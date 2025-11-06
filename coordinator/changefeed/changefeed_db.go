@@ -121,13 +121,14 @@ func (db *ChangefeedDB) StopByChangefeedID(cfID common.ChangeFeedID, remove bool
 	if !ok {
 		return ""
 	}
+
+	// Remove from replication tracking
+	db.RemoveReplicaWithoutLock(cf)
+
 	nodeID := cf.GetNodeID()
 	if nodeID != "" {
 		cf.SetNodeID("")
 	}
-
-	// Remove from replication tracking
-	db.RemoveReplicaWithoutLock(cf)
 
 	if remove {
 		log.Info("remove changefeed", zap.String("changefeed", cf.ID.String()))

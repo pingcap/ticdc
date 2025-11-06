@@ -21,26 +21,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNotReusableEvent(t *testing.T) {
+func TestReadyEvent(t *testing.T) {
 	did := common.NewDispatcherID()
-	e := NewNotReusableEvent(did)
+	e := NewReadyEvent(did)
 	data, err := e.Marshal()
 	require.NoError(t, err)
 	require.Len(t, data, int(e.GetSize())+int(GetEventHeaderSize()))
 
-	var e2 NotReusableEvent
+	var e2 ReadyEvent
 	err = e2.Unmarshal(data)
 	require.NoError(t, err)
 	require.Equal(t, e.Version, e2.Version)
 	require.Equal(t, e.DispatcherID, e2.DispatcherID)
 }
 
-func TestNotReusableEventMethods(t *testing.T) {
+func TestReadyEventMethods(t *testing.T) {
 	did := common.NewDispatcherID()
-	e := NewNotReusableEvent(did)
+	e := NewReadyEvent(did)
 
 	// Test GetType
-	require.Equal(t, TypeNotReusableEvent, e.GetType())
+	require.Equal(t, TypeReadyEvent, e.GetType())
 
 	// Test GetSeq
 	require.Equal(t, uint64(0), e.GetSeq())
@@ -64,11 +64,11 @@ func TestNotReusableEventMethods(t *testing.T) {
 	require.Equal(t, int32(0), e.Len())
 }
 
-func TestNotReusableEventMarshalUnmarshal(t *testing.T) {
-	normalEvent := NewNotReusableEvent(common.NewDispatcherID())
+func TestReadyEventMarshalUnmarshal(t *testing.T) {
+	normalEvent := NewReadyEvent(common.NewDispatcherID())
 	testCases := []struct {
 		name      string
-		event     *NotReusableEvent
+		event     *ReadyEvent
 		wantError bool
 	}{
 		{
@@ -78,16 +78,16 @@ func TestNotReusableEventMarshalUnmarshal(t *testing.T) {
 		},
 		{
 			name: "zero values",
-			event: &NotReusableEvent{
-				Version:      0,
+			event: &ReadyEvent{
+				Version:      ReadyEventVersion1,
 				DispatcherID: common.DispatcherID{},
 			},
 			wantError: false,
 		},
 		{
 			name: "invalid version",
-			event: &NotReusableEvent{
-				Version:      1,
+			event: &ReadyEvent{
+				Version:      0,
 				DispatcherID: common.NewDispatcherID(),
 			},
 			wantError: true,
@@ -103,7 +103,7 @@ func TestNotReusableEventMarshalUnmarshal(t *testing.T) {
 			}
 			require.NoError(t, err)
 
-			var e2 NotReusableEvent
+			var e2 ReadyEvent
 			err = e2.Unmarshal(data)
 			require.NoError(t, err)
 			require.Equal(t, tc.event.Version, e2.Version)
@@ -112,10 +112,10 @@ func TestNotReusableEventMarshalUnmarshal(t *testing.T) {
 	}
 }
 
-// TestNotReusableEventHeader verifies the unified header format
-func TestNotReusableEventHeader(t *testing.T) {
+// TestReadyEventHeader verifies the unified header format
+func TestReadyEventHeader(t *testing.T) {
 	did := common.NewDispatcherID()
-	e := NewNotReusableEvent(did)
+	e := NewReadyEvent(did)
 
 	data, err := e.Marshal()
 	require.NoError(t, err)
@@ -123,8 +123,8 @@ func TestNotReusableEventHeader(t *testing.T) {
 	// Verify header
 	eventType, version, payloadLen, err := UnmarshalEventHeader(data)
 	require.NoError(t, err)
-	require.Equal(t, TypeNotReusableEvent, eventType)
-	require.Equal(t, NotReusableEventVersion, version)
+	require.Equal(t, TypeReadyEvent, eventType)
+	require.Equal(t, ReadyEventVersion1, version)
 	require.Equal(t, uint64(e.GetSize()), payloadLen)
 
 	// Verify total size
@@ -132,8 +132,8 @@ func TestNotReusableEventHeader(t *testing.T) {
 	require.Equal(t, uint64(headerSize)+payloadLen, uint64(len(data)))
 }
 
-// TestNotReusableEventUnmarshalErrors tests error handling in Unmarshal
-func TestNotReusableEventUnmarshalErrors(t *testing.T) {
+// TestReadyEventUnmarshalErrors tests error handling in Unmarshal
+func TestReadyEventUnmarshalErrors(t *testing.T) {
 	testCases := []struct {
 		name      string
 		data      []byte
@@ -150,8 +150,8 @@ func TestNotReusableEventUnmarshalErrors(t *testing.T) {
 				// Create a 16-byte header with invalid magic
 				header := make([]byte, 16)
 				binary.BigEndian.PutUint32(header[0:4], 0x00000000) // invalid magic
-				binary.BigEndian.PutUint16(header[4:6], uint16(TypeNotReusableEvent))
-				binary.BigEndian.PutUint16(header[6:8], uint16(NotReusableEventVersion))
+				binary.BigEndian.PutUint16(header[4:6], uint16(TypeReadyEvent))
+				binary.BigEndian.PutUint16(header[6:8], uint16(ReadyEventVersion1))
 				binary.BigEndian.PutUint64(header[8:16], 0)
 				return header
 			}(),
@@ -164,11 +164,11 @@ func TestNotReusableEventUnmarshalErrors(t *testing.T) {
 				header := make([]byte, 16)
 				binary.BigEndian.PutUint32(header[0:4], 0xDA7A6A6A)           // valid magic
 				binary.BigEndian.PutUint16(header[4:6], uint16(TypeDMLEvent)) // wrong type
-				binary.BigEndian.PutUint16(header[6:8], uint16(NotReusableEventVersion))
+				binary.BigEndian.PutUint16(header[6:8], uint16(ReadyEventVersion1))
 				binary.BigEndian.PutUint64(header[8:16], 0)
 				return header
 			}(),
-			wantError: "NotReusableEvent",
+			wantError: "ReadyEvent",
 		},
 		{
 			name: "incomplete data",
@@ -176,8 +176,8 @@ func TestNotReusableEventUnmarshalErrors(t *testing.T) {
 				// Create a header claiming more data than provided
 				header := make([]byte, 16)
 				binary.BigEndian.PutUint32(header[0:4], 0xDA7A6A6A) // valid magic
-				binary.BigEndian.PutUint16(header[4:6], uint16(TypeNotReusableEvent))
-				binary.BigEndian.PutUint16(header[6:8], uint16(NotReusableEventVersion))
+				binary.BigEndian.PutUint16(header[4:6], uint16(TypeReadyEvent))
+				binary.BigEndian.PutUint16(header[6:8], uint16(ReadyEventVersion1))
 				binary.BigEndian.PutUint64(header[8:16], 100) // claim 100 bytes but don't provide
 				return header
 			}(),
@@ -187,7 +187,7 @@ func TestNotReusableEventUnmarshalErrors(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			var e NotReusableEvent
+			var e ReadyEvent
 			err := e.Unmarshal(tc.data)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tc.wantError)
@@ -195,10 +195,10 @@ func TestNotReusableEventUnmarshalErrors(t *testing.T) {
 	}
 }
 
-// TestNotReusableEventSize verifies GetSize calculation
-func TestNotReusableEventSize(t *testing.T) {
+// TestReadyEventSize verifies GetSize calculation
+func TestReadyEventSize(t *testing.T) {
 	did := common.NewDispatcherID()
-	e := NewNotReusableEvent(did)
+	e := NewReadyEvent(did)
 
 	// GetSize should only return business data size, not including header
 	expectedSize := int64(did.GetSize())

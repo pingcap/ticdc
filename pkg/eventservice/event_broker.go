@@ -766,8 +766,7 @@ func (c *eventBroker) flushResolvedTs(ctx context.Context, cache *resolvedTsCach
 	if cache == nil || cache.len == 0 {
 		return
 	}
-	msg := &event.BatchResolvedEvent{}
-	msg.Events = append(msg.Events, cache.getAll()...)
+	msg := event.NewBatchResolvedEvent(cache.getAll())
 	if len(msg.Events) == 0 {
 		return
 	}

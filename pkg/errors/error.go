@@ -785,6 +785,11 @@ var (
 		"the ddl event will break splitable of this table",
 		errors.RFCCodeText("CDC:ErrTableAfterNotSplitable"),
 	)
+
+	ErrUnimplementedIOType = errors.Normalize(
+		"unimplemented IOType: %d",
+		errors.RFCCodeText("CDC:ErrUnimplementedIOType"),
+	)
 )
 
 // ErrorType defines the type of application errors

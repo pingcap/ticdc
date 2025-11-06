@@ -808,7 +808,7 @@ func TestHandleDataEvents(t *testing.T) {
 				{
 					From: &remoteServerID,
 					Event: &commonEvent.DDLEvent{
-						Version:    commonEvent.DDLEventVersion,
+						Version:    commonEvent.DDLEventVersion1,
 						FinishedTs: 100,
 						Epoch:      10,
 						Seq:        2,

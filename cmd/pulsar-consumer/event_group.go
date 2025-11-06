@@ -51,8 +51,16 @@ func (g *eventsGroup) Append(row *commonEvent.DMLEvent, force bool) {
 		lastDMLEvent = g.events[len(g.events)-1]
 	}
 
-	if lastDMLEvent == nil || lastDMLEvent.GetCommitTs() <= row.GetCommitTs() {
+	if lastDMLEvent == nil || lastDMLEvent.GetCommitTs() < row.GetCommitTs() {
 		g.events = append(g.events, row)
+		return
+	}
+
+	if lastDMLEvent.GetCommitTs() == row.GetCommitTs() {
+		lastDMLEvent.Rows.Append(row.Rows, 0, row.Rows.NumRows())
+		lastDMLEvent.RowTypes = append(lastDMLEvent.RowTypes, row.RowTypes...)
+		lastDMLEvent.Length += row.Length
+		lastDMLEvent.PostTxnFlushed = append(lastDMLEvent.PostTxnFlushed, row.PostTxnFlushed...)
 		return
 	}
 

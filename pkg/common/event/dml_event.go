@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -31,8 +32,10 @@ import (
 const (
 	// defaultRowCount is the start row count of a transaction.
 	defaultRowCount = 1
-	// DMLEventVersion is the version of the DMLEvent struct.
-	DMLEventVersion = 1
+	// DMLEventVersion1 is the version of the DMLEvent struct.
+	DMLEventVersion1 = 1
+	// BatchDMLEventVersion1 is the version of the BatchDMLEvent struct.
+	BatchDMLEventVersion1 = 1
 )
 
 var _ Event = &BatchDMLEvent{}
@@ -41,8 +44,9 @@ var _ Event = &BatchDMLEvent{}
 // the Rows is shared by the BatchDMLEvent and DMLEvents.
 type BatchDMLEvent struct {
 	// Version is the version of the BatchDMLEvent struct.
-	Version   byte        `json:"version"`
-	DMLEvents []*DMLEvent `json:"dml_events"`
+	Version       int         `json:"version"`
+	DMLEventCount int32       `json:"dml_event_count"`
+	DMLEvents     []*DMLEvent `json:"dml_events"`
 	// Rows is the rows of the transactions.
 	Rows *chunk.Chunk `json:"rows"`
 	// RawRows is the raw bytes of the rows.
@@ -55,10 +59,16 @@ type BatchDMLEvent struct {
 
 // NewBatchDMLEvent creates a new BatchDMLEvent with proper initialization
 func NewBatchDMLEvent() *BatchDMLEvent {
-	return &BatchDMLEvent{
-		Version:   0,
+	res := &BatchDMLEvent{
+		Version:   BatchDMLEventVersion1,
 		DMLEvents: make([]*DMLEvent, 0),
 	}
+
+	failpoint.Inject("InjectBatchDMLEventVersion", func() {
+		res.Version = 127
+	})
+
+	return res
 }
 
 func (b *BatchDMLEvent) String() string {
@@ -110,28 +120,50 @@ func (b *BatchDMLEvent) AppendDMLEvent(dmlEvent *DMLEvent) error {
 		dmlEvent.PreviousTotalOffset = pre.PreviousTotalOffset + len(pre.RowTypes)
 	}
 	b.DMLEvents = append(b.DMLEvents, dmlEvent)
+	b.DMLEventCount = int32(len(b.DMLEvents))
 
 	return nil
 }
 
 func (b *BatchDMLEvent) Unmarshal(data []byte) error {
-	return b.decodeV0(data)
+	// 1. Validate header and extract payload
+	payload, version, err := ValidateAndExtractPayload(data, TypeBatchDMLEvent)
+	if err != nil {
+		return err
+	}
+
+	// 2. Store version
+	b.Version = version
+
+	// 3. Decode based on version
+	switch version {
+	case BatchDMLEventVersion1:
+		return b.decodeV1(payload)
+	default:
+		return fmt.Errorf("unsupported BatchDMLEvent version: %d", version)
+	}
 }
 
-func (b *BatchDMLEvent) decodeV0(data []byte) error {
-	if len(data) < 1+8*3 {
+func (b *BatchDMLEvent) decodeV1(data []byte) error {
+	// Minimum payload: DMLEventCount(8B)
+	// Even with 0 events, we still need to read the count field
+	if len(data) < 8 {
 		return errors.ErrDecodeFailed.FastGenByArgs("data length is less than the minimum value")
 	}
-	b.Version = data[0]
-	if b.Version != 0 {
-		log.Panic("BatchDMLEvent: Only version 0 is supported right now", zap.Uint8("version", b.Version))
+	if b.Version != BatchDMLEventVersion1 {
+		log.Panic("BatchDMLEvent: Only version 0 is supported right now", zap.Int("version", b.Version))
 		return nil
 	}
-	offset := 1
-	length := int(binary.LittleEndian.Uint64(data[offset:]))
+	offset := 0
+
+	// Read DMLEventCount
+	dmlEventCount := int32(binary.BigEndian.Uint64(data[offset:]))
+	b.DMLEventCount = dmlEventCount
 	offset += 8
-	b.DMLEvents = make([]*DMLEvent, 0, length)
-	for i := 0; i < length; i++ {
+
+	// Read each DML event
+	b.DMLEvents = make([]*DMLEvent, 0, dmlEventCount)
+	for i := int32(0); i < dmlEventCount; i++ {
 		event := &DMLEvent{}
 		eventDataSize := int(binary.BigEndian.Uint64(data[offset:]))
 		offset += 8
@@ -142,28 +174,49 @@ func (b *BatchDMLEvent) decodeV0(data []byte) error {
 		b.DMLEvents = append(b.DMLEvents, event)
 		offset += eventDataSize
 	}
+
+	// Remaining data is RawRows
 	b.RawRows = data[offset:]
 	return nil
 }
 
 func (b *BatchDMLEvent) Marshal() ([]byte, error) {
-	return b.encodeV0()
+	// 1. Encode payload based on version
+	var payload []byte
+	var err error
+	switch b.Version {
+	case BatchDMLEventVersion1:
+		payload, err = b.encodeV1()
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("unsupported BatchDMLEvent version: %d", b.Version)
+	}
+
+	// 2. Use unified header format
+	return MarshalEventWithHeader(TypeBatchDMLEvent, b.Version, payload)
 }
 
-func (b *BatchDMLEvent) encodeV0() ([]byte, error) {
-	if b.Version != 0 {
-		log.Panic("BatchDMLEvent: Only version 0 is supported right now", zap.Uint8("version", b.Version))
+func (b *BatchDMLEvent) encodeV1() ([]byte, error) {
+	if b.Version != BatchDMLEventVersion1 {
+		log.Panic("BatchDMLEvent: Only version 0 is supported right now", zap.Int("version", b.Version))
 		return nil, nil
 	}
-	size := 1 + 8 + (1+16+6*8+4*2+1)*len(b.DMLEvents) + int(b.Len())
+
+	// Update DMLEventCount to match actual count
+	b.DMLEventCount = int32(len(b.DMLEvents))
+
+	size := 8 + (1+16+6*8+4*2+1)*len(b.DMLEvents) + int(b.Len())
 	data := make([]byte, 0, size)
-	// Encode all fields
-	// Version
-	data = append(data, b.Version)
-	// DMLEvents
-	dmlEventsDataSize := make([]byte, 8)
-	binary.LittleEndian.PutUint64(dmlEventsDataSize, uint64(len(b.DMLEvents)))
-	data = append(data, dmlEventsDataSize...)
+
+	// Encode all fields (note: version is now in header, not here)
+	// 1. Write DMLEventCount
+	dmlEventCountBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(dmlEventCountBytes, uint64(b.DMLEventCount))
+	data = append(data, dmlEventCountBytes...)
+
+	// 2. Write each DML event with its size
 	for _, event := range b.DMLEvents {
 		buff, err := event.Marshal()
 		if err != nil {
@@ -174,10 +227,12 @@ func (b *BatchDMLEvent) encodeV0() ([]byte, error) {
 		data = append(data, eventDataSize...)
 		data = append(data, buff...)
 	}
+
+	// 3. Write RawRows
 	encoder := chunk.NewCodec(b.TableInfo.GetFieldSlice())
 	value := encoder.Encode(b.Rows)
-	// Append the encoded value to the buffer
 	data = append(data, value...)
+
 	return data, nil
 }
 
@@ -259,13 +314,13 @@ func (b *BatchDMLEvent) Len() int32 {
 
 // DMLCount returns the number of DML events in the batch.
 func (b *BatchDMLEvent) DMLCount() int {
-	return len(b.DMLEvents)
+	return int(b.DMLEventCount)
 }
 
 // DMLEvent represent a batch of DMLs of a whole or partial of a transaction.
 type DMLEvent struct {
 	// Version is the version of the DMLEvent struct.
-	Version         byte                `json:"version"`
+	Version         int                 `json:"version"`
 	DispatcherID    common.DispatcherID `json:"dispatcher_id"`
 	PhysicalTableID int64               `json:"physical_table_id"`
 	StartTs         uint64              `json:"start_ts"`
@@ -326,7 +381,7 @@ func NewDMLEvent(
 	tableInfo *common.TableInfo,
 ) *DMLEvent {
 	return &DMLEvent{
-		Version:         DMLEventVersion,
+		Version:         DMLEventVersion1,
 		DispatcherID:    dispatcherID,
 		PhysicalTableID: tableID,
 		StartTs:         startTs,
@@ -623,14 +678,62 @@ func (t *DMLEvent) Len() int32 {
 }
 
 func (t *DMLEvent) Marshal() ([]byte, error) {
-	return t.encode()
+	// 1. Encode payload based on version
+	var payload []byte
+	var err error
+	switch t.Version {
+	case DMLEventVersion1:
+		payload, err = t.encodeV1()
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("unsupported DMLEvent version: %d", t.Version)
+	}
+
+	// 2. Use unified header format
+	return MarshalEventWithHeader(TypeDMLEvent, t.Version, payload)
 }
 
 // Unmarshal the DMLEvent from the given data.
 // Please make sure the TableInfo of the DMLEvent is set before unmarshal.
 func (t *DMLEvent) Unmarshal(data []byte) error {
+	// Store the total event size including header
 	t.eventSize = int64(len(data))
-	return t.decode(data)
+
+	// 1. Parse unified header
+	eventType, version, payloadLen, err := UnmarshalEventHeader(data)
+	if err != nil {
+		return err
+	}
+
+	// 2. Validate event type
+	if eventType != TypeDMLEvent {
+		return fmt.Errorf("expected DMLEvent (type %d), got type %d (%s)",
+			TypeDMLEvent, eventType, TypeToString(eventType))
+	}
+
+	// 3. Validate total data length
+	headerSize := GetEventHeaderSize()
+	expectedLen := uint64(headerSize) + payloadLen
+	if uint64(len(data)) < expectedLen {
+		return fmt.Errorf("incomplete data: expected %d bytes (header %d + payload %d), got %d",
+			expectedLen, headerSize, payloadLen, len(data))
+	}
+
+	// 4. Extract payload
+	payload := data[headerSize:expectedLen]
+
+	// 5. Store version
+	t.Version = version
+
+	// 6. Decode based on version
+	switch version {
+	case DMLEventVersion1:
+		return t.decodeV1(payload)
+	default:
+		return fmt.Errorf("unsupported DMLEvent version: %d", version)
+	}
 }
 
 // GetSize returns the approximate size of the rows in the transaction.
@@ -644,23 +747,15 @@ func (t *DMLEvent) IsPaused() bool {
 	return false
 }
 
-func (t *DMLEvent) encode() ([]byte, error) {
-	if t.Version != DMLEventVersion {
-		log.Panic("DMLEvent: unexpected version", zap.Uint8("expected", DMLEventVersion), zap.Uint8("version", t.Version))
+func (t *DMLEvent) encodeV1() ([]byte, error) {
+	if t.Version != DMLEventVersion1 {
+		log.Panic("DMLEvent: unexpected version", zap.Uint8("expected", DMLEventVersion1), zap.Int("version", t.Version))
 		return nil, nil
 	}
-	return t.encodeV0()
-}
-
-func (t *DMLEvent) encodeV0() ([]byte, error) {
-	if t.Version != DMLEventVersion {
-		log.Panic("DMLEvent: unexpected version", zap.Uint8("expected", DMLEventVersion), zap.Uint8("version", t.Version))
-		return nil, nil
-	}
-	// Version(1) + DispatcherID(16) + PhysicalTableID(8) + StartTs(8) + CommitTs(8) +
-	// Seq(8) + Epoch(8) + Length(4) + AApproximateSize(8) + PreviousTotalOffset(4)
+	// DispatcherID(16) + PhysicalTableID(8) + StartTs(8) + CommitTs(8) +
+	// Seq(8) + Epoch(8) + Length(4) + ApproximateSize(8) + PreviousTotalOffset(4)
 	// + size of len(t.RowTypes)(4) + len(t.RowTypes)
-	size := 1 + t.DispatcherID.GetSize() + 5*8 + 4 + 8 + 4*2 + len(t.RowTypes)
+	size := t.DispatcherID.GetSize() + 5*8 + 4 + 8 + 4*2 + len(t.RowTypes)
 	size += 4 // len(t.RowKeys)
 	for i := 0; i < len(t.RowKeys); i++ {
 		size += 4 + len(t.RowKeys[i]) // size + contents of t.RowKeys[i]
@@ -670,52 +765,48 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 	buf := make([]byte, size)
 	offset := 0
 
-	// Encode all fields
-	// Version
-	buf[offset] = t.Version
-	offset += 1
-
+	// Encode all fields (note: version is now in header, not here)
 	// DispatcherID
 	dispatcherIDBytes := t.DispatcherID.Marshal()
 	copy(buf[offset:], dispatcherIDBytes)
 	offset += len(dispatcherIDBytes)
 
 	// PhysicalTableID
-	binary.LittleEndian.PutUint64(buf[offset:], uint64(t.PhysicalTableID))
+	binary.BigEndian.PutUint64(buf[offset:], uint64(t.PhysicalTableID))
 	offset += 8
 	// StartTs
-	binary.LittleEndian.PutUint64(buf[offset:], t.StartTs)
+	binary.BigEndian.PutUint64(buf[offset:], t.StartTs)
 	offset += 8
 	// CommitTs
-	binary.LittleEndian.PutUint64(buf[offset:], t.CommitTs)
+	binary.BigEndian.PutUint64(buf[offset:], t.CommitTs)
 	offset += 8
 	// Seq
-	binary.LittleEndian.PutUint64(buf[offset:], t.Seq)
+	binary.BigEndian.PutUint64(buf[offset:], t.Seq)
 	offset += 8
 	// Epoch
-	binary.LittleEndian.PutUint64(buf[offset:], t.Epoch)
+	binary.BigEndian.PutUint64(buf[offset:], t.Epoch)
 	offset += 8
 	// Length
-	binary.LittleEndian.PutUint32(buf[offset:], uint32(t.Length))
+	binary.BigEndian.PutUint32(buf[offset:], uint32(t.Length))
 	offset += 4
 	// ApproximateSize
-	binary.LittleEndian.PutUint64(buf[offset:], uint64(t.ApproximateSize))
+	binary.BigEndian.PutUint64(buf[offset:], uint64(t.ApproximateSize))
 	offset += 8
 	// PreviousTotalOffset
-	binary.LittleEndian.PutUint32(buf[offset:], uint32(t.PreviousTotalOffset))
+	binary.BigEndian.PutUint32(buf[offset:], uint32(t.PreviousTotalOffset))
 	offset += 4
 	// RowTypes
-	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(t.RowTypes)))
+	binary.BigEndian.PutUint32(buf[offset:], uint32(len(t.RowTypes)))
 	offset += 4
 	for _, rowType := range t.RowTypes {
 		buf[offset] = byte(rowType)
 		offset++
 	}
 	// RowKeys
-	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(t.RowKeys)))
+	binary.BigEndian.PutUint32(buf[offset:], uint32(len(t.RowKeys)))
 	offset += 4
 	for _, rowKey := range t.RowKeys {
-		binary.LittleEndian.PutUint32(buf[offset:], uint32(len(rowKey)))
+		binary.BigEndian.PutUint32(buf[offset:], uint32(len(rowKey)))
 		offset += 4
 		copy(buf[offset:], rowKey)
 		offset += len(rowKey)
@@ -723,60 +814,54 @@ func (t *DMLEvent) encodeV0() ([]byte, error) {
 	return buf, nil
 }
 
-func (t *DMLEvent) decode(data []byte) error {
-	t.Version = data[0]
-	if t.Version != DMLEventVersion {
-		log.Panic("DMLEvent: unexpected version", zap.Uint8("expected", DMLEventVersion), zap.Uint8("version", t.Version))
-		return nil
-	}
-	return t.decodeV0(data)
-}
-
-func (t *DMLEvent) decodeV0(data []byte) error {
-	// Version(1) + DispatcherID(16) + PhysicalTableID(8) + StartTs(8) + CommitTs(8) +
-	// Seq(8) + Epoch(8) + State(1) + Length(4) + AApproximateSize(8) + PreviousTotalOffset(4)
-	// + size of len(t.RowTypes)(4)
-	if len(data) < 1+16+8*5+1+4+8+4*2 {
+func (t *DMLEvent) decodeV1(data []byte) error {
+	// Minimum payload size calculation:
+	// DispatcherID(16) + PhysicalTableID(8) + StartTs(8) + CommitTs(8) +
+	// Seq(8) + Epoch(8) + Length(4) + ApproximateSize(8) + PreviousTotalOffset(4)
+	// + len(RowTypes)(4) + len(RowKeys)(4)
+	// = 16 + 8*5 + 4 + 8 + 4*3 = 16 + 40 + 4 + 8 + 12 = 80 bytes
+	const minPayloadSize = 16 + 8*5 + 4 + 8 + 4*3
+	if len(data) < minPayloadSize {
 		return errors.ErrDecodeFailed.FastGenByArgs("data length is less than the minimum value")
 	}
-	if t.Version != DMLEventVersion {
-		log.Panic("DMLEvent: unexpected version", zap.Uint8("expected", DMLEventVersion), zap.Uint8("version", t.Version))
+	if t.Version != DMLEventVersion1 {
+		log.Panic("DMLEvent: unexpected version", zap.Uint8("expected", DMLEventVersion1), zap.Int("version", t.Version))
 		return nil
 	}
-	offset := 1
+	offset := 0
 	err := t.DispatcherID.Unmarshal(data[offset:])
 	if err != nil {
 		return errors.Trace(err)
 	}
 	offset += t.DispatcherID.GetSize()
-	t.PhysicalTableID = int64(binary.LittleEndian.Uint64(data[offset:]))
+	t.PhysicalTableID = int64(binary.BigEndian.Uint64(data[offset:]))
 	offset += 8
-	t.StartTs = binary.LittleEndian.Uint64(data[offset:])
+	t.StartTs = binary.BigEndian.Uint64(data[offset:])
 	offset += 8
-	t.CommitTs = binary.LittleEndian.Uint64(data[offset:])
+	t.CommitTs = binary.BigEndian.Uint64(data[offset:])
 	offset += 8
-	t.Seq = binary.LittleEndian.Uint64(data[offset:])
+	t.Seq = binary.BigEndian.Uint64(data[offset:])
 	offset += 8
-	t.Epoch = binary.LittleEndian.Uint64(data[offset:])
+	t.Epoch = binary.BigEndian.Uint64(data[offset:])
 	offset += 8
-	t.Length = int32(binary.LittleEndian.Uint32(data[offset:]))
+	t.Length = int32(binary.BigEndian.Uint32(data[offset:]))
 	offset += 4
-	t.ApproximateSize = int64(binary.LittleEndian.Uint64(data[offset:]))
+	t.ApproximateSize = int64(binary.BigEndian.Uint64(data[offset:]))
 	offset += 8
-	t.PreviousTotalOffset = int(binary.LittleEndian.Uint32(data[offset:]))
+	t.PreviousTotalOffset = int(binary.BigEndian.Uint32(data[offset:]))
 	offset += 4
-	length := int32(binary.LittleEndian.Uint32(data[offset:]))
+	length := int32(binary.BigEndian.Uint32(data[offset:]))
 	offset += 4
 	t.RowTypes = make([]common.RowType, length)
 	for i := 0; i < int(length); i++ {
 		t.RowTypes[i] = common.RowType(data[offset])
 		offset++
 	}
-	rowKeysLen := int32(binary.LittleEndian.Uint32(data[offset:]))
+	rowKeysLen := int32(binary.BigEndian.Uint32(data[offset:]))
 	offset += 4
 	t.RowKeys = make([][]byte, rowKeysLen)
 	for i := 0; i < int(rowKeysLen); i++ {
-		len := int32(binary.LittleEndian.Uint32(data[offset:]))
+		len := int32(binary.BigEndian.Uint32(data[offset:]))
 		offset += 4
 		t.RowKeys[i] = make([]byte, len)
 		copy(t.RowKeys[i], data[offset:offset+int(len)])

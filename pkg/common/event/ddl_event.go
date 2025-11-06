@@ -26,16 +26,17 @@ import (
 )
 
 const (
-	DDLEventVersion = 0
+	DDLEventVersion1 = 1
 )
 
 var _ Event = &DDLEvent{}
 
 type DDLEvent struct {
 	// Version is the version of the DDLEvent struct.
-	Version      byte                `json:"version"`
+	Version      int                 `json:"version"`
 	DispatcherID common.DispatcherID `json:"-"`
-	Type         byte                `json:"type"`
+	// Type is the type of the DDL.
+	Type byte `json:"type"`
 	// SchemaID is from upstream job.SchemaID
 	SchemaID   int64  `json:"schema_id"`
 	SchemaName string `json:"schema_name"`
@@ -242,12 +243,51 @@ func (e *DDLEvent) GetDDLType() model.ActionType {
 	return model.ActionType(e.Type)
 }
 
-func (t DDLEvent) Marshal() ([]byte, error) {
-	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize | multipleTableInfos | multipletableInfosDataSize |errorData | errorDataSize
+func (t *DDLEvent) Marshal() ([]byte, error) {
+	// 1. Encode payload based on version
+	var payload []byte
+	var err error
+	switch t.Version {
+	case DDLEventVersion1:
+		payload, err = t.encodeV1()
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("unsupported DDLEvent version: %d", t.Version)
+	}
+
+	// 2. Use unified header format
+	return MarshalEventWithHeader(TypeDDLEvent, t.Version, payload)
+}
+
+func (t *DDLEvent) Unmarshal(data []byte) error {
+	// 1. Validate header and extract payload
+	payload, version, err := ValidateAndExtractPayload(data, TypeDDLEvent)
+	if err != nil {
+		return err
+	}
+
+	// 2. Store version
+	t.Version = version
+
+	// 3. Decode based on version
+	switch version {
+	case DDLEventVersion1:
+		return t.decodeV1(payload)
+	default:
+		return fmt.Errorf("unsupported DDLEvent version: %d", version)
+	}
+}
+
+func (t DDLEvent) encodeV1() ([]byte, error) {
+	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize | multipleTableInfos | multipletableInfosDataSize
+	// Note: version is now handled in the header by Marshal(), not here
 	data, err := json.Marshal(t)
 	if err != nil {
 		return nil, err
 	}
+
 	dispatcherIDData := t.DispatcherID.Marshal()
 	dispatcherIDDataSize := make([]byte, 8)
 	binary.BigEndian.PutUint64(dispatcherIDDataSize, uint64(len(dispatcherIDData)))
@@ -279,19 +319,20 @@ func (t DDLEvent) Marshal() ([]byte, error) {
 		data = append(data, tableInfoData...)
 		data = append(data, tableInfoDataSize...)
 	}
-	multipletableInfosDataSize := make([]byte, 8)
-	binary.BigEndian.PutUint64(multipletableInfosDataSize, uint64(len(t.MultipleTableInfos)))
-	data = append(data, multipletableInfosDataSize...)
+	multipleTableInfosDataSize := make([]byte, 8)
+	binary.BigEndian.PutUint64(multipleTableInfosDataSize, uint64(len(t.MultipleTableInfos)))
+	data = append(data, multipleTableInfosDataSize...)
 
 	return data, nil
 }
 
-func (t *DDLEvent) Unmarshal(data []byte) error {
-	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize | multipleTableInfos | multipletableInfosDataSize
+func (t *DDLEvent) decodeV1(data []byte) error {
+	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize | multipleTableInfos | multipleTableInfosDataSize
 	t.eventSize = int64(len(data))
+
 	end := len(data)
-	multipletableInfosDataSize := binary.BigEndian.Uint64(data[end-8 : end])
-	for i := 0; i < int(multipletableInfosDataSize); i++ {
+	multipleTableInfosDataSize := binary.BigEndian.Uint64(data[end-8 : end])
+	for i := 0; i < int(multipleTableInfosDataSize); i++ {
 		tableInfoDataSize := binary.BigEndian.Uint64(data[end-8 : end])
 		tableInfoData := data[end-8-int(tableInfoDataSize) : end-8]
 		info, err := common.UnmarshalJSONToTableInfo(tableInfoData)
@@ -301,7 +342,7 @@ func (t *DDLEvent) Unmarshal(data []byte) error {
 		t.MultipleTableInfos = append(t.MultipleTableInfos, info)
 		end -= 8 + int(tableInfoDataSize)
 	}
-	end -= 8 + int(multipletableInfosDataSize)
+	end -= 8 + int(multipleTableInfosDataSize)
 	tableInfoDataSize := binary.BigEndian.Uint64(data[end-8 : end])
 	var err error
 	if tableInfoDataSize > 0 {

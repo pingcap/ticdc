@@ -16,63 +16,51 @@ package event
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
+	"fmt"
 
 	"github.com/pingcap/ticdc/pkg/common"
 )
 
 const (
-	DispatcherHeartbeatVersion         = 0
-	DispatcherHeartbeatResponseVersion = 0
-
-	CongestionControlVersion = 1
+	DispatcherHeartbeatVersion1         = 1
+	DispatcherHeartbeatResponseVersion1 = 1
 )
 
 // DispatcherProgress is used to report the progress of a dispatcher to the EventService
+// It is a part of DispatcherHeartbeat, so it has no version field.
 type DispatcherProgress struct {
-	Version      byte // 1 byte, it should be the same as DispatcherHeartbeatVersion
 	DispatcherID common.DispatcherID
 	CheckpointTs uint64 // 8 bytes
 }
 
 func NewDispatcherProgress(dispatcherID common.DispatcherID, checkpointTs uint64) DispatcherProgress {
 	return DispatcherProgress{
-		Version:      DispatcherHeartbeatVersion,
 		DispatcherID: dispatcherID,
 		CheckpointTs: checkpointTs,
 	}
 }
 
 func (dp DispatcherProgress) GetSize() int {
-	return dp.DispatcherID.GetSize() + 8 + 1 // version
+	return dp.DispatcherID.GetSize() + 8 // dispatcherID size + checkpointTs size
 }
 
 func (dp DispatcherProgress) Marshal() ([]byte, error) {
-	return dp.encodeV0()
+	return dp.encodeV1()
 }
 
 func (dp *DispatcherProgress) Unmarshal(data []byte) error {
-	return dp.decodeV0(data)
+	return dp.decodeV1(data)
 }
 
-func (dp DispatcherProgress) encodeV0() ([]byte, error) {
-	if dp.Version != 0 {
-		return nil, errors.New("invalid version")
-	}
+func (dp DispatcherProgress) encodeV1() ([]byte, error) {
 	buf := bytes.NewBuffer(make([]byte, 0))
-	buf.WriteByte(dp.Version)
 	buf.Write(dp.DispatcherID.Marshal())
 	binary.Write(buf, binary.BigEndian, dp.CheckpointTs)
 	return buf.Bytes(), nil
 }
 
-func (dp *DispatcherProgress) decodeV0(data []byte) error {
+func (dp *DispatcherProgress) decodeV1(data []byte) error {
 	buf := bytes.NewBuffer(data)
-	var err error
-	dp.Version, err = buf.ReadByte()
-	if err != nil {
-		return err
-	}
 	dp.DispatcherID.Unmarshal(buf.Next(dp.DispatcherID.GetSize()))
 	dp.CheckpointTs = binary.BigEndian.Uint64(buf.Next(8))
 	return nil
@@ -80,7 +68,7 @@ func (dp *DispatcherProgress) decodeV0(data []byte) error {
 
 // DispatcherHeartbeat is used to report the progress of a dispatcher to the EventService
 type DispatcherHeartbeat struct {
-	Version              byte
+	Version              int
 	ClusterID            uint64
 	DispatcherCount      uint32
 	DispatcherProgresses []DispatcherProgress
@@ -88,7 +76,7 @@ type DispatcherHeartbeat struct {
 
 func NewDispatcherHeartbeat(dispatcherCount int) *DispatcherHeartbeat {
 	return &DispatcherHeartbeat{
-		Version: DispatcherHeartbeatVersion,
+		Version: DispatcherHeartbeatVersion1,
 		// TODO: Pass a real clusterID when we support 1 TiCDC cluster subscribe multiple TiDB clusters
 		ClusterID:            0,
 		DispatcherProgresses: make([]DispatcherProgress, 0, dispatcherCount),
@@ -101,8 +89,7 @@ func (d *DispatcherHeartbeat) Append(dp DispatcherProgress) {
 }
 
 func (d *DispatcherHeartbeat) GetSize() int {
-	size := 1 // version
-	size += 8 // clusterID
+	size := 8 // clusterID
 	size += 4 // dispatcher count
 	for _, dp := range d.DispatcherProgresses {
 		size += dp.GetSize()
@@ -111,16 +98,44 @@ func (d *DispatcherHeartbeat) GetSize() int {
 }
 
 func (d *DispatcherHeartbeat) Marshal() ([]byte, error) {
-	return d.encodeV0()
+	// 1. Encode payload based on version
+	var payload []byte
+	var err error
+	switch d.Version {
+	case DispatcherHeartbeatVersion1:
+		payload, err = d.encodeV1()
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("unsupported DispatcherHeartbeat version: %d", d.Version)
+	}
+
+	// 2. Use unified header format
+	return MarshalEventWithHeader(TypeDispatcherHeartbeat, d.Version, payload)
 }
 
 func (d *DispatcherHeartbeat) Unmarshal(data []byte) error {
-	return d.decodeV0(data)
+	// 1. Validate header and extract payload
+	payload, version, err := ValidateAndExtractPayload(data, TypeDispatcherHeartbeat)
+	if err != nil {
+		return err
+	}
+
+	// 2. Store version
+	d.Version = version
+
+	// 3. Decode based on version
+	switch version {
+	case DispatcherHeartbeatVersion1:
+		return d.decodeV1(payload)
+	default:
+		return fmt.Errorf("unsupported DispatcherHeartbeat version: %d", version)
+	}
 }
 
-func (d *DispatcherHeartbeat) encodeV0() ([]byte, error) {
+func (d *DispatcherHeartbeat) encodeV1() ([]byte, error) {
 	buf := bytes.NewBuffer(make([]byte, 0))
-	buf.WriteByte(d.Version)
 	binary.Write(buf, binary.BigEndian, d.ClusterID)
 	binary.Write(buf, binary.BigEndian, d.DispatcherCount)
 	for _, dp := range d.DispatcherProgresses {
@@ -133,13 +148,8 @@ func (d *DispatcherHeartbeat) encodeV0() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (d *DispatcherHeartbeat) decodeV0(data []byte) error {
+func (d *DispatcherHeartbeat) decodeV1(data []byte) error {
 	buf := bytes.NewBuffer(data)
-	var err error
-	d.Version, err = buf.ReadByte()
-	if err != nil {
-		return err
-	}
 	d.ClusterID = binary.BigEndian.Uint64(buf.Next(8))
 	d.DispatcherCount = binary.BigEndian.Uint32(buf.Next(4))
 	d.DispatcherProgresses = make([]DispatcherProgress, 0, d.DispatcherCount)
@@ -161,36 +171,34 @@ const (
 	DSStateRemoved
 )
 
+// It is a part of DispatcherHeartbeatResponse, so it has no version field.
 type DispatcherState struct {
-	Version      byte // 1 byte, it should be the same as DispatcherHeartbeatResponseVersion
 	State        DSState
 	DispatcherID common.DispatcherID
 }
 
 func NewDispatcherState(dispatcherID common.DispatcherID, state DSState) DispatcherState {
 	return DispatcherState{
-		Version:      DispatcherHeartbeatResponseVersion,
 		State:        state,
 		DispatcherID: dispatcherID,
 	}
 }
 
 func (d *DispatcherState) GetSize() int {
-	return d.DispatcherID.GetSize() + 2 // version + state
+	return d.DispatcherID.GetSize() + 1 // + state
 }
 
 func (d DispatcherState) Marshal() ([]byte, error) {
-	return d.encodeV0()
+	return d.encodeV1()
 }
 
 func (d *DispatcherState) Unmarshal(data []byte) error {
-	return d.decodeV0(data)
+	return d.decodeV1(data)
 }
 
-func (d *DispatcherState) decodeV0(data []byte) error {
+func (d *DispatcherState) decodeV1(data []byte) error {
 	buf := bytes.NewBuffer(data)
 	var err error
-	d.Version, err = buf.ReadByte()
 	if err != nil {
 		return err
 	}
@@ -203,16 +211,15 @@ func (d *DispatcherState) decodeV0(data []byte) error {
 	return nil
 }
 
-func (d *DispatcherState) encodeV0() ([]byte, error) {
+func (d *DispatcherState) encodeV1() ([]byte, error) {
 	buf := bytes.NewBuffer(make([]byte, 0))
-	buf.WriteByte(d.Version)
 	buf.Write(d.DispatcherID.Marshal())
 	buf.WriteByte(byte(d.State))
 	return buf.Bytes(), nil
 }
 
 type DispatcherHeartbeatResponse struct {
-	Version   byte
+	Version   int
 	ClusterID uint64
 	// DispatcherCount is use for decoding of the response.
 	DispatcherCount  uint32
@@ -221,7 +228,7 @@ type DispatcherHeartbeatResponse struct {
 
 func NewDispatcherHeartbeatResponse() *DispatcherHeartbeatResponse {
 	return &DispatcherHeartbeatResponse{
-		Version: DispatcherHeartbeatVersion,
+		Version: DispatcherHeartbeatResponseVersion1,
 		// TODO: Pass a real clusterID when we support 1 TiCDC cluster subscribe multiple TiDB clusters
 		ClusterID:        0,
 		DispatcherCount:  0,
@@ -235,8 +242,7 @@ func (d *DispatcherHeartbeatResponse) Append(ds DispatcherState) {
 }
 
 func (d *DispatcherHeartbeatResponse) GetSize() int {
-	size := 1 // version
-	size += 8 // clusterID
+	size := 8 // clusterID
 	size += 4 // dispatcher count
 	for _, ds := range d.DispatcherStates {
 		size += ds.GetSize()
@@ -244,38 +250,61 @@ func (d *DispatcherHeartbeatResponse) GetSize() int {
 	return size
 }
 
-func (d DispatcherHeartbeatResponse) Marshal() ([]byte, error) {
-	return d.encodeV0()
+func (d *DispatcherHeartbeatResponse) Marshal() ([]byte, error) {
+	// 1. Encode payload based on version
+	var payload []byte
+	var err error
+	switch d.Version {
+	case DispatcherHeartbeatResponseVersion1:
+		payload, err = d.encodeV1()
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("unsupported DispatcherHeartbeatResponse version: %d", d.Version)
+	}
+	// 2. Use unified header format
+	return MarshalEventWithHeader(TypeDispatcherHeartbeatResponse, d.Version, payload)
 }
 
 func (d *DispatcherHeartbeatResponse) Unmarshal(data []byte) error {
-	return d.decodeV0(data)
-}
-
-func (d *DispatcherHeartbeatResponse) decodeV0(data []byte) error {
-	buf := bytes.NewBuffer(data)
-	var err error
-	d.Version, err = buf.ReadByte()
+	// 1. Parse unified header
+	eventType, version, payloadLen, err := UnmarshalEventHeader(data)
 	if err != nil {
 		return err
 	}
-	d.ClusterID = binary.BigEndian.Uint64(buf.Next(8))
-	d.DispatcherCount = binary.BigEndian.Uint32(buf.Next(4))
-	d.DispatcherStates = make([]DispatcherState, 0, d.DispatcherCount)
-	for range d.DispatcherCount {
-		var ds DispatcherState
-		dsData := buf.Next(ds.GetSize())
-		if err = ds.Unmarshal(dsData); err != nil {
-			return err
-		}
-		d.DispatcherStates = append(d.DispatcherStates, ds)
+
+	// 2. Validate event type
+	if eventType != TypeDispatcherHeartbeatResponse {
+		return fmt.Errorf("expected DispatcherHeartbeatResponse (type %d), got type %d (%s)",
+			TypeDispatcherHeartbeatResponse, eventType, TypeToString(eventType))
 	}
-	return nil
+
+	// 3. Validate total data length
+	headerSize := GetEventHeaderSize()
+	expectedLen := uint64(headerSize) + payloadLen
+	if uint64(len(data)) < expectedLen {
+		return fmt.Errorf("incomplete data: expected %d bytes (header %d + payload %d), got %d",
+			expectedLen, headerSize, payloadLen, len(data))
+	}
+
+	// 4. Extract payload
+	payload := data[headerSize:expectedLen]
+
+	// 5. Store version
+	d.Version = version
+
+	// 6. Decode based on version
+	switch version {
+	case DispatcherHeartbeatResponseVersion1:
+		return d.decodeV1(payload)
+	default:
+		return fmt.Errorf("unsupported DispatcherHeartbeatResponse version: %d", version)
+	}
 }
 
-func (d *DispatcherHeartbeatResponse) encodeV0() ([]byte, error) {
+func (d *DispatcherHeartbeatResponse) encodeV1() ([]byte, error) {
 	buf := bytes.NewBuffer(make([]byte, 0))
-	buf.WriteByte(d.Version)
 	binary.Write(buf, binary.BigEndian, d.ClusterID)
 	binary.Write(buf, binary.BigEndian, d.DispatcherCount)
 	for _, ds := range d.DispatcherStates {
@@ -288,130 +317,18 @@ func (d *DispatcherHeartbeatResponse) encodeV0() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-type AvailableMemory struct {
-	Gid                 common.GID                     // GID is the internal representation of ChangeFeedID
-	Available           uint64                         // in bytes, used to report the Available memory
-	DispatcherCount     uint32                         // used to report the number of dispatchers
-	DispatcherAvailable map[common.DispatcherID]uint64 // in bytes, used to report the memory usage of each dispatcher
-}
-
-func NewAvailableMemory(gid common.GID, available uint64) AvailableMemory {
-	return AvailableMemory{
-		Gid:                 gid,
-		Available:           available,
-		DispatcherAvailable: make(map[common.DispatcherID]uint64),
-	}
-}
-
-func (m AvailableMemory) Marshal() []byte {
-	buf := bytes.NewBuffer(make([]byte, 0))
-	buf.Write(m.Gid.Marshal())
-	binary.Write(buf, binary.BigEndian, m.Available)
-	binary.Write(buf, binary.BigEndian, m.DispatcherCount)
-	for dispatcherID, available := range m.DispatcherAvailable {
-		buf.Write(dispatcherID.Marshal())
-		binary.Write(buf, binary.BigEndian, available)
-	}
-	return buf.Bytes()
-}
-
-func (m *AvailableMemory) Unmarshal(buf *bytes.Buffer) {
-	m.Gid.Unmarshal(buf.Next(m.Gid.GetSize()))
-	m.Available = binary.BigEndian.Uint64(buf.Next(8))
-	m.DispatcherCount = binary.BigEndian.Uint32(buf.Next(4))
-	m.DispatcherAvailable = make(map[common.DispatcherID]uint64)
-	for range m.DispatcherCount {
-		dispatcherID := common.DispatcherID{}
-		dispatcherID.Unmarshal(buf.Next(dispatcherID.GetSize()))
-		m.DispatcherAvailable[dispatcherID] = binary.BigEndian.Uint64(buf.Next(8))
-	}
-}
-
-func (m AvailableMemory) GetSize() int {
-	// changefeedID size + changefeed available size
-	size := m.Gid.GetSize() + 8
-	size += 4 // dispatcher count
-	for range m.DispatcherCount {
-		dispatcherID := &common.DispatcherID{}
-		// dispatcherID size + dispatcher available size
-		size += dispatcherID.GetSize() + 8
-	}
-	return size
-}
-
-type CongestionControl struct {
-	version   byte
-	clusterID uint64
-
-	changefeedCount uint32
-	availables      []AvailableMemory
-}
-
-func NewCongestionControl() *CongestionControl {
-	return &CongestionControl{
-		version: CongestionControlVersion,
-	}
-}
-
-func (c *CongestionControl) GetSize() int {
-	size := 1 // version
-	size += 8 // clusterID
-
-	size += 4 // changefeed count
-	for _, mem := range c.availables {
-		size += mem.GetSize()
-	}
-	return size
-}
-
-func (c *CongestionControl) Marshal() ([]byte, error) {
-	buf := bytes.NewBuffer(make([]byte, 0))
-	buf.WriteByte(c.version)
-	_ = binary.Write(buf, binary.BigEndian, c.clusterID)
-	_ = binary.Write(buf, binary.BigEndian, c.changefeedCount)
-
-	for _, item := range c.availables {
-		data := item.Marshal()
-		buf.Write(data)
-	}
-	return buf.Bytes(), nil
-}
-
-func (c *CongestionControl) Unmarshal(data []byte) error {
+func (d *DispatcherHeartbeatResponse) decodeV1(data []byte) error {
 	buf := bytes.NewBuffer(data)
-	var err error
-	c.version, err = buf.ReadByte()
-	if err != nil {
-		return err
-	}
-	c.clusterID = binary.BigEndian.Uint64(buf.Next(8))
-	c.changefeedCount = binary.BigEndian.Uint32(buf.Next(4))
-	c.availables = make([]AvailableMemory, 0, c.changefeedCount)
-	for i := uint32(0); i < c.changefeedCount; i++ {
-		var item AvailableMemory
-		item.Unmarshal(buf)
-		c.availables = append(c.availables, item)
+	d.ClusterID = binary.BigEndian.Uint64(buf.Next(8))
+	d.DispatcherCount = binary.BigEndian.Uint32(buf.Next(4))
+	d.DispatcherStates = make([]DispatcherState, 0, d.DispatcherCount)
+	for range d.DispatcherCount {
+		var ds DispatcherState
+		dsData := buf.Next(ds.GetSize())
+		if err := ds.Unmarshal(dsData); err != nil {
+			return err
+		}
+		d.DispatcherStates = append(d.DispatcherStates, ds)
 	}
 	return nil
-}
-
-func (c *CongestionControl) AddAvailableMemory(gid common.GID, available uint64) {
-	c.changefeedCount++
-	c.availables = append(c.availables, NewAvailableMemory(gid, available))
-}
-
-func (c *CongestionControl) AddAvailableMemoryWithDispatchers(gid common.GID, available uint64, dispatcherAvailable map[common.DispatcherID]uint64) {
-	c.changefeedCount++
-	availMem := NewAvailableMemory(gid, available)
-	availMem.DispatcherAvailable = dispatcherAvailable
-	availMem.DispatcherCount = uint32(len(dispatcherAvailable))
-	c.availables = append(c.availables, availMem)
-}
-
-func (c *CongestionControl) GetAvailables() []AvailableMemory {
-	return c.availables
-}
-
-func (c *CongestionControl) GetClusterID() uint64 {
-	return c.clusterID
 }

@@ -716,7 +716,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	// If needCompleteStatus is true, we need to send the dispatcher heartbeat to the event service.
 	if needCompleteStatus {
 		eventServiceDispatcherHeartbeat := &event.DispatcherHeartbeat{
-			Version:              event.DispatcherHeartbeatVersion,
+			Version:              event.DispatcherHeartbeatVersion1,
 			DispatcherCount:      0,
 			DispatcherProgresses: make([]event.DispatcherProgress, 0, dispatcherCount),
 		}

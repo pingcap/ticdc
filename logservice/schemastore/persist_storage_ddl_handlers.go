@@ -1656,7 +1656,8 @@ func buildDDLEventCommonWithTableID(rawEvent *PersistedDDLEvent, tableID int64, 
 	}
 
 	return commonEvent.DDLEvent{
-		Type: rawEvent.Type,
+		Version: commonEvent.DDLEventVersion1, // Must set version explicitly
+		Type:    rawEvent.Type,
 		// TODO: whether the following four fields are needed
 		SchemaID:   rawEvent.SchemaID,
 		SchemaName: rawEvent.SchemaName,

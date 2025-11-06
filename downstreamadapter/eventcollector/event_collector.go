@@ -383,7 +383,7 @@ func (c *EventCollector) groupHeartbeat(heartbeat *event.DispatcherHeartbeat) ma
 		heartbeat, ok := groupedHeartbeats[target]
 		if !ok {
 			heartbeat = &event.DispatcherHeartbeat{
-				Version:              event.DispatcherHeartbeatVersion,
+				Version:              event.DispatcherHeartbeatVersion1,
 				DispatcherProgresses: make([]event.DispatcherProgress, 0, 32),
 			}
 			groupedHeartbeats[target] = heartbeat

@@ -17,15 +17,13 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	"go.uber.org/zap"
 )
 
 var _ Event = &SyncPointEvent{}
 
 const (
-	SyncPointEventVersion = 1
+	SyncPointEventVersion1 = 1
 )
 
 // Implement Event / FlushEvent / BlockEvent interface
@@ -49,7 +47,7 @@ func NewSyncPointEvent(id common.DispatcherID, commitTsList []uint64, seq uint64
 		CommitTsList: commitTsList,
 		Seq:          seq,
 		Epoch:        epoch,
-		Version:      SyncPointEventVersion,
+		Version:      SyncPointEventVersion1,
 	}
 }
 
@@ -74,8 +72,9 @@ func (e *SyncPointEvent) GetStartTs() common.Ts {
 }
 
 func (e *SyncPointEvent) GetSize() int64 {
-	// Version(1) + Seq(8) + Epoch(8) + DispatcherID(16) + len(CommitTsList) + 8 * len(CommitTsList)
-	return 1 + 8*2 + int64(e.DispatcherID.GetSize()+4+8*len(e.CommitTsList))
+	// Size does not include header or version (those are only for serialization)
+	// Only business data: Seq(8) + Epoch(8) + DispatcherID + len(CommitTsList)(4) + CommitTsList
+	return int64(8 + 8 + e.DispatcherID.GetSize() + 4 + 8*len(e.CommitTsList))
 }
 
 func (e *SyncPointEvent) IsPaused() bool {
@@ -131,64 +130,101 @@ func (e *SyncPointEvent) Len() int32 {
 }
 
 func (e SyncPointEvent) Marshal() ([]byte, error) {
-	return e.encode()
+	// 1. Encode payload based on version
+	var payload []byte
+	var err error
+	switch e.Version {
+	case SyncPointEventVersion1:
+		payload, err = e.encodeV1()
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("unsupported SyncPointEvent version: %d", e.Version)
+	}
+
+	// 2. Use unified header format
+	return MarshalEventWithHeader(TypeSyncPointEvent, int(e.Version), payload)
 }
 
 func (e *SyncPointEvent) Unmarshal(data []byte) error {
-	return e.decode(data)
+	// 1. Validate header and extract payload
+	payload, version, err := ValidateAndExtractPayload(data, TypeSyncPointEvent)
+	if err != nil {
+		return err
+	}
+
+	// 2. Store version
+	e.Version = byte(version)
+
+	// 3. Decode based on version
+	switch version {
+	case SyncPointEventVersion1:
+		return e.decodeV1(payload)
+	default:
+		return fmt.Errorf("unsupported SyncPointEvent version: %d", version)
+	}
 }
 
-func (e SyncPointEvent) encode() ([]byte, error) {
-	if e.Version != SyncPointEventVersion {
-		log.Panic("SyncPointEvent: invalid version",
-			zap.Uint64("expected", SyncPointEventVersion), zap.Uint8("received", e.Version))
-	}
-	return e.encodeV0()
-}
-
-func (e *SyncPointEvent) decode(data []byte) error {
-	if len(data) == 0 {
-		return fmt.Errorf("SyncPointEvent.decode: empty data")
-	}
-	e.Version = data[0]
-	if e.Version != SyncPointEventVersion {
-		return fmt.Errorf("SyncPointEvent: invalid version, expect %d, got %d", SyncPointEventVersion, e.Version)
-	}
-	return e.decodeV0(data)
-}
-
-func (e SyncPointEvent) encodeV0() ([]byte, error) {
-	data := make([]byte, e.GetSize())
+func (e SyncPointEvent) encodeV1() ([]byte, error) {
+	// Note: version is now handled in the header by Marshal(), not here
+	// payload: Seq + Epoch + len(CommitTsList) + CommitTsList + DispatcherID
+	payloadSize := 8 + 8 + 4 + 8*len(e.CommitTsList) + e.DispatcherID.GetSize()
+	data := make([]byte, payloadSize)
 	offset := 0
-	data[offset] = e.Version
-	offset += 1
+
+	// Seq
 	binary.BigEndian.PutUint64(data[offset:], uint64(e.Seq))
 	offset += 8
+
+	// Epoch
 	binary.BigEndian.PutUint64(data[offset:], e.Epoch)
 	offset += 8
+
+	// CommitTsList length
 	binary.BigEndian.PutUint32(data[offset:], uint32(len(e.CommitTsList)))
 	offset += 4
+
+	// CommitTsList
 	for _, ts := range e.CommitTsList {
 		binary.BigEndian.PutUint64(data[offset:], ts)
 		offset += 8
 	}
+
+	// DispatcherID
 	copy(data[offset:], e.DispatcherID.Marshal())
-	offset += e.DispatcherID.GetSize()
+
 	return data, nil
 }
 
-func (e *SyncPointEvent) decodeV0(data []byte) error {
-	offset := 1 // Skip version byte
-	e.Seq = common.Ts(binary.BigEndian.Uint64(data[offset:]))
+func (e *SyncPointEvent) decodeV1(data []byte) error {
+	// Note: header (magic + event type + version + length) has already been read and removed from data
+	offset := 0
+
+	// Seq
+	e.Seq = binary.BigEndian.Uint64(data[offset:])
 	offset += 8
+
+	// Epoch
 	e.Epoch = binary.BigEndian.Uint64(data[offset:])
 	offset += 8
+
+	// CommitTsList length
 	count := binary.BigEndian.Uint32(data[offset:])
 	offset += 4
+
+	// CommitTsList
 	e.CommitTsList = make([]uint64, count)
 	for i := uint32(0); i < count; i++ {
 		e.CommitTsList[i] = binary.BigEndian.Uint64(data[offset:])
 		offset += 8
 	}
-	return e.DispatcherID.Unmarshal(data[offset:])
+
+	// DispatcherID
+	err := e.DispatcherID.Unmarshal(data[offset:])
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

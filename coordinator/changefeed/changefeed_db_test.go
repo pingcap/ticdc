@@ -63,6 +63,7 @@ func TestStopByChangefeedID(t *testing.T) {
 	db := NewChangefeedDB(1216)
 	cf := &Changefeed{ID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)}
 	db.AddReplicatingMaintainer(cf, node.ID("node-1"))
+	require.Contains(t, db.GetByNodeID("node-1"), cf)
 
 	nodeID := db.StopByChangefeedID(cf.ID, false)
 
@@ -70,6 +71,11 @@ func TestStopByChangefeedID(t *testing.T) {
 	require.Contains(t, db.changefeeds, cf.ID)
 	require.Equal(t, node.ID("node-1"), nodeID)
 	require.Lenf(t, db.GetReplicating(), 0, "")
+	require.NotContains(t, db.GetByNodeID("node-1"), cf)
+
+	sizeMap := db.GetTaskSizePerNode()
+	_, ok := sizeMap["node-1"]
+	require.False(t, ok)
 
 	require.Equal(t, "", db.StopByChangefeedID(common.NewChangeFeedIDWithName("a", common.DefaultKeyspace), false).String())
 }
@@ -101,11 +107,16 @@ func TestRemoveChangefeed(t *testing.T) {
 
 	cf2 := &Changefeed{ID: common.NewChangeFeedIDWithName("test2", common.DefaultKeyspace)}
 	db.AddReplicatingMaintainer(cf2, "node1")
+	require.Contains(t, db.GetByNodeID("node1"), cf2)
 	require.Equal(t, node.ID("node1"), db.StopByChangefeedID(cf2.ID, true))
 	require.NotContains(t, db.GetAbsent(), cf2)
 	require.NotContains(t, db.changefeeds, cf2.ID)
 	require.NotContains(t, db.stopped, cf2.ID)
 	require.Equal(t, "", cf2.nodeID.String())
+
+	sizeMap := db.GetTaskSizePerNode()
+	_, ok := sizeMap["node1"]
+	require.False(t, ok)
 }
 
 func TestGetByID(t *testing.T) {

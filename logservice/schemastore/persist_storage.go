@@ -59,6 +59,10 @@ type persistentStorage struct {
 	kvStorage kv.Storage
 
 	db *pebble.DB
+	wg sync.WaitGroup
+
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	mu sync.RWMutex
 
@@ -152,6 +156,7 @@ func newPersistentStorage(
 		tableInfoStoreMap:      make(map[int64]*versionedTableInfoStore),
 		tableRegisteredCount:   make(map[int64]int),
 	}
+	dataStorage.ctx, dataStorage.cancel = context.WithCancel(ctx)
 	err := dataStorage.initialize(ctx)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -292,7 +297,16 @@ func (p *persistentStorage) initializeFromDisk() {
 	}
 }
 
+func (p *persistentStorage) run() error {
+	p.wg.Add(2)
+	go p.gc(p.ctx)
+	go p.persistUpperBoundPeriodically(p.ctx)
+	return nil
+}
+
 func (p *persistentStorage) close() error {
+	p.cancel()
+	p.wg.Wait()
 	return p.db.Close()
 }
 
@@ -569,6 +583,7 @@ func addTableInfoFromKVSnap(
 }
 
 func (p *persistentStorage) gc(ctx context.Context) {
+	defer p.wg.Done()
 	ticker := time.NewTicker(5 * time.Minute)
 	for {
 		select {
@@ -682,6 +697,7 @@ func (p *persistentStorage) getUpperBound() UpperBoundMeta {
 }
 
 func (p *persistentStorage) persistUpperBoundPeriodically(ctx context.Context) {
+	defer p.wg.Done()
 	ticker := time.NewTicker(10 * time.Second)
 	for {
 		select {
