@@ -110,7 +110,7 @@ function run() {
 		--storage="$storage_path" \
 		--sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
 
-	check_sync_diff $WORK_DIR $WORK_DIR/diff_config.toml
+	check_sync_diff $WORK_DIR $WORK_DIR/diff_config.toml 100
 }
 
 trap stop EXIT
