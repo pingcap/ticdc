@@ -263,8 +263,9 @@ func (c *Controller) onMessage(msg *messaging.TargetMessage) {
 	case messaging.TypeLogCoordinatorResolvedTsResponse:
 		c.onLogCoordinatorReportResolvedTs(msg)
 	default:
-		log.Warn("unexpected message type",
-			zap.String("type", msg.Type.String()))
+		log.Warn("unknown message type, ignore it",
+			zap.String("type", msg.Type.String()),
+			zap.Any("message", msg.Message))
 	}
 }
 

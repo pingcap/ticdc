@@ -550,7 +550,7 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 						ds.Push(e.GetDispatcherID(), dispatcherEvent)
 					}
 				default:
-					log.Warn("invalid message type, ignore it", zap.Any("msg", msg))
+					log.Warn("unknown message type, ignore it", zap.Any("msg", msg))
 				}
 			}
 		}

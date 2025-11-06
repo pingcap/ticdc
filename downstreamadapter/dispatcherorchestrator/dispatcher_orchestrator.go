@@ -117,7 +117,9 @@ func (m *DispatcherOrchestrator) handleMessages(ctx context.Context) error {
 					log.Error("failed to handle close request", zap.Error(err))
 				}
 			default:
-				log.Warn("unknown message type, ignore it", zap.Any("message", msg.Message))
+				log.Warn("unknown message type, ignore it",
+					zap.String("type", msg.Type.String()),
+					zap.Any("message", msg.Message))
 			}
 		}
 	}
