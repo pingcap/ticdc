@@ -128,7 +128,7 @@ func (o *options) run(cmd *cobra.Command) error {
 
 	err = svr.Run(ctx)
 	if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
-		log.Warn("cdc server exits with error", zap.Error(err))
+		log.Error("cdc server exits with error", zap.Error(err))
 	} else {
 		log.Info("cdc server exits normally")
 	}

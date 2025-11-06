@@ -209,6 +209,12 @@ func (c *Config) Apply(
 	if err = getMultiStmtEnable(query, &c.MultiStmtEnable); err != nil {
 		return err
 	}
+	if err = getHasVectorType(query, &c.HasVectorType); err != nil {
+		return err
+	}
+	if err = getCachePrepStmts(query, &c.CachePrepStmts); err != nil {
+		return err
+	}
 	if err = getEnableDDLTs(query, &c.EnableDDLTs); err != nil {
 		return err
 	}
@@ -227,7 +233,6 @@ func (c *Config) Apply(
 		c.SourceID = cfg.SinkConfig.TiDBSourceID
 		log.Info("TiDB source ID is set", zap.Uint64("sourceID", c.SourceID))
 	}
-
 	return nil
 }
 
@@ -251,6 +256,8 @@ func NewMysqlConfigAndDB(
 	if err != nil {
 		return nil, nil, err
 	}
+
+	cfg.HasVectorType = ShouldFormatVectorType(db, cfg)
 
 	// By default, cache-prep-stmts=true, an LRU cache is used for prepared statements,
 	// two connections are required to process a transaction.
@@ -463,43 +470,8 @@ func getSSLCA(values url.Values, changefeedID common.ChangeFeedID, tls *string) 
 	return nil
 }
 
-// func getBatchReplaceEnable(values url.Values, batchReplaceEnabled *bool, batchReplaceSize *int) error {
-// 	s := values.Get("batch-replace-enable")
-// 	if len(s) > 0 {
-// 		enable, err := strconv.ParseBool(s)
-// 		if err != nil {
-// 			return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
-// 		}
-// 		*batchReplaceEnabled = enable
-// 	}
-
-// 	if !*batchReplaceEnabled {
-// 		return nil
-// 	}
-
-// 	s = values.Get("batch-replace-size")
-// 	if len(s) == 0 {
-// 		return nil
-// 	}
-// 	size, err := strconv.Atoi(s)
-// 	if err != nil {
-// 		return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
-// 	}
-// 	*batchReplaceSize = size
-// 	return nil
-// }
-
 func getSafeMode(values url.Values, safeMode *bool) error {
-	s := values.Get("safe-mode")
-	if len(s) == 0 {
-		return nil
-	}
-	enabled, err := strconv.ParseBool(s)
-	if err != nil {
-		return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
-	}
-	*safeMode = enabled
-	return nil
+	return getBool(values, "safe-mode", safeMode)
 }
 
 func getTimezone(serverTimezone string, values url.Values, timezone *string) error {
@@ -550,37 +522,33 @@ func getDuration(values url.Values, key string, target *string) error {
 }
 
 func getBatchDMLEnable(values url.Values, batchDMLEnable *bool) error {
-	s := values.Get("batch-dml-enable")
-	if len(s) > 0 {
-		enable, err := strconv.ParseBool(s)
-		if err != nil {
-			return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
-		}
-		*batchDMLEnable = enable
-	}
-	return nil
+	return getBool(values, "batch-dml-enable", batchDMLEnable)
 }
 
 func getMultiStmtEnable(values url.Values, multiStmtEnable *bool) error {
-	s := values.Get("multi-stmt-enable")
-	if len(s) > 0 {
-		enable, err := strconv.ParseBool(s)
-		if err != nil {
-			return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
-		}
-		*multiStmtEnable = enable
-	}
-	return nil
+	return getBool(values, "multi-stmt-enable", multiStmtEnable)
+}
+
+func getHasVectorType(values url.Values, hasVectorType *bool) error {
+	return getBool(values, "has-vector-type", hasVectorType)
+}
+
+func getCachePrepStmts(values url.Values, cachePrepStmts *bool) error {
+	return getBool(values, "cache-prep-stmts", cachePrepStmts)
 }
 
 func getEnableDDLTs(value url.Values, enableDDLTs *bool) error {
-	s := value.Get("enable-ddl-ts")
+	return getBool(value, "enable-ddl-ts", enableDDLTs)
+}
+
+func getBool(values url.Values, key string, target *bool) error {
+	s := values.Get(key)
 	if len(s) > 0 {
 		enable, err := strconv.ParseBool(s)
 		if err != nil {
 			return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
 		}
-		*enableDDLTs = enable
+		*target = enable
 	}
 	return nil
 }

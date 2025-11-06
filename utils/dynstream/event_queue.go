@@ -15,6 +15,7 @@ package dynstream
 
 import (
 	"sync/atomic"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/utils/deque"
@@ -70,12 +71,28 @@ func (q *eventQueue[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H]) 
 	}
 }
 
+func (q *eventQueue[A, P, T, D, H]) releasePath(path *pathInfo[A, P, T, D, H]) {
+	for {
+		_, ok := path.pendingQueue.PopFront()
+		if !ok {
+			break
+		}
+	}
+
+	if path.areaMemStat != nil {
+		path.areaMemStat.decPendingSize(path, int64(path.pendingSize.Load()))
+		path.areaMemStat.lastSizeDecreaseTime.Store(time.Now())
+	}
+
+	path.pendingSize.Store(0)
+}
+
 func (q *eventQueue[A, P, T, D, H]) blockPath(path *pathInfo[A, P, T, D, H]) {
-	path.blocking = true
+	path.blocking.Store(true)
 }
 
 func (q *eventQueue[A, P, T, D, H]) wakePath(path *pathInfo[A, P, T, D, H]) {
-	path.blocking = false
+	path.blocking.Store(false)
 	count := path.pendingQueue.Length()
 	if count > 0 {
 		q.signalQueue.PushFront(eventSignal[A, P, T, D, H]{pathInfo: path, eventCount: count})
@@ -103,7 +120,7 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, 
 		if signal.eventCount == 0 {
 			log.Panic("signal event count is zero")
 		}
-		if path.blocking || path.removed.Load() {
+		if path.blocking.Load() || path.removed.Load() {
 			// The path is blocking or removed, we should ignore the signal completely.
 			// Since when it is waked, a signal event will be added to the queue.
 			q.totalPendingLength.Add(-int64(signal.eventCount))

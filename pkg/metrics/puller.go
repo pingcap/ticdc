@@ -78,7 +78,7 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(1, 2, 20),
 		},
 		// actions: wait, run.
-		[]string{"namespace", "changefeed"})
+		[]string{getKeyspaceLabel(), "changefeed"})
 
 	RegionWorkerProcessDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{

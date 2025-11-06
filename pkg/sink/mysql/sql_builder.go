@@ -38,7 +38,7 @@ type preparedDMLs struct {
 	tsPairs         []tsPair
 }
 
-func (d *preparedDMLs) LogDebug(events []*commonEvent.DMLEvent) {
+func (d *preparedDMLs) LogDebug(events []*commonEvent.DMLEvent, writerID int) {
 	if log.GetLevel() != zapcore.DebugLevel {
 		return
 	}
@@ -53,7 +53,7 @@ func (d *preparedDMLs) LogDebug(events []*commonEvent.DMLEvent) {
 
 	// Build complete log content in a single string
 	var logBuilder strings.Builder
-	logBuilder.WriteString(fmt.Sprintf("Total SQL Count: %d, Row Count: %d :", totalCount, d.rowCount))
+	logBuilder.WriteString(fmt.Sprintf("Total SQL Count: %d, Row Count: %d, Writer ID: %d :", totalCount, d.rowCount, writerID))
 
 	// Build SQL statements and arguments section
 	for i, sql := range d.sqls {

@@ -203,9 +203,9 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 	// The merger dispatcher operates by first creating a dispatcher and then removing it.
 	// Even if the redo dispatcher’s start-ts is less than that of the common dispatcher, we still record the correct redo metadata log.
 	if common.IsDefaultMode(t.mergedDispatcher.GetMode()) && t.manager.sink.SinkType() == common.MysqlSinkType {
-		newStartTsList, skipSyncpointSameAsStartTsList, err := t.manager.sink.(*mysql.Sink).GetStartTsList([]int64{t.mergedDispatcher.GetTableSpan().TableID}, []int64{int64(minCheckpointTs)}, false)
+		newStartTsList, skipSyncpointAtStartTsList, skipDMLAsStartTsList, err := t.manager.sink.(*mysql.Sink).GetTableRecoveryInfo([]int64{t.mergedDispatcher.GetTableSpan().TableID}, []int64{int64(minCheckpointTs)}, false)
 		if err != nil {
-			log.Error("calculate real startTs for merge dispatcher failed",
+			log.Error("get table recovery info for merge dispatcher failed",
 				zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()),
 				zap.Stringer("changefeedID", t.manager.changefeedID),
 				zap.Error(err),
@@ -213,14 +213,16 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 			t.mergedDispatcher.HandleError(err)
 			return
 		}
-		log.Info("calculate real startTs for Merge Dispatcher",
+		log.Info("get table recovery info for Merge Dispatcher",
 			zap.Stringer("changefeedID", t.manager.changefeedID),
 			zap.Any("receiveStartTs", minCheckpointTs),
 			zap.Any("realStartTs", newStartTsList),
-			zap.Any("skipSyncpointSameAsStartTsList", skipSyncpointSameAsStartTsList),
+			zap.Any("skipSyncpointAtStartTsList", skipSyncpointAtStartTsList),
+			zap.Any("skipDMLAsStartTsList", skipDMLAsStartTsList),
 		)
 		t.mergedDispatcher.SetStartTs(uint64(newStartTsList[0]))
-		t.mergedDispatcher.SetSkipSyncpointSameAsStartTs(skipSyncpointSameAsStartTsList[0])
+		t.mergedDispatcher.SetSkipSyncpointAtStartTs(skipSyncpointAtStartTsList[0])
+		t.mergedDispatcher.SetSkipDMLAsStartTs(skipDMLAsStartTsList[0])
 	} else {
 		t.mergedDispatcher.SetStartTs(minCheckpointTs)
 	}

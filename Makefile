@@ -54,8 +54,6 @@ else ifeq (${OS}, "darwin")
 	SED_IN_PLACE += -i ''
 endif
 
-GOTEST := CGO_ENABLED=1 $(GO) test -p 3 --race --tags=intest
-
 BUILD_FLAG =
 GOEXPERIMENT=
 ifeq ("${ENABLE_FIPS}", "1")
@@ -70,6 +68,13 @@ ifeq ("${NEXT_GEN}", "1")
 		BUILD_FLAG := $(BUILD_FLAG),nextgen
 	endif
 endif
+
+TEST_FLAG=intest
+ifeq ("${NEXT_GEN}", "1")
+	TEST_FLAG := $(TEST_FLAG),nextgen
+endif
+
+GOTEST := CGO_ENABLED=1 $(GO) test -p 3 --race --tags=$(TEST_FLAG)
 
 RELEASE_VERSION =
 ifeq ($(RELEASE_VERSION),)

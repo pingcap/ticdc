@@ -120,7 +120,7 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 	// Pre-check log level to avoid dmls.String() being called unnecessarily
 	// This method is expensive, so we only log it when the log level is debug.
 
-	dmls.LogDebug(events)
+	dmls.LogDebug(events, w.id)
 
 	return dmls, nil
 }
@@ -330,8 +330,8 @@ func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([
 					if nextRowType == common.RowTypeInsert {
 						if compareKeys(rowKey, rowLists[j].RowKeys) {
 							sql, values := w.generateNormalSQLs(events)
-							log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values))
-							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events), zap.Any("i", i), zap.Any("j", j))
+							log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values), zap.Int("writerID", w.id))
+							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events), zap.Any("i", i), zap.Any("j", j), zap.Int("writerID", w.id))
 						}
 					} else if nextRowType == common.RowTypeDelete {
 						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
@@ -342,7 +342,7 @@ func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([
 						}
 					} else if nextRowType == common.RowTypeUpdate {
 						if !compareKeys(rowLists[j].PreRowKeys, rowLists[j].RowKeys) {
-							log.Panic("The Update Row have different Row Key", zap.Any("Events", events))
+							log.Panic("The Update Row have different Row Key", zap.Any("Events", events), zap.Int("writerID", w.id))
 						}
 						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
 							// remove insert one, and break the inner loop for row i
@@ -364,13 +364,13 @@ func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([
 				case common.RowTypeUpdate:
 					rowKey := rowLists[i].RowKeys
 					if !compareKeys(rowKey, rowLists[i].PreRowKeys) {
-						log.Panic("The Update Row have different Row Key", zap.Any("Events", events))
+						log.Panic("The Update Row have different Row Key", zap.Any("Events", events), zap.Int("writerID", w.id))
 					}
 					if nextRowType == common.RowTypeInsert {
 						if compareKeys(rowKey, rowLists[j].RowKeys) {
 							sql, values := w.generateNormalSQLs(events)
-							log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values))
-							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events), zap.Any("i", i), zap.Any("j", j))
+							log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values), zap.Int("writerID", w.id))
+							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events), zap.Any("i", i), zap.Any("j", j), zap.Int("writerID", w.id))
 						}
 					} else if nextRowType == common.RowTypeDelete {
 						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
@@ -392,7 +392,7 @@ func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([
 					} else if nextRowType == common.RowTypeUpdate {
 						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
 							if !compareKeys(rowLists[j].PreRowKeys, rowLists[j].RowKeys) {
-								log.Panic("The Update Row have different Row Key", zap.Any("Events", events))
+								log.Panic("The Update Row have different Row Key", zap.Any("Events", events), zap.Int("writerID", w.id))
 							}
 							// remove the first one, update the second one, then break
 							newRowChange := commonEvent.RowChange{
@@ -519,10 +519,10 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 			rowType := rowChanges[i].RowType
 			if rowType == prevType {
 				sql, values := w.generateNormalSQLs(events)
-				log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values))
+				log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values), zap.Int("writerID", w.id))
 				log.Panic("invalid row changes", zap.String("schemaName", tableInfo.GetSchemaName()),
 					zap.String("tableName", tableInfo.GetTableName()), zap.Any("rowChanges", rowChanges),
-					zap.Any("prevType", prevType), zap.Any("currentType", rowType))
+					zap.Any("prevType", prevType), zap.Any("currentType", rowType), zap.Int("writerID", w.id))
 			}
 			prevType = rowType
 		}
@@ -558,7 +558,9 @@ func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]i
 		zap.Uint64("firstRowCommitTs", event.CommitTs),
 		zap.Uint64("firstRowReplicatingTs", event.ReplicatingTs),
 		zap.Bool("cfgSafeMode", w.cfg.SafeMode),
-		zap.Bool("isInErrorCausedSafeMode", w.isInErrorCausedSafeMode))
+		zap.Bool("isInErrorCausedSafeMode", w.isInErrorCausedSafeMode),
+		zap.Int("writerID", w.id),
+	)
 
 	var (
 		queries  []string
@@ -606,13 +608,13 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 
 	// approximateSize is multiplied by 2 because in extreme circustumas, every
 	// byte in dmls can be escaped and adds one byte.
-	fallbackToSeqWay := dmls.approximateSize*2 > w.maxAllowedPacket
+	fallbackToSeqWay := dmls.approximateSize*2 > w.cfg.MaxAllowedPacket
 
 	writeTimeout, _ := time.ParseDuration(w.cfg.WriteTimeout)
 	writeTimeout += networkDriftDuration
 
 	tryExec := func() (int, int64, error) {
-		if fallbackToSeqWay {
+		if fallbackToSeqWay || !w.cfg.MultiStmtEnable {
 			// use sequence way to execute the dmls
 			tx, err := w.db.BeginTx(w.ctx, nil)
 			if err != nil {
@@ -627,7 +629,7 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 			if err = tx.Commit(); err != nil {
 				return 0, 0, err
 			}
-			log.Debug("Exec Rows succeeded", zap.Any("rowCount", dmls.rowCount))
+			log.Debug("Exec Rows succeeded", zap.Any("rowCount", dmls.rowCount), zap.Int("writerID", w.id))
 		} else {
 			// use multi stmt way to execute the dmls
 			err := w.multiStmtExecute(dmls, writeTimeout)
@@ -674,11 +676,11 @@ func (w *Writer) sequenceExecute(
 ) error {
 	for i, query := range dmls.sqls {
 		args := dmls.values[i]
-		log.Debug("exec row", zap.String("sql", query), zap.Any("args", args))
+		log.Debug("exec row", zap.String("sql", query), zap.Any("args", args), zap.Int("writerID", w.id))
 		ctx, cancelFunc := context.WithTimeout(w.ctx, writeTimeout)
 
 		var prepStmt *sql.Stmt
-		if w.cachePrepStmts {
+		if w.cfg.CachePrepStmts {
 			if stmt, ok := w.stmtCache.Get(query); ok {
 				prepStmt = stmt.(*sql.Stmt)
 			} else if stmt, err := w.db.Prepare(query); err == nil {
@@ -700,10 +702,10 @@ func (w *Writer) sequenceExecute(
 		}
 
 		if execError != nil {
-			log.Error("ExecContext", zap.Error(execError), zap.Any("dmls", dmls))
+			log.Error("ExecContext", zap.Error(execError), zap.Any("dmls", dmls), zap.Int("writerID", w.id))
 			if rbErr := tx.Rollback(); rbErr != nil {
 				if errors.Cause(rbErr) != context.Canceled {
-					log.Warn("failed to rollback txn", zap.Error(rbErr))
+					log.Warn("failed to rollback txn", zap.Error(rbErr), zap.Int("writerID", w.id))
 				}
 			}
 			cancelFunc()
@@ -757,6 +759,7 @@ func (w *Writer) logDMLTxnErr(
 			zap.Any("tsPairs", dmls.tsPairs),
 			zap.Int("count", dmls.rowCount),
 			zap.String("dmls", dmls.String()),
+			zap.Int("writerID", w.id),
 			zap.Error(err))
 	} else {
 		if !w.checkIsDuplicateEntryError(err) {
@@ -766,6 +769,7 @@ func (w *Writer) logDMLTxnErr(
 				zap.Any("tsPairs", dmls.tsPairs),
 				zap.Int("count", dmls.rowCount),
 				zap.String("dmls", dmls.String()),
+				zap.Int("writerID", w.id),
 				zap.Error(err))
 		}
 	}

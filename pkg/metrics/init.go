@@ -16,6 +16,7 @@ package metrics
 import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/prometheus/client_golang/prometheus"
@@ -43,4 +44,11 @@ func InitMetrics(registry *prometheus.Registry) {
 	gc.InitMetrics(registry)
 	metrics.InitCloudStorageMetrics(registry)
 	InitRedoMetrics(registry)
+}
+
+func getKeyspaceLabel() string {
+	if kerneltype.IsNextGen() {
+		return "keyspace_name"
+	}
+	return "namespace"
 }

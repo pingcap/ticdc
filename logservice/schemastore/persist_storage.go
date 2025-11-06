@@ -59,6 +59,10 @@ type persistentStorage struct {
 	kvStorage kv.Storage
 
 	db *pebble.DB
+	wg sync.WaitGroup
+
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	mu sync.RWMutex
 
@@ -138,7 +142,7 @@ func newPersistentStorage(
 	keyspaceID uint32,
 	pdCli pd.Client,
 	storage kv.Storage,
-) *persistentStorage {
+) (*persistentStorage, error) {
 	dataStorage := &persistentStorage{
 		rootDir:                root,
 		keyspaceID:             keyspaceID,
@@ -152,16 +156,20 @@ func newPersistentStorage(
 		tableInfoStoreMap:      make(map[int64]*versionedTableInfoStore),
 		tableRegisteredCount:   make(map[int64]int),
 	}
-	dataStorage.initialize(ctx)
+	dataStorage.ctx, dataStorage.cancel = context.WithCancel(ctx)
+	err := dataStorage.initialize(ctx)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
 
-	return dataStorage
+	return dataStorage, nil
 }
 
 func (p *persistentStorage) getGcSafePoint(ctx context.Context) (uint64, error) {
 	return gc.UnifyGetServiceGCSafepoint(ctx, p.pdCli, p.keyspaceID, defaultSchemaStoreGcServiceID)
 }
 
-func (p *persistentStorage) initialize(ctx context.Context) {
+func (p *persistentStorage) initialize(ctx context.Context) error {
 	var gcSafePoint uint64
 	fakeChangefeedID := common.NewChangefeedID(defaultSchemaStoreGcServiceID)
 	for {
@@ -185,7 +193,7 @@ func (p *persistentStorage) initialize(ctx context.Context) {
 		log.Warn("get ts failed, will retry in 1s", zap.Error(err))
 		select {
 		case <-ctx.Done():
-			log.Panic("context is canceled during getting gc safepoint", zap.Error(ctx.Err()))
+			return errors.Trace(err)
 		case <-time.After(time.Second):
 		}
 	}
@@ -209,7 +217,7 @@ func (p *persistentStorage) initialize(ctx context.Context) {
 			isDataReusable = false
 		}
 		if gcSafePoint < gcTs {
-			log.Panic("gc safe point should never go back")
+			return errors.New(fmt.Sprintf("gc safe point %d is smaller than gcTs %d on disk", gcSafePoint, gcTs))
 		}
 		upperBound, err := readUpperBoundMeta(db)
 		if err != nil {
@@ -231,6 +239,7 @@ func (p *persistentStorage) initialize(ctx context.Context) {
 	if !isDataReusable {
 		p.initializeFromKVStorage(dbPath, gcSafePoint)
 	}
+	return nil
 }
 
 func (p *persistentStorage) initializeFromKVStorage(dbPath string, gcTs uint64) {
@@ -288,7 +297,16 @@ func (p *persistentStorage) initializeFromDisk() {
 	}
 }
 
+func (p *persistentStorage) run() error {
+	p.wg.Add(2)
+	go p.gc(p.ctx)
+	go p.persistUpperBoundPeriodically(p.ctx)
+	return nil
+}
+
 func (p *persistentStorage) close() error {
+	p.cancel()
+	p.wg.Wait()
 	return p.db.Close()
 }
 
@@ -565,6 +583,7 @@ func addTableInfoFromKVSnap(
 }
 
 func (p *persistentStorage) gc(ctx context.Context) {
+	defer p.wg.Done()
 	ticker := time.NewTicker(5 * time.Minute)
 	for {
 		select {
@@ -678,6 +697,7 @@ func (p *persistentStorage) getUpperBound() UpperBoundMeta {
 }
 
 func (p *persistentStorage) persistUpperBoundPeriodically(ctx context.Context) {
+	defer p.wg.Done()
 	ticker := time.NewTicker(10 * time.Second)
 	for {
 		select {

@@ -75,7 +75,7 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 		return err
 	}
 
-	storage, err := keyspaceManager.GetStorage(keyspaceMeta.Name)
+	storage, err := keyspaceManager.GetStorage(ctx, keyspaceMeta.Name)
 	if err != nil {
 		return err
 	}

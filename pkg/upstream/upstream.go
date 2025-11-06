@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/security"
 	tidbkv "github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/store/driver"
@@ -54,6 +55,7 @@ const (
 	closed
 
 	maxIdleDuration = time.Minute * 30
+	defaultMaxRetry = 5
 )
 
 // Upstream holds resources of a TiDB cluster, it can be shared by many changefeeds
@@ -100,7 +102,7 @@ func newUpstream(pdEndpoints []string,
 // CreateTiStore creates a tikv storage client
 // Note: It will return a same storage if the urls connect to a same pd cluster,
 // so must be careful when you call storage.Close().
-func CreateTiStore(urls string, credential *security.Credential, keyspaceName string) (tidbkv.Storage, error) {
+func CreateTiStore(ctx context.Context, urls string, credential *security.Credential, keyspaceName string) (tidbkv.Storage, error) {
 	urlv, err := common.NewURLsValue(urls)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -117,9 +119,22 @@ func CreateTiStore(urls string, credential *security.Credential, keyspaceName st
 		ClusterVerifyCN: credential.CertAllowedCN,
 	}
 	d := driver.TiKVDriver{}
-	// we should use OpenWithOptions to open a storage to avoid modifying tidb's GlobalConfig
-	// so that we can create different storage in TiCDC by different urls and credential
-	tiStore, err := d.OpenWithOptions(tiPath, driver.WithSecurity(securityCfg))
+	var tiStore tidbkv.Storage
+	err = retry.Do(ctx, func() error {
+		// we should use OpenWithOptions to open a storage to avoid modifying tidb's GlobalConfig
+		// so that we can create different storage in TiCDC by different urls and credential
+		tiStore, err = d.OpenWithOptions(tiPath, driver.WithSecurity(securityCfg))
+		return err
+	}, retry.WithMaxTries(defaultMaxRetry),
+		retry.WithBackoffBaseDelay(200),
+		retry.WithBackoffMaxDelay(4000),
+		retry.WithIsRetryableErr(func(err error) bool {
+			switch errors.Cause(err) {
+			case context.Canceled:
+				return false
+			}
+			return true
+		}))
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrNewStore, err)
 	}
@@ -175,7 +190,7 @@ func initUpstream(ctx context.Context, up *Upstream, cfg *NodeTopologyCfg) error
 	}
 	up.ID = clusterID
 
-	up.KVStorage, err = CreateTiStore(strings.Join(up.PdEndpoints, ","), up.SecurityConfig, "")
+	up.KVStorage, err = CreateTiStore(ctx, strings.Join(up.PdEndpoints, ","), up.SecurityConfig, "")
 	if err != nil {
 		up.err.Store(err)
 		return errors.Trace(err)

@@ -31,7 +31,6 @@ func TestDDLRedoConvert(t *testing.T) {
 		Query:      "ALTER TABLE test.t1 ADD COLUMN a int",
 		SchemaName: "Hello",
 		TableName:  "World",
-		TableID:    1,
 		TableInfo:  &common.TableInfo{},
 	}
 

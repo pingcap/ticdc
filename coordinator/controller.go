@@ -546,6 +546,8 @@ func (c *Controller) FinishBootstrap(runningChangefeeds map[common.ChangeFeedID]
 	for cfID, cfMeta := range allChangefeeds {
 		rm, ok := runningChangefeeds[cfID]
 		if !ok {
+			// Configuration items for compatibility with older versions
+			cfMeta.Info.VerifyAndComplete()
 			// The changefeed is not running on other nodes, add it to changefeedDB.
 			// We will create this changefeed later.
 			cf := changefeed.NewChangefeed(cfID, cfMeta.Info, cfMeta.Status.CheckpointTs, false)

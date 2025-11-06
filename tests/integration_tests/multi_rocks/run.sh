@@ -9,6 +9,11 @@ CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
 function run() {
+	# TODO tenfyzhong 2025-10-27 15:36:10 need to support next-gen
+	if [ "$NEXT_GEN" = 1 ]; then
+		exit 0
+	fi
+
 	# TODO(dongmen): enable pulsar in the future.
 	if [ "$SINK_TYPE" == "pulsar" ]; then
 		exit 0

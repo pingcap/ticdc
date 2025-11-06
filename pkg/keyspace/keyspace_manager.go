@@ -35,7 +35,7 @@ import (
 type Manager interface {
 	LoadKeyspace(ctx context.Context, keyspace string) (*keyspacepb.KeyspaceMeta, error)
 	GetKeyspaceByID(ctx context.Context, keyspaceID uint32) (*keyspacepb.KeyspaceMeta, error)
-	GetStorage(keyspace string) (kv.Storage, error)
+	GetStorage(ctx context.Context, keyspace string) (kv.Storage, error)
 	Close()
 }
 
@@ -147,7 +147,7 @@ func (k *manager) GetKeyspaceByID(ctx context.Context, keyspaceID uint32) (*keys
 	return meta, nil
 }
 
-func (k *manager) GetStorage(keyspace string) (kv.Storage, error) {
+func (k *manager) GetStorage(ctx context.Context, keyspace string) (kv.Storage, error) {
 	k.storageMu.Lock()
 	defer k.storageMu.Unlock()
 
@@ -156,7 +156,7 @@ func (k *manager) GetStorage(keyspace string) (kv.Storage, error) {
 	}
 
 	conf := config.GetGlobalServerConfig()
-	kvStorage, err := upstream.CreateTiStore(k.urls, conf.Security, keyspace)
+	kvStorage, err := upstream.CreateTiStore(ctx, k.urls, conf.Security, keyspace)
 	if err != nil {
 		return nil, err
 	}

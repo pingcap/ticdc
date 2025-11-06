@@ -1,0 +1,4 @@
+[scheduler]
+enable-table-across-nodes = true
+region-threshold = 20
+write-key-threshold = 2000

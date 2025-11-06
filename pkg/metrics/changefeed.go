@@ -24,7 +24,7 @@ var (
 			Subsystem: "maintainer",
 			Name:      "checkpoint_ts",
 			Help:      "checkpoint ts of maintainer",
-		}, []string{"namespace", "changefeed"})
+		}, []string{getKeyspaceLabel(), "changefeed"})
 
 	MaintainerCheckpointTsLagGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -32,7 +32,7 @@ var (
 			Subsystem: "maintainer",
 			Name:      "checkpoint_ts_lag",
 			Help:      "checkpoint ts lag of maintainer in seconds",
-		}, []string{"namespace", "changefeed"})
+		}, []string{getKeyspaceLabel(), "changefeed"})
 
 	MaintainerResolvedTsGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -40,14 +40,14 @@ var (
 			Subsystem: "maintainer",
 			Name:      "resolved_ts",
 			Help:      "resolved ts of maintainer",
-		}, []string{"namespace", "changefeed"})
+		}, []string{getKeyspaceLabel(), "changefeed"})
 	MaintainerResolvedTsLagGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "maintainer",
 			Name:      "resolved_ts_lag",
 			Help:      "resolved ts lag of maintainer in seconds",
-		}, []string{"namespace", "changefeed"})
+		}, []string{getKeyspaceLabel(), "changefeed"})
 
 	CoordinatorCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
@@ -63,7 +63,7 @@ var (
 			Subsystem: "changefeed",
 			Name:      "maintainer_counter",
 			Help:      "The counter of changefeed maintainer",
-		}, []string{"namespace", "changefeed"})
+		}, []string{getKeyspaceLabel(), "changefeed"})
 
 	ChangefeedStatusGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -71,7 +71,7 @@ var (
 			Subsystem: "owner",
 			Name:      "status",
 			Help:      "The status of changefeeds",
-		}, []string{"namespace", "changefeed"})
+		}, []string{getKeyspaceLabel(), "changefeed"})
 
 	ChangefeedCheckpointTsLagGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -79,7 +79,7 @@ var (
 			Subsystem: "owner",
 			Name:      "checkpoint_ts_lag",
 			Help:      "changefeed checkpoint ts lag in changefeeds in seconds",
-		}, []string{"namespace", "changefeed"})
+		}, []string{getKeyspaceLabel(), "changefeed"})
 
 	// it's a metrics used in a large number of tcms, we should always keep this metrics
 	ChangefeedCheckpointTsGauge = prometheus.NewGaugeVec(
@@ -88,7 +88,7 @@ var (
 			Subsystem: "owner",
 			Name:      "checkpoint_ts",
 			Help:      "checkpoint ts of changefeeds",
-		}, []string{"namespace", "changefeed"})
+		}, []string{getKeyspaceLabel(), "changefeed"})
 )
 
 func initChangefeedMetrics(registry *prometheus.Registry) {

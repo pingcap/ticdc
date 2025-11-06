@@ -163,6 +163,30 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Wake(path P) {
 	s.pathMap.RUnlock()
 }
 
+func (s *parallelDynamicStream[A, P, T, D, H]) Release(path P) {
+	// Check if the stream is closed first
+	if s.closed.Load() {
+		return
+	}
+
+	s.pathMap.RLock()
+	pi, ok := s.pathMap.m[path]
+	if !ok {
+		s.pathMap.RUnlock()
+		return
+	}
+
+	// Double-check closed status while holding the read lock
+	if s.closed.Load() {
+		s.pathMap.RUnlock()
+		return
+	}
+
+	// Keep the read lock until we finish using pathInfo
+	pi.stream.addEvent(eventWrap[A, P, T, D, H]{release: true, pathInfo: pi})
+	s.pathMap.RUnlock()
+}
+
 func (s *parallelDynamicStream[A, P, T, D, H]) Feedback() <-chan Feedback[A, P, D] {
 	return s.feedbackChan
 }
@@ -222,8 +246,8 @@ func (s *parallelDynamicStream[A, P, T, D, H]) SetAreaSettings(area A, settings 
 	}
 }
 
-func (s *parallelDynamicStream[A, P, T, D, H]) GetMetrics() Metrics[A] {
-	metrics := Metrics[A]{}
+func (s *parallelDynamicStream[A, P, T, D, H]) GetMetrics() Metrics[A, P] {
+	metrics := Metrics[A, P]{}
 	for _, ds := range s.streams {
 		metrics.PendingQueueLen += ds.getPendingSize()
 	}
