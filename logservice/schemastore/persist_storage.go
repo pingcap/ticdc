@@ -515,7 +515,8 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 		p.mu.RUnlock()
 		for _, ts := range allTargetTs {
 			rawEvent := readPersistedDDLEvent(storageSnap, ts)
-			ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter, rawEvent.TableID)
+			// the tableID of buildDDLEvent is not used in this function, set it to 0
+			ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter, 0)
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
