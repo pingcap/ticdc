@@ -43,6 +43,7 @@ const (
 
 // Writer is responsible for writing various dml events, ddl events, syncpoint events to mysql downstream.
 type Writer struct {
+	id           int
 	ctx          context.Context
 	db           *sql.DB
 	cfg          *Config
@@ -57,12 +58,8 @@ type Writer struct {
 
 	// implement stmtCache to improve performance, especially when the downstream is TiDB
 	stmtCache *lru.Cache
-	// Indicate if the CachePrepStmts should be enabled or not
-	cachePrepStmts   bool
-	maxAllowedPacket int64
 
 	statistics *metrics.Statistics
-	needFormat bool
 
 	// When encountered an `Duplicate entry` error, we will set the `isInErrorCausedSafeMode` to true,
 	// and set the `lastErrorCausedSafeModeTime` to the current time.
@@ -77,25 +74,23 @@ type Writer struct {
 
 func NewWriter(
 	ctx context.Context,
+	id int,
 	db *sql.DB,
 	cfg *Config,
 	changefeedID common.ChangeFeedID,
 	statistics *metrics.Statistics,
-	needFormatVectorType bool,
 ) *Writer {
 	res := &Writer{
 		ctx:                    ctx,
+		id:                     id,
 		db:                     db,
 		cfg:                    cfg,
 		syncPointTableInit:     false,
 		ChangefeedID:           changefeedID,
 		lastCleanSyncPointTime: time.Now(),
 		ddlTsTableInit:         false,
-		cachePrepStmts:         cfg.CachePrepStmts,
-		maxAllowedPacket:       cfg.MaxAllowedPacket,
 		stmtCache:              cfg.stmtCache,
 		statistics:             statistics,
-		needFormat:             needFormatVectorType,
 
 		isInErrorCausedSafeMode:     false,
 		errorCausedSafeModeDuration: defaultErrorCausedSafeModeDuration,
