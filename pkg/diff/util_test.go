@@ -14,41 +14,43 @@
 package diff
 
 import (
-	"testing"
-
+	"github.com/pingcap/check"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
-	"github.com/pingcap/tidb/pkg/parser/ast"
+	pmodel "github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/util/dbutil"
 	"github.com/pingcap/tidb/pkg/util/dbutil/dbutiltest"
-	"github.com/stretchr/testify/require"
 )
 
-func TestIgnoreColumns(t *testing.T) {
+var _ = check.Suite(&testUtilSuite{})
+
+type testUtilSuite struct{}
+
+func (s *testUtilSuite) TestIgnoreColumns(c *check.C) {
 	createTableSQL1 := "CREATE TABLE `test`.`atest` (`a` int, `b` int, `c` int, `d` int, primary key(`a`))"
 	tableInfo1, err := dbutiltest.GetTableInfoBySQL(createTableSQL1, parser.New())
-	require.NoError(t, err)
+	c.Assert(err, check.IsNil)
 	tbInfo := ignoreColumns(tableInfo1, []string{"a"})
-	require.Len(t, tbInfo.Columns, 3)
-	require.Len(t, tbInfo.Indices, 0)
-	require.Equal(t, tbInfo.Columns[2].Offset, 2)
+	c.Assert(tbInfo.Columns, check.HasLen, 3)
+	c.Assert(tbInfo.Indices, check.HasLen, 0)
+	c.Assert(tbInfo.Columns[2].Offset, check.Equals, 2)
 
 	createTableSQL2 := "CREATE TABLE `test`.`atest` (`a` int, `b` int, `c` int, `d` int, primary key(`a`), index idx(`b`, `c`))"
 	tableInfo2, err := dbutiltest.GetTableInfoBySQL(createTableSQL2, parser.New())
-	require.NoError(t, err)
+	c.Assert(err, check.IsNil)
 	tbInfo = ignoreColumns(tableInfo2, []string{"a", "b"})
-	require.Len(t, tbInfo.Columns, 2)
-	require.Len(t, tbInfo.Indices, 0)
+	c.Assert(tbInfo.Columns, check.HasLen, 2)
+	c.Assert(tbInfo.Indices, check.HasLen, 0)
 
 	createTableSQL3 := "CREATE TABLE `test`.`atest` (`a` int, `b` int, `c` int, `d` int, primary key(`a`), index idx(`b`, `c`))"
 	tableInfo3, err := dbutiltest.GetTableInfoBySQL(createTableSQL3, parser.New())
-	require.NoError(t, err)
+	c.Assert(err, check.IsNil)
 	tbInfo = ignoreColumns(tableInfo3, []string{"b", "c"})
-	require.Len(t, tbInfo.Columns, 2)
-	require.Len(t, tbInfo.Indices, 1)
+	c.Assert(tbInfo.Columns, check.HasLen, 2)
+	c.Assert(tbInfo.Indices, check.HasLen, 1)
 }
 
-func TestRowContainsCols(t *testing.T) {
+func (s *testUtilSuite) TestRowContainsCols(c *check.C) {
 	row := map[string]*dbutil.ColumnData{
 		"a": nil,
 		"b": nil,
@@ -57,23 +59,23 @@ func TestRowContainsCols(t *testing.T) {
 
 	cols := []*model.ColumnInfo{
 		{
-			Name: ast.NewCIStr("a"),
+			Name: pmodel.NewCIStr("a"),
 		}, {
-			Name: ast.NewCIStr("b"),
+			Name: pmodel.NewCIStr("b"),
 		}, {
-			Name: ast.NewCIStr("c"),
+			Name: pmodel.NewCIStr("c"),
 		},
 	}
 
 	contain := rowContainsCols(row, cols)
-	require.True(t, contain)
+	c.Assert(contain, check.Equals, true)
 
 	delete(row, "a")
 	contain = rowContainsCols(row, cols)
-	require.False(t, contain)
+	c.Assert(contain, check.Equals, false)
 }
 
-func TestRowToString(t *testing.T) {
+func (s *testUtilSuite) TestRowToString(c *check.C) {
 	row := make(map[string]*dbutil.ColumnData)
 	row["id"] = &dbutil.ColumnData{
 		Data:   []byte("1"),
@@ -91,12 +93,12 @@ func TestRowToString(t *testing.T) {
 	}
 
 	rowStr := rowToString(row)
-	require.Regexp(t, ".*id: 1.*", rowStr)
-	require.Regexp(t, ".*name: abc.*", rowStr)
-	require.Regexp(t, ".*info: IsNull.*", rowStr)
+	c.Assert(rowStr, check.Matches, ".*id: 1.*")
+	c.Assert(rowStr, check.Matches, ".*name: abc.*")
+	c.Assert(rowStr, check.Matches, ".*info: IsNull.*")
 }
 
-func TestMinLenInSlices(t *testing.T) {
+func (s *testUtilSuite) TestMinLenInSlices(c *check.C) {
 	testCases := []struct {
 		slices [][]string
 		expect int
@@ -128,6 +130,6 @@ func TestMinLenInSlices(t *testing.T) {
 
 	for _, testCase := range testCases {
 		minLen := minLenInSlices(testCase.slices)
-		require.Equal(t, testCase.expect, minLen)
+		c.Assert(minLen, check.Equals, testCase.expect)
 	}
 }

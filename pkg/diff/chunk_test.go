@@ -14,12 +14,14 @@
 package diff
 
 import (
-	"testing"
-
-	"github.com/stretchr/testify/require"
+	"github.com/pingcap/check"
 )
 
-func TestChunkUpdate(t *testing.T) {
+var _ = check.Suite(&testChunkSuite{})
+
+type testChunkSuite struct{}
+
+func (*testChunkSuite) TestChunkUpdate(c *check.C) {
 	chunk := &ChunkRange{
 		Bounds: []*Bound{
 			{
@@ -61,18 +63,18 @@ func TestChunkUpdate(t *testing.T) {
 	for _, cs := range testCases {
 		newChunk := chunk.copyAndUpdate(cs.boundArgs[0], cs.boundArgs[1], cs.boundArgs[2])
 		conditions, args := newChunk.toString("")
-		require.Equal(t, cs.expectStr, conditions)
-		require.Equal(t, cs.expectArgs, args)
+		c.Assert(conditions, check.Equals, cs.expectStr)
+		c.Assert(args, check.DeepEquals, cs.expectArgs)
 	}
 
 	// the origin chunk is not changed
 	conditions, args := chunk.toString("")
-	require.Equal(t, conditions, "((`a` > ?) OR (`a` = ? AND `b` > ?)) AND ((`a` < ?) OR (`a` = ? AND `b` <= ?))")
+	c.Assert(conditions, check.Equals, "((`a` > ?) OR (`a` = ? AND `b` > ?)) AND ((`a` < ?) OR (`a` = ? AND `b` <= ?))")
 	expectArgs := []string{"1", "1", "3", "2", "2", "4"}
-	require.Equal(t, expectArgs, args)
+	c.Assert(args, check.DeepEquals, expectArgs)
 }
 
-func TestChunkToString(t *testing.T) {
+func (*testChunkSuite) TestChunkToString(c *check.C) {
 	chunk := &ChunkRange{
 		Bounds: []*Bound{
 			{
@@ -98,17 +100,16 @@ func TestChunkToString(t *testing.T) {
 	}
 
 	conditions, args := chunk.toString("")
-
-	require.Equal(t, conditions, "((`a` > ?) OR (`a` = ? AND `b` > ?) OR (`a` = ? AND `b` = ? AND `c` > ?)) AND ((`a` < ?) OR (`a` = ? AND `b` < ?) OR (`a` = ? AND `b` = ? AND `c` <= ?))")
+	c.Assert(conditions, check.Equals, "((`a` > ?) OR (`a` = ? AND `b` > ?) OR (`a` = ? AND `b` = ? AND `c` > ?)) AND ((`a` < ?) OR (`a` = ? AND `b` < ?) OR (`a` = ? AND `b` = ? AND `c` <= ?))")
 	expectArgs := []string{"1", "1", "3", "1", "3", "5", "2", "2", "4", "2", "4", "6"}
 	for i, arg := range args {
-		require.Equal(t, expectArgs[i], arg)
+		c.Assert(arg, check.Equals, expectArgs[i])
 	}
 
 	conditions, args = chunk.toString("latin1")
-	require.Equal(t, conditions, "((`a` COLLATE 'latin1' > ?) OR (`a` = ? AND `b` COLLATE 'latin1' > ?) OR (`a` = ? AND `b` = ? AND `c` COLLATE 'latin1' > ?)) AND ((`a` COLLATE 'latin1' < ?) OR (`a` = ? AND `b` COLLATE 'latin1' < ?) OR (`a` = ? AND `b` = ? AND `c` COLLATE 'latin1' <= ?))")
+	c.Assert(conditions, check.Equals, "((`a` COLLATE 'latin1' > ?) OR (`a` = ? AND `b` COLLATE 'latin1' > ?) OR (`a` = ? AND `b` = ? AND `c` COLLATE 'latin1' > ?)) AND ((`a` COLLATE 'latin1' < ?) OR (`a` = ? AND `b` COLLATE 'latin1' < ?) OR (`a` = ? AND `b` = ? AND `c` COLLATE 'latin1' <= ?))")
 	expectArgs = []string{"1", "1", "3", "1", "3", "5", "2", "2", "4", "2", "4", "6"}
 	for i, arg := range args {
-		require.Equal(t, expectArgs[i], arg)
+		c.Assert(arg, check.Equals, expectArgs[i])
 	}
 }
