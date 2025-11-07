@@ -33,15 +33,24 @@ CDC_COUNT=3
 DB_COUNT=4
 
 function kill_pd() {
-	ps aux | grep pd-server | grep "$WORK_DIR" | awk '{print $2}' | xargs -I{} kill -9 {} || true
+	kill_by_ports "${UP_PD_PORT_1}" "${UP_PD_PEER_PORT_1}" "${UP_PD_PORT_2}" "${UP_PD_PEER_PORT_2}" "${UP_PD_PORT_3}" "${UP_PD_PEER_PORT_3}"
 }
 
 function kill_tikv() {
-	ps aux | grep tikv-server | grep "$WORK_DIR" | awk '{print $2}' | xargs -I{} kill -9 {} || true
+	kill_by_ports "${UP_TIKV_PORT_1}" "${UP_TIKV_STATUS_PORT_1}" "${UP_TIKV_PORT_2}" "${UP_TIKV_STATUS_PORT_2}" "${UP_TIKV_PORT_3}" "${UP_TIKV_STATUS_PORT_3}"
 }
 
 function kill_tidb() {
-	ps aux | grep tidb-server | grep "$WORK_DIR" | awk '{print $2}' | xargs -I{} kill -9 {} || true
+	kill_by_ports "${UP_TIDB_PORT}" "${UP_TIDB_STATUS}" "${UP_TIDB_OTHER_PORT}" "${UP_TIDB_OTHER_STATUS}"
+}
+
+function kill_by_ports() {
+	for port in "$@"; do
+		if [ -z "$port" ]; then
+			continue
+		fi
+		lsof -i tcp:${port} -t 2>/dev/null | sort -u | xargs -I{} kill -9 {} || true
+	done
 }
 
 function run_normal_case_and_unavailable_pd() {
