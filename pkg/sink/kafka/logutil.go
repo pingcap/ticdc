@@ -38,7 +38,7 @@ func BuildDMLLogFields(info *common.MessageLogInfo) []zap.Field {
 		if row.Database == "" && row.Table == "" && row.Type == "" && row.CommitTs == 0 && len(row.PrimaryKeys) == 0 {
 			continue
 		}
-rowMap := map[string]interface{}{
+		rowMap := map[string]interface{}{
 			"type":     row.Type,
 			"database": row.Database,
 			"table":    row.Table,
