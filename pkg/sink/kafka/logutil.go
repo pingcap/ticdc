@@ -111,19 +111,6 @@ func DetermineEventType(info *common.MessageLogInfo) string {
 	return "unknown"
 }
 
-// BuildEventLogFields builds zap fields for an event, including keyspace/changefeed/eventType and details.
-func BuildEventLogFields(keyspace, changefeed string, info *common.MessageLogInfo) []zap.Field {
-	fields := []zap.Field{
-		zap.String("keyspace", keyspace),
-		zap.String("changefeed", changefeed),
-		zap.String("eventType", DetermineEventType(info)),
-	}
-	fields = append(fields, BuildDMLLogFields(info)...)
-	fields = append(fields, BuildDDLLogFields(info)...)
-	fields = append(fields, BuildCheckpointLogFields(info)...)
-	return fields
-}
-
 // BuildEventLogContext builds a textual representation of event info.
 func BuildEventLogContext(keyspace, changefeed string, info *common.MessageLogInfo) string {
 	var sb strings.Builder
@@ -173,8 +160,8 @@ func BuildEventLogContext(keyspace, changefeed string, info *common.MessageLogIn
 	return sb.String()
 }
 
-// LogAndAnnotateEventError logs the event context and annotates the error with that context.
-func LogAndAnnotateEventError(
+// AnnotateEventError logs the event context and annotates the error with that context.
+func AnnotateEventError(
 	keyspace, changefeed string,
 	info *common.MessageLogInfo,
 	err error,

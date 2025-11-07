@@ -108,8 +108,11 @@ func (p *saramaSyncProducer) SendMessage(
 		Value:     sarama.ByteEncoder(message.Value),
 		Partition: partitionNum,
 	})
+	failpoint.Inject("KafkaSinkSyncSendMessageError", func() {
+		err = cerror.WrapError(cerror.ErrKafkaSendMessage, errors.New("kafka sink sync send message injected error"))
+	})
 	if err != nil {
-		err = LogAndAnnotateEventError(
+		err = AnnotateEventError(
 			p.id.Keyspace(),
 			p.id.Name(),
 			message.LogInfo,
@@ -135,8 +138,11 @@ func (p *saramaSyncProducer) SendMessages(
 		}
 	}
 	err := p.producer.SendMessages(msgs)
+	failpoint.Inject("KafkaSinkSyncSendMessagesError", func() {
+		err = cerror.WrapError(cerror.ErrKafkaSendMessage, errors.New("kafka sink sync send messages injected error"))
+	})
 	if err != nil {
-		err = LogAndAnnotateEventError(
+		err = AnnotateEventError(
 			p.id.Keyspace(),
 			p.id.Name(),
 			message.LogInfo,
@@ -291,7 +297,7 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 }
 
 func (p *saramaAsyncProducer) handleProducerError(err *sarama.ProducerError) error {
-	errWithInfo := LogAndAnnotateEventError(
+	errWithInfo := AnnotateEventError(
 		p.changefeedID.Keyspace(),
 		p.changefeedID.Name(),
 		extractLogInfo(err.Msg),
