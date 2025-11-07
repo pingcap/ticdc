@@ -170,7 +170,7 @@ func AnnotateEventError(
 		return nil
 	}
 	if contextStr := BuildEventLogContext(keyspace, changefeed, info); contextStr != "" {
-		return errors.Annotate(err, contextStr+"errorInfo:"+err.Error())
+		return errors.Annotate(err, contextStr+"; ErrorInfo:"+err.Error())
 	}
 	return err
 }
