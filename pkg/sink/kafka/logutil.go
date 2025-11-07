@@ -38,12 +38,10 @@ func BuildDMLLogFields(info *common.MessageLogInfo) []zap.Field {
 		if row.Database == "" && row.Table == "" && row.Type == "" && row.CommitTs == 0 && len(row.PrimaryKeys) == 0 {
 			continue
 		}
-		rowMap := map[string]interface{}{
-			"type":      row.Type,
-			"database":  row.Database,
-			"table":     row.Table,
-			"commitTs":  row.CommitTs,
-			"primaryPK": nil,
+rowMap := map[string]interface{}{
+			"type":     row.Type,
+			"database": row.Database,
+			"table":    row.Table,
 		}
 		if len(row.PrimaryKeys) > 0 {
 			pkMap := make(map[string]interface{}, len(row.PrimaryKeys))
@@ -51,11 +49,9 @@ func BuildDMLLogFields(info *common.MessageLogInfo) []zap.Field {
 				pkMap[pk.Name] = pk.Value
 			}
 			rowMap["primaryPK"] = pkMap
-		} else {
-			delete(rowMap, "primaryPK")
 		}
-		if row.CommitTs == 0 {
-			delete(rowMap, "commitTs")
+		if row.CommitTs != 0 {
+			rowMap["commitTs"] = row.CommitTs
 		}
 		rows = append(rows, rowMap)
 	}
