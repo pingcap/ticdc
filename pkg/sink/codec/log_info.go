@@ -108,9 +108,6 @@ func extractPrimaryKeys(event *commonEvent.RowEvent) []common.ColumnLogInfo {
 	if event.IsDelete() {
 		row = event.GetPreRows()
 	}
-	if row == nil {
-		return nil
-	}
 
 	values := make([]common.ColumnLogInfo, 0, len(columns))
 	for i, col := range columns {
