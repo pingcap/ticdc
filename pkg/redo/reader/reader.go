@@ -194,7 +194,6 @@ func (l *LogReader) runReader(egCtx context.Context, cfg *readerConfig) error {
 		return errors.Trace(err)
 	}
 
-	var previousDDLCommit uint64
 	for redoLogHeap.Len() != 0 {
 		item := heap.Pop(&redoLogHeap).(*logWithIdx)
 
@@ -203,7 +202,7 @@ func (l *LogReader) runReader(egCtx context.Context, cfg *readerConfig) error {
 			row := item.data.RedoRow
 			// By design only data (startTs,endTs] is needed,
 			// so filter out data may beyond the boundary.
-			if row.Row.CommitTs > cfg.startTs && row.Row.CommitTs <= cfg.endTs {
+			if row != nil && row.Row.CommitTs > cfg.startTs && row.Row.CommitTs <= cfg.endTs {
 				select {
 				case <-egCtx.Done():
 					return errors.Trace(egCtx.Err())
@@ -212,13 +211,11 @@ func (l *LogReader) runReader(egCtx context.Context, cfg *readerConfig) error {
 			}
 		case redo.RedoDDLLogFileType:
 			ddl := item.data.RedoDDL
-			// There may exist dupilicate ddls
-			if previousDDLCommit != ddl.DDL.CommitTs && ddl.DDL.CommitTs > cfg.startTs && ddl.DDL.CommitTs <= cfg.endTs {
+			if ddl != nil && ddl.DDL.CommitTs > cfg.startTs && ddl.DDL.CommitTs <= cfg.endTs {
 				select {
 				case <-egCtx.Done():
 					return errors.Trace(egCtx.Err())
 				case l.ddlCh <- ddl:
-					previousDDLCommit = ddl.DDL.CommitTs
 				}
 			}
 		}

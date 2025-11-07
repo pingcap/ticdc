@@ -30,6 +30,8 @@ import (
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/redo/writer/file"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
@@ -53,13 +55,8 @@ func genLogFile(
 		// generate unsorted logs
 		for ts := maxCommitTs; ts >= minCommitTs; ts-- {
 			event := &pevent.RedoRowEvent{
-				CommitTs: ts,
-				TableInfo: &common.TableInfo{
-					TableName: common.TableName{
-						Schema: "test",
-						Table:  "t",
-					},
-				},
+				CommitTs:  ts,
+				TableInfo: common.NewTableInfo4Decoder("test", &model.TableInfo{Name: ast.NewCIStr("t")}),
 			}
 			log := event.ToRedoLog()
 			rawData, err := codec.MarshalRedoLog(log, nil)
