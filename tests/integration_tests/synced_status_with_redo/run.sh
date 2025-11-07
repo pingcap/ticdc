@@ -48,15 +48,6 @@ function kill_tidb() {
 	kill_by_ports "${UP_TIDB_PORT}" "${UP_TIDB_STATUS}" "${UP_TIDB_OTHER_PORT}" "${UP_TIDB_OTHER_STATUS}"
 }
 
-function kill_by_ports() {
-	for port in "$@"; do
-		if [ -z "$port" ]; then
-			continue
-		fi
-		lsof -i tcp:${port} -t 2>/dev/null | sort -u | xargs -I{} kill -9 {} || true
-	done
-}
-
 function run_normal_case_and_unavailable_pd() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 

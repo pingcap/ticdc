@@ -1,0 +1,23 @@
+#!/bin/bash
+
+# Usage: kill_by_ports <port> [<port>...]
+# Kills any process that listens on the provided TCP ports. Ports can be empty
+# strings, which will be ignored.
+
+if [ $# -eq 0 ]; then
+	echo "Usage: kill_by_ports <port> [<port>...]" >&2
+	exit 1
+fi
+
+status=0
+for port in "$@"; do
+	if [ -z "$port" ]; then
+		continue
+	fi
+	pids=$(lsof -i tcp:${port} -t 2>/dev/null | sort -u)
+	if [ -n "$pids" ]; then
+		echo "$pids" | xargs -I{} kill -9 {} || status=$?
+	fi
+done
+
+exit $status
