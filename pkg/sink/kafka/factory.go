@@ -140,10 +140,15 @@ func (p *saramaSyncProducer) SendMessages(
 				contextStr = BuildEventLogContext(p.id.Keyspace(), p.id.Name(), extractLogInfo(prodErrs[0].Msg))
 			}
 		} else {
-			fields := BuildEventLogFields(p.id.Keyspace(), p.id.Name(), message.LogInfo)
-			fields = append(fields, zap.Error(err))
-			log.Error("failed to send kafka messages in batch", fields...)
-			contextStr = BuildEventLogContext(p.id.Keyspace(), p.id.Name(), message.LogInfo)
+			err = LogAndAnnotateEventError(
+				log.Error,
+				"failed to send kafka messages in batch",
+				p.id.Keyspace(),
+				p.id.Name(),
+				message.LogInfo,
+				err,
+			)
+			contextStr = ""
 		}
 		if contextStr != "" {
 			err = errors.Annotate(err, contextStr)
@@ -293,14 +298,14 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 				return nil
 			}
 			logInfo := extractLogInfo(err.Msg)
-			fields := BuildEventLogFields(p.changefeedID.Keyspace(), p.changefeedID.Name(), logInfo)
-			fields = append(fields, zap.Error(err.Err))
-			log.Info("kafka async producer send error", fields...)
-			contextStr := BuildEventLogContext(p.changefeedID.Keyspace(), p.changefeedID.Name(), logInfo)
-			underlyingErr := err.Err
-			if contextStr != "" {
-				underlyingErr = errors.Annotate(underlyingErr, contextStr)
-			}
+			underlyingErr := LogAndAnnotateEventError(
+				log.Info,
+				"kafka async producer send error",
+				p.changefeedID.Keyspace(),
+				p.changefeedID.Name(),
+				logInfo,
+				err.Err,
+			)
 			return cerror.WrapError(cerror.ErrKafkaAsyncSendMessage, underlyingErr)
 		}
 	}

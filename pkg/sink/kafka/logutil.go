@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"go.uber.org/zap"
 )
@@ -157,4 +158,22 @@ func BuildEventLogContext(keyspace, changefeed string, info *common.MessageLogIn
 	}
 
 	return sb.String()
+}
+
+// LogAndAnnotateEventError logs the event context and annotates the error with that context.
+func LogAndAnnotateEventError(
+	logFunc func(msg string, fields ...zap.Field),
+	message string,
+	keyspace, changefeed string,
+	info *common.MessageLogInfo,
+	err error,
+) error {
+	fields := BuildEventLogFields(keyspace, changefeed, info)
+	fields = append(fields, zap.Error(err))
+	logFunc(message, fields...)
+
+	if contextStr := BuildEventLogContext(keyspace, changefeed, info); contextStr != "" {
+		return errors.Annotate(err, contextStr)
+	}
+	return err
 }
