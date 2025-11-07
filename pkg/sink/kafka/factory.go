@@ -188,7 +188,7 @@ type saramaAsyncProducer struct {
 	changefeedID commonType.ChangeFeedID
 
 	closed      *atomic.Bool
-	failpointCh chan error
+	failpointCh chan *sarama.ProducerError
 }
 
 type messageMetadata struct {
@@ -263,7 +263,7 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 				zap.String("keyspace", p.changefeedID.Keyspace()),
 				zap.String("changefeed", p.changefeedID.Name()),
 				zap.Error(err))
-			return errors.Trace(err)
+			return p.handleProducerError(err)
 		case ack := <-p.producer.Successes():
 			if ack != nil {
 				switch meta := ack.Metadata.(type) {
@@ -285,15 +285,19 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 			if err == nil {
 				return nil
 			}
-			errWithInfo := LogAndAnnotateEventError(
-				p.changefeedID.Keyspace(),
-				p.changefeedID.Name(),
-				extractLogInfo(err.Msg),
-				err.Err,
-			)
-			return cerror.WrapError(cerror.ErrKafkaAsyncSendMessage, errWithInfo)
+			return p.handleProducerError(err)
 		}
 	}
+}
+
+func (p *saramaAsyncProducer) handleProducerError(err *sarama.ProducerError) error {
+	errWithInfo := LogAndAnnotateEventError(
+		p.changefeedID.Keyspace(),
+		p.changefeedID.Name(),
+		extractLogInfo(err.Msg),
+		err.Err,
+	)
+	return cerror.WrapError(cerror.ErrKafkaAsyncSendMessage, errWithInfo)
 }
 
 func (p *saramaAsyncProducer) Heartbeat() {
@@ -316,7 +320,13 @@ func (p *saramaAsyncProducer) AsyncSend(
 		// message to Kafka meets error
 		log.Info("KafkaSinkAsyncSendError error injected", zap.String("keyspace", p.changefeedID.Keyspace()),
 			zap.String("changefeed", p.changefeedID.Name()))
-		p.failpointCh <- errors.New("kafka sink injected error")
+		p.failpointCh <- &sarama.ProducerError{
+			Err: errors.New("kafka sink injected error"),
+			Msg: &sarama.ProducerMessage{Metadata: &messageMetadata{
+				callback: message.Callback,
+				message:  message,
+			}},
+		}
 		failpoint.Return(nil)
 	})
 	meta := &messageMetadata{
