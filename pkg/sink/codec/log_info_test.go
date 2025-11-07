@@ -36,6 +36,7 @@ func TestBuildMessageLogInfo(t *testing.T) {
 
 	rowEvent := &commonEvent.RowEvent{
 		TableInfo:      tableInfo,
+		StartTs:        dml.StartTs,
 		CommitTs:       dml.GetCommitTs(),
 		Event:          row,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
@@ -48,6 +49,7 @@ func TestBuildMessageLogInfo(t *testing.T) {
 	require.Equal(t, "insert", rowInfo.Type)
 	require.Equal(t, "test", rowInfo.Database)
 	require.Equal(t, "t", rowInfo.Table)
+	require.Equal(t, dml.StartTs, rowInfo.StartTs)
 	require.Equal(t, dml.GetCommitTs(), rowInfo.CommitTs)
 	require.Len(t, rowInfo.PrimaryKeys, 1)
 	require.Equal(t, "id", rowInfo.PrimaryKeys[0].Name)
@@ -68,6 +70,7 @@ func TestAttachMessageLogInfo(t *testing.T) {
 
 	rowEvent := &commonEvent.RowEvent{
 		TableInfo:      tableInfo,
+		StartTs:        dml.StartTs,
 		CommitTs:       dml.GetCommitTs(),
 		Event:          row,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
@@ -81,6 +84,7 @@ func TestAttachMessageLogInfo(t *testing.T) {
 	require.NotNil(t, message.LogInfo)
 	require.Len(t, message.LogInfo.Rows, 1)
 	require.Equal(t, "insert", message.LogInfo.Rows[0].Type)
+	require.Equal(t, dml.StartTs, message.LogInfo.Rows[0].StartTs)
 	require.Len(t, message.LogInfo.Rows[0].PrimaryKeys, 1)
 	require.Equal(t, int64(1), message.LogInfo.Rows[0].PrimaryKeys[0].Value)
 }
@@ -131,6 +135,7 @@ func makeTestRowEvents(
 		}
 		events = append(events, &commonEvent.RowEvent{
 			TableInfo:      tableInfo,
+			StartTs:        dml.StartTs,
 			CommitTs:       dml.GetCommitTs(),
 			Event:          row,
 			ColumnSelector: columnselector.NewDefaultColumnSelector(),

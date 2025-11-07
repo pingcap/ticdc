@@ -35,13 +35,16 @@ func BuildDMLLogFields(info *common.MessageLogInfo) []zap.Field {
 
 	rows := make([]map[string]interface{}, 0, len(info.Rows))
 	for _, row := range info.Rows {
-		if row.Database == "" && row.Table == "" && row.Type == "" && row.CommitTs == 0 && len(row.PrimaryKeys) == 0 {
+		if row.Database == "" && row.Table == "" && row.Type == "" && row.CommitTs == 0 && row.StartTs == 0 && len(row.PrimaryKeys) == 0 {
 			continue
 		}
 		rowMap := map[string]interface{}{
 			"type":     row.Type,
 			"database": row.Database,
 			"table":    row.Table,
+		}
+		if row.StartTs != 0 {
+			rowMap["startTs"] = row.StartTs
 		}
 		if len(row.PrimaryKeys) > 0 {
 			pkMap := make(map[string]interface{}, len(row.PrimaryKeys))

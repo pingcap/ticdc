@@ -51,6 +51,7 @@ func (b *batchEncoder) AppendTxnEvent(event *commonEvent.DMLEvent) error {
 		}
 		msg, err := rowChangedEvent2CSVMsg(b.config, &commonEvent.RowEvent{
 			TableInfo: event.TableInfo,
+			StartTs:   event.StartTs,
 			CommitTs:  event.CommitTs,
 			Event:     row,
 		})

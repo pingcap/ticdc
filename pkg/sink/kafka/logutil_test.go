@@ -31,6 +31,7 @@ func TestBuildDMLLogFields(t *testing.T) {
 				Type:     "insert",
 				Database: "test",
 				Table:    "t",
+				StartTs:  50,
 				CommitTs: 100,
 				PrimaryKeys: []common.ColumnLogInfo{
 					{Name: "id", Value: 1},
@@ -48,6 +49,7 @@ func TestBuildDMLLogFields(t *testing.T) {
 	require.Equal(t, "insert", rows[0]["type"])
 	require.Equal(t, "test", rows[0]["database"])
 	require.Equal(t, "t", rows[0]["table"])
+	require.Equal(t, uint64(50), rows[0]["startTs"])
 	require.Equal(t, uint64(100), rows[0]["commitTs"])
 	pk, ok := rows[0]["primaryPK"].(map[string]interface{})
 	require.True(t, ok)

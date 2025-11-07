@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -261,6 +262,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 					RowEvent: commonEvent.RowEvent{
 						PhysicalTableID: event.PhysicalTableID,
 						TableInfo:       event.TableInfo,
+						StartTs:         event.StartTs,
 						CommitTs:        event.CommitTs,
 						Event:           row,
 						Callback:        rowCallback,
@@ -416,6 +418,13 @@ func (s *sink) sendMessages(ctx context.Context) error {
 
 func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 	for _, e := range event.GetEvents() {
+		failpoint.Inject("KafkaSinkDDLSendError", func() {
+			log.Warn("Kafka sink DDL send error injected",
+				zap.String("keyspace", s.changefeedID.Keyspace()),
+				zap.String("changefeed", s.changefeedID.Name()),
+				zap.Uint64("commitTs", e.GetCommitTs()))
+			failpoint.Return(errors.New("kafka sink ddl injected error"))
+		})
 		message, err := s.comp.encoder.EncodeDDLEvent(e)
 		if err != nil {
 			return err
@@ -505,6 +514,13 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 				continue
 			}
 			codecPkg.SetCheckpointMessageLogInfo(msg, ts)
+			failpoint.Inject("KafkaSinkCheckpointSendError", func() {
+				log.Warn("Kafka sink checkpoint send error injected",
+					zap.String("keyspace", s.changefeedID.Keyspace()),
+					zap.String("changefeed", s.changefeedID.Name()),
+					zap.Uint64("checkpointTs", ts))
+				failpoint.Return(errors.New("kafka sink checkpoint injected error"))
+			})
 
 			tableNames := s.getAllTableNames(ts)
 			// NOTICE: When there are no tables to replicate,

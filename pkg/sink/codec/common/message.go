@@ -64,6 +64,7 @@ type RowLogInfo struct {
 	Type        string
 	Database    string
 	Table       string
+	StartTs     uint64
 	CommitTs    uint64
 	PrimaryKeys []ColumnLogInfo
 }

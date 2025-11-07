@@ -72,6 +72,7 @@ func buildMessageLogInfo(events []*commonEvent.RowEvent) *common.MessageLogInfo 
 			Type:     rowEventType(event),
 			Database: event.TableInfo.GetSchemaName(),
 			Table:    event.TableInfo.GetTableName(),
+			StartTs:  event.StartTs,
 			CommitTs: event.CommitTs,
 		}
 		if pk := extractPrimaryKeys(event); len(pk) > 0 {
