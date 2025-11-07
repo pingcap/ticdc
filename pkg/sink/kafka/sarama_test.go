@@ -27,7 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestnewSaramaConfig(t *testing.T) {
+func TestNewSaramaConfig(t *testing.T) {
 	options := NewOptions()
 	options.Version = "invalid"
 	options.IsAssignedVersion = true

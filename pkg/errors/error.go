@@ -538,6 +538,20 @@ var (
 		errors.RFCCodeText("CDC:ErrChangefeedUnretryable"),
 	)
 
+	// workerpool errors
+	ErrWorkerPoolHandleCancelled = errors.Normalize(
+		"workerpool handle is cancelled",
+		errors.RFCCodeText("CDC:ErrWorkerPoolHandleCancelled"),
+	)
+	ErrAsyncPoolExited = errors.Normalize(
+		"asyncPool has exited. Report a bug if seen externally.",
+		errors.RFCCodeText("CDC:ErrAsyncPoolExited"),
+	)
+	ErrWorkerPoolGracefulUnregisterTimedOut = errors.Normalize(
+		"workerpool handle graceful unregister timed out",
+		errors.RFCCodeText("CDC:ErrWorkerPoolGracefulUnregisterTimedOut"),
+	)
+
 	// sorter errors
 	ErrIllegalSorterParameter = errors.Normalize(
 		"illegal parameter for sorter: %s",

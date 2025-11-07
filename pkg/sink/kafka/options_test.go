@@ -802,7 +802,7 @@ func (m *mockAdminClientForAdjust) GetBrokerConfig(_ context.Context, configName
 	return "", errors.Errorf("unexpected config name: %s", configName)
 }
 
-func TestadjustOptionsKeepAlive(t *testing.T) {
+func TestAdjustOptionsKeepAlive(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
