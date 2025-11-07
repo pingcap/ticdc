@@ -1,9 +1,11 @@
-package kafka
+package codec
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
+	commonModel "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
@@ -62,7 +64,8 @@ func TestAttachMessageLogInfo(t *testing.T) {
 
 	message := common.NewMsg(nil, nil)
 	message.SetRowsCount(1)
-	attachMessageLogInfo([]*common.Message{message}, []*commonEvent.RowEvent{rowEvent})
+	err := AttachMessageLogInfo([]*common.Message{message}, []*commonEvent.RowEvent{rowEvent})
+	require.NoError(t, err)
 
 	require.NotNil(t, message.LogInfo)
 	require.Len(t, message.LogInfo.Rows, 1)
@@ -79,30 +82,91 @@ func TestSetDDLMessageLogInfo(t *testing.T) {
 	ddlEvent := helper.DDL2Event("create table test.ddl_t (id int primary key, val varchar(10))")
 	message := common.NewMsg(nil, nil)
 
-	setDDLMessageLogInfo(message, ddlEvent)
+	SetDDLMessageLogInfo(message, ddlEvent)
 
 	require.NotNil(t, message.LogInfo)
 	require.NotNil(t, message.LogInfo.DDL)
 	require.Equal(t, ddlEvent.Query, message.LogInfo.DDL.Query)
 	require.Equal(t, ddlEvent.GetCommitTs(), message.LogInfo.DDL.CommitTs)
 
-	// Ensure existing LogInfo is preserved.
 	message.LogInfo.Rows = []common.RowLogInfo{{Type: "insert"}}
-	setDDLMessageLogInfo(message, ddlEvent)
+	SetDDLMessageLogInfo(message, ddlEvent)
 	require.Len(t, message.LogInfo.Rows, 1)
 	require.Equal(t, "insert", message.LogInfo.Rows[0].Type)
 }
 
 func TestSetCheckpointMessageLogInfo(t *testing.T) {
 	message := common.NewMsg(nil, nil)
-	setCheckpointMessageLogInfo(message, 789)
+	SetCheckpointMessageLogInfo(message, 789)
 	require.NotNil(t, message.LogInfo)
 	require.NotNil(t, message.LogInfo.Checkpoint)
 	require.Equal(t, uint64(789), message.LogInfo.Checkpoint.CommitTs)
 
-	// Ensure existing info preserved.
 	message.LogInfo.Rows = []common.RowLogInfo{{Type: "insert"}}
-	setCheckpointMessageLogInfo(message, 900)
+	SetCheckpointMessageLogInfo(message, 900)
 	require.Equal(t, uint64(900), message.LogInfo.Checkpoint.CommitTs)
 	require.Len(t, message.LogInfo.Rows, 1)
+}
+
+func TestAttachMessageLogInfoReturnsErrorWhenEventsRemain(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job("create table test.t (id int primary key, name varchar(32))")
+	tableInfo := helper.GetTableInfo(job)
+	events := makeTestRowEvents(t, helper, tableInfo,
+		`insert into test.t values (1, "alice"), (2, "bob")`)
+	message := common.NewMsg(nil, nil)
+	message.SetRowsCount(1)
+
+	err := AttachMessageLogInfo([]*common.Message{message}, events)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrMessageEventMismatch))
+	require.NotNil(t, message.LogInfo)
+	require.Len(t, message.LogInfo.Rows, 1)
+	require.Equal(t, int64(1), message.LogInfo.Rows[0].PrimaryKeys[0].Value)
+}
+
+func TestAttachMessageLogInfoReturnsErrorWhenRowsOverflow(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job("create table test.t (id int primary key, name varchar(32))")
+	tableInfo := helper.GetTableInfo(job)
+	events := makeTestRowEvents(t, helper, tableInfo,
+		`insert into test.t values (1, "alice"), (2, "bob")`)
+	message := common.NewMsg(nil, nil)
+	message.SetRowsCount(5)
+
+	err := AttachMessageLogInfo([]*common.Message{message}, events)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrMessageEventMismatch))
+	require.NotNil(t, message.LogInfo)
+	require.Len(t, message.LogInfo.Rows, len(events))
+}
+
+func makeTestRowEvents(
+	t *testing.T,
+	helper *commonEvent.EventTestHelper,
+	tableInfo *commonModel.TableInfo,
+	sql string,
+) []*commonEvent.RowEvent {
+	dml := helper.DML2Event("test", "t", sql)
+	events := make([]*commonEvent.RowEvent, 0)
+	for {
+		row, ok := dml.GetNextRow()
+		if !ok {
+			break
+		}
+		events = append(events, &commonEvent.RowEvent{
+			TableInfo:      tableInfo,
+			CommitTs:       dml.GetCommitTs(),
+			Event:          row,
+			ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		})
+	}
+	require.NotEmpty(t, events)
+	return events
 }

@@ -11,24 +11,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package kafka
+package codec
 
 import (
+	"errors"
+
+	perrors "github.com/pingcap/errors"
 	commonPkg "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 )
 
-func attachMessageLogInfo(messages []*common.Message, events []*commonEvent.RowEvent) {
+var ErrMessageEventMismatch = errors.New("message rows count mismatches row events")
+
+// AttachMessageLogInfo binds row event diagnostic info onto sink messages.
+func AttachMessageLogInfo(messages []*common.Message, events []*commonEvent.RowEvent) error {
 	if len(messages) == 0 || len(events) == 0 {
-		return
+		return nil
 	}
 
 	eventIdx := 0
-	for _, message := range messages {
+	var mismatchErr error
+	for idx, message := range messages {
 		rowsNeeded := message.GetRowsCount()
 		if rowsNeeded <= 0 {
 			rowsNeeded = len(events) - eventIdx
+		}
+		remaining := len(events) - eventIdx
+		if rowsNeeded > remaining {
+			mismatchErr = annotateMismatchError(mismatchErr, "messageIndex=%d rowsNeeded=%d remaining=%d", idx, rowsNeeded, remaining)
+			rowsNeeded = remaining
 		}
 		if rowsNeeded <= 0 {
 			message.LogInfo = nil
@@ -48,6 +60,17 @@ func attachMessageLogInfo(messages []*common.Message, events []*commonEvent.RowE
 			break
 		}
 	}
+	if eventIdx != len(events) {
+		mismatchErr = annotateMismatchError(mismatchErr, "eventsRemaining=%d totalEvents=%d", len(events)-eventIdx, len(events))
+	}
+	return mismatchErr
+}
+
+func annotateMismatchError(existing error, format string, args ...interface{}) error {
+	if existing == nil {
+		return perrors.Annotatef(ErrMessageEventMismatch, format, args...)
+	}
+	return perrors.Annotatef(existing, format, args...)
 }
 
 func buildMessageLogInfo(events []*commonEvent.RowEvent) *common.MessageLogInfo {
@@ -113,7 +136,8 @@ func extractPrimaryKeys(event *commonEvent.RowEvent) []common.ColumnLogInfo {
 	return values
 }
 
-func setDDLMessageLogInfo(msg *common.Message, event *commonEvent.DDLEvent) {
+// SetDDLMessageLogInfo attaches DDL diagnostic info on message.
+func SetDDLMessageLogInfo(msg *common.Message, event *commonEvent.DDLEvent) {
 	if msg == nil || event == nil {
 		return
 	}
@@ -128,7 +152,8 @@ func setDDLMessageLogInfo(msg *common.Message, event *commonEvent.DDLEvent) {
 	msg.LogInfo = logInfo
 }
 
-func setCheckpointMessageLogInfo(msg *common.Message, commitTs uint64) {
+// SetCheckpointMessageLogInfo attaches checkpoint info on message.
+func SetCheckpointMessageLogInfo(msg *common.Message, commitTs uint64) {
 	if msg == nil {
 		return
 	}

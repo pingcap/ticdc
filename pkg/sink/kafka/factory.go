@@ -108,6 +108,14 @@ func (p *saramaSyncProducer) SendMessage(
 		Value:     sarama.ByteEncoder(message.Value),
 		Partition: partitionNum,
 	})
+	if err != nil {
+		err = LogAndAnnotateEventError(
+			p.id.Keyspace(),
+			p.id.Name(),
+			message.LogInfo,
+			err,
+		)
+	}
 	return cerror.WrapError(cerror.ErrKafkaSendMessage, err)
 }
 
@@ -129,8 +137,6 @@ func (p *saramaSyncProducer) SendMessages(
 	err := p.producer.SendMessages(msgs)
 	if err != nil {
 		err = LogAndAnnotateEventError(
-			log.Error,
-			"failed to send kafka messages in batch",
 			p.id.Keyspace(),
 			p.id.Name(),
 			message.LogInfo,
@@ -265,10 +271,9 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 					if meta != nil && meta.callback != nil {
 						meta.callback()
 					}
-				case func():
-					if meta != nil {
-						meta()
-					}
+				default:
+					log.Error("unknown message metadata type in async producer",
+						zap.Any("metadata", ack.Metadata))
 				}
 			}
 		case err := <-p.producer.Errors():
@@ -281,8 +286,6 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 				return nil
 			}
 			errWithInfo := LogAndAnnotateEventError(
-				log.Info,
-				"kafka async producer send error",
 				p.changefeedID.Keyspace(),
 				p.changefeedID.Name(),
 				extractLogInfo(err.Msg),

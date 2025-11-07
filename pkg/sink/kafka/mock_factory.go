@@ -18,9 +18,11 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/IBM/sarama/mocks"
+	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"go.uber.org/zap"
 )
 
 // mockFactory is a mock implementation of Factory interface.
@@ -138,10 +140,9 @@ func (p *MockSaramaAsyncProducer) AsyncRunCallback(
 					if meta != nil && meta.callback != nil {
 						meta.callback()
 					}
-				case func():
-					if meta != nil {
-						meta()
-					}
+				default:
+					log.Error("unknown message metadata type in mock async producer",
+						zap.Any("metadata", ack.Metadata))
 				}
 			}
 		case err := <-p.AsyncProducer.Errors():

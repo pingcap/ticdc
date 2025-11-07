@@ -23,6 +23,11 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	maxEventLogRows      = 20
+	maxEventLogJSONBytes = 8 * 1024
+)
+
 func BuildDMLLogFields(info *common.MessageLogInfo) []zap.Field {
 	if info == nil || len(info.Rows) == 0 {
 		return nil
@@ -135,9 +140,18 @@ func BuildEventLogContext(keyspace, changefeed string, info *common.MessageLogIn
 	}
 
 	if len(info.Rows) > 0 {
-		if data, err := json.Marshal(info.Rows); err == nil {
+		if rowsStr, truncated, truncatedRows := formatDMLInfo(info.Rows); rowsStr != "" {
 			sb.WriteString(", dmlInfo=")
-			sb.Write(data)
+			sb.WriteString(rowsStr)
+			if truncated {
+				sb.WriteString(", dmlInfoTruncated=true")
+				if truncatedRows > 0 {
+					sb.WriteString(", truncatedRows=")
+					sb.WriteString(strconv.Itoa(truncatedRows))
+				}
+				sb.WriteString(", totalRows=")
+				sb.WriteString(strconv.Itoa(len(info.Rows)))
+			}
 		}
 	}
 
@@ -162,18 +176,36 @@ func BuildEventLogContext(keyspace, changefeed string, info *common.MessageLogIn
 
 // LogAndAnnotateEventError logs the event context and annotates the error with that context.
 func LogAndAnnotateEventError(
-	logFunc func(msg string, fields ...zap.Field),
-	message string,
 	keyspace, changefeed string,
 	info *common.MessageLogInfo,
 	err error,
 ) error {
-	fields := BuildEventLogFields(keyspace, changefeed, info)
-	fields = append(fields, zap.Error(err))
-	logFunc(message, fields...)
-
 	if contextStr := BuildEventLogContext(keyspace, changefeed, info); contextStr != "" {
 		return errors.Annotate(err, contextStr)
 	}
 	return err
+}
+
+func formatDMLInfo(rows []common.RowLogInfo) (string, bool, int) {
+	if len(rows) == 0 {
+		return "", false, 0
+	}
+	truncated := false
+	truncatedRows := 0
+	limited := rows
+	if len(rows) > maxEventLogRows {
+		truncated = true
+		truncatedRows = len(rows) - maxEventLogRows
+		limited = rows[:maxEventLogRows]
+	}
+	data, err := json.Marshal(limited)
+	if err != nil {
+		return "", false, 0
+	}
+	dataStr := string(data)
+	if len(dataStr) > maxEventLogJSONBytes {
+		truncated = true
+		dataStr = dataStr[:maxEventLogJSONBytes] + "...(truncated)"
+	}
+	return dataStr, truncated, truncatedRows
 }

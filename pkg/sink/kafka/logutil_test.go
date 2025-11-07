@@ -1,6 +1,8 @@
 package kafka
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -79,4 +81,38 @@ func TestDetermineEventType(t *testing.T) {
 	require.Equal(t, "ddl", DetermineEventType(&common.MessageLogInfo{DDL: &common.DDLLogInfo{}}))
 	require.Equal(t, "checkpoint", DetermineEventType(&common.MessageLogInfo{Checkpoint: &common.CheckpointLogInfo{CommitTs: 1}}))
 	require.Equal(t, "unknown", DetermineEventType(&common.MessageLogInfo{}))
+}
+
+func TestBuildEventLogContextTruncateRows(t *testing.T) {
+	rows := make([]common.RowLogInfo, 0, maxEventLogRows+5)
+	for i := 0; i < maxEventLogRows+5; i++ {
+		rows = append(rows, common.RowLogInfo{
+			Type:     "insert",
+			Database: "db",
+			Table:    "t",
+			CommitTs: uint64(i + 1),
+			PrimaryKeys: []common.ColumnLogInfo{
+				{Name: "id", Value: i},
+			},
+		})
+	}
+	info := &common.MessageLogInfo{Rows: rows}
+	ctx := BuildEventLogContext("ks", "cf", info)
+	require.Contains(t, ctx, "dmlInfo=")
+	require.Contains(t, ctx, "dmlInfoTruncated=true")
+	require.Contains(t, ctx, "truncatedRows=5")
+	require.Contains(t, ctx, "totalRows="+strconv.Itoa(len(rows)))
+}
+
+func TestBuildEventLogContextTruncateBySize(t *testing.T) {
+	largeValue := strings.Repeat("a", maxEventLogJSONBytes)
+	info := &common.MessageLogInfo{
+		Rows: []common.RowLogInfo{
+			{Type: "insert", Table: largeValue},
+		},
+	}
+	ctx := BuildEventLogContext("ks", "cf", info)
+	require.Contains(t, ctx, "dmlInfoTruncated=true")
+	require.Contains(t, ctx, "totalRows=1")
+	require.Contains(t, ctx, "...(truncated)")
 }
