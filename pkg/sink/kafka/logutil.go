@@ -18,7 +18,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"go.uber.org/zap"
 )
@@ -160,17 +159,38 @@ func BuildEventLogContext(keyspace, changefeed string, info *common.MessageLogIn
 	return sb.String()
 }
 
-// AnnotateEventError logs the event context and annotates the error with that context.
+// AnnotateEventError appends event context to the error message while keeping the original text intact.
 func AnnotateEventError(
 	keyspace, changefeed string,
 	info *common.MessageLogInfo,
 	err error,
 ) error {
-	if contextStr := BuildEventLogContext(keyspace, changefeed, info); contextStr != "" {
-		return errors.Annotate(err, contextStr)
+	contextStr := BuildEventLogContext(keyspace, changefeed, info)
+	if contextStr == "" || err == nil {
+		return err
 	}
-	return err
+	return &annotatedEventError{base: err, context: contextStr}
 }
+
+type annotatedEventError struct {
+	base    error
+	context string
+}
+
+func (e *annotatedEventError) Error() string {
+	switch {
+	case e.base == nil:
+		return e.context
+	case e.context == "":
+		return e.base.Error()
+	default:
+		return e.base.Error() + ": " + e.context
+	}
+}
+
+func (e *annotatedEventError) Unwrap() error { return e.base }
+
+func (e *annotatedEventError) Cause() error { return e.base }
 
 func formatDMLInfo(rows []common.RowLogInfo) (string, bool, int) {
 	if len(rows) == 0 {
