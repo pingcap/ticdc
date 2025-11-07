@@ -1,7 +1,6 @@
 package codec
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
@@ -88,11 +87,8 @@ func TestSetDDLMessageLogInfo(t *testing.T) {
 	require.NotNil(t, message.LogInfo.DDL)
 	require.Equal(t, ddlEvent.Query, message.LogInfo.DDL.Query)
 	require.Equal(t, ddlEvent.GetCommitTs(), message.LogInfo.DDL.CommitTs)
-
-	message.LogInfo.Rows = []common.RowLogInfo{{Type: "insert"}}
-	SetDDLMessageLogInfo(message, ddlEvent)
-	require.Len(t, message.LogInfo.Rows, 1)
-	require.Equal(t, "insert", message.LogInfo.Rows[0].Type)
+	require.Nil(t, message.LogInfo.Rows)
+	require.Nil(t, message.LogInfo.Checkpoint)
 }
 
 func TestSetCheckpointMessageLogInfo(t *testing.T) {
@@ -101,50 +97,11 @@ func TestSetCheckpointMessageLogInfo(t *testing.T) {
 	require.NotNil(t, message.LogInfo)
 	require.NotNil(t, message.LogInfo.Checkpoint)
 	require.Equal(t, uint64(789), message.LogInfo.Checkpoint.CommitTs)
+	require.Nil(t, message.LogInfo.Rows)
+	require.Nil(t, message.LogInfo.DDL)
 
-	message.LogInfo.Rows = []common.RowLogInfo{{Type: "insert"}}
 	SetCheckpointMessageLogInfo(message, 900)
 	require.Equal(t, uint64(900), message.LogInfo.Checkpoint.CommitTs)
-	require.Len(t, message.LogInfo.Rows, 1)
-}
-
-func TestAttachMessageLogInfoReturnsErrorWhenEventsRemain(t *testing.T) {
-	helper := commonEvent.NewEventTestHelper(t)
-	defer helper.Close()
-
-	helper.Tk().MustExec("use test")
-	job := helper.DDL2Job("create table test.t (id int primary key, name varchar(32))")
-	tableInfo := helper.GetTableInfo(job)
-	events := makeTestRowEvents(t, helper, tableInfo,
-		`insert into test.t values (1, "alice"), (2, "bob")`)
-	message := common.NewMsg(nil, nil)
-	message.SetRowsCount(1)
-
-	err := AttachMessageLogInfo([]*common.Message{message}, events)
-	require.Error(t, err)
-	require.True(t, errors.Is(err, ErrMessageEventMismatch))
-	require.NotNil(t, message.LogInfo)
-	require.Len(t, message.LogInfo.Rows, 1)
-	require.Equal(t, int64(1), message.LogInfo.Rows[0].PrimaryKeys[0].Value)
-}
-
-func TestAttachMessageLogInfoReturnsErrorWhenRowsOverflow(t *testing.T) {
-	helper := commonEvent.NewEventTestHelper(t)
-	defer helper.Close()
-
-	helper.Tk().MustExec("use test")
-	job := helper.DDL2Job("create table test.t (id int primary key, name varchar(32))")
-	tableInfo := helper.GetTableInfo(job)
-	events := makeTestRowEvents(t, helper, tableInfo,
-		`insert into test.t values (1, "alice"), (2, "bob")`)
-	message := common.NewMsg(nil, nil)
-	message.SetRowsCount(5)
-
-	err := AttachMessageLogInfo([]*common.Message{message}, events)
-	require.Error(t, err)
-	require.True(t, errors.Is(err, ErrMessageEventMismatch))
-	require.NotNil(t, message.LogInfo)
-	require.Len(t, message.LogInfo.Rows, len(events))
 }
 
 func makeTestRowEvents(

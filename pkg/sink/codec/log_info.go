@@ -34,9 +34,6 @@ func AttachMessageLogInfo(messages []*common.Message, events []*commonEvent.RowE
 	var mismatchErr error
 	for idx, message := range messages {
 		rowsNeeded := message.GetRowsCount()
-		if rowsNeeded <= 0 {
-			rowsNeeded = len(events) - eventIdx
-		}
 		remaining := len(events) - eventIdx
 		if rowsNeeded > remaining {
 			mismatchErr = annotateMismatchError(mismatchErr, "messageIndex=%d rowsNeeded=%d remaining=%d", idx, rowsNeeded, remaining)
@@ -46,16 +43,8 @@ func AttachMessageLogInfo(messages []*common.Message, events []*commonEvent.RowE
 			message.LogInfo = nil
 			continue
 		}
-		end := eventIdx + rowsNeeded
-		if end > len(events) {
-			end = len(events)
-		}
-		if end <= eventIdx {
-			message.LogInfo = nil
-			continue
-		}
-		message.LogInfo = buildMessageLogInfo(events[eventIdx:end])
-		eventIdx = end
+		message.LogInfo = buildMessageLogInfo(events[eventIdx : eventIdx+rowsNeeded])
+		eventIdx += rowsNeeded
 		if eventIdx >= len(events) {
 			break
 		}
