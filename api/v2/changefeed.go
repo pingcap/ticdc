@@ -210,10 +210,14 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	// Therefore, we cannot use the context of the HTTP request.
 	// We create a new context here.
 	schemaCxt := context.Background()
-	if err := schemaStore.RegisterKeyspace(schemaCxt, keyspaceName); err != nil {
+
+	start := time.Now()
+	if err = schemaStore.RegisterKeyspace(schemaCxt, keyspaceName); err != nil {
 		_ = c.Error(err)
 		return
 	}
+	log.Info("register the keyspace finished",
+		zap.String("keyspaceName", keyspaceName), zap.Duration("duration", time.Since(start)))
 
 	ineligibleTables, _, err := getVerifiedTables(ctx, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
 	if err != nil {
@@ -393,10 +397,6 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	log.Info("verify table",
-		zap.Bool("forceReplicate", replicaCfg.ForceReplicate),
-		zap.Bool("ignoreIneligibleTable", cfg.ReplicaConfig.IgnoreIneligibleTable),
-	)
 
 	toAPIModelFunc := func(tbls []string) []TableName {
 		var apiModels []TableName
@@ -1474,14 +1474,17 @@ func getVerifiedTables(
 	if err != nil {
 		return nil, nil, err
 	}
+	start := time.Now()
 	tableInfos, ineligibleTables, eligibleTables, err := schemastore.
 		VerifyTables(f, storage, startTs)
 	if err != nil {
 		return nil, nil, err
 	}
 	log.Info("verifyTables completed",
-		zap.Int("tableCount", len(tableInfos)),
-		zap.Uint64("startTs", startTs))
+		zap.Duration("duration", time.Since(start)),
+		zap.Int("tableCount", len(tableInfos)), zap.Uint64("startTs", startTs),
+		zap.Bool("forceReplicate", replicaConfig.ForceReplicate),
+		zap.Bool("ignoreIneligibleTable", replicaConfig.IgnoreIneligibleTable))
 
 	err = f.Verify(tableInfos)
 	if err != nil {
