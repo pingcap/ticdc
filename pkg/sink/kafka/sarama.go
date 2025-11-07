@@ -119,6 +119,27 @@ func newSaramaConfig(ctx context.Context, o *options) (*sarama.Config, error) {
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 	}
+
+	kafkaVersion, err := getKafkaVersion(config, o)
+	if err != nil {
+		log.Warn("Can't get Kafka version by broker. ticdc will use default version",
+			zap.String("defaultVersion", kafkaVersion.String()))
+	}
+	config.Version = kafkaVersion
+
+	if o.IsAssignedVersion {
+		version, err := sarama.ParseKafkaVersion(o.Version)
+		if err != nil {
+			return nil, errors.WrapError(errors.ErrKafkaInvalidVersion, err)
+		}
+		config.Version = version
+		if !version.IsAtLeast(maxKafkaVersion) && version.String() != kafkaVersion.String() {
+			log.Warn("The Kafka version you assigned may not be correct. "+
+				"Please assign a version equal to or less than the specified version",
+				zap.String("assignedVersion", version.String()),
+				zap.String("desiredVersion", kafkaVersion.String()))
+		}
+	}
 	return config, nil
 }
 

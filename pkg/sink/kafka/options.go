@@ -562,7 +562,7 @@ func NewKafkaClientID(captureAddr string,
 		clientID = configuredClientID
 	} else {
 		clientID = fmt.Sprintf("TiCDC_producer_%s_%s_%s",
-			captureAddr, changefeedID.Keyspace(), changefeedID.ID())
+			captureAddr, changefeedID.Keyspace(), changefeedID.Name())
 		clientID = commonInvalidChar.ReplaceAllString(clientID, "_")
 	}
 	if !validClientID.MatchString(clientID) {
@@ -591,6 +591,21 @@ func adjustOptions(
 		if err != nil {
 			return errors.Trace(err)
 		}
+	}
+
+	// adjust keepConnAliveInterval by `connections.max.idle.ms` broker config.
+	idleMs, err := admin.GetBrokerConfig(ctx, BrokerConnectionsMaxIdleMsConfigName)
+	if err != nil {
+		log.Warn("GetBrokerConfig failed for connections.max.idle.ms", zap.Error(err))
+	} else {
+		idleMsInt, err := strconv.Atoi(idleMs)
+		if err != nil || idleMsInt <= 0 {
+			log.Warn("invalid broker config",
+				zap.String("configName", BrokerConnectionsMaxIdleMsConfigName), zap.String("configValue", idleMs))
+			return errors.Trace(err)
+		}
+		options.KeepConnAliveInterval = time.Duration(idleMsInt/3) * time.Millisecond
+		log.Info("Adjust KeepConnAliveInterval", zap.Duration("KeepConnAliveInterval", options.KeepConnAliveInterval))
 	}
 
 	info, exists := topics[topic]
