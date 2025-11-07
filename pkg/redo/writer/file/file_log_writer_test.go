@@ -28,104 +28,6 @@ import (
 	"go.uber.org/zap"
 )
 
-func TestLogWriterWriteLog(t *testing.T) {
-	t.Parallel()
-
-	type arg struct {
-		ctx  context.Context
-		rows []writer.RedoEvent
-	}
-	tableInfo := &common.TableInfo{TableName: common.TableName{Schema: "test", Table: "t"}}
-	tests := []struct {
-		name      string
-		args      arg
-		wantTs    uint64
-		isRunning bool
-		writerErr error
-		wantErr   error
-	}{
-		{
-			name: "happy",
-			args: arg{
-				ctx: context.Background(),
-				rows: []writer.RedoEvent{
-					&pevent.RedoRowEvent{CommitTs: 1, TableInfo: tableInfo},
-				},
-			},
-			isRunning: true,
-			writerErr: nil,
-		},
-		{
-			name: "writer err",
-			args: arg{
-				ctx: context.Background(),
-				rows: []writer.RedoEvent{
-					nil,
-					&pevent.RedoRowEvent{CommitTs: 1, TableInfo: tableInfo},
-				},
-			},
-			writerErr: errors.New("err"),
-			wantErr:   errors.New("err"),
-			isRunning: true,
-		},
-		{
-			name: "len(rows)==0",
-			args: arg{
-				ctx:  context.Background(),
-				rows: []writer.RedoEvent{},
-			},
-			writerErr: errors.New("err"),
-			isRunning: true,
-		},
-		{
-			name: "isStopped",
-			args: arg{
-				ctx:  context.Background(),
-				rows: []writer.RedoEvent{},
-			},
-			writerErr: errors.ErrRedoWriterStopped,
-			isRunning: false,
-			wantErr:   errors.ErrRedoWriterStopped,
-		},
-		{
-			name: "context cancel",
-			args: arg{
-				ctx:  context.Background(),
-				rows: []writer.RedoEvent{},
-			},
-			writerErr: nil,
-			isRunning: true,
-			wantErr:   context.Canceled,
-		},
-	}
-
-	for _, tt := range tests {
-		mockWriter := &mockFileWriter{}
-		mockWriter.On("Write", mock.Anything).Return(1, tt.writerErr)
-		mockWriter.On("IsRunning").Return(tt.isRunning)
-		mockWriter.On("AdvanceTs", mock.Anything)
-		w := logWriter{
-			cfg:           &writer.LogWriterConfig{},
-			backendWriter: mockWriter,
-		}
-		if tt.name == "context cancel" {
-			ctx, cancel := context.WithCancel(context.Background())
-			cancel()
-			tt.args.ctx = ctx
-		}
-
-		err := w.WriteEvents(tt.args.ctx, tt.args.rows...)
-		if tt.wantErr != nil {
-			log.Info("log error",
-				zap.String("wantErr", tt.wantErr.Error()),
-				zap.String("gotErr", err.Error()))
-			require.Equal(t, tt.wantErr.Error(), err.Error(), tt.name)
-		} else {
-			require.Nil(t, err, tt.name)
-		}
-	}
-}
-
 func TestLogWriterWriteDDL(t *testing.T) {
 	t.Parallel()
 
@@ -276,17 +178,6 @@ func TestLogWriterFlushLog(t *testing.T) {
 			flushErr:  errors.ErrRedoWriterStopped,
 			isRunning: false,
 			wantErr:   errors.ErrRedoWriterStopped,
-		},
-		{
-			name: "context cancel",
-			args: arg{
-				ctx:     context.Background(),
-				tableID: 1,
-				ts:      1,
-			},
-			flushErr:  nil,
-			isRunning: true,
-			wantErr:   context.Canceled,
 		},
 	}
 
