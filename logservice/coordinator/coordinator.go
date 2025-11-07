@@ -164,7 +164,9 @@ func (c *logCoordinator) handleMessage(_ context.Context, targetMessage *messagi
 		case *heartbeatpb.LogCoordinatorResolvedTsRequest:
 			c.sendResolvedTsToCoordinator(targetMessage.From, common.NewChangefeedIDFromPB(msg.ChangefeedID))
 		default:
-			log.Panic("invalid message type", zap.Any("msg", msg))
+			log.Warn("unknown message type, ignore it",
+				zap.String("type", targetMessage.Type.String()),
+				zap.Any("msg", msg))
 		}
 	}
 	return nil

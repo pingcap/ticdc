@@ -233,7 +233,7 @@ func TestMigration(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, uint64(1), info.UpstreamID)
 		tc.info.UpstreamID = info.UpstreamID
-		require.Equal(t, common.DefaultKeyspace, info.ChangefeedID.Keyspace())
+		require.Equal(t, common.DefaultKeyspaceNamme, info.ChangefeedID.Keyspace())
 		require.Equal(t, tc.id, info.ChangefeedID.Name())
 		tc.info.ChangefeedID.DisplayName.Keyspace = info.ChangefeedID.Keyspace()
 		tc.info.ChangefeedID.DisplayName.Name = info.ChangefeedID.Name()
@@ -276,7 +276,7 @@ func TestMigration(t *testing.T) {
 	err = info.Unmarshal(infoResp.Kvs[0].Value)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), info.UpstreamID)
-	require.Equal(t, common.DefaultKeyspace, info.ChangefeedID.Keyspace())
+	require.Equal(t, common.DefaultKeyspaceNamme, info.ChangefeedID.Keyspace())
 
 	resp, err := cli.Get(context.Background(), otherClusterData)
 	require.Nil(t, err)

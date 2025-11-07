@@ -41,6 +41,7 @@ func TestKeyspaceCheckerMiddleware(t *testing.T) {
 		expectedStatus       int
 		expectedAbort        bool
 		expectedBodyContains string
+		expectedMeta         *keyspacepb.KeyspaceMeta
 	}{
 		{
 			name:           "default keyspace",
@@ -73,12 +74,19 @@ func TestKeyspaceCheckerMiddleware(t *testing.T) {
 			keyspace: "success",
 			init: func(t *testing.T, mock *keyspace.MockManager) {
 				mock.EXPECT().LoadKeyspace(gomock.Any(), "success").Return(&keyspacepb.KeyspaceMeta{
+					Id:    1,
+					Name:  "kespace1",
 					State: keyspacepb.KeyspaceState_ENABLED,
 				}, nil)
 			},
 			expectedStatus:       http.StatusOK,
 			expectedAbort:        false,
 			expectedBodyContains: "",
+			expectedMeta: &keyspacepb.KeyspaceMeta{
+				Id:    1,
+				Name:  "kespace1",
+				State: keyspacepb.KeyspaceState_ENABLED,
+			},
 		},
 	}
 
@@ -111,6 +119,10 @@ func TestKeyspaceCheckerMiddleware(t *testing.T) {
 			if tt.expectedBodyContains != "" {
 				require.NotNil(t, w.Body)
 				require.Contains(t, w.Body.String(), tt.expectedBodyContains)
+			}
+
+			if tt.expectedMeta != nil {
+				require.EqualValues(t, tt.expectedMeta, GetKeyspaceFromContext(c))
 			}
 		})
 	}

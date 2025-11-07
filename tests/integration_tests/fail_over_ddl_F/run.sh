@@ -84,7 +84,7 @@ function failOverCaseF-1() {
 	check_coordinator_and_maintainer "127.0.0.1:8300" "test" 60
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
-	cdc_pid_2=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8301")
+	cdc_pid_2=$(get_cdc_pid 127.0.0.1 8301)
 
 	# move table 1 to node 2
 	table_id=$(get_table_id "fail_over_ddl_test" "test1")
@@ -137,7 +137,7 @@ function failOverCaseF-2() {
 	check_coordinator_and_maintainer "127.0.0.1:8300" "test" 60
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
-	cdc_pid_2=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8301")
+	cdc_pid_2=$(get_cdc_pid 127.0.0.1 8301)
 
 	# move table 1 to node 2
 	table_id=$(get_table_id "fail_over_ddl_test" "test1")
@@ -198,7 +198,7 @@ function failOverCaseF-3() {
 	check_coordinator_and_maintainer "127.0.0.1:8300" "test" 60
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
-	cdc_pid_2=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8301")
+	cdc_pid_2=$(get_cdc_pid 127.0.0.1 8301)
 
 	# move table 1 to node 2
 	table_id=$(get_table_id "fail_over_ddl_test" "test1")
@@ -259,7 +259,7 @@ function failOverCaseF-4() {
 	check_coordinator_and_maintainer "127.0.0.1:8300" "test" 60
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
-	cdc_pid_2=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8301")
+	cdc_pid_2=$(get_cdc_pid 127.0.0.1 8301)
 
 	# move table 1 to node 2
 	table_id=$(get_table_id "fail_over_ddl_test" "test1")

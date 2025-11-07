@@ -681,7 +681,7 @@ func createTestEventFilterRule() *eventpb.EventFilterRule {
 }
 
 func createTestChangeFeedID(name string) common.ChangeFeedID {
-	return common.NewChangeFeedIDWithName(name, common.DefaultKeyspace)
+	return common.NewChangeFeedIDWithName(name, common.DefaultKeyspaceNamme)
 }
 
 // Helper functions to verify filter instances

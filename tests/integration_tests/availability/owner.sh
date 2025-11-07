@@ -139,7 +139,7 @@ function test_owner_retryable_error() {
 	# run another server
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix test_owner_retryable_error.server2 --addr "127.0.0.1:8301"
 	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep -v \"$owner_id\" | grep -v cluster_id | grep id"
-	capture_pid=$(pgrep $CDC_BINARY | awk '{print $1}' | grep -v "$owner_pid")
+	capture_pid=$(get_cdc_pid 127.0.0.1 8301)
 	capture_id=$($CDC_BINARY cli capture list --server 'http://127.0.0.1:8301' 2>&1 | awk -F '"' '/\"id/{print $4}' | grep -v "$owner_id")
 	echo "capture_id:" $capture_id
 	# resign the first capture, the second capture campaigns to be owner.

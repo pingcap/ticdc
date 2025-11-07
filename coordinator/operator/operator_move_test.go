@@ -25,7 +25,7 @@ import (
 
 func TestMoveMaintainerOperator_OnNodeRemove(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),
@@ -51,7 +51,7 @@ func TestMoveMaintainerOperator_OnNodeRemove(t *testing.T) {
 	require.True(t, op.canceled)
 	require.Nil(t, op.Schedule())
 
-	cf2ID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
+	cf2ID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	cf2 := changefeed.NewChangefeed(cf2ID, &config.ChangeFeedInfo{
 		ChangefeedID: cf2ID,
 		Config:       config.GetDefaultReplicaConfig(),

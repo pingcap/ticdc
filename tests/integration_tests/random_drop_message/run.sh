@@ -80,7 +80,7 @@ function kill_and_restart_nodes() {
 		local node_addr="127.0.0.1:830${node_to_kill}"
 
 		echo "[$(date)] Randomly selected CDC node $node_to_kill to kill (addr: $node_addr)..."
-		cdc_pid=$(pgrep -f "$CDC_BINARY.*--addr $node_addr")
+		cdc_pid=$(get_cdc_pid 127.0.0.1 830${node_to_kill})
 		if [ -n "$cdc_pid" ]; then
 			kill_cdc_pid $cdc_pid
 			echo "[$(date)] CDC node $node_to_kill killed, PID: $cdc_pid"

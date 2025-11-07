@@ -91,7 +91,7 @@ function simulate_crashes() {
 		echo "Simulating crash #$((crash_count + 1))"
 
 		# Kill CDC processes
-		cdc_pid_1=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8300")
+		cdc_pid_1=$(get_cdc_pid 127.0.0.1 8300)
 		if [ -z "$cdc_pid_1" ]; then
 			continue
 		fi

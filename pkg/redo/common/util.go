@@ -27,7 +27,7 @@ func FilterChangefeedFiles(files []string, changefeedID common.ChangeFeedID) []s
 		res     []string
 	)
 
-	if changefeedID.Keyspace() == common.DefaultKeyspace {
+	if changefeedID.Keyspace() == common.DefaultKeyspaceNamme {
 		matcher = fmt.Sprintf("_%s_", changefeedID.Name())
 	} else {
 		matcher = fmt.Sprintf("_%s_%s_", changefeedID.Keyspace(), changefeedID.Name())

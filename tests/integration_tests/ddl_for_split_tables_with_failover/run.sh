@@ -91,7 +91,7 @@ function kill_server() {
 	while true; do
 		case $((RANDOM % 3)) in
 		0)
-			cdc_pid_1=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8300")
+			cdc_pid_1=$(get_cdc_pid 127.0.0.1 8300)
 			if [ -z "$cdc_pid_1" ]; then
 				continue
 			fi
@@ -101,7 +101,7 @@ function kill_server() {
 			run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-$count" --addr "127.0.0.1:8300"
 			;;
 		1)
-			cdc_pid_2=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8301")
+			cdc_pid_2=$(get_cdc_pid 127.0.0.1 8301)
 			if [ -z "$cdc_pid_2" ]; then
 				continue
 			fi
