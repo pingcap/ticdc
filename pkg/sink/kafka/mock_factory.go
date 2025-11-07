@@ -163,7 +163,7 @@ func (p *MockSaramaAsyncProducer) AsyncRunCallback(
 func (p *MockSaramaAsyncProducer) AsyncSend(ctx context.Context, topic string, partition int32, message *common.Message) error {
 	meta := &messageMetadata{
 		callback: message.Callback,
-		message:  message,
+		logInfo:  message.LogInfo,
 	}
 	msg := &sarama.ProducerMessage{
 		Topic:     topic,

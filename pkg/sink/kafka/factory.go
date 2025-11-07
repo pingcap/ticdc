@@ -199,7 +199,7 @@ type saramaAsyncProducer struct {
 
 type messageMetadata struct {
 	callback func()
-	message  *common.Message
+	logInfo  *common.MessageLogInfo
 }
 
 func (p *saramaAsyncProducer) Close() {
@@ -330,14 +330,14 @@ func (p *saramaAsyncProducer) AsyncSend(
 			Err: errors.New("kafka sink injected error"),
 			Msg: &sarama.ProducerMessage{Metadata: &messageMetadata{
 				callback: message.Callback,
-				message:  message,
+				logInfo:  message.LogInfo,
 			}},
 		}
 		failpoint.Return(nil)
 	})
 	meta := &messageMetadata{
 		callback: message.Callback,
-		message:  message,
+		logInfo:  message.LogInfo,
 	}
 	msg := &sarama.ProducerMessage{
 		Topic:     topic,
@@ -359,8 +359,8 @@ func extractLogInfo(msg *sarama.ProducerMessage) *common.MessageLogInfo {
 		return nil
 	}
 	meta, ok := msg.Metadata.(*messageMetadata)
-	if !ok || meta == nil || meta.message == nil {
+	if !ok || meta == nil {
 		return nil
 	}
-	return meta.message.LogInfo
+	return meta.logInfo
 }
