@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logservicepb"
-	"github.com/pingcap/ticdc/pkg/chann"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -32,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/server/watcher"
+	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
@@ -164,7 +164,9 @@ func (c *logCoordinator) handleMessage(_ context.Context, targetMessage *messagi
 		case *heartbeatpb.LogCoordinatorResolvedTsRequest:
 			c.sendResolvedTsToCoordinator(targetMessage.From, common.NewChangefeedIDFromPB(msg.ChangefeedID))
 		default:
-			log.Panic("invalid message type", zap.Any("msg", msg))
+			log.Warn("unknown message type, ignore it",
+				zap.String("type", targetMessage.Type.String()),
+				zap.Any("msg", msg))
 		}
 	}
 	return nil

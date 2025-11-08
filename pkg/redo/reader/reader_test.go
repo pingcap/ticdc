@@ -55,8 +55,10 @@ func genLogFile(
 		// generate unsorted logs
 		for ts := maxCommitTs; ts >= minCommitTs; ts-- {
 			event := &pevent.RedoRowEvent{
-				CommitTs:  ts,
-				TableInfo: common.NewTableInfo4Decoder("test", &model.TableInfo{Name: ast.NewCIStr("t")}),
+				CommitTs: ts,
+				TableInfo: common.NewTableInfo4Decoder("test", &model.TableInfo{
+					Name: ast.NewCIStr("t"),
+				}),
 			}
 			log := event.ToRedoLog()
 			rawData, err := codec.MarshalRedoLog(log, nil)

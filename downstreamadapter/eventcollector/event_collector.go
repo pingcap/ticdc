@@ -21,7 +21,6 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
-	"github.com/pingcap/ticdc/pkg/chann"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
@@ -30,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
@@ -502,7 +502,9 @@ func (c *EventCollector) MessageCenterHandler(_ context.Context, targetMessage *
 		case *event.DispatcherHeartbeatResponse:
 			c.handleDispatcherHeartbeatResponse(targetMessage)
 		default:
-			log.Panic("invalid message type", zap.Any("msg", msg))
+			log.Warn("unknown message type, ignore it",
+				zap.String("type", targetMessage.Type.String()),
+				zap.Any("msg", msg))
 		}
 	}
 	return nil
@@ -516,7 +518,9 @@ func (c *EventCollector) RedoMessageCenterHandler(_ context.Context, targetMessa
 		c.redoReceiveChannels[targetMessage.GetGroup()%uint64(len(c.redoReceiveChannels))] <- targetMessage
 		return nil
 	}
-	log.Panic("invalid message type", zap.Any("msg", targetMessage))
+	log.Warn("unknown message type, ignore it",
+		zap.String("type", targetMessage.Type.String()),
+		zap.Any("msg", targetMessage))
 	return nil
 }
 
@@ -550,7 +554,9 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 						ds.Push(e.GetDispatcherID(), dispatcherEvent)
 					}
 				default:
-					log.Panic("invalid message type", zap.Any("msg", msg))
+					log.Warn("unknown message type, ignore it",
+						zap.String("type", targetMessage.Type.String()),
+						zap.Any("msg", msg))
 				}
 			}
 		}

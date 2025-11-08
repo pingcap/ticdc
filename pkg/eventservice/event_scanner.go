@@ -37,8 +37,8 @@ type eventGetter interface {
 // schemaGetter is the interface for getting schema info and ddl events
 // The implementation of schemaGetter is schemastore.SchemaStore
 type schemaGetter interface {
-	FetchTableDDLEvents(keyspaceID uint32, dispatcherID common.DispatcherID, tableID int64, filter filter.Filter, startTs, endTs uint64) ([]event.DDLEvent, error)
-	GetTableInfo(keyspaceID uint32, tableID int64, ts uint64) (*common.TableInfo, error)
+	FetchTableDDLEvents(keyspace common.KeyspaceMeta, dispatcherID common.DispatcherID, tableID int64, filter filter.Filter, startTs, endTs uint64) ([]event.DDLEvent, error)
+	GetTableInfo(keyspace common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error)
 }
 
 // ScanLimit defines the limits for a scan operation
@@ -142,8 +142,12 @@ func (s *eventScanner) scan(
 // fetchDDLEvents retrieves DDL events which finishedTs are within the range (start, end]
 func (s *eventScanner) fetchDDLEvents(stat *dispatcherStat, dataRange common.DataRange) ([]event.Event, error) {
 	dispatcherID := stat.info.GetID()
+	keyspaceMeta := common.KeyspaceMeta{
+		ID:   stat.info.GetTableSpan().KeyspaceID,
+		Name: stat.changefeedStat.changefeedID.Keyspace(),
+	}
 	ddlEvents, err := s.schemaGetter.FetchTableDDLEvents(
-		stat.info.GetTableSpan().KeyspaceID,
+		keyspaceMeta,
 		dispatcherID,
 		dataRange.Span.TableID,
 		stat.filter,
@@ -248,7 +252,11 @@ func (s *eventScanner) checkScanConditions(session *session) (bool, error) {
 }
 
 func (s *eventScanner) getTableInfo4Txn(dispatcher *dispatcherStat, tableID int64, ts uint64) (*common.TableInfo, error) {
-	tableInfo, err := s.schemaGetter.GetTableInfo(dispatcher.info.GetTableSpan().KeyspaceID, tableID, ts)
+	keyspaceMeta := common.KeyspaceMeta{
+		ID:   dispatcher.info.GetTableSpan().KeyspaceID,
+		Name: dispatcher.info.GetChangefeedID().Keyspace(),
+	}
+	tableInfo, err := s.schemaGetter.GetTableInfo(keyspaceMeta, tableID, ts)
 	if err == nil {
 		return tableInfo, nil
 	}

@@ -40,27 +40,27 @@ import (
 type SchemaStore interface {
 	common.SubModule
 
-	GetAllPhysicalTables(keyspaceID uint32, snapTs uint64, filter filter.Filter) ([]commonEvent.Table, error)
+	GetAllPhysicalTables(keyspaceMeta common.KeyspaceMeta, snapTs uint64, filter filter.Filter) ([]commonEvent.Table, error)
 
-	RegisterTable(keyspaceID uint32, tableID int64, startTs uint64) error
+	RegisterTable(keyspaceMeta common.KeyspaceMeta, tableID int64, startTs uint64) error
 
-	UnregisterTable(keyspaceID uint32, tableID int64) error
+	UnregisterTable(keyspaceMeta common.KeyspaceMeta, tableID int64) error
 
 	// GetTableInfo return table info with the largest version <= ts
-	GetTableInfo(keyspaceID uint32, tableID int64, ts uint64) (*common.TableInfo, error)
+	GetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error)
 
 	// TODO: how to respect tableFilter
-	GetTableDDLEventState(keyspaceID uint32, tableID int64) (DDLEventState, error)
+	GetTableDDLEventState(keyspaceMeta common.KeyspaceMeta, tableID int64) (DDLEventState, error)
 
 	// FetchTableDDLEvents returns the next ddl events which finishedTs are within the range (start, end]
 	// The caller must ensure end <= current resolvedTs
 	// TODO: add a parameter limit
-	FetchTableDDLEvents(keyspaceID uint32, dispatcherID common.DispatcherID, tableID int64, tableFilter filter.Filter, start, end uint64) ([]commonEvent.DDLEvent, error)
+	FetchTableDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableID int64, tableFilter filter.Filter, start, end uint64) ([]commonEvent.DDLEvent, error)
 
-	FetchTableTriggerDDLEvents(keyspaceID uint32, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error)
+	FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error)
 
 	// RegisterKeyspace register a keyspace to fetch table ddl
-	RegisterKeyspace(ctx context.Context, keyspaceName string) error
+	RegisterKeyspace(ctx context.Context, keyspaceMeta common.KeyspaceMeta) error
 }
 
 type DDLEventState struct {
@@ -251,35 +251,28 @@ func (s *schemaStore) Name() string {
 	return appcontext.SchemaStore
 }
 
-func (s *schemaStore) getKeyspaceSchemaStore(keyspaceID uint32) (*keyspaceSchemaStore, error) {
+func (s *schemaStore) getKeyspaceSchemaStore(keyspaceMeta common.KeyspaceMeta) (*keyspaceSchemaStore, error) {
 	s.keyspaceLocker.RLock()
-	store, ok := s.keyspaceSchemaStoreMap[keyspaceID]
+	store, ok := s.keyspaceSchemaStoreMap[keyspaceMeta.ID]
 	s.keyspaceLocker.RUnlock()
 	if ok {
 		return store, nil
 	}
 
 	ctx := context.Background()
-	// If the schemastore does not contain the keyspace, it means it is not a maintainer node.
-	// It should register the keyspace when it tries to get keyspace schema_store.
-	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
-	keyspaceMeta, err := keyspaceManager.GetKeyspaceByID(ctx, keyspaceID)
-	if err != nil {
-		return nil, err
-	}
 
-	if err = s.RegisterKeyspace(ctx, keyspaceMeta.Name); err != nil {
+	if err := s.RegisterKeyspace(ctx, keyspaceMeta); err != nil {
 		return nil, err
 	}
 
 	s.keyspaceLocker.RLock()
-	store, ok = s.keyspaceSchemaStoreMap[keyspaceID]
+	store, ok = s.keyspaceSchemaStoreMap[keyspaceMeta.ID]
 	s.keyspaceLocker.RUnlock()
 	if ok {
 		return store, nil
 	}
 
-	return nil, errors.ErrKeyspaceNotFound.FastGenByArgs(keyspaceID)
+	return nil, errors.ErrKeyspaceNotFound.FastGenByArgs(keyspaceMeta.ID)
 }
 
 func (s *schemaStore) Run(ctx context.Context) error {
@@ -311,8 +304,8 @@ func (s *schemaStore) Close(_ context.Context) error {
 	return nil
 }
 
-func (s *schemaStore) GetAllPhysicalTables(keyspaceID uint32, snapTs uint64, filter filter.Filter) ([]commonEvent.Table, error) {
-	store, err := s.getKeyspaceSchemaStore(keyspaceID)
+func (s *schemaStore) GetAllPhysicalTables(keyspaceMeta common.KeyspaceMeta, snapTs uint64, filter filter.Filter) ([]commonEvent.Table, error) {
+	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
 	if err != nil {
 		return nil, err
 	}
@@ -321,8 +314,8 @@ func (s *schemaStore) GetAllPhysicalTables(keyspaceID uint32, snapTs uint64, fil
 	return store.dataStorage.getAllPhysicalTables(snapTs, filter)
 }
 
-func (s *schemaStore) RegisterTable(keyspaceID uint32, tableID int64, startTs uint64) error {
-	store, err := s.getKeyspaceSchemaStore(keyspaceID)
+func (s *schemaStore) RegisterTable(keyspaceMeta common.KeyspaceMeta, tableID int64, startTs uint64) error {
+	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
 	if err != nil {
 		return err
 	}
@@ -330,15 +323,15 @@ func (s *schemaStore) RegisterTable(keyspaceID uint32, tableID int64, startTs ui
 	metrics.SchemaStoreResolvedRegisterTableGauge.Inc()
 	store.waitResolvedTs(tableID, startTs, 5*time.Second)
 	log.Info("register table",
-		zap.Uint32("keyspaceID", keyspaceID),
+		zap.Any("keyspace", keyspaceMeta),
 		zap.Int64("tableID", tableID),
 		zap.Uint64("startTs", startTs),
 		zap.Uint64("resolvedTs", store.resolvedTs.Load()))
 	return store.dataStorage.registerTable(tableID, startTs)
 }
 
-func (s *schemaStore) UnregisterTable(keyspaceID uint32, tableID int64) error {
-	store, err := s.getKeyspaceSchemaStore(keyspaceID)
+func (s *schemaStore) UnregisterTable(keyspaceMeta common.KeyspaceMeta, tableID int64) error {
+	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
 	if err != nil {
 		return err
 	}
@@ -346,8 +339,8 @@ func (s *schemaStore) UnregisterTable(keyspaceID uint32, tableID int64) error {
 	return store.dataStorage.unregisterTable(tableID)
 }
 
-func (s *schemaStore) GetTableInfo(keyspaceID uint32, tableID int64, ts uint64) (*common.TableInfo, error) {
-	store, err := s.getKeyspaceSchemaStore(keyspaceID)
+func (s *schemaStore) GetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error) {
+	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
 	if err != nil {
 		return nil, err
 	}
@@ -361,8 +354,8 @@ func (s *schemaStore) GetTableInfo(keyspaceID uint32, tableID int64, ts uint64) 
 	return store.dataStorage.getTableInfo(tableID, ts)
 }
 
-func (s *schemaStore) GetTableDDLEventState(keyspaceID uint32, tableID int64) (DDLEventState, error) {
-	store, err := s.getKeyspaceSchemaStore(keyspaceID)
+func (s *schemaStore) GetTableDDLEventState(keyspaceMeta common.KeyspaceMeta, tableID int64) (DDLEventState, error) {
+	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
 	if err != nil {
 		return DDLEventState{}, err
 	}
@@ -377,9 +370,9 @@ func (s *schemaStore) GetTableDDLEventState(keyspaceID uint32, tableID int64) (D
 
 // FetchTableDDLEvents returns the ddl events which finishedTs are within the range (start, end]
 func (s *schemaStore) FetchTableDDLEvents(
-	keyspaceID uint32, dispatcherID common.DispatcherID, tableID int64, tableFilter filter.Filter, start, end uint64,
+	keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableID int64, tableFilter filter.Filter, start, end uint64,
 ) ([]commonEvent.DDLEvent, error) {
-	store, err := s.getKeyspaceSchemaStore(keyspaceID)
+	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
 	if err != nil {
 		return nil, err
 	}
@@ -387,7 +380,7 @@ func (s *schemaStore) FetchTableDDLEvents(
 	currentResolvedTs := store.resolvedTs.Load()
 	if end > currentResolvedTs {
 		log.Warn("end should not be greater than current resolved ts",
-			zap.Uint32("keyspaceID", keyspaceID),
+			zap.Any("keyspace", keyspaceMeta),
 			zap.Stringer("dispatcherID", dispatcherID),
 			zap.Int64("tableID", tableID),
 			zap.Uint64("start", start),
@@ -403,8 +396,8 @@ func (s *schemaStore) FetchTableDDLEvents(
 }
 
 // FetchTableTriggerDDLEvents returns the next ddl events which finishedTs are within the range (start, end]
-func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceID uint32, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error) {
-	store, err := s.getKeyspaceSchemaStore(keyspaceID)
+func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error) {
+	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -430,7 +423,7 @@ func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceID uint32, dispatcherID
 		end = events[len(events)-1].FinishedTs
 	}
 	log.Debug("FetchTableTriggerDDLEvents end",
-		zap.Uint32("keyspaceID", keyspaceID),
+		zap.Any("keyspace", keyspaceMeta),
 		zap.Stringer("dispatcherID", dispatcherID),
 		zap.Uint64("start", start),
 		zap.Int("limit", limit),
@@ -444,30 +437,24 @@ func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceID uint32, dispatcherID
 // For classic mode, the keyspace is nil
 func (s *schemaStore) RegisterKeyspace(
 	ctx context.Context,
-	keyspaceName string,
+	keyspaceMeta common.KeyspaceMeta,
 ) error {
 	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
-	keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, keyspaceName)
-	if err != nil {
-		return err
-	}
-
-	keyspaceID := keyspaceMeta.Id
 
 	s.keyspaceLocker.Lock()
 	defer s.keyspaceLocker.Unlock()
 	// If the keyspace has already been registered
 	// No need to register again
-	if _, ok := s.keyspaceSchemaStoreMap[keyspaceID]; ok {
+	if _, ok := s.keyspaceSchemaStoreMap[keyspaceMeta.ID]; ok {
 		return nil
 	}
 
-	kvStorage, err := keyspaceManager.GetStorage(ctx, keyspaceName)
+	kvStorage, err := keyspaceManager.GetStorage(ctx, keyspaceMeta.Name)
 	if err != nil {
 		return err
 	}
 
-	storage, err := newPersistentStorage(ctx, s.root, keyspaceID, s.pdCli, kvStorage)
+	storage, err := newPersistentStorage(ctx, s.root, keyspaceMeta.ID, s.pdCli, kvStorage)
 	if err != nil {
 		return err
 	}
@@ -484,8 +471,7 @@ func (s *schemaStore) RegisterKeyspace(
 	store.pendingResolvedTs.Store(upperBound.ResolvedTs)
 	store.resolvedTs.Store(upperBound.ResolvedTs)
 	log.Info("schema store initialized",
-		zap.String("keyspaceName", keyspaceName),
-		zap.Uint32("keyspaceID", keyspaceID),
+		zap.Any("keyspace", keyspaceMeta),
 		zap.Uint64("resolvedTs", store.resolvedTs.Load()),
 		zap.Uint64("finishedDDLTS", store.finishedDDLTs),
 		zap.Int64("schemaVersion", store.schemaVersion))
@@ -495,7 +481,7 @@ func (s *schemaStore) RegisterKeyspace(
 		ctx,
 		subClient,
 		kvStorage,
-		keyspaceID,
+		keyspaceMeta.ID,
 		store.writeDDLEvent,
 		store.advancePendingResolvedTs,
 	)
@@ -521,7 +507,7 @@ func (s *schemaStore) RegisterKeyspace(
 		}
 	}(ctx, store)
 
-	s.keyspaceSchemaStoreMap[keyspaceID] = store
+	s.keyspaceSchemaStoreMap[keyspaceMeta.ID] = store
 
 	return nil
 }

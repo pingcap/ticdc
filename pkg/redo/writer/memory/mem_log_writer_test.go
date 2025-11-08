@@ -22,6 +22,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,15 +34,15 @@ func TestWriteDDL(t *testing.T) {
 		nil,
 		&pevent.RedoRowEvent{
 			CommitTs:  11,
-			TableInfo: &common.TableInfo{TableName: common.TableName{Schema: "test", Table: "t1"}},
+			TableInfo: common.NewTableInfo4Decoder("test", &model.TableInfo{Name: ast.NewCIStr("t1")}),
 		},
 		&pevent.RedoRowEvent{
 			CommitTs:  15,
-			TableInfo: &common.TableInfo{TableName: common.TableName{Schema: "test", Table: "t2"}},
+			TableInfo: common.NewTableInfo4Decoder("test", &model.TableInfo{Name: ast.NewCIStr("t2")}),
 		},
 		&pevent.RedoRowEvent{
 			CommitTs:  8,
-			TableInfo: &common.TableInfo{TableName: common.TableName{Schema: "test", Table: "t2"}},
+			TableInfo: common.NewTableInfo4Decoder("test", &model.TableInfo{Name: ast.NewCIStr("t2")}),
 		},
 	}
 	testWriteEvents(t, rows)
@@ -66,7 +68,7 @@ func testWriteEvents(t *testing.T, events []writer.RedoEvent) {
 	require.NoError(t, err)
 	lwcfg := &writer.LogWriterConfig{
 		CaptureID:          "test-capture",
-		ChangeFeedID:       common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspace),
+		ChangeFeedID:       common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceNamme),
 		URI:                uri,
 		UseExternalStorage: true,
 		MaxLogSizeInBytes:  10 * redo.Megabyte,
@@ -86,7 +88,7 @@ func testWriteEvents(t *testing.T, events []writer.RedoEvent) {
 	})
 	require.NoError(t, err)
 
-	require.ErrorIs(t, lw.Close(), context.Canceled)
+	require.ErrorIs(t, lw.Close(), nil)
 	// duplicate close should return the same error
-	require.ErrorIs(t, lw.Close(), context.Canceled)
+	require.ErrorIs(t, lw.Close(), nil)
 }

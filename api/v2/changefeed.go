@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/api/middleware"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
@@ -103,10 +104,11 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
-	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
-	keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, keyspaceName)
-	if err != nil {
-		_ = c.Error(errors.WrapError(errors.ErrKeyspaceNotFound, err))
+	keyspaceMeta := middleware.GetKeyspaceFromContext(c)
+
+	if keyspaceMeta.State != keyspacepb.KeyspaceState_ENABLED {
+		c.IndentedJSON(http.StatusBadRequest, errors.ErrAPIInvalidParam)
+		c.Abort()
 		return
 	}
 
@@ -198,6 +200,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	}
 	protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(replicaCfg.Sink.Protocol))
 
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 	kvStorage, err := keyspaceManager.GetStorage(ctx, keyspaceName)
 	if err != nil {
 		_ = c.Error(err)
@@ -210,7 +213,10 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	// Therefore, we cannot use the context of the HTTP request.
 	// We create a new context here.
 	schemaCxt := context.Background()
-	if err := schemaStore.RegisterKeyspace(schemaCxt, keyspaceName); err != nil {
+	if err := schemaStore.RegisterKeyspace(schemaCxt, common.KeyspaceMeta{
+		ID:   keyspaceMeta.Id,
+		Name: keyspaceMeta.Name,
+	}); err != nil {
 		_ = c.Error(err)
 		return
 	}
@@ -238,6 +244,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		Config:         replicaCfg,
 		State:          config.StateNormal,
 		CreatorVersion: version.ReleaseVersion,
+		KeyspaceID:     keyspaceMeta.Id,
 	}
 
 	// verify sinkURI
@@ -663,10 +670,11 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		newCheckpointTs = cfg.OverwriteCheckpointTs
 	}
 
-	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
-	keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, keyspaceName)
-	if err != nil {
-		_ = c.Error(errors.WrapError(errors.ErrKeyspaceNotFound, err))
+	keyspaceMeta := middleware.GetKeyspaceFromContext(c)
+
+	if keyspaceMeta.State != keyspacepb.KeyspaceState_ENABLED {
+		c.IndentedJSON(http.StatusBadRequest, errors.ErrAPIInvalidParam)
+		c.Abort()
 		return
 	}
 
@@ -731,6 +739,14 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	keyspaceName := GetKeyspaceValueWithDefault(c)
+
+	keyspaceMeta := middleware.GetKeyspaceFromContext(c)
+
+	if keyspaceMeta.State != keyspacepb.KeyspaceState_ENABLED {
+		c.IndentedJSON(http.StatusBadRequest, errors.ErrAPIInvalidParam)
+		c.Abort()
+		return
+	}
 
 	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), keyspaceName)
 	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
@@ -1518,12 +1534,12 @@ func getVerifiedTables(
 
 func GetKeyspaceValueWithDefault(c *gin.Context) string {
 	if kerneltype.IsClassic() {
-		return common.DefaultKeyspace
+		return common.DefaultKeyspaceNamme
 	}
 
 	keyspace := c.Query(api.APIOpVarKeyspace)
 	if keyspace == "" {
-		keyspace = common.DefaultKeyspace
+		keyspace = common.DefaultKeyspaceNamme
 	}
 	return keyspace
 }

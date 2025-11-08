@@ -608,7 +608,7 @@ func TestIsEligible(t *testing.T) {
 }
 
 func TestIsAllowedDDL(t *testing.T) {
-	require.Len(t, ddlWhiteListMap, 38)
+	require.Len(t, ddlWhiteListMap, 40)
 	type testCase struct {
 		model.ActionType
 		allowed bool
@@ -617,8 +617,6 @@ func TestIsAllowedDDL(t *testing.T) {
 	for ddlType := range ddlWhiteListMap {
 		testCases = append(testCases, testCase{ddlType, true})
 	}
-	testCases = append(testCases, testCase{model.ActionAddForeignKey, false})
-	testCases = append(testCases, testCase{model.ActionDropForeignKey, false})
 	testCases = append(testCases, testCase{model.ActionCreateSequence, false})
 	testCases = append(testCases, testCase{model.ActionAlterSequence, false})
 	testCases = append(testCases, testCase{model.ActionDropSequence, false})
@@ -683,7 +681,7 @@ func createTestEventFilterRule() *eventpb.EventFilterRule {
 }
 
 func createTestChangeFeedID(name string) common.ChangeFeedID {
-	return common.NewChangeFeedIDWithName(name, common.DefaultKeyspace)
+	return common.NewChangeFeedIDWithName(name, common.DefaultKeyspaceNamme)
 }
 
 // Helper functions to verify filter instances

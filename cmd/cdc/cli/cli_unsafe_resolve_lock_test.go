@@ -36,6 +36,6 @@ func TestUnsafeResolveLockCli(t *testing.T) {
 		"--upstream-cert=cer",
 		"--upstream-key=key",
 	}
-	f.unsafes.EXPECT().ResolveLock(gomock.Any(), gomock.Any()).Return(nil)
+	f.unsafes.EXPECT().ResolveLock(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
 	require.Nil(t, cmd.Execute())
 }

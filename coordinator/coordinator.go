@@ -26,8 +26,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -287,22 +285,16 @@ func (c *coordinator) handleStateChange(
 		log.Info("changefeed is resumed or created successfully, try to delete its safeguard gc safepoint",
 			zap.String("changefeed", event.changefeedID.String()))
 
-		keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
-		keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, event.changefeedID.Keyspace())
+		// We need to clean its gc safepoint when changefeed is resumed or created
+		gcServiceID := c.getEnsureGCServiceID(gc.EnsureGCServiceCreating)
+		err := gc.UndoEnsureChangefeedStartTsSafety(ctx, c.pdClient, cfInfo.KeyspaceID, gcServiceID, event.changefeedID)
 		if err != nil {
-			log.Warn("failed to load keyspace", zap.String("keyspace", event.changefeedID.Keyspace()), zap.Error(err))
-		} else {
-			// We need to clean its gc safepoint when changefeed is resumed or created
-			gcServiceID := c.getEnsureGCServiceID(gc.EnsureGCServiceCreating)
-			err := gc.UndoEnsureChangefeedStartTsSafety(ctx, c.pdClient, keyspaceMeta.Id, gcServiceID, event.changefeedID)
-			if err != nil {
-				log.Warn("failed to delete create changefeed gc safepoint", zap.Error(err))
-			}
-			gcServiceID = c.getEnsureGCServiceID(gc.EnsureGCServiceResuming)
-			err = gc.UndoEnsureChangefeedStartTsSafety(ctx, c.pdClient, keyspaceMeta.Id, gcServiceID, event.changefeedID)
-			if err != nil {
-				log.Warn("failed to delete resume changefeed gc safepoint", zap.Error(err))
-			}
+			log.Warn("failed to delete create changefeed gc safepoint", zap.Error(err))
+		}
+		gcServiceID = c.getEnsureGCServiceID(gc.EnsureGCServiceResuming)
+		err = gc.UndoEnsureChangefeedStartTsSafety(ctx, c.pdClient, cfInfo.KeyspaceID, gcServiceID, event.changefeedID)
+		if err != nil {
+			log.Warn("failed to delete resume changefeed gc safepoint", zap.Error(err))
 		}
 
 	default:
@@ -461,8 +453,8 @@ func (c *coordinator) updateGlobalGcSafepoint(ctx context.Context) error {
 func (c *coordinator) updateAllKeyspaceGcBarriers(ctx context.Context) error {
 	barrierMap := c.controller.calculateKeyspaceGCBarrier()
 
-	for keyspaceName := range barrierMap {
-		err := c.updateKeyspaceGcBarrier(ctx, barrierMap, keyspaceName)
+	for meta, barrierTS := range barrierMap {
+		err := c.updateKeyspaceGcBarrier(ctx, meta, barrierTS)
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -471,23 +463,9 @@ func (c *coordinator) updateAllKeyspaceGcBarriers(ctx context.Context) error {
 	return nil
 }
 
-func (c *coordinator) updateKeyspaceGcBarrier(ctx context.Context, barrierMap map[string]uint64, keyspaceName string) error {
-	// Obtain keyspace metadata from PD
-	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
-	keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, keyspaceName)
-	if err != nil {
-		return cerror.WrapError(cerror.ErrLoadKeyspaceFailed, err)
-	}
-	keyspaceID := keyspaceMeta.Id
-
-	barrierTS, ok := barrierMap[keyspaceName]
-	if !ok || barrierTS == math.MaxUint64 {
-		ts := c.pdClock.CurrentTime()
-		barrierTS = oracle.GoTimeToTS(ts)
-	}
-
+func (c *coordinator) updateKeyspaceGcBarrier(ctx context.Context, meta common.KeyspaceMeta, barrierTS uint64) error {
 	barrierTsUpperBound := barrierTS - 1
-	err = c.gcManager.TryUpdateKeyspaceGCBarrier(ctx, keyspaceID, keyspaceName, barrierTsUpperBound, false)
+	err := c.gcManager.TryUpdateKeyspaceGCBarrier(ctx, meta.ID, meta.Name, barrierTsUpperBound, false)
 	return errors.Trace(err)
 }
 
@@ -497,7 +475,18 @@ func (c *coordinator) updateKeyspaceGcBarrier(ctx context.Context, barrierMap ma
 func (c *coordinator) updateGCSafepointByChangefeed(ctx context.Context, changefeedID common.ChangeFeedID) error {
 	if kerneltype.IsNextGen() {
 		barrierMap := c.controller.calculateKeyspaceGCBarrier()
-		return c.updateKeyspaceGcBarrier(ctx, barrierMap, changefeedID.Keyspace())
+
+		cfInfo, _, err := c.GetChangefeed(ctx, changefeedID.DisplayName)
+		if err != nil {
+			return err
+		}
+
+		meta := common.KeyspaceMeta{
+			ID:   cfInfo.KeyspaceID,
+			Name: changefeedID.Keyspace(),
+		}
+
+		return c.updateKeyspaceGcBarrier(ctx, meta, barrierMap[meta])
 	}
 	return c.updateGlobalGcSafepoint(ctx)
 }
