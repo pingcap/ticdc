@@ -222,13 +222,7 @@ func (m *MoveDispatcherOperator) Type() string {
 }
 
 func (m *MoveDispatcherOperator) BlockTsForward() bool {
-	if m.removed.Load() {
-		return true
-	}
-	if m.originNodeStopped.Load() {
-		return true
-	}
-	return false
+	return true
 }
 
 // just for test.
