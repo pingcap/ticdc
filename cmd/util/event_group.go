@@ -72,7 +72,7 @@ func (g *EventsGroup) Append(row *commonEvent.DMLEvent, force bool) {
 		return
 	}
 	log.Panic("append event with smaller commit ts",
-		zap.Int32("Partition", g.Partition), zap.Int64("tableID", g.tableID),
+		zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
 		zap.Uint64("lastCommitTs", lastDMLEvent.GetCommitTs()), zap.Uint64("commitTs", row.GetCommitTs()))
 }
 
@@ -86,7 +86,7 @@ func (g *EventsGroup) Resolve(resolve uint64) []*commonEvent.DMLEvent {
 	g.events = g.events[i:]
 	if len(result) != 0 && len(g.events) != 0 {
 		log.Warn("not all events resolved",
-			zap.Int32("Partition", g.Partition), zap.Int64("tableID", g.tableID),
+			zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
 			zap.Int("resolved", len(result)), zap.Int("remained", len(g.events)),
 			zap.Uint64("resolveTs", resolve), zap.Uint64("firstCommitTs", g.events[0].CommitTs))
 	}
