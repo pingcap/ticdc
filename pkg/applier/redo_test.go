@@ -17,23 +17,23 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/url"
 	"os"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/go-sql-driver/mysql"
 	"github.com/phayes/freeport"
 	dmysql "github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/redo/reader"
 	pkgMysql "github.com/pingcap/ticdc/pkg/sink/mysql"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	pmysql "github.com/pingcap/tidb/pkg/parser/mysql"
-	"github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -102,10 +102,13 @@ func (br *MockReader) GetVersion() int {
 	return misc.Version
 }
 
-func newFieldType(tp byte, flag uint) *types.FieldType {
-	ft := types.NewFieldType(tp)
-	ft.SetFlag(flag)
-	return ft
+func newFlag(flag uint) uint64 {
+	var result commonType.ColumnFlagType
+	if flag == pmysql.PriKeyFlag {
+		result.SetIsHandleKey()
+		result.SetIsPrimaryKey()
+	}
+	return uint64(result)
 }
 
 func TestApply(t *testing.T) {
@@ -129,18 +132,9 @@ func TestApply(t *testing.T) {
 		createRedoReader = createRedoReaderBak
 	}()
 
-	tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
-		Name:  ast.NewCIStr("t"),
+	tableInfo := common.NewTableInfo4Decoder("test", &timodel.TableInfo{
+		Name:  ast.NewCIStr("t1"),
 		State: timodel.StatePublic,
-		Columns: []*timodel.ColumnInfo{
-			{
-				Name:      ast.NewCIStr("a"),
-				FieldType: *newFieldType(pmysql.TypeLong, pmysql.PriKeyFlag),
-			}, {
-				Name:      ast.NewCIStr("b"),
-				FieldType: *newFieldType(pmysql.TypeString, 0),
-			},
-		},
 	})
 	dmls := []*commonEvent.RedoDMLEvent{
 		{
@@ -149,14 +143,17 @@ func TestApply(t *testing.T) {
 				CommitTs: 1200,
 				Table:    &tableInfo.TableName,
 				Columns: []*commonEvent.RedoColumn{
-					{Name: "a"},
-					{Name: "b"},
+					{Name: "a", Type: pmysql.TypeLong},
+					{Name: "b", Type: pmysql.TypeString},
 				},
+				IndexColumns: [][]int{{0}},
 			},
 			Columns: []commonEvent.RedoColumnValue{
 				{
-					Value: 1,
-				}, {
+					Value: int64(1),
+					Flag:  newFlag(pmysql.PriKeyFlag),
+				},
+				{
 					Value: "2",
 				},
 			},
@@ -166,27 +163,32 @@ func TestApply(t *testing.T) {
 			Row: &commonEvent.DMLEventInRedoLog{
 				StartTs:  1120,
 				CommitTs: 1220,
-				Table:    &common.TableName{},
+				Table:    &tableInfo.TableName,
 				Columns: []*commonEvent.RedoColumn{
-					{Name: "a"},
-					{Name: "b"},
+					{Name: "a", Type: pmysql.TypeLong},
+					{Name: "b", Type: pmysql.TypeString},
 				},
 				PreColumns: []*commonEvent.RedoColumn{
-					{Name: "a"},
-					{Name: "b"},
+					{Name: "a", Type: pmysql.TypeLong},
+					{Name: "b", Type: pmysql.TypeString},
 				},
+				IndexColumns: [][]int{{0}},
 			},
 			Columns: []commonEvent.RedoColumnValue{
 				{
-					Value: 1,
-				}, {
+					Value: int64(1),
+					Flag:  newFlag(pmysql.PriKeyFlag),
+				},
+				{
 					Value: "3",
 				},
 			},
 			PreColumns: []commonEvent.RedoColumnValue{
 				{
-					Value: 1,
-				}, {
+					Value: int64(1),
+					Flag:  newFlag(pmysql.PriKeyFlag),
+				},
+				{
 					Value: "2",
 				},
 			},
@@ -197,14 +199,17 @@ func TestApply(t *testing.T) {
 				CommitTs: 1250,
 				Table:    &tableInfo.TableName,
 				Columns: []*commonEvent.RedoColumn{
-					{Name: "a"},
-					{Name: "b"},
+					{Name: "a", Type: pmysql.TypeLong},
+					{Name: "b", Type: pmysql.TypeString},
 				},
+				IndexColumns: [][]int{{0}},
 			},
 			Columns: []commonEvent.RedoColumnValue{
 				{
-					Value: 10,
-				}, {
+					Value: int64(10),
+					Flag:  newFlag(pmysql.PriKeyFlag),
+				},
+				{
 					Value: "20",
 				},
 			},
@@ -215,14 +220,17 @@ func TestApply(t *testing.T) {
 				CommitTs: 1250,
 				Table:    &tableInfo.TableName,
 				Columns: []*commonEvent.RedoColumn{
-					{Name: "a"},
-					{Name: "b"},
+					{Name: "a", Type: pmysql.TypeLong},
+					{Name: "b", Type: pmysql.TypeString},
 				},
+				IndexColumns: [][]int{{0}},
 			},
 			Columns: []commonEvent.RedoColumnValue{
 				{
-					Value: 100,
-				}, {
+					Value: int64(100),
+					Flag:  newFlag(pmysql.PriKeyFlag),
+				},
+				{
 					Value: "200",
 				},
 			},
@@ -233,14 +241,17 @@ func TestApply(t *testing.T) {
 				CommitTs: resolvedTs,
 				Table:    &tableInfo.TableName,
 				PreColumns: []*commonEvent.RedoColumn{
-					{Name: "a"},
-					{Name: "b"},
+					{Name: "a", Type: pmysql.TypeLong},
+					{Name: "b", Type: pmysql.TypeString},
 				},
+				IndexColumns: [][]int{{0}},
 			},
 			PreColumns: []commonEvent.RedoColumnValue{
 				{
-					Value: 10,
-				}, {
+					Value: int64(10),
+					Flag:  newFlag(pmysql.PriKeyFlag),
+				},
+				{
 					Value: "20",
 				},
 			},
@@ -251,25 +262,30 @@ func TestApply(t *testing.T) {
 				CommitTs: resolvedTs,
 				Table:    &tableInfo.TableName,
 				Columns: []*commonEvent.RedoColumn{
-					{Name: "a"},
-					{Name: "b"},
+					{Name: "a", Type: pmysql.TypeLong},
+					{Name: "b", Type: pmysql.TypeString},
 				},
 				PreColumns: []*commonEvent.RedoColumn{
-					{Name: "a"},
-					{Name: "b"},
+					{Name: "a", Type: pmysql.TypeLong},
+					{Name: "b", Type: pmysql.TypeString},
 				},
+				IndexColumns: [][]int{{0}},
 			},
 			Columns: []commonEvent.RedoColumnValue{
 				{
-					Value: 2,
-				}, {
+					Value: int64(2),
+					Flag:  newFlag(pmysql.PriKeyFlag),
+				},
+				{
 					Value: "3",
 				},
 			},
 			PreColumns: []commonEvent.RedoColumnValue{
 				{
-					Value: 1,
-				}, {
+					Value: int64(1),
+					Flag:  newFlag(pmysql.PriKeyFlag),
+				},
+				{
 					Value: "3",
 				},
 			},
@@ -280,25 +296,30 @@ func TestApply(t *testing.T) {
 				CommitTs: resolvedTs,
 				Table:    &tableInfo.TableName,
 				Columns: []*commonEvent.RedoColumn{
-					{Name: "a"},
-					{Name: "b"},
+					{Name: "a", Type: pmysql.TypeLong},
+					{Name: "b", Type: pmysql.TypeString},
 				},
 				PreColumns: []*commonEvent.RedoColumn{
-					{Name: "a"},
-					{Name: "b"},
+					{Name: "a", Type: pmysql.TypeLong},
+					{Name: "b", Type: pmysql.TypeString},
 				},
+				IndexColumns: [][]int{{0}},
 			},
 			Columns: []commonEvent.RedoColumnValue{
 				{
-					Value: 200,
-				}, {
+					Value: int64(200),
+					Flag:  newFlag(pmysql.PriKeyFlag),
+				},
+				{
 					Value: "300",
 				},
 			},
 			PreColumns: []commonEvent.RedoColumnValue{
 				{
-					Value: 100,
-				}, {
+					Value: int64(100),
+					Flag:  newFlag(pmysql.PriKeyFlag),
+				},
+				{
 					Value: "200",
 				},
 			},
@@ -337,16 +358,25 @@ func TestApply(t *testing.T) {
 
 	dir, err := os.Getwd()
 	require.Nil(t, err)
-	cfg := &RedoApplierConfig{
+	applyCfg := &RedoApplierConfig{
 		SinkURI: "mysql://127.0.0.1:4000/?worker-count=1&max-txn-row=1" +
 			"&tidb_placement_mode=ignore&safe-mode=true&cache-prep-stmts=false" +
-			"&multi-stmt-enable=false&enable-ddl-ts=false",
+			"&multi-stmt-enable=false&enable-ddl-ts=false&batch-dml-enable=false&enable-ddl-ts=false",
 		Dir: dir,
 	}
-	ap := NewRedoApplier(cfg)
+	ap := NewRedoApplier(applyCfg)
 	// use mock db init sink
-	ap.mysqlSink = dmysql.NewMySQLSink(ctx, ap.rd.GetChangefeedID(), pkgMysql.New(), db, false)
-	ap.eventsGroup = make(map[commonType.TableID]*eventsGroup)
+	cfg := &config.ChangefeedConfig{
+		ChangefeedID: common.NewChangefeedID4Test(common.DefaultKeyspace.Name, "test"),
+		SinkURI:      applyCfg.SinkURI,
+		SinkConfig:   config.GetDefaultReplicaConfig().Sink,
+	}
+	mysqlCfg := pkgMysql.New()
+	sinkURI, err := url.Parse(cfg.SinkURI)
+	require.NoError(t, err)
+	mysqlCfg.Apply(sinkURI, cfg.ChangefeedID, cfg)
+	ap.mysqlSink = dmysql.NewMySQLSink(ctx, cfg.ChangefeedID, mysqlCfg, db, false)
+	ap.needRecoveryInfo = false
 	err = ap.Apply(ctx)
 	require.Nil(t, err)
 }
@@ -372,18 +402,9 @@ func TestApplyBigTxn(t *testing.T) {
 		createRedoReader = createRedoReaderBak
 	}()
 
-	tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
+	tableInfo := common.NewTableInfo4Decoder("test", &timodel.TableInfo{
 		Name:  ast.NewCIStr("t1"),
 		State: timodel.StatePublic,
-		Columns: []*timodel.ColumnInfo{
-			{
-				Name:      ast.NewCIStr("a"),
-				FieldType: *newFieldType(pmysql.TypeLong, pmysql.PriKeyFlag),
-			}, {
-				Name:      ast.NewCIStr("b"),
-				FieldType: *newFieldType(pmysql.TypeString, 0),
-			},
-		},
 	})
 
 	dmls := make([]*commonEvent.RedoDMLEvent, 0)
@@ -395,14 +416,17 @@ func TestApplyBigTxn(t *testing.T) {
 				CommitTs: 1200,
 				Table:    &tableInfo.TableName,
 				Columns: []*commonEvent.RedoColumn{
-					{Name: "a"},
-					{Name: "b"},
+					{Name: "a", Type: pmysql.TypeLong},
+					{Name: "b", Type: pmysql.TypeString},
 				},
+				IndexColumns: [][]int{{0}},
 			},
 			Columns: []commonEvent.RedoColumnValue{
 				{
-					Value: i,
-				}, {
+					Value: int64(i),
+					Flag:  newFlag(pmysql.PriKeyFlag),
+				},
+				{
 					Value: fmt.Sprintf("%d", i+1),
 				},
 			},
@@ -417,25 +441,30 @@ func TestApplyBigTxn(t *testing.T) {
 				CommitTs: 1300,
 				Table:    &tableInfo.TableName,
 				Columns: []*commonEvent.RedoColumn{
-					{Name: "a"},
-					{Name: "b"},
+					{Name: "a", Type: pmysql.TypeLong},
+					{Name: "b", Type: pmysql.TypeString},
 				},
 				PreColumns: []*commonEvent.RedoColumn{
-					{Name: "a"},
-					{Name: "b"},
+					{Name: "a", Type: pmysql.TypeLong},
+					{Name: "b", Type: pmysql.TypeString},
 				},
+				IndexColumns: [][]int{{0}},
 			},
 			Columns: []commonEvent.RedoColumnValue{
 				{
-					Value: i * 10,
-				}, {
+					Value: int64(i * 10),
+					Flag:  newFlag(pmysql.PriKeyFlag),
+				},
+				{
 					Value: fmt.Sprintf("%d", i*10+1),
 				},
 			},
 			PreColumns: []commonEvent.RedoColumnValue{
 				{
-					Value: i,
-				}, {
+					Value: int64(i),
+					Flag:  newFlag(pmysql.PriKeyFlag),
+				},
+				{
 					Value: fmt.Sprintf("%d", i+1),
 				},
 			},
@@ -450,14 +479,17 @@ func TestApplyBigTxn(t *testing.T) {
 				CommitTs: resolvedTs,
 				Table:    &tableInfo.TableName,
 				PreColumns: []*commonEvent.RedoColumn{
-					{Name: "a"},
-					{Name: "b"},
+					{Name: "a", Type: pmysql.TypeLong},
+					{Name: "b", Type: pmysql.TypeString},
 				},
+				IndexColumns: [][]int{{0}},
 			},
 			PreColumns: []commonEvent.RedoColumnValue{
 				{
-					Value: i * 10,
-				}, {
+					Value: int64(i * 10),
+					Flag:  newFlag(pmysql.PriKeyFlag),
+				},
+				{
 					Value: fmt.Sprintf("%d", i*10+1),
 				},
 			},
@@ -471,25 +503,30 @@ func TestApplyBigTxn(t *testing.T) {
 				CommitTs: resolvedTs,
 				Table:    &tableInfo.TableName,
 				Columns: []*commonEvent.RedoColumn{
-					{Name: "a"},
-					{Name: "b"},
+					{Name: "a", Type: pmysql.TypeLong},
+					{Name: "b", Type: pmysql.TypeString},
 				},
 				PreColumns: []*commonEvent.RedoColumn{
-					{Name: "a"},
-					{Name: "b"},
+					{Name: "a", Type: pmysql.TypeLong},
+					{Name: "b", Type: pmysql.TypeString},
 				},
+				IndexColumns: [][]int{{0}},
 			},
 			Columns: []commonEvent.RedoColumnValue{
 				{
-					Value: i * 100,
-				}, {
+					Value: int64(i * 100),
+					Flag:  newFlag(pmysql.PriKeyFlag),
+				},
+				{
 					Value: fmt.Sprintf("%d", i*100+1),
 				},
 			},
 			PreColumns: []commonEvent.RedoColumnValue{
 				{
-					Value: i * 10,
-				}, {
+					Value: int64(i * 10),
+					Flag:  newFlag(pmysql.PriKeyFlag),
+				},
+				{
 					Value: fmt.Sprintf("%d", i*10+1),
 				},
 			},
@@ -529,16 +566,25 @@ func TestApplyBigTxn(t *testing.T) {
 
 	dir, err := os.Getwd()
 	require.Nil(t, err)
-	cfg := &RedoApplierConfig{
+	applyCfg := &RedoApplierConfig{
 		SinkURI: "mysql://127.0.0.1:4000/?worker-count=1&max-txn-row=1" +
 			"&tidb_placement_mode=ignore&safe-mode=true&cache-prep-stmts=false" +
-			"&multi-stmt-enable=false&enable-ddl-ts=false",
+			"&multi-stmt-enable=false&enable-ddl-ts=false&batch-dml-enable=false&enable-ddl-ts=false",
 		Dir: dir,
 	}
-	ap := NewRedoApplier(cfg)
+	ap := NewRedoApplier(applyCfg)
 	// use mock db init sink
-	ap.mysqlSink = dmysql.NewMySQLSink(ctx, ap.rd.GetChangefeedID(), pkgMysql.New(), db, false)
-	ap.eventsGroup = make(map[commonType.TableID]*eventsGroup)
+	cfg := &config.ChangefeedConfig{
+		ChangefeedID: common.NewChangefeedID4Test(common.DefaultKeyspace.Name, "test"),
+		SinkURI:      applyCfg.SinkURI,
+		SinkConfig:   config.GetDefaultReplicaConfig().Sink,
+	}
+	mysqlCfg := pkgMysql.New()
+	sinkURI, err := url.Parse(cfg.SinkURI)
+	require.NoError(t, err)
+	mysqlCfg.Apply(sinkURI, cfg.ChangefeedID, cfg)
+	ap.mysqlSink = dmysql.NewMySQLSink(ctx, cfg.ChangefeedID, mysqlCfg, db, false)
+	ap.needRecoveryInfo = false
 	err = ap.Apply(ctx)
 	require.Nil(t, err)
 }
@@ -563,25 +609,6 @@ func getMockDB(t *testing.T) *sql.DB {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.Nil(t, err)
 
-	// Before we write data to downstream, we need to check whether the downstream is TiDB.
-	// So we mock a select tidb_version() query.
-	mock.ExpectQuery("select tidb_version()").WillReturnError(&mysql.MySQLError{
-		Number:  1305,
-		Message: "FUNCTION test.tidb_version does not exist",
-	})
-	mock.ExpectQuery("select tidb_version()").WillReturnError(&mysql.MySQLError{
-		Number:  1305,
-		Message: "FUNCTION test.tidb_version does not exist",
-	})
-	mock.ExpectQuery("select tidb_version()").WillReturnError(&mysql.MySQLError{
-		Number:  1305,
-		Message: "FUNCTION test.tidb_version does not exist",
-	})
-	mock.ExpectQuery("select tidb_version()").WillReturnError(&mysql.MySQLError{
-		Number:  1305,
-		Message: "FUNCTION test.tidb_version does not exist",
-	})
-
 	mock.ExpectBegin()
 	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("create table checkpoint(id int)").WillReturnResult(sqlmock.NewResult(1, 1))
@@ -589,22 +616,22 @@ func getMockDB(t *testing.T) *sql.DB {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("REPLACE INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
-		WithArgs(1, "2").
+		WithArgs(1, []byte("2")).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
 	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE `test`.`t1` SET `a` = ?, `b` = ? WHERE `a` = ? LIMIT 1").
-		WithArgs(1, "3", 1).
+		WithArgs(1, []byte("3"), 1).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
 	mock.ExpectBegin()
 	mock.ExpectExec("REPLACE INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
-		WithArgs(10, "20").
+		WithArgs(10, []byte("20")).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("REPLACE INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
-		WithArgs(100, "200").
+		WithArgs(100, []byte("200")).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
@@ -620,10 +647,10 @@ func getMockDB(t *testing.T) *sql.DB {
 		WithArgs(100).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("REPLACE INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
-		WithArgs(2, "3").
+		WithArgs(2, []byte("3")).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("REPLACE INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
-		WithArgs(200, "300").
+		WithArgs(200, []byte("300")).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
@@ -642,25 +669,6 @@ func getMockDBForBigTxn(t *testing.T) *sql.DB {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
 	require.Nil(t, err)
 
-	// Before we write data to downstream, we need to check whether the downstream is TiDB.
-	// So we mock a select tidb_version() query.
-	mock.ExpectQuery("select tidb_version()").WillReturnError(&mysql.MySQLError{
-		Number:  1305,
-		Message: "FUNCTION test.tidb_version does not exist",
-	})
-	mock.ExpectQuery("select tidb_version()").WillReturnError(&mysql.MySQLError{
-		Number:  1305,
-		Message: "FUNCTION test.tidb_version does not exist",
-	})
-	mock.ExpectQuery("select tidb_version()").WillReturnError(&mysql.MySQLError{
-		Number:  1305,
-		Message: "FUNCTION test.tidb_version does not exist",
-	})
-	mock.ExpectQuery("select tidb_version()").WillReturnError(&mysql.MySQLError{
-		Number:  1305,
-		Message: "FUNCTION test.tidb_version does not exist",
-	})
-
 	mock.ExpectBegin()
 	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("create table checkpoint(id int)").WillReturnResult(sqlmock.NewResult(1, 1))
@@ -669,7 +677,7 @@ func getMockDBForBigTxn(t *testing.T) *sql.DB {
 	mock.ExpectBegin()
 	for i := 1; i <= 100; i++ {
 		mock.ExpectExec("REPLACE INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
-			WithArgs(i, fmt.Sprintf("%d", i+1)).
+			WithArgs(i, []byte(fmt.Sprintf("%d", i+1))).
 			WillReturnResult(sqlmock.NewResult(1, 1))
 	}
 	mock.ExpectCommit()
@@ -682,7 +690,7 @@ func getMockDBForBigTxn(t *testing.T) *sql.DB {
 	}
 	for i := 1; i <= 100; i++ {
 		mock.ExpectExec("REPLACE INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
-			WithArgs(i*10, fmt.Sprintf("%d", i*10+1)).
+			WithArgs(i*10, []byte(fmt.Sprintf("%d", i*10+1))).
 			WillReturnResult(sqlmock.NewResult(1, 1))
 	}
 	mock.ExpectCommit()
@@ -696,7 +704,7 @@ func getMockDBForBigTxn(t *testing.T) *sql.DB {
 	}
 	for i := 51; i <= 100; i++ {
 		mock.ExpectExec("REPLACE INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
-			WithArgs(i*100, fmt.Sprintf("%d", i*100+1)).
+			WithArgs(i*100, []byte(fmt.Sprintf("%d", i*100+1))).
 			WillReturnResult(sqlmock.NewResult(1, 1))
 	}
 	mock.ExpectCommit()

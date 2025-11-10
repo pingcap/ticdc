@@ -232,7 +232,9 @@ func (ra *RedoApplier) applyDDL(
 
 		var tableDDLTs ddlTs
 		if !ra.needRecoveryInfo {
-			tableDDLTs = ddlTs{ts: int64(checkpointTs)}
+			// If the checkpointTs is equal the DDL commitTs, the DDL will apply in old arch
+			// keep same with old arch.
+			tableDDLTs = ddlTs{ts: int64(checkpointTs - 1)}
 		} else {
 			// we get start-ts from different table id according the ddl type
 			switch timodel.ActionType(ddl.Type) {
@@ -290,7 +292,7 @@ func (ra *RedoApplier) applyDDL(
 			}
 			return true
 		}
-		if ddl.DDL.CommitTs == uint64(tableDDLTs.ts) {
+		if ddl.DDL.CommitTs+1 == uint64(tableDDLTs.ts) {
 			if _, ok := unsupportedDDL[timodel.ActionType(ddl.Type)]; ok {
 				log.Error("ignore unsupported DDL", zap.Any("ddl", ddl))
 				return true
@@ -332,13 +334,20 @@ func (ra *RedoApplier) applyRow(
 			zap.Any("resolvedTs", ra.eventsGroup[tableID].highWatermark))
 	}
 
-	ddlTs := ra.getTableDDLTs(checkpointTs, tableID)
-	if ddlTs.ts >= int64(row.Row.CommitTs) {
-		log.Warn("ignore the dml event since the commitTs is less than startTs", zap.Int64("ts", ddlTs.ts), zap.Any("row", row))
+	var tableDDLTs ddlTs
+	if !ra.needRecoveryInfo {
+		// If the checkpointTs is equal the DML commitTs, the DML will apply in old arch
+		// keep same with old arch.
+		tableDDLTs = ddlTs{ts: int64(checkpointTs - 1)}
+	} else {
+		tableDDLTs = ra.getTableDDLTs(checkpointTs, tableID)
+	}
+	if tableDDLTs.ts >= int64(row.Row.CommitTs) {
+		log.Warn("ignore the dml event since the commitTs is less than startTs", zap.Int64("ts", tableDDLTs.ts), zap.Any("row", row))
 		return nil
 	}
-	if ddlTs.skipDML && int64(row.Row.CommitTs)-1 == ddlTs.ts {
-		log.Warn("ignore the dml event since the ddl is not finished", zap.Int64("ts", ddlTs.ts), zap.Any("row", row))
+	if tableDDLTs.skipDML && int64(row.Row.CommitTs)-1 == tableDDLTs.ts {
+		log.Warn("ignore the dml event since the ddl is not finished", zap.Int64("ts", tableDDLTs.ts), zap.Any("row", row))
 		return nil
 	}
 
@@ -440,9 +449,11 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 			// SafeMode: util.AddressOf(false),
 		},
 	}
-	ra.mysqlSink, err = mysql.New(egCtx, ra.rd.GetChangefeedID(), replicaConfig, sinkURI)
-	if err != nil {
-		return err
+	if ra.mysqlSink == nil {
+		ra.mysqlSink, err = mysql.New(egCtx, ra.rd.GetChangefeedID(), replicaConfig, sinkURI)
+		if err != nil {
+			return err
+		}
 	}
 	eg.Go(func() error {
 		return ra.mysqlSink.Run(egCtx)

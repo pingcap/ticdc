@@ -110,14 +110,27 @@ func splitUpdateEvent(
 	// NOTICE: Here we don't need a full deep copy because
 	// our two events need Columns and PreColumns respectively,
 	// so it won't have an impact and no more full deep copy wastes memory.
-	deleteEvent := *updateEvent
-	deleteEvent.Columns = nil
-	deleteEvent.Row.Columns = nil
+	deleteEvent := &commonEvent.RedoDMLEvent{
+		PreColumns: updateEvent.PreColumns,
+		Row: &commonEvent.DMLEventInRedoLog{
+			StartTs:      updateEvent.Row.StartTs,
+			CommitTs:     updateEvent.Row.CommitTs,
+			Table:        updateEvent.Row.Table,
+			PreColumns:   updateEvent.Row.PreColumns,
+			IndexColumns: updateEvent.Row.IndexColumns,
+		},
+	}
 
-	insertEvent := *updateEvent
-	// NOTICE: clean up pre cols for insert commonEvent.
-	insertEvent.PreColumns = nil
-	insertEvent.Row.PreColumns = nil
+	insertEvent := &commonEvent.RedoDMLEvent{
+		Columns: updateEvent.Columns,
+		Row: &commonEvent.DMLEventInRedoLog{
+			StartTs:      updateEvent.Row.StartTs,
+			CommitTs:     updateEvent.Row.CommitTs,
+			Table:        updateEvent.Row.Table,
+			Columns:      updateEvent.Row.Columns,
+			IndexColumns: updateEvent.Row.IndexColumns,
+		},
+	}
 
 	log.Debug("split update event", zap.Uint64("startTs", updateEvent.Row.StartTs),
 		zap.Uint64("commitTs", updateEvent.Row.CommitTs),
@@ -126,7 +139,7 @@ func splitUpdateEvent(
 		zap.Any("preCols", updateEvent.PreColumns),
 		zap.Any("cols", updateEvent.Columns))
 
-	return &deleteEvent, &insertEvent, nil
+	return deleteEvent, insertEvent, nil
 }
 
 // EventsGroup could store change event message.
