@@ -37,11 +37,11 @@ CDC_COUNT=3
 DB_COUNT=4
 
 function kill_pd() {
-	kill_by_ports "${UP_PD_PORT_1}" "${UP_PD_PEER_PORT_1}" "${UP_PD_PORT_2}"
+	kill_by_ports "${UP_PD_PORT_1}" "${UP_PD_PORT_2}" "${UP_PD_PORT_3}"
 }
 
 function kill_tikv() {
-	kill_by_ports "${UP_TIKV_PORT_1}" "${UP_TIKV_STATUS_PORT_1}" "${UP_TIKV_PORT_2}"
+	kill_by_ports "${UP_TIKV_PORT_1}" "${UP_TIKV_PORT_2}" "${UP_TIKV_PORT_3}"
 }
 
 function kill_tidb() {
