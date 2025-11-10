@@ -402,6 +402,8 @@ func (c *Controller) ReplaceReplicaSet(
 	checkpointTs uint64,
 	splitTargetNodes []node.ID,
 ) []*replica.SpanReplication {
+	// we need to ensure the create the new spans and drop the old span should be protected by mutex
+	// Then GetMinCheckpointTsForNonReplicatingSpans will not get incorrect min checkpoint ts
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
