@@ -60,14 +60,14 @@ type consumer struct {
 	sink            sink.Sink
 	// tableDMLIdxMap maintains a map of <dmlPathKey, max file index>
 	tableDMLIdxMap map[cloudstorage.DmlPathKey]uint64
-	// tableTsMap maintains a map of <TableID, max commit ts>
-	tableTsMap map[int64]uint64
+	eventsGroup    map[int64]*util.EventsGroup
 	// tableDefMap maintains a map of <`schema`.`table`, tableDef slice sorted by TableVersion>
 	tableDefMap      map[string]map[uint64]*cloudstorage.TableDefinition
 	tableIDGenerator *fakeTableIDGenerator
 	errCh            chan error
 
-	dmlCount atomic.Int64
+	dmlCount               atomic.Int64
+	enableTableAcrossNodes bool
 }
 
 func newConsumer(ctx context.Context) (*consumer, error) {
@@ -144,11 +144,12 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 		sink:            sink,
 		errCh:           errCh,
 		tableDMLIdxMap:  make(map[cloudstorage.DmlPathKey]uint64),
-		tableTsMap:      make(map[int64]uint64),
+		eventsGroup:     make(map[int64]*util.EventsGroup),
 		tableDefMap:     make(map[string]map[uint64]*cloudstorage.TableDefinition),
 		tableIDGenerator: &fakeTableIDGenerator{
 			tableIDs: make(map[string]int64),
 		},
+		enableTableAcrossNodes: replicaConfig.Scheduler.EnableTableAcrossNodes,
 	}, nil
 }
 
@@ -214,13 +215,48 @@ func (c *consumer) getNewFiles(
 	return tableDMLMap, err
 }
 
+func (c *consumer) appendRow2Group(dml *event.DMLEvent) {
+	var (
+		tableID  = dml.GetTableID()
+		schema   = dml.TableInfo.GetSchemaName()
+		table    = dml.TableInfo.GetTableName()
+		commitTs = dml.GetCommitTs()
+	)
+	group := c.eventsGroup[tableID]
+	if group == nil {
+		group = util.NewEventsGroup(0, tableID)
+		c.eventsGroup[tableID] = group
+	}
+	if commitTs >= group.HighWatermark {
+		group.Append(dml, false)
+		log.Info("DML event append to the group",
+			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
+			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
+			zap.Stringer("eventType", dml.RowTypes[0]))
+		return
+	}
+	if c.enableTableAcrossNodes {
+		log.Warn("DML events fallback, but enableTableAcrossNodes is true, still append it",
+			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
+			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
+			zap.Stringer("eventType", dml.RowTypes[0]))
+		group.Append(dml, true)
+		return
+	}
+	log.Warn("dml event commit ts fallback, ignore",
+		zap.Uint64("commitTs", dml.CommitTs),
+		zap.Any("highWatermark", group.HighWatermark),
+		zap.Any("row", dml),
+	)
+}
+
 // emitDMLEvents decodes RowChangedEvents from file content and emit them.
 func (c *consumer) emitDMLEvents(
 	ctx context.Context, tableID int64,
 	tableDetail cloudstorage.TableDefinition,
 	pathKey cloudstorage.DmlPathKey,
 	content []byte,
-) ([]*event.DMLEvent, error) {
+) error {
 	var (
 		decoder common.Decoder
 		err     error
@@ -228,14 +264,14 @@ func (c *consumer) emitDMLEvents(
 
 	tableInfo, err := tableDetail.ToTableInfo()
 	if err != nil {
-		return nil, errors.Trace(err)
+		return errors.Trace(err)
 	}
 
 	switch c.codecCfg.Protocol {
 	case config.ProtocolCsv:
 		decoder, err = csv.NewDecoder(ctx, c.codecCfg, tableInfo, content)
 		if err != nil {
-			return nil, errors.Trace(err)
+			return errors.Trace(err)
 		}
 	case config.ProtocolCanalJSON:
 		// Always enable tidb extension for canal-json protocol
@@ -247,12 +283,11 @@ func (c *consumer) emitDMLEvents(
 
 	cnt := 0
 	filteredCnt := 0
-	events := make([]*event.DMLEvent, 0)
 	for {
 		tp, hasNext := decoder.HasNext()
 		if err != nil {
 			log.Error("failed to decode message", zap.Error(err))
-			return nil, err
+			return err
 		}
 		if !hasNext {
 			break
@@ -266,32 +301,8 @@ func (c *consumer) emitDMLEvents(
 
 			log.Debug("next dml event", zap.Any("commitTs", row.CommitTs), zap.Any("tableName", tableInfo.TableName.String()), zap.Any("tableID", tableID))
 
-			_, ok := c.tableTsMap[tableID]
-			if !ok || row.CommitTs > c.tableTsMap[tableID] {
-				c.tableTsMap[tableID] = row.CommitTs
-			} else if row.CommitTs < c.tableTsMap[tableID] {
-				log.Warn("dml event commit ts fallback, ignore",
-					zap.Uint64("commitTs", row.CommitTs),
-					zap.Any("tableMaxCommitTs", c.tableTsMap[tableID]),
-					zap.Any("row", row),
-				)
-				continue
-			}
 			row.PhysicalTableID = tableID
-			var lastDMLEvent *event.DMLEvent
-			if len(events) > 0 {
-				lastDMLEvent = events[len(events)-1]
-			}
-			if lastDMLEvent == nil || lastDMLEvent.GetCommitTs() < row.GetCommitTs() {
-				events = append(events, row)
-			} else if lastDMLEvent.GetCommitTs() == row.GetCommitTs() {
-				lastDMLEvent.Rows.Append(row.Rows, 0, row.Rows.NumRows())
-				lastDMLEvent.RowTypes = append(lastDMLEvent.RowTypes, row.RowTypes...)
-				lastDMLEvent.Length += row.Length
-				lastDMLEvent.PostTxnFlushed = append(lastDMLEvent.PostTxnFlushed, row.PostTxnFlushed...)
-			} else {
-				log.Error("the current event commitTs is bigger than last event", zap.Any("event", row), zap.Any("lastEvent", lastDMLEvent))
-			}
+			c.appendRow2Group(row)
 			filteredCnt++
 		}
 	}
@@ -301,7 +312,7 @@ func (c *consumer) emitDMLEvents(
 		zap.Int("decodeRowsCnt", cnt),
 		zap.Int("filteredRowsCnt", filteredCnt))
 
-	return events, err
+	return err
 }
 
 func (c *consumer) syncExecDMLEvents(
@@ -318,11 +329,12 @@ func (c *consumer) syncExecDMLEvents(
 	}
 	tableID := c.tableIDGenerator.generateFakeTableID(
 		key.Schema, key.Table, key.PartitionNum)
-	events, err := c.emitDMLEvents(ctx, tableID, tableDef, key, content)
+	err = c.emitDMLEvents(ctx, tableID, tableDef, key, content)
 	if err != nil {
 		return errors.Trace(err)
 	}
 
+	events := c.eventsGroup[tableID].GetAllEvents()
 	total := len(events)
 	if total == 0 {
 		return nil

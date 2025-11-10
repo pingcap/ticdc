@@ -49,8 +49,9 @@ type option struct {
 	mtlsAuthTLSCertificatePath string
 	mtlsAuthTLSPrivateKeyPath  string
 
-	downstreamURI string
-	partitionNum  int
+	downstreamURI          string
+	partitionNum           int
+	enableTableAcrossNodes bool
 }
 
 func newConsumerOption() *option {
@@ -98,6 +99,7 @@ func (o *option) Adjust(upstreamURI *url.URL, configFile string) {
 		}
 		o.enableTiDBExtension = enableTiDBExtension
 	}
+	o.enableTableAcrossNodes = replicaConfig.Scheduler.EnableTableAcrossNodes
 
 	log.Info("consumer option adjusted",
 		zap.String("configFile", configFile),
