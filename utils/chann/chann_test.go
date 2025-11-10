@@ -302,6 +302,7 @@ func TestNonblockSelectRace2(t *testing.T) {
 			c1.In() <- 1
 		}
 		c1.In() <- 1
+		time.Sleep(time.Millisecond)
 		go func() {
 			select {
 			case <-c1.Out():

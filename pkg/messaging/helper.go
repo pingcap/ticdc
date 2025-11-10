@@ -44,6 +44,7 @@ func NewMessageCenterForTest(t *testing.T) (*messageCenter, string, func()) {
 	mcs := NewMessageCenterServer(mc)
 	proto.RegisterMessageServiceServer(grpcServer, mcs)
 
+	mc.Run(ctx)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {

@@ -148,6 +148,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		start := time.Now()
 		manager, startTs, err = dispatchermanager.
 			NewDispatcherManager(
+				req.KeyspaceId,
 				cfId,
 				cfConfig,
 				req.TableTriggerEventDispatcherId,

@@ -15,39 +15,41 @@ package diff
 
 import (
 	"context"
-	"testing"
 
 	sqlmock "github.com/DATA-DOG/go-sqlmock"
-	"github.com/stretchr/testify/require"
+	"github.com/pingcap/check"
 )
 
-func TestLoadFromCheckPoint(t *testing.T) {
+var _ = check.Suite(&testCheckpointSuite{})
+
+type testCheckpointSuite struct{}
+
+func (s *testUtilSuite) TestloadFromCheckPoint(c *check.C) {
 	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	require.NoError(t, err)
+	c.Assert(err, check.IsNil)
 
 	rows := sqlmock.NewRows([]string{"state", "config_hash"}).AddRow("success", "123")
 	mock.ExpectQuery("SELECT").WillReturnRows(rows)
 	useCheckpoint, err := loadFromCheckPoint(context.Background(), db, "test", "test", "123")
-	require.NoError(t, err)
-	require.False(t, useCheckpoint)
+	c.Assert(err, check.IsNil)
+	c.Assert(useCheckpoint, check.Equals, false)
 
 	rows = sqlmock.NewRows([]string{"state", "config_hash"}).AddRow("success", "123")
 	mock.ExpectQuery("SELECT").WillReturnRows(rows)
 	useCheckpoint, err = loadFromCheckPoint(context.Background(), db, "test", "test", "456")
-	require.NoError(t, err)
-	require.False(t, useCheckpoint)
+	c.Assert(err, check.IsNil)
+	c.Assert(useCheckpoint, check.Equals, false)
 
 	rows = sqlmock.NewRows([]string{"state", "config_hash"}).AddRow("failed", "123")
 	mock.ExpectQuery("SELECT").WillReturnRows(rows)
 	useCheckpoint, err = loadFromCheckPoint(context.Background(), db, "test", "test", "123")
-	require.NoError(t, err)
-	require.True(t, useCheckpoint)
+	c.Assert(err, check.IsNil)
+	c.Assert(useCheckpoint, check.Equals, true)
 }
 
-func TestInitChunks(t *testing.T) {
+func (s *testUtilSuite) TestInitChunks(c *check.C) {
 	db, _, err := sqlmock.New()
-	require.NoError(t, err)
+	c.Assert(err, check.IsNil)
 
 	chunks := []*ChunkRange{
 		{
@@ -67,5 +69,5 @@ func TestInitChunks(t *testing.T) {
 	// so just skip the `ExpectQuery` and check the error message
 	// mock.ExpectQuery("INSERT INTO `sync_diff_inspector`.`chunk` VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").WithArgs(......)
 	err = initChunks(context.Background(), db, "target", "diff_test", "test", chunks)
-	require.Regexp(t, err, ".*INSERT INTO `sync_diff_inspector`.`chunk` VALUES\\(\\?, \\?, \\?, \\?, \\?, \\?, \\?, \\?, \\?\\), \\(\\?, \\?, \\?, \\?, \\?, \\?, \\?, \\?, \\?\\).*")
+	c.Assert(err, check.ErrorMatches, ".*INSERT INTO `sync_diff_inspector`.`chunk` VALUES\\(\\?, \\?, \\?, \\?, \\?, \\?, \\?, \\?, \\?\\), \\(\\?, \\?, \\?, \\?, \\?, \\?, \\?, \\?, \\?\\).*")
 }

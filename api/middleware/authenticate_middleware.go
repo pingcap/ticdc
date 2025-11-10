@@ -13,19 +13,17 @@
 package middleware
 
 import (
-	"context"
 	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/gin-gonic/gin"
 	dmysql "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/api"
-	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
-	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/server"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/upstream"
@@ -55,14 +53,8 @@ func verify(ctx *gin.Context, etcdCli etcd.Client) error {
 		return errors.ErrCredentialNotFound.GenWithStackByArgs(errMsg)
 	}
 
-	allowed := false
 	serverCfg := config.GetGlobalServerConfig()
-	for _, user := range serverCfg.Security.ClientAllowedUser {
-		if user == username {
-			allowed = true
-			break
-		}
-	}
+	allowed := slices.Contains(serverCfg.Security.ClientAllowedUser, username)
 	if !allowed {
 		errMsg := "The user is not allowed."
 		if username == "" {
@@ -71,11 +63,11 @@ func verify(ctx *gin.Context, etcdCli etcd.Client) error {
 		return errors.ErrUnauthorized.GenWithStackByArgs(username, errMsg)
 	}
 
-	ks := ctx.Query(api.APIOpVarKeyspace)
+	keyspaceMeta := GetKeyspaceFromContext(ctx)
 
 	// verifyTiDBUser verify whether the username and password are valid in TiDB. It does the validation via
 	// the successfully build of a connection with upstream TiDB with the username and password.
-	tidbs, err := fetchTiDBTopology(ctx, etcdCli, ks)
+	tidbs, err := upstream.FetchTiDBTopology(ctx, etcdCli, keyspaceMeta.Id)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -98,17 +90,6 @@ func verify(ctx *gin.Context, etcdCli etcd.Client) error {
 		}
 	}
 	return errors.ErrUnauthorized.GenWithStackByArgs(username, err.Error())
-}
-
-// fetchTiDBTopology parses the TiDB topology from etcd.
-func fetchTiDBTopology(ctx context.Context, etcdClient etcd.Client, ks string) ([]upstream.TidbInstance, error) {
-	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
-	meta, err := keyspaceManager.LoadKeyspace(ctx, ks)
-	if err != nil {
-		return nil, err
-	}
-
-	return upstream.FetchTiDBTopology(ctx, etcdClient, meta.Id)
 }
 
 func doVerify(dsnStr string) error {

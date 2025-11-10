@@ -41,27 +41,20 @@ type Manager interface {
 
 func NewManager(pdEndpoints []string) Manager {
 	return &manager{
-		urls:          strings.Join(pdEndpoints, ","),
-		keyspaceMap:   make(map[string]*keyspacepb.KeyspaceMeta),
-		keyspaceIDMap: make(map[uint32]*keyspacepb.KeyspaceMeta),
-		storageMap:    make(map[string]kv.Storage),
+		urls:       strings.Join(pdEndpoints, ","),
+		storageMap: make(map[string]kv.Storage),
 	}
 }
 
 type manager struct {
 	urls string
 
-	// TODO tenfyzhong 2025-09-16 23:46:01 update keyspaceMeta periodicity
-	keyspaceMap   map[string]*keyspacepb.KeyspaceMeta
-	keyspaceIDMap map[uint32]*keyspacepb.KeyspaceMeta
-	keyspaceMu    sync.Mutex
-
 	storageMap map[string]kv.Storage
 	storageMu  sync.Mutex
 }
 
 var defaultKeyspaceMeta = &keyspacepb.KeyspaceMeta{
-	Name: common.DefaultKeyspace,
+	Name: common.DefaultKeyspaceNamme,
 	Id:   common.DefaultKeyspaceID,
 }
 
@@ -70,14 +63,9 @@ func (k *manager) LoadKeyspace(ctx context.Context, keyspace string) (*keyspacep
 		return defaultKeyspaceMeta, nil
 	}
 
-	k.keyspaceMu.Lock()
-	meta := k.keyspaceMap[keyspace]
-	k.keyspaceMu.Unlock()
-	if meta != nil {
-		return meta, nil
-	}
-
+	var meta *keyspacepb.KeyspaceMeta
 	var err error
+
 	pdAPIClient := appcontext.GetService[pdutil.PDAPIClient](appcontext.PDAPIClient)
 	err = retry.Do(ctx, func() error {
 		meta, err = pdAPIClient.LoadKeyspace(ctx, keyspace)
@@ -93,16 +81,6 @@ func (k *manager) LoadKeyspace(ctx context.Context, keyspace string) (*keyspacep
 		return nil, errors.Trace(err)
 	}
 
-	k.keyspaceMu.Lock()
-	defer k.keyspaceMu.Unlock()
-	// Double check, another goroutine might have fetched and stored it.
-	if meta, ok := k.keyspaceMap[keyspace]; ok {
-		return meta, nil
-	}
-
-	k.keyspaceMap[keyspace] = meta
-	k.keyspaceIDMap[meta.Id] = meta
-
 	return meta, nil
 }
 
@@ -111,14 +89,9 @@ func (k *manager) GetKeyspaceByID(ctx context.Context, keyspaceID uint32) (*keys
 		return defaultKeyspaceMeta, nil
 	}
 
-	k.keyspaceMu.Lock()
-	meta := k.keyspaceIDMap[keyspaceID]
-	k.keyspaceMu.Unlock()
-	if meta != nil {
-		return meta, nil
-	}
-
+	var meta *keyspacepb.KeyspaceMeta
 	var err error
+
 	pdAPIClient := appcontext.GetService[pdutil.PDAPIClient](appcontext.PDAPIClient)
 	err = retry.Do(ctx, func() error {
 		meta, err = pdAPIClient.GetKeyspaceMetaByID(ctx, keyspaceID)
@@ -133,16 +106,6 @@ func (k *manager) GetKeyspaceByID(ctx context.Context, keyspaceID uint32) (*keys
 		log.Error("retry to load keyspace from pd", zap.Uint32("keyspaceID", keyspaceID), zap.Error(err))
 		return nil, errors.Trace(err)
 	}
-
-	k.keyspaceMu.Lock()
-	defer k.keyspaceMu.Unlock()
-	// Double check, another goroutine might have fetched and stored it.
-	if meta, ok := k.keyspaceIDMap[keyspaceID]; ok {
-		return meta, nil
-	}
-
-	k.keyspaceMap[meta.Name] = meta
-	k.keyspaceIDMap[keyspaceID] = meta
 
 	return meta, nil
 }

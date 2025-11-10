@@ -30,7 +30,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/scheduler/operator"
 	"github.com/pingcap/ticdc/server/watcher"
-	"github.com/pingcap/tiflow/cdc/model"
 	"go.uber.org/zap"
 )
 
@@ -247,8 +246,8 @@ func (oc *Controller) pollQueueingOperator() (
 		delete(oc.lastWarnTime, opID)
 		oc.mu.Unlock()
 
-		metrics.OperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Dec()
-		metrics.OperatorDuration.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Observe(time.Since(item.CreatedAt).Seconds())
+		metrics.OperatorCount.WithLabelValues(common.DefaultKeyspaceNamme, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Dec()
+		metrics.OperatorDuration.WithLabelValues(common.DefaultKeyspaceNamme, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Observe(time.Since(item.CreatedAt).Seconds())
 		log.Info("operator finished",
 			zap.String("role", oc.role),
 			zap.String("changefeed", oc.changefeedID.Name()),
@@ -331,8 +330,8 @@ func (oc *Controller) pushOperator(op operator.Operator[common.DispatcherID, *he
 	heap.Push(&oc.runningQueue, withTime)
 	oc.mu.Unlock()
 
-	metrics.OperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Inc()
-	metrics.TotalOperatorCount.WithLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Inc()
+	metrics.OperatorCount.WithLabelValues(common.DefaultKeyspaceNamme, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Inc()
+	metrics.TotalOperatorCount.WithLabelValues(common.DefaultKeyspaceNamme, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Inc()
 }
 
 func (oc *Controller) checkAffectedNodes(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) {
@@ -449,9 +448,9 @@ func (oc *Controller) Close() {
 	opTypes := []string{"occupy", "merge", "add", "remove", "move", "split", "merge"}
 
 	for _, opType := range opTypes {
-		metrics.OperatorCount.DeleteLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
-		metrics.TotalOperatorCount.DeleteLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
-		metrics.OperatorDuration.DeleteLabelValues(model.DefaultNamespace, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
+		metrics.OperatorCount.DeleteLabelValues(common.DefaultKeyspaceNamme, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
+		metrics.TotalOperatorCount.DeleteLabelValues(common.DefaultKeyspaceNamme, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
+		metrics.OperatorDuration.DeleteLabelValues(common.DefaultKeyspaceNamme, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
 	}
 }
 

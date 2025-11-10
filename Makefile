@@ -123,14 +123,6 @@ FAILPOINT_DISABLE := $$(echo $(FAILPOINT_DIR) | xargs $(FAILPOINT) disable >/dev
 # gotestsum -p parameter for unit tests
 P=3
 
-# The following packages are used in unit tests.
-# Add new packages here if you want to include them in unit tests.
-UT_PACKAGES_DISPATCHER := ./pkg/sink/cloudstorage/... ./pkg/sink/mysql/... ./pkg/sink/util/... ./downstreamadapter/sink/... ./downstreamadapter/dispatcher/... ./downstreamadapter/dispatchermanager/... ./downstreamadapter/eventcollector/... ./pkg/sink/...
-UT_PACKAGES_MAINTAINER := ./maintainer/... ./pkg/scheduler/...
-UT_PACKAGES_COORDINATOR := ./coordinator/...
-UT_PACKAGES_LOGSERVICE := ./logservice/...
-UT_PACKAGES_OTHERS := ./pkg/eventservice/... ./pkg/version/... ./utils/dynstream/... ./pkg/common/event/... ./pkg/common/... ./api/middleware/...
-
 include tools/Makefile
 
 go-generate: tools/bin/msgp tools/bin/stringer tools/bin/mockery
@@ -259,12 +251,7 @@ unit_test_in_verify_ci: check_failpoint_ctl tools/bin/gotestsum tools/bin/gocov 
 	@export log_level=error;\
 	CGO_ENABLED=1 tools/bin/gotestsum --junitfile cdc-junit-report.xml -- -v -timeout 300s -p $(P) --race --tags=intest \
 	-parallel=16 \
-	-covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" \
-	$(UT_PACKAGES_DISPATCHER) \
-	$(UT_PACKAGES_MAINTAINER) \
-	$(UT_PACKAGES_COORDINATOR) \
-	$(UT_PACKAGES_LOGSERVICE) \
-	$(UT_PACKAGES_OTHERS) \
+	-covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" $(PACKAGES) \
 	|| { $(FAILPOINT_DISABLE); exit 1; }
 	tools/bin/gocov convert "$(TEST_DIR)/cov.unit.out" | tools/bin/gocov-xml > cdc-coverage.xml
 	$(FAILPOINT_DISABLE)
@@ -276,12 +263,7 @@ unit_test_in_verify_ci_next_gen: check_failpoint_ctl tools/bin/gotestsum tools/b
 	@export log_level=error;\
 	CGO_ENABLED=1 tools/bin/gotestsum --junitfile cdc-junit-report.xml -- -v -timeout 300s -p $(P) --race --tags=intest,nextgen \
 	-parallel=16 \
-	-covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" \
-	$(UT_PACKAGES_DISPATCHER) \
-	$(UT_PACKAGES_MAINTAINER) \
-	$(UT_PACKAGES_COORDINATOR) \
-	$(UT_PACKAGES_LOGSERVICE) \
-	$(UT_PACKAGES_OTHERS) \
+	-covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" $(PACKAGES) \
 	|| { $(FAILPOINT_DISABLE); exit 1; }
 	tools/bin/gocov convert "$(TEST_DIR)/cov.unit.out" | tools/bin/gocov-xml > cdc-coverage.xml
 	$(FAILPOINT_DISABLE)
