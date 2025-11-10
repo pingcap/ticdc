@@ -42,15 +42,17 @@ function test_dml_log_info() {
 	local changefeed_id="kafka-log-info-${protocol}-dml"
 	local sink_uri=$(build_sink_uri $protocol $topic)
 
-	run_sql "DROP TABLE IF EXISTS ${DB_NAME}.dml_${protocol};" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	run_sql "CREATE TABLE ${DB_NAME}.dml_${protocol}(id INT PRIMARY KEY AUTO_INCREMENT, val INT);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "DROP TABLE IF EXISTS ${DB_NAME}.dml_table;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "CREATE TABLE ${DB_NAME}.dml_table(id INT PRIMARY KEY AUTO_INCREMENT, val INT);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
-	start_cdc_with_failpoint 'github.com/pingcap/ticdc/pkg/sink/kafka/KafkaSinkAsyncSendError=1*return(true)'
-	cdc cli changefeed create --pd=$pd_addr --sink-uri="$sink_uri" --changefeed-id="$changefeed_id"
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/sink/kafka/KafkaSinkAsyncSendError=1*return(true)'
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300" --pd $pd_addr
 
-	run_sql "INSERT INTO ${DB_NAME}.dml_${protocol}(val) VALUES (1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	cdc_cli_changefeed create --pd=$pd_addr --sink-uri="$sink_uri" --changefeed-id="$changefeed_id"
 
-	local pattern="eventType=dml.*startTs=.*commitTs=.*\\\"database\\\":\\\"${DB_NAME}\\\".*\\\"table\\\":\\\"dml_${protocol}\\\""
+	run_sql "INSERT INTO ${DB_NAME}.dml_table(val) VALUES (1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+
+	local pattern='eventType=dml.*\\"Table\\":\\"dml_table\\".*\\"StartTs\\":.*\\"CommitTs\\":'
 	ensure $MAX_RETRIES "check_logs_contains $WORK_DIR '$pattern' ''"
 
 	cleanup_changefeed $changefeed_id
@@ -63,14 +65,14 @@ function test_ddl_log_info() {
 	local changefeed_id="kafka-log-info-${protocol}-ddl"
 	local sink_uri=$(build_sink_uri $protocol $topic)
 
-	run_sql "DROP TABLE IF EXISTS ${DB_NAME}.ddl_${protocol};" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "DROP TABLE IF EXISTS ${DB_NAME}.ddl_table;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
-	start_cdc_with_failpoint 'github.com/pingcap/ticdc/pkg/sink/kafka/KafkaSinkSyncSendMessageError=1*return(true);github.com/pingcap/ticdc/pkg/sink/kafka/KafkaSinkSyncSendMessagesError=1*return(true)'
-	cdc cli changefeed create --pd=$pd_addr --sink-uri="$sink_uri" --changefeed-id="$changefeed_id"
+	start_cdc_with_failpoint 'github.com/pingcap/ticdc/pkg/sink/kafka/KafkaSinkSyncSendMessageError=return(true);github.com/pingcap/ticdc/pkg/sink/kafka/KafkaSinkSyncSendMessagesError=return(true)'
+	cdc_cli_changefeed create --pd=$pd_addr --sink-uri="$sink_uri" --changefeed-id="$changefeed_id"
 
-	run_sql "CREATE TABLE ${DB_NAME}.ddl_${protocol}(id INT PRIMARY KEY);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "CREATE TABLE ${DB_NAME}.ddl_table(id INT PRIMARY KEY);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
-	local ddl_pattern="eventType=ddl.*ddlQuery=.*CREATE TABLE ${DB_NAME}.ddl_${protocol}"
+	local ddl_pattern="eventType=ddl.*ddlQuery=.*CREATE TABLE `${DB_NAME}`.`ddl_table`"
 	ensure $MAX_RETRIES "check_logs_contains $WORK_DIR '$ddl_pattern' ''"
 
 	cleanup_changefeed $changefeed_id
@@ -83,8 +85,8 @@ function test_checkpoint_log_info() {
 	local changefeed_id="kafka-log-info-${protocol}-checkpoint"
 	local sink_uri=$(build_sink_uri $protocol $topic)
 
-	start_cdc_with_failpoint 'github.com/pingcap/ticdc/pkg/sink/kafka/KafkaSinkSyncSendMessagesError=1*return(true)'
-	cdc cli changefeed create --pd=$pd_addr --sink-uri="$sink_uri" --changefeed-id="$changefeed_id"
+	start_cdc_with_failpoint 'github.com/pingcap/ticdc/pkg/sink/kafka/KafkaSinkSyncSendMessagesError=return(true)'
+	cdc_cli_changefeed create --pd=$pd_addr --sink-uri="$sink_uri" --changefeed-id="$changefeed_id"
 
 	ensure $MAX_RETRIES "check_logs_contains $WORK_DIR 'eventType=checkpoint.*checkpointTs=' ''"
 
