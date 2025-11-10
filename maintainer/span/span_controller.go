@@ -183,8 +183,13 @@ func (c *Controller) AddNewSpans(schemaID int64, tableSpans []*heartbeatpb.Table
 	}
 }
 
-func (c *Controller) GetMinCheckpointTsForAbsentSpans(minCheckpointTs uint64) uint64 {
+func (c *Controller) GetMinCheckpointTsForNonReplicatingSpans(minCheckpointTs uint64) uint64 {
 	for _, span := range c.GetAbsent() {
+		if span.GetStatus().CheckpointTs < minCheckpointTs {
+			minCheckpointTs = span.GetStatus().CheckpointTs
+		}
+	}
+	for _, span := range c.GetScheduling() {
 		if span.GetStatus().CheckpointTs < minCheckpointTs {
 			minCheckpointTs = span.GetStatus().CheckpointTs
 		}

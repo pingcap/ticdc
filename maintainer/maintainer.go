@@ -623,6 +623,13 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 				break
 			}
 
+			// first check the online/offline nodes
+			// we need to check node changed before calculating checkpointTs
+			// to avoid the case when a node is offline, the node's heartbeat is missing
+			// while the span in this node still not set to absent, which may cause
+			// the checkpointTs be advanced incorrectly
+			m.checkNodeChanged()
+
 			// CRITICAL SECTION: Calculate checkpointTs with proper ordering to prevent race condition
 			newWatermark, canUpdate := m.calculateNewCheckpointTs()
 			if canUpdate {
