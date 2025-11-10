@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
@@ -44,6 +45,11 @@ type DispatcherOrchestrator struct {
 	msgChan chan *messaging.TargetMessage
 	wg      sync.WaitGroup
 	cancel  context.CancelFunc
+
+	// closed indicates Close has been invoked and no more messages should be enqueued.
+	closed atomic.Bool
+	// msgWG waits for all in-flight RecvMaintainerRequest handlers to exit before closing msgChan.
+	msgWG sync.WaitGroup
 }
 
 func New() *DispatcherOrchestrator {
@@ -79,6 +85,15 @@ func (m *DispatcherOrchestrator) RecvMaintainerRequest(
 	_ context.Context,
 	msg *messaging.TargetMessage,
 ) error {
+	// Register this handler before checking closed so Close can observe and wait on it.
+	m.msgWG.Add(1)
+	defer m.msgWG.Done()
+
+	if m.closed.Load() {
+		log.Debug("dispatcher orchestrator already closed, drop message", zap.Any("message", msg.Message))
+		return nil
+	}
+
 	// Put message into channel for asynchronous processing by another goroutine
 	select {
 	case m.msgChan <- msg:
@@ -376,8 +391,14 @@ func (m *DispatcherOrchestrator) sendResponse(to node.ID, topic string, msg mess
 }
 
 func (m *DispatcherOrchestrator) Close() {
+	if !m.closed.CompareAndSwap(false, true) {
+		return
+	}
 	log.Info("dispatcher orchestrator is closing")
 	m.mc.DeRegisterHandler(messaging.DispatcherManagerManagerTopic)
+
+	// Wait until all in-flight RecvMaintainerRequest calls finish using msgChan.
+	m.msgWG.Wait()
 
 	// Stop the message handling goroutine
 	if m.cancel != nil {

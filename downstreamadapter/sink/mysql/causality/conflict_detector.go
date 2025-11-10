@@ -15,6 +15,7 @@ package causality
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/pingcap/log"
@@ -45,6 +46,8 @@ type ConflictDetector struct {
 	nextCacheID atomic.Int64
 
 	notifiedNodes *chann.UnlimitedChannel[func(), any]
+	notifyWG      sync.WaitGroup
+	notifyClosed  atomic.Bool
 
 	changefeedID                 common.ChangeFeedID
 	metricConflictDetectDuration prometheus.Observer
@@ -116,12 +119,12 @@ func (d *ConflictDetector) Add(event *commonEvent.DMLEvent) {
 		return d.nextCacheID.Add(1) % int64(len(d.resolvedTxnCaches))
 	}
 	node.OnNotified = func(callback func()) {
-		// TODO:find a better way to handle the panic
-		defer func() {
-			if r := recover(); r != nil {
-				log.Warn("failed to send notification, channel might be closed", zap.Any("error", r))
-			}
-		}()
+		d.notifyWG.Add(1)
+		defer d.notifyWG.Done()
+
+		if d.notifyClosed.Load() {
+			return
+		}
 		d.notifiedNodes.Push(callback)
 	}
 	d.slots.Add(node)
@@ -148,7 +151,10 @@ func (d *ConflictDetector) closeCache() {
 }
 
 func (d *ConflictDetector) CloseNotifiedNodes() {
-	d.notifiedNodes.Close()
+	if d.notifyClosed.CompareAndSwap(false, true) {
+		d.notifyWG.Wait()
+		d.notifiedNodes.Close()
+	}
 }
 
 func (d *ConflictDetector) Close() {
