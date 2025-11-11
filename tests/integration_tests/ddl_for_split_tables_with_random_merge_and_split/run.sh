@@ -179,14 +179,6 @@ main_with_consistent() {
 
 	kill -9 $NORMAL_TABLE_DDL_PID ${pids[@]} $MERGE_AND_SPLIT_TABLE_PID
 
-	# to ensure row changed events have been replicated to TiCDC
-	sleep 10
-	changefeed_id="test"
-	storage_path="file://$WORK_DIR/redo"
-	tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
-	current_tso=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
-	ensure 20 check_redo_resolved_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
-
 	cleanup_process $CDC_BINARY
 	# to ensure row changed events have been replicated to TiCDC
 	sleep 10
