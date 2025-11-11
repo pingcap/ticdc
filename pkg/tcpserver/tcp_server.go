@@ -27,6 +27,7 @@ import (
 	"github.com/soheilhy/cmux"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 var cmuxReadTimeout = 10 * time.Second
