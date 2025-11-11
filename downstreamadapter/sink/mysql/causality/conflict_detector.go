@@ -124,9 +124,6 @@ func (d *ConflictDetector) Add(event *commonEvent.DMLEvent) {
 		}
 		defer d.notifyGuardWaitGroup.Done()
 
-		if d.notifyClosed.Load() {
-			return
-		}
 		d.notifiedNodes.Push(callback)
 	}
 	d.slots.Add(node)
