@@ -5,6 +5,7 @@
 	cdc kafka_consumer storage_consumer pulsar_consumer filter_helper \
 	prepare_test_binaries \
 	unit_test_in_verify_ci integration_test_build integration_test_build_fast integration_test_mysql integration_test_kafka integration_test_storage integration_test_pulsar \
+	generate-next-gen-grafana
 
 
 FAIL_ON_STDOUT := awk '{ print } END { if (NR > 0) { exit 1  }  }'
@@ -332,3 +333,6 @@ clean:
 	rm -rf tools/include
 
 workload: tools/bin/workload
+
+generate-next-gen-grafana:
+	./scripts/generate-next-gen-metrics.sh
