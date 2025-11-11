@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package codec
+package common
 
 import (
 	"errors"
@@ -19,13 +19,10 @@ import (
 	perrors "github.com/pingcap/errors"
 	commonPkg "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 )
 
-var ErrMessageEventMismatch = errors.New("message rows count mismatches row events")
-
 // AttachMessageLogInfo binds row event diagnostic info onto sink messages.
-func AttachMessageLogInfo(messages []*common.Message, events []*commonEvent.RowEvent) error {
+func AttachMessageLogInfo(messages []*Message, events []*commonEvent.RowEvent) error {
 	if len(messages) == 0 || len(events) == 0 {
 		return nil
 	}
@@ -57,18 +54,18 @@ func AttachMessageLogInfo(messages []*common.Message, events []*commonEvent.RowE
 
 func annotateMismatchError(existing error, format string, args ...interface{}) error {
 	if existing == nil {
-		return perrors.Annotatef(ErrMessageEventMismatch, format, args...)
+		return perrors.Annotatef(errors.New("message rows count mismatches row events"), format, args...)
 	}
 	return perrors.Annotatef(existing, format, args...)
 }
 
-func buildMessageLogInfo(events []*commonEvent.RowEvent) *common.MessageLogInfo {
-	rows := make([]common.RowLogInfo, 0, len(events))
+func buildMessageLogInfo(events []*commonEvent.RowEvent) *MessageLogInfo {
+	rows := make([]RowLogInfo, 0, len(events))
 	for _, event := range events {
 		if event == nil || event.TableInfo == nil {
 			continue
 		}
-		rowInfo := common.RowLogInfo{
+		rowInfo := RowLogInfo{
 			Type:     rowEventType(event),
 			Database: event.TableInfo.GetSchemaName(),
 			Table:    event.TableInfo.GetTableName(),
@@ -83,7 +80,7 @@ func buildMessageLogInfo(events []*commonEvent.RowEvent) *common.MessageLogInfo 
 	if len(rows) == 0 {
 		return nil
 	}
-	return &common.MessageLogInfo{Rows: rows}
+	return &MessageLogInfo{Rows: rows}
 }
 
 func rowEventType(event *commonEvent.RowEvent) string {
@@ -99,7 +96,7 @@ func rowEventType(event *commonEvent.RowEvent) string {
 	}
 }
 
-func extractPrimaryKeys(event *commonEvent.RowEvent) []common.ColumnLogInfo {
+func extractPrimaryKeys(event *commonEvent.RowEvent) []ColumnLogInfo {
 	indexes, columns := event.PrimaryKeyColumn()
 	if len(columns) == 0 {
 		return nil
@@ -109,13 +106,13 @@ func extractPrimaryKeys(event *commonEvent.RowEvent) []common.ColumnLogInfo {
 		row = event.GetPreRows()
 	}
 
-	values := make([]common.ColumnLogInfo, 0, len(columns))
+	values := make([]ColumnLogInfo, 0, len(columns))
 	for i, col := range columns {
 		if col == nil {
 			continue
 		}
 		value := commonPkg.ExtractColVal(row, col, indexes[i])
-		values = append(values, common.ColumnLogInfo{
+		values = append(values, ColumnLogInfo{
 			Name:  col.Name.String(),
 			Value: value,
 		})
@@ -124,15 +121,15 @@ func extractPrimaryKeys(event *commonEvent.RowEvent) []common.ColumnLogInfo {
 }
 
 // SetDDLMessageLogInfo attaches DDL diagnostic info on message.
-func SetDDLMessageLogInfo(msg *common.Message, event *commonEvent.DDLEvent) {
+func SetDDLMessageLogInfo(msg *Message, event *commonEvent.DDLEvent) {
 	if msg == nil || event == nil {
 		return
 	}
 	logInfo := msg.LogInfo
 	if logInfo == nil {
-		logInfo = &common.MessageLogInfo{}
+		logInfo = &MessageLogInfo{}
 	}
-	logInfo.DDL = &common.DDLLogInfo{
+	logInfo.DDL = &DDLLogInfo{
 		Query:    event.Query,
 		CommitTs: event.GetCommitTs(),
 	}
@@ -140,15 +137,15 @@ func SetDDLMessageLogInfo(msg *common.Message, event *commonEvent.DDLEvent) {
 }
 
 // SetCheckpointMessageLogInfo attaches checkpoint info on message.
-func SetCheckpointMessageLogInfo(msg *common.Message, commitTs uint64) {
+func SetCheckpointMessageLogInfo(msg *Message, commitTs uint64) {
 	if msg == nil {
 		return
 	}
 	logInfo := msg.LogInfo
 	if logInfo == nil {
-		logInfo = &common.MessageLogInfo{}
+		logInfo = &MessageLogInfo{}
 	}
-	logInfo.Checkpoint = &common.CheckpointLogInfo{
+	logInfo.Checkpoint = &CheckpointLogInfo{
 		CommitTs: commitTs,
 	}
 	msg.LogInfo = logInfo

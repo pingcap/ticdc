@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	codecPkg "github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/sink/util"
@@ -397,12 +396,10 @@ func (s *sink) sendMessages(ctx context.Context) error {
 						future.Key.Topic,
 						future.Key.Partition,
 						message); err != nil {
-						err = kafka.AnnotateEventError(
-							s.changefeedID.Keyspace(),
-							s.changefeedID.Name(),
-							message.LogInfo,
-							err,
-						)
+						log.Error("kafka sink send message failed",
+							zap.String("keyspace", s.changefeedID.Keyspace()),
+							zap.String("changefeed", s.changefeedID.Name()),
+							zap.Error(err))
 						return 0, 0, err
 					}
 					return message.GetRowsCount(), int64(message.Length()), nil
@@ -427,7 +424,7 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 				zap.Stringer("changefeed", s.changefeedID))
 			continue
 		}
-		codecPkg.SetDDLMessageLogInfo(message, e)
+		common.SetDDLMessageLogInfo(message, e)
 		topic := s.comp.eventRouter.GetTopicForDDL(e)
 		// Notice: We must call GetPartitionNum here,
 		// which will be responsible for automatically creating topics when they don't exist.
@@ -505,7 +502,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 			if msg == nil {
 				continue
 			}
-			codecPkg.SetCheckpointMessageLogInfo(msg, ts)
+			common.SetCheckpointMessageLogInfo(msg, ts)
 
 			tableNames := s.getAllTableNames(ts)
 			// NOTICE: When there are no tables to replicate,

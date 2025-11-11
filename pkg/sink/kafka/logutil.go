@@ -22,11 +22,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 )
 
-const (
-	maxEventLogRows      = 20
-	maxEventLogJSONBytes = 8 * 1024
-)
-
 // DetermineEventType infers the event type based on MessageLogInfo content.
 func DetermineEventType(info *common.MessageLogInfo) string {
 	if info == nil {
@@ -59,18 +54,9 @@ func BuildEventLogContext(keyspace, changefeed string, info *common.MessageLogIn
 	}
 
 	if len(info.Rows) > 0 {
-		if rowsStr, truncated, truncatedRows := formatDMLInfo(info.Rows); rowsStr != "" {
+		if rowsStr := formatDMLInfo(info.Rows); rowsStr != "" {
 			sb.WriteString(", dmlInfo=")
 			sb.WriteString(rowsStr)
-			if truncated {
-				sb.WriteString(", dmlInfoTruncated=true")
-				if truncatedRows > 0 {
-					sb.WriteString(", truncatedRows=")
-					sb.WriteString(strconv.Itoa(truncatedRows))
-				}
-				sb.WriteString(", totalRows=")
-				sb.WriteString(strconv.Itoa(len(info.Rows)))
-			}
 		}
 	}
 
@@ -108,26 +94,10 @@ func AnnotateEventError(
 	return err
 }
 
-func formatDMLInfo(rows []common.RowLogInfo) (string, bool, int) {
-	if len(rows) == 0 {
-		return "", false, 0
-	}
-	truncated := false
-	truncatedRows := 0
-	limited := rows
-	if len(rows) > maxEventLogRows {
-		truncated = true
-		truncatedRows = len(rows) - maxEventLogRows
-		limited = rows[:maxEventLogRows]
-	}
-	data, err := json.Marshal(limited)
+func formatDMLInfo(rows []common.RowLogInfo) string {
+	data, err := json.Marshal(rows)
 	if err != nil {
-		return "", false, 0
+		return ""
 	}
-	dataStr := string(data)
-	if len(dataStr) > maxEventLogJSONBytes {
-		truncated = true
-		dataStr = dataStr[:maxEventLogJSONBytes] + "...(truncated)"
-	}
-	return dataStr, truncated, truncatedRows
+	return string(data)
 }

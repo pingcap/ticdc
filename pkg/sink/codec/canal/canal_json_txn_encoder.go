@@ -62,7 +62,6 @@ func (j *JSONTxnEventEncoder) AppendTxnEvent(event *commonEvent.DMLEvent) error 
 		}
 		value, err := newJSONMessageForDML(&commonEvent.RowEvent{
 			TableInfo:      event.TableInfo,
-			StartTs:        event.StartTs,
 			CommitTs:       event.CommitTs,
 			Event:          row,
 			ColumnSelector: j.columnSelector,

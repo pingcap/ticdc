@@ -159,7 +159,7 @@ func (g *encoderGroup) runEncoder(ctx context.Context, idx int) error {
 				}
 			}
 			future.Messages = g.rowEventEncoders[idx].Build()
-			if err := AttachMessageLogInfo(future.Messages, future.events); err != nil {
+			if err := common.AttachMessageLogInfo(future.Messages, future.events); err != nil {
 				log.Warn("message rows count mismatches row events",
 					zap.String("keyspace", g.changefeedID.Keyspace()),
 					zap.String("changefeed", g.changefeedID.Name()),

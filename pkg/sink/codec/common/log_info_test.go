@@ -10,7 +10,7 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package codec
+package common
 
 import (
 	"testing"
@@ -18,7 +18,6 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	commonModel "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )
 
@@ -76,9 +75,9 @@ func TestAttachMessageLogInfo(t *testing.T) {
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
 	}
 
-	message := common.NewMsg(nil, nil)
+	message := NewMsg(nil, nil)
 	message.SetRowsCount(1)
-	err := AttachMessageLogInfo([]*common.Message{message}, []*commonEvent.RowEvent{rowEvent})
+	err := AttachMessageLogInfo([]*Message{message}, []*commonEvent.RowEvent{rowEvent})
 	require.NoError(t, err)
 
 	require.NotNil(t, message.LogInfo)
@@ -95,7 +94,7 @@ func TestSetDDLMessageLogInfo(t *testing.T) {
 
 	helper.Tk().MustExec("use test")
 	ddlEvent := helper.DDL2Event("create table test.ddl_t (id int primary key, val varchar(10))")
-	message := common.NewMsg(nil, nil)
+	message := NewMsg(nil, nil)
 
 	SetDDLMessageLogInfo(message, ddlEvent)
 
@@ -108,7 +107,7 @@ func TestSetDDLMessageLogInfo(t *testing.T) {
 }
 
 func TestSetCheckpointMessageLogInfo(t *testing.T) {
-	message := common.NewMsg(nil, nil)
+	message := NewMsg(nil, nil)
 	SetCheckpointMessageLogInfo(message, 789)
 	require.NotNil(t, message.LogInfo)
 	require.NotNil(t, message.LogInfo.Checkpoint)

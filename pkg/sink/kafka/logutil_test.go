@@ -13,7 +13,6 @@
 package kafka
 
 import (
-	"strconv"
 	"strings"
 	"testing"
 
@@ -29,36 +28,40 @@ func TestDetermineEventType(t *testing.T) {
 	require.Equal(t, "unknown", DetermineEventType(&common.MessageLogInfo{}))
 }
 
-func TestBuildEventLogContextTruncateRows(t *testing.T) {
-	rows := make([]common.RowLogInfo, 0, maxEventLogRows+5)
-	for i := 0; i < maxEventLogRows+5; i++ {
-		rows = append(rows, common.RowLogInfo{
+func TestBuildEventLogContextRowsIncluded(t *testing.T) {
+	rows := []common.RowLogInfo{
+		{
 			Type:     "insert",
-			Database: "db",
-			Table:    "t",
-			CommitTs: uint64(i + 1),
+			Database: "db1",
+			Table:    "t1",
+			CommitTs: 1,
 			PrimaryKeys: []common.ColumnLogInfo{
-				{Name: "id", Value: i},
+				{Name: "id", Value: 1},
 			},
-		})
+		},
+		{
+			Type:     "delete",
+			Database: "db2",
+			Table:    "t2",
+			CommitTs: 2,
+		},
 	}
 	info := &common.MessageLogInfo{Rows: rows}
 	ctx := BuildEventLogContext("ks", "cf", info)
-	require.Contains(t, ctx, "dmlInfo=")
-	require.Contains(t, ctx, "dmlInfoTruncated=true")
-	require.Contains(t, ctx, "truncatedRows=5")
-	require.Contains(t, ctx, "totalRows="+strconv.Itoa(len(rows)))
+	expected := formatDMLInfo(rows)
+	require.Contains(t, ctx, "dmlInfo="+expected)
+	require.NotContains(t, ctx, "dmlInfoTruncated")
+	require.NotContains(t, ctx, "truncatedRows")
 }
 
-func TestBuildEventLogContextTruncateBySize(t *testing.T) {
-	largeValue := strings.Repeat("a", maxEventLogJSONBytes)
+func TestBuildEventLogContextLargeData(t *testing.T) {
+	largeValue := strings.Repeat("a", 12*1024)
 	info := &common.MessageLogInfo{
 		Rows: []common.RowLogInfo{
 			{Type: "insert", Table: largeValue},
 		},
 	}
 	ctx := BuildEventLogContext("ks", "cf", info)
-	require.Contains(t, ctx, "dmlInfoTruncated=true")
-	require.Contains(t, ctx, "totalRows=1")
-	require.Contains(t, ctx, "...(truncated)")
+	require.Contains(t, ctx, largeValue)
+	require.NotContains(t, ctx, "...(truncated)")
 }
