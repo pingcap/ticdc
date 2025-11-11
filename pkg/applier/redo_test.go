@@ -159,6 +159,7 @@ func TestApply(t *testing.T) {
 			},
 		},
 		// update event which doesn't modify handle key
+		// split into delete+insert when safe-mode is true
 		{
 			Row: &commonEvent.DMLEventInRedoLog{
 				StartTs:  1120,
@@ -360,7 +361,7 @@ func TestApply(t *testing.T) {
 	require.Nil(t, err)
 	applyCfg := &RedoApplierConfig{
 		SinkURI: "mysql://127.0.0.1:4000/?worker-count=1&max-txn-row=1" +
-			"&tidb_placement_mode=ignore&safe-mode=true&cache-prep-stmts=false" +
+			"&tidb_placement_mode=ignore&safe-mode=false&cache-prep-stmts=false" +
 			"&multi-stmt-enable=false&enable-ddl-ts=false&batch-dml-enable=false&enable-ddl-ts=false",
 		Dir: dir,
 	}
@@ -568,7 +569,7 @@ func TestApplyBigTxn(t *testing.T) {
 	require.Nil(t, err)
 	applyCfg := &RedoApplierConfig{
 		SinkURI: "mysql://127.0.0.1:4000/?worker-count=1&max-txn-row=1" +
-			"&tidb_placement_mode=ignore&safe-mode=true&cache-prep-stmts=false" +
+			"&tidb_placement_mode=ignore&safe-mode=false&cache-prep-stmts=false" +
 			"&multi-stmt-enable=false&enable-ddl-ts=false&batch-dml-enable=false&enable-ddl-ts=false",
 		Dir: dir,
 	}
@@ -615,7 +616,7 @@ func getMockDB(t *testing.T) *sql.DB {
 	mock.ExpectCommit()
 
 	mock.ExpectBegin()
-	mock.ExpectExec("REPLACE INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
+	mock.ExpectExec("INSERT INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
 		WithArgs(1, []byte("2")).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
@@ -627,10 +628,10 @@ func getMockDB(t *testing.T) *sql.DB {
 	mock.ExpectCommit()
 
 	mock.ExpectBegin()
-	mock.ExpectExec("REPLACE INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
+	mock.ExpectExec("INSERT INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
 		WithArgs(10, []byte("20")).
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("REPLACE INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
+	mock.ExpectExec("INSERT INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
 		WithArgs(100, []byte("200")).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
@@ -646,10 +647,10 @@ func getMockDB(t *testing.T) *sql.DB {
 	mock.ExpectExec("DELETE FROM `test`.`t1` WHERE `a` = ? LIMIT 1").
 		WithArgs(100).
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("REPLACE INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
+	mock.ExpectExec("INSERT INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
 		WithArgs(2, []byte("3")).
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("REPLACE INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
+	mock.ExpectExec("INSERT INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
 		WithArgs(200, []byte("300")).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
@@ -676,7 +677,7 @@ func getMockDBForBigTxn(t *testing.T) *sql.DB {
 
 	mock.ExpectBegin()
 	for i := 1; i <= 100; i++ {
-		mock.ExpectExec("REPLACE INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
+		mock.ExpectExec("INSERT INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
 			WithArgs(i, []byte(fmt.Sprintf("%d", i+1))).
 			WillReturnResult(sqlmock.NewResult(1, 1))
 	}
@@ -689,7 +690,7 @@ func getMockDBForBigTxn(t *testing.T) *sql.DB {
 			WillReturnResult(sqlmock.NewResult(1, 1))
 	}
 	for i := 1; i <= 100; i++ {
-		mock.ExpectExec("REPLACE INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
+		mock.ExpectExec("INSERT INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
 			WithArgs(i*10, []byte(fmt.Sprintf("%d", i*10+1))).
 			WillReturnResult(sqlmock.NewResult(1, 1))
 	}
@@ -703,7 +704,7 @@ func getMockDBForBigTxn(t *testing.T) *sql.DB {
 			WillReturnResult(sqlmock.NewResult(1, 1))
 	}
 	for i := 51; i <= 100; i++ {
-		mock.ExpectExec("REPLACE INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
+		mock.ExpectExec("INSERT INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
 			WithArgs(i*100, []byte(fmt.Sprintf("%d", i*100+1))).
 			WillReturnResult(sqlmock.NewResult(1, 1))
 	}
