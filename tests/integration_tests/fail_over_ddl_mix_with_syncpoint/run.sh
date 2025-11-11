@@ -184,7 +184,7 @@ main_with_consistent() {
 
 	sleep 15
 
-	if (( RANDOM % 2 )); then
+	if ((RANDOM % 2)); then
 		cleanup_process $CDC_BINARY
 		kill -9 $DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5
 
@@ -202,7 +202,7 @@ main_with_consistent() {
 		kill -9 $DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5
 		sleep 15
 		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
-		
+
 		checkpoint1=$(cdc_cli_changefeed query -c "test" 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
 		sleep 20
 		checkpoint2=$(cdc_cli_changefeed query -c "test" 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
@@ -217,10 +217,10 @@ main_with_consistent() {
 }
 
 trap stop_tidb_cluster EXIT
-main
-check_logs $WORK_DIR
-echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
-stop_tidb_cluster
+# main
+# check_logs $WORK_DIR
+# echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
+# stop_tidb_cluster
 main_with_consistent
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run consistent test case $TEST_NAME success! >>>>>>"

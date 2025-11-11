@@ -177,7 +177,7 @@ main_with_consistent() {
 
 	sleep 500
 
-	if (( RANDOM % 2 )); then
+	if ((RANDOM % 2)); then
 		cleanup_process $CDC_BINARY
 		kill -9 $NORMAL_TABLE_DDL_PID ${pids[@]} $MERGE_AND_SPLIT_TABLE_PID
 

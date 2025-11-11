@@ -162,7 +162,7 @@ main_with_consistent() {
 	# Stop background processes
 	echo "[$(date)] Stopping background processes..."
 
-	if (( RANDOM % 2 )); then
+	if ((RANDOM % 2)); then
 		cleanup_process $CDC_BINARY
 		kill -9 ${dml_pids[@]} $KILL_RESTART_PID 2>/dev/null || true
 		export GO_FAILPOINTS=''

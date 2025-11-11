@@ -269,7 +269,7 @@ main_with_consistent() {
 
 	sleep 10
 
-	if (( RANDOM % 2 )); then
+	if ((RANDOM % 2)); then
 		cleanup_process $CDC_BINARY
 		# kill -9 $NORMAL_TABLE_DDL_PID $PARTITION_TABLE_DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5 $DML_PID_6 $DML_PID_7 $DML_PID_8 $DML_PID_9 $DML_PID_10
 		kill -9 $NORMAL_TABLE_DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5

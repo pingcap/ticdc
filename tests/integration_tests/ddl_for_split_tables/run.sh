@@ -68,7 +68,7 @@ main_with_consistent() {
 	# ## insert some datas
 	run_sql_file $CUR/data/dmls.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
-	if (( RANDOM % 2 )); then
+	if ((RANDOM % 2)); then
 		cleanup_process $CDC_BINARY
 		changefeed_id="test"
 		storage_path="file://$WORK_DIR/redo"

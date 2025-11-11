@@ -136,7 +136,7 @@ main_with_consistent() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-1" --addr "127.0.0.1:8301"
 
 	sleep 10
-	if (( RANDOM % 2 )); then
+	if ((RANDOM % 2)); then
 		cleanup_process $CDC_BINARY
 		changefeed_id="test"
 		storage_path="file://$WORK_DIR/redo"

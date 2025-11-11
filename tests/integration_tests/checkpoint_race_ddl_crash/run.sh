@@ -228,7 +228,7 @@ main_with_consistent() {
 	simulate_crashes $test_duration &
 	CRASH_PID=$!
 
-	if (( RANDOM % 2 )); then
+	if ((RANDOM % 2)); then
 		sleep 100
 		cleanup_process $CDC_BINARY
 		# Wait for all background jobs to complete
