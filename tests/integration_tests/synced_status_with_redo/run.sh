@@ -45,9 +45,9 @@ function kill_process_by_ports() {
 			continue
 		fi
 		if [ -z "$port_pattern" ]; then
-			port_pattern=":${port}"
+			port_pattern="${port}"
 		else
-			port_pattern="${port_pattern}\|:${port}"
+			port_pattern="${port_pattern}|${port}"
 		fi
 	done
 	if [ -z "$port_pattern" ]; then
