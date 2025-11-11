@@ -15,7 +15,6 @@ package applier
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -115,8 +114,6 @@ func (u *updateEventSplitter) readNextRow(ctx context.Context) (*event.RedoDMLEv
 				return nil, err
 			}
 			if event != nil {
-				fmt.Println("111")
-				fmt.Println("111", event.Row.StartTs, event.Row.CommitTs)
 				return event, nil
 			}
 			if u.pendingEvent == nil {
@@ -152,7 +149,6 @@ func processEvent(
 		}
 		return event, nil, nil
 	} else if shouldSplitUpdateEvent(event) {
-		fmt.Println("shouldSplitUpdateEvent", event.Row.StartTs, event.Row.CommitTs)
 		deleteEvent, insertEvent, err := splitUpdateEvent(event)
 		if err != nil {
 			return nil, nil, err

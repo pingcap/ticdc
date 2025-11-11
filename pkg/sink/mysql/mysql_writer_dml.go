@@ -577,16 +577,7 @@ func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]i
 		)
 		switch row.RowType {
 		case common.RowTypeUpdate:
-			if inSafeMode {
-				query, args = buildDelete(event.TableInfo, row)
-				if query != "" {
-					queries = append(queries, query)
-					argsList = append(argsList, args)
-				}
-				query, args = buildInsert(event.TableInfo, row, inSafeMode)
-			} else {
-				query, args = buildUpdate(event.TableInfo, row)
-			}
+			query, args = buildUpdate(event.TableInfo, row)
 		case common.RowTypeDelete:
 			query, args = buildDelete(event.TableInfo, row)
 		case common.RowTypeInsert:
