@@ -35,7 +35,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -145,6 +144,7 @@ type DispatcherManager struct {
 // return actual startTs of the table trigger event dispatcher
 // when the table trigger event dispatcher is in this event dispatcher manager
 func NewDispatcherManager(
+	keyspaceID uint32,
 	changefeedID common.ChangeFeedID,
 	cfConfig *config.ChangefeedConfig,
 	tableTriggerEventDispatcherID,
@@ -157,13 +157,6 @@ func NewDispatcherManager(
 
 	ctx, cancel := context.WithCancel(context.Background())
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
-
-	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
-	keyspaceMeta, err := keyspaceManager.LoadKeyspace(ctx, changefeedID.Keyspace())
-	if err != nil {
-		cancel()
-		return nil, 0, err
-	}
 
 	filterCfg := &eventpb.FilterConfig{
 		CaseSensitive:  cfConfig.CaseSensitive,
@@ -182,7 +175,7 @@ func NewDispatcherManager(
 	manager := &DispatcherManager{
 		dispatcherMap:         newDispatcherMap[*dispatcher.EventDispatcher](),
 		changefeedID:          changefeedID,
-		keyspaceID:            keyspaceMeta.Id,
+		keyspaceID:            keyspaceID,
 		pdClock:               pdClock,
 		cancel:                cancel,
 		config:                cfConfig,
@@ -217,6 +210,7 @@ func NewDispatcherManager(
 		}
 	}
 
+	var err error
 	manager.sink, err = sink.New(ctx, manager.config, manager.changefeedID)
 	if err != nil {
 		return nil, 0, errors.Trace(err)

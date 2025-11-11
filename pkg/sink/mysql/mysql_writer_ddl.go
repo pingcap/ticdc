@@ -58,9 +58,9 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 	shouldSwitchDB := needSwitchDB(event)
 
 	// Convert vector type to string type for unsupport database
-	if w.needFormat {
+	if w.cfg.HasVectorType {
 		if newQuery := formatQuery(event.Query); newQuery != event.Query {
-			log.Warn("format ddl query", zap.String("newQuery", newQuery), zap.String("query", event.Query))
+			log.Info("format ddl query", zap.String("newQuery", newQuery), zap.String("query", event.Query))
 			event.Query = newQuery
 		}
 	}

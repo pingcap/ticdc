@@ -30,6 +30,7 @@ import (
 
 // StopChangefeedOperator is an operator to remove a maintainer from a node
 type StopChangefeedOperator struct {
+	keyspaceID          uint32
 	cfID                common.ChangeFeedID
 	nodeID              node.ID
 	changefeedIsRemoved bool
@@ -38,13 +39,16 @@ type StopChangefeedOperator struct {
 	backend             changefeed.Backend
 }
 
-func NewStopChangefeedOperator(cfID common.ChangeFeedID,
+func NewStopChangefeedOperator(
+	keyspaceID uint32,
+	cfID common.ChangeFeedID,
 	nodeID node.ID,
 	coordinatorNode node.ID,
 	backend changefeed.Backend,
 	removed bool,
 ) *StopChangefeedOperator {
 	return &StopChangefeedOperator{
+		keyspaceID:          keyspaceID,
 		cfID:                cfID,
 		nodeID:              nodeID,
 		changefeedIsRemoved: removed,
@@ -62,7 +66,7 @@ func (m *StopChangefeedOperator) Check(_ node.ID, status *heartbeatpb.Maintainer
 }
 
 func (m *StopChangefeedOperator) Schedule() *messaging.TargetMessage {
-	return changefeed.RemoveMaintainerMessage(m.cfID, m.nodeID, true, m.changefeedIsRemoved)
+	return changefeed.RemoveMaintainerMessage(m.keyspaceID, m.cfID, m.nodeID, true, m.changefeedIsRemoved)
 }
 
 // OnNodeRemove is called when node offline, and the maintainer must already move to absent status and will be scheduled again

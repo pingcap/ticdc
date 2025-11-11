@@ -39,7 +39,7 @@ func TestInitAndWriteMeta(t *testing.T) {
 	captureID := "test-capture"
 	nConfig := config.GetGlobalServerConfig().Clone()
 	config.StoreGlobalServerConfig(nConfig)
-	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspace)
+	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceNamme)
 
 	extStorage, uri, err := util.GetTestExtStorage(ctx, t.TempDir())
 	require.NoError(t, err)
@@ -123,7 +123,7 @@ func TestPreCleanupAndWriteMeta(t *testing.T) {
 	captureID := "test-capture"
 	nConfig := config.GetGlobalServerConfig().Clone()
 	config.StoreGlobalServerConfig(nConfig)
-	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspace)
+	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceNamme)
 
 	extStorage, uri, err := util.GetTestExtStorage(ctx, t.TempDir())
 	require.NoError(t, err)
@@ -254,7 +254,7 @@ func TestGCAndCleanup(t *testing.T) {
 	captureID := "test-capture"
 	nConfig := config.GetGlobalServerConfig().Clone()
 	config.StoreGlobalServerConfig(nConfig)
-	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspace)
+	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceNamme)
 
 	extStorage, uri, err := util.GetTestExtStorage(ctx, t.TempDir())
 	require.NoError(t, err)

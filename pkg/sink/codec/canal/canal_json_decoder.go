@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -542,9 +543,26 @@ func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.Tabl
 }
 
 func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {
+	type columnPair struct {
+		mysqlType string
+		name      string
+	}
+	rawColumnList := make([]columnPair, 0, len(msg.getMySQLType()))
+	for name, mysqlType := range msg.getMySQLType() {
+		rawColumnList = append(rawColumnList, columnPair{
+			mysqlType: mysqlType,
+			name:      name,
+		})
+	}
+	slices.SortFunc(rawColumnList, func(a, b columnPair) int {
+		return strings.Compare(a.name, b.name)
+	})
+
 	var nextColumnID int64
 	result := make([]*timodel.ColumnInfo, 0, len(msg.getMySQLType()))
-	for name, mysqlType := range msg.getMySQLType() {
+	for _, rawColumn := range rawColumnList {
+		mysqlType := rawColumn.mysqlType
+		name := rawColumn.name
 		col := new(timodel.ColumnInfo)
 		col.ID = nextColumnID
 		col.Name = ast.NewCIStr(name)

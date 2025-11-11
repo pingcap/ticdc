@@ -29,7 +29,7 @@ import (
 )
 
 func TestNewController(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	ddlDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, ddlDispatcherID,
 		common.DDLSpanSchemaID,
@@ -46,7 +46,7 @@ func TestNewController(t *testing.T) {
 }
 
 func TestController_AddNewTable(t *testing.T) {
-	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	ddlDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(changefeedID, ddlDispatcherID,
 		common.DDLSpanSchemaID,
@@ -83,7 +83,7 @@ func TestController_AddNewTable(t *testing.T) {
 }
 
 func TestController_GetTaskByID(t *testing.T) {
-	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	ddlDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(changefeedID, ddlDispatcherID,
 		common.DDLSpanSchemaID,
@@ -137,7 +137,7 @@ func TestController_GetTaskByID(t *testing.T) {
 }
 
 func TestController_GetTasksByTableID(t *testing.T) {
-	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	ddlDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(changefeedID, ddlDispatcherID,
 		common.DDLSpanSchemaID,
@@ -174,7 +174,7 @@ func TestController_GetTasksByTableID(t *testing.T) {
 }
 
 func TestController_GetTasksBySchemaID(t *testing.T) {
-	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	ddlDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(changefeedID, ddlDispatcherID,
 		common.DDLSpanSchemaID,
@@ -215,7 +215,7 @@ func TestController_GetTasksBySchemaID(t *testing.T) {
 }
 
 func TestController_UpdateSchemaID(t *testing.T) {
-	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	ddlDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(changefeedID, ddlDispatcherID,
 		common.DDLSpanSchemaID,
@@ -257,7 +257,7 @@ func TestController_UpdateSchemaID(t *testing.T) {
 }
 
 func TestController_Statistics(t *testing.T) {
-	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	ddlDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(changefeedID, ddlDispatcherID,
 		common.DDLSpanSchemaID,
@@ -416,7 +416,7 @@ func TestMarkSpanAbsent(t *testing.T) {
 
 func newControllerWithCheckerForTest(t *testing.T) *Controller {
 	testutil.SetUpTestServices()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,

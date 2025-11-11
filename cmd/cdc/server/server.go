@@ -199,7 +199,7 @@ func (o *options) complete(command *cobra.Command) error {
 	}
 
 	if cfg.DataDir == "" {
-		command.Printf(color.HiYellowString("[WARN] TiCDC server data-dir is not set. " +
+		command.Printf("%s", color.HiYellowString("[WARN] TiCDC server data-dir is not set. "+
 			"Please use `cdc server --data-dir` to start the cdc server if possible.\n"))
 	}
 

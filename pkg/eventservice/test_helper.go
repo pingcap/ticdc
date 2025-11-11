@@ -33,6 +33,7 @@ type mockVersionTableInfo struct {
 type mockSchemaStore struct {
 	DDLEvents map[common.TableID][]commonEvent.DDLEvent
 	TableInfo map[common.TableID]*mockVersionTableInfo
+	Tables    []commonEvent.Table
 
 	resolvedTs     uint64
 	maxDDLCommitTs uint64
@@ -83,7 +84,11 @@ func (m *mockSchemaStore) AppendDDLEvent(id common.TableID, ddls ...commonEvent.
 	}
 }
 
-func (m *mockSchemaStore) GetTableInfo(keyspaceID uint32, tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {
+func (m *mockSchemaStore) SetTables(tables []commonEvent.Table) {
+	m.Tables = tables
+}
+
+func (m *mockSchemaStore) GetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {
 	if info, ok := m.TableInfo[tableID]; ok {
 		if info.deleteVersion <= uint64(ts) {
 			return nil, &schemastore.TableDeletedError{}
@@ -100,11 +105,11 @@ func (m *mockSchemaStore) GetTableInfo(keyspaceID uint32, tableID common.TableID
 	return nil, nil
 }
 
-func (m *mockSchemaStore) GetAllPhysicalTables(keyspaceID uint32, snapTs uint64, filter filter.Filter) ([]commonEvent.Table, error) {
-	return nil, nil
+func (m *mockSchemaStore) GetAllPhysicalTables(keyspaceMeta common.KeyspaceMeta, snapTs uint64, filter filter.Filter) ([]commonEvent.Table, error) {
+	return m.Tables, nil
 }
 
-func (m *mockSchemaStore) GetTableDDLEventState(keyspaceID uint32, tableID int64) (schemastore.DDLEventState, error) {
+func (m *mockSchemaStore) GetTableDDLEventState(keyspaceMeta common.KeyspaceMeta, tableID int64) (schemastore.DDLEventState, error) {
 	return schemastore.DDLEventState{
 		ResolvedTs:       m.resolvedTs,
 		MaxEventCommitTs: m.maxDDLCommitTs,
@@ -112,19 +117,19 @@ func (m *mockSchemaStore) GetTableDDLEventState(keyspaceID uint32, tableID int64
 }
 
 func (m *mockSchemaStore) RegisterTable(
-	keyspaceID uint32,
+	keyspaceMeta common.KeyspaceMeta,
 	tableID int64,
 	startTS common.Ts,
 ) error {
 	return nil
 }
 
-func (m *mockSchemaStore) UnregisterTable(_ uint32, _ int64) error {
+func (m *mockSchemaStore) UnregisterTable(_ common.KeyspaceMeta, _ int64) error {
 	return nil
 }
 
 // GetNextDDLEvents returns the next ddl event which finishedTs is within the range (start, end]
-func (m *mockSchemaStore) FetchTableDDLEvents(keyspaceID uint32, dispatcherID common.DispatcherID, tableID int64, tableFilter filter.Filter, start, end uint64) ([]commonEvent.DDLEvent, error) {
+func (m *mockSchemaStore) FetchTableDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableID int64, tableFilter filter.Filter, start, end uint64) ([]commonEvent.DDLEvent, error) {
 	events := m.DDLEvents[tableID]
 	if len(events) == 0 {
 		return nil, nil
@@ -141,11 +146,11 @@ func (m *mockSchemaStore) FetchTableDDLEvents(keyspaceID uint32, dispatcherID co
 	return events[l:r], nil
 }
 
-func (m *mockSchemaStore) FetchTableTriggerDDLEvents(keyspaceID uint32, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error) {
+func (m *mockSchemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error) {
 	return nil, 0, nil
 }
 
-func (m *mockSchemaStore) RegisterKeyspace(ctx context.Context, keyspaceName string) error {
+func (m *mockSchemaStore) RegisterKeyspace(ctx context.Context, keyspaceMeta common.KeyspaceMeta) error {
 	return nil
 }
 

@@ -175,7 +175,9 @@ func fromCsvValToColValue(csvConfig *common.Config, csvVal any, ft types.FieldTy
 	case mysql.TypeNewDecimal:
 		val = types.NewDecFromStringForTest(str)
 	case mysql.TypeFloat:
-		val, err = strconv.ParseFloat(str, 32)
+		var v float64
+		v, err = strconv.ParseFloat(str, 32)
+		val = float32(v)
 	case mysql.TypeDouble:
 		val, err = strconv.ParseFloat(str, 64)
 	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeInt24, mysql.TypeLong, mysql.TypeLonglong:
@@ -191,7 +193,9 @@ func fromCsvValToColValue(csvConfig *common.Config, csvVal any, ft types.FieldTy
 	case mysql.TypeDuration:
 		val, _, err = types.ParseDuration(types.DefaultStmtNoWarningContext, str, ft.GetDecimal())
 	case mysql.TypeBit:
-		val, err = types.NewBitLiteral(str)
+		var v uint64
+		v, err = strconv.ParseUint(str, 10, 64)
+		val = types.NewBinaryLiteralFromUint(v, -1)
 	case mysql.TypeSet:
 		val, err = types.ParseSet(ft.GetElems(), str, ft.GetCollate())
 	case mysql.TypeEnum:
@@ -207,7 +211,6 @@ func fromCsvValToColValue(csvConfig *common.Config, csvVal any, ft types.FieldTy
 }
 
 func csvMsg2RowChangedEvent(csvConfig *common.Config, csvMsg *csvMessage, tableInfo *commonType.TableInfo) (*commonEvent.DMLEvent, error) {
-	var err error
 	if len(csvMsg.columns) != len(tableInfo.GetColumns()) {
 		return nil, errors.WrapError(errors.ErrCSVDecodeFailed,
 			fmt.Errorf("the column length of csv message %d doesn't equal to that of tableInfo %d",
@@ -216,6 +219,7 @@ func csvMsg2RowChangedEvent(csvConfig *common.Config, csvMsg *csvMessage, tableI
 
 	e := new(commonEvent.DMLEvent)
 	e.CommitTs = csvMsg.commitTs
+	e.StartTs = csvMsg.commitTs
 	e.TableInfo = tableInfo
 
 	chk := chunk.NewChunkFromPoolWithCapacity(tableInfo.GetFieldSlice(), chunk.InitialCapacity)
@@ -229,11 +233,12 @@ func csvMsg2RowChangedEvent(csvConfig *common.Config, csvMsg *csvMessage, tableI
 	}
 	common.AppendRow2Chunk(data, columns, chk)
 	switch csvMsg.opType {
-	case operationInsert, operationUpdate:
-		e.RowTypes = append(e.RowTypes, commonType.RowTypeInsert)
 	case operationDelete:
 		e.RowTypes = append(e.RowTypes, commonType.RowTypeDelete)
+	default:
+		e.RowTypes = append(e.RowTypes, commonType.RowTypeInsert)
 	}
+	e.Rows = chk
 	e.Length += 1
 	return e, nil
 }

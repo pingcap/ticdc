@@ -197,8 +197,12 @@ func (d *EventDispatcher) EmitBootstrap() bool {
 	ts := d.GetStartTs()
 	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
 	currentTables := make([]*common.TableInfo, 0, len(tables))
+	meta := common.KeyspaceMeta{
+		ID:   d.tableSpan.KeyspaceID,
+		Name: d.sharedInfo.changefeedID.Keyspace(),
+	}
 	for _, table := range tables {
-		err := schemaStore.RegisterTable(d.tableSpan.KeyspaceID, table, ts)
+		err := schemaStore.RegisterTable(meta, table, ts)
 		if err != nil {
 			log.Warn("register table to schemaStore failed",
 				zap.Int64("tableID", table),
@@ -207,7 +211,7 @@ func (d *EventDispatcher) EmitBootstrap() bool {
 			)
 			continue
 		}
-		tableInfo, err := schemaStore.GetTableInfo(d.tableSpan.KeyspaceID, table, ts)
+		tableInfo, err := schemaStore.GetTableInfo(meta, table, ts)
 		if err != nil {
 			log.Warn("get table info failed, just ignore",
 				zap.Stringer("changefeed", d.sharedInfo.changefeedID),

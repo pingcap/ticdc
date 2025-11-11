@@ -16,6 +16,7 @@ package pdutil
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -139,9 +140,15 @@ func newPdHttpClient(pdClient pd.Client, conf *security.Credential) (pdhttp.Clie
 	discovery := pdClient.GetServiceDiscovery()
 	pdhttpOpts := make([]pdhttp.ClientOption, 0)
 
-	tlsConf, err := conf.ToTLSConfigWithVerify()
-	if err != nil {
-		return nil, errors.Trace(err)
+	var (
+		tlsConf *tls.Config
+		err     error
+	)
+	if conf != nil {
+		tlsConf, err = conf.ToTLSConfigWithVerify()
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
 	}
 
 	if tlsConf != nil {

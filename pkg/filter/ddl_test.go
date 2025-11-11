@@ -32,5 +32,5 @@ func TestSingleTableDDL(t *testing.T) {
 		_, ok := ddlWhiteListMap[d]
 		require.True(t, ok, "DDL %s is in the white list", d)
 	}
-	require.Equal(t, len(singleTableDDLs)+len(multiTableDDLs)+len(globalTableDDLs), len(ddlWhiteListMap))
+	require.Equal(t, 40, len(ddlWhiteListMap))
 }

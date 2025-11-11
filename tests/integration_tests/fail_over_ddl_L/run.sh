@@ -92,7 +92,7 @@ function failOverCaseL-1() {
 	# ensure the dispatcher pass the ddl event
 	sleep 15
 
-	cdc_pid_2=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8301")
+	cdc_pid_2=$(get_cdc_pid 127.0.0.1 8301)
 	kill_cdc_pid $cdc_pid_2
 
 	export GO_FAILPOINTS=''
@@ -144,7 +144,7 @@ function failOverCaseL-2() {
 	# ensure the dispatcher pass the ddl event
 	sleep 15
 
-	cdc_pid_2=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8301")
+	cdc_pid_2=$(get_cdc_pid 127.0.0.1 8301)
 	kill_cdc_pid $cdc_pid_2
 
 	export GO_FAILPOINTS=''
@@ -205,7 +205,7 @@ function failOverCaseL-3() {
 	# ensure the dispatcher pass the ddl event
 	sleep 15
 
-	cdc_pid_2=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8301")
+	cdc_pid_2=$(get_cdc_pid 127.0.0.1 8301)
 	kill_cdc_pid $cdc_pid_2
 
 	export GO_FAILPOINTS=''
@@ -271,7 +271,7 @@ function failOverCaseL-4() {
 	# ensure the dispatcher pass the ddl event
 	sleep 15
 
-	cdc_pid_2=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8301")
+	cdc_pid_2=$(get_cdc_pid 127.0.0.1 8301)
 	kill_cdc_pid $cdc_pid_2
 
 	export GO_FAILPOINTS=''

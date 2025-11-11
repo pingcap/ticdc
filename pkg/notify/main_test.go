@@ -1,4 +1,4 @@
-// Copyright 2023 PingCAP, Inc.
+// Copyright 2021 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,15 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package chann
+package notify
 
-import "testing"
+import (
+	"testing"
 
-func TestCloseAndDrain(t *testing.T) {
-	ch := NewAutoDrainChann[int]()
-	for i := 0; i < 100; i++ {
-		ch.In() <- i
-	}
+	"github.com/pingcap/ticdc/pkg/leakutil"
+)
 
-	ch.CloseAndDrain()
+func TestMain(m *testing.M) {
+	leakutil.SetUpLeakTest(m)
 }

@@ -85,7 +85,7 @@ function run() {
 	# Stop one CDC server (simulate node failure)
 	echo "Stopping one CDC server to simulate node failure..."
 	# Find and kill one of the CDC processes (not the first one)
-	CDC_PIDS=$(pgrep -f "cdc.test.*8301")
+	CDC_PIDS=$(get_cdc_pid 127.0.0.1 8301)
 	if [ ! -z "$CDC_PIDS" ]; then
 		FIRST_PID=$(echo $CDC_PIDS | awk '{print $1}')
 		kill $FIRST_PID

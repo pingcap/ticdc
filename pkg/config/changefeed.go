@@ -254,6 +254,9 @@ type ChangeFeedInfo struct {
 	CreatorVersion string `json:"creator-version"`
 	// Epoch is the epoch of a changefeed, changes on every restart.
 	Epoch uint64 `json:"epoch"`
+
+	// The changefeed belongs to the keyspace.  In classic mode, it will always be 0.
+	KeyspaceID uint32 `json:"keyspace-id"`
 }
 
 func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
@@ -307,13 +310,13 @@ func (info *ChangeFeedInfo) String() (str string) {
 	str, err = info.Marshal()
 	if err != nil {
 		log.Error("failed to marshal changefeed info", zap.Error(err))
-		return
+		return str
 	}
 	clone := new(ChangeFeedInfo)
 	err = clone.Unmarshal([]byte(str))
 	if err != nil {
 		log.Error("failed to unmarshal changefeed info", zap.Error(err))
-		return
+		return str
 	}
 
 	clone.SinkURI = util.MaskSensitiveDataInURI(clone.SinkURI)
@@ -325,7 +328,7 @@ func (info *ChangeFeedInfo) String() (str string) {
 	if err != nil {
 		log.Error("failed to marshal changefeed info", zap.Error(err))
 	}
-	return
+	return str
 }
 
 // GetStartTs returns StartTs if it's specified or using the

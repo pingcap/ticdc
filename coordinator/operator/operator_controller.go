@@ -135,14 +135,18 @@ func (oc *Controller) StopChangefeed(_ context.Context, cfID common.ChangeFeedID
 			zap.String("changefeed", cfID.Name()))
 		scheduledNode = oc.selfNode.ID
 	}
-	oc.pushStopChangefeedOperator(cfID, scheduledNode, removed)
+
+	changefeed := oc.changefeedDB.GetByID(cfID)
+	keyspaceID := changefeed.GetKeyspaceID()
+
+	oc.pushStopChangefeedOperator(keyspaceID, cfID, scheduledNode, removed)
 }
 
 // pushStopChangefeedOperator pushes a stop changefeed operator to the controller.
 // it checks if the operator already exists, if exists, it will replace the old one.
 // if the old operator is the removing operator, it will skip this operator.
-func (oc *Controller) pushStopChangefeedOperator(cfID common.ChangeFeedID, nodeID node.ID, remove bool) {
-	op := NewStopChangefeedOperator(cfID, nodeID, oc.selfNode.ID, oc.backend, remove)
+func (oc *Controller) pushStopChangefeedOperator(keyspaceID uint32, cfID common.ChangeFeedID, nodeID node.ID, remove bool) {
+	op := NewStopChangefeedOperator(keyspaceID, cfID, nodeID, oc.selfNode.ID, oc.backend, remove)
 	if old, ok := oc.operators[cfID]; ok {
 		oldStop, ok := old.OP.(*StopChangefeedOperator)
 		if ok {

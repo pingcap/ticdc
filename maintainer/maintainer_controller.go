@@ -66,8 +66,8 @@ type Controller struct {
 	enableTableAcrossNodes bool
 	batchSize              int
 
-	keyspaceID uint32
-	enableRedo bool
+	keyspaceMeta common.KeyspaceMeta
+	enableRedo   bool
 }
 
 func NewController(changefeedID common.ChangeFeedID,
@@ -76,7 +76,7 @@ func NewController(changefeedID common.ChangeFeedID,
 	cfConfig *config.ReplicaConfig,
 	ddlSpan, redoDDLSpan *replica.SpanReplication,
 	batchSize int, balanceInterval time.Duration,
-	keyspaceID uint32,
+	keyspaceMeta common.KeyspaceMeta,
 	enableRedo bool,
 ) *Controller {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
@@ -85,7 +85,7 @@ func NewController(changefeedID common.ChangeFeedID,
 	var splitter *split.Splitter
 	if cfConfig != nil && cfConfig.Scheduler.EnableTableAcrossNodes {
 		enableTableAcrossNodes = true
-		splitter = split.NewSplitter(keyspaceID, changefeedID, cfConfig.Scheduler)
+		splitter = split.NewSplitter(keyspaceMeta.ID, changefeedID, cfConfig.Scheduler)
 	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -95,14 +95,14 @@ func NewController(changefeedID common.ChangeFeedID,
 	if cfConfig != nil {
 		schedulerCfg = cfConfig.Scheduler
 	}
-	spanController := span.NewController(changefeedID, ddlSpan, splitter, schedulerCfg, keyspaceID, common.DefaultMode)
+	spanController := span.NewController(changefeedID, ddlSpan, splitter, schedulerCfg, keyspaceMeta.ID, common.DefaultMode)
 
 	var (
 		redoSpanController *span.Controller
 		redoOC             *operator.Controller
 	)
 	if enableRedo {
-		redoSpanController = span.NewController(changefeedID, redoDDLSpan, splitter, schedulerCfg, keyspaceID, common.RedoMode)
+		redoSpanController = span.NewController(changefeedID, redoDDLSpan, splitter, schedulerCfg, keyspaceMeta.ID, common.RedoMode)
 		redoOC = operator.NewOperatorController(changefeedID, redoSpanController, batchSize, common.RedoMode)
 	}
 	// Create operator controller using spanController
@@ -128,7 +128,7 @@ func NewController(changefeedID common.ChangeFeedID,
 		enableTableAcrossNodes: enableTableAcrossNodes,
 		batchSize:              batchSize,
 		splitter:               splitter,
-		keyspaceID:             keyspaceID,
+		keyspaceMeta:           keyspaceMeta,
 		enableRedo:             enableRedo,
 	}
 }
@@ -174,7 +174,7 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 
 func (c *Controller) GetMinCheckpointTs(minCheckpointTs uint64) uint64 {
 	minCheckpointTsForOperator := c.operatorController.GetMinCheckpointTs(minCheckpointTs)
-	minCheckpointTsForSpan := c.spanController.GetMinCheckpointTsForAbsentSpans(minCheckpointTs)
+	minCheckpointTsForSpan := c.spanController.GetMinCheckpointTsForNonReplicatingSpans(minCheckpointTs)
 	return min(minCheckpointTsForOperator, minCheckpointTsForSpan)
 }
 
@@ -192,7 +192,7 @@ func (c *Controller) Stop() {
 }
 
 func (c *Controller) GetKeyspaceID() uint32 {
-	return c.keyspaceID
+	return c.keyspaceMeta.ID
 }
 
 // RemoveNode is called when a node is removed
@@ -205,6 +205,6 @@ func (c *Controller) RemoveNode(id node.ID) {
 
 func (c *Controller) GetMinRedoCheckpointTs(minCheckpointTs uint64) uint64 {
 	minCheckpointTsForOperator := c.redoOperatorController.GetMinCheckpointTs(minCheckpointTs)
-	minCheckpointTsForSpan := c.redoSpanController.GetMinCheckpointTsForAbsentSpans(minCheckpointTs)
+	minCheckpointTsForSpan := c.redoSpanController.GetMinCheckpointTsForNonReplicatingSpans(minCheckpointTs)
 	return min(minCheckpointTsForOperator, minCheckpointTsForSpan)
 }

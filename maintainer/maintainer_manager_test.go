@@ -24,14 +24,13 @@ import (
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/etcd"
-	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/eventservice"
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
@@ -53,33 +52,18 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[selfNode.ID] = selfNode
-	store := &mockSchemaStore{
+	store := eventservice.NewMockSchemaStore()
+	store.SetTables(
 		// 4 tables
-		tables: []commonEvent.Table{
+		[]commonEvent.Table{
 			{SchemaID: 1, TableID: 1, SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t1"}},
 			{SchemaID: 1, TableID: 2, SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t2"}},
 			{SchemaID: 1, TableID: 3, SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t3"}},
 			{SchemaID: 1, TableID: 4, SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t4"}},
 		},
-	}
+	)
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
-
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	meta := &keyspacepb.KeyspaceMeta{
-		Id:   0,
-		Name: "default",
-	}
-	if kerneltype.IsNextGen() {
-		meta = &keyspacepb.KeyspaceMeta{
-			Id:   1,
-			Name: "ks1",
-		}
-	}
-	keyspaceManager := keyspace.NewMockManager(ctrl)
-	keyspaceManager.EXPECT().LoadKeyspace(gomock.Any(), gomock.Any()).Return(meta, nil)
-	appcontext.SetService(appcontext.KeyspaceManager, keyspaceManager)
 
 	appcontext.SetService(appcontext.SchemaStore, store)
 	mc := messaging.NewMessageCenter(ctx, selfNode.ID, config.NewDefaultMessageCenterConfig(selfNode.AdvertiseAddr), nil)
@@ -110,20 +94,31 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	go func() {
 		_ = dispManager.Run(ctx)
 	}()
+
+	keyspaceMeta := common.DefaultKeyspace
+	if kerneltype.IsNextGen() {
+		keyspaceMeta = common.KeyspaceMeta{
+			ID:   1,
+			Name: "keyspace1",
+		}
+	}
+
 	cfConfig := &config.ChangeFeedInfo{
-		ChangefeedID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspace),
+		ChangefeedID: common.NewChangeFeedIDWithName("test", keyspaceMeta.Name),
 		Config:       config.GetDefaultReplicaConfig(),
+		KeyspaceID:   keyspaceMeta.ID,
 	}
 	data, err := json.Marshal(cfConfig)
 	require.NoError(t, err)
 
 	// Case 1: Add new changefeed
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
+	cfID := common.NewChangeFeedIDWithName("test", keyspaceMeta.Name)
 	_ = mc.SendCommand(messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic, &heartbeatpb.AddMaintainerRequest{
 			Id:           cfID.ToPB(),
 			Config:       data,
 			CheckpointTs: 10,
+			KeyspaceId:   keyspaceMeta.ID,
 		}))
 
 	value, ok := manager.maintainers.Load(cfID)
@@ -279,34 +274,19 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[selfNode.ID] = selfNode
-	store := &mockSchemaStore{
+	store := eventservice.NewMockSchemaStore()
+	store.SetTables(
 		// 4 tables
-		tables: []commonEvent.Table{
+		[]commonEvent.Table{
 			{SchemaID: 1, TableID: 1, SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t1"}},
 			{SchemaID: 1, TableID: 2, SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t2"}},
 			{SchemaID: 1, TableID: 3, SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t3"}},
 			{SchemaID: 1, TableID: 4, SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t4"}},
 		},
-	}
+	)
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 	appcontext.SetService(appcontext.SchemaStore, store)
-
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	meta := &keyspacepb.KeyspaceMeta{
-		Id:   0,
-		Name: "default",
-	}
-	if kerneltype.IsNextGen() {
-		meta = &keyspacepb.KeyspaceMeta{
-			Id:   1,
-			Name: "ks1",
-		}
-	}
-	keyspaceManager := keyspace.NewMockManager(ctrl)
-	keyspaceManager.EXPECT().LoadKeyspace(gomock.Any(), gomock.Any()).Return(meta, nil)
-	appcontext.SetService(appcontext.KeyspaceManager, keyspaceManager)
 
 	mc := messaging.NewMessageCenter(ctx, selfNode.ID, config.NewDefaultMessageCenterConfig(selfNode.AdvertiseAddr), nil)
 	mc.Run(ctx)
@@ -331,8 +311,12 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	dispManager := MockDispatcherManager(mc, selfNode.ID)
 	// table1 and table 2 will be reported by remote
 	var remotedIds []common.DispatcherID
+	keyspaceID := common.DefaultKeyspaceID
+	if kerneltype.IsNextGen() {
+		keyspaceID = 1
+	}
 	for i := 1; i < 3; i++ {
-		span := common.TableIDToComparableSpan(common.DefaultKeyspaceID, int64(i))
+		span := common.TableIDToComparableSpan(keyspaceID, int64(i))
 		tableSpan := &heartbeatpb.TableSpan{
 			TableID:  int64(i),
 			StartKey: span.StartKey,
@@ -344,9 +328,10 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 			ID:       dispatcherID.ToPB(),
 			SchemaID: 1,
 			Span: &heartbeatpb.TableSpan{
-				TableID:  tableSpan.TableID,
-				StartKey: tableSpan.StartKey,
-				EndKey:   tableSpan.EndKey,
+				TableID:    tableSpan.TableID,
+				StartKey:   tableSpan.StartKey,
+				EndKey:     tableSpan.EndKey,
+				KeyspaceID: keyspaceID,
 			},
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    10,
@@ -356,7 +341,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	go func() {
 		_ = dispManager.Run(ctx)
 	}()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	cfConfig := &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),
@@ -391,7 +376,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	foundSize := 0
 	hasDDLDispatcher := false
 	for _, stm := range maintainer.controller.spanController.GetReplicating() {
-		if stm.Span.Equal(common.KeyspaceDDLSpan(common.DefaultKeyspaceID)) {
+		if stm.Span.Equal(common.KeyspaceDDLSpan(keyspaceID)) {
 			hasDDLDispatcher = true
 		}
 		for _, remotedId := range remotedIds {
@@ -415,15 +400,16 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[selfNode.ID] = selfNode
-	store := &mockSchemaStore{
+	store := eventservice.NewMockSchemaStore()
+	store.SetTables(
 		// 4 tables
-		tables: []commonEvent.Table{
+		[]commonEvent.Table{
 			{SchemaID: 1, TableID: 1, SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t1"}},
 			{SchemaID: 1, TableID: 2, SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t2"}},
 			{SchemaID: 1, TableID: 3, SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t3"}},
 			{SchemaID: 1, TableID: 4, SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t4"}},
 		},
-	}
+	)
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 	appcontext.SetService(appcontext.SchemaStore, store)
@@ -469,7 +455,7 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 	go func() {
 		_ = dispManager.Run(ctx)
 	}()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	_ = mc.SendCommand(messaging.NewSingleTargetMessage(selfNode.ID, messaging.MaintainerManagerTopic, &heartbeatpb.RemoveMaintainerRequest{
 		Id:      cfID.ToPB(),
 		Cascade: true,
@@ -485,15 +471,6 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 	}
 	require.False(t, ok)
 	cancel()
-}
-
-type mockSchemaStore struct {
-	schemastore.SchemaStore
-	tables []commonEvent.Table
-}
-
-func (m *mockSchemaStore) GetAllPhysicalTables(keyspaceID uint32, snapTs common.Ts, filter filter.Filter) ([]commonEvent.Table, error) {
-	return m.tables, nil
 }
 
 type dispatcherNode struct {

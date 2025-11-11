@@ -25,10 +25,10 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/api/middleware"
+	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/logger"
-	"github.com/pingcap/tiflow/cdc/api"
 	"github.com/pingcap/tiflow/cdc/capture"
 	"github.com/pingcap/tiflow/cdc/model"
 	"github.com/tikv/client-go/v2/oracle"
@@ -132,7 +132,7 @@ func (h *ownerAPI) handleChangefeedAdmin(w http.ResponseWriter, req *http.Reques
 		Type: model.AdminJobType(typ),
 	}
 
-	err = api.HandleOwnerJob(req.Context(), h.capture, job)
+	err = HandleOwnerJob(req.Context(), h.capture, job)
 	handleOwnerResp(w, err)
 }
 
@@ -155,7 +155,7 @@ func (h *ownerAPI) handleRebalanceTrigger(w http.ResponseWriter, req *http.Reque
 		return
 	}
 
-	err = api.HandleOwnerBalance(req.Context(), h.capture, changefeedID)
+	err = HandleOwnerBalance(req.Context(), h.capture, changefeedID)
 	handleOwnerResp(w, err)
 }
 
@@ -192,7 +192,7 @@ func (h *ownerAPI) handleMoveTable(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	err = api.HandleOwnerScheduleTable(
+	err = HandleOwnerScheduleTable(
 		req.Context(), h.capture, changefeedID, to, tableID)
 	handleOwnerResp(w, err)
 }
@@ -267,4 +267,62 @@ func HandleAdminLogLevel(w http.ResponseWriter, r *http.Request) {
 	log.Warn("log level changed", zap.String("level", level))
 
 	api.WriteData(w, struct{}{})
+}
+
+// HandleOwnerJob enqueue the admin job
+func HandleOwnerJob(
+	ctx context.Context, capture capture.Capture, job model.AdminJob,
+) error {
+	// Use buffered channel to prevent blocking owner from happening.
+	done := make(chan error, 1)
+	o, err := capture.GetOwner()
+	if err != nil {
+		return errors.Trace(err)
+	}
+	o.EnqueueJob(job, done)
+	select {
+	case <-ctx.Done():
+		return errors.Trace(ctx.Err())
+	case err := <-done:
+		return errors.Trace(err)
+	}
+}
+
+// HandleOwnerBalance balance the changefeed tables
+func HandleOwnerBalance(
+	ctx context.Context, capture capture.Capture, changefeedID model.ChangeFeedID,
+) error {
+	// Use buffered channel to prevernt blocking owner.
+	done := make(chan error, 1)
+	o, err := capture.GetOwner()
+	if err != nil {
+		return errors.Trace(err)
+	}
+	o.RebalanceTables(changefeedID, done)
+	select {
+	case <-ctx.Done():
+		return errors.Trace(ctx.Err())
+	case err := <-done:
+		return errors.Trace(err)
+	}
+}
+
+// HandleOwnerScheduleTable schedule tables
+func HandleOwnerScheduleTable(
+	ctx context.Context, capture capture.Capture,
+	changefeedID model.ChangeFeedID, captureID string, tableID int64,
+) error {
+	// Use buffered channel to prevent blocking owner.
+	done := make(chan error, 1)
+	o, err := capture.GetOwner()
+	if err != nil {
+		return errors.Trace(err)
+	}
+	o.ScheduleTable(changefeedID, captureID, tableID, done)
+	select {
+	case <-ctx.Done():
+		return errors.Trace(ctx.Err())
+	case err := <-done:
+		return errors.Trace(err)
+	}
 }

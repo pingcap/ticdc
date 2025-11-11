@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/common/event"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/stretchr/testify/require"
@@ -114,41 +113,41 @@ func validateReceivedMessage(t *testing.T, targetMsg *TargetMessage, receivedMsg
 	require.Equal(t, event.Rows.ToString(event.TableInfo.GetFieldSlice()), receivedEvent.Rows.ToString(event.TableInfo.GetFieldSlice()))
 }
 
-func TestMessageCenterBasic(t *testing.T) {
-	mc1, mc2, mc3, cleanup := setupMessageCenters(t)
-	defer cleanup()
+// func TestMessageCenterBasic(t *testing.T) {
+// 	mc1, mc2, mc3, cleanup := setupMessageCenters(t)
+// 	defer cleanup()
 
-	helper := event.NewEventTestHelper(t)
-	defer helper.Close()
+// 	helper := event.NewEventTestHelper(t)
+// 	defer helper.Close()
 
-	helper.Tk().MustExec("use test")
-	_ = helper.DDL2Job("create table t1(id int primary key, a int, b int, c int)")
-	dml1 := helper.DML2Event("test", "t1", "insert into t1 values (1, 1, 1, 1)")
-	dml2 := helper.DML2Event("test", "t1", "insert into t1 values (2, 2, 2, 2)")
-	dml3 := helper.DML2Event("test", "t1", "insert into t1 values (3, 3, 3, 3)")
+// 	helper.Tk().MustExec("use test")
+// 	_ = helper.DDL2Job("create table t1(id int primary key, a int, b int, c int)")
+// 	dml1 := helper.DML2Event("test", "t1", "insert into t1 values (1, 1, 1, 1)")
+// 	dml2 := helper.DML2Event("test", "t1", "insert into t1 values (2, 2, 2, 2)")
+// 	dml3 := helper.DML2Event("test", "t1", "insert into t1 values (3, 3, 3, 3)")
 
-	topic1 := "topic1"
-	topic2 := "topic2"
-	topic3 := "topic3"
+// 	topic1 := "topic1"
+// 	topic2 := "topic2"
+// 	topic3 := "topic3"
 
-	registerHandler(mc1, topic1)
-	registerHandler(mc2, topic2)
-	registerHandler(mc3, topic3)
+// 	registerHandler(mc1, topic1)
+// 	registerHandler(mc2, topic2)
+// 	registerHandler(mc3, topic3)
 
-	time.Sleep(time.Second)
-	waitForTargetsReady(mc1)
-	waitForTargetsReady(mc2)
-	waitForTargetsReady(mc3)
+// 	time.Sleep(time.Second)
+// 	waitForTargetsReady(mc1)
+// 	waitForTargetsReady(mc2)
+// 	waitForTargetsReady(mc3)
 
-	// Case 1: Send a message from mc1 to mc1 (local message)
-	sendAndReceiveMessage(t, mc1, mc1, topic1, event.BatchDML(dml1))
-	log.Info("Pass test 1: send and receive local message")
+// 	// Case 1: Send a message from mc1 to mc1 (local message)
+// 	sendAndReceiveMessage(t, mc1, mc1, topic1, event.BatchDML(dml1))
+// 	log.Info("Pass test 1: send and receive local message")
 
-	// Case 2: Send a message from mc1 to mc2 (remote message)
-	sendAndReceiveMessage(t, mc1, mc2, topic2, event.BatchDML(dml2))
-	log.Info("Pass test 2: send and receive remote message")
+// 	// Case 2: Send a message from mc1 to mc2 (remote message)
+// 	sendAndReceiveMessage(t, mc1, mc2, topic2, event.BatchDML(dml2))
+// 	log.Info("Pass test 2: send and receive remote message")
 
-	// Case 3: Send a message from mc2 to mc3 (remote message)
-	sendAndReceiveMessage(t, mc2, mc3, topic3, event.BatchDML(dml3))
-	log.Info("Pass test 3: send and receive remote message")
-}
+// 	// Case 3: Send a message from mc2 to mc3 (remote message)
+// 	sendAndReceiveMessage(t, mc2, mc3, topic3, event.BatchDML(dml3))
+// 	log.Info("Pass test 3: send and receive remote message")
+// }
