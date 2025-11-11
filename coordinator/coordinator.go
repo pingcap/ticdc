@@ -16,7 +16,6 @@ package coordinator
 import (
 	"context"
 	"math"
-	"sync"
 	"time"
 
 	"github.com/pingcap/failpoint"
@@ -33,6 +32,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/server"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/tikv/client-go/v2/oracle"
@@ -90,8 +90,8 @@ type coordinator struct {
 	// changefeedChangeCh is used to receive the changefeed change from the controller
 	changefeedChangeCh chan []*ChangefeedChange
 
-	// msgWG waits for in-flight recvMessages handlers before closing eventCh.
-	msgWG sync.WaitGroup
+	// msgGuardWaitGroup guards Add/Wait so Stop never races with new recv handlers.
+	msgGuardWaitGroup util.GuardedWaitGroup
 
 	cancel func()
 	closed atomic.Bool
@@ -148,12 +148,12 @@ func New(node *node.Info,
 }
 
 func (c *coordinator) recvMessages(ctx context.Context, msg *messaging.TargetMessage) error {
-	c.msgWG.Add(1)
-	defer c.msgWG.Done()
-
-	if c.closed.Load() {
+	if !c.msgGuardWaitGroup.AddIf(func() bool {
+		return !c.closed.Load()
+	}) {
 		return nil
 	}
+	defer c.msgGuardWaitGroup.Done()
 
 	select {
 	case <-ctx.Done():
@@ -406,7 +406,7 @@ func (c *coordinator) Stop() {
 	if c.closed.CompareAndSwap(false, true) {
 		c.mc.DeRegisterHandler(messaging.CoordinatorTopic)
 		// Ensure no handler is still writing to eventCh before closing it.
-		c.msgWG.Wait()
+		c.msgGuardWaitGroup.Wait()
 		c.controller.Stop()
 		c.cancel()
 		// close eventCh after cancel, to avoid send or get event from the channel

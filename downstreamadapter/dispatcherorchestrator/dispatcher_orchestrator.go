@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -48,8 +49,8 @@ type DispatcherOrchestrator struct {
 
 	// closed indicates Close has been invoked and no more messages should be enqueued.
 	closed atomic.Bool
-	// msgWG waits for all in-flight RecvMaintainerRequest handlers to exit before closing msgChan.
-	msgWG sync.WaitGroup
+	// msgGuardWaitGroup waits for in-flight RecvMaintainerRequest handlers before shutdown.
+	msgGuardWaitGroup util.GuardedWaitGroup
 }
 
 func New() *DispatcherOrchestrator {
@@ -85,14 +86,11 @@ func (m *DispatcherOrchestrator) RecvMaintainerRequest(
 	_ context.Context,
 	msg *messaging.TargetMessage,
 ) error {
-	// Register this handler before checking closed so Close can observe and wait on it.
-	m.msgWG.Add(1)
-	defer m.msgWG.Done()
-
-	if m.closed.Load() {
+	if !m.msgGuardWaitGroup.AddIf(func() bool { return !m.closed.Load() }) {
 		log.Debug("dispatcher orchestrator already closed, drop message", zap.Any("message", msg.Message))
 		return nil
 	}
+	defer m.msgGuardWaitGroup.Done()
 
 	// Put message into channel for asynchronous processing by another goroutine
 	select {
@@ -399,7 +397,7 @@ func (m *DispatcherOrchestrator) Close() {
 	m.mc.DeRegisterHandler(messaging.DispatcherManagerManagerTopic)
 
 	// Wait until all in-flight RecvMaintainerRequest calls finish using msgChan.
-	m.msgWG.Wait()
+	m.msgGuardWaitGroup.Wait()
 
 	// Stop the message handling goroutine
 	if m.cancel != nil {
