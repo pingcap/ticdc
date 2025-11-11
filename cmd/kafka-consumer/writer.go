@@ -524,6 +524,15 @@ func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionP
 			zap.Stringer("eventType", dml.RowTypes[0]))
 		return
 	}
+	if w.enableTableAcrossNodes {
+		log.Warn("DML events fallback, but enableTableAcrossNodes is true, still append it",
+			zap.Int32("partition", group.Partition), zap.Any("offset", offset),
+			zap.Uint64("commitTs", commitTs), zap.Uint64("HighWatermark", group.HighWatermark),
+			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
+			zap.Stringer("eventType", dml.RowTypes[0]))
+		group.Append(dml, true)
+		return
+	}
 	switch w.protocol {
 	case config.ProtocolSimple, config.ProtocolDebezium:
 		// simple protocol set the table id for all row message, it can be known which table the row message belongs to,
@@ -539,7 +548,6 @@ func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionP
 			zap.Stringer("eventType", dml.RowTypes[0]),
 			// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
 			zap.Any("protocol", w.protocol), zap.Bool("IsPartition", dml.TableInfo.TableName.IsPartition))
-		return
 	case config.ProtocolCanalJSON, config.ProtocolOpen:
 		// for partition table, the canal-json and open-protocol message cannot assign physical table id to each dml message,
 		// we cannot distinguish whether it's a real fallback event or not, still append it.
@@ -560,17 +568,9 @@ func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionP
 			zap.Stringer("eventType", dml.RowTypes[0]),
 			// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
 			zap.Any("protocol", w.protocol), zap.Bool("IsPartition", dml.TableInfo.TableName.IsPartition))
+	default:
+		log.Panic("unknown protocol", zap.Any("protocol", w.protocol))
 	}
-	if w.enableTableAcrossNodes {
-		log.Warn("DML events fallback, but enableTableAcrossNodes is true, still append it",
-			zap.Int32("partition", group.Partition), zap.Any("offset", offset),
-			zap.Uint64("commitTs", commitTs), zap.Uint64("HighWatermark", group.HighWatermark),
-			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-			zap.Stringer("eventType", dml.RowTypes[0]))
-		group.Append(dml, true)
-		return
-	}
-	log.Panic("unknown protocol", zap.Any("protocol", w.protocol))
 }
 
 func openDB(ctx context.Context, dsn string) (*sql.DB, error) {
