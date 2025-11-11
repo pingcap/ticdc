@@ -269,22 +269,28 @@ main_with_consistent() {
 
 	sleep 10
 
-	# kill -9 $NORMAL_TABLE_DDL_PID $PARTITION_TABLE_DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5 $DML_PID_6 $DML_PID_7 $DML_PID_8 $DML_PID_9 $DML_PID_10
-	kill -9 $NORMAL_TABLE_DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5
+	if (( RANDOM % 2 )); then
+		cleanup_process $CDC_BINARY
+		# kill -9 $NORMAL_TABLE_DDL_PID $PARTITION_TABLE_DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5 $DML_PID_6 $DML_PID_7 $DML_PID_8 $DML_PID_9 $DML_PID_10
+		kill -9 $NORMAL_TABLE_DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5
 
-	cleanup_process $CDC_BINARY
-	# to ensure row changed events have been replicated to TiCDC
-	sleep 10
-	changefeed_id="test"
-	storage_path="file://$WORK_DIR/redo"
-	tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
-	rts=$(cdc redo meta --storage="$storage_path" --tmp-dir="$tmp_download_path" | grep -oE "resolved-ts:[0-9]+" | awk -F: '{print $2}')
+		changefeed_id="test"
+		storage_path="file://$WORK_DIR/redo"
+		tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
+		rts=$(cdc redo meta --storage="$storage_path" --tmp-dir="$tmp_download_path" | grep -oE "resolved-ts:[0-9]+" | awk -F: '{print $2}')
 
-	sed "s/<placeholder>/$rts/g" $CUR/conf/consistent_diff_config.toml >$WORK_DIR/consistent_diff_config.toml
+		sed "s/<placeholder>/$rts/g" $CUR/conf/consistent_diff_config.toml >$WORK_DIR/consistent_diff_config.toml
 
-	cat $WORK_DIR/consistent_diff_config.toml
-	cdc redo apply --log-level debug --tmp-dir="$tmp_download_path/apply" --storage="$storage_path" --sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
-	check_sync_diff $WORK_DIR $WORK_DIR/consistent_diff_config.toml 100
+		cat $WORK_DIR/consistent_diff_config.toml
+		cdc redo apply --log-level debug --tmp-dir="$tmp_download_path/apply" --storage="$storage_path" --sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
+		check_sync_diff $WORK_DIR $WORK_DIR/consistent_diff_config.toml 100
+	else
+		# kill -9 $NORMAL_TABLE_DDL_PID $PARTITION_TABLE_DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5 $DML_PID_6 $DML_PID_7 $DML_PID_8 $DML_PID_9 $DML_PID_10
+		kill -9 $NORMAL_TABLE_DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5
+		sleep 10
+		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
+		cleanup_process $CDC_BINARY
+	fi
 }
 
 trap stop_tidb_cluster EXIT
