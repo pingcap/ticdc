@@ -461,5 +461,4 @@ func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionP
 	default:
 		log.Panic("unknown protocol", zap.Any("protocol", w.protocol))
 	}
-
 }
