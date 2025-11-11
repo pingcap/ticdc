@@ -53,7 +53,7 @@ function kill_process_by_ports() {
 	if [ -z "$port_pattern" ]; then
 		return
 	fi
-	ps aux | grep "$process_pattern" | grep "$WORK_DIR" | grep -E "$port_pattern" | awk '{print $2}' | xargs -I{} kill -9 {} || true
+	ps aux | grep "$process_pattern" | grep -E "$port_pattern" | awk '{print $2}' | xargs -I{} kill -9 {} || true
 }
 
 function kill_pd() {
