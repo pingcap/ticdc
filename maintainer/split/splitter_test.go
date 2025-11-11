@@ -37,7 +37,7 @@ func TestNewSplitter(t *testing.T) {
 	mockPDClient := testutil.NewMockPDAPIClient()
 	appcontext.SetService(appcontext.PDAPIClient, mockPDClient)
 
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	cfg := &config.ChangefeedSchedulerConfig{
 		RegionThreshold:    100,
 		RegionCountPerSpan: 10,
@@ -66,7 +66,7 @@ func TestSplitter_Split_ByRegion(t *testing.T) {
 	cache.regions.ReplaceOrInsert(heartbeatpb.TableSpan{StartKey: []byte("t1_4"), EndKey: []byte("t2_2")}, 5)
 	cache.regions.ReplaceOrInsert(heartbeatpb.TableSpan{StartKey: []byte("t2_2"), EndKey: []byte("t2_3")}, 6)
 
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	cfg := &config.ChangefeedSchedulerConfig{
 		RegionThreshold:    2,
 		RegionCountPerSpan: 10,

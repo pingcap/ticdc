@@ -76,7 +76,7 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 
 // createTestManager creates a test DispatcherManager
 func createTestManager(t *testing.T) *DispatcherManager {
-	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	manager := &DispatcherManager{
 		changefeedID:            changefeedID,
 		dispatcherMap:           newDispatcherMap[*dispatcher.EventDispatcher](),

@@ -385,7 +385,7 @@ func (w *Writer) getLogFileName() string {
 		return w.op.GetLogFileName()
 	}
 	uid := w.uuidGenerator.NewString()
-	if common.DefaultKeyspace == w.cfg.ChangeFeedID.Keyspace() {
+	if common.DefaultKeyspaceNamme == w.cfg.ChangeFeedID.Keyspace() {
 		return fmt.Sprintf(redo.RedoLogFileFormatV1,
 			w.cfg.CaptureID, w.cfg.ChangeFeedID.Name(), w.logType,
 			w.commitTS.Load(), uid, redo.LogEXT)

@@ -25,7 +25,7 @@ import (
 )
 
 func TestRetry(t *testing.T) {
-	backoff := NewBackoff(common.NewChangeFeedIDWithName("test", common.DefaultKeyspace), time.Minute*30, 1)
+	backoff := NewBackoff(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme), time.Minute*30, 1)
 	require.True(t, backoff.ShouldRun())
 
 	// stop the backoff
@@ -98,7 +98,7 @@ func TestRetry(t *testing.T) {
 }
 
 func TestErrorReportedWhenRetrying(t *testing.T) {
-	backoff := NewBackoff(common.NewChangeFeedIDWithName("test", common.DefaultKeyspace), time.Minute*30, 1)
+	backoff := NewBackoff(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme), time.Minute*30, 1)
 	require.True(t, backoff.ShouldRun())
 
 	changefeed, state, err := backoff.CheckStatus(&heartbeatpb.MaintainerStatus{
@@ -131,7 +131,7 @@ func TestErrorReportedWhenRetrying(t *testing.T) {
 }
 
 func TestFailedWhenRetry(t *testing.T) {
-	backoff := NewBackoff(common.NewChangeFeedIDWithName("test", common.DefaultKeyspace), time.Second*30, 1)
+	backoff := NewBackoff(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme), time.Second*30, 1)
 	require.True(t, backoff.ShouldRun())
 
 	mc := clock.NewMock()
@@ -168,7 +168,7 @@ func TestFailedWhenRetry(t *testing.T) {
 }
 
 func TestNormal(t *testing.T) {
-	backoff := NewBackoff(common.NewChangeFeedIDWithName("test", common.DefaultKeyspace), time.Second*10, 1)
+	backoff := NewBackoff(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme), time.Second*10, 1)
 	require.True(t, backoff.ShouldRun())
 
 	changefeed, state, err := backoff.CheckStatus(&heartbeatpb.MaintainerStatus{

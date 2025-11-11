@@ -126,6 +126,13 @@ func (c *Changefeed) GetID() common.ChangeFeedID {
 	return c.ID
 }
 
+func (c *Changefeed) GetKeyspaceID() uint32 {
+	if c == nil {
+		return 0
+	}
+	return c.GetInfo().KeyspaceID
+}
+
 func (c *Changefeed) GetGroupID() replica.GroupID {
 	// currently we only have one scheduler group for changefeed
 	return replica.DefaultGroupID
@@ -245,11 +252,12 @@ func (c *Changefeed) NewAddMaintainerMessage(server node.ID) *messaging.TargetMe
 			CheckpointTs:    c.GetStatus().CheckpointTs,
 			Config:          c.configBytes,
 			IsNewChangefeed: c.isNew,
+			KeyspaceId:      c.GetKeyspaceID(),
 		})
 }
 
 func (c *Changefeed) NewRemoveMaintainerMessage(server node.ID, casCade, removed bool) *messaging.TargetMessage {
-	return RemoveMaintainerMessage(c.ID, server, casCade, removed)
+	return RemoveMaintainerMessage(c.GetKeyspaceID(), c.ID, server, casCade, removed)
 }
 
 func (c *Changefeed) NewCheckpointTsMessage(ts uint64) *messaging.TargetMessage {
@@ -261,14 +269,15 @@ func (c *Changefeed) NewCheckpointTsMessage(ts uint64) *messaging.TargetMessage 
 		})
 }
 
-func RemoveMaintainerMessage(id common.ChangeFeedID, server node.ID, casCade bool, removed bool) *messaging.TargetMessage {
+func RemoveMaintainerMessage(keyspaceID uint32, id common.ChangeFeedID, server node.ID, casCade bool, removed bool) *messaging.TargetMessage {
 	casCade = casCade || removed
 	return messaging.NewSingleTargetMessage(server,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.RemoveMaintainerRequest{
-			Id:      id.ToPB(),
-			Cascade: casCade,
-			Removed: removed,
+			Id:         id.ToPB(),
+			Cascade:    casCade,
+			Removed:    removed,
+			KeyspaceId: keyspaceID,
 		})
 }
 

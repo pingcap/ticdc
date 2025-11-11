@@ -454,8 +454,10 @@ func (c *Controller) handleNonExistentChangefeed(
 			zap.Stringer("sourceNode", from),
 			zap.String("status", common.FormatMaintainerStatus(status)))
 
+		keyspaceID := c.getChangefeed(cfID).GetKeyspaceID()
+
 		// Remove working changefeed from maintainer if it's not in changefeedDB
-		_ = c.messageCenter.SendCommand(changefeed.RemoveMaintainerMessage(cfID, from, true, true))
+		_ = c.messageCenter.SendCommand(changefeed.RemoveMaintainerMessage(keyspaceID, cfID, from, true, true))
 	}
 }
 
@@ -535,7 +537,16 @@ func (c *Controller) FinishBootstrap(runningChangefeeds map[common.ChangeFeedID]
 			continue
 		}
 
-		err := schemaStore.RegisterKeyspace(ctx, id.Keyspace())
+		cfInfo, _, err := c.GetChangefeed(ctx, id.DisplayName)
+		if err != nil {
+			log.Error("get changefeed failed", zap.Any("changefeed", id), zap.Error(err))
+			continue
+		}
+
+		err = schemaStore.RegisterKeyspace(ctx, common.KeyspaceMeta{
+			ID:   cfInfo.KeyspaceID,
+			Name: id.Keyspace(),
+		})
 		if err != nil {
 			log.Error("RegisterKeyspace failed", zap.String("keyspace", id.Keyspace()), zap.Error(err))
 		}
@@ -582,7 +593,8 @@ func (c *Controller) FinishBootstrap(runningChangefeeds map[common.ChangeFeedID]
 			zap.String("changefeed", id.Name()),
 			zap.String("node", rm.nodeID.String()),
 		)
-		_ = c.messageCenter.SendCommand(changefeed.RemoveMaintainerMessage(id, rm.nodeID, true, true))
+		keyspaceID := c.getChangefeed(id).GetKeyspaceID()
+		_ = c.messageCenter.SendCommand(changefeed.RemoveMaintainerMessage(keyspaceID, id, rm.nodeID, true, true))
 	}
 
 	// start operator and scheduler
@@ -828,7 +840,7 @@ func (c *Controller) calculateGlobalGCSafepoint() uint64 {
 	return c.changefeedDB.CalculateGlobalGCSafepoint()
 }
 
-func (c *Controller) calculateKeyspaceGCBarrier() map[string]uint64 {
+func (c *Controller) calculateKeyspaceGCBarrier() map[common.KeyspaceMeta]uint64 {
 	return c.changefeedDB.CalculateKeyspaceGCBarrier()
 }
 

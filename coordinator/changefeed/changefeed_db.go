@@ -319,25 +319,30 @@ func (db *ChangefeedDB) CalculateGlobalGCSafepoint() uint64 {
 }
 
 // CalculateKeyspaceGCBarrier calculates the minimum keyspace-based checkpointTs of all changefeeds that replicating the upstream TiDB cluster.
-func (db *ChangefeedDB) CalculateKeyspaceGCBarrier() map[string]uint64 {
+func (db *ChangefeedDB) CalculateKeyspaceGCBarrier() map[common.KeyspaceMeta]uint64 {
 	db.lock.RLock()
 	defer db.lock.RUnlock()
 
-	keyspaceGCBarrier := make(map[string]uint64)
+	keyspaceGCBarrier := make(map[common.KeyspaceMeta]uint64)
 	for _, cf := range db.changefeeds {
 		info := cf.GetInfo()
 		if info == nil || !info.NeedBlockGC() {
 			continue
 		}
 
-		minCpts := keyspaceGCBarrier[cf.ID.Keyspace()]
+		meta := common.KeyspaceMeta{
+			ID:   info.KeyspaceID,
+			Name: cf.ID.Keyspace(),
+		}
+
+		minCpts := keyspaceGCBarrier[meta]
 		if minCpts == 0 {
 			minCpts = math.MaxUint64
 		}
 
 		checkpointTs := cf.GetLastSavedCheckPointTs()
 		if minCpts > checkpointTs {
-			keyspaceGCBarrier[cf.ID.Keyspace()] = checkpointTs
+			keyspaceGCBarrier[meta] = checkpointTs
 		}
 
 	}

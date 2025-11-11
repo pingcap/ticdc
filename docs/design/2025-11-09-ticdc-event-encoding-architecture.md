@@ -37,25 +37,24 @@ Every serialized event now follows this unified format:
 ┌──────────────────────────────────────────────────────────────────┐
 │                        Serialized Event                          │
 ├─────────────────────────────┬────────────────────────────────────┤
-│      Header (8 bytes)       │       Payload (Variable)           │
+│      Header (16 bytes)       │       Payload (Variable)           │
 ├──────┬──────┬──────┬────────┼────────────────────────────────────┤
 │MAGIC │ TYPE │ VER  │ LENGTH │    Event-specific Data             │
-│ 2B   │  1B  │  1B  │   4B   │    (Business Fields)               │
+│ 4B   │  2B  │  2B  │   8B   │    (Business Fields)               │
 └──────┴──────┴──────┴────────┴────────────────────────────────────┘
-  0xDA   0-12    0-N   uint32      (DispatcherID, Seq, Epoch, etc.)
-  0x7A
+  0xDA7A6A6A   0-65535   0-65535   uint64      (DispatcherID, Seq, Epoch, etc.)
 ```
 
 ### Header Layout
 
-The header is **8 bytes** fixed size with the following fields:
+The header is **16 bytes** fixed size with the following fields:
 
-| Field          | Size | Type   | Description                                    |
-|----------------|------|--------|------------------------------------------------|
-| Magic Bytes    | 2B   | bytes  | `0xDA 0x7A` - Format validation marker         |
-| Event Type     | 1B   | uint8  | Event type identifier (0-12)                   |
-| Version        | 1B   | uint8  | Payload format version (0-255)                 |
-| Payload Length | 4B   | uint32 | Length of payload in bytes (big-endian)        |
+| Field          | Size | Type    | Description                                    |
+|----------------|------|---------|------------------------------------------------|
+| Magic Bytes    | 4B   | bytes   | `0xDA 0x7A 0x6A 0x6A` - Format validation marker |
+| Event Type     | 2B   | uint16  | Event type identifier                          |
+| Version        | 2B   | uint16  | Payload format version                         |
+| Payload Length | 8B   | uint64  | Length of payload in bytes (big-endian)        |
 
 ### Key Design Principles
 

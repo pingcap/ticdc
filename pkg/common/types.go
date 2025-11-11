@@ -27,13 +27,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const (
-	// DefaultKeyspace is the default keyspace value,
-	// all the old changefeed will be put into default keyspace
-	DefaultKeyspace   = "default"
-	DefaultKeyspaceID = 0
-)
-
 type (
 	Ts      = uint64
 	TableID = int64
@@ -196,7 +189,7 @@ func NewChangefeedID(keyspace string) ChangeFeedID {
 	}
 
 	if keyspace == "" {
-		keyspace = DefaultKeyspace
+		keyspace = DefaultKeyspaceNamme
 	}
 
 	cfID.DisplayName = ChangeFeedDisplayName{
@@ -208,7 +201,7 @@ func NewChangefeedID(keyspace string) ChangeFeedID {
 
 func NewChangeFeedIDWithName(name string, keyspace string) ChangeFeedID {
 	if keyspace == "" {
-		keyspace = DefaultKeyspace
+		keyspace = DefaultKeyspaceNamme
 	}
 
 	return ChangeFeedID{
@@ -359,4 +352,21 @@ func StringMode(mode int64) string {
 		return "redo"
 	}
 	return "default"
+}
+
+type KeyspaceMeta struct {
+	ID   uint32
+	Name string
+}
+
+const (
+	// DefaultKeyspaceNamme is the default keyspace value,
+	// all the old changefeed will be put into default keyspace
+	DefaultKeyspaceNamme = "default"
+	DefaultKeyspaceID    = uint32(0)
+)
+
+var DefaultKeyspace = KeyspaceMeta{
+	ID:   DefaultKeyspaceID,
+	Name: DefaultKeyspaceNamme,
 }

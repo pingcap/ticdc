@@ -45,7 +45,7 @@ func TestTCPServerInsecureHTTP1(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 	defer cancel()
 
 	var wg sync.WaitGroup

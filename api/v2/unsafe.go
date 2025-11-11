@@ -19,10 +19,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/api/middleware"
 	"github.com/pingcap/ticdc/logservice/txnutil"
-	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"go.uber.org/zap"
 )
@@ -52,20 +51,12 @@ func (h *OpenAPIV2) ResolveLock(c *gin.Context) {
 		return
 	}
 
-	keyspaceName := GetKeyspaceValueWithDefault(c)
-
-	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 	// The ctx's lifecycle is the same as the HTTP request.
 	// The schema store may use the context to fetch database information asynchronously.
 	// Therefore, we cannot use the context of the HTTP request.
 	// We create a new context here.
 	schemaCxt := context.Background()
-	keyspaceMeta, err := keyspaceManager.LoadKeyspace(schemaCxt, keyspaceName)
-	if err != nil {
-		log.Error("LoadKeyspace failed", zap.String("keyspaceName", keyspaceName), zap.Error(err))
-		_ = c.Error(err)
-		return
-	}
+	keyspaceMeta := middleware.GetKeyspaceFromContext(c)
 
 	txnResolver := txnutil.NewLockerResolver()
 	if err := txnResolver.Resolve(schemaCxt, keyspaceMeta.Id, resolveLockReq.RegionID, resolveLockReq.Ts); err != nil {
@@ -92,15 +83,9 @@ func (h *OpenAPIV2) DeleteServiceGcSafePoint(c *gin.Context) {
 	pdClient := h.server.GetPdClient()
 	defer pdClient.Close()
 
-	keyspaceName := GetKeyspaceValueWithDefault(c)
-	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
-	keyspaceMeta, err := keyspaceManager.LoadKeyspace(c.Request.Context(), keyspaceName)
-	if err != nil {
-		_ = c.Error(cerror.WrapError(cerror.ErrKeyspaceNotFound, err))
-		return
-	}
+	keyspaceMeta := middleware.GetKeyspaceFromContext(c)
 
-	err = gc.UnifyDeleteGcSafepoint(
+	err := gc.UnifyDeleteGcSafepoint(
 		c,
 		pdClient,
 		keyspaceMeta.Id,

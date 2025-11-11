@@ -23,7 +23,7 @@ message Watermark {
     uint64 checkpointTs = 1;  // min checkpointTs of all tables in the DispatcherManager
     uint64 resolvedTs = 2;    // min resolvedTs of all tables in the DispatcherManager
     uint64 seq = 3;           // sequence number, it's used to check whether the watermark is outdated
-    uint64 lastSyncedTs = 4; // last synced ts of all tables in the DispatcherManager, used in /:changefeed_id/synced API
+    uint64 lastSyncedTs = 4;  // last synced ts of all tables in the DispatcherManager, used in /:changefeed_id/synced API
 }
 
 enum Action {
@@ -112,7 +112,7 @@ message MaintainerStatus {
     uint64 checkpoint_ts = 4;
     repeated RunningError err = 5;
     bool bootstrap_done = 6;
-    uint64 lastSyncedTs = 7; // last synced ts of all tables in the changefeed, used in /:changefeed_id/synced API
+    uint64 lastSyncedTs = 7;  // last synced ts of all tables in the changefeed, used in /:changefeed_id/synced API
 }
 
 message CoordinatorBootstrapRequest {
@@ -128,12 +128,14 @@ message AddMaintainerRequest {
     bytes config = 2;
     uint64 checkpoint_ts = 3;
     bool is_new_changefeed = 4;  // only true when the changefeed is new created or resumed with overwriteCheckpointTs
+    uint32 keyspace_id = 5;
 }
 
 message RemoveMaintainerRequest {
     ChangefeedID id = 1;
     bool cascade = 2;
     bool removed = 3;
+    uint32 keyspace_id = 4;
 }
 
 message MaintainerBootstrapRequest {
@@ -143,6 +145,7 @@ message MaintainerBootstrapRequest {
     DispatcherID table_trigger_event_dispatcher_id = 4;
     bool is_new_changefeed = 5;                               // only true when the changefeed is new created or resumed with overwriteCheckpointTs
     DispatcherID redo_table_trigger_event_dispatcher_id = 6;  // only for redo
+    uint32 keyspace_id = 7;
 }
 
 message MaintainerBootstrapResponse {

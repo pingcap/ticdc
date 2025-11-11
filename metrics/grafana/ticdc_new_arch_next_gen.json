@@ -1048,9 +1048,9 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "ticdc_dynamic_stream_memory_usage{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", component=~\"event-collector\", instance=~\"$ticdc_instance\"}",
+              "expr": "sum(ticdc_dynamic_stream_memory_usage{k8s_cluster=~\"$k8s_cluster\", tidb_cluster_id=~\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", area=~\"$changefeed\", instance=~\"$ticdc_instance\", module=~\"event-collector.*\"}) by (keyspace_name, area, instance, module, type)",
               "interval": "",
-              "legendFormat": "{{area}}-{{instance}}-memory-{{component}}-{{type}}",
+              "legendFormat": "{{keyspace_name}}-{{area}}-{{instance}}-{{module}}-{{type}}",
               "refId": "A"
             }
           ],
@@ -1210,7 +1210,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The lag between changefeed resolved ts and the lac1 ts of upstream TiDB.",
+          "description": "The lag between maintainer resolved ts and PD TSO of upstream TiDB.",
           "fieldConfig": {
             "defaults": {
               "links": []
@@ -1439,21 +1439,21 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "ticdc_event_store_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}",
+              "expr": "sum(ticdc_event_store_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}) by (instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "Event-Store-{{type}}-resolvedTs-Lag-{{instance}}",
-              "refId": "B"
+              "refId": "A"
             },
             {
               "exemplar": true,
-              "expr": "ticdc_event_service_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}",
+              "expr": "sum(ticdc_event_service_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}) by (instance, type)",
               "format": "time_series",
               "hide": false,
               "interval": "",
               "intervalFactor": 1,
               "legendFormat": "Event-Service-{{type}}-resolvedTs-Lag-{{instance}}",
-              "refId": "C"
+              "refId": "B"
             }
           ],
           "thresholds": [],
@@ -3983,7 +3983,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The lag between changefeed checkpoint ts and the lac1 ts of upstream TiDB.",
+          "description": "The lag between changefeed checkpoint ts and PD TSO of upstream TiDB.",
           "fieldConfig": {
             "defaults": {
               "links": []
@@ -4086,7 +4086,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The lag between changefeed resolved ts and the lac1 ts of upstream TiDB.",
+          "description": "The lag between changefeed resolved ts and PD TSO of upstream TiDB.",
           "fieldConfig": {
             "defaults": {
               "links": []
@@ -4212,7 +4212,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The lag between changefeed checkpoint ts and the lac1 ts of upstream TiDB.",
+          "description": "The lag between changefeed checkpoint ts and PD TSO of upstream TiDB.",
           "fieldConfig": {
             "defaults": {
               "links": []
@@ -4309,7 +4309,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The lag between changefeed resolved ts and the lac1 ts of upstream TiDB.",
+          "description": "The lag between changefeed resolved ts and PD TSO of upstream TiDB.",
           "fieldConfig": {
             "defaults": {
               "links": []
@@ -6379,7 +6379,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The lag between changefeed checkpoint ts and the lac1 ts of upstream TiDB.",
+          "description": "The lag between maintainer checkpoint ts and PD TSO of upstream TiDB.",
           "fieldConfig": {
             "defaults": {
               "links": []
@@ -6482,7 +6482,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The lag between changefeed resolved ts and the lac1 ts of upstream TiDB.",
+          "description": "The lag between maintainer resolved ts and PD TSO of upstream TiDB.",
           "fieldConfig": {
             "defaults": {
               "links": []
@@ -7276,9 +7276,9 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "ticdc_dynamic_stream_memory_usage{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", component=~\"log-puller\", instance=~\"$ticdc_instance\"}",
+              "expr": "sum(ticdc_dynamic_stream_memory_usage{k8s_cluster=~\"$k8s_cluster\", tidb_cluster_id=~\"$tidb_cluster\", instance=~\"$ticdc_instance\", module=~\"log-puller\"}) by (instance, type)",
               "interval": "",
-              "legendFormat": "{{area}}-{{instance}}-memory-{{component}}-{{type}}",
+              "legendFormat": "{{instance}}-{{type}}",
               "refId": "A"
             }
           ],
@@ -10661,7 +10661,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "ticdc_event_service_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}",
+              "expr": "sum(ticdc_event_service_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}) by (instance, type)",
               "format": "time_series",
               "hide": false,
               "interval": "",

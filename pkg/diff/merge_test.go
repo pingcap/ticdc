@@ -15,18 +15,21 @@ package diff
 
 import (
 	"container/heap"
-	"testing"
 
+	"github.com/pingcap/check"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/util/dbutil"
 	"github.com/pingcap/tidb/pkg/util/dbutil/dbutiltest"
-	"github.com/stretchr/testify/require"
 )
 
-func TestMerge(t *testing.T) {
+var _ = check.Suite(&testMergerSuite{})
+
+type testMergerSuite struct{}
+
+func (s *testMergerSuite) TestMerge(c *check.C) {
 	createTableSQL := "create table test.test(id int(24), name varchar(24), age int(24), primary key(id, name));"
 	tableInfo, err := dbutiltest.GetTableInfoBySQL(createTableSQL, parser.New())
-	require.NoError(t, err)
+	c.Assert(err, check.IsNil)
 
 	_, orderKeyCols := dbutil.SelectUniqueOrderKey(tableInfo)
 	ids := []string{"3", "2", "2", "4", "1", "NULL"}
@@ -57,7 +60,7 @@ func TestMerge(t *testing.T) {
 		rowData := heap.Pop(rowDatas).(RowData)
 		id := string(rowData.Data["id"].Data)
 		name := string(rowData.Data["name"].Data)
-		require.Equal(t, expectIDs[i], id)
-		require.Equal(t, expectNames[i], name)
+		c.Assert(id, check.Equals, expectIDs[i])
+		c.Assert(name, check.Equals, expectNames[i])
 	}
 }

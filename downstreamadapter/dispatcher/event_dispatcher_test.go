@@ -65,7 +65,7 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Eve
 	var redoTs atomic.Uint64
 	redoTs.Store(math.MaxUint64)
 	sharedInfo := NewSharedInfo(
-		common.NewChangefeedID(common.DefaultKeyspace),
+		common.NewChangefeedID(common.DefaultKeyspaceNamme),
 		"system",
 		false,
 		false,
@@ -780,7 +780,7 @@ func TestDispatcherSplittableCheck(t *testing.T) {
 
 	// Create shared info with enableSplittableCheck=true
 	sharedInfo := NewSharedInfo(
-		common.NewChangefeedID(common.DefaultKeyspace),
+		common.NewChangefeedID(common.DefaultKeyspaceNamme),
 		"system",
 		false,
 		false,
@@ -888,7 +888,7 @@ func TestDispatcher_SkipDMLAsStartTs_FilterCorrectly(t *testing.T) {
 	var redoTs atomic.Uint64
 	redoTs.Store(math.MaxUint64)
 	sharedInfo := NewSharedInfo(
-		common.NewChangefeedID(common.DefaultKeyspace),
+		common.NewChangefeedID(common.DefaultKeyspaceNamme),
 		"system",
 		false,
 		false,
@@ -966,7 +966,7 @@ func TestDispatcher_SkipDMLAsStartTs_Disabled(t *testing.T) {
 	var redoTs atomic.Uint64
 	redoTs.Store(math.MaxUint64)
 	sharedInfo := NewSharedInfo(
-		common.NewChangefeedID(common.DefaultKeyspace),
+		common.NewChangefeedID(common.DefaultKeyspaceNamme),
 		"system",
 		false,
 		false,

@@ -520,7 +520,7 @@ func getChangefeedMatcher(changeFeedID common.ChangeFeedID) string {
 }
 
 func getDeletedChangefeedMarker(changeFeedID common.ChangeFeedID) string {
-	if changeFeedID.Keyspace() == common.DefaultKeyspace {
+	if changeFeedID.Keyspace() == common.DefaultKeyspaceNamme {
 		return fmt.Sprintf("delete_%s", changeFeedID.Name())
 	}
 	return fmt.Sprintf("delete_%s_%s", changeFeedID.Keyspace(), changeFeedID.Name())
