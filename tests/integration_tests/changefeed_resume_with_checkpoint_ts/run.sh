@@ -130,6 +130,7 @@ function resume_changefeed_in_failed_state() {
 }
 
 trap stop_tidb_cluster EXIT
+trap "collect_logs $WORK_DIR" EXIT
 
 if [ "$SINK_TYPE" == "mysql" ]; then
 	prepare

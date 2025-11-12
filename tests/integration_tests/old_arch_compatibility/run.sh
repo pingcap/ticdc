@@ -185,6 +185,7 @@ run() {
 }
 
 trap stop_tidb_cluster EXIT
+trap "collect_logs $WORK_DIR" EXIT
 run "$@"
 check_logs $BASE_WORK_DIR/basic
 check_logs $BASE_WORK_DIR/scheduler

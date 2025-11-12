@@ -48,6 +48,7 @@ EOF
 }
 
 trap stop_tidb_cluster EXIT
+trap "collect_logs $WORK_DIR" EXIT
 # storage and pulsar is not supported yet.
 # TODO(dongmen): enable pulsar in the future.
 if [ "$SINK_TYPE" != "storage" ]; then

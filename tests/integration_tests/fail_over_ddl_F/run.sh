@@ -304,6 +304,7 @@ function failOverCaseF-4() {
 }
 
 trap stop_tidb_cluster EXIT
+trap "collect_logs $WORK_DIR" EXIT
 failOverCaseF-1
 failOverCaseF-2
 failOverCaseF-3
