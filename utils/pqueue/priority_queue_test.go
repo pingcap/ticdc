@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package logpuller
+package pqueue
 
 import (
 	"context"
@@ -20,51 +20,27 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/stretchr/testify/require"
-	"github.com/tikv/client-go/v2/oracle"
-	"github.com/tikv/client-go/v2/tikv"
 )
 
 // mockPriorityTask is a simple mock implementation of PriorityTask for testing
 type mockPriorityTask struct {
 	priority    int
 	heapIndex   int
-	regionInfo  regionInfo
 	description string
 }
 
 func newMockPriorityTask(priority int, description string) *mockPriorityTask {
-	// Create a minimal regionInfo for testing
-	verID := tikv.NewRegionVerID(1, 1, 1)
-	span := heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("z")}
-
-	// Create a subscribedSpan with atomic resolvedTs
-	subscribedSpan := &subscribedSpan{
-		resolvedTs: atomic.Uint64{},
-	}
-	subscribedSpan.resolvedTs.Store(oracle.GoTimeToTS(time.Now()))
-
-	regionInfo := regionInfo{
-		verID:          verID,
-		span:           span,
-		subscribedSpan: subscribedSpan,
-	}
 
 	return &mockPriorityTask{
 		priority:    priority,
 		heapIndex:   0,
-		regionInfo:  regionInfo,
 		description: description,
 	}
 }
 
 func (m *mockPriorityTask) Priority() int {
 	return m.priority
-}
-
-func (m *mockPriorityTask) GetRegionInfo() regionInfo {
-	return m.regionInfo
 }
 
 func (m *mockPriorityTask) SetHeapIndex(index int) {
@@ -429,65 +405,5 @@ func TestPriorityQueue_EmptyQueueOperations(t *testing.T) {
 
 	task2, err := pq.Pop(ctx)
 	require.Nil(t, task2)
-	require.Error(t, err)
-}
-
-func TestPriorityQueue_RealPriorityTaskIntegration(t *testing.T) {
-	pq := NewPriorityQueue()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	currentTs := oracle.GoTimeToTS(time.Now())
-
-	// Create real priority tasks with different types
-	verID := tikv.NewRegionVerID(1, 1, 1)
-	span := heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("z")}
-
-	subscribedSpan := &subscribedSpan{
-		resolvedTs: atomic.Uint64{},
-	}
-	subscribedSpan.resolvedTs.Store(oracle.GoTimeToTS(time.Now().Add(-time.Second)))
-
-	regionInfo := regionInfo{
-		verID:          verID,
-		span:           span,
-		subscribedSpan: subscribedSpan,
-	}
-
-	// Create tasks with different priorities
-	errorTask := NewRegionPriorityTask(TaskHighPrior, regionInfo, currentTs+1)
-	highTask := NewRegionPriorityTask(TaskHighPrior, regionInfo, currentTs)
-	lowTask := NewRegionPriorityTask(TaskLowPrior, regionInfo, currentTs)
-
-	// Add tasks in non-priority order
-	pq.Push(lowTask)
-	pq.Push(errorTask)
-	pq.Push(highTask)
-
-	require.Equal(t, 3, pq.Len())
-
-	// Pop tasks and verify they come out in priority order
-	// TaskRegionError should have highest priority (lowest value)
-	first, err := pq.Pop(ctx)
-	require.NoError(t, err)
-	require.NotNil(t, first)
-	require.Equal(t, TaskHighPrior, first.(*regionPriorityTask).taskType)
-
-	second, err := pq.Pop(ctx)
-	require.NoError(t, err)
-	require.NotNil(t, second)
-	require.Equal(t, TaskHighPrior, second.(*regionPriorityTask).taskType)
-
-	third, err := pq.Pop(ctx)
-	require.NoError(t, err)
-	require.NotNil(t, third)
-	require.Equal(t, TaskLowPrior, third.(*regionPriorityTask).taskType)
-
-	require.Equal(t, 0, pq.Len())
-
-	pq.Close()
-	cancel()
-	task, err := pq.Pop(ctx)
-	require.Nil(t, task)
 	require.Error(t, err)
 }

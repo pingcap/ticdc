@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package logpuller
+package pqueue
 
 import (
 	"context"
@@ -20,6 +20,17 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/utils/heap"
 )
+
+// PriorityTask is the interface for priority-based tasks
+// It implements heap.Item interface
+type PriorityTask interface {
+	// Priority returns the priority value, lower value means higher priority
+	Priority() int
+	// heap.Item interface methods
+	SetHeapIndex(int)
+	GetHeapIndex() int
+	LessThan(PriorityTask) bool
+}
 
 // PriorityQueue is a thread-safe priority queue for region tasks
 // It integrates a signal channel to support blocking operations

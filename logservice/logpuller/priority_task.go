@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/pingcap/ticdc/utils/pqueue"
 	"github.com/tikv/client-go/v2/oracle"
 )
 
@@ -42,21 +43,6 @@ func (t TaskType) String() string {
 	return fmt.Sprintf("%d", t)
 }
 
-// PriorityTask is the interface for priority-based tasks
-// It implements heap.Item interface
-type PriorityTask interface {
-	// Priority returns the priority value, lower value means higher priority
-	Priority() int
-
-	// GetRegionInfo returns the underlying regionInfo
-	GetRegionInfo() regionInfo
-
-	// heap.Item interface methods
-	SetHeapIndex(int)
-	GetHeapIndex() int
-	LessThan(PriorityTask) bool
-}
-
 // regionPriorityTask implements PriorityTask interface
 type regionPriorityTask struct {
 	taskType   TaskType
@@ -67,7 +53,7 @@ type regionPriorityTask struct {
 }
 
 // NewRegionPriorityTask creates a new priority task for region
-func NewRegionPriorityTask(taskType TaskType, regionInfo regionInfo, currentTs uint64) PriorityTask {
+func NewRegionPriorityTask(taskType TaskType, regionInfo regionInfo, currentTs uint64) pqueue.PriorityTask {
 	return &regionPriorityTask{
 		taskType:   taskType,
 		createTime: time.Now(),
@@ -122,6 +108,6 @@ func (pt *regionPriorityTask) GetHeapIndex() int {
 
 // LessThan implements heap.Item interface
 // Returns true if this task has higher priority (lower priority value) than the other task
-func (pt *regionPriorityTask) LessThan(other PriorityTask) bool {
+func (pt *regionPriorityTask) LessThan(other pqueue.PriorityTask) bool {
 	return pt.Priority() < other.Priority()
 }
