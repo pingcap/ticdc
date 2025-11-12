@@ -303,7 +303,25 @@ func (c *eventBroker) runScanWorker(ctx context.Context, taskChan chan scanTask)
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case task := <-taskChan:
-			c.doScan(ctx, task)
+
+			priorityTask, err := task.changefeedStat.priorityQueue.Pop(ctx)
+			if err != nil {
+				if ctx.Err() != nil {
+					return context.Cause(ctx)
+				}
+				log.Warn("failed to pop task from priority queue", zap.Stringer("changefeedID", task.changefeedStat.changefeedID), zap.Stringer("dispatcherID", task.id), zap.Error(err))
+				task.isTaskScanning.Store(false)
+				continue
+			}
+
+			dispatcherTask, ok := priorityTask.(*dispatcherStat)
+			if !ok {
+				log.Warn("unexpected task type from priority queue", zap.Any("task", priorityTask))
+				task.isTaskScanning.Store(false)
+				continue
+			}
+
+			c.doScan(ctx, dispatcherTask)
 		}
 	}
 }
@@ -893,15 +911,20 @@ func (c *eventBroker) pushTask(d *dispatcherStat, force bool) {
 	}
 
 	if force {
+		d.changefeedStat.priorityQueue.PushBlocking(d)
 		c.taskChan[d.scanWorkerIndex] <- d
-	} else {
-		timer := time.NewTimer(time.Millisecond * 10)
-		select {
-		case c.taskChan[d.scanWorkerIndex] <- d:
-		case <-timer.C:
-			d.isTaskScanning.Store(false)
-		}
+		return
 	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	err := d.changefeedStat.priorityQueue.PushWithContext(ctx, d)
+	if err != nil {
+		d.isTaskScanning.Store(false)
+		return
+	}
+	c.taskChan[d.scanWorkerIndex] <- d
+
 }
 
 func (c *eventBroker) getDispatcher(id common.DispatcherID) *atomic.Pointer[dispatcherStat] {

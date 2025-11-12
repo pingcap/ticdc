@@ -65,6 +65,27 @@ func (pq *PriorityQueue) Push(task PriorityTask) {
 	}
 }
 
+func (pq *PriorityQueue) PushBlocking(task PriorityTask) {
+	pq.signal <- struct{}{}
+	pq.mu.Lock()
+	defer pq.mu.Unlock()
+	pq.heap.AddOrUpdate(task)
+}
+
+// PushWithContext adds a task to the priority queue and waits until the signal
+// is delivered or the context times out.
+func (pq *PriorityQueue) PushWithContext(ctx context.Context, task PriorityTask) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case pq.signal <- struct{}{}:
+		pq.mu.Lock()
+		defer pq.mu.Unlock()
+		pq.heap.AddOrUpdate(task)
+		return nil
+	}
+}
+
 // Pop removes and returns the highest priority task
 // This is a blocking operation that waits for a signal
 // Returns nil if the context is cancelled
@@ -134,4 +155,12 @@ func (pq *PriorityQueue) Close() {
 	for pq.Len() > 0 {
 		pq.TryPop()
 	}
+}
+
+// Remove removes a task from the queue if it exists.
+func (pq *PriorityQueue) Remove(task PriorityTask) bool {
+	pq.mu.Lock()
+	defer pq.mu.Unlock()
+
+	return pq.heap.Remove(task)
 }
