@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
+	"golang.org/x/time/rate"
 )
 
 const (
@@ -414,17 +415,23 @@ func (c *resolvedTsCache) reset() {
 	c.len = 0
 }
 
+const minScanLimitRate = 1024 // 1KB/s
+
 type changefeedStatus struct {
 	changefeedID common.ChangeFeedID
 
 	dispatchers sync.Map // common.DispatcherID -> *atomic.Pointer[dispatcherStat]
 
 	availableMemoryQuota sync.Map // nodeID -> atomic.Uint64 (memory quota in bytes)
+	scanLimit            *rate.Limiter
 }
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
+	scanLimit := rate.NewLimiter(rate.Limit(minScanLimitRate), 1)
 	return &changefeedStatus{
-		changefeedID: changefeedID,
+		changefeedID:         changefeedID,
+		scanLimit:            scanLimit,
+		availableMemoryQuota: sync.Map{},
 	}
 }
 

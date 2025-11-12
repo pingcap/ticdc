@@ -15,6 +15,7 @@ package eventservice
 
 import (
 	"context"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -1165,9 +1166,11 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 	}
 
 	holder := make(map[common.GID]uint64, len(availables))
+	popHolder := make(map[common.GID]uint64, len(availables))
 	dispatcherAvailable := make(map[common.DispatcherID]uint64, len(availables))
 	for _, item := range availables {
 		holder[item.Gid] = item.Available
+		popHolder[item.Gid] = item.PopSizeLast1s
 		for dispatcherID, available := range item.DispatcherAvailable {
 			dispatcherAvailable[dispatcherID] = available
 		}
@@ -1180,6 +1183,13 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 		if ok {
 			changefeed.availableMemoryQuota.Store(from, atomic.NewUint64(available))
 			metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(available))
+		}
+
+		popSize, popOK := popHolder[changefeedID.ID()]
+		if popOK {
+			limit := math.Min(float64(popSize)*1.5, float64(minScanLimitRate))
+			changefeed.scanLimit.SetLimit(rate.Limit(limit))
+			metrics.EventServiceScanLimitRateVec.WithLabelValues(changefeedID.String()).Set(float64(limit))
 		}
 		return true
 	})
