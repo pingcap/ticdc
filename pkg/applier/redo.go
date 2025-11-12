@@ -217,22 +217,22 @@ func (ra *RedoApplier) consumeLogs(ctx context.Context) error {
 	return errApplyFinished
 }
 
-// applyDDL will check the ddl and replicate the previous dmls and ddl to downstream
+// applyDDL will check the ddl and replicate the previous dmls and ddl to downstream.
 //
 // Before appling DDL, we have to query the start-ts of the table,
 // because some dispatchers has replicates some ddls which commit-ts is bigger than the redo meta checkpoint-ts.
-// see https://github.com/pingcap/ticdc/issues/1061#issuecomment-3266230636
+// see https://github.com/pingcap/ticdc/issues/1061#issuecomment-3266230636.
 //
 // we could query start-ts of table by specified table id according DDL type.
-// For the cross table DDL, we could query the table id of table trigger event dispatcher
-// For the other DDL, we just query the block tables' id
-// When some ddls are ignored, we also ignored the dml events of their drop tables
-// This is because some cross table DDLs maybe flush the dmls by mistake
+// For the cross table DDL, we could query the table id of table trigger event dispatcher.
+// For the other DDL, we just query the block tables' id.
+// When some ddls are ignored, we also ignored the dml events of their drop tables.
+// This is because some dmls maybe flush by mistake.
 //
 // For example:
 //
 // DML + DROP TABLE: If the drop table ddl has replicated the downstream,
-// we can't query the start-ts and have to drop these dml events
+// we can't query the start-ts and have to drop these dml events.
 func (ra *RedoApplier) applyDDL(
 	ctx context.Context, ddl *commonEvent.RedoDDLEvent, checkpointTs uint64,
 ) error {
