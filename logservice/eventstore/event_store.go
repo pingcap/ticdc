@@ -453,8 +453,9 @@ func (e *eventStore) RegisterDispatcher(
 	stat.resolvedTs.Store(startTs)
 
 	wrappedNotifier := func(resolvedTs uint64, latestCommitTs uint64) {
-		util.CompareAndMonotonicIncrease(&stat.resolvedTs, resolvedTs)
-		notifier(resolvedTs, latestCommitTs)
+		if util.CompareAndMonotonicIncrease(&stat.resolvedTs, resolvedTs) {
+			// notifier(resolvedTs, latestCommitTs)
+		}
 	}
 
 	e.dispatcherMeta.Lock()
