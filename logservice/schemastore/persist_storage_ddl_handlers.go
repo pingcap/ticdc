@@ -524,17 +524,15 @@ func buildPersistedDDLEventCommon(args buildPersistedDDLEventFuncArgs) Persisted
 	job := args.job
 	// TODO: for ActionAddFullTextIndex and ActionCreateHybridIndex,
 	// the parser cannot recogonize the query now, so we keep the original query in job.Query.
-	if job.Type == filter.ActionAddFullTextIndex || job.Type == filter.ActionCreateHybridIndex {
-		query = job.Query
-	} else {
-		// only in unit test job.Query may be empty
-		if job.Query != "" {
-			var err error
-			query, err = transformDDLJobQuery(job)
-			if err != nil {
-				log.Panic("transformDDLJobQuery failed", zap.Error(err))
-			}
+	// only in unit test job.Query may be empty
+	if job.Type != filter.ActionAddFullTextIndex && job.Type != filter.ActionCreateHybridIndex && job.Query != "" {
+		var err error
+		query, err = transformDDLJobQuery(job)
+		if err != nil {
+			log.Panic("transformDDLJobQuery failed", zap.Error(err))
 		}
+	} else {
+		query = job.Query
 	}
 
 	// Note: if a ddl involve multiple tables, job.TableID is different with job.BinlogInfo.TableInfo.ID
