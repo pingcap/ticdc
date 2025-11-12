@@ -468,6 +468,15 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTableForTiDB,
 	},
+	filter.ActionCreateHybridIndex: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTableForTiDB,
+	},
 }
 
 func isPartitionTable(tableInfo *model.TableInfo) bool {
