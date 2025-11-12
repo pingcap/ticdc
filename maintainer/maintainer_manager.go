@@ -173,10 +173,7 @@ func (m *Manager) Close(_ context.Context) error {
 	// cancel the maintainers, but keep the related metrics
 	m.maintainers.Range(func(key, value interface{}) bool {
 		maintainer := value.(*Maintainer)
-		maintainer.cancel()
-		for _, handler := range maintainer.controller.taskHandles {
-			handler.Cancel()
-		}
+		maintainer.Close()
 		return true
 	})
 	return nil
