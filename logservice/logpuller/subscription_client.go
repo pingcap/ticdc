@@ -1048,19 +1048,19 @@ func (s *subscriptionClient) newSubscribedSpan(
 	rt.resolvedTs.Store(startTs)
 
 	rt.tryResolveLock = func(regionID uint64, state *regionlock.LockedRangeState) {
-		targetTs := rt.staleLocksTargetTs.Load()
-		if state.ResolvedTs.Load() < targetTs && state.Initialized.Load() {
-			select {
-			case <-s.ctx.Done():
-			case s.resolveLockTaskCh <- resolveLockTask{
-				keyspaceID: span.KeyspaceID,
-				regionID:   regionID,
-				targetTs:   targetTs,
-				state:      state,
-				create:     time.Now(),
-			}:
-			}
-		}
+		// targetTs := rt.staleLocksTargetTs.Load()
+		// if state.ResolvedTs.Load() < targetTs && state.Initialized.Load() {
+		// 	select {
+		// 	case <-s.ctx.Done():
+		// 	case s.resolveLockTaskCh <- resolveLockTask{
+		// 		keyspaceID: span.KeyspaceID,
+		// 		regionID:   regionID,
+		// 		targetTs:   targetTs,
+		// 		state:      state,
+		// 		create:     time.Now(),
+		// 	}:
+		// 	}
+		// }
 	}
 	return rt
 }
