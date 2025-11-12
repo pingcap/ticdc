@@ -734,7 +734,7 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 	}
 	// CREATE HYBRID INDEX i_idx ON t(b, c, d, e, g) PARAMETER
 	// TODO: remove this after CREATE HYBRID INDEX has a dedicated action type in tidb repo
-	if strings.Contains(strings.ToUpper(job.Query), "CREATE HYBRID INDEX") {
+	if strings.HasPrefix(strings.TrimSpace(strings.ToUpper(job.Query)), "CREATE HYBRID INDEX") {
 		job.Type = filter.ActionCreateHybridIndex
 	}
 
