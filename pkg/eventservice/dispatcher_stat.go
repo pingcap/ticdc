@@ -465,7 +465,7 @@ type changefeedStatus struct {
 }
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
-	scanLimit := rate.NewLimiter(rate.Limit(minScanLimitRate), 1)
+	scanLimit := rate.NewLimiter(rate.Limit(minScanLimitRate), minScanLimitRate)
 	return &changefeedStatus{
 		changefeedID:         changefeedID,
 		scanLimit:            scanLimit,

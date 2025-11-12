@@ -916,7 +916,7 @@ func (c *eventBroker) pushTask(d *dispatcherStat, force bool) {
 		if force {
 			log.Warn("priority queue reject forced scan task", zap.Stringer("dispatcherID", d.id))
 		} else {
-			log.Debug("skip enqueue scan task because priority queue is full and task has lower priority",
+			log.Info("fizz skip enqueue scan task because priority queue is full and task has lower priority",
 				zap.Stringer("dispatcherID", d.id))
 		}
 		d.isTaskScanning.Store(false)
@@ -1213,11 +1213,12 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 			changefeed.availableMemoryQuota.Store(from, atomic.NewUint64(available))
 			metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(available))
 		}
-
 		popSize, popOK := popHolder[changefeedID.ID()]
 		if popOK {
-			limit := math.Min(float64(popSize)*1.5, float64(minScanLimitRate))
+			limit := math.Max(float64(popSize)*1.5, float64(minScanLimitRate))
 			changefeed.scanLimit.SetLimit(rate.Limit(limit))
+			changefeed.scanLimit.SetBurst(int(limit))
+
 			metrics.EventServiceScanLimitRateVec.WithLabelValues(changefeedID.String()).Set(float64(limit))
 		}
 		return true
