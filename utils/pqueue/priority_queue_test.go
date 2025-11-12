@@ -86,6 +86,50 @@ func TestPriorityQueue_Push(t *testing.T) {
 	}
 }
 
+func TestPriorityQueue_TryPushWithEviction(t *testing.T) {
+	pq := NewBoundedPriorityQueue(2)
+
+	task1 := newMockPriorityTask(10, "task1")
+	added, evicted := pq.TryPush(task1)
+	require.True(t, added)
+	require.Nil(t, evicted)
+
+	task2 := newMockPriorityTask(20, "task2")
+	added, evicted = pq.TryPush(task2)
+	require.True(t, added)
+	require.Nil(t, evicted)
+
+	// Queue is full now. Pushing a better priority task should evict the worst one.
+	task3 := newMockPriorityTask(5, "task3")
+	added, evicted = pq.TryPush(task3)
+	require.True(t, added)
+	require.NotNil(t, evicted)
+	require.Equal(t, "task2", evicted.(*mockPriorityTask).description)
+	require.Equal(t, 2, pq.Len())
+
+	// Pushing a worse task should be rejected.
+	task4 := newMockPriorityTask(30, "task4")
+	added, evicted = pq.TryPush(task4)
+	require.False(t, added)
+	require.Nil(t, evicted)
+	require.Equal(t, 2, pq.Len())
+
+	// Updating an existing task should succeed without eviction.
+	task1.priority = 1
+	added, evicted = pq.TryPush(task1)
+	require.True(t, added)
+	require.Nil(t, evicted)
+
+	// The queue should still contain the best two tasks: task1 and task3.
+	ctx := context.Background()
+	top, err := pq.Pop(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "task1", top.(*mockPriorityTask).description)
+	top, err = pq.Pop(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "task3", top.(*mockPriorityTask).description)
+}
+
 func TestPriorityQueue_Peek(t *testing.T) {
 	pq := NewPriorityQueue()
 

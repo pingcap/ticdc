@@ -470,7 +470,7 @@ func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
 		changefeedID:         changefeedID,
 		scanLimit:            scanLimit,
 		availableMemoryQuota: sync.Map{},
-		priorityQueue:        pqueue.NewPriorityQueue(),
+		priorityQueue:        pqueue.NewBoundedPriorityQueue(1024),
 	}
 }
 

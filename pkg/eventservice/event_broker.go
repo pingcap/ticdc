@@ -850,6 +850,7 @@ func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context, tickInter
 	isInactiveDispatcher := func(d *dispatcherStat) bool {
 		return d.isHandshaked() && time.Since(time.Unix(d.lastReceivedHeartbeatTime.Load(), 0)) > heartbeatTimeout
 	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -910,19 +911,24 @@ func (c *eventBroker) pushTask(d *dispatcherStat, force bool) {
 		return
 	}
 
-	if force {
-		d.changefeedStat.priorityQueue.PushBlocking(d)
-		c.taskChan[d.scanWorkerIndex] <- d
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
-	defer cancel()
-	err := d.changefeedStat.priorityQueue.PushWithContext(ctx, d)
-	if err != nil {
+	added, evicted := d.changefeedStat.priorityQueue.TryPush(d)
+	if !added {
+		if force {
+			log.Warn("priority queue reject forced scan task", zap.Stringer("dispatcherID", d.id))
+		} else {
+			log.Debug("skip enqueue scan task because priority queue is full and task has lower priority",
+				zap.Stringer("dispatcherID", d.id))
+		}
 		d.isTaskScanning.Store(false)
 		return
 	}
+
+	if evicted != nil {
+		if evictedDispatcher, ok := evicted.(*dispatcherStat); ok && evictedDispatcher != d {
+			evictedDispatcher.isTaskScanning.Store(false)
+		}
+	}
+
 	c.taskChan[d.scanWorkerIndex] <- d
 
 }

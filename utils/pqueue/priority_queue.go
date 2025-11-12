@@ -35,55 +35,63 @@ type PriorityTask interface {
 // PriorityQueue is a thread-safe priority queue for region tasks
 // It integrates a signal channel to support blocking operations
 type PriorityQueue struct {
-	mu   sync.Mutex
-	heap *heap.Heap[PriorityTask]
+	mu       sync.Mutex
+	heap     *heap.Heap[PriorityTask]
+	capacity int
 
 	// signal channel for blocking operations
 	signal chan struct{}
 }
 
-// NewPriorityQueue creates a new priority queue
+const defaultSignalSize = 1024
+
+// NewPriorityQueue creates an unbounded priority queue.
 func NewPriorityQueue() *PriorityQueue {
+	return NewBoundedPriorityQueue(0)
+}
+
+// NewBoundedPriorityQueue creates a priority queue with a maximum size limit.
+// When limit <= 0, the priority queue behaves as unbounded.
+func NewBoundedPriorityQueue(limit int) *PriorityQueue {
+	if limit < 0 {
+		panic("priority queue capacity must not be negative")
+	}
+	signalSize := defaultSignalSize
+	if limit > 0 {
+		if limit < defaultSignalSize {
+			signalSize = limit
+		}
+		if signalSize == 0 {
+			signalSize = 1
+		}
+	}
 	return &PriorityQueue{
-		heap:   heap.NewHeap[PriorityTask](),
-		signal: make(chan struct{}, 1024),
+		heap:     heap.NewHeap[PriorityTask](),
+		signal:   make(chan struct{}, signalSize),
+		capacity: limit,
 	}
 }
 
-// Push adds a task to the priority queue and sends a signal
-// This is a non-blocking operation
+// Push adds a task to the priority queue and sends a signal.
+// This helper keeps backward compatibility and does not enforce queue capacity.
 func (pq *PriorityQueue) Push(task PriorityTask) {
 	pq.mu.Lock()
 	pq.heap.AddOrUpdate(task)
 	pq.mu.Unlock()
-
-	// Send signal to notify waiting consumers
-	select {
-	case pq.signal <- struct{}{}:
-	default:
-		// Signal channel is full, ignore
-	}
+	pq.notify()
 }
 
-func (pq *PriorityQueue) PushBlocking(task PriorityTask) {
-	pq.signal <- struct{}{}
+// TryPush inserts the task into the queue while respecting the capacity limit.
+// It returns whether the task remains in the queue and, if an existing task was
+// evicted to make space, the evicted task.
+func (pq *PriorityQueue) TryPush(task PriorityTask) (bool, PriorityTask) {
 	pq.mu.Lock()
-	defer pq.mu.Unlock()
-	pq.heap.AddOrUpdate(task)
-}
-
-// PushWithContext adds a task to the priority queue and waits until the signal
-// is delivered or the context times out.
-func (pq *PriorityQueue) PushWithContext(ctx context.Context, task PriorityTask) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case pq.signal <- struct{}{}:
-		pq.mu.Lock()
-		defer pq.mu.Unlock()
-		pq.heap.AddOrUpdate(task)
-		return nil
+	added, evicted := pq.tryPushLocked(task)
+	pq.mu.Unlock()
+	if added {
+		pq.notify()
 	}
+	return added, evicted
 }
 
 // Pop removes and returns the highest priority task
@@ -163,4 +171,52 @@ func (pq *PriorityQueue) Remove(task PriorityTask) bool {
 	defer pq.mu.Unlock()
 
 	return pq.heap.Remove(task)
+}
+
+func (pq *PriorityQueue) notify() {
+	select {
+	case pq.signal <- struct{}{}:
+	default:
+		// Signal channel is full, ignore.
+	}
+}
+
+func (pq *PriorityQueue) tryPushLocked(task PriorityTask) (bool, PriorityTask) {
+	// Updating an existing task never changes the queue size.
+	if task.GetHeapIndex() != 0 {
+		pq.heap.AddOrUpdate(task)
+		return true, nil
+	}
+
+	// Unlimited or not full yet.
+	if pq.capacity <= 0 || pq.heap.Len() < pq.capacity {
+		pq.heap.AddOrUpdate(task)
+		return true, nil
+	}
+
+	// Queue is full, find the task with the lowest priority (largest value).
+	worst := pq.findWorstLocked()
+	if worst == nil {
+		return false, nil
+	}
+
+	// If the new task is not better, drop it.
+	if !task.LessThan(worst) {
+		return false, nil
+	}
+
+	// Replace the worst task with the new, higher priority task.
+	pq.heap.Remove(worst)
+	pq.heap.AddOrUpdate(task)
+	return true, worst
+}
+
+func (pq *PriorityQueue) findWorstLocked() PriorityTask {
+	var worst PriorityTask
+	for _, item := range pq.heap.All() {
+		if worst == nil || worst.LessThan(item) {
+			worst = item
+		}
+	}
+	return worst
 }
