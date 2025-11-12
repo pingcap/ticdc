@@ -522,12 +522,18 @@ func getSchemaID(tableMap map[int64]*BasicTableInfo, tableID int64) int64 {
 func buildPersistedDDLEventCommon(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
 	var query string
 	job := args.job
-	// only in unit test job.Query is empty
-	if job.Query != "" {
-		var err error
-		query, err = transformDDLJobQuery(job)
-		if err != nil {
-			log.Panic("transformDDLJobQuery failed", zap.Error(err))
+	// TODO: for ActionAddFullTextIndex and ActionCreateHybridIndex,
+	// the parser cannot recogonize the query now, so we keep the original query in job.Query.
+	if job.Type == filter.ActionAddFullTextIndex || job.Type == filter.ActionCreateHybridIndex {
+		query = job.Query
+	} else {
+		// only in unit test job.Query may be empty
+		if job.Query != "" {
+			var err error
+			query, err = transformDDLJobQuery(job)
+			if err != nil {
+				log.Panic("transformDDLJobQuery failed", zap.Error(err))
+			}
 		}
 	}
 
