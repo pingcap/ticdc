@@ -36,7 +36,7 @@ import (
 	"go.uber.org/zap"
 )
 
-var timeOut = time.Second * 10
+var timeOut = time.Second * 20
 
 var (
 	nFailed = 0
@@ -171,6 +171,7 @@ func fetchNextCDCRecord(reader *kafka.Reader, kind Kind, timeout time.Duration) 
 		m, err := reader.FetchMessage(ctx)
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
+				logger.Warn("fetch record exit", zap.Error(err))
 				return nil, nil, nil
 			}
 			return nil, nil, fmt.Errorf("Failed to read CDC record of %s: %w", kind, err)
