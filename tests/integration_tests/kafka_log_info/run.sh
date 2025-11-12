@@ -46,7 +46,7 @@ function test_dml_log_info() {
 	run_sql "CREATE TABLE ${DB_NAME}.dml_table(id INT PRIMARY KEY AUTO_INCREMENT, val INT);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	start_cdc_with_failpoint 'github.com/pingcap/ticdc/pkg/sink/kafka/KafkaSinkAsyncSendError=1*return(true)'
-	cdc cli changefeed create --pd=$pd_addr --sink-uri="$sink_uri" --changefeed-id="$changefeed_id"
+	cdc_cli_changefeed create --pd=$pd_addr --sink-uri="$sink_uri" --changefeed-id="$changefeed_id"
 
 	run_sql "INSERT INTO ${DB_NAME}.dml_table(val) VALUES (1);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
@@ -66,7 +66,7 @@ function test_ddl_log_info() {
 	run_sql "DROP TABLE IF EXISTS ${DB_NAME}.ddl_table;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	start_cdc_with_failpoint 'github.com/pingcap/ticdc/pkg/sink/kafka/KafkaSinkSyncSendMessageError=1*return(true);github.com/pingcap/ticdc/pkg/sink/kafka/KafkaSinkSyncSendMessagesError=1*return(true)'
-	cdc_cli_changefeed --pd=$pd_addr --sink-uri="$sink_uri" --changefeed-id="$changefeed_id"
+	cdc_cli_changefeed create --pd=$pd_addr --sink-uri="$sink_uri" --changefeed-id="$changefeed_id"
 
 	run_sql "CREATE TABLE ${DB_NAME}.ddl_table(id INT PRIMARY KEY);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
@@ -84,7 +84,7 @@ function test_checkpoint_log_info() {
 	local sink_uri=$(build_sink_uri $protocol $topic)
 
 	start_cdc_with_failpoint 'github.com/pingcap/ticdc/pkg/sink/kafka/KafkaSinkSyncSendMessagesError=1*return(true)'
-	cdc_cli_changefeed --pd=$pd_addr --sink-uri="$sink_uri" --changefeed-id="$changefeed_id"
+	cdc_cli_changefeed create --pd=$pd_addr --sink-uri="$sink_uri" --changefeed-id="$changefeed_id"
 
 	ensure $MAX_RETRIES "check_logs_contains $WORK_DIR 'eventType=checkpoint.*checkpointTs=' ''"
 
