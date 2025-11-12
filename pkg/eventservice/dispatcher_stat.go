@@ -415,7 +415,7 @@ func (c *resolvedTsCache) reset() {
 	c.len = 0
 }
 
-const minScanLimitRate = 1024 // 1KB/s
+const minScanLimitRate = 1024 * 1024 // 1MB/s
 
 type changefeedStatus struct {
 	changefeedID common.ChangeFeedID

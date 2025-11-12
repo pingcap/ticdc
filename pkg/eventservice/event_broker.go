@@ -587,7 +587,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	// At this time, a dispatcher with very little traffic comes in. It cannot apply for the rate limit, resulting in it being starved and unable to be scheduled for a long time.
 	// Therefore, we need to consider the priority of each task in the future and allocate rate limits based on priority.
 	// My current idea is to divide rate limits into 3 different levels, and decide which rate limit to use according to lastScanBytes.
-	if !c.scanRateLimiter.AllowN(time.Now(), int(task.lastScanBytes.Load())) {
+	if !task.changefeedStat.scanLimit.AllowN(time.Now(), int(task.lastScanBytes.Load())) {
 		log.Debug("scan rate limit exceeded",
 			zap.Stringer("dispatcher", task.id),
 			zap.Int64("lastScanBytes", task.lastScanBytes.Load()),
