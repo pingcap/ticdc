@@ -57,10 +57,13 @@ function run() {
 	target_capture=$capture1_id
 	# find a table that capture2 is replicating
 	one_table_id=$(curl -X GET "http://127.0.0.1:8301/api/v2/changefeeds/${changefeed_id}/tables?keyspace=$KEYSPACE_NAME" | jq -r --arg cid "$capture2_id" '.items[] | select(.node_id==$cid) | .table_ids[0]')
-	if [[ $one_table_id == "null" || $one_table_id == "0" ]]; then
+	if [[ "$one_table_id" == "" || "$one_table_id" == "null" || "$one_table_id" == "0" ]]; then
 		# if not found, find a table that capture1 is replicating
 		target_capture=$capture2_id
 		one_table_id=$(curl -X GET "http://127.0.0.1:8300/api/v2/changefeeds/${changefeed_id}/tables?keyspace=$KEYSPACE_NAME" | jq -r --arg cid "$capture1_id" '.items[] | select(.node_id==$cid) | .table_ids[0]')
+		if [[ "$one_table_id" == "" || "$one_table_id" == "null" || "$one_table_id" == "0" ]]; then
+			exit 1
+		fi
 	fi
 	table_query=$(mysql -E -h${UP_TIDB_HOST} -P${UP_TIDB_PORT} -uroot -e "select table_name from information_schema.tables where tidb_table_id = ${one_table_id}")
 	table_name=$(echo $table_query | tail -n 1 | awk '{print $(NF)}')
