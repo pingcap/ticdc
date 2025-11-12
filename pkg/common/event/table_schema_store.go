@@ -36,7 +36,9 @@ import (
 type TableSchemaStore struct {
 	sinkType       commonType.SinkType `msg:"-"`
 	tableNameStore *TableNameStore     `msg:"-"`
-	TableIDStore   *TableIDStore       `msg:"table_id_store"`
+	// TableIDStore will be used in redo ddl event to record all block tables id,
+	// so it has to support Marshal/Unmarshal
+	TableIDStore *TableIDStore `msg:"table_id_store"`
 }
 
 func NewTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo, sinkType commonType.SinkType) *TableSchemaStore {

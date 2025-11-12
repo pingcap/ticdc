@@ -577,7 +577,8 @@ func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]i
 		)
 		switch row.RowType {
 		case common.RowTypeUpdate:
-			// For MySQL Sink, all update events will be split into insert and delete according to whether the changefeed is in safemode.
+			// For MySQL Sink, in safe mode, all update events will be split into inserts and deletes.
+			// TODO(Should we still split all update events in safe mode? we already split the events which update uk in event broker)
 			if inSafeMode {
 				query, args = buildDelete(event.TableInfo, row)
 				if query != "" {

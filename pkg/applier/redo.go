@@ -67,7 +67,6 @@ type RedoApplier struct {
 	tableDDLTs      map[commonType.TableID]ddlTs
 	appliedLogCount uint64
 
-	errCh            chan error
 	needRecoveryInfo bool
 }
 
@@ -75,7 +74,6 @@ type RedoApplier struct {
 func NewRedoApplier(cfg *RedoApplierConfig) *RedoApplier {
 	return &RedoApplier{
 		cfg:              cfg,
-		errCh:            make(chan error, 1024),
 		tableDDLTs:       make(map[commonType.TableID]ddlTs),
 		eventsGroup:      make(map[commonType.TableID]*eventsGroup),
 		needRecoveryInfo: true,
@@ -125,7 +123,7 @@ func (ra *RedoApplier) getBlockTableIDs(blockTables *commonEvent.InfluencedTable
 	return tableIDs
 }
 
-func (ra *RedoApplier) getTableDDLTs(checkpointTs uint64, tableIDs ...int64) ddlTs {
+func (ra *RedoApplier) getTableDDLTs(tableIDs ...int64) ddlTs {
 	// we have to refactor redo apply to tolerate DDL execution errors.
 	// Besides, we have to query ddl_ts to get the correct checkpointTs to avoid inconsistency.
 	minTs := ddlTs{ts: math.MaxInt64}
@@ -219,6 +217,22 @@ func (ra *RedoApplier) consumeLogs(ctx context.Context) error {
 	return errApplyFinished
 }
 
+// applyDDL will check the ddl and replicate the previous dmls and ddl to downstream
+//
+// Before appling DDL, we have to query the start-ts of the table,
+// because some dispatchers has replicates some ddls which commit-ts is bigger than the redo meta checkpoint-ts.
+// see https://github.com/pingcap/ticdc/issues/1061#issuecomment-3266230636
+//
+// we could query start-ts of table by specified table id according DDL type.
+// For the cross table DDL, we could query the table id of table trigger event dispatcher
+// For the other DDL, we just query the block tables' id
+// When some ddls are ignored, we also ignored the dml events of their drop tables
+// This is because some cross table DDLs maybe flush the dmls by mistake
+//
+// For example:
+//
+// DML + DROP TABLE: If the drop table ddl has replicated the downstream,
+// we can't query the start-ts and have to drop these dml events
 func (ra *RedoApplier) applyDDL(
 	ctx context.Context, ddl *commonEvent.RedoDDLEvent, checkpointTs uint64,
 ) error {
@@ -251,7 +265,7 @@ func (ra *RedoApplier) applyDDL(
 				timodel.ActionAddCheckConstraint, timodel.ActionDropCheckConstraint, timodel.ActionAlterCheckConstraint,
 				timodel.ActionAlterTableAttributes, timodel.ActionAlterCacheTable, timodel.ActionAlterNoCacheTable,
 				timodel.ActionMultiSchemaChange, timodel.ActionAlterTTLInfo, timodel.ActionAlterTTLRemove:
-				tableDDLTs = ra.getTableDDLTs(checkpointTs, ddl.DDL.BlockTables.TableIDs...)
+				tableDDLTs = ra.getTableDDLTs(ddl.DDL.BlockTables.TableIDs...)
 			case timodel.ActionExchangeTablePartition, timodel.ActionReorganizePartition,
 				timodel.ActionAddTablePartition, timodel.ActionDropTablePartition, timodel.ActionTruncateTablePartition,
 				timodel.ActionAlterTablePartitionAttributes, timodel.ActionAlterTablePartitioning, timodel.ActionRemovePartitioning,
@@ -263,7 +277,7 @@ func (ra *RedoApplier) applyDDL(
 				timodel.ActionRecoverTable, timodel.ActionAlterTablePlacement, timodel.ActionModifySchemaDefaultPlacement,
 				timodel.ActionCreateTables, timodel.ActionRenameTables, timodel.ActionRenameTable,
 				timodel.ActionAlterTablePartitionPlacement, timodel.ActionRecoverSchema:
-				tableDDLTs = ra.getTableDDLTs(checkpointTs, commonType.DDLSpanTableID)
+				tableDDLTs = ra.getTableDDLTs(commonType.DDLSpanTableID)
 			default:
 				log.Warn("ignore unsupport DDL", zap.Any("ddl", ddl), zap.Any("type", ddl.Type))
 				return true
@@ -292,7 +306,8 @@ func (ra *RedoApplier) applyDDL(
 			}
 			return true
 		}
-		if ddl.DDL.CommitTs+1 == uint64(tableDDLTs.ts) {
+		// compatible with old arch
+		if ra.needRecoveryInfo && ddl.DDL.CommitTs == checkpointTs {
 			if _, ok := unsupportedDDL[timodel.ActionType(ddl.Type)]; ok {
 				log.Error("ignore unsupported DDL", zap.Any("ddl", ddl))
 				return true
@@ -340,7 +355,7 @@ func (ra *RedoApplier) applyRow(
 		// keep same with old arch.
 		tableDDLTs = ddlTs{ts: int64(checkpointTs - 1)}
 	} else {
-		tableDDLTs = ra.getTableDDLTs(checkpointTs, tableID)
+		tableDDLTs = ra.getTableDDLTs(tableID)
 	}
 	if tableDDLTs.ts >= int64(row.Row.CommitTs) {
 		log.Warn("ignore the dml event since the commitTs is less than startTs", zap.Int64("ts", tableDDLTs.ts), zap.Any("row", row))
@@ -445,9 +460,7 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 	sinkURI.RawQuery = query.Encode()
 	replicaConfig := &config.ChangefeedConfig{
 		SinkURI:    sinkURI.String(),
-		SinkConfig: &config.SinkConfig{
-			// SafeMode: util.AddressOf(false),
-		},
+		SinkConfig: &config.SinkConfig{},
 	}
 	if ra.mysqlSink == nil {
 		ra.mysqlSink, err = mysql.New(egCtx, ra.rd.GetChangefeedID(), replicaConfig, sinkURI)
