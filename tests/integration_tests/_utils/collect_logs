@@ -6,5 +6,7 @@ set +e
 
 # find some file and change them to .log so the ci plugin will collect them
 find $WORK_DIR -type f -name "*.txt" -o -name "*.sql" -o -name "*sql*" -o -name "*summary*" -o -name "*.json" -o -name "*.index" -o -name "metadata" | while read file; do
-	mv $file ${file%.txt}.log
+	if [[ -f "$file" ]]; then
+		mv "$file" "${file%.txt}.log" 2>/dev/null || true
+	fi
 done
