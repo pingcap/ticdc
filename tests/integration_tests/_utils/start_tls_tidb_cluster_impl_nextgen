@@ -63,7 +63,7 @@ check_pd_health --cacert $TLS_DIR/ca.pem \
 	"$TLS_PD_HOST" "$TLS_PD_PORT"
 
 if ! mc ls "$MINIO_MC_ALIAS/tls-cse-test" &>/dev/null; then
-	mc mb "$MINIO_MC_ALIAS/tls-cse-test" --retry 5 --delay 2000
+	mc mb "$MINIO_MC_ALIAS/tls-cse-test"
 else
 	echo "Bucket tls-cse-test already exists, skipping creation"
 fi

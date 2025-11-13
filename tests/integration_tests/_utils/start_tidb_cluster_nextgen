@@ -99,12 +99,12 @@ sleep 1
 # create bucket
 mc alias set "$MINIO_MC_ALIAS" "http://127.0.0.1:$MINIO_API_PORT" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
 if ! mc ls "$MINIO_MC_ALIAS/cse-test-up" &>/dev/null; then
-	mc mb "$MINIO_MC_ALIAS/cse-test-up" --retry 5 --delay 2000
+	mc mb "$MINIO_MC_ALIAS/cse-test-up"
 else
 	echo "Bucket cse-test-up already exists, skipping creation"
 fi
 if ! mc ls "$MINIO_MC_ALIAS/cse-test-down" &>/dev/null; then
-	mc mb "$MINIO_MC_ALIAS/cse-test-down" --retry 5 --delay 2000
+	mc mb "$MINIO_MC_ALIAS/cse-test-down"
 else
 	echo "Bucket cse-test-down already exists, skipping creation"
 fi
