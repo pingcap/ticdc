@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
@@ -190,7 +191,7 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 			zap.Any("tables", tableIDs))
 	case <-ticker.C:
 		log.Panic("DDL event timeout, since the DML events are not flushed in time",
-			zap.Uint64("DDLCommitTs", commitTs), zap.String("query", ddl.Query),
+			zap.Uint64("DDLCommitTs", commitTs), zap.String("query", util.RedactValue(ddl.Query)),
 			zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
 	}
 	return w.mysqlSink.WriteBlockEvent(ddl)
@@ -337,7 +338,7 @@ func (w *writer) WriteMessage(ctx context.Context, message pulsar.Message) bool 
 		w.appendDDL(ddl)
 		log.Info("DDL event received",
 			zap.String("schema", ddl.GetSchemaName()), zap.String("table", ddl.GetTableName()),
-			zap.Uint64("commitTs", ddl.GetCommitTs()), zap.String("query", ddl.Query),
+			zap.Uint64("commitTs", ddl.GetCommitTs()), zap.String("query", util.RedactValue(ddl.Query)),
 			zap.Any("blockedTables", ddl.GetBlockedTables()))
 		needFlush = true
 	case common.MessageTypeRow:
@@ -405,7 +406,7 @@ func (w *writer) onDDL(ddl *commonEvent.DDLEvent) {
 	}
 	stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
 	if err != nil {
-		log.Panic("parse ddl query failed", zap.String("query", ddl.Query), zap.Error(err))
+		log.Panic("parse ddl query failed", zap.String("query", util.RedactValue(ddl.Query)), zap.Error(err))
 	}
 	if v, ok := stmt.(*ast.CreateTableStmt); ok && v.Partition != nil {
 		w.partitionTableAccessor.Add(ddl.GetSchemaName(), ddl.GetTableName())

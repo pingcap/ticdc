@@ -32,6 +32,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -166,14 +167,14 @@ func (s *keyspaceSchemaStore) writeDDLEvent(ddlEvent DDLJobWithCommitTs) {
 		zap.Int64("schemaID", ddlEvent.Job.SchemaID),
 		zap.Int64("tableID", ddlEvent.Job.TableID),
 		zap.Uint64("finishedTs", ddlEvent.Job.BinlogInfo.FinishedTS),
-		zap.String("query", ddlEvent.Job.Query))
+		zap.String("query", util.RedactValue(ddlEvent.Job.Query)))
 
 	serverConfig := config.GetGlobalServerConfig()
 	for _, ts := range serverConfig.Debug.SchemaStore.IgnoreDDLCommitTs {
 		if ts == ddlEvent.CommitTs {
 			log.Info("ignore ddl job by commit ts",
 				zap.Uint64("commitTs", ts),
-				zap.String("query", ddlEvent.Job.Query))
+				zap.String("query", util.RedactValue(ddlEvent.Job.Query)))
 			return
 		}
 	}

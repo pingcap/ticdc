@@ -21,6 +21,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"go.uber.org/zap"
 )
@@ -159,7 +160,7 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 			log.Panic("split queries failed", zap.Error(err))
 		}
 		if len(queries) != len(d.MultipleTableInfos) {
-			log.Panic("queries length should be equal to multipleTableInfos length", zap.String("query", d.Query), zap.Any("multipleTableInfos", d.MultipleTableInfos))
+			log.Panic("queries length should be equal to multipleTableInfos length", zap.String("query", util.RedactValue(d.Query)), zap.Any("multipleTableInfos", d.MultipleTableInfos))
 		}
 
 		t := model.ActionCreateTable

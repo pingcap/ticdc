@@ -330,8 +330,8 @@ func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([
 					if nextRowType == common.RowTypeInsert {
 						if compareKeys(rowKey, rowLists[j].RowKeys) {
 							sql, values := w.generateNormalSQLs(events)
-							log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values), zap.Int("writerID", w.id))
-							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events), zap.Any("i", i), zap.Any("j", j), zap.Int("writerID", w.id))
+							log.Info("normal sql should be", zap.String("sql", util.RedactAny(sql)), zap.String("values", util.RedactAny(values)), zap.Int("writerID", w.id))
+							log.Panic("Here are two invalid rows with the same row type and keys", zap.String("Events", util.RedactAny(events)), zap.Any("i", i), zap.Any("j", j), zap.Int("writerID", w.id))
 						}
 					} else if nextRowType == common.RowTypeDelete {
 						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
@@ -342,7 +342,7 @@ func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([
 						}
 					} else if nextRowType == common.RowTypeUpdate {
 						if !compareKeys(rowLists[j].PreRowKeys, rowLists[j].RowKeys) {
-							log.Panic("The Update Row have different Row Key", zap.Any("Events", events), zap.Int("writerID", w.id))
+							log.Panic("The Update Row have different Row Key", zap.String("Events", util.RedactAny(events)), zap.Int("writerID", w.id))
 						}
 						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
 							// remove insert one, and break the inner loop for row i
@@ -364,13 +364,13 @@ func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([
 				case common.RowTypeUpdate:
 					rowKey := rowLists[i].RowKeys
 					if !compareKeys(rowKey, rowLists[i].PreRowKeys) {
-						log.Panic("The Update Row have different Row Key", zap.Any("Events", events), zap.Int("writerID", w.id))
+						log.Panic("The Update Row have different Row Key", zap.String("Events", util.RedactAny(events)), zap.Int("writerID", w.id))
 					}
 					if nextRowType == common.RowTypeInsert {
 						if compareKeys(rowKey, rowLists[j].RowKeys) {
 							sql, values := w.generateNormalSQLs(events)
-							log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values), zap.Int("writerID", w.id))
-							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events), zap.Any("i", i), zap.Any("j", j), zap.Int("writerID", w.id))
+							log.Info("normal sql should be", zap.String("sql", util.RedactAny(sql)), zap.String("values", util.RedactAny(values)), zap.Int("writerID", w.id))
+							log.Panic("Here are two invalid rows with the same row type and keys", zap.String("Events", util.RedactAny(events)), zap.Any("i", i), zap.Any("j", j), zap.Int("writerID", w.id))
 						}
 					} else if nextRowType == common.RowTypeDelete {
 						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
@@ -392,7 +392,7 @@ func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([
 					} else if nextRowType == common.RowTypeUpdate {
 						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
 							if !compareKeys(rowLists[j].PreRowKeys, rowLists[j].RowKeys) {
-								log.Panic("The Update Row have different Row Key", zap.Any("Events", events), zap.Int("writerID", w.id))
+								log.Panic("The Update Row have different Row Key", zap.String("Events", util.RedactAny(events)), zap.Int("writerID", w.id))
 							}
 							// remove the first one, update the second one, then break
 							newRowChange := commonEvent.RowChange{
@@ -519,7 +519,7 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 			rowType := rowChanges[i].RowType
 			if rowType == prevType {
 				sql, values := w.generateNormalSQLs(events)
-				log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values), zap.Int("writerID", w.id))
+				log.Info("normal sql should be", zap.String("sql", util.RedactAny(sql)), zap.String("values", util.RedactAny(values)), zap.Int("writerID", w.id))
 				log.Panic("invalid row changes", zap.String("schemaName", tableInfo.GetSchemaName()),
 					zap.String("tableName", tableInfo.GetTableName()), zap.Any("rowChanges", rowChanges),
 					zap.Any("prevType", prevType), zap.Any("currentType", rowType), zap.Int("writerID", w.id))
@@ -676,7 +676,7 @@ func (w *Writer) sequenceExecute(
 ) error {
 	for i, query := range dmls.sqls {
 		args := dmls.values[i]
-		log.Debug("exec row", zap.String("sql", query), zap.Any("args", args), zap.Int("writerID", w.id))
+		log.Debug("exec row", zap.String("sql", util.RedactValue(query)), zap.String("args", util.RedactArgs(args)), zap.Int("writerID", w.id))
 		ctx, cancelFunc := context.WithTimeout(w.ctx, writeTimeout)
 
 		var prepStmt *sql.Stmt
@@ -702,14 +702,16 @@ func (w *Writer) sequenceExecute(
 		}
 
 		if execError != nil {
-			log.Error("ExecContext", zap.Error(execError), zap.Any("dmls", dmls), zap.Int("writerID", w.id))
+			// Don't log dmls as it may contain sensitive data; error already captured
+			log.Error("ExecContext", zap.Error(execError), zap.Int("rowCount", dmls.rowCount), zap.Int("writerID", w.id))
 			if rbErr := tx.Rollback(); rbErr != nil {
 				if errors.Cause(rbErr) != context.Canceled {
 					log.Warn("failed to rollback txn", zap.Error(rbErr), zap.Int("writerID", w.id))
 				}
 			}
 			cancelFunc()
-			return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(execError, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", query, args)))
+			// Apply redaction to SQL and args to prevent sensitive data exposure in error messages
+			return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(execError, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%s; ", util.RedactValue(query), util.RedactArgs(args))))
 		}
 		cancelFunc()
 	}
@@ -743,7 +745,8 @@ func (w *Writer) multiStmtExecute(
 	// The txn can ensure the atomicity of the transaction.
 	_, err = conn.ExecContext(ctx, multiStmtSQLWithTxn, multiStmtArgs...)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", multiStmtSQLWithTxn, multiStmtArgs)))
+		// Apply redaction to SQL and args to prevent sensitive data exposure in error messages
+		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%s; ", util.RedactValue(multiStmtSQLWithTxn), util.RedactArgs(multiStmtArgs))))
 	}
 	return nil
 }

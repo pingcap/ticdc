@@ -252,7 +252,7 @@ func (m *confluentSchemaManager) Lookup(
 
 	if resp.StatusCode == 404 {
 		log.Warn("Specified schema not found in Registry",
-			zap.String("key", schemaName),
+			zap.String("key", schemaName), // skip-redaction: schema registry key name, not user data
 			zap.Int("schemaID", schemaID.confluentSchemaID))
 		return nil, errors.ErrAvroSchemaAPIError.GenWithStackByArgs(
 			"Schema not found in Registry",
@@ -297,7 +297,7 @@ func (m *confluentSchemaManager) GetCachedOrRegister(
 	m.cacheRWLock.RLock()
 	if entry, exists := m.cache[schemaSubject]; exists && entry.tableVersion == tableVersion {
 		log.Debug("Avro schema GetCachedOrRegister cache hit",
-			zap.String("key", schemaSubject),
+			zap.String("key", schemaSubject), // skip-redaction: schema registry subject, not user data
 			zap.Uint64("tableVersion", tableVersion),
 			zap.Int("schemaID", entry.schemaID.confluentSchemaID))
 		m.cacheRWLock.RUnlock()
@@ -306,7 +306,7 @@ func (m *confluentSchemaManager) GetCachedOrRegister(
 	m.cacheRWLock.RUnlock()
 
 	log.Info("Avro schema lookup cache miss",
-		zap.String("key", schemaSubject),
+		zap.String("key", schemaSubject), // skip-redaction: schema registry subject, not user data
 		zap.Uint64("tableVersion", tableVersion))
 
 	schema, err := schemaGen()

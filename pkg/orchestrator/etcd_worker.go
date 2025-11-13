@@ -362,7 +362,7 @@ func (worker *EtcdWorker) handleEvent(_ context.Context, event *clientv3.Event) 
 					"owner resign or externally delete operation"+
 					"exit etcd worker and campaign again",
 					zap.String("ownerMetaKey", worker.ownerMetaKey),
-					zap.String("value", string(event.Kv.Value)),
+					zap.String("value", string(event.Kv.Value)), // skip-redaction: etcd event value, infrastructure only
 					zap.Error(err))
 				return err
 			}
