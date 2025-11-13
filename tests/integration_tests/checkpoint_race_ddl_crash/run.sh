@@ -236,6 +236,7 @@ main_with_consistent() {
 		wait $DATA_PID
 		wait $CRASH_PID
 
+		changefeed_id="test"
 		storage_path="file://$WORK_DIR/redo"
 		tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
 		export GO_FAILPOINTS=''
