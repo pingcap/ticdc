@@ -20,11 +20,11 @@ import (
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	canal "github.com/pingcap/ticdc/pkg/sink/codec/canal/proto"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/util/chunk"
+	canal "github.com/pingcap/tiflow/proto/canal"
 	"go.uber.org/zap"
 )
 
