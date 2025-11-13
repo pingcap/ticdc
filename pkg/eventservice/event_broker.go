@@ -929,6 +929,14 @@ func (c *eventBroker) pushTask(d *dispatcherStat, force bool) {
 		}
 	}
 
+	if !force {
+		select {
+		case c.taskChan[d.scanWorkerIndex] <- d:
+		default:
+		}
+		return
+	}
+
 	c.taskChan[d.scanWorkerIndex] <- d
 
 }
