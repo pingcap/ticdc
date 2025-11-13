@@ -26,6 +26,7 @@ function prepare() {
 }
 
 trap stop_tidb_cluster EXIT
+trap "collect_logs $WORK_DIR" EXIT
 # kafka and storage is not supported yet.
 if [ "$SINK_TYPE" == "mysql" ]; then
 	prepare $*
