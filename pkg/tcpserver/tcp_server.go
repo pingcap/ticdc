@@ -27,6 +27,7 @@ import (
 	"github.com/soheilhy/cmux"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 var cmuxReadTimeout = 10 * time.Second
@@ -119,23 +120,13 @@ func (s *tcpServerImpl) Run(ctx context.Context) (err error) {
 		// Closing the rootListener provides a reliable way
 		// for telling downstream components to exit.
 		_ = s.rootListener.Close()
-		log.Debug("cmux has been canceled", zap.Error(err))
-		s.mux.Close()
 	}()
 
 	// we must to exit if the context is done.
-	ch := make(chan error)
-	go func() {
+	errg, ctx := errgroup.WithContext(ctx)
+
+	errg.Go(func() error {
 		err := s.mux.Serve()
-		if err != nil {
-			log.Error("tcp server error", zap.Error(err))
-		}
-		ch <- err
-	}()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case err := <-ch:
 		if err == cmux.ErrServerClosed {
 			return cerror.ErrTCPServerClosed.GenWithStackByArgs()
 		}
@@ -143,7 +134,16 @@ func (s *tcpServerImpl) Run(ctx context.Context) (err error) {
 			return cerror.ErrTCPServerClosed.GenWithStackByArgs()
 		}
 		return errors.Trace(err)
-	}
+	})
+
+	errg.Go(func() error {
+		<-ctx.Done()
+		log.Debug("cmux has been canceled", zap.Error(ctx.Err()))
+		s.mux.Close()
+		return nil
+	})
+
+	return errg.Wait()
 }
 
 func (s *tcpServerImpl) GrpcListener() net.Listener {

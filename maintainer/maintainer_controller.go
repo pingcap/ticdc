@@ -174,7 +174,7 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 
 func (c *Controller) GetMinCheckpointTs(minCheckpointTs uint64) uint64 {
 	minCheckpointTsForOperator := c.operatorController.GetMinCheckpointTs(minCheckpointTs)
-	minCheckpointTsForSpan := c.spanController.GetMinCheckpointTsForAbsentSpans(minCheckpointTs)
+	minCheckpointTsForSpan := c.spanController.GetMinCheckpointTsForNonReplicatingSpans(minCheckpointTs)
 	return min(minCheckpointTsForOperator, minCheckpointTsForSpan)
 }
 
@@ -205,6 +205,6 @@ func (c *Controller) RemoveNode(id node.ID) {
 
 func (c *Controller) GetMinRedoCheckpointTs(minCheckpointTs uint64) uint64 {
 	minCheckpointTsForOperator := c.redoOperatorController.GetMinCheckpointTs(minCheckpointTs)
-	minCheckpointTsForSpan := c.redoSpanController.GetMinCheckpointTsForAbsentSpans(minCheckpointTs)
+	minCheckpointTsForSpan := c.redoSpanController.GetMinCheckpointTsForNonReplicatingSpans(minCheckpointTs)
 	return min(minCheckpointTsForOperator, minCheckpointTsForSpan)
 }

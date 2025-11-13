@@ -1,4 +1,4 @@
-// Copyright 2024 PingCAP, Inc.
+// Copyright 2025 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package util
 
 import (
 	"slices"
@@ -23,27 +23,27 @@ import (
 )
 
 // EventsGroup could store change event message.
-type eventsGroup struct {
-	partition int32
+type EventsGroup struct {
+	Partition int32
 	tableID   int64
 
 	events        []*commonEvent.DMLEvent
-	highWatermark uint64
+	HighWatermark uint64
 }
 
 // NewEventsGroup will create new event group.
-func NewEventsGroup(partition int32, tableID int64) *eventsGroup {
-	return &eventsGroup{
-		partition: partition,
+func NewEventsGroup(partition int32, tableID int64) *EventsGroup {
+	return &EventsGroup{
+		Partition: partition,
 		tableID:   tableID,
 		events:    make([]*commonEvent.DMLEvent, 0, 1024),
 	}
 }
 
 // Append will append an event to event groups.
-func (g *eventsGroup) Append(row *commonEvent.DMLEvent, force bool) {
-	if row.CommitTs > g.highWatermark {
-		g.highWatermark = row.CommitTs
+func (g *EventsGroup) Append(row *commonEvent.DMLEvent, force bool) {
+	if row.CommitTs > g.HighWatermark {
+		g.HighWatermark = row.CommitTs
 	}
 
 	var lastDMLEvent *commonEvent.DMLEvent
@@ -72,12 +72,12 @@ func (g *eventsGroup) Append(row *commonEvent.DMLEvent, force bool) {
 		return
 	}
 	log.Panic("append event with smaller commit ts",
-		zap.Int32("partition", g.partition), zap.Int64("tableID", g.tableID),
+		zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
 		zap.Uint64("lastCommitTs", lastDMLEvent.GetCommitTs()), zap.Uint64("commitTs", row.GetCommitTs()))
 }
 
 // Resolve will get events where CommitTs is less than resolveTs.
-func (g *eventsGroup) Resolve(resolve uint64) []*commonEvent.DMLEvent {
+func (g *EventsGroup) Resolve(resolve uint64) []*commonEvent.DMLEvent {
 	i := sort.Search(len(g.events), func(i int) bool {
 		return g.events[i].CommitTs > resolve
 	})
@@ -86,9 +86,16 @@ func (g *eventsGroup) Resolve(resolve uint64) []*commonEvent.DMLEvent {
 	g.events = g.events[i:]
 	if len(result) != 0 && len(g.events) != 0 {
 		log.Warn("not all events resolved",
-			zap.Int32("partition", g.partition), zap.Int64("tableID", g.tableID),
+			zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
 			zap.Int("resolved", len(result)), zap.Int("remained", len(g.events)),
 			zap.Uint64("resolveTs", resolve), zap.Uint64("firstCommitTs", g.events[0].CommitTs))
 	}
+	return result
+}
+
+// GetAllEvents will get all events.
+func (g *EventsGroup) GetAllEvents() []*commonEvent.DMLEvent {
+	result := g.events
+	g.events = nil
 	return result
 }

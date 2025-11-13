@@ -108,6 +108,17 @@ func (p *saramaSyncProducer) SendMessage(
 		Value:     sarama.ByteEncoder(message.Value),
 		Partition: partitionNum,
 	})
+	failpoint.Inject("KafkaSinkSyncSendMessageError", func() {
+		err = cerror.WrapError(cerror.ErrKafkaSendMessage, errors.New("kafka sink sync send message injected error"))
+	})
+	if err != nil {
+		err = AnnotateEventError(
+			p.id.Keyspace(),
+			p.id.Name(),
+			message.LogInfo,
+			err,
+		)
+	}
 	return cerror.WrapError(cerror.ErrKafkaSendMessage, err)
 }
 
@@ -127,6 +138,17 @@ func (p *saramaSyncProducer) SendMessages(
 		}
 	}
 	err := p.producer.SendMessages(msgs)
+	failpoint.Inject("KafkaSinkSyncSendMessagesError", func() {
+		err = cerror.WrapError(cerror.ErrKafkaSendMessage, errors.New("kafka sink sync send messages injected error"))
+	})
+	if err != nil {
+		err = AnnotateEventError(
+			p.id.Keyspace(),
+			p.id.Name(),
+			message.LogInfo,
+			err,
+		)
+	}
 	return cerror.WrapError(cerror.ErrKafkaSendMessage, err)
 }
 
@@ -172,7 +194,12 @@ type saramaAsyncProducer struct {
 	changefeedID commonType.ChangeFeedID
 
 	closed      *atomic.Bool
-	failpointCh chan error
+	failpointCh chan *sarama.ProducerError
+}
+
+type messageMetadata struct {
+	callback func()
+	logInfo  *common.MessageLogInfo
 }
 
 func (p *saramaAsyncProducer) Close() {
@@ -242,12 +269,17 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 				zap.String("keyspace", p.changefeedID.Keyspace()),
 				zap.String("changefeed", p.changefeedID.Name()),
 				zap.Error(err))
-			return errors.Trace(err)
+			return p.handleProducerError(err)
 		case ack := <-p.producer.Successes():
 			if ack != nil {
-				callback := ack.Metadata.(func())
-				if callback != nil {
-					callback()
+				switch meta := ack.Metadata.(type) {
+				case *messageMetadata:
+					if meta != nil && meta.callback != nil {
+						meta.callback()
+					}
+				default:
+					log.Error("unknown message metadata type in async producer",
+						zap.Any("metadata", ack.Metadata))
 				}
 			}
 		case err := <-p.producer.Errors():
@@ -259,9 +291,19 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 			if err == nil {
 				return nil
 			}
-			return cerror.WrapError(cerror.ErrKafkaAsyncSendMessage, err)
+			return p.handleProducerError(err)
 		}
 	}
+}
+
+func (p *saramaAsyncProducer) handleProducerError(err *sarama.ProducerError) error {
+	errWithInfo := AnnotateEventError(
+		p.changefeedID.Keyspace(),
+		p.changefeedID.Name(),
+		extractLogInfo(err.Msg),
+		err.Err,
+	)
+	return cerror.WrapError(cerror.ErrKafkaAsyncSendMessage, errWithInfo)
 }
 
 func (p *saramaAsyncProducer) Heartbeat() {
@@ -284,15 +326,25 @@ func (p *saramaAsyncProducer) AsyncSend(
 		// message to Kafka meets error
 		log.Info("KafkaSinkAsyncSendError error injected", zap.String("keyspace", p.changefeedID.Keyspace()),
 			zap.String("changefeed", p.changefeedID.Name()))
-		p.failpointCh <- errors.New("kafka sink injected error")
+		p.failpointCh <- &sarama.ProducerError{
+			Err: errors.New("kafka sink injected error"),
+			Msg: &sarama.ProducerMessage{Metadata: &messageMetadata{
+				callback: message.Callback,
+				logInfo:  message.LogInfo,
+			}},
+		}
 		failpoint.Return(nil)
 	})
+	meta := &messageMetadata{
+		callback: message.Callback,
+		logInfo:  message.LogInfo,
+	}
 	msg := &sarama.ProducerMessage{
 		Topic:     topic,
 		Partition: partition,
 		Key:       sarama.StringEncoder(message.Key),
 		Value:     sarama.ByteEncoder(message.Value),
-		Metadata:  message.Callback,
+		Metadata:  meta,
 	}
 	select {
 	case <-ctx.Done():
@@ -300,4 +352,15 @@ func (p *saramaAsyncProducer) AsyncSend(
 	case p.producer.Input() <- msg:
 	}
 	return nil
+}
+
+func extractLogInfo(msg *sarama.ProducerMessage) *common.MessageLogInfo {
+	if msg == nil {
+		return nil
+	}
+	meta, ok := msg.Metadata.(*messageMetadata)
+	if !ok || meta == nil {
+		return nil
+	}
+	return meta.logInfo
 }
