@@ -141,6 +141,7 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 				TableInfo:       event.TableInfo,
 				Callback:        event.PostFlush,
 			})
+			log.Debug("send message to redo", zap.Any("event", event))
 		}
 		return int(event.Len()), event.GetSize(), nil
 	})

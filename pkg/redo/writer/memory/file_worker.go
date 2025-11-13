@@ -249,6 +249,7 @@ func (f *fileWorkerGroup) bgWriteLogs(
 				log.Error("inputCh of redo file worker is closed unexpectedly")
 				return errors.ErrUnexpected.FastGenByArgs("inputCh of redo file worker is closed unexpectedly")
 			}
+			log.Debug("send message to log", zap.Any("event", event))
 			err := f.writeToCache(egCtx, event)
 			if err != nil {
 				return errors.Trace(err)
@@ -388,7 +389,7 @@ func (f *fileWorkerGroup) writeToCache(
 		}
 		file := f.newFileCache(data, rl.GetCommitTs())
 		f.files = append(f.files, file)
-		return err
+		return nil
 	}
 
 	_, err = file.writer.Write(data)

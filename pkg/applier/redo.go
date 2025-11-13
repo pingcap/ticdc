@@ -353,7 +353,7 @@ func (ra *RedoApplier) applyRow(
 	if !ra.needRecoveryInfo {
 		// If the checkpointTs is equal the DML commitTs, the DML will apply in old arch
 		// keep same with old arch.
-		tableDDLTs = ddlTs{ts: int64(checkpointTs - 1)}
+		tableDDLTs = ddlTs{ts: int64(checkpointTs)}
 	} else {
 		tableDDLTs = ra.getTableDDLTs(tableID)
 	}
