@@ -255,6 +255,7 @@ main_with_consistent() {
 		wait $CRASH_PID
 		echo "All workloads completed"
 		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
+		cleanup_process $CDC_BINARY
 	fi
 }
 

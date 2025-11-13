@@ -143,7 +143,7 @@ main() {
 
 	kill -9 $DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5
 
-	sleep 15
+	sleep 60
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
 
@@ -200,7 +200,7 @@ main_with_consistent() {
 		check_sync_diff $WORK_DIR $WORK_DIR/consistent_diff_config.toml 100
 	else
 		kill -9 $DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5
-		sleep 15
+		sleep 60
 		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
 
 		checkpoint1=$(cdc_cli_changefeed query -c "test" 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
