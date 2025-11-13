@@ -69,3 +69,8 @@ done
 # 	# Output generated go files next to protobuf files.
 # 	generate ./pkg/messaging/proto $pb paths="source_relative"
 # done
+
+$PROTOC $INCLUDE \
+	--plugin=protoc-gen-gogofaster="$GOGO_FASTER" \
+	--gogofaster_out="paths=source_relative:." \
+	./pkg/sink/codec/canal/proto/canal_protocol.proto ./pkg/sink/codec/canal/proto/entry_protocol.proto
