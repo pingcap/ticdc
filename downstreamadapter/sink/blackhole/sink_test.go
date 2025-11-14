@@ -14,6 +14,7 @@
 package blackhole
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -24,6 +25,9 @@ import (
 // Test callback and tableProgress works as expected after AddDMLEvent
 func TestBlacHoleSinkBasicFunctionality(t *testing.T) {
 	sink, err := New()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go sink.Run(ctx)
 	require.NoError(t, err)
 
 	count := 0
