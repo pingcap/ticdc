@@ -45,6 +45,7 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 	redoTs.Store(math.MaxUint64)
 	sharedInfo := dispatcher.NewSharedInfo(
 		manager.changefeedID,
+		dispatcher.NewBlockEventDynamicStream(),
 		"system",
 		false,
 		false,
@@ -101,6 +102,7 @@ func createTestManager(t *testing.T) *DispatcherManager {
 	// Create shared info for the test manager
 	manager.sharedInfo = dispatcher.NewSharedInfo(
 		manager.changefeedID,
+		dispatcher.NewBlockEventDynamicStream(),
 		"system",
 		manager.config.BDRMode,
 		false, // outputRawChangeEvent

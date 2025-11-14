@@ -66,6 +66,7 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Eve
 	redoTs.Store(math.MaxUint64)
 	sharedInfo := NewSharedInfo(
 		common.NewChangefeedID(common.DefaultKeyspaceNamme),
+		NewBlockEventDynamicStream(),
 		"system",
 		false,
 		false,
@@ -172,6 +173,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, true, isEmpty)
 	require.Equal(t, uint64(1), checkpointTs)
 
+	time.Sleep(2 * time.Second)
 	require.Equal(t, 2, count)
 
 	// 2.1 non-block ddl event, but need to communicate with maintainer(drop table)
@@ -198,6 +200,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, true, isEmpty)
 	require.Equal(t, uint64(2), checkpointTs)
 
+	time.Sleep(2 * time.Second)
 	require.Equal(t, 3, count)
 
 	require.Equal(t, 1, dispatcher.resendTaskMap.Len())
@@ -238,6 +241,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, false, isEmpty)
 	require.Equal(t, uint64(3), checkpointTs)
 
+	time.Sleep(2 * time.Second)
 	require.Equal(t, 4, count)
 
 	require.Equal(t, 1, dispatcher.resendTaskMap.Len())
@@ -287,7 +291,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
 	require.Equal(t, true, isEmpty)
 	require.Equal(t, uint64(3), checkpointTs)
-
+	time.Sleep(2 * time.Second)
 	require.Equal(t, 4, count)
 
 	require.Equal(t, 1, dispatcher.resendTaskMap.Len())
@@ -326,7 +330,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	// clear pending event(TODO:add a check for the middle status)
 	require.Nil(t, dispatcher.blockEventStatus.blockPendingEvent)
 	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_NONE)
-
+	time.Sleep(2 * time.Second)
 	require.Equal(t, 5, count)
 
 	// ===== sync point event =====
@@ -372,6 +376,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, true, isEmpty)
 	require.Equal(t, uint64(5), checkpointTs)
 
+	time.Sleep(2 * time.Second)
 	require.Equal(t, 6, count)
 
 	// ===== resolved event =====
@@ -426,6 +431,7 @@ func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 
 	checkpointTs := dispatcher.GetCheckpointTs()
 	require.Equal(t, uint64(0), checkpointTs)
+	time.Sleep(2 * time.Second)
 	require.Equal(t, 0, count)
 
 	// receive the ack info
@@ -457,6 +463,7 @@ func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 	dispatcher.HandleDispatcherStatus(dispatcherStatus)
 	checkpointTs = dispatcher.GetCheckpointTs()
 	require.Equal(t, uint64(1), checkpointTs)
+	time.Sleep(2 * time.Second)
 	require.Equal(t, 1, count)
 }
 
@@ -498,6 +505,7 @@ func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
 	require.Equal(t, true, block)
 	// no pending event
 	require.Nil(t, tableTriggerEventDispatcher.blockEventStatus.blockPendingEvent)
+	time.Sleep(2 * time.Second)
 	require.Equal(t, 1, count)
 
 	tableIds := tableTriggerEventDispatcher.tableSchemaStore.GetAllTableIds()
@@ -532,6 +540,7 @@ func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
 	require.Equal(t, true, block)
 	// no pending event
 	require.Nil(t, tableTriggerEventDispatcher.blockEventStatus.blockPendingEvent)
+	time.Sleep(2 * time.Second)
 	require.Equal(t, 2, count)
 
 	tableIds = tableTriggerEventDispatcher.tableSchemaStore.GetAllTableIds()
@@ -578,6 +587,7 @@ func TestTableTriggerEventDispatcherInKafka(t *testing.T) {
 	require.Equal(t, true, block)
 	// no pending event
 	require.Nil(t, tableTriggerEventDispatcher.blockEventStatus.blockPendingEvent)
+	time.Sleep(2 * time.Second)
 	require.Equal(t, 1, count)
 
 	tableNames := tableTriggerEventDispatcher.tableSchemaStore.GetAllTableNames(2)
@@ -611,6 +621,7 @@ func TestTableTriggerEventDispatcherInKafka(t *testing.T) {
 	require.Equal(t, true, block)
 	// no pending event
 	require.Nil(t, tableTriggerEventDispatcher.blockEventStatus.blockPendingEvent)
+	time.Sleep(2 * time.Second)
 	require.Equal(t, 2, count)
 
 	tableNames = tableTriggerEventDispatcher.tableSchemaStore.GetAllTableNames(3)
@@ -781,6 +792,7 @@ func TestDispatcherSplittableCheck(t *testing.T) {
 	// Create shared info with enableSplittableCheck=true
 	sharedInfo := NewSharedInfo(
 		common.NewChangefeedID(common.DefaultKeyspaceNamme),
+		NewBlockEventDynamicStream(),
 		"system",
 		false,
 		false,
@@ -889,6 +901,7 @@ func TestDispatcher_SkipDMLAsStartTs_FilterCorrectly(t *testing.T) {
 	redoTs.Store(math.MaxUint64)
 	sharedInfo := NewSharedInfo(
 		common.NewChangefeedID(common.DefaultKeyspaceNamme),
+		NewBlockEventDynamicStream(),
 		"system",
 		false,
 		false,
@@ -967,6 +980,7 @@ func TestDispatcher_SkipDMLAsStartTs_Disabled(t *testing.T) {
 	redoTs.Store(math.MaxUint64)
 	sharedInfo := NewSharedInfo(
 		common.NewChangefeedID(common.DefaultKeyspaceNamme),
+		NewBlockEventDynamicStream(),
 		"system",
 		false,
 		false,
