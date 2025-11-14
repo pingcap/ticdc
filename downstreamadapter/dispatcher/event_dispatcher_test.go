@@ -97,15 +97,15 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Eve
 	)
 }
 
-var count = 0
+var count atomic.Int32
 
 func callback() {
-	count++
+	count.Add(1)
 }
 
 // test different events can be correctly handled by the dispatcher
 func TestDispatcherHandleEvents(t *testing.T) {
-	count = 0
+	count.Swap(0)
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
@@ -141,7 +141,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
 	require.Equal(t, false, isEmpty)
 	require.Equal(t, uint64(1), checkpointTs)
-	require.Equal(t, 0, count)
+	require.Equal(t, int32(0), count.Load())
 
 	// flush
 	sink.FlushDMLs()
@@ -149,7 +149,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
 	require.Equal(t, true, isEmpty)
 	require.Equal(t, uint64(1), checkpointTs)
-	require.Equal(t, 1, count)
+	require.Equal(t, int32(1), count.Load())
 
 	// ===== ddl event =====
 	// 1. non-block ddl event, and don't need to communicate with maintainer
@@ -174,7 +174,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, uint64(1), checkpointTs)
 
 	time.Sleep(2 * time.Second)
-	require.Equal(t, 2, count)
+	require.Equal(t, int32(2), count.Load())
 
 	// 2.1 non-block ddl event, but need to communicate with maintainer(drop table)
 	ddlEvent21 := &commonEvent.DDLEvent{
@@ -201,7 +201,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, uint64(2), checkpointTs)
 
 	time.Sleep(2 * time.Second)
-	require.Equal(t, 3, count)
+	require.Equal(t, int32(3), count.Load())
 
 	require.Equal(t, 1, dispatcher.resendTaskMap.Len())
 
@@ -242,7 +242,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, uint64(3), checkpointTs)
 
 	time.Sleep(2 * time.Second)
-	require.Equal(t, 4, count)
+	require.Equal(t, int32(4), count.Load())
 
 	require.Equal(t, 1, dispatcher.resendTaskMap.Len())
 
@@ -292,7 +292,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, true, isEmpty)
 	require.Equal(t, uint64(3), checkpointTs)
 	time.Sleep(2 * time.Second)
-	require.Equal(t, 4, count)
+	require.Equal(t, int32(4), count.Load())
 
 	require.Equal(t, 1, dispatcher.resendTaskMap.Len())
 
@@ -331,7 +331,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	require.Nil(t, dispatcher.blockEventStatus.blockPendingEvent)
 	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_NONE)
 	time.Sleep(2 * time.Second)
-	require.Equal(t, 5, count)
+	require.Equal(t, int32(5), count.Load())
 
 	// ===== sync point event =====
 
@@ -377,7 +377,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, uint64(5), checkpointTs)
 
 	time.Sleep(2 * time.Second)
-	require.Equal(t, 6, count)
+	require.Equal(t, int32(6), count.Load())
 
 	// ===== resolved event =====
 	checkpointTs = dispatcher.GetCheckpointTs()
@@ -395,7 +395,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 
 // test uncompelete table span can correctly handle the ddl events
 func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
-	count = 0
+	count.Swap(0)
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
@@ -432,7 +432,7 @@ func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 	checkpointTs := dispatcher.GetCheckpointTs()
 	require.Equal(t, uint64(0), checkpointTs)
 	time.Sleep(2 * time.Second)
-	require.Equal(t, 0, count)
+	require.Equal(t, int32(0), count.Load())
 
 	// receive the ack info
 	dispatcherStatus := &heartbeatpb.DispatcherStatus{
@@ -450,7 +450,7 @@ func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 	// the ddl is still not available for write to sink
 	checkpointTs = dispatcher.GetCheckpointTs()
 	require.Equal(t, uint64(0), checkpointTs)
-	require.Equal(t, 0, count)
+	require.Equal(t, int32(0), count.Load())
 
 	// receive the action info
 	dispatcherStatus = &heartbeatpb.DispatcherStatus{
@@ -464,11 +464,11 @@ func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 	checkpointTs = dispatcher.GetCheckpointTs()
 	require.Equal(t, uint64(1), checkpointTs)
 	time.Sleep(2 * time.Second)
-	require.Equal(t, 1, count)
+	require.Equal(t, int32(1), count.Load())
 }
 
 func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
-	count = 0
+	count.Swap(0)
 
 	ddlTableSpan := common.KeyspaceDDLSpan(common.DefaultKeyspaceID)
 	sink := sink.NewMockSink(common.MysqlSinkType)
@@ -506,7 +506,7 @@ func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
 	// no pending event
 	require.Nil(t, tableTriggerEventDispatcher.blockEventStatus.blockPendingEvent)
 	time.Sleep(2 * time.Second)
-	require.Equal(t, 1, count)
+	require.Equal(t, int32(1), count.Load())
 
 	tableIds := tableTriggerEventDispatcher.tableSchemaStore.GetAllTableIds()
 	require.Equal(t, 1, len(tableIds))
@@ -541,7 +541,7 @@ func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
 	// no pending event
 	require.Nil(t, tableTriggerEventDispatcher.blockEventStatus.blockPendingEvent)
 	time.Sleep(2 * time.Second)
-	require.Equal(t, 2, count)
+	require.Equal(t, int32(2), count.Load())
 
 	tableIds = tableTriggerEventDispatcher.tableSchemaStore.GetAllTableIds()
 	require.Equal(t, int(2), len(tableIds))
@@ -550,7 +550,7 @@ func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
 }
 
 func TestTableTriggerEventDispatcherInKafka(t *testing.T) {
-	count = 0
+	count.Swap(0)
 
 	ddlTableSpan := common.KeyspaceDDLSpan(common.DefaultKeyspaceID)
 	sink := sink.NewMockSink(common.KafkaSinkType)
@@ -588,7 +588,7 @@ func TestTableTriggerEventDispatcherInKafka(t *testing.T) {
 	// no pending event
 	require.Nil(t, tableTriggerEventDispatcher.blockEventStatus.blockPendingEvent)
 	time.Sleep(2 * time.Second)
-	require.Equal(t, 1, count)
+	require.Equal(t, int32(1), count.Load())
 
 	tableNames := tableTriggerEventDispatcher.tableSchemaStore.GetAllTableNames(2)
 	require.Equal(t, int(0), len(tableNames))
@@ -622,7 +622,7 @@ func TestTableTriggerEventDispatcherInKafka(t *testing.T) {
 	// no pending event
 	require.Nil(t, tableTriggerEventDispatcher.blockEventStatus.blockPendingEvent)
 	time.Sleep(2 * time.Second)
-	require.Equal(t, 2, count)
+	require.Equal(t, int32(2), count.Load())
 
 	tableNames = tableTriggerEventDispatcher.tableSchemaStore.GetAllTableNames(3)
 	require.Equal(t, int(0), len(tableNames))
