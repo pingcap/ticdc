@@ -7,6 +7,9 @@
 # --logsuffix: log suffix
 # --addr: address
 # --pd: pd address
+# --redact-info-log: log redaction mode (off|on|marker)
+#                    Security note: Once enabled via API at runtime, redaction
+#                    cannot be disabled to prevent accidental data exposure
 
 set -e
 
@@ -22,6 +25,9 @@ addr_url="127.0.0.1:8300"
 pd_addr=
 pwd=$pwd
 log_level=debug
+# Security feature: Log redaction mode (off|on|marker)
+# Can be set at startup. Once enabled via API at runtime, it cannot be disabled.
+redact_log=
 restart=
 failpoint=$GO_FAILPOINTS
 config_path=
@@ -66,6 +72,10 @@ while [[ ${1} ]]; do
 		;;
 	--loglevel)
 		log_level=${2}
+		shift
+		;;
+	--redact-info-log)
+		redact_log="--redact-info-log ${2}"
 		shift
 		;;
 	--restart)
@@ -125,6 +135,7 @@ if [[ "$restart" == "true" ]]; then
 		GO_FAILPOINTS=$failpoint $binary -test.coverprofile="$OUT_DIR/cov.$TEST_NAME.$pid.out" server $newarch \
 			--log-file $workdir/cdc$logsuffix.log \
 			--log-level $log_level \
+			$redact_log \
 			--data-dir "$data_dir" \
 			--cluster-id "$cluster_id" \
 			$config_path \
@@ -141,6 +152,7 @@ else
 	GO_FAILPOINTS=$failpoint $binary -test.coverprofile="$OUT_DIR/cov.$TEST_NAME.$pid.out" server \
 		--log-file $workdir/cdc$logsuffix.log \
 		--log-level $log_level \
+		$redact_log \
 		--data-dir "$data_dir" \
 		--cluster-id "$cluster_id" \
 		$config_path \
