@@ -127,6 +127,7 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	_ = s.statistics.RecordBatchExecution(func() (int, int64, error) {
+		log.Debug("send message to redo", zap.Any("event", event))
 		for {
 			row, ok := event.GetNextRow()
 			if !ok {
@@ -141,7 +142,8 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 				TableInfo:       event.TableInfo,
 				Callback:        event.PostFlush,
 			})
-			log.Debug("send message to redo", zap.Any("event", event))
+			log.Debug("push row", zap.Any("row", row), zap.Any("StartTs", event.StartTs), zap.Any("CommitTs", event.CommitTs),
+				zap.Any("TableInfo", event.TableInfo))
 		}
 		return int(event.Len()), event.GetSize(), nil
 	})
