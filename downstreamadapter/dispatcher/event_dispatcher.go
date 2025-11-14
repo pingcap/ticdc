@@ -139,6 +139,13 @@ func (d *EventDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 		d.cache(dispatcherEvents, wakeCallback)
 		return true
 	}
+	log.Debug("handleEvents",
+		zap.Stringer("dispatcher", d.id),
+		zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
+		zap.Uint64("redoGlobalTs", d.redoGlobalTs.Load()),
+		zap.Int("length", len(dispatcherEvents)),
+		zap.Any("dispatcherEvents", dispatcherEvents),
+	)
 	return d.handleEvents(dispatcherEvents, wakeCallback)
 }
 
