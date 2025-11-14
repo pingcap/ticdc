@@ -361,11 +361,7 @@ func (s *subscriptionClient) Subscribe(
 	s.totalSpans.Unlock()
 
 	serverConfig := config.GetGlobalServerConfig()
-	memoryQuota := serverConfig.Debug.Puller.MemoryQuota
-	if memoryQuota < 1*1024*1024*1024 {
-		memoryQuota = 1 * 1024 * 1024 * 1024
-	}
-	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlForPuller, "logPuller")
+	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(serverConfig.Debug.Puller.MemoryQuota, dynstream.MemoryControlForPuller, "logPuller")
 	s.ds.AddPath(rt.subID, rt, areaSetting)
 
 	select {
