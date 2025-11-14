@@ -15,6 +15,7 @@ package blackhole
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,7 +31,8 @@ func TestBlacHoleSinkBasicFunctionality(t *testing.T) {
 	go sink.Run(ctx)
 	require.NoError(t, err)
 
-	count := 0
+	var count atomic.Int32
+	count.Swap(0)
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -51,7 +53,7 @@ func TestBlacHoleSinkBasicFunctionality(t *testing.T) {
 		},
 		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
 		PostTxnFlushed: []func(){
-			func() { count++ },
+			func() { count.Add(1) },
 		},
 	}
 
@@ -66,13 +68,13 @@ func TestBlacHoleSinkBasicFunctionality(t *testing.T) {
 		},
 		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
 		PostTxnFlushed: []func(){
-			func() { count++ },
+			func() { count.Add(1) },
 		},
 	}
 
 	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')", "insert into t values (2, 'test2');")
 	dmlEvent.PostTxnFlushed = []func(){
-		func() { count++ },
+		func() { count.Add(1) },
 	}
 	dmlEvent.CommitTs = 2
 
@@ -84,5 +86,5 @@ func TestBlacHoleSinkBasicFunctionality(t *testing.T) {
 
 	ddlEvent2.PostFlush()
 
-	require.Equal(t, count, 3)
+	require.Equal(t, count.Load(), int32(3))
 }

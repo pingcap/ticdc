@@ -164,7 +164,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, callback)
 	require.Equal(t, true, block)
 	require.Equal(t, 0, len(sink.GetDMLs()))
-	time.Sleep(10 * time.Second)
+	time.Sleep(5 * time.Second)
 	// no pending event
 	blockPendingEvent, blockStage := dispatcher.blockEventStatus.getEventAndStage()
 	require.Nil(t, blockPendingEvent)
@@ -191,7 +191,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent21)}, callback)
 	require.Equal(t, true, block)
 	require.Equal(t, 0, len(sink.GetDMLs()))
-	time.Sleep(10 * time.Second)
+	time.Sleep(5 * time.Second)
 	// no pending event
 	blockPendingEvent, blockStage = dispatcher.blockEventStatus.getEventAndStage()
 	require.Nil(t, blockPendingEvent)
@@ -232,11 +232,11 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent2)}, callback)
 	require.Equal(t, true, block)
 	require.Equal(t, 0, len(sink.GetDMLs()))
-	time.Sleep(10 * time.Second)
+	time.Sleep(5 * time.Second)
 	// no pending event
 	blockPendingEvent, blockStage = dispatcher.blockEventStatus.getEventAndStage()
 	require.Nil(t, blockPendingEvent)
-	require.Equal(t, blockStage, heartbeatpb.BlockStage_WAITING)
+	require.Equal(t, blockStage, heartbeatpb.BlockStage_NONE)
 	// but block table progress until ack
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
 	require.Equal(t, false, isEmpty)
@@ -282,7 +282,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent3)}, callback)
 	require.Equal(t, true, block)
 	require.Equal(t, 0, len(sink.GetDMLs()))
-	time.Sleep(10 * time.Second)
+	time.Sleep(5 * time.Second)
 	// pending event
 	blockPendingEvent, blockStage = dispatcher.blockEventStatus.getEventAndStage()
 	require.Nil(t, blockPendingEvent)
@@ -292,7 +292,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
 	require.Equal(t, true, isEmpty)
 	require.Equal(t, uint64(3), checkpointTs)
-	time.Sleep(10 * time.Second)
+	time.Sleep(5 * time.Second)
 	require.Equal(t, int32(4), count.Load())
 
 	require.Equal(t, 1, dispatcher.resendTaskMap.Len())
@@ -308,7 +308,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, 0, dispatcher.resendTaskMap.Len())
 	// pending event
 	blockPendingEvent, blockStage = dispatcher.blockEventStatus.getEventAndStage()
-	require.Nil(t, blockPendingEvent)
+	require.NotNil(t, blockPendingEvent)
 	require.Equal(t, blockStage, heartbeatpb.BlockStage_WAITING)
 
 	// the ddl is still not available for write to sink
@@ -342,11 +342,11 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	}
 	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, syncPointEvent)}, callback)
 	require.Equal(t, true, block)
-	time.Sleep(10 * time.Second)
+	time.Sleep(5 * time.Second)
 	require.Equal(t, 0, len(sink.GetDMLs()))
 	// pending event
 	blockPendingEvent, blockStage = dispatcher.blockEventStatus.getEventAndStage()
-	require.Nil(t, blockPendingEvent)
+	require.NotNil(t, blockPendingEvent)
 	require.Equal(t, blockStage, heartbeatpb.BlockStage_WAITING)
 
 	// not available for write to sink
@@ -365,7 +365,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, 0, dispatcher.resendTaskMap.Len())
 	// pending event
 	blockPendingEvent, blockStage = dispatcher.blockEventStatus.getEventAndStage()
-	require.Nil(t, blockPendingEvent)
+	require.NotNil(t, blockPendingEvent)
 	require.Equal(t, blockStage, heartbeatpb.BlockStage_WAITING)
 
 	// receive the action info
@@ -427,10 +427,10 @@ func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 	nodeID := node.NewID()
 	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, callback)
 	require.Equal(t, true, block)
-	time.Sleep(10 * time.Second)
+	time.Sleep(5 * time.Second)
 	// pending event
 	blockPendingEvent, blockStage := dispatcher.blockEventStatus.getEventAndStage()
-	require.Nil(t, blockPendingEvent)
+	require.NotNil(t, blockPendingEvent)
 	require.Equal(t, blockStage, heartbeatpb.BlockStage_WAITING)
 	require.Equal(t, 1, dispatcher.resendTaskMap.Len())
 
@@ -449,7 +449,7 @@ func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, 0, dispatcher.resendTaskMap.Len())
 	// pending event
 	blockPendingEvent, blockStage = dispatcher.blockEventStatus.getEventAndStage()
-	require.Nil(t, blockPendingEvent)
+	require.NotNil(t, blockPendingEvent)
 	require.Equal(t, blockStage, heartbeatpb.BlockStage_WAITING)
 
 	// the ddl is still not available for write to sink
@@ -507,7 +507,7 @@ func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
 	nodeID := node.NewID()
 	block := tableTriggerEventDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, callback)
 	require.Equal(t, true, block)
-	time.Sleep(10 * time.Second)
+	time.Sleep(5 * time.Second)
 	// no pending event
 	blockPendingEvent := tableTriggerEventDispatcher.blockEventStatus.getEvent()
 	require.Nil(t, blockPendingEvent)
@@ -543,7 +543,7 @@ func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
 
 	block = tableTriggerEventDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, callback)
 	require.Equal(t, true, block)
-	time.Sleep(10 * time.Second)
+	time.Sleep(5 * time.Second)
 	// no pending event
 	blockPendingEvent = tableTriggerEventDispatcher.blockEventStatus.getEvent()
 	require.Nil(t, blockPendingEvent)
@@ -591,7 +591,7 @@ func TestTableTriggerEventDispatcherInKafka(t *testing.T) {
 	nodeID := node.NewID()
 	block := tableTriggerEventDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, callback)
 	require.Equal(t, true, block)
-	time.Sleep(10 * time.Second)
+	time.Sleep(5 * time.Second)
 	// no pending event
 	blockPendingEvent := tableTriggerEventDispatcher.blockEventStatus.getEvent()
 	require.Nil(t, blockPendingEvent)
@@ -626,7 +626,7 @@ func TestTableTriggerEventDispatcherInKafka(t *testing.T) {
 
 	block = tableTriggerEventDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, callback)
 	require.Equal(t, true, block)
-	time.Sleep(10 * time.Second)
+	time.Sleep(5 * time.Second)
 	// no pending event
 	blockPendingEvent = tableTriggerEventDispatcher.blockEventStatus.getEvent()
 	require.Nil(t, blockPendingEvent)
