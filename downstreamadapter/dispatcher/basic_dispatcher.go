@@ -72,6 +72,7 @@ type Dispatcher interface {
 	GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus
 	GetEventSizePerSecond() float32
 	IsTableTriggerEventDispatcher() bool
+	DealWithBlockEvent(event commonEvent.BlockEvent)
 	TryClose() (w heartbeatpb.Watermark, ok bool)
 	Remove()
 }
@@ -179,6 +180,8 @@ type BasicDispatcher struct {
 	// In this corner case, `tableProgress` might be empty, which could lead to the dispatcher being removed prematurely.
 	duringHandleEvents atomic.Bool
 
+	blockEventChan chan commonEvent.BlockEvent
+
 	seq  uint64
 	mode int64
 
@@ -220,6 +223,8 @@ func NewBasicDispatcher(
 		mode:                   mode,
 		BootstrapState:         BootstrapFinished,
 	}
+
+	sharedInfo.GetBlockEventDS().AddPath(dispatcher.id, dispatcher)
 
 	return dispatcher
 }
@@ -479,7 +484,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				}
 				wakeCallback()
 			})
-			d.dealWithBlockEvent(ddl)
+			d.sharedInfo.GetBlockEventDS().Push(d.id, newBlockEventWithID(d.id, ddl))
 		case commonEvent.TypeSyncPointEvent:
 			if common.IsRedoMode(d.GetMode()) {
 				continue
@@ -498,7 +503,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			syncPoint.AddPostFlushFunc(func() {
 				wakeCallback()
 			})
-			d.dealWithBlockEvent(syncPoint)
+			d.sharedInfo.GetBlockEventDS().Push(d.id, newBlockEventWithID(d.id, syncPoint))
 		case commonEvent.TypeHandshakeEvent:
 			log.Warn("Receive handshake event unexpectedly",
 				zap.Stringer("dispatcher", d.id),
@@ -648,7 +653,7 @@ func (d *BasicDispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
 // 1.If the event is a single table DDL, it will be added to the sink for writing to downstream.
 // If the ddl leads to add new tables or drop tables, it should send heartbeat to maintainer
 // 2. If the event is a multi-table DDL / sync point Event, it will generate a TableSpanBlockStatus message with ddl info to send to maintainer.
-func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
+func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 	if !d.shouldBlock(event) {
 		err := d.AddBlockEventToSink(event)
 		if err != nil {
@@ -891,4 +896,6 @@ func (d *BasicDispatcher) removeDispatcher() {
 			zap.Any("identifier", identifier),
 			zap.Stringer("dispatcherID", d.id))
 	}
+
+	d.sharedInfo.GetBlockEventDS().RemovePath(d.id)
 }

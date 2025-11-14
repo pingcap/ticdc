@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/utils/dynstream"
 )
 
 // SharedInfo contains all the shared configuration and resources
@@ -28,7 +29,10 @@ import (
 // This eliminates the need to pass these parameters individually to each dispatcher.
 type SharedInfo struct {
 	// Basic configuration
-	changefeedID         common.ChangeFeedID
+	changefeedID common.ChangeFeedID
+
+	blockEventDS dynstream.DynamicStream[int, common.DispatcherID, BlockEventWithID, Dispatcher, *BlockEventTaskHandler]
+
 	timezone             string
 	bdrMode              bool
 	outputRawChangeEvent bool
@@ -62,6 +66,7 @@ type SharedInfo struct {
 // NewSharedInfo creates a new SharedInfo with the given parameters
 func NewSharedInfo(
 	changefeedID common.ChangeFeedID,
+	blockEventDS dynstream.DynamicStream[int, common.DispatcherID, BlockEventWithID, Dispatcher, *BlockEventTaskHandler],
 	timezone string,
 	bdrMode bool,
 	outputRawChangeEvent bool,
@@ -75,6 +80,7 @@ func NewSharedInfo(
 ) *SharedInfo {
 	return &SharedInfo{
 		changefeedID:          changefeedID,
+		blockEventDS:          blockEventDS,
 		timezone:              timezone,
 		bdrMode:               bdrMode,
 		outputRawChangeEvent:  outputRawChangeEvent,
@@ -212,4 +218,8 @@ func (s *SharedInfo) GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStat
 
 func (s *SharedInfo) GetErrCh() chan error {
 	return s.errCh
+}
+
+func (s *SharedInfo) GetBlockEventDS() dynstream.DynamicStream[int, common.DispatcherID, BlockEventWithID, Dispatcher, *BlockEventTaskHandler] {
+	return s.blockEventDS
 }
