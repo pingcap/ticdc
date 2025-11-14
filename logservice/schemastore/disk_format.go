@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"go.uber.org/zap"
@@ -351,7 +352,7 @@ func loadAndApplyDDLHistory(
 		// 2. for other ddls to be ignored, they are already filtered before write to disk.
 		handler, ok := allDDLHandlers[model.ActionType(ddlEvent.Type)]
 		if !ok {
-			log.Panic("unknown ddl type", zap.Any("ddlType", ddlEvent.Type), zap.String("query", ddlEvent.Query))
+			log.Panic("unknown ddl type", zap.Any("ddlType", ddlEvent.Type), zap.String("query", util.RedactValue(ddlEvent.Query)))
 		}
 		tableTriggerDDLHistory = handler.updateDDLHistoryFunc(updateDDLHistoryFuncArgs{
 			ddlEvent:               &ddlEvent,
@@ -771,7 +772,7 @@ func loadAllPhysicalTablesAtTs(
 		ddlEvent := unmarshalPersistedDDLEvent(snapIter.Value())
 		handler, ok := allDDLHandlers[model.ActionType(ddlEvent.Type)]
 		if !ok {
-			log.Panic("unknown ddl type", zap.Any("ddlType", ddlEvent.Type), zap.String("query", ddlEvent.Query))
+			log.Panic("unknown ddl type", zap.Any("ddlType", ddlEvent.Type), zap.String("query", util.RedactValue(ddlEvent.Query)))
 		}
 		// Note: updateFullTableInfoFunc must be called before updateSchemaMetadataFunc,
 		// because it depends on some info which may be updated by updateSchemaMetadataFunc.

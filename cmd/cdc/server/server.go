@@ -25,10 +25,12 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/config"
+	perrors "github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/security"
+	pkgutil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/pingcap/ticdc/server"
 	ticonfig "github.com/pingcap/tidb/pkg/config"
@@ -49,6 +51,8 @@ type options struct {
 	certPath      string
 	keyPath       string
 	allowedCertCN string
+
+	redactInfoLog string
 }
 
 // newOptions creates new options for the `server` command.
@@ -81,6 +85,9 @@ func (o *options) addFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&o.certPath, "cert", "", "Certificate path for TLS connection")
 	cmd.Flags().StringVar(&o.keyPath, "key", "", "Private key path for TLS connection")
 	cmd.Flags().StringVar(&o.allowedCertCN, "cert-allowed-cn", "", "Verify caller's identity (cert Common Name). Use ',' to separate multiple CN")
+
+	// Add redact-info-log flag
+	cmd.Flags().StringVar(&o.redactInfoLog, "redact-info-log", "off", "Log redaction mode: off (default, no redaction), on (redact with '?'), marker (wrap with ‹›)")
 }
 
 // run runs the server cmd.
@@ -99,6 +106,11 @@ func (o *options) run(cmd *cobra.Command) error {
 		os.Exit(1)
 	}
 	log.Info("init log", zap.String("file", loggerConfig.File), zap.String("level", loggerConfig.Level))
+
+	// Initialize log redaction mode
+	redactMode := pkgutil.ParseRedactMode(o.serverConfig.Security.RedactInfoLog)
+	perrors.RedactLogEnabled.Store(redactMode)
+	log.Info("log redaction initialized", zap.String("mode", redactMode))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -183,6 +195,8 @@ func (o *options) complete(command *cobra.Command) error {
 			cfg.Security.KeyPath = o.serverConfig.Security.KeyPath
 		case "cert-allowed-cn":
 			cfg.Security.CertAllowedCN = o.serverConfig.Security.CertAllowedCN
+		case "redact-info-log":
+			cfg.Security.RedactInfoLog = o.redactInfoLog
 		case "cluster-id":
 			cfg.ClusterID = o.serverConfig.ClusterID
 		case "pd", "config":
@@ -293,6 +307,28 @@ func isNewArchEnabled(o *options) bool {
 }
 
 func runTiFlowServer(o *options, cmd *cobra.Command) error {
+	// Set redact config for old architecture
+	o.serverConfig.Security.RedactInfoLog = o.redactInfoLog
+
+	// Initialize log redaction mode for old architecture
+	redactMode := pkgutil.ParseRedactMode(o.redactInfoLog)
+	perrors.RedactLogEnabled.Store(redactMode)
+	log.Info("log redaction initialized", zap.String("mode", redactMode))
+
+	// Create a new command without the redact-info-log flag for old architecture
+	// Tiflow doesn't support this flag and will panic on unknown flags
+	cleanCmd := &cobra.Command{
+		Use:   cmd.Use,
+		Short: cmd.Short,
+		Args:  cmd.Args,
+	}
+	// Copy only the flags that tiflow knows about
+	cmd.Flags().VisitAll(func(flag *pflag.Flag) {
+		if flag.Name != "redact-info-log" {
+			cleanCmd.Flags().AddFlag(flag)
+		}
+	})
+
 	cfgData, err := json.Marshal(o.serverConfig)
 	if err != nil {
 		return errors.Trace(err)
@@ -313,7 +349,7 @@ func runTiFlowServer(o *options, cmd *cobra.Command) error {
 	oldOptions.KeyPath = o.keyPath
 	oldOptions.AllowedCertCN = o.allowedCertCN
 
-	return tiflowServer.Run(&oldOptions, cmd)
+	return tiflowServer.Run(&oldOptions, cleanCmd)
 }
 
 // NewCmdServer creates the `server` command.

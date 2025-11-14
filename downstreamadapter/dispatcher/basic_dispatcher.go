@@ -27,7 +27,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/sink/util"
+	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -172,7 +173,7 @@ type BasicDispatcher struct {
 	// tableSchemaStore only exist when the dispatcher is a table trigger event dispatcher
 	// tableSchemaStore store the schema infos for all the table in the event dispatcher manager
 	// it's used for sink to calculate the tableNames or TableIds
-	tableSchemaStore *util.TableSchemaStore
+	tableSchemaStore *sinkutil.TableSchemaStore
 
 	isRemoving atomic.Bool
 	// duringHandleEvents is used to indicate whether the dispatcher is currently handling events.
@@ -378,7 +379,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			log.Debug("dispatcher receive all event",
 				zap.Stringer("dispatcher", d.id), zap.Int64("mode", d.mode),
 				zap.String("eventType", commonEvent.TypeToString(dispatcherEvent.Event.GetType())),
-				zap.Any("event", dispatcherEvent.Event))
+				zap.String("event", util.RedactAny(dispatcherEvent.Event)))
 		}
 
 		failpoint.Inject("HandleEventsSlowly", func() {
@@ -470,7 +471,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			}
 			log.Info("dispatcher receive ddl event",
 				zap.Stringer("dispatcher", d.id),
-				zap.String("query", ddl.Query),
+				zap.String("query", util.RedactValue(ddl.Query)),
 				zap.Int64("table", tableID),
 				zap.Uint64("commitTs", event.GetCommitTs()),
 				zap.Uint64("seq", event.GetSeq()))

@@ -132,7 +132,7 @@ func (m *glueSchemaManager) Lookup(
 	entry, exists := m.cache[schemaName]
 	if exists && entry.schemaID.confluentSchemaID == schemaID.confluentSchemaID {
 		log.Debug("Avro schema lookup cache hit",
-			zap.String("key", schemaName),
+			zap.String("key", schemaName), // skip-redaction: schema name, not user data
 			zap.Int("schemaID", entry.schemaID.confluentSchemaID))
 		m.cacheRWLock.RUnlock()
 		return entry.codec, nil
@@ -140,7 +140,7 @@ func (m *glueSchemaManager) Lookup(
 	m.cacheRWLock.RUnlock()
 
 	log.Info("Avro schema lookup cache miss",
-		zap.String("key", schemaName),
+		zap.String("key", schemaName), // skip-redaction: schema name, not user data
 		zap.Int("schemaID", schemaID.confluentSchemaID))
 
 	ok, schema, err := m.getSchemaByID(ctx, schemaID.glueSchemaID)
