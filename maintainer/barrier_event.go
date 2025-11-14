@@ -341,7 +341,7 @@ func (be *BarrierEvent) allDispatcherReported() bool {
 			if be.spanController.IsDDLDispatcher(dispatcherID) {
 				ddlDispatcherExist = false
 			}
-		} else if !be.spanController.IsReplicating(task) {
+		} else if !be.spanController.IsDDLDispatcher(dispatcherID) && !be.spanController.IsReplicating(task) { // TODO:fix ddlReplicating status
 			log.Info("unreplicating dispatcher, remove it from barrier event",
 				zap.String("changefeed", be.cfID.Name()),
 				zap.String("dispatcher", dispatcherID.String()),
@@ -349,9 +349,6 @@ func (be *BarrierEvent) allDispatcherReported() bool {
 			)
 			needDoubleCheck = true
 			delete(be.reportedDispatchers, dispatcherID)
-			if be.spanController.IsDDLDispatcher(dispatcherID) {
-				ddlDispatcherExist = false
-			}
 		}
 	}
 
