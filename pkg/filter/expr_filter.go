@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/expression"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -31,7 +32,6 @@ import (
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/pingcap/tidb/pkg/util/dbterror/plannererrors"
 	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
-	"github.com/pingcap/tiflow/dm/pkg/utils"
 	"go.uber.org/zap"
 )
 
@@ -404,7 +404,7 @@ func newExprFilter(
 	cfg *config.FilterConfig,
 ) (*dmlExprFilter, error) {
 	res := &dmlExprFilter{}
-	sessCtx := utils.NewSessionCtx(map[string]string{
+	sessCtx := util.NewSessionCtx(map[string]string{
 		"time_zone": timezone,
 	})
 	for _, rule := range cfg.EventFilters {
