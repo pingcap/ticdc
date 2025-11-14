@@ -225,6 +225,27 @@ func (e *DispatcherManager) cleanRedoDispatcher(id common.DispatcherID, schemaID
 	)
 }
 
+func (e *DispatcherManager) closeRedoMeta(removeChangefeed bool) {
+	if removeChangefeed {
+		e.redoTableTriggerEventDispatcher.GetRedoMeta().Cleanup(context.Background())
+	}
+}
+
+func (e *DispatcherManager) InitalizeRedoTableTriggerEventDispatcher(schemaInfo []*heartbeatpb.SchemaInfo) error {
+	if e.redoTableTriggerEventDispatcher == nil {
+		return nil
+	}
+	needAddDispatcher, err := e.redoTableTriggerEventDispatcher.InitializeTableSchemaStore(schemaInfo)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	if !needAddDispatcher {
+		return nil
+	}
+	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.redoTableTriggerEventDispatcher, e.redoQuota)
+	return nil
+}
+
 func (e *DispatcherManager) SetGlobalRedoTs(checkpointTs, resolvedTs uint64) bool {
 	// only update meta on the one node
 	if e.redoTableTriggerEventDispatcher != nil {

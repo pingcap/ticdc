@@ -25,7 +25,7 @@ import (
 	"github.com/pierrec/lz4/v4"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/common/event"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/compression"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -101,6 +101,7 @@ type fileWorkerGroup struct {
 
 	metricWriteBytes       prometheus.Gauge
 	metricFlushAllDuration prometheus.Observer
+	tableSchemaStore       *commonEvent.TableSchemaStore
 }
 
 // newFileWorkerGroup create a fileWorkerGroup
@@ -248,6 +249,7 @@ func (f *fileWorkerGroup) bgWriteLogs(
 				log.Error("inputCh of redo file worker is closed unexpectedly")
 				return errors.ErrUnexpected.FastGenByArgs("inputCh of redo file worker is closed unexpectedly")
 			}
+			log.Debug("send message to log", zap.Any("event", event.ToRedoLog()))
 			err := f.writeToCache(egCtx, event)
 			if err != nil {
 				return errors.Trace(err)
@@ -338,8 +340,11 @@ func (f *fileWorkerGroup) newFileCache(data []byte, commitTs common.Ts) *fileCac
 	}
 }
 
-func (f *fileWorkerGroup) encodeData(event writer.RedoEvent) (*event.RedoLog, []byte, error) {
+func (f *fileWorkerGroup) encodeData(event writer.RedoEvent) (*commonEvent.RedoLog, []byte, error) {
 	rl := event.ToRedoLog()
+	if rl.Type == commonEvent.RedoLogTypeDDL {
+		rl.RedoDDL.SetTableSchemaStore(f.tableSchemaStore)
+	}
 	rawData, err := codec.MarshalRedoLog(rl, nil)
 	if err != nil {
 		return nil, nil, err
@@ -364,7 +369,7 @@ func (f *fileWorkerGroup) writeToCache(
 	}
 	writeLen := int64(len(data))
 	if writeLen > f.cfg.MaxLogSizeInBytes {
-		// TODO: maybe we need to deal with the oversized event.
+		// TODO: maybe we need to deal with the oversized commonEvent.
 		return errors.ErrRedoFileSizeExceed.GenWithStackByArgs(writeLen, f.cfg.MaxLogSizeInBytes)
 	}
 	defer f.metricWriteBytes.Add(float64(writeLen))
@@ -384,7 +389,7 @@ func (f *fileWorkerGroup) writeToCache(
 		}
 		file := f.newFileCache(data, rl.GetCommitTs())
 		f.files = append(f.files, file)
-		return err
+		return nil
 	}
 
 	_, err = file.writer.Write(data)

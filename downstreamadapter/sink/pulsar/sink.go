@@ -26,7 +26,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/util"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -48,7 +47,7 @@ type sink struct {
 	isNormal *atomic.Bool
 	ctx      context.Context
 
-	tableSchemaStore *util.TableSchemaStore
+	tableSchemaStore *commonEvent.TableSchemaStore
 	checkpointTsChan chan uint64
 	eventChan        chan *commonEvent.DMLEvent
 	rowChan          chan *commonEvent.MQRowEvent
@@ -192,7 +191,7 @@ func (s *sink) AddCheckpointTs(ts uint64) {
 	}
 }
 
-func (s *sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
+func (s *sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
 	s.tableSchemaStore = tableSchemaStore
 }
 

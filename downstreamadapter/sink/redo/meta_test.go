@@ -46,9 +46,9 @@ func TestInitAndWriteMeta(t *testing.T) {
 
 	// write some meta and log files
 	metas := []misc.LogMeta{
-		{CheckpointTs: 1, ResolvedTs: 2},
-		{CheckpointTs: 8, ResolvedTs: 9},
-		{CheckpointTs: 9, ResolvedTs: 11},
+		misc.NewMeta(1, 2),
+		misc.NewMeta(8, 9),
+		misc.NewMeta(9, 11),
 	}
 
 	var toRemoveFiles []string
@@ -130,10 +130,10 @@ func TestPreCleanupAndWriteMeta(t *testing.T) {
 
 	// write some meta and log files
 	metas := []misc.LogMeta{
-		{CheckpointTs: 1, ResolvedTs: 2},
-		{CheckpointTs: 8, ResolvedTs: 9},
-		{CheckpointTs: 9, ResolvedTs: 11},
-		{CheckpointTs: 11, ResolvedTs: 12},
+		misc.NewMeta(1, 2),
+		misc.NewMeta(8, 9),
+		misc.NewMeta(9, 11),
+		misc.NewMeta(11, 12),
 	}
 	var toRemoveFiles []string
 	for _, meta := range metas {

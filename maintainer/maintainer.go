@@ -584,7 +584,6 @@ func (m *Maintainer) handleRedoMessage(ctx context.Context) {
 			}
 			log.Debug("handle redo message",
 				zap.Any("needUpdate", needUpdate),
-				zap.Any("updateCheckpointTs", updateCheckpointTs),
 				zap.Any("globalRedoTs", m.redoTs),
 				zap.Any("checkpointTs", m.getWatermark().CheckpointTs),
 				zap.Any("resolvedTs", newWatermark.CheckpointTs),
