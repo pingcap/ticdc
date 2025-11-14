@@ -224,8 +224,6 @@ func NewBasicDispatcher(
 		BootstrapState:         BootstrapFinished,
 	}
 
-	sharedInfo.GetBlockEventDS().AddPath(dispatcher.id, dispatcher)
-
 	return dispatcher
 }
 
@@ -484,7 +482,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				}
 				wakeCallback()
 			})
-			d.sharedInfo.GetBlockEventDS().Push(d.id, newBlockEventWithID(d.id, ddl))
+			d.sharedInfo.GetBlockEventExecutor().Submit(d, ddl)
 		case commonEvent.TypeSyncPointEvent:
 			if common.IsRedoMode(d.GetMode()) {
 				continue
@@ -503,7 +501,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			syncPoint.AddPostFlushFunc(func() {
 				wakeCallback()
 			})
-			d.sharedInfo.GetBlockEventDS().Push(d.id, newBlockEventWithID(d.id, syncPoint))
+			d.sharedInfo.GetBlockEventExecutor().Submit(d, syncPoint)
 		case commonEvent.TypeHandshakeEvent:
 			log.Warn("Receive handshake event unexpectedly",
 				zap.Stringer("dispatcher", d.id),
@@ -896,6 +894,4 @@ func (d *BasicDispatcher) removeDispatcher() {
 			zap.Any("identifier", identifier),
 			zap.Stringer("dispatcherID", d.id))
 	}
-
-	d.sharedInfo.GetBlockEventDS().RemovePath(d.id)
 }

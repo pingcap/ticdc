@@ -21,7 +21,6 @@ import (
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/utils/dynstream"
 )
 
 // SharedInfo contains all the shared configuration and resources
@@ -30,8 +29,6 @@ import (
 type SharedInfo struct {
 	// Basic configuration
 	changefeedID common.ChangeFeedID
-
-	blockEventDS dynstream.DynamicStream[int, common.DispatcherID, BlockEventWithID, Dispatcher, *BlockEventTaskHandler]
 
 	timezone             string
 	bdrMode              bool
@@ -58,6 +55,11 @@ type SharedInfo struct {
 	// blockStatusesChan use to collector block status of ddl/sync point event to Maintainer
 	// shared by the event dispatcher manager
 	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus
+
+	// blockExecutor is used to execute block events such as DDL and sync point events asynchronously
+	// to avoid callback() called in handleEvents, causing deadlock in ds
+	blockExecutor *blockEventExecutor
+
 	// errCh is used to collect the errors that need to report to maintainer
 	// such as error of flush ddl events
 	errCh chan error
@@ -66,7 +68,6 @@ type SharedInfo struct {
 // NewSharedInfo creates a new SharedInfo with the given parameters
 func NewSharedInfo(
 	changefeedID common.ChangeFeedID,
-	blockEventDS dynstream.DynamicStream[int, common.DispatcherID, BlockEventWithID, Dispatcher, *BlockEventTaskHandler],
 	timezone string,
 	bdrMode bool,
 	outputRawChangeEvent bool,
@@ -80,7 +81,6 @@ func NewSharedInfo(
 ) *SharedInfo {
 	return &SharedInfo{
 		changefeedID:          changefeedID,
-		blockEventDS:          blockEventDS,
 		timezone:              timezone,
 		bdrMode:               bdrMode,
 		outputRawChangeEvent:  outputRawChangeEvent,
@@ -90,6 +90,7 @@ func NewSharedInfo(
 		enableSplittableCheck: enableSplittableCheck,
 		statusesChan:          statusesChan,
 		blockStatusesChan:     blockStatusesChan,
+		blockExecutor:         newBlockEventExecutor(),
 		errCh:                 errCh,
 	}
 }
@@ -220,6 +221,12 @@ func (s *SharedInfo) GetErrCh() chan error {
 	return s.errCh
 }
 
-func (s *SharedInfo) GetBlockEventDS() dynstream.DynamicStream[int, common.DispatcherID, BlockEventWithID, Dispatcher, *BlockEventTaskHandler] {
-	return s.blockEventDS
+func (s *SharedInfo) GetBlockEventExecutor() *blockEventExecutor {
+	return s.blockExecutor
+}
+
+func (s *SharedInfo) Close() {
+	if s.blockExecutor != nil {
+		s.blockExecutor.Close()
+	}
 }

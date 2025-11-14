@@ -228,7 +228,6 @@ func NewDispatcherManager(
 	// Create shared info for all dispatchers
 	manager.sharedInfo = dispatcher.NewSharedInfo(
 		manager.changefeedID,
-		dispatcher.NewBlockEventDynamicStream(),
 		manager.config.TimeZone,
 		manager.config.BDRMode,
 		outputRawChangeEvent,
@@ -843,7 +842,7 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 	}
 
 	if e.sharedInfo != nil {
-		e.sharedInfo.GetBlockEventDS().Close()
+		e.sharedInfo.Close()
 	}
 
 	if e.RedoEnable {

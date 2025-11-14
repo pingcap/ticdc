@@ -66,7 +66,6 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Eve
 	redoTs.Store(math.MaxUint64)
 	sharedInfo := NewSharedInfo(
 		common.NewChangefeedID(common.DefaultKeyspaceNamme),
-		NewBlockEventDynamicStream(),
 		"system",
 		false,
 		false,
@@ -167,8 +166,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, 0, len(sink.GetDMLs()))
 	time.Sleep(10 * time.Second)
 	// no pending event
-	require.Nil(t, dispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_NONE)
+	assertBlockEventStatus(t, &dispatcher.blockEventStatus, false, heartbeatpb.BlockStage_NONE)
 
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
 	require.Equal(t, true, isEmpty)
@@ -193,8 +191,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, 0, len(sink.GetDMLs()))
 	time.Sleep(10 * time.Second)
 	// no pending event
-	require.Nil(t, dispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_NONE)
+	assertBlockEventStatus(t, &dispatcher.blockEventStatus, false, heartbeatpb.BlockStage_NONE)
 
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
 	require.Equal(t, true, isEmpty)
@@ -233,8 +230,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, 0, len(sink.GetDMLs()))
 	time.Sleep(10 * time.Second)
 	// no pending event
-	require.Nil(t, dispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_NONE)
+	assertBlockEventStatus(t, &dispatcher.blockEventStatus, false, heartbeatpb.BlockStage_NONE)
 	// but block table progress until ack
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
 	require.Equal(t, false, isEmpty)
@@ -282,8 +278,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, 0, len(sink.GetDMLs()))
 	time.Sleep(10 * time.Second)
 	// pending event
-	require.NotNil(t, dispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_WAITING)
+	assertBlockEventStatus(t, &dispatcher.blockEventStatus, true, heartbeatpb.BlockStage_WAITING)
 
 	// the ddl is not available for write to sink
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
@@ -304,8 +299,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	dispatcher.HandleDispatcherStatus(dispatcherStatus)
 	require.Equal(t, 0, dispatcher.resendTaskMap.Len())
 	// pending event
-	require.NotNil(t, dispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_WAITING)
+	assertBlockEventStatus(t, &dispatcher.blockEventStatus, true, heartbeatpb.BlockStage_WAITING)
 
 	// the ddl is still not available for write to sink
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
@@ -326,8 +320,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, uint64(4), checkpointTs)
 
 	// clear pending event(TODO:add a check for the middle status)
-	require.Nil(t, dispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_NONE)
+	assertBlockEventStatus(t, &dispatcher.blockEventStatus, false, heartbeatpb.BlockStage_NONE)
 	require.Equal(t, int32(5), count.Load())
 
 	// ===== sync point event =====
@@ -340,8 +333,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	time.Sleep(10 * time.Second)
 	require.Equal(t, 0, len(sink.GetDMLs()))
 	// pending event
-	require.NotNil(t, dispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_WAITING)
+	assertBlockEventStatus(t, &dispatcher.blockEventStatus, true, heartbeatpb.BlockStage_WAITING)
 
 	// not available for write to sink
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
@@ -358,8 +350,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	dispatcher.HandleDispatcherStatus(dispatcherStatus)
 	require.Equal(t, 0, dispatcher.resendTaskMap.Len())
 	// pending event
-	require.NotNil(t, dispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_WAITING)
+	assertBlockEventStatus(t, &dispatcher.blockEventStatus, true, heartbeatpb.BlockStage_WAITING)
 
 	// receive the action info
 	dispatcherStatus = &heartbeatpb.DispatcherStatus{
@@ -422,8 +413,7 @@ func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, true, block)
 	time.Sleep(10 * time.Second)
 	// pending event
-	require.NotNil(t, dispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_WAITING)
+	assertBlockEventStatus(t, &dispatcher.blockEventStatus, true, heartbeatpb.BlockStage_WAITING)
 	require.Equal(t, 1, dispatcher.resendTaskMap.Len())
 
 	checkpointTs := dispatcher.GetCheckpointTs()
@@ -440,8 +430,7 @@ func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 	dispatcher.HandleDispatcherStatus(dispatcherStatus)
 	require.Equal(t, 0, dispatcher.resendTaskMap.Len())
 	// pending event
-	require.NotNil(t, dispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_WAITING)
+	assertBlockEventStatus(t, &dispatcher.blockEventStatus, true, heartbeatpb.BlockStage_WAITING)
 
 	// the ddl is still not available for write to sink
 	checkpointTs = dispatcher.GetCheckpointTs()
@@ -500,7 +489,7 @@ func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
 	require.Equal(t, true, block)
 	time.Sleep(10 * time.Second)
 	// no pending event
-	require.Nil(t, tableTriggerEventDispatcher.blockEventStatus.blockPendingEvent)
+	assertNoPendingBlockEvent(t, &tableTriggerEventDispatcher.blockEventStatus)
 	require.Equal(t, int32(1), count.Load())
 
 	tableIds := tableTriggerEventDispatcher.tableSchemaStore.GetAllTableIds()
@@ -535,7 +524,8 @@ func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
 	require.Equal(t, true, block)
 	time.Sleep(10 * time.Second)
 	// no pending event
-	require.Nil(t, tableTriggerEventDispatcher.blockEventStatus.blockPendingEvent)
+	blockPendingEvent := tableTriggerEventDispatcher.blockEventStatus.getEvent()
+	require.Nil(t, blockPendingEvent)
 	require.Equal(t, int32(2), count.Load())
 
 	tableIds = tableTriggerEventDispatcher.tableSchemaStore.GetAllTableIds()
@@ -582,7 +572,8 @@ func TestTableTriggerEventDispatcherInKafka(t *testing.T) {
 	require.Equal(t, true, block)
 	time.Sleep(10 * time.Second)
 	// no pending event
-	require.Nil(t, tableTriggerEventDispatcher.blockEventStatus.blockPendingEvent)
+	blockPendingEvent := tableTriggerEventDispatcher.blockEventStatus.getEvent()
+	require.Nil(t, blockPendingEvent)
 	require.Equal(t, int32(1), count.Load())
 
 	tableNames := tableTriggerEventDispatcher.tableSchemaStore.GetAllTableNames(2)
@@ -616,7 +607,8 @@ func TestTableTriggerEventDispatcherInKafka(t *testing.T) {
 	require.Equal(t, true, block)
 	time.Sleep(10 * time.Second)
 	// no pending event
-	require.Nil(t, tableTriggerEventDispatcher.blockEventStatus.blockPendingEvent)
+	blockPendingEvent = tableTriggerEventDispatcher.blockEventStatus.getEvent()
+	require.Nil(t, blockPendingEvent)
 	require.Equal(t, int32(2), count.Load())
 
 	tableNames = tableTriggerEventDispatcher.tableSchemaStore.GetAllTableNames(3)
@@ -787,7 +779,6 @@ func TestDispatcherSplittableCheck(t *testing.T) {
 	// Create shared info with enableSplittableCheck=true
 	sharedInfo := NewSharedInfo(
 		common.NewChangefeedID(common.DefaultKeyspaceNamme),
-		NewBlockEventDynamicStream(),
 		"system",
 		false,
 		false,
@@ -896,7 +887,6 @@ func TestDispatcher_SkipDMLAsStartTs_FilterCorrectly(t *testing.T) {
 	redoTs.Store(math.MaxUint64)
 	sharedInfo := NewSharedInfo(
 		common.NewChangefeedID(common.DefaultKeyspaceNamme),
-		NewBlockEventDynamicStream(),
 		"system",
 		false,
 		false,
@@ -975,7 +965,6 @@ func TestDispatcher_SkipDMLAsStartTs_Disabled(t *testing.T) {
 	redoTs.Store(math.MaxUint64)
 	sharedInfo := NewSharedInfo(
 		common.NewChangefeedID(common.DefaultKeyspaceNamme),
-		NewBlockEventDynamicStream(),
 		"system",
 		false,
 		false,
