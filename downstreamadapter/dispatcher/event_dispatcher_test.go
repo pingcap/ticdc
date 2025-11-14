@@ -285,7 +285,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	time.Sleep(5 * time.Second)
 	// pending event
 	blockPendingEvent, blockStage = dispatcher.blockEventStatus.getEventAndStage()
-	require.Nil(t, blockPendingEvent)
+	require.NotNil(t, blockPendingEvent)
 	require.Equal(t, blockStage, heartbeatpb.BlockStage_WAITING)
 
 	// the ddl is not available for write to sink
