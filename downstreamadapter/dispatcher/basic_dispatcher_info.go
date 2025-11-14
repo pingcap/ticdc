@@ -28,8 +28,7 @@ import (
 // This eliminates the need to pass these parameters individually to each dispatcher.
 type SharedInfo struct {
 	// Basic configuration
-	changefeedID common.ChangeFeedID
-
+	changefeedID         common.ChangeFeedID
 	timezone             string
 	bdrMode              bool
 	outputRawChangeEvent bool

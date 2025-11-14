@@ -180,8 +180,6 @@ type BasicDispatcher struct {
 	// In this corner case, `tableProgress` might be empty, which could lead to the dispatcher being removed prematurely.
 	duringHandleEvents atomic.Bool
 
-	blockEventChan chan commonEvent.BlockEvent
-
 	seq  uint64
 	mode int64
 
