@@ -842,6 +842,10 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 		e.heartBeatTask.Cancel()
 	}
 
+	if e.sharedInfo != nil {
+		e.sharedInfo.GetBlockEventDS().Close()
+	}
+
 	if e.RedoEnable {
 		e.redoSink.Close(removeChangefeed)
 	}
