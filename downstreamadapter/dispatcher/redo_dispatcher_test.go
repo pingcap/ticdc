@@ -121,6 +121,7 @@ func TestRedoDispatcherHandleEvents(t *testing.T) {
 	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, redoCallback)
 	require.Equal(t, true, block)
 	require.Equal(t, 0, len(sink.GetDMLs()))
+	time.Sleep(2 * time.Second)
 	// no pending event
 	require.Nil(t, dispatcher.blockEventStatus.blockPendingEvent)
 	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_NONE)
@@ -128,8 +129,6 @@ func TestRedoDispatcherHandleEvents(t *testing.T) {
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
 	require.Equal(t, true, isEmpty)
 	require.Equal(t, uint64(1), checkpointTs)
-
-	time.Sleep(2 * time.Second)
 	require.Equal(t, int32(2), redoCount.Load())
 
 	// 2.1 non-block ddl event, but need to communicate with maintainer(drop table)
@@ -148,6 +147,7 @@ func TestRedoDispatcherHandleEvents(t *testing.T) {
 	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent21)}, redoCallback)
 	require.Equal(t, true, block)
 	require.Equal(t, 0, len(sink.GetDMLs()))
+	time.Sleep(2 * time.Second)
 	// no pending event
 	require.Nil(t, dispatcher.blockEventStatus.blockPendingEvent)
 	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_NONE)
@@ -156,7 +156,6 @@ func TestRedoDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, true, isEmpty)
 	require.Equal(t, uint64(2), checkpointTs)
 
-	time.Sleep(2 * time.Second)
 	require.Equal(t, int32(3), redoCount.Load())
 
 	require.Equal(t, 1, dispatcher.resendTaskMap.Len())
@@ -189,6 +188,7 @@ func TestRedoDispatcherHandleEvents(t *testing.T) {
 	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent2)}, redoCallback)
 	require.Equal(t, true, block)
 	require.Equal(t, 0, len(sink.GetDMLs()))
+	time.Sleep(2 * time.Second)
 	// no pending event
 	require.Nil(t, dispatcher.blockEventStatus.blockPendingEvent)
 	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_NONE)
@@ -196,8 +196,6 @@ func TestRedoDispatcherHandleEvents(t *testing.T) {
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
 	require.Equal(t, false, isEmpty)
 	require.Equal(t, uint64(3), checkpointTs)
-
-	time.Sleep(2 * time.Second)
 	require.Equal(t, int32(4), redoCount.Load())
 
 	require.Equal(t, 1, dispatcher.resendTaskMap.Len())
@@ -239,6 +237,7 @@ func TestRedoDispatcherHandleEvents(t *testing.T) {
 	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent3)}, redoCallback)
 	require.Equal(t, true, block)
 	require.Equal(t, 0, len(sink.GetDMLs()))
+	time.Sleep(2 * time.Second)
 	// pending event
 	require.NotNil(t, dispatcher.blockEventStatus.blockPendingEvent)
 	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_WAITING)
@@ -247,8 +246,6 @@ func TestRedoDispatcherHandleEvents(t *testing.T) {
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
 	require.Equal(t, true, isEmpty)
 	require.Equal(t, uint64(3), checkpointTs)
-
-	time.Sleep(2 * time.Second)
 	require.Equal(t, int32(4), redoCount.Load())
 
 	require.Equal(t, 1, dispatcher.resendTaskMap.Len())
@@ -287,8 +284,6 @@ func TestRedoDispatcherHandleEvents(t *testing.T) {
 	// clear pending event(TODO:add a check for the middle status)
 	require.Nil(t, dispatcher.blockEventStatus.blockPendingEvent)
 	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_NONE)
-
-	time.Sleep(2 * time.Second)
 	require.Equal(t, int32(5), redoCount.Load())
 
 	// ===== resolved event =====
@@ -333,6 +328,7 @@ func TestRedoUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 	nodeID := node.NewID()
 	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, redoCallback)
 	require.Equal(t, true, block)
+	time.Sleep(2 * time.Second)
 	// pending event
 	require.NotNil(t, dispatcher.blockEventStatus.blockPendingEvent)
 	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_WAITING)
@@ -340,7 +336,6 @@ func TestRedoUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 
 	checkpointTs := dispatcher.GetCheckpointTs()
 	require.Equal(t, uint64(0), checkpointTs)
-	time.Sleep(2 * time.Second)
 	require.Equal(t, int32(0), redoCount.Load())
 
 	// receive the ack info
@@ -372,8 +367,6 @@ func TestRedoUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 	dispatcher.HandleDispatcherStatus(dispatcherStatus)
 	checkpointTs = dispatcher.GetCheckpointTs()
 	require.Equal(t, uint64(1), checkpointTs)
-
-	time.Sleep(2 * time.Second)
 	require.Equal(t, int32(1), redoCount.Load())
 }
 
@@ -408,10 +401,9 @@ func TestRedoTableTriggerEventDispatcherInMysql(t *testing.T) {
 	nodeID := node.NewID()
 	block := tableTriggerEventDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, redoCallback)
 	require.Equal(t, true, block)
+	time.Sleep(2 * time.Second)
 	// no pending event
 	require.Nil(t, tableTriggerEventDispatcher.blockEventStatus.blockPendingEvent)
-
-	time.Sleep(2 * time.Second)
 	require.Equal(t, int32(1), redoCount.Load())
 
 	// ddl influences tableSchemaStore
@@ -440,9 +432,9 @@ func TestRedoTableTriggerEventDispatcherInMysql(t *testing.T) {
 
 	block = tableTriggerEventDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, redoCallback)
 	require.Equal(t, true, block)
+	time.Sleep(2 * time.Second)
 	// no pending event
 	require.Nil(t, tableTriggerEventDispatcher.blockEventStatus.blockPendingEvent)
-	time.Sleep(2 * time.Second)
 	require.Equal(t, int32(2), redoCount.Load())
 }
 
@@ -477,9 +469,9 @@ func TestRedoTableTriggerEventDispatcherInKafka(t *testing.T) {
 	nodeID := node.NewID()
 	block := tableTriggerEventDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, redoCallback)
 	require.Equal(t, true, block)
+	time.Sleep(2 * time.Second)
 	// no pending event
 	require.Nil(t, tableTriggerEventDispatcher.blockEventStatus.blockPendingEvent)
-	time.Sleep(2 * time.Second)
 	require.Equal(t, int32(1), redoCount.Load())
 
 	// ddl influences tableSchemaStore
@@ -508,9 +500,9 @@ func TestRedoTableTriggerEventDispatcherInKafka(t *testing.T) {
 
 	block = tableTriggerEventDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, redoCallback)
 	require.Equal(t, true, block)
+	time.Sleep(2 * time.Second)
 	// no pending event
 	require.Nil(t, tableTriggerEventDispatcher.blockEventStatus.blockPendingEvent)
-	time.Sleep(2 * time.Second)
 	require.Equal(t, int32(2), redoCount.Load())
 }
 
