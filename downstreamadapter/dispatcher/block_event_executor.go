@@ -52,10 +52,12 @@ func newBlockEventExecutor() *blockEventExecutor {
 	}
 	return executor
 }
+
 func (e *blockEventExecutor) Submit(dispatcher *BasicDispatcher, event commonEvent.BlockEvent) {
 	idx := common.GID(dispatcher.id).Hash(uint64(len(e.queues)))
 	e.queues[idx].Push(blockEventTask{dispatcher: dispatcher, event: event})
 }
+
 func (e *blockEventExecutor) Close() {
 	if e == nil {
 		return
