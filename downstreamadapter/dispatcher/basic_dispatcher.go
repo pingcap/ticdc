@@ -28,7 +28,6 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/util"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"go.uber.org/zap"
 )
 
@@ -393,21 +392,21 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			continue
 		}
 
-		if event.GetType() == commonEvent.TypeDMLEvent {
-			dml := event.(*commonEvent.DMLEvent)
-			for i, rowType := range dml.RowTypes {
-				rowKey := dml.RowKeys[i]
-				log.Info("dispatcher receive dml row",
-					zap.Stringer("dispatcher", d.id),
-					zap.Int64("mode", d.mode),
-					zap.String("eventType", commonEvent.TypeToString(event.GetType())),
-					zap.Uint64("commitTs", event.GetCommitTs()),
-					zap.Uint64("startTs", event.GetStartTs()),
-					zap.Int("rowType", int(rowType)),
-					zap.String("hexKey", spanz.HexKey(rowKey)),
-					zap.Any("rawKey", rowKey))
-			}
-		}
+		// if event.GetType() == commonEvent.TypeDMLEvent {
+		// 	dml := event.(*commonEvent.DMLEvent)
+		// 	for i, rowType := range dml.RowTypes {
+		// 		rowKey := dml.RowKeys[i]
+		// 		log.Info("dispatcher receive dml row",
+		// 			zap.Stringer("dispatcher", d.id),
+		// 			zap.Int64("mode", d.mode),
+		// 			zap.String("eventType", commonEvent.TypeToString(event.GetType())),
+		// 			zap.Uint64("commitTs", event.GetCommitTs()),
+		// 			zap.Uint64("startTs", event.GetStartTs()),
+		// 			zap.Int("rowType", int(rowType)),
+		// 			zap.String("hexKey", spanz.HexKey(rowKey)),
+		// 			zap.Any("rawKey", rowKey))
+		// 	}
+		// }
 
 		// only when we receive the first event, we can regard the dispatcher begin syncing data
 		// then turning into working status.
