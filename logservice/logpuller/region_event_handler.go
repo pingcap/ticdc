@@ -228,7 +228,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 				zap.String("endKey", spanz.HexKey(span.span.EndKey)))
 			for _, cachedEvent := range state.matcher.matchCachedRow(true) {
 				result := assembleRowEvent(regionID, cachedEvent)
-				span.kvEventsCache = append(span.kvEventsCache)
+				span.kvEventsCache = append(span.kvEventsCache, result)
 				log.Info("assemble row event by the initialized",
 					zap.Uint64("regionID", regionID),
 					zap.Uint64("startTs", result.StartTs),
