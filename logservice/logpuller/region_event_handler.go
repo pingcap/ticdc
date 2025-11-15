@@ -233,11 +233,11 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 					zap.Uint64("regionID", regionID),
 					zap.Uint64("startTs", result.StartTs),
 					zap.Uint64("commitTs", result.CRTs),
-					zap.ByteString("rawKey", result.Key),
+					zap.Bool("isInsert", result.IsInsert()),
+					zap.Bool("isDelete", result.IsDelete()),
+					zap.Bool("isUpdate", result.IsUpdate()),
 					zap.String("hexKey", spanz.HexKey(result.Key)),
-					zap.Any("opType", result.OpType),
-					zap.String("value", spanz.HexKey(result.Value)),
-					zap.String("oldValue", spanz.HexKey(result.OldValue)))
+					zap.Any("rawKey", result.Key))
 			}
 			state.matcher.matchCachedRollbackRow(true)
 		case cdcpb.Event_COMMITTED:
@@ -258,11 +258,11 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 				zap.Uint64("regionID", regionID),
 				zap.Uint64("startTs", result.StartTs),
 				zap.Uint64("commitTs", result.CRTs),
-				zap.ByteString("rawKey", result.Key),
+				zap.Bool("isInsert", result.IsInsert()),
+				zap.Bool("isDelete", result.IsDelete()),
+				zap.Bool("isUpdate", result.IsUpdate()),
 				zap.String("hexKey", spanz.HexKey(result.Key)),
-				zap.Any("opType", result.OpType),
-				zap.String("value", spanz.HexKey(result.Value)),
-				zap.String("oldValue", spanz.HexKey(result.OldValue)))
+				zap.Any("rawKey", result.Key))
 		case cdcpb.Event_PREWRITE:
 			state.matcher.putPrewriteRow(entry)
 		case cdcpb.Event_COMMIT:
@@ -305,11 +305,11 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 				zap.Uint64("regionID", regionID),
 				zap.Uint64("startTs", result.StartTs),
 				zap.Uint64("commitTs", result.CRTs),
-				zap.ByteString("rawKey", result.Key),
+				zap.Bool("isInsert", result.IsInsert()),
+				zap.Bool("isDelete", result.IsDelete()),
+				zap.Bool("isUpdate", result.IsUpdate()),
 				zap.String("hexKey", spanz.HexKey(result.Key)),
-				zap.Any("opType", result.OpType),
-				zap.String("value", spanz.HexKey(result.Value)),
-				zap.String("oldValue", spanz.HexKey(result.OldValue)))
+				zap.Any("rawKey", result.Key))
 		case cdcpb.Event_ROLLBACK:
 			if !state.isInitialized() {
 				state.matcher.cacheRollbackRow(entry)
