@@ -391,7 +391,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			continue
 		}
 
-		if event.GetType() == commonEvent.TypeDMLEvent {
+		if d.tableSpan.TableID == 717 && event.GetType() == commonEvent.TypeDMLEvent {
 			log.Info("dispatcher receive all event",
 				zap.Stringer("dispatcher", d.id), zap.Int64("mode", d.mode),
 				zap.String("eventType", commonEvent.TypeToString(dispatcherEvent.Event.GetType())),
