@@ -520,6 +520,17 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 			if rowType == prevType {
 				sql, values := w.generateNormalSQLs(events)
 				log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values), zap.Int("writerID", w.id))
+				for _, dml_event := range events {
+					log.Info("original dml event", zap.String("dml_event", dml_event.String()), zap.Int("writerID", w.id))
+				}
+				indexs := tableInfo.GetPKIndex()
+				for _, colID := range indexs {
+					info, ok := tableInfo.GetColumnInfo(colID)
+					log.Info("index info", zap.Int64("colID", colID), zap.Int("writerID", w.id))
+					if ok {
+						log.Info("column info", zap.Int64("colID", colID), zap.String("colName", info.Name.O), zap.Int("writerID", w.id))
+					}
+				}
 				log.Panic("invalid row changes", zap.String("schemaName", tableInfo.GetSchemaName()),
 					zap.String("tableName", tableInfo.GetTableName()), zap.Any("rowChanges", rowChanges),
 					zap.Any("prevType", prevType), zap.Any("currentType", rowType), zap.Int("writerID", w.id))
