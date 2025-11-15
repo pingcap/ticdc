@@ -533,7 +533,7 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 				}
 				for index, rowChange := range rowChanges {
 					if rowChange.RowType == common.RowTypeDelete {
-						key := genKeyList(&rowChanges[i].PreRow, tableInfo)
+						key := genKeyList(&rowChange.PreRow, tableInfo)
 						log.Info("row change key", zap.Int("index", index), zap.ByteString("key", key), zap.Int("writerID", w.id))
 					}
 				}
