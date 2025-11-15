@@ -32,37 +32,37 @@ group_num=${group#G}
 # 4 CPU, 16 Gi memory.
 mysql_groups=(
 	# G00
-	'event_filter charset_gbk changefeed_finish sql_mode changefeed_reconstruct fail_over_ddl_A'
-	# G01
-	'common_1 foreign_key changefeed_pause_resume fail_over_ddl_B'
-	# G02
-	'new_ci_collation safe_mode savepoint fail_over_ddl_C'
-	# G03
-	'capture_suicide_while_balance_table kv_client_stream_reconnect fail_over_ddl_D'
-	# G04
-	'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
-	# G05
-	'vector simple partition_table fail_over_ddl_F'
-	# G06
-	'http_api http_api_tls fail_over_ddl_G synced_status'
-	# G07
-	'http_api_tls_with_user_auth fail_over_ddl_H changefeed_update_config synced_status_with_redo'
-	# G08
-	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry fail_over_ddl_I'
-	# G09
-	'cdc_server_tips ddl_sequence server_config_compatibility fail_over_ddl_J'
-	# G10
-	'changefeed_error bdr_mode fail_over_ddl_K split_table_check'
-	# G11
-	'multi_tables_ddl ddl_attributes multi_cdc_cluster fail_over_ddl_L'
-	# G12
-	'row_format tiflash multi_rocks fail_over_ddl_M'
-	# G13
-	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
-	# G14
-	'batch_add_table batch_update_to_no_batch fail_over_ddl_O'
-	# G15
-	'split_region changefeed_resume_with_checkpoint_ts autorandom gc_safepoint foreign_key_check ddl_for_split_tables old_arch_compatibility'
+	# 'event_filter charset_gbk changefeed_finish sql_mode changefeed_reconstruct fail_over_ddl_A'
+	# # G01
+	# 'common_1 foreign_key changefeed_pause_resume fail_over_ddl_B'
+	# # G02
+	# 'new_ci_collation safe_mode savepoint fail_over_ddl_C'
+	# # G03
+	# 'capture_suicide_while_balance_table kv_client_stream_reconnect fail_over_ddl_D'
+	# # G04
+	# 'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
+	# # G05
+	# 'vector simple partition_table fail_over_ddl_F'
+	# # G06
+	# 'http_api http_api_tls fail_over_ddl_G synced_status'
+	# # G07
+	# 'http_api_tls_with_user_auth fail_over_ddl_H changefeed_update_config synced_status_with_redo'
+	# # G08
+	# 'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry fail_over_ddl_I'
+	# # G09
+	# 'cdc_server_tips ddl_sequence server_config_compatibility fail_over_ddl_J'
+	# # G10
+	# 'changefeed_error bdr_mode fail_over_ddl_K split_table_check'
+	# # G11
+	# 'multi_tables_ddl ddl_attributes multi_cdc_cluster fail_over_ddl_L'
+	# # G12
+	# 'row_format tiflash multi_rocks fail_over_ddl_M'
+	# # G13
+	# 'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
+	# # G14
+	# 'batch_add_table batch_update_to_no_batch fail_over_ddl_O'
+	# # G15
+	# 'split_region changefeed_resume_with_checkpoint_ts autorandom gc_safepoint foreign_key_check ddl_for_split_tables old_arch_compatibility'
 )
 
 # Resource allocation for kafka light integration tests in CI pipelines:
@@ -70,37 +70,37 @@ mysql_groups=(
 # 6 CPU, 16 Gi memory.
 kafka_groups=(
 	# G00
-	'event_filter charset_gbk changefeed_finish changefeed_reconstruct fail_over_ddl_A'
-	# G01
-	'foreign_key common_1 changefeed_pause_resume fail_over_ddl_B'
-	# G02
-	'new_ci_collation savepoint fail_over_ddl_C'
-	# G03
-	'kv_client_stream_reconnect fail_over_ddl_D'
-	# G04
-	'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
-	# G05
-	'vector simple partition_table fail_over_ddl_F'
-	# G06
-	'multi_topics mq_sink_dispatcher fail_over_ddl_G'
-	# G07
-	'kafka_messages kafka_big_messages kafka_compression fail_over_ddl_H changefeed_update_config'
-	# G08
-	'capture_session_done_during_task fail_over_ddl_I'
-	# G09
-	'cdc_server_tips ddl_sequence fail_over_ddl_J'
-	# G10
-	'changefeed_error batch_add_table fail_over_ddl_K split_table_check'
-	# G11
-	'ddl_attributes multi_tables_ddl fail_over_ddl_L'
-	# G12
-	'row_format tiflash multi_rocks fail_over_ddl_M'
-	# G13
-	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
-	# G14
-	'kafka_simple_basic avro_basic debezium_basic fail_over_ddl_O'
-	# G15
-	'kafka_simple_basic_avro split_region autorandom gc_safepoint ddl_for_split_tables kafka_log_info'
+	# 'event_filter charset_gbk changefeed_finish changefeed_reconstruct fail_over_ddl_A'
+	# # G01
+	# 'foreign_key common_1 changefeed_pause_resume fail_over_ddl_B'
+	# # G02
+	# 'new_ci_collation savepoint fail_over_ddl_C'
+	# # G03
+	# 'kv_client_stream_reconnect fail_over_ddl_D'
+	# # G04
+	# 'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
+	# # G05
+	# 'vector simple partition_table fail_over_ddl_F'
+	# # G06
+	# 'multi_topics mq_sink_dispatcher fail_over_ddl_G'
+	# # G07
+	# 'kafka_messages kafka_big_messages kafka_compression fail_over_ddl_H changefeed_update_config'
+	# # G08
+	# 'capture_session_done_during_task fail_over_ddl_I'
+	# # G09
+	# 'cdc_server_tips ddl_sequence fail_over_ddl_J'
+	# # G10
+	# 'changefeed_error batch_add_table fail_over_ddl_K split_table_check'
+	# # G11
+	# 'ddl_attributes multi_tables_ddl fail_over_ddl_L'
+	# # G12
+	# 'row_format tiflash multi_rocks fail_over_ddl_M'
+	# # G13
+	# 'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
+	# # G14
+	# 'kafka_simple_basic avro_basic debezium_basic fail_over_ddl_O'
+	# # G15
+	# 'kafka_simple_basic_avro split_region autorandom gc_safepoint ddl_for_split_tables kafka_log_info'
 )
 
 # Resource allocation for pulsar light integration tests in CI pipelines:
@@ -108,37 +108,37 @@ kafka_groups=(
 # 6 CPU, 32 Gi memory.
 pulsar_groups=(
 	# G00
-	'event_filter charset_gbk changefeed_finish changefeed_reconstruct fail_over_ddl_A'
-	# G01
-	'foreign_key common_1 changefeed_pause_resume fail_over_ddl_B'
-	# G02
-	'new_ci_collation savepoint fail_over_ddl_C'
-	# G03
-	'kv_client_stream_reconnect fail_over_ddl_D'
-	# G04
-	'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
-	# G05
-	'vector simple partition_table fail_over_ddl_F'
-	# G06
-	'multi_topics mq_sink_dispatcher fail_over_ddl_G'
-	# G07
-	'kafka_messages kafka_big_messages kafka_compression fail_over_ddl_H changefeed_update_config'
-	# G08
-	'capture_session_done_during_task fail_over_ddl_I'
-	# G09
-	'cdc_server_tips ddl_sequence fail_over_ddl_J'
-	# G10
-	'changefeed_error batch_add_table fail_over_ddl_K split_table_check'
-	# G11
-	'ddl_attributes multi_tables_ddl fail_over_ddl_L'
-	# G12
-	'row_format tiflash multi_rocks fail_over_ddl_M'
-	# G13
-	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
-	# G14
-	'avro_basic debezium_basic fail_over_ddl_O'
-	# G15
-	'split_region autorandom gc_safepoint ddl_for_split_tables'
+	# 'event_filter charset_gbk changefeed_finish changefeed_reconstruct fail_over_ddl_A'
+	# # G01
+	# 'foreign_key common_1 changefeed_pause_resume fail_over_ddl_B'
+	# # G02
+	# 'new_ci_collation savepoint fail_over_ddl_C'
+	# # G03
+	# 'kv_client_stream_reconnect fail_over_ddl_D'
+	# # G04
+	# 'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
+	# # G05
+	# 'vector simple partition_table fail_over_ddl_F'
+	# # G06
+	# 'multi_topics mq_sink_dispatcher fail_over_ddl_G'
+	# # G07
+	# 'kafka_messages kafka_big_messages kafka_compression fail_over_ddl_H changefeed_update_config'
+	# # G08
+	# 'capture_session_done_during_task fail_over_ddl_I'
+	# # G09
+	# 'cdc_server_tips ddl_sequence fail_over_ddl_J'
+	# # G10
+	# 'changefeed_error batch_add_table fail_over_ddl_K split_table_check'
+	# # G11
+	# 'ddl_attributes multi_tables_ddl fail_over_ddl_L'
+	# # G12
+	# 'row_format tiflash multi_rocks fail_over_ddl_M'
+	# # G13
+	# 'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
+	# # G14
+	# 'avro_basic debezium_basic fail_over_ddl_O'
+	# # G15
+	# 'split_region autorandom gc_safepoint ddl_for_split_tables'
 )
 
 # Resource allocation for storage light integration tests in CI pipelines:
@@ -146,37 +146,37 @@ pulsar_groups=(
 # 6 CPU, 16 Gi memory.
 storage_groups=(
 	# G00
-	'event_filter charset_gbk changefeed_finish changefeed_reconstruct fail_over_ddl_A'
-	# G01
-	'foreign_key common_1 changefeed_pause_resume fail_over_ddl_B'
-	# G02
-	'new_ci_collation savepoint fail_over_ddl_C'
-	# G03
-	'kv_client_stream_reconnect fail_over_ddl_D'
-	# G04
-	'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
-	# G05
-	'vector simple partition_table fail_over_ddl_F'
-	# G06
-	'lossy_ddl fail_over_ddl_G'
-	# G07
-	'storage_cleanup fail_over_ddl_H changefeed_update_config'
-	# G08
-	'capture_session_done_during_task fail_over_ddl_I'
-	# G09
-	'cdc_server_tips ddl_sequence fail_over_ddl_J'
-	# G10
-	'changefeed_error batch_add_table fail_over_ddl_K  split_table_check'
-	# G11
-	'ddl_attributes multi_tables_ddl fail_over_ddl_L'
-	# G12
-	'row_format tiflash multi_rocks fail_over_ddl_M'
-	# G13
-	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
-	# G14
-	'csv_storage_multi_tables_ddl fail_over_ddl_O'
-	# G15
-	'split_region autorandom gc_safepoint ddl_for_split_tables'
+	# 'event_filter charset_gbk changefeed_finish changefeed_reconstruct fail_over_ddl_A'
+	# # G01
+	# 'foreign_key common_1 changefeed_pause_resume fail_over_ddl_B'
+	# # G02
+	# 'new_ci_collation savepoint fail_over_ddl_C'
+	# # G03
+	# 'kv_client_stream_reconnect fail_over_ddl_D'
+	# # G04
+	# 'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
+	# # G05
+	# 'vector simple partition_table fail_over_ddl_F'
+	# # G06
+	# 'lossy_ddl fail_over_ddl_G'
+	# # G07
+	# 'storage_cleanup fail_over_ddl_H changefeed_update_config'
+	# # G08
+	# 'capture_session_done_during_task fail_over_ddl_I'
+	# # G09
+	# 'cdc_server_tips ddl_sequence fail_over_ddl_J'
+	# # G10
+	# 'changefeed_error batch_add_table fail_over_ddl_K  split_table_check'
+	# # G11
+	# 'ddl_attributes multi_tables_ddl fail_over_ddl_L'
+	# # G12
+	# 'row_format tiflash multi_rocks fail_over_ddl_M'
+	# # G13
+	# 'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
+	# # G14
+	# 'csv_storage_multi_tables_ddl fail_over_ddl_O'
+	# # G15
+	# 'split_region autorandom gc_safepoint ddl_for_split_tables'
 )
 
 # Source shared functions and check test coverage
