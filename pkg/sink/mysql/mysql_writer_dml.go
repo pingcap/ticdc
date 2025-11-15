@@ -521,20 +521,20 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 				sql, values := w.generateNormalSQLs(events)
 				log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values), zap.Int("writerID", w.id))
 				for _, dml_event := range events {
-					log.Info("original dml event", zap.String("dml_event", dml_event.String()), zap.Int("writerID", w.id))
+					log.Info("originalDmlEvent", zap.String("dml_event", dml_event.String()), zap.Int("writerID", w.id))
 				}
 				indexs := tableInfo.GetPKIndex()
 				for _, colID := range indexs {
 					info, ok := tableInfo.GetColumnInfo(colID)
-					log.Info("index info", zap.Int64("colID", colID), zap.Int("writerID", w.id))
+					log.Info("indexInfo", zap.Int64("colID", colID), zap.Int("writerID", w.id))
 					if ok {
-						log.Info("column info", zap.Int64("colID", colID), zap.String("colName", info.Name.O), zap.Int("writerID", w.id))
+						log.Info("columnInfo", zap.Int64("colID", colID), zap.String("colName", info.Name.O), zap.Int("writerID", w.id))
 					}
 				}
 				for index, rowChange := range rowChanges {
 					if rowChange.RowType == common.RowTypeDelete {
 						key := genKeyList(&rowChange.PreRow, tableInfo)
-						log.Info("row change key", zap.Int("index", index), zap.ByteString("key", key), zap.Int("writerID", w.id))
+						log.Info("rowChangeKey", zap.Int("index", index), zap.ByteString("key", key), zap.Int("writerID", w.id))
 					}
 				}
 				log.Panic("invalid row changes", zap.String("schemaName", tableInfo.GetSchemaName()),
