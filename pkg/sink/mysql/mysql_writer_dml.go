@@ -531,6 +531,12 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 						log.Info("column info", zap.Int64("colID", colID), zap.String("colName", info.Name.O), zap.Int("writerID", w.id))
 					}
 				}
+				for index, rowChange := range rowChanges {
+					if rowChange.RowType == common.RowTypeDelete {
+						key := genKeyList(&rowChanges[i].PreRow, tableInfo)
+						log.Info("row change key", zap.Int("index", index), zap.ByteString("key", key), zap.Int("writerID", w.id))
+					}
+				}
 				log.Panic("invalid row changes", zap.String("schemaName", tableInfo.GetSchemaName()),
 					zap.String("tableName", tableInfo.GetTableName()), zap.Any("rowChanges", rowChanges),
 					zap.Any("prevType", prevType), zap.Any("currentType", rowType), zap.Int("writerID", w.id))
