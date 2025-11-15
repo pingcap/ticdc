@@ -38,6 +38,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/tikv/client-go/v2/oracle"
@@ -1203,6 +1204,14 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		metrics.EventStoreScanBytes.WithLabelValues("skipped").Add(float64(len(value)))
 		iter.innerIter.Next()
 	}
+	log.Info("event store iter next",
+		zap.Uint64("startTs", rawKV.StartTs),
+		zap.Uint64("commitTs", rawKV.CRTs),
+		zap.Bool("isInsert", rawKV.IsInsert()),
+		zap.Bool("isDelete", rawKV.IsDelete()),
+		zap.Bool("isUpdate", rawKV.IsUpdate()),
+		zap.String("hexKey", spanz.HexKey(rawKV.Key)),
+		zap.Any("rawKey", rawKV.Key))
 	isNewTxn := false
 	// 2 PC transactions have different startTs and commitTs.
 	// async-commit transactions have different startTs and may have the same commitTs.
