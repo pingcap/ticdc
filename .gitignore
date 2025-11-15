@@ -12,3 +12,5 @@ tools/workload/bin
 
 # Unit test reports
 cdc-junit-report.xml
+
+/tests/integration_tests/*/test_out_data
