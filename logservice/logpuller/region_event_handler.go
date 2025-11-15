@@ -227,17 +227,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 				zap.String("startKey", spanz.HexKey(span.span.StartKey)),
 				zap.String("endKey", spanz.HexKey(span.span.EndKey)))
 			for _, cachedEvent := range state.matcher.matchCachedRow(true) {
-				result := assembleRowEvent(regionID, cachedEvent)
-				span.kvEventsCache = append(span.kvEventsCache, result)
-				log.Info("assemble row event by the initialized",
-					zap.Uint64("regionID", regionID),
-					zap.Uint64("startTs", result.StartTs),
-					zap.Uint64("commitTs", result.CRTs),
-					zap.Bool("isInsert", result.IsInsert()),
-					zap.Bool("isDelete", result.IsDelete()),
-					zap.Bool("isUpdate", result.IsUpdate()),
-					zap.String("hexKey", spanz.HexKey(result.Key)),
-					zap.Any("rawKey", result.Key))
+				span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, cachedEvent))
 			}
 			state.matcher.matchCachedRollbackRow(true)
 		case cdcpb.Event_COMMITTED:
@@ -252,17 +242,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 					zap.Uint64("resolvedTs", resolvedTs),
 					zap.String("key", spanz.HexKey(entry.GetKey())))
 			}
-			result := assembleRowEvent(regionID, entry)
-			span.kvEventsCache = append(span.kvEventsCache, result)
-			log.Info("assemble row event by the committed",
-				zap.Uint64("regionID", regionID),
-				zap.Uint64("startTs", result.StartTs),
-				zap.Uint64("commitTs", result.CRTs),
-				zap.Bool("isInsert", result.IsInsert()),
-				zap.Bool("isDelete", result.IsDelete()),
-				zap.Bool("isUpdate", result.IsUpdate()),
-				zap.String("hexKey", spanz.HexKey(result.Key)),
-				zap.Any("rawKey", result.Key))
+			span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, entry))
 		case cdcpb.Event_PREWRITE:
 			state.matcher.putPrewriteRow(entry)
 		case cdcpb.Event_COMMIT:
@@ -299,17 +279,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 					zap.Uint64("resolvedTs", resolvedTs),
 					zap.String("key", spanz.HexKey(entry.GetKey())))
 			}
-			result := assembleRowEvent(regionID, entry)
-			span.kvEventsCache = append(span.kvEventsCache, result)
-			log.Info("assemble row event by the commit",
-				zap.Uint64("regionID", regionID),
-				zap.Uint64("startTs", result.StartTs),
-				zap.Uint64("commitTs", result.CRTs),
-				zap.Bool("isInsert", result.IsInsert()),
-				zap.Bool("isDelete", result.IsDelete()),
-				zap.Bool("isUpdate", result.IsUpdate()),
-				zap.String("hexKey", spanz.HexKey(result.Key)),
-				zap.Any("rawKey", result.Key))
+			span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, entry))
 		case cdcpb.Event_ROLLBACK:
 			if !state.isInitialized() {
 				state.matcher.cacheRollbackRow(entry)
