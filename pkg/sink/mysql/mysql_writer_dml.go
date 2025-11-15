@@ -521,7 +521,7 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 				sql, values := w.generateNormalSQLs(events)
 				log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values), zap.Int("writerID", w.id))
 				for _, dml_event := range events {
-					log.Info("originalDmlEvent", zap.String("dml_event", dml_event.String()), zap.Int("writerID", w.id))
+					log.Info("originalDmlEvent", zap.String("dmlEvent", dml_event.String()), zap.Int("writerID", w.id))
 				}
 				indexs := tableInfo.GetPKIndex()
 				for _, colID := range indexs {
