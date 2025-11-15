@@ -159,17 +159,11 @@ func (r *SpanReplication) GetMode() int64 {
 }
 
 // UpdateStatus updates the replication status with the following rules:
-//  1. If there is a block state in WAITING stage and its blockTs is less than or equal to
-//     the new status's checkpointTs, the update is **skipped** to prevent checkpoint advancement
-//     during an ongoing block event.
-//  2. The new status is only stored if its checkpointTs is greater than or equal to
-//     the current status's checkpointTs.
+//
+//	The new status is only stored if its checkpointTs is greater than or equal to
+//	the current status's checkpointTs.
 func (r *SpanReplication) UpdateStatus(newStatus *heartbeatpb.TableSpanStatus) {
 	if newStatus != nil {
-		blockState := r.blockState.Load()
-		if blockState != nil && blockState.Stage == heartbeatpb.BlockStage_WAITING && blockState.BlockTs <= newStatus.CheckpointTs {
-			return
-		}
 		oldStatus := r.status.Load()
 		if newStatus.CheckpointTs >= oldStatus.CheckpointTs {
 			r.status.Store(newStatus)
