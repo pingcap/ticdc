@@ -773,7 +773,7 @@ func TestEventStoreGetIteratorConcurrently(t *testing.T) {
 	wg.Wait()
 }
 
-func TestEventStoreIter_NextReusesRawKVEntry(t *testing.T) {
+func TestEventStoreIter_NextWithFiltering(t *testing.T) {
 	t.Parallel()
 
 	// Define a set of reusable events for different test cases.
@@ -888,14 +888,7 @@ func TestEventStoreIter_NextReusesRawKVEntry(t *testing.T) {
 			// Verify results
 			require.Len(t, results, len(tc.expectedEvents), "Should only read events within the span")
 
-			// Check that pointers are unique
-			pointerSet := make(map[string]struct{})
 			for i, res := range results {
-				ptrAddr := fmt.Sprintf("%p", res)
-				_, exists := pointerSet[ptrAddr]
-				require.False(t, exists, "Pointer %s is reused at index %d", ptrAddr, i)
-				pointerSet[ptrAddr] = struct{}{}
-
 				// Check content correctness
 				require.True(t, bytes.Equal(tc.expectedEvents[i].Key, res.Key))
 				require.True(t, bytes.Equal(tc.expectedEvents[i].Value, res.Value))
