@@ -167,7 +167,7 @@ func (d *dispatcherStat) registerTo(serverID node.ID) {
 
 // commitReady is used to notify the event service to start sending events.
 func (d *dispatcherStat) commitReady(serverID node.ID) {
-	d.doReset(serverID, d.target.GetStartTs())
+	d.doReset(serverID, d.getResetTs())
 }
 
 // reset is used to reset the dispatcher to the specified commitTs,

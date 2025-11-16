@@ -54,6 +54,11 @@ type SharedInfo struct {
 	// blockStatusesChan use to collector block status of ddl/sync point event to Maintainer
 	// shared by the event dispatcher manager
 	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus
+
+	// blockExecutor is used to execute block events such as DDL and sync point events asynchronously
+	// to avoid callback() called in handleEvents, causing deadlock in ds
+	blockExecutor *blockEventExecutor
+
 	// errCh is used to collect the errors that need to report to maintainer
 	// such as error of flush ddl events
 	errCh chan error
@@ -84,6 +89,7 @@ func NewSharedInfo(
 		enableSplittableCheck: enableSplittableCheck,
 		statusesChan:          statusesChan,
 		blockStatusesChan:     blockStatusesChan,
+		blockExecutor:         newBlockEventExecutor(),
 		errCh:                 errCh,
 	}
 }
@@ -212,4 +218,14 @@ func (s *SharedInfo) GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStat
 
 func (s *SharedInfo) GetErrCh() chan error {
 	return s.errCh
+}
+
+func (s *SharedInfo) GetBlockEventExecutor() *blockEventExecutor {
+	return s.blockExecutor
+}
+
+func (s *SharedInfo) Close() {
+	if s.blockExecutor != nil {
+		s.blockExecutor.Close()
+	}
 }

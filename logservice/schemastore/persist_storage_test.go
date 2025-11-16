@@ -2073,6 +2073,8 @@ func TestApplyDDLJobs(t *testing.T) {
 					buildCreateViewJobForTest(100, 1110),
 					buildDropViewJobForTest(100, 1120),
 					buildAddForeignKeyJobForTest(100, 300, 1130),
+					buildAddFulltextIndexJobForTest(100, 300, 1140),
+					buildCreateHybridIndexJobForTest(100, 300, 1150),
 				}
 			}(),
 			map[int64]*BasicTableInfo{
@@ -2091,7 +2093,7 @@ func TestApplyDDLJobs(t *testing.T) {
 				},
 			},
 			map[int64][]uint64{
-				300: {1010, 1020, 1030, 1040, 1050, 1060, 1080, 1090, 1100, 1110, 1130},
+				300: {1010, 1020, 1030, 1040, 1050, 1060, 1080, 1090, 1100, 1110, 1130, 1140, 1150},
 			},
 			[]uint64{1110, 1120},
 			nil,
@@ -2099,11 +2101,27 @@ func TestApplyDDLJobs(t *testing.T) {
 				{
 					tableID: 300,
 					startTs: 1120,
-					endTs:   1150,
+					endTs:   1180,
 					result: []commonEvent.DDLEvent{
 						{
 							Type:       byte(model.ActionAddForeignKey),
 							FinishedTs: 1130,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{300},
+							},
+						},
+						{
+							Type:       byte(filter.ActionAddFullTextIndex),
+							FinishedTs: 1140,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{300},
+							},
+						},
+						{
+							Type:       byte(filter.ActionCreateHybridIndex),
+							FinishedTs: 1150,
 							BlockedTables: &commonEvent.InfluencedTables{
 								InfluenceType: commonEvent.InfluenceTypeNormal,
 								TableIDs:      []int64{300},

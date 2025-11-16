@@ -164,6 +164,8 @@ type subscriptionStat struct {
 	// the time when the subscription receives latest dml event
 	// it is used to calculate the idle time of the subscription
 	// 0 means the subscription has not received any dml event
+	// last time when we log the lag is too large
+	lastLogLagTime     atomic.Int64
 	lastReceiveDMLTime atomic.Int64
 	// the resolveTs persisted in the store
 	resolvedTs atomic.Uint64
@@ -539,6 +541,7 @@ func (e *eventStore) RegisterDispatcher(
 	subStat.checkpointTs.Store(startTs)
 	subStat.resolvedTs.Store(startTs)
 	subStat.maxEventCommitTs.Store(0)
+	subStat.lastLogLagTime.Store(0)
 	if stat.subStat == nil {
 		stat.subStat = subStat
 	} else {
@@ -1051,22 +1054,27 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 			subResolvedPhysicalTime := oracle.ExtractPhysical(subResolvedTs)
 			subResolvedTsLagInSec := float64(pdPhysicalTime-subResolvedPhysicalTime) / 1e3
 			const largeResolvedTsLagInSecs = 30
+			const logInterval = 5 * time.Minute
 			if subStat.initialized.Load() {
 				if subResolvedTsLagInSec >= largeResolvedTsLagInSecs {
-					lastReceiveDMLTimeRepr := "never"
-					if lastReceiveDMLTime := subStat.lastReceiveDMLTime.Load(); lastReceiveDMLTime > 0 {
-						lastReceiveDMLTimeRepr = time.UnixMilli(lastReceiveDMLTime).String()
+					lastLogTime := subStat.lastLogLagTime.Load()
+					if time.Since(time.Unix(0, lastLogTime)) > logInterval {
+						lastReceiveDMLTimeRepr := "never"
+						if lastReceiveDMLTime := subStat.lastReceiveDMLTime.Load(); lastReceiveDMLTime > 0 {
+							lastReceiveDMLTimeRepr = time.UnixMilli(lastReceiveDMLTime).String()
+						}
+						log.Warn("resolved ts lag is too large for initialized subscription",
+							zap.Uint64("subID", uint64(subStat.subID)),
+							zap.Int64("tableID", subStat.tableSpan.TableID),
+							zap.Uint64("resolvedTs", subResolvedTs),
+							zap.Float64("resolvedLag(s)", subResolvedTsLagInSec),
+							zap.Stringer("lastAdvanceTime", time.UnixMilli(subStat.lastAdvanceTime.Load())),
+							zap.String("lastReceiveDMLTime", lastReceiveDMLTimeRepr),
+							zap.String("tableSpan", common.FormatTableSpan(subStat.tableSpan)),
+							zap.Uint64("checkpointTs", subStat.checkpointTs.Load()),
+							zap.Uint64("maxEventCommitTs", subStat.maxEventCommitTs.Load()))
+						subStat.lastLogLagTime.Store(time.Now().UnixNano())
 					}
-					log.Warn("resolved ts lag is too large for initialized subscription",
-						zap.Uint64("subID", uint64(subStat.subID)),
-						zap.Int64("tableID", subStat.tableSpan.TableID),
-						zap.Uint64("resolvedTs", subResolvedTs),
-						zap.Float64("resolvedLag(s)", subResolvedTsLagInSec),
-						zap.Stringer("lastAdvanceTime", time.UnixMilli(subStat.lastAdvanceTime.Load())),
-						zap.String("lastReceiveDMLTime", lastReceiveDMLTimeRepr),
-						zap.String("tableSpan", common.FormatTableSpan(subStat.tableSpan)),
-						zap.Uint64("checkpointTs", subStat.checkpointTs.Load()),
-						zap.Uint64("maxEventCommitTs", subStat.maxEventCommitTs.Load()))
 				}
 			} else {
 				uninitializedStatCount++
@@ -1187,11 +1195,14 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 			bytes.Compare(comparableKey, iter.tableSpan.EndKey) <= 0 {
 			break
 		}
-		log.Debug("event store iter skip kv not in table span",
+		log.Info("event store iter skip kv not in table span",
 			zap.String("tableSpan", common.FormatTableSpan(iter.tableSpan)),
 			zap.String("key", hex.EncodeToString(rawKV.Key)),
 			zap.Uint64("startTs", rawKV.StartTs),
-			zap.Uint64("commitTs", rawKV.CRTs))
+			zap.Uint64("commitTs", rawKV.CRTs),
+			zap.Bool("isInsert", rawKV.IsInsert()),
+			zap.Bool("isDelete", rawKV.IsDelete()),
+			zap.Bool("isUpdate", rawKV.IsUpdate()))
 		metrics.EventStoreScanBytes.WithLabelValues("skipped").Add(float64(len(value)))
 		iter.innerIter.Next()
 	}

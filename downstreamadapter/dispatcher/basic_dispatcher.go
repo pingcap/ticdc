@@ -72,6 +72,7 @@ type Dispatcher interface {
 	GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus
 	GetEventSizePerSecond() float32
 	IsTableTriggerEventDispatcher() bool
+	DealWithBlockEvent(event commonEvent.BlockEvent)
 	TryClose() (w heartbeatpb.Watermark, ok bool)
 	Remove()
 }
@@ -479,7 +480,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				}
 				wakeCallback()
 			})
-			d.dealWithBlockEvent(ddl)
+			d.sharedInfo.GetBlockEventExecutor().Submit(d, ddl)
 		case commonEvent.TypeSyncPointEvent:
 			if common.IsRedoMode(d.GetMode()) {
 				continue
@@ -498,7 +499,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			syncPoint.AddPostFlushFunc(func() {
 				wakeCallback()
 			})
-			d.dealWithBlockEvent(syncPoint)
+			d.sharedInfo.GetBlockEventExecutor().Submit(d, syncPoint)
 		case commonEvent.TypeHandshakeEvent:
 			log.Warn("Receive handshake event unexpectedly",
 				zap.Stringer("dispatcher", d.id),
@@ -648,7 +649,7 @@ func (d *BasicDispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
 // 1.If the event is a single table DDL, it will be added to the sink for writing to downstream.
 // If the ddl leads to add new tables or drop tables, it should send heartbeat to maintainer
 // 2. If the event is a multi-table DDL / sync point Event, it will generate a TableSpanBlockStatus message with ddl info to send to maintainer.
-func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent) {
+func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 	if !d.shouldBlock(event) {
 		err := d.AddBlockEventToSink(event)
 		if err != nil {
