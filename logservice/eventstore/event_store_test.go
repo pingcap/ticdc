@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -770,4 +771,111 @@ func TestEventStoreGetIteratorConcurrently(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestEventStoreIter_NextReusesRawKVEntry(t *testing.T) {
+	t.Parallel()
+
+	// Define events that are inside and outside the span.
+	// The span for the iterator will be [keyB, keyD).
+	eventA := &common.RawKVEntry{OpType: common.OpTypeDelete, Key: []byte("keyA"), OldValue: []byte("valA"), StartTs: 300, CRTs: 301} // Outside, before span
+	eventB := &common.RawKVEntry{OpType: common.OpTypePut, Key: []byte("keyB"), Value: []byte("valB"), StartTs: 302, CRTs: 303}       // Inside span
+	eventC := &common.RawKVEntry{OpType: common.OpTypePut, Key: []byte("keyC"), Value: []byte("valC"), StartTs: 304, CRTs: 305}       // Inside span
+	eventD := &common.RawKVEntry{OpType: common.OpTypeDelete, Key: []byte("keyD"), OldValue: []byte("valD"), StartTs: 306, CRTs: 307} // Outside, at end key (exclusive)
+
+	testCases := []struct {
+		name           string
+		allEvents      []*common.RawKVEntry
+		iteratorSpan   *heartbeatpb.TableSpan
+		expectedEvents []*common.RawKVEntry
+	}{
+		{
+			name:      "Insert-After-Delete",
+			allEvents: []*common.RawKVEntry{eventA, eventB, eventC, eventD},
+			iteratorSpan: &heartbeatpb.TableSpan{
+				TableID:  42,
+				StartKey: []byte("keyB"),
+				EndKey:   []byte("keyD"),
+			},
+			expectedEvents: []*common.RawKVEntry{eventB, eventC},
+		},
+	}
+
+	var subID uint64 = 1
+	var tableID int64 = 42
+
+	// This test now focuses on a single, more comprehensive scenario.
+	for _, tc := range testCases {
+		dir := t.TempDir()
+		db, err := pebble.Open(dir, &pebble.Options{})
+		require.NoError(t, err)
+		t.Run(tc.name, func(t *testing.T) {
+			// Write test data
+			batch := db.NewBatch()
+			for _, event := range tc.allEvents {
+				key := EncodeKey(subID, tableID, event, CompressionNone)
+				value := event.Encode()
+				require.NoError(t, batch.Set(key, value, pebble.NoSync))
+			}
+			require.NoError(t, batch.Commit(pebble.NoSync))
+
+			// Create iterator with a wider range to ensure it sees all keys,
+			// so we can test the internal filtering logic.
+			start := EncodeKeyPrefix(subID, tableID, 0)
+			end := EncodeKeyPrefix(subID, tableID, 500)
+			innerIter, err := db.NewIter(&pebble.IterOptions{
+				LowerBound: start,
+				UpperBound: end,
+			})
+			require.NoError(t, err)
+			_ = innerIter.First()
+
+			decoder, err := zstd.NewReader(nil)
+			require.NoError(t, err)
+
+			iter := &eventStoreIter{
+				id:            1,
+				tableSpan:     tc.iteratorSpan,
+				needCheckSpan: true, // Enable span checking logic
+				innerIter:     innerIter,
+				decoder:       decoder,
+				decoderPool:   nil, // Not needed for this test
+			}
+
+			// Collect results
+			var results []*common.RawKVEntry
+			for {
+				rawKV, _ := iter.Next()
+				if rawKV == nil {
+					break
+				}
+				// Make a copy to verify against later, as the original pointer's content might be overwritten if reused.
+				kvCopy := *rawKV
+				results = append(results, &kvCopy)
+			}
+			require.NoError(t, iter.innerIter.Close())
+
+			// Verify results
+			require.Len(t, results, len(tc.expectedEvents), "Should only read events within the span")
+
+			// Check that pointers are unique
+			pointerSet := make(map[string]struct{})
+			for i, res := range results {
+				ptrAddr := fmt.Sprintf("%p", res)
+				_, exists := pointerSet[ptrAddr]
+				require.False(t, exists, "Pointer %s is reused at index %d", ptrAddr, i)
+				pointerSet[ptrAddr] = struct{}{}
+
+				// Check content correctness
+				require.True(t, bytes.Equal(tc.expectedEvents[i].Key, res.Key))
+				require.True(t, bytes.Equal(tc.expectedEvents[i].Value, res.Value))
+				require.True(t, bytes.Equal(tc.expectedEvents[i].OldValue, res.OldValue))
+				require.Equal(t, tc.expectedEvents[i].OpType, res.OpType)
+				require.Equal(t, tc.expectedEvents[i].StartTs, res.StartTs)
+				require.Equal(t, tc.expectedEvents[i].CRTs, res.CRTs)
+			}
+		})
+		require.NoError(t, db.Close())
+		require.NoError(t, os.RemoveAll(dir))
+	}
 }

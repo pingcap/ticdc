@@ -1195,7 +1195,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 			bytes.Compare(comparableKey, iter.tableSpan.EndKey) <= 0 {
 			break
 		}
-		log.Info("event store iter skip kv not in table span",
+		log.Debug("event store iter skip kv not in table span",
 			zap.String("tableSpan", common.FormatTableSpan(iter.tableSpan)),
 			zap.String("key", hex.EncodeToString(rawKV.Key)),
 			zap.Uint64("startTs", rawKV.StartTs),
