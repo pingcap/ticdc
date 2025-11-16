@@ -1217,11 +1217,14 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 			bytes.Compare(comparableKey, iter.tableSpan.EndKey) <= 0 {
 			break
 		}
-		log.Debug("event store iter skip kv not in table span",
+		log.Info("event store iter skip kv not in table span",
 			zap.String("tableSpan", common.FormatTableSpan(iter.tableSpan)),
 			zap.String("key", hex.EncodeToString(rawKV.Key)),
 			zap.Uint64("startTs", rawKV.StartTs),
-			zap.Uint64("commitTs", rawKV.CRTs))
+			zap.Uint64("commitTs", rawKV.CRTs),
+			zap.Bool("isInsert", rawKV.IsInsert()),
+			zap.Bool("isDelete", rawKV.IsDelete()),
+			zap.Bool("isUpdate", rawKV.IsUpdate()))
 		metrics.EventStoreScanBytes.WithLabelValues("skipped").Add(float64(len(value)))
 		iter.innerIter.Next()
 	}

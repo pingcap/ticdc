@@ -194,3 +194,22 @@ func TestRawKVEntry_IsUpdate(t *testing.T) {
 		require.False(t, entry.IsUpdate())
 	})
 }
+
+func TestRawKVEntryEncodeDecode_DeleteInsertOperation(t *testing.T) {
+	original := RawKVEntry{
+		OpType:   OpTypeDelete,
+		CRTs:     1111111111,
+		StartTs:  2222222222,
+		RegionID: 24,
+		Key:      []byte("delete_key"),
+		Value:    make([]byte, 0),
+		OldValue: []byte("old_value"),
+	}
+
+	encoded := original.Encode()
+
+	var decoded RawKVEntry
+	err := decoded.Decode(encoded)
+	require.NoError(t, err)
+	require.Equal(t, original, decoded)
+}
