@@ -46,8 +46,10 @@ import (
 )
 
 var (
-	CounterKv       = metrics.EventStoreReceivedEventCount.WithLabelValues("kv")
-	CounterResolved = metrics.EventStoreReceivedEventCount.WithLabelValues("resolved")
+	CounterKv           = metrics.EventStoreReceivedEventCount.WithLabelValues("kv")
+	CounterResolved     = metrics.EventStoreReceivedEventCount.WithLabelValues("resolved")
+	scannedBytesMetrics = metrics.EventStoreScanBytes.WithLabelValues("scanned")
+	skippedBytesMetrics = metrics.EventStoreScanBytes.WithLabelValues("skipped")
 )
 
 var (
@@ -1186,7 +1188,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		if err != nil {
 			log.Panic("fail to decode raw kv entry", zap.Error(err))
 		}
-		metrics.EventStoreScanBytes.WithLabelValues("scanned").Add(float64(len(value)))
+		scannedBytesMetrics.Add(float64(len(value)))
 		if !iter.needCheckSpan {
 			break
 		}
@@ -1203,7 +1205,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 			zap.Bool("isInsert", rawKV.IsInsert()),
 			zap.Bool("isDelete", rawKV.IsDelete()),
 			zap.Bool("isUpdate", rawKV.IsUpdate()))
-		metrics.EventStoreScanBytes.WithLabelValues("skipped").Add(float64(len(value)))
+		skippedBytesMetrics.Add(float64(len(value)))
 		iter.innerIter.Next()
 	}
 	isNewTxn := false
