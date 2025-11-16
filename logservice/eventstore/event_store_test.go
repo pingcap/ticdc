@@ -776,33 +776,63 @@ func TestEventStoreGetIteratorConcurrently(t *testing.T) {
 func TestEventStoreIter_NextReusesRawKVEntry(t *testing.T) {
 	t.Parallel()
 
-	// Define events that are inside and outside the span.
+	// Define a set of reusable events for different test cases.
 	// The span for the iterator will be [keyB, keyD).
-	eventA := &common.RawKVEntry{OpType: common.OpTypeDelete, Key: []byte("keyA"), OldValue: []byte("valA"), StartTs: 300, CRTs: 301} // Outside, before span
-	eventB := &common.RawKVEntry{OpType: common.OpTypePut, Key: []byte("keyB"), Value: []byte("valB"), StartTs: 302, CRTs: 303}       // Inside span
-	eventC := &common.RawKVEntry{OpType: common.OpTypePut, Key: []byte("keyC"), Value: []byte("valC"), StartTs: 304, CRTs: 305}       // Inside span
-	eventD := &common.RawKVEntry{OpType: common.OpTypeDelete, Key: []byte("keyD"), OldValue: []byte("valD"), StartTs: 306, CRTs: 307} // Outside, at end key (exclusive)
+	// Filtered events (outside the span)
+	filteredInsert := &common.RawKVEntry{OpType: common.OpTypePut, Key: []byte("keyA1"), Value: []byte("valA1"), StartTs: 300, CRTs: 301}
+	filteredDelete := &common.RawKVEntry{OpType: common.OpTypeDelete, Key: []byte("keyA2"), OldValue: []byte("valA2"), StartTs: 302, CRTs: 303}
+	filteredUpdate := &common.RawKVEntry{OpType: common.OpTypePut, Key: []byte("keyA3"), Value: []byte("valA3"), OldValue: []byte("oldValA3"), StartTs: 304, CRTs: 305}
+	filteredAtEnd := &common.RawKVEntry{OpType: common.OpTypePut, Key: []byte("keyD"), Value: []byte("valD"), StartTs: 310, CRTs: 311}
+
+	// Kept events (inside the span)
+	keptInsert := &common.RawKVEntry{OpType: common.OpTypePut, Key: []byte("keyB1"), Value: []byte("valB1"), StartTs: 400, CRTs: 401}
+	keptDelete := &common.RawKVEntry{OpType: common.OpTypeDelete, Key: []byte("keyB2"), OldValue: []byte("valB2"), StartTs: 402, CRTs: 403}
+	keptUpdate := &common.RawKVEntry{OpType: common.OpTypePut, Key: []byte("keyB3"), Value: []byte("valB3"), OldValue: []byte("oldValB3"), StartTs: 404, CRTs: 405}
 
 	testCases := []struct {
 		name           string
 		allEvents      []*common.RawKVEntry
-		iteratorSpan   *heartbeatpb.TableSpan
 		expectedEvents []*common.RawKVEntry
 	}{
 		{
-			name:      "Insert-After-Delete",
-			allEvents: []*common.RawKVEntry{eventA, eventB, eventC, eventD},
-			iteratorSpan: &heartbeatpb.TableSpan{
-				TableID:  42,
-				StartKey: []byte("keyB"),
-				EndKey:   []byte("keyD"),
-			},
-			expectedEvents: []*common.RawKVEntry{eventB, eventC},
+			name:           "FilteredInsert-then-KeptDelete",
+			allEvents:      []*common.RawKVEntry{filteredInsert, keptDelete},
+			expectedEvents: []*common.RawKVEntry{keptDelete},
+		},
+		{
+			name:           "FilteredDelete-then-KeptInsert",
+			allEvents:      []*common.RawKVEntry{filteredDelete, keptInsert},
+			expectedEvents: []*common.RawKVEntry{keptInsert},
+		},
+		{
+			name:           "FilteredUpdate-then-KeptInsert",
+			allEvents:      []*common.RawKVEntry{filteredUpdate, keptInsert},
+			expectedEvents: []*common.RawKVEntry{keptInsert},
+		},
+		{
+			name:           "KeptInsert-then-FilteredAtEnd",
+			allEvents:      []*common.RawKVEntry{keptInsert, filteredAtEnd},
+			expectedEvents: []*common.RawKVEntry{keptInsert},
+		},
+		{
+			name:           "MultipleFiltered-then-KeptUpdate",
+			allEvents:      []*common.RawKVEntry{filteredInsert, filteredDelete, keptUpdate},
+			expectedEvents: []*common.RawKVEntry{keptUpdate},
+		},
+		{
+			name:           "Kept-Filtered-Kept",
+			allEvents:      []*common.RawKVEntry{keptInsert, filteredUpdate, keptDelete},
+			expectedEvents: []*common.RawKVEntry{keptInsert, keptDelete},
 		},
 	}
 
 	var subID uint64 = 1
 	var tableID int64 = 42
+	iteratorSpan := &heartbeatpb.TableSpan{
+		TableID:  tableID,
+		StartKey: []byte("keyB"),
+		EndKey:   []byte("keyD"),
+	}
 
 	// This test now focuses on a single, more comprehensive scenario.
 	for _, tc := range testCases {
@@ -835,7 +865,7 @@ func TestEventStoreIter_NextReusesRawKVEntry(t *testing.T) {
 
 			iter := &eventStoreIter{
 				id:            1,
-				tableSpan:     tc.iteratorSpan,
+				tableSpan:     iteratorSpan,
 				needCheckSpan: true, // Enable span checking logic
 				innerIter:     innerIter,
 				decoder:       decoder,
