@@ -230,6 +230,9 @@ type eventStore struct {
 
 	// compressionThreshold is the size in bytes above which a value will be compressed.
 	compressionThreshold int
+
+	// iterIDCounter is used to generate unique id for eventStoreIter.
+	iterIDCounter atomic.Uint64
 }
 
 const (
@@ -861,6 +864,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	}
 
 	return &eventStoreIter{
+		id:            e.iterIDCounter.Add(1),
 		tableSpan:     stat.tableSpan,
 		needCheckSpan: needCheckSpan,
 		innerIter:     iter,
@@ -1119,10 +1123,26 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback, enco
 					zap.Int64("tableID", event.tableID))
 				continue
 			}
+			log.Info("event store write events",
+				zap.Uint64("startTs", kv.StartTs),
+				zap.Uint64("commitTs", kv.CRTs),
+				zap.Bool("isInsert", kv.IsInsert()),
+				zap.Bool("isDelete", kv.IsDelete()),
+				zap.Bool("isUpdate", kv.IsUpdate()),
+				zap.String("hexKey", spanz.HexKey(kv.Key)),
+				zap.Any("rawKey", kv.Key))
 
 			compressionType := CompressionNone
 			value := kv.Encode()
 			if len(value) > e.compressionThreshold {
+				log.Info("event store compress events",
+					zap.Uint64("startTs", kv.StartTs),
+					zap.Uint64("commitTs", kv.CRTs),
+					zap.Bool("isInsert", kv.IsInsert()),
+					zap.Bool("isDelete", kv.IsDelete()),
+					zap.Bool("isUpdate", kv.IsUpdate()),
+					zap.String("hexKey", spanz.HexKey(kv.Key)),
+					zap.Any("rawKey", kv.Key))
 				value = encoder.EncodeAll(value, nil)
 				compressionType = CompressionZSTD
 				metrics.EventStoreCompressedRowsCount.Inc()
@@ -1145,6 +1165,7 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback, enco
 }
 
 type eventStoreIter struct {
+	id        uint64
 	tableSpan *heartbeatpb.TableSpan
 	// true when need check whether data from `innerIter` is in `tableSpan`
 	// (e.g. subscription span is not the same as dispatcher span)
@@ -1205,6 +1226,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		iter.innerIter.Next()
 	}
 	log.Info("event store iter next",
+		zap.Uint64("iterID", iter.id),
 		zap.Uint64("startTs", rawKV.StartTs),
 		zap.Uint64("commitTs", rawKV.CRTs),
 		zap.Bool("isInsert", rawKV.IsInsert()),
