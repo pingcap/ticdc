@@ -17,12 +17,14 @@ import (
 	"context"
 	"time"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/api/owner"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
 	v2 "github.com/pingcap/ticdc/pkg/api/v2"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/spf13/cobra"
+	"go.uber.org/zap"
 )
 
 const timeFormat = "2006-01-02 15:04:05.000"
@@ -70,6 +72,7 @@ func (o *listChangefeedOptions) run(cmd *cobra.Command) error {
 
 	raw, err := o.apiClient.Changefeeds().List(ctx, o.keyspace, "all")
 	if err != nil {
+		log.Warn("list changefeed error", zap.String("keyspace", o.keyspace), zap.Error(err))
 		return err
 	}
 	cfs := make([]*changefeedCommonInfo, 0, len(raw))
