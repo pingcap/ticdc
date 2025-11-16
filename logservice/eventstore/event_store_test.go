@@ -864,7 +864,6 @@ func TestEventStoreIter_NextWithFiltering(t *testing.T) {
 			require.NoError(t, err)
 
 			iter := &eventStoreIter{
-				id:            1,
 				tableSpan:     iteratorSpan,
 				needCheckSpan: true, // Enable span checking logic
 				innerIter:     innerIter,
