@@ -38,7 +38,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/tikv/client-go/v2/oracle"
@@ -1123,26 +1122,10 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback, enco
 					zap.Int64("tableID", event.tableID))
 				continue
 			}
-			log.Info("event store write events",
-				zap.Uint64("startTs", kv.StartTs),
-				zap.Uint64("commitTs", kv.CRTs),
-				zap.Bool("isInsert", kv.IsInsert()),
-				zap.Bool("isDelete", kv.IsDelete()),
-				zap.Bool("isUpdate", kv.IsUpdate()),
-				zap.String("hexKey", spanz.HexKey(kv.Key)),
-				zap.Any("rawKey", kv.Key))
 
 			compressionType := CompressionNone
 			value := kv.Encode()
 			if len(value) > e.compressionThreshold {
-				log.Info("event store compress events",
-					zap.Uint64("startTs", kv.StartTs),
-					zap.Uint64("commitTs", kv.CRTs),
-					zap.Bool("isInsert", kv.IsInsert()),
-					zap.Bool("isDelete", kv.IsDelete()),
-					zap.Bool("isUpdate", kv.IsUpdate()),
-					zap.String("hexKey", spanz.HexKey(kv.Key)),
-					zap.Any("rawKey", kv.Key))
 				value = encoder.EncodeAll(value, nil)
 				compressionType = CompressionZSTD
 				metrics.EventStoreCompressedRowsCount.Inc()
@@ -1228,15 +1211,6 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		metrics.EventStoreScanBytes.WithLabelValues("skipped").Add(float64(len(value)))
 		iter.innerIter.Next()
 	}
-	log.Info("event store iter next",
-		zap.Uint64("iterID", iter.id),
-		zap.Uint64("startTs", rawKV.StartTs),
-		zap.Uint64("commitTs", rawKV.CRTs),
-		zap.Bool("isInsert", rawKV.IsInsert()),
-		zap.Bool("isDelete", rawKV.IsDelete()),
-		zap.Bool("isUpdate", rawKV.IsUpdate()),
-		zap.String("hexKey", spanz.HexKey(rawKV.Key)),
-		zap.Any("rawKey", rawKV.Key))
 	isNewTxn := false
 	// 2 PC transactions have different startTs and commitTs.
 	// async-commit transactions have different startTs and may have the same commitTs.
