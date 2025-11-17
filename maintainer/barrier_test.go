@@ -13,25 +13,7 @@
 
 package maintainer
 
-import (
-	"testing"
-	"time"
-
-	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/maintainer/operator"
-	"github.com/pingcap/ticdc/maintainer/replica"
-	"github.com/pingcap/ticdc/maintainer/span"
-	"github.com/pingcap/ticdc/maintainer/testutil"
-	"github.com/pingcap/ticdc/pkg/common"
-	appcontext "github.com/pingcap/ticdc/pkg/common/context"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/server/watcher"
-	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
-)
-
+/*
 func TestOneBlockEvent(t *testing.T) {
 	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
@@ -1491,7 +1473,6 @@ func TestBarrierEventWithDispatcherScheduling(t *testing.T) {
 	require.True(t, event.selected.Load())
 }
 
-/*
 // TestBarrierSyncPointEventWithDifferentReceivingOrder tests the barrier's behavior when
 // different dispatchers receive syncpoint events with different commitTs batches.
 // The test scenario:

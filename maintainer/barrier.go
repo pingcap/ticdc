@@ -208,7 +208,6 @@ func (b *Barrier) HandleStatus(from node.ID,
 			msgs = append(msgs, msg)
 		}
 	}
-	log.Info("hyy msgs", zap.Any("msg", msgs))
 	return msgs
 }
 

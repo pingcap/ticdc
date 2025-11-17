@@ -627,7 +627,6 @@ func (be *BarrierEvent) newWriterActionMessage(capture node.ID, mode int64) *mes
 			},
 			Mode: mode,
 		})
-	log.Info("hyy msg", zap.Any("msg", msg))
 	return msg
 }
 
