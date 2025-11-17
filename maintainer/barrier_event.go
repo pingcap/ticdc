@@ -513,7 +513,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 }
 
 func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
-	if time.Since(be.lastResendTime) < 60*time.Second {
+	if time.Since(be.lastResendTime) < 300*time.Second {
 		return nil
 	}
 	var msgs []*messaging.TargetMessage
