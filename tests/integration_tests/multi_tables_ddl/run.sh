@@ -37,6 +37,7 @@ stop_minio() {
 stop() {
 	stop_minio
 	stop_tidb_cluster
+	collect_logs $WORK_DIR
 }
 s3cmd --access_key=$MINIO_ACCESS_KEY --secret_key=$MINIO_SECRET_KEY --host=$S3_ENDPOINT --host-bucket=$S3_ENDPOINT --no-ssl mb s3://logbucket
 
