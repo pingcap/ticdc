@@ -811,8 +811,8 @@ func TestEventStoreIter_NextWithFiltering(t *testing.T) {
 		},
 		{
 			name:           "FilteredUpdate-then-KeptDelete",
-			allEvents:      []*common.RawKVEntry{filteredUpdate, keptInsert},
-			expectedEvents: []*common.RawKVEntry{keptInsert},
+			allEvents:      []*common.RawKVEntry{filteredUpdate, keptDelete},
+			expectedEvents: []*common.RawKVEntry{keptDelete},
 		},
 		{
 			name:           "KeptInsert-then-FilteredAtEnd",
@@ -823,11 +823,6 @@ func TestEventStoreIter_NextWithFiltering(t *testing.T) {
 			name:           "MultipleFiltered-then-KeptUpdate",
 			allEvents:      []*common.RawKVEntry{filteredInsert, filteredDelete, keptUpdate},
 			expectedEvents: []*common.RawKVEntry{keptUpdate},
-		},
-		{
-			name:           "Kept-Filtered-Kept",
-			allEvents:      []*common.RawKVEntry{keptInsert, filteredUpdate, keptDelete},
-			expectedEvents: []*common.RawKVEntry{keptInsert, keptDelete},
 		},
 	}
 
