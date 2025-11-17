@@ -160,6 +160,9 @@ func (d *dispatcherStat) clear() {
 }
 
 // registerTo register the dispatcher to the specified event service.
+// `onlyReuse` is used to control the register behavior at logservice side
+// it should be set to `false` when register to a local event service,
+// and set to `true` when register to a remote event service.
 func (d *dispatcherStat) registerTo(serverID node.ID, onlyReuse bool) {
 	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRegisterRequest(d.eventCollector.getLocalServerID().String(), onlyReuse))
 	d.eventCollector.enqueueMessageForSend(msg)
