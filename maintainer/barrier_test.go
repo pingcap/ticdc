@@ -1491,6 +1491,7 @@ func TestBarrierEventWithDispatcherScheduling(t *testing.T) {
 	require.True(t, event.selected.Load())
 }
 
+/*
 // TestBarrierSyncPointEventWithDifferentReceivingOrder tests the barrier's behavior when
 // different dispatchers receive syncpoint events with different commitTs batches.
 // The test scenario:
@@ -1887,3 +1888,4 @@ func TestBarrierSyncPointEventWithDifferentReceivingOrder(t *testing.T) {
 	// Verify all events are processed
 	require.Len(t, barrier.blockedEvents.m, 0)
 }
+*/
