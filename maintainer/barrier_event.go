@@ -610,7 +610,7 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 }
 
 func (be *BarrierEvent) newWriterActionMessage(capture node.ID, mode int64) *messaging.TargetMessage {
-	return messaging.NewSingleTargetMessage(capture, messaging.HeartbeatCollectorTopic,
+	msg := messaging.NewSingleTargetMessage(capture, messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.HeartBeatResponse{
 			ChangefeedID: be.cfID.ToPB(),
 			DispatcherStatuses: []*heartbeatpb.DispatcherStatus{
@@ -626,6 +626,8 @@ func (be *BarrierEvent) newWriterActionMessage(capture node.ID, mode int64) *mes
 			},
 			Mode: mode,
 		})
+	log.Info("hyy msg", zap.Any("msg", msg))
+	return msg
 }
 
 func (be *BarrierEvent) newPassActionMessage(capture node.ID, mode int64) *messaging.TargetMessage {

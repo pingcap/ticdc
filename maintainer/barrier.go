@@ -188,13 +188,15 @@ func (b *Barrier) HandleStatus(from node.ID,
 		return nil
 	}
 	// send ack or write action message to dispatcher
-	return messaging.NewSingleTargetMessage(from,
+	msg := messaging.NewSingleTargetMessage(from,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.HeartBeatResponse{
 			ChangefeedID:       request.ChangefeedID,
 			DispatcherStatuses: dispatcherStatus,
 			Mode:               b.mode,
 		})
+	log.Info("hyy msg", zap.Any("msg", msg))
+	return msg
 }
 
 // handleBootstrapResponse rebuild the block event from the bootstrap response

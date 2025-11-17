@@ -240,6 +240,7 @@ func (c *HeartBeatCollector) sendBlockStatusMessages(ctx context.Context) error 
 }
 
 func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.TargetMessage) error {
+	log.Info("hyy receive msg", zap.Any("msg", msg))
 	switch msg.Type {
 	case messaging.TypeHeartBeatResponse:
 		// TODO: Change a more appropriate name for HeartBeatResponse. It should be BlockStatusResponse or something else.
