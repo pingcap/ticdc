@@ -15,6 +15,7 @@ package range_checker
 
 import (
 	"fmt"
+	"sort"
 	"sync/atomic"
 )
 
@@ -52,7 +53,12 @@ func (rc *TableIDRangeChecker) Reset() {
 }
 
 func (rc *TableIDRangeChecker) Detail() string {
-	return fmt.Sprintf("reported count: %d, require count: %d", len(rc.reportedMap), rc.needCount)
+	keys := make([]int64, 0, len(rc.reportedMap))
+	for tableID := range rc.reportedMap {
+		keys = append(keys, tableID)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	return fmt.Sprintf("reported count: %d, require count: %d, reported tables: %v", len(rc.reportedMap), rc.needCount, keys)
 }
 
 func (rc *TableIDRangeChecker) MarkCovered() {
