@@ -32,6 +32,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/server"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/tikv/client-go/v2/oracle"
@@ -89,6 +90,9 @@ type coordinator struct {
 	// changefeedChangeCh is used to receive the changefeed change from the controller
 	changefeedChangeCh chan []*ChangefeedChange
 
+	// msgGuardWaitGroup guards Add/Wait so Stop never races with new recv handlers.
+	msgGuardWaitGroup util.GuardedWaitGroup
+
 	cancel func()
 	closed atomic.Bool
 }
@@ -144,25 +148,12 @@ func New(node *node.Info,
 }
 
 func (c *coordinator) recvMessages(ctx context.Context, msg *messaging.TargetMessage) error {
-	if c.closed.Load() {
+	if !c.msgGuardWaitGroup.AddIf(func() bool {
+		return !c.closed.Load()
+	}) {
 		return nil
 	}
-
-	defer func() {
-		if r := recover(); r != nil {
-			// There is chance that:
-			// 1. Just before the c.eventCh is closed, the recvMessages is called
-			// 2. Then the goroutine(call it g1) that calls recvMessages is scheduled out by runtime, and the msg is in flight
-			// 3. The c.eventCh is closed by another goroutine(call it g2)
-			// 4. g1 is scheduled back by runtime, and the msg is sent to the closed channel
-			// 5. g1 panics
-			// To avoid the panic, we have two choices:
-			// 1. Use a mutex to protect this function, but it will reduce the throughput
-			// 2. Recover the panic, and log the error
-			// We choose the second option here.
-			log.Error("panic in recvMessages", zap.Any("msg", msg), zap.Any("panic", r))
-		}
-	}()
+	defer c.msgGuardWaitGroup.Done()
 
 	select {
 	case <-ctx.Done():
@@ -414,6 +405,8 @@ func (c *coordinator) Bootstrapped() bool {
 func (c *coordinator) Stop() {
 	if c.closed.CompareAndSwap(false, true) {
 		c.mc.DeRegisterHandler(messaging.CoordinatorTopic)
+		// Ensure no handler is still writing to eventCh before closing it.
+		c.msgGuardWaitGroup.Wait()
 		c.controller.Stop()
 		c.cancel()
 		// close eventCh after cancel, to avoid send or get event from the channel

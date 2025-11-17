@@ -159,6 +159,11 @@ func (g *encoderGroup) runEncoder(ctx context.Context, idx int) error {
 				}
 			}
 			future.Messages = g.rowEventEncoders[idx].Build()
+			if err := common.AttachMessageLogInfo(future.Messages, future.events); err != nil {
+				return errors.Annotatef(errors.Trace(err),
+					"message rows count mismatches row events, keyspace:%s, changefeed:%s, messageCount:%d, eventCount:%d",
+					g.changefeedID.Keyspace(), g.changefeedID.Name(), len(future.Messages), len(future.events))
+			}
 			// TODO: Is it necessary to clear after use?
 			close(future.done)
 		}

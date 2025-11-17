@@ -48,6 +48,42 @@ type Message struct {
 
 	// PartitionKey for pulsar, route messages to one or different partitions
 	PartitionKey *string
+	// LogInfo carries diagnostic information of the message.
+	LogInfo *MessageLogInfo
+}
+
+// MessageLogInfo captures diagnostic context of a sink message.
+type MessageLogInfo struct {
+	Rows       []RowLogInfo
+	DDL        *DDLLogInfo
+	Checkpoint *CheckpointLogInfo
+}
+
+// RowLogInfo represents the information of a single row in a sink message.
+type RowLogInfo struct {
+	Type        string
+	Database    string
+	Table       string
+	StartTs     uint64
+	CommitTs    uint64
+	PrimaryKeys []ColumnLogInfo
+}
+
+// ColumnLogInfo records the name and value of a column for logging purposes.
+type ColumnLogInfo struct {
+	Name  string
+	Value interface{}
+}
+
+// DDLLogInfo stores diagnostic information for DDL messages.
+type DDLLogInfo struct {
+	Query    string
+	CommitTs uint64
+}
+
+// CheckpointLogInfo stores diagnostic information for checkpoint messages.
+type CheckpointLogInfo struct {
+	CommitTs uint64
 }
 
 // Length returns the expected size of the Kafka message

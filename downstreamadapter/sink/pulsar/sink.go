@@ -339,6 +339,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 					RowEvent: commonEvent.RowEvent{
 						PhysicalTableID: event.PhysicalTableID,
 						TableInfo:       event.TableInfo,
+						StartTs:         event.StartTs,
 						CommitTs:        event.CommitTs,
 						Event:           row,
 						Callback:        rowCallback,

@@ -36,9 +36,6 @@ import (
 const (
 	// batchSize is the maximum size of the number of messages in a batch.
 	batchSize = 2048
-	// batchInterval is the interval of the worker to collect a batch of messages.
-	// It shouldn't be too large, otherwise it will lead to a high latency.
-	batchInterval = 15 * time.Millisecond
 )
 
 type sink struct {
@@ -259,6 +256,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 					RowEvent: commonEvent.RowEvent{
 						PhysicalTableID: event.PhysicalTableID,
 						TableInfo:       event.TableInfo,
+						StartTs:         event.StartTs,
 						CommitTs:        event.CommitTs,
 						Event:           row,
 						Callback:        rowCallback,
@@ -422,6 +420,7 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 				zap.Stringer("changefeed", s.changefeedID))
 			continue
 		}
+		common.SetDDLMessageLogInfo(message, e)
 		topic := s.comp.eventRouter.GetTopicForDDL(e)
 		// Notice: We must call GetPartitionNum here,
 		// which will be responsible for automatically creating topics when they don't exist.
@@ -499,6 +498,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 			if msg == nil {
 				continue
 			}
+			common.SetCheckpointMessageLogInfo(msg, ts)
 
 			tableNames := s.getAllTableNames(ts)
 			// NOTICE: When there are no tables to replicate,

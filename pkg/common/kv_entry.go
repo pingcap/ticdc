@@ -179,6 +179,8 @@ func (v *RawKVEntry) Decode(data []byte) error {
 	if v.OldValueLen > 0 {
 		v.OldValue = make([]byte, v.OldValueLen)
 		copy(v.OldValue, data[offset:offset+int(v.OldValueLen)])
+	} else {
+		v.OldValue = nil
 	}
 
 	return nil

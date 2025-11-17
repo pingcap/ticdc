@@ -100,7 +100,7 @@ kafka_groups=(
 	# G14
 	'kafka_simple_basic avro_basic debezium_basic fail_over_ddl_O'
 	# G15
-	'kafka_simple_basic_avro split_region autorandom gc_safepoint ddl_for_split_tables'
+	'kafka_simple_basic_avro split_region autorandom gc_safepoint ddl_for_split_tables kafka_log_info'
 )
 
 # Resource allocation for pulsar light integration tests in CI pipelines:

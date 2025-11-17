@@ -340,8 +340,8 @@ func (m *Maintainer) checkNodeChanged() {
 // Close cleanup resources
 func (m *Maintainer) Close() {
 	m.cancel()
-	m.cleanupMetrics()
 	m.controller.Stop()
+	m.cleanupMetrics()
 }
 
 func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {

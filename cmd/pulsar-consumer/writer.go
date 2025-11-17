@@ -21,6 +21,7 @@ import (
 
 	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -39,14 +40,14 @@ import (
 type partitionProgress struct {
 	partition   int32
 	watermark   uint64
-	eventGroups map[int64]*eventsGroup
+	eventsGroup map[int64]*util.EventsGroup
 	decoder     common.Decoder
 }
 
 func newPartitionProgress(partition int32, decoder common.Decoder) *partitionProgress {
 	return &partitionProgress{
 		partition:   partition,
-		eventGroups: make(map[int64]*eventsGroup),
+		eventsGroup: make(map[int64]*util.EventsGroup),
 		decoder:     decoder,
 	}
 }
@@ -71,9 +72,10 @@ type writer struct {
 	// this should only be used by the canal-json protocol
 	partitionTableAccessor *common.PartitionTableAccessor
 
-	eventRouter *eventrouter.EventRouter
-	protocol    config.Protocol
-	mysqlSink   sink.Sink
+	eventRouter            *eventrouter.EventRouter
+	protocol               config.Protocol
+	mysqlSink              sink.Sink
+	enableTableAcrossNodes bool
 }
 
 func newWriter(ctx context.Context, o *option) *writer {
@@ -83,6 +85,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 		partitionTableAccessor: common.NewPartitionTableAccessor(),
 		ddlList:                make([]*commonEvent.DDLEvent, 0),
 		ddlWithMaxCommitTs:     make(map[int64]uint64),
+		enableTableAcrossNodes: o.replicaConfig.Scheduler.EnableTableAcrossNodes,
 	}
 	var (
 		db  *sql.DB
@@ -148,7 +151,7 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 	resolvedEvents := make([]*commonEvent.DMLEvent, 0)
 	for tableID := range tableIDs {
 		for _, progress := range w.progresses {
-			g, ok := progress.eventGroups[tableID]
+			g, ok := progress.eventsGroup[tableID]
 			if !ok {
 				continue
 			}
@@ -202,7 +205,7 @@ func (w *writer) getBlockTableIDs(ddl *commonEvent.DDLEvent) map[int64]struct{} 
 	switch ddl.GetBlockedTables().InfluenceType {
 	case commonEvent.InfluenceTypeDB, commonEvent.InfluenceTypeAll:
 		for _, progress := range w.progresses {
-			for tableID := range progress.eventGroups {
+			for tableID := range progress.eventsGroup {
 				tableIDs[tableID] = struct{}{}
 			}
 		}
@@ -259,7 +262,7 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 	watermark := w.globalWatermark()
 	resolvedEvents := make([]*commonEvent.DMLEvent, 0)
 	for _, p := range w.progresses {
-		for _, group := range p.eventGroups {
+		for _, group := range p.eventsGroup {
 			events := group.Resolve(watermark)
 			resolvedCount := len(events)
 			if resolvedCount == 0 {
@@ -416,17 +419,25 @@ func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionP
 		table    = dml.TableInfo.GetTableName()
 		commitTs = dml.GetCommitTs()
 	)
-	group := progress.eventGroups[tableID]
+	group := progress.eventsGroup[tableID]
 	if group == nil {
-		group = NewEventsGroup(progress.partition, tableID)
-		progress.eventGroups[tableID] = group
+		group = util.NewEventsGroup(progress.partition, tableID)
+		progress.eventsGroup[tableID] = group
 	}
-	if commitTs >= group.highWatermark {
+	if commitTs >= group.HighWatermark {
 		group.Append(dml, false)
 		log.Info("DML event append to the group",
-			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.highWatermark),
+			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 			zap.Stringer("eventType", dml.RowTypes[0]))
+		return
+	}
+	if w.enableTableAcrossNodes {
+		log.Warn("DML events fallback, but enableTableAcrossNodes is true, still append it",
+			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
+			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
+			zap.Stringer("eventType", dml.RowTypes[0]))
+		group.Append(dml, true)
 		return
 	}
 	switch w.protocol {
@@ -435,14 +446,14 @@ func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionP
 		// we cannot distinguish whether it's a real fallback event or not, still append it.
 		if w.partitionTableAccessor.IsPartitionTable(schema, table) {
 			log.Warn("DML events fallback, but it's canal-json and partition table, still append it",
-				zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.highWatermark),
+				zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 				zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 				zap.Stringer("eventType", dml.RowTypes[0]))
 			group.Append(dml, true)
 			return
 		}
 		log.Warn("DML event fallback row, since less than the group high watermark, ignore it",
-			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.highWatermark),
+			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 			zap.Any("partitionWatermark", progress.watermark), zap.Any("watermark", progress.watermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 			zap.Stringer("eventType", dml.RowTypes[0]),

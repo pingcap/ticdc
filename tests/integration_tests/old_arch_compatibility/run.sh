@@ -22,16 +22,16 @@ prepare_sink() {
 	case $SINK_TYPE in
 	kafka)
 		SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760"
-		run_kafka_consumer "$WORK_DIR" "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760"
+		run_kafka_consumer "$WORK_DIR" "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" "$CUR/conf/${scenario}_changefeed.toml"
 		;;
 	storage)
 		SINK_URI="file://$WORK_DIR/storage_test/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true"
-		run_storage_consumer "$WORK_DIR" "$SINK_URI" "" ""
+		run_storage_consumer "$WORK_DIR" "$SINK_URI" "$CUR/conf/${scenario}_changefeed.toml" ""
 		;;
 	pulsar)
 		run_pulsar_cluster "$WORK_DIR" normal
 		SINK_URI="pulsar://127.0.0.1:6650/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true"
-		run_pulsar_consumer --upstream-uri "$SINK_URI"
+		run_pulsar_consumer --upstream-uri "$SINK_URI" --config "$CUR/conf/${scenario}_changefeed.toml"
 		;;
 	*)
 		SINK_URI="mysql://root@127.0.0.1:3306/"

@@ -468,6 +468,15 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTableForTiDB,
 	},
+	filter.ActionCreateHybridIndex: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
+		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTableForTiDB,
+	},
 }
 
 func isPartitionTable(tableInfo *model.TableInfo) bool {
@@ -513,13 +522,17 @@ func getSchemaID(tableMap map[int64]*BasicTableInfo, tableID int64) int64 {
 func buildPersistedDDLEventCommon(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
 	var query string
 	job := args.job
-	// only in unit test job.Query is empty
-	if job.Query != "" {
+	// TODO: for ActionAddFullTextIndex and ActionCreateHybridIndex,
+	// the parser cannot recogonize the query now, so we keep the original query in job.Query.
+	// only in unit test job.Query may be empty
+	if job.Type != filter.ActionAddFullTextIndex && job.Type != filter.ActionCreateHybridIndex && job.Query != "" {
 		var err error
 		query, err = transformDDLJobQuery(job)
 		if err != nil {
 			log.Panic("transformDDLJobQuery failed", zap.Error(err))
 		}
+	} else {
+		query = job.Query
 	}
 
 	// Note: if a ddl involve multiple tables, job.TableID is different with job.BinlogInfo.TableInfo.ID

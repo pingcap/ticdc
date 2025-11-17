@@ -147,6 +147,7 @@ func NewLargeEvent4Test(t *testing.T) (*commonEvent.DDLEvent, *commonEvent.RowEv
 	require.Equal(t, ok, true)
 	insertEvent := &commonEvent.RowEvent{
 		PhysicalTableID: dmlEvent.PhysicalTableID,
+		StartTs:         dmlEvent.StartTs,
 		CommitTs:        dmlEvent.CommitTs,
 		TableInfo:       dmlEvent.TableInfo,
 		Event:           insert,
@@ -159,6 +160,7 @@ func NewLargeEvent4Test(t *testing.T) (*commonEvent.DDLEvent, *commonEvent.RowEv
 	}
 	updateEvent := &commonEvent.RowEvent{
 		PhysicalTableID: dmlEvent.PhysicalTableID,
+		StartTs:         dmlEvent.StartTs,
 		CommitTs:        dmlEvent.CommitTs,
 		TableInfo:       dmlEvent.TableInfo,
 		Event:           update,
@@ -171,6 +173,7 @@ func NewLargeEvent4Test(t *testing.T) (*commonEvent.DDLEvent, *commonEvent.RowEv
 	}
 	deleteEvent := &commonEvent.RowEvent{
 		PhysicalTableID: dmlEvent.PhysicalTableID,
+		StartTs:         dmlEvent.StartTs,
 		CommitTs:        dmlEvent.CommitTs,
 		TableInfo:       dmlEvent.TableInfo,
 		Event:           delete,

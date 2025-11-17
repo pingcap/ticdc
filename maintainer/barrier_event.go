@@ -327,10 +327,8 @@ func (be *BarrierEvent) allDispatcherReported() bool {
 	//    Because the DDL was executed before the DML, the DML execution failed.
 	// 5. Therefore, when checking the reported status, we need to check for expired dispatchers
 	//    to avoid this situation.
+	ddlDispatcherExist := true
 	for dispatcherID := range be.reportedDispatchers {
-		if dispatcherID == be.spanController.GetDDLDispatcherID() {
-			continue
-		}
 		task := be.spanController.GetTaskByID(dispatcherID)
 		if task == nil {
 			log.Info("unexisted dispatcher, remove it from barrier event",
@@ -340,38 +338,43 @@ func (be *BarrierEvent) allDispatcherReported() bool {
 			)
 			needDoubleCheck = true
 			delete(be.reportedDispatchers, dispatcherID)
-		} else {
-			if !be.spanController.IsReplicating(task) {
-				log.Info("unreplicating dispatcher, remove it from barrier event",
-					zap.String("changefeed", be.cfID.Name()),
-					zap.String("dispatcher", dispatcherID.String()),
-					zap.Uint64("commitTs", be.commitTs),
-				)
-				needDoubleCheck = true
-				delete(be.reportedDispatchers, dispatcherID)
+			if be.spanController.IsDDLDispatcher(dispatcherID) {
+				ddlDispatcherExist = false
 			}
+		} else if !be.spanController.IsDDLDispatcher(dispatcherID) && !be.spanController.IsReplicating(task) { // TODO:fix ddlReplicating status
+			log.Info("unreplicating dispatcher, remove it from barrier event",
+				zap.String("changefeed", be.cfID.Name()),
+				zap.String("dispatcher", dispatcherID.String()),
+				zap.Uint64("commitTs", be.commitTs),
+			)
+			needDoubleCheck = true
+			delete(be.reportedDispatchers, dispatcherID)
 		}
 	}
 
 	if needDoubleCheck {
 		be.rangeChecker.Reset()
 
-		switch be.blockedDispatchers.InfluenceType {
-		case heartbeatpb.InfluenceType_Normal:
-			if be.dynamicSplitEnabled {
-				be.rangeChecker = range_checker.NewTableSpanRangeChecker(be.spanController.GetkeyspaceID(), be.blockedDispatchers.TableIDs)
-			} else {
-				be.rangeChecker = range_checker.NewTableCountChecker(len(be.blockedDispatchers.TableIDs))
+		if ddlDispatcherExist {
+			switch be.blockedDispatchers.InfluenceType {
+			case heartbeatpb.InfluenceType_Normal:
+				if be.dynamicSplitEnabled {
+					be.rangeChecker = range_checker.NewTableSpanRangeChecker(be.spanController.GetkeyspaceID(), be.blockedDispatchers.TableIDs)
+				} else {
+					be.rangeChecker = range_checker.NewTableCountChecker(len(be.blockedDispatchers.TableIDs))
+				}
+			case heartbeatpb.InfluenceType_DB:
+				be.createRangeCheckerForTypeDB()
+			case heartbeatpb.InfluenceType_All:
+				be.createRangeCheckerForTypeAll()
 			}
-		case heartbeatpb.InfluenceType_DB:
-			be.createRangeCheckerForTypeDB()
-		case heartbeatpb.InfluenceType_All:
-			be.createRangeCheckerForTypeAll()
+
+			be.addDispatchersToRangeChecker()
+
+			return be.rangeChecker.IsFullyCovered()
+		} else {
+			return false
 		}
-
-		be.addDispatchersToRangeChecker()
-
-		return be.rangeChecker.IsFullyCovered()
 	}
 
 	return true

@@ -36,16 +36,43 @@ SINK_TYPE=$1
 CDC_COUNT=3
 DB_COUNT=4
 
+function kill_process_by_ports() {
+	process_pattern=$1
+	shift
+	port_pattern=""
+	for port in "$@"; do
+		if [ -z "$port" ]; then
+			continue
+		fi
+		if [ -z "$port_pattern" ]; then
+			port_pattern="${port}"
+		else
+			port_pattern="${port_pattern}|${port}"
+		fi
+	done
+	if [ -z "$port_pattern" ]; then
+		return
+	fi
+	ps aux | grep "$process_pattern" | grep -E "$port_pattern" | awk '{print $2}' | xargs -I{} kill -9 {} || true
+}
+
 function kill_pd() {
-	ps aux | grep pd-server | grep "$WORK_DIR" | awk '{print $2}' | xargs -I{} kill -9 {} || true
+	kill_process_by_ports "[p]d-server" \
+		"${UP_PD_PORT_1}" \
+		"${UP_PD_PORT_2}" \
+		"${UP_PD_PORT_3}"
 }
 
 function kill_tikv() {
-	ps aux | grep tikv-server | grep "$WORK_DIR" | awk '{print $2}' | xargs -I{} kill -9 {} || true
+	kill_process_by_ports "[t]ikv-server" \
+		"${UP_TIKV_PORT_1}" \
+		"${UP_TIKV_PORT_2}" \
+		"${UP_TIKV_PORT_3}"
 }
 
 function kill_tidb() {
-	ps aux | grep tidb-server | grep "$WORK_DIR" | awk '{print $2}' | xargs -I{} kill -9 {} || true
+	kill_process_by_ports "[t]idb-server" \
+		"${UP_TIDB_PORT}"
 }
 
 function run_normal_case_and_unavailable_pd() {

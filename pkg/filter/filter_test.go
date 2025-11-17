@@ -608,7 +608,7 @@ func TestIsEligible(t *testing.T) {
 }
 
 func TestIsAllowedDDL(t *testing.T) {
-	require.Len(t, ddlWhiteListMap, 40)
+	require.Len(t, ddlWhiteListMap, 41)
 	type testCase struct {
 		model.ActionType
 		allowed bool
