@@ -40,7 +40,7 @@ function prepare() {
 }
 
 trap stop_tidb_cluster EXIT
-trap "collect_logs $WORK_DIR" EXIT
+# trap "collect_logs $WORK_DIR" EXIT
 
 # storage is not supported yet.
 if [ "$SINK_TYPE" != "storage" ]; then

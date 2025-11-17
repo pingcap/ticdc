@@ -91,7 +91,7 @@ function sql_test() {
 }
 
 trap stop_tidb_cluster EXIT
-trap "collect_logs $WORK_DIR" EXIT
+# trap "collect_logs $WORK_DIR" EXIT
 # No need to test different sink type.
 # Because we only test the compatibility of the server config file.
 if [ "$SINK_TYPE" == "mysql" ]; then

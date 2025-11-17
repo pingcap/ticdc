@@ -306,7 +306,7 @@ function run_case_with_failpoint() {
 }
 
 trap stop_tidb_cluster EXIT
-trap "collect_logs $WORK_DIR" EXIT
+# trap "collect_logs $WORK_DIR" EXIT
 run_normal_case_and_unavailable_pd "conf/changefeed.toml"
 run_case_with_unavailable_tikv "conf/changefeed.toml"
 run_case_with_unavailable_tidb "conf/changefeed.toml"

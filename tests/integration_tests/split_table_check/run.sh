@@ -115,7 +115,7 @@ round_without_enable_splittable_check() {
 }
 
 trap stop_tidb_cluster EXIT
-trap "collect_logs $WORK_DIR" EXIT
+# trap "collect_logs $WORK_DIR" EXIT
 round_with_enable_splittable_check
 round_without_enable_splittable_check
 check_logs $WORK_DIR
