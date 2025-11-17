@@ -98,7 +98,7 @@ function run_without_fast_create_table() {
 }
 
 trap stop_tidb_cluster EXIT
-# trap "collect_logs $WORK_DIR" EXIT
+trap "collect_logs $WORK_DIR" EXIT
 run_without_fast_create_table $*
 stop_tidb_cluster
 run_with_fast_create_table $*

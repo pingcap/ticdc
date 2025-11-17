@@ -52,7 +52,7 @@ fi
 # mysql test may suffer from duplicate DML for no pk/uk
 # [TODO] need add pk or move from integration test
 trap stop_tidb_cluster EXIT
-# trap "collect_logs $WORK_DIR" EXIT
+trap "collect_logs $WORK_DIR" EXIT
 prepare $*
 cd "$(dirname "$0")"
 # run mysql-test cases

@@ -120,7 +120,7 @@ function run_pause_restart_resume() {
 }
 
 trap stop_tidb_cluster EXIT
-# trap "collect_logs $WORK_DIR" EXIT
+trap "collect_logs $WORK_DIR" EXIT
 run_restart_and_check $*
 run_pause_restart_resume $*
 

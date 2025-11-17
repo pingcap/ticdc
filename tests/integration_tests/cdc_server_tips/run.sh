@@ -74,7 +74,7 @@ stop_cdc() {
 }
 
 trap stop_tidb_cluster EXIT
-# trap "collect_logs $WORK_DIR" EXIT
+trap "collect_logs $WORK_DIR" EXIT
 prepare_tidb_cluster
 
 # If cdc gets started normally, no usage tips should be printed when exit
