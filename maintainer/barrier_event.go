@@ -191,6 +191,7 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 
 	be.selected.Store(true)
 	be.writerDispatcher = dispatcher
+	be.lastResendTime = time.Now()
 	log.Info("all dispatcher reported heartbeat, schedule it, and select one to write",
 		zap.String("changefeed", be.cfID.Name()),
 		zap.String("dispatcher", be.writerDispatcher.String()),
@@ -513,7 +514,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 }
 
 func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
-	if time.Since(be.lastResendTime) < 300*time.Second {
+	if time.Since(be.lastResendTime) < 10*time.Second {
 		return nil
 	}
 	var msgs []*messaging.TargetMessage
