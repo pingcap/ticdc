@@ -149,7 +149,7 @@ func newDispatcherStat(
 }
 
 func (d *dispatcherStat) run() {
-	d.registerTo(d.eventCollector.getLocalServerID())
+	d.registerTo(d.eventCollector.getLocalServerID(), false)
 }
 
 func (d *dispatcherStat) clear() {
@@ -160,8 +160,8 @@ func (d *dispatcherStat) clear() {
 }
 
 // registerTo register the dispatcher to the specified event service.
-func (d *dispatcherStat) registerTo(serverID node.ID) {
-	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRegisterRequest(d.eventCollector.getLocalServerID().String(), false))
+func (d *dispatcherStat) registerTo(serverID node.ID, onlyReuse bool) {
+	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRegisterRequest(d.eventCollector.getLocalServerID().String(), onlyReuse))
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
@@ -574,7 +574,7 @@ func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
 		}
 		candidate := d.connState.getNextRemoteCandidate()
 		if candidate != "" {
-			d.registerTo(candidate)
+			d.registerTo(candidate, true)
 		}
 	default:
 		log.Panic("should not happen: unknown signal event type", zap.Int("eventType", event.GetType()))
@@ -642,7 +642,7 @@ func (d *dispatcherStat) setRemoteCandidates(nodes []string) {
 			zap.Stringer("dispatcherID", d.getDispatcherID()),
 			zap.Int64("tableID", d.target.GetTableSpan().TableID), zap.Strings("nodes", nodes))
 		candidate := d.connState.getNextRemoteCandidate()
-		d.registerTo(candidate)
+		d.registerTo(candidate, true)
 	}
 }
 
