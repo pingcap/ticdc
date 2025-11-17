@@ -95,7 +95,6 @@ function check() {
 }
 
 trap "stop_tidb_cluster && stop_proxy" EXIT
-trap "collect_logs $WORK_DIR" EXIT
 
 if [ "$SINK_TYPE" == "mysql" ]; then
 	prepare

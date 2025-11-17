@@ -58,7 +58,6 @@ function run() {
 	cleanup_process $CDC_BINARY
 }
 
-trap stop_tidb_cluster EXIT
-trap "collect_logs $WORK_DIR" EXIT
+trap "stop_tidb_cluster && collect_logs $WORK_DIR" EXIT
 run $*
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

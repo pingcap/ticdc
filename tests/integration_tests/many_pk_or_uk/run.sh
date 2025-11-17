@@ -39,9 +39,7 @@ function prepare() {
 	esac
 }
 
-trap stop_tidb_cluster EXIT
-trap "collect_logs $WORK_DIR" EXIT
-
+trap "stop_tidb_cluster && collect_logs $WORK_DIR" EXIT
 # storage is not supported yet.
 if [ "$SINK_TYPE" != "storage" ]; then
 	# TODO(dongmen): enable pulsar in the future.
