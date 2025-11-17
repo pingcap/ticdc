@@ -149,7 +149,7 @@ func newDispatcherStat(
 }
 
 func (d *dispatcherStat) run() {
-	d.registerTo(d.eventCollector.getLocalServerID(), false)
+	d.registerTo(d.eventCollector.getLocalServerID())
 }
 
 func (d *dispatcherStat) clear() {
@@ -160,10 +160,11 @@ func (d *dispatcherStat) clear() {
 }
 
 // registerTo register the dispatcher to the specified event service.
-// `onlyReuse` is used to control the register behavior at logservice side
-// it should be set to `false` when register to a local event service,
-// and set to `true` when register to a remote event service.
-func (d *dispatcherStat) registerTo(serverID node.ID, onlyReuse bool) {
+func (d *dispatcherStat) registerTo(serverID node.ID) {
+	// `onlyReuse` is used to control the register behavior at logservice side
+	// it should be set to `false` when register to a local event service,
+	// and set to `true` when register to a remote event service.
+	onlyReuse := serverID != d.eventCollector.getLocalServerID()
 	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRegisterRequest(d.eventCollector.getLocalServerID().String(), onlyReuse))
 	d.eventCollector.enqueueMessageForSend(msg)
 }
@@ -577,7 +578,7 @@ func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
 		}
 		candidate := d.connState.getNextRemoteCandidate()
 		if candidate != "" {
-			d.registerTo(candidate, true)
+			d.registerTo(candidate)
 		}
 	default:
 		log.Panic("should not happen: unknown signal event type", zap.Int("eventType", event.GetType()))
@@ -645,7 +646,7 @@ func (d *dispatcherStat) setRemoteCandidates(nodes []string) {
 			zap.Stringer("dispatcherID", d.getDispatcherID()),
 			zap.Int64("tableID", d.target.GetTableSpan().TableID), zap.Strings("nodes", nodes))
 		candidate := d.connState.getNextRemoteCandidate()
-		d.registerTo(candidate, true)
+		d.registerTo(candidate)
 	}
 }
 
