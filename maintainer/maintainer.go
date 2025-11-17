@@ -806,14 +806,14 @@ func (m *Maintainer) onBlockStateRequest(msg *messaging.TargetMessage) {
 	}
 	req := msg.Message[0].(*heartbeatpb.BlockStatusRequest)
 
-	var ackMsg *messaging.TargetMessage
+	var ackMsg []*messaging.TargetMessage
 	if common.IsDefaultMode(req.Mode) {
 		ackMsg = m.controller.barrier.HandleStatus(msg.From, req)
 	} else {
 		ackMsg = m.controller.redoBarrier.HandleStatus(msg.From, req)
 	}
 	if ackMsg != nil {
-		m.sendMessages([]*messaging.TargetMessage{ackMsg})
+		m.sendMessages(ackMsg)
 	}
 }
 
