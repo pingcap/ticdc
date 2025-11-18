@@ -635,10 +635,11 @@ func (s *remoteMessageTarget) handleIncomingMessage(ctx context.Context, stream 
 		mt := IOType(message.Type)
 
 		targetMsg := &TargetMessage{
-			From:  node.ID(message.From),
-			To:    node.ID(message.To),
-			Topic: message.Topic,
-			Type:  mt,
+			From:     node.ID(message.From),
+			To:       node.ID(message.To),
+			Topic:    message.Topic,
+			Type:     mt,
+			CreateAt: message.GetCreateAt(),
 		}
 
 		for _, payload := range message.Payload {
@@ -680,11 +681,12 @@ func (s *remoteMessageTarget) newMessage(msg ...*TargetMessage) *proto.Message {
 		}
 	}
 	protoMsg := &proto.Message{
-		From:    string(s.messageCenterID),
-		To:      string(s.targetId),
-		Topic:   string(msg[0].Topic),
-		Type:    int32(msg[0].Type),
-		Payload: msgBytes,
+		From:     string(s.messageCenterID),
+		To:       string(s.targetId),
+		Topic:    string(msg[0].Topic),
+		Type:     int32(msg[0].Type),
+		CreateAt: msg[0].CreateAt,
+		Payload:  msgBytes,
 	}
 	return protoMsg
 }

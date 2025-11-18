@@ -72,6 +72,24 @@ var (
 			Name:      "slow_handle_counter",
 			Help:      "The counter of messages that took more than 100ms to handle",
 		}, []string{"type"}) // type: message type
+
+	MessagingEndToEndDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "messaging",
+			Name:      "message_end_to_end_duration_seconds",
+			Help:      "Bucketed histogram of message end-to-end latency from creation to handler completion (s).",
+			Buckets:   prometheus.ExponentialBuckets(0.001 /* 1 ms */, 2, 20),
+		}, []string{"type"}) // type: message type
+
+	MessagingHandlerDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "messaging",
+			Name:      "message_handler_duration_seconds",
+			Help:      "Bucketed histogram of message handler execution time (s).",
+			Buckets:   prometheus.ExponentialBuckets(0.001 /* 1 ms */, 2, 20),
+		}, []string{"type"}) // type: message type
 )
 
 // InitMetrics registers all metrics used in owner
@@ -83,4 +101,6 @@ func initMessagingMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(MessagingStreamGauge)
 	registry.Register(MessagingReceiveChannelLength)
 	registry.MustRegister(MessagingSlowHandleCounter)
+	registry.MustRegister(MessagingEndToEndDuration)
+	registry.MustRegister(MessagingHandlerDuration)
 }

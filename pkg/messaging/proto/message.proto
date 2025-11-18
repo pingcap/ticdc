@@ -13,6 +13,8 @@ message Message {
     string topic = 4;
     // payload is the payload of the message.
     repeated bytes payload = 5;
+    // create_at is the unix timestamp in milliseconds recorded when the message is created on sender side.
+    int64 create_at = 6;
 }
 
 service MessageService {
