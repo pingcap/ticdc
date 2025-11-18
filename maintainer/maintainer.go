@@ -157,6 +157,8 @@ type Maintainer struct {
 	redoScheduledTaskGauge prometheus.Gauge
 	redoSpanCountGauge     prometheus.Gauge
 	redoTableCountGauge    prometheus.Gauge
+
+	lastPrintTime time.Time
 }
 
 // NewMaintainer create the maintainer for the changefeed
@@ -221,6 +223,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		redoScheduledTaskGauge: metrics.ScheduleTaskGauge.WithLabelValues(keyspaceName, name, "redo"),
 		redoSpanCountGauge:     metrics.SpanCountGauge.WithLabelValues(keyspaceName, name, "redo"),
 		redoTableCountGauge:    metrics.TableCountGauge.WithLabelValues(keyspaceName, name, "redo"),
+		lastPrintTime:          time.Now(),
 	}
 	m.nodeChanged.changed = false
 	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
@@ -697,13 +700,15 @@ func (m *Maintainer) calculateNewCheckpointTs() (*heartbeatpb.Watermark, bool) {
 	newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForBarrier, ResolvedTs: minCheckpointTsForBarrier})
 	newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForScheduler, ResolvedTs: minCheckpointTsForScheduler})
 
-	log.Debug("can advance checkpointTs",
-		zap.String("changefeed", m.id.Name()),
-		zap.Uint64("newCheckpointTs", newWatermark.CheckpointTs),
-		zap.Uint64("newResolvedTs", newWatermark.ResolvedTs),
-		zap.Uint64("minCheckpointTsForScheduler", minCheckpointTsForScheduler),
-		zap.Uint64("minCheckpointTsForBarrier", minCheckpointTsForBarrier),
-	)
+	if time.Since(m.lastPrintTime) > 10*time.Second {
+		log.Info("can advance checkpointTs",
+			zap.String("changefeed", m.id.Name()),
+			zap.Uint64("newCheckpointTs", newWatermark.CheckpointTs),
+			zap.Uint64("newResolvedTs", newWatermark.ResolvedTs),
+			zap.Uint64("minCheckpointTsForScheduler", minCheckpointTsForScheduler),
+			zap.Uint64("minCheckpointTsForBarrier", minCheckpointTsForBarrier),
+		)
+	}
 
 	return newWatermark, true
 }
