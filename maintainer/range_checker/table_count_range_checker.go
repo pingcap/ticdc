@@ -69,7 +69,7 @@ func (rc *TableIDRangeChecker) Detail() string {
 		}
 	}
 
-	return fmt.Sprintf("reported count: %d, require count: %d", len(rc.reportedMap), rc.needCount)
+	return buf.String()
 }
 
 func (rc *TableIDRangeChecker) MarkCovered() {
