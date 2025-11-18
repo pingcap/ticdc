@@ -69,6 +69,9 @@ main_with_consistent() {
 	run_sql_file $CUR/data/dmls.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	if ((RANDOM % 2)); then
+		# For rename table or modify column ddl, the struct of table is wrong when appling snapshot.
+		# see https://github.com/pingcap/tidb/issues/63464.
+		# So we can't check sync_diff with snapshot.
 		cleanup_process $CDC_BINARY
 		changefeed_id="test"
 		storage_path="file://$WORK_DIR/redo"
