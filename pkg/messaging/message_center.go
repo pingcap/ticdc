@@ -276,8 +276,6 @@ func (mc *messageCenter) SendEvent(msg *TargetMessage) error {
 		return nil
 	}
 
-	msg.markEnqueued()
-
 	if msg.To.IsEmpty() {
 		log.Panic("Target ID is empty, cannot send message",
 			zap.Stringer("localID", mc.id),
@@ -309,8 +307,6 @@ func (mc *messageCenter) SendCommand(msg *TargetMessage) error {
 	if msg == nil {
 		return nil
 	}
-
-	msg.markEnqueued()
 
 	if msg.To == mc.id {
 		return mc.localTarget.sendCommand(msg)
