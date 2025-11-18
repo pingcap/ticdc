@@ -124,7 +124,8 @@ function run() {
 	check_db_not_exists "foo" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
 	# only capture table filter.t1, so filter.t2 should not be replicated
-	run_sql "create database filter;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "create database filter if not exists;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "create database filter if not exists;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	run_sql "create table filter.t1 (id int primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	check_table_exists "filter.t1" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	run_sql "create table filter.t2 (id int primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
