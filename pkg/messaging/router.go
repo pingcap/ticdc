@@ -72,7 +72,7 @@ func (r *router) runDispatch(ctx context.Context, out <-chan *TargetMessage) {
 				if msg.CreateAt > 0 {
 					endToEndDuration := now.Sub(time.UnixMilli(msg.CreateAt))
 					metrics.MessagingEndToEndDuration.WithLabelValues(msg.Type.String()).Observe(endToEndDuration.Seconds())
-					log.Info("msg time cost", zap.Any("msgType", msg.Type), zap.Any("time cost", endToEndDuration.Seconds()))
+					//log.Info("msg time cost", zap.Any("msgType", msg.Type), zap.Any("time cost", endToEndDuration.Seconds()))
 				}
 			}
 			if handleDuration > 100*time.Millisecond {
