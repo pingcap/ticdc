@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -99,7 +100,7 @@ func (w *Writer) SendSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to write syncpoint table; Exec Failed; Query is %s", query)))
 	}
 
-	log.Info("exec syncpoint ts query", zap.String("query", query))
+	log.Info("exec syncpoint ts query", zap.String("query", util.RedactValue(query)))
 
 	// set global tidb_external_ts to secondary ts
 	// TiDB supports tidb_external_ts system variable since v6.4.0.
@@ -138,7 +139,7 @@ func (w *Writer) SendSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 		if err != nil {
 			// It is ok to ignore the error, since it will not affect the correctness of the system,
 			// and no any business logic depends on this behavior, so we just log the error.
-			log.Error("failed to clean syncpoint table", zap.Error(cerror.WrapError(cerror.ErrMySQLTxnError, err)), zap.Any("query", query))
+			log.Error("failed to clean syncpoint table", zap.Error(cerror.WrapError(cerror.ErrMySQLTxnError, err)), zap.String("query", util.RedactValue(query)))
 		} else {
 			w.lastCleanSyncPointTime = time.Now()
 		}

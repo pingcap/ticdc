@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -97,7 +98,7 @@ func (w *Writer) SendDDLTsPre(event commonEvent.BlockEvent) error {
 			isSyncpoint = "0"
 		}
 		query := insertItemQuery(tableIds, ticdcClusterID, changefeedID, ddlTs, "0", isSyncpoint)
-		log.Info("send ddl ts table query", zap.String("query", query))
+		log.Info("send ddl ts table query", zap.String("query", util.RedactValue(query)))
 
 		_, err = tx.Exec(query)
 		if err != nil {
@@ -168,7 +169,7 @@ func (w *Writer) SendDDLTs(event commonEvent.BlockEvent) error {
 			isSyncpoint = "0"
 		}
 		query := insertItemQuery(tableIds, ticdcClusterID, changefeedID, ddlTs, "1", isSyncpoint)
-		log.Info("send ddl ts table query", zap.String("query", query))
+		log.Info("send ddl ts table query", zap.String("query", util.RedactValue(query)))
 
 		_, err = tx.Exec(query)
 		if err != nil {
@@ -186,7 +187,7 @@ func (w *Writer) SendDDLTs(event commonEvent.BlockEvent) error {
 	if len(dropTableIds) > 0 {
 		// drop item for this tableid
 		query := dropItemQuery(dropTableIds, ticdcClusterID, changefeedID)
-		log.Debug("send ddl ts table query", zap.String("query", query))
+		log.Debug("send ddl ts table query", zap.String("query", util.RedactValue(query)))
 
 		_, err = tx.Exec(query)
 		if err != nil {
@@ -298,7 +299,7 @@ func (w *Writer) GetTableRecoveryInfo(tableIDs []int64) ([]int64, []bool, []bool
 	ticdcClusterID := config.GetGlobalServerConfig().ClusterID
 
 	query := selectDDLTsQuery(tableIDs, ticdcClusterID, changefeedID)
-	log.Info("query ddl ts table", zap.String("query", query))
+	log.Info("query ddl ts table", zap.String("query", util.RedactValue(query)))
 	rows, err := w.db.Query(query)
 	if err != nil {
 		if errors.IsTableNotExistsErr(err) {

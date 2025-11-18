@@ -24,6 +24,7 @@ import (
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
@@ -35,6 +36,7 @@ import (
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
 )
+
 
 var tableIDAllocator = common.NewTableIDAllocator()
 
@@ -87,7 +89,7 @@ func (d *decoder) HasNext() (common.MessageType, bool) {
 		return common.MessageTypeRow, true
 	}
 	if len(d.value) < 1 {
-		log.Panic("avro invalid data, the length of value is less than 1", zap.Any("data", d.value))
+		log.Panic("avro invalid data, the length of value is less than 1", zap.String("data", util.RedactAny(d.value)))
 	}
 	switch d.value[0] {
 	case magicByte:
@@ -169,8 +171,8 @@ func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 				zap.Any("type", col.GetType()),
 				zap.Any("charset", col.GetCharset()),
 				zap.Any("flag", col.GetFlag()),
-				zap.Any("value", valueMap[col.Name.O]),
-				zap.Any("default", col.GetDefaultValue()))
+				zap.String("value", util.RedactAny(valueMap[col.Name.O])),
+				zap.String("default", util.RedactAny(col.GetDefaultValue())))
 		}
 	}
 	if found {
@@ -443,14 +445,14 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 		log.Panic("value is empty, cannot found the ddl event")
 	}
 	if d.value[0] != ddlByte {
-		log.Panic("avro invalid data, the first byte is not ddl byte", zap.Any("value", d.value))
+		log.Panic("avro invalid data, the first byte is not ddl byte", zap.Any("value", util.RedactAny(d.value)))
 	}
 
 	data := d.value[1:]
 	var baseDDLEvent ddlEvent
 	err := json.Unmarshal(data, &baseDDLEvent)
 	if err != nil {
-		log.Panic("unmarshal ddl event failed", zap.Any("value", d.value), zap.Error(err))
+		log.Panic("unmarshal ddl event failed", zap.Any("value", util.RedactAny(d.value)), zap.Error(err))
 	}
 	d.value = nil
 

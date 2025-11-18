@@ -21,6 +21,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"go.uber.org/zap"
 )
@@ -79,7 +80,7 @@ func (v *versionedTableInfoStore) setTableInfoInitialized() {
 	for _, job := range v.pendingDDLs {
 		// log.Info("apply pending ddl",
 		// 	zap.Int64("tableID", int64(v.tableID)),
-		// 	zap.String("query", job.Query),
+		// 	zap.String("query", util.RedactValue(job.Query)),
 		// 	zap.Uint64("finishedTS", job.BinlogInfo.FinishedTS),
 		// 	zap.Any("infosLen", len(v.infos)))
 		v.doApplyDDL(&job)
@@ -193,7 +194,7 @@ func (v *versionedTableInfoStore) doApplyDDL(event *PersistedDDLEvent) {
 	if len(v.infos) != 0 && event.FinishedTs <= v.infos[len(v.infos)-1].Version {
 		log.Warn("already applied ddl, ignore it.",
 			zap.Int64("tableID", v.tableID),
-			zap.String("query", event.Query),
+			zap.String("query", util.RedactValue(event.Query)),
 			zap.Uint64("finishedTS", event.FinishedTs),
 			zap.Int("infosLen", len(v.infos)))
 		return
@@ -201,7 +202,7 @@ func (v *versionedTableInfoStore) doApplyDDL(event *PersistedDDLEvent) {
 	ddlType := model.ActionType(event.Type)
 	handler, ok := allDDLHandlers[ddlType]
 	if !ok {
-		log.Panic("unknown ddl type", zap.Any("ddlType", ddlType), zap.String("query", event.Query))
+		log.Panic("unknown ddl type", zap.Any("ddlType", ddlType), zap.String("query", util.RedactValue(event.Query)))
 	}
 	tableInfo, deleted := handler.extractTableInfoFunc(event, v.tableID)
 	if tableInfo != nil {

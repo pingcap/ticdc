@@ -74,7 +74,7 @@ func FetchTiDBTopology(ctx context.Context, etcdClient etcd.Client, keyspaceID u
 		remainingKey := strings.TrimPrefix(key[len(keyPrefix):], "/")
 		keyParts := strings.Split(remainingKey, "/")
 		if len(keyParts) != 2 {
-			log.Warn("Ignored invalid topology key", zap.String("component", distro.R().TiDB), zap.String("key", key))
+			log.Warn("Ignored invalid topology key", zap.String("component", distro.R().TiDB), zap.String("key", key)) // skip-redaction: topology key, infrastructure
 			continue
 		}
 
@@ -84,8 +84,8 @@ func FetchTiDBTopology(ctx context.Context, etcdClient etcd.Client, keyspaceID u
 			hostname, port, err := netutil.ParseHostAndPortFromAddress(address)
 			if err != nil {
 				log.Warn("Ignored invalid tidb topology info entry",
-					zap.String("key", key),
-					zap.String("value", string(kv.Value)),
+					zap.String("key", key),                // skip-redaction: topology key, infrastructure
+					zap.String("value", string(kv.Value)), // skip-redaction: pd topology value, infrastructure only
 					zap.Error(err))
 				continue
 			}
@@ -97,8 +97,8 @@ func FetchTiDBTopology(ctx context.Context, etcdClient etcd.Client, keyspaceID u
 			alive, err := parseTiDBAliveness(kv.Value)
 			if !alive || err != nil {
 				log.Warn("Ignored invalid tidb topology TTL entry",
-					zap.String("key", key),
-					zap.String("value", string(kv.Value)),
+					zap.String("key", key),                // skip-redaction: topology key, infrastructure
+					zap.String("value", string(kv.Value)), // skip-redaction: pd topology value, infrastructure only
 					zap.Error(err))
 				continue
 			}

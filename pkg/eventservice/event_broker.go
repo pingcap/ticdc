@@ -32,6 +32,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -252,7 +253,7 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 		zap.Stringer("dispatcherID", d.id),
 		zap.Int64("DDLSpanTableID", d.info.GetTableSpan().TableID),
 		zap.Int64("EventTableID", tableID),
-		zap.String("query", e.Query), zap.Uint64("commitTs", e.FinishedTs),
+		zap.String("query", util.RedactValue(e.Query)), zap.Uint64("commitTs", e.FinishedTs),
 		zap.Uint64("seq", e.Seq), zap.Int64("mode", d.info.GetMode()))
 }
 

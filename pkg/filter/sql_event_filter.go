@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
 	"go.uber.org/zap"
@@ -144,7 +145,7 @@ func (f *sqlEventFilter) shouldSkipDDL(schema, table, query string, ddlType mode
 	if evenType == bf.NullEvent {
 		log.Warn("sql event filter unsupported ddl type, do nothing",
 			zap.String("type", ddlType.String()),
-			zap.String("query", query))
+			zap.String("query", util.RedactValue(query)))
 		return false, nil
 	}
 

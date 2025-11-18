@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/tidb/pkg/util/redact"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/tikv/client-go/v2/oracle"
@@ -240,7 +241,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 					zap.String("EventType", "COMMITTED"),
 					zap.Uint64("CommitTs", entry.CommitTs),
 					zap.Uint64("resolvedTs", resolvedTs),
-					zap.String("key", spanz.HexKey(entry.GetKey())))
+					zap.String("key", redact.Key(entry.GetKey())))
 			}
 			span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, entry))
 		case cdcpb.Event_PREWRITE:
@@ -258,7 +259,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 					zap.Uint64("requestID", state.requestID),
 					zap.Uint64("startTs", entry.GetStartTs()),
 					zap.Uint64("commitTs", entry.GetCommitTs()),
-					zap.String("key", spanz.HexKey(entry.GetKey())))
+					zap.String("key", redact.Key(entry.GetKey())))
 			}
 
 			// TiKV can send events with StartTs/CommitTs less than startTs.
@@ -277,7 +278,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 					zap.String("EventType", "COMMIT"),
 					zap.Uint64("CommitTs", entry.CommitTs),
 					zap.Uint64("resolvedTs", resolvedTs),
-					zap.String("key", spanz.HexKey(entry.GetKey())))
+					zap.String("key", redact.Key(entry.GetKey())))
 			}
 			span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, entry))
 		case cdcpb.Event_ROLLBACK:

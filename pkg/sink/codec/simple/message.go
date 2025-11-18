@@ -14,8 +14,9 @@
 package simple
 
 import (
-	"encoding/base64"
+	"github.com/pingcap/ticdc/pkg/util"
 	"fmt"
+	"encoding/base64"
 	"strconv"
 	"time"
 
@@ -29,6 +30,7 @@ import (
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
 )
+
 
 const (
 	defaultVersion = 1
@@ -415,7 +417,7 @@ func (a *avroMarshaller) encodeValue4Avro(row *chunk.Row, i int, ft *types.Field
 	case mysql.TypeBit:
 		v, err := d.GetMysqlBit().ToInt(types.DefaultStmtNoWarningContext)
 		if err != nil {
-			log.Panic("invalid column value for bit", zap.Any("value", d.GetValue()), zap.Error(err))
+			log.Panic("invalid column value for bit", zap.String("value", util.RedactAny(d.GetValue())), zap.Error(err))
 		}
 		return strconv.FormatUint(v, 10), "string"
 	case mysql.TypeJSON:
@@ -440,7 +442,7 @@ func encodeValue(
 	case mysql.TypeBit:
 		v, err := d.GetMysqlBit().ToInt(types.DefaultStmtNoWarningContext)
 		if err != nil {
-			log.Panic("invalid column value for bit", zap.Any("value", value), zap.Error(err))
+			log.Panic("invalid column value for bit", zap.String("value", util.RedactAny(value)), zap.Error(err))
 		}
 		value = strconv.FormatUint(v, 10)
 	case mysql.TypeTimestamp:
