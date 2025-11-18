@@ -691,7 +691,13 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 		if watermark != nil {
 			message.Watermark.Update(*watermark)
 		}
+		if needCompleteStatus {
+			log.Info("dispatcher heartbeatInfo", zap.Any("dispatcherID", id), zap.Any("watermark", watermark))
+		}
 	})
+	if needCompleteStatus {
+		log.Info("dispatchers whole heartbeatInfo", zap.Any("watermark", message.Watermark))
+	}
 	message.Watermark.Seq = seq
 	e.latestWatermark.Set(message.Watermark)
 

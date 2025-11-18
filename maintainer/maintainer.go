@@ -708,6 +708,7 @@ func (m *Maintainer) calculateNewCheckpointTs() (*heartbeatpb.Watermark, bool) {
 			zap.Uint64("minCheckpointTsForScheduler", minCheckpointTsForScheduler),
 			zap.Uint64("minCheckpointTsForBarrier", minCheckpointTsForBarrier),
 		)
+		m.lastPrintTime = time.Now()
 	}
 
 	return newWatermark, true
@@ -747,6 +748,7 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 		return
 	}
 	req := msg.Message[0].(*heartbeatpb.HeartBeatRequest)
+	log.Info("maintainer handle onHeartbeatRequest", zap.Any("msg", msg))
 
 	// ATOMIC CHECKPOINT UPDATE: Part 1 of race condition fix
 	// Update checkpointTsByCapture BEFORE processing operator status to ensure atomicity
