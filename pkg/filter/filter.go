@@ -60,9 +60,9 @@ type Filter interface {
 	// Then, for the following DDLs:
 	//  1. `CREATE TABLE test.worker` will be ignored, but the table will be replicated by changefeed-test.
 	//  2. `CREATE TABLE other.worker` will be discarded, and the table will not be replicated by changefeed-test.
-	ShouldIgnoreDDL(schema, table, query string, ddlType timodel.ActionType, tableInfo *common.TableInfo, startTs uint64) (bool, error)
+	ShouldIgnoreDDL(schema, table, query string, ddlType timodel.ActionType, startTs uint64) (bool, error)
 	// ShouldIgnoreTable returns true if the table should be ignored.
-	ShouldIgnoreTable(schema, table string, tableInfo *common.TableInfo) bool
+	ShouldIgnoreTable(schema, table string) bool
 	// ShouldIgnoreSchema returns true if the schema should be ignored.
 	ShouldIgnoreSchema(schema string) bool
 	// IsEligibleTable returns true if the table is eligible to be replicated.
@@ -122,7 +122,7 @@ func (f *filter) ShouldIgnoreDML(dmlType common.RowType, preRow, row chunk.Row, 
 		return true, nil
 	}
 
-	if f.ShouldIgnoreTable(tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo) {
+	if f.ShouldIgnoreTable(tableInfo.GetSchemaName(), tableInfo.GetTableName()) {
 		return true, nil
 	}
 
@@ -152,7 +152,7 @@ func (f *filter) ShouldDiscardDDL(schema, table string, ddlType timodel.ActionTy
 		return true
 	}
 
-	if f.ShouldIgnoreTable(schema, table, tableInfo) {
+	if f.ShouldIgnoreTable(schema, table) {
 		return true
 	}
 
@@ -167,7 +167,7 @@ func (f *filter) ShouldDiscardDDL(schema, table string, ddlType timodel.ActionTy
 // ShouldIgnoreDDL checks if a DDL event should be ignore by conditions below:
 // 1. By ddl type.
 // 2. By ddl query.
-func (f *filter) ShouldIgnoreDDL(schema, table, query string, ddlType timodel.ActionType, tableInfo *common.TableInfo, startTs uint64) (bool, error) {
+func (f *filter) ShouldIgnoreDDL(schema, table, query string, ddlType timodel.ActionType, startTs uint64) (bool, error) {
 	if f.shouldIgnoreStartTs(startTs) {
 		return true, nil
 	}
@@ -176,7 +176,7 @@ func (f *filter) ShouldIgnoreDDL(schema, table, query string, ddlType timodel.Ac
 
 // ShouldIgnoreTable returns true if the specified table should be ignored by this changefeed.
 // NOTICE: Set `tbl` to an empty string to test against the whole database.
-func (f *filter) ShouldIgnoreTable(db, tbl string, tableInfo *common.TableInfo) bool {
+func (f *filter) ShouldIgnoreTable(db, tbl string) bool {
 	if IsSysSchema(db) {
 		return true
 	}

@@ -573,6 +573,9 @@ func WrapTableInfoWithTableID(schemaName string, info *model.TableInfo, tableID 
 // This function is a convenience wrapper around WrapTableInfoWithTableID,
 // defaulting to use the logical table ID (info.ID).
 func WrapTableInfo(schemaName string, info *model.TableInfo) *TableInfo {
+	if info == nil {
+		return nil
+	}
 	return WrapTableInfoWithTableID(schemaName, info, info.ID)
 }
 
