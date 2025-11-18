@@ -291,7 +291,7 @@ function failOverCaseK-4() {
 	echo "failOverCaseK-4 passed successfully"
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 failOverCaseK-1
 failOverCaseK-2
 failOverCaseK-3

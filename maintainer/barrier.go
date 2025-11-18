@@ -15,6 +15,7 @@ package maintainer
 
 import (
 	"sync"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -129,12 +130,12 @@ func (b *Barrier) ReleaseLock(mutex *sync.Mutex) {
 // HandleStatus handle the block status from dispatcher manager
 func (b *Barrier) HandleStatus(from node.ID,
 	request *heartbeatpb.BlockStatusRequest,
-) *messaging.TargetMessage {
+) []*messaging.TargetMessage {
 	log.Debug("handle block status", zap.String("from", from.String()),
 		zap.String("changefeed", request.ChangefeedID.GetName()),
 		zap.Any("detail", request), zap.Int64("mode", b.mode))
 	eventDispatcherIDsMap := make(map[*BarrierEvent][]*heartbeatpb.DispatcherID)
-	actions := []*heartbeatpb.DispatcherStatus{}
+	actions := map[node.ID][]*heartbeatpb.DispatcherStatus{}
 	var dispatcherStatus []*heartbeatpb.DispatcherStatus
 	for _, status := range request.BlockStatuses {
 		// only receive block status from the replicating dispatcher
@@ -155,7 +156,7 @@ func (b *Barrier) HandleStatus(from node.ID,
 		// deal with block status, and check whether need to return action.
 		// we need to deal with the block status in order, otherwise scheduler may have problem
 		// e.g. TODO（truncate + create table)
-		event, action := b.handleOneStatus(request.ChangefeedID, status)
+		event, action, targetID := b.handleOneStatus(request.ChangefeedID, status)
 		if event == nil {
 			// should not happen
 			log.Error("handle block status failed, event is nil",
@@ -165,8 +166,8 @@ func (b *Barrier) HandleStatus(from node.ID,
 			continue
 		}
 		eventDispatcherIDsMap[event] = append(eventDispatcherIDsMap[event], status.ID)
-		if action != nil {
-			actions = append(actions, action)
+		if action != nil && targetID != "" {
+			actions[targetID] = append(actions[targetID], action)
 		}
 	}
 	for event, dispatchers := range eventDispatcherIDsMap {
@@ -178,22 +179,36 @@ func (b *Barrier) HandleStatus(from node.ID,
 			Ack: ackEvent(event.commitTs, event.isSyncPoint),
 		})
 	}
-	dispatcherStatus = append(dispatcherStatus, actions...)
-
+	dispatcherStatus = append(dispatcherStatus, actions[from]...)
 	if len(dispatcherStatus) <= 0 {
 		log.Warn("no dispatcher status to send",
 			zap.String("from", from.String()),
 			zap.String("changefeed", request.ChangefeedID.String()))
-		return nil
 	}
+
 	// send ack or write action message to dispatcher
-	return messaging.NewSingleTargetMessage(from,
+	msg := messaging.NewSingleTargetMessage(from,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.HeartBeatResponse{
 			ChangefeedID:       request.ChangefeedID,
 			DispatcherStatuses: dispatcherStatus,
 			Mode:               b.mode,
 		})
+	msgs := []*messaging.TargetMessage{msg}
+
+	for id, action := range actions {
+		if id != from && len(action) != 0 {
+			msg := messaging.NewSingleTargetMessage(id,
+				messaging.HeartbeatCollectorTopic,
+				&heartbeatpb.HeartBeatResponse{
+					ChangefeedID:       request.ChangefeedID,
+					DispatcherStatuses: action,
+					Mode:               b.mode,
+				})
+			msgs = append(msgs, msg)
+		}
+	}
+	return msgs
 }
 
 // handleBootstrapResponse rebuild the block event from the bootstrap response
@@ -304,7 +319,7 @@ func (b *Barrier) GetMinBlockedCheckpointTsForNewTables(minCheckpointTs uint64) 
 	return minCheckpointTs
 }
 
-func (b *Barrier) handleOneStatus(changefeedID *heartbeatpb.ChangefeedID, status *heartbeatpb.TableSpanBlockStatus) (*BarrierEvent, *heartbeatpb.DispatcherStatus) {
+func (b *Barrier) handleOneStatus(changefeedID *heartbeatpb.ChangefeedID, status *heartbeatpb.TableSpanBlockStatus) (*BarrierEvent, *heartbeatpb.DispatcherStatus, node.ID) {
 	cfID := common.NewChangefeedIDFromPB(changefeedID)
 	dispatcherID := common.NewDispatcherIDFromPB(status.ID)
 
@@ -323,7 +338,7 @@ func (b *Barrier) handleOneStatus(changefeedID *heartbeatpb.ChangefeedID, status
 		}
 	}
 	if status.State.Stage == heartbeatpb.BlockStage_DONE {
-		return b.handleEventDone(cfID, dispatcherID, status), nil
+		return b.handleEventDone(cfID, dispatcherID, status), nil, ""
 	}
 	return b.handleBlockState(cfID, dispatcherID, status)
 }
@@ -350,6 +365,7 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 		// the pass action will be sent periodically in resend logic if not acked
 		// todo: schedule the block event here?
 		event.writerDispatcherAdvanced = true
+		event.lastResendTime = time.Now().Add(-20 * time.Second) // make resend quickly
 	}
 
 	// checkpoint ts is advanced, clear the map, so do not need to resend message anymore
@@ -361,7 +377,7 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 	dispatcherID common.DispatcherID,
 	status *heartbeatpb.TableSpanBlockStatus,
-) (*BarrierEvent, *heartbeatpb.DispatcherStatus) {
+) (*BarrierEvent, *heartbeatpb.DispatcherStatus, node.ID) {
 	blockState := status.State
 	if blockState.IsBlocked {
 		key := getEventKey(blockState.BlockTs, blockState.IsSyncPoint)
@@ -383,11 +399,12 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 			)
 			// check whether the event can be finished.
 			b.checkEventFinish(event)
-			return event, nil
+			return event, nil, ""
 		}
 		// the block event, and check whether we need to send write action
 		event.markDispatcherEventDone(dispatcherID)
-		return event, event.checkEventAction(dispatcherID)
+		status, targetID := event.checkEventAction(dispatcherID)
+		return event, status, targetID
 	}
 	// it's not a blocked event, it must be sent by table event trigger dispatcher, just for doing scheduler
 	// and the ddl already synced to downstream , e.g.: create table
@@ -399,7 +416,7 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 	event := b.getOrInsertNewEvent(changefeedID, dispatcherID, key, blockState)
 	event.scheduleBlockEvent()
 	b.blockedEvents.Delete(getEventKey(event.commitTs, event.isSyncPoint))
-	return event, nil
+	return event, nil, ""
 }
 
 // getOrInsertNewEvent get the block event from the map, if not found, create a new one

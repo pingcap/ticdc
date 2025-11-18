@@ -27,6 +27,7 @@ stop_minio() {
 stop() {
 	stop_minio
 	stop_tidb_cluster
+	collect_logs $WORK_DIR
 }
 
 function run() {

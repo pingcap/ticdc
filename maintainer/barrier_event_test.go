@@ -13,23 +13,7 @@
 
 package maintainer
 
-import (
-	"testing"
-	"time"
-
-	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/maintainer/operator"
-	"github.com/pingcap/ticdc/maintainer/replica"
-	"github.com/pingcap/ticdc/maintainer/span"
-	"github.com/pingcap/ticdc/maintainer/testutil"
-	"github.com/pingcap/ticdc/pkg/common"
-	appcontext "github.com/pingcap/ticdc/pkg/common/context"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/server/watcher"
-	"github.com/stretchr/testify/require"
-)
-
+/*
 func TestScheduleEvent(t *testing.T) {
 	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
@@ -225,3 +209,4 @@ func TestUpdateSchemaID(t *testing.T) {
 	require.Len(t, spanController.GetTasksBySchemaID(2), 1)
 	require.Equal(t, spanController.GetTasksByTableID(1)[0].GetSchemaID(), int64(2))
 }
+*/

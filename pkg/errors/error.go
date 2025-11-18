@@ -804,6 +804,11 @@ var (
 		errors.RFCCodeText("CDC:ErrTableAfterNotSplitable"),
 	)
 
+	ErrConfigInvalidTimezone = errors.Normalize(
+		"invalid timezone string: %s",
+		errors.RFCCodeText("CDC:ErrConfigInvalidTimezone"),
+	)
+
 	ErrUnimplementedIOType = errors.Normalize(
 		"unimplemented IOType: %d",
 		errors.RFCCodeText("CDC:ErrUnimplementedIOType"),

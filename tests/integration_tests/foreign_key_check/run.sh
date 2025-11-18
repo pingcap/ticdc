@@ -20,8 +20,7 @@ fi
 
 rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 start_tidb_cluster --workdir $WORK_DIR
-trap stop_tidb_cluster EXIT
-
+trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 run_sql "set global foreign_key_checks=0;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 cd $WORK_DIR

@@ -29,6 +29,7 @@ stop() {
 	echo $(mysql -h${DOWN_TIDB_HOST} -P${DOWN_TIDB_PORT} -uroot -e "select count(*) from consistent_replicate_storage_s3.usertable;")
 	stop_minio
 	stop_tidb_cluster
+	collect_logs $WORK_DIR
 }
 
 function run() {
