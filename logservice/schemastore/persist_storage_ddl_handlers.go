@@ -1606,7 +1606,7 @@ func buildDDLEventCommonWithTableID(rawEvent *PersistedDDLEvent, tableID int64, 
 	// Note: not all ddl types will respect the `filtered` result: create tables, rename tables, rename table, exchange table partition.
 	filtered, notSync := false, false
 	var err error
-	if tableFilter != nil && rawEvent.SchemaName != "" && rawEvent.TableName != "" {
+	if tableFilter != nil {
 		filtered, notSync, err = filterDDL(
 			tableFilter,
 			rawEvent.SchemaName,
