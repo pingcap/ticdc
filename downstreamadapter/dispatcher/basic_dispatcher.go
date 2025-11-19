@@ -364,6 +364,13 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 		return true
 	}
 
+	start := time.Now()
+
+	log.Info("dispatcher handle events", zap.Any("dispatcherID", d.id), zap.Any("eventLen", len(dispatcherEvents)))
+	defer func() {
+		log.Info("dispatcher finish handle events", zap.Any("dispatcherID", d.id), zap.Any("eventLen", len(dispatcherEvents)), zap.Duration("time cost", time.Since(start)))
+	}()
+
 	d.duringHandleEvents.Store(true)
 	defer d.duringHandleEvents.Store(false)
 
@@ -374,8 +381,8 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	latestResolvedTs := uint64(0)
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
-		log.Info("dispatcher receive all event",
-			zap.Stringer("dispatcher", d.id), zap.Int64("mode", d.mode), zap.Any("commitTs", dispatcherEvent.GetCommitTs()))
+		// log.Info("dispatcher receive all event",
+		// 	zap.Stringer("dispatcher", d.id), zap.Int64("mode", d.mode), zap.Any("commitTs", dispatcherEvent.GetCommitTs()))
 		if log.GetLevel() == zapcore.DebugLevel {
 			log.Debug("dispatcher receive all event",
 				zap.Stringer("dispatcher", d.id), zap.Int64("mode", d.mode),
