@@ -153,7 +153,9 @@ func (m *SplitDispatcherOperator) PostFinish() {
 	log.Info("split dispatcher operator begin post finish", zap.String("id", m.replicaSet.ID.String()))
 
 	if m.removed.Load() {
-		m.spanController.MarkSpanAbsent(m.replicaSet)
+		if m.spanController.GetTaskByID(m.replicaSet.ID) != nil {
+			m.spanController.MarkSpanAbsent(m.replicaSet)
+		}
 		return
 	}
 
