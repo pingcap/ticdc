@@ -328,8 +328,6 @@ func (w *writer) WriteMessage(ctx context.Context, message pulsar.Message) bool 
 		// but all DDL event messages should be consumed.
 		ddl := progress.decoder.NextDDLEvent()
 
-		w.onDDL(ddl)
-
 		// the Query maybe empty if using simple protocol, it's comes from `bootstrap` event, no need to handle it.
 		if ddl.Query == "" {
 			return false
@@ -373,6 +371,7 @@ func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool
 			log.Panic("write DDL event failed", zap.Error(err),
 				zap.String("DDL", todoDDL.Query), zap.Uint64("commitTs", todoDDL.GetCommitTs()))
 		}
+		w.onDDL(todoDDL)
 	}
 
 	if messageType == common.MessageTypeResolved {
@@ -396,19 +395,21 @@ func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool
 
 func (w *writer) onDDL(ddl *commonEvent.DDLEvent) {
 	switch w.protocol {
-	case config.ProtocolCanalJSON, config.ProtocolOpen:
+	case config.ProtocolCanalJSON:
 	default:
 		return
 	}
-	if ddl.Type != byte(timodel.ActionCreateTable) {
-		return
-	}
-	stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
-	if err != nil {
-		log.Panic("parse ddl query failed", zap.String("query", ddl.Query), zap.Error(err))
-	}
-	if v, ok := stmt.(*ast.CreateTableStmt); ok && v.Partition != nil {
-		w.partitionTableAccessor.Add(ddl.GetSchemaName(), ddl.GetTableName())
+	switch timodel.ActionType(ddl.Type) {
+	case timodel.ActionCreateTable:
+		stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
+		if err != nil {
+			log.Panic("parse ddl query failed", zap.String("query", ddl.Query), zap.Error(err))
+		}
+		if v, ok := stmt.(*ast.CreateTableStmt); ok && v.Partition != nil {
+			w.partitionTableAccessor.Add(ddl.GetSchemaName(), ddl.GetTableName())
+		}
+	case timodel.ActionDropTable:
+		w.partitionTableAccessor.Drop(ddl.GetSchemaName(), ddl.GetTableName())
 	}
 }
 

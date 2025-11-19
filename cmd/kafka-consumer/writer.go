@@ -79,7 +79,7 @@ type writer struct {
 	ddlList            []*commonEvent.DDLEvent
 	ddlWithMaxCommitTs map[int64]uint64
 
-	// this should only be used by the canal-json protocol
+	// this should be used by the canal-json, avro and open protocol
 	partitionTableAccessor *common.PartitionTableAccessor
 
 	eventRouter            *eventrouter.EventRouter
@@ -353,8 +353,6 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 			}
 		}
 
-		w.onDDL(ddl)
-
 		// DDL is broadcast to all partitions, but only handle the DDL from partition-0.
 		if partition != 0 {
 			return false
@@ -434,6 +432,7 @@ func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool
 			log.Panic("write DDL event failed", zap.Error(err),
 				zap.String("DDL", todoDDL.Query), zap.Uint64("commitTs", todoDDL.GetCommitTs()))
 		}
+		w.onDDL(todoDDL)
 	}
 
 	if messageType == common.MessageTypeResolved {
@@ -457,19 +456,21 @@ func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool
 
 func (w *writer) onDDL(ddl *commonEvent.DDLEvent) {
 	switch w.protocol {
-	case config.ProtocolCanalJSON, config.ProtocolOpen:
+	case config.ProtocolCanalJSON, config.ProtocolOpen, config.ProtocolAvro:
 	default:
 		return
 	}
-	if ddl.Type != byte(timodel.ActionCreateTable) {
-		return
-	}
-	stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
-	if err != nil {
-		log.Panic("parse ddl query failed", zap.String("query", ddl.Query), zap.Error(err))
-	}
-	if v, ok := stmt.(*ast.CreateTableStmt); ok && v.Partition != nil {
-		w.partitionTableAccessor.Add(ddl.GetSchemaName(), ddl.GetTableName())
+	switch timodel.ActionType(ddl.Type) {
+	case timodel.ActionCreateTable:
+		stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
+		if err != nil {
+			log.Panic("parse ddl query failed", zap.String("query", ddl.Query), zap.Error(err))
+		}
+		if v, ok := stmt.(*ast.CreateTableStmt); ok && v.Partition != nil {
+			w.partitionTableAccessor.Add(ddl.GetSchemaName(), ddl.GetTableName())
+		}
+	case timodel.ActionDropTable:
+		w.partitionTableAccessor.Drop(ddl.GetSchemaName(), ddl.GetTableName())
 	}
 }
 
@@ -548,11 +549,11 @@ func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionP
 			zap.Stringer("eventType", dml.RowTypes[0]),
 			// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
 			zap.Any("protocol", w.protocol), zap.Bool("IsPartition", dml.TableInfo.TableName.IsPartition))
-	case config.ProtocolCanalJSON, config.ProtocolOpen:
-		// for partition table, the canal-json and open-protocol message cannot assign physical table id to each dml message,
+	case config.ProtocolCanalJSON, config.ProtocolOpen, config.ProtocolAvro:
+		// for partition table, the canal-json, avro and open-protocol message cannot assign physical table id to each dml message,
 		// we cannot distinguish whether it's a real fallback event or not, still append it.
 		if w.partitionTableAccessor.IsPartitionTable(schema, table) {
-			log.Warn("DML events fallback, but it's canal-json or open-protocol and the table is a partition table, still append it",
+			log.Warn("DML events fallback, but it's canal-json, avro or open-protocol and the table is a partition table, still append it",
 				zap.Int32("partition", group.Partition), zap.Any("offset", offset),
 				zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 				zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
