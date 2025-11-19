@@ -119,12 +119,10 @@ func (p *TableProgress) Empty() bool {
 
 // Pass remove the
 func (p *TableProgress) Pass(event commonEvent.FlushableEvent) {
-	// p.rwMutex.Lock()
-	// defer p.rwMutex.Unlock()
+	p.rwMutex.Lock()
+	defer p.rwMutex.Unlock()
 
-	// p.maxCommitTs = getFinalCommitTs(event)
-	// TODO:more clean here
-	p.Remove(event)
+	p.maxCommitTs = getFinalCommitTs(event)
 }
 
 func (p *TableProgress) Len() int {

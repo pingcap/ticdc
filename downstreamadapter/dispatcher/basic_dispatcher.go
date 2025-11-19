@@ -251,13 +251,13 @@ func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) erro
 			return nil
 		}
 	}
-	// d.tableProgress.Add(event)
+	d.tableProgress.Add(event)
 	return d.sink.WriteBlockEvent(event)
 }
 
 func (d *BasicDispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) {
-	d.tableProgress.Pass(event) // or just not this
-	event.PostFlush()           // ?do we need this?
+	d.tableProgress.Pass(event)
+	event.PostFlush()
 }
 
 func (d *BasicDispatcher) isFirstEvent(event commonEvent.Event) bool {
