@@ -136,7 +136,7 @@ func TestShouldUseCustomRules(t *testing.T) {
 	t.Parallel()
 
 	filter, err := NewFilter(&config.FilterConfig{
-		Rules: []string{"sns.*", "ecom.*", "!sns.log", "!ecom.test"},
+		Rules: []string{"sns.*", "ecom.*", "!sns.log", "!ecom.test", "haha.xixi"},
 	}, "", false, false)
 	require.Nil(t, err)
 	require.True(t, filter.ShouldIgnoreTable("other", ""))
@@ -147,6 +147,8 @@ func TestShouldUseCustomRules(t *testing.T) {
 	require.True(t, filter.ShouldIgnoreTable("ecom", "test"))
 	require.True(t, filter.ShouldIgnoreTable("sns", "log"))
 	require.True(t, filter.ShouldIgnoreTable("information_schema", ""))
+	require.True(t, filter.ShouldIgnoreTable("haha", ""))
+	require.False(t, filter.ShouldIgnoreSchema("haha"))
 
 	filter, err = NewFilter(&config.FilterConfig{
 		// 1. match all schema and table
@@ -286,7 +288,7 @@ func TestShouldDiscardDDL(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.FilterConfig{
-		Rules: []string{"test.*"},
+		Rules: []string{"test.*", "filter.t1"},
 	}
 
 	f, err := NewFilter(cfg, "UTC", false, false)
@@ -303,6 +305,10 @@ func TestShouldDiscardDDL(t *testing.T) {
 
 	// DDL on system schema, should discard.
 	require.True(t, f.ShouldDiscardDDL("mysql", "t1", model.ActionCreateTable, nil))
+
+	require.False(t, f.ShouldDiscardDDL("filter", "", model.ActionCreateSchema, nil))
+	require.False(t, f.ShouldDiscardDDL("filter", "t1", model.ActionCreateTable, nil))
+	require.True(t, f.ShouldDiscardDDL("filter", "t2", model.ActionCreateTable, nil))
 }
 
 func TestShouldIgnoreDDL(t *testing.T) {
