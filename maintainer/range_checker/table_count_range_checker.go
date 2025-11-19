@@ -14,7 +14,6 @@
 package range_checker
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -61,12 +60,17 @@ func (rc *TableIDRangeChecker) Detail() string {
 	buf.WriteString(strconv.FormatInt(int64(len(rc.reportedMap)), 10))
 	buf.WriteString(", require count: ")
 	buf.WriteString(strconv.FormatInt(int64(rc.needCount), 10))
-	buf.WriteString(", uncovered tables: ")
+
+	var uncoveredIDs []string
 	for _, id := range rc.tableIDs {
-		_, ok := rc.reportedMap[id]
-		if !ok {
-			buf.WriteString(fmt.Sprintf("%d,\n", id))
+		if _, ok := rc.reportedMap[id]; !ok {
+			uncoveredIDs = append(uncoveredIDs, strconv.FormatInt(id, 10))
 		}
+	}
+
+	if len(uncoveredIDs) > 0 {
+		buf.WriteString(", uncovered tables: ")
+		buf.WriteString(strings.Join(uncoveredIDs, ", "))
 	}
 
 	return buf.String()
