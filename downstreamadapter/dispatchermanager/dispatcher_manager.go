@@ -634,6 +634,7 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 			message.ChangefeedID = e.changefeedID.ToPB()
 			message.Statuses = statusMessage
 			message.Watermark = newWatermark
+			log.Error("collectComponentStatusWhenChanged", zap.Any("watermark", newWatermark))
 			// FIXME: need to send redo watermark?
 			// message.RedoWatermark = newRedoWatermark
 			e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
@@ -688,6 +689,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 		if cleanMap != nil {
 			toCleanMap = append(toCleanMap, cleanMap)
 		}
+		log.Error("aggregateDispatcherHeartbeats", zap.Any("dispatcherItem", dispatcherItem), zap.Any("watermark", watermark))
 		if watermark != nil {
 			message.Watermark.Update(*watermark)
 		}

@@ -654,6 +654,7 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 			log.Warn("inject MySQLDuplicateEntryError")
 			err := cerror.WrapError(cerror.ErrMySQLDuplicateEntry, &dmysql.MySQLError{
 				Number: uint16(mysql.ErrDupEntry),
+				// Message: "Duplicate entry",
 			})
 			w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls)
 			failpoint.Return(err)

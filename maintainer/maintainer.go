@@ -752,6 +752,7 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 		// an earlier startTs). For the same sequence we still keep checkpoint monotonic
 		// to ignore reordered or duplicated heartbeats.
 		old, ok := m.checkpointTsByCapture.Get(msg.From)
+		log.Error("onHeartbeatRequest", zap.Any("old", old), zap.Any("new", req.Watermark))
 		if !ok || req.Watermark.Seq > old.Seq || (req.Watermark.Seq == old.Seq && req.Watermark.CheckpointTs > old.CheckpointTs) {
 			m.checkpointTsByCapture.Set(msg.From, *req.Watermark)
 		}
