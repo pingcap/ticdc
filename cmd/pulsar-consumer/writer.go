@@ -328,6 +328,8 @@ func (w *writer) WriteMessage(ctx context.Context, message pulsar.Message) bool 
 		// but all DDL event messages should be consumed.
 		ddl := progress.decoder.NextDDLEvent()
 
+		w.onDDL(ddl)
+
 		// the Query maybe empty if using simple protocol, it's comes from `bootstrap` event, no need to handle it.
 		if ddl.Query == "" {
 			return false
@@ -371,7 +373,6 @@ func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool
 			log.Panic("write DDL event failed", zap.Error(err),
 				zap.String("DDL", todoDDL.Query), zap.Uint64("commitTs", todoDDL.GetCommitTs()))
 		}
-		w.onDDL(todoDDL)
 	}
 
 	if messageType == common.MessageTypeResolved {
@@ -399,6 +400,8 @@ func (w *writer) onDDL(ddl *commonEvent.DDLEvent) {
 	default:
 		return
 	}
+	// TODO: support more corner cases
+	// e.g. create partition table + drop table(rename table) + create normal table: the partitionTableAccessor should drop the table when the table become normal.
 	switch timodel.ActionType(ddl.Type) {
 	case timodel.ActionCreateTable:
 		stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
@@ -408,8 +411,10 @@ func (w *writer) onDDL(ddl *commonEvent.DDLEvent) {
 		if v, ok := stmt.(*ast.CreateTableStmt); ok && v.Partition != nil {
 			w.partitionTableAccessor.Add(ddl.GetSchemaName(), ddl.GetTableName())
 		}
-	case timodel.ActionDropTable:
-		w.partitionTableAccessor.Drop(ddl.GetSchemaName(), ddl.GetTableName())
+	case timodel.ActionRenameTable:
+		if w.partitionTableAccessor.IsPartitionTable(ddl.ExtraSchemaName, ddl.ExtraTableName) {
+			w.partitionTableAccessor.Add(ddl.GetSchemaName(), ddl.GetTableName())
+		}
 	}
 }
 
