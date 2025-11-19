@@ -650,11 +650,6 @@ func (d *BasicDispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
 // If the ddl leads to add new tables or drop tables, it should send heartbeat to maintainer
 // 2. If the event is a multi-table DDL / sync point Event, it will generate a TableSpanBlockStatus message with ddl info to send to maintainer.
 func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
-	// we first add this event to tableProgress, to update our checkpointTs
-	// especially when there is a long syncpoint event list,
-	// we should update progress now, instread of all syncpoint reach the pass/write
-	d.tableProgress.Add(event)
-
 	if !d.shouldBlock(event) {
 		err := d.AddBlockEventToSink(event)
 		if err != nil {
