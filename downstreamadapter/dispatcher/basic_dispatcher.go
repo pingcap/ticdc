@@ -374,6 +374,8 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	latestResolvedTs := uint64(0)
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
+		log.Info("dispatcher receive all event",
+			zap.Stringer("dispatcher", d.id), zap.Int64("mode", d.mode), zap.Any("commitTs", dispatcherEvent.GetCommitTs()))
 		if log.GetLevel() == zapcore.DebugLevel {
 			log.Debug("dispatcher receive all event",
 				zap.Stringer("dispatcher", d.id), zap.Int64("mode", d.mode),

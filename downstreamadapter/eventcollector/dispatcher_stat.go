@@ -226,6 +226,7 @@ func (d *dispatcherStat) wake() {
 		d.eventCollector.redoDs.Wake(d.getDispatcherID())
 	} else {
 		d.eventCollector.ds.Wake(d.getDispatcherID())
+		log.Info("wake", zap.Any("dispatcherID", d.getDispatcherID()))
 	}
 }
 
