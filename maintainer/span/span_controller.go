@@ -350,7 +350,7 @@ func (c *Controller) MarkSpanAbsent(span *replica.SpanReplication) {
 	defer c.mu.Unlock()
 	c.MarkAbsentWithoutLock(span)
 	// We need to add the absent replication
-	// because the split operator will remove the span firstly and make is absent later
+	// because the split operator will remove the span firstly and mark it absent later
 	c.allTasks[span.ID] = span
 }
 
