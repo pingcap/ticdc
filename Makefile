@@ -336,3 +336,4 @@ workload: tools/bin/workload
 
 generate-next-gen-grafana:
 	./scripts/generate-next-gen-metrics.sh
+
