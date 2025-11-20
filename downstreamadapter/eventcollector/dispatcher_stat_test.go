@@ -32,7 +32,7 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 )
 
-var mockChangefeedID = common.NewChangeFeedIDWithName("dispatcher_stat_test", common.DefaultKeyspace)
+var mockChangefeedID = common.NewChangeFeedIDWithName("dispatcher_stat_test", common.DefaultKeyspaceNamme)
 
 // mockDispatcher implements the dispatcher.EventDispatcher interface for testing
 type mockDispatcher struct {
@@ -44,7 +44,7 @@ type mockDispatcher struct {
 	events       []dispatcher.DispatcherEvent
 	checkPointTs uint64
 
-	skipSyncpointSameAsStartTs bool
+	skipSyncpointAtStartTs bool
 }
 
 func newMockDispatcher(id common.DispatcherID, startTs uint64) *mockDispatcher {
@@ -94,8 +94,8 @@ func (m *mockDispatcher) GetSyncPointInterval() time.Duration {
 	return time.Second * 10
 }
 
-func (m *mockDispatcher) GetSkipSyncpointSameAsStartTs() bool {
-	return m.skipSyncpointSameAsStartTs
+func (m *mockDispatcher) GetSkipSyncpointAtStartTs() bool {
+	return m.skipSyncpointAtStartTs
 }
 
 func (m *mockDispatcher) GetResolvedTs() uint64 {
@@ -808,7 +808,7 @@ func TestHandleDataEvents(t *testing.T) {
 				{
 					From: &remoteServerID,
 					Event: &commonEvent.DDLEvent{
-						Version:    commonEvent.DDLEventVersion,
+						Version:    commonEvent.DDLEventVersion1,
 						FinishedTs: 100,
 						Epoch:      10,
 						Seq:        2,
@@ -1228,44 +1228,89 @@ func TestNewDispatcherResetRequest(t *testing.T) {
 	nextSyncpointTs := oracle.GoTimeToTS(time.Unix(0, 0).Add(1001 * syncPointInterval))
 
 	cases := []struct {
-		name                       string
-		resetTs                    uint64
-		skipSyncpointSameAsStartTs bool
-		expectedSyncPointTs        uint64
+		name                   string
+		resetTs                uint64
+		skipSyncpointAtStartTs bool
+		expectedSyncPointTs    uint64
 	}{
 		{
-			name:                       "reset at startTs, skipSyncpointSameAsStartTs is true",
-			resetTs:                    startTs,
-			skipSyncpointSameAsStartTs: true,
-			expectedSyncPointTs:        nextSyncpointTs,
+			name:                   "reset at startTs, skipSyncpointAtStartTs is true",
+			resetTs:                startTs,
+			skipSyncpointAtStartTs: true,
+			expectedSyncPointTs:    nextSyncpointTs,
 		},
 		{
-			name:                       "reset at startTs, skipSyncpointSameAsStartTs is false",
-			resetTs:                    startTs,
-			skipSyncpointSameAsStartTs: false,
-			expectedSyncPointTs:        startTs,
+			name:                   "reset at startTs, skipSyncpointAtStartTs is false",
+			resetTs:                startTs,
+			skipSyncpointAtStartTs: false,
+			expectedSyncPointTs:    startTs,
 		},
 		{
-			name:                       "reset at nextSyncpointTs, skipSyncpointSameAsStartTs is true",
-			resetTs:                    nextSyncpointTs,
-			skipSyncpointSameAsStartTs: true,
-			expectedSyncPointTs:        nextSyncpointTs,
+			name:                   "reset at nextSyncpointTs, skipSyncpointAtStartTs is true",
+			resetTs:                nextSyncpointTs,
+			skipSyncpointAtStartTs: true,
+			expectedSyncPointTs:    nextSyncpointTs,
 		},
 		{
-			name:                       "reset at nextSyncpointTs, skipSyncpointSameAsStartTs is false",
-			resetTs:                    nextSyncpointTs,
-			skipSyncpointSameAsStartTs: false,
-			expectedSyncPointTs:        nextSyncpointTs,
+			name:                   "reset at nextSyncpointTs, skipSyncpointAtStartTs is false",
+			resetTs:                nextSyncpointTs,
+			skipSyncpointAtStartTs: false,
+			expectedSyncPointTs:    nextSyncpointTs,
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			mockDisp := newMockDispatcher(common.NewDispatcherID(), startTs)
-			mockDisp.skipSyncpointSameAsStartTs = tc.skipSyncpointSameAsStartTs
+			mockDisp.skipSyncpointAtStartTs = tc.skipSyncpointAtStartTs
 			stat := newDispatcherStat(mockDisp, nil, nil)
 			resetReq := stat.newDispatcherResetRequest("local", tc.resetTs, 1)
 			require.Equal(t, tc.expectedSyncPointTs, resetReq.SyncPointTs)
 		})
 	}
+}
+
+func TestRegisterTo(t *testing.T) {
+	localServerID := node.ID("local-server")
+	remoteServerID := node.ID("remote-server")
+	dispatcherID := common.NewDispatcherID()
+
+	// Create a mock dispatcher and event collector
+	mockDisp := newMockDispatcher(dispatcherID, 0)
+	mockEventCollector := newTestEventCollector(localServerID)
+	stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
+
+	// Test case 1: Register to local server
+	t.Run("register to local server", func(t *testing.T) {
+		stat.registerTo(localServerID)
+
+		select {
+		case msg := <-mockEventCollector.dispatcherMessageChan.Out():
+			require.Equal(t, localServerID, msg.Message.To)
+			req, ok := msg.Message.Message[0].(*messaging.DispatcherRequest)
+			require.True(t, ok)
+			require.Equal(t, eventpb.ActionType_ACTION_TYPE_REGISTER, req.ActionType)
+			require.False(t, req.OnlyReuse, "OnlyReuse should be false for local registration")
+			require.Equal(t, dispatcherID.ToPB(), req.DispatcherId)
+		case <-time.After(1 * time.Second):
+			require.Fail(t, "timed out waiting for message")
+		}
+	})
+
+	// Test case 2: Register to remote server
+	t.Run("register to remote server", func(t *testing.T) {
+		stat.registerTo(remoteServerID)
+
+		select {
+		case msg := <-mockEventCollector.dispatcherMessageChan.Out():
+			require.Equal(t, remoteServerID, msg.Message.To)
+			req, ok := msg.Message.Message[0].(*messaging.DispatcherRequest)
+			require.True(t, ok)
+			require.Equal(t, eventpb.ActionType_ACTION_TYPE_REGISTER, req.ActionType)
+			require.True(t, req.OnlyReuse, "OnlyReuse should be true for remote registration")
+			require.Equal(t, dispatcherID.ToPB(), req.DispatcherId)
+		case <-time.After(1 * time.Second):
+			require.Fail(t, "timed out waiting for message")
+		}
+	})
 }

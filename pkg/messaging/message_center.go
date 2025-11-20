@@ -440,7 +440,8 @@ func (s *grpcServer) handleConnect(stream proto.MessageService_StreamMessagesSer
 
 	handshake := &HandshakeMessage{}
 	if err := handshake.Unmarshal(msg.Payload[0]); err != nil {
-		log.Panic("failed to unmarshal handshake message", zap.Error(err))
+		log.Warn("failed to unmarshal handshake message", zap.Error(err))
+		return err
 	}
 
 	to := node.ID(msg.To)
@@ -472,10 +473,7 @@ func (s *grpcServer) handleConnect(stream proto.MessageService_StreamMessagesSer
 		}
 		return nil
 	}, retry.WithIsRetryableErr(func(err error) bool {
-		if err == context.DeadlineExceeded {
-			return false
-		}
-		return true
+		return err != context.DeadlineExceeded
 	}), retry.WithMaxTries(10))
 	if err != nil {
 		log.Error("Failed to get remote target", zap.Error(err))

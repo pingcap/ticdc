@@ -37,10 +37,11 @@ func TestKeyspaceCheckerMiddleware(t *testing.T) {
 	tests := []struct {
 		name                 string
 		keyspace             string
-		init                 func(t *testing.T, mock *keyspace.MockKeyspaceManager)
+		init                 func(t *testing.T, mock *keyspace.MockManager)
 		expectedStatus       int
 		expectedAbort        bool
 		expectedBodyContains string
+		expectedMeta         *keyspacepb.KeyspaceMeta
 	}{
 		{
 			name:           "default keyspace",
@@ -51,7 +52,7 @@ func TestKeyspaceCheckerMiddleware(t *testing.T) {
 		{
 			name:     "keyspace not exist",
 			keyspace: "not-exist",
-			init: func(t *testing.T, mock *keyspace.MockKeyspaceManager) {
+			init: func(t *testing.T, mock *keyspace.MockManager) {
 				mock.EXPECT().LoadKeyspace(gomock.Any(), "not-exist").Return(nil, errors.New(pdpb.ErrorType_ENTRY_NOT_FOUND.String()))
 			},
 			expectedStatus:       http.StatusBadRequest,
@@ -61,7 +62,7 @@ func TestKeyspaceCheckerMiddleware(t *testing.T) {
 		{
 			name:     "internal server error",
 			keyspace: "internal-error",
-			init: func(t *testing.T, mock *keyspace.MockKeyspaceManager) {
+			init: func(t *testing.T, mock *keyspace.MockManager) {
 				mock.EXPECT().LoadKeyspace(gomock.Any(), "internal-error").Return(nil, errors.New("internal error"))
 			},
 			expectedStatus:       http.StatusInternalServerError,
@@ -71,14 +72,21 @@ func TestKeyspaceCheckerMiddleware(t *testing.T) {
 		{
 			name:     "success",
 			keyspace: "success",
-			init: func(t *testing.T, mock *keyspace.MockKeyspaceManager) {
+			init: func(t *testing.T, mock *keyspace.MockManager) {
 				mock.EXPECT().LoadKeyspace(gomock.Any(), "success").Return(&keyspacepb.KeyspaceMeta{
+					Id:    1,
+					Name:  "kespace1",
 					State: keyspacepb.KeyspaceState_ENABLED,
 				}, nil)
 			},
 			expectedStatus:       http.StatusOK,
 			expectedAbort:        false,
 			expectedBodyContains: "",
+			expectedMeta: &keyspacepb.KeyspaceMeta{
+				Id:    1,
+				Name:  "kespace1",
+				State: keyspacepb.KeyspaceState_ENABLED,
+			},
 		},
 	}
 
@@ -87,7 +95,7 @@ func TestKeyspaceCheckerMiddleware(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 
-			mock := keyspace.NewMockKeyspaceManager(ctrl)
+			mock := keyspace.NewMockManager(ctrl)
 
 			if tt.init != nil {
 				tt.init(t, mock)
@@ -111,6 +119,10 @@ func TestKeyspaceCheckerMiddleware(t *testing.T) {
 			if tt.expectedBodyContains != "" {
 				require.NotNil(t, w.Body)
 				require.Contains(t, w.Body.String(), tt.expectedBodyContains)
+			}
+
+			if tt.expectedMeta != nil {
+				require.EqualValues(t, tt.expectedMeta, GetKeyspaceFromContext(c))
 			}
 		})
 	}

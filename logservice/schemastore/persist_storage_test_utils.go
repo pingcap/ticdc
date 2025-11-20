@@ -14,6 +14,7 @@
 package schemastore
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -48,6 +49,8 @@ func loadPersistentStorageForTest(db *pebble.DB, gcTs uint64, upperBound UpperBo
 		tableRegisteredCount:   make(map[int64]int),
 	}
 	p.initializeFromDisk()
+	ctx := context.Background()
+	p.ctx, p.cancel = context.WithCancel(ctx)
 	return p
 }
 
@@ -500,6 +503,34 @@ func buildAlterIndexVisibilityJobForTest(schemaID, tableID int64, finishedTs uin
 			FinishedTS: finishedTs,
 			TableInfo:  tableInfo,
 		},
+	}
+}
+
+func buildAddFulltextIndexJobForTest(schemaID, tableID int64, finishedTs uint64, indexes ...*model.IndexInfo) *model.Job {
+	tableInfo := newEligibleTableInfoForTest(tableID, fmt.Sprintf("t_%d", tableID))
+	tableInfo.Indices = indexes
+	return &model.Job{
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+			TableInfo:  tableInfo,
+		},
+		Query: "ALTER TABLE t2 ADD FULLTEXT INDEX (b) WITH PARSER standard;",
+	}
+}
+
+func buildCreateHybridIndexJobForTest(schemaID, tableID int64, finishedTs uint64, indexes ...*model.IndexInfo) *model.Job {
+	tableInfo := newEligibleTableInfoForTest(tableID, fmt.Sprintf("t_%d", tableID))
+	tableInfo.Indices = indexes
+	return &model.Job{
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+			TableInfo:  tableInfo,
+		},
+		Query: "CREATE HYBRID INDEX i_idx ON t(b, c, d, e, g) PARAMETER 'hybrid_index_param';",
 	}
 }
 

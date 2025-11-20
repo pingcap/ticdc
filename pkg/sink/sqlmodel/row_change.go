@@ -20,8 +20,8 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/sessionctx"
-	"github.com/pingcap/tiflow/dm/pkg/utils"
 	"go.uber.org/zap"
 )
 
@@ -135,7 +135,7 @@ func NewRowChange(
 	if tiCtx != nil {
 		ret.tiSessionCtx = tiCtx
 	} else {
-		ret.tiSessionCtx = utils.ZeroSessionCtx
+		ret.tiSessionCtx = util.ZeroSessionCtx
 	}
 
 	ret.calculateType()

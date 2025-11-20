@@ -223,6 +223,15 @@ func TestParseSinkURIOverride(t *testing.T) {
 		uri     string
 		checker func(*Config)
 	}{{
+		uri: "mysql://127.0.0.1:3306/",
+		checker: func(sp *Config) {
+			require.True(t, sp.MultiStmtEnable)
+			require.True(t, sp.BatchDMLEnable)
+			require.True(t, sp.CachePrepStmts)
+			require.True(t, sp.EnableDDLTs)
+			require.False(t, sp.HasVectorType)
+		},
+	}, {
 		uri: "mysql://127.0.0.1:3306/?worker-count=2147483648", // int32 max
 		checker: func(sp *Config) {
 			require.EqualValues(t, sp.WorkerCount, maxWorkerCount)
@@ -246,6 +255,31 @@ func TestParseSinkURIOverride(t *testing.T) {
 		uri: "mysql://127.0.0.1:3306/?tidb-txn-mode=badmode",
 		checker: func(sp *Config) {
 			require.EqualValues(t, sp.tidbTxnMode, defaultTiDBTxnMode)
+		},
+	}, {
+		uri: "mysql://127.0.0.1:3306/?multi-stmt-enable=false",
+		checker: func(sp *Config) {
+			require.False(t, sp.MultiStmtEnable)
+		},
+	}, {
+		uri: "mysql://127.0.0.1:3306/?batch-dml-enable=false",
+		checker: func(sp *Config) {
+			require.False(t, sp.BatchDMLEnable)
+		},
+	}, {
+		uri: "mysql://127.0.0.1:3306/?cache-prep-stmts=false",
+		checker: func(sp *Config) {
+			require.False(t, sp.CachePrepStmts)
+		},
+	}, {
+		uri: "mysql://127.0.0.1:3306/?enable-ddl-ts=false",
+		checker: func(sp *Config) {
+			require.False(t, sp.EnableDDLTs)
+		},
+	}, {
+		uri: "mysql://127.0.0.1:3306/?has-vector-type=true",
+		checker: func(sp *Config) {
+			require.True(t, sp.HasVectorType)
 		},
 	}}
 	var uri *url.URL

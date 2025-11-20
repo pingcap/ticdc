@@ -53,7 +53,7 @@ function prepare() {
 	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/" ;;
 	esac
 
-	run_cdc_cli changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --server="127.0.0.1:8301"
+	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --server="127.0.0.1:8301"
 
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
@@ -80,7 +80,7 @@ function kill_and_restart_nodes() {
 		local node_addr="127.0.0.1:830${node_to_kill}"
 
 		echo "[$(date)] Randomly selected CDC node $node_to_kill to kill (addr: $node_addr)..."
-		cdc_pid=$(pgrep -f "$CDC_BINARY.*--addr $node_addr")
+		cdc_pid=$(get_cdc_pid 127.0.0.1 830${node_to_kill})
 		if [ -n "$cdc_pid" ]; then
 			kill_cdc_pid $cdc_pid
 			echo "[$(date)] CDC node $node_to_kill killed, PID: $cdc_pid"
@@ -136,7 +136,7 @@ main() {
 	cleanup_process $CDC_BINARY
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 main
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

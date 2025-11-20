@@ -59,6 +59,10 @@ type persistentStorage struct {
 	kvStorage kv.Storage
 
 	db *pebble.DB
+	wg sync.WaitGroup
+
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	mu sync.RWMutex
 
@@ -133,11 +137,12 @@ func openDB(dbPath string) *pebble.DB {
 }
 
 func newPersistentStorage(
+	ctx context.Context,
 	root string,
 	keyspaceID uint32,
 	pdCli pd.Client,
 	storage kv.Storage,
-) *persistentStorage {
+) (*persistentStorage, error) {
 	dataStorage := &persistentStorage{
 		rootDir:                root,
 		keyspaceID:             keyspaceID,
@@ -151,22 +156,27 @@ func newPersistentStorage(
 		tableInfoStoreMap:      make(map[int64]*versionedTableInfoStore),
 		tableRegisteredCount:   make(map[int64]int),
 	}
+	dataStorage.ctx, dataStorage.cancel = context.WithCancel(ctx)
+	err := dataStorage.initialize(ctx)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
 
-	return dataStorage
+	return dataStorage, nil
 }
 
 func (p *persistentStorage) getGcSafePoint(ctx context.Context) (uint64, error) {
 	return gc.UnifyGetServiceGCSafepoint(ctx, p.pdCli, p.keyspaceID, defaultSchemaStoreGcServiceID)
 }
 
-func (p *persistentStorage) initialize(ctx context.Context) {
+func (p *persistentStorage) initialize(ctx context.Context) error {
 	var gcSafePoint uint64
 	fakeChangefeedID := common.NewChangefeedID(defaultSchemaStoreGcServiceID)
 	for {
 		var err error
 		gcSafePoint, err = p.getGcSafePoint(ctx)
 		if err == nil {
-			log.Info("GetGCState success", zap.Uint32("keyspaceID", p.keyspaceID), zap.Any("gcState", gcSafePoint))
+			log.Info("get gc safepoint success", zap.Uint32("keyspaceID", p.keyspaceID), zap.Any("gcSafePoint", gcSafePoint))
 			// Ensure the start ts is valid during the gc service ttl
 			err = gc.EnsureChangefeedStartTsSafety(
 				ctx,
@@ -183,7 +193,7 @@ func (p *persistentStorage) initialize(ctx context.Context) {
 		log.Warn("get ts failed, will retry in 1s", zap.Error(err))
 		select {
 		case <-ctx.Done():
-			log.Panic("context is canceled during getting gc safepoint", zap.Error(ctx.Err()))
+			return errors.Trace(err)
 		case <-time.After(time.Second):
 		}
 	}
@@ -194,7 +204,7 @@ func (p *persistentStorage) initialize(ctx context.Context) {
 
 	// FIXME: currently we don't try to reuse data at restart, when we need, just remove the following line
 	if err := os.RemoveAll(dbPath); err != nil {
-		log.Panic("fail to remove path")
+		log.Panic("fail to remove path", zap.String("dbPath", dbPath), zap.Error(err))
 	}
 
 	isDataReusable := false
@@ -207,7 +217,7 @@ func (p *persistentStorage) initialize(ctx context.Context) {
 			isDataReusable = false
 		}
 		if gcSafePoint < gcTs {
-			log.Panic("gc safe point should never go back")
+			return errors.New(fmt.Sprintf("gc safe point %d is smaller than gcTs %d on disk", gcSafePoint, gcTs))
 		}
 		upperBound, err := readUpperBoundMeta(db)
 		if err != nil {
@@ -223,12 +233,13 @@ func (p *persistentStorage) initialize(ctx context.Context) {
 			p.upperBound = upperBound
 			p.initializeFromDisk()
 		} else {
-			db.Close()
+			_ = db.Close()
 		}
 	}
 	if !isDataReusable {
 		p.initializeFromKVStorage(dbPath, gcSafePoint)
 	}
+	return nil
 }
 
 func (p *persistentStorage) initializeFromKVStorage(dbPath string, gcTs uint64) {
@@ -286,7 +297,16 @@ func (p *persistentStorage) initializeFromDisk() {
 	}
 }
 
+func (p *persistentStorage) run() error {
+	p.wg.Add(2)
+	go p.gc(p.ctx)
+	go p.persistUpperBoundPeriodically(p.ctx)
+	return nil
+}
+
 func (p *persistentStorage) close() error {
+	p.cancel()
+	p.wg.Wait()
 	return p.db.Close()
 }
 
@@ -562,12 +582,13 @@ func addTableInfoFromKVSnap(
 	return nil
 }
 
-func (p *persistentStorage) gc(ctx context.Context) error {
+func (p *persistentStorage) gc(ctx context.Context) {
+	defer p.wg.Done()
 	ticker := time.NewTicker(5 * time.Minute)
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			return
 		case <-ticker.C:
 			gcSafePoint, err := p.getGcSafePoint(ctx)
 			if err != nil {
@@ -579,7 +600,7 @@ func (p *persistentStorage) gc(ctx context.Context) error {
 	}
 }
 
-func (p *persistentStorage) doGc(gcTs uint64) error {
+func (p *persistentStorage) doGc(gcTs uint64) {
 	p.mu.Lock()
 	if gcTs > p.upperBound.ResolvedTs {
 		// It might happen when all changefeed is removed in the maintainer side,
@@ -590,16 +611,15 @@ func (p *persistentStorage) doGc(gcTs uint64) error {
 	}
 	if gcTs <= p.gcTs {
 		p.mu.Unlock()
-		return nil
+		return
 	}
 	oldGcTs := p.gcTs
 	p.mu.Unlock()
 
 	serverConfig := config.GetGlobalServerConfig()
 	if !serverConfig.Debug.SchemaStore.EnableGC {
-		log.Info("gc is disabled",
-			zap.Uint64("gcTs", gcTs))
-		return nil
+		log.Info("gc is disabled", zap.Uint64("gcTs", gcTs))
+		return
 	}
 
 	start := time.Now()
@@ -608,24 +628,18 @@ func (p *persistentStorage) doGc(gcTs uint64) error {
 		log.Warn("fail to write kv snapshot during gc",
 			zap.Uint64("gcTs", gcTs), zap.Error(err))
 		// TODO: return err and retry?
-		return nil
+		return
 	}
 	log.Info("gc finish write schema snapshot",
-		zap.Uint64("gcTs", gcTs),
-		zap.Any("duration", time.Since(start)))
+		zap.Uint64("gcTs", gcTs), zap.Any("duration", time.Since(start)))
 
 	// clean data in memory before clean data on disk
 	p.cleanObsoleteDataInMemory(gcTs)
 	log.Info("gc finish clean in memory data",
-		zap.Uint64("gcTs", gcTs),
-		zap.Any("duration", time.Since(start)))
+		zap.Uint64("gcTs", gcTs), zap.Any("duration", time.Since(start)))
 
 	cleanObsoleteData(p.db, oldGcTs, gcTs)
-	log.Info("gc finish",
-		zap.Uint64("gcTs", gcTs),
-		zap.Any("duration", time.Since(start)))
-
-	return nil
+	log.Info("gc finish", zap.Uint64("gcTs", gcTs), zap.Any("duration", time.Since(start)))
 }
 
 func (p *persistentStorage) cleanObsoleteDataInMemory(gcTs uint64) {
@@ -682,12 +696,13 @@ func (p *persistentStorage) getUpperBound() UpperBoundMeta {
 	return p.upperBound
 }
 
-func (p *persistentStorage) persistUpperBoundPeriodically(ctx context.Context) error {
+func (p *persistentStorage) persistUpperBoundPeriodically(ctx context.Context) {
+	defer p.wg.Done()
 	ticker := time.NewTicker(10 * time.Second)
 	for {
 		select {
 		case <-ctx.Done():
-			return nil
+			return
 		case <-ticker.C:
 			p.mu.Lock()
 			if !p.upperBoundChanged {
@@ -717,10 +732,15 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 	if strings.Contains(strings.ToUpper(job.Query), "ADD FULLTEXT INDEX") {
 		job.Type = filter.ActionAddFullTextIndex
 	}
+	// CREATE HYBRID INDEX i_idx ON t(b, c, d, e, g) PARAMETER
+	// TODO: remove this after CREATE HYBRID INDEX has a dedicated action type in tidb repo
+	if strings.HasPrefix(strings.TrimSpace(strings.ToUpper(job.Query)), "CREATE HYBRID INDEX") {
+		job.Type = filter.ActionCreateHybridIndex
+	}
 
 	handler, ok := allDDLHandlers[job.Type]
 	if !ok {
-		log.Error("unknown ddl type, ignore it", zap.Any("ddlType", job.Type), zap.String("query", job.Query))
+		log.Warn("unknown ddl type, ignore it", zap.Any("ddlType", job.Type), zap.String("query", job.Query))
 		return nil
 	}
 

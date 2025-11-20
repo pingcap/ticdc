@@ -32,16 +32,43 @@ SINK_TYPE=$1
 CDC_COUNT=3
 DB_COUNT=4
 
+function kill_process_by_ports() {
+	process_pattern=$1
+	shift
+	port_pattern=""
+	for port in "$@"; do
+		if [ -z "$port" ]; then
+			continue
+		fi
+		if [ -z "$port_pattern" ]; then
+			port_pattern="${port}"
+		else
+			port_pattern="${port_pattern}|${port}"
+		fi
+	done
+	if [ -z "$port_pattern" ]; then
+		return
+	fi
+	ps aux | grep "$process_pattern" | grep -E "$port_pattern" | awk '{print $2}' | xargs -I{} kill -9 {} || true
+}
+
 function kill_pd() {
-	ps aux | grep pd-server | grep "$WORK_DIR" | awk '{print $2}' | xargs -I{} kill -9 {} || true
+	kill_process_by_ports "[p]d-server" \
+		"${UP_PD_PORT_1}" \
+		"${UP_PD_PORT_2}" \
+		"${UP_PD_PORT_3}"
 }
 
 function kill_tikv() {
-	ps aux | grep tikv-server | grep "$WORK_DIR" | awk '{print $2}' | xargs -I{} kill -9 {} || true
+	kill_process_by_ports "[t]ikv-server" \
+		"${UP_TIKV_PORT_1}" \
+		"${UP_TIKV_PORT_2}" \
+		"${UP_TIKV_PORT_3}"
 }
 
 function kill_tidb() {
-	ps aux | grep tidb-server | grep "$WORK_DIR" | awk '{print $2}' | xargs -I{} kill -9 {} || true
+	kill_process_by_ports "[t]idb-server" \
+		"${UP_TIDB_PORT}"
 }
 
 function run_normal_case_and_unavailable_pd() {
@@ -255,6 +282,9 @@ function run_case_with_failpoint() {
 	SINK_URI="mysql://root@127.0.0.1:3306/?max-txn-row=1"
 	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --changefeed-id="test-1" --config="$CUR/$config_path"
 
+	run_sql "USE TEST;Create table t1(a int primary key, b int);insert into t1 values(1,2);insert into t1 values(2,3);"
+	check_table_exists "test.t1" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+
 	sleep 20 # wait enough time for pass checkpoint-check-interval
 	synced_status=$(curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/test-1/synced?keyspace=$KEYSPACE_NAME)
 	status=$(echo $synced_status | jq '.synced')
@@ -263,10 +293,7 @@ function run_case_with_failpoint() {
 		exit 1
 	fi
 	info=$(echo $synced_status | jq -r '.info')
-	target_message="Please check whether PD is online and TiKV Regions are all available. \
-If PD is offline or some TiKV regions are not available, it means that the data syncing process is complete. \
-If the gap is large, such as a few minutes, it means that some regions in TiKV are unavailable. \
-Otherwise, if the gap is small and PD is online, it means the data syncing is incomplete, so please wait"
+	target_message="The data syncing is not finished, please wait"
 	if [ "$info" != "$target_message" ]; then
 		echo "synced status info is not correct"
 		exit 1
@@ -278,7 +305,7 @@ Otherwise, if the gap is small and PD is online, it means the data syncing is in
 	stop_tidb_cluster
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 run_normal_case_and_unavailable_pd "conf/changefeed.toml"
 run_case_with_unavailable_tikv "conf/changefeed.toml"
 run_case_with_unavailable_tidb "conf/changefeed.toml"

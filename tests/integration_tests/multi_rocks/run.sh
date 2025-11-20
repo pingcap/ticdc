@@ -9,6 +9,11 @@ CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
 function run() {
+	# TODO tenfyzhong 2025-10-27 15:36:10 need to support next-gen
+	if [ "$NEXT_GEN" = 1 ]; then
+		exit 0
+	fi
+
 	# TODO(dongmen): enable pulsar in the future.
 	if [ "$SINK_TYPE" == "pulsar" ]; then
 		exit 0
@@ -56,7 +61,7 @@ function run() {
 	cleanup_process $CDC_BINARY
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 run $*
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

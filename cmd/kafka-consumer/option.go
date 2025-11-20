@@ -54,6 +54,8 @@ type option struct {
 
 	// upstreamTiDBDSN is the dsn of the upstream TiDB cluster
 	upstreamTiDBDSN string
+
+	enableTableAcrossNodes bool
 }
 
 func newOption() *option {
@@ -158,6 +160,7 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) {
 	if protocol == config.ProtocolAvro {
 		o.codecConfig.AvroEnableWatermark = true
 	}
+	o.enableTableAcrossNodes = replicaConfig.Scheduler.EnableTableAcrossNodes
 
 	log.Info("consumer option adjusted",
 		zap.String("address", strings.Join(o.address, ",")),

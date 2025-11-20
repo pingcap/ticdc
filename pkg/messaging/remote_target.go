@@ -667,13 +667,14 @@ func (s *remoteMessageTarget) newMessage(msg ...*TargetMessage) *proto.Message {
 			// Use buffer for marshaling
 			buf, err := im.Marshal()
 			if err != nil {
-				log.Panic("marshal message failed ",
+				log.Warn("marshal message failed ",
 					zap.Any("msg", im),
 					zap.Error(err),
 					zap.Stringer("localID", s.messageCenterID),
 					zap.String("localAddr", s.localAddr),
 					zap.Stringer("remoteID", s.targetId),
 					zap.String("remoteAddr", s.targetAddr))
+				continue
 			}
 			msgBytes = append(msgBytes, buf)
 		}

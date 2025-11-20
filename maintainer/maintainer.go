@@ -180,16 +180,20 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	}
 
 	var (
-		keyspace = cfID.Keyspace()
-		name     = cfID.Name()
+		keyspaceName = cfID.Keyspace()
+		name         = cfID.Name()
 	)
+	keyspaceMeta := common.KeyspaceMeta{
+		ID:   keyspaceID,
+		Name: keyspaceName,
+	}
 	m := &Maintainer{
 		id:                cfID,
 		selfNode:          selfNode,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		startCheckpointTs: checkpointTs,
 		controller: NewController(cfID, checkpointTs, taskScheduler,
-			info.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), keyspaceID, enableRedo),
+			info.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), keyspaceMeta, enableRedo),
 		mc:                    mc,
 		removed:               atomic.NewBool(false),
 		nodeManager:           nodeManager,
@@ -204,19 +208,19 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		newChangefeed:         newChangefeed,
 		enableRedo:            enableRedo,
 
-		checkpointTsGauge:    metrics.MaintainerCheckpointTsGauge.WithLabelValues(keyspace, name),
-		checkpointTsLagGauge: metrics.MaintainerCheckpointTsLagGauge.WithLabelValues(keyspace, name),
-		resolvedTsGauge:      metrics.MaintainerResolvedTsGauge.WithLabelValues(keyspace, name),
-		resolvedTsLagGauge:   metrics.MaintainerResolvedTsLagGauge.WithLabelValues(keyspace, name),
+		checkpointTsGauge:    metrics.MaintainerCheckpointTsGauge.WithLabelValues(keyspaceName, name),
+		checkpointTsLagGauge: metrics.MaintainerCheckpointTsLagGauge.WithLabelValues(keyspaceName, name),
+		resolvedTsGauge:      metrics.MaintainerResolvedTsGauge.WithLabelValues(keyspaceName, name),
+		resolvedTsLagGauge:   metrics.MaintainerResolvedTsLagGauge.WithLabelValues(keyspaceName, name),
 
-		scheduledTaskGauge:  metrics.ScheduleTaskGauge.WithLabelValues(keyspace, name, "default"),
-		spanCountGauge:      metrics.SpanCountGauge.WithLabelValues(keyspace, name, "default"),
-		tableCountGauge:     metrics.TableCountGauge.WithLabelValues(keyspace, name, "default"),
-		handleEventDuration: metrics.MaintainerHandleEventDuration.WithLabelValues(keyspace, name),
+		scheduledTaskGauge:  metrics.ScheduleTaskGauge.WithLabelValues(keyspaceName, name, "default"),
+		spanCountGauge:      metrics.SpanCountGauge.WithLabelValues(keyspaceName, name, "default"),
+		tableCountGauge:     metrics.TableCountGauge.WithLabelValues(keyspaceName, name, "default"),
+		handleEventDuration: metrics.MaintainerHandleEventDuration.WithLabelValues(keyspaceName, name),
 
-		redoScheduledTaskGauge: metrics.ScheduleTaskGauge.WithLabelValues(keyspace, name, "redo"),
-		redoSpanCountGauge:     metrics.SpanCountGauge.WithLabelValues(keyspace, name, "redo"),
-		redoTableCountGauge:    metrics.TableCountGauge.WithLabelValues(keyspace, name, "redo"),
+		redoScheduledTaskGauge: metrics.ScheduleTaskGauge.WithLabelValues(keyspaceName, name, "redo"),
+		redoSpanCountGauge:     metrics.SpanCountGauge.WithLabelValues(keyspaceName, name, "redo"),
+		redoTableCountGauge:    metrics.TableCountGauge.WithLabelValues(keyspaceName, name, "redo"),
 	}
 	m.nodeChanged.changed = false
 	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
@@ -236,7 +240,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		m.createBootstrapMessageFactory(),
 	)
 
-	metrics.MaintainerGauge.WithLabelValues(keyspace, name).Inc()
+	metrics.MaintainerGauge.WithLabelValues(keyspaceName, name).Inc()
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 
@@ -336,8 +340,8 @@ func (m *Maintainer) checkNodeChanged() {
 // Close cleanup resources
 func (m *Maintainer) Close() {
 	m.cancel()
-	m.cleanupMetrics()
 	m.controller.Stop()
+	m.cleanupMetrics()
 }
 
 func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
@@ -462,9 +466,10 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 		req := msg.Message[0].(*heartbeatpb.CheckpointTsMessage)
 		m.onCheckpointTsPersisted(req)
 	default:
-		log.Panic("unexpected message type",
+		log.Warn("unknown message type, ignore it",
 			zap.String("changefeed", m.id.Name()),
-			zap.String("messageType", msg.Type.String()))
+			zap.String("type", msg.Type.String()),
+			zap.Any("message", msg.Message))
 	}
 }
 
@@ -541,6 +546,13 @@ func (m *Maintainer) handleRedoMessage(ctx context.Context) {
 			updateCheckpointTs := true
 
 			newWatermark := heartbeatpb.NewMaxWatermark()
+			// Calculate operator and barrier constraints first to ensure atomicity.
+			// This prevents a race condition where checkpointTsByCapture contains old heartbeat data
+			// while operators have completed based on newer heartbeat processing.
+			// For more detailed comments, please refer to `calculateNewCheckpointTs`.
+			minRedoCheckpointTsForScheduler := m.controller.GetMinRedoCheckpointTs(newWatermark.CheckpointTs)
+			minRedoCheckpointTsForBarrier := m.controller.redoBarrier.GetMinBlockedCheckpointTsForNewTables(newWatermark.CheckpointTs)
+
 			// if there is no tables, there must be a table trigger dispatcher
 			for id := range m.bootstrapper.GetAllNodeIDs() {
 				// maintainer node has the table trigger dispatcher
@@ -559,8 +571,6 @@ func (m *Maintainer) handleRedoMessage(ctx context.Context) {
 				newWatermark.UpdateMin(watermark)
 			}
 
-			minRedoCheckpointTsForScheduler := m.controller.GetMinRedoCheckpointTs(newWatermark.CheckpointTs)
-			minRedoCheckpointTsForBarrier := m.controller.redoBarrier.GetMinBlockedCheckpointTsForNewTables(newWatermark.CheckpointTs)
 			newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minRedoCheckpointTsForScheduler, ResolvedTs: minRedoCheckpointTsForScheduler})
 			newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minRedoCheckpointTsForBarrier, ResolvedTs: minRedoCheckpointTsForBarrier})
 
@@ -605,7 +615,6 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			updateCheckpointTs := true
 			if !m.bootstrapped.Load() {
 				log.Warn("can not advance checkpointTs since not bootstrapped",
 					zap.String("changefeed", m.id.Name()),
@@ -614,47 +623,89 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 				break
 			}
 
-			newWatermark := heartbeatpb.NewMaxWatermark()
-			// if there is no tables, there must be a table trigger dispatcher
-			for id := range m.bootstrapper.GetAllNodeIDs() {
-				// maintainer node has the table trigger dispatcher
-				if id != m.selfNode.ID && m.controller.spanController.GetTaskSizeByNodeID(id) <= 0 {
-					continue
-				}
-				// node level watermark reported, ignore this round
-				watermark, ok := m.checkpointTsByCapture.Get(id)
-				if !ok {
-					updateCheckpointTs = false
-					log.Warn("checkpointTs can not be advanced, since missing capture heartbeat",
-						zap.String("changefeed", m.id.Name()),
-						zap.Any("node", id),
-						zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
-						zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs))
-					continue
-				}
-				newWatermark.UpdateMin(watermark)
+			// first check the online/offline nodes
+			// we need to check node changed before calculating checkpointTs
+			// to avoid the case when a node is offline, the node's heartbeat is missing
+			// while the span in this node still not set to absent, which may cause
+			// the checkpointTs be advanced incorrectly
+			m.checkNodeChanged()
+
+			// CRITICAL SECTION: Calculate checkpointTs with proper ordering to prevent race condition
+			newWatermark, canUpdate := m.calculateNewCheckpointTs()
+			if canUpdate {
+				m.setWatermark(*newWatermark)
+				m.updateMetrics()
 			}
-
-			if !updateCheckpointTs {
-				break
-			}
-
-			// the min checkpointTs is taken from the minimum of three sources: dispatcher reported checkpointTs,
-			// minimum checkpointTs of new tables undergoing DDL, and checkpointTs of tasks in scheduling.
-			minCheckpointTsForScheduler := m.controller.GetMinCheckpointTs(newWatermark.CheckpointTs)
-			minCheckpointTsForBarrier := m.controller.barrier.GetMinBlockedCheckpointTsForNewTables(newWatermark.CheckpointTs)
-			newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForBarrier, ResolvedTs: minCheckpointTsForBarrier})
-			newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForScheduler, ResolvedTs: minCheckpointTsForScheduler})
-
-			log.Debug("can advance checkpointTs",
-				zap.String("changefeed", m.id.Name()),
-				zap.Uint64("newCheckpointTs", newWatermark.CheckpointTs),
-				zap.Uint64("newResolvedTs", newWatermark.ResolvedTs),
-			)
-			m.setWatermark(*newWatermark)
-			m.updateMetrics()
 		}
 	}
+}
+
+// calculateNewCheckpointTs calculates the new checkpoint with proper ordering to prevent race condition.
+//
+// Race Condition Problem:
+// 1. DDL creates operator_add for new dispatcher (startTs=150)
+// 2. Old heartbeat (calculated before dispatcher creation) sent with checkpointTs=200
+// 3. New heartbeat (with new dispatcher status) sent with checkpointTs=200
+// 4. onHeartBeatRequest processes old heartbeat first -> updates checkpointTsByCapture to 200
+// 5. onHeartBeatRequest processes new heartbeat -> operator_add completes -> no longer blocks
+// 6. calCheckpointTs uses checkpointTsByCapture=200 but operator no longer blocks
+// 7. RESULT: checkpointTs advances to 200 > newDispatcherStartTs=150 -> DATA LOSS on crash
+//
+// Solution: Two-part atomic fix in onHeartBeatRequest + calculateNewCheckpointTs:
+//
+// Part 1 (onHeartBeatRequest): Update checkpointTsByCapture BEFORE processing operator status
+//   - This ensures when operator completes, checkpointTsByCapture contains complete heartbeat
+//   - Eliminates the window where old heartbeat data exists with completed operator
+//
+// Part 2 (calculateNewCheckpointTs): Calculate operator constraints first, then apply heartbeat constraints
+//   - Operator constraints represent current safe limits regardless of heartbeat timing
+//   - Heartbeat constraints can only further restrict, never relax operator limits
+//
+// Returns: (newWatermark, canUpdate)
+func (m *Maintainer) calculateNewCheckpointTs() (*heartbeatpb.Watermark, bool) {
+	// Step 1: Get current operator and barrier constraints first
+	newWatermark := heartbeatpb.NewMaxWatermark()
+	minCheckpointTsForScheduler := m.controller.GetMinCheckpointTs(newWatermark.CheckpointTs)
+	minCheckpointTsForBarrier := m.controller.barrier.GetMinBlockedCheckpointTsForNewTables(newWatermark.CheckpointTs)
+
+	// Step 2: Apply heartbeat constraints from all nodes
+	updateCheckpointTs := true
+	for id := range m.bootstrapper.GetAllNodeIDs() {
+		// maintainer node has the table trigger dispatcher
+		if id != m.selfNode.ID && m.controller.spanController.GetTaskSizeByNodeID(id) <= 0 {
+			continue
+		}
+		// node level watermark reported, ignore this round
+		watermark, ok := m.checkpointTsByCapture.Get(id)
+		if !ok {
+			updateCheckpointTs = false
+			log.Warn("checkpointTs can not be advanced, since missing capture heartbeat",
+				zap.String("changefeed", m.id.Name()),
+				zap.Any("node", id),
+				zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
+				zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs))
+			continue
+		}
+		// Apply heartbeat constraint - can only make checkpointTs smaller (safer)
+		newWatermark.UpdateMin(watermark)
+	}
+
+	if !updateCheckpointTs {
+		return nil, false
+	}
+
+	newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForBarrier, ResolvedTs: minCheckpointTsForBarrier})
+	newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForScheduler, ResolvedTs: minCheckpointTsForScheduler})
+
+	log.Debug("can advance checkpointTs",
+		zap.String("changefeed", m.id.Name()),
+		zap.Uint64("newCheckpointTs", newWatermark.CheckpointTs),
+		zap.Uint64("newResolvedTs", newWatermark.ResolvedTs),
+		zap.Uint64("minCheckpointTsForScheduler", minCheckpointTsForScheduler),
+		zap.Uint64("minCheckpointTsForBarrier", minCheckpointTsForBarrier),
+	)
+
+	return newWatermark, true
 }
 
 func (m *Maintainer) updateMetrics() {
@@ -691,11 +742,17 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 		return
 	}
 	req := msg.Message[0].(*heartbeatpb.HeartBeatRequest)
-	// TODO:add comment and test to ensure the operator will get first before calculate checkpointTs
-	m.controller.HandleStatus(msg.From, req.Statuses)
+
+	// ATOMIC CHECKPOINT UPDATE: Part 1 of race condition fix
+	// Update checkpointTsByCapture BEFORE processing operator status to ensure atomicity
+	// This works together with calCheckpointTs to prevent incorrect checkpoint advancement
 	if req.Watermark != nil {
+		// The sequence increases when a dispatcher status changes, so accept the new watermark
+		// even if the reported checkpoint regresses (new dispatcher might replay from
+		// an earlier startTs). For the same sequence we still keep checkpoint monotonic
+		// to ignore reordered or duplicated heartbeats.
 		old, ok := m.checkpointTsByCapture.Get(msg.From)
-		if !ok || (req.Watermark.Seq >= old.Seq && req.Watermark.CheckpointTs >= old.CheckpointTs) {
+		if !ok || req.Watermark.Seq > old.Seq || (req.Watermark.Seq == old.Seq && req.Watermark.CheckpointTs > old.CheckpointTs) {
 			m.checkpointTsByCapture.Set(msg.From, *req.Watermark)
 		}
 		// Update last synced ts from all dispatchers.
@@ -707,9 +764,12 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 		}
 		m.watermark.mu.Unlock()
 	}
+
 	if req.RedoWatermark != nil {
+		// Apply the same rule for redo checkpoint: newer sequence wins even if checkpoint
+		// moves backwards, while identical sequence updates must be strictly forward only.
 		old, ok := m.redoTsByCapture.Get(msg.From)
-		if !ok || (req.RedoWatermark.Seq >= old.Seq && req.RedoWatermark.CheckpointTs >= old.CheckpointTs) {
+		if !ok || req.RedoWatermark.Seq > old.Seq || (req.RedoWatermark.Seq == old.Seq && req.RedoWatermark.CheckpointTs > old.CheckpointTs) {
 			m.redoTsByCapture.Set(msg.From, *req.RedoWatermark)
 		}
 	}
@@ -720,6 +780,12 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 			zap.String("error", req.Err.Message))
 		m.onError(msg.From, req.Err)
 	}
+
+	// ATOMIC CHECKPOINT UPDATE: Part 2 of race condition fix
+	// Process operator status updates AFTER checkpointTsByCapture is updated
+	// This ensures when operators complete, checkpointTsByCapture already contains the complete heartbeat
+	// Works with calCheckpointTs constraint ordering to prevent checkpoint advancing past new dispatcher startTs
+	m.controller.HandleStatus(msg.From, req.Statuses)
 }
 
 func (m *Maintainer) onError(from node.ID, err *heartbeatpb.RunningError) {
@@ -740,14 +806,14 @@ func (m *Maintainer) onBlockStateRequest(msg *messaging.TargetMessage) {
 	}
 	req := msg.Message[0].(*heartbeatpb.BlockStatusRequest)
 
-	var ackMsg *messaging.TargetMessage
+	var ackMsg []*messaging.TargetMessage
 	if common.IsDefaultMode(req.Mode) {
 		ackMsg = m.controller.barrier.HandleStatus(msg.From, req)
 	} else {
 		ackMsg = m.controller.redoBarrier.HandleStatus(msg.From, req)
 	}
 	if ackMsg != nil {
-		m.sendMessages([]*messaging.TargetMessage{ackMsg})
+		m.sendMessages(ackMsg)
 	}
 }
 
@@ -822,7 +888,11 @@ func newDDLSpan(keyspaceID uint32, cfID common.ChangeFeedID, checkpointTs uint64
 }
 
 func (m *Maintainer) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) {
-	if cachedResp == nil {
+	// calCheckpointTs() skips advancing checkpoint when bootstrapped is false, so it won't call
+	// onNodeChanged() before FinishBootstrap succeeds. All other callers of onNodeChanged() and
+	// onMaintainerBootstrapResponse() run in the same event loop goroutine as onRemoveMaintainer(),
+	// hence guarding with m.removing is sufficient to avoid accessing a removed DDL span leading to panic.
+	if cachedResp == nil || m.removing.Load() {
 		return
 	}
 	isMySQLSinkCompatible, err := isMysqlCompatible(m.info.SinkURI)
@@ -973,6 +1043,7 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapMessa
 			TableTriggerEventDispatcherId:     nil,
 			RedoTableTriggerEventDispatcherId: nil,
 			IsNewChangefeed:                   false,
+			KeyspaceId:                        m.info.KeyspaceID,
 		}
 
 		// only send dispatcher id to dispatcher manager on the same node

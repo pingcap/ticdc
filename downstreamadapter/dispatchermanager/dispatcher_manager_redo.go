@@ -121,8 +121,8 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 	// If the redo dispatcher’s start-ts is less than that of the common dispatcher,
 	// we will encounter a checkpoint-ts greater than the resolved-ts in the redo metadata.
 	// This results in the redo metadata recording an incorrect log, which can cause a panic if no additional redo metadata logs are flushed.
-	// Therefore, we must ensure that the start-ts remains consistent with the common dispatcher by querying the start-ts from the MySQL sink.
-	newStartTsList, _, err := e.getStartTsFromMysqlSink(tableIds, startTsList, removeDDLTs)
+	// Therefore, we must ensure that the start-ts remains consistent with the common dispatcher by querying the recovery info from the MySQL sink.
+	newStartTsList, _, _, err := e.getTableRecoveryInfoFromMysqlSink(tableIds, startTsList, removeDDLTs)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -134,7 +134,7 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 			uint64(newStartTsList[idx]),
 			schemaIds[idx],
 			e.redoSchemaIDToDispatchers,
-			false, // skipSyncpointSameAsStartTs
+			false, // skipSyncpointAtStartTs
 			e.redoSink,
 			e.sharedInfo,
 		)
@@ -196,7 +196,7 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 		fakeStartTs, // real startTs will be calculated later.
 		schemaID,
 		e.redoSchemaIDToDispatchers,
-		false, // skipSyncpointSameAsStartTs
+		false, // skipSyncpointAtStartTs
 		e.redoSink,
 		e.sharedInfo,
 	)

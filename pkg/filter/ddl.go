@@ -24,6 +24,10 @@ import (
 // TODO: remove this after ADD FULLTEXT INDEX has a dedicated action type in tidb repo
 const ActionAddFullTextIndex = timodel.ActionType(230)
 
+// CREATE HYBRID INDEX i_idx ON t(b, c, d, e, g) PARAMETER
+// TODO: remove this after CREATE HYBRID INDEX has a dedicated action type in tidb repo
+const ActionCreateHybridIndex = timodel.ActionType(231)
+
 // ddlWhiteListMap is a map of all DDL types that can be applied to cdc's schema storage.
 var ddlWhiteListMap = map[timodel.ActionType]bf.EventType{
 	// schema related DDLs
@@ -86,7 +90,8 @@ var ddlWhiteListMap = map[timodel.ActionType]bf.EventType{
 	timodel.ActionAddColumns:  bf.AddColumn,
 	timodel.ActionDropColumns: bf.DropColumn,
 
-	ActionAddFullTextIndex: bf.AddFullTextIndex,
+	ActionAddFullTextIndex:  bf.AddFullTextIndex,
+	ActionCreateHybridIndex: bf.CreateHybridIndex,
 }
 
 // singleTableDDLs should only affect one table.

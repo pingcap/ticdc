@@ -71,8 +71,8 @@ var (
 	metricKvIsBusyCounter             = metrics.EventFeedErrorCounter.WithLabelValues("KvIsBusy")
 	metricKvCongestedCounter          = metrics.EventFeedErrorCounter.WithLabelValues("KvCongested")
 
-	metricSubscriptionClientDSChannelSize     = metrics.DynamicStreamEventChanSize.WithLabelValues("event-store", "default")
-	metricSubscriptionClientDSPendingQueueLen = metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-store", "default")
+	metricSubscriptionClientDSChannelSize     = metrics.DynamicStreamEventChanSize.WithLabelValues("event-store")
+	metricSubscriptionClientDSPendingQueueLen = metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-store")
 )
 
 // To generate an ID for a new subscription.
@@ -365,7 +365,7 @@ func (s *subscriptionClient) Subscribe(
 
 	select {
 	case <-s.ctx.Done():
-		log.Error("subscribes span failed, the subscription client has closed")
+		log.Warn("subscribes span failed, the subscription client has closed")
 	case s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: rt, filterLoop: bdrMode, priority: TaskLowPrior}:
 		log.Info("subscribes span done", zap.Uint64("subscriptionID", uint64(subID)),
 			zap.Int64("tableID", span.TableID), zap.Uint64("startTs", startTs),
@@ -424,7 +424,7 @@ func (s *subscriptionClient) handleDSFeedBack(ctx context.Context) error {
 				s.paused.Store(false)
 				s.cond.Broadcast()
 				log.Info("subscription client resume push region event")
-			case dynstream.PausePath, dynstream.ResumePath:
+			case dynstream.ReleasePath, dynstream.ResumePath:
 				// Ignore it, because it is no need to pause and resume a path in puller.
 			}
 		}

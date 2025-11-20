@@ -112,12 +112,12 @@ func (d *txnDecoder) canalJSONMessage2RowChange() *commonEvent.DMLEvent {
 	result := new(commonEvent.DMLEvent)
 	result.Length++                    // todo: set this field correctly
 	result.StartTs = msg.getCommitTs() // todo: how to set this correctly?
+	result.CommitTs = msg.getCommitTs()
 	result.TableInfo = tableInfo
 	chk := chunk.NewChunkFromPoolWithCapacity(tableInfo.GetFieldSlice(), chunk.InitialCapacity)
 	result.AddPostFlushFunc(func() {
 		chk.Destroy(chunk.InitialCapacity, tableInfo.GetFieldSlice())
 	})
-	result.CommitTs = msg.getCommitTs()
 
 	columns := tableInfo.GetColumns()
 	switch msg.eventType() {
@@ -145,8 +145,6 @@ func (d *txnDecoder) canalJSONMessage2RowChange() *commonEvent.DMLEvent {
 		log.Panic("unknown event type for the DML event", zap.Any("eventType", msg.eventType()))
 	}
 	result.Rows = chk
-	// todo: may fix this later.
-	result.PhysicalTableID = result.TableInfo.TableName.TableID
 	return result
 }
 
@@ -164,8 +162,6 @@ func newTableInfo(msg canalJSONMessageInterface) *commonType.TableInfo {
 	schemaName := *msg.getSchema()
 	tableName := *msg.getTable()
 	tableInfo := new(timodel.TableInfo)
-	tableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
-	tableIDAllocator.AddBlockTableID(schemaName, tableName, tableInfo.ID)
 	tableInfo.Name = ast.NewCIStr(tableName)
 
 	columns := newTiColumns(msg)

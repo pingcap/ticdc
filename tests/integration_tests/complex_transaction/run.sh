@@ -24,11 +24,10 @@ function prepare() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "cdc2" --addr "127.0.0.1:8301"
 
 	# Create changefeed
-	run_cdc_cli changefeed create --sink-uri="mysql://root@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/"
+	cdc_cli_changefeed create --sink-uri="mysql://root@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/"
 }
 
-trap stop_tidb_cluster EXIT
-
+trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 # Only support MySQL sink for complex transaction test
 if [ "$SINK_TYPE" == "mysql" ]; then
 	prepare $*

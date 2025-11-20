@@ -161,13 +161,17 @@ func (d *dispatcherStat) clear() {
 
 // registerTo register the dispatcher to the specified event service.
 func (d *dispatcherStat) registerTo(serverID node.ID) {
-	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRegisterRequest(d.eventCollector.getLocalServerID().String(), false))
+	// `onlyReuse` is used to control the register behavior at logservice side
+	// it should be set to `false` when register to a local event service,
+	// and set to `true` when register to a remote event service.
+	onlyReuse := serverID != d.eventCollector.getLocalServerID()
+	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRegisterRequest(d.eventCollector.getLocalServerID().String(), onlyReuse))
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
 // commitReady is used to notify the event service to start sending events.
 func (d *dispatcherStat) commitReady(serverID node.ID) {
-	d.doReset(serverID, d.target.GetStartTs())
+	d.doReset(serverID, d.getResetTs())
 }
 
 // reset is used to reset the dispatcher to the specified commitTs,
@@ -589,13 +593,15 @@ func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
 			zap.Stringer("dispatcher", d.getDispatcherID()),
 			zap.Any("event", event))
 	}
+
 	if !d.isFromCurrentEpoch(event) {
-		log.Info("receive a drop event from a stale epoch, ignore it",
+		log.Debug("receive a drop event from a stale epoch, ignore it",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
 			zap.Any("event", event.Event))
 		return
 	}
+
 	log.Info("received a dropEvent, need to reset the dispatcher",
 		zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 		zap.Stringer("dispatcher", d.getDispatcherID()),
@@ -659,7 +665,7 @@ func (d *dispatcherStat) newDispatcherRegisterRequest(serverId string, onlyReuse
 			FilterConfig:         d.target.GetFilterConfig(),
 			EnableSyncPoint:      d.target.EnableSyncPoint(),
 			SyncPointInterval:    uint64(syncPointInterval.Seconds()),
-			SyncPointTs:          syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, d.target.GetSkipSyncpointSameAsStartTs()),
+			SyncPointTs:          syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, d.target.GetSkipSyncpointAtStartTs()),
 			OnlyReuse:            onlyReuse,
 			BdrMode:              d.target.GetBDRMode(),
 			Mode:                 d.target.GetMode(),
@@ -678,7 +684,7 @@ func (d *dispatcherStat) newDispatcherResetRequest(serverId string, resetTs uint
 	// so we just take care of the case that resetTs is same as startTs
 	skipSyncpointSameAsResetTs := false
 	if resetTs == d.target.GetStartTs() {
-		skipSyncpointSameAsResetTs = d.target.GetSkipSyncpointSameAsStartTs()
+		skipSyncpointSameAsResetTs = d.target.GetSkipSyncpointAtStartTs()
 	}
 	return &messaging.DispatcherRequest{
 		DispatcherRequest: &eventpb.DispatcherRequest{

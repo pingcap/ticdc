@@ -16,6 +16,7 @@ package pdutil
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -93,7 +94,7 @@ const (
 )
 
 const (
-	defaultMaxRetry       = 3
+	defaultMaxRetry       = 5
 	defaultRequestTimeout = 5 * time.Second
 )
 
@@ -139,9 +140,15 @@ func newPdHttpClient(pdClient pd.Client, conf *security.Credential) (pdhttp.Clie
 	discovery := pdClient.GetServiceDiscovery()
 	pdhttpOpts := make([]pdhttp.ClientOption, 0)
 
-	tlsConf, err := conf.ToTLSConfigWithVerify()
-	if err != nil {
-		return nil, errors.Trace(err)
+	var (
+		tlsConf *tls.Config
+		err     error
+	)
+	if conf != nil {
+		tlsConf, err = conf.ToTLSConfigWithVerify()
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
 	}
 
 	if tlsConf != nil {
@@ -172,13 +179,16 @@ func (pc *pdAPIClient) UpdateMetaLabel(ctx context.Context) error {
 
 		log.Info("Succeed to add meta region label to PD")
 		return nil
-	}, retry.WithMaxTries(defaultMaxRetry), retry.WithIsRetryableErr(func(err error) bool {
-		switch errors.Cause(err) {
-		case context.Canceled:
-			return false
-		}
-		return true
-	}))
+	}, retry.WithMaxTries(defaultMaxRetry),
+		retry.WithBackoffBaseDelay(200),
+		retry.WithBackoffMaxDelay(4000),
+		retry.WithIsRetryableErr(func(err error) bool {
+			switch errors.Cause(err) {
+			case context.Canceled:
+				return false
+			}
+			return true
+		}))
 	return err
 }
 

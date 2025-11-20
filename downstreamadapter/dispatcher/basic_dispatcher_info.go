@@ -54,6 +54,11 @@ type SharedInfo struct {
 	// blockStatusesChan use to collector block status of ddl/sync point event to Maintainer
 	// shared by the event dispatcher manager
 	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus
+
+	// blockExecutor is used to execute block events such as DDL and sync point events asynchronously
+	// to avoid callback() called in handleEvents, causing deadlock in ds
+	blockExecutor *blockEventExecutor
+
 	// errCh is used to collect the errors that need to report to maintainer
 	// such as error of flush ddl events
 	errCh chan error
@@ -84,6 +89,7 @@ func NewSharedInfo(
 		enableSplittableCheck: enableSplittableCheck,
 		statusesChan:          statusesChan,
 		blockStatusesChan:     blockStatusesChan,
+		blockExecutor:         newBlockEventExecutor(),
 		errCh:                 errCh,
 	}
 }
@@ -148,12 +154,20 @@ func (d *BasicDispatcher) GetStartTs() uint64 {
 	return d.startTs
 }
 
-func (d *BasicDispatcher) SetSkipSyncpointSameAsStartTs(skipSyncpointSameAsStartTs bool) {
-	d.skipSyncpointSameAsStartTs = skipSyncpointSameAsStartTs
+func (d *BasicDispatcher) SetSkipSyncpointAtStartTs(skipSyncpointAtStartTs bool) {
+	d.skipSyncpointAtStartTs = skipSyncpointAtStartTs
 }
 
-func (d *BasicDispatcher) GetSkipSyncpointSameAsStartTs() bool {
-	return d.skipSyncpointSameAsStartTs
+func (d *BasicDispatcher) GetSkipSyncpointAtStartTs() bool {
+	return d.skipSyncpointAtStartTs
+}
+
+func (d *BasicDispatcher) SetSkipDMLAsStartTs(skipDMLAsStartTs bool) {
+	d.skipDMLAsStartTs = skipDMLAsStartTs
+}
+
+func (d *BasicDispatcher) GetSkipDMLAsStartTs() bool {
+	return d.skipDMLAsStartTs
 }
 
 func (d *BasicDispatcher) GetSyncPointInterval() time.Duration {
@@ -204,4 +218,14 @@ func (s *SharedInfo) GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStat
 
 func (s *SharedInfo) GetErrCh() chan error {
 	return s.errCh
+}
+
+func (s *SharedInfo) GetBlockEventExecutor() *blockEventExecutor {
+	return s.blockExecutor
+}
+
+func (s *SharedInfo) Close() {
+	if s.blockExecutor != nil {
+		s.blockExecutor.Close()
+	}
 }

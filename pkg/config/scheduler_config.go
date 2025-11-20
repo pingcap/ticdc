@@ -18,7 +18,14 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/pingcap/log"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"go.uber.org/zap"
+)
+
+const (
+	// MinWriteKeyThreshold is the minimum allowed value for WriteKeyThreshold
+	MinWriteKeyThreshold = 10485760 // 10MB
 )
 
 // ChangefeedSchedulerConfig is per changefeed scheduler settings.
@@ -33,7 +40,7 @@ type ChangefeedSchedulerConfig struct {
 	// WriteKeyThreshold is the written keys threshold of splitting a table.
 	WriteKeyThreshold int `toml:"write-key-threshold" json:"write-key-threshold"`
 	// SchedulingTaskCountPerNode is the upper limit for scheduling tasks each node.
-	SchedulingTaskCountPerNode int `toml:"scheduling-task-count-per-node" json:"scheduling-task-per-node"`
+	SchedulingTaskCountPerNode int `toml:"scheduling-task-count-per-node" json:"scheduling-task-count-per-node"`
 	// EnableSplittableCheck controls whether to check if a table is splittable before splitting.
 	// If true, only tables with primary key and no unique key can be split.
 	// If false, all tables can be split without checking.
@@ -52,6 +59,34 @@ type ChangefeedSchedulerConfig struct {
 	MaxTrafficPercentage float64 `toml:"max-traffic-percentage" json:"max-traffic-percentage"`
 }
 
+// FillMissingWithDefaults copies default values into invalid or zero fields.
+func (c *ChangefeedSchedulerConfig) FillMissingWithDefaults(defaultCfg *ChangefeedSchedulerConfig) {
+	if c == nil || defaultCfg == nil {
+		return
+	}
+	if c.RegionThreshold <= 0 {
+		c.RegionThreshold = defaultCfg.RegionThreshold
+	}
+	if c.RegionCountPerSpan <= 0 {
+		c.RegionCountPerSpan = defaultCfg.RegionCountPerSpan
+	}
+	if c.WriteKeyThreshold < 0 {
+		c.WriteKeyThreshold = defaultCfg.WriteKeyThreshold
+	}
+	if c.SchedulingTaskCountPerNode <= 0 {
+		c.SchedulingTaskCountPerNode = defaultCfg.SchedulingTaskCountPerNode
+	}
+	if c.BalanceScoreThreshold <= 0 {
+		c.BalanceScoreThreshold = defaultCfg.BalanceScoreThreshold
+	}
+	if c.MinTrafficPercentage <= 0 || c.MinTrafficPercentage >= 1 {
+		c.MinTrafficPercentage = defaultCfg.MinTrafficPercentage
+	}
+	if c.MaxTrafficPercentage <= 1 {
+		c.MaxTrafficPercentage = defaultCfg.MaxTrafficPercentage
+	}
+}
+
 // Validate validates the config.
 func (c *ChangefeedSchedulerConfig) ValidateAndAdjust(sinkURI *url.URL) error {
 	if !c.EnableTableAcrossNodes {
@@ -62,6 +97,15 @@ func (c *ChangefeedSchedulerConfig) ValidateAndAdjust(sinkURI *url.URL) error {
 	}
 	if c.WriteKeyThreshold < 0 {
 		return errors.New("write-key-threshold must be larger than 0")
+	}
+
+	// Validate and adjust WriteKeyThreshold if it's too small
+	if c.WriteKeyThreshold > 0 && c.WriteKeyThreshold < MinWriteKeyThreshold {
+		log.Warn("WriteKeyThreshold is set too small, adjusting to minimum recommended value",
+			zap.Int("configuredValue", c.WriteKeyThreshold),
+			zap.Int("adjustedValue", MinWriteKeyThreshold),
+			zap.String("reason", "small values may cause performance issues and frequent table splitting"))
+		c.WriteKeyThreshold = MinWriteKeyThreshold
 	}
 	if c.SchedulingTaskCountPerNode < 0 {
 		return errors.New("scheduling-task-count-per-node must be larger than 0")

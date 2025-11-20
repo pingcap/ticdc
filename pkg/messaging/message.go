@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -47,55 +48,57 @@ func (t IOType) IsLogServiceEvent() bool {
 	return slices.Contains(LogServiceEventTypes, t)
 }
 
+// Please do not modify the value of the constants in this section.
+// When you need to add new type, please chose a new value for the constant.
 const (
-	TypeInvalid IOType = iota
+	TypeInvalid IOType = 0
 	// LogService related
-	TypeBatchDMLEvent
-	TypeDDLEvent
-	TypeBatchResolvedTs
-	TypeSyncPointEvent
-	TypeHandshakeEvent
-	TypeReadyEvent
-	TypeNotReusableEvent
+	TypeBatchDMLEvent    IOType = 1
+	TypeDDLEvent         IOType = 2
+	TypeBatchResolvedTs  IOType = 3
+	TypeSyncPointEvent   IOType = 4
+	TypeHandshakeEvent   IOType = 5
+	TypeReadyEvent       IOType = 6
+	TypeNotReusableEvent IOType = 7
 
 	// LogCoordinator related
-	TypeLogCoordinatorBroadcastRequest
-	TypeEventStoreState
-	TypeReusableEventServiceRequest
-	TypeReusableEventServiceResponse
-	TypeLogCoordinatorResolvedTsRequest
+	TypeLogCoordinatorBroadcastRequest  IOType = 8
+	TypeEventStoreState                 IOType = 9
+	TypeReusableEventServiceRequest     IOType = 10
+	TypeReusableEventServiceResponse    IOType = 11
+	TypeLogCoordinatorResolvedTsRequest IOType = 12
 
 	// EventCollector related
-	TypeHeartBeatRequest
-	TypeHeartBeatResponse
-	TypeScheduleDispatcherRequest
-	TypeDispatcherRequest
-	TypeCheckpointTsMessage
-	TypeBlockStatusRequest
-	TypeDispatcherHeartbeat
-	TypeDispatcherHeartbeatResponse
-	TypeRedoMessage
-	TypeMergeDispatcherRequest
-	TypeCongestionControl
+	TypeHeartBeatRequest            IOType = 13
+	TypeHeartBeatResponse           IOType = 14
+	TypeScheduleDispatcherRequest   IOType = 15
+	TypeDispatcherRequest           IOType = 16
+	TypeCheckpointTsMessage         IOType = 17
+	TypeBlockStatusRequest          IOType = 18
+	TypeDispatcherHeartbeat         IOType = 19
+	TypeDispatcherHeartbeatResponse IOType = 20
+	TypeRedoMessage                 IOType = 21
+	TypeMergeDispatcherRequest      IOType = 22
+	TypeCongestionControl           IOType = 23
 
 	// Coordinator related
-	TypeCoordinatorBootstrapRequest
-	TypeCoordinatorBootstrapResponse
-	TypeAddMaintainerRequest
-	TypeRemoveMaintainerRequest
-	TypeMaintainerHeartbeatRequest
-	TypeMaintainerBootstrapRequest
-	TypeMaintainerBootstrapResponse
-	TypeMaintainerPostBootstrapRequest
-	TypeMaintainerPostBootstrapResponse
-	TypeMaintainerCloseRequest
-	TypeMaintainerCloseResponse
-	TypeLogCoordinatorResolvedTsResponse
+	TypeCoordinatorBootstrapRequest      IOType = 24
+	TypeCoordinatorBootstrapResponse     IOType = 25
+	TypeAddMaintainerRequest             IOType = 26
+	TypeRemoveMaintainerRequest          IOType = 27
+	TypeMaintainerHeartbeatRequest       IOType = 28
+	TypeMaintainerBootstrapRequest       IOType = 29
+	TypeMaintainerBootstrapResponse      IOType = 30
+	TypeMaintainerPostBootstrapRequest   IOType = 31
+	TypeMaintainerPostBootstrapResponse  IOType = 32
+	TypeMaintainerCloseRequest           IOType = 33
+	TypeMaintainerCloseResponse          IOType = 34
+	TypeLogCoordinatorResolvedTsResponse IOType = 35
 
-	TypeMessageHandShake
+	TypeMessageHandShake IOType = 36
 
 	// used to upload changefeed metrics from event store to log coordinator
-	TypeLogCoordinatorChangefeedStates
+	TypeLogCoordinatorChangefeedStates IOType = 37
 )
 
 func (t IOType) String() string {
@@ -361,7 +364,8 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 	case TypeLogCoordinatorResolvedTsResponse:
 		m = &heartbeatpb.LogCoordinatorResolvedTsResponse{}
 	default:
-		log.Panic("Unimplemented IOType", zap.Stringer("Type", ioType))
+		log.Debug("Unimplemented IOType, ignore the message", zap.Stringer("Type", ioType))
+		return nil, errors.ErrUnimplementedIOType.GenWithStackByArgs(int(ioType))
 	}
 	err := m.Unmarshal(value)
 	return m, err

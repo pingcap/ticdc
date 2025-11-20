@@ -25,7 +25,7 @@ func TestDropEvent(t *testing.T) {
 	e := NewDropEvent(did, 123, 100, 456)
 	data, err := e.Marshal()
 	require.NoError(t, err)
-	require.Len(t, data, int(e.GetSize()))
+	require.Len(t, data, int(e.GetSize())+int(GetEventHeaderSize()))
 
 	var e2 DropEvent
 	err = e2.Unmarshal(data)
@@ -81,7 +81,7 @@ func TestDropEventMarshalUnmarshal(t *testing.T) {
 		{
 			name: "zero values",
 			event: &DropEvent{
-				Version:         0,
+				Version:         DropEventVersion1,
 				DispatcherID:    common.DispatcherID{},
 				DroppedSeq:      0,
 				DroppedCommitTs: 0,
@@ -89,14 +89,15 @@ func TestDropEventMarshalUnmarshal(t *testing.T) {
 			wantError: false,
 		},
 		{
-			name: "max values",
-			event: NewDropEvent(
-				common.NewDispatcherID(),
-				^uint64(0),
-				0,
-				common.Ts(^uint64(0)),
-			),
-			wantError: false,
+			name: "invalid version",
+			event: &DropEvent{
+				Version:         99,
+				DispatcherID:    common.NewDispatcherID(),
+				DroppedSeq:      0,
+				DroppedCommitTs: 0,
+				DroppedEpoch:    0,
+			},
+			wantError: true,
 		},
 	}
 
@@ -109,62 +110,11 @@ func TestDropEventMarshalUnmarshal(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			require.Len(t, data, int(tc.event.GetSize()))
+			require.Len(t, data, int(tc.event.GetSize())+int(GetEventHeaderSize()))
 
 			// Test Unmarshal
 			var e2 DropEvent
 			err = e2.Unmarshal(data)
-			require.NoError(t, err)
-			require.Equal(t, tc.event.Version, e2.Version)
-			require.Equal(t, tc.event.DispatcherID, e2.DispatcherID)
-			require.Equal(t, tc.event.DroppedSeq, e2.DroppedSeq)
-			require.Equal(t, tc.event.DroppedCommitTs, e2.DroppedCommitTs)
-		})
-	}
-}
-
-func TestDropEventEncodeDecode(t *testing.T) {
-	testCases := []struct {
-		name      string
-		event     *DropEvent
-		wantError bool
-	}{
-		{
-			name: "normal case",
-			event: NewDropEvent(
-				common.NewDispatcherID(),
-				123,
-				100,
-				456,
-			),
-			wantError: false,
-		},
-		{
-			name: "invalid version",
-			event: &DropEvent{
-				Version:         1, // Invalid version
-				DispatcherID:    common.NewDispatcherID(),
-				DroppedSeq:      123,
-				DroppedCommitTs: 456,
-			},
-			wantError: true,
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			// Test encode
-			data, err := tc.event.encode()
-			if tc.wantError {
-				require.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
-			require.Len(t, data, int(tc.event.GetSize()))
-
-			// Test decode
-			var e2 DropEvent
-			err = e2.decode(data)
 			require.NoError(t, err)
 			require.Equal(t, tc.event.Version, e2.Version)
 			require.Equal(t, tc.event.DispatcherID, e2.DispatcherID)

@@ -18,6 +18,8 @@ function run() {
 	# record tso before we create tables to skip the system table DDLs
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/common/event/InjectBatchDMLEventVersion=10%return(true)'
+
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
 	TOPIC_NAME="ticdc-savepoint-test-$RANDOM"
@@ -44,7 +46,7 @@ function run() {
 	cleanup_process $CDC_BINARY
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 run $*
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

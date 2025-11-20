@@ -158,7 +158,7 @@ function run() {
 	run_sql "CREATE DATABASE testSync;"
 	run_sql "CREATE DATABASE testSync;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/utils/dynstream/InjectDropEvent=10%return(true)'
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/utils/dynstream/InjectDeadlock=10%return(true)'
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
@@ -185,7 +185,7 @@ function run() {
 	cleanup_process $CDC_BINARY
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 run $*
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

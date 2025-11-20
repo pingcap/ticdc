@@ -32,49 +32,40 @@ import (
 	"go.uber.org/zap"
 )
 
-type KeyspaceManager interface {
+type Manager interface {
 	LoadKeyspace(ctx context.Context, keyspace string) (*keyspacepb.KeyspaceMeta, error)
 	GetKeyspaceByID(ctx context.Context, keyspaceID uint32) (*keyspacepb.KeyspaceMeta, error)
-	GetStorage(keyspace string) (kv.Storage, error)
+	GetStorage(ctx context.Context, keyspace string) (kv.Storage, error)
 	Close()
 }
 
-func NewKeyspaceManager(pdEndpoints []string) KeyspaceManager {
-	return &keyspaceManager{
-		pdEndpoints:   pdEndpoints,
-		keyspaceMap:   make(map[string]*keyspacepb.KeyspaceMeta),
-		keyspaceIDMap: make(map[uint32]*keyspacepb.KeyspaceMeta),
-		storageMap:    make(map[string]kv.Storage),
+func NewManager(pdEndpoints []string) Manager {
+	return &manager{
+		urls:       strings.Join(pdEndpoints, ","),
+		storageMap: make(map[string]kv.Storage),
 	}
 }
 
-type keyspaceManager struct {
-	pdEndpoints []string
-
-	// TODO tenfyzhong 2025-09-16 23:46:01 update keyspaceMeta periodicity
-	keyspaceMap   map[string]*keyspacepb.KeyspaceMeta
-	keyspaceIDMap map[uint32]*keyspacepb.KeyspaceMeta
-	keyspaceMu    sync.Mutex
+type manager struct {
+	urls string
 
 	storageMap map[string]kv.Storage
 	storageMu  sync.Mutex
 }
 
-func (k *keyspaceManager) LoadKeyspace(ctx context.Context, keyspace string) (*keyspacepb.KeyspaceMeta, error) {
+var defaultKeyspaceMeta = &keyspacepb.KeyspaceMeta{
+	Name: common.DefaultKeyspaceNamme,
+	Id:   common.DefaultKeyspaceID,
+}
+
+func (k *manager) LoadKeyspace(ctx context.Context, keyspace string) (*keyspacepb.KeyspaceMeta, error) {
 	if kerneltype.IsClassic() {
-		return &keyspacepb.KeyspaceMeta{
-			Name: common.DefaultKeyspace,
-		}, nil
+		return defaultKeyspaceMeta, nil
 	}
 
-	k.keyspaceMu.Lock()
-	meta := k.keyspaceMap[keyspace]
-	k.keyspaceMu.Unlock()
-	if meta != nil {
-		return meta, nil
-	}
-
+	var meta *keyspacepb.KeyspaceMeta
 	var err error
+
 	pdAPIClient := appcontext.GetService[pdutil.PDAPIClient](appcontext.PDAPIClient)
 	err = retry.Do(ctx, func() error {
 		meta, err = pdAPIClient.LoadKeyspace(ctx, keyspace)
@@ -82,40 +73,25 @@ func (k *keyspaceManager) LoadKeyspace(ctx context.Context, keyspace string) (*k
 			return err
 		}
 		return nil
-	}, retry.WithBackoffBaseDelay(500), retry.WithBackoffMaxDelay(1000), retry.WithMaxTries(6))
+	}, retry.WithBackoffBaseDelay(500),
+		retry.WithBackoffMaxDelay(1000),
+		retry.WithMaxTries(6))
 	if err != nil {
 		log.Error("retry to load keyspace from pd", zap.String("keyspace", keyspace), zap.Error(err))
 		return nil, errors.Trace(err)
 	}
 
-	k.keyspaceMu.Lock()
-	defer k.keyspaceMu.Unlock()
-	// Double check, another goroutine might have fetched and stored it.
-	if meta, ok := k.keyspaceMap[keyspace]; ok {
-		return meta, nil
-	}
-
-	k.keyspaceMap[keyspace] = meta
-	k.keyspaceIDMap[meta.Id] = meta
-
 	return meta, nil
 }
 
-func (k *keyspaceManager) GetKeyspaceByID(ctx context.Context, keyspaceID uint32) (*keyspacepb.KeyspaceMeta, error) {
+func (k *manager) GetKeyspaceByID(ctx context.Context, keyspaceID uint32) (*keyspacepb.KeyspaceMeta, error) {
 	if kerneltype.IsClassic() {
-		return &keyspacepb.KeyspaceMeta{
-			Name: common.DefaultKeyspace,
-		}, nil
+		return defaultKeyspaceMeta, nil
 	}
 
-	k.keyspaceMu.Lock()
-	meta := k.keyspaceIDMap[keyspaceID]
-	k.keyspaceMu.Unlock()
-	if meta != nil {
-		return meta, nil
-	}
-
+	var meta *keyspacepb.KeyspaceMeta
 	var err error
+
 	pdAPIClient := appcontext.GetService[pdutil.PDAPIClient](appcontext.PDAPIClient)
 	err = retry.Do(ctx, func() error {
 		meta, err = pdAPIClient.GetKeyspaceMetaByID(ctx, keyspaceID)
@@ -123,26 +99,18 @@ func (k *keyspaceManager) GetKeyspaceByID(ctx context.Context, keyspaceID uint32
 			return err
 		}
 		return nil
-	}, retry.WithBackoffBaseDelay(500), retry.WithBackoffMaxDelay(1000), retry.WithMaxTries(6))
+	}, retry.WithBackoffBaseDelay(500),
+		retry.WithBackoffMaxDelay(1000),
+		retry.WithMaxTries(6))
 	if err != nil {
 		log.Error("retry to load keyspace from pd", zap.Uint32("keyspaceID", keyspaceID), zap.Error(err))
 		return nil, errors.Trace(err)
 	}
 
-	k.keyspaceMu.Lock()
-	defer k.keyspaceMu.Unlock()
-	// Double check, another goroutine might have fetched and stored it.
-	if meta, ok := k.keyspaceIDMap[keyspaceID]; ok {
-		return meta, nil
-	}
-
-	k.keyspaceMap[meta.Name] = meta
-	k.keyspaceIDMap[keyspaceID] = meta
-
 	return meta, nil
 }
 
-func (k *keyspaceManager) GetStorage(keyspace string) (kv.Storage, error) {
+func (k *manager) GetStorage(ctx context.Context, keyspace string) (kv.Storage, error) {
 	k.storageMu.Lock()
 	defer k.storageMu.Unlock()
 
@@ -151,9 +119,9 @@ func (k *keyspaceManager) GetStorage(keyspace string) (kv.Storage, error) {
 	}
 
 	conf := config.GetGlobalServerConfig()
-	kvStorage, err := upstream.CreateTiStore(strings.Join(k.pdEndpoints, ","), conf.Security, keyspace)
+	kvStorage, err := upstream.CreateTiStore(ctx, k.urls, conf.Security, keyspace)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 
 	k.storageMap[keyspace] = kvStorage
@@ -161,7 +129,7 @@ func (k *keyspaceManager) GetStorage(keyspace string) (kv.Storage, error) {
 	return kvStorage, nil
 }
 
-func (k *keyspaceManager) Close() {
+func (k *manager) Close() {
 	k.storageMu.Lock()
 	defer k.storageMu.Unlock()
 

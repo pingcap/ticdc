@@ -32,7 +32,7 @@ func setupTestEnvironment(t *testing.T) (*span.Controller, common.ChangeFeedID, 
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 
-	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspace)
+	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceNamme)
 	dispatcherID := common.NewDispatcherID()
 
 	tableSpan := testutil.GetTableSpanByID(100)

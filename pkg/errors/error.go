@@ -55,7 +55,7 @@ var (
 		errors.RFCCodeText("CDC:ErrMetaListDatabases"),
 	)
 	ErrDDLSchemaNotFound = errors.Normalize(
-		"cannot find mysql.tidb_ddl_job schema",
+		"cannot find schema: %s",
 		errors.RFCCodeText("CDC:ErrDDLSchemaNotFound"),
 	)
 	ErrPDEtcdAPIError = errors.Normalize(
@@ -319,6 +319,10 @@ var (
 		"span doesn't overlap: %+v vs %+v",
 		errors.RFCCodeText("CDC:ErrIntersectNoOverlap"),
 	)
+	ErrOperateOnClosedNotifier = errors.Normalize(
+		"operate on a closed notifier",
+		errors.RFCCodeText("CDC:ErrOperateOnClosedNotifier"),
+	)
 	ErrDiskFull = errors.Normalize(
 		"failed to preallocate file because disk is full",
 		errors.RFCCodeText("CDC:ErrDiskFull"))
@@ -361,7 +365,7 @@ var (
 		errors.RFCCodeText("CDC:ErrInvalidKeyspace"),
 	)
 	ErrKeyspaceNotFound = errors.Normalize(
-		"keyspace not found",
+		"keyspace not found: %d",
 		errors.RFCCodeText("CDC:ErrKeyspaceNotFound"),
 	)
 	ErrKeyspaceIDInvalid = errors.Normalize(
@@ -532,6 +536,20 @@ var (
 		"changefeed is in unretryable state, please check the error message"+
 			", and you should manually handle it",
 		errors.RFCCodeText("CDC:ErrChangefeedUnretryable"),
+	)
+
+	// workerpool errors
+	ErrWorkerPoolHandleCancelled = errors.Normalize(
+		"workerpool handle is cancelled",
+		errors.RFCCodeText("CDC:ErrWorkerPoolHandleCancelled"),
+	)
+	ErrAsyncPoolExited = errors.Normalize(
+		"asyncPool has exited. Report a bug if seen externally.",
+		errors.RFCCodeText("CDC:ErrAsyncPoolExited"),
+	)
+	ErrWorkerPoolGracefulUnregisterTimedOut = errors.Normalize(
+		"workerpool handle graceful unregister timed out",
+		errors.RFCCodeText("CDC:ErrWorkerPoolGracefulUnregisterTimedOut"),
 	)
 
 	// sorter errors
@@ -784,6 +802,16 @@ var (
 	ErrTableAfterDDLNotSplitable = errors.Normalize(
 		"the ddl event will break splitable of this table",
 		errors.RFCCodeText("CDC:ErrTableAfterNotSplitable"),
+	)
+
+	ErrConfigInvalidTimezone = errors.Normalize(
+		"invalid timezone string: %s",
+		errors.RFCCodeText("CDC:ErrConfigInvalidTimezone"),
+	)
+
+	ErrUnimplementedIOType = errors.Normalize(
+		"unimplemented IOType: %d",
+		errors.RFCCodeText("CDC:ErrUnimplementedIOType"),
 	)
 )
 

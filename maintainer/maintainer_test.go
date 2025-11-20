@@ -29,6 +29,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/eventservice"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -299,7 +300,8 @@ func TestMaintainerSchedule(t *testing.T) {
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 
-	schemaStore := &mockSchemaStore{tables: tables}
+	schemaStore := eventservice.NewMockSchemaStore()
+	schemaStore.SetTables(tables)
 	appcontext.SetService(appcontext.SchemaStore, schemaStore)
 
 	n := node.NewInfo("", "")
@@ -311,7 +313,7 @@ func TestMaintainerSchedule(t *testing.T) {
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[n.ID] = n
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspace)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	dispatcherManager := MockDispatcherManager(mc, n.ID)
 
 	wg := &sync.WaitGroup{}

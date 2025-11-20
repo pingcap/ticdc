@@ -44,6 +44,7 @@ const (
 
 // Writer is responsible for writing various dml events, ddl events, syncpoint events to mysql downstream.
 type Writer struct {
+	id           int
 	ctx          context.Context
 	db           *sql.DB
 	cfg          *Config
@@ -58,12 +59,8 @@ type Writer struct {
 
 	// implement stmtCache to improve performance, especially when the downstream is TiDB
 	stmtCache *lru.Cache
-	// Indicate if the CachePrepStmts should be enabled or not
-	cachePrepStmts   bool
-	maxAllowedPacket int64
 
 	statistics *metrics.Statistics
-	needFormat bool
 
 	// When encountered an `Duplicate entry` error, we will set the `isInErrorCausedSafeMode` to true,
 	// and set the `lastErrorCausedSafeModeTime` to the current time.
@@ -78,25 +75,23 @@ type Writer struct {
 
 func NewWriter(
 	ctx context.Context,
+	id int,
 	db *sql.DB,
 	cfg *Config,
 	changefeedID common.ChangeFeedID,
 	statistics *metrics.Statistics,
-	needFormatVectorType bool,
 ) *Writer {
 	res := &Writer{
 		ctx:                    ctx,
+		id:                     id,
 		db:                     db,
 		cfg:                    cfg,
 		syncPointTableInit:     false,
 		ChangefeedID:           changefeedID,
 		lastCleanSyncPointTime: time.Now(),
 		ddlTsTableInit:         false,
-		cachePrepStmts:         cfg.CachePrepStmts,
-		maxAllowedPacket:       cfg.MaxAllowedPacket,
 		stmtCache:              cfg.stmtCache,
 		statistics:             statistics,
-		needFormat:             needFormatVectorType,
 
 		isInErrorCausedSafeMode:     false,
 		errorCausedSafeModeDuration: defaultErrorCausedSafeModeDuration,
@@ -119,13 +114,14 @@ func (w *Writer) FlushDDLEvent(event *commonEvent.DDLEvent) error {
 		w.waitAsyncDDLDone(event)
 	}
 	if w.cfg.IsTiDB || !event.TiDBOnly {
-		if w.cfg.IsTiDB && w.cfg.EnableDDLTs {
-			// if downstream is tidb, we write ddl ts before ddl first, and update the ddl ts item after ddl executed,
-			// to ensure the atomic with ddl writing when server is restarted.
-			w.FlushDDLTsPre(event)
+		// we write ddl ts before ddl first, and update the ddl ts item after ddl executed,
+		// to ensure the atomic with ddl writing when server is restarted.
+		err := w.FlushDDLTsPre(event)
+		if err != nil {
+			return err
 		}
 
-		err := w.execDDLWithMaxRetries(event)
+		err = w.execDDLWithMaxRetries(event)
 		if err != nil {
 			return err
 		}
@@ -136,11 +132,9 @@ func (w *Writer) FlushDDLEvent(event *commonEvent.DDLEvent) error {
 		// We make Flush ddl ts before callback(), in order to make sure the ddl ts is flushed
 		// before new checkpointTs will report to maintainer. Therefore, when the table checkpointTs is forward,
 		// we can ensure the ddl and ddl ts are both flushed downstream successfully.
-		if w.cfg.EnableDDLTs {
-			err = w.FlushDDLTs(event)
-			if err != nil {
-				return err
-			}
+		err = w.FlushDDLTs(event)
+		if err != nil {
+			return err
 		}
 	}
 	return nil
@@ -159,13 +153,15 @@ func (w *Writer) FlushSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 		}
 		w.syncPointTableInit = true
 	}
-	if w.cfg.IsTiDB && w.cfg.EnableDDLTs {
-		// if downstream is tidb, we write ddl ts before ddl first, and update the ddl ts item after ddl executed,
-		// to ensure the atomic with ddl writing when server is restarted.
-		w.FlushDDLTsPre(event)
+
+	// we write ddl ts before ddl first, and update the ddl ts item after ddl executed,
+	// to ensure the atomic with ddl writing when server is restarted.
+	err := w.FlushDDLTsPre(event)
+	if err != nil {
+		return errors.Trace(err)
 	}
 
-	err := w.SendSyncPointEvent(event)
+	err = w.SendSyncPointEvent(event)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -177,9 +173,8 @@ func (w *Writer) FlushSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 	// We make Flush ddl ts before callback(), in order to make sure the ddl ts is flushed
 	// before new checkpointTs will report to maintainer. Therefore, when the table checkpointTs is forward,
 	// we can ensure the ddl and ddl ts are both flushed downstream successfully.
-	if w.cfg.EnableDDLTs {
-		err = w.FlushDDLTs(event)
-	}
+	err = w.FlushDDLTs(event)
+
 	return err
 }
 

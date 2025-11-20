@@ -22,6 +22,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/atomic"
@@ -44,7 +45,9 @@ type ConflictDetector struct {
 	// nextCacheID is used to dispatch transactions round-robin.
 	nextCacheID atomic.Int64
 
-	notifiedNodes *chann.UnlimitedChannel[func(), any]
+	notifiedNodes        *chann.UnlimitedChannel[func(), any]
+	notifyGuardWaitGroup util.GuardedWaitGroup
+	notifyClosed         atomic.Bool
 
 	changefeedID                 common.ChangeFeedID
 	metricConflictDetectDuration prometheus.Observer
@@ -116,12 +119,11 @@ func (d *ConflictDetector) Add(event *commonEvent.DMLEvent) {
 		return d.nextCacheID.Add(1) % int64(len(d.resolvedTxnCaches))
 	}
 	node.OnNotified = func(callback func()) {
-		// TODO:find a better way to handle the panic
-		defer func() {
-			if r := recover(); r != nil {
-				log.Warn("failed to send notification, channel might be closed", zap.Any("error", r))
-			}
-		}()
+		if !d.notifyGuardWaitGroup.AddIf(func() bool { return !d.notifyClosed.Load() }) {
+			return
+		}
+		defer d.notifyGuardWaitGroup.Done()
+
 		d.notifiedNodes.Push(callback)
 	}
 	d.slots.Add(node)
@@ -148,7 +150,10 @@ func (d *ConflictDetector) closeCache() {
 }
 
 func (d *ConflictDetector) CloseNotifiedNodes() {
-	d.notifiedNodes.Close()
+	if d.notifyClosed.CompareAndSwap(false, true) {
+		d.notifyGuardWaitGroup.Wait()
+		d.notifiedNodes.Close()
+	}
 }
 
 func (d *ConflictDetector) Close() {

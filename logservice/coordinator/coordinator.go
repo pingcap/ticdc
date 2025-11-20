@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logservicepb"
-	"github.com/pingcap/ticdc/pkg/chann"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -32,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/server/watcher"
+	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
@@ -144,7 +144,7 @@ func (c *logCoordinator) Run(ctx context.Context) error {
 				log.Warn("send reusable event service response failed", zap.Error(err))
 			}
 		case <-metricTick.C:
-			c.updateChangefeedMetrics()
+			c.reportChangefeedMetrics()
 		}
 	}
 }
@@ -164,15 +164,15 @@ func (c *logCoordinator) handleMessage(_ context.Context, targetMessage *messagi
 		case *heartbeatpb.LogCoordinatorResolvedTsRequest:
 			c.sendResolvedTsToCoordinator(targetMessage.From, common.NewChangefeedIDFromPB(msg.ChangefeedID))
 		default:
-			log.Panic("invalid message type", zap.Any("msg", msg))
+			log.Warn("unknown message type, ignore it",
+				zap.String("type", targetMessage.Type.String()),
+				zap.Any("msg", msg))
 		}
 	}
 	return nil
 }
 
 func (c *logCoordinator) sendResolvedTsToCoordinator(id node.ID, changefeedID common.ChangeFeedID) {
-	c.nodes.Lock()
-	defer c.nodes.Unlock()
 	resolvedTs := c.getMinLogServiceResolvedTs(changefeedID)
 	msg := messaging.NewSingleTargetMessage(
 		id,
@@ -200,9 +200,7 @@ func (c *logCoordinator) handleNodeChange(allNodes map[node.ID]*node.Info) {
 
 			c.changefeedStates.Lock()
 			for _, state := range c.changefeedStates.m {
-				if _, exists := state.nodeStates[id]; exists {
-					delete(state.nodeStates, id)
-				}
+				delete(state.nodeStates, id)
 			}
 			c.changefeedStates.Unlock()
 		}
@@ -280,7 +278,7 @@ func (c *logCoordinator) updateChangefeedStates(from node.ID, states *logservice
 	}
 }
 
-func (c *logCoordinator) updateChangefeedMetrics() {
+func (c *logCoordinator) reportChangefeedMetrics() {
 	pdTime := c.pdClock.CurrentTime()
 	pdPhyTs := oracle.GetPhysical(pdTime)
 

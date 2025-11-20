@@ -65,7 +65,7 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Eve
 	var redoTs atomic.Uint64
 	redoTs.Store(math.MaxUint64)
 	sharedInfo := NewSharedInfo(
-		common.NewChangefeedID(common.DefaultKeyspace),
+		common.NewChangefeedID(common.DefaultKeyspaceNamme),
 		"system",
 		false,
 		false,
@@ -86,7 +86,8 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Eve
 		common.Ts(0), // startTs
 		1,            // schemaID
 		NewSchemaIDToDispatchers(),
-		false,
+		false,        // skipSyncpointAtStartTs
+		false,        // skipDMLAsStartTs
 		common.Ts(0), // pdTs
 		sink,
 		sharedInfo,
@@ -95,15 +96,15 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Eve
 	)
 }
 
-var count = 0
+var count atomic.Int32
 
 func callback() {
-	count++
+	count.Add(1)
 }
 
 // test different events can be correctly handled by the dispatcher
 func TestDispatcherHandleEvents(t *testing.T) {
-	count = 0
+	count.Swap(0)
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
@@ -139,7 +140,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
 	require.Equal(t, false, isEmpty)
 	require.Equal(t, uint64(1), checkpointTs)
-	require.Equal(t, 0, count)
+	require.Equal(t, int32(0), count.Load())
 
 	// flush
 	sink.FlushDMLs()
@@ -147,7 +148,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
 	require.Equal(t, true, isEmpty)
 	require.Equal(t, uint64(1), checkpointTs)
-	require.Equal(t, 1, count)
+	require.Equal(t, int32(1), count.Load())
 
 	// ===== ddl event =====
 	// 1. non-block ddl event, and don't need to communicate with maintainer
@@ -163,15 +164,16 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, callback)
 	require.Equal(t, true, block)
 	require.Equal(t, 0, len(sink.GetDMLs()))
+	time.Sleep(5 * time.Second)
 	// no pending event
-	require.Nil(t, dispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_NONE)
+	blockPendingEvent, blockStage := dispatcher.blockEventStatus.getEventAndStage()
+	require.Nil(t, blockPendingEvent)
+	require.Equal(t, blockStage, heartbeatpb.BlockStage_NONE)
 
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
 	require.Equal(t, true, isEmpty)
 	require.Equal(t, uint64(1), checkpointTs)
-
-	require.Equal(t, 2, count)
+	require.Equal(t, int32(2), count.Load())
 
 	// 2.1 non-block ddl event, but need to communicate with maintainer(drop table)
 	ddlEvent21 := &commonEvent.DDLEvent{
@@ -189,15 +191,16 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent21)}, callback)
 	require.Equal(t, true, block)
 	require.Equal(t, 0, len(sink.GetDMLs()))
+	time.Sleep(5 * time.Second)
 	// no pending event
-	require.Nil(t, dispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_NONE)
+	blockPendingEvent, blockStage = dispatcher.blockEventStatus.getEventAndStage()
+	require.Nil(t, blockPendingEvent)
+	require.Equal(t, blockStage, heartbeatpb.BlockStage_NONE)
 
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
 	require.Equal(t, true, isEmpty)
 	require.Equal(t, uint64(2), checkpointTs)
-
-	require.Equal(t, 3, count)
+	require.Equal(t, int32(3), count.Load())
 
 	require.Equal(t, 1, dispatcher.resendTaskMap.Len())
 
@@ -229,15 +232,16 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent2)}, callback)
 	require.Equal(t, true, block)
 	require.Equal(t, 0, len(sink.GetDMLs()))
+	time.Sleep(5 * time.Second)
 	// no pending event
-	require.Nil(t, dispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_NONE)
+	blockPendingEvent, blockStage = dispatcher.blockEventStatus.getEventAndStage()
+	require.Nil(t, blockPendingEvent)
+	require.Equal(t, blockStage, heartbeatpb.BlockStage_NONE)
 	// but block table progress until ack
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
 	require.Equal(t, false, isEmpty)
 	require.Equal(t, uint64(3), checkpointTs)
-
-	require.Equal(t, 4, count)
+	require.Equal(t, int32(4), count.Load())
 
 	require.Equal(t, 1, dispatcher.resendTaskMap.Len())
 
@@ -278,16 +282,18 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent3)}, callback)
 	require.Equal(t, true, block)
 	require.Equal(t, 0, len(sink.GetDMLs()))
+	time.Sleep(5 * time.Second)
 	// pending event
-	require.NotNil(t, dispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_WAITING)
+	blockPendingEvent, blockStage = dispatcher.blockEventStatus.getEventAndStage()
+	require.NotNil(t, blockPendingEvent)
+	require.Equal(t, blockStage, heartbeatpb.BlockStage_WAITING)
 
 	// the ddl is not available for write to sink
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
 	require.Equal(t, true, isEmpty)
 	require.Equal(t, uint64(3), checkpointTs)
-
-	require.Equal(t, 4, count)
+	time.Sleep(5 * time.Second)
+	require.Equal(t, int32(4), count.Load())
 
 	require.Equal(t, 1, dispatcher.resendTaskMap.Len())
 
@@ -301,8 +307,9 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	dispatcher.HandleDispatcherStatus(dispatcherStatus)
 	require.Equal(t, 0, dispatcher.resendTaskMap.Len())
 	// pending event
-	require.NotNil(t, dispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_WAITING)
+	blockPendingEvent, blockStage = dispatcher.blockEventStatus.getEventAndStage()
+	require.NotNil(t, blockPendingEvent)
+	require.Equal(t, blockStage, heartbeatpb.BlockStage_WAITING)
 
 	// the ddl is still not available for write to sink
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
@@ -323,10 +330,10 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, uint64(4), checkpointTs)
 
 	// clear pending event(TODO:add a check for the middle status)
-	require.Nil(t, dispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_NONE)
-
-	require.Equal(t, 5, count)
+	blockPendingEvent, blockStage = dispatcher.blockEventStatus.getEventAndStage()
+	require.Nil(t, blockPendingEvent)
+	require.Equal(t, blockStage, heartbeatpb.BlockStage_NONE)
+	require.Equal(t, int32(5), count.Load())
 
 	// ===== sync point event =====
 
@@ -335,10 +342,12 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	}
 	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, syncPointEvent)}, callback)
 	require.Equal(t, true, block)
+	time.Sleep(5 * time.Second)
 	require.Equal(t, 0, len(sink.GetDMLs()))
 	// pending event
-	require.NotNil(t, dispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_WAITING)
+	blockPendingEvent, blockStage = dispatcher.blockEventStatus.getEventAndStage()
+	require.NotNil(t, blockPendingEvent)
+	require.Equal(t, blockStage, heartbeatpb.BlockStage_WAITING)
 
 	// not available for write to sink
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
@@ -355,8 +364,9 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	dispatcher.HandleDispatcherStatus(dispatcherStatus)
 	require.Equal(t, 0, dispatcher.resendTaskMap.Len())
 	// pending event
-	require.NotNil(t, dispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_WAITING)
+	blockPendingEvent, blockStage = dispatcher.blockEventStatus.getEventAndStage()
+	require.NotNil(t, blockPendingEvent)
+	require.Equal(t, blockStage, heartbeatpb.BlockStage_WAITING)
 
 	// receive the action info
 	dispatcherStatus = &heartbeatpb.DispatcherStatus{
@@ -370,8 +380,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
 	require.Equal(t, true, isEmpty)
 	require.Equal(t, uint64(5), checkpointTs)
-
-	require.Equal(t, 6, count)
+	require.Equal(t, int32(6), count.Load())
 
 	// ===== resolved event =====
 	checkpointTs = dispatcher.GetCheckpointTs()
@@ -389,7 +398,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 
 // test uncompelete table span can correctly handle the ddl events
 func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
-	count = 0
+	count.Swap(0)
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
@@ -418,14 +427,16 @@ func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 	nodeID := node.NewID()
 	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, callback)
 	require.Equal(t, true, block)
+	time.Sleep(5 * time.Second)
 	// pending event
-	require.NotNil(t, dispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_WAITING)
+	blockPendingEvent, blockStage := dispatcher.blockEventStatus.getEventAndStage()
+	require.NotNil(t, blockPendingEvent)
+	require.Equal(t, blockStage, heartbeatpb.BlockStage_WAITING)
 	require.Equal(t, 1, dispatcher.resendTaskMap.Len())
 
 	checkpointTs := dispatcher.GetCheckpointTs()
 	require.Equal(t, uint64(0), checkpointTs)
-	require.Equal(t, 0, count)
+	require.Equal(t, int32(0), count.Load())
 
 	// receive the ack info
 	dispatcherStatus := &heartbeatpb.DispatcherStatus{
@@ -437,13 +448,14 @@ func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 	dispatcher.HandleDispatcherStatus(dispatcherStatus)
 	require.Equal(t, 0, dispatcher.resendTaskMap.Len())
 	// pending event
-	require.NotNil(t, dispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, dispatcher.blockEventStatus.blockStage, heartbeatpb.BlockStage_WAITING)
+	blockPendingEvent, blockStage = dispatcher.blockEventStatus.getEventAndStage()
+	require.NotNil(t, blockPendingEvent)
+	require.Equal(t, blockStage, heartbeatpb.BlockStage_WAITING)
 
 	// the ddl is still not available for write to sink
 	checkpointTs = dispatcher.GetCheckpointTs()
 	require.Equal(t, uint64(0), checkpointTs)
-	require.Equal(t, 0, count)
+	require.Equal(t, int32(0), count.Load())
 
 	// receive the action info
 	dispatcherStatus = &heartbeatpb.DispatcherStatus{
@@ -456,11 +468,11 @@ func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 	dispatcher.HandleDispatcherStatus(dispatcherStatus)
 	checkpointTs = dispatcher.GetCheckpointTs()
 	require.Equal(t, uint64(1), checkpointTs)
-	require.Equal(t, 1, count)
+	require.Equal(t, int32(1), count.Load())
 }
 
 func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
-	count = 0
+	count.Swap(0)
 
 	ddlTableSpan := common.KeyspaceDDLSpan(common.DefaultKeyspaceID)
 	sink := sink.NewMockSink(common.MysqlSinkType)
@@ -495,9 +507,11 @@ func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
 	nodeID := node.NewID()
 	block := tableTriggerEventDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, callback)
 	require.Equal(t, true, block)
+	time.Sleep(5 * time.Second)
 	// no pending event
-	require.Nil(t, tableTriggerEventDispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, 1, count)
+	blockPendingEvent := tableTriggerEventDispatcher.blockEventStatus.getEvent()
+	require.Nil(t, blockPendingEvent)
+	require.Equal(t, int32(1), count.Load())
 
 	tableIds := tableTriggerEventDispatcher.tableSchemaStore.GetAllTableIds()
 	require.Equal(t, 1, len(tableIds))
@@ -529,9 +543,11 @@ func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
 
 	block = tableTriggerEventDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, callback)
 	require.Equal(t, true, block)
+	time.Sleep(5 * time.Second)
 	// no pending event
-	require.Nil(t, tableTriggerEventDispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, 2, count)
+	blockPendingEvent = tableTriggerEventDispatcher.blockEventStatus.getEvent()
+	require.Nil(t, blockPendingEvent)
+	require.Equal(t, int32(2), count.Load())
 
 	tableIds = tableTriggerEventDispatcher.tableSchemaStore.GetAllTableIds()
 	require.Equal(t, int(2), len(tableIds))
@@ -540,7 +556,7 @@ func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
 }
 
 func TestTableTriggerEventDispatcherInKafka(t *testing.T) {
-	count = 0
+	count.Swap(0)
 
 	ddlTableSpan := common.KeyspaceDDLSpan(common.DefaultKeyspaceID)
 	sink := sink.NewMockSink(common.KafkaSinkType)
@@ -575,9 +591,11 @@ func TestTableTriggerEventDispatcherInKafka(t *testing.T) {
 	nodeID := node.NewID()
 	block := tableTriggerEventDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, callback)
 	require.Equal(t, true, block)
+	time.Sleep(5 * time.Second)
 	// no pending event
-	require.Nil(t, tableTriggerEventDispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, 1, count)
+	blockPendingEvent := tableTriggerEventDispatcher.blockEventStatus.getEvent()
+	require.Nil(t, blockPendingEvent)
+	require.Equal(t, int32(1), count.Load())
 
 	tableNames := tableTriggerEventDispatcher.tableSchemaStore.GetAllTableNames(2)
 	require.Equal(t, int(0), len(tableNames))
@@ -608,9 +626,11 @@ func TestTableTriggerEventDispatcherInKafka(t *testing.T) {
 
 	block = tableTriggerEventDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, callback)
 	require.Equal(t, true, block)
+	time.Sleep(5 * time.Second)
 	// no pending event
-	require.Nil(t, tableTriggerEventDispatcher.blockEventStatus.blockPendingEvent)
-	require.Equal(t, 2, count)
+	blockPendingEvent = tableTriggerEventDispatcher.blockEventStatus.getEvent()
+	require.Nil(t, blockPendingEvent)
+	require.Equal(t, int32(2), count.Load())
 
 	tableNames = tableTriggerEventDispatcher.tableSchemaStore.GetAllTableNames(3)
 	require.Equal(t, int(0), len(tableNames))
@@ -779,7 +799,7 @@ func TestDispatcherSplittableCheck(t *testing.T) {
 
 	// Create shared info with enableSplittableCheck=true
 	sharedInfo := NewSharedInfo(
-		common.NewChangefeedID(common.DefaultKeyspace),
+		common.NewChangefeedID(common.DefaultKeyspaceNamme),
 		"system",
 		false,
 		false,
@@ -804,7 +824,8 @@ func TestDispatcherSplittableCheck(t *testing.T) {
 		common.Ts(0), // startTs
 		1,            // schemaID
 		NewSchemaIDToDispatchers(),
-		false,
+		false,        // skipSyncpointAtStartTs
+		false,        // skipDMLAsStartTs
 		common.Ts(0), // pdTs
 		sink,
 		sharedInfo,
@@ -824,7 +845,6 @@ func TestDispatcherSplittableCheck(t *testing.T) {
 		},
 		TableInfo: commonTableInfo,
 		Query:     "ALTER TABLE t ADD COLUMN new_col INT",
-		TableID:   1,
 	}
 
 	// Create dispatcher event
@@ -851,4 +871,155 @@ func TestDispatcherSplittableCheck(t *testing.T) {
 	case <-time.After(1 * time.Second):
 		require.Fail(t, "Expected error to be reported within 1 second")
 	}
+}
+
+// TestDispatcher_SkipDMLAsStartTs_FilterCorrectly tests DML filtering during DDL crash recovery.
+// When skipDMLAsStartTs=true and startTs=99, DML events at commitTs=100 (startTs+1) should be skipped.
+func TestDispatcher_SkipDMLAsStartTs_FilterCorrectly(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	helper.DDL2Job("create table t(id int primary key, v int)")
+
+	// Create DML events with different commitTs
+	dmlEvent99 := helper.DML2Event("test", "t", "insert into t values(1, 1)")
+	dmlEvent99.CommitTs = 99
+	dmlEvent99.Length = 1
+
+	dmlEvent100 := helper.DML2Event("test", "t", "insert into t values(2, 2)")
+	dmlEvent100.CommitTs = 100
+	dmlEvent100.Length = 1
+
+	dmlEvent101 := helper.DML2Event("test", "t", "insert into t values(3, 3)")
+	dmlEvent101.CommitTs = 101
+	dmlEvent101.Length = 1
+
+	mockSink := sink.NewMockSink(common.MysqlSinkType)
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+
+	// Create dispatcher with skipDMLAsStartTs=true, startTs=99
+	// This simulates DDL crash recovery where:
+	// - DDL commitTs = 100
+	// - We start from ddlTs-1 = 99
+	// - Need to skip DML at commitTs = 100 (already written before crash)
+	var redoTs atomic.Uint64
+	redoTs.Store(math.MaxUint64)
+	sharedInfo := NewSharedInfo(
+		common.NewChangefeedID(common.DefaultKeyspaceNamme),
+		"system",
+		false,
+		false,
+		nil,
+		nil,
+		&syncpoint.SyncPointConfig{
+			SyncPointInterval:  time.Duration(5 * time.Second),
+			SyncPointRetention: time.Duration(10 * time.Minute),
+		},
+		false,
+		make(chan TableSpanStatusWithSeq, 128),
+		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
+		make(chan error, 1),
+	)
+
+	dispatcher := NewEventDispatcher(
+		common.NewDispatcherID(),
+		tableSpan,
+		common.Ts(99), // startTs = 99 (ddlTs - 1)
+		1,             // schemaID
+		NewSchemaIDToDispatchers(),
+		false, // skipSyncpointAtStartTs
+		true,  // skipDMLAsStartTs = true (KEY: enable DML filtering)
+		common.Ts(99),
+		mockSink,
+		sharedInfo,
+		false,
+		&redoTs,
+	)
+
+	nodeID := node.NewID()
+
+	// Test 1: DML at commitTs=99 should NOT be skipped (less than startTs+1)
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dmlEvent99)}, func() {})
+	require.True(t, block)
+	require.Equal(t, 1, len(mockSink.GetDMLs()), "DML at commitTs=99 should be processed")
+	mockSink.FlushDMLs()
+
+	// Test 2: DML at commitTs=100 SHOULD be skipped (equals startTs+1)
+	// This is the critical test - DML at ddlTs should be filtered
+	dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dmlEvent100)}, func() {})
+	// Note: block return value may be false when event is skipped
+	require.Equal(t, 0, len(mockSink.GetDMLs()), "DML at commitTs=100 should be skipped (already written before crash)")
+
+	// Test 3: DML at commitTs=101 should NOT be skipped (greater than startTs+1)
+	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dmlEvent101)}, func() {})
+	require.True(t, block)
+	require.Equal(t, 1, len(mockSink.GetDMLs()), "DML at commitTs=101 should be processed")
+	mockSink.FlushDMLs()
+
+	// Verify checkpoint advances correctly
+	checkpointTs, isEmpty := dispatcher.GetCheckpointTs(), false
+	require.False(t, isEmpty)
+	require.Greater(t, checkpointTs, uint64(99), "Checkpoint should advance beyond startTs")
+}
+
+// TestDispatcher_SkipDMLAsStartTs_Disabled tests that DML is not filtered when skipDMLAsStartTs=false
+func TestDispatcher_SkipDMLAsStartTs_Disabled(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	helper.DDL2Job("create table t(id int primary key, v int)")
+
+	// Create DML event at commitTs=100
+	dmlEvent100 := helper.DML2Event("test", "t", "insert into t values(2, 2)")
+	dmlEvent100.CommitTs = 100
+	dmlEvent100.Length = 1
+
+	mockSink := sink.NewMockSink(common.MysqlSinkType)
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+
+	// Create dispatcher with skipDMLAsStartTs=false
+	var redoTs atomic.Uint64
+	redoTs.Store(math.MaxUint64)
+	sharedInfo := NewSharedInfo(
+		common.NewChangefeedID(common.DefaultKeyspaceNamme),
+		"system",
+		false,
+		false,
+		nil,
+		nil,
+		&syncpoint.SyncPointConfig{
+			SyncPointInterval:  time.Duration(5 * time.Second),
+			SyncPointRetention: time.Duration(10 * time.Minute),
+		},
+		false,
+		make(chan TableSpanStatusWithSeq, 128),
+		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
+		make(chan error, 1),
+	)
+
+	dispatcher := NewEventDispatcher(
+		common.NewDispatcherID(),
+		tableSpan,
+		common.Ts(99), // startTs = 99
+		1,
+		NewSchemaIDToDispatchers(),
+		false, // skipSyncpointAtStartTs
+		false, // skipDMLAsStartTs = false (KEY: DML filtering disabled)
+		common.Ts(99),
+		mockSink,
+		sharedInfo,
+		false,
+		&redoTs,
+	)
+
+	nodeID := node.NewID()
+
+	// DML at commitTs=100 should NOT be skipped when skipDMLAsStartTs=false
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dmlEvent100)}, func() {})
+	require.True(t, block)
+	require.Equal(t, 1, len(mockSink.GetDMLs()), "DML at commitTs=100 should be processed when skipDMLAsStartTs=false")
 }

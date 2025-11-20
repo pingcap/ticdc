@@ -185,11 +185,5 @@ func (m *SplitDispatcherOperator) Type() string {
 }
 
 func (m *SplitDispatcherOperator) BlockTsForward() bool {
-	if m.removed.Load() {
-		return true
-	}
-	if m.finished.Load() {
-		return true
-	}
-	return false
+	return true
 }

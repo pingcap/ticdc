@@ -12,6 +12,10 @@ if [ "$SINK_TYPE" != "kafka" ]; then
 	exit 0
 fi
 
+if [ "$NEXT_GEN" = 1 ]; then
+	exit 0
+fi
+
 stop_tidb_cluster
 rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 

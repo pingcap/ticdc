@@ -555,7 +555,7 @@ func (c *CDCEtcdClientImpl) DeleteCaptureInfo(ctx context.Context, captureID str
 	// we need to clean all task position related to this capture when the capture is offline
 	// otherwise the task positions may leak
 	// FIXME (dongmen 2022.9.28): find a way to use changefeed's keyspace
-	taskKey := TaskPositionKeyPrefix(c.ClusterID, common.DefaultKeyspace)
+	taskKey := TaskPositionKeyPrefix(c.ClusterID, common.DefaultKeyspaceNamme)
 	// the taskKey format is /tidb/cdc/{clusterID}/{keyspace}/task/position/{captureID}
 	taskKey = fmt.Sprintf("%s/%s", taskKey, captureID)
 	_, err = c.Client.Delete(ctx, taskKey, clientv3.WithPrefix())

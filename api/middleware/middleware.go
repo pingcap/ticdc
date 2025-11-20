@@ -46,6 +46,8 @@ const (
 // ClientVersionHeader is the header name of client version
 const ClientVersionHeader = "X-client-version"
 
+const ctxKeyspaceKey = "ctx-keyspace"
+
 // ErrorHandleMiddleware puts the error into response
 func ErrorHandleMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -238,7 +240,7 @@ func KeyspaceCheckerMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		keyspaceManager := appcontext.GetService[keyspace.KeyspaceManager](appcontext.KeyspaceManager)
+		keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 		meta, err := keyspaceManager.LoadKeyspace(c.Request.Context(), ks)
 		if errors.IsKeyspaceNotExistError(err) {
 			c.IndentedJSON(http.StatusBadRequest, errors.ErrAPIInvalidParam)
@@ -250,12 +252,20 @@ func KeyspaceCheckerMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		if meta.State != keyspacepb.KeyspaceState_ENABLED {
-			c.IndentedJSON(http.StatusBadRequest, errors.ErrAPIInvalidParam)
-			c.Abort()
-			return
-		}
+		c.Set(ctxKeyspaceKey, meta)
 
 		c.Next()
 	}
+}
+
+func GetKeyspaceFromContext(c *gin.Context) *keyspacepb.KeyspaceMeta {
+	meta := &keyspacepb.KeyspaceMeta{}
+	obj, ok := c.Get(ctxKeyspaceKey)
+	if ok {
+		meta, ok = obj.(*keyspacepb.KeyspaceMeta)
+		if ok {
+			return meta
+		}
+	}
+	return meta
 }

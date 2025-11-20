@@ -49,6 +49,8 @@ const (
 	defaultReportDispatcherStatToStoreInterval = time.Second * 10
 
 	maxReadyEventIntervalSeconds = 10
+	// defaultSendResolvedTsInterval use to control whether to send a resolvedTs event to the dispatcher when its scan is skipped.
+	defaultSendResolvedTsInterval = time.Second * 2
 )
 
 // eventBroker get event from the eventStore, and send the event to the dispatchers.
@@ -241,12 +243,27 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 	case c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- ddlEvent:
 		updateMetricEventServiceSendDDLCount(d.info.GetMode())
 	}
+
+	tableID := int64(0)
+	if e.TableInfo != nil {
+		tableID = e.TableInfo.TableName.TableID
+	}
 	log.Info("send ddl event to dispatcher",
 		zap.Stringer("dispatcherID", d.id),
 		zap.Int64("DDLSpanTableID", d.info.GetTableSpan().TableID),
-		zap.Int64("EventTableID", e.TableID),
+		zap.Int64("EventTableID", tableID),
 		zap.String("query", e.Query), zap.Uint64("commitTs", e.FinishedTs),
 		zap.Uint64("seq", e.Seq), zap.Int64("mode", d.info.GetMode()))
+}
+
+func (c *eventBroker) sendSignalResolvedTs(d *dispatcherStat) {
+	// Can't send resolvedTs if there was a interrupted scan task happened before.
+	// d.lastScannedStartTs.Load() != 0 indicates that there was a interrupted scan task happened before.
+	if time.Since(d.lastSentResolvedTsTime.Load()) < defaultSendResolvedTsInterval || d.lastScannedStartTs.Load() != 0 {
+		return
+	}
+	watermark := d.sentResolvedTs.Load()
+	c.sendResolvedTs(d, watermark)
 }
 
 func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
@@ -308,7 +325,11 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 				c.sendHandshakeIfNeed(stat)
 				startTs := stat.sentResolvedTs.Load()
 				remoteID := node.ID(stat.info.GetServerID())
-				ddlEvents, endTs, err := c.schemaStore.FetchTableTriggerDDLEvents(stat.info.GetTableSpan().KeyspaceID, key.(common.DispatcherID), stat.filter, startTs, 100)
+				keyspaceMeta := common.KeyspaceMeta{
+					ID:   stat.info.GetTableSpan().KeyspaceID,
+					Name: stat.info.GetChangefeedID().Keyspace(),
+				}
+				ddlEvents, endTs, err := c.schemaStore.FetchTableTriggerDDLEvents(keyspaceMeta, key.(common.DispatcherID), stat.filter, startTs, 100)
 				if err != nil {
 					log.Error("table trigger ddl events fetch failed", zap.Uint32("keyspaceID", stat.info.GetTableSpan().KeyspaceID), zap.Stringer("dispatcherID", stat.id), zap.Error(err))
 					return true
@@ -369,8 +390,13 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		return false, common.DataRange{}
 	}
 
+	keyspaceMeta := common.KeyspaceMeta{
+		ID:   task.info.GetTableSpan().KeyspaceID,
+		Name: task.changefeedStat.changefeedID.Keyspace(),
+	}
+
 	// 2. Constrain the data range by the ddl state of the table.
-	ddlState, err := c.schemaStore.GetTableDDLEventState(task.info.GetTableSpan().KeyspaceID, task.info.GetTableSpan().TableID)
+	ddlState, err := c.schemaStore.GetTableDDLEventState(keyspaceMeta, task.info.GetTableSpan().TableID)
 	if err != nil {
 		log.Error("GetTableDDLEventState failed", zap.Uint32("keyspaceID", task.info.GetTableSpan().KeyspaceID), zap.Int64("tableID", task.info.GetTableSpan().TableID), zap.Error(err))
 		return false, common.DataRange{}
@@ -581,7 +607,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 	available := item.(*atomic.Uint64)
-
 	if available.Load() < c.scanLimitInBytes {
 		task.resetScanLimit()
 	}
@@ -589,11 +614,18 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	sl := c.calculateScanLimit(task)
 	ok = allocQuota(available, uint64(sl.maxDMLBytes))
 	if !ok {
-		log.Debug("not enough memory quota, skip scan",
+		log.Debug("changefeed available memory quota is not enough, skip scan",
 			zap.String("changefeed", changefeedID.String()),
 			zap.String("remote", remoteID.String()),
 			zap.Uint64("available", available.Load()),
 			zap.Uint64("required", uint64(sl.maxDMLBytes)))
+		c.sendSignalResolvedTs(task)
+		return
+	}
+
+	if uint64(sl.maxDMLBytes) > task.availableMemoryQuota.Load() {
+		log.Debug("dispatcher available memory quota is not enough, skip scan", zap.Stringer("dispatcher", task.id), zap.Uint64("available", task.availableMemoryQuota.Load()), zap.Int64("required", int64(sl.maxDMLBytes)))
+		c.sendSignalResolvedTs(task)
 		return
 	}
 
@@ -743,8 +775,7 @@ func (c *eventBroker) flushResolvedTs(ctx context.Context, cache *resolvedTsCach
 	if cache == nil || cache.len == 0 {
 		return
 	}
-	msg := &event.BatchResolvedEvent{}
-	msg.Events = append(msg.Events, cache.getAll()...)
+	msg := event.NewBatchResolvedEvent(cache.getAll())
 	if len(msg.Events) == 0 {
 		return
 	}
@@ -895,6 +926,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	dispatcher := newDispatcherStat(info, uint64(len(c.taskChan)), uint64(len(c.messageCh)), nil, status)
 	dispatcherPtr := &atomic.Pointer[dispatcherStat]{}
 	dispatcherPtr.Store(dispatcher)
+	status.addDispatcher(id, dispatcherPtr)
 	if span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
 		c.tableTriggerDispatchers.Store(id, dispatcherPtr)
 		log.Info("table trigger dispatcher register dispatcher",
@@ -934,7 +966,11 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		return nil
 	}
 
-	err := c.schemaStore.RegisterTable(span.KeyspaceID, span.GetTableID(), info.GetStartTs())
+	keyspaceMeta := common.KeyspaceMeta{
+		ID:   span.KeyspaceID,
+		Name: changefeedID.Keyspace(),
+	}
+	err := c.schemaStore.RegisterTable(keyspaceMeta, span.GetTableID(), info.GetStartTs())
 	if err != nil {
 		log.Error("register table to schemaStore failed",
 			zap.Uint32("keyspaceID", span.KeyspaceID),
@@ -971,10 +1007,10 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	}
 	stat := statPtr.(*atomic.Pointer[dispatcherStat]).Load()
 
-	stat.changefeedStat.removeDispatcher()
+	stat.changefeedStat.removeDispatcher(id)
 	changefeedID := dispatcherInfo.GetChangefeedID()
 
-	if stat.changefeedStat.dispatcherCount.Load() == 0 {
+	if stat.changefeedStat.isEmpty() {
 		log.Info("All dispatchers for the changefeed are removed, remove the changefeed status",
 			zap.Stringer("changefeedID", changefeedID),
 		)
@@ -986,7 +1022,11 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	c.eventStore.UnregisterDispatcher(changefeedID, id)
 
 	span := dispatcherInfo.GetTableSpan()
-	c.schemaStore.UnregisterTable(span.KeyspaceID, span.TableID)
+	keyspaceMeta := common.KeyspaceMeta{
+		ID:   span.KeyspaceID,
+		Name: changefeedID.Keyspace(),
+	}
+	c.schemaStore.UnregisterTable(keyspaceMeta, span.TableID)
 	c.dispatchers.Delete(id)
 
 	log.Info("remove dispatcher",
@@ -1029,7 +1069,11 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	var tableInfo *common.TableInfo
 	if !span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
 		var err error
-		tableInfo, err = c.schemaStore.GetTableInfo(span.KeyspaceID, span.GetTableID(), dispatcherInfo.GetStartTs())
+		keyspaceMeta := common.KeyspaceMeta{
+			ID:   span.KeyspaceID,
+			Name: changefeedID.Keyspace(),
+		}
+		tableInfo, err = c.schemaStore.GetTableInfo(keyspaceMeta, span.GetTableID(), dispatcherInfo.GetStartTs())
 		if err != nil {
 			log.Error("get table info from schemaStore failed",
 				zap.Stringer("dispatcherID", dispatcherID),
@@ -1046,6 +1090,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 
 	for {
 		if statPtr.CompareAndSwap(oldStat, newStat) {
+			status.addDispatcher(dispatcherID, statPtr)
 			break
 		}
 		log.Warn("reset dispatcher failed since the dispatcher is changed concurrently",
@@ -1120,20 +1165,32 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 	}
 
 	holder := make(map[common.GID]uint64, len(availables))
+	dispatcherAvailable := make(map[common.DispatcherID]uint64, len(availables))
 	for _, item := range availables {
 		holder[item.Gid] = item.Available
+		for dispatcherID, available := range item.DispatcherAvailable {
+			dispatcherAvailable[dispatcherID] = available
+		}
 	}
 
 	c.changefeedMap.Range(func(k, v interface{}) bool {
 		changefeedID := k.(common.ChangeFeedID)
 		changefeed := v.(*changefeedStatus)
-
 		available, ok := holder[changefeedID.ID()]
-		if !ok {
-			return true
+		if ok {
+			changefeed.availableMemoryQuota.Store(from, atomic.NewUint64(available))
+			metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(available))
 		}
-		changefeed.availableMemoryQuota.Store(from, atomic.NewUint64(available))
-		metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(available))
+		return true
+	})
+
+	c.dispatchers.Range(func(k, v interface{}) bool {
+		dispatcherID := k.(common.DispatcherID)
+		dispatcher := v.(*atomic.Pointer[dispatcherStat]).Load()
+		available, ok := dispatcherAvailable[dispatcherID]
+		if ok {
+			dispatcher.availableMemoryQuota.Store(available)
+		}
 		return true
 	})
 }

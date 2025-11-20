@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/utils/heap"
+	"github.com/uber-go/atomic"
 )
 
 type taskAndTime struct {
@@ -83,7 +84,7 @@ type waitReactor struct {
 
 	// It is only use in test cases, to stop the schedule working.
 	blockUntil int
-	freeToRun  bool
+	freeToRun  *atomic.Bool
 }
 
 func newWaitReactor(threadPool *threadPoolImpl) *waitReactor {
@@ -94,7 +95,7 @@ func newWaitReactor(threadPool *threadPoolImpl) *waitReactor {
 		threadPool:        threadPool,
 		stopSignal:        make(chan struct{}),
 
-		freeToRun: true,
+		freeToRun: atomic.NewBool(true),
 	}
 
 	waitReactor.wg.Add(2)
@@ -111,7 +112,7 @@ const (
 // Don't execute any task before the tasks in the waitingQueue is larger than the given number.
 func (r *waitReactor) blockForTest(until int) {
 	r.blockUntil = until
-	r.freeToRun = false
+	r.freeToRun.Store(false)
 }
 
 // Push the new task to the waitingQueue.
@@ -158,11 +159,11 @@ func (r *waitReactor) executeTaskLoop() {
 		default:
 		}
 
-		if !r.freeToRun {
+		if !r.freeToRun.Load() {
 			for r.waitingQueue.len() < r.blockUntil {
 				time.Sleep(10 * time.Millisecond)
 			}
-			r.freeToRun = true
+			r.freeToRun.Store(true)
 			continue
 		}
 

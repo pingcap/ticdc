@@ -18,9 +18,11 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/IBM/sarama/mocks"
+	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"go.uber.org/zap"
 )
 
 // mockFactory is a mock implementation of Factory interface.
@@ -133,9 +135,14 @@ func (p *MockSaramaAsyncProducer) AsyncRunCallback(
 			return errors.Trace(err)
 		case ack := <-p.AsyncProducer.Successes():
 			if ack != nil {
-				callback := ack.Metadata.(func())
-				if callback != nil {
-					callback()
+				switch meta := ack.Metadata.(type) {
+				case *messageMetadata:
+					if meta != nil && meta.callback != nil {
+						meta.callback()
+					}
+				default:
+					log.Error("unknown message metadata type in mock async producer",
+						zap.Any("metadata", ack.Metadata))
 				}
 			}
 		case err := <-p.AsyncProducer.Errors():
@@ -154,12 +161,16 @@ func (p *MockSaramaAsyncProducer) AsyncRunCallback(
 
 // AsyncSend implement the AsyncProducer interface.
 func (p *MockSaramaAsyncProducer) AsyncSend(ctx context.Context, topic string, partition int32, message *common.Message) error {
+	meta := &messageMetadata{
+		callback: message.Callback,
+		logInfo:  message.LogInfo,
+	}
 	msg := &sarama.ProducerMessage{
 		Topic:     topic,
 		Partition: partition,
 		Key:       sarama.StringEncoder(message.Key),
 		Value:     sarama.ByteEncoder(message.Value),
-		Metadata:  message.Callback,
+		Metadata:  meta,
 	}
 	select {
 	case <-ctx.Done():

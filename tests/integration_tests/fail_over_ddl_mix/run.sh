@@ -155,7 +155,7 @@ function kill_server() {
 	for count in {1..10}; do
 		case $((RANDOM % 2)) in
 		0)
-			cdc_pid_1=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8300")
+			cdc_pid_1=$(get_cdc_pid 127.0.0.1 8300)
 			if [ -z "$cdc_pid_1" ]; then
 				continue
 			fi
@@ -165,7 +165,7 @@ function kill_server() {
 			run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-$count" --addr "127.0.0.1:8300"
 			;;
 		1)
-			cdc_pid_2=$(pgrep -f "$CDC_BINARY.*--addr 127.0.0.1:8301")
+			cdc_pid_2=$(get_cdc_pid 127.0.0.1 8301)
 			if [ -z "$cdc_pid_2" ]; then
 				continue
 			fi
@@ -220,9 +220,9 @@ main() {
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
 
-	checkpoint1=$(cdc cli changefeed query -c "test" 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
+	checkpoint1=$(cdc_cli_changefeed query -c "test" 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
 	sleep 20
-	checkpoint2=$(cdc cli changefeed query -c "test" 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
+	checkpoint2=$(cdc_cli_changefeed query -c "test" 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
 
 	if [[ "$checkpoint1" -eq "$checkpoint2" ]]; then
 		echo "checkpoint is not changed"
@@ -287,7 +287,7 @@ main_with_consistent() {
 	check_sync_diff $WORK_DIR $WORK_DIR/consistent_diff_config.toml
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 main
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

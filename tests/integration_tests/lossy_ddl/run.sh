@@ -32,6 +32,10 @@ function check_lossy_ddl() {
 export -f check_lossy_ddl
 
 function run() {
+	# next-gen mode doesn't support lossy ddl
+	if [ "$NEXT_GEN" = 1 ]; then
+		return
+	fi
 	# Use blackhole sink to check if the DDL is lossy.
 	# So no need to run this test for other sinks.
 	if [ "$SINK_TYPE" != "storage" ]; then
@@ -54,6 +58,6 @@ function run() {
 	cleanup_process $CDC_BINARY
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 run $*
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

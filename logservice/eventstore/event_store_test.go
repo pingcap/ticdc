@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -27,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/logservice/logpuller"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
 )
@@ -89,11 +91,12 @@ func (s *mockSubscriptionClient) Unsubscribe(subID logpuller.SubscriptionID) {
 }
 
 func newEventStoreForTest(path string) (logpuller.SubscriptionClient, EventStore) {
-	ctx := context.Background()
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
 	subClient := NewMockSubscriptionClient()
-	store := New(ctx, path, subClient)
+	store := New(path, subClient)
 	return subClient, store
 }
 
@@ -250,19 +253,6 @@ func TestEventStoreOnlyReuseDispatcherSuccess(t *testing.T) {
 		ok := es.RegisterDispatcher(cfID, dispatcherID3, span, 100, func(watermark uint64, latestCommitTs uint64) {}, true, false)
 		require.True(t, ok)
 	}
-
-	// 4. Verify that dispatcherID2 and dispatcherID3 are included in the changefeedStat, confirming
-	//    that the defer cleanup logic was not incorrectly triggered.
-	v, ok := es.changefeedMeta.Load(cfID)
-	require.True(t, ok)
-	cfStat := v.(*changefeedStat)
-	cfStat.mutex.Lock()
-	defer cfStat.mutex.Unlock()
-	require.Len(t, cfStat.dispatchers, 3, "dispatcher2 and dispatcher3 should be registered successfully")
-	_, dispatcher2Exists := cfStat.dispatchers[dispatcherID2]
-	require.True(t, dispatcher2Exists, "dispatcher2 should exist in changefeedStat")
-	_, dispatcher3Exists := cfStat.dispatchers[dispatcherID3]
-	require.True(t, dispatcher3Exists, "dispatcher3 should exist in changefeedStat")
 }
 
 func TestEventStoreNonOnlyReuseDispatcher(t *testing.T) {
@@ -596,139 +586,13 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 	}
 }
 
-func TestChangefeedStatManagement(t *testing.T) {
-	_, store := newEventStoreForTest(fmt.Sprintf("/tmp/%s", t.Name()))
-	es := store.(*eventStore)
-
-	cfID1 := common.NewChangefeedID4Test("default", "test-cf-1")
-	cfID2 := common.NewChangefeedID4Test("default", "test-cf-2")
-
-	dispatcherID1 := common.NewDispatcherID()
-	dispatcherID2 := common.NewDispatcherID()
-	dispatcherID3 := common.NewDispatcherID()
-
-	span1 := &heartbeatpb.TableSpan{TableID: 1}
-	span2 := &heartbeatpb.TableSpan{TableID: 2}
-	span3 := &heartbeatpb.TableSpan{TableID: 3}
-
-	// 1. Register dispatcher1 for cfID1.
-	ok := es.RegisterDispatcher(cfID1, dispatcherID1, span1, 100, func(u uint64, u2 uint64) {}, false, false)
-	require.True(t, ok)
-
-	// Check if changefeedStat for cfID1 is created.
-	v, ok := es.changefeedMeta.Load(cfID1)
-	require.True(t, ok)
-	cfStat1 := v.(*changefeedStat)
-	require.NotNil(t, cfStat1)
-	cfStat1.mutex.Lock()
-	require.Len(t, cfStat1.dispatchers, 1)
-	_, ok = cfStat1.dispatchers[dispatcherID1]
-	cfStat1.mutex.Unlock()
-	require.True(t, ok)
-
-	// 2. Register dispatcher2 for cfID1.
-	ok = es.RegisterDispatcher(cfID1, dispatcherID2, span2, 110, func(u uint64, u2 uint64) {}, false, false)
-	require.True(t, ok)
-
-	// Check if dispatcher2 is added to the same changefeedStat.
-	v, ok = es.changefeedMeta.Load(cfID1)
-	require.True(t, ok)
-	cfStat1 = v.(*changefeedStat)
-	cfStat1.mutex.Lock()
-	require.Len(t, cfStat1.dispatchers, 2)
-	_, ok = cfStat1.dispatchers[dispatcherID2]
-	cfStat1.mutex.Unlock()
-	require.True(t, ok)
-
-	// 3. Register dispatcher3 for cfID2.
-	ok = es.RegisterDispatcher(cfID2, dispatcherID3, span3, 120, func(u uint64, u2 uint64) {}, false, false)
-	require.True(t, ok)
-
-	// Check if changefeedStat for cfID2 is created.
-	v, ok = es.changefeedMeta.Load(cfID2)
-	require.True(t, ok)
-	cfStat2 := v.(*changefeedStat)
-	require.NotNil(t, cfStat2)
-	cfStat2.mutex.Lock()
-	require.Len(t, cfStat2.dispatchers, 1)
-	cfStat2.mutex.Unlock()
-
-	// 4. Unregister dispatcher1 from cfID1.
-	es.UnregisterDispatcher(cfID1, dispatcherID1)
-	v, ok = es.changefeedMeta.Load(cfID1)
-	require.True(t, ok)
-	cfStat1 = v.(*changefeedStat)
-	cfStat1.mutex.Lock()
-	require.Len(t, cfStat1.dispatchers, 1)
-	_, ok = cfStat1.dispatchers[dispatcherID1]
-	cfStat1.mutex.Unlock()
-	require.False(t, ok)
-
-	// 5. Unregister dispatcher2 from cfID1 (the last one).
-	es.UnregisterDispatcher(cfID1, dispatcherID2)
-	// Check if changefeedStat for cfID1 is removed.
-	_, ok = es.changefeedMeta.Load(cfID1)
-	require.False(t, ok)
-
-	// 6. Check cfID2 is not affected.
-	v, ok = es.changefeedMeta.Load(cfID2)
-	require.True(t, ok)
-	cfStat2 = v.(*changefeedStat)
-	cfStat2.mutex.Lock()
-	require.Len(t, cfStat2.dispatchers, 1)
-	cfStat2.mutex.Unlock()
-}
-
-func TestChangefeedStatManagementConcurrent(t *testing.T) {
-	_, store := newEventStoreForTest(fmt.Sprintf("/tmp/%s", t.Name()))
-	es := store.(*eventStore)
-
-	cfID1 := common.NewChangefeedID4Test("default", "test-cf-1")
-	cfID2 := common.NewChangefeedID4Test("default", "test-cf-2")
-	cfIDs := []common.ChangeFeedID{cfID1, cfID2}
-
-	concurrency := 100
-	dispatchersPerRoutine := 20
-	var wg sync.WaitGroup
-	wg.Add(concurrency)
-
-	for i := 0; i < concurrency; i++ {
-		go func(routineID int) {
-			defer wg.Done()
-			for j := 0; j < dispatchersPerRoutine; j++ {
-				dispatcherID := common.NewDispatcherID()
-				cfID := cfIDs[(routineID*dispatchersPerRoutine+j)%len(cfIDs)]
-				span := &heartbeatpb.TableSpan{TableID: int64(j)}
-
-				ok := es.RegisterDispatcher(cfID, dispatcherID, span, 100, func(u uint64, u2 uint64) {}, false, false)
-				require.True(t, ok)
-
-				es.UnregisterDispatcher(cfID, dispatcherID)
-			}
-		}(i)
-	}
-
-	wg.Wait()
-
-	// After all operations, the changefeedMeta should be empty because all dispatchers are unregistered.
-	isEmpty := true
-	es.changefeedMeta.Range(func(key, value interface{}) bool {
-		isEmpty = false
-		return false // stop iteration
-	})
-	require.True(t, isEmpty, "changefeedMeta should be empty after all dispatchers are unregistered")
-}
-
 func TestWriteToEventStore(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 
 	dir := t.TempDir()
-	store := New(ctx, dir, nil).(*eventStore)
-	defer store.Close(ctx)
+	store := New(dir, nil).(*eventStore)
+	defer store.Close(context.Background())
 
 	smallEntryKey := []byte("small-key")
 	smallEntryValue := []byte("small-value")
@@ -907,4 +771,133 @@ func TestEventStoreGetIteratorConcurrently(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestEventStoreIter_NextWithFiltering(t *testing.T) {
+	t.Parallel()
+
+	// Define a set of reusable events for different test cases.
+	// The span for the iterator will be [keyB, keyD).
+	// Filtered events (outside the span)
+	filteredInsert := &common.RawKVEntry{OpType: common.OpTypePut, Key: []byte("keyA1"), Value: []byte("valA1"), StartTs: 300, CRTs: 301}
+	filteredDelete := &common.RawKVEntry{OpType: common.OpTypeDelete, Key: []byte("keyA2"), OldValue: []byte("valA2"), StartTs: 302, CRTs: 303}
+	filteredUpdate := &common.RawKVEntry{OpType: common.OpTypePut, Key: []byte("keyA3"), Value: []byte("valA3"), OldValue: []byte("oldValA3"), StartTs: 304, CRTs: 305}
+	filteredAtEnd := &common.RawKVEntry{OpType: common.OpTypePut, Key: []byte("keyD"), Value: []byte("valD"), StartTs: 310, CRTs: 311}
+
+	// Kept events (inside the span)
+	keptInsert := &common.RawKVEntry{OpType: common.OpTypePut, Key: []byte("keyB1"), Value: []byte("valB1"), StartTs: 400, CRTs: 401}
+	keptDelete := &common.RawKVEntry{OpType: common.OpTypeDelete, Key: []byte("keyB2"), OldValue: []byte("valB2"), StartTs: 402, CRTs: 403}
+	keptUpdate := &common.RawKVEntry{OpType: common.OpTypePut, Key: []byte("keyB3"), Value: []byte("valB3"), OldValue: []byte("oldValB3"), StartTs: 404, CRTs: 405}
+
+	testCases := []struct {
+		name           string
+		allEvents      []*common.RawKVEntry
+		expectedEvents []*common.RawKVEntry
+	}{
+		{
+			name:           "FilteredInsert-then-KeptDelete",
+			allEvents:      []*common.RawKVEntry{filteredInsert, keptDelete},
+			expectedEvents: []*common.RawKVEntry{keptDelete},
+		},
+		{
+			name:           "FilteredDelete-then-KeptInsert",
+			allEvents:      []*common.RawKVEntry{filteredDelete, keptInsert},
+			expectedEvents: []*common.RawKVEntry{keptInsert},
+		},
+		{
+			name:           "FilteredUpdate-then-KeptInsert",
+			allEvents:      []*common.RawKVEntry{filteredUpdate, keptInsert},
+			expectedEvents: []*common.RawKVEntry{keptInsert},
+		},
+		{
+			name:           "FilteredUpdate-then-KeptDelete",
+			allEvents:      []*common.RawKVEntry{filteredUpdate, keptDelete},
+			expectedEvents: []*common.RawKVEntry{keptDelete},
+		},
+		{
+			name:           "KeptInsert-then-FilteredAtEnd",
+			allEvents:      []*common.RawKVEntry{keptInsert, filteredAtEnd},
+			expectedEvents: []*common.RawKVEntry{keptInsert},
+		},
+		{
+			name:           "MultipleFiltered-then-KeptUpdate",
+			allEvents:      []*common.RawKVEntry{filteredInsert, filteredDelete, keptUpdate},
+			expectedEvents: []*common.RawKVEntry{keptUpdate},
+		},
+	}
+
+	var subID uint64 = 1
+	var tableID int64 = 42
+	iteratorSpan := &heartbeatpb.TableSpan{
+		TableID:  tableID,
+		StartKey: []byte("keyB"),
+		EndKey:   []byte("keyD"),
+	}
+
+	// This test now focuses on a single, more comprehensive scenario.
+	for _, tc := range testCases {
+		dir := t.TempDir()
+		db, err := pebble.Open(dir, &pebble.Options{})
+		require.NoError(t, err)
+		t.Run(tc.name, func(t *testing.T) {
+			// Write test data
+			batch := db.NewBatch()
+			for _, event := range tc.allEvents {
+				key := EncodeKey(subID, tableID, event, CompressionNone)
+				value := event.Encode()
+				require.NoError(t, batch.Set(key, value, pebble.NoSync))
+			}
+			require.NoError(t, batch.Commit(pebble.NoSync))
+
+			// Create iterator with a wider range to ensure it sees all keys,
+			// so we can test the internal filtering logic.
+			start := EncodeKeyPrefix(subID, tableID, 0)
+			end := EncodeKeyPrefix(subID, tableID, 500)
+			innerIter, err := db.NewIter(&pebble.IterOptions{
+				LowerBound: start,
+				UpperBound: end,
+			})
+			require.NoError(t, err)
+			_ = innerIter.First()
+
+			decoder, err := zstd.NewReader(nil)
+			require.NoError(t, err)
+
+			iter := &eventStoreIter{
+				tableSpan:     iteratorSpan,
+				needCheckSpan: true, // Enable span checking logic
+				innerIter:     innerIter,
+				decoder:       decoder,
+				decoderPool:   nil, // Not needed for this test
+			}
+
+			// Collect results
+			var results []*common.RawKVEntry
+			for {
+				rawKV, _ := iter.Next()
+				if rawKV == nil {
+					break
+				}
+				// Make a copy to verify against later, as the original pointer's content might be overwritten if reused.
+				kvCopy := *rawKV
+				results = append(results, &kvCopy)
+			}
+			require.NoError(t, iter.innerIter.Close())
+
+			// Verify results
+			require.Len(t, results, len(tc.expectedEvents), "Should only read events within the span")
+
+			for i, res := range results {
+				// Check content correctness
+				require.True(t, bytes.Equal(tc.expectedEvents[i].Key, res.Key))
+				require.True(t, bytes.Equal(tc.expectedEvents[i].Value, res.Value))
+				require.True(t, bytes.Equal(tc.expectedEvents[i].OldValue, res.OldValue))
+				require.Equal(t, tc.expectedEvents[i].OpType, res.OpType)
+				require.Equal(t, tc.expectedEvents[i].StartTs, res.StartTs)
+				require.Equal(t, tc.expectedEvents[i].CRTs, res.CRTs)
+			}
+		})
+		require.NoError(t, db.Close())
+		require.NoError(t, os.RemoveAll(dir))
+	}
 }

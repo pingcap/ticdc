@@ -33,7 +33,7 @@ const (
 	// we consider it is in-active and remove it.
 	heartbeatTimeout = time.Second * 3600
 
-	minScanLimitInBytes     = 1024 * 128  // 128KB
+	minScanLimitInBytes     = 1024        // 1KB
 	maxScanLimitInBytes     = 1024 * 1024 // 1MB
 	updateScanLimitInterval = time.Second * 10
 )
@@ -90,6 +90,7 @@ type dispatcherStat struct {
 	maxScanLimitInBytes     atomic.Int64
 	lastUpdateScanLimitTime atomic.Time
 	lastScanBytes           atomic.Int64
+	availableMemoryQuota    atomic.Uint64
 
 	lastReceivedResolvedTsTime atomic.Time
 	lastSentResolvedTsTime     atomic.Time
@@ -149,9 +150,8 @@ func newDispatcherStat(
 	}
 
 	// A small value to avoid too many scan tasks at the first place.
-	dispStat.lastScanBytes.Store(1024)
-
-	changefeedStatus.addDispatcher()
+	dispStat.lastScanBytes.Store(minScanLimitInBytes)
+	dispStat.availableMemoryQuota.Store(minScanLimitInBytes)
 
 	if info.SyncPointEnabled() {
 		dispStat.enableSyncPoint = true
@@ -404,7 +404,8 @@ func (c *resolvedTsCache) isFull() bool {
 }
 
 func (c *resolvedTsCache) getAll() []pevent.ResolvedEvent {
-	res := c.cache[:c.len]
+	res := make([]pevent.ResolvedEvent, c.len)
+	copy(res, c.cache[:c.len]) // must explicitly copy the slice to avoid data being covered by the next add operation
 	c.reset()
 	return res
 }
@@ -416,24 +417,30 @@ func (c *resolvedTsCache) reset() {
 type changefeedStatus struct {
 	changefeedID common.ChangeFeedID
 
-	// dispatcherCount is the number of the dispatchers that belong to this changefeed.
-	dispatcherCount atomic.Uint64
+	dispatchers sync.Map // common.DispatcherID -> *atomic.Pointer[dispatcherStat]
 
-	dispatcherStatMap    sync.Map // nodeID -> dispatcherID -> dispatcherStat
 	availableMemoryQuota sync.Map // nodeID -> atomic.Uint64 (memory quota in bytes)
 }
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
-	stat := &changefeedStatus{
+	return &changefeedStatus{
 		changefeedID: changefeedID,
 	}
-	return stat
 }
 
-func (c *changefeedStatus) addDispatcher() {
-	c.dispatcherCount.Inc()
+func (c *changefeedStatus) addDispatcher(id common.DispatcherID, dispatcher *atomic.Pointer[dispatcherStat]) {
+	c.dispatchers.Store(id, dispatcher)
 }
 
-func (c *changefeedStatus) removeDispatcher() {
-	c.dispatcherCount.Dec()
+func (c *changefeedStatus) removeDispatcher(id common.DispatcherID) {
+	c.dispatchers.Delete(id)
+}
+
+func (c *changefeedStatus) isEmpty() bool {
+	empty := true
+	c.dispatchers.Range(func(key, value any) bool {
+		empty = false
+		return false // stop iteration
+	})
+	return empty
 }
