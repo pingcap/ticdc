@@ -115,17 +115,17 @@ func (oc *Controller) Execute() time.Time {
 // RemoveTasksBySchemaID remove all tasks by schema id.
 // it is only by the barrier when the schema is dropped by ddl
 func (oc *Controller) RemoveTasksBySchemaID(schemaID int64) {
-	for _, replicaSet := range oc.spanController.RemoveBySchemaID(schemaID) {
+	oc.spanController.RemoveBySchemaID(func(replicaSet *replica.SpanReplication) {
 		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.spanController, replicaSet))
-	}
+	}, schemaID)
 }
 
 // RemoveTasksByTableIDs remove all tasks by table ids.
 // it is only called by the barrier when the table is dropped by ddl
 func (oc *Controller) RemoveTasksByTableIDs(tables ...int64) {
-	for _, replicaSet := range oc.spanController.RemoveByTableIDs(tables...) {
+	oc.spanController.RemoveByTableIDs(func(replicaSet *replica.SpanReplication) {
 		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.spanController, replicaSet))
-	}
+	}, tables...)
 }
 
 // AddOperator adds an operator to the controller, if the operator already exists, return false.
@@ -146,7 +146,7 @@ func (oc *Controller) AddOperator(op operator.Operator[common.DispatcherID, *hea
 			zap.String("role", oc.role),
 			zap.String("changefeed", oc.changefeedID.Name()),
 			zap.String("operator", op.String()))
-		op.OnTaskRemoved()
+		return false
 	}
 	oc.pushOperator(op)
 	return true

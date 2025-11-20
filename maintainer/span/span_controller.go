@@ -489,35 +489,31 @@ func (c *Controller) RemoveAll() []*replica.SpanReplication {
 }
 
 // RemoveByTableIDs removes the tasks by the table ids and return the scheduled tasks
-func (c *Controller) RemoveByTableIDs(tableIDs ...int64) []*replica.SpanReplication {
+func (c *Controller) RemoveByTableIDs(fn func(task *replica.SpanReplication), tableIDs ...int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	tasks := make([]*replica.SpanReplication, 0)
 	for _, tblID := range tableIDs {
 		for _, task := range c.tableTasks[tblID] {
-			c.removeSpanWithoutLock(task)
 			if task.IsScheduled() {
-				tasks = append(tasks, task)
+				fn(task)
 			}
+			c.removeSpanWithoutLock(task)
 		}
 	}
-	return tasks
 }
 
 // RemoveBySchemaID removes the tasks by the schema id and return the scheduled tasks
-func (c *Controller) RemoveBySchemaID(schemaID int64) []*replica.SpanReplication {
+func (c *Controller) RemoveBySchemaID(fn func(replicaSet *replica.SpanReplication), schemaID int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	tasks := make([]*replica.SpanReplication, 0)
 	for _, task := range c.schemaTasks[schemaID] {
-		c.removeSpanWithoutLock(task)
 		if task.IsScheduled() {
-			tasks = append(tasks, task)
+			fn(task)
 		}
+		c.removeSpanWithoutLock(task)
 	}
-	return tasks
 }
 
 // removeSpanWithoutLock removes the spans from the db without lock
