@@ -145,7 +145,7 @@ var defaultReplicaConfig = &ReplicaConfig{
 	},
 	Scheduler: &ChangefeedSchedulerConfig{
 		EnableTableAcrossNodes: false,
-		RegionThreshold:        100_000,
+		RegionThreshold:        100_00,
 	},
 	Integrity: &IntegrityConfig{
 		IntegrityCheckLevel:   "none",
