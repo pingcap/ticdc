@@ -65,7 +65,7 @@ main_with_consistent() {
 
 	## execute ddls
 	run_sql_file $CUR/data/ddls.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	# ## insert some datas
+	## insert some datas
 	run_sql_file $CUR/data/dmls.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	if ((RANDOM % 2)); then
