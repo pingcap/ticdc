@@ -79,7 +79,7 @@ func TestSyncPointEventCommitTs(t *testing.T) {
 		CommitTs:     40,
 	}
 
-	finalCommitTs := getFinalCommitTs(syncPointEvent)
+	finalCommitTs := syncPointEvent.CommitTs
 	assert.Equal(t, uint64(40), finalCommitTs, "getFinalCommitTs should return the largest commitTs")
 
 	// Test Add method with SyncPointEvent

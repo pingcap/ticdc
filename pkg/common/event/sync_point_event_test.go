@@ -169,3 +169,43 @@ func TestSyncPointEventUnmarshalErrors(t *testing.T) {
 		})
 	}
 }
+
+// TestSyncPointEventSize verifies GetSize calculation
+func TestSyncPointEventSize(t *testing.T) {
+	did := common.NewDispatcherID()
+	e := NewSyncPointEvent(did, 100, 1000, 10)
+
+	// GetSize should only return business data size, not including header
+	// Seq(8) + Epoch(8) + DispatcherID + CommitTs(8)
+	expectedSize := int64(8 + 8 + did.GetSize() + 8)
+	require.Equal(t, expectedSize, e.GetSize())
+
+	// Marshaled data should include header
+	data, err := e.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, int(e.GetSize())+GetEventHeaderSize(), len(data))
+}
+
+// TestSyncPointEventPostFlush tests PostFlush functionality
+func TestSyncPointEventPostFlush(t *testing.T) {
+	e := NewSyncPointEvent(common.NewDispatcherID(), 100, 1000, 10)
+
+	called := 0
+	e.AddPostFlushFunc(func() { called++ })
+	e.AddPostFlushFunc(func() { called++ })
+
+	e.PostFlush()
+	require.Equal(t, 2, called)
+
+	// Test ClearPostFlushFunc
+	e.ClearPostFlushFunc()
+	called = 0
+	e.PostFlush()
+	require.Equal(t, 0, called)
+
+	// Test PushFrontFlushFunc
+	e.AddPostFlushFunc(func() { called += 1 })
+	e.PushFrontFlushFunc(func() { called += 10 })
+	e.PostFlush()
+	require.Equal(t, 11, called) // Should be 10 + 1
+}
