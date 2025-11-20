@@ -124,6 +124,7 @@ func (w *Writer) SendDDLTs(event commonEvent.BlockEvent) error {
 
 	changefeedID := w.ChangefeedID.String()
 	ticdcClusterID := config.GetGlobalServerConfig().ClusterID
+
 	ddlTs := strconv.FormatUint(event.GetCommitTs(), 10)
 	var tableIds []int64
 	var dropTableIds []int64

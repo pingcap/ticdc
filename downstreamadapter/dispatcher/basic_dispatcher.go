@@ -493,7 +493,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			syncPoint := event.(*commonEvent.SyncPointEvent)
 			log.Info("dispatcher receive sync point event",
 				zap.Stringer("dispatcher", d.id),
-				zap.Any("commitTsList", syncPoint.GetCommitTsList()),
+				zap.Uint64("commitTs", syncPoint.GetCommitTs()),
 				zap.Uint64("seq", event.GetSeq()))
 
 			syncPoint.AddPostFlushFunc(func() {
@@ -700,66 +700,26 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 	} else {
 		d.blockEventStatus.setBlockEvent(event, heartbeatpb.BlockStage_WAITING)
 
-		if event.GetType() == commonEvent.TypeSyncPointEvent {
-			// deal with multi sync point commit ts in one Sync Point Event
-			// we only report the latest commitTs as the blockTs.
-			// If A receive [syncpont1, syncpoint2, syncpoint3]
-			// B receive [syncpoint1]
-			// C receive [syncpoint1, syncpoint2]
-			// then A report syncpoint3, B report syncpoint1, C report syncpoint2
-			// and barrier find A checkpointTs is exceed syncpoint1 and syncpoint2,
-			// so will just make B and C pass these syncpoint, to receive the latest syncpoint3
-			// then make syncpoint3 Write successfully.
-
-			// TODO(hyy): we could consider to just use the latest commitTs to represent this batch sync point event,
-			// instead of obtain a commitTsList in the sync point event.
-			commitTsList := event.(*commonEvent.SyncPointEvent).GetCommitTsList()
-			blockTables := event.GetBlockedTables().ToPB()
-			needDroppedTables := event.GetNeedDroppedTables().ToPB()
-			needAddedTables := commonEvent.ToTablesPB(event.GetNeedAddedTables())
-			commitTs := commitTsList[len(commitTsList)-1]
-			message := &heartbeatpb.TableSpanBlockStatus{
-				ID: d.id.ToPB(),
-				State: &heartbeatpb.State{
-					IsBlocked:         true,
-					BlockTs:           commitTs,
-					BlockTables:       blockTables,
-					NeedDroppedTables: needDroppedTables,
-					NeedAddedTables:   needAddedTables,
-					UpdatedSchemas:    nil,
-					IsSyncPoint:       true,
-					Stage:             heartbeatpb.BlockStage_WAITING,
-				},
-				Mode: d.GetMode(),
-			}
-			identifier := BlockEventIdentifier{
-				CommitTs:    commitTs,
-				IsSyncPoint: true,
-			}
-			d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
-			d.sharedInfo.blockStatusesChan <- message
-		} else {
-			message := &heartbeatpb.TableSpanBlockStatus{
-				ID: d.id.ToPB(),
-				State: &heartbeatpb.State{
-					IsBlocked:         true,
-					BlockTs:           event.GetCommitTs(),
-					BlockTables:       event.GetBlockedTables().ToPB(),
-					NeedDroppedTables: event.GetNeedDroppedTables().ToPB(),
-					NeedAddedTables:   commonEvent.ToTablesPB(event.GetNeedAddedTables()),
-					UpdatedSchemas:    commonEvent.ToSchemaIDChangePB(event.GetUpdatedSchemas()), // only exists for rename table and rename tables
-					IsSyncPoint:       false,
-					Stage:             heartbeatpb.BlockStage_WAITING,
-				},
-				Mode: d.GetMode(),
-			}
-			identifier := BlockEventIdentifier{
-				CommitTs:    event.GetCommitTs(),
-				IsSyncPoint: false,
-			}
-			d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
-			d.sharedInfo.blockStatusesChan <- message
+		message := &heartbeatpb.TableSpanBlockStatus{
+			ID: d.id.ToPB(),
+			State: &heartbeatpb.State{
+				IsBlocked:         true,
+				BlockTs:           event.GetCommitTs(),
+				BlockTables:       event.GetBlockedTables().ToPB(),
+				NeedDroppedTables: event.GetNeedDroppedTables().ToPB(),
+				NeedAddedTables:   commonEvent.ToTablesPB(event.GetNeedAddedTables()),
+				UpdatedSchemas:    commonEvent.ToSchemaIDChangePB(event.GetUpdatedSchemas()),
+				IsSyncPoint:       event.GetType() == commonEvent.TypeSyncPointEvent,
+				Stage:             heartbeatpb.BlockStage_WAITING,
+			},
+			Mode: d.GetMode(),
 		}
+		identifier := BlockEventIdentifier{
+			CommitTs:    event.GetCommitTs(),
+			IsSyncPoint: event.GetType() == commonEvent.TypeSyncPointEvent,
+		}
+		d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
+		d.sharedInfo.blockStatusesChan <- message
 	}
 
 	// dealing with events which update schema ids
