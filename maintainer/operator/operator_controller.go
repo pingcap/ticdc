@@ -146,7 +146,7 @@ func (oc *Controller) AddOperator(op operator.Operator[common.DispatcherID, *hea
 			zap.String("role", oc.role),
 			zap.String("changefeed", oc.changefeedID.Name()),
 			zap.String("operator", op.String()))
-		return false
+		op.OnTaskRemoved()
 	}
 	oc.pushOperator(op)
 	return true
