@@ -150,7 +150,7 @@ function simulate_crashes() {
 # 2. Inserting data immediately after table creation (critical race window)
 # 3. Simulating frequent CDC crashes during DDL processing
 # 4. Verifying no data loss occurs after restarts
-function main() {
+main() {
 	prepare changefeed
 
 	# Create test database
@@ -263,7 +263,6 @@ main_with_consistent() {
 trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 main
 check_logs $WORK_DIR
-run $*
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
 stop_tidb_cluster
 main_with_consistent
