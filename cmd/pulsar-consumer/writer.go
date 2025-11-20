@@ -396,19 +396,25 @@ func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool
 
 func (w *writer) onDDL(ddl *commonEvent.DDLEvent) {
 	switch w.protocol {
-	case config.ProtocolCanalJSON, config.ProtocolOpen:
+	case config.ProtocolCanalJSON:
 	default:
 		return
 	}
-	if ddl.Type != byte(timodel.ActionCreateTable) {
-		return
-	}
-	stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
-	if err != nil {
-		log.Panic("parse ddl query failed", zap.String("query", ddl.Query), zap.Error(err))
-	}
-	if v, ok := stmt.(*ast.CreateTableStmt); ok && v.Partition != nil {
-		w.partitionTableAccessor.Add(ddl.GetSchemaName(), ddl.GetTableName())
+	// TODO: support more corner cases
+	// e.g. create partition table + drop table(rename table) + create normal table: the partitionTableAccessor should drop the table when the table become normal.
+	switch timodel.ActionType(ddl.Type) {
+	case timodel.ActionCreateTable:
+		stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
+		if err != nil {
+			log.Panic("parse ddl query failed", zap.String("query", ddl.Query), zap.Error(err))
+		}
+		if v, ok := stmt.(*ast.CreateTableStmt); ok && v.Partition != nil {
+			w.partitionTableAccessor.Add(ddl.GetSchemaName(), ddl.GetTableName())
+		}
+	case timodel.ActionRenameTable:
+		if w.partitionTableAccessor.IsPartitionTable(ddl.ExtraSchemaName, ddl.ExtraTableName) {
+			w.partitionTableAccessor.Add(ddl.GetSchemaName(), ddl.GetTableName())
+		}
 	}
 }
 

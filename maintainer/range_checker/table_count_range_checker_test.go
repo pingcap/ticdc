@@ -20,14 +20,14 @@ import (
 )
 
 func TestNewTableIDRangeChecker(t *testing.T) {
-	rc := NewTableCountChecker(3)
+	rc := NewTableCountChecker([]int64{1, 2, 3})
 	require.NotNil(t, rc)
 	require.Len(t, rc.reportedMap, 0)
 	require.Equal(t, 3, rc.needCount)
 }
 
 func TestAddSubRange(t *testing.T) {
-	rc := NewTableCountChecker(3)
+	rc := NewTableCountChecker([]int64{1, 2, 3})
 	require.Len(t, rc.reportedMap, 0)
 	rc.AddSubRange(1, nil, nil)
 	require.Len(t, rc.reportedMap, 1)
@@ -37,7 +37,7 @@ func TestAddSubRange(t *testing.T) {
 }
 
 func TestIsFullyCovered(t *testing.T) {
-	rc := NewTableCountChecker(3)
+	rc := NewTableCountChecker([]int64{1, 2, 3})
 	require.False(t, rc.IsFullyCovered())
 	rc.AddSubRange(1, nil, nil)
 	require.False(t, rc.IsFullyCovered())
@@ -47,7 +47,7 @@ func TestIsFullyCovered(t *testing.T) {
 }
 
 func TestReset(t *testing.T) {
-	rc := NewTableCountChecker(3)
+	rc := NewTableCountChecker([]int64{1, 2, 3})
 	rc.AddSubRange(1, nil, nil)
 	rc.AddSubRange(2, nil, nil)
 	rc.AddSubRange(3, nil, nil)

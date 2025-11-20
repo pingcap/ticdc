@@ -106,7 +106,7 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 			if dynamicSplitEnabled {
 				event.rangeChecker = range_checker.NewTableSpanRangeChecker(spanController.GetkeyspaceID(), status.BlockTables.TableIDs)
 			} else {
-				event.rangeChecker = range_checker.NewTableCountChecker(len(status.BlockTables.TableIDs))
+				event.rangeChecker = range_checker.NewTableCountChecker(status.BlockTables.TableIDs)
 			}
 		}
 	}
@@ -120,33 +120,31 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 }
 
 func (be *BarrierEvent) createRangeCheckerForTypeAll() {
+	reps := be.spanController.GetAllTasks()
+	tbls := make([]int64, 0, len(reps))
+	for _, rep := range reps {
+		tbls = append(tbls, rep.Span.TableID)
+	}
 	if be.dynamicSplitEnabled {
-		reps := be.spanController.GetAllTasks()
-		tbls := make([]int64, 0, len(reps))
-		for _, rep := range reps {
-			tbls = append(tbls, rep.Span.TableID)
-		}
-		tbls = append(tbls, common.DDLSpanTableID)
 		be.rangeChecker = range_checker.NewTableSpanRangeChecker(be.spanController.GetkeyspaceID(), tbls)
 	} else {
-		be.rangeChecker = range_checker.NewTableCountChecker(be.spanController.TaskSize())
+		be.rangeChecker = range_checker.NewTableCountChecker(tbls)
 	}
 	log.Info("create range checker for block event", zap.Any("influcenceType", be.blockedDispatchers.InfluenceType), zap.Any("commitTs", be.commitTs))
 }
 
 func (be *BarrierEvent) createRangeCheckerForTypeDB() {
-	if be.dynamicSplitEnabled {
-		reps := be.spanController.GetTasksBySchemaID(be.blockedDispatchers.SchemaID)
-		tbls := make([]int64, 0, len(reps))
-		for _, rep := range reps {
-			tbls = append(tbls, rep.Span.TableID)
-		}
+	reps := be.spanController.GetTasksBySchemaID(be.blockedDispatchers.SchemaID)
+	tbls := make([]int64, 0, len(reps))
+	for _, rep := range reps {
+		tbls = append(tbls, rep.Span.TableID)
+	}
 
-		tbls = append(tbls, common.DDLSpanTableID)
+	tbls = append(tbls, common.DDLSpanTableID)
+	if be.dynamicSplitEnabled {
 		be.rangeChecker = range_checker.NewTableSpanRangeChecker(be.spanController.GetkeyspaceID(), tbls)
 	} else {
-		be.rangeChecker = range_checker.NewTableCountChecker(
-			be.spanController.GetTaskSizeBySchemaID(be.blockedDispatchers.SchemaID) + 1 /*table trigger event dispatcher*/)
+		be.rangeChecker = range_checker.NewTableCountChecker(tbls)
 	}
 	log.Info("create range checker for block event", zap.Any("influcenceType", be.blockedDispatchers.InfluenceType), zap.Any("commitTs", be.commitTs))
 }
@@ -363,7 +361,7 @@ func (be *BarrierEvent) allDispatcherReported() bool {
 				if be.dynamicSplitEnabled {
 					be.rangeChecker = range_checker.NewTableSpanRangeChecker(be.spanController.GetkeyspaceID(), be.blockedDispatchers.TableIDs)
 				} else {
-					be.rangeChecker = range_checker.NewTableCountChecker(len(be.blockedDispatchers.TableIDs))
+					be.rangeChecker = range_checker.NewTableCountChecker(be.blockedDispatchers.TableIDs)
 				}
 			case heartbeatpb.InfluenceType_DB:
 				be.createRangeCheckerForTypeDB()
@@ -515,7 +513,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 }
 
 func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
-	if time.Since(be.lastResendTime) < 10*time.Second {
+	if time.Since(be.lastResendTime) < time.Second {
 		return nil
 	}
 	var msgs []*messaging.TargetMessage

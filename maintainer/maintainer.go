@@ -888,7 +888,11 @@ func newDDLSpan(keyspaceID uint32, cfID common.ChangeFeedID, checkpointTs uint64
 }
 
 func (m *Maintainer) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) {
-	if cachedResp == nil {
+	// calCheckpointTs() skips advancing checkpoint when bootstrapped is false, so it won't call
+	// onNodeChanged() before FinishBootstrap succeeds. All other callers of onNodeChanged() and
+	// onMaintainerBootstrapResponse() run in the same event loop goroutine as onRemoveMaintainer(),
+	// hence guarding with m.removing is sufficient to avoid accessing a removed DDL span leading to panic.
+	if cachedResp == nil || m.removing.Load() {
 		return
 	}
 	isMySQLSinkCompatible, err := isMysqlCompatible(m.info.SinkURI)

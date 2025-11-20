@@ -347,7 +347,7 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 	key := getEventKey(status.State.BlockTs, status.State.IsSyncPoint)
 	event, ok := b.blockedEvents.Get(key)
 	if !ok {
-		log.Info("No block event found, ignore the event done message",
+		log.Debug("No block event found, ignore the event done message",
 			zap.String("changefeed", changefeedID.Name()),
 			zap.String("dispatcher", dispatcherID.String()),
 			zap.Uint64("commitTs", status.State.BlockTs),
@@ -392,7 +392,7 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 		}
 		if event.selected.Load() {
 			// the event already in the selected state, ignore the block event just sent ack
-			log.Warn("the block event already selected, ignore the block event",
+			log.Debug("the block event already selected, ignore the block event",
 				zap.String("changefeed", changefeedID.Name()),
 				zap.String("dispatcher", dispatcherID.String()),
 				zap.Uint64("commitTs", blockState.BlockTs),
