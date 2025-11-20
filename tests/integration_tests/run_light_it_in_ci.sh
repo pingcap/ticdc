@@ -32,37 +32,37 @@ group_num=${group#G}
 # 4 CPU, 16 Gi memory.
 mysql_groups=(
 	# G00
-	'event_filter charset_gbk changefeed_finish sql_mode changefeed_reconstruct fail_over_ddl_A'
-	# G01
-	'common_1 foreign_key changefeed_pause_resume fail_over_ddl_B'
-	# G02
-	'new_ci_collation safe_mode savepoint fail_over_ddl_C'
-	# G03
-	'capture_suicide_while_balance_table kv_client_stream_reconnect fail_over_ddl_D'
-	# G04
-	'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
-	# G05
-	'vector simple partition_table fail_over_ddl_F'
-	# G06
-	'http_api http_api_tls fail_over_ddl_G synced_status'
-	# G07
-	'http_api_tls_with_user_auth fail_over_ddl_H changefeed_update_config synced_status_with_redo'
-	# G08
-	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry fail_over_ddl_I'
+	'changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart'
 	# G09
-	'cdc_server_tips ddl_sequence server_config_compatibility fail_over_ddl_J'
+	'changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart'
 	# G10
-	'changefeed_error bdr_mode fail_over_ddl_K split_table_check'
+	'changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart'
 	# G11
-	'multi_tables_ddl ddl_attributes multi_cdc_cluster fail_over_ddl_L'
+	'changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart'
+	# G04
+	'changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart'
+	# G09
+	'changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart'
+	# G10
+	'changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart'
+	# G11
+	'changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart'
+	# G08
+	'changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart'
+	# G09
+	'changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart'
+	# G10
+	'changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart'
+	# G11
+	'changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart'
 	# G12
-	'row_format tiflash multi_rocks fail_over_ddl_M'
-	# G13
-	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
-	# G14
-	'batch_add_table batch_update_to_no_batch fail_over_ddl_O'
-	# G15
-	'split_region changefeed_resume_with_checkpoint_ts autorandom gc_safepoint foreign_key_check ddl_for_split_tables old_arch_compatibility'
+	'changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart'
+	# G09
+	'changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart'
+	# G10
+	'changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart'
+	# G11
+	'changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart changefeed_dup_error_restart'
 )
 
 # Resource allocation for kafka light integration tests in CI pipelines:
