@@ -187,7 +187,7 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 			}
 
 			beginIndex, rowCount := 0, txnEvents[0].Len()
-			workerEventRowCount.Observe(float64(txnEvents[0].Len()))
+			workerEventRowCount.Observe(float64(rowCount))
 			for i := 1; i < len(txnEvents); i++ {
 				workerEventRowCount.Observe(float64(txnEvents[i].Len()))
 				if rowCount+txnEvents[i].Len() > int32(s.maxTxnRows) {
