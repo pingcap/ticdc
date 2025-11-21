@@ -143,7 +143,7 @@ main() {
 
 	kill -9 $DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5
 
-	sleep 15
+	sleep 20
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
 
