@@ -486,7 +486,8 @@ func (s *session) exceedLimit(nBytes int64, batchDMLs ...*event.BatchDMLEvent) b
 		return (s.eventBytes + int64(eventCount)) >= s.limit.maxDMLBytes
 	}
 
-	return (s.eventBytes+nBytes) >= s.limit.maxDMLBytes || s.scannedEntryCount > s.maxBatchRows
+	return (s.eventBytes+nBytes) >= s.limit.maxDMLBytes ||
+		(s.maxBatchRows != 0 && s.scannedEntryCount > s.maxBatchRows)
 }
 
 // eventMerger handles merging of DML and DDL events in timestamp order
