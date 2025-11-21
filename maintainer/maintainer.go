@@ -754,6 +754,7 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 		old, ok := m.checkpointTsByCapture.Get(msg.From)
 		if !ok || req.Watermark.Seq > old.Seq || (req.Watermark.Seq == old.Seq && req.Watermark.CheckpointTs > old.CheckpointTs) {
 			m.checkpointTsByCapture.Set(msg.From, *req.Watermark)
+			log.Info("hyy onHeartbeatRequest", zap.Any("watermark", *req.Watermark))
 		}
 		// Update last synced ts from all dispatchers.
 		// We don't care about the checkpoint ts of scheduler or barrier here,
