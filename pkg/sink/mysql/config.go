@@ -160,24 +160,24 @@ func New() *Config {
 
 func (c *Config) mergeConfig(cfg *config.ChangefeedConfig) {
 	if cfg.SinkConfig != nil {
-		c.SafeMode = *cfg.SinkConfig.SafeMode
+		merge(&c.SafeMode, cfg.SinkConfig.SafeMode)
 		if cfg.SinkConfig.MySQLConfig != nil {
 			mConfig := cfg.SinkConfig.MySQLConfig
-			c.WorkerCount = *mConfig.WorkerCount
-			c.MaxTxnRow = *mConfig.MaxTxnRow
-			c.MaxMultiUpdateRowCount = *mConfig.MaxMultiUpdateRowCount
-			c.MaxMultiUpdateRowSize = *mConfig.MaxMultiUpdateRowSize
-			c.TidbTxnMode = *mConfig.TiDBTxnMode
-			c.SSLCa = *mConfig.SSLCa
-			c.SSLCert = *mConfig.SSLCert
-			c.SSLKey = *mConfig.SSLKey
-			c.Timezone = *mConfig.TimeZone
-			c.WriteTimeout = *mConfig.WriteTimeout
-			c.ReadTimeout = *mConfig.ReadTimeout
-			//c.Timeout = mConfig.Timeout
-			c.BatchDMLEnable = *mConfig.EnableBatchDML
-			c.MultiStmtEnable = *mConfig.EnableMultiStatement
-			c.CachePrepStmts = *mConfig.EnableCachePreparedStatement
+			merge(&c.WorkerCount, mConfig.WorkerCount)
+			merge(&c.MaxTxnRow, mConfig.MaxTxnRow)
+			merge(&c.MaxMultiUpdateRowCount, mConfig.MaxMultiUpdateRowCount)
+			merge(&c.MaxMultiUpdateRowSize, mConfig.MaxMultiUpdateRowSize)
+			merge(&c.TidbTxnMode, mConfig.TiDBTxnMode)
+			merge(&c.SSLCa, mConfig.SSLCa)
+			merge(&c.SSLCert, mConfig.SSLCert)
+			merge(&c.SSLKey, mConfig.SSLKey)
+			merge(&c.Timezone, mConfig.TimeZone)
+			merge(&c.WriteTimeout, mConfig.WriteTimeout)
+			merge(&c.ReadTimeout, mConfig.ReadTimeout)
+			merge(&c.DialTimeout, mConfig.Timeout)
+			merge(&c.BatchDMLEnable, mConfig.EnableBatchDML)
+			merge(&c.MultiStmtEnable, mConfig.EnableMultiStatement)
+			merge(&c.CachePrepStmts, mConfig.EnableCachePreparedStatement)
 		}
 	}
 }
@@ -596,4 +596,10 @@ func getBool(values url.Values, key string, target *bool) error {
 		*target = enable
 	}
 	return nil
+}
+
+func merge[T int | bool | string](dst, src *T) {
+	if src != nil {
+		*dst = *src
+	}
 }
