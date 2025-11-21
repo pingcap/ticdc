@@ -223,8 +223,6 @@ func generateDSNByConfig(
 	// auto fetch max_allowed_packet on every new connection
 	dsnCfg.Params["maxAllowedPacket"] = "0"
 
-	dsnCfg.Params["tidb_slow_txn_log_threshold"] = "30000"
-
 	autoRandom, err := checkTiDBVariable(testDB, "allow_auto_random_explicit_insert", "1")
 	if err != nil {
 		return "", err
