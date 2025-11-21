@@ -76,6 +76,10 @@ function execute_ddls() {
 			sleep 0.5
 			run_sql "ALTER TABLE test.$table_name DROP COLUMN new_col;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 			;;
+		3)
+			echo "DDL: Truncating $table_name..."
+			run_sql "TRUNCATE TABLE test.$table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+			;;
 		esac
 
 		sleep 1

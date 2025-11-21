@@ -118,6 +118,21 @@ function run() {
 	sleep 10
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 
+	run_sql "create database foo;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	check_db_exists "foo" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	sleep 10
+	check_db_not_exists "foo" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+
+	# only capture table filter.t1, so filter.t2 should not be replicated
+	run_sql "create database if not exists filter;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "create database if not exists filter;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	run_sql "create table filter.t1 (id int primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	check_table_exists "filter.t1" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	run_sql "create table filter.t2 (id int primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	check_table_exists "filter.t2" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	sleep 10
+	check_table_not_exists "filter.t2" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+
 	cleanup_process $CDC_BINARY
 }
 

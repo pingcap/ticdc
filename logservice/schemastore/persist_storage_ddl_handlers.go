@@ -1605,7 +1605,7 @@ func buildDDLEventCommonWithTableID(rawEvent *PersistedDDLEvent, tableID int64, 
 	// Note: not all ddl types will respect the `filtered` result: create tables, rename tables, rename table, exchange table partition.
 	filtered, notSync := false, false
 	var err error
-	if tableFilter != nil && rawEvent.SchemaName != "" && rawEvent.TableName != "" {
+	if tableFilter != nil {
 		filtered, notSync, err = filterDDL(
 			tableFilter,
 			rawEvent.SchemaName,
@@ -1688,7 +1688,7 @@ func buildDDLEventCommonWithTableID(rawEvent *PersistedDDLEvent, tableID int64, 
 
 func filterDDL(tableFilter filter.Filter, schema, table, query string, ddlType model.ActionType, tableInfo *model.TableInfo, startTs uint64) (bool, bool, error) {
 	filtered, notSync := false, false
-	if tableFilter != nil && schema != "" && table != "" {
+	if tableFilter != nil {
 		filtered = tableFilter.ShouldDiscardDDL(schema, table, ddlType, common.WrapTableInfo(schema, tableInfo))
 	}
 	if !filtered {
@@ -1698,7 +1698,7 @@ func filterDDL(tableFilter filter.Filter, schema, table, query string, ddlType m
 		// should be sent to downstream.
 		// So we should send the `TRUNCATE TABLE` DDL event to table trigger,
 		// to ensure the new truncated table can be handled correctly.
-		if tableFilter != nil && schema != "" && table != "" {
+		if tableFilter != nil {
 			var err error
 			// The core of whether `NotSync` is set to true is whether the DML events should be sent to downstream.
 			// If the table is filtered, we don't need to send the DML events to downstream.
@@ -1706,7 +1706,7 @@ func filterDDL(tableFilter filter.Filter, schema, table, query string, ddlType m
 			// Thus, we set `NotSync` to true.
 			// If the table is not filtered, we should send the DML events to downstream.
 			// So we set `NotSync` to false, and this corresponding DDL can be applied to log service.
-			notSync, err = tableFilter.ShouldIgnoreDDL(schema, table, query, ddlType, common.WrapTableInfo(schema, tableInfo), startTs)
+			notSync, err = tableFilter.ShouldIgnoreDDL(schema, table, query, ddlType, startTs)
 			if err != nil {
 				return false, false, err
 			}

@@ -104,11 +104,6 @@ func (b *BlockEventStatus) setBlockEvent(event commonEvent.BlockEvent, blockStag
 	b.blockPendingEvent = event
 	b.blockStage = blockStage
 	b.blockCommitTs = event.GetCommitTs()
-
-	if event.GetType() == commonEvent.TypeSyncPointEvent {
-		commitTsList := event.(*commonEvent.SyncPointEvent).GetCommitTsList()
-		b.blockCommitTs = commitTsList[len(commitTsList)-1]
-	}
 }
 
 func (b *BlockEventStatus) updateBlockStage(blockStage heartbeatpb.BlockStage) {
@@ -131,10 +126,7 @@ func (b *BlockEventStatus) getEventAndStage() (commonEvent.BlockEvent, heartbeat
 	return b.blockPendingEvent, b.blockStage
 }
 
-// actionMatchs checks whether the action is for the current pending ddl event.
-// Most of time, the pending event only have one commitTs, so when the commitTs of the action meets the pending event's commitTs, it is enough.
-// While if the pending event is a sync point event with multiple commitTs, we only can do the action
-// when all the commitTs have been received.
+// actionMatchs checks whether the action is for the current pending ddl/sync point event.
 func (b *BlockEventStatus) actionMatchs(action *heartbeatpb.DispatcherAction) bool {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
@@ -261,6 +253,8 @@ type ResendTask struct {
 	taskHandle *threadpool.TaskHandle
 }
 
+const resendTimeInterval = 10 * time.Second
+
 func newResendTask(message *heartbeatpb.TableSpanBlockStatus, dispatcher Dispatcher, callback func()) *ResendTask {
 	taskScheduler := GetDispatcherTaskScheduler()
 	t := &ResendTask{
@@ -268,14 +262,14 @@ func newResendTask(message *heartbeatpb.TableSpanBlockStatus, dispatcher Dispatc
 		dispatcher: dispatcher,
 		callback:   callback,
 	}
-	t.taskHandle = taskScheduler.Submit(t, time.Now().Add(50*time.Millisecond))
+	t.taskHandle = taskScheduler.Submit(t, time.Now().Add(resendTimeInterval))
 	return t
 }
 
 func (t *ResendTask) Execute() time.Time {
 	log.Debug("resend task", zap.Any("message", t.message), zap.Any("dispatcherID", t.dispatcher.GetId()))
 	t.dispatcher.GetBlockStatusesChan() <- t.message
-	return time.Now().Add(10 * time.Second)
+	return time.Now().Add(resendTimeInterval)
 }
 
 func (t *ResendTask) Cancel() {

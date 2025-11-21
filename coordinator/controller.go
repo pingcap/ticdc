@@ -80,11 +80,11 @@ type Controller struct {
 	taskHandlers     []*threadpool.TaskHandle
 	messageCenter    messaging.MessageCenter
 
-	changefeedChangeCh chan []*ChangefeedChange
+	changefeedChangeCh chan []*changefeedChange
 	apiLock            sync.RWMutex
 }
 
-type ChangefeedChange struct {
+type changefeedChange struct {
 	changefeedID common.ChangeFeedID
 	changefeed   *changefeed.Changefeed
 	state        config.FeedState
@@ -92,10 +92,20 @@ type ChangefeedChange struct {
 	err          *config.RunningError
 }
 
+func newChangefeedChange(changefeed *changefeed.Changefeed, state config.FeedState, changeType ChangeType, err *config.RunningError) *changefeedChange {
+	return &changefeedChange{
+		changefeedID: changefeed.ID,
+		changefeed:   changefeed,
+		state:        state,
+		changeType:   changeType,
+		err:          err,
+	}
+}
+
 func NewController(
 	version int64,
 	selfNode *node.Info,
-	changefeedChangeCh chan []*ChangefeedChange,
+	changefeedChangeCh chan []*changefeedChange,
 	backend changefeed.Backend,
 	eventCh *chann.DrainableChann[*Event],
 	batchSize int,
@@ -400,7 +410,7 @@ func (c *Controller) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.Coordin
 
 // handleMaintainerStatus handle the status report from the maintainers
 func (c *Controller) handleMaintainerStatus(from node.ID, statusList []*heartbeatpb.MaintainerStatus) {
-	changes := make([]*ChangefeedChange, 0, len(statusList))
+	changes := make([]*changefeedChange, 0, len(statusList))
 	for _, status := range statusList {
 		cfID := common.NewChangefeedIDFromPB(status.ChangefeedID)
 		change := c.handleSingleMaintainerStatus(from, status, cfID)
@@ -420,7 +430,7 @@ func (c *Controller) handleSingleMaintainerStatus(
 	from node.ID,
 	status *heartbeatpb.MaintainerStatus,
 	cfID common.ChangeFeedID,
-) *ChangefeedChange {
+) *changefeedChange {
 	// Update the operator status first
 	c.operatorController.UpdateOperatorStatus(cfID, from, status)
 
@@ -485,20 +495,11 @@ func (c *Controller) updateChangefeedStatus(
 	cf *changefeed.Changefeed,
 	cfID common.ChangeFeedID,
 	status *heartbeatpb.MaintainerStatus,
-) *ChangefeedChange {
+) *changefeedChange {
 	changed, state, err := cf.UpdateStatus(status)
-	change := &ChangefeedChange{
-		changefeedID: cfID,
-		changefeed:   cf,
-		state:        state,
-		changeType:   ChangeStateAndTs,
-	}
-	if !changed {
-		change.changeType = ChangeTs
-		return change
-	}
+	var runningErr *config.RunningError
 	if err != nil {
-		change.err = &config.RunningError{
+		runningErr = &config.RunningError{
 			Time:    time.Now(),
 			Addr:    err.Node,
 			Code:    err.Code,
@@ -506,10 +507,16 @@ func (c *Controller) updateChangefeedStatus(
 		}
 	}
 
-	log.Info("changefeed status changed",
-		zap.Stringer("changefeed", cfID),
-		zap.String("state", string(change.state)),
-		zap.Stringer("error", err))
+	changeType := ChangeTs
+	if changed {
+		changeType = ChangeStateAndTs
+		log.Info("changefeed status changed",
+			zap.Stringer("changefeed", cfID),
+			zap.String("state", string(state)),
+			zap.Stringer("error", err))
+	}
+
+	change := newChangefeedChange(cf, state, changeType, runningErr)
 	return change
 }
 

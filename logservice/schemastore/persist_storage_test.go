@@ -66,6 +66,131 @@ func TestApplyDDLJobs(t *testing.T) {
 		fetchTableDDLEventsTestCase []FetchTableDDLEventsTestCase        // test cases for fetchTableDDLEvents, nil means not check it
 		fetchTableTriggerDDLEvents  []FetchTableTriggerDDLEventsTestCase //	test cases for fetchTableTriggerDDLEvents, nil means not check it
 	}{
+		// test filter rules
+		{
+			testName:       "filter_rules",
+			initailDBInfos: nil,
+			ddlJobs: []*model.Job{
+				buildCreateSchemaJobForTest(100, "filter", 1000),
+				buildCreateTableJobForTest(100, 200, "t1", 1010), // create table 200
+				buildCreateTableJobForTest(100, 201, "t2", 1020), // create table 201
+				buildCreateSchemaJobForTest(101, "haha", 2000),
+				buildCreateTableJobForTest(101, 202, "t2", 2010), // create table 202
+			},
+			tableMap: map[int64]*BasicTableInfo{
+				200: {
+					SchemaID: 100,
+					Name:     "t1",
+				},
+				201: {
+					SchemaID: 100,
+					Name:     "t2",
+				},
+				202: {
+					SchemaID: 101,
+					Name:     "t2",
+				},
+			},
+			partitionMap: map[int64]BasicPartitionInfo{},
+			databaseMap: map[int64]*BasicDatabaseInfo{
+				100: {
+					Name: "filter",
+					Tables: map[int64]bool{
+						200: true,
+						201: true,
+					},
+				},
+				101: {
+					Name: "haha",
+					Tables: map[int64]bool{
+						202: true,
+					},
+				},
+			},
+			tablesDDLHistory: map[int64][]uint64{
+				200: {1010},
+				201: {1020},
+				202: {2010},
+			},
+			tableTriggerDDLHistory:      []uint64{1000, 1010, 1020, 2000, 2010},
+			physicalTableQueryTestCases: nil,
+			fetchTableDDLEventsTestCase: []FetchTableDDLEventsTestCase{
+				{
+					tableID:     200,
+					tableFilter: buildTableFilterByNameForTest("filter", "t1"),
+					startTs:     999,
+					endTs:       3000,
+					result: []commonEvent.DDLEvent{
+						{
+							SchemaID:   100,
+							Type:       byte(model.ActionCreateTable),
+							FinishedTs: 1010,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{common.DDLSpanTableID},
+							},
+							NeedAddedTables: []commonEvent.Table{
+								{
+									SchemaID:  100,
+									TableID:   200,
+									Splitable: true,
+								},
+							},
+							TableNameChange: &commonEvent.TableNameChange{
+								AddName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "filter",
+										TableName:  "t1",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			fetchTableTriggerDDLEvents: []FetchTableTriggerDDLEventsTestCase{
+				{
+					tableFilter: buildTableFilterByNameForTest("filter", "t1"),
+					startTs:     999,
+					limit:       10,
+					result: []commonEvent.DDLEvent{
+						{
+							SchemaID:   100,
+							Type:       byte(model.ActionCreateSchema),
+							FinishedTs: 1000,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{common.DDLSpanTableID},
+							},
+						},
+						{
+							SchemaID:   100,
+							Type:       byte(model.ActionCreateTable),
+							FinishedTs: 1010,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{common.DDLSpanTableID},
+							},
+							NeedAddedTables: []commonEvent.Table{
+								{
+									SchemaID:  100,
+									TableID:   200,
+									Splitable: true,
+								},
+							},
+							TableNameChange: &commonEvent.TableNameChange{
+								AddName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "filter",
+										TableName:  "t1",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
 		// test drop schema can clear table info and partition info
 		{
 			"drop_schema",

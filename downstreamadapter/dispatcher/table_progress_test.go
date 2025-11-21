@@ -66,28 +66,26 @@ func TestTableProgress(t *testing.T) {
 	assert.True(t, isEmpty)
 }
 
-// TestSyncPointEventWithMultipleCommitTs tests the behavior when SyncPointEvent contains multiple commitTs
-func TestSyncPointEventWithMultipleCommitTs(t *testing.T) {
+// TestSyncPointEventCommitTs tests the behavior for SyncPointEvent commitTs
+func TestSyncPointEventCommitTs(t *testing.T) {
 	tp := NewTableProgress()
 	assert.True(t, tp.Empty())
 
 	dispatcherID := common.NewDispatcherID()
 
-	// Create a SyncPointEvent with multiple commitTs
+	// Create a SyncPointEvent
 	syncPointEvent := &commonEvent.SyncPointEvent{
 		DispatcherID: dispatcherID,
-		CommitTsList: []uint64{10, 20, 30, 40},
+		CommitTs:     40,
 	}
 
-	// Should return the last (largest) commitTs from the list
-	finalCommitTs := getFinalCommitTs(syncPointEvent)
+	finalCommitTs := syncPointEvent.CommitTs
 	assert.Equal(t, uint64(40), finalCommitTs, "getFinalCommitTs should return the largest commitTs")
 
-	// Test Add method with SyncPointEvent containing multiple commitTs
+	// Test Add method with SyncPointEvent
 	tp.Add(syncPointEvent)
 	assert.False(t, tp.Empty())
 
-	// Verify that maxCommitTs is set to the largest commitTs
 	assert.Equal(t, uint64(40), tp.maxCommitTs, "maxCommitTs should be set to the largest commitTs")
 
 	// Verify GetCheckpointTs behavior
@@ -95,7 +93,7 @@ func TestSyncPointEventWithMultipleCommitTs(t *testing.T) {
 	assert.Equal(t, uint64(39), checkpointTs, "checkpointTs should be largest commitTs - 1")
 	assert.False(t, isEmpty)
 
-	// Test Remove method with SyncPointEvent containing multiple commitTs
+	// Test Remove method
 	tp.Remove(syncPointEvent)
 	assert.True(t, tp.Empty(), "TableProgress should be empty after removing the event")
 
@@ -104,10 +102,10 @@ func TestSyncPointEventWithMultipleCommitTs(t *testing.T) {
 	assert.Equal(t, uint64(39), checkpointTs, "checkpointTs should remain as maxCommitTs - 1 after removal")
 	assert.True(t, isEmpty)
 
-	// Create a SyncPointEvent with multiple commitTs
+	// Create another SyncPointEvent
 	syncPointEvent = &commonEvent.SyncPointEvent{
 		DispatcherID: dispatcherID,
-		CommitTsList: []uint64{50, 60},
+		CommitTs:     60,
 	}
 
 	tp.Add(syncPointEvent)
@@ -125,7 +123,7 @@ func TestSyncPointEventWithMultipleCommitTs(t *testing.T) {
 
 	syncPointEvent = &commonEvent.SyncPointEvent{
 		DispatcherID: dispatcherID,
-		CommitTsList: []uint64{80},
+		CommitTs:     80,
 	}
 
 	tp.Pass(syncPointEvent)
