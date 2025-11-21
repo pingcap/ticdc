@@ -98,6 +98,15 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms~524s
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
+	WorkerBatchFlushDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "txn_worker_batch_flush_duration",
+			Help:      "Flush duration (s) for txn worker.",
+			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms~524s
+		}, []string{getKeyspaceLabel(), "changefeed", "id"})
+
 	WorkerFlushDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
@@ -213,6 +222,7 @@ func initSinkMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(ConflictDetectDuration)
 	registry.MustRegister(QueueDuration)
 	registry.MustRegister(WorkerFlushDuration)
+	registry.MustRegister(WorkerBatchFlushDuration)
 	registry.MustRegister(WorkerTotalDuration)
 	registry.MustRegister(WorkerHandledRows)
 	registry.MustRegister(SinkDMLBatchCommit)

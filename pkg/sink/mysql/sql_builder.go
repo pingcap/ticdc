@@ -38,6 +38,22 @@ type preparedDMLs struct {
 	tsPairs         []tsPair
 }
 
+func (d *preparedDMLs) LogWithoutValues() string {
+	// Calculate total count
+	totalCount := len(d.sqls)
+	var logBuilder strings.Builder
+	logBuilder.WriteString(fmt.Sprintf("Total SQL Count: %d, Row Count: %d,", totalCount, d.rowCount))
+
+	// Build SQL statements and arguments section
+	for i, sql := range d.sqls {
+		// Add formatted SQL and args to log content
+		logBuilder.WriteString(fmt.Sprintf("[%03d] Query: %s,", i+1, sql))
+	}
+	logBuilder.WriteString("End")
+
+	return logBuilder.String()
+}
+
 func (d *preparedDMLs) LogDebug(events []*commonEvent.DMLEvent, writerID int) {
 	if log.GetLevel() != zapcore.DebugLevel {
 		return

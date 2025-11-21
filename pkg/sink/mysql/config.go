@@ -93,13 +93,16 @@ type Config struct {
 	MaxTxnRow              int
 	MaxMultiUpdateRowCount int
 	MaxMultiUpdateRowSize  int
-	tidbTxnMode            string
+	TidbTxnMode            string
 	ReadTimeout            string
 	WriteTimeout           string
 	DialTimeout            string
 	SafeMode               bool
 	Timezone               string
 	TLS                    string
+	SSLCa                  string
+	SSLCert                string
+	SSLKey                 string
 
 	// retry number for dml
 	DMLMaxRetry uint64
@@ -140,7 +143,7 @@ func New() *Config {
 		MaxTxnRow:              DefaultMaxTxnRow,
 		MaxMultiUpdateRowCount: defaultMaxMultiUpdateRowCount,
 		MaxMultiUpdateRowSize:  defaultMaxMultiUpdateRowSize,
-		tidbTxnMode:            defaultTiDBTxnMode,
+		TidbTxnMode:            defaultTiDBTxnMode,
 		ReadTimeout:            defaultReadTimeout,
 		WriteTimeout:           defaultWriteTimeout,
 		DialTimeout:            defaultDialTimeout,
@@ -152,6 +155,30 @@ func New() *Config {
 		DMLMaxRetry:            8,
 		HasVectorType:          defaultHasVectorType,
 		EnableDDLTs:            defaultEnableDDLTs,
+	}
+}
+
+func (c *Config) mergeConfig(cfg *config.ChangefeedConfig) {
+	if cfg.SinkConfig != nil {
+		c.SafeMode = *cfg.SinkConfig.SafeMode
+		if cfg.SinkConfig.MySQLConfig != nil {
+			mConfig := cfg.SinkConfig.MySQLConfig
+			c.WorkerCount = *mConfig.WorkerCount
+			c.MaxTxnRow = *mConfig.MaxTxnRow
+			c.MaxMultiUpdateRowCount = *mConfig.MaxMultiUpdateRowCount
+			c.MaxMultiUpdateRowSize = *mConfig.MaxMultiUpdateRowSize
+			c.TidbTxnMode = *mConfig.TiDBTxnMode
+			c.SSLCa = *mConfig.SSLCa
+			c.SSLCert = *mConfig.SSLCert
+			c.SSLKey = *mConfig.SSLKey
+			c.Timezone = *mConfig.TimeZone
+			c.WriteTimeout = *mConfig.WriteTimeout
+			c.ReadTimeout = *mConfig.ReadTimeout
+			//c.Timeout = mConfig.Timeout
+			c.BatchDMLEnable = *mConfig.EnableBatchDML
+			c.MultiStmtEnable = *mConfig.EnableMultiStatement
+			c.CachePrepStmts = *mConfig.EnableCachePreparedStatement
+		}
 	}
 }
 
@@ -169,6 +196,11 @@ func (c *Config) Apply(
 	if !config.IsMySQLCompatibleScheme(scheme) {
 		return cerror.ErrMySQLInvalidConfig.GenWithStack("can't create MySQL sink with unsupported scheme: %s", scheme)
 	}
+
+	if cfg != nil {
+		c.mergeConfig(cfg)
+	}
+
 	query := sinkURI.Query()
 	if err = getWorkerCount(query, &c.WorkerCount); err != nil {
 		return err
@@ -182,10 +214,10 @@ func (c *Config) Apply(
 	if err = getMaxMultiUpdateRowSize(query, &c.MaxMultiUpdateRowSize); err != nil {
 		return err
 	}
-	if err = getTiDBTxnMode(query, &c.tidbTxnMode); err != nil {
+	if err = getTiDBTxnMode(query, &c.TidbTxnMode); err != nil {
 		return err
 	}
-	if err = getSSLCA(query, changefeedID, &c.TLS); err != nil {
+	if err = c.getSSLCA(query, changefeedID, &c.TLS); err != nil {
 		return err
 	}
 	if err = getSafeMode(query, &c.SafeMode); err != nil {
@@ -445,17 +477,30 @@ func getTiDBTxnMode(values url.Values, mode *string) error {
 	return nil
 }
 
-func getSSLCA(values url.Values, changefeedID common.ChangeFeedID, tls *string) error {
+func (c *Config) getSSLCA(values url.Values, changefeedID common.ChangeFeedID, tls *string) error {
 	s := values.Get("ssl-ca")
 	if len(s) == 0 {
 		return nil
 	}
 
 	credential := security.Credential{
-		CAPath:   values.Get("ssl-ca"),
-		CertPath: values.Get("ssl-cert"),
-		KeyPath:  values.Get("ssl-key"),
+		CAPath:   c.SSLCa,
+		CertPath: c.SSLCert,
+		KeyPath:  c.SSLKey,
 	}
+
+	if values.Get("ssl-ca") != "" {
+		credential.CAPath = values.Get("ssl-ca")
+	}
+
+	if values.Get("ssl-cert") != "" {
+		credential.CertPath = values.Get("ssl-cert")
+	}
+
+	if values.Get("ssl-key") != "" {
+		credential.CertPath = values.Get("ssl-key")
+	}
+
 	tlsCfg, err := credential.ToTLSConfig()
 	if err != nil {
 		return errors.Trace(err)

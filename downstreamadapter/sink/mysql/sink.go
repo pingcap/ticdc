@@ -139,6 +139,7 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 	keyspace := s.changefeedID.Keyspace()
 	changefeed := s.changefeedID.Name()
 
+	workerBatchFlushDuration := metrics.WorkerBatchFlushDuration.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 	workerFlushDuration := metrics.WorkerFlushDuration.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 	workerTotalDuration := metrics.WorkerTotalDuration.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 	workerHandledRows := metrics.WorkerHandledRows.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
@@ -147,6 +148,7 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 		metrics.WorkerFlushDuration.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 		metrics.WorkerTotalDuration.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 		metrics.WorkerHandledRows.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+		metrics.WorkerBatchFlushDuration.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 	}()
 
 	inputCh := s.conflictDetector.GetOutChByCacheID(idx)
@@ -168,6 +170,8 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 				buffer = buffer[:0]
 				continue
 			}
+			start := time.Now()
+			singleFlushStart := time.Now()
 
 			flushEvent := func(beginIndex, endIndex int, rowCount int32) error {
 				workerHandledRows.Add(float64(rowCount))
@@ -175,10 +179,11 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 				if err != nil {
 					return errors.Trace(err)
 				}
+				workerBatchFlushDuration.Observe(time.Since(singleFlushStart).Seconds())
+				singleFlushStart = time.Now()
 				return nil
 			}
 
-			start := time.Now()
 			beginIndex, rowCount := 0, txnEvents[0].Len()
 
 			for i := 1; i < len(txnEvents); i++ {
