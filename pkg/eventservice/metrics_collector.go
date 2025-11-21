@@ -16,6 +16,7 @@ package eventservice
 import (
 	"context"
 	"math"
+	"sort"
 	"strconv"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/utils/heap"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
@@ -95,13 +97,35 @@ func updateMetricEventServiceSkipResolvedTsCount(mode int64) {
 	updateCounter(mode, metricEventServiceSkipResolvedTsCount, metricRedoEventServiceSkipResolvedTsCount)
 }
 
+// dispatcherHeapItem wraps dispatcherStat to implement heap.Item interface.
+// The heap maintains the slowest dispatchers by checkpointTs.
+// The heap top is the fastest (largest checkpointTs) among the slowest ones.
+type dispatcherHeapItem struct {
+	dispatcher *dispatcherStat
+	heapIndex  int
+}
+
+func (d *dispatcherHeapItem) SetHeapIndex(index int) {
+	d.heapIndex = index
+}
+
+func (d *dispatcherHeapItem) GetHeapIndex() int {
+	return d.heapIndex
+}
+
+func (d *dispatcherHeapItem) LessThan(other *dispatcherHeapItem) bool {
+	// Larger checkpointTs is "less" (closer to top in min-heap)
+	// This means the top is the fastest among the slowest ones
+	return d.dispatcher.checkpointTs.Load() > other.dispatcher.checkpointTs.Load()
+}
+
 // metricsSnapshot holds all metrics data collected at a point in time
 type metricsSnapshot struct {
 	receivedMinResolvedTs uint64
 	sentMinResolvedTs     uint64
 	dispatcherCount       int
 	pendingTaskCount      int
-	slowestDispatcher     *dispatcherStat
+	slowestDispatchers    []*dispatcherStat // top 10 dispatchers with slowest checkpointTs
 	pdTime                time.Time
 }
 
@@ -112,6 +136,8 @@ type metricsCollector struct {
 	metricDispatcherCount                   prometheus.Gauge
 	metricEventServiceReceivedResolvedTsLag prometheus.Gauge
 	metricEventServiceSentResolvedTsLag     prometheus.Gauge
+
+	lastLogSlowDispatchersTime time.Time
 }
 
 // newMetricsCollector creates a new MetricsCollector instance
@@ -121,6 +147,7 @@ func newMetricsCollector(broker *eventBroker) *metricsCollector {
 		metricDispatcherCount:                   metrics.EventServiceDispatcherGauge.WithLabelValues(strconv.FormatUint(broker.tidbClusterID, 10)),
 		metricEventServiceReceivedResolvedTsLag: metrics.EventServiceResolvedTsLagGauge.WithLabelValues("received"),
 		metricEventServiceSentResolvedTsLag:     metrics.EventServiceResolvedTsLagGauge.WithLabelValues("sent"),
+		lastLogSlowDispatchersTime:              time.Now(),
 	}
 }
 
@@ -174,6 +201,9 @@ func (mc *metricsCollector) collectMetrics() *metricsSnapshot {
 
 // collectDispatcherMetrics collects metrics related to dispatchers
 func (mc *metricsCollector) collectDispatcherMetrics(snapshot *metricsSnapshot) {
+	const maxSlowestCount = 10
+	h := heap.NewHeap[*dispatcherHeapItem]()
+
 	collect := func(dispatcher *dispatcherStat) {
 		// Record update time difference
 		updateDiff := dispatcher.lastReceivedResolvedTsTime.Load().Sub(dispatcher.lastSentResolvedTsTime.Load())
@@ -190,9 +220,25 @@ func (mc *metricsCollector) collectDispatcherMetrics(snapshot *metricsSnapshot) 
 			snapshot.sentMinResolvedTs = watermark
 		}
 
-		// Track slowest dispatcher
-		if snapshot.slowestDispatcher == nil || snapshot.slowestDispatcher.sentResolvedTs.Load() < watermark {
-			snapshot.slowestDispatcher = dispatcher
+		// Maintain a min-heap of size 10 for the slowest dispatchers
+		checkpointTs := dispatcher.checkpointTs.Load()
+		if h.Len() < maxSlowestCount {
+			// Heap not full, add directly
+			item := &dispatcherHeapItem{
+				dispatcher: dispatcher,
+			}
+			h.AddOrUpdate(item)
+		} else {
+			// Heap is full, compare with the top (fastest among the slowest)
+			top, ok := h.PeekTop()
+			if ok && checkpointTs < top.dispatcher.checkpointTs.Load() {
+				// This dispatcher is slower, replace the top
+				h.PopTop()
+				item := &dispatcherHeapItem{
+					dispatcher: dispatcher,
+				}
+				h.AddOrUpdate(item)
+			}
 		}
 	}
 
@@ -207,6 +253,17 @@ func (mc *metricsCollector) collectDispatcherMetrics(snapshot *metricsSnapshot) 
 		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
 		collect(dispatcher)
 		return true
+	})
+
+	// Extract all dispatchers from the heap and sort by checkpointTs (ascending, slowest first)
+	snapshot.slowestDispatchers = make([]*dispatcherStat, 0, h.Len())
+	allItems := h.All()
+	for _, item := range allItems {
+		snapshot.slowestDispatchers = append(snapshot.slowestDispatchers, item.dispatcher)
+	}
+	// Sort by checkpointTs ascending (slowest first)
+	sort.Slice(snapshot.slowestDispatchers, func(i, j int) bool {
+		return snapshot.slowestDispatchers[i].checkpointTs.Load() < snapshot.slowestDispatchers[j].checkpointTs.Load()
 	})
 }
 
@@ -235,27 +292,44 @@ func (mc *metricsCollector) updateMetricsFromSnapshot(snapshot *metricsSnapshot)
 
 // logSlowDispatchers logs warnings for dispatchers that are too slow
 func (mc *metricsCollector) logSlowDispatchers(snapshot *metricsSnapshot) {
-	if snapshot.slowestDispatcher == nil {
+	if len(snapshot.slowestDispatchers) == 0 {
 		return
 	}
 
-	lag := time.Since(oracle.GetTimeFromTS(snapshot.slowestDispatcher.sentResolvedTs.Load()))
-	if lag <= 30*time.Second {
+	if time.Since(mc.lastLogSlowDispatchersTime) < 60*time.Second {
 		return
 	}
 
-	log.Warn("slowest dispatcher",
-		zap.Stringer("dispatcherID", snapshot.slowestDispatcher.id),
-		zap.Uint64("sentResolvedTs", snapshot.slowestDispatcher.sentResolvedTs.Load()),
-		zap.Uint64("receivedResolvedTs", snapshot.slowestDispatcher.receivedResolvedTs.Load()),
-		zap.Duration("lag", lag),
-		zap.Duration("updateDiff",
-			time.Since(snapshot.slowestDispatcher.lastSentResolvedTsTime.Load())-
-				time.Since(snapshot.slowestDispatcher.lastReceivedResolvedTsTime.Load())),
-		zap.Uint64("epoch", snapshot.slowestDispatcher.epoch),
-		zap.Uint64("seq", snapshot.slowestDispatcher.seq.Load()),
-		zap.Bool("isTaskScanning", snapshot.slowestDispatcher.isTaskScanning.Load()),
-	)
+	mc.lastLogSlowDispatchersTime = time.Now()
+
+	for _, dispatcher := range snapshot.slowestDispatchers {
+		checkpointTs := dispatcher.checkpointTs.Load()
+		lag := time.Since(oracle.GetTimeFromTS(checkpointTs))
+
+		if lag <= 60*time.Second {
+			continue
+		}
+
+		if dispatcher.startTableInfo == nil {
+			continue
+		}
+
+		log.Warn("slow dispatcher by checkpointTs",
+			zap.Stringer("tableName", dispatcher.startTableInfo.TableName),
+			zap.Int64("tableID", dispatcher.startTableInfo.TableName.TableID),
+			zap.Stringer("dispatcherID", dispatcher.id),
+			zap.Uint64("checkpointTs", checkpointTs),
+			zap.Uint64("sentResolvedTs", dispatcher.sentResolvedTs.Load()),
+			zap.Uint64("receivedResolvedTs", dispatcher.receivedResolvedTs.Load()),
+			zap.Duration("lag", lag),
+			zap.Duration("updateDiff",
+				time.Since(dispatcher.lastSentResolvedTsTime.Load())-
+					time.Since(dispatcher.lastReceivedResolvedTsTime.Load())),
+			zap.Uint64("epoch", dispatcher.epoch),
+			zap.Uint64("seq", dispatcher.seq.Load()),
+			zap.Bool("isTaskScanning", dispatcher.isTaskScanning.Load()),
+		)
+	}
 }
 
 // reportChangefeedStatesToLogCoordinator collects and reports the state of all changefeeds to the log coordinator.
