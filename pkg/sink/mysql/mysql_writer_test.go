@@ -323,7 +323,7 @@ func TestMysqlWriter_FlushSyncPointEvent(t *testing.T) {
 	defer db.Close()
 
 	syncPointEvent := &commonEvent.SyncPointEvent{
-		CommitTsList: []uint64{1},
+		CommitTs: 1,
 	}
 	tableSchemaStore := util.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{}, common.MysqlSinkType)
 	writer.SetTableSchemaStore(tableSchemaStore)
@@ -381,7 +381,7 @@ func TestMysqlWriter_FlushSyncPointEvent(t *testing.T) {
 	require.NoError(t, err)
 
 	syncPointEvent = &commonEvent.SyncPointEvent{
-		CommitTsList: []uint64{2},
+		CommitTs: 2,
 	}
 
 	// Second sync point: Step 1: FlushDDLTsPre - Insert pre-record (finished=0)
@@ -407,7 +407,7 @@ func TestMysqlWriter_FlushSyncPointEvent(t *testing.T) {
 	// flush multiple sync point events
 
 	syncPointEvent = &commonEvent.SyncPointEvent{
-		CommitTsList: []uint64{3, 4, 5},
+		CommitTs: 3,
 	}
 
 	// Third sync point: Step 1: FlushDDLTsPre - Insert pre-record (finished=0)
@@ -418,7 +418,7 @@ func TestMysqlWriter_FlushSyncPointEvent(t *testing.T) {
 	// Step 2: SendSyncPointEvent
 	mock.ExpectBegin()
 	mock.ExpectQuery("select @@tidb_current_ts").WillReturnRows(sqlmock.NewRows([]string{"@@tidb_current_ts"}).AddRow(3))
-	mock.ExpectExec("insert ignore into tidb_cdc.syncpoint_v1 (ticdc_cluster_id, changefeed, primary_ts, secondary_ts) VALUES ('default', 'test/test', 3, 3), ('default', 'test/test', 4, 3), ('default', 'test/test', 5, 3)").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("insert ignore into tidb_cdc.syncpoint_v1 (ticdc_cluster_id, changefeed, primary_ts, secondary_ts) VALUES ('default', 'test/test', 3, 3)").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("set global tidb_external_ts = 3").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 

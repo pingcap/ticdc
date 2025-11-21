@@ -338,7 +338,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	// ===== sync point event =====
 
 	syncPointEvent := &commonEvent.SyncPointEvent{
-		CommitTsList: []uint64{6},
+		CommitTs: 6,
 	}
 	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, syncPointEvent)}, callback)
 	require.Equal(t, true, block)

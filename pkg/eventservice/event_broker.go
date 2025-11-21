@@ -514,32 +514,18 @@ func (c *eventBroker) hasSyncPointEventsBeforeTs(ts uint64, d *dispatcherStat) b
 // emitSyncPointEventIfNeeded emits a sync point event if the current ts is greater than the next sync point, and updates the next sync point.
 // We need call this function every time we send a event(whether dml/ddl/resolvedTs),
 // thus to ensure the sync point event is in correct order for each dispatcher.
-// When a period of time, there is no other dml and ddls, we will batch multiple sync point commit ts in one sync point event to enhance the speed.
 func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, remoteID node.ID) {
-	commitTsList := make([]uint64, 0)
 	for d.enableSyncPoint && ts > d.nextSyncPoint.Load() {
-		commitTsList = append(commitTsList, d.nextSyncPoint.Load())
-		d.nextSyncPoint.Store(oracle.GoTimeToTS(oracle.GetTimeFromTS(d.nextSyncPoint.Load()).Add(d.syncPointInterval)))
-	}
-	for len(commitTsList) > 0 {
-		// we limit a sync point event to contain at most 16 commit ts, to avoid a too large event.
-		newCommitTsList := commitTsList
-		if len(commitTsList) > 16 {
-			newCommitTsList = commitTsList[:16]
-		}
-		e := event.NewSyncPointEvent(d.id, newCommitTsList, d.seq.Add(1), d.epoch)
+		commitTs := d.nextSyncPoint.Load()
+		d.nextSyncPoint.Store(oracle.GoTimeToTS(oracle.GetTimeFromTS(commitTs).Add(d.syncPointInterval)))
+
+		e := event.NewSyncPointEvent(d.id, commitTs, d.seq.Add(1), d.epoch)
 		log.Debug("send syncpoint event to dispatcher",
 			zap.Stringer("dispatcherID", d.id), zap.Int64("tableID", d.info.GetTableSpan().GetTableID()),
 			zap.Uint64("commitTs", e.GetCommitTs()), zap.Uint64("seq", e.GetSeq()))
 
 		syncPointEvent := newWrapSyncPointEvent(remoteID, e)
 		c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- syncPointEvent
-
-		if len(commitTsList) > 16 {
-			commitTsList = commitTsList[16:]
-		} else {
-			break
-		}
 	}
 }
 

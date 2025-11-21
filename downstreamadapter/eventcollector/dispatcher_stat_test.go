@@ -265,8 +265,8 @@ func TestVerifyEventSequence(t *testing.T) {
 			lastEventSeq: 3,
 			event: dispatcher.DispatcherEvent{
 				Event: &commonEvent.SyncPointEvent{
-					CommitTsList: []uint64{100},
-					Seq:          5,
+					CommitTs: 100,
+					Seq:      5,
 				},
 			},
 			expectedResult: false,
