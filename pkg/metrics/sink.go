@@ -30,6 +30,16 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(1, 2, 18),
 		}, []string{getKeyspaceLabel(), "changefeed", "type"}) // type is for `sinkType`
 
+	// ExecBatchWriteBytesHistogram records bytes written for each batch.
+	ExecBatchWriteBytesHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "batch_write_bytes",
+			Help:      "Bytes number for a given batch.",
+			Buckets:   prometheus.ExponentialBuckets(1024, 2, 18), // 1KB~128MB
+		}, []string{getKeyspaceLabel(), "changefeed", "type"}) // type is for `sinkType`
+
 	// ExecWriteBytesGauge records the total number of bytes written by sink.
 	TotalWriteBytesCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -132,6 +142,14 @@ var (
 			Name:      "txn_worker_handled_rows",
 			Help:      "Busy ratio (X ms in 1s) for all workers.",
 		}, []string{getKeyspaceLabel(), "changefeed", "id"})
+	WorkerEventRowCount = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "txn_worker_event_row_count",
+			Help:      "Row count number for a single DML event handled by txn sink worker.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 12), // 1~2048
+		}, []string{getKeyspaceLabel(), "changefeed", "id"})
 
 	SinkDMLBatchCommit = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -212,6 +230,7 @@ var (
 func initSinkMetrics(registry *prometheus.Registry) {
 	// common sink metrics
 	registry.MustRegister(ExecBatchHistogram)
+	registry.MustRegister(ExecBatchWriteBytesHistogram)
 	registry.MustRegister(TotalWriteBytesCounter)
 	registry.MustRegister(ExecDDLHistogram)
 	registry.MustRegister(EventSizeHistogram)
@@ -225,6 +244,7 @@ func initSinkMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(WorkerBatchFlushDuration)
 	registry.MustRegister(WorkerTotalDuration)
 	registry.MustRegister(WorkerHandledRows)
+	registry.MustRegister(WorkerEventRowCount)
 	registry.MustRegister(SinkDMLBatchCommit)
 	registry.MustRegister(SinkDMLBatchCallback)
 	registry.MustRegister(PrepareStatementErrors)

@@ -143,12 +143,14 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 	workerFlushDuration := metrics.WorkerFlushDuration.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 	workerTotalDuration := metrics.WorkerTotalDuration.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 	workerHandledRows := metrics.WorkerHandledRows.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+	workerEventRowCount := metrics.WorkerEventRowCount.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 
 	defer func() {
 		metrics.WorkerFlushDuration.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 		metrics.WorkerTotalDuration.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 		metrics.WorkerHandledRows.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 		metrics.WorkerBatchFlushDuration.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+		metrics.WorkerEventRowCount.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 	}()
 
 	inputCh := s.conflictDetector.GetOutChByCacheID(idx)
@@ -175,6 +177,12 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 
 			flushEvent := func(beginIndex, endIndex int, rowCount int32) error {
 				workerHandledRows.Add(float64(rowCount))
+				for i := beginIndex; i < endIndex; i++ {
+					if txnEvents[i] == nil {
+						continue
+					}
+					workerEventRowCount.Observe(float64(txnEvents[i].Len()))
+				}
 				err := writer.Flush(txnEvents[beginIndex:endIndex])
 				if err != nil {
 					return errors.Trace(err)
@@ -187,6 +195,7 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 			beginIndex, rowCount := 0, txnEvents[0].Len()
 
 			for i := 1; i < len(txnEvents); i++ {
+				workerEventRowCount.Observe(float64(txnEvents[i].Len()))
 				if rowCount+txnEvents[i].Len() > int32(s.maxTxnRows) {
 					if err := flushEvent(beginIndex, i, rowCount); err != nil {
 						return errors.Trace(err)
