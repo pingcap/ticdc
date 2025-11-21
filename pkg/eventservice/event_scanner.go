@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"go.uber.org/zap"
@@ -397,11 +398,15 @@ type session struct {
 	dataRange      common.DataRange
 
 	limit scanLimit
+
+	maxBatchRows int
+
 	// State tracking
 	startTime time.Time
 
 	scannedBytes      int64
 	scannedEntryCount int
+
 	// dmlCount is the count of transactions.
 	dmlCount int
 
@@ -417,11 +422,13 @@ func newSession(
 	dataRange common.DataRange,
 	limit scanLimit,
 ) *session {
+	serverConfig := config.GetGlobalServerConfig()
 	return &session{
 		ctx:            ctx,
 		dispatcherStat: dispatcherStat,
 		dataRange:      dataRange,
 		limit:          limit,
+		maxBatchRows:   serverConfig.Debug.EventService.MaxBatchRows,
 		startTime:      time.Now(),
 		events:         make([]event.Event, 0),
 	}
@@ -472,14 +479,14 @@ func (s *session) appendEvents(events []event.Event) {
 	}
 }
 
-func (s *session) exceedLimit(nBytes int64, batchDML ...*event.BatchDMLEvent) bool {
-	if s.limit.isInUnitTest && len(batchDML) > 0 {
-		batchDML := batchDML[0]
+func (s *session) exceedLimit(nBytes int64, batchDMLs ...*event.BatchDMLEvent) bool {
+	if s.limit.isInUnitTest && len(batchDMLs) > 0 {
+		batchDML := batchDMLs[0]
 		eventCount := len(batchDML.DMLEvents)
 		return (s.eventBytes + int64(eventCount)) >= s.limit.maxDMLBytes
 	}
 
-	return (s.eventBytes + nBytes) >= s.limit.maxDMLBytes
+	return (s.eventBytes+nBytes) >= s.limit.maxDMLBytes || s.scannedEntryCount > s.maxBatchRows
 }
 
 // eventMerger handles merging of DML and DDL events in timestamp order
