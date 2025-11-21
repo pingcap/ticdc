@@ -1,6 +1,6 @@
 threadcount=2
 recordcount=100000
-operationcount=0
+operationcount=10000
 maxexecutiontime=120
 
 readallfields=true
