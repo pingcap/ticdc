@@ -483,27 +483,26 @@ func getTiDBTxnMode(values url.Values, mode *string) error {
 }
 
 func (c *Config) getSSLCA(values url.Values, changefeedID common.ChangeFeedID, tls *string) error {
-	s := values.Get("ssl-ca")
-	if len(s) == 0 {
-		return nil
-	}
-
 	credential := security.Credential{
 		CAPath:   c.SSLCa,
 		CertPath: c.SSLCert,
 		KeyPath:  c.SSLKey,
 	}
 
-	if values.Get("ssl-ca") != "" {
-		credential.CAPath = values.Get("ssl-ca")
+	if v := values.Get("ssl-ca"); v != "" {
+		credential.CAPath = v
 	}
 
-	if values.Get("ssl-cert") != "" {
-		credential.CertPath = values.Get("ssl-cert")
+	if v := values.Get("ssl-cert"); v != "" {
+		credential.CertPath = v
 	}
 
-	if values.Get("ssl-key") != "" {
-		credential.CertPath = values.Get("ssl-key")
+	if v := values.Get("ssl-key"); v != "" {
+		credential.KeyPath = v
+	}
+
+	if credential.CAPath == "" {
+		return nil
 	}
 
 	tlsCfg, err := credential.ToTLSConfig()
