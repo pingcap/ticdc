@@ -56,7 +56,8 @@ mysql_groups=(
 	# G11
 	'kill_owner_with_ddl multi_tables_ddl ddl_attributes multi_cdc_cluster fail_over_ddl_L'
 	# G12
-	'ds_memory_control row_format tiflash multi_rocks fail_over_ddl_M'
+	# ds_memory_control
+	'row_format tiflash multi_rocks fail_over_ddl_M'
 	# G13
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
 	# G14
