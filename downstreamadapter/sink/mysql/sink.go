@@ -177,12 +177,6 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 
 			flushEvent := func(beginIndex, endIndex int, rowCount int32) error {
 				workerHandledRows.Add(float64(rowCount))
-				for i := beginIndex; i < endIndex; i++ {
-					if txnEvents[i] == nil {
-						continue
-					}
-					workerEventRowCount.Observe(float64(txnEvents[i].Len()))
-				}
 				err := writer.Flush(txnEvents[beginIndex:endIndex])
 				if err != nil {
 					return errors.Trace(err)
