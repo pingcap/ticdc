@@ -456,9 +456,6 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				if d.tableProgress.Empty() {
 					dmlWakeOnce.Do(wakeCallback)
 				}
-				if common.IsRedoMode(d.GetMode()) {
-					log.Debug("send message to redo log", zap.Any("StartTs", dml.StartTs), zap.Any("CommitTs", dml.CommitTs), zap.Any("TableInfo", dml.TableInfo))
-				}
 			})
 			dmlEvents = append(dmlEvents, dml)
 		case commonEvent.TypeDDLEvent:
