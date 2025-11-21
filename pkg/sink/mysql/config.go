@@ -85,6 +85,8 @@ const (
 	defaultHasVectorType = false
 
 	defaultEnableDDLTs = true
+
+	slowQuery = 5 * time.Second
 )
 
 type Config struct {
@@ -134,6 +136,8 @@ type Config struct {
 	DryRunDelay time.Duration
 	// DryRunBlockInterval is the interval time for blocking in dry-run mode.
 	DryRunBlockInterval time.Duration
+	// SlowQuery is the threshold time above which the query will be logged.
+	SlowQuery time.Duration
 }
 
 // New returns the default mysql backend config.
@@ -155,6 +159,7 @@ func New() *Config {
 		DMLMaxRetry:            8,
 		HasVectorType:          defaultHasVectorType,
 		EnableDDLTs:            defaultEnableDDLTs,
+		SlowQuery:              slowQuery,
 	}
 }
 

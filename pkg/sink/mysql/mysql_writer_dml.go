@@ -616,7 +616,7 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 	tryExec := func() (int, int64, error) {
 		start := time.Now()
 		defer func() {
-			if time.Since(start) > 5*time.Second {
+			if time.Since(start) > w.cfg.SlowQuery {
 				log.Info("Slow Query", zap.Any("sql", dmls.LogWithoutValues()), zap.Any("writerID", w.id))
 			}
 		}()
