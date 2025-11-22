@@ -604,11 +604,6 @@ func (m *eventMerger) canInterrupt(newCommitTs uint64, currentBatchDML *event.Ba
 // TxnEvent represents a transaction, it may generates one or multiple DMLEvents
 type TxnEvent struct {
 	BatchDML         *event.BatchDMLEvent
-	DispatcherID     common.DispatcherID
-	TableID          int64
-	TableInfo        *common.TableInfo
-	StartTs          uint64
-	CommitTs         uint64
 	CurrentDMLEvent  *event.DMLEvent
 	DMLEventMaxRows  int32
 	DMLEventMaxBytes int64
@@ -625,11 +620,6 @@ func newTxnEvent(
 	serverConfig := config.GetGlobalServerConfig()
 	txn := &TxnEvent{
 		BatchDML:         batchDML,
-		DispatcherID:     dispatcherID,
-		TableID:          tableID,
-		TableInfo:        tableInfo,
-		StartTs:          startTs,
-		CommitTs:         commitTs,
 		CurrentDMLEvent:  event.NewDMLEvent(dispatcherID, tableID, startTs, commitTs, tableInfo),
 		DMLEventMaxRows:  serverConfig.Debug.EventService.DMLEventMaxRows,
 		DMLEventMaxBytes: serverConfig.Debug.EventService.DMLEventMaxBytes,
@@ -648,8 +638,17 @@ func (t *TxnEvent) AppendRow(
 ) error {
 	// TODO: check whether split txn is enabled
 	if t.CurrentDMLEvent.Len() >= t.DMLEventMaxRows || t.CurrentDMLEvent.GetSize() >= t.DMLEventMaxBytes {
-		t.CurrentDMLEvent = event.NewDMLEvent(t.DispatcherID, t.TableID, t.StartTs, t.CommitTs, t.TableInfo)
-		t.BatchDML.AppendDMLEvent(t.CurrentDMLEvent)
+		newDMLEvent := event.NewDMLEvent(
+			t.CurrentDMLEvent.DispatcherID,
+			t.CurrentDMLEvent.PhysicalTableID,
+			t.CurrentDMLEvent.StartTs,
+			t.CurrentDMLEvent.CommitTs,
+			t.CurrentDMLEvent.TableInfo)
+		err := t.BatchDML.AppendDMLEvent(newDMLEvent)
+		t.CurrentDMLEvent = newDMLEvent
+		if err != nil {
+			return err
+		}
 	}
 	return t.CurrentDMLEvent.AppendRow(rawEvent, decode, filter)
 }
@@ -762,7 +761,7 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 		err         error
 	)
 	if !p.outputRawChangeEvent {
-		shouldSplit, err = event.IsUKChanged(rawEvent, p.currentTxn.TableInfo)
+		shouldSplit, err = event.IsUKChanged(rawEvent, p.currentTxn.CurrentDMLEvent.TableInfo)
 		if err != nil {
 			return err
 		}
@@ -774,7 +773,7 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 
 	log.Debug("split update event", zap.Uint64("startTs", rawEvent.StartTs),
 		zap.Uint64("commitTs", rawEvent.CRTs),
-		zap.String("table", p.currentTxn.TableInfo.TableName.String()))
+		zap.String("table", p.currentTxn.CurrentDMLEvent.TableInfo.TableName.String()))
 	deleteRow, insertRow, err := rawEvent.SplitUpdate()
 	if err != nil {
 		return err
