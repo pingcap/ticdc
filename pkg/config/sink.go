@@ -109,7 +109,7 @@ func DefaultAtomicityLevel() AtomicityLevel {
 // ShouldSplitTxn returns whether the sink should split txn.
 func (l AtomicityLevel) ShouldSplitTxn() bool {
 	if l == unknownTxnAtomicity {
-		l = tableTxnAtomicity
+		l = defaultTxnAtomicity
 	}
 	return l == noneTxnAtomicity
 }
