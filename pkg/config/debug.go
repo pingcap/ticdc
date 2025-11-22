@@ -131,8 +131,8 @@ func NewDefaultEventServiceConfig() *EventServiceConfig {
 	return &EventServiceConfig{
 		ScanTaskQueueSize:        1024 * 8,
 		ScanLimitInBytes:         1024 * 1024 * 256, // 256MB
-		DMLEventMaxRows:          256 * 100000,
-		DMLEventMaxBytes:         1024 * 1024 * 1024000, // 1MB
+		DMLEventMaxRows:          256,
+		DMLEventMaxBytes:         1024 * 1024 * 1, // 1MB
 		EnableRemoteEventService: true,
 	}
 }
