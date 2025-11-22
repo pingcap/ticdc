@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -677,9 +678,16 @@ func tryGetEndTsFromLog(db *sql.DB, tableName string) (result uint64, ok bool) {
 		}
 		defer file.Close()
 
-		scanner := bufio.NewScanner(file)
-		for scanner.Scan() {
-			line := scanner.Text()
+		reader := bufio.NewReader(file)
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				if err != io.EOF {
+					log.Error("Error reading file: %v", zap.Error(err))
+				}
+				break
+			}
+			line = strings.TrimSuffix(line, "\n")
 			if !logRegex.MatchString(line) || !tableNameRegex.MatchString(line) {
 				continue
 			}
@@ -694,10 +702,6 @@ func tryGetEndTsFromLog(db *sql.DB, tableName string) (result uint64, ok bool) {
 				}
 				return result, true
 			}
-		}
-
-		if err := scanner.Err(); err != nil {
-			log.Error("Error scanning file: %v", zap.Error(err))
 		}
 	}
 	return 0, false

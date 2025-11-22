@@ -23,8 +23,8 @@ import (
 	"github.com/go-sql-driver/mysql"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/stretchr/testify/require"
 )
 
@@ -44,7 +44,7 @@ func newTestMysqlWriterForDDLTs(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock
 	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics)
 
 	// Initialize table schema store
-	writer.tableSchemaStore = util.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{}, common.MysqlSinkType)
+	writer.tableSchemaStore = commonEvent.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{}, common.MysqlSinkType)
 
 	return writer, db, mock
 }
@@ -65,7 +65,7 @@ func newTestMysqlWriterForDDLTsTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sql
 	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics)
 
 	// Initialize table schema store
-	writer.tableSchemaStore = util.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{}, common.MysqlSinkType)
+	writer.tableSchemaStore = commonEvent.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{}, common.MysqlSinkType)
 
 	return writer, db, mock
 }

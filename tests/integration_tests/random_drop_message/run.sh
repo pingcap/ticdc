@@ -53,7 +53,7 @@ function prepare() {
 	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/" ;;
 	esac
 
-	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --server="127.0.0.1:8301"
+	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --server="127.0.0.1:8301" --config="$CUR/conf/$1.toml"
 
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
@@ -102,7 +102,7 @@ function kill_and_restart_nodes() {
 }
 
 main() {
-	prepare
+	prepare changefeed
 
 	# Start continuous DML operations for all 10 tables in background
 	declare -a dml_pids=()
@@ -133,10 +133,64 @@ main() {
 	# storage sink consumer performance is not good, so we need to wait for a longer time
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
 
+	export GO_FAILPOINTS=''
 	cleanup_process $CDC_BINARY
+}
+
+main_with_consistent() {
+	if [ "$SINK_TYPE" != "mysql" ]; then
+		return
+	fi
+	prepare consistent_changefeed
+
+	# Start continuous DML operations for all 10 tables in background
+	declare -a dml_pids=()
+	for i in $(seq 1 $TABLE_COUNT); do
+		execute_dml $i &
+		dml_pids+=("$!")
+		echo "[$(date)] Started DML operations for test_table_$i, PID: $!"
+	done
+
+	# Periodically kill and restart random CDC nodes in background
+	kill_and_restart_nodes &
+	KILL_RESTART_PID=$!
+
+	# Run test for the specified duration
+	echo "[$(date)] Test will run for $TEST_DURATION seconds..."
+	sleep $TEST_DURATION
+
+	# Stop background processes
+	echo "[$(date)] Stopping background processes..."
+
+	if ((RANDOM % 2)); then
+		cleanup_process $CDC_BINARY
+		kill -9 ${dml_pids[@]} $KILL_RESTART_PID 2>/dev/null || true
+		export GO_FAILPOINTS=''
+
+		changefeed_id="test"
+		storage_path="file://$WORK_DIR/redo"
+		tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
+		rts=$(cdc redo meta --storage="$storage_path" --tmp-dir="$tmp_download_path" | grep -oE "resolved-ts:[0-9]+" | awk -F: '{print $2}')
+
+		sed "s/<placeholder>/$rts/g" $CUR/conf/consistent_diff_config.toml >$WORK_DIR/consistent_diff_config.toml
+
+		cat $WORK_DIR/consistent_diff_config.toml
+		cdc redo apply --log-level debug --tmp-dir="$tmp_download_path/apply" --storage="$storage_path" --sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
+		check_sync_diff $WORK_DIR $WORK_DIR/consistent_diff_config.toml 100
+	else
+		kill -9 ${dml_pids[@]} $KILL_RESTART_PID 2>/dev/null || true
+		sleep 10
+		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
+		export GO_FAILPOINTS=''
+		cleanup_process $CDC_BINARY
+	fi
 }
 
 trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 main
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
+stop_tidb_cluster
+main_with_consistent
+check_logs $WORK_DIR
+echo "[$(date)] <<<<<< run consistent test case $TEST_NAME success! >>>>>>"

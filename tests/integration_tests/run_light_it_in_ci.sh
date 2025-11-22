@@ -167,7 +167,7 @@ storage_groups=(
 	# G09
 	'cdc_server_tips ddl_sequence fail_over_ddl_J'
 	# G10
-	'changefeed_error batch_add_table fail_over_ddl_K  split_table_check'
+	'changefeed_error batch_add_table fail_over_ddl_K split_table_check'
 	# G11
 	'ddl_attributes multi_tables_ddl fail_over_ddl_L'
 	# G12

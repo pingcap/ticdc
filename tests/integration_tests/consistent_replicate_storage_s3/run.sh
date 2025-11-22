@@ -17,21 +17,11 @@ export AWS_SECRET_ACCESS_KEY=$MINIO_SECRET_KEY
 export S3_ENDPOINT=127.0.0.1:24927
 rm -rf "$WORK_DIR"
 mkdir -p "$WORK_DIR"
-pkill -9 minio || true
-bin/minio server --address $S3_ENDPOINT "$WORK_DIR/s3" &
-MINIO_PID=$!
-i=0
-while ! curl -o /dev/null -v -s "http://$S3_ENDPOINT/"; do
-	i=$(($i + 1))
-	if [ $i -gt 30 ]; then
-		echo 'Failed to start minio'
-		exit 1
-	fi
-	sleep 2
-done
-
+MINIO_PID=0
 stop_minio() {
-	kill -2 $MINIO_PID || true
+	if [ $MINIO_PID -ne 0 ]; then
+		kill -2 $MINIO_PID || true
+	fi
 }
 
 stop() {
@@ -42,8 +32,6 @@ stop() {
 	collect_logs $WORK_DIR
 }
 
-s3cmd --access_key=$MINIO_ACCESS_KEY --secret_key=$MINIO_SECRET_KEY --host=$S3_ENDPOINT --host-bucket=$S3_ENDPOINT --no-ssl mb s3://logbucket
-
 function run() {
 	# we only support eventually consistent replication with MySQL sink
 	if [ "$SINK_TYPE" != "mysql" ]; then
@@ -51,6 +39,19 @@ function run() {
 	fi
 
 	start_tidb_cluster --workdir $WORK_DIR
+
+	bin/minio server --address $S3_ENDPOINT "$WORK_DIR/s3" &
+	MINIO_PID=$!
+	i=0
+	while ! curl -o /dev/null -v -s "http://$S3_ENDPOINT/"; do
+		i=$(($i + 1))
+		if [ $i -gt 30 ]; then
+			echo 'Failed to start minio'
+			exit 1
+		fi
+		sleep 2
+	done
+	s3cmd --access_key=$MINIO_ACCESS_KEY --secret_key=$MINIO_SECRET_KEY --host=$S3_ENDPOINT --host-bucket=$S3_ENDPOINT --no-ssl mb s3://logbucket
 
 	cd $WORK_DIR
 	run_sql "set @@global.tidb_enable_exchange_partition=on" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
@@ -101,10 +102,10 @@ function run() {
 	# when use base64 encoded password
 	ENPASSWORD="MTIzNDU2"
 
-	cdc redo apply --tmp-dir="$tmp_download_path/apply" \
+	cdc redo apply --log-level debug --tmp-dir="$tmp_download_path/apply" \
 		--storage="$storage_path" \
 		--sink-uri="mysql://normal:${ENPASSWORD}@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
-	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
 }
 
 trap stop EXIT

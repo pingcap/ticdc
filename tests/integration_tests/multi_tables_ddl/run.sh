@@ -17,21 +17,11 @@ export AWS_SECRET_ACCESS_KEY=$MINIO_SECRET_KEY
 export S3_ENDPOINT=127.0.0.1:24927
 rm -rf "$WORK_DIR"
 mkdir -p "$WORK_DIR"
-pkill -9 minio || true
-bin/minio server --address $S3_ENDPOINT "$WORK_DIR/s3" &
-MINIO_PID=$!
-i=0
-while ! curl -o /dev/null -v -s "http://$S3_ENDPOINT/"; do
-	i=$(($i + 1))
-	if [ $i -gt 30 ]; then
-		echo 'Failed to start minio'
-		exit 1
-	fi
-	sleep 2
-done
-
+MINIO_PID=0
 stop_minio() {
-	kill -2 $MINIO_PID || true
+	if [ $MINIO_PID -ne 0 ]; then
+		kill -2 $MINIO_PID || true
+	fi
 }
 
 stop() {
@@ -39,7 +29,6 @@ stop() {
 	stop_tidb_cluster
 	collect_logs $WORK_DIR
 }
-s3cmd --access_key=$MINIO_ACCESS_KEY --secret_key=$MINIO_SECRET_KEY --host=$S3_ENDPOINT --host-bucket=$S3_ENDPOINT --no-ssl mb s3://logbucket
 
 function run() {
 	if [ "$SINK_TYPE" == "storage" ]; then
@@ -51,8 +40,21 @@ function run() {
 	fi
 
 	start_tidb_cluster --workdir $WORK_DIR
-	cd $WORK_DIR
 
+	bin/minio server --address $S3_ENDPOINT "$WORK_DIR/s3" &
+	MINIO_PID=$!
+	i=0
+	while ! curl -o /dev/null -v -s "http://$S3_ENDPOINT/"; do
+		i=$(($i + 1))
+		if [ $i -gt 30 ]; then
+			echo 'Failed to start minio'
+			exit 1
+		fi
+		sleep 2
+	done
+	s3cmd --access_key=$MINIO_ACCESS_KEY --secret_key=$MINIO_SECRET_KEY --host=$S3_ENDPOINT --host-bucket=$S3_ENDPOINT --no-ssl mb s3://logbucket
+
+	cd $WORK_DIR
 	# record tso before we create tables to skip the system table DDLs
 	start_ts=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
 
