@@ -601,7 +601,7 @@ func (m *eventMerger) canInterrupt(newCommitTs uint64, currentBatchDML *event.Ba
 	return !m.hasDDLAtCommitTs(newCommitTs)
 }
 
-// TxnEvent represents a transaction, it may contain one or multiple DMLEvents
+// TxnEvent represents a transaction, it may generates one or multiple DMLEvents
 type TxnEvent struct {
 	BatchDML         *event.BatchDMLEvent
 	DispatcherID     common.DispatcherID
