@@ -18,7 +18,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"go.uber.org/zap"
 )
 
 // TableProgress maintains event timestamp information in the sink.
@@ -70,13 +72,14 @@ func (el *ElementList) Push(elem *list.Element) {
 // When all elements are popped once, it returns finish=true.
 // Means the startTs/commitTs pair has no elements left.
 func (el *ElementList) Pop() (*list.Element, bool) {
+	if el.idx >= len(el.elements) {
+		log.Error("ElementList Pop called but no elements left", zap.Int("el.idx", el.idx))
+		return nil, true
+	}
+
 	elem := el.elements[el.idx]
 	el.idx++
-	finish := false
-	if el.idx >= len(el.elements) {
-		finish = true
-	}
-	return elem, finish
+	return elem, el.idx >= len(el.elements)
 }
 
 // NewTableProgress creates and initializes a new TableProgress instance.
@@ -118,7 +121,9 @@ func (p *TableProgress) Remove(event commonEvent.FlushableEvent) {
 
 	if elemLists, ok := p.elemMap[ts]; ok {
 		elem, finish := elemLists.Pop()
-		p.list.Remove(elem)
+		if elem != nil {
+			p.list.Remove(elem)
+		}
 		if finish {
 			delete(p.elemMap, ts)
 		}
