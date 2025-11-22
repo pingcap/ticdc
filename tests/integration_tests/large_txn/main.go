@@ -54,7 +54,6 @@ func main() {
 	db.SetMaxIdleConns(*concurrency)
 
 	createTable(db)
-	defer dropTable(db) // Clean up table at the end
 
 	log.Printf("Starting interleaved operations with %d transactions, %d rows per txn, %d concurrency", *txns, *rows, *concurrency)
 
@@ -85,10 +84,8 @@ func main() {
 
 	wg.Wait()
 
-	log.Println("All interleaved operations completed. Starting consistency verification...")
-	verifyConsistency(db)
-	log.Println("Consistency verification completed successfully.")
-	log.Println("Test finished.")
+	log.Println("All interleaved operations completed successfully.")
+	log.Println("Workload generation finished. CDC sync_diff_inspector will verify upstream-downstream consistency.")
 }
 
 func createTable(db *sql.DB) {
@@ -105,16 +102,6 @@ func createTable(db *sql.DB) {
 		log.Fatalf("Failed to create table: %v", err)
 	}
 	log.Println("Table 'large_txn_table' created or already exists.")
-}
-
-func dropTable(db *sql.DB) {
-	log.Println("Dropping table 'large_txn_table'...")
-	_, err := db.Exec("DROP TABLE IF EXISTS large_txn_table")
-	if err != nil {
-		log.Printf("Failed to drop table: %v", err)
-	} else {
-		log.Println("Table 'large_txn_table' dropped.")
-	}
 }
 
 func runInterleavedOperations(db *sql.DB, numRows int, batchID int) {
@@ -199,61 +186,4 @@ func runLargeDelete(db *sql.DB, batchID int) {
 		log.Fatalf("Failed to commit delete transaction (batch %d): %v", batchID, err)
 	}
 	log.Printf("Committed large delete transaction (batch %d)", batchID)
-}
-
-func verifyConsistency(db *sql.DB) {
-	log.Println("Verifying consistency...")
-	totalExpectedRows := 0
-
-	for batchID := 0; batchID < *txns; batchID++ {
-		var expectedRows int
-		var expectedData string
-
-		if batchID%2 == 0 {
-			// Even batches were deleted
-			expectedRows = 0
-			expectedData = "" // Data doesn't matter if rows are 0
-		} else {
-			// Odd batches were updated, not deleted
-			expectedRows = *rows
-			expectedData = strings.Repeat("y", 100) + fmt.Sprintf("%s%d", updateDataPrefix, batchID)
-			totalExpectedRows += expectedRows
-		}
-
-		var actualRows int
-		err := db.QueryRow("SELECT COUNT(*) FROM large_txn_table WHERE batch_id = ?", batchID).Scan(&actualRows)
-		if err != nil {
-			log.Fatalf("Failed to query row count for batch %d: %v", batchID, err)
-		}
-
-		if actualRows != expectedRows {
-			log.Fatalf("Consistency check failed for batch %d: Expected %d rows, got %d rows.", batchID, expectedRows, actualRows)
-		}
-
-		if expectedRows > 0 {
-			var actualData string
-			err := db.QueryRow("SELECT data FROM large_txn_table WHERE batch_id = ? LIMIT 1", batchID).Scan(&actualData)
-			if err != nil {
-				log.Fatalf("Failed to query data for batch %d: %v", batchID, err)
-			}
-			if actualData != expectedData {
-				log.Fatalf("Consistency check failed for batch %d: Expected data '%s', got '%s'.", batchID, expectedData, actualData)
-			}
-		}
-		log.Printf("Batch %d: OK (Rows: %d, Data: %s)", batchID, actualRows, expectedData)
-	}
-
-	// Verify total row count
-	var finalTotalRows int
-	err := db.QueryRow("SELECT COUNT(*) FROM large_txn_table").Scan(&finalTotalRows)
-	if err != nil {
-		log.Fatalf("Failed to query total row count: %v", err)
-	}
-
-	if finalTotalRows != totalExpectedRows {
-		log.Fatalf("Final consistency check failed: Expected total %d rows, got %d rows.", totalExpectedRows, finalTotalRows)
-	}
-	log.Printf("Total rows in table: %d (Expected: %d)", finalTotalRows, totalExpectedRows)
-
-	log.Println("All consistency checks passed.")
 }
