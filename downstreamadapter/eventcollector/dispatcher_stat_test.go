@@ -106,6 +106,10 @@ func (m *mockDispatcher) GetCheckpointTs() uint64 {
 	return m.checkPointTs
 }
 
+func (m *mockDispatcher) GetTxnAtomicity() config.AtomicityLevel {
+	return config.DefaultAtomicityLevel()
+}
+
 func (m *mockDispatcher) HandleEvents(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
 	if m.handleEvents == nil {
 		return false
