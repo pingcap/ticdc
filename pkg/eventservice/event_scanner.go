@@ -644,8 +644,8 @@ func (t *TxnEvent) AppendRow(
 			t.CurrentDMLEvent.StartTs,
 			t.CurrentDMLEvent.CommitTs,
 			t.CurrentDMLEvent.TableInfo)
-		err := t.BatchDML.AppendDMLEvent(newDMLEvent)
 		t.CurrentDMLEvent = newDMLEvent
+		err := t.BatchDML.AppendDMLEvent(newDMLEvent)
 		if err != nil {
 			return err
 		}
