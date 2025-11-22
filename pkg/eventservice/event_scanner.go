@@ -386,7 +386,7 @@ func interruptScan(
 	} else {
 		startTs := uint64(0)
 		if processor.currentTxn != nil {
-			startTs = processor.currentTxn.GetStartTs()
+			startTs = processor.currentTxn.CurrentDMLEvent.GetStartTs()
 		}
 		log.Debug("scan interrupted at the same commitTs with new event", zap.Stringer("dispatcherID", session.dispatcherStat.id), zap.Uint64("startTs", startTs), zap.Uint64("commitTs", merger.lastBatchDMLCommitTs), zap.Uint64("newStartTs", newStartTs), zap.Uint64("newCommitTs", newCommitTs), zap.Duration("duration", time.Since(session.startTime)))
 	}
@@ -651,10 +651,6 @@ func (t *TxnEvent) AppendRow(
 		}
 	}
 	return t.CurrentDMLEvent.AppendRow(rawEvent, decode, filter)
-}
-
-func (t *TxnEvent) GetStartTs() common.Ts {
-	return t.CurrentDMLEvent.GetStartTs()
 }
 
 // dmlProcessor handles DML event processing and batching
