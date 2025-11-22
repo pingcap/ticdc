@@ -1743,7 +1743,8 @@ func TestTxnEventSplit(t *testing.T) {
 	// Case 1: Split by rows
 	t.Run("SplitByRows", func(t *testing.T) {
 		batchDML := event.NewBatchDMLEvent()
-		txn := newTxnEvent(batchDML, dispatcherID, tableID, tableInfo, 100, 110)
+		txn, err := newTxnEvent(batchDML, dispatcherID, tableID, tableInfo, 100, 110)
+		require.NoError(t, err)
 		// Set max rows to 2
 		txn.DMLEventMaxRows = 2
 
@@ -1764,7 +1765,8 @@ func TestTxnEventSplit(t *testing.T) {
 	// Case 2: Split by bytes
 	t.Run("SplitByBytes", func(t *testing.T) {
 		batchDML := event.NewBatchDMLEvent()
-		txn := newTxnEvent(batchDML, dispatcherID, tableID, tableInfo, 100, 110)
+		txn, err := newTxnEvent(batchDML, dispatcherID, tableID, tableInfo, 100, 110)
+		require.NoError(t, err)
 		// Set max bytes to a small value that forces split after each row
 		// Each row is roughly: key(insert_key_X) + value(insert_value_X) + overhead
 		// Setting to 1 byte ensures split

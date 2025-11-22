@@ -621,7 +621,7 @@ func newTxnEvent(
 	tableInfo *common.TableInfo,
 	startTs uint64,
 	commitTs uint64,
-) *TxnEvent {
+) (*TxnEvent, error) {
 	serverConfig := config.GetGlobalServerConfig()
 	txn := &TxnEvent{
 		BatchDML:         batchDML,
@@ -634,8 +634,7 @@ func newTxnEvent(
 		DMLEventMaxRows:  serverConfig.Debug.EventService.DMLEventMaxRows,
 		DMLEventMaxBytes: serverConfig.Debug.EventService.DMLEventMaxBytes,
 	}
-	txn.BatchDML.AppendDMLEvent(txn.CurrentDMLEvent)
-	return txn
+	return txn, txn.BatchDML.AppendDMLEvent(txn.CurrentDMLEvent)
 }
 
 func (t *TxnEvent) AppendRow(
@@ -704,8 +703,9 @@ func (p *dmlProcessor) startTxn(
 	if p.currentTxn != nil {
 		log.Panic("there is a transaction not flushed yet")
 	}
-	p.currentTxn = newTxnEvent(p.batchDML, dispatcherID, tableID, tableInfo, startTs, commitTs)
-	return nil
+	var err error
+	p.currentTxn, err = newTxnEvent(p.batchDML, dispatcherID, tableID, tableInfo, startTs, commitTs)
+	return err
 }
 
 func (p *dmlProcessor) commitTxn() error {
