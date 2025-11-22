@@ -1724,3 +1724,68 @@ func TestCanInterrupt(t *testing.T) {
 		require.True(t, result, "Should be able to interrupt when currentBatchDML is empty")
 	})
 }
+
+func TestTxnEventSplit(t *testing.T) {
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+
+	ddlEvent, kvEvents := genEvents(helper, `create table test.t(id int primary key, c char(50))`, []string{
+		`insert into test.t(id,c) values (0, "c0")`,
+		`insert into test.t(id,c) values (1, "c1")`,
+		`insert into test.t(id,c) values (2, "c2")`,
+		`insert into test.t(id,c) values (3, "c3")`,
+	}...)
+
+	tableInfo := ddlEvent.TableInfo
+	tableID := ddlEvent.TableInfo.TableName.TableID
+	dispatcherID := common.NewDispatcherID()
+
+	// Case 1: Split by rows
+	t.Run("SplitByRows", func(t *testing.T) {
+		batchDML := event.NewBatchDMLEvent()
+		txn := newTxnEvent(batchDML, dispatcherID, tableID, tableInfo, 100, 110)
+		// Set max rows to 2
+		txn.DMLEventMaxRows = 2
+
+		mockMounter := &mockMounter{}
+
+		// Append 4 rows
+		for _, rawEvent := range kvEvents {
+			err := txn.AppendRow(rawEvent, mockMounter.DecodeToChunk, nil)
+			require.NoError(t, err)
+		}
+
+		// Should have 2 DMLEvents, each with 2 rows
+		require.Equal(t, 2, len(batchDML.DMLEvents))
+		require.Equal(t, int32(2), batchDML.DMLEvents[0].Len())
+		require.Equal(t, int32(2), batchDML.DMLEvents[1].Len())
+	})
+
+	// Case 2: Split by bytes
+	t.Run("SplitByBytes", func(t *testing.T) {
+		batchDML := event.NewBatchDMLEvent()
+		txn := newTxnEvent(batchDML, dispatcherID, tableID, tableInfo, 100, 110)
+		// Set max bytes to a small value that forces split after each row
+		// Each row is roughly: key(insert_key_X) + value(insert_value_X) + overhead
+		// Setting to 1 byte ensures split
+		txn.DMLEventMaxBytes = 1
+
+		mockMounter := &mockMounter{}
+
+		// Append 4 rows
+		for _, rawEvent := range kvEvents {
+			err := txn.AppendRow(rawEvent, mockMounter.DecodeToChunk, nil)
+			require.NoError(t, err)
+		}
+
+		// Should have 4 DMLEvents
+		// The logic is: if current.Len >= MaxRows OR current.Size >= MaxBytes THEN create new.
+		// Since we check BEFORE append, the first row is always appended to the first event.
+		// Then for 2nd row, size > 1, so it creates new event.
+		// So we expect 4 events.
+		require.Equal(t, 4, len(batchDML.DMLEvents))
+		for i := 0; i < 4; i++ {
+			require.Equal(t, int32(1), batchDML.DMLEvents[i].Len())
+		}
+	})
+}
