@@ -4,24 +4,22 @@ set -eu
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
-export PATH=$CUR/../_utils:$PATH
 WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
 function prepare() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
-
 	start_tidb_cluster --workdir $WORK_DIR
-
 	cd $WORK_DIR
 
 	# Create database in upstream and downstream
 	run_sql "CREATE DATABASE large_txn" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE DATABASE large_txn" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
+	pd_addr="http://$UP_PD_HOST_1:$UP_PD_PORT_1"
 	# Start CDC server
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "cdc"
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300" --pd $pd_addr
 
 	# Create changefeed
 	cdc_cli_changefeed create --sink-uri="mysql://root@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/"
