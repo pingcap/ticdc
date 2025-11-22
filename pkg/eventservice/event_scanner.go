@@ -400,13 +400,11 @@ type session struct {
 	dataRange      common.DataRange
 
 	limit scanLimit
-
 	// State tracking
 	startTime time.Time
 
 	scannedBytes      int64
 	scannedEntryCount int
-
 	// dmlCount is the count of transactions.
 	dmlCount int
 
