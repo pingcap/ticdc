@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -69,6 +70,7 @@ type dispatcherStat struct {
 	enableSyncPoint   bool
 	nextSyncPoint     atomic.Uint64
 	syncPointInterval time.Duration
+	txnAtomicity      config.AtomicityLevel
 
 	// =============================================================================
 	// ================== below are fields need copied when reset ==================
@@ -147,6 +149,7 @@ func newDispatcherStat(
 		startTs:            info.GetStartTs(),
 		epoch:              info.GetEpoch(),
 		startTableInfo:     startTableInfo,
+		txnAtomicity:       info.GetTxnAtomicity(),
 	}
 
 	// A small value to avoid too many scan tasks at the first place.

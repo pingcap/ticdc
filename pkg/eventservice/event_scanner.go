@@ -291,7 +291,8 @@ func (s *eventScanner) startTxn(
 	tableInfo *common.TableInfo,
 	tableID int64,
 ) error {
-	err := processor.startTxn(session.dispatcherStat.id, tableID, tableInfo, startTs, commitTs)
+	shouldSplitTxn := session.dispatcherStat.txnAtomicity.ShouldSplitTxn()
+	err := processor.startTxn(session.dispatcherStat.id, tableID, tableInfo, startTs, commitTs, shouldSplitTxn)
 	if err != nil {
 		return err
 	}
@@ -607,6 +608,7 @@ type TxnEvent struct {
 	CurrentDMLEvent  *event.DMLEvent
 	DMLEventMaxRows  int32
 	DMLEventMaxBytes int64
+	shouldSplitTxn   bool
 }
 
 func newTxnEvent(
@@ -616,6 +618,7 @@ func newTxnEvent(
 	tableInfo *common.TableInfo,
 	startTs uint64,
 	commitTs uint64,
+	shouldSplitTxn bool,
 ) (*TxnEvent, error) {
 	serverConfig := config.GetGlobalServerConfig()
 	txn := &TxnEvent{
@@ -623,6 +626,7 @@ func newTxnEvent(
 		CurrentDMLEvent:  event.NewDMLEvent(dispatcherID, tableID, startTs, commitTs, tableInfo),
 		DMLEventMaxRows:  serverConfig.Debug.EventService.DMLEventMaxRows,
 		DMLEventMaxBytes: serverConfig.Debug.EventService.DMLEventMaxBytes,
+		shouldSplitTxn:   shouldSplitTxn,
 	}
 	return txn, txn.BatchDML.AppendDMLEvent(txn.CurrentDMLEvent)
 }
@@ -636,8 +640,7 @@ func (t *TxnEvent) AppendRow(
 	) (int, *integrity.Checksum, error),
 	filter filter.Filter,
 ) error {
-	// TODO: check whether split txn is enabled
-	if t.CurrentDMLEvent.Len() >= t.DMLEventMaxRows || t.CurrentDMLEvent.GetSize() >= t.DMLEventMaxBytes {
+	if t.shouldSplitTxn && (t.CurrentDMLEvent.Len() >= t.DMLEventMaxRows || t.CurrentDMLEvent.GetSize() >= t.DMLEventMaxBytes) {
 		newDMLEvent := event.NewDMLEvent(
 			t.CurrentDMLEvent.DispatcherID,
 			t.CurrentDMLEvent.PhysicalTableID,
@@ -694,12 +697,13 @@ func (p *dmlProcessor) startTxn(
 	tableInfo *common.TableInfo,
 	startTs uint64,
 	commitTs uint64,
+	shouldSplitTxn bool,
 ) error {
 	if p.currentTxn != nil {
 		log.Panic("there is a transaction not flushed yet")
 	}
 	var err error
-	p.currentTxn, err = newTxnEvent(p.batchDML, dispatcherID, tableID, tableInfo, startTs, commitTs)
+	p.currentTxn, err = newTxnEvent(p.batchDML, dispatcherID, tableID, tableInfo, startTs, commitTs, shouldSplitTxn)
 	return err
 }
 
