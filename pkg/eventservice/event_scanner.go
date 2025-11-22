@@ -605,17 +605,19 @@ func (m *eventMerger) canInterrupt(newCommitTs uint64, currentBatchDML *event.Ba
 
 // TxnEvent represents a transaction, it may contain one or multiple DMLEvents
 type TxnEvent struct {
+	BatchDML         *event.BatchDMLEvent
 	DispatcherID     common.DispatcherID
 	TableID          int64
 	TableInfo        *common.TableInfo
 	StartTs          uint64
 	CommitTs         uint64
-	DMLEvents        []*event.DMLEvent
+	CurrentDMLEvent  *event.DMLEvent
 	DMLEventMaxRows  int32
 	DMLEventMaxBytes int64
 }
 
 func newTxnEvent(
+	batchDML *event.BatchDMLEvent,
 	dispatcherID common.DispatcherID,
 	tableID int64,
 	tableInfo *common.TableInfo,
@@ -624,16 +626,17 @@ func newTxnEvent(
 ) *TxnEvent {
 	serverConfig := config.GetGlobalServerConfig()
 	txn := &TxnEvent{
+		BatchDML:         batchDML,
 		DispatcherID:     dispatcherID,
 		TableID:          tableID,
 		TableInfo:        tableInfo,
 		StartTs:          startTs,
 		CommitTs:         commitTs,
+		CurrentDMLEvent:  event.NewDMLEvent(dispatcherID, tableID, startTs, commitTs, tableInfo),
 		DMLEventMaxRows:  serverConfig.Debug.EventService.DMLEventMaxRows,
 		DMLEventMaxBytes: serverConfig.Debug.EventService.DMLEventMaxBytes,
 	}
-	dmlEvent := event.NewDMLEvent(dispatcherID, tableID, startTs, commitTs, tableInfo)
-	txn.DMLEvents = append(txn.DMLEvents, dmlEvent)
+	txn.BatchDML.AppendDMLEvent(txn.CurrentDMLEvent)
 	return txn
 }
 
@@ -646,17 +649,16 @@ func (t *TxnEvent) AppendRow(
 	) (int, *integrity.Checksum, error),
 	filter filter.Filter,
 ) error {
-	// TODO: check split txn is enabled
-	lastDMLEvent := t.DMLEvents[len(t.DMLEvents)-1]
-	if lastDMLEvent.Len() >= t.DMLEventMaxRows || lastDMLEvent.GetSize() >= t.DMLEventMaxBytes {
-		lastDMLEvent = event.NewDMLEvent(t.DispatcherID, t.TableID, t.StartTs, t.CommitTs, t.TableInfo)
-		t.DMLEvents = append(t.DMLEvents, lastDMLEvent)
+	// TODO: check whether split txn is enabled
+	if t.CurrentDMLEvent.Len() >= t.DMLEventMaxRows || t.CurrentDMLEvent.GetSize() >= t.DMLEventMaxBytes {
+		t.CurrentDMLEvent = event.NewDMLEvent(t.DispatcherID, t.TableID, t.StartTs, t.CommitTs, t.TableInfo)
+		t.BatchDML.AppendDMLEvent(t.CurrentDMLEvent)
 	}
-	return lastDMLEvent.AppendRow(rawEvent, decode, filter)
+	return t.CurrentDMLEvent.AppendRow(rawEvent, decode, filter)
 }
 
 func (t *TxnEvent) GetStartTs() common.Ts {
-	return t.DMLEvents[0].GetStartTs()
+	return t.CurrentDMLEvent.GetStartTs()
 }
 
 // dmlProcessor handles DML event processing and batching
@@ -704,7 +706,7 @@ func (p *dmlProcessor) startTxn(
 	if p.currentTxn != nil {
 		log.Panic("there is a transaction not flushed yet")
 	}
-	p.currentTxn = newTxnEvent(dispatcherID, tableID, tableInfo, startTs, commitTs)
+	p.currentTxn = newTxnEvent(p.batchDML, dispatcherID, tableID, tableInfo, startTs, commitTs)
 	return nil
 }
 
@@ -716,9 +718,6 @@ func (p *dmlProcessor) commitTxn() error {
 			}
 		}
 		p.insertRowCache = make([]*common.RawKVEntry, 0)
-	}
-	for _, dmlEvent := range p.currentTxn.DMLEvents {
-		p.batchDML.AppendDMLEvent(dmlEvent)
 	}
 	p.currentTxn = nil
 	return nil
