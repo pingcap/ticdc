@@ -222,6 +222,9 @@ func (d *dispatcherStat) removeFrom(serverID node.ID) {
 }
 
 func (d *dispatcherStat) wake() {
+	log.Info("Wake up dispatcher to send events",
+		zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+		zap.Stringer("dispatcher", d.getDispatcherID()))
 	if common.IsRedoMode(d.target.GetMode()) {
 		d.eventCollector.redoDs.Wake(d.getDispatcherID())
 	} else {
