@@ -45,13 +45,21 @@ GOVERSION := $(shell go version)
 # ref: https://github.com/cloudfoundry/gosigar/issues/58#issuecomment-1150925711
 # ref: https://github.com/pingcap/tidb/pull/39526#issuecomment-1407952955
 OS := "$(shell go env GOOS)"
-SED_IN_PLACE ?= $(shell which sed)
 IS_ALPINE := $(shell if [ -f /etc/os-release ]; then grep -qi Alpine /etc/os-release && echo 1; else echo 0; fi)
 ifeq (${OS}, "linux")
 	CGO := 0
-	SED_IN_PLACE += -i
 else ifeq (${OS}, "darwin")
 	CGO := 1
+endif
+
+# Check if sed is GNU sed and set SED_IN_PLACE accordingly.
+# GNU sed supports -i without a suffix, while BSD sed requires one.
+# `sed --version` is a GNU-specific flag.
+# Using the operating system to determine the sed version is inaccurate, as macOS may have GNU sed installed.
+SED_IN_PLACE ?= $(shell which sed)
+ifeq ($(shell $(SED_IN_PLACE) --version >/dev/null 2>&1 && echo gnu),gnu)
+	SED_IN_PLACE += -i
+else
 	SED_IN_PLACE += -i ''
 endif
 
