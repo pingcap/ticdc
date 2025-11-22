@@ -69,6 +69,8 @@ type Dispatcher interface {
 	SetSkipDMLAsStartTs(skipDMLAsStartTs bool)
 	SetComponentStatus(status heartbeatpb.ComponentState)
 	GetRemovingStatus() bool
+	GetTryRemoving() bool
+	SetTryRemoving()
 	GetHeartBeatInfo(h *HeartBeatInfo)
 	GetComponentStatus() heartbeatpb.ComponentState
 	GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus
@@ -176,6 +178,9 @@ type BasicDispatcher struct {
 	// it's used for sink to calculate the tableNames or TableIds
 	tableSchemaStore *util.TableSchemaStore
 
+	// try to remove the dispatcher, but dispatcher may not able to be removed now
+	tryRemoving atomic.Bool
+	// is able to remove, and removing now
 	isRemoving atomic.Bool
 	// duringHandleEvents is used to indicate whether the dispatcher is currently handling events.
 	// This field prevents a race condition where TryClose is called while events are being processed.

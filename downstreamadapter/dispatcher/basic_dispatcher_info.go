@@ -134,6 +134,14 @@ func (d *BasicDispatcher) GetRemovingStatus() bool {
 	return d.isRemoving.Load()
 }
 
+func (d *BasicDispatcher) GetTryRemoving() bool {
+	return d.tryRemoving.Load()
+}
+
+func (d *BasicDispatcher) SetTryRemoving() {
+	d.tryRemoving.Store(true)
+}
+
 func (d *BasicDispatcher) EnableSyncPoint() bool {
 	return d.sharedInfo.syncPointConfig != nil
 }
