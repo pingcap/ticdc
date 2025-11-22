@@ -42,7 +42,7 @@ type SharedInfo struct {
 	syncPointConfig *syncpoint.SyncPointConfig
 
 	// The atomicity level of a transaction.
-	txnAtomicity *config.AtomicityLevel
+	txnAtomicity config.AtomicityLevel
 
 	// enableSplittableCheck controls whether to check if a table is splittable before splitting.
 	// If true, only tables with a primary key and no unique key can be split.
@@ -83,7 +83,7 @@ func NewSharedInfo(
 	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus,
 	errCh chan error,
 ) *SharedInfo {
-	return &SharedInfo{
+	sharedInfo := &SharedInfo{
 		changefeedID:          changefeedID,
 		timezone:              timezone,
 		bdrMode:               bdrMode,
@@ -91,13 +91,19 @@ func NewSharedInfo(
 		integrityConfig:       integrityConfig,
 		filterConfig:          filterConfig,
 		syncPointConfig:       syncPointConfig,
-		txnAtomicity:          txnAtomicity,
 		enableSplittableCheck: enableSplittableCheck,
 		statusesChan:          statusesChan,
 		blockStatusesChan:     blockStatusesChan,
 		blockExecutor:         newBlockEventExecutor(),
 		errCh:                 errCh,
 	}
+
+	if txnAtomicity != nil {
+		sharedInfo.txnAtomicity = *txnAtomicity
+	} else {
+		sharedInfo.txnAtomicity = config.DefaultAtomicityLevel()
+	}
+	return sharedInfo
 }
 
 func (d *BasicDispatcher) GetId() common.DispatcherID {
@@ -187,7 +193,7 @@ func (d *BasicDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
 	return d.tableSpan
 }
 
-func (d *BasicDispatcher) GetTxnAtomicity() *config.AtomicityLevel {
+func (d *BasicDispatcher) GetTxnAtomicity() config.AtomicityLevel {
 	return d.sharedInfo.txnAtomicity
 }
 

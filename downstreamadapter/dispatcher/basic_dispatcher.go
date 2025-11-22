@@ -47,7 +47,7 @@ type DispatcherService interface {
 	EnableSyncPoint() bool
 	GetSyncPointInterval() time.Duration
 	GetSkipSyncpointAtStartTs() bool
-	GetTxnAtomicity() *config.AtomicityLevel
+	GetTxnAtomicity() config.AtomicityLevel
 	GetResolvedTs() uint64
 	GetCheckpointTs() uint64
 	HandleEvents(events []DispatcherEvent, wakeCallback func()) (block bool)

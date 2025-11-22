@@ -88,6 +88,10 @@ func (m *mockEventDispatcher) GetSkipSyncpointAtStartTs() bool {
 	return false
 }
 
+func (m *mockEventDispatcher) GetTxnAtomicity() config.AtomicityLevel {
+	return config.DefaultAtomicityLevel()
+}
+
 func (m *mockEventDispatcher) GetResolvedTs() uint64 {
 	return 0
 }
