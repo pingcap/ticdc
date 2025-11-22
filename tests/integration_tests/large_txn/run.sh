@@ -6,7 +6,7 @@ CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
 export PATH=$CUR/../_utils:$PATH
 WORK_DIR=$OUT_DIR/$TEST_NAME
-CDC_BINARY=$CUR/cdc.test
+CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
 function prepare() {
@@ -39,11 +39,11 @@ if [ "$SINK_TYPE" == "mysql" ]; then
 	echo "[$(date)] Starting large transaction workload..."
 
 	# Run the large transaction workload
-    # 1000 rows per txn, 10 txns per type (insert, update, delete)
+	# 1000 rows per txn, 10 txns per type (insert, update, delete)
 	GO111MODULE=on go run main.go \
 		-dsn "root@tcp(${UP_TIDB_HOST}:${UP_TIDB_PORT})/large_txn" \
 		--rows=1000 \
-        --txns=10
+		--txns=10
 
 	echo "[$(date)] Workload completed, verifying data consistency with CDC sync..."
 
