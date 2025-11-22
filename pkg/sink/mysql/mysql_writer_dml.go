@@ -640,6 +640,7 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 			// use multi stmt way to execute the dmls
 			err := w.multiStmtExecute(dmls, writeTimeout)
 			if err != nil {
+				log.Warn("multiStmtExecute failed, fallback to sequence way", zap.Error(err), zap.Any("sql", dmls.LogWithoutValues()), zap.Int("writerID", w.id))
 				fallbackToSeqWay = true
 				return 0, 0, err
 			}
