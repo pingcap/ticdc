@@ -25,7 +25,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
 )
 
@@ -383,8 +385,8 @@ func interruptScan(
 		}
 	} else {
 		startTs := uint64(0)
-		if processor.currentDML != nil {
-			startTs = processor.currentDML.GetStartTs()
+		if processor.currentTxn != nil {
+			startTs = processor.currentTxn.GetStartTs()
 		}
 		log.Debug("scan interrupted at the same commitTs with new event", zap.Stringer("dispatcherID", session.dispatcherStat.id), zap.Uint64("startTs", startTs), zap.Uint64("commitTs", merger.lastBatchDMLCommitTs), zap.Uint64("newStartTs", newStartTs), zap.Uint64("newCommitTs", newCommitTs), zap.Duration("duration", time.Since(session.startTime)))
 	}
@@ -398,8 +400,6 @@ type session struct {
 	dataRange      common.DataRange
 
 	limit scanLimit
-
-	maxBatchRows int
 
 	// State tracking
 	startTime time.Time
@@ -422,13 +422,11 @@ func newSession(
 	dataRange common.DataRange,
 	limit scanLimit,
 ) *session {
-	serverConfig := config.GetGlobalServerConfig()
 	return &session{
 		ctx:            ctx,
 		dispatcherStat: dispatcherStat,
 		dataRange:      dataRange,
 		limit:          limit,
-		maxBatchRows:   serverConfig.Debug.EventService.MaxBatchRows,
 		startTime:      time.Now(),
 		events:         make([]event.Event, 0),
 	}
@@ -486,8 +484,7 @@ func (s *session) exceedLimit(nBytes int64, batchDMLs ...*event.BatchDMLEvent) b
 		return (s.eventBytes + int64(eventCount)) >= s.limit.maxDMLBytes
 	}
 
-	return (s.eventBytes+nBytes) >= s.limit.maxDMLBytes ||
-		(s.maxBatchRows != 0 && s.scannedEntryCount > s.maxBatchRows)
+	return (s.eventBytes + nBytes) >= s.limit.maxDMLBytes
 }
 
 // eventMerger handles merging of DML and DDL events in timestamp order
@@ -606,6 +603,62 @@ func (m *eventMerger) canInterrupt(newCommitTs uint64, currentBatchDML *event.Ba
 	return !m.hasDDLAtCommitTs(newCommitTs)
 }
 
+// TxnEvent represents a transaction, it may contain one or multiple DMLEvents
+type TxnEvent struct {
+	DispatcherID     common.DispatcherID
+	TableID          int64
+	TableInfo        *common.TableInfo
+	StartTs          uint64
+	CommitTs         uint64
+	DMLEvents        []*event.DMLEvent
+	DMLEventMaxRows  int32
+	DMLEventMaxBytes int64
+}
+
+func newTxnEvent(
+	dispatcherID common.DispatcherID,
+	tableID int64,
+	tableInfo *common.TableInfo,
+	startTs uint64,
+	commitTs uint64,
+) *TxnEvent {
+	serverConfig := config.GetGlobalServerConfig()
+	txn := &TxnEvent{
+		DispatcherID:     dispatcherID,
+		TableID:          tableID,
+		TableInfo:        tableInfo,
+		StartTs:          startTs,
+		CommitTs:         commitTs,
+		DMLEventMaxRows:  serverConfig.Debug.EventService.DMLEventMaxRows,
+		DMLEventMaxBytes: serverConfig.Debug.EventService.DMLEventMaxBytes,
+	}
+	dmlEvent := event.NewDMLEvent(dispatcherID, tableID, startTs, commitTs, tableInfo)
+	txn.DMLEvents = append(txn.DMLEvents, dmlEvent)
+	return txn
+}
+
+func (t *TxnEvent) AppendRow(
+	rawEvent *common.RawKVEntry,
+	decode func(
+		rawKv *common.RawKVEntry,
+		tableInfo *common.TableInfo,
+		chk *chunk.Chunk,
+	) (int, *integrity.Checksum, error),
+	filter filter.Filter,
+) error {
+	// TODO: check split txn is enabled
+	lastDMLEvent := t.DMLEvents[len(t.DMLEvents)-1]
+	if lastDMLEvent.Len() >= t.DMLEventMaxRows || lastDMLEvent.GetSize() >= t.DMLEventMaxBytes {
+		lastDMLEvent = event.NewDMLEvent(t.DispatcherID, t.TableID, t.StartTs, t.CommitTs, t.TableInfo)
+		t.DMLEvents = append(t.DMLEvents, lastDMLEvent)
+	}
+	return lastDMLEvent.AppendRow(rawEvent, decode, filter)
+}
+
+func (t *TxnEvent) GetStartTs() common.Ts {
+	return t.DMLEvents[0].GetStartTs()
+}
+
 // dmlProcessor handles DML event processing and batching
 type dmlProcessor struct {
 	mounter      event.Mounter
@@ -618,8 +671,8 @@ type dmlProcessor struct {
 	// And it will be cleared when the transaction is finished.
 	insertRowCache []*common.RawKVEntry
 
-	// currentDML is the transaction that is handling now
-	currentDML *event.DMLEvent
+	// currentTxn is the transaction that is handling now
+	currentTxn *TxnEvent
 
 	batchDML             *event.BatchDMLEvent
 	outputRawChangeEvent bool
@@ -645,25 +698,29 @@ func (p *dmlProcessor) startTxn(
 	dispatcherID common.DispatcherID,
 	tableID int64,
 	tableInfo *common.TableInfo,
-	startTs uint64, commitTs uint64,
+	startTs uint64,
+	commitTs uint64,
 ) error {
-	if p.currentDML != nil {
+	if p.currentTxn != nil {
 		log.Panic("there is a transaction not flushed yet")
 	}
-	p.currentDML = event.NewDMLEvent(dispatcherID, tableID, startTs, commitTs, tableInfo)
-	return p.batchDML.AppendDMLEvent(p.currentDML)
+	p.currentTxn = newTxnEvent(dispatcherID, tableID, tableInfo, startTs, commitTs)
+	return nil
 }
 
 func (p *dmlProcessor) commitTxn() error {
-	if p.currentDML != nil && len(p.insertRowCache) > 0 {
+	if p.currentTxn != nil && len(p.insertRowCache) > 0 {
 		for _, insertRow := range p.insertRowCache {
-			if err := p.currentDML.AppendRow(insertRow, p.mounter.DecodeToChunk, p.filter); err != nil {
+			if err := p.currentTxn.AppendRow(insertRow, p.mounter.DecodeToChunk, p.filter); err != nil {
 				return err
 			}
 		}
 		p.insertRowCache = make([]*common.RawKVEntry, 0)
 	}
-	p.currentDML = nil
+	for _, dmlEvent := range p.currentTxn.DMLEvents {
+		p.batchDML.AppendDMLEvent(dmlEvent)
+	}
+	p.currentTxn = nil
 	return nil
 }
 
@@ -693,14 +750,14 @@ func (p *dmlProcessor) commitTxn() error {
 //
 // 4. For normal updates (no unique key changes), appends the row directly
 func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
-	if p.currentDML == nil {
+	if p.currentTxn == nil {
 		log.Panic("no current DML event to append to")
 	}
 
 	rawEvent.Key = event.RemoveKeyspacePrefix(rawEvent.Key)
 
 	if !rawEvent.IsUpdate() {
-		return p.currentDML.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)
+		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)
 	}
 
 	var (
@@ -708,25 +765,25 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 		err         error
 	)
 	if !p.outputRawChangeEvent {
-		shouldSplit, err = event.IsUKChanged(rawEvent, p.currentDML.TableInfo)
+		shouldSplit, err = event.IsUKChanged(rawEvent, p.currentTxn.TableInfo)
 		if err != nil {
 			return err
 		}
 	}
 
 	if !shouldSplit {
-		return p.currentDML.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)
+		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)
 	}
 
 	log.Debug("split update event", zap.Uint64("startTs", rawEvent.StartTs),
 		zap.Uint64("commitTs", rawEvent.CRTs),
-		zap.String("table", p.currentDML.TableInfo.TableName.String()))
+		zap.String("table", p.currentTxn.TableInfo.TableName.String()))
 	deleteRow, insertRow, err := rawEvent.SplitUpdate()
 	if err != nil {
 		return err
 	}
 	p.insertRowCache = append(p.insertRowCache, insertRow)
-	return p.currentDML.AppendRow(deleteRow, p.mounter.DecodeToChunk, p.filter)
+	return p.currentTxn.AppendRow(deleteRow, p.mounter.DecodeToChunk, p.filter)
 }
 
 // getCurrentBatchDML returns the current batch DML event
