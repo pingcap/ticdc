@@ -975,6 +975,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		zap.Int64("tableID", span.GetTableID()),
 		zap.String("span", common.FormatTableSpan(span)),
 		zap.Uint64("startTs", info.GetStartTs()),
+		zap.String("txnAtomocity", string(info.GetTxnAtomicity())),
 		zap.Duration("duration", time.Since(start)))
 	return nil
 }
