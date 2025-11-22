@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"go.uber.org/zap"
@@ -46,6 +47,7 @@ type DispatcherService interface {
 	EnableSyncPoint() bool
 	GetSyncPointInterval() time.Duration
 	GetSkipSyncpointAtStartTs() bool
+	GetTxnAtomicity() *config.AtomicityLevel
 	GetResolvedTs() uint64
 	GetCheckpointTs() uint64
 	HandleEvents(events []DispatcherEvent, wakeCallback func()) (block bool)
