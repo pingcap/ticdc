@@ -93,6 +93,9 @@ type TableInfo struct {
 
 	Sequence *model.SequenceInfo `json:"sequence"`
 
+	ActiveActiveTable bool `json:"active-active-table"`
+	SoftDeleteTable   bool `json:"soft-delete-table"`
+
 	// UpdateTS is used to record the timestamp of updating the table's schema information.
 	// These changing schema operations don't include 'truncate table', 'rename table',
 	// 'truncate partition' and 'exchange partition'.
@@ -188,6 +191,38 @@ func (ti *TableInfo) GetIndices() []*model.IndexInfo {
 	return ti.columnSchema.Indices
 }
 
+// IsActiveActiveTable indicates whether the table participates in active-active replication.
+func (ti *TableInfo) IsActiveActiveTable() bool {
+	if ti == nil {
+		return false
+	}
+	return ti.ActiveActiveTable
+}
+
+// IsSoftDeleteTable indicates whether the table relies on TiDB soft-delete semantics.
+func (ti *TableInfo) IsSoftDeleteTable() bool {
+	if ti == nil {
+		return false
+	}
+	return ti.SoftDeleteTable
+}
+
+// SetActiveActiveTable marks the table as active-active.
+func (ti *TableInfo) SetActiveActiveTable(enabled bool) {
+	if ti == nil {
+		return
+	}
+	ti.ActiveActiveTable = enabled
+}
+
+// SetSoftDeleteTable marks the table as using soft-delete.
+func (ti *TableInfo) SetSoftDeleteTable(enabled bool) {
+	if ti == nil {
+		return
+	}
+	ti.SoftDeleteTable = enabled
+}
+
 // GetRowColumnsOffset return offset with visible column
 func (ti *TableInfo) GetRowColumnsOffset() map[int64]int {
 	return ti.columnSchema.RowColumnsOffset
@@ -242,6 +277,19 @@ func (ti *TableInfo) GetColumnInfo(colID int64) (info *model.ColumnInfo, exist b
 	return ti.columnSchema.Columns[colOffset], true
 }
 
+// GetColumnInfoByName returns column info by name if it exists.
+func (ti *TableInfo) GetColumnInfoByName(name string) (*model.ColumnInfo, bool) {
+	colID, ok := ti.columnSchema.NameToColID[name]
+	if !ok {
+		return nil, false
+	}
+	offset, ok := ti.columnSchema.ColumnsOffset[colID]
+	if !ok {
+		return nil, false
+	}
+	return ti.columnSchema.Columns[offset], true
+}
+
 // ForceGetColumnInfo return the column info by ID
 // Caller must ensure `colID` exists
 func (ti *TableInfo) ForceGetColumnInfo(colID int64) *model.ColumnInfo {
@@ -276,6 +324,16 @@ func (ti *TableInfo) ForceGetColumnIDByName(name string) int64 {
 		log.Panic("invalid column name", zap.String("column", name))
 	}
 	return colID
+}
+
+// GetColumnOffsetByName returns the offset of the specified column if it exists.
+func (ti *TableInfo) GetColumnOffsetByName(name string) (int, bool) {
+	colID, ok := ti.columnSchema.NameToColID[name]
+	if !ok {
+		return 0, false
+	}
+	offset, ok := ti.columnSchema.ColumnsOffset[colID]
+	return offset, ok
 }
 
 func (ti *TableInfo) MustGetColumnOffsetByID(id int64) int {

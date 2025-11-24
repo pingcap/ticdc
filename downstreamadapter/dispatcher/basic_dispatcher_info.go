@@ -31,6 +31,7 @@ type SharedInfo struct {
 	changefeedID         common.ChangeFeedID
 	timezone             string
 	bdrMode              bool
+	enableActiveActive   bool
 	outputRawChangeEvent bool
 
 	// Configuration objects
@@ -64,6 +65,7 @@ func NewSharedInfo(
 	changefeedID common.ChangeFeedID,
 	timezone string,
 	bdrMode bool,
+	enableActiveActive bool,
 	outputRawChangeEvent bool,
 	integrityConfig *eventpb.IntegrityConfig,
 	filterConfig *eventpb.FilterConfig,
@@ -77,6 +79,7 @@ func NewSharedInfo(
 		changefeedID:          changefeedID,
 		timezone:              timezone,
 		bdrMode:               bdrMode,
+		enableActiveActive:    enableActiveActive,
 		outputRawChangeEvent:  outputRawChangeEvent,
 		integrityConfig:       integrityConfig,
 		filterConfig:          filterConfig,
@@ -126,6 +129,10 @@ func (d *BasicDispatcher) SetSeq(seq uint64) {
 
 func (d *BasicDispatcher) GetBDRMode() bool {
 	return d.sharedInfo.bdrMode
+}
+
+func (d *BasicDispatcher) EnableActiveActive() bool {
+	return d.sharedInfo.enableActiveActive
 }
 
 func (d *BasicDispatcher) GetTimezone() string {

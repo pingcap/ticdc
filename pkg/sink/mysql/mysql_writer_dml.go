@@ -85,6 +85,9 @@ func groupEventsByTable(events []*commonEvent.DMLEvent) map[int64][][]*commonEve
 //     if there is only one rows of the whole group, we generate the sqls for the row.
 //     Otherwise, we batch all the event rows for the same dispatcherID to limited delete / update/ insert query(in order)
 func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, error) {
+	if w.cfg.EnableActiveActive {
+		return w.prepareActiveActiveDMLs(events)
+	}
 	dmls := dmlsPool.Get().(*preparedDMLs)
 	dmls.reset()
 
@@ -122,6 +125,46 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 
 	dmls.LogDebug(events, w.id)
 
+	return dmls, nil
+}
+
+func (w *Writer) prepareActiveActiveDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, error) {
+	dmls := dmlsPool.Get().(*preparedDMLs)
+	dmls.reset()
+
+	for _, event := range events {
+		if event == nil {
+			continue
+		}
+		dmls.rowCount += int(event.Len())
+		if len(dmls.tsPairs) == 0 || dmls.tsPairs[len(dmls.tsPairs)-1].startTs != event.StartTs {
+			dmls.tsPairs = append(dmls.tsPairs, tsPair{startTs: event.StartTs, commitTs: event.CommitTs})
+		}
+		dmls.approximateSize += event.GetSize()
+
+		for {
+			row, ok := event.GetNextRow()
+			if !ok {
+				event.Rewind()
+				break
+			}
+			if row.RowType == common.RowTypeDelete {
+				continue
+			}
+			sql, args, err := buildActiveActiveUpsertSQL(event.TableInfo, &row)
+			if err != nil {
+				event.Rewind()
+				return dmls, err
+			}
+			if sql == "" {
+				continue
+			}
+			dmls.sqls = append(dmls.sqls, sql)
+			dmls.values = append(dmls.values, args)
+		}
+	}
+
+	dmls.LogDebug(events, w.id)
 	return dmls, nil
 }
 

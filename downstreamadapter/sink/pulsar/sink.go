@@ -26,7 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/util"
+	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -48,10 +48,11 @@ type sink struct {
 	isNormal *atomic.Bool
 	ctx      context.Context
 
-	tableSchemaStore *util.TableSchemaStore
-	checkpointTsChan chan uint64
-	eventChan        chan *commonEvent.DMLEvent
-	rowChan          chan *commonEvent.MQRowEvent
+	tableSchemaStore   *sinkutil.TableSchemaStore
+	checkpointTsChan   chan uint64
+	eventChan          chan *commonEvent.DMLEvent
+	rowChan            chan *commonEvent.MQRowEvent
+	enableActiveActive bool
 }
 
 func (s *sink) SinkType() commonType.SinkType {
@@ -65,7 +66,7 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 }
 
 func New(
-	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
+	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, enableActiveActive bool,
 ) (*sink, error) {
 	comp, protocol, err := newPulsarSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
@@ -98,12 +99,13 @@ func New(
 		eventChan:        make(chan *commonEvent.DMLEvent, 32),
 		rowChan:          make(chan *commonEvent.MQRowEvent, 32),
 
-		protocol:      protocol,
-		partitionRule: helper.GetDDLDispatchRule(protocol),
-		comp:          comp,
-		statistics:    statistics,
-		isNormal:      atomic.NewBool(true),
-		ctx:           ctx,
+		protocol:           protocol,
+		partitionRule:      helper.GetDDLDispatchRule(protocol),
+		comp:               comp,
+		statistics:         statistics,
+		isNormal:           atomic.NewBool(true),
+		ctx:                ctx,
+		enableActiveActive: enableActiveActive,
 	}, nil
 }
 
@@ -125,7 +127,19 @@ func (s *sink) IsNormal() bool {
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	s.eventChan <- event
+	filtered, skip, err := sinkutil.FilterDMLEvent(event, s.enableActiveActive)
+	if err != nil {
+		log.Error("pulsar sink filter dml event failed",
+			zap.String("keyspace", s.changefeedID.Keyspace()),
+			zap.String("changefeed", s.changefeedID.Name()),
+			zap.Error(err))
+		s.isNormal.Store(false)
+		return
+	}
+	if skip {
+		return
+	}
+	s.eventChan <- filtered
 }
 
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
@@ -192,7 +206,7 @@ func (s *sink) AddCheckpointTs(ts uint64) {
 	}
 }
 
-func (s *sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
+func (s *sink) SetTableSchemaStore(tableSchemaStore *sinkutil.TableSchemaStore) {
 	s.tableSchemaStore = tableSchemaStore
 }
 

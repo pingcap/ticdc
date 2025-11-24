@@ -52,11 +52,11 @@ func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.
 	case config.MySQLScheme, config.MySQLSSLScheme, config.TiDBScheme, config.TiDBSSLScheme:
 		return mysql.New(ctx, changefeedID, cfg, sinkURI)
 	case config.KafkaScheme, config.KafkaSSLScheme:
-		return kafka.New(ctx, changefeedID, sinkURI, cfg.SinkConfig)
+		return kafka.New(ctx, changefeedID, sinkURI, cfg.SinkConfig, cfg.EnableActiveActive)
 	case config.PulsarScheme, config.PulsarSSLScheme, config.PulsarHTTPScheme, config.PulsarHTTPSScheme:
-		return pulsar.New(ctx, changefeedID, sinkURI, cfg.SinkConfig)
+		return pulsar.New(ctx, changefeedID, sinkURI, cfg.SinkConfig, cfg.EnableActiveActive)
 	case config.S3Scheme, config.FileScheme, config.GCSScheme, config.GSScheme, config.AzblobScheme, config.AzureScheme, config.CloudStorageNoopScheme:
-		return cloudstorage.New(ctx, changefeedID, sinkURI, cfg.SinkConfig, nil)
+		return cloudstorage.New(ctx, changefeedID, sinkURI, cfg.SinkConfig, cfg.EnableActiveActive, nil)
 	case config.BlackHoleScheme:
 		return blackhole.New()
 	}

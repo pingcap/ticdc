@@ -184,6 +184,7 @@ type ChangefeedConfig struct {
 	StartTS      uint64              `json:"start_ts"`
 	TargetTS     uint64              `json:"target_ts"`
 	SinkURI      string              `json:"sink_uri"`
+	UpstreamID   uint64              `json:"upstream_id"`
 	// timezone used when checking sink uri
 	TimeZone      string `json:"timezone" default:"system"`
 	CaseSensitive bool   `json:"case_sensitive" default:"false"`
@@ -199,8 +200,10 @@ type ChangefeedConfig struct {
 	SinkConfig            *SinkConfig   `json:"sink_config"`
 	EnableSplittableCheck bool          `json:"enable_splittable_check" default:"false"`
 	// Epoch is the epoch of a changefeed, changes on every restart.
-	Epoch   uint64 `json:"epoch"`
-	BDRMode bool   `json:"bdr_mode" default:"false"`
+	Epoch                        uint64        `json:"epoch"`
+	BDRMode                      bool          `json:"bdr_mode" default:"false"`
+	EnableActiveActive           bool          `json:"enable_active_active" default:"false"`
+	ActiveActiveProgressInterval time.Duration `json:"active_active_progress_interval" default:"30m"`
 	// redo releated
 	Consistent *ConsistentConfig `toml:"consistent" json:"consistent,omitempty"`
 }
@@ -260,24 +263,35 @@ type ChangeFeedInfo struct {
 }
 
 func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
+	activeActiveInterval := defaultActiveActiveProgressInterval
+	if info.Config.ActiveActiveProgressInterval != nil {
+		activeActiveInterval = *info.Config.ActiveActiveProgressInterval
+	} else if defaultReplicaConfig.ActiveActiveProgressInterval != nil &&
+		info.Config.ActiveActiveProgressInterval == nil {
+		activeActiveInterval = *defaultReplicaConfig.ActiveActiveProgressInterval
+	}
+
 	return &ChangefeedConfig{
-		ChangefeedID:          info.ChangefeedID,
-		StartTS:               info.StartTs,
-		TargetTS:              info.TargetTs,
-		SinkURI:               info.SinkURI,
-		CaseSensitive:         info.Config.CaseSensitive,
-		ForceReplicate:        info.Config.ForceReplicate,
-		SinkConfig:            info.Config.Sink,
-		Filter:                info.Config.Filter,
-		EnableSyncPoint:       util.GetOrZero(info.Config.EnableSyncPoint),
-		SyncPointInterval:     util.GetOrZero(info.Config.SyncPointInterval),
-		SyncPointRetention:    util.GetOrZero(info.Config.SyncPointRetention),
-		EnableSplittableCheck: info.Config.Scheduler.EnableSplittableCheck,
-		MemoryQuota:           info.Config.MemoryQuota,
-		Epoch:                 info.Epoch,
-		BDRMode:               util.GetOrZero(info.Config.BDRMode),
-		TimeZone:              GetGlobalServerConfig().TZ,
-		Consistent:            info.Config.Consistent,
+		ChangefeedID:                 info.ChangefeedID,
+		StartTS:                      info.StartTs,
+		TargetTS:                     info.TargetTs,
+		SinkURI:                      info.SinkURI,
+		UpstreamID:                   info.UpstreamID,
+		CaseSensitive:                info.Config.CaseSensitive,
+		ForceReplicate:               info.Config.ForceReplicate,
+		SinkConfig:                   info.Config.Sink,
+		Filter:                       info.Config.Filter,
+		EnableSyncPoint:              util.GetOrZero(info.Config.EnableSyncPoint),
+		SyncPointInterval:            util.GetOrZero(info.Config.SyncPointInterval),
+		SyncPointRetention:           util.GetOrZero(info.Config.SyncPointRetention),
+		EnableSplittableCheck:        info.Config.Scheduler.EnableSplittableCheck,
+		MemoryQuota:                  info.Config.MemoryQuota,
+		Epoch:                        info.Epoch,
+		BDRMode:                      util.GetOrZero(info.Config.BDRMode),
+		EnableActiveActive:           util.GetOrZero(info.Config.EnableActiveActive),
+		ActiveActiveProgressInterval: activeActiveInterval,
+		TimeZone:                     GetGlobalServerConfig().TZ,
+		Consistent:                   info.Config.Consistent,
 		// other fields are not necessary for dispatcherManager
 	}
 }

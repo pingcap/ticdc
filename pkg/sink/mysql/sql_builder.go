@@ -18,9 +18,11 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap/zapcore"
 )
@@ -223,6 +225,82 @@ func buildUpdate(tableInfo *common.TableInfo, row commonEvent.RowChange) (string
 	builder.WriteString(" LIMIT 1")
 	sql := builder.String()
 	return sql, args
+}
+
+func buildActiveActiveUpsertSQL(tableInfo *common.TableInfo, row *commonEvent.RowChange) (string, []interface{}, error) {
+	if tableInfo == nil || row == nil || row.Row.IsEmpty() {
+		return "", nil, nil
+	}
+
+	if _, ok := tableInfo.GetColumnInfoByName(sinkutil.OriginTsColumn); !ok {
+		return "", nil, errors.Errorf("table %s.%s missing column %s for active-active mode",
+			tableInfo.GetSchemaName(), tableInfo.GetTableName(), sinkutil.OriginTsColumn)
+	}
+	if _, ok := tableInfo.GetColumnInfoByName(sinkutil.CommitTsColumn); !ok {
+		return "", nil, errors.Errorf("table %s.%s missing column %s for active-active mode",
+			tableInfo.GetSchemaName(), tableInfo.GetTableName(), sinkutil.CommitTsColumn)
+	}
+
+	insertColumns := make([]string, 0, len(tableInfo.GetColumns()))
+	for _, col := range tableInfo.GetColumns() {
+		if col == nil || col.IsGenerated() {
+			continue
+		}
+		insertColumns = append(insertColumns, col.Name.O)
+	}
+	if len(insertColumns) == 0 {
+		return "", nil, nil
+	}
+
+	args := getArgs(&row.Row, tableInfo)
+	if len(args) == 0 {
+		return "", nil, nil
+	}
+
+	originQuoted := common.QuoteName(sinkutil.OriginTsColumn)
+	commitQuoted := common.QuoteName(sinkutil.CommitTsColumn)
+
+	var builder strings.Builder
+	builder.WriteString("INSERT INTO ")
+	builder.WriteString(tableInfo.TableName.QuoteString())
+	builder.WriteString(" (")
+	for i, colName := range insertColumns {
+		if i > 0 {
+			builder.WriteString(",")
+		}
+		builder.WriteString(common.QuoteName(colName))
+	}
+	builder.WriteString(") VALUES (")
+	for i := range insertColumns {
+		if i > 0 {
+			builder.WriteString(",")
+		}
+		builder.WriteString("?")
+	}
+	builder.WriteString(") ON DUPLICATE KEY UPDATE ")
+
+	condInitialized := false
+	for i, colName := range insertColumns {
+		if i > 0 {
+			builder.WriteString(",")
+		}
+		quoted := common.QuoteName(colName)
+		if colName == sinkutil.OriginTsColumn {
+			condInitialized = true
+			builder.WriteString(fmt.Sprintf("%s = IF((@ticdc_aa_cond := (IFNULL(%s, %s) <= VALUES(%s))), VALUES(%s), %s)",
+				quoted, originQuoted, commitQuoted, originQuoted, quoted, quoted))
+			continue
+		}
+		if !condInitialized {
+			builder.WriteString(fmt.Sprintf("%s = IF((@ticdc_aa_cond := (IFNULL(%s, %s) <= VALUES(%s))), VALUES(%s), %s)",
+				quoted, originQuoted, commitQuoted, originQuoted, quoted, quoted))
+			condInitialized = true
+			continue
+		}
+		builder.WriteString(fmt.Sprintf("%s = IF(@ticdc_aa_cond, VALUES(%s), %s)", quoted, quoted, quoted))
+	}
+
+	return builder.String(), args, nil
 }
 
 func getArgs(row *chunk.Row, tableInfo *common.TableInfo) []interface{} {

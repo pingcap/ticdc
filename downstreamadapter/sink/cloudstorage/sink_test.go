@@ -43,7 +43,7 @@ func newSinkForTest(
 	cleanUpJobs []func(),
 ) (*sink, error) {
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	result, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, cleanUpJobs)
+	result, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, false, cleanUpJobs)
 	if err != nil {
 		return nil, err
 	}

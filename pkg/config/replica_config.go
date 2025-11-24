@@ -35,8 +35,9 @@ const (
 	// minSyncPointInterval is the minimum of SyncPointInterval can be set.
 	minSyncPointInterval = time.Second * 30
 	// minSyncPointRetention is the minimum of SyncPointRetention can be set.
-	minSyncPointRetention           = time.Hour * 1
-	minChangeFeedErrorStuckDuration = time.Minute * 30
+	minSyncPointRetention               = time.Hour * 1
+	minChangeFeedErrorStuckDuration     = time.Minute * 30
+	defaultActiveActiveProgressInterval = time.Minute * 30
 	// DefaultTiDBSourceID is the default source ID of TiDB cluster.
 	DefaultTiDBSourceID = 1
 )
@@ -50,6 +51,7 @@ var defaultReplicaConfig = &ReplicaConfig{
 	SyncPointInterval:  util.AddressOf(10 * time.Minute),
 	SyncPointRetention: util.AddressOf(24 * time.Hour),
 	BDRMode:            util.AddressOf(false),
+	EnableActiveActive: util.AddressOf(false),
 	Filter: &FilterConfig{
 		Rules: []string{"*.*"},
 	},
@@ -111,6 +113,7 @@ var defaultReplicaConfig = &ReplicaConfig{
 	},
 	ChangefeedErrorStuckDuration: util.AddressOf(time.Minute * 30),
 	SyncedStatus:                 &SyncedStatusConfig{SyncedCheckInterval: 5 * 60, CheckpointInterval: 15},
+	ActiveActiveProgressInterval: util.AddressOf(defaultActiveActiveProgressInterval),
 }
 
 // GetDefaultReplicaConfig returns the default replica config.
@@ -148,7 +151,8 @@ type replicaConfig struct {
 	// BDR(Bidirectional Replication) is a feature that allows users to
 	// replicate data of same tables from TiDB-1 to TiDB-2 and vice versa.
 	// This feature is only available for TiDB.
-	BDRMode *bool `toml:"bdr-mode" json:"bdr-mode,omitempty"`
+	BDRMode            *bool `toml:"bdr-mode" json:"bdr-mode,omitempty"`
+	EnableActiveActive *bool `toml:"enable-active-active" json:"enable-active-active,omitempty"`
 	// SyncPointInterval is only available when the downstream is DB.
 	SyncPointInterval *time.Duration `toml:"sync-point-interval" json:"sync-point-interval,omitempty"`
 	// SyncPointRetention is only available when the downstream is DB.
@@ -164,6 +168,8 @@ type replicaConfig struct {
 	Integrity                    *integrity.Config   `toml:"integrity" json:"integrity"`
 	ChangefeedErrorStuckDuration *time.Duration      `toml:"changefeed-error-stuck-duration" json:"changefeed-error-stuck-duration,omitempty"`
 	SyncedStatus                 *SyncedStatusConfig `toml:"synced-status" json:"synced-status,omitempty"`
+
+	ActiveActiveProgressInterval *time.Duration `toml:"active-active-progress-interval" json:"active-active-progress-interval,omitempty"`
 
 	// Deprecated: we don't use this field since v8.0.0.
 	SQLMode string `toml:"sql-mode" json:"sql-mode"`
@@ -325,6 +331,30 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 				fmt.Sprintf("The ChangefeedErrorStuckDuration:%f must be larger than %f Seconds",
 					c.ChangefeedErrorStuckDuration.Seconds(),
 					minChangeFeedErrorStuckDuration.Seconds()))
+	}
+
+	if c.ActiveActiveProgressInterval == nil {
+		interval := defaultActiveActiveProgressInterval
+		c.ActiveActiveProgressInterval = util.AddressOf(interval)
+	}
+	if *c.ActiveActiveProgressInterval <= 0 {
+		return cerror.ErrInvalidReplicaConfig.
+			FastGenByArgs("the active-active-progress-interval must be larger than 0")
+	}
+
+	if util.GetOrZero(c.EnableActiveActive) {
+		if !util.GetOrZero(c.BDRMode) {
+			return cerror.ErrInvalidReplicaConfig.
+				FastGenByArgs("enable-active-active requires bdr-mode to be true")
+		}
+		if !IsMySQLCompatibleScheme(GetScheme(sinkURI)) {
+			return cerror.ErrInvalidReplicaConfig.
+				FastGenByArgs("enable-active-active only supports mysql/tidb sink")
+		}
+		if c.Consistent != nil && redo.IsConsistentEnabled(c.Consistent.Level) {
+			return cerror.ErrInvalidReplicaConfig.
+				FastGenByArgs("enable-active-active is incompatible with redo log/consistency feature, please disable redo")
+		}
 	}
 
 	return nil

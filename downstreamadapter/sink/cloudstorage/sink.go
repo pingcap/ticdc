@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/util"
+	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -66,7 +67,8 @@ type sink struct {
 	cleanupJobs []func() /* only for test */
 
 	// To perceive the context done from the upper layer
-	ctx context.Context
+	ctx                context.Context
+	enableActiveActive bool
 }
 
 func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
@@ -93,6 +95,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 
 func New(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
+	enableActiveActive bool,
 	cleanupJobs []func(), /* only for test */
 ) (*sink, error) {
 	// create cloud storage config and then apply the params of sinkURI to it.
@@ -134,7 +137,8 @@ func New(
 		statistics:               statistics,
 		isNormal:                 atomic.NewBool(true),
 
-		ctx: ctx,
+		ctx:                ctx,
+		enableActiveActive: enableActiveActive,
 	}, nil
 }
 
@@ -168,7 +172,19 @@ func (s *sink) IsNormal() bool {
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	s.dmlWriters.AddDMLEvent(event)
+	filtered, skip, err := sinkutil.FilterDMLEvent(event, s.enableActiveActive)
+	if err != nil {
+		log.Error("cloud storage sink filter dml event failed",
+			zap.String("keyspace", s.changefeedID.Keyspace()),
+			zap.String("changefeed", s.changefeedID.Name()),
+			zap.Error(err))
+		s.isNormal.Store(false)
+		return
+	}
+	if skip {
+		return
+	}
+	s.dmlWriters.AddDMLEvent(filtered)
 }
 
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {

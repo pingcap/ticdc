@@ -27,7 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
-	"github.com/pingcap/ticdc/pkg/sink/util"
+	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -53,14 +53,15 @@ type sink struct {
 	partitionRule helper.DDLDispatchRule
 
 	checkpointChan   chan uint64
-	tableSchemaStore *util.TableSchemaStore
+	tableSchemaStore *sinkutil.TableSchemaStore
 
 	eventChan *chann.UnlimitedChannel[*commonEvent.DMLEvent, any]
 	rowChan   *chann.UnlimitedChannel[*commonEvent.MQRowEvent, any]
 
 	// isNormal indicate whether the sink is in the normal state.
-	isNormal *atomic.Bool
-	ctx      context.Context
+	isNormal           *atomic.Bool
+	ctx                context.Context
+	enableActiveActive bool
 }
 
 func (s *sink) SinkType() commonType.SinkType {
@@ -74,7 +75,7 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 }
 
 func New(
-	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
+	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, enableActiveActive bool,
 ) (*sink, error) {
 	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
@@ -112,8 +113,9 @@ func New(
 		eventChan:      chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
 		rowChan:        chann.NewUnlimitedChannelDefault[*commonEvent.MQRowEvent](),
 
-		isNormal: atomic.NewBool(true),
-		ctx:      ctx,
+		isNormal:           atomic.NewBool(true),
+		ctx:                ctx,
+		enableActiveActive: enableActiveActive,
 	}, nil
 }
 
@@ -142,7 +144,19 @@ func (s *sink) IsNormal() bool {
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	s.eventChan.Push(event)
+	filtered, skip, err := sinkutil.FilterDMLEvent(event, s.enableActiveActive)
+	if err != nil {
+		log.Error("kafka sink filter dml event failed",
+			zap.String("keyspace", s.changefeedID.Keyspace()),
+			zap.String("changefeed", s.changefeedID.Name()),
+			zap.Error(err))
+		s.isNormal.Store(false)
+		return
+	}
+	if skip {
+		return
+	}
+	s.eventChan.Push(filtered)
 }
 
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
@@ -534,7 +548,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 	}
 }
 
-func (s *sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
+func (s *sink) SetTableSchemaStore(tableSchemaStore *sinkutil.TableSchemaStore) {
 	s.tableSchemaStore = tableSchemaStore
 }
 

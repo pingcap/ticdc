@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
@@ -38,6 +39,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus"
@@ -230,6 +232,7 @@ func NewDispatcherManager(
 		manager.changefeedID,
 		manager.config.TimeZone,
 		manager.config.BDRMode,
+		manager.config.EnableActiveActive,
 		outputRawChangeEvent,
 		integrityCfg,
 		filterCfg,
@@ -412,6 +415,14 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 		return errors.Trace(err)
 	}
 
+	if e.config.EnableActiveActive {
+		for idx, tableID := range tableIds {
+			if err := e.ensureActiveActiveTable(tableID, uint64(newStartTsList[idx])); err != nil {
+				return errors.Trace(err)
+			}
+		}
+	}
+
 	if e.latestWatermark.Get().CheckpointTs == 0 {
 		// If the checkpointTs is 0, means there is no dispatchers before. So we need to init it with the smallest startTs of these dispatchers
 		smallestStartTs := int64(math.MaxInt64)
@@ -479,6 +490,40 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 		zap.Int("count", len(dispatcherIds)),
 		zap.Duration("duration", time.Since(start)),
 	)
+	return nil
+}
+
+func (e *DispatcherManager) ensureActiveActiveTable(tableID int64, ts uint64) error {
+	if !e.config.EnableActiveActive {
+		return nil
+	}
+	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
+	keyspaceMeta := common.KeyspaceMeta{
+		ID:   e.keyspaceID,
+		Name: e.changefeedID.Keyspace(),
+	}
+	tableInfo, err := schemaStore.GetTableInfo(keyspaceMeta, tableID, ts)
+	if err != nil {
+		return errors.Annotatef(err, "get table info for tableID %d", tableID)
+	}
+	if tableInfo == nil {
+		return errors.Errorf("table info is nil for tableID %d", tableID)
+	}
+	if !tableInfo.IsActiveActiveTable() {
+		return errors.Errorf("table %s.%s(id=%d) is not active-active but enable-active-active is true",
+			tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableID)
+	}
+	requiredCols := []string{
+		sinkutil.OriginTsColumn,
+		sinkutil.CommitTsColumn,
+		sinkutil.SoftDeleteTimeColumn,
+	}
+	for _, col := range requiredCols {
+		if _, ok := tableInfo.GetColumnInfoByName(col); !ok {
+			return errors.Errorf("table %s.%s(id=%d) missing required column %s for enable-active-active",
+				tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableID, col)
+		}
+	}
 	return nil
 }
 

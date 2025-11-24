@@ -139,6 +139,7 @@ type ChangefeedConfig struct {
 	StartTs       uint64         `json:"start_ts"`
 	TargetTs      uint64         `json:"target_ts"`
 	SinkURI       string         `json:"sink_uri"`
+	UpstreamID    uint64         `json:"upstream_id"`
 	ReplicaConfig *ReplicaConfig `json:"replica_config"`
 	PDConfig
 }
@@ -192,9 +193,11 @@ type ReplicaConfig struct {
 	EnableSyncPoint       *bool  `json:"enable_sync_point,omitempty"`
 	EnableTableMonitor    *bool  `json:"enable_table_monitor,omitempty"`
 	BDRMode               *bool  `json:"bdr_mode,omitempty"`
+	EnableActiveActive    *bool  `json:"enable_active_active,omitempty"`
 
-	SyncPointInterval  *JSONDuration `json:"sync_point_interval,omitempty"`
-	SyncPointRetention *JSONDuration `json:"sync_point_retention,omitempty"`
+	SyncPointInterval            *JSONDuration `json:"sync_point_interval,omitempty"`
+	SyncPointRetention           *JSONDuration `json:"sync_point_retention,omitempty"`
+	ActiveActiveProgressInterval *JSONDuration `json:"active_active_progress_interval,omitempty"`
 
 	Filter                       *FilterConfig              `json:"filter"`
 	Mounter                      *MounterConfig             `json:"mounter"`
@@ -232,6 +235,7 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 		res.SyncPointRetention = &c.SyncPointRetention.duration
 	}
 	res.BDRMode = c.BDRMode
+	res.EnableActiveActive = c.EnableActiveActive
 
 	if c.Filter != nil {
 		var efs []*config.EventFilterRule
@@ -530,6 +534,9 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 	if c.ChangefeedErrorStuckDuration != nil {
 		res.ChangefeedErrorStuckDuration = &c.ChangefeedErrorStuckDuration.duration
 	}
+	if c.ActiveActiveProgressInterval != nil {
+		res.ActiveActiveProgressInterval = &c.ActiveActiveProgressInterval.duration
+	}
 	if c.SyncedStatus != nil {
 		res.SyncedStatus = &config.SyncedStatusConfig{
 			SyncedCheckInterval: c.SyncedStatus.SyncedCheckInterval,
@@ -552,6 +559,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 		EnableSyncPoint:       cloned.EnableSyncPoint,
 		EnableTableMonitor:    cloned.EnableTableMonitor,
 		BDRMode:               cloned.BDRMode,
+		EnableActiveActive:    cloned.EnableActiveActive,
 	}
 
 	if cloned.SyncPointInterval != nil {
@@ -560,6 +568,9 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 
 	if cloned.SyncPointRetention != nil {
 		res.SyncPointRetention = &JSONDuration{*cloned.SyncPointRetention}
+	}
+	if cloned.ActiveActiveProgressInterval != nil {
+		res.ActiveActiveProgressInterval = &JSONDuration{*cloned.ActiveActiveProgressInterval}
 	}
 
 	if cloned.Filter != nil {

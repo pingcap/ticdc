@@ -18,6 +18,8 @@ import (
 	"database/sql"
 	"net/url"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/pingcap/log"
@@ -28,7 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
-	"github.com/pingcap/ticdc/pkg/sink/util"
+	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -38,6 +40,8 @@ import (
 const (
 	// defaultConflictDetectorSlots indicates the default slot count of conflict detector. TODO:check this
 	defaultConflictDetectorSlots uint64 = 16 * 1024
+	progressDatabase                    = "tidb_cdc"
+	progressTableName                   = "ticdcProgressTable"
 )
 
 // Sink is responsible for writing data to mysql downstream.
@@ -54,9 +58,22 @@ type Sink struct {
 	conflictDetector *causality.ConflictDetector
 
 	// isNormal indicate whether the sink is in the normal state.
-	isNormal   *atomic.Bool
-	maxTxnRows int
-	bdrMode    bool
+	isNormal               *atomic.Bool
+	maxTxnRows             int
+	bdrMode                bool
+	enableActiveActive     bool
+	upstreamID             uint64
+	progressUpdateInterval time.Duration
+	latestCheckpoint       atomic.Uint64
+	tableNameMu            sync.RWMutex
+	tableNameMap           map[int64]trackedTable
+	progressTableInit      atomic.Bool
+	progressTableInitMu    sync.Mutex
+}
+
+type trackedTable struct {
+	schema string
+	table  string
 }
 
 // Verify is used to verify the sink uri and config is valid
@@ -85,7 +102,11 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	return newMySQLSink(ctx, changefeedID, cfg, db, config.BDRMode), nil
+	interval := config.ActiveActiveProgressInterval
+	if interval <= 0 {
+		interval = 30 * time.Minute
+	}
+	return newMySQLSink(ctx, changefeedID, cfg, db, config.BDRMode, config.EnableActiveActive, config.UpstreamID, interval), nil
 }
 
 func newMySQLSink(
@@ -94,6 +115,9 @@ func newMySQLSink(
 	cfg *mysql.Config,
 	db *sql.DB,
 	bdrMode bool,
+	enableActiveActive bool,
+	upstreamID uint64,
+	progressInterval time.Duration,
 ) *Sink {
 	stat := metrics.NewStatistics(changefeedID, "TxnSink")
 	result := &Sink{
@@ -108,9 +132,13 @@ func newMySQLSink(
 				BlockStrategy: causality.BlockStrategyWaitEmpty,
 			},
 			changefeedID),
-		isNormal:   atomic.NewBool(true),
-		maxTxnRows: cfg.MaxTxnRow,
-		bdrMode:    bdrMode,
+		isNormal:               atomic.NewBool(true),
+		maxTxnRows:             cfg.MaxTxnRow,
+		bdrMode:                bdrMode,
+		enableActiveActive:     enableActiveActive,
+		upstreamID:             upstreamID,
+		progressUpdateInterval: progressInterval,
+		tableNameMap:           make(map[int64]trackedTable),
 	}
 	for i := 0; i < len(result.dmlWriter); i++ {
 		result.dmlWriter[i] = mysql.NewWriter(ctx, i, db, cfg, changefeedID, stat)
@@ -128,6 +156,11 @@ func (s *Sink) Run(ctx context.Context) error {
 		g.Go(func() error {
 			defer s.conflictDetector.CloseNotifiedNodes()
 			return s.runDMLWriter(ctx, idx)
+		})
+	}
+	if s.enableActiveActive {
+		g.Go(func() error {
+			return s.runProgressUpdater(ctx)
 		})
 	}
 	err := g.Wait()
@@ -215,12 +248,25 @@ func (s *Sink) SinkType() common.SinkType {
 	return common.MysqlSinkType
 }
 
-func (s *Sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
+func (s *Sink) SetTableSchemaStore(tableSchemaStore *sinkutil.TableSchemaStore) {
 	s.ddlWriter.SetTableSchemaStore(tableSchemaStore)
 }
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	s.conflictDetector.Add(event)
+	s.recordTableInfo(event)
+	filtered, skip, err := sinkutil.FilterDMLEvent(event, s.enableActiveActive)
+	if err != nil {
+		log.Error("mysql sink filter dml event failed",
+			zap.String("keyspace", s.changefeedID.Keyspace()),
+			zap.String("changefeed", s.changefeedID.Name()),
+			zap.Error(err))
+		s.isNormal.Store(false)
+		return
+	}
+	if skip {
+		return
+	}
+	s.conflictDetector.Add(filtered)
 }
 
 func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
@@ -250,7 +296,126 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	return nil
 }
 
-func (s *Sink) AddCheckpointTs(_ uint64) {}
+func (s *Sink) AddCheckpointTs(ts uint64) {
+	if !s.enableActiveActive {
+		return
+	}
+	s.latestCheckpoint.Store(ts)
+}
+
+func (s *Sink) recordTableInfo(event *commonEvent.DMLEvent) {
+	if !s.enableActiveActive || event == nil || event.TableInfo == nil {
+		return
+	}
+	tableInfo := event.TableInfo
+	tableID := tableInfo.TableName.TableID
+	if tableID == 0 {
+		return
+	}
+	schemaName := tableInfo.GetSchemaName()
+	tableName := tableInfo.GetTableName()
+	if schemaName == "" || tableName == "" {
+		return
+	}
+	s.tableNameMu.Lock()
+	s.tableNameMap[tableID] = trackedTable{schema: schemaName, table: tableName}
+	s.tableNameMu.Unlock()
+}
+
+func (s *Sink) runProgressUpdater(ctx context.Context) error {
+	if s.progressUpdateInterval <= 0 {
+		return nil
+	}
+	ticker := time.NewTicker(s.progressUpdateInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return errors.Trace(ctx.Err())
+		case <-ticker.C:
+			if err := s.flushProgressTable(ctx); err != nil {
+				log.Warn("failed to update active-active progress table",
+					zap.String("changefeed", s.changefeedID.DisplayName.String()),
+					zap.Error(err))
+			}
+		}
+	}
+}
+
+func (s *Sink) flushProgressTable(ctx context.Context) error {
+	checkpoint := s.latestCheckpoint.Load()
+	if checkpoint == 0 {
+		return nil
+	}
+	tables := s.getTrackedTables()
+	if len(tables) == 0 {
+		return nil
+	}
+	if err := s.ensureProgressTable(ctx); err != nil {
+		return err
+	}
+	changefeedID := s.changefeedID.DisplayName.String()
+	upstream := strconv.FormatUint(s.upstreamID, 10)
+
+	var builder strings.Builder
+	builder.WriteString("INSERT INTO `")
+	builder.WriteString(progressDatabase)
+	builder.WriteString("`.`")
+	builder.WriteString(progressTableName)
+	builder.WriteString("` (changefeed_id, upstreamID, database_name, table_name, checkpoint_ts) VALUES ")
+	args := make([]interface{}, 0, len(tables)*5)
+	for i, tbl := range tables {
+		if i > 0 {
+			builder.WriteString(",")
+		}
+		builder.WriteString("(?,?,?,?,?)")
+		args = append(args, changefeedID, upstream, tbl.schema, tbl.table, checkpoint)
+	}
+	builder.WriteString(" ON DUPLICATE KEY UPDATE checkpoint_ts = VALUES(checkpoint_ts)")
+	_, err := s.db.ExecContext(ctx, builder.String(), args...)
+	return errors.Trace(err)
+}
+
+func (s *Sink) ensureProgressTable(ctx context.Context) error {
+	if s.progressTableInit.Load() {
+		return nil
+	}
+	s.progressTableInitMu.Lock()
+	defer s.progressTableInitMu.Unlock()
+	if s.progressTableInit.Load() {
+		return nil
+	}
+	createDB := "CREATE DATABASE IF NOT EXISTS `" + progressDatabase + "`"
+	if _, err := s.db.ExecContext(ctx, createDB); err != nil {
+		return errors.Trace(err)
+	}
+	createTable := "CREATE TABLE IF NOT EXISTS `" + progressDatabase + "`.`" + progressTableName + "` (" +
+		"changefeed_id VARCHAR(255) NOT NULL COMMENT 'Unique identifier for the changefeed synchronization task'," +
+		"upstreamID VARCHAR(255) NOT NULL COMMENT 'Unique identifier for the upstream cluster'," +
+		"database_name VARCHAR(255) NOT NULL COMMENT 'Name of the upstream database'," +
+		"table_name VARCHAR(255) NOT NULL COMMENT 'Name of the upstream table'," +
+		"checkpoint_ts BIGINT UNSIGNED NOT NULL COMMENT 'Safe watermark CommitTS indicating the data has been synchronized'," +
+		"PRIMARY KEY (changefeed_id, upstreamID, database_name, table_name)" +
+		") COMMENT='TiCDC synchronization progress table for HardDelete safety check'"
+	if _, err := s.db.ExecContext(ctx, createTable); err != nil {
+		return errors.Trace(err)
+	}
+	s.progressTableInit.Store(true)
+	return nil
+}
+
+func (s *Sink) getTrackedTables() []trackedTable {
+	s.tableNameMu.RLock()
+	defer s.tableNameMu.RUnlock()
+	result := make([]trackedTable, 0, len(s.tableNameMap))
+	for _, tbl := range s.tableNameMap {
+		if tbl.schema == "" || tbl.table == "" {
+			continue
+		}
+		result = append(result, tbl)
+	}
+	return result
+}
 
 // GetTableRecoveryInfo queries DDL crash recovery information for the given tables.
 //
