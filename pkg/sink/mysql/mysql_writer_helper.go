@@ -45,7 +45,7 @@ func genKeyAndHash(row *chunk.Row, tableInfo *common.TableInfo) (uint64, []byte)
 
 func genKeyList(row *chunk.Row, tableInfo *common.TableInfo) []byte {
 	var key []byte
-	keyColumns := tableInfo.GetHandleKeyColumnIDs()
+	keyColumns := tableInfo.GetOrderedHandleKeyColumnIDs()
 	if len(keyColumns) == 0 {
 		return nil
 	}

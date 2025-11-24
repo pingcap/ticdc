@@ -512,9 +512,17 @@ func (ti *TableInfo) IsHandleKey(colID int64) bool {
 	return ok
 }
 
-// GetHandleKeyColumnIDs returns the column IDs selected as handle keys in order
-func (ti *TableInfo) GetHandleKeyColumnIDs() []int64 {
-	if len(ti.columnSchema.HandleKeyIDs) == 0 {
+// GetOrderedHandleKeyColumnIDs returns the ordered handle-key column IDs.
+// It prefers the primary key columns (PKIndex) when available; otherwise,
+// it falls back to the not-null unique key selected during schema init.
+func (ti *TableInfo) GetOrderedHandleKeyColumnIDs() []int64 {
+	if len(ti.columnSchema.PKIndex) > 0 {
+		return ti.columnSchema.PKIndex
+	}
+	if len(ti.columnSchema.HandleColID) == 0 {
+		return nil
+	}
+	if len(ti.columnSchema.HandleColID) == 1 && ti.columnSchema.HandleColID[0] == -1 {
 		return nil
 	}
 	return ti.columnSchema.HandleColID
