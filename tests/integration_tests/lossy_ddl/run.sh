@@ -8,7 +8,6 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
-
 # Because we want the lossy DDL to not cause any data updates, so we can check the
 # data in the blackhole sink to see if any row is updated.
 function check_lossy_ddl() {
