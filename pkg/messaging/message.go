@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/logservice/logservicepb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
@@ -279,6 +280,10 @@ func (r DispatcherRequest) GetEpoch() uint64 {
 
 func (r DispatcherRequest) IsOutputRawChangeEvent() bool {
 	return r.OutputRawChangeEvent
+}
+
+func (r DispatcherRequest) GetTxnAtomicity() config.AtomicityLevel {
+	return config.AtomicityLevel(r.TxnAtomicity)
 }
 
 type IOTypeT interface {

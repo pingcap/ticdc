@@ -138,14 +138,18 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 	keyspace := s.changefeedID.Keyspace()
 	changefeed := s.changefeedID.Name()
 
+	workerBatchFlushDuration := metrics.WorkerBatchFlushDuration.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 	workerFlushDuration := metrics.WorkerFlushDuration.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 	workerTotalDuration := metrics.WorkerTotalDuration.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 	workerHandledRows := metrics.WorkerHandledRows.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+	workerEventRowCount := metrics.WorkerEventRowCount.WithLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 
 	defer func() {
 		metrics.WorkerFlushDuration.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 		metrics.WorkerTotalDuration.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 		metrics.WorkerHandledRows.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+		metrics.WorkerBatchFlushDuration.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
+		metrics.WorkerEventRowCount.DeleteLabelValues(keyspace, changefeed, strconv.Itoa(idx))
 	}()
 
 	inputCh := s.conflictDetector.GetOutChByCacheID(idx)
@@ -167,6 +171,8 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 				buffer = buffer[:0]
 				continue
 			}
+			start := time.Now()
+			singleFlushStart := time.Now()
 
 			flushEvent := func(beginIndex, endIndex int, rowCount int32) error {
 				workerHandledRows.Add(float64(rowCount))
@@ -174,13 +180,15 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 				if err != nil {
 					return errors.Trace(err)
 				}
+				workerFlushDuration.Observe(time.Since(singleFlushStart).Seconds())
+				singleFlushStart = time.Now()
 				return nil
 			}
 
-			start := time.Now()
 			beginIndex, rowCount := 0, txnEvents[0].Len()
-
+			workerEventRowCount.Observe(float64(rowCount))
 			for i := 1; i < len(txnEvents); i++ {
+				workerEventRowCount.Observe(float64(txnEvents[i].Len()))
 				if rowCount+txnEvents[i].Len() > int32(s.maxTxnRows) {
 					if err := flushEvent(beginIndex, i, rowCount); err != nil {
 						return errors.Trace(err)
@@ -194,7 +202,7 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 			if err := flushEvent(beginIndex, len(txnEvents), rowCount); err != nil {
 				return errors.Trace(err)
 			}
-			workerFlushDuration.Observe(time.Since(start).Seconds())
+			workerBatchFlushDuration.Observe(time.Since(start).Seconds())
 
 			// we record total time to calculate the worker busy ratio.
 			// so we record the total time after flushing, to unified statistics on

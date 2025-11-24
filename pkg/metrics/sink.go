@@ -30,6 +30,16 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(1, 2, 18),
 		}, []string{getKeyspaceLabel(), "changefeed", "type"}) // type is for `sinkType`
 
+	// ExecBatchWriteBytesHistogram records bytes written for each batch.
+	ExecBatchWriteBytesHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "batch_write_bytes",
+			Help:      "Bytes number for a given batch.",
+			Buckets:   prometheus.ExponentialBuckets(1024, 2, 18), // 1KB~128MB
+		}, []string{getKeyspaceLabel(), "changefeed", "type"}) // type is for `sinkType`
+
 	// ExecWriteBytesGauge records the total number of bytes written by sink.
 	TotalWriteBytesCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -98,6 +108,15 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms~524s
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
+	WorkerBatchFlushDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "txn_worker_batch_flush_duration",
+			Help:      "Flush duration (s) for txn worker.",
+			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms~524s
+		}, []string{getKeyspaceLabel(), "changefeed", "id"})
+
 	WorkerFlushDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
@@ -122,6 +141,14 @@ var (
 			Subsystem: "sink",
 			Name:      "txn_worker_handled_rows",
 			Help:      "Busy ratio (X ms in 1s) for all workers.",
+		}, []string{getKeyspaceLabel(), "changefeed", "id"})
+	WorkerEventRowCount = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "txn_worker_event_row_count",
+			Help:      "Row count number for a single DML event handled by txn sink worker.",
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 12), // 1~2048
 		}, []string{getKeyspaceLabel(), "changefeed", "id"})
 
 	SinkDMLBatchCommit = prometheus.NewHistogramVec(
@@ -203,6 +230,7 @@ var (
 func initSinkMetrics(registry *prometheus.Registry) {
 	// common sink metrics
 	registry.MustRegister(ExecBatchHistogram)
+	registry.MustRegister(ExecBatchWriteBytesHistogram)
 	registry.MustRegister(TotalWriteBytesCounter)
 	registry.MustRegister(ExecDDLHistogram)
 	registry.MustRegister(EventSizeHistogram)
@@ -213,8 +241,10 @@ func initSinkMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(ConflictDetectDuration)
 	registry.MustRegister(QueueDuration)
 	registry.MustRegister(WorkerFlushDuration)
+	registry.MustRegister(WorkerBatchFlushDuration)
 	registry.MustRegister(WorkerTotalDuration)
 	registry.MustRegister(WorkerHandledRows)
+	registry.MustRegister(WorkerEventRowCount)
 	registry.MustRegister(SinkDMLBatchCommit)
 	registry.MustRegister(SinkDMLBatchCallback)
 	registry.MustRegister(PrepareStatementErrors)

@@ -133,3 +133,65 @@ func TestSyncPointEventCommitTs(t *testing.T) {
 	assert.Equal(t, uint64(79), checkpointTs, "checkpointTs should be largest commitTs - 1")
 	assert.True(t, isEmpty)
 }
+
+// TestMultiSameCommitTsStartTsPair tests the behavior when multiple events have the same (startTs, commitTs) pair.
+func TestMultiSameCommitTsStartTsPair(t *testing.T) {
+	tp := NewTableProgress()
+
+	// Create a mock DML event
+	mockDMLEvent1 := &commonEvent.DMLEvent{
+		StartTs:  1,
+		CommitTs: 2,
+		Seq:      1,
+		Epoch:    1,
+	}
+
+	mockDMLEvent2 := &commonEvent.DMLEvent{
+		StartTs:  1,
+		CommitTs: 2,
+		Seq:      2,
+		Epoch:    1,
+	}
+
+	mockDMLEvent3 := &commonEvent.DMLEvent{
+		StartTs:  1,
+		CommitTs: 4,
+		Seq:      3,
+		Epoch:    1,
+	}
+
+	// Add an event
+	tp.Add(mockDMLEvent1)
+	tp.Add(mockDMLEvent2)
+	assert.False(t, tp.Empty())
+
+	// Verify GetCheckpointTs
+	checkpointTs, isEmpty := tp.GetCheckpointTs()
+	assert.Equal(t, uint64(1), checkpointTs)
+	assert.False(t, isEmpty)
+	// Verify maxCommitTs
+	assert.Equal(t, uint64(2), tp.maxCommitTs)
+	assert.Equal(t, 2, tp.Len())
+
+	// verify after event is flushed
+	mockDMLEvent1.PostFlush()
+	checkpointTs, isEmpty = tp.GetCheckpointTs()
+	assert.Equal(t, uint64(1), checkpointTs)
+	assert.False(t, isEmpty)
+	assert.Equal(t, 1, tp.Len())
+
+	tp.Add(mockDMLEvent3)
+	assert.Equal(t, 2, tp.Len())
+
+	mockDMLEvent2.PostFlush()
+	checkpointTs, isEmpty = tp.GetCheckpointTs()
+	assert.Equal(t, uint64(3), checkpointTs)
+	assert.False(t, isEmpty)
+	assert.Equal(t, 1, tp.Len())
+
+	mockDMLEvent3.PostFlush()
+	checkpointTs, isEmpty = tp.GetCheckpointTs()
+	assert.Equal(t, uint64(3), checkpointTs)
+	assert.True(t, isEmpty)
+	assert.Equal(t, 0, tp.Len())
+}

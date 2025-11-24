@@ -699,7 +699,7 @@ func TestDMLProcessor(t *testing.T) {
 		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false)
 		require.NotNil(t, processor)
 		require.NotNil(t, processor.batchDML)
-		require.Nil(t, processor.currentDML)
+		require.Nil(t, processor.currentTxn)
 		require.Empty(t, processor.insertRowCache)
 	})
 
@@ -708,7 +708,7 @@ func TestDMLProcessor(t *testing.T) {
 		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false)
 		err := processor.commitTxn()
 		require.NoError(t, err)
-		require.Nil(t, processor.currentDML)
+		require.Nil(t, processor.currentTxn)
 		require.Empty(t, processor.insertRowCache)
 		require.Equal(t, int32(0), processor.batchDML.Len())
 	})
@@ -718,18 +718,18 @@ func TestDMLProcessor(t *testing.T) {
 		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false)
 		rawEvent := kvEvents[0]
 
-		processor.startTxn(dispatcherID, tableID, tableInfo, rawEvent.StartTs, rawEvent.CRTs)
+		processor.startTxn(dispatcherID, tableID, tableInfo, rawEvent.StartTs, rawEvent.CRTs, false)
 
 		// Verify that a new DML event was created
-		require.NotNil(t, processor.currentDML)
-		require.Equal(t, dispatcherID, processor.currentDML.GetDispatcherID())
-		require.Equal(t, tableID, processor.currentDML.GetTableID())
-		require.Equal(t, rawEvent.StartTs, processor.currentDML.GetStartTs())
-		require.Equal(t, rawEvent.CRTs, processor.currentDML.GetCommitTs())
+		require.NotNil(t, processor.currentTxn)
+		require.Equal(t, dispatcherID, processor.currentTxn.CurrentDMLEvent.GetDispatcherID())
+		require.Equal(t, tableID, processor.currentTxn.CurrentDMLEvent.GetTableID())
+		require.Equal(t, rawEvent.StartTs, processor.currentTxn.CurrentDMLEvent.GetStartTs())
+		require.Equal(t, rawEvent.CRTs, processor.currentTxn.CurrentDMLEvent.GetCommitTs())
 
 		// Verify that the DML was added to the batch
 		require.Len(t, processor.batchDML.DMLEvents, 1)
-		require.Equal(t, processor.currentDML, processor.batchDML.DMLEvents[0])
+		require.Equal(t, processor.currentTxn.CurrentDMLEvent, processor.batchDML.DMLEvents[0])
 
 		// Verify insert cache is empty
 		require.Empty(t, processor.insertRowCache)
@@ -741,7 +741,7 @@ func TestDMLProcessor(t *testing.T) {
 
 		// Setup first transaction
 		firstEvent := kvEvents[0]
-		processor.startTxn(dispatcherID, tableID, tableInfo, firstEvent.StartTs, firstEvent.CRTs)
+		processor.startTxn(dispatcherID, tableID, tableInfo, firstEvent.StartTs, firstEvent.CRTs, false)
 
 		err := processor.appendRow(firstEvent)
 		require.NoError(t, err)
@@ -770,12 +770,12 @@ func TestDMLProcessor(t *testing.T) {
 
 		// Process second transaction
 		secondEvent := kvEvents[1]
-		processor.startTxn(dispatcherID, tableID, tableInfo, secondEvent.StartTs, secondEvent.CRTs)
+		processor.startTxn(dispatcherID, tableID, tableInfo, secondEvent.StartTs, secondEvent.CRTs, false)
 
 		// Verify new DML event was created for second transaction
-		require.NotNil(t, processor.currentDML)
-		require.Equal(t, secondEvent.StartTs, processor.currentDML.GetStartTs())
-		require.Equal(t, secondEvent.CRTs, processor.currentDML.GetCommitTs())
+		require.NotNil(t, processor.currentTxn)
+		require.Equal(t, secondEvent.StartTs, processor.currentTxn.CurrentDMLEvent.GetStartTs())
+		require.Equal(t, secondEvent.CRTs, processor.currentTxn.CurrentDMLEvent.GetCommitTs())
 
 		err = processor.appendRow(secondEvent)
 		require.NoError(t, err)
@@ -794,16 +794,17 @@ func TestDMLProcessor(t *testing.T) {
 
 		// Process multiple transactions
 		for i, item := range kvEvents {
-			processor.startTxn(dispatcherID, tableID, tableInfo, item.StartTs, item.CRTs)
+			err := processor.startTxn(dispatcherID, tableID, tableInfo, item.StartTs, item.CRTs, false)
+			require.NoError(t, err)
 
 			// Verify current DML matches the event
-			require.NotNil(t, processor.currentDML)
-			require.Equal(t, item.StartTs, processor.currentDML.GetStartTs())
-			require.Equal(t, item.CRTs, processor.currentDML.GetCommitTs())
+			require.NotNil(t, processor.currentTxn)
+			require.Equal(t, item.StartTs, processor.currentTxn.CurrentDMLEvent.GetStartTs())
+			require.Equal(t, item.CRTs, processor.currentTxn.CurrentDMLEvent.GetCommitTs())
 
 			// Verify batch size increases
 
-			err := processor.appendRow(item)
+			err = processor.appendRow(item)
 			require.NoError(t, err)
 
 			require.Equal(t, int32(i+1), processor.batchDML.Len())
@@ -826,7 +827,7 @@ func TestDMLProcessor(t *testing.T) {
 
 		// First transaction - no cache
 		firstEvent := kvEvents[0]
-		processor.startTxn(dispatcherID, tableID, tableInfo, firstEvent.StartTs, firstEvent.CRTs)
+		processor.startTxn(dispatcherID, tableID, tableInfo, firstEvent.StartTs, firstEvent.CRTs, false)
 		require.Empty(t, processor.insertRowCache)
 
 		err := processor.appendRow(firstEvent)
@@ -837,7 +838,7 @@ func TestDMLProcessor(t *testing.T) {
 
 		// Second transaction - should process and clear cache
 		secondEvent := kvEvents[1]
-		processor.startTxn(dispatcherID, tableID, tableInfo, secondEvent.StartTs, secondEvent.CRTs)
+		processor.startTxn(dispatcherID, tableID, tableInfo, secondEvent.StartTs, secondEvent.CRTs, false)
 
 		err = processor.appendRow(secondEvent)
 		require.NoError(t, err)
@@ -874,11 +875,11 @@ func TestDMLProcessor(t *testing.T) {
 		_, updateEvent := helper.DML2UpdateEvent("test", "t2",
 			"insert into test.t2(id, a, b) values (0, 1, 'b0')",
 			"update test.t2 set a = 2 where id = 0")
-		processor.startTxn(dispatcherID, tableID, tableInfo, updateEvent.StartTs, updateEvent.CRTs)
+		processor.startTxn(dispatcherID, tableID, tableInfo, updateEvent.StartTs, updateEvent.CRTs, false)
 
-		require.NotNil(t, processor.currentDML)
-		require.Equal(t, updateEvent.StartTs, processor.currentDML.GetStartTs())
-		require.Equal(t, updateEvent.CRTs, processor.currentDML.GetCommitTs())
+		require.NotNil(t, processor.currentTxn)
+		require.Equal(t, updateEvent.StartTs, processor.currentTxn.CurrentDMLEvent.GetStartTs())
+		require.Equal(t, updateEvent.CRTs, processor.currentTxn.CurrentDMLEvent.GetCommitTs())
 
 		err := processor.appendRow(updateEvent)
 		require.NoError(t, err)
@@ -932,7 +933,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 		processor := newDMLProcessor(mockMounter, mockSchemaGetter, nil, false)
 
 		firstEvent := kvEvents[0]
-		processor.startTxn(dispatcherID, tableID, tableInfo, firstEvent.StartTs, firstEvent.CRTs)
+		processor.startTxn(dispatcherID, tableID, tableInfo, firstEvent.StartTs, firstEvent.CRTs, false)
 
 		err := processor.appendRow(firstEvent)
 		require.NoError(t, err)
@@ -952,7 +953,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 		rawEvent := kvEvents[0]
 		deleteRow := insertToDeleteRow(rawEvent)
 
-		processor.startTxn(dispatcherID, tableID, tableInfo, rawEvent.StartTs, rawEvent.CRTs)
+		processor.startTxn(dispatcherID, tableID, tableInfo, rawEvent.StartTs, rawEvent.CRTs, false)
 		err := processor.appendRow(rawEvent)
 		require.NoError(t, err)
 
@@ -972,7 +973,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 		rawEvent := kvEvents[0]
 		deleteRow := insertToDeleteRow(rawEvent)
 
-		processor.startTxn(dispatcherID, tableID, tableInfo, rawEvent.StartTs, rawEvent.CRTs)
+		processor.startTxn(dispatcherID, tableID, tableInfo, rawEvent.StartTs, rawEvent.CRTs, false)
 		err := processor.appendRow(rawEvent)
 		require.NoError(t, err)
 
@@ -996,7 +997,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 		rawEvent := kvEvents[0]
 		deleteRow := insertToDeleteRow(rawEvent)
 
-		processor.startTxn(dispatcherID, tableID, tableInfo, rawEvent.StartTs, rawEvent.CRTs)
+		processor.startTxn(dispatcherID, tableID, tableInfo, rawEvent.StartTs, rawEvent.CRTs, false)
 		err := processor.appendRow(rawEvent)
 		require.NoError(t, err)
 
@@ -1023,7 +1024,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 		// Create a current DML event first
 		rawEvent := kvEvents[0]
 
-		processor.startTxn(dispatcherID, tableID, tableInfo, rawEvent.StartTs, rawEvent.CRTs)
+		processor.startTxn(dispatcherID, tableID, tableInfo, rawEvent.StartTs, rawEvent.CRTs, false)
 		err := processor.appendRow(rawEvent)
 		require.NoError(t, err)
 
@@ -1056,7 +1057,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 		insertSQL, updateSQL := "insert into test.t(id,a,b) values (7, 'a7', 'b7')", "update test.t set a = 'a7_updated' where id = 7"
 		_, updateEvent := helper.DML2UpdateEvent("test", "t", insertSQL, updateSQL)
 
-		processor.startTxn(dispatcherID, tableID, tableInfo, updateEvent.StartTs, updateEvent.CRTs)
+		processor.startTxn(dispatcherID, tableID, tableInfo, updateEvent.StartTs, updateEvent.CRTs, false)
 		err := processor.appendRow(updateEvent)
 		require.NoError(t, err)
 
@@ -1236,7 +1237,7 @@ func TestEventMerger(t *testing.T) {
 		mockSchemaGetter.AppendDDLEvent(tableID, ddlEvent)
 
 		processor := newDMLProcessor(&mockMounter{}, mockSchemaGetter, nil, false)
-		processor.startTxn(dispatcherID, tableID, ddlEvent.TableInfo, kvEvents[0].StartTs, kvEvents[0].CRTs)
+		processor.startTxn(dispatcherID, tableID, ddlEvent.TableInfo, kvEvents[0].StartTs, kvEvents[0].CRTs, false)
 
 		err := processor.appendRow(kvEvents[0])
 		require.NoError(t, err)
@@ -1269,7 +1270,7 @@ func TestEventMerger(t *testing.T) {
 		mockSchemaGetter.AppendDDLEvent(tableID, ddlEvent)
 		processor := newDMLProcessor(&mockMounter{}, mockSchemaGetter, nil, false)
 
-		processor.startTxn(dispatcherID, tableID, ddlEvent.TableInfo, kvEvents[0].StartTs, kvEvents[0].CRTs)
+		processor.startTxn(dispatcherID, tableID, ddlEvent.TableInfo, kvEvents[0].StartTs, kvEvents[0].CRTs, false)
 
 		err := processor.appendRow(kvEvents[0])
 		require.NoError(t, err)
@@ -1321,7 +1322,7 @@ func TestEventMerger(t *testing.T) {
 		tableInfo := ddlEvent1.TableInfo
 		processor := newDMLProcessor(mounter, mockSchemaGetter, nil, false)
 
-		processor.startTxn(dispatcherID, tableID, tableInfo, kvEvents1[0].StartTs, kvEvents1[0].CRTs)
+		processor.startTxn(dispatcherID, tableID, tableInfo, kvEvents1[0].StartTs, kvEvents1[0].CRTs, false)
 
 		// Create first DML event (timestamp after DDL1, before DDL2)
 		err := processor.appendRow(kvEvents1[0])
@@ -1342,7 +1343,7 @@ func TestEventMerger(t *testing.T) {
 		require.Equal(t, kvEvents1[0].CRTs, events1[1].GetCommitTs())
 
 		// Create second DML event (timestamp after DDL2 and DDL3)
-		processor.startTxn(dispatcherID, tableID, tableInfo, kvEvents1[0].StartTs+50, kvEvents1[0].CRTs+50)
+		processor.startTxn(dispatcherID, tableID, tableInfo, kvEvents1[0].StartTs+50, kvEvents1[0].CRTs+50, false)
 
 		err = processor.appendRow(kvEvents1[0])
 		require.NoError(t, err)
@@ -1722,5 +1723,72 @@ func TestCanInterrupt(t *testing.T) {
 		// Test: currentDML.commitTs=0 (empty), newCommitTs=102
 		result := merger.canInterrupt(102, currentBatchDML)
 		require.True(t, result, "Should be able to interrupt when currentBatchDML is empty")
+	})
+}
+
+func TestTxnEventSplit(t *testing.T) {
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+
+	ddlEvent, kvEvents := genEvents(helper, `create table test.t(id int primary key, c char(50))`, []string{
+		`insert into test.t(id,c) values (0, "c0")`,
+		`insert into test.t(id,c) values (1, "c1")`,
+		`insert into test.t(id,c) values (2, "c2")`,
+		`insert into test.t(id,c) values (3, "c3")`,
+	}...)
+
+	tableInfo := ddlEvent.TableInfo
+	tableID := ddlEvent.TableInfo.TableName.TableID
+	dispatcherID := common.NewDispatcherID()
+
+	// Case 1: Split by rows
+	t.Run("SplitByRows", func(t *testing.T) {
+		batchDML := event.NewBatchDMLEvent()
+		txn, err := newTxnEvent(batchDML, dispatcherID, tableID, tableInfo, 100, 110, true)
+		require.NoError(t, err)
+		// Set max rows to 2
+		txn.DMLEventMaxRows = 2
+
+		mockMounter := &mockMounter{}
+
+		// Append 4 rows
+		for _, rawEvent := range kvEvents {
+			err := txn.AppendRow(rawEvent, mockMounter.DecodeToChunk, nil)
+			require.NoError(t, err)
+		}
+
+		// Should have 2 DMLEvents, each with 2 rows
+		require.Equal(t, 2, len(batchDML.DMLEvents))
+		require.Equal(t, int32(2), batchDML.DMLEvents[0].Len())
+		require.Equal(t, int32(2), batchDML.DMLEvents[1].Len())
+	})
+
+	// Case 2: Split by bytes
+	t.Run("SplitByBytes", func(t *testing.T) {
+		batchDML := event.NewBatchDMLEvent()
+		txn, err := newTxnEvent(batchDML, dispatcherID, tableID, tableInfo, 100, 110, true)
+		require.NoError(t, err)
+		// Set max bytes to a small value that forces split after each row
+		// Each row is roughly: key(insert_key_X) + value(insert_value_X) + overhead
+		// Setting to 1 byte ensures split
+		txn.DMLEventMaxBytes = 1
+
+		mockMounter := &mockMounter{}
+
+		// Append 4 rows
+		for _, rawEvent := range kvEvents {
+			err := txn.AppendRow(rawEvent, mockMounter.DecodeToChunk, nil)
+			require.NoError(t, err)
+		}
+
+		// Should have 4 DMLEvents
+		// The logic is: if current.Len >= MaxRows OR current.Size >= MaxBytes THEN create new.
+		// Since we check BEFORE append, the first row is always appended to the first event.
+		// Then for 2nd row, size > 1, so it creates new event.
+		// So we expect 4 events.
+		require.Equal(t, 4, len(batchDML.DMLEvents))
+		for i := 0; i < 4; i++ {
+			require.Equal(t, int32(1), batchDML.DMLEvents[i].Len())
+		}
 	})
 }

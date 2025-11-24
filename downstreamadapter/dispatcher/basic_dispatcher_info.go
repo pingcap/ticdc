@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config"
 )
 
 // SharedInfo contains all the shared configuration and resources
@@ -39,6 +40,9 @@ type SharedInfo struct {
 	filterConfig *eventpb.FilterConfig
 	// if syncPointInfo is not nil, means enable Sync Point feature,
 	syncPointConfig *syncpoint.SyncPointConfig
+
+	// The atomicity level of a transaction.
+	txnAtomicity config.AtomicityLevel
 
 	// enableSplittableCheck controls whether to check if a table is splittable before splitting.
 	// If true, only tables with a primary key and no unique key can be split.
@@ -73,12 +77,13 @@ func NewSharedInfo(
 	integrityConfig *eventpb.IntegrityConfig,
 	filterConfig *eventpb.FilterConfig,
 	syncPointConfig *syncpoint.SyncPointConfig,
+	txnAtomicity *config.AtomicityLevel,
 	enableSplittableCheck bool,
 	statusesChan chan TableSpanStatusWithSeq,
 	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus,
 	errCh chan error,
 ) *SharedInfo {
-	return &SharedInfo{
+	sharedInfo := &SharedInfo{
 		changefeedID:          changefeedID,
 		timezone:              timezone,
 		bdrMode:               bdrMode,
@@ -92,6 +97,13 @@ func NewSharedInfo(
 		blockExecutor:         newBlockEventExecutor(),
 		errCh:                 errCh,
 	}
+
+	if txnAtomicity != nil {
+		sharedInfo.txnAtomicity = *txnAtomicity
+	} else {
+		sharedInfo.txnAtomicity = config.DefaultAtomicityLevel()
+	}
+	return sharedInfo
 }
 
 func (d *BasicDispatcher) GetId() common.DispatcherID {
@@ -120,6 +132,14 @@ func (d *BasicDispatcher) SetComponentStatus(status heartbeatpb.ComponentState) 
 
 func (d *BasicDispatcher) GetRemovingStatus() bool {
 	return d.isRemoving.Load()
+}
+
+func (d *BasicDispatcher) GetTryRemoving() bool {
+	return d.tryRemoving.Load()
+}
+
+func (d *BasicDispatcher) SetTryRemoving() {
+	d.tryRemoving.Store(true)
 }
 
 func (d *BasicDispatcher) EnableSyncPoint() bool {
@@ -179,6 +199,10 @@ func (d *BasicDispatcher) GetSyncPointInterval() time.Duration {
 
 func (d *BasicDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
 	return d.tableSpan
+}
+
+func (d *BasicDispatcher) GetTxnAtomicity() config.AtomicityLevel {
+	return d.sharedInfo.txnAtomicity
 }
 
 func (d *BasicDispatcher) GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus {

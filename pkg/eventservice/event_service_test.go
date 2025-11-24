@@ -500,6 +500,10 @@ func (m *mockDispatcherInfo) IsOutputRawChangeEvent() bool {
 	return false
 }
 
+func (m *mockDispatcherInfo) GetTxnAtomicity() config.AtomicityLevel {
+	return config.DefaultAtomicityLevel()
+}
+
 func genEvents(helper *commonEvent.EventTestHelper, ddl string, dmls ...string) (commonEvent.DDLEvent, []*common.RawKVEntry) {
 	job := helper.DDL2Job(ddl)
 	kvEvents := helper.DML2RawKv(job.TableID, job.BinlogInfo.FinishedTS, dmls...)

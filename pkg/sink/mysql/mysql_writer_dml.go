@@ -616,6 +616,12 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 	writeTimeout += networkDriftDuration
 
 	tryExec := func() (int, int64, error) {
+		start := time.Now()
+		defer func() {
+			if time.Since(start) > w.cfg.SlowQuery {
+				log.Info("Slow Query", zap.Any("sql", dmls.LogWithoutValues()), zap.Any("writerID", w.id))
+			}
+		}()
 		if fallbackToSeqWay || !w.cfg.MultiStmtEnable {
 			// use sequence way to execute the dmls
 			tx, err := w.db.BeginTx(w.ctx, nil)
@@ -636,6 +642,7 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 			// use multi stmt way to execute the dmls
 			err := w.multiStmtExecute(dmls, writeTimeout)
 			if err != nil {
+				log.Warn("multiStmtExecute failed, fallback to sequence way", zap.Error(err), zap.Any("sql", dmls.LogWithoutValues()), zap.Int("writerID", w.id))
 				fallbackToSeqWay = true
 				return 0, 0, err
 			}
@@ -655,7 +662,8 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 		failpoint.Inject("MySQLDuplicateEntryError", func() {
 			log.Warn("inject MySQLDuplicateEntryError")
 			err := cerror.WrapError(cerror.ErrMySQLDuplicateEntry, &dmysql.MySQLError{
-				Number: uint16(mysql.ErrDupEntry),
+				Number:  uint16(mysql.ErrDupEntry),
+				Message: "Duplicate entry",
 			})
 			w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls)
 			failpoint.Return(err)

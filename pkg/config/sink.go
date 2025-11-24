@@ -102,6 +102,10 @@ const (
 // AtomicityLevel represents the atomicity level of a changefeed.
 type AtomicityLevel string
 
+func DefaultAtomicityLevel() AtomicityLevel {
+	return defaultTxnAtomicity
+}
+
 // ShouldSplitTxn returns whether the sink should split txn.
 func (l AtomicityLevel) ShouldSplitTxn() bool {
 	if l == unknownTxnAtomicity {

@@ -5085,7 +5085,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_txn_worker_flush_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance,id) / sum(rate(ticdc_sink_txn_worker_total_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance,id) *100",
+              "expr": "sum(rate(ticdc_sink_txn_worker_batch_flush_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance,id) / sum(rate(ticdc_sink_txn_worker_total_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance,id) *100",
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-worker-{{id}}",
               "queryType": "randomWalk",

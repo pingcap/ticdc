@@ -673,6 +673,7 @@ func (d *dispatcherStat) newDispatcherRegisterRequest(serverId string, onlyReuse
 			Timezone:             d.target.GetTimezone(),
 			Integrity:            d.target.GetIntegrityConfig(),
 			OutputRawChangeEvent: d.target.IsOutputRawChangeEvent(),
+			TxnAtomicity:         string(d.target.GetTxnAtomicity()),
 		},
 	}
 }
