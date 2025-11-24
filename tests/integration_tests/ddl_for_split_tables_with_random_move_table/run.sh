@@ -164,13 +164,13 @@ main_with_consistent() {
 
 	sleep 500
 
+	kill -9 $NORMAL_TABLE_DDL_PID ${pids[@]} $MOVE_TABLE_PID
+	# to ensure row changed events have been replicated to TiCDC
+	sleep 20
 	if ((RANDOM % 2)); then
-		# For rename table or modify column ddl, the struct of table is wrong when appling snapshot.
+		# For rename table, modify column ddl, drop column, drop index and drop table ddl, the struct of table is wrong when appling snapshot.
 		# see https://github.com/pingcap/tidb/issues/63464.
 		# So we can't check sync_diff with snapshot.
-		kill -9 $NORMAL_TABLE_DDL_PID ${pids[@]} $MOVE_TABLE_PID
-		# to ensure row changed events have been replicated to TiCDC
-		sleep 20
 		changefeed_id="test"
 		storage_path="file://$WORK_DIR/redo"
 		tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
@@ -183,8 +183,6 @@ main_with_consistent() {
 			--sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
 		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
 	else
-		kill -9 $NORMAL_TABLE_DDL_PID ${pids[@]} $MOVE_TABLE_PID
-		sleep 10
 		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
 		cleanup_process $CDC_BINARY
 	fi
