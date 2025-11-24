@@ -45,15 +45,9 @@ func genKeyAndHash(row *chunk.Row, tableInfo *common.TableInfo) (uint64, []byte)
 
 func genKeyList(row *chunk.Row, tableInfo *common.TableInfo) []byte {
 	var key []byte
-	keyColumns := tableInfo.GetPKIndex()
+	keyColumns := tableInfo.GetHandleKeyColumnIDs()
 	if len(keyColumns) == 0 {
-		notNullUKs := tableInfo.GetNotNullUniqueIndices()
-		if len(notNullUKs) > 0 {
-			keyColumns = notNullUKs[0]
-		}
-	}
-	if len(keyColumns) == 0 {
-		log.Panic("the table has no primary key or not-null unique key", zap.String("table", tableInfo.GetTableName()))
+		return nil
 	}
 	for _, colID := range keyColumns {
 		info, ok := tableInfo.GetColumnInfo(colID)

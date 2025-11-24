@@ -108,7 +108,7 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 	for _, sortedEventGroups := range eventsGroupSortedByUpdateTs {
 		for _, eventsInGroup := range sortedEventGroups {
 			tableInfo := eventsInGroup[0].TableInfo
-			if !w.shouldGenBatchSQL(tableInfo.GetHasPKOrNotNullUK(), tableInfo.HasVirtualColumns(), eventsInGroup) {
+			if !w.shouldGenBatchSQL(tableInfo.HasPKOrNotNullUK, tableInfo.HasVirtualColumns(), eventsInGroup) {
 				queryList, argsList = w.generateNormalSQLs(eventsInGroup)
 			} else {
 				queryList, argsList = w.generateBatchSQL(eventsInGroup)
@@ -266,6 +266,23 @@ func (w *Writer) generateSQLForSingleEvent(event *commonEvent.DMLEvent, inDataSa
 	return w.batchSingleTxnDmls(rowLists, tableInfo, inDataSafeMode)
 }
 
+func (w *Writer) generateBatchSQLsPerEvent(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
+	var (
+		queries []string
+		args    [][]interface{}
+	)
+	for _, event := range events {
+		if event.Len() == 0 {
+			continue
+		}
+		inSafeMode := w.cfg.SafeMode || w.isInErrorCausedSafeMode || event.CommitTs < event.ReplicatingTs
+		sqls, vals := w.generateSQLForSingleEvent(event, inSafeMode)
+		queries = append(queries, sqls...)
+		args = append(args, vals...)
+	}
+	return queries, args
+}
+
 func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
 	tableInfo := events[0].TableInfo
 	type RowChangeWithKeys struct {
@@ -329,7 +346,7 @@ func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([
 					rowKey := rowLists[i].RowKeys
 					if nextRowType == common.RowTypeInsert {
 						if compareKeys(rowKey, rowLists[j].RowKeys) {
-							sql, values := w.generateNormalSQLs(events)
+							sql, values := w.generateBatchSQLsPerEvent(events)
 							log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values), zap.Int("writerID", w.id))
 							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events), zap.Any("i", i), zap.Any("j", j), zap.Int("writerID", w.id))
 						}
@@ -368,7 +385,7 @@ func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([
 					}
 					if nextRowType == common.RowTypeInsert {
 						if compareKeys(rowKey, rowLists[j].RowKeys) {
-							sql, values := w.generateNormalSQLs(events)
+							sql, values := w.generateBatchSQLsPerEvent(events)
 							log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values), zap.Int("writerID", w.id))
 							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events), zap.Any("i", i), zap.Any("j", j), zap.Int("writerID", w.id))
 						}
@@ -454,8 +471,8 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 			if !compareKeys(hashToKeyMap[hashValue], keyValue) {
 				log.Warn("the key hash is equal, but the keys is not the same; so we don't use batch generate sql, but use the normal generated sql instead")
 				event.Rewind() // reset event
-				// use normal sql instead
-				sql, args := w.generateNormalSQLs(events)
+				// fallback to per-event batch sql
+				sql, args := w.generateBatchSQLsPerEvent(events)
 				return sql, args, false
 			}
 		}
@@ -518,7 +535,7 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 		for i := 1; i < len(rowChanges); i++ {
 			rowType := rowChanges[i].RowType
 			if rowType == prevType {
-				sql, values := w.generateNormalSQLs(events)
+				sql, values := w.generateBatchSQLsPerEvent(events)
 				log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values), zap.Int("writerID", w.id))
 				log.Panic("invalid row changes", zap.String("schemaName", tableInfo.GetSchemaName()),
 					zap.String("tableName", tableInfo.GetTableName()), zap.Any("rowChanges", rowChanges),

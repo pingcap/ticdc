@@ -366,9 +366,6 @@ type columnSchema struct {
 
 	// PKIndex store the colID of the columns in row changed events for primary key
 	PKIndex []int64 `json:"pk_index"`
-	// NotNullUniqueIndices stores the colIDs for each unique index whose columns are visible and NOT NULL
-	NotNullUniqueIndices [][]int64 `json:"not_null_unique_indices"`
-
 	// The following 3 fields, should only be used to decode datum from the raw value bytes, do not abuse those field.
 	// RowColInfos extend the model.ColumnInfo with some extra information
 	// it's the same length and order with the model.TableInfo.Columns
@@ -425,20 +422,19 @@ func newColumnSchema4Decoder(tableInfo *model.TableInfo) *columnSchema {
 // we only want user to get columnSchema by GetOrSetColumnSchema or Clone method.
 func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 	colSchema := &columnSchema{
-		Digest:               digest,
-		Columns:              tableInfo.Columns,
-		Indices:              tableInfo.Indices,
-		PKIsHandle:           tableInfo.PKIsHandle,
-		IsCommonHandle:       tableInfo.IsCommonHandle,
-		ColumnsOffset:        make(map[int64]int, len(tableInfo.Columns)),
-		NameToColID:          make(map[string]int64, len(tableInfo.Columns)),
-		RowColumnsOffset:     make(map[int64]int, len(tableInfo.Columns)),
-		HandleKeyIDs:         make(map[int64]struct{}),
-		HandleColID:          []int64{-1},
-		RowColInfos:          make([]rowcodec.ColInfo, len(tableInfo.Columns)),
-		RowColFieldTps:       make(map[int64]*datumTypes.FieldType, len(tableInfo.Columns)),
-		PKIndex:              make([]int64, 0),
-		NotNullUniqueIndices: make([][]int64, 0),
+		Digest:           digest,
+		Columns:          tableInfo.Columns,
+		Indices:          tableInfo.Indices,
+		PKIsHandle:       tableInfo.PKIsHandle,
+		IsCommonHandle:   tableInfo.IsCommonHandle,
+		ColumnsOffset:    make(map[int64]int, len(tableInfo.Columns)),
+		NameToColID:      make(map[string]int64, len(tableInfo.Columns)),
+		RowColumnsOffset: make(map[int64]int, len(tableInfo.Columns)),
+		HandleKeyIDs:     make(map[int64]struct{}),
+		HandleColID:      []int64{-1},
+		RowColInfos:      make([]rowcodec.ColInfo, len(tableInfo.Columns)),
+		RowColFieldTps:   make(map[int64]*datumTypes.FieldType, len(tableInfo.Columns)),
+		PKIndex:          make([]int64, 0),
 	}
 
 	rowColumnsCurrentOffset := 0
@@ -627,9 +623,6 @@ func (s *columnSchema) initIndexColumns() {
 			}
 			if len(indexColOffset) > 0 {
 				s.IndexColumns = append(s.IndexColumns, indexColOffset)
-				if hasNotNullUK {
-					s.NotNullUniqueIndices = append(s.NotNullUniqueIndices, indexColOffset)
-				}
 			}
 			// check handle key with not null unique key
 			if hasPrimary || !hasNotNullUK {
@@ -651,8 +644,11 @@ func (s *columnSchema) initIndexColumns() {
 	}
 
 	selectCols := s.Indices[handleIndexOffset].Columns
+	s.HandleColID = make([]int64, 0, len(selectCols))
 	for _, col := range selectCols {
-		s.HandleKeyIDs[s.Columns[col.Offset].ID] = struct{}{}
+		colID := s.Columns[col.Offset].ID
+		s.HandleKeyIDs[colID] = struct{}{}
+		s.HandleColID = append(s.HandleColID, colID)
 	}
 }
 

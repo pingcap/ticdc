@@ -205,11 +205,6 @@ func (ti *TableInfo) GetPKIndex() []int64 {
 	return ti.columnSchema.PKIndex
 }
 
-// GetNotNullUniqueIndices returns the colIDs for each not-null unique index
-func (ti *TableInfo) GetNotNullUniqueIndices() [][]int64 {
-	return ti.columnSchema.NotNullUniqueIndices
-}
-
 // GetUpdateTS() returns the GetUpdateTS() of columnSchema
 // These changing schema operations don't include 'truncate table', 'rename table',
 // 'rename tables', 'truncate partition' and 'exchange partition'.
@@ -372,10 +367,6 @@ func (ti *TableInfo) IsEligible(forceReplicate bool) bool {
 	return ti.HasPKOrNotNullUK
 }
 
-func (ti *TableInfo) GetHasPKOrNotNullUK() bool {
-	return ti.HasPKOrNotNullUK
-}
-
 func OriginalHasPKOrNotNullUK(tableInfo *model.TableInfo) bool {
 	// If the table has primary key, it is eligible.
 	// the PKIsHandle can not handle all primary key cases, for example:
@@ -519,6 +510,14 @@ func (ti *TableInfo) GetPrimaryKeyColumnNames() []string {
 func (ti *TableInfo) IsHandleKey(colID int64) bool {
 	_, ok := ti.columnSchema.HandleKeyIDs[colID]
 	return ok
+}
+
+// GetHandleKeyColumnIDs returns the column IDs selected as handle keys in order
+func (ti *TableInfo) GetHandleKeyColumnIDs() []int64 {
+	if len(ti.columnSchema.HandleKeyIDs) == 0 {
+		return nil
+	}
+	return ti.columnSchema.HandleColID
 }
 
 func (ti *TableInfo) ToTiDBTableInfo() *model.TableInfo {
