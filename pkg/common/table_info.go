@@ -205,6 +205,11 @@ func (ti *TableInfo) GetPKIndex() []int64 {
 	return ti.columnSchema.PKIndex
 }
 
+// GetNotNullUniqueIndices returns the colIDs for each not-null unique index
+func (ti *TableInfo) GetNotNullUniqueIndices() [][]int64 {
+	return ti.columnSchema.NotNullUniqueIndices
+}
+
 // GetUpdateTS() returns the GetUpdateTS() of columnSchema
 // These changing schema operations don't include 'truncate table', 'rename table',
 // 'rename tables', 'truncate partition' and 'exchange partition'.
@@ -364,6 +369,10 @@ func (ti *TableInfo) IsEligible(forceReplicate bool) bool {
 	if ti.IsView() {
 		return true
 	}
+	return ti.HasPKOrNotNullUK
+}
+
+func (ti *TableInfo) GetHasPKOrNotNullUK() bool {
 	return ti.HasPKOrNotNullUK
 }
 

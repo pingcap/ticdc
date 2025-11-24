@@ -174,6 +174,30 @@ func TestColumnIndex(t *testing.T) {
 	require.Equal(t, tableInfo.GetPKIndex(), []int64{101})
 }
 
+func TestGetNotNullUniqueIndices(t *testing.T) {
+	columns := []*model.ColumnInfo{
+		newColumnInfo(101, "a", mysql.TypeLong, mysql.PriKeyFlag|mysql.NotNullFlag),
+		newColumnInfo(102, "b", mysql.TypeLong, mysql.NotNullFlag),
+		newColumnInfo(103, "c", mysql.TypeLong, mysql.NotNullFlag),
+		newColumnInfo(104, "d", mysql.TypeLong, 0),
+		newColumnInfo(105, "e", mysql.TypeLong, mysql.NotNullFlag),
+		newColumnInfo(106, "f", mysql.TypeLong, mysql.NotNullFlag),
+	}
+	columns[4].GeneratedExprString = "e+1"
+	indices := []*model.IndexInfo{
+		newIndexInfo("pk", []*model.IndexColumn{{Offset: 0}}, true, true),
+		newIndexInfo("uk_valid", []*model.IndexColumn{{Offset: 1}, {Offset: 2}}, false, true),
+		newIndexInfo("uk_nullable", []*model.IndexColumn{{Offset: 3}}, false, true),
+		newIndexInfo("uk_hidden", []*model.IndexColumn{{Offset: 4}}, false, true),
+		newIndexInfo("uk_second", []*model.IndexColumn{{Offset: 5}}, false, true),
+	}
+	tableInfo := WrapTableInfo("test", &model.TableInfo{
+		Columns: columns,
+		Indices: indices,
+	})
+	require.Equal(t, [][]int64{{102, 103}, {106}}, tableInfo.GetNotNullUniqueIndices())
+}
+
 func TestIndexByName(t *testing.T) {
 	tableInfo := WrapTableInfo("test", &model.TableInfo{
 		Indices: nil,

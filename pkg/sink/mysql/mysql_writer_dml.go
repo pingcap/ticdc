@@ -108,7 +108,7 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 	for _, sortedEventGroups := range eventsGroupSortedByUpdateTs {
 		for _, eventsInGroup := range sortedEventGroups {
 			tableInfo := eventsInGroup[0].TableInfo
-			if !w.shouldGenBatchSQL(tableInfo.HasPrimaryKey(), tableInfo.HasVirtualColumns(), eventsInGroup) {
+			if !w.shouldGenBatchSQL(tableInfo.GetHasPKOrNotNullUK(), tableInfo.HasVirtualColumns(), eventsInGroup) {
 				queryList, argsList = w.generateNormalSQLs(eventsInGroup)
 			} else {
 				queryList, argsList = w.generateBatchSQL(eventsInGroup)
@@ -128,16 +128,16 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 // shouldGenBatchSQL determines whether batch SQL generation should be used based on table properties and events.
 // Batch SQL generation is used when:
 // 1. BatchDMLEnable = true, and rows > 1
-// 2. The table has a primary key
+// 2. The table has a pk or not null unique key
 // 3. The table doesn't have virtual columns
 // 4. There's more than one row in the group
 // 5. All events have the same safe mode status
-func (w *Writer) shouldGenBatchSQL(hasPK bool, hasVirtualCols bool, events []*commonEvent.DMLEvent) bool {
+func (w *Writer) shouldGenBatchSQL(HasPKOrNotNullUK bool, hasVirtualCols bool, events []*commonEvent.DMLEvent) bool {
 	if !w.cfg.BatchDMLEnable {
 		return false
 	}
 
-	if !hasPK || hasVirtualCols {
+	if !HasPKOrNotNullUK || hasVirtualCols {
 		return false
 	}
 	if len(events) == 1 && events[0].Len() == 1 {
@@ -885,7 +885,7 @@ func (w *Writer) groupRowsByType(
 				eventTableInfo,
 				nil, nil)
 			updateRow = append(updateRow, newUpdateRow)
-			if len(updateRow) >= w.cfg.MaxTxnRow {
+			if len(updateRow) >= w.cfg.MaxMultiUpdateRowCount {
 				updateRows = append(updateRows, updateRow)
 				updateRow = make([]*sqlmodel.RowChange, 0, rowSize)
 			}
