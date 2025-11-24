@@ -132,12 +132,12 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 // 3. The table doesn't have virtual columns
 // 4. There's more than one row in the group
 // 5. All events have the same safe mode status
-func (w *Writer) shouldGenBatchSQL(HasPKOrNotNullUK bool, hasVirtualCols bool, events []*commonEvent.DMLEvent) bool {
+func (w *Writer) shouldGenBatchSQL(hasPKOrNotNullUK bool, hasVirtualCols bool, events []*commonEvent.DMLEvent) bool {
 	if !w.cfg.BatchDMLEnable {
 		return false
 	}
 
-	if !HasPKOrNotNullUK || hasVirtualCols {
+	if !hasPKOrNotNullUK || hasVirtualCols {
 		return false
 	}
 	if len(events) == 1 && events[0].Len() == 1 {
