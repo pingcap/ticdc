@@ -32,41 +32,35 @@ import (
 // which means each changefeed only has one TableSchemaStore.
 // for mysql sink, tableSchemaStore only need the id-class infos; otherwise, it only need name-class infos.
 type TableSchemaStore struct {
-	sinkType       commonType.SinkType
-	tableNameStore *TableNameStore
-	tableIDStore   *TableIDStore
+	sinkType           commonType.SinkType
+	enableActiveActive bool
+	tableNameStore     *TableNameStore
+	tableIDStore       *TableIDStore
 }
 
-func NewTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo, sinkType commonType.SinkType) *TableSchemaStore {
+func NewTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo, sinkType commonType.SinkType, enableActiveActive bool) *TableSchemaStore {
 	tableSchemaStore := &TableSchemaStore{
-		sinkType: sinkType,
+		sinkType:           sinkType,
+		enableActiveActive: enableActiveActive,
 		tableIDStore: &TableIDStore{
 			schemaIDToTableIDs: make(map[int64]map[int64]interface{}),
 			tableIDToSchemaID:  make(map[int64]int64),
 		},
 	}
-	switch sinkType {
-	case commonType.MysqlSinkType:
-		for _, schema := range schemaInfo {
-			schemaID := schema.SchemaID
-			for _, table := range schema.Tables {
-				tableID := table.TableID
-				tableSchemaStore.tableIDStore.Add(schemaID, tableID)
-			}
-		}
-	default:
+	needTableNameStore := sinkType != commonType.MysqlSinkType || enableActiveActive
+	if needTableNameStore {
 		tableSchemaStore.tableNameStore = &TableNameStore{
 			existingTables:         make(map[string]map[string]*commonEvent.SchemaTableName),
 			latestTableNameChanges: &LatestTableNameChanges{m: make(map[uint64]*commonEvent.TableNameChange)},
 		}
-		for _, schema := range schemaInfo {
-			schemaName := schema.SchemaName
-			schemaID := schema.SchemaID
-			for _, table := range schema.Tables {
-				tableName := table.TableName
-				tableSchemaStore.tableNameStore.Add(schemaName, tableName)
-				tableID := table.TableID
-				tableSchemaStore.tableIDStore.Add(schemaID, tableID)
+	}
+	for _, schema := range schemaInfo {
+		schemaID := schema.SchemaID
+		for _, table := range schema.Tables {
+			tableID := table.TableID
+			tableSchemaStore.tableIDStore.Add(schemaID, tableID)
+			if tableSchemaStore.tableNameStore != nil {
+				tableSchemaStore.tableNameStore.Add(schema.SchemaName, table.TableName)
 			}
 		}
 	}
@@ -78,9 +72,12 @@ func (s *TableSchemaStore) Clear() {
 }
 
 func (s *TableSchemaStore) AddEvent(event *commonEvent.DDLEvent) {
-	if s.sinkType == commonType.MysqlSinkType {
-		s.tableIDStore.AddEvent(event)
-	} else {
+	if event == nil || s == nil {
+		return
+	}
+
+	s.tableIDStore.AddEvent(event)
+	if s.tableNameStore != nil {
 		s.tableNameStore.AddEvent(event)
 	}
 }
@@ -126,7 +123,7 @@ func (s *TableSchemaStore) GetAllNormalTableIds() []int64 {
 // GetAllTableNames only will be called when maintainer send message to ask dispatcher to write checkpointTs to downstream.
 // So the ts must be <= the latest received event ts of table trigger event dispatcher.
 func (s *TableSchemaStore) GetAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
-	if !s.initialized() {
+	if !s.initialized() || s.tableNameStore == nil {
 		return nil
 	}
 	return s.tableNameStore.GetAllTableNames(ts)

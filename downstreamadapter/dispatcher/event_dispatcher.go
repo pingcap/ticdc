@@ -107,7 +107,7 @@ func (d *EventDispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.S
 		return false, nil
 	}
 
-	d.tableSchemaStore = util.NewTableSchemaStore(schemaInfo, d.sink.SinkType())
+	d.tableSchemaStore = util.NewTableSchemaStore(schemaInfo, d.sink.SinkType(), d.sharedInfo.enableActiveActive)
 	d.sink.SetTableSchemaStore(d.tableSchemaStore)
 	return true, nil
 }

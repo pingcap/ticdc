@@ -127,19 +127,7 @@ func (s *sink) IsNormal() bool {
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	filtered, skip, err := sinkutil.FilterDMLEvent(event, s.enableActiveActive)
-	if err != nil {
-		log.Error("pulsar sink filter dml event failed",
-			zap.String("keyspace", s.changefeedID.Keyspace()),
-			zap.String("changefeed", s.changefeedID.Name()),
-			zap.Error(err))
-		s.isNormal.Store(false)
-		return
-	}
-	if skip {
-		return
-	}
-	s.eventChan <- filtered
+	s.eventChan <- event
 }
 
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
