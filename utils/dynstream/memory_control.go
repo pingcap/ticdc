@@ -35,7 +35,7 @@ const (
 
 	defaultReleaseMemoryRatio     = 0.4
 	defaultDeadlockDuration       = 5 * time.Second
-	defaultReleaseMemoryThreshold = 256
+	defaultReleaseMemoryThreshold = 256 // 256 bytes
 )
 
 // areaMemStat is used to store the memory statistics of an area.
@@ -282,6 +282,10 @@ func (as *areaMemStat[A, P, T, D, H]) decPendingSize(path *pathInfo[A, P, T, D, 
 	as.updateAreaPauseState(path)
 }
 
+func (as *areaMemStat[A, P, T, D, H]) getAvailableMemory() int64 {
+	return max(0, int64(as.settings.Load().maxPendingSize)-as.totalPendingSize.Load())
+}
+
 // A memControl is used to control the memory usage of the dynamic stream.
 // It is a global level struct, not stream level.
 type memControl[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
@@ -347,7 +351,7 @@ func (m *memControl[A, P, T, D, H]) getMetrics() MemoryMetric[A, P] {
 		areaMetric := AreaMemoryMetric[A, P]{
 			AreaValue:           area.area,
 			PathAvailableMemory: make(map[P]int64),
-			UsedMemoryValue:     area.totalPendingSize.Load(),
+			AvailableMemory:     area.totalPendingSize.Load(),
 			MaxMemoryValue:      int64(area.settings.Load().maxPendingSize),
 			PathMaxMemoryValue:  int64(area.settings.Load().pathMaxPendingSize),
 		}
@@ -369,25 +373,22 @@ type MemoryMetric[A Area, P Path] struct {
 type AreaMemoryMetric[A Area, P Path] struct {
 	AreaValue           A
 	PathAvailableMemory map[P]int64
-	UsedMemoryValue     int64
-	MaxMemoryValue      int64
-	PathMaxMemoryValue  int64
+	AvailableMemory     int64
+
+	MaxMemoryValue     int64
+	PathMaxMemoryValue int64
 }
 
 func (a *AreaMemoryMetric[A, P]) MemoryUsageRatio() float64 {
-	return float64(a.UsedMemoryValue) / float64(a.MaxMemoryValue)
+	return float64(a.AvailableMemory) / float64(a.MaxMemoryValue)
 }
 
 func (a *AreaMemoryMetric[A, P]) MemoryUsage() int64 {
-	return a.UsedMemoryValue
+	return a.AvailableMemory
 }
 
 func (a *AreaMemoryMetric[A, P]) MaxMemory() int64 {
 	return a.MaxMemoryValue
-}
-
-func (a *AreaMemoryMetric[A, P]) AvailableMemory() int64 {
-	return max(0, a.MaxMemoryValue-a.UsedMemoryValue)
 }
 
 func (a *AreaMemoryMetric[A, P]) Area() A {
