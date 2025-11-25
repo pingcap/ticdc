@@ -542,10 +542,6 @@ func TestAddDispatcherFailure(t *testing.T) {
 	err := broker.addDispatcher(dispInfo)
 	require.Error(t, err)
 
-	// Verify that the dispatcher is NOT in the changefeed map
-	// Before the fix, this assertion should FAIL because the dispatcher remains in the map
-	cfStatus, ok := broker.changefeedMap.Load(dispInfo.GetChangefeedID())
-	if ok {
-		require.True(t, cfStatus.(*changefeedStatus).isEmpty(), "changefeedStatus should be empty after failed registration")
-	}
+	_, ok := broker.changefeedMap.Load(dispInfo.GetChangefeedID())
+	require.False(t, ok, "changefeedStatus should be removed after failed registration")
 }
