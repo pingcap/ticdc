@@ -240,6 +240,8 @@ func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) {
 		filteredEvents = append(filteredEvents, filtered)
 	}
 	if len(filteredEvents) == 0 {
+		// no event, just wake ds
+		events[0].PostFlush()
 		return
 	}
 
@@ -281,9 +283,6 @@ func (d *BasicDispatcher) ensureActiveActiveTableInfo(tableInfo *common.TableInf
 	if !d.sharedInfo.enableActiveActive {
 		return nil
 	}
-	if d.activeActiveChecked.Load() {
-		return nil
-	}
 	if tableInfo == nil {
 		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
 			"table info is nil for dispatcher %s in active-active mode", d.id.String())
@@ -305,7 +304,19 @@ func (d *BasicDispatcher) ensureActiveActiveTableInfo(tableInfo *common.TableInf
 				tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, col)
 		}
 	}
-	d.activeActiveChecked.Store(true)
+	return nil
+}
+
+func (d *BasicDispatcher) handleActiveActiveCheck(event commonEvent.Event) error {
+	if !d.sharedInfo.enableActiveActive {
+		return nil
+	}
+	switch ev := event.(type) {
+	case *commonEvent.DMLEvent:
+		return d.ensureActiveActiveTableInfo(ev.TableInfo)
+	case *commonEvent.DDLEvent:
+		return d.ensureActiveActiveTableInfo(ev.TableInfo)
+	}
 	return nil
 }
 
@@ -450,8 +461,12 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 
 		// only when we receive the first event, we can regard the dispatcher begin syncing data
 		// then turning into working status.
-		if d.isFirstEvent(event) {
+		firstEvent := d.isFirstEvent(event)
+		if firstEvent {
 			d.updateDispatcherStatusToWorking()
+			if err := d.handleActiveActiveCheck(event); err != nil {
+				d.HandleError(err)
+			}
 		}
 
 		switch event.GetType() {
@@ -461,11 +476,6 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			dml := event.(*commonEvent.DMLEvent)
 			if dml.Len() == 0 {
 				continue
-			}
-
-			if err := d.ensureActiveActiveTableInfo(dml.TableInfo); err != nil {
-				d.HandleError(err)
-				return true
 			}
 
 			// Skip DML events at startTs+1 when skipDMLAsStartTs is true.
@@ -496,6 +506,10 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				log.Panic("ddl event should only be singly handled",
 					zap.Stringer("dispatcherID", d.id))
 			}
+			if err := d.handleActiveActiveCheck(event); err != nil {
+				d.HandleError(err)
+			}
+
 			failpoint.Inject("BlockOrWaitBeforeDealWithDDL", nil)
 			block = true
 			ddl := event.(*commonEvent.DDLEvent)

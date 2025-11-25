@@ -17,6 +17,7 @@ import (
 	"context"
 	"database/sql"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/pingcap/log"
@@ -46,8 +47,9 @@ const (
 type Sink struct {
 	changefeedID common.ChangeFeedID
 
-	dmlWriter []*mysql.Writer
-	ddlWriter *mysql.Writer
+	dmlWriter      []*mysql.Writer
+	ddlWriter      *mysql.Writer
+	progressWriter *mysql.ProgressWriter
 
 	db         *sql.DB
 	statistics *metrics.Statistics
@@ -59,12 +61,8 @@ type Sink struct {
 	maxTxnRows             int
 	bdrMode                bool
 	enableActiveActive     bool
-	upstreamID             uint64
 	progressUpdateInterval time.Duration
-	latestCheckpoint       atomic.Uint64
-	tableSchemaStore       *sinkutil.TableSchemaStore
-	progressTableInit      atomic.Bool
-	progressTableInitMu    sync.Mutex
+	lastProgressUpdate     time.Time
 }
 
 // Verify is used to verify the sink uri and config is valid
@@ -127,13 +125,15 @@ func newMySQLSink(
 		maxTxnRows:             cfg.MaxTxnRow,
 		bdrMode:                bdrMode,
 		enableActiveActive:     enableActiveActive,
-		upstreamID:             upstreamID,
 		progressUpdateInterval: progressInterval,
 	}
 	for i := 0; i < len(result.dmlWriter); i++ {
 		result.dmlWriter[i] = mysql.NewWriter(ctx, i, db, cfg, changefeedID, stat)
 	}
 	result.ddlWriter = mysql.NewWriter(ctx, len(result.dmlWriter), db, cfg, changefeedID, stat)
+	if enableActiveActive {
+		result.progressWriter = mysql.NewProgressWriter(db, changefeedID, upstreamID)
+	}
 	return result
 }
 
@@ -146,11 +146,6 @@ func (s *Sink) Run(ctx context.Context) error {
 		g.Go(func() error {
 			defer s.conflictDetector.CloseNotifiedNodes()
 			return s.runDMLWriter(ctx, idx)
-		})
-	}
-	if s.enableActiveActive {
-		g.Go(func() error {
-			return s.runProgressUpdater(ctx)
 		})
 	}
 	err := g.Wait()
@@ -239,8 +234,10 @@ func (s *Sink) SinkType() common.SinkType {
 }
 
 func (s *Sink) SetTableSchemaStore(tableSchemaStore *sinkutil.TableSchemaStore) {
-	s.tableSchemaStore = tableSchemaStore
 	s.ddlWriter.SetTableSchemaStore(tableSchemaStore)
+	if s.progressWriter != nil {
+		s.progressWriter.SetTableSchemaStore(tableSchemaStore)
+	}
 }
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
@@ -276,9 +273,22 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 
 func (s *Sink) AddCheckpointTs(ts uint64) {
 	if !s.enableActiveActive {
+		log.Error("AddCheckpointTs called when active-active is not enabled",
+			zap.String("changefeed", s.changefeedID.DisplayName.String()))
 		return
 	}
-	s.latestCheckpoint.Store(ts)
+
+	if time.Now().Sub(s.lastProgressUpdate) < s.progressUpdateInterval {
+		return
+	}
+
+	if err := s.progressWriter.Flush(context.Background(), ts); err != nil {
+		log.Warn("failed to update active-active progress table",
+			zap.String("changefeed", s.changefeedID.DisplayName.String()),
+			zap.Error(err))
+		return
+	}
+	s.lastProgressUpdate = time.Now()
 }
 
 // GetTableRecoveryInfo queries DDL crash recovery information for the given tables.

@@ -211,7 +211,6 @@ func FilterDMLEvent(event *commonEvent.DMLEvent, enableActiveActive bool) (*comm
 	}
 
 	if kept == 0 {
-		event.PostFlush()
 		return nil, true, nil
 	}
 

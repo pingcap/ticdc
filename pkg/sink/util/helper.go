@@ -76,7 +76,9 @@ func (s *TableSchemaStore) AddEvent(event *commonEvent.DDLEvent) {
 		return
 	}
 
-	s.tableIDStore.AddEvent(event)
+	if s.sinkType == commonType.MysqlSinkType {
+		s.tableIDStore.AddEvent(event)
+	}
 	if s.tableNameStore != nil {
 		s.tableNameStore.AddEvent(event)
 	}
