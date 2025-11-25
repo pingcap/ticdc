@@ -479,6 +479,11 @@ func (e *eventStore) RegisterDispatcher(
 			if bytes.Compare(subStat.tableSpan.StartKey, dispatcherSpan.StartKey) <= 0 &&
 				bytes.Compare(subStat.tableSpan.EndKey, dispatcherSpan.EndKey) >= 0 {
 
+				// For onlyReuse register request, we only consider initialized subStats
+				if onlyReuse && !subStat.initialized.Load() {
+					continue
+				}
+
 				// Check whether the subStat ts range contains startTs
 				if subStat.checkpointTs.Load() > startTs || startTs > subStat.resolvedTs.Load() {
 					continue
