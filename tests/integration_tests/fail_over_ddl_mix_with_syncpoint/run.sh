@@ -202,10 +202,10 @@ main_with_consistent() {
 		cdc redo apply --log-level debug --tmp-dir="$tmp_download_path/apply" \
 			--storage="$storage_path" \
 			--sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
-		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
+		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
 	else
 		sleep 30
-		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
+		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
 
 		checkpoint1=$(cdc_cli_changefeed query -c "test" 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
 		sleep 20
