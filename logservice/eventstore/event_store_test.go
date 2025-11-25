@@ -152,6 +152,14 @@ func TestEventStoreInteractionWithSubClient(t *testing.T) {
 	}
 }
 
+func markSubStatsInitializedForTest(store EventStore, tableID int64) {
+	es := store.(*eventStore)
+	subStats := es.dispatcherMeta.tableStats[tableID]
+	for _, subStat := range subStats {
+		subStat.initialized.Store(true)
+	}
+}
+
 func TestEventStoreOnlyReuseDispatcher(t *testing.T) {
 	_, store := newEventStoreForTest(fmt.Sprintf("/tmp/%s", t.Name()))
 
@@ -180,6 +188,18 @@ func TestEventStoreOnlyReuseDispatcher(t *testing.T) {
 		ok := store.RegisterDispatcher(cfID, dispatcherID2, span, 100, func(watermark uint64, latestCommitTs uint64) {}, true, false)
 		require.False(t, ok)
 	}
+	// when the existing subscription is not initialized, add a dispatcher(onlyReuse=true) should fail
+	{
+		span := &heartbeatpb.TableSpan{
+			TableID:  tableID,
+			StartKey: []byte("b"),
+			EndKey:   []byte("h"),
+		}
+		ok := store.RegisterDispatcher(cfID, dispatcherID3, span, 100, func(watermark uint64, latestCommitTs uint64) {}, true, false)
+		require.False(t, ok)
+	}
+	// mark existing subscription as initialized
+	markSubStatsInitializedForTest(store, tableID)
 	// add a dispatcher(onlyReuse=true) with a containing span which should success
 	{
 		span := &heartbeatpb.TableSpan{
@@ -229,6 +249,7 @@ func TestEventStoreOnlyReuseDispatcherSuccess(t *testing.T) {
 		ok := es.RegisterDispatcher(cfID, dispatcherID1, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
 		require.True(t, ok)
 	}
+	markSubStatsInitializedForTest(store, tableID)
 
 	// 2. Register a second dispatcher with onlyReuse=true, whose span is contained
 	//    by the first subscription. This registration should succeed.
