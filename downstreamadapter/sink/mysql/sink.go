@@ -132,7 +132,7 @@ func newMySQLSink(
 	}
 	result.ddlWriter = mysql.NewWriter(ctx, len(result.dmlWriter), db, cfg, changefeedID, stat)
 	if enableActiveActive {
-		result.progressWriter = mysql.NewProgressWriter(db, changefeedID, upstreamID)
+		result.progressWriter = mysql.NewProgressWriter(ctx, db, changefeedID, upstreamID)
 	}
 	return result
 }
@@ -278,17 +278,18 @@ func (s *Sink) AddCheckpointTs(ts uint64) {
 		return
 	}
 
-	if time.Now().Sub(s.lastProgressUpdate) < s.progressUpdateInterval {
+	now := time.Now()
+	if now.Sub(s.lastProgressUpdate) < s.progressUpdateInterval {
 		return
 	}
 
-	if err := s.progressWriter.Flush(context.Background(), ts); err != nil {
+	if err := s.progressWriter.Flush(ts); err != nil {
 		log.Warn("failed to update active-active progress table",
 			zap.String("changefeed", s.changefeedID.DisplayName.String()),
 			zap.Error(err))
 		return
 	}
-	s.lastProgressUpdate = time.Now()
+	s.lastProgressUpdate = now
 }
 
 // GetTableRecoveryInfo queries DDL crash recovery information for the given tables.
