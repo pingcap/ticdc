@@ -187,7 +187,6 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 	}
 
 	log.Info("flush DML events before DDL", zap.Uint64("DDLCommitTs", commitTs), zap.Int("total", total))
-	var preFlushed int64
 	start := time.Now()
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -201,13 +200,9 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 				zap.Any("tables", tableIDs))
 			return w.mysqlSink.WriteBlockEvent(ddl)
 		case <-ticker.C:
-			currentFlushed := flushed.Load()
-			if preFlushed == currentFlushed {
-				log.Panic("DDL event timeout, since the DML events are not flushed in time",
-					zap.Uint64("DDLCommitTs", commitTs), zap.String("query", ddl.Query),
-					zap.Int("total", total), zap.Int64("flushed", currentFlushed))
-			}
-			preFlushed = currentFlushed
+			log.Warn("DML events are not flushed in time",
+				zap.Uint64("DDLCommitTs", commitTs), zap.String("query", ddl.Query),
+				zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
 		}
 	}
 }
@@ -302,7 +297,6 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 	}
 
 	log.Info("flush DML events by watermark", zap.Uint64("watermark", watermark), zap.Int("total", total))
-	var preFlushed int64
 	start := time.Now()
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -315,12 +309,8 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 				zap.Int("total", total), zap.Duration("duration", time.Since(start)))
 			return nil
 		case <-ticker.C:
-			currentFlushed := flushed.Load()
-			if preFlushed == currentFlushed {
-				log.Panic("DML events are not flushed in time", zap.Uint64("watermark", watermark),
-					zap.Int("total", total), zap.Int64("flushed", currentFlushed))
-			}
-			preFlushed = currentFlushed
+			log.Warn("DML events are not flushed in time", zap.Uint64("watermark", watermark),
+				zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
 		}
 	}
 }
