@@ -20,7 +20,12 @@ function run_changefeed() {
 	sleep 8
 
 	cp $CUR/conf/diff_config.toml $WORK_DIR/diff_config.toml
-	sed -i "s/<suffix>/$changefeed_id/" $WORK_DIR/diff_config.toml
+	if [[ $(sed --version 2>/dev/null) == *"GNU"* ]]; then
+		sed -i "s/<suffix>/$changefeed_id/" $WORK_DIR/diff_config.toml
+	else
+		sed -i "" "s/<suffix>/$changefeed_id/" $WORK_DIR/diff_config.toml
+	fi
+
 	if [[ $should_pass_check == true ]]; then
 		check_sync_diff $WORK_DIR $WORK_DIR/diff_config.toml 100
 	else

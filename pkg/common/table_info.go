@@ -512,6 +512,22 @@ func (ti *TableInfo) IsHandleKey(colID int64) bool {
 	return ok
 }
 
+// GetOrderedHandleKeyColumnIDs returns the ordered handle-key column IDs.
+// It prefers the primary key columns (PKIndex) when available; otherwise,
+// it falls back to the not-null unique key selected during schema init.
+func (ti *TableInfo) GetOrderedHandleKeyColumnIDs() []int64 {
+	if len(ti.columnSchema.PKIndex) > 0 {
+		return ti.columnSchema.PKIndex
+	}
+	if len(ti.columnSchema.HandleColID) == 0 {
+		return nil
+	}
+	if len(ti.columnSchema.HandleColID) == 1 && ti.columnSchema.HandleColID[0] == -1 {
+		return nil
+	}
+	return ti.columnSchema.HandleColID
+}
+
 func (ti *TableInfo) ToTiDBTableInfo() *model.TableInfo {
 	return &model.TableInfo{
 		ID:         ti.TableName.TableID,
@@ -558,25 +574,15 @@ func NewTableInfo(schemaName string, tableName string, tableID int64, isPartitio
 	return ti
 }
 
-// WrapTableInfoWithTableID creates a TableInfo from a model.TableInfo.
-// It explicitly uses the provided tableID instead of the one from info.ID.
-// This is used to create TableInfo wrappers for physical partitions,
-// ensuring they carry the physical partition ID, not the logical table ID.
-func WrapTableInfoWithTableID(schemaName string, info *model.TableInfo, tableID int64) *TableInfo {
-	// search column schema object
-	sharedColumnSchemaStorage := GetSharedColumnSchemaStorage()
-	columnSchema := sharedColumnSchemaStorage.GetOrSetColumnSchema(info)
-	return NewTableInfo(schemaName, info.Name.O, tableID, info.GetPartitionInfo() != nil, columnSchema, info)
-}
-
 // WrapTableInfo creates a TableInfo from a model.TableInfo.
-// This function is a convenience wrapper around WrapTableInfoWithTableID,
-// defaulting to use the logical table ID (info.ID).
 func WrapTableInfo(schemaName string, info *model.TableInfo) *TableInfo {
 	if info == nil {
 		return nil
 	}
-	return WrapTableInfoWithTableID(schemaName, info, info.ID)
+	// search column schema object
+	sharedColumnSchemaStorage := GetSharedColumnSchemaStorage()
+	columnSchema := sharedColumnSchemaStorage.GetOrSetColumnSchema(info)
+	return NewTableInfo(schemaName, info.Name.O, info.ID, info.GetPartitionInfo() != nil, columnSchema, info)
 }
 
 // NewTableInfo4Decoder is only used by the codec decoder for the test purpose,

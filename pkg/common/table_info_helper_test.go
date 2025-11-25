@@ -174,6 +174,65 @@ func TestColumnIndex(t *testing.T) {
 	require.Equal(t, tableInfo.GetPKIndex(), []int64{101})
 }
 
+func TestGetOrderedHandleKeyColumnIDs(t *testing.T) {
+	t.Run("pk is handle", func(t *testing.T) {
+		columns := []*model.ColumnInfo{
+			newColumnInfo(101, "a", mysql.TypeLong, mysql.PriKeyFlag),
+			newColumnInfo(102, "b", mysql.TypeLong, 0),
+		}
+		tableInfo := WrapTableInfo("test", &model.TableInfo{
+			PKIsHandle: true,
+			Columns:    columns,
+		})
+		require.Equal(t, []int64{101}, tableInfo.GetOrderedHandleKeyColumnIDs())
+	})
+
+	t.Run("composite primary key", func(t *testing.T) {
+		columns := []*model.ColumnInfo{
+			newColumnInfo(201, "a", mysql.TypeLong, mysql.PriKeyFlag),
+			newColumnInfo(202, "b", mysql.TypeLong, mysql.PriKeyFlag),
+		}
+		tableInfo := WrapTableInfo("test", &model.TableInfo{
+			Columns: columns,
+			Indices: []*model.IndexInfo{
+				newIndexInfo("pk", []*model.IndexColumn{{Offset: 0}, {Offset: 1}}, true, true),
+			},
+		})
+		require.Equal(t, []int64{201, 202}, tableInfo.GetOrderedHandleKeyColumnIDs())
+	})
+
+	t.Run("unique key fallback", func(t *testing.T) {
+		columns := []*model.ColumnInfo{
+			newColumnInfo(301, "a", mysql.TypeLong, 0),
+			newColumnInfo(302, "b", mysql.TypeLong, mysql.NotNullFlag),
+			newColumnInfo(303, "c", mysql.TypeLong, mysql.NotNullFlag),
+			newColumnInfo(304, "d", mysql.TypeLong, mysql.NotNullFlag),
+			newColumnInfo(305, "e", mysql.TypeLong, 0),
+		}
+		tableInfo := WrapTableInfo("test", &model.TableInfo{
+			Columns: columns,
+			Indices: []*model.IndexInfo{
+				newIndexInfo("uk_long", []*model.IndexColumn{{Offset: 1}, {Offset: 2}}, false, true),
+				newIndexInfo("uk_short", []*model.IndexColumn{{Offset: 3}}, false, true),
+				newIndexInfo("uk_nullable", []*model.IndexColumn{{Offset: 4}}, false, true),
+			},
+		})
+		require.True(t, tableInfo.IsHandleKey(304))
+		require.Equal(t, []int64{304}, tableInfo.GetOrderedHandleKeyColumnIDs())
+	})
+
+	t.Run("no handle key", func(t *testing.T) {
+		columns := []*model.ColumnInfo{
+			newColumnInfo(401, "a", mysql.TypeLong, 0),
+			newColumnInfo(402, "b", mysql.TypeLong, 0),
+		}
+		tableInfo := WrapTableInfo("test", &model.TableInfo{
+			Columns: columns,
+		})
+		require.Nil(t, tableInfo.GetOrderedHandleKeyColumnIDs())
+	})
+}
+
 func TestIndexByName(t *testing.T) {
 	tableInfo := WrapTableInfo("test", &model.TableInfo{
 		Indices: nil,

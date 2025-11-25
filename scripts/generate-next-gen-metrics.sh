@@ -19,19 +19,17 @@ ORIGIN_FILE="metrics/grafana/ticdc_new_arch.json"
 NEXT_GEN_SHARED_FILE="${1:-metrics/grafana/ticdc_new_arch_next_gen.json}"
 NEXT_GEN_USER_FILE="${2:-metrics/grafana/ticdc_new_arch_with_keyspace_name.json}"
 
-# Detect the appropriate sed command
-SED_CMD=""
-if command -v gsed &>/dev/null; then
-	SED_CMD="gsed"
-elif [[ $(sed --version 2>/dev/null) == *"GNU"* ]]; then
-	SED_CMD="sed"
+# Determine sed command and in-place edit syntax.
+SED_CMD="sed"
+if [[ $($SED_CMD --version 2>/dev/null) == *"GNU"* ]]; then
+	echo "using GNU sed"
+	SED_INPLACE_ARGS=("-i")
 else
-	echo "This script requires GNU sed." >&2
-	echo "On macOS, you can install it with 'brew install gnu-sed' and use it as 'gsed'." >&2
-	exit 1
+	echo "using non-GNU sed"
+	SED_INPLACE_ARGS=("-i" "")
 fi
 
-"$SED_CMD" 's/namespace/keyspace_name/g;' $ORIGIN_FILE >"$NEXT_GEN_SHARED_FILE"
+"$SED_CMD" 's/namespace/keyspace_name/g;' "$ORIGIN_FILE" >"$NEXT_GEN_SHARED_FILE"
 
 if ! command -v jq &>/dev/null; then
 	echo "Error: jq is not installed. Please install it to run this script." >&2
@@ -64,12 +62,12 @@ jq '
   .panels |= filter_panels
 ' "$NEXT_GEN_SHARED_FILE" >"$NEXT_GEN_USER_FILE"
 
-sed -i "s/Test-Cluster-TiCDC-New-Arch/Test-Cluster-TiCDC-New-Arch-KeyspaceName/" "$NEXT_GEN_USER_FILE"
-sed -i "s/YiGL8hBZ0aac/lGT5hED6vqTn/" "$NEXT_GEN_USER_FILE"
+"$SED_CMD" "${SED_INPLACE_ARGS[@]}" "s/Test-Cluster-TiCDC-New-Arch/Test-Cluster-TiCDC-New-Arch-KeyspaceName/" "$NEXT_GEN_USER_FILE"
+"$SED_CMD" "${SED_INPLACE_ARGS[@]}" "s/YiGL8hBZ0aac/lGT5hED6vqTn/" "$NEXT_GEN_USER_FILE"
 
 echo "Userscope dashboard created at '$NEXT_GEN_USER_FILE'"
 
-"$SED_CMD" -i 's/tidb_cluster_id/tidb_cluster/' "$NEXT_GEN_SHARED_FILE"
-"$SED_CMD" -i 's/tidb_cluster/sharedpool_id/' "$NEXT_GEN_SHARED_FILE"
+"$SED_CMD" "${SED_INPLACE_ARGS[@]}" 's/tidb_cluster_id/tidb_cluster/' "$NEXT_GEN_SHARED_FILE"
+"$SED_CMD" "${SED_INPLACE_ARGS[@]}" 's/tidb_cluster/sharedpool_id/' "$NEXT_GEN_SHARED_FILE"
 
 echo "Sharedscope dashboard created at '$NEXT_GEN_SHARED_FILE'"

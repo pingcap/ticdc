@@ -8,8 +8,6 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
-MAX_RETRIES=10
-
 # Because we want the lossy DDL to not cause any data updates, so we can check the
 # data in the blackhole sink to see if any row is updated.
 function check_lossy_ddl() {
@@ -54,7 +52,7 @@ function run() {
 
 	run_sql_file $CUR/data/prepare.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
-	ensure $MAX_RETRIES check_lossy_ddl $WORK_DIR
+	ensure 50 check_lossy_ddl $WORK_DIR
 	cleanup_process $CDC_BINARY
 }
 
