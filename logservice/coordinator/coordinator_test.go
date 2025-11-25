@@ -51,7 +51,7 @@ func TestGetCandidateNodes(t *testing.T) {
 	tableID2 := int64(101)
 	span1 := common.TableIDToComparableSpan(common.DefaultKeyspaceID, tableID1)
 	span2 := common.TableIDToComparableSpan(common.DefaultKeyspaceID, tableID2)
-	startTs := uint64(500)
+	startTs := uint64(100)
 
 	// initialize event store states
 	coordinator.updateEventStoreState(nodeID1, &logservicepb.EventStoreState{
@@ -61,8 +61,8 @@ func TestGetCandidateNodes(t *testing.T) {
 					{
 						SubID:        1,
 						Span:         &span1,
-						CheckpointTs: 450,
-						ResolvedTs:   400,
+						CheckpointTs: 100,
+						ResolvedTs:   200,
 					},
 				},
 			},
@@ -75,20 +75,20 @@ func TestGetCandidateNodes(t *testing.T) {
 					{
 						SubID:        1,
 						Span:         &span1,
-						CheckpointTs: 440,
-						ResolvedTs:   410,
+						CheckpointTs: 90,
+						ResolvedTs:   180,
 					},
 					{
 						SubID:        2,
 						Span:         &span1,
-						CheckpointTs: 460,
-						ResolvedTs:   420,
+						CheckpointTs: 100,
+						ResolvedTs:   220,
 					},
 					{
 						SubID:        3,
 						Span:         &span1,
-						CheckpointTs: 430,
-						ResolvedTs:   405,
+						CheckpointTs: 80,
+						ResolvedTs:   160,
 					},
 				},
 			},
@@ -97,14 +97,14 @@ func TestGetCandidateNodes(t *testing.T) {
 					{
 						SubID:        4,
 						Span:         &span2,
-						CheckpointTs: 430,
-						ResolvedTs:   405,
+						CheckpointTs: 90,
+						ResolvedTs:   190,
 					},
 					{
 						SubID:        5,
 						Span:         &span2,
-						CheckpointTs: 470,
-						ResolvedTs:   430,
+						CheckpointTs: 90,
+						ResolvedTs:   240,
 					},
 				},
 			},
@@ -117,14 +117,14 @@ func TestGetCandidateNodes(t *testing.T) {
 					{
 						SubID:        1,
 						Span:         &span2,
-						CheckpointTs: 480,
-						ResolvedTs:   460,
+						CheckpointTs: 100,
+						ResolvedTs:   290,
 					},
 					{
 						SubID:        2,
 						Span:         &span2,
-						CheckpointTs: 450,
-						ResolvedTs:   440,
+						CheckpointTs: 100,
+						ResolvedTs:   230,
 					},
 				},
 			},
@@ -158,8 +158,8 @@ func TestGetCandidateNodes(t *testing.T) {
 					{
 						SubID:        1,
 						Span:         &span1,
-						CheckpointTs: 490,
-						ResolvedTs:   470,
+						CheckpointTs: 100,
+						ResolvedTs:   300,
 					},
 				},
 			},
@@ -178,14 +178,14 @@ func TestGetCandidateNodes(t *testing.T) {
 					{
 						SubID:        1,
 						Span:         &span1,
-						CheckpointTs: 480,
-						ResolvedTs:   460,
+						CheckpointTs: 100,
+						ResolvedTs:   230,
 					},
 					{
 						SubID:        2,
 						Span:         &span1,
-						CheckpointTs: 495,
-						ResolvedTs:   480,
+						CheckpointTs: 100,
+						ResolvedTs:   310,
 					},
 				},
 			},
