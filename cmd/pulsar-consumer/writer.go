@@ -192,12 +192,13 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 				zap.Any("tables", tableIDs))
 			return w.mysqlSink.WriteBlockEvent(ddl)
 		case <-ticker.C:
-			if preFlushed == flushed.Load() {
+			currentFlushed := flushed.Load()
+			if preFlushed == currentFlushed {
 				log.Panic("DDL event timeout, since the DML events are not flushed in time",
 					zap.Uint64("DDLCommitTs", commitTs), zap.String("query", ddl.Query),
-					zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
+					zap.Int("total", total), zap.Int64("flushed", currentFlushed))
 			}
-			preFlushed = flushed.Load()
+			preFlushed = currentFlushed
 		}
 	}
 }
@@ -304,11 +305,12 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 				zap.Int("total", total), zap.Duration("duration", time.Since(start)))
 			return nil
 		case <-ticker.C:
-			if preFlushed == flushed.Load() {
+			currentFlushed := flushed.Load()
+			if preFlushed == currentFlushed {
 				log.Panic("DML events are not flushed in time", zap.Uint64("watermark", watermark),
-					zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
+					zap.Int("total", total), zap.Int64("flushed", currentFlushed))
 			}
-			preFlushed = flushed.Load()
+			preFlushed = currentFlushed
 		}
 	}
 }
