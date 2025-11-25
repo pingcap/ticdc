@@ -466,6 +466,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			d.updateDispatcherStatusToWorking()
 			if err := d.handleActiveActiveCheck(event); err != nil {
 				d.HandleError(err)
+				return block
 			}
 		}
 
@@ -508,6 +509,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			}
 			if err := d.handleActiveActiveCheck(event); err != nil {
 				d.HandleError(err)
+				return block
 			}
 
 			failpoint.Inject("BlockOrWaitBeforeDealWithDDL", nil)
