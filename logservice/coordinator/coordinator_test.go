@@ -51,6 +51,7 @@ func TestGetCandidateNodes(t *testing.T) {
 	tableID2 := int64(101)
 	span1 := common.TableIDToComparableSpan(common.DefaultKeyspaceID, tableID1)
 	span2 := common.TableIDToComparableSpan(common.DefaultKeyspaceID, tableID2)
+	startTs := uint64(500)
 
 	// initialize event store states
 	coordinator.updateEventStoreState(nodeID1, &logservicepb.EventStoreState{
@@ -60,8 +61,8 @@ func TestGetCandidateNodes(t *testing.T) {
 					{
 						SubID:        1,
 						Span:         &span1,
-						CheckpointTs: 100,
-						ResolvedTs:   200,
+						CheckpointTs: 450,
+						ResolvedTs:   400,
 					},
 				},
 			},
@@ -74,20 +75,20 @@ func TestGetCandidateNodes(t *testing.T) {
 					{
 						SubID:        1,
 						Span:         &span1,
-						CheckpointTs: 90,
-						ResolvedTs:   180,
+						CheckpointTs: 440,
+						ResolvedTs:   410,
 					},
 					{
 						SubID:        2,
 						Span:         &span1,
-						CheckpointTs: 100,
-						ResolvedTs:   220,
+						CheckpointTs: 460,
+						ResolvedTs:   420,
 					},
 					{
 						SubID:        3,
 						Span:         &span1,
-						CheckpointTs: 80,
-						ResolvedTs:   160,
+						CheckpointTs: 430,
+						ResolvedTs:   405,
 					},
 				},
 			},
@@ -96,14 +97,14 @@ func TestGetCandidateNodes(t *testing.T) {
 					{
 						SubID:        4,
 						Span:         &span2,
-						CheckpointTs: 90,
-						ResolvedTs:   190,
+						CheckpointTs: 430,
+						ResolvedTs:   405,
 					},
 					{
 						SubID:        5,
 						Span:         &span2,
-						CheckpointTs: 90,
-						ResolvedTs:   240,
+						CheckpointTs: 470,
+						ResolvedTs:   430,
 					},
 				},
 			},
@@ -116,35 +117,36 @@ func TestGetCandidateNodes(t *testing.T) {
 					{
 						SubID:        1,
 						Span:         &span2,
-						CheckpointTs: 100,
-						ResolvedTs:   290,
+						CheckpointTs: 480,
+						ResolvedTs:   460,
 					},
 					{
 						SubID:        2,
 						Span:         &span2,
-						CheckpointTs: 100,
-						ResolvedTs:   230,
+						CheckpointTs: 450,
+						ResolvedTs:   440,
 					},
 				},
 			},
 		},
 	})
+	require.Len(t, coordinator.eventStoreStates.m, 3)
 
 	// check get candidates
 	{
-		nodes := coordinator.getCandidateNodes(nodeID1, &span1, uint64(100))
+		nodes := coordinator.getCandidateNodes(nodeID1, &span1, startTs)
 		assert.Equal(t, []string{nodeID2.String()}, nodes)
 	}
 	{
-		nodes := coordinator.getCandidateNodes(nodeID3, &span1, uint64(100))
+		nodes := coordinator.getCandidateNodes(nodeID3, &span1, startTs)
 		assert.Equal(t, []string{nodeID2.String(), nodeID1.String()}, nodes)
 	}
 	{
-		nodes := coordinator.getCandidateNodes(nodeID1, &span2, uint64(100))
+		nodes := coordinator.getCandidateNodes(nodeID1, &span2, startTs)
 		assert.Equal(t, []string{nodeID3.String(), nodeID2.String()}, nodes)
 	}
 	{
-		nodes := coordinator.getCandidateNodes(nodeID3, &span2, uint64(100))
+		nodes := coordinator.getCandidateNodes(nodeID3, &span2, startTs)
 		assert.Equal(t, []string{nodeID2.String()}, nodes)
 	}
 
@@ -156,15 +158,15 @@ func TestGetCandidateNodes(t *testing.T) {
 					{
 						SubID:        1,
 						Span:         &span1,
-						CheckpointTs: 100,
-						ResolvedTs:   300,
+						CheckpointTs: 490,
+						ResolvedTs:   470,
 					},
 				},
 			},
 		},
 	})
 	{
-		nodes := coordinator.getCandidateNodes(nodeID3, &span1, uint64(100))
+		nodes := coordinator.getCandidateNodes(nodeID3, &span1, startTs)
 		assert.Equal(t, []string{nodeID1.String(), nodeID2.String()}, nodes)
 	}
 
@@ -176,30 +178,61 @@ func TestGetCandidateNodes(t *testing.T) {
 					{
 						SubID:        1,
 						Span:         &span1,
-						CheckpointTs: 100,
-						ResolvedTs:   230,
+						CheckpointTs: 480,
+						ResolvedTs:   460,
 					},
 					{
 						SubID:        2,
 						Span:         &span1,
-						CheckpointTs: 100,
-						ResolvedTs:   310,
+						CheckpointTs: 495,
+						ResolvedTs:   480,
 					},
 				},
 			},
 		},
 	})
 	{
-		nodes := coordinator.getCandidateNodes(nodeID3, &span1, uint64(100))
+		nodes := coordinator.getCandidateNodes(nodeID3, &span1, startTs)
 		assert.Equal(t, []string{nodeID2.String(), nodeID1.String()}, nodes)
 	}
 
 	// remove node1 and check again
 	delete(coordinator.nodes.m, nodeID1)
 	{
-		nodes := coordinator.getCandidateNodes(nodeID3, &span1, uint64(100))
+		nodes := coordinator.getCandidateNodes(nodeID3, &span1, startTs)
 		assert.Equal(t, []string{nodeID2.String()}, nodes)
 	}
+}
+
+func TestGetCandidateNodesIgnoreResolvedEqCheckpoint(t *testing.T) {
+	coordinator := newLogCoordinatorForTest()
+
+	nodeID1 := node.ID("node-1")
+	nodeID2 := node.ID("node-2")
+	coordinator.nodes.m[nodeID1] = &node.Info{ID: nodeID1}
+	coordinator.nodes.m[nodeID2] = &node.Info{ID: nodeID2}
+
+	tableID := int64(200)
+	span := common.TableIDToComparableSpan(common.DefaultKeyspaceID, tableID)
+	startTs := uint64(600)
+
+	coordinator.updateEventStoreState(nodeID2, &logservicepb.EventStoreState{
+		TableStates: map[int64]*logservicepb.TableState{
+			tableID: {
+				Subscriptions: []*logservicepb.SubscriptionState{
+					{
+						SubID:        1,
+						Span:         &span,
+						CheckpointTs: startTs - 1,
+						ResolvedTs:   startTs - 1,
+					},
+				},
+			},
+		},
+	})
+
+	nodes := coordinator.getCandidateNodes(nodeID1, &span, startTs)
+	require.Empty(t, nodes, "resolvedTs equal to checkpointTs should not be reused")
 }
 
 func TestUpdateChangefeedStates(t *testing.T) {
@@ -289,6 +322,49 @@ func TestUpdateChangefeedStates(t *testing.T) {
 	require.Equal(t, uint64(120), cf1State.nodeStates[nodeID1])
 	_, ok = cf1State.nodeStates[nodeID2]
 	require.False(t, ok)
+}
+
+func TestUpdateChangefeedStates_RemovesNodeWhenChangefeedMissing(t *testing.T) {
+	c := newLogCoordinatorForTest()
+
+	cfID1 := common.NewChangefeedID4Test("default", "test1")
+	cfID2 := common.NewChangefeedID4Test("default", "test2")
+	nodeID1 := node.ID("node-1")
+	nodeID2 := node.ID("node-2")
+
+	// Node-1 reports cf1 and cf2, node-2 only reports cf1.
+	c.updateChangefeedStates(nodeID1, &logservicepb.ChangefeedStates{
+		States: []*logservicepb.ChangefeedStateEntry{
+			{ChangefeedID: cfID1.ToPB(), ResolvedTs: 100},
+			{ChangefeedID: cfID2.ToPB(), ResolvedTs: 200},
+		},
+	})
+	c.updateChangefeedStates(nodeID2, &logservicepb.ChangefeedStates{
+		States: []*logservicepb.ChangefeedStateEntry{
+			{ChangefeedID: cfID1.ToPB(), ResolvedTs: 110},
+		},
+	})
+
+	// Now node-1 restarts and only reports cf2.
+	c.updateChangefeedStates(nodeID1, &logservicepb.ChangefeedStates{
+		States: []*logservicepb.ChangefeedStateEntry{
+			{ChangefeedID: cfID2.ToPB(), ResolvedTs: 210},
+		},
+	})
+
+	// Node-1 should be removed from cf1, but cf1 remains because node-2 still reports it.
+	cf1State, ok := c.changefeedStates.m[cfID1.ID()]
+	require.True(t, ok)
+	require.Len(t, cf1State.nodeStates, 1)
+	_, exists := cf1State.nodeStates[nodeID1]
+	require.False(t, exists)
+	require.Equal(t, uint64(110), cf1State.nodeStates[nodeID2])
+
+	// cf2 should still have node-1.
+	cf2State, ok := c.changefeedStates.m[cfID2.ID()]
+	require.True(t, ok)
+	require.Len(t, cf2State.nodeStates, 1)
+	require.Equal(t, uint64(210), cf2State.nodeStates[nodeID1])
 }
 
 func TestReportMetricsForAffectedChangefeeds(t *testing.T) {
