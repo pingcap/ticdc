@@ -15,6 +15,7 @@ package eventservice
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -528,4 +529,23 @@ func TestSendHandshakeIfNeedConcurrency(t *testing.T) {
 		require.Equal(t, 1, handshakeCount, "Expected exactly 1 handshake event")
 		require.True(t, disp.isHandshaked(), "Dispatcher should be marked as handshaked")
 	})
+}
+
+func TestAddDispatcherFailure(t *testing.T) {
+	broker, _, ss, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	// Simulate schema store failure
+	ss.registerTableError = errors.New("mock error")
+
+	dispInfo := newMockDispatcherInfoForTest(t)
+	err := broker.addDispatcher(dispInfo)
+	require.Error(t, err)
+
+	// Verify that the dispatcher is NOT in the changefeed map
+	// Before the fix, this assertion should FAIL because the dispatcher remains in the map
+	cfStatus, ok := broker.changefeedMap.Load(dispInfo.GetChangefeedID())
+	if ok {
+		require.True(t, cfStatus.(*changefeedStatus).isEmpty(), "changefeedStatus should be empty after failed registration")
+	}
 }
