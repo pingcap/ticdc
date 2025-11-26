@@ -552,27 +552,27 @@ func TestMysqlWriter_AsyncDDL(t *testing.T) {
 	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, finished, is_syncpoint) VALUES ('default', 'test/test', '3', 1, 1, 0) ON DUPLICATE KEY UPDATE finished=VALUES(finished), ddl_ts=VALUES(ddl_ts), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
-	// {
-	// 	// add index ddl
-	// 	addIndexSQL := "alter table t add index nameIndex(name);"
-	// 	addIndexjob := helper.DDL2Job(addIndexSQL)
-	// 	require.NotNil(t, addIndexjob)
+	{
+		// add index ddl
+		addIndexSQL := "alter table t add index nameIndex(name);"
+		addIndexjob := helper.DDL2Job(addIndexSQL)
+		require.NotNil(t, addIndexjob)
 
-	// 	addIndexddlEvent := &commonEvent.DDLEvent{
-	// 		Type:       byte(timodel.ActionAddIndex),
-	// 		Query:      addIndexjob.Query,
-	// 		SchemaName: addIndexjob.SchemaName,
-	// 		TableName:  addIndexjob.TableName,
-	// 		FinishedTs: 1,
-	// 		BlockedTables: &commonEvent.InfluencedTables{
-	// 			InfluenceType: commonEvent.InfluenceTypeNormal,
-	// 			TableIDs:      []int64{1},
-	// 		},
-	// 	}
+		addIndexddlEvent := &commonEvent.DDLEvent{
+			Type:       byte(timodel.ActionAddIndex),
+			Query:      addIndexjob.Query,
+			SchemaName: addIndexjob.SchemaName,
+			TableName:  addIndexjob.TableName,
+			FinishedTs: 1,
+			BlockedTables: &commonEvent.InfluencedTables{
+				InfluenceType: commonEvent.InfluenceTypeNormal,
+				TableIDs:      []int64{1},
+			},
+		}
 
-	// 	err = writer.FlushDDLEvent(addIndexddlEvent)
-	// 	require.NoError(t, err)
-	// }
+		err = writer.FlushDDLEvent(addIndexddlEvent)
+		require.NoError(t, err)
+	}
 
 	{
 		// ensure the dml can be writen succesfully before add index finished
