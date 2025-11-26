@@ -948,6 +948,10 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 				zap.Stringer("dispatcherID", id), zap.Int64("tableID", span.GetTableID()),
 				zap.Uint64("startTs", info.GetStartTs()), zap.String("span", common.FormatTableSpan(span)))
 		}
+		status.removeDispatcher(id)
+		if status.isEmpty() {
+			c.changefeedMap.Delete(changefeedID)
+		}
 		c.sendNotReusableEvent(node.ID(info.GetServerID()), dispatcher)
 		return nil
 	}
@@ -964,6 +968,10 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 			zap.Uint64("startTs", info.GetStartTs()), zap.String("span", common.FormatTableSpan(span)),
 			zap.Error(err),
 		)
+		status.removeDispatcher(id)
+		if status.isEmpty() {
+			c.changefeedMap.Delete(changefeedID)
+		}
 		return err
 	}
 	c.dispatchers.Store(id, dispatcherPtr)

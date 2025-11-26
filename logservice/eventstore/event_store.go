@@ -420,7 +420,7 @@ func (e *eventStore) RegisterDispatcher(
 	notifier ResolvedTsNotifier,
 	onlyReuse bool,
 	bdrMode bool,
-) bool {
+) (success bool) {
 	if e.closed.Load() {
 		return false
 	}
@@ -442,11 +442,21 @@ func (e *eventStore) RegisterDispatcher(
 
 	start := time.Now()
 	defer func() {
-		log.Info("register dispatcher done",
-			zap.Stringer("dispatcherID", dispatcherID),
-			zap.String("span", common.FormatTableSpan(dispatcherSpan)),
-			zap.Uint64("startTs", startTs),
-			zap.Duration("duration", time.Since(start)))
+		if success {
+			log.Info("register dispatcher success",
+				zap.Stringer("dispatcherID", dispatcherID),
+				zap.String("span", common.FormatTableSpan(dispatcherSpan)),
+				zap.Uint64("startTs", startTs),
+				zap.Bool("onlyReuse", onlyReuse),
+				zap.Duration("duration", time.Since(start)))
+		} else {
+			log.Info("register dispatcher failed",
+				zap.Stringer("dispatcherID", dispatcherID),
+				zap.String("span", common.FormatTableSpan(dispatcherSpan)),
+				zap.Uint64("startTs", startTs),
+				zap.Bool("onlyReuse", onlyReuse),
+				zap.Duration("duration", time.Since(start)))
+		}
 	}()
 
 	stat := &dispatcherStat{
