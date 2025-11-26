@@ -259,7 +259,8 @@ func (w *Writer) doQueryAsyncDDL(tableID int64, query string) (bool, error) {
 // query the ddl jobs to find the state of the async ddl
 // if the ddl is still running, we should wait for it.
 func (w *Writer) checkAndWaitAsyncDDLDoneDownstream(tableID int64) error {
-	query := fmt.Sprintf(checkRunningAddIndexSQL, tableID)
+	checkSQL := getCheckRunningAddIndexSQL(w.cfg)
+	query := fmt.Sprintf(checkSQL, tableID)
 	running, err := w.doQueryAsyncDDL(tableID, query)
 	if err != nil {
 		return err
