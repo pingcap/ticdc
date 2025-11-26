@@ -605,6 +605,10 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 			changefeedPathMemory[cfID][dispatcherID] = uint64(0.2 * float64(available))
 		}
 
+		log.Info("collecting main dynamic stream memory metrics",
+			zap.Stringer("changefeedID", cfID),
+			zap.Int64("availableMemory", quota.AvailableMemory()))
+
 		// store total available memory from AreaMemoryMetric
 		changefeedTotalMemory[cfID] = uint64(0.2 * float64(quota.AvailableMemory()))
 	}
