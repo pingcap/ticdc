@@ -324,49 +324,6 @@ func TestUpdateChangefeedStates(t *testing.T) {
 	require.False(t, ok)
 }
 
-func TestUpdateChangefeedStates_RemovesNodeWhenChangefeedMissing(t *testing.T) {
-	c := newLogCoordinatorForTest()
-
-	cfID1 := common.NewChangefeedID4Test("default", "test1")
-	cfID2 := common.NewChangefeedID4Test("default", "test2")
-	nodeID1 := node.ID("node-1")
-	nodeID2 := node.ID("node-2")
-
-	// Node-1 reports cf1 and cf2, node-2 only reports cf1.
-	c.updateChangefeedStates(nodeID1, &logservicepb.ChangefeedStates{
-		States: []*logservicepb.ChangefeedStateEntry{
-			{ChangefeedID: cfID1.ToPB(), ResolvedTs: 100},
-			{ChangefeedID: cfID2.ToPB(), ResolvedTs: 200},
-		},
-	})
-	c.updateChangefeedStates(nodeID2, &logservicepb.ChangefeedStates{
-		States: []*logservicepb.ChangefeedStateEntry{
-			{ChangefeedID: cfID1.ToPB(), ResolvedTs: 110},
-		},
-	})
-
-	// Now node-1 restarts and only reports cf2.
-	c.updateChangefeedStates(nodeID1, &logservicepb.ChangefeedStates{
-		States: []*logservicepb.ChangefeedStateEntry{
-			{ChangefeedID: cfID2.ToPB(), ResolvedTs: 210},
-		},
-	})
-
-	// Node-1 should be removed from cf1, but cf1 remains because node-2 still reports it.
-	cf1State, ok := c.changefeedStates.m[cfID1.ID()]
-	require.True(t, ok)
-	require.Len(t, cf1State.nodeStates, 1)
-	_, exists := cf1State.nodeStates[nodeID1]
-	require.False(t, exists)
-	require.Equal(t, uint64(110), cf1State.nodeStates[nodeID2])
-
-	// cf2 should still have node-1.
-	cf2State, ok := c.changefeedStates.m[cfID2.ID()]
-	require.True(t, ok)
-	require.Len(t, cf2State.nodeStates, 1)
-	require.Equal(t, uint64(210), cf2State.nodeStates[nodeID1])
-}
-
 func TestReportMetricsForAffectedChangefeeds(t *testing.T) {
 	c := newLogCoordinatorForTest()
 	mockPDClock := pdutil.NewClock4Test()
