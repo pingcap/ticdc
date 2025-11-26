@@ -602,10 +602,11 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 		}
 		// merge path-level available memory
 		for dispatcherID, available := range quota.PathMetrics() {
-			changefeedPathMemory[cfID][dispatcherID] = uint64(available)
+			changefeedPathMemory[cfID][dispatcherID] = uint64(0.2 * float64(available))
 		}
+
 		// store total available memory from AreaMemoryMetric
-		changefeedTotalMemory[cfID] = uint64(quota.AvailableMemory())
+		changefeedTotalMemory[cfID] = uint64(0.2 * float64(quota.AvailableMemory()))
 	}
 
 	// collect from redo dynamic stream and take minimum
@@ -678,7 +679,7 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 			// get total available memory directly from AreaMemoryMetric
 			totalAvailable := uint64(changefeedTotalMemory[changefeedID])
 			if totalAvailable > 0 {
-				totalAvailable = uint64(0.6 * float64(totalAvailable))
+				// totalAvailable = uint64(0.2 * float64(totalAvailable))
 				congestionControl.AddAvailableMemoryWithDispatchers(
 					changefeedID.ID(),
 					totalAvailable,
