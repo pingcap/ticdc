@@ -1,0 +1,16 @@
+#!/bin/bash
+# parameter 1: S3_ENDPOINT
+
+set +e
+
+S3_ENDPOINT=$1
+
+i=0
+while ! curl -o /dev/null -v -s "http://$S3_ENDPOINT/minio/health/ready"; do
+	i=$(($i + 1))
+	if [ $i -gt 30 ]; then
+		echo 'Failed to start minio'
+		exit 1
+	fi
+	sleep 2
+done
