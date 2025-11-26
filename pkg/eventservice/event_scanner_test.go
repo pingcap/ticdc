@@ -686,7 +686,7 @@ func TestDMLProcessor(t *testing.T) {
 	}...)
 
 	tableInfo := ddlEvent.TableInfo
-	tableID := ddlEvent.TableInfo.TableName.TableID
+	tableID := ddlEvent.GetTableID()
 	dispatcherID := common.NewDispatcherID()
 
 	// Create a mock mounter and schema getter
@@ -870,7 +870,7 @@ func TestDMLProcessor(t *testing.T) {
 		helper.Tk().MustExec("use test")
 		ddlEvent := helper.DDL2Event("create table t2 (id int primary key, a int(50), b char(50), unique key uk_a(a))")
 		tableInfo := ddlEvent.TableInfo
-		tableID := ddlEvent.TableInfo.TableName.TableID
+		tableID := ddlEvent.GetTableID()
 
 		_, updateEvent := helper.DML2UpdateEvent("test", "t2",
 			"insert into test.t2(id, a, b) values (0, 1, 'b0')",
@@ -910,7 +910,7 @@ func TestDMLProcessorAppendRow(t *testing.T) {
 	}...)
 
 	tableInfo := ddlEvent.TableInfo
-	tableID := ddlEvent.TableInfo.TableName.TableID
+	tableID := ddlEvent.GetTableID()
 	dispatcherID := common.NewDispatcherID()
 
 	// Create a mock mounter and schema getter
@@ -1232,7 +1232,7 @@ func TestEventMerger(t *testing.T) {
 				`insert into test.t(id,c) values (0, "c0")`,
 			}...)
 
-		tableID := ddlEvent.TableInfo.TableName.TableID
+		tableID := ddlEvent.GetTableID()
 		mockSchemaGetter := NewMockSchemaStore()
 		mockSchemaGetter.AppendDDLEvent(tableID, ddlEvent)
 
@@ -1265,7 +1265,7 @@ func TestEventMerger(t *testing.T) {
 
 		merger := newEventMerger([]event.Event{&ddlEvent})
 
-		tableID := ddlEvent.TableInfo.TableName.TableID
+		tableID := ddlEvent.GetTableID()
 		mockSchemaGetter := NewMockSchemaStore()
 		mockSchemaGetter.AppendDDLEvent(tableID, ddlEvent)
 		processor := newDMLProcessor(&mockMounter{}, mockSchemaGetter, nil, false)
@@ -1301,24 +1301,24 @@ func TestEventMerger(t *testing.T) {
 			[]string{
 				`insert into test.t1(id,c) values (1, "c1")`,
 			}...)
-		mockSchemaGetter.AppendDDLEvent(ddlEvent1.TableInfo.TableName.TableID, ddlEvent1)
+		mockSchemaGetter.AppendDDLEvent(ddlEvent1.GetTableID(), ddlEvent1)
 
 		ddlEvent2 := event.DDLEvent{
 			FinishedTs: kvEvents1[0].CRTs + 10, // DDL2 after DML1
 			TableInfo:  ddlEvent1.TableInfo,
 		}
-		mockSchemaGetter.AppendDDLEvent(ddlEvent2.TableInfo.TableName.TableID, ddlEvent2)
+		mockSchemaGetter.AppendDDLEvent(ddlEvent2.GetTableID(), ddlEvent2)
 
 		ddlEvent3 := event.DDLEvent{
 			FinishedTs: kvEvents1[0].CRTs + 30, // DDL3 after DML1
 			TableInfo:  ddlEvent1.TableInfo,
 		}
-		mockSchemaGetter.AppendDDLEvent(ddlEvent3.TableInfo.TableName.TableID, ddlEvent3)
+		mockSchemaGetter.AppendDDLEvent(ddlEvent3.GetTableID(), ddlEvent3)
 
 		ddlEvents := []event.Event{&ddlEvent1, &ddlEvent2, &ddlEvent3}
 		merger := newEventMerger(ddlEvents)
 
-		tableID := ddlEvent1.TableInfo.TableName.TableID
+		tableID := ddlEvent1.GetTableID()
 		tableInfo := ddlEvent1.TableInfo
 		processor := newDMLProcessor(mounter, mockSchemaGetter, nil, false)
 
@@ -1416,7 +1416,7 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 	// Create table with unique key on column 'a'
 	helper.Tk().MustExec("use test")
 	ddlEvent := helper.DDL2Event("create table t_uk (id int primary key, a int, b char(50), unique key uk_a(a))")
-	tableID := ddlEvent.TableInfo.TableName.TableID
+	tableID := ddlEvent.GetTableID()
 
 	// Generate update event that changes UK
 	_, updateEvent := helper.DML2UpdateEvent("test", "t_uk",
@@ -1738,7 +1738,7 @@ func TestTxnEventSplit(t *testing.T) {
 	}...)
 
 	tableInfo := ddlEvent.TableInfo
-	tableID := ddlEvent.TableInfo.TableName.TableID
+	tableID := ddlEvent.GetTableID()
 	dispatcherID := common.NewDispatcherID()
 
 	// Case 1: Split by rows

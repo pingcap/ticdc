@@ -471,14 +471,10 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				}
 			}
 
-			tableID := int64(0)
-			if ddl.TableInfo != nil {
-				tableID = ddl.TableInfo.TableName.TableID
-			}
 			log.Info("dispatcher receive ddl event",
 				zap.Stringer("dispatcher", d.id),
 				zap.String("query", ddl.Query),
-				zap.Int64("table", tableID),
+				zap.Int64("table", ddl.GetTableID()),
 				zap.Uint64("commitTs", event.GetCommitTs()),
 				zap.Uint64("seq", event.GetSeq()))
 			ddl.AddPostFlushFunc(func() {

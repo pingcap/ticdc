@@ -148,6 +148,13 @@ func (d *DDLEvent) GetExtraTableName() string {
 	return d.ExtraTableName
 }
 
+func (d *DDLEvent) GetTableID() int64 {
+	if d.TableInfo != nil {
+		return d.TableInfo.TableName.TableID
+	}
+	return 0
+}
+
 func (d *DDLEvent) GetEvents() []*DDLEvent {
 	// Some ddl event may be multi-events, we need to split it into multiple messages.
 	// Such as rename table test.table1 to test.table10, test.table2 to test.table20
@@ -230,13 +237,6 @@ func (e *DDLEvent) GetDDLQuery() string {
 		return ""
 	}
 	return e.Query
-}
-
-func (e *DDLEvent) GetDDLSchemaName() string {
-	if e == nil {
-		return ""
-	}
-	return e.SchemaName
 }
 
 func (e *DDLEvent) GetDDLType() model.ActionType {

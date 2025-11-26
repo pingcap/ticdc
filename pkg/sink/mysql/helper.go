@@ -376,7 +376,7 @@ func CreateMysqlDBConn(dsnStr string) (*sql.DB, error) {
 }
 
 func needSwitchDB(event *commonEvent.DDLEvent) bool {
-	if len(event.GetDDLSchemaName()) == 0 {
+	if len(event.GetSchemaName()) == 0 {
 		return false
 	}
 	if event.GetDDLType() == timodel.ActionCreateSchema || event.GetDDLType() == timodel.ActionDropSchema {
