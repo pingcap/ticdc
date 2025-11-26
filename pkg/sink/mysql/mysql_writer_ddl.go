@@ -25,6 +25,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
+	"github.com/pingcap/tidb/dumpling/export"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"go.uber.org/zap"
 )
@@ -216,42 +217,35 @@ func (w *Writer) waitAsyncDDLDone(event *commonEvent.DDLEvent) {
 }
 
 // true means the async ddl is still running, false means the async ddl is done.
-func (w *Writer) doQueryAsyncDDL(tableID int64, query string) (bool, error) {
+func (w *Writer) doQueryAsyncDDL(query string) (bool, error) {
 	start := time.Now()
 	rows, err := w.db.QueryContext(w.ctx, query)
 	log.Debug("query duration", zap.Any("duration", time.Since(start)), zap.Any("query", query))
 	if err != nil {
 		return false, errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to query ddl jobs table; Query is %s", query)))
 	}
-
-	defer rows.Close()
-	var jobID int64
-	var jobType string
-	var schemaState string
-	var state string
-
-	noRows := true
-	for rows.Next() {
-		noRows = false
-		err := rows.Scan(&jobID, &jobType, &schemaState, &state)
-		if err != nil {
-			return false, errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to query ddl jobs table; Query is %s", query)))
-		}
-
-		log.Info("async ddl is still running",
+	rets, err := export.GetSpecifiedColumnValuesAndClose(rows, "JOB_ID", "JOB_TYPE", "SCHEMA_STATE", "STATE", "QUERY")
+	if err != nil {
+		log.Error("check previous asynchronous ddl failed",
 			zap.String("changefeed", w.ChangefeedID.String()),
-			zap.Duration("checkDuration", time.Since(start)),
-			zap.Any("tableID", tableID),
-			zap.Any("jobID", jobID),
-			zap.String("jobType", jobType),
-			zap.String("schemaState", schemaState),
-			zap.String("state", state))
-		break
+			zap.Error(err))
+		return false, errors.Trace(err)
 	}
 
-	if noRows {
+	if len(rets) == 0 {
 		return false, nil
 	}
+	ret := rets[0]
+	jobID, jobType, schemaState, state, currentQuery := ret[0], ret[1], ret[2], ret[3], ret[4]
+	log.Info("async ddl is still running",
+		zap.String("changefeed", w.ChangefeedID.String()),
+		zap.Duration("checkDuration", time.Since(start)),
+		zap.String("currentQuery", currentQuery),
+		zap.String("query", query),
+		zap.Any("jobID", jobID),
+		zap.String("jobType", jobType),
+		zap.String("schemaState", schemaState),
+		zap.String("state", state))
 
 	return true, nil
 }
@@ -261,7 +255,7 @@ func (w *Writer) doQueryAsyncDDL(tableID int64, query string) (bool, error) {
 func (w *Writer) checkAndWaitAsyncDDLDoneDownstream(tableID int64) error {
 	checkSQL := getCheckRunningAddIndexSQL(w.cfg)
 	query := fmt.Sprintf(checkSQL, tableID)
-	running, err := w.doQueryAsyncDDL(tableID, query)
+	running, err := w.doQueryAsyncDDL(query)
 	if err != nil {
 		return err
 	}
@@ -277,7 +271,7 @@ func (w *Writer) checkAndWaitAsyncDDLDoneDownstream(tableID int64) error {
 		case <-w.ctx.Done():
 			return nil
 		case <-ticker.C:
-			running, err = w.doQueryAsyncDDL(tableID, query)
+			running, err = w.doQueryAsyncDDL(query)
 			if err != nil {
 				return err
 			}

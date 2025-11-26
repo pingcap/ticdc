@@ -34,17 +34,17 @@ import (
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/charset"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
-	tmysql "github.com/pingcap/tidb/pkg/parser/mysql"
 	"go.uber.org/zap"
 )
 
 const checkRunningAddIndexSQL = `
-SELECT JOB_ID, JOB_TYPE, STATE, QUERY
+SELECT *
 FROM information_schema.ddl_jobs
 WHERE DB_NAME = "%s"
     AND TABLE_NAME = "%s"
     AND JOB_TYPE LIKE "add index%%"
     AND (STATE = "running" OR STATE = "queueing");
+LIMIT 1;
 `
 
 // Ref: https://github.com/pingcap/tidb/issues/55725
@@ -57,7 +57,7 @@ WHERE DB_NAME = "%s"
 LIMIT 1;
 `
 
-const checkRunningSQL = `SELECT JOB_ID, JOB_TYPE, SCHEMA_STATE, SCHEMA_ID, TABLE_ID, STATE, QUERY FROM information_schema.ddl_jobs 
+const checkRunningSQL = `SELECT * FROM information_schema.ddl_jobs 
 	WHERE CREATE_TIME >= "%s" AND QUERY = "%s";`
 
 // CheckIfBDRModeIsSupported checks if the downstream supports set tidb_cdc_write_source variable
@@ -563,15 +563,15 @@ func AdjustSQLModeCompatible(sqlModes string) (string, error) {
 	disable := strings.Join(needDisable, ",")
 	enable := strings.Join(needEnable, ",")
 
-	mode, err := tmysql.GetSQLMode(sqlModes)
+	mode, err := mysql.GetSQLMode(sqlModes)
 	if err != nil {
 		return sqlModes, err
 	}
-	disableMode, err2 := tmysql.GetSQLMode(disable)
+	disableMode, err2 := mysql.GetSQLMode(disable)
 	if err2 != nil {
 		return sqlModes, err2
 	}
-	enableMode, err3 := tmysql.GetSQLMode(enable)
+	enableMode, err3 := mysql.GetSQLMode(enable)
 	if err3 != nil {
 		return sqlModes, err3
 	}
@@ -583,9 +583,9 @@ func AdjustSQLModeCompatible(sqlModes string) (string, error) {
 }
 
 // GetSQLModeStrBySQLMode get string represent of sql_mode by sql_mode.
-func GetSQLModeStrBySQLMode(sqlMode tmysql.SQLMode) string {
+func GetSQLModeStrBySQLMode(sqlMode mysql.SQLMode) string {
 	var sqlModeStr []string
-	for str, SQLMode := range tmysql.Str2SQLMode {
+	for str, SQLMode := range mysql.Str2SQLMode {
 		if sqlMode&SQLMode != 0 {
 			sqlModeStr = append(sqlModeStr, str)
 		}
