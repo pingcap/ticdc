@@ -91,13 +91,7 @@ func (m *MoveDispatcherOperator) Schedule() *messaging.TargetMessage {
 		if !m.sendThrottler.shouldSend() {
 			return nil
 		}
-
-		msg, err := m.replicaSet.NewAddDispatcherMessage(m.dest)
-		if err != nil {
-			log.Warn("generate dispatcher message failed, retry later", zap.String("operator", m.String()), zap.Error(err))
-			return nil
-		}
-		return msg
+		return m.replicaSet.NewAddDispatcherMessage(m.dest)
 	}
 
 	if !m.sendThrottler.shouldSend() {

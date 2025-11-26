@@ -220,7 +220,7 @@ func TestUpdateSchemaID(t *testing.T) {
 	}, true)
 	event.scheduleBlockEvent()
 	require.Equal(t, 1, spanController.GetAbsentSize())
-	// check the schema id and map is updated
+	// check the schema changefeedID and map is updated
 	require.Len(t, spanController.GetTasksBySchemaID(1), 0)
 	require.Len(t, spanController.GetTasksBySchemaID(2), 1)
 	require.Equal(t, spanController.GetTasksByTableID(1)[0].GetSchemaID(), int64(2))

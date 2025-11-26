@@ -138,7 +138,7 @@ func (m *Manager) Run(ctx context.Context) error {
 				if cf.removed.Load() {
 					cf.Close()
 					log.Info("maintainer removed, remove it from dynamic stream",
-						zap.Stringer("changefeed", cf.id),
+						zap.Stringer("changefeed", cf.changefeedID),
 						zap.Uint64("checkpointTs", cf.getWatermark().CheckpointTs),
 					)
 					m.maintainers.Delete(key)
@@ -268,7 +268,7 @@ func (m *Manager) onDispatchMaintainerRequest(
 	msg *messaging.TargetMessage,
 ) *heartbeatpb.MaintainerStatus {
 	if m.coordinatorID != msg.From {
-		log.Warn("ignore invalid coordinator id",
+		log.Warn("ignore invalid coordinator changefeedID",
 			zap.Any("request", msg),
 			zap.Any("coordinatorID", m.coordinatorID),
 			zap.Stringer("from", msg.From))

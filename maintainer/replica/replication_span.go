@@ -95,9 +95,8 @@ func NewWorkingSpanReplication(
 		zap.Uint64("checkpointTs", status.CheckpointTs),
 		zap.String("componentStatus", status.ComponentStatus.String()),
 		zap.Int64("schemaID", SchemaID),
-		zap.Uint32("keyspaceID", span.KeyspaceID),
 		zap.Int64("tableID", span.TableID),
-		zap.Int64("groupID", int64(r.groupID)),
+		zap.Int64("groupID", r.groupID),
 		zap.String("start", hex.EncodeToString(span.StartKey)),
 		zap.String("end", hex.EncodeToString(span.EndKey)))
 	return r
@@ -147,7 +146,9 @@ func (r *SpanReplication) initGroupID() {
 	if !bytes.Equal(span.StartKey, totalSpan.StartKey) || !bytes.Equal(span.EndKey, totalSpan.EndKey) {
 		r.groupID = replica.GenGroupID(replica.GroupTable, span.TableID)
 	}
-	log.Info("init groupID", zap.Any("span", span), zap.Any("totalSpan", totalSpan))
+	log.Info("init groupID",
+		zap.String("changefeedID", r.ChangefeedID.Name()), zap.Any("groupID", r.groupID),
+		zap.Any("span", span), zap.Any("totalSpan", totalSpan))
 }
 
 func (r *SpanReplication) GetStatus() *heartbeatpb.TableSpanStatus {
@@ -220,7 +221,7 @@ func (r *SpanReplication) GetGroupID() replica.GroupID {
 	return r.groupID
 }
 
-func (r *SpanReplication) NewAddDispatcherMessage(server node.ID) (*messaging.TargetMessage, error) {
+func (r *SpanReplication) NewAddDispatcherMessage(server node.ID) *messaging.TargetMessage {
 	return messaging.NewSingleTargetMessage(server,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.ScheduleDispatcherRequest{
@@ -233,7 +234,7 @@ func (r *SpanReplication) NewAddDispatcherMessage(server node.ID) (*messaging.Ta
 				Mode:         r.GetMode(),
 			},
 			ScheduleAction: heartbeatpb.ScheduleAction_Create,
-		}), nil
+		})
 }
 
 func (r *SpanReplication) NewRemoveDispatcherMessage(server node.ID) *messaging.TargetMessage {

@@ -168,11 +168,6 @@ func NewDispatcherManager(
 		integrityCfg = cfConfig.SinkConfig.Integrity.ToPB()
 	}
 
-	log.Info("New DispatcherManager",
-		zap.Stringer("changefeedID", changefeedID),
-		zap.String("config", cfConfig.String()),
-		zap.String("filterConfig", filterCfg.String()),
-	)
 	manager := &DispatcherManager{
 		dispatcherMap:         newDispatcherMap[*dispatcher.EventDispatcher](),
 		changefeedID:          changefeedID,
@@ -290,7 +285,7 @@ func NewDispatcherManager(
 		manager.collectBlockStatusRequest(ctx)
 	}()
 
-	log.Info("event dispatcher manager created",
+	log.Info("dispatcher manager initialized",
 		zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("maintainerID", maintainerID),
 		zap.Uint64("startTs", startTs),
@@ -299,6 +294,7 @@ func NewDispatcherManager(
 		zap.Uint64("redoQuota", manager.redoQuota),
 		zap.Bool("redoEnable", manager.RedoEnable),
 		zap.Bool("outputRawChangeEvent", manager.sharedInfo.IsOutputRawChangeEvent()),
+		zap.String("filterConfig", filterCfg.String()),
 	)
 	return manager, tableTriggerStartTs, nil
 }

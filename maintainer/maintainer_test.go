@@ -183,7 +183,7 @@ func (m *mockDispatcherManager) onDispatchRequest(
 ) {
 	request := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
 	if m.maintainerID != msg.From {
-		log.Warn("ignore invalid maintainer id",
+		log.Warn("ignore invalid maintainer changefeedID",
 			zap.Any("request", request),
 			zap.Any("maintainer", msg.From))
 		return

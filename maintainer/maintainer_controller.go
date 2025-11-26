@@ -161,8 +161,8 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 		}
 		nodeID := stm.GetNodeID()
 		if nodeID != from {
-			// todo: handle the case that the node id is mismatch
-			log.Warn("node id not match",
+			// todo: handle the case that the node changefeedID is mismatch
+			log.Warn("node changefeedID not match",
 				zap.String("changefeed", c.changefeedID.Name()),
 				zap.Any("from", from),
 				zap.Stringer("node", nodeID))

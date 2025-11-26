@@ -147,16 +147,17 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	cfConfig := &config.ChangefeedConfig{}
 	if err := json.Unmarshal(req.Config, cfConfig); err != nil {
 		log.Panic("failed to unmarshal changefeed config",
-			zap.String("changefeedID", cfId.Name()), zap.Error(err))
-		return err
+			zap.String("changefeedID", cfId.Name()), zap.Any("data", req.Config), zap.Error(err))
 	}
 
 	m.mutex.Lock()
 	manager, exists := m.dispatcherManagers[cfId]
 	m.mutex.Unlock()
 
-	var err error
-	var startTs uint64
+	var (
+		err     error
+		startTs uint64
+	)
 	if !exists {
 		start := time.Now()
 		manager, startTs, err = dispatchermanager.
@@ -170,7 +171,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 				from,
 				req.IsNewChangefeed,
 			)
-			// Fast return the error to maintainer.
+		// Fast return the error to maintainer.
 		if err != nil {
 			log.Error("failed to create new dispatcher manager",
 				zap.Any("changefeedID", cfId.Name()), zap.Duration("duration", time.Since(start)), zap.Error(err))
