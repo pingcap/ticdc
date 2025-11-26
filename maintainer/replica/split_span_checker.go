@@ -230,7 +230,7 @@ func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
 			status.trafficScore++
 			log.Debug("update traffic score",
 				zap.String("changefeed", s.changefeedID.String()),
-				zap.Int64("group", int64(s.groupID)),
+				zap.Int64("group", s.groupID),
 				zap.String("span", status.SpanReplication.ID.String()),
 				zap.Any("trafficScore", status.trafficScore),
 				zap.Any("eventSizePerSecond", status.GetStatus().EventSizePerSecond),
@@ -247,7 +247,8 @@ func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
 		if time.Since(status.regionCheckTime) > regionCheckInterval {
 			regions, err := s.regionCache.LoadRegionsInKeyRange(tikv.NewBackoffer(context.Background(), 500), status.Span.StartKey, status.Span.EndKey)
 			if err != nil {
-				log.Warn("list regions failed, skip check region count", zap.String("changefeed", s.changefeedID.Name()), zap.String("span", status.Span.String()), zap.Error(err))
+				log.Warn("list regions failed, skip check region count",
+					zap.String("changefeed", s.changefeedID.Name()), zap.String("span", common.FormatTableSpan(status.Span)), zap.Error(err))
 			} else {
 				status.regionCount = len(regions)
 				status.regionCheckTime = time.Now()
@@ -947,7 +948,10 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 	for _, status := range s.allTasks {
 		nodeID := status.GetNodeID()
 		if nodeID == "" {
-			log.Info("split span checker: node id is empty, please check the node id", zap.String("changefeed", s.changefeedID.Name()), zap.String("dispatcherID", status.ID.String()), zap.String("span", status.Span.String()))
+			log.Info("split span checker: node id is empty, please check the node id",
+				zap.String("changefeed", s.changefeedID.Name()),
+				zap.String("dispatcherID", status.ID.String()),
+				zap.String("span", common.FormatTableSpan(status.Span)))
 			continue
 		}
 

@@ -400,8 +400,8 @@ func (oc *Controller) AddMergeOperator(
 		} else {
 			log.Error("failed to add occupy dispatcher operator",
 				zap.String("changefeed", oc.changefeedID.String()),
-				zap.Int64("group", int64(replicaSet.GetGroupID())),
-				zap.String("span", replicaSet.Span.String()),
+				zap.Int64("group", replicaSet.GetGroupID()),
+				zap.String("span", common.FormatTableSpan(replicaSet.Span)),
 				zap.String("operator", operator.String()))
 			// set prev op taskRemoved
 			for _, op := range operators {

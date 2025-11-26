@@ -823,6 +823,7 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 		return w, true
 	}
 	log.Info("dispatcher is not ready to close",
+		zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
 		zap.Stringer("dispatcher", d.id),
 		zap.Int64("mode", d.mode),
 		zap.Bool("sinkIsNormal", d.sink.IsNormal()),

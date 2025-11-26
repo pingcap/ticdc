@@ -148,7 +148,7 @@ func (r *SpanReplication) initGroupID() {
 	}
 	log.Info("init groupID",
 		zap.String("changefeedID", r.ChangefeedID.Name()), zap.Any("groupID", r.groupID),
-		zap.Any("span", span), zap.Any("totalSpan", totalSpan))
+		zap.Any("span", common.FormatTableSpan(&span)), zap.Any("totalSpan", common.FormatTableSpan(&totalSpan)))
 }
 
 func (r *SpanReplication) GetStatus() *heartbeatpb.TableSpanStatus {
