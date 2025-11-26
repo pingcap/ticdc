@@ -38,8 +38,6 @@ import (
 const (
 	// defaultConflictDetectorSlots indicates the default slot count of conflict detector. TODO:check this
 	defaultConflictDetectorSlots uint64 = 16 * 1024
-	progressDatabase                    = "tidb_cdc"
-	progressTableName                   = "ticdcProgressTable"
 )
 
 // Sink is responsible for writing data to mysql downstream.
@@ -95,7 +93,7 @@ func New(
 	if interval <= 0 {
 		interval = 30 * time.Minute
 	}
-	return newMySQLSink(ctx, changefeedID, cfg, db, config.BDRMode, config.EnableActiveActive, config.UpstreamID, interval), nil
+	return newMySQLSink(ctx, changefeedID, cfg, db, config.BDRMode, config.EnableActiveActive, interval), nil
 }
 
 func newMySQLSink(
@@ -105,7 +103,6 @@ func newMySQLSink(
 	db *sql.DB,
 	bdrMode bool,
 	enableActiveActive bool,
-	upstreamID uint64,
 	progressInterval time.Duration,
 ) *Sink {
 	stat := metrics.NewStatistics(changefeedID, "TxnSink")
@@ -132,7 +129,7 @@ func newMySQLSink(
 	}
 	result.ddlWriter = mysql.NewWriter(ctx, len(result.dmlWriter), db, cfg, changefeedID, stat)
 	if enableActiveActive {
-		result.progressWriter = mysql.NewProgressWriter(ctx, db, changefeedID, upstreamID)
+		result.progressWriter = mysql.NewProgressWriter(ctx, db, changefeedID)
 	}
 	return result
 }

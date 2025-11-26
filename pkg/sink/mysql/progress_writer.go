@@ -16,11 +16,11 @@ package mysql
 import (
 	"context"
 	"database/sql"
-	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 )
@@ -35,7 +35,6 @@ type ProgressWriter struct {
 	ctx          context.Context
 	db           *sql.DB
 	changefeedID common.ChangeFeedID
-	upstreamID   uint64
 
 	tableSchemaStore *util.TableSchemaStore
 
@@ -44,12 +43,11 @@ type ProgressWriter struct {
 }
 
 // NewProgressWriter creates a new writer for active-active progress updates.
-func NewProgressWriter(ctx context.Context, db *sql.DB, changefeedID common.ChangeFeedID, upstreamID uint64) *ProgressWriter {
+func NewProgressWriter(ctx context.Context, db *sql.DB, changefeedID common.ChangeFeedID) *ProgressWriter {
 	return &ProgressWriter{
 		ctx:          ctx,
 		db:           db,
 		changefeedID: changefeedID,
-		upstreamID:   upstreamID,
 	}
 }
 
@@ -74,22 +72,22 @@ func (w *ProgressWriter) Flush(checkpoint uint64) error {
 	}
 
 	changefeed := w.changefeedID.DisplayName.String()
-	upstream := strconv.FormatUint(w.upstreamID, 10)
 	var builder strings.Builder
 	builder.WriteString("INSERT INTO `")
 	builder.WriteString(progressDatabase)
 	builder.WriteString("`.`")
 	builder.WriteString(progressTableName)
-	builder.WriteString("` (changefeed_id, upstreamID, database_name, table_name, checkpoint_ts) VALUES ")
+	builder.WriteString("` (changefeed_id, cluster_id, database_name, table_name, checkpoint_ts) VALUES ")
 
 	args := make([]interface{}, 0, len(tableNames)*5)
 	written := 0
+	clusterID := config.GetGlobalServerConfig().ClusterID
 	for _, tbl := range tableNames {
 		if written > 0 {
 			builder.WriteString(",")
 		}
 		builder.WriteString("(?,?,?,?,?)")
-		args = append(args, changefeed, upstream, tbl.SchemaName, tbl.TableName, checkpoint)
+		args = append(args, changefeed, clusterID, tbl.SchemaName, tbl.TableName, checkpoint)
 		written++
 	}
 
@@ -113,11 +111,11 @@ func (w *ProgressWriter) ensureProgressTable(ctx context.Context) error {
 	}
 	createTable := "CREATE TABLE IF NOT EXISTS `" + progressDatabase + "`.`" + progressTableName + "` (" +
 		"changefeed_id VARCHAR(255) NOT NULL COMMENT 'Unique identifier for the changefeed synchronization task'," +
-		"upstreamID VARCHAR(255) NOT NULL COMMENT 'Unique identifier for the upstream cluster'," +
+		"cluster_id VARCHAR(255) NOT NULL COMMENT 'TiCDC cluster ID'," +
 		"database_name VARCHAR(255) NOT NULL COMMENT 'Name of the upstream database'," +
 		"table_name VARCHAR(255) NOT NULL COMMENT 'Name of the upstream table'," +
 		"checkpoint_ts BIGINT UNSIGNED NOT NULL COMMENT 'Safe watermark CommitTS indicating the data has been synchronized'," +
-		"PRIMARY KEY (changefeed_id, upstreamID, database_name, table_name)" +
+		"PRIMARY KEY (changefeed_id, cluster_id, database_name, table_name)" +
 		") COMMENT='TiCDC synchronization progress table for HardDelete safety check'"
 	if _, err := w.db.ExecContext(ctx, createTable); err != nil {
 		return errors.Trace(err)

@@ -139,7 +139,6 @@ type ChangefeedConfig struct {
 	StartTs       uint64         `json:"start_ts"`
 	TargetTs      uint64         `json:"target_ts"`
 	SinkURI       string         `json:"sink_uri"`
-	UpstreamID    uint64         `json:"upstream_id"`
 	ReplicaConfig *ReplicaConfig `json:"replica_config"`
 	PDConfig
 }

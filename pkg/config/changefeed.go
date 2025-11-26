@@ -184,7 +184,6 @@ type ChangefeedConfig struct {
 	StartTS      uint64              `json:"start_ts"`
 	TargetTS     uint64              `json:"target_ts"`
 	SinkURI      string              `json:"sink_uri"`
-	UpstreamID   uint64              `json:"upstream_id"`
 	// timezone used when checking sink uri
 	TimeZone      string `json:"timezone" default:"system"`
 	CaseSensitive bool   `json:"case_sensitive" default:"false"`
@@ -276,7 +275,6 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		StartTS:                      info.StartTs,
 		TargetTS:                     info.TargetTs,
 		SinkURI:                      info.SinkURI,
-		UpstreamID:                   info.UpstreamID,
 		CaseSensitive:                info.Config.CaseSensitive,
 		ForceReplicate:               info.Config.ForceReplicate,
 		SinkConfig:                   info.Config.Sink,
