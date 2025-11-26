@@ -678,6 +678,7 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 			// get total available memory directly from AreaMemoryMetric
 			totalAvailable := uint64(changefeedTotalMemory[changefeedID])
 			if totalAvailable > 0 {
+				totalAvailable = uint64(0.6 * float64(totalAvailable))
 				congestionControl.AddAvailableMemoryWithDispatchers(
 					changefeedID.ID(),
 					totalAvailable,
