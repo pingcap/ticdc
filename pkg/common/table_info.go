@@ -193,33 +193,21 @@ func (ti *TableInfo) GetIndices() []*model.IndexInfo {
 
 // IsActiveActiveTable indicates whether the table participates in active-active replication.
 func (ti *TableInfo) IsActiveActiveTable() bool {
-	if ti == nil {
-		return false
-	}
 	return ti.ActiveActiveTable
 }
 
 // IsSoftDeleteTable indicates whether the table relies on TiDB soft-delete semantics.
 func (ti *TableInfo) IsSoftDeleteTable() bool {
-	if ti == nil {
-		return false
-	}
 	return ti.SoftDeleteTable
 }
 
 // SetActiveActiveTable marks the table as active-active.
 func (ti *TableInfo) SetActiveActiveTable(enabled bool) {
-	if ti == nil {
-		return
-	}
 	ti.ActiveActiveTable = enabled
 }
 
 // SetSoftDeleteTable marks the table as using soft-delete.
 func (ti *TableInfo) SetSoftDeleteTable(enabled bool) {
-	if ti == nil {
-		return
-	}
 	ti.SoftDeleteTable = enabled
 }
 
@@ -571,18 +559,23 @@ func (ti *TableInfo) IsHandleKey(colID int64) bool {
 }
 
 func (ti *TableInfo) ToTiDBTableInfo() *model.TableInfo {
-	return &model.TableInfo{
-		ID:         ti.TableName.TableID,
-		Name:       ast.NewCIStr(ti.TableName.Table),
-		Charset:    ti.Charset,
-		Collate:    ti.Collate,
-		Comment:    ti.Comment,
-		View:       ti.View,
-		Sequence:   ti.Sequence,
-		Columns:    ti.columnSchema.Columns,
-		Indices:    ti.columnSchema.Indices,
-		PKIsHandle: ti.columnSchema.PKIsHandle,
+	result := &model.TableInfo{
+		ID:             ti.TableName.TableID,
+		Name:           ast.NewCIStr(ti.TableName.Table),
+		Charset:        ti.Charset,
+		Collate:        ti.Collate,
+		Comment:        ti.Comment,
+		View:           ti.View,
+		Sequence:       ti.Sequence,
+		Columns:        ti.columnSchema.Columns,
+		Indices:        ti.columnSchema.Indices,
+		PKIsHandle:     ti.columnSchema.PKIsHandle,
+		IsActiveActive: ti.ActiveActiveTable,
 	}
+	if ti.SoftDeleteTable {
+		result.SoftdeleteInfo = &model.SoftdeleteInfo{}
+	}
+	return result
 }
 
 func newTableInfo(schema string, table string, tableID int64, isPartition bool, columnSchema *columnSchema, tableInfo *model.TableInfo) *TableInfo {
@@ -593,14 +586,16 @@ func newTableInfo(schema string, table string, tableID int64, isPartition bool, 
 			TableID:     tableID,
 			IsPartition: isPartition,
 		},
-		columnSchema:     columnSchema,
-		HasPKOrNotNullUK: OriginalHasPKOrNotNullUK(tableInfo),
-		View:             tableInfo.View,
-		Sequence:         tableInfo.Sequence,
-		Charset:          tableInfo.Charset,
-		Collate:          tableInfo.Collate,
-		Comment:          tableInfo.Comment,
-		UpdateTS:         tableInfo.UpdateTS,
+		columnSchema:      columnSchema,
+		HasPKOrNotNullUK:  OriginalHasPKOrNotNullUK(tableInfo),
+		View:              tableInfo.View,
+		Sequence:          tableInfo.Sequence,
+		Charset:           tableInfo.Charset,
+		Collate:           tableInfo.Collate,
+		Comment:           tableInfo.Comment,
+		UpdateTS:          tableInfo.UpdateTS,
+		ActiveActiveTable: tableInfo.IsActiveActive,
+		SoftDeleteTable:   tableInfo.SoftdeleteInfo != nil,
 	}
 }
 
