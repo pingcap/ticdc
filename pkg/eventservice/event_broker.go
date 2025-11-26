@@ -620,6 +620,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	log.Info("scan finished",
 		zap.Stringer("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
 		zap.Any("dataRange", dataRange), zap.Int64("scannedBytes", scannedBytes),
+		zap.Int64("sl.maxDMLBytes", sl.maxDMLBytes),
 		zap.Uint64("receivedResolvedTs", task.receivedResolvedTs.Load()),
 		zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()),
 		zap.Bool("interrupted", interrupted),
