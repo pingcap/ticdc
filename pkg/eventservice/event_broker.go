@@ -1162,6 +1162,10 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 	holder := make(map[common.GID]uint64, len(availables))
 	dispatcherAvailable := make(map[common.DispatcherID]uint64, len(availables))
 	for _, item := range availables {
+		log.Info("receive congestion control",
+			zap.String("from", from.String()),
+			zap.Any("gid", item.Gid),
+			zap.Uint64("available", item.Available))
 		holder[item.Gid] = item.Available
 		for dispatcherID, available := range item.DispatcherAvailable {
 			dispatcherAvailable[dispatcherID] = available
