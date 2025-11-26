@@ -269,6 +269,10 @@ func (a *dispatcherStat) getCurrentScanLimitInBytes() int64 {
 		a.currentScanLimitInBytes.Store(newLimit)
 		a.lastUpdateScanLimitTime.Store(time.Now())
 	}
+	log.Info("update scan limit",
+		zap.Stringer("dispatcherID", a.id),
+		zap.Int64("res", res),
+		zap.Int64("maxScanLimitInBytes", a.maxScanLimitInBytes.Load()))
 	return res
 }
 
