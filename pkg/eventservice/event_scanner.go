@@ -482,10 +482,18 @@ func (s *session) exceedLimit(nBytes int64, batchDMLs ...*event.BatchDMLEvent) b
 		eventCount := len(batchDML.DMLEvents)
 		return (s.eventBytes + int64(eventCount)) >= s.limit.maxDMLBytes
 	}
+	// calculate the rows
+	rows := int32(0)
+	for _, batchDML := range batchDMLs {
+		for _, dml := range batchDML.DMLEvents {
+			rows += dml.Len()
+		}
+	}
 	log.Info("checking scan limit",
 		zap.Stringer("dispatcherID", s.dispatcherStat.id),
 		zap.Int64("currentEventBytes", s.eventBytes),
 		zap.Int64("newEventBytes", nBytes),
+		zap.Int32("newRows", rows),
 		zap.Int64("maxDMLBytes", s.limit.maxDMLBytes))
 	return (s.eventBytes + nBytes) >= s.limit.maxDMLBytes
 }
