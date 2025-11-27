@@ -174,7 +174,7 @@ func (c *Controller) splitTableByRegionCount(tableID int64, mode int64) error {
 	}
 	splitter := spanController.GetSplitter()
 	if splitter == nil {
-return errors.ErrInternalCheckFailed.GenWithStackByArgs("splitter is nil")
+		return errors.ErrInternalCheckFailed.GenWithStackByArgs("splitter is nil")
 	}
 	splitTableSpans := splitter.Split(context.Background(), wholeSpan, 0, split.SplitTypeRegionCount)
 
