@@ -151,8 +151,7 @@ type replicaConfig struct {
 	// BDR(Bidirectional Replication) is a feature that allows users to
 	// replicate data of same tables from TiDB-1 to TiDB-2 and vice versa.
 	// This feature is only available for TiDB.
-	BDRMode            *bool `toml:"bdr-mode" json:"bdr-mode,omitempty"`
-	EnableActiveActive *bool `toml:"enable-active-active" json:"enable-active-active,omitempty"`
+	BDRMode *bool `toml:"bdr-mode" json:"bdr-mode,omitempty"`
 	// SyncPointInterval is only available when the downstream is DB.
 	SyncPointInterval *time.Duration `toml:"sync-point-interval" json:"sync-point-interval,omitempty"`
 	// SyncPointRetention is only available when the downstream is DB.
@@ -169,6 +168,7 @@ type replicaConfig struct {
 	ChangefeedErrorStuckDuration *time.Duration      `toml:"changefeed-error-stuck-duration" json:"changefeed-error-stuck-duration,omitempty"`
 	SyncedStatus                 *SyncedStatusConfig `toml:"synced-status" json:"synced-status,omitempty"`
 
+	EnableActiveActive           *bool          `toml:"enable-active-active" json:"enable-active-active,omitempty"`
 	ActiveActiveProgressInterval *time.Duration `toml:"active-active-progress-interval" json:"active-active-progress-interval,omitempty"`
 
 	// Deprecated: we don't use this field since v8.0.0.
@@ -347,9 +347,10 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 			return cerror.ErrInvalidReplicaConfig.
 				FastGenByArgs("enable-active-active requires bdr-mode to be true")
 		}
-		if !IsMySQLCompatibleScheme(GetScheme(sinkURI)) {
+		scheme := GetScheme(sinkURI)
+		if !IsMySQLCompatibleScheme(scheme) {
 			return cerror.ErrInvalidReplicaConfig.
-				FastGenByArgs("enable-active-active only supports mysql/tidb sink")
+				FastGenByArgs("enable-active-active only supports tidb sink")
 		}
 		if c.Consistent != nil && redo.IsConsistentEnabled(c.Consistent.Level) {
 			return cerror.ErrInvalidReplicaConfig.

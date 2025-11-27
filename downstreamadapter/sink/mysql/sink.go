@@ -89,11 +89,7 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	interval := config.ActiveActiveProgressInterval
-	if interval <= 0 {
-		interval = 30 * time.Minute
-	}
-	return newMySQLSink(ctx, changefeedID, cfg, db, config.BDRMode, config.EnableActiveActive, interval), nil
+	return newMySQLSink(ctx, changefeedID, cfg, db, config.BDRMode, config.EnableActiveActive, config.ActiveActiveProgressInterval), nil
 }
 
 func newMySQLSink(

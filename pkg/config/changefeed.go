@@ -262,14 +262,6 @@ type ChangeFeedInfo struct {
 }
 
 func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
-	activeActiveInterval := defaultActiveActiveProgressInterval
-	if info.Config.ActiveActiveProgressInterval != nil {
-		activeActiveInterval = *info.Config.ActiveActiveProgressInterval
-	} else if defaultReplicaConfig.ActiveActiveProgressInterval != nil &&
-		info.Config.ActiveActiveProgressInterval == nil {
-		activeActiveInterval = *defaultReplicaConfig.ActiveActiveProgressInterval
-	}
-
 	return &ChangefeedConfig{
 		ChangefeedID:                 info.ChangefeedID,
 		StartTS:                      info.StartTs,
@@ -287,7 +279,7 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		Epoch:                        info.Epoch,
 		BDRMode:                      util.GetOrZero(info.Config.BDRMode),
 		EnableActiveActive:           util.GetOrZero(info.Config.EnableActiveActive),
-		ActiveActiveProgressInterval: activeActiveInterval,
+		ActiveActiveProgressInterval: *info.Config.ActiveActiveProgressInterval,
 		TimeZone:                     GetGlobalServerConfig().TZ,
 		Consistent:                   info.Config.Consistent,
 		// other fields are not necessary for dispatcherManager
