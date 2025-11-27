@@ -257,6 +257,10 @@ func (a *dispatcherStat) getDataRange() (common.DataRange, bool) {
 // and cap the scan limit in bytes to the max scan limit in bytes.
 func (a *dispatcherStat) getCurrentScanLimitInBytes() int64 {
 	res := a.currentScanLimitInBytes.Load()
+	log.Info("update scan limit begin",
+		zap.Stringer("dispatcherID", a.id),
+		zap.Int64("res", res),
+		zap.Int64("maxScanLimitInBytes", a.maxScanLimitInBytes.Load()))
 	if time.Since(a.lastUpdateScanLimitTime.Load()) > updateScanLimitInterval {
 		maxScanLimit := a.maxScanLimitInBytes.Load()
 		if res > maxScanLimit {
@@ -277,6 +281,10 @@ func (a *dispatcherStat) getCurrentScanLimitInBytes() int64 {
 }
 
 func (a *dispatcherStat) resetScanLimit() {
+	log.Info("reset scan limit",
+		zap.Stringer("dispatcherID", a.id),
+		zap.Int64("minScanLimitInBytes", minScanLimitInBytes),
+		zap.Int64("maxScanLimitInBytes", maxScanLimitInBytes))
 	a.currentScanLimitInBytes.Store(minScanLimitInBytes)
 	a.maxScanLimitInBytes.Store(maxScanLimitInBytes)
 	a.lastUpdateScanLimitTime.Store(time.Now())
