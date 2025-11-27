@@ -85,9 +85,6 @@ func groupEventsByTable(events []*commonEvent.DMLEvent) map[int64][][]*commonEve
 //     if there is only one rows of the whole group, we generate the sqls for the row.
 //     Otherwise, we batch all the event rows for the same dispatcherID to limited delete / update/ insert query(in order)
 func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, error) {
-	if w.cfg.EnableActiveActive {
-		return w.prepareActiveActiveDMLs(events)
-	}
 	dmls := dmlsPool.Get().(*preparedDMLs)
 	dmls.reset()
 
@@ -111,10 +108,22 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 	for _, sortedEventGroups := range eventsGroupSortedByUpdateTs {
 		for _, eventsInGroup := range sortedEventGroups {
 			tableInfo := eventsInGroup[0].TableInfo
-			if !w.shouldGenBatchSQL(tableInfo.HasPKOrNotNullUK, tableInfo.HasVirtualColumns(), eventsInGroup) {
-				queryList, argsList = w.generateNormalSQLs(eventsInGroup)
+			if w.cfg.EnableActiveActive {
+				var err error
+				if !w.shouldGenBatchSQL(tableInfo.HasPKOrNotNullUK, tableInfo.HasVirtualColumns(), eventsInGroup) {
+					queryList, argsList, err = w.generateActiveActiveNormalSQLs(eventsInGroup)
+				} else {
+					queryList, argsList, err = w.generateActiveActiveBatchSQL(eventsInGroup)
+				}
+				if err != nil {
+					return dmls, err
+				}
 			} else {
-				queryList, argsList = w.generateBatchSQL(eventsInGroup)
+				if !w.shouldGenBatchSQL(tableInfo.HasPKOrNotNullUK, tableInfo.HasVirtualColumns(), eventsInGroup) {
+					queryList, argsList = w.generateNormalSQLs(eventsInGroup)
+				} else {
+					queryList, argsList = w.generateBatchSQL(eventsInGroup)
+				}
 			}
 			dmls.sqls = append(dmls.sqls, queryList...)
 			dmls.values = append(dmls.values, argsList...)
@@ -125,46 +134,6 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 
 	dmls.LogDebug(events, w.id)
 
-	return dmls, nil
-}
-
-func (w *Writer) prepareActiveActiveDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, error) {
-	dmls := dmlsPool.Get().(*preparedDMLs)
-	dmls.reset()
-
-	for _, event := range events {
-		if event == nil {
-			continue
-		}
-		dmls.rowCount += int(event.Len())
-		if len(dmls.tsPairs) == 0 || dmls.tsPairs[len(dmls.tsPairs)-1].startTs != event.StartTs {
-			dmls.tsPairs = append(dmls.tsPairs, tsPair{startTs: event.StartTs, commitTs: event.CommitTs})
-		}
-		dmls.approximateSize += event.GetSize()
-
-		for {
-			row, ok := event.GetNextRow()
-			if !ok {
-				event.Rewind()
-				break
-			}
-			if row.RowType == common.RowTypeDelete {
-				continue
-			}
-			sql, args, err := buildActiveActiveUpsertSQL(event.TableInfo, &row)
-			if err != nil {
-				event.Rewind()
-				return dmls, err
-			}
-			if sql == "" {
-				continue
-			}
-			dmls.sqls = append(dmls.sqls, sql)
-			dmls.values = append(dmls.values, args)
-		}
-	}
-
-	dmls.LogDebug(events, w.id)
 	return dmls, nil
 }
 
@@ -277,21 +246,7 @@ func (w *Writer) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string, [][
 		}
 	}
 
-	beginIndex := 0
-	rowsCount := events[0].Len()
-	for i := 1; i < len(events); i++ {
-		if rowsCount+events[i].Len() > int32(w.cfg.MaxTxnRow) {
-			// batch events[beginIndex:i]
-			batchSQL(events[beginIndex:i])
-			// reset beginIndex and rowsCount
-			beginIndex = i
-			rowsCount = events[i].Len()
-		} else {
-			rowsCount += events[i].Len()
-		}
-	}
-
-	batchSQL(events[beginIndex:])
+	batchSQL(events)
 	return sqlList, argsList
 }
 
@@ -326,16 +281,20 @@ func (w *Writer) generateBatchSQLsPerEvent(events []*commonEvent.DMLEvent) ([]st
 	return queries, args
 }
 
-func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
-	tableInfo := events[0].TableInfo
-	type RowChangeWithKeys struct {
-		RowChange  *commonEvent.RowChange
-		RowKeys    []byte
-		PreRowKeys []byte
-	}
+type rowChangeWithKeys struct {
+	rowChange  *commonEvent.RowChange
+	rowKeys    []byte
+	preRowKeys []byte
+}
 
-	// Step 1 extract all rows in these events to rowLists, and calcuate row key for each row(based on pk value)
-	rowLists := make([]RowChangeWithKeys, 0)
+// buildRowChangesForUnSafeBatch merges row changes within the same batch following the
+// unsafe-mode algorithm that splits delete/update/insert combinations.
+// It returns the merged rows which can be used to generate final SQLs.
+func (w *Writer) buildRowChangesForUnSafeBatch(
+	events []*commonEvent.DMLEvent,
+	tableInfo *common.TableInfo,
+) ([]*commonEvent.RowChange, error) {
+	rowLists := make([]rowChangeWithKeys, 0)
 	for _, event := range events {
 		for {
 			row, ok := event.GetNextRow()
@@ -343,34 +302,24 @@ func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([
 				event.Rewind()
 				break
 			}
-			rowChangeWithKeys := RowChangeWithKeys{RowChange: &row}
+			rowCopy := row
+			rowChangeWithKeys := rowChangeWithKeys{rowChange: &rowCopy}
 			if !row.Row.IsEmpty() {
 				_, keys := genKeyAndHash(&row.Row, tableInfo)
-				rowChangeWithKeys.RowKeys = keys
+				rowChangeWithKeys.rowKeys = keys
 			}
 			if !row.PreRow.IsEmpty() {
 				_, keys := genKeyAndHash(&row.PreRow, tableInfo)
-				rowChangeWithKeys.PreRowKeys = keys
+				rowChangeWithKeys.preRowKeys = keys
 			}
 			rowLists = append(rowLists, rowChangeWithKeys)
 		}
 	}
 
-	// Step 2 combine the rows until there is no change
-	// Consider we will split the event if PK is changed, so the Update will not change the PK
-	// for the rows comparation, there are six situations:
-	// 1. the previous row is Delete A, the next row is Insert A. --- we don't need to combine the rows.
-	// 2. the previous row is Delete A, the next row is Update xx where A . --- we don't need to combine the rows.
-	// 3. the previous row is Insert A, the next row is Delete A. --- remove the row of `Insert A`
-	// 4. the previous row is Insert A, the next row is Update xx where A --  remove the row of `Insert A`, change the row `Update A` to `Insert A`
-	// 5. the previous row is Update xx where A, the next row is Delete A. --- remove the row `Update xx where A`
-	// 6. the previous row is Update xx where A, the next row is Update xx where A. --- we need to remove the row, and change the second Update's preRows = first Update's preRows
 	for {
-		// hasUpdate to determine whether we can break the combine logic
 		hasUpdate := false
-		// flagList used to store the exists or not for this row. True means exists.
 		flagList := make([]bool, len(rowLists))
-		for i := 0; i < len(rowLists); i++ {
+		for i := range flagList {
 			flagList[i] = true
 		}
 		for i := 0; i < len(rowLists); i++ {
@@ -382,88 +331,78 @@ func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([
 				if !flagList[j] {
 					continue
 				}
-				rowType := rowLists[i].RowChange.RowType
-				nextRowType := rowLists[j].RowChange.RowType
+				rowType := rowLists[i].rowChange.RowType
+				nextRowType := rowLists[j].rowChange.RowType
 				switch rowType {
 				case common.RowTypeInsert:
-					rowKey := rowLists[i].RowKeys
+					rowKey := rowLists[i].rowKeys
 					if nextRowType == common.RowTypeInsert {
-						if compareKeys(rowKey, rowLists[j].RowKeys) {
-							sql, values := w.generateBatchSQLsPerEvent(events)
-							log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values), zap.Int("writerID", w.id))
-							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events), zap.Any("i", i), zap.Any("j", j), zap.Int("writerID", w.id))
+						if compareKeys(rowKey, rowLists[j].rowKeys) {
+							return nil, cerror.ErrUnexpected.FastGenByArgs("duplicate insert rows with same key")
 						}
 					} else if nextRowType == common.RowTypeDelete {
-						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
-							// remove the insert one, and break the inner loop for row i
+						if compareKeys(rowKey, rowLists[j].preRowKeys) {
 							flagList[i] = false
 							hasUpdate = true
 							break innerLoop
 						}
 					} else if nextRowType == common.RowTypeUpdate {
-						if !compareKeys(rowLists[j].PreRowKeys, rowLists[j].RowKeys) {
-							log.Panic("The Update Row have different Row Key", zap.Any("Events", events), zap.Int("writerID", w.id))
+						if !compareKeys(rowLists[j].preRowKeys, rowLists[j].rowKeys) {
+							return nil, cerror.ErrUnexpected.FastGenByArgs("update row key mismatch")
 						}
-						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
-							// remove insert one, and break the inner loop for row i
+						if compareKeys(rowKey, rowLists[j].preRowKeys) {
 							flagList[i] = false
-							// change update one to insert
-							preRowChange := rowLists[j].RowChange
+							preRowChange := rowLists[j].rowChange
 							newRowChange := commonEvent.RowChange{
 								Row:     preRowChange.Row,
 								RowType: common.RowTypeInsert,
 							}
-							rowLists[j] = RowChangeWithKeys{
-								RowChange: &newRowChange,
-								RowKeys:   rowLists[j].RowKeys,
+							rowLists[j] = rowChangeWithKeys{
+								rowChange: &newRowChange,
+								rowKeys:   rowLists[j].rowKeys,
 							}
 							hasUpdate = true
 							break innerLoop
 						}
 					}
 				case common.RowTypeUpdate:
-					rowKey := rowLists[i].RowKeys
-					if !compareKeys(rowKey, rowLists[i].PreRowKeys) {
-						log.Panic("The Update Row have different Row Key", zap.Any("Events", events), zap.Int("writerID", w.id))
+					rowKey := rowLists[i].rowKeys
+					if !compareKeys(rowKey, rowLists[i].preRowKeys) {
+						return nil, cerror.ErrUnexpected.FastGenByArgs("update row key mismatch")
 					}
 					if nextRowType == common.RowTypeInsert {
-						if compareKeys(rowKey, rowLists[j].RowKeys) {
-							sql, values := w.generateBatchSQLsPerEvent(events)
-							log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values), zap.Int("writerID", w.id))
-							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events), zap.Any("i", i), zap.Any("j", j), zap.Int("writerID", w.id))
+						if compareKeys(rowKey, rowLists[j].rowKeys) {
+							return nil, cerror.ErrUnexpected.FastGenByArgs("duplicate rows for update and insert")
 						}
 					} else if nextRowType == common.RowTypeDelete {
-						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
-							// remove the update one, and break the inner loop
+						if compareKeys(rowKey, rowLists[j].preRowKeys) {
 							flagList[j] = false
-							// change the update to delete
-							preRowChange := rowLists[i].RowChange
+							preRowChange := rowLists[i].rowChange
 							newRowChange := commonEvent.RowChange{
 								PreRow:  preRowChange.PreRow,
 								RowType: common.RowTypeDelete,
 							}
-							rowLists[i] = RowChangeWithKeys{
-								RowChange:  &newRowChange,
-								PreRowKeys: rowKey,
+							rowLists[i] = rowChangeWithKeys{
+								rowChange:  &newRowChange,
+								preRowKeys: rowKey,
 							}
 							hasUpdate = true
 							break innerLoop
 						}
 					} else if nextRowType == common.RowTypeUpdate {
-						if compareKeys(rowKey, rowLists[j].PreRowKeys) {
-							if !compareKeys(rowLists[j].PreRowKeys, rowLists[j].RowKeys) {
-								log.Panic("The Update Row have different Row Key", zap.Any("Events", events), zap.Int("writerID", w.id))
+						if compareKeys(rowKey, rowLists[j].preRowKeys) {
+							if !compareKeys(rowLists[j].preRowKeys, rowLists[j].rowKeys) {
+								return nil, cerror.ErrUnexpected.FastGenByArgs("update row key mismatch")
 							}
-							// remove the first one, update the second one, then break
 							newRowChange := commonEvent.RowChange{
-								PreRow:  rowLists[j].RowChange.PreRow,
-								Row:     rowLists[j].RowChange.Row,
+								PreRow:  rowLists[j].rowChange.PreRow,
+								Row:     rowLists[j].rowChange.Row,
 								RowType: common.RowTypeUpdate,
 							}
-							rowLists[j] = RowChangeWithKeys{
-								RowChange:  &newRowChange,
-								PreRowKeys: rowKey,
-								RowKeys:    rowKey,
+							rowLists[j] = rowChangeWithKeys{
+								rowChange:  &newRowChange,
+								preRowKeys: rowKey,
+								rowKeys:    rowKey,
 							}
 							flagList[i] = false
 							hasUpdate = true
@@ -475,27 +414,33 @@ func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([
 		}
 
 		if !hasUpdate {
-			// means no more changes for the rows, break and generate sqls.
 			break
-		} else {
-			newRowLists := make([]RowChangeWithKeys, 0, len(rowLists))
-			for i := 0; i < len(rowLists); i++ {
-				if flagList[i] {
-					newRowLists = append(newRowLists, rowLists[i])
-				}
-			}
-			rowLists = newRowLists
 		}
-
+		newRowLists := make([]rowChangeWithKeys, 0, len(rowLists))
+		for i := 0; i < len(rowLists); i++ {
+			if flagList[i] {
+				newRowLists = append(newRowLists, rowLists[i])
+			}
+		}
+		rowLists = newRowLists
 	}
 
 	finalRowLists := make([]*commonEvent.RowChange, 0, len(rowLists))
-
 	for i := 0; i < len(rowLists); i++ {
-		finalRowLists = append(finalRowLists, rowLists[i].RowChange)
+		finalRowLists = append(finalRowLists, rowLists[i].rowChange)
 	}
+	return finalRowLists, nil
+}
 
-	// Step 3. generate sqls based on finalRowLists
+func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
+	tableInfo := events[0].TableInfo
+	finalRowLists, err := w.buildRowChangesForUnSafeBatch(events, tableInfo)
+	if err != nil {
+		sql, values := w.generateBatchSQLsPerEvent(events)
+		log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values), zap.Int("writerID", w.id))
+		log.Panic("invalid rows when generating batch SQL in unsafe mode",
+			zap.Error(err), zap.Any("events", events), zap.Int("writerID", w.id))
+	}
 	return w.batchSingleTxnDmls(finalRowLists, tableInfo, false)
 }
 
@@ -610,6 +555,50 @@ func (w *Writer) generateNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [
 	return queries, args
 }
 
+func (w *Writer) generateActiveActiveNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [][]interface{}, error) {
+	queries := make([]string, 0)
+	argsList := make([][]interface{}, 0)
+	for _, event := range events {
+		if event.Len() == 0 {
+			continue
+		}
+		for {
+			row, ok := event.GetNextRow()
+			if !ok {
+				event.Rewind()
+				break
+			}
+			sql, args, err := buildActiveActiveUpsertSQL(event.TableInfo, []*commonEvent.RowChange{&row})
+			if err != nil {
+				return nil, nil, err
+			}
+			if sql == "" {
+				continue
+			}
+			queries = append(queries, sql)
+			argsList = append(argsList, args)
+		}
+	}
+	return queries, argsList, nil
+}
+
+func (w *Writer) generateActiveActiveBatchSQL(events []*commonEvent.DMLEvent) ([]string, [][]interface{}, error) {
+	if len(events) == 0 {
+		return []string{}, [][]interface{}{}, nil
+	}
+
+	if len(events) == 1 {
+		return w.generateActiveActiveSQLForSingleEvent(events[0], false)
+	}
+
+	tableInfo := events[0].TableInfo
+	rowChanges, err := w.buildRowChangesForUnSafeBatch(events, tableInfo)
+	if err != nil {
+		return []string{}, [][]interface{}{}, nil
+	}
+	return w.batchSingleTxnActiveRows(rowChanges, tableInfo, false)
+}
+
 func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]interface{}) {
 	inSafeMode := w.cfg.SafeMode || w.isInErrorCausedSafeMode || event.CommitTs < event.ReplicatingTs
 
@@ -659,6 +648,32 @@ func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]i
 		}
 	}
 	return queries, argsList
+}
+
+func (w *Writer) generateActiveActiveSQLForSingleEvent(event *commonEvent.DMLEvent, _ bool) ([]string, [][]interface{}, error) {
+	rows := collectActiveActiveRows(event)
+	if len(rows) == 0 {
+		return nil, nil, nil
+	}
+	sql, args, err := buildActiveActiveUpsertSQL(event.TableInfo, rows)
+	if err != nil || sql == "" {
+		return nil, nil, err
+	}
+	return []string{sql}, [][]interface{}{args}, nil
+}
+
+func collectActiveActiveRows(event *commonEvent.DMLEvent) []*commonEvent.RowChange {
+	rows := make([]*commonEvent.RowChange, 0, event.Len())
+	for {
+		row, ok := event.GetNextRow()
+		if !ok {
+			event.Rewind()
+			break
+		}
+		rowCopy := row
+		rows = append(rows, &rowCopy)
+	}
+	return rows
 }
 
 func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
@@ -901,6 +916,28 @@ func (w *Writer) batchSingleTxnDmls(
 	}
 
 	return
+}
+
+func (w *Writer) batchSingleTxnActiveRows(
+	rows []*commonEvent.RowChange,
+	tableInfo *common.TableInfo,
+	_ bool,
+) ([]string, [][]interface{}, error) {
+	filtered := make([]*commonEvent.RowChange, 0, len(rows))
+	for _, row := range rows {
+		if row == nil || row.Row.IsEmpty() {
+			continue
+		}
+		filtered = append(filtered, row)
+	}
+	if len(filtered) == 0 {
+		return nil, nil, nil
+	}
+	sql, args, err := buildActiveActiveUpsertSQL(tableInfo, filtered)
+	if err != nil || sql == "" {
+		return nil, nil, err
+	}
+	return []string{sql}, [][]interface{}{args}, nil
 }
 
 func (w *Writer) groupRowsByType(

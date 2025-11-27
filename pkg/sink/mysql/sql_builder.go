@@ -18,7 +18,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -243,18 +242,19 @@ func buildUpdate(tableInfo *common.TableInfo, row commonEvent.RowChange) (string
 	return sql, args
 }
 
-func buildActiveActiveUpsertSQL(tableInfo *common.TableInfo, row *commonEvent.RowChange) (string, []interface{}, error) {
-	if tableInfo == nil || row == nil || row.Row.IsEmpty() {
+func buildActiveActiveUpsertSQL(tableInfo *common.TableInfo, rows []*commonEvent.RowChange) (string, []interface{}, error) {
+	if tableInfo == nil || len(rows) == 0 {
 		return "", nil, nil
 	}
-
-	if _, ok := tableInfo.GetColumnInfoByName(sinkutil.OriginTsColumn); !ok {
-		return "", nil, errors.Errorf("table %s.%s missing column %s for active-active mode",
-			tableInfo.GetSchemaName(), tableInfo.GetTableName(), sinkutil.OriginTsColumn)
+	validRows := make([]*commonEvent.RowChange, 0, len(rows))
+	for _, row := range rows {
+		if row == nil || row.Row.IsEmpty() {
+			continue
+		}
+		validRows = append(validRows, row)
 	}
-	if _, ok := tableInfo.GetColumnInfoByName(sinkutil.CommitTsColumn); !ok {
-		return "", nil, errors.Errorf("table %s.%s missing column %s for active-active mode",
-			tableInfo.GetSchemaName(), tableInfo.GetTableName(), sinkutil.CommitTsColumn)
+	if len(validRows) == 0 {
+		return "", nil, nil
 	}
 
 	insertColumns := make([]string, 0, len(tableInfo.GetColumns()))
@@ -265,11 +265,6 @@ func buildActiveActiveUpsertSQL(tableInfo *common.TableInfo, row *commonEvent.Ro
 		insertColumns = append(insertColumns, col.Name.O)
 	}
 	if len(insertColumns) == 0 {
-		return "", nil, nil
-	}
-
-	args := getArgs(&row.Row, tableInfo)
-	if len(args) == 0 {
 		return "", nil, nil
 	}
 
@@ -286,14 +281,25 @@ func buildActiveActiveUpsertSQL(tableInfo *common.TableInfo, row *commonEvent.Ro
 		}
 		builder.WriteString(common.QuoteName(colName))
 	}
-	builder.WriteString(") VALUES (")
-	for i := range insertColumns {
-		if i > 0 {
+	builder.WriteString(") VALUES ")
+
+	args := make([]interface{}, 0, len(validRows)*len(insertColumns))
+	for rowIdx, row := range validRows {
+		if rowIdx > 0 {
 			builder.WriteString(",")
 		}
-		builder.WriteString("?")
+		builder.WriteString("(")
+		for i := range insertColumns {
+			if i > 0 {
+				builder.WriteString(",")
+			}
+			builder.WriteString("?")
+		}
+		builder.WriteString(")")
+		args = append(args, getArgs(&row.Row, tableInfo)...)
 	}
-	builder.WriteString(") ON DUPLICATE KEY UPDATE ")
+
+	builder.WriteString(" ON DUPLICATE KEY UPDATE ")
 
 	condInitialized := false
 	for i, colName := range insertColumns {
