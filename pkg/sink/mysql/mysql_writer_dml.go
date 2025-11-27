@@ -572,9 +572,6 @@ func (w *Writer) generateActiveActiveNormalSQLs(events []*commonEvent.DMLEvent) 
 			if err != nil {
 				return nil, nil, err
 			}
-			if sql == "" {
-				continue
-			}
 			queries = append(queries, sql)
 			argsList = append(argsList, args)
 		}

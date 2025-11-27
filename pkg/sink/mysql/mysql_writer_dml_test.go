@@ -220,23 +220,23 @@ func TestBuildActiveActiveUpsertSQLMultiRows(t *testing.T) {
 	defer helper.Close()
 
 	helper.Tk().MustExec("use test")
-	createTableSQL := "create table t (id int primary key, name varchar(32), _tidb_origin_ts bigint, _tidb_commit_ts bigint, _tidb_softdelete_time bigint);"
+	createTableSQL := "create table t (id int primary key, name varchar(32), _tidb_origin_ts bigint, _tidb_commit_ts bigint, _tidb_softdelete_time timestamp null default null);"
 	job := helper.DDL2Job(createTableSQL)
 	require.NotNil(t, job)
 
 	event := helper.DML2Event("test", "t",
-		"insert into t values (1, 'alice', 10, 20, 0)",
-		"insert into t values (2, 'bob', 11, 21, 0)",
+		"insert into t values (1, 'alice', 10, 20, NULL)",
+		"insert into t values (2, 'bob', 11, 21, NULL)",
 	)
 	rows := collectActiveActiveRows(event)
 	sql, args, err := buildActiveActiveUpsertSQL(event.TableInfo, rows)
 	require.NoError(t, err)
 	require.Equal(t,
-		"INSERT INTO `test`.`t` (`id`,`name`,`_tidb_origin_ts`,`_tidb_commit_ts`,`_tidb_softdelete_time`) VALUES (?,?,?,?,?),(?,?,?,?,?) ON DUPLICATE KEY UPDATE `id` = IF((@ticdc_aa_cond := (IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`))), VALUES(`id`), `id`),`name` = IF(@ticdc_aa_cond, VALUES(`name`), `name`),`_tidb_origin_ts` = IF(@ticdc_aa_cond, VALUES(`_tidb_origin_ts`), `_tidb_origin_ts`),`_tidb_commit_ts` = IF(@ticdc_aa_cond, VALUES(`_tidb_commit_ts`), `_tidb_commit_ts`),`_tidb_softdelete_time` = IF(@ticdc_aa_cond, VALUES(`_tidb_softdelete_time`), `_tidb_softdelete_time`)",
+		"INSERT INTO `test`.`t` (`id`,`name`,`_tidb_origin_ts`,`_tidb_commit_ts`,`_tidb_softdelete_time`) VALUES (?,?,?,?,?),(?,?,?,?,?) ON DUPLICATE KEY UPDATE `id` = IF((@ticdc_lww_cond := (IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`))), VALUES(`id`), `id`),`name` = IF(@ticdc_lww_cond, VALUES(`name`), `name`),`_tidb_origin_ts` = IF(@ticdc_lww_cond, VALUES(`_tidb_origin_ts`), `_tidb_origin_ts`),`_tidb_commit_ts` = IF(@ticdc_lww_cond, VALUES(`_tidb_commit_ts`), `_tidb_commit_ts`),`_tidb_softdelete_time` = IF(@ticdc_lww_cond, VALUES(`_tidb_softdelete_time`), `_tidb_softdelete_time`)",
 		sql)
 	expectedArgs := []interface{}{
-		int64(1), "alice", int64(10), int64(20), int64(0),
-		int64(2), "bob", int64(11), int64(21), int64(0),
+		int64(1), "alice", int64(10), int64(20), nil,
+		int64(2), "bob", int64(11), int64(21), nil,
 	}
 	require.Equal(t, expectedArgs, args)
 }
@@ -251,14 +251,14 @@ func TestGenerateActiveActiveSQLs(t *testing.T) {
 	defer helper.Close()
 
 	helper.Tk().MustExec("use test")
-	createTableSQL := "create table t (id int primary key, name varchar(32), _tidb_origin_ts bigint, _tidb_commit_ts bigint, _tidb_softdelete_time bigint);"
+	createTableSQL := "create table t (id int primary key, name varchar(32), _tidb_origin_ts bigint, _tidb_commit_ts bigint, _tidb_softdelete_time timestamp null default null);"
 	job := helper.DDL2Job(createTableSQL)
 	require.NotNil(t, job)
 
 	event := helper.DML2Event("test", "t",
-		"insert into t values (1, 'a', 10, 20, 0)",
-		"insert into t values (2, 'b', 11, 21, 0)",
-		"insert into t values (3, 'c', 12, 22, 0)",
+		"insert into t values (1, 'a', 10, 20, NULL)",
+		"insert into t values (2, 'b', 11, 21, NULL)",
+		"insert into t values (3, 'c', 12, 22, NULL)",
 	)
 
 	sqls, args, err := writer.generateActiveActiveNormalSQLs([]*commonEvent.DMLEvent{event})

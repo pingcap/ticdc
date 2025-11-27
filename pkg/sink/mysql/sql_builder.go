@@ -246,16 +246,6 @@ func buildActiveActiveUpsertSQL(tableInfo *common.TableInfo, rows []*commonEvent
 	if tableInfo == nil || len(rows) == 0 {
 		return "", nil, nil
 	}
-	validRows := make([]*commonEvent.RowChange, 0, len(rows))
-	for _, row := range rows {
-		if row == nil || row.Row.IsEmpty() {
-			continue
-		}
-		validRows = append(validRows, row)
-	}
-	if len(validRows) == 0 {
-		return "", nil, nil
-	}
 
 	insertColumns := make([]string, 0, len(tableInfo.GetColumns()))
 	for _, col := range tableInfo.GetColumns() {
@@ -283,8 +273,8 @@ func buildActiveActiveUpsertSQL(tableInfo *common.TableInfo, rows []*commonEvent
 	}
 	builder.WriteString(") VALUES ")
 
-	args := make([]interface{}, 0, len(validRows)*len(insertColumns))
-	for rowIdx, row := range validRows {
+	args := make([]interface{}, 0, len(rows)*len(insertColumns))
+	for rowIdx, row := range rows {
 		if rowIdx > 0 {
 			builder.WriteString(",")
 		}
@@ -307,19 +297,13 @@ func buildActiveActiveUpsertSQL(tableInfo *common.TableInfo, rows []*commonEvent
 			builder.WriteString(",")
 		}
 		quoted := common.QuoteName(colName)
-		if colName == sinkutil.OriginTsColumn {
-			condInitialized = true
-			builder.WriteString(fmt.Sprintf("%s = IF((@ticdc_aa_cond := (IFNULL(%s, %s) <= VALUES(%s))), VALUES(%s), %s)",
-				quoted, originQuoted, commitQuoted, originQuoted, quoted, quoted))
-			continue
-		}
 		if !condInitialized {
-			builder.WriteString(fmt.Sprintf("%s = IF((@ticdc_aa_cond := (IFNULL(%s, %s) <= VALUES(%s))), VALUES(%s), %s)",
+			builder.WriteString(fmt.Sprintf("%s = IF((@ticdc_lww_cond := (IFNULL(%s, %s) <= VALUES(%s))), VALUES(%s), %s)",
 				quoted, originQuoted, commitQuoted, originQuoted, quoted, quoted))
 			condInitialized = true
 			continue
 		}
-		builder.WriteString(fmt.Sprintf("%s = IF(@ticdc_aa_cond, VALUES(%s), %s)", quoted, quoted, quoted))
+		builder.WriteString(fmt.Sprintf("%s = IF(@ticdc_lww_cond, VALUES(%s), %s)", quoted, quoted, quoted))
 	}
 
 	return builder.String(), args, nil
