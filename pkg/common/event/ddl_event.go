@@ -148,6 +148,7 @@ func (d *DDLEvent) GetExtraTableName() string {
 	return d.ExtraTableName
 }
 
+// GetTableID returns the logic table ID of the event.
 func (d *DDLEvent) GetTableID() int64 {
 	if d.TableInfo != nil {
 		return d.TableInfo.TableName.TableID
