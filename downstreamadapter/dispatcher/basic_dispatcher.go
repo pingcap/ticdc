@@ -318,8 +318,8 @@ func (d *BasicDispatcher) GetCheckpointTs() uint64 {
 // updateDispatcherStatusToWorking updates the dispatcher status to working and adds it to status dynamic stream
 func (d *BasicDispatcher) updateDispatcherStatusToWorking() {
 	log.Info("update dispatcher status to working",
-		zap.Stringer("dispatcher", d.id),
 		zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
+		zap.Stringer("dispatcher", d.id),
 		zap.String("table", common.FormatTableSpan(d.tableSpan)),
 		zap.Uint64("checkpointTs", d.GetCheckpointTs()),
 		zap.Uint64("resolvedTs", d.GetResolvedTs()),

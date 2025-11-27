@@ -852,7 +852,7 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 	if len(mergeSpans) > 1 {
 		log.Info("chooseMergedSpans merge spans",
 			zap.String("changefeed", s.changefeedID.String()),
-			zap.Int64("group", int64(s.groupID)),
+			zap.Int64("group", s.groupID),
 			zap.Any("mergeSpans", mergeSpans),
 			zap.Any("node", mergeSpans[0].GetNodeID()),
 		)
@@ -975,7 +975,7 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 			if status.trafficScore > trafficScoreThreshold {
 				log.Info("chooseSplitSpans split span by traffic",
 					zap.String("changefeed", s.changefeedID.String()),
-					zap.Int64("group", int64(s.groupID)),
+					zap.Int64("group", s.groupID),
 					zap.String("splitSpan", status.SpanReplication.ID.String()),
 					zap.Any("splitTargetNodes", status.GetNodeID()),
 				)
@@ -1000,8 +1000,8 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 			if status.regionCount > s.regionThreshold {
 				log.Info("chooseSplitSpans split span by region",
 					zap.String("changefeed", s.changefeedID.String()),
-					zap.Int64("group", int64(s.groupID)),
 					zap.String("splitSpan", status.SpanReplication.ID.String()),
+					zap.Int64("group", s.groupID),
 					zap.Any("splitTargetNodes", status.GetNodeID()),
 				)
 
@@ -1188,7 +1188,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	if len(moveSpans) > 0 {
 		log.Info("checkBalanceTraffic move spans",
 			zap.String("changefeed", s.changefeedID.String()),
-			zap.Int64("group", int64(s.groupID)),
+			zap.Int64("group", s.groupID),
 			zap.Any("moveSpans", moveSpans),
 			zap.Any("minTrafficNodeID", minTrafficNodeID),
 		)
@@ -1210,9 +1210,9 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	}
 
 	log.Info("checkBalanceTraffic split span",
-		zap.String("changefeed", s.changefeedID.String()),
-		zap.Int64("group", int64(s.groupID)),
+		zap.Stringer("changefeed", s.changefeedID),
 		zap.String("splitSpan", span.SpanReplication.ID.String()),
+		zap.Int64("group", s.groupID),
 		zap.Any("splitTargetNodes", []node.ID{minTrafficNodeID, maxTrafficNodeID}),
 	)
 

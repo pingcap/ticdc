@@ -363,7 +363,9 @@ func (c *eventBroker) logUninitializedDispatchers(ctx context.Context) error {
 			c.dispatchers.Range(func(key, value interface{}) bool {
 				dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
 				if isUninitialized(dispatcher) {
-					log.Info("dispatcher not reset", zap.Any("dispatcherID", dispatcher.id))
+					log.Info("dispatcher not reset",
+						zap.Stringer("changefeedID", dispatcher.changefeedStat.changefeedID),
+						zap.Any("dispatcherID", dispatcher.id))
 				}
 				return true
 			})
