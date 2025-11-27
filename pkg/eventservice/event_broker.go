@@ -635,8 +635,13 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		zap.Error(err))
 	if scannedBytes < 0 {
 		releaseQuota(available, uint64(sl.maxDMLBytes))
-	} else if scannedBytes >= 0 && scannedBytes < sl.maxDMLBytes {
-		releaseQuota(available, uint64(sl.maxDMLBytes-scannedBytes))
+	} else if scannedBytes >= 0 {
+		if scannedBytes < sl.maxDMLBytes {
+			releaseQuota(available, uint64(sl.maxDMLBytes-scannedBytes))
+		} else if scannedBytes > int64(sl.maxDMLBytes) {
+			extra := scannedBytes - int64(sl.maxDMLBytes)
+			allocQuota(available, uint64(extra))
+		}
 	}
 
 	if err != nil {
@@ -647,10 +652,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	if scannedBytes > int64(c.scanLimitInBytes) {
-		log.Info("scan bytes exceeded the limit, there must be a big transaction", zap.Stringer("dispatcher", task.id), zap.Int64("scannedBytes", scannedBytes), zap.Int64("limit", int64(c.scanLimitInBytes)))
-		scannedBytes = int64(c.scanLimitInBytes)
-	}
 	task.lastScanBytes.Store(scannedBytes)
 
 	for _, e := range events {
