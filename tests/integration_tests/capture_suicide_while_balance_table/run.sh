@@ -11,7 +11,7 @@ SINK_TYPE=$1
 function prepare() {
 	changefeed_id=$1
 	capture1_id=$2
-	capture1_id=$3
+	capture2_id=$3
 	target_capture=$capture1_id
 	# find a table that capture2 is replicating
 	tables=$(curl -X GET "http://127.0.0.1:8301/api/v2/changefeeds/${changefeed_id}/tables?keyspace=$KEYSPACE_NAME")
