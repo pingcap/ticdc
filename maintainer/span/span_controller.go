@@ -369,6 +369,7 @@ func (c *Controller) MarkSpanReplicating(span *replica.SpanReplication) {
 func (c *Controller) BindSpanToNode(old, new node.ID, span *replica.SpanReplication) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	span.SetNodeID(new)
 	c.BindReplicaToNodeWithoutLock(old, new, span)
 }
 
