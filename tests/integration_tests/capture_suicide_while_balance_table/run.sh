@@ -22,9 +22,10 @@ function prepare() {
 		tables=$(curl -X GET "http://127.0.0.1:8300/api/v2/changefeeds/${changefeed_id}/tables?keyspace=$KEYSPACE_NAME")
 		one_table_id=$(echo $tables | jq -r --arg cid "$capture1_id" '.items[] | select(.node_id==$cid) | .table_ids[0]')
 		if [[ "$one_table_id" == "" || "$one_table_id" == "null" || "$one_table_id" == "0" ]]; then
-			exit 1
+			return 1
 		fi
 	fi
+	return 0
 }
 
 # This test mainly verifies CDC can handle the following scenario
@@ -74,11 +75,10 @@ function run() {
 	capture2_id=$(cdc cli capture list | grep -v "Command to ticdc" | jq -r '.[]|select(.address=="127.0.0.1:8301")|.id')
 
 	for ((i = 0; i < 5; i++)); do
-		prepare "$changefeed_id" "$capture1_id" "$capture2_id"
-		if [[ $? -eq 0 ]]; then
+		if prepare "$changefeed_id" "$capture1_id" "$capture2_id"; then
 			break
 		fi
-		sleep $2
+		sleep 2
 	done
 	if [[ $i -eq 5 ]]; then
 		echo 'Failed to find a replicating table'
