@@ -589,7 +589,9 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	item, ok = status.availableMemoryQuota.Load(remoteID)
 	if !ok {
 		log.Info("available memory quota is not set, skip scan",
-			zap.String("changefeed", changefeedID.String()), zap.String("remote", remoteID.String()))
+			zap.Stringer("changefeed", changefeedID),
+			zap.Stringer("dispatcherID", task.id),
+			zap.String("remote", remoteID.String()))
 		return
 	}
 	available := item.(*atomic.Uint64)
@@ -601,7 +603,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	ok = allocQuota(available, uint64(sl.maxDMLBytes))
 	if !ok {
 		log.Info("changefeed available memory quota is not enough, skip scan",
-			zap.String("changefeed", changefeedID.String()),
+			zap.Stringer("changefeed", changefeedID),
+			zap.Stringer("dispatcherID", task.id),
 			zap.String("remote", remoteID.String()),
 			zap.Uint64("available", available.Load()),
 			zap.Uint64("required", uint64(sl.maxDMLBytes)))
@@ -610,7 +613,11 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	if uint64(sl.maxDMLBytes) > task.availableMemoryQuota.Load() {
-		log.Info("dispatcher available memory quota is not enough, skip scan", zap.Stringer("dispatcher", task.id), zap.Uint64("available", task.availableMemoryQuota.Load()), zap.Int64("required", int64(sl.maxDMLBytes)))
+		log.Info("dispatcher available memory quota is not enough, skip scan",
+			zap.String("changefeed", changefeedID.String()),
+			zap.Stringer("dispatcher", task.id),
+			zap.Uint64("available", task.availableMemoryQuota.Load()),
+			zap.Int64("required", int64(sl.maxDMLBytes)))
 		c.sendSignalResolvedTs(task)
 		return
 	}
@@ -618,6 +625,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter, task.info.GetMode())
 	scannedBytes, events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
 	log.Info("scan finished",
+		zap.String("changefeed", changefeedID.String()),
 		zap.Stringer("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
 		zap.Any("dataRange", dataRange), zap.Int64("scannedBytes", scannedBytes),
 		zap.Int64("sl.maxDMLBytes", sl.maxDMLBytes),
