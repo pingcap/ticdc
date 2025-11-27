@@ -76,6 +76,10 @@ function execute_ddls() {
 			sleep 0.5
 			run_sql "ALTER TABLE test.$table_name DROP COLUMN new_col;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 			;;
+		3)
+			echo "DDL: Truncating $table_name..."
+			run_sql "TRUNCATE TABLE test.$table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+			;;
 		esac
 
 		sleep 1
@@ -206,7 +210,7 @@ main_with_consistent() {
 	# check_sync_diff $WORK_DIR $WORK_DIR/consistent_diff_config.toml
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 main
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

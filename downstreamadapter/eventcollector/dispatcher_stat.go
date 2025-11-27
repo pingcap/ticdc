@@ -161,13 +161,17 @@ func (d *dispatcherStat) clear() {
 
 // registerTo register the dispatcher to the specified event service.
 func (d *dispatcherStat) registerTo(serverID node.ID) {
-	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRegisterRequest(d.eventCollector.getLocalServerID().String(), false))
+	// `onlyReuse` is used to control the register behavior at logservice side
+	// it should be set to `false` when register to a local event service,
+	// and set to `true` when register to a remote event service.
+	onlyReuse := serverID != d.eventCollector.getLocalServerID()
+	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRegisterRequest(d.eventCollector.getLocalServerID().String(), onlyReuse))
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
 // commitReady is used to notify the event service to start sending events.
 func (d *dispatcherStat) commitReady(serverID node.ID) {
-	d.doReset(serverID, d.target.GetStartTs())
+	d.doReset(serverID, d.getResetTs())
 }
 
 // reset is used to reset the dispatcher to the specified commitTs,
@@ -669,6 +673,7 @@ func (d *dispatcherStat) newDispatcherRegisterRequest(serverId string, onlyReuse
 			Timezone:             d.target.GetTimezone(),
 			Integrity:            d.target.GetIntegrityConfig(),
 			OutputRawChangeEvent: d.target.IsOutputRawChangeEvent(),
+			TxnAtomicity:         string(d.target.GetTxnAtomicity()),
 		},
 	}
 }

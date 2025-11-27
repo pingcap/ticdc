@@ -109,10 +109,10 @@ func (w *Writer) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
 }
 
 func (w *Writer) FlushDDLEvent(event *commonEvent.DDLEvent) error {
-	if w.cfg.IsTiDB {
-		// first we check whether there is some async ddl executed now.
-		w.waitAsyncDDLDone(event)
-	}
+	// if w.cfg.IsTiDB {
+	// 	// first we check whether there is some async ddl executed now.
+	// 	w.waitAsyncDDLDone(event)
+	// }
 	if w.cfg.IsTiDB || !event.TiDBOnly {
 		// we write ddl ts before ddl first, and update the ddl ts item after ddl executed,
 		// to ensure the atomic with ddl writing when server is restarted.

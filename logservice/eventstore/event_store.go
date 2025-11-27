@@ -46,8 +46,10 @@ import (
 )
 
 var (
-	CounterKv       = metrics.EventStoreReceivedEventCount.WithLabelValues("kv")
-	CounterResolved = metrics.EventStoreReceivedEventCount.WithLabelValues("resolved")
+	CounterKv           = metrics.EventStoreReceivedEventCount.WithLabelValues("kv")
+	CounterResolved     = metrics.EventStoreReceivedEventCount.WithLabelValues("resolved")
+	scannedBytesMetrics = metrics.EventStoreScanBytes.WithLabelValues("scanned")
+	skippedBytesMetrics = metrics.EventStoreScanBytes.WithLabelValues("skipped")
 )
 
 var (
@@ -164,6 +166,8 @@ type subscriptionStat struct {
 	// the time when the subscription receives latest dml event
 	// it is used to calculate the idle time of the subscription
 	// 0 means the subscription has not received any dml event
+	// last time when we log the lag is too large
+	lastLogLagTime     atomic.Int64
 	lastReceiveDMLTime atomic.Int64
 	// the resolveTs persisted in the store
 	resolvedTs atomic.Uint64
@@ -416,7 +420,7 @@ func (e *eventStore) RegisterDispatcher(
 	notifier ResolvedTsNotifier,
 	onlyReuse bool,
 	bdrMode bool,
-) bool {
+) (success bool) {
 	if e.closed.Load() {
 		return false
 	}
@@ -438,11 +442,21 @@ func (e *eventStore) RegisterDispatcher(
 
 	start := time.Now()
 	defer func() {
-		log.Info("register dispatcher done",
-			zap.Stringer("dispatcherID", dispatcherID),
-			zap.String("span", common.FormatTableSpan(dispatcherSpan)),
-			zap.Uint64("startTs", startTs),
-			zap.Duration("duration", time.Since(start)))
+		if success {
+			log.Info("register dispatcher success",
+				zap.Stringer("dispatcherID", dispatcherID),
+				zap.String("span", common.FormatTableSpan(dispatcherSpan)),
+				zap.Uint64("startTs", startTs),
+				zap.Bool("onlyReuse", onlyReuse),
+				zap.Duration("duration", time.Since(start)))
+		} else {
+			log.Info("register dispatcher failed",
+				zap.Stringer("dispatcherID", dispatcherID),
+				zap.String("span", common.FormatTableSpan(dispatcherSpan)),
+				zap.Uint64("startTs", startTs),
+				zap.Bool("onlyReuse", onlyReuse),
+				zap.Duration("duration", time.Since(start)))
+		}
 	}()
 
 	stat := &dispatcherStat{
@@ -464,6 +478,11 @@ func (e *eventStore) RegisterDispatcher(
 			// Check if this subStat's span contains the dispatcherSpan
 			if bytes.Compare(subStat.tableSpan.StartKey, dispatcherSpan.StartKey) <= 0 &&
 				bytes.Compare(subStat.tableSpan.EndKey, dispatcherSpan.EndKey) >= 0 {
+
+				// For onlyReuse register request, we only consider initialized subStats
+				if onlyReuse && !subStat.initialized.Load() {
+					continue
+				}
 
 				// Check whether the subStat ts range contains startTs
 				if subStat.checkpointTs.Load() > startTs || startTs > subStat.resolvedTs.Load() {
@@ -539,6 +558,7 @@ func (e *eventStore) RegisterDispatcher(
 	subStat.checkpointTs.Store(startTs)
 	subStat.resolvedTs.Store(startTs)
 	subStat.maxEventCommitTs.Store(0)
+	subStat.lastLogLagTime.Store(0)
 	if stat.subStat == nil {
 		stat.subStat = subStat
 	} else {
@@ -1051,22 +1071,27 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 			subResolvedPhysicalTime := oracle.ExtractPhysical(subResolvedTs)
 			subResolvedTsLagInSec := float64(pdPhysicalTime-subResolvedPhysicalTime) / 1e3
 			const largeResolvedTsLagInSecs = 30
+			const logInterval = 5 * time.Minute
 			if subStat.initialized.Load() {
 				if subResolvedTsLagInSec >= largeResolvedTsLagInSecs {
-					lastReceiveDMLTimeRepr := "never"
-					if lastReceiveDMLTime := subStat.lastReceiveDMLTime.Load(); lastReceiveDMLTime > 0 {
-						lastReceiveDMLTimeRepr = time.UnixMilli(lastReceiveDMLTime).String()
+					lastLogTime := subStat.lastLogLagTime.Load()
+					if time.Since(time.Unix(0, lastLogTime)) > logInterval {
+						lastReceiveDMLTimeRepr := "never"
+						if lastReceiveDMLTime := subStat.lastReceiveDMLTime.Load(); lastReceiveDMLTime > 0 {
+							lastReceiveDMLTimeRepr = time.UnixMilli(lastReceiveDMLTime).String()
+						}
+						log.Warn("resolved ts lag is too large for initialized subscription",
+							zap.Uint64("subID", uint64(subStat.subID)),
+							zap.Int64("tableID", subStat.tableSpan.TableID),
+							zap.Uint64("resolvedTs", subResolvedTs),
+							zap.Float64("resolvedLag(s)", subResolvedTsLagInSec),
+							zap.Stringer("lastAdvanceTime", time.UnixMilli(subStat.lastAdvanceTime.Load())),
+							zap.String("lastReceiveDMLTime", lastReceiveDMLTimeRepr),
+							zap.String("tableSpan", common.FormatTableSpan(subStat.tableSpan)),
+							zap.Uint64("checkpointTs", subStat.checkpointTs.Load()),
+							zap.Uint64("maxEventCommitTs", subStat.maxEventCommitTs.Load()))
+						subStat.lastLogLagTime.Store(time.Now().UnixNano())
 					}
-					log.Warn("resolved ts lag is too large for initialized subscription",
-						zap.Uint64("subID", uint64(subStat.subID)),
-						zap.Int64("tableID", subStat.tableSpan.TableID),
-						zap.Uint64("resolvedTs", subResolvedTs),
-						zap.Float64("resolvedLag(s)", subResolvedTsLagInSec),
-						zap.Stringer("lastAdvanceTime", time.UnixMilli(subStat.lastAdvanceTime.Load())),
-						zap.String("lastReceiveDMLTime", lastReceiveDMLTimeRepr),
-						zap.String("tableSpan", common.FormatTableSpan(subStat.tableSpan)),
-						zap.Uint64("checkpointTs", subStat.checkpointTs.Load()),
-						zap.Uint64("maxEventCommitTs", subStat.maxEventCommitTs.Load()))
 				}
 			} else {
 				uninitializedStatCount++
@@ -1178,7 +1203,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		if err != nil {
 			log.Panic("fail to decode raw kv entry", zap.Error(err))
 		}
-		metrics.EventStoreScanBytes.WithLabelValues("scanned").Add(float64(len(value)))
+		scannedBytesMetrics.Add(float64(len(value)))
 		if !iter.needCheckSpan {
 			break
 		}
@@ -1191,8 +1216,11 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 			zap.String("tableSpan", common.FormatTableSpan(iter.tableSpan)),
 			zap.String("key", hex.EncodeToString(rawKV.Key)),
 			zap.Uint64("startTs", rawKV.StartTs),
-			zap.Uint64("commitTs", rawKV.CRTs))
-		metrics.EventStoreScanBytes.WithLabelValues("skipped").Add(float64(len(value)))
+			zap.Uint64("commitTs", rawKV.CRTs),
+			zap.Bool("isInsert", rawKV.IsInsert()),
+			zap.Bool("isDelete", rawKV.IsDelete()),
+			zap.Bool("isUpdate", rawKV.IsUpdate()))
+		skippedBytesMetrics.Add(float64(len(value)))
 		iter.innerIter.Next()
 	}
 	isNewTxn := false

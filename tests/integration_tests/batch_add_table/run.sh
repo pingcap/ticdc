@@ -97,7 +97,7 @@ function run_without_fast_create_table() {
 	cleanup_process $CDC_BINARY
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 run_without_fast_create_table $*
 stop_tidb_cluster
 run_with_fast_create_table $*

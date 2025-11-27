@@ -114,6 +114,11 @@ type EventServiceConfig struct {
 	ScanTaskQueueSize int `toml:"scan-task-queue-size" json:"scan_task_queue_size"`
 	ScanLimitInBytes  int `toml:"scan-limit-in-bytes" json:"scan_limit_in_bytes"`
 
+	// DMLEventMaxRows is the maximum number of rows in a DML event when split txn is enabled.
+	DMLEventMaxRows int32 `toml:"dml-event-max-rows" json:"dml_event_max_rows"`
+	// DMLEventMaxBytes is the maximum size of a DML event in bytes when split txn is enabled.
+	DMLEventMaxBytes int64 `toml:"dml-event-max-bytes" json:"dml_event_max_bytes"`
+
 	// FIXME: For now we found cdc may OOM when there is a large amount of events to be sent to event collector from a remote event service.
 	// So we add this config to be able to disable remote event service in such scenario.
 	// TODO: Remove this config after we find a proper way to fix the OOM issue.
@@ -126,6 +131,8 @@ func NewDefaultEventServiceConfig() *EventServiceConfig {
 	return &EventServiceConfig{
 		ScanTaskQueueSize:        1024 * 8,
 		ScanLimitInBytes:         1024 * 1024 * 256, // 256MB
+		DMLEventMaxRows:          256,
+		DMLEventMaxBytes:         1024 * 1024 * 1, // 1MB
 		EnableRemoteEventService: true,
 	}
 }

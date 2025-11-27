@@ -167,6 +167,7 @@ func NewDispatcherManager(
 	if cfConfig.SinkConfig.Integrity != nil {
 		integrityCfg = cfConfig.SinkConfig.Integrity.ToPB()
 	}
+
 	log.Info("New DispatcherManager",
 		zap.Stringer("changefeedID", changefeedID),
 		zap.String("config", cfConfig.String()),
@@ -235,6 +236,7 @@ func NewDispatcherManager(
 		integrityCfg,
 		filterCfg,
 		syncPointConfig,
+		manager.config.SinkConfig.TxnAtomicity,
 		manager.config.EnableSplittableCheck,
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
@@ -840,6 +842,10 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 	// Thus there will not data race when we check heartBeatTask.
 	if e.heartBeatTask != nil {
 		e.heartBeatTask.Cancel()
+	}
+
+	if e.sharedInfo != nil {
+		e.sharedInfo.Close()
 	}
 
 	if e.RedoEnable {

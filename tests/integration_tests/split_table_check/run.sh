@@ -114,7 +114,7 @@ round_without_enable_splittable_check() {
 	cleanup_process $CDC_BINARY
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 round_with_enable_splittable_check
 round_without_enable_splittable_check
 check_logs $WORK_DIR

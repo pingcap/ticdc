@@ -97,7 +97,7 @@ func (w *Writer) SendDDLTsPre(event commonEvent.BlockEvent) error {
 			isSyncpoint = "0"
 		}
 		query := insertItemQuery(tableIds, ticdcClusterID, changefeedID, ddlTs, "0", isSyncpoint)
-		log.Info("send ddl ts table query", zap.String("query", query))
+		log.Debug("send ddl ts table query", zap.String("query", query))
 
 		_, err = tx.Exec(query)
 		if err != nil {
@@ -124,6 +124,7 @@ func (w *Writer) SendDDLTs(event commonEvent.BlockEvent) error {
 
 	changefeedID := w.ChangefeedID.String()
 	ticdcClusterID := config.GetGlobalServerConfig().ClusterID
+
 	ddlTs := strconv.FormatUint(event.GetCommitTs(), 10)
 	var tableIds []int64
 	var dropTableIds []int64

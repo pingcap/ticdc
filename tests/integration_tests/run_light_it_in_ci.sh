@@ -50,12 +50,13 @@ mysql_groups=(
 	# G08
 	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry fail_over_ddl_I'
 	# G09
-	'cdc_server_tips ddl_sequence server_config_compatibility fail_over_ddl_J'
+	'sequence cdc_server_tips ddl_sequence server_config_compatibility fail_over_ddl_J'
 	# G10
-	'changefeed_error bdr_mode fail_over_ddl_K split_table_check'
+	'overwrite_resume_with_syncpoint restart_changefeed changefeed_error bdr_mode fail_over_ddl_K split_table_check'
 	# G11
-	'multi_tables_ddl ddl_attributes multi_cdc_cluster fail_over_ddl_L'
+	'kill_owner_with_ddl multi_tables_ddl ddl_attributes multi_cdc_cluster fail_over_ddl_L'
 	# G12
+	# ds_memory_control
 	'row_format tiflash multi_rocks fail_over_ddl_M'
 	# G13
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
@@ -174,7 +175,7 @@ storage_groups=(
 	# G13
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
 	# G14
-	'csv_storage_multi_tables_ddl fail_over_ddl_O'
+	'csv_storage_partition_table csv_storage_multi_tables_ddl fail_over_ddl_O'
 	# G15
 	'split_region autorandom gc_safepoint ddl_for_split_tables'
 )

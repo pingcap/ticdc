@@ -506,6 +506,34 @@ func buildAlterIndexVisibilityJobForTest(schemaID, tableID int64, finishedTs uin
 	}
 }
 
+func buildAddFulltextIndexJobForTest(schemaID, tableID int64, finishedTs uint64, indexes ...*model.IndexInfo) *model.Job {
+	tableInfo := newEligibleTableInfoForTest(tableID, fmt.Sprintf("t_%d", tableID))
+	tableInfo.Indices = indexes
+	return &model.Job{
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+			TableInfo:  tableInfo,
+		},
+		Query: "ALTER TABLE t2 ADD FULLTEXT INDEX (b) WITH PARSER standard;",
+	}
+}
+
+func buildCreateHybridIndexJobForTest(schemaID, tableID int64, finishedTs uint64, indexes ...*model.IndexInfo) *model.Job {
+	tableInfo := newEligibleTableInfoForTest(tableID, fmt.Sprintf("t_%d", tableID))
+	tableInfo.Indices = indexes
+	return &model.Job{
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			FinishedTS: finishedTs,
+			TableInfo:  tableInfo,
+		},
+		Query: "CREATE HYBRID INDEX i_idx ON t(b, c, d, e, g) PARAMETER 'hybrid_index_param';",
+	}
+}
+
 func buildDropPrimaryKeyJobForTest(schemaID, tableID int64, finishedTs uint64) *model.Job {
 	return &model.Job{
 		Type:     model.ActionDropPrimaryKey,

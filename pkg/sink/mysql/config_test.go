@@ -194,7 +194,7 @@ func TestApplySinkURIParamsToConfig(t *testing.T) {
 	// expected.BatchReplaceSize = 50
 	expected.SafeMode = false
 	expected.Timezone = `"UTC"`
-	expected.tidbTxnMode = "pessimistic"
+	expected.TidbTxnMode = "pessimistic"
 	// expected.EnableOldValue = true
 	uriStr := "mysql://127.0.0.1:3306/?time-zone=UTC&worker-count=64&max-txn-row=20" +
 		"&max-multi-update-row=80&max-multi-update-row-size=512" +
@@ -254,7 +254,7 @@ func TestParseSinkURIOverride(t *testing.T) {
 	}, {
 		uri: "mysql://127.0.0.1:3306/?tidb-txn-mode=badmode",
 		checker: func(sp *Config) {
-			require.EqualValues(t, sp.tidbTxnMode, defaultTiDBTxnMode)
+			require.EqualValues(t, sp.TidbTxnMode, defaultTiDBTxnMode)
 		},
 	}, {
 		uri: "mysql://127.0.0.1:3306/?multi-stmt-enable=false",

@@ -189,6 +189,6 @@ function run() {
 	echo "=== Checkpoint race condition test completed successfully ==="
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 run $*
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

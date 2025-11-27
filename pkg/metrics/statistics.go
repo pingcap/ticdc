@@ -34,6 +34,7 @@ func NewStatistics(
 	changefeedID := changefeed.Name()
 	statistics.metricExecDDLHis = ExecDDLHistogram.WithLabelValues(keyspace, changefeedID, sinkType)
 	statistics.metricExecBatchHis = ExecBatchHistogram.WithLabelValues(keyspace, changefeedID, sinkType)
+	statistics.metricExecBatchBytesHis = ExecBatchWriteBytesHistogram.WithLabelValues(keyspace, changefeedID, sinkType)
 	statistics.metricTotalWriteBytesCnt = TotalWriteBytesCounter.WithLabelValues(keyspace, changefeedID, sinkType)
 	statistics.metricExecErrCnt = ExecutionErrorCounter.WithLabelValues(keyspace, changefeedID, sinkType)
 	statistics.metricExecDMLCnt = ExecDMLEventCounter.WithLabelValues(keyspace, changefeedID)
@@ -51,6 +52,8 @@ type Statistics struct {
 	// metricExecBatchHis record the executed DML batch size.
 	// this should be only useful for the MySQL Sink, and Kafka Sink with batched protocol, such as open-protocol.
 	metricExecBatchHis prometheus.Observer
+	// metricExecBatchBytesHis record the executed batch write bytes.
+	metricExecBatchBytesHis prometheus.Observer
 	// metricTotalWriteBytesCnt record the executed DML event size.
 	metricTotalWriteBytesCnt prometheus.Counter
 
@@ -68,6 +71,7 @@ func (b *Statistics) RecordBatchExecution(executor func() (int, int64, error)) e
 		return err
 	}
 	b.metricExecBatchHis.Observe(float64(batchSize))
+	b.metricExecBatchBytesHis.Observe(float64(batchWriteBytes))
 	b.metricExecDMLCnt.Add(float64(batchSize))
 	b.metricTotalWriteBytesCnt.Add(float64(batchWriteBytes))
 	return nil
@@ -90,6 +94,7 @@ func (b *Statistics) Close() {
 	changefeedID := b.changefeedID.Name()
 	ExecDDLHistogram.DeleteLabelValues(keyspace, changefeedID)
 	ExecBatchHistogram.DeleteLabelValues(keyspace, changefeedID)
+	ExecBatchWriteBytesHistogram.DeleteLabelValues(keyspace, changefeedID)
 	EventSizeHistogram.DeleteLabelValues(keyspace, changefeedID)
 	ExecutionErrorCounter.DeleteLabelValues(keyspace, changefeedID)
 	TotalWriteBytesCounter.DeleteLabelValues(keyspace, changefeedID)

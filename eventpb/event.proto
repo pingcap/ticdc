@@ -99,4 +99,5 @@ message DispatcherRequest {
     uint64 epoch = 16;
     bool output_raw_change_event = 17;
     int64 mode = 18;
+    string txn_atomicity = 19;
 }

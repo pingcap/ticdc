@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -45,6 +46,7 @@ type DispatcherInfo interface {
 	GetActionType() eventpb.ActionType
 	GetChangefeedID() common.ChangeFeedID
 	GetFilter() filter.Filter
+	GetTxnAtomicity() config.AtomicityLevel
 
 	// sync point related
 	SyncPointEnabled() bool

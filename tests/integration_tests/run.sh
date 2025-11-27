@@ -16,8 +16,7 @@ mkdir -p $OUT_DIR || true
 
 if [ "${1-}" = '--debug' ]; then
 	WORK_DIR=$OUT_DIR/debug
-	trap stop_tidb_cluster EXIT
-
+	trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
 	PATH="$CUR/../bin:$CUR/_utils:$PATH" \

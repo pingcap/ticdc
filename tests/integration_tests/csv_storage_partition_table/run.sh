@@ -31,7 +31,7 @@ function run() {
 	run_sql_file $CUR/data/prepare.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	run_storage_consumer $WORK_DIR $SINK_URI $CUR/conf/changefeed.toml ""
-	sleep 8
+	sleep 20
 
 	# sync_diff can't check non-exist table, so we check expected tables are created in downstream first
 	check_table_exists partition_table.t ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
@@ -43,7 +43,7 @@ function run() {
 	cleanup_process $CDC_BINARY
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 run $*
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

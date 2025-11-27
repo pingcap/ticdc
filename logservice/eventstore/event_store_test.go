@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -151,6 +152,14 @@ func TestEventStoreInteractionWithSubClient(t *testing.T) {
 	}
 }
 
+func markSubStatsInitializedForTest(store EventStore, tableID int64) {
+	es := store.(*eventStore)
+	subStats := es.dispatcherMeta.tableStats[tableID]
+	for _, subStat := range subStats {
+		subStat.initialized.Store(true)
+	}
+}
+
 func TestEventStoreOnlyReuseDispatcher(t *testing.T) {
 	_, store := newEventStoreForTest(fmt.Sprintf("/tmp/%s", t.Name()))
 
@@ -179,6 +188,18 @@ func TestEventStoreOnlyReuseDispatcher(t *testing.T) {
 		ok := store.RegisterDispatcher(cfID, dispatcherID2, span, 100, func(watermark uint64, latestCommitTs uint64) {}, true, false)
 		require.False(t, ok)
 	}
+	// when the existing subscription is not initialized, add a dispatcher(onlyReuse=true) should fail
+	{
+		span := &heartbeatpb.TableSpan{
+			TableID:  tableID,
+			StartKey: []byte("b"),
+			EndKey:   []byte("h"),
+		}
+		ok := store.RegisterDispatcher(cfID, dispatcherID3, span, 100, func(watermark uint64, latestCommitTs uint64) {}, true, false)
+		require.False(t, ok)
+	}
+	// mark existing subscription as initialized
+	markSubStatsInitializedForTest(store, tableID)
 	// add a dispatcher(onlyReuse=true) with a containing span which should success
 	{
 		span := &heartbeatpb.TableSpan{
@@ -228,6 +249,7 @@ func TestEventStoreOnlyReuseDispatcherSuccess(t *testing.T) {
 		ok := es.RegisterDispatcher(cfID, dispatcherID1, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
 		require.True(t, ok)
 	}
+	markSubStatsInitializedForTest(store, tableID)
 
 	// 2. Register a second dispatcher with onlyReuse=true, whose span is contained
 	//    by the first subscription. This registration should succeed.
@@ -770,4 +792,133 @@ func TestEventStoreGetIteratorConcurrently(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestEventStoreIter_NextWithFiltering(t *testing.T) {
+	t.Parallel()
+
+	// Define a set of reusable events for different test cases.
+	// The span for the iterator will be [keyB, keyD).
+	// Filtered events (outside the span)
+	filteredInsert := &common.RawKVEntry{OpType: common.OpTypePut, Key: []byte("keyA1"), Value: []byte("valA1"), StartTs: 300, CRTs: 301}
+	filteredDelete := &common.RawKVEntry{OpType: common.OpTypeDelete, Key: []byte("keyA2"), OldValue: []byte("valA2"), StartTs: 302, CRTs: 303}
+	filteredUpdate := &common.RawKVEntry{OpType: common.OpTypePut, Key: []byte("keyA3"), Value: []byte("valA3"), OldValue: []byte("oldValA3"), StartTs: 304, CRTs: 305}
+	filteredAtEnd := &common.RawKVEntry{OpType: common.OpTypePut, Key: []byte("keyD"), Value: []byte("valD"), StartTs: 310, CRTs: 311}
+
+	// Kept events (inside the span)
+	keptInsert := &common.RawKVEntry{OpType: common.OpTypePut, Key: []byte("keyB1"), Value: []byte("valB1"), StartTs: 400, CRTs: 401}
+	keptDelete := &common.RawKVEntry{OpType: common.OpTypeDelete, Key: []byte("keyB2"), OldValue: []byte("valB2"), StartTs: 402, CRTs: 403}
+	keptUpdate := &common.RawKVEntry{OpType: common.OpTypePut, Key: []byte("keyB3"), Value: []byte("valB3"), OldValue: []byte("oldValB3"), StartTs: 404, CRTs: 405}
+
+	testCases := []struct {
+		name           string
+		allEvents      []*common.RawKVEntry
+		expectedEvents []*common.RawKVEntry
+	}{
+		{
+			name:           "FilteredInsert-then-KeptDelete",
+			allEvents:      []*common.RawKVEntry{filteredInsert, keptDelete},
+			expectedEvents: []*common.RawKVEntry{keptDelete},
+		},
+		{
+			name:           "FilteredDelete-then-KeptInsert",
+			allEvents:      []*common.RawKVEntry{filteredDelete, keptInsert},
+			expectedEvents: []*common.RawKVEntry{keptInsert},
+		},
+		{
+			name:           "FilteredUpdate-then-KeptInsert",
+			allEvents:      []*common.RawKVEntry{filteredUpdate, keptInsert},
+			expectedEvents: []*common.RawKVEntry{keptInsert},
+		},
+		{
+			name:           "FilteredUpdate-then-KeptDelete",
+			allEvents:      []*common.RawKVEntry{filteredUpdate, keptDelete},
+			expectedEvents: []*common.RawKVEntry{keptDelete},
+		},
+		{
+			name:           "KeptInsert-then-FilteredAtEnd",
+			allEvents:      []*common.RawKVEntry{keptInsert, filteredAtEnd},
+			expectedEvents: []*common.RawKVEntry{keptInsert},
+		},
+		{
+			name:           "MultipleFiltered-then-KeptUpdate",
+			allEvents:      []*common.RawKVEntry{filteredInsert, filteredDelete, keptUpdate},
+			expectedEvents: []*common.RawKVEntry{keptUpdate},
+		},
+	}
+
+	var subID uint64 = 1
+	var tableID int64 = 42
+	iteratorSpan := &heartbeatpb.TableSpan{
+		TableID:  tableID,
+		StartKey: []byte("keyB"),
+		EndKey:   []byte("keyD"),
+	}
+
+	// This test now focuses on a single, more comprehensive scenario.
+	for _, tc := range testCases {
+		dir := t.TempDir()
+		db, err := pebble.Open(dir, &pebble.Options{})
+		require.NoError(t, err)
+		t.Run(tc.name, func(t *testing.T) {
+			// Write test data
+			batch := db.NewBatch()
+			for _, event := range tc.allEvents {
+				key := EncodeKey(subID, tableID, event, CompressionNone)
+				value := event.Encode()
+				require.NoError(t, batch.Set(key, value, pebble.NoSync))
+			}
+			require.NoError(t, batch.Commit(pebble.NoSync))
+
+			// Create iterator with a wider range to ensure it sees all keys,
+			// so we can test the internal filtering logic.
+			start := EncodeKeyPrefix(subID, tableID, 0)
+			end := EncodeKeyPrefix(subID, tableID, 500)
+			innerIter, err := db.NewIter(&pebble.IterOptions{
+				LowerBound: start,
+				UpperBound: end,
+			})
+			require.NoError(t, err)
+			_ = innerIter.First()
+
+			decoder, err := zstd.NewReader(nil)
+			require.NoError(t, err)
+
+			iter := &eventStoreIter{
+				tableSpan:     iteratorSpan,
+				needCheckSpan: true, // Enable span checking logic
+				innerIter:     innerIter,
+				decoder:       decoder,
+				decoderPool:   nil, // Not needed for this test
+			}
+
+			// Collect results
+			var results []*common.RawKVEntry
+			for {
+				rawKV, _ := iter.Next()
+				if rawKV == nil {
+					break
+				}
+				// Make a copy to verify against later, as the original pointer's content might be overwritten if reused.
+				kvCopy := *rawKV
+				results = append(results, &kvCopy)
+			}
+			require.NoError(t, iter.innerIter.Close())
+
+			// Verify results
+			require.Len(t, results, len(tc.expectedEvents), "Should only read events within the span")
+
+			for i, res := range results {
+				// Check content correctness
+				require.True(t, bytes.Equal(tc.expectedEvents[i].Key, res.Key))
+				require.True(t, bytes.Equal(tc.expectedEvents[i].Value, res.Value))
+				require.True(t, bytes.Equal(tc.expectedEvents[i].OldValue, res.OldValue))
+				require.Equal(t, tc.expectedEvents[i].OpType, res.OpType)
+				require.Equal(t, tc.expectedEvents[i].StartTs, res.StartTs)
+				require.Equal(t, tc.expectedEvents[i].CRTs, res.CRTs)
+			}
+		})
+		require.NoError(t, db.Close())
+		require.NoError(t, os.RemoveAll(dir))
+	}
 }

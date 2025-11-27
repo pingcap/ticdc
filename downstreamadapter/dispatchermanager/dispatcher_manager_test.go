@@ -43,6 +43,7 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 	}
 	var redoTs atomic.Uint64
 	redoTs.Store(math.MaxUint64)
+	defaultAtomicity := config.DefaultAtomicityLevel()
 	sharedInfo := dispatcher.NewSharedInfo(
 		manager.changefeedID,
 		"system",
@@ -52,6 +53,7 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 		nil,
 		nil,
 		nil,
+		&defaultAtomicity,
 		false,
 		make(chan dispatcher.TableSpanStatusWithSeq, 1),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 1),
@@ -100,6 +102,7 @@ func createTestManager(t *testing.T) *DispatcherManager {
 	}
 
 	// Create shared info for the test manager
+	defaultAtomicity := config.DefaultAtomicityLevel()
 	manager.sharedInfo = dispatcher.NewSharedInfo(
 		manager.changefeedID,
 		"system",
@@ -109,6 +112,7 @@ func createTestManager(t *testing.T) *DispatcherManager {
 		nil,   // integrityConfig
 		nil,   // filterConfig
 		nil,   // syncPointConfig
+		&defaultAtomicity,
 		false,
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),

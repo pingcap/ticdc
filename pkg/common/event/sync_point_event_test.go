@@ -22,23 +22,9 @@ import (
 )
 
 func TestSyncpointEvent(t *testing.T) {
-	e := NewSyncPointEvent(common.NewDispatcherID(), []uint64{100, 102}, 1000, 10)
+	e := NewSyncPointEvent(common.NewDispatcherID(), 100, 1000, 10)
 	data, err := e.Marshal()
 	require.NoError(t, err)
-	// Now includes header size
-	require.Len(t, data, int(e.GetSize())+GetEventHeaderSize())
-
-	var e2 SyncPointEvent
-	err = e2.Unmarshal(data)
-	require.NoError(t, err)
-	require.Equal(t, *e, e2)
-}
-
-func TestSyncpointEventWithEmptyCommitTsList(t *testing.T) {
-	e := NewSyncPointEvent(common.NewDispatcherID(), []uint64{}, 1000, 10)
-	data, err := e.Marshal()
-	require.NoError(t, err)
-	// Now includes header size
 	require.Len(t, data, int(e.GetSize())+GetEventHeaderSize())
 
 	var e2 SyncPointEvent
@@ -49,40 +35,17 @@ func TestSyncpointEventWithEmptyCommitTsList(t *testing.T) {
 
 func TestSyncPointEventMethods(t *testing.T) {
 	did := common.NewDispatcherID()
-	e := NewSyncPointEvent(did, []uint64{100, 102}, 1000, 10)
+	e := NewSyncPointEvent(did, 123, 1000, 10)
 
-	// Test GetType
 	require.Equal(t, TypeSyncPointEvent, e.GetType())
-
-	// Test GetSeq
 	require.Equal(t, uint64(1000), e.GetSeq())
-
-	// Test GetEpoch
 	require.Equal(t, uint64(10), e.GetEpoch())
-
-	// Test GetDispatcherID
 	require.Equal(t, did, e.GetDispatcherID())
-
-	// Test GetCommitTsList
-	require.Equal(t, []common.Ts{100, 102}, e.GetCommitTsList())
-
-	// Test GetCommitTs
-	require.Equal(t, common.Ts(100), e.GetCommitTs())
-
-	// Test GetStartTs
-	require.Equal(t, common.Ts(100), e.GetStartTs())
-
-	// Test IsPaused
+	require.Equal(t, common.Ts(123), e.GetCommitTs())
+	require.Equal(t, common.Ts(123), e.GetStartTs())
 	require.False(t, e.IsPaused())
-
-	// Test Len
 	require.Equal(t, int32(1), e.Len())
-
-	// Test BlockEvent interface
-	blockedTables := e.GetBlockedTables()
-	require.NotNil(t, blockedTables)
-	require.Equal(t, InfluenceTypeAll, blockedTables.InfluenceType)
-
+	require.Equal(t, InfluenceTypeAll, e.GetBlockedTables().InfluenceType)
 	require.Nil(t, e.GetNeedDroppedTables())
 	require.Nil(t, e.GetNeedAddedTables())
 	require.Nil(t, e.GetUpdatedSchemas())
@@ -92,41 +55,24 @@ func TestSyncPointEventMarshalUnmarshal(t *testing.T) {
 	testCases := []struct {
 		name         string
 		dispatcherID common.DispatcherID
-		commitTsList []uint64
+		commitTs     uint64
 		seq          uint64
 		epoch        uint64
 		version      byte
 		wantError    bool
 	}{
 		{
-			name:         "normal case with multiple ts",
+			name:         "normal case",
 			dispatcherID: common.NewDispatcherID(),
-			commitTsList: []uint64{100, 102, 104},
+			commitTs:     100,
 			seq:          1000,
 			epoch:        10,
 			wantError:    false,
 		},
-		{
-			name:         "single ts",
-			dispatcherID: common.NewDispatcherID(),
-			commitTsList: []uint64{100},
-			seq:          1000,
-			epoch:        10,
-			wantError:    false,
-		},
-		{
-			name:         "empty ts list",
-			dispatcherID: common.NewDispatcherID(),
-			commitTsList: []uint64{},
-			seq:          1000,
-			epoch:        10,
-			wantError:    false,
-		},
-		// invalid version
 		{
 			name:         "invalid version",
 			dispatcherID: common.NewDispatcherID(),
-			commitTsList: []uint64{100},
+			commitTs:     100,
 			seq:          1000,
 			epoch:        10,
 			version:      byte(128),
@@ -136,8 +82,16 @@ func TestSyncPointEventMarshalUnmarshal(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			e := NewSyncPointEvent(tc.dispatcherID, tc.commitTsList, tc.seq, tc.epoch)
+			e := NewSyncPointEvent(tc.dispatcherID, tc.commitTs, tc.seq, tc.epoch)
+			if tc.version != 0 {
+				e.Version = tc.version
+			}
+
 			data, err := e.Marshal()
+			if tc.wantError {
+				require.Error(t, err)
+				return
+			}
 			require.NoError(t, err)
 
 			var e2 SyncPointEvent
@@ -148,27 +102,22 @@ func TestSyncPointEventMarshalUnmarshal(t *testing.T) {
 	}
 }
 
-// TestSyncPointEventHeader verifies the unified header format
 func TestSyncPointEventHeader(t *testing.T) {
 	did := common.NewDispatcherID()
-	e := NewSyncPointEvent(did, []uint64{100, 102}, 1000, 10)
+	e := NewSyncPointEvent(did, 100, 1000, 10)
 
 	data, err := e.Marshal()
 	require.NoError(t, err)
 
-	// Verify header
 	eventType, version, payloadLen, err := UnmarshalEventHeader(data)
 	require.NoError(t, err)
 	require.Equal(t, TypeSyncPointEvent, eventType)
 	require.Equal(t, SyncPointEventVersion1, version)
 	require.Equal(t, uint64(e.GetSize()), payloadLen)
 
-	// Verify total size
-	headerSize := GetEventHeaderSize()
-	require.Equal(t, uint64(headerSize)+payloadLen, uint64(len(data)))
+	require.Equal(t, uint64(GetEventHeaderSize())+payloadLen, uint64(len(data)))
 }
 
-// TestSyncPointEventUnmarshalErrors tests error handling in Unmarshal
 func TestSyncPointEventUnmarshalErrors(t *testing.T) {
 	testCases := []struct {
 		name      string
@@ -190,7 +139,7 @@ func TestSyncPointEventUnmarshalErrors(t *testing.T) {
 			data: func() []byte {
 				header := make([]byte, 16)
 				binary.BigEndian.PutUint32(header[0:4], 0xDA7A6A6A)
-				binary.BigEndian.PutUint16(header[4:6], uint16(TypeDMLEvent)) // wrong type
+				binary.BigEndian.PutUint16(header[4:6], uint16(TypeDMLEvent))
 				binary.BigEndian.PutUint16(header[6:8], uint16(SyncPointEventVersion1))
 				binary.BigEndian.PutUint64(header[8:16], 0)
 				return header
@@ -198,13 +147,13 @@ func TestSyncPointEventUnmarshalErrors(t *testing.T) {
 			wantError: "expected SyncPointEvent",
 		},
 		{
-			name: "incomplete data",
+			name: "payload too short",
 			data: func() []byte {
 				header := make([]byte, 16)
 				binary.BigEndian.PutUint32(header[0:4], 0xDA7A6A6A)
 				binary.BigEndian.PutUint16(header[4:6], uint16(TypeSyncPointEvent))
 				binary.BigEndian.PutUint16(header[6:8], uint16(SyncPointEventVersion1))
-				binary.BigEndian.PutUint64(header[8:16], 100) // Set payload length to 100 but don't provide data
+				binary.BigEndian.PutUint64(header[8:16], 1)
 				return header
 			}(),
 			wantError: "incomplete data",
@@ -224,11 +173,11 @@ func TestSyncPointEventUnmarshalErrors(t *testing.T) {
 // TestSyncPointEventSize verifies GetSize calculation
 func TestSyncPointEventSize(t *testing.T) {
 	did := common.NewDispatcherID()
-	e := NewSyncPointEvent(did, []uint64{100, 102}, 1000, 10)
+	e := NewSyncPointEvent(did, 100, 1000, 10)
 
 	// GetSize should only return business data size, not including header
-	// Seq(8) + Epoch(8) + DispatcherID + len(CommitTsList)(4) + 2*CommitTs(8*2)
-	expectedSize := int64(8 + 8 + did.GetSize() + 4 + 8*2)
+	// Seq(8) + Epoch(8) + DispatcherID + CommitTs(8)
+	expectedSize := int64(8 + 8 + did.GetSize() + 8)
 	require.Equal(t, expectedSize, e.GetSize())
 
 	// Marshaled data should include header
@@ -239,7 +188,7 @@ func TestSyncPointEventSize(t *testing.T) {
 
 // TestSyncPointEventPostFlush tests PostFlush functionality
 func TestSyncPointEventPostFlush(t *testing.T) {
-	e := NewSyncPointEvent(common.NewDispatcherID(), []uint64{100}, 1000, 10)
+	e := NewSyncPointEvent(common.NewDispatcherID(), 100, 1000, 10)
 
 	called := 0
 	e.AddPostFlushFunc(func() { called++ })

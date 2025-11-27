@@ -363,16 +363,16 @@ type columnSchema struct {
 	// create table t (a int primary key, b int unique key);
 	// Every element in first dimension is a index, and the second dimension is the columns offset
 	IndexColumns [][]int64 `json:"index_columns"`
-
 	// PKIndex store the colID of the columns in row changed events for primary key
 	PKIndex []int64 `json:"pk_index"`
-
 	// The following 3 fields, should only be used to decode datum from the raw value bytes, do not abuse those field.
 	// RowColInfos extend the model.ColumnInfo with some extra information
 	// it's the same length and order with the model.TableInfo.Columns
 	RowColInfos    []rowcodec.ColInfo              `json:"row_col_infos"`
 	RowColFieldTps map[int64]*datumTypes.FieldType `json:"row_col_field_tps"`
-	// only for new row format decoder
+	// if the table has pk, the handle col id is the pk col id
+	// else if the table has not null unique key, the handle col id is the unique key col id
+	// else the handle col id is -1
 	HandleColID []int64 `json:"handle_col_id"`
 	// RowColFieldTpsSlice is used to decode chunk ∂ raw value bytes
 	RowColFieldTpsSlice []*datumTypes.FieldType `json:"row_col_field_tps_slice"`
@@ -640,13 +640,18 @@ func (s *columnSchema) initIndexColumns() {
 			}
 		}
 	}
+
 	if handleIndexOffset < 0 {
 		return
 	}
 
+	// set handle key with not null unique key
 	selectCols := s.Indices[handleIndexOffset].Columns
+	s.HandleColID = make([]int64, 0, len(selectCols))
 	for _, col := range selectCols {
-		s.HandleKeyIDs[s.Columns[col.Offset].ID] = struct{}{}
+		colID := s.Columns[col.Offset].ID
+		s.HandleKeyIDs[colID] = struct{}{}
+		s.HandleColID = append(s.HandleColID, colID)
 	}
 }
 

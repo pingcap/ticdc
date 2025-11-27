@@ -111,7 +111,7 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 	for _, sortedEventGroups := range eventsGroupSortedByUpdateTs {
 		for _, eventsInGroup := range sortedEventGroups {
 			tableInfo := eventsInGroup[0].TableInfo
-			if !w.shouldGenBatchSQL(tableInfo.HasPrimaryKey(), tableInfo.HasVirtualColumns(), eventsInGroup) {
+			if !w.shouldGenBatchSQL(tableInfo.HasPKOrNotNullUK, tableInfo.HasVirtualColumns(), eventsInGroup) {
 				queryList, argsList = w.generateNormalSQLs(eventsInGroup)
 			} else {
 				queryList, argsList = w.generateBatchSQL(eventsInGroup)
@@ -171,16 +171,16 @@ func (w *Writer) prepareActiveActiveDMLs(events []*commonEvent.DMLEvent) (*prepa
 // shouldGenBatchSQL determines whether batch SQL generation should be used based on table properties and events.
 // Batch SQL generation is used when:
 // 1. BatchDMLEnable = true, and rows > 1
-// 2. The table has a primary key
+// 2. The table has a pk or not null unique key
 // 3. The table doesn't have virtual columns
 // 4. There's more than one row in the group
 // 5. All events have the same safe mode status
-func (w *Writer) shouldGenBatchSQL(hasPK bool, hasVirtualCols bool, events []*commonEvent.DMLEvent) bool {
+func (w *Writer) shouldGenBatchSQL(hasPKOrNotNullUK bool, hasVirtualCols bool, events []*commonEvent.DMLEvent) bool {
 	if !w.cfg.BatchDMLEnable {
 		return false
 	}
 
-	if !hasPK || hasVirtualCols {
+	if !hasPKOrNotNullUK || hasVirtualCols {
 		return false
 	}
 	if len(events) == 1 && events[0].Len() == 1 {
@@ -309,6 +309,23 @@ func (w *Writer) generateSQLForSingleEvent(event *commonEvent.DMLEvent, inDataSa
 	return w.batchSingleTxnDmls(rowLists, tableInfo, inDataSafeMode)
 }
 
+func (w *Writer) generateBatchSQLsPerEvent(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
+	var (
+		queries []string
+		args    [][]interface{}
+	)
+	for _, event := range events {
+		if event.Len() == 0 {
+			continue
+		}
+		inSafeMode := w.cfg.SafeMode || w.isInErrorCausedSafeMode || event.CommitTs < event.ReplicatingTs
+		sqls, vals := w.generateSQLForSingleEvent(event, inSafeMode)
+		queries = append(queries, sqls...)
+		args = append(args, vals...)
+	}
+	return queries, args
+}
+
 func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
 	tableInfo := events[0].TableInfo
 	type RowChangeWithKeys struct {
@@ -372,7 +389,7 @@ func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([
 					rowKey := rowLists[i].RowKeys
 					if nextRowType == common.RowTypeInsert {
 						if compareKeys(rowKey, rowLists[j].RowKeys) {
-							sql, values := w.generateNormalSQLs(events)
+							sql, values := w.generateBatchSQLsPerEvent(events)
 							log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values), zap.Int("writerID", w.id))
 							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events), zap.Any("i", i), zap.Any("j", j), zap.Int("writerID", w.id))
 						}
@@ -411,7 +428,7 @@ func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([
 					}
 					if nextRowType == common.RowTypeInsert {
 						if compareKeys(rowKey, rowLists[j].RowKeys) {
-							sql, values := w.generateNormalSQLs(events)
+							sql, values := w.generateBatchSQLsPerEvent(events)
 							log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values), zap.Int("writerID", w.id))
 							log.Panic("Here are two invalid rows with the same row type and keys", zap.Any("Events", events), zap.Any("i", i), zap.Any("j", j), zap.Int("writerID", w.id))
 						}
@@ -497,8 +514,8 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 			if !compareKeys(hashToKeyMap[hashValue], keyValue) {
 				log.Warn("the key hash is equal, but the keys is not the same; so we don't use batch generate sql, but use the normal generated sql instead")
 				event.Rewind() // reset event
-				// use normal sql instead
-				sql, args := w.generateNormalSQLs(events)
+				// fallback to per-event batch sql
+				sql, args := w.generateBatchSQLsPerEvent(events)
 				return sql, args, false
 			}
 		}
@@ -561,7 +578,7 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 		for i := 1; i < len(rowChanges); i++ {
 			rowType := rowChanges[i].RowType
 			if rowType == prevType {
-				sql, values := w.generateNormalSQLs(events)
+				sql, values := w.generateBatchSQLsPerEvent(events)
 				log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values), zap.Int("writerID", w.id))
 				log.Panic("invalid row changes", zap.String("schemaName", tableInfo.GetSchemaName()),
 					zap.String("tableName", tableInfo.GetTableName()), zap.Any("rowChanges", rowChanges),
@@ -657,6 +674,12 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 	writeTimeout += networkDriftDuration
 
 	tryExec := func() (int, int64, error) {
+		start := time.Now()
+		defer func() {
+			if time.Since(start) > w.cfg.SlowQuery {
+				log.Info("Slow Query", zap.Any("sql", dmls.LogWithoutValues()), zap.Any("writerID", w.id))
+			}
+		}()
 		if fallbackToSeqWay || !w.cfg.MultiStmtEnable {
 			// use sequence way to execute the dmls
 			tx, err := w.db.BeginTx(w.ctx, nil)
@@ -677,6 +700,7 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 			// use multi stmt way to execute the dmls
 			err := w.multiStmtExecute(dmls, writeTimeout)
 			if err != nil {
+				log.Warn("multiStmtExecute failed, fallback to sequence way", zap.Error(err), zap.Any("sql", dmls.LogWithoutValues()), zap.Int("writerID", w.id))
 				fallbackToSeqWay = true
 				return 0, 0, err
 			}
@@ -696,7 +720,8 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 		failpoint.Inject("MySQLDuplicateEntryError", func() {
 			log.Warn("inject MySQLDuplicateEntryError")
 			err := cerror.WrapError(cerror.ErrMySQLDuplicateEntry, &dmysql.MySQLError{
-				Number: uint16(mysql.ErrDupEntry),
+				Number:  uint16(mysql.ErrDupEntry),
+				Message: "Duplicate entry",
 			})
 			w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls)
 			failpoint.Return(err)
@@ -920,7 +945,7 @@ func (w *Writer) groupRowsByType(
 				eventTableInfo,
 				nil, nil)
 			updateRow = append(updateRow, newUpdateRow)
-			if len(updateRow) >= w.cfg.MaxTxnRow {
+			if len(updateRow) >= w.cfg.MaxMultiUpdateRowCount {
 				updateRows = append(updateRows, updateRow)
 				updateRow = make([]*sqlmodel.RowChange, 0, rowSize)
 			}

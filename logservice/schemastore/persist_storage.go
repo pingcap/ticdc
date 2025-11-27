@@ -732,10 +732,15 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 	if strings.Contains(strings.ToUpper(job.Query), "ADD FULLTEXT INDEX") {
 		job.Type = filter.ActionAddFullTextIndex
 	}
+	// CREATE HYBRID INDEX i_idx ON t(b, c, d, e, g) PARAMETER
+	// TODO: remove this after CREATE HYBRID INDEX has a dedicated action type in tidb repo
+	if strings.HasPrefix(strings.TrimSpace(strings.ToUpper(job.Query)), "CREATE HYBRID INDEX") {
+		job.Type = filter.ActionCreateHybridIndex
+	}
 
 	handler, ok := allDDLHandlers[job.Type]
 	if !ok {
-		log.Error("unknown ddl type, ignore it", zap.Any("ddlType", job.Type), zap.String("query", job.Query))
+		log.Warn("unknown ddl type, ignore it", zap.Any("ddlType", job.Type), zap.String("query", job.Query))
 		return nil
 	}
 

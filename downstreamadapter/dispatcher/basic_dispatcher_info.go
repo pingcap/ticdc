@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config"
 )
 
 // SharedInfo contains all the shared configuration and resources
@@ -41,6 +42,9 @@ type SharedInfo struct {
 	// if syncPointInfo is not nil, means enable Sync Point feature,
 	syncPointConfig *syncpoint.SyncPointConfig
 
+	// The atomicity level of a transaction.
+	txnAtomicity config.AtomicityLevel
+
 	// enableSplittableCheck controls whether to check if a table is splittable before splitting.
 	// If true, only tables with a primary key and no unique key can be split.
 	// If false, all tables can be split without checking.
@@ -55,6 +59,11 @@ type SharedInfo struct {
 	// blockStatusesChan use to collector block status of ddl/sync point event to Maintainer
 	// shared by the event dispatcher manager
 	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus
+
+	// blockExecutor is used to execute block events such as DDL and sync point events asynchronously
+	// to avoid callback() called in handleEvents, causing deadlock in ds
+	blockExecutor *blockEventExecutor
+
 	// errCh is used to collect the errors that need to report to maintainer
 	// such as error of flush ddl events
 	errCh chan error
@@ -70,12 +79,13 @@ func NewSharedInfo(
 	integrityConfig *eventpb.IntegrityConfig,
 	filterConfig *eventpb.FilterConfig,
 	syncPointConfig *syncpoint.SyncPointConfig,
+	txnAtomicity *config.AtomicityLevel,
 	enableSplittableCheck bool,
 	statusesChan chan TableSpanStatusWithSeq,
 	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus,
 	errCh chan error,
 ) *SharedInfo {
-	return &SharedInfo{
+	sharedInfo := &SharedInfo{
 		changefeedID:          changefeedID,
 		timezone:              timezone,
 		bdrMode:               bdrMode,
@@ -87,8 +97,16 @@ func NewSharedInfo(
 		enableSplittableCheck: enableSplittableCheck,
 		statusesChan:          statusesChan,
 		blockStatusesChan:     blockStatusesChan,
+		blockExecutor:         newBlockEventExecutor(),
 		errCh:                 errCh,
 	}
+
+	if txnAtomicity != nil {
+		sharedInfo.txnAtomicity = *txnAtomicity
+	} else {
+		sharedInfo.txnAtomicity = config.DefaultAtomicityLevel()
+	}
+	return sharedInfo
 }
 
 func (d *BasicDispatcher) GetId() common.DispatcherID {
@@ -117,6 +135,14 @@ func (d *BasicDispatcher) SetComponentStatus(status heartbeatpb.ComponentState) 
 
 func (d *BasicDispatcher) GetRemovingStatus() bool {
 	return d.isRemoving.Load()
+}
+
+func (d *BasicDispatcher) GetTryRemoving() bool {
+	return d.tryRemoving.Load()
+}
+
+func (d *BasicDispatcher) SetTryRemoving() {
+	d.tryRemoving.Store(true)
 }
 
 func (d *BasicDispatcher) EnableSyncPoint() bool {
@@ -182,6 +208,10 @@ func (d *BasicDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
 	return d.tableSpan
 }
 
+func (d *BasicDispatcher) GetTxnAtomicity() config.AtomicityLevel {
+	return d.sharedInfo.txnAtomicity
+}
+
 func (d *BasicDispatcher) GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus {
 	return d.sharedInfo.blockStatusesChan
 }
@@ -219,4 +249,14 @@ func (s *SharedInfo) GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStat
 
 func (s *SharedInfo) GetErrCh() chan error {
 	return s.errCh
+}
+
+func (s *SharedInfo) GetBlockEventExecutor() *blockEventExecutor {
+	return s.blockExecutor
+}
+
+func (s *SharedInfo) Close() {
+	if s.blockExecutor != nil {
+		s.blockExecutor.Close()
+	}
 }

@@ -27,8 +27,7 @@ function prepare() {
 	cdc_cli_changefeed create --sink-uri="mysql://root@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/"
 }
 
-trap stop_tidb_cluster EXIT
-
+trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 # Only support MySQL sink for complex transaction test
 if [ "$SINK_TYPE" == "mysql" ]; then
 	prepare $*
