@@ -8,6 +8,26 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
+function prepare() {
+	changefeed_id=$1
+	capture1_id=$2
+	capture2_id=$3
+	target_capture=$capture1_id
+	# find a table that capture2 is replicating
+	tables=$(curl -X GET "http://127.0.0.1:8301/api/v2/changefeeds/${changefeed_id}/tables?keyspace=$KEYSPACE_NAME")
+	one_table_id=$(echo $tables | jq -r --arg cid "$capture2_id" '.items[] | select(.node_id==$cid) | .table_ids[0]')
+	if [[ "$one_table_id" == "" || "$one_table_id" == "null" || "$one_table_id" == "0" ]]; then
+		# if not found, find a table that capture1 is replicating
+		target_capture=$capture2_id
+		tables=$(curl -X GET "http://127.0.0.1:8300/api/v2/changefeeds/${changefeed_id}/tables?keyspace=$KEYSPACE_NAME")
+		one_table_id=$(echo $tables | jq -r --arg cid "$capture1_id" '.items[] | select(.node_id==$cid) | .table_ids[0]')
+		if [[ "$one_table_id" == "" || "$one_table_id" == "null" || "$one_table_id" == "0" ]]; then
+			return 1
+		fi
+	fi
+	return 0
+}
+
 # This test mainly verifies CDC can handle the following scenario
 # 1. Two captures, capture-1 is the coordinator, each capture replicates more than one table.
 # 2. capture-2 replicates some DMLs but has some delay, such as large amount of
@@ -54,17 +74,17 @@ function run() {
 	capture1_id=$(cdc cli capture list | grep -v "Command to ticdc" | jq -r '.[]|select(.address=="127.0.0.1:8300")|.id')
 	capture2_id=$(cdc cli capture list | grep -v "Command to ticdc" | jq -r '.[]|select(.address=="127.0.0.1:8301")|.id')
 
-	target_capture=$capture1_id
-	# find a table that capture2 is replicating
-	one_table_id=$(curl -X GET "http://127.0.0.1:8301/api/v2/changefeeds/${changefeed_id}/tables?keyspace=$KEYSPACE_NAME" | jq -r --arg cid "$capture2_id" '.items[] | select(.node_id==$cid) | .table_ids[0]')
-	if [[ "$one_table_id" == "" || "$one_table_id" == "null" || "$one_table_id" == "0" ]]; then
-		# if not found, find a table that capture1 is replicating
-		target_capture=$capture2_id
-		one_table_id=$(curl -X GET "http://127.0.0.1:8300/api/v2/changefeeds/${changefeed_id}/tables?keyspace=$KEYSPACE_NAME" | jq -r --arg cid "$capture1_id" '.items[] | select(.node_id==$cid) | .table_ids[0]')
-		if [[ "$one_table_id" == "" || "$one_table_id" == "null" || "$one_table_id" == "0" ]]; then
-			exit 1
+	for ((i = 0; i < 5; i++)); do
+		if prepare "$changefeed_id" "$capture1_id" "$capture2_id"; then
+			break
 		fi
+		sleep 2
+	done
+	if [[ $i -eq 5 ]]; then
+		echo 'Failed to find a replicating table'
+		exit 1
 	fi
+
 	table_query=$(mysql -E -h${UP_TIDB_HOST} -P${UP_TIDB_PORT} -uroot -e "select table_name from information_schema.tables where tidb_table_id = ${one_table_id}")
 	table_name=$(echo $table_query | tail -n 1 | awk '{print $(NF)}')
 	run_sql "insert into capture_suicide_while_balance_table.${table_name} values (),(),(),(),()"

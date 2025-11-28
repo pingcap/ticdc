@@ -244,14 +244,10 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 		updateMetricEventServiceSendDDLCount(d.info.GetMode())
 	}
 
-	tableID := int64(0)
-	if e.TableInfo != nil {
-		tableID = e.TableInfo.TableName.TableID
-	}
 	log.Info("send ddl event to dispatcher",
 		zap.Stringer("dispatcherID", d.id),
 		zap.Int64("DDLSpanTableID", d.info.GetTableSpan().TableID),
-		zap.Int64("EventTableID", tableID),
+		zap.Int64("EventTableID", e.GetTableID()),
 		zap.String("query", e.Query), zap.Uint64("commitTs", e.FinishedTs),
 		zap.Uint64("seq", e.Seq), zap.Int64("mode", d.info.GetMode()))
 }
@@ -948,6 +944,10 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 				zap.Stringer("dispatcherID", id), zap.Int64("tableID", span.GetTableID()),
 				zap.Uint64("startTs", info.GetStartTs()), zap.String("span", common.FormatTableSpan(span)))
 		}
+		status.removeDispatcher(id)
+		if status.isEmpty() {
+			c.changefeedMap.Delete(changefeedID)
+		}
 		c.sendNotReusableEvent(node.ID(info.GetServerID()), dispatcher)
 		return nil
 	}
@@ -964,6 +964,10 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 			zap.Uint64("startTs", info.GetStartTs()), zap.String("span", common.FormatTableSpan(span)),
 			zap.Error(err),
 		)
+		status.removeDispatcher(id)
+		if status.isEmpty() {
+			c.changefeedMap.Delete(changefeedID)
+		}
 		return err
 	}
 	c.dispatchers.Store(id, dispatcherPtr)

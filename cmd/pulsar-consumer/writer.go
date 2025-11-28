@@ -181,19 +181,21 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 	start := time.Now()
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
-	select {
-	case <-ctx.Done():
-		return context.Cause(ctx)
-	case <-done:
-		log.Info("flush DML events before DDL done", zap.Uint64("DDLCommitTs", commitTs),
-			zap.Int("total", total), zap.Duration("duration", time.Since(start)),
-			zap.Any("tables", tableIDs))
-	case <-ticker.C:
-		log.Panic("DDL event timeout, since the DML events are not flushed in time",
-			zap.Uint64("DDLCommitTs", commitTs), zap.String("query", ddl.Query),
-			zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-done:
+			log.Info("flush DML events before DDL done", zap.Uint64("DDLCommitTs", commitTs),
+				zap.Int("total", total), zap.Duration("duration", time.Since(start)),
+				zap.Any("tables", tableIDs))
+			return w.mysqlSink.WriteBlockEvent(ddl)
+		case <-ticker.C:
+			log.Warn("DML events cannot be flushed in time",
+				zap.Uint64("DDLCommitTs", commitTs), zap.String("query", ddl.Query),
+				zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
+		}
 	}
-	return w.mysqlSink.WriteBlockEvent(ddl)
 }
 
 func (w *writer) getBlockTableIDs(ddl *commonEvent.DDLEvent) map[int64]struct{} {
@@ -288,17 +290,19 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 	start := time.Now()
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
-	select {
-	case <-ctx.Done():
-		return context.Cause(ctx)
-	case <-done:
-		log.Info("flush DML events done", zap.Uint64("watermark", watermark),
-			zap.Int("total", total), zap.Duration("duration", time.Since(start)))
-	case <-ticker.C:
-		log.Panic("DML events cannot be flushed in 1 minute", zap.Uint64("watermark", watermark),
-			zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-done:
+			log.Info("flush DML events done", zap.Uint64("watermark", watermark),
+				zap.Int("total", total), zap.Duration("duration", time.Since(start)))
+			return nil
+		case <-ticker.C:
+			log.Warn("DML events cannot be flushed in time", zap.Uint64("watermark", watermark),
+				zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
+		}
 	}
-	return nil
 }
 
 // WriteMessage is to decode pulsar message to event.

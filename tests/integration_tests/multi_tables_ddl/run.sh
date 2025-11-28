@@ -17,7 +17,11 @@ export AWS_SECRET_ACCESS_KEY=$MINIO_SECRET_KEY
 export S3_ENDPOINT=127.0.0.1:24927
 rm -rf "$WORK_DIR"
 mkdir -p "$WORK_DIR"
-MINIO_PID=0
+pkill -9 minio || true
+bin/minio server --address $S3_ENDPOINT "$WORK_DIR/s3" &
+MINIO_PID=$!
+check_minio $S3_ENDPOINT
+
 stop_minio() {
 	if [ $MINIO_PID -ne 0 ]; then
 		kill -2 $MINIO_PID || true
