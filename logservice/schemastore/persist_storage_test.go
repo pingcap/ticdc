@@ -382,6 +382,9 @@ func TestApplyDDLJobs(t *testing.T) {
 								},
 							},
 							Query: "DROP TABLE `test`.`t2`",
+							BlockedTableNames: []commonEvent.SchemaTableName{
+								{SchemaName: "test", TableName: "t2"},
+							},
 						},
 						{
 							Type:       byte(model.ActionTruncateTable),
@@ -400,6 +403,9 @@ func TestApplyDDLJobs(t *testing.T) {
 							NeedDroppedTables: &commonEvent.InfluencedTables{
 								InfluenceType: commonEvent.InfluenceTypeNormal,
 								TableIDs:      []int64{200},
+							},
+							BlockedTableNames: []commonEvent.SchemaTableName{
+								{SchemaName: "test", TableName: "t1"},
 							},
 						},
 					},
@@ -497,6 +503,9 @@ func TestApplyDDLJobs(t *testing.T) {
 								},
 							},
 							Query: "DROP TABLE `test`.`t1`",
+							BlockedTableNames: []commonEvent.SchemaTableName{
+								{SchemaName: "test", TableName: "t1"},
+							},
 						},
 					},
 				},
@@ -643,6 +652,9 @@ func TestApplyDDLJobs(t *testing.T) {
 								InfluenceType: commonEvent.InfluenceTypeNormal,
 								TableIDs:      []int64{204},
 							},
+							BlockedTableNames: []commonEvent.SchemaTableName{
+								{SchemaName: "test", TableName: "t1"},
+							},
 						},
 						{
 							Type:       byte(model.ActionTruncateTablePartition),
@@ -661,6 +673,9 @@ func TestApplyDDLJobs(t *testing.T) {
 									TableID:   208,
 									Splitable: true,
 								},
+							},
+							BlockedTableNames: []commonEvent.SchemaTableName{
+								{SchemaName: "test", TableName: "t1"},
 							},
 						},
 					},
@@ -699,6 +714,9 @@ func TestApplyDDLJobs(t *testing.T) {
 									Splitable: true,
 								},
 							},
+							BlockedTableNames: []commonEvent.SchemaTableName{
+								{SchemaName: "test", TableName: "t1"},
+							},
 						},
 					},
 				},
@@ -734,6 +752,9 @@ func TestApplyDDLJobs(t *testing.T) {
 									Splitable: true,
 								},
 							},
+							BlockedTableNames: []commonEvent.SchemaTableName{
+								{SchemaName: "test", TableName: "t1"},
+							},
 						},
 						{
 							Type:       byte(model.ActionAddTablePartition),
@@ -749,6 +770,9 @@ func TestApplyDDLJobs(t *testing.T) {
 									Splitable: true,
 								},
 							},
+							BlockedTableNames: []commonEvent.SchemaTableName{
+								{SchemaName: "test", TableName: "t1"},
+							},
 						},
 						{
 							Type:       byte(model.ActionDropTablePartition),
@@ -760,6 +784,9 @@ func TestApplyDDLJobs(t *testing.T) {
 							NeedDroppedTables: &commonEvent.InfluencedTables{
 								InfluenceType: commonEvent.InfluenceTypeNormal,
 								TableIDs:      []int64{204},
+							},
+							BlockedTableNames: []commonEvent.SchemaTableName{
+								{SchemaName: "test", TableName: "t1"},
 							},
 						},
 						{
@@ -779,6 +806,9 @@ func TestApplyDDLJobs(t *testing.T) {
 									TableID:   208,
 									Splitable: true,
 								},
+							},
+							BlockedTableNames: []commonEvent.SchemaTableName{
+								{SchemaName: "test", TableName: "t1"},
 							},
 						},
 					},
@@ -873,6 +903,10 @@ func TestApplyDDLJobs(t *testing.T) {
 									NewSchemaID: 105,
 								},
 							},
+							BlockedTableNames: []commonEvent.SchemaTableName{
+								{SchemaName: "test", TableName: "t1"},
+								{SchemaName: "test2", TableName: "t2"},
+							},
 						},
 					},
 				},
@@ -901,6 +935,9 @@ func TestApplyDDLJobs(t *testing.T) {
 									Splitable: true,
 								},
 							},
+							BlockedTableNames: []commonEvent.SchemaTableName{
+								{SchemaName: "test", TableName: "t1"},
+							},
 						},
 					},
 				},
@@ -928,6 +965,9 @@ func TestApplyDDLJobs(t *testing.T) {
 									TableID:   203,
 									Splitable: true,
 								},
+							},
+							BlockedTableNames: []commonEvent.SchemaTableName{
+								{SchemaName: "test2", TableName: "t2"},
 							},
 						},
 					},
@@ -1027,6 +1067,9 @@ func TestApplyDDLJobs(t *testing.T) {
 									},
 								},
 							},
+							BlockedTableNames: []commonEvent.SchemaTableName{
+								{SchemaName: "test", TableName: "t1"},
+							},
 						},
 						{
 							Type:       byte(model.ActionRenameTable),
@@ -1049,6 +1092,9 @@ func TestApplyDDLJobs(t *testing.T) {
 										TableName:  "t2",
 									},
 								},
+							},
+							BlockedTableNames: []commonEvent.SchemaTableName{
+								{SchemaName: "test2", TableName: "t2"},
 							},
 						},
 					},
@@ -1078,6 +1124,9 @@ func TestApplyDDLJobs(t *testing.T) {
 										TableName:  "t1",
 									},
 								},
+							},
+							BlockedTableNames: []commonEvent.SchemaTableName{
+								{SchemaName: "test", TableName: "t1"},
 							},
 						},
 					},
@@ -1206,6 +1255,9 @@ func TestApplyDDLJobs(t *testing.T) {
 									},
 								},
 							},
+							BlockedTableNames: []commonEvent.SchemaTableName{
+								{SchemaName: "test", TableName: "t1"},
+							},
 						},
 					},
 				},
@@ -1234,6 +1286,9 @@ func TestApplyDDLJobs(t *testing.T) {
 										TableName:  "t1",
 									},
 								},
+							},
+							BlockedTableNames: []commonEvent.SchemaTableName{
+								{SchemaName: "test", TableName: "t1"},
 							},
 						},
 					},
@@ -1368,6 +1423,10 @@ func TestApplyDDLJobs(t *testing.T) {
 									},
 								},
 							},
+							BlockedTableNames: []commonEvent.SchemaTableName{
+								{SchemaName: "test", TableName: "t1"},
+								{SchemaName: "test", TableName: "t2"},
+							},
 						},
 					},
 				},
@@ -1407,6 +1466,54 @@ func TestApplyDDLJobs(t *testing.T) {
 										TableName:  "t2",
 									},
 								},
+							},
+							BlockedTableNames: []commonEvent.SchemaTableName{
+								{SchemaName: "test", TableName: "t1"},
+								{SchemaName: "test", TableName: "t2"},
+							},
+						},
+					},
+				},
+				// test filter: after rename, t102 is filtered out
+				{
+					tableID:     200,
+					tableFilter: buildTableFilterByNameForTest("test", "*"),
+					startTs:     1000,
+					endTs:       1010,
+					result: []commonEvent.DDLEvent{
+						{
+							Type:       byte(model.ActionRenameTables),
+							Query:      "RENAME TABLE `test`.`t1` TO `test`.`t101`;RENAME TABLE `test`.`t2` TO `test2`.`t102`;",
+							FinishedTs: 1010,
+							BlockedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{0, 200, 201},
+							},
+							NeedDroppedTables: &commonEvent.InfluencedTables{
+								InfluenceType: commonEvent.InfluenceTypeNormal,
+								TableIDs:      []int64{201},
+							},
+							TableNameChange: &commonEvent.TableNameChange{
+								AddName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test",
+										TableName:  "t101",
+									},
+								},
+								DropName: []commonEvent.SchemaTableName{
+									{
+										SchemaName: "test",
+										TableName:  "t1",
+									},
+									{
+										SchemaName: "test",
+										TableName:  "t2",
+									},
+								},
+							},
+							BlockedTableNames: []commonEvent.SchemaTableName{
+								{SchemaName: "test", TableName: "t1"},
+								{SchemaName: "test", TableName: "t2"},
 							},
 						},
 					},
@@ -1538,6 +1645,10 @@ func TestApplyDDLJobs(t *testing.T) {
 										TableName:  "t2",
 									},
 								},
+							},
+							BlockedTableNames: []commonEvent.SchemaTableName{
+								{SchemaName: "test", TableName: "t1"},
+								{SchemaName: "test", TableName: "t2"},
 							},
 						},
 					},
@@ -2097,6 +2208,9 @@ func TestApplyDDLJobs(t *testing.T) {
 									Splitable: true,
 								},
 							},
+							BlockedTableNames: []commonEvent.SchemaTableName{
+								{SchemaName: "test", TableName: "t1"},
+							},
 						},
 						{
 							Type:       byte(model.ActionAlterTablePartitioning),
@@ -2126,6 +2240,9 @@ func TestApplyDDLJobs(t *testing.T) {
 									Splitable: true,
 								},
 							},
+							BlockedTableNames: []commonEvent.SchemaTableName{
+								{SchemaName: "test", TableName: "t1"},
+							},
 						},
 						{
 							Type:       byte(model.ActionRemovePartitioning),
@@ -2144,6 +2261,9 @@ func TestApplyDDLJobs(t *testing.T) {
 									TableID:   303,
 									Splitable: true,
 								},
+							},
+							BlockedTableNames: []commonEvent.SchemaTableName{
+								{SchemaName: "test", TableName: "t1"},
 							},
 						},
 					},
@@ -2235,21 +2355,32 @@ func TestApplyDDLJobs(t *testing.T) {
 								InfluenceType: commonEvent.InfluenceTypeNormal,
 								TableIDs:      []int64{300},
 							},
+							BlockedTableNames: []commonEvent.SchemaTableName{
+								{SchemaName: "test", TableName: "t1"},
+							},
 						},
 						{
 							Type:       byte(filter.ActionAddFullTextIndex),
 							FinishedTs: 1140,
+							TiDBOnly:   true,
 							BlockedTables: &commonEvent.InfluencedTables{
 								InfluenceType: commonEvent.InfluenceTypeNormal,
 								TableIDs:      []int64{300},
+							},
+							BlockedTableNames: []commonEvent.SchemaTableName{
+								{SchemaName: "test", TableName: "t1"},
 							},
 						},
 						{
 							Type:       byte(filter.ActionCreateHybridIndex),
 							FinishedTs: 1150,
+							TiDBOnly:   true,
 							BlockedTables: &commonEvent.InfluencedTables{
 								InfluenceType: commonEvent.InfluenceTypeNormal,
 								TableIDs:      []int64{300},
+							},
+							BlockedTableNames: []commonEvent.SchemaTableName{
+								{SchemaName: "test", TableName: "t1"},
 							},
 						},
 					},
@@ -2351,6 +2482,27 @@ func TestApplyDDLJobs(t *testing.T) {
 							if !reflect.DeepEqual(expectedDDLEvent.BlockedTables, actualDDLEvent.BlockedTables) {
 								return false
 							}
+						}
+						// check BlockedTableNames
+						sort.Slice(expectedDDLEvent.BlockedTableNames, func(i, j int) bool {
+							if expectedDDLEvent.BlockedTableNames[i].TableName != expectedDDLEvent.BlockedTableNames[j].TableName {
+								return expectedDDLEvent.BlockedTableNames[i].TableName < expectedDDLEvent.BlockedTableNames[j].TableName
+							}
+							return expectedDDLEvent.BlockedTableNames[i].SchemaName < expectedDDLEvent.BlockedTableNames[j].SchemaName
+						})
+						sort.Slice(actualDDLEvent.BlockedTableNames, func(i, j int) bool {
+							if actualDDLEvent.BlockedTableNames[i].TableName != actualDDLEvent.BlockedTableNames[j].TableName {
+								return actualDDLEvent.BlockedTableNames[i].TableName < actualDDLEvent.BlockedTableNames[j].TableName
+							}
+							return actualDDLEvent.BlockedTableNames[i].SchemaName < actualDDLEvent.BlockedTableNames[j].SchemaName
+						})
+						if !reflect.DeepEqual(expectedDDLEvent.BlockedTableNames, actualDDLEvent.BlockedTableNames) {
+							log.Warn("BlockedTableNames not equal",
+								zap.String("DDLType", model.ActionType(expectedDDLEvent.Type).String()),
+								zap.Uint64("TS", expectedDDLEvent.FinishedTs),
+								zap.Any("expectedBlockedTableNames", expectedDDLEvent.BlockedTableNames),
+								zap.Any("actualBlockedTableNames", actualDDLEvent.BlockedTableNames))
+							return false
 						}
 						// check UpdatedSchemas
 						sort.Slice(expectedDDLEvent.UpdatedSchemas, func(i, j int) bool {

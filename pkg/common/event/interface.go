@@ -144,6 +144,7 @@ func (t InfluenceType) toPB() heartbeatpb.InfluenceType {
 type InfluencedTables struct {
 	InfluenceType InfluenceType
 	// only exists when InfluenceType is InfluenceTypeNormal
+	// NOTE: All the table IDs in TableIDs are physical table IDs.
 	TableIDs []int64
 	// only exists when InfluenceType is InfluenceTypeDB
 	SchemaID int64
