@@ -48,7 +48,7 @@ mysql_groups=(
 	# G08
 	'default_value http_proxies bank ddl_for_split_tables_random_schedule'
 	# G09
-	'availability resolve_lock merge_table drop_many_tables'
+	'availability resolve_lock merge_table drop_many_tables ddl_for_split_tables'
 	# G10
 	'consistent_replicate_nfs consistent_replicate_storage_file consistent_replicate_storage_file_large_value consistent_replicate_storage_s3'
 	# G11

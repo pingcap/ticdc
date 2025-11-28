@@ -177,7 +177,7 @@ storage_groups=(
 	# G14
 	'csv_storage_partition_table csv_storage_multi_tables_ddl fail_over_ddl_O'
 	# G15
-	'split_region autorandom gc_safepoint ddl_for_split_tables'
+	'split_region autorandom gc_safepoint'
 )
 
 # Source shared functions and check test coverage
