@@ -200,7 +200,7 @@ func (m *kafkaTopicManager) fetchAllTopicsPartitionsNum(
 		numPartitions[m.defaultTopic] = m.cfg.PartitionNum
 	}
 
-	log.Info(
+	log.Debug(
 		"Kafka admin client describe topics success",
 		zap.String("keyspace", m.changefeedID.Keyspace()),
 		zap.String("changefeed", m.changefeedID.Name()),
