@@ -636,7 +636,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 			controller.spanController.UpdateStatus(spanReplica, status)
 		}
 
-		log.Info("spanReplica", zap.Any("j", j), zap.Any("changefeedID", spanReplica.ID), zap.Any("span", common.FormatTableSpan(spanReplica.Span)))
+		log.Info("spanReplica", zap.Any("j", j), zap.Any("id", spanReplica.ID), zap.Any("span", common.FormatTableSpan(spanReplica.Span)))
 	}
 
 	// first keep the system is balanced
@@ -897,7 +897,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	// 50    |       |
 	controller.schedulerController.GetScheduler(scheduler.BalanceSplitScheduler).Execute()
 	for _, operator := range controller.operatorController.GetAllOperators() {
-		log.Info("operator", zap.Any("type", operator.Type()), zap.Any("changefeedID", operator.ID()), zap.Any("string", operator.String()))
+		log.Info("operator", zap.Any("type", operator.Type()), zap.Any("id", operator.ID()), zap.Any("string", operator.String()))
 	}
 	require.Equal(t, controller.operatorController.OperatorSize(), 3)
 

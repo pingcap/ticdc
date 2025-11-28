@@ -268,7 +268,7 @@ func (m *Manager) onDispatchMaintainerRequest(
 	msg *messaging.TargetMessage,
 ) *heartbeatpb.MaintainerStatus {
 	if m.coordinatorID != msg.From {
-		log.Warn("ignore invalid coordinator changefeedID",
+		log.Warn("ignore invalid coordinator id",
 			zap.Any("request", msg),
 			zap.Any("coordinatorID", m.coordinatorID),
 			zap.Stringer("from", msg.From))
