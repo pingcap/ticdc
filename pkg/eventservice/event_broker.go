@@ -614,12 +614,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	if uint64(sl.maxDMLBytes) > task.availableMemoryQuota.Load() {
-		log.Debug("dispatcher available memory quota is not enough, skip scan", zap.Stringer("dispatcher", task.id), zap.Uint64("available", task.availableMemoryQuota.Load()), zap.Int64("required", int64(sl.maxDMLBytes)))
-		c.sendSignalResolvedTs(task)
-		return
-	}
-
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter, task.info.GetMode())
 	scannedBytes, events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
 	if scannedBytes < 0 {
@@ -1093,6 +1087,8 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.taskChan)), uint64(len(c.messageCh)), tableInfo, status)
 	newStat.copyStatistics(oldStat)
 
+	newStat.resetScanLimit()
+
 	for {
 		if statPtr.CompareAndSwap(oldStat, newStat) {
 			status.addDispatcher(dispatcherID, statPtr)
@@ -1170,12 +1166,8 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 	}
 
 	holder := make(map[common.GID]uint64, len(availables))
-	dispatcherAvailable := make(map[common.DispatcherID]uint64, len(availables))
 	for _, item := range availables {
 		holder[item.Gid] = item.Available
-		for dispatcherID, available := range item.DispatcherAvailable {
-			dispatcherAvailable[dispatcherID] = available
-		}
 	}
 
 	c.changefeedMap.Range(func(k, v interface{}) bool {
@@ -1185,16 +1177,6 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 		if ok {
 			changefeed.availableMemoryQuota.Store(from, atomic.NewUint64(available))
 			metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(available))
-		}
-		return true
-	})
-
-	c.dispatchers.Range(func(k, v interface{}) bool {
-		dispatcherID := k.(common.DispatcherID)
-		dispatcher := v.(*atomic.Pointer[dispatcherStat]).Load()
-		available, ok := dispatcherAvailable[dispatcherID]
-		if ok {
-			dispatcher.availableMemoryQuota.Store(available)
 		}
 		return true
 	})

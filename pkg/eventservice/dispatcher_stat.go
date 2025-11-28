@@ -92,7 +92,6 @@ type dispatcherStat struct {
 	maxScanLimitInBytes     atomic.Int64
 	lastUpdateScanLimitTime atomic.Time
 	lastScanBytes           atomic.Int64
-	availableMemoryQuota    atomic.Uint64
 
 	lastReceivedResolvedTsTime atomic.Time
 	lastSentResolvedTsTime     atomic.Time
@@ -154,7 +153,6 @@ func newDispatcherStat(
 
 	// A small value to avoid too many scan tasks at the first place.
 	dispStat.lastScanBytes.Store(minScanLimitInBytes)
-	dispStat.availableMemoryQuota.Store(minScanLimitInBytes)
 
 	if info.SyncPointEnabled() {
 		dispStat.enableSyncPoint = true
