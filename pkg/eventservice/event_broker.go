@@ -594,19 +594,28 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	item, ok = status.availableMemoryQuota.Load(remoteID)
 	if !ok {
 		log.Info("available memory quota is not set, skip scan",
-			zap.String("changefeed", changefeedID.String()), zap.String("remote", remoteID.String()))
+			zap.Stringer("changefeed", changefeedID),
+			zap.Stringer("dispatcherID", task.id),
+			zap.String("remote", remoteID.String()))
 		return
 	}
 	available := item.(*atomic.Uint64)
 	if available.Load() < c.scanLimitInBytes {
+		log.Info("changefeed available memory quota is less than scan limit,",
+			zap.Stringer("changefeed", changefeedID),
+			zap.Stringer("dispatcherID", task.id),
+			zap.String("remote", remoteID.String()),
+			zap.Uint64("available", available.Load()),
+			zap.Uint64("scanLimitInBytes", c.scanLimitInBytes))
 		task.resetScanLimit()
 	}
 
 	sl := c.calculateScanLimit(task)
 	ok = allocQuota(available, uint64(sl.maxDMLBytes))
 	if !ok {
-		log.Debug("changefeed available memory quota is not enough, skip scan",
-			zap.String("changefeed", changefeedID.String()),
+		log.Info("changefeed available memory quota is not enough, skip scan",
+			zap.Stringer("changefeed", changefeedID),
+			zap.Stringer("dispatcherID", task.id),
 			zap.String("remote", remoteID.String()),
 			zap.Uint64("available", available.Load()),
 			zap.Uint64("required", uint64(sl.maxDMLBytes)))
@@ -615,17 +624,41 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	if uint64(sl.maxDMLBytes) > task.availableMemoryQuota.Load() {
-		log.Debug("dispatcher available memory quota is not enough, skip scan", zap.Stringer("dispatcher", task.id), zap.Uint64("available", task.availableMemoryQuota.Load()), zap.Int64("required", int64(sl.maxDMLBytes)))
+		log.Info("dispatcher available memory quota is not enough, skip scan",
+			zap.String("changefeed", changefeedID.String()),
+			zap.Stringer("dispatcher", task.id),
+			zap.Uint64("available", task.availableMemoryQuota.Load()),
+			zap.Int64("required", int64(sl.maxDMLBytes)))
 		c.sendSignalResolvedTs(task)
 		return
 	}
 
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter, task.info.GetMode())
 	scannedBytes, events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
+	log.Info("scan finished",
+		zap.String("changefeed", changefeedID.String()),
+		zap.Stringer("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
+		zap.Any("dataRange", dataRange), zap.Int64("scannedBytes", scannedBytes),
+		zap.Int64("sl.maxDMLBytes", sl.maxDMLBytes),
+		zap.Uint64("receivedResolvedTs", task.receivedResolvedTs.Load()),
+		zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()),
+		zap.Bool("interrupted", interrupted),
+		zap.Error(err))
 	if scannedBytes < 0 {
 		releaseQuota(available, uint64(sl.maxDMLBytes))
-	} else if scannedBytes >= 0 && scannedBytes < sl.maxDMLBytes {
-		releaseQuota(available, uint64(sl.maxDMLBytes-scannedBytes))
+	} else if scannedBytes >= 0 {
+		if scannedBytes < sl.maxDMLBytes {
+			releaseQuota(available, uint64(sl.maxDMLBytes-scannedBytes))
+		} else if scannedBytes > int64(sl.maxDMLBytes) {
+			extra := scannedBytes - int64(sl.maxDMLBytes)
+			log.Info("scan use more memory quota than expected",
+				zap.String("changefeed", changefeedID.String()),
+				zap.Stringer("dispatcherID", task.id),
+				zap.Int64("scannedBytes", scannedBytes),
+				zap.Int64("expectedBytes", int64(sl.maxDMLBytes)),
+				zap.Int64("extra", extra))
+			allocQuota(available, uint64(extra))
+		}
 	}
 
 	if err != nil {
@@ -637,10 +670,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	if scannedBytes > int64(c.scanLimitInBytes) {
-		log.Info("scan bytes exceeded the limit, there must be a big transaction", zap.Stringer("dispatcher", task.id), zap.Int64("scannedBytes", scannedBytes), zap.Int64("limit", int64(c.scanLimitInBytes)))
-		scannedBytes = int64(c.scanLimitInBytes)
-	}
 	task.lastScanBytes.Store(scannedBytes)
 
 	for _, e := range events {
@@ -1172,6 +1201,10 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 	holder := make(map[common.GID]uint64, len(availables))
 	dispatcherAvailable := make(map[common.DispatcherID]uint64, len(availables))
 	for _, item := range availables {
+		log.Info("receive congestion control",
+			zap.String("from", from.String()),
+			zap.Any("gid", item.Gid),
+			zap.Uint64("available", item.Available))
 		holder[item.Gid] = item.Available
 		for dispatcherID, available := range item.DispatcherAvailable {
 			dispatcherAvailable[dispatcherID] = available

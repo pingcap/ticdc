@@ -149,18 +149,19 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 }
 
 func (as *areaMemStat[A, P, T, D, H]) checkDeadlock() bool {
-	failpoint.Inject("InjectDeadlock", func() { failpoint.Return(true) })
+	return false
+	// failpoint.Inject("InjectDeadlock", func() { failpoint.Return(true) })
 
-	if as.settings.Load().algorithm !=
-		MemoryControlForEventCollector {
-		return false
-	}
+	// if as.settings.Load().algorithm !=
+	// 	MemoryControlForEventCollector {
+	// 	return false
+	// }
 
-	hasEventComeButNotOut := time.Since(as.lastAppendEventTime.Load().(time.Time)) < defaultDeadlockDuration && time.Since(as.lastSizeDecreaseTime.Load().(time.Time)) > defaultDeadlockDuration
+	// hasEventComeButNotOut := time.Since(as.lastAppendEventTime.Load().(time.Time)) < defaultDeadlockDuration && time.Since(as.lastSizeDecreaseTime.Load().(time.Time)) > defaultDeadlockDuration
 
-	memoryHighWaterMark := as.memoryUsageRatio() > (1 - defaultReleaseMemoryRatio)
+	// memoryHighWaterMark := as.memoryUsageRatio() > (1 - defaultReleaseMemoryRatio)
 
-	return hasEventComeButNotOut && memoryHighWaterMark
+	// return hasEventComeButNotOut && memoryHighWaterMark
 }
 
 func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
