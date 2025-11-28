@@ -640,6 +640,12 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			releaseQuota(available, uint64(sl.maxDMLBytes-scannedBytes))
 		} else if scannedBytes > int64(sl.maxDMLBytes) {
 			extra := scannedBytes - int64(sl.maxDMLBytes)
+			log.Info("scan use more memory quota than expected",
+				zap.String("changefeed", changefeedID.String()),
+				zap.Stringer("dispatcherID", task.id),
+				zap.Int64("scannedBytes", scannedBytes),
+				zap.Int64("expectedBytes", int64(sl.maxDMLBytes)),
+				zap.Int64("extra", extra))
 			allocQuota(available, uint64(extra))
 		}
 	}
