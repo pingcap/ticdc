@@ -464,6 +464,7 @@ func (m *memControl[A, P, T, D, H]) getMetrics() MemoryMetric[A, P] {
 		areaMetric := AreaMemoryMetric[A, P]{
 			AreaValue:           area.area,
 			PathAvailableMemory: make(map[P]int64),
+			UsedMemoryValue:     area.totalPendingSize.Load(),
 			AvailableMemory:     area.getAvailableMemory(),
 			MaxMemoryValue:      int64(area.settings.Load().maxPendingSize),
 			PathMaxMemoryValue:  int64(area.settings.Load().pathMaxPendingSize),
@@ -487,6 +488,7 @@ type AreaMemoryMetric[A Area, P Path] struct {
 	AreaValue           A
 	PathAvailableMemory map[P]int64
 	AvailableMemory     int64
+	UsedMemoryValue     int64
 
 	MaxMemoryValue     int64
 	PathMaxMemoryValue int64
@@ -497,7 +499,7 @@ func (a *AreaMemoryMetric[A, P]) MemoryUsageRatio() float64 {
 }
 
 func (a *AreaMemoryMetric[A, P]) MemoryUsage() int64 {
-	return a.AvailableMemory
+	return a.UsedMemoryValue
 }
 
 func (a *AreaMemoryMetric[A, P]) MaxMemory() int64 {
