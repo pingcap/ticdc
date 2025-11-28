@@ -229,14 +229,13 @@ func TestBuildActiveActiveUpsertSQLMultiRows(t *testing.T) {
 		"insert into t values (2, 'bob', 11, 21, NULL)",
 	)
 	rows := collectActiveActiveRows(event)
-	sql, args, err := buildActiveActiveUpsertSQL(event.TableInfo, rows)
-	require.NoError(t, err)
+	sql, args := buildActiveActiveUpsertSQL(event.TableInfo, rows)
 	require.Equal(t,
 		"INSERT INTO `test`.`t` (`id`,`name`,`_tidb_origin_ts`,`_tidb_softdelete_time`) VALUES (?,?,?,?),(?,?,?,?) ON DUPLICATE KEY UPDATE `id` = IF((@ticdc_lww_cond := (IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`))), VALUES(`id`), `id`),`name` = IF(@ticdc_lww_cond, VALUES(`name`), `name`),`_tidb_origin_ts` = IF(@ticdc_lww_cond, VALUES(`_tidb_origin_ts`), `_tidb_origin_ts`),`_tidb_softdelete_time` = IF(@ticdc_lww_cond, VALUES(`_tidb_softdelete_time`), `_tidb_softdelete_time`)",
 		sql)
 	expectedArgs := []interface{}{
-		int64(1), "alice", int64(20), nil,
-		int64(2), "bob", int64(21), nil,
+		int64(1), "alice", uint64(20), nil,
+		int64(2), "bob", uint64(21), nil,
 	}
 	require.Equal(t, expectedArgs, args)
 }
@@ -261,13 +260,11 @@ func TestGenerateActiveActiveSQLs(t *testing.T) {
 		"insert into t values (3, 'c', 12, 22, NULL)",
 	)
 
-	sqls, args, err := writer.generateActiveActiveNormalSQLs([]*commonEvent.DMLEvent{event})
-	require.NoError(t, err)
+	sqls, args := writer.generateActiveActiveNormalSQLs([]*commonEvent.DMLEvent{event})
 	require.Len(t, sqls, 3)
 	require.Len(t, args, 3)
 
-	sqls, args, err = writer.generateActiveActiveBatchSQL([]*commonEvent.DMLEvent{event})
-	require.NoError(t, err)
+	sqls, args = writer.generateActiveActiveBatchSQL([]*commonEvent.DMLEvent{event})
 	require.Len(t, sqls, 1)
 	require.Len(t, args, 1)
 	require.Contains(t, sqls[0], "VALUES (?,?,?,?),(?,?,?,?),(?,?,?,?)")

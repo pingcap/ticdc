@@ -250,9 +250,9 @@ func buildUpdate(tableInfo *common.TableInfo, row commonEvent.RowChange) (string
 //     describes when the row was committed at the upstream cluster.
 //  3. ON DUPLICATE KEY UPDATE reuses a single @ticdc_lww_cond flag derived from downstream
 //     IFNULL(_tidb_origin_ts, _tidb_commit_ts) <= VALUES(_tidb_origin_ts) to keep LWW semantics.
-func buildActiveActiveUpsertSQL(tableInfo *common.TableInfo, rows []*commonEvent.RowChange) (string, []interface{}, error) {
+func buildActiveActiveUpsertSQL(tableInfo *common.TableInfo, rows []*commonEvent.RowChange) (string, []interface{}) {
 	if tableInfo == nil || len(rows) == 0 {
-		return "", nil, nil
+		return "", nil
 	}
 
 	columns := tableInfo.GetColumns()
@@ -268,7 +268,7 @@ func buildActiveActiveUpsertSQL(tableInfo *common.TableInfo, rows []*commonEvent
 		insertColumns = append(insertColumns, col.Name.O)
 	}
 	if len(insertColumns) == 0 {
-		return "", nil, nil
+		return "", nil
 	}
 
 	valueOffsets := make([]int, len(insertColumns))
@@ -336,7 +336,7 @@ func buildActiveActiveUpsertSQL(tableInfo *common.TableInfo, rows []*commonEvent
 		builder.WriteString(fmt.Sprintf("%s = IF(@ticdc_lww_cond, VALUES(%s), %s)", quoted, quoted, quoted))
 	}
 
-	return builder.String(), args, nil
+	return builder.String(), args
 }
 
 func getArgs(row *chunk.Row, tableInfo *common.TableInfo) []interface{} {
