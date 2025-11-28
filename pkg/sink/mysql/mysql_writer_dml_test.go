@@ -629,7 +629,7 @@ func TestGenerateBatchSQLWithDifferentTableVersion(t *testing.T) {
 	})
 
 	// This should not return an error instead of panic since we grouped the events by table version
-	dmls, err := writer.prepareDMLs(events)
+	dmls, err := writer.PrepareDMLs(events)
 	require.NoError(t, err)
 	require.NotNil(t, dmls)
 }
@@ -903,7 +903,7 @@ func TestPrepareDMLsWithNotNullUniqueKey(t *testing.T) {
 
 	events := []*commonEvent.DMLEvent{dml1, dml2, dml3}
 
-	dmls, err := writer.prepareDMLs(events)
+	dmls, err := writer.PrepareDMLs(events)
 	require.NoError(t, err)
 	require.NotNil(t, dmls)
 
