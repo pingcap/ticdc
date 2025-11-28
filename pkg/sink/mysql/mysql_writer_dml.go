@@ -537,7 +537,7 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 			if rowType == prevType {
 				sql, values := w.generateBatchSQLsPerEvent(events)
 				log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values), zap.Int("writerID", w.id))
-				log.Panic("invalid row changes", zap.String("schemaName", tableInfo.GetSchemaName()),
+				log.Panic("invalid row changes", zap.String("schemaName", tableInfo.GetSchemaName()), zap.Any("PKIndex", tableInfo.GetPKIndex()),
 					zap.String("tableName", tableInfo.GetTableName()), zap.Any("rowChanges", rowChanges),
 					zap.Any("prevType", prevType), zap.Any("currentType", rowType), zap.Int("writerID", w.id))
 			}
@@ -594,6 +594,8 @@ func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]i
 		)
 		switch row.RowType {
 		case common.RowTypeUpdate:
+			// For MySQL Sink, in safe mode, all update events will be split into inserts and deletes.
+			// TODO(Should we still split all update events in safe mode? we already split the events which update uk in event broker)
 			if inSafeMode {
 				query, args = buildDelete(event.TableInfo, row)
 				if query != "" {

@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/applier"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -35,6 +36,7 @@ type applyRedoOptions struct {
 	sinkURI              string
 	enableProfiling      bool
 	memoryLimitInGiBytes int64
+	logLevel             string
 }
 
 // newapplyRedoOptions creates new applyRedoOptions for the `redo apply` command.
@@ -50,6 +52,7 @@ func (o *applyRedoOptions) addFlags(cmd *cobra.Command) {
 	cmd.MarkFlagRequired("sink-uri") //nolint:errcheck
 	cmd.Flags().BoolVar(&o.enableProfiling, "enable-profiling", true, "enable pprof profiling")
 	cmd.Flags().Int64Var(&o.memoryLimitInGiBytes, "memory-limit", 10, "memory limit in GiB")
+	cmd.Flags().StringVar(&o.logLevel, "log-level", "info", "log level (etc: debug|info|warn|error)")
 }
 
 //nolint:unparam
@@ -84,7 +87,12 @@ func (o *applyRedoOptions) complete(cmd *cobra.Command) error {
 // run runs the `redo apply` command.
 func (o *applyRedoOptions) run(cmd *cobra.Command) error {
 	ctx := context.Background()
-
+	err := logger.InitLogger(&logger.Config{
+		Level: o.logLevel,
+	})
+	if err != nil {
+		log.Panic("init logger failed", zap.Error(err))
+	}
 	if o.enableProfiling {
 		go func() {
 			server := &http.Server{
@@ -104,7 +112,7 @@ func (o *applyRedoOptions) run(cmd *cobra.Command) error {
 		Dir:     o.dir,
 	}
 	ap := applier.NewRedoApplier(cfg)
-	err := ap.Apply(ctx)
+	err = ap.Apply(ctx)
 	if err != nil {
 		return err
 	}

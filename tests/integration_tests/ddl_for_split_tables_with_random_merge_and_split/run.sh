@@ -182,40 +182,36 @@ main_with_consistent() {
 	sleep 500
 
 	kill -9 $NORMAL_TABLE_DDL_PID ${pids[@]} $MERGE_AND_SPLIT_TABLE_PID
-
 	# to ensure row changed events have been replicated to TiCDC
-	sleep 10
-	changefeed_id="test"
-	storage_path="file://$WORK_DIR/redo"
-	tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
-	current_tso=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
-	ensure 20 check_redo_resolved_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
-	cleanup_process $CDC_BINARY
+	sleep 20
+	if ((RANDOM % 2)); then
+		# For rename table, modify column ddl, drop column, drop index and drop table ddl, the struct of table is wrong when appling snapshot.
+		# see https://github.com/pingcap/tidb/issues/63464.
+		# So we can't check sync_diff with snapshot.
+		changefeed_id="test"
+		storage_path="file://$WORK_DIR/redo"
+		tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
+		current_tso=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
+		ensure 100 check_redo_resolved_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
+		cleanup_process $CDC_BINARY
 
-	cdc redo apply --tmp-dir="$tmp_download_path/apply" --storage="$storage_path" --sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
-	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
+		cdc redo apply --log-level debug --tmp-dir="$tmp_download_path/apply" \
+			--storage="$storage_path" \
+			--sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
+		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
 
-	# cleanup_process $CDC_BINARY
-	# # to ensure row changed events have been replicated to TiCDC
-	# sleep 10
-	# changefeed_id="test"
-	# storage_path="file://$WORK_DIR/redo"
-	# tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
-	# rts=$(cdc redo meta --storage="$storage_path" --tmp-dir="$tmp_download_path" | grep -oE "resolved-ts:[0-9]+" | awk -F: '{print $2}')
-
-	# sed "s/<placeholder>/$rts/g" $CUR/conf/consistent_diff_config.toml >$WORK_DIR/consistent_diff_config.toml
-
-	# cat $WORK_DIR/consistent_diff_config.toml
-	# cdc redo apply --tmp-dir="$tmp_download_path/apply" --storage="$storage_path" --sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
-	# check_sync_diff $WORK_DIR $WORK_DIR/consistent_diff_config.toml
+		cleanup_process $CDC_BINARY
+	else
+		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
+		cleanup_process $CDC_BINARY
+	fi
 }
 
 trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 main
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
-# FIXME: refactor redo apply
-# stop_tidb_cluster
-# main_with_consistent
-# check_logs $WORK_DIR
-# echo "[$(date)] <<<<<< run consistent test case $TEST_NAME success! >>>>>>"
+stop_tidb_cluster
+main_with_consistent
+check_logs $WORK_DIR
+echo "[$(date)] <<<<<< run consistent test case $TEST_NAME success! >>>>>>"

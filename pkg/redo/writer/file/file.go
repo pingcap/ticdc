@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/fsutil"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -47,6 +48,7 @@ type fileWriter interface {
 	GetInputCh() chan writer.RedoEvent
 	Flush() error
 	Close() error
+	SetTableSchemaStore(*commonEvent.TableSchemaStore)
 }
 
 // fileWriter is a redo log event fileWriter which writes redo log events to a file.
@@ -76,6 +78,7 @@ type Writer struct {
 	metricFsyncDuration    prometheus.Observer
 	metricFlushAllDuration prometheus.Observer
 	metricWriteBytes       prometheus.Gauge
+	tableSchemaStore       *commonEvent.TableSchemaStore
 }
 
 // NewFileWriter return a file rotated writer, TODO: extract to a common rotate Writer
@@ -141,6 +144,10 @@ func NewFileWriter(
 
 	w.running.Store(true)
 	return w, nil
+}
+
+func (w *Writer) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
+	w.tableSchemaStore = tableSchemaStore
 }
 
 func (w *Writer) Run(ctx context.Context) error {
@@ -249,6 +256,9 @@ func (w *Writer) GetInputCh() chan writer.RedoEvent {
 
 func (w *Writer) write(event writer.RedoEvent) error {
 	rl := event.ToRedoLog()
+	if rl.Type == commonEvent.RedoLogTypeDDL {
+		rl.RedoDDL.SetTableSchemaStore(w.tableSchemaStore)
+	}
 	data, err := codec.MarshalRedoLog(rl, nil)
 	if err != nil {
 		return errors.WrapError(errors.ErrMarshalFailed, err)

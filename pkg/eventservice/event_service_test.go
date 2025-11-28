@@ -289,7 +289,9 @@ func (m *mockEventStore) RegisterDispatcher(
 	_ bool,
 	_ bool,
 ) bool {
-	log.Info("subscribe table span", zap.Any("span", span), zap.Uint64("startTs", startTS), zap.Any("dispatcherID", dispatcherID))
+	log.Info("subscribe table span", zap.Any("dispatcherID", dispatcherID),
+		zap.Uint64("startTs", startTS),
+		zap.Any("span", common.FormatTableSpan(span)))
 	spanStats := &mockSpanStats{
 		startTs:            startTS,
 		resolvedTsNotifier: notifier,

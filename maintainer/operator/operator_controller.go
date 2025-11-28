@@ -101,7 +101,7 @@ func (oc *Controller) Execute() time.Time {
 			_ = oc.messageCenter.SendCommand(msg)
 			log.Debug("send command to dispatcher",
 				zap.String("role", oc.role),
-				zap.String("changefeed", oc.changefeedID.Name()),
+				zap.Stringer("changefeedID", oc.changefeedID),
 				zap.String("operator", op.String()),
 				zap.Any("msg", msg.Message))
 		}
@@ -135,7 +135,7 @@ func (oc *Controller) AddOperator(op operator.Operator[common.DispatcherID, *hea
 		oc.mu.RUnlock()
 		log.Info("add operator failed, operator already exists",
 			zap.String("role", oc.role),
-			zap.String("changefeed", oc.changefeedID.Name()),
+			zap.Stringer("changefeedID", oc.changefeedID),
 			zap.String("operator", op.String()))
 		return false
 	}
@@ -144,7 +144,7 @@ func (oc *Controller) AddOperator(op operator.Operator[common.DispatcherID, *hea
 	if span == nil {
 		log.Warn("add operator failed, span not found",
 			zap.String("role", oc.role),
-			zap.String("changefeed", oc.changefeedID.Name()),
+			zap.Stringer("changefeedID", oc.changefeedID),
 			zap.String("operator", op.String()))
 		return false
 	}
@@ -250,7 +250,7 @@ func (oc *Controller) pollQueueingOperator() (
 		metrics.OperatorDuration.WithLabelValues(common.DefaultKeyspaceNamme, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Observe(time.Since(item.CreatedAt).Seconds())
 		log.Info("operator finished",
 			zap.String("role", oc.role),
-			zap.String("changefeed", oc.changefeedID.Name()),
+			zap.Stringer("changefeedID", oc.changefeedID),
 			zap.String("operatorID", opID.String()),
 			zap.String("operator", op.String()))
 		return nil, true
@@ -268,7 +268,7 @@ func (oc *Controller) pollQueueingOperator() (
 
 		if shouldWarn {
 			log.Warn("operator is still in running queue",
-				zap.String("changefeed", oc.changefeedID.Name()),
+				zap.Stringer("changefeedID", oc.changefeedID),
 				zap.String("operator", opID.String()),
 				zap.String("operator", op.String()),
 				zap.Any("timeSinceCreated", time.Since(item.CreatedAt)))
@@ -294,7 +294,7 @@ func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
 
 		log.Info("replica set is removed, replace the old one",
 			zap.String("role", oc.role),
-			zap.String("changefeed", oc.changefeedID.Name()),
+			zap.Stringer("changefeedID", oc.changefeedID),
 			zap.String("replicaSet", old.OP.ID().String()),
 			zap.String("operator", old.OP.String()))
 		old.OP.OnTaskRemoved()
@@ -316,7 +316,7 @@ func (oc *Controller) pushOperator(op operator.Operator[common.DispatcherID, *he
 	oc.checkAffectedNodes(op)
 	log.Info("add operator to running queue",
 		zap.String("role", oc.role),
-		zap.String("changefeed", oc.changefeedID.Name()),
+		zap.Stringer("changefeedID", oc.changefeedID),
 		zap.String("operator", op.String()))
 	withTime := operator.NewOperatorWithTime(op, time.Now())
 
@@ -399,9 +399,9 @@ func (oc *Controller) AddMergeOperator(
 			operators = append(operators, operator)
 		} else {
 			log.Error("failed to add occupy dispatcher operator",
-				zap.String("changefeed", oc.changefeedID.String()),
-				zap.Int64("group", int64(replicaSet.GetGroupID())),
-				zap.String("span", replicaSet.Span.String()),
+				zap.Stringer("changefeedID", oc.changefeedID),
+				zap.Int64("group", replicaSet.GetGroupID()),
+				zap.String("span", common.FormatTableSpan(replicaSet.Span)),
 				zap.String("operator", operator.String()))
 			// set prev op taskRemoved
 			for _, op := range operators {
@@ -415,7 +415,7 @@ func (oc *Controller) AddMergeOperator(
 	ret := oc.AddOperator(mergeOperator)
 	if !ret {
 		log.Error("failed to add merge dispatcher operator",
-			zap.String("changefeed", oc.changefeedID.String()),
+			zap.Stringer("changefeedID", oc.changefeedID),
 			zap.Any("mergeSpans", affectedReplicaSets),
 			zap.String("operator", mergeOperator.String()))
 		// set prev op taskRemoved
@@ -426,7 +426,7 @@ func (oc *Controller) AddMergeOperator(
 	}
 	log.Info("add merge operator",
 		zap.String("role", oc.role),
-		zap.String("changefeed", oc.changefeedID.Name()),
+		zap.Stringer("changefeedID", oc.changefeedID),
 		zap.Int("affectedReplicaSets", len(affectedReplicaSets)),
 	)
 	return mergeOperator

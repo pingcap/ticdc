@@ -220,7 +220,9 @@ func (a *dispatcherStat) onResolvedTs(resolvedTs uint64) bool {
 	}
 	if !a.hasReceivedFirstResolvedTs.Load() {
 		log.Info("received first resolved ts from event store",
-			zap.Stringer("dispatcherID", a.id), zap.Uint64("resolvedTs", resolvedTs))
+			zap.Stringer("changefeedID", a.changefeedStat.changefeedID),
+			zap.Stringer("dispatcherID", a.id),
+			zap.Uint64("resolvedTs", resolvedTs))
 		a.lastUpdateScanLimitTime.Store(time.Now())
 		a.hasReceivedFirstResolvedTs.Store(true)
 	}

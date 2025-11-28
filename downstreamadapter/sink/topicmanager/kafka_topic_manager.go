@@ -185,8 +185,8 @@ func (m *kafkaTopicManager) fetchAllTopicsPartitionsNum(
 			"Kafka admin client describe topics failed",
 			zap.String("keyspace", m.changefeedID.Keyspace()),
 			zap.String("changefeed", m.changefeedID.Name()),
-			zap.Error(err),
 			zap.Duration("duration", time.Since(start)),
+			zap.Error(err),
 		)
 		return nil, err
 	}
@@ -199,13 +199,6 @@ func (m *kafkaTopicManager) fetchAllTopicsPartitionsNum(
 	if ok {
 		numPartitions[m.defaultTopic] = m.cfg.PartitionNum
 	}
-
-	log.Info(
-		"Kafka admin client describe topics success",
-		zap.String("keyspace", m.changefeedID.Keyspace()),
-		zap.String("changefeed", m.changefeedID.Name()),
-		zap.Duration("duration", time.Since(start)))
-
 	return numPartitions, nil
 }
 
