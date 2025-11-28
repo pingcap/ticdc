@@ -445,7 +445,8 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				if d.tableProgress.Empty() {
 					dmlWakeOnce.Do(wakeCallback)
 				}
-				w.PrepareDMLs(dmlEvents)
+				log.Error("flush dml")
+				w.PrepareDMLs([]*commonEvent.DMLEvent{dml})
 			})
 			dmlEvents = append(dmlEvents, dml)
 		case commonEvent.TypeDDLEvent:
