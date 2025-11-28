@@ -72,6 +72,7 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Eve
 		"system",
 		false,
 		false,
+		false,
 		nil,
 		nil,
 		&syncpoint.SyncPointConfig{
@@ -807,6 +808,7 @@ func TestDispatcherSplittableCheck(t *testing.T) {
 		"system",
 		false,
 		false,
+		false,
 		nil,
 		nil,
 		&syncpoint.SyncPointConfig{
@@ -916,6 +918,7 @@ func TestDispatcher_SkipDMLAsStartTs_FilterCorrectly(t *testing.T) {
 		"system",
 		false,
 		false,
+		false,
 		nil,
 		nil,
 		&syncpoint.SyncPointConfig{
@@ -993,6 +996,7 @@ func TestDispatcher_SkipDMLAsStartTs_Disabled(t *testing.T) {
 	sharedInfo := NewSharedInfo(
 		common.NewChangefeedID(common.DefaultKeyspaceNamme),
 		"system",
+		false,
 		false,
 		false,
 		nil,

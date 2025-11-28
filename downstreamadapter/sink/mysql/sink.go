@@ -28,7 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
-	"github.com/pingcap/ticdc/pkg/sink/util"
+	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -45,8 +45,9 @@ const (
 type Sink struct {
 	changefeedID common.ChangeFeedID
 
-	dmlWriter []*mysql.Writer
-	ddlWriter *mysql.Writer
+	dmlWriter           []*mysql.Writer
+	ddlWriter           *mysql.Writer
+	progressTableWriter *mysql.ProgressTableWriter
 
 	db         *sql.DB
 	statistics *metrics.Statistics
@@ -54,9 +55,12 @@ type Sink struct {
 	conflictDetector *causality.ConflictDetector
 
 	// isNormal indicate whether the sink is in the normal state.
-	isNormal   *atomic.Bool
-	maxTxnRows int
-	bdrMode    bool
+	isNormal               *atomic.Bool
+	maxTxnRows             int
+	bdrMode                bool
+	enableActiveActive     bool
+	progressUpdateInterval time.Duration
+	lastProgressUpdate     time.Time
 }
 
 // Verify is used to verify the sink uri and config is valid
@@ -85,7 +89,7 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	return newMySQLSink(ctx, changefeedID, cfg, db, config.BDRMode), nil
+	return newMySQLSink(ctx, changefeedID, cfg, db, config.BDRMode, config.EnableActiveActive, config.ActiveActiveProgressInterval), nil
 }
 
 func newMySQLSink(
@@ -94,6 +98,8 @@ func newMySQLSink(
 	cfg *mysql.Config,
 	db *sql.DB,
 	bdrMode bool,
+	enableActiveActive bool,
+	progressInterval time.Duration,
 ) *Sink {
 	stat := metrics.NewStatistics(changefeedID, "TxnSink")
 	result := &Sink{
@@ -108,14 +114,19 @@ func newMySQLSink(
 				BlockStrategy: causality.BlockStrategyWaitEmpty,
 			},
 			changefeedID),
-		isNormal:   atomic.NewBool(true),
-		maxTxnRows: cfg.MaxTxnRow,
-		bdrMode:    bdrMode,
+		isNormal:               atomic.NewBool(true),
+		maxTxnRows:             cfg.MaxTxnRow,
+		bdrMode:                bdrMode,
+		enableActiveActive:     enableActiveActive,
+		progressUpdateInterval: progressInterval,
 	}
 	for i := 0; i < len(result.dmlWriter); i++ {
 		result.dmlWriter[i] = mysql.NewWriter(ctx, i, db, cfg, changefeedID, stat)
 	}
 	result.ddlWriter = mysql.NewWriter(ctx, len(result.dmlWriter), db, cfg, changefeedID, stat)
+	if enableActiveActive {
+		result.progressTableWriter = mysql.NewProgressTableWriter(ctx, db, changefeedID, cfg.MaxTxnRow)
+	}
 	return result
 }
 
@@ -223,8 +234,11 @@ func (s *Sink) SinkType() common.SinkType {
 	return common.MysqlSinkType
 }
 
-func (s *Sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
+func (s *Sink) SetTableSchemaStore(tableSchemaStore *sinkutil.TableSchemaStore) {
 	s.ddlWriter.SetTableSchemaStore(tableSchemaStore)
+	if s.progressTableWriter != nil {
+		s.progressTableWriter.SetTableSchemaStore(tableSchemaStore)
+	}
 }
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
@@ -258,7 +272,26 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	return nil
 }
 
-func (s *Sink) AddCheckpointTs(_ uint64) {}
+func (s *Sink) AddCheckpointTs(ts uint64) {
+	if !s.enableActiveActive {
+		log.Error("AddCheckpointTs called when active-active is not enabled",
+			zap.String("changefeed", s.changefeedID.DisplayName.String()))
+		return
+	}
+
+	now := time.Now()
+	if now.Sub(s.lastProgressUpdate) < s.progressUpdateInterval {
+		return
+	}
+
+	if err := s.progressTableWriter.Flush(ts); err != nil {
+		log.Warn("failed to update active-active progress table",
+			zap.String("changefeed", s.changefeedID.DisplayName.String()),
+			zap.Error(err))
+		return
+	}
+	s.lastProgressUpdate = now
+}
 
 // GetTableRecoveryInfo queries DDL crash recovery information for the given tables.
 //

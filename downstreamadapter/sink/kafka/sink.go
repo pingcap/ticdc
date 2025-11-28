@@ -27,7 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
-	"github.com/pingcap/ticdc/pkg/sink/util"
+	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -53,7 +53,7 @@ type sink struct {
 	partitionRule helper.DDLDispatchRule
 
 	checkpointChan   chan uint64
-	tableSchemaStore *util.TableSchemaStore
+	tableSchemaStore *sinkutil.TableSchemaStore
 
 	eventChan *chann.UnlimitedChannel[*commonEvent.DMLEvent, any]
 	rowChan   *chann.UnlimitedChannel[*commonEvent.MQRowEvent, any]
@@ -534,7 +534,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 	}
 }
 
-func (s *sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
+func (s *sink) SetTableSchemaStore(tableSchemaStore *sinkutil.TableSchemaStore) {
 	s.tableSchemaStore = tableSchemaStore
 }
 

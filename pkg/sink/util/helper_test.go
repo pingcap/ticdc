@@ -47,7 +47,7 @@ func TestTableSchemaStoreWhenMysqlSink(t *testing.T) {
 		},
 	})
 
-	tableSchemaStore := NewTableSchemaStore(schemaInfos, common.MysqlSinkType)
+	tableSchemaStore := NewTableSchemaStore(schemaInfos, common.MysqlSinkType, false)
 	tableIds := tableSchemaStore.GetAllTableIds()
 	require.Equal(t, 5, len(tableIds))
 	tableIds = tableSchemaStore.GetTableIdsByDB(1)
@@ -115,6 +115,24 @@ func TestTableSchemaStoreWhenMysqlSink(t *testing.T) {
 	require.Equal(t, 2, len(tableIds))
 }
 
+func TestTableSchemaStoreActiveActiveMetadata(t *testing.T) {
+	schemaInfos := []*heartbeatpb.SchemaInfo{
+		{
+			SchemaID:   1,
+			SchemaName: "db1",
+			Tables: []*heartbeatpb.TableInfo{
+				{TableID: 1, TableName: "t1"},
+			},
+		},
+	}
+
+	store := NewTableSchemaStore(schemaInfos, common.MysqlSinkType, true)
+	names := store.GetAllTableNames(0)
+	require.Equal(t, 1, len(names))
+	require.Equal(t, "db1", names[0].SchemaName)
+	require.Equal(t, "t1", names[0].TableName)
+}
+
 func TestTableSchemaStoreWhenNonMysqlSink(t *testing.T) {
 	schemaInfos := make([]*heartbeatpb.SchemaInfo, 0)
 	schemaInfos = append(schemaInfos, &heartbeatpb.SchemaInfo{
@@ -140,7 +158,7 @@ func TestTableSchemaStoreWhenNonMysqlSink(t *testing.T) {
 		},
 	})
 
-	tableSchemaStore := NewTableSchemaStore(schemaInfos, common.KafkaSinkType)
+	tableSchemaStore := NewTableSchemaStore(schemaInfos, common.KafkaSinkType, false)
 	tableNames := tableSchemaStore.GetAllTableNames(1)
 	require.Equal(t, 4, len(tableNames))
 
