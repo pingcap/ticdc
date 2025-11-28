@@ -318,7 +318,7 @@ func (as *areaMemStat[A, P, T, D, H]) applyCongestionWindow(rawAvailable int64) 
 	maxPending := int64(settings.maxPendingSize)
 	maxWindow := int64(float64(maxPending) * defaultCongestionMaxWindowRatio)
 
-	as.maybeGrowCongestionWindow(maxPending)
+	as.maybeGrowCongestionWindow(maxWindow)
 
 	window := as.congestionWindow.Load()
 	if window <= 0 {
