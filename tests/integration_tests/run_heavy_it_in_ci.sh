@@ -80,7 +80,7 @@ kafka_groups=(
 	# G06
 	'cdc default_value ddl_for_split_tables_with_random_merge_and_split'
 	# G07
-	'merge_table resolve_lock force_replicate_table'
+	'merge_table resolve_lock force_replicate_table ddl_for_split_tables'
 	# G08
 	'kafka_simple_claim_check kafka_simple_claim_check_avro tidb_mysql_test'
 	# G09
@@ -118,7 +118,7 @@ pulsar_groups=(
 	# G07
 	'merge_table resolve_lock force_replicate_table'
 	# G08
-	'tidb_mysql_test'
+	'tidb_mysql_test ddl_for_split_tables'
 	# G09
 	'mq_sink_error_resume'
 	# G10
@@ -153,7 +153,7 @@ storage_groups=(
 	# G07
 	'merge_table resolve_lock force_replicate_table'
 	# G08
-	'tidb_mysql_test'
+	'tidb_mysql_test ddl_for_split_tables'
 	# G09
 	'ddl_for_split_tables_with_merge_and_split'
 	# G10
