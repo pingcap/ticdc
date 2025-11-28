@@ -86,7 +86,6 @@ func (b *Bootstrapper[T]) HandleNewNodes(newNodes []*node.Info) []*messaging.Tar
 // return cached bootstrap
 func (b *Bootstrapper[T]) HandleRemoveNodes(nodeIDs []node.ID) map[node.ID]*T {
 	b.mutex.Lock()
-	defer b.mutex.Unlock()
 	for _, id := range nodeIDs {
 		status, ok := b.nodes[id]
 		if ok {
@@ -101,6 +100,7 @@ func (b *Bootstrapper[T]) HandleRemoveNodes(nodeIDs []node.ID) map[node.ID]*T {
 				zap.Any("nodeID", id))
 		}
 	}
+	b.mutex.Unlock()
 	return b.collectInitialBootstrapResponses()
 }
 

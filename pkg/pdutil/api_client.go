@@ -225,7 +225,7 @@ func (pc *pdAPIClient) ScanRegions(ctx context.Context, span heartbeatpb.TableSp
 	scanLimit := 1024
 	endpoints, err := pc.CollectMemberEndpoints(ctx)
 	if err != nil {
-		log.Warn("fail to collec pd member endpoints")
+		log.Warn("fail to collect pd member endpoints")
 		return nil, errors.Trace(err)
 	}
 	return pc.scanRegions(ctx, span, endpoints, scanLimit)

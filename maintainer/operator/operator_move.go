@@ -198,7 +198,7 @@ func (m *MoveDispatcherOperator) PostFinish() {
 	}
 
 	log.Info("move dispatcher operator finished",
-		zap.String("changefeed", m.replicaSet.ChangefeedID.String()),
+		zap.Stringer("changefeedID", m.replicaSet.ChangefeedID),
 		zap.String("dispatcherID", m.replicaSet.ID.String()))
 	m.spanController.MarkSpanReplicating(m.replicaSet)
 }

@@ -248,7 +248,8 @@ func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
 			regions, err := s.regionCache.LoadRegionsInKeyRange(tikv.NewBackoffer(context.Background(), 500), status.Span.StartKey, status.Span.EndKey)
 			if err != nil {
 				log.Warn("list regions failed, skip check region count",
-					zap.String("changefeed", s.changefeedID.Name()), zap.String("span", common.FormatTableSpan(status.Span)), zap.Error(err))
+					zap.Stringer("changefeed", s.changefeedID),
+					zap.String("span", common.FormatTableSpan(status.Span)), zap.Error(err))
 			} else {
 				status.regionCount = len(regions)
 				status.regionCheckTime = time.Now()

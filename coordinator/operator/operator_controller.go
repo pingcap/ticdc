@@ -87,7 +87,7 @@ func (oc *Controller) Execute() time.Time {
 
 		if msg != nil {
 			_ = oc.messageCenter.SendCommand(msg)
-			log.Info("send command to maintainer manager",
+			log.Info("send command to maintainer",
 				zap.String("role", oc.role),
 				zap.String("operator", r.String()))
 		}

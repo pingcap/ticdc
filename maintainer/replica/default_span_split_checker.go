@@ -139,7 +139,7 @@ func (s *defaultSpanSplitChecker) UpdateStatus(replica *SpanReplication) {
 		regions, err := s.regionCache.LoadRegionsInKeyRange(tikv.NewBackoffer(context.Background(), 500), status.Span.StartKey, status.Span.EndKey)
 		if err != nil {
 			log.Warn("list regions failed, skip check region count",
-				zap.String("changefeed", s.changefeedID.Name()),
+				zap.Stringer("changefeed", s.changefeedID),
 				zap.String("span", common.FormatTableSpan(status.Span)), zap.Error(err))
 		} else {
 			status.regionCount = len(regions)
@@ -147,7 +147,7 @@ func (s *defaultSpanSplitChecker) UpdateStatus(replica *SpanReplication) {
 		status.regionCheckTime = time.Now()
 	}
 
-	log.Debug("default span split checker: update status", zap.String("changefeed", s.changefeedID.Name()), zap.String("replica", replica.ID.String()), zap.Int("trafficScore", status.trafficScore), zap.Int("regionCount", status.regionCount))
+	log.Debug("default span split checker: update status", zap.Stringer("changefeed", s.changefeedID), zap.String("replica", replica.ID.String()), zap.Int("trafficScore", status.trafficScore), zap.Int("regionCount", status.regionCount))
 
 	if status.trafficScore >= trafficScoreThreshold || (s.regionThreshold > 0 && status.regionCount >= s.regionThreshold) {
 		if _, ok := s.splitReadyTasks[status.ID]; !ok {
