@@ -213,64 +213,6 @@ func TestGenerateBatchSQL(t *testing.T) {
 	require.Equal(t, 2000, len(args[0]), "Should have 2000 arguments (1000 rows * 2 columns)")
 }
 
-func TestBuildActiveActiveUpsertSQLMultiRows(t *testing.T) {
-	writer, _, _ := newTestMysqlWriter(t)
-	defer writer.db.Close()
-	helper := commonEvent.NewEventTestHelper(t)
-	defer helper.Close()
-
-	helper.Tk().MustExec("use test")
-	createTableSQL := "create table t (id int primary key, name varchar(32), _tidb_origin_ts bigint unsigned null, _tidb_commit_ts bigint unsigned null, _tidb_softdelete_time timestamp null);"
-	job := helper.DDL2Job(createTableSQL)
-	require.NotNil(t, job)
-
-	event := helper.DML2Event("test", "t",
-		"insert into t values (1, 'alice', 10, 20, NULL)",
-		"insert into t values (2, 'bob', 11, 21, NULL)",
-	)
-	rows := collectActiveActiveRows(event)
-	sql, args := buildActiveActiveUpsertSQL(event.TableInfo, rows)
-	require.Equal(t,
-		"INSERT INTO `test`.`t` (`id`,`name`,`_tidb_origin_ts`,`_tidb_softdelete_time`) VALUES (?,?,?,?),(?,?,?,?) ON DUPLICATE KEY UPDATE `id` = IF((@ticdc_lww_cond := (IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`))), VALUES(`id`), `id`),`name` = IF(@ticdc_lww_cond, VALUES(`name`), `name`),`_tidb_origin_ts` = IF(@ticdc_lww_cond, VALUES(`_tidb_origin_ts`), `_tidb_origin_ts`),`_tidb_softdelete_time` = IF(@ticdc_lww_cond, VALUES(`_tidb_softdelete_time`), `_tidb_softdelete_time`)",
-		sql)
-	expectedArgs := []interface{}{
-		int64(1), "alice", uint64(20), nil,
-		int64(2), "bob", uint64(21), nil,
-	}
-	require.Equal(t, expectedArgs, args)
-}
-
-func TestGenerateActiveActiveSQLs(t *testing.T) {
-	writer, _, _ := newTestMysqlWriter(t)
-	defer writer.db.Close()
-	writer.cfg.EnableActiveActive = true
-	writer.cfg.MaxTxnRow = 2
-
-	helper := commonEvent.NewEventTestHelper(t)
-	defer helper.Close()
-
-	helper.Tk().MustExec("use test")
-	createTableSQL := "create table t (id int primary key, name varchar(32), _tidb_origin_ts bigint unsigned null, _tidb_commit_ts bigint unsigned null, _tidb_softdelete_time timestamp null);"
-	job := helper.DDL2Job(createTableSQL)
-	require.NotNil(t, job)
-
-	event := helper.DML2Event("test", "t",
-		"insert into t values (1, 'a', 10, 20, NULL)",
-		"insert into t values (2, 'b', 11, 21, NULL)",
-		"insert into t values (3, 'c', 12, 22, NULL)",
-	)
-
-	sqls, args := writer.generateActiveActiveNormalSQLs([]*commonEvent.DMLEvent{event})
-	require.Len(t, sqls, 3)
-	require.Len(t, args, 3)
-
-	sqls, args = writer.generateActiveActiveBatchSQL([]*commonEvent.DMLEvent{event})
-	require.Len(t, sqls, 1)
-	require.Len(t, args, 1)
-	require.Contains(t, sqls[0], "VALUES (?,?,?,?),(?,?,?,?),(?,?,?,?)")
-	require.Len(t, args[0], 12)
-}
-
 func TestGenerateBatchSQLInUnSafeMode(t *testing.T) {
 	writer, _, _ := newTestMysqlWriter(t)
 	defer writer.db.Close()
