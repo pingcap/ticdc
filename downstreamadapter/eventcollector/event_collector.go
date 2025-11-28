@@ -602,7 +602,7 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 		}
 		// merge path-level available memory
 		for dispatcherID, available := range quota.PathMetrics() {
-			changefeedPathMemory[cfID][dispatcherID] = uint64(0.5 * float64(available))
+			changefeedPathMemory[cfID][dispatcherID] = uint64(0.01 * float64(available))
 		}
 
 		log.Info("collecting main dynamic stream memory metrics",
@@ -610,7 +610,7 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 			zap.Int64("availableMemory", quota.AvailableMemory()))
 
 		// store total available memory from AreaMemoryMetric
-		changefeedTotalMemory[cfID] = uint64(0.5 * float64(quota.AvailableMemory()))
+		changefeedTotalMemory[cfID] = uint64(0.01 * float64(quota.AvailableMemory()))
 	}
 
 	// collect from redo dynamic stream and take minimum
