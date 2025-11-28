@@ -220,7 +220,7 @@ func TestBuildActiveActiveUpsertSQLMultiRows(t *testing.T) {
 	defer helper.Close()
 
 	helper.Tk().MustExec("use test")
-	createTableSQL := "create table t (id int primary key, name varchar(32), _tidb_origin_ts bigint, _tidb_commit_ts bigint, _tidb_softdelete_time timestamp null default null);"
+	createTableSQL := "create table t (id int primary key, name varchar(32), _tidb_origin_ts bigint unsigned null, _tidb_commit_ts bigint unsigned null, _tidb_softdelete_time timestamp null);"
 	job := helper.DDL2Job(createTableSQL)
 	require.NotNil(t, job)
 
@@ -232,11 +232,11 @@ func TestBuildActiveActiveUpsertSQLMultiRows(t *testing.T) {
 	sql, args, err := buildActiveActiveUpsertSQL(event.TableInfo, rows)
 	require.NoError(t, err)
 	require.Equal(t,
-		"INSERT INTO `test`.`t` (`id`,`name`,`_tidb_origin_ts`,`_tidb_commit_ts`,`_tidb_softdelete_time`) VALUES (?,?,?,?,?),(?,?,?,?,?) ON DUPLICATE KEY UPDATE `id` = IF((@ticdc_lww_cond := (IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`))), VALUES(`id`), `id`),`name` = IF(@ticdc_lww_cond, VALUES(`name`), `name`),`_tidb_origin_ts` = IF(@ticdc_lww_cond, VALUES(`_tidb_origin_ts`), `_tidb_origin_ts`),`_tidb_commit_ts` = IF(@ticdc_lww_cond, VALUES(`_tidb_commit_ts`), `_tidb_commit_ts`),`_tidb_softdelete_time` = IF(@ticdc_lww_cond, VALUES(`_tidb_softdelete_time`), `_tidb_softdelete_time`)",
+		"INSERT INTO `test`.`t` (`id`,`name`,`_tidb_origin_ts`,`_tidb_softdelete_time`) VALUES (?,?,?,?),(?,?,?,?) ON DUPLICATE KEY UPDATE `id` = IF((@ticdc_lww_cond := (IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`))), VALUES(`id`), `id`),`name` = IF(@ticdc_lww_cond, VALUES(`name`), `name`),`_tidb_origin_ts` = IF(@ticdc_lww_cond, VALUES(`_tidb_origin_ts`), `_tidb_origin_ts`),`_tidb_softdelete_time` = IF(@ticdc_lww_cond, VALUES(`_tidb_softdelete_time`), `_tidb_softdelete_time`)",
 		sql)
 	expectedArgs := []interface{}{
-		int64(1), "alice", int64(10), int64(20), nil,
-		int64(2), "bob", int64(11), int64(21), nil,
+		int64(1), "alice", int64(20), nil,
+		int64(2), "bob", int64(21), nil,
 	}
 	require.Equal(t, expectedArgs, args)
 }
@@ -251,7 +251,7 @@ func TestGenerateActiveActiveSQLs(t *testing.T) {
 	defer helper.Close()
 
 	helper.Tk().MustExec("use test")
-	createTableSQL := "create table t (id int primary key, name varchar(32), _tidb_origin_ts bigint, _tidb_commit_ts bigint, _tidb_softdelete_time timestamp null default null);"
+	createTableSQL := "create table t (id int primary key, name varchar(32), _tidb_origin_ts bigint unsigned null, _tidb_commit_ts bigint unsigned null, _tidb_softdelete_time timestamp null);"
 	job := helper.DDL2Job(createTableSQL)
 	require.NotNil(t, job)
 
@@ -268,10 +268,10 @@ func TestGenerateActiveActiveSQLs(t *testing.T) {
 
 	sqls, args, err = writer.generateActiveActiveBatchSQL([]*commonEvent.DMLEvent{event})
 	require.NoError(t, err)
-	require.Len(t, sqls, 2)
-	require.Len(t, args, 2)
-	require.Contains(t, sqls[0], "VALUES (?,?,?,?,?),(?,?,?,?,?)")
-	require.Contains(t, sqls[1], "VALUES (?,?,?,?,?)")
+	require.Len(t, sqls, 1)
+	require.Len(t, args, 1)
+	require.Contains(t, sqls[0], "VALUES (?,?,?,?),(?,?,?,?),(?,?,?,?)")
+	require.Len(t, args[0], 12)
 }
 
 func TestGenerateBatchSQLInUnSafeMode(t *testing.T) {
