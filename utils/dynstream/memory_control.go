@@ -39,12 +39,12 @@ const (
 	defaultBurstMemoryFactor      = 2   // burst memory factor.
 
 	// Congestion-control knobs for smoothing AvailableMemory after forced releases.
-	defaultCongestionDecreaseFactor   = 0.7             // multiplicative decrease factor (<=1).
+	defaultCongestionDecreaseFactor   = 0.5             // multiplicative decrease factor (<=1).
 	defaultCongestionMinWindowRatio   = 0.1             // never shrink window below 10% capacity.
 	defaultCongestionAdditiveRatio    = 0.05            // additive increase per interval.
 	defaultCongestionMinStepBytes     = 64 * 1024       // 64KB, ensure growth even when capacity is small.
-	defaultCongestionFreezeDuration   = 2 * time.Second // pause growth after a release.
-	defaultCongestionIncreaseInterval = 500 * time.Millisecond
+	defaultCongestionFreezeDuration   = 4 * time.Second // pause growth after a release.
+	defaultCongestionIncreaseInterval = 1 * time.Second
 
 	defaultCongestionMaxWindowRatio = 0.5 // never grow window above 50% capacity.
 )
@@ -184,7 +184,7 @@ func (as *areaMemStat[A, P, T, D, H]) checkDeadlock() bool {
 }
 
 func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
-	if time.Since(as.lastReleaseMemoryTime.Load().(time.Time)) < 1*time.Second {
+	if time.Since(as.lastReleaseMemoryTime.Load().(time.Time)) < 100*time.Millisecond {
 		return
 	}
 	as.lastReleaseMemoryTime.Store(time.Now())
