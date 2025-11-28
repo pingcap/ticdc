@@ -610,7 +610,12 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 			zap.Int64("availableMemory", quota.AvailableMemory()))
 
 		// store total available memory from AreaMemoryMetric
-		changefeedTotalMemory[cfID] = uint64(0.01 * float64(quota.AvailableMemory()))
+		available := quota.AvailableMemory()
+		if available < 512*1024*1024 {
+			changefeedTotalMemory[cfID] = 0
+		} else {
+			changefeedTotalMemory[cfID] = uint64(available) - 512*1024*1024
+		}
 	}
 
 	// collect from redo dynamic stream and take minimum
