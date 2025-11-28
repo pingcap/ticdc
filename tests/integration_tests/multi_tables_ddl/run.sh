@@ -20,15 +20,7 @@ mkdir -p "$WORK_DIR"
 pkill -9 minio || true
 bin/minio server --address $S3_ENDPOINT "$WORK_DIR/s3" &
 MINIO_PID=$!
-i=0
-while ! curl -o /dev/null -v -s "http://$S3_ENDPOINT/"; do
-	i=$(($i + 1))
-	if [ $i -gt 30 ]; then
-		echo 'Failed to start minio'
-		exit 1
-	fi
-	sleep 2
-done
+check_minio $S3_ENDPOINT
 
 stop_minio() {
 	kill -2 $MINIO_PID || true

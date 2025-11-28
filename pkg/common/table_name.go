@@ -21,10 +21,11 @@ import (
 
 // TableName represents name of a table, includes table name and schema name.
 type TableName struct {
-	Schema      string `toml:"db-name" msg:"db-name"`
-	Table       string `toml:"tbl-name" msg:"tbl-name"`
-	TableID     int64  `toml:"tbl-id" msg:"tbl-id"`
-	IsPartition bool   `toml:"is-partition" msg:"is-partition"`
+	Schema string `toml:"db-name" msg:"db-name"`
+	Table  string `toml:"tbl-name" msg:"tbl-name"`
+	// TableID is the logic table ID
+	TableID     int64 `toml:"tbl-id" msg:"tbl-id"`
+	IsPartition bool  `toml:"is-partition" msg:"is-partition"`
 }
 
 // String implements fmt.Stringer interface.
@@ -35,19 +36,4 @@ func (t TableName) String() string {
 // QuoteString returns quoted full table name
 func (t TableName) QuoteString() string {
 	return QuoteSchema(t.Schema, t.Table)
-}
-
-// GetSchema returns schema name.
-func (t *TableName) GetSchema() string {
-	return t.Schema
-}
-
-// GetTable returns table name.
-func (t *TableName) GetTable() string {
-	return t.Table
-}
-
-// GetTableID returns table ID.
-func (t *TableName) GetTableID() int64 {
-	return t.TableID
 }

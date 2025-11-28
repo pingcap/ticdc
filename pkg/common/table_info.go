@@ -574,25 +574,15 @@ func NewTableInfo(schemaName string, tableName string, tableID int64, isPartitio
 	return ti
 }
 
-// WrapTableInfoWithTableID creates a TableInfo from a model.TableInfo.
-// It explicitly uses the provided tableID instead of the one from info.ID.
-// This is used to create TableInfo wrappers for physical partitions,
-// ensuring they carry the physical partition ID, not the logical table ID.
-func WrapTableInfoWithTableID(schemaName string, info *model.TableInfo, tableID int64) *TableInfo {
-	// search column schema object
-	sharedColumnSchemaStorage := GetSharedColumnSchemaStorage()
-	columnSchema := sharedColumnSchemaStorage.GetOrSetColumnSchema(info)
-	return NewTableInfo(schemaName, info.Name.O, tableID, info.GetPartitionInfo() != nil, columnSchema, info)
-}
-
 // WrapTableInfo creates a TableInfo from a model.TableInfo.
-// This function is a convenience wrapper around WrapTableInfoWithTableID,
-// defaulting to use the logical table ID (info.ID).
 func WrapTableInfo(schemaName string, info *model.TableInfo) *TableInfo {
 	if info == nil {
 		return nil
 	}
-	return WrapTableInfoWithTableID(schemaName, info, info.ID)
+	// search column schema object
+	sharedColumnSchemaStorage := GetSharedColumnSchemaStorage()
+	columnSchema := sharedColumnSchemaStorage.GetOrSetColumnSchema(info)
+	return NewTableInfo(schemaName, info.Name.O, info.ID, info.GetPartitionInfo() != nil, columnSchema, info)
 }
 
 // NewTableInfo4Decoder is only used by the codec decoder for the test purpose,
