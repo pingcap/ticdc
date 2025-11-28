@@ -45,9 +45,9 @@ const (
 type Sink struct {
 	changefeedID common.ChangeFeedID
 
-	dmlWriter      []*mysql.Writer
-	ddlWriter      *mysql.Writer
-	progressWriter *mysql.ProgressWriter
+	dmlWriter           []*mysql.Writer
+	ddlWriter           *mysql.Writer
+	progressTableWriter *mysql.ProgressTableWriter
 
 	db         *sql.DB
 	statistics *metrics.Statistics
@@ -125,7 +125,7 @@ func newMySQLSink(
 	}
 	result.ddlWriter = mysql.NewWriter(ctx, len(result.dmlWriter), db, cfg, changefeedID, stat)
 	if enableActiveActive {
-		result.progressWriter = mysql.NewProgressWriter(ctx, db, changefeedID)
+		result.progressTableWriter = mysql.NewProgressTableWriter(ctx, db, changefeedID, cfg.MaxTxnRow)
 	}
 	return result
 }
@@ -236,8 +236,8 @@ func (s *Sink) SinkType() common.SinkType {
 
 func (s *Sink) SetTableSchemaStore(tableSchemaStore *sinkutil.TableSchemaStore) {
 	s.ddlWriter.SetTableSchemaStore(tableSchemaStore)
-	if s.progressWriter != nil {
-		s.progressWriter.SetTableSchemaStore(tableSchemaStore)
+	if s.progressTableWriter != nil {
+		s.progressTableWriter.SetTableSchemaStore(tableSchemaStore)
 	}
 }
 
@@ -284,7 +284,7 @@ func (s *Sink) AddCheckpointTs(ts uint64) {
 		return
 	}
 
-	if err := s.progressWriter.Flush(ts); err != nil {
+	if err := s.progressTableWriter.Flush(ts); err != nil {
 		log.Warn("failed to update active-active progress table",
 			zap.String("changefeed", s.changefeedID.DisplayName.String()),
 			zap.Error(err))

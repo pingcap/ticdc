@@ -59,9 +59,8 @@ type sink struct {
 	rowChan   *chann.UnlimitedChannel[*commonEvent.MQRowEvent, any]
 
 	// isNormal indicate whether the sink is in the normal state.
-	isNormal           *atomic.Bool
-	ctx                context.Context
-	enableActiveActive bool
+	isNormal *atomic.Bool
+	ctx      context.Context
 }
 
 func (s *sink) SinkType() commonType.SinkType {
@@ -75,7 +74,7 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 }
 
 func New(
-	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, enableActiveActive bool,
+	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
 ) (*sink, error) {
 	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
@@ -113,9 +112,8 @@ func New(
 		eventChan:      chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
 		rowChan:        chann.NewUnlimitedChannelDefault[*commonEvent.MQRowEvent](),
 
-		isNormal:           atomic.NewBool(true),
-		ctx:                ctx,
-		enableActiveActive: enableActiveActive,
+		isNormal: atomic.NewBool(true),
+		ctx:      ctx,
 	}, nil
 }
 

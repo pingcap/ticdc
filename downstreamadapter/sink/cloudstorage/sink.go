@@ -66,8 +66,7 @@ type sink struct {
 	cleanupJobs []func() /* only for test */
 
 	// To perceive the context done from the upper layer
-	ctx                context.Context
-	enableActiveActive bool
+	ctx context.Context
 }
 
 func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
@@ -94,7 +93,6 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 
 func New(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
-	enableActiveActive bool,
 	cleanupJobs []func(), /* only for test */
 ) (*sink, error) {
 	// create cloud storage config and then apply the params of sinkURI to it.
@@ -136,8 +134,7 @@ func New(
 		statistics:               statistics,
 		isNormal:                 atomic.NewBool(true),
 
-		ctx:                ctx,
-		enableActiveActive: enableActiveActive,
+		ctx: ctx,
 	}, nil
 }
 

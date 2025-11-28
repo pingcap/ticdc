@@ -44,6 +44,14 @@ const (
 
 // EvaluateRowPolicy decides how special tables (active-active/soft-delete)
 // should behave under the given changefeed mode.
+// The decision order is:
+//  1. Tables with neither feature are returned untouched.
+//  2. Delete rows are skipped no matter which mode we run in.
+//  3. When enableActiveActive is true we keep inserts/updates as-is to let
+//     downstream LWW SQL handle the conflict resolution.
+//  4. Otherwise, for update rows we determine whether this row represents a
+//     soft-delete transition (Origin -> Soft delete), and convert it into a
+//     delete event to keep downstream consistent.
 func EvaluateRowPolicy(
 	tableInfo *common.TableInfo,
 	row *commonEvent.RowChange,
@@ -53,7 +61,9 @@ func EvaluateRowPolicy(
 		return RowPolicyKeep, nil
 	}
 
-	if !tableInfo.IsActiveActiveTable() && !tableInfo.IsSoftDeleteTable() {
+	isActiveActive := tableInfo.IsActiveActiveTable()
+	isSoftDelete := tableInfo.IsSoftDeleteTable()
+	if !isActiveActive && !isSoftDelete {
 		return RowPolicyKeep, nil
 	}
 
@@ -61,8 +71,7 @@ func EvaluateRowPolicy(
 		return RowPolicySkip, nil
 	}
 
-	// When enable-active-active is true, other sink types should not be used,
-	// but to keep semantics consistent we only skip delete rows and keep the rest.
+	// When enable-active-active is true, we only drop delete events and keep the rest.
 	if enableActiveActive {
 		return RowPolicyKeep, nil
 	}
@@ -85,6 +94,9 @@ func needConvertUpdateToDelete(tableInfo *common.TableInfo, row *commonEvent.Row
 	if tableInfo == nil || row == nil {
 		return false, nil
 	}
+	// Soft-delete is modeled as `_tidb_softdelete_time` changing from NULL/zero to
+	// a non-zero timestamp. Only when the table exposes this column do we attempt
+	// the conversion.
 	colInfo, ok := tableInfo.GetColumnInfoByName(SoftDeleteTimeColumn)
 	if !ok {
 		return false, nil
@@ -105,37 +117,20 @@ func isSoftDeleteTransition(preRow, row chunk.Row, offset int, colInfo *model.Co
 	}
 	oldVal := common.ExtractColVal(&preRow, colInfo, offset)
 	newVal := common.ExtractColVal(&row, colInfo, offset)
-	return isZeroValue(oldVal) && !isZeroValue(newVal)
+	return isZeroSoftDeleteValue(oldVal) && !isZeroSoftDeleteValue(newVal)
 }
 
-func isZeroValue(val interface{}) bool {
+// isZeroSoftDeleteValue assumes `_tidb_softdelete_time` is defined as `TIMESTAMP NULL`
+// and ExtractColVal always returns either nil or its string representation.
+func isZeroSoftDeleteValue(val interface{}) bool {
 	if val == nil {
 		return true
 	}
-	switch v := val.(type) {
-	case int:
-		return v == 0
-	case int32:
-		return v == 0
-	case int64:
-		return v == 0
-	case uint:
-		return v == 0
-	case uint32:
-		return v == 0
-	case uint64:
-		return v == 0
-	case float32:
-		return v == 0
-	case float64:
-		return v == 0
-	case string:
-		return v == "" || v == "0"
-	case []byte:
-		return len(v) == 0
-	default:
+	str, ok := val.(string)
+	if !ok {
 		return false
 	}
+	return str == "" || str == "0"
 }
 
 // ApplyRowPolicyDecision mutates the row based on decision.
@@ -148,7 +143,16 @@ func ApplyRowPolicyDecision(row *commonEvent.RowChange, decision RowPolicyDecisi
 }
 
 // FilterDMLEvent applies row policy decisions to each row in the DMLEvent.
-// Returns the possibly modified event, whether it should be skipped entirely, and error if any.
+//   - Normal tables simply fall through: the original event is returned as-is.
+//   - Active-active tables:
+//   - enable-active-active = true: only delete rows are removed, other rows pass through.
+//   - enable-active-active = false: delete rows are removed and updates that flip
+//     `_tidb_softdelete_time` from zero to non-zero will be converted to delete events.
+//   - Soft-delete tables behave the same as the second bullet: delete rows are removed and
+//     soft-delete transitions are converted into deletes.
+//
+// It returns the possibly modified event, whether the event should be skipped entirely,
+// and an error if evaluation fails.
 func FilterDMLEvent(event *commonEvent.DMLEvent, enableActiveActive bool) (*commonEvent.DMLEvent, bool, error) {
 	if event == nil {
 		return nil, true, nil

@@ -201,16 +201,6 @@ func (ti *TableInfo) IsSoftDeleteTable() bool {
 	return ti.SoftDeleteTable
 }
 
-// SetActiveActiveTable marks the table as active-active.
-func (ti *TableInfo) SetActiveActiveTable(enabled bool) {
-	ti.ActiveActiveTable = enabled
-}
-
-// SetSoftDeleteTable marks the table as using soft-delete.
-func (ti *TableInfo) SetSoftDeleteTable(enabled bool) {
-	ti.SoftDeleteTable = enabled
-}
-
 // GetRowColumnsOffset return offset with visible column
 func (ti *TableInfo) GetRowColumnsOffset() map[int64]int {
 	return ti.columnSchema.RowColumnsOffset

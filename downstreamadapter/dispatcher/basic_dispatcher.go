@@ -232,9 +232,17 @@ func NewBasicDispatcher(
 	return dispatcher
 }
 
-func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) {
+// AddDMLEventsToSink filters events for special tables and only returns true when
+// at least one event remains to be written to the downstream sink.
+func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) bool {
+	// Normal DML dispatch: most tables just pass through this function unchanged.
+	// Active-active or soft-delete tables are re-written by FilterDMLEvent before
+	// being handed over to the sink.
 	filteredEvents := make([]*commonEvent.DMLEvent, 0, len(events))
 	for _, event := range events {
+		// FilterDMLEvent returns the original event for normal tables and only
+		// allocates a new event when the table needs active-active or soft-delete
+		// processing. Skip is only true when every row in the event should be dropped.
 		filtered, skip, err := util.FilterDMLEvent(event, d.sharedInfo.enableActiveActive)
 		if err != nil {
 			d.HandleError(err)
@@ -246,9 +254,8 @@ func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) {
 		filteredEvents = append(filteredEvents, filtered)
 	}
 	if len(filteredEvents) == 0 {
-		// no event, just wake ds
-		events[0].PostFlush()
-		return
+		// Nothing left to flush. Caller will treat this batch as non-blocking.
+		return false
 	}
 
 	// for one batch events, we need to add all them in table progress first, then add them to sink
@@ -261,6 +268,7 @@ func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) {
 		d.sink.AddDMLEvent(event)
 		failpoint.Inject("BlockAddDMLEvents", nil)
 	}
+	return true
 }
 
 func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {
@@ -594,7 +602,11 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	// the checkpointTs may be incorrect set as the new resolvedTs,
 	// due to the tableProgress is empty before dml events add into sink.
 	if len(dmlEvents) > 0 {
-		d.AddDMLEventsToSink(dmlEvents)
+		hasDMLToFlush := d.AddDMLEventsToSink(dmlEvents)
+		if !hasDMLToFlush {
+			// All DML events were filtered out, so they no longer block dispatcher progress.
+			block = false
+		}
 	}
 	if latestResolvedTs > 0 {
 		atomic.StoreUint64(&d.resolvedTs, latestResolvedTs)

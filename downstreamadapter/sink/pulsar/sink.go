@@ -48,11 +48,10 @@ type sink struct {
 	isNormal *atomic.Bool
 	ctx      context.Context
 
-	tableSchemaStore   *sinkutil.TableSchemaStore
-	checkpointTsChan   chan uint64
-	eventChan          chan *commonEvent.DMLEvent
-	rowChan            chan *commonEvent.MQRowEvent
-	enableActiveActive bool
+	tableSchemaStore *sinkutil.TableSchemaStore
+	checkpointTsChan chan uint64
+	eventChan        chan *commonEvent.DMLEvent
+	rowChan          chan *commonEvent.MQRowEvent
 }
 
 func (s *sink) SinkType() commonType.SinkType {
@@ -66,7 +65,7 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 }
 
 func New(
-	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, enableActiveActive bool,
+	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
 ) (*sink, error) {
 	comp, protocol, err := newPulsarSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
@@ -99,13 +98,12 @@ func New(
 		eventChan:        make(chan *commonEvent.DMLEvent, 32),
 		rowChan:          make(chan *commonEvent.MQRowEvent, 32),
 
-		protocol:           protocol,
-		partitionRule:      helper.GetDDLDispatchRule(protocol),
-		comp:               comp,
-		statistics:         statistics,
-		isNormal:           atomic.NewBool(true),
-		ctx:                ctx,
-		enableActiveActive: enableActiveActive,
+		protocol:      protocol,
+		partitionRule: helper.GetDDLDispatchRule(protocol),
+		comp:          comp,
+		statistics:    statistics,
+		isNormal:      atomic.NewBool(true),
+		ctx:           ctx,
 	}, nil
 }
 
