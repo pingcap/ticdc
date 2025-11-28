@@ -14,6 +14,7 @@
 package dispatcher
 
 import (
+	"context"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -28,6 +29,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/sink/util"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -366,6 +368,7 @@ func (d *BasicDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // wakeCallback is used to wake the dynamic stream to handle the next batch events.
 // It will be called when all the events are flushed to downstream successfully.
 func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
+	w := mysql.NewWriter(context.Background(), 0, nil, mysql.New(), d.sharedInfo.changefeedID, nil)
 	if d.GetRemovingStatus() {
 		log.Warn("dispatcher is removing", zap.Any("id", d.id))
 		return true
@@ -442,6 +445,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				if d.tableProgress.Empty() {
 					dmlWakeOnce.Do(wakeCallback)
 				}
+				w.PrepareDMLs(dmlEvents)
 			})
 			dmlEvents = append(dmlEvents, dml)
 		case commonEvent.TypeDDLEvent:
