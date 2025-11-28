@@ -1099,6 +1099,11 @@ func (h *OpenAPIV2) SplitTableByRegionCount(c *gin.Context) {
 		return
 	}
 
+	if !cfInfo.Config.Scheduler.EnableTableAcrossNodes {
+		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("enable_table_across_nodes should be true when spliting one table to multiple spans"))
+		return
+	}
+
 	if cfInfo.MaintainerAddr == "" {
 		_ = c.Error(errors.New("Can't not find maintainer for changefeed: " + changefeedDisplayName.Name))
 		return

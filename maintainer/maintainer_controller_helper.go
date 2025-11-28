@@ -172,7 +172,11 @@ func (c *Controller) splitTableByRegionCount(tableID int64, mode int64) error {
 		EndKey:     span.EndKey,
 		KeyspaceID: c.GetKeyspaceID(),
 	}
-	splitTableSpans := spanController.GetSplitter().Split(context.Background(), wholeSpan, 0, split.SplitTypeRegionCount)
+	splitter := spanController.GetSplitter()
+	if splitter == nil {
+		return errors.ErrInternalCheckFailed.GenWithStackByArgs("splitter is nil")
+	}
+	splitTableSpans := splitter.Split(context.Background(), wholeSpan, 0, split.SplitTypeRegionCount)
 
 	op := operator.NewSplitDispatcherOperator(spanController, replications[0], splitTableSpans, []node.ID{}, nil)
 	ret := operatorController.AddOperator(op)
