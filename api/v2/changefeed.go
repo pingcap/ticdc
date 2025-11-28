@@ -1098,6 +1098,7 @@ func (h *OpenAPIV2) SplitTableByRegionCount(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
+
 	if !cfInfo.Config.Scheduler.EnableTableAcrossNodes {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("enable_table_across_nodes should be true when spliting one table to multiple spans"))
 		return
