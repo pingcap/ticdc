@@ -434,7 +434,7 @@ func (s *subscriptionClient) handleDSFeedBack(ctx context.Context) error {
 func (s *subscriptionClient) Run(ctx context.Context) error {
 	// s.consume = consume
 	if s.pd == nil {
-		log.Warn("subsription client should be in test mode, skip run")
+		log.Warn("subscription client should be in test mode, skip run")
 		return nil
 	}
 	s.clusterID = s.pd.GetClusterID(ctx)

@@ -836,9 +836,9 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 // It removes the dispatcher from status dynamic stream to stop receiving status info from maintainer.
 func (d *BasicDispatcher) removeDispatcher() {
 	log.Info("remove dispatcher",
+		zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
 		zap.Stringer("dispatcher", d.id),
 		zap.Int64("mode", d.mode),
-		zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
 		zap.String("table", common.FormatTableSpan(d.tableSpan)))
 	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
 	err := dispatcherStatusDS.RemovePath(d.id)
