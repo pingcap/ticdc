@@ -95,6 +95,8 @@ if [ -z "$OUT_DIR" ]; then
 	exit 1
 fi
 
+mkdir -p "$OUT_DIR" || true
+
 # start minio
 echo "Starting MinIO server..."
 mkdir -p "$TEST_DATA_DIR/minio"

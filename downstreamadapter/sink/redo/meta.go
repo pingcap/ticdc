@@ -74,7 +74,7 @@ func NewRedoMeta(
 		uuidGenerator:     uuid.NewGenerator(),
 		cfg:               cfg,
 		startTs:           checkpoint,
-		flushIntervalInMs: cfg.MetaFlushIntervalInMs,
+		flushIntervalInMs: util.GetOrZero(cfg.MetaFlushIntervalInMs),
 	}
 
 	if m.flushIntervalInMs < redo.MinFlushIntervalInMs {
@@ -94,7 +94,7 @@ func (m *RedoMeta) Running() bool {
 }
 
 func (m *RedoMeta) PreStart(ctx context.Context) error {
-	uri, err := storage.ParseRawURL(m.cfg.Storage)
+	uri, err := storage.ParseRawURL(util.GetOrZero(m.cfg.Storage))
 	if err != nil {
 		return err
 	}
@@ -315,7 +315,7 @@ func (m *RedoMeta) deleteAllLogs(ctx context.Context) error {
 	// otherwise it should have already meet panic during changefeed running time.
 	// the extStorage may be nil in the unit test, so just set the external storage to make unit test happy.
 	if m.extStorage == nil {
-		uri, err := storage.ParseRawURL(m.cfg.Storage)
+		uri, err := storage.ParseRawURL(util.GetOrZero(m.cfg.Storage))
 		redo.FixLocalScheme(uri)
 		if err != nil {
 			return err

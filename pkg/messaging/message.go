@@ -258,12 +258,14 @@ func (r DispatcherRequest) GetBdrMode() bool {
 func (r DispatcherRequest) GetIntegrity() *integrity.Config {
 	if r.DispatcherRequest.Integrity == nil {
 		return &integrity.Config{
-			IntegrityCheckLevel:   integrity.CheckLevelNone,
-			CorruptionHandleLevel: integrity.CorruptionHandleLevelWarn,
+			IntegrityCheckLevel:   util.AddressOf(integrity.CheckLevelNone),
+			CorruptionHandleLevel: util.AddressOf(integrity.CorruptionHandleLevelWarn),
 		}
 	}
-	integrity := integrity.Config(*r.DispatcherRequest.Integrity)
-	return &integrity
+	return &integrity.Config{
+		IntegrityCheckLevel:   util.AddressOf(r.DispatcherRequest.Integrity.IntegrityCheckLevel),
+		CorruptionHandleLevel: util.AddressOf(r.DispatcherRequest.Integrity.CorruptionHandleLevel),
+	}
 }
 
 func (r DispatcherRequest) GetTimezone() *time.Location {

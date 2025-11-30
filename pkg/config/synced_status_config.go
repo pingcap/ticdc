@@ -16,8 +16,8 @@ package config
 // SyncedStatusConfig represents synced check interval config for a changefeed
 type SyncedStatusConfig struct {
 	// The minimum interval between the latest synced ts and now required to reach synced state
-	SyncedCheckInterval int64 `toml:"synced-check-interval" json:"synced-check-interval"`
+	SyncedCheckInterval *int64 `toml:"synced-check-interval" json:"synced-check-interval"`
 	// The maximum interval between latest checkpoint ts and now or
 	// between latest sink's checkpoint ts and puller's checkpoint ts required to reach synced state
-	CheckpointInterval int64 `toml:"checkpoint-interval" json:"checkpoint-interval"`
+	CheckpointInterval *int64 `toml:"checkpoint-interval" json:"checkpoint-interval"`
 }

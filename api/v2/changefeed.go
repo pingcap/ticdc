@@ -226,7 +226,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	if !replicaCfg.ForceReplicate && !cfg.ReplicaConfig.IgnoreIneligibleTable {
+	if !util.GetOrZero(replicaCfg.ForceReplicate) && !util.GetOrZero(cfg.ReplicaConfig.IgnoreIneligibleTable) {
 		if len(ineligibleTables) != 0 {
 			_ = c.Error(errors.ErrTableIneligible.GenWithStackByArgs(ineligibleTables))
 			return
@@ -401,8 +401,8 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 		return
 	}
 	log.Info("verify table",
-		zap.Bool("forceReplicate", replicaCfg.ForceReplicate),
-		zap.Bool("ignoreIneligibleTable", cfg.ReplicaConfig.IgnoreIneligibleTable),
+		zap.Bool("forceReplicate", util.GetOrZero(replicaCfg.ForceReplicate)),
+		zap.Bool("ignoreIneligibleTable", util.GetOrZero(cfg.ReplicaConfig.IgnoreIneligibleTable)),
 	)
 
 	toAPIModelFunc := func(tbls []string) []TableName {
@@ -789,6 +789,8 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		return
 	}
 
+	log.Info("update config", zap.Any("updateCfConfig", updateCfConfig))
+
 	var configUpdated, sinkURIUpdated bool
 	if updateCfConfig.TargetTs != 0 {
 		if updateCfConfig.TargetTs <= oldCfInfo.StartTs {
@@ -802,6 +804,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 	if updateCfConfig.ReplicaConfig != nil {
 		configUpdated = true
 		oldCfInfo.Config = updateCfConfig.ReplicaConfig.ToInternalReplicaConfig()
+		log.Info("update replicat config", zap.Any("config", oldCfInfo.Config))
 	}
 	if updateCfConfig.SinkURI != "" {
 		sinkURIUpdated = true
@@ -850,7 +853,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 			_ = c.Error(errors.ErrChangefeedUpdateRefused.GenWithStackByCause(err))
 			return
 		}
-		if !oldCfInfo.Config.ForceReplicate && !oldCfInfo.Config.IgnoreIneligibleTable {
+		if !util.GetOrZero(oldCfInfo.Config.ForceReplicate) && !util.GetOrZero(oldCfInfo.Config.IgnoreIneligibleTable) {
 			if len(ineligibleTables) != 0 {
 				_ = c.Error(errors.ErrTableIneligible.GenWithStackByArgs(ineligibleTables))
 				return
@@ -864,6 +867,8 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, oldCfInfo.SinkURI))
 		return
 	}
+
+	log.Info("updating change info", zap.Any("oldCfInfo", oldCfInfo))
 
 	if err = co.UpdateChangefeed(ctx, oldCfInfo); err != nil {
 		_ = c.Error(err)
@@ -1413,12 +1418,14 @@ func (h *OpenAPIV2) synced(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	if info.Config.SyncedStatus.SyncedCheckInterval == 0 || info.Config.SyncedStatus.CheckpointInterval == 0 {
-		info.Config.SyncedStatus.SyncedCheckInterval = config.GetDefaultReplicaConfig().SyncedStatus.SyncedCheckInterval
-		info.Config.SyncedStatus.CheckpointInterval = config.GetDefaultReplicaConfig().SyncedStatus.CheckpointInterval
+
+	syncedCheckInterval := util.GetOrZero(info.Config.SyncedStatus.SyncedCheckInterval)
+	checkpointInterval := util.GetOrZero(info.Config.SyncedStatus.CheckpointInterval)
+
+	if syncedCheckInterval == 0 || checkpointInterval == 0 {
+		syncedCheckInterval = util.GetOrZero(config.GetDefaultReplicaConfig().SyncedStatus.SyncedCheckInterval)
+		checkpointInterval = util.GetOrZero(config.GetDefaultReplicaConfig().SyncedStatus.CheckpointInterval)
 	}
-	syncedCheckInterval := info.Config.SyncedStatus.SyncedCheckInterval
-	checkpointInterval := info.Config.SyncedStatus.CheckpointInterval
 
 	// get time from pd
 	ctx := c.Request.Context()
@@ -1486,7 +1493,7 @@ func getVerifiedTables(
 	storage tidbkv.Storage, startTs uint64,
 	scheme string, topic string, protocol config.Protocol,
 ) ([]string, []string, error) {
-	f, err := filter.NewFilter(replicaConfig.Filter, "", replicaConfig.CaseSensitive, replicaConfig.ForceReplicate)
+	f, err := filter.NewFilter(replicaConfig.Filter, "", util.GetOrZero(replicaConfig.CaseSensitive), util.GetOrZero(replicaConfig.ForceReplicate))
 	if err != nil {
 		return nil, nil, err
 	}

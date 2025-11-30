@@ -219,8 +219,8 @@ func getV2ChangefeedConfig(changefeedConfig changefeedConfig) *v2.ChangefeedConf
 	replicaConfig.Filter.IgnoreTxnStartTs = changefeedConfig.IgnoreTxnStartTs
 	replicaConfig.Mounter.WorkerNum = changefeedConfig.MounterWorkerNum
 	replicaConfig.Sink = changefeedConfig.SinkConfig
-	replicaConfig.ForceReplicate = changefeedConfig.ForceReplicate
-	replicaConfig.IgnoreIneligibleTable = changefeedConfig.IgnoreIneligibleTable
+	replicaConfig.ForceReplicate = util.AddressOf(changefeedConfig.ForceReplicate)
+	replicaConfig.IgnoreIneligibleTable = util.AddressOf(changefeedConfig.IgnoreIneligibleTable)
 
 	return &v2.ChangefeedConfig{
 		ID:            changefeedConfig.ID,

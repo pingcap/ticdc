@@ -65,6 +65,7 @@ source $CUR/../_utils/test_prepare
 
 stop_tidb_cluster
 
+mkdir "$OUT_DIR" || true
 cd $OUT_DIR && echo "start tidb cluster in $OUT_DIR"
 
 # pd server config file

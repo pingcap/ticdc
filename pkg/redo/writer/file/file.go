@@ -32,6 +32,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/codec"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/prometheus/client_golang/prometheus"
@@ -108,7 +109,7 @@ func NewFileWriter(
 		cfg:       cfg,
 		logType:   logType,
 		op:        op,
-		inputCh:   make(chan writer.RedoEvent, redo.DefaultEncodingInputChanSize*cfg.FlushWorkerNum),
+		inputCh:   make(chan writer.RedoEvent, redo.DefaultEncodingInputChanSize*util.GetOrZero(cfg.FlushWorkerNum)),
 		uint64buf: make([]byte, 8),
 		storage:   extStorage,
 
@@ -285,7 +286,7 @@ func (w *Writer) SyncWrite(event writer.RedoEvent) error {
 }
 
 func (w *Writer) encode(ctx context.Context) error {
-	d := time.Duration(w.cfg.FlushIntervalInMs) * time.Millisecond
+	d := time.Duration(util.GetOrZero(w.cfg.FlushIntervalInMs)) * time.Millisecond
 	ticker := time.NewTicker(d)
 	defer ticker.Stop()
 	num := 0

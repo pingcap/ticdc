@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/scheduler"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"go.uber.org/zap"
@@ -83,7 +84,7 @@ func NewController(changefeedID common.ChangeFeedID,
 
 	enableTableAcrossNodes := false
 	var splitter *split.Splitter
-	if cfConfig != nil && cfConfig.Scheduler.EnableTableAcrossNodes {
+	if cfConfig != nil && util.GetOrZero(cfConfig.Scheduler.EnableTableAcrossNodes) {
 		enableTableAcrossNodes = true
 		splitter = split.NewSplitter(keyspaceMeta.ID, changefeedID, cfConfig.Scheduler)
 	}

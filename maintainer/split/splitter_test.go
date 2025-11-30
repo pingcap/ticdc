@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,9 +40,9 @@ func TestNewSplitter(t *testing.T) {
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	cfg := &config.ChangefeedSchedulerConfig{
-		RegionThreshold:    100,
-		RegionCountPerSpan: 10,
-		WriteKeyThreshold:  1000,
+		RegionThreshold:    util.AddressOf(100),
+		RegionCountPerSpan: util.AddressOf(10),
+		WriteKeyThreshold:  util.AddressOf(1000),
 	}
 
 	splitter := NewSplitter(common.DefaultKeyspaceID, cfID, cfg)
@@ -68,9 +69,9 @@ func TestSplitter_Split_ByRegion(t *testing.T) {
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	cfg := &config.ChangefeedSchedulerConfig{
-		RegionThreshold:    2,
-		RegionCountPerSpan: 10,
-		WriteKeyThreshold:  1000,
+		RegionThreshold:    util.AddressOf(2),
+		RegionCountPerSpan: util.AddressOf(10),
+		WriteKeyThreshold:  util.AddressOf(1000),
 	}
 
 	splitter := NewSplitter(0, cfID, cfg)
