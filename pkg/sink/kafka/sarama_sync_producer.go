@@ -74,6 +74,8 @@ func (p *saramaSyncProducer) SendMessages(topic string, partitionNum int32, mess
 		}
 	}
 
+	log.Info("kafka send messages",
+		zap.Int("count", len(msgs)), zap.ByteString("value", message.Value))
 	err := p.producer.SendMessages(msgs)
 	failpoint.Inject("KafkaSinkSyncSendMessagesError", func() {
 		err = errors.WrapError(errors.ErrKafkaSendMessage, errors.New("kafka sink sync send messages injected error"))
