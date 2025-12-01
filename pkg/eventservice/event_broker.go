@@ -595,15 +595,9 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 	available := item.(*atomic.Uint64)
-	// if available.Load() < c.scanLimitInBytes {
-	// 	log.Info("changefeed available memory quota is less than scan limit,",
-	// 		zap.Stringer("changefeed", changefeedID),
-	// 		zap.Stringer("dispatcherID", task.id),
-	// 		zap.String("remote", remoteID.String()),
-	// 		zap.Uint64("available", available.Load()),
-	// 		zap.Uint64("scanLimitInBytes", c.scanLimitInBytes))
-	// 	task.resetScanLimit()
-	// }
+	if available.Load() < c.scanLimitInBytes {
+		task.resetScanLimit()
+	}
 
 	sl := c.calculateScanLimit(task)
 	ok = allocQuota(available, uint64(sl.maxDMLBytes))
@@ -639,19 +633,13 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()),
 		zap.Bool("interrupted", interrupted),
 		zap.Error(err))
-	if scannedBytes < 0 {
+	if scannedBytes <= 0 {
 		releaseQuota(available, uint64(sl.maxDMLBytes))
-	} else if scannedBytes >= 0 {
+	} else if scannedBytes > 0 {
 		if scannedBytes < sl.maxDMLBytes {
 			releaseQuota(available, uint64(sl.maxDMLBytes-scannedBytes))
 		} else if scannedBytes > int64(sl.maxDMLBytes) {
 			extra := scannedBytes - int64(sl.maxDMLBytes)
-			log.Info("scan use more memory quota than expected",
-				zap.String("changefeed", changefeedID.String()),
-				zap.Stringer("dispatcherID", task.id),
-				zap.Int64("scannedBytes", scannedBytes),
-				zap.Int64("expectedBytes", int64(sl.maxDMLBytes)),
-				zap.Int64("extra", extra))
 			allocQuota(available, uint64(extra))
 		}
 	}
