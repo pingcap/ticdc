@@ -180,7 +180,7 @@ func (w *Writer) FlushSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 func (w *Writer) Flush(events []*commonEvent.DMLEvent) error {
 	w.updateIsInErrorCausedSafeMode()
 
-	dmls, err := w.PrepareDMLs(events)
+	dmls, err := w.prepareDMLs(events)
 	defer dmlsPool.Put(dmls) // Return dmls to pool after use
 	if err != nil {
 		return errors.Trace(err)
@@ -197,7 +197,7 @@ func (w *Writer) Flush(events []*commonEvent.DMLEvent) error {
 			for _, event := range events {
 				event.Rewind()
 			}
-			dmls, err = w.PrepareDMLs(events)
+			dmls, err = w.prepareDMLs(events)
 			if err != nil {
 				return errors.Trace(err)
 			}
