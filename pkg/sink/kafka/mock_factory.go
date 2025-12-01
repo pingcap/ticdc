@@ -78,11 +78,7 @@ type MockSaramaSyncProducer struct {
 }
 
 // SendMessage implement the SyncProducer interface.
-func (m *MockSaramaSyncProducer) SendMessage(
-	_ context.Context,
-	topic string, partitionNum int32,
-	message *common.Message,
-) error {
+func (m *MockSaramaSyncProducer) SendMessage(topic string, partitionNum int32, message *common.Message) error {
 	_, _, err := m.SyncProducer.SendMessage(&sarama.ProducerMessage{
 		Topic:     topic,
 		Key:       sarama.ByteEncoder(message.Key),
@@ -93,7 +89,7 @@ func (m *MockSaramaSyncProducer) SendMessage(
 }
 
 // SendMessages implement the SyncProducer interface.
-func (m *MockSaramaSyncProducer) SendMessages(_ context.Context, topic string, partitionNum int32, message *common.Message) error {
+func (m *MockSaramaSyncProducer) SendMessages(topic string, partitionNum int32, message *common.Message) error {
 	msgs := make([]*sarama.ProducerMessage, partitionNum)
 	for i := 0; i < int(partitionNum); i++ {
 		msgs[i] = &sarama.ProducerMessage{
