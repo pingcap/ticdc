@@ -123,6 +123,7 @@ func (f *saramaFactory) AdminClient() (ClusterAdminClient, error) {
 // SyncProducer returns a Sync SyncProducer,
 // it should be the caller's responsibility to close the producer
 func (f *saramaFactory) SyncProducer() (SyncProducer, error) {
+	f.config.Producer.Retry.Max = 3
 	client, err := sarama.NewClient(f.endpoints, f.config)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
