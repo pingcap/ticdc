@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -95,19 +96,28 @@ type saramaSyncProducer struct {
 }
 
 func (p *saramaSyncProducer) SendMessage(
-	_ context.Context,
+	ctx context.Context,
 	topic string, partitionNum int32,
 	message *common.Message,
 ) error {
 	if p.closed.Load() {
 		return cerror.ErrKafkaProducerClosed.GenWithStackByArgs()
 	}
-	_, _, err := p.producer.SendMessage(&sarama.ProducerMessage{
+
+	msg := &sarama.ProducerMessage{
 		Topic:     topic,
 		Key:       sarama.ByteEncoder(message.Key),
 		Value:     sarama.ByteEncoder(message.Value),
 		Partition: partitionNum,
-	})
+	}
+
+	err := retry.Do(ctx, func() error {
+		_, _, err := p.producer.SendMessage(msg)
+		return err
+	}, retry.WithBackoffBaseDelay(100),
+		retry.WithBackoffMaxDelay(2000),
+		retry.WithMaxTries(6))
+
 	failpoint.Inject("KafkaSinkSyncSendMessageError", func() {
 		err = cerror.WrapError(cerror.ErrKafkaSendMessage, errors.New("kafka sink sync send message injected error"))
 	})
@@ -123,7 +133,7 @@ func (p *saramaSyncProducer) SendMessage(
 }
 
 func (p *saramaSyncProducer) SendMessages(
-	_ context.Context, topic string, partitionNum int32, message *common.Message,
+	ctx context.Context, topic string, partitionNum int32, message *common.Message,
 ) error {
 	if p.closed.Load() {
 		return cerror.ErrKafkaProducerClosed.GenWithStackByArgs()
@@ -137,7 +147,13 @@ func (p *saramaSyncProducer) SendMessages(
 			Partition: int32(i),
 		}
 	}
-	err := p.producer.SendMessages(msgs)
+
+	err := retry.Do(ctx, func() error {
+		return p.producer.SendMessages(msgs)
+	}, retry.WithBackoffBaseDelay(100),
+		retry.WithBackoffMaxDelay(2000),
+		retry.WithMaxTries(6))
+
 	failpoint.Inject("KafkaSinkSyncSendMessagesError", func() {
 		err = cerror.WrapError(cerror.ErrKafkaSendMessage, errors.New("kafka sink sync send messages injected error"))
 	})
