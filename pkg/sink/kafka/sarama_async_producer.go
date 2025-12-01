@@ -93,6 +93,10 @@ func (p *saramaAsyncProducer) Close() {
 	}()
 }
 
+func (p *saramaAsyncProducer) Config() *sarama.Config {
+	return p.client.Config()
+}
+
 func (p *saramaAsyncProducer) AsyncRunCallback(
 	ctx context.Context,
 ) error {

@@ -16,6 +16,7 @@ package kafka
 import (
 	"context"
 
+	"github.com/IBM/sarama"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 )
@@ -54,6 +55,8 @@ type SyncProducer interface {
 	// object passes out of scope, as it may otherwise leak memory.
 	// You must call this before calling Close on the underlying client.
 	Close()
+
+	Config() *sarama.Config
 }
 
 // AsyncProducer is the kafka async producer
@@ -75,4 +78,6 @@ type AsyncProducer interface {
 	// and run tha attached callback. the caller should call this
 	// method in a background goroutine
 	AsyncRunCallback(ctx context.Context) error
+
+	Config() *sarama.Config
 }
