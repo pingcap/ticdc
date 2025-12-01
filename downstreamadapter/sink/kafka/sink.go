@@ -86,12 +86,12 @@ func New(
 	}()
 
 	statistics := metrics.NewStatistics(changefeedID, "sink")
-	asyncProducer, err := comp.factory.AsyncProducer()
+	asyncProducer, err := comp.factory.AsyncProducer(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	syncProducer, err := comp.factory.SyncProducer()
+	syncProducer, err := comp.factory.SyncProducer(ctx)
 	if err != nil {
 		return nil, err
 	}

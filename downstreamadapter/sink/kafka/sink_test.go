@@ -65,14 +65,14 @@ func newKafkaSinkForTestWithProducers(ctx context.Context,
 	}()
 
 	if asyncProducer == nil {
-		asyncProducer, err = comp.factory.AsyncProducer()
+		asyncProducer, err = comp.factory.AsyncProducer(ctx)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	if syncProducer == nil {
-		syncProducer, err = comp.factory.SyncProducer()
+		syncProducer, err = comp.factory.SyncProducer(ctx)
 		if err != nil {
 			return nil, err
 		}

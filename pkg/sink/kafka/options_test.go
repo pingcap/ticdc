@@ -615,7 +615,7 @@ func TestConfigurationCombinations(t *testing.T) {
 		factory, err := NewMockFactory(ctx, options, changefeed)
 		require.NoError(t, err)
 
-		adminClient, err := factory.AdminClient()
+		adminClient, err := factory.AdminClient(ctx)
 		require.NoError(t, err)
 
 		topic, ok := a.uriParams[0].(string)
