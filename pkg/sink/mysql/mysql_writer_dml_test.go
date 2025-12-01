@@ -877,7 +877,7 @@ func TestGroupEventsByTable(t *testing.T) {
 	})
 }
 
-func TestprepareDMLsWithNotNullUniqueKey(t *testing.T) {
+func TestPrepareDMLsWithNotNullUniqueKey(t *testing.T) {
 	writer, _, _ := newTestMysqlWriter(t)
 	defer writer.db.Close()
 	helper := commonEvent.NewEventTestHelper(t)
