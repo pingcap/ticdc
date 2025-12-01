@@ -1,4 +1,4 @@
 [scheduler]
 enable-table-across-nodes=true
-region-threshold=10
-region-count-per-span=10
+region-threshold=10000
+region-count-per-span=1000

@@ -14,6 +14,7 @@
 package dynstream
 
 import (
+	"math"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -35,7 +36,29 @@ const (
 
 	defaultReleaseMemoryRatio     = 0.4
 	defaultDeadlockDuration       = 5 * time.Second
-	defaultReleaseMemoryThreshold = 256
+	defaultReleaseMemoryThreshold = 256 // 256 bytes
+	defaultBurstMemoryFactor      = 2   // burst memory factor.
+
+	// Congestion-control knobs for smoothing AvailableMemory after forced releases.
+	defaultCongestionDecreaseFactor   = 0.5             // multiplicative decrease factor (<=1).
+	defaultCongestionMinWindowRatio   = 0.1             // never shrink window below 10% capacity.
+	defaultCongestionAdditiveRatio    = 0.05            // additive increase per interval.
+	defaultCongestionMinStepBytes     = 64 * 1024       // 64KB, ensure growth even when capacity is small.
+	defaultCongestionFreezeDuration   = 4 * time.Second // pause growth after a release.
+	defaultCongestionIncreaseInterval = 1 * time.Second
+
+	defaultCongestionMaxWindowRatio = 0.5 // never grow window above 50% capacity.
+
+	// Drain-smoothing knobs.
+	defaultDrainEWMASmoothing        = 0.25
+	defaultDrainSampleInterval       = 100 * time.Millisecond
+	defaultDrainWindowSeconds        = 2.0
+	defaultDrainMinBudgetBytes int64 = 64 * 1024
+
+	// Multi-level watermark ratios.
+	defaultSoftWatermarkRatio        = 0.65
+	defaultHardWatermarkRatio        = 0.85
+	defaultHardWatermarkFreezeWindow = 6 * time.Second
 )
 
 // areaMemStat is used to store the memory statistics of an area.
@@ -59,6 +82,17 @@ type areaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct 
 	lastAppendEventTime   atomic.Value
 	lastSizeDecreaseTime  atomic.Value
 	lastReleaseMemoryTime atomic.Value
+
+	// Congestion-control state for smoothed AvailableMemory reporting.
+	congestionWindow        atomic.Int64
+	lastCongestionEventTime atomic.Value
+	lastWindowUpdateTime    atomic.Value
+	congestionFreezeUntil   atomic.Value
+
+	// Drain estimator state.
+	drainSampleBytes    atomic.Int64
+	lastDrainUpdateTime atomic.Value
+	drainRateEWMA       atomic.Uint64
 }
 
 func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
@@ -81,6 +115,13 @@ func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	res.lastSendFeedbackTime.Store(time.Now())
 	res.lastSizeDecreaseTime.Store(time.Now())
 	res.lastReleaseMemoryTime.Store(time.Now())
+	res.lastCongestionEventTime.Store(time.Time{})
+	now := time.Now()
+	res.lastWindowUpdateTime.Store(now)
+	res.congestionFreezeUntil.Store(time.Time{})
+	res.lastDrainUpdateTime.Store(time.Time{})
+	res.drainRateEWMA.Store(math.Float64bits(0))
+	res.congestionWindow.Store(int64(settings.maxPendingSize))
 	res.settings.Store(&settings)
 	return res
 }
@@ -114,7 +155,7 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 		as.releaseMemory()
 	}
 
-	if as.memoryUsageRatio() >= 1 && as.settings.Load().algorithm ==
+	if as.memoryUsageRatio() >= defaultBurstMemoryFactor && as.settings.Load().algorithm ==
 		MemoryControlForEventCollector {
 		as.releaseMemory()
 		if event.eventType.Droppable {
@@ -164,7 +205,7 @@ func (as *areaMemStat[A, P, T, D, H]) checkDeadlock() bool {
 }
 
 func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
-	if time.Since(as.lastReleaseMemoryTime.Load().(time.Time)) < 1*time.Second {
+	if time.Since(as.lastReleaseMemoryTime.Load().(time.Time)) < 100*time.Millisecond {
 		return
 	}
 	as.lastReleaseMemoryTime.Store(time.Now())
@@ -208,6 +249,7 @@ func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
 		}
 	}
 	as.lastSizeDecreaseTime.Store(time.Now())
+	as.recordCongestionEvent(releasedSize)
 }
 
 func (as *areaMemStat[A, P, T, D, H]) memoryUsageRatio() float64 {
@@ -278,8 +320,210 @@ func (as *areaMemStat[A, P, T, D, H]) decPendingSize(path *pathInfo[A, P, T, D, 
 		log.Debug("Total pending size is less than 0, reset it to 0", zap.Int64("totalPendingSize", as.totalPendingSize.Load()), zap.String("component", as.settings.Load().component))
 		as.totalPendingSize.Store(0)
 	}
+	as.updateDrainRate(size)
 
 	as.updateAreaPauseState(path)
+}
+
+func (as *areaMemStat[A, P, T, D, H]) getAvailableMemory() int64 {
+	rawAvailable := max(0, int64(as.settings.Load().maxPendingSize)-as.totalPendingSize.Load())
+	if rawAvailable == 0 {
+		return 0
+	}
+	return as.applyDrainBudget(as.applyCongestionWindow(rawAvailable))
+}
+
+// applyCongestionWindow enforces the AIMD-style window so that AvailableMemory
+// does not rebound immediately after a release.
+func (as *areaMemStat[A, P, T, D, H]) applyCongestionWindow(rawAvailable int64) int64 {
+	settings := as.settings.Load()
+	maxPending := int64(settings.maxPendingSize)
+	maxWindow := int64(float64(maxPending) * defaultCongestionMaxWindowRatio)
+
+	as.maybeGrowCongestionWindow(maxWindow)
+
+	window := as.congestionWindow.Load()
+	if window <= 0 {
+		return rawAvailable
+	}
+	if window < rawAvailable {
+		return window
+	}
+	return rawAvailable
+}
+
+// maybeGrowCongestionWindow implements the additive-increase phase.
+func (as *areaMemStat[A, P, T, D, H]) maybeGrowCongestionWindow(maxWindow int64) {
+	now := time.Now()
+	lastUpdate := as.lastWindowUpdateTime.Load().(time.Time)
+	if now.Sub(lastUpdate) < defaultCongestionIncreaseInterval {
+		return
+	}
+
+	if as.isCongestionGrowthFrozen(now) {
+		return
+	}
+
+	usageRatio := as.memoryUsageRatio()
+	if usageRatio >= defaultHardWatermarkRatio {
+		as.freezeCongestionGrowth(now)
+		return
+	}
+	if usageRatio >= defaultSoftWatermarkRatio {
+		as.lastWindowUpdateTime.Store(now)
+		return
+	}
+
+	// If the last congestion event is too recent, we don't grow the congestion window.
+	if lastCongested := as.lastCongestionEventTime.Load().(time.Time); !lastCongested.IsZero() && now.Sub(lastCongested) < defaultCongestionFreezeDuration {
+		as.lastWindowUpdateTime.Store(now)
+		return
+	}
+
+	additiveStep := int64(float64(maxWindow) * defaultCongestionAdditiveRatio)
+	if additiveStep < defaultCongestionMinStepBytes {
+		additiveStep = defaultCongestionMinStepBytes
+	}
+
+	for {
+		current := as.congestionWindow.Load()
+		if current >= maxWindow {
+			as.lastWindowUpdateTime.Store(now)
+			return
+		}
+
+		next := current + additiveStep
+		if next > maxWindow {
+			next = maxWindow
+		}
+
+		if as.congestionWindow.CompareAndSwap(current, next) {
+			as.lastWindowUpdateTime.Store(now)
+			return
+		}
+	}
+}
+
+// recordCongestionEvent applies multiplicative decrease once a forced release happens.
+func (as *areaMemStat[A, P, T, D, H]) recordCongestionEvent(releasedSize int64) {
+	if releasedSize <= 0 {
+		return
+	}
+
+	usageRatio := as.memoryUsageRatio()
+	now := time.Now()
+	maxPending := int64(as.settings.Load().maxPendingSize)
+	minWindow := int64(float64(maxPending) * defaultCongestionMinWindowRatio)
+	if minWindow < defaultCongestionMinStepBytes {
+		minWindow = defaultCongestionMinStepBytes
+	}
+
+	for {
+		current := as.congestionWindow.Load()
+		next := int64(float64(current) * defaultCongestionDecreaseFactor)
+		if next < minWindow {
+			next = minWindow
+		}
+		if next <= 0 {
+			next = minWindow
+		}
+		if as.congestionWindow.CompareAndSwap(current, next) {
+			break
+		}
+	}
+
+	if usageRatio >= defaultSoftWatermarkRatio {
+		as.forceWindowHalve(minWindow)
+	}
+	if usageRatio >= defaultHardWatermarkRatio {
+		as.freezeCongestionGrowth(now)
+	}
+
+	as.lastCongestionEventTime.Store(now)
+	as.lastWindowUpdateTime.Store(now)
+}
+
+func (as *areaMemStat[A, P, T, D, H]) forceWindowHalve(minWindow int64) {
+	for {
+		current := as.congestionWindow.Load()
+		next := current / 2
+		if next < minWindow {
+			next = minWindow
+		}
+		if as.congestionWindow.CompareAndSwap(current, next) {
+			return
+		}
+	}
+}
+
+func (as *areaMemStat[A, P, T, D, H]) freezeCongestionGrowth(now time.Time) {
+	as.congestionFreezeUntil.Store(now.Add(defaultHardWatermarkFreezeWindow))
+}
+
+func (as *areaMemStat[A, P, T, D, H]) isCongestionGrowthFrozen(now time.Time) bool {
+	freezeUntil := as.congestionFreezeUntil.Load().(time.Time)
+	return !freezeUntil.IsZero() && now.Before(freezeUntil)
+}
+
+func (as *areaMemStat[A, P, T, D, H]) applyDrainBudget(rawAvailable int64) int64 {
+	rate := math.Float64frombits(as.drainRateEWMA.Load())
+	if rate <= 0 {
+		return rawAvailable
+	}
+
+	budget := int64(rate * defaultDrainWindowSeconds)
+	if budget < defaultDrainMinBudgetBytes {
+		budget = defaultDrainMinBudgetBytes
+	}
+	if budget <= 0 {
+		return rawAvailable
+	}
+	if budget < rawAvailable {
+		return budget
+	}
+	return rawAvailable
+}
+
+func (as *areaMemStat[A, P, T, D, H]) updateDrainRate(consumed int64) {
+	if consumed <= 0 {
+		return
+	}
+
+	now := time.Now()
+	last := as.lastDrainUpdateTime.Load().(time.Time)
+	as.drainSampleBytes.Add(consumed)
+	if last.IsZero() {
+		as.lastDrainUpdateTime.Store(now)
+		return
+	}
+
+	if now.Sub(last) < defaultDrainSampleInterval {
+		return
+	}
+
+	bytes := as.drainSampleBytes.Swap(0)
+	if bytes <= 0 {
+		as.lastDrainUpdateTime.Store(now)
+		return
+	}
+
+	elapsed := now.Sub(last).Seconds()
+	if elapsed <= 0 {
+		as.lastDrainUpdateTime.Store(now)
+		return
+	}
+
+	instantRate := float64(bytes) / elapsed
+	prev := math.Float64frombits(as.drainRateEWMA.Load())
+	var ewma float64
+	if prev <= 0 {
+		ewma = instantRate
+	} else {
+		ewma = prev*(1-defaultDrainEWMASmoothing) + instantRate*defaultDrainEWMASmoothing
+	}
+
+	as.drainRateEWMA.Store(math.Float64bits(ewma))
+	as.lastDrainUpdateTime.Store(now)
 }
 
 // A memControl is used to control the memory usage of the dynamic stream.
@@ -348,6 +592,7 @@ func (m *memControl[A, P, T, D, H]) getMetrics() MemoryMetric[A, P] {
 			AreaValue:           area.area,
 			PathAvailableMemory: make(map[P]int64),
 			UsedMemoryValue:     area.totalPendingSize.Load(),
+			AvailableMemory:     area.getAvailableMemory(),
 			MaxMemoryValue:      int64(area.settings.Load().maxPendingSize),
 			PathMaxMemoryValue:  int64(area.settings.Load().pathMaxPendingSize),
 		}
@@ -369,13 +614,15 @@ type MemoryMetric[A Area, P Path] struct {
 type AreaMemoryMetric[A Area, P Path] struct {
 	AreaValue           A
 	PathAvailableMemory map[P]int64
+	AvailableMemory     int64
 	UsedMemoryValue     int64
-	MaxMemoryValue      int64
-	PathMaxMemoryValue  int64
+
+	MaxMemoryValue     int64
+	PathMaxMemoryValue int64
 }
 
 func (a *AreaMemoryMetric[A, P]) MemoryUsageRatio() float64 {
-	return float64(a.UsedMemoryValue) / float64(a.MaxMemoryValue)
+	return float64(a.AvailableMemory) / float64(a.MaxMemoryValue)
 }
 
 func (a *AreaMemoryMetric[A, P]) MemoryUsage() int64 {
@@ -384,10 +631,6 @@ func (a *AreaMemoryMetric[A, P]) MemoryUsage() int64 {
 
 func (a *AreaMemoryMetric[A, P]) MaxMemory() int64 {
 	return a.MaxMemoryValue
-}
-
-func (a *AreaMemoryMetric[A, P]) AvailableMemory() int64 {
-	return max(0, a.MaxMemoryValue-a.UsedMemoryValue)
 }
 
 func (a *AreaMemoryMetric[A, P]) Area() A {
