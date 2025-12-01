@@ -272,10 +272,12 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	return nil
 }
 
+// AddCheckpointTs is invoked by dispatcher manager whenever Maintainer broadcasts a
+// new changefeed-level checkpoint. We only flush the active-active progress table when
+// the feature is enabled and the progress writer has been initialized, and we throttle
+// updates via progressUpdateInterval to avoid hammering downstream on every tick.
 func (s *Sink) AddCheckpointTs(ts uint64) {
-	if !s.enableActiveActive {
-		log.Error("AddCheckpointTs called when active-active is not enabled",
-			zap.String("changefeed", s.changefeedID.DisplayName.String()))
+	if !s.enableActiveActive || s.progressTableWriter == nil {
 		return
 	}
 
