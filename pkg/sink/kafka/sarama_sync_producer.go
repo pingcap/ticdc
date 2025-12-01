@@ -14,7 +14,6 @@
 package kafka
 
 import (
-	"sync/atomic"
 	"time"
 
 	"github.com/IBM/sarama"
@@ -23,6 +22,7 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
