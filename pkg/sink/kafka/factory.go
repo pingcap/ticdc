@@ -149,6 +149,8 @@ func (p *saramaSyncProducer) SendMessages(
 	}
 
 	err := retry.Do(ctx, func() error {
+		log.Info("kafka sink send messages", zap.Int("num", len(msgs)),
+			zap.ByteString("value", message.Value))
 		return p.producer.SendMessages(msgs)
 	}, retry.WithBackoffBaseDelay(100),
 		retry.WithBackoffMaxDelay(2000),
