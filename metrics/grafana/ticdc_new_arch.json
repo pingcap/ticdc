@@ -124,6 +124,7 @@
   "editable": true,
   "gnetId": null,
   "graphTooltip": 1,
+  "id": 33,
   "iteration": 1764311940562,
   "links": [],
   "panels": [
@@ -1047,7 +1048,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_dynamic_stream_memory_usage{k8s_cluster=~\"$k8s_cluster\", tidb_cluster_id=~\"$tidb_cluster\", namespace=~\"$namespace\", area=~\"$changefeed\", instance=~\"$ticdc_instance\", module=~\"event-collector\"}) by (namespace, area, instance, module, type)",
+              "expr": "sum(ticdc_dynamic_stream_memory_usage{k8s_cluster=~\"$k8s_cluster\", tidb_cluster=~\"$tidb_cluster\", namespace=~\"$namespace\", area=~\"$changefeed\", instance=~\"$ticdc_instance\", module=~\"event-collector\"}) by (namespace, area, instance, module, type)",
               "interval": "",
               "legendFormat": "{{namespace}}-{{area}}-{{instance}}-{{module}}-{{type}}",
               "refId": "A"
@@ -1357,7 +1358,7 @@
               "expr": "sum(ticdc_event_store_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}) by (instance)",
               "hide": false,
               "interval": "",
-              "legendFormat": "Event-Store-{{type}}-resolvedTs-Lag-{{instance}}",
+              "legendFormat": "{{instance}}",
               "refId": "A"
             }
           ],
@@ -1453,7 +1454,7 @@
               "expr": "sum(ticdc_event_service_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", type=~\"received\"}) by (instance, type)",
               "hide": false,
               "interval": "",
-              "legendFormat": "Event-Service-{{type}}-resolvedTs-Lag-{{instance}}",
+              "legendFormat": "{{type}}-{{instance}}",
               "refId": "A"
             },
             {
@@ -1461,7 +1462,7 @@
               "expr": "sum(ticdc_event_service_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", type=~\"sent\"}) by (instance, type)",
               "hide": false,
               "interval": "",
-              "legendFormat": "Event-Service-{{type}}-resolvedTs-Lag-{{instance}}",
+              "legendFormat": "{{type}}-{{instance}}",
               "refId": "B"
             }
           ],
@@ -7287,7 +7288,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_dynamic_stream_memory_usage{k8s_cluster=~\"$k8s_cluster\", tidb_cluster_id=~\"$tidb_cluster\", instance=~\"$ticdc_instance\", module=~\"log-puller\"}) by (instance, type)",
+              "expr": "sum(ticdc_dynamic_stream_memory_usage{k8s_cluster=~\"$k8s_cluster\", tidb_cluster=~\"$tidb_cluster\", instance=~\"$ticdc_instance\", module=~\"log-puller\"}) by (instance, type)",
               "interval": "",
               "legendFormat": "{{instance}}-{{type}}",
               "refId": "A"
@@ -19434,7 +19435,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_dynamic_stream_memory_usage{k8s_cluster=~\"$k8s_cluster\", tidb_cluster_id=~\"$tidb_cluster\", namespace=~\"$namespace\", area=~\"$changefeed\", instance=~\"$ticdc_instance\", module=~\"event-collector-redo\"}) by (namespace, area, instance, module, type)",
+              "expr": "sum(ticdc_dynamic_stream_memory_usage{k8s_cluster=~\"$k8s_cluster\", tidb_cluster=~\"$tidb_cluster\", namespace=~\"$namespace\", area=~\"$changefeed\", instance=~\"$ticdc_instance\", module=~\"event-collector-redo\"}) by (namespace, area, instance, module, type)",
               "interval": "",
               "legendFormat": "{{namespace}}-{{area}}-{{instance}}-{{module}}-{{type}}",
               "refId": "A"
@@ -19544,13 +19545,6 @@
           "renderer": "flot",
           "repeat": null,
           "repeatDirection": "h",
-          "scopedVars": {
-            "runtime_instance": {
-              "selected": false,
-              "text": "10.2.4.11:8305",
-              "value": "10.2.4.11:8305"
-            }
-          },
           "seriesOverrides": [
             {
               "alias": "alloc-from-os",
@@ -19734,13 +19728,6 @@
           "renderer": "flot",
           "repeat": null,
           "repeatDirection": "h",
-          "scopedVars": {
-            "runtime_instance": {
-              "selected": false,
-              "text": "10.2.4.11:8305",
-              "value": "10.2.4.11:8305"
-            }
-          },
           "seriesOverrides": [],
           "spaceLength": 10,
           "stack": false,
@@ -19845,13 +19832,6 @@
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
-          "scopedVars": {
-            "runtime_instance": {
-              "selected": false,
-              "text": "10.2.4.11:8305",
-              "value": "10.2.4.11:8305"
-            }
-          },
           "seriesOverrides": [
             {}
           ],
@@ -19972,13 +19952,6 @@
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
-          "scopedVars": {
-            "runtime_instance": {
-              "selected": false,
-              "text": "10.2.4.11:8305",
-              "value": "10.2.4.11:8305"
-            }
-          },
           "seriesOverrides": [
             {
               "alias": "sweep",
@@ -20070,13 +20043,6 @@
         }
       ],
       "repeat": "runtime_instance",
-      "scopedVars": {
-        "runtime_instance": {
-          "selected": false,
-          "text": "10.2.4.11:8305",
-          "value": "10.2.4.11:8305"
-        }
-      },
       "title": "Runtime $runtime_instance",
       "type": "row"
     },
@@ -20148,13 +20114,6 @@
           "repeatIteration": 1764311940562,
           "repeatPanelId": 157,
           "repeatedByRow": true,
-          "scopedVars": {
-            "runtime_instance": {
-              "selected": false,
-              "text": "10.2.4.11:8310",
-              "value": "10.2.4.11:8310"
-            }
-          },
           "seriesOverrides": [
             {
               "alias": "alloc-from-os",
@@ -20341,13 +20300,6 @@
           "repeatIteration": 1764311940562,
           "repeatPanelId": 158,
           "repeatedByRow": true,
-          "scopedVars": {
-            "runtime_instance": {
-              "selected": false,
-              "text": "10.2.4.11:8310",
-              "value": "10.2.4.11:8310"
-            }
-          },
           "seriesOverrides": [],
           "spaceLength": 10,
           "stack": false,
@@ -20455,13 +20407,6 @@
           "repeatIteration": 1764311940562,
           "repeatPanelId": 160,
           "repeatedByRow": true,
-          "scopedVars": {
-            "runtime_instance": {
-              "selected": false,
-              "text": "10.2.4.11:8310",
-              "value": "10.2.4.11:8310"
-            }
-          },
           "seriesOverrides": [
             {}
           ],
@@ -20585,13 +20530,6 @@
           "repeatIteration": 1764311940562,
           "repeatPanelId": 161,
           "repeatedByRow": true,
-          "scopedVars": {
-            "runtime_instance": {
-              "selected": false,
-              "text": "10.2.4.11:8310",
-              "value": "10.2.4.11:8310"
-            }
-          },
           "seriesOverrides": [
             {
               "alias": "sweep",
@@ -20684,13 +20622,6 @@
       ],
       "repeatIteration": 1764311940562,
       "repeatPanelId": 155,
-      "scopedVars": {
-        "runtime_instance": {
-          "selected": false,
-          "text": "10.2.4.11:8310",
-          "value": "10.2.4.11:8310"
-        }
-      },
       "title": "Runtime $runtime_instance",
       "type": "row"
     },
@@ -20762,13 +20693,6 @@
           "repeatIteration": 1764311940562,
           "repeatPanelId": 157,
           "repeatedByRow": true,
-          "scopedVars": {
-            "runtime_instance": {
-              "selected": false,
-              "text": "10.2.4.11:8315",
-              "value": "10.2.4.11:8315"
-            }
-          },
           "seriesOverrides": [
             {
               "alias": "alloc-from-os",
@@ -20955,13 +20879,6 @@
           "repeatIteration": 1764311940562,
           "repeatPanelId": 158,
           "repeatedByRow": true,
-          "scopedVars": {
-            "runtime_instance": {
-              "selected": false,
-              "text": "10.2.4.11:8315",
-              "value": "10.2.4.11:8315"
-            }
-          },
           "seriesOverrides": [],
           "spaceLength": 10,
           "stack": false,
@@ -21069,13 +20986,6 @@
           "repeatIteration": 1764311940562,
           "repeatPanelId": 160,
           "repeatedByRow": true,
-          "scopedVars": {
-            "runtime_instance": {
-              "selected": false,
-              "text": "10.2.4.11:8315",
-              "value": "10.2.4.11:8315"
-            }
-          },
           "seriesOverrides": [
             {}
           ],
@@ -21199,13 +21109,6 @@
           "repeatIteration": 1764311940562,
           "repeatPanelId": 161,
           "repeatedByRow": true,
-          "scopedVars": {
-            "runtime_instance": {
-              "selected": false,
-              "text": "10.2.4.11:8315",
-              "value": "10.2.4.11:8315"
-            }
-          },
           "seriesOverrides": [
             {
               "alias": "sweep",
@@ -21298,13 +21201,6 @@
       ],
       "repeatIteration": 1764311940562,
       "repeatPanelId": 155,
-      "scopedVars": {
-        "runtime_instance": {
-          "selected": false,
-          "text": "10.2.4.11:8315",
-          "value": "10.2.4.11:8315"
-        }
-      },
       "title": "Runtime $runtime_instance",
       "type": "row"
     },
@@ -21376,13 +21272,6 @@
           "repeatIteration": 1764311940562,
           "repeatPanelId": 157,
           "repeatedByRow": true,
-          "scopedVars": {
-            "runtime_instance": {
-              "selected": false,
-              "text": "10.2.4.11:8320",
-              "value": "10.2.4.11:8320"
-            }
-          },
           "seriesOverrides": [
             {
               "alias": "alloc-from-os",
@@ -21569,13 +21458,6 @@
           "repeatIteration": 1764311940562,
           "repeatPanelId": 158,
           "repeatedByRow": true,
-          "scopedVars": {
-            "runtime_instance": {
-              "selected": false,
-              "text": "10.2.4.11:8320",
-              "value": "10.2.4.11:8320"
-            }
-          },
           "seriesOverrides": [],
           "spaceLength": 10,
           "stack": false,
@@ -21683,13 +21565,6 @@
           "repeatIteration": 1764311940562,
           "repeatPanelId": 160,
           "repeatedByRow": true,
-          "scopedVars": {
-            "runtime_instance": {
-              "selected": false,
-              "text": "10.2.4.11:8320",
-              "value": "10.2.4.11:8320"
-            }
-          },
           "seriesOverrides": [
             {}
           ],
@@ -21813,13 +21688,6 @@
           "repeatIteration": 1764311940562,
           "repeatPanelId": 161,
           "repeatedByRow": true,
-          "scopedVars": {
-            "runtime_instance": {
-              "selected": false,
-              "text": "10.2.4.11:8320",
-              "value": "10.2.4.11:8320"
-            }
-          },
           "seriesOverrides": [
             {
               "alias": "sweep",
@@ -21912,13 +21780,6 @@
       ],
       "repeatIteration": 1764311940562,
       "repeatPanelId": 155,
-      "scopedVars": {
-        "runtime_instance": {
-          "selected": false,
-          "text": "10.2.4.11:8320",
-          "value": "10.2.4.11:8320"
-        }
-      },
       "title": "Runtime $runtime_instance",
       "type": "row"
     },
@@ -23513,7 +23374,7 @@
     ]
   },
   "time": {
-    "from": "now-30m",
+    "from": "now-1h",
     "to": "now"
   },
   "timepicker": {
