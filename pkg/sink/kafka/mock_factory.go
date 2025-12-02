@@ -102,10 +102,6 @@ func (m *MockSaramaSyncProducer) SendMessages(topic string, partitionNum int32, 
 	return m.SyncProducer.SendMessages(msgs)
 }
 
-func (m *MockSaramaSyncProducer) Config() *sarama.Config {
-	return nil
-}
-
 // Close implement the SyncProducer interface.
 func (m *MockSaramaSyncProducer) Close() {
 	_ = m.SyncProducer.Close()
@@ -121,10 +117,6 @@ type MockSaramaAsyncProducer struct {
 	failpointCh   chan error
 
 	closed bool
-}
-
-func (p *MockSaramaAsyncProducer) Config() *sarama.Config {
-	return nil
 }
 
 // AsyncRunCallback implement the AsyncProducer interface.

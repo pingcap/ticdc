@@ -100,10 +100,6 @@ func (p *saramaSyncProducer) Heartbeat() {
 	}
 }
 
-func (p *saramaSyncProducer) Config() *sarama.Config {
-	return p.client.Config()
-}
-
 func (p *saramaSyncProducer) Close() {
 	if p.closed.Load() {
 		log.Warn("kafka DDL producer already closed",
