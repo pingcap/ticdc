@@ -95,13 +95,6 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-
-	log.Info("kafka sink initialized",
-		zap.Int("async-produce-retry-max", asyncProducer.Config().Producer.Retry.Max),
-		zap.Any("async-produce-retry-backoff", asyncProducer.Config().Producer.Retry.Backoff),
-		zap.Int("sync-produce-retry-max", syncProducer.Config().Producer.Retry.Max),
-		zap.Any("sync-produce-retry-backoff", syncProducer.Config().Producer.Retry.Backoff))
-
 	return &sink{
 		changefeedID:     changefeedID,
 		dmlProducer:      asyncProducer,

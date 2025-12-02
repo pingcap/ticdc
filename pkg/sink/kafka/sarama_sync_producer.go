@@ -64,6 +64,7 @@ func (p *saramaSyncProducer) SendMessages(topic string, partitionNum int32, mess
 	if p.closed.Load() {
 		return errors.ErrKafkaProducerClosed.GenWithStackByArgs()
 	}
+
 	msgs := make([]*sarama.ProducerMessage, partitionNum)
 	for i := 0; i < int(partitionNum); i++ {
 		msgs[i] = &sarama.ProducerMessage{
@@ -73,10 +74,8 @@ func (p *saramaSyncProducer) SendMessages(topic string, partitionNum int32, mess
 			Partition: int32(i),
 		}
 	}
-
-	log.Info("kafka send messages",
-		zap.Int("count", len(msgs)), zap.ByteString("value", message.Value))
 	err := p.producer.SendMessages(msgs)
+
 	failpoint.Inject("KafkaSinkSyncSendMessagesError", func() {
 		err = errors.WrapError(errors.ErrKafkaSendMessage, errors.New("kafka sink sync send messages injected error"))
 	})
