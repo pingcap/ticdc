@@ -46,6 +46,10 @@ type Credential struct {
 
 	ClientUserRequired bool     `toml:"client-user-required" json:"client-user-required"`
 	ClientAllowedUser  []string `toml:"client-allowed-user" json:"client-allowed-user"`
+
+	// RedactInfoLog controls log redaction to prevent sensitive data from appearing in logs.
+	// Valid values: "off" (default, no redaction), "on" (redact with '?'), "marker" (wrap with ‹›)
+	RedactInfoLog string `toml:"redact-info-log" json:"redact-info-log"`
 }
 
 // Value implements the driver.Valuer interface
