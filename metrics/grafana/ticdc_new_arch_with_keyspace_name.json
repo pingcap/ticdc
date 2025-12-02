@@ -4653,7 +4653,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(delta(ticdc_sink_exec_running{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
+              "expr": "sum(delta(ticdc_sink_ddl_exec_running{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}",
               "queryType": "randomWalk",
@@ -4715,7 +4715,7 @@
             "y": 23
           },
           "hiddenSeries": false,
-          "id": 614,
+          "id": 615,
           "legend": {
             "alignAsTable": true,
             "avg": false,
