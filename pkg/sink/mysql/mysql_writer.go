@@ -38,7 +38,7 @@ const (
 
 	defaultSupportVectorVersion = "8.4.0"
 
-	defaultRunningAddIndexSQLVersion = "8.5.0"
+	defaultRunningAddIndexNewSQLVersion = "8.5.0"
 
 	defaultErrorCausedSafeModeDuration = 5 * time.Second
 )

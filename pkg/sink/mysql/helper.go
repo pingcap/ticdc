@@ -433,7 +433,7 @@ func shouldFormatVectorType(cfg *Config) bool {
 
 // getCheckRunningAddIndexSQL return different sql according to tidb version
 func getCheckRunningAddIndexSQL(cfg *Config) string {
-	ver := semver.New(defaultRunningAddIndexSQLVersion)
+	ver := semver.New(defaultRunningAddIndexNewSQLVersion)
 	if cfg.ServerInfo.ServerVersion.LessThan(*ver) {
 		log.Info("it will check running AddIndex SQL with old version",
 			zap.String("version", cfg.ServerInfo.ServerVersion.String()))
