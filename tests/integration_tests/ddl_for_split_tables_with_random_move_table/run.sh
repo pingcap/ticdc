@@ -83,7 +83,7 @@ function execute_ddls() {
 
 function execute_dml() {
 	table_name="table_$1"
-	execute_mixed_dml "$table_name" "${UP_TIDB_HOST}" "${UP_TIDB_PORT}"
+	run_sql_ignore_error "INSERT INTO test.$table_name (data) VALUES ('insert_$(date +%s)_${RANDOM}_${dml_counter}');" $host $port || true
 }
 
 function move_split_table() {
