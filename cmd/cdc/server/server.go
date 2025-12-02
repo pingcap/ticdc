@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/fatih/color"
+	perrors "github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -29,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/security"
+	pkgutil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/pingcap/ticdc/server"
 	ticonfig "github.com/pingcap/tidb/pkg/config"
@@ -99,6 +101,22 @@ func (o *options) run(cmd *cobra.Command) error {
 		os.Exit(1)
 	}
 	log.Info("init log", zap.String("file", loggerConfig.File), zap.String("level", loggerConfig.Level))
+
+	// Initialize log redaction mode from config
+	// Empty string defaults to OFF (no redaction)
+	var redactMode string
+	if o.serverConfig.Security.RedactInfoLog == "" {
+		redactMode = perrors.RedactLogDisable
+	} else {
+		var err error
+		redactMode, err = pkgutil.ValidateAndParseRedactMode(o.serverConfig.Security.RedactInfoLog)
+		if err != nil {
+			cmd.Printf("invalid redact-info-log configuration: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	perrors.RedactLogEnabled.Store(redactMode)
+	log.Info("log redaction initialized", zap.String("mode", redactMode))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
