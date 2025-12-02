@@ -21,8 +21,10 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/go-sql-driver/mysql"
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/pingcap/errors"
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -31,6 +33,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	ticonfig "github.com/pingcap/tidb/pkg/config"
 	"github.com/pingcap/tidb/pkg/disttask/framework/handle"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
 	"github.com/stretchr/testify/require"
 )
@@ -439,7 +442,6 @@ func TestMysqlWriter_RemoveDDLTsTable(t *testing.T) {
 	require.NoError(t, err)
 }
 
-/*
 // Test the async ddl can be write successfully
 func TestMysqlWriter_AsyncDDL(t *testing.T) {
 	writer, db, mock := newTestMysqlWriterForTiDB(t)
@@ -628,7 +630,6 @@ func TestMysqlWriter_AsyncDDL(t *testing.T) {
 	err = mock.ExpectationsWereMet()
 	require.NoError(t, err)
 }
-*/
 
 func TestCheckIsDuplicateEntryError(t *testing.T) {
 	writer, db, _ := newTestMysqlWriter(t)
