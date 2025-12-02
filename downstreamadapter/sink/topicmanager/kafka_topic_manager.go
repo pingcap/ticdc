@@ -179,7 +179,7 @@ func (m *kafkaTopicManager) fetchAllTopicsPartitionsNum(
 	})
 
 	start := time.Now()
-	numPartitions, err := m.admin.GetTopicsPartitionsNum(ctx, topics)
+	numPartitions, err := m.admin.GetTopicsPartitionsNum(topics)
 	if err != nil {
 		log.Warn(
 			"Kafka admin client describe topics failed",
@@ -216,7 +216,7 @@ func (m *kafkaTopicManager) waitUntilTopicVisible(
 		start := time.Now()
 		// ignoreTopicError is set to false since we just create the topic,
 		// make sure the topic is visible.
-		meta, err := m.admin.GetTopicsMeta(ctx, topics, false)
+		meta, err := m.admin.GetTopicsMeta(topics, false)
 		if err != nil {
 			log.Warn("topic not found, retry it",
 				zap.String("keyspace", m.changefeedID.Keyspace()),
@@ -254,7 +254,7 @@ func (m *kafkaTopicManager) createTopic(
 	}
 
 	start := time.Now()
-	err := m.admin.CreateTopic(ctx, &kafka.TopicDetail{
+	err := m.admin.CreateTopic(&kafka.TopicDetail{
 		Name:              topicName,
 		NumPartitions:     m.cfg.PartitionNum,
 		ReplicationFactor: m.cfg.ReplicationFactor,
@@ -294,7 +294,7 @@ func (m *kafkaTopicManager) CreateTopicAndWaitUntilVisible(
 	// If the topic is not in the cache, we try to get the metadata of the topic.
 	// ignoreTopicErr is set to true to ignore the error if the topic is not found,
 	// which means we should create the topic later.
-	topicDetails, err := m.admin.GetTopicsMeta(ctx, []string{topicName}, true)
+	topicDetails, err := m.admin.GetTopicsMeta([]string{topicName}, true)
 	if err != nil {
 		return 0, errors.Trace(err)
 	}

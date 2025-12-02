@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql/driver"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -28,7 +29,7 @@ func TestProgressTableWriterFlushSingleBatch(t *testing.T) {
 
 	setTestClusterID(t, "cluster-single")
 
-	writer := NewProgressTableWriter(context.Background(), db, common.NewChangeFeedIDWithName("cf", "ks"), 10)
+	writer := NewProgressTableWriter(context.Background(), db, common.NewChangeFeedIDWithName("cf", "ks"), 10, 1*time.Millisecond)
 	tables := []*event.SchemaTableName{
 		{SchemaName: "db1", TableName: "t1"},
 		{SchemaName: "db1", TableName: "t2"},
@@ -38,6 +39,7 @@ func TestProgressTableWriterFlushSingleBatch(t *testing.T) {
 	expectProgressTableInit(mock)
 	expectProgressInsert(mock, "ks/cf", "cluster-single", 42, tables)
 
+	time.Sleep(time.Second)
 	err = writer.Flush(42)
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -50,7 +52,7 @@ func TestProgressTableWriterFlushMultiBatch(t *testing.T) {
 
 	setTestClusterID(t, "cluster-multi")
 
-	writer := NewProgressTableWriter(context.Background(), db, common.NewChangeFeedIDWithName("cf", "ks"), 2)
+	writer := NewProgressTableWriter(context.Background(), db, common.NewChangeFeedIDWithName("cf", "ks"), 2, 1*time.Millisecond)
 	allTables := []*event.SchemaTableName{
 		{SchemaName: "db1", TableName: "t1"},
 		{SchemaName: "db1", TableName: "t2"},
@@ -62,6 +64,7 @@ func TestProgressTableWriterFlushMultiBatch(t *testing.T) {
 	expectProgressInsert(mock, "ks/cf", "cluster-multi", 99, allTables[:2])
 	expectProgressInsert(mock, "ks/cf", "cluster-multi", 99, allTables[2:])
 
+	time.Sleep(time.Second)
 	err = writer.Flush(99)
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
