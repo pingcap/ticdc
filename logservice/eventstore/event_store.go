@@ -612,7 +612,7 @@ func (e *eventStore) RegisterDispatcher(
 					subscriber.notifyFunc(ts, subStat.maxEventCommitTs.Load())
 				}
 			}
-			resolvedEventCount.Add(float64(len(subscribersData.subscribers)))
+resolvedEventCount.Inc()
 			metrics.EventStoreNotifyDispatcherDurationHist.Observe(float64(time.Since(start).Seconds()))
 		}
 	}
