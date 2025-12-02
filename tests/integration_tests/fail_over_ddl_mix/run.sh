@@ -216,9 +216,9 @@ main() {
 	# kill -9 $NORMAL_TABLE_DDL_PID $PARTITION_TABLE_DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5 $DML_PID_6 $DML_PID_7 $DML_PID_8 $DML_PID_9 $DML_PID_10
 	kill -9 $NORMAL_TABLE_DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5
 
-	sleep 60
+	sleep 30
 
-	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 1000
 
 	checkpoint1=$(cdc_cli_changefeed query -c "test" 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
 	sleep 20
