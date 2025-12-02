@@ -22,6 +22,9 @@ import (
 	"go.uber.org/zap"
 )
 
+//go:generate msgp
+//msgp:maps autoshim
+
 // NeedTableNameStoreAndCheckpointTs returns true when downstream components must maintain table names
 // for checkpoint propagation. Non-MySQL sinks always require table names, while MySQL
 // sinks only need them when active-active replication is enabled.
