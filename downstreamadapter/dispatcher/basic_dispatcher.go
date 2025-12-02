@@ -28,6 +28,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -406,7 +407,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			log.Debug("dispatcher receive all event",
 				zap.Stringer("dispatcher", d.id), zap.Int64("mode", d.mode),
 				zap.String("eventType", commonEvent.TypeToString(dispatcherEvent.Event.GetType())),
-				zap.Any("event", dispatcherEvent.Event))
+				zap.String("event", util.RedactAny(dispatcherEvent.Event)))
 		}
 
 		failpoint.Inject("HandleEventsSlowly", func() {
