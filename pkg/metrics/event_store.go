@@ -163,6 +163,14 @@ var (
 		Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
 	}, []string{"type"})
 
+	EventStoreNotifyDispatcherCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_store",
+			Name:      "notify_dispatcher_count",
+			Help:      "The number of times event store notifies dispatchers with resolved ts.",
+		})
+
 	EventStoreNotifyDispatcherDurationHist = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
@@ -220,6 +228,7 @@ func initEventStoreMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventStoreWriteBatchSizeHist)
 	registry.MustRegister(EventStoreWriteRequestsCount)
 	registry.MustRegister(EventStoreReadDurationHistogram)
+	registry.MustRegister(EventStoreNotifyDispatcherCount)
 	registry.MustRegister(EventStoreNotifyDispatcherDurationHist)
 	registry.MustRegister(EventStoreRegisterDispatcherStartTsLagHist)
 	registry.MustRegister(EventStoreWriteWorkerIODuration)
