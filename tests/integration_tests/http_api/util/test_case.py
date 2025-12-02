@@ -137,7 +137,7 @@ def create_changefeed(sink_uri):
     assert "ErrDispatcherFailed" in resp.text, f"{resp.text}"
 
     # create changefeed fail because glue schema config is invalid
-    url = BASE_URL1_V2+"/changefeeds"
+    url = BASE_URL1_V2+"/changefeeds?keyspace=keyspace1"
     data = json.dumps({
         "changefeed_id": "changefeed-test-v2",
         "sink_uri": "kafka://127.0.0.1:9092/http_api?protocol=avro",
