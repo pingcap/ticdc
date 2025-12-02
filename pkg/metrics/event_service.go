@@ -137,6 +137,13 @@ var (
 		Help:      "The number of transactions scanned from eventStore",
 		Buckets:   prometheus.ExponentialBuckets(1, 2.0, 8), // 1 ~ 256
 	})
+	EventServiceSkipScanCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "skip_scan_count",
+			Help:      "The number of scans skipped",
+		}, []string{"reason"})
 )
 
 // initEventServiceMetrics registers all metrics in this file.
@@ -157,4 +164,5 @@ func initEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceAvailableMemoryQuotaGaugeVec)
 	registry.MustRegister(EventServiceScannedDMLSize)
 	registry.MustRegister(EventServiceScannedTxnCount)
+	registry.MustRegister(EventServiceSkipScanCount)
 }
