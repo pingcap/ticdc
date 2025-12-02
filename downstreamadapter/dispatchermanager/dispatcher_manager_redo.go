@@ -71,15 +71,10 @@ func initRedoComponet(
 
 	// RedoMessageDs need register on every node
 	appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RegisterRedoMessageDs(manager)
-	manager.wg.Add(2)
+	manager.wg.Add(1)
 	go func() {
 		defer manager.wg.Done()
 		err := manager.redoSink.Run(ctx)
-		manager.handleError(ctx, err)
-	}()
-	go func() {
-		defer manager.wg.Done()
-		err := manager.collectRedoMeta(ctx)
 		manager.handleError(ctx, err)
 	}()
 	return nil
@@ -104,6 +99,12 @@ func (e *DispatcherManager) NewRedoTableTriggerEventDispatcher(id *heartbeatpb.D
 	// redo meta should keep the same node with table trigger event dispatcher
 	// table trigger event dispatcher and redo table trigger event dispatcher must exist on the same node
 	e.redoTableTriggerEventDispatcher.SetRedoMeta(e.config.Consistent)
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		err := e.collectRedoMeta(e.ctx)
+		e.handleError(e.ctx, err)
+	}()
 	log.Info("redo table trigger event dispatcher created",
 		zap.Stringer("changefeedID", e.changefeedID),
 		zap.Stringer("dispatcherID", e.redoTableTriggerEventDispatcher.GetId()),
@@ -254,9 +255,11 @@ func (e *DispatcherManager) InitalizeRedoTableTriggerEventDispatcher(schemaInfo 
 
 func (e *DispatcherManager) UpdateRedoMeta(checkpointTs, resolvedTs uint64) {
 	// only update meta on the one node
-	if e.redoTableTriggerEventDispatcher != nil {
+	if e.redoTableTriggerEventDispatcher == nil {
 		e.redoTableTriggerEventDispatcher.UpdateMeta(checkpointTs, resolvedTs)
+		return
 	}
+	log.Error("should not reach here. only update redo meta on the redoTableTriggerEventDispatcher")
 }
 
 func (e *DispatcherManager) SetGlobalRedoTs(resolvedTs uint64) bool {
@@ -271,22 +274,24 @@ func (e *DispatcherManager) collectRedoMeta(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			if e.redoTableTriggerEventDispatcher != nil {
-				logMeta := e.redoTableTriggerEventDispatcher.GetFlushedMeta()
-				mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
-				err := mc.SendCommand(
-					messaging.NewSingleTargetMessage(
-						e.GetMaintainerID(),
-						messaging.MaintainerManagerTopic,
-						&heartbeatpb.RedoMessage{
-							ChangefeedID: e.changefeedID.ToPB(),
-							ResolvedTs:   logMeta.ResolvedTs,
-							CheckpointTs: logMeta.CheckpointTs,
-						},
-					))
-				if err != nil {
-					log.Error("failed to send redo request message", zap.Error(err))
-				}
+			if e.redoTableTriggerEventDispatcher == nil {
+				log.Error("should not reach here. only collect redo meta on the redoTableTriggerEventDispatcher")
+				continue
+			}
+			logMeta := e.redoTableTriggerEventDispatcher.GetFlushedMeta()
+			mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
+			err := mc.SendCommand(
+				messaging.NewSingleTargetMessage(
+					e.GetMaintainerID(),
+					messaging.MaintainerManagerTopic,
+					&heartbeatpb.RedoMessage{
+						ChangefeedID: e.changefeedID.ToPB(),
+						ResolvedTs:   logMeta.ResolvedTs,
+						CheckpointTs: logMeta.CheckpointTs,
+					},
+				))
+			if err != nil {
+				log.Error("failed to send redo request message", zap.Error(err))
 			}
 		}
 	}

@@ -61,6 +61,7 @@ Architecture:
 - Each DispatcherManager has exactly one backend sink
 */
 type DispatcherManager struct {
+	ctx          context.Context
 	changefeedID common.ChangeFeedID
 	keyspaceID   uint32
 
@@ -169,6 +170,7 @@ func NewDispatcherManager(
 	}
 
 	manager := &DispatcherManager{
+		ctx:                   ctx,
 		dispatcherMap:         newDispatcherMap[*dispatcher.EventDispatcher](),
 		changefeedID:          changefeedID,
 		keyspaceID:            keyspaceID,
