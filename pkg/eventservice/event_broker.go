@@ -631,6 +631,10 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		releaseQuota(available, uint64(sl.maxDMLBytes-scannedBytes))
 	}
 
+	if interrupted {
+		metrics.EventServiceInterruptScanCount.Inc()
+	}
+
 	if err != nil {
 		log.Error("scan events failed",
 			zap.Stringer("changefeedID", task.changefeedStat.changefeedID),

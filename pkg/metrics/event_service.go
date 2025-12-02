@@ -144,6 +144,22 @@ var (
 			Name:      "skip_scan_count",
 			Help:      "The number of scans skipped",
 		}, []string{"reason"})
+
+	EventServiceGetDDLEventDuration = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "get_ddl_event_duration",
+			Help:      "The duration of getting DDL events from eventStore",
+			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
+		})
+	EventServiceInterruptScanCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "interrupt_scan_count",
+			Help:      "The number of scans interrupted",
+		})
 )
 
 // initEventServiceMetrics registers all metrics in this file.
@@ -165,4 +181,6 @@ func initEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceScannedDMLSize)
 	registry.MustRegister(EventServiceScannedTxnCount)
 	registry.MustRegister(EventServiceSkipScanCount)
+	registry.MustRegister(EventServiceInterruptScanCount)
+	registry.MustRegister(EventServiceGetDDLEventDuration)
 }
