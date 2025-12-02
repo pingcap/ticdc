@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -386,7 +387,7 @@ func (s *sink) sendMessages(ctx context.Context) error {
 				start := time.Now()
 				if err = s.statistics.RecordBatchExecution(func() (int, int64, error) {
 					message.SetPartitionKey(future.Key.PartitionKey)
-					log.Debug("send message to kafka", zap.String("messageKey", string(message.Key)), zap.String("messageValue", string(message.Value)))
+					log.Debug("send message to kafka", zap.String("messageKey", util.RedactBytes(message.Key)), zap.String("messageValue", util.RedactBytes(message.Value)))
 					if err = s.dmlProducer.AsyncSend(
 						ctx,
 						future.Key.Topic,
