@@ -238,7 +238,6 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	}
 	m.redoPersistedTs = &heartbeatpb.RedoMessage{
 		ChangefeedID: cfID.ToPB(),
-		CheckpointTs: checkpointTs,
 		ResolvedTs:   checkpointTs,
 	}
 	m.scheduleState.Store(int32(heartbeatpb.ComponentState_Working))
@@ -509,10 +508,6 @@ func (m *Maintainer) onCheckpointTsPersisted(msg *heartbeatpb.CheckpointTsMessag
 
 func (m *Maintainer) onRedoPersisted(req *heartbeatpb.RedoMessage) {
 	update := false
-	if m.redoPersistedTs.CheckpointTs < req.CheckpointTs {
-		update = true
-		m.redoPersistedTs.CheckpointTs = req.CheckpointTs
-	}
 	if m.redoPersistedTs.ResolvedTs < req.ResolvedTs {
 		update = true
 		m.redoPersistedTs.ResolvedTs = req.ResolvedTs
@@ -522,7 +517,6 @@ func (m *Maintainer) onRedoPersisted(req *heartbeatpb.RedoMessage) {
 		for id := range m.bootstrapper.GetAllNodeIDs() {
 			msgs = append(msgs, messaging.NewSingleTargetMessage(id, messaging.HeartbeatCollectorTopic, &heartbeatpb.RedoMessage{
 				ChangefeedID: m.redoPersistedTs.ChangefeedID,
-				CheckpointTs: m.redoPersistedTs.CheckpointTs,
 				ResolvedTs:   m.redoPersistedTs.ResolvedTs,
 				Advanced:     true,
 			}))
