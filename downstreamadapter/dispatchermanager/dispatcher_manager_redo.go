@@ -267,8 +267,9 @@ func (e *DispatcherManager) SetGlobalRedoTs(resolvedTs uint64) bool {
 }
 
 func (e *DispatcherManager) collectRedoMeta(ctx context.Context) error {
-	ticker := time.NewTicker(time.Duration(e.config.Consistent.FlushIntervalInMs))
+	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	for {
 		select {
 		case <-ctx.Done():
@@ -279,7 +280,6 @@ func (e *DispatcherManager) collectRedoMeta(ctx context.Context) error {
 				continue
 			}
 			logMeta := e.redoTableTriggerEventDispatcher.GetFlushedMeta()
-			mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 			err := mc.SendCommand(
 				messaging.NewSingleTargetMessage(
 					e.GetMaintainerID(),
@@ -287,7 +287,6 @@ func (e *DispatcherManager) collectRedoMeta(ctx context.Context) error {
 					&heartbeatpb.RedoMessage{
 						ChangefeedID: e.changefeedID.ToPB(),
 						ResolvedTs:   logMeta.ResolvedTs,
-						CheckpointTs: logMeta.CheckpointTs,
 					},
 				))
 			if err != nil {

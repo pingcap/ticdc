@@ -95,8 +95,8 @@ type Maintainer struct {
 	enableRedo        bool
 	// redoTs is global ts to forward
 	redoTs *heartbeatpb.RedoMessage
-	// redoPersistedTs is global ts to advance
-	redoPersistedTs *heartbeatpb.RedoMessage
+	// redoResolvedTs is the commit-ts of the redo meta record
+	redoResolvedTs  uint64
 	redoDDLSpan     *replica.SpanReplication
 	redoTsByCapture *WatermarkCaptureMap
 
@@ -236,10 +236,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		CheckpointTs: checkpointTs,
 		ResolvedTs:   checkpointTs,
 	}
-	m.redoPersistedTs = &heartbeatpb.RedoMessage{
-		ChangefeedID: cfID.ToPB(),
-		ResolvedTs:   checkpointTs,
-	}
+	m.redoResolvedTs = checkpointTs
 	m.scheduleState.Store(int32(heartbeatpb.ComponentState_Working))
 	m.bootstrapper = bootstrap.NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse](
 		m.changefeedID.Name(),
@@ -507,17 +504,13 @@ func (m *Maintainer) onCheckpointTsPersisted(msg *heartbeatpb.CheckpointTsMessag
 }
 
 func (m *Maintainer) onRedoPersisted(req *heartbeatpb.RedoMessage) {
-	update := false
-	if m.redoPersistedTs.ResolvedTs < req.ResolvedTs {
-		update = true
-		m.redoPersistedTs.ResolvedTs = req.ResolvedTs
-	}
-	if update {
+	if m.redoResolvedTs < req.ResolvedTs {
+		m.redoResolvedTs = req.ResolvedTs
 		msgs := make([]*messaging.TargetMessage, 0, len(m.bootstrapper.GetAllNodeIDs()))
 		for id := range m.bootstrapper.GetAllNodeIDs() {
 			msgs = append(msgs, messaging.NewSingleTargetMessage(id, messaging.HeartbeatCollectorTopic, &heartbeatpb.RedoMessage{
-				ChangefeedID: m.redoPersistedTs.ChangefeedID,
-				ResolvedTs:   m.redoPersistedTs.ResolvedTs,
+				ChangefeedID: req.ChangefeedID,
+				ResolvedTs:   m.redoResolvedTs,
 				Advanced:     true,
 			}))
 		}
