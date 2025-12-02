@@ -16,8 +16,6 @@ function prepare() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	cd $WORK_DIR
-
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0" --addr "127.0.0.1:8300"
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
 
@@ -65,20 +63,30 @@ main_with_consistent() {
 
 	## execute ddls
 	run_sql_file $CUR/data/ddls.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	# ## insert some datas
+	## insert some datas
 	run_sql_file $CUR/data/dmls.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
-	# to ensure row changed events have been replicated to TiCDC
-	sleep 10
-	changefeed_id="test"
-	storage_path="file://$WORK_DIR/redo"
-	tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
-	current_tso=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
-	ensure 20 check_redo_resolved_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
-	cleanup_process $CDC_BINARY
+	if ((RANDOM % 2)); then
+		# For rename table, modify column ddl, drop column, drop index and drop table ddl, the struct of table is wrong when appling snapshot.
+		# see https://github.com/pingcap/tidb/issues/63464.
+		# So we can't check sync_diff with snapshot.
 
-	cdc redo apply --tmp-dir="$tmp_download_path/apply" --storage="$storage_path" --sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
-	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
+		# to ensure row changed events have been replicated to TiCDC
+		changefeed_id="test"
+		storage_path="file://$WORK_DIR/redo"
+		tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
+		current_tso=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
+		ensure 100 check_redo_resolved_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
+		cleanup_process $CDC_BINARY
+
+		cdc redo apply --log-level debug --tmp-dir="$tmp_download_path/apply" \
+			--storage="$storage_path" \
+			--sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
+		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
+	else
+		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
+		cleanup_process $CDC_BINARY
+	fi
 }
 
 trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
@@ -86,7 +94,6 @@ main
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
 stop_tidb_cluster
-# FIXME: refactor redo apply
-# main_with_consistent
-# check_logs $WORK_DIR
-# echo "[$(date)] <<<<<< run consistent test case $TEST_NAME success! >>>>>>"
+main_with_consistent
+check_logs $WORK_DIR
+echo "[$(date)] <<<<<< run consistent test case $TEST_NAME success! >>>>>>"

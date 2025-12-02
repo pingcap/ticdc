@@ -18,8 +18,6 @@ function run() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	cd $WORK_DIR
-
 	# cdc server 1
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 	# cdc server 2

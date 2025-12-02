@@ -17,8 +17,6 @@ function run() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	cd $WORK_DIR
-
 	TOPIC_NAME="big-message-test-$RANDOM"
 
 	# record tso before we create tables to skip the system table DDLs

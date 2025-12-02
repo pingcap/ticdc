@@ -47,8 +47,7 @@ func TestSpanReplication_NewAddDispatcherMessage(t *testing.T) {
 
 	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme), common.NewDispatcherID(), 1, getTableSpanByID(4), 10, common.DefaultMode)
 
-	msg, err := replicaSet.NewAddDispatcherMessage("node1")
-	require.Nil(t, err)
+	msg := replicaSet.NewAddDispatcherMessage("node1")
 	require.Equal(t, "node1", msg.To.String())
 	req := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
 	require.Equal(t, heartbeatpb.ScheduleAction_Create, req.ScheduleAction)

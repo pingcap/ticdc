@@ -256,12 +256,12 @@ func (c *Controller) handleRemainingWorkingTasks(
 	for tableID := range redoWorkingTaskMap {
 		log.Warn("found a redo working table that is not in initial table map, just ignore it",
 			zap.Stringer("changefeed", c.changefeedID),
-			zap.Int64("id", tableID))
+			zap.Int64("tableID", tableID))
 	}
 	for tableID := range workingTaskMap {
 		log.Warn("found a working table that is not in initial table map, just ignore it",
 			zap.Stringer("changefeed", c.changefeedID),
-			zap.Int64("id", tableID))
+			zap.Int64("tableID", tableID))
 	}
 }
 

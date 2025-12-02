@@ -169,7 +169,7 @@ func (m *RedoMeta) UpdateMeta(checkpointTs, resolvedTs common.Ts) {
 func (m *RedoMeta) GetFlushedMeta() misc.LogMeta {
 	checkpointTs := m.metaCheckpointTs.getFlushed()
 	resolvedTs := m.metaResolvedTs.getFlushed()
-	return misc.LogMeta{CheckpointTs: checkpointTs, ResolvedTs: resolvedTs}
+	return misc.NewMeta(checkpointTs, resolvedTs)
 }
 
 // initMeta will read the meta file from external storage and
@@ -181,8 +181,9 @@ func (m *RedoMeta) initMeta(ctx context.Context) error {
 	default:
 	}
 
+	meta := misc.NewMeta(m.startTs, m.startTs)
 	metas := []*misc.LogMeta{
-		{CheckpointTs: m.startTs, ResolvedTs: m.startTs},
+		&meta,
 	}
 	var toRemoveMetaFiles []string
 	err := m.extStorage.WalkDir(ctx, nil, func(path string, size int64) error {
@@ -371,11 +372,11 @@ func (m *RedoMeta) maybeFlushMeta(ctx context.Context) error {
 // PrepareForFlushMeta determines whether should advance.
 // If the unflushed ts exceeds the flushed ts, the redo meta will flush the persisted unflushed ts.
 func (m *RedoMeta) prepareForFlushMeta() (bool, misc.LogMeta) {
-	flushed := misc.LogMeta{}
+	flushed := misc.DefaultMeta()
 	flushed.CheckpointTs = m.metaCheckpointTs.getFlushed()
 	flushed.ResolvedTs = m.metaResolvedTs.getFlushed()
 
-	unflushed := misc.LogMeta{}
+	unflushed := misc.DefaultMeta()
 	unflushed.CheckpointTs = m.metaCheckpointTs.getUnflushed()
 	unflushed.ResolvedTs = m.metaResolvedTs.getUnflushed()
 

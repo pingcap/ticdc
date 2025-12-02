@@ -13,8 +13,6 @@ function prepare() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	cd $WORK_DIR
-
 	# Create database in upstream and downstream
 	run_sql "CREATE DATABASE complex_txn" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE DATABASE complex_txn" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}

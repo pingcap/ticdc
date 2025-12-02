@@ -30,8 +30,6 @@ function run() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	cd $WORK_DIR
-
 	# adjust schema registry compatibility level to the none, to allow the schema evolution caused by the TiDB DDL execution.
 	curl -X PUT -H "Content-Type: application/vnd.schemaregistry.v1+json" --data '{"compatibility": "NONE"}' http://127.0.0.1:8088/config
 

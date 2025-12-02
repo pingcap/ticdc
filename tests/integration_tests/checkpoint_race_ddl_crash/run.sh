@@ -8,6 +8,40 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
+function prepare() {
+	# This test focuses on the maintainer logic, works with all sink types
+	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
+	start_tidb_cluster --workdir $WORK_DIR
+
+	# Main test execution
+	echo "=== Starting checkpoint race condition stress test ==="
+
+	# Start initial CDC server
+	start_cdc_server "initial"
+
+	# Wait for initial stabilization
+	sleep 5
+
+	TOPIC_NAME="ticdc-checkpoint-race-ddl-crash-$RANDOM"
+	case $SINK_TYPE in
+	kafka) SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=3" ;;
+	storage) SINK_URI="file://$WORK_DIR/storage_test/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true" ;;
+	pulsar)
+		run_pulsar_cluster $WORK_DIR normal
+		SINK_URI="pulsar://127.0.0.1:6650/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true"
+		;;
+	*) SINK_URI="mysql://root@127.0.0.1:3306/" ;;
+	esac
+
+	do_retry 5 3 cdc_cli_changefeed create --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/$1.toml"
+
+	case $SINK_TYPE in
+	kafka) run_kafka_consumer $WORK_DIR $SINK_URI ;;
+	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
+	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI ;;
+	esac
+}
+
 # Function to start CDC server
 function start_cdc_server() {
 	local suffix=$1
@@ -115,39 +149,8 @@ function simulate_crashes() {
 # 2. Inserting data immediately after table creation (critical race window)
 # 3. Simulating frequent CDC crashes during DDL processing
 # 4. Verifying no data loss occurs after restarts
-function run() {
-	# This test focuses on the maintainer logic, works with all sink types
-	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
-	start_tidb_cluster --workdir $WORK_DIR
-	cd $WORK_DIR
-
-	# Main test execution
-	echo "=== Starting checkpoint race condition stress test ==="
-
-	# Start initial CDC server
-	start_cdc_server "initial"
-
-	# Wait for initial stabilization
-	sleep 5
-
-	TOPIC_NAME="ticdc-checkpoint-race-ddl-crash-$RANDOM"
-	case $SINK_TYPE in
-	kafka) SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=3" ;;
-	storage) SINK_URI="file://$WORK_DIR/storage_test/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true" ;;
-	pulsar)
-		run_pulsar_cluster $WORK_DIR normal
-		SINK_URI="pulsar://127.0.0.1:6650/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true"
-		;;
-	*) SINK_URI="mysql://root@127.0.0.1:3306/" ;;
-	esac
-
-	do_retry 5 3 cdc_cli_changefeed create --sink-uri="$SINK_URI" -c "test"
-
-	case $SINK_TYPE in
-	kafka) run_kafka_consumer $WORK_DIR $SINK_URI ;;
-	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
-	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI ;;
-	esac
+main() {
+	prepare changefeed
 
 	# Create test database
 	run_sql "CREATE DATABASE checkpoint_race_test;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
@@ -187,8 +190,76 @@ function run() {
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
 
 	echo "=== Checkpoint race condition test completed successfully ==="
+	cleanup_process $CDC_BINARY
+}
+
+main_with_consistent() {
+	if [ "$SINK_TYPE" != "mysql" ]; then
+		return
+	fi
+	prepare consistent_changefeed
+
+	# Create test database
+	run_sql "CREATE DATABASE checkpoint_race_test;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "CREATE TABLE checkpoint_race_test.data_tracking (
+		id INT PRIMARY KEY AUTO_INCREMENT,
+		table_name VARCHAR(50),
+		data_value INT,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+
+	# Run concurrent workloads with crash simulation
+	test_duration=120 # 120 seconds of intensive testing
+
+	# Initialize created tables file
+	rm -f "$WORK_DIR/created_tables.txt"
+	touch "$WORK_DIR/created_tables.txt"
+
+	echo "Starting concurrent workloads..."
+	# DDL workload: CREATE TABLE (race condition target)
+	generate_ddl_workload $test_duration &
+	DDL_PID=$!
+
+	# Data insertion workload: Insert data into created tables (separate thread)
+	generate_data_insertion $test_duration &
+	DATA_PID=$!
+
+	simulate_crashes $test_duration &
+	CRASH_PID=$!
+
+	# Wait for all background jobs to complete
+	wait $DDL_PID
+	wait $DATA_PID
+	wait $CRASH_PID
+	echo "All workloads completed"
+
+	# to ensure row changed events have been replicated to TiCDC
+	sleep 30
+	if ((RANDOM % 2)); then
+		# Some tables have replicated to the downstream, but the global redo resolved ts has not advanced, resulting in incorrect table structure when applying the snapshot.
+		# So we can't check sync_diff with snapshot.
+		changefeed_id="test"
+		storage_path="file://$WORK_DIR/redo"
+		tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
+		current_tso=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
+		ensure 100 check_redo_resolved_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
+		cleanup_process $CDC_BINARY
+
+		cdc redo apply --log-level debug --tmp-dir="$tmp_download_path/apply" \
+			--storage="$storage_path" \
+			--sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
+		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
+	else
+		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
+		cleanup_process $CDC_BINARY
+	fi
 }
 
 trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
-run $*
+main
+check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
+stop_tidb_cluster
+main_with_consistent
+check_logs $WORK_DIR
+echo "[$(date)] <<<<<< run consistent test case $TEST_NAME success! >>>>>>"

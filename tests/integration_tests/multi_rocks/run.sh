@@ -22,8 +22,6 @@ function run() {
 
 	start_tidb_cluster --workdir $WORK_DIR --tikv-config $CUR/conf/tikv_config.toml
 
-	cd $WORK_DIR
-
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
 	TOPIC_NAME="ticdc-multi-rocks-test-$RANDOM"

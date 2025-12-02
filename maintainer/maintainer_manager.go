@@ -138,7 +138,7 @@ func (m *Manager) Run(ctx context.Context) error {
 				if cf.removed.Load() {
 					cf.Close()
 					log.Info("maintainer removed, remove it from dynamic stream",
-						zap.Stringer("changefeed", cf.id),
+						zap.Stringer("changefeedID", cf.changefeedID),
 						zap.Uint64("checkpointTs", cf.getWatermark().CheckpointTs),
 					)
 					m.maintainers.Delete(key)
@@ -209,8 +209,8 @@ func (m *Manager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {
 }
 
 func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) *heartbeatpb.MaintainerStatus {
-	cfID := common.NewChangefeedIDFromPB(req.Id)
-	_, ok := m.maintainers.Load(cfID)
+	changefeedID := common.NewChangefeedIDFromPB(req.Id)
+	_, ok := m.maintainers.Load(changefeedID)
 	if ok {
 		return nil
 	}
@@ -222,26 +222,26 @@ func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) 
 	}
 	if req.CheckpointTs == 0 {
 		log.Panic("add maintainer with invalid checkpointTs",
-			zap.Stringer("changefeed", cfID),
+			zap.Stringer("changefeedID", changefeedID),
 			zap.Uint64("checkpointTs", req.CheckpointTs),
 			zap.Any("info", info))
 	}
 
-	maintainer := NewMaintainer(cfID, m.conf, info, m.nodeInfo, m.taskScheduler, req.CheckpointTs, req.IsNewChangefeed, req.KeyspaceId)
-	m.maintainers.Store(cfID, maintainer)
-	maintainer.pushEvent(&Event{changefeedID: cfID, eventType: EventInit})
+	maintainer := NewMaintainer(changefeedID, m.conf, info, m.nodeInfo, m.taskScheduler, req.CheckpointTs, req.IsNewChangefeed, req.KeyspaceId)
+	m.maintainers.Store(changefeedID, maintainer)
+	maintainer.pushEvent(&Event{changefeedID: changefeedID, eventType: EventInit})
 	return nil
 }
 
 func (m *Manager) onRemoveMaintainerRequest(msg *messaging.TargetMessage) *heartbeatpb.MaintainerStatus {
 	req := msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
-	cfID := common.NewChangefeedIDFromPB(req.GetId())
-	maintainer, ok := m.maintainers.Load(cfID)
+	changefeedID := common.NewChangefeedIDFromPB(req.GetId())
+	maintainer, ok := m.maintainers.Load(changefeedID)
 	if !ok {
 		if !req.Cascade {
 			log.Warn("ignore remove maintainer request, "+
 				"since the maintainer not found",
-				zap.Stringer("changefeed", cfID),
+				zap.Stringer("changefeedID", changefeedID),
 				zap.Any("request", req))
 			return &heartbeatpb.MaintainerStatus{
 				ChangefeedID: req.GetId(),
@@ -251,16 +251,16 @@ func (m *Manager) onRemoveMaintainerRequest(msg *messaging.TargetMessage) *heart
 
 		// it's cascade remove, we should remove the dispatcher from all node
 		// here we create a maintainer to run the remove the dispatcher logic
-		maintainer = NewMaintainerForRemove(cfID, m.conf, m.nodeInfo, m.taskScheduler, req.KeyspaceId)
-		m.maintainers.Store(cfID, maintainer)
+		maintainer = NewMaintainerForRemove(changefeedID, m.conf, m.nodeInfo, m.taskScheduler, req.KeyspaceId)
+		m.maintainers.Store(changefeedID, maintainer)
 	}
 	maintainer.(*Maintainer).pushEvent(&Event{
-		changefeedID: cfID,
+		changefeedID: changefeedID,
 		eventType:    EventMessage,
 		message:      msg,
 	})
 	log.Info("received remove maintainer request",
-		zap.Stringer("changefeed", cfID))
+		zap.Stringer("changefeedID", changefeedID))
 	return nil
 }
 
@@ -333,7 +333,7 @@ func (m *Manager) dispatcherMaintainerMessage(
 	c, ok := m.maintainers.Load(changefeed)
 	if !ok {
 		log.Warn("maintainer is not found",
-			zap.Stringer("changefeed", changefeed),
+			zap.Stringer("changefeedID", changefeed),
 			zap.String("message", msg.String()))
 		return nil
 	}

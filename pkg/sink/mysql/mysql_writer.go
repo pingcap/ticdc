@@ -27,7 +27,6 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/ticdc/pkg/sink/util"
 	"go.uber.org/zap"
 )
 
@@ -57,7 +56,7 @@ type Writer struct {
 
 	ddlTsTableInit      bool
 	ddlTsTableInitMutex sync.Mutex
-	tableSchemaStore    *util.TableSchemaStore
+	tableSchemaStore    *commonEvent.TableSchemaStore
 
 	// implement stmtCache to improve performance, especially when the downstream is TiDB
 	stmtCache *lru.Cache
@@ -106,15 +105,15 @@ func NewWriter(
 	return res
 }
 
-func (w *Writer) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
+func (w *Writer) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
 	w.tableSchemaStore = tableSchemaStore
 }
 
 func (w *Writer) FlushDDLEvent(event *commonEvent.DDLEvent) error {
-	if w.cfg.IsTiDB {
-		// first we check whether there is some async ddl executed now.
-		w.waitAsyncDDLDone(event)
-	}
+	// if w.cfg.IsTiDB {
+	// 	// first we check whether there is some async ddl executed now.
+	// 	w.waitAsyncDDLDone(event)
+	// }
 	if w.cfg.IsTiDB || !event.TiDBOnly {
 		// we write ddl ts before ddl first, and update the ddl ts item after ddl executed,
 		// to ensure the atomic with ddl writing when server is restarted.

@@ -14,7 +14,6 @@ CHANGEFEED_COUNT=6
 function run() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 	start_tidb_cluster --workdir $WORK_DIR
-	cd $WORK_DIR
 
 	# Start first CDC server (single node)
 	echo "Starting first CDC server..."

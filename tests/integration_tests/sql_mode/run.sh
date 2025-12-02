@@ -40,7 +40,6 @@ trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 run_sql "set global sql_mode='NO_BACKSLASH_ESCAPES';" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 run_sql "set global sql_mode='NO_BACKSLASH_ESCAPES';" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
-cd $WORK_DIR
 start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 

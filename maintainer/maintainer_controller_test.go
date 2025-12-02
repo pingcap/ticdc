@@ -714,8 +714,8 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 		spanReplicaID8 = spanTmp1
 	}
 
-	log.Info("spanReplica7", zap.Any("id", spanReplica7.ID), zap.Any("span", common.FormatTableSpan(spanReplica7.Span)))
-	log.Info("spanReplica8", zap.Any("id", spanReplica8.ID), zap.Any("span", common.FormatTableSpan(spanReplica8.Span)))
+	log.Info("spanReplica7", zap.Any("changefeedID", spanReplica7.ID), zap.Any("span", common.FormatTableSpan(spanReplica7.Span)))
+	log.Info("spanReplica8", zap.Any("changefeedID", spanReplica8.ID), zap.Any("span", common.FormatTableSpan(spanReplica8.Span)))
 	trafficForSpanReplica7 := 50
 	trafficForSpanReplica8 := 150
 
@@ -807,8 +807,8 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 		spanReplicaID9 = spanID2
 	}
 
-	log.Info("spanReplica9", zap.Any("id", spanReplica9.ID), zap.Any("span", common.FormatTableSpan(spanReplica9.Span)))
-	log.Info("spanReplica10", zap.Any("id", spanReplica10.ID), zap.Any("span", common.FormatTableSpan(spanReplica10.Span)))
+	log.Info("spanReplica9", zap.Any("changefeedID", spanReplica9.ID), zap.Any("span", common.FormatTableSpan(spanReplica9.Span)))
+	log.Info("spanReplica10", zap.Any("changefeedID", spanReplica10.ID), zap.Any("span", common.FormatTableSpan(spanReplica10.Span)))
 	operators[0].Start()
 	operators[0].PostFinish()
 	operators[1].Start()
@@ -865,7 +865,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	require.Contains(t, relatedIDs, spanReplicaID9)
 	spanReplicaID11 := typeCount["merge"][0].ID()
 	spanReplica11 := controller.spanController.GetTaskByID(spanReplicaID11)
-	log.Info("spanReplica11", zap.Any("id", spanReplica11.ID), zap.Any("span", common.FormatTableSpan(spanReplica11.Span)))
+	log.Info("spanReplica11", zap.Any("changefeedID", spanReplica11.ID), zap.Any("span", common.FormatTableSpan(spanReplica11.Span)))
 	typeCount["merge"][0].Start()
 	typeCount["merge"][0].PostFinish()
 	controller.operatorController.RemoveOp(typeCount["merge"][0].ID())
@@ -934,7 +934,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	// 400   |       |
 	controller.schedulerController.GetScheduler(scheduler.BalanceSplitScheduler).Execute()
 	for _, operator := range controller.operatorController.GetAllOperators() {
-		log.Info("operator", zap.Any("type", operator.Type()), zap.Any("id", operator.ID()), zap.Any("string", operator.String()))
+		log.Info("operator", zap.Any("type", operator.Type()), zap.Any("changefeedID", operator.ID()), zap.Any("string", operator.String()))
 	}
 	require.Equal(t, controller.operatorController.OperatorSize(), 7)
 	typeCount = make(map[string][]pkgoperator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus])

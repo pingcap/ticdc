@@ -147,16 +147,17 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	cfConfig := &config.ChangefeedConfig{}
 	if err := json.Unmarshal(req.Config, cfConfig); err != nil {
 		log.Panic("failed to unmarshal changefeed config",
-			zap.String("changefeedID", cfId.Name()), zap.Error(err))
-		return err
+			zap.String("changefeedID", cfId.Name()), zap.Any("data", req.Config), zap.Error(err))
 	}
 
 	m.mutex.Lock()
 	manager, exists := m.dispatcherManagers[cfId]
 	m.mutex.Unlock()
 
-	var err error
-	var startTs uint64
+	var (
+		err     error
+		startTs uint64
+	)
 	if !exists {
 		start := time.Now()
 		manager, startTs, err = dispatchermanager.
@@ -301,6 +302,14 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 		log.Error("failed to initialize table trigger event dispatcher",
 			zap.Any("changefeedID", cfId.Name()), zap.Error(err))
 		return m.handleDispatcherError(from, req.ChangefeedID, err)
+	}
+	if manager.RedoEnable {
+		err := manager.InitalizeRedoTableTriggerEventDispatcher(req.Schemas)
+		if err != nil {
+			log.Error("failed to initialize redo table trigger event dispatcher",
+				zap.Any("changefeedID", cfId.Name()), zap.Error(err))
+			return m.handleDispatcherError(from, req.ChangefeedID, err)
+		}
 	}
 
 	response := &heartbeatpb.MaintainerPostBootstrapResponse{

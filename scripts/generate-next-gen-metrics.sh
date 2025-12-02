@@ -20,7 +20,7 @@ NEXT_GEN_SHARED_FILE="${1:-metrics/grafana/ticdc_new_arch_next_gen.json}"
 NEXT_GEN_USER_FILE="${2:-metrics/grafana/ticdc_new_arch_with_keyspace_name.json}"
 
 # Determine sed command and in-place edit syntax.
-SED_CMD="sed"
+SED_CMD="${SED_CMD:-sed}"
 if [[ $($SED_CMD --version 2>/dev/null) == *"GNU"* ]]; then
 	echo "using GNU sed"
 	SED_INPLACE_ARGS=("-i")
@@ -67,7 +67,6 @@ jq '
 
 echo "Userscope dashboard created at '$NEXT_GEN_USER_FILE'"
 
-"$SED_CMD" "${SED_INPLACE_ARGS[@]}" 's/tidb_cluster_id/tidb_cluster/' "$NEXT_GEN_SHARED_FILE"
-"$SED_CMD" "${SED_INPLACE_ARGS[@]}" 's/tidb_cluster/sharedpool_id/' "$NEXT_GEN_SHARED_FILE"
+"$SED_CMD" "${SED_INPLACE_ARGS[@]}" 's/\([^$]\)tidb_cluster/\1sharedpool_id/g' "$NEXT_GEN_SHARED_FILE"
 
 echo "Sharedscope dashboard created at '$NEXT_GEN_SHARED_FILE'"

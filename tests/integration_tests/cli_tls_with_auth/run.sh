@@ -40,7 +40,6 @@ function run() {
 		--ssl-cert=$TLS_DIR/server.pem \
 		--ssl-key=$TLS_DIR/server-key.pem
 
-	cd $WORK_DIR
 	pd_addr="https://$TLS_PD_HOST:$TLS_PD_PORT"
 
 	# record tso before we create tables to skip the system table DDLs
@@ -54,7 +53,6 @@ function run() {
 		--ssl-cert=$TLS_DIR/server.pem \
 		--ssl-key=$TLS_DIR/server-key.pem
 
-	cd $WORK_DIR
 	echo " \
   [security]
    ca-path = \"$TLS_DIR/ca.pem\"
