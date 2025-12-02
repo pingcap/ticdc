@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/node"
+	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/utils"
 	"go.uber.org/zap"
 )
@@ -181,11 +182,11 @@ func (c *Controller) processTablesAndBuildSchemaInfo(
 
 		// Add schema info if not exists
 		if _, ok := schemaInfos[schemaID]; !ok {
-			schemaInfos[schemaID] = getSchemaInfo(table, isMysqlCompatibleBackend)
+			schemaInfos[schemaID] = getSchemaInfo(table, isMysqlCompatibleBackend, *c.cfConfig.EnableActiveActive)
 		}
 
 		// Add table info to schema
-		tableInfo := getTableInfo(table, isMysqlCompatibleBackend)
+		tableInfo := getTableInfo(table, isMysqlCompatibleBackend, *c.cfConfig.EnableActiveActive)
 		schemaInfos[schemaID].Tables = append(schemaInfos[schemaID].Tables, tableInfo)
 
 		// Process table spans
@@ -326,19 +327,19 @@ func (c *Controller) loadTables(startTs uint64) ([]commonEvent.Table, error) {
 	return tables, err
 }
 
-func getSchemaInfo(table commonEvent.Table, isMysqlCompatibleBackend bool) *heartbeatpb.SchemaInfo {
+func getSchemaInfo(table commonEvent.Table, isMysqlCompatibleBackend bool, enableActiveActive bool) *heartbeatpb.SchemaInfo {
 	schemaInfo := &heartbeatpb.SchemaInfo{}
 	schemaInfo.SchemaID = table.SchemaID
-	if !isMysqlCompatibleBackend {
+	if sinkutil.NeedTableNameStoreAndCheckpointTs(isMysqlCompatibleBackend, enableActiveActive) {
 		schemaInfo.SchemaName = table.SchemaName
 	}
 	return schemaInfo
 }
 
-func getTableInfo(table commonEvent.Table, isMysqlCompatibleBackend bool) *heartbeatpb.TableInfo {
+func getTableInfo(table commonEvent.Table, isMysqlCompatibleBackend bool, enableActiveActive bool) *heartbeatpb.TableInfo {
 	tableInfo := &heartbeatpb.TableInfo{}
 	tableInfo.TableID = table.TableID
-	if !isMysqlCompatibleBackend {
+	if sinkutil.NeedTableNameStoreAndCheckpointTs(isMysqlCompatibleBackend, enableActiveActive) {
 		tableInfo.TableName = table.TableName
 	}
 	return tableInfo

@@ -17,16 +17,20 @@ import (
 	"context"
 	"database/sql"
 	"strings"
+	"time"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"go.uber.org/atomic"
+	"go.uber.org/zap"
 )
 
 const (
-	progressTableName = "ticdcProgressTable"
+	progressTableName = "ticdc_progress_table"
 )
 
 // ProgressTableWriter is responsible for writing active-active progress rows.
@@ -42,18 +46,25 @@ type ProgressTableWriter struct {
 
 	tableSchemaStore tableNameProvider
 
+	progressUpdateInterval time.Duration
+
+	lastProgressUpdate time.Time
+	lastDDLCommitTs    atomic.Uint64
+
 	progressTableInit bool
 
 	maxTableNameCount int
 }
 
 // NewProgressTableWriter creates a new writer for active-active progress updates.
-func NewProgressTableWriter(ctx context.Context, db *sql.DB, changefeedID common.ChangeFeedID, maxTableNameCount int) *ProgressTableWriter {
+func NewProgressTableWriter(ctx context.Context, db *sql.DB, changefeedID common.ChangeFeedID, maxTableNameCount int, progressUpdateInterval time.Duration) *ProgressTableWriter {
 	return &ProgressTableWriter{
-		ctx:               ctx,
-		db:                db,
-		changefeedID:      changefeedID,
-		maxTableNameCount: maxTableNameCount,
+		ctx:                    ctx,
+		db:                     db,
+		changefeedID:           changefeedID,
+		maxTableNameCount:      maxTableNameCount,
+		progressUpdateInterval: progressUpdateInterval,
+		lastProgressUpdate:     time.Now(),
 	}
 }
 
@@ -65,6 +76,15 @@ func (w *ProgressTableWriter) SetTableSchemaStore(store tableNameProvider) {
 // Flush writes checkpoint info for all tracked tables.
 func (w *ProgressTableWriter) Flush(checkpoint uint64) error {
 	if w.tableSchemaStore == nil || checkpoint == 0 {
+		return nil
+	}
+
+	if time.Since(w.lastProgressUpdate) < w.progressUpdateInterval {
+		return nil
+	}
+	// skip checkpointTs less than or equal to last DDL commit ts
+	// which will makes tableNames incorrect after DDL like drop table/database
+	if checkpoint <= w.lastDDLCommitTs.Load() {
 		return nil
 	}
 
@@ -88,6 +108,7 @@ func (w *ProgressTableWriter) Flush(checkpoint uint64) error {
 			return errors.Trace(err)
 		}
 	}
+	w.lastProgressUpdate = time.Now()
 	return nil
 }
 
@@ -128,10 +149,10 @@ func (w *ProgressTableWriter) initProgressTable(ctx context.Context) error {
 		return errors.Trace(err)
 	}
 	createTable := "CREATE TABLE IF NOT EXISTS `" + filter.TiCDCSystemSchema + "`.`" + progressTableName + "` (" +
-		"changefeed_id VARCHAR(255) NOT NULL COMMENT 'Unique identifier for the changefeed synchronization task'," +
-		"cluster_id VARCHAR(255) NOT NULL COMMENT 'TiCDC cluster ID'," +
-		"database_name VARCHAR(255) NOT NULL COMMENT 'Name of the upstream database'," +
-		"table_name VARCHAR(255) NOT NULL COMMENT 'Name of the upstream table'," +
+		"changefeed_id VARCHAR(128) NOT NULL COMMENT 'Unique identifier for the changefeed synchronization task'," +
+		"cluster_id VARCHAR(128) NOT NULL COMMENT 'TiCDC cluster ID'," +
+		"database_name VARCHAR(128) NOT NULL COMMENT 'Name of the upstream database'," +
+		"table_name VARCHAR(128) NOT NULL COMMENT 'Name of the upstream table'," +
 		"checkpoint_ts BIGINT UNSIGNED NOT NULL COMMENT 'Safe watermark CommitTS indicating the data has been synchronized'," +
 		"PRIMARY KEY (changefeed_id, cluster_id, database_name, table_name)" +
 		") COMMENT='TiCDC synchronization progress table for HardDelete safety check'"
@@ -141,4 +162,79 @@ func (w *ProgressTableWriter) initProgressTable(ctx context.Context) error {
 
 	w.progressTableInit = true
 	return nil
+}
+
+func (w *ProgressTableWriter) RemoveTables(ddl *event.DDLEvent) error {
+	tableNameChange := ddl.TableNameChange
+	if tableNameChange == nil {
+		return nil
+	}
+
+	w.lastDDLCommitTs.Store(ddl.GetCommitTs())
+
+	changefeed := w.changefeedID.DisplayName.String()
+	clusterID := config.GetGlobalServerConfig().ClusterID
+
+	if len(tableNameChange.DropName) != 0 {
+		for start := 0; start < len(tableNameChange.DropName); start += w.maxTableNameCount {
+			end := start + w.maxTableNameCount
+			if end > len(tableNameChange.DropName) {
+				end = len(tableNameChange.DropName)
+			}
+			if err := w.removeTableBatch(changefeed, clusterID, tableNameChange.DropName[start:end]); err != nil {
+				log.Error("failed to remove dropped tables from progress table",
+					zap.String("keyspace", w.changefeedID.Keyspace()),
+					zap.Stringer("changefeed", w.changefeedID),
+					zap.Error(err))
+				return err
+			}
+		}
+	}
+
+	if tableNameChange.DropDatabaseName != "" {
+		if err := w.removeDatabase(changefeed, clusterID, tableNameChange.DropDatabaseName); err != nil {
+			log.Error("failed to remove dropped database from progress table",
+				zap.String("keyspace", w.changefeedID.Keyspace()),
+				zap.Stringer("changefeed", w.changefeedID),
+				zap.Error(err))
+			return err
+		}
+	}
+	return nil
+}
+
+func (w *ProgressTableWriter) removeTableBatch(changefeed, clusterID string, tables []event.SchemaTableName) error {
+	var builder strings.Builder
+	builder.WriteString("DELETE FROM `")
+	builder.WriteString(filter.TiCDCSystemSchema)
+	builder.WriteString("`.`")
+	builder.WriteString(progressTableName)
+	builder.WriteString("` WHERE changefeed_id = ? AND cluster_id = ? AND (")
+
+	args := make([]interface{}, 0, len(tables)*2+2)
+	args = append(args, changefeed, clusterID)
+
+	for idx, tbl := range tables {
+		if idx > 0 {
+			builder.WriteString(" OR ")
+		}
+		builder.WriteString("(database_name = ? AND table_name = ?)")
+		args = append(args, tbl.SchemaName, tbl.TableName)
+	}
+	builder.WriteString(")")
+
+	_, err := w.db.ExecContext(w.ctx, builder.String(), args...)
+	return err
+}
+
+func (w *ProgressTableWriter) removeDatabase(changefeed, clusterID, dbName string) error {
+	var builder strings.Builder
+	builder.WriteString("DELETE FROM `")
+	builder.WriteString(filter.TiCDCSystemSchema)
+	builder.WriteString("`.`")
+	builder.WriteString(progressTableName)
+	builder.WriteString("` WHERE changefeed_id = ? AND cluster_id = ? AND database_name = ?")
+
+	_, err := w.db.ExecContext(w.ctx, builder.String(), changefeed, clusterID, dbName)
+	return err
 }

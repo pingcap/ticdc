@@ -243,6 +243,10 @@ func (s *SharedInfo) GetStatusesChan() chan TableSpanStatusWithSeq {
 	return s.statusesChan
 }
 
+func (s *SharedInfo) EnableActiveActive() bool {
+	return s.enableActiveActive
+}
+
 func (s *SharedInfo) GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus {
 	return s.blockStatusesChan
 }

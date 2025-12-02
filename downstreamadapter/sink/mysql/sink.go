@@ -55,12 +55,10 @@ type Sink struct {
 	conflictDetector *causality.ConflictDetector
 
 	// isNormal indicate whether the sink is in the normal state.
-	isNormal               *atomic.Bool
-	maxTxnRows             int
-	bdrMode                bool
-	enableActiveActive     bool
-	progressUpdateInterval time.Duration
-	lastProgressUpdate     time.Time
+	isNormal           *atomic.Bool
+	maxTxnRows         int
+	bdrMode            bool
+	enableActiveActive bool
 }
 
 // Verify is used to verify the sink uri and config is valid
@@ -114,18 +112,17 @@ func newMySQLSink(
 				BlockStrategy: causality.BlockStrategyWaitEmpty,
 			},
 			changefeedID),
-		isNormal:               atomic.NewBool(true),
-		maxTxnRows:             cfg.MaxTxnRow,
-		bdrMode:                bdrMode,
-		enableActiveActive:     enableActiveActive,
-		progressUpdateInterval: progressInterval,
+		isNormal:           atomic.NewBool(true),
+		maxTxnRows:         cfg.MaxTxnRow,
+		bdrMode:            bdrMode,
+		enableActiveActive: enableActiveActive,
 	}
 	for i := 0; i < len(result.dmlWriter); i++ {
 		result.dmlWriter[i] = mysql.NewWriter(ctx, i, db, cfg, changefeedID, stat)
 	}
 	result.ddlWriter = mysql.NewWriter(ctx, len(result.dmlWriter), db, cfg, changefeedID, stat)
 	if enableActiveActive {
-		result.progressTableWriter = mysql.NewProgressTableWriter(ctx, db, changefeedID, cfg.MaxTxnRow)
+		result.progressTableWriter = mysql.NewProgressTableWriter(ctx, db, changefeedID, cfg.MaxTxnRow, progressInterval)
 	}
 	return result
 }
@@ -250,6 +247,17 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	switch event.GetType() {
 	case commonEvent.TypeDDLEvent:
 		ddl := event.(*commonEvent.DDLEvent)
+		// if enable active-active progress table, we need to remove the dropped/renamed tables from progress table
+		// This drop action can be executed multiple times without side effect.
+		// Thus, we execute it before flush ddl event.
+		// Even if after removeTables, cdc crash before flush ddl event, it is safe to removeTables again.
+		if s.enableActiveActive {
+			err := s.progressTableWriter.RemoveTables(ddl)
+			if err != nil {
+				s.isNormal.Store(false)
+				return err
+			}
+		}
 		// a BDR mode cluster, TiCDC can receive DDLs from all roles of TiDB.
 		// However, CDC only executes the DDLs from the TiDB that has BDRRolePrimary role.
 		if s.bdrMode && ddl.BDRMode != string(ast.BDRRolePrimary) {
@@ -281,18 +289,12 @@ func (s *Sink) AddCheckpointTs(ts uint64) {
 		return
 	}
 
-	now := time.Now()
-	if now.Sub(s.lastProgressUpdate) < s.progressUpdateInterval {
-		return
-	}
-
 	if err := s.progressTableWriter.Flush(ts); err != nil {
 		log.Warn("failed to update active-active progress table",
 			zap.String("changefeed", s.changefeedID.DisplayName.String()),
 			zap.Error(err))
 		return
 	}
-	s.lastProgressUpdate = now
 }
 
 // GetTableRecoveryInfo queries DDL crash recovery information for the given tables.

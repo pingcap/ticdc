@@ -38,6 +38,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus"
@@ -354,8 +355,9 @@ func (e *DispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*h
 	// table trigger event dispatcher can register to event collector to receive events after finish the initial table schema store from the maintainer.
 	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.tableTriggerEventDispatcher, e.sinkQuota)
 
-	// when sink is not mysql-class, table trigger event dispatcher need to receive the checkpointTs message from maintainer.
-	if e.sink.SinkType() != common.MysqlSinkType {
+	// only when sink is mysql sink, and not enable active-active, table trigger event dispatcher does not need to receive the checkpointTs message from maintainer.
+	needCheckpointUpdates := sinkutil.NeedTableNameStoreAndCheckpointTs(e.sink.SinkType() == common.MysqlSinkType, e.sharedInfo.EnableActiveActive())
+	if needCheckpointUpdates {
 		appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RegisterCheckpointTsMessageDs(e)
 	}
 	return nil
