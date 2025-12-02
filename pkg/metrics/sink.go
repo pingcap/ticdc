@@ -76,6 +76,15 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 18),
 		}, []string{getKeyspaceLabel(), "changefeed", "type"}) // type is for `sinkType`
 
+	// ExecutionErrorCounter is the counter of running DDL.
+	ExecDDLRunningCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "ddl_exec_running",
+			Help:      "Total count of running ddl.",
+		}, []string{getKeyspaceLabel(), "changefeed", "type"}) // type is for `sinkType`
+
 	// ExecutionErrorCounter is the counter of execution errors.
 	ExecutionErrorCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -233,6 +242,7 @@ func initSinkMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(ExecBatchWriteBytesHistogram)
 	registry.MustRegister(TotalWriteBytesCounter)
 	registry.MustRegister(ExecDDLHistogram)
+	registry.MustRegister(ExecDDLRunningCounter)
 	registry.MustRegister(EventSizeHistogram)
 	registry.MustRegister(ExecutionErrorCounter)
 	registry.MustRegister(ExecDMLEventCounter)

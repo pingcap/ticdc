@@ -33,6 +33,7 @@ func NewStatistics(
 	keyspace := changefeed.Keyspace()
 	changefeedID := changefeed.Name()
 	statistics.metricExecDDLHis = ExecDDLHistogram.WithLabelValues(keyspace, changefeedID, sinkType)
+	statistics.metricExecDDLRunningCnt = ExecDDLRunningCounter.WithLabelValues(keyspace, changefeedID, sinkType)
 	statistics.metricExecBatchHis = ExecBatchHistogram.WithLabelValues(keyspace, changefeedID, sinkType)
 	statistics.metricExecBatchBytesHis = ExecBatchWriteBytesHistogram.WithLabelValues(keyspace, changefeedID, sinkType)
 	statistics.metricTotalWriteBytesCnt = TotalWriteBytesCounter.WithLabelValues(keyspace, changefeedID, sinkType)
@@ -49,6 +50,8 @@ type Statistics struct {
 
 	// metricExecDDLHis record each DDL execution time duration.
 	metricExecDDLHis prometheus.Observer
+	// metricExecDDLRunningCnt record the count of running DDL.
+	metricExecDDLRunningCnt prometheus.Counter
 	// metricExecBatchHis record the executed DML batch size.
 	// this should be only useful for the MySQL Sink, and Kafka Sink with batched protocol, such as open-protocol.
 	metricExecBatchHis prometheus.Observer
@@ -79,12 +82,14 @@ func (b *Statistics) RecordBatchExecution(executor func() (int, int64, error)) e
 
 // RecordDDLExecution record the time cost of execute ddl
 func (b *Statistics) RecordDDLExecution(executor func() error) error {
+	b.metricExecDDLRunningCnt.Add(1)
 	start := time.Now()
 	if err := executor(); err != nil {
 		b.metricExecErrCnt.Inc()
 		return err
 	}
 	b.metricExecDDLHis.Observe(time.Since(start).Seconds())
+	b.metricExecDDLRunningCnt.Add(-1)
 	return nil
 }
 
