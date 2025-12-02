@@ -190,23 +190,16 @@ func (w *Writer) waitAsyncDDLDone(event *commonEvent.DDLEvent) {
 		return
 	}
 
-	var relatedTableIDs []int64
 	switch event.GetBlockedTables().InfluenceType {
-	case commonEvent.InfluenceTypeNormal:
-		relatedTableIDs = event.GetBlockedTables().TableIDs
 	// db-class, all-class ddl with not affect by async ddl, just return
 	case commonEvent.InfluenceTypeDB, commonEvent.InfluenceTypeAll:
 		return
 	}
 
-	for _, tableID := range relatedTableIDs {
-		// tableID 0 means table trigger, which can't do async ddl
-		if tableID == 0 {
-			continue
-		}
+	for _, blockedTable := range event.GetBlockedTableNames() {
 		// query the downstream,
 		// if the ddl is still running, we should wait for it.
-		err := w.checkAndWaitAsyncDDLDoneDownstream(tableID)
+		err := w.checkAndWaitAsyncDDLDoneDownstream(blockedTable.SchemaName, blockedTable.TableName)
 		if err != nil {
 			log.Error("check previous asynchronous ddl failed",
 				zap.String("keyspace", w.ChangefeedID.Keyspace()),
@@ -236,11 +229,11 @@ func (w *Writer) doQueryAsyncDDL(query string) (bool, error) {
 		return false, nil
 	}
 	ret := rets[0]
-	jobID, jobType, schemaState, state, currentQuery := ret[0], ret[1], ret[2], ret[3], ret[4]
+	jobID, jobType, schemaState, state, runningDDL := ret[0], ret[1], ret[2], ret[3], ret[4]
 	log.Info("async ddl is still running",
 		zap.String("changefeed", w.ChangefeedID.String()),
 		zap.Duration("checkDuration", time.Since(start)),
-		zap.String("currentQuery", currentQuery),
+		zap.String("runningDDL", runningDDL),
 		zap.String("query", query),
 		zap.Any("jobID", jobID),
 		zap.String("jobType", jobType),
@@ -252,9 +245,9 @@ func (w *Writer) doQueryAsyncDDL(query string) (bool, error) {
 
 // query the ddl jobs to find the state of the async ddl
 // if the ddl is still running, we should wait for it.
-func (w *Writer) checkAndWaitAsyncDDLDoneDownstream(tableID int64) error {
+func (w *Writer) checkAndWaitAsyncDDLDoneDownstream(schemaName, tableName string) error {
 	checkSQL := getCheckRunningAddIndexSQL(w.cfg)
-	query := fmt.Sprintf(checkSQL, tableID)
+	query := fmt.Sprintf(checkSQL, schemaName, tableName)
 	running, err := w.doQueryAsyncDDL(query)
 	if err != nil {
 		return err

@@ -43,7 +43,7 @@ FROM information_schema.ddl_jobs
 WHERE DB_NAME = "%s"
     AND TABLE_NAME = "%s"
     AND JOB_TYPE LIKE "add index%%"
-    AND (STATE = "running" OR STATE = "queueing");
+    AND (STATE = "running" OR STATE = "queueing")
 LIMIT 1;
 `
 
@@ -54,7 +54,6 @@ WHERE DB_NAME = "%s"
     AND TABLE_NAME = "%s"
     AND JOB_TYPE LIKE "add index%%"
     AND (STATE = "running" OR STATE = "queueing");
-LIMIT 1;
 `
 
 const checkRunningSQL = `SELECT * FROM information_schema.ddl_jobs 
