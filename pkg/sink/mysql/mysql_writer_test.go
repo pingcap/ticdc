@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/tidb/br/pkg/version"
 	ticonfig "github.com/pingcap/tidb/pkg/config"
 	"github.com/pingcap/tidb/pkg/disttask/framework/handle"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
@@ -68,6 +69,8 @@ func newTestMysqlWriterForTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock)
 	cfg.SyncPointRetention = 100 * time.Second
 	cfg.IsTiDB = true
 	cfg.EnableDDLTs = defaultEnableDDLTs
+	cfg.ServerInfo = version.ParseServerInfo(defaultRunningAddIndexNewSQLVersion)
+
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	statistics := metrics.NewStatistics(changefeedID, "mysqlSink")
 	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics)
@@ -504,7 +507,7 @@ func TestMysqlWriter_AsyncDDL(t *testing.T) {
 	err = mock.ExpectationsWereMet()
 	require.NoError(t, err)
 
-	mock.ExpectQuery(fmt.Sprintf(checkRunningAddIndexSQL, 1)).WillReturnError(sqlmock.ErrCancelled)
+	mock.ExpectQuery(fmt.Sprintf(checkRunningAddIndexSQL, "test", "t")).WillReturnError(sqlmock.ErrCancelled)
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, finished, is_syncpoint) VALUES ('default', 'test/test', '1', 1, 0, 0) ON DUPLICATE KEY UPDATE finished=VALUES(finished), ddl_ts=VALUES(ddl_ts), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
@@ -540,7 +543,7 @@ func TestMysqlWriter_AsyncDDL(t *testing.T) {
 	mock.ExpectCommit()
 
 	// for add column ddl for table t
-	mock.ExpectQuery(fmt.Sprintf(checkRunningAddIndexSQL, 1)).WillReturnError(sqlmock.ErrCancelled)
+	mock.ExpectQuery(fmt.Sprintf(checkRunningAddIndexSQL, "test", "t")).WillReturnError(sqlmock.ErrCancelled)
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, finished, is_syncpoint) VALUES ('default', 'test/test', '3', 1, 0, 0) ON DUPLICATE KEY UPDATE finished=VALUES(finished), ddl_ts=VALUES(ddl_ts), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
@@ -568,6 +571,9 @@ func TestMysqlWriter_AsyncDDL(t *testing.T) {
 			BlockedTables: &commonEvent.InfluencedTables{
 				InfluenceType: commonEvent.InfluenceTypeNormal,
 				TableIDs:      []int64{1},
+			},
+			BlockedTableNames: []commonEvent.SchemaTableName{
+				{SchemaName: addIndexjob.SchemaName, TableName: addIndexjob.TableName},
 			},
 		}
 
@@ -600,6 +606,9 @@ func TestMysqlWriter_AsyncDDL(t *testing.T) {
 				InfluenceType: commonEvent.InfluenceTypeNormal,
 				TableIDs:      []int64{0},
 			},
+			BlockedTableNames: []commonEvent.SchemaTableName{
+				{SchemaName: job2.SchemaName, TableName: job2.TableName},
+			},
 			NeedAddedTables: []commonEvent.Table{{TableID: 2, SchemaID: 1}},
 		}
 
@@ -620,6 +629,9 @@ func TestMysqlWriter_AsyncDDL(t *testing.T) {
 			BlockedTables: &commonEvent.InfluencedTables{
 				InfluenceType: commonEvent.InfluenceTypeNormal,
 				TableIDs:      []int64{1},
+			},
+			BlockedTableNames: []commonEvent.SchemaTableName{
+				{SchemaName: job.SchemaName, TableName: job.TableName},
 			},
 		}
 
