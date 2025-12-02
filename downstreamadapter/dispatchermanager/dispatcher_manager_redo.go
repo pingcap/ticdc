@@ -271,20 +271,22 @@ func (e *DispatcherManager) collectRedoMeta(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			logMeta := e.redoTableTriggerEventDispatcher.GetFlushedMeta()
-			mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
-			err := mc.SendCommand(
-				messaging.NewSingleTargetMessage(
-					e.GetMaintainerID(),
-					messaging.MaintainerManagerTopic,
-					&heartbeatpb.RedoMessage{
-						ChangefeedID: e.changefeedID.ToPB(),
-						ResolvedTs:   logMeta.ResolvedTs,
-						CheckpointTs: logMeta.CheckpointTs,
-					},
-				))
-			if err != nil {
-				log.Error("failed to send redo request message", zap.Error(err))
+			if e.redoTableTriggerEventDispatcher != nil {
+				logMeta := e.redoTableTriggerEventDispatcher.GetFlushedMeta()
+				mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
+				err := mc.SendCommand(
+					messaging.NewSingleTargetMessage(
+						e.GetMaintainerID(),
+						messaging.MaintainerManagerTopic,
+						&heartbeatpb.RedoMessage{
+							ChangefeedID: e.changefeedID.ToPB(),
+							ResolvedTs:   logMeta.ResolvedTs,
+							CheckpointTs: logMeta.CheckpointTs,
+						},
+					))
+				if err != nil {
+					log.Error("failed to send redo request message", zap.Error(err))
+				}
 			}
 		}
 	}
