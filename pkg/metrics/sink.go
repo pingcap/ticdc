@@ -76,7 +76,7 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 18),
 		}, []string{getKeyspaceLabel(), "changefeed", "type"}) // type is for `sinkType`
 
-	// ExecutionErrorCounter is the counter of running DDL.
+	// ExecDDLRunningCounter is the counter of running DDL.
 	ExecDDLRunningCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
