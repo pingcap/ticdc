@@ -35,6 +35,11 @@ type LogLevelReq struct {
 	Level string `json:"log_level"`
 }
 
+// RedactModeReq redaction mode request
+type RedactModeReq struct {
+	Mode string `json:"redact_mode"`
+}
+
 // ListResponse is the response for all List APIs
 type ListResponse[T any] struct {
 	Total int `json:"total"`
