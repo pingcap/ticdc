@@ -4760,7 +4760,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "scalar(max(pd_cluster_tso{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\"}))/1000 - avg(tikv_cdc_min_resolved_ts{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$tikv_instance\"}/1000) by (instance) > 0",
+              "expr": "scalar(max(pd_cluster_tso{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\"}))/1000 - avg(tikv_cdc_min_resolved_ts{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$tikv_instance\"}/1000) by (instance) > 0",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -4976,7 +4976,7 @@
               },
               "editorMode": "code",
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_txn_worker_flush_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_txn_worker_flush_duration_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
+              "expr": "sum(rate(ticdc_sink_txn_worker_flush_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_txn_worker_flush_duration_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 2,
@@ -5478,7 +5478,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_cdc_resolved_ts_gap_seconds_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$tikv_instance\"}[1m])) by (instance) / sum(tikv_cdc_region_resolve_status{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$tikv_instance\", status=~\"resolved\"}) by (instance) ",
+              "expr": "sum(rate(tikv_cdc_resolved_ts_gap_seconds_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$tikv_instance\"}[1m])) by (instance) / sum(tikv_cdc_region_resolve_status{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$tikv_instance\", status=~\"resolved\"}) by (instance) ",
               "format": "time_series",
               "hide": false,
               "intervalFactor": 1,
@@ -6209,7 +6209,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_coordinator_finish_operators_duration_seconds_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,mode) / \nsum(rate(ticdc_coordinator_finish_operators_duration_seconds_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,mode)",
+              "expr": "sum(rate(ticdc_coordinator_finish_operators_duration_seconds_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,mode) / \nsum(rate(ticdc_coordinator_finish_operators_duration_seconds_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,mode)",
               "hide": false,
               "interval": "",
               "legendFormat": "avg",
@@ -6750,7 +6750,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_maintainer_handle_event_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed) / \nsum(rate(ticdc_maintainer_handle_event_duration_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed)",
+              "expr": "sum(rate(ticdc_maintainer_handle_event_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed) / \nsum(rate(ticdc_maintainer_handle_event_duration_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed)",
               "hide": false,
               "interval": "",
               "legendFormat": "avg-{{keyspace_name}}-{{changefeed}}",
@@ -7088,7 +7088,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_subscription_client_region_request_finish_scan_duration_sum{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance)\n/\nsum(rate(ticdc_subscription_client_region_request_finish_scan_duration_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance)",
+              "expr": "sum(rate(ticdc_subscription_client_region_request_finish_scan_duration_sum{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance)\n/\nsum(rate(ticdc_subscription_client_region_request_finish_scan_duration_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "{{instance}}-avg",
@@ -8200,7 +8200,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_event_store_write_worker_io_duration_sum{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance,db,worker) / sum(rate(ticdc_event_store_write_worker_total_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$ticdc_instance\"}[1m])) by (instance,db,worker) *100",
+              "expr": "sum(rate(ticdc_event_store_write_worker_io_duration_sum{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance,db,worker) / sum(rate(ticdc_event_store_write_worker_total_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",instance=~\"$ticdc_instance\"}[1m])) by (instance,db,worker) *100",
               "interval": "",
               "legendFormat": "{{instance}}-db-{{db}}-worker-{{worker}}",
               "refId": "A"
@@ -8415,7 +8415,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_event_store_write_duration_sum{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance) /\nsum(rate(ticdc_event_store_write_duration_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance)",
+              "expr": "sum(rate(ticdc_event_store_write_duration_sum{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance) /\nsum(rate(ticdc_event_store_write_duration_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "{{instance}}-avg",
@@ -10086,7 +10086,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_event_service_scan_duration_sum{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance) /\nsum(rate(ticdc_event_service_scan_duration_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance)",
+              "expr": "sum(rate(ticdc_event_service_scan_duration_sum{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance) /\nsum(rate(ticdc_event_service_scan_duration_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance)",
               "format": "heatmap",
               "instant": false,
               "interval": "",
@@ -12645,7 +12645,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_batch_row_count_sum{k8s_cluster=~\"$k8s_cluster\",sharedpool_id=~\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / sum(rate(ticdc_sink_batch_row_count_count{k8s_cluster=~\"$k8s_cluster\",tidb_cluster=~\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
+              "expr": "sum(rate(ticdc_sink_batch_row_count_sum{k8s_cluster=~\"$k8s_cluster\",sharedpool_id=~\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / sum(rate(ticdc_sink_batch_row_count_count{k8s_cluster=~\"$k8s_cluster\",sharedpool_id=~\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "avg-{{keyspace_name}}-{{changefeed}}-{{instance}}",
@@ -12834,7 +12834,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_ddl_exec_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_ddl_exec_duration_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
+              "expr": "sum(rate(ticdc_sink_ddl_exec_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_ddl_exec_duration_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
               "interval": "",
               "legendFormat": "avg-{{keyspace_name}}-{{changefeed}}-{{instance}}",
               "queryType": "randomWalk",
@@ -13146,7 +13146,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_txn_conflict_detect_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (changefeed,instance) / \nsum(rate(ticdc_sink_txn_conflict_detect_duration_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (changefeed,instance)",
+              "expr": "sum(rate(ticdc_sink_txn_conflict_detect_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (changefeed,instance) / \nsum(rate(ticdc_sink_txn_conflict_detect_duration_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (changefeed,instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-detect-avg",
@@ -13162,7 +13162,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_txn_queue_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_txn_queue_duration_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
+              "expr": "sum(rate(ticdc_sink_txn_queue_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_txn_queue_duration_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-queue-avg",
@@ -13268,7 +13268,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_txn_worker_flush_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_txn_worker_flush_duration_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
+              "expr": "sum(rate(ticdc_sink_txn_worker_flush_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_txn_worker_flush_duration_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "avg-{{keyspace_name}}-{{changefeed}}-{{instance}}",
@@ -13366,7 +13366,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_txn_worker_batch_flush_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance,id) / sum(rate(ticdc_sink_txn_worker_total_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance,id) *100",
+              "expr": "sum(rate(ticdc_sink_txn_worker_batch_flush_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance,id) / sum(rate(ticdc_sink_txn_worker_total_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance,id) *100",
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-worker-{{id}}",
               "queryType": "randomWalk",
@@ -13568,7 +13568,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_txn_sink_dml_batch_commit_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_txn_sink_dml_batch_commit_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
+              "expr": "sum(rate(ticdc_sink_txn_sink_dml_batch_commit_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_txn_sink_dml_batch_commit_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "avg-{{keyspace_name}}-{{changefeed}}-{{instance}}",
@@ -13689,7 +13689,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_mq_worker_send_message_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_mq_worker_send_message_duration_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
+              "expr": "sum(rate(ticdc_sink_mq_worker_send_message_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_mq_worker_send_message_duration_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-avg",
@@ -14607,7 +14607,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_mq_worker_batch_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_mq_worker_batch_duration_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
+              "expr": "sum(rate(ticdc_sink_mq_worker_batch_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_mq_worker_batch_duration_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-avg",
@@ -14714,7 +14714,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_mq_worker_batch_size_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) /\nsum(rate(ticdc_sink_mq_worker_batch_size_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
+              "expr": "sum(rate(ticdc_sink_mq_worker_batch_size_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) /\nsum(rate(ticdc_sink_mq_worker_batch_size_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-avg",
@@ -15122,7 +15122,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_mq_checkpoint_ts_message_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_mq_checkpoint_ts_message_duration_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
+              "expr": "sum(rate(ticdc_sink_mq_checkpoint_ts_message_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_mq_checkpoint_ts_message_duration_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-avg",
@@ -15904,7 +15904,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_maintainer_finish_operators_duration_seconds_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,mode) / \nsum(rate(ticdc_maintainer_finish_operators_duration_seconds_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,mode)",
+              "expr": "sum(rate(ticdc_maintainer_finish_operators_duration_seconds_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,mode) / \nsum(rate(ticdc_maintainer_finish_operators_duration_seconds_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,mode)",
               "hide": false,
               "interval": "",
               "legendFormat": "avg-{{keyspace_name}}-{{changefeed}}-{{instance}}-{{mode}}",
@@ -16010,7 +16010,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_maintainer_split_span_check_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_maintainer_split_span_check_duration_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
+              "expr": "sum(rate(ticdc_maintainer_split_span_check_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_maintainer_split_span_check_duration_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "avg-{{keyspace_name}}-{{changefeed}}-{{instance}}",
@@ -17185,7 +17185,7 @@
               "refId": "A"
             },
             {
-              "expr": "sum(tikv_cdc_scan_tasks{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$tikv_instance\", type=\"total\"}) by (instance) - sum(tikv_cdc_scan_tasks{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$tikv_instance\", type=~\"abort|finish\"}) by (instance)",
+              "expr": "sum(tikv_cdc_scan_tasks{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$tikv_instance\", type=\"total\"}) by (instance) - sum(tikv_cdc_scan_tasks{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$tikv_instance\", type=~\"abort|finish\"}) by (instance)",
               "format": "time_series",
               "hide": false,
               "intervalFactor": 1,
@@ -17301,7 +17301,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(tikv_cdc_scan_duration_seconds_sum{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$tikv_instance\"}[1m])) by (instance) / \nsum(rate(tikv_cdc_scan_duration_seconds_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$tikv_instance\"}[1m])) by (instance)",
+              "expr": "sum(rate(tikv_cdc_scan_duration_seconds_sum{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$tikv_instance\"}[1m])) by (instance) / \nsum(rate(tikv_cdc_scan_duration_seconds_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$tikv_instance\"}[1m])) by (instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "{{instance}}-avg",
@@ -17499,7 +17499,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(tikv_cdc_scan_sink_duration_seconds_sum{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$tikv_instance\"}[1m])) by (instance) / \nsum(rate(tikv_cdc_scan_sink_duration_seconds_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$tikv_instance\"}[1m])) by (instance)",
+              "expr": "sum(rate(tikv_cdc_scan_sink_duration_seconds_sum{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$tikv_instance\"}[1m])) by (instance) / \nsum(rate(tikv_cdc_scan_sink_duration_seconds_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$tikv_instance\"}[1m])) by (instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "{{instance}}-avg",
@@ -17953,7 +17953,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "scalar(max(pd_cluster_tso{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\"}))/1000 - avg(tikv_cdc_min_resolved_ts{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$tikv_instance\"}/1000) by (instance) > 0",
+              "expr": "scalar(max(pd_cluster_tso{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\"}))/1000 - avg(tikv_cdc_min_resolved_ts{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$tikv_instance\"}/1000) by (instance) > 0",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -18185,7 +18185,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "(sum(rate(tikv_cdc_old_value_cache_access{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$tikv_instance\"}[1m])) by (instance) - sum(rate(tikv_cdc_old_value_cache_miss{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$tikv_instance\"}[1m])) by (instance)) / sum(rate(tikv_cdc_old_value_cache_access{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$tikv_instance\"}[1m])) by (instance)",
+              "expr": "(sum(rate(tikv_cdc_old_value_cache_access{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$tikv_instance\"}[1m])) by (instance) - sum(rate(tikv_cdc_old_value_cache_miss{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$tikv_instance\"}[1m])) by (instance)) / sum(rate(tikv_cdc_old_value_cache_access{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$tikv_instance\"}[1m])) by (instance)",
               "format": "time_series",
               "hide": false,
               "intervalFactor": 1,
@@ -18514,7 +18514,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(tikv_cdc_old_value_cache_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$tikv_instance\"}) by (instance) / sum(tikv_cdc_old_value_cache_length{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$tikv_instance\"}) by (instance)",
+              "expr": "sum(tikv_cdc_old_value_cache_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$tikv_instance\"}) by (instance) / sum(tikv_cdc_old_value_cache_length{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$tikv_instance\"}) by (instance)",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -18647,7 +18647,7 @@
               "refId": "A"
             },
             {
-              "expr": "sum(rate(tikv_cdc_old_value_duration_sum{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$tikv_instance\"}[1m])) by (le, instance, tag) / sum(rate(tikv_cdc_old_value_duration_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$tikv_instance\"}[1m])) by (le, instance, tag)",
+              "expr": "sum(rate(tikv_cdc_old_value_duration_sum{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$tikv_instance\"}[1m])) by (le, instance, tag) / sum(rate(tikv_cdc_old_value_duration_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$tikv_instance\"}[1m])) by (le, instance, tag)",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "{{instance}}-avg-{{tag}}",
@@ -19529,7 +19529,7 @@
               "refId": "A"
             },
             {
-              "expr": "go_memstats_next_gc_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} / (1 + ticdc_server_go_gc{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$runtime_instance\"} / 100)",
+              "expr": "go_memstats_next_gc_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} / (1 + ticdc_server_go_gc{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} / 100)",
               "format": "time_series",
               "hide": false,
               "intervalFactor": 1,
@@ -19537,7 +19537,7 @@
               "refId": "H"
             },
             {
-              "expr": "go_memstats_heap_alloc_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} - go_memstats_next_gc_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$runtime_instance\"} / (1 + ticdc_server_go_gc{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$runtime_instance\"} / 100)",
+              "expr": "go_memstats_heap_alloc_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} - go_memstats_next_gc_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} / (1 + ticdc_server_go_gc{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} / 100)",
               "format": "time_series",
               "hide": false,
               "intervalFactor": 1,
@@ -19545,7 +19545,7 @@
               "refId": "C"
             },
             {
-              "expr": "go_memstats_heap_idle_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} - go_memstats_heap_released_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$runtime_instance\"} + go_memstats_heap_inuse_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$runtime_instance\"} - go_memstats_heap_alloc_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$runtime_instance\"}",
+              "expr": "go_memstats_heap_idle_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} - go_memstats_heap_released_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} + go_memstats_heap_inuse_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} - go_memstats_heap_alloc_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"}",
               "format": "time_series",
               "hide": false,
               "intervalFactor": 1,
@@ -19553,7 +19553,7 @@
               "refId": "B"
             },
             {
-              "expr": "go_memstats_stack_sys_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} + go_memstats_mspan_sys_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$runtime_instance\"} + go_memstats_mcache_sys_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$runtime_instance\"} + go_memstats_buck_hash_sys_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$runtime_instance\"} + go_memstats_gc_sys_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$runtime_instance\"} + go_memstats_other_sys_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$runtime_instance\"}",
+              "expr": "go_memstats_stack_sys_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} + go_memstats_mspan_sys_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} + go_memstats_mcache_sys_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} + go_memstats_buck_hash_sys_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} + go_memstats_gc_sys_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} + go_memstats_other_sys_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"}",
               "format": "time_series",
               "hide": false,
               "intervalFactor": 1,
@@ -19569,7 +19569,7 @@
               "refId": "E"
             },
             {
-              "expr": "(clamp_max(idelta(go_memstats_last_gc_time_seconds{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"}[1m]), 1) * go_memstats_next_gc_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$runtime_instance\"}) > 0",
+              "expr": "(clamp_max(idelta(go_memstats_last_gc_time_seconds{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"}[1m]), 1) * go_memstats_next_gc_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"}) > 0",
               "format": "time_series",
               "hide": false,
               "intervalFactor": 1,
@@ -19924,7 +19924,7 @@
               "refId": "A"
             },
             {
-              "expr": "irate((go_memstats_alloc_bytes_total{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} - go_memstats_heap_alloc_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$runtime_instance\"})[30s:])",
+              "expr": "irate((go_memstats_alloc_bytes_total{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} - go_memstats_heap_alloc_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"})[30s:])",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "sweep",
@@ -20098,7 +20098,7 @@
               "refId": "A"
             },
             {
-              "expr": "go_memstats_next_gc_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} / (1 + ticdc_server_go_gc{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$runtime_instance\"} / 100)",
+              "expr": "go_memstats_next_gc_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} / (1 + ticdc_server_go_gc{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} / 100)",
               "format": "time_series",
               "hide": false,
               "intervalFactor": 1,
@@ -20106,7 +20106,7 @@
               "refId": "H"
             },
             {
-              "expr": "go_memstats_heap_alloc_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} - go_memstats_next_gc_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$runtime_instance\"} / (1 + ticdc_server_go_gc{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$runtime_instance\"} / 100)",
+              "expr": "go_memstats_heap_alloc_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} - go_memstats_next_gc_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} / (1 + ticdc_server_go_gc{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} / 100)",
               "format": "time_series",
               "hide": false,
               "intervalFactor": 1,
@@ -20114,7 +20114,7 @@
               "refId": "C"
             },
             {
-              "expr": "go_memstats_heap_idle_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} - go_memstats_heap_released_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$runtime_instance\"} + go_memstats_heap_inuse_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$runtime_instance\"} - go_memstats_heap_alloc_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$runtime_instance\"}",
+              "expr": "go_memstats_heap_idle_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} - go_memstats_heap_released_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} + go_memstats_heap_inuse_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} - go_memstats_heap_alloc_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"}",
               "format": "time_series",
               "hide": false,
               "intervalFactor": 1,
@@ -20122,7 +20122,7 @@
               "refId": "B"
             },
             {
-              "expr": "go_memstats_stack_sys_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} + go_memstats_mspan_sys_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$runtime_instance\"} + go_memstats_mcache_sys_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$runtime_instance\"} + go_memstats_buck_hash_sys_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$runtime_instance\"} + go_memstats_gc_sys_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$runtime_instance\"} + go_memstats_other_sys_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$runtime_instance\"}",
+              "expr": "go_memstats_stack_sys_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} + go_memstats_mspan_sys_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} + go_memstats_mcache_sys_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} + go_memstats_buck_hash_sys_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} + go_memstats_gc_sys_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} + go_memstats_other_sys_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"}",
               "format": "time_series",
               "hide": false,
               "intervalFactor": 1,
@@ -20138,7 +20138,7 @@
               "refId": "E"
             },
             {
-              "expr": "(clamp_max(idelta(go_memstats_last_gc_time_seconds{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"}[1m]), 1) * go_memstats_next_gc_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$runtime_instance\"}) > 0",
+              "expr": "(clamp_max(idelta(go_memstats_last_gc_time_seconds{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"}[1m]), 1) * go_memstats_next_gc_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"}) > 0",
               "format": "time_series",
               "hide": false,
               "intervalFactor": 1,
@@ -20502,7 +20502,7 @@
               "refId": "A"
             },
             {
-              "expr": "irate((go_memstats_alloc_bytes_total{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} - go_memstats_heap_alloc_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$runtime_instance\"})[30s:])",
+              "expr": "irate((go_memstats_alloc_bytes_total{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"} - go_memstats_heap_alloc_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$runtime_instance\"})[30s:])",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "sweep",

@@ -19,7 +19,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/sink/util"
 	"go.uber.org/zap"
 )
 
@@ -43,7 +42,7 @@ func (s *sink) SinkType() common.SinkType {
 	return common.BlackHoleSinkType
 }
 
-func (s *sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
+func (s *sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {

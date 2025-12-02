@@ -20,8 +20,6 @@ function run() {
 	# start tidb cluster
 	start_tidb_cluster --workdir $WORK_DIR
 
-	cd $WORK_DIR
-
 	TOPIC_NAME="ticdc-debezium-basic-$RANDOM"
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY

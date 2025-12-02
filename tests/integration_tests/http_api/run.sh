@@ -26,8 +26,6 @@ function run() {
 
 	start_tidb_cluster --workdir $WORK_DIR --multiple-upstream-pd true
 
-	cd $WORK_DIR
-
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix 1
 	# wait for cdc run
 	ensure $MAX_RETRIES "$CDC_BINARY cli capture list 2>&1 | grep '\"is-owner\": true'"

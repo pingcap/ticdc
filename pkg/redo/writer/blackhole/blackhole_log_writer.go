@@ -18,6 +18,7 @@ import (
 	"errors"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"go.uber.org/zap"
 )
@@ -35,6 +36,9 @@ func NewLogWriter(invalid bool) *blackHoleWriter {
 	return &blackHoleWriter{
 		invalid: invalid,
 	}
+}
+
+func (bs *blackHoleWriter) SetTableSchemaStore(tableSchemaStore *event.TableSchemaStore) {
 }
 
 func (bs *blackHoleWriter) Run(ctx context.Context) error {

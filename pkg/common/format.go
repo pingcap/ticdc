@@ -103,7 +103,6 @@ func FormatTableSpan(s *heartbeatpb.TableSpan) string {
 		hex.EncodeToString(s.StartKey),
 		hex.EncodeToString(s.EndKey),
 		s.KeyspaceID))
-	sb.WriteString("\n")
 	return sb.String()
 }
 

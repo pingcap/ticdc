@@ -14,8 +14,6 @@ function run() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	cd $WORK_DIR
-
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 	run_sql "CREATE DATABASE move_table;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	go-ycsb load mysql -P $CUR/conf/workload -p mysql.host=${UP_TIDB_HOST} -p mysql.port=${UP_TIDB_PORT} -p mysql.user=root -p mysql.db=move_table
@@ -50,7 +48,6 @@ function run() {
 
 	cd $CUR
 	GO111MODULE=on go run main.go 2>&1 | tee $WORK_DIR/tester.log
-	cd $WORK_DIR
 
 	check_table_exists "move_table.check1" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
@@ -58,7 +55,6 @@ function run() {
 	# move back
 	cd $CUR
 	GO111MODULE=on go run main.go 2>&1 | tee $WORK_DIR/tester.log
-	cd $WORK_DIR
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 	run_sql "CREATE table move_table.check2(id int primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	check_table_exists "move_table.check2" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300

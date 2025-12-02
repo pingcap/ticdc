@@ -28,7 +28,6 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/sink/util"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -77,6 +76,7 @@ type Dispatcher interface {
 	GetEventSizePerSecond() float32
 	IsTableTriggerEventDispatcher() bool
 	DealWithBlockEvent(event commonEvent.BlockEvent)
+	EnableActiveActive() bool
 	TryClose() (w heartbeatpb.Watermark, ok bool)
 	Remove()
 }
@@ -176,7 +176,7 @@ type BasicDispatcher struct {
 	// tableSchemaStore only exist when the dispatcher is a table trigger event dispatcher
 	// tableSchemaStore store the schema infos for all the table in the event dispatcher manager
 	// it's used for sink to calculate the tableNames or TableIds
-	tableSchemaStore *util.TableSchemaStore
+	tableSchemaStore *commonEvent.TableSchemaStore
 
 	// try to remove the dispatcher, but dispatcher may not able to be removed now
 	tryRemoving atomic.Bool
@@ -243,7 +243,7 @@ func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) boo
 		// FilterDMLEvent returns the original event for normal tables and only
 		// allocates a new event when the table needs active-active or soft-delete
 		// processing. Skip is only true when every row in the event should be dropped.
-		filtered, skip, err := util.FilterDMLEvent(event, d.sharedInfo.enableActiveActive)
+		filtered, skip, err := commonEvent.FilterDMLEvent(event, d.sharedInfo.enableActiveActive)
 		if err != nil {
 			d.HandleError(err)
 			continue
@@ -269,6 +269,28 @@ func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) boo
 		failpoint.Inject("BlockAddDMLEvents", nil)
 	}
 	return true
+}
+
+// InitializeTableSchemaStore initializes the tableSchemaStore for the table trigger event dispatcher.
+// It returns true if the tableSchemaStore is initialized successfully, otherwise returns fals
+func (d *BasicDispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo) (ok bool, err error) {
+	// Only the table trigger event dispatcher need to create a tableSchemaStore
+	// Because we only need to calculate the tableNames or TableIds in the sink
+	// when the event dispatcher manager have table trigger event dispatcher
+	if !d.tableSpan.Equal(common.KeyspaceDDLSpan(d.tableSpan.KeyspaceID)) {
+		log.Error("InitializeTableSchemaStore should only be received by table trigger event dispatcher", zap.Any("dispatcher", d.id))
+		return false, errors.ErrChangefeedInitTableTriggerEventDispatcherFailed.
+			GenWithStackByArgs("InitializeTableSchemaStore should only be received by table trigger event dispatcher")
+	}
+
+	if d.tableSchemaStore != nil {
+		log.Info("tableSchemaStore has already been initialized", zap.Stringer("dispatcher", d.id))
+		return false, nil
+	}
+
+	d.tableSchemaStore = commonEvent.NewTableSchemaStore(schemaInfo, d.sink.SinkType(), d.EnableActiveActive())
+	d.sink.SetTableSchemaStore(d.tableSchemaStore)
+	return true, nil
 }
 
 func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {
@@ -307,9 +329,9 @@ func (d *BasicDispatcher) ensureActiveActiveTableInfo(tableInfo *common.TableInf
 			tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID)
 	}
 	requiredCols := []string{
-		util.OriginTsColumn,
-		util.CommitTsColumn,
-		util.SoftDeleteTimeColumn,
+		commonEvent.OriginTsColumn,
+		commonEvent.CommitTsColumn,
+		commonEvent.SoftDeleteTimeColumn,
 	}
 	for _, col := range requiredCols {
 		if _, ok := tableInfo.GetColumnInfoByName(col); !ok {
@@ -385,8 +407,8 @@ func (d *BasicDispatcher) GetCheckpointTs() uint64 {
 // updateDispatcherStatusToWorking updates the dispatcher status to working and adds it to status dynamic stream
 func (d *BasicDispatcher) updateDispatcherStatusToWorking() {
 	log.Info("update dispatcher status to working",
-		zap.Stringer("dispatcher", d.id),
 		zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
+		zap.Stringer("dispatcher", d.id),
 		zap.String("table", common.FormatTableSpan(d.tableSpan)),
 		zap.Uint64("checkpointTs", d.GetCheckpointTs()),
 		zap.Uint64("resolvedTs", d.GetResolvedTs()),
@@ -548,14 +570,10 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				}
 			}
 
-			tableID := int64(0)
-			if ddl.TableInfo != nil {
-				tableID = ddl.TableInfo.TableName.TableID
-			}
 			log.Info("dispatcher receive ddl event",
 				zap.Stringer("dispatcher", d.id),
 				zap.String("query", ddl.Query),
-				zap.Int64("table", tableID),
+				zap.Int64("table", ddl.GetTableID()),
 				zap.Uint64("commitTs", event.GetCommitTs()),
 				zap.Uint64("seq", event.GetSeq()))
 			ddl.AddPostFlushFunc(func() {
@@ -651,9 +669,9 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 		}
 		if d.blockEventStatus.actionMatchs(action) {
 			log.Info("pending event get the action",
+				zap.Stringer("dispatcher", d.id),
 				zap.Any("action", action),
 				zap.Any("innerAction", int(action.Action)),
-				zap.Stringer("dispatcher", d.id),
 				zap.Uint64("pendingEventCommitTs", pendingEvent.GetCommitTs()))
 			d.blockEventStatus.updateBlockStage(heartbeatpb.BlockStage_WRITING)
 			pendingEvent.PushFrontFlushFunc(func() {
@@ -904,6 +922,7 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 		return w, true
 	}
 	log.Info("dispatcher is not ready to close",
+		zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
 		zap.Stringer("dispatcher", d.id),
 		zap.Int64("mode", d.mode),
 		zap.Bool("sinkIsNormal", d.sink.IsNormal()),
@@ -916,9 +935,9 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 // It removes the dispatcher from status dynamic stream to stop receiving status info from maintainer.
 func (d *BasicDispatcher) removeDispatcher() {
 	log.Info("remove dispatcher",
+		zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
 		zap.Stringer("dispatcher", d.id),
 		zap.Int64("mode", d.mode),
-		zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
 		zap.String("table", common.FormatTableSpan(d.tableSpan)))
 	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
 	err := dispatcherStatusDS.RemovePath(d.id)

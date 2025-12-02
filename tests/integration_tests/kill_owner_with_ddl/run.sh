@@ -44,7 +44,6 @@ function run() {
 
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 	start_tidb_cluster --workdir $WORK_DIR
-	cd $WORK_DIR
 
 	pd_addr="http://$UP_PD_HOST_1:$UP_PD_PORT_1"
 	SINK_URI="mysql://normal:123456@127.0.0.1:3306/?max-txn-row=1"

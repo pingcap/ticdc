@@ -21,7 +21,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap/zapcore"
 )
@@ -261,7 +260,7 @@ func buildActiveActiveUpsertSQL(tableInfo *common.TableInfo, rows []*commonEvent
 		if col == nil || col.IsGenerated() {
 			continue
 		}
-		if col.Name.O == sinkutil.CommitTsColumn {
+		if col.Name.O == commonEvent.CommitTsColumn {
 			// _tidb_commit_ts is kept downstream-only; do not emit it in INSERT columns.
 			continue
 		}
@@ -274,16 +273,16 @@ func buildActiveActiveUpsertSQL(tableInfo *common.TableInfo, rows []*commonEvent
 	valueOffsets := make([]int, len(insertColumns))
 	for i, colName := range insertColumns {
 		valueColName := colName
-		if colName == sinkutil.OriginTsColumn {
+		if colName == commonEvent.OriginTsColumn {
 			// VALUES(_tidb_origin_ts) should reuse upstream commitTs to record origin.
-			valueColName = sinkutil.CommitTsColumn
+			valueColName = commonEvent.CommitTsColumn
 		}
 		offset, _ := tableInfo.GetColumnOffsetByName(valueColName)
 		valueOffsets[i] = offset
 	}
 
-	originQuoted := common.QuoteName(sinkutil.OriginTsColumn)
-	commitQuoted := common.QuoteName(sinkutil.CommitTsColumn)
+	originQuoted := common.QuoteName(commonEvent.OriginTsColumn)
+	commitQuoted := common.QuoteName(commonEvent.CommitTsColumn)
 
 	var builder strings.Builder
 	builder.WriteString("INSERT INTO ")

@@ -26,7 +26,6 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/sink/util"
 )
 
 type Sink interface {
@@ -37,7 +36,7 @@ type Sink interface {
 	WriteBlockEvent(event commonEvent.BlockEvent) error
 	AddCheckpointTs(ts uint64)
 
-	SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore)
+	SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore)
 	Close(removeChangefeed bool)
 	Run(ctx context.Context) error
 }

@@ -16,7 +16,9 @@ package reader
 import (
 	"context"
 
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
+	misc "github.com/pingcap/ticdc/pkg/redo/common"
 )
 
 // BlackHoleReader is a blockHole storage which implements LogReader interface
@@ -33,18 +35,28 @@ func (br *BlackHoleReader) Run(ctx context.Context) error {
 }
 
 // ReadNextRow implements LogReader.ReadNextRow
-func (br *BlackHoleReader) ReadNextRow(ctx context.Context) (pevent.RedoDMLEvent, bool, error) {
-	return pevent.RedoDMLEvent{}, false, nil
+func (br *BlackHoleReader) ReadNextRow(ctx context.Context) (*pevent.RedoDMLEvent, error) {
+	return &pevent.RedoDMLEvent{}, nil
 }
 
 // ReadNextDDL implements LogReader.ReadNextDDL
-func (br *BlackHoleReader) ReadNextDDL(ctx context.Context) (pevent.RedoDDLEvent, bool, error) {
-	return pevent.RedoDDLEvent{}, false, nil
+func (br *BlackHoleReader) ReadNextDDL(ctx context.Context) (*pevent.RedoDDLEvent, error) {
+	return &pevent.RedoDDLEvent{}, nil
 }
 
 // ReadMeta implements LogReader.ReadMeta
-func (br *BlackHoleReader) ReadMeta(ctx context.Context) (checkpointTs, resolvedTs uint64, err error) {
-	return 0, 1, nil
+func (br *BlackHoleReader) ReadMeta(ctx context.Context) (checkpointTs, resolvedTs uint64, version int, err error) {
+	return 0, 1, misc.Version, nil
+}
+
+// GetChangefeedID implements LogReader.GetChangefeedID
+func (br *BlackHoleReader) GetChangefeedID() commonType.ChangeFeedID {
+	return commonType.ChangeFeedID{}
+}
+
+// GetChangefeedID implements LogReader.GetChangefeedID
+func (br *BlackHoleReader) GetVersion() int {
+	return misc.Version
 }
 
 // Close implement the Close interface

@@ -26,8 +26,6 @@ export DBUS_SESSION_BUS_ADDRESS := /dev/null
 SHELL := /usr/bin/env bash
 
 TEST_DIR := /tmp/tidb_cdc_test
-DM_TEST_DIR := /tmp/dm_test
-ENGINE_TEST_DIR := /tmp/engine_test
 
 GO       := GO111MODULE=on go
 ifeq (${CDC_ENABLE_VENDOR}, 1)

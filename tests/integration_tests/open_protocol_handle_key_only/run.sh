@@ -18,8 +18,6 @@ function run() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	cd $WORK_DIR
-
 	TOPIC_NAME="open-protocol-handle-key-only-$RANDOM"
 
 	# record tso before we create tables to skip the system table DDLs

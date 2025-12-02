@@ -28,8 +28,6 @@ function run() {
 	start_tidb_cluster --workdir $WORK_DIR
 	start_tls_tidb_cluster --workdir $WORK_DIR --tlsdir $TLS_DIR
 
-	cd $WORK_DIR
-
 	echo " \
   [security]
    ca-path = \"$TLS_DIR/ca.pem\"

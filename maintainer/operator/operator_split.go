@@ -172,7 +172,7 @@ func (m *SplitDispatcherOperator) PostFinish() {
 		}
 	}
 
-	log.Info("split dispatcher operator post finish finished", zap.String("id", m.replicaSet.ID.String()))
+	log.Info("split dispatcher operator post finish finished", zap.String("dispatcherID", m.replicaSet.ID.String()))
 }
 
 func (m *SplitDispatcherOperator) String() string {

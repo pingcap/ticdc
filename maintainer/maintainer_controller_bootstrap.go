@@ -30,7 +30,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/node"
-	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/utils"
 	"go.uber.org/zap"
 )
@@ -257,12 +256,12 @@ func (c *Controller) handleRemainingWorkingTasks(
 	for tableID := range redoWorkingTaskMap {
 		log.Warn("found a redo working table that is not in initial table map, just ignore it",
 			zap.Stringer("changefeed", c.changefeedID),
-			zap.Int64("id", tableID))
+			zap.Int64("tableID", tableID))
 	}
 	for tableID := range workingTaskMap {
 		log.Warn("found a working table that is not in initial table map, just ignore it",
 			zap.Stringer("changefeed", c.changefeedID),
-			zap.Int64("id", tableID))
+			zap.Int64("tableID", tableID))
 	}
 }
 
@@ -330,7 +329,7 @@ func (c *Controller) loadTables(startTs uint64) ([]commonEvent.Table, error) {
 func getSchemaInfo(table commonEvent.Table, isMysqlCompatibleBackend bool, enableActiveActive bool) *heartbeatpb.SchemaInfo {
 	schemaInfo := &heartbeatpb.SchemaInfo{}
 	schemaInfo.SchemaID = table.SchemaID
-	if sinkutil.NeedTableNameStoreAndCheckpointTs(isMysqlCompatibleBackend, enableActiveActive) {
+	if commonEvent.NeedTableNameStoreAndCheckpointTs(isMysqlCompatibleBackend, enableActiveActive) {
 		schemaInfo.SchemaName = table.SchemaName
 	}
 	return schemaInfo
@@ -339,7 +338,7 @@ func getSchemaInfo(table commonEvent.Table, isMysqlCompatibleBackend bool, enabl
 func getTableInfo(table commonEvent.Table, isMysqlCompatibleBackend bool, enableActiveActive bool) *heartbeatpb.TableInfo {
 	tableInfo := &heartbeatpb.TableInfo{}
 	tableInfo.TableID = table.TableID
-	if sinkutil.NeedTableNameStoreAndCheckpointTs(isMysqlCompatibleBackend, enableActiveActive) {
+	if commonEvent.NeedTableNameStoreAndCheckpointTs(isMysqlCompatibleBackend, enableActiveActive) {
 		tableInfo.TableName = table.TableName
 	}
 	return tableInfo

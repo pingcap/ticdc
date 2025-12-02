@@ -23,7 +23,6 @@ start_tidb_cluster --workdir $WORK_DIR
 trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 run_sql "set global foreign_key_checks=0;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
-cd $WORK_DIR
 start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 

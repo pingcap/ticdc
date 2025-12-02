@@ -51,7 +51,7 @@ type BarrierEvent struct {
 	newTables          []*heartbeatpb.Table
 	schemaIDChange     []*heartbeatpb.SchemaIDChange
 	isSyncPoint        bool
-	// if the split table is enable for this changefeeed, if not we can use table id to check coverage
+	// if the split table is enable for this changefeed, if not we can use tableID to check coverage
 	dynamicSplitEnabled bool
 
 	// Used to record reported dispatchers and has two main functions:
@@ -91,7 +91,7 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		newTables:          status.NeedAddedTables,
 		schemaIDChange:     status.UpdatedSchemas,
 		isSyncPoint:        status.IsSyncPoint,
-		// if the split table is enable for this changefeeed, if not we can use table id to check coverage
+		// if the split table is enable for this changefeed, if not we can use tableID to check coverage
 		dynamicSplitEnabled: dynamicSplitEnabled,
 
 		reportedDispatchers: make(map[common.DispatcherID]struct{}),
@@ -245,7 +245,7 @@ func (be *BarrierEvent) scheduleBlockEvent() {
 	}
 
 	for _, change := range be.schemaIDChange {
-		log.Info("update schema id",
+		log.Info("update schemaID for table",
 			zap.String("changefeed", be.cfID.Name()),
 			zap.Uint64("commitTs", be.commitTs),
 			zap.Int64("newSchema", change.OldSchemaID),

@@ -641,11 +641,6 @@ func (e *eventStore) UnregisterDispatcher(changefeedID common.ChangeFeedID, disp
 	if e.closed.Load() {
 		return
 	}
-
-	log.Info("unregister dispatcher", zap.Stringer("changefeedID", changefeedID), zap.Stringer("dispatcherID", dispatcherID))
-	defer func() {
-		log.Info("unregister dispatcher done", zap.Stringer("changefeedID", changefeedID), zap.Stringer("dispatcherID", dispatcherID))
-	}()
 	e.dispatcherMeta.Lock()
 	if stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]; ok {
 		e.detachFromSubStat(dispatcherID, stat.subStat)
@@ -654,6 +649,8 @@ func (e *eventStore) UnregisterDispatcher(changefeedID common.ChangeFeedID, disp
 		delete(e.dispatcherMeta.dispatcherStats, dispatcherID)
 	}
 	e.dispatcherMeta.Unlock()
+	log.Info("unregister dispatcher done", zap.Stringer("changefeedID", changefeedID),
+		zap.Stringer("dispatcherID", dispatcherID))
 }
 
 func (e *eventStore) UpdateDispatcherCheckpointTs(

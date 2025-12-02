@@ -108,8 +108,6 @@ function run() {
 
 	complete_ddls
 
-	cd $WORK_DIR
-
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 	changefeedid=$(cdc_cli_changefeed create --sink-uri="$SINK_URI" | grep '^ID:' | head -n1 | awk '{print $2}')
 

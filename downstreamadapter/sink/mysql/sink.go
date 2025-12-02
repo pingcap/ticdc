@@ -28,7 +28,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
-	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -87,10 +86,10 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	return newMySQLSink(ctx, changefeedID, cfg, db, config.BDRMode, config.EnableActiveActive, config.ActiveActiveProgressInterval), nil
+	return NewMySQLSink(ctx, changefeedID, cfg, db, config.BDRMode, config.EnableActiveActive, config.ActiveActiveProgressInterval), nil
 }
 
-func newMySQLSink(
+func NewMySQLSink(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
 	cfg *mysql.Config,
@@ -231,7 +230,7 @@ func (s *Sink) SinkType() common.SinkType {
 	return common.MysqlSinkType
 }
 
-func (s *Sink) SetTableSchemaStore(tableSchemaStore *sinkutil.TableSchemaStore) {
+func (s *Sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
 	s.ddlWriter.SetTableSchemaStore(tableSchemaStore)
 	if s.progressTableWriter != nil {
 		s.progressTableWriter.SetTableSchemaStore(tableSchemaStore)

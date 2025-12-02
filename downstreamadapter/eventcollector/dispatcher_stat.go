@@ -184,9 +184,10 @@ func (d *dispatcherStat) doReset(serverID node.ID, resetTs uint64) {
 	epoch := d.epoch.Add(1)
 	d.lastEventSeq.Store(0)
 	// remove the dispatcher from the dynamic stream
-	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherResetRequest(d.eventCollector.getLocalServerID().String(), resetTs, epoch))
+	resetRequest := d.newDispatcherResetRequest(d.eventCollector.getLocalServerID().String(), resetTs, epoch)
+	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, resetRequest)
 	d.eventCollector.enqueueMessageForSend(msg)
-	log.Info("Send reset dispatcher request to event service to reset the dispatcher",
+	log.Info("send reset dispatcher request to event service",
 		zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 		zap.Stringer("dispatcher", d.getDispatcherID()),
 		zap.Stringer("eventServiceID", serverID),
@@ -213,7 +214,7 @@ func (d *dispatcherStat) remove() {
 
 // removeFrom is used to remove the dispatcher from the specified event service.
 func (d *dispatcherStat) removeFrom(serverID node.ID) {
-	log.Info("Send remove dispatcher request to event service",
+	log.Info("send remove dispatcher request to event service",
 		zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 		zap.Stringer("dispatcher", d.getDispatcherID()),
 		zap.Stringer("eventServiceID", serverID))
@@ -262,7 +263,7 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) b
 		}
 
 		if event.GetSeq() != expectedSeq {
-			log.Warn("Received an out-of-order event, reset the dispatcher",
+			log.Warn("receive an out-of-order event, reset the dispatcher",
 				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 				zap.Stringer("dispatcher", d.getDispatcherID()),
 				zap.String("eventType", commonEvent.TypeToString(event.GetType())),
@@ -284,7 +285,7 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) b
 
 			expectedSeq := d.lastEventSeq.Add(1)
 			if e.Seq != expectedSeq {
-				log.Warn("Received an out-of-order batch DML event, reset the dispatcher",
+				log.Warn("receive an out-of-order batch DML event, reset the dispatcher",
 					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 					zap.Stringer("dispatcher", d.getDispatcherID()),
 					zap.String("eventType", commonEvent.TypeToString(event.GetType())),
@@ -319,7 +320,7 @@ func (d *dispatcherStat) filterAndUpdateEventByCommitTs(event dispatcher.Dispatc
 		}
 	}
 	if shouldIgnore {
-		log.Warn("Receive a event older than sendCommitTs, ignore it",
+		log.Warn("receive a event older than sendCommitTs, ignore it",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Int64("tableID", d.target.GetTableSpan().TableID),
 			zap.Stringer("dispatcher", d.getDispatcherID()),

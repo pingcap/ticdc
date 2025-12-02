@@ -11,11 +11,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package util
+package event
 
 import (
 	"github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -54,7 +53,7 @@ const (
 //     delete event to keep downstream consistent.
 func EvaluateRowPolicy(
 	tableInfo *common.TableInfo,
-	row *commonEvent.RowChange,
+	row *RowChange,
 	enableActiveActive bool,
 ) (RowPolicyDecision, error) {
 	if tableInfo == nil || row == nil {
@@ -90,7 +89,7 @@ func EvaluateRowPolicy(
 	return RowPolicyKeep, nil
 }
 
-func needConvertUpdateToDelete(tableInfo *common.TableInfo, row *commonEvent.RowChange) (bool, error) {
+func needConvertUpdateToDelete(tableInfo *common.TableInfo, row *RowChange) (bool, error) {
 	if tableInfo == nil || row == nil {
 		return false, nil
 	}
@@ -134,7 +133,7 @@ func isZeroSoftDeleteValue(val interface{}) bool {
 }
 
 // ApplyRowPolicyDecision mutates the row based on decision.
-func ApplyRowPolicyDecision(row *commonEvent.RowChange, decision RowPolicyDecision) {
+func ApplyRowPolicyDecision(row *RowChange, decision RowPolicyDecision) {
 	switch decision {
 	case RowPolicyConvertToDelete:
 		row.RowType = common.RowTypeDelete
@@ -153,7 +152,7 @@ func ApplyRowPolicyDecision(row *commonEvent.RowChange, decision RowPolicyDecisi
 //
 // It returns the possibly modified event, whether the event should be skipped entirely,
 // and an error if evaluation fails.
-func FilterDMLEvent(event *commonEvent.DMLEvent, enableActiveActive bool) (*commonEvent.DMLEvent, bool, error) {
+func FilterDMLEvent(event *DMLEvent, enableActiveActive bool) (*DMLEvent, bool, error) {
 	if event == nil {
 		return nil, true, nil
 	}
@@ -218,7 +217,7 @@ func FilterDMLEvent(event *commonEvent.DMLEvent, enableActiveActive bool) (*comm
 		return nil, true, nil
 	}
 
-	newEvent := commonEvent.NewDMLEvent(event.DispatcherID, event.PhysicalTableID, event.StartTs, event.CommitTs, event.TableInfo)
+	newEvent := NewDMLEvent(event.DispatcherID, event.PhysicalTableID, event.StartTs, event.CommitTs, event.TableInfo)
 	newEvent.TableInfoVersion = event.TableInfoVersion
 	newEvent.Seq = event.Seq
 	newEvent.Epoch = event.Epoch
@@ -242,7 +241,7 @@ func FilterDMLEvent(event *commonEvent.DMLEvent, enableActiveActive bool) (*comm
 	return newEvent, false, nil
 }
 
-func appendRowChangeToChunk(chk *chunk.Chunk, row *commonEvent.RowChange) {
+func appendRowChangeToChunk(chk *chunk.Chunk, row *RowChange) {
 	if row == nil || chk == nil {
 		return
 	}

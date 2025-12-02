@@ -16,8 +16,6 @@ function run_length_limit() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	cd $WORK_DIR
-
 	run_sql "DROP DATABASE if exists kafka_message;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
@@ -69,8 +67,6 @@ function run_batch_size_limit() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
 	start_tidb_cluster --workdir $WORK_DIR
-
-	cd $WORK_DIR
 
 	run_sql "DROP DATABASE if exists kafka_message;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 

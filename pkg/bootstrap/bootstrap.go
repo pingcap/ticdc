@@ -61,21 +61,22 @@ func NewBootstrapper[T any](id string, newBootstrapMsg NewBootstrapMessageFn) *B
 }
 
 // HandleNewNodes add node to bootstrapper and return messages that need to be sent to remote node
-func (b *Bootstrapper[T]) HandleNewNodes(nodes []*node.Info) []*messaging.TargetMessage {
-	msgs := make([]*messaging.TargetMessage, 0, len(nodes))
-	for _, info := range nodes {
-		b.mutex.Lock()
-		if _, ok := b.nodes[info.ID]; !ok {
-			// A new node is found, send a bootstrap message to it.
-			b.nodes[info.ID] = NewNodeStatus[T](info)
-			log.Info("find a new node",
-				zap.String("changefeed", b.id),
-				zap.String("nodeAddr", info.AdvertiseAddr),
-				zap.Any("nodeID", info.ID))
-			msgs = append(msgs, b.newBootstrapMsg(info.ID))
-			b.nodes[info.ID].lastBootstrapTime = b.currentTime()
+func (b *Bootstrapper[T]) HandleNewNodes(newNodes []*node.Info) []*messaging.TargetMessage {
+	msgs := make([]*messaging.TargetMessage, 0, len(newNodes))
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	for _, info := range newNodes {
+		if _, ok := b.nodes[info.ID]; ok {
+			continue
 		}
-		b.mutex.Unlock()
+		// A new node is found, send a bootstrap message to it.
+		b.nodes[info.ID] = NewNodeStatus[T](info)
+		log.Info("maintainer found a new node",
+			zap.String("changefeed", b.id),
+			zap.String("nodeAddr", info.AdvertiseAddr),
+			zap.Any("nodeID", info.ID))
+		msgs = append(msgs, b.newBootstrapMsg(info.ID))
+		b.nodes[info.ID].lastBootstrapTime = b.currentTime()
 	}
 	return msgs
 }
@@ -84,8 +85,8 @@ func (b *Bootstrapper[T]) HandleNewNodes(nodes []*node.Info) []*messaging.Target
 // finished bootstrap if all node are initialized after these node removed
 // return cached bootstrap
 func (b *Bootstrapper[T]) HandleRemoveNodes(nodeIDs []node.ID) map[node.ID]*T {
+	b.mutex.Lock()
 	for _, id := range nodeIDs {
-		b.mutex.Lock()
 		status, ok := b.nodes[id]
 		if ok {
 			delete(b.nodes, id)
@@ -98,8 +99,8 @@ func (b *Bootstrapper[T]) HandleRemoveNodes(nodeIDs []node.ID) map[node.ID]*T {
 				zap.String("changefeed", b.id),
 				zap.Any("nodeID", id))
 		}
-		b.mutex.Unlock()
 	}
+	b.mutex.Unlock()
 	return b.collectInitialBootstrapResponses()
 }
 

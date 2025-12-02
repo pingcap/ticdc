@@ -27,7 +27,6 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/ticdc/pkg/sink/util"
 	"go.uber.org/zap"
 )
 
@@ -56,7 +55,7 @@ type Writer struct {
 	ddlTsTableInit      bool
 	ddlTsTableInitMutex sync.Mutex
 	maxDDLTsBatch       int
-	tableSchemaStore    *util.TableSchemaStore
+	tableSchemaStore    *commonEvent.TableSchemaStore
 
 	// implement stmtCache to improve performance, especially when the downstream is TiDB
 	stmtCache *lru.Cache
@@ -105,7 +104,7 @@ func NewWriter(
 	return res
 }
 
-func (w *Writer) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
+func (w *Writer) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
 	w.tableSchemaStore = tableSchemaStore
 }
 

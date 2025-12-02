@@ -564,6 +564,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	return nil
 }
 
+// GetTableID returns the physical table ID of the event.
 func (t *DMLEvent) GetTableID() int64 {
 	return t.PhysicalTableID
 }

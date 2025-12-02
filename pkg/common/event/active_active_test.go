@@ -11,14 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package util
+package event
 
 import (
 	"testing"
 	"time"
 
 	commonpkg "github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -190,13 +189,13 @@ func newTestColumn(id int64, name string, tp byte, flag uint) *model.ColumnInfo 
 	}
 }
 
-func newDMLEventForTest(t *testing.T, tableInfo *commonpkg.TableInfo, rowTypes []commonpkg.RowType, rows [][]interface{}) *commonEvent.DMLEvent {
+func newDMLEventForTest(t *testing.T, tableInfo *commonpkg.TableInfo, rowTypes []commonpkg.RowType, rows [][]interface{}) *DMLEvent {
 	require.Equal(t, rowSlots(rowTypes), len(rows))
 	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), len(rows))
 	for _, values := range rows {
 		appendRowToChunk(t, chk, values)
 	}
-	event := commonEvent.NewDMLEvent(commonpkg.NewDispatcherID(), tableInfo.TableName.TableID, 1, 1, tableInfo)
+	event := NewDMLEvent(commonpkg.NewDispatcherID(), tableInfo.TableName.TableID, 1, 1, tableInfo)
 	event.SetRows(chk)
 	event.RowTypes = append(event.RowTypes, rowTypes...)
 	event.Length = int32(len(rowTypes))

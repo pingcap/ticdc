@@ -26,7 +26,6 @@ function run() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	cd $WORK_DIR
 	run_sql "set @@global.tidb_enable_exchange_partition=on" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix partition_table.server1
@@ -56,12 +55,10 @@ function run() {
 	sed "s/<placeholder>/$rts/g" $CUR/conf/diff_config.toml >$WORK_DIR/diff_config.toml
 
 	cat $WORK_DIR/diff_config.toml
-	cdc redo apply --tmp-dir="$tmp_download_path/apply" \
+	cdc redo apply --log-level debug --tmp-dir="$tmp_download_path/apply" \
 		--storage="$storage_path" \
 		--sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
-
-	# check_table_exists "partition_table.finish_mark" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 120
-	check_sync_diff $WORK_DIR $WORK_DIR/diff_config.toml
+	check_sync_diff $WORK_DIR $WORK_DIR/diff_config.toml 100
 }
 
 trap stop EXIT

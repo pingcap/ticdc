@@ -80,6 +80,10 @@ func (rd *RedoDispatcher) Remove() {
 	}
 }
 
+func (rd *RedoDispatcher) GetRedoMeta() *redo.RedoMeta {
+	return rd.redoMeta
+}
+
 // SetRedoMeta used to init redo meta
 // only for redo table trigger event dispatcher
 func (rd *RedoDispatcher) SetRedoMeta(cfg *config.ConsistentConfig) {

@@ -33,12 +33,12 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus"
@@ -169,11 +169,6 @@ func NewDispatcherManager(
 		integrityCfg = cfConfig.SinkConfig.Integrity.ToPB()
 	}
 
-	log.Info("New DispatcherManager",
-		zap.Stringer("changefeedID", changefeedID),
-		zap.String("config", cfConfig.String()),
-		zap.String("filterConfig", filterCfg.String()),
-	)
 	manager := &DispatcherManager{
 		dispatcherMap:         newDispatcherMap[*dispatcher.EventDispatcher](),
 		changefeedID:          changefeedID,
@@ -292,7 +287,7 @@ func NewDispatcherManager(
 		manager.collectBlockStatusRequest(ctx)
 	}()
 
-	log.Info("event dispatcher manager created",
+	log.Info("dispatcher manager initialized",
 		zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("maintainerID", maintainerID),
 		zap.Uint64("startTs", startTs),
@@ -301,6 +296,7 @@ func NewDispatcherManager(
 		zap.Uint64("redoQuota", manager.redoQuota),
 		zap.Bool("redoEnable", manager.RedoEnable),
 		zap.Bool("outputRawChangeEvent", manager.sharedInfo.IsOutputRawChangeEvent()),
+		zap.String("filterConfig", filterCfg.String()),
 	)
 	return manager, tableTriggerStartTs, nil
 }
@@ -333,12 +329,10 @@ func (e *DispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*h
 	if e.tableTriggerEventDispatcher == nil {
 		return nil
 	}
-
 	needAddDispatcher, err := e.tableTriggerEventDispatcher.InitializeTableSchemaStore(schemaInfo)
 	if err != nil {
 		return errors.Trace(err)
 	}
-
 	if !needAddDispatcher {
 		return nil
 	}
@@ -348,15 +342,11 @@ func (e *DispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*h
 		return errors.ErrDispatcherFailed.GenWithStackByArgs()
 	}
 
-	// redo
-	if e.RedoEnable {
-		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.redoTableTriggerEventDispatcher, e.redoQuota)
-	}
 	// table trigger event dispatcher can register to event collector to receive events after finish the initial table schema store from the maintainer.
 	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.tableTriggerEventDispatcher, e.sinkQuota)
 
 	// only when sink is mysql sink, and not enable active-active, table trigger event dispatcher does not need to receive the checkpointTs message from maintainer.
-	needCheckpointUpdates := sinkutil.NeedTableNameStoreAndCheckpointTs(e.sink.SinkType() == common.MysqlSinkType, e.sharedInfo.EnableActiveActive())
+	needCheckpointUpdates := commonEvent.NeedTableNameStoreAndCheckpointTs(e.sink.SinkType() == common.MysqlSinkType, e.sharedInfo.EnableActiveActive())
 	if needCheckpointUpdates {
 		appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RegisterCheckpointTsMessageDs(e)
 	}
@@ -852,6 +842,8 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 
 	if e.RedoEnable {
 		e.redoSink.Close(removeChangefeed)
+		// FIXME: cleanup redo log when remove the changefeed
+		e.closeRedoMeta(removeChangefeed)
 	}
 	e.sink.Close(removeChangefeed)
 	e.cancel()
