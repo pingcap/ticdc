@@ -255,7 +255,7 @@ func (e *DispatcherManager) InitalizeRedoTableTriggerEventDispatcher(schemaInfo 
 
 func (e *DispatcherManager) UpdateRedoMeta(checkpointTs, resolvedTs uint64) {
 	// only update meta on the one node
-	if e.redoTableTriggerEventDispatcher == nil {
+	if e.redoTableTriggerEventDispatcher != nil {
 		e.redoTableTriggerEventDispatcher.UpdateMeta(checkpointTs, resolvedTs)
 		return
 	}
@@ -267,9 +267,10 @@ func (e *DispatcherManager) SetGlobalRedoTs(resolvedTs uint64) bool {
 }
 
 func (e *DispatcherManager) collectRedoMeta(ctx context.Context) error {
-	ticker := time.NewTicker(time.Second)
+	ticker := time.NewTicker(time.Duration(e.config.Consistent.FlushIntervalInMs))
 	defer ticker.Stop()
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
+	var preResolvedTs uint64
 	for {
 		select {
 		case <-ctx.Done():
@@ -280,6 +281,9 @@ func (e *DispatcherManager) collectRedoMeta(ctx context.Context) error {
 				continue
 			}
 			logMeta := e.redoTableTriggerEventDispatcher.GetFlushedMeta()
+			if preResolvedTs >= logMeta.ResolvedTs {
+				continue
+			}
 			err := mc.SendCommand(
 				messaging.NewSingleTargetMessage(
 					e.GetMaintainerID(),
@@ -292,6 +296,7 @@ func (e *DispatcherManager) collectRedoMeta(ctx context.Context) error {
 			if err != nil {
 				log.Error("failed to send redo request message", zap.Error(err))
 			}
+			preResolvedTs = logMeta.ResolvedTs
 		}
 	}
 }
