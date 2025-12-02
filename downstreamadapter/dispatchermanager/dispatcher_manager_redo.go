@@ -26,6 +26,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	pkgRedo "github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -70,10 +71,15 @@ func initRedoComponet(
 
 	// RedoMessageDs need register on every node
 	appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RegisterRedoMessageDs(manager)
-	manager.wg.Add(1)
+	manager.wg.Add(2)
 	go func() {
 		defer manager.wg.Done()
 		err := manager.redoSink.Run(ctx)
+		manager.handleError(ctx, err)
+	}()
+	go func() {
+		defer manager.wg.Done()
+		err := manager.collectRedoMeta(ctx)
 		manager.handleError(ctx, err)
 	}()
 	return nil
@@ -246,12 +252,42 @@ func (e *DispatcherManager) InitalizeRedoTableTriggerEventDispatcher(schemaInfo 
 	return nil
 }
 
-func (e *DispatcherManager) SetGlobalRedoTs(checkpointTs, resolvedTs uint64) bool {
+func (e *DispatcherManager) UpdateRedoMeta(checkpointTs, resolvedTs uint64) {
 	// only update meta on the one node
 	if e.redoTableTriggerEventDispatcher != nil {
 		e.redoTableTriggerEventDispatcher.UpdateMeta(checkpointTs, resolvedTs)
 	}
+}
+
+func (e *DispatcherManager) SetGlobalRedoTs(resolvedTs uint64) bool {
 	return util.CompareAndMonotonicIncrease(&e.redoGlobalTs, resolvedTs)
+}
+
+func (e *DispatcherManager) collectRedoMeta(ctx context.Context) error {
+	ticker := time.NewTicker(time.Duration(e.config.Consistent.FlushIntervalInMs))
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			logMeta := e.redoTableTriggerEventDispatcher.GetFlushedMeta()
+			mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
+			err := mc.SendCommand(
+				messaging.NewSingleTargetMessage(
+					e.GetMaintainerID(),
+					messaging.MaintainerManagerTopic,
+					&heartbeatpb.RedoMessage{
+						ChangefeedID: e.changefeedID.ToPB(),
+						ResolvedTs:   logMeta.ResolvedTs,
+						CheckpointTs: logMeta.CheckpointTs,
+					},
+				))
+			if err != nil {
+				log.Error("failed to send redo request message", zap.Error(err))
+			}
+		}
+	}
 }
 
 func (e *DispatcherManager) GetRedoDispatcherMap() *DispatcherMap[*dispatcher.RedoDispatcher] {

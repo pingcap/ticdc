@@ -73,6 +73,7 @@ message RedoMessage {
     ChangefeedID changefeedID = 1;
     uint64 resolvedTs = 2;
     uint64 checkpointTs = 3;
+    bool advanced = 4;
 }
 
 enum ScheduleAction {
