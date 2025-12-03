@@ -34,19 +34,29 @@ import (
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/charset"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
-	tmysql "github.com/pingcap/tidb/pkg/parser/mysql"
 	"go.uber.org/zap"
 )
 
 const checkRunningAddIndexSQL = `
-SELECT JOB_ID, JOB_TYPE, SCHEMA_STATE, STATE
+SELECT *
 FROM information_schema.ddl_jobs
-WHERE TABLE_ID = "%d"
+WHERE DB_NAME = "%s"
+    AND TABLE_NAME = "%s"
+    AND JOB_TYPE LIKE "add index%%"
+    AND (STATE = "running" OR STATE = "queueing")
+LIMIT 1;
+`
+
+// Ref: https://github.com/pingcap/tidb/issues/55725
+const checkRunningAddIndexSQLForOldVersion = `
+ADMIN SHOW DDL JOBS 1
+WHERE DB_NAME = "%s" 
+    AND TABLE_NAME = "%s"
     AND JOB_TYPE LIKE "add index%%"
     AND (STATE = "running" OR STATE = "queueing");
 `
 
-const checkRunningSQL = `SELECT JOB_ID, JOB_TYPE, SCHEMA_STATE, SCHEMA_ID, TABLE_ID, STATE, QUERY FROM information_schema.ddl_jobs 
+const checkRunningSQL = `SELECT * FROM information_schema.ddl_jobs 
 	WHERE CREATE_TIME >= "%s" AND QUERY = "%s";`
 
 // CheckIfBDRModeIsSupported checks if the downstream supports set tidb_cdc_write_source variable
@@ -396,26 +406,40 @@ func needWaitAsyncExecDone(t timodel.ActionType) bool {
 	}
 }
 
-// ShouldFormatVectorType return true if vector type should be converted to longtext.
-func ShouldFormatVectorType(db *sql.DB, cfg *Config) bool {
+func getTiDBVersion(db *sql.DB) version.ServerInfo {
+	versionInfo, err := export.SelectVersion(db)
+	if err != nil {
+		log.Warn("fail to get version", zap.Error(err))
+		return version.ParseServerInfo("")
+	}
+	return version.ParseServerInfo(versionInfo)
+}
+
+// shouldFormatVectorType return true if vector type should be converted to longtext.
+func shouldFormatVectorType(cfg *Config) bool {
 	if !cfg.HasVectorType {
 		log.Warn("please set `has-vector-type` to be true if a column is vector type when the downstream is not TiDB or TiDB version less than specify version",
 			zap.Any("hasVectorType", cfg.HasVectorType), zap.Any("supportVectorVersion", defaultSupportVectorVersion))
 		return false
 	}
-	versionInfo, err := export.SelectVersion(db)
-	if err != nil {
-		log.Warn("fail to get version", zap.Error(err), zap.Bool("isTiDB", cfg.IsTiDB))
-		return false
-	}
-	serverInfo := version.ParseServerInfo(versionInfo)
 	ver := semver.New(defaultSupportVectorVersion)
-	if !cfg.IsTiDB || serverInfo.ServerVersion.LessThan(*ver) {
+	if !cfg.IsTiDB || cfg.ServerInfo.ServerVersion.LessThan(*ver) {
 		log.Error("downstream unsupport vector type. it will be converted to longtext",
-			zap.String("version", serverInfo.ServerVersion.String()), zap.String("supportVectorVersion", defaultSupportVectorVersion), zap.Bool("isTiDB", cfg.IsTiDB))
+			zap.String("version", cfg.ServerInfo.ServerVersion.String()), zap.String("supportVectorVersion", defaultSupportVectorVersion), zap.Bool("isTiDB", cfg.IsTiDB))
 		return true
 	}
 	return false
+}
+
+// getCheckRunningAddIndexSQL return different sql according to tidb version
+func getCheckRunningAddIndexSQL(cfg *Config) string {
+	ver := semver.New(defaultRunningAddIndexNewSQLVersion)
+	if cfg.ServerInfo.ServerVersion.LessThan(*ver) {
+		log.Info("it will check running AddIndex SQL with old version",
+			zap.String("version", cfg.ServerInfo.ServerVersion.String()))
+		return checkRunningAddIndexSQLForOldVersion
+	}
+	return checkRunningAddIndexSQL
 }
 
 func isRetryableDMLError(err error) bool {
@@ -538,15 +562,15 @@ func AdjustSQLModeCompatible(sqlModes string) (string, error) {
 	disable := strings.Join(needDisable, ",")
 	enable := strings.Join(needEnable, ",")
 
-	mode, err := tmysql.GetSQLMode(sqlModes)
+	mode, err := mysql.GetSQLMode(sqlModes)
 	if err != nil {
 		return sqlModes, err
 	}
-	disableMode, err2 := tmysql.GetSQLMode(disable)
+	disableMode, err2 := mysql.GetSQLMode(disable)
 	if err2 != nil {
 		return sqlModes, err2
 	}
-	enableMode, err3 := tmysql.GetSQLMode(enable)
+	enableMode, err3 := mysql.GetSQLMode(enable)
 	if err3 != nil {
 		return sqlModes, err3
 	}
@@ -558,9 +582,9 @@ func AdjustSQLModeCompatible(sqlModes string) (string, error) {
 }
 
 // GetSQLModeStrBySQLMode get string represent of sql_mode by sql_mode.
-func GetSQLModeStrBySQLMode(sqlMode tmysql.SQLMode) string {
+func GetSQLModeStrBySQLMode(sqlMode mysql.SQLMode) string {
 	var sqlModeStr []string
-	for str, SQLMode := range tmysql.Str2SQLMode {
+	for str, SQLMode := range mysql.Str2SQLMode {
 		if sqlMode&SQLMode != 0 {
 			sqlModeStr = append(sqlModeStr, str)
 		}
