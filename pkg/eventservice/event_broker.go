@@ -1045,6 +1045,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			zap.Uint64("startTs", dispatcherInfo.GetStartTs()))
 		return nil
 	}
+	metrics.EventServiceResetDispatcherCount.Inc()
 
 	oldStat := statPtr.Load()
 	// stale reset request, ignore it.
