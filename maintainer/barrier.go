@@ -39,65 +39,11 @@ import (
 // 7. maintainer clear the event, and schedule block event? todo: what if we schedule first then wait for all dispatchers?
 type Barrier struct {
 	blockedEvents      *BlockedEventMap
+	pendingEvents      *pendingScheduleEventMap
 	spanController     *span.Controller
 	operatorController *operator.Controller
 	splitTableEnabled  bool
 	mode               int64
-}
-
-type BlockedEventMap struct {
-	mutex sync.Mutex
-	m     map[eventKey]*BarrierEvent
-}
-
-func NewBlockEventMap() *BlockedEventMap {
-	return &BlockedEventMap{
-		m: make(map[eventKey]*BarrierEvent),
-	}
-}
-
-func (b *BlockedEventMap) Range(f func(key eventKey, value *BarrierEvent) bool) {
-	b.mutex.Lock()
-	defer b.mutex.Unlock()
-	for k, v := range b.m {
-		if !f(k, v) {
-			break
-		}
-	}
-}
-
-func (b *BlockedEventMap) RangeWoLock(f func(key eventKey, value *BarrierEvent) bool) {
-	for k, v := range b.m {
-		if !f(k, v) {
-			break
-		}
-	}
-}
-
-func (b *BlockedEventMap) Get(key eventKey) (*BarrierEvent, bool) {
-	b.mutex.Lock()
-	defer b.mutex.Unlock()
-	event, ok := b.m[key]
-	return event, ok
-}
-
-func (b *BlockedEventMap) Set(key eventKey, event *BarrierEvent) {
-	b.mutex.Lock()
-	defer b.mutex.Unlock()
-	b.m[key] = event
-}
-
-func (b *BlockedEventMap) Delete(key eventKey) {
-	b.mutex.Lock()
-	defer b.mutex.Unlock()
-	delete(b.m, key)
-}
-
-// eventKey is the key of the block event,
-// the ddl and sync point are identified by the blockTs and isSyncPoint since they can share the same blockTs
-type eventKey struct {
-	blockTs     uint64
-	isSyncPoint bool
 }
 
 // NewBarrier create a new barrier for the changefeed
@@ -109,6 +55,7 @@ func NewBarrier(spanController *span.Controller,
 ) *Barrier {
 	barrier := Barrier{
 		blockedEvents:      NewBlockEventMap(),
+		pendingEvents:      newPendingScheduleEventMap(),
 		spanController:     spanController,
 		operatorController: operatorController,
 		splitTableEnabled:  splitTableEnabled,
@@ -156,7 +103,7 @@ func (b *Barrier) HandleStatus(from node.ID,
 		// deal with block status, and check whether need to return action.
 		// we need to deal with the block status in order, otherwise scheduler may have problem
 		// e.g. TODO（truncate + create table)
-		event, action, targetID := b.handleOneStatus(request.ChangefeedID, status)
+		event, action, targetID, needACK := b.handleOneStatus(request.ChangefeedID, status)
 		if event == nil {
 			// should not happen
 			log.Error("handle block status failed, event is nil",
@@ -165,9 +112,11 @@ func (b *Barrier) HandleStatus(from node.ID,
 				zap.String("detail", status.String()))
 			continue
 		}
-		eventDispatcherIDsMap[event] = append(eventDispatcherIDsMap[event], status.ID)
-		if action != nil && targetID != "" {
-			actions[targetID] = append(actions[targetID], action)
+		if needACK {
+			eventDispatcherIDsMap[event] = append(eventDispatcherIDsMap[event], status.ID)
+			if action != nil && targetID != "" {
+				actions[targetID] = append(actions[targetID], action)
+			}
 		}
 	}
 	for event, dispatchers := range eventDispatcherIDsMap {
@@ -319,7 +268,7 @@ func (b *Barrier) GetMinBlockedCheckpointTsForNewTables(minCheckpointTs uint64) 
 	return minCheckpointTs
 }
 
-func (b *Barrier) handleOneStatus(changefeedID *heartbeatpb.ChangefeedID, status *heartbeatpb.TableSpanBlockStatus) (*BarrierEvent, *heartbeatpb.DispatcherStatus, node.ID) {
+func (b *Barrier) handleOneStatus(changefeedID *heartbeatpb.ChangefeedID, status *heartbeatpb.TableSpanBlockStatus) (*BarrierEvent, *heartbeatpb.DispatcherStatus, node.ID, bool) {
 	cfID := common.NewChangefeedIDFromPB(changefeedID)
 	dispatcherID := common.NewDispatcherIDFromPB(status.ID)
 
@@ -338,7 +287,7 @@ func (b *Barrier) handleOneStatus(changefeedID *heartbeatpb.ChangefeedID, status
 		}
 	}
 	if status.State.Stage == heartbeatpb.BlockStage_DONE {
-		return b.handleEventDone(cfID, dispatcherID, status), nil, ""
+		return b.handleEventDone(cfID, dispatcherID, status), nil, "", true
 	}
 	return b.handleBlockState(cfID, dispatcherID, status)
 }
@@ -363,14 +312,11 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 	// the writer already synced ddl to downstream
 	if event.writerDispatcher == dispatcherID {
 		// the pass action will be sent periodically in resend logic if not acked
-		event.writerDispatcherAdvanced = true
-		// we do scheduler block event when writer dispatcher advanced
-		// we can't do scheduler before writer advanced for the following cases:
-		// 1. truncate table ddl with dml for this table
-		// 2. if truncate table ddl executed after new dispatcher receive dml events and write downstream
-		// 3. then there will loss data for the this new table.
-		event.scheduleBlockEvent()
-		event.lastResendTime = time.Now().Add(-20 * time.Second) // make resend quickly
+		scheduled := b.tryScheduleEvent(event)
+		if !scheduled {
+			// not scheduled yet, just return, wait for next resend
+			return event
+		}
 	}
 
 	// checkpoint ts is advanced, clear the map, so do not need to resend message anymore
@@ -382,7 +328,7 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 	dispatcherID common.DispatcherID,
 	status *heartbeatpb.TableSpanBlockStatus,
-) (*BarrierEvent, *heartbeatpb.DispatcherStatus, node.ID) {
+) (*BarrierEvent, *heartbeatpb.DispatcherStatus, node.ID, bool) {
 	blockState := status.State
 	if blockState.IsBlocked {
 		key := getEventKey(blockState.BlockTs, blockState.IsSyncPoint)
@@ -404,12 +350,15 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 			)
 			// check whether the event can be finished.
 			b.checkEventFinish(event)
-			return event, nil, ""
+			return event, nil, "", true
 		}
 		// the block event, and check whether we need to send write action
 		event.markDispatcherEventDone(dispatcherID)
 		status, targetID := event.checkEventAction(dispatcherID)
-		return event, status, targetID
+		if status != nil {
+			b.pendingEvents.add(event)
+		}
+		return event, status, targetID, true
 	}
 	// it's not a blocked event, it must be sent by table event trigger dispatcher, just for doing scheduler
 	// and the ddl already synced to downstream , e.g.: create table
@@ -419,9 +368,15 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 	// that make scheduleBlockEvent can calculate correctly.
 	key := getEventKey(blockState.BlockTs, blockState.IsSyncPoint)
 	event := b.getOrInsertNewEvent(changefeedID, dispatcherID, key, blockState)
-	event.scheduleBlockEvent()
+	event.writerDispatcher = dispatcherID
+	b.pendingEvents.add(event)
+	scheduled := b.tryScheduleEvent(event)
+	if !scheduled {
+		b.blockedEvents.Delete(getEventKey(event.commitTs, event.isSyncPoint))
+		return event, nil, "", false
+	}
 	b.blockedEvents.Delete(getEventKey(event.commitTs, event.isSyncPoint))
-	return event, nil, ""
+	return event, nil, "", true
 }
 
 // getOrInsertNewEvent get the block event from the map, if not found, create a new one
@@ -449,6 +404,24 @@ func (b *Barrier) checkEventFinish(be *BarrierEvent) {
 		// already selected a dispatcher to write, now all dispatchers reported the block event
 		b.blockedEvents.Delete(getEventKey(be.commitTs, be.isSyncPoint))
 	}
+}
+
+func (b *Barrier) tryScheduleEvent(event *BarrierEvent) bool {
+	ready, blocking := b.pendingEvents.popIfHead(event)
+	if !ready {
+		log.Info("event waits for a smaller commitTs before scheduling",
+			zap.String("changefeed", event.cfID.Name()),
+			zap.String("writerDispatcher", event.writerDispatcher.String()),
+			zap.Uint64("EventCommitTs", event.commitTs),
+			zap.Bool("isSyncPoint", event.isSyncPoint),
+			zap.Uint64("blockingEventCommitTs", blocking.commitTs),
+			zap.Bool("blockingEventIsSyncPoint", blocking.isSyncPoint))
+		return false
+	}
+	event.scheduleBlockEvent()
+	event.writerDispatcherAdvanced = true
+	event.lastResendTime = time.Now().Add(-20 * time.Second)
+	return true
 }
 
 // ackEvent creates an ack event
