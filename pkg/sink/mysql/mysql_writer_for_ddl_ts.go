@@ -97,10 +97,7 @@ func (w *Writer) SendDDLTsPre(event commonEvent.BlockEvent) error {
 		if event.GetType() == commonEvent.TypeDDLEvent {
 			isSyncpoint = "0"
 		}
-		logQuery := func(query string) {
-			log.Debug("send ddl ts table query", zap.String("query", query))
-		}
-		err = w.execInsertItemBatches(tx, tableIds, ticdcClusterID, changefeedID, ddlTs, "0", isSyncpoint, logQuery)
+		err = w.execInsertItemBatches(tx, tableIds, ticdcClusterID, changefeedID, ddlTs, "0", isSyncpoint)
 		if err != nil {
 			log.Error("failed to write ddl ts table", zap.Error(err))
 			err2 := tx.Rollback()
@@ -169,10 +166,7 @@ func (w *Writer) SendDDLTs(event commonEvent.BlockEvent) error {
 		if event.GetType() == commonEvent.TypeDDLEvent {
 			isSyncpoint = "0"
 		}
-		logQuery := func(query string) {
-			log.Info("send ddl ts table query", zap.String("query", query))
-		}
-		err = w.execInsertItemBatches(tx, tableIds, ticdcClusterID, changefeedID, ddlTs, "1", isSyncpoint, logQuery)
+		err = w.execInsertItemBatches(tx, tableIds, ticdcClusterID, changefeedID, ddlTs, "1", isSyncpoint)
 		if err != nil {
 			log.Error("failed to write ddl ts table", zap.Error(err))
 			err2 := tx.Rollback()
@@ -209,7 +203,6 @@ func (w *Writer) execInsertItemBatches(
 	tx *sql.Tx,
 	tableIds []int64,
 	ticdcClusterID, changefeedID, ddlTs, finished, isSyncpoint string,
-	logFunc func(string),
 ) error {
 	if len(tableIds) == 0 {
 		return nil
@@ -221,9 +214,7 @@ func (w *Writer) execInsertItemBatches(
 			end = len(tableIds)
 		}
 		query := buildInsertItemQuery(tableIds[start:end], ticdcClusterID, changefeedID, ddlTs, finished, isSyncpoint)
-		if logFunc != nil {
-			logFunc(query)
-		}
+		log.Debug("send ddl ts table query", zap.String("query", query))
 		if _, err := tx.Exec(query); err != nil {
 			return errors.WithMessage(err, fmt.Sprintf("failed to execute ddl ts insert chunk [%d:%d)", start, end))
 		}
