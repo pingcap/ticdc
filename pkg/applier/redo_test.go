@@ -428,7 +428,7 @@ func TestApplyBigTxn(t *testing.T) {
 					Flag:  newFlag(pmysql.PriKeyFlag),
 				},
 				{
-					Value: fmt.Sprintf("%d", i+1),
+					Value: []byte(fmt.Sprintf("%d", i+1)),
 				},
 			},
 		}
@@ -457,7 +457,7 @@ func TestApplyBigTxn(t *testing.T) {
 					Flag:  newFlag(pmysql.PriKeyFlag),
 				},
 				{
-					Value: fmt.Sprintf("%d", i*10+1),
+					Value: []byte(fmt.Sprintf("%d", i*10+1)),
 				},
 			},
 			PreColumns: []commonEvent.RedoColumnValue{
@@ -466,7 +466,7 @@ func TestApplyBigTxn(t *testing.T) {
 					Flag:  newFlag(pmysql.PriKeyFlag),
 				},
 				{
-					Value: fmt.Sprintf("%d", i+1),
+					Value: []byte(fmt.Sprintf("%d", i+1)),
 				},
 			},
 		}
@@ -491,7 +491,7 @@ func TestApplyBigTxn(t *testing.T) {
 					Flag:  newFlag(pmysql.PriKeyFlag),
 				},
 				{
-					Value: fmt.Sprintf("%d", i*10+1),
+					Value: []byte(fmt.Sprintf("%d", i*10+1)),
 				},
 			},
 		}
@@ -519,7 +519,7 @@ func TestApplyBigTxn(t *testing.T) {
 					Flag:  newFlag(pmysql.PriKeyFlag),
 				},
 				{
-					Value: fmt.Sprintf("%d", i*100+1),
+					Value: []byte(fmt.Sprintf("%d", i*100+1)),
 				},
 			},
 			PreColumns: []commonEvent.RedoColumnValue{
@@ -528,7 +528,7 @@ func TestApplyBigTxn(t *testing.T) {
 					Flag:  newFlag(pmysql.PriKeyFlag),
 				},
 				{
-					Value: fmt.Sprintf("%d", i*10+1),
+					Value: []byte(fmt.Sprintf("%d", i*10+1)),
 				},
 			},
 		}
