@@ -365,6 +365,7 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 		// the pass action will be sent periodically in resend logic if not acked
 		// todo: schedule the block event here?
 		event.writerDispatcherAdvanced = true
+		event.scheduleBlockEvent()
 		event.lastResendTime = time.Now().Add(-20 * time.Second) // make resend quickly
 	}
 

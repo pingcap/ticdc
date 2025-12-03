@@ -195,7 +195,7 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 		zap.String("dispatcher", be.writerDispatcher.String()),
 		zap.Uint64("commitTs", be.commitTs),
 		zap.String("barrierType", be.blockedDispatchers.InfluenceType.String()))
-	be.scheduleBlockEvent()
+	// be.scheduleBlockEvent()
 	stm := be.spanController.GetTaskByID(be.writerDispatcher)
 	return &heartbeatpb.DispatcherStatus{
 		InfluencedDispatchers: &heartbeatpb.InfluencedDispatchers{
