@@ -363,8 +363,12 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 	// the writer already synced ddl to downstream
 	if event.writerDispatcher == dispatcherID {
 		// the pass action will be sent periodically in resend logic if not acked
-		// todo: schedule the block event here?
 		event.writerDispatcherAdvanced = true
+		// we do scheduler block event when writer dispatcher advanced
+		// we can't do scheduler before writer advanced for the following cases:
+		// 1. truncate table ddl with dml for this table
+		// 2. if truncate table ddl executed after new dispatcher receive dml events and write downstream
+		// 3. then there will loss data for the this new table.
 		event.scheduleBlockEvent()
 		event.lastResendTime = time.Now().Add(-20 * time.Second) // make resend quickly
 	}
