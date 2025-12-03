@@ -4609,7 +4609,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Count of running DDL in the last minute",
+          "description": "Count of running DDL in the last minute.",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
