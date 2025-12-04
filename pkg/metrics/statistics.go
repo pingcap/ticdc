@@ -83,7 +83,7 @@ func (b *Statistics) RecordBatchExecution(executor func() (int, int64, error)) e
 // RecordDDLExecution record the time cost of execute ddl
 func (b *Statistics) RecordDDLExecution(executor func() error) error {
 	b.metricExecDDLRunningCnt.Inc()
-	defer b.metricExecDDLRunningCnt.Dec()
+	defer b.metricExecDDLRunningCnt.Add(-1)
 
 	start := time.Now()
 	if err := executor(); err != nil {
