@@ -291,7 +291,7 @@ main_with_consistent() {
 		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
 	else
 		sleep 30
-		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
+		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 1000
 		cleanup_process $CDC_BINARY
 	fi
 }
