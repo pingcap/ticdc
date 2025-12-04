@@ -43,13 +43,15 @@ func newPendingScheduleEventMap() *pendingScheduleEventMap {
 }
 
 type dispatcherPendingQueue struct {
-	heap pendingEventHeap
-	set  map[*BarrierEvent]struct{}
+	heap   pendingEventHeap
+	set    map[*BarrierEvent]struct{}
+	keySet map[eventKey]struct{}
 }
 
 func newDispatcherPendingQueue() *dispatcherPendingQueue {
 	return &dispatcherPendingQueue{
-		set: make(map[*BarrierEvent]struct{}),
+		set:    make(map[*BarrierEvent]struct{}),
+		keySet: make(map[eventKey]struct{}),
 	}
 }
 
@@ -65,11 +67,16 @@ func (q *dispatcherPendingQueue) head() *BarrierEvent {
 }
 
 func (q *dispatcherPendingQueue) add(event *BarrierEvent) {
+	key := barrierEventKey(event)
+	if _, ok := q.keySet[key]; ok {
+		return
+	}
 	if _, ok := q.set[event]; ok {
 		return
 	}
 	heap.Push(&q.heap, event)
 	q.set[event] = struct{}{}
+	q.keySet[key] = struct{}{}
 }
 
 func (q *dispatcherPendingQueue) popIfHead(event *BarrierEvent) (bool, *BarrierEvent) {
@@ -81,7 +88,9 @@ func (q *dispatcherPendingQueue) popIfHead(event *BarrierEvent) (bool, *BarrierE
 		return false, head
 	}
 	heap.Pop(&q.heap)
+	key := barrierEventKey(event)
 	delete(q.set, event)
+	delete(q.keySet, key)
 	return true, nil
 }
 
@@ -148,6 +157,13 @@ func compareBarrierEvent(a, b *BarrierEvent) int {
 		return -1
 	}
 	return 1
+}
+
+func barrierEventKey(event *BarrierEvent) eventKey {
+	return eventKey{
+		blockTs:     event.commitTs,
+		isSyncPoint: event.isSyncPoint,
+	}
 }
 
 func (b *BlockedEventMap) Range(f func(key eventKey, value *BarrierEvent) bool) {
