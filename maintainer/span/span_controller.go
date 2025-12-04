@@ -488,38 +488,76 @@ func (c *Controller) RemoveAll() []*replica.SpanReplication {
 	return tasks
 }
 
-// RemoveByTableIDs removes the tasks by the table ids and return the scheduled tasks.
-// When the split dispatcher operator is running, a TRUNCATE TABLE DDL can potentially drop the dispatcher.
-// This leads to the completion of the split dispatcher operator and the subsequent removal of the span.
-// However, the operator callback may erroneously mark the span as absent. To avoid this situation,
-// we should first remove the replicaSet and then remove the span to ensure it doesn't remain active.
-func (c *Controller) RemoveByTableIDs(fn func(task *replica.SpanReplication), tableIDs ...int64) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
+func (c *Controller) GetRemoveTasksByTableIDs(tableIDs ...int64) []*replica.SpanReplication {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	taskList := []*replica.SpanReplication{}
 	for _, tblID := range tableIDs {
 		for _, task := range c.tableTasks[tblID] {
 			if task.IsScheduled() {
-				fn(task)
+				taskList = append(taskList, task)
 			}
-			c.removeSpanWithoutLock(task)
 		}
 	}
+	return taskList
 }
 
-// RemoveBySchemaID removes the tasks by the schema id and return the scheduled tasks
-// The order of removing the span and the replicaSet should align with the RemoveByTableIDs function.
-func (c *Controller) RemoveBySchemaID(fn func(replicaSet *replica.SpanReplication), schemaID int64) {
+func (c *Controller) GetRemoveTasksBySchemaID(schemaID int64) []*replica.SpanReplication {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	taskList := []*replica.SpanReplication{}
 	for _, task := range c.schemaTasks[schemaID] {
 		if task.IsScheduled() {
-			fn(task)
+			taskList = append(taskList, task)
 		}
+	}
+	return taskList
+}
+
+func (c *Controller) RemoveTasks(tasks []*replica.SpanReplication) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, task := range tasks {
 		c.removeSpanWithoutLock(task)
 	}
 }
+
+// // RemoveByTableIDs removes the tasks by the table ids and return the scheduled tasks.
+// // When the split dispatcher operator is running, a TRUNCATE TABLE DDL can potentially drop the dispatcher.
+// // This leads to the completion of the split dispatcher operator and the subsequent removal of the span.
+// // However, the operator callback may erroneously mark the span as absent. To avoid this situation,
+// // we should first remove the replicaSet and then remove the span to ensure it doesn't remain active.
+// func (c *Controller) RemoveByTableIDs(fn func(task *replica.SpanReplication), tableIDs ...int64) {
+// 	c.mu.Lock()
+
+// 	c.mu.Unlock()
+
+// 	//
+// 	for _, task := range taskList {
+// 		fn(task)
+// 	}
+
+// 	c.mu.Lock()
+// 	for _, task := range taskList {
+// 		c.removeSpanWithoutLock(task)
+// 	}
+// 	c.mu.Unlock()
+// }
+
+// // RemoveBySchemaID removes the tasks by the schema id and return the scheduled tasks
+// // The order of removing the span and the replicaSet should align with the RemoveByTableIDs function.
+// func (c *Controller) RemoveBySchemaID(fn func(replicaSet *replica.SpanReplication), schemaID int64) {
+// 	c.mu.Lock()
+// 	defer c.mu.Unlock()
+
+// 	for _, task := range c.schemaTasks[schemaID] {
+// 		if task.IsScheduled() {
+// 			fn(task)
+// 		}
+// 		c.removeSpanWithoutLock(task)
+// 	}
+// }
 
 // removeSpanWithoutLock removes the spans from the db without lock
 func (c *Controller) removeSpanWithoutLock(spans ...*replica.SpanReplication) {
