@@ -136,6 +136,27 @@ def create_changefeed(sink_uri):
     resp = rq.post(url, data=data, headers=headers)
     assert "ErrDispatcherFailed" in resp.text, f"{resp.text}"
 
+    # create changefeed fail because glue schema config is invalid
+    url = BASE_URL1_V2+"/changefeeds?keyspace=keyspace1"
+    data = json.dumps({
+        "changefeed_id": "changefeed-test-v2",
+        "sink_uri": "kafka://127.0.0.1:9092/http_api?protocol=avro",
+        "replica_config": {
+            "sink": {
+                "kafka_config": {
+                    "glue_schema_registry_config": {
+                        "region": "us-west-1",
+                        "registry_name": "ticdc-test"
+                    }
+                }
+            }
+        }
+    })
+    headers = {"Content-Type": "application/json"}
+    resp = rq.post(url, data=data, headers=headers)
+    assert "CDC:ErrKafkaNewProducer" in resp.text, f"{resp.text}"
+    assert "not found, ResolveEndpointV2" not in resp.text, f"{resp.text}"
+
     print("pass test: create changefeed")
 
 
@@ -332,14 +353,16 @@ def move_table(cfID="changefeed-test1"):
 
     # move table
     url = BASE_URL0_V2 + "/changefeeds/" + cfID + \
-        "/move_table?targetNodeID=" + capture_id + "&tableID=" + str(table_id) + "&keyspace=keyspace1"
+        "/move_table?targetNodeID=" + capture_id + \
+        "&tableID=" + str(table_id) + "&keyspace=keyspace1"
     resp = rq.post(url)
     assert_status_code(resp, rq.codes.ok, url)
     logging.info(f"Move table success")
     # move table fail
     # The target node is not found
     url = BASE_URL0_V2 + "/changefeeds/" + cfID + \
-        "/move_table?targetNodeID=&tableID=" + str(table_id) + "&keyspace=keyspace1"
+        "/move_table?targetNodeID=&tableID=" + \
+        str(table_id) + "&keyspace=keyspace1"
     resp = rq.post(url)
     assert_status_code(resp, rq.codes.internal_server_error, url)
 

@@ -137,6 +137,14 @@ var (
 		Help:      "The number of transactions scanned from eventStore",
 		Buckets:   prometheus.ExponentialBuckets(1, 2.0, 8), // 1 ~ 256
 	})
+
+	EventServiceResetDispatcherCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "reset_dispatcher_count",
+			Help:      "The number of event dispatcher reset operations performed",
+		})
 )
 
 // initEventServiceMetrics registers all metrics in this file.
@@ -157,4 +165,5 @@ func initEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceAvailableMemoryQuotaGaugeVec)
 	registry.MustRegister(EventServiceScannedDMLSize)
 	registry.MustRegister(EventServiceScannedTxnCount)
+	registry.MustRegister(EventServiceResetDispatcherCount)
 }

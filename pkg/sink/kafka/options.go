@@ -578,7 +578,7 @@ func adjustOptions(
 	options *options,
 	topic string,
 ) error {
-	topics, err := admin.GetTopicsMeta(ctx, []string{topic}, true)
+	topics, err := admin.GetTopicsMeta([]string{topic}, true)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -594,7 +594,7 @@ func adjustOptions(
 	}
 
 	// adjust keepConnAliveInterval by `connections.max.idle.ms` broker config.
-	idleMs, err := admin.GetBrokerConfig(ctx, BrokerConnectionsMaxIdleMsConfigName)
+	idleMs, err := admin.GetBrokerConfig(BrokerConnectionsMaxIdleMsConfigName)
 	if err != nil {
 		log.Warn("GetBrokerConfig failed for connections.max.idle.ms", zap.Error(err))
 	} else {
@@ -654,10 +654,7 @@ func adjustOptions(
 		return nil
 	}
 
-	brokerMessageMaxBytesStr, err := admin.GetBrokerConfig(
-		ctx,
-		BrokerMessageMaxBytesConfigName,
-	)
+	brokerMessageMaxBytesStr, err := admin.GetBrokerConfig(BrokerMessageMaxBytesConfigName)
 	if err != nil {
 		log.Warn("TiCDC cannot find `message.max.bytes` from broker's configuration")
 		return errors.Trace(err)
@@ -714,8 +711,7 @@ func validateMinInsyncReplicas(
 			return minInsyncReplicasStr, true, nil
 		}
 
-		minInsyncReplicasStr, err := admin.GetBrokerConfig(ctx,
-			MinInsyncReplicasConfigName)
+		minInsyncReplicasStr, err := admin.GetBrokerConfig(MinInsyncReplicasConfigName)
 		if err != nil {
 			return "", false, err
 		}
@@ -773,11 +769,11 @@ func getTopicConfig(
 	topicConfigName string,
 	brokerConfigName string,
 ) (string, error) {
-	if c, err := admin.GetTopicConfig(ctx, topicName, topicConfigName); err == nil {
+	if c, err := admin.GetTopicConfig(topicName, topicConfigName); err == nil {
 		return c, nil
 	}
 
 	log.Info("kafka sink cannot find the configuration from topic, try to get it from broker",
 		zap.String("topic", topicName), zap.String("config", topicConfigName))
-	return admin.GetBrokerConfig(ctx, brokerConfigName)
+	return admin.GetBrokerConfig(brokerConfigName)
 }

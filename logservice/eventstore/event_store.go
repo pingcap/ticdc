@@ -46,8 +46,8 @@ import (
 )
 
 var (
-	CounterKv           = metrics.EventStoreReceivedEventCount.WithLabelValues("kv")
-	CounterResolved     = metrics.EventStoreReceivedEventCount.WithLabelValues("resolved")
+	kvEventCount        = metrics.EventStoreReceivedEventCount.WithLabelValues("kv")
+	resolvedEventCount  = metrics.EventStoreReceivedEventCount.WithLabelValues("resolved")
 	scannedBytesMetrics = metrics.EventStoreScanBytes.WithLabelValues("scanned")
 	skippedBytesMetrics = metrics.EventStoreScanBytes.WithLabelValues("skipped")
 )
@@ -612,7 +612,8 @@ func (e *eventStore) RegisterDispatcher(
 					subscriber.notifyFunc(ts, subStat.maxEventCommitTs.Load())
 				}
 			}
-			CounterResolved.Inc()
+			resolvedEventCount.Inc()
+			metrics.EventStoreNotifyDispatcherCount.Add(float64(len(subscribersData.subscribers)))
 			metrics.EventStoreNotifyDispatcherDurationHist.Observe(float64(time.Since(start).Seconds()))
 		}
 	}
@@ -1147,7 +1148,7 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback, enco
 			}
 		}
 	}
-	CounterKv.Add(float64(kvCount))
+	kvEventCount.Add(float64(kvCount))
 	metrics.EventStoreWriteBatchEventsCountHist.Observe(float64(kvCount))
 	metrics.EventStoreWriteBatchSizeHist.Observe(float64(batch.Len()))
 	metrics.EventStoreWriteBytes.Add(float64(batch.Len()))

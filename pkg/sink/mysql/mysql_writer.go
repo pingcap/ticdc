@@ -38,6 +38,8 @@ const (
 
 	defaultSupportVectorVersion = "8.4.0"
 
+	defaultRunningAddIndexNewSQLVersion = "8.5.0"
+
 	defaultErrorCausedSafeModeDuration = 5 * time.Second
 )
 
@@ -108,10 +110,10 @@ func (w *Writer) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaSt
 }
 
 func (w *Writer) FlushDDLEvent(event *commonEvent.DDLEvent) error {
-	// if w.cfg.IsTiDB {
-	// 	// first we check whether there is some async ddl executed now.
-	// 	w.waitAsyncDDLDone(event)
-	// }
+	if w.cfg.IsTiDB {
+		// first we check whether there is some async ddl executed now.
+		w.waitAsyncDDLDone(event)
+	}
 	if w.cfg.IsTiDB || !event.TiDBOnly {
 		// we write ddl ts before ddl first, and update the ddl ts item after ddl executed,
 		// to ensure the atomic with ddl writing when server is restarted.

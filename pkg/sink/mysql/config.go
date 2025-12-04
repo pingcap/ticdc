@@ -32,6 +32,7 @@ import (
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/tidb/br/pkg/version"
 	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
 	"go.uber.org/zap"
 )
@@ -138,6 +139,9 @@ type Config struct {
 	DryRunBlockInterval time.Duration
 	// SlowQuery is the threshold time above which the query will be logged.
 	SlowQuery time.Duration
+
+	// ServerInfo is the version info of the downstream
+	ServerInfo version.ServerInfo
 }
 
 // New returns the default mysql backend config.
@@ -294,7 +298,8 @@ func NewMysqlConfigAndDB(
 		return nil, nil, err
 	}
 
-	cfg.HasVectorType = ShouldFormatVectorType(db, cfg)
+	cfg.ServerInfo = getTiDBVersion(db)
+	cfg.HasVectorType = shouldFormatVectorType(cfg)
 
 	// By default, cache-prep-stmts=true, an LRU cache is used for prepared statements,
 	// two connections are required to process a transaction.
