@@ -14,7 +14,6 @@
 package maintainer
 
 import (
-	"sync"
 	"time"
 
 	"github.com/pingcap/log"
@@ -63,15 +62,6 @@ func NewBarrier(spanController *span.Controller,
 	}
 	barrier.handleBootstrapResponse(bootstrapRespMap)
 	return &barrier
-}
-
-func (b *Barrier) GetLock() *sync.Mutex {
-	b.blockedEvents.mutex.Lock()
-	return &b.blockedEvents.mutex
-}
-
-func (b *Barrier) ReleaseLock(mutex *sync.Mutex) {
-	mutex.Unlock()
 }
 
 // HandleStatus handle the block status from dispatcher manager
@@ -310,12 +300,17 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 	// there is a block event and the dispatcher write or pass action already
 	// which means we have sent pass or write action to it
 	// the writer already synced ddl to downstream
-	if event.writerDispatcher == dispatcherID && event.needSchedule {
-		// the pass action will be sent periodically in resend logic if not acked
-		scheduled := b.tryScheduleEvent(event)
-		if !scheduled {
-			// not scheduled yet, just return, wait for next resend
-			return event
+	if event.writerDispatcher == dispatcherID {
+		if event.needSchedule {
+			// the pass action will be sent periodically in resend logic if not acked
+			scheduled := b.tryScheduleEvent(event)
+			if !scheduled {
+				// not scheduled yet, just return, wait for next resend
+				return event
+			}
+		} else {
+			event.writerDispatcherAdvanced = true
+			event.lastResendTime = time.Now().Add(-20 * time.Second)
 		}
 	}
 
