@@ -310,7 +310,7 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 	// there is a block event and the dispatcher write or pass action already
 	// which means we have sent pass or write action to it
 	// the writer already synced ddl to downstream
-	if event.writerDispatcher == dispatcherID {
+	if event.writerDispatcher == dispatcherID && event.needSchedule {
 		// the pass action will be sent periodically in resend logic if not acked
 		scheduled := b.tryScheduleEvent(event)
 		if !scheduled {
@@ -355,7 +355,7 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 		// the block event, and check whether we need to send write action
 		event.markDispatcherEventDone(dispatcherID)
 		status, targetID := event.checkEventAction(dispatcherID)
-		if status != nil {
+		if status != nil && event.needSchedule {
 			b.pendingEvents.add(event)
 		}
 		return event, status, targetID, true
@@ -369,6 +369,10 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 	key := getEventKey(blockState.BlockTs, blockState.IsSyncPoint)
 	event := b.getOrInsertNewEvent(changefeedID, dispatcherID, key, blockState)
 	event.writerDispatcher = dispatcherID
+	if !event.needSchedule {
+		b.blockedEvents.Delete(getEventKey(event.commitTs, event.isSyncPoint))
+		return event, nil, "", true
+	}
 	b.pendingEvents.add(event)
 	scheduled := b.tryScheduleEvent(event)
 	if !scheduled {
@@ -407,20 +411,32 @@ func (b *Barrier) checkEventFinish(be *BarrierEvent) {
 }
 
 func (b *Barrier) tryScheduleEvent(event *BarrierEvent) bool {
+	if !event.needSchedule {
+		return true
+	}
 	log.Info("event trySchedule",
 		zap.String("changefeed", event.cfID.Name()),
 		zap.String("writerDispatcher", event.writerDispatcher.String()),
 		zap.Uint64("EventCommitTs", event.commitTs))
-	ready, blocking := b.pendingEvents.popIfHead(event)
+	ready, candidate := b.pendingEvents.popIfHead(event)
 	if !ready {
+		blockCommitTs := uint64(0)
+		blockSyncPoint := false
+		if candidate != nil {
+			blockCommitTs = candidate.commitTs
+			blockSyncPoint = candidate.isSyncPoint
+		}
 		log.Info("event waits for a smaller commitTs before scheduling",
 			zap.String("changefeed", event.cfID.Name()),
 			zap.String("writerDispatcher", event.writerDispatcher.String()),
 			zap.Uint64("EventCommitTs", event.commitTs),
 			zap.Bool("isSyncPoint", event.isSyncPoint),
-			zap.Uint64("blockingEventCommitTs", blocking.commitTs),
-			zap.Bool("blockingEventIsSyncPoint", blocking.isSyncPoint))
+			zap.Uint64("blockingEventCommitTs", blockCommitTs),
+			zap.Bool("blockingEventIsSyncPoint", blockSyncPoint))
 		return false
+	}
+	if candidate != nil {
+		event = candidate
 	}
 	event.scheduleBlockEvent()
 	event.writerDispatcherAdvanced = true

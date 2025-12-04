@@ -16,8 +16,6 @@ package maintainer
 import (
 	"container/heap"
 	"sync"
-
-	"github.com/pingcap/ticdc/pkg/common"
 )
 
 type BlockedEventMap struct {
@@ -32,14 +30,12 @@ func NewBlockEventMap() *BlockedEventMap {
 }
 
 type pendingScheduleEventMap struct {
-	mutex  sync.Mutex
-	queues map[common.DispatcherID]*dispatcherPendingQueue
+	mutex sync.Mutex
+	queue *dispatcherPendingQueue
 }
 
 func newPendingScheduleEventMap() *pendingScheduleEventMap {
-	return &pendingScheduleEventMap{
-		queues: make(map[common.DispatcherID]*dispatcherPendingQueue),
-	}
+	return &pendingScheduleEventMap{}
 }
 
 type dispatcherPendingQueue struct {
@@ -85,38 +81,39 @@ func (q *dispatcherPendingQueue) popIfHead(event *BarrierEvent) (bool, *BarrierE
 		return false, nil
 	}
 	if head != event {
-		return false, head
+		headKey := barrierEventKey(head)
+		eventKey := barrierEventKey(event)
+		if headKey != eventKey {
+			return false, head
+		}
 	}
 	heap.Pop(&q.heap)
-	key := barrierEventKey(event)
-	delete(q.set, event)
+	key := barrierEventKey(head)
+	delete(q.set, head)
 	delete(q.keySet, key)
-	return true, nil
+	return true, head
 }
 
 func (m *pendingScheduleEventMap) add(event *BarrierEvent) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
-	queue := m.queues[event.writerDispatcher]
-	if queue == nil {
-		queue = newDispatcherPendingQueue()
-		m.queues[event.writerDispatcher] = queue
+	if m.queue == nil {
+		m.queue = newDispatcherPendingQueue()
 	}
-	queue.add(event)
+	m.queue.add(event)
 }
 
 func (m *pendingScheduleEventMap) popIfHead(event *BarrierEvent) (bool, *BarrierEvent) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
-	queue, ok := m.queues[event.writerDispatcher]
-	if !ok || queue.empty() {
+	if m.queue == nil || m.queue.empty() {
 		return false, nil
 	}
-	ready, blocking := queue.popIfHead(event)
-	if queue.empty() {
-		delete(m.queues, event.writerDispatcher)
+	ready, candidate := m.queue.popIfHead(event)
+	if m.queue.empty() {
+		m.queue = nil
 	}
-	return ready, blocking
+	return ready, candidate
 }
 
 type pendingEventHeap []*BarrierEvent
