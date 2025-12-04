@@ -1646,6 +1646,7 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 		TableName:  rawEvent.TableName,
 
 		Query:      rawEvent.Query,
+		StartTs:    rawEvent.StartTs,
 		TableInfo:  wrapTableInfo,
 		FinishedTs: rawEvent.FinishedTs,
 		TiDBOnly:   tiDBOnly,

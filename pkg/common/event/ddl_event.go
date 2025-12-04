@@ -46,6 +46,7 @@ type DDLEvent struct {
 	ExtraSchemaName string            `json:"extra_schema_name"`
 	ExtraTableName  string            `json:"extra_table_name"`
 	Query           string            `json:"query"`
+	StartTs         uint64            `json:"start_ts"`
 	TableInfo       *common.TableInfo `json:"-"`
 	FinishedTs      uint64            `json:"finished_ts"`
 	// The seq of the event. It is set by event service.
@@ -107,8 +108,8 @@ type DDLEvent struct {
 }
 
 func (d *DDLEvent) String() string {
-	return fmt.Sprintf("DDLEvent{Version: %d, DispatcherID: %s, Type: %d, SchemaID: %d, SchemaName: %s, TableName: %s, ExtraSchemaName: %s, ExtraTableName: %s, Query: %s, TableInfo: %v, FinishedTs: %d, Seq: %d, BlockedTables: %v, NeedDroppedTables: %v, NeedAddedTables: %v, UpdatedSchemas: %v, TableNameChange: %v, TiDBOnly: %t, BDRMode: %s, Err: %s, eventSize: %d}",
-		d.Version, d.DispatcherID.String(), d.Type, d.SchemaID, d.SchemaName, d.TableName, d.ExtraSchemaName, d.ExtraTableName, d.Query, d.TableInfo, d.FinishedTs, d.Seq, d.BlockedTables, d.NeedDroppedTables, d.NeedAddedTables, d.UpdatedSchemas, d.TableNameChange, d.TiDBOnly, d.BDRMode, d.Err, d.eventSize)
+	return fmt.Sprintf("DDLEvent{Version: %d, DispatcherID: %s, Type: %d, SchemaID: %d, SchemaName: %s, TableName: %s, ExtraSchemaName: %s, ExtraTableName: %s, Query: %s, TableInfo: %v, StartTs: %d, FinishedTs: %d, Seq: %d, BlockedTables: %v, NeedDroppedTables: %v, NeedAddedTables: %v, UpdatedSchemas: %v, TableNameChange: %v, TiDBOnly: %t, BDRMode: %s, Err: %s, eventSize: %d}",
+		d.Version, d.DispatcherID.String(), d.Type, d.SchemaID, d.SchemaName, d.TableName, d.ExtraSchemaName, d.ExtraTableName, d.Query, d.TableInfo, d.StartTs, d.FinishedTs, d.Seq, d.BlockedTables, d.NeedDroppedTables, d.NeedAddedTables, d.UpdatedSchemas, d.TableNameChange, d.TiDBOnly, d.BDRMode, d.Err, d.eventSize)
 }
 
 func (d *DDLEvent) GetType() int {
@@ -120,7 +121,7 @@ func (d *DDLEvent) GetDispatcherID() common.DispatcherID {
 }
 
 func (d *DDLEvent) GetStartTs() common.Ts {
-	return 0
+	return d.StartTs
 }
 
 func (d *DDLEvent) GetError() error {
@@ -154,6 +155,13 @@ func (d *DDLEvent) GetExtraSchemaName() string {
 
 func (d *DDLEvent) GetExtraTableName() string {
 	return d.ExtraTableName
+}
+
+func (e *DDLEvent) GetDDLSchemaName() string {
+	if e == nil {
+		return ""
+	}
+	return e.SchemaName
 }
 
 // GetTableID returns the logic table ID of the event.
