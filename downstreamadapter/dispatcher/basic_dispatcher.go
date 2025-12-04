@@ -191,6 +191,12 @@ type BasicDispatcher struct {
 	mode int64
 
 	BootstrapState bootstrapState
+
+	// activeActiveChecked indicates whether we have already validated that
+	// the table matches the current active-active configuration. The first
+	// DML/DDL must trigger this validation, afterwards only DDL events need
+	// to keep checking.
+	activeActiveChecked bool
 }
 
 func NewBasicDispatcher(
@@ -344,14 +350,41 @@ func (d *BasicDispatcher) ensureActiveActiveTableInfo(tableInfo *common.TableInf
 }
 
 func (d *BasicDispatcher) handleActiveActiveCheck(event commonEvent.Event) error {
-	if !d.sharedInfo.enableActiveActive {
-		return nil
-	}
 	switch ev := event.(type) {
 	case *commonEvent.DMLEvent:
-		return d.ensureActiveActiveTableInfo(ev.TableInfo)
+		return d.ensureTableModeCompatibility(ev.TableInfo)
 	case *commonEvent.DDLEvent:
-		return d.ensureActiveActiveTableInfo(ev.TableInfo)
+		return d.ensureTableModeCompatibility(ev.TableInfo)
+	}
+	return nil
+}
+
+func (d *BasicDispatcher) ensureTableModeCompatibility(tableInfo *common.TableInfo) error {
+	if tableInfo == nil {
+		if d.sharedInfo.enableActiveActive {
+			return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+				"table info is nil for dispatcher %s in active-active mode", d.id.String())
+		}
+		return nil
+	}
+
+	if d.sharedInfo.enableActiveActive {
+		return d.ensureActiveActiveTableInfo(tableInfo)
+	}
+
+	if d.sink.SinkType() != common.MysqlSinkType {
+		return nil
+	}
+
+	if tableInfo.IsActiveActiveTable() {
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			"table %s.%s(id=%d) is active-active but enable-active-active is false",
+			tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID)
+	}
+	if tableInfo.IsSoftDeleteTable() {
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			"table %s.%s(id=%d) is soft delete but enable-active-active is false",
+			tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID)
 	}
 	return nil
 }
@@ -500,16 +533,19 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 		firstEvent := d.isFirstEvent(event)
 		if firstEvent {
 			d.updateDispatcherStatusToWorking()
-			if err := d.handleActiveActiveCheck(event); err != nil {
-				d.HandleError(err)
-				return block
-			}
 		}
 
 		switch event.GetType() {
 		case commonEvent.TypeResolvedEvent:
 			latestResolvedTs = event.(commonEvent.ResolvedEvent).ResolvedTs
 		case commonEvent.TypeDMLEvent:
+			if !d.activeActiveChecked {
+				if err := d.handleActiveActiveCheck(event); err != nil {
+					d.HandleError(err)
+					return block
+				}
+				d.activeActiveChecked = true
+			}
 			dml := event.(*commonEvent.DMLEvent)
 			if dml.Len() == 0 {
 				continue
@@ -547,6 +583,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				d.HandleError(err)
 				return block
 			}
+			d.activeActiveChecked = true
 
 			failpoint.Inject("BlockOrWaitBeforeDealWithDDL", nil)
 			block = true
