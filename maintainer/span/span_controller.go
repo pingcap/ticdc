@@ -515,49 +515,32 @@ func (c *Controller) GetRemoveTasksBySchemaID(schemaID int64) []*replica.SpanRep
 	return taskList
 }
 
-func (c *Controller) RemoveTasks(tasks []*replica.SpanReplication) {
+// // RemoveByTableIDs removes the tasks by the table ids and return the scheduled tasks.
+// When the split dispatcher operator is running, a TRUNCATE TABLE DDL can potentially drop the dispatcher.
+// This leads to the completion of the split dispatcher operator and the subsequent removal of the span.
+// However, the operator callback may erroneously mark the span as absent. To avoid this situation,
+// we should first remove the replicaSet and then remove the span to ensure it doesn't remain active.
+func (c *Controller) RemoveByTableIDs(tableIDs ...int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for _, task := range tasks {
-		c.removeSpanWithoutLock(task)
+
+	for _, tblID := range tableIDs {
+		for _, task := range c.tableTasks[tblID] {
+			c.removeSpanWithoutLock(task)
+		}
 	}
 }
 
-// // RemoveByTableIDs removes the tasks by the table ids and return the scheduled tasks.
-// // When the split dispatcher operator is running, a TRUNCATE TABLE DDL can potentially drop the dispatcher.
-// // This leads to the completion of the split dispatcher operator and the subsequent removal of the span.
-// // However, the operator callback may erroneously mark the span as absent. To avoid this situation,
-// // we should first remove the replicaSet and then remove the span to ensure it doesn't remain active.
-// func (c *Controller) RemoveByTableIDs(fn func(task *replica.SpanReplication), tableIDs ...int64) {
-// 	c.mu.Lock()
+// RemoveBySchemaID removes the tasks by the schema id and return the scheduled tasks
+// The order of removing the span and the replicaSet should align with the RemoveByTableIDs function.
+func (c *Controller) RemoveBySchemaID(schemaID int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-// 	c.mu.Unlock()
-
-// 	//
-// 	for _, task := range taskList {
-// 		fn(task)
-// 	}
-
-// 	c.mu.Lock()
-// 	for _, task := range taskList {
-// 		c.removeSpanWithoutLock(task)
-// 	}
-// 	c.mu.Unlock()
-// }
-
-// // RemoveBySchemaID removes the tasks by the schema id and return the scheduled tasks
-// // The order of removing the span and the replicaSet should align with the RemoveByTableIDs function.
-// func (c *Controller) RemoveBySchemaID(fn func(replicaSet *replica.SpanReplication), schemaID int64) {
-// 	c.mu.Lock()
-// 	defer c.mu.Unlock()
-
-// 	for _, task := range c.schemaTasks[schemaID] {
-// 		if task.IsScheduled() {
-// 			fn(task)
-// 		}
-// 		c.removeSpanWithoutLock(task)
-// 	}
-// }
+	for _, task := range c.schemaTasks[schemaID] {
+		c.removeSpanWithoutLock(task)
+	}
+}
 
 // removeSpanWithoutLock removes the spans from the db without lock
 func (c *Controller) removeSpanWithoutLock(spans ...*replica.SpanReplication) {

@@ -119,7 +119,7 @@ func (oc *Controller) RemoveTasksBySchemaID(schemaID int64) {
 	for _, task := range tasks {
 		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.spanController, task))
 	}
-	oc.spanController.RemoveTasks(tasks)
+	oc.spanController.RemoveBySchemaID(schemaID)
 }
 
 // RemoveTasksByTableIDs remove all tasks by table ids.
@@ -134,7 +134,7 @@ func (oc *Controller) RemoveTasksByTableIDs(tables ...int64) {
 	for _, task := range tasks {
 		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.spanController, task))
 	}
-	oc.spanController.RemoveTasks(tasks)
+	oc.spanController.RemoveByTableIDs(tables...)
 }
 
 // AddOperator adds an operator to the controller, if the operator already exists, return false.
