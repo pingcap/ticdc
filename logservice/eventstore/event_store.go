@@ -88,6 +88,8 @@ type EventStore interface {
 	GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) EventIterator
 
 	GetLogCoordinatorNodeID() node.ID
+
+	DoManualCompaction() error
 }
 
 type DMLEventState struct {
@@ -718,6 +720,11 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 		if lastReceiveDMLTime > 0 {
 			oldCheckpointPhysicalTime := oracle.GetTimeFromTS(oldCheckpointTs)
 			if lastReceiveDMLTime >= oldCheckpointPhysicalTime.UnixMilli() {
+				log.Info("add gc item for subscription",
+					zap.Uint64("subscriptionID", uint64(subStat.subID)),
+					zap.String("span", common.FormatTableSpan(subStat.tableSpan)),
+					zap.Uint64("oldCheckpointTs", oldCheckpointTs),
+					zap.Uint64("newCheckpointTs", newCheckpointTs))
 				e.gcManager.addGCItem(
 					subStat.dbIndex,
 					uint64(subStat.subID),
@@ -726,6 +733,12 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 					newCheckpointTs,
 				)
 			}
+		} else {
+			log.Info("skip add gc item for subscription because it has not received any dml event",
+				zap.Uint64("subscriptionID", uint64(subStat.subID)),
+				zap.String("span", common.FormatTableSpan(subStat.tableSpan)),
+				zap.Uint64("oldCheckpointTs", oldCheckpointTs),
+				zap.Uint64("newCheckpointTs", newCheckpointTs))
 		}
 		e.subscriptionChangeCh.In() <- SubscriptionChange{
 			ChangeType:   SubscriptionChangeTypeUpdate,
@@ -735,13 +748,11 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 			ResolvedTs:   subStat.resolvedTs.Load(),
 		}
 		subStat.checkpointTs.Store(newCheckpointTs)
-		if log.GetLevel() <= zap.DebugLevel {
-			log.Debug("update checkpoint ts",
-				zap.Any("dispatcherID", dispatcherID),
-				zap.Uint64("subscriptionID", uint64(subStat.subID)),
-				zap.Uint64("newCheckpointTs", newCheckpointTs),
-				zap.Uint64("oldCheckpointTs", oldCheckpointTs))
-		}
+		log.Info("update checkpoint ts",
+			zap.Any("dispatcherID", dispatcherID),
+			zap.Uint64("subscriptionID", uint64(subStat.subID)),
+			zap.Uint64("newCheckpointTs", newCheckpointTs),
+			zap.Uint64("oldCheckpointTs", oldCheckpointTs))
 	}
 	updateSubStatCheckpoint(dispatcherStat.subStat)
 	updateSubStatCheckpoint(dispatcherStat.pendingSubStat)
@@ -886,6 +897,27 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		decoder:       decoder,
 		decoderPool:   e.decoderPool,
 	}
+}
+
+func (e *eventStore) DoManualCompaction() error {
+	// To compact the entire database, we need to specify a key range that covers
+	// all possible keys. The event store key format is:
+	// uniqueID (8) | tableID (8) | CRTs (8) | startTs (8) | ...
+	// All are encoded in big-endian format.
+	// A minKey with all zeros and a maxKey with all 0xff will cover all keys.
+	minKey := bytes.Repeat([]byte{0x00}, 8)
+	// A nil end key is treated as infinity by Pebble.
+	maxKey := bytes.Repeat([]byte{0xff}, 8)
+	for i, db := range e.dbs {
+		log.Info("start manual compaction", zap.Int("dbIndex", i))
+		start := time.Now()
+		if err := db.Compact(minKey, maxKey, false); err != nil {
+			log.Error("manual compaction failed", zap.Int("dbIndex", i), zap.Error(err))
+			return err
+		}
+		log.Info("manual compaction completed", zap.Int("dbIndex", i), zap.Duration("duration", time.Since(start)))
+	}
+	return nil
 }
 
 func (e *eventStore) GetLogCoordinatorNodeID() node.ID {

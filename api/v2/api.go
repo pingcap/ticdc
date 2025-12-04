@@ -101,4 +101,5 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	unsafeGroup.GET("/metadata", api.CDCMetaData)
 	unsafeGroup.POST("/resolve_lock", api.ResolveLock)
 	unsafeGroup.DELETE("/service_gc_safepoint", api.DeleteServiceGcSafePoint)
+	unsafeGroup.POST("/compact", authenticateMiddleware, api.CompactEventStore)
 }
