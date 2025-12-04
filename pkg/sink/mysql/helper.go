@@ -534,7 +534,7 @@ func getDDLStateFromTiDB(ctx context.Context, db *sql.DB, ddl string, createTime
 			zap.String("state", state),
 			zap.Any("jobsResults", jobsResults),
 		)
-		return timodel.StrToJobState(result[1]), nil
+		return timodel.StrToJobState(state), nil
 	}
 	return timodel.JobStateNone, nil
 }
