@@ -407,6 +407,10 @@ func (b *Barrier) checkEventFinish(be *BarrierEvent) {
 }
 
 func (b *Barrier) tryScheduleEvent(event *BarrierEvent) bool {
+	log.Info("event trySchedule",
+		zap.String("changefeed", event.cfID.Name()),
+		zap.String("writerDispatcher", event.writerDispatcher.String()),
+		zap.Uint64("EventCommitTs", event.commitTs))
 	ready, blocking := b.pendingEvents.popIfHead(event)
 	if !ready {
 		log.Info("event waits for a smaller commitTs before scheduling",
