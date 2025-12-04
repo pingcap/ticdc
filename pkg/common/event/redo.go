@@ -377,7 +377,14 @@ func (r *RedoDDLEvent) SetTableSchemaStore(tableSchemaStore *TableSchemaStore) {
 }
 
 func parseColumnValue(row *chunk.Row, colInfo *timodel.ColumnInfo, i int, isHandleKey bool) RedoColumnValue {
-	v := extractColVal(row, colInfo, i)
+	v := commonType.ExtractColVal(row, colInfo, i)
+	switch colInfo.GetType() {
+	case mysql.TypeString, mysql.TypeVarString, mysql.TypeVarchar,
+		mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob:
+		if v != nil {
+			v = row.GetBytes(i)
+		}
+	}
 	rrv := RedoColumnValue{Value: v}
 	switch t := rrv.Value.(type) {
 	case []byte:
@@ -386,60 +393,6 @@ func parseColumnValue(row *chunk.Row, colInfo *timodel.ColumnInfo, i int, isHand
 	// FIXME: Use tidb column flag
 	rrv.Flag = convertFlag(colInfo, isHandleKey)
 	return rrv
-}
-
-func extractColVal(row *chunk.Row, col *timodel.ColumnInfo, idx int) any {
-	if row.IsNull(idx) {
-		return nil
-	}
-	switch col.GetType() {
-	case mysql.TypeLonglong, mysql.TypeLong, mysql.TypeInt24, mysql.TypeShort, mysql.TypeTiny:
-		if mysql.HasUnsignedFlag(col.GetFlag()) {
-			return row.GetUint64(idx)
-		}
-		return row.GetInt64(idx)
-	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeNewDate, mysql.TypeTimestamp:
-		return row.GetTime(idx).String()
-	case mysql.TypeYear:
-		return row.GetInt64(idx)
-	case mysql.TypeDuration:
-		return row.GetDuration(idx, 0).String()
-	case mysql.TypeJSON:
-		return row.GetJSON(idx).String()
-	case mysql.TypeNewDecimal:
-		d := row.GetMyDecimal(idx)
-		if d == nil {
-			// nil takes 0 byte.
-			return nil
-		}
-		return d.String()
-	case mysql.TypeEnum, mysql.TypeSet:
-		return row.GetEnum(idx).Value
-	case mysql.TypeBit:
-		d := row.GetDatum(idx, &col.FieldType)
-		dp := &d
-		// Encode bits as integers to avoid pingcap/tidb#10988 (which also affects MySQL itself)
-		result, err := dp.GetBinaryLiteral().ToInt(tiTypes.DefaultStmtNoWarningContext)
-		if err != nil {
-			log.Panic("extract bit value failed", zap.Any("bit", dp.GetBinaryLiteral()), zap.Error(err))
-		}
-		return result
-	case mysql.TypeString, mysql.TypeVarString, mysql.TypeVarchar,
-		mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob:
-		return row.GetBytes(idx)
-	case mysql.TypeFloat:
-		return row.GetFloat32(idx)
-	case mysql.TypeDouble:
-		return row.GetFloat64(idx)
-	case mysql.TypeTiDBVectorFloat32:
-		return row.GetVectorFloat32(idx).String()
-	default:
-		d := row.GetDatum(idx, &col.FieldType)
-		// NOTICE: GetValue() may return some types that go sql not support, which will cause sink DML fail
-		// Make specified convert upper if you need
-		// Go sql support type ref to: https://github.com/golang/go/blob/go1.17.4/src/database/sql/driver/types.go#L236
-		return d.GetValue()
-	}
 }
 
 // For compatibility
@@ -497,6 +450,8 @@ func appendCol2Chunk(idx int, raw interface{}, ft tiTypes.FieldType, chk *chunk.
 		chk.AppendNull(idx)
 		return
 	}
+	// FIXME: when the value is less than 127, uint64 will be encode into int64.
+	// see https://github.com/tinylib/msgp/issues/427
 	var val uint64
 	switch v := raw.(type) {
 	case uint64:
