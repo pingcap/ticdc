@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	v2 "github.com/pingcap/ticdc/api/v2"
+	cmdcontext "github.com/pingcap/ticdc/cmd/cdc/context"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
@@ -194,7 +195,7 @@ func (o *resumeChangefeedOptions) validateParams(ctx context.Context) error {
 
 // run the `cli changefeed resume` command.
 func (o *resumeChangefeedOptions) run(cmd *cobra.Command) error {
-	ctx := context.Background()
+	ctx := cmdcontext.GetDefaultContext()
 
 	if err := o.validateParams(ctx); err != nil {
 		return err

@@ -14,11 +14,11 @@
 package factory
 
 import (
-	"context"
 	"strings"
 	"time"
 
 	"github.com/pingcap/log"
+	cmdcontext "github.com/pingcap/ticdc/cmd/cdc/context"
 	"github.com/pingcap/ticdc/cmd/util"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -56,7 +56,7 @@ func NewFactory(clientGetter ClientGetter) Factory {
 
 // EtcdClient creates new cdc etcd client.
 func (f *factoryImpl) EtcdClient() (*etcd.CDCEtcdClientImpl, error) {
-	ctx := context.Background()
+	ctx := cmdcontext.GetDefaultContext()
 	tlsConfig, err := f.ToTLSConfig()
 	if err != nil {
 		return nil, err
@@ -116,7 +116,7 @@ func (f *factoryImpl) EtcdClient() (*etcd.CDCEtcdClientImpl, error) {
 
 // PdClient creates new pd client.
 func (f *factoryImpl) PdClient() (pd.Client, error) {
-	ctx := context.Background()
+	ctx := cmdcontext.GetDefaultContext()
 
 	credential := f.GetCredential()
 	grpcTLSOption, err := f.ToGRPCDialOption()
@@ -225,7 +225,7 @@ func (f *factoryImpl) findServerAddr() (string, error) {
 	}
 	defer etcdClient.Close()
 
-	ctx := context.Background()
+	ctx := cmdcontext.GetDefaultContext()
 	err = etcdClient.CheckMultipleCDCClusterExist(ctx)
 	if err != nil {
 		if errors.ErrMultipleCDCClustersExist.Equal(err) {
@@ -253,7 +253,7 @@ func (f *factoryImpl) findServerAddr() (string, error) {
 }
 
 func checkCDCVersion(client apiv2client.APIV2Interface) error {
-	serverStatus, err := client.Status().Get(context.Background())
+	serverStatus, err := client.Status().Get(cmdcontext.GetDefaultContext())
 	if err != nil {
 		return errors.Trace(err)
 	}

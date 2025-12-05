@@ -19,6 +19,7 @@ import (
 	"time"
 
 	v2 "github.com/pingcap/ticdc/api/v2"
+	cmdcontext "github.com/pingcap/ticdc/cmd/cdc/context"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
@@ -95,7 +96,7 @@ func (o *statisticsChangefeedOptions) runCliWithAPIClient(ctx context.Context, c
 
 // run the `cli changefeed statistics` command.
 func (o *statisticsChangefeedOptions) run(cmd *cobra.Command) error {
-	ctx := context.Background()
+	ctx := cmdcontext.GetDefaultContext()
 
 	tick := time.NewTicker(time.Duration(o.interval) * time.Second)
 	var lastTime time.Time

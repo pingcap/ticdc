@@ -14,8 +14,7 @@
 package cli
 
 import (
-	"context"
-
+	cmdcontext "github.com/pingcap/ticdc/cmd/cdc/context"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
@@ -69,7 +68,7 @@ type response struct {
 // run the `cli changefeed move table` command.
 // return success or error message.
 func (o *moveTableChangefeedOptions) run(cmd *cobra.Command) error {
-	ctx := context.Background()
+	ctx := cmdcontext.GetDefaultContext()
 
 	err := o.apiClientV2.Changefeeds().MoveTable(ctx, o.keyspace, o.changefeedID, o.tableId, o.targetNodeID, o.mode)
 	var errStr string

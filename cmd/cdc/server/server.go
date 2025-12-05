@@ -322,7 +322,7 @@ func NewCmdServer() *cobra.Command {
 
 	command := &cobra.Command{
 		Use:   "server",
-		Short: "Start a TiCDC server server",
+		Short: "Start a TiCDC server",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if isNewArchEnabled(o) {
