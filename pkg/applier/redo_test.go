@@ -154,7 +154,7 @@ func TestApply(t *testing.T) {
 					Flag:  newFlag(pmysql.PriKeyFlag),
 				},
 				{
-					Value: "2",
+					Value: []byte("20"),
 				},
 			},
 		},
@@ -181,7 +181,7 @@ func TestApply(t *testing.T) {
 					Flag:  newFlag(pmysql.PriKeyFlag),
 				},
 				{
-					Value: "3",
+					Value: []byte("3"),
 				},
 			},
 			PreColumns: []commonEvent.RedoColumnValue{
@@ -190,7 +190,7 @@ func TestApply(t *testing.T) {
 					Flag:  newFlag(pmysql.PriKeyFlag),
 				},
 				{
-					Value: "2",
+					Value: []byte("20"),
 				},
 			},
 		},
@@ -211,7 +211,7 @@ func TestApply(t *testing.T) {
 					Flag:  newFlag(pmysql.PriKeyFlag),
 				},
 				{
-					Value: "20",
+					Value: []byte("20"),
 				},
 			},
 		},
@@ -232,7 +232,7 @@ func TestApply(t *testing.T) {
 					Flag:  newFlag(pmysql.PriKeyFlag),
 				},
 				{
-					Value: "200",
+					Value: []byte("200"),
 				},
 			},
 		},
@@ -253,7 +253,7 @@ func TestApply(t *testing.T) {
 					Flag:  newFlag(pmysql.PriKeyFlag),
 				},
 				{
-					Value: "20",
+					Value: []byte("20"),
 				},
 			},
 		},
@@ -278,7 +278,7 @@ func TestApply(t *testing.T) {
 					Flag:  newFlag(pmysql.PriKeyFlag),
 				},
 				{
-					Value: "3",
+					Value: []byte("3"),
 				},
 			},
 			PreColumns: []commonEvent.RedoColumnValue{
@@ -287,7 +287,7 @@ func TestApply(t *testing.T) {
 					Flag:  newFlag(pmysql.PriKeyFlag),
 				},
 				{
-					Value: "3",
+					Value: []byte("3"),
 				},
 			},
 		},
@@ -312,7 +312,7 @@ func TestApply(t *testing.T) {
 					Flag:  newFlag(pmysql.PriKeyFlag),
 				},
 				{
-					Value: "300",
+					Value: []byte("300"),
 				},
 			},
 			PreColumns: []commonEvent.RedoColumnValue{
@@ -321,7 +321,7 @@ func TestApply(t *testing.T) {
 					Flag:  newFlag(pmysql.PriKeyFlag),
 				},
 				{
-					Value: "200",
+					Value: []byte("200"),
 				},
 			},
 		},
@@ -428,7 +428,7 @@ func TestApplyBigTxn(t *testing.T) {
 					Flag:  newFlag(pmysql.PriKeyFlag),
 				},
 				{
-					Value: fmt.Sprintf("%d", i+1),
+					Value: []byte(fmt.Sprintf("%d", i+1)),
 				},
 			},
 		}
@@ -457,7 +457,7 @@ func TestApplyBigTxn(t *testing.T) {
 					Flag:  newFlag(pmysql.PriKeyFlag),
 				},
 				{
-					Value: fmt.Sprintf("%d", i*10+1),
+					Value: []byte(fmt.Sprintf("%d", i*10+1)),
 				},
 			},
 			PreColumns: []commonEvent.RedoColumnValue{
@@ -466,7 +466,7 @@ func TestApplyBigTxn(t *testing.T) {
 					Flag:  newFlag(pmysql.PriKeyFlag),
 				},
 				{
-					Value: fmt.Sprintf("%d", i+1),
+					Value: []byte(fmt.Sprintf("%d", i+1)),
 				},
 			},
 		}
@@ -491,7 +491,7 @@ func TestApplyBigTxn(t *testing.T) {
 					Flag:  newFlag(pmysql.PriKeyFlag),
 				},
 				{
-					Value: fmt.Sprintf("%d", i*10+1),
+					Value: []byte(fmt.Sprintf("%d", i*10+1)),
 				},
 			},
 		}
@@ -519,7 +519,7 @@ func TestApplyBigTxn(t *testing.T) {
 					Flag:  newFlag(pmysql.PriKeyFlag),
 				},
 				{
-					Value: fmt.Sprintf("%d", i*100+1),
+					Value: []byte(fmt.Sprintf("%d", i*100+1)),
 				},
 			},
 			PreColumns: []commonEvent.RedoColumnValue{
@@ -528,7 +528,7 @@ func TestApplyBigTxn(t *testing.T) {
 					Flag:  newFlag(pmysql.PriKeyFlag),
 				},
 				{
-					Value: fmt.Sprintf("%d", i*10+1),
+					Value: []byte(fmt.Sprintf("%d", i*10+1)),
 				},
 			},
 		}
@@ -617,7 +617,7 @@ func getMockDB(t *testing.T) *sql.DB {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
-		WithArgs(1, []byte("2")).
+		WithArgs(1, []byte([]byte("20"))).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
@@ -629,7 +629,7 @@ func getMockDB(t *testing.T) *sql.DB {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
-		WithArgs(10, []byte("20")).
+		WithArgs(10, []byte([]byte("20"))).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("INSERT INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
 		WithArgs(100, []byte("200")).
