@@ -607,6 +607,7 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 		for dispatcherID, available := range quota.PathMetrics() {
 			changefeedPathMemory[cfID][dispatcherID] = uint64(available)
 		}
+
 		// store total available memory from AreaMemoryMetric
 		changefeedTotalMemory[cfID] = uint64(quota.AvailableMemory())
 	}
