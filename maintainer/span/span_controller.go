@@ -515,11 +515,7 @@ func (c *Controller) GetRemoveTasksBySchemaID(schemaID int64) []*replica.SpanRep
 	return taskList
 }
 
-// // RemoveByTableIDs removes the tasks by the table ids and return the scheduled tasks.
-// When the split dispatcher operator is running, a TRUNCATE TABLE DDL can potentially drop the dispatcher.
-// This leads to the completion of the split dispatcher operator and the subsequent removal of the span.
-// However, the operator callback may erroneously mark the span as absent. To avoid this situation,
-// we should first remove the replicaSet and then remove the span to ensure it doesn't remain active.
+// RemoveByTableIDs removes the tasks by the table ids.
 func (c *Controller) RemoveByTableIDs(tableIDs ...int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -531,8 +527,7 @@ func (c *Controller) RemoveByTableIDs(tableIDs ...int64) {
 	}
 }
 
-// RemoveBySchemaID removes the tasks by the schema id and return the scheduled tasks
-// The order of removing the span and the replicaSet should align with the RemoveByTableIDs function.
+// RemoveBySchemaID removes the tasks by the schema id.
 func (c *Controller) RemoveBySchemaID(schemaID int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

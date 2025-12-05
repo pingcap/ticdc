@@ -16,6 +16,8 @@ package maintainer
 import (
 	"container/heap"
 	"sync"
+
+	"github.com/pingcap/log"
 )
 
 type BlockedEventMap struct {
@@ -29,110 +31,69 @@ func NewBlockEventMap() *BlockedEventMap {
 	}
 }
 
+// pendingScheduleEventMap keeps pending BarrierEvents keyed by eventKey
+// since only DDLs related add/drop/truncate/recover etc. tables need scheduling, and those events will always be written
+// by the table trigger dispatcher, we can store only the eventKey heap with a map to the actual event.
 type pendingScheduleEventMap struct {
-	mutex sync.Mutex
-	queue *dispatcherPendingQueue
+	mutex  sync.Mutex
+	queue  pendingEventKeyHeap
+	events map[eventKey]*BarrierEvent
 }
 
 func newPendingScheduleEventMap() *pendingScheduleEventMap {
-	return &pendingScheduleEventMap{}
-}
-
-type dispatcherPendingQueue struct {
-	heap   pendingEventHeap
-	set    map[*BarrierEvent]struct{}
-	keySet map[eventKey]struct{}
-}
-
-func newDispatcherPendingQueue() *dispatcherPendingQueue {
-	return &dispatcherPendingQueue{
-		set:    make(map[*BarrierEvent]struct{}),
-		keySet: make(map[eventKey]struct{}),
+	return &pendingScheduleEventMap{
+		events: make(map[eventKey]*BarrierEvent),
 	}
-}
-
-func (q *dispatcherPendingQueue) empty() bool {
-	return len(q.heap) == 0
-}
-
-func (q *dispatcherPendingQueue) head() *BarrierEvent {
-	if len(q.heap) == 0 {
-		return nil
-	}
-	return q.heap[0]
-}
-
-func (q *dispatcherPendingQueue) add(event *BarrierEvent) {
-	key := barrierEventKey(event)
-	if _, ok := q.keySet[key]; ok {
-		return
-	}
-	if _, ok := q.set[event]; ok {
-		return
-	}
-	heap.Push(&q.heap, event)
-	q.set[event] = struct{}{}
-	q.keySet[key] = struct{}{}
-}
-
-func (q *dispatcherPendingQueue) popIfHead(event *BarrierEvent) (bool, *BarrierEvent) {
-	head := q.head()
-	if head == nil {
-		return false, nil
-	}
-	if head != event {
-		headKey := barrierEventKey(head)
-		eventKey := barrierEventKey(event)
-		if headKey != eventKey {
-			return false, head
-		}
-	}
-	heap.Pop(&q.heap)
-	key := barrierEventKey(head)
-	delete(q.set, head)
-	delete(q.keySet, key)
-	return true, head
 }
 
 func (m *pendingScheduleEventMap) add(event *BarrierEvent) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
-	if m.queue == nil {
-		m.queue = newDispatcherPendingQueue()
+	key := getEventKey(event.commitTs, event.isSyncPoint)
+	if _, ok := m.events[key]; ok {
+		return
 	}
-	m.queue.add(event)
+	heap.Push(&m.queue, key)
+	m.events[key] = event
 }
 
 func (m *pendingScheduleEventMap) popIfHead(event *BarrierEvent) (bool, *BarrierEvent) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
-	if m.queue == nil || m.queue.empty() {
+	if len(m.queue) == 0 {
 		return false, nil
 	}
-	ready, candidate := m.queue.popIfHead(event)
-	if m.queue.empty() {
-		m.queue = nil
+	headKey := m.queue[0]
+	candidate := m.events[headKey]
+	if candidate == nil {
+		log.Panic("candidate is nil")
 	}
-	return ready, candidate
+	eventKey := getEventKey(event.commitTs, event.isSyncPoint)
+	if headKey != eventKey {
+		return false, candidate
+	}
+	heap.Pop(&m.queue)
+	delete(m.events, headKey)
+	return true, candidate
 }
 
-type pendingEventHeap []*BarrierEvent
+type pendingEventKeyHeap []eventKey
 
-func (h pendingEventHeap) Len() int { return len(h) }
+func (h pendingEventKeyHeap) Len() int { return len(h) }
 
-func (h pendingEventHeap) Less(i, j int) bool {
-	return compareBarrierEvent(h[i], h[j]) < 0
+func (h pendingEventKeyHeap) Less(i, j int) bool {
+	return compareEventKey(h[i], h[j]) < 0
 }
 
-func (h pendingEventHeap) Swap(i, j int) {
+func (h pendingEventKeyHeap) Swap(i, j int) {
 	h[i], h[j] = h[j], h[i]
 }
 
-func (h *pendingEventHeap) Push(x any) {
-	*h = append(*h, x.(*BarrierEvent))
+func (h *pendingEventKeyHeap) Push(x any) {
+	*h = append(*h, x.(eventKey))
 }
 
-func (h *pendingEventHeap) Pop() any {
+func (h *pendingEventKeyHeap) Pop() any {
 	old := *h
 	n := len(old)
 	x := old[n-1]
@@ -140,27 +101,17 @@ func (h *pendingEventHeap) Pop() any {
 	return x
 }
 
-func compareBarrierEvent(a, b *BarrierEvent) int {
-	if a.commitTs < b.commitTs {
+func compareEventKey(a, b eventKey) int {
+	if a.blockTs < b.blockTs {
 		return -1
 	}
-	if a.commitTs > b.commitTs {
+	if a.blockTs > b.blockTs {
 		return 1
-	}
-	if a.isSyncPoint == b.isSyncPoint {
-		return 0
 	}
 	if !a.isSyncPoint && b.isSyncPoint {
 		return -1
 	}
 	return 1
-}
-
-func barrierEventKey(event *BarrierEvent) eventKey {
-	return eventKey{
-		blockTs:     event.commitTs,
-		isSyncPoint: event.isSyncPoint,
-	}
 }
 
 func (b *BlockedEventMap) Range(f func(key eventKey, value *BarrierEvent) bool) {
@@ -205,4 +156,12 @@ func (b *BlockedEventMap) Delete(key eventKey) {
 type eventKey struct {
 	blockTs     uint64
 	isSyncPoint bool
+}
+
+// getEventKey returns the key of the block event
+func getEventKey(blockTs uint64, isSyncPoint bool) eventKey {
+	return eventKey{
+		blockTs:     blockTs,
+		isSyncPoint: isSyncPoint,
+	}
 }

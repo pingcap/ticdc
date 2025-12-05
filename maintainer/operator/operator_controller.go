@@ -129,6 +129,9 @@ func (oc *Controller) RemoveTasksBySchemaID(schemaID int64) {
 // This leads to the completion of the split dispatcher operator and the subsequent removal of the span.
 // However, the operator callback may erroneously mark the span as absent. To avoid this situation,
 // we should first remove the replicaSet and then remove the span to ensure it doesn't remain active.
+//
+// Note: removeReplicaSet creates operators and touches the operator controller lock hierarchy, so it must
+// NOT be executed while holding spanController's internal locks, otherwise deadlock may happen.
 func (oc *Controller) RemoveTasksByTableIDs(tables ...int64) {
 	tasks := oc.spanController.GetRemoveTasksByTableIDs(tables...)
 	for _, task := range tasks {

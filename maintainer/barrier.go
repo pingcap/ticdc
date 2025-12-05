@@ -37,8 +37,8 @@ import (
 // 6. maintainer wait for all dispatchers reporting event(pass) done message
 // 7. maintainer clear the event, and schedule block event? todo: what if we schedule first then wait for all dispatchers?
 type Barrier struct {
-	blockedEvents      *BlockedEventMap
-	pendingEvents      *pendingScheduleEventMap
+	blockedEvents      *BlockedEventMap         // tracks all block events that still wait for dispatcher progress
+	pendingEvents      *pendingScheduleEventMap // pending DDL events that require scheduling order
 	spanController     *span.Controller
 	operatorController *operator.Controller
 	splitTableEnabled  bool
@@ -302,13 +302,18 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 	// the writer already synced ddl to downstream
 	if event.writerDispatcher == dispatcherID {
 		if event.needSchedule {
-			// the pass action will be sent periodically in resend logic if not acked
+			// we need do schedule when writerDispatcherAdvanced
+			// Otherwise, if we do schedule when just selected = true, then ask dispatcher execute ddl
+			// when meeting truncate table,
+			// there is possible that dml for the new table will arrive before truncate ddl executed.
+			// that will lead to data loss
 			scheduled := b.tryScheduleEvent(event)
 			if !scheduled {
 				// not scheduled yet, just return, wait for next resend
 				return event
 			}
 		} else {
+			// the pass action will be sent periodically in resend logic if not acked
 			event.writerDispatcherAdvanced = true
 			event.lastResendTime = time.Now().Add(-20 * time.Second)
 		}
@@ -351,6 +356,7 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 		event.markDispatcherEventDone(dispatcherID)
 		status, targetID := event.checkEventAction(dispatcherID)
 		if status != nil && event.needSchedule {
+			// scheduling is only required for ddl that changes tables, enqueue the event
 			b.pendingEvents.add(event)
 		}
 		return event, status, targetID, true
@@ -368,6 +374,10 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 		b.blockedEvents.Delete(getEventKey(event.commitTs, event.isSyncPoint))
 		return event, nil, "", true
 	}
+	// enqueue ddl that needs scheduling so the table trigger dispatcher can process in order
+	// otherwise the barrier may receive the first status of "recover table a" before it sees the
+	// "truncate table a" done status when intermediate messages are lost, and the recover ddl would
+	// be scheduled before truncate finishes, re-adding the table before drop completes and risking data loss.
 	b.pendingEvents.add(event)
 	scheduled := b.tryScheduleEvent(event)
 	if !scheduled {
@@ -413,6 +423,7 @@ func (b *Barrier) tryScheduleEvent(event *BarrierEvent) bool {
 		zap.String("changefeed", event.cfID.Name()),
 		zap.String("writerDispatcher", event.writerDispatcher.String()),
 		zap.Uint64("EventCommitTs", event.commitTs))
+	// pending queue ensures ddl with the same eventKey only schedules once and in order
 	ready, candidate := b.pendingEvents.popIfHead(event)
 	if !ready {
 		blockCommitTs := uint64(0)
@@ -444,13 +455,5 @@ func ackEvent(commitTs uint64, isSyncPoint bool) *heartbeatpb.ACK {
 	return &heartbeatpb.ACK{
 		CommitTs:    commitTs,
 		IsSyncPoint: isSyncPoint,
-	}
-}
-
-// getEventKey returns the key of the block event
-func getEventKey(blockTs uint64, isSyncPoint bool) eventKey {
-	return eventKey{
-		blockTs:     blockTs,
-		isSyncPoint: isSyncPoint,
 	}
 }
