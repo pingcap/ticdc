@@ -80,7 +80,6 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 			failpoint.Return(ctx.Err())
 		case <-time.After(delay):
 		}
-		failpoint.Return(nil)
 	})
 
 	tx, err := w.db.BeginTx(ctx, nil)
