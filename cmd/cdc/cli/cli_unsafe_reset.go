@@ -18,6 +18,7 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	cmdcontext "github.com/pingcap/ticdc/cmd/cdc/context"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
@@ -70,7 +71,7 @@ func (o *unsafeResetOptions) addFlags(cmd *cobra.Command) {
 
 // run runs the `cli unsafe reset` command.
 func (o *unsafeResetOptions) run(cmd *cobra.Command) error {
-	ctx := context.Background()
+	ctx := cmdcontext.GetDefaultContext()
 	defer o.pdClient.Close()
 	defer o.etcdClient.Close()
 

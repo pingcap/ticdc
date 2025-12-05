@@ -17,6 +17,7 @@ import (
 	"context"
 	"os"
 
+	cmdcontext "github.com/pingcap/ticdc/cmd/cdc/context"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -44,8 +45,8 @@ func NewCmdCli() *cobra.Command {
 			cmd.Printf("init logger error %v\n", errors.Trace(err))
 			os.Exit(1)
 		}
-		_, cancel := context.WithCancel(context.Background())
-		defer cancel()
+		ctx, cancel := context.WithCancel(context.Background())
+		cmdcontext.SetDefaultContext(ctx)
 		util.LogHTTPProxies()
 		// A notify that complete immediately, it skips the second signal essentially.
 		doneNotify := func() <-chan struct{} {
