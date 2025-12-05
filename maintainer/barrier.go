@@ -426,13 +426,21 @@ func (b *Barrier) tryScheduleEvent(event *BarrierEvent) bool {
 	// pending queue ensures ddl with the same eventKey only schedules once and in order
 	ready, candidate := b.pendingEvents.popIfHead(event)
 	if !ready {
-		log.Info("event waits for a smaller commitTs before scheduling",
-			zap.String("changefeed", event.cfID.Name()),
-			zap.String("writerDispatcher", event.writerDispatcher.String()),
-			zap.Uint64("EventCommitTs", event.commitTs),
-			zap.Bool("isSyncPoint", event.isSyncPoint),
-			zap.Uint64("blockingEventCommitTs", candidate.commitTs),
-			zap.Bool("blockingEventIsSyncPoint", candidate.isSyncPoint))
+		if candidate == nil {
+			log.Info("no candidate here, skip",
+				zap.String("changefeed", event.cfID.Name()),
+				zap.String("writerDispatcher", event.writerDispatcher.String()),
+				zap.Uint64("EventCommitTs", event.commitTs),
+				zap.Bool("isSyncPoint", event.isSyncPoint))
+		} else {
+			log.Info("event waits for a smaller commitTs before scheduling",
+				zap.String("changefeed", event.cfID.Name()),
+				zap.String("writerDispatcher", event.writerDispatcher.String()),
+				zap.Uint64("EventCommitTs", event.commitTs),
+				zap.Bool("isSyncPoint", event.isSyncPoint),
+				zap.Uint64("blockingEventCommitTs", candidate.commitTs),
+				zap.Bool("blockingEventIsSyncPoint", candidate.isSyncPoint))
+		}
 		return false
 	}
 	event.scheduleBlockEvent()
