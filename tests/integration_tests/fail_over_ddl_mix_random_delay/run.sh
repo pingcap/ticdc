@@ -19,7 +19,7 @@ function start_cdc_instance() {
 	local logsuffix=$1
 	local addr=$2
 
-	export GO_FAILPOINTS="github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkExecDDLDelay=return(\"$((RANDOM % 20 + 1))\")"
+	export GO_FAILPOINTS="github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkExecDDLDelay=return(\"$((RANDOM % 5 + 1))\")"
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "$logsuffix" --addr "$addr"
 }
 
@@ -68,7 +68,7 @@ function execute_ddl_for_normal_tables() {
 			;;
 		esac
 
-		sleep 1
+		sleep 10
 	done
 }
 
