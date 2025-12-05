@@ -87,7 +87,7 @@ function run() {
 	# case 4:
 	# rename multiple tables
 	for i in {1..100}; do
-		run_sql "INSERT INTO consistent_replicate_ddl.table_$i (data) VALUES ('insert_$(date +%s)_${RANDOM}'"
+		run_sql "INSERT INTO consistent_replicate_ddl.table_$i (data) VALUES ('insert_$(date +%s)_${RANDOM}')"
 		new_table_name="table_$(($i + 500))"
 		run_sql "RENAME TABLE consistent_replicate_ddl.table_$i TO consistent_replicate_ddl.$new_table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	done
@@ -96,11 +96,16 @@ function run() {
 
 	# to ensure row changed events have been replicated to TiCDC
 	sleep 120
-	cleanup_process $CDC_BINARY
 
+	# For rename table, modify column ddl, drop column, drop index and drop table ddl, the struct of table is wrong when appling snapshot.
+	# see https://github.com/pingcap/tidb/issues/63464.
+	# So we can't check sync_diff with snapshot.
 	storage_path="file://$WORK_DIR/redo"
 	tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
+	current_tso=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
+	ensure 100 check_redo_resolved_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
 	export GO_FAILPOINTS=''
+	cleanup_process $CDC_BINARY
 
 	rts=$(cdc redo meta --storage="$storage_path" --tmp-dir="$tmp_download_path" | grep -oE "resolved-ts:[0-9]+" | awk -F: '{print $2}')
 	sed "s/<placeholder>/$rts/g" $CUR/conf/diff_config.toml >$WORK_DIR/diff_config.toml

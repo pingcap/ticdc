@@ -41,7 +41,10 @@ func TestDDLEvent(t *testing.T) {
 		Query:        ddlJob.Query,
 		TableInfo:    common.WrapTableInfo(ddlJob.SchemaName, ddlJob.BinlogInfo.TableInfo),
 		FinishedTs:   ddlJob.BinlogInfo.FinishedTS,
-		Err:          errors.ErrDDLEventError.GenWithStackByArgs("test").Error(),
+		BlockedTableNames: []SchemaTableName{
+			{SchemaName: ddlJob.SchemaName, TableName: ddlJob.TableName},
+		},
+		Err: errors.ErrDDLEventError.GenWithStackByArgs("test").Error(),
 	}
 	ddlEvent.TableInfo.InitPrivateFields()
 
@@ -74,6 +77,7 @@ func TestDDLEvent(t *testing.T) {
 	require.Equal(t, ddlEvent.TableInfo, reverseEvent.TableInfo)
 	require.Equal(t, ddlEvent.FinishedTs, reverseEvent.FinishedTs)
 	require.Equal(t, ddlEvent.Err, reverseEvent.Err)
+	require.Equal(t, ddlEvent.BlockedTableNames, reverseEvent.BlockedTableNames)
 
 	// Test unsupported version in Marshal
 	mockDDLVersion1 := 99

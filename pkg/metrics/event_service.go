@@ -159,6 +159,13 @@ var (
 			Subsystem: "event_service",
 			Name:      "interrupt_scan_count",
 			Help:      "The number of scans interrupted",
+
+	EventServiceResetDispatcherCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "reset_dispatcher_count",
+			Help:      "The number of event dispatcher reset operations performed",
 		})
 )
 
@@ -183,4 +190,5 @@ func initEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceSkipScanCount)
 	registry.MustRegister(EventServiceInterruptScanCount)
 	registry.MustRegister(EventServiceGetDDLEventDuration)
+	registry.MustRegister(EventServiceResetDispatcherCount)
 }

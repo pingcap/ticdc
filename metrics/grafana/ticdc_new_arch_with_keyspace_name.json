@@ -125,7 +125,7 @@
   "gnetId": null,
   "graphTooltip": 1,
   "id": 33,
-  "iteration": 1758780574108,
+  "iteration": 1764311940562,
   "links": [],
   "panels": [
     {
@@ -859,7 +859,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_dynamic_stream_memory_usage{k8s_cluster=~\"$k8s_cluster\", tidb_cluster=~\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", area=~\"$changefeed\", instance=~\"$ticdc_instance\", module=~\"event-collector.*\"}) by (keyspace_name, area, instance, module, type)",
+              "expr": "sum(ticdc_dynamic_stream_memory_usage{k8s_cluster=~\"$k8s_cluster\", tidb_cluster=~\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", area=~\"$changefeed\", instance=~\"$ticdc_instance\", module=~\"event-collector\"}) by (keyspace_name, area, instance, module, type)",
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{area}}-{{instance}}-{{module}}-{{type}}",
               "refId": "A"
@@ -937,7 +937,7 @@
             "h": 5,
             "w": 12,
             "x": 0,
-            "y": 27
+            "y": 2
           },
           "hiddenSeries": false,
           "id": 12025,
@@ -1034,7 +1034,7 @@
             "h": 5,
             "w": 12,
             "x": 12,
-            "y": 27
+            "y": 2
           },
           "hiddenSeries": false,
           "id": 12022,
@@ -1131,7 +1131,7 @@
             "h": 6,
             "w": 12,
             "x": 0,
-            "y": 38
+            "y": 13
           },
           "hiddenSeries": false,
           "id": 12026,
@@ -1229,7 +1229,7 @@
             "h": 6,
             "w": 12,
             "x": 12,
-            "y": 38
+            "y": 13
           },
           "hiddenSeries": false,
           "id": 12027,
@@ -3361,7 +3361,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 153
+            "y": 114
           },
           "hiddenSeries": false,
           "id": 20025,
@@ -3457,18 +3457,19 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 153
+            "y": 114
           },
           "hiddenSeries": false,
           "id": 22258,
           "legend": {
+            "alignAsTable": true,
             "avg": false,
-            "current": false,
-            "max": false,
+            "current": true,
+            "max": true,
             "min": false,
             "show": true,
             "total": false,
-            "values": false
+            "values": true
           },
           "lines": true,
           "linewidth": 1,
@@ -3495,6 +3496,7 @@
               "expr": "ticdc_event_service_dispatcher_status_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", instance=~\"$ticdc_instance\"}",
               "hide": false,
               "legendFormat": "{{instance}}-dispatcherStatus-{{status}}",
+              "queryType": "randomWalk",
               "range": true,
               "refId": "B"
             }
@@ -3551,7 +3553,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 161
+            "y": 122
           },
           "hiddenSeries": false,
           "id": 22266,
@@ -3641,7 +3643,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 161
+            "y": 122
           },
           "hiddenSeries": false,
           "id": 22260,
@@ -6925,7 +6927,7 @@
             "h": 6,
             "w": 12,
             "x": 0,
-            "y": 1
+            "y": 99
           },
           "hiddenSeries": false,
           "id": 546,
@@ -7038,7 +7040,7 @@
             "h": 6,
             "w": 12,
             "x": 12,
-            "y": 1
+            "y": 99
           },
           "hiddenSeries": false,
           "id": 548,
@@ -7147,7 +7149,7 @@
             "h": 6,
             "w": 12,
             "x": 0,
-            "y": 7
+            "y": 105
           },
           "hiddenSeries": false,
           "id": 545,
@@ -7250,7 +7252,7 @@
             "h": 6,
             "w": 12,
             "x": 12,
-            "y": 7
+            "y": 105
           },
           "hiddenSeries": false,
           "id": 22271,
@@ -7353,7 +7355,7 @@
             "h": 6,
             "w": 12,
             "x": 0,
-            "y": 13
+            "y": 111
           },
           "hiddenSeries": false,
           "id": 22283,
@@ -7480,7 +7482,7 @@
             "h": 6,
             "w": 12,
             "x": 12,
-            "y": 13
+            "y": 111
           },
           "hiddenSeries": false,
           "id": 22295,
@@ -7571,112 +7573,6 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "duration for each operator",
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
-          "fill": 1,
-          "fillGradient": 0,
-          "gridPos": {
-            "h": 6,
-            "w": 12,
-            "x": 12,
-            "y": 19
-          },
-          "hiddenSeries": false,
-          "id": 22284,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": false,
-            "show": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
-          "percentage": false,
-          "pluginVersion": "7.5.17",
-          "pointradius": 2,
-          "points": false,
-          "renderer": "flot",
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "exemplar": true,
-              "expr": "histogram_quantile(0.999, sum(rate(ticdc_maintainer_finish_operators_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed,mode))",
-              "interval": "",
-              "legendFormat": "99.9-{{keyspace_name}}-{{changefeed}}-{{instance}}-{{mode}}",
-              "queryType": "randomWalk",
-              "refId": "A"
-            },
-            {
-              "exemplar": true,
-              "expr": "sum(rate(ticdc_maintainer_finish_operators_duration_seconds_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,mode) / \nsum(rate(ticdc_maintainer_finish_operators_duration_seconds_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,mode)",
-              "hide": false,
-              "interval": "",
-              "legendFormat": "avg-{{keyspace_name}}-{{changefeed}}-{{instance}}-{{mode}}",
-              "refId": "B"
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Operator Cost Duration",
-          "tooltip": {
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "s",
-              "label": null,
-              "logBase": 2,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": false
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
           "description": "duration for split span do once check",
           "fieldConfig": {
             "defaults": {},
@@ -7688,7 +7584,7 @@
             "h": 6,
             "w": 12,
             "x": 0,
-            "y": 19
+            "y": 117
           },
           "hiddenSeries": false,
           "id": 22272,
@@ -7783,51 +7679,42 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "decimals": 1,
-          "description": "The ID of the slowest table",
-          "editable": true,
-          "error": false,
+          "description": "duration for each operator",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
           },
-          "fill": 0,
+          "fill": 1,
           "fillGradient": 0,
-          "grid": {},
           "gridPos": {
             "h": 6,
             "w": 12,
             "x": 12,
-            "y": 25
+            "y": 117
           },
           "hiddenSeries": false,
-          "id": 543,
+          "id": 22284,
           "legend": {
             "alignAsTable": true,
             "avg": false,
             "current": true,
-            "max": false,
+            "max": true,
             "min": false,
             "rightSide": false,
             "show": true,
-            "sideWidth": null,
-            "sort": null,
-            "sortDesc": null,
             "total": false,
             "values": true
           },
-          "lines": false,
+          "lines": true,
           "linewidth": 1,
-          "links": [],
           "nullPointMode": "null",
           "options": {
             "alertThreshold": true
           },
-          "paceLength": 10,
           "percentage": false,
           "pluginVersion": "7.5.17",
-          "pointradius": 1,
-          "points": true,
+          "pointradius": 2,
+          "points": false,
           "renderer": "flot",
           "seriesOverrides": [],
           "spaceLength": 10,
@@ -7836,23 +7723,27 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_scheduler_slow_table_id{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\",keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed)",
-              "format": "time_series",
+              "expr": "histogram_quantile(0.999, sum(rate(ticdc_maintainer_finish_operators_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed,mode))",
+              "interval": "",
+              "legendFormat": "99.9-{{keyspace_name}}-{{changefeed}}-{{instance}}-{{mode}}",
+              "queryType": "randomWalk",
+              "refId": "A"
+            },
+            {
+              "exemplar": true,
+              "expr": "sum(rate(ticdc_maintainer_finish_operators_duration_seconds_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,mode) / \nsum(rate(ticdc_maintainer_finish_operators_duration_seconds_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,mode)",
               "hide": false,
               "interval": "",
-              "intervalFactor": 2,
-              "legendFormat": "{{keyspace_name}}-{{changefeed}}",
-              "refId": "A",
-              "step": 10
+              "legendFormat": "avg-{{keyspace_name}}-{{changefeed}}-{{instance}}-{{mode}}",
+              "refId": "B"
             }
           ],
           "thresholds": [],
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Slowest Table ID",
+          "title": "Operator Cost Duration",
           "tooltip": {
-            "msResolution": false,
             "shared": true,
             "sort": 0,
             "value_type": "individual"
@@ -7867,16 +7758,15 @@
           },
           "yaxes": [
             {
-              "decimals": 0,
-              "format": "none",
+              "format": "s",
               "label": null,
-              "logBase": 1,
+              "logBase": 2,
               "max": null,
-              "min": "0",
+              "min": null,
               "show": true
             },
             {
-              "format": "none",
+              "format": "short",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -7909,7 +7799,7 @@
             "h": 6,
             "w": 12,
             "x": 0,
-            "y": 25
+            "y": 123
           },
           "hiddenSeries": false,
           "id": 541,
@@ -8012,6 +7902,232 @@
         },
         {
           "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "decimals": 1,
+          "description": "The ID of the slowest table",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "fill": 0,
+          "fillGradient": 0,
+          "grid": {},
+          "gridPos": {
+            "h": 6,
+            "w": 12,
+            "x": 12,
+            "y": 123
+          },
+          "hiddenSeries": false,
+          "id": 543,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": false,
+            "min": false,
+            "rightSide": false,
+            "show": true,
+            "sideWidth": null,
+            "sort": null,
+            "sortDesc": null,
+            "total": false,
+            "values": true
+          },
+          "lines": false,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
+          "paceLength": 10,
+          "percentage": false,
+          "pluginVersion": "7.5.17",
+          "pointradius": 1,
+          "points": true,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "exemplar": true,
+              "expr": "sum(ticdc_scheduler_slow_table_id{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\",keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed)",
+              "format": "time_series",
+              "hide": false,
+              "interval": "",
+              "intervalFactor": 2,
+              "legendFormat": "{{keyspace_name}}-{{changefeed}}",
+              "refId": "A",
+              "step": 10
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Slowest Table ID",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": 0,
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": "0",
+              "show": true
+            },
+            {
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": false
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "decimals": 1,
+          "description": "The state of the slowest table.\n\n0: ReplicationSetStateUnknown means the replication state is unknown, it should not happen.\n\n1: ReplicationSetStateAbsent means there is no one replicates or prepares it.\n\n2: ReplicationSetStatePrepare means it needs to add a secondary.\n\n3: ReplicationSetStateCommit means it needs to promote secondary to primary.\n\n4: ReplicationSetStateReplicating means there is exactly one capture that is replicating the table.\n\n5: ReplicationSetStateRemoving means all captures need to stop replication eventually.\n\n",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none"
+            },
+            "overrides": []
+          },
+          "fill": 0,
+          "fillGradient": 0,
+          "grid": {},
+          "gridPos": {
+            "h": 6,
+            "w": 12,
+            "x": 0,
+            "y": 129
+          },
+          "hiddenSeries": false,
+          "id": 544,
+          "legend": {
+            "alignAsTable": false,
+            "avg": false,
+            "current": false,
+            "max": false,
+            "min": false,
+            "rightSide": false,
+            "show": true,
+            "sideWidth": null,
+            "sort": null,
+            "sortDesc": null,
+            "total": false,
+            "values": false
+          },
+          "lines": false,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
+          "paceLength": 10,
+          "percentage": false,
+          "pluginVersion": "7.5.17",
+          "pointradius": 1,
+          "points": true,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "exemplar": true,
+              "expr": "sum(ticdc_scheduler_slow_table_replication_state{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed)",
+              "format": "time_series",
+              "hide": false,
+              "interval": "",
+              "intervalFactor": 2,
+              "legendFormat": "{{keyspace_name}}-{{changefeed}}",
+              "refId": "A",
+              "step": 10
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Slowest Table Replication State",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": 0,
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": "0",
+              "show": true
+            },
+            {
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": false
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
           "bars": true,
           "cacheTimeout": null,
           "dashLength": 10,
@@ -8028,7 +8144,7 @@
             "h": 6,
             "w": 12,
             "x": 12,
-            "y": 31
+            "y": 129
           },
           "hiddenSeries": false,
           "id": 590,
@@ -8128,60 +8244,63 @@
             "align": false,
             "alignLevel": null
           }
-        },
+        }
+      ],
+      "title": "Scheduler",
+      "type": "row"
+    },
+    {
+      "collapsed": true,
+      "datasource": null,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
+      "id": 10021,
+      "panels": [
         {
           "aliasColors": {},
           "bars": false,
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "decimals": 1,
-          "description": "The state of the slowest table.\n\n0: ReplicationSetStateUnknown means the replication state is unknown, it should not happen.\n\n1: ReplicationSetStateAbsent means there is no one replicates or prepares it.\n\n2: ReplicationSetStatePrepare means it needs to add a secondary.\n\n3: ReplicationSetStateCommit means it needs to promote secondary to primary.\n\n4: ReplicationSetStateReplicating means there is exactly one capture that is replicating the table.\n\n5: ReplicationSetStateRemoving means all captures need to stop replication eventually.\n\n",
-          "editable": true,
-          "error": false,
+          "description": "Changefeed memory quota",
           "fieldConfig": {
-            "defaults": {
-              "unit": "none"
-            },
+            "defaults": {},
             "overrides": []
           },
           "fill": 0,
           "fillGradient": 0,
-          "grid": {},
           "gridPos": {
-            "h": 6,
+            "h": 8,
             "w": 12,
-            "x": 0,
-            "y": 31
+            "x": 12,
+            "y": 45
           },
           "hiddenSeries": false,
-          "id": 544,
+          "id": 22470,
           "legend": {
-            "alignAsTable": false,
+            "alignAsTable": true,
             "avg": false,
-            "current": false,
-            "max": false,
+            "current": true,
+            "max": true,
             "min": false,
-            "rightSide": false,
             "show": true,
-            "sideWidth": null,
-            "sort": null,
-            "sortDesc": null,
             "total": false,
-            "values": false
+            "values": true
           },
-          "lines": false,
+          "lines": true,
           "linewidth": 1,
-          "links": [],
           "nullPointMode": "null",
           "options": {
             "alertThreshold": true
           },
-          "paceLength": 10,
           "percentage": false,
           "pluginVersion": "7.5.17",
-          "pointradius": 1,
-          "points": true,
+          "pointradius": 2,
+          "points": false,
           "renderer": "flot",
           "seriesOverrides": [],
           "spaceLength": 10,
@@ -8190,23 +8309,18 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_scheduler_slow_table_replication_state{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed)",
-              "format": "time_series",
-              "hide": false,
+              "expr": "sum(ticdc_dynamic_stream_memory_usage{k8s_cluster=~\"$k8s_cluster\", tidb_cluster=~\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", area=~\"$changefeed\", instance=~\"$ticdc_instance\", module=~\"event-collector-redo\"}) by (keyspace_name, area, instance, module, type)",
               "interval": "",
-              "intervalFactor": 2,
-              "legendFormat": "{{keyspace_name}}-{{changefeed}}",
-              "refId": "A",
-              "step": 10
+              "legendFormat": "{{keyspace_name}}-{{area}}-{{instance}}-{{module}}-{{type}}",
+              "refId": "A"
             }
           ],
           "thresholds": [],
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Slowest Table Replication State",
+          "title": "Memory Quota",
           "tooltip": {
-            "msResolution": false,
             "shared": true,
             "sort": 0,
             "value_type": "individual"
@@ -8221,30 +8335,23 @@
           },
           "yaxes": [
             {
-              "decimals": 0,
-              "format": "none",
-              "label": null,
+              "format": "bytes",
               "logBase": 1,
-              "max": null,
               "min": "0",
               "show": true
             },
             {
-              "format": "none",
-              "label": null,
+              "format": "short",
               "logBase": 1,
-              "max": null,
-              "min": null,
               "show": false
             }
           ],
           "yaxis": {
-            "align": false,
-            "alignLevel": null
+            "align": false
           }
         }
       ],
-      "title": "Scheduler",
+      "title": "Redo",
       "type": "row"
     }
   ],
@@ -8561,7 +8668,7 @@
     ]
   },
   "timezone": "browser",
-  "title": "Test-Cluster-TiCDC-New-Arch-KeyspaceName",
+  "title": "${DS_TEST-CLUSTER}-TiCDC-New-Arch-KeyspaceName",
   "uid": "lGT5hED6vqTn",
-  "version": 12
+  "version": 34
 }
