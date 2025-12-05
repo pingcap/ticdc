@@ -36,7 +36,7 @@ function test_update() {
 	sleep 30
 
 	table_dir="$WORK_DIR/storage_test/test/test_update"
-	ensure 60 ls "$table_dir" | grep -v "meta"
+	ensure 50 ls "$table_dir" | grep -v "meta"
 
 	version_dir=$(ls $table_dir | grep -v "meta")
 	date_dir=$(ls $table_dir/$version_dir)
