@@ -135,8 +135,8 @@ func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 			return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Execute DDL failed, Query info: %s; ", event.GetDDLQuery())))
 		}
 		log.Info("Execute DDL succeeded",
-			zap.String("changefeed", w.ChangefeedID.String()),
-			zap.Uint64("commitTs", event.GetCommitTs()), zap.String("query", event.GetDDLQuery()),
+			zap.String("changefeed", w.ChangefeedID.String()), zap.String("query", event.GetDDLQuery()),
+			zap.Uint64("StartTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()),
 			zap.Any("ddl", event))
 		return nil
 	}, retry.WithBackoffBaseDelay(BackoffBaseDelay.Milliseconds()),
