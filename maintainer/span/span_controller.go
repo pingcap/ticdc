@@ -491,7 +491,7 @@ func (c *Controller) RemoveAll() []*replica.SpanReplication {
 func (c *Controller) GetRemoveTasksByTableIDs(tableIDs ...int64) []*replica.SpanReplication {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	taskList := []*replica.SpanReplication{}
+	taskList := make([]*replica.SpanReplication, 0)
 	for _, tblID := range tableIDs {
 		for _, task := range c.tableTasks[tblID] {
 			if task.IsScheduled() {
@@ -503,10 +503,10 @@ func (c *Controller) GetRemoveTasksByTableIDs(tableIDs ...int64) []*replica.Span
 }
 
 func (c *Controller) GetRemoveTasksBySchemaID(schemaID int64) []*replica.SpanReplication {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 
-	taskList := []*replica.SpanReplication{}
+	taskList := make([]*replica.SpanReplication, 0)
 	for _, task := range c.schemaTasks[schemaID] {
 		if task.IsScheduled() {
 			taskList = append(taskList, task)

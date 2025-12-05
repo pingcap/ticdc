@@ -160,7 +160,62 @@ function main() {
 	cleanup_process $CDC_BINARY
 }
 
+function main_with_consistent() {
+	if [ "$SINK_TYPE" != "mysql" ]; then
+		echo "Skip consistent test since MySQL sink is required for failpoint coverage"
+		return
+	fi
+
+	prepare consistent_changefeed
+
+	create_tables
+	execute_ddl_for_normal_tables &
+	DDL_PID=$!
+
+	DML_PIDS=()
+	for i in {1..5}; do
+		execute_dml $i &
+		DML_PIDS+=($!)
+	done
+
+	random_failover_loop $TEST_DURATION &
+	FAILOVER_PID=$!
+
+	sleep $TEST_DURATION
+
+	stop_background_jobs $DDL_PID ${DML_PIDS[@]}
+	wait $FAILOVER_PID 2>/dev/null || true
+
+	# Wait to make sure replication catches up before checking redo progress.
+	sleep 60
+
+	if ((RANDOM % 2)); then
+		# For rename table, modify column ddl, drop column, drop index and drop table ddl, the struct of table is wrong when appling snapshot.
+		# see https://github.com/pingcap/tidb/issues/63464.
+		# So we can't check sync_diff with snapshot.
+		changefeed_id="test"
+		storage_path="file://$WORK_DIR/redo"
+		tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
+		current_tso=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
+		ensure 50 check_redo_resolved_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
+		cleanup_process $CDC_BINARY
+
+		cdc redo apply --log-level debug --tmp-dir="$tmp_download_path/apply" \
+			--storage="$storage_path" \
+			--sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
+		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
+	else
+		sleep 30
+		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 1000
+		cleanup_process $CDC_BINARY
+	fi
+}
+
 trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 main
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
+stop_tidb_cluster
+main_with_consistent
+check_logs $WORK_DIR
+echo "[$(date)] <<<<<< run consistent test case $TEST_NAME success! >>>>>>"
