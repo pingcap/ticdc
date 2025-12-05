@@ -529,7 +529,9 @@ func buildPersistedDDLEventCommon(args buildPersistedDDLEventFuncArgs) Persisted
 		var err error
 		query, err = transformDDLJobQuery(job)
 		if err != nil {
-			log.Panic("transformDDLJobQuery failed", zap.Error(err))
+			log.Error("transformDDLJobQuery failed", zap.Error(err))
+			// send the original query to downstream if transform failed
+			query = job.Query
 		}
 	} else {
 		query = job.Query
