@@ -129,7 +129,6 @@ var (
 		Help:      "The size of scanned DML events from eventStore",
 		Buckets:   prometheus.ExponentialBuckets(1024, 2.0, 16), // 1KB to 64MB
 	})
-
 	EventServiceScannedTxnCount = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: "ticdc",
 		Subsystem: "event_service",
@@ -137,6 +136,7 @@ var (
 		Help:      "The number of transactions scanned from eventStore",
 		Buckets:   prometheus.ExponentialBuckets(1, 2.0, 8), // 1 ~ 256
 	})
+
 	EventServiceSkipScanCount = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
@@ -153,12 +153,14 @@ var (
 			Help:      "The duration of getting DDL events from eventStore",
 			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
 		})
+
 	EventServiceInterruptScanCount = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "event_service",
 			Name:      "interrupt_scan_count",
 			Help:      "The number of scans interrupted",
+		})
 
 	EventServiceResetDispatcherCount = prometheus.NewCounter(
 		prometheus.CounterOpts{
