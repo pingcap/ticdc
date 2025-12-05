@@ -14,7 +14,6 @@ CDC_BINARY=cdc.test
 SINK_TYPE=$1
 TEST_DURATION=${TEST_DURATION:-300}
 
-
 function start_cdc_instance() {
 	local logsuffix=$1
 	local addr=$2
