@@ -245,13 +245,13 @@ func (oc *Controller) pollQueueingOperator() (
 	op := item.OP
 	opID := op.ID()
 	oc.mu.Unlock()
-	if item.IsRemoved {
+	if item.IsRemoved.Load() {
 		return nil, true
 	}
 	// always call the PostFinish method to ensure the operator is cleaned up by itself.
 	if op.IsFinished() {
 		op.PostFinish()
-		item.IsRemoved = true
+		item.IsRemoved.Store(true)
 
 		oc.mu.Lock()
 		delete(oc.operators, opID)
@@ -311,7 +311,7 @@ func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
 			zap.String("operator", old.OP.String()))
 		old.OP.OnTaskRemoved()
 		old.OP.PostFinish()
-		old.IsRemoved = true
+		old.IsRemoved.Store(true)
 
 		oc.mu.Lock()
 		delete(oc.operators, op.ID())
