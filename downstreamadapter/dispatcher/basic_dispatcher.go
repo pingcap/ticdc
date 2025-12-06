@@ -260,6 +260,7 @@ func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) boo
 		filteredEvents = append(filteredEvents, filtered)
 	}
 	if len(filteredEvents) == 0 {
+		log.Debug("all events all filtered")
 		// Nothing left to flush. Caller will treat this batch as non-blocking.
 		return false
 	}

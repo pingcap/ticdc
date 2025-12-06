@@ -30,7 +30,7 @@ type mockTableSchemaStore struct {
 	names []*event.SchemaTableName
 }
 
-func (m *mockTableSchemaStore) GetAllTableNames(uint64) []*event.SchemaTableName {
+func (m *mockTableSchemaStore) GetAllTableNames(uint64, bool) []*event.SchemaTableName {
 	return m.names
 }
 

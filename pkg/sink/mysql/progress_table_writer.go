@@ -35,7 +35,7 @@ const (
 
 // ProgressTableWriter is responsible for writing active-active progress rows.
 type tableNameProvider interface {
-	GetAllTableNames(ts uint64) []*event.SchemaTableName
+	GetAllTableNames(ts uint64, needDroppedTableName bool) []*event.SchemaTableName
 }
 
 // ProgressTableWriter is responsible for writing active-active progress rows.
@@ -88,7 +88,7 @@ func (w *ProgressTableWriter) Flush(checkpoint uint64) error {
 		return nil
 	}
 
-	tableNames := w.tableSchemaStore.GetAllTableNames(checkpoint)
+	tableNames := w.tableSchemaStore.GetAllTableNames(checkpoint, false)
 	if len(tableNames) == 0 {
 		return nil
 	}
