@@ -25,6 +25,16 @@ import (
 //go:generate msgp
 //msgp:maps autoshim
 
+// NeedTableNameStoreAndCheckpointTs returns true when downstream components must maintain table names
+// for checkpoint propagation. Non-MySQL sinks always require table names, while MySQL
+// sinks only need them when active-active replication is enabled.
+func NeedTableNameStoreAndCheckpointTs(isMysqlCompatibleBackend bool, enableActiveActive bool) bool {
+	if !isMysqlCompatibleBackend {
+		return true
+	}
+	return enableActiveActive
+}
+
 // TableSchemaStore is store some schema info for dispatchers.
 // It is responsible for
 // 1. [By TableNameStore]provide all the table name of the specified ts(only support incremental ts), mainly for generate topic for kafka sink when send watermark.
@@ -32,45 +42,41 @@ import (
 //
 // TableSchemaStore only exists in the table trigger event dispatcher, and the same instance's sink of this changefeed,
 // which means each changefeed only has one TableSchemaStore.
-// for mysql sink, tableSchemaStore only need the id-class infos; otherwise, it only need name-class infos.
+// for mysql sink with non-enable-active-active, tableSchemaStore only need the id-class infos;
+// otherwise, need both id-class and name-class, but id-class just for bootstrap, don't need to update it later.
 type TableSchemaStore struct {
-	sinkType       commonType.SinkType `msg:"-"`
-	tableNameStore *TableNameStore     `msg:"-"`
+	sinkType           commonType.SinkType `msg:"-"`
+	enableActiveActive bool                `msg:"-"`
+	tableNameStore     *TableNameStore     `msg:"-"`
 	// TableIDStore will be used in redo ddl event to record all block tables id,
 	// so it has to support Marshal/Unmarshal
 	TableIDStore *TableIDStore `msg:"table_id_store"`
 }
 
-func NewTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo, sinkType commonType.SinkType) *TableSchemaStore {
+func NewTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo, sinkType commonType.SinkType, enableActiveActive bool) *TableSchemaStore {
 	tableSchemaStore := &TableSchemaStore{
-		sinkType: sinkType,
+		sinkType:           sinkType,
+		enableActiveActive: enableActiveActive,
 		TableIDStore: &TableIDStore{
 			SchemaIDToTableIDs: make(map[int64]map[int64]interface{}),
 			TableIDToSchemaID:  make(map[int64]int64),
 		},
 	}
-	switch sinkType {
-	case commonType.MysqlSinkType, commonType.RedoSinkType:
-		for _, schema := range schemaInfo {
-			schemaID := schema.SchemaID
-			for _, table := range schema.Tables {
-				tableID := table.TableID
-				tableSchemaStore.TableIDStore.Add(schemaID, tableID)
-			}
-		}
-	default:
+	needTableNameStore := NeedTableNameStoreAndCheckpointTs(sinkType == commonType.MysqlSinkType, enableActiveActive)
+	if needTableNameStore {
 		tableSchemaStore.tableNameStore = &TableNameStore{
 			existingTables:         make(map[string]map[string]*SchemaTableName),
 			latestTableNameChanges: &LatestTableNameChanges{m: make(map[uint64]*TableNameChange)},
+			sinkType:               sinkType,
 		}
-		for _, schema := range schemaInfo {
-			schemaName := schema.SchemaName
-			schemaID := schema.SchemaID
-			for _, table := range schema.Tables {
-				tableName := table.TableName
-				tableSchemaStore.tableNameStore.Add(schemaName, tableName)
-				tableID := table.TableID
-				tableSchemaStore.TableIDStore.Add(schemaID, tableID)
+	}
+	for _, schema := range schemaInfo {
+		schemaID := schema.SchemaID
+		for _, table := range schema.Tables {
+			tableID := table.TableID
+			tableSchemaStore.TableIDStore.Add(schemaID, tableID)
+			if tableSchemaStore.tableNameStore != nil {
+				tableSchemaStore.tableNameStore.Add(schema.SchemaName, table.TableName)
 			}
 		}
 	}
@@ -128,13 +134,15 @@ func (s *TableSchemaStore) GetAllNormalTableIds() []int64 {
 	return s.TableIDStore.GetAllNormalTableIds()
 }
 
-// GetAllTableNames only will be called when maintainer send message to ask dispatcher to write checkpointTs to downstream.
-// So the ts must be <= the latest received event ts of table trigger event dispatcher.
-func (s *TableSchemaStore) GetAllTableNames(ts uint64) []*SchemaTableName {
-	if !s.initialized() {
+// GetAllTableNames will be called in two cases:
+// 1. for non-mysqlSink case, when maintainer send message to ask dispatcher to write checkpointTs to downstream. In this case, tableNames should also include the dropped tables, needDroppedTableName will be false.
+// 2. for mysqlSink with enableActiveActive case, when maintainer send message to ask dispatcher to write checkpointTs to downstream, needDroppedTableName will be true.
+// the ts must be <= the latest received event ts of table trigger event dispatcher.
+func (s *TableSchemaStore) GetAllTableNames(ts uint64, needDroppedTableName bool) []*SchemaTableName {
+	if !s.initialized() || s.tableNameStore == nil {
 		return nil
 	}
-	return s.tableNameStore.GetAllTableNames(ts)
+	return s.tableNameStore.GetAllTableNames(ts, needDroppedTableName)
 }
 
 //msgp:ignore LatestTableNameChanges
@@ -155,6 +163,7 @@ type TableNameStore struct {
 	existingTables map[string]map[string]*SchemaTableName // databaseName -> {tableName -> SchemaTableName}
 	// store the change of table name from the latest query ts to now(latest event)
 	latestTableNameChanges *LatestTableNameChanges
+	sinkType               commonType.SinkType
 }
 
 func (s *TableNameStore) Add(databaseName string, tableName string) {
@@ -173,10 +182,12 @@ func (s *TableNameStore) AddEvent(event *DDLEvent) {
 	}
 }
 
-// GetAllTableNames only will be called when maintainer send message to ask dispatcher to write checkpointTs to downstream.
-// So the ts must be <= the latest received event ts of table trigger event dispatcher.
-func (s *TableNameStore) GetAllTableNames(ts uint64) []*SchemaTableName {
-	// we have to send checkpointTs to the drop schema/tables so that consumer can know the schema/table is dropped.
+// GetAllTableNames will be called in two cases:
+// 1. for non-mysqlSink case, when maintainer send message to ask dispatcher to write checkpointTs to downstream. In this case, tableNames should also include the dropped tables, needDroppedTableName will be true.
+// 2. for mysqlSink with enableActiveActive case, when maintainer send message to ask dispatcher to write checkpointTs to downstream, needDroppedTableName will be false.
+// the ts must be <= the latest received event ts of table trigger event dispatcher.
+func (s *TableNameStore) GetAllTableNames(ts uint64, needDroppedTableName bool) []*SchemaTableName {
+	// In non-mysqlSink cases, we have to send checkpointTs to the drop schema/tables so that consumer can know the schema/table is dropped.
 	tableNames := make([]*SchemaTableName, 0)
 	s.latestTableNameChanges.mutex.Lock()
 	if len(s.latestTableNameChanges.m) > 0 {
@@ -184,9 +195,11 @@ func (s *TableNameStore) GetAllTableNames(ts uint64) []*SchemaTableName {
 		for commitTs, tableNameChange := range s.latestTableNameChanges.m {
 			if commitTs <= ts {
 				if tableNameChange.DropDatabaseName != "" {
-					tableNames = append(tableNames, &SchemaTableName{
-						SchemaName: tableNameChange.DropDatabaseName,
-					})
+					if needDroppedTableName {
+						tableNames = append(tableNames, &SchemaTableName{
+							SchemaName: tableNameChange.DropDatabaseName,
+						})
+					}
 					delete(s.existingTables, tableNameChange.DropDatabaseName)
 				} else {
 					for _, addName := range tableNameChange.AddName {
@@ -196,7 +209,9 @@ func (s *TableNameStore) GetAllTableNames(ts uint64) []*SchemaTableName {
 						s.existingTables[addName.SchemaName][addName.TableName] = &addName
 					}
 					for _, dropName := range tableNameChange.DropName {
-						tableNames = append(tableNames, &dropName)
+						if needDroppedTableName {
+							tableNames = append(tableNames, &dropName)
+						}
 						delete(s.existingTables[dropName.SchemaName], dropName.TableName)
 						if len(s.existingTables[dropName.SchemaName]) == 0 {
 							delete(s.existingTables, dropName.SchemaName)

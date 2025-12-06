@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/phayes/freeport"
@@ -376,7 +377,7 @@ func TestApply(t *testing.T) {
 	sinkURI, err := url.Parse(cfg.SinkURI)
 	require.NoError(t, err)
 	mysqlCfg.Apply(sinkURI, cfg.ChangefeedID, cfg)
-	ap.mysqlSink = dmysql.NewMySQLSink(ctx, cfg.ChangefeedID, mysqlCfg, db, false)
+	ap.mysqlSink = dmysql.NewMySQLSink(ctx, cfg.ChangefeedID, mysqlCfg, db, false, false, 1*time.Second)
 	ap.needRecoveryInfo = false
 	err = ap.Apply(ctx)
 	require.Nil(t, err)
@@ -584,7 +585,7 @@ func TestApplyBigTxn(t *testing.T) {
 	sinkURI, err := url.Parse(cfg.SinkURI)
 	require.NoError(t, err)
 	mysqlCfg.Apply(sinkURI, cfg.ChangefeedID, cfg)
-	ap.mysqlSink = dmysql.NewMySQLSink(ctx, cfg.ChangefeedID, mysqlCfg, db, false)
+	ap.mysqlSink = dmysql.NewMySQLSink(ctx, cfg.ChangefeedID, mysqlCfg, db, false, false, 1*time.Second)
 	ap.needRecoveryInfo = false
 	err = ap.Apply(ctx)
 	require.Nil(t, err)
