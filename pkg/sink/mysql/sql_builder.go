@@ -319,20 +319,16 @@ func buildActiveActiveUpsertSQL(tableInfo *common.TableInfo, rows []*commonEvent
 
 	builder.WriteString(" ON DUPLICATE KEY UPDATE ")
 
-	condInitialized := false
 	for i, colName := range insertColumns {
-		if i > 0 {
-			builder.WriteString(",")
-		}
 		quoted := common.QuoteName(colName)
-		if !condInitialized {
+		if i == 0 {
 			// The first column initializes the shared @ticdc_lww_cond condition and performs LWW update.
 			builder.WriteString(fmt.Sprintf("%s = IF((@ticdc_lww_cond := (IFNULL(%s, %s) <= VALUES(%s))), VALUES(%s), %s)",
 				quoted, originQuoted, commitQuoted, originQuoted, quoted, quoted))
-			condInitialized = true
-			continue
+		} else {
+			builder.WriteString(",")
+			builder.WriteString(fmt.Sprintf("%s = IF(@ticdc_lww_cond, VALUES(%s), %s)", quoted, quoted, quoted))
 		}
-		builder.WriteString(fmt.Sprintf("%s = IF(@ticdc_lww_cond, VALUES(%s), %s)", quoted, quoted, quoted))
 	}
 
 	return builder.String(), args

@@ -16,6 +16,7 @@ package mysql
 import (
 	"sort"
 
+	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 )
 
@@ -91,11 +92,7 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 		for _, eventsInGroup := range sortedEventGroups {
 			tableInfo := eventsInGroup[0].TableInfo
 			if w.cfg.EnableActiveActive {
-				if !w.shouldGenBatchSQL(tableInfo.HasPKOrNotNullUK, tableInfo.HasVirtualColumns(), eventsInGroup) {
-					queryList, argsList = w.generateActiveActiveNormalSQLs(eventsInGroup)
-				} else {
-					queryList, argsList = w.generateActiveActiveBatchSQL(eventsInGroup)
-				}
+				queryList, argsList = w.genActiveActiveSQL(tableInfo, eventsInGroup)
 			} else {
 				if !w.shouldGenBatchSQL(tableInfo.HasPKOrNotNullUK, tableInfo.HasVirtualColumns(), eventsInGroup) {
 					queryList, argsList = w.generateNormalSQLs(eventsInGroup)
@@ -113,6 +110,13 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 	dmls.LogDebug(events, w.id)
 
 	return dmls, nil
+}
+
+func (w *Writer) genActiveActiveSQL(tableInfo *common.TableInfo, eventsInGroup []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
+	if !w.shouldGenBatchSQL(tableInfo.HasPKOrNotNullUK, tableInfo.HasVirtualColumns(), eventsInGroup) {
+		return w.generateActiveActiveNormalSQLs(eventsInGroup)
+	}
+	return w.generateActiveActiveBatchSQL(eventsInGroup)
 }
 
 // shouldGenBatchSQL determines whether batch SQL generation should be used based on table properties and events.

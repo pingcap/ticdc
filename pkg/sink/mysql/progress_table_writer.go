@@ -31,6 +31,7 @@ import (
 
 const (
 	progressTableName = "ticdc_progress_table"
+	maxBatchSize      = 256
 )
 
 // ProgressTableWriter is responsible for writing active-active progress rows.
@@ -58,6 +59,9 @@ type ProgressTableWriter struct {
 
 // NewProgressTableWriter creates a new writer for active-active progress updates.
 func NewProgressTableWriter(ctx context.Context, db *sql.DB, changefeedID common.ChangeFeedID, maxTableNameCount int, progressUpdateInterval time.Duration) *ProgressTableWriter {
+	if maxTableNameCount <= 0 {
+		maxTableNameCount = maxBatchSize
+	}
 	return &ProgressTableWriter{
 		ctx:                    ctx,
 		db:                     db,
