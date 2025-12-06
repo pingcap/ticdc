@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -131,7 +132,7 @@ func WriteError(w http.ResponseWriter, statusCode int, err error) {
 func WriteData(w http.ResponseWriter, data interface{}) {
 	js, err := json.MarshalIndent(data, "", " ")
 	if err != nil {
-		log.Error("invalid json data", zap.Any("data", data), zap.Error(err))
+		log.Error("invalid json data", zap.String("data", util.RedactAny(data)), zap.Error(err))
 		WriteError(w, http.StatusInternalServerError, err)
 		return
 	}

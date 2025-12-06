@@ -161,13 +161,13 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	if err != nil {
 		log.Panic("decompress failed",
 			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
-			zap.Any("value", value), zap.Error(err))
+			zap.Any("value", util.RedactAny(value)), zap.Error(err))
 	}
 
 	var m messageDDL
 	err = json.Unmarshal(value, &m)
 	if err != nil {
-		log.Panic("decode message DDL failed", zap.Any("data", value), zap.Error(err))
+		log.Panic("decode message DDL failed", zap.String("data", util.RedactAny(value)), zap.Error(err))
 	}
 
 	result := new(commonEvent.DDLEvent)
@@ -202,7 +202,7 @@ func (b *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if err != nil {
 		log.Panic("decompress failed",
 			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
-			zap.Any("value", value), zap.Error(err))
+			zap.Any("value", util.RedactAny(value)), zap.Error(err))
 	}
 
 	nextRow := new(messageRow)
@@ -293,7 +293,7 @@ func (b *decoder) assembleEventFromClaimCheckStorage(ctx context.Context) *commo
 	}
 	claimCheckM, err := common.UnmarshalClaimCheckMessage(data)
 	if err != nil {
-		log.Panic("unmarshal claim check message failed", zap.Any("data", data), zap.Error(err))
+		log.Panic("unmarshal claim check message failed", zap.String("data", util.RedactAny(data)), zap.Error(err))
 	}
 
 	version := binary.BigEndian.Uint64(claimCheckM.Key[:8])
@@ -313,7 +313,7 @@ func (b *decoder) assembleEventFromClaimCheckStorage(ctx context.Context) *commo
 	if err != nil {
 		log.Panic("decompress large message failed",
 			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
-			zap.Any("value", value), zap.Error(err))
+			zap.Any("value", util.RedactAny(value)), zap.Error(err))
 	}
 
 	rowMsg := new(messageRow)
