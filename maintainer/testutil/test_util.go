@@ -33,11 +33,7 @@ import (
 // GetTableSpanByID returns a mock TableSpan for testing
 func GetTableSpanByID(id common.TableID) *heartbeatpb.TableSpan {
 	totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, id)
-	return &heartbeatpb.TableSpan{
-		TableID:  totalSpan.TableID,
-		StartKey: totalSpan.StartKey,
-		EndKey:   totalSpan.EndKey,
-	}
+	return heartbeatpb.NewTableSpan(totalSpan.TableID, totalSpan.StartKey, totalSpan.EndKey, totalSpan.KeyspaceID)
 }
 
 // InitializeTestServices sets up the node manager and message center for testing

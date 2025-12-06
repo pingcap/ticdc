@@ -105,3 +105,15 @@ func KeyspaceDDLSpan(keyspaceID uint32) *heartbeatpb.TableSpan {
 func LessTableSpan(t1, t2 *heartbeatpb.TableSpan) bool {
 	return t1.Less(t2)
 }
+
+// NewTableSpan creates a new TableSpan with all fields specified.
+// This is a convenience wrapper around heartbeatpb.NewTableSpan.
+func NewTableSpan(tableID int64, startKey, endKey []byte, keyspaceID uint32) *heartbeatpb.TableSpan {
+	return heartbeatpb.NewTableSpan(tableID, startKey, endKey, keyspaceID)
+}
+
+// NewTableSpanFromKeys creates a new TableSpan from keys without a TableID.
+// This is useful for creating spans that represent key ranges rather than specific tables.
+func NewTableSpanFromKeys(startKey, endKey []byte, keyspaceID uint32) *heartbeatpb.TableSpan {
+	return heartbeatpb.NewTableSpan(0, startKey, endKey, keyspaceID)
+}

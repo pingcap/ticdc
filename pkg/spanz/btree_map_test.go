@@ -26,49 +26,49 @@ func TestSpanMap(t *testing.T) {
 	m := NewBtreeMap[int]()
 
 	// Insert then get.
-	m.ReplaceOrInsert(heartbeatpb.TableSpan{TableID: 1}, 1)
-	v, ok := m.Get(heartbeatpb.TableSpan{TableID: 1})
+	m.ReplaceOrInsert(*heartbeatpb.NewTableSpan(1, nil, nil, 0), 1)
+	v, ok := m.Get(*heartbeatpb.NewTableSpan(1, nil, nil, 0))
 	require.Equal(t, v, 1)
 	require.True(t, ok)
 	require.Equal(t, 1, m.Len())
-	require.True(t, m.Has(heartbeatpb.TableSpan{TableID: 1}))
+	require.True(t, m.Has(*heartbeatpb.NewTableSpan(1, nil, nil, 0)))
 
 	// Insert then get again.
-	m.ReplaceOrInsert(heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}}, 2)
+	m.ReplaceOrInsert(*heartbeatpb.NewTableSpan(1, []byte{1}, nil, 0), 2)
 	require.Equal(t, 2, m.Len())
-	v, ok = m.Get(heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}})
+	v, ok = m.Get(*heartbeatpb.NewTableSpan(1, []byte{1}, nil, 0))
 	require.Equal(t, v, 2)
 	require.True(t, ok)
 
 	// Overwrite then get.
 	old, ok := m.ReplaceOrInsert(
-		heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}, EndKey: []byte{1}}, 3)
+		*heartbeatpb.NewTableSpan(1, []byte{1}, []byte{1}, 0), 3)
 	require.Equal(t, old, 2)
 	require.True(t, ok)
 	require.Equal(t, 2, m.Len())
-	require.True(t, m.Has(heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}}))
-	v, ok = m.Get(heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}})
+	require.True(t, m.Has(*heartbeatpb.NewTableSpan(1, []byte{1}, nil, 0)))
+	v, ok = m.Get(*heartbeatpb.NewTableSpan(1, []byte{1}, nil, 0))
 	require.Equal(t, v, 3)
 	require.True(t, ok)
 
 	// get value
-	v = m.GetV(heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}})
+	v = m.GetV(*heartbeatpb.NewTableSpan(1, []byte{1}, nil, 0))
 	require.Equal(t, v, 3)
 
 	// Delete than get value
-	v, ok = m.Delete(heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}})
+	v, ok = m.Delete(*heartbeatpb.NewTableSpan(1, []byte{1}, nil, 0))
 	require.Equal(t, v, 3)
 	require.True(t, ok)
 	require.Equal(t, 1, m.Len())
-	require.False(t, m.Has(heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}}))
-	v = m.GetV(heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{1}})
+	require.False(t, m.Has(*heartbeatpb.NewTableSpan(1, []byte{1}, nil, 0)))
+	v = m.GetV(*heartbeatpb.NewTableSpan(1, []byte{1}, nil, 0))
 	require.Equal(t, v, 0)
 
 	// Pointer value
 	mp := NewBtreeMap[*int]()
 	vp := &v
-	mp.ReplaceOrInsert(heartbeatpb.TableSpan{TableID: 1}, vp)
-	vp1, ok := mp.Get(heartbeatpb.TableSpan{TableID: 1})
+	mp.ReplaceOrInsert(*heartbeatpb.NewTableSpan(1, nil, nil, 0), vp)
+	vp1, ok := mp.Get(*heartbeatpb.NewTableSpan(1, nil, nil, 0))
 	require.Equal(t, vp, vp1)
 	require.True(t, ok)
 	require.Equal(t, 1, m.Len())
@@ -79,21 +79,21 @@ func TestMapAscend(t *testing.T) {
 
 	m := NewBtreeMap[int]()
 	for i := 0; i < 4; i++ {
-		m.ReplaceOrInsert(heartbeatpb.TableSpan{TableID: int64(i)}, i)
+		m.ReplaceOrInsert(*heartbeatpb.NewTableSpan(int64(i), nil, nil, 0), i)
 	}
 
 	j := 0
 	m.Ascend(func(span heartbeatpb.TableSpan, value int) bool {
-		require.Equal(t, heartbeatpb.TableSpan{TableID: int64(j)}, span)
+		require.Equal(t, *heartbeatpb.NewTableSpan(int64(j), nil, nil, 0), span)
 		j++
 		return true
 	})
 	require.Equal(t, 4, j)
 
 	j = 0
-	m.AscendRange(heartbeatpb.TableSpan{TableID: 1}, heartbeatpb.TableSpan{TableID: 2},
+	m.AscendRange(*heartbeatpb.NewTableSpan(1, nil, nil, 0), *heartbeatpb.NewTableSpan(2, nil, nil, 0),
 		func(span heartbeatpb.TableSpan, value int) bool {
-			require.Equal(t, heartbeatpb.TableSpan{TableID: 1}, span)
+			require.Equal(t, *heartbeatpb.NewTableSpan(1, nil, nil, 0), span)
 			j++
 			return true
 		})
@@ -111,97 +111,97 @@ func TestMapFindHole(t *testing.T) {
 	}{
 		{ // 0. all found.
 			spans: []heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_0"), EndKey: []byte("t1_1")},
-				{StartKey: []byte("t1_1"), EndKey: []byte("t1_2")},
-				{StartKey: []byte("t1_2"), EndKey: []byte("t2_0")},
+				*heartbeatpb.NewTableSpan(0, []byte("t1_0"), []byte("t1_1"), 0),
+				*heartbeatpb.NewTableSpan(0, []byte("t1_1"), []byte("t1_2"), 0),
+				*heartbeatpb.NewTableSpan(0, []byte("t1_2"), []byte("t2_0"), 0),
 			},
 			rang: [2]heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_0")},
-				{StartKey: []byte("t2_0")},
+				*heartbeatpb.NewTableSpan(0, []byte("t1_0"), nil, 0),
+				*heartbeatpb.NewTableSpan(0, []byte("t2_0"), nil, 0),
 			},
 			expectedFound: []heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_0"), EndKey: []byte("t1_1")},
-				{StartKey: []byte("t1_1"), EndKey: []byte("t1_2")},
-				{StartKey: []byte("t1_2"), EndKey: []byte("t2_0")},
+				*heartbeatpb.NewTableSpan(0, []byte("t1_0"), []byte("t1_1"), 0),
+				*heartbeatpb.NewTableSpan(0, []byte("t1_1"), []byte("t1_2"), 0),
+				*heartbeatpb.NewTableSpan(0, []byte("t1_2"), []byte("t2_0"), 0),
 			},
 		},
 		{ // 1. on hole in the middle.
 			spans: []heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_0"), EndKey: []byte("t1_1")},
-				{StartKey: []byte("t1_3"), EndKey: []byte("t1_4")},
-				{StartKey: []byte("t1_4"), EndKey: []byte("t2_0")},
+				*heartbeatpb.NewTableSpan(0, []byte("t1_0"), []byte("t1_1"), 0),
+				*heartbeatpb.NewTableSpan(0, []byte("t1_3"), []byte("t1_4"), 0),
+				*heartbeatpb.NewTableSpan(0, []byte("t1_4"), []byte("t2_0"), 0),
 			},
 			rang: [2]heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_0")},
-				{StartKey: []byte("t2_0")},
+				*heartbeatpb.NewTableSpan(0, []byte("t1_0"), nil, 0),
+				*heartbeatpb.NewTableSpan(0, []byte("t2_0"), nil, 0),
 			},
 			expectedFound: []heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_0"), EndKey: []byte("t1_1")},
-				{StartKey: []byte("t1_3"), EndKey: []byte("t1_4")},
-				{StartKey: []byte("t1_4"), EndKey: []byte("t2_0")},
+				*heartbeatpb.NewTableSpan(0, []byte("t1_0"), []byte("t1_1"), 0),
+				*heartbeatpb.NewTableSpan(0, []byte("t1_3"), []byte("t1_4"), 0),
+				*heartbeatpb.NewTableSpan(0, []byte("t1_4"), []byte("t2_0"), 0),
 			},
 			expectedHole: []heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_1"), EndKey: []byte("t1_3")},
+				*heartbeatpb.NewTableSpan(0, []byte("t1_1"), []byte("t1_3"), 0),
 			},
 		},
 		{ // 2. two holes in the middle.
 			spans: []heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_0"), EndKey: []byte("t1_1")},
-				{StartKey: []byte("t1_2"), EndKey: []byte("t1_3")},
-				{StartKey: []byte("t1_4"), EndKey: []byte("t2_0")},
+				*heartbeatpb.NewTableSpan(0, []byte("t1_0"), []byte("t1_1"), 0),
+				*heartbeatpb.NewTableSpan(0, []byte("t1_2"), []byte("t1_3"), 0),
+				*heartbeatpb.NewTableSpan(0, []byte("t1_4"), []byte("t2_0"), 0),
 			},
 			rang: [2]heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_0")},
-				{StartKey: []byte("t2_0")},
+				*heartbeatpb.NewTableSpan(0, []byte("t1_0"), nil, 0),
+				*heartbeatpb.NewTableSpan(0, []byte("t2_0"), nil, 0),
 			},
 			expectedFound: []heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_0"), EndKey: []byte("t1_1")},
-				{StartKey: []byte("t1_2"), EndKey: []byte("t1_3")},
-				{StartKey: []byte("t1_4"), EndKey: []byte("t2_0")},
+				*heartbeatpb.NewTableSpan(0, []byte("t1_0"), []byte("t1_1"), 0),
+				*heartbeatpb.NewTableSpan(0, []byte("t1_2"), []byte("t1_3"), 0),
+				*heartbeatpb.NewTableSpan(0, []byte("t1_4"), []byte("t2_0"), 0),
 			},
 			expectedHole: []heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_1"), EndKey: []byte("t1_2")},
-				{StartKey: []byte("t1_3"), EndKey: []byte("t1_4")},
+				*heartbeatpb.NewTableSpan(0, []byte("t1_1"), []byte("t1_2"), 0),
+				*heartbeatpb.NewTableSpan(0, []byte("t1_3"), []byte("t1_4"), 0),
 			},
 		},
 		{ // 3. all missing.
 			spans: []heartbeatpb.TableSpan{},
 			rang: [2]heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_0")},
-				{StartKey: []byte("t2_0")},
+				*heartbeatpb.NewTableSpan(0, []byte("t1_0"), nil, 0),
+				*heartbeatpb.NewTableSpan(0, []byte("t2_0"), nil, 0),
 			},
 			expectedHole: []heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_0"), EndKey: []byte("t2_0")},
+				*heartbeatpb.NewTableSpan(0, []byte("t1_0"), []byte("t2_0"), 0),
 			},
 		},
 		{ // 4. start not found
 			spans: []heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_4"), EndKey: []byte("t2_0")},
+				*heartbeatpb.NewTableSpan(0, []byte("t1_4"), []byte("t2_0"), 0),
 			},
 			rang: [2]heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_0")},
-				{StartKey: []byte("t2_0")},
+				*heartbeatpb.NewTableSpan(0, []byte("t1_0"), nil, 0),
+				*heartbeatpb.NewTableSpan(0, []byte("t2_0"), nil, 0),
 			},
 			expectedFound: []heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_4"), EndKey: []byte("t2_0")},
+				*heartbeatpb.NewTableSpan(0, []byte("t1_4"), []byte("t2_0"), 0),
 			},
 			expectedHole: []heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_0"), EndKey: []byte("t1_4")},
+				*heartbeatpb.NewTableSpan(0, []byte("t1_0"), []byte("t1_4"), 0),
 			},
 		},
 		{ // 5. end not found
 			spans: []heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_0"), EndKey: []byte("t1_1")},
+				*heartbeatpb.NewTableSpan(0, []byte("t1_0"), []byte("t1_1"), 0),
 			},
 			rang: [2]heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_0")},
-				{StartKey: []byte("t2_0")},
+				*heartbeatpb.NewTableSpan(0, []byte("t1_0"), nil, 0),
+				*heartbeatpb.NewTableSpan(0, []byte("t2_0"), nil, 0),
 			},
 			expectedFound: []heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_0"), EndKey: []byte("t1_1")},
+				*heartbeatpb.NewTableSpan(0, []byte("t1_0"), []byte("t1_1"), 0),
 			},
 			expectedHole: []heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_1"), EndKey: []byte("t2_0")},
+				*heartbeatpb.NewTableSpan(0, []byte("t1_1"), []byte("t2_0"), 0),
 			},
 		},
 	}

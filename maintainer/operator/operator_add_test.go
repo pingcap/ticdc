@@ -32,11 +32,7 @@ func TestAddOperator_DestNodeRemoved(t *testing.T) {
 
 	// Create a new replica set for adding
 	dispatcherID := common.NewDispatcherID()
-	tableSpan := &heartbeatpb.TableSpan{
-		TableID:  200,
-		StartKey: []byte("a"),
-		EndKey:   []byte("b"),
-	}
+	tableSpan := heartbeatpb.NewTableSpan(200, []byte("a"), []byte("b"), 0)
 
 	absentReplicaSet := replica.NewSpanReplication(
 		changefeedID,

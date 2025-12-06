@@ -1200,23 +1200,26 @@ func TestBarrierEventWithDispatcherReallocation(t *testing.T) {
 	startKey := span.StartKey
 	endKey := span.EndKey
 
-	dispatcherA := replica.NewSpanReplication(cfID, common.NewDispatcherID(), schemaID, &heartbeatpb.TableSpan{
-		TableID:  tableID,
-		StartKey: startKey,
-		EndKey:   append(startKey, byte('a')),
-	}, startTs, common.DefaultMode)
+	dispatcherA := replica.NewSpanReplication(cfID, common.NewDispatcherID(), schemaID, heartbeatpb.NewTableSpan(
+		tableID,
+		startKey,
+		append(startKey, byte('a')),
+		span.KeyspaceID,
+	), startTs, common.DefaultMode)
 
-	dispatcherB := replica.NewSpanReplication(cfID, common.NewDispatcherID(), schemaID, &heartbeatpb.TableSpan{
-		TableID:  tableID,
-		StartKey: append(startKey, byte('a')),
-		EndKey:   append(startKey, byte('b')),
-	}, startTs, common.DefaultMode)
+	dispatcherB := replica.NewSpanReplication(cfID, common.NewDispatcherID(), schemaID, heartbeatpb.NewTableSpan(
+		tableID,
+		append(startKey, byte('a')),
+		append(startKey, byte('b')),
+		span.KeyspaceID,
+	), startTs, common.DefaultMode)
 
-	dispatcherC := replica.NewSpanReplication(cfID, common.NewDispatcherID(), schemaID, &heartbeatpb.TableSpan{
-		TableID:  tableID,
-		StartKey: append(startKey, byte('b')),
-		EndKey:   endKey,
-	}, startTs, common.DefaultMode)
+	dispatcherC := replica.NewSpanReplication(cfID, common.NewDispatcherID(), schemaID, heartbeatpb.NewTableSpan(
+		tableID,
+		append(startKey, byte('b')),
+		endKey,
+		span.KeyspaceID,
+	), startTs, common.DefaultMode)
 
 	// add dispatcher to spanController and set to replicating state
 	spanController.AddReplicatingSpan(dispatcherA)
@@ -1273,23 +1276,26 @@ func TestBarrierEventWithDispatcherReallocation(t *testing.T) {
 	require.Nil(t, spanController.GetTaskByID(dispatcherC.ID))
 
 	// create new dispatcher E, F, G
-	dispatcherE := replica.NewSpanReplication(cfID, common.NewDispatcherID(), schemaID, &heartbeatpb.TableSpan{
-		TableID:  tableID,
-		StartKey: append(startKey, byte('a')),
-		EndKey:   append(startKey, byte('b')),
-	}, startTs, common.DefaultMode)
+	dispatcherE := replica.NewSpanReplication(cfID, common.NewDispatcherID(), schemaID, heartbeatpb.NewTableSpan(
+		tableID,
+		append(startKey, byte('a')),
+		append(startKey, byte('b')),
+		span.KeyspaceID,
+	), startTs, common.DefaultMode)
 
-	dispatcherF := replica.NewSpanReplication(cfID, common.NewDispatcherID(), schemaID, &heartbeatpb.TableSpan{
-		TableID:  tableID,
-		StartKey: append(startKey, byte('b')),
-		EndKey:   endKey,
-	}, startTs, common.DefaultMode)
+	dispatcherF := replica.NewSpanReplication(cfID, common.NewDispatcherID(), schemaID, heartbeatpb.NewTableSpan(
+		tableID,
+		append(startKey, byte('b')),
+		endKey,
+		span.KeyspaceID,
+	), startTs, common.DefaultMode)
 
-	dispatcherG := replica.NewSpanReplication(cfID, common.NewDispatcherID(), schemaID, &heartbeatpb.TableSpan{
-		TableID:  tableID,
-		StartKey: startKey,
-		EndKey:   append(startKey, byte('a')),
-	}, startTs, common.DefaultMode)
+	dispatcherG := replica.NewSpanReplication(cfID, common.NewDispatcherID(), schemaID, heartbeatpb.NewTableSpan(
+		tableID,
+		startKey,
+		append(startKey, byte('a')),
+		span.KeyspaceID,
+	), startTs, common.DefaultMode)
 
 	spanController.AddReplicatingSpan(dispatcherE)
 	spanController.AddReplicatingSpan(dispatcherF)
@@ -1403,11 +1409,12 @@ func TestBarrierEventWithDispatcherScheduling(t *testing.T) {
 	ddlTs := uint64(10)
 
 	span := common.TableIDToComparableSpan(0, tableID)
-	dispatcherA := replica.NewSpanReplication(cfID, common.NewDispatcherID(), schemaID, &heartbeatpb.TableSpan{
-		TableID:  tableID,
-		StartKey: span.StartKey,
-		EndKey:   span.EndKey,
-	}, startTs, common.DefaultMode)
+	dispatcherA := replica.NewSpanReplication(cfID, common.NewDispatcherID(), schemaID, heartbeatpb.NewTableSpan(
+		tableID,
+		span.StartKey,
+		span.EndKey,
+		span.KeyspaceID,
+	), startTs, common.DefaultMode)
 
 	// Add dispatcher A to spanController and set to replicating state
 	spanController.AddReplicatingSpan(dispatcherA)

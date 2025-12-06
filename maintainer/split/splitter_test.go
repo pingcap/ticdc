@@ -59,12 +59,12 @@ func TestSplitter_Split_ByRegion(t *testing.T) {
 	// Set up RegionCache service for testing
 	cache := NewMockRegionCache(nil)
 	appcontext.SetService(appcontext.RegionCache, cache)
-	cache.regions.ReplaceOrInsert(heartbeatpb.TableSpan{StartKey: []byte("t1_0"), EndKey: []byte("t1_1")}, 1)
-	cache.regions.ReplaceOrInsert(heartbeatpb.TableSpan{StartKey: []byte("t1_1"), EndKey: []byte("t1_2")}, 2)
-	cache.regions.ReplaceOrInsert(heartbeatpb.TableSpan{StartKey: []byte("t1_2"), EndKey: []byte("t1_3")}, 3)
-	cache.regions.ReplaceOrInsert(heartbeatpb.TableSpan{StartKey: []byte("t1_3"), EndKey: []byte("t1_4")}, 4)
-	cache.regions.ReplaceOrInsert(heartbeatpb.TableSpan{StartKey: []byte("t1_4"), EndKey: []byte("t2_2")}, 5)
-	cache.regions.ReplaceOrInsert(heartbeatpb.TableSpan{StartKey: []byte("t2_2"), EndKey: []byte("t2_3")}, 6)
+	cache.regions.ReplaceOrInsert(*heartbeatpb.NewTableSpan(0, []byte("t1_0"), []byte("t1_1"), 0), 1)
+	cache.regions.ReplaceOrInsert(*heartbeatpb.NewTableSpan(0, []byte("t1_1"), []byte("t1_2"), 0), 2)
+	cache.regions.ReplaceOrInsert(*heartbeatpb.NewTableSpan(0, []byte("t1_2"), []byte("t1_3"), 0), 3)
+	cache.regions.ReplaceOrInsert(*heartbeatpb.NewTableSpan(0, []byte("t1_3"), []byte("t1_4"), 0), 4)
+	cache.regions.ReplaceOrInsert(*heartbeatpb.NewTableSpan(0, []byte("t1_4"), []byte("t2_2"), 0), 5)
+	cache.regions.ReplaceOrInsert(*heartbeatpb.NewTableSpan(0, []byte("t2_2"), []byte("t2_3"), 0), 6)
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	cfg := &config.ChangefeedSchedulerConfig{
@@ -75,15 +75,11 @@ func TestSplitter_Split_ByRegion(t *testing.T) {
 
 	splitter := NewSplitter(0, cfID, cfg)
 
-	span := &heartbeatpb.TableSpan{
-		TableID:  1,
-		StartKey: []byte("t1"),
-		EndKey:   []byte("t2"),
-	}
+	span := heartbeatpb.NewTableSpan(1, []byte("t1"), []byte("t2"), 0)
 
 	// Test splitting by region count
 	spans := splitter.Split(context.Background(), span, 2, SplitTypeRegionCount)
 	re.Equal(2, len(spans))
-	re.Equal(&heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t1_3")}, spans[0])
-	re.Equal(&heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1_3"), EndKey: []byte("t2")}, spans[1])
+	re.Equal(heartbeatpb.NewTableSpan(1, []byte("t1"), []byte("t1_3"), 0), spans[0])
+	re.Equal(heartbeatpb.NewTableSpan(1, []byte("t1_3"), []byte("t2"), 0), spans[1])
 }

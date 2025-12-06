@@ -62,11 +62,7 @@ func splitTableSpanIntoMultiple(spanA *heartbeatpb.TableSpan, count int) []*hear
 		if i == count-1 {
 			endKey = spanA.EndKey
 		}
-		spans = append(spans, &heartbeatpb.TableSpan{
-			TableID:  spanA.TableID,
-			StartKey: startKey,
-			EndKey:   endKey,
-		})
+		spans = append(spans, heartbeatpb.NewTableSpan(spanA.TableID, startKey, endKey, spanA.KeyspaceID))
 	}
 
 	return spans
@@ -171,11 +167,7 @@ func TestSplitSpanChecker_RemoveReplica(t *testing.T) {
 	require.Contains(t, checker.allTasks, replicas[2].ID)
 
 	// Remove non-existing replica (no-op)
-	nonExistingReplica := NewSpanReplication(cfID, common.NewDispatcherID(), 100000, &heartbeatpb.TableSpan{
-		TableID:  100000,
-		StartKey: []byte{1},
-		EndKey:   []byte{2},
-	}, 1, common.DefaultMode)
+	nonExistingReplica := NewSpanReplication(cfID, common.NewDispatcherID(), 100000, heartbeatpb.NewTableSpan(100000, []byte{1}, []byte{2}, 0), 1, common.DefaultMode)
 	checker.RemoveReplica(nonExistingReplica)
 	require.Len(t, checker.allTasks, len(replicas)-1) // Should not change
 

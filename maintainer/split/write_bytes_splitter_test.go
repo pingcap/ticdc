@@ -226,7 +226,7 @@ func TestSplitRegionsByWrittenKeysConfig(t *testing.T) {
 	}
 
 	// When PD returns no regions, split should return empty spans
-	spans := splitter.split(context.Background(), &heartbeatpb.TableSpan{}, 3)
+	spans := splitter.split(context.Background(), heartbeatpb.NewTableSpan(0, nil, nil, 0), 3)
 	require.Empty(t, spans)
 }
 

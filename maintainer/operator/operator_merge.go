@@ -76,12 +76,12 @@ func NewMergeDispatcherOperator(
 	}
 
 	// bind the new replica set to the node.
-	mergeTableSpan := &heartbeatpb.TableSpan{
-		TableID:    toMergedSpans[0].TableID,
-		StartKey:   toMergedSpans[0].StartKey,
-		EndKey:     toMergedSpans[len(toMergedSpans)-1].EndKey,
-		KeyspaceID: spanController.GetkeyspaceID(),
-	}
+	mergeTableSpan := heartbeatpb.NewTableSpan(
+		toMergedSpans[0].TableID,
+		toMergedSpans[0].StartKey,
+		toMergedSpans[len(toMergedSpans)-1].EndKey,
+		spanController.GetkeyspaceID(),
+	)
 
 	newReplicaSet := replica.NewSpanReplication(
 		toMergedReplicaSets[0].ChangefeedID,

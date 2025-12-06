@@ -211,12 +211,12 @@ func (c *Controller) processTableSpans(
 		// Handle existing table spans
 		keyspaceID := c.GetKeyspaceID()
 		span := common.TableIDToComparableSpan(keyspaceID, table.TableID)
-		tableSpan := &heartbeatpb.TableSpan{
-			TableID:    table.TableID,
-			StartKey:   span.StartKey,
-			EndKey:     span.EndKey,
-			KeyspaceID: keyspaceID,
-		}
+		tableSpan := heartbeatpb.NewTableSpan(
+			table.TableID,
+			span.StartKey,
+			span.EndKey,
+			keyspaceID,
+		)
 		log.Info("table already working in other node",
 			zap.Stringer("changefeed", c.changefeedID),
 			zap.Int64("tableID", table.TableID))
@@ -359,24 +359,24 @@ func addToWorkingTaskMap(
 
 // findHoles returns an array of Span that are not covered in the range
 func findHoles(currentSpan utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication], totalSpan *heartbeatpb.TableSpan) []*heartbeatpb.TableSpan {
-	lastSpan := &heartbeatpb.TableSpan{
-		TableID:    totalSpan.TableID,
-		StartKey:   totalSpan.StartKey,
-		EndKey:     totalSpan.StartKey,
-		KeyspaceID: totalSpan.KeyspaceID,
-	}
+	lastSpan := heartbeatpb.NewTableSpan(
+		totalSpan.TableID,
+		totalSpan.StartKey,
+		totalSpan.StartKey,
+		totalSpan.KeyspaceID,
+	)
 	var holes []*heartbeatpb.TableSpan
 	// table span is sorted
 	currentSpan.Ascend(func(current *heartbeatpb.TableSpan, _ *replica.SpanReplication) bool {
 		ord := bytes.Compare(lastSpan.EndKey, current.StartKey)
 		if ord < 0 {
 			// Find a hole.
-			holes = append(holes, &heartbeatpb.TableSpan{
-				TableID:    totalSpan.TableID,
-				StartKey:   lastSpan.EndKey,
-				EndKey:     current.StartKey,
-				KeyspaceID: totalSpan.KeyspaceID,
-			})
+			holes = append(holes, heartbeatpb.NewTableSpan(
+				totalSpan.TableID,
+				lastSpan.EndKey,
+				current.StartKey,
+				totalSpan.KeyspaceID,
+			))
 		} else if ord > 0 {
 			log.Panic("map is out of order",
 				zap.String("lastSpan", lastSpan.String()),
@@ -388,12 +388,12 @@ func findHoles(currentSpan utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplic
 	// Check if there is a hole in the end.
 	// the lastSpan not reach the totalSpan end
 	if !bytes.Equal(lastSpan.EndKey, totalSpan.EndKey) {
-		holes = append(holes, &heartbeatpb.TableSpan{
-			TableID:    totalSpan.TableID,
-			StartKey:   lastSpan.EndKey,
-			EndKey:     totalSpan.EndKey,
-			KeyspaceID: totalSpan.KeyspaceID,
-		})
+		holes = append(holes, heartbeatpb.NewTableSpan(
+			totalSpan.TableID,
+			lastSpan.EndKey,
+			totalSpan.EndKey,
+			totalSpan.KeyspaceID,
+		))
 	}
 	return holes
 }

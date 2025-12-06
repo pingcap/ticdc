@@ -76,29 +76,29 @@ func TestIntersect(t *testing.T) {
 		res *heartbeatpb.TableSpan
 	}{
 		{
-			lhs: heartbeatpb.TableSpan{StartKey: nil, EndKey: []byte{1}},
-			rhs: heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: nil},
+			lhs: *heartbeatpb.NewTableSpan(0, nil, []byte{1}, 0),
+			rhs: *heartbeatpb.NewTableSpan(0, []byte{1}, nil, 0),
 			res: nil,
 		},
 		{
-			lhs: heartbeatpb.TableSpan{StartKey: nil, EndKey: nil},
-			rhs: heartbeatpb.TableSpan{StartKey: nil, EndKey: nil},
-			res: &heartbeatpb.TableSpan{StartKey: nil, EndKey: nil},
+			lhs: *heartbeatpb.NewTableSpan(0, nil, nil, 0),
+			rhs: *heartbeatpb.NewTableSpan(0, nil, nil, 0),
+			res: heartbeatpb.NewTableSpan(0, nil, nil, 0),
 		},
 		{
-			lhs: heartbeatpb.TableSpan{StartKey: nil, EndKey: nil},
-			rhs: heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: []byte{2}},
-			res: &heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: []byte{2}},
+			lhs: *heartbeatpb.NewTableSpan(0, nil, nil, 0),
+			rhs: *heartbeatpb.NewTableSpan(0, []byte{1}, []byte{2}, 0),
+			res: heartbeatpb.NewTableSpan(0, []byte{1}, []byte{2}, 0),
 		},
 		{
-			lhs: heartbeatpb.TableSpan{StartKey: []byte{0}, EndKey: []byte{3}},
-			rhs: heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: []byte{2}},
-			res: &heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: []byte{2}},
+			lhs: *heartbeatpb.NewTableSpan(0, []byte{0}, []byte{3}, 0),
+			rhs: *heartbeatpb.NewTableSpan(0, []byte{1}, []byte{2}, 0),
+			res: heartbeatpb.NewTableSpan(0, []byte{1}, []byte{2}, 0),
 		},
 		{
-			lhs: heartbeatpb.TableSpan{StartKey: []byte{0}, EndKey: []byte{2}},
-			rhs: heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: []byte{2}},
-			res: &heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: []byte{2}},
+			lhs: *heartbeatpb.NewTableSpan(0, []byte{0}, []byte{2}, 0),
+			rhs: *heartbeatpb.NewTableSpan(0, []byte{1}, []byte{2}, 0),
+			res: heartbeatpb.NewTableSpan(0, []byte{1}, []byte{2}, 0),
 		},
 	}
 

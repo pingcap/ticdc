@@ -49,11 +49,7 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 	ds := dynstream.NewParallelDynamicStream(&regionEventHandler{}, option)
 	ds.Start()
 
-	span := heartbeatpb.TableSpan{
-		TableID:  100,
-		StartKey: common.ToComparableKey([]byte{}), // TODO: remove spanz dependency
-		EndKey:   common.ToComparableKey(common.UpperBoundKey),
-	}
+	span := *heartbeatpb.NewTableSpan(100, common.ToComparableKey([]byte{}), common.ToComparableKey(common.UpperBoundKey), 0)
 	subID := SubscriptionID(999)
 	eventCh := make(chan common.RawKVEntry, 1000)
 	consumeKVEvents := func(events []common.RawKVEntry, _ func()) bool {
@@ -220,14 +216,10 @@ func TestHandleResolvedTs(t *testing.T) {
 	state1 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(1, 1, 1)}, uint64(subID1), worker)
 	state1.start()
 	{
-		span := heartbeatpb.TableSpan{
-			TableID:  100,
-			StartKey: common.ToComparableKey([]byte{}), // TODO: remove spanz dependency
-			EndKey:   common.ToComparableKey(common.UpperBoundKey),
-		}
+		span := *heartbeatpb.NewTableSpan(100, common.ToComparableKey([]byte{}), common.ToComparableKey(common.UpperBoundKey), 0)
 		subSpan := &subscribedSpan{
 			subID:             subID1,
-			span:              heartbeatpb.TableSpan{},
+			span:              *heartbeatpb.NewTableSpan(0, nil, nil, 0),
 			rangeLock:         regionlock.NewRangeLock(uint64(subID1), span.StartKey, span.EndKey, 1),
 			consumeKVEvents:   consumeKVEvents,
 			advanceResolvedTs: advanceResolvedTs,
@@ -244,11 +236,7 @@ func TestHandleResolvedTs(t *testing.T) {
 	state2 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(2, 2, 2)}, uint64(subID2), worker)
 	state2.start()
 	{
-		span := heartbeatpb.TableSpan{
-			TableID:  100,
-			StartKey: common.ToComparableKey([]byte{}), // TODO: remove spanz dependency
-			EndKey:   common.ToComparableKey(common.UpperBoundKey),
-		}
+		span := *heartbeatpb.NewTableSpan(100, common.ToComparableKey([]byte{}), common.ToComparableKey(common.UpperBoundKey), 0)
 		subSpan := &subscribedSpan{
 			subID:             subID2,
 			span:              span,
@@ -268,11 +256,7 @@ func TestHandleResolvedTs(t *testing.T) {
 	state3 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(3, 3, 3)}, uint64(subID3), worker)
 	state3.start()
 	{
-		span := heartbeatpb.TableSpan{
-			TableID:  100,
-			StartKey: common.ToComparableKey([]byte{}), // TODO: remove spanz dependency
-			EndKey:   common.ToComparableKey(common.UpperBoundKey),
-		}
+		span := *heartbeatpb.NewTableSpan(100, common.ToComparableKey([]byte{}), common.ToComparableKey(common.UpperBoundKey), 0)
 		subSpan := &subscribedSpan{
 			subID:             subID3,
 			span:              span,

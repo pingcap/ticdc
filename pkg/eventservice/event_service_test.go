@@ -406,17 +406,13 @@ func newMockDispatcherInfo(t *testing.T, startTs uint64, dispatcherID common.Dis
 		id:           dispatcherID,
 		changefeedID: common.NewChangefeedID4Test("default", "test"),
 		topic:        "topic1",
-		span: &heartbeatpb.TableSpan{
-			TableID:  tableID,
-			StartKey: []byte("a"),
-			EndKey:   []byte("z"),
-		},
-		startTs:    startTs,
-		actionType: actionType,
-		filter:     filter,
-		bdrMode:    false,
-		integrity:  config.GetDefaultReplicaConfig().Integrity,
-		tz:         time.Local,
+		span:         heartbeatpb.NewTableSpan(tableID, []byte("a"), []byte("z"), 0),
+		startTs:      startTs,
+		actionType:   actionType,
+		filter:       filter,
+		bdrMode:      false,
+		integrity:    config.GetDefaultReplicaConfig().Integrity,
+		tz:           time.Local,
 	}
 }
 

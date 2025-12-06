@@ -38,7 +38,8 @@ func HexKey(key []byte) string {
 func ArrayToSpan(in []heartbeatpb.Table) []heartbeatpb.TableSpan {
 	out := make([]heartbeatpb.TableSpan, 0, len(in))
 	for _, table := range in {
-		out = append(out, heartbeatpb.TableSpan{TableID: table.GetTableID()})
+		span := heartbeatpb.NewTableSpan(table.GetTableID(), nil, nil, 0)
+		out = append(out, *span)
 	}
 	return out
 }
@@ -72,11 +73,8 @@ func toHashableSpan(span heartbeatpb.TableSpan) hashableSpan {
 
 // toSpan converts to Span.
 func (h hashableSpan) toSpan() heartbeatpb.TableSpan {
-	return heartbeatpb.TableSpan{
-		TableID:  h.TableID,
-		StartKey: unsafeStringToBytes(h.StartKey),
-		EndKey:   unsafeStringToBytes(h.EndKey),
-	}
+	span := heartbeatpb.NewTableSpan(h.TableID, unsafeStringToBytes(h.StartKey), unsafeStringToBytes(h.EndKey), 0)
+	return *span
 }
 
 // unsafeStringToBytes converts string to byte without memory allocation.

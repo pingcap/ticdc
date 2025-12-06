@@ -39,11 +39,7 @@ func TestGenerateResolveLockTask(t *testing.T) {
 		resolveLockTaskCh: make(chan resolveLockTask, 10),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
-	rawSpan := heartbeatpb.TableSpan{
-		TableID:  1,
-		StartKey: []byte{'a'},
-		EndKey:   []byte{'z'},
-	}
+	rawSpan := *heartbeatpb.NewTableSpan(1, []byte{'a'}, []byte{'z'}, 0)
 	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
 	advanceResolvedTs := func(ts uint64) {}
 	span := client.newSubscribedSpan(SubscriptionID(1), rawSpan, 100, consumeKVEvents, advanceResolvedTs, 0)
@@ -161,7 +157,7 @@ func TestSubscriptionWithFailedTiKV(t *testing.T) {
 	}()
 
 	subID := client.AllocSubscriptionID()
-	span := heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("b")}
+	span := *heartbeatpb.NewTableSpan(1, []byte("a"), []byte("b"), 0)
 	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool {
 		// should not reach here
 		require.True(t, false)
@@ -218,7 +214,7 @@ func TestErrCacheDispatchWithFullChannelAndCanceledContext(t *testing.T) {
 	mockErrInfo := regionErrorInfo{
 		regionInfo: regionInfo{
 			verID: tikv.NewRegionVerID(1, 1, 1),
-			span:  heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("b")},
+			span:  *heartbeatpb.NewTableSpan(1, []byte("a"), []byte("b"), 0),
 		},
 		err: errors.New("test error"),
 	}

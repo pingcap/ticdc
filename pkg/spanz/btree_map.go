@@ -141,18 +141,17 @@ func (m *BtreeMap[T]) FindHoles(start, end heartbeatpb.TableSpan) ([]heartbeatpb
 	m.cache.coveredSpans = m.cache.coveredSpans[:0]
 	m.cache.holes = m.cache.holes[:0]
 
-	lastSpan := heartbeatpb.TableSpan{
-		StartKey: start.StartKey,
-		EndKey:   start.StartKey,
-	}
+	lastSpan := *heartbeatpb.NewTableSpan(start.TableID, start.StartKey, start.StartKey, start.KeyspaceID)
 	m.AscendRange(start, end, func(current heartbeatpb.TableSpan, _ T) bool {
 		ord := bytes.Compare(lastSpan.EndKey, current.StartKey)
 		if ord < 0 {
 			// Find a hole.
-			m.cache.holes = append(m.cache.holes, heartbeatpb.TableSpan{
-				StartKey: lastSpan.EndKey,
-				EndKey:   current.StartKey,
-			})
+			m.cache.holes = append(m.cache.holes, *heartbeatpb.NewTableSpan(
+				current.TableID,
+				lastSpan.EndKey,
+				current.StartKey,
+				current.KeyspaceID,
+			))
 		} else if ord > 0 {
 			log.Panic("map is out of order",
 				zap.String("lastSpan", lastSpan.String()),
@@ -165,17 +164,22 @@ func (m *BtreeMap[T]) FindHoles(start, end heartbeatpb.TableSpan) ([]heartbeatpb
 	})
 	if len(m.cache.coveredSpans) == 0 {
 		// No such span in the map.
-		m.cache.holes = append(m.cache.holes, heartbeatpb.TableSpan{
-			StartKey: start.StartKey, EndKey: end.StartKey,
-		})
+		m.cache.holes = append(m.cache.holes, *heartbeatpb.NewTableSpan(
+			start.TableID,
+			start.StartKey,
+			end.StartKey,
+			start.KeyspaceID,
+		))
 		return m.cache.coveredSpans, m.cache.holes
 	}
 	// Check if there is a hole in the end.
 	if !bytes.Equal(lastSpan.EndKey, end.StartKey) {
-		m.cache.holes = append(m.cache.holes, heartbeatpb.TableSpan{
-			StartKey: lastSpan.EndKey,
-			EndKey:   end.StartKey,
-		})
+		m.cache.holes = append(m.cache.holes, *heartbeatpb.NewTableSpan(
+			lastSpan.TableID,
+			lastSpan.EndKey,
+			end.StartKey,
+			lastSpan.KeyspaceID,
+		))
 	}
 	return m.cache.coveredSpans, m.cache.holes
 }

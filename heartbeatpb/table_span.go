@@ -41,3 +41,14 @@ func (s *TableSpan) Copy() *TableSpan {
 		KeyspaceID: s.KeyspaceID,
 	}
 }
+
+// NewTableSpan creates a new TableSpan with all fields specified.
+// This constructor ensures all fields are properly initialized.
+func NewTableSpan(tableID int64, startKey, endKey []byte, keyspaceID uint32) *TableSpan {
+	return &TableSpan{
+		TableID:    tableID,
+		StartKey:   startKey,
+		EndKey:     endKey,
+		KeyspaceID: keyspaceID,
+	}
+}

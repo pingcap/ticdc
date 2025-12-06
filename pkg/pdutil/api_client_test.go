@@ -213,14 +213,14 @@ func TestScanRegions(t *testing.T) {
 		}
 		return RegionsInfo{Regions: regions[start:end]}
 	}
-	rs, err := pc.scanRegions(context.Background(), heartbeatpb.TableSpan{}, []string{mockPDServer.URL}, 1)
+	rs, err := pc.scanRegions(context.Background(), *heartbeatpb.NewTableSpan(0, nil, nil, 0), []string{mockPDServer.URL}, 1)
 	require.NoError(t, err)
 	require.Equal(t, 7, len(rs))
 
 	handler = func() RegionsInfo {
 		return RegionsInfo{Regions: regions}
 	}
-	rs, err = pc.scanRegions(context.Background(), heartbeatpb.TableSpan{}, []string{mockPDServer.URL}, 1024)
+	rs, err = pc.scanRegions(context.Background(), *heartbeatpb.NewTableSpan(0, nil, nil, 0), []string{mockPDServer.URL}, 1024)
 	require.NoError(t, err)
 	require.Equal(t, 7, len(rs))
 
@@ -234,7 +234,7 @@ func TestScanRegions(t *testing.T) {
 	}
 	rs, err = pc.scanRegions(
 		context.Background(),
-		heartbeatpb.TableSpan{StartKey: []byte{0, 2, 0}, EndKey: []byte{0, 3}},
+		*heartbeatpb.NewTableSpan(0, []byte{0, 2, 0}, []byte{0, 3}, 0),
 		[]string{mockPDServer.URL}, 1)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(rs))
@@ -257,7 +257,7 @@ func TestScanRegions(t *testing.T) {
 	}
 	rs, err = pc.scanRegions(
 		context.Background(),
-		heartbeatpb.TableSpan{StartKey: []byte{0, 2, 0}, EndKey: []byte{0, 4, 0}},
+		*heartbeatpb.NewTableSpan(0, []byte{0, 2, 0}, []byte{0, 4, 0}, 0),
 		[]string{mockPDServer.URL}, 1)
 	require.NoError(t, err)
 	require.Equal(t, 3, len(rs))

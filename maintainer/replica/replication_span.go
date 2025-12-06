@@ -126,12 +126,7 @@ func (r *SpanReplication) initStatus(status *heartbeatpb.TableSpanStatus) {
 
 func (r *SpanReplication) initGroupID() {
 	r.groupID = replica.DefaultGroupID
-	span := heartbeatpb.TableSpan{
-		TableID:    r.Span.TableID,
-		StartKey:   r.Span.StartKey,
-		EndKey:     r.Span.EndKey,
-		KeyspaceID: r.Span.KeyspaceID,
-	}
+	span := *r.Span.Copy()
 	// check if the table is split
 	totalSpan := common.TableIDToComparableSpan(span.KeyspaceID, span.TableID)
 	if !common.IsSubSpan(span, totalSpan) {

@@ -58,9 +58,5 @@ func TestSpanReplication_NewAddDispatcherMessage(t *testing.T) {
 // getTableSpanByID returns a mock TableSpan for testing
 func getTableSpanByID(id common.TableID) *heartbeatpb.TableSpan {
 	totalSpan := common.TableIDToComparableSpan(0, id)
-	return &heartbeatpb.TableSpan{
-		TableID:  totalSpan.TableID,
-		StartKey: totalSpan.StartKey,
-		EndKey:   totalSpan.EndKey,
-	}
+	return heartbeatpb.NewTableSpan(totalSpan.TableID, totalSpan.StartKey, totalSpan.EndKey, totalSpan.KeyspaceID)
 }

@@ -46,12 +46,8 @@ func TableIDToComparableSpan(keyspaceID uint32, tableID int64) heartbeatpb.Table
 		// The error only happends when the keyspaceID is greater than 0xFFFFFF, which is an invalid keyspaceID
 		log.Error("GetKeyspaceTableRange failed", zap.Uint32("keyspaceID", keyspaceID), zap.Int64("tableID", tableID), zap.Error(err))
 	}
-	return heartbeatpb.TableSpan{
-		TableID:    tableID,
-		StartKey:   ToComparableKey(startKey),
-		EndKey:     ToComparableKey(endKey),
-		KeyspaceID: keyspaceID,
-	}
+	span := heartbeatpb.NewTableSpan(tableID, ToComparableKey(startKey), ToComparableKey(endKey), keyspaceID)
+	return *span
 }
 
 // TableIDToComparableRange returns a range of a table,
@@ -180,10 +176,8 @@ func EndCompare(lhs []byte, rhs []byte) int {
 func GetIntersectSpan(lhs, rhs heartbeatpb.TableSpan) heartbeatpb.TableSpan {
 	if len(lhs.StartKey) != 0 && EndCompare(lhs.StartKey, rhs.EndKey) >= 0 ||
 		len(rhs.StartKey) != 0 && EndCompare(rhs.StartKey, lhs.EndKey) >= 0 {
-		return heartbeatpb.TableSpan{
-			StartKey: nil,
-			EndKey:   nil,
-		}
+		span := heartbeatpb.NewTableSpan(0, nil, nil, lhs.KeyspaceID)
+		return *span
 	}
 
 	start := lhs.StartKey
@@ -198,11 +192,8 @@ func GetIntersectSpan(lhs, rhs heartbeatpb.TableSpan) heartbeatpb.TableSpan {
 		end = rhs.EndKey
 	}
 
-	return heartbeatpb.TableSpan{
-		StartKey:   start,
-		EndKey:     end,
-		KeyspaceID: lhs.KeyspaceID,
-	}
+	span := heartbeatpb.NewTableSpan(lhs.TableID, start, end, lhs.KeyspaceID)
+	return *span
 }
 
 // IsSubSpan returns true if the sub span is parents spans
@@ -227,11 +218,10 @@ func IsEmptySpan(span heartbeatpb.TableSpan) bool {
 
 // ToSpan returns a span, keys are encoded in memcomparable format.
 // See: https://github.com/facebook/mysql-5.6/wiki/MyRocks-record-format
+// Deprecated: Use NewTableSpan or NewTableSpanFromKeys instead to ensure all fields are set.
 func ToSpan(startKey, endKey []byte) heartbeatpb.TableSpan {
-	return heartbeatpb.TableSpan{
-		StartKey: ToComparableKey(startKey),
-		EndKey:   ToComparableKey(endKey),
-	}
+	span := heartbeatpb.NewTableSpan(0, ToComparableKey(startKey), ToComparableKey(endKey), 0)
+	return *span
 }
 
 // ToComparableKey returns a memcomparable key.
