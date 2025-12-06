@@ -447,11 +447,15 @@ func (h *RedoMessageHandler) Handle(dispatcherManager *DispatcherManager, messag
 		panic("invalid message count")
 	}
 	msg := messages[0]
-	ok := dispatcherManager.SetGlobalRedoTs(msg.CheckpointTs, msg.ResolvedTs)
-	if ok {
-		dispatcherManager.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.EventDispatcher) {
-			dispatcher.HandleCacheEvents()
-		})
+	if msg.Advanced {
+		ok := dispatcherManager.SetGlobalRedoTs(msg.ResolvedTs)
+		if ok {
+			dispatcherManager.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.EventDispatcher) {
+				dispatcher.HandleCacheEvents()
+			})
+		}
+	} else {
+		dispatcherManager.UpdateRedoMeta(msg.CheckpointTs, msg.ResolvedTs)
 	}
 	return false
 }

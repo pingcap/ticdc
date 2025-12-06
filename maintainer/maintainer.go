@@ -94,7 +94,9 @@ type Maintainer struct {
 	startCheckpointTs uint64
 	enableRedo        bool
 	// redoTs is global ts to forward
-	redoTs          *heartbeatpb.RedoMessage
+	redoTs *heartbeatpb.RedoMessage
+	// redoResolvedTs is the commit-ts of the redo meta record
+	redoResolvedTs  uint64
 	redoDDLSpan     *replica.SpanReplication
 	redoTsByCapture *WatermarkCaptureMap
 
@@ -234,6 +236,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		CheckpointTs: checkpointTs,
 		ResolvedTs:   checkpointTs,
 	}
+	m.redoResolvedTs = checkpointTs
 	m.scheduleState.Store(int32(heartbeatpb.ComponentState_Working))
 	m.bootstrapper = bootstrap.NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse](
 		m.changefeedID.Name(),
@@ -466,6 +469,9 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 	case messaging.TypeCheckpointTsMessage:
 		req := msg.Message[0].(*heartbeatpb.CheckpointTsMessage)
 		m.onCheckpointTsPersisted(req)
+	case messaging.TypeRedoMessage:
+		req := msg.Message[0].(*heartbeatpb.RedoMessage)
+		m.onRedoPersisted(req)
 	default:
 		log.Warn("unknown message type, ignore it",
 			zap.Stringer("changefeedID", m.changefeedID),
@@ -495,6 +501,21 @@ func (m *Maintainer) onCheckpointTsPersisted(msg *heartbeatpb.CheckpointTsMessag
 	m.sendMessages([]*messaging.TargetMessage{
 		messaging.NewSingleTargetMessage(m.selfNode.ID, messaging.HeartbeatCollectorTopic, msg),
 	})
+}
+
+func (m *Maintainer) onRedoPersisted(req *heartbeatpb.RedoMessage) {
+	if m.redoResolvedTs < req.ResolvedTs {
+		m.redoResolvedTs = req.ResolvedTs
+		msgs := make([]*messaging.TargetMessage, 0, len(m.bootstrapper.GetAllNodeIDs()))
+		for id := range m.bootstrapper.GetAllNodeIDs() {
+			msgs = append(msgs, messaging.NewSingleTargetMessage(id, messaging.HeartbeatCollectorTopic, &heartbeatpb.RedoMessage{
+				ChangefeedID: req.ChangefeedID,
+				ResolvedTs:   m.redoResolvedTs,
+				Advanced:     true,
+			}))
+		}
+		m.sendMessages(msgs)
+	}
 }
 
 func (m *Maintainer) onNodeChanged() {
@@ -590,15 +611,13 @@ func (m *Maintainer) handleRedoMessage(ctx context.Context) {
 				zap.Any("resolvedTs", newWatermark.CheckpointTs),
 			)
 			if needUpdate {
-				msgs := make([]*messaging.TargetMessage, 0, len(m.bootstrapper.GetAllNodeIDs()))
-				for id := range m.bootstrapper.GetAllNodeIDs() {
-					msgs = append(msgs, messaging.NewSingleTargetMessage(id, messaging.HeartbeatCollectorTopic, &heartbeatpb.RedoMessage{
+				m.sendMessages([]*messaging.TargetMessage{
+					messaging.NewSingleTargetMessage(m.selfNode.ID, messaging.HeartbeatCollectorTopic, &heartbeatpb.RedoMessage{
 						ChangefeedID: m.redoTs.ChangefeedID,
 						CheckpointTs: m.redoTs.CheckpointTs,
 						ResolvedTs:   m.redoTs.ResolvedTs,
-					}))
-				}
-				m.sendMessages(msgs)
+					}),
+				})
 			}
 		}
 	}
