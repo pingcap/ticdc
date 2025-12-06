@@ -175,7 +175,7 @@ func (o *updateChangefeedOptions) applyChanges(oldInfo *v2.ChangeFeedInfo,
 		case "pd", "log-level", "key", "cert", "ca", "server":
 		// Do nothing, this is a flags from the cli command
 		// we don't use it to update, but we do use these flags.
-		case "upstream-pd", "upstream-ca", "upstream-cert", "upstream-key":
+		case "upstream-pd", "upstream-ca", "upstream-cert", "upstream-key", "keyspace":
 		default:
 			// use this default branch to prevent new added parameter is not added
 			log.Warn("unsupported flag, please report a bug", zap.String("flagName", flag.Name))

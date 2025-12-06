@@ -19,6 +19,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
@@ -40,7 +41,7 @@ func TestDmlExprFilterInvalidConfig(t *testing.T) {
 		EventFilters: []*config.EventFilterRule{
 			{
 				Matcher:               []string{"test.t1"},
-				IgnoreInsertValueExpr: "id > > 100",
+				IgnoreInsertValueExpr: util.AddressOf("id > > 100"),
 			},
 		},
 	}

@@ -19,6 +19,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/tikv/client-go/v2/tikv"
 )
 
@@ -51,7 +52,7 @@ func NewSplitter(
 ) *Splitter {
 	return &Splitter{
 		changefeedID:          changefeedID,
-		regionCounterSplitter: newRegionCountSplitter(keyspaceID, changefeedID, config.RegionCountPerSpan, config.RegionThreshold),
+		regionCounterSplitter: newRegionCountSplitter(keyspaceID, changefeedID, util.GetOrZero(config.RegionCountPerSpan), util.GetOrZero(config.RegionThreshold)),
 		writeBytesSplitter:    newWriteBytesSplitter(keyspaceID, changefeedID),
 	}
 }

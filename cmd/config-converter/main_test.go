@@ -79,7 +79,7 @@ case-sensitive = false
 		{
 			name:       "empty config",
 			config:     ``,
-			wantOutput: `"memory_quota": 0`,
+			wantOutput: ``,
 			wantErr:    false,
 			setup: func() {
 				file, err := os.CreateTemp("", "test-config-*.toml")

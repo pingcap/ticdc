@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
 
@@ -86,7 +87,7 @@ func createTestManager(t *testing.T) *DispatcherManager {
 		blockStatusRequestQueue: NewBlockStatusRequestQueue(),
 		sink:                    mockSink,
 		schemaIDToDispatchers:   dispatcher.NewSchemaIDToDispatchers(),
-		sinkQuota:               config.GetDefaultReplicaConfig().MemoryQuota,
+		sinkQuota:               util.GetOrZero(config.GetDefaultReplicaConfig().MemoryQuota),
 		latestWatermark:         NewWatermark(0),
 		closing:                 atomic.Bool{},
 		pdClock:                 pdutil.NewClock4Test(),

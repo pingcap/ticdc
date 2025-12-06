@@ -32,6 +32,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/codec"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/prometheus/client_golang/prometheus"
@@ -204,7 +205,7 @@ func (f *fileWorkerGroup) bgFlushFileCache(egCtx context.Context) error {
 
 func (f *fileWorkerGroup) multiPartUpload(ctx context.Context, file *fileCache) error {
 	multipartWrite, err := f.extStorage.Create(ctx, file.filename, &storage.WriterOption{
-		Concurrency: f.cfg.FlushConcurrency,
+		Concurrency: util.GetOrZero(f.cfg.FlushConcurrency),
 	})
 	if err != nil {
 		return errors.Trace(err)
@@ -218,7 +219,7 @@ func (f *fileWorkerGroup) multiPartUpload(ctx context.Context, file *fileCache) 
 func (f *fileWorkerGroup) bgWriteLogs(
 	egCtx context.Context, inputCh <-chan writer.RedoEvent,
 ) (err error) {
-	d := time.Duration(f.cfg.FlushIntervalInMs) * time.Millisecond
+	d := time.Duration(util.GetOrZero(f.cfg.FlushIntervalInMs)) * time.Millisecond
 	ticker := time.NewTicker(d)
 	defer ticker.Stop()
 	num := 0
@@ -286,7 +287,7 @@ func (f *fileWorkerGroup) syncWriteFile(egCtx context.Context, file *fileCache) 
 	if err = file.writer.Close(); err != nil {
 		return err
 	}
-	if f.cfg.FlushConcurrency <= 1 {
+	if util.GetOrZero(f.cfg.FlushConcurrency) <= 1 {
 		err = f.extStorage.WriteFile(egCtx, file.filename, file.writer.buf.Bytes())
 	} else {
 		err = f.multiPartUpload(egCtx, file)
@@ -314,7 +315,7 @@ func (f *fileWorkerGroup) newFileCache(data []byte, commitTs common.Ts) *fileCac
 	)
 	bufferWriter := bytes.NewBuffer(buf)
 	wr = bufferWriter
-	if f.cfg.Compression == compression.LZ4 {
+	if util.GetOrZero(f.cfg.Compression) == compression.LZ4 {
 		wr = lz4.NewWriter(bufferWriter)
 		closer = wr.(io.Closer)
 	}

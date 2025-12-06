@@ -14,6 +14,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -84,7 +85,11 @@ func TestTomlFileToApiModel(t *testing.T) {
 	require.Nil(t, err)
 	apiModel := v2.ToAPIReplicaConfig(cfg)
 	cfg2 := apiModel.ToInternalReplicaConfig()
-	require.Equal(t, cfg, cfg2)
+	cfgBuf, err := json.MarshalIndent(cfg, "", "  ")
+	require.NoError(t, err)
+	cfg2Buf, err := json.MarshalIndent(cfg2, "", "  ")
+	require.NoError(t, err)
+	require.EqualValuesf(t, cfg, cfg2, "cfg: %s, cfg2: %s", cfgBuf, cfg2Buf)
 }
 
 func TestInvalidSortEngine(t *testing.T) {

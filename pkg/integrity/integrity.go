@@ -16,13 +16,14 @@ package integrity
 import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
 // Config represents integrity check config for a changefeed.
 type Config struct {
-	IntegrityCheckLevel   string `toml:"integrity-check-level" json:"integrity-check-level"`
-	CorruptionHandleLevel string `toml:"corruption-handle-level" json:"corruption-handle-level"`
+	IntegrityCheckLevel   *string `toml:"integrity-check-level" json:"integrity-check-level,omitempty"`
+	CorruptionHandleLevel *string `toml:"corruption-handle-level" json:"corruption-handle-level,omitempty"`
 }
 
 const (
@@ -42,12 +43,12 @@ const (
 
 // Validate the integrity config.
 func (c *Config) Validate() error {
-	if c.IntegrityCheckLevel != CheckLevelNone &&
-		c.IntegrityCheckLevel != CheckLevelCorrectness {
+	if util.GetOrZero(c.IntegrityCheckLevel) != CheckLevelNone &&
+		util.GetOrZero(c.IntegrityCheckLevel) != CheckLevelCorrectness {
 		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs()
 	}
-	if c.CorruptionHandleLevel != CorruptionHandleLevelWarn &&
-		c.CorruptionHandleLevel != CorruptionHandleLevelError {
+	if util.GetOrZero(c.CorruptionHandleLevel) != CorruptionHandleLevelWarn &&
+		util.GetOrZero(c.CorruptionHandleLevel) != CorruptionHandleLevelError {
 		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs()
 	}
 
@@ -62,10 +63,10 @@ func (c *Config) Validate() error {
 
 // Enabled returns true if the integrity check is enabled.
 func (c *Config) Enabled() bool {
-	return c.IntegrityCheckLevel == CheckLevelCorrectness
+	return util.GetOrZero(c.IntegrityCheckLevel) == CheckLevelCorrectness
 }
 
 // ErrorHandle returns true if the corruption handle level is error.
 func (c *Config) ErrorHandle() bool {
-	return c.CorruptionHandleLevel == CorruptionHandleLevelError
+	return util.GetOrZero(c.CorruptionHandleLevel) == CorruptionHandleLevelError
 }

@@ -15,6 +15,8 @@ package middleware
 
 import (
 	"bufio"
+	"bytes"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -69,6 +71,24 @@ func ErrorHandleMiddleware() gin.HandlerFunc {
 	}
 }
 
+// responseBodyWriter is a wrapper for gin.ResponseWriter to capture the response body.
+type responseBodyWriter struct {
+	gin.ResponseWriter
+	body *bytes.Buffer
+}
+
+// Write captures the response body.
+func (w responseBodyWriter) Write(b []byte) (int, error) {
+	w.body.Write(b)
+	return w.ResponseWriter.Write(b)
+}
+
+// WriteString captures the response body.
+func (w responseBodyWriter) WriteString(s string) (int, error) {
+	w.body.WriteString(s)
+	return w.ResponseWriter.WriteString(s)
+}
+
 // LogMiddleware logs the api requests
 func LogMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -76,6 +96,24 @@ func LogMiddleware() gin.HandlerFunc {
 		path := c.Request.URL.Path
 		query := c.Request.URL.RawQuery
 		user, _, _ := c.Request.BasicAuth()
+
+		// Read request body
+		var reqBody []byte
+		if c.Request.Body != nil {
+			var err error
+			reqBody, err = io.ReadAll(c.Request.Body)
+			if err != nil {
+				// This should not happen in normal cases.
+				log.Warn("read request body failed", zap.Error(err))
+			}
+			// Restore the io.ReadCloser to its original state
+			c.Request.Body = io.NopCloser(bytes.NewBuffer(reqBody))
+		}
+
+		// Capture response body
+		w := &responseBodyWriter{body: bytes.NewBufferString(""), ResponseWriter: c.Writer}
+		c.Writer = w
+
 		c.Next()
 
 		cost := time.Since(start)
@@ -91,6 +129,8 @@ func LogMiddleware() gin.HandlerFunc {
 			zap.String("method", c.Request.Method),
 			zap.String("path", path),
 			zap.String("query", query),
+			zap.ByteString("requestBody", reqBody),
+			zap.String("responseBody", w.body.String()),
 			zap.String("ip", c.ClientIP()),
 			zap.String("user-agent", c.Request.UserAgent()), zap.String("client-version", version),
 			zap.String("username", user),

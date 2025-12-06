@@ -265,15 +265,15 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		StartTS:               info.StartTs,
 		TargetTS:              info.TargetTs,
 		SinkURI:               info.SinkURI,
-		CaseSensitive:         info.Config.CaseSensitive,
-		ForceReplicate:        info.Config.ForceReplicate,
+		CaseSensitive:         util.GetOrZero(info.Config.CaseSensitive),
+		ForceReplicate:        util.GetOrZero(info.Config.ForceReplicate),
 		SinkConfig:            info.Config.Sink,
 		Filter:                info.Config.Filter,
 		EnableSyncPoint:       util.GetOrZero(info.Config.EnableSyncPoint),
 		SyncPointInterval:     util.GetOrZero(info.Config.SyncPointInterval),
 		SyncPointRetention:    util.GetOrZero(info.Config.SyncPointRetention),
-		EnableSplittableCheck: info.Config.Scheduler.EnableSplittableCheck,
-		MemoryQuota:           info.Config.MemoryQuota,
+		EnableSplittableCheck: util.GetOrZero(info.Config.Scheduler.EnableSplittableCheck),
+		MemoryQuota:           util.GetOrZero(info.Config.MemoryQuota),
 		Epoch:                 info.Epoch,
 		BDRMode:               util.GetOrZero(info.Config.BDRMode),
 		TimeZone:              GetGlobalServerConfig().TZ,
@@ -424,7 +424,7 @@ func (info *ChangeFeedInfo) VerifyAndComplete() {
 		info.Config.Scheduler.FillMissingWithDefaults(defaultConfig.Scheduler)
 	}
 
-	if info.Config.MemoryQuota == uint64(0) {
+	if util.GetOrZero(info.Config.MemoryQuota) == uint64(0) {
 		info.fixMemoryQuota()
 	}
 
@@ -531,7 +531,7 @@ func (info *ChangeFeedInfo) FixIncompatible() {
 		log.Info("Fix incompatibility changefeed sink uri completed", zap.String("changefeed", info.String()))
 	}
 
-	if info.Config.MemoryQuota == uint64(0) {
+	if util.GetOrZero(info.Config.MemoryQuota) == uint64(0) {
 		log.Info("Start fixing incompatible memory quota", zap.String("changefeed", info.String()))
 		info.fixMemoryQuota()
 		log.Info("Fix incompatible memory quota completed", zap.String("changefeed", info.String()))

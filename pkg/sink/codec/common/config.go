@@ -236,7 +236,7 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 		sinkConfig.KafkaConfig.GlueSchemaRegistryConfig != nil {
 		c.AvroGlueSchemaRegistry = sinkConfig.KafkaConfig.GlueSchemaRegistryConfig
 	}
-	if c.Protocol == config.ProtocolAvro && sinkConfig.ForceReplicate {
+	if c.Protocol == config.ProtocolAvro && util.GetOrZero(sinkConfig.ForceReplicate) {
 		return errors.ErrCodecInvalidConfig.GenWithStack(
 			`force-replicate must be disabled, when using avro protocol`)
 	}
@@ -272,7 +272,7 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 	}
 
 	c.DeleteOnlyHandleKeyColumns = util.GetOrZero(sinkConfig.DeleteOnlyOutputHandleKeyColumns)
-	if c.DeleteOnlyHandleKeyColumns && sinkConfig.ForceReplicate {
+	if c.DeleteOnlyHandleKeyColumns && util.GetOrZero(sinkConfig.ForceReplicate) {
 		return errors.ErrCodecInvalidConfig.GenWithStack(
 			`force-replicate must be disabled when configuration "delete-only-output-handle-key-columns" is true.`)
 	}

@@ -26,6 +26,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/spanz"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/tikv"
 )
@@ -49,8 +50,8 @@ func TestRegionCountSplitSpan(t *testing.T) {
 		{
 			span: &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")},
 			cfg: &config.ChangefeedSchedulerConfig{
-				RegionThreshold:    1,
-				RegionCountPerSpan: 1,
+				RegionThreshold:    util.AddressOf(1),
+				RegionCountPerSpan: util.AddressOf(1),
 			},
 			spansNum: 0,
 			expectSpans: []*heartbeatpb.TableSpan{
@@ -64,8 +65,8 @@ func TestRegionCountSplitSpan(t *testing.T) {
 		{
 			span: &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")},
 			cfg: &config.ChangefeedSchedulerConfig{
-				RegionThreshold:    1,
-				RegionCountPerSpan: 2,
+				RegionThreshold:    util.AddressOf(1),
+				RegionCountPerSpan: util.AddressOf(2),
 			},
 			spansNum: 0,
 			expectSpans: []*heartbeatpb.TableSpan{
@@ -77,8 +78,8 @@ func TestRegionCountSplitSpan(t *testing.T) {
 		{
 			span: &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")},
 			cfg: &config.ChangefeedSchedulerConfig{
-				RegionThreshold:    1,
-				RegionCountPerSpan: 3,
+				RegionThreshold:    util.AddressOf(1),
+				RegionCountPerSpan: util.AddressOf(3),
 			},
 			spansNum: 0,
 			expectSpans: []*heartbeatpb.TableSpan{
@@ -89,8 +90,8 @@ func TestRegionCountSplitSpan(t *testing.T) {
 		{
 			span: &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")},
 			cfg: &config.ChangefeedSchedulerConfig{
-				RegionThreshold:    1,
-				RegionCountPerSpan: 4,
+				RegionThreshold:    util.AddressOf(1),
+				RegionCountPerSpan: util.AddressOf(4),
 			},
 			spansNum: 0,
 			expectSpans: []*heartbeatpb.TableSpan{
@@ -101,8 +102,8 @@ func TestRegionCountSplitSpan(t *testing.T) {
 		{
 			span: &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")},
 			cfg: &config.ChangefeedSchedulerConfig{
-				RegionThreshold:    10,
-				RegionCountPerSpan: 2,
+				RegionThreshold:    util.AddressOf(10),
+				RegionCountPerSpan: util.AddressOf(2),
 			},
 			spansNum: 0,
 			expectSpans: []*heartbeatpb.TableSpan{
@@ -112,8 +113,8 @@ func TestRegionCountSplitSpan(t *testing.T) {
 		{
 			span: &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")},
 			cfg: &config.ChangefeedSchedulerConfig{
-				RegionThreshold:    1,
-				RegionCountPerSpan: 1,
+				RegionThreshold:    util.AddressOf(1),
+				RegionCountPerSpan: util.AddressOf(1),
 			},
 			spansNum: 2,
 			expectSpans: []*heartbeatpb.TableSpan{
@@ -125,7 +126,12 @@ func TestRegionCountSplitSpan(t *testing.T) {
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	for i, cs := range cases {
-		splitter := newRegionCountSplitter(common.DefaultKeyspaceID, cfID, cs.cfg.RegionCountPerSpan, cs.cfg.RegionThreshold)
+		splitter := newRegionCountSplitter(
+			common.DefaultKeyspaceID,
+			cfID,
+			*cs.cfg.RegionCountPerSpan,
+			*cs.cfg.RegionThreshold,
+		)
 		spans := splitter.split(context.Background(), cs.span, cs.spansNum)
 		require.Equalf(t, cs.expectSpans, spans, "%d %s", i, cs.span.String())
 	}
@@ -150,64 +156,64 @@ func TestRegionCountEvenlySplitSpan(t *testing.T) {
 		{
 			expectedSpans: 1000,
 			cfg: &config.ChangefeedSchedulerConfig{
-				RegionThreshold:    1,
-				RegionCountPerSpan: 1,
+				RegionThreshold:    util.AddressOf(1),
+				RegionCountPerSpan: util.AddressOf(1),
 			},
 			spansNum: 0,
 		},
 		{
 			expectedSpans: 500,
 			cfg: &config.ChangefeedSchedulerConfig{
-				RegionThreshold:    1,
-				RegionCountPerSpan: 2,
+				RegionThreshold:    util.AddressOf(1),
+				RegionCountPerSpan: util.AddressOf(2),
 			},
 			spansNum: 0,
 		},
 		{
 			expectedSpans: 334,
 			cfg: &config.ChangefeedSchedulerConfig{
-				RegionThreshold:    1,
-				RegionCountPerSpan: 3,
+				RegionThreshold:    util.AddressOf(1),
+				RegionCountPerSpan: util.AddressOf(3),
 			},
 			spansNum: 0,
 		},
 		{
 			expectedSpans: 250,
 			cfg: &config.ChangefeedSchedulerConfig{
-				RegionThreshold:    1,
-				RegionCountPerSpan: 4,
+				RegionThreshold:    util.AddressOf(1),
+				RegionCountPerSpan: util.AddressOf(4),
 			},
 			spansNum: 0,
 		},
 		{
 			expectedSpans: 200,
 			cfg: &config.ChangefeedSchedulerConfig{
-				RegionThreshold:    1,
-				RegionCountPerSpan: 5,
+				RegionThreshold:    util.AddressOf(1),
+				RegionCountPerSpan: util.AddressOf(5),
 			},
 			spansNum: 0,
 		},
 		{
 			expectedSpans: 167,
 			cfg: &config.ChangefeedSchedulerConfig{
-				RegionThreshold:    1,
-				RegionCountPerSpan: 6,
+				RegionThreshold:    util.AddressOf(1),
+				RegionCountPerSpan: util.AddressOf(6),
 			},
 			spansNum: 0,
 		},
 		{
 			expectedSpans: 143,
 			cfg: &config.ChangefeedSchedulerConfig{
-				RegionThreshold:    1,
-				RegionCountPerSpan: 7,
+				RegionThreshold:    util.AddressOf(1),
+				RegionCountPerSpan: util.AddressOf(7),
 			},
 			spansNum: 0,
 		},
 		{
 			expectedSpans: 125,
 			cfg: &config.ChangefeedSchedulerConfig{
-				RegionThreshold:    1,
-				RegionCountPerSpan: 8,
+				RegionThreshold:    util.AddressOf(1),
+				RegionCountPerSpan: util.AddressOf(8),
 			},
 			spansNum: 0,
 		},
@@ -216,7 +222,12 @@ func TestRegionCountEvenlySplitSpan(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	spans := &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")}
 	for i, cs := range cases {
-		splitter := newRegionCountSplitter(common.DefaultKeyspaceID, cfID, cs.cfg.RegionCountPerSpan, cs.cfg.RegionThreshold)
+		splitter := newRegionCountSplitter(
+			common.DefaultKeyspaceID,
+			cfID,
+			*cs.cfg.RegionCountPerSpan,
+			*cs.cfg.RegionThreshold,
+		)
 		spans := splitter.split(context.Background(), spans, cs.spansNum)
 		require.Equalf(t, cs.expectedSpans, len(spans), "%d %v", i, cs)
 	}
@@ -230,11 +241,16 @@ func TestSplitSpanRegionOutOfOrder(t *testing.T) {
 	cache.regions.ReplaceOrInsert(heartbeatpb.TableSpan{StartKey: []byte("t1_2"), EndKey: []byte("t1_3")}, 3)
 
 	cfg := &config.ChangefeedSchedulerConfig{
-		RegionThreshold:    1,
-		RegionCountPerSpan: 1,
+		RegionThreshold:    util.AddressOf(1),
+		RegionCountPerSpan: util.AddressOf(1),
 	}
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
-	splitter := newRegionCountSplitter(common.DefaultKeyspaceID, cfID, cfg.RegionCountPerSpan, cfg.RegionCountPerSpan)
+	splitter := newRegionCountSplitter(
+		common.DefaultKeyspaceID,
+		cfID,
+		*cfg.RegionCountPerSpan,
+		*cfg.RegionThreshold,
+	)
 	span := &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")}
 	spans := splitter.split(context.Background(), span, 0)
 	require.Equal(

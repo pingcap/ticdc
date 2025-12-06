@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/node"
 	pkgreplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils"
 	"go.uber.org/zap"
@@ -96,8 +97,8 @@ func NewController(
 		splitter:               splitter,
 		ddlDispatcherID:        ddlSpan.ID,
 		mode:                   mode,
-		enableTableAcrossNodes: schedulerCfg != nil && schedulerCfg.EnableTableAcrossNodes,
-		enableSplittableCheck:  schedulerCfg != nil && schedulerCfg.EnableSplittableCheck,
+		enableTableAcrossNodes: schedulerCfg != nil && util.GetOrZero(schedulerCfg.EnableTableAcrossNodes),
+		enableSplittableCheck:  schedulerCfg != nil && util.GetOrZero(schedulerCfg.EnableSplittableCheck),
 		keyspaceID:             keyspaceID,
 	}
 
