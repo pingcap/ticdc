@@ -174,7 +174,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 
-	tableTriggerEventDispatcherID, ddlSpan := newDDLSpan(keyspaceID, cfID, checkpointTs, selfNode, common.DefaultMode)
+	tableTriggerDispatcherID, ddlSpan := newDDLSpan(keyspaceID, cfID, checkpointTs, selfNode, common.DefaultMode)
 	var redoDDLSpan *replica.SpanReplication
 	enableRedo := redo.IsConsistentEnabled(info.Config.Consistent.Level)
 	if enableRedo {
@@ -257,7 +257,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		zap.Stringer("changefeedID", cfID),
 		zap.String("state", string(info.State)),
 		zap.Uint64("checkpointTs", checkpointTs),
-		zap.String("ddlDispatcherID", tableTriggerEventDispatcherID.String()),
+		zap.String("ddlDispatcherID", tableTriggerDispatcherID.String()),
 		zap.String("redoTs", m.redoMetaTs.String()),
 		zap.Bool("newChangefeed", newChangefeed),
 	)
@@ -893,16 +893,16 @@ func isMysqlCompatible(sinkURIStr string) (bool, error) {
 }
 
 func newDDLSpan(keyspaceID uint32, cfID common.ChangeFeedID, checkpointTs uint64, selfNode *node.Info, mode int64) (common.DispatcherID, *replica.SpanReplication) {
-	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+	tableTriggerDispatcherID := common.NewDispatcherID()
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(keyspaceID), &heartbeatpb.TableSpanStatus{
-			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ID:              tableTriggerDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    checkpointTs,
 			Mode:            mode,
 		}, selfNode.ID)
-	return tableTriggerEventDispatcherID, ddlSpan
+	return tableTriggerDispatcherID, ddlSpan
 }
 
 func (m *Maintainer) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) {
@@ -1055,13 +1055,13 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapMessa
 	}
 	return func(targetNodeID node.ID) *messaging.TargetMessage {
 		msg := &heartbeatpb.MaintainerBootstrapRequest{
-			ChangefeedID:                      m.changefeedID.ToPB(),
-			Config:                            cfgBytes,
-			StartTs:                           m.startCheckpointTs,
-			TableTriggerEventDispatcherId:     nil,
-			RedoTableTriggerEventDispatcherId: nil,
-			IsNewChangefeed:                   false,
-			KeyspaceId:                        m.info.KeyspaceID,
+			ChangefeedID:                 m.changefeedID.ToPB(),
+			Config:                       cfgBytes,
+			StartTs:                      m.startCheckpointTs,
+			TableTriggerDispatcherID:     nil,
+			RedoTableTriggerDispatcherID: nil,
+			IsNewChangefeed:              false,
+			KeyspaceId:                   m.info.KeyspaceID,
 		}
 
 		// only send dispatcher targetNodeID to dispatcher manager on the same node
@@ -1072,9 +1072,9 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapMessa
 				zap.String("dispatcherID", m.ddlSpan.ID.String()),
 				zap.Uint64("startTs", m.startCheckpointTs),
 			)
-			msg.TableTriggerEventDispatcherId = m.ddlSpan.ID.ToPB()
+			msg.TableTriggerDispatcherID = m.ddlSpan.ID.ToPB()
 			if m.enableRedo {
-				msg.RedoTableTriggerEventDispatcherId = m.redoDDLSpan.ID.ToPB()
+				msg.RedoTableTriggerDispatcherID = m.redoDDLSpan.ID.ToPB()
 			}
 			msg.IsNewChangefeed = m.newChangefeed
 		}

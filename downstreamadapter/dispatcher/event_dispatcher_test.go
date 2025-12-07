@@ -475,15 +475,15 @@ func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, int32(1), count.Load())
 }
 
-func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
+func TestTableTriggerDispatcherInMysql(t *testing.T) {
 	count.Swap(0)
 
 	ddlTableSpan := common.KeyspaceDDLSpan(common.DefaultKeyspaceID)
 	sink := sink.NewMockSink(common.MysqlSinkType)
-	tableTriggerEventDispatcher := newDispatcherForTest(sink, ddlTableSpan)
-	require.Nil(t, tableTriggerEventDispatcher.tableSchemaStore)
+	tableTriggerDispatcher := newDispatcherForTest(sink, ddlTableSpan)
+	require.Nil(t, tableTriggerDispatcher.tableSchemaStore)
 
-	ok, err := tableTriggerEventDispatcher.InitializeTableSchemaStore([]*heartbeatpb.SchemaInfo{})
+	ok, err := tableTriggerDispatcher.InitializeTableSchemaStore([]*heartbeatpb.SchemaInfo{})
 	require.NoError(t, err)
 	require.True(t, ok)
 
@@ -509,15 +509,15 @@ func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
 	}
 
 	nodeID := node.NewID()
-	block := tableTriggerEventDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, callback)
+	block := tableTriggerDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, callback)
 	require.Equal(t, true, block)
 	time.Sleep(5 * time.Second)
 	// no pending event
-	blockPendingEvent := tableTriggerEventDispatcher.blockEventStatus.getEvent()
+	blockPendingEvent := tableTriggerDispatcher.blockEventStatus.getEvent()
 	require.Nil(t, blockPendingEvent)
 	require.Equal(t, int32(1), count.Load())
 
-	tableIds := tableTriggerEventDispatcher.tableSchemaStore.GetAllTableIds()
+	tableIds := tableTriggerDispatcher.tableSchemaStore.GetAllTableIds()
 	require.Equal(t, 1, len(tableIds))
 	require.Equal(t, int64(0), tableIds[0])
 
@@ -545,29 +545,29 @@ func TestTableTriggerEventDispatcherInMysql(t *testing.T) {
 		TableInfo: tableInfo,
 	}
 
-	block = tableTriggerEventDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, callback)
+	block = tableTriggerDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, callback)
 	require.Equal(t, true, block)
 	time.Sleep(5 * time.Second)
 	// no pending event
-	blockPendingEvent = tableTriggerEventDispatcher.blockEventStatus.getEvent()
+	blockPendingEvent = tableTriggerDispatcher.blockEventStatus.getEvent()
 	require.Nil(t, blockPendingEvent)
 	require.Equal(t, int32(2), count.Load())
 
-	tableIds = tableTriggerEventDispatcher.tableSchemaStore.GetAllTableIds()
+	tableIds = tableTriggerDispatcher.tableSchemaStore.GetAllTableIds()
 	require.Equal(t, int(2), len(tableIds))
 	require.Equal(t, int64(1), tableIds[0])
 	require.Equal(t, int64(0), tableIds[1])
 }
 
-func TestTableTriggerEventDispatcherInKafka(t *testing.T) {
+func TestTableTriggerDispatcherInKafka(t *testing.T) {
 	count.Swap(0)
 
 	ddlTableSpan := common.KeyspaceDDLSpan(common.DefaultKeyspaceID)
 	sink := sink.NewMockSink(common.KafkaSinkType)
-	tableTriggerEventDispatcher := newDispatcherForTest(sink, ddlTableSpan)
-	require.Nil(t, tableTriggerEventDispatcher.tableSchemaStore)
+	tableTriggerDispatcher := newDispatcherForTest(sink, ddlTableSpan)
+	require.Nil(t, tableTriggerDispatcher.tableSchemaStore)
 
-	ok, err := tableTriggerEventDispatcher.InitializeTableSchemaStore([]*heartbeatpb.SchemaInfo{})
+	ok, err := tableTriggerDispatcher.InitializeTableSchemaStore([]*heartbeatpb.SchemaInfo{})
 	require.NoError(t, err)
 	require.True(t, ok)
 
@@ -593,15 +593,15 @@ func TestTableTriggerEventDispatcherInKafka(t *testing.T) {
 	}
 
 	nodeID := node.NewID()
-	block := tableTriggerEventDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, callback)
+	block := tableTriggerDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, callback)
 	require.Equal(t, true, block)
 	time.Sleep(5 * time.Second)
 	// no pending event
-	blockPendingEvent := tableTriggerEventDispatcher.blockEventStatus.getEvent()
+	blockPendingEvent := tableTriggerDispatcher.blockEventStatus.getEvent()
 	require.Nil(t, blockPendingEvent)
 	require.Equal(t, int32(1), count.Load())
 
-	tableNames := tableTriggerEventDispatcher.tableSchemaStore.GetAllTableNames(2)
+	tableNames := tableTriggerDispatcher.tableSchemaStore.GetAllTableNames(2)
 	require.Equal(t, int(0), len(tableNames))
 
 	// ddl influences tableSchemaStore
@@ -628,17 +628,17 @@ func TestTableTriggerEventDispatcherInKafka(t *testing.T) {
 		TableInfo: tableInfo,
 	}
 
-	block = tableTriggerEventDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, callback)
+	block = tableTriggerDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, callback)
 	require.Equal(t, true, block)
 	time.Sleep(5 * time.Second)
 	// no pending event
-	blockPendingEvent = tableTriggerEventDispatcher.blockEventStatus.getEvent()
+	blockPendingEvent = tableTriggerDispatcher.blockEventStatus.getEvent()
 	require.Nil(t, blockPendingEvent)
 	require.Equal(t, int32(2), count.Load())
 
-	tableNames = tableTriggerEventDispatcher.tableSchemaStore.GetAllTableNames(3)
+	tableNames = tableTriggerDispatcher.tableSchemaStore.GetAllTableNames(3)
 	require.Equal(t, int(0), len(tableNames))
-	tableNames = tableTriggerEventDispatcher.tableSchemaStore.GetAllTableNames(4)
+	tableNames = tableTriggerDispatcher.tableSchemaStore.GetAllTableNames(4)
 	require.Equal(t, int(1), len(tableNames))
 	require.Equal(t, commonEvent.SchemaTableName{SchemaName: "test", TableName: "t1"}, *tableNames[0])
 }

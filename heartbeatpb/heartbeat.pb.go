@@ -6,10 +6,11 @@ package heartbeatpb
 import (
 	encoding_binary "encoding/binary"
 	fmt "fmt"
-	proto "github.com/gogo/protobuf/proto"
 	io "io"
 	math "math"
 	math_bits "math/bits"
+
+	proto "github.com/gogo/protobuf/proto"
 )
 
 // Reference imports to suppress errors if they are not otherwise used.
@@ -1432,13 +1433,13 @@ func (m *RemoveMaintainerRequest) GetKeyspaceId() uint32 {
 }
 
 type MaintainerBootstrapRequest struct {
-	ChangefeedID                      *ChangefeedID `protobuf:"bytes,1,opt,name=changefeedID,proto3" json:"changefeedID,omitempty"`
-	Config                            []byte        `protobuf:"bytes,2,opt,name=config,proto3" json:"config,omitempty"`
-	StartTs                           uint64        `protobuf:"varint,3,opt,name=start_ts,json=startTs,proto3" json:"start_ts,omitempty"`
-	TableTriggerEventDispatcherId     *DispatcherID `protobuf:"bytes,4,opt,name=table_trigger_event_dispatcher_id,json=tableTriggerEventDispatcherId,proto3" json:"table_trigger_event_dispatcher_id,omitempty"`
-	IsNewChangefeed                   bool          `protobuf:"varint,5,opt,name=is_new_changefeed,json=isNewChangefeed,proto3" json:"is_new_changefeed,omitempty"`
-	RedoTableTriggerEventDispatcherId *DispatcherID `protobuf:"bytes,6,opt,name=redo_table_trigger_event_dispatcher_id,json=redoTableTriggerEventDispatcherId,proto3" json:"redo_table_trigger_event_dispatcher_id,omitempty"`
-	KeyspaceId                        uint32        `protobuf:"varint,7,opt,name=keyspace_id,json=keyspaceId,proto3" json:"keyspace_id,omitempty"`
+	ChangefeedID                 *ChangefeedID `protobuf:"bytes,1,opt,name=changefeedID,proto3" json:"changefeedID,omitempty"`
+	Config                       []byte        `protobuf:"bytes,2,opt,name=config,proto3" json:"config,omitempty"`
+	StartTs                      uint64        `protobuf:"varint,3,opt,name=start_ts,json=startTs,proto3" json:"start_ts,omitempty"`
+	TableTriggerDispatcherID     *DispatcherID `protobuf:"bytes,4,opt,name=table_trigger_event_dispatcher_id,json=tableTriggerDispatcherID,proto3" json:"table_trigger_event_dispatcher_id,omitempty"`
+	IsNewChangefeed              bool          `protobuf:"varint,5,opt,name=is_new_changefeed,json=isNewChangefeed,proto3" json:"is_new_changefeed,omitempty"`
+	RedoTableTriggerDispatcherID *DispatcherID `protobuf:"bytes,6,opt,name=redo_table_trigger_event_dispatcher_id,json=redoTableTriggerDispatcherID,proto3" json:"redo_table_trigger_event_dispatcher_id,omitempty"`
+	KeyspaceId                   uint32        `protobuf:"varint,7,opt,name=keyspace_id,json=keyspaceId,proto3" json:"keyspace_id,omitempty"`
 }
 
 func (m *MaintainerBootstrapRequest) Reset()         { *m = MaintainerBootstrapRequest{} }
@@ -1495,9 +1496,9 @@ func (m *MaintainerBootstrapRequest) GetStartTs() uint64 {
 	return 0
 }
 
-func (m *MaintainerBootstrapRequest) GetTableTriggerEventDispatcherId() *DispatcherID {
+func (m *MaintainerBootstrapRequest) GetTableTriggerDispatcherID() *DispatcherID {
 	if m != nil {
-		return m.TableTriggerEventDispatcherId
+		return m.TableTriggerDispatcherID
 	}
 	return nil
 }
@@ -1509,9 +1510,9 @@ func (m *MaintainerBootstrapRequest) GetIsNewChangefeed() bool {
 	return false
 }
 
-func (m *MaintainerBootstrapRequest) GetRedoTableTriggerEventDispatcherId() *DispatcherID {
+func (m *MaintainerBootstrapRequest) GetRedoTableTriggerDispatcherID() *DispatcherID {
 	if m != nil {
-		return m.RedoTableTriggerEventDispatcherId
+		return m.RedoTableTriggerDispatcherID
 	}
 	return nil
 }
@@ -1600,9 +1601,9 @@ func (m *MaintainerBootstrapResponse) GetCheckpointTs() uint64 {
 }
 
 type MaintainerPostBootstrapRequest struct {
-	ChangefeedID                  *ChangefeedID `protobuf:"bytes,1,opt,name=changefeedID,proto3" json:"changefeedID,omitempty"`
-	TableTriggerEventDispatcherId *DispatcherID `protobuf:"bytes,2,opt,name=table_trigger_event_dispatcher_id,json=tableTriggerEventDispatcherId,proto3" json:"table_trigger_event_dispatcher_id,omitempty"`
-	Schemas                       []*SchemaInfo `protobuf:"bytes,3,rep,name=schemas,proto3" json:"schemas,omitempty"`
+	ChangefeedID             *ChangefeedID `protobuf:"bytes,1,opt,name=changefeedID,proto3" json:"changefeedID,omitempty"`
+	TableTriggerDispatcherID *DispatcherID `protobuf:"bytes,2,opt,name=table_trigger_event_dispatcher_id,json=tableTriggerDispatcherID,proto3" json:"table_trigger_event_dispatcher_id,omitempty"`
+	Schemas                  []*SchemaInfo `protobuf:"bytes,3,rep,name=schemas,proto3" json:"schemas,omitempty"`
 }
 
 func (m *MaintainerPostBootstrapRequest) Reset()         { *m = MaintainerPostBootstrapRequest{} }
@@ -1645,9 +1646,9 @@ func (m *MaintainerPostBootstrapRequest) GetChangefeedID() *ChangefeedID {
 	return nil
 }
 
-func (m *MaintainerPostBootstrapRequest) GetTableTriggerEventDispatcherId() *DispatcherID {
+func (m *MaintainerPostBootstrapRequest) GetTableTriggerDispatcherID() *DispatcherID {
 	if m != nil {
-		return m.TableTriggerEventDispatcherId
+		return m.TableTriggerDispatcherID
 	}
 	return nil
 }
@@ -1660,9 +1661,9 @@ func (m *MaintainerPostBootstrapRequest) GetSchemas() []*SchemaInfo {
 }
 
 type MaintainerPostBootstrapResponse struct {
-	ChangefeedID                  *ChangefeedID `protobuf:"bytes,1,opt,name=changefeedID,proto3" json:"changefeedID,omitempty"`
-	TableTriggerEventDispatcherId *DispatcherID `protobuf:"bytes,2,opt,name=table_trigger_event_dispatcher_id,json=tableTriggerEventDispatcherId,proto3" json:"table_trigger_event_dispatcher_id,omitempty"`
-	Err                           *RunningError `protobuf:"bytes,3,opt,name=err,proto3" json:"err,omitempty"`
+	ChangefeedID             *ChangefeedID `protobuf:"bytes,1,opt,name=changefeedID,proto3" json:"changefeedID,omitempty"`
+	TableTriggerDispatcherID *DispatcherID `protobuf:"bytes,2,opt,name=table_trigger_event_dispatcher_id,json=tableTriggerDispatcherID,proto3" json:"table_trigger_event_dispatcher_id,omitempty"`
+	Err                      *RunningError `protobuf:"bytes,3,opt,name=err,proto3" json:"err,omitempty"`
 }
 
 func (m *MaintainerPostBootstrapResponse) Reset()         { *m = MaintainerPostBootstrapResponse{} }
@@ -1705,9 +1706,9 @@ func (m *MaintainerPostBootstrapResponse) GetChangefeedID() *ChangefeedID {
 	return nil
 }
 
-func (m *MaintainerPostBootstrapResponse) GetTableTriggerEventDispatcherId() *DispatcherID {
+func (m *MaintainerPostBootstrapResponse) GetTableTriggerDispatcherID() *DispatcherID {
 	if m != nil {
-		return m.TableTriggerEventDispatcherId
+		return m.TableTriggerDispatcherID
 	}
 	return nil
 }
@@ -4050,9 +4051,9 @@ func (m *MaintainerBootstrapRequest) MarshalToSizedBuffer(dAtA []byte) (int, err
 		i--
 		dAtA[i] = 0x38
 	}
-	if m.RedoTableTriggerEventDispatcherId != nil {
+	if m.RedoTableTriggerDispatcherID != nil {
 		{
-			size, err := m.RedoTableTriggerEventDispatcherId.MarshalToSizedBuffer(dAtA[:i])
+			size, err := m.RedoTableTriggerDispatcherID.MarshalToSizedBuffer(dAtA[:i])
 			if err != nil {
 				return 0, err
 			}
@@ -4072,9 +4073,9 @@ func (m *MaintainerBootstrapRequest) MarshalToSizedBuffer(dAtA []byte) (int, err
 		i--
 		dAtA[i] = 0x28
 	}
-	if m.TableTriggerEventDispatcherId != nil {
+	if m.TableTriggerDispatcherID != nil {
 		{
-			size, err := m.TableTriggerEventDispatcherId.MarshalToSizedBuffer(dAtA[:i])
+			size, err := m.TableTriggerDispatcherID.MarshalToSizedBuffer(dAtA[:i])
 			if err != nil {
 				return 0, err
 			}
@@ -4211,9 +4212,9 @@ func (m *MaintainerPostBootstrapRequest) MarshalToSizedBuffer(dAtA []byte) (int,
 			dAtA[i] = 0x1a
 		}
 	}
-	if m.TableTriggerEventDispatcherId != nil {
+	if m.TableTriggerDispatcherID != nil {
 		{
-			size, err := m.TableTriggerEventDispatcherId.MarshalToSizedBuffer(dAtA[:i])
+			size, err := m.TableTriggerDispatcherID.MarshalToSizedBuffer(dAtA[:i])
 			if err != nil {
 				return 0, err
 			}
@@ -4270,9 +4271,9 @@ func (m *MaintainerPostBootstrapResponse) MarshalToSizedBuffer(dAtA []byte) (int
 		i--
 		dAtA[i] = 0x1a
 	}
-	if m.TableTriggerEventDispatcherId != nil {
+	if m.TableTriggerDispatcherID != nil {
 		{
-			size, err := m.TableTriggerEventDispatcherId.MarshalToSizedBuffer(dAtA[:i])
+			size, err := m.TableTriggerDispatcherID.MarshalToSizedBuffer(dAtA[:i])
 			if err != nil {
 				return 0, err
 			}
@@ -5611,15 +5612,15 @@ func (m *MaintainerBootstrapRequest) Size() (n int) {
 	if m.StartTs != 0 {
 		n += 1 + sovHeartbeat(uint64(m.StartTs))
 	}
-	if m.TableTriggerEventDispatcherId != nil {
-		l = m.TableTriggerEventDispatcherId.Size()
+	if m.TableTriggerDispatcherID != nil {
+		l = m.TableTriggerDispatcherID.Size()
 		n += 1 + l + sovHeartbeat(uint64(l))
 	}
 	if m.IsNewChangefeed {
 		n += 2
 	}
-	if m.RedoTableTriggerEventDispatcherId != nil {
-		l = m.RedoTableTriggerEventDispatcherId.Size()
+	if m.RedoTableTriggerDispatcherID != nil {
+		l = m.RedoTableTriggerDispatcherID.Size()
 		n += 1 + l + sovHeartbeat(uint64(l))
 	}
 	if m.KeyspaceId != 0 {
@@ -5664,8 +5665,8 @@ func (m *MaintainerPostBootstrapRequest) Size() (n int) {
 		l = m.ChangefeedID.Size()
 		n += 1 + l + sovHeartbeat(uint64(l))
 	}
-	if m.TableTriggerEventDispatcherId != nil {
-		l = m.TableTriggerEventDispatcherId.Size()
+	if m.TableTriggerDispatcherID != nil {
+		l = m.TableTriggerDispatcherID.Size()
 		n += 1 + l + sovHeartbeat(uint64(l))
 	}
 	if len(m.Schemas) > 0 {
@@ -5687,8 +5688,8 @@ func (m *MaintainerPostBootstrapResponse) Size() (n int) {
 		l = m.ChangefeedID.Size()
 		n += 1 + l + sovHeartbeat(uint64(l))
 	}
-	if m.TableTriggerEventDispatcherId != nil {
-		l = m.TableTriggerEventDispatcherId.Size()
+	if m.TableTriggerDispatcherID != nil {
+		l = m.TableTriggerDispatcherID.Size()
 		n += 1 + l + sovHeartbeat(uint64(l))
 	}
 	if m.Err != nil {
@@ -8985,7 +8986,7 @@ func (m *MaintainerBootstrapRequest) Unmarshal(dAtA []byte) error {
 			}
 		case 4:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field TableTriggerEventDispatcherId", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field TableTriggerDispatcherID", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -9012,10 +9013,10 @@ func (m *MaintainerBootstrapRequest) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if m.TableTriggerEventDispatcherId == nil {
-				m.TableTriggerEventDispatcherId = &DispatcherID{}
+			if m.TableTriggerDispatcherID == nil {
+				m.TableTriggerDispatcherID = &DispatcherID{}
 			}
-			if err := m.TableTriggerEventDispatcherId.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.TableTriggerDispatcherID.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -9041,7 +9042,7 @@ func (m *MaintainerBootstrapRequest) Unmarshal(dAtA []byte) error {
 			m.IsNewChangefeed = bool(v != 0)
 		case 6:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field RedoTableTriggerEventDispatcherId", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field RedoTableTriggerDispatcherID", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -9068,10 +9069,10 @@ func (m *MaintainerBootstrapRequest) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if m.RedoTableTriggerEventDispatcherId == nil {
-				m.RedoTableTriggerEventDispatcherId = &DispatcherID{}
+			if m.RedoTableTriggerDispatcherID == nil {
+				m.RedoTableTriggerDispatcherID = &DispatcherID{}
 			}
-			if err := m.RedoTableTriggerEventDispatcherId.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.RedoTableTriggerDispatcherID.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -9357,7 +9358,7 @@ func (m *MaintainerPostBootstrapRequest) Unmarshal(dAtA []byte) error {
 			iNdEx = postIndex
 		case 2:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field TableTriggerEventDispatcherId", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field TableTriggerDispatcherID", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -9384,10 +9385,10 @@ func (m *MaintainerPostBootstrapRequest) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if m.TableTriggerEventDispatcherId == nil {
-				m.TableTriggerEventDispatcherId = &DispatcherID{}
+			if m.TableTriggerDispatcherID == nil {
+				m.TableTriggerDispatcherID = &DispatcherID{}
 			}
-			if err := m.TableTriggerEventDispatcherId.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.TableTriggerDispatcherID.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -9513,7 +9514,7 @@ func (m *MaintainerPostBootstrapResponse) Unmarshal(dAtA []byte) error {
 			iNdEx = postIndex
 		case 2:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field TableTriggerEventDispatcherId", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field TableTriggerDispatcherID", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -9540,10 +9541,10 @@ func (m *MaintainerPostBootstrapResponse) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if m.TableTriggerEventDispatcherId == nil {
-				m.TableTriggerEventDispatcherId = &DispatcherID{}
+			if m.TableTriggerDispatcherID == nil {
+				m.TableTriggerDispatcherID = &DispatcherID{}
 			}
-			if err := m.TableTriggerEventDispatcherId.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.TableTriggerDispatcherID.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex

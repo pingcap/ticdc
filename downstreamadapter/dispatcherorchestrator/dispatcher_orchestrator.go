@@ -165,8 +165,8 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 				req.KeyspaceId,
 				cfId,
 				cfConfig,
-				req.TableTriggerEventDispatcherId,
-				req.RedoTableTriggerEventDispatcherId,
+				req.TableTriggerDispatcherID,
+				req.RedoTableTriggerDispatcherID,
 				req.StartTs,
 				from,
 				req.IsNewChangefeed,
@@ -201,11 +201,11 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		// This is necessary during maintainer node migration, as the existing
 		// dispatcher manager on the new node may not have a table trigger
 		// event dispatcher configured yet.
-		if req.RedoTableTriggerEventDispatcherId != nil {
-			redoTableTriggerDispatcher := manager.GetRedoTableTriggerEventDispatcher()
+		if req.RedoTableTriggerDispatcherID != nil {
+			redoTableTriggerDispatcher := manager.GetRedoTableTriggerDispatcher()
 			if redoTableTriggerDispatcher == nil {
-				err = manager.NewRedoTableTriggerEventDispatcher(
-					req.RedoTableTriggerEventDispatcherId,
+				err = manager.NewRedoTableTriggerDispatcher(
+					req.RedoTableTriggerDispatcherID,
 					req.StartTs,
 					false,
 				)
@@ -216,11 +216,11 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 				}
 			}
 		}
-		if req.TableTriggerEventDispatcherId != nil {
-			tableTriggerDispatcher := manager.GetTableTriggerEventDispatcher()
+		if req.TableTriggerDispatcherID != nil {
+			tableTriggerDispatcher := manager.GetTableTriggerDispatcher()
 			if tableTriggerDispatcher == nil {
-				startTs, err = manager.NewTableTriggerEventDispatcher(
-					req.TableTriggerEventDispatcherId,
+				startTs, err = manager.NewTableTriggerDispatcher(
+					req.TableTriggerDispatcherID,
 					req.StartTs,
 					false,
 				)
@@ -266,21 +266,21 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 	manager, exists := m.dispatcherManagers[cfId]
 	m.mutex.Unlock()
 
-	if !exists || manager.GetTableTriggerEventDispatcher() == nil {
+	if !exists || manager.GetTableTriggerDispatcher() == nil {
 		log.Error("Receive post bootstrap request but there is no table trigger event dispatcher",
 			zap.Any("changefeedID", cfId.Name()))
 		return nil
 	}
-	if manager.GetTableTriggerEventDispatcher().GetId() !=
-		common.NewDispatcherIDFromPB(req.TableTriggerEventDispatcherId) {
+	if manager.GetTableTriggerDispatcher().GetId() !=
+		common.NewDispatcherIDFromPB(req.TableTriggerDispatcherID) {
 		log.Error("Receive post bootstrap request but the table trigger event dispatcher id is not match",
 			zap.Any("changefeedID", cfId.Name()),
 			zap.String("expectedDispatcherID",
-				manager.GetTableTriggerEventDispatcher().GetId().String()),
+				manager.GetTableTriggerDispatcher().GetId().String()),
 			zap.String("actualDispatcherID",
-				common.NewDispatcherIDFromPB(req.TableTriggerEventDispatcherId).String()))
+				common.NewDispatcherIDFromPB(req.TableTriggerDispatcherID).String()))
 
-		err := errors.ErrChangefeedInitTableTriggerEventDispatcherFailed.
+		err := errors.ErrChangefeedInitTableTriggerDispatcherFailed.
 			GenWithStackByArgs("Receive post bootstrap request but the table trigger event dispatcher id is not match")
 
 		response := &heartbeatpb.MaintainerPostBootstrapResponse{
@@ -297,14 +297,14 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 	}
 
 	// init table schema store
-	err := manager.InitalizeTableTriggerEventDispatcher(req.Schemas)
+	err := manager.InitalizeTableTriggerDispatcher(req.Schemas)
 	if err != nil {
 		log.Error("failed to initialize table trigger event dispatcher",
 			zap.Any("changefeedID", cfId.Name()), zap.Error(err))
 		return m.handleDispatcherError(from, req.ChangefeedID, err)
 	}
 	if manager.RedoEnable {
-		err := manager.InitalizeRedoTableTriggerEventDispatcher(req.Schemas)
+		err := manager.InitalizeRedoTableTriggerDispatcher(req.Schemas)
 		if err != nil {
 			log.Error("failed to initialize redo table trigger event dispatcher",
 				zap.Any("changefeedID", cfId.Name()), zap.Error(err))
@@ -313,8 +313,8 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 	}
 
 	response := &heartbeatpb.MaintainerPostBootstrapResponse{
-		ChangefeedID:                  req.ChangefeedID,
-		TableTriggerEventDispatcherId: req.TableTriggerEventDispatcherId,
+		ChangefeedID:             req.ChangefeedID,
+		TableTriggerDispatcherID: req.TableTriggerDispatcherID,
 	}
 	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
 }

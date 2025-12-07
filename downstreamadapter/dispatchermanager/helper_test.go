@@ -121,8 +121,8 @@ func TestCheckpointTsMessageHandlerDeadlock(t *testing.T) {
 
 	// Create a mock DispatcherManager
 	dispatcherManager := &DispatcherManager{
-		sink:                        mockSink,
-		tableTriggerEventDispatcher: &dispatcher.EventDispatcher{}, // Non-nil to pass the check
+		sink:                   mockSink,
+		tableTriggerDispatcher: &dispatcher.EventDispatcher{}, // Non-nil to pass the check
 	}
 
 	// Create CheckpointTsMessage
@@ -164,8 +164,8 @@ func TestCheckpointTsMessageHandlerDeadlock(t *testing.T) {
 
 		// Create a new dispatcher manager with the deadlock sink
 		deadlockDispatcherManager := &DispatcherManager{
-			sink:                        deadlockMockSink,
-			tableTriggerEventDispatcher: &dispatcher.EventDispatcher{},
+			sink:                   deadlockMockSink,
+			tableTriggerDispatcher: &dispatcher.EventDispatcher{},
 		}
 
 		// Close the sink but does not cancel the context, so the AddCheckpointTs will block forever
@@ -196,8 +196,8 @@ func TestCheckpointTsMessageHandlerDeadlock(t *testing.T) {
 
 		// Create a new dispatcher manager with the deadlock sink
 		deadlockDispatcherManager := &DispatcherManager{
-			sink:                        deadlockMockSink,
-			tableTriggerEventDispatcher: &dispatcher.EventDispatcher{},
+			sink:                   deadlockMockSink,
+			tableTriggerDispatcher: &dispatcher.EventDispatcher{},
 		}
 
 		// Close the sink but does not cancel the context, so the AddCheckpointTs will block forever
