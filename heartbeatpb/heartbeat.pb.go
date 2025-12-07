@@ -747,24 +747,24 @@ func (m *CheckpointTsMessage) GetCheckpointTs() uint64 {
 	return 0
 }
 
-type RedoMeatMessage struct {
+type RedoMetaMessage struct {
 	ChangefeedID *ChangefeedID `protobuf:"bytes,1,opt,name=changefeedID,proto3" json:"changefeedID,omitempty"`
 	ResolvedTs   uint64        `protobuf:"varint,2,opt,name=resolvedTs,proto3" json:"resolvedTs,omitempty"`
 	CheckpointTs uint64        `protobuf:"varint,3,opt,name=checkpointTs,proto3" json:"checkpointTs,omitempty"`
 }
 
-func (m *RedoMeatMessage) Reset()         { *m = RedoMeatMessage{} }
-func (m *RedoMeatMessage) String() string { return proto.CompactTextString(m) }
-func (*RedoMeatMessage) ProtoMessage()    {}
-func (*RedoMeatMessage) Descriptor() ([]byte, []int) {
+func (m *RedoMetaMessage) Reset()         { *m = RedoMetaMessage{} }
+func (m *RedoMetaMessage) String() string { return proto.CompactTextString(m) }
+func (*RedoMetaMessage) ProtoMessage()    {}
+func (*RedoMetaMessage) Descriptor() ([]byte, []int) {
 	return fileDescriptor_6d584080fdadb670, []int{9}
 }
-func (m *RedoMeatMessage) XXX_Unmarshal(b []byte) error {
+func (m *RedoMetaMessage) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
 }
-func (m *RedoMeatMessage) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+func (m *RedoMetaMessage) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	if deterministic {
-		return xxx_messageInfo_RedoMeatMessage.Marshal(b, m, deterministic)
+		return xxx_messageInfo_RedoMetaMessage.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
 		n, err := m.MarshalToSizedBuffer(b)
@@ -774,33 +774,33 @@ func (m *RedoMeatMessage) XXX_Marshal(b []byte, deterministic bool) ([]byte, err
 		return b[:n], nil
 	}
 }
-func (m *RedoMeatMessage) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_RedoMeatMessage.Merge(m, src)
+func (m *RedoMetaMessage) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_RedoMetaMessage.Merge(m, src)
 }
-func (m *RedoMeatMessage) XXX_Size() int {
+func (m *RedoMetaMessage) XXX_Size() int {
 	return m.Size()
 }
-func (m *RedoMeatMessage) XXX_DiscardUnknown() {
-	xxx_messageInfo_RedoMeatMessage.DiscardUnknown(m)
+func (m *RedoMetaMessage) XXX_DiscardUnknown() {
+	xxx_messageInfo_RedoMetaMessage.DiscardUnknown(m)
 }
 
-var xxx_messageInfo_RedoMeatMessage proto.InternalMessageInfo
+var xxx_messageInfo_RedoMetaMessage proto.InternalMessageInfo
 
-func (m *RedoMeatMessage) GetChangefeedID() *ChangefeedID {
+func (m *RedoMetaMessage) GetChangefeedID() *ChangefeedID {
 	if m != nil {
 		return m.ChangefeedID
 	}
 	return nil
 }
 
-func (m *RedoMeatMessage) GetResolvedTs() uint64 {
+func (m *RedoMetaMessage) GetResolvedTs() uint64 {
 	if m != nil {
 		return m.ResolvedTs
 	}
 	return 0
 }
 
-func (m *RedoMeatMessage) GetCheckpointTs() uint64 {
+func (m *RedoMetaMessage) GetCheckpointTs() uint64 {
 	if m != nil {
 		return m.CheckpointTs
 	}
@@ -2857,7 +2857,7 @@ func init() {
 	proto.RegisterType((*DispatcherStatus)(nil), "heartbeatpb.DispatcherStatus")
 	proto.RegisterType((*HeartBeatResponse)(nil), "heartbeatpb.HeartBeatResponse")
 	proto.RegisterType((*CheckpointTsMessage)(nil), "heartbeatpb.CheckpointTsMessage")
-	proto.RegisterType((*RedoMeatMessage)(nil), "heartbeatpb.RedoMeatMessage")
+	proto.RegisterType((*RedoMetaMessage)(nil), "heartbeatpb.RedoMetaMessage")
 	proto.RegisterType((*RedoTsMessage)(nil), "heartbeatpb.RedoTsMessage")
 	proto.RegisterType((*RedoFlushedMessage)(nil), "heartbeatpb.RedoFlushedMessage")
 	proto.RegisterType((*DispatcherConfig)(nil), "heartbeatpb.DispatcherConfig")
@@ -2937,7 +2937,7 @@ var fileDescriptor_6d584080fdadb670 = []byte{
 	0x91, 0x4a, 0x3a, 0xd4, 0xf7, 0x5c, 0x4a, 0xae, 0x9b, 0x75, 0xf6, 0x01, 0xd9, 0x39, 0xed, 0x10,
 	0x69, 0xcd, 0x49, 0xb2, 0x8b, 0x64, 0x50, 0x80, 0x88, 0x10, 0x94, 0x86, 0x9e, 0x4d, 0x84, 0x49,
 	0xf9, 0xb7, 0xf1, 0x0a, 0x6e, 0xb6, 0x53, 0x11, 0xbb, 0x4f, 0x28, 0x35, 0xfb, 0xd7, 0x16, 0x3c,
-	0x9f, 0x1b, 0xd4, 0xf1, 0xdc, 0x60, 0xfc, 0x4e, 0x81, 0x45, 0x4c, 0x6c, 0x6f, 0x9f, 0x98, 0xe1,
+	0x9f, 0x1b, 0xd4, 0xf1, 0xdc, 0x60, 0xfc, 0x4e, 0x81, 0x45, 0x4c, 0x6c, 0x6f, 0x9f, 0x84, 0xe6,
 	0x8c, 0xd8, 0x4e, 0x4b, 0x37, 0x79, 0xb1, 0xb4, 0x02, 0xb1, 0x5c, 0x68, 0x32, 0xa9, 0x66, 0xa6,
 	0x8a, 0x29, 0x32, 0x19, 0x14, 0x10, 0xe3, 0xf7, 0xf1, 0x60, 0x44, 0x4f, 0x88, 0xfd, 0x8e, 0x98,
 	0x66, 0xe3, 0xae, 0xed, 0xb9, 0xcf, 0x9d, 0x3e, 0xda, 0x80, 0x12, 0xf5, 0x4d, 0x57, 0xf0, 0x5a,
@@ -3027,7 +3027,7 @@ var fileDescriptor_6d584080fdadb670 = []byte{
 	0x6f, 0x56, 0x95, 0xdf, 0xbe, 0x5d, 0x9d, 0xfb, 0xfc, 0xed, 0xea, 0xdc, 0x3f, 0xdf, 0xae, 0xce,
 	0xfd, 0xe4, 0xcb, 0x7d, 0x27, 0x3c, 0x19, 0x1d, 0x6f, 0x5a, 0xde, 0xf0, 0xa1, 0xef, 0xb8, 0x7d,
 	0xcb, 0xf4, 0x1f, 0x86, 0x8e, 0x65, 0x5b, 0x0f, 0x53, 0x96, 0x3a, 0xae, 0xf0, 0xbf, 0xb9, 0x1f,
-	0xfc, 0x3f, 0x00, 0x00, 0xff, 0xff, 0xa2, 0xdb, 0x4d, 0x9c, 0xec, 0x1d, 0x00, 0x00,
+	0xfc, 0x3f, 0x00, 0x00, 0xff, 0xff, 0xaf, 0xbb, 0x8d, 0xf5, 0xec, 0x1d, 0x00, 0x00,
 }
 
 func (m *TableSpan) Marshal() (dAtA []byte, err error) {
@@ -3508,7 +3508,7 @@ func (m *CheckpointTsMessage) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
-func (m *RedoMeatMessage) Marshal() (dAtA []byte, err error) {
+func (m *RedoMetaMessage) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
 	n, err := m.MarshalToSizedBuffer(dAtA[:size])
@@ -3518,12 +3518,12 @@ func (m *RedoMeatMessage) Marshal() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *RedoMeatMessage) MarshalTo(dAtA []byte) (int, error) {
+func (m *RedoMetaMessage) MarshalTo(dAtA []byte) (int, error) {
 	size := m.Size()
 	return m.MarshalToSizedBuffer(dAtA[:size])
 }
 
-func (m *RedoMeatMessage) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+func (m *RedoMetaMessage) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i := len(dAtA)
 	_ = i
 	var l int
@@ -5455,7 +5455,7 @@ func (m *CheckpointTsMessage) Size() (n int) {
 	return n
 }
 
-func (m *RedoMeatMessage) Size() (n int) {
+func (m *RedoMetaMessage) Size() (n int) {
 	if m == nil {
 		return 0
 	}
@@ -7461,7 +7461,7 @@ func (m *CheckpointTsMessage) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
-func (m *RedoMeatMessage) Unmarshal(dAtA []byte) error {
+func (m *RedoMetaMessage) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {
@@ -7484,10 +7484,10 @@ func (m *RedoMeatMessage) Unmarshal(dAtA []byte) error {
 		fieldNum := int32(wire >> 3)
 		wireType := int(wire & 0x7)
 		if wireType == 4 {
-			return fmt.Errorf("proto: RedoMeatMessage: wiretype end group for non-group")
+			return fmt.Errorf("proto: RedoMetaMessage: wiretype end group for non-group")
 		}
 		if fieldNum <= 0 {
-			return fmt.Errorf("proto: RedoMeatMessage: illegal tag %d (wire type %d)", fieldNum, wire)
+			return fmt.Errorf("proto: RedoMetaMessage: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
 		case 1:

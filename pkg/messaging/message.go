@@ -100,7 +100,7 @@ const (
 
 	// used to upload changefeed metrics from event store to log coordinator
 	TypeLogCoordinatorChangefeedStates IOType = 37
-	TypeRedoMeatMessage                IOType = 38
+	TypeRedoMetaMessage                IOType = 38
 	TypeRedoFlushedMessage             IOType = 39
 )
 
@@ -172,8 +172,8 @@ func (t IOType) String() string {
 		return "DispatcherHeartbeat"
 	case TypeRedoTsMessage:
 		return "RedoTsMessage"
-	case TypeRedoMeatMessage:
-		return "RedoMeatMessage"
+	case TypeRedoMetaMessage:
+		return "RedoMetaMessage"
 	case TypeRedoFlushedMessage:
 		return "RedoFlushedMessage"
 
@@ -364,8 +364,8 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 		m = &commonEvent.DispatcherHeartbeatResponse{}
 	case TypeRedoTsMessage:
 		m = &heartbeatpb.RedoTsMessage{}
-	case TypeRedoMeatMessage:
-		m = &heartbeatpb.RedoMeatMessage{}
+	case TypeRedoMetaMessage:
+		m = &heartbeatpb.RedoMetaMessage{}
 	case TypeRedoFlushedMessage:
 		m = &heartbeatpb.RedoFlushedMessage{}
 	case TypeCongestionControl:
@@ -472,8 +472,8 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		ioType = TypeDispatcherHeartbeatResponse
 	case *heartbeatpb.RedoTsMessage:
 		ioType = TypeRedoTsMessage
-	case *heartbeatpb.RedoMeatMessage:
-		ioType = TypeRedoMeatMessage
+	case *heartbeatpb.RedoMetaMessage:
+		ioType = TypeRedoMetaMessage
 	case *heartbeatpb.RedoFlushedMessage:
 		ioType = TypeRedoFlushedMessage
 	case *commonEvent.CongestionControl:

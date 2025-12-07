@@ -93,9 +93,9 @@ type Maintainer struct {
 	// checkpointTs.
 	startCheckpointTs uint64
 	enableRedo        bool
-	// redoMetaTs is global redo ts to forward
-	redoMetaTs *heartbeatpb.RedoMeatMessage
-	// redoResolvedTs is the commit-ts of the redo meta flushed
+	// redoMetaTs is the redo meta unflushed ts to forward
+	redoMetaTs *heartbeatpb.RedoMetaMessage
+	// redoResolvedTs is the redo meta flushed resolvedTs
 	redoResolvedTs  uint64
 	redoDDLSpan     *replica.SpanReplication
 	redoTsByCapture *WatermarkCaptureMap
@@ -231,7 +231,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		CheckpointTs: checkpointTs,
 		ResolvedTs:   checkpointTs,
 	}
-	m.redoMetaTs = &heartbeatpb.RedoMeatMessage{
+	m.redoMetaTs = &heartbeatpb.RedoMetaMessage{
 		ChangefeedID: cfID.ToPB(),
 		CheckpointTs: checkpointTs,
 		ResolvedTs:   checkpointTs,
@@ -611,7 +611,7 @@ func (m *Maintainer) handleRedoTsMessage(ctx context.Context) {
 			)
 			if needUpdate {
 				m.sendMessages([]*messaging.TargetMessage{
-					messaging.NewSingleTargetMessage(m.selfNode.ID, messaging.HeartbeatCollectorTopic, &heartbeatpb.RedoMeatMessage{
+					messaging.NewSingleTargetMessage(m.selfNode.ID, messaging.HeartbeatCollectorTopic, &heartbeatpb.RedoMetaMessage{
 						ChangefeedID: m.redoMetaTs.ChangefeedID,
 						CheckpointTs: m.redoMetaTs.CheckpointTs,
 						ResolvedTs:   m.redoMetaTs.ResolvedTs,

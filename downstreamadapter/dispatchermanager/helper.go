@@ -474,33 +474,33 @@ func (h *RedoTsMessageHandler) OnDrop(event RedoTsMessage) interface{} {
 	return nil
 }
 
-// newRedoMeatMessageDynamicStream is responsible for push RedoMeatMessage to the corresponding table trigger event dispatcher.
-func newRedoMeatMessageDynamicStream() dynstream.DynamicStream[int, common.GID, RedoMeatMessage, *DispatcherManager, *RedoMeatMessageHandler] {
+// newRedoMetaMessageDynamicStream is responsible for push RedoMetaMessage to the corresponding table trigger event dispatcher.
+func newRedoMetaMessageDynamicStream() dynstream.DynamicStream[int, common.GID, RedoMetaMessage, *DispatcherManager, *RedoMetaMessageHandler] {
 	ds := dynstream.NewParallelDynamicStream(
-		&RedoMeatMessageHandler{})
+		&RedoMetaMessageHandler{})
 	ds.Start()
 	return ds
 }
 
-type RedoMeatMessage struct {
-	*heartbeatpb.RedoMeatMessage
+type RedoMetaMessage struct {
+	*heartbeatpb.RedoMetaMessage
 }
 
-func NewRedoMeatMessage(msg *heartbeatpb.RedoMeatMessage) RedoMeatMessage {
-	return RedoMeatMessage{msg}
+func NewRedoMetaMessage(msg *heartbeatpb.RedoMetaMessage) RedoMetaMessage {
+	return RedoMetaMessage{msg}
 }
 
-type RedoMeatMessageHandler struct{}
+type RedoMetaMessageHandler struct{}
 
-func NewRedoMeatMessageHandler() RedoMeatMessageHandler {
-	return RedoMeatMessageHandler{}
+func NewRedoMetaMessageHandler() RedoMetaMessageHandler {
+	return RedoMetaMessageHandler{}
 }
 
-func (h *RedoMeatMessageHandler) Path(RedoMeatMessage RedoMeatMessage) common.GID {
-	return common.NewChangefeedGIDFromPB(RedoMeatMessage.ChangefeedID)
+func (h *RedoMetaMessageHandler) Path(redoMetaMessage RedoMetaMessage) common.GID {
+	return common.NewChangefeedGIDFromPB(redoMetaMessage.ChangefeedID)
 }
 
-func (h *RedoMeatMessageHandler) Handle(dispatcherManager *DispatcherManager, messages ...RedoMeatMessage) bool {
+func (h *RedoMetaMessageHandler) Handle(dispatcherManager *DispatcherManager, messages ...RedoMetaMessage) bool {
 	if len(messages) != 1 {
 		// TODO: Support batch
 		panic("invalid message count")
@@ -510,21 +510,21 @@ func (h *RedoMeatMessageHandler) Handle(dispatcherManager *DispatcherManager, me
 	return false
 }
 
-func (h *RedoMeatMessageHandler) GetSize(event RedoMeatMessage) int   { return 0 }
-func (h *RedoMeatMessageHandler) IsPaused(event RedoMeatMessage) bool { return false }
-func (h *RedoMeatMessageHandler) GetArea(path common.GID, dest *DispatcherManager) int {
+func (h *RedoMetaMessageHandler) GetSize(event RedoMetaMessage) int   { return 0 }
+func (h *RedoMetaMessageHandler) IsPaused(event RedoMetaMessage) bool { return false }
+func (h *RedoMetaMessageHandler) GetArea(path common.GID, dest *DispatcherManager) int {
 	return 0
 }
 
-func (h *RedoMeatMessageHandler) GetTimestamp(event RedoMeatMessage) dynstream.Timestamp {
+func (h *RedoMetaMessageHandler) GetTimestamp(event RedoMetaMessage) dynstream.Timestamp {
 	return 0
 }
 
-func (h *RedoMeatMessageHandler) GetType(event RedoMeatMessage) dynstream.EventType {
+func (h *RedoMetaMessageHandler) GetType(event RedoMetaMessage) dynstream.EventType {
 	return dynstream.DefaultEventType
 }
 
-func (h *RedoMeatMessageHandler) OnDrop(event RedoMeatMessage) interface{} {
+func (h *RedoMetaMessageHandler) OnDrop(event RedoMetaMessage) interface{} {
 	return nil
 }
 
