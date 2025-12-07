@@ -126,7 +126,7 @@ func TestTableSchemaStoreActiveActiveMetadata(t *testing.T) {
 	}
 
 	store := NewTableSchemaStore(schemaInfos, common.MysqlSinkType, true)
-	names := store.GetAllTableNames(0)
+	names := store.GetAllTableNames(0, false)
 	require.Equal(t, 1, len(names))
 	require.Equal(t, "db1", names[0].SchemaName)
 	require.Equal(t, "t1", names[0].TableName)
@@ -158,7 +158,7 @@ func TestTableSchemaStoreWhenNonMysqlSink(t *testing.T) {
 	})
 
 	tableSchemaStore := NewTableSchemaStore(schemaInfos, common.KafkaSinkType, false)
-	tableNames := tableSchemaStore.GetAllTableNames(1)
+	tableNames := tableSchemaStore.GetAllTableNames(1, true)
 	require.Equal(t, 4, len(tableNames))
 
 	// add table event
@@ -180,9 +180,9 @@ func TestTableSchemaStoreWhenNonMysqlSink(t *testing.T) {
 
 	tableSchemaStore.AddEvent(event1)
 
-	tableNames = tableSchemaStore.GetAllTableNames(2)
+	tableNames = tableSchemaStore.GetAllTableNames(2, true)
 	require.Equal(t, 4, len(tableNames))
-	tableNames = tableSchemaStore.GetAllTableNames(3)
+	tableNames = tableSchemaStore.GetAllTableNames(3, true)
 	require.Equal(t, 6, len(tableNames))
 
 	// drop databases
@@ -194,7 +194,7 @@ func TestTableSchemaStoreWhenNonMysqlSink(t *testing.T) {
 	}
 	tableSchemaStore.AddEvent(event2)
 
-	tableNames = tableSchemaStore.GetAllTableNames(5)
+	tableNames = tableSchemaStore.GetAllTableNames(5, true)
 	require.Equal(t, 4, len(tableNames))
 
 	// rename
@@ -216,6 +216,6 @@ func TestTableSchemaStoreWhenNonMysqlSink(t *testing.T) {
 		},
 	}
 	tableSchemaStore.AddEvent(event3)
-	tableNames = tableSchemaStore.GetAllTableNames(7)
+	tableNames = tableSchemaStore.GetAllTableNames(7, true)
 	require.Equal(t, 4, len(tableNames))
 }
