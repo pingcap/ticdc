@@ -75,12 +75,7 @@ message RedoMetaMessage {
     uint64 checkpointTs = 3;
 }
 
-message RedoTsMessage {
-    ChangefeedID changefeedID = 1;
-    uint64 resolvedTs = 2;
-}
-
-message RedoFlushedMessage {
+message RedoResolvedTsMessage {
     ChangefeedID changefeedID = 1;
     uint64 resolvedTs = 2;
 }

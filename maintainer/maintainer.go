@@ -469,8 +469,8 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 	case messaging.TypeCheckpointTsMessage:
 		req := msg.Message[0].(*heartbeatpb.CheckpointTsMessage)
 		m.onCheckpointTsPersisted(req)
-	case messaging.TypeRedoFlushedMessage:
-		req := msg.Message[0].(*heartbeatpb.RedoFlushedMessage)
+	case messaging.TypeRedoResolvedTsMessage:
+		req := msg.Message[0].(*heartbeatpb.RedoResolvedTsMessage)
 		m.onRedoPersisted(req)
 	default:
 		log.Warn("unknown message type, ignore it",
@@ -503,12 +503,12 @@ func (m *Maintainer) onCheckpointTsPersisted(msg *heartbeatpb.CheckpointTsMessag
 	})
 }
 
-func (m *Maintainer) onRedoPersisted(req *heartbeatpb.RedoFlushedMessage) {
+func (m *Maintainer) onRedoPersisted(req *heartbeatpb.RedoResolvedTsMessage) {
 	if m.redoResolvedTs < req.ResolvedTs {
 		m.redoResolvedTs = req.ResolvedTs
 		msgs := make([]*messaging.TargetMessage, 0, len(m.bootstrapper.GetAllNodeIDs()))
 		for id := range m.bootstrapper.GetAllNodeIDs() {
-			msgs = append(msgs, messaging.NewSingleTargetMessage(id, messaging.HeartbeatCollectorTopic, &heartbeatpb.RedoTsMessage{
+			msgs = append(msgs, messaging.NewSingleTargetMessage(id, messaging.HeartbeatCollectorTopic, &heartbeatpb.RedoResolvedTsMessage{
 				ChangefeedID: req.ChangefeedID,
 				ResolvedTs:   m.redoResolvedTs,
 			}))

@@ -262,7 +262,7 @@ func (e *DispatcherManager) UpdateRedoMeta(checkpointTs, resolvedTs uint64) {
 	log.Error("should not reach here. only update redo meta on the redoTableTriggerEventDispatcher")
 }
 
-func (e *DispatcherManager) SetGlobalRedoTs(resolvedTs uint64) bool {
+func (e *DispatcherManager) SetRedoResolvedTs(resolvedTs uint64) bool {
 	return util.CompareAndMonotonicIncrease(&e.redoGlobalTs, resolvedTs)
 }
 
@@ -288,7 +288,7 @@ func (e *DispatcherManager) collectRedoMeta(ctx context.Context) error {
 				messaging.NewSingleTargetMessage(
 					e.GetMaintainerID(),
 					messaging.MaintainerManagerTopic,
-					&heartbeatpb.RedoFlushedMessage{
+					&heartbeatpb.RedoResolvedTsMessage{
 						ChangefeedID: e.changefeedID.ToPB(),
 						ResolvedTs:   logMeta.ResolvedTs,
 					},

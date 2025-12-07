@@ -55,7 +55,7 @@ type HeartBeatCollector struct {
 	heartBeatResponseDynamicStream          dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *DispatcherManager, *HeartBeatResponseHandler]
 	schedulerDispatcherRequestDynamicStream dynstream.DynamicStream[int, common.GID, SchedulerDispatcherRequest, *DispatcherManager, *SchedulerDispatcherRequestHandler]
 	checkpointTsMessageDynamicStream        dynstream.DynamicStream[int, common.GID, CheckpointTsMessage, *DispatcherManager, *CheckpointTsMessageHandler]
-	redoTsMessageDynamicStream              dynstream.DynamicStream[int, common.GID, RedoTsMessage, *DispatcherManager, *RedoTsMessageHandler]
+	redoResolvedTsMessageDynamicStream      dynstream.DynamicStream[int, common.GID, RedoResolvedTsMessage, *DispatcherManager, *RedoResolvedTsMessageHandler]
 	redoMetaMessageDynamicStream            dynstream.DynamicStream[int, common.GID, RedoMetaMessage, *DispatcherManager, *RedoMetaMessageHandler]
 	mergeDispatcherRequestDynamicStream     dynstream.DynamicStream[int, common.GID, MergeDispatcherRequest, *DispatcherManager, *MergeDispatcherRequestHandler]
 	mc                                      messaging.MessageCenter
@@ -75,7 +75,7 @@ func NewHeartBeatCollector(serverId node.ID) *HeartBeatCollector {
 		heartBeatResponseDynamicStream:          newHeartBeatResponseDynamicStream(dStatusDS),
 		schedulerDispatcherRequestDynamicStream: newSchedulerDispatcherRequestDynamicStream(),
 		checkpointTsMessageDynamicStream:        newCheckpointTsMessageDynamicStream(),
-		redoTsMessageDynamicStream:              newRedoTsMessageDynamicStream(),
+		redoResolvedTsMessageDynamicStream:      newRedoResolvedTsMessageDynamicStream(),
 		redoMetaMessageDynamicStream:            newRedoMetaMessageDynamicStream(),
 		mergeDispatcherRequestDynamicStream:     newMergeDispatcherRequestDynamicStream(),
 		mc:                                      appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
@@ -145,7 +145,7 @@ func (c *HeartBeatCollector) RegisterRedoMessageDs(m *DispatcherManager) error {
 		return nil
 	}
 
-	err := c.redoTsMessageDynamicStream.AddPath(m.changefeedID.Id, m)
+	err := c.redoResolvedTsMessageDynamicStream.AddPath(m.changefeedID.Id, m)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -190,10 +190,10 @@ func (c *HeartBeatCollector) RemoveRedoMessage(changefeedID common.ChangeFeedID)
 		return nil
 	}
 
-	if c.redoTsMessageDynamicStream == nil {
+	if c.redoResolvedTsMessageDynamicStream == nil {
 		return nil
 	}
-	err := c.redoTsMessageDynamicStream.RemovePath(changefeedID.Id)
+	err := c.redoResolvedTsMessageDynamicStream.RemovePath(changefeedID.Id)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -272,11 +272,11 @@ func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.Targ
 		c.checkpointTsMessageDynamicStream.Push(
 			common.NewChangefeedGIDFromPB(checkpointTsMessage.ChangefeedID),
 			NewCheckpointTsMessage(checkpointTsMessage))
-	case messaging.TypeRedoTsMessage:
-		redoMessage := msg.Message[0].(*heartbeatpb.RedoTsMessage)
-		c.redoTsMessageDynamicStream.Push(
+	case messaging.TypeRedoResolvedTsMessage:
+		redoMessage := msg.Message[0].(*heartbeatpb.RedoResolvedTsMessage)
+		c.redoResolvedTsMessageDynamicStream.Push(
 			common.NewChangefeedGIDFromPB(redoMessage.ChangefeedID),
-			NewRedoTsMessage(redoMessage))
+			NewRedoResolvedTsMessage(redoMessage))
 	case messaging.TypeRedoMetaMessage:
 		redoMessage := msg.Message[0].(*heartbeatpb.RedoMetaMessage)
 		c.redoMetaMessageDynamicStream.Push(
@@ -303,7 +303,7 @@ func (c *HeartBeatCollector) Close() {
 	c.isClosed.Store(true)
 
 	c.checkpointTsMessageDynamicStream.Close()
-	c.redoTsMessageDynamicStream.Close()
+	c.redoResolvedTsMessageDynamicStream.Close()
 	c.redoMetaMessageDynamicStream.Close()
 	c.heartBeatResponseDynamicStream.Close()
 	c.schedulerDispatcherRequestDynamicStream.Close()
