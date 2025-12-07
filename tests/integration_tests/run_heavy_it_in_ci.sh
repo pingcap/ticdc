@@ -56,7 +56,7 @@ mysql_groups=(
 	# G12
 	'ddl_with_random_move_table'
 	# G13
-	'tidb_mysql_test fail_over region_merge'
+	'tidb_mysql_test fail_over region_merge fail_over_ddl_mix_random_delay'
 	# G14
 	'fail_over_ddl_mix'
 	# G15

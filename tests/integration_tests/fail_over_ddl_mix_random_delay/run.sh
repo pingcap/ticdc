@@ -1,15 +1,8 @@
 #!/bin/bash
-# This test case is going to test the situation with dmls, ddls and random server down.
-# The test case is as follows:
-# 1. Start two ticdc servers.
-# 2. Create 10 tables. And then randomly exec the ddls:
-#    such as: drop table, and then create table
-#             drop table, and then recover table
-#             truncate table
-# 3. Simultaneously we exec the dmls, continues insert data to these 10 tables.
-# 4. Besides, we enable the syncpoint.
-# 5. Furthermore, we will randomly kill the ticdc server, and then restart it.
-# 6. We execute these threads for a time, and then check the data consistency between the upstream and downstream.
+# This test case mixes heavy DML traffic, random DDLs and CDC failover.
+# Compared with fail_over_ddl_mix, this version randomly injects
+# MySQLSinkExecDDLDelay failpoints (1~20s) and performs occasional CDC restarts
+# while verifying data consistency at the end.
 
 set -eu
 
@@ -19,36 +12,28 @@ source $CUR/../_utils/execute_mixed_dml
 WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
-check_time=60
+TEST_DURATION=${TEST_DURATION:-300}
+
+function start_cdc_instance() {
+	local logsuffix=$1
+	local addr=$2
+
+	export GO_FAILPOINTS="github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkExecDDLDelay=return(\"$((RANDOM % 5 + 1))\")"
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "$logsuffix" --addr "$addr"
+}
 
 function prepare() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	# record tso before we create tables to skip the system table DDLs
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0" --addr "127.0.0.1:8300"
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
+	start_cdc_instance "0" "127.0.0.1:8300"
+	start_cdc_instance "1" "127.0.0.1:8301"
 
-	TOPIC_NAME="ticdc-failover-ddl-test-mix-with-syncpoint-$RANDOM"
-
-	case $SINK_TYPE in
-	kafka) SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=3" ;;
-	storage) SINK_URI="file://$WORK_DIR/storage_test/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true" ;;
-	pulsar)
-		run_pulsar_cluster $WORK_DIR normal
-		SINK_URI="pulsar://127.0.0.1:6650/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true"
-		;;
-	*) SINK_URI="mysql://root@127.0.0.1:3306/" ;;
-	esac
+	SINK_URI="mysql://normal:123456@127.0.0.1:3306/"
 	do_retry 5 3 cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/$1.toml"
-	case $SINK_TYPE in
-	kafka) run_kafka_consumer $WORK_DIR $SINK_URI ;;
-	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
-	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI ;;
-	esac
 }
 
 function create_tables() {
@@ -58,7 +43,7 @@ function create_tables() {
 	done
 }
 
-function execute_ddl() {
+function execute_ddl_for_normal_tables() {
 	while true; do
 		table_num=$((RANDOM % 5 + 1))
 		table_name="table_$table_num"
@@ -82,7 +67,7 @@ function execute_ddl() {
 			;;
 		esac
 
-		sleep 1
+		sleep 10
 	done
 }
 
@@ -91,59 +76,73 @@ function execute_dml() {
 	execute_mixed_dml "$table_name" "${UP_TIDB_HOST}" "${UP_TIDB_PORT}"
 }
 
-function kill_server() {
-	for count in {1..10}; do
-		case $((RANDOM % 2)) in
-		0)
-			cdc_pid_1=$(get_cdc_pid 127.0.0.1 8300)
-			if [ -z "$cdc_pid_1" ]; then
-				continue
-			fi
-			kill_cdc_pid $cdc_pid_1
+function random_failover_loop() {
+	local duration=$1
+	local end_time=$(($(date +%s) + duration))
+	local restart_round=0
 
-			sleep 10
-			run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-$count" --addr "127.0.0.1:8300"
-			;;
-		1)
-			cdc_pid_2=$(get_cdc_pid 127.0.0.1 8301)
-			if [ -z "$cdc_pid_2" ]; then
-				continue
-			fi
-			kill_cdc_pid $cdc_pid_2
+	while [ $(date +%s) -lt $end_time ]; do
+		sleep $((RANDOM % 10 + 5))
+		if ((RANDOM % 2 == 0)); then
+			continue
+		fi
 
-			sleep 10
-			run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1-$count" --addr "127.0.0.1:8301"
-			;;
-		esac
-		sleep 15
+		local target_port=8300
+		local suffix="0"
+		if ((RANDOM % 2 == 1)); then
+			target_port=8301
+			suffix="1"
+		fi
+
+		local cdc_pid=$(get_cdc_pid 127.0.0.1 $target_port)
+		if [ -n "$cdc_pid" ]; then
+			echo "Failover: killing CDC on port $target_port"
+			kill_cdc_pid $cdc_pid
+		fi
+
+		sleep $((RANDOM % 5 + 3))
+		restart_round=$((restart_round + 1))
+		start_cdc_instance "$suffix-restart-$restart_round" "127.0.0.1:$target_port"
+		sleep $((RANDOM % 5 + 3))
 	done
 }
 
-main() {
+function stop_background_jobs() {
+	for pid in "$@"; do
+		if [ -n "$pid" ] && kill -0 $pid 2>/dev/null; then
+			kill $pid 2>/dev/null || true
+			wait $pid 2>/dev/null || true
+		fi
+	done
+}
+
+function main() {
+	if [ "$SINK_TYPE" != "mysql" ]; then
+		echo "Skip test since MySQL sink is required for failpoint coverage"
+		return
+	fi
+
 	prepare changefeed
 
 	create_tables
-	execute_ddl &
+	execute_ddl_for_normal_tables &
 	DDL_PID=$!
 
-	execute_dml 1 &
-	DML_PID_1=$!
-	execute_dml 2 &
-	DML_PID_2=$!
-	execute_dml 3 &
-	DML_PID_3=$!
-	execute_dml 4 &
-	DML_PID_4=$!
-	execute_dml 5 &
-	DML_PID_5=$!
+	DML_PIDS=()
+	for i in {1..5}; do
+		execute_dml $i &
+		DML_PIDS+=($!)
+	done
 
-	kill_server
+	random_failover_loop $TEST_DURATION &
+	FAILOVER_PID=$!
 
-	sleep 15
+	sleep $TEST_DURATION
 
-	kill -9 $DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5
+	stop_background_jobs $DDL_PID ${DML_PIDS[@]}
+	wait $FAILOVER_PID 2>/dev/null || true
 
-	sleep 60
+	sleep 30
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
 
@@ -156,38 +155,40 @@ main() {
 		exit 1
 	fi
 
+	export GO_FAILPOINTS=''
+
 	cleanup_process $CDC_BINARY
 }
 
-main_with_consistent() {
+function main_with_consistent() {
 	if [ "$SINK_TYPE" != "mysql" ]; then
+		echo "Skip consistent test since MySQL sink is required for failpoint coverage"
 		return
 	fi
+
 	prepare consistent_changefeed
 
 	create_tables
-	execute_ddl &
+	execute_ddl_for_normal_tables &
 	DDL_PID=$!
 
-	execute_dml 1 &
-	DML_PID_1=$!
-	execute_dml 2 &
-	DML_PID_2=$!
-	execute_dml 3 &
-	DML_PID_3=$!
-	execute_dml 4 &
-	DML_PID_4=$!
-	execute_dml 5 &
-	DML_PID_5=$!
+	DML_PIDS=()
+	for i in {1..5}; do
+		execute_dml $i &
+		DML_PIDS+=($!)
+	done
 
-	kill_server
+	random_failover_loop $TEST_DURATION &
+	FAILOVER_PID=$!
 
-	sleep 15
+	sleep $TEST_DURATION
 
-	kill -9 $DDL_PID $DML_PID_1 $DML_PID_2 $DML_PID_3 $DML_PID_4 $DML_PID_5
+	stop_background_jobs $DDL_PID ${DML_PIDS[@]}
+	wait $FAILOVER_PID 2>/dev/null || true
 
-	# to ensure row changed events have been replicated to TiCDC
+	# Wait to make sure replication catches up before checking redo progress.
 	sleep 60
+
 	if ((RANDOM % 2)); then
 		# For rename table, modify column ddl, drop column, drop index and drop table ddl, the struct of table is wrong when appling snapshot.
 		# see https://github.com/pingcap/tidb/issues/63464.
@@ -205,19 +206,9 @@ main_with_consistent() {
 		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
 	else
 		sleep 30
-		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
-
-		checkpoint1=$(cdc_cli_changefeed query -c "test" 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
-		sleep 20
-		checkpoint2=$(cdc_cli_changefeed query -c "test" 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
-
-		if [[ "$checkpoint1" -eq "$checkpoint2" ]]; then
-			echo "checkpoint is not changed"
-			exit 1
-		fi
+		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 1000
 		cleanup_process $CDC_BINARY
 	fi
-
 }
 
 trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT

@@ -344,11 +344,8 @@ func TestBasicFunction(t *testing.T) {
 	require.Len(t, controller.GetTasksBySchemaID(1), 1)
 	require.Len(t, controller.GetTasksBySchemaID(2), 1)
 
-	var count int
-	controller.RemoveByTableIDs(func(task *replica.SpanReplication) {
-		count++
-	}, 3)
-	require.Equal(t, count, 1)
+	require.Len(t, controller.GetRemoveTasksByTableIDs(3), 1)
+	controller.RemoveByTableIDs(3)
 	require.Len(t, controller.GetTasksBySchemaID(1), 1)
 	require.Len(t, controller.GetTasksBySchemaID(2), 0)
 	require.Len(t, controller.GetReplicating(), 1)
@@ -358,12 +355,8 @@ func TestBasicFunction(t *testing.T) {
 	controller.UpdateSchemaID(4, 5)
 	require.Equal(t, 1, controller.GetTaskSizeBySchemaID(5))
 
-	count = 0
-	controller.RemoveBySchemaID(func(replicaSet *replica.SpanReplication) {
-		count++
-	}, 5)
-	require.Equal(t, count, 1)
-
+	require.Len(t, controller.GetRemoveTasksBySchemaID(5), 1)
+	controller.RemoveBySchemaID(5)
 	require.Len(t, controller.GetReplicating(), 0)
 	require.Equal(t, 1, controller.TaskSize())
 	require.Equal(t, controller.GetAbsentSize(), 0)

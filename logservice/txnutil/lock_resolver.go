@@ -53,7 +53,7 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 		// Only log when there are locks or error to avoid log flooding.
 		if len(totalLocks) != 0 || err != nil {
 			cost := time.Since(start)
-			log.Info("resolve lock finishes",
+			log.Debug("resolve lock finishes",
 				zap.Uint64("regionID", regionID),
 				zap.Int("lockCount", len(totalLocks)),
 				zap.Any("locks", totalLocks),

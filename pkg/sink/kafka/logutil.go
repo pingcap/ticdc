@@ -65,6 +65,10 @@ func BuildEventLogContext(keyspace, changefeed string, info *common.MessageLogIn
 			sb.WriteString(", ddlQuery=")
 			sb.WriteString(strconv.Quote(info.DDL.Query))
 		}
+		if info.DDL.StartTs != 0 {
+			sb.WriteString(", ddlStartTs=")
+			sb.WriteString(strconv.FormatUint(info.DDL.StartTs, 10))
+		}
 		if info.DDL.CommitTs != 0 {
 			sb.WriteString(", ddlCommitTs=")
 			sb.WriteString(strconv.FormatUint(info.DDL.CommitTs, 10))
