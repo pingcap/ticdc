@@ -15,6 +15,7 @@ package dispatchermanager
 
 import (
 	"context"
+	"math"
 	"time"
 
 	"github.com/pingcap/log"
@@ -132,6 +133,20 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 	newStartTsList, _, _, err := e.getTableRecoveryInfoFromMysqlSink(tableIds, startTsList, removeDDLTs)
 	if err != nil {
 		return errors.Trace(err)
+	}
+
+	if e.latestRedoWatermark.Get().CheckpointTs == 0 {
+		// If the checkpointTs is 0, means there is no dispatchers before. So we need to init it with the smallest startTs of these dispatchers
+		smallestStartTs := int64(math.MaxInt64)
+		for _, startTs := range newStartTsList {
+			if startTs < smallestStartTs {
+				smallestStartTs = startTs
+			}
+		}
+		e.latestRedoWatermark.Set(&heartbeatpb.Watermark{
+			CheckpointTs: uint64(smallestStartTs),
+			ResolvedTs:   uint64(smallestStartTs),
+		})
 	}
 
 	for idx, id := range dispatcherIds {
