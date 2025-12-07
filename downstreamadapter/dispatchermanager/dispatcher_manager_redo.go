@@ -288,7 +288,7 @@ func (e *DispatcherManager) collectRedoMeta(ctx context.Context) error {
 				messaging.NewSingleTargetMessage(
 					e.GetMaintainerID(),
 					messaging.MaintainerManagerTopic,
-					&heartbeatpb.RedoMessage{
+					&heartbeatpb.RedoFlushedMessage{
 						ChangefeedID: e.changefeedID.ToPB(),
 						ResolvedTs:   logMeta.ResolvedTs,
 					},

@@ -415,66 +415,116 @@ func (h *CheckpointTsMessageHandler) OnDrop(event CheckpointTsMessage) interface
 	return nil
 }
 
-// redoMessageDynamicStream is responsible for push RedoMessage to the corresponding table trigger event dispatcher.
-func newRedoMessageDynamicStream() dynstream.DynamicStream[int, common.GID, RedoMessage, *DispatcherManager, *RedoMessageHandler] {
+// redoTsMessageDynamicStream is responsible for push RedoTsMessage to the corresponding table trigger event dispatcher.
+func newRedoTsMessageDynamicStream() dynstream.DynamicStream[int, common.GID, RedoTsMessage, *DispatcherManager, *RedoTsMessageHandler] {
 	ds := dynstream.NewParallelDynamicStream(
-		&RedoMessageHandler{})
+		&RedoTsMessageHandler{})
 	ds.Start()
 	return ds
 }
 
-type RedoMessage struct {
-	*heartbeatpb.RedoMessage
+type RedoTsMessage struct {
+	*heartbeatpb.RedoTsMessage
 }
 
-func NewRedoMessage(msg *heartbeatpb.RedoMessage) RedoMessage {
-	return RedoMessage{msg}
+func NewRedoTsMessage(msg *heartbeatpb.RedoTsMessage) RedoTsMessage {
+	return RedoTsMessage{msg}
 }
 
-type RedoMessageHandler struct{}
+type RedoTsMessageHandler struct{}
 
-func NewRedoMessageHandler() RedoMessageHandler {
-	return RedoMessageHandler{}
+func NewRedoTsMessageHandler() RedoTsMessageHandler {
+	return RedoTsMessageHandler{}
 }
 
-func (h *RedoMessageHandler) Path(redoMessage RedoMessage) common.GID {
-	return common.NewChangefeedGIDFromPB(redoMessage.ChangefeedID)
+func (h *RedoTsMessageHandler) Path(redoTsMessage RedoTsMessage) common.GID {
+	return common.NewChangefeedGIDFromPB(redoTsMessage.ChangefeedID)
 }
 
-func (h *RedoMessageHandler) Handle(dispatcherManager *DispatcherManager, messages ...RedoMessage) bool {
+func (h *RedoTsMessageHandler) Handle(dispatcherManager *DispatcherManager, messages ...RedoTsMessage) bool {
 	if len(messages) != 1 {
 		// TODO: Support batch
 		panic("invalid message count")
 	}
 	msg := messages[0]
-	if msg.Advanced {
-		ok := dispatcherManager.SetGlobalRedoTs(msg.ResolvedTs)
-		if ok {
-			dispatcherManager.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.EventDispatcher) {
-				dispatcher.HandleCacheEvents()
-			})
-		}
-	} else {
-		dispatcherManager.UpdateRedoMeta(msg.CheckpointTs, msg.ResolvedTs)
+	ok := dispatcherManager.SetGlobalRedoTs(msg.ResolvedTs)
+	if ok {
+		dispatcherManager.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.EventDispatcher) {
+			dispatcher.HandleCacheEvents()
+		})
 	}
 	return false
 }
 
-func (h *RedoMessageHandler) GetSize(event RedoMessage) int   { return 0 }
-func (h *RedoMessageHandler) IsPaused(event RedoMessage) bool { return false }
-func (h *RedoMessageHandler) GetArea(path common.GID, dest *DispatcherManager) int {
+func (h *RedoTsMessageHandler) GetSize(event RedoTsMessage) int   { return 0 }
+func (h *RedoTsMessageHandler) IsPaused(event RedoTsMessage) bool { return false }
+func (h *RedoTsMessageHandler) GetArea(path common.GID, dest *DispatcherManager) int {
 	return 0
 }
 
-func (h *RedoMessageHandler) GetTimestamp(event RedoMessage) dynstream.Timestamp {
+func (h *RedoTsMessageHandler) GetTimestamp(event RedoTsMessage) dynstream.Timestamp {
 	return 0
 }
 
-func (h *RedoMessageHandler) GetType(event RedoMessage) dynstream.EventType {
+func (h *RedoTsMessageHandler) GetType(event RedoTsMessage) dynstream.EventType {
 	return dynstream.DefaultEventType
 }
 
-func (h *RedoMessageHandler) OnDrop(event RedoMessage) interface{} {
+func (h *RedoTsMessageHandler) OnDrop(event RedoTsMessage) interface{} {
+	return nil
+}
+
+// newRedoMeatMessageDynamicStream is responsible for push RedoMeatMessage to the corresponding table trigger event dispatcher.
+func newRedoMeatMessageDynamicStream() dynstream.DynamicStream[int, common.GID, RedoMeatMessage, *DispatcherManager, *RedoMeatMessageHandler] {
+	ds := dynstream.NewParallelDynamicStream(
+		&RedoMeatMessageHandler{})
+	ds.Start()
+	return ds
+}
+
+type RedoMeatMessage struct {
+	*heartbeatpb.RedoMeatMessage
+}
+
+func NewRedoMeatMessage(msg *heartbeatpb.RedoMeatMessage) RedoMeatMessage {
+	return RedoMeatMessage{msg}
+}
+
+type RedoMeatMessageHandler struct{}
+
+func NewRedoMeatMessageHandler() RedoMeatMessageHandler {
+	return RedoMeatMessageHandler{}
+}
+
+func (h *RedoMeatMessageHandler) Path(RedoMeatMessage RedoMeatMessage) common.GID {
+	return common.NewChangefeedGIDFromPB(RedoMeatMessage.ChangefeedID)
+}
+
+func (h *RedoMeatMessageHandler) Handle(dispatcherManager *DispatcherManager, messages ...RedoMeatMessage) bool {
+	if len(messages) != 1 {
+		// TODO: Support batch
+		panic("invalid message count")
+	}
+	msg := messages[0]
+	dispatcherManager.UpdateRedoMeta(msg.CheckpointTs, msg.ResolvedTs)
+	return false
+}
+
+func (h *RedoMeatMessageHandler) GetSize(event RedoMeatMessage) int   { return 0 }
+func (h *RedoMeatMessageHandler) IsPaused(event RedoMeatMessage) bool { return false }
+func (h *RedoMeatMessageHandler) GetArea(path common.GID, dest *DispatcherManager) int {
+	return 0
+}
+
+func (h *RedoMeatMessageHandler) GetTimestamp(event RedoMeatMessage) dynstream.Timestamp {
+	return 0
+}
+
+func (h *RedoMeatMessageHandler) GetType(event RedoMeatMessage) dynstream.EventType {
+	return dynstream.DefaultEventType
+}
+
+func (h *RedoMeatMessageHandler) OnDrop(event RedoMeatMessage) interface{} {
 	return nil
 }
 

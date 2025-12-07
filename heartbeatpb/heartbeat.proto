@@ -69,11 +69,20 @@ message CheckpointTsMessage {
     uint64 checkpointTs = 2;
 }
 
-message RedoMessage {
+message RedoMeatMessage {
     ChangefeedID changefeedID = 1;
     uint64 resolvedTs = 2;
     uint64 checkpointTs = 3;
-    bool advanced = 4;
+}
+
+message RedoTsMessage {
+    ChangefeedID changefeedID = 1;
+    uint64 resolvedTs = 2;
+}
+
+message RedoFlushedMessage {
+    ChangefeedID changefeedID = 1;
+    uint64 resolvedTs = 2;
 }
 
 enum ScheduleAction {

@@ -55,7 +55,8 @@ type HeartBeatCollector struct {
 	heartBeatResponseDynamicStream          dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *DispatcherManager, *HeartBeatResponseHandler]
 	schedulerDispatcherRequestDynamicStream dynstream.DynamicStream[int, common.GID, SchedulerDispatcherRequest, *DispatcherManager, *SchedulerDispatcherRequestHandler]
 	checkpointTsMessageDynamicStream        dynstream.DynamicStream[int, common.GID, CheckpointTsMessage, *DispatcherManager, *CheckpointTsMessageHandler]
-	redoMessageDynamicStream                dynstream.DynamicStream[int, common.GID, RedoMessage, *DispatcherManager, *RedoMessageHandler]
+	redoTsMessageDynamicStream              dynstream.DynamicStream[int, common.GID, RedoTsMessage, *DispatcherManager, *RedoTsMessageHandler]
+	RedoMeatMessageDynamicStream            dynstream.DynamicStream[int, common.GID, RedoMeatMessage, *DispatcherManager, *RedoMeatMessageHandler]
 	mergeDispatcherRequestDynamicStream     dynstream.DynamicStream[int, common.GID, MergeDispatcherRequest, *DispatcherManager, *MergeDispatcherRequestHandler]
 	mc                                      messaging.MessageCenter
 
@@ -74,7 +75,8 @@ func NewHeartBeatCollector(serverId node.ID) *HeartBeatCollector {
 		heartBeatResponseDynamicStream:          newHeartBeatResponseDynamicStream(dStatusDS),
 		schedulerDispatcherRequestDynamicStream: newSchedulerDispatcherRequestDynamicStream(),
 		checkpointTsMessageDynamicStream:        newCheckpointTsMessageDynamicStream(),
-		redoMessageDynamicStream:                newRedoMessageDynamicStream(),
+		redoTsMessageDynamicStream:              newRedoTsMessageDynamicStream(),
+		RedoMeatMessageDynamicStream:            newRedoMeatMessageDynamicStream(),
 		mergeDispatcherRequestDynamicStream:     newMergeDispatcherRequestDynamicStream(),
 		mc:                                      appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 	}
@@ -143,7 +145,11 @@ func (c *HeartBeatCollector) RegisterRedoMessageDs(m *DispatcherManager) error {
 		return nil
 	}
 
-	err := c.redoMessageDynamicStream.AddPath(m.changefeedID.Id, m)
+	err := c.redoTsMessageDynamicStream.AddPath(m.changefeedID.Id, m)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	err = c.RedoMeatMessageDynamicStream.AddPath(m.changefeedID.Id, m)
 	return errors.Trace(err)
 }
 
@@ -184,10 +190,17 @@ func (c *HeartBeatCollector) RemoveRedoMessage(changefeedID common.ChangeFeedID)
 		return nil
 	}
 
-	if c.redoMessageDynamicStream == nil {
+	if c.redoTsMessageDynamicStream == nil {
 		return nil
 	}
-	err := c.redoMessageDynamicStream.RemovePath(changefeedID.Id)
+	err := c.redoTsMessageDynamicStream.RemovePath(changefeedID.Id)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	if c.RedoMeatMessageDynamicStream == nil {
+		return nil
+	}
+	err = c.RedoMeatMessageDynamicStream.RemovePath(changefeedID.Id)
 	return errors.Trace(err)
 }
 
@@ -259,11 +272,16 @@ func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.Targ
 		c.checkpointTsMessageDynamicStream.Push(
 			common.NewChangefeedGIDFromPB(checkpointTsMessage.ChangefeedID),
 			NewCheckpointTsMessage(checkpointTsMessage))
-	case messaging.TypeRedoMessage:
-		redoMessage := msg.Message[0].(*heartbeatpb.RedoMessage)
-		c.redoMessageDynamicStream.Push(
+	case messaging.TypeRedoTsMessage:
+		redoMessage := msg.Message[0].(*heartbeatpb.RedoTsMessage)
+		c.redoTsMessageDynamicStream.Push(
 			common.NewChangefeedGIDFromPB(redoMessage.ChangefeedID),
-			NewRedoMessage(redoMessage))
+			NewRedoTsMessage(redoMessage))
+	case messaging.TypeRedoMeatMessage:
+		redoMessage := msg.Message[0].(*heartbeatpb.RedoMeatMessage)
+		c.RedoMeatMessageDynamicStream.Push(
+			common.NewChangefeedGIDFromPB(redoMessage.ChangefeedID),
+			NewRedoMeatMessage(redoMessage))
 	case messaging.TypeMergeDispatcherRequest:
 		mergeDispatcherRequest := msg.Message[0].(*heartbeatpb.MergeDispatcherRequest)
 		c.mergeDispatcherRequestDynamicStream.Push(
@@ -285,7 +303,8 @@ func (c *HeartBeatCollector) Close() {
 	c.isClosed.Store(true)
 
 	c.checkpointTsMessageDynamicStream.Close()
-	c.redoMessageDynamicStream.Close()
+	c.redoTsMessageDynamicStream.Close()
+	c.RedoMeatMessageDynamicStream.Close()
 	c.heartBeatResponseDynamicStream.Close()
 	c.schedulerDispatcherRequestDynamicStream.Close()
 	c.dispatcherStatusDynamicStream.Close()
