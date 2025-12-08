@@ -250,7 +250,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	go m.runHandleEvents(ctx)
 	go m.calCheckpointTs(ctx)
 	if enableRedo {
-		go m.handleRedoTsMessage(ctx)
+		go m.handleRedoMetaTsMessage(ctx)
 	}
 
 	log.Info("changefeed maintainer is created",
@@ -547,9 +547,9 @@ func (m *Maintainer) onNodeChanged() {
 	}
 }
 
-// handleRedoTsMessage forwards the redoTs message to the dispatcher manager.
+// handleRedoMetaTsMessage forwards the redo meta ts message to the dispatcher manager.
 // - ResolvedTs: The commit-ts of the transaction that was finally confirmed to have been fully uploaded to external storage.
-func (m *Maintainer) handleRedoTsMessage(ctx context.Context) {
+func (m *Maintainer) handleRedoMetaTsMessage(ctx context.Context) {
 	ticker := time.NewTicker(periodRedoInterval)
 	defer ticker.Stop()
 
