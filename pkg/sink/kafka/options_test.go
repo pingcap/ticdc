@@ -291,7 +291,7 @@ func TestAdjustConfigTopicExist(t *testing.T) {
 		Name:          topicName,
 		NumPartitions: 3,
 	}
-	err = adminClient.CreateTopic(context.Background(), detail, false)
+	err = adminClient.CreateTopic(detail, false)
 	require.NoError(t, err)
 
 	options.MaxMessageBytes = adminClient.GetBrokerMessageMaxBytes() - 1
@@ -348,7 +348,7 @@ func TestAdjustConfigMinInsyncReplicas(t *testing.T) {
 	topicName := "no-topic-no-min-insync-replicas"
 	err = adjustOptions(ctx, adminClient, options, "no-topic-no-min-insync-replicas")
 	require.Nil(t, err)
-	err = adminClient.CreateTopic(context.Background(), &TopicDetail{
+	err = adminClient.CreateTopic(&TopicDetail{
 		Name:              topicName,
 		ReplicationFactor: 1,
 	}, false)
@@ -359,7 +359,7 @@ func TestAdjustConfigMinInsyncReplicas(t *testing.T) {
 
 	// topic exist, but `min.insync.replicas` not found in topic and broker configuration
 	topicName = "topic-no-options-entry"
-	err = adminClient.CreateTopic(context.Background(), &TopicDetail{
+	err = adminClient.CreateTopic(&TopicDetail{
 		Name:              topicName,
 		ReplicationFactor: 3,
 		NumPartitions:     3,
@@ -615,7 +615,7 @@ func TestConfigurationCombinations(t *testing.T) {
 		factory, err := NewMockFactory(ctx, options, changefeed)
 		require.NoError(t, err)
 
-		adminClient, err := factory.AdminClient()
+		adminClient, err := factory.AdminClient(ctx)
 		require.NoError(t, err)
 
 		topic, ok := a.uriParams[0].(string)
@@ -792,7 +792,7 @@ type mockAdminClientForAdjust struct {
 }
 
 // GetBrokerConfig simulates the behavior of getting configuration from a broker.
-func (m *mockAdminClientForAdjust) GetBrokerConfig(_ context.Context, configName string) (string, error) {
+func (m *mockAdminClientForAdjust) GetBrokerConfig(configName string) (string, error) {
 	if m.shouldError {
 		return "", errors.New("mock error: cannot get broker config")
 	}

@@ -48,19 +48,19 @@ func NewMockFactory(
 }
 
 // AdminClient return a mocked admin client
-func (f *mockFactory) AdminClient() (ClusterAdminClient, error) {
+func (f *mockFactory) AdminClient(context.Context) (ClusterAdminClient, error) {
 	return NewClusterAdminClientMockImpl(), nil
 }
 
 // SyncProducer creates a sync producer
-func (f *mockFactory) SyncProducer() (SyncProducer, error) {
+func (f *mockFactory) SyncProducer(context.Context) (SyncProducer, error) {
 	return &MockSaramaSyncProducer{
 		SyncProducer: mocks.NewSyncProducer(f.errorReporter, f.config),
 	}, nil
 }
 
 // AsyncProducer creates an async producer
-func (f *mockFactory) AsyncProducer() (AsyncProducer, error) {
+func (f *mockFactory) AsyncProducer(context.Context) (AsyncProducer, error) {
 	return &MockSaramaAsyncProducer{
 		AsyncProducer: mocks.NewAsyncProducer(f.errorReporter, f.config),
 		failpointCh:   make(chan error, 1),
@@ -78,11 +78,7 @@ type MockSaramaSyncProducer struct {
 }
 
 // SendMessage implement the SyncProducer interface.
-func (m *MockSaramaSyncProducer) SendMessage(
-	_ context.Context,
-	topic string, partitionNum int32,
-	message *common.Message,
-) error {
+func (m *MockSaramaSyncProducer) SendMessage(topic string, partitionNum int32, message *common.Message) error {
 	_, _, err := m.SyncProducer.SendMessage(&sarama.ProducerMessage{
 		Topic:     topic,
 		Key:       sarama.ByteEncoder(message.Key),
@@ -93,7 +89,7 @@ func (m *MockSaramaSyncProducer) SendMessage(
 }
 
 // SendMessages implement the SyncProducer interface.
-func (m *MockSaramaSyncProducer) SendMessages(_ context.Context, topic string, partitionNum int32, message *common.Message) error {
+func (m *MockSaramaSyncProducer) SendMessages(topic string, partitionNum int32, message *common.Message) error {
 	msgs := make([]*sarama.ProducerMessage, partitionNum)
 	for i := 0; i < int(partitionNum); i++ {
 		msgs[i] = &sarama.ProducerMessage{

@@ -163,7 +163,7 @@ func (oc *Controller) pushStopChangefeedOperator(keyspaceID uint32, cfID common.
 			zap.String("operator", old.OP.String()))
 		old.OP.OnTaskRemoved()
 		old.OP.PostFinish()
-		old.IsRemoved = true
+		old.IsRemoved.Store(true)
 		delete(oc.operators, old.OP.ID())
 	}
 	oc.pushOperator(op)
@@ -242,7 +242,7 @@ func (oc *Controller) pollQueueingOperator() (operator.Operator[common.ChangeFee
 		return nil, false
 	}
 	item := heap.Pop(&oc.runningQueue).(*operator.OperatorWithTime[common.ChangeFeedID, *heartbeatpb.MaintainerStatus])
-	if item.IsRemoved {
+	if item.IsRemoved.Load() {
 		return nil, true
 	}
 	op := item.OP
@@ -250,7 +250,7 @@ func (oc *Controller) pollQueueingOperator() (operator.Operator[common.ChangeFee
 	// always call the PostFinish method to ensure the operator is cleaned up by itself.
 	if op.IsFinished() {
 		op.PostFinish()
-		item.IsRemoved = true
+		item.IsRemoved.Store(true)
 		delete(oc.operators, opID)
 		metrics.CoordinatorFinishedOperatorCount.WithLabelValues(op.Type()).Inc()
 		metrics.CoordinatorOperatorDuration.WithLabelValues(op.Type()).Observe(time.Since(item.CreatedAt).Seconds())

@@ -14,7 +14,6 @@
 package kafka
 
 import (
-	"context"
 	"strconv"
 	"strings"
 
@@ -32,7 +31,7 @@ type saramaAdminClient struct {
 	admin  sarama.ClusterAdmin
 }
 
-func (a *saramaAdminClient) GetAllBrokers(_ context.Context) []Broker {
+func (a *saramaAdminClient) GetAllBrokers() []Broker {
 	brokers := a.client.Brokers()
 	result := make([]Broker, 0, len(brokers))
 	for _, broker := range brokers {
@@ -43,10 +42,7 @@ func (a *saramaAdminClient) GetAllBrokers(_ context.Context) []Broker {
 	return result
 }
 
-func (a *saramaAdminClient) GetBrokerConfig(
-	_ context.Context,
-	configName string,
-) (string, error) {
+func (a *saramaAdminClient) GetBrokerConfig(configName string) (string, error) {
 	_, controller, err := a.admin.DescribeCluster()
 	if err != nil {
 		return "", errors.Trace(err)
@@ -78,9 +74,7 @@ func (a *saramaAdminClient) GetBrokerConfig(
 		"cannot find the `%s` from the broker's configuration", configName)
 }
 
-func (a *saramaAdminClient) GetTopicConfig(
-	_ context.Context, topicName string, configName string,
-) (string, error) {
+func (a *saramaAdminClient) GetTopicConfig(topicName string, configName string) (string, error) {
 	configEntries, err := a.admin.DescribeConfig(sarama.ConfigResource{
 		Type:        sarama.TopicResource,
 		Name:        topicName,
@@ -112,9 +106,7 @@ func (a *saramaAdminClient) GetTopicConfig(
 		"cannot find the `%s` from the topic's configuration", configName)
 }
 
-func (a *saramaAdminClient) GetTopicsMeta(
-	_ context.Context, topics []string, ignoreTopicError bool,
-) (map[string]TopicDetail, error) {
+func (a *saramaAdminClient) GetTopicsMeta(topics []string, ignoreTopicError bool) (map[string]TopicDetail, error) {
 	result := make(map[string]TopicDetail, len(topics))
 
 	metaList, err := a.admin.DescribeTopics(topics)
@@ -145,9 +137,7 @@ func (a *saramaAdminClient) GetTopicsMeta(
 	return result, nil
 }
 
-func (a *saramaAdminClient) GetTopicsPartitionsNum(
-	_ context.Context, topics []string,
-) (map[string]int32, error) {
+func (a *saramaAdminClient) GetTopicsPartitionsNum(topics []string) (map[string]int32, error) {
 	result := make(map[string]int32, len(topics))
 	for _, topic := range topics {
 		partition, err := a.client.Partitions(topic)
@@ -160,9 +150,7 @@ func (a *saramaAdminClient) GetTopicsPartitionsNum(
 	return result, nil
 }
 
-func (a *saramaAdminClient) CreateTopic(
-	_ context.Context, detail *TopicDetail, validateOnly bool,
-) error {
+func (a *saramaAdminClient) CreateTopic(detail *TopicDetail, validateOnly bool) error {
 	request := &sarama.TopicDetail{
 		NumPartitions:     detail.NumPartitions,
 		ReplicationFactor: detail.ReplicationFactor,

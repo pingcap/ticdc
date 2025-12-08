@@ -365,6 +365,7 @@ func (r *RedoDDLEvent) ToDDLEvent() *DDLEvent {
 		SchemaName:        r.TableName.Schema,
 		TableName:         r.TableName.Table,
 		FinishedTs:        r.DDL.CommitTs,
+		StartTs:           r.DDL.StartTs,
 		BlockedTables:     r.DDL.BlockTables,
 		NeedDroppedTables: r.DDL.NeedDroppedTables,
 	}

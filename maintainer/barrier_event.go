@@ -51,6 +51,7 @@ type BarrierEvent struct {
 	newTables          []*heartbeatpb.Table
 	schemaIDChange     []*heartbeatpb.SchemaIDChange
 	isSyncPoint        bool
+	needSchedule       bool
 	// if the split table is enable for this changefeed, if not we can use tableID to check coverage
 	dynamicSplitEnabled bool
 
@@ -91,6 +92,7 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		newTables:          status.NeedAddedTables,
 		schemaIDChange:     status.UpdatedSchemas,
 		isSyncPoint:        status.IsSyncPoint,
+		needSchedule:       needSchedule(status),
 		// if the split table is enable for this changefeed, if not we can use tableID to check coverage
 		dynamicSplitEnabled: dynamicSplitEnabled,
 
@@ -117,6 +119,19 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		zap.Bool("syncPoint", event.isSyncPoint),
 		zap.Any("detail", status))
 	return event
+}
+
+func needSchedule(state *heartbeatpb.State) bool {
+	if state.NeedDroppedTables != nil {
+		return true
+	}
+	if len(state.NeedAddedTables) > 0 {
+		return true
+	}
+	if len(state.UpdatedSchemas) > 0 {
+		return true
+	}
+	return false
 }
 
 func (be *BarrierEvent) createRangeCheckerForTypeAll() {
@@ -195,7 +210,6 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 		zap.String("dispatcher", be.writerDispatcher.String()),
 		zap.Uint64("commitTs", be.commitTs),
 		zap.String("barrierType", be.blockedDispatchers.InfluenceType.String()))
-	be.scheduleBlockEvent()
 	stm := be.spanController.GetTaskByID(be.writerDispatcher)
 	return &heartbeatpb.DispatcherStatus{
 		InfluencedDispatchers: &heartbeatpb.InfluencedDispatchers{
