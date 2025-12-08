@@ -45,6 +45,11 @@ func newSaramaConfig(ctx context.Context, o *options) (*sarama.Config, error) {
 	config.Metadata.Retry.Max = 10
 	config.Metadata.Retry.Backoff = 200 * time.Millisecond
 	config.Metadata.Timeout = 2 * time.Minute
+	// The kafka server side connections.max.idle.ms default value is 10 minutes.
+	// it will close the connection if idle for too long.
+	// so we need to refresh the metadata frequently to avoid the connection being closed by server,
+	// and then trigger the `fetching metadata: write broken pipe` error, it's annoying.
+	config.Metadata.RefreshFrequency = 9 * time.Minute
 
 	config.Admin.Retry.Max = 10
 	config.Admin.Retry.Backoff = 200 * time.Millisecond

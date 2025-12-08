@@ -45,8 +45,10 @@ type PersistedDDLEvent struct {
 	// - for TruncateTable, it the table ID of the new table
 	ExtraTableID int64 `msg:"extra_table_id"`
 	// ExtraSchemaName corresponds to ExtraSchemaID
+	// - for RenameTable, it is the schema name of the old table
 	ExtraSchemaName string `msg:"extra_schema_name"`
 	// ExtraTableName corresponds to ExtraTableID
+	// - for RenameTable, it is the table name of the old table
 	ExtraTableName string `msg:"extra_table_name"`
 
 	// the following fields are only used for RenameTables

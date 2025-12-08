@@ -92,7 +92,7 @@ func (m *saramaMetricsCollector) Run(ctx context.Context) {
 }
 
 func (m *saramaMetricsCollector) updateBrokers(ctx context.Context) {
-	brokers := m.adminClient.GetAllBrokers(ctx)
+	brokers := m.adminClient.GetAllBrokers()
 	for _, b := range brokers {
 		m.brokers[b.ID] = struct{}{}
 	}

@@ -13,10 +13,6 @@
 
 package kafka
 
-import (
-	"context"
-)
-
 // TopicDetail represent a topic's detail information.
 type TopicDetail struct {
 	Name              string
@@ -33,24 +29,23 @@ type Broker struct {
 // which supports managing and inspecting topics, brokers, configurations and ACLs.
 type ClusterAdminClient interface {
 	// GetAllBrokers return all brokers among the cluster
-	GetAllBrokers(ctx context.Context) []Broker
+	GetAllBrokers() []Broker
 
 	// GetBrokerConfig return the broker level configuration with the `configName`
-	GetBrokerConfig(ctx context.Context, configName string) (string, error)
+	GetBrokerConfig(configName string) (string, error)
 
 	// GetTopicConfig return the topic level configuration with the `configName`
-	GetTopicConfig(ctx context.Context, topicName string, configName string) (string, error)
+	GetTopicConfig(topicName string, configName string) (string, error)
 
 	// GetTopicsMeta return all target topics' metadata
 	// if `ignoreTopicError` is true, ignore the topic error and return the metadata of valid topics
-	GetTopicsMeta(ctx context.Context,
-		topics []string, ignoreTopicError bool) (map[string]TopicDetail, error)
+	GetTopicsMeta(topics []string, ignoreTopicError bool) (map[string]TopicDetail, error)
 
 	// GetTopicsPartitionsNum return the number of partitions of each topic.
-	GetTopicsPartitionsNum(ctx context.Context, topics []string) (map[string]int32, error)
+	GetTopicsPartitionsNum(topics []string) (map[string]int32, error)
 
 	// CreateTopic creates a new topic.
-	CreateTopic(ctx context.Context, detail *TopicDetail, validateOnly bool) error
+	CreateTopic(detail *TopicDetail, validateOnly bool) error
 
 	Heartbeat()
 

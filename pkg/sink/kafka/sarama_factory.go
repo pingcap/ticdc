@@ -1,4 +1,4 @@
-// Copyright 2023 PingCAP, Inc.
+// Copyright 2025 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -27,9 +27,9 @@ import (
 )
 
 type saramaFactory struct {
-	changefeedID common.ChangeFeedID
-	config       *sarama.Config
-	endpoints    []string
+	changefeedID   common.ChangeFeedID
+	option         *options
+	metricRegistry metrics.Registry
 }
 
 // NewSaramaFactory constructs a Factory with sarama implementation.
@@ -43,17 +43,11 @@ func NewSaramaFactory(
 	duration := time.Since(start).Seconds()
 	if duration > 2 {
 		log.Warn("new sarama config cost too much time",
-			zap.Any("duration", duration), zap.Stringer("changefeedID", changefeedID))
+			zap.Stringer("changefeedID", changefeedID), zap.Any("duration", duration))
 	}
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-
-	version, err := getKafkaVersion(config, o)
-	if err != nil {
-		return nil, err
-	}
-	config.Version = version
 
 	admin, err := newAdminClient(changefeedID, o.BrokerEndpoints, config)
 	if err != nil {
@@ -67,23 +61,10 @@ func NewSaramaFactory(
 		return nil, errors.Trace(err)
 	}
 
-	start = time.Now()
-	saramaConfig, err := newSaramaConfig(ctx, o)
-	duration = time.Since(start).Seconds()
-	if duration > 2 {
-		log.Warn("new sarama config cost too much time",
-			zap.Any("duration", duration), zap.Stringer("changefeedID", changefeedID))
-	}
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	saramaConfig.MetricRegistry = metrics.NewRegistry()
-	saramaConfig.Version = version
-
 	return &saramaFactory{
-		changefeedID: changefeedID,
-		endpoints:    o.BrokerEndpoints,
-		config:       saramaConfig,
+		changefeedID:   changefeedID,
+		option:         o,
+		metricRegistry: metrics.NewRegistry(),
 	}, nil
 }
 
@@ -116,14 +97,25 @@ func newAdminClient(changefeedID common.ChangeFeedID, endpoints []string, config
 	}, nil
 }
 
-func (f *saramaFactory) AdminClient() (ClusterAdminClient, error) {
-	return newAdminClient(f.changefeedID, f.endpoints, f.config)
+func (f *saramaFactory) AdminClient(ctx context.Context) (ClusterAdminClient, error) {
+	config, err := newSaramaConfig(ctx, f.option)
+	if err != nil {
+		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
+	}
+	return newAdminClient(f.changefeedID, f.option.BrokerEndpoints, config)
 }
 
 // SyncProducer returns a Sync SyncProducer,
 // it should be the caller's responsibility to close the producer
-func (f *saramaFactory) SyncProducer() (SyncProducer, error) {
-	client, err := sarama.NewClient(f.endpoints, f.config)
+func (f *saramaFactory) SyncProducer(ctx context.Context) (SyncProducer, error) {
+	config, err := newSaramaConfig(ctx, f.option)
+	if err != nil {
+		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
+	}
+	config.MetricRegistry = f.metricRegistry
+	config.Producer.Retry.Max = 3
+
+	client, err := sarama.NewClient(f.option.BrokerEndpoints, config)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
@@ -143,11 +135,18 @@ func (f *saramaFactory) SyncProducer() (SyncProducer, error) {
 
 // AsyncProducer return an Async SyncProducer,
 // it should be the caller's responsibility to close the producer
-func (f *saramaFactory) AsyncProducer() (AsyncProducer, error) {
-	client, err := sarama.NewClient(f.endpoints, f.config)
+func (f *saramaFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error) {
+	config, err := newSaramaConfig(ctx, f.option)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
+	config.MetricRegistry = f.metricRegistry
+
+	client, err := sarama.NewClient(f.option.BrokerEndpoints, config)
+	if err != nil {
+		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
+	}
+
 	p, err := sarama.NewAsyncProducerFromClient(client)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
@@ -168,6 +167,6 @@ func (f *saramaFactory) MetricsCollector(
 		changefeedID: f.changefeedID,
 		adminClient:  adminClient,
 		brokers:      make(map[int32]struct{}),
-		registry:     f.config.MetricRegistry,
+		registry:     f.metricRegistry,
 	}
 }

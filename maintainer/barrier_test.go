@@ -616,7 +616,7 @@ func TestSchemaBlock(t *testing.T) {
 	require.NotNil(t, msgs)
 	require.NotEmpty(t, msgs)
 	resp = msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
-	require.Len(t, resp.DispatcherStatuses, 0)
+	require.Len(t, resp.DispatcherStatuses, 1)
 
 	// selected node write done
 	_ = barrier.HandleStatus("node2", &heartbeatpb.BlockStatusRequest{
