@@ -412,6 +412,7 @@ func loadBootstrapState(addr *bootstrapState) bootstrapState {
 func addToStatusDynamicStream(d Dispatcher) {
 	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
 	err := dispatcherStatusDS.AddPath(d.GetId(), d)
+	log.Error("dispatcherStatusDS AddPath", zap.Any("id", d.GetId()))
 	if err != nil {
 		log.Error("add dispatcher to dynamic stream failed",
 			zap.Stringer("changefeedID", d.GetChangefeedID()),

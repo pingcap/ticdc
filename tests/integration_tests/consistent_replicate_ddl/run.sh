@@ -14,7 +14,7 @@ mkdir -p "$WORK_DIR"
 stop() {
 	# to distinguish whether the test failed in the DML synchronization phase or the DDL synchronization phase
 	echo $(mysql -h${DOWN_TIDB_HOST} -P${DOWN_TIDB_PORT} -uroot -e "SELECT count(*) FROM consistent_replicate_ddl.usertable;")
-	curl -X GET http://127.0.0.1:8300/debug/pprof/profile >$WORK_DIR/cdc_profile.log || true
+	curl -X GET http://127.0.0.1:8300/debug/pprof/goroutine?debug=2 >$WORK_DIR/cdc_profile.log || true
 	stop_tidb_cluster
 	collect_logs $WORK_DIR
 }

@@ -865,6 +865,7 @@ func (d *BasicDispatcher) removeDispatcher() {
 		zap.Int64("mode", d.mode),
 		zap.String("table", common.FormatTableSpan(d.tableSpan)))
 	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
+	log.Error("dispatcherStatusDS RemovePath", zap.Any("id", d.id))
 	err := dispatcherStatusDS.RemovePath(d.id)
 	if err != nil {
 		log.Error("remove dispatcher from dynamic stream failed",
