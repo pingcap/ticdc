@@ -17,7 +17,6 @@ import (
 	"context"
 	"os"
 
-	cmdcontext "github.com/pingcap/ticdc/cmd/cdc/context"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/logger"
@@ -62,7 +61,7 @@ func NewCmdRedo() *cobra.Command {
 				os.Exit(1)
 			}
 			ctx, cancel := context.WithCancel(context.Background())
-			cmdcontext.SetDefaultContext(ctx)
+			cmd.SetContext(ctx)
 			util.LogHTTPProxies()
 			// A notify that complete immediately, it skips the second signal essentially.
 			doneNotify := func() <-chan struct{} {

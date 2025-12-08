@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	cmdcontext "github.com/pingcap/ticdc/cmd/cdc/context"
 	"github.com/pingcap/ticdc/pkg/applier"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/logger"
@@ -86,7 +85,7 @@ func (o *applyRedoOptions) complete(cmd *cobra.Command) error {
 
 // run runs the `redo apply` command.
 func (o *applyRedoOptions) run(cmd *cobra.Command) error {
-	ctx := cmdcontext.GetDefaultContext()
+	ctx := cmd.Context()
 	err := logger.InitLogger(&logger.Config{
 		Level: o.logLevel,
 	})

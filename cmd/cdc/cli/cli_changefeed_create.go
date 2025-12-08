@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	v2 "github.com/pingcap/ticdc/api/v2"
-	cmdcontext "github.com/pingcap/ticdc/cmd/cdc/context"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
@@ -353,7 +352,7 @@ func newCmdCreateChangefeed(f factory.Factory) *cobra.Command {
 		Short: "Create a new replication task (changefeed)",
 		Args:  cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			ctx := cmdcontext.GetDefaultContext()
+			ctx := cmd.Context()
 			util.CheckErr(o.complete(f))
 			util.CheckErr(o.validate(cmd))
 			util.CheckErr(o.run(ctx, cmd))

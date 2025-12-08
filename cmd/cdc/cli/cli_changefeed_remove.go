@@ -16,7 +16,6 @@ package cli
 import (
 	"strings"
 
-	cmdcontext "github.com/pingcap/ticdc/cmd/cdc/context"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
@@ -56,7 +55,7 @@ func (o *removeChangefeedOptions) complete(f factory.Factory) error {
 
 // run the `cli changefeed remove` command.
 func (o *removeChangefeedOptions) run(cmd *cobra.Command) error {
-	ctx := cmdcontext.GetDefaultContext()
+	ctx := cmd.Context()
 
 	changefeedDetail, err := o.apiClient.Changefeeds().Get(ctx, o.keyspace, o.changefeedID)
 	if err != nil {

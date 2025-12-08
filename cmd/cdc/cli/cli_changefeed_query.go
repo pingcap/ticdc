@@ -16,7 +16,6 @@ package cli
 import (
 	"github.com/pingcap/errors"
 	v2 "github.com/pingcap/ticdc/api/v2"
-	cmdcontext "github.com/pingcap/ticdc/cmd/cdc/context"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/api"
@@ -81,7 +80,7 @@ func (o *queryChangefeedOptions) complete(f factory.Factory) error {
 
 // run the `cli changefeed query` command.
 func (o *queryChangefeedOptions) run(cmd *cobra.Command) error {
-	ctx := cmdcontext.GetDefaultContext()
+	ctx := cmd.Context()
 	if o.simplified {
 		infos, err := o.apiClientV2.Changefeeds().List(ctx, o.keyspace, "all")
 		if err != nil {
