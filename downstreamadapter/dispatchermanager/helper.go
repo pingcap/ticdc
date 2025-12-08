@@ -308,6 +308,7 @@ func (h *HeartBeatResponseHandler) Handle(dispatcherManager *DispatcherManager, 
 		case heartbeatpb.InfluenceType_Normal:
 			for _, dispatcherID := range dispatcherStatus.InfluencedDispatchers.DispatcherIDs {
 				dispId := common.NewDispatcherIDFromPB(dispatcherID)
+				log.Error("dispatcherStatusDynamicStream", zap.Any("id", dispId))
 				h.dispatcherStatusDynamicStream.Push(
 					dispId,
 					dispatcher.NewDispatcherStatusWithID(dispatcherStatus, dispId))

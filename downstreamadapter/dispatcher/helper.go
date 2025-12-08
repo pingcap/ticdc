@@ -347,7 +347,9 @@ func (h *DispatcherStatusHandler) Path(event DispatcherStatusWithID) common.Disp
 }
 
 func (h *DispatcherStatusHandler) Handle(dispatcher Dispatcher, events ...DispatcherStatusWithID) (await bool) {
+	log.Error("DispatcherStatusHandler", zap.Any("id", dispatcher.GetId()))
 	for _, event := range events {
+		log.Error("DispatcherStatusHandler", zap.Any("e", event))
 		dispatcher.HandleDispatcherStatus(event.GetDispatcherStatus())
 	}
 	return false
@@ -412,7 +414,7 @@ func loadBootstrapState(addr *bootstrapState) bootstrapState {
 func addToStatusDynamicStream(d Dispatcher) {
 	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
 	err := dispatcherStatusDS.AddPath(d.GetId(), d)
-	log.Error("dispatcherStatusDS AddPath", zap.Any("id", d.GetId()))
+	log.Error("dispatcherStatusDS AddPath", zap.Any("id", d.GetId()), zap.Any("err", err))
 	if err != nil {
 		log.Error("add dispatcher to dynamic stream failed",
 			zap.Stringer("changefeedID", d.GetChangefeedID()),
