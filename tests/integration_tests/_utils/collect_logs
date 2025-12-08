@@ -10,3 +10,5 @@ find $WORK_DIR -type f -name "*.txt" -o -name "*sql*" -o -name "*summary*" -o -n
 		mv "$file" "${file%.txt}.log" 2>/dev/null || true
 	fi
 done
+
+curl -X GET http://127.0.0.1:8300/debug/pprof/profile >$WORK_DIR/cdc_profile.log

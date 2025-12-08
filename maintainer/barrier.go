@@ -133,6 +133,9 @@ func (b *Barrier) HandleStatus(from node.ID,
 			DispatcherStatuses: dispatcherStatus,
 			Mode:               b.mode,
 		})
+	if common.IsRedoMode(b.mode) {
+		log.Error("redo DispatcherStatuses", zap.Any("dispatcherStatus", dispatcherStatus))
+	}
 	msgs := []*messaging.TargetMessage{msg}
 
 	for id, action := range actions {
@@ -144,6 +147,9 @@ func (b *Barrier) HandleStatus(from node.ID,
 					DispatcherStatuses: action,
 					Mode:               b.mode,
 				})
+			if common.IsRedoMode(b.mode) {
+				log.Error("redo DispatcherStatuses", zap.Any("action", action))
+			}
 			msgs = append(msgs, msg)
 		}
 	}

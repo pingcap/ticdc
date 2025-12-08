@@ -688,7 +688,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 			}
 			if watermark != nil {
 				message.RedoWatermark.UpdateMin(*watermark)
-				log.Error("aggregateDispatcherHeartbeats", zap.Any("id", id), zap.Any("running", e.redoTableTriggerDispatcher.GetRedoMeta().Running()), zap.Any("watermark", watermark))
+				log.Error("aggregateDispatcherHeartbeats", zap.Any("id", id), zap.Any("watermark", watermark))
 			}
 		})
 		message.RedoWatermark.Seq = redoSeq
