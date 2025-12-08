@@ -11,4 +11,5 @@ find $WORK_DIR -type f -name "*.txt" -o -name "*sql*" -o -name "*summary*" -o -n
 	fi
 done
 
-curl -X GET http://127.0.0.1:8300/debug/pprof/profile >$WORK_DIR/cdc_profile.log
+echo "collect profile"
+curl -X GET http://127.0.0.1:8300/debug/pprof/profile >$WORK_DIR/cdc_profile.log || true
