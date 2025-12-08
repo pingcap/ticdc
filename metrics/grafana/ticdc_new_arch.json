@@ -7288,10 +7288,10 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_subscription_client_resolve_lock_task_drop_count[1m])) by (instance, reason)",
+              "expr": "sum(rate(ticdc_subscription_client_resolve_lock_task_drop_count[1m])) by (instance)",
               "hide": false,
               "interval": "",
-              "legendFormat": "{{instance}}-{{reason}}",
+              "legendFormat": "{{instance}}",
               "refId": "A"
             }
           ],
