@@ -96,8 +96,14 @@ func (c *Controller) FinishBootstrap(
 		return nil, errors.Trace(err)
 	}
 
+	// Build table splitability map for later use
+	tableSplitMap := make(map[int64]bool, len(tables))
+	for _, tbl := range tables {
+		tableSplitMap[tbl.TableID] = tbl.Splitable
+	}
+
 	// Step 3: Build working task map from bootstrap responses
-	workingTaskMap, redoWorkingTaskMap := c.buildWorkingTaskMap(allNodesResp)
+	workingTaskMap, redoWorkingTaskMap := c.buildWorkingTaskMap(allNodesResp, tableSplitMap)
 
 	// Step 4: Process tables and build schema info
 	schemaInfos := c.processTablesAndBuildSchemaInfo(tables, workingTaskMap, redoWorkingTaskMap, isMysqlCompatibleBackend)
@@ -145,6 +151,7 @@ func (c *Controller) determineStartTs(allNodesResp map[node.ID]*heartbeatpb.Main
 
 func (c *Controller) buildWorkingTaskMap(
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
+	tableSplitMap map[int64]bool,
 ) (
 	map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
 	map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
@@ -158,7 +165,8 @@ func (c *Controller) buildWorkingTaskMap(
 			if spanController.IsDDLDispatcher(dispatcherID) {
 				continue
 			}
-			spanReplication := c.createSpanReplication(spanInfo, node)
+			splitEnabled := spanController.ShouldEnableSplit(tableSplitMap[spanInfo.Span.TableID])
+			spanReplication := c.createSpanReplication(spanInfo, node, splitEnabled)
 			if common.IsRedoMode(spanInfo.Mode) {
 				addToWorkingTaskMap(redoWorkingTaskMap, spanInfo.Span, spanReplication)
 			} else {
@@ -222,7 +230,7 @@ func (c *Controller) processTableSpans(
 			zap.Stringer("changefeed", c.changefeedID),
 			zap.Int64("tableID", table.TableID))
 
-		spanController.AddWorkingSpans(tableSpans, splitEnabled)
+		spanController.AddWorkingSpans(tableSpans)
 
 		if c.enableTableAcrossNodes {
 			c.handleTableHoles(spanController, table, tableSpans, tableSpan, splitEnabled)
@@ -298,7 +306,7 @@ func (c *Controller) prepareSchemaInfoResponse(
 	return initSchemaInfos
 }
 
-func (c *Controller) createSpanReplication(spanInfo *heartbeatpb.BootstrapTableSpan, node node.ID) *replica.SpanReplication {
+func (c *Controller) createSpanReplication(spanInfo *heartbeatpb.BootstrapTableSpan, node node.ID, splitEnabled bool) *replica.SpanReplication {
 	status := &heartbeatpb.TableSpanStatus{
 		ComponentStatus: spanInfo.ComponentStatus,
 		ID:              spanInfo.ID,
@@ -313,6 +321,7 @@ func (c *Controller) createSpanReplication(spanInfo *heartbeatpb.BootstrapTableS
 		spanInfo.Span,
 		status,
 		node,
+		splitEnabled,
 	)
 }
 
