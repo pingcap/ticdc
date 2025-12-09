@@ -47,12 +47,14 @@ function run_for_force_split() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
 	SINK_URI="mysql://root:@127.0.0.1:3306/"
-	cdc_cli_changefeed create --sink-uri="$SINK_URI" -c "test2" --config="$CUR/conf/changefeed2.toml"
 
 	run_sql "use test;create table t1 (a int primary key, b int, unique key uk(b));" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "split table test.t1 between (1) and (100000) regions 50;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
-	sleep 60 # sleep enough for try to split table
+	sleep 10
+	
+	cdc_cli_changefeed create --sink-uri="$SINK_URI" -c "test2" --config="$CUR/conf/changefeed2.toml"
+
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 50
 
 	query_dispatcher_count "127.0.0.1:8300" "test2" 6 10 # table trigger + t1 (split to 5 regions)
