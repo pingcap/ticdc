@@ -686,6 +686,7 @@ func (t *TxnEvent) AppendRow(
 						zap.Uint64("tableInfoUpdateTs", currentDMLEvent.TableInfo.GetUpdateTS()),
 						zap.Bool("tablePKIsHandle", currentDMLEvent.TableInfo.PKIsHandle()),
 						zap.Any("tableInfo", currentDMLEvent.TableInfo),
+						zap.Any("tidbTableInfo", currentDMLEvent.TableInfo.ToTiDBTableInfo()),
 					)
 				} else {
 					fields = append(fields, zap.Bool("tableInfoIsNil", true))
