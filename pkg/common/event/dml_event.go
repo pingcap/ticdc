@@ -502,8 +502,6 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 		rowType = common.RowTypeUpdate
 	}
 
-	panic("mock panic2")
-
 	count, checksum, err := decode(raw, t.TableInfo, t.Rows)
 	if err != nil {
 		return err
