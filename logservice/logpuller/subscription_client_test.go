@@ -25,9 +25,11 @@ import (
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/tidb/pkg/store/mockstore/mockcopr"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/testutils"
@@ -98,6 +100,52 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	}
 	require.Equal(t, 0, len(client.resolveLockTaskCh))
 
+	close(client.resolveLockTaskCh)
+}
+
+func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
+	client := &subscriptionClient{
+		resolveLockTaskCh: make(chan resolveLockTask, 1),
+	}
+	client.ctx, client.cancel = context.WithCancel(context.Background())
+	defer client.cancel()
+
+	rawSpan := heartbeatpb.TableSpan{
+		TableID:  1,
+		StartKey: []byte{'a'},
+		EndKey:   []byte{'z'},
+	}
+	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
+	advanceResolvedTs := func(ts uint64) {}
+	span := client.newSubscribedSpan(SubscriptionID(1), rawSpan, 100, consumeKVEvents, advanceResolvedTs, 0)
+
+	res := span.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
+	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
+	res.LockedRangeState.Initialized.Store(true)
+
+	// Fill the channel to simulate the resolver goroutine being blocked.
+	client.resolveLockTaskCh <- resolveLockTask{}
+
+	before := testutil.ToFloat64(metrics.SubscriptionClientResolveLockTaskDropCounter)
+	done := make(chan struct{})
+	go func() {
+		span.resolveStaleLocks(200)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("resolveStaleLocks should not block even if resolveLockTaskCh is full")
+	}
+
+	// No new task is added because the channel is still full.
+	require.Equal(t, 1, len(client.resolveLockTaskCh))
+
+	after := testutil.ToFloat64(metrics.SubscriptionClientResolveLockTaskDropCounter)
+	require.Equal(t, before+1, after)
+
+	<-client.resolveLockTaskCh
 	close(client.resolveLockTaskCh)
 }
 
