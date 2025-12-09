@@ -132,6 +132,8 @@ func (c *ChangefeedSchedulerConfig) ValidateAndAdjust(sinkURI *url.URL) error {
 
 	if IsMySQLCompatibleScheme(sinkURI.Scheme) && !c.ForceSplit {
 		c.EnableSplittableCheck = true
+	} else if c.ForceSplit {
+		c.EnableSplittableCheck = false
 	}
 	return nil
 }
