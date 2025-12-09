@@ -113,8 +113,6 @@ func (b *BatchDMLEvent) AppendDMLEvent(dmlEvent *DMLEvent) error {
 		}
 	}
 
-	panic("mock panic2")
-
 	dmlEvent.SetRows(b.Rows)
 
 	if len(b.DMLEvents) > 0 {
@@ -503,6 +501,8 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	if raw.IsUpdate() {
 		rowType = common.RowTypeUpdate
 	}
+
+	panic("mock panic2")
 
 	count, checksum, err := decode(raw, t.TableInfo, t.Rows)
 	if err != nil {
