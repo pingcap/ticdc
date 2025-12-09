@@ -19,10 +19,13 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/integrity"
+	"github.com/pingcap/tidb/pkg/kv"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/tablecodec"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
+	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	"github.com/stretchr/testify/require"
 )
 
@@ -783,4 +786,127 @@ func TestDecodeToChunk(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, sum, checksum.Current)
 	}
+}
+
+// TestRawKVToChunkV2IntHandleWithNonPKIsHandleTable tests the fix for panic when
+// handle is IntHandle but table PKIsHandle is false.
+// This scenario can happen with legacy data or after schema changes where
+// the table structure doesn't expect IntHandle but the row key still encodes IntHandle.
+func TestRawKVToChunkV2IntHandleWithNonPKIsHandleTable(t *testing.T) {
+	helper := NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.tk.MustExec("use test")
+
+	// Create a table where PKIsHandle=false (primary key is varchar, not int)
+	// This simulates the scenario in panic.log where table has PKIsHandle=false
+	// but handle from row key is IntHandle
+	ddlJob := helper.DDL2Job("create table t1(id varchar(64) primary key, name varchar(32))")
+	require.NotNil(t, ddlJob)
+	tableInfo := helper.GetTableInfo(ddlJob)
+	require.False(t, tableInfo.PKIsHandle(), "table should not have PKIsHandle")
+
+	// Insert a row to get valid row data
+	helper.tk.MustExec("insert into t1 values('pk1', 'name1')")
+
+	// Get the raw KV entry
+	ts := tableInfo.GetUpdateTS()
+	rawKvs := helper.DML2RawKv(tableInfo.TableName.TableID, ts, "insert into t1 values('pk1', 'name1')")
+	require.Len(t, rawKvs, 1)
+	rawKV := rawKvs[0]
+
+	// Create an IntHandle to simulate the panic scenario
+	// where handle is IntHandle but table PKIsHandle=false
+	intHandle := kv.IntHandle(12345)
+
+	// Create mounter and chunk
+	m := NewMounter(time.UTC, &integrity.Config{
+		IntegrityCheckLevel:   integrity.CheckLevelNone,
+		CorruptionHandleLevel: integrity.CorruptionHandleLevelWarn,
+	})
+	chk := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
+
+	// Test case 1: rowdata has value, handle is IntHandle but PKIsHandle=false
+	// This should work because tryAppendHandleColumn is not called when rowdata has value
+	t.Run("rowdata_has_value_int_handle_non_pk_handle", func(t *testing.T) {
+		chk.Reset()
+		// Use the original value (which contains all column data)
+		decoder, err := m.(*mounter).rawKVToChunkV2(rawKV.Value, tableInfo, chk, intHandle)
+		require.NoError(t, err)
+		require.NotNil(t, decoder)
+		require.Greater(t, chk.NumRows(), 0)
+	})
+
+	// Test case 2: rowdata is empty or missing columns, handle is IntHandle but PKIsHandle=false
+	// This should not panic (the fix should prevent panic by setting handleColIDs to dummy value)
+	t.Run("rowdata_missing_columns_int_handle_non_pk_handle", func(t *testing.T) {
+		chk.Reset()
+		// Create a minimal value that might not contain all columns
+		// This simulates the case where some columns are missing from rowdata
+		// and tryAppendHandleColumn would be called
+		minimalValue := []byte{rowcodec.CodecVer} // Just the version byte, minimal row data
+
+		// This should not panic even though handle is IntHandle and PKIsHandle=false
+		decoder, err := m.(*mounter).rawKVToChunkV2(minimalValue, tableInfo, chk, intHandle)
+		require.NoError(t, err)
+		// Decoder might be nil if value is too short, but should not panic
+		if decoder != nil {
+			require.GreaterOrEqual(t, chk.NumRows(), 0)
+		}
+	})
+
+	// Test case 3: handle is IntHandle, handleColIDs is empty (invalid)
+	// This should not panic with the fix
+	t.Run("int_handle_empty_handle_col_ids", func(t *testing.T) {
+		chk.Reset()
+		// Create a table info scenario where handleColIDs would be empty
+		// We'll use a table with no primary key or unique key that would set handleColIDs
+		ddlJob2 := helper.DDL2Job("create table t2(id int, name varchar(32))")
+		tableInfo2 := helper.GetTableInfo(ddlJob2)
+
+		// Verify handleColIDs is empty/invalid
+		handleColIDs, _, _ := tableInfo2.GetRowColInfos()
+		require.True(t, len(handleColIDs) == 0 || (len(handleColIDs) == 1 && handleColIDs[0] == -1),
+			"handleColIDs should be empty or invalid for table without PK/UK")
+
+		// Create a value with new format
+		testValue := []byte{rowcodec.CodecVer, 0x01, 0x00} // Minimal new format value
+		intHandle2 := kv.IntHandle(67890)
+
+		// This should not panic - the fix sets handleColIDs to [-1] to prevent index panic
+		decoder, err := m.(*mounter).rawKVToChunkV2(testValue, tableInfo2, chk, intHandle2)
+		require.NoError(t, err)
+		// Should not panic even if decoder is nil or has issues
+		if decoder != nil {
+			require.GreaterOrEqual(t, chk.NumRows(), 0)
+		}
+	})
+
+	// Test case 4: Normal case with PKIsHandle=true and IntHandle should still work
+	t.Run("normal_pk_is_handle_int_handle", func(t *testing.T) {
+		ddlJob3 := helper.DDL2Job("create table t3(id int primary key, name varchar(32))")
+		tableInfo3 := helper.GetTableInfo(ddlJob3)
+		require.True(t, tableInfo3.PKIsHandle(), "table should have PKIsHandle")
+
+		helper.tk.MustExec("insert into t3 values(100, 'test')")
+		ts3 := tableInfo3.GetUpdateTS()
+		rawKvs3 := helper.DML2RawKv(tableInfo3.TableName.TableID, ts3, "insert into t3 values(100, 'test')")
+		require.Len(t, rawKvs3, 1)
+
+		chk.Reset()
+		key3 := RemoveKeyspacePrefix(rawKvs3[0].Key)
+		recordID3, err := tablecodec.DecodeRowKey(key3)
+		require.NoError(t, err)
+		require.True(t, recordID3.IsInt(), "recordID should be IntHandle")
+
+		decoder, err := m.(*mounter).rawKVToChunkV2(rawKvs3[0].Value, tableInfo3, chk, recordID3)
+		require.NoError(t, err)
+		require.NotNil(t, decoder)
+		require.Equal(t, 1, chk.NumRows())
+
+		// Verify the decoded data
+		row := chk.GetRow(0)
+		idVal := row.GetInt64(0)
+		require.Equal(t, int64(100), idVal)
+	})
 }

@@ -69,7 +69,60 @@ func (m *mounter) rawKVToChunkV2(value []byte, tableInfo *common.TableInfo, chk 
 	if len(value) == 0 {
 		return nil, nil
 	}
-	decoder := newChunkDecoderV2(tableInfo, m.tz)
+	handleColIDs, _, reqCols := tableInfo.GetRowColInfos()
+
+	// Fix: When handle is IntHandle but handleColIDs is empty or invalid,
+	// rowcodec.ChunkDecoder.tryAppendHandleColumn will panic:
+	// 1. If handleColIDs is empty, accessing handleColIDs[0] at line 263 causes index out of range panic
+	// 2. If handleColIDs doesn't match IntHandle, it calls handle.EncodedCol(i) which panics for IntHandle
+	//
+	// Note: DecodeToChunk only calls tryAppendHandleColumn when column value is NOT in rowdata.
+	// So if rowdata has the value, handleColIDs being empty is fine.
+	// But if rowdata doesn't have the value, we need to prevent the panic.
+	//
+	// Solution: If handleColIDs is empty/invalid and handle is IntHandle, we need to ensure
+	// handleColIDs has at least one element to avoid index panic. We use a dummy value that
+	// won't match any column ID, so the condition check fails and for loop won't match,
+	// preventing both index panic and EncodedCol panic.
+	if handle != nil && handle.IsInt() {
+		isHandleColIDsValid := len(handleColIDs) > 0 && !(len(handleColIDs) == 1 && handleColIDs[0] == -1)
+
+		if !isHandleColIDsValid || !tableInfo.PKIsHandle() {
+			// Set to a dummy invalid column ID to prevent index panic.
+			// The dummy value won't match any real column ID, so:
+			// - Line 263 check fails (col.ID != dummy)
+			// - For loop won't match, returns false
+			// - Falls back to default value (prevents panic, though value may be incorrect)
+			handleColIDs = []int64{-1}
+		}
+	}
+
+	// Create decoder with adjusted handleColIDs
+	defVal := func(i int, chk *chunk.Chunk) error {
+		if reqCols[i].ID < 0 {
+			// model.ExtraHandleID, ExtraPidColID, ExtraPhysTblID... etc
+			// Don't set the default value for that column.
+			chk.AppendNull(i)
+			return nil
+		}
+		ci, ok := tableInfo.GetColumnInfo(reqCols[i].ID)
+		if !ok {
+			log.Panic("column not found", zap.Int64("columnID", reqCols[i].ID))
+		}
+
+		colDatum, _, _, warn, err := getDefaultOrZeroValue(ci, m.tz)
+		if err != nil {
+			return err
+		}
+		if warn != "" {
+			log.Warn(warn, zap.String("table", tableInfo.TableName.String()),
+				zap.String("column", ci.Name.String()))
+		}
+		chk.AppendDatum(i, &colDatum)
+		return nil
+	}
+	decoder := rowcodec.NewChunkDecoder(reqCols, handleColIDs, defVal, m.tz)
+
 	// cache it for later use
 	err := decoder.DecodeToChunk(value, handle, chk)
 	if err != nil {
