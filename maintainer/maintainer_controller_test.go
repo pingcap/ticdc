@@ -1119,6 +1119,7 @@ func TestDefaultSpanIntoSplit(t *testing.T) {
 	span := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: totalSpan.StartKey, EndKey: totalSpan.EndKey}
 	dispatcherID := common.NewDispatcherID()
 	spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, common.DefaultMode)
+	spanReplica.SetSplitEnabled(true)
 	spanReplica.SetNodeID("node1")
 	controller.spanController.AddReplicatingSpan(spanReplica)
 

@@ -205,6 +205,7 @@ func (c *Controller) processTableSpans(
 ) {
 	tableSpans, isTableWorking := workingTaskMap[table.TableID]
 	spanController := c.getSpanController(mode)
+	splitEnabled := spanController.ShouldEnableSplit(table.Splitable)
 
 	// Add new table if not working
 	if isTableWorking {
@@ -221,10 +222,10 @@ func (c *Controller) processTableSpans(
 			zap.Stringer("changefeed", c.changefeedID),
 			zap.Int64("tableID", table.TableID))
 
-		spanController.AddWorkingSpans(tableSpans)
+		spanController.AddWorkingSpans(tableSpans, splitEnabled)
 
 		if c.enableTableAcrossNodes {
-			c.handleTableHoles(spanController, table, tableSpans, tableSpan)
+			c.handleTableHoles(spanController, table, tableSpans, tableSpan, splitEnabled)
 		}
 		// Remove processed table from working task map
 		delete(workingTaskMap, table.TableID)
@@ -238,15 +239,16 @@ func (c *Controller) handleTableHoles(
 	table commonEvent.Table,
 	tableSpans utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
 	tableSpan *heartbeatpb.TableSpan,
+	splitEnabled bool,
 ) {
 	holes := findHoles(tableSpans, tableSpan)
 	if c.splitter != nil {
 		for _, hole := range holes {
 			spans := c.splitter.Split(context.Background(), hole, 0, split.SplitTypeRegionCount)
-			spanController.AddNewSpans(table.SchemaID, spans, c.startCheckpointTs)
+			spanController.AddNewSpans(table.SchemaID, spans, c.startCheckpointTs, splitEnabled)
 		}
 	} else {
-		spanController.AddNewSpans(table.SchemaID, holes, c.startCheckpointTs)
+		spanController.AddNewSpans(table.SchemaID, holes, c.startCheckpointTs, splitEnabled)
 	}
 }
 

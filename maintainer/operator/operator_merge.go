@@ -90,6 +90,7 @@ func NewMergeDispatcherOperator(
 		mergeTableSpan,
 		1, // use a fake checkpointTs here.
 		toMergedReplicaSets[0].GetMode())
+	newReplicaSet.SetSplitEnabled(toMergedReplicaSets[0].IsSplitEnabled())
 
 	spanController.AddSchedulingReplicaSet(newReplicaSet, nodeID)
 

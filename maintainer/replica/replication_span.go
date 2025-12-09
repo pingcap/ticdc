@@ -113,6 +113,16 @@ func newSpanReplication(cfID common.ChangeFeedID, id common.DispatcherID, Schema
 	return r
 }
 
+// SetSplitEnabled marks whether this span replica can be split.
+func (r *SpanReplication) SetSplitEnabled(enabled bool) {
+	r.enabledSplit = enabled
+}
+
+// IsSplitEnabled reports if split operations are allowed on this replica.
+func (r *SpanReplication) IsSplitEnabled() bool {
+	return r.enabledSplit
+}
+
 func (r *SpanReplication) initStatus(status *heartbeatpb.TableSpanStatus) {
 	if status == nil || status.CheckpointTs == 0 {
 		log.Panic("add replica with invalid checkpoint ts",
