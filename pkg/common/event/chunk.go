@@ -64,41 +64,53 @@ func newChunkDecoderV2(tableInfo *common.TableInfo, tz *time.Location) *rowcodec
 	return rowcodec.NewChunkDecoder(reqCols, handleColIDs, defVal, tz)
 }
 
+// decodeHandleToDatum decodes a handle to a specific column datum.
+func decodeHandleToDatum(handle kv.Handle, ft *types.FieldType, idx int) (types.Datum, error) {
+	var d types.Datum
+	var err error
+	if handle.IsInt() {
+		if mysql.HasUnsignedFlag(ft.GetFlag()) {
+			d = types.NewUintDatum(uint64(handle.IntValue()))
+		} else {
+			d = types.NewIntDatum(handle.IntValue())
+		}
+		return d, nil
+	}
+	// Decode common handle to Datum.
+	_, d, err = codec.DecodeOne(handle.EncodedCol(idx))
+	return d, err
+}
+
 // rawKVToChunkV2 is used to decode the new format of row data.
 func (m *mounter) rawKVToChunkV2(value []byte, tableInfo *common.TableInfo, chk *chunk.Chunk, handle kv.Handle) (*rowcodec.ChunkDecoder, error) {
 	if len(value) == 0 {
 		return nil, nil
 	}
 	handleColIDs, _, reqCols := tableInfo.GetRowColInfos()
+	passToDecoderHandle := handle
 
-	// Fix: When handle is IntHandle but handleColIDs is empty or invalid,
-	// rowcodec.ChunkDecoder.tryAppendHandleColumn will panic:
-	// 1. If handleColIDs is empty, accessing handleColIDs[0] at line 263 causes index out of range panic
-	// 2. If handleColIDs doesn't match IntHandle, it calls handle.EncodedCol(i) which panics for IntHandle
-	//
-	// Note: DecodeToChunk only calls tryAppendHandleColumn when column value is NOT in rowdata.
-	// So if rowdata has the value, handleColIDs being empty is fine.
-	// But if rowdata doesn't have the value, we need to prevent the panic.
-	//
-	// Solution: If handleColIDs is empty/invalid and handle is IntHandle, we need to ensure
-	// handleColIDs has at least one element to avoid index panic. We use a dummy value that
-	// won't match any column ID, so the condition check fails and for loop won't match,
-	// preventing both index panic and EncodedCol panic.
-	if handle != nil && handle.IsInt() {
-		isHandleColIDsValid := len(handleColIDs) > 0 && !(len(handleColIDs) == 1 && handleColIDs[0] == -1)
-
-		if !isHandleColIDsValid || !tableInfo.PKIsHandle() {
-			// Set to a dummy invalid column ID to prevent index panic.
-			// The dummy value won't match any real column ID, so:
-			// - Line 263 check fails (col.ID != dummy)
-			// - For loop won't match, returns false
-			// - Falls back to default value (prevents panic, though value may be incorrect)
-			handleColIDs = []int64{-1}
-		}
+	isIntHandleAndNotPKIsHandle := handle != nil && handle.IsInt() && !tableInfo.PKIsHandle() && tableInfo.HasPrimaryKey()
+	// when hit this scenario, we need to pass nil to the decoder, because the decoder will panic.
+	if isIntHandleAndNotPKIsHandle {
+		passToDecoderHandle = nil
 	}
 
 	// Create decoder with adjusted handleColIDs
 	defVal := func(i int, chk *chunk.Chunk) error {
+		if isIntHandleAndNotPKIsHandle {
+			log.Info("fizz found the column id in handleColIDs", zap.Int64s("handleColIDs", handleColIDs))
+			for _, colID := range handleColIDs {
+				if reqCols[i].ID == colID {
+					colDatum, err := decodeHandleToDatum(handle, reqCols[i].Ft, i)
+					if err != nil {
+						return err
+					}
+					chk.AppendDatum(i, &colDatum)
+					return nil
+				}
+			}
+		}
+
 		if reqCols[i].ID < 0 {
 			// model.ExtraHandleID, ExtraPidColID, ExtraPhysTblID... etc
 			// Don't set the default value for that column.
@@ -121,10 +133,11 @@ func (m *mounter) rawKVToChunkV2(value []byte, tableInfo *common.TableInfo, chk 
 		chk.AppendDatum(i, &colDatum)
 		return nil
 	}
+
 	decoder := rowcodec.NewChunkDecoder(reqCols, handleColIDs, defVal, m.tz)
 
 	// cache it for later use
-	err := decoder.DecodeToChunk(value, handle, chk)
+	err := decoder.DecodeToChunk(value, passToDecoderHandle, chk)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}

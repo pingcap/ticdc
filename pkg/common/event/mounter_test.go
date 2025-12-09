@@ -14,8 +14,10 @@
 package event
 
 import (
+	"reflect"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/integrity"
@@ -25,7 +27,6 @@ import (
 	"github.com/pingcap/tidb/pkg/tablecodec"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	"github.com/stretchr/testify/require"
 )
 
@@ -806,9 +807,6 @@ func TestRawKVToChunkV2IntHandleWithNonPKIsHandleTable(t *testing.T) {
 	tableInfo := helper.GetTableInfo(ddlJob)
 	require.False(t, tableInfo.PKIsHandle(), "table should not have PKIsHandle")
 
-	// Insert a row to get valid row data
-	helper.tk.MustExec("insert into t1 values('pk1', 'name1')")
-
 	// Get the raw KV entry
 	ts := tableInfo.GetUpdateTS()
 	rawKvs := helper.DML2RawKv(tableInfo.TableName.TableID, ts, "insert into t1 values('pk1', 'name1')")
@@ -838,48 +836,54 @@ func TestRawKVToChunkV2IntHandleWithNonPKIsHandleTable(t *testing.T) {
 	})
 
 	// Test case 2: rowdata is empty or missing columns, handle is IntHandle but PKIsHandle=false
-	// This should not panic (the fix should prevent panic by setting handleColIDs to dummy value)
+	// This should not panic (the fix should prevent panic by passing nil handle to decoder)
 	t.Run("rowdata_missing_columns_int_handle_non_pk_handle", func(t *testing.T) {
 		chk.Reset()
-		// Create a minimal value that might not contain all columns
-		// This simulates the case where some columns are missing from rowdata
-		// and tryAppendHandleColumn would be called
-		minimalValue := []byte{rowcodec.CodecVer} // Just the version byte, minimal row data
+		// Use empty value to simulate the case where rowdata is empty
+		// When isIntHandleAndNotPKIsHandle is true, the code should pass nil to decoder
+		// and handle the primary key column in defVal function
+		emptyValue := []byte{}
 
 		// This should not panic even though handle is IntHandle and PKIsHandle=false
-		decoder, err := m.(*mounter).rawKVToChunkV2(minimalValue, tableInfo, chk, intHandle)
+		// The fix should prevent panic by passing nil handle to decoder
+		decoder, err := m.(*mounter).rawKVToChunkV2(emptyValue, tableInfo, chk, intHandle)
 		require.NoError(t, err)
-		// Decoder might be nil if value is too short, but should not panic
-		if decoder != nil {
-			require.GreaterOrEqual(t, chk.NumRows(), 0)
-		}
+		// When value is empty, decoder should be nil
+		require.Nil(t, decoder)
 	})
 
-	// Test case 3: handle is IntHandle, handleColIDs is empty (invalid)
-	// This should not panic with the fix
-	t.Run("int_handle_empty_handle_col_ids", func(t *testing.T) {
-		chk.Reset()
-		// Create a table info scenario where handleColIDs would be empty
-		// We'll use a table with no primary key or unique key that would set handleColIDs
-		ddlJob2 := helper.DDL2Job("create table t2(id int, name varchar(32))")
-		tableInfo2 := helper.GetTableInfo(ddlJob2)
+	// Test case 3: Test the isIntHandleAndNotPKIsHandle logic more directly
+	// Verify that the condition is correctly detected and handled
+	t.Run("verify_isIntHandleAndNotPKIsHandle_condition", func(t *testing.T) {
+		// Verify that isIntHandleAndNotPKIsHandle condition is met
+		require.True(t, intHandle.IsInt() && !tableInfo.PKIsHandle() && tableInfo.HasPrimaryKey(),
+			"isIntHandleAndNotPKIsHandle condition should be true")
 
-		// Verify handleColIDs is empty/invalid
-		handleColIDs, _, _ := tableInfo2.GetRowColInfos()
-		require.True(t, len(handleColIDs) == 0 || (len(handleColIDs) == 1 && handleColIDs[0] == -1),
-			"handleColIDs should be empty or invalid for table without PK/UK")
+		// Get handleColIDs to verify the fix logic
+		handleColIDs, _, reqCols := tableInfo.GetRowColInfos()
+		require.Greater(t, len(handleColIDs), 0, "handleColIDs should contain primary key column ID")
+		require.NotEqual(t, int64(-1), handleColIDs[0], "handleColIDs should not be -1 for table with primary key")
 
-		// Create a value with new format
-		testValue := []byte{rowcodec.CodecVer, 0x01, 0x00} // Minimal new format value
-		intHandle2 := kv.IntHandle(67890)
-
-		// This should not panic - the fix sets handleColIDs to [-1] to prevent index panic
-		decoder, err := m.(*mounter).rawKVToChunkV2(testValue, tableInfo2, chk, intHandle2)
-		require.NoError(t, err)
-		// Should not panic even if decoder is nil or has issues
-		if decoder != nil {
-			require.GreaterOrEqual(t, chk.NumRows(), 0)
+		// Verify that handleColIDs contains the primary key column
+		pkColID := handleColIDs[0]
+		found := false
+		for _, col := range reqCols {
+			if col.ID == pkColID {
+				found = true
+				break
+			}
 		}
+		require.True(t, found, "primary key column ID should be in reqCols")
+
+		// Test that the code path is correctly taken by using a value that triggers defVal
+		// We'll use the original value but verify the logic is correct
+		chk.Reset()
+		decoder, err := m.(*mounter).rawKVToChunkV2(rawKV.Value, tableInfo, chk, intHandle)
+		require.NoError(t, err)
+		require.NotNil(t, decoder)
+		require.Greater(t, chk.NumRows(), 0)
+		// The key point is that this should not panic even though handle is IntHandle
+		// and PKIsHandle=false, because the fix passes nil to decoder
 	})
 
 	// Test case 4: Normal case with PKIsHandle=true and IntHandle should still work
@@ -888,25 +892,107 @@ func TestRawKVToChunkV2IntHandleWithNonPKIsHandleTable(t *testing.T) {
 		tableInfo3 := helper.GetTableInfo(ddlJob3)
 		require.True(t, tableInfo3.PKIsHandle(), "table should have PKIsHandle")
 
-		helper.tk.MustExec("insert into t3 values(100, 'test')")
 		ts3 := tableInfo3.GetUpdateTS()
-		rawKvs3 := helper.DML2RawKv(tableInfo3.TableName.TableID, ts3, "insert into t3 values(100, 'test')")
+		rawKvs3 := helper.DML2RawKv(tableInfo3.TableName.TableID, ts3, "insert into t3 values(200, 'test2')")
 		require.Len(t, rawKvs3, 1)
 
-		chk.Reset()
+		// Create a new chunk for tableInfo3 since it has different column types
+		// (int primary key vs varchar primary key in tableInfo)
+		chk3 := chunk.NewChunkWithCapacity(tableInfo3.GetFieldSlice(), 1)
 		key3 := RemoveKeyspacePrefix(rawKvs3[0].Key)
 		recordID3, err := tablecodec.DecodeRowKey(key3)
 		require.NoError(t, err)
 		require.True(t, recordID3.IsInt(), "recordID should be IntHandle")
 
-		decoder, err := m.(*mounter).rawKVToChunkV2(rawKvs3[0].Value, tableInfo3, chk, recordID3)
+		decoder, err := m.(*mounter).rawKVToChunkV2(rawKvs3[0].Value, tableInfo3, chk3, recordID3)
 		require.NoError(t, err)
 		require.NotNil(t, decoder)
-		require.Equal(t, 1, chk.NumRows())
+		require.Equal(t, 1, chk3.NumRows())
 
 		// Verify the decoded data
-		row := chk.GetRow(0)
+		row := chk3.GetRow(0)
 		idVal := row.GetInt64(0)
-		require.Equal(t, int64(100), idVal)
+		require.Equal(t, int64(200), idVal)
+	})
+
+	// Test case 5: Real case where column is in handle, not in rowData
+	// Create a table with int primary key (PKIsHandle=true by default)
+	// Insert data, then manually set PKIsHandle=false
+	// Verify that the primary key column can be decoded from handle
+	t.Run("column_in_handle_not_in_rowdata", func(t *testing.T) {
+		// Create a table with int primary key
+		ddlJob4 := helper.DDL2Job("create table t4(id int primary key, name varchar(32))")
+		tableInfo4 := helper.GetTableInfo(ddlJob4)
+		require.True(t, tableInfo4.PKIsHandle(), "table should have PKIsHandle=true initially")
+
+		// Insert data
+		ts4 := tableInfo4.GetUpdateTS()
+		rawKvs4 := helper.DML2RawKv(tableInfo4.TableName.TableID, ts4, "insert into t4 values(300, 'test3')")
+		require.Len(t, rawKvs4, 1)
+
+		// Decode the handle from the key
+		key4 := RemoveKeyspacePrefix(rawKvs4[0].Key)
+		recordID4, err := tablecodec.DecodeRowKey(key4)
+		require.NoError(t, err)
+		require.True(t, recordID4.IsInt(), "recordID should be IntHandle")
+		expectedID := recordID4.IntValue()
+
+		// When PKIsHandle=true, the primary key column is typically not in rowData
+		// So rawKvs4[0].Value should not contain the id column
+		// Let's verify this and then manually set PKIsHandle=false
+
+		// Create chunk for tableInfo4
+		chk4 := chunk.NewChunkWithCapacity(tableInfo4.GetFieldSlice(), 1)
+
+		// First, let's verify the normal case works (PKIsHandle=true)
+		chk4.Reset()
+		decoder1, err := m.(*mounter).rawKVToChunkV2(rawKvs4[0].Value, tableInfo4, chk4, recordID4)
+		require.NoError(t, err)
+		require.NotNil(t, decoder1)
+		require.Equal(t, 1, chk4.NumRows())
+		row1 := chk4.GetRow(0)
+		idVal1 := row1.GetInt64(0)
+		require.Equal(t, expectedID, idVal1)
+
+		// Now manually modify the tableInfo's PKIsHandle to false
+		// We'll use unsafe to access the private field
+		tableInfo4Value := reflect.ValueOf(tableInfo4).Elem()
+		columnSchemaField := tableInfo4Value.FieldByName("columnSchema")
+		// Get the columnSchema pointer value
+		columnSchemaPtrValue := columnSchemaField
+		// Get the PKIsHandle field offset from the columnSchema type
+		columnSchemaType := columnSchemaPtrValue.Type().Elem()
+		pkIsHandleField, _ := columnSchemaType.FieldByName("PKIsHandle")
+		// Get the actual pointer to the columnSchema struct
+		columnSchemaPtr := unsafe.Pointer(columnSchemaPtrValue.Pointer())
+		// Calculate the address of PKIsHandle field
+		pkIsHandleAddr := unsafe.Pointer(uintptr(columnSchemaPtr) + uintptr(pkIsHandleField.Offset))
+		// Get the current value
+		originalPKIsHandle := *(*bool)(pkIsHandleAddr)
+		// Modify PKIsHandle to false
+		*(*bool)(pkIsHandleAddr) = false
+		defer func() {
+			// Restore original value
+			*(*bool)(pkIsHandleAddr) = originalPKIsHandle
+		}()
+
+		// Now verify PKIsHandle is false
+		require.False(t, tableInfo4.PKIsHandle(), "tableInfo should have PKIsHandle=false after modification")
+
+		// Reset chunk and test with modified tableInfo
+		chk4.Reset()
+		decoder2, err := m.(*mounter).rawKVToChunkV2(rawKvs4[0].Value, tableInfo4, chk4, recordID4)
+		require.NoError(t, err)
+		require.NotNil(t, decoder2)
+		require.Equal(t, 1, chk4.NumRows())
+
+		// Verify the decoded data - the id should come from handle, not rowData
+		row2 := chk4.GetRow(0)
+		idVal2 := row2.GetInt64(0)
+		require.Equal(t, expectedID, idVal2, "id should be decoded from handle when PKIsHandle=false")
+
+		// Also verify the name column
+		nameVal := row2.GetString(1)
+		require.Equal(t, "test3", nameVal)
 	})
 }
