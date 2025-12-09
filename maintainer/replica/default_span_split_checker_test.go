@@ -30,7 +30,7 @@ import (
 
 func createTestSpanReplication(cfID common.ChangeFeedID, tableID int64) *SpanReplication {
 	totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, tableID)
-	return NewSpanReplication(cfID, common.NewDispatcherID(), 0, &totalSpan, 1, common.DefaultMode)
+	return NewSpanReplication(cfID, common.NewDispatcherID(), 0, &totalSpan, 1, common.DefaultMode, true)
 }
 
 func TestDefaultSpanSplitChecker_AddReplica(t *testing.T) {
