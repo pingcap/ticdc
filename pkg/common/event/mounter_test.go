@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/tidb/pkg/tablecodec"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
+	"github.com/pingcap/tidb/pkg/util/rowcodec"
 	"github.com/stretchr/testify/require"
 )
 
@@ -939,7 +940,59 @@ func TestRawKVToChunkV2IntHandleWithNonPKIsHandleTable(t *testing.T) {
 
 		// When PKIsHandle=true, the primary key column is typically not in rowData
 		// So rawKvs4[0].Value should not contain the id column
-		// Let's verify this and then manually set PKIsHandle=false
+		// Let's verify this by decoding rowData to see which columns are present
+		//
+		// Principle: Why id column is NOT in rowData when PKIsHandle=true?
+		// --------------------------------------------------------------------
+		// In TiDB's storage format:
+		// 1. Row Key format: {tablePrefix}{tableID}_r{handle}
+		//    - When PKIsHandle=true, the primary key value (id=300) is directly encoded
+		//      as the handle in the row key: t{tableID}_r300
+		// 2. Row Value format: {non-handle-columns-data}
+		//    - TiDB's rowcodec encoder optimizes storage by NOT encoding handle columns
+		//      in the row value, since they can be extracted from the row key
+		//    - This saves storage space and avoids data duplication
+		//    - The handle column value is only stored once in the key, not in the value
+		//
+		// Example for table t4(id int primary key, name varchar(32)):
+		//   - Row Key:   t{tableID}_r300  (contains id=300)
+		//   - Row Value: {name: "test3"} (does NOT contain id, only non-handle columns)
+		//
+		// When decoding:
+		//   - The decoder knows PKIsHandle=true, so it extracts id from the handle (row key)
+		//   - Other columns are decoded from row value
+		//   - This is why we need special handling when PKIsHandle=false but handle is IntHandle
+		_, _, reqCols := tableInfo4.GetRowColInfos()
+		decoderForCheck := rowcodec.NewDatumMapDecoder(reqCols, time.UTC)
+		datumsInRowData, err := decoderForCheck.DecodeToDatumMap(rawKvs4[0].Value, nil)
+		require.NoError(t, err)
+
+		// Get the id column ID
+		var idColID int64
+		for _, col := range tableInfo4.GetColumns() {
+			if col.Name.O == "id" {
+				idColID = col.ID
+				break
+			}
+		}
+		require.NotZero(t, idColID, "id column should exist")
+
+		// Verify that id column is NOT in rowData (it should be in handle instead)
+		// This confirms the optimization: handle columns are stored in key, not in value
+		_, idInRowData := datumsInRowData[idColID]
+		require.False(t, idInRowData, "id column should NOT be in rowData when PKIsHandle=true, it should come from handle")
+
+		// Verify that name column IS in rowData
+		var nameColID int64
+		for _, col := range tableInfo4.GetColumns() {
+			if col.Name.O == "name" {
+				nameColID = col.ID
+				break
+			}
+		}
+		require.NotZero(t, nameColID, "name column should exist")
+		_, nameInRowData := datumsInRowData[nameColID]
+		require.True(t, nameInRowData, "name column should be in rowData")
 
 		// Create chunk for tableInfo4
 		chk4 := chunk.NewChunkWithCapacity(tableInfo4.GetFieldSlice(), 1)
