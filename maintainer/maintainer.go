@@ -883,7 +883,7 @@ func newDDLSpan(keyspaceID uint32, cfID common.ChangeFeedID, checkpointTs uint64
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    checkpointTs,
 			Mode:            mode,
-		}, selfNode.ID)
+		}, selfNode.ID, false)
 	return tableTriggerEventDispatcherID, ddlSpan
 }
 

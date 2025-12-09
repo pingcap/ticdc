@@ -58,11 +58,6 @@ function run() {
 		check_table_exists "consistent_compatibility.table_$i" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 120
 	done
 	sleep 5
-	cleanup_process $CDC_BINARY
-	# Inject the failpoint to prevent sink execution, but the global resolved can be moved forward.
-	# Then we can apply redo log to reach an eventual consistent state in downstream.
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkHangLongTime=return(true);github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkExecDDLDelay=return("3600")'
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix consistent_compatibility.server2
 
 	# case 1:
 	# global ddl tests -> ActionRenameTable
@@ -100,15 +95,19 @@ function run() {
 		run_sql "RENAME TABLE consistent_compatibility.table_$i TO consistent_compatibility.$new_table_name;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	done
 
+	run_sql_file $CUR/data/data.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE table consistent_compatibility.check1(id int primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	# to ensure row changed events have been replicated to TiCDC
-	sleep 120
-	cleanup_process $CDC_BINARY
+	sleep 60
 
 	storage_path="file://$WORK_DIR/redo"
 	tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
+	current_tso=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
+	ensure 300 check_redo_resolved_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
 	export GO_FAILPOINTS=''
+	cleanup_process $CDC_BINARY
+	export TICDC_NEWARCH=true
 
 	rts=$(cdc redo meta --storage="$storage_path" --tmp-dir="$tmp_download_path" | grep -oE "resolved-ts:[0-9]+" | awk -F: '{print $2}')
 	sed "s/<placeholder>/$rts/g" $CUR/conf/diff_config.toml >$WORK_DIR/diff_config.toml
