@@ -165,9 +165,8 @@ func runTestCase(testCasePath, dbConnMySQL, dbConnTiDB string) {
 }
 
 func fetchNextCDCRecord(reader *kafka.Reader, kind Kind, timeout time.Duration) (map[string]any, map[string]any, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
 	for {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		m, err := reader.FetchMessage(ctx)
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
@@ -180,6 +179,7 @@ func fetchNextCDCRecord(reader *kafka.Reader, kind Kind, timeout time.Duration) 
 		if err = reader.CommitMessages(ctx, m); err != nil {
 			return nil, nil, fmt.Errorf("Failed to commit CDC record of %s: %w", kind, err)
 		}
+		cancel()
 
 		if len(m.Value) == 0 {
 			continue
