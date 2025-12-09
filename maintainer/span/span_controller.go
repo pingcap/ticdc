@@ -149,12 +149,7 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 	keyspaceID := c.GetkeyspaceID()
 
 	span := common.TableIDToComparableSpan(keyspaceID, table.TableID)
-	tableSpan := &heartbeatpb.TableSpan{
-		TableID:    table.TableID,
-		StartKey:   span.StartKey,
-		EndKey:     span.EndKey,
-		KeyspaceID: keyspaceID,
-	}
+	tableSpan := heartbeatpb.NewTableSpan(table.TableID, span.StartKey, span.EndKey, keyspaceID)
 	tableSpans := []*heartbeatpb.TableSpan{tableSpan}
 
 	// Determine if the table can be split based on configuration and table splittable status

@@ -272,23 +272,23 @@ func getAllDDLSpan(keyspaceID uint32) ([]heartbeatpb.TableSpan, error) {
 		return nil, err
 	}
 
-	spans = append(spans, heartbeatpb.TableSpan{
-		TableID:    JobTableID,
-		StartKey:   common.ToComparableKey(start),
-		EndKey:     common.ToComparableKey(end),
-		KeyspaceID: keyspaceID,
-	})
+	spans = append(spans, *heartbeatpb.NewTableSpan(
+		JobTableID,
+		common.ToComparableKey(start),
+		common.ToComparableKey(end),
+		keyspaceID,
+	))
 
 	start, end, err = common.GetKeyspaceTableRange(keyspaceID, JobHistoryID)
 	if err != nil {
 		return nil, err
 	}
-	spans = append(spans, heartbeatpb.TableSpan{
-		TableID:    JobHistoryID,
-		StartKey:   common.ToComparableKey(start),
-		EndKey:     common.ToComparableKey(end),
-		KeyspaceID: keyspaceID,
-	})
+	spans = append(spans, *heartbeatpb.NewTableSpan(
+		JobHistoryID,
+		common.ToComparableKey(start),
+		common.ToComparableKey(end),
+		keyspaceID,
+	))
 	return spans, nil
 }
 

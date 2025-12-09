@@ -108,21 +108,13 @@ func TestEventStoreInteractionWithSubClient(t *testing.T) {
 	cfID := common.NewChangefeedID4Test("default", "test-cf")
 
 	{
-		span := &heartbeatpb.TableSpan{
-			TableID:  1,
-			StartKey: []byte("a"),
-			EndKey:   []byte("e"),
-		}
+		span := heartbeatpb.NewTableSpan(1, []byte("a"), []byte("e"), 0)
 		ok := store.RegisterDispatcher(cfID, dispatcherID1, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
 		require.True(t, ok)
 	}
 	// add a dispatcher with the same span
 	{
-		span := &heartbeatpb.TableSpan{
-			TableID:  1,
-			StartKey: []byte("a"),
-			EndKey:   []byte("e"),
-		}
+		span := heartbeatpb.NewTableSpan(1, []byte("a"), []byte("e"), 0)
 		ok := store.RegisterDispatcher(cfID, dispatcherID2, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
 		require.True(t, ok)
 	}
@@ -135,11 +127,7 @@ func TestEventStoreInteractionWithSubClient(t *testing.T) {
 	}
 	// add a dispatcher with a containing span
 	{
-		span := &heartbeatpb.TableSpan{
-			TableID:  1,
-			StartKey: []byte("a"),
-			EndKey:   []byte("b"),
-		}
+		span := heartbeatpb.NewTableSpan(1, []byte("a"), []byte("b"), 0)
 		ok := store.RegisterDispatcher(cfID, dispatcherID3, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
 		require.True(t, ok)
 	}
@@ -170,31 +158,19 @@ func TestEventStoreOnlyReuseDispatcher(t *testing.T) {
 	cfID := common.NewChangefeedID4Test("default", "test-cf")
 	// add a dispatcher to create a subscription
 	{
-		span := &heartbeatpb.TableSpan{
-			TableID:  tableID,
-			StartKey: []byte("a"),
-			EndKey:   []byte("h"),
-		}
+		span := heartbeatpb.NewTableSpan(tableID, []byte("a"), []byte("h"), 0)
 		ok := store.RegisterDispatcher(cfID, dispatcherID1, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
 		require.True(t, ok)
 	}
 	// add a dispatcher(onlyReuse=true) with a non-containing span which should fail
 	{
-		span := &heartbeatpb.TableSpan{
-			TableID:  tableID,
-			StartKey: []byte("b"),
-			EndKey:   []byte("i"),
-		}
+		span := heartbeatpb.NewTableSpan(tableID, []byte("b"), []byte("i"), 0)
 		ok := store.RegisterDispatcher(cfID, dispatcherID2, span, 100, func(watermark uint64, latestCommitTs uint64) {}, true, false)
 		require.False(t, ok)
 	}
 	// when the existing subscription is not initialized, add a dispatcher(onlyReuse=true) should fail
 	{
-		span := &heartbeatpb.TableSpan{
-			TableID:  tableID,
-			StartKey: []byte("b"),
-			EndKey:   []byte("h"),
-		}
+		span := heartbeatpb.NewTableSpan(tableID, []byte("b"), []byte("h"), 0)
 		ok := store.RegisterDispatcher(cfID, dispatcherID3, span, 100, func(watermark uint64, latestCommitTs uint64) {}, true, false)
 		require.False(t, ok)
 	}
@@ -202,11 +178,7 @@ func TestEventStoreOnlyReuseDispatcher(t *testing.T) {
 	markSubStatsInitializedForTest(store, tableID)
 	// add a dispatcher(onlyReuse=true) with a containing span which should success
 	{
-		span := &heartbeatpb.TableSpan{
-			TableID:  tableID,
-			StartKey: []byte("b"),
-			EndKey:   []byte("h"),
-		}
+		span := heartbeatpb.NewTableSpan(tableID, []byte("b"), []byte("h"), 0)
 		ok := store.RegisterDispatcher(cfID, dispatcherID3, span, 100, func(watermark uint64, latestCommitTs uint64) {}, true, false)
 		require.True(t, ok)
 	}
@@ -241,11 +213,7 @@ func TestEventStoreOnlyReuseDispatcherSuccess(t *testing.T) {
 
 	// 1. Register a dispatcher to create a large subscription.
 	{
-		span := &heartbeatpb.TableSpan{
-			TableID:  tableID,
-			StartKey: []byte("a"),
-			EndKey:   []byte("z"),
-		}
+		span := heartbeatpb.NewTableSpan(tableID, []byte("a"), []byte("z"), 0)
 		ok := es.RegisterDispatcher(cfID, dispatcherID1, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
 		require.True(t, ok)
 	}
@@ -254,11 +222,7 @@ func TestEventStoreOnlyReuseDispatcherSuccess(t *testing.T) {
 	// 2. Register a second dispatcher with onlyReuse=true, whose span is contained
 	//    by the first subscription. This registration should succeed.
 	{
-		span := &heartbeatpb.TableSpan{
-			TableID:  tableID,
-			StartKey: []byte("b"),
-			EndKey:   []byte("y"),
-		}
+		span := heartbeatpb.NewTableSpan(tableID, []byte("b"), []byte("y"), 0)
 		ok := es.RegisterDispatcher(cfID, dispatcherID2, span, 100, func(watermark uint64, latestCommitTs uint64) {}, true, false)
 		require.True(t, ok)
 	}
@@ -266,11 +230,7 @@ func TestEventStoreOnlyReuseDispatcherSuccess(t *testing.T) {
 	// 3. Register a third dispatcher with onlyReuse=true, whose span is an exact match
 	//    to the first subscription. This registration should also succeed.
 	{
-		span := &heartbeatpb.TableSpan{
-			TableID:  tableID,
-			StartKey: []byte("a"),
-			EndKey:   []byte("z"),
-		}
+		span := heartbeatpb.NewTableSpan(tableID, []byte("a"), []byte("z"), 0)
 		ok := es.RegisterDispatcher(cfID, dispatcherID3, span, 100, func(watermark uint64, latestCommitTs uint64) {}, true, false)
 		require.True(t, ok)
 	}
@@ -287,21 +247,13 @@ func TestEventStoreNonOnlyReuseDispatcher(t *testing.T) {
 	cfID := common.NewChangefeedID4Test("default", "test-cf")
 	// add a subscription to create a subscription
 	{
-		span := &heartbeatpb.TableSpan{
-			TableID:  tableID,
-			StartKey: []byte("a"),
-			EndKey:   []byte("h"),
-		}
+		span := heartbeatpb.NewTableSpan(tableID, []byte("a"), []byte("h"), 0)
 		ok := store.RegisterDispatcher(cfID, dispatcherID1, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
 		require.True(t, ok)
 	}
 	// add a dispatcher(onlyReuse=false) with a non-containing span
 	{
-		span := &heartbeatpb.TableSpan{
-			TableID:  tableID,
-			StartKey: []byte("c"),
-			EndKey:   []byte("i"),
-		}
+		span := heartbeatpb.NewTableSpan(tableID, []byte("c"), []byte("i"), 0)
 		ok := store.RegisterDispatcher(cfID, dispatcherID2, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
 		require.True(t, ok)
 	}
@@ -313,11 +265,7 @@ func TestEventStoreNonOnlyReuseDispatcher(t *testing.T) {
 	}
 	// add a dispatcher(onlyReuse=false) with a containing span
 	{
-		span := &heartbeatpb.TableSpan{
-			TableID:  tableID,
-			StartKey: []byte("b"),
-			EndKey:   []byte("h"),
-		}
+		span := heartbeatpb.NewTableSpan(tableID, []byte("b"), []byte("h"), 0)
 		ok := store.RegisterDispatcher(cfID, dispatcherID3, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
 		require.True(t, ok)
 	}
@@ -335,11 +283,7 @@ func TestEventStoreNonOnlyReuseDispatcher(t *testing.T) {
 	}
 	// add a dispatcher(onlyReuse=false) with the same span
 	{
-		span := &heartbeatpb.TableSpan{
-			TableID:  tableID,
-			StartKey: []byte("a"),
-			EndKey:   []byte("h"),
-		}
+		span := heartbeatpb.NewTableSpan(tableID, []byte("a"), []byte("h"), 0)
 		ok := store.RegisterDispatcher(cfID, dispatcherID4, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
 		require.True(t, ok)
 		subStats := store.(*eventStore).dispatcherMeta.tableStats[tableID]
@@ -382,21 +326,13 @@ func TestEventStoreUpdateCheckpointTs(t *testing.T) {
 	cfID := common.NewChangefeedID4Test("default", "test-cf")
 	// add first dispatcher
 	{
-		span := &heartbeatpb.TableSpan{
-			TableID:  tableID,
-			StartKey: []byte("a"),
-			EndKey:   []byte("h"),
-		}
+		span := heartbeatpb.NewTableSpan(tableID, []byte("a"), []byte("h"), 0)
 		ok := store.RegisterDispatcher(cfID, dispatcherID1, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
 		require.True(t, ok)
 	}
 	// add a dispatcher(onlyReuse=false) with a containing span
 	{
-		span := &heartbeatpb.TableSpan{
-			TableID:  tableID,
-			StartKey: []byte("b"),
-			EndKey:   []byte("h"),
-		}
+		span := heartbeatpb.NewTableSpan(tableID, []byte("b"), []byte("h"), 0)
 		ok := store.RegisterDispatcher(cfID, dispatcherID2, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
 		require.True(t, ok)
 	}
@@ -470,22 +406,14 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 	// ============ prepare two subscriptions ============
 	// add a dispatcher to create an subscription
 	{
-		span := &heartbeatpb.TableSpan{
-			TableID:  tableID,
-			StartKey: []byte("a"),
-			EndKey:   []byte("h"),
-		}
+		span := heartbeatpb.NewTableSpan(tableID, []byte("a"), []byte("h"), 0)
 		ok := store.RegisterDispatcher(cfID, dispatcherID1, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
 		require.True(t, ok)
 	}
 	// add a dispatcher(onlyReuse=false) with a containing span
 	// it will reuse the first subscription and create a new one
 	{
-		span := &heartbeatpb.TableSpan{
-			TableID:  tableID,
-			StartKey: []byte("b"),
-			EndKey:   []byte("h"),
-		}
+		span := heartbeatpb.NewTableSpan(tableID, []byte("b"), []byte("h"), 0)
 		ok := store.RegisterDispatcher(cfID, dispatcherID2, span, 100, func(watermark uint64, latestCommitTs uint64) {}, false, false)
 		require.True(t, ok)
 	}
@@ -500,11 +428,7 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 	updateSubStatResolvedTs(1, 200)
 	{
 		iter := store.GetIterator(dispatcherID2, common.DataRange{
-			Span: &heartbeatpb.TableSpan{
-				TableID:  tableID,
-				StartKey: []byte("b"),
-				EndKey:   []byte("h"),
-			},
+			Span:          heartbeatpb.NewTableSpan(tableID, []byte("b"), []byte("h"), 0),
 			CommitTsStart: 100,
 			CommitTsEnd:   150,
 		})
@@ -516,11 +440,7 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 	updateSubStatResolvedTs(2, 200)
 	{
 		iter := store.GetIterator(dispatcherID2, common.DataRange{
-			Span: &heartbeatpb.TableSpan{
-				TableID:  tableID,
-				StartKey: []byte("b"),
-				EndKey:   []byte("h"),
-			},
+			Span:          heartbeatpb.NewTableSpan(tableID, []byte("b"), []byte("h"), 0),
 			CommitTsStart: 100,
 			CommitTsEnd:   150,
 		})
@@ -544,11 +464,7 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 	updateSubStatResolvedTs(1, 220)
 	{
 		iter := store.GetIterator(dispatcherID2, common.DataRange{
-			Span: &heartbeatpb.TableSpan{
-				TableID:  tableID,
-				StartKey: []byte("b"),
-				EndKey:   []byte("h"),
-			},
+			Span:          heartbeatpb.NewTableSpan(tableID, []byte("b"), []byte("h"), 0),
 			CommitTsStart: 100,
 			CommitTsEnd:   220,
 		})
@@ -578,11 +494,7 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 	updateSubStatResolvedTs(2, 220)
 	{
 		iter := store.GetIterator(dispatcherID2, common.DataRange{
-			Span: &heartbeatpb.TableSpan{
-				TableID:  tableID,
-				StartKey: []byte("b"),
-				EndKey:   []byte("h"),
-			},
+			Span:          heartbeatpb.NewTableSpan(tableID, []byte("b"), []byte("h"), 0),
 			CommitTsStart: 100,
 			CommitTsEnd:   220,
 		})
@@ -717,7 +629,7 @@ func TestEventStoreGetIteratorConcurrently(t *testing.T) {
 	// 1. Register a dispatcher.
 	dispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangefeedID4Test("default", "test-cf")
-	span := &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("z")}
+	span := heartbeatpb.NewTableSpan(1, []byte("a"), []byte("z"), 0)
 	startTs := uint64(100)
 	var resolvedTs atomic.Uint64
 	resolvedTs.Store(startTs)
@@ -849,11 +761,7 @@ func TestEventStoreIter_NextWithFiltering(t *testing.T) {
 
 	var subID uint64 = 1
 	var tableID int64 = 42
-	iteratorSpan := &heartbeatpb.TableSpan{
-		TableID:  tableID,
-		StartKey: []byte("keyB"),
-		EndKey:   []byte("keyD"),
-	}
+	iteratorSpan := heartbeatpb.NewTableSpan(tableID, []byte("keyB"), []byte("keyD"), 0)
 
 	// This test now focuses on a single, more comprehensive scenario.
 	for _, tc := range testCases {

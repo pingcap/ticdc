@@ -1144,7 +1144,7 @@ func TestScanSession(t *testing.T) {
 		ctx := context.Background()
 		dispStat := &dispatcherStat{}
 		dataRange := common.DataRange{
-			Span:          &heartbeatpb.TableSpan{TableID: 123},
+			Span:          heartbeatpb.NewTableSpan(123, nil, nil, 0),
 			CommitTsStart: 100,
 			CommitTsEnd:   200,
 		}
@@ -1450,9 +1450,7 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 	}
 
 	dataRange := common.DataRange{
-		Span: &heartbeatpb.TableSpan{
-			TableID: tableID,
-		},
+		Span:          heartbeatpb.NewTableSpan(tableID, nil, nil, 0),
 		CommitTsStart: updateEvent.StartTs,
 		CommitTsEnd:   updateEvent.CRTs + 100,
 	}

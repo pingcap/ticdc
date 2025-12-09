@@ -317,22 +317,13 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	}
 	for i := 1; i < 3; i++ {
 		span := common.TableIDToComparableSpan(keyspaceID, int64(i))
-		tableSpan := &heartbeatpb.TableSpan{
-			TableID:  int64(i),
-			StartKey: span.StartKey,
-			EndKey:   span.EndKey,
-		}
+		tableSpan := heartbeatpb.NewTableSpan(int64(i), span.StartKey, span.EndKey, keyspaceID)
 		dispatcherID := common.NewDispatcherID()
 		remotedIds = append(remotedIds, dispatcherID)
 		dispManager.bootstrapTables = append(dispManager.bootstrapTables, &heartbeatpb.BootstrapTableSpan{
-			ID:       dispatcherID.ToPB(),
-			SchemaID: 1,
-			Span: &heartbeatpb.TableSpan{
-				TableID:    tableSpan.TableID,
-				StartKey:   tableSpan.StartKey,
-				EndKey:     tableSpan.EndKey,
-				KeyspaceID: keyspaceID,
-			},
+			ID:              dispatcherID.ToPB(),
+			SchemaID:        1,
+			Span:            tableSpan,
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    10,
 		})

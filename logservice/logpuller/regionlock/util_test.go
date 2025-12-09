@@ -31,32 +31,32 @@ func TestCheckRegionsLeftCover(t *testing.T) {
 	}{
 		{
 			regions: []*metapb.Region{},
-			span:    heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: []byte{2}}, cover: false,
+			span:    *heartbeatpb.NewTableSpan(0, []byte{1}, []byte{2}, 0), cover: false,
 		},
 		{regions: []*metapb.Region{
 			{StartKey: nil, EndKey: nil},
-		}, span: heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: []byte{2}}, cover: true},
+		}, span: *heartbeatpb.NewTableSpan(0, []byte{1}, []byte{2}, 0), cover: true},
 		{regions: []*metapb.Region{
 			{StartKey: []byte{1}, EndKey: []byte{2}},
-		}, span: heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: []byte{2}}, cover: true},
+		}, span: *heartbeatpb.NewTableSpan(0, []byte{1}, []byte{2}, 0), cover: true},
 		{regions: []*metapb.Region{
 			{StartKey: []byte{0}, EndKey: []byte{4}},
-		}, span: heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: []byte{2}}, cover: true},
+		}, span: *heartbeatpb.NewTableSpan(0, []byte{1}, []byte{2}, 0), cover: true},
 		{regions: []*metapb.Region{
 			{StartKey: []byte{1}, EndKey: []byte{2}},
 			{StartKey: []byte{2}, EndKey: []byte{3}},
-		}, span: heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: []byte{3}}, cover: true},
+		}, span: *heartbeatpb.NewTableSpan(0, []byte{1}, []byte{3}, 0), cover: true},
 		{regions: []*metapb.Region{
 			{StartKey: []byte{1}, EndKey: []byte{2}},
 			{StartKey: []byte{3}, EndKey: []byte{4}},
-		}, span: heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: []byte{4}}, cover: false},
+		}, span: *heartbeatpb.NewTableSpan(0, []byte{1}, []byte{4}, 0), cover: false},
 		{regions: []*metapb.Region{
 			{StartKey: []byte{1}, EndKey: []byte{2}},
 			{StartKey: []byte{2}, EndKey: []byte{3}},
-		}, span: heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: []byte{4}}, cover: true},
+		}, span: *heartbeatpb.NewTableSpan(0, []byte{1}, []byte{4}, 0), cover: true},
 		{regions: []*metapb.Region{
 			{StartKey: []byte{2}, EndKey: []byte{3}},
-		}, span: heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: []byte{3}}, cover: false},
+		}, span: *heartbeatpb.NewTableSpan(0, []byte{1}, []byte{3}, 0), cover: false},
 	}
 
 	for _, tc := range cases {
@@ -74,19 +74,19 @@ func TestCutRegionsLeftCoverSpan(t *testing.T) {
 	}{
 		{
 			regions: []*metapb.Region{},
-			span:    heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: []byte{2}},
+			span:    *heartbeatpb.NewTableSpan(0, []byte{1}, []byte{2}, 0),
 			covered: nil,
 		},
 		{
 			regions: []*metapb.Region{{StartKey: nil, EndKey: nil}},
-			span:    heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: []byte{2}},
+			span:    *heartbeatpb.NewTableSpan(0, []byte{1}, []byte{2}, 0),
 			covered: []*metapb.Region{{StartKey: nil, EndKey: nil}},
 		},
 		{
 			regions: []*metapb.Region{
 				{StartKey: []byte{1}, EndKey: []byte{2}},
 			},
-			span: heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: []byte{2}},
+			span: *heartbeatpb.NewTableSpan(0, []byte{1}, []byte{2}, 0),
 			covered: []*metapb.Region{
 				{StartKey: []byte{1}, EndKey: []byte{2}},
 			},
@@ -95,7 +95,7 @@ func TestCutRegionsLeftCoverSpan(t *testing.T) {
 			regions: []*metapb.Region{
 				{StartKey: []byte{0}, EndKey: []byte{4}},
 			},
-			span: heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: []byte{2}},
+			span: *heartbeatpb.NewTableSpan(0, []byte{1}, []byte{2}, 0),
 			covered: []*metapb.Region{
 				{StartKey: []byte{0}, EndKey: []byte{4}},
 			},
@@ -105,7 +105,7 @@ func TestCutRegionsLeftCoverSpan(t *testing.T) {
 				{StartKey: []byte{1}, EndKey: []byte{2}},
 				{StartKey: []byte{2}, EndKey: []byte{3}},
 			},
-			span: heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: []byte{3}},
+			span: *heartbeatpb.NewTableSpan(0, []byte{1}, []byte{3}, 0),
 			covered: []*metapb.Region{
 				{StartKey: []byte{1}, EndKey: []byte{2}},
 				{StartKey: []byte{2}, EndKey: []byte{3}},
@@ -116,7 +116,7 @@ func TestCutRegionsLeftCoverSpan(t *testing.T) {
 				{StartKey: []byte{1}, EndKey: []byte{2}},
 				{StartKey: []byte{3}, EndKey: []byte{4}},
 			},
-			span: heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: []byte{4}},
+			span: *heartbeatpb.NewTableSpan(0, []byte{1}, []byte{4}, 0),
 			covered: []*metapb.Region{
 				{StartKey: []byte{1}, EndKey: []byte{2}},
 			},
@@ -126,7 +126,7 @@ func TestCutRegionsLeftCoverSpan(t *testing.T) {
 				{StartKey: []byte{1}, EndKey: []byte{2}},
 				{StartKey: []byte{2}, EndKey: []byte{3}},
 			},
-			span: heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: []byte{4}},
+			span: *heartbeatpb.NewTableSpan(0, []byte{1}, []byte{4}, 0),
 			covered: []*metapb.Region{
 				{StartKey: []byte{1}, EndKey: []byte{2}},
 				{StartKey: []byte{2}, EndKey: []byte{3}},
@@ -136,7 +136,7 @@ func TestCutRegionsLeftCoverSpan(t *testing.T) {
 			regions: []*metapb.Region{
 				{StartKey: []byte{2}, EndKey: []byte{3}},
 			},
-			span:    heartbeatpb.TableSpan{StartKey: []byte{1}, EndKey: []byte{3}},
+			span:    *heartbeatpb.NewTableSpan(0, []byte{1}, []byte{3}, 0),
 			covered: nil,
 		},
 	}

@@ -123,7 +123,7 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableMoreThanNodeNum(t *testing.T) {
 		// generate 100 groups
 		totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, int64(i))
 		for j := 0; j < 4; j++ {
-			span := &heartbeatpb.TableSpan{TableID: int64(i), StartKey: appendNew(totalSpan.StartKey, byte('a'+j)), EndKey: appendNew(totalSpan.StartKey, byte('b'+j))}
+			span := heartbeatpb.NewTableSpan(int64(i), appendNew(totalSpan.StartKey, byte('a'+j)), appendNew(totalSpan.StartKey, byte('b'+j)), totalSpan.KeyspaceID)
 			dispatcherID := common.NewDispatcherID()
 			spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, common.DefaultMode)
 			spanReplica.SetNodeID(nodeID)
@@ -233,7 +233,7 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableLessThanNodeNum(t *testing.T) {
 		// generate 100 groups
 		totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, int64(i))
 		for j := 0; j < 2; j++ {
-			span := &heartbeatpb.TableSpan{TableID: int64(i), StartKey: appendNew(totalSpan.StartKey, byte('a'+j)), EndKey: appendNew(totalSpan.StartKey, byte('b'+j))}
+			span := heartbeatpb.NewTableSpan(int64(i), appendNew(totalSpan.StartKey, byte('a'+j)), appendNew(totalSpan.StartKey, byte('b'+j)), totalSpan.KeyspaceID)
 			dispatcherID := common.NewDispatcherID()
 			spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, common.DefaultMode)
 			spanReplica.SetNodeID(nodeIDList[j%2])
@@ -352,7 +352,7 @@ func TestSplitBalanceGroupsWithNodeRemove(t *testing.T) {
 		// generate 100 groups
 		totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, int64(i))
 		for j := 0; j < 6; j++ {
-			span := &heartbeatpb.TableSpan{TableID: int64(i), StartKey: appendNew(totalSpan.StartKey, byte('a'+j)), EndKey: appendNew(totalSpan.StartKey, byte('b'+j))}
+			span := heartbeatpb.NewTableSpan(int64(i), appendNew(totalSpan.StartKey, byte('a'+j)), appendNew(totalSpan.StartKey, byte('b'+j)), totalSpan.KeyspaceID)
 			dispatcherID := common.NewDispatcherID()
 			spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, common.DefaultMode)
 			spanReplica.SetNodeID(nodeIDList[j%3])
@@ -457,7 +457,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	// span1
 	startKey := appendNew(totalSpan.StartKey, byte('a'))
 	endKey := appendNew(totalSpan.StartKey, byte('b'))
-	span1 := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: startKey, EndKey: endKey}
+	span1 := heartbeatpb.NewTableSpan(int64(1), startKey, endKey, totalSpan.KeyspaceID)
 	spanReplica := replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span1, 1, common.DefaultMode)
 	spanReplica.SetNodeID(nodeIDList[1])
 	regionCache.SetRegions(fmt.Sprintf("%s-%s", span1.StartKey, span1.EndKey), []*tikv.Region{
@@ -497,7 +497,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	// span2
 	startKey = appendNew(totalSpan.StartKey, byte('b'))
 	endKey = appendNew(totalSpan.StartKey, byte('c'))
-	span2 := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: startKey, EndKey: endKey}
+	span2 := heartbeatpb.NewTableSpan(int64(1), startKey, endKey, totalSpan.KeyspaceID)
 	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span2, 1, common.DefaultMode)
 	spanReplica.SetNodeID(nodeIDList[0])
 	regionCache.SetRegions(fmt.Sprintf("%s-%s", span2.StartKey, span2.EndKey), []*tikv.Region{
@@ -522,7 +522,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	// span3
 	startKey = appendNew(totalSpan.StartKey, byte('c'))
 	endKey = appendNew(totalSpan.StartKey, byte('d'))
-	span3 := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: startKey, EndKey: endKey}
+	span3 := heartbeatpb.NewTableSpan(int64(1), startKey, endKey, totalSpan.KeyspaceID)
 	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span3, 1, common.DefaultMode)
 	spanReplica.SetNodeID(nodeIDList[1])
 	regionCache.SetRegions(fmt.Sprintf("%s-%s", span3.StartKey, span3.EndKey), []*tikv.Region{
@@ -547,7 +547,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	// span4
 	startKey = appendNew(totalSpan.StartKey, byte('d'))
 	endKey = appendNew(totalSpan.StartKey, byte('e'))
-	span4 := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: startKey, EndKey: endKey}
+	span4 := heartbeatpb.NewTableSpan(int64(1), startKey, endKey, totalSpan.KeyspaceID)
 	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span4, 1, common.DefaultMode)
 	spanReplica.SetNodeID(nodeIDList[2])
 	regionCache.SetRegions(fmt.Sprintf("%s-%s", span4.StartKey, span4.EndKey), []*tikv.Region{
@@ -572,7 +572,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	// span5
 	startKey = appendNew(totalSpan.StartKey, byte('e'))
 	endKey = appendNew(totalSpan.StartKey, byte('f'))
-	span5 := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: startKey, EndKey: endKey}
+	span5 := heartbeatpb.NewTableSpan(int64(1), startKey, endKey, totalSpan.KeyspaceID)
 	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span5, 1, common.DefaultMode)
 	spanReplica.SetNodeID(nodeIDList[0])
 	regionCache.SetRegions(fmt.Sprintf("%s-%s", span5.StartKey, span5.EndKey), []*tikv.Region{
@@ -597,7 +597,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	// span6
 	startKey = appendNew(totalSpan.StartKey, byte('f'))
 	endKey = totalSpan.EndKey
-	span6 := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: startKey, EndKey: endKey}
+	span6 := heartbeatpb.NewTableSpan(int64(1), startKey, endKey, totalSpan.KeyspaceID)
 	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span6, 1, common.DefaultMode)
 	spanReplica.SetNodeID(nodeIDList[2])
 	regionCache.SetRegions(fmt.Sprintf("%s-%s", span6.StartKey, span6.EndKey), []*tikv.Region{
@@ -1033,7 +1033,7 @@ func TestBalance(t *testing.T) {
 	s := NewController(cfID, 1, nil, replicaConfig, ddlSpan, nil, 1000, 0, common.DefaultKeyspace, false)
 	for i := 0; i < 100; i++ {
 		sz := common.TableIDToComparableSpan(common.DefaultKeyspaceID, int64(i))
-		span := &heartbeatpb.TableSpan{TableID: sz.TableID, StartKey: sz.StartKey, EndKey: sz.EndKey}
+		span := heartbeatpb.NewTableSpan(sz.TableID, sz.StartKey, sz.EndKey, sz.KeyspaceID)
 		dispatcherID := common.NewDispatcherID()
 		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, common.DefaultMode)
 		spanReplica.SetNodeID("node1")
@@ -1116,7 +1116,7 @@ func TestDefaultSpanIntoSplit(t *testing.T) {
 		},
 	}, ddlSpan, nil, 1000, 0, common.DefaultKeyspace, false)
 	totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
-	span := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: totalSpan.StartKey, EndKey: totalSpan.EndKey}
+	span := heartbeatpb.NewTableSpan(int64(1), totalSpan.StartKey, totalSpan.EndKey, totalSpan.KeyspaceID)
 	dispatcherID := common.NewDispatcherID()
 	spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, common.DefaultMode)
 	spanReplica.SetNodeID("node1")
@@ -1258,7 +1258,7 @@ func TestStoppedWhenMoving(t *testing.T) {
 	s := NewController(cfID, 1, nil, replicaConfig, ddlSpan, nil, 1000, 0, common.DefaultKeyspace, false)
 	for i := 0; i < 2; i++ {
 		sz := common.TableIDToComparableSpan(common.DefaultKeyspaceID, int64(i))
-		span := &heartbeatpb.TableSpan{TableID: sz.TableID, StartKey: sz.StartKey, EndKey: sz.EndKey}
+		span := heartbeatpb.NewTableSpan(sz.TableID, sz.StartKey, sz.EndKey, sz.KeyspaceID)
 		dispatcherID := common.NewDispatcherID()
 		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, common.DefaultMode)
 		spanReplica.SetNodeID("node1")
@@ -1309,7 +1309,7 @@ func TestFinishBootstrap(t *testing.T) {
 	s := NewController(cfID, 1, &mockThreadPool{},
 		config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0, common.DefaultKeyspace, false)
 	totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
-	span := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: totalSpan.StartKey, EndKey: totalSpan.EndKey}
+	span := heartbeatpb.NewTableSpan(int64(1), totalSpan.StartKey, totalSpan.EndKey, totalSpan.KeyspaceID)
 	schemaStore := eventservice.NewMockSchemaStore()
 	schemaStore.SetTables(
 		[]commonEvent.Table{
@@ -1405,8 +1405,8 @@ func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 		testutil.MockRegionWithKeyRange(2, appendNew(totalSpan2.StartKey, 'a'), totalSpan2.EndKey),
 	})
 
-	span1 := &heartbeatpb.TableSpan{TableID: 1, StartKey: appendNew(totalSpan.StartKey, 'a'), EndKey: appendNew(totalSpan.StartKey, 'b')}
-	span2 := &heartbeatpb.TableSpan{TableID: 1, StartKey: appendNew(totalSpan.StartKey, 'b'), EndKey: appendNew(totalSpan.StartKey, 'c')}
+	span1 := heartbeatpb.NewTableSpan(1, appendNew(totalSpan.StartKey, 'a'), appendNew(totalSpan.StartKey, 'b'), totalSpan.KeyspaceID)
+	span2 := heartbeatpb.NewTableSpan(1, appendNew(totalSpan.StartKey, 'b'), appendNew(totalSpan.StartKey, 'c'), totalSpan.KeyspaceID)
 
 	reportedSpans := []*heartbeatpb.BootstrapTableSpan{
 		{
@@ -1452,58 +1452,58 @@ func TestMapFindHole(t *testing.T) {
 	}{
 		{ // 0. all found.
 			spans: []*heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_0"), EndKey: []byte("t1_1")},
-				{StartKey: []byte("t1_1"), EndKey: []byte("t1_2")},
-				{StartKey: []byte("t1_2"), EndKey: []byte("t2_0")},
+				heartbeatpb.NewTableSpan(0, []byte("t1_0"), []byte("t1_1"), 0),
+				heartbeatpb.NewTableSpan(0, []byte("t1_1"), []byte("t1_2"), 0),
+				heartbeatpb.NewTableSpan(0, []byte("t1_2"), []byte("t2_0"), 0),
 			},
-			rang: &heartbeatpb.TableSpan{StartKey: []byte("t1_0"), EndKey: []byte("t2_0")},
+			rang: heartbeatpb.NewTableSpan(0, []byte("t1_0"), []byte("t2_0"), 0),
 		},
 		{ // 1. on hole in the middle.
 			spans: []*heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_0"), EndKey: []byte("t1_1")},
-				{StartKey: []byte("t1_3"), EndKey: []byte("t1_4")},
-				{StartKey: []byte("t1_4"), EndKey: []byte("t2_0")},
+				heartbeatpb.NewTableSpan(0, []byte("t1_0"), []byte("t1_1"), 0),
+				heartbeatpb.NewTableSpan(0, []byte("t1_3"), []byte("t1_4"), 0),
+				heartbeatpb.NewTableSpan(0, []byte("t1_4"), []byte("t2_0"), 0),
 			},
-			rang: &heartbeatpb.TableSpan{StartKey: []byte("t1_0"), EndKey: []byte("t2_0")},
+			rang: heartbeatpb.NewTableSpan(0, []byte("t1_0"), []byte("t2_0"), 0),
 			expectedHole: []*heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_1"), EndKey: []byte("t1_3")},
+				heartbeatpb.NewTableSpan(0, []byte("t1_1"), []byte("t1_3"), 0),
 			},
 		},
 		{ // 2. two holes in the middle.
 			spans: []*heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_0"), EndKey: []byte("t1_1")},
-				{StartKey: []byte("t1_2"), EndKey: []byte("t1_3")},
-				{StartKey: []byte("t1_4"), EndKey: []byte("t2_0")},
+				heartbeatpb.NewTableSpan(0, []byte("t1_0"), []byte("t1_1"), 0),
+				heartbeatpb.NewTableSpan(0, []byte("t1_2"), []byte("t1_3"), 0),
+				heartbeatpb.NewTableSpan(0, []byte("t1_4"), []byte("t2_0"), 0),
 			},
-			rang: &heartbeatpb.TableSpan{StartKey: []byte("t1_0"), EndKey: []byte("t2_0")},
+			rang: heartbeatpb.NewTableSpan(0, []byte("t1_0"), []byte("t2_0"), 0),
 			expectedHole: []*heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_1"), EndKey: []byte("t1_2")},
-				{StartKey: []byte("t1_3"), EndKey: []byte("t1_4")},
+				heartbeatpb.NewTableSpan(0, []byte("t1_1"), []byte("t1_2"), 0),
+				heartbeatpb.NewTableSpan(0, []byte("t1_3"), []byte("t1_4"), 0),
 			},
 		},
 		{ // 3. all missing.
 			spans: []*heartbeatpb.TableSpan{},
-			rang:  &heartbeatpb.TableSpan{StartKey: []byte("t1_0"), EndKey: []byte("t2_0")},
+			rang:  heartbeatpb.NewTableSpan(0, []byte("t1_0"), []byte("t2_0"), 0),
 			expectedHole: []*heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_0"), EndKey: []byte("t2_0")},
+				heartbeatpb.NewTableSpan(0, []byte("t1_0"), []byte("t2_0"), 0),
 			},
 		},
 		{ // 4. start not found
 			spans: []*heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_4"), EndKey: []byte("t2_0")},
+				heartbeatpb.NewTableSpan(0, []byte("t1_4"), []byte("t2_0"), 0),
 			},
-			rang: &heartbeatpb.TableSpan{StartKey: []byte("t1_0"), EndKey: []byte("t2_0")},
+			rang: heartbeatpb.NewTableSpan(0, []byte("t1_0"), []byte("t2_0"), 0),
 			expectedHole: []*heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_0"), EndKey: []byte("t1_4")},
+				heartbeatpb.NewTableSpan(0, []byte("t1_0"), []byte("t1_4"), 0),
 			},
 		},
 		{ // 5. end not found
 			spans: []*heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_0"), EndKey: []byte("t1_1")},
+				heartbeatpb.NewTableSpan(0, []byte("t1_0"), []byte("t1_1"), 0),
 			},
-			rang: &heartbeatpb.TableSpan{StartKey: []byte("t1_0"), EndKey: []byte("t2_0")},
+			rang: heartbeatpb.NewTableSpan(0, []byte("t1_0"), []byte("t2_0"), 0),
 			expectedHole: []*heartbeatpb.TableSpan{
-				{StartKey: []byte("t1_1"), EndKey: []byte("t2_0")},
+				heartbeatpb.NewTableSpan(0, []byte("t1_1"), []byte("t2_0"), 0),
 			},
 		},
 	}

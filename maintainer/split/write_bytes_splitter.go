@@ -56,12 +56,12 @@ func (m *writeBytesSplitter) split(
 	span *heartbeatpb.TableSpan,
 	spansNum int,
 ) []*heartbeatpb.TableSpan {
-	regions, err := m.pdAPIClient.ScanRegions(ctx, heartbeatpb.TableSpan{
-		TableID:    span.TableID,
-		StartKey:   span.StartKey,
-		EndKey:     span.EndKey,
-		KeyspaceID: m.keyspaceID,
-	})
+	regions, err := m.pdAPIClient.ScanRegions(ctx, *heartbeatpb.NewTableSpan(
+		span.TableID,
+		span.StartKey,
+		span.EndKey,
+		m.keyspaceID,
+	))
 	if err != nil {
 		// Skip split.
 		log.Warn("scan regions failed, skip split span",
@@ -151,12 +151,12 @@ func (m *writeBytesSplitter) splitRegionsByWrittenBytesV1(
 		// then we need to add more restSpans (restWeight / writeLimitPerSpan) to split the rest regions.
 		if restSpans == 1 {
 			if restWeight < int64(writeLimitPerSpan) {
-				spans = append(spans, &heartbeatpb.TableSpan{
-					TableID:    tableID,
-					StartKey:   decodeKey(regions[spanStartIndex].StartKey),
-					EndKey:     decodeKey(regions[len(regions)-1].EndKey),
-					KeyspaceID: m.keyspaceID,
-				})
+				spans = append(spans, heartbeatpb.NewTableSpan(
+					tableID,
+					decodeKey(regions[spanStartIndex].StartKey),
+					decodeKey(regions[len(regions)-1].EndKey),
+					m.keyspaceID,
+				))
 
 				lastSpanRegionCount := len(regions) - spanStartIndex
 				lastSpanWriteWeight := uint64(0)
@@ -178,12 +178,12 @@ func (m *writeBytesSplitter) splitRegionsByWrittenBytesV1(
 		// If the restRegions is less than equal to restSpans,
 		// then every region will be a span.
 		if restRegions <= restSpans {
-			spans = append(spans, &heartbeatpb.TableSpan{
-				TableID:    tableID,
-				StartKey:   decodeKey(regions[spanStartIndex].StartKey),
-				EndKey:     decodeKey(regions[i].EndKey),
-				KeyspaceID: m.keyspaceID,
-			})
+			spans = append(spans, heartbeatpb.NewTableSpan(
+				tableID,
+				decodeKey(regions[spanStartIndex].StartKey),
+				decodeKey(regions[i].EndKey),
+				m.keyspaceID,
+			))
 			regionCounts = append(regionCounts, regionCount)
 			weights = append(weights, spanWriteWeight)
 
@@ -200,12 +200,12 @@ func (m *writeBytesSplitter) splitRegionsByWrittenBytesV1(
 		// is larger than spanRegionLimit, then use the region range from
 		// spanStartIndex to i to as a span.
 		if spanWriteWeight > writeLimitPerSpan {
-			spans = append(spans, &heartbeatpb.TableSpan{
-				TableID:    tableID,
-				StartKey:   decodeKey(regions[spanStartIndex].StartKey),
-				EndKey:     decodeKey(regions[i].EndKey),
-				KeyspaceID: m.keyspaceID,
-			})
+			spans = append(spans, heartbeatpb.NewTableSpan(
+				tableID,
+				decodeKey(regions[spanStartIndex].StartKey),
+				decodeKey(regions[i].EndKey),
+				m.keyspaceID,
+			))
 			regionCounts = append(regionCounts, regionCount)
 			weights = append(weights, spanWriteWeight)
 			// reset the temp variables to start a new span

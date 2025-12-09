@@ -114,13 +114,12 @@ func (m *regionCountSplitter) split(
 				zap.Any("endKey", endKey))
 			return []*heartbeatpb.TableSpan{span}
 		}
-		spans = append(spans, &heartbeatpb.TableSpan{
-			TableID:    span.TableID,
-			StartKey:   startKey,
-			EndKey:     endKey,
-			KeyspaceID: m.keyspaceID,
-		},
-		)
+		spans = append(spans, heartbeatpb.NewTableSpan(
+			span.TableID,
+			startKey,
+			endKey,
+			m.keyspaceID,
+		))
 
 		if end == len(regions) {
 			break

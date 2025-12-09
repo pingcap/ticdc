@@ -110,11 +110,8 @@ func toHashableSpan(span heartbeatpb.TableSpan) hashableSpan {
 
 // toSpan converts to Span.
 func (h hashableSpan) toSpan() heartbeatpb.TableSpan {
-	return heartbeatpb.TableSpan{
-		TableID:  h.TableID,
-		StartKey: unsafeStringToBytes(h.StartKey),
-		EndKey:   unsafeStringToBytes(h.EndKey),
-	}
+	span := heartbeatpb.NewTableSpan(h.TableID, unsafeStringToBytes(h.StartKey), unsafeStringToBytes(h.EndKey), 0)
+	return *span
 }
 
 // unsafeStringToBytes converts string to byte without memory allocation.

@@ -36,11 +36,7 @@ var mockSink = sink.NewMockSink(common.BlackHoleSinkType)
 
 // createTestDispatcher creates a test dispatcher with given parameters
 func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.DispatcherID, tableID int64, startKey, endKey []byte) *dispatcher.EventDispatcher {
-	span := &heartbeatpb.TableSpan{
-		TableID:  tableID,
-		StartKey: startKey,
-		EndKey:   endKey,
-	}
+	span := heartbeatpb.NewTableSpan(tableID, startKey, endKey, 0)
 	var redoTs atomic.Uint64
 	redoTs.Store(math.MaxUint64)
 	defaultAtomicity := config.DefaultAtomicityLevel()

@@ -179,12 +179,8 @@ func TestFormatTableSpan(t *testing.T) {
 			isEmptyString: true,
 		},
 		{
-			name: "normal span",
-			input: &heartbeatpb.TableSpan{
-				TableID:  1,
-				StartKey: []byte("start"),
-				EndKey:   []byte("end"),
-			},
+			name:          "normal span",
+			input:         heartbeatpb.NewTableSpan(1, []byte("start"), []byte("end"), 0),
 			isEmptyString: false,
 		},
 	}

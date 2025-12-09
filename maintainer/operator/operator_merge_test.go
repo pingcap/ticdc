@@ -32,11 +32,7 @@ func setupMergeTestEnvironment(t *testing.T) (*span.Controller, []*replica.SpanR
 
 	// Create two consecutive spans to merge
 	dispatcherID1 := common.NewDispatcherID()
-	span1 := &heartbeatpb.TableSpan{
-		TableID:  100,
-		StartKey: []byte("a"),
-		EndKey:   []byte("m"),
-	}
+	span1 := heartbeatpb.NewTableSpan(100, []byte("a"), []byte("m"), 0)
 	status1 := &heartbeatpb.TableSpanStatus{
 		ID:              dispatcherID1.ToPB(),
 		ComponentStatus: heartbeatpb.ComponentState_Working,
@@ -52,11 +48,7 @@ func setupMergeTestEnvironment(t *testing.T) (*span.Controller, []*replica.SpanR
 	)
 
 	dispatcherID2 := common.NewDispatcherID()
-	span2 := &heartbeatpb.TableSpan{
-		TableID:  100,
-		StartKey: []byte("m"),
-		EndKey:   []byte("z"),
-	}
+	span2 := heartbeatpb.NewTableSpan(100, []byte("m"), []byte("z"), 0)
 	status2 := &heartbeatpb.TableSpanStatus{
 		ID:              dispatcherID2.ToPB(),
 		ComponentStatus: heartbeatpb.ComponentState_Working,

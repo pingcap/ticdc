@@ -34,7 +34,7 @@ func TestHashableSpan(t *testing.T) {
 }
 
 func TestHashableSpanHeapAlloc(t *testing.T) {
-	span := heartbeatpb.TableSpan{TableID: 1}
+	span := *heartbeatpb.NewTableSpan(1, nil, nil, 0)
 	for i := 0; i < 10; i++ {
 		span.StartKey = append(span.StartKey, byte(i))
 		span.EndKey = append(span.EndKey, byte(i))

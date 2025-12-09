@@ -26,11 +26,7 @@ import (
 func createTestRegionInfo(subID SubscriptionID, regionID uint64) regionInfo {
 	verID := tikv.NewRegionVerID(regionID, 1, 1)
 
-	span := heartbeatpb.TableSpan{
-		TableID:  1,
-		StartKey: []byte("start"),
-		EndKey:   []byte("end"),
-	}
+	span := *heartbeatpb.NewTableSpan(1, []byte("start"), []byte("end"), 0)
 
 	subscribedSpan := &subscribedSpan{
 		subID:   subID,

@@ -37,7 +37,7 @@ type mockPriorityTask struct {
 func newMockPriorityTask(priority int, description string) *mockPriorityTask {
 	// Create a minimal regionInfo for testing
 	verID := tikv.NewRegionVerID(1, 1, 1)
-	span := heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("z")}
+	span := *heartbeatpb.NewTableSpan(1, []byte("a"), []byte("z"), 0)
 
 	// Create a subscribedSpan with atomic resolvedTs
 	subscribedSpan := &subscribedSpan{
@@ -441,7 +441,7 @@ func TestPriorityQueue_RealPriorityTaskIntegration(t *testing.T) {
 
 	// Create real priority tasks with different types
 	verID := tikv.NewRegionVerID(1, 1, 1)
-	span := heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("z")}
+	span := *heartbeatpb.NewTableSpan(1, []byte("a"), []byte("z"), 0)
 
 	subscribedSpan := &subscribedSpan{
 		resolvedTs: atomic.Uint64{},

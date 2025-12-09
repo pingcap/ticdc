@@ -32,16 +32,8 @@ func TestSplitOperator_OriginNodeRemovedBeforeStopped(t *testing.T) {
 
 	// Define split spans
 	splitSpans := []*heartbeatpb.TableSpan{
-		{
-			TableID:  100,
-			StartKey: []byte("a"),
-			EndKey:   []byte("m"),
-		},
-		{
-			TableID:  100,
-			StartKey: []byte("m"),
-			EndKey:   []byte("z"),
-		},
+		heartbeatpb.NewTableSpan(100, []byte("a"), []byte("m"), 0),
+		heartbeatpb.NewTableSpan(100, []byte("m"), []byte("z"), 0),
 	}
 
 	// Split targets are empty, meaning let scheduler decide
@@ -83,16 +75,8 @@ func TestSplitOperator_OriginNodeRemovedAfterStopped(t *testing.T) {
 
 	// Define split spans
 	splitSpans := []*heartbeatpb.TableSpan{
-		{
-			TableID:  100,
-			StartKey: []byte("a"),
-			EndKey:   []byte("m"),
-		},
-		{
-			TableID:  100,
-			StartKey: []byte("m"),
-			EndKey:   []byte("z"),
-		},
+		heartbeatpb.NewTableSpan(100, []byte("a"), []byte("m"), 0),
+		heartbeatpb.NewTableSpan(100, []byte("m"), []byte("z"), 0),
 	}
 
 	// Split targets are empty, meaning let scheduler decide

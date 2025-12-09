@@ -34,10 +34,7 @@ import (
 var defaultAtomicity = config.DefaultAtomicityLevel()
 
 func getCompleteTableSpanWithTableID(keyspaceID uint32, tableID int64) (*heartbeatpb.TableSpan, error) {
-	tableSpan := &heartbeatpb.TableSpan{
-		KeyspaceID: keyspaceID,
-		TableID:    tableID,
-	}
+	tableSpan := heartbeatpb.NewTableSpan(tableID, nil, nil, keyspaceID)
 	startKey, endKey, err := common.GetKeyspaceTableRange(keyspaceID, tableSpan.TableID)
 	if err != nil {
 		return nil, err
@@ -59,9 +56,7 @@ func getCompleteTableSpan(keyspaceID uint32) (*heartbeatpb.TableSpan, error) {
 }
 
 func getUncompleteTableSpan() *heartbeatpb.TableSpan {
-	return &heartbeatpb.TableSpan{
-		TableID: 1,
-	}
+	return heartbeatpb.NewTableSpan(1, nil, nil, 0)
 }
 
 func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *EventDispatcher {

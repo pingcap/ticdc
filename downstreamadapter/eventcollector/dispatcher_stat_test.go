@@ -73,9 +73,7 @@ func (m *mockDispatcher) GetChangefeedID() common.ChangeFeedID {
 }
 
 func (m *mockDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
-	return &heartbeatpb.TableSpan{
-		TableID: 1,
-	}
+	return heartbeatpb.NewTableSpan(1, nil, nil, 0)
 }
 
 func (m *mockDispatcher) GetBDRMode() bool {
