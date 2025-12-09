@@ -494,6 +494,8 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 		return nil
 	}
 
+	panic("mock panic")
+
 	rowType := common.RowTypeInsert
 	if raw.IsDelete() {
 		rowType = common.RowTypeDelete
