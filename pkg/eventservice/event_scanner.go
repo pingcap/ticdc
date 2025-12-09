@@ -640,6 +640,62 @@ func (t *TxnEvent) AppendRow(
 	) (int, *integrity.Checksum, error),
 	filter filter.Filter,
 ) error {
+	defer func() {
+		if r := recover(); r != nil {
+			fields := []zap.Field{
+				zap.Any("panic", r),
+				zap.Bool("shouldSplitTxn", t.shouldSplitTxn),
+				zap.Int32("dmlEventMaxRows", t.DMLEventMaxRows),
+				zap.Int64("dmlEventMaxBytes", t.DMLEventMaxBytes),
+			}
+			if t.BatchDML != nil {
+				fields = append(fields,
+					zap.Int("batchDMLEventCount", len(t.BatchDML.DMLEvents)),
+					zap.Int32("batchDMLEventLength", t.BatchDML.Len()),
+				)
+			}
+			if rawEvent != nil {
+				fields = append(fields,
+					zap.Uint32("rawEventOpType", uint32(rawEvent.OpType)),
+					zap.Uint64("rawEventCommitTs", rawEvent.CRTs),
+					zap.Uint64("rawEventStartTs", rawEvent.StartTs),
+					zap.Uint64("rawEventRegionID", rawEvent.RegionID),
+					zap.Uint32("rawEventKeyLen", rawEvent.KeyLen),
+					zap.Uint32("rawEventValueLen", rawEvent.ValueLen),
+					zap.Uint32("rawEventOldValueLen", rawEvent.OldValueLen),
+					zap.Int("rawEventKeyBytes", len(rawEvent.Key)),
+					zap.Int("rawEventValueBytes", len(rawEvent.Value)),
+					zap.Int("rawEventOldValueBytes", len(rawEvent.OldValue)),
+					zap.Bool("rawEventIsUpdate", rawEvent.IsUpdate()),
+					zap.Bool("rawEventIsDelete", rawEvent.IsDelete()),
+				)
+			}
+			if t.CurrentDMLEvent != nil {
+				fields = append(fields,
+					zap.Stringer("dispatcherID", t.CurrentDMLEvent.DispatcherID),
+					zap.Int64("physicalTableID", t.CurrentDMLEvent.PhysicalTableID),
+					zap.Uint64("dmlStartTs", t.CurrentDMLEvent.StartTs),
+					zap.Uint64("dmlCommitTs", t.CurrentDMLEvent.CommitTs),
+					zap.Int32("currentDMLEventRows", t.CurrentDMLEvent.Len()),
+					zap.Int64("currentDMLEventSize", t.CurrentDMLEvent.GetSize()),
+				)
+				if t.CurrentDMLEvent.TableInfo != nil {
+					fields = append(fields,
+						zap.String("table", t.CurrentDMLEvent.TableInfo.TableName.String()),
+						zap.Uint64("tableInfoUpdateTs", t.CurrentDMLEvent.TableInfo.GetUpdateTS()),
+						zap.Bool("tablePKIsHandle", t.CurrentDMLEvent.TableInfo.PKIsHandle()),
+						zap.Any("tableInfo", t.CurrentDMLEvent.TableInfo),
+						zap.Any("tidbTableInfo", t.CurrentDMLEvent.TableInfo.ToTiDBTableInfo()),
+					)
+				} else {
+					fields = append(fields, zap.Bool("tableInfoIsNil", true))
+				}
+			}
+			log.Error("panic when appending row to DML event", fields...)
+			panic(r)
+		}
+	}()
+
 	if t.shouldSplitTxn && (t.CurrentDMLEvent.Len() >= t.DMLEventMaxRows || t.CurrentDMLEvent.GetSize() >= t.DMLEventMaxBytes) {
 		newDMLEvent := event.NewDMLEvent(
 			t.CurrentDMLEvent.DispatcherID,
