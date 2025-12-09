@@ -640,7 +640,6 @@ func (t *TxnEvent) AppendRow(
 	) (int, *integrity.Checksum, error),
 	filter filter.Filter,
 ) error {
-	currentDMLEvent := t.CurrentDMLEvent
 	defer func() {
 		if r := recover(); r != nil {
 			fields := []zap.Field{
@@ -671,22 +670,22 @@ func (t *TxnEvent) AppendRow(
 					zap.Bool("rawEventIsDelete", rawEvent.IsDelete()),
 				)
 			}
-			if currentDMLEvent != nil {
+			if t.CurrentDMLEvent != nil {
 				fields = append(fields,
-					zap.Stringer("dispatcherID", currentDMLEvent.DispatcherID),
-					zap.Int64("physicalTableID", currentDMLEvent.PhysicalTableID),
-					zap.Uint64("dmlStartTs", currentDMLEvent.StartTs),
-					zap.Uint64("dmlCommitTs", currentDMLEvent.CommitTs),
-					zap.Int32("currentDMLEventRows", currentDMLEvent.Len()),
-					zap.Int64("currentDMLEventSize", currentDMLEvent.GetSize()),
+					zap.Stringer("dispatcherID", t.CurrentDMLEvent.DispatcherID),
+					zap.Int64("physicalTableID", t.CurrentDMLEvent.PhysicalTableID),
+					zap.Uint64("dmlStartTs", t.CurrentDMLEvent.StartTs),
+					zap.Uint64("dmlCommitTs", t.CurrentDMLEvent.CommitTs),
+					zap.Int32("currentDMLEventRows", t.CurrentDMLEvent.Len()),
+					zap.Int64("currentDMLEventSize", t.CurrentDMLEvent.GetSize()),
 				)
-				if currentDMLEvent.TableInfo != nil {
+				if t.CurrentDMLEvent.TableInfo != nil {
 					fields = append(fields,
-						zap.String("table", currentDMLEvent.TableInfo.TableName.String()),
-						zap.Uint64("tableInfoUpdateTs", currentDMLEvent.TableInfo.GetUpdateTS()),
-						zap.Bool("tablePKIsHandle", currentDMLEvent.TableInfo.PKIsHandle()),
-						zap.Any("tableInfo", currentDMLEvent.TableInfo),
-						zap.Any("tidbTableInfo", currentDMLEvent.TableInfo.ToTiDBTableInfo()),
+						zap.String("table", t.CurrentDMLEvent.TableInfo.TableName.String()),
+						zap.Uint64("tableInfoUpdateTs", t.CurrentDMLEvent.TableInfo.GetUpdateTS()),
+						zap.Bool("tablePKIsHandle", t.CurrentDMLEvent.TableInfo.PKIsHandle()),
+						zap.Any("tableInfo", t.CurrentDMLEvent.TableInfo),
+						zap.Any("tidbTableInfo", t.CurrentDMLEvent.TableInfo.ToTiDBTableInfo()),
 					)
 				} else {
 					fields = append(fields, zap.Bool("tableInfoIsNil", true))
@@ -705,7 +704,6 @@ func (t *TxnEvent) AppendRow(
 			t.CurrentDMLEvent.CommitTs,
 			t.CurrentDMLEvent.TableInfo)
 		t.CurrentDMLEvent = newDMLEvent
-		currentDMLEvent = t.CurrentDMLEvent
 		err := t.BatchDML.AppendDMLEvent(newDMLEvent)
 		if err != nil {
 			return err

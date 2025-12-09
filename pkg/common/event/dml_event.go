@@ -113,6 +113,8 @@ func (b *BatchDMLEvent) AppendDMLEvent(dmlEvent *DMLEvent) error {
 		}
 	}
 
+	panic("mock panic")
+
 	dmlEvent.SetRows(b.Rows)
 
 	if len(b.DMLEvents) > 0 {
