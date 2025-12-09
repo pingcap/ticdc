@@ -516,6 +516,7 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 			WriteKeyThreshold:          c.Scheduler.WriteKeyThreshold,
 			SchedulingTaskCountPerNode: c.Scheduler.SchedulingTaskCountPerNode,
 			EnableSplittableCheck:      c.Scheduler.EnableSplittableCheck,
+			ForceSplit:                 c.Scheduler.ForceSplit,
 			BalanceScoreThreshold:      c.Scheduler.BalanceScoreThreshold,
 			MinTrafficPercentage:       c.Scheduler.MinTrafficPercentage,
 			MaxTrafficPercentage:       c.Scheduler.MaxTrafficPercentage,
@@ -845,6 +846,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 			WriteKeyThreshold:          cloned.Scheduler.WriteKeyThreshold,
 			SchedulingTaskCountPerNode: cloned.Scheduler.SchedulingTaskCountPerNode,
 			EnableSplittableCheck:      cloned.Scheduler.EnableSplittableCheck,
+			ForceSplit:                 c.Scheduler.ForceSplit,
 			BalanceScoreThreshold:      cloned.Scheduler.BalanceScoreThreshold,
 			MinTrafficPercentage:       cloned.Scheduler.MinTrafficPercentage,
 			MaxTrafficPercentage:       cloned.Scheduler.MaxTrafficPercentage,
@@ -1066,6 +1068,11 @@ type ChangefeedSchedulerConfig struct {
 	// If false, all tables can be split without checking.
 	// For MySQL downstream, this is always set to true for data consistency.
 	EnableSplittableCheck bool `json:"enable_splittable_check"`
+	// ForceSplit controls whether to skip the splittable table check for MySQL downstream.
+	// If true, the splittable table check will be skipped even if the downstream is MySQL.
+	// This is useful for advanced users who are aware of the risks of splitting unsplittable tables.
+	// Default value is false.
+	ForceSplit bool `json:"force_split"`
 	// These config is used for adjust the frequency of balancing traffic.
 	// BalanceScoreThreshold is the score threshold for balancing traffic. Larger value means less frequent balancing.
 	BalanceScoreThreshold int `json:"balance_score_threshold"`
