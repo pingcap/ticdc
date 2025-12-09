@@ -174,9 +174,8 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 }
 
 // AddWorkingSpans adds working spans
-func (c *Controller) AddWorkingSpans(tableMap utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication], enabledSplit bool) {
+func (c *Controller) AddWorkingSpans(tableMap utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication]) {
 	tableMap.Ascend(func(span *heartbeatpb.TableSpan, stm *replica.SpanReplication) bool {
-		stm.SetSplitEnabled(enabledSplit)
 		c.AddReplicatingSpan(stm)
 		return true
 	})
@@ -188,8 +187,7 @@ func (c *Controller) AddNewSpans(schemaID int64, tableSpans []*heartbeatpb.Table
 	for _, span := range tableSpans {
 		dispatcherID := common.NewDispatcherID()
 		span.KeyspaceID = c.GetkeyspaceID()
-		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs, c.mode)
-		replicaSet.SetSplitEnabled(enabledSplit)
+		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs, c.mode, enabledSplit)
 		c.AddAbsentReplicaSet(replicaSet)
 	}
 }
@@ -441,8 +439,8 @@ func (c *Controller) ReplaceReplicaSet(
 			common.NewDispatcherID(),
 			old.GetSchemaID(),
 			span, checkpointTs,
-			old.GetMode())
-		new.SetSplitEnabled(old.IsSplitEnabled())
+			old.GetMode(),
+			old.IsSplitEnabled())
 		news = append(news, new)
 	}
 

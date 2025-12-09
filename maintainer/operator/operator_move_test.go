@@ -57,6 +57,7 @@ func setupTestEnvironment(t *testing.T) (*span.Controller, common.ChangeFeedID, 
 			CheckpointTs:    1,
 		},
 		nodeA,
+		false,
 	)
 
 	spanController := span.NewController(changefeedID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
@@ -68,6 +69,7 @@ func setupTestEnvironment(t *testing.T) (*span.Controller, common.ChangeFeedID, 
 		tableSpan,
 		status,
 		nodeA,
+		false,
 	)
 
 	return spanController, changefeedID, replicaSet, nodeA, nodeB

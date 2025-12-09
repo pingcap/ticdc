@@ -45,6 +45,7 @@ func TestAddOperator_DestNodeRemoved(t *testing.T) {
 		tableSpan,
 		1000,
 		common.DefaultMode,
+		false,
 	)
 
 	spanController.AddAbsentReplicaSet(absentReplicaSet)
