@@ -42,7 +42,7 @@ const (
 	txnModePessimistic = "pessimistic"
 
 	// DefaultWorkerCount is the default number of workers.
-	DefaultWorkerCount = 32
+	DefaultWorkerCount = 128
 	// DefaultMaxTxnRow is the default max number of rows in a transaction.
 	DefaultMaxTxnRow = 256
 	// defaultMaxMultiUpdateRowCount is the default max number of rows in a
