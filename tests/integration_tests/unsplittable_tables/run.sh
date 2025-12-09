@@ -52,7 +52,7 @@ function run_for_force_split() {
 	run_sql "split table test.t1 between (1) and (100000) regions 50;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	sleep 10
-	
+
 	cdc_cli_changefeed create --sink-uri="$SINK_URI" -c "test2" --config="$CUR/conf/changefeed2.toml"
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 50
