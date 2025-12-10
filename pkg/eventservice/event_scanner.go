@@ -666,6 +666,7 @@ func (t *TxnEvent) AppendRow(
 				fields = append(fields,
 					zap.Any("handleColIDs", handleColIDs),
 					zap.Any("recordID", recordID),
+					zap.Bool("recordIDIsInt", recordID.IsInt()),
 					zap.Uint32("rawEventOpType", uint32(rawEvent.OpType)),
 					zap.Uint64("rawEventCommitTs", rawEvent.CRTs),
 					zap.Uint64("rawEventStartTs", rawEvent.StartTs),
