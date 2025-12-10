@@ -611,19 +611,6 @@ func (s *columnSchema) initIndexColumns() {
 				}
 				hasPrimary = true
 			}
-			// Fix: When PKIsHandle=false and IsCommonHandle=false, HandleColID might not be set correctly.
-			// In this case, we should set HandleColID to the primary key column IDs.
-			// This is important for rowcodec decoder to correctly identify handle columns.
-			if len(s.HandleColID) == 1 && s.HandleColID[0] == -1 {
-				// HandleColID is still the initial value, set it to primary key column IDs
-				s.HandleColID = make([]int64, 0, len(idx.Columns))
-				for _, col := range idx.Columns {
-					colInfo := s.Columns[col.Offset]
-					if IsColCDCVisible(colInfo) {
-						s.HandleColID = append(s.HandleColID, colInfo.ID)
-					}
-				}
-			}
 		} else if idx.Unique {
 			hasNotNullUK := true
 			// append index
