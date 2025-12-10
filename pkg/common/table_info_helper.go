@@ -449,7 +449,7 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 			rowColumnsCurrentOffset++
 			pkIsHandle = (tableInfo.PKIsHandle && mysql.HasPriKeyFlag(col.GetFlag())) || col.ID == model.ExtraHandleID
 			if pkIsHandle {
-				log.Info("fizz pk is handle", zap.Any("col", col))
+				log.Info("fizz pk is handle", zap.Any("col", col), zap.Any("tableName", tableInfo.Name.String()))
 				// pk is handle
 				colSchema.HandleKeyIDs[col.ID] = struct{}{}
 				colSchema.HandleColID = []int64{col.ID}
@@ -610,6 +610,19 @@ func (s *columnSchema) initIndexColumns() {
 					s.HandleKeyIDs[s.Columns[col.Offset].ID] = struct{}{}
 				}
 				hasPrimary = true
+			}
+			// Fix: When PKIsHandle=false and IsCommonHandle=false, HandleColID might not be set correctly.
+			// In this case, we should set HandleColID to the primary key column IDs.
+			// This is important for rowcodec decoder to correctly identify handle columns.
+			if len(s.HandleColID) == 1 && s.HandleColID[0] == -1 {
+				// HandleColID is still the initial value, set it to primary key column IDs
+				s.HandleColID = make([]int64, 0, len(idx.Columns))
+				for _, col := range idx.Columns {
+					colInfo := s.Columns[col.Offset]
+					if IsColCDCVisible(colInfo) {
+						s.HandleColID = append(s.HandleColID, colInfo.ID)
+					}
+				}
 			}
 		} else if idx.Unique {
 			hasNotNullUK := true
