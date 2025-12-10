@@ -744,7 +744,12 @@ func (c *Controller) UpdateChangefeed(ctx context.Context, change *config.Change
 	if cf == nil {
 		return errors.New("changefeed not found")
 	}
-	if err := c.backend.UpdateChangefeed(ctx, change, cf.GetStatus().CheckpointTs, config.ProgressStopping); err != nil {
+	progress := config.ProgressNone
+	state := cf.GetInfo().State
+	if state == config.StateFailed || state == config.StateFinished {
+		progress = config.ProgressStopping
+	}
+	if err := c.backend.UpdateChangefeed(ctx, change, cf.GetStatus().CheckpointTs, progress); err != nil {
 		return errors.Trace(err)
 	}
 	c.changefeedDB.ReplaceStoppedChangefeed(change)
