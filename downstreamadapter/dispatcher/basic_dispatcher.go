@@ -337,7 +337,6 @@ func (d *BasicDispatcher) ensureActiveActiveTableInfo(tableInfo *common.TableInf
 	}
 	requiredCols := []string{
 		commonEvent.OriginTsColumn,
-		commonEvent.CommitTsColumn,
 		commonEvent.SoftDeleteTimeColumn,
 	}
 	for _, col := range requiredCols {
