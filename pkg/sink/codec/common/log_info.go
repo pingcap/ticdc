@@ -131,6 +131,7 @@ func SetDDLMessageLogInfo(msg *Message, event *commonEvent.DDLEvent) {
 	}
 	logInfo.DDL = &DDLLogInfo{
 		Query:    event.Query,
+		StartTs:  event.GetStartTs(),
 		CommitTs: event.GetCommitTs(),
 	}
 	msg.LogInfo = logInfo

@@ -414,7 +414,7 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 			return err
 		}
 		if message == nil {
-			log.Info("Skip ddl event", zap.Uint64("commitTs", e.GetCommitTs()),
+			log.Info("Skip ddl event", zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", e.GetCommitTs()),
 				zap.String("query", e.Query),
 				zap.Stringer("changefeed", s.changefeedID))
 			continue
@@ -444,7 +444,7 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 	}
 	log.Info("kafka sink send DDL event",
 		zap.String("keyspace", s.changefeedID.Keyspace()), zap.String("changefeed", s.changefeedID.Name()),
-		zap.Any("commitTs", event.GetCommitTs()), zap.Any("event", event.GetDDLQuery()),
+		zap.Any("startTs", event.GetStartTs()), zap.Any("commitTs", event.GetCommitTs()), zap.Any("event", event.GetDDLQuery()),
 		zap.String("schema", event.GetSchemaName()), zap.String("table", event.GetTableName()))
 	return nil
 }

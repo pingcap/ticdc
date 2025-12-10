@@ -100,6 +100,10 @@ func (s *defaultSpanSplitChecker) AddReplica(replica *SpanReplication) {
 	if _, ok := s.allTasks[replica.ID]; ok {
 		return
 	}
+	if !replica.enabledSplit {
+		log.Debug("default span split checker: replica not enabled to split, skip add", zap.Stringer("changefeed", s.changefeedID), zap.String("replica", replica.ID.String()))
+		return
+	}
 	s.allTasks[replica.ID] = &spanSplitStatus{
 		SpanReplication: replica,
 		trafficScore:    0,

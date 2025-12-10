@@ -1059,6 +1059,9 @@ func (s *subscriptionClient) newSubscribedSpan(
 				state:      state,
 				create:     time.Now(),
 			}:
+			// it is ok to ignore resolve lock task when the channel is full
+			default:
+				metrics.SubscriptionClientResolveLockTaskDropCounter.Inc()
 			}
 		}
 	}

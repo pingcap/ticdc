@@ -96,8 +96,14 @@ func (c *Controller) FinishBootstrap(
 		return nil, errors.Trace(err)
 	}
 
+	// Build table splitability map for later use
+	tableSplitMap := make(map[int64]bool, len(tables))
+	for _, tbl := range tables {
+		tableSplitMap[tbl.TableID] = tbl.Splitable
+	}
+
 	// Step 3: Build working task map from bootstrap responses
-	workingTaskMap, redoWorkingTaskMap := c.buildWorkingTaskMap(allNodesResp)
+	workingTaskMap, redoWorkingTaskMap := c.buildWorkingTaskMap(allNodesResp, tableSplitMap)
 
 	// Step 4: Process tables and build schema info
 	schemaInfos := c.processTablesAndBuildSchemaInfo(tables, workingTaskMap, redoWorkingTaskMap, isMysqlCompatibleBackend)
@@ -145,6 +151,7 @@ func (c *Controller) determineStartTs(allNodesResp map[node.ID]*heartbeatpb.Main
 
 func (c *Controller) buildWorkingTaskMap(
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
+	tableSplitMap map[int64]bool,
 ) (
 	map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
 	map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
@@ -158,7 +165,8 @@ func (c *Controller) buildWorkingTaskMap(
 			if spanController.IsDDLDispatcher(dispatcherID) {
 				continue
 			}
-			spanReplication := c.createSpanReplication(spanInfo, node)
+			splitEnabled := spanController.ShouldEnableSplit(tableSplitMap[spanInfo.Span.TableID])
+			spanReplication := c.createSpanReplication(spanInfo, node, splitEnabled)
 			if common.IsRedoMode(spanInfo.Mode) {
 				addToWorkingTaskMap(redoWorkingTaskMap, spanInfo.Span, spanReplication)
 			} else {
@@ -205,6 +213,7 @@ func (c *Controller) processTableSpans(
 ) {
 	tableSpans, isTableWorking := workingTaskMap[table.TableID]
 	spanController := c.getSpanController(mode)
+	splitEnabled := spanController.ShouldEnableSplit(table.Splitable)
 
 	// Add new table if not working
 	if isTableWorking {
@@ -224,7 +233,7 @@ func (c *Controller) processTableSpans(
 		spanController.AddWorkingSpans(tableSpans)
 
 		if c.enableTableAcrossNodes {
-			c.handleTableHoles(spanController, table, tableSpans, tableSpan)
+			c.handleTableHoles(spanController, table, tableSpans, tableSpan, splitEnabled)
 		}
 		// Remove processed table from working task map
 		delete(workingTaskMap, table.TableID)
@@ -238,15 +247,16 @@ func (c *Controller) handleTableHoles(
 	table commonEvent.Table,
 	tableSpans utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
 	tableSpan *heartbeatpb.TableSpan,
+	splitEnabled bool,
 ) {
 	holes := findHoles(tableSpans, tableSpan)
 	if c.splitter != nil {
 		for _, hole := range holes {
 			spans := c.splitter.Split(context.Background(), hole, 0, split.SplitTypeRegionCount)
-			spanController.AddNewSpans(table.SchemaID, spans, c.startCheckpointTs)
+			spanController.AddNewSpans(table.SchemaID, spans, c.startCheckpointTs, splitEnabled)
 		}
 	} else {
-		spanController.AddNewSpans(table.SchemaID, holes, c.startCheckpointTs)
+		spanController.AddNewSpans(table.SchemaID, holes, c.startCheckpointTs, splitEnabled)
 	}
 }
 
@@ -296,7 +306,7 @@ func (c *Controller) prepareSchemaInfoResponse(
 	return initSchemaInfos
 }
 
-func (c *Controller) createSpanReplication(spanInfo *heartbeatpb.BootstrapTableSpan, node node.ID) *replica.SpanReplication {
+func (c *Controller) createSpanReplication(spanInfo *heartbeatpb.BootstrapTableSpan, node node.ID, splitEnabled bool) *replica.SpanReplication {
 	status := &heartbeatpb.TableSpanStatus{
 		ComponentStatus: spanInfo.ComponentStatus,
 		ID:              spanInfo.ID,
@@ -311,6 +321,7 @@ func (c *Controller) createSpanReplication(spanInfo *heartbeatpb.BootstrapTableS
 		spanInfo.Span,
 		status,
 		node,
+		splitEnabled,
 	)
 }
 
