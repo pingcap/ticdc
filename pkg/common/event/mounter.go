@@ -95,6 +95,10 @@ func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableI
 			zap.String("rawKey", fmt.Sprintf("%x", raw.Key)),
 			zap.String("recordID", recordID.String()),
 			zap.Int("chunkRows", chk.NumRows()))
+		handleColIDs, _, reqCols := tableInfo.GetRowColInfos()
+		log.Info("newChunkDecoderV2",
+			zap.Int64s("handleColIDs", handleColIDs),
+			zap.Any("reqCols", reqCols))
 		if !rowcodec.IsNewFormat(raw.OldValue) {
 			err = m.rawKVToChunkV1(raw.OldValue, tableInfo, chk, recordID)
 		} else {
