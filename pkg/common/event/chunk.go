@@ -98,7 +98,6 @@ func (m *mounter) rawKVToChunkV2(value []byte, tableInfo *common.TableInfo, chk 
 	// Create decoder with adjusted handleColIDs
 	defVal := func(i int, chk *chunk.Chunk) error {
 		if isIntHandleAndNotPKIsHandle {
-			log.Info("fizz found the column id in handleColIDs", zap.Int64s("handleColIDs", handleColIDs))
 			for _, colID := range handleColIDs {
 				if reqCols[i].ID == colID {
 					colDatum, err := decodeHandleToDatum(handle, reqCols[i].Ft, i)
