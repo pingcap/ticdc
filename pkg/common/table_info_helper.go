@@ -653,7 +653,8 @@ func (s *columnSchema) initIndexColumns() {
 		}
 	}
 
-	if handleIndexOffset < 0 || len(s.HandleKeyIDs) > 0 {
+	// if no handle index or has primary key, return directly
+	if handleIndexOffset < 0 || hasPrimary {
 		return
 	}
 
