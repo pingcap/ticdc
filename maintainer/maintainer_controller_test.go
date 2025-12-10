@@ -34,6 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler"
 	pkgoperator "github.com/pingcap/ticdc/pkg/scheduler/operator"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -45,9 +46,9 @@ import (
 
 var replicaConfig = &config.ReplicaConfig{
 	Scheduler: &config.ChangefeedSchedulerConfig{
-		BalanceScoreThreshold: 1,
-		MinTrafficPercentage:  0.8,
-		MaxTrafficPercentage:  1.2,
+		BalanceScoreThreshold: util.AddressOf(1),
+		MinTrafficPercentage:  util.AddressOf(0.8),
+		MaxTrafficPercentage:  util.AddressOf(1.2),
 	},
 }
 
@@ -110,11 +111,11 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableMoreThanNodeNum(t *testing.T) {
 		}, "node1", false)
 	s := NewController(cfID, 1, nil, &config.ReplicaConfig{
 		Scheduler: &config.ChangefeedSchedulerConfig{
-			EnableTableAcrossNodes: true,
-			WriteKeyThreshold:      500,
-			BalanceScoreThreshold:  1,
-			MinTrafficPercentage:   0.8,
-			MaxTrafficPercentage:   1.2,
+			EnableTableAcrossNodes: util.AddressOf(true),
+			WriteKeyThreshold:      util.AddressOf(500),
+			BalanceScoreThreshold:  util.AddressOf(1),
+			MinTrafficPercentage:   util.AddressOf(0.8),
+			MaxTrafficPercentage:   util.AddressOf(1.2),
 		},
 	}, ddlSpan, nil, 1000, 0, common.DefaultKeyspace, false)
 
@@ -218,11 +219,11 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableLessThanNodeNum(t *testing.T) {
 		}, "node1", false)
 	s := NewController(cfID, 1, nil, &config.ReplicaConfig{
 		Scheduler: &config.ChangefeedSchedulerConfig{
-			EnableTableAcrossNodes: true,
-			WriteKeyThreshold:      500,
-			BalanceScoreThreshold:  1,
-			MinTrafficPercentage:   0.8,
-			MaxTrafficPercentage:   1.2,
+			EnableTableAcrossNodes: util.AddressOf(true),
+			WriteKeyThreshold:      util.AddressOf(500),
+			BalanceScoreThreshold:  util.AddressOf(1),
+			MinTrafficPercentage:   util.AddressOf(0.8),
+			MaxTrafficPercentage:   util.AddressOf(1.2),
 		},
 	}, ddlSpan, nil, 1000, 0, common.DefaultKeyspace, false)
 
@@ -339,11 +340,11 @@ func TestSplitBalanceGroupsWithNodeRemove(t *testing.T) {
 		}, "node1", false)
 	s := NewController(cfID, 1, nil, &config.ReplicaConfig{
 		Scheduler: &config.ChangefeedSchedulerConfig{
-			EnableTableAcrossNodes: true,
-			WriteKeyThreshold:      500,
-			BalanceScoreThreshold:  1,
-			MinTrafficPercentage:   0.8,
-			MaxTrafficPercentage:   1.2,
+			EnableTableAcrossNodes: util.AddressOf(true),
+			WriteKeyThreshold:      util.AddressOf(500),
+			BalanceScoreThreshold:  util.AddressOf(1),
+			MinTrafficPercentage:   util.AddressOf(0.8),
+			MaxTrafficPercentage:   util.AddressOf(1.2),
 		},
 	}, ddlSpan, nil, 1000, 0, common.DefaultKeyspace, false)
 
@@ -438,12 +439,12 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 
 	controller := NewController(cfID, 1, nil, &config.ReplicaConfig{
 		Scheduler: &config.ChangefeedSchedulerConfig{
-			EnableTableAcrossNodes: true,
-			WriteKeyThreshold:      1000,
-			RegionThreshold:        20,
-			BalanceScoreThreshold:  1,
-			MinTrafficPercentage:   0.8,
-			MaxTrafficPercentage:   1.2,
+			EnableTableAcrossNodes: util.AddressOf(true),
+			WriteKeyThreshold:      util.AddressOf(1000),
+			RegionThreshold:        util.AddressOf(20),
+			BalanceScoreThreshold:  util.AddressOf(1),
+			MinTrafficPercentage:   util.AddressOf(0.8),
+			MaxTrafficPercentage:   util.AddressOf(1.2),
 		},
 	}, ddlSpan, nil, 1000, 0, common.DefaultKeyspace, false)
 
@@ -1106,13 +1107,13 @@ func TestDefaultSpanIntoSplit(t *testing.T) {
 		}, "node1", false)
 	controller := NewController(cfID, 1, nil, &config.ReplicaConfig{
 		Scheduler: &config.ChangefeedSchedulerConfig{
-			EnableTableAcrossNodes:     true,
-			WriteKeyThreshold:          1000,
-			RegionThreshold:            8,
-			SchedulingTaskCountPerNode: 10,
-			BalanceScoreThreshold:      1,
-			MinTrafficPercentage:       0.8,
-			MaxTrafficPercentage:       1.2,
+			EnableTableAcrossNodes:     util.AddressOf(true),
+			WriteKeyThreshold:          util.AddressOf(1000),
+			RegionThreshold:            util.AddressOf(8),
+			SchedulingTaskCountPerNode: util.AddressOf(10),
+			BalanceScoreThreshold:      util.AddressOf(1),
+			MinTrafficPercentage:       util.AddressOf(0.8),
+			MaxTrafficPercentage:       util.AddressOf(1.2),
 		},
 	}, ddlSpan, nil, 1000, 0, common.DefaultKeyspace, false)
 	totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
@@ -1379,12 +1380,12 @@ func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 		}, "node1", false)
 	defaultConfig := config.GetDefaultReplicaConfig().Clone()
 	defaultConfig.Scheduler = &config.ChangefeedSchedulerConfig{
-		EnableTableAcrossNodes: true,
-		RegionThreshold:        1,
-		RegionCountPerSpan:     1,
-		BalanceScoreThreshold:  1,
-		MinTrafficPercentage:   0.8,
-		MaxTrafficPercentage:   1.2,
+		EnableTableAcrossNodes: util.AddressOf(true),
+		RegionThreshold:        util.AddressOf(1),
+		RegionCountPerSpan:     util.AddressOf(1),
+		BalanceScoreThreshold:  util.AddressOf(1),
+		MinTrafficPercentage:   util.AddressOf(0.8),
+		MaxTrafficPercentage:   util.AddressOf(1.2),
 	}
 	s := NewController(cfID, 1, nil, defaultConfig, ddlSpan, nil, 1000, 0, common.DefaultKeyspace, false)
 	s.taskPool = &mockThreadPool{}
@@ -1555,14 +1556,14 @@ func TestLargeTableInitialization(t *testing.T) {
 	// Configure with the specified parameters
 	controller := NewController(cfID, 1, nil, &config.ReplicaConfig{
 		Scheduler: &config.ChangefeedSchedulerConfig{
-			EnableTableAcrossNodes:     true,
-			WriteKeyThreshold:          500,
-			RegionThreshold:            50,
-			RegionCountPerSpan:         10,
-			SchedulingTaskCountPerNode: 2,
-			BalanceScoreThreshold:      1,
-			MinTrafficPercentage:       0.8,
-			MaxTrafficPercentage:       1.2,
+			EnableTableAcrossNodes:     util.AddressOf(true),
+			WriteKeyThreshold:          util.AddressOf(500),
+			RegionThreshold:            util.AddressOf(50),
+			RegionCountPerSpan:         util.AddressOf(10),
+			SchedulingTaskCountPerNode: util.AddressOf(2),
+			BalanceScoreThreshold:      util.AddressOf(1),
+			MinTrafficPercentage:       util.AddressOf(0.8),
+			MaxTrafficPercentage:       util.AddressOf(1.2),
 		},
 	}, ddlSpan, nil, 1000, 0, common.DefaultKeyspace, false)
 

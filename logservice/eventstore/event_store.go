@@ -425,6 +425,8 @@ func (e *eventStore) RegisterDispatcher(
 		return false
 	}
 
+	enableDataSharing := config.GetGlobalServerConfig().Debug.EventStore.EnableDataSharing
+
 	lag := time.Since(oracle.GetTimeFromTS(startTs))
 	metrics.EventStoreRegisterDispatcherStartTsLagHist.Observe(lag.Seconds())
 	if lag >= 10*time.Second {
@@ -447,6 +449,7 @@ func (e *eventStore) RegisterDispatcher(
 				zap.Stringer("dispatcherID", dispatcherID),
 				zap.String("span", common.FormatTableSpan(dispatcherSpan)),
 				zap.Uint64("startTs", startTs),
+				zap.Bool("enableDataSharing", enableDataSharing),
 				zap.Bool("onlyReuse", onlyReuse),
 				zap.Duration("duration", time.Since(start)))
 		} else {
@@ -454,6 +457,7 @@ func (e *eventStore) RegisterDispatcher(
 				zap.Stringer("dispatcherID", dispatcherID),
 				zap.String("span", common.FormatTableSpan(dispatcherSpan)),
 				zap.Uint64("startTs", startTs),
+				zap.Bool("enableDataSharing", enableDataSharing),
 				zap.Bool("onlyReuse", onlyReuse),
 				zap.Duration("duration", time.Since(start)))
 		}
@@ -471,73 +475,75 @@ func (e *eventStore) RegisterDispatcher(
 		notifier(resolvedTs, latestCommitTs)
 	}
 
-	e.dispatcherMeta.Lock()
-	var bestMatch *subscriptionStat
-	if subStats, ok := e.dispatcherMeta.tableStats[dispatcherSpan.TableID]; ok {
-		for _, subStat := range subStats {
-			// Check if this subStat's span contains the dispatcherSpan
-			if bytes.Compare(subStat.tableSpan.StartKey, dispatcherSpan.StartKey) <= 0 &&
-				bytes.Compare(subStat.tableSpan.EndKey, dispatcherSpan.EndKey) >= 0 {
+	if enableDataSharing {
+		e.dispatcherMeta.Lock()
+		var bestMatch *subscriptionStat
+		if subStats, ok := e.dispatcherMeta.tableStats[dispatcherSpan.TableID]; ok {
+			for _, subStat := range subStats {
+				// Check if this subStat's span contains the dispatcherSpan
+				if bytes.Compare(subStat.tableSpan.StartKey, dispatcherSpan.StartKey) <= 0 &&
+					bytes.Compare(subStat.tableSpan.EndKey, dispatcherSpan.EndKey) >= 0 {
 
-				// For onlyReuse register request, we only consider initialized subStats
-				if onlyReuse && !subStat.initialized.Load() {
-					continue
-				}
+					// For onlyReuse register request, we only consider initialized subStats
+					if onlyReuse && !subStat.initialized.Load() {
+						continue
+					}
 
-				// Check whether the subStat ts range contains startTs
-				if subStat.checkpointTs.Load() > startTs || startTs > subStat.resolvedTs.Load() {
-					continue
-				}
+					// Check whether the subStat ts range contains startTs
+					if subStat.checkpointTs.Load() > startTs || startTs > subStat.resolvedTs.Load() {
+						continue
+					}
 
-				// If we find an exact match, use it immediately
-				if subStat.tableSpan.Equal(dispatcherSpan) {
-					stat.subStat = subStat
-					e.dispatcherMeta.dispatcherStats[dispatcherID] = stat
-					e.addSubscriberToSubStat(subStat, dispatcherID, &Subscriber{notifyFunc: wrappedNotifier})
-					e.dispatcherMeta.Unlock()
-					log.Info("reuse existing subscription with exact span match",
-						zap.Stringer("dispatcherID", dispatcherID),
-						zap.String("dispatcherSpan", common.FormatTableSpan(dispatcherSpan)),
-						zap.Uint64("startTs", startTs),
-						zap.Uint64("subscriptionID", uint64(subStat.subID)),
-						zap.String("subSpan", common.FormatTableSpan(subStat.tableSpan)),
-						zap.Uint64("checkpointTs", subStat.checkpointTs.Load()))
-					return true
-				}
+					// If we find an exact match, use it immediately
+					if subStat.tableSpan.Equal(dispatcherSpan) {
+						stat.subStat = subStat
+						e.dispatcherMeta.dispatcherStats[dispatcherID] = stat
+						e.addSubscriberToSubStat(subStat, dispatcherID, &Subscriber{notifyFunc: wrappedNotifier})
+						e.dispatcherMeta.Unlock()
+						log.Info("reuse existing subscription with exact span match",
+							zap.Stringer("dispatcherID", dispatcherID),
+							zap.String("dispatcherSpan", common.FormatTableSpan(dispatcherSpan)),
+							zap.Uint64("startTs", startTs),
+							zap.Uint64("subscriptionID", uint64(subStat.subID)),
+							zap.String("subSpan", common.FormatTableSpan(subStat.tableSpan)),
+							zap.Uint64("checkpointTs", subStat.checkpointTs.Load()))
+						return true
+					}
 
-				// Track the smallest containing span that meets ts requirements
-				// Note: this is still not bestMatch
-				// for example, if we have a dispatcher with span [b, c),
-				// it is hard to determine whether [a, d) or [b, h) is bestMatch without some statistics.
-				if bestMatch == nil ||
-					(bytes.Compare(subStat.tableSpan.StartKey, bestMatch.tableSpan.StartKey) >= 0 &&
-						bytes.Compare(subStat.tableSpan.EndKey, bestMatch.tableSpan.EndKey) <= 0) {
-					bestMatch = subStat
+					// Track the smallest containing span that meets ts requirements
+					// Note: this is still not bestMatch
+					// for example, if we have a dispatcher with span [b, c),
+					// it is hard to determine whether [a, d) or [b, h) is bestMatch without some statistics.
+					if bestMatch == nil ||
+						(bytes.Compare(subStat.tableSpan.StartKey, bestMatch.tableSpan.StartKey) >= 0 &&
+							bytes.Compare(subStat.tableSpan.EndKey, bestMatch.tableSpan.EndKey) <= 0) {
+						bestMatch = subStat
+					}
 				}
 			}
 		}
-	}
-	if bestMatch != nil {
-		stat.subStat = bestMatch
-		e.dispatcherMeta.dispatcherStats[dispatcherID] = stat
-		e.addSubscriberToSubStat(bestMatch, dispatcherID, &Subscriber{notifyFunc: wrappedNotifier})
+		if bestMatch != nil {
+			stat.subStat = bestMatch
+			e.dispatcherMeta.dispatcherStats[dispatcherID] = stat
+			e.addSubscriberToSubStat(bestMatch, dispatcherID, &Subscriber{notifyFunc: wrappedNotifier})
+			log.Info("reuse existing subscription with smallest containing span",
+				zap.Stringer("dispatcherID", dispatcherID),
+				zap.String("dispatcherSpan", common.FormatTableSpan(dispatcherSpan)),
+				zap.Uint64("startTs", startTs),
+				zap.Uint64("subscriptionID", uint64(bestMatch.subID)),
+				zap.String("subSpan", common.FormatTableSpan(bestMatch.tableSpan)),
+				zap.Uint64("resolvedTs", bestMatch.resolvedTs.Load()),
+				zap.Uint64("checkpointTs", bestMatch.checkpointTs.Load()),
+				zap.Bool("exactMatch", bestMatch.tableSpan.Equal(dispatcherSpan)))
+		}
 		e.dispatcherMeta.Unlock()
-		log.Info("reuse existing subscription with smallest containing span",
-			zap.Stringer("dispatcherID", dispatcherID),
-			zap.String("dispatcherSpan", common.FormatTableSpan(dispatcherSpan)),
-			zap.Uint64("startTs", startTs),
-			zap.Uint64("subscriptionID", uint64(bestMatch.subID)),
-			zap.String("subSpan", common.FormatTableSpan(bestMatch.tableSpan)),
-			zap.Uint64("resolvedTs", bestMatch.resolvedTs.Load()),
-			zap.Uint64("checkpointTs", bestMatch.checkpointTs.Load()),
-			zap.Bool("exactMatch", bestMatch.tableSpan.Equal(dispatcherSpan)))
-		// when onlyReuse is true, we don't need a exact span match
+
+		// when onlyReuse is true, we never create new subscription
 		if onlyReuse {
-			return true
+			return bestMatch != nil
 		}
 	} else {
-		e.dispatcherMeta.Unlock()
-		// when onlyReuse is true, we never create new subscription
+		// when onlyReuse is true, if data sharing is disabled, just return because we never create new subscription
 		if onlyReuse {
 			return false
 		}

@@ -33,6 +33,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
@@ -182,11 +183,11 @@ func NewSplitSpanChecker(changefeedID common.ChangeFeedID, groupID replica.Group
 		changefeedID:           changefeedID,
 		groupID:                groupID,
 		allTasks:               make(map[common.DispatcherID]*splitSpanStatus),
-		writeThreshold:         schedulerCfg.WriteKeyThreshold,
-		regionThreshold:        schedulerCfg.RegionThreshold,
-		balanceScoreThreshold:  schedulerCfg.BalanceScoreThreshold,
-		minTrafficPercentage:   schedulerCfg.MinTrafficPercentage,
-		maxTrafficPercentage:   schedulerCfg.MaxTrafficPercentage,
+		writeThreshold:         util.GetOrZero(schedulerCfg.WriteKeyThreshold),
+		regionThreshold:        util.GetOrZero(schedulerCfg.RegionThreshold),
+		balanceScoreThreshold:  util.GetOrZero(schedulerCfg.BalanceScoreThreshold),
+		minTrafficPercentage:   util.GetOrZero(schedulerCfg.MinTrafficPercentage),
+		maxTrafficPercentage:   util.GetOrZero(schedulerCfg.MaxTrafficPercentage),
 		regionCache:            regionCache,
 		mergeThreshold:         mergeThreshold,
 		mergeCheckCount:        0,
