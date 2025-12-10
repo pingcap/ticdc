@@ -80,10 +80,6 @@ func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableI
 		return 0, nil, nil
 	}
 
-	log.Info("DecodeToChunk",
-		zap.Any("tableInfo", tableInfo),
-		zap.Bool("isIntHandle", recordID.IsInt()))
-
 	var (
 		decoder         *rowcodec.ChunkDecoder
 		preChecksum     uint32
@@ -95,6 +91,10 @@ func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableI
 	prev := chk.NumRows()
 	count := 0
 	if len(raw.OldValue) != 0 {
+		log.Info("decoding old value",
+			zap.String("rawKey", fmt.Sprintf("%x", raw.Key)),
+			zap.String("recordID", recordID.String()),
+			zap.Int("chunkRows", chk.NumRows()))
 		if !rowcodec.IsNewFormat(raw.OldValue) {
 			err = m.rawKVToChunkV1(raw.OldValue, tableInfo, chk, recordID)
 		} else {
