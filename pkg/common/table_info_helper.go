@@ -361,7 +361,7 @@ type columnSchema struct {
 
 	// TiCDC only replicates table has primary key or not null unique key.
 	// * If there is primary key, it's the handle key
-	// * Otherwise, it's the unique key. If there are multiple unique keys, it's the one with the longest length
+	// * Otherwise, it's the unique key. If there are multiple unique keys, it's the longest one.
 	// * If there are multiple unique key with the same length, it the first one.
 	HandleKeyIDs map[int64]struct{} `json:"handle_key_ids"`
 	// HandleKeyIDList store the colID list of the HandleKeyIDs in order.
