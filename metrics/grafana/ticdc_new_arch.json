@@ -12483,10 +12483,10 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_dynamic_stream_event_chan_size{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance,component)",
+              "expr": "sum(rate(ticdc_dynamic_stream_event_chan_size{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance, module)",
               "hide": false,
               "interval": "",
-              "legendFormat": "{{component}}-Input-chanel-len-{{instance}}",
+              "legendFormat": "{{module}}-Input-chanel-len-{{instance}}",
               "refId": "B"
             }
           ],
@@ -12580,10 +12580,10 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_dynamic_stream_pending_queue_len{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\",}[1m])) by (instance,component)",
+              "expr": "sum(rate(ticdc_dynamic_stream_pending_queue_len{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\",}[1m])) by (instance, module)",
               "hide": false,
               "interval": "",
-              "legendFormat": "{{component}}-pending-queue-len-{{instance}}",
+              "legendFormat": "{{module}}-pending-queue-len-{{instance}}",
               "refId": "B"
             }
           ],
