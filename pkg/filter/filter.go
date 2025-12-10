@@ -22,6 +22,7 @@ import (
 	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
@@ -277,10 +278,10 @@ func (s *SharedFilterStorage) GetOrSetFilter(
 		f := &config.EventFilterRule{
 			Matcher:                  rule.Matcher,
 			IgnoreSQL:                rule.IgnoreSql,
-			IgnoreInsertValueExpr:    rule.IgnoreInsertValueExpr,
-			IgnoreUpdateNewValueExpr: rule.IgnoreUpdateNewValueExpr,
-			IgnoreUpdateOldValueExpr: rule.IgnoreUpdateOldValueExpr,
-			IgnoreDeleteValueExpr:    rule.IgnoreDeleteValueExpr,
+			IgnoreInsertValueExpr:    util.AddressOf(rule.IgnoreInsertValueExpr),
+			IgnoreUpdateNewValueExpr: util.AddressOf(rule.IgnoreUpdateNewValueExpr),
+			IgnoreUpdateOldValueExpr: util.AddressOf(rule.IgnoreUpdateOldValueExpr),
+			IgnoreDeleteValueExpr:    util.AddressOf(rule.IgnoreDeleteValueExpr),
 		}
 		for _, e := range rule.IgnoreEvent {
 			f.IgnoreEvent = append(f.IgnoreEvent, bf.EventType(e))

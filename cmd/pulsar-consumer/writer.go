@@ -85,7 +85,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 		partitionTableAccessor: common.NewPartitionTableAccessor(),
 		ddlList:                make([]*commonEvent.DDLEvent, 0),
 		ddlWithMaxCommitTs:     make(map[int64]uint64),
-		enableTableAcrossNodes: o.replicaConfig.Scheduler.EnableTableAcrossNodes,
+		enableTableAcrossNodes: putil.GetOrZero(o.replicaConfig.Scheduler.EnableTableAcrossNodes),
 	}
 	var (
 		db  *sql.DB

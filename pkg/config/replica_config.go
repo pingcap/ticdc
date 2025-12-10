@@ -42,17 +42,15 @@ const (
 )
 
 var defaultReplicaConfig = &ReplicaConfig{
-	MemoryQuota:        DefaultChangefeedMemoryQuota,
-	CaseSensitive:      false,
-	CheckGCSafePoint:   true,
+	MemoryQuota:        util.AddressOf(uint64(DefaultChangefeedMemoryQuota)),
+	CaseSensitive:      util.AddressOf(false),
+	CheckGCSafePoint:   util.AddressOf(true),
 	EnableSyncPoint:    util.AddressOf(false),
 	EnableTableMonitor: util.AddressOf(false),
 	SyncPointInterval:  util.AddressOf(10 * time.Minute),
 	SyncPointRetention: util.AddressOf(24 * time.Hour),
 	BDRMode:            util.AddressOf(false),
-	Filter: &FilterConfig{
-		Rules: []string{"*.*"},
-	},
+	Filter:             NewDefaultFilterConfig(),
 	Mounter: &MounterConfig{
 		WorkerNum: 16,
 	},
@@ -81,37 +79,40 @@ var defaultReplicaConfig = &ReplicaConfig{
 		Debezium:                         &DebeziumConfig{OutputOldValue: true},
 	},
 	Consistent: &ConsistentConfig{
-		Level:                 "none",
-		MaxLogSize:            redo.DefaultMaxLogSize,
-		FlushIntervalInMs:     redo.DefaultFlushIntervalInMs,
-		MetaFlushIntervalInMs: redo.DefaultMetaFlushIntervalInMs,
-		EncodingWorkerNum:     redo.DefaultEncodingWorkerNum,
-		FlushWorkerNum:        redo.DefaultFlushWorkerNum,
-		Storage:               "",
-		UseFileBackend:        false,
-		Compression:           "",
+		Level:                 util.AddressOf("none"),
+		MaxLogSize:            util.AddressOf(redo.DefaultMaxLogSize),
+		FlushIntervalInMs:     util.AddressOf(int64(redo.DefaultFlushIntervalInMs)),
+		MetaFlushIntervalInMs: util.AddressOf(int64(redo.DefaultMetaFlushIntervalInMs)),
+		EncodingWorkerNum:     util.AddressOf(redo.DefaultEncodingWorkerNum),
+		FlushWorkerNum:        util.AddressOf(redo.DefaultFlushWorkerNum),
+		Storage:               util.AddressOf(""),
+		UseFileBackend:        util.AddressOf(false),
+		Compression:           util.AddressOf(""),
 		MemoryUsage: &ConsistentMemoryUsage{
 			MemoryQuotaPercentage: 50,
 		},
 	},
 	Scheduler: &ChangefeedSchedulerConfig{
-		EnableTableAcrossNodes:     false,
-		RegionThreshold:            10_000,
-		WriteKeyThreshold:          0,
-		SchedulingTaskCountPerNode: 20,  // TODO: choose a btter value
-		RegionCountPerSpan:         100, // TODO: choose a btter value
-		EnableSplittableCheck:      false,
-		ForceSplit:                 false,
-		BalanceScoreThreshold:      20,
-		MinTrafficPercentage:       0.8,
-		MaxTrafficPercentage:       1.25,
+		EnableTableAcrossNodes:     util.AddressOf(false),
+		RegionThreshold:            util.AddressOf(10_000),
+		WriteKeyThreshold:          util.AddressOf(0),
+		SchedulingTaskCountPerNode: util.AddressOf(20),  // TODO: choose a btter value
+		RegionCountPerSpan:         util.AddressOf(100), // TODO: choose a btter value
+		EnableSplittableCheck:      util.AddressOf(false),
+		ForceSplit:                 util.AddressOf(false),
+		BalanceScoreThreshold:      util.AddressOf(20),
+		MinTrafficPercentage:       util.AddressOf(0.8),
+		MaxTrafficPercentage:       util.AddressOf(1.25),
 	},
 	Integrity: &integrity.Config{
-		IntegrityCheckLevel:   integrity.CheckLevelNone,
-		CorruptionHandleLevel: integrity.CorruptionHandleLevelWarn,
+		IntegrityCheckLevel:   util.AddressOf(integrity.CheckLevelNone),
+		CorruptionHandleLevel: util.AddressOf(integrity.CorruptionHandleLevelWarn),
 	},
 	ChangefeedErrorStuckDuration: util.AddressOf(time.Minute * 30),
-	SyncedStatus:                 &SyncedStatusConfig{SyncedCheckInterval: 5 * 60, CheckpointInterval: 15},
+	SyncedStatus: &SyncedStatusConfig{
+		SyncedCheckInterval: util.AddressOf(int64(5 * 60)),
+		CheckpointInterval:  util.AddressOf(int64(15)),
+	},
 }
 
 // GetDefaultReplicaConfig returns the default replica config.
@@ -135,16 +136,16 @@ func (d *Duration) UnmarshalText(text []byte) error {
 type ReplicaConfig replicaConfig
 
 type replicaConfig struct {
-	MemoryQuota      uint64 `toml:"memory-quota" json:"memory-quota"`
-	CaseSensitive    bool   `toml:"case-sensitive" json:"case-sensitive"`
-	ForceReplicate   bool   `toml:"force-replicate" json:"force-replicate"`
-	CheckGCSafePoint bool   `toml:"check-gc-safe-point" json:"check-gc-safe-point"`
+	MemoryQuota      *uint64 `toml:"memory-quota" json:"memory-quota,omitempty"`
+	CaseSensitive    *bool   `toml:"case-sensitive" json:"case-sensitive,omitempty"`
+	ForceReplicate   *bool   `toml:"force-replicate" json:"force-replicate,omitempty"`
+	CheckGCSafePoint *bool   `toml:"check-gc-safe-point" json:"check-gc-safe-point,omitempty"`
 	// EnableSyncPoint is only available when the downstream is a Database.
 	EnableSyncPoint    *bool `toml:"enable-sync-point" json:"enable-sync-point,omitempty"`
 	EnableTableMonitor *bool `toml:"enable-table-monitor" json:"enable-table-monitor"`
 	// IgnoreIneligibleTable is used to store the user's config when creating a changefeed.
 	// not used in the changefeed's lifecycle.
-	IgnoreIneligibleTable bool `toml:"ignore-ineligible-table" json:"ignore-ineligible-table"`
+	IgnoreIneligibleTable *bool `toml:"ignore-ineligible-table" json:"ignore-ineligible-table,omitempty"`
 
 	// BDR(Bidirectional Replication) is a feature that allows users to
 	// replicate data of same tables from TiDB-1 to TiDB-2 and vice versa.
@@ -285,7 +286,7 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 						minSyncPointRetention.String()))
 		}
 	}
-	if c.MemoryQuota == uint64(0) {
+	if util.GetOrZero(c.MemoryQuota) == uint64(0) {
 		c.FixMemoryQuota()
 	}
 	if c.Scheduler == nil {
@@ -303,7 +304,7 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 		default:
 			if c.Integrity.Enabled() {
 				log.Warn("integrity checksum only support kafka sink now, disable integrity")
-				c.Integrity.IntegrityCheckLevel = integrity.CheckLevelNone
+				c.Integrity.IntegrityCheckLevel = util.AddressOf(integrity.CheckLevelNone)
 			}
 		}
 
@@ -341,7 +342,7 @@ func (c *ReplicaConfig) FixScheduler(inheritV66 bool) {
 
 // FixMemoryQuota adjusts memory quota to default value
 func (c *ReplicaConfig) FixMemoryQuota() {
-	c.MemoryQuota = DefaultChangefeedMemoryQuota
+	c.MemoryQuota = util.AddressOf(uint64(DefaultChangefeedMemoryQuota))
 }
 
 // isSinkCompatibleWithSpanReplication returns true if the sink uri is
