@@ -81,6 +81,7 @@ func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableI
 	}
 
 	log.Info("DecodeToChunk",
+		zap.Any("tableInfo", tableInfo),
 		zap.Bool("isIntHandle", recordID.IsInt()))
 
 	var (
