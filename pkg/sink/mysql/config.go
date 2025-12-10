@@ -131,6 +131,8 @@ type Config struct {
 
 	HasVectorType bool // HasVectorType is true if the column is vector type
 
+	EnableActiveActive bool
+
 	// DryRun is used to enable dry-run mode. In dry-run mode, the writer will not write data to the downstream.
 	DryRun bool
 	// DryRunDelay is the delay time for dry-run mode, it is used to simulate the delay time of real write.
@@ -287,6 +289,7 @@ func NewMysqlConfigAndDB(
 	if err != nil {
 		return nil, nil, err
 	}
+	cfg.EnableActiveActive = config.EnableActiveActive
 
 	dsnStr, err := GenerateDSN(ctx, cfg)
 	if err != nil {
