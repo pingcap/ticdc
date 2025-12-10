@@ -60,7 +60,8 @@ function run() {
 		"region_count_per_span": 100,
 		"region_threshold": 10000,
 		"scheduling_task_count_per_node": 20,
-		"write_key_threshold": 0
+		"write_key_threshold": 0,
+		"force_split": false
 	}
 EOF
 	)
