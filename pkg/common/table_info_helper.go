@@ -476,7 +476,6 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 				}
 
 			}
-			log.Info("col init", zap.Any("pkIsHandle", pkIsHandle), zap.Any("tableInfo.PKIsHandle", tableInfo.PKIsHandle), zap.Int64("col.ID", col.ID), zap.Any("model.ExtraHandleID", model.ExtraHandleID), zap.Any("mysql.HasPriKeyFlag(col.GetFlag()))", mysql.HasPriKeyFlag(col.GetFlag())))
 		} else {
 			colSchema.VirtualColumnsOffset = append(colSchema.VirtualColumnsOffset, i)
 		}
@@ -493,7 +492,6 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 	colSchema.initRowColInfosWithoutVirtualCols()
 	colSchema.InitPreSQLs(tableInfo.Name.O)
 	colSchema.initIndexColumns()
-	log.Info("new column schema created", zap.Any("colSchema.HandleColID", colSchema.HandleColID), zap.Any("HandleKeyIDs", colSchema.HandleKeyIDs))
 	return colSchema
 }
 
