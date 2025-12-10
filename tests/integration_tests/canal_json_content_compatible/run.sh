@@ -20,8 +20,6 @@ function run() {
 	# start tidb cluster
 	start_tidb_cluster --workdir $WORK_DIR
 
-	cd $WORK_DIR
-
 	TOPIC_NAME="ticdc-canal-json-content-compatible-$RANDOM"
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
@@ -62,7 +60,7 @@ function run() {
 	cleanup_process $CDC_BINARY
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 run $*
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

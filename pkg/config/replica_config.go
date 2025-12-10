@@ -96,11 +96,12 @@ var defaultReplicaConfig = &ReplicaConfig{
 	},
 	Scheduler: &ChangefeedSchedulerConfig{
 		EnableTableAcrossNodes:     false,
-		RegionThreshold:            100_000,
+		RegionThreshold:            10_000,
 		WriteKeyThreshold:          0,
 		SchedulingTaskCountPerNode: 20,  // TODO: choose a btter value
 		RegionCountPerSpan:         100, // TODO: choose a btter value
 		EnableSplittableCheck:      false,
+		ForceSplit:                 false,
 		BalanceScoreThreshold:      20,
 		MinTrafficPercentage:       0.8,
 		MaxTrafficPercentage:       1.25,

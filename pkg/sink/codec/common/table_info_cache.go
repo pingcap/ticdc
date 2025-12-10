@@ -116,6 +116,15 @@ func (m *PartitionTableAccessor) Add(schema, table string) {
 	log.Info("add partition table to the accessor", zap.String("schema", schema), zap.String("table", table))
 }
 
+func (m *PartitionTableAccessor) Drop(schema, table string) {
+	key := newAccessKey(schema, table)
+	_, ok := m.memo[key]
+	if ok {
+		delete(m.memo, key)
+		log.Info("drop partition table to the accessor", zap.String("schema", schema), zap.String("table", table))
+	}
+}
+
 func (m *PartitionTableAccessor) IsPartitionTable(schema, table string) bool {
 	key := newAccessKey(schema, table)
 	_, ok := m.memo[key]

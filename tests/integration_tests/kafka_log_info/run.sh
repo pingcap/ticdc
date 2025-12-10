@@ -22,7 +22,7 @@ function build_sink_uri() {
 
 function cleanup_changefeed() {
 	local id=$1
-	cdc cli changefeed remove --pd="${pd_addr}" --changefeed-id="$id" >/dev/null 2>&1 || true
+	cdc_cli_changefeed remove --pd="${pd_addr}" --changefeed-id="$id" >/dev/null 2>&1 || true
 }
 
 function stop_cdc() {

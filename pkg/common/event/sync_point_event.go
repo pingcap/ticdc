@@ -27,12 +27,9 @@ const (
 )
 
 // Implement Event / FlushEvent / BlockEvent interface
-// CommitTsList contains the commit ts of sync point.
-// If a period of time has no other dml and ddl, commitTsList may contains multiple commit ts in order.
-// Otherwise, the commitTsList only contains one commit ts.
 type SyncPointEvent struct {
 	DispatcherID common.DispatcherID
-	CommitTsList []uint64
+	CommitTs     uint64
 	// The seq of the event. It is set by event service.
 	Seq uint64
 	// The epoch of the event. It is set by event service.
@@ -41,10 +38,10 @@ type SyncPointEvent struct {
 	PostTxnFlushed []func()
 }
 
-func NewSyncPointEvent(id common.DispatcherID, commitTsList []uint64, seq uint64, epoch uint64) *SyncPointEvent {
+func NewSyncPointEvent(id common.DispatcherID, commitTs uint64, seq uint64, epoch uint64) *SyncPointEvent {
 	return &SyncPointEvent{
 		DispatcherID: id,
-		CommitTsList: commitTsList,
+		CommitTs:     commitTs,
 		Seq:          seq,
 		Epoch:        epoch,
 		Version:      SyncPointEventVersion1,
@@ -59,22 +56,18 @@ func (e *SyncPointEvent) GetDispatcherID() common.DispatcherID {
 	return e.DispatcherID
 }
 
-func (e *SyncPointEvent) GetCommitTsList() []common.Ts {
-	return e.CommitTsList
-}
-
 func (e *SyncPointEvent) GetCommitTs() common.Ts {
-	return e.CommitTsList[0]
+	return e.CommitTs
 }
 
 func (e *SyncPointEvent) GetStartTs() common.Ts {
-	return e.CommitTsList[0]
+	return e.CommitTs
 }
 
 func (e *SyncPointEvent) GetSize() int64 {
 	// Size does not include header or version (those are only for serialization)
-	// Only business data: Seq(8) + Epoch(8) + DispatcherID + len(CommitTsList)(4) + CommitTsList
-	return int64(8 + 8 + e.DispatcherID.GetSize() + 4 + 8*len(e.CommitTsList))
+	// Only business data: Seq(8) + Epoch(8) + DispatcherID + CommitTs(8)
+	return int64(8 + 8 + e.DispatcherID.GetSize() + 8)
 }
 
 func (e *SyncPointEvent) IsPaused() bool {
@@ -168,8 +161,8 @@ func (e *SyncPointEvent) Unmarshal(data []byte) error {
 
 func (e SyncPointEvent) encodeV1() ([]byte, error) {
 	// Note: version is now handled in the header by Marshal(), not here
-	// payload: Seq + Epoch + len(CommitTsList) + CommitTsList + DispatcherID
-	payloadSize := 8 + 8 + 4 + 8*len(e.CommitTsList) + e.DispatcherID.GetSize()
+	// payload: Seq + Epoch + CommitTs + DispatcherID
+	payloadSize := 8 + 8 + 8 + e.DispatcherID.GetSize()
 	data := make([]byte, payloadSize)
 	offset := 0
 
@@ -181,15 +174,9 @@ func (e SyncPointEvent) encodeV1() ([]byte, error) {
 	binary.BigEndian.PutUint64(data[offset:], e.Epoch)
 	offset += 8
 
-	// CommitTsList length
-	binary.BigEndian.PutUint32(data[offset:], uint32(len(e.CommitTsList)))
-	offset += 4
-
-	// CommitTsList
-	for _, ts := range e.CommitTsList {
-		binary.BigEndian.PutUint64(data[offset:], ts)
-		offset += 8
-	}
+	// CommitTs
+	binary.BigEndian.PutUint64(data[offset:], e.CommitTs)
+	offset += 8
 
 	// DispatcherID
 	copy(data[offset:], e.DispatcherID.Marshal())
@@ -209,16 +196,9 @@ func (e *SyncPointEvent) decodeV1(data []byte) error {
 	e.Epoch = binary.BigEndian.Uint64(data[offset:])
 	offset += 8
 
-	// CommitTsList length
-	count := binary.BigEndian.Uint32(data[offset:])
-	offset += 4
-
-	// CommitTsList
-	e.CommitTsList = make([]uint64, count)
-	for i := uint32(0); i < count; i++ {
-		e.CommitTsList[i] = binary.BigEndian.Uint64(data[offset:])
-		offset += 8
-	}
+	// CommitTs
+	e.CommitTs = binary.BigEndian.Uint64(data[offset:])
+	offset += 8
 
 	// DispatcherID
 	err := e.DispatcherID.Unmarshal(data[offset:])

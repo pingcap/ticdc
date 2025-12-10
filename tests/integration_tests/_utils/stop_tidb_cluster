@@ -57,3 +57,13 @@ kill -9 $(lsof -i tcp:17000 -t 2>/dev/null) &>/dev/null || true
 kill -9 $(lsof -i tcp:6650 -t 2>/dev/null) &>/dev/null || true
 kill -9 $(lsof -i tcp:6651 -t 2>/dev/null) &>/dev/null || true
 kill -9 $(lsof -i tcp:9096 -t 2>/dev/null) &>/dev/null || true
+
+if [ "$NEXT_GEN" = 1 ]; then
+	if [[ -z "$TEST_NAME" || -z "$TEST_OUT_DATA_DIR" ]]; then
+		echo "Error: TEST_NAME and TEST_OUT_DATA_DIR must be set for next-gen cleanup." >&2
+		exit 0
+	fi
+	CASE_DIR="$CUR/../$TEST_NAME"
+	TEST_DATA_DIR="$CASE_DIR/$TEST_OUT_DATA_DIR"
+	rm -rf "$TEST_DATA_DIR"
+fi

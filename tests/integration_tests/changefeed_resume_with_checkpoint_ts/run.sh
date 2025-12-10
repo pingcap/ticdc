@@ -129,8 +129,7 @@ function resume_changefeed_in_failed_state() {
 	cleanup_process $CDC_BINARY
 }
 
-trap stop_tidb_cluster EXIT
-
+trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 if [ "$SINK_TYPE" == "mysql" ]; then
 	prepare
 	resume_changefeed_in_stopped_state $*

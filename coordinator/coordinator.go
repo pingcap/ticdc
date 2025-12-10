@@ -88,7 +88,7 @@ type coordinator struct {
 	// are from maintainer.
 	eventCh *chann.DrainableChann[*Event]
 	// changefeedChangeCh is used to receive the changefeed change from the controller
-	changefeedChangeCh chan []*ChangefeedChange
+	changefeedChangeCh chan []*changefeedChange
 
 	// msgGuardWaitGroup guards Add/Wait so Stop never races with new recv handlers.
 	msgGuardWaitGroup util.GuardedWaitGroup
@@ -116,7 +116,7 @@ func New(node *node.Info,
 		pdClient:           pdClient,
 		pdClock:            appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		mc:                 mc,
-		changefeedChangeCh: make(chan []*ChangefeedChange, 1024),
+		changefeedChangeCh: make(chan []*changefeedChange, 1024),
 		backend:            backend,
 	}
 	// handle messages from message center
@@ -241,7 +241,7 @@ func (c *coordinator) runHandleEvent(ctx context.Context) error {
 
 func (c *coordinator) handleStateChange(
 	ctx context.Context,
-	event *ChangefeedChange,
+	event *changefeedChange,
 ) error {
 	cf := c.controller.getChangefeed(event.changefeedID)
 	if cf == nil {
@@ -294,8 +294,9 @@ func (c *coordinator) handleStateChange(
 }
 
 // checkStaleCheckpointTs checks if the checkpointTs is stale, if it is, it will send a state change event to the stateChangedCh
-func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, id common.ChangeFeedID, reportedCheckpointTs uint64) {
-	err := c.gcManager.CheckStaleCheckpointTs(ctx, id, reportedCheckpointTs)
+func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, changefeed *changefeed.Changefeed, reportedCheckpointTs uint64) {
+	id := changefeed.ID
+	err := c.gcManager.CheckStaleCheckpointTs(ctx, changefeed.GetKeyspaceID(), id, reportedCheckpointTs)
 	if err == nil {
 		return
 	}
@@ -309,15 +310,10 @@ func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, id common.Chan
 		state = config.StateFailed
 	}
 
-	change := &ChangefeedChange{
-		changefeedID: id,
-		state:        state,
-		err: &config.RunningError{
-			Code:    string(errCode),
-			Message: err.Error(),
-		},
-		changeType: ChangeState,
-	}
+	change := newChangefeedChange(changefeed, state, ChangeState, &config.RunningError{
+		Code:    string(errCode),
+		Message: err.Error(),
+	})
 
 	select {
 	case <-ctx.Done():
@@ -326,11 +322,11 @@ func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, id common.Chan
 			zap.String("changefeed", id.String()),
 			zap.Error(ctx.Err()))
 		return
-	case c.changefeedChangeCh <- []*ChangefeedChange{change}:
+	case c.changefeedChangeCh <- []*changefeedChange{change}:
 	}
 }
 
-func (c *coordinator) saveCheckpointTs(ctx context.Context, changes []*ChangefeedChange) error {
+func (c *coordinator) saveCheckpointTs(ctx context.Context, changes []*changefeedChange) error {
 	statusMap := make(map[common.ChangeFeedID]uint64)
 	cfsMap := make(map[common.ChangeFeedID]*changefeed.Changefeed)
 	for _, change := range changes {
@@ -342,7 +338,7 @@ func (c *coordinator) saveCheckpointTs(ctx context.Context, changes []*Changefee
 		if upCf.GetLastSavedCheckPointTs() < reportedCheckpointTs {
 			statusMap[upCf.ID] = reportedCheckpointTs
 			cfsMap[upCf.ID] = upCf
-			c.checkStaleCheckpointTs(ctx, upCf.ID, reportedCheckpointTs)
+			c.checkStaleCheckpointTs(ctx, upCf, reportedCheckpointTs)
 		}
 	}
 	if len(statusMap) == 0 {

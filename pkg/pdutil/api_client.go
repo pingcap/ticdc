@@ -225,7 +225,7 @@ func (pc *pdAPIClient) ScanRegions(ctx context.Context, span heartbeatpb.TableSp
 	scanLimit := 1024
 	endpoints, err := pc.CollectMemberEndpoints(ctx)
 	if err != nil {
-		log.Warn("fail to collec pd member endpoints")
+		log.Warn("fail to collect pd member endpoints")
 		return nil, errors.Trace(err)
 	}
 	return pc.scanRegions(ctx, span, endpoints, scanLimit)
@@ -244,21 +244,21 @@ func (pc *pdAPIClient) scanRegions(
 		resp, err := pc.httpClient.Get(ctx, u.String())
 		if err != nil {
 			log.Warn("fail to scan regions",
-				zap.String("endpoint", endpoint), zap.Any("span", span))
+				zap.String("endpoint", endpoint), zap.Any("span", common.FormatTableSpan(&span)))
 			return nil, errors.Trace(err)
 		}
 		defer resp.Body.Close()
 		data, err := io.ReadAll(resp.Body)
 		if err != nil {
 			log.Warn("fail to scan regions",
-				zap.String("endpoint", endpoint), zap.Any("span", span))
+				zap.String("endpoint", endpoint), zap.Any("span", common.FormatTableSpan(&span)))
 			return nil, errors.Trace(err)
 		}
 		regions := &RegionsInfo{}
 		err = json.Unmarshal(data, regions)
 		if err != nil {
 			log.Warn("fail to scan regions",
-				zap.String("endpoint", endpoint), zap.Any("span", span))
+				zap.String("endpoint", endpoint), zap.Any("span", common.FormatTableSpan(&span)))
 			return nil, errors.Trace(err)
 		}
 		return regions.Regions, nil

@@ -161,13 +161,17 @@ func (d *dispatcherStat) clear() {
 
 // registerTo register the dispatcher to the specified event service.
 func (d *dispatcherStat) registerTo(serverID node.ID) {
-	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRegisterRequest(d.eventCollector.getLocalServerID().String(), false))
+	// `onlyReuse` is used to control the register behavior at logservice side
+	// it should be set to `false` when register to a local event service,
+	// and set to `true` when register to a remote event service.
+	onlyReuse := serverID != d.eventCollector.getLocalServerID()
+	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRegisterRequest(d.eventCollector.getLocalServerID().String(), onlyReuse))
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
 // commitReady is used to notify the event service to start sending events.
 func (d *dispatcherStat) commitReady(serverID node.ID) {
-	d.doReset(serverID, d.target.GetStartTs())
+	d.doReset(serverID, d.getResetTs())
 }
 
 // reset is used to reset the dispatcher to the specified commitTs,
@@ -180,9 +184,10 @@ func (d *dispatcherStat) doReset(serverID node.ID, resetTs uint64) {
 	epoch := d.epoch.Add(1)
 	d.lastEventSeq.Store(0)
 	// remove the dispatcher from the dynamic stream
-	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherResetRequest(d.eventCollector.getLocalServerID().String(), resetTs, epoch))
+	resetRequest := d.newDispatcherResetRequest(d.eventCollector.getLocalServerID().String(), resetTs, epoch)
+	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, resetRequest)
 	d.eventCollector.enqueueMessageForSend(msg)
-	log.Info("Send reset dispatcher request to event service to reset the dispatcher",
+	log.Info("send reset dispatcher request to event service",
 		zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 		zap.Stringer("dispatcher", d.getDispatcherID()),
 		zap.Stringer("eventServiceID", serverID),
@@ -209,7 +214,7 @@ func (d *dispatcherStat) remove() {
 
 // removeFrom is used to remove the dispatcher from the specified event service.
 func (d *dispatcherStat) removeFrom(serverID node.ID) {
-	log.Info("Send remove dispatcher request to event service",
+	log.Info("send remove dispatcher request to event service",
 		zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 		zap.Stringer("dispatcher", d.getDispatcherID()),
 		zap.Stringer("eventServiceID", serverID))
@@ -258,7 +263,7 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) b
 		}
 
 		if event.GetSeq() != expectedSeq {
-			log.Warn("Received an out-of-order event, reset the dispatcher",
+			log.Warn("receive an out-of-order event, reset the dispatcher",
 				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 				zap.Stringer("dispatcher", d.getDispatcherID()),
 				zap.String("eventType", commonEvent.TypeToString(event.GetType())),
@@ -280,7 +285,7 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) b
 
 			expectedSeq := d.lastEventSeq.Add(1)
 			if e.Seq != expectedSeq {
-				log.Warn("Received an out-of-order batch DML event, reset the dispatcher",
+				log.Warn("receive an out-of-order batch DML event, reset the dispatcher",
 					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 					zap.Stringer("dispatcher", d.getDispatcherID()),
 					zap.String("eventType", commonEvent.TypeToString(event.GetType())),
@@ -315,7 +320,7 @@ func (d *dispatcherStat) filterAndUpdateEventByCommitTs(event dispatcher.Dispatc
 		}
 	}
 	if shouldIgnore {
-		log.Warn("Receive a event older than sendCommitTs, ignore it",
+		log.Warn("receive a event older than sendCommitTs, ignore it",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Int64("tableID", d.target.GetTableSpan().TableID),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
@@ -669,6 +674,7 @@ func (d *dispatcherStat) newDispatcherRegisterRequest(serverId string, onlyReuse
 			Timezone:             d.target.GetTimezone(),
 			Integrity:            d.target.GetIntegrityConfig(),
 			OutputRawChangeEvent: d.target.IsOutputRawChangeEvent(),
+			TxnAtomicity:         string(d.target.GetTxnAtomicity()),
 		},
 	}
 }

@@ -20,8 +20,6 @@ function run() {
 	# start tidb cluster
 	start_tidb_cluster --workdir $WORK_DIR
 
-	cd $WORK_DIR
-
 	# upstream TiDB disable the cluster index
 	run_sql "set global tidb_enable_clustered_index=0;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
@@ -67,7 +65,7 @@ function run() {
 	cleanup_process $CDC_BINARY
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 run $*
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

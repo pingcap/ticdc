@@ -117,7 +117,7 @@ function failOverWhenTwoNode() {
 	stop_tidb_cluster
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 failOverOnlyOneNode $*
 failOverWhenTwoNode $*
 check_logs $WORK_DIR

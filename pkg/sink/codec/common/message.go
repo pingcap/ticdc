@@ -78,6 +78,7 @@ type ColumnLogInfo struct {
 // DDLLogInfo stores diagnostic information for DDL messages.
 type DDLLogInfo struct {
 	Query    string
+	StartTs  uint64
 	CommitTs uint64
 }
 

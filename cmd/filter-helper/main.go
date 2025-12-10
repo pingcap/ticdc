@@ -65,7 +65,7 @@ func runFilter(cmd *cobra.Command, args []string) {
 
 	switch target {
 	case "table":
-		matched := !ft.ShouldIgnoreTable(tableAndSchema[0], tableAndSchema[1], nil)
+		matched := !ft.ShouldIgnoreTable(tableAndSchema[0], tableAndSchema[1])
 		if matched {
 			fmt.Printf("Table: %s, Matched filter rule\n", table)
 			return
@@ -78,7 +78,7 @@ func runFilter(cmd *cobra.Command, args []string) {
 			fmt.Printf("DDL: %s, should be discard by event filter rule\n", ddl)
 			return
 		}
-		ignored, err := ft.ShouldIgnoreDDL(tableAndSchema[0], tableAndSchema[1], ddl, ddlType, nil, 0)
+		ignored, err := ft.ShouldIgnoreDDL(tableAndSchema[0], tableAndSchema[1], ddl, ddlType, 0)
 		if err != nil {
 			fmt.Printf("filter ddl error: %s, error: %v\n", ddl, err)
 			return

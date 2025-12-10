@@ -68,7 +68,6 @@ function prepare() {
 	echo started proxy pid: $proxy_pid
 	echo started proxy at port: $proxy_port
 
-	cd $WORK_DIR
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 	echo "query start ts: $start_ts"
 

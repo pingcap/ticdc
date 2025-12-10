@@ -122,31 +122,33 @@ func TestShouldUseDefaultRules(t *testing.T) {
 
 	filter, err := NewFilter(config.NewDefaultFilterConfig(), "", false, false)
 	require.Nil(t, err)
-	require.True(t, filter.ShouldIgnoreTable("information_schema", "", nil))
-	require.True(t, filter.ShouldIgnoreTable("information_schema", "statistics", nil))
-	require.True(t, filter.ShouldIgnoreTable("performance_schema", "", nil))
-	require.True(t, filter.ShouldIgnoreTable(TiDBWorkloadSchema, "hist_snapshots", nil))
-	require.False(t, filter.ShouldIgnoreTable("metric_schema", "query_duration", nil))
-	require.False(t, filter.ShouldIgnoreTable("sns", "user", nil))
-	require.True(t, filter.ShouldIgnoreTable("tidb_cdc", "repl_mark_a_a", nil))
-	require.True(t, filter.ShouldIgnoreTable("lightning_task_info", "conflict_records", nil))
+	require.True(t, filter.ShouldIgnoreTable("information_schema", ""))
+	require.True(t, filter.ShouldIgnoreTable("information_schema", "statistics"))
+	require.True(t, filter.ShouldIgnoreTable("performance_schema", ""))
+	require.True(t, filter.ShouldIgnoreTable(TiDBWorkloadSchema, "hist_snapshots"))
+	require.False(t, filter.ShouldIgnoreTable("metric_schema", "query_duration"))
+	require.False(t, filter.ShouldIgnoreTable("sns", "user"))
+	require.True(t, filter.ShouldIgnoreTable("tidb_cdc", "repl_mark_a_a"))
+	require.True(t, filter.ShouldIgnoreTable("lightning_task_info", "conflict_records"))
 }
 
 func TestShouldUseCustomRules(t *testing.T) {
 	t.Parallel()
 
 	filter, err := NewFilter(&config.FilterConfig{
-		Rules: []string{"sns.*", "ecom.*", "!sns.log", "!ecom.test"},
+		Rules: []string{"sns.*", "ecom.*", "!sns.log", "!ecom.test", "haha.xixi"},
 	}, "", false, false)
 	require.Nil(t, err)
-	require.True(t, filter.ShouldIgnoreTable("other", "", nil))
-	require.True(t, filter.ShouldIgnoreTable("other", "what", nil))
-	require.False(t, filter.ShouldIgnoreTable("sns", "", nil))
-	require.False(t, filter.ShouldIgnoreTable("ecom", "order", nil))
-	require.False(t, filter.ShouldIgnoreTable("ecom", "order", nil))
-	require.True(t, filter.ShouldIgnoreTable("ecom", "test", nil))
-	require.True(t, filter.ShouldIgnoreTable("sns", "log", nil))
-	require.True(t, filter.ShouldIgnoreTable("information_schema", "", nil))
+	require.True(t, filter.ShouldIgnoreTable("other", ""))
+	require.True(t, filter.ShouldIgnoreTable("other", "what"))
+	require.False(t, filter.ShouldIgnoreTable("sns", ""))
+	require.False(t, filter.ShouldIgnoreTable("ecom", "order"))
+	require.False(t, filter.ShouldIgnoreTable("ecom", "order"))
+	require.True(t, filter.ShouldIgnoreTable("ecom", "test"))
+	require.True(t, filter.ShouldIgnoreTable("sns", "log"))
+	require.True(t, filter.ShouldIgnoreTable("information_schema", ""))
+	require.True(t, filter.ShouldIgnoreTable("haha", ""))
+	require.False(t, filter.ShouldIgnoreSchema("haha"))
 
 	filter, err = NewFilter(&config.FilterConfig{
 		// 1. match all schema and table
@@ -155,10 +157,10 @@ func TestShouldUseCustomRules(t *testing.T) {
 		// 4. do not match table school.teacher
 		Rules: []string{"*.*", "!test.season", "school.*", "!school.teacher"},
 	}, "", false, false)
-	require.True(t, filter.ShouldIgnoreTable("test", "season", nil))
-	require.False(t, filter.ShouldIgnoreTable("other", "", nil))
-	require.False(t, filter.ShouldIgnoreTable("school", "student", nil))
-	require.True(t, filter.ShouldIgnoreTable("school", "teacher", nil))
+	require.True(t, filter.ShouldIgnoreTable("test", "season"))
+	require.False(t, filter.ShouldIgnoreTable("other", ""))
+	require.False(t, filter.ShouldIgnoreTable("school", "student"))
+	require.True(t, filter.ShouldIgnoreTable("school", "teacher"))
 	require.Nil(t, err)
 
 	filter, err = NewFilter(&config.FilterConfig{
@@ -168,9 +170,9 @@ func TestShouldUseCustomRules(t *testing.T) {
 		// 4. do not match table school.teacher
 		Rules: []string{"*.*", "!test.t1", "!test.t2"},
 	}, "", false, false)
-	require.False(t, filter.ShouldIgnoreTable("test", "season", nil))
-	require.True(t, filter.ShouldIgnoreTable("test", "t1", nil))
-	require.True(t, filter.ShouldIgnoreTable("test", "t2", nil))
+	require.False(t, filter.ShouldIgnoreTable("test", "season"))
+	require.True(t, filter.ShouldIgnoreTable("test", "t1"))
+	require.True(t, filter.ShouldIgnoreTable("test", "t2"))
 	require.Nil(t, err)
 }
 
@@ -265,7 +267,7 @@ func TestShouldIgnoreTable(t *testing.T) {
 			}
 			f, err := NewFilter(cfg, "UTC", false, false)
 			require.NoError(t, err)
-			require.Equal(t, !c.shouldBeA, f.ShouldIgnoreTable(c.schema, c.table, nil))
+			require.Equal(t, !c.shouldBeA, f.ShouldIgnoreTable(c.schema, c.table))
 		})
 	}
 
@@ -273,20 +275,20 @@ func TestShouldIgnoreTable(t *testing.T) {
 	cfg := &config.FilterConfig{Rules: []string{"TEST.*"}}
 	f, err := NewFilter(cfg, "UTC", false, false) // case-insensitive
 	require.NoError(t, err)
-	require.False(t, f.ShouldIgnoreTable("test", "t1", nil))
-	require.False(t, f.ShouldIgnoreTable("Test", "t1", nil))
+	require.False(t, f.ShouldIgnoreTable("test", "t1"))
+	require.False(t, f.ShouldIgnoreTable("Test", "t1"))
 
 	f, err = NewFilter(cfg, "UTC", true, false) // case-sensitive
 	require.NoError(t, err)
-	require.True(t, f.ShouldIgnoreTable("test", "t1", nil))
-	require.False(t, f.ShouldIgnoreTable("TEST", "t1", nil))
+	require.True(t, f.ShouldIgnoreTable("test", "t1"))
+	require.False(t, f.ShouldIgnoreTable("TEST", "t1"))
 }
 
 func TestShouldDiscardDDL(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.FilterConfig{
-		Rules: []string{"test.*"},
+		Rules: []string{"test.*", "filter.t1"},
 	}
 
 	f, err := NewFilter(cfg, "UTC", false, false)
@@ -303,6 +305,10 @@ func TestShouldDiscardDDL(t *testing.T) {
 
 	// DDL on system schema, should discard.
 	require.True(t, f.ShouldDiscardDDL("mysql", "t1", model.ActionCreateTable, nil))
+
+	require.False(t, f.ShouldDiscardDDL("filter", "", model.ActionCreateSchema, nil))
+	require.False(t, f.ShouldDiscardDDL("filter", "t1", model.ActionCreateTable, nil))
+	require.True(t, f.ShouldDiscardDDL("filter", "t2", model.ActionCreateTable, nil))
 }
 
 func TestShouldIgnoreDDL(t *testing.T) {
@@ -327,27 +333,27 @@ func TestShouldIgnoreDDL(t *testing.T) {
 	require.NoError(t, err)
 
 	// DDL matches an event filter rule (drop table), should ignore.
-	ignore, err := f.ShouldIgnoreDDL("test", "t1", "DROP TABLE t1", model.ActionDropTable, nil, 0)
+	ignore, err := f.ShouldIgnoreDDL("test", "t1", "DROP TABLE t1", model.ActionDropTable, 0)
 	require.NoError(t, err)
 	require.True(t, ignore)
 
 	// DDL (create table) does not match event filter, should not ignore.
-	ignore, err = f.ShouldIgnoreDDL("test", "t1", "CREATE TABLE t1(id int)", model.ActionCreateTable, nil, 0)
+	ignore, err = f.ShouldIgnoreDDL("test", "t1", "CREATE TABLE t1(id int)", model.ActionCreateTable, 0)
 	require.NoError(t, err)
 	require.False(t, ignore)
 
 	// DDL (create table) matches IgnoreTxnStartTs, should ignore.
-	ignore, err = f.ShouldIgnoreDDL("test", "t1", "CREATE TABLE t1(id int)", model.ActionCreateTable, nil, 100)
+	ignore, err = f.ShouldIgnoreDDL("test", "t1", "CREATE TABLE t1(id int)", model.ActionCreateTable, 100)
 	require.NoError(t, err)
 	require.True(t, ignore)
 
 	// DDL matches an SQL regex rule, should ignore.
-	ignore, err = f.ShouldIgnoreDDL("test", "t2", "DROP TABLE t2", model.ActionDropTable, nil, 0)
+	ignore, err = f.ShouldIgnoreDDL("test", "t2", "DROP TABLE t2", model.ActionDropTable, 0)
 	require.NoError(t, err)
 	require.True(t, ignore)
 
 	// DDL does not match any rule, should not ignore.
-	ignore, err = f.ShouldIgnoreDDL("test", "t3", "CREATE TABLE t3(id int)", model.ActionCreateTable, nil, 0)
+	ignore, err = f.ShouldIgnoreDDL("test", "t3", "CREATE TABLE t3(id int)", model.ActionCreateTable, 0)
 	require.NoError(t, err)
 	require.False(t, ignore)
 }
@@ -485,7 +491,7 @@ func TestShouldIgnoreDDLCaseSensitivity(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f, err := NewFilter(cfg, "UTC", tc.caseSensitive, false)
 			require.NoError(t, err)
-			ignore, err := f.ShouldIgnoreDDL(tc.schema, tc.table, tc.query, model.ActionDropTable, nil, 0)
+			ignore, err := f.ShouldIgnoreDDL(tc.schema, tc.table, tc.query, model.ActionDropTable, 0)
 			require.NoError(t, err)
 			require.Equal(t, tc.shouldIgnore, ignore, tc.msg)
 		})

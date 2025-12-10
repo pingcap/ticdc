@@ -13,8 +13,6 @@ function prepare() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	cd $WORK_DIR
-
 	# Create database in upstream and downstream
 	run_sql "CREATE DATABASE complex_txn" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE DATABASE complex_txn" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
@@ -27,8 +25,7 @@ function prepare() {
 	cdc_cli_changefeed create --sink-uri="mysql://root@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/"
 }
 
-trap stop_tidb_cluster EXIT
-
+trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 # Only support MySQL sink for complex transaction test
 if [ "$SINK_TYPE" == "mysql" ]; then
 	prepare $*

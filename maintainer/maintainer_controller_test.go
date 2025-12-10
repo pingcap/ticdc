@@ -70,7 +70,7 @@ func TestSchedule(t *testing.T) {
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
+		}, "node1", false)
 	controller := NewController(cfID, 1, nil, replicaConfig, ddlSpan, nil, 9, time.Minute, common.DefaultKeyspace, false)
 	for i := 0; i < 10; i++ {
 		controller.spanController.AddNewTable(commonEvent.Table{
@@ -107,7 +107,7 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableMoreThanNodeNum(t *testing.T) {
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
+		}, "node1", false)
 	s := NewController(cfID, 1, nil, &config.ReplicaConfig{
 		Scheduler: &config.ChangefeedSchedulerConfig{
 			EnableTableAcrossNodes: true,
@@ -125,7 +125,7 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableMoreThanNodeNum(t *testing.T) {
 		for j := 0; j < 4; j++ {
 			span := &heartbeatpb.TableSpan{TableID: int64(i), StartKey: appendNew(totalSpan.StartKey, byte('a'+j)), EndKey: appendNew(totalSpan.StartKey, byte('b'+j))}
 			dispatcherID := common.NewDispatcherID()
-			spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, common.DefaultMode)
+			spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, common.DefaultMode, false)
 			spanReplica.SetNodeID(nodeID)
 			s.spanController.AddReplicatingSpan(spanReplica)
 
@@ -215,7 +215,7 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableLessThanNodeNum(t *testing.T) {
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
+		}, "node1", false)
 	s := NewController(cfID, 1, nil, &config.ReplicaConfig{
 		Scheduler: &config.ChangefeedSchedulerConfig{
 			EnableTableAcrossNodes: true,
@@ -235,7 +235,7 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableLessThanNodeNum(t *testing.T) {
 		for j := 0; j < 2; j++ {
 			span := &heartbeatpb.TableSpan{TableID: int64(i), StartKey: appendNew(totalSpan.StartKey, byte('a'+j)), EndKey: appendNew(totalSpan.StartKey, byte('b'+j))}
 			dispatcherID := common.NewDispatcherID()
-			spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, common.DefaultMode)
+			spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, common.DefaultMode, false)
 			spanReplica.SetNodeID(nodeIDList[j%2])
 			s.spanController.AddReplicatingSpan(spanReplica)
 
@@ -336,7 +336,7 @@ func TestSplitBalanceGroupsWithNodeRemove(t *testing.T) {
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
+		}, "node1", false)
 	s := NewController(cfID, 1, nil, &config.ReplicaConfig{
 		Scheduler: &config.ChangefeedSchedulerConfig{
 			EnableTableAcrossNodes: true,
@@ -354,7 +354,7 @@ func TestSplitBalanceGroupsWithNodeRemove(t *testing.T) {
 		for j := 0; j < 6; j++ {
 			span := &heartbeatpb.TableSpan{TableID: int64(i), StartKey: appendNew(totalSpan.StartKey, byte('a'+j)), EndKey: appendNew(totalSpan.StartKey, byte('b'+j))}
 			dispatcherID := common.NewDispatcherID()
-			spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, common.DefaultMode)
+			spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, common.DefaultMode, false)
 			spanReplica.SetNodeID(nodeIDList[j%3])
 			s.spanController.AddReplicatingSpan(spanReplica)
 
@@ -434,7 +434,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
+		}, "node1", false)
 
 	controller := NewController(cfID, 1, nil, &config.ReplicaConfig{
 		Scheduler: &config.ChangefeedSchedulerConfig{
@@ -458,7 +458,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	startKey := appendNew(totalSpan.StartKey, byte('a'))
 	endKey := appendNew(totalSpan.StartKey, byte('b'))
 	span1 := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: startKey, EndKey: endKey}
-	spanReplica := replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span1, 1, common.DefaultMode)
+	spanReplica := replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span1, 1, common.DefaultMode, false)
 	spanReplica.SetNodeID(nodeIDList[1])
 	regionCache.SetRegions(fmt.Sprintf("%s-%s", span1.StartKey, span1.EndKey), []*tikv.Region{
 		testutil.MockRegionWithKeyRange(uint64(1), startKey, appendNew(startKey, 'a')),
@@ -498,7 +498,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	startKey = appendNew(totalSpan.StartKey, byte('b'))
 	endKey = appendNew(totalSpan.StartKey, byte('c'))
 	span2 := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: startKey, EndKey: endKey}
-	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span2, 1, common.DefaultMode)
+	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span2, 1, common.DefaultMode, false)
 	spanReplica.SetNodeID(nodeIDList[0])
 	regionCache.SetRegions(fmt.Sprintf("%s-%s", span2.StartKey, span2.EndKey), []*tikv.Region{
 		testutil.MockRegionWithKeyRange(uint64(1), startKey, appendNew(startKey, 'a')),
@@ -523,7 +523,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	startKey = appendNew(totalSpan.StartKey, byte('c'))
 	endKey = appendNew(totalSpan.StartKey, byte('d'))
 	span3 := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: startKey, EndKey: endKey}
-	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span3, 1, common.DefaultMode)
+	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span3, 1, common.DefaultMode, false)
 	spanReplica.SetNodeID(nodeIDList[1])
 	regionCache.SetRegions(fmt.Sprintf("%s-%s", span3.StartKey, span3.EndKey), []*tikv.Region{
 		testutil.MockRegionWithKeyRange(uint64(1), startKey, appendNew(startKey, 'a')),
@@ -548,7 +548,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	startKey = appendNew(totalSpan.StartKey, byte('d'))
 	endKey = appendNew(totalSpan.StartKey, byte('e'))
 	span4 := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: startKey, EndKey: endKey}
-	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span4, 1, common.DefaultMode)
+	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span4, 1, common.DefaultMode, false)
 	spanReplica.SetNodeID(nodeIDList[2])
 	regionCache.SetRegions(fmt.Sprintf("%s-%s", span4.StartKey, span4.EndKey), []*tikv.Region{
 		testutil.MockRegionWithKeyRange(uint64(1), startKey, appendNew(startKey, 'a')),
@@ -573,7 +573,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	startKey = appendNew(totalSpan.StartKey, byte('e'))
 	endKey = appendNew(totalSpan.StartKey, byte('f'))
 	span5 := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: startKey, EndKey: endKey}
-	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span5, 1, common.DefaultMode)
+	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span5, 1, common.DefaultMode, false)
 	spanReplica.SetNodeID(nodeIDList[0])
 	regionCache.SetRegions(fmt.Sprintf("%s-%s", span5.StartKey, span5.EndKey), []*tikv.Region{
 		testutil.MockRegionWithKeyRange(uint64(1), startKey, appendNew(startKey, 'a')),
@@ -598,7 +598,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	startKey = appendNew(totalSpan.StartKey, byte('f'))
 	endKey = totalSpan.EndKey
 	span6 := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: startKey, EndKey: endKey}
-	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span6, 1, common.DefaultMode)
+	spanReplica = replica.NewSpanReplication(cfID, common.NewDispatcherID(), 1, span6, 1, common.DefaultMode, false)
 	spanReplica.SetNodeID(nodeIDList[2])
 	regionCache.SetRegions(fmt.Sprintf("%s-%s", span6.StartKey, span6.EndKey), []*tikv.Region{
 		testutil.MockRegionWithKeyRange(uint64(1), startKey, appendNew(startKey, 'a')),
@@ -714,8 +714,8 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 		spanReplicaID8 = spanTmp1
 	}
 
-	log.Info("spanReplica7", zap.Any("id", spanReplica7.ID), zap.Any("span", common.FormatTableSpan(spanReplica7.Span)))
-	log.Info("spanReplica8", zap.Any("id", spanReplica8.ID), zap.Any("span", common.FormatTableSpan(spanReplica8.Span)))
+	log.Info("spanReplica7", zap.Any("changefeedID", spanReplica7.ID), zap.Any("span", common.FormatTableSpan(spanReplica7.Span)))
+	log.Info("spanReplica8", zap.Any("changefeedID", spanReplica8.ID), zap.Any("span", common.FormatTableSpan(spanReplica8.Span)))
 	trafficForSpanReplica7 := 50
 	trafficForSpanReplica8 := 150
 
@@ -807,8 +807,8 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 		spanReplicaID9 = spanID2
 	}
 
-	log.Info("spanReplica9", zap.Any("id", spanReplica9.ID), zap.Any("span", common.FormatTableSpan(spanReplica9.Span)))
-	log.Info("spanReplica10", zap.Any("id", spanReplica10.ID), zap.Any("span", common.FormatTableSpan(spanReplica10.Span)))
+	log.Info("spanReplica9", zap.Any("changefeedID", spanReplica9.ID), zap.Any("span", common.FormatTableSpan(spanReplica9.Span)))
+	log.Info("spanReplica10", zap.Any("changefeedID", spanReplica10.ID), zap.Any("span", common.FormatTableSpan(spanReplica10.Span)))
 	operators[0].Start()
 	operators[0].PostFinish()
 	operators[1].Start()
@@ -865,7 +865,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	require.Contains(t, relatedIDs, spanReplicaID9)
 	spanReplicaID11 := typeCount["merge"][0].ID()
 	spanReplica11 := controller.spanController.GetTaskByID(spanReplicaID11)
-	log.Info("spanReplica11", zap.Any("id", spanReplica11.ID), zap.Any("span", common.FormatTableSpan(spanReplica11.Span)))
+	log.Info("spanReplica11", zap.Any("changefeedID", spanReplica11.ID), zap.Any("span", common.FormatTableSpan(spanReplica11.Span)))
 	typeCount["merge"][0].Start()
 	typeCount["merge"][0].PostFinish()
 	controller.operatorController.RemoveOp(typeCount["merge"][0].ID())
@@ -934,7 +934,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	// 400   |       |
 	controller.schedulerController.GetScheduler(scheduler.BalanceSplitScheduler).Execute()
 	for _, operator := range controller.operatorController.GetAllOperators() {
-		log.Info("operator", zap.Any("type", operator.Type()), zap.Any("id", operator.ID()), zap.Any("string", operator.String()))
+		log.Info("operator", zap.Any("type", operator.Type()), zap.Any("changefeedID", operator.ID()), zap.Any("string", operator.String()))
 	}
 	require.Equal(t, controller.operatorController.OperatorSize(), 7)
 	typeCount = make(map[string][]pkgoperator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus])
@@ -1029,13 +1029,13 @@ func TestBalance(t *testing.T) {
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
+		}, "node1", false)
 	s := NewController(cfID, 1, nil, replicaConfig, ddlSpan, nil, 1000, 0, common.DefaultKeyspace, false)
 	for i := 0; i < 100; i++ {
 		sz := common.TableIDToComparableSpan(common.DefaultKeyspaceID, int64(i))
 		span := &heartbeatpb.TableSpan{TableID: sz.TableID, StartKey: sz.StartKey, EndKey: sz.EndKey}
 		dispatcherID := common.NewDispatcherID()
-		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, common.DefaultMode)
+		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, common.DefaultMode, false)
 		spanReplica.SetNodeID("node1")
 		s.spanController.AddReplicatingSpan(spanReplica)
 	}
@@ -1103,7 +1103,7 @@ func TestDefaultSpanIntoSplit(t *testing.T) {
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
+		}, "node1", false)
 	controller := NewController(cfID, 1, nil, &config.ReplicaConfig{
 		Scheduler: &config.ChangefeedSchedulerConfig{
 			EnableTableAcrossNodes:     true,
@@ -1118,7 +1118,7 @@ func TestDefaultSpanIntoSplit(t *testing.T) {
 	totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
 	span := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: totalSpan.StartKey, EndKey: totalSpan.EndKey}
 	dispatcherID := common.NewDispatcherID()
-	spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, common.DefaultMode)
+	spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, common.DefaultMode, true)
 	spanReplica.SetNodeID("node1")
 	controller.spanController.AddReplicatingSpan(spanReplica)
 
@@ -1254,13 +1254,13 @@ func TestStoppedWhenMoving(t *testing.T) {
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
+		}, "node1", false)
 	s := NewController(cfID, 1, nil, replicaConfig, ddlSpan, nil, 1000, 0, common.DefaultKeyspace, false)
 	for i := 0; i < 2; i++ {
 		sz := common.TableIDToComparableSpan(common.DefaultKeyspaceID, int64(i))
 		span := &heartbeatpb.TableSpan{TableID: sz.TableID, StartKey: sz.StartKey, EndKey: sz.EndKey}
 		dispatcherID := common.NewDispatcherID()
-		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, common.DefaultMode)
+		spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, span, 1, common.DefaultMode, false)
 		spanReplica.SetNodeID("node1")
 		s.spanController.AddReplicatingSpan(spanReplica)
 	}
@@ -1305,7 +1305,7 @@ func TestFinishBootstrap(t *testing.T) {
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
+		}, "node1", false)
 	s := NewController(cfID, 1, &mockThreadPool{},
 		config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0, common.DefaultKeyspace, false)
 	totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
@@ -1376,7 +1376,7 @@ func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
+		}, "node1", false)
 	defaultConfig := config.GetDefaultReplicaConfig().Clone()
 	defaultConfig.Scheduler = &config.ChangefeedSchedulerConfig{
 		EnableTableAcrossNodes: true,
@@ -1550,7 +1550,7 @@ func TestLargeTableInitialization(t *testing.T) {
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
+		}, "node1", false)
 
 	// Configure with the specified parameters
 	controller := NewController(cfID, 1, nil, &config.ReplicaConfig{

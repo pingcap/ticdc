@@ -33,7 +33,9 @@ func NewStatistics(
 	keyspace := changefeed.Keyspace()
 	changefeedID := changefeed.Name()
 	statistics.metricExecDDLHis = ExecDDLHistogram.WithLabelValues(keyspace, changefeedID, sinkType)
+	statistics.metricExecDDLRunningCnt = ExecDDLRunningGauge.WithLabelValues(keyspace, changefeedID, sinkType)
 	statistics.metricExecBatchHis = ExecBatchHistogram.WithLabelValues(keyspace, changefeedID, sinkType)
+	statistics.metricExecBatchBytesHis = ExecBatchWriteBytesHistogram.WithLabelValues(keyspace, changefeedID, sinkType)
 	statistics.metricTotalWriteBytesCnt = TotalWriteBytesCounter.WithLabelValues(keyspace, changefeedID, sinkType)
 	statistics.metricExecErrCnt = ExecutionErrorCounter.WithLabelValues(keyspace, changefeedID, sinkType)
 	statistics.metricExecDMLCnt = ExecDMLEventCounter.WithLabelValues(keyspace, changefeedID)
@@ -46,17 +48,21 @@ type Statistics struct {
 	sinkType     string
 	changefeedID common.ChangeFeedID
 
-	// metricExecDDLHis record each DDL execution time duration.
+	// metricExecDDLHis records each DDL execution time duration.
 	metricExecDDLHis prometheus.Observer
-	// metricExecBatchHis record the executed DML batch size.
+	// metricExecDDLRunningCnt records the count of running DDL.
+	metricExecDDLRunningCnt prometheus.Gauge
+	// metricExecBatchHis records the executed DML batch size.
 	// this should be only useful for the MySQL Sink, and Kafka Sink with batched protocol, such as open-protocol.
 	metricExecBatchHis prometheus.Observer
-	// metricTotalWriteBytesCnt record the executed DML event size.
+	// metricExecBatchBytesHis records the executed batch write bytes.
+	metricExecBatchBytesHis prometheus.Observer
+	// metricTotalWriteBytesCnt records the executed DML event size.
 	metricTotalWriteBytesCnt prometheus.Counter
 
-	// metricExecErrCnt record the error count of the Sink.
+	// metricExecErrCnt records the error count of the Sink.
 	metricExecErrCnt prometheus.Counter
-	// metricExecDMLCnt record the executed DML event count of the Sink.
+	// metricExecDMLCnt records the executed DML event count of the Sink.
 	metricExecDMLCnt prometheus.Counter
 }
 
@@ -68,6 +74,7 @@ func (b *Statistics) RecordBatchExecution(executor func() (int, int64, error)) e
 		return err
 	}
 	b.metricExecBatchHis.Observe(float64(batchSize))
+	b.metricExecBatchBytesHis.Observe(float64(batchWriteBytes))
 	b.metricExecDMLCnt.Add(float64(batchSize))
 	b.metricTotalWriteBytesCnt.Add(float64(batchWriteBytes))
 	return nil
@@ -75,6 +82,9 @@ func (b *Statistics) RecordBatchExecution(executor func() (int, int64, error)) e
 
 // RecordDDLExecution record the time cost of execute ddl
 func (b *Statistics) RecordDDLExecution(executor func() error) error {
+	b.metricExecDDLRunningCnt.Inc()
+	defer b.metricExecDDLRunningCnt.Dec()
+
 	start := time.Now()
 	if err := executor(); err != nil {
 		b.metricExecErrCnt.Inc()
@@ -90,6 +100,7 @@ func (b *Statistics) Close() {
 	changefeedID := b.changefeedID.Name()
 	ExecDDLHistogram.DeleteLabelValues(keyspace, changefeedID)
 	ExecBatchHistogram.DeleteLabelValues(keyspace, changefeedID)
+	ExecBatchWriteBytesHistogram.DeleteLabelValues(keyspace, changefeedID)
 	EventSizeHistogram.DeleteLabelValues(keyspace, changefeedID)
 	ExecutionErrorCounter.DeleteLabelValues(keyspace, changefeedID)
 	TotalWriteBytesCounter.DeleteLabelValues(keyspace, changefeedID)

@@ -876,3 +876,49 @@ func TestGroupEventsByTable(t *testing.T) {
 		require.Equal(t, 2, len(tableGroups[1]), "Second group should have 2 events")
 	})
 }
+
+func TestPrepareDMLsWithNotNullUniqueKey(t *testing.T) {
+	writer, _, _ := newTestMysqlWriter(t)
+	defer writer.db.Close()
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	createTableSQL := "create table t3 (a int not null unique key, b int);"
+	job := helper.DDL2Job(createTableSQL)
+	require.NotNil(t, job)
+
+	// enable batch DML and set limits
+	writer.cfg.BatchDMLEnable = true
+	writer.cfg.SafeMode = false
+	writer.cfg.MaxTxnRow = 10
+
+	// prepare a few insert events for table t3
+	dml1 := helper.DML2Event("test", "t3", "insert into t3 values (1, 10)")
+	helper.ExecuteDeleteDml("test", "t3", "delete from t3 where a = 1")
+	dml2 := helper.DML2Event("test", "t3", "insert into t3 values (2, 20)")
+	helper.ExecuteDeleteDml("test", "t3", "delete from t3 where a = 2")
+	dml3 := helper.DML2Event("test", "t3", "insert into t3 values (3, 30)")
+	helper.ExecuteDeleteDml("test", "t3", "delete from t3 where a = 3")
+
+	events := []*commonEvent.DMLEvent{dml1, dml2, dml3}
+
+	dmls, err := writer.prepareDMLs(events)
+	require.NoError(t, err)
+	require.NotNil(t, dmls)
+
+	// Expect at least one batched INSERT for t3
+	found := false
+	for i, q := range dmls.sqls {
+		if strings.HasPrefix(q, "INSERT INTO `test`.`t3`") || strings.HasPrefix(q, "REPLACE INTO `test`.`t3`") {
+			found = true
+			// check corresponding args length: 3 rows * 2 cols = 6
+			require.Equal(t, 6, len(dmls.values[i]))
+			// check placeholders count consistent with args
+			placeholderCount := strings.Count(q, "?")
+			require.Equal(t, 6, placeholderCount)
+			break
+		}
+	}
+	require.True(t, found, "expected batched INSERT/REPLACE for table t3")
+}

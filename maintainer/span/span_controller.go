@@ -121,6 +121,14 @@ func (c *Controller) reset(ddlSpan *replica.SpanReplication) {
 	c.initializeDDLSpan(ddlSpan)
 }
 
+// ShouldEnableSplit returns whether split is allowed for a table given its splittable flag and controller config.
+func (c *Controller) ShouldEnableSplit(splitable bool) bool {
+	if !c.enableSplittableCheck {
+		return true
+	}
+	return splitable
+}
+
 func (c *Controller) initializeDDLSpan(ddlSpan *replica.SpanReplication) {
 	// we don't need to schedule the ddl span, but added it to the allTasks map, so we can access it by id
 	c.allTasks[ddlSpan.ID] = ddlSpan
@@ -156,12 +164,13 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 		KeyspaceID: keyspaceID,
 	}
 	tableSpans := []*heartbeatpb.TableSpan{tableSpan}
+	enableSplit := c.ShouldEnableSplit(table.Splitable)
 
 	// Determine if the table can be split based on configuration and table splittable status
-	if c.enableTableAcrossNodes && c.splitter != nil && (table.Splitable || !c.enableSplittableCheck) {
+	if c.enableTableAcrossNodes && c.splitter != nil && enableSplit {
 		tableSpans = c.splitter.Split(context.Background(), tableSpan, 0, split.SplitTypeRegionCount)
 	}
-	c.AddNewSpans(table.SchemaID, tableSpans, startTs)
+	c.AddNewSpans(table.SchemaID, tableSpans, startTs, enableSplit)
 }
 
 // AddWorkingSpans adds working spans
@@ -174,11 +183,11 @@ func (c *Controller) AddWorkingSpans(tableMap utils.Map[*heartbeatpb.TableSpan, 
 
 // AddNewSpans creates new spans for the given schema and table spans
 // This is a complex business logic method that handles span creation
-func (c *Controller) AddNewSpans(schemaID int64, tableSpans []*heartbeatpb.TableSpan, startTs uint64) {
+func (c *Controller) AddNewSpans(schemaID int64, tableSpans []*heartbeatpb.TableSpan, startTs uint64, enabledSplit bool) {
 	for _, span := range tableSpans {
 		dispatcherID := common.NewDispatcherID()
 		span.KeyspaceID = c.GetkeyspaceID()
-		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs, c.mode)
+		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs, c.mode, enabledSplit)
 		c.AddAbsentReplicaSet(replicaSet)
 	}
 }
@@ -430,7 +439,8 @@ func (c *Controller) ReplaceReplicaSet(
 			common.NewDispatcherID(),
 			old.GetSchemaID(),
 			span, checkpointTs,
-			old.GetMode())
+			old.GetMode(),
+			old.IsSplitEnabled())
 		news = append(news, new)
 	}
 
@@ -488,36 +498,53 @@ func (c *Controller) RemoveAll() []*replica.SpanReplication {
 	return tasks
 }
 
-// RemoveByTableIDs removes the tasks by the table ids and return the scheduled tasks
-func (c *Controller) RemoveByTableIDs(tableIDs ...int64) []*replica.SpanReplication {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	tasks := make([]*replica.SpanReplication, 0)
+func (c *Controller) GetRemoveTasksByTableIDs(tableIDs ...int64) []*replica.SpanReplication {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	taskList := make([]*replica.SpanReplication, 0)
 	for _, tblID := range tableIDs {
 		for _, task := range c.tableTasks[tblID] {
-			c.removeSpanWithoutLock(task)
 			if task.IsScheduled() {
-				tasks = append(tasks, task)
+				taskList = append(taskList, task)
 			}
 		}
 	}
-	return tasks
+	return taskList
 }
 
-// RemoveBySchemaID removes the tasks by the schema id and return the scheduled tasks
-func (c *Controller) RemoveBySchemaID(schemaID int64) []*replica.SpanReplication {
+func (c *Controller) GetRemoveTasksBySchemaID(schemaID int64) []*replica.SpanReplication {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	taskList := make([]*replica.SpanReplication, 0)
+	for _, task := range c.schemaTasks[schemaID] {
+		if task.IsScheduled() {
+			taskList = append(taskList, task)
+		}
+	}
+	return taskList
+}
+
+// RemoveByTableIDs removes the tasks by the table ids.
+func (c *Controller) RemoveByTableIDs(tableIDs ...int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	tasks := make([]*replica.SpanReplication, 0)
-	for _, task := range c.schemaTasks[schemaID] {
-		c.removeSpanWithoutLock(task)
-		if task.IsScheduled() {
-			tasks = append(tasks, task)
+	for _, tblID := range tableIDs {
+		for _, task := range c.tableTasks[tblID] {
+			c.removeSpanWithoutLock(task)
 		}
 	}
-	return tasks
+}
+
+// RemoveBySchemaID removes the tasks by the schema id.
+func (c *Controller) RemoveBySchemaID(schemaID int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for _, task := range c.schemaTasks[schemaID] {
+		c.removeSpanWithoutLock(task)
+	}
 }
 
 // removeSpanWithoutLock removes the spans from the db without lock

@@ -79,7 +79,7 @@ type writer struct {
 	ddlList            []*commonEvent.DDLEvent
 	ddlWithMaxCommitTs map[int64]uint64
 
-	// this should only be used by the canal-json protocol
+	// this should be used by the canal-json, avro and open protocol
 	partitionTableAccessor *common.PartitionTableAccessor
 
 	eventRouter            *eventrouter.EventRouter
@@ -190,19 +190,21 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 	start := time.Now()
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
-	select {
-	case <-ctx.Done():
-		return context.Cause(ctx)
-	case <-done:
-		log.Info("flush DML events before DDL done", zap.Uint64("DDLCommitTs", commitTs),
-			zap.Int("total", total), zap.Duration("duration", time.Since(start)),
-			zap.Any("tables", tableIDs))
-	case <-ticker.C:
-		log.Panic("DDL event timeout, since the DML events are not flushed in time",
-			zap.Uint64("DDLCommitTs", commitTs), zap.String("query", ddl.Query),
-			zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-done:
+			log.Info("flush DML events before DDL done", zap.Uint64("DDLCommitTs", commitTs),
+				zap.Int("total", total), zap.Duration("duration", time.Since(start)),
+				zap.Any("tables", tableIDs))
+			return w.mysqlSink.WriteBlockEvent(ddl)
+		case <-ticker.C:
+			log.Warn("DML events cannot be flushed in time",
+				zap.Uint64("DDLCommitTs", commitTs), zap.String("query", ddl.Query),
+				zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
+		}
 	}
-	return w.mysqlSink.WriteBlockEvent(ddl)
 }
 
 func (w *writer) getBlockTableIDs(ddl *commonEvent.DDLEvent) map[int64]struct{} {
@@ -298,17 +300,19 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 	start := time.Now()
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
-	select {
-	case <-ctx.Done():
-		return context.Cause(ctx)
-	case <-done:
-		log.Info("flush DML events done", zap.Uint64("watermark", watermark),
-			zap.Int("total", total), zap.Duration("duration", time.Since(start)))
-	case <-ticker.C:
-		log.Panic("DML events cannot be flushed in 1 minute", zap.Uint64("watermark", watermark),
-			zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-done:
+			log.Info("flush DML events done", zap.Uint64("watermark", watermark),
+				zap.Int("total", total), zap.Duration("duration", time.Since(start)))
+			return nil
+		case <-ticker.C:
+			log.Warn("DML events cannot be flushed in time", zap.Uint64("watermark", watermark),
+				zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
+		}
 	}
-	return nil
 }
 
 // WriteMessage is to decode kafka message to event.
@@ -354,7 +358,6 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 		}
 
 		w.onDDL(ddl)
-
 		// DDL is broadcast to all partitions, but only handle the DDL from partition-0.
 		if partition != 0 {
 			return false
@@ -457,19 +460,25 @@ func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool
 
 func (w *writer) onDDL(ddl *commonEvent.DDLEvent) {
 	switch w.protocol {
-	case config.ProtocolCanalJSON, config.ProtocolOpen:
+	case config.ProtocolCanalJSON, config.ProtocolOpen, config.ProtocolAvro:
 	default:
 		return
 	}
-	if ddl.Type != byte(timodel.ActionCreateTable) {
-		return
-	}
-	stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
-	if err != nil {
-		log.Panic("parse ddl query failed", zap.String("query", ddl.Query), zap.Error(err))
-	}
-	if v, ok := stmt.(*ast.CreateTableStmt); ok && v.Partition != nil {
-		w.partitionTableAccessor.Add(ddl.GetSchemaName(), ddl.GetTableName())
+	// TODO: support more corner cases
+	// e.g. create partition table + drop table(rename table) + create normal table: the partitionTableAccessor should drop the table when the table become normal.
+	switch timodel.ActionType(ddl.Type) {
+	case timodel.ActionCreateTable:
+		stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
+		if err != nil {
+			log.Panic("parse ddl query failed", zap.String("query", ddl.Query), zap.Error(err))
+		}
+		if v, ok := stmt.(*ast.CreateTableStmt); ok && v.Partition != nil {
+			w.partitionTableAccessor.Add(ddl.GetSchemaName(), ddl.GetTableName())
+		}
+	case timodel.ActionRenameTable:
+		if w.partitionTableAccessor.IsPartitionTable(ddl.ExtraSchemaName, ddl.ExtraTableName) {
+			w.partitionTableAccessor.Add(ddl.GetSchemaName(), ddl.GetTableName())
+		}
 	}
 }
 
@@ -548,11 +557,11 @@ func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionP
 			zap.Stringer("eventType", dml.RowTypes[0]),
 			// zap.Any("columns", row.Columns), zap.Any("preColumns", row.PreColumns),
 			zap.Any("protocol", w.protocol), zap.Bool("IsPartition", dml.TableInfo.TableName.IsPartition))
-	case config.ProtocolCanalJSON, config.ProtocolOpen:
-		// for partition table, the canal-json and open-protocol message cannot assign physical table id to each dml message,
+	case config.ProtocolCanalJSON, config.ProtocolOpen, config.ProtocolAvro:
+		// for partition table, the canal-json, avro and open-protocol message cannot assign physical table id to each dml message,
 		// we cannot distinguish whether it's a real fallback event or not, still append it.
 		if w.partitionTableAccessor.IsPartitionTable(schema, table) {
-			log.Warn("DML events fallback, but it's canal-json or open-protocol and the table is a partition table, still append it",
+			log.Warn("DML events fallback, but it's canal-json, avro or open-protocol and the table is a partition table, still append it",
 				zap.Int32("partition", group.Partition), zap.Any("offset", offset),
 				zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 				zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),

@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -69,6 +70,7 @@ type dispatcherStat struct {
 	enableSyncPoint   bool
 	nextSyncPoint     atomic.Uint64
 	syncPointInterval time.Duration
+	txnAtomicity      config.AtomicityLevel
 
 	// =============================================================================
 	// ================== below are fields need copied when reset ==================
@@ -147,6 +149,7 @@ func newDispatcherStat(
 		startTs:            info.GetStartTs(),
 		epoch:              info.GetEpoch(),
 		startTableInfo:     startTableInfo,
+		txnAtomicity:       info.GetTxnAtomicity(),
 	}
 
 	// A small value to avoid too many scan tasks at the first place.
@@ -217,7 +220,9 @@ func (a *dispatcherStat) onResolvedTs(resolvedTs uint64) bool {
 	}
 	if !a.hasReceivedFirstResolvedTs.Load() {
 		log.Info("received first resolved ts from event store",
-			zap.Stringer("dispatcherID", a.id), zap.Uint64("resolvedTs", resolvedTs))
+			zap.Stringer("changefeedID", a.changefeedStat.changefeedID),
+			zap.Stringer("dispatcherID", a.id),
+			zap.Uint64("resolvedTs", resolvedTs))
 		a.lastUpdateScanLimitTime.Store(time.Now())
 		a.hasReceivedFirstResolvedTs.Store(true)
 	}

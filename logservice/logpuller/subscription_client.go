@@ -435,7 +435,7 @@ func (s *subscriptionClient) handleDSFeedBack(ctx context.Context) error {
 func (s *subscriptionClient) Run(ctx context.Context) error {
 	// s.consume = consume
 	if s.pd == nil {
-		log.Warn("subsription client should be in test mode, skip run")
+		log.Warn("subscription client should be in test mode, skip run")
 		return nil
 	}
 	s.clusterID = s.pd.GetClusterID(ctx)
@@ -686,14 +686,14 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 		}
 		log.Debug("subscription client is going to load regions",
 			zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
-			zap.Any("span", nextSpan))
+			zap.Any("span", common.FormatTableSpan(&nextSpan)))
 
 		backoff := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		regions, err := s.regionCache.BatchLoadRegionsWithKeyRange(backoff, nextSpan.StartKey, nextSpan.EndKey, limit)
 		if err != nil {
 			log.Warn("subscription client load regions failed",
 				zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
-				zap.Any("span", nextSpan),
+				zap.Any("span", common.FormatTableSpan(&nextSpan)),
 				zap.Error(err))
 			backoffBeforeLoad = true
 			continue
@@ -708,7 +708,7 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 		if len(regionMetas) == 0 {
 			log.Warn("subscription client load regions with holes",
 				zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
-				zap.Any("span", nextSpan))
+				zap.Any("span", common.FormatTableSpan(&nextSpan)))
 			backoffBeforeLoad = true
 			continue
 		}
@@ -999,7 +999,7 @@ func (s *subscriptionClient) logSlowRegions(ctx context.Context) error {
 			attr := rt.rangeLock.IterAll(nil)
 			ckptTime := oracle.GetTimeFromTS(attr.SlowestRegion.ResolvedTs)
 			if attr.SlowestRegion.Initialized {
-				if currTime.Sub(ckptTime) > 2*resolveLockMinInterval {
+				if currTime.Sub(ckptTime) > 6*resolveLockMinInterval {
 					log.Info("subscription client finds a initialized slow region",
 						zap.Uint64("subscriptionID", uint64(subscriptionID)),
 						zap.Any("slowRegion", attr.SlowestRegion))
@@ -1060,6 +1060,9 @@ func (s *subscriptionClient) newSubscribedSpan(
 				state:      state,
 				create:     time.Now(),
 			}:
+			// it is ok to ignore resolve lock task when the channel is full
+			default:
+				metrics.SubscriptionClientResolveLockTaskDropCounter.Inc()
 			}
 		}
 	}

@@ -43,6 +43,8 @@ type RedoLogWriter interface {
 	Run(ctx context.Context) error
 	// Close is used to close the writer.
 	Close() error
+
+	SetTableSchemaStore(*pevent.TableSchemaStore)
 }
 
 // LogWriterConfig is the config for redo log writer.

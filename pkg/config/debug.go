@@ -67,8 +67,8 @@ type PullerConfig struct {
 
 	// PendingRegionRequestQueueSize is the total size of the pending region request queue shared across
 	// all puller workers connecting to a single TiKV store. This size is divided equally among all workers.
-	// For example, if PendingRegionRequestQueueSize is 256 and there are 8 workers connecting to the same store,
-	// each worker's queue size will be 256 / 8 = 32.
+	// For example, if PendingRegionRequestQueueSize is 32 and there are 8 workers connecting to the same store,
+	// each worker's queue size will be 32 / 8 = 4.
 	PendingRegionRequestQueueSize int `toml:"pending-region-request-queue-size" json:"pending_region_request_queue_size"`
 
 	MemoryQuota uint64 `toml:"memory-quota" json:"memory_quota"`
@@ -80,20 +80,22 @@ func NewDefaultPullerConfig() *PullerConfig {
 		EnableResolvedTsStuckDetection: false,
 		ResolvedTsStuckInterval:        TomlDuration(5 * time.Minute),
 		LogRegionDetails:               false,
-		PendingRegionRequestQueueSize:  256,                    // Base on test result
-		MemoryQuota:                    1 * 1024 * 1024 * 1024, // 1GB
-
+		PendingRegionRequestQueueSize:  32, // This value is chosen to reduce the impact of new changefeeds on existing ones.
+    MemoryQuota:                    1 * 1024 * 1024 * 1024, // 1GB
 	}
 }
 
 type EventStoreConfig struct {
 	CompressionThreshold int `toml:"compression-threshold" json:"compression_threshold"`
+
+	EnableDataSharing bool `toml:"enable-data-sharing" json:"enable_data_sharing"`
 }
 
 // NewDefaultEventStoreConfig returns the default event store configuration.
 func NewDefaultEventStoreConfig() *EventStoreConfig {
 	return &EventStoreConfig{
-		CompressionThreshold: 4096, // 4KB
+		CompressionThreshold: 16384, // 16KB
+		EnableDataSharing:    false,
 	}
 }
 
@@ -118,6 +120,11 @@ type EventServiceConfig struct {
 	ScanTaskQueueSize int `toml:"scan-task-queue-size" json:"scan_task_queue_size"`
 	ScanLimitInBytes  int `toml:"scan-limit-in-bytes" json:"scan_limit_in_bytes"`
 
+	// DMLEventMaxRows is the maximum number of rows in a DML event when split txn is enabled.
+	DMLEventMaxRows int32 `toml:"dml-event-max-rows" json:"dml_event_max_rows"`
+	// DMLEventMaxBytes is the maximum size of a DML event in bytes when split txn is enabled.
+	DMLEventMaxBytes int64 `toml:"dml-event-max-bytes" json:"dml_event_max_bytes"`
+
 	// FIXME: For now we found cdc may OOM when there is a large amount of events to be sent to event collector from a remote event service.
 	// So we add this config to be able to disable remote event service in such scenario.
 	// TODO: Remove this config after we find a proper way to fix the OOM issue.
@@ -130,6 +137,8 @@ func NewDefaultEventServiceConfig() *EventServiceConfig {
 	return &EventServiceConfig{
 		ScanTaskQueueSize:        1024 * 8,
 		ScanLimitInBytes:         1024 * 1024 * 256, // 256MB
+		DMLEventMaxRows:          256,
+		DMLEventMaxBytes:         1024 * 1024 * 1, // 1MB
 		EnableRemoteEventService: true,
 	}
 }

@@ -32,8 +32,6 @@ function run() {
 		--ssl-cert=$TLS_DIR/server.pem \
 		--ssl-key=$TLS_DIR/server-key.pem
 
-	cd $WORK_DIR
-
 	echo " \
   [security]
    ca-path = \"$TLS_DIR/ca.pem\"
@@ -145,7 +143,7 @@ function run() {
 	cleanup_process $CDC_BINARY
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 run $*
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

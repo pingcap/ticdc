@@ -542,7 +542,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 			return errors.Trace(err)
 		}
 		if skip {
-			log.Info("ignore DML by filter", zap.Any("tableInfo", t.TableInfo), zap.Any("raw", raw))
+			log.Debug("ignore DML by filter", zap.Any("tableInfo", t.TableInfo), zap.Any("raw", raw))
 			t.Rows.TruncateTo(t.Rows.NumRows() - count) // Remove the rows that were added
 			return nil
 		}
@@ -564,6 +564,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	return nil
 }
 
+// GetTableID returns the physical table ID of the event.
 func (t *DMLEvent) GetTableID() int64 {
 	return t.PhysicalTableID
 }

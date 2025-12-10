@@ -47,6 +47,7 @@ type DDLEvent struct {
 	ExtraTableName  string            `json:"extra_table_name"`
 	Query           string            `json:"query"`
 	TableInfo       *common.TableInfo `json:"-"`
+	StartTs         uint64            `json:"start_ts"`
 	FinishedTs      uint64            `json:"finished_ts"`
 	// The seq of the event. It is set by event service.
 	Seq uint64 `json:"seq"`
@@ -56,7 +57,15 @@ type DDLEvent struct {
 	// The first entry always represents the current table information.
 	MultipleTableInfos []*common.TableInfo `json:"-"`
 
-	BlockedTables     *InfluencedTables `json:"blocked_tables"`
+	BlockedTables *InfluencedTables `json:"blocked_tables"`
+	// BlockedTableNames is used by downstream adapters to get the names of tables that should block this DDL.
+	// It is particularly used for querying the execution status of asynchronous DDLs (e.g., `ADD INDEX`)
+	// that may be running on the table before this DDL.
+	// This field will be set for most `InfluenceTypeNormal` DDLs, except for those creating new tables/schemas or dropping views.
+	// It will be empty for other DDLs.
+	// NOTE: For `RENAME TABLE` / `RENAME TABLES` DDLs, this will be set to the old table names.
+	// For partition DDLs, this will be the parent table name.
+	BlockedTableNames []SchemaTableName `json:"blocked_table_names"`
 	NeedDroppedTables *InfluencedTables `json:"need_dropped_tables"`
 	NeedAddedTables   []Table           `json:"need_added_tables"`
 
@@ -99,8 +108,8 @@ type DDLEvent struct {
 }
 
 func (d *DDLEvent) String() string {
-	return fmt.Sprintf("DDLEvent{Version: %d, DispatcherID: %s, Type: %d, SchemaID: %d, SchemaName: %s, TableName: %s, ExtraSchemaName: %s, ExtraTableName: %s, Query: %s, TableInfo: %v, FinishedTs: %d, Seq: %d, BlockedTables: %v, NeedDroppedTables: %v, NeedAddedTables: %v, UpdatedSchemas: %v, TableNameChange: %v, TiDBOnly: %t, BDRMode: %s, Err: %s, eventSize: %d}",
-		d.Version, d.DispatcherID.String(), d.Type, d.SchemaID, d.SchemaName, d.TableName, d.ExtraSchemaName, d.ExtraTableName, d.Query, d.TableInfo, d.FinishedTs, d.Seq, d.BlockedTables, d.NeedDroppedTables, d.NeedAddedTables, d.UpdatedSchemas, d.TableNameChange, d.TiDBOnly, d.BDRMode, d.Err, d.eventSize)
+	return fmt.Sprintf("DDLEvent{Version: %d, DispatcherID: %s, Type: %d, SchemaID: %d, SchemaName: %s, TableName: %s, ExtraSchemaName: %s, ExtraTableName: %s, Query: %s, TableInfo: %v, StartTs: %d, FinishedTs: %d, Seq: %d, BlockedTables: %v, NeedDroppedTables: %v, NeedAddedTables: %v, UpdatedSchemas: %v, TableNameChange: %v, TiDBOnly: %t, BDRMode: %s, Err: %s, eventSize: %d}",
+		d.Version, d.DispatcherID.String(), d.Type, d.SchemaID, d.SchemaName, d.TableName, d.ExtraSchemaName, d.ExtraTableName, d.Query, d.TableInfo, d.StartTs, d.FinishedTs, d.Seq, d.BlockedTables, d.NeedDroppedTables, d.NeedAddedTables, d.UpdatedSchemas, d.TableNameChange, d.TiDBOnly, d.BDRMode, d.Err, d.eventSize)
 }
 
 func (d *DDLEvent) GetType() int {
@@ -112,7 +121,7 @@ func (d *DDLEvent) GetDispatcherID() common.DispatcherID {
 }
 
 func (d *DDLEvent) GetStartTs() common.Ts {
-	return 0
+	return d.StartTs
 }
 
 func (d *DDLEvent) GetError() error {
@@ -148,6 +157,15 @@ func (d *DDLEvent) GetExtraTableName() string {
 	return d.ExtraTableName
 }
 
+// GetTableID returns the logic table ID of the event.
+// it returns 0 when there is no tableinfo
+func (d *DDLEvent) GetTableID() int64 {
+	if d.TableInfo != nil {
+		return d.TableInfo.TableName.TableID
+	}
+	return 0
+}
+
 func (d *DDLEvent) GetEvents() []*DDLEvent {
 	// Some ddl event may be multi-events, we need to split it into multiple messages.
 	// Such as rename table test.table1 to test.table10, test.table2 to test.table20
@@ -174,6 +192,7 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 				TableName:  info.GetTableName(),
 				TableInfo:  info,
 				Query:      queries[i],
+				StartTs:    d.StartTs,
 				FinishedTs: d.FinishedTs,
 			}
 			if model.ActionType(d.Type) == model.ActionRenameTables {
@@ -212,6 +231,10 @@ func (e *DDLEvent) GetBlockedTables() *InfluencedTables {
 	return e.BlockedTables
 }
 
+func (e *DDLEvent) GetBlockedTableNames() []SchemaTableName {
+	return e.BlockedTableNames
+}
+
 func (e *DDLEvent) GetNeedDroppedTables() *InfluencedTables {
 	return e.NeedDroppedTables
 }
@@ -230,13 +253,6 @@ func (e *DDLEvent) GetDDLQuery() string {
 		return ""
 	}
 	return e.Query
-}
-
-func (e *DDLEvent) GetDDLSchemaName() string {
-	if e == nil {
-		return ""
-	}
-	return e.SchemaName
 }
 
 func (e *DDLEvent) GetDDLType() model.ActionType {

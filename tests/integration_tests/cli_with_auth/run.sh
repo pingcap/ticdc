@@ -29,7 +29,6 @@ function run() {
 	start_tidb_cluster --workdir $WORK_DIR --multiple-upstream-pd true
 	run_sql "CREATE USER 'ticdc'@'%' IDENTIFIED BY 'ticdc_secret';"
 
-	cd $WORK_DIR
 	pd_addr="http://$UP_PD_HOST_1:$UP_PD_PORT_1"
 
 	# record tso before we create tables to skip the system table DDLs
@@ -190,7 +189,7 @@ EOF
 	cleanup_process $CDC_BINARY
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 run $*
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

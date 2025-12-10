@@ -28,7 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
-	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
+	"github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"go.uber.org/zap"
@@ -39,7 +39,7 @@ import (
 type Controller struct {
 	bootstrapped bool
 
-	schedulerController    *pkgscheduler.Controller
+	schedulerController    *scheduler.Controller
 	operatorController     *operator.Controller
 	redoOperatorController *operator.Controller
 	spanController         *span.Controller
@@ -161,8 +161,8 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 		}
 		nodeID := stm.GetNodeID()
 		if nodeID != from {
-			// todo: handle the case that the node id is mismatch
-			log.Warn("node id not match",
+			// todo: handle the case that the nodeID is mismatch
+			log.Warn("nodeID not match",
 				zap.String("changefeed", c.changefeedID.Name()),
 				zap.Any("from", from),
 				zap.Stringer("node", nodeID))

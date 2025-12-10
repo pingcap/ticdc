@@ -51,6 +51,7 @@ func TestGetCandidateNodes(t *testing.T) {
 	tableID2 := int64(101)
 	span1 := common.TableIDToComparableSpan(common.DefaultKeyspaceID, tableID1)
 	span2 := common.TableIDToComparableSpan(common.DefaultKeyspaceID, tableID2)
+	startTs := uint64(100)
 
 	// initialize event store states
 	coordinator.updateEventStoreState(nodeID1, &logservicepb.EventStoreState{
@@ -129,22 +130,23 @@ func TestGetCandidateNodes(t *testing.T) {
 			},
 		},
 	})
+	require.Len(t, coordinator.eventStoreStates.m, 3)
 
 	// check get candidates
 	{
-		nodes := coordinator.getCandidateNodes(nodeID1, &span1, uint64(100))
+		nodes := coordinator.getCandidateNodes(nodeID1, &span1, startTs)
 		assert.Equal(t, []string{nodeID2.String()}, nodes)
 	}
 	{
-		nodes := coordinator.getCandidateNodes(nodeID3, &span1, uint64(100))
+		nodes := coordinator.getCandidateNodes(nodeID3, &span1, startTs)
 		assert.Equal(t, []string{nodeID2.String(), nodeID1.String()}, nodes)
 	}
 	{
-		nodes := coordinator.getCandidateNodes(nodeID1, &span2, uint64(100))
+		nodes := coordinator.getCandidateNodes(nodeID1, &span2, startTs)
 		assert.Equal(t, []string{nodeID3.String(), nodeID2.String()}, nodes)
 	}
 	{
-		nodes := coordinator.getCandidateNodes(nodeID3, &span2, uint64(100))
+		nodes := coordinator.getCandidateNodes(nodeID3, &span2, startTs)
 		assert.Equal(t, []string{nodeID2.String()}, nodes)
 	}
 
@@ -164,7 +166,7 @@ func TestGetCandidateNodes(t *testing.T) {
 		},
 	})
 	{
-		nodes := coordinator.getCandidateNodes(nodeID3, &span1, uint64(100))
+		nodes := coordinator.getCandidateNodes(nodeID3, &span1, startTs)
 		assert.Equal(t, []string{nodeID1.String(), nodeID2.String()}, nodes)
 	}
 
@@ -190,16 +192,47 @@ func TestGetCandidateNodes(t *testing.T) {
 		},
 	})
 	{
-		nodes := coordinator.getCandidateNodes(nodeID3, &span1, uint64(100))
+		nodes := coordinator.getCandidateNodes(nodeID3, &span1, startTs)
 		assert.Equal(t, []string{nodeID2.String(), nodeID1.String()}, nodes)
 	}
 
 	// remove node1 and check again
 	delete(coordinator.nodes.m, nodeID1)
 	{
-		nodes := coordinator.getCandidateNodes(nodeID3, &span1, uint64(100))
+		nodes := coordinator.getCandidateNodes(nodeID3, &span1, startTs)
 		assert.Equal(t, []string{nodeID2.String()}, nodes)
 	}
+}
+
+func TestGetCandidateNodesIgnoreResolvedEqCheckpoint(t *testing.T) {
+	coordinator := newLogCoordinatorForTest()
+
+	nodeID1 := node.ID("node-1")
+	nodeID2 := node.ID("node-2")
+	coordinator.nodes.m[nodeID1] = &node.Info{ID: nodeID1}
+	coordinator.nodes.m[nodeID2] = &node.Info{ID: nodeID2}
+
+	tableID := int64(200)
+	span := common.TableIDToComparableSpan(common.DefaultKeyspaceID, tableID)
+	startTs := uint64(600)
+
+	coordinator.updateEventStoreState(nodeID2, &logservicepb.EventStoreState{
+		TableStates: map[int64]*logservicepb.TableState{
+			tableID: {
+				Subscriptions: []*logservicepb.SubscriptionState{
+					{
+						SubID:        1,
+						Span:         &span,
+						CheckpointTs: startTs - 1,
+						ResolvedTs:   startTs - 1,
+					},
+				},
+			},
+		},
+	})
+
+	nodes := coordinator.getCandidateNodes(nodeID1, &span, startTs)
+	require.Empty(t, nodes, "resolvedTs equal to checkpointTs should not be reused")
 }
 
 func TestUpdateChangefeedStates(t *testing.T) {

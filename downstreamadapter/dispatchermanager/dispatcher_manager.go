@@ -167,11 +167,7 @@ func NewDispatcherManager(
 	if cfConfig.SinkConfig.Integrity != nil {
 		integrityCfg = cfConfig.SinkConfig.Integrity.ToPB()
 	}
-	log.Info("New DispatcherManager",
-		zap.Stringer("changefeedID", changefeedID),
-		zap.String("config", cfConfig.String()),
-		zap.String("filterConfig", filterCfg.String()),
-	)
+
 	manager := &DispatcherManager{
 		dispatcherMap:         newDispatcherMap[*dispatcher.EventDispatcher](),
 		changefeedID:          changefeedID,
@@ -234,6 +230,7 @@ func NewDispatcherManager(
 		integrityCfg,
 		filterCfg,
 		syncPointConfig,
+		manager.config.SinkConfig.TxnAtomicity,
 		manager.config.EnableSplittableCheck,
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
@@ -288,7 +285,7 @@ func NewDispatcherManager(
 		manager.collectBlockStatusRequest(ctx)
 	}()
 
-	log.Info("event dispatcher manager created",
+	log.Info("dispatcher manager initialized",
 		zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("maintainerID", maintainerID),
 		zap.Uint64("startTs", startTs),
@@ -297,6 +294,7 @@ func NewDispatcherManager(
 		zap.Uint64("redoQuota", manager.redoQuota),
 		zap.Bool("redoEnable", manager.RedoEnable),
 		zap.Bool("outputRawChangeEvent", manager.sharedInfo.IsOutputRawChangeEvent()),
+		zap.String("filterConfig", filterCfg.String()),
 	)
 	return manager, tableTriggerStartTs, nil
 }
@@ -329,12 +327,10 @@ func (e *DispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*h
 	if e.tableTriggerEventDispatcher == nil {
 		return nil
 	}
-
 	needAddDispatcher, err := e.tableTriggerEventDispatcher.InitializeTableSchemaStore(schemaInfo)
 	if err != nil {
 		return errors.Trace(err)
 	}
-
 	if !needAddDispatcher {
 		return nil
 	}
@@ -344,10 +340,6 @@ func (e *DispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*h
 		return errors.ErrDispatcherFailed.GenWithStackByArgs()
 	}
 
-	// redo
-	if e.RedoEnable {
-		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.redoTableTriggerEventDispatcher, e.redoQuota)
-	}
 	// table trigger event dispatcher can register to event collector to receive events after finish the initial table schema store from the maintainer.
 	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.tableTriggerEventDispatcher, e.sinkQuota)
 
@@ -841,8 +833,14 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 		e.heartBeatTask.Cancel()
 	}
 
+	if e.sharedInfo != nil {
+		e.sharedInfo.Close()
+	}
+
 	if e.RedoEnable {
 		e.redoSink.Close(removeChangefeed)
+		// FIXME: cleanup redo log when remove the changefeed
+		e.closeRedoMeta(removeChangefeed)
 	}
 	e.sink.Close(removeChangefeed)
 	e.cancel()

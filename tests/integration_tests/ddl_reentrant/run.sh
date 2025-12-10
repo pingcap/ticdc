@@ -93,7 +93,7 @@ function ddl_test() {
 	cdc_cli_changefeed resume --no-confirm --changefeed-id=${changefeedid} --overwrite-checkpoint-ts=$((ddl_finished_ts - 1))
 	echo "resume changefeed ${changefeedid} from ${ddl_finished_ts}"
 	ensure 10 check_ts_forward $changefeedid
-	ensure 1000000000000000 check_ddl_executed "${WORK_DIR}/cdc.log" "${WORK_DIR}/ddl_temp.sql" $is_reentrant
+	ensure 50 check_ddl_executed "${WORK_DIR}/cdc.log" "${WORK_DIR}/ddl_temp.sql" $is_reentrant
 }
 
 function run() {
@@ -107,8 +107,6 @@ function run() {
 	start_tidb_cluster --workdir $WORK_DIR --tidb-config $CUR/conf/tidb_config.toml
 
 	complete_ddls
-
-	cd $WORK_DIR
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 	changefeedid=$(cdc_cli_changefeed create --sink-uri="$SINK_URI" | grep '^ID:' | head -n1 | awk '{print $2}')
@@ -130,7 +128,7 @@ function run() {
 	cleanup_process $CDC_BINARY
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 run $*
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

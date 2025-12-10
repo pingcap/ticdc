@@ -15,6 +15,7 @@ stop() {
 	# to distinguish whether the test failed in the DML synchronization phase or the DDL synchronization phase
 	echo $(mysql -h${DOWN_TIDB_HOST} -P${DOWN_TIDB_PORT} -uroot -e "select count(*) from consistent_replicate_storage_file_large_value.usertable;")
 	stop_tidb_cluster
+	collect_logs $WORK_DIR
 }
 
 function run() {
@@ -25,7 +26,6 @@ function run() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	cd $WORK_DIR
 	run_sql "set @@global.tidb_enable_exchange_partition=on" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
@@ -72,10 +72,10 @@ function run() {
 	# when use base64 encoded password
 	ENPASSWORD="MTIzNDU2"
 
-	cdc redo apply --tmp-dir="$tmp_download_path/apply" \
+	cdc redo apply --log-level debug --tmp-dir="$tmp_download_path/apply" \
 		--storage="$storage_path" \
 		--sink-uri="mysql://normal:${ENPASSWORD}@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
-	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
 }
 
 trap stop EXIT

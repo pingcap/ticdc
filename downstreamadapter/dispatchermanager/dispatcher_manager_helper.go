@@ -231,7 +231,10 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 
 	dispatcherItem, ok := dispatcherMap.Get(id)
 	if ok {
-		if dispatcherItem.GetRemovingStatus() {
+		if dispatcherItem.GetTryRemoving() {
+			log.Info("dispatcher is already in removing state, skip repeated remove request",
+				zap.Stringer("changefeedID", changefeedID),
+				zap.Stringer("dispatcherID", id))
 			return
 		}
 
@@ -260,6 +263,8 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 
 		// Save taskHandle for later cancellation
 		e.removeTaskHandles.Store(id, taskHandle)
+
+		dispatcherItem.SetTryRemoving()
 
 		log.Info("submitted async remove task",
 			zap.Stringer("changefeedID", changefeedID),

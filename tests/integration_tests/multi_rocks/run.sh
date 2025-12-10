@@ -22,8 +22,6 @@ function run() {
 
 	start_tidb_cluster --workdir $WORK_DIR --tikv-config $CUR/conf/tikv_config.toml
 
-	cd $WORK_DIR
-
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
 	TOPIC_NAME="ticdc-multi-rocks-test-$RANDOM"
@@ -61,7 +59,7 @@ function run() {
 	cleanup_process $CDC_BINARY
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
 run $*
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
