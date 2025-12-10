@@ -449,12 +449,16 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 			rowColumnsCurrentOffset++
 			pkIsHandle = (tableInfo.PKIsHandle && mysql.HasPriKeyFlag(col.GetFlag())) || col.ID == model.ExtraHandleID
 			if pkIsHandle {
+				log.Info("fizz pk is handle", zap.Any("col", col))
 				// pk is handle
 				colSchema.HandleKeyIDs[col.ID] = struct{}{}
 				colSchema.HandleColID = []int64{col.ID}
 				colSchema.IndexColumns = append(colSchema.IndexColumns, []int64{col.ID})
 				colSchema.PKIndex = []int64{col.ID}
 			} else if tableInfo.IsCommonHandle {
+
+				log.Info("fizz common handle", zap.Any("col", col))
+
 				clear(colSchema.HandleKeyIDs)
 				colSchema.HandleColID = colSchema.HandleColID[:0]
 				pkIdx := tables.FindPrimaryIndex(tableInfo)

@@ -74,7 +74,8 @@ func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableI
 	raw.Key = RemoveKeyspacePrefix(raw.Key)
 	recordID, err := tablecodec.DecodeRowKey(raw.Key)
 
-	log.Info("fizz recordID", zap.Any("recordID", recordID), zap.Any("raw.Key", raw.Key), zap.Any("Value", raw.Value))
+	log.Info("fizz recordID", zap.Any("recordID", recordID), zap.Any("raw.Key", raw.Key), zap.Any("Value", raw.Value), zap.Any("isIntHandle", recordID.IsInt()))
+
 	if err != nil {
 		return 0, nil, errors.Trace(err)
 	}
