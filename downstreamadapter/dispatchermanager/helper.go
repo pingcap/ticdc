@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"go.uber.org/zap"
 )
@@ -120,10 +121,10 @@ func toFilterConfigPB(filter *config.FilterConfig) *eventpb.InnerFilterConfig {
 
 func toEventFilterRulePB(rule *config.EventFilterRule) *eventpb.EventFilterRule {
 	eventFilterPB := &eventpb.EventFilterRule{
-		IgnoreInsertValueExpr:    rule.IgnoreInsertValueExpr,
-		IgnoreUpdateNewValueExpr: rule.IgnoreUpdateNewValueExpr,
-		IgnoreUpdateOldValueExpr: rule.IgnoreUpdateOldValueExpr,
-		IgnoreDeleteValueExpr:    rule.IgnoreDeleteValueExpr,
+		IgnoreInsertValueExpr:    util.GetOrZero(rule.IgnoreInsertValueExpr),
+		IgnoreUpdateNewValueExpr: util.GetOrZero(rule.IgnoreUpdateNewValueExpr),
+		IgnoreUpdateOldValueExpr: util.GetOrZero(rule.IgnoreUpdateOldValueExpr),
+		IgnoreDeleteValueExpr:    util.GetOrZero(rule.IgnoreDeleteValueExpr),
 	}
 
 	eventFilterPB.Matcher = append(eventFilterPB.Matcher, rule.Matcher...)

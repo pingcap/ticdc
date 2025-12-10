@@ -60,7 +60,7 @@ mysql_groups=(
 	# G13
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
 	# G14
-	'batch_add_table batch_update_to_no_batch fail_over_ddl_O'
+	'batch_add_table batch_update_to_no_batch fail_over_ddl_O update_changefeed_check_config'
 	# G15
 	'split_region changefeed_resume_with_checkpoint_ts autorandom gc_safepoint foreign_key_check old_arch_compatibility'
 )
@@ -98,7 +98,7 @@ kafka_groups=(
 	# G13
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
 	# G14
-	'kafka_simple_basic avro_basic debezium_basic fail_over_ddl_O'
+	'kafka_simple_basic avro_basic debezium_basic fail_over_ddl_O update_changefeed_check_config'
 	# G15
 	'kafka_simple_basic_avro split_region autorandom gc_safepoint kafka_log_info'
 )
@@ -136,7 +136,7 @@ pulsar_groups=(
 	# G13
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
 	# G14
-	'avro_basic debezium_basic fail_over_ddl_O'
+	'avro_basic debezium_basic fail_over_ddl_O update_changefeed_check_config'
 	# G15
 	'split_region autorandom gc_safepoint'
 )
