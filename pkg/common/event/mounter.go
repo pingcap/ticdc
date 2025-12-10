@@ -80,10 +80,6 @@ func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableI
 		return 0, nil, nil
 	}
 
-	log.Info("DecodeToChunk",
-		zap.Any("tableInfo", tableInfo),
-		zap.Bool("isIntHandle", recordID.IsInt()))
-
 	var (
 		decoder         *rowcodec.ChunkDecoder
 		preChecksum     uint32
