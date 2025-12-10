@@ -1195,7 +1195,7 @@ type ChangefeedSchedulerConfig struct {
 	// If true, the splittable table check will be skipped even if the downstream is MySQL.
 	// This is useful for advanced users who are aware of the risks of splitting unsplittable tables.
 	// Default value is false.
-	ForceSplit *bool `json:"force_split"`
+	ForceSplit *bool `json:"force_split,omitempty"`
 	// These config is used for adjust the frequency of balancing traffic.
 	// BalanceScoreThreshold is the score threshold for balancing traffic. Larger value means less frequent balancing.
 	BalanceScoreThreshold *int `json:"balance_score_threshold,omitempty"`
