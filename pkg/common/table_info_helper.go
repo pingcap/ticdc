@@ -463,7 +463,6 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 					colSchema.HandleKeyIDs[id] = struct{}{}
 					colSchema.HandleColID = append(colSchema.HandleColID, id)
 				}
-
 			}
 		} else {
 			colSchema.VirtualColumnsOffset = append(colSchema.VirtualColumnsOffset, i)
@@ -586,7 +585,13 @@ func (s *columnSchema) initRowColInfosWithoutVirtualCols() {
 func (s *columnSchema) initIndexColumns() {
 	handleIndexOffset := -1
 	hasPrimary := len(s.HandleKeyIDs) != 0
+	log.Info("before set handle key with not null unique key",
+		zap.Int64s("handle col ids", s.HandleColID))
 	for i, idx := range s.Indices {
+		log.Info("init index columns",
+			zap.String("index name", idx.Name.O),
+			zap.Bool("is primary", idx.Primary),
+			zap.Bool("is unique", idx.Unique))
 		if idx.Primary {
 			// append index
 			indexColOffset := make([]int64, 0, len(idx.Columns))
@@ -653,6 +658,9 @@ func (s *columnSchema) initIndexColumns() {
 		s.HandleKeyIDs[colID] = struct{}{}
 		s.HandleColID = append(s.HandleColID, colID)
 	}
+	log.Info("set handle key with not null unique key",
+		zap.String("index name", s.Indices[handleIndexOffset].Name.O),
+		zap.Int64s("handle col ids", s.HandleColID))
 }
 
 // TryGetCommonPkColumnIds get the IDs of primary key column if the table has common handle.

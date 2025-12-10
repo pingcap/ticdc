@@ -38,7 +38,6 @@ func newChunkDecoderV2(tableInfo *common.TableInfo, tz *time.Location) *rowcodec
 	handleColIDs, _, reqCols := tableInfo.GetRowColInfos()
 	log.Info("newChunkDecoderV2",
 		zap.Int64s("handleColIDs", handleColIDs),
-		zap.Any("reqCols", reqCols),
 		zap.Any("tidbTableInfo", tableInfo.ToTiDBTableInfo()))
 	// This function is used to set the default value for the column that
 	// is not in the raw data.
