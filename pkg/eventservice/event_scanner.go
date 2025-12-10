@@ -707,8 +707,6 @@ func (t *TxnEvent) AppendRow(
 		}
 	}()
 
-	log.Panic("fizz append row", zap.Any("rawEvent", rawEvent), zap.Any("t.CurrentDMLEvent", t.CurrentDMLEvent))
-
 	if t.shouldSplitTxn && (t.CurrentDMLEvent.Len() >= t.DMLEventMaxRows || t.CurrentDMLEvent.GetSize() >= t.DMLEventMaxBytes) {
 		newDMLEvent := event.NewDMLEvent(
 			t.CurrentDMLEvent.DispatcherID,
