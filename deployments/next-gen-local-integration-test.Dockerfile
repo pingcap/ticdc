@@ -28,7 +28,7 @@ WORKDIR /root/download
 #RUN ls ./bin
 
 # Download go into /usr/local dir.
-ENV GOLANG_VERSION 1.25.4
+ENV GOLANG_VERSION 1.25.5
 ENV GOLANG_DOWNLOAD_URL https://dl.google.com/go/go$GOLANG_VERSION.linux-amd64.tar.gz
 RUN curl -fsSL "$GOLANG_DOWNLOAD_URL" -o golang.tar.gz \
 	&& tar -C /usr/local -xzf golang.tar.gz \
