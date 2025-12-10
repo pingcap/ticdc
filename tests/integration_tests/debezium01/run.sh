@@ -59,8 +59,6 @@ cdc_cli_changefeed create -c test --sink-uri="kafka://127.0.0.1:9092/output_ticd
 cd $CUR
 go run ./src
 
-if [ $? -ne 0 ]; then
-	exit 1
-fi
+exit 1
 
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
