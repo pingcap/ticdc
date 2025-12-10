@@ -38,7 +38,7 @@ func TestNewController(t *testing.T) {
 			ID:              ddlDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
+		}, "node1", false)
 	appcontext.SetService(watcher.NodeManagerName, watcher.NewNodeManager(nil, nil))
 	controller := NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	require.NotNil(t, controller)
@@ -55,7 +55,7 @@ func TestController_AddNewTable(t *testing.T) {
 			ID:              ddlDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
+		}, "node1", false)
 
 	controller := NewController(
 		changefeedID,
@@ -92,7 +92,7 @@ func TestController_GetTaskByID(t *testing.T) {
 			ID:              ddlDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
+		}, "node1", false)
 
 	controller := NewController(
 		changefeedID,
@@ -146,7 +146,7 @@ func TestController_GetTasksByTableID(t *testing.T) {
 			ID:              ddlDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
+		}, "node1", false)
 
 	controller := NewController(
 		changefeedID,
@@ -183,7 +183,7 @@ func TestController_GetTasksBySchemaID(t *testing.T) {
 			ID:              ddlDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
+		}, "node1", false)
 
 	controller := NewController(
 		changefeedID,
@@ -224,7 +224,7 @@ func TestController_UpdateSchemaID(t *testing.T) {
 			ID:              ddlDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
+		}, "node1", false)
 
 	controller := NewController(
 		changefeedID,
@@ -266,7 +266,7 @@ func TestController_Statistics(t *testing.T) {
 			ID:              ddlDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
+		}, "node1", false)
 
 	controller := NewController(
 		changefeedID,
@@ -298,7 +298,7 @@ func TestBasicFunction(t *testing.T) {
 	t.Parallel()
 
 	controller := newControllerWithCheckerForTest(t)
-	absent := replica.NewSpanReplication(controller.changefeedID, common.NewDispatcherID(), 1, testutil.GetTableSpanByID(4), 1, common.DefaultMode)
+	absent := replica.NewSpanReplication(controller.changefeedID, common.NewDispatcherID(), 1, testutil.GetTableSpanByID(4), 1, common.DefaultMode, false)
 	controller.AddAbsentReplicaSet(absent)
 	// replicating and scheduling will be returned
 	replicaSpanID := common.NewDispatcherID()
@@ -308,7 +308,7 @@ func TestBasicFunction(t *testing.T) {
 			ID:              replicaSpanID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
+		}, "node1", false)
 	controller.AddReplicatingSpan(replicaSpan)
 	require.Equal(t, 3, controller.TaskSize())
 	require.Len(t, controller.GetAllTasks(), 3)
@@ -382,7 +382,7 @@ func TestReplaceReplicaSet(t *testing.T) {
 			ID:              replicaSpanID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
+		}, "node1", false)
 	controller.AddReplicatingSpan(replicaSpan)
 
 	notExists := &replica.SpanReplication{ID: common.NewDispatcherID()}
@@ -410,7 +410,7 @@ func TestMarkSpanAbsent(t *testing.T) {
 			ID:              replicaSpanID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
+		}, "node1", false)
 	controller.AddReplicatingSpan(replicaSpan)
 	controller.MarkSpanAbsent(replicaSpan)
 	require.Equal(t, 1, controller.GetAbsentSize())
@@ -427,7 +427,7 @@ func newControllerWithCheckerForTest(t *testing.T) *Controller {
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
+		}, "node1", false)
 	return NewController(
 		cfID,
 		ddlSpan,

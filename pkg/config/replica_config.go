@@ -99,6 +99,7 @@ var defaultReplicaConfig = &ReplicaConfig{
 		SchedulingTaskCountPerNode: util.AddressOf(20),  // TODO: choose a btter value
 		RegionCountPerSpan:         util.AddressOf(100), // TODO: choose a btter value
 		EnableSplittableCheck:      util.AddressOf(false),
+		ForceSplit:                 util.AddressOf(false),
 		BalanceScoreThreshold:      util.AddressOf(20),
 		MinTrafficPercentage:       util.AddressOf(0.8),
 		MaxTrafficPercentage:       util.AddressOf(1.25),

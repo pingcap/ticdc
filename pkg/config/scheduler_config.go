@@ -46,8 +46,12 @@ type ChangefeedSchedulerConfig struct {
 	// If true, only tables with primary key and no unique key can be split.
 	// If false, all tables can be split without checking.
 	// For MySQL downstream, this is always set to true for data consistency.
-	EnableSplittableCheck *bool `toml:"enable-splittable-check" json:"enable-splittable-check,omitempty"`
-
+	EnableSplittableCheck *bool `toml:"enable-splittable-check" json:"enable-splittable-check"`
+	// ForceSplit controls whether to skip the splittable table check for MySQL downstream.
+	// If true, the splittable table check will be skipped even if the downstream is MySQL.
+	// This is useful for advanced users who are aware of the risks of splitting unsplittable tables.
+	// Default value is false.
+	ForceSplit *bool `toml:"force-split" json:"force-split"`
 	// These config is used for adjust the frequency of balancing traffic.
 	// BalanceScoreThreshold is the score threshold for balancing traffic. Larger value means less frequent balancing.
 	// Default value is 20
@@ -127,8 +131,11 @@ func (c *ChangefeedSchedulerConfig) ValidateAndAdjust(sinkURI *url.URL) error {
 		return errors.New("max-traffic-percentage must be greater than 1")
 	}
 
-	if IsMySQLCompatibleScheme(sinkURI.Scheme) {
+	forceSplit := util.GetOrZero(c.ForceSplit)
+	if IsMySQLCompatibleScheme(sinkURI.Scheme) && !forceSplit {
 		c.EnableSplittableCheck = util.AddressOf(true)
+	} else if forceSplit {
+		c.EnableSplittableCheck = util.AddressOf(false)
 	}
 	return nil
 }
