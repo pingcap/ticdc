@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/tidb/pkg/tablecodec"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
 )
@@ -642,6 +643,13 @@ func (t *TxnEvent) AppendRow(
 ) error {
 	defer func() {
 		if r := recover(); r != nil {
+			handleColIDs, _, _ := t.CurrentDMLEvent.TableInfo.GetRowColInfos()
+			rawEvent.Key = event.RemoveKeyspacePrefix(rawEvent.Key)
+			recordID, err := tablecodec.DecodeRowKey(rawEvent.Key)
+			if err != nil {
+				log.Error("failed to decode row key", zap.Error(err))
+			}
+
 			fields := []zap.Field{
 				zap.Any("panic", r),
 				zap.Bool("shouldSplitTxn", t.shouldSplitTxn),
@@ -656,6 +664,8 @@ func (t *TxnEvent) AppendRow(
 			}
 			if rawEvent != nil {
 				fields = append(fields,
+					zap.Any("handleColIDs", handleColIDs),
+					zap.Any("recordID", recordID),
 					zap.Uint32("rawEventOpType", uint32(rawEvent.OpType)),
 					zap.Uint64("rawEventCommitTs", rawEvent.CRTs),
 					zap.Uint64("rawEventStartTs", rawEvent.StartTs),
@@ -695,6 +705,8 @@ func (t *TxnEvent) AppendRow(
 			panic(r)
 		}
 	}()
+
+	log.Panic("fizz append row", zap.Any("rawEvent", rawEvent), zap.Any("t.CurrentDMLEvent", t.CurrentDMLEvent))
 
 	if t.shouldSplitTxn && (t.CurrentDMLEvent.Len() >= t.DMLEventMaxRows || t.CurrentDMLEvent.GetSize() >= t.DMLEventMaxBytes) {
 		newDMLEvent := event.NewDMLEvent(
