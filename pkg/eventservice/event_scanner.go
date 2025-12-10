@@ -634,10 +634,10 @@ func newTxnEvent(
 func (t *TxnEvent) AppendRow(
 	rawEvent *common.RawKVEntry,
 	decode func(
-		rawKv *common.RawKVEntry,
-		tableInfo *common.TableInfo,
-		chk *chunk.Chunk,
-	) (int, *integrity.Checksum, error),
+	rawKv *common.RawKVEntry,
+	tableInfo *common.TableInfo,
+	chk *chunk.Chunk,
+) (int, *integrity.Checksum, error),
 	filter filter.Filter,
 ) error {
 	defer func() {
@@ -680,7 +680,9 @@ func (t *TxnEvent) AppendRow(
 					zap.Int64("currentDMLEventSize", t.CurrentDMLEvent.GetSize()),
 				)
 				if t.CurrentDMLEvent.TableInfo != nil {
+					handleColIDs, _, _ := t.CurrentDMLEvent.TableInfo.GetRowColInfos()
 					fields = append(fields,
+						zap.Any("handleColIDs", handleColIDs),
 						zap.String("table", t.CurrentDMLEvent.TableInfo.TableName.String()),
 						zap.Uint64("tableInfoUpdateTs", t.CurrentDMLEvent.TableInfo.GetUpdateTS()),
 						zap.Bool("tablePKIsHandle", t.CurrentDMLEvent.TableInfo.PKIsHandle()),
