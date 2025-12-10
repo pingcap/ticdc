@@ -174,7 +174,7 @@ func (o *createChangefeedOptions) completeReplicaCfg() error {
 	}
 
 	if o.disableGCSafePointCheck {
-		cfg.CheckGCSafePoint = false
+		cfg.CheckGCSafePoint = putil.AddressOf(false)
 	}
 	// Complete cfg.
 	o.cfg = cfg
@@ -295,7 +295,7 @@ func (o *createChangefeedOptions) run(ctx context.Context, cmd *cobra.Command) e
 
 	ignoreIneligibleTables := false
 	if len(tables.IneligibleTables) != 0 {
-		if o.cfg.ForceReplicate {
+		if putil.GetOrZero(o.cfg.ForceReplicate) {
 			cmd.Printf("[WARN] Force to replicate some ineligible tables, "+
 				"these tables do not have a primary key or a not-null unique key: %#v\n"+
 				"[WARN] This may cause data redundancy, "+
@@ -318,7 +318,7 @@ func (o *createChangefeedOptions) run(ctx context.Context, cmd *cobra.Command) e
 		ignoreIneligibleTables = true
 	}
 
-	createChangefeedCfg.ReplicaConfig.IgnoreIneligibleTable = ignoreIneligibleTables
+	createChangefeedCfg.ReplicaConfig.IgnoreIneligibleTable = putil.AddressOf(ignoreIneligibleTables)
 
 	info, err := o.apiClient.Changefeeds().Create(ctx, createChangefeedCfg, o.keyspace)
 	if err != nil {

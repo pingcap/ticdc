@@ -24,6 +24,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 )
@@ -427,5 +428,12 @@ func newControllerWithCheckerForTest(t *testing.T) *Controller {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1", false)
-	return NewController(cfID, ddlSpan, nil, &config.ChangefeedSchedulerConfig{EnableTableAcrossNodes: true}, common.DefaultKeyspaceID, common.DefaultMode)
+	return NewController(
+		cfID,
+		ddlSpan,
+		nil,
+		&config.ChangefeedSchedulerConfig{EnableTableAcrossNodes: util.AddressOf(true)},
+		common.DefaultKeyspaceID,
+		common.DefaultMode,
+	)
 }
