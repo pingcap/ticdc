@@ -73,6 +73,8 @@ func NewMounter(tz *time.Location, integrity *integrity.Config) Mounter {
 func (m *mounter) DecodeToChunk(raw *common.RawKVEntry, tableInfo *common.TableInfo, chk *chunk.Chunk) (int, *integrity.Checksum, error) {
 	raw.Key = RemoveKeyspacePrefix(raw.Key)
 	recordID, err := tablecodec.DecodeRowKey(raw.Key)
+
+	log.Info("fizz recordID", zap.Any("recordID", recordID), zap.Any("raw.Key", raw.Key), zap.Any("Value", raw.Value))
 	if err != nil {
 		return 0, nil, errors.Trace(err)
 	}

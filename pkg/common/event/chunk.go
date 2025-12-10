@@ -38,6 +38,7 @@ func newChunkDecoderV2(tableInfo *common.TableInfo, tz *time.Location) *rowcodec
 	handleColIDs, _, reqCols := tableInfo.GetRowColInfos()
 
 	log.Info("fizz handleColIDs", zap.Int64s("handleColIDs", handleColIDs), zap.Any("isPkHandle", tableInfo.PKIsHandle()))
+
 	// This function is used to set the default value for the column that
 	// is not in the raw data.
 	defVal := func(i int, chk *chunk.Chunk) error {
