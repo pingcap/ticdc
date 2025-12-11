@@ -164,7 +164,7 @@ func runTestCase(testCasePath, dbConnMySQL, dbConnTiDB string) {
 	}
 }
 
-func fetchNextCDCRecord(reader *kafka.Reader, kind Kind, timeout time.Duration, needWait bool) (map[string]any, map[string]any, error) {
+func fetchNextCDCRecord(reader *kafka.Reader, kind Kind, timeout time.Duration, needWait bool, query string) (map[string]any, map[string]any, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	for {
@@ -172,7 +172,7 @@ func fetchNextCDCRecord(reader *kafka.Reader, kind Kind, timeout time.Duration, 
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
 				if needWait {
-					logger.Warn("fetch record timed out", zap.Any("kind", kind), zap.Error(err))
+					logger.Warn("fetch record timed out", zap.String("query", query), zap.Any("kind", kind), zap.Error(err))
 				}
 				return nil, nil, nil
 			}
@@ -301,14 +301,14 @@ func runSingleQuery(query string, waitCDCRows bool) bool {
 		wg := &sync.WaitGroup{}
 		wg.Add(2)
 		go func() {
-			if _, _, err := fetchNextCDCRecord(readerDebezium, KindMySQL, timeout, false); err != nil {
-				logger.Error("fetch record failed", zap.Error(err))
+			if _, _, err := fetchNextCDCRecord(readerDebezium, KindMySQL, timeout, false, query); err != nil {
+				logger.Error("fetch record failed", zap.String("query", query), zap.Error(err))
 			}
 			wg.Done()
 		}()
 		go func() {
-			if _, _, err := fetchNextCDCRecord(readerTiCDC, KindTiDB, timeout, false); err != nil {
-				logger.Error("fetch record failed", zap.Error(err))
+			if _, _, err := fetchNextCDCRecord(readerTiCDC, KindTiDB, timeout, false, query); err != nil {
+				logger.Error("fetch record failed", zap.String("query", query), zap.Error(err))
 			}
 			wg.Done()
 		}()
@@ -335,17 +335,17 @@ func runSingleQuery(query string, waitCDCRows bool) bool {
 		wg.Add(2)
 		go func() {
 			var err error
-			keyMapsDebezium, objsDebezium, err = fetchNextCDCRecord(readerDebezium, KindMySQL, timeout, true)
+			keyMapsDebezium, objsDebezium, err = fetchNextCDCRecord(readerDebezium, KindMySQL, timeout, true, query)
 			if err != nil {
-				logger.Error("fetch record failed", zap.Error(err))
+				logger.Error("fetch record failed", zap.String("query", query), zap.Error(err))
 			}
 			wg.Done()
 		}()
 		go func() {
 			var err error
-			keyMapsTiCDC, objsTiCDC, err = fetchNextCDCRecord(readerTiCDC, KindTiDB, timeout, true)
+			keyMapsTiCDC, objsTiCDC, err = fetchNextCDCRecord(readerTiCDC, KindTiDB, timeout, true, query)
 			if err != nil {
-				logger.Error("fetch record failed", zap.Error(err))
+				logger.Error("fetch record failed", zap.String("query", query), zap.Error(err))
 			}
 			wg.Done()
 		}()
