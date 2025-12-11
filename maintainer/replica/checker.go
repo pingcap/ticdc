@@ -31,7 +31,8 @@ const (
 )
 
 func GetNewGroupChecker(
-	cfID common.ChangeFeedID, schedulerCfg *config.ChangefeedSchedulerConfig,
+	cfID common.ChangeFeedID,
+	schedulerCfg *config.ChangefeedSchedulerConfig,
 ) func(replica.GroupID) replica.GroupChecker[common.DispatcherID, *SpanReplication] {
 	if schedulerCfg == nil || !util.GetOrZero(schedulerCfg.EnableTableAcrossNodes) {
 		return replica.NewEmptyChecker[common.DispatcherID, *SpanReplication]

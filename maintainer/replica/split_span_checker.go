@@ -162,6 +162,7 @@ type SplitSpanChecker struct {
 	pdClock     pdutil.Clock
 
 	refresher *regionCountRefresher
+	cancel    context.CancelFunc
 
 	splitSpanCheckDuration prometheus.Observer
 }
@@ -181,7 +182,6 @@ func NewSplitSpanChecker(
 	changefeedID common.ChangeFeedID,
 	groupID replica.GroupID,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
-	refresher *regionCountRefresher,
 ) *SplitSpanChecker {
 	if schedulerCfg == nil {
 		log.Panic("scheduler config is nil, please check the config", zap.String("changefeed", changefeedID.Name()))
@@ -199,9 +199,22 @@ func NewSplitSpanChecker(
 		mergeCheckCount:        0,
 		nodeManager:            appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		pdClock:                appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
-		refresher:              refresher,
 		splitSpanCheckDuration: metrics.SplitSpanCheckDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), replica.GetGroupName(groupID)),
 	}
+
+	if checker.regionThreshold > 0 {
+		regionCache := appcontext.GetService[split.RegionCache](appcontext.RegionCache)
+		interval := util.GetOrZero(schedulerCfg.RegionCountRefreshInterval)
+		refresher := newRegionCountRefresher(regionCache, interval)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		checker.cancel = cancel
+		checker.refresher = refresher
+
+		// start the region count refresher goroutine
+		go refresher.refreshRegionCounts(ctx)
+	}
+
 	return checker
 }
 
@@ -1288,6 +1301,12 @@ func (s *SplitSpanChecker) Stat() string {
 
 func (s *SplitSpanChecker) Name() string {
 	return "split_span_checker"
+}
+
+func (s *SplitSpanChecker) Close() {
+	if s.cancel != nil {
+		s.cancel()
+	}
 }
 
 // for test only

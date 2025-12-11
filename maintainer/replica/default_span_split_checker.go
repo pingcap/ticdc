@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -66,24 +67,39 @@ type defaultSpanSplitChecker struct {
 	regionThreshold int
 
 	refresher *regionCountRefresher
+	cancel    context.CancelFunc
 }
 
 func NewDefaultSpanSplitChecker(
 	changefeedID common.ChangeFeedID,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
-	refresher *regionCountRefresher,
 ) *defaultSpanSplitChecker {
 	if schedulerCfg == nil {
 		log.Panic("scheduler config is nil, please check the config", zap.String("changefeed", changefeedID.Name()))
 	}
-	return &defaultSpanSplitChecker{
+
+	checker := &defaultSpanSplitChecker{
 		changefeedID:    changefeedID,
 		allTasks:        make(map[common.DispatcherID]*spanSplitStatus),
 		splitReadyTasks: make(map[common.DispatcherID]*spanSplitStatus),
 		writeThreshold:  util.GetOrZero(schedulerCfg.WriteKeyThreshold),
 		regionThreshold: util.GetOrZero(schedulerCfg.RegionThreshold),
-		refresher:       refresher,
 	}
+
+	if checker.regionThreshold > 0 {
+		regionCache := appcontext.GetService[split.RegionCache](appcontext.RegionCache)
+		interval := util.GetOrZero(schedulerCfg.RegionCountRefreshInterval)
+		refresher := newRegionCountRefresher(regionCache, interval)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		checker.cancel = cancel
+		checker.refresher = refresher
+
+		// start the region count refresher goroutine
+		go refresher.refreshRegionCounts(ctx)
+	}
+
+	return checker
 }
 
 // spanSplitStatus tracks the split status of a span in the default group
@@ -226,4 +242,10 @@ func (s *defaultSpanSplitChecker) Stat() string {
 		res.WriteString("];")
 	}
 	return res.String()
+}
+
+func (s *defaultSpanSplitChecker) Close() {
+	if s.cancel != nil {
+		s.cancel()
+	}
 }
