@@ -5,8 +5,8 @@ WORK_DIR=$1
 set +e
 
 for port in 8300 8301 8302 8303; do
-    # The -f option makes curl fail silently on server errors, and 2>/dev/null suppresses connection errors.
-    curl -sf -X GET http://127.0.0.1:${port}/debug/pprof/goroutine?debug=2 > "$WORK_DIR/cdc_profile_${port}.log" 2>/dev/null || true
+	# The -f option makes curl fail silently on server errors, and 2>/dev/null suppresses connection errors.
+	curl -sf -X GET http://127.0.0.1:${port}/debug/pprof/goroutine?debug=2 >"$WORK_DIR/cdc_profile_${port}.log" 2>/dev/null || true
 done
 
 stop_tidb_cluster
