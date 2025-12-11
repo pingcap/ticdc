@@ -166,7 +166,7 @@ func runTestCase(testCasePath, dbConnMySQL, dbConnTiDB string) {
 
 func fetchNextCDCRecord(reader *kafka.Reader, kind Kind, timeout time.Duration, needWait bool) (map[string]any, map[string]any, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	cancel()
+	defer cancel()
 	for {
 		m, err := reader.FetchMessage(ctx)
 		if err != nil {
