@@ -25,6 +25,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/node"
+	pkgreplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
@@ -87,6 +88,12 @@ func createTestSplitSpanReplications(cfID common.ChangeFeedID, tableID int64, sp
 	return replicas
 }
 
+func newTestSplitChecker(t *testing.T, cfID common.ChangeFeedID, groupID pkgreplica.GroupID, schedulerCfg *config.ChangefeedSchedulerConfig) *SplitSpanChecker {
+	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	t.Cleanup(checker.Close)
+	return checker
+}
+
 func TestSplitTableSpanIntoMultiple_Properties(t *testing.T) {
 	spanA := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 100)
 	count := 10000
@@ -123,7 +130,7 @@ func TestSplitSpanChecker_AddReplica(t *testing.T) {
 	replicas := createTestSplitSpanReplications(cfID, 100000, 3)
 	require.Len(t, replicas, 3)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	for _, replica := range replicas {
 		checker.AddReplica(replica)
@@ -156,7 +163,7 @@ func TestSplitSpanChecker_RemoveReplica(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 3)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas first
 	for _, replica := range replicas {
@@ -200,7 +207,7 @@ func TestSplitSpanChecker_UpdateStatus_Traffic(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 1)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	replica := replicas[0]
 	checker.AddReplica(replica)
@@ -276,7 +283,7 @@ func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 1)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	replica := replicas[0]
 	checker.AddReplica(replica)
@@ -293,9 +300,7 @@ func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
 	mockCache := appcontext.GetService[*testutil.MockCache](appcontext.RegionCache)
 	mockCache.SetRegions(fmt.Sprintf("%s-%s", replicas[0].Span.StartKey, replicas[0].Span.EndKey), mockRegions)
 
-	// Set region check time to force update
 	spanStatus := checker.allTasks[replica.ID]
-	spanStatus.regionCheckTime = time.Now().Add(-2 * regionCheckInterval) // Force region check
 
 	status := &heartbeatpb.TableSpanStatus{
 		ID:                 replica.ID.ToPB(),
@@ -306,12 +311,12 @@ func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
 	replica.UpdateStatus(status)
 
 	// Test region count above threshold
-	checker.UpdateStatus(replica)
+	checker.refreshRegionCounts()
 	spanStatus = checker.allTasks[replica.ID]
 	require.Equal(t, 6, spanStatus.regionCount)
 
 	// Test region check interval enforcement
-	checker.UpdateStatus(replica)
+	checker.refreshRegionCounts()
 	spanStatus = checker.allTasks[replica.ID]
 	require.Equal(t, 6, spanStatus.regionCount) // Should not change due to time interval
 
@@ -323,9 +328,7 @@ func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
 	}
 	mockCache.SetRegions(fmt.Sprintf("%s-%s", replicas[0].Span.StartKey, replicas[0].Span.EndKey), mockRegions)
 
-	spanStatus.regionCheckTime = time.Now().Add(-2 * regionCheckInterval)
-
-	checker.UpdateStatus(replica)
+	checker.refreshRegionCounts()
 	spanStatus = checker.allTasks[replica.ID]
 	require.Equal(t, 3, spanStatus.regionCount)
 }
@@ -344,7 +347,7 @@ func TestSplitSpanChecker_UpdateStatus_NonWorking(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 1)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	replica := replicas[0]
 	checker.AddReplica(replica)
@@ -389,7 +392,7 @@ func TestSplitSpanChecker_ChooseSplitSpans_Traffic(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 3)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -444,7 +447,7 @@ func TestSplitSpanChecker_ChooseSplitSpans_Region(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 2)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -494,7 +497,7 @@ func TestSplitSpanChecker_CheckMergeWhole_SingleNode(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 3)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -541,7 +544,7 @@ func TestSplitSpanChecker_CheckMergeWhole_MultiNode(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 3)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -586,7 +589,7 @@ func TestSplitSpanChecker_CheckMergeWhole_ThresholdNotMet(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 2)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -630,7 +633,7 @@ func TestSplitSpanChecker_CheckBalanceTraffic_Balance(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 4)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -695,7 +698,7 @@ func TestSplitSpanChecker_CheckBalanceTraffic_NoBalanceNeeded(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 2)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -742,7 +745,7 @@ func TestSplitSpanChecker_CheckBalanceTraffic_SplitIfNoMove(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 2)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -796,7 +799,7 @@ func TestSplitSpanChecker_CheckBalanceTraffic_SingleNode(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 2)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -842,7 +845,7 @@ func TestSplitSpanChecker_CheckBalanceTraffic_TrafficFluctuation(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 4)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -914,7 +917,7 @@ func TestSplitSpanChecker_ChooseMergedSpans_LargeLag(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 3)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -952,7 +955,7 @@ func TestSplitSpanChecker_ChooseMergedSpans_Continuous(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 3)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -1010,7 +1013,7 @@ func TestSplitSpanChecker_ChooseMoveSpans_SimpleMove(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 5)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -1079,7 +1082,7 @@ func TestSplitSpanChecker_ChooseMoveSpans_ExchangeMove(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 6)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -1141,7 +1144,7 @@ func TestSplitSpanChecker_Check_FullFlow(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 4)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -1217,7 +1220,7 @@ func TestSplitSpanChecker_Check_FullFlow_WriteThresholdZero(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 4)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -1293,7 +1296,7 @@ func TestSplitSpanChecker_Check_FullFlow_RegionThresholdZero(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 4)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -1374,7 +1377,7 @@ func TestSplitSpanChecker_Check_PerformanceWithManySpans(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, spanCount)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker, set traffic and regionCount, assign nodeID alternately
 	for i, replica := range replicas {

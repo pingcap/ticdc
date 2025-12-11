@@ -115,6 +115,9 @@ func (c *Controller) doWithRLock(action func()) {
 
 // reset resets the maps of Controller
 func (c *Controller) reset(ddlSpan *replica.SpanReplication) {
+	if c.ReplicationDB != nil {
+		c.ReplicationDB.Close()
+	}
 	c.schemaTasks = make(map[int64]map[common.DispatcherID]*replica.SpanReplication)
 	c.tableTasks = make(map[int64]map[common.DispatcherID]*replica.SpanReplication)
 	c.allTasks = make(map[common.DispatcherID]*replica.SpanReplication)

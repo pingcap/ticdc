@@ -14,10 +14,10 @@
 package replica
 
 import (
-	"context"
 	"math"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pingcap/log"
@@ -28,14 +28,12 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/tikv/client-go/v2/tikv"
 	"go.uber.org/zap"
 )
 
 var (
 	trafficScoreThreshold = 3
 	regionScoreThreshold  = 3
-	regionCheckInterval   = time.Second * 120
 )
 
 // defaultSpanSplitChecker is used to check whether spans in the default group need to be split
@@ -60,13 +58,19 @@ type defaultSpanSplitChecker struct {
 
 	splitReadyTasks map[common.DispatcherID]*spanSplitStatus
 
+	mu sync.RWMutex
+
 	// writeThreshold defines the traffic threshold for triggering split consideration
 	writeThreshold int
 
 	// regionThreshold defines the maximum number of regions allowed before split
 	regionThreshold int
 
-	regionCache split.RegionCache
+	refreshInterval time.Duration
+	regionCache     split.RegionCache
+
+	stopCh   chan struct{}
+	stopOnce sync.Once
 }
 
 func NewDefaultSpanSplitChecker(changefeedID common.ChangeFeedID, schedulerCfg *config.ChangefeedSchedulerConfig) *defaultSpanSplitChecker {
@@ -74,23 +78,32 @@ func NewDefaultSpanSplitChecker(changefeedID common.ChangeFeedID, schedulerCfg *
 		log.Panic("scheduler config is nil, please check the config", zap.String("changefeed", changefeedID.Name()))
 	}
 	regionCache := appcontext.GetService[split.RegionCache](appcontext.RegionCache)
-	return &defaultSpanSplitChecker{
+	refreshInterval := defaultRegionCountRefreshInterval
+	if schedulerCfg.RegionCountRefreshInterval != nil && *schedulerCfg.RegionCountRefreshInterval > 0 {
+		refreshInterval = *schedulerCfg.RegionCountRefreshInterval
+	}
+	checker := &defaultSpanSplitChecker{
 		changefeedID:    changefeedID,
 		allTasks:        make(map[common.DispatcherID]*spanSplitStatus),
 		splitReadyTasks: make(map[common.DispatcherID]*spanSplitStatus),
 		writeThreshold:  util.GetOrZero(schedulerCfg.WriteKeyThreshold),
 		regionThreshold: util.GetOrZero(schedulerCfg.RegionThreshold),
+		refreshInterval: refreshInterval,
 		regionCache:     regionCache,
+		stopCh:          make(chan struct{}),
 	}
+	if checker.regionThreshold > 0 {
+		go checker.runRegionCountRefresh()
+	}
+	return checker
 }
 
 // spanSplitStatus tracks the split status of a span in the default group
 type spanSplitStatus struct {
 	*SpanReplication
-	trafficScore    int
-	latestTraffic   float64
-	regionCount     int
-	regionCheckTime time.Time
+	trafficScore  int
+	latestTraffic float64
+	regionCount   int
 }
 
 func (s *defaultSpanSplitChecker) Name() string {
@@ -98,6 +111,8 @@ func (s *defaultSpanSplitChecker) Name() string {
 }
 
 func (s *defaultSpanSplitChecker) AddReplica(replica *SpanReplication) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if _, ok := s.allTasks[replica.ID]; ok {
 		return
 	}
@@ -110,16 +125,19 @@ func (s *defaultSpanSplitChecker) AddReplica(replica *SpanReplication) {
 		trafficScore:    0,
 		regionCount:     0,
 		latestTraffic:   0,
-		regionCheckTime: time.Now().Add(-regionCheckInterval),
 	}
 }
 
 func (s *defaultSpanSplitChecker) RemoveReplica(replica *SpanReplication) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	delete(s.allTasks, replica.ID)
 	delete(s.splitReadyTasks, replica.ID)
 }
 
 func (s *defaultSpanSplitChecker) UpdateStatus(replica *SpanReplication) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	status, ok := s.allTasks[replica.ID]
 	if !ok {
 		log.Warn("default span split checker: replica not found", zap.String("changefeed", s.changefeedID.Name()), zap.String("replica", replica.ID.String()))
@@ -137,19 +155,6 @@ func (s *defaultSpanSplitChecker) UpdateStatus(replica *SpanReplication) {
 			status.trafficScore++
 			status.latestTraffic = float64(status.GetStatus().EventSizePerSecond)
 		}
-	}
-
-	// check region count, because the change of region count is not frequent, so we can check less frequently
-	if time.Since(status.regionCheckTime) > regionCheckInterval {
-		regions, err := s.regionCache.LoadRegionsInKeyRange(tikv.NewBackoffer(context.Background(), 500), status.Span.StartKey, status.Span.EndKey)
-		if err != nil {
-			log.Warn("list regions failed, skip check region count",
-				zap.Stringer("changefeed", s.changefeedID),
-				zap.String("span", common.FormatTableSpan(status.Span)), zap.Error(err))
-		} else {
-			status.regionCount = len(regions)
-		}
-		status.regionCheckTime = time.Now()
 	}
 
 	log.Debug("default span split checker: update status", zap.Stringer("changefeed", s.changefeedID), zap.String("replica", replica.ID.String()), zap.Int("trafficScore", status.trafficScore), zap.Int("regionCount", status.regionCount))
@@ -170,6 +175,8 @@ type DefaultSpanSplitCheckResult struct {
 }
 
 func (s *defaultSpanSplitChecker) Check(batch int) replica.GroupCheckResult {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	results := make([]DefaultSpanSplitCheckResult, 0, batch)
 	for _, status := range s.splitReadyTasks {
 		// for default span to do split, we use splitByTraffic to make the split more balanced
@@ -203,6 +210,8 @@ func (s *defaultSpanSplitChecker) Check(batch int) replica.GroupCheckResult {
 
 // stat shows the split ready tasks's dispatcherID, traffic score and region count
 func (s *defaultSpanSplitChecker) Stat() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	var res strings.Builder
 	for _, status := range s.splitReadyTasks {
 		res.WriteString("[dispatcherID: ")
@@ -214,4 +223,71 @@ func (s *defaultSpanSplitChecker) Stat() string {
 		res.WriteString("];")
 	}
 	return res.String()
+}
+
+func (s *defaultSpanSplitChecker) runRegionCountRefresh() {
+	interval := s.refreshInterval
+	if interval <= 0 {
+		interval = defaultRegionCountRefreshInterval
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	s.refreshRegionCounts()
+
+	for {
+		select {
+		case <-ticker.C:
+			s.refreshRegionCounts()
+		case <-s.stopCh:
+			return
+		}
+	}
+}
+
+func (s *defaultSpanSplitChecker) refreshRegionCounts() {
+	if s.regionThreshold <= 0 {
+		return
+	}
+	jobs := s.collectRegionCountJobs()
+	runRegionCountJobs(s.regionCache, jobs, s.applyRegionCountResult)
+}
+
+func (s *defaultSpanSplitChecker) collectRegionCountJobs() []regionCountJob {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.allTasks) == 0 {
+		return nil
+	}
+	jobs := make([]regionCountJob, 0, len(s.allTasks))
+	for id, status := range s.allTasks {
+		jobs = append(jobs, regionCountJob{
+			id:   id,
+			span: status.Span,
+		})
+	}
+	return jobs
+}
+
+func (s *defaultSpanSplitChecker) applyRegionCountResult(job regionCountJob, count int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	status, ok := s.allTasks[job.id]
+	if !ok {
+		return
+	}
+	if err != nil {
+		log.Warn("list regions failed, skip check region count",
+			zap.Stringer("changefeed", s.changefeedID),
+			zap.String("span", common.FormatTableSpan(status.Span)),
+			zap.Error(err))
+		return
+	}
+	status.regionCount = count
+}
+
+func (s *defaultSpanSplitChecker) Close() {
+	s.stopOnce.Do(func() {
+		close(s.stopCh)
+	})
 }
