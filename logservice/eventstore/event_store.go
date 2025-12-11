@@ -1171,9 +1171,10 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 		}
 	}
 	e.dispatcherMeta.RUnlock()
+	var slowestList []slowSubscriptionLogEntry
 	if slowestInitialized.Len() > 0 {
 		size := slowestInitialized.Len()
-		slowestList := make([]slowSubscriptionLogEntry, size)
+		slowestList = make([]slowSubscriptionLogEntry, size)
 		for i := size - 1; i >= 0; i-- {
 			entry, ok := slowestInitialized.PopTop()
 			if !ok {
@@ -1181,16 +1182,14 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 			}
 			slowestList[i] = *entry
 		}
-		log.Info("slowest initialized subscriptions by resolved lag",
-			zap.Int("initializedCount", initializedStatCount),
-			zap.Int("limit", logEntryLimit),
-			zap.Any("subscriptions", slowestList))
 	}
-	if uninitializedStatCount > 0 {
-		log.Info("found uninitialized subscriptions",
-			zap.Int("count", uninitializedStatCount),
-			zap.Int("limit", logEntryLimit),
-			zap.Any("subscriptions", uninitializedSamples))
+	if len(slowestList) > 0 || uninitializedStatCount > 0 {
+		log.Info("subscription lag snapshot",
+			zap.Int("initializedCount", initializedStatCount),
+			zap.Int("slowestInitializedCount", len(slowestList)),
+			zap.Int("uninitializedCount", uninitializedStatCount),
+			zap.Any("slowestInitializedSubscriptions", slowestList),
+			zap.Any("uninitializedSubscriptions", uninitializedSamples))
 	}
 	if globalMinResolvedTs == 0 {
 		metrics.EventStoreResolvedTsLagGauge.Set(0)
