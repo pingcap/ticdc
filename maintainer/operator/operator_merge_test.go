@@ -49,6 +49,7 @@ func setupMergeTestEnvironment(t *testing.T) (*span.Controller, []*replica.SpanR
 		span1,
 		status1,
 		nodeA,
+		false,
 	)
 
 	dispatcherID2 := common.NewDispatcherID()
@@ -69,6 +70,7 @@ func setupMergeTestEnvironment(t *testing.T) (*span.Controller, []*replica.SpanR
 		span2,
 		status2,
 		nodeA,
+		false,
 	)
 
 	toMergedReplicaSets := []*replica.SpanReplication{replicaSet1, replicaSet2}

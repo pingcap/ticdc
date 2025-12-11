@@ -18,6 +18,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -32,7 +33,7 @@ const (
 func GetNewGroupChecker(
 	cfID common.ChangeFeedID, schedulerCfg *config.ChangefeedSchedulerConfig,
 ) func(replica.GroupID) replica.GroupChecker[common.DispatcherID, *SpanReplication] {
-	if schedulerCfg == nil || !schedulerCfg.EnableTableAcrossNodes {
+	if schedulerCfg == nil || !util.GetOrZero(schedulerCfg.EnableTableAcrossNodes) {
 		return replica.NewEmptyChecker[common.DispatcherID, *SpanReplication]
 	}
 	return func(groupID replica.GroupID) replica.GroupChecker[common.DispatcherID, *SpanReplication] {

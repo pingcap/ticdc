@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/node"
 	pkgreplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils"
 	"go.uber.org/zap"
@@ -96,8 +97,8 @@ func NewController(
 		splitter:               splitter,
 		ddlDispatcherID:        ddlSpan.ID,
 		mode:                   mode,
-		enableTableAcrossNodes: schedulerCfg != nil && schedulerCfg.EnableTableAcrossNodes,
-		enableSplittableCheck:  schedulerCfg != nil && schedulerCfg.EnableSplittableCheck,
+		enableTableAcrossNodes: schedulerCfg != nil && util.GetOrZero(schedulerCfg.EnableTableAcrossNodes),
+		enableSplittableCheck:  schedulerCfg != nil && util.GetOrZero(schedulerCfg.EnableSplittableCheck),
 		keyspaceID:             keyspaceID,
 	}
 
@@ -119,6 +120,14 @@ func (c *Controller) reset(ddlSpan *replica.SpanReplication) {
 	c.allTasks = make(map[common.DispatcherID]*replica.SpanReplication)
 	c.ReplicationDB = pkgreplica.NewReplicationDB(c.changefeedID.String(), c.doWithRLock, c.newGroupChecker)
 	c.initializeDDLSpan(ddlSpan)
+}
+
+// ShouldEnableSplit returns whether split is allowed for a table given its splittable flag and controller config.
+func (c *Controller) ShouldEnableSplit(splitable bool) bool {
+	if !c.enableSplittableCheck {
+		return true
+	}
+	return splitable
 }
 
 func (c *Controller) initializeDDLSpan(ddlSpan *replica.SpanReplication) {
@@ -156,12 +165,13 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 		KeyspaceID: keyspaceID,
 	}
 	tableSpans := []*heartbeatpb.TableSpan{tableSpan}
+	enableSplit := c.ShouldEnableSplit(table.Splitable)
 
 	// Determine if the table can be split based on configuration and table splittable status
-	if c.enableTableAcrossNodes && c.splitter != nil && (table.Splitable || !c.enableSplittableCheck) {
+	if c.enableTableAcrossNodes && c.splitter != nil && enableSplit {
 		tableSpans = c.splitter.Split(context.Background(), tableSpan, 0, split.SplitTypeRegionCount)
 	}
-	c.AddNewSpans(table.SchemaID, tableSpans, startTs)
+	c.AddNewSpans(table.SchemaID, tableSpans, startTs, enableSplit)
 }
 
 // AddWorkingSpans adds working spans
@@ -174,11 +184,11 @@ func (c *Controller) AddWorkingSpans(tableMap utils.Map[*heartbeatpb.TableSpan, 
 
 // AddNewSpans creates new spans for the given schema and table spans
 // This is a complex business logic method that handles span creation
-func (c *Controller) AddNewSpans(schemaID int64, tableSpans []*heartbeatpb.TableSpan, startTs uint64) {
+func (c *Controller) AddNewSpans(schemaID int64, tableSpans []*heartbeatpb.TableSpan, startTs uint64, enabledSplit bool) {
 	for _, span := range tableSpans {
 		dispatcherID := common.NewDispatcherID()
 		span.KeyspaceID = c.GetkeyspaceID()
-		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs, c.mode)
+		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs, c.mode, enabledSplit)
 		c.AddAbsentReplicaSet(replicaSet)
 	}
 }
@@ -430,7 +440,8 @@ func (c *Controller) ReplaceReplicaSet(
 			common.NewDispatcherID(),
 			old.GetSchemaID(),
 			span, checkpointTs,
-			old.GetMode())
+			old.GetMode(),
+			old.IsSplitEnabled())
 		news = append(news, new)
 	}
 

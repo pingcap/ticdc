@@ -379,6 +379,13 @@ func (r *RedoDDLEvent) SetTableSchemaStore(tableSchemaStore *TableSchemaStore) {
 
 func parseColumnValue(row *chunk.Row, colInfo *timodel.ColumnInfo, i int, isHandleKey bool) RedoColumnValue {
 	v := commonType.ExtractColVal(row, colInfo, i)
+	switch colInfo.GetType() {
+	case mysql.TypeString, mysql.TypeVarString, mysql.TypeVarchar,
+		mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob:
+		if v != nil {
+			v = row.GetBytes(i)
+		}
+	}
 	rrv := RedoColumnValue{Value: v}
 	switch t := rrv.Value.(type) {
 	case []byte:
@@ -444,43 +451,65 @@ func appendCol2Chunk(idx int, raw interface{}, ft tiTypes.FieldType, chk *chunk.
 		chk.AppendNull(idx)
 		return
 	}
+	// FIXME: when the value is less than 127, uint64 will be encode into int64.
+	// see https://github.com/tinylib/msgp/issues/427
+	var val uint64
+	switch v := raw.(type) {
+	case uint64:
+		val = (v)
+	case int64:
+		val = uint64(v)
+	}
 	switch ft.GetType() {
 	case mysql.TypeLonglong, mysql.TypeLong, mysql.TypeInt24, mysql.TypeShort, mysql.TypeTiny:
 		if mysql.HasUnsignedFlag(ft.GetFlag()) {
-			chk.AppendUint64(idx, raw.(uint64))
+			chk.AppendUint64(idx, val)
 			return
 		}
-		chk.AppendInt64(idx, raw.(int64))
+		chk.AppendInt64(idx, int64(val))
 	case mysql.TypeYear:
-		chk.AppendInt64(idx, raw.(int64))
+		chk.AppendInt64(idx, int64(val))
 	case mysql.TypeFloat:
 		chk.AppendFloat32(idx, raw.(float32))
 	case mysql.TypeDouble:
 		chk.AppendFloat64(idx, raw.(float64))
 	case mysql.TypeVarString, mysql.TypeVarchar, mysql.TypeString,
 		mysql.TypeBlob, mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob:
-		switch val := raw.(type) {
-		case string:
-			chk.AppendBytes(idx, []byte(val))
-		case []byte:
-			chk.AppendBytes(idx, val)
-		}
+		chk.AppendBytes(idx, raw.([]byte))
 	case mysql.TypeNewDecimal:
-		chk.AppendMyDecimal(idx, raw.(*tiTypes.MyDecimal))
+		chk.AppendMyDecimal(idx, tiTypes.NewDecFromStringForTest(raw.(string)))
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeTimestamp:
-		chk.AppendTime(idx, raw.(tiTypes.Time))
+		val, err := tiTypes.ParseTime(tiTypes.DefaultStmtNoWarningContext, raw.(string), ft.GetType(), tiTypes.MaxFsp)
+		if err != nil {
+			log.Panic("invalid column value for data time", zap.Any("raw", raw), zap.Error(err))
+		}
+		chk.AppendTime(idx, val)
 	case mysql.TypeDuration:
-		chk.AppendDuration(idx, raw.(tiTypes.Duration))
+		val, _, err := tiTypes.ParseDuration(tiTypes.DefaultStmtNoWarningContext, raw.(string), tiTypes.MaxFsp)
+		if err != nil {
+			log.Panic("invalid column value for duration", zap.Any("raw", raw), zap.Error(err))
+		}
+		chk.AppendDuration(idx, val)
 	case mysql.TypeEnum:
-		chk.AppendEnum(idx, raw.(tiTypes.Enum))
+		chk.AppendEnum(idx, tiTypes.Enum{Value: val})
 	case mysql.TypeSet:
-		chk.AppendSet(idx, raw.(tiTypes.Set))
+
+		chk.AppendSet(idx, tiTypes.Set{Value: val})
 	case mysql.TypeBit:
-		chk.AppendBytes(idx, raw.(tiTypes.BinaryLiteral))
+		value := tiTypes.NewBinaryLiteralFromUint(val, -1)
+		chk.AppendBytes(idx, value)
 	case mysql.TypeJSON:
-		chk.AppendJSON(idx, raw.(tiTypes.BinaryJSON))
+		result, err := tiTypes.ParseBinaryJSONFromString(raw.(string))
+		if err != nil {
+			log.Panic("invalid column value for json", zap.Any("raw", raw), zap.Error(err))
+		}
+		chk.AppendJSON(idx, result)
 	case mysql.TypeTiDBVectorFloat32:
-		chk.AppendVectorFloat32(idx, raw.(tiTypes.VectorFloat32))
+		result, err := tiTypes.ParseVectorFloat32(raw.(string))
+		if err != nil {
+			log.Panic("cannot parse vector32 value from string", zap.Any("raw", raw), zap.Error(err))
+		}
+		chk.AppendVectorFloat32(idx, result)
 	default:
 		log.Panic("unknown column type", zap.Any("type", ft.GetType()), zap.Any("raw", raw))
 	}

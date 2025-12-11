@@ -36,7 +36,7 @@ mysql_groups=(
 	# G01
 	'common_1 foreign_key changefeed_pause_resume fail_over_ddl_B'
 	# G02
-	'new_ci_collation safe_mode savepoint fail_over_ddl_C'
+	'new_ci_collation safe_mode savepoint fail_over_ddl_C unsplittable_tables'
 	# G03
 	'capture_suicide_while_balance_table kv_client_stream_reconnect fail_over_ddl_D'
 	# G04
@@ -61,7 +61,7 @@ mysql_groups=(
 	# G13
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
 	# G14
-	'batch_add_table batch_update_to_no_batch fail_over_ddl_O'
+	'batch_add_table batch_update_to_no_batch fail_over_ddl_O update_changefeed_check_config'
 	# G15
 	'split_region changefeed_resume_with_checkpoint_ts autorandom gc_safepoint foreign_key_check old_arch_compatibility'
 )
@@ -99,7 +99,7 @@ kafka_groups=(
 	# G13
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
 	# G14
-	'kafka_simple_basic avro_basic debezium_basic fail_over_ddl_O'
+	'kafka_simple_basic avro_basic debezium_basic fail_over_ddl_O update_changefeed_check_config'
 	# G15
 	'kafka_simple_basic_avro split_region autorandom gc_safepoint kafka_log_info'
 )
@@ -137,7 +137,7 @@ pulsar_groups=(
 	# G13
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
 	# G14
-	'avro_basic debezium_basic fail_over_ddl_O'
+	'avro_basic debezium_basic fail_over_ddl_O update_changefeed_check_config'
 	# G15
 	'split_region autorandom gc_safepoint'
 )
@@ -175,7 +175,7 @@ storage_groups=(
 	# G13
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
 	# G14
-	'csv_storage_partition_table csv_storage_multi_tables_ddl fail_over_ddl_O'
+	'csv_storage_partition_table csv_storage_multi_tables_ddl fail_over_ddl_O update_changefeed_check_config'
 	# G15
 	'split_region autorandom gc_safepoint'
 )

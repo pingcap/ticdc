@@ -27,6 +27,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/tikv/client-go/v2/tikv"
 	"go.uber.org/zap"
 )
@@ -77,8 +78,8 @@ func NewDefaultSpanSplitChecker(changefeedID common.ChangeFeedID, schedulerCfg *
 		changefeedID:    changefeedID,
 		allTasks:        make(map[common.DispatcherID]*spanSplitStatus),
 		splitReadyTasks: make(map[common.DispatcherID]*spanSplitStatus),
-		writeThreshold:  schedulerCfg.WriteKeyThreshold,
-		regionThreshold: schedulerCfg.RegionThreshold,
+		writeThreshold:  util.GetOrZero(schedulerCfg.WriteKeyThreshold),
+		regionThreshold: util.GetOrZero(schedulerCfg.RegionThreshold),
 		regionCache:     regionCache,
 	}
 }
@@ -98,6 +99,10 @@ func (s *defaultSpanSplitChecker) Name() string {
 
 func (s *defaultSpanSplitChecker) AddReplica(replica *SpanReplication) {
 	if _, ok := s.allTasks[replica.ID]; ok {
+		return
+	}
+	if !replica.enabledSplit {
+		log.Debug("default span split checker: replica not enabled to split, skip add", zap.Stringer("changefeed", s.changefeedID), zap.String("replica", replica.ID.String()))
 		return
 	}
 	s.allTasks[replica.ID] = &spanSplitStatus{
