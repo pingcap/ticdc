@@ -128,11 +128,11 @@ pulsar_groups=(
 	# G12
 	'fail_over region_merge multi_changefeeds'
 	# G13
-	'debezium01'
+	'debezium01 fail_over_ddl_mix'
 	# G14
-	# 'debezium02'
+	'debezium02'
 	# G15
-	# 'debezium03'
+	'debezium03'
 )
 
 storage_groups=(
