@@ -85,6 +85,7 @@ func (r *regionCountRefresher) refreshRegionCounts(
 func (r *regionCountRefresher) queryRegionCount(ctx context.Context) {
 	backoff := tikv.NewBackoffer(ctx, 2000)
 
+	var tableCount int
 	r.traced.Range(func(key, value any) bool {
 		dispatcherID := key.(common.DispatcherID)
 		span := value.(*heartbeatpb.TableSpan)
@@ -101,6 +102,9 @@ func (r *regionCountRefresher) queryRegionCount(ctx context.Context) {
 			return true
 		}
 		r.counts.Store(dispatcherID, len(regions))
+		tableCount++
 		return true
 	})
+
+	log.Info("refresh region count for all tables", zap.Int("tableCount", tableCount))
 }
