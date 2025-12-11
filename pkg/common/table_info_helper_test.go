@@ -229,7 +229,37 @@ func TestGetOrderedHandleKeyColumnIDs(t *testing.T) {
 		tableInfo := WrapTableInfo("test", &model.TableInfo{
 			Columns: columns,
 		})
-		require.Nil(t, tableInfo.GetOrderedHandleKeyColumnIDs())
+		require.Equal(t, []int64{}, tableInfo.GetOrderedHandleKeyColumnIDs())
+	})
+
+	t.Run("unclustered index", func(t *testing.T) {
+		columns := []*model.ColumnInfo{
+			newColumnInfo(501, "a", mysql.TypeLong, 0),
+			newColumnInfo(502, "b", mysql.TypeLong, 0),
+		}
+		tableInfo := WrapTableInfo("test", &model.TableInfo{
+			Columns: columns,
+			Indices: []*model.IndexInfo{
+				newIndexInfo("primarykey", []*model.IndexColumn{{Offset: 0}, {Offset: 1}}, true, true),
+			},
+		})
+		require.Equal(t, []int64{501, 502}, tableInfo.GetOrderedHandleKeyColumnIDs())
+	})
+
+	t.Run("unclustered index with unique key", func(t *testing.T) {
+		columns := []*model.ColumnInfo{
+			newColumnInfo(601, "a", mysql.TypeLong, 0),
+			newColumnInfo(602, "b", mysql.TypeLong, 0),
+			newColumnInfo(603, "c", mysql.TypeLong, 0),
+		}
+		tableInfo := WrapTableInfo("test", &model.TableInfo{
+			Columns: columns,
+			Indices: []*model.IndexInfo{
+				newIndexInfo("primarykey", []*model.IndexColumn{{Offset: 0}, {Offset: 1}}, true, true),
+				newIndexInfo("uniquekey", []*model.IndexColumn{{Offset: 1}, {Offset: 2}}, false, true),
+			},
+		})
+		require.Equal(t, []int64{601, 602}, tableInfo.GetOrderedHandleKeyColumnIDs())
 	})
 }
 
