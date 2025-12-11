@@ -75,7 +75,12 @@ message RedoMetaMessage {
     uint64 checkpointTs = 3;
 }
 
-message RedoResolvedTsMessage {
+message RedoResolvedTsProgressMessage {
+    ChangefeedID changefeedID = 1;
+    uint64 resolvedTs = 2;
+}
+
+message RedoResolvedTsForwardMessage {
     ChangefeedID changefeedID = 1;
     uint64 resolvedTs = 2;
 }

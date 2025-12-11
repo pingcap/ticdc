@@ -303,7 +303,7 @@ func (e *DispatcherManager) collectRedoMeta(ctx context.Context) error {
 				messaging.NewSingleTargetMessage(
 					e.GetMaintainerID(),
 					messaging.MaintainerManagerTopic,
-					&heartbeatpb.RedoResolvedTsMessage{
+					&heartbeatpb.RedoResolvedTsProgressMessage{
 						ChangefeedID: e.changefeedID.ToPB(),
 						ResolvedTs:   logMeta.ResolvedTs,
 					},

@@ -123,7 +123,7 @@ func (c *Controller) FinishBootstrap(
 
 	return &heartbeatpb.MaintainerPostBootstrapRequest{
 		ChangefeedID:                  c.changefeedID.ToPB(),
-		TableTriggerEventDispatcherID: c.spanController.GetDDLDispatcherID().ToPB(),
+		TableTriggerEventDispatcherId: c.spanController.GetDDLDispatcherID().ToPB(),
 		Schemas:                       initSchemaInfos,
 	}, nil
 }

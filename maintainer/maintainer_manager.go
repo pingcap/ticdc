@@ -108,8 +108,8 @@ func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage
 	case messaging.TypeCheckpointTsMessage:
 		req := msg.Message[0].(*heartbeatpb.CheckpointTsMessage)
 		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
-	case messaging.TypeRedoResolvedTsMessage:
-		req := msg.Message[0].(*heartbeatpb.RedoResolvedTsMessage)
+	case messaging.TypeRedoResolvedTsProgressMessage:
+		req := msg.Message[0].(*heartbeatpb.RedoResolvedTsProgressMessage)
 		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 	default:
 		log.Warn("unknown message type, ignore it",

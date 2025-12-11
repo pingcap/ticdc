@@ -138,13 +138,13 @@ func (m *mockDispatcherManager) onBootstrapRequest(msg *messaging.TargetMessage)
 	}
 	m.changefeedID = req.ChangefeedID
 	m.checkpointTs = req.StartTs
-	if req.TableTriggerEventDispatcherID != nil {
-		m.dispatchersMap[*req.TableTriggerEventDispatcherID] = &heartbeatpb.TableSpanStatus{
-			ID:              req.TableTriggerEventDispatcherID,
+	if req.TableTriggerEventDispatcherId != nil {
+		m.dispatchersMap[*req.TableTriggerEventDispatcherId] = &heartbeatpb.TableSpanStatus{
+			ID:              req.TableTriggerEventDispatcherId,
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    req.StartTs,
 		}
-		m.dispatchers = append(m.dispatchers, m.dispatchersMap[*req.TableTriggerEventDispatcherID])
+		m.dispatchers = append(m.dispatchers, m.dispatchersMap[*req.TableTriggerEventDispatcherId])
 	}
 	err := m.mc.SendCommand(messaging.NewSingleTargetMessage(
 		m.maintainerID,
@@ -163,7 +163,7 @@ func (m *mockDispatcherManager) onPostBootstrapRequest(msg *messaging.TargetMess
 	m.maintainerID = msg.From
 	response := &heartbeatpb.MaintainerPostBootstrapResponse{
 		ChangefeedID:                  req.ChangefeedID,
-		TableTriggerEventDispatcherID: req.TableTriggerEventDispatcherID,
+		TableTriggerEventDispatcherId: req.TableTriggerEventDispatcherId,
 		Err:                           nil,
 	}
 	err := m.mc.SendCommand(messaging.NewSingleTargetMessage(

@@ -418,33 +418,33 @@ func (h *CheckpointTsMessageHandler) OnDrop(event CheckpointTsMessage) interface
 	return nil
 }
 
-// RedoResolvedTsMessageDynamicStream is responsible for push RedoResolvedTsMessage to the corresponding table trigger event dispatcher.
-func newRedoResolvedTsMessageDynamicStream() dynstream.DynamicStream[int, common.GID, RedoResolvedTsMessage, *DispatcherManager, *RedoResolvedTsMessageHandler] {
+// RedoResolvedTsForwardMessageDynamicStream is responsible for push RedoResolvedTsForwardMessage to the corresponding table trigger event dispatcher.
+func newRedoResolvedTsForwardMessageDynamicStream() dynstream.DynamicStream[int, common.GID, RedoResolvedTsForwardMessage, *DispatcherManager, *RedoResolvedTsForwardMessageHandler] {
 	ds := dynstream.NewParallelDynamicStream(
-		&RedoResolvedTsMessageHandler{})
+		&RedoResolvedTsForwardMessageHandler{})
 	ds.Start()
 	return ds
 }
 
-type RedoResolvedTsMessage struct {
-	*heartbeatpb.RedoResolvedTsMessage
+type RedoResolvedTsForwardMessage struct {
+	*heartbeatpb.RedoResolvedTsForwardMessage
 }
 
-func NewRedoResolvedTsMessage(msg *heartbeatpb.RedoResolvedTsMessage) RedoResolvedTsMessage {
-	return RedoResolvedTsMessage{msg}
+func NewRedoResolvedTsForwardMessage(msg *heartbeatpb.RedoResolvedTsForwardMessage) RedoResolvedTsForwardMessage {
+	return RedoResolvedTsForwardMessage{msg}
 }
 
-type RedoResolvedTsMessageHandler struct{}
+type RedoResolvedTsForwardMessageHandler struct{}
 
-func NewRedoResolvedTsMessageHandler() RedoResolvedTsMessageHandler {
-	return RedoResolvedTsMessageHandler{}
+func NewRedoResolvedTsForwardMessageHandler() RedoResolvedTsForwardMessageHandler {
+	return RedoResolvedTsForwardMessageHandler{}
 }
 
-func (h *RedoResolvedTsMessageHandler) Path(RedoResolvedTsMessage RedoResolvedTsMessage) common.GID {
-	return common.NewChangefeedGIDFromPB(RedoResolvedTsMessage.ChangefeedID)
+func (h *RedoResolvedTsForwardMessageHandler) Path(RedoResolvedTsForwardMessage RedoResolvedTsForwardMessage) common.GID {
+	return common.NewChangefeedGIDFromPB(RedoResolvedTsForwardMessage.ChangefeedID)
 }
 
-func (h *RedoResolvedTsMessageHandler) Handle(dispatcherManager *DispatcherManager, messages ...RedoResolvedTsMessage) bool {
+func (h *RedoResolvedTsForwardMessageHandler) Handle(dispatcherManager *DispatcherManager, messages ...RedoResolvedTsForwardMessage) bool {
 	if len(messages) != 1 {
 		// TODO: Support batch
 		panic("invalid message count")
@@ -459,21 +459,27 @@ func (h *RedoResolvedTsMessageHandler) Handle(dispatcherManager *DispatcherManag
 	return false
 }
 
-func (h *RedoResolvedTsMessageHandler) GetSize(event RedoResolvedTsMessage) int   { return 0 }
-func (h *RedoResolvedTsMessageHandler) IsPaused(event RedoResolvedTsMessage) bool { return false }
-func (h *RedoResolvedTsMessageHandler) GetArea(path common.GID, dest *DispatcherManager) int {
+func (h *RedoResolvedTsForwardMessageHandler) GetSize(event RedoResolvedTsForwardMessage) int {
 	return 0
 }
 
-func (h *RedoResolvedTsMessageHandler) GetTimestamp(event RedoResolvedTsMessage) dynstream.Timestamp {
+func (h *RedoResolvedTsForwardMessageHandler) IsPaused(event RedoResolvedTsForwardMessage) bool {
+	return false
+}
+
+func (h *RedoResolvedTsForwardMessageHandler) GetArea(path common.GID, dest *DispatcherManager) int {
 	return 0
 }
 
-func (h *RedoResolvedTsMessageHandler) GetType(event RedoResolvedTsMessage) dynstream.EventType {
+func (h *RedoResolvedTsForwardMessageHandler) GetTimestamp(event RedoResolvedTsForwardMessage) dynstream.Timestamp {
+	return 0
+}
+
+func (h *RedoResolvedTsForwardMessageHandler) GetType(event RedoResolvedTsForwardMessage) dynstream.EventType {
 	return dynstream.DefaultEventType
 }
 
-func (h *RedoResolvedTsMessageHandler) OnDrop(event RedoResolvedTsMessage) interface{} {
+func (h *RedoResolvedTsForwardMessageHandler) OnDrop(event RedoResolvedTsForwardMessage) interface{} {
 	return nil
 }
 
