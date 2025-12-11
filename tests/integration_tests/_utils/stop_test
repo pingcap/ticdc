@@ -4,6 +4,10 @@ WORK_DIR=$1
 
 set +e
 
+curl -X GET http://127.0.0.1:8300/debug/pprof/goroutine?debug=2 >$WORK_DIR/cdc_profile.log || true
+
+stop_tidb_cluster
+
 # find some file and change them to .log so the ci plugin will collect them
 find $WORK_DIR -type f -name "*.txt" -o -name "*sql*" -o -name "*summary*" -o -name "*.json" -o -name "*.index" -o -name "metadata" | while read file; do
 	if [[ -f "$file" ]]; then

@@ -115,7 +115,7 @@ function region_label_test() {
 	echo 'succeed to verify meta placement rules'
 }
 
-trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
+trap 'stop_test $WORK_DIR' EXIT
 prepare $*
 region_label_test $*
 sql_test $*
