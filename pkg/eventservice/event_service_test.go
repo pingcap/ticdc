@@ -280,6 +280,10 @@ func (m *mockEventStore) GetLogCoordinatorNodeID() node.ID {
 	return ""
 }
 
+func (m *mockEventStore) DoManualCompaction() error {
+	return nil
+}
+
 func (m *mockEventStore) RegisterDispatcher(
 	changefeedID common.ChangeFeedID,
 	dispatcherID common.DispatcherID,

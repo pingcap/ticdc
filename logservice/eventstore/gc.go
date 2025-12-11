@@ -106,6 +106,7 @@ func (d *gcManager) run(ctx context.Context) error {
 			return nil
 		case <-deleteTicker.C:
 			ranges := d.fetchAllGCItems()
+			log.Info("gc manager start to do delete job", zap.Int("count", len(ranges)))
 			if len(ranges) == 0 {
 				continue
 			}
@@ -123,6 +124,12 @@ func (d *gcManager) run(ctx context.Context) error {
 func (d *gcManager) doGCJob(ranges []gcRangeItem) {
 	for _, r := range ranges {
 		db := d.dbs[r.dbIndex]
+		log.Info("gc manager start to delete data range",
+			zap.Int("dbIndex", r.dbIndex),
+			zap.Uint64("uniqueKeyID", r.uniqueKeyID),
+			zap.Int64("tableID", r.tableID),
+			zap.Uint64("startTs", r.startTs),
+			zap.Uint64("endTs", r.endTs))
 		if err := d.deleteDataRange(db, r.uniqueKeyID, r.tableID, r.startTs, r.endTs); err != nil {
 			log.Warn("gc manager failed to delete data range", zap.Error(err))
 		}
@@ -157,8 +164,14 @@ func (d *gcManager) doCompaction() {
 	}
 	d.mu.Unlock()
 
+	log.Info("gc manager start to do compaction", zap.Int("count", len(toCompact)))
 	for key, endTs := range toCompact {
 		db := d.dbs[key.dbIndex]
+		log.Info("gc manager start to compact data range",
+			zap.Int("dbIndex", key.dbIndex),
+			zap.Uint64("uniqueKeyID", key.uniqueKeyID),
+			zap.Int64("tableID", key.tableID),
+			zap.Uint64("endTs", endTs))
 		if err := d.compactDataRange(db, key.uniqueKeyID, key.tableID, 0, endTs); err != nil {
 			log.Warn("gc manager failed to compact data range",
 				zap.Int("dbIndex", key.dbIndex),

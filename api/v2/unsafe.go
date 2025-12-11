@@ -20,7 +20,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/api/middleware"
+	"github.com/pingcap/ticdc/logservice/eventstore"
 	"github.com/pingcap/ticdc/logservice/txnutil"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"go.uber.org/zap"
@@ -93,6 +95,24 @@ func (h *OpenAPIV2) DeleteServiceGcSafePoint(c *gin.Context) {
 	)
 	if err != nil {
 		_ = c.Error(cerror.WrapError(cerror.ErrInternalServerError, err))
+	}
+	c.JSON(http.StatusOK, &EmptyResponse{})
+}
+
+// CompactEventStore triggers a manual compaction for the event store on the current node.
+// @Summary Compact event store
+// @Description trigger a manual compaction for the event store on the current node
+// @Tags unsafe,v2
+// @Accept json
+// @Produce json
+// @Success 200 {object} EmptyResponse
+// @Failure 500 {object} common.HTTPError
+// @Router /api/v2/unsafe/compact [post]
+func (h *OpenAPIV2) CompactEventStore(c *gin.Context) {
+	eventStore := appcontext.GetService[eventstore.EventStore](appcontext.EventStore)
+	if err := eventStore.DoManualCompaction(); err != nil {
+		_ = c.Error(err)
+		return
 	}
 	c.JSON(http.StatusOK, &EmptyResponse{})
 }
