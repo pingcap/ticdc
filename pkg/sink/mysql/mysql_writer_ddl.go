@@ -17,6 +17,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
@@ -108,6 +109,35 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 	// Use second-level precision to match upstream default value evaluation.
 	ddlTimestamp := ddlTime.Unix()
 
+	// If the table info provides an origin default value (e.g. for a column with DEFAULT CURRENT_TIMESTAMP),
+	// use that timestamp to set the session timestamp. This ensures that the default value evaluated
+	// by MySQL's CURRENT_TIMESTAMP matches the upstream value exactly.
+	if event.TableInfo != nil {
+		for _, col := range event.TableInfo.GetColumns() {
+			val := col.GetOriginDefaultValue()
+			if valStr, ok := val.(string); ok {
+				ts, err := parseTimestamp(valStr, w.cfg.Timezone)
+				if err == nil {
+					// Check if the timestamp is reasonable close to StartTs (e.g. within 24 hours)
+					// to avoid using a fixed default value (like '2000-01-01') which would be incorrect
+					// for a CURRENT_TIMESTAMP column.
+					diff := ts - ddlTimestamp
+					if diff < 0 {
+						diff = -diff
+					}
+					if diff < 24*3600 {
+						ddlTimestamp = ts
+						log.Info("Using OriginDefaultValue for DDL timestamp",
+							zap.String("originDefault", valStr),
+							zap.Int64("timestamp", ddlTimestamp),
+							zap.String("timezone", w.cfg.Timezone))
+						break
+					}
+				}
+			}
+		}
+	}
+
 	// Set the session timestamp to match upstream DDL execution time
 	// This is critical for preserving timestamp function behavior
 	if err := setSessionTimestamp(ctx, tx, ddlTimestamp); err != nil {
@@ -162,6 +192,31 @@ func setSessionTimestamp(ctx context.Context, tx *sql.Tx, unixTimestamp int64) e
 func resetSessionTimestamp(ctx context.Context, tx *sql.Tx) error {
 	_, err := tx.ExecContext(ctx, "SET TIMESTAMP = DEFAULT")
 	return err
+}
+
+func parseTimestamp(val string, timezone string) (int64, error) {
+	loc := time.UTC
+	if timezone != "" {
+		// timezone is usually quoted, remove quotes
+		tz := strings.Trim(timezone, "\"")
+		var err error
+		loc, err = time.LoadLocation(tz)
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	formats := []string{
+		"2006-01-02 15:04:05",
+		"2006-01-02 15:04:05.999999",
+	}
+	for _, f := range formats {
+		t, err := time.ParseInLocation(f, val, loc)
+		if err == nil {
+			return t.Unix(), nil
+		}
+	}
+	return 0, fmt.Errorf("failed to parse timestamp: %s", val)
 }
 
 // execDDLWithMaxRetries will retry executing DDL statements.
