@@ -109,7 +109,7 @@ func (d *gcManager) run(ctx context.Context) error {
 			if len(ranges) == 0 {
 				continue
 			}
-			log.Info("gc manager deleting ranges", zap.Int("rangeCount", len(ranges)))
+			log.Debug("gc manager deleting ranges", zap.Int("rangeCount", len(ranges)))
 			d.doGCJob(ranges)
 			d.updateCompactRanges(ranges)
 			metrics.EventStoreDeleteRangeCount.Add(float64(len(ranges)))
