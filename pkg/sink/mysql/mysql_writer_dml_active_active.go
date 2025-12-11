@@ -42,7 +42,11 @@ func (w *Writer) generateActiveActiveNormalSQLs(events []*commonEvent.DMLEvent) 
 				event.Rewind()
 				break
 			}
-			sql, args := buildActiveActiveUpsertSQL(event.TableInfo, []*commonEvent.RowChange{&row})
+			sql, args := buildActiveActiveUpsertSQL(
+				event.TableInfo,
+				[]*commonEvent.RowChange{&row},
+				[]uint64{event.CommitTs},
+			)
 			queries = append(queries, sql)
 			argsList = append(argsList, args)
 		}
@@ -71,11 +75,11 @@ func (w *Writer) generateActiveActiveBatchSQLForPerEvent(events []*commonEvent.D
 
 // generateActiveActiveSQLForSingleEvent merges rows from a single event into one active-active UPSERT.
 func (w *Writer) generateActiveActiveSQLForSingleEvent(event *commonEvent.DMLEvent) ([]string, [][]interface{}) {
-	rows := collectActiveActiveRows(event)
+	rows, commitTs := collectActiveActiveRows(event)
 	if len(rows) == 0 {
 		return nil, nil
 	}
-	sql, args := buildActiveActiveUpsertSQL(event.TableInfo, rows)
+	sql, args := buildActiveActiveUpsertSQL(event.TableInfo, rows, commitTs)
 	return []string{sql}, [][]interface{}{args}
 }
 
@@ -92,7 +96,7 @@ func (w *Writer) generateActiveActiveBatchSQL(events []*commonEvent.DMLEvent) ([
 	}
 
 	tableInfo := events[0].TableInfo
-	rowChanges, err := w.buildRowChangesForUnSafeBatch(events, tableInfo)
+	rowChanges, commitTs, err := w.buildRowChangesForUnSafeBatch(events, tableInfo)
 	if err != nil {
 		sql, values := w.generateActiveActiveBatchSQLForPerEvent(events)
 		log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values), zap.Int("writerID", w.id))
@@ -100,14 +104,15 @@ func (w *Writer) generateActiveActiveBatchSQL(events []*commonEvent.DMLEvent) ([
 			zap.Error(err), zap.Any("events", events), zap.Int("writerID", w.id))
 		return []string{}, [][]interface{}{}
 	}
-	return w.batchSingleTxnActiveRows(rowChanges, tableInfo)
+	return w.batchSingleTxnActiveRows(rowChanges, commitTs, tableInfo)
 }
 
 // ===== Helpers =====
 
 // collectActiveActiveRows copies all row changes inside the event, keeping GetNextRow semantics intact.
-func collectActiveActiveRows(event *commonEvent.DMLEvent) []*commonEvent.RowChange {
+func collectActiveActiveRows(event *commonEvent.DMLEvent) ([]*commonEvent.RowChange, []uint64) {
 	rows := make([]*commonEvent.RowChange, 0, event.Len())
+	commitTs := make([]uint64, 0, event.Len())
 	for {
 		row, ok := event.GetNextRow()
 		if !ok {
@@ -116,25 +121,33 @@ func collectActiveActiveRows(event *commonEvent.DMLEvent) []*commonEvent.RowChan
 		}
 		rowCopy := row
 		rows = append(rows, &rowCopy)
+		commitTs = append(commitTs, event.CommitTs)
 	}
-	return rows
+	return rows, commitTs
 }
 
 // batchSingleTxnActiveRows wraps multiple row changes into one active-active UPSERT statement.
 func (w *Writer) batchSingleTxnActiveRows(
 	rows []*commonEvent.RowChange,
+	commitTs []uint64,
 	tableInfo *common.TableInfo,
 ) ([]string, [][]interface{}) {
-	filtered := make([]*commonEvent.RowChange, 0, len(rows))
-	for _, row := range rows {
+	if len(rows) != len(commitTs) {
+		log.Panic("mismatched rows and commitTs for active-active batch",
+			zap.Int("rows", len(rows)), zap.Int("commitTs", len(commitTs)))
+	}
+	filteredRows := make([]*commonEvent.RowChange, 0, len(rows))
+	filteredCommitTs := make([]uint64, 0, len(rows))
+	for i, row := range rows {
 		if row == nil || row.Row.IsEmpty() {
 			continue
 		}
-		filtered = append(filtered, row)
+		filteredRows = append(filteredRows, row)
+		filteredCommitTs = append(filteredCommitTs, commitTs[i])
 	}
-	if len(filtered) == 0 {
+	if len(filteredRows) == 0 {
 		return nil, nil
 	}
-	sql, args := buildActiveActiveUpsertSQL(tableInfo, filtered)
+	sql, args := buildActiveActiveUpsertSQL(tableInfo, filteredRows, filteredCommitTs)
 	return []string{sql}, [][]interface{}{args}
 }
