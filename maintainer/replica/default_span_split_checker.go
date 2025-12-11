@@ -19,13 +19,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
-	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -67,31 +65,25 @@ type defaultSpanSplitChecker struct {
 	// regionThreshold defines the maximum number of regions allowed before split
 	regionThreshold int
 
-	refreshInterval time.Duration
-	regionCache     split.RegionCache
-
-	cancel context.CancelFunc
+	refresher *regionCountRefresher
 }
 
-func NewDefaultSpanSplitChecker(changefeedID common.ChangeFeedID, schedulerCfg *config.ChangefeedSchedulerConfig) *defaultSpanSplitChecker {
+func NewDefaultSpanSplitChecker(
+	changefeedID common.ChangeFeedID,
+	schedulerCfg *config.ChangefeedSchedulerConfig,
+	refresher *regionCountRefresher,
+) *defaultSpanSplitChecker {
 	if schedulerCfg == nil {
 		log.Panic("scheduler config is nil, please check the config", zap.String("changefeed", changefeedID.Name()))
 	}
-	checker := &defaultSpanSplitChecker{
+	return &defaultSpanSplitChecker{
 		changefeedID:    changefeedID,
 		allTasks:        make(map[common.DispatcherID]*spanSplitStatus),
 		splitReadyTasks: make(map[common.DispatcherID]*spanSplitStatus),
 		writeThreshold:  util.GetOrZero(schedulerCfg.WriteKeyThreshold),
 		regionThreshold: util.GetOrZero(schedulerCfg.RegionThreshold),
-		refreshInterval: util.GetOrZero(schedulerCfg.RegionCountRefreshInterval),
-		regionCache:     appcontext.GetService[split.RegionCache](appcontext.RegionCache),
+		refresher:       refresher,
 	}
-	if checker.regionThreshold > 0 {
-		ctx, cancel := context.WithCancel(context.Background())
-		checker.cancel = cancel
-		go checker.runRegionCountRefresh(ctx)
-	}
-	return checker
 }
 
 // spanSplitStatus tracks the split status of a span in the default group
@@ -122,6 +114,10 @@ func (s *defaultSpanSplitChecker) AddReplica(replica *SpanReplication) {
 		regionCount:     0,
 		latestTraffic:   0,
 	}
+	// todo: the context should be passed from upper level
+	if s.regionThreshold > 0 {
+		s.refresher.addDispatcher(context.Background(), replica.ID, replica.Span)
+	}
 }
 
 func (s *defaultSpanSplitChecker) RemoveReplica(replica *SpanReplication) {
@@ -129,6 +125,10 @@ func (s *defaultSpanSplitChecker) RemoveReplica(replica *SpanReplication) {
 	defer s.mu.Unlock()
 	delete(s.allTasks, replica.ID)
 	delete(s.splitReadyTasks, replica.ID)
+
+	if s.regionThreshold > 0 {
+		s.refresher.removeDispatcher(replica.ID)
+	}
 }
 
 func (s *defaultSpanSplitChecker) UpdateStatus(replica *SpanReplication) {
@@ -161,6 +161,13 @@ func (s *defaultSpanSplitChecker) UpdateStatus(replica *SpanReplication) {
 		}
 	} else {
 		delete(s.splitReadyTasks, status.ID)
+	}
+
+	if s.regionThreshold > 0 {
+		regionCount, ok := s.refresher.getRegionCount(replica.ID)
+		if ok {
+			status.regionCount = regionCount
+		}
 	}
 }
 
@@ -219,64 +226,4 @@ func (s *defaultSpanSplitChecker) Stat() string {
 		res.WriteString("];")
 	}
 	return res.String()
-}
-
-func (s *defaultSpanSplitChecker) runRegionCountRefresh(ctx context.Context) {
-	ticker := time.NewTicker(s.refreshInterval)
-	defer ticker.Stop()
-
-	s.refreshRegionCounts()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			s.refreshRegionCounts()
-		}
-	}
-}
-
-func (s *defaultSpanSplitChecker) refreshRegionCounts() {
-	jobs := s.collectRegionCountJobs()
-	runRegionCountJobs(s.regionCache, jobs, s.applyRegionCountResult)
-}
-
-func (s *defaultSpanSplitChecker) collectRegionCountJobs() []regionCountJob {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if len(s.allTasks) == 0 {
-		return nil
-	}
-	jobs := make([]regionCountJob, 0, len(s.allTasks))
-	for id, status := range s.allTasks {
-		jobs = append(jobs, regionCountJob{
-			id:   id,
-			span: status.Span,
-		})
-	}
-	return jobs
-}
-
-func (s *defaultSpanSplitChecker) applyRegionCountResult(job regionCountJob, count int, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	status, ok := s.allTasks[job.id]
-	if !ok {
-		return
-	}
-	if err != nil {
-		log.Warn("list regions failed, skip check region count",
-			zap.Stringer("changefeed", s.changefeedID),
-			zap.String("span", common.FormatTableSpan(status.Span)),
-			zap.Error(err))
-		return
-	}
-	status.regionCount = count
-}
-
-func (s *defaultSpanSplitChecker) Close() {
-	if s.cancel != nil {
-		s.cancel()
-	}
 }

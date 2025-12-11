@@ -41,8 +41,17 @@ func newRegionCountRefresher(regionCache split.RegionCache, interval time.Durati
 	}
 }
 
-func (r *regionCountRefresher) addDispatcher(id common.DispatcherID, span *heartbeatpb.TableSpan) {
+func (r *regionCountRefresher) addDispatcher(ctx context.Context, id common.DispatcherID, span *heartbeatpb.TableSpan) {
 	r.traced.Store(id, span)
+	backoff := tikv.NewBackoffer(ctx, 2000)
+	regions, err := r.regionCache.LoadRegionsInKeyRange(backoff, span.StartKey, span.EndKey)
+	if err != nil {
+		log.Warn("load regions failed, just continue",
+			zap.Stringer("dispatcerID", id),
+			zap.String("span", common.FormatTableSpan(span)),
+			zap.Error(err))
+	}
+	r.counts.Store(id, len(regions))
 }
 
 func (r *regionCountRefresher) removeDispatcher(id common.DispatcherID) {

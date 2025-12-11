@@ -40,7 +40,6 @@ type GroupChecker[T ReplicationID, R Replication[T]] interface {
 	Check(batch int) GroupCheckResult
 	Name() string
 	Stat() string
-	Close()
 }
 
 func NewEmptyChecker[T ReplicationID, R Replication[T]](GroupID) GroupChecker[T, R] {
@@ -67,8 +66,6 @@ func (c *EmptyStatusChecker[T, R]) Name() string {
 func (c *EmptyStatusChecker[T, R]) Stat() string {
 	return ""
 }
-
-func (c *EmptyStatusChecker[T, R]) Close() {}
 
 func GetGroupName(id GroupID) string {
 	gt := GroupType(id >> 56)

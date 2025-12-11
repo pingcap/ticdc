@@ -15,6 +15,7 @@ package replica
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"math"
 	"math/rand"
@@ -157,9 +158,10 @@ type SplitSpanChecker struct {
 	mergeThreshold  int
 	mergeCheckCount int
 
-	regionCache split.RegionCache
 	nodeManager *watcher.NodeManager
 	pdClock     pdutil.Clock
+
+	refresher *regionCountRefresher
 
 	splitSpanCheckDuration prometheus.Observer
 }
@@ -175,11 +177,15 @@ type splitSpanStatus struct {
 	regionCount int
 }
 
-func NewSplitSpanChecker(changefeedID common.ChangeFeedID, groupID replica.GroupID, schedulerCfg *config.ChangefeedSchedulerConfig) *SplitSpanChecker {
+func NewSplitSpanChecker(
+	changefeedID common.ChangeFeedID,
+	groupID replica.GroupID,
+	schedulerCfg *config.ChangefeedSchedulerConfig,
+	refresher *regionCountRefresher,
+) *SplitSpanChecker {
 	if schedulerCfg == nil {
 		log.Panic("scheduler config is nil, please check the config", zap.String("changefeed", changefeedID.Name()))
 	}
-	regionCache := appcontext.GetService[split.RegionCache](appcontext.RegionCache)
 	checker := &SplitSpanChecker{
 		changefeedID:           changefeedID,
 		groupID:                groupID,
@@ -189,11 +195,11 @@ func NewSplitSpanChecker(changefeedID common.ChangeFeedID, groupID replica.Group
 		balanceScoreThreshold:  util.GetOrZero(schedulerCfg.BalanceScoreThreshold),
 		minTrafficPercentage:   util.GetOrZero(schedulerCfg.MinTrafficPercentage),
 		maxTrafficPercentage:   util.GetOrZero(schedulerCfg.MaxTrafficPercentage),
-		regionCache:            regionCache,
 		mergeThreshold:         mergeThreshold,
 		mergeCheckCount:        0,
 		nodeManager:            appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		pdClock:                appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		refresher:              refresher,
 		splitSpanCheckDuration: metrics.SplitSpanCheckDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), replica.GetGroupName(groupID)),
 	}
 	return checker
@@ -208,12 +214,21 @@ func (s *SplitSpanChecker) AddReplica(replica *SpanReplication) {
 		trafficScore:     0,
 		lastThreeTraffic: make([]float64, 3),
 	}
+
+	// todo: the context should be passed from upper level
+	if s.regionThreshold > 0 {
+		s.refresher.addDispatcher(context.Background(), replica.ID, replica.Span)
+	}
 }
 
 func (s *SplitSpanChecker) RemoveReplica(replica *SpanReplication) {
 	s.taskMu.Lock()
 	defer s.taskMu.Unlock()
 	delete(s.allTasks, replica.ID)
+
+	if s.regionThreshold > 0 {
+		s.refresher.removeDispatcher(replica.ID)
+	}
 }
 
 func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
@@ -249,6 +264,13 @@ func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
 		status.lastThreeTraffic[2] = status.lastThreeTraffic[1]
 		status.lastThreeTraffic[1] = status.lastThreeTraffic[0]
 		status.lastThreeTraffic[0] = float64(status.GetStatus().EventSizePerSecond)
+	}
+
+	if s.regionThreshold > 0 {
+		count, ok := s.refresher.getRegionCount(replica.ID)
+		if ok {
+			status.regionCount = count
+		}
 	}
 
 	s.balanceCondition.statusUpdated = true
@@ -1262,47 +1284,6 @@ func (s *SplitSpanChecker) Stat() string {
 		}
 	}
 	return res.String()
-}
-
-func (s *SplitSpanChecker) refreshRegionCounts() {
-	if s.regionThreshold <= 0 {
-		return
-	}
-	jobs := s.collectRegionCountJobs()
-	runRegionCountJobs(s.regionCache, jobs, s.applyRegionCountResult)
-}
-
-func (s *SplitSpanChecker) collectRegionCountJobs() []regionCountJob {
-	s.taskMu.RLock()
-	defer s.taskMu.RUnlock()
-	if len(s.allTasks) == 0 {
-		return nil
-	}
-	jobs := make([]regionCountJob, 0, len(s.allTasks))
-	for id, status := range s.allTasks {
-		jobs = append(jobs, regionCountJob{
-			id:   id,
-			span: status.Span,
-		})
-	}
-	return jobs
-}
-
-func (s *SplitSpanChecker) applyRegionCountResult(job regionCountJob, count int, err error) {
-	s.taskMu.Lock()
-	defer s.taskMu.Unlock()
-	status, ok := s.allTasks[job.id]
-	if !ok {
-		return
-	}
-	if err != nil {
-		log.Warn("split span checker: list regions failed, skip check region count",
-			zap.Stringer("changefeed", s.changefeedID),
-			zap.String("span", common.FormatTableSpan(status.Span)),
-			zap.Error(err))
-		return
-	}
-	status.regionCount = count
 }
 
 func (s *SplitSpanChecker) Name() string {
