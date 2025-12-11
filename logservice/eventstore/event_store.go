@@ -1115,12 +1115,12 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 			const logInterval = 5 * time.Minute
 			if subStat.initialized.Load() {
 				initializedStatCount++
-				lastAdvanceTime := time.UnixMilli(subStat.lastAdvanceTime.Load())
-				lastReceiveDMLTimeRepr := "never"
-				if lastReceiveDMLTime := subStat.lastReceiveDMLTime.Load(); lastReceiveDMLTime > 0 {
-					lastReceiveDMLTimeRepr = time.UnixMilli(lastReceiveDMLTime).String()
-				}
 				if subResolvedTsLagInSec >= largeResolvedTsLagInSecs {
+					lastAdvanceTime := time.UnixMilli(subStat.lastAdvanceTime.Load())
+					lastReceiveDMLTimeRepr := "never"
+					if lastReceiveDMLTime := subStat.lastReceiveDMLTime.Load(); lastReceiveDMLTime > 0 {
+						lastReceiveDMLTimeRepr = time.UnixMilli(lastReceiveDMLTime).String()
+					}
 					lastLogTime := subStat.lastLogLagTime.Load()
 					if time.Since(time.Unix(0, lastLogTime)) > logInterval {
 						log.Warn("resolved ts lag is too large for initialized subscription",
@@ -1135,20 +1135,20 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 							zap.Uint64("maxEventCommitTs", subStat.maxEventCommitTs.Load()))
 						subStat.lastLogLagTime.Store(time.Now().UnixNano())
 					}
-				}
-				entry := &slowSubscriptionLogEntry{
-					SubID:              uint64(subStat.subID),
-					ResolvedLagSeconds: subResolvedTsLagInSec,
-					ResolvedTs:         subResolvedTs,
-					CheckpointTs:       subStat.checkpointTs.Load(),
-					MaxEventCommitTs:   subStat.maxEventCommitTs.Load(),
-					LastAdvanceTime:    lastAdvanceTime.String(),
-					LastReceiveDMLTime: lastReceiveDMLTimeRepr,
-					TableSpan:          common.FormatTableSpan(subStat.tableSpan),
-				}
-				slowestInitialized.AddOrUpdate(entry)
-				if slowestInitialized.Len() > logEntryLimit {
-					slowestInitialized.PopTop()
+					entry := &slowSubscriptionLogEntry{
+						SubID:              uint64(subStat.subID),
+						ResolvedLagSeconds: subResolvedTsLagInSec,
+						ResolvedTs:         subResolvedTs,
+						CheckpointTs:       subStat.checkpointTs.Load(),
+						MaxEventCommitTs:   subStat.maxEventCommitTs.Load(),
+						LastAdvanceTime:    lastAdvanceTime.String(),
+						LastReceiveDMLTime: lastReceiveDMLTimeRepr,
+						TableSpan:          common.FormatTableSpan(subStat.tableSpan),
+					}
+					slowestInitialized.AddOrUpdate(entry)
+					if slowestInitialized.Len() > logEntryLimit {
+						slowestInitialized.PopTop()
+					}
 				}
 			} else {
 				uninitializedStatCount++
