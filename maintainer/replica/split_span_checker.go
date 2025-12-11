@@ -161,9 +161,6 @@ type SplitSpanChecker struct {
 	nodeManager *watcher.NodeManager
 	pdClock     pdutil.Clock
 
-	refreshInterval     time.Duration
-	regionRefreshCancel func()
-
 	splitSpanCheckDuration prometheus.Observer
 }
 
@@ -183,10 +180,6 @@ func NewSplitSpanChecker(changefeedID common.ChangeFeedID, groupID replica.Group
 		log.Panic("scheduler config is nil, please check the config", zap.String("changefeed", changefeedID.Name()))
 	}
 	regionCache := appcontext.GetService[split.RegionCache](appcontext.RegionCache)
-	refreshInterval := defaultRegionCountRefreshInterval
-	if schedulerCfg.RegionCountRefreshInterval != nil && *schedulerCfg.RegionCountRefreshInterval > 0 {
-		refreshInterval = *schedulerCfg.RegionCountRefreshInterval
-	}
 	checker := &SplitSpanChecker{
 		changefeedID:           changefeedID,
 		groupID:                groupID,
@@ -201,11 +194,7 @@ func NewSplitSpanChecker(changefeedID common.ChangeFeedID, groupID replica.Group
 		mergeCheckCount:        0,
 		nodeManager:            appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		pdClock:                appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
-		refreshInterval:        refreshInterval,
 		splitSpanCheckDuration: metrics.SplitSpanCheckDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), replica.GetGroupName(groupID)),
-	}
-	if checker.regionThreshold > 0 {
-		checker.regionRefreshCancel = splitRegionRefresher.register(changefeedID, refreshInterval, checker)
 	}
 	return checker
 }
@@ -1320,19 +1309,9 @@ func (s *SplitSpanChecker) Name() string {
 	return "split_span_checker"
 }
 
-func (s *SplitSpanChecker) Close() {
-	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
-	if s.regionRefreshCancel != nil {
-		s.regionRefreshCancel()
-		s.regionRefreshCancel = nil
-	}
-}
-
 // for test only
 func SetEasyThresholdForTest() {
 	minTrafficBalanceThreshold = 1
 	maxLagThreshold = 120
-	defaultRegionCountRefreshInterval = time.Second * 10
 	mergeThreshold = 1
 }

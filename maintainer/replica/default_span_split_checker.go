@@ -14,6 +14,7 @@
 package replica
 
 import (
+	"context"
 	"math"
 	"strconv"
 	"strings"
@@ -69,18 +70,12 @@ type defaultSpanSplitChecker struct {
 	refreshInterval time.Duration
 	regionCache     split.RegionCache
 
-	stopCh   chan struct{}
-	stopOnce sync.Once
+	cancel context.CancelFunc
 }
 
 func NewDefaultSpanSplitChecker(changefeedID common.ChangeFeedID, schedulerCfg *config.ChangefeedSchedulerConfig) *defaultSpanSplitChecker {
 	if schedulerCfg == nil {
 		log.Panic("scheduler config is nil, please check the config", zap.String("changefeed", changefeedID.Name()))
-	}
-	regionCache := appcontext.GetService[split.RegionCache](appcontext.RegionCache)
-	refreshInterval := defaultRegionCountRefreshInterval
-	if schedulerCfg.RegionCountRefreshInterval != nil && *schedulerCfg.RegionCountRefreshInterval > 0 {
-		refreshInterval = *schedulerCfg.RegionCountRefreshInterval
 	}
 	checker := &defaultSpanSplitChecker{
 		changefeedID:    changefeedID,
@@ -88,12 +83,13 @@ func NewDefaultSpanSplitChecker(changefeedID common.ChangeFeedID, schedulerCfg *
 		splitReadyTasks: make(map[common.DispatcherID]*spanSplitStatus),
 		writeThreshold:  util.GetOrZero(schedulerCfg.WriteKeyThreshold),
 		regionThreshold: util.GetOrZero(schedulerCfg.RegionThreshold),
-		refreshInterval: refreshInterval,
-		regionCache:     regionCache,
-		stopCh:          make(chan struct{}),
+		refreshInterval: util.GetOrZero(schedulerCfg.RegionCountRefreshInterval),
+		regionCache:     appcontext.GetService[split.RegionCache](appcontext.RegionCache),
 	}
 	if checker.regionThreshold > 0 {
-		go checker.runRegionCountRefresh()
+		ctx, cancel := context.WithCancel(context.Background())
+		checker.cancel = cancel
+		go checker.runRegionCountRefresh(ctx)
 	}
 	return checker
 }
@@ -225,30 +221,23 @@ func (s *defaultSpanSplitChecker) Stat() string {
 	return res.String()
 }
 
-func (s *defaultSpanSplitChecker) runRegionCountRefresh() {
-	interval := s.refreshInterval
-	if interval <= 0 {
-		interval = defaultRegionCountRefreshInterval
-	}
-	ticker := time.NewTicker(interval)
+func (s *defaultSpanSplitChecker) runRegionCountRefresh(ctx context.Context) {
+	ticker := time.NewTicker(s.refreshInterval)
 	defer ticker.Stop()
 
 	s.refreshRegionCounts()
 
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case <-ticker.C:
 			s.refreshRegionCounts()
-		case <-s.stopCh:
-			return
 		}
 	}
 }
 
 func (s *defaultSpanSplitChecker) refreshRegionCounts() {
-	if s.regionThreshold <= 0 {
-		return
-	}
 	jobs := s.collectRegionCountJobs()
 	runRegionCountJobs(s.regionCache, jobs, s.applyRegionCountResult)
 }
@@ -287,7 +276,7 @@ func (s *defaultSpanSplitChecker) applyRegionCountResult(job regionCountJob, cou
 }
 
 func (s *defaultSpanSplitChecker) Close() {
-	s.stopOnce.Do(func() {
-		close(s.stopCh)
-	})
+	if s.cancel != nil {
+		s.cancel()
+	}
 }
