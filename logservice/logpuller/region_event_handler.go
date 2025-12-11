@@ -205,14 +205,19 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 		default:
 			log.Panic("meet unknown op type", zap.Any("entry", entry))
 		}
+		value := entry.GetValue()
+		oldValue := entry.GetOldValue()
 		return common.RawKVEntry{
-			OpType:   opType,
-			Key:      entry.Key,
-			Value:    entry.GetValue(),
-			StartTs:  entry.StartTs,
-			CRTs:     entry.CommitTs,
-			RegionID: regionID,
-			OldValue: entry.GetOldValue(),
+			OpType:      opType,
+			KeyLen:      uint32(len(entry.GetKey())),
+			ValueLen:    uint32(len(value)),
+			OldValueLen: uint32(len(oldValue)),
+			Key:         entry.Key,
+			Value:       value,
+			StartTs:     entry.StartTs,
+			CRTs:        entry.CommitTs,
+			RegionID:    regionID,
+			OldValue:    oldValue,
 		}
 	}
 
