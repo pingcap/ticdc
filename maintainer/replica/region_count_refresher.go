@@ -107,6 +107,8 @@ func (r *regionCountRefresher) queryRegionCount(ctx context.Context) {
 		return true
 	})
 
-	log.Info("refresh region count for all tables",
-		zap.Int("tableCount", tableCount), zap.Duration("duration", time.Since(start)))
+	if tableCount > 0 {
+		log.Info("refresh region count for all tables",
+			zap.Int("tableCount", tableCount), zap.Duration("duration", time.Since(start)))
+	}
 }
