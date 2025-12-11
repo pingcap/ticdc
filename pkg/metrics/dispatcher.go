@@ -24,7 +24,7 @@ var (
 			Help:      "The number of event dispatcher managers",
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
-	TableTriggerDispatcherGauge = prometheus.NewGaugeVec(
+	TableTriggerEventDispatcherGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dispatchermanager",
@@ -129,7 +129,7 @@ var (
 
 func initDispatcherMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(DispatcherManagerGauge)
-	registry.MustRegister(TableTriggerDispatcherGauge)
+	registry.MustRegister(TableTriggerEventDispatcherGauge)
 	registry.MustRegister(EventDispatcherGauge)
 	registry.MustRegister(CreateDispatcherDuration)
 	registry.MustRegister(DispatcherManagerResolvedTsGauge)

@@ -420,11 +420,11 @@ func TestMarkSpanAbsent(t *testing.T) {
 func newControllerWithCheckerForTest(t *testing.T) *Controller {
 	testutil.SetUpTestServices()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
-	tableTriggerDispatcherID := common.NewDispatcherID()
-	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerDispatcherID,
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
-			ID:              tableTriggerDispatcherID.ToPB(),
+			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1", false)

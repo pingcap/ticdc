@@ -34,12 +34,12 @@ import (
 
 func TestOneBlockEvent(t *testing.T) {
 	testutil.SetUpTestServices()
-	tableTriggerDispatcherID := common.NewDispatcherID()
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
-	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerDispatcherID,
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
-			ID:              tableTriggerDispatcherID.ToPB(),
+			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1", false)
@@ -166,12 +166,12 @@ func TestOneBlockEvent(t *testing.T) {
 
 func TestNormalBlock(t *testing.T) {
 	testutil.SetUpTestServices()
-	tableTriggerDispatcherID := common.NewDispatcherID()
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
-	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerDispatcherID,
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
-			ID:              tableTriggerDispatcherID.ToPB(),
+			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1", false)
@@ -335,12 +335,12 @@ func TestNormalBlock(t *testing.T) {
 
 func TestNormalBlockWithTableTrigger(t *testing.T) {
 	testutil.SetUpTestServices()
-	tableTriggerDispatcherID := common.NewDispatcherID()
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
-	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerDispatcherID,
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
-			ID:              tableTriggerDispatcherID.ToPB(),
+			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1", false)
@@ -386,14 +386,14 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 	require.Len(t, resp.DispatcherStatuses, 1)
 	require.True(t, resp.DispatcherStatuses[0].Ack.CommitTs == 10)
 	require.Len(t, resp.DispatcherStatuses[0].InfluencedDispatchers.DispatcherIDs, 1)
-	require.False(t, barrier.blockedEvents.m[eventKey{blockTs: 10, isSyncPoint: false}].tableTriggerDispatcherRelated)
+	require.False(t, barrier.blockedEvents.m[eventKey{blockTs: 10, isSyncPoint: false}].tableTriggerEventDispatcherRelated)
 
 	// table trigger  block request
 	msgs = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
 			{
-				ID: tableTriggerDispatcherID.ToPB(),
+				ID: tableTriggerEventDispatcherID.ToPB(),
 				State: &heartbeatpb.State{
 					IsBlocked: true,
 					BlockTs:   10,
@@ -433,17 +433,17 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 	}
 	event := barrier.blockedEvents.m[key]
 	require.Equal(t, uint64(10), event.commitTs)
-	require.True(t, event.writerDispatcher == tableTriggerDispatcherID)
+	require.True(t, event.writerDispatcher == tableTriggerEventDispatcherID)
 	// all dispatcher reported, the reported status is reset
 	require.False(t, event.rangeChecker.IsFullyCovered())
-	require.True(t, event.tableTriggerDispatcherRelated)
+	require.True(t, event.tableTriggerEventDispatcherRelated)
 
 	// table trigger write done
 	_ = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
 			{
-				ID: tableTriggerDispatcherID.ToPB(),
+				ID: tableTriggerEventDispatcherID.ToPB(),
 				State: &heartbeatpb.State{
 					IsBlocked: true,
 					BlockTs:   10,
@@ -483,12 +483,12 @@ func TestSchemaBlock(t *testing.T) {
 	}
 	nmap["node1"] = &node.Info{ID: "node1"}
 	nmap["node2"] = &node.Info{ID: "node2"}
-	tableTriggerDispatcherID := common.NewDispatcherID()
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
-	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerDispatcherID,
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
-			ID:              tableTriggerDispatcherID.ToPB(),
+			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1", false)
@@ -659,12 +659,12 @@ func TestSyncPointBlock(t *testing.T) {
 	}
 	nmap["node1"] = &node.Info{ID: "node1"}
 	nmap["node2"] = &node.Info{ID: "node2"}
-	tableTriggerDispatcherID := common.NewDispatcherID()
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
-	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerDispatcherID,
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
-			ID:              tableTriggerDispatcherID.ToPB(),
+			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1", false)
@@ -827,12 +827,12 @@ func TestSyncPointBlock(t *testing.T) {
 
 func TestNonBlocked(t *testing.T) {
 	testutil.SetUpTestServices()
-	tableTriggerDispatcherID := common.NewDispatcherID()
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
-	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerDispatcherID,
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
-			ID:              tableTriggerDispatcherID.ToPB(),
+			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1", false)
@@ -881,12 +881,12 @@ func TestNonBlocked(t *testing.T) {
 
 func TestUpdateCheckpointTs(t *testing.T) {
 	testutil.SetUpTestServices()
-	tableTriggerDispatcherID := common.NewDispatcherID()
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
-	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerDispatcherID,
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
-			ID:              tableTriggerDispatcherID.ToPB(),
+			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1", false)
@@ -936,12 +936,12 @@ func TestUpdateCheckpointTs(t *testing.T) {
 // TODO:Add more cases here
 func TestHandleBlockBootstrapResponse(t *testing.T) {
 	testutil.SetUpTestServices()
-	tableTriggerDispatcherID := common.NewDispatcherID()
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
-	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerDispatcherID,
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
-			ID:              tableTriggerDispatcherID.ToPB(),
+			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1", false)
@@ -1097,12 +1097,12 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 
 func TestSyncPointBlockPerf(t *testing.T) {
 	testutil.SetUpTestServices()
-	tableTriggerDispatcherID := common.NewDispatcherID()
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
-	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerDispatcherID,
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
-			ID:              tableTriggerDispatcherID.ToPB(),
+			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1", false)
@@ -1177,12 +1177,12 @@ func TestSyncPointBlockPerf(t *testing.T) {
 func TestBarrierEventWithDispatcherReallocation(t *testing.T) {
 	testutil.SetUpTestServices()
 
-	tableTriggerDispatcherID := common.NewDispatcherID()
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
-	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerDispatcherID,
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
-			ID:              tableTriggerDispatcherID.ToPB(),
+			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1", false)
@@ -1384,12 +1384,12 @@ func TestBarrierEventWithDispatcherScheduling(t *testing.T) {
 	testutil.SetUpTestServices()
 
 	// Setup table trigger event dispatcher (DDL dispatcher)
-	tableTriggerDispatcherID := common.NewDispatcherID()
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
-	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerDispatcherID,
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
-			ID:              tableTriggerDispatcherID.ToPB(),
+			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1", false)
@@ -1458,7 +1458,7 @@ func TestBarrierEventWithDispatcherScheduling(t *testing.T) {
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
 			{
-				ID: tableTriggerDispatcherID.ToPB(),
+				ID: tableTriggerEventDispatcherID.ToPB(),
 				State: &heartbeatpb.State{
 					IsBlocked: true,
 					BlockTs:   ddlTs,
@@ -1479,7 +1479,7 @@ func TestBarrierEventWithDispatcherScheduling(t *testing.T) {
 	require.True(t, ok)
 	require.NotNil(t, event)
 	require.False(t, event.selected.Load())
-	require.Contains(t, event.reportedDispatchers, tableTriggerDispatcherID)
+	require.Contains(t, event.reportedDispatchers, tableTriggerEventDispatcherID)
 	require.NotContains(t, event.reportedDispatchers, dispatcherA.ID)
 
 	// Phase 3: Dispatcher A finishes scheduling and reports DDL again

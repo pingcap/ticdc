@@ -32,19 +32,19 @@ import (
 
 func TestScheduleEvent(t *testing.T) {
 	testutil.SetUpTestServices()
-	tableTriggerDispatcherID := common.NewDispatcherID()
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
-	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerDispatcherID,
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
-			ID:              tableTriggerDispatcherID.ToPB(),
+			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "test1", false)
 	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
-	event := NewBlockEvent(cfID, tableTriggerDispatcherID, spanController, operatorController, &heartbeatpb.State{
+	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked:         true,
 		BlockTs:           10,
 		NeedDroppedTables: &heartbeatpb.InfluencedTables{InfluenceType: heartbeatpb.InfluenceType_Normal, TableIDs: []int64{1}},
@@ -54,7 +54,7 @@ func TestScheduleEvent(t *testing.T) {
 	// drop table will be executed first
 	require.Equal(t, 2, spanController.GetAbsentSize())
 
-	event = NewBlockEvent(cfID, tableTriggerDispatcherID, spanController, operatorController, &heartbeatpb.State{
+	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		NeedDroppedTables: &heartbeatpb.InfluencedTables{
@@ -67,7 +67,7 @@ func TestScheduleEvent(t *testing.T) {
 	// drop table will be executed first, then add the new table
 	require.Equal(t, 1, spanController.GetAbsentSize())
 
-	event = NewBlockEvent(cfID, tableTriggerDispatcherID, spanController, operatorController, &heartbeatpb.State{
+	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		NeedDroppedTables: &heartbeatpb.InfluencedTables{
@@ -85,12 +85,12 @@ func TestResendAction(t *testing.T) {
 	testutil.SetUpTestServices()
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
-	tableTriggerDispatcherID := common.NewDispatcherID()
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
-	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerDispatcherID,
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
-			ID:              tableTriggerDispatcherID.ToPB(),
+			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1", false)
@@ -105,7 +105,7 @@ func TestResendAction(t *testing.T) {
 		spanController.MarkSpanReplicating(stm)
 		dispatcherIDs = append(dispatcherIDs, stm.ID)
 	}
-	event := NewBlockEvent(cfID, tableTriggerDispatcherID, spanController, operatorController, &heartbeatpb.State{
+	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		BlockTables: &heartbeatpb.InfluencedTables{
@@ -131,7 +131,7 @@ func TestResendAction(t *testing.T) {
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
 
-	event = NewBlockEvent(cfID, tableTriggerDispatcherID, spanController, operatorController, &heartbeatpb.State{
+	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		BlockTables: &heartbeatpb.InfluencedTables{
@@ -149,7 +149,7 @@ func TestResendAction(t *testing.T) {
 	require.Equal(t, resp.DispatcherStatuses[0].InfluencedDispatchers.InfluenceType, heartbeatpb.InfluenceType_DB)
 	require.Equal(t, resp.DispatcherStatuses[0].Action.CommitTs, uint64(10))
 
-	event = NewBlockEvent(cfID, tableTriggerDispatcherID, spanController, operatorController, &heartbeatpb.State{
+	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		BlockTables: &heartbeatpb.InfluencedTables{
@@ -190,12 +190,12 @@ func TestResendAction(t *testing.T) {
 
 func TestUpdateSchemaID(t *testing.T) {
 	testutil.SetUpTestServices()
-	tableTriggerDispatcherID := common.NewDispatcherID()
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
-	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerDispatcherID,
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
-			ID:              tableTriggerDispatcherID.ToPB(),
+			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1", false)
@@ -204,7 +204,7 @@ func TestUpdateSchemaID(t *testing.T) {
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	require.Equal(t, 1, spanController.GetAbsentSize())
 	require.Len(t, spanController.GetTasksBySchemaID(1), 1)
-	event := NewBlockEvent(cfID, tableTriggerDispatcherID, spanController, operatorController, &heartbeatpb.State{
+	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		BlockTables: &heartbeatpb.InfluencedTables{

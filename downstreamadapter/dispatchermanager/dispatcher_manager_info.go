@@ -57,8 +57,8 @@ func (e *DispatcherManager) GetMaintainerEpoch() uint64 {
 	return e.meta.maintainerEpoch
 }
 
-func (e *DispatcherManager) GetTableTriggerDispatcher() *dispatcher.EventDispatcher {
-	return e.tableTriggerDispatcher
+func (e *DispatcherManager) GetTableTriggerEventDispatcher() *dispatcher.EventDispatcher {
+	return e.tableTriggerEventDispatcher
 }
 
 func (e *DispatcherManager) SetHeartbeatRequestQueue(heartbeatRequestQueue *HeartbeatRequestQueue) {
@@ -69,11 +69,11 @@ func (e *DispatcherManager) SetBlockStatusRequestQueue(blockStatusRequestQueue *
 	e.blockStatusRequestQueue = blockStatusRequestQueue
 }
 
-// Get all dispatchers id of the specified schemaID. Including the tableTriggerDispatcherID if exists.
+// Get all dispatchers id of the specified schemaID. Including the tableTriggerEventDispatcherID if exists.
 func (e *DispatcherManager) GetAllDispatchers(schemaID int64) []common.DispatcherID {
 	dispatcherIDs := e.schemaIDToDispatchers.GetDispatcherIDs(schemaID)
-	if e.tableTriggerDispatcher != nil {
-		dispatcherIDs = append(dispatcherIDs, e.tableTriggerDispatcher.GetId())
+	if e.tableTriggerEventDispatcher != nil {
+		dispatcherIDs = append(dispatcherIDs, e.tableTriggerEventDispatcher.GetId())
 	}
 	return dispatcherIDs
 }

@@ -74,7 +74,7 @@ type Dispatcher interface {
 	GetComponentStatus() heartbeatpb.ComponentState
 	GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus
 	GetEventSizePerSecond() float32
-	IsTableTriggerDispatcher() bool
+	IsTableTriggerEventDispatcher() bool
 	DealWithBlockEvent(event commonEvent.BlockEvent)
 	TryClose() (w heartbeatpb.Watermark, ok bool)
 	Remove()
@@ -239,7 +239,7 @@ func (d *BasicDispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.S
 	// when the event dispatcher manager have table trigger event dispatcher
 	if !d.tableSpan.Equal(common.KeyspaceDDLSpan(d.tableSpan.KeyspaceID)) {
 		log.Error("InitializeTableSchemaStore should only be received by table trigger event dispatcher", zap.Any("dispatcher", d.id))
-		return false, errors.ErrChangefeedInitTableTriggerDispatcherFailed.
+		return false, errors.ErrChangefeedInitTableTriggerEventDispatcherFailed.
 			GenWithStackByArgs("InitializeTableSchemaStore should only be received by table trigger event dispatcher")
 	}
 
@@ -762,7 +762,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 	// So there won't be a related db-level ddl event is in dealing when we get update schema id events.
 	// Thus, whether to update schema id before or after current ddl event is not important.
 	// To make it easier, we choose to directly update schema id here.
-	if event.GetUpdatedSchemas() != nil && !d.IsTableTriggerDispatcher() {
+	if event.GetUpdatedSchemas() != nil && !d.IsTableTriggerEventDispatcher() {
 		for _, schemaIDChange := range event.GetUpdatedSchemas() {
 			if schemaIDChange.TableID == d.tableSpan.TableID {
 				if schemaIDChange.OldSchemaID != d.schemaID {
@@ -833,7 +833,7 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 		w.CheckpointTs = d.GetCheckpointTs()
 		w.ResolvedTs = d.GetResolvedTs()
 
-		if d.IsTableTriggerDispatcher() && d.tableSchemaStore != nil {
+		if d.IsTableTriggerEventDispatcher() && d.tableSchemaStore != nil {
 			d.tableSchemaStore.Clear()
 		}
 		log.Info("dispatcher component has stopped and is ready for cleanup",

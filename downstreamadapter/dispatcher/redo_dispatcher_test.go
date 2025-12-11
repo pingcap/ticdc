@@ -380,12 +380,12 @@ func TestRedoUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, int32(1), redoCount.Load())
 }
 
-func TestRedoTableTriggerDispatcherInMysql(t *testing.T) {
+func TestRedoTableTriggerEventDispatcherInMysql(t *testing.T) {
 	redoCount.Store(0)
 
 	ddlTableSpan := common.KeyspaceDDLSpan(common.DefaultKeyspaceID)
 	sink := sink.NewMockSink(common.MysqlSinkType)
-	tableTriggerDispatcher := newRedoDispatcherForTest(sink, ddlTableSpan)
+	tableTriggerEventDispatcher := newRedoDispatcherForTest(sink, ddlTableSpan)
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -409,11 +409,11 @@ func TestRedoTableTriggerDispatcherInMysql(t *testing.T) {
 	}
 
 	nodeID := node.NewID()
-	block := tableTriggerDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, redoCallback)
+	block := tableTriggerEventDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, redoCallback)
 	require.Equal(t, true, block)
 	time.Sleep(5 * time.Second)
 	// no pending event
-	blockPendingEvent := tableTriggerDispatcher.blockEventStatus.getEvent()
+	blockPendingEvent := tableTriggerEventDispatcher.blockEventStatus.getEvent()
 	require.Nil(t, blockPendingEvent)
 	require.Equal(t, int32(1), redoCount.Load())
 
@@ -441,21 +441,21 @@ func TestRedoTableTriggerDispatcherInMysql(t *testing.T) {
 		TableInfo: tableInfo,
 	}
 
-	block = tableTriggerDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, redoCallback)
+	block = tableTriggerEventDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, redoCallback)
 	require.Equal(t, true, block)
 	time.Sleep(5 * time.Second)
 	// no pending event
-	blockPendingEvent = tableTriggerDispatcher.blockEventStatus.getEvent()
+	blockPendingEvent = tableTriggerEventDispatcher.blockEventStatus.getEvent()
 	require.Nil(t, blockPendingEvent)
 	require.Equal(t, int32(2), redoCount.Load())
 }
 
-func TestRedoTableTriggerDispatcherInKafka(t *testing.T) {
+func TestRedoTableTriggerEventDispatcherInKafka(t *testing.T) {
 	redoCount.Store(0)
 
 	ddlTableSpan := common.KeyspaceDDLSpan(common.DefaultKeyspaceID)
 	sink := sink.NewMockSink(common.KafkaSinkType)
-	tableTriggerDispatcher := newRedoDispatcherForTest(sink, ddlTableSpan)
+	tableTriggerEventDispatcher := newRedoDispatcherForTest(sink, ddlTableSpan)
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -479,11 +479,11 @@ func TestRedoTableTriggerDispatcherInKafka(t *testing.T) {
 	}
 
 	nodeID := node.NewID()
-	block := tableTriggerDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, redoCallback)
+	block := tableTriggerEventDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, redoCallback)
 	require.Equal(t, true, block)
 	time.Sleep(5 * time.Second)
 	// no pending event
-	blockPendingEvent := tableTriggerDispatcher.blockEventStatus.getEvent()
+	blockPendingEvent := tableTriggerEventDispatcher.blockEventStatus.getEvent()
 	require.Nil(t, blockPendingEvent)
 	require.Equal(t, int32(1), redoCount.Load())
 
@@ -511,11 +511,11 @@ func TestRedoTableTriggerDispatcherInKafka(t *testing.T) {
 		TableInfo: tableInfo,
 	}
 
-	block = tableTriggerDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, redoCallback)
+	block = tableTriggerEventDispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, redoCallback)
 	require.Equal(t, true, block)
 	time.Sleep(5 * time.Second)
 	// no pending event
-	blockPendingEvent = tableTriggerDispatcher.blockEventStatus.getEvent()
+	blockPendingEvent = tableTriggerEventDispatcher.blockEventStatus.getEvent()
 	require.Nil(t, blockPendingEvent)
 	require.Equal(t, int32(2), redoCount.Load())
 }

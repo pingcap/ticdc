@@ -175,7 +175,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 
-	tableTriggerDispatcherID, ddlSpan := newDDLSpan(keyspaceID, cfID, checkpointTs, selfNode, common.DefaultMode)
+	tableTriggerEventDispatcherID, ddlSpan := newDDLSpan(keyspaceID, cfID, checkpointTs, selfNode, common.DefaultMode)
 	var redoDDLSpan *replica.SpanReplication
 	enableRedo := redo.IsConsistentEnabled(util.GetOrZero(info.Config.Consistent.Level))
 	if enableRedo {
@@ -258,7 +258,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		zap.Stringer("changefeedID", cfID),
 		zap.String("state", string(info.State)),
 		zap.Uint64("checkpointTs", checkpointTs),
-		zap.String("ddlDispatcherID", tableTriggerDispatcherID.String()),
+		zap.String("ddlDispatcherID", tableTriggerEventDispatcherID.String()),
 		zap.String("redoTs", m.redoMetaTs.String()),
 		zap.Bool("newChangefeed", newChangefeed),
 	)
@@ -495,7 +495,7 @@ func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
 	}
 }
 
-// onCheckpointTsPersisted forwards the checkpoint message to the table trigger dispatcher,
+// onCheckpointTsPersisted forwards the checkpoint message to the table trigger event dispatcher,
 // which is co-located on the same node as the maintainer. The dispatcher will propagate
 // the watermark information to downstream sinks.
 func (m *Maintainer) onCheckpointTsPersisted(msg *heartbeatpb.CheckpointTsMessage) {
@@ -575,9 +575,9 @@ func (m *Maintainer) handleRedoMetaTsMessage(ctx context.Context) {
 			minRedoCheckpointTsForScheduler := m.controller.GetMinRedoCheckpointTs(newWatermark.CheckpointTs)
 			minRedoCheckpointTsForBarrier := m.controller.redoBarrier.GetMinBlockedCheckpointTsForNewTables(newWatermark.CheckpointTs)
 
-			// if there is no tables, there must be a table trigger dispatcher
+			// if there is no tables, there must be a table trigger event dispatcher
 			for id := range m.bootstrapper.GetAllNodeIDs() {
-				// maintainer node has the table trigger dispatcher
+				// maintainer node has the table trigger event dispatcher
 				if id != m.selfNode.ID && m.controller.redoSpanController.GetTaskSizeByNodeID(id) <= 0 {
 					continue
 				}
@@ -690,7 +690,7 @@ func (m *Maintainer) calculateNewCheckpointTs() (*heartbeatpb.Watermark, bool) {
 	// Step 2: Apply heartbeat constraints from all nodes
 	updateCheckpointTs := true
 	for id := range m.bootstrapper.GetAllNodeIDs() {
-		// maintainer node has the table trigger dispatcher
+		// maintainer node has the table trigger event dispatcher
 		if id != m.selfNode.ID && m.controller.spanController.GetTaskSizeByNodeID(id) <= 0 {
 			continue
 		}
@@ -894,16 +894,16 @@ func isMysqlCompatible(sinkURIStr string) (bool, error) {
 }
 
 func newDDLSpan(keyspaceID uint32, cfID common.ChangeFeedID, checkpointTs uint64, selfNode *node.Info, mode int64) (common.DispatcherID, *replica.SpanReplication) {
-	tableTriggerDispatcherID := common.NewDispatcherID()
-	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerDispatcherID,
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(keyspaceID), &heartbeatpb.TableSpanStatus{
-			ID:              tableTriggerDispatcherID.ToPB(),
+			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    checkpointTs,
 			Mode:            mode,
 		}, selfNode.ID, false)
-	return tableTriggerDispatcherID, ddlSpan
+	return tableTriggerEventDispatcherID, ddlSpan
 }
 
 func (m *Maintainer) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) {
@@ -1056,26 +1056,26 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapMessa
 	}
 	return func(targetNodeID node.ID) *messaging.TargetMessage {
 		msg := &heartbeatpb.MaintainerBootstrapRequest{
-			ChangefeedID:                 m.changefeedID.ToPB(),
-			Config:                       cfgBytes,
-			StartTs:                      m.startCheckpointTs,
-			TableTriggerDispatcherID:     nil,
-			RedoTableTriggerDispatcherID: nil,
-			IsNewChangefeed:              false,
-			KeyspaceId:                   m.info.KeyspaceID,
+			ChangefeedID:                      m.changefeedID.ToPB(),
+			Config:                            cfgBytes,
+			StartTs:                           m.startCheckpointTs,
+			TableTriggerEventDispatcherID:     nil,
+			RedoTableTriggerEventDispatcherID: nil,
+			IsNewChangefeed:                   false,
+			KeyspaceId:                        m.info.KeyspaceID,
 		}
 
 		// only send dispatcher targetNodeID to dispatcher manager on the same node
 		if targetNodeID == m.selfNode.ID {
-			log.Info("create table event trigger dispatcher bootstrap message",
+			log.Info("create table event trigger event dispatcher bootstrap message",
 				zap.Stringer("changefeedID", m.changefeedID),
 				zap.String("server", targetNodeID.String()),
 				zap.String("dispatcherID", m.ddlSpan.ID.String()),
 				zap.Uint64("startTs", m.startCheckpointTs),
 			)
-			msg.TableTriggerDispatcherID = m.ddlSpan.ID.ToPB()
+			msg.TableTriggerEventDispatcherID = m.ddlSpan.ID.ToPB()
 			if m.enableRedo {
-				msg.RedoTableTriggerDispatcherID = m.redoDDLSpan.ID.ToPB()
+				msg.RedoTableTriggerEventDispatcherID = m.redoDDLSpan.ID.ToPB()
 			}
 			msg.IsNewChangefeed = m.newChangefeed
 		}

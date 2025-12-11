@@ -49,8 +49,8 @@ type EventDispatcher struct {
 }
 
 // All event dispatchers in the changefeed will share the same Sink.
-// Here is a special dispatcher will deal with the events of the DDLSpan in one changefeed, we call it TableTriggerDispatcher
-// One changefeed across multiple nodes only will have one TableTriggerDispatcher.
+// Here is a special dispatcher will deal with the events of the DDLSpan in one changefeed, we call it TableTriggerEventDispatcher
+// One changefeed across multiple nodes only will have one TableTriggerEventDispatcher.
 func NewEventDispatcher(
 	id common.DispatcherID,
 	tableSpan *heartbeatpb.TableSpan,

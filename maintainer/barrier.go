@@ -345,7 +345,7 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 				zap.String("changefeed", changefeedID.Name()),
 				zap.String("dispatcher", dispatcherID.String()),
 				zap.Uint64("commitTs", blockState.BlockTs))
-			event.tableTriggerDispatcherRelated = true
+			event.tableTriggerEventDispatcherRelated = true
 		}
 		if event.selected.Load() {
 			// the event already in the selected state, ignore the block event just sent ack
@@ -367,7 +367,7 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 		}
 		return event, status, targetID, true
 	}
-	// it's not a blocked event, it must be sent by table event trigger dispatcher, just for doing scheduler
+	// it's not a blocked event, it must be sent by table event trigger event dispatcher, just for doing scheduler
 	// and the ddl already synced to downstream , e.g.: create table
 	// if ack failed, dispatcher will send a heartbeat again, so we do not need to care about resend message here
 	//
@@ -380,7 +380,7 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 		b.blockedEvents.Delete(getEventKey(event.commitTs, event.isSyncPoint))
 		return event, nil, "", true
 	}
-	// enqueue ddl that needs scheduling so the table trigger dispatcher can process in order
+	// enqueue ddl that needs scheduling so the table trigger event dispatcher can process in order
 	// otherwise the barrier may receive the first status of "recover table t_a" before it sees the
 	// "truncate table t_a" done status when intermediate messages are lost, and the recover ddl would
 	// be scheduled before truncate finishes, re-adding the table before drop completes and risking data loss.

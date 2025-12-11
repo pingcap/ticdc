@@ -42,9 +42,9 @@ type BarrierEvent struct {
 	selected           atomic.Bool
 	hasNewTable        bool
 	// table trigger event dispatcher reported the block event, we should use it as the writer
-	tableTriggerDispatcherRelated bool
-	writerDispatcher              common.DispatcherID
-	writerDispatcherAdvanced      bool
+	tableTriggerEventDispatcherRelated bool
+	writerDispatcher                   common.DispatcherID
+	writerDispatcherAdvanced           bool
 
 	blockedDispatchers *heartbeatpb.InfluencedTables
 	dropDispatchers    *heartbeatpb.InfluencedTables
@@ -186,7 +186,7 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 		dispatcher = be.spanController.GetDDLDispatcherID()
 	default:
 		selected := dispatcherID.ToPB()
-		if be.tableTriggerDispatcherRelated {
+		if be.tableTriggerEventDispatcherRelated {
 			// select the last one as the writer
 			// or the table trigger event dispatcher if it's one of the blocked dispatcher
 			selected = be.spanController.GetDDLDispatcherID().ToPB()
