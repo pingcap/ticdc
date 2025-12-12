@@ -330,11 +330,12 @@ func TestSplitSpanChecker_UpdateStatus_NonWorking(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     util.AddressOf(1000),
-		RegionThreshold:       util.AddressOf(5),
-		BalanceScoreThreshold: util.AddressOf(1),
-		MinTrafficPercentage:  util.AddressOf(0.8),
-		MaxTrafficPercentage:  util.AddressOf(1.2),
+		WriteKeyThreshold:          util.AddressOf(1000),
+		RegionThreshold:            util.AddressOf(5),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
+		BalanceScoreThreshold:      util.AddressOf(1),
+		MinTrafficPercentage:       util.AddressOf(0.8),
+		MaxTrafficPercentage:       util.AddressOf(1.2),
 	}
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 1)
@@ -427,11 +428,12 @@ func TestSplitSpanChecker_ChooseSplitSpans_Region(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     util.AddressOf(1000),
-		RegionThreshold:       util.AddressOf(5),
-		BalanceScoreThreshold: util.AddressOf(1),
-		MinTrafficPercentage:  util.AddressOf(0.8),
-		MaxTrafficPercentage:  util.AddressOf(1.2),
+		WriteKeyThreshold:          util.AddressOf(1000),
+		RegionThreshold:            util.AddressOf(5),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
+		BalanceScoreThreshold:      util.AddressOf(1),
+		MinTrafficPercentage:       util.AddressOf(0.8),
+		MaxTrafficPercentage:       util.AddressOf(1.2),
 	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -478,11 +480,12 @@ func TestSplitSpanChecker_CheckMergeWhole_SingleNode(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     util.AddressOf(2000),
-		RegionThreshold:       util.AddressOf(20),
-		BalanceScoreThreshold: util.AddressOf(1),
-		MinTrafficPercentage:  util.AddressOf(0.8),
-		MaxTrafficPercentage:  util.AddressOf(1.2),
+		WriteKeyThreshold:          util.AddressOf(2000),
+		RegionThreshold:            util.AddressOf(20),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
+		BalanceScoreThreshold:      util.AddressOf(1),
+		MinTrafficPercentage:       util.AddressOf(0.8),
+		MaxTrafficPercentage:       util.AddressOf(1.2),
 	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -570,11 +573,12 @@ func TestSplitSpanChecker_CheckMergeWhole_ThresholdNotMet(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     util.AddressOf(1000),
-		RegionThreshold:       util.AddressOf(10),
-		BalanceScoreThreshold: util.AddressOf(1),
-		MinTrafficPercentage:  util.AddressOf(0.8),
-		MaxTrafficPercentage:  util.AddressOf(1.2),
+		WriteKeyThreshold:          util.AddressOf(1000),
+		RegionThreshold:            util.AddressOf(10),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
+		BalanceScoreThreshold:      util.AddressOf(1),
+		MinTrafficPercentage:       util.AddressOf(0.8),
+		MaxTrafficPercentage:       util.AddressOf(1.2),
 	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -613,11 +617,12 @@ func TestSplitSpanChecker_CheckBalanceTraffic_Balance(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     util.AddressOf(1000),
-		RegionThreshold:       util.AddressOf(10),
-		BalanceScoreThreshold: util.AddressOf(1),
-		MinTrafficPercentage:  util.AddressOf(0.8),
-		MaxTrafficPercentage:  util.AddressOf(1.2),
+		WriteKeyThreshold:          util.AddressOf(1000),
+		RegionThreshold:            util.AddressOf(10),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
+		BalanceScoreThreshold:      util.AddressOf(1),
+		MinTrafficPercentage:       util.AddressOf(0.8),
+		MaxTrafficPercentage:       util.AddressOf(1.2),
 	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
