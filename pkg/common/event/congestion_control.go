@@ -24,10 +24,12 @@ import (
 const CongestionControlVersion1 = 1
 
 type AvailableMemory struct {
-	Version             byte                           // 1 byte, it should be the same as CongestionControlVersion
-	Gid                 common.GID                     // GID is the internal representation of ChangeFeedID
-	Available           uint64                         // in bytes, used to report the Available memory
-	DispatcherCount     uint32                         // used to report the number of dispatchers
+	Version         byte       // 1 byte, it should be the same as CongestionControlVersion
+	Gid             common.GID // GID is the internal representation of ChangeFeedID
+	Available       uint64     // in bytes, used to report the Available memory
+	DispatcherCount uint32     // used to report the number of dispatchers
+
+	// Deprecated, only keep it for backward compatibility.
 	DispatcherAvailable map[common.DispatcherID]uint64 // in bytes, used to report the memory usage of each dispatcher
 }
 
