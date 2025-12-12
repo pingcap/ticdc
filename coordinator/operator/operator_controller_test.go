@@ -35,7 +35,7 @@ func TestController_StopChangefeed(t *testing.T) {
 	self := node.NewInfo("localhost:8300", "")
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	nodeManager.GetAliveNodes()[self.ID] = self
-	oc := NewOperatorController(self, changefeedDB, backend, nodeManager, 10)
+	oc := NewOperatorController(self, changefeedDB, backend, 10)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
@@ -62,7 +62,7 @@ func TestController_AddOperator(t *testing.T) {
 	self := node.NewInfo("localhost:8300", "")
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	nodeManager.GetAliveNodes()[self.ID] = self
-	oc := NewOperatorController(self, changefeedDB, backend, nodeManager, 10)
+	oc := NewOperatorController(self, changefeedDB, backend, 10)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
@@ -98,7 +98,7 @@ func TestController_StopChangefeedDuringAddOperator(t *testing.T) {
 	self := node.NewInfo("localhost:8300", "")
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	nodeManager.GetAliveNodes()[self.ID] = self
-	oc := NewOperatorController(self, changefeedDB, backend, nodeManager, 10)
+	oc := NewOperatorController(self, changefeedDB, backend, 10)
 
 	// Create changefeed and add it to absent state (simulating a newly created changefeed)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)

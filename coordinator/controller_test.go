@@ -71,7 +71,7 @@ func TestPauseChangefeed(t *testing.T) {
 		backend:      backend,
 		changefeedDB: changefeedDB,
 		operatorController: operator.NewOperatorController(node.NewInfo("node1", ""),
-			changefeedDB, backend, nodeManager, 10),
+			changefeedDB, backend, 10),
 	}
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
@@ -172,7 +172,7 @@ func TestRemoveChangefeed(t *testing.T) {
 		backend:      backend,
 		changefeedDB: changefeedDB,
 		operatorController: operator.NewOperatorController(node.NewInfo("node1", ""),
-			changefeedDB, backend, nodeManager, 10),
+			changefeedDB, backend, 10),
 	}
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
@@ -208,7 +208,7 @@ func TestListChangefeed(t *testing.T) {
 		backend:      backend,
 		changefeedDB: changefeedDB,
 		operatorController: operator.NewOperatorController(node.NewInfo("node1", ""),
-			changefeedDB, backend, nodeManager, 10),
+			changefeedDB, backend, 10),
 	}
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
@@ -255,7 +255,7 @@ func TestCreateChangefeed(t *testing.T) {
 		backend:      backend,
 		changefeedDB: changefeedDB,
 		operatorController: operator.NewOperatorController(node.NewInfo("node1", ""),
-			changefeedDB, backend, nodeManager, 10),
+			changefeedDB, backend, 10),
 		bootstrapped: atomic.NewBool(false),
 	}
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)

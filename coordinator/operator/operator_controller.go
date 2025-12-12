@@ -52,7 +52,6 @@ func NewOperatorController(
 	selfNode *node.Info,
 	db *changefeed.ChangefeedDB,
 	backend changefeed.Backend,
-	nodeManger *watcher.NodeManager,
 	batchSize int,
 ) *Controller {
 	oc := &Controller{
@@ -64,7 +63,7 @@ func NewOperatorController(
 		changefeedDB:  db,
 		selfNode:      selfNode,
 		backend:       backend,
-		nodeManger:    nodeManger,
+		nodeManger:    appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 	}
 	return oc
 }

@@ -115,8 +115,7 @@ func NewController(
 ) *Controller {
 	changefeedDB := changefeed.NewChangefeedDB(version)
 
-	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
-	oc := operator.NewOperatorController(selfNode, changefeedDB, backend, nodeManager, batchSize)
+	oc := operator.NewOperatorController(selfNode, changefeedDB, backend, batchSize)
 	c := &Controller{
 		version:      version,
 		bootstrapped: atomic.NewBool(false),
@@ -126,14 +125,12 @@ func NewController(
 				batchSize,
 				oc,
 				changefeedDB,
-				nodeManager,
 			),
 			scheduler.BalanceScheduler: coscheduler.NewBalanceScheduler(
 				selfNode.ID.String(),
 				batchSize,
 				oc,
 				changefeedDB,
-				nodeManager,
 				balanceInterval,
 			),
 		}),
@@ -141,7 +138,7 @@ func NewController(
 		operatorController: oc,
 		messageCenter:      appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		changefeedDB:       changefeedDB,
-		nodeManager:        nodeManager,
+		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		taskScheduler:      threadpool.NewThreadPoolDefault(),
 		backend:            backend,
 		changefeedChangeCh: changefeedChangeCh,
