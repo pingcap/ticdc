@@ -14,7 +14,6 @@
 package redo
 
 import (
-	"context"
 	"net/http"
 	_ "net/http/pprof" // init pprof
 	"net/url"
@@ -86,7 +85,7 @@ func (o *applyRedoOptions) complete(cmd *cobra.Command) error {
 
 // run runs the `redo apply` command.
 func (o *applyRedoOptions) run(cmd *cobra.Command) error {
-	ctx := context.Background()
+	ctx := cmd.Context()
 	err := logger.InitLogger(&logger.Config{
 		Level: o.logLevel,
 	})

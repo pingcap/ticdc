@@ -14,8 +14,6 @@
 package cli
 
 import (
-	"context"
-
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/spf13/cobra"
@@ -46,7 +44,7 @@ func (o *queryTsoOptions) complete(f factory.Factory) error {
 
 // run runs the `cli tso query` command.
 func (o *queryTsoOptions) run(cmd *cobra.Command) error {
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	ts, logic, err := o.pdClient.GetTS(ctx)
 	if err != nil {
