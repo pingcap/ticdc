@@ -732,6 +732,9 @@ func (c *Controller) ResumeChangefeed(
 	if runningErr != nil {
 		return errors.New(runningErr.Message)
 	}
+	if overwriteCheckpointTs {
+		cf.SetLastSavedCheckPointTs(newCheckpointTs)
+	}
 	c.moveChangefeedToSchedulingQueue(id, true, overwriteCheckpointTs)
 	return nil
 }
