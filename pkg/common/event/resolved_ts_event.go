@@ -155,14 +155,12 @@ func NewResolvedEvent(
 	resolvedTs common.Ts,
 	dispatcherID common.DispatcherID,
 	epoch uint64,
-	seq uint64,
 ) ResolvedEvent {
 	return ResolvedEvent{
 		DispatcherID: dispatcherID,
 		ResolvedTs:   resolvedTs,
 		Version:      ResolvedEventVersion1,
 		Epoch:        epoch,
-		Seq:          seq,
 	}
 }
 
