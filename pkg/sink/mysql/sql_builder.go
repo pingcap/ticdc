@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/tidb/pkg/util/chunk"
+	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
@@ -249,9 +250,17 @@ func buildUpdate(tableInfo *common.TableInfo, row commonEvent.RowChange) (string
 //     describes when the row was committed at the upstream cluster.
 //  3. ON DUPLICATE KEY UPDATE reuses a single @ticdc_lww_cond flag derived from downstream
 //     IFNULL(_tidb_origin_ts, _tidb_commit_ts) <= VALUES(_tidb_origin_ts) to keep LWW semantics.
-func buildActiveActiveUpsertSQL(tableInfo *common.TableInfo, rows []*commonEvent.RowChange) (string, []interface{}) {
+func buildActiveActiveUpsertSQL(
+	tableInfo *common.TableInfo,
+	rows []*commonEvent.RowChange,
+	commitTs []uint64,
+) (string, []interface{}) {
 	if tableInfo == nil || len(rows) == 0 {
 		return "", nil
+	}
+	if len(commitTs) != len(rows) {
+		log.Panic("mismatched commitTs and rows length",
+			zap.Int("rows", len(rows)), zap.Int("commitTs", len(commitTs)))
 	}
 
 	columns := tableInfo.GetColumns()
@@ -271,13 +280,21 @@ func buildActiveActiveUpsertSQL(tableInfo *common.TableInfo, rows []*commonEvent
 	}
 
 	valueOffsets := make([]int, len(insertColumns))
+	useCommitTs := make([]bool, len(insertColumns))
+	for i := range valueOffsets {
+		valueOffsets[i] = -1
+	}
 	for i, colName := range insertColumns {
-		valueColName := colName
 		if colName == commonEvent.OriginTsColumn {
 			// VALUES(_tidb_origin_ts) should reuse upstream commitTs to record origin.
-			valueColName = commonEvent.CommitTsColumn
+			useCommitTs[i] = true
+			continue
 		}
-		offset, _ := tableInfo.GetColumnOffsetByName(valueColName)
+		offset, ok := tableInfo.GetColumnOffsetByName(colName)
+		if !ok {
+			log.Panic("column not found when building active-active SQL",
+				zap.String("column", colName), zap.Stringer("table", tableInfo.TableName))
+		}
 		valueOffsets[i] = offset
 	}
 
@@ -310,7 +327,15 @@ func buildActiveActiveUpsertSQL(tableInfo *common.TableInfo, rows []*commonEvent
 		}
 		builder.WriteString(")")
 		for i := range insertColumns {
+			if useCommitTs[i] {
+				args = append(args, commitTs[rowIdx])
+				continue
+			}
 			offset := valueOffsets[i]
+			if offset < 0 || offset >= len(columns) {
+				log.Panic("invalid column offset when building active-active SQL",
+					zap.Int("offset", offset), zap.Int("columnCount", len(columns)))
+			}
 			col := columns[offset]
 			v := common.ExtractColVal(&row.Row, col, offset)
 			args = append(args, v)

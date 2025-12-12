@@ -36,6 +36,7 @@ type rowChangeWithKeys struct {
 	rowChange  *commonEvent.RowChange
 	rowKeys    []byte
 	preRowKeys []byte
+	commitTs   uint64
 }
 
 // ===== Normal SQL (one row -> one statement) =====
@@ -198,7 +199,7 @@ func (w *Writer) generateBatchSQL(events []*commonEvent.DMLEvent) ([]string, [][
 func (w *Writer) buildRowChangesForUnSafeBatch(
 	events []*commonEvent.DMLEvent,
 	tableInfo *common.TableInfo,
-) ([]*commonEvent.RowChange, error) {
+) ([]*commonEvent.RowChange, []uint64, error) {
 	// Step 1 extract all rows in these events to rowLists, and calcuate row key for each row(based on pk value)
 	rowLists := make([]rowChangeWithKeys, 0)
 	for _, event := range events {
@@ -209,7 +210,10 @@ func (w *Writer) buildRowChangesForUnSafeBatch(
 				break
 			}
 			rowCopy := row
-			rowChangeWithKeys := rowChangeWithKeys{rowChange: &rowCopy}
+			rowChangeWithKeys := rowChangeWithKeys{
+				rowChange: &rowCopy,
+				commitTs:  event.CommitTs,
+			}
 			if !row.Row.IsEmpty() {
 				_, keys := genKeyAndHash(&row.Row, tableInfo)
 				rowChangeWithKeys.rowKeys = keys
@@ -255,7 +259,7 @@ func (w *Writer) buildRowChangesForUnSafeBatch(
 					rowKey := rowLists[i].rowKeys
 					if nextRowType == common.RowTypeInsert {
 						if compareKeys(rowKey, rowLists[j].rowKeys) {
-							return nil, cerror.ErrUnexpected.FastGenByArgs("duplicate insert rows with same key")
+							return nil, nil, cerror.ErrUnexpected.FastGenByArgs("duplicate insert rows with same key")
 						}
 					} else if nextRowType == common.RowTypeDelete {
 						if compareKeys(rowKey, rowLists[j].preRowKeys) {
@@ -265,7 +269,7 @@ func (w *Writer) buildRowChangesForUnSafeBatch(
 						}
 					} else if nextRowType == common.RowTypeUpdate {
 						if !compareKeys(rowLists[j].preRowKeys, rowLists[j].rowKeys) {
-							return nil, cerror.ErrUnexpected.FastGenByArgs("update row key mismatch")
+							return nil, nil, cerror.ErrUnexpected.FastGenByArgs("update row key mismatch")
 						}
 						if compareKeys(rowKey, rowLists[j].preRowKeys) {
 							flagList[i] = false
@@ -277,6 +281,7 @@ func (w *Writer) buildRowChangesForUnSafeBatch(
 							rowLists[j] = rowChangeWithKeys{
 								rowChange: &newRowChange,
 								rowKeys:   rowLists[j].rowKeys,
+								commitTs:  rowLists[j].commitTs,
 							}
 							hasUpdate = true
 							break innerLoop
@@ -285,11 +290,11 @@ func (w *Writer) buildRowChangesForUnSafeBatch(
 				case common.RowTypeUpdate:
 					rowKey := rowLists[i].rowKeys
 					if !compareKeys(rowKey, rowLists[i].preRowKeys) {
-						return nil, cerror.ErrUnexpected.FastGenByArgs("update row key mismatch")
+						return nil, nil, cerror.ErrUnexpected.FastGenByArgs("update row key mismatch")
 					}
 					if nextRowType == common.RowTypeInsert {
 						if compareKeys(rowKey, rowLists[j].rowKeys) {
-							return nil, cerror.ErrUnexpected.FastGenByArgs("duplicate rows for update and insert")
+							return nil, nil, cerror.ErrUnexpected.FastGenByArgs("duplicate rows for update and insert")
 						}
 					} else if nextRowType == common.RowTypeDelete {
 						if compareKeys(rowKey, rowLists[j].preRowKeys) {
@@ -302,6 +307,7 @@ func (w *Writer) buildRowChangesForUnSafeBatch(
 							rowLists[i] = rowChangeWithKeys{
 								rowChange:  &newRowChange,
 								preRowKeys: rowKey,
+								commitTs:   rowLists[j].commitTs,
 							}
 							hasUpdate = true
 							break innerLoop
@@ -309,7 +315,7 @@ func (w *Writer) buildRowChangesForUnSafeBatch(
 					} else if nextRowType == common.RowTypeUpdate {
 						if compareKeys(rowKey, rowLists[j].preRowKeys) {
 							if !compareKeys(rowLists[j].preRowKeys, rowLists[j].rowKeys) {
-								return nil, cerror.ErrUnexpected.FastGenByArgs("update row key mismatch")
+								return nil, nil, cerror.ErrUnexpected.FastGenByArgs("update row key mismatch")
 							}
 							newRowChange := commonEvent.RowChange{
 								PreRow:  rowLists[j].rowChange.PreRow,
@@ -320,6 +326,7 @@ func (w *Writer) buildRowChangesForUnSafeBatch(
 								rowChange:  &newRowChange,
 								preRowKeys: rowKey,
 								rowKeys:    rowKey,
+								commitTs:   rowLists[j].commitTs,
 							}
 							flagList[i] = false
 							hasUpdate = true
@@ -344,17 +351,19 @@ func (w *Writer) buildRowChangesForUnSafeBatch(
 	}
 
 	finalRowLists := make([]*commonEvent.RowChange, 0, len(rowLists))
+	finalCommitTs := make([]uint64, 0, len(rowLists))
 	for i := 0; i < len(rowLists); i++ {
 		finalRowLists = append(finalRowLists, rowLists[i].rowChange)
+		finalCommitTs = append(finalCommitTs, rowLists[i].commitTs)
 	}
-	return finalRowLists, nil
+	return finalRowLists, finalCommitTs, nil
 }
 
 // generateBatchSQLInUnSafeMode merges rows with the same keys and produces batch SQLs
 // following the non-safe path (INSERT/UPDATE/DELETE without REPLACE semantics).
 func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
 	tableInfo := events[0].TableInfo
-	finalRowLists, err := w.buildRowChangesForUnSafeBatch(events, tableInfo)
+	finalRowLists, _, err := w.buildRowChangesForUnSafeBatch(events, tableInfo)
 	if err != nil {
 		sql, values := w.generateBatchSQLsPerEvent(events)
 		log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values), zap.Int("writerID", w.id))
