@@ -280,10 +280,7 @@ func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
 	}
 
 	if s.regionThreshold > 0 {
-		count, ok := s.refresher.getRegionCount(replica.ID)
-		if ok {
-			status.regionCount = count
-		}
+		status.regionCount = s.refresher.getRegionCount(replica.ID)
 	}
 
 	s.balanceCondition.statusUpdated = true

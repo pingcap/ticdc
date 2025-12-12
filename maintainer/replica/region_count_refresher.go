@@ -47,7 +47,7 @@ func (r *regionCountRefresher) addDispatcher(ctx context.Context, id common.Disp
 	regions, err := r.regionCache.LoadRegionsInKeyRange(backoff, span.StartKey, span.EndKey)
 	if err != nil {
 		log.Warn("load regions failed, just continue",
-			zap.Stringer("dispatcerID", id),
+			zap.Stringer("dispatcherID", id),
 			zap.String("span", common.FormatTableSpan(span)),
 			zap.Error(err))
 	}
@@ -59,12 +59,12 @@ func (r *regionCountRefresher) removeDispatcher(id common.DispatcherID) {
 	r.counts.Delete(id)
 }
 
-func (r *regionCountRefresher) getRegionCount(id common.DispatcherID) (int, bool) {
+func (r *regionCountRefresher) getRegionCount(id common.DispatcherID) int {
 	value, ok := r.counts.Load(id)
 	if !ok {
-		return 0, false
+		return 0
 	}
-	return value.(int), true
+	return value.(int)
 }
 
 func (r *regionCountRefresher) refreshRegionCounts(

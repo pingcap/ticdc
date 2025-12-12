@@ -172,10 +172,7 @@ func (s *defaultSpanSplitChecker) UpdateStatus(replica *SpanReplication) {
 	log.Debug("default span split checker: update status", zap.Stringer("changefeed", s.changefeedID), zap.String("replica", replica.ID.String()), zap.Int("trafficScore", status.trafficScore), zap.Int("regionCount", status.regionCount))
 
 	if s.regionThreshold > 0 {
-		regionCount, ok := s.refresher.getRegionCount(replica.ID)
-		if ok {
-			status.regionCount = regionCount
-		}
+		status.regionCount = s.refresher.getRegionCount(replica.ID)
 	}
 
 	if status.trafficScore >= trafficScoreThreshold || (s.regionThreshold > 0 && status.regionCount >= s.regionThreshold) {
