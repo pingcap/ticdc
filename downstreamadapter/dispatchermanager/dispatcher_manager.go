@@ -723,7 +723,9 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 		}
 		e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.EventDispatcher) {
 			_, _, watermark := getDispatcherStatus(id, dispatcherItem, needCompleteStatus)
-			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, watermark.CheckpointTs))
+			if watermark != nil {
+				eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, watermark.CheckpointTs))
+			}
 		})
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).SendDispatcherHeartbeat(eventServiceDispatcherHeartbeat)
 	}
