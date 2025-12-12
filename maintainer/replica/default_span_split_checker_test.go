@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/testutil"
@@ -42,8 +43,9 @@ func newTestDefaultChecker(t *testing.T, cfID common.ChangeFeedID, schedulerCfg 
 func TestDefaultSpanSplitChecker_AddReplica(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold: util.AddressOf(1000),
-		RegionThreshold:   util.AddressOf(10),
+		WriteKeyThreshold:          util.AddressOf(1000),
+		RegionThreshold:            util.AddressOf(10),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
 	}
 
 	mockCache := testutil.NewMockRegionCache()
@@ -75,8 +77,9 @@ func TestDefaultSpanSplitChecker_RemoveReplica(t *testing.T) {
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold: util.AddressOf(1000),
-		RegionThreshold:   util.AddressOf(10),
+		WriteKeyThreshold:          util.AddressOf(1000),
+		RegionThreshold:            util.AddressOf(10),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
 	}
 
 	checker := newTestDefaultChecker(t, cfID, schedulerCfg)
@@ -96,8 +99,9 @@ func TestDefaultSpanSplitChecker_RemoveReplica(t *testing.T) {
 func TestDefaultSpanSplitChecker_UpdateStatus_TrafficCheck(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold: util.AddressOf(1000),
-		RegionThreshold:   util.AddressOf(10),
+		WriteKeyThreshold:          util.AddressOf(1000),
+		RegionThreshold:            util.AddressOf(10),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
 	}
 
 	testutil.SetUpTestServices()
@@ -153,8 +157,9 @@ func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheck(t *testing.T) {
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold: util.AddressOf(1000),
-		RegionThreshold:   util.AddressOf(5),
+		WriteKeyThreshold:          util.AddressOf(1000),
+		RegionThreshold:            util.AddressOf(5),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
 	}
 
 	checker := newTestDefaultChecker(t, cfID, schedulerCfg)
@@ -186,14 +191,12 @@ func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheck(t *testing.T) {
 	replica.UpdateStatus(status)
 
 	// Test region count update
-	checker.refreshRegionCounts()
 	checker.UpdateStatus(replica)
 	spanStatus = checker.allTasks[replica.ID]
 	require.Equal(t, 6, spanStatus.regionCount)
 	require.Contains(t, checker.splitReadyTasks, replica.ID)
 
 	// Subsequent refresh keeps the updated count
-	checker.refreshRegionCounts()
 	spanStatus = checker.allTasks[replica.ID]
 	require.Equal(t, 6, spanStatus.regionCount)
 }
@@ -203,8 +206,9 @@ func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheckError(t *testing.T) {
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold: util.AddressOf(1000),
-		RegionThreshold:   util.AddressOf(5),
+		WriteKeyThreshold:          util.AddressOf(1000),
+		RegionThreshold:            util.AddressOf(5),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
 	}
 
 	// Mock region cache with error
@@ -228,7 +232,6 @@ func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheckError(t *testing.T) {
 	spanStatus := checker.allTasks[replica.ID]
 
 	// Test region check error handling
-	checker.refreshRegionCounts()
 	spanStatus = checker.allTasks[replica.ID]
 	require.Equal(t, 0, spanStatus.regionCount) // Should remain 0 due to error
 }
@@ -238,8 +241,9 @@ func TestDefaultSpanSplitChecker_UpdateStatus_NonWorkingStatus(t *testing.T) {
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold: util.AddressOf(1000),
-		RegionThreshold:   util.AddressOf(5),
+		WriteKeyThreshold:          util.AddressOf(1000),
+		RegionThreshold:            util.AddressOf(5),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
 	}
 
 	checker := newTestDefaultChecker(t, cfID, schedulerCfg)
@@ -267,8 +271,9 @@ func TestDefaultSpanSplitChecker_CheckRegionSplit(t *testing.T) {
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold: util.AddressOf(1000),
-		RegionThreshold:   util.AddressOf(5),
+		WriteKeyThreshold:          util.AddressOf(1000),
+		RegionThreshold:            util.AddressOf(5),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
 	}
 
 	checker := newTestDefaultChecker(t, cfID, schedulerCfg)
@@ -302,8 +307,9 @@ func TestDefaultSpanSplitChecker_Check_BatchLimit(t *testing.T) {
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold: util.AddressOf(1000),
-		RegionThreshold:   util.AddressOf(5),
+		WriteKeyThreshold:          util.AddressOf(1000),
+		RegionThreshold:            util.AddressOf(5),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
 	}
 
 	checker := newTestDefaultChecker(t, cfID, schedulerCfg)
@@ -337,8 +343,9 @@ func TestDefaultSpanSplitChecker_Check_EmptyResults(t *testing.T) {
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold: util.AddressOf(1000),
-		RegionThreshold:   util.AddressOf(5),
+		WriteKeyThreshold:          util.AddressOf(1000),
+		RegionThreshold:            util.AddressOf(5),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
 	}
 
 	checker := newTestDefaultChecker(t, cfID, schedulerCfg)
@@ -370,8 +377,9 @@ func TestDefaultSpanSplitChecker_Stat(t *testing.T) {
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold: util.AddressOf(1000),
-		RegionThreshold:   util.AddressOf(5),
+		WriteKeyThreshold:          util.AddressOf(1000),
+		RegionThreshold:            util.AddressOf(5),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
 	}
 
 	checker := newTestDefaultChecker(t, cfID, schedulerCfg)

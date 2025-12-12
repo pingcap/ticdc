@@ -119,11 +119,12 @@ func TestSplitSpanChecker_AddReplica(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     util.AddressOf(1000),
-		RegionThreshold:       util.AddressOf(10),
-		BalanceScoreThreshold: util.AddressOf(1),
-		MinTrafficPercentage:  util.AddressOf(0.8),
-		MaxTrafficPercentage:  util.AddressOf(1.2),
+		WriteKeyThreshold:          util.AddressOf(1000),
+		RegionThreshold:            util.AddressOf(10),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
+		BalanceScoreThreshold:      util.AddressOf(1),
+		MinTrafficPercentage:       util.AddressOf(0.8),
+		MaxTrafficPercentage:       util.AddressOf(1.2),
 	}
 
 	// Test adding single replica
@@ -154,11 +155,12 @@ func TestSplitSpanChecker_RemoveReplica(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     util.AddressOf(1000),
-		RegionThreshold:       util.AddressOf(10),
-		BalanceScoreThreshold: util.AddressOf(1),
-		MinTrafficPercentage:  util.AddressOf(0.8),
-		MaxTrafficPercentage:  util.AddressOf(1.2),
+		WriteKeyThreshold:          util.AddressOf(1000),
+		RegionThreshold:            util.AddressOf(10),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
+		BalanceScoreThreshold:      util.AddressOf(1),
+		MinTrafficPercentage:       util.AddressOf(0.8),
+		MaxTrafficPercentage:       util.AddressOf(1.2),
 	}
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 3)
@@ -311,12 +313,10 @@ func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
 	replica.UpdateStatus(status)
 
 	// Test region count above threshold
-	checker.refreshRegionCounts()
 	spanStatus = checker.allTasks[replica.ID]
 	require.Equal(t, 6, spanStatus.regionCount)
 
 	// Test region check interval enforcement
-	checker.refreshRegionCounts()
 	spanStatus = checker.allTasks[replica.ID]
 	require.Equal(t, 6, spanStatus.regionCount) // Should not change due to time interval
 
@@ -328,7 +328,6 @@ func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
 	}
 	mockCache.SetRegions(fmt.Sprintf("%s-%s", replicas[0].Span.StartKey, replicas[0].Span.EndKey), mockRegions)
 
-	checker.refreshRegionCounts()
 	spanStatus = checker.allTasks[replica.ID]
 	require.Equal(t, 3, spanStatus.regionCount)
 }
