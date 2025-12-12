@@ -712,13 +712,18 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 			DispatcherCount:      0,
 			DispatcherProgresses: make([]event.DispatcherProgress, 0, dispatcherCount),
 		}
+
 		if e.RedoEnable {
-			e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.RedoDispatcher) {
-				eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
+			e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.RedoDispatcher) {
+				_, _, watermark := getDispatcherStatus(id, dispatcherItem, needCompleteStatus)
+				if watermark != nil {
+					eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, watermark.CheckpointTs))
+				}
 			})
 		}
-		e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.EventDispatcher) {
-			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
+		e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.EventDispatcher) {
+			_, _, watermark := getDispatcherStatus(id, dispatcherItem, needCompleteStatus)
+			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, watermark.CheckpointTs))
 		})
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).SendDispatcherHeartbeat(eventServiceDispatcherHeartbeat)
 	}
