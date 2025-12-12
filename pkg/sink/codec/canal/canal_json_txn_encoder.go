@@ -76,7 +76,7 @@ func (j *JSONTxnEventEncoder) AppendTxnEvent(event *commonEvent.DMLEvent) error 
 				zap.Int("maxMessageBytes", j.config.MaxMessageBytes),
 				zap.Int("length", length),
 				zap.Any("table", event.TableInfo.TableName))
-			return errors.ErrMessageTooLarge.GenWithStackByArgs()
+			return errors.ErrMessageTooLarge.GenWithStackByArgs(event.TableInfo.GetTableName(), length, j.config.MaxMessageBytes)
 		}
 		j.valueBuf.Write(value)
 		j.valueBuf.Write(j.terminator)
