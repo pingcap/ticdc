@@ -49,6 +49,7 @@ type Filter interface {
 	// ShouldDiscardDDL returns true if the DDL event should not be handled.
 	ShouldDiscardDDL(schema, table string, ddlType timodel.ActionType, tableInfo *common.TableInfo) bool
 	// ShouldIgnoreDDL returns true if the DDL event should not be sent to downstream.
+<<<<<<< HEAD
 	//
 	// If a ddl is ignored, it will be sent to table trigger dispatcher to update the schema or table info,
 	// but will not be sent to downstream.
@@ -67,6 +68,13 @@ type Filter interface {
 	ShouldIgnoreSchema(schema string) bool
 	// IsEligibleTable returns true if the table is eligible to be replicated.
 	IsEligibleTable(tableInfo *common.TableInfo) bool
+=======
+	ShouldIgnoreDDL(schema, table, query string, ddlType timodel.ActionType, tableInfo *common.TableInfo) (bool, error)
+	// ShouldIgnoreTable returns true if the table should be ignored.
+	ShouldIgnoreTable(schema, table string, tableInfo *common.TableInfo) bool
+	// ShouldIgnoreSchema returns true if the schema should be ignored.
+	ShouldIgnoreSchema(schema string) bool
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
 	// Verify should only be called by create changefeed OpenAPI.
 	// Its purpose is to verify the expression filter config.
 	Verify(tableInfos []*common.TableInfo) error
@@ -136,6 +144,7 @@ func (f *filter) ShouldIgnoreDML(dmlType common.RowType, preRow, row chunk.Row, 
 	return f.dmlExprFilter.shouldSkipDML(dmlType, preRow, row, tableInfo)
 }
 
+<<<<<<< HEAD
 // ShouldDiscardDDL checks if a DDL event should be discarded by conditions below:
 // 1. By allow list.
 // 2. By startTs.
@@ -143,6 +152,16 @@ func (f *filter) ShouldIgnoreDML(dmlType common.RowType, preRow, row chunk.Row, 
 // 4. By table name.
 // 5. By eligibility of the table.
 func (f *filter) ShouldDiscardDDL(schema, table string, ddlType timodel.ActionType, tableInfo *common.TableInfo) bool {
+=======
+// ShouldIgnoreDDL checks if a DDL event should be ignore by conditions below:
+// 0. By allow list.
+// 1. By schema name.
+// 2. By table name.
+// 3. By startTs.
+// 4. By ddl type.
+// 5. By ddl query.
+func (f *filter) ShouldIgnoreDDL(schema, table, query string, ddlType timodel.ActionType, tableInfo *common.TableInfo) (bool, error) {
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
 	if !isAllowedDDL(ddlType) {
 		return true
 	}
@@ -176,11 +195,23 @@ func (f *filter) ShouldIgnoreDDL(schema, table, query string, ddlType timodel.Ac
 
 // ShouldIgnoreTable returns true if the specified table should be ignored by this changefeed.
 // NOTICE: Set `tbl` to an empty string to test against the whole database.
+<<<<<<< HEAD
 func (f *filter) ShouldIgnoreTable(db, tbl string) bool {
+=======
+func (f *filter) ShouldIgnoreTable(db, tbl string, tableInfo *common.TableInfo) bool {
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
 	if IsSysSchema(db) {
 		return true
 	}
 
+<<<<<<< HEAD
+=======
+	if tableInfo != nil && !tableInfo.IsEligible(f.forceReplicate) {
+		log.Info("table is not eligible, should ignore this table", zap.String("db", db), zap.String("table", tbl))
+		return true
+	}
+
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
 	return !f.tableFilter.MatchTable(db, tbl)
 }
 
@@ -194,6 +225,7 @@ func (f *filter) Verify(tableInfos []*common.TableInfo) error {
 	return nil
 	// return f.dmlExprFilter.verify(tableInfos)
 }
+<<<<<<< HEAD
 
 func (f *filter) IsEligibleTable(tableInfo *common.TableInfo) bool {
 	if tableInfo == nil {
@@ -202,6 +234,8 @@ func (f *filter) IsEligibleTable(tableInfo *common.TableInfo) bool {
 	}
 	return tableInfo.IsEligible(f.forceReplicate)
 }
+=======
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
 
 func (f *filter) shouldIgnoreStartTs(ts uint64) bool {
 	for _, ignoreTs := range f.ignoreTxnStartTs {

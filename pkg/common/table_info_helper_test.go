@@ -30,7 +30,11 @@ func newColumnInfo(id int64, name string, tp byte, flag uint) *model.ColumnInfo 
 	ft.AddFlag(flag)
 	return &model.ColumnInfo{
 		ID:        id,
+<<<<<<< HEAD
 		Name:      parser_model.NewCIStr(name),
+=======
+		Name:      ast.NewCIStr(name),
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
 		FieldType: *ft,
 		State:     model.StatePublic,
 		Version:   model.CurrLatestColumnInfoVersion,
@@ -40,7 +44,11 @@ func newColumnInfo(id int64, name string, tp byte, flag uint) *model.ColumnInfo 
 // Helper to create a model.IndexInfo
 func newIndexInfo(name string, cols []*model.IndexColumn, isPrimary, isUnique bool) *model.IndexInfo {
 	return &model.IndexInfo{
+<<<<<<< HEAD
 		Name:    parser_model.NewCIStr(name),
+=======
+		Name:    ast.NewCIStr(name),
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
 		Columns: cols,
 		Primary: isPrimary,
 		Unique:  isUnique,
@@ -551,7 +559,11 @@ func TestIsEligible(t *testing.T) {
 
 	// 1. Table with PK
 	tiWithPK := WrapTableInfo("test", &model.TableInfo{
+<<<<<<< HEAD
 		Name: parser_model.NewCIStr("t1"),
+=======
+		Name: ast.NewCIStr("t1"),
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
 		Columns: []*model.ColumnInfo{
 			newColumnInfo(1, "id", mysql.TypeLong, mysql.PriKeyFlag),
 		},
@@ -560,29 +572,49 @@ func TestIsEligible(t *testing.T) {
 
 	// 2. Table with UK on not-null column
 	tiWithUK := WrapTableInfo("test", &model.TableInfo{
+<<<<<<< HEAD
 		Name: parser_model.NewCIStr("t2"),
+=======
+		Name: ast.NewCIStr("t2"),
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
 		Columns: []*model.ColumnInfo{
 			newColumnInfo(1, "id", mysql.TypeLong, mysql.NotNullFlag),
 		},
 		Indices: []*model.IndexInfo{
+<<<<<<< HEAD
 			newIndexInfo("uk_id", []*model.IndexColumn{{Name: parser_model.NewCIStr("id"), Offset: 0}}, false, true),
+=======
+			newIndexInfo("uk_id", []*model.IndexColumn{{Name: ast.NewCIStr("id"), Offset: 0}}, false, true),
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
 		},
 	})
 
 	// 3. Table with UK on nullable column (ineligible)
 	tiWithNullableUK := WrapTableInfo("test", &model.TableInfo{
+<<<<<<< HEAD
 		Name: parser_model.NewCIStr("t3"),
+=======
+		Name: ast.NewCIStr("t3"),
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
 		Columns: []*model.ColumnInfo{
 			newColumnInfo(1, "id", mysql.TypeLong, 0),
 		},
 		Indices: []*model.IndexInfo{
+<<<<<<< HEAD
 			newIndexInfo("uk_id", []*model.IndexColumn{{Name: parser_model.NewCIStr("id"), Offset: 0}}, false, true),
+=======
+			newIndexInfo("uk_id", []*model.IndexColumn{{Name: ast.NewCIStr("id"), Offset: 0}}, false, true),
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
 		},
 	})
 
 	// 4. Table with no PK or UK (ineligible)
 	tiNoKey := WrapTableInfo("test", &model.TableInfo{
+<<<<<<< HEAD
 		Name: parser_model.NewCIStr("t4"),
+=======
+		Name: ast.NewCIStr("t4"),
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
 		Columns: []*model.ColumnInfo{
 			newColumnInfo(1, "id", mysql.TypeLong, 0),
 		},
@@ -590,13 +622,21 @@ func TestIsEligible(t *testing.T) {
 
 	// 5. View (eligible)
 	tiView := WrapTableInfo("test", &model.TableInfo{
+<<<<<<< HEAD
 		Name: parser_model.NewCIStr("v1"),
+=======
+		Name: ast.NewCIStr("v1"),
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
 	})
 	tiView.View = &model.ViewInfo{}
 
 	// 6. Sequence (ineligible)
 	tiSeq := WrapTableInfo("test", &model.TableInfo{
+<<<<<<< HEAD
 		Name: parser_model.NewCIStr("s1"),
+=======
+		Name: ast.NewCIStr("s1"),
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
 	})
 	tiSeq.Sequence = &model.SequenceInfo{}
 

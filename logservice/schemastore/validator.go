@@ -68,7 +68,11 @@ func VerifyTables(f filter.Filter, storage tidbkv.Storage, startTs uint64) (
 				return nil, nil, nil, errors.Trace(err)
 			}
 			tableInfo := common.WrapTableInfo(dbinfo.Name.O, tbInfo)
+<<<<<<< HEAD
 			if f.ShouldIgnoreTable(dbinfo.Name.O, tbName.Name.O) {
+=======
+			if f.ShouldIgnoreTable(dbinfo.Name.O, tbName.Name.O, tableInfo) {
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
 				log.Debug("ignore table", zap.String("db", dbinfo.Name.O),
 					zap.String("table", tbName.Name.O))
 				continue

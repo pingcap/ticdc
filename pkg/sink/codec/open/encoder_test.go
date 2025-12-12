@@ -19,7 +19,10 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
+<<<<<<< HEAD
 	commonTable "github.com/pingcap/ticdc/pkg/common"
+=======
+>>>>>>> 86d3e6d2a (api: add more verification for changefeed config (#1883))
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"

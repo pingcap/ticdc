@@ -208,3 +208,7 @@ func ToSchemaIDChangePB(SchemaIDChange []SchemaIDChange) []*heartbeatpb.SchemaID
 type Selector interface {
 	Select(colInfo *model.ColumnInfo) bool
 }
+
+type Selector interface {
+	Select(colInfo *model.ColumnInfo) bool
+}
