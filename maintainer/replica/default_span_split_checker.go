@@ -247,5 +247,6 @@ func (s *defaultSpanSplitChecker) Stat() string {
 func (s *defaultSpanSplitChecker) Close() {
 	if s.cancel != nil {
 		s.cancel()
+		log.Info("default span split checker is closing", zap.Stringer("changefeed", s.changefeedID))
 	}
 }

@@ -1306,6 +1306,7 @@ func (s *SplitSpanChecker) Name() string {
 func (s *SplitSpanChecker) Close() {
 	if s.cancel != nil {
 		s.cancel()
+		log.Info("split span checker closed", zap.Stringer("changefeed", s.changefeedID))
 	}
 }
 

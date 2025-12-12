@@ -75,6 +75,7 @@ func (r *regionCountRefresher) refreshRegionCounts(
 	for {
 		select {
 		case <-ctx.Done():
+			log.Info("region count refresher exited")
 			return
 		case <-ticker.C:
 			r.queryRegionCount(ctx)
@@ -97,7 +98,7 @@ func (r *regionCountRefresher) queryRegionCount(ctx context.Context) {
 		)
 		if err != nil {
 			log.Warn("load regions failed, just continue",
-				zap.Stringer("dispatcerID", dispatcherID),
+				zap.Stringer("dispatcherID", dispatcherID),
 				zap.String("span", common.FormatTableSpan(span)),
 				zap.Error(err))
 			return true
