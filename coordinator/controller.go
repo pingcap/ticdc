@@ -729,11 +729,11 @@ func (c *Controller) ResumeChangefeed(
 	status := cf.GetClonedStatus()
 	status.CheckpointTs = newCheckpointTs
 	_, _, runningErr := cf.ForceUpdateStatus(status)
-	if overwriteCheckpointTs {
-		cf.SetLastSavedCheckPointTs(newCheckpointTs)
-	}
 	if runningErr != nil {
 		return errors.New(runningErr.Message)
+	}
+	if overwriteCheckpointTs {
+		cf.SetLastSavedCheckPointTs(newCheckpointTs)
 	}
 	c.moveChangefeedToSchedulingQueue(id, true, overwriteCheckpointTs)
 	return nil
