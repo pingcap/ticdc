@@ -16,6 +16,7 @@ package coordinator
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
@@ -85,6 +86,15 @@ func TestPauseChangefeed(t *testing.T) {
 	// no changefeed
 	require.NotNil(t, controller.PauseChangefeed(context.Background(), common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceNamme)))
 
+	go func() {
+		for {
+			op := controller.operatorController.GetOperator(cfID)
+			if op != nil {
+				op.OnTaskRemoved()
+			}
+			time.Sleep(time.Second)
+		}
+	}()
 	backend.EXPECT().PauseChangefeed(gomock.Any(), gomock.Any()).Return(errors.New("failed")).Times(1)
 	require.NotNil(t, controller.PauseChangefeed(context.Background(), cfID))
 	require.Equal(t, config.StateNormal, changefeedDB.GetByID(cfID).GetInfo().State)
