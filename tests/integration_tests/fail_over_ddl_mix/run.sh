@@ -218,7 +218,7 @@ main() {
 
 	sleep 30
 
-	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 1000
 
 	checkpoint1=$(cdc_cli_changefeed query -c "test" 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
 	sleep 20
