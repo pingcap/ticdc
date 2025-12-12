@@ -182,11 +182,12 @@ func NewSplitSpanChecker(
 	changefeedID common.ChangeFeedID,
 	groupID replica.GroupID,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
+	refresher *regionCountRefresher,
 ) *SplitSpanChecker {
 	if schedulerCfg == nil {
 		log.Panic("scheduler config is nil, please check the config", zap.String("changefeed", changefeedID.Name()))
 	}
-	checker := &SplitSpanChecker{
+	return &SplitSpanChecker{
 		changefeedID:           changefeedID,
 		groupID:                groupID,
 		allTasks:               make(map[common.DispatcherID]*splitSpanStatus),
@@ -200,22 +201,9 @@ func NewSplitSpanChecker(
 		nodeManager:            appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		pdClock:                appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		splitSpanCheckDuration: metrics.SplitSpanCheckDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), replica.GetGroupName(groupID)),
+
+		refresher: refresher,
 	}
-
-	if checker.regionThreshold > 0 {
-		regionCache := appcontext.GetService[split.RegionCache](appcontext.RegionCache)
-		interval := util.GetOrZero(schedulerCfg.RegionCountRefreshInterval)
-		refresher := newRegionCountRefresher(regionCache, interval)
-
-		ctx, cancel := context.WithCancel(context.Background())
-		checker.cancel = cancel
-		checker.refresher = refresher
-
-		// start the region count refresher goroutine
-		go refresher.refreshRegionCounts(ctx)
-	}
-
-	return checker
 }
 
 func (s *SplitSpanChecker) AddReplica(replica *SpanReplication) {
@@ -1305,6 +1293,19 @@ func (s *SplitSpanChecker) Close() {
 		s.cancel()
 		log.Info("split span checker closed", zap.Stringer("changefeed", s.changefeedID))
 	}
+
+	// if checker.regionThreshold > 0 {
+	// 	regionCache := appcontext.GetService[split.RegionCache](appcontext.RegionCache)
+	// 	interval := util.GetOrZero(schedulerCfg.RegionCountRefreshInterval)
+	// 	refresher := newRegionCountRefresher(regionCache, interval)
+
+	// 	ctx, cancel := context.WithCancel(context.Background())
+	// 	checker.cancel = cancel
+	// 	checker.refresher = refresher
+
+	// 	// start the region count refresher goroutine
+	// 	go refresher.refreshRegionCounts(ctx)
+	// }
 }
 
 // for test only

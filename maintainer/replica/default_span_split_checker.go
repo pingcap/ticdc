@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
-	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -73,33 +72,20 @@ type defaultSpanSplitChecker struct {
 func NewDefaultSpanSplitChecker(
 	changefeedID common.ChangeFeedID,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
+	refresher *regionCountRefresher,
 ) *defaultSpanSplitChecker {
 	if schedulerCfg == nil {
 		log.Panic("scheduler config is nil, please check the config", zap.String("changefeed", changefeedID.Name()))
 	}
 
-	checker := &defaultSpanSplitChecker{
+	return &defaultSpanSplitChecker{
 		changefeedID:    changefeedID,
 		allTasks:        make(map[common.DispatcherID]*spanSplitStatus),
 		splitReadyTasks: make(map[common.DispatcherID]*spanSplitStatus),
 		writeThreshold:  util.GetOrZero(schedulerCfg.WriteKeyThreshold),
 		regionThreshold: util.GetOrZero(schedulerCfg.RegionThreshold),
+		refresher:       refresher,
 	}
-
-	if checker.regionThreshold > 0 {
-		regionCache := appcontext.GetService[split.RegionCache](appcontext.RegionCache)
-		interval := util.GetOrZero(schedulerCfg.RegionCountRefreshInterval)
-		refresher := newRegionCountRefresher(regionCache, interval)
-
-		ctx, cancel := context.WithCancel(context.Background())
-		checker.cancel = cancel
-		checker.refresher = refresher
-
-		// start the region count refresher goroutine
-		go refresher.refreshRegionCounts(ctx)
-	}
-
-	return checker
 }
 
 // spanSplitStatus tracks the split status of a span in the default group
@@ -242,8 +228,23 @@ func (s *defaultSpanSplitChecker) Stat() string {
 }
 
 func (s *defaultSpanSplitChecker) Close() {
+	// todo: remove all dispatcheres belongs to this checker.
 	if s.cancel != nil {
 		s.cancel()
 		log.Info("default span split checker closed", zap.Stringer("changefeed", s.changefeedID))
 	}
+
+	// if checker.regionThreshold > 0 {
+	// 	regionCache := appcontext.GetService[split.RegionCache](appcontext.RegionCache)
+	// 	interval := util.GetOrZero(schedulerCfg.RegionCountRefreshInterval)
+	// 	refresher := newRegionCountRefresher(regionCache, interval)
+
+	// 	ctx, cancel := context.WithCancel(context.Background())
+	// 	checker.cancel = cancel
+	// 	checker.refresher = refresher
+
+	// 	// start the region count refresher goroutine
+	// 	go refresher.refreshRegionCounts(ctx)
+	// }
+
 }
