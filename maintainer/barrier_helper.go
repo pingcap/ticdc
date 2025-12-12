@@ -33,7 +33,7 @@ func NewBlockEventMap() *BlockedEventMap {
 
 // pendingScheduleEventMap keeps pending BarrierEvents keyed by eventKey
 // since only DDLs related add/drop/truncate/recover etc. tables need scheduling, and those events will always be written
-// by the table trigger dispatcher, we can store only the eventKey heap with a map to the actual event.
+// by the table trigger event dispatcher, we can store only the eventKey heap with a map to the actual event.
 type pendingScheduleEventMap struct {
 	mutex  sync.Mutex
 	queue  pendingEventKeyHeap

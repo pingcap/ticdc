@@ -562,6 +562,13 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 		zap.Stringer("dispatcher", d.id),
 		zap.Any("action", dispatcherStatus.GetAction()),
 		zap.Any("ack", dispatcherStatus.GetAck()))
+	defer func() {
+		log.Error("HandleDispatcherStatus exit",
+			zap.Any("dispatcherStatus", dispatcherStatus),
+			zap.Stringer("dispatcher", d.id),
+			zap.Any("action", dispatcherStatus.GetAction()),
+			zap.Any("ack", dispatcherStatus.GetAck()))
+	}()
 	// Step1: deal with the ack info
 	ack := dispatcherStatus.GetAck()
 	if ack != nil {
@@ -858,6 +865,7 @@ func (d *BasicDispatcher) removeDispatcher() {
 		zap.Int64("mode", d.mode),
 		zap.String("table", common.FormatTableSpan(d.tableSpan)))
 	dispatcherStatusDS := GetDispatcherStatusDynamicStream()
+	log.Error("dispatcherStatusDS RemovePath", zap.Any("id", d.id))
 	err := dispatcherStatusDS.RemovePath(d.id)
 	if err != nil {
 		log.Error("remove dispatcher from dynamic stream failed",

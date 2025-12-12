@@ -202,8 +202,8 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		// dispatcher manager on the new node may not have a table trigger
 		// event dispatcher configured yet.
 		if req.RedoTableTriggerEventDispatcherId != nil {
-			redoTableTriggerDispatcher := manager.GetRedoTableTriggerEventDispatcher()
-			if redoTableTriggerDispatcher == nil {
+			redoTableTriggerEventDispatcher := manager.GetRedoTableTriggerEventDispatcher()
+			if redoTableTriggerEventDispatcher == nil {
 				err = manager.NewRedoTableTriggerEventDispatcher(
 					req.RedoTableTriggerEventDispatcherId,
 					req.StartTs,
@@ -217,8 +217,8 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			}
 		}
 		if req.TableTriggerEventDispatcherId != nil {
-			tableTriggerDispatcher := manager.GetTableTriggerEventDispatcher()
-			if tableTriggerDispatcher == nil {
+			tableTriggerEventDispatcher := manager.GetTableTriggerEventDispatcher()
+			if tableTriggerEventDispatcher == nil {
 				startTs, err = manager.NewTableTriggerEventDispatcher(
 					req.TableTriggerEventDispatcherId,
 					req.StartTs,
@@ -230,7 +230,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 					return m.handleDispatcherError(from, req.ChangefeedID, err)
 				}
 			} else {
-				startTs = tableTriggerDispatcher.GetStartTs()
+				startTs = tableTriggerEventDispatcher.GetStartTs()
 			}
 		}
 	}
@@ -356,7 +356,7 @@ func createBootstrapResponse(
 		Spans:        make([]*heartbeatpb.BootstrapTableSpan, 0, manager.GetDispatcherMap().Len()),
 	}
 
-	// table trigger dispatcher startTs
+	// table trigger event dispatcher startTs
 	if startTs != 0 {
 		response.CheckpointTs = startTs
 	}
