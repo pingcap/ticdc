@@ -280,6 +280,18 @@ func TestDefaultSpanSplitChecker_CheckRegionSplit(t *testing.T) {
 
 	replica := createTestSpanReplication(cfID, 1)
 
+	// Mock regions
+	mockRegions := []*tikv.Region{
+		testutil.MockRegionWithID(1),
+		testutil.MockRegionWithID(2),
+		testutil.MockRegionWithID(3),
+		testutil.MockRegionWithID(4),
+		testutil.MockRegionWithID(5),
+		testutil.MockRegionWithID(6), // Above threshold
+	}
+	mockCache := appcontext.GetService[*testutil.MockCache](appcontext.RegionCache)
+	mockCache.SetRegions(fmt.Sprintf("%s-%s", replica.Span.StartKey, replica.Span.EndKey), mockRegions)
+
 	checker.AddReplica(replica)
 
 	// Set up low traffic but high region count

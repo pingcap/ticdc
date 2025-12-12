@@ -200,11 +200,12 @@ func TestSplitSpanChecker_UpdateStatus_Traffic(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     util.AddressOf(1000),
-		RegionThreshold:       util.AddressOf(10),
-		BalanceScoreThreshold: util.AddressOf(1),
-		MinTrafficPercentage:  util.AddressOf(0.8),
-		MaxTrafficPercentage:  util.AddressOf(1.2),
+		WriteKeyThreshold:          util.AddressOf(1000),
+		RegionThreshold:            util.AddressOf(10),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
+		BalanceScoreThreshold:      util.AddressOf(1),
+		MinTrafficPercentage:       util.AddressOf(0.8),
+		MaxTrafficPercentage:       util.AddressOf(1.2),
 	}
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 1)
@@ -276,19 +277,17 @@ func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     util.AddressOf(1000),
-		RegionThreshold:       util.AddressOf(5),
-		BalanceScoreThreshold: util.AddressOf(1),
-		MinTrafficPercentage:  util.AddressOf(0.8),
-		MaxTrafficPercentage:  util.AddressOf(1.2),
+		WriteKeyThreshold:          util.AddressOf(1000),
+		RegionThreshold:            util.AddressOf(5),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
+		BalanceScoreThreshold:      util.AddressOf(1),
+		MinTrafficPercentage:       util.AddressOf(0.8),
+		MaxTrafficPercentage:       util.AddressOf(1.2),
 	}
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 1)
 	groupID := replicas[0].GetGroupID()
 	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
-
-	replica := replicas[0]
-	checker.AddReplica(replica)
 
 	// Mock regions
 	mockRegions := []*tikv.Region{
@@ -302,6 +301,9 @@ func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
 	mockCache := appcontext.GetService[*testutil.MockCache](appcontext.RegionCache)
 	mockCache.SetRegions(fmt.Sprintf("%s-%s", replicas[0].Span.StartKey, replicas[0].Span.EndKey), mockRegions)
 
+	replica := replicas[0]
+	checker.AddReplica(replica)
+
 	spanStatus := checker.allTasks[replica.ID]
 
 	status := &heartbeatpb.TableSpanStatus{
@@ -312,6 +314,8 @@ func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
 	}
 	replica.UpdateStatus(status)
 
+	checker.UpdateStatus(replica)
+
 	// Test region count above threshold
 	spanStatus = checker.allTasks[replica.ID]
 	require.Equal(t, 6, spanStatus.regionCount)
@@ -319,17 +323,6 @@ func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
 	// Test region check interval enforcement
 	spanStatus = checker.allTasks[replica.ID]
 	require.Equal(t, 6, spanStatus.regionCount) // Should not change due to time interval
-
-	// Test region count below threshold
-	mockRegions = []*tikv.Region{
-		testutil.MockRegionWithID(1),
-		testutil.MockRegionWithID(2),
-		testutil.MockRegionWithID(3),
-	}
-	mockCache.SetRegions(fmt.Sprintf("%s-%s", replicas[0].Span.StartKey, replicas[0].Span.EndKey), mockRegions)
-
-	spanStatus = checker.allTasks[replica.ID]
-	require.Equal(t, 3, spanStatus.regionCount)
 }
 
 func TestSplitSpanChecker_UpdateStatus_NonWorking(t *testing.T) {
@@ -378,11 +371,12 @@ func TestSplitSpanChecker_ChooseSplitSpans_Traffic(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     util.AddressOf(1000),
-		RegionThreshold:       util.AddressOf(10),
-		BalanceScoreThreshold: util.AddressOf(1),
-		MinTrafficPercentage:  util.AddressOf(0.8),
-		MaxTrafficPercentage:  util.AddressOf(1.2),
+		WriteKeyThreshold:          util.AddressOf(1000),
+		RegionThreshold:            util.AddressOf(10),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
+		BalanceScoreThreshold:      util.AddressOf(1),
+		MinTrafficPercentage:       util.AddressOf(0.8),
+		MaxTrafficPercentage:       util.AddressOf(1.2),
 	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
