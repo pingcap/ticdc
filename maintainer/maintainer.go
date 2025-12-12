@@ -392,11 +392,8 @@ func (m *Maintainer) initialize() error {
 		zap.Stringer("changefeedID", m.changefeedID),
 		zap.Int("nodeCount", len(nodes)))
 
-	newNodes := make([]*node.Info, 0, len(nodes))
-	for _, n := range nodes {
-		newNodes = append(newNodes, n)
-	}
-	m.sendMessages(m.bootstrapper.HandleNewNodes(newNodes))
+	_, _, messages, _ := m.bootstrapper.HandleNewNodes(nodes)
+	m.sendMessages(messages)
 
 	log.Info("changefeed maintainer initialized",
 		zap.Stringer("changefeedID", m.changefeedID),
@@ -499,31 +496,20 @@ func (m *Maintainer) onCheckpointTsPersisted(msg *heartbeatpb.CheckpointTsMessag
 }
 
 func (m *Maintainer) onNodeChanged() {
-	currentNodes := m.bootstrapper.GetAllNodeIDs()
-
-	activeNodes := m.nodeManager.GetAliveNodes()
-	newNodes := make([]*node.Info, 0, len(activeNodes))
-	for id, n := range activeNodes {
-		if _, ok := currentNodes[id]; !ok {
-			newNodes = append(newNodes, n)
-		}
-	}
-	var removedNodes []node.ID
-	for id := range currentNodes {
-		if _, ok := activeNodes[id]; !ok {
-			removedNodes = append(removedNodes, id)
-			m.checkpointTsByCapture.Delete(id)
-			m.redoTsByCapture.Delete(id)
-			m.controller.RemoveNode(id)
-		}
-	}
+	newNodes, removedNodes, messages, cachedResponse := m.bootstrapper.HandleNewNodes(m.nodeManager.GetAliveNodes())
 	log.Info("maintainer node changed", zap.Stringer("changefeedID", m.changefeedID),
 		zap.Int("new", len(newNodes)),
 		zap.Int("removed", len(removedNodes)))
-	m.sendMessages(m.bootstrapper.HandleNewNodes(newNodes))
-	cachedResponse := m.bootstrapper.HandleRemoveNodes(removedNodes)
+
+	for _, id := range removedNodes {
+		m.checkpointTsByCapture.Delete(id)
+		m.redoTsByCapture.Delete(id)
+		m.controller.RemoveNode(id)
+	}
+
+	m.sendMessages(messages)
 	if cachedResponse != nil {
-		log.Info("bootstrap done after removed some nodes", zap.Stringer("changefeedID", m.changefeedID))
+		log.Info("maintainer bootstrap done after removed some nodes", zap.Stringer("changefeedID", m.changefeedID))
 		m.onBootstrapDone(cachedResponse)
 	}
 }

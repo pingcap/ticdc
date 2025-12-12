@@ -60,48 +60,47 @@ func NewBootstrapper[T any](id string, newBootstrapMsg NewBootstrapMessageFn) *B
 	}
 }
 
-// HandleNewNodes add node to bootstrapper and return messages that need to be sent to remote node
-func (b *Bootstrapper[T]) HandleNewNodes(newNodes []*node.Info) []*messaging.TargetMessage {
-	msgs := make([]*messaging.TargetMessage, 0, len(newNodes))
+// HandleNewNodes update node to bootstrapper
+// return the removed nodes, messages that need to be sent to remote node, and cached bootstrap responses.
+func (b *Bootstrapper[T]) HandleNewNodes(newNodes map[node.ID]*node.Info) (
+	[]node.ID,
+	[]node.ID,
+	[]*messaging.TargetMessage,
+	map[node.ID]*T,
+) {
+	var (
+		newAddNodes  = make([]node.ID, 0)
+		removedNodes = make([]node.ID, 0)
+		msgs         = make([]*messaging.TargetMessage, 0, len(newNodes))
+	)
 	b.mutex.Lock()
-	defer b.mutex.Unlock()
-	for _, info := range newNodes {
-		if _, ok := b.nodes[info.ID]; ok {
+	for id, info := range newNodes {
+		if _, ok := b.nodes[id]; ok {
 			continue
 		}
 		// A new node is found, send a bootstrap message to it.
-		b.nodes[info.ID] = NewNodeStatus[T](info)
+		b.nodes[id] = NewNodeStatus[T](info)
 		log.Info("maintainer found a new node",
 			zap.String("changefeed", b.id),
 			zap.String("nodeAddr", info.AdvertiseAddr),
-			zap.Any("nodeID", info.ID))
-		msgs = append(msgs, b.newBootstrapMsg(info.ID))
-		b.nodes[info.ID].lastBootstrapTime = b.currentTime()
+			zap.Any("nodeID", id))
+		msgs = append(msgs, b.newBootstrapMsg(id))
+		b.nodes[id].lastBootstrapTime = b.currentTime()
+		newAddNodes = append(newAddNodes, id)
 	}
-	return msgs
-}
 
-// HandleRemoveNodes remove node from bootstrapper,
-// finished bootstrap if all node are initialized after these node removed
-// return cached bootstrap
-func (b *Bootstrapper[T]) HandleRemoveNodes(nodeIDs []node.ID) map[node.ID]*T {
-	b.mutex.Lock()
-	for _, id := range nodeIDs {
-		status, ok := b.nodes[id]
-		if ok {
-			delete(b.nodes, id)
+	for id, _ := range b.nodes {
+		if _, ok := newNodes[id]; !ok {
 			log.Info("remove node from bootstrapper",
 				zap.String("changefeed", b.id),
-				zap.Int("status", int(status.state)),
 				zap.Any("nodeID", id))
-		} else {
-			log.Info("node is not tracked by bootstrapper, ignore it",
-				zap.String("changefeed", b.id),
-				zap.Any("nodeID", id))
+			delete(b.nodes, id)
+			removedNodes = append(removedNodes, id)
 		}
 	}
+
 	b.mutex.Unlock()
-	return b.collectInitialBootstrapResponses()
+	return newAddNodes, removedNodes, msgs, b.collectInitialBootstrapResponses()
 }
 
 // HandleBootstrapResponse do the following:

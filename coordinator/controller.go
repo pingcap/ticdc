@@ -152,8 +152,6 @@ func NewController(
 		c.newBootstrapMessage,
 	)
 
-	// init bootstrapper nodes
-	nodes := c.nodeManager.GetAliveNodes()
 	// detect the capture changes
 	c.nodeManager.RegisterNodeChangeHandler(
 		nodeChangeHandlerID,
@@ -164,16 +162,15 @@ func NewController(
 		},
 	)
 
+	// init bootstrapper nodes
+	nodes := c.nodeManager.GetAliveNodes()
 	log.Info("coordinator bootstrap initial nodes",
 		zap.Int("nodeNum", len(nodes)),
 		zap.Any("nodes", nodes),
 	)
 
-	newNodes := make([]*node.Info, 0, len(nodes))
-	for _, n := range nodes {
-		newNodes = append(newNodes, n)
-	}
-	for _, msg := range c.bootstrapper.HandleNewNodes(newNodes) {
+	_, _, messages, _ := c.bootstrapper.HandleNewNodes(nodes)
+	for _, msg := range messages {
 		_ = c.messageCenter.SendCommand(msg)
 	}
 	c.submitPeriodTask()
@@ -322,34 +319,21 @@ func (c *Controller) RequestResolvedTsFromLogCoordinator(ctx context.Context, ch
 }
 
 func (c *Controller) onNodeChanged() {
-	currentNodes := c.bootstrapper.GetAllNodeIDs()
+	newNodes, removedNodes, messages, cachedResponse := c.bootstrapper.HandleNewNodes(c.nodeManager.GetAliveNodes())
 
-	activeNodes := c.nodeManager.GetAliveNodes()
-	newNodes := make([]*node.Info, 0, len(activeNodes))
-	for id, n := range activeNodes {
-		if _, ok := currentNodes[id]; !ok {
-			newNodes = append(newNodes, n)
-		}
-	}
-	var removedNodes []node.ID
-	for id := range currentNodes {
-		if _, ok := activeNodes[id]; !ok {
-			removedNodes = append(removedNodes, id)
-			c.RemoveNode(id)
-		}
-	}
-
-	log.Info("node changed",
+	log.Info("controller detects node changed",
 		zap.Int("newNodeNum", len(newNodes)),
 		zap.Int("removedNodeNum", len(removedNodes)),
 		zap.Any("newNodes", newNodes),
 		zap.Any("removedNodes", removedNodes),
 	)
 
-	c.sendMessages(c.bootstrapper.HandleNewNodes(newNodes))
-	cachedResponse := c.bootstrapper.HandleRemoveNodes(removedNodes)
+	for _, node := range removedNodes {
+		c.RemoveNode(node)
+	}
+	c.sendMessages(messages)
 	if cachedResponse != nil {
-		log.Info("bootstrap done after removed some nodes",
+		log.Info("controller bootstrap done after removed some nodes",
 			zap.Any("removedNodes", removedNodes))
 		c.onBootstrapDone(cachedResponse)
 	}
