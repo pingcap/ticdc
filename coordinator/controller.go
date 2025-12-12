@@ -66,6 +66,7 @@ type Controller struct {
 	backend            changefeed.Backend
 	eventCh            *chann.DrainableChann[*Event]
 
+	// bootstrapped is set to true after get in touch with all other nodes' maintainer manager.
 	bootstrapped *atomic.Bool
 	bootstrapper *bootstrap.Bootstrapper[heartbeatpb.CoordinatorBootstrapResponse]
 
@@ -112,11 +113,10 @@ func NewController(
 	balanceInterval time.Duration,
 	pdClient pd.Client,
 ) *Controller {
-	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	changefeedDB := changefeed.NewChangefeedDB(version)
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
-	oc := operator.NewOperatorController(mc, selfNode, changefeedDB, backend, nodeManager, batchSize)
+	oc := operator.NewOperatorController(selfNode, changefeedDB, backend, nodeManager, batchSize)
 	c := &Controller{
 		version:      version,
 		bootstrapped: atomic.NewBool(false),
@@ -139,7 +139,7 @@ func NewController(
 		}),
 		eventCh:            eventCh,
 		operatorController: oc,
-		messageCenter:      mc,
+		messageCenter:      appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		changefeedDB:       changefeedDB,
 		nodeManager:        nodeManager,
 		taskScheduler:      threadpool.NewThreadPoolDefault(),
