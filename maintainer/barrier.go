@@ -80,11 +80,11 @@ func (b *Barrier) HandleStatus(from node.ID,
 		if dispatcherID != b.spanController.GetDDLDispatcherID() {
 			task := b.spanController.GetTaskByID(dispatcherID)
 			if task == nil {
-				log.Info("Get block status from unexisted dispatcher, ignore it", zap.String("changefeed", request.ChangefeedID.GetName()), zap.String("dispatcher", dispatcherID.String()))
+				log.Info("Get block status from unexisted dispatcher, ignore it", zap.String("changefeed", request.ChangefeedID.GetName()), zap.String("dispatcher", dispatcherID.String()), zap.Uint64("commitTs", status.State.BlockTs))
 				continue
 			} else {
 				if !b.spanController.IsReplicating(task) {
-					log.Info("Get block status from unreplicating dispatcher, ignore it", zap.String("changefeed", request.ChangefeedID.GetName()), zap.String("dispatcher", dispatcherID.String()))
+					log.Info("Get block status from unreplicating dispatcher, ignore it", zap.String("changefeed", request.ChangefeedID.GetName()), zap.String("dispatcher", dispatcherID.String()), zap.Uint64("commitTs", status.State.BlockTs))
 					continue
 				}
 			}
@@ -99,7 +99,8 @@ func (b *Barrier) HandleStatus(from node.ID,
 			log.Error("handle block status failed, event is nil",
 				zap.String("from", from.String()),
 				zap.String("changefeed", request.ChangefeedID.GetName()),
-				zap.String("detail", status.String()))
+				zap.String("detail", status.String()),
+				zap.Uint64("commitTs", status.State.BlockTs))
 			continue
 		}
 		if needACK {
