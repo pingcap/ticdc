@@ -84,12 +84,15 @@ func NewDefaultPullerConfig() *PullerConfig {
 
 type EventStoreConfig struct {
 	CompressionThreshold int `toml:"compression-threshold" json:"compression_threshold"`
+
+	EnableDataSharing bool `toml:"enable-data-sharing" json:"enable_data_sharing"`
 }
 
 // NewDefaultEventStoreConfig returns the default event store configuration.
 func NewDefaultEventStoreConfig() *EventStoreConfig {
 	return &EventStoreConfig{
-		CompressionThreshold: 4096, // 4KB
+		CompressionThreshold: 16384, // 16KB
+		EnableDataSharing:    false,
 	}
 }
 

@@ -194,7 +194,7 @@ func (o *resumeChangefeedOptions) validateParams(ctx context.Context) error {
 
 // run the `cli changefeed resume` command.
 func (o *resumeChangefeedOptions) run(cmd *cobra.Command) error {
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	if err := o.validateParams(ctx); err != nil {
 		return err

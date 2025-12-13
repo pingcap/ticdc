@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/logservice/logpuller"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
@@ -100,7 +101,21 @@ func newEventStoreForTest(path string) (logpuller.SubscriptionClient, EventStore
 	return subClient, store
 }
 
+func setDataSharingForTest(t *testing.T, enable bool) func() {
+	t.Helper()
+	originalCfg := config.GetGlobalServerConfig().Clone()
+	updatedCfg := originalCfg.Clone()
+	updatedCfg.Debug.EventStore.EnableDataSharing = enable
+	config.StoreGlobalServerConfig(updatedCfg)
+	return func() {
+		config.StoreGlobalServerConfig(originalCfg)
+	}
+}
+
 func TestEventStoreInteractionWithSubClient(t *testing.T) {
+	restoreCfg := setDataSharingForTest(t, true)
+	defer restoreCfg()
+
 	subClient, store := newEventStoreForTest(fmt.Sprintf("/tmp/%s", t.Name()))
 	dispatcherID1 := common.NewDispatcherID()
 	dispatcherID2 := common.NewDispatcherID()
@@ -161,6 +176,9 @@ func markSubStatsInitializedForTest(store EventStore, tableID int64) {
 }
 
 func TestEventStoreOnlyReuseDispatcher(t *testing.T) {
+	restoreCfg := setDataSharingForTest(t, true)
+	defer restoreCfg()
+
 	_, store := newEventStoreForTest(fmt.Sprintf("/tmp/%s", t.Name()))
 
 	dispatcherID1 := common.NewDispatcherID()
@@ -230,6 +248,9 @@ func TestEventStoreOnlyReuseDispatcher(t *testing.T) {
 }
 
 func TestEventStoreOnlyReuseDispatcherSuccess(t *testing.T) {
+	restoreCfg := setDataSharingForTest(t, true)
+	defer restoreCfg()
+
 	_, store := newEventStoreForTest(fmt.Sprintf("/tmp/%s", t.Name()))
 	es := store.(*eventStore)
 
@@ -277,6 +298,9 @@ func TestEventStoreOnlyReuseDispatcherSuccess(t *testing.T) {
 }
 
 func TestEventStoreNonOnlyReuseDispatcher(t *testing.T) {
+	restoreCfg := setDataSharingForTest(t, true)
+	defer restoreCfg()
+
 	_, store := newEventStoreForTest(fmt.Sprintf("/tmp/%s", t.Name()))
 
 	dispatcherID1 := common.NewDispatcherID()
@@ -373,7 +397,65 @@ func TestEventStoreNonOnlyReuseDispatcher(t *testing.T) {
 	}
 }
 
+func TestEventStoreRegisterDispatcherWithoutDataSharing(t *testing.T) {
+	restoreCfg := setDataSharingForTest(t, false)
+	defer restoreCfg()
+
+	subClient, store := newEventStoreForTest(fmt.Sprintf("/tmp/%s", t.Name()))
+	es := store.(*eventStore)
+
+	tableID := int64(1)
+	cfID := common.NewChangefeedID4Test("default", "test-cf")
+	dispatcherID1 := common.NewDispatcherID()
+	dispatcherID2 := common.NewDispatcherID()
+	dispatcherID3 := common.NewDispatcherID()
+	dispatcherID4 := common.NewDispatcherID()
+
+	spanFull := &heartbeatpb.TableSpan{
+		TableID:  tableID,
+		StartKey: []byte("a"),
+		EndKey:   []byte("h"),
+	}
+	require.True(t, store.RegisterDispatcher(cfID, dispatcherID1, spanFull, 100, func(uint64, uint64) {}, false, false))
+
+	require.True(t, store.RegisterDispatcher(cfID, dispatcherID2, spanFull, 100, func(uint64, uint64) {}, false, false))
+
+	spanSubset := &heartbeatpb.TableSpan{
+		TableID:  tableID,
+		StartKey: []byte("b"),
+		EndKey:   []byte("g"),
+	}
+	require.True(t, store.RegisterDispatcher(cfID, dispatcherID3, spanSubset, 100, func(uint64, uint64) {}, false, false))
+
+	mockSubClient := subClient.(*mockSubscriptionClient)
+	mockSubClient.mu.Lock()
+	require.Equal(t, 3, len(mockSubClient.subscriptions))
+	mockSubClient.mu.Unlock()
+
+	es.dispatcherMeta.RLock()
+	subStats := es.dispatcherMeta.tableStats[tableID]
+	require.Equal(t, 3, len(subStats))
+	require.Nil(t, es.dispatcherMeta.dispatcherStats[dispatcherID2].pendingSubStat)
+	require.Nil(t, es.dispatcherMeta.dispatcherStats[dispatcherID3].pendingSubStat)
+	es.dispatcherMeta.RUnlock()
+
+	ok := store.RegisterDispatcher(cfID, dispatcherID4, spanFull, 100, func(uint64, uint64) {}, true, false)
+	require.False(t, ok)
+
+	es.dispatcherMeta.RLock()
+	_, exists := es.dispatcherMeta.dispatcherStats[dispatcherID4]
+	require.False(t, exists)
+	es.dispatcherMeta.RUnlock()
+
+	mockSubClient.mu.Lock()
+	require.Equal(t, 3, len(mockSubClient.subscriptions))
+	mockSubClient.mu.Unlock()
+}
+
 func TestEventStoreUpdateCheckpointTs(t *testing.T) {
+	restoreCfg := setDataSharingForTest(t, true)
+	defer restoreCfg()
+
 	_, store := newEventStoreForTest(fmt.Sprintf("/tmp/%s", t.Name()))
 
 	dispatcherID1 := common.NewDispatcherID()
@@ -454,6 +536,9 @@ func TestEventStoreUpdateCheckpointTs(t *testing.T) {
 }
 
 func TestEventStoreSwitchSubStat(t *testing.T) {
+	restoreCfg := setDataSharingForTest(t, true)
+	defer restoreCfg()
+
 	_, store := newEventStoreForTest(fmt.Sprintf("/tmp/%s", t.Name()))
 
 	dispatcherID1 := common.NewDispatcherID()

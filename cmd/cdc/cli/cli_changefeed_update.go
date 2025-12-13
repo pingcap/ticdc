@@ -14,7 +14,6 @@
 package cli
 
 import (
-	"context"
 	"encoding/json"
 	"strings"
 
@@ -91,7 +90,7 @@ func (o *updateChangefeedOptions) complete(f factory.Factory) error {
 
 // run the `cli changefeed update` command.
 func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	old, err := o.apiV2Client.Changefeeds().Get(ctx, o.keyspace, o.changefeedID)
 	if err != nil {
@@ -175,7 +174,7 @@ func (o *updateChangefeedOptions) applyChanges(oldInfo *v2.ChangeFeedInfo,
 		case "pd", "log-level", "key", "cert", "ca", "server":
 		// Do nothing, this is a flags from the cli command
 		// we don't use it to update, but we do use these flags.
-		case "upstream-pd", "upstream-ca", "upstream-cert", "upstream-key":
+		case "upstream-pd", "upstream-ca", "upstream-cert", "upstream-key", "keyspace":
 		default:
 			// use this default branch to prevent new added parameter is not added
 			log.Warn("unsupported flag, please report a bug", zap.String("flagName", flag.Name))

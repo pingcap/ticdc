@@ -37,6 +37,7 @@ func NewCmdCli() *cobra.Command {
 
 	// Binding the `cli` command flags.
 	cf.AddFlags(cmds)
+	ctx, cancel := context.WithCancel(context.Background())
 	cmds.PersistentPreRun = func(cmd *cobra.Command, args []string) {
 		// Here we will initialize the logging configuration and set the current default context.
 		err := logger.InitLogger(&logger.Config{Level: cf.GetLogLevel()})
@@ -44,8 +45,7 @@ func NewCmdCli() *cobra.Command {
 			cmd.Printf("init logger error %v\n", errors.Trace(err))
 			os.Exit(1)
 		}
-		_, cancel := context.WithCancel(context.Background())
-		defer cancel()
+		cmd.SetContext(ctx)
 		util.LogHTTPProxies()
 		// A notify that complete immediately, it skips the second signal essentially.
 		doneNotify := func() <-chan struct{} {
@@ -59,7 +59,7 @@ func NewCmdCli() *cobra.Command {
 	}
 
 	// Construct the client construction factory.
-	f := factory.NewFactory(cf)
+	f := factory.NewFactory(ctx, cf)
 
 	// Add subcommands.
 	cmds.AddCommand(newCmdChangefeed(f))
