@@ -346,12 +346,11 @@ func GenerateDSN(ctx context.Context, cfg *Config) (string, error) {
 		if bdrModeSupported {
 			dsn.Params["tidb_cdc_write_source"] = "1"
 		}
-		// not now.
-		// if cfg.EnableActiveActive {
-		// 	// LWW mode relies on TiDB preserving _tidb_softdelete_time column semantics,
-		// 	// so disable the softdelete SQL translation on each new session.
-		// 	dsn.Params["tidb_translate_softdelete_sql"] = "\"OFF\""
-		// }
+		if cfg.EnableActiveActive {
+			// LWW mode relies on TiDB preserving _tidb_softdelete_time column semantics,
+			// so disable the softdelete SQL translation on each new session.
+			dsn.Params["tidb_translate_softdelete_sql"] = "\"OFF\""
+		}
 	}
 
 	dsnStr, err := generateDSNByConfig(dsn, cfg, testDB)
