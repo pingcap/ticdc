@@ -23,7 +23,7 @@ function prepare() {
 	check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" "cf-blackhole" "normal" "null" ""
 }
 
-trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
+trap 'stop_test $WORK_DIR' EXIT
 # kafka and storage is not supported yet.
 if [ "$SINK_TYPE" == "mysql" ]; then
 	prepare $*

@@ -57,7 +57,7 @@ function check_equal() {
 	fi
 }
 
-trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
+trap 'stop_test $WORK_DIR' EXIT
 run $*
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

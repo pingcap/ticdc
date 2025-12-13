@@ -4,6 +4,13 @@ WORK_DIR=$1
 
 set +e
 
+for port in 8300 8301 8302 8303; do
+	# The -f option makes curl fail silently on server errors, and 2>/dev/null suppresses connection errors.
+	curl -sf -X GET http://127.0.0.1:${port}/debug/pprof/goroutine?debug=2 >"$WORK_DIR/cdc_profile_${port}.log" 2>/dev/null || true
+done
+
+stop_tidb_cluster
+
 # find some file and change them to .log so the ci plugin will collect them
 find $WORK_DIR -type f -name "*.txt" -o -name "*sql*" -o -name "*summary*" -o -name "*.json" -o -name "*.index" -o -name "metadata" | while read file; do
 	if [[ -f "$file" ]]; then

@@ -329,7 +329,7 @@ function failOverCaseH-4() {
 	echo "failOverCaseH-4 passed successfully"
 }
 
-trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
+trap 'stop_test $WORK_DIR' EXIT
 failOverCaseH-1
 failOverCaseH-2
 failOverCaseH-3

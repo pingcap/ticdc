@@ -34,7 +34,7 @@ mysql_groups=(
 	# G00
 	'event_filter charset_gbk changefeed_finish sql_mode changefeed_reconstruct fail_over_ddl_A'
 	# G01
-	'common_1 foreign_key changefeed_pause_resume fail_over_ddl_B'
+	'common_1 large_txn foreign_key changefeed_pause_resume fail_over_ddl_B'
 	# G02
 	'new_ci_collation safe_mode savepoint fail_over_ddl_C unsplittable_tables'
 	# G03
