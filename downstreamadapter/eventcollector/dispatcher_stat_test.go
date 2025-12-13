@@ -195,6 +195,28 @@ func TestVerifyEventSequence(t *testing.T) {
 		expectedResult bool
 	}{
 		{
+			name:         "first event is handshake",
+			lastEventSeq: 0,
+			event: dispatcher.DispatcherEvent{
+				Event: &mockEvent{
+					eventType: commonEvent.TypeHandshakeEvent,
+					seq:       1,
+				},
+			},
+			expectedResult: true,
+		},
+		{
+			name:         "first event is not handshake",
+			lastEventSeq: 0,
+			event: dispatcher.DispatcherEvent{
+				Event: &mockEvent{
+					eventType: commonEvent.TypeDMLEvent,
+					seq:       1,
+				},
+			},
+			expectedResult: false,
+		},
+		{
 			name:         "continuous DML event sequence",
 			lastEventSeq: 1,
 			event: dispatcher.DispatcherEvent{
@@ -650,7 +672,7 @@ func TestIsFromCurrentEpoch(t *testing.T) {
 		expectedResult bool
 	}{
 		{
-			name: "first event is not handshake",
+			name: "first event is not handshake but epoch matches",
 			event: dispatcher.DispatcherEvent{
 				Event: &mockEvent{
 					eventType: commonEvent.TypeResolvedEvent,
@@ -659,7 +681,7 @@ func TestIsFromCurrentEpoch(t *testing.T) {
 			},
 			epoch:          1,
 			lastEventSeq:   0,
-			expectedResult: false,
+			expectedResult: true,
 		},
 		{
 			name: "first event is handshake",

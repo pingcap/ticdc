@@ -237,6 +237,15 @@ func (d *dispatcherStat) getDispatcherID() common.DispatcherID {
 // verifyEventSequence verifies if the event's sequence number is continuous with previous events.
 // Returns false if sequence is discontinuous (indicating dropped events), which requires dispatcher reset.
 func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) bool {
+	// check the invariant that handshake event is the first event of every epoch
+	if event.GetType() != commonEvent.TypeHandshakeEvent && d.lastEventSeq.Load() == 0 {
+		log.Warn("receive non-handshake event before handshake event, reset the dispatcher",
+			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+			zap.Stringer("dispatcher", d.getDispatcherID()),
+			zap.Any("event", event.Event))
+		return false
+	}
+
 	switch event.GetType() {
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeDDLEvent,
@@ -363,18 +372,7 @@ func (d *dispatcherStat) isFromCurrentEpoch(event dispatcher.DispatcherEvent) bo
 			}
 		}
 	}
-	if event.GetEpoch() != d.epoch.Load() {
-		return false
-	}
-	// check the invariant that handshake event is the first event of every epoch
-	if event.GetType() != commonEvent.TypeHandshakeEvent && d.lastEventSeq.Load() == 0 {
-		log.Warn("receive non-handshake event before handshake event, ignore it",
-			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-			zap.Stringer("dispatcher", d.getDispatcherID()),
-			zap.Any("event", event.Event))
-		return false
-	}
-	return true
+	return event.GetEpoch() == d.epoch.Load()
 }
 
 // handleBatchDataEvents processes a batch of DML and Resolved events with the following algorithm:
@@ -628,6 +626,13 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
 			zap.Any("event", event.Event))
+		return
+	}
+	if event.GetSeq() != 1 {
+		log.Warn("should not happen: handshake event sequence number is not 1",
+			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+			zap.Stringer("dispatcher", d.getDispatcherID()),
+			zap.Uint64("sequence", event.GetSeq()))
 		return
 	}
 	tableInfo := handshakeEvent.TableInfo
