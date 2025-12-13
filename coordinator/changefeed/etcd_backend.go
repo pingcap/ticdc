@@ -269,6 +269,7 @@ func (b *EtcdBackend) ResumeChangefeed(ctx context.Context,
 			return errors.Trace(err)
 		}
 		status.CheckpointTs = newCheckpointTs
+		status.Progress = config.ProgressNone
 		jobValue, err := status.Marshal()
 		if err != nil {
 			return errors.Trace(err)

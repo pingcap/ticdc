@@ -123,7 +123,7 @@ func (oc *Controller) AddOperator(op operator.Operator[common.ChangeFeedID, *hea
 // StopChangefeed stop changefeed when the changefeed is stopped/removed.
 // if remove is true, it will remove the changefeed from the chagnefeed DB
 // if remove is false, it only marks as the changefeed stooped in changefeed DB, so we will not schedule the changefeed again
-func (oc *Controller) StopChangefeed(_ context.Context, cfID common.ChangeFeedID, removed bool) {
+func (oc *Controller) StopChangefeed(_ context.Context, cfID common.ChangeFeedID, removed bool) operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus] {
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
 
@@ -139,13 +139,13 @@ func (oc *Controller) StopChangefeed(_ context.Context, cfID common.ChangeFeedID
 	changefeed := oc.changefeedDB.GetByID(cfID)
 	keyspaceID := changefeed.GetKeyspaceID()
 
-	oc.pushStopChangefeedOperator(keyspaceID, cfID, scheduledNode, removed)
+	return oc.pushStopChangefeedOperator(keyspaceID, cfID, scheduledNode, removed)
 }
 
 // pushStopChangefeedOperator pushes a stop changefeed operator to the controller.
 // it checks if the operator already exists, if exists, it will replace the old one.
 // if the old operator is the removing operator, it will skip this operator.
-func (oc *Controller) pushStopChangefeedOperator(keyspaceID uint32, cfID common.ChangeFeedID, nodeID node.ID, remove bool) {
+func (oc *Controller) pushStopChangefeedOperator(keyspaceID uint32, cfID common.ChangeFeedID, nodeID node.ID, remove bool) operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus] {
 	op := NewStopChangefeedOperator(keyspaceID, cfID, nodeID, oc.selfNode.ID, oc.backend, remove)
 	if old, ok := oc.operators[cfID]; ok {
 		oldStop, ok := old.OP.(*StopChangefeedOperator)
@@ -154,7 +154,7 @@ func (oc *Controller) pushStopChangefeedOperator(keyspaceID uint32, cfID common.
 				log.Info("changefeed is in removing progress, skip the stop operator",
 					zap.String("role", oc.role),
 					zap.String("changefeed", cfID.Name()))
-				return
+				return oldStop
 			}
 		}
 		log.Info("changefeed is stopped, replace the old one",
@@ -167,6 +167,7 @@ func (oc *Controller) pushStopChangefeedOperator(keyspaceID uint32, cfID common.
 		delete(oc.operators, old.OP.ID())
 	}
 	oc.pushOperator(op)
+	return op
 }
 
 func (oc *Controller) UpdateOperatorStatus(id common.ChangeFeedID, from node.ID,
