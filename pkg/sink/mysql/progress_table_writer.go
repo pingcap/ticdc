@@ -174,6 +174,10 @@ func (w *ProgressTableWriter) RemoveTables(ddl *event.DDLEvent) error {
 		return nil
 	}
 
+	if err := w.initProgressTable(w.ctx); err != nil {
+		return err
+	}
+
 	w.lastDDLCommitTs.Store(ddl.GetCommitTs())
 
 	changefeed := w.changefeedID.DisplayName.String()
