@@ -17,6 +17,7 @@ import (
 	"strconv"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/util/dbutil"
 	"go.uber.org/zap"
@@ -72,11 +73,11 @@ func (r RowDatas) Less(i, j int) bool {
 
 		num1, err1 := strconv.ParseFloat(strData1, 64)
 		if err1 != nil {
-			log.Fatal("convert string to float failed", zap.String("column", col.Name.O), zap.String("data", strData1), zap.Error(err1))
+			log.Fatal("convert string to float failed", zap.String("column", col.Name.O), zap.String("data", util.RedactValue(strData1)), zap.Error(err1))
 		}
 		num2, err2 := strconv.ParseFloat(strData2, 64)
 		if err2 != nil {
-			log.Fatal("convert string to float failed", zap.String("column", col.Name.O), zap.String("data", strData2), zap.Error(err2))
+			log.Fatal("convert string to float failed", zap.String("column", col.Name.O), zap.String("data", util.RedactValue(strData2)), zap.Error(err2))
 		}
 
 		if num1 == num2 {
