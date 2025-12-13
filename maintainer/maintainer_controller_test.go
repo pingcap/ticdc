@@ -439,12 +439,13 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 
 	controller := NewController(cfID, 1, nil, &config.ReplicaConfig{
 		Scheduler: &config.ChangefeedSchedulerConfig{
-			EnableTableAcrossNodes: util.AddressOf(true),
-			WriteKeyThreshold:      util.AddressOf(1000),
-			RegionThreshold:        util.AddressOf(20),
-			BalanceScoreThreshold:  util.AddressOf(1),
-			MinTrafficPercentage:   util.AddressOf(0.8),
-			MaxTrafficPercentage:   util.AddressOf(1.2),
+			EnableTableAcrossNodes:     util.AddressOf(true),
+			WriteKeyThreshold:          util.AddressOf(1000),
+			RegionThreshold:            util.AddressOf(20),
+			RegionCountRefreshInterval: util.AddressOf(time.Minute),
+			BalanceScoreThreshold:      util.AddressOf(1),
+			MinTrafficPercentage:       util.AddressOf(0.8),
+			MaxTrafficPercentage:       util.AddressOf(1.2),
 		},
 	}, ddlSpan, nil, 1000, 0, common.DefaultKeyspace, false)
 
@@ -1110,6 +1111,7 @@ func TestDefaultSpanIntoSplit(t *testing.T) {
 			EnableTableAcrossNodes:     util.AddressOf(true),
 			WriteKeyThreshold:          util.AddressOf(1000),
 			RegionThreshold:            util.AddressOf(8),
+			RegionCountRefreshInterval: util.AddressOf(5 * time.Minute),
 			SchedulingTaskCountPerNode: util.AddressOf(10),
 			BalanceScoreThreshold:      util.AddressOf(1),
 			MinTrafficPercentage:       util.AddressOf(0.8),
@@ -1380,12 +1382,13 @@ func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 		}, "node1", false)
 	defaultConfig := config.GetDefaultReplicaConfig().Clone()
 	defaultConfig.Scheduler = &config.ChangefeedSchedulerConfig{
-		EnableTableAcrossNodes: util.AddressOf(true),
-		RegionThreshold:        util.AddressOf(1),
-		RegionCountPerSpan:     util.AddressOf(1),
-		BalanceScoreThreshold:  util.AddressOf(1),
-		MinTrafficPercentage:   util.AddressOf(0.8),
-		MaxTrafficPercentage:   util.AddressOf(1.2),
+		EnableTableAcrossNodes:     util.AddressOf(true),
+		RegionThreshold:            util.AddressOf(1),
+		RegionCountPerSpan:         util.AddressOf(1),
+		RegionCountRefreshInterval: util.AddressOf(5 * time.Minute),
+		BalanceScoreThreshold:      util.AddressOf(1),
+		MinTrafficPercentage:       util.AddressOf(0.8),
+		MaxTrafficPercentage:       util.AddressOf(1.2),
 	}
 	s := NewController(cfID, 1, nil, defaultConfig, ddlSpan, nil, 1000, 0, common.DefaultKeyspace, false)
 	s.taskPool = &mockThreadPool{}
@@ -1560,6 +1563,7 @@ func TestLargeTableInitialization(t *testing.T) {
 			WriteKeyThreshold:          util.AddressOf(500),
 			RegionThreshold:            util.AddressOf(50),
 			RegionCountPerSpan:         util.AddressOf(10),
+			RegionCountRefreshInterval: util.AddressOf(5 * time.Minute),
 			SchedulingTaskCountPerNode: util.AddressOf(2),
 			BalanceScoreThreshold:      util.AddressOf(1),
 			MinTrafficPercentage:       util.AddressOf(0.8),

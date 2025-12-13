@@ -16,6 +16,7 @@ package config
 import (
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
@@ -35,6 +36,7 @@ func TestReplicaConfig_EnableSplittableCheck_AutoAdjust(t *testing.T) {
 				EnableTableAcrossNodes:     util.AddressOf(true),
 				RegionThreshold:            util.AddressOf(100000),
 				RegionCountPerSpan:         util.AddressOf(100),
+				RegionCountRefreshInterval: util.AddressOf(5 * time.Minute),
 				WriteKeyThreshold:          util.AddressOf(1000),
 				SchedulingTaskCountPerNode: util.AddressOf(20),
 				BalanceScoreThreshold:      util.AddressOf(20),
@@ -51,6 +53,7 @@ func TestReplicaConfig_EnableSplittableCheck_AutoAdjust(t *testing.T) {
 				EnableTableAcrossNodes:     util.AddressOf(true),
 				RegionThreshold:            util.AddressOf(100000),
 				RegionCountPerSpan:         util.AddressOf(100),
+				RegionCountRefreshInterval: util.AddressOf(5 * time.Minute),
 				WriteKeyThreshold:          util.AddressOf(1000),
 				SchedulingTaskCountPerNode: util.AddressOf(20),
 				BalanceScoreThreshold:      util.AddressOf(20),
@@ -67,6 +70,7 @@ func TestReplicaConfig_EnableSplittableCheck_AutoAdjust(t *testing.T) {
 				EnableTableAcrossNodes:     util.AddressOf(true),
 				RegionThreshold:            util.AddressOf(100000),
 				RegionCountPerSpan:         util.AddressOf(100),
+				RegionCountRefreshInterval: util.AddressOf(5 * time.Minute),
 				WriteKeyThreshold:          util.AddressOf(1000),
 				SchedulingTaskCountPerNode: util.AddressOf(20),
 				BalanceScoreThreshold:      util.AddressOf(20),
@@ -83,6 +87,7 @@ func TestReplicaConfig_EnableSplittableCheck_AutoAdjust(t *testing.T) {
 				EnableTableAcrossNodes:     util.AddressOf(true),
 				RegionThreshold:            util.AddressOf(100000),
 				RegionCountPerSpan:         util.AddressOf(100),
+				RegionCountRefreshInterval: util.AddressOf(5 * time.Minute),
 				WriteKeyThreshold:          util.AddressOf(1000),
 				SchedulingTaskCountPerNode: util.AddressOf(20),
 				BalanceScoreThreshold:      util.AddressOf(20),
@@ -99,6 +104,7 @@ func TestReplicaConfig_EnableSplittableCheck_AutoAdjust(t *testing.T) {
 				EnableTableAcrossNodes:     util.AddressOf(true),
 				RegionThreshold:            util.AddressOf(100000),
 				RegionCountPerSpan:         util.AddressOf(100),
+				RegionCountRefreshInterval: util.AddressOf(5 * time.Minute),
 				WriteKeyThreshold:          util.AddressOf(1000),
 				SchedulingTaskCountPerNode: util.AddressOf(20),
 				BalanceScoreThreshold:      util.AddressOf(20),
@@ -115,6 +121,7 @@ func TestReplicaConfig_EnableSplittableCheck_AutoAdjust(t *testing.T) {
 				EnableTableAcrossNodes:     util.AddressOf(true),
 				RegionThreshold:            util.AddressOf(100000),
 				RegionCountPerSpan:         util.AddressOf(100),
+				RegionCountRefreshInterval: util.AddressOf(5 * time.Minute),
 				WriteKeyThreshold:          util.AddressOf(1000),
 				SchedulingTaskCountPerNode: util.AddressOf(20),
 				BalanceScoreThreshold:      util.AddressOf(20),
@@ -131,6 +138,7 @@ func TestReplicaConfig_EnableSplittableCheck_AutoAdjust(t *testing.T) {
 				EnableTableAcrossNodes:     util.AddressOf(true),
 				RegionThreshold:            util.AddressOf(100000),
 				RegionCountPerSpan:         util.AddressOf(100),
+				RegionCountRefreshInterval: util.AddressOf(5 * time.Minute),
 				WriteKeyThreshold:          util.AddressOf(1000),
 				SchedulingTaskCountPerNode: util.AddressOf(20),
 				EnableSplittableCheck:      util.AddressOf(true), // User sets to true
@@ -147,6 +155,7 @@ func TestReplicaConfig_EnableSplittableCheck_AutoAdjust(t *testing.T) {
 				EnableTableAcrossNodes:     util.AddressOf(true),
 				RegionThreshold:            util.AddressOf(100000),
 				RegionCountPerSpan:         util.AddressOf(100),
+				RegionCountRefreshInterval: util.AddressOf(5 * time.Minute),
 				WriteKeyThreshold:          util.AddressOf(1000),
 				SchedulingTaskCountPerNode: util.AddressOf(20),
 				EnableSplittableCheck:      util.AddressOf(false), // User sets to false
