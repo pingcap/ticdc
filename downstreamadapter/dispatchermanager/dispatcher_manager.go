@@ -685,7 +685,6 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 					eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
 				}
 			}
-
 		})
 		message.RedoWatermark.Seq = redoSeq
 	}
