@@ -19,7 +19,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -225,18 +224,4 @@ func (s *defaultSpanSplitChecker) Stat() string {
 		res.WriteString("];")
 	}
 	return res.String()
-}
-
-func (s *defaultSpanSplitChecker) Close() {
-	var (
-		start = time.Now()
-		count int
-	)
-	for _, t := range s.allTasks {
-		s.refresher.removeDispatcher(t.ID)
-		count++
-	}
-	log.Info("default span split checker remove all dispatchers from the refresher",
-		zap.Stringer("changefeed", s.changefeedID),
-		zap.Int("count", count), zap.Duration("duration", time.Since(start)))
 }

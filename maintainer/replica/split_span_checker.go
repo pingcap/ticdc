@@ -1286,20 +1286,6 @@ func (s *SplitSpanChecker) Name() string {
 	return "split_span_checker"
 }
 
-func (s *SplitSpanChecker) Close() {
-	var (
-		start = time.Now()
-		count int
-	)
-	for _, t := range s.allTasks {
-		s.refresher.removeDispatcher(t.ID)
-		count++
-	}
-	log.Info("default span split checker remove all dispatchers from the refresher",
-		zap.Stringer("changefeed", s.changefeedID),
-		zap.Int("count", count), zap.Duration("duration", time.Since(start)))
-}
-
 // for test only
 func SetEasyThresholdForTest() {
 	minTrafficBalanceThreshold = 1

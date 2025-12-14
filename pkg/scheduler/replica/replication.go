@@ -95,8 +95,6 @@ type ReplicationDB[T ReplicationID, R Replication[T]] interface {
 	BindReplicaToNodeWithoutLock(old, new node.ID, task R)
 	RemoveReplicaWithoutLock(task R)
 	AddSchedulingReplicaWithoutLock(replica R, targetNodeID node.ID)
-
-	Close()
 }
 
 func NewReplicationDB[T ReplicationID, R Replication[T]](
@@ -389,7 +387,6 @@ func (db *replicationDB[T, R]) maybeRemoveGroup(g *replicationGroup[T, R]) {
 	if g.groupID == DefaultGroupID || !g.IsEmpty() {
 		return
 	}
-	g.checker.Close()
 	delete(db.taskGroups, g.groupID)
 	log.Info("scheduler: remove task group", zap.String("schedulerID", db.id),
 		zap.String("group", GetGroupName(g.groupID)),
@@ -444,13 +441,6 @@ func (db *replicationDB[T, R]) RemoveReplicaWithoutLock(replica R) {
 func (db *replicationDB[T, R]) AddSchedulingReplicaWithoutLock(replica R, targetNodeID node.ID) {
 	g := db.mustGetGroup(replica.GetGroupID())
 	g.AddSchedulingReplica(replica, targetNodeID)
-}
-
-func (db *replicationDB[T, R]) Close() {
-	for _, group := range db.taskGroups {
-		group.checker.Close()
-	}
-	db.taskGroups = make(map[GroupID]*replicationGroup[T, R])
 }
 
 func (db *replicationDB[T, R]) IsReplicating(replica R) bool {
