@@ -718,13 +718,19 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 				_, _, watermark := getDispatcherStatus(id, dispatcherItem, needCompleteStatus)
 				if watermark != nil {
 					eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, watermark.CheckpointTs))
+				} else {
+					eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
 				}
 			})
 		}
+
 		e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.EventDispatcher) {
 			_, _, watermark := getDispatcherStatus(id, dispatcherItem, needCompleteStatus)
 			if watermark != nil {
 				eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, watermark.CheckpointTs))
+			} else {
+				// Use the min checkpointTs of all dispatchers to report to the event service as a keepalive heartbeat.
+				eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
 			}
 		})
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).SendDispatcherHeartbeat(eventServiceDispatcherHeartbeat)
