@@ -161,7 +161,7 @@ type SplitSpanChecker struct {
 	nodeManager *watcher.NodeManager
 	pdClock     pdutil.Clock
 
-	refresher *regionCountRefresher
+	refresher *RegionCountRefresher
 	cancel    context.CancelFunc
 
 	splitSpanCheckDuration prometheus.Observer
@@ -182,7 +182,7 @@ func NewSplitSpanChecker(
 	changefeedID common.ChangeFeedID,
 	groupID replica.GroupID,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
-	refresher *regionCountRefresher,
+	refresher *RegionCountRefresher,
 ) *SplitSpanChecker {
 	if schedulerCfg == nil {
 		log.Panic("scheduler config is nil, please check the config", zap.String("changefeed", changefeedID.Name()))

@@ -180,6 +180,8 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		_, redoDDLSpan = newDDLSpan(keyspaceID, cfID, checkpointTs, selfNode, common.RedoMode)
 	}
 
+	refresher := replica.NewRegionCountRefresher(util.GetOrZero(info.Config.Scheduler.RegionCountRefreshInterval))
+
 	var (
 		keyspaceName = cfID.Keyspace()
 		name         = cfID.Name()
@@ -194,7 +196,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		startCheckpointTs: checkpointTs,
 		controller: NewController(cfID, checkpointTs, taskScheduler,
-			info.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), keyspaceMeta, enableRedo),
+			info.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), refresher, keyspaceMeta, enableRedo),
 		mc:                    mc,
 		removed:               atomic.NewBool(false),
 		nodeManager:           nodeManager,
@@ -250,6 +252,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	if enableRedo {
 		go m.handleRedoMessage(ctx)
 	}
+	go refresher.Run(ctx)
 
 	log.Info("changefeed maintainer is created",
 		zap.Stringer("changefeedID", cfID),

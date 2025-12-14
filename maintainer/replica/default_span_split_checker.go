@@ -65,14 +65,14 @@ type defaultSpanSplitChecker struct {
 	// regionThreshold defines the maximum number of regions allowed before split
 	regionThreshold int
 
-	refresher *regionCountRefresher
+	refresher *RegionCountRefresher
 	cancel    context.CancelFunc
 }
 
 func NewDefaultSpanSplitChecker(
 	changefeedID common.ChangeFeedID,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
-	refresher *regionCountRefresher,
+	refresher *RegionCountRefresher,
 ) *defaultSpanSplitChecker {
 	if schedulerCfg == nil {
 		log.Panic("scheduler config is nil, please check the config", zap.String("changefeed", changefeedID.Name()))

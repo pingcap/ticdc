@@ -22,11 +22,12 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/tikv/client-go/v2/tikv"
 	"go.uber.org/zap"
 )
 
-type regionCountRefresher struct {
+type RegionCountRefresher struct {
 	regionCache split.RegionCache
 	interval    time.Duration
 
@@ -34,14 +35,14 @@ type regionCountRefresher struct {
 	counts sync.Map // map[common.DispatcherID]int
 }
 
-func newRegionCountRefresher(regionCache split.RegionCache, interval time.Duration) *regionCountRefresher {
-	return &regionCountRefresher{
-		regionCache: regionCache,
+func NewRegionCountRefresher(interval time.Duration) *RegionCountRefresher {
+	return &RegionCountRefresher{
+		regionCache: appcontext.GetService[split.RegionCache](appcontext.RegionCache),
 		interval:    interval,
 	}
 }
 
-func (r *regionCountRefresher) addDispatcher(ctx context.Context, id common.DispatcherID, span *heartbeatpb.TableSpan) {
+func (r *RegionCountRefresher) addDispatcher(ctx context.Context, id common.DispatcherID, span *heartbeatpb.TableSpan) {
 	r.traced.Store(id, span)
 	backoff := tikv.NewBackoffer(ctx, 2000)
 	regions, err := r.regionCache.LoadRegionsInKeyRange(backoff, span.StartKey, span.EndKey)
@@ -54,12 +55,12 @@ func (r *regionCountRefresher) addDispatcher(ctx context.Context, id common.Disp
 	r.counts.Store(id, len(regions))
 }
 
-func (r *regionCountRefresher) removeDispatcher(id common.DispatcherID) {
+func (r *RegionCountRefresher) removeDispatcher(id common.DispatcherID) {
 	r.traced.Delete(id)
 	r.counts.Delete(id)
 }
 
-func (r *regionCountRefresher) getRegionCount(id common.DispatcherID) int {
+func (r *RegionCountRefresher) getRegionCount(id common.DispatcherID) int {
 	value, ok := r.counts.Load(id)
 	if !ok {
 		return 0
@@ -67,9 +68,7 @@ func (r *regionCountRefresher) getRegionCount(id common.DispatcherID) int {
 	return value.(int)
 }
 
-func (r *regionCountRefresher) refreshRegionCounts(
-	ctx context.Context,
-) {
+func (r *RegionCountRefresher) Run(ctx context.Context) {
 	ticker := time.NewTicker(r.interval)
 	defer ticker.Stop()
 	for {
@@ -83,7 +82,7 @@ func (r *regionCountRefresher) refreshRegionCounts(
 	}
 }
 
-func (r *regionCountRefresher) queryRegionCount(ctx context.Context) {
+func (r *RegionCountRefresher) queryRegionCount(ctx context.Context) {
 	backoff := tikv.NewBackoffer(ctx, 2000)
 
 	var tableCount int

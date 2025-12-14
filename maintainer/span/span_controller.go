@@ -86,13 +86,14 @@ func NewController(
 	ddlSpan *replica.SpanReplication,
 	splitter *split.Splitter,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
+	refresher *replica.RegionCountRefresher,
 	keyspaceID uint32,
 	mode int64,
 ) *Controller {
 	c := &Controller{
 		changefeedID:           changefeedID,
 		ddlSpan:                ddlSpan,
-		newGroupChecker:        replica.GetNewGroupChecker(changefeedID, schedulerCfg),
+		newGroupChecker:        replica.GetNewGroupChecker(changefeedID, schedulerCfg, refresher),
 		nodeManager:            appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		splitter:               splitter,
 		ddlDispatcherID:        ddlSpan.ID,
