@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -66,7 +67,6 @@ type defaultSpanSplitChecker struct {
 	regionThreshold int
 
 	refresher *RegionCountRefresher
-	cancel    context.CancelFunc
 }
 
 func NewDefaultSpanSplitChecker(
@@ -228,23 +228,15 @@ func (s *defaultSpanSplitChecker) Stat() string {
 }
 
 func (s *defaultSpanSplitChecker) Close() {
-	// todo: remove all dispatcheres belongs to this checker.
-	if s.cancel != nil {
-		s.cancel()
-		log.Info("default span split checker closed", zap.Stringer("changefeed", s.changefeedID))
+	var (
+		start = time.Now()
+		count int
+	)
+	for _, t := range s.allTasks {
+		s.refresher.removeDispatcher(t.ID)
+		count++
 	}
-
-	// if checker.regionThreshold > 0 {
-	// 	regionCache := appcontext.GetService[split.RegionCache](appcontext.RegionCache)
-	// 	interval := util.GetOrZero(schedulerCfg.RegionCountRefreshInterval)
-	// 	refresher := newRegionCountRefresher(regionCache, interval)
-
-	// 	ctx, cancel := context.WithCancel(context.Background())
-	// 	checker.cancel = cancel
-	// 	checker.refresher = refresher
-
-	// 	// start the region count refresher goroutine
-	// 	go refresher.refreshRegionCounts(ctx)
-	// }
-
+	log.Info("default span split checker remove all dispatchers from the refresher",
+		zap.Stringer("changefeed", s.changefeedID),
+		zap.Int("count", count), zap.Duration("duration", time.Since(start)))
 }
