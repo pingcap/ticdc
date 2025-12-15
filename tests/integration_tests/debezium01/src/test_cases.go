@@ -36,7 +36,7 @@ import (
 	"go.uber.org/zap"
 )
 
-const timeout = time.Second * 30
+const timeout = time.Second * 10
 
 var (
 	nFailed = 0
