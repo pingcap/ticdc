@@ -21,7 +21,6 @@ import (
 	"math/rand"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/pingcap/log"
@@ -141,9 +140,6 @@ type SplitSpanChecker struct {
 	groupID      replica.GroupID
 	allTasks     map[common.DispatcherID]*splitSpanStatus
 
-	taskMu  sync.RWMutex
-	stateMu sync.Mutex
-
 	// when writeThreshold is 0, we don't check the traffic
 	writeThreshold int
 	// when regionThreshold is 0, we don't check the region count
@@ -207,8 +203,6 @@ func NewSplitSpanChecker(
 }
 
 func (s *SplitSpanChecker) AddReplica(replica *SpanReplication) {
-	s.taskMu.Lock()
-	defer s.taskMu.Unlock()
 	s.allTasks[replica.ID] = &splitSpanStatus{
 		SpanReplication:  replica,
 		regionCount:      0,
@@ -222,8 +216,6 @@ func (s *SplitSpanChecker) AddReplica(replica *SpanReplication) {
 }
 
 func (s *SplitSpanChecker) RemoveReplica(replica *SpanReplication) {
-	s.taskMu.Lock()
-	defer s.taskMu.Unlock()
 	delete(s.allTasks, replica.ID)
 
 	if s.enableTableAcrossNodes && s.regionThreshold > 0 {
@@ -232,15 +224,12 @@ func (s *SplitSpanChecker) RemoveReplica(replica *SpanReplication) {
 }
 
 func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
-	s.taskMu.Lock()
 	status, ok := s.allTasks[replica.ID]
 	if !ok {
-		s.taskMu.Unlock()
 		log.Warn("split span checker: replica not found", zap.String("changefeed", s.changefeedID.Name()), zap.String("replica", replica.ID.String()))
 		return
 	}
 	if status.GetStatus().ComponentStatus != heartbeatpb.ComponentState_Working {
-		s.taskMu.Unlock()
 		return
 	}
 
@@ -281,11 +270,6 @@ func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
 		zap.Int("status.trafficScore", status.trafficScore),
 		zap.Any("status.lastThreeTraffic", status.lastThreeTraffic),
 	)
-	s.taskMu.Unlock()
-
-	s.stateMu.Lock()
-	s.balanceCondition.statusUpdated = true
-	s.stateMu.Unlock()
 }
 
 type SplitSpanCheckResult struct {
@@ -315,8 +299,6 @@ func (s *SplitSpanChecker) checkAllTaskAvailableLocked() bool {
 
 // return some actions for scheduling the split spans
 func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
-	s.taskMu.RLock()
-	s.stateMu.Lock()
 	start := time.Now()
 	waitMerge := false
 	defer func() {
@@ -325,8 +307,6 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 			s.mergeCheckCount = 0
 		}
 		s.splitSpanCheckDuration.Observe(time.Since(start).Seconds())
-		s.stateMu.Unlock()
-		s.taskMu.RUnlock()
 	}()
 	log.Debug("SplitSpanChecker try to check",
 		zap.Any("changefeedID", s.changefeedID),
@@ -1264,8 +1244,6 @@ func findClosestSmaller(spans []*splitSpanStatus, diffTraffic float64) (int, *sp
 }
 
 func (s *SplitSpanChecker) Stat() string {
-	s.taskMu.RLock()
-	defer s.taskMu.RUnlock()
 	res := strings.Builder{}
 	if s.writeThreshold > 0 {
 		res.WriteString("traffic infos:")

@@ -18,7 +18,6 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -56,8 +55,6 @@ type defaultSpanSplitChecker struct {
 	allTasks map[common.DispatcherID]*spanSplitStatus
 
 	splitReadyTasks map[common.DispatcherID]*spanSplitStatus
-
-	mu sync.RWMutex
 
 	// writeThreshold defines the traffic threshold for triggering split consideration
 	writeThreshold int
@@ -101,8 +98,6 @@ func (s *defaultSpanSplitChecker) Name() string {
 }
 
 func (s *defaultSpanSplitChecker) AddReplica(replica *SpanReplication) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if _, ok := s.allTasks[replica.ID]; ok {
 		return
 	}
@@ -122,8 +117,6 @@ func (s *defaultSpanSplitChecker) AddReplica(replica *SpanReplication) {
 }
 
 func (s *defaultSpanSplitChecker) RemoveReplica(replica *SpanReplication) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	delete(s.allTasks, replica.ID)
 	delete(s.splitReadyTasks, replica.ID)
 
@@ -133,8 +126,6 @@ func (s *defaultSpanSplitChecker) RemoveReplica(replica *SpanReplication) {
 }
 
 func (s *defaultSpanSplitChecker) UpdateStatus(replica *SpanReplication) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	status, ok := s.allTasks[replica.ID]
 	if !ok {
 		log.Warn("default span split checker: replica not found", zap.String("changefeed", s.changefeedID.Name()), zap.String("replica", replica.ID.String()))
@@ -180,8 +171,6 @@ type DefaultSpanSplitCheckResult struct {
 }
 
 func (s *defaultSpanSplitChecker) Check(batch int) replica.GroupCheckResult {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	results := make([]DefaultSpanSplitCheckResult, 0, batch)
 	for _, status := range s.splitReadyTasks {
 		// for default span to do split, we use splitByTraffic to make the split more balanced
@@ -215,8 +204,6 @@ func (s *defaultSpanSplitChecker) Check(batch int) replica.GroupCheckResult {
 
 // stat shows the split ready tasks's dispatcherID, traffic score and region count
 func (s *defaultSpanSplitChecker) Stat() string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	var res strings.Builder
 	for _, status := range s.splitReadyTasks {
 		res.WriteString("[dispatcherID: ")
