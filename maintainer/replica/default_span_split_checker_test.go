@@ -197,10 +197,6 @@ func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheck(t *testing.T) {
 	spanStatus = checker.allTasks[replica.ID]
 	require.Equal(t, 6, spanStatus.regionCount)
 	require.Contains(t, checker.splitReadyTasks, replica.ID)
-
-	// Subsequent refresh keeps the updated count
-	spanStatus = checker.allTasks[replica.ID]
-	require.Equal(t, 6, spanStatus.regionCount)
 }
 
 func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheckError(t *testing.T) {

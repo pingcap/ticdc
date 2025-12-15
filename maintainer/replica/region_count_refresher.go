@@ -91,6 +91,7 @@ func (r *RegionCountRefresher) queryRegionCount(ctx context.Context) {
 	var tableCount int
 	start := time.Now()
 	r.traced.Range(func(key, value any) bool {
+		tableCount++
 		dispatcherID := key.(common.DispatcherID)
 		span := value.(*heartbeatpb.TableSpan)
 		regions, err := r.regionCache.LoadRegionsInKeyRange(
@@ -107,7 +108,6 @@ func (r *RegionCountRefresher) queryRegionCount(ctx context.Context) {
 			return true
 		}
 		r.counts.Store(dispatcherID, len(regions))
-		tableCount++
 		return true
 	})
 
