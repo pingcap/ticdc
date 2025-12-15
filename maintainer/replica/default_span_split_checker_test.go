@@ -35,8 +35,8 @@ func createTestSpanReplication(cfID common.ChangeFeedID, tableID int64) *SpanRep
 }
 
 func newTestDefaultChecker(t *testing.T, cfID common.ChangeFeedID, schedulerCfg *config.ChangefeedSchedulerConfig) *defaultSpanSplitChecker {
-	checker := NewDefaultSpanSplitChecker(cfID, schedulerCfg)
-	t.Cleanup(checker.Close)
+	refresher := NewRegionCountRefresher(cfID, util.GetOrZero(schedulerCfg.RegionCountRefreshInterval))
+	checker := NewDefaultSpanSplitChecker(cfID, schedulerCfg, refresher)
 	return checker
 }
 

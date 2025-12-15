@@ -89,8 +89,8 @@ func createTestSplitSpanReplications(cfID common.ChangeFeedID, tableID int64, sp
 }
 
 func newTestSplitChecker(t *testing.T, cfID common.ChangeFeedID, groupID pkgreplica.GroupID, schedulerCfg *config.ChangefeedSchedulerConfig) *SplitSpanChecker {
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
-	t.Cleanup(checker.Close)
+	refresher := NewRegionCountRefresher(cfID, util.GetOrZero(schedulerCfg.RegionCountRefreshInterval))
+	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg, refresher)
 	return checker
 }
 
