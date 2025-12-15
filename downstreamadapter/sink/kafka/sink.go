@@ -447,8 +447,9 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 	duration := time.Since(finishedAt)
 	log.Info("kafka sink send DDL event",
 		zap.String("keyspace", s.changefeedID.Keyspace()), zap.String("changefeed", s.changefeedID.Name()),
-		zap.Duration("duration", duration), zap.Any("tidbFinishedAt", finishedAt), zap.Any("ticdcFinishedAt", time.Now()),
-		zap.Any("startTs", event.GetStartTs()), zap.Any("commitTs", event.GetCommitTs()), zap.Any("DDL", event.GetDDLQuery()),
+		zap.Any("startTs", event.GetStartTs()), zap.Any("commitTs", event.GetCommitTs()),
+		zap.Any("tidbFinishedAt", finishedAt), zap.Duration("duration", duration),
+		zap.Any("DDL", event.GetDDLQuery()),
 		zap.String("schema", event.GetSchemaName()), zap.String("table", event.GetTableName()))
 	return nil
 }
