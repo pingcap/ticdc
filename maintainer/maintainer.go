@@ -252,7 +252,11 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	if enableRedo {
 		go m.handleRedoMessage(ctx)
 	}
-	go refresher.Run(ctx)
+
+	if util.GetOrZero(info.Config.Scheduler.EnableTableAcrossNodes) &&
+		util.GetOrZero(info.Config.Scheduler.RegionThreshold) > 0 {
+		go refresher.Run(ctx)
+	}
 
 	log.Info("changefeed maintainer is created",
 		zap.Stringer("changefeedID", cfID),

@@ -63,9 +63,9 @@ type defaultSpanSplitChecker struct {
 	writeThreshold int
 
 	// regionThreshold defines the maximum number of regions allowed before split
-	regionThreshold int
-
-	refresher *RegionCountRefresher
+	regionThreshold        int
+	enableTableAcrossNodes bool
+	refresher              *RegionCountRefresher
 }
 
 func NewDefaultSpanSplitChecker(
@@ -78,12 +78,13 @@ func NewDefaultSpanSplitChecker(
 	}
 
 	return &defaultSpanSplitChecker{
-		changefeedID:    changefeedID,
-		allTasks:        make(map[common.DispatcherID]*spanSplitStatus),
-		splitReadyTasks: make(map[common.DispatcherID]*spanSplitStatus),
-		writeThreshold:  util.GetOrZero(schedulerCfg.WriteKeyThreshold),
-		regionThreshold: util.GetOrZero(schedulerCfg.RegionThreshold),
-		refresher:       refresher,
+		changefeedID:           changefeedID,
+		allTasks:               make(map[common.DispatcherID]*spanSplitStatus),
+		splitReadyTasks:        make(map[common.DispatcherID]*spanSplitStatus),
+		writeThreshold:         util.GetOrZero(schedulerCfg.WriteKeyThreshold),
+		regionThreshold:        util.GetOrZero(schedulerCfg.RegionThreshold),
+		enableTableAcrossNodes: util.GetOrZero(schedulerCfg.EnableTableAcrossNodes),
+		refresher:              refresher,
 	}
 }
 
@@ -115,8 +116,7 @@ func (s *defaultSpanSplitChecker) AddReplica(replica *SpanReplication) {
 		regionCount:     0,
 		latestTraffic:   0,
 	}
-	// todo: the context should be passed from upper level
-	if s.regionThreshold > 0 {
+	if s.enableTableAcrossNodes && s.regionThreshold > 0 {
 		s.refresher.addDispatcher(context.Background(), replica.ID, replica.Span)
 	}
 }
@@ -127,7 +127,7 @@ func (s *defaultSpanSplitChecker) RemoveReplica(replica *SpanReplication) {
 	delete(s.allTasks, replica.ID)
 	delete(s.splitReadyTasks, replica.ID)
 
-	if s.regionThreshold > 0 {
+	if s.enableTableAcrossNodes && s.regionThreshold > 0 {
 		s.refresher.removeDispatcher(replica.ID)
 	}
 }
@@ -155,6 +155,10 @@ func (s *defaultSpanSplitChecker) UpdateStatus(replica *SpanReplication) {
 	}
 
 	log.Debug("default span split checker: update status", zap.Stringer("changefeed", s.changefeedID), zap.String("replica", replica.ID.String()), zap.Int("trafficScore", status.trafficScore), zap.Int("regionCount", status.regionCount))
+
+	if !s.enableTableAcrossNodes {
+		return
+	}
 
 	if s.regionThreshold > 0 {
 		status.regionCount = s.refresher.getRegionCount(replica.ID)
