@@ -99,6 +99,7 @@ func TestDefaultSpanSplitChecker_RemoveReplica(t *testing.T) {
 func TestDefaultSpanSplitChecker_UpdateStatus_TrafficCheck(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
+		EnableTableAcrossNodes:     util.AddressOf(true),
 		WriteKeyThreshold:          util.AddressOf(1000),
 		RegionThreshold:            util.AddressOf(10),
 		RegionCountRefreshInterval: util.AddressOf(time.Minute),
@@ -157,6 +158,7 @@ func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheck(t *testing.T) {
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
+		EnableTableAcrossNodes:     util.AddressOf(true),
 		WriteKeyThreshold:          util.AddressOf(1000),
 		RegionThreshold:            util.AddressOf(5),
 		RegionCountRefreshInterval: util.AddressOf(time.Minute),
@@ -271,6 +273,7 @@ func TestDefaultSpanSplitChecker_CheckRegionSplit(t *testing.T) {
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
+		EnableTableAcrossNodes:     util.AddressOf(true),
 		WriteKeyThreshold:          util.AddressOf(1000),
 		RegionThreshold:            util.AddressOf(5),
 		RegionCountRefreshInterval: util.AddressOf(time.Minute),

@@ -15,6 +15,7 @@ package operator
 
 import (
 	"testing"
+	"time"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
@@ -60,7 +61,8 @@ func setupTestEnvironment(t *testing.T) (*span.Controller, common.ChangeFeedID, 
 		false,
 	)
 
-	spanController := span.NewController(changefeedID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	refresher := replica.NewRegionCountRefresher(changefeedID, time.Minute)
+	spanController := span.NewController(changefeedID, ddlSpan, nil, nil, refresher, common.DefaultKeyspaceID, common.DefaultMode)
 
 	replicaSet := replica.NewWorkingSpanReplication(
 		changefeedID,

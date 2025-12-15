@@ -277,6 +277,7 @@ func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
+		EnableTableAcrossNodes:     util.AddressOf(true),
 		WriteKeyThreshold:          util.AddressOf(1000),
 		RegionThreshold:            util.AddressOf(5),
 		RegionCountRefreshInterval: util.AddressOf(time.Minute),
