@@ -772,6 +772,7 @@ func (w *Writer) multiStmtExecute(
 	if err != nil {
 		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", multiStmtSQLWithTxn, multiStmtArgs)))
 	}
+	log.Info("Exec Rows succeeded", zap.Any("sql", dmls.LogWithoutValues()), zap.Int("writerID", w.id))
 	return nil
 }
 
