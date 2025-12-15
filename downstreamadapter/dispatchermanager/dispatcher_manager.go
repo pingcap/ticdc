@@ -719,17 +719,6 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	message.Watermark.Seq = seq
 	e.latestWatermark.Set(message.Watermark)
 
-	if needCompleteStatus {
-		// Fill the missing watermarks with the final aggregated values to avoid
-		// reporting an uninitialized checkpoint.
-		for _, id := range redoDispatchersWithoutWatermark {
-			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.RedoWatermark.CheckpointTs))
-		}
-		for _, id := range eventDispatchersWithoutWatermark {
-			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
-		}
-	}
-
 	// if the event dispatcher manager is closing, we don't to remove the stopped dispatchers.
 	if !e.closing.Load() {
 		for _, m := range toCleanMap {
@@ -750,6 +739,15 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 
 	// If needCompleteStatus is true, we need to send the dispatcher heartbeat to the event service.
 	if needCompleteStatus {
+		// Fill the missing watermarks with the final aggregated values to avoid
+		// reporting an uninitialized checkpoint.
+		for _, id := range redoDispatchersWithoutWatermark {
+			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.RedoWatermark.CheckpointTs))
+		}
+		for _, id := range eventDispatchersWithoutWatermark {
+			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
+		}
+
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).SendDispatcherHeartbeat(eventServiceDispatcherHeartbeat)
 	}
 
