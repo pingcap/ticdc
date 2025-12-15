@@ -661,7 +661,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 		eventServiceDispatcherHeartbeat = &event.DispatcherHeartbeat{
 			Version:              event.DispatcherHeartbeatVersion1,
 			DispatcherCount:      0,
-			DispatcherProgresses: make([]event.DispatcherProgress, 0, e.dispatcherMap.Len()+e.redoDispatcherMap.Len()),
+			DispatcherProgresses: make([]event.DispatcherProgress, 0),
 		}
 	}
 
