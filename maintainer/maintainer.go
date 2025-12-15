@@ -180,7 +180,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		_, redoDDLSpan = newDDLSpan(keyspaceID, cfID, checkpointTs, selfNode, common.RedoMode)
 	}
 
-	refresher := replica.NewRegionCountRefresher(util.GetOrZero(info.Config.Scheduler.RegionCountRefreshInterval))
+	refresher := replica.NewRegionCountRefresher(cfID, util.GetOrZero(info.Config.Scheduler.RegionCountRefreshInterval))
 
 	var (
 		keyspaceName = cfID.Keyspace()

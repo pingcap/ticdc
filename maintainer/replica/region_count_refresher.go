@@ -28,17 +28,19 @@ import (
 )
 
 type RegionCountRefresher struct {
-	regionCache split.RegionCache
-	interval    time.Duration
+	regionCache  split.RegionCache
+	interval     time.Duration
+	changefeedID common.ChangeFeedID
 
 	traced sync.Map // map[common.DispatcherID]*heartbeatpb.TableSpan
 	counts sync.Map // map[common.DispatcherID]int
 }
 
-func NewRegionCountRefresher(interval time.Duration) *RegionCountRefresher {
+func NewRegionCountRefresher(changefeedID common.ChangeFeedID, interval time.Duration) *RegionCountRefresher {
 	return &RegionCountRefresher{
-		regionCache: appcontext.GetService[split.RegionCache](appcontext.RegionCache),
-		interval:    interval,
+		regionCache:  appcontext.GetService[split.RegionCache](appcontext.RegionCache),
+		interval:     interval,
+		changefeedID: changefeedID,
 	}
 }
 
@@ -48,6 +50,7 @@ func (r *RegionCountRefresher) addDispatcher(ctx context.Context, id common.Disp
 	regions, err := r.regionCache.LoadRegionsInKeyRange(backoff, span.StartKey, span.EndKey)
 	if err != nil {
 		log.Warn("load regions failed, just continue",
+			zap.Stringer("changefeedID", r.changefeedID),
 			zap.Stringer("dispatcherID", id),
 			zap.String("span", common.FormatTableSpan(span)),
 			zap.Error(err))
@@ -74,7 +77,7 @@ func (r *RegionCountRefresher) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info("region count refresher exited")
+			log.Info("region count refresher exited", zap.Stringer("changefeedID", r.changefeedID))
 			return
 		case <-ticker.C:
 			r.queryRegionCount(ctx)
@@ -97,6 +100,7 @@ func (r *RegionCountRefresher) queryRegionCount(ctx context.Context) {
 		)
 		if err != nil {
 			log.Warn("load regions failed, just continue",
+				zap.Stringer("changefeedID", r.changefeedID),
 				zap.Stringer("dispatcherID", dispatcherID),
 				zap.String("span", common.FormatTableSpan(span)),
 				zap.Error(err))
@@ -109,6 +113,7 @@ func (r *RegionCountRefresher) queryRegionCount(ctx context.Context) {
 
 	if tableCount > 0 {
 		log.Info("refresh region count for all tables",
+			zap.Stringer("changefeedID", r.changefeedID),
 			zap.Int("tableCount", tableCount), zap.Duration("duration", time.Since(start)))
 	}
 }
