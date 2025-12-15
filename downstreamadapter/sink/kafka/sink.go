@@ -442,9 +442,13 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 			return err
 		}
 	}
+
+	finishedAt := time.UnixMilli(int64(event.GetCommitTs() >> 18))
+	duration := time.Since(finishedAt)
 	log.Info("kafka sink send DDL event",
 		zap.String("keyspace", s.changefeedID.Keyspace()), zap.String("changefeed", s.changefeedID.Name()),
-		zap.Any("startTs", event.GetStartTs()), zap.Any("commitTs", event.GetCommitTs()), zap.Any("event", event.GetDDLQuery()),
+		zap.Duration("duration", duration), zap.Any("tidbFinishedAt", finishedAt), zap.Any("ticdcFinishedAt", time.Now()),
+		zap.Any("startTs", event.GetStartTs()), zap.Any("commitTs", event.GetCommitTs()), zap.Any("DDL", event.GetDDLQuery()),
 		zap.String("schema", event.GetSchemaName()), zap.String("table", event.GetTableName()))
 	return nil
 }
