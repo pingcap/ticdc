@@ -833,9 +833,16 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 		e.heartBeatTask.Cancel()
 	}
 
+	// cancel the context
+	// avoid long time ddl execution can't return to stuck sharedInfo.Close()
+	e.cancel()
+
 	if e.sharedInfo != nil {
 		e.sharedInfo.Close()
 	}
+
+	log.Info("closed shared info",
+		zap.Stringer("changefeedID", e.changefeedID))
 
 	if e.RedoEnable {
 		e.redoSink.Close(removeChangefeed)
@@ -843,7 +850,6 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 		e.closeRedoMeta(removeChangefeed)
 	}
 	e.sink.Close(removeChangefeed)
-	e.cancel()
 	e.wg.Wait()
 
 	e.removeTaskHandles.Range(func(key, value interface{}) bool {
