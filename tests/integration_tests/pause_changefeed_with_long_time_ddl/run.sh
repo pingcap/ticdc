@@ -35,6 +35,10 @@ function run() {
 
 	cdc_cli_changefeed resume -c "test"
 
+	cleanup_process $CDC_BINARY
+	export GO_FAILPOINTS=''
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+
 	check_table_exists test.t1 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
 	cleanup_process $CDC_BINARY
