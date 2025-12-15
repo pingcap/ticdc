@@ -653,6 +653,10 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	}
 
 	eventServiceDispatcherHeartbeat := &event.DispatcherHeartbeat{}
+	// Collect dispatchers without watermarks so we can fill them with the
+	// final aggregated watermark after both loops are done.
+	eventDispatchersWithoutWatermark := make([]common.DispatcherID, 0)
+	redoDispatchersWithoutWatermark := make([]common.DispatcherID, 0)
 	if needCompleteStatus {
 		eventServiceDispatcherHeartbeat = &event.DispatcherHeartbeat{
 			Version:              event.DispatcherHeartbeatVersion1,
@@ -682,7 +686,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 				if watermark != nil {
 					eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, watermark.CheckpointTs))
 				} else {
-					eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
+					redoDispatchersWithoutWatermark = append(redoDispatchersWithoutWatermark, id)
 				}
 			}
 		})
@@ -707,13 +711,24 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 				eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, watermark.CheckpointTs))
 			} else {
 				// Use the min checkpointTs of all dispatchers to report to the event service as a keepalive heartbeat.
-				eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
+				eventDispatchersWithoutWatermark = append(eventDispatchersWithoutWatermark, id)
 			}
 		}
 	})
 
 	message.Watermark.Seq = seq
 	e.latestWatermark.Set(message.Watermark)
+
+	if needCompleteStatus {
+		// Fill the missing watermarks with the final aggregated values to avoid
+		// reporting an uninitialized checkpoint.
+		for _, id := range redoDispatchersWithoutWatermark {
+			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.RedoWatermark.CheckpointTs))
+		}
+		for _, id := range eventDispatchersWithoutWatermark {
+			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
+		}
+	}
 
 	// if the event dispatcher manager is closing, we don't to remove the stopped dispatchers.
 	if !e.closing.Load() {
