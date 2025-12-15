@@ -833,8 +833,9 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 		e.heartBeatTask.Cancel()
 	}
 
-	// cancel the context
-	// avoid long time ddl execution can't return to stuck sharedInfo.Close()
+	// Cancel the context to signal all dependent components to stop.
+	// This is important to prevent `e.sink.Close() / e.sharedInfo.Close()` from blocking,
+	// especially when a long-running DDL is being executed by the sink.
 	e.cancel()
 
 	if e.sharedInfo != nil {

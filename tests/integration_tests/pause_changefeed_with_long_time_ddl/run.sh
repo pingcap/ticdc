@@ -18,25 +18,24 @@ function run() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-    export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkExecDDLDelay=return("3600")'
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkExecDDLDelay=return("3600")'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
 	SINK_URI="mysql://root:@127.0.0.1:3306/"
-    cdc_cli_changefeed create --sink-uri="$SINK_URI" -c "test" 
+	cdc_cli_changefeed create --sink-uri="$SINK_URI" -c "test"
 
 	run_sql "use test;create table t1 (a int primary key, b int, unique key uk(b));" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
-    cdc_cli_changefeed pause -c "test"
+	cdc_cli_changefeed pause -c "test"
 
-    sleep 10
+	sleep 10
 
-    ensure 10 "check_logs_contains $WORK_DIR 'changefeed maintainer closed'"
-    check_table_not_exists test.t1 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	ensure 10 "check_logs_contains $WORK_DIR 'changefeed maintainer closed'"
+	check_table_not_exists test.t1 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
+	cdc_cli_changefeed resume -c "test"
 
-    cdc_cli_changefeed resume -c "test"
-
-    check_table_exists test.t1 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_table_exists test.t1 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
 	cleanup_process $CDC_BINARY
 	stop_tidb_cluster
