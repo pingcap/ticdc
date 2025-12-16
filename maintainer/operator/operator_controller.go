@@ -346,7 +346,6 @@ func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
 
 // pushOperator add an operator to the controller queue.
 func (oc *Controller) pushOperator(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) {
-	oc.checkAffectedNodes(op)
 	log.Info("add operator to running queue",
 		zap.String("role", oc.role),
 		zap.Stringer("changefeedID", oc.changefeedID),
@@ -358,6 +357,11 @@ func (oc *Controller) pushOperator(op operator.Operator[common.DispatcherID, *he
 	oc.mu.Unlock()
 
 	op.Start()
+	// Check affected nodes after Start to avoid operators being forced into terminal states
+	// before they have initialized their span state. For example, a move operator can mark
+	// a span absent on node removal, and a subsequent Start must not bring it back to an
+	// invalid scheduling state with an empty node ID.
+	oc.checkAffectedNodes(op)
 
 	oc.mu.Lock()
 	heap.Push(&oc.runningQueue, withTime)

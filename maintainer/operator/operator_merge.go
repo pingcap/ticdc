@@ -84,12 +84,27 @@ func NewMergeDispatcherOperator(
 		KeyspaceID: spanController.GetkeyspaceID(),
 	}
 
+	// Initialize the merged replica with a safe checkpointTs. Using an artificially small
+	// value can regress the changefeed checkpoint because scheduling/absent replicas are
+	// included in the global checkpoint calculation.
+	checkpointTs := toMergedReplicaSets[0].GetStatus().GetCheckpointTs()
+	for idx := 1; idx < len(toMergedReplicaSets); idx++ {
+		ts := toMergedReplicaSets[idx].GetStatus().GetCheckpointTs()
+		if ts < checkpointTs {
+			checkpointTs = ts
+		}
+	}
+	// Ensure checkpointTs is at least 1.
+	if checkpointTs == 0 {
+		checkpointTs = 1
+	}
+
 	newReplicaSet := replica.NewSpanReplication(
 		toMergedReplicaSets[0].ChangefeedID,
 		newDispatcherID,
 		toMergedReplicaSets[0].GetSchemaID(),
 		mergeTableSpan,
-		1, // use a fake checkpointTs here.
+		checkpointTs,
 		toMergedReplicaSets[0].GetMode(),
 		toMergedReplicaSets[0].IsSplitEnabled())
 

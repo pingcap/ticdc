@@ -26,8 +26,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// setupMergeTestEnvironment creates multiple replica sets for merge testing
+// setupMergeTestEnvironment creates multiple replica sets for merge testing.
 func setupMergeTestEnvironment(t *testing.T) (*span.Controller, []*replica.SpanReplication, []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], node.ID) {
+	return setupMergeTestEnvironmentWithCheckpointTs(t, 1000, 1000)
+}
+
+func setupMergeTestEnvironmentWithCheckpointTs(
+	t *testing.T,
+	checkpointTs1 uint64,
+	checkpointTs2 uint64,
+) (*span.Controller, []*replica.SpanReplication, []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], node.ID) {
 	spanController, changefeedID, _, nodeA, _ := setupTestEnvironment(t)
 
 	// Create two consecutive spans to merge
@@ -40,7 +48,7 @@ func setupMergeTestEnvironment(t *testing.T) (*span.Controller, []*replica.SpanR
 	status1 := &heartbeatpb.TableSpanStatus{
 		ID:              dispatcherID1.ToPB(),
 		ComponentStatus: heartbeatpb.ComponentState_Working,
-		CheckpointTs:    1000,
+		CheckpointTs:    checkpointTs1,
 	}
 	replicaSet1 := replica.NewWorkingSpanReplication(
 		changefeedID,
@@ -61,7 +69,7 @@ func setupMergeTestEnvironment(t *testing.T) (*span.Controller, []*replica.SpanR
 	status2 := &heartbeatpb.TableSpanStatus{
 		ID:              dispatcherID2.ToPB(),
 		ComponentStatus: heartbeatpb.ComponentState_Working,
-		CheckpointTs:    1000,
+		CheckpointTs:    checkpointTs2,
 	}
 	replicaSet2 := replica.NewWorkingSpanReplication(
 		changefeedID,
@@ -165,4 +173,13 @@ func TestMergeOperator_TaskRemovedByDDLBeforeWorking(t *testing.T) {
 	for _, occupyOp := range occupyOperators {
 		require.True(t, occupyOp.IsFinished())
 	}
+}
+
+func TestMergeOperator_NewReplicaSetCheckpointTsUsesMinOfMergedReplicas(t *testing.T) {
+	spanController, toMergedReplicaSets, occupyOperators, _ := setupMergeTestEnvironmentWithCheckpointTs(t, 1500, 1000)
+
+	op := NewMergeDispatcherOperator(spanController, toMergedReplicaSets, occupyOperators)
+	require.NotNil(t, op)
+	// The merged replica should inherit a safe checkpointTs to avoid regressing global checkpoint.
+	require.Equal(t, uint64(1000), op.newReplicaSet.GetStatus().GetCheckpointTs())
 }

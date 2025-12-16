@@ -254,3 +254,22 @@ func TestMoveOperator_OriginNodeRemovedAfterOriginStopped(t *testing.T) {
 	op.Check(nodeB, workingStatus)
 	require.True(t, op.IsFinished())
 }
+
+func TestMoveOperator_BothNodesRemovedBeforeStartDoesNotLeaveSchedulingWithoutNodeID(t *testing.T) {
+	messageCenter, _, _ := messaging.NewMessageCenterForTest(t)
+	appcontext.SetService(appcontext.MessageCenter, messageCenter)
+
+	spanController, changefeedID, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
+	spanController.AddReplicatingSpan(replicaSet)
+
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	setAliveNodes(nodeManager, map[node.ID]*node.Info{})
+
+	oc := NewOperatorController(changefeedID, spanController, 1, common.DefaultMode)
+	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB)
+	require.True(t, oc.AddOperator(op))
+
+	require.Equal(t, 1, spanController.GetAbsentSize())
+	require.Equal(t, 0, spanController.GetSchedulingSize())
+	require.Equal(t, "", replicaSet.GetNodeID().String())
+}
