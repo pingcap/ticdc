@@ -14,7 +14,6 @@
 package cli
 
 import (
-	"context"
 	"time"
 
 	"github.com/pingcap/ticdc/api/owner"
@@ -66,7 +65,7 @@ func (o *listChangefeedOptions) complete(f factory.Factory) error {
 
 // run the `cli changefeed list` command.
 func (o *listChangefeedOptions) run(cmd *cobra.Command) error {
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	raw, err := o.apiClient.Changefeeds().List(ctx, o.keyspace, "all")
 	if err != nil {

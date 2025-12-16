@@ -160,7 +160,7 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) {
 	if protocol == config.ProtocolAvro {
 		o.codecConfig.AvroEnableWatermark = true
 	}
-	o.enableTableAcrossNodes = replicaConfig.Scheduler.EnableTableAcrossNodes
+	o.enableTableAcrossNodes = putil.GetOrZero(replicaConfig.Scheduler.EnableTableAcrossNodes)
 
 	log.Info("consumer option adjusted",
 		zap.String("address", strings.Join(o.address, ",")),

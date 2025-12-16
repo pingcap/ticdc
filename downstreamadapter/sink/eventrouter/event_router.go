@@ -21,6 +21,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/util"
 	tableFilter "github.com/pingcap/tidb/pkg/util/table-filter"
 )
 
@@ -56,7 +57,7 @@ func NewEventRouter(
 		if err != nil {
 			return nil, cerror.WrapError(cerror.ErrFilterRuleInvalid, err, ruleConfig.Matcher)
 		}
-		if !sinkConfig.CaseSensitive {
+		if !util.GetOrZero(sinkConfig.CaseSensitive) {
 			f = tableFilter.CaseInsensitive(f)
 		}
 		d := partition.NewGenerator(ruleConfig.PartitionRule, isPulsar, ruleConfig.IndexName, ruleConfig.Columns)

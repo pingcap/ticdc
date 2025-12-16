@@ -20,6 +20,7 @@ import (
 
 	"github.com/pingcap/log"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -32,35 +33,35 @@ const (
 type ChangefeedSchedulerConfig struct {
 	// EnableTableAcrossNodes set true to split one table to multiple spans and
 	// distribute to multiple TiCDC nodes.
-	EnableTableAcrossNodes bool `toml:"enable-table-across-nodes" json:"enable-table-across-nodes"`
+	EnableTableAcrossNodes *bool `toml:"enable-table-across-nodes" json:"enable-table-across-nodes,omitempty"`
 	// RegionThreshold is the region count threshold of splitting a table.
-	RegionThreshold int `toml:"region-threshold" json:"region-threshold"`
+	RegionThreshold *int `toml:"region-threshold" json:"region-threshold,omitempty"`
 	// RegionCountPerSpan is the maximax region count for each span when first splitted by RegionCountSpliiter
-	RegionCountPerSpan int `toml:"region-count-per-span" json:"region-count-per-span"`
+	RegionCountPerSpan *int `toml:"region-count-per-span" json:"region-count-per-span,omitempty"`
 	// WriteKeyThreshold is the written keys threshold of splitting a table.
-	WriteKeyThreshold int `toml:"write-key-threshold" json:"write-key-threshold"`
+	WriteKeyThreshold *int `toml:"write-key-threshold" json:"write-key-threshold,omitempty"`
 	// SchedulingTaskCountPerNode is the upper limit for scheduling tasks each node.
-	SchedulingTaskCountPerNode int `toml:"scheduling-task-count-per-node" json:"scheduling-task-count-per-node"`
+	SchedulingTaskCountPerNode *int `toml:"scheduling-task-count-per-node" json:"scheduling-task-count-per-node,omitempty"`
 	// EnableSplittableCheck controls whether to check if a table is splittable before splitting.
 	// If true, only tables with primary key and no unique key can be split.
 	// If false, all tables can be split without checking.
 	// For MySQL downstream, this is always set to true for data consistency.
-	EnableSplittableCheck bool `toml:"enable-splittable-check" json:"enable-splittable-check"`
+	EnableSplittableCheck *bool `toml:"enable-splittable-check" json:"enable-splittable-check"`
 	// ForceSplit controls whether to skip the splittable table check for MySQL downstream.
 	// If true, the splittable table check will be skipped even if the downstream is MySQL.
 	// This is useful for advanced users who are aware of the risks of splitting unsplittable tables.
 	// Default value is false.
-	ForceSplit bool `toml:"force-split" json:"force-split"`
+	ForceSplit *bool `toml:"force-split" json:"force-split"`
 	// These config is used for adjust the frequency of balancing traffic.
 	// BalanceScoreThreshold is the score threshold for balancing traffic. Larger value means less frequent balancing.
 	// Default value is 20
-	BalanceScoreThreshold int `toml:"balance-score-threshold" json:"balance-score-threshold"`
+	BalanceScoreThreshold *int `toml:"balance-score-threshold" json:"balance-score-threshold,omitempty"`
 	// MinTrafficPercentage is the minimum traffic percentage for balancing traffic. Larger value means less frequent balancing.
 	// MinTrafficPercentage must be less then 1. Default value is 0.8
-	MinTrafficPercentage float64 `toml:"min-traffic-percentage" json:"min-traffic-percentage"`
+	MinTrafficPercentage *float64 `toml:"min-traffic-percentage" json:"min-traffic-percentage,omitempty"`
 	// MaxTrafficPercentage is the maximum traffic percentage for balancing traffic. Less value means less frequent balancing.
 	// MaxTrafficPercentage must be greater then 1. Default value is 1.25
-	MaxTrafficPercentage float64 `toml:"max-traffic-percentage" json:"max-traffic-percentage"`
+	MaxTrafficPercentage *float64 `toml:"max-traffic-percentage" json:"max-traffic-percentage,omitempty"`
 }
 
 // FillMissingWithDefaults copies default values into invalid or zero fields.
@@ -68,72 +69,73 @@ func (c *ChangefeedSchedulerConfig) FillMissingWithDefaults(defaultCfg *Changefe
 	if c == nil || defaultCfg == nil {
 		return
 	}
-	if c.RegionThreshold <= 0 {
+	if util.GetOrZero(c.RegionThreshold) <= 0 {
 		c.RegionThreshold = defaultCfg.RegionThreshold
 	}
-	if c.RegionCountPerSpan <= 0 {
+	if util.GetOrZero(c.RegionCountPerSpan) <= 0 {
 		c.RegionCountPerSpan = defaultCfg.RegionCountPerSpan
 	}
-	if c.WriteKeyThreshold < 0 {
+	if util.GetOrZero(c.WriteKeyThreshold) < 0 {
 		c.WriteKeyThreshold = defaultCfg.WriteKeyThreshold
 	}
-	if c.SchedulingTaskCountPerNode <= 0 {
+	if util.GetOrZero(c.SchedulingTaskCountPerNode) <= 0 {
 		c.SchedulingTaskCountPerNode = defaultCfg.SchedulingTaskCountPerNode
 	}
-	if c.BalanceScoreThreshold <= 0 {
+	if util.GetOrZero(c.BalanceScoreThreshold) <= 0 {
 		c.BalanceScoreThreshold = defaultCfg.BalanceScoreThreshold
 	}
-	if c.MinTrafficPercentage <= 0 || c.MinTrafficPercentage >= 1 {
+	if util.GetOrZero(c.MinTrafficPercentage) <= 0 || util.GetOrZero(c.MinTrafficPercentage) >= 1 {
 		c.MinTrafficPercentage = defaultCfg.MinTrafficPercentage
 	}
-	if c.MaxTrafficPercentage <= 1 {
+	if util.GetOrZero(c.MaxTrafficPercentage) <= 1 {
 		c.MaxTrafficPercentage = defaultCfg.MaxTrafficPercentage
 	}
 }
 
 // Validate validates the config.
 func (c *ChangefeedSchedulerConfig) ValidateAndAdjust(sinkURI *url.URL) error {
-	if !c.EnableTableAcrossNodes {
+	if !util.GetOrZero(c.EnableTableAcrossNodes) {
 		return nil
 	}
-	if c.RegionThreshold < 0 {
+	if util.GetOrZero(c.RegionThreshold) < 0 {
 		return errors.New("region-threshold must be larger than 0")
 	}
-	if c.WriteKeyThreshold < 0 {
+	if util.GetOrZero(c.WriteKeyThreshold) < 0 {
 		return errors.New("write-key-threshold must be larger than 0")
 	}
 
 	// Validate and adjust WriteKeyThreshold if it's too small
-	if c.WriteKeyThreshold > 0 && c.WriteKeyThreshold < MinWriteKeyThreshold {
+	if util.GetOrZero(c.WriteKeyThreshold) > 0 && util.GetOrZero(c.WriteKeyThreshold) < MinWriteKeyThreshold {
 		log.Warn("WriteKeyThreshold is set too small, adjusting to minimum recommended value",
-			zap.Int("configuredValue", c.WriteKeyThreshold),
+			zap.Int("configuredValue", util.GetOrZero(c.WriteKeyThreshold)),
 			zap.Int("adjustedValue", MinWriteKeyThreshold),
 			zap.String("reason", "small values may cause performance issues and frequent table splitting"))
-		c.WriteKeyThreshold = MinWriteKeyThreshold
+		c.WriteKeyThreshold = util.AddressOf(MinWriteKeyThreshold)
 	}
-	if c.SchedulingTaskCountPerNode < 0 {
+	if util.GetOrZero(c.SchedulingTaskCountPerNode) < 0 {
 		return errors.New("scheduling-task-count-per-node must be larger than 0")
 	}
-	if c.RegionCountPerSpan <= 0 {
+	if util.GetOrZero(c.RegionCountPerSpan) <= 0 {
 		return errors.New("region-count-per-span must be larger than 0")
 	}
 
-	if c.BalanceScoreThreshold <= 0 {
+	if util.GetOrZero(c.BalanceScoreThreshold) <= 0 {
 		return errors.New("balance-score-threshold must be larger than 0")
 	}
 
-	if c.MinTrafficPercentage <= 0 || c.MinTrafficPercentage >= 1 {
+	if util.GetOrZero(c.MinTrafficPercentage) <= 0 || util.GetOrZero(c.MinTrafficPercentage) >= 1 {
 		return errors.New("min-traffic-percentage must be between 0 and 1")
 	}
 
-	if c.MaxTrafficPercentage <= 1 {
+	if util.GetOrZero(c.MaxTrafficPercentage) <= 1 {
 		return errors.New("max-traffic-percentage must be greater than 1")
 	}
 
-	if IsMySQLCompatibleScheme(sinkURI.Scheme) && !c.ForceSplit {
-		c.EnableSplittableCheck = true
-	} else if c.ForceSplit {
-		c.EnableSplittableCheck = false
+	forceSplit := util.GetOrZero(c.ForceSplit)
+	if IsMySQLCompatibleScheme(sinkURI.Scheme) && !forceSplit {
+		c.EnableSplittableCheck = util.AddressOf(true)
+	} else if forceSplit {
+		c.EnableSplittableCheck = util.AddressOf(false)
 	}
 	return nil
 }
