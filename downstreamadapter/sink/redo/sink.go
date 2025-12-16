@@ -127,7 +127,20 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 }
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
+	toRowCallback := func(postTxnFlushed []func(), totalCount uint64) func() {
+		var calledCount atomic.Uint64
+		// The callback of the last row will trigger the callback of the txn.
+		return func() {
+			if calledCount.Inc() == totalCount {
+				for _, callback := range postTxnFlushed {
+					callback()
+				}
+			}
+		}
+	}
 	_ = s.statistics.RecordBatchExecution(func() (int, int64, error) {
+		rowsCount := uint64(event.Len())
+		rowCallback := toRowCallback(event.PostTxnFlushed, rowsCount)
 		for {
 			row, ok := event.GetNextRow()
 			if !ok {
@@ -140,9 +153,8 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 				Event:           row,
 				PhysicalTableID: event.PhysicalTableID,
 				TableInfo:       event.TableInfo,
-				Callback:        event.PostFlush,
+				Callback:        rowCallback,
 			}
-			log.Error("AddDMLEvent", zap.Any("e", e.ToRedoLog()))
 			s.logBuffer.Push(e)
 		}
 		return int(event.Len()), event.GetSize(), nil
@@ -197,7 +209,6 @@ func (s *Sink) sendMessages(ctx context.Context) error {
 			return ctx.Err()
 		default:
 			if e, ok := s.logBuffer.Get(); ok {
-				log.Error("sendMessages", zap.Any("e", e.ToRedoLog()))
 				err := s.dmlWriter.WriteEvents(ctx, e)
 				if err != nil {
 					return err

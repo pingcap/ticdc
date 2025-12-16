@@ -388,8 +388,6 @@ func (d *BasicDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // wakeCallback is used to wake the dynamic stream to handle the next batch events.
 // It will be called when all the events are flushed to downstream successfully.
 func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
-	log.Info("dispatcher handle events", zap.Any("dispatcherID", d.id), zap.Int("numEvents", len(dispatcherEvents)))
-
 	if d.GetRemovingStatus() {
 		log.Warn("dispatcher is removing", zap.Any("id", d.id))
 		return true
@@ -464,7 +462,6 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				// thus, we use tableProgress.Empty() to ensure these events are flushed to downstream completely
 				// and wake dynamic stream to handle the next events.
 				if d.tableProgress.Empty() {
-					log.Info("call wake", zap.Any("dispatcherID", d.id), zap.Any("dmlCommitTs", dml.GetCommitTs()), zap.Uint64("seq", dml.GetSeq()))
 					dmlWakeOnce.Do(wakeCallback)
 				}
 			})

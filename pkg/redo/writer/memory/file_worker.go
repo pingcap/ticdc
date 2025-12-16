@@ -224,21 +224,16 @@ func (f *fileWorkerGroup) bgWriteLogs(
 	defer ticker.Stop()
 	num := 0
 	cacheEventPostFlush := make([]func(), 0, redo.DefaultFlushBatchSize)
-	testEvents := make([]*commonEvent.RedoLog, 0, redo.DefaultFlushBatchSize)
 	flush := func() error {
 		err := f.flushAll(egCtx)
 		if err != nil {
 			return err
-		}
-		for _, e := range testEvents {
-			log.Error("flush event", zap.Any("e", e))
 		}
 		for _, fn := range cacheEventPostFlush {
 			fn()
 		}
 		num = 0
 		cacheEventPostFlush = cacheEventPostFlush[:0]
-		testEvents = testEvents[:0]
 		return nil
 	}
 	for {
@@ -255,7 +250,6 @@ func (f *fileWorkerGroup) bgWriteLogs(
 				log.Error("inputCh of redo file worker is closed unexpectedly")
 				return errors.ErrUnexpected.FastGenByArgs("inputCh of redo file worker is closed unexpectedly")
 			}
-			log.Error("writeToCache", zap.Any("e", event.ToRedoLog()))
 			err := f.writeToCache(egCtx, event)
 			if err != nil {
 				return errors.Trace(err)
@@ -267,10 +261,8 @@ func (f *fileWorkerGroup) bgWriteLogs(
 					return errors.Trace(err)
 				}
 				event.PostFlush()
-				log.Error("flush event", zap.Any("e", event.ToRedoLog()))
 			} else {
 				cacheEventPostFlush = append(cacheEventPostFlush, event.PostFlush)
-				testEvents = append(testEvents, event.ToRedoLog())
 			}
 		}
 	}
@@ -434,7 +426,6 @@ func (f *fileWorkerGroup) flushAll(egCtx context.Context) error {
 		if err != nil {
 			return errors.Trace(err)
 		}
-		log.Error("file flush", zap.Any("file", file.filename), zap.Any("ts", file.maxCommitTs))
 	}
 	f.files = f.files[:0]
 	return nil
