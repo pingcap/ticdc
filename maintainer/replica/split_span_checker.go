@@ -143,8 +143,7 @@ type SplitSpanChecker struct {
 	// when writeThreshold is 0, we don't check the traffic
 	writeThreshold int
 	// when regionThreshold is 0, we don't check the region count
-	regionThreshold        int
-	enableTableAcrossNodes bool
+	regionThreshold int
 
 	balanceScoreThreshold int
 	minTrafficPercentage  float64
@@ -188,7 +187,6 @@ func NewSplitSpanChecker(
 		allTasks:               make(map[common.DispatcherID]*splitSpanStatus),
 		writeThreshold:         util.GetOrZero(schedulerCfg.WriteKeyThreshold),
 		regionThreshold:        util.GetOrZero(schedulerCfg.RegionThreshold),
-		enableTableAcrossNodes: util.GetOrZero(schedulerCfg.EnableTableAcrossNodes),
 		balanceScoreThreshold:  util.GetOrZero(schedulerCfg.BalanceScoreThreshold),
 		minTrafficPercentage:   util.GetOrZero(schedulerCfg.MinTrafficPercentage),
 		maxTrafficPercentage:   util.GetOrZero(schedulerCfg.MaxTrafficPercentage),
@@ -210,7 +208,7 @@ func (s *SplitSpanChecker) AddReplica(replica *SpanReplication) {
 		lastThreeTraffic: make([]float64, 3),
 	}
 
-	if s.enableTableAcrossNodes && s.regionThreshold > 0 {
+	if s.regionThreshold > 0 {
 		s.refresher.addDispatcher(context.Background(), replica.ID, replica.Span)
 	}
 }
@@ -218,7 +216,7 @@ func (s *SplitSpanChecker) AddReplica(replica *SpanReplication) {
 func (s *SplitSpanChecker) RemoveReplica(replica *SpanReplication) {
 	delete(s.allTasks, replica.ID)
 
-	if s.enableTableAcrossNodes && s.regionThreshold > 0 {
+	if s.regionThreshold > 0 {
 		s.refresher.removeDispatcher(replica.ID)
 	}
 }
@@ -255,7 +253,7 @@ func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
 		status.lastThreeTraffic[0] = float64(status.GetStatus().EventSizePerSecond)
 	}
 
-	if s.enableTableAcrossNodes && s.regionThreshold > 0 {
+	if s.regionThreshold > 0 {
 		status.regionCount = s.refresher.getRegionCount(replica.ID)
 	}
 
