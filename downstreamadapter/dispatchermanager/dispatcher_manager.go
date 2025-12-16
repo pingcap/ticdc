@@ -842,8 +842,7 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 		e.sharedInfo.Close()
 	}
 
-	log.Info("closed shared info",
-		zap.Stringer("changefeedID", e.changefeedID))
+	log.Info("shared info closed", zap.Stringer("changefeedID", e.changefeedID))
 
 	if e.RedoEnable {
 		e.redoSink.Close(removeChangefeed)
@@ -851,6 +850,8 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 		e.closeRedoMeta(removeChangefeed)
 	}
 	e.sink.Close(removeChangefeed)
+	log.Info("sink closed", zap.Stringer("changefeedID", e.changefeedID))
+
 	e.wg.Wait()
 
 	e.removeTaskHandles.Range(func(key, value interface{}) bool {
