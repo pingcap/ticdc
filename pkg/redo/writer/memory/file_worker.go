@@ -426,6 +426,7 @@ func (f *fileWorkerGroup) flushAll(egCtx context.Context) error {
 		if err != nil {
 			return errors.Trace(err)
 		}
+		log.Error("file flush", zap.Any("file", file.filename), zap.Any("ts", file.maxCommitTs))
 	}
 	f.files = f.files[:0]
 	return nil
