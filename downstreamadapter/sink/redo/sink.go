@@ -134,14 +134,16 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 				event.Rewind()
 				break
 			}
-			s.logBuffer.Push(&commonEvent.RedoRowEvent{
+			e := &commonEvent.RedoRowEvent{
 				StartTs:         event.StartTs,
 				CommitTs:        event.CommitTs,
 				Event:           row,
 				PhysicalTableID: event.PhysicalTableID,
 				TableInfo:       event.TableInfo,
 				Callback:        event.PostFlush,
-			})
+			}
+			log.Error("AddDMLEvent", zap.Any("e", e.ToRedoLog()))
+			s.logBuffer.Push(e)
 		}
 		return int(event.Len()), event.GetSize(), nil
 	})
@@ -195,6 +197,7 @@ func (s *Sink) sendMessages(ctx context.Context) error {
 			return ctx.Err()
 		default:
 			if e, ok := s.logBuffer.Get(); ok {
+				log.Error("sendMessages", zap.Any("e", e.ToRedoLog()))
 				err := s.dmlWriter.WriteEvents(ctx, e)
 				if err != nil {
 					return err

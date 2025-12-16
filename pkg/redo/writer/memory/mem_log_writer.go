@@ -106,6 +106,7 @@ func (l *memoryLogWriter) asyncWriteEvents(ctx context.Context, events ...writer
 				zap.String("capture", l.cfg.CaptureID))
 			continue
 		}
+		log.Error("asyncWriteEvents", zap.Any("e", e.ToRedoLog()))
 		if err := l.fileWorkers.input(ctx, e); err != nil {
 			return err
 		}
