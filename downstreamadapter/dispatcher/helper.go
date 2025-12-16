@@ -350,6 +350,7 @@ func (h *DispatcherStatusHandler) Handle(dispatcher Dispatcher, events ...Dispat
 	if len(events) != 1 {
 		panic("invalid event count")
 	}
+	log.Info("DispatcherStatusHandler handle dispatcher status", zap.Any("dispatcherID", events[0].GetDispatcherID()))
 	return dispatcher.HandleDispatcherStatus(events[0].GetDispatcherStatus())
 }
 

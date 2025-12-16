@@ -30,37 +30,37 @@ group_num=${group#G}
 # 12 CPU cores will be allocated to run each mysql heavy group in CI pipelines.
 mysql_groups=(
 	# G00
-	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl
+	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl'
 	# G01
-	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl
+	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl'
 	# G02
-	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl
+	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl'
 	# G03
-	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl
+	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl'
 	# G04
-	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl
+	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl'
 	# G05
-	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl
+	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl'
 	# G06
-	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl
+	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl'
 	# G07
-	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl
+	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl'
 	# G08
-	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl
+	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl''
 	# G09
-	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl
+	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl'
 	# G10
-	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl
+	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl'
 	# G11
-	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl
+	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl'
 	# G12
-	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl
+	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl'
 	# G13
-	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl
+	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl'
 	# G14
-	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl
+	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl'
 	# G15
-	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl
+	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl'
 )
 
 # 12 CPU cores will be allocated to run each kafka heavy group in CI pipelines.
