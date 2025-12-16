@@ -120,6 +120,19 @@ func (t *MergeCheckTask) Execute() time.Time {
 		return time.Time{}
 	}
 
+	sinkType := getSinkType(t.mergedDispatcher, t.manager)
+	if common.IsRedoMode(t.mergedDispatcher.GetMode()) {
+		if needAbort, abortReason := shouldAbortMerge(t, t.manager.redoDispatcherMap); needAbort {
+			abortMerge(t, t.manager.redoDispatcherMap, sinkType, abortReason)
+			return time.Time{}
+		}
+	} else {
+		if needAbort, abortReason := shouldAbortMerge(t, t.manager.dispatcherMap); needAbort {
+			abortMerge(t, t.manager.dispatcherMap, sinkType, abortReason)
+			return time.Time{}
+		}
+	}
+
 	if t.mergedDispatcher.GetComponentStatus() != heartbeatpb.ComponentState_MergeReady {
 		return time.Now().Add(time.Second * 1)
 	}
@@ -170,6 +183,12 @@ func abortMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispa
 	// Stop retrying and cleanup best-effort.
 	t.Cancel()
 
+	eventCollector := appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector)
+	memoryQuota := t.manager.sinkQuota
+	if common.IsRedoMode(t.mergedDispatcher.GetMode()) {
+		memoryQuota = t.manager.redoQuota
+	}
+
 	for _, id := range t.dispatcherIDs {
 		dispatcherItem, ok := dispatcherMap.Get(id)
 		if !ok {
@@ -180,6 +199,11 @@ func abortMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispa
 		}
 		if dispatcherItem.GetComponentStatus() == heartbeatpb.ComponentState_WaitingMerge {
 			dispatcherItem.SetComponentStatus(heartbeatpb.ComponentState_Working)
+		}
+		// Merge closes and detaches source dispatchers from event collector. If merge aborts,
+		// re-register the dispatchers so they can resume receiving events.
+		if !eventCollector.HasDispatcher(id) {
+			eventCollector.AddDispatcher(dispatcherItem, memoryQuota)
 		}
 	}
 
@@ -193,12 +217,7 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 		zap.Any("dispatcherIDs", t.dispatcherIDs),
 		zap.Any("mergedDispatcher", t.mergedDispatcher.GetId()),
 	)
-	var sinkType common.SinkType
-	if common.IsRedoMode(t.mergedDispatcher.GetMode()) {
-		sinkType = t.manager.redoSink.SinkType()
-	} else {
-		sinkType = t.manager.sink.SinkType()
-	}
+	sinkType := getSinkType(t.mergedDispatcher, t.manager)
 
 	// Step1: close all dispatchers to be merged, calculate the min checkpointTs of the merged dispatcher
 	minCheckpointTs := uint64(math.MaxUint64)
