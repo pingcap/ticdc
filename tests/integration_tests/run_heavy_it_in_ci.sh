@@ -46,7 +46,7 @@ mysql_groups=(
 	# G07
 	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl'
 	# G08
-	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl''
+	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl'
 	# G09
 	'consistent_replicate_ddl consistent_replicate_ddl consistent_replicate_ddl'
 	# G10
