@@ -192,6 +192,15 @@ func TestRemoveChangefeed(t *testing.T) {
 		SinkURI:      "mysql://127.0.0.1:3306",
 	},
 		1, true)
+	go func() {
+		for {
+			op := controller.operatorController.GetOperator(cfID)
+			if op != nil {
+				op.OnTaskRemoved()
+			}
+			time.Sleep(time.Second)
+		}
+	}()
 	changefeedDB.AddReplicatingMaintainer(cf, "node1")
 	// no changefeed
 	_, err := controller.RemoveChangefeed(context.Background(), common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceNamme))
