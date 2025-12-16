@@ -224,6 +224,7 @@ func (f *fileWorkerGroup) bgWriteLogs(
 	defer ticker.Stop()
 	num := 0
 	cacheEventPostFlush := make([]func(), 0, redo.DefaultFlushBatchSize)
+	testEvents := make([]*commonEvent.RedoLog, 0, redo.DefaultFlushBatchSize)
 	flush := func() error {
 		err := f.flushAll(egCtx)
 		if err != nil {
@@ -232,8 +233,12 @@ func (f *fileWorkerGroup) bgWriteLogs(
 		for _, fn := range cacheEventPostFlush {
 			fn()
 		}
+		for _, e := range testEvents {
+			log.Error("flush event", zap.Any("e", e))
+		}
 		num = 0
 		cacheEventPostFlush = cacheEventPostFlush[:0]
+		testEvents = testEvents[:0]
 		return nil
 	}
 	for {
@@ -261,8 +266,10 @@ func (f *fileWorkerGroup) bgWriteLogs(
 					return errors.Trace(err)
 				}
 				event.PostFlush()
+				log.Error("flush event", zap.Any("e", event.ToRedoLog()))
 			} else {
 				cacheEventPostFlush = append(cacheEventPostFlush, event.PostFlush)
+				testEvents = append(testEvents, event.ToRedoLog())
 			}
 		}
 	}
