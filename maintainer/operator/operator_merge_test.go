@@ -130,3 +130,39 @@ func TestMergeOperator_NodeRemovedBeforeWorking(t *testing.T) {
 		require.True(t, occupyOp.IsFinished())
 	}
 }
+
+// TestMergeOperator_TaskRemovedByDDLBeforeWorking tests the scenario where:
+// 1. A merge operation is initiated to merge multiple spans on node A
+// 2. Before the merged dispatcher reports working status, a DDL removes the task
+// 3. Verify that the operator is marked as finished and does not mark original spans as absent
+// 4. Verify that the merged span is removed from span controller
+// 5. Verify that occupy operators are marked as finished
+func TestMergeOperator_TaskRemovedByDDLBeforeWorking(t *testing.T) {
+	spanController, toMergedReplicaSets, occupyOperators, nodeA := setupMergeTestEnvironment(t)
+
+	op := NewMergeDispatcherOperator(spanController, toMergedReplicaSets, occupyOperators)
+	require.NotNil(t, op)
+
+	op.Start()
+	require.False(t, op.IsFinished())
+
+	absentSizeBefore := spanController.GetAbsentSize()
+	require.NotNil(t, spanController.GetTaskByID(op.ID()))
+
+	op.OnTaskRemoved()
+	require.True(t, op.IsFinished())
+	require.True(t, op.removed.Load())
+	require.True(t, op.ddlRemoved.Load())
+
+	op.PostFinish()
+
+	require.Equal(t, absentSizeBefore, spanController.GetAbsentSize())
+	for _, replicaSet := range toMergedReplicaSets {
+		require.Equal(t, nodeA, replicaSet.GetNodeID())
+	}
+	require.Nil(t, spanController.GetTaskByID(op.ID()))
+
+	for _, occupyOp := range occupyOperators {
+		require.True(t, occupyOp.IsFinished())
+	}
+}

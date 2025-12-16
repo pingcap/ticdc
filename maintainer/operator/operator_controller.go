@@ -248,23 +248,8 @@ func (oc *Controller) pollQueueingOperator() (
 	if item.IsRemoved.Load() {
 		return nil, true
 	}
-	// always call the PostFinish method to ensure the operator is cleaned up by itself.
 	if op.IsFinished() {
-		op.PostFinish()
-		item.IsRemoved.Store(true)
-
-		oc.mu.Lock()
-		delete(oc.operators, opID)
-		delete(oc.lastWarnTime, opID)
-		oc.mu.Unlock()
-
-		metrics.OperatorCount.WithLabelValues(common.DefaultKeyspaceNamme, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Dec()
-		metrics.OperatorDuration.WithLabelValues(common.DefaultKeyspaceNamme, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Observe(time.Since(item.CreatedAt).Seconds())
-		log.Info("operator finished",
-			zap.String("role", oc.role),
-			zap.Stringer("changefeedID", oc.changefeedID),
-			zap.String("operatorID", opID.String()),
-			zap.String("operator", op.String()))
+		oc.finalizeOperator(item, opID)
 		return nil, true
 	}
 	// log warn message for stil running operator
@@ -289,6 +274,9 @@ func (oc *Controller) pollQueueingOperator() (
 	now := time.Now()
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
+	if item.IsRemoved.Load() {
+		return nil, true
+	}
 	if now.Before(item.NotifyAt) {
 		heap.Push(&oc.runningQueue, item)
 		return nil, false
@@ -299,27 +287,60 @@ func (oc *Controller) pollQueueingOperator() (
 	return op, true
 }
 
-func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
-	oc.mu.Lock()
-	if old, ok := oc.operators[op.ID()]; ok {
-		oc.mu.Unlock()
+func (oc *Controller) finalizeOperator(
+	item *operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus],
+	opID common.DispatcherID,
+) {
+	if !item.IsRemoved.CompareAndSwap(false, true) {
+		return
+	}
+	op := item.OP
+	// Always call the PostFinish method to ensure the operator is cleaned up by itself.
+	op.PostFinish()
 
+	oc.mu.Lock()
+	if cur, ok := oc.operators[opID]; ok && cur == item {
+		delete(oc.operators, opID)
+	}
+	delete(oc.lastWarnTime, opID)
+	oc.mu.Unlock()
+
+	metrics.OperatorCount.WithLabelValues(common.DefaultKeyspaceNamme, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Dec()
+	metrics.OperatorDuration.WithLabelValues(common.DefaultKeyspaceNamme, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Observe(time.Since(item.CreatedAt).Seconds())
+	log.Info("operator finished",
+		zap.String("role", oc.role),
+		zap.Stringer("changefeedID", oc.changefeedID),
+		zap.String("operatorID", opID.String()),
+		zap.String("operator", op.String()))
+}
+
+func (oc *Controller) cancelOperator(opID common.DispatcherID) {
+	oc.mu.RLock()
+	item, ok := oc.operators[opID]
+	oc.mu.RUnlock()
+	if !ok {
+		return
+	}
+	item.OP.OnTaskRemoved()
+	oc.finalizeOperator(item, opID)
+}
+
+func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
+	oc.mu.RLock()
+	old, ok := oc.operators[op.ID()]
+	oc.mu.RUnlock()
+	if ok {
 		log.Info("replica set is removed, replace the old one",
 			zap.String("role", oc.role),
 			zap.Stringer("changefeedID", oc.changefeedID),
 			zap.String("replicaSet", old.OP.ID().String()),
 			zap.String("operator", old.OP.String()))
 		old.OP.OnTaskRemoved()
-		old.OP.PostFinish()
-		old.IsRemoved.Store(true)
-
-		oc.mu.Lock()
-		delete(oc.operators, op.ID())
-		delete(oc.lastWarnTime, op.ID())
-		oc.mu.Unlock()
-	} else {
-		oc.mu.Unlock()
+		oc.finalizeOperator(old, op.ID())
 	}
+	oc.mu.Lock()
+	delete(oc.lastWarnTime, op.ID())
+	oc.mu.Unlock()
 	oc.pushOperator(op)
 }
 
@@ -415,9 +436,8 @@ func (oc *Controller) AddMergeOperator(
 				zap.Int64("group", replicaSet.GetGroupID()),
 				zap.String("span", common.FormatTableSpan(replicaSet.Span)),
 				zap.String("operator", operator.String()))
-			// set prev op taskRemoved
 			for _, op := range operators {
-				op.OnTaskRemoved()
+				oc.cancelOperator(op.ID())
 			}
 			return nil
 		}
@@ -430,10 +450,10 @@ func (oc *Controller) AddMergeOperator(
 			zap.Stringer("changefeedID", oc.changefeedID),
 			zap.Any("mergeSpans", affectedReplicaSets),
 			zap.String("operator", mergeOperator.String()))
-		// set prev op taskRemoved
 		for _, op := range operators {
-			op.OnTaskRemoved()
+			oc.cancelOperator(op.ID())
 		}
+		oc.spanController.RemoveReplicatingSpan(mergeOperator.newReplicaSet)
 		return nil
 	}
 	log.Info("add merge operator",

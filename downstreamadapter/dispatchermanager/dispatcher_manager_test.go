@@ -437,3 +437,85 @@ func TestDoMergeWithThreeDispatchers(t *testing.T) {
 	_, exists = manager.dispatcherMap.Get(dispatcher3.GetId())
 	require.False(t, exists)
 }
+
+func TestDoMergeAbortWhenSourceDispatcherMissing(t *testing.T) {
+	manager := createTestManager(t)
+
+	dispatcher1 := createTestDispatcher(t, manager,
+		common.NewDispatcherID(),
+		1,
+		[]byte("a"),
+		[]byte("m"),
+	)
+	dispatcher2 := createTestDispatcher(t, manager,
+		common.NewDispatcherID(),
+		1,
+		[]byte("m"),
+		[]byte("z"),
+	)
+
+	manager.dispatcherMap.Set(dispatcher1.GetId(), dispatcher1)
+	manager.dispatcherMap.Set(dispatcher2.GetId(), dispatcher2)
+
+	mergedID := common.NewDispatcherID()
+	task := manager.mergeEventDispatcher([]common.DispatcherID{
+		dispatcher1.GetId(),
+		dispatcher2.GetId(),
+	}, mergedID)
+	require.NotNil(t, task)
+
+	manager.dispatcherMap.Delete(dispatcher1.GetId())
+
+	require.NotPanics(t, func() {
+		doMerge(task, task.manager.dispatcherMap)
+	})
+
+	mergedDispatcher, exists := manager.dispatcherMap.Get(mergedID)
+	require.True(t, exists)
+	require.True(t, mergedDispatcher.GetTryRemoving())
+
+	dispatcher2After, exists := manager.dispatcherMap.Get(dispatcher2.GetId())
+	require.True(t, exists)
+	require.Equal(t, heartbeatpb.ComponentState_Working, dispatcher2After.GetComponentStatus())
+}
+
+func TestDoMergeAbortWhenSourceDispatcherRemoving(t *testing.T) {
+	manager := createTestManager(t)
+
+	dispatcher1 := createTestDispatcher(t, manager,
+		common.NewDispatcherID(),
+		1,
+		[]byte("a"),
+		[]byte("m"),
+	)
+	dispatcher2 := createTestDispatcher(t, manager,
+		common.NewDispatcherID(),
+		1,
+		[]byte("m"),
+		[]byte("z"),
+	)
+
+	manager.dispatcherMap.Set(dispatcher1.GetId(), dispatcher1)
+	manager.dispatcherMap.Set(dispatcher2.GetId(), dispatcher2)
+
+	mergedID := common.NewDispatcherID()
+	task := manager.mergeEventDispatcher([]common.DispatcherID{
+		dispatcher1.GetId(),
+		dispatcher2.GetId(),
+	}, mergedID)
+	require.NotNil(t, task)
+
+	dispatcher1.SetTryRemoving()
+
+	require.NotPanics(t, func() {
+		doMerge(task, task.manager.dispatcherMap)
+	})
+
+	mergedDispatcher, exists := manager.dispatcherMap.Get(mergedID)
+	require.True(t, exists)
+	require.True(t, mergedDispatcher.GetTryRemoving())
+
+	dispatcher2After, exists := manager.dispatcherMap.Get(dispatcher2.GetId())
+	require.True(t, exists)
+	require.Equal(t, heartbeatpb.ComponentState_Working, dispatcher2After.GetComponentStatus())
+}

@@ -30,6 +30,7 @@ import (
 // OccupyDispatcherOperator is an operator to occupy a replica set not evolving.
 type OccupyDispatcherOperator struct {
 	replicaSet     *replica.SpanReplication
+	nodeID         node.ID
 	finished       atomic.Bool
 	removed        atomic.Bool
 	spanController *span.Controller
@@ -41,6 +42,7 @@ func NewOccupyDispatcherOperator(
 ) *OccupyDispatcherOperator {
 	return &OccupyDispatcherOperator{
 		replicaSet:     replicaSet,
+		nodeID:         replicaSet.GetNodeID(),
 		spanController: spanController,
 	}
 }
@@ -54,11 +56,15 @@ func (m *OccupyDispatcherOperator) Schedule() *messaging.TargetMessage {
 
 // OnNodeRemove is called when node offline, and the replicaset must already move to absent status and will be scheduled again
 func (m *OccupyDispatcherOperator) OnNodeRemove(n node.ID) {
+	if n == m.nodeID {
+		m.spanController.MarkSpanAbsent(m.replicaSet)
+		m.finished.Store(true)
+	}
 }
 
 // AffectedNodes returns the nodes affected by the operator
 func (m *OccupyDispatcherOperator) AffectedNodes() []node.ID {
-	return []node.ID{}
+	return []node.ID{m.nodeID}
 }
 
 func (m *OccupyDispatcherOperator) ID() common.DispatcherID {
