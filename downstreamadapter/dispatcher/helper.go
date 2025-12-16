@@ -253,7 +253,7 @@ type ResendTask struct {
 	taskHandle *threadpool.TaskHandle
 }
 
-const resendTimeInterval = 10 * time.Second
+const resendTimeInterval = 5 * time.Second
 
 func newResendTask(message *heartbeatpb.TableSpanBlockStatus, dispatcher Dispatcher, callback func()) *ResendTask {
 	taskScheduler := GetDispatcherTaskScheduler()
