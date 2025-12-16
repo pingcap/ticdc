@@ -16,15 +16,13 @@ import (
 	"sync"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/utils/chann"
 )
 
 const blockEventWorkerCount = 8
 
 type blockEventTask struct {
-	dispatcher *BasicDispatcher
-	event      commonEvent.BlockEvent
+	f func()
 }
 type blockEventExecutor struct {
 	queues []*chann.UnlimitedChannel[blockEventTask, any]
@@ -46,16 +44,18 @@ func newBlockEventExecutor() *blockEventExecutor {
 				if !ok {
 					return
 				}
-				task.dispatcher.DealWithBlockEvent(task.event)
+				if task.f != nil {
+					task.f()
+				}
 			}
 		}(queue)
 	}
 	return executor
 }
 
-func (e *blockEventExecutor) Submit(dispatcher *BasicDispatcher, event commonEvent.BlockEvent) {
+func (e *blockEventExecutor) Submit(dispatcher *BasicDispatcher, f func()) {
 	idx := common.GID(dispatcher.id).Hash(uint64(len(e.queues)))
-	e.queues[idx].Push(blockEventTask{dispatcher: dispatcher, event: event})
+	e.queues[idx].Push(blockEventTask{f: f})
 }
 
 func (e *blockEventExecutor) Close() {
