@@ -331,6 +331,7 @@ func (d *BasicDispatcher) GetCheckpointTs() uint64 {
 	}
 
 	if isEmpty {
+		log.Error("GetCheckpointTs", zap.Any("d", d.id), zap.Any("ts", max(checkpointTs, d.GetResolvedTs())), zap.Any("checkpointTs", checkpointTs), zap.Any("GetResolvedTs", d.GetResolvedTs()))
 		return max(checkpointTs, d.GetResolvedTs())
 	}
 	return checkpointTs

@@ -230,11 +230,11 @@ func (f *fileWorkerGroup) bgWriteLogs(
 		if err != nil {
 			return err
 		}
-		for _, fn := range cacheEventPostFlush {
-			fn()
-		}
 		for _, e := range testEvents {
 			log.Error("flush event", zap.Any("e", e))
+		}
+		for _, fn := range cacheEventPostFlush {
+			fn()
 		}
 		num = 0
 		cacheEventPostFlush = cacheEventPostFlush[:0]
