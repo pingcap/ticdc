@@ -30,29 +30,37 @@ group_num=${group#G}
 # 12 CPU cores will be allocated to run each mysql heavy group in CI pipelines.
 mysql_groups=(
 	# G00
-	'consistent_replicate_storage_file consistent_replicate_storage_file consistent_replicate_storage_file consistent_replicate_storage_file'
-	# G11
-	'consistent_replicate_storage_file consistent_replicate_storage_file consistent_replicate_storage_file consistent_replicate_storage_file'
-	# G12
-	'consistent_replicate_storage_file consistent_replicate_storage_file consistent_replicate_storage_file consistent_replicate_storage_file'
-	# G13
-	'consistent_replicate_storage_file consistent_replicate_storage_file consistent_replicate_storage_file consistent_replicate_storage_file'
-	# G14
-	'consistent_replicate_storage_file consistent_replicate_storage_file consistent_replicate_storage_file consistent_replicate_storage_file'
-	# G15
-	'consistent_replicate_storage_file consistent_replicate_storage_file consistent_replicate_storage_file consistent_replicate_storage_file'
+	'api_v2 generate_column many_pk_or_uk multi_source'
+	# G01
+	'ddl_for_split_tables_with_random_move_table'
+	# G02
+	'ddl_for_split_tables_with_failover'
+	# G03
+	'cdc move_table checkpoint_race_ddl_crash'
+	# G04
+	'complex_transaction syncpoint syncpoint_check_ts random_drop_message'
+	# G05
+	'ddl_for_split_tables_with_merge_and_split'
+	# G06
+	'ddl_for_split_tables_with_random_merge_and_split'
+	# G07
+	'consistent_compatibility consistent_partition_table consistent_replicate_gbk consistent_replicate_ddl consistent_replicate_basic'
+	# G08
+	'default_value http_proxies bank ddl_for_split_tables_random_schedule'
+	# G09
+	'availability resolve_lock merge_table drop_many_tables ddl_for_split_tables'
 	# G10
-	'consistent_replicate_storage_file consistent_replicate_storage_file consistent_replicate_storage_file consistent_replicate_storage_file'
+	'consistent_replicate_nfs consistent_replicate_storage_file consistent_replicate_storage_file_large_value consistent_replicate_storage_s3'
 	# G11
-	'consistent_replicate_storage_file consistent_replicate_storage_file consistent_replicate_storage_file consistent_replicate_storage_file'
+	'multi_changefeeds ddl_wait ddl_reentrant force_replicate_table multi_source'
 	# G12
-	'consistent_replicate_storage_file consistent_replicate_storage_file consistent_replicate_storage_file consistent_replicate_storage_file'
+	'ddl_with_random_move_table'
 	# G13
-	'consistent_replicate_storage_file consistent_replicate_storage_file consistent_replicate_storage_file consistent_replicate_storage_file'
+	'tidb_mysql_test fail_over region_merge fail_over_ddl_mix_random_delay'
 	# G14
-	'consistent_replicate_storage_file consistent_replicate_storage_file consistent_replicate_storage_file consistent_replicate_storage_file'
+	'fail_over_ddl_mix'
 	# G15
-	'consistent_replicate_storage_file consistent_replicate_storage_file consistent_replicate_storage_file consistent_replicate_storage_file'
+	'fail_over_ddl_mix_with_syncpoint'
 )
 
 # 12 CPU cores will be allocated to run each kafka heavy group in CI pipelines.
