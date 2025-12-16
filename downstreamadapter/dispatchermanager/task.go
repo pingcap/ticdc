@@ -120,26 +120,6 @@ func (t *MergeCheckTask) Execute() time.Time {
 		return time.Time{}
 	}
 
-	if common.IsRedoMode(t.mergedDispatcher.GetMode()) {
-		sinkType := common.RedoSinkType
-		if t.manager.redoSink != nil {
-			sinkType = t.manager.redoSink.SinkType()
-		}
-		if needAbort, abortReason := shouldAbortMerge(t, t.manager.redoDispatcherMap); needAbort {
-			abortMerge(t, t.manager.redoDispatcherMap, sinkType, abortReason)
-			return time.Time{}
-		}
-	} else {
-		sinkType := common.BlackHoleSinkType
-		if t.manager.sink != nil {
-			sinkType = t.manager.sink.SinkType()
-		}
-		if needAbort, abortReason := shouldAbortMerge(t, t.manager.dispatcherMap); needAbort {
-			abortMerge(t, t.manager.dispatcherMap, sinkType, abortReason)
-			return time.Time{}
-		}
-	}
-
 	if t.mergedDispatcher.GetComponentStatus() != heartbeatpb.ComponentState_MergeReady {
 		return time.Now().Add(time.Second * 1)
 	}
@@ -215,22 +195,9 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 	)
 	var sinkType common.SinkType
 	if common.IsRedoMode(t.mergedDispatcher.GetMode()) {
-		if t.manager.redoSink != nil {
-			sinkType = t.manager.redoSink.SinkType()
-		} else {
-			sinkType = common.RedoSinkType
-		}
+		sinkType = t.manager.redoSink.SinkType()
 	} else {
-		if t.manager.sink != nil {
-			sinkType = t.manager.sink.SinkType()
-		} else {
-			sinkType = common.BlackHoleSinkType
-		}
-	}
-
-	if needAbort, abortReason := shouldAbortMerge(t, dispatcherMap); needAbort {
-		abortMerge(t, dispatcherMap, sinkType, abortReason)
-		return
+		sinkType = t.manager.sink.SinkType()
 	}
 
 	// Step1: close all dispatchers to be merged, calculate the min checkpointTs of the merged dispatcher
@@ -249,12 +216,7 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 			}
 			dispatcher, ok := dispatcherMap.Get(id)
 			if !ok {
-				abortMerge(t, dispatcherMap, sinkType, "source_dispatcher_missing")
-				return
-			}
-			if dispatcher.GetTryRemoving() || dispatcher.GetRemovingStatus() {
-				abortMerge(t, dispatcherMap, sinkType, "source_dispatcher_removing")
-				return
+				break
 			}
 			if count == 0 {
 				appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcher)
