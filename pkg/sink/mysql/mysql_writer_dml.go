@@ -654,7 +654,7 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 			if err = tx.Commit(); err != nil {
 				return 0, 0, err
 			}
-			log.Info("Exec Rows succeeded", zap.Any("sql", dmls.String()), zap.Int("writerID", w.id))
+			log.Debug("Exec Rows succeeded", zap.Any("rowCount", dmls.rowCount), zap.Int("writerID", w.id))
 		} else {
 			// use multi stmt way to execute the dmls
 			err := w.multiStmtExecute(dmls, writeTimeout)
@@ -772,7 +772,6 @@ func (w *Writer) multiStmtExecute(
 	if err != nil {
 		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", multiStmtSQLWithTxn, multiStmtArgs)))
 	}
-	log.Info("Exec Rows succeeded", zap.Any("sql", dmls.String()), zap.Int("writerID", w.id))
 	return nil
 }
 

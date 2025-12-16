@@ -147,15 +147,14 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 				event.Rewind()
 				break
 			}
-			e := &commonEvent.RedoRowEvent{
+			s.logBuffer.Push(&commonEvent.RedoRowEvent{
 				StartTs:         event.StartTs,
 				CommitTs:        event.CommitTs,
 				Event:           row,
 				PhysicalTableID: event.PhysicalTableID,
 				TableInfo:       event.TableInfo,
 				Callback:        rowCallback,
-			}
-			s.logBuffer.Push(e)
+			})
 		}
 		return int(event.Len()), event.GetSize(), nil
 	})
