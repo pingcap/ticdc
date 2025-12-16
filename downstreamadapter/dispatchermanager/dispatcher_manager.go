@@ -742,7 +742,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 		// Fill the missing watermarks with the final aggregated values to avoid
 		// reporting an uninitialized checkpoint.
 		for _, id := range redoDispatchersWithoutWatermark {
-			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.RedoWatermark.CheckpointTs))
+			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
 		}
 		for _, id := range eventDispatchersWithoutWatermark {
 			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
