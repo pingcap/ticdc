@@ -1,6 +1,6 @@
 # diff Configuration.
 
-check-thread-count = 16
+check-thread-count = 4
 
 export-fix-sql = true
 
@@ -21,11 +21,9 @@ check-struct-only = false
     port = 4000
     user = "root"
     password = ""
-    snapshot = "435953225454059520"
 
 [data-sources.tidb0]
     host = "127.0.0.1"
     port = 3306
     user = "root"
     password = ""
-    snapshot = "435953225454059520"
