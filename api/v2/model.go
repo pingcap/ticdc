@@ -513,6 +513,7 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 			EnableTableAcrossNodes:     c.Scheduler.EnableTableAcrossNodes,
 			RegionThreshold:            c.Scheduler.RegionThreshold,
 			RegionCountPerSpan:         c.Scheduler.RegionCountPerSpan,
+			RegionCountRefreshInterval: c.Scheduler.RegionCountRefreshInterval,
 			WriteKeyThreshold:          c.Scheduler.WriteKeyThreshold,
 			SchedulingTaskCountPerNode: c.Scheduler.SchedulingTaskCountPerNode,
 			EnableSplittableCheck:      c.Scheduler.EnableSplittableCheck,
@@ -842,6 +843,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 		res.Scheduler = &ChangefeedSchedulerConfig{
 			EnableTableAcrossNodes:     cloned.Scheduler.EnableTableAcrossNodes,
 			RegionThreshold:            cloned.Scheduler.RegionThreshold,
+			RegionCountRefreshInterval: cloned.Scheduler.RegionCountRefreshInterval,
 			RegionCountPerSpan:         cloned.Scheduler.RegionCountPerSpan,
 			WriteKeyThreshold:          cloned.Scheduler.WriteKeyThreshold,
 			SchedulingTaskCountPerNode: cloned.Scheduler.SchedulingTaskCountPerNode,
@@ -1059,6 +1061,8 @@ type ChangefeedSchedulerConfig struct {
 	RegionThreshold int `json:"region_threshold"`
 	// RegionCountPerSpan is the maximax region count for each span when first splitted by RegionCountSpliiter
 	RegionCountPerSpan int `json:"region_count_per_span"`
+	// RegionCountRefreshInterval controls how often we refresh span region count with PD.
+	RegionCountRefreshInterval time.Duration `json:"region_count_refresh_interval"`
 	// WriteKeyThreshold is the written keys threshold of splitting a table.
 	WriteKeyThreshold int `json:"write_key_threshold"`
 	// SchedulingTaskCountPerNode is the upper limit for scheduling tasks each node.

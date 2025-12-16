@@ -33,17 +33,24 @@ func createTestSpanReplication(cfID common.ChangeFeedID, tableID int64) *SpanRep
 	return NewSpanReplication(cfID, common.NewDispatcherID(), 0, &totalSpan, 1, common.DefaultMode, true)
 }
 
+func newTestDefaultChecker(t *testing.T, cfID common.ChangeFeedID, schedulerCfg *config.ChangefeedSchedulerConfig) *defaultSpanSplitChecker {
+	refresher := NewRegionCountRefresher(cfID, schedulerCfg.RegionCountRefreshInterval)
+	checker := NewDefaultSpanSplitChecker(cfID, schedulerCfg, refresher)
+	return checker
+}
+
 func TestDefaultSpanSplitChecker_AddReplica(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold: 1000,
-		RegionThreshold:   10,
+		WriteKeyThreshold:          1000,
+		RegionThreshold:            10,
+		RegionCountRefreshInterval: time.Minute,
 	}
 
 	mockCache := testutil.NewMockRegionCache()
 	appcontext.SetService(appcontext.RegionCache, mockCache)
 
-	checker := NewDefaultSpanSplitChecker(cfID, schedulerCfg)
+	checker := newTestDefaultChecker(t, cfID, schedulerCfg)
 
 	// Create a test replica
 	replica := createTestSpanReplication(cfID, 1)
@@ -69,11 +76,12 @@ func TestDefaultSpanSplitChecker_RemoveReplica(t *testing.T) {
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold: 1000,
-		RegionThreshold:   10,
+		WriteKeyThreshold:          1000,
+		RegionThreshold:            10,
+		RegionCountRefreshInterval: time.Minute,
 	}
 
-	checker := NewDefaultSpanSplitChecker(cfID, schedulerCfg)
+	checker := newTestDefaultChecker(t, cfID, schedulerCfg)
 
 	replica := createTestSpanReplication(cfID, 1)
 
@@ -90,13 +98,15 @@ func TestDefaultSpanSplitChecker_RemoveReplica(t *testing.T) {
 func TestDefaultSpanSplitChecker_UpdateStatus_TrafficCheck(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold: 1000,
-		RegionThreshold:   10,
+		EnableTableAcrossNodes:     true,
+		WriteKeyThreshold:          1000,
+		RegionThreshold:            10,
+		RegionCountRefreshInterval: time.Minute,
 	}
 
 	testutil.SetUpTestServices()
 
-	checker := NewDefaultSpanSplitChecker(cfID, schedulerCfg)
+	checker := newTestDefaultChecker(t, cfID, schedulerCfg)
 
 	replica := createTestSpanReplication(cfID, 1)
 
@@ -147,11 +157,13 @@ func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheck(t *testing.T) {
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold: 1000,
-		RegionThreshold:   5,
+		EnableTableAcrossNodes:     true,
+		WriteKeyThreshold:          1000,
+		RegionThreshold:            5,
+		RegionCountRefreshInterval: time.Minute,
 	}
 
-	checker := NewDefaultSpanSplitChecker(cfID, schedulerCfg)
+	checker := newTestDefaultChecker(t, cfID, schedulerCfg)
 
 	replica := createTestSpanReplication(cfID, 1)
 
@@ -170,7 +182,6 @@ func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheck(t *testing.T) {
 	checker.AddReplica(replica)
 
 	spanStatus := checker.allTasks[replica.ID]
-	spanStatus.regionCheckTime = time.Now().Add(-2 * regionCheckInterval)
 
 	status := &heartbeatpb.TableSpanStatus{
 		ID:                 replica.ID.ToPB(),
@@ -185,11 +196,6 @@ func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheck(t *testing.T) {
 	spanStatus = checker.allTasks[replica.ID]
 	require.Equal(t, 6, spanStatus.regionCount)
 	require.Contains(t, checker.splitReadyTasks, replica.ID)
-
-	// Test region check time interval
-	checker.UpdateStatus(replica)
-	spanStatus = checker.allTasks[replica.ID]
-	require.Equal(t, 6, spanStatus.regionCount) // Should not change due to time interval
 }
 
 func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheckError(t *testing.T) {
@@ -197,15 +203,16 @@ func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheckError(t *testing.T) {
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold: 1000,
-		RegionThreshold:   5,
+		WriteKeyThreshold:          1000,
+		RegionThreshold:            5,
+		RegionCountRefreshInterval: time.Minute,
 	}
 
 	// Mock region cache with error
 	mockCache := appcontext.GetService[*testutil.MockCache](appcontext.RegionCache)
 	mockCache.SetError(context.DeadlineExceeded)
 
-	checker := NewDefaultSpanSplitChecker(cfID, schedulerCfg)
+	checker := newTestDefaultChecker(t, cfID, schedulerCfg)
 
 	replica := createTestSpanReplication(cfID, 1)
 
@@ -219,9 +226,10 @@ func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheckError(t *testing.T) {
 	}
 	replica.UpdateStatus(status)
 
-	// Test region check error handling
-	checker.UpdateStatus(replica)
 	spanStatus := checker.allTasks[replica.ID]
+
+	// Test region check error handling
+	spanStatus = checker.allTasks[replica.ID]
 	require.Equal(t, 0, spanStatus.regionCount) // Should remain 0 due to error
 }
 
@@ -230,11 +238,12 @@ func TestDefaultSpanSplitChecker_UpdateStatus_NonWorkingStatus(t *testing.T) {
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold: 1000,
-		RegionThreshold:   5,
+		WriteKeyThreshold:          1000,
+		RegionThreshold:            5,
+		RegionCountRefreshInterval: time.Minute,
 	}
 
-	checker := NewDefaultSpanSplitChecker(cfID, schedulerCfg)
+	checker := newTestDefaultChecker(t, cfID, schedulerCfg)
 
 	replica := createTestSpanReplication(cfID, 1)
 
@@ -259,13 +268,27 @@ func TestDefaultSpanSplitChecker_CheckRegionSplit(t *testing.T) {
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold: 1000,
-		RegionThreshold:   5,
+		EnableTableAcrossNodes:     true,
+		WriteKeyThreshold:          1000,
+		RegionThreshold:            5,
+		RegionCountRefreshInterval: time.Minute,
 	}
 
-	checker := NewDefaultSpanSplitChecker(cfID, schedulerCfg)
+	checker := newTestDefaultChecker(t, cfID, schedulerCfg)
 
 	replica := createTestSpanReplication(cfID, 1)
+
+	// Mock regions
+	mockRegions := []*tikv.Region{
+		testutil.MockRegionWithID(1),
+		testutil.MockRegionWithID(2),
+		testutil.MockRegionWithID(3),
+		testutil.MockRegionWithID(4),
+		testutil.MockRegionWithID(5),
+		testutil.MockRegionWithID(6), // Above threshold
+	}
+	mockCache := appcontext.GetService[*testutil.MockCache](appcontext.RegionCache)
+	mockCache.SetRegions(fmt.Sprintf("%s-%s", replica.Span.StartKey, replica.Span.EndKey), mockRegions)
 
 	checker.AddReplica(replica)
 
@@ -280,7 +303,6 @@ func TestDefaultSpanSplitChecker_CheckRegionSplit(t *testing.T) {
 
 	// Set region count above threshold
 	spanStatus := checker.allTasks[replica.ID]
-	spanStatus.regionCheckTime = time.Now() // set region check time to now, to skip get region from query
 	spanStatus.regionCount = 10
 	checker.UpdateStatus(replica)
 
@@ -295,11 +317,12 @@ func TestDefaultSpanSplitChecker_Check_BatchLimit(t *testing.T) {
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold: 1000,
-		RegionThreshold:   5,
+		WriteKeyThreshold:          1000,
+		RegionThreshold:            5,
+		RegionCountRefreshInterval: time.Minute,
 	}
 
-	checker := NewDefaultSpanSplitChecker(cfID, schedulerCfg)
+	checker := newTestDefaultChecker(t, cfID, schedulerCfg)
 
 	// Add multiple replicas
 	for i := 0; i < 5; i++ {
@@ -330,11 +353,12 @@ func TestDefaultSpanSplitChecker_Check_EmptyResults(t *testing.T) {
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold: 1000,
-		RegionThreshold:   5,
+		WriteKeyThreshold:          1000,
+		RegionThreshold:            5,
+		RegionCountRefreshInterval: time.Minute,
 	}
 
-	checker := NewDefaultSpanSplitChecker(cfID, schedulerCfg)
+	checker := newTestDefaultChecker(t, cfID, schedulerCfg)
 
 	// Test empty results when no split ready tasks
 	results := checker.Check(10)
@@ -363,11 +387,12 @@ func TestDefaultSpanSplitChecker_Stat(t *testing.T) {
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold: 1000,
-		RegionThreshold:   5,
+		WriteKeyThreshold:          1000,
+		RegionThreshold:            5,
+		RegionCountRefreshInterval: time.Minute,
 	}
 
-	checker := NewDefaultSpanSplitChecker(cfID, schedulerCfg)
+	checker := newTestDefaultChecker(t, cfID, schedulerCfg)
 
 	// Test empty stat
 	stat := checker.Stat()

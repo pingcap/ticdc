@@ -100,6 +100,7 @@ var defaultReplicaConfig = &ReplicaConfig{
 		WriteKeyThreshold:          0,
 		SchedulingTaskCountPerNode: 20,  // TODO: choose a btter value
 		RegionCountPerSpan:         100, // TODO: choose a btter value
+		RegionCountRefreshInterval: 5 * time.Minute,
 		EnableSplittableCheck:      false,
 		ForceSplit:                 false,
 		BalanceScoreThreshold:      20,
