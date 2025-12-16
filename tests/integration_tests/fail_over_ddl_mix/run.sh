@@ -282,7 +282,7 @@ main_with_consistent() {
 		storage_path="file://$WORK_DIR/redo"
 		tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeed_id
 		current_tso=$(run_cdc_cli_tso_query $UP_PD_HOST_1 $UP_PD_PORT_1)
-		ensure 300 check_redo_resolved_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
+		ensure 50 check_redo_resolved_ts $changefeed_id $current_tso $storage_path $tmp_download_path/meta
 		cleanup_process $CDC_BINARY
 
 		cdc redo apply --log-level debug --tmp-dir="$tmp_download_path/apply" \
@@ -291,7 +291,7 @@ main_with_consistent() {
 		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
 	else
 		sleep 30
-		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
+		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 1000
 		cleanup_process $CDC_BINARY
 	fi
 }

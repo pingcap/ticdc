@@ -40,14 +40,15 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
+	"github.com/pingcap/ticdc/utils/heap"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
 
 var (
-	CounterKv           = metrics.EventStoreReceivedEventCount.WithLabelValues("kv")
-	CounterResolved     = metrics.EventStoreReceivedEventCount.WithLabelValues("resolved")
+	kvEventCount        = metrics.EventStoreReceivedEventCount.WithLabelValues("kv")
+	resolvedEventCount  = metrics.EventStoreReceivedEventCount.WithLabelValues("resolved")
 	scannedBytesMetrics = metrics.EventStoreScanBytes.WithLabelValues("scanned")
 	skippedBytesMetrics = metrics.EventStoreScanBytes.WithLabelValues("skipped")
 )
@@ -425,6 +426,8 @@ func (e *eventStore) RegisterDispatcher(
 		return false
 	}
 
+	enableDataSharing := config.GetGlobalServerConfig().Debug.EventStore.EnableDataSharing
+
 	lag := time.Since(oracle.GetTimeFromTS(startTs))
 	metrics.EventStoreRegisterDispatcherStartTsLagHist.Observe(lag.Seconds())
 	if lag >= 10*time.Second {
@@ -447,6 +450,7 @@ func (e *eventStore) RegisterDispatcher(
 				zap.Stringer("dispatcherID", dispatcherID),
 				zap.String("span", common.FormatTableSpan(dispatcherSpan)),
 				zap.Uint64("startTs", startTs),
+				zap.Bool("enableDataSharing", enableDataSharing),
 				zap.Bool("onlyReuse", onlyReuse),
 				zap.Duration("duration", time.Since(start)))
 		} else {
@@ -454,6 +458,7 @@ func (e *eventStore) RegisterDispatcher(
 				zap.Stringer("dispatcherID", dispatcherID),
 				zap.String("span", common.FormatTableSpan(dispatcherSpan)),
 				zap.Uint64("startTs", startTs),
+				zap.Bool("enableDataSharing", enableDataSharing),
 				zap.Bool("onlyReuse", onlyReuse),
 				zap.Duration("duration", time.Since(start)))
 		}
@@ -471,73 +476,75 @@ func (e *eventStore) RegisterDispatcher(
 		notifier(resolvedTs, latestCommitTs)
 	}
 
-	e.dispatcherMeta.Lock()
-	var bestMatch *subscriptionStat
-	if subStats, ok := e.dispatcherMeta.tableStats[dispatcherSpan.TableID]; ok {
-		for _, subStat := range subStats {
-			// Check if this subStat's span contains the dispatcherSpan
-			if bytes.Compare(subStat.tableSpan.StartKey, dispatcherSpan.StartKey) <= 0 &&
-				bytes.Compare(subStat.tableSpan.EndKey, dispatcherSpan.EndKey) >= 0 {
+	if enableDataSharing {
+		e.dispatcherMeta.Lock()
+		var bestMatch *subscriptionStat
+		if subStats, ok := e.dispatcherMeta.tableStats[dispatcherSpan.TableID]; ok {
+			for _, subStat := range subStats {
+				// Check if this subStat's span contains the dispatcherSpan
+				if bytes.Compare(subStat.tableSpan.StartKey, dispatcherSpan.StartKey) <= 0 &&
+					bytes.Compare(subStat.tableSpan.EndKey, dispatcherSpan.EndKey) >= 0 {
 
-				// For onlyReuse register request, we only consider initialized subStats
-				if onlyReuse && !subStat.initialized.Load() {
-					continue
-				}
+					// For onlyReuse register request, we only consider initialized subStats
+					if onlyReuse && !subStat.initialized.Load() {
+						continue
+					}
 
-				// Check whether the subStat ts range contains startTs
-				if subStat.checkpointTs.Load() > startTs || startTs > subStat.resolvedTs.Load() {
-					continue
-				}
+					// Check whether the subStat ts range contains startTs
+					if subStat.checkpointTs.Load() > startTs || startTs > subStat.resolvedTs.Load() {
+						continue
+					}
 
-				// If we find an exact match, use it immediately
-				if subStat.tableSpan.Equal(dispatcherSpan) {
-					stat.subStat = subStat
-					e.dispatcherMeta.dispatcherStats[dispatcherID] = stat
-					e.addSubscriberToSubStat(subStat, dispatcherID, &Subscriber{notifyFunc: wrappedNotifier})
-					e.dispatcherMeta.Unlock()
-					log.Info("reuse existing subscription with exact span match",
-						zap.Stringer("dispatcherID", dispatcherID),
-						zap.String("dispatcherSpan", common.FormatTableSpan(dispatcherSpan)),
-						zap.Uint64("startTs", startTs),
-						zap.Uint64("subscriptionID", uint64(subStat.subID)),
-						zap.String("subSpan", common.FormatTableSpan(subStat.tableSpan)),
-						zap.Uint64("checkpointTs", subStat.checkpointTs.Load()))
-					return true
-				}
+					// If we find an exact match, use it immediately
+					if subStat.tableSpan.Equal(dispatcherSpan) {
+						stat.subStat = subStat
+						e.dispatcherMeta.dispatcherStats[dispatcherID] = stat
+						e.addSubscriberToSubStat(subStat, dispatcherID, &Subscriber{notifyFunc: wrappedNotifier})
+						e.dispatcherMeta.Unlock()
+						log.Info("reuse existing subscription with exact span match",
+							zap.Stringer("dispatcherID", dispatcherID),
+							zap.String("dispatcherSpan", common.FormatTableSpan(dispatcherSpan)),
+							zap.Uint64("startTs", startTs),
+							zap.Uint64("subscriptionID", uint64(subStat.subID)),
+							zap.String("subSpan", common.FormatTableSpan(subStat.tableSpan)),
+							zap.Uint64("checkpointTs", subStat.checkpointTs.Load()))
+						return true
+					}
 
-				// Track the smallest containing span that meets ts requirements
-				// Note: this is still not bestMatch
-				// for example, if we have a dispatcher with span [b, c),
-				// it is hard to determine whether [a, d) or [b, h) is bestMatch without some statistics.
-				if bestMatch == nil ||
-					(bytes.Compare(subStat.tableSpan.StartKey, bestMatch.tableSpan.StartKey) >= 0 &&
-						bytes.Compare(subStat.tableSpan.EndKey, bestMatch.tableSpan.EndKey) <= 0) {
-					bestMatch = subStat
+					// Track the smallest containing span that meets ts requirements
+					// Note: this is still not bestMatch
+					// for example, if we have a dispatcher with span [b, c),
+					// it is hard to determine whether [a, d) or [b, h) is bestMatch without some statistics.
+					if bestMatch == nil ||
+						(bytes.Compare(subStat.tableSpan.StartKey, bestMatch.tableSpan.StartKey) >= 0 &&
+							bytes.Compare(subStat.tableSpan.EndKey, bestMatch.tableSpan.EndKey) <= 0) {
+						bestMatch = subStat
+					}
 				}
 			}
 		}
-	}
-	if bestMatch != nil {
-		stat.subStat = bestMatch
-		e.dispatcherMeta.dispatcherStats[dispatcherID] = stat
-		e.addSubscriberToSubStat(bestMatch, dispatcherID, &Subscriber{notifyFunc: wrappedNotifier})
+		if bestMatch != nil {
+			stat.subStat = bestMatch
+			e.dispatcherMeta.dispatcherStats[dispatcherID] = stat
+			e.addSubscriberToSubStat(bestMatch, dispatcherID, &Subscriber{notifyFunc: wrappedNotifier})
+			log.Info("reuse existing subscription with smallest containing span",
+				zap.Stringer("dispatcherID", dispatcherID),
+				zap.String("dispatcherSpan", common.FormatTableSpan(dispatcherSpan)),
+				zap.Uint64("startTs", startTs),
+				zap.Uint64("subscriptionID", uint64(bestMatch.subID)),
+				zap.String("subSpan", common.FormatTableSpan(bestMatch.tableSpan)),
+				zap.Uint64("resolvedTs", bestMatch.resolvedTs.Load()),
+				zap.Uint64("checkpointTs", bestMatch.checkpointTs.Load()),
+				zap.Bool("exactMatch", bestMatch.tableSpan.Equal(dispatcherSpan)))
+		}
 		e.dispatcherMeta.Unlock()
-		log.Info("reuse existing subscription with smallest containing span",
-			zap.Stringer("dispatcherID", dispatcherID),
-			zap.String("dispatcherSpan", common.FormatTableSpan(dispatcherSpan)),
-			zap.Uint64("startTs", startTs),
-			zap.Uint64("subscriptionID", uint64(bestMatch.subID)),
-			zap.String("subSpan", common.FormatTableSpan(bestMatch.tableSpan)),
-			zap.Uint64("resolvedTs", bestMatch.resolvedTs.Load()),
-			zap.Uint64("checkpointTs", bestMatch.checkpointTs.Load()),
-			zap.Bool("exactMatch", bestMatch.tableSpan.Equal(dispatcherSpan)))
-		// when onlyReuse is true, we don't need a exact span match
+
+		// when onlyReuse is true, we never create new subscription
 		if onlyReuse {
-			return true
+			return bestMatch != nil
 		}
 	} else {
-		e.dispatcherMeta.Unlock()
-		// when onlyReuse is true, we never create new subscription
+		// when onlyReuse is true, if data sharing is disabled, just return because we never create new subscription
 		if onlyReuse {
 			return false
 		}
@@ -612,7 +619,8 @@ func (e *eventStore) RegisterDispatcher(
 					subscriber.notifyFunc(ts, subStat.maxEventCommitTs.Load())
 				}
 			}
-			CounterResolved.Inc()
+			resolvedEventCount.Inc()
+			metrics.EventStoreNotifyDispatcherCount.Add(float64(len(subscribersData.subscribers)))
 			metrics.EventStoreNotifyDispatcherDurationHist.Observe(float64(time.Since(start).Seconds()))
 		}
 	}
@@ -1044,7 +1052,40 @@ func diskSpaceUsage(m *pebble.Metrics) uint64 {
 	return usageBytes
 }
 
+type slowSubscriptionLogEntry struct {
+	SubID              uint64  `json:"subID"`
+	ResolvedLagSeconds float64 `json:"resolvedLagSeconds"`
+	ResolvedTs         uint64  `json:"resolvedTs"`
+	CheckpointTs       uint64  `json:"checkpointTs"`
+	MaxEventCommitTs   uint64  `json:"maxEventCommitTs"`
+	LastAdvanceTime    string  `json:"lastAdvanceTime"`
+	LastReceiveDMLTime string  `json:"lastReceiveDMLTime"`
+	TableSpan          string  `json:"tableSpan"`
+	heapIndex          int     `json:"-"`
+}
+
+func (e *slowSubscriptionLogEntry) SetHeapIndex(idx int) {
+	e.heapIndex = idx
+}
+
+func (e *slowSubscriptionLogEntry) GetHeapIndex() int {
+	return e.heapIndex
+}
+
+func (e *slowSubscriptionLogEntry) LessThan(other *slowSubscriptionLogEntry) bool {
+	if e.ResolvedLagSeconds == other.ResolvedLagSeconds {
+		return e.SubID < other.SubID
+	}
+	return e.ResolvedLagSeconds < other.ResolvedLagSeconds
+}
+
+type uninitializedSubscriptionLogEntry struct {
+	SubID     uint64 `json:"subID"`
+	TableSpan string `json:"tableSpan"`
+}
+
 func (e *eventStore) collectAndReportStoreMetrics() {
+	const logEntryLimit = 10
 	for i, db := range e.dbs {
 		stats := db.Metrics()
 		id := strconv.Itoa(i + 1)
@@ -1060,6 +1101,9 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 	pdPhysicalTime := oracle.GetPhysical(pdCurrentTime)
 	globalMinResolvedTs := uint64(0)
 	uninitializedStatCount := 0
+	initializedStatCount := 0
+	slowestInitialized := heap.NewHeap[*slowSubscriptionLogEntry]()
+	uninitializedSamples := make([]uninitializedSubscriptionLogEntry, 0, logEntryLimit)
 	e.dispatcherMeta.RLock()
 	for _, subStats := range e.dispatcherMeta.tableStats {
 		for _, subStat := range subStats {
@@ -1070,28 +1114,50 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 			const largeResolvedTsLagInSecs = 30
 			const logInterval = 5 * time.Minute
 			if subStat.initialized.Load() {
+				initializedStatCount++
 				if subResolvedTsLagInSec >= largeResolvedTsLagInSecs {
+					lastAdvanceTime := time.UnixMilli(subStat.lastAdvanceTime.Load())
+					lastReceiveDMLTimeRepr := "never"
+					if lastReceiveDMLTime := subStat.lastReceiveDMLTime.Load(); lastReceiveDMLTime > 0 {
+						lastReceiveDMLTimeRepr = time.UnixMilli(lastReceiveDMLTime).String()
+					}
 					lastLogTime := subStat.lastLogLagTime.Load()
 					if time.Since(time.Unix(0, lastLogTime)) > logInterval {
-						lastReceiveDMLTimeRepr := "never"
-						if lastReceiveDMLTime := subStat.lastReceiveDMLTime.Load(); lastReceiveDMLTime > 0 {
-							lastReceiveDMLTimeRepr = time.UnixMilli(lastReceiveDMLTime).String()
-						}
 						log.Warn("resolved ts lag is too large for initialized subscription",
 							zap.Uint64("subID", uint64(subStat.subID)),
 							zap.Int64("tableID", subStat.tableSpan.TableID),
 							zap.Uint64("resolvedTs", subResolvedTs),
 							zap.Float64("resolvedLag(s)", subResolvedTsLagInSec),
-							zap.Stringer("lastAdvanceTime", time.UnixMilli(subStat.lastAdvanceTime.Load())),
+							zap.Stringer("lastAdvanceTime", lastAdvanceTime),
 							zap.String("lastReceiveDMLTime", lastReceiveDMLTimeRepr),
 							zap.String("tableSpan", common.FormatTableSpan(subStat.tableSpan)),
 							zap.Uint64("checkpointTs", subStat.checkpointTs.Load()),
 							zap.Uint64("maxEventCommitTs", subStat.maxEventCommitTs.Load()))
 						subStat.lastLogLagTime.Store(time.Now().UnixNano())
 					}
+					entry := &slowSubscriptionLogEntry{
+						SubID:              uint64(subStat.subID),
+						ResolvedLagSeconds: subResolvedTsLagInSec,
+						ResolvedTs:         subResolvedTs,
+						CheckpointTs:       subStat.checkpointTs.Load(),
+						MaxEventCommitTs:   subStat.maxEventCommitTs.Load(),
+						LastAdvanceTime:    lastAdvanceTime.String(),
+						LastReceiveDMLTime: lastReceiveDMLTimeRepr,
+						TableSpan:          common.FormatTableSpan(subStat.tableSpan),
+					}
+					slowestInitialized.AddOrUpdate(entry)
+					if slowestInitialized.Len() > logEntryLimit {
+						slowestInitialized.PopTop()
+					}
 				}
 			} else {
 				uninitializedStatCount++
+				if len(uninitializedSamples) < logEntryLimit {
+					uninitializedSamples = append(uninitializedSamples, uninitializedSubscriptionLogEntry{
+						SubID:     uint64(subStat.subID),
+						TableSpan: common.FormatTableSpan(subStat.tableSpan),
+					})
+				}
 			}
 			metrics.EventStoreSubscriptionResolvedTsLagHist.Observe(subResolvedTsLagInSec)
 			if globalMinResolvedTs == 0 || subResolvedTs < globalMinResolvedTs {
@@ -1105,8 +1171,25 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 		}
 	}
 	e.dispatcherMeta.RUnlock()
-	if uninitializedStatCount > 0 {
-		log.Info("found uninitialized subscriptions", zap.Int("count", uninitializedStatCount))
+	var slowestList []slowSubscriptionLogEntry
+	if slowestInitialized.Len() > 0 {
+		size := slowestInitialized.Len()
+		slowestList = make([]slowSubscriptionLogEntry, size)
+		for i := size - 1; i >= 0; i-- {
+			entry, ok := slowestInitialized.PopTop()
+			if !ok {
+				break
+			}
+			slowestList[i] = *entry
+		}
+	}
+	if len(slowestList) > 0 || uninitializedStatCount > 0 {
+		log.Info("subscription lag snapshot",
+			zap.Int("initializedCount", initializedStatCount),
+			zap.Int("slowestInitializedCount", len(slowestList)),
+			zap.Int("uninitializedCount", uninitializedStatCount),
+			zap.Any("slowestInitializedSubscriptions", slowestList),
+			zap.Any("uninitializedSubscriptions", uninitializedSamples))
 	}
 	if globalMinResolvedTs == 0 {
 		metrics.EventStoreResolvedTsLagGauge.Set(0)
@@ -1147,7 +1230,7 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback, enco
 			}
 		}
 	}
-	CounterKv.Add(float64(kvCount))
+	kvEventCount.Add(float64(kvCount))
 	metrics.EventStoreWriteBatchEventsCountHist.Observe(float64(kvCount))
 	metrics.EventStoreWriteBatchSizeHist.Observe(float64(batch.Len()))
 	metrics.EventStoreWriteBytes.Add(float64(batch.Len()))

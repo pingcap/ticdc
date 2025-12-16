@@ -1,0 +1,3 @@
+[consistent]
+level = "eventual"
+storage = "file:///tmp/tidb_cdc_test/fail_over_ddl_mix_random_delay/redo"

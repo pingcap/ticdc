@@ -78,6 +78,13 @@ var (
 			Name:      "subscribed_region_count",
 			Help:      "The number of locked ranges",
 		})
+	SubscriptionClientResolveLockTaskDropCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "subscription_client",
+			Name:      "resolve_lock_task_drop_count",
+			Help:      "The number of resolve lock tasks dropped before being processed",
+		})
 )
 
 func initLogPullerMetrics(registry *prometheus.Registry) {
@@ -88,4 +95,5 @@ func initLogPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(SubscriptionClientAddRegionRequestDuration)
 	registry.MustRegister(RegionRequestFinishScanDuration)
 	registry.MustRegister(SubscriptionClientSubscribedRegionCount)
+	registry.MustRegister(SubscriptionClientResolveLockTaskDropCounter)
 }

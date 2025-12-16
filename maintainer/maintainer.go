@@ -36,6 +36,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/redo"
 	pkgReplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -174,7 +175,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 
 	tableTriggerEventDispatcherID, ddlSpan := newDDLSpan(keyspaceID, cfID, checkpointTs, selfNode, common.DefaultMode)
 	var redoDDLSpan *replica.SpanReplication
-	enableRedo := redo.IsConsistentEnabled(info.Config.Consistent.Level)
+	enableRedo := redo.IsConsistentEnabled(util.GetOrZero(info.Config.Consistent.Level))
 	if enableRedo {
 		_, redoDDLSpan = newDDLSpan(keyspaceID, cfID, checkpointTs, selfNode, common.RedoMode)
 	}
@@ -883,7 +884,7 @@ func newDDLSpan(keyspaceID uint32, cfID common.ChangeFeedID, checkpointTs uint64
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    checkpointTs,
 			Mode:            mode,
-		}, selfNode.ID)
+		}, selfNode.ID, false)
 	return tableTriggerEventDispatcherID, ddlSpan
 }
 

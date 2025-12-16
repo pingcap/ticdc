@@ -59,6 +59,30 @@ func TestResumeChangefeed(t *testing.T) {
 	require.Equal(t, config.StateNormal, changefeedDB.GetByID(cfID).GetInfo().State)
 }
 
+func TestResumeChangefeedOverwriteUpdatesLastSavedCheckpointTs(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	controller := &Controller{
+		backend:      backend,
+		changefeedDB: changefeedDB,
+	}
+	cfID := common.NewChangeFeedIDWithName("test-overwrite", common.DefaultKeyspaceNamme)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateStopped,
+		SinkURI:      "mysql://127.0.0.1:3306",
+	}, 100, true)
+	cf.SetLastSavedCheckPointTs(200)
+	changefeedDB.AddStoppedChangefeed(cf)
+
+	newCheckpointTs := uint64(120)
+	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+	require.Nil(t, controller.ResumeChangefeed(context.Background(), cfID, newCheckpointTs, true))
+	require.Equal(t, newCheckpointTs, changefeedDB.GetByID(cfID).GetLastSavedCheckPointTs())
+}
+
 func TestPauseChangefeed(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)

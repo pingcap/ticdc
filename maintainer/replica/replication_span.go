@@ -55,8 +55,9 @@ func NewSpanReplication(cfID common.ChangeFeedID,
 	span *heartbeatpb.TableSpan,
 	checkpointTs uint64,
 	mode int64,
+	enabledSplit bool,
 ) *SpanReplication {
-	r := newSpanReplication(cfID, id, SchemaID, span)
+	r := newSpanReplication(cfID, id, SchemaID, span, enabledSplit)
 	r.initStatus(&heartbeatpb.TableSpanStatus{
 		ID:           id.ToPB(),
 		CheckpointTs: checkpointTs,
@@ -81,8 +82,9 @@ func NewWorkingSpanReplication(
 	span *heartbeatpb.TableSpan,
 	status *heartbeatpb.TableSpanStatus,
 	nodeID node.ID,
+	enabledSplit bool,
 ) *SpanReplication {
-	r := newSpanReplication(cfID, id, SchemaID, span)
+	r := newSpanReplication(cfID, id, SchemaID, span, enabledSplit)
 	// Must set Node ID when creating a working span replication
 	r.SetNodeID(nodeID)
 	r.initStatus(status)
@@ -100,17 +102,23 @@ func NewWorkingSpanReplication(
 	return r
 }
 
-func newSpanReplication(cfID common.ChangeFeedID, id common.DispatcherID, SchemaID int64, span *heartbeatpb.TableSpan) *SpanReplication {
+func newSpanReplication(cfID common.ChangeFeedID, id common.DispatcherID, SchemaID int64, span *heartbeatpb.TableSpan, enabledSplit bool) *SpanReplication {
 	r := &SpanReplication{
 		ID:           id,
 		schemaID:     SchemaID,
 		Span:         span,
 		ChangefeedID: cfID,
+		enabledSplit: enabledSplit,
 		status:       atomic.NewPointer[heartbeatpb.TableSpanStatus](nil),
 		blockState:   atomic.NewPointer[heartbeatpb.State](nil),
 	}
 	r.initGroupID()
 	return r
+}
+
+// IsSplitEnabled reports if split operations are allowed on this replica.
+func (r *SpanReplication) IsSplitEnabled() bool {
+	return r.enabledSplit
 }
 
 func (r *SpanReplication) initStatus(status *heartbeatpb.TableSpanStatus) {
