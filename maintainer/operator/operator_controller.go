@@ -338,9 +338,6 @@ func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
 		old.OP.OnTaskRemoved()
 		oc.finalizeOperator(old, op.ID())
 	}
-	oc.mu.Lock()
-	delete(oc.lastWarnTime, op.ID())
-	oc.mu.Unlock()
 	oc.pushOperator(op)
 }
 
