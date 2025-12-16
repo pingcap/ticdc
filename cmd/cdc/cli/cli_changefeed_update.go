@@ -14,7 +14,6 @@
 package cli
 
 import (
-	"context"
 	"encoding/json"
 	"strings"
 
@@ -91,7 +90,7 @@ func (o *updateChangefeedOptions) complete(f factory.Factory) error {
 
 // run the `cli changefeed update` command.
 func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	old, err := o.apiV2Client.Changefeeds().Get(ctx, o.keyspace, o.changefeedID)
 	if err != nil {

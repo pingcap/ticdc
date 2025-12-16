@@ -40,6 +40,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
+	"github.com/pingcap/ticdc/utils/heap"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -1051,7 +1052,40 @@ func diskSpaceUsage(m *pebble.Metrics) uint64 {
 	return usageBytes
 }
 
+type slowSubscriptionLogEntry struct {
+	SubID              uint64  `json:"subID"`
+	ResolvedLagSeconds float64 `json:"resolvedLagSeconds"`
+	ResolvedTs         uint64  `json:"resolvedTs"`
+	CheckpointTs       uint64  `json:"checkpointTs"`
+	MaxEventCommitTs   uint64  `json:"maxEventCommitTs"`
+	LastAdvanceTime    string  `json:"lastAdvanceTime"`
+	LastReceiveDMLTime string  `json:"lastReceiveDMLTime"`
+	TableSpan          string  `json:"tableSpan"`
+	heapIndex          int     `json:"-"`
+}
+
+func (e *slowSubscriptionLogEntry) SetHeapIndex(idx int) {
+	e.heapIndex = idx
+}
+
+func (e *slowSubscriptionLogEntry) GetHeapIndex() int {
+	return e.heapIndex
+}
+
+func (e *slowSubscriptionLogEntry) LessThan(other *slowSubscriptionLogEntry) bool {
+	if e.ResolvedLagSeconds == other.ResolvedLagSeconds {
+		return e.SubID < other.SubID
+	}
+	return e.ResolvedLagSeconds < other.ResolvedLagSeconds
+}
+
+type uninitializedSubscriptionLogEntry struct {
+	SubID     uint64 `json:"subID"`
+	TableSpan string `json:"tableSpan"`
+}
+
 func (e *eventStore) collectAndReportStoreMetrics() {
+	const logEntryLimit = 10
 	for i, db := range e.dbs {
 		stats := db.Metrics()
 		id := strconv.Itoa(i + 1)
@@ -1067,6 +1101,9 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 	pdPhysicalTime := oracle.GetPhysical(pdCurrentTime)
 	globalMinResolvedTs := uint64(0)
 	uninitializedStatCount := 0
+	initializedStatCount := 0
+	slowestInitialized := heap.NewHeap[*slowSubscriptionLogEntry]()
+	uninitializedSamples := make([]uninitializedSubscriptionLogEntry, 0, logEntryLimit)
 	e.dispatcherMeta.RLock()
 	for _, subStats := range e.dispatcherMeta.tableStats {
 		for _, subStat := range subStats {
@@ -1077,28 +1114,50 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 			const largeResolvedTsLagInSecs = 30
 			const logInterval = 5 * time.Minute
 			if subStat.initialized.Load() {
+				initializedStatCount++
 				if subResolvedTsLagInSec >= largeResolvedTsLagInSecs {
+					lastAdvanceTime := time.UnixMilli(subStat.lastAdvanceTime.Load())
+					lastReceiveDMLTimeRepr := "never"
+					if lastReceiveDMLTime := subStat.lastReceiveDMLTime.Load(); lastReceiveDMLTime > 0 {
+						lastReceiveDMLTimeRepr = time.UnixMilli(lastReceiveDMLTime).String()
+					}
 					lastLogTime := subStat.lastLogLagTime.Load()
 					if time.Since(time.Unix(0, lastLogTime)) > logInterval {
-						lastReceiveDMLTimeRepr := "never"
-						if lastReceiveDMLTime := subStat.lastReceiveDMLTime.Load(); lastReceiveDMLTime > 0 {
-							lastReceiveDMLTimeRepr = time.UnixMilli(lastReceiveDMLTime).String()
-						}
 						log.Warn("resolved ts lag is too large for initialized subscription",
 							zap.Uint64("subID", uint64(subStat.subID)),
 							zap.Int64("tableID", subStat.tableSpan.TableID),
 							zap.Uint64("resolvedTs", subResolvedTs),
 							zap.Float64("resolvedLag(s)", subResolvedTsLagInSec),
-							zap.Stringer("lastAdvanceTime", time.UnixMilli(subStat.lastAdvanceTime.Load())),
+							zap.Stringer("lastAdvanceTime", lastAdvanceTime),
 							zap.String("lastReceiveDMLTime", lastReceiveDMLTimeRepr),
 							zap.String("tableSpan", common.FormatTableSpan(subStat.tableSpan)),
 							zap.Uint64("checkpointTs", subStat.checkpointTs.Load()),
 							zap.Uint64("maxEventCommitTs", subStat.maxEventCommitTs.Load()))
 						subStat.lastLogLagTime.Store(time.Now().UnixNano())
 					}
+					entry := &slowSubscriptionLogEntry{
+						SubID:              uint64(subStat.subID),
+						ResolvedLagSeconds: subResolvedTsLagInSec,
+						ResolvedTs:         subResolvedTs,
+						CheckpointTs:       subStat.checkpointTs.Load(),
+						MaxEventCommitTs:   subStat.maxEventCommitTs.Load(),
+						LastAdvanceTime:    lastAdvanceTime.String(),
+						LastReceiveDMLTime: lastReceiveDMLTimeRepr,
+						TableSpan:          common.FormatTableSpan(subStat.tableSpan),
+					}
+					slowestInitialized.AddOrUpdate(entry)
+					if slowestInitialized.Len() > logEntryLimit {
+						slowestInitialized.PopTop()
+					}
 				}
 			} else {
 				uninitializedStatCount++
+				if len(uninitializedSamples) < logEntryLimit {
+					uninitializedSamples = append(uninitializedSamples, uninitializedSubscriptionLogEntry{
+						SubID:     uint64(subStat.subID),
+						TableSpan: common.FormatTableSpan(subStat.tableSpan),
+					})
+				}
 			}
 			metrics.EventStoreSubscriptionResolvedTsLagHist.Observe(subResolvedTsLagInSec)
 			if globalMinResolvedTs == 0 || subResolvedTs < globalMinResolvedTs {
@@ -1112,8 +1171,25 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 		}
 	}
 	e.dispatcherMeta.RUnlock()
-	if uninitializedStatCount > 0 {
-		log.Info("found uninitialized subscriptions", zap.Int("count", uninitializedStatCount))
+	var slowestList []slowSubscriptionLogEntry
+	if slowestInitialized.Len() > 0 {
+		size := slowestInitialized.Len()
+		slowestList = make([]slowSubscriptionLogEntry, size)
+		for i := size - 1; i >= 0; i-- {
+			entry, ok := slowestInitialized.PopTop()
+			if !ok {
+				break
+			}
+			slowestList[i] = *entry
+		}
+	}
+	if len(slowestList) > 0 || uninitializedStatCount > 0 {
+		log.Info("subscription lag snapshot",
+			zap.Int("initializedCount", initializedStatCount),
+			zap.Int("slowestInitializedCount", len(slowestList)),
+			zap.Int("uninitializedCount", uninitializedStatCount),
+			zap.Any("slowestInitializedSubscriptions", slowestList),
+			zap.Any("uninitializedSubscriptions", uninitializedSamples))
 	}
 	if globalMinResolvedTs == 0 {
 		metrics.EventStoreResolvedTsLagGauge.Set(0)
