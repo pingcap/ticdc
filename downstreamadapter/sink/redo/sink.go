@@ -128,6 +128,20 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	_ = s.statistics.RecordBatchExecution(func() (int, int64, error) {
+		toRowCallback := func(postTxnFlushed []func(), totalCount uint64) func() {
+			var calledCount atomic.Uint64
+			// The callback of the last row will trigger the callback of the txn.
+			return func() {
+				if calledCount.Inc() == totalCount {
+					for _, callback := range postTxnFlushed {
+						callback()
+					}
+				}
+			}
+		}
+		rowsCount := uint64(event.Len())
+		rowCallback := toRowCallback(event.PostTxnFlushed, rowsCount)
+
 		for {
 			row, ok := event.GetNextRow()
 			if !ok {
@@ -140,7 +154,7 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 				Event:           row,
 				PhysicalTableID: event.PhysicalTableID,
 				TableInfo:       event.TableInfo,
-				Callback:        event.PostFlush,
+				Callback:        rowCallback,
 			})
 		}
 		return int(event.Len()), event.GetSize(), nil
