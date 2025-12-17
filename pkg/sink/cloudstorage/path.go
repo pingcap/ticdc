@@ -41,7 +41,7 @@ import (
 
 const (
 	// 3 is the length of "CDC", and the file number contains
-	// at least 6 digits (e.g. CDC000001.csv).
+	// at least 6 digits (e.g. CDC-xxx-000001.csv).
 	minFileNamePrefixLen = 3 + config.MinFileIndexWidth
 	defaultIndexFileName = "meta/CDC-%s.index"
 
@@ -465,7 +465,7 @@ func RemoveExpiredFiles(
 
 	cnt := uint64(0)
 	err := util.RemoveFilesIf(ctx, storage, func(path string) bool {
-		// the path is like: <schema>/<table>/<tableVersion>/<partitionID>/<date>/CDC{num}.extension
+		// the path is like: <schema>/<table>/<tableVersion>/<partitionID>/<date>/CDC-{dispatcher}-{num}.extension
 		match := dateSeparatorDayRegexp.FindString(path)
 		if match != "" && match < expiredDate {
 			cnt++

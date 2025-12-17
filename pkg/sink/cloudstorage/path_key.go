@@ -73,6 +73,7 @@ type DmlPathKey struct {
 	SchemaPathKey
 	PartitionNum int64
 	Date         string
+	DispatcherID string
 }
 
 // GenerateDMLFilePath generates the dml file path.
@@ -91,7 +92,7 @@ func (d *DmlPathKey) GenerateDMLFilePath(
 	if len(d.Date) != 0 {
 		elems = append(elems, d.Date)
 	}
-	elems = append(elems, generateDataFileName(idx, extension, fileIndexWidth))
+	elems = append(elems, generateDataFileName(d.DispatcherID, idx, extension, fileIndexWidth))
 
 	return strings.Join(elems, "/")
 }
@@ -100,7 +101,7 @@ func (d *DmlPathKey) GenerateDMLFilePath(
 // DML file path pattern is as follows:
 // {schema}/{table}/{table-version-separator}/{partition-separator}/{date-separator}/, where
 // partition-separator and date-separator could be empty.
-// DML file name pattern is as follows: CDC{num}.extension.
+// DML file name pattern is as follows: CDC-{dispatcher}-{num}.extension.
 func (d *DmlPathKey) ParseDMLFilePath(dateSeparator, path string) (uint64, error) {
 	var partitionNum int64
 
@@ -115,14 +116,14 @@ func (d *DmlPathKey) ParseDMLFilePath(dateSeparator, path string) (uint64, error
 	case config.DateSeparatorDay.String():
 		str += `(\d{4}-\d{2}-\d{2})\/`
 	}
-	str += `CDC(\d+).\w+`
+	str += `CDC-(\w+)-(\d+).\w+`
 	pathRE, err := regexp.Compile(str)
 	if err != nil {
 		return 0, err
 	}
 
 	matches := pathRE.FindStringSubmatch(path)
-	if len(matches) != 7 {
+	if len(matches) != 8 {
 		return 0, fmt.Errorf("cannot match dml path pattern for %s", path)
 	}
 
@@ -137,7 +138,11 @@ func (d *DmlPathKey) ParseDMLFilePath(dateSeparator, path string) (uint64, error
 			return 0, err
 		}
 	}
-	fileIdx, err := strconv.ParseUint(strings.TrimLeft(matches[6], "0"), 10, 64)
+	dispatcherID := matches[6]
+	if err != nil {
+		return 0, err
+	}
+	fileIdx, err := strconv.ParseUint(strings.TrimLeft(matches[7], "0"), 10, 64)
 	if err != nil {
 		return 0, err
 	}
@@ -150,6 +155,7 @@ func (d *DmlPathKey) ParseDMLFilePath(dateSeparator, path string) (uint64, error
 		},
 		PartitionNum: partitionNum,
 		Date:         matches[5],
+		DispatcherID: dispatcherID,
 	}
 
 	return fileIdx, nil
