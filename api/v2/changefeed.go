@@ -1514,7 +1514,7 @@ func getVerifiedTables(
 		return ineligibleTables, eligibleTables, nil
 	}
 
-	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, topic, config.IsPulsarScheme(protocol.String()), protocol == config.ProtocolAvro)
+	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, topic, config.IsPulsarScheme(scheme), protocol == config.ProtocolAvro)
 	if err != nil {
 		return nil, nil, err
 	}

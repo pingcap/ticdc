@@ -86,13 +86,14 @@ func NewController(
 	ddlSpan *replica.SpanReplication,
 	splitter *split.Splitter,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
+	refresher *replica.RegionCountRefresher,
 	keyspaceID uint32,
 	mode int64,
 ) *Controller {
 	c := &Controller{
 		changefeedID:           changefeedID,
 		ddlSpan:                ddlSpan,
-		newGroupChecker:        replica.GetNewGroupChecker(changefeedID, schedulerCfg),
+		newGroupChecker:        replica.GetNewGroupChecker(changefeedID, schedulerCfg, refresher),
 		nodeManager:            appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		splitter:               splitter,
 		ddlDispatcherID:        ddlSpan.ID,
@@ -100,9 +101,13 @@ func NewController(
 		enableTableAcrossNodes: schedulerCfg != nil && util.GetOrZero(schedulerCfg.EnableTableAcrossNodes),
 		enableSplittableCheck:  schedulerCfg != nil && util.GetOrZero(schedulerCfg.EnableSplittableCheck),
 		keyspaceID:             keyspaceID,
-	}
 
-	c.reset(c.ddlSpan)
+		schemaTasks: make(map[int64]map[common.DispatcherID]*replica.SpanReplication),
+		tableTasks:  make(map[int64]map[common.DispatcherID]*replica.SpanReplication),
+		allTasks:    make(map[common.DispatcherID]*replica.SpanReplication),
+	}
+	c.ReplicationDB = pkgreplica.NewReplicationDB(changefeedID.String(), c.doWithRLock, c.newGroupChecker)
+	c.initializeDDLSpan(ddlSpan)
 	return c
 }
 
@@ -111,15 +116,6 @@ func (c *Controller) doWithRLock(action func()) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	action()
-}
-
-// reset resets the maps of Controller
-func (c *Controller) reset(ddlSpan *replica.SpanReplication) {
-	c.schemaTasks = make(map[int64]map[common.DispatcherID]*replica.SpanReplication)
-	c.tableTasks = make(map[int64]map[common.DispatcherID]*replica.SpanReplication)
-	c.allTasks = make(map[common.DispatcherID]*replica.SpanReplication)
-	c.ReplicationDB = pkgreplica.NewReplicationDB(c.changefeedID.String(), c.doWithRLock, c.newGroupChecker)
-	c.initializeDDLSpan(ddlSpan)
 }
 
 // ShouldEnableSplit returns whether split is allowed for a table given its splittable flag and controller config.
@@ -484,19 +480,6 @@ func (c *Controller) CheckByGroup(groupID pkgreplica.GroupID, batch int) pkgrepl
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return checker.Check(batch)
-}
-
-// RemoveAll reset the db and return all the replicating and scheduling tasks
-func (c *Controller) RemoveAll() []*replica.SpanReplication {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	tasks := make([]*replica.SpanReplication, 0)
-	tasks = append(tasks, c.GetReplicatingWithoutLock()...)
-	tasks = append(tasks, c.GetSchedulingWithoutLock()...)
-
-	c.reset(c.ddlSpan)
-	return tasks
 }
 
 func (c *Controller) GetRemoveTasksByTableIDs(tableIDs ...int64) []*replica.SpanReplication {
