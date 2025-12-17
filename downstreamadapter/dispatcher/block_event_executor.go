@@ -63,7 +63,7 @@ func newBlockEventExecutor() *blockEventExecutor {
 					// Re-enqueue the dispatcher ID and try later.
 					//
 					// dispatcher event ds ensures if a ddl task is not processed, there can't be new tasks submitted.
-					// So there is only one case there will be two task from samle dispatchers being processed at the same time:
+					// So there is only one case there will be two task from same dispatchers being processed at the same time:
 					// 1. worker 1 pop dispatcher A, start processing
 					// 2. during processing, new task from dispatcher A is submitted, and push A to ready queue
 					// Thus, we can safely re-push the dispatcher ID to the ready queue here.
