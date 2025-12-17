@@ -67,7 +67,7 @@ run() {
 
 	cdc_cli_changefeed pause  --changefeed-id="$CHANGEFEED_ID"
 	sleep 2
-	cdc_cli_changefeed update --config="$CUR/conf/changefeed.toml" --changefeed-id="$CHANGEFEED_ID"
+	cdc_cli_changefeed update --config="$CUR/conf/changefeed.toml" --changefeed-id="$CHANGEFEED_ID" --no-confirm
 	cdc_cli_changefeed resume --changefeed-id="$CHANGEFEED_ID"
 
 	# Start node2 for moving the table.
