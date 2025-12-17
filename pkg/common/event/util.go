@@ -496,7 +496,7 @@ func BatchDML(dml *DMLEvent) *BatchDMLEvent {
 // Only the table with pk and no uk can always be splitted in all sinks.
 // Notice: please ensure the logic of IsSplitable is totally the same with isSplitable in utils
 func IsSplitable(tableInfo *common.TableInfo) bool {
-	// some ddl jobs do not have table info, such as drop database
+	// some ddl jobs do not have table info, such as drop database, we just ignore checking these jobs
 	if tableInfo == nil {
 		return true
 	}
