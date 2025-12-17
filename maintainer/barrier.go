@@ -134,9 +134,6 @@ func (b *Barrier) HandleStatus(from node.ID,
 			DispatcherStatuses: dispatcherStatus,
 			Mode:               b.mode,
 		})
-	if common.IsRedoMode(b.mode) {
-		log.Error("redo DispatcherStatuses", zap.Any("dispatcherStatus", dispatcherStatus))
-	}
 	msgs := []*messaging.TargetMessage{msg}
 
 	for id, action := range actions {
@@ -148,9 +145,6 @@ func (b *Barrier) HandleStatus(from node.ID,
 					DispatcherStatuses: action,
 					Mode:               b.mode,
 				})
-			if common.IsRedoMode(b.mode) {
-				log.Error("redo DispatcherStatuses", zap.Any("action", action))
-			}
 			msgs = append(msgs, msg)
 		}
 	}
@@ -346,7 +340,7 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 				zap.String("changefeed", changefeedID.Name()),
 				zap.String("dispatcher", dispatcherID.String()),
 				zap.Uint64("commitTs", blockState.BlockTs))
-			event.tableTriggerEventDispatcherRelated = true
+			event.tableTriggerDispatcherRelated = true
 		}
 		if event.selected.Load() {
 			// the event already in the selected state, ignore the block event just sent ack

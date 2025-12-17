@@ -73,8 +73,8 @@ type eventBroker struct {
 	// All the dispatchers that register to the eventBroker.
 	dispatchers sync.Map
 
-	// dispatcherID -> dispatcherStat map, track all table trigger event dispatchers.
-	tableTriggerEventDispatchers sync.Map
+	// dispatcherID -> dispatcherStat map, track all table trigger dispatchers.
+	tableTriggerDispatchers sync.Map
 
 	// taskChan is used to send the scan tasks to the scan workers.
 	taskChan []chan scanTask
@@ -124,22 +124,22 @@ func newEventBroker(
 	// For now, since there is only one upstream, using the default pdClock is sufficient.
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 	c := &eventBroker{
-		tidbClusterID:                id,
-		eventStore:                   eventStore,
-		pdClock:                      pdClock,
-		mounter:                      event.NewMounter(tz, integrity),
-		schemaStore:                  schemaStore,
-		changefeedMap:                sync.Map{},
-		dispatchers:                  sync.Map{},
-		tableTriggerEventDispatchers: sync.Map{},
-		msgSender:                    mc,
-		taskChan:                     make([]chan scanTask, scanWorkerCount),
-		messageCh:                    make([]chan *wrapEvent, sendMessageWorkerCount),
-		redoMessageCh:                make([]chan *wrapEvent, sendMessageWorkerCount),
-		cancel:                       cancel,
-		g:                            g,
-		scanRateLimiter:              rate.NewLimiter(rate.Limit(scanLimitInBytes), scanLimitInBytes),
-		scanLimitInBytes:             uint64(scanLimitInBytes),
+		tidbClusterID:           id,
+		eventStore:              eventStore,
+		pdClock:                 pdClock,
+		mounter:                 event.NewMounter(tz, integrity),
+		schemaStore:             schemaStore,
+		changefeedMap:           sync.Map{},
+		dispatchers:             sync.Map{},
+		tableTriggerDispatchers: sync.Map{},
+		msgSender:               mc,
+		taskChan:                make([]chan scanTask, scanWorkerCount),
+		messageCh:               make([]chan *wrapEvent, sendMessageWorkerCount),
+		redoMessageCh:           make([]chan *wrapEvent, sendMessageWorkerCount),
+		cancel:                  cancel,
+		g:                       g,
+		scanRateLimiter:         rate.NewLimiter(rate.Limit(scanLimitInBytes), scanLimitInBytes),
+		scanLimitInBytes:        uint64(scanLimitInBytes),
 	}
 
 	// Initialize metrics collector
@@ -165,7 +165,7 @@ func newEventBroker(
 	}
 
 	g.Go(func() error {
-		return c.tickTableTriggerEventDispatchers(ctx)
+		return c.tickTableTriggerDispatchers(ctx)
 	})
 
 	g.Go(func() error {
@@ -307,7 +307,7 @@ func (c *eventBroker) runScanWorker(ctx context.Context, taskChan chan scanTask)
 
 // TODO: maybe event driven model is better. It is coupled with the detail implementation of
 // the schemaStore, we will refactor it later.
-func (c *eventBroker) tickTableTriggerEventDispatchers(ctx context.Context) error {
+func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 	ticker := time.NewTicker(time.Millisecond * 50)
 	defer ticker.Stop()
 	for {
@@ -315,7 +315,7 @@ func (c *eventBroker) tickTableTriggerEventDispatchers(ctx context.Context) erro
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-ticker.C:
-			c.tableTriggerEventDispatchers.Range(func(key, value interface{}) bool {
+			c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
 				stat := value.(*atomic.Pointer[dispatcherStat]).Load()
 				if !c.checkAndSendReady(stat) {
 					return true
@@ -367,10 +367,10 @@ func (c *eventBroker) logUninitializedDispatchers(ctx context.Context) error {
 				}
 				return true
 			})
-			c.tableTriggerEventDispatchers.Range(func(key, value interface{}) bool {
+			c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
 				dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
 				if isUninitialized(dispatcher) {
-					log.Info("table trigger event dispatcher not reset",
+					log.Info("table trigger dispatcher not reset",
 						zap.Stringer("changefeedID", dispatcher.changefeedStat.changefeedID),
 						zap.Any("dispatcherID", dispatcher.id))
 				}
@@ -841,7 +841,7 @@ func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context, tickInter
 				return true
 			})
 
-			c.tableTriggerEventDispatchers.Range(func(key, value interface{}) bool {
+			c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
 				dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
 				if isInactiveDispatcher(dispatcher) {
 					inActiveDispatchers = append(inActiveDispatchers, dispatcher)
@@ -902,7 +902,7 @@ func (c *eventBroker) getDispatcher(id common.DispatcherID) *atomic.Pointer[disp
 	if ok {
 		return stat.(*atomic.Pointer[dispatcherStat])
 	}
-	stat, ok = c.tableTriggerEventDispatchers.Load(id)
+	stat, ok = c.tableTriggerDispatchers.Load(id)
 	if ok {
 		return stat.(*atomic.Pointer[dispatcherStat])
 	}
@@ -922,8 +922,8 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	dispatcherPtr.Store(dispatcher)
 	status.addDispatcher(id, dispatcherPtr)
 	if span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
-		c.tableTriggerEventDispatchers.Store(id, dispatcherPtr)
-		log.Info("table trigger event dispatcher register dispatcher",
+		c.tableTriggerDispatchers.Store(id, dispatcherPtr)
+		log.Info("table trigger dispatcher register dispatcher",
 			zap.Uint64("clusterID", c.tidbClusterID),
 			zap.Stringer("changefeedID", changefeedID),
 			zap.Stringer("dispatcherID", id),
@@ -1003,11 +1003,11 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 
 	statPtr, ok := c.dispatchers.Load(id)
 	if !ok {
-		statPtr, ok = c.tableTriggerEventDispatchers.Load(id)
+		statPtr, ok = c.tableTriggerDispatchers.Load(id)
 		if !ok {
 			return
 		}
-		c.tableTriggerEventDispatchers.Delete(id)
+		c.tableTriggerDispatchers.Delete(id)
 	}
 	stat := statPtr.(*atomic.Pointer[dispatcherStat]).Load()
 

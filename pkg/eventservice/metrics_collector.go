@@ -248,7 +248,7 @@ func (mc *metricsCollector) collectDispatcherMetrics(snapshot *metricsSnapshot) 
 		collect(dispatcher)
 		return true
 	})
-	mc.broker.tableTriggerEventDispatchers.Range(func(key, value any) bool {
+	mc.broker.tableTriggerDispatchers.Range(func(key, value any) bool {
 		snapshot.dispatcherCount++
 		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
 		collect(dispatcher)

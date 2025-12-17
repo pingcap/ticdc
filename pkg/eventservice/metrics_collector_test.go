@@ -31,9 +31,9 @@ func TestCollectSlowestDispatchersByCheckpointTs(t *testing.T) {
 
 	// Create a mock metrics collector
 	broker := &eventBroker{
-		dispatchers:                  sync.Map{},
-		tableTriggerEventDispatchers: sync.Map{},
-		pdClock:                      pdutil.NewClock4Test(),
+		dispatchers:             sync.Map{},
+		tableTriggerDispatchers: sync.Map{},
+		pdClock:                 pdutil.NewClock4Test(),
 	}
 
 	// Create 20 dispatchers with different checkpointTs values
@@ -94,9 +94,9 @@ func TestCollectSlowestDispatchersLessThan10(t *testing.T) {
 
 	// Create a mock metrics collector
 	broker := &eventBroker{
-		dispatchers:                  sync.Map{},
-		tableTriggerEventDispatchers: sync.Map{},
-		pdClock:                      pdutil.NewClock4Test(),
+		dispatchers:             sync.Map{},
+		tableTriggerDispatchers: sync.Map{},
+		pdClock:                 pdutil.NewClock4Test(),
 	}
 
 	// Create only 5 dispatchers

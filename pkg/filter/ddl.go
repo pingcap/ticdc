@@ -158,7 +158,7 @@ var multiTableDDLs = map[timodel.ActionType]struct{}{
 	timodel.ActionRemovePartitioning:     {},
 }
 
-// globalTableDDLs must be sent to table trigger event dispatcher.
+// globalTableDDLs must be sent to table trigger dispatcher.
 var globalTableDDLs = map[timodel.ActionType]struct{}{
 	timodel.ActionCreateSchema:                  {},
 	timodel.ActionDropSchema:                    {},

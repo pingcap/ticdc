@@ -386,7 +386,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 	require.Len(t, resp.DispatcherStatuses, 1)
 	require.True(t, resp.DispatcherStatuses[0].Ack.CommitTs == 10)
 	require.Len(t, resp.DispatcherStatuses[0].InfluencedDispatchers.DispatcherIDs, 1)
-	require.False(t, barrier.blockedEvents.m[eventKey{blockTs: 10, isSyncPoint: false}].tableTriggerEventDispatcherRelated)
+	require.False(t, barrier.blockedEvents.m[eventKey{blockTs: 10, isSyncPoint: false}].tableTriggerDispatcherRelated)
 
 	// table trigger  block request
 	msgs = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
@@ -436,7 +436,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 	require.True(t, event.writerDispatcher == tableTriggerEventDispatcherID)
 	// all dispatcher reported, the reported status is reset
 	require.False(t, event.rangeChecker.IsFullyCovered())
-	require.True(t, event.tableTriggerEventDispatcherRelated)
+	require.True(t, event.tableTriggerDispatcherRelated)
 
 	// table trigger write done
 	_ = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{

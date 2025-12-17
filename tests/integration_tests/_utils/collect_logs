@@ -10,4 +10,3 @@ find $WORK_DIR -type f -name "*.txt" -o -name "*sql*" -o -name "*summary*" -o -n
 		mv "$file" "${file%.txt}.log" 2>/dev/null || true
 	fi
 done
-

@@ -153,7 +153,7 @@ func newCluster() (*cluster, error) {
 func (c *cluster) moveAllTables(sourceNode, targetNode string, mode int64) error {
 	for _, table := range c.servers[sourceNode] {
 		if table.id == 0 {
-			// table trigger event dispatcher is not support to move, except the maintainer is crashed
+			// table trigger dispatcher is not support to move, except the maintainer is crashed
 			continue
 		}
 		ctx := context.Background()

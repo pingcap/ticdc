@@ -51,7 +51,7 @@ type Filter interface {
 	ShouldDiscardDDL(schema, table string, ddlType timodel.ActionType, tableInfo *common.TableInfo) bool
 	// ShouldIgnoreDDL returns true if the DDL event should not be sent to downstream.
 	//
-	// If a ddl is ignored, it will be sent to table trigger event dispatcher to update the schema or table info,
+	// If a ddl is ignored, it will be sent to table trigger dispatcher to update the schema or table info,
 	// but will not be sent to downstream.
 	// Note that a ignored ddl is different from a discarded ddl. For example, suppose
 	// we have a changefeed-test with the following config:

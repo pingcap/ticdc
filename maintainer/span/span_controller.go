@@ -60,7 +60,7 @@ type Controller struct {
 	mu sync.RWMutex
 	// ReplicationDB tracks the scheduling status of spans
 	pkgreplica.ReplicationDB[common.DispatcherID, *replica.SpanReplication]
-	// allTasks maps dispatcher IDs to their spans, including table trigger event dispatchers
+	// allTasks maps dispatcher IDs to their spans, including table trigger dispatchers
 	allTasks map[common.DispatcherID]*replica.SpanReplication
 	// schemaTasks provides quick access to spans by schema ID
 	schemaTasks map[int64]map[common.DispatcherID]*replica.SpanReplication
