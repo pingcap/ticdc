@@ -69,6 +69,7 @@ func TestGenerateDataFilePath(t *testing.T) {
 			Table:  "table1",
 		},
 		TableInfoVersion: 5,
+		DispatcherID:     commonType.NewDispatcherID(),
 	}
 
 	dir := t.TempDir()
@@ -78,10 +79,10 @@ func TestGenerateDataFilePath(t *testing.T) {
 	// date-separator: none
 	path, err := f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/CDC000001.json", path)
+	require.Equal(t, fmt.Sprintf("test/table1/5/CDC-%s-000001.json", table.DispatcherID.String()), path)
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/CDC000002.json", path)
+	require.Equal(t, fmt.Sprintf("test/table1/5/CDC-%s-000002.json", table.DispatcherID.String()), path)
 
 	// date-separator: year
 	mockClock := clock.NewMock()
@@ -93,19 +94,19 @@ func TestGenerateDataFilePath(t *testing.T) {
 	date = f.GenerateDateStr()
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2022/CDC000001.json", path)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2022/CDC-%s-000001.json", table.DispatcherID.String()), path)
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2022/CDC000002.json", path)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2022/CDC-%s-000002.json", table.DispatcherID.String()), path)
 	// year changed
 	mockClock.Set(time.Date(2023, 1, 1, 0, 0, 20, 0, time.UTC))
 	date = f.GenerateDateStr()
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2023/CDC000001.json", path)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2023/CDC-%s-000001.json", table.DispatcherID.String()), path)
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2023/CDC000002.json", path)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2023/CDC-%s-000002.json", table.DispatcherID.String()), path)
 
 	// date-separator: month
 	mockClock = clock.NewMock()
@@ -118,19 +119,19 @@ func TestGenerateDataFilePath(t *testing.T) {
 	date = f.GenerateDateStr()
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2022-12/CDC000001.json", path)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2022-12/CDC-%s-000001.json", table.DispatcherID.String()), path)
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2022-12/CDC000002.json", path)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2022-12/CDC-%s-000002.json", table.DispatcherID.String()), path)
 	// month changed
 	mockClock.Set(time.Date(2023, 1, 1, 0, 0, 20, 0, time.UTC))
 	date = f.GenerateDateStr()
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2023-01/CDC000001.json", path)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2023-01/CDC-%s-000001.json", table.DispatcherID.String()), path)
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2023-01/CDC000002.json", path)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2023-01/CDC-%s-000002.json", table.DispatcherID.String()), path)
 
 	// date-separator: day
 	mockClock = clock.NewMock()
@@ -143,19 +144,19 @@ func TestGenerateDataFilePath(t *testing.T) {
 	date = f.GenerateDateStr()
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2022-12-31/CDC000001.json", path)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2022-12-31/CDC-%s-000001.json", table.DispatcherID.String()), path)
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2022-12-31/CDC000002.json", path)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2022-12-31/CDC-%s-000002.json", table.DispatcherID.String()), path)
 	// day changed
 	mockClock.Set(time.Date(2023, 1, 1, 0, 0, 20, 0, time.UTC))
 	date = f.GenerateDateStr()
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2023-01-01/CDC000001.json", path)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2023-01-01/CDC-%s-000001.json", table.DispatcherID.String()), path)
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2023-01-01/CDC000002.json", path)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2023-01-01/CDC-%s-000002.json", table.DispatcherID.String()), path)
 }
 
 func TestFetchIndexFromFileName(t *testing.T) {
@@ -197,7 +198,7 @@ func TestFetchIndexFromFileName(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		_, err := f.fetchIndexFromFileName(tc.fileName)
+		_, err := f.fetchIndexFromFileName("", tc.fileName)
 		if len(tc.wantErr) != 0 {
 			require.Contains(t, err.Error(), tc.wantErr)
 		} else {

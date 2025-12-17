@@ -381,7 +381,7 @@ func (f *FilePathGenerator) getNextFileIdxFromIndexFile(
 		return 0, err
 	}
 	fileName := strings.TrimSuffix(string(data), "\n")
-	maxFileIdx, err := f.fetchIndexFromFileName(fileName)
+	maxFileIdx, err := f.fetchIndexFromFileName(tbl.DispatcherID.String(), fileName)
 	if err != nil {
 		return 0, err
 	}
@@ -421,7 +421,7 @@ func (f *FilePathGenerator) getNextFileIdxFromIndexFile(
 	return fileIdx, nil
 }
 
-func (f *FilePathGenerator) fetchIndexFromFileName(fileName string) (uint64, error) {
+func (f *FilePathGenerator) fetchIndexFromFileName(dispatcherID string, fileName string) (uint64, error) {
 	var fileIdx uint64
 	var err error
 
@@ -433,7 +433,7 @@ func (f *FilePathGenerator) fetchIndexFromFileName(fileName string) (uint64, err
 	}
 
 	extIdx := strings.Index(fileName, f.extension)
-	fileIdxStr := fileName[3:extIdx]
+	fileIdxStr := fileName[5+len(dispatcherID) : extIdx]
 	if fileIdx, err = strconv.ParseUint(fileIdxStr, 10, 64); err != nil {
 		return 0, errors.WrapError(errors.ErrStorageSinkInvalidFileName, err)
 	}

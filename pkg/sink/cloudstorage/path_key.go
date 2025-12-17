@@ -138,10 +138,6 @@ func (d *DmlPathKey) ParseDMLFilePath(dateSeparator, path string) (uint64, error
 			return 0, err
 		}
 	}
-	dispatcherID := matches[6]
-	if err != nil {
-		return 0, err
-	}
 	fileIdx, err := strconv.ParseUint(strings.TrimLeft(matches[7], "0"), 10, 64)
 	if err != nil {
 		return 0, err
@@ -155,7 +151,7 @@ func (d *DmlPathKey) ParseDMLFilePath(dateSeparator, path string) (uint64, error
 		},
 		PartitionNum: partitionNum,
 		Date:         matches[5],
-		DispatcherID: dispatcherID,
+		DispatcherID: matches[6],
 	}
 
 	return fileIdx, nil
