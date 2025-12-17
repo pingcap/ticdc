@@ -307,7 +307,7 @@ func (w *Writer) buildRowChangesForUnSafeBatch(
 							rowLists[i] = rowChangeWithKeys{
 								rowChange:  &newRowChange,
 								preRowKeys: rowKey,
-								commitTs:   rowLists[j].commitTs,
+								commitTs:   rowLists[j].commitTs, // use the delete's commitTs to make LWW correctly
 							}
 							hasUpdate = true
 							break innerLoop
