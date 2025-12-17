@@ -229,6 +229,20 @@ func (r *SpanReplication) GetGroupID() replica.GroupID {
 }
 
 func (r *SpanReplication) NewAddDispatcherMessage(server node.ID) *messaging.TargetMessage {
+	// When a syncpoint is in-flight (WAITING/WRITING), the maintainer will force the span checkpoint to BlockTs-1
+	// when handling block status. If we start a moved/recreated dispatcher from that forced checkpoint, it may re-scan
+	// and re-apply events with commitTs <= BlockTs, which can race with the syncpoint write and corrupt the snapshot
+	// semantics of that syncpoint. Starting from BlockTs avoids replaying those events, and is safe because the
+	// dispatcher can only enter the syncpoint barrier after all events with commitTs <= BlockTs have been pushed
+	// downstream.
+	startTs := r.status.Load().CheckpointTs
+	if state := r.blockState.Load(); state != nil &&
+		state.IsBlocked &&
+		state.IsSyncPoint &&
+		(state.Stage == heartbeatpb.BlockStage_WAITING || state.Stage == heartbeatpb.BlockStage_WRITING) &&
+		state.BlockTs > startTs {
+		startTs = state.BlockTs
+	}
 	return messaging.NewSingleTargetMessage(server,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.ScheduleDispatcherRequest{
@@ -237,7 +251,7 @@ func (r *SpanReplication) NewAddDispatcherMessage(server node.ID) *messaging.Tar
 				DispatcherID: r.ID.ToPB(),
 				SchemaID:     r.schemaID,
 				Span:         r.Span,
-				StartTs:      r.status.Load().CheckpointTs,
+				StartTs:      startTs,
 				Mode:         r.GetMode(),
 			},
 			ScheduleAction: heartbeatpb.ScheduleAction_Create,
