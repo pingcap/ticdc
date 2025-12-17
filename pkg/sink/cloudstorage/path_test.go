@@ -219,12 +219,14 @@ func TestGenerateDataFilePathWithIndexFile(t *testing.T) {
 	f.SetClock(pdutil.NewMonotonicClock(mockClock))
 
 	mockClock.Set(time.Date(2023, 3, 9, 23, 59, 59, 0, time.UTC))
+	dispatcherID := commonType.NewDispatcherID()
 	table := VersionedTableName{
 		TableNameWithPhysicTableID: commonType.TableName{
 			Schema: "test",
 			Table:  "table1",
 		},
 		TableInfoVersion: 5,
+		DispatcherID:     dispatcherID,
 	}
 	f.versionMap[table] = table.TableInfoVersion
 	date := f.GenerateDateStr()
@@ -235,7 +237,7 @@ func TestGenerateDataFilePathWithIndexFile(t *testing.T) {
 	// index file exists, but the file is not exist
 	dataFilePath, err := f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2023-03-09/CDC000005.json", dataFilePath)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2023-03-09/CDC-%s-000005.json", dispatcherID.String()), dataFilePath)
 
 	// cleanup cached file index
 	delete(f.fileIndex, table)
@@ -244,7 +246,7 @@ func TestGenerateDataFilePathWithIndexFile(t *testing.T) {
 	require.NoError(t, err)
 	dataFilePath, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2023-03-09/CDC000005.json", dataFilePath)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2023-03-09/CDC-%s-000005.json", dispatcherID.String()), dataFilePath)
 
 	// cleanup cached file index
 	delete(f.fileIndex, table)
@@ -253,7 +255,7 @@ func TestGenerateDataFilePathWithIndexFile(t *testing.T) {
 	require.NoError(t, err)
 	dataFilePath, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2023-03-09/CDC000006.json", dataFilePath)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2023-03-09/CDC-%s-000006.json", dispatcherID.String()), dataFilePath)
 }
 
 func TestIsSchemaFile(t *testing.T) {

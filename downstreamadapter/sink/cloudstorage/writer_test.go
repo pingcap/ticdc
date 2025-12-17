@@ -84,6 +84,7 @@ func TestWriterRun(t *testing.T) {
 	}
 	tableInfo := commonType.WrapTableInfo("test", tidbTableInfo)
 
+	dispatcherID := commonType.NewDispatcherID()
 	for i := 0; i < 5; i++ {
 		frag := eventFragment{
 			seqNumber: uint64(i),
@@ -94,6 +95,7 @@ func TestWriterRun(t *testing.T) {
 					TableID: 100,
 				},
 				TableInfoVersion: 99,
+				DispatcherID:     dispatcherID,
 			},
 			event: &commonEvent.DMLEvent{
 				PhysicalTableID: 100,
@@ -122,7 +124,7 @@ func TestWriterRun(t *testing.T) {
 	// check whether files for table1 has been generated
 	fileNames := getTableFiles(t, table1Dir)
 	require.Len(t, fileNames, 2)
-	require.ElementsMatch(t, []string{"CDC000001.json", "CDC.index"}, fileNames)
+	require.ElementsMatch(t, []string{fmt.Sprintf("CDC-%s-000001.json", dispatcherID.String()), fmt.Sprintf("CDC-%s.index", dispatcherID.String())}, fileNames)
 	fragCh.CloseAndDrain()
 	cancel()
 	d.close()

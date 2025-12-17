@@ -14,8 +14,10 @@
 package cloudstorage
 
 import (
+	"fmt"
 	"testing"
 
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/stretchr/testify/require"
 )
 
@@ -60,6 +62,7 @@ func TestSchemaPathKey(t *testing.T) {
 func TestDmlPathKey(t *testing.T) {
 	t.Parallel()
 
+	dispatcherID := common.NewDispatcherID()
 	testCases := []struct {
 		index          int
 		fileIndexWidth int
@@ -71,7 +74,7 @@ func TestDmlPathKey(t *testing.T) {
 			index:          10,
 			fileIndexWidth: 20,
 			extension:      ".csv",
-			path:           "schema1/table1/123456/2023-05-09/CDC00000000000000000010.csv",
+			path:           fmt.Sprintf("schema1/table1/123456/2023-05-09/CDC-%s-00000000000000000010.csv", dispatcherID.String()),
 			dmlkey: DmlPathKey{
 				SchemaPathKey: SchemaPathKey{
 					Schema:       "schema1",
@@ -80,6 +83,7 @@ func TestDmlPathKey(t *testing.T) {
 				},
 				PartitionNum: 0,
 				Date:         "2023-05-09",
+				DispatcherID: dispatcherID.String(),
 			},
 		},
 	}
