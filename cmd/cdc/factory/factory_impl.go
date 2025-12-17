@@ -39,15 +39,17 @@ const (
 
 type factoryImpl struct {
 	ClientGetter
+	ctx               context.Context
 	fetchedServerAddr string
 }
 
 // NewFactory creates a client build factory.
-func NewFactory(clientGetter ClientGetter) Factory {
+func NewFactory(ctx context.Context, clientGetter ClientGetter) Factory {
 	if clientGetter == nil {
 		panic("attempt to instantiate factory with nil clientGetter")
 	}
 	f := &factoryImpl{
+		ctx:          ctx,
 		ClientGetter: clientGetter,
 	}
 
@@ -56,7 +58,6 @@ func NewFactory(clientGetter ClientGetter) Factory {
 
 // EtcdClient creates new cdc etcd client.
 func (f *factoryImpl) EtcdClient() (*etcd.CDCEtcdClientImpl, error) {
-	ctx := context.Background()
 	tlsConfig, err := f.ToTLSConfig()
 	if err != nil {
 		return nil, err
@@ -78,7 +79,7 @@ func (f *factoryImpl) EtcdClient() (*etcd.CDCEtcdClientImpl, error) {
 	pdEndpoints := strings.Split(pdAddr, ",")
 
 	etcdClient, err := clientv3.New(clientv3.Config{
-		Context:     ctx,
+		Context:     f.ctx,
 		Endpoints:   pdEndpoints,
 		TLS:         tlsConfig,
 		LogConfig:   &logConfig,
@@ -104,7 +105,7 @@ func (f *factoryImpl) EtcdClient() (*etcd.CDCEtcdClientImpl, error) {
 			"Fail to open PD client. Please check the pd address(es) \"%s\"", pdAddr)
 	}
 
-	client, err := etcd.NewCDCEtcdClient(ctx, etcdClient, etcd.DefaultCDCClusterID)
+	client, err := etcd.NewCDCEtcdClient(f.ctx, etcdClient, etcd.DefaultCDCClusterID)
 	if err != nil {
 		return nil, errors.ErrEtcdAPIError.GenWithStack(
 			"Etcd operation error. Please check the cluster's status " +
@@ -116,8 +117,6 @@ func (f *factoryImpl) EtcdClient() (*etcd.CDCEtcdClientImpl, error) {
 
 // PdClient creates new pd client.
 func (f *factoryImpl) PdClient() (pd.Client, error) {
-	ctx := context.Background()
-
 	credential := f.GetCredential()
 	grpcTLSOption, err := f.ToGRPCDialOption()
 	if err != nil {
@@ -137,7 +136,7 @@ func (f *factoryImpl) PdClient() (pd.Client, error) {
 	}
 
 	pdClient, err := pd.NewClientWithContext(
-		ctx, "cdc-factory", pdEndpoints, credential.PDSecurityOption(),
+		f.ctx, "cdc-factory", pdEndpoints, credential.PDSecurityOption(),
 		pdopt.WithMaxErrorRetry(maxGetPDClientRetryTimes),
 		// TODO(hi-rustin): add gRPC metrics to Options.
 		// See also: https://github.com/pingcap/tiflow/pull/2341#discussion_r673032407.
@@ -159,7 +158,7 @@ func (f *factoryImpl) PdClient() (pd.Client, error) {
 			"Fail to open PD client. Please check the pd address(es)  \"%s\"", pdAddr)
 	}
 
-	err = version.CheckClusterVersion(ctx, pdClient, pdEndpoints, credential, true)
+	err = version.CheckClusterVersion(f.ctx, pdClient, pdEndpoints, credential, true)
 	if err != nil {
 		return nil, err
 	}

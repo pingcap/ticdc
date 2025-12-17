@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	mock_simple "github.com/pingcap/ticdc/pkg/sink/codec/simple/mock"
+	"github.com/pingcap/ticdc/pkg/util"
 	ticonfig "github.com/pingcap/tidb/pkg/config"
 	"github.com/pingcap/tidb/pkg/disttask/framework/handle"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
@@ -89,7 +90,7 @@ func TestEncodeCheckpoint(t *testing.T) {
 
 func TestEncodeDMLEnableChecksum(t *testing.T) {
 	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Integrity.IntegrityCheckLevel = config.CheckLevelCorrectness
+	replicaConfig.Integrity.IntegrityCheckLevel = util.AddressOf(config.CheckLevelCorrectness)
 	createTableDDL, _, updateEvent, _ := common.NewLargeEvent4Test(t)
 
 	ctx := context.Background()
@@ -781,7 +782,7 @@ func TestEncodeDDLSequence(t *testing.T) {
 
 func TestEncodeDDLEvent(t *testing.T) {
 	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Integrity.IntegrityCheckLevel = config.CheckLevelCorrectness
+	replicaConfig.Integrity.IntegrityCheckLevel = util.AddressOf(config.CheckLevelCorrectness)
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
@@ -990,7 +991,7 @@ func TestColumnFlags(t *testing.T) {
 
 func TestEncodeIntegerTypes(t *testing.T) {
 	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Integrity.IntegrityCheckLevel = config.CheckLevelCorrectness
+	replicaConfig.Integrity.IntegrityCheckLevel = util.AddressOf(config.CheckLevelCorrectness)
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 

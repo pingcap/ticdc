@@ -25,6 +25,8 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/node"
+	pkgreplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
@@ -86,6 +88,12 @@ func createTestSplitSpanReplications(cfID common.ChangeFeedID, tableID int64, sp
 	return replicas
 }
 
+func newTestSplitChecker(t *testing.T, cfID common.ChangeFeedID, groupID pkgreplica.GroupID, schedulerCfg *config.ChangefeedSchedulerConfig) *SplitSpanChecker {
+	refresher := NewRegionCountRefresher(cfID, util.GetOrZero(schedulerCfg.RegionCountRefreshInterval))
+	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg, refresher)
+	return checker
+}
+
 func TestSplitTableSpanIntoMultiple_Properties(t *testing.T) {
 	spanA := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 100)
 	count := 10000
@@ -111,18 +119,19 @@ func TestSplitSpanChecker_AddReplica(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     1000,
-		RegionThreshold:       10,
-		BalanceScoreThreshold: 1,
-		MinTrafficPercentage:  0.8,
-		MaxTrafficPercentage:  1.2,
+		WriteKeyThreshold:          util.AddressOf(1000),
+		RegionThreshold:            util.AddressOf(10),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
+		BalanceScoreThreshold:      util.AddressOf(1),
+		MinTrafficPercentage:       util.AddressOf(0.8),
+		MaxTrafficPercentage:       util.AddressOf(1.2),
 	}
 
 	// Test adding single replica
 	replicas := createTestSplitSpanReplications(cfID, 100000, 3)
 	require.Len(t, replicas, 3)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	for _, replica := range replicas {
 		checker.AddReplica(replica)
@@ -146,16 +155,17 @@ func TestSplitSpanChecker_RemoveReplica(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     1000,
-		RegionThreshold:       10,
-		BalanceScoreThreshold: 1,
-		MinTrafficPercentage:  0.8,
-		MaxTrafficPercentage:  1.2,
+		WriteKeyThreshold:          util.AddressOf(1000),
+		RegionThreshold:            util.AddressOf(10),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
+		BalanceScoreThreshold:      util.AddressOf(1),
+		MinTrafficPercentage:       util.AddressOf(0.8),
+		MaxTrafficPercentage:       util.AddressOf(1.2),
 	}
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 3)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas first
 	for _, replica := range replicas {
@@ -190,16 +200,17 @@ func TestSplitSpanChecker_UpdateStatus_Traffic(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     1000,
-		RegionThreshold:       10,
-		BalanceScoreThreshold: 1,
-		MinTrafficPercentage:  0.8,
-		MaxTrafficPercentage:  1.2,
+		WriteKeyThreshold:          util.AddressOf(1000),
+		RegionThreshold:            util.AddressOf(10),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
+		BalanceScoreThreshold:      util.AddressOf(1),
+		MinTrafficPercentage:       util.AddressOf(0.8),
+		MaxTrafficPercentage:       util.AddressOf(1.2),
 	}
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 1)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	replica := replicas[0]
 	checker.AddReplica(replica)
@@ -266,19 +277,18 @@ func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     1000,
-		RegionThreshold:       5,
-		BalanceScoreThreshold: 1,
-		MinTrafficPercentage:  0.8,
-		MaxTrafficPercentage:  1.2,
+		EnableTableAcrossNodes:     util.AddressOf(true),
+		WriteKeyThreshold:          util.AddressOf(1000),
+		RegionThreshold:            util.AddressOf(5),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
+		BalanceScoreThreshold:      util.AddressOf(1),
+		MinTrafficPercentage:       util.AddressOf(0.8),
+		MaxTrafficPercentage:       util.AddressOf(1.2),
 	}
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 1)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
-
-	replica := replicas[0]
-	checker.AddReplica(replica)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Mock regions
 	mockRegions := []*tikv.Region{
@@ -292,9 +302,10 @@ func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
 	mockCache := appcontext.GetService[*testutil.MockCache](appcontext.RegionCache)
 	mockCache.SetRegions(fmt.Sprintf("%s-%s", replicas[0].Span.StartKey, replicas[0].Span.EndKey), mockRegions)
 
-	// Set region check time to force update
+	replica := replicas[0]
+	checker.AddReplica(replica)
+
 	spanStatus := checker.allTasks[replica.ID]
-	spanStatus.regionCheckTime = time.Now().Add(-2 * regionCheckInterval) // Force region check
 
 	status := &heartbeatpb.TableSpanStatus{
 		ID:                 replica.ID.ToPB(),
@@ -304,29 +315,15 @@ func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
 	}
 	replica.UpdateStatus(status)
 
-	// Test region count above threshold
 	checker.UpdateStatus(replica)
+
+	// Test region count above threshold
 	spanStatus = checker.allTasks[replica.ID]
 	require.Equal(t, 6, spanStatus.regionCount)
 
 	// Test region check interval enforcement
-	checker.UpdateStatus(replica)
 	spanStatus = checker.allTasks[replica.ID]
 	require.Equal(t, 6, spanStatus.regionCount) // Should not change due to time interval
-
-	// Test region count below threshold
-	mockRegions = []*tikv.Region{
-		testutil.MockRegionWithID(1),
-		testutil.MockRegionWithID(2),
-		testutil.MockRegionWithID(3),
-	}
-	mockCache.SetRegions(fmt.Sprintf("%s-%s", replicas[0].Span.StartKey, replicas[0].Span.EndKey), mockRegions)
-
-	spanStatus.regionCheckTime = time.Now().Add(-2 * regionCheckInterval)
-
-	checker.UpdateStatus(replica)
-	spanStatus = checker.allTasks[replica.ID]
-	require.Equal(t, 3, spanStatus.regionCount)
 }
 
 func TestSplitSpanChecker_UpdateStatus_NonWorking(t *testing.T) {
@@ -334,16 +331,17 @@ func TestSplitSpanChecker_UpdateStatus_NonWorking(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     1000,
-		RegionThreshold:       5,
-		BalanceScoreThreshold: 1,
-		MinTrafficPercentage:  0.8,
-		MaxTrafficPercentage:  1.2,
+		WriteKeyThreshold:          util.AddressOf(1000),
+		RegionThreshold:            util.AddressOf(5),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
+		BalanceScoreThreshold:      util.AddressOf(1),
+		MinTrafficPercentage:       util.AddressOf(0.8),
+		MaxTrafficPercentage:       util.AddressOf(1.2),
 	}
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 1)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	replica := replicas[0]
 	checker.AddReplica(replica)
@@ -375,11 +373,12 @@ func TestSplitSpanChecker_ChooseSplitSpans_Traffic(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     1000,
-		RegionThreshold:       10,
-		BalanceScoreThreshold: 1,
-		MinTrafficPercentage:  0.8,
-		MaxTrafficPercentage:  1.2,
+		WriteKeyThreshold:          util.AddressOf(1000),
+		RegionThreshold:            util.AddressOf(10),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
+		BalanceScoreThreshold:      util.AddressOf(1),
+		MinTrafficPercentage:       util.AddressOf(0.8),
+		MaxTrafficPercentage:       util.AddressOf(1.2),
 	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -388,7 +387,7 @@ func TestSplitSpanChecker_ChooseSplitSpans_Traffic(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 3)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -430,11 +429,12 @@ func TestSplitSpanChecker_ChooseSplitSpans_Region(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     1000,
-		RegionThreshold:       5,
-		BalanceScoreThreshold: 1,
-		MinTrafficPercentage:  0.8,
-		MaxTrafficPercentage:  1.2,
+		WriteKeyThreshold:          util.AddressOf(1000),
+		RegionThreshold:            util.AddressOf(5),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
+		BalanceScoreThreshold:      util.AddressOf(1),
+		MinTrafficPercentage:       util.AddressOf(0.8),
+		MaxTrafficPercentage:       util.AddressOf(1.2),
 	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -443,7 +443,7 @@ func TestSplitSpanChecker_ChooseSplitSpans_Region(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 2)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -481,11 +481,12 @@ func TestSplitSpanChecker_CheckMergeWhole_SingleNode(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     2000,
-		RegionThreshold:       20,
-		BalanceScoreThreshold: 1,
-		MinTrafficPercentage:  0.8,
-		MaxTrafficPercentage:  1.2,
+		WriteKeyThreshold:          util.AddressOf(2000),
+		RegionThreshold:            util.AddressOf(20),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
+		BalanceScoreThreshold:      util.AddressOf(1),
+		MinTrafficPercentage:       util.AddressOf(0.8),
+		MaxTrafficPercentage:       util.AddressOf(1.2),
 	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -493,7 +494,7 @@ func TestSplitSpanChecker_CheckMergeWhole_SingleNode(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 3)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -526,11 +527,11 @@ func TestSplitSpanChecker_CheckMergeWhole_MultiNode(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     2000,
-		RegionThreshold:       20,
-		BalanceScoreThreshold: 1,
-		MinTrafficPercentage:  0.8,
-		MaxTrafficPercentage:  1.2,
+		WriteKeyThreshold:     util.AddressOf(2000),
+		RegionThreshold:       util.AddressOf(20),
+		BalanceScoreThreshold: util.AddressOf(1),
+		MinTrafficPercentage:  util.AddressOf(0.8),
+		MaxTrafficPercentage:  util.AddressOf(1.2),
 	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -540,7 +541,7 @@ func TestSplitSpanChecker_CheckMergeWhole_MultiNode(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 3)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -573,11 +574,12 @@ func TestSplitSpanChecker_CheckMergeWhole_ThresholdNotMet(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     1000,
-		RegionThreshold:       10,
-		BalanceScoreThreshold: 1,
-		MinTrafficPercentage:  0.8,
-		MaxTrafficPercentage:  1.2,
+		WriteKeyThreshold:          util.AddressOf(1000),
+		RegionThreshold:            util.AddressOf(10),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
+		BalanceScoreThreshold:      util.AddressOf(1),
+		MinTrafficPercentage:       util.AddressOf(0.8),
+		MaxTrafficPercentage:       util.AddressOf(1.2),
 	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -585,7 +587,7 @@ func TestSplitSpanChecker_CheckMergeWhole_ThresholdNotMet(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 2)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -616,11 +618,12 @@ func TestSplitSpanChecker_CheckBalanceTraffic_Balance(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     1000,
-		RegionThreshold:       10,
-		BalanceScoreThreshold: 1,
-		MinTrafficPercentage:  0.8,
-		MaxTrafficPercentage:  1.2,
+		WriteKeyThreshold:          util.AddressOf(1000),
+		RegionThreshold:            util.AddressOf(10),
+		RegionCountRefreshInterval: util.AddressOf(time.Minute),
+		BalanceScoreThreshold:      util.AddressOf(1),
+		MinTrafficPercentage:       util.AddressOf(0.8),
+		MaxTrafficPercentage:       util.AddressOf(1.2),
 	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -629,7 +632,7 @@ func TestSplitSpanChecker_CheckBalanceTraffic_Balance(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 4)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -681,11 +684,11 @@ func TestSplitSpanChecker_CheckBalanceTraffic_NoBalanceNeeded(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     1000,
-		RegionThreshold:       10,
-		BalanceScoreThreshold: 1,
-		MinTrafficPercentage:  0.8,
-		MaxTrafficPercentage:  1.2,
+		WriteKeyThreshold:     util.AddressOf(1000),
+		RegionThreshold:       util.AddressOf(10),
+		BalanceScoreThreshold: util.AddressOf(1),
+		MinTrafficPercentage:  util.AddressOf(0.8),
+		MaxTrafficPercentage:  util.AddressOf(1.2),
 	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -694,7 +697,7 @@ func TestSplitSpanChecker_CheckBalanceTraffic_NoBalanceNeeded(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 2)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -728,11 +731,11 @@ func TestSplitSpanChecker_CheckBalanceTraffic_SplitIfNoMove(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     1000,
-		RegionThreshold:       10,
-		BalanceScoreThreshold: 1,
-		MinTrafficPercentage:  0.8,
-		MaxTrafficPercentage:  1.2,
+		WriteKeyThreshold:     util.AddressOf(1000),
+		RegionThreshold:       util.AddressOf(10),
+		BalanceScoreThreshold: util.AddressOf(1),
+		MinTrafficPercentage:  util.AddressOf(0.8),
+		MaxTrafficPercentage:  util.AddressOf(1.2),
 	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -741,7 +744,7 @@ func TestSplitSpanChecker_CheckBalanceTraffic_SplitIfNoMove(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 2)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -783,11 +786,11 @@ func TestSplitSpanChecker_CheckBalanceTraffic_SingleNode(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     1000,
-		RegionThreshold:       10,
-		BalanceScoreThreshold: 1,
-		MinTrafficPercentage:  0.8,
-		MaxTrafficPercentage:  1.2,
+		WriteKeyThreshold:     util.AddressOf(1000),
+		RegionThreshold:       util.AddressOf(10),
+		BalanceScoreThreshold: util.AddressOf(1),
+		MinTrafficPercentage:  util.AddressOf(0.8),
+		MaxTrafficPercentage:  util.AddressOf(1.2),
 	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -795,7 +798,7 @@ func TestSplitSpanChecker_CheckBalanceTraffic_SingleNode(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 2)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -828,11 +831,11 @@ func TestSplitSpanChecker_CheckBalanceTraffic_TrafficFluctuation(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     1000,
-		RegionThreshold:       0,
-		BalanceScoreThreshold: 1,
-		MinTrafficPercentage:  0.8,
-		MaxTrafficPercentage:  1.2,
+		WriteKeyThreshold:     util.AddressOf(1000),
+		RegionThreshold:       util.AddressOf(0),
+		BalanceScoreThreshold: util.AddressOf(1),
+		MinTrafficPercentage:  util.AddressOf(0.8),
+		MaxTrafficPercentage:  util.AddressOf(1.2),
 	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -841,7 +844,7 @@ func TestSplitSpanChecker_CheckBalanceTraffic_TrafficFluctuation(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 4)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -901,11 +904,11 @@ func TestSplitSpanChecker_ChooseMergedSpans_LargeLag(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     1000,
-		RegionThreshold:       20,
-		BalanceScoreThreshold: 1,
-		MinTrafficPercentage:  0.8,
-		MaxTrafficPercentage:  1.2,
+		WriteKeyThreshold:     util.AddressOf(1000),
+		RegionThreshold:       util.AddressOf(20),
+		BalanceScoreThreshold: util.AddressOf(1),
+		MinTrafficPercentage:  util.AddressOf(0.8),
+		MaxTrafficPercentage:  util.AddressOf(1.2),
 	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -913,7 +916,7 @@ func TestSplitSpanChecker_ChooseMergedSpans_LargeLag(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 3)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -939,11 +942,11 @@ func TestSplitSpanChecker_ChooseMergedSpans_Continuous(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     1000,
-		RegionThreshold:       20,
-		BalanceScoreThreshold: 1,
-		MinTrafficPercentage:  0.8,
-		MaxTrafficPercentage:  1.2,
+		WriteKeyThreshold:     util.AddressOf(1000),
+		RegionThreshold:       util.AddressOf(20),
+		BalanceScoreThreshold: util.AddressOf(1),
+		MinTrafficPercentage:  util.AddressOf(0.8),
+		MaxTrafficPercentage:  util.AddressOf(1.2),
 	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -951,7 +954,7 @@ func TestSplitSpanChecker_ChooseMergedSpans_Continuous(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 3)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -996,11 +999,11 @@ func TestSplitSpanChecker_ChooseMoveSpans_SimpleMove(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     1000,
-		RegionThreshold:       20,
-		BalanceScoreThreshold: 1,
-		MinTrafficPercentage:  0.8,
-		MaxTrafficPercentage:  1.2,
+		WriteKeyThreshold:     util.AddressOf(1000),
+		RegionThreshold:       util.AddressOf(20),
+		BalanceScoreThreshold: util.AddressOf(1),
+		MinTrafficPercentage:  util.AddressOf(0.8),
+		MaxTrafficPercentage:  util.AddressOf(1.2),
 	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -1009,7 +1012,7 @@ func TestSplitSpanChecker_ChooseMoveSpans_SimpleMove(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 5)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -1065,11 +1068,11 @@ func TestSplitSpanChecker_ChooseMoveSpans_ExchangeMove(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     1000,
-		RegionThreshold:       20,
-		BalanceScoreThreshold: 1,
-		MinTrafficPercentage:  0.8,
-		MaxTrafficPercentage:  1.2,
+		WriteKeyThreshold:     util.AddressOf(1000),
+		RegionThreshold:       util.AddressOf(20),
+		BalanceScoreThreshold: util.AddressOf(1),
+		MinTrafficPercentage:  util.AddressOf(0.8),
+		MaxTrafficPercentage:  util.AddressOf(1.2),
 	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -1078,7 +1081,7 @@ func TestSplitSpanChecker_ChooseMoveSpans_ExchangeMove(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 6)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -1127,11 +1130,11 @@ func TestSplitSpanChecker_Check_FullFlow(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     1000,
-		RegionThreshold:       10,
-		BalanceScoreThreshold: 1,
-		MinTrafficPercentage:  0.8,
-		MaxTrafficPercentage:  1.2,
+		WriteKeyThreshold:     util.AddressOf(1000),
+		RegionThreshold:       util.AddressOf(10),
+		BalanceScoreThreshold: util.AddressOf(1),
+		MinTrafficPercentage:  util.AddressOf(0.8),
+		MaxTrafficPercentage:  util.AddressOf(1.2),
 	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -1140,7 +1143,7 @@ func TestSplitSpanChecker_Check_FullFlow(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 4)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -1203,11 +1206,11 @@ func TestSplitSpanChecker_Check_FullFlow_WriteThresholdZero(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     0, // No write threshold
-		RegionThreshold:       10,
-		BalanceScoreThreshold: 1,
-		MinTrafficPercentage:  0.8,
-		MaxTrafficPercentage:  1.2,
+		WriteKeyThreshold:     util.AddressOf(0), // No write threshold
+		RegionThreshold:       util.AddressOf(10),
+		BalanceScoreThreshold: util.AddressOf(1),
+		MinTrafficPercentage:  util.AddressOf(0.8),
+		MaxTrafficPercentage:  util.AddressOf(1.2),
 	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -1216,7 +1219,7 @@ func TestSplitSpanChecker_Check_FullFlow_WriteThresholdZero(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 4)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -1279,11 +1282,11 @@ func TestSplitSpanChecker_Check_FullFlow_RegionThresholdZero(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     1000,
-		RegionThreshold:       0, // No region threshold
-		BalanceScoreThreshold: 1,
-		MinTrafficPercentage:  0.8,
-		MaxTrafficPercentage:  1.2,
+		WriteKeyThreshold:     util.AddressOf(1000),
+		RegionThreshold:       util.AddressOf(0), // No region threshold
+		BalanceScoreThreshold: util.AddressOf(1),
+		MinTrafficPercentage:  util.AddressOf(0.8),
+		MaxTrafficPercentage:  util.AddressOf(1.2),
 	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -1292,7 +1295,7 @@ func TestSplitSpanChecker_Check_FullFlow_RegionThresholdZero(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, 4)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker
 	for _, replica := range replicas {
@@ -1359,11 +1362,11 @@ func TestSplitSpanChecker_Check_PerformanceWithManySpans(t *testing.T) {
 	traffic := 100.0
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
-		WriteKeyThreshold:     1000,
-		RegionThreshold:       10,
-		BalanceScoreThreshold: 1,
-		MinTrafficPercentage:  0.8,
-		MaxTrafficPercentage:  1.2,
+		WriteKeyThreshold:     util.AddressOf(1000),
+		RegionThreshold:       util.AddressOf(10),
+		BalanceScoreThreshold: util.AddressOf(1),
+		MinTrafficPercentage:  util.AddressOf(0.8),
+		MaxTrafficPercentage:  util.AddressOf(1.2),
 	}
 
 	nodeIDs := []node.ID{"node1", "node2"}
@@ -1373,7 +1376,7 @@ func TestSplitSpanChecker_Check_PerformanceWithManySpans(t *testing.T) {
 
 	replicas := createTestSplitSpanReplications(cfID, 100000, spanCount)
 	groupID := replicas[0].GetGroupID()
-	checker := NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
 
 	// Add replicas to checker, set traffic and regionCount, assign nodeID alternately
 	for i, replica := range replicas {

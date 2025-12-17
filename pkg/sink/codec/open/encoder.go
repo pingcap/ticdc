@@ -103,7 +103,7 @@ func (d *batchEncoder) AppendRowChangedEvent(
 				zap.Int("length", length),
 				zap.Any("table", e.TableInfo.TableName),
 				zap.Any("key", key))
-			return errors.ErrMessageTooLarge.GenWithStackByArgs()
+			return errors.ErrMessageTooLarge.GenWithStackByArgs(e.TableInfo.GetTableName(), length, d.config.MaxMessageBytes)
 		}
 
 		if d.config.LargeMessageHandle.EnableClaimCheck() {
@@ -127,7 +127,7 @@ func (d *batchEncoder) AppendRowChangedEvent(
 					zap.Int("maxMessageBytes", d.config.MaxMessageBytes),
 					zap.Int("length", length),
 					zap.Any("key", key))
-				return errors.ErrMessageTooLarge.GenWithStackByArgs()
+				return errors.ErrMessageTooLarge.GenWithStackByArgs(e.TableInfo.GetTableName(), length, d.config.MaxMessageBytes)
 			}
 		}
 
@@ -144,7 +144,7 @@ func (d *batchEncoder) AppendRowChangedEvent(
 					zap.Int("length", length),
 					zap.Any("table", e.TableInfo.TableName),
 					zap.Any("key", key))
-				return errors.ErrMessageTooLarge.GenWithStackByArgs()
+				return errors.ErrMessageTooLarge.GenWithStackByArgs(e.TableInfo.GetTableName(), length, d.config.MaxMessageBytes)
 			}
 		}
 	}

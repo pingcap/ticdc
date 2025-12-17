@@ -34,6 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler"
 	pkgoperator "github.com/pingcap/ticdc/pkg/scheduler/operator"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -45,9 +46,9 @@ import (
 
 var replicaConfig = &config.ReplicaConfig{
 	Scheduler: &config.ChangefeedSchedulerConfig{
-		BalanceScoreThreshold: 1,
-		MinTrafficPercentage:  0.8,
-		MaxTrafficPercentage:  1.2,
+		BalanceScoreThreshold: util.AddressOf(1),
+		MinTrafficPercentage:  util.AddressOf(0.8),
+		MaxTrafficPercentage:  util.AddressOf(1.2),
 	},
 }
 
@@ -71,7 +72,8 @@ func TestSchedule(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1", false)
-	controller := NewController(cfID, 1, nil, replicaConfig, ddlSpan, nil, 9, time.Minute, common.DefaultKeyspace, false)
+	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
+	controller := NewController(cfID, 1, nil, replicaConfig, ddlSpan, nil, 9, time.Minute, refresher, common.DefaultKeyspace, false)
 	for i := 0; i < 10; i++ {
 		controller.spanController.AddNewTable(commonEvent.Table{
 			SchemaID: 1,
@@ -108,15 +110,16 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableMoreThanNodeNum(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1", false)
+	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
 	s := NewController(cfID, 1, nil, &config.ReplicaConfig{
 		Scheduler: &config.ChangefeedSchedulerConfig{
-			EnableTableAcrossNodes: true,
-			WriteKeyThreshold:      500,
-			BalanceScoreThreshold:  1,
-			MinTrafficPercentage:   0.8,
-			MaxTrafficPercentage:   1.2,
+			EnableTableAcrossNodes: util.AddressOf(true),
+			WriteKeyThreshold:      util.AddressOf(500),
+			BalanceScoreThreshold:  util.AddressOf(1),
+			MinTrafficPercentage:   util.AddressOf(0.8),
+			MaxTrafficPercentage:   util.AddressOf(1.2),
 		},
-	}, ddlSpan, nil, 1000, 0, common.DefaultKeyspace, false)
+	}, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false)
 
 	nodeID := node.ID("node1")
 	for i := 0; i < 100; i++ {
@@ -216,15 +219,16 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableLessThanNodeNum(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1", false)
+	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
 	s := NewController(cfID, 1, nil, &config.ReplicaConfig{
 		Scheduler: &config.ChangefeedSchedulerConfig{
-			EnableTableAcrossNodes: true,
-			WriteKeyThreshold:      500,
-			BalanceScoreThreshold:  1,
-			MinTrafficPercentage:   0.8,
-			MaxTrafficPercentage:   1.2,
+			EnableTableAcrossNodes: util.AddressOf(true),
+			WriteKeyThreshold:      util.AddressOf(500),
+			BalanceScoreThreshold:  util.AddressOf(1),
+			MinTrafficPercentage:   util.AddressOf(0.8),
+			MaxTrafficPercentage:   util.AddressOf(1.2),
 		},
-	}, ddlSpan, nil, 1000, 0, common.DefaultKeyspace, false)
+	}, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false)
 
 	regionCache := appcontext.GetService[*testutil.MockCache](appcontext.RegionCache)
 
@@ -337,15 +341,16 @@ func TestSplitBalanceGroupsWithNodeRemove(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1", false)
+	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
 	s := NewController(cfID, 1, nil, &config.ReplicaConfig{
 		Scheduler: &config.ChangefeedSchedulerConfig{
-			EnableTableAcrossNodes: true,
-			WriteKeyThreshold:      500,
-			BalanceScoreThreshold:  1,
-			MinTrafficPercentage:   0.8,
-			MaxTrafficPercentage:   1.2,
+			EnableTableAcrossNodes: util.AddressOf(true),
+			WriteKeyThreshold:      util.AddressOf(500),
+			BalanceScoreThreshold:  util.AddressOf(1),
+			MinTrafficPercentage:   util.AddressOf(0.8),
+			MaxTrafficPercentage:   util.AddressOf(1.2),
 		},
-	}, ddlSpan, nil, 1000, 0, common.DefaultKeyspace, false)
+	}, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false)
 
 	nodeIDList := []node.ID{"node1", "node2", "node3"}
 	for i := 0; i < 100; i++ {
@@ -436,16 +441,18 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1", false)
 
+	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
 	controller := NewController(cfID, 1, nil, &config.ReplicaConfig{
 		Scheduler: &config.ChangefeedSchedulerConfig{
-			EnableTableAcrossNodes: true,
-			WriteKeyThreshold:      1000,
-			RegionThreshold:        20,
-			BalanceScoreThreshold:  1,
-			MinTrafficPercentage:   0.8,
-			MaxTrafficPercentage:   1.2,
+			EnableTableAcrossNodes:     util.AddressOf(true),
+			WriteKeyThreshold:          util.AddressOf(1000),
+			RegionThreshold:            util.AddressOf(20),
+			RegionCountRefreshInterval: util.AddressOf(time.Minute),
+			BalanceScoreThreshold:      util.AddressOf(1),
+			MinTrafficPercentage:       util.AddressOf(0.8),
+			MaxTrafficPercentage:       util.AddressOf(1.2),
 		},
-	}, ddlSpan, nil, 1000, 0, common.DefaultKeyspace, false)
+	}, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false)
 
 	nodeIDList := []node.ID{"node1", "node2", "node3"}
 	// make a group
@@ -1030,7 +1037,8 @@ func TestBalance(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1", false)
-	s := NewController(cfID, 1, nil, replicaConfig, ddlSpan, nil, 1000, 0, common.DefaultKeyspace, false)
+	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
+	s := NewController(cfID, 1, nil, replicaConfig, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false)
 	for i := 0; i < 100; i++ {
 		sz := common.TableIDToComparableSpan(common.DefaultKeyspaceID, int64(i))
 		span := &heartbeatpb.TableSpan{TableID: sz.TableID, StartKey: sz.StartKey, EndKey: sz.EndKey}
@@ -1104,17 +1112,20 @@ func TestDefaultSpanIntoSplit(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1", false)
+
+	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
 	controller := NewController(cfID, 1, nil, &config.ReplicaConfig{
 		Scheduler: &config.ChangefeedSchedulerConfig{
-			EnableTableAcrossNodes:     true,
-			WriteKeyThreshold:          1000,
-			RegionThreshold:            8,
-			SchedulingTaskCountPerNode: 10,
-			BalanceScoreThreshold:      1,
-			MinTrafficPercentage:       0.8,
-			MaxTrafficPercentage:       1.2,
+			EnableTableAcrossNodes:     util.AddressOf(true),
+			WriteKeyThreshold:          util.AddressOf(1000),
+			RegionThreshold:            util.AddressOf(8),
+			RegionCountRefreshInterval: util.AddressOf(time.Minute),
+			SchedulingTaskCountPerNode: util.AddressOf(10),
+			BalanceScoreThreshold:      util.AddressOf(1),
+			MinTrafficPercentage:       util.AddressOf(0.8),
+			MaxTrafficPercentage:       util.AddressOf(1.2),
 		},
-	}, ddlSpan, nil, 1000, 0, common.DefaultKeyspace, false)
+	}, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false)
 	totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
 	span := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: totalSpan.StartKey, EndKey: totalSpan.EndKey}
 	dispatcherID := common.NewDispatcherID()
@@ -1255,7 +1266,8 @@ func TestStoppedWhenMoving(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1", false)
-	s := NewController(cfID, 1, nil, replicaConfig, ddlSpan, nil, 1000, 0, common.DefaultKeyspace, false)
+	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
+	s := NewController(cfID, 1, nil, replicaConfig, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false)
 	for i := 0; i < 2; i++ {
 		sz := common.TableIDToComparableSpan(common.DefaultKeyspaceID, int64(i))
 		span := &heartbeatpb.TableSpan{TableID: sz.TableID, StartKey: sz.StartKey, EndKey: sz.EndKey}
@@ -1306,8 +1318,9 @@ func TestFinishBootstrap(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		}, "node1", false)
+	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
 	s := NewController(cfID, 1, &mockThreadPool{},
-		config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0, common.DefaultKeyspace, false)
+		config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false)
 	totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
 	span := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: totalSpan.StartKey, EndKey: totalSpan.EndKey}
 	schemaStore := eventservice.NewMockSchemaStore()
@@ -1379,14 +1392,16 @@ func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 		}, "node1", false)
 	defaultConfig := config.GetDefaultReplicaConfig().Clone()
 	defaultConfig.Scheduler = &config.ChangefeedSchedulerConfig{
-		EnableTableAcrossNodes: true,
-		RegionThreshold:        1,
-		RegionCountPerSpan:     1,
-		BalanceScoreThreshold:  1,
-		MinTrafficPercentage:   0.8,
-		MaxTrafficPercentage:   1.2,
+		EnableTableAcrossNodes:     util.AddressOf(true),
+		RegionThreshold:            util.AddressOf(1),
+		RegionCountPerSpan:         util.AddressOf(1),
+		RegionCountRefreshInterval: util.AddressOf(5 * time.Minute),
+		BalanceScoreThreshold:      util.AddressOf(1),
+		MinTrafficPercentage:       util.AddressOf(0.8),
+		MaxTrafficPercentage:       util.AddressOf(1.2),
 	}
-	s := NewController(cfID, 1, nil, defaultConfig, ddlSpan, nil, 1000, 0, common.DefaultKeyspace, false)
+	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
+	s := NewController(cfID, 1, nil, defaultConfig, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false)
 	s.taskPool = &mockThreadPool{}
 	schemaStore := eventservice.NewMockSchemaStore()
 	schemaStore.SetTables(
@@ -1553,18 +1568,20 @@ func TestLargeTableInitialization(t *testing.T) {
 		}, "node1", false)
 
 	// Configure with the specified parameters
+	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
 	controller := NewController(cfID, 1, nil, &config.ReplicaConfig{
 		Scheduler: &config.ChangefeedSchedulerConfig{
-			EnableTableAcrossNodes:     true,
-			WriteKeyThreshold:          500,
-			RegionThreshold:            50,
-			RegionCountPerSpan:         10,
-			SchedulingTaskCountPerNode: 2,
-			BalanceScoreThreshold:      1,
-			MinTrafficPercentage:       0.8,
-			MaxTrafficPercentage:       1.2,
+			EnableTableAcrossNodes:     util.AddressOf(true),
+			WriteKeyThreshold:          util.AddressOf(500),
+			RegionThreshold:            util.AddressOf(50),
+			RegionCountPerSpan:         util.AddressOf(10),
+			RegionCountRefreshInterval: util.AddressOf(time.Minute),
+			SchedulingTaskCountPerNode: util.AddressOf(2),
+			BalanceScoreThreshold:      util.AddressOf(1),
+			MinTrafficPercentage:       util.AddressOf(0.8),
+			MaxTrafficPercentage:       util.AddressOf(1.2),
 		},
-	}, ddlSpan, nil, 1000, 0, common.DefaultKeyspace, false)
+	}, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false)
 
 	// Create a large table with 10000 regions
 	totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, int64(1))

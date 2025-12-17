@@ -18,6 +18,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -30,18 +31,20 @@ const (
 )
 
 func GetNewGroupChecker(
-	cfID common.ChangeFeedID, schedulerCfg *config.ChangefeedSchedulerConfig,
+	cfID common.ChangeFeedID,
+	schedulerCfg *config.ChangefeedSchedulerConfig,
+	refresher *RegionCountRefresher,
 ) func(replica.GroupID) replica.GroupChecker[common.DispatcherID, *SpanReplication] {
-	if schedulerCfg == nil || !schedulerCfg.EnableTableAcrossNodes {
+	if schedulerCfg == nil || !util.GetOrZero(schedulerCfg.EnableTableAcrossNodes) {
 		return replica.NewEmptyChecker[common.DispatcherID, *SpanReplication]
 	}
 	return func(groupID replica.GroupID) replica.GroupChecker[common.DispatcherID, *SpanReplication] {
 		groupType := replica.GetGroupType(groupID)
 		switch groupType {
 		case replica.GroupDefault:
-			return NewDefaultSpanSplitChecker(cfID, schedulerCfg)
+			return NewDefaultSpanSplitChecker(cfID, schedulerCfg, refresher)
 		case replica.GroupTable:
-			return NewSplitSpanChecker(cfID, groupID, schedulerCfg)
+			return NewSplitSpanChecker(cfID, groupID, schedulerCfg, refresher)
 		}
 		log.Panic("unknown group type", zap.String("changefeed", cfID.Name()), zap.Int8("groupType", int8(groupType)))
 		return nil

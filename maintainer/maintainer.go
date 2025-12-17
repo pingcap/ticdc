@@ -36,6 +36,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/redo"
 	pkgReplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -174,10 +175,12 @@ func NewMaintainer(cfID common.ChangeFeedID,
 
 	tableTriggerEventDispatcherID, ddlSpan := newDDLSpan(keyspaceID, cfID, checkpointTs, selfNode, common.DefaultMode)
 	var redoDDLSpan *replica.SpanReplication
-	enableRedo := redo.IsConsistentEnabled(info.Config.Consistent.Level)
+	enableRedo := redo.IsConsistentEnabled(util.GetOrZero(info.Config.Consistent.Level))
 	if enableRedo {
 		_, redoDDLSpan = newDDLSpan(keyspaceID, cfID, checkpointTs, selfNode, common.RedoMode)
 	}
+
+	refresher := replica.NewRegionCountRefresher(cfID, util.GetOrZero(info.Config.Scheduler.RegionCountRefreshInterval))
 
 	var (
 		keyspaceName = cfID.Keyspace()
@@ -193,7 +196,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		startCheckpointTs: checkpointTs,
 		controller: NewController(cfID, checkpointTs, taskScheduler,
-			info.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), keyspaceMeta, enableRedo),
+			info.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), refresher, keyspaceMeta, enableRedo),
 		mc:                    mc,
 		removed:               atomic.NewBool(false),
 		nodeManager:           nodeManager,
@@ -248,6 +251,11 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	go m.calCheckpointTs(ctx)
 	if enableRedo {
 		go m.handleRedoMessage(ctx)
+	}
+
+	if util.GetOrZero(info.Config.Scheduler.EnableTableAcrossNodes) &&
+		util.GetOrZero(info.Config.Scheduler.RegionThreshold) > 0 {
+		go refresher.Run(ctx)
 	}
 
 	log.Info("changefeed maintainer is created",

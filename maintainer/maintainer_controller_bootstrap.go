@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils"
 	"go.uber.org/zap"
 )
@@ -280,9 +281,9 @@ func (c *Controller) initializeComponents(
 ) {
 	// Initialize barrier
 	if c.enableRedo {
-		c.redoBarrier = NewBarrier(c.redoSpanController, c.redoOperatorController, c.cfConfig.Scheduler.EnableTableAcrossNodes, allNodesResp, common.RedoMode)
+		c.redoBarrier = NewBarrier(c.redoSpanController, c.redoOperatorController, util.GetOrZero(c.cfConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.RedoMode)
 	}
-	c.barrier = NewBarrier(c.spanController, c.operatorController, c.cfConfig.Scheduler.EnableTableAcrossNodes, allNodesResp, common.DefaultMode)
+	c.barrier = NewBarrier(c.spanController, c.operatorController, util.GetOrZero(c.cfConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.DefaultMode)
 
 	// Start scheduler
 	c.taskHandlesMu.Lock()
@@ -327,7 +328,7 @@ func (c *Controller) createSpanReplication(spanInfo *heartbeatpb.BootstrapTableS
 
 func (c *Controller) loadTables(startTs uint64) ([]commonEvent.Table, error) {
 	// Use a empty timezone because table filter does not need it.
-	f, err := filter.NewFilter(c.cfConfig.Filter, "", c.cfConfig.CaseSensitive, c.cfConfig.ForceReplicate)
+	f, err := filter.NewFilter(c.cfConfig.Filter, "", util.GetOrZero(c.cfConfig.CaseSensitive), util.GetOrZero(c.cfConfig.ForceReplicate))
 	if err != nil {
 		return nil, errors.Cause(err)
 	}
