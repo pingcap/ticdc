@@ -319,14 +319,13 @@ func (c *Controller) RequestResolvedTsFromLogCoordinator(ctx context.Context, ch
 }
 
 func (c *Controller) onNodeChanged() {
-	newNodes, removedNodes, messages, cachedResponse := c.bootstrapper.HandleNewNodes(c.nodeManager.GetAliveNodes())
+	addedNodes, removedNodes, messages, cachedResponse := c.bootstrapper.HandleNewNodes(c.nodeManager.GetAliveNodes())
 
 	log.Info("controller detects node changed",
-		zap.Int("newNodeNum", len(newNodes)),
-		zap.Int("removedNodeNum", len(removedNodes)),
-		zap.Any("newNodes", newNodes),
-		zap.Any("removedNodes", removedNodes),
-	)
+		zap.Int("addedCount", len(addedNodes)),
+		zap.Int("removedCount", len(removedNodes)),
+		zap.Any("addedNodes", addedNodes),
+		zap.Any("removedNodes", removedNodes))
 
 	for _, node := range removedNodes {
 		c.RemoveNode(node)

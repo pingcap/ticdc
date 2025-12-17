@@ -60,37 +60,32 @@ func NewBootstrapper[T any](id string, newBootstrapMsg NewBootstrapMessageFn) *B
 	}
 }
 
-// HandleNewNodes update node to bootstrapper
-// return the removed nodes, messages that need to be sent to remote node, and cached bootstrap responses.
-func (b *Bootstrapper[T]) HandleNewNodes(newNodes map[node.ID]*node.Info) (
-	[]node.ID,
-	[]node.ID,
-	[]*messaging.TargetMessage,
-	map[node.ID]*T,
+// HandleNewNodes updates the bootstrapper with the current set of active nodes.
+// It returns the IDs of newly added nodes, removed nodes, messages to be sent, and any cached bootstrap responses.
+func (b *Bootstrapper[T]) HandleNewNodes(activeNodes map[node.ID]*node.Info) (
+	addedNodes []node.ID,
+	removedNodes []node.ID,
+	messages []*messaging.TargetMessage,
+	cachedResponses map[node.ID]*T,
 ) {
-	var (
-		newAddNodes  = make([]node.ID, 0)
-		removedNodes = make([]node.ID, 0)
-		msgs         = make([]*messaging.TargetMessage, 0, len(newNodes))
-	)
 	b.mutex.Lock()
-	for id, info := range newNodes {
+	for id, info := range activeNodes {
 		if _, ok := b.nodes[id]; ok {
 			continue
 		}
 		// A new node is found, send a bootstrap message to it.
 		b.nodes[id] = NewNodeStatus[T](info)
-		log.Info("maintainer found a new node",
+		log.Info("found a new node",
 			zap.String("changefeed", b.id),
 			zap.String("nodeAddr", info.AdvertiseAddr),
 			zap.Any("nodeID", id))
-		msgs = append(msgs, b.newBootstrapMsg(id))
+		messages = append(messages, b.newBootstrapMsg(id))
 		b.nodes[id].lastBootstrapTime = b.currentTime()
-		newAddNodes = append(newAddNodes, id)
+		addedNodes = append(addedNodes, id)
 	}
 
-	for id, _ := range b.nodes {
-		if _, ok := newNodes[id]; !ok {
+	for id := range b.nodes {
+		if _, ok := activeNodes[id]; !ok {
 			log.Info("remove node from bootstrapper",
 				zap.String("changefeed", b.id),
 				zap.Any("nodeID", id))
@@ -100,7 +95,8 @@ func (b *Bootstrapper[T]) HandleNewNodes(newNodes map[node.ID]*node.Info) (
 	}
 
 	b.mutex.Unlock()
-	return newAddNodes, removedNodes, msgs, b.collectInitialBootstrapResponses()
+	cachedResponses = b.collectInitialBootstrapResponses()
+	return
 }
 
 // HandleBootstrapResponse do the following:

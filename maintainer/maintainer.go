@@ -496,10 +496,10 @@ func (m *Maintainer) onCheckpointTsPersisted(msg *heartbeatpb.CheckpointTsMessag
 }
 
 func (m *Maintainer) onNodeChanged() {
-	newNodes, removedNodes, messages, cachedResponse := m.bootstrapper.HandleNewNodes(m.nodeManager.GetAliveNodes())
+	addedNodes, removedNodes, messages, cachedResponse := m.bootstrapper.HandleNewNodes(m.nodeManager.GetAliveNodes())
 	log.Info("maintainer node changed", zap.Stringer("changefeedID", m.changefeedID),
-		zap.Int("new", len(newNodes)),
-		zap.Int("removed", len(removedNodes)))
+		zap.Int("addedCount", len(addedNodes)),
+		zap.Int("removedCount", len(removedNodes)))
 
 	for _, id := range removedNodes {
 		m.checkpointTsByCapture.Delete(id)
