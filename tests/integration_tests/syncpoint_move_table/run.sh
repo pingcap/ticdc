@@ -42,7 +42,7 @@ run() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0" --addr "127.0.0.1:8300"
 
 	SINK_URI="mysql://root@127.0.0.1:3306/?max-txn-row=1"
-	do_retry 5 3 cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml" -c "$CHANGEFEED_ID"
+	do_retry 5 3 cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "$CHANGEFEED_ID"
 
 	run_sql "DROP DATABASE IF EXISTS ${DB_NAME};" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE DATABASE ${DB_NAME};" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
@@ -59,10 +59,16 @@ run() {
 	kill_cdc_pid $cdc_pid_1
 	cleanup_process $CDC_BINARY
 
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforeWrite=sleep(30000)'
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforeWrite=sleep(90000)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 
 	check_coordinator_and_maintainer "127.0.0.1:8300" "$CHANGEFEED_ID" 60
+
+
+	cdc_cli_changefeed pause  --changefeed-id="$CHANGEFEED_ID"
+	sleep 2
+	cdc_cli_changefeed update --config="$CUR/conf/changefeed.toml" --changefeed-id="$CHANGEFEED_ID"
+	cdc_cli_changefeed resume --changefeed-id="$CHANGEFEED_ID"
 
 	# Start node2 for moving the table.
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
