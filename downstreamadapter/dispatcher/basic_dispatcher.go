@@ -504,9 +504,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				}
 				wakeCallback()
 			})
-			d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
-				d.DealWithBlockEvent(ddl)
-			})
+			d.DealWithBlockEvent(ddl)
 		case commonEvent.TypeSyncPointEvent:
 			if common.IsRedoMode(d.GetMode()) {
 				continue
@@ -525,9 +523,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			syncPoint.AddPostFlushFunc(func() {
 				wakeCallback()
 			})
-			d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
-				d.DealWithBlockEvent(syncPoint)
-			})
+			d.DealWithBlockEvent(syncPoint)
 		case commonEvent.TypeHandshakeEvent:
 			log.Warn("Receive handshake event unexpectedly",
 				zap.Stringer("dispatcher", d.id),
@@ -623,7 +619,6 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 					err := d.AddBlockEventToSink(pendingEvent)
 					if err != nil {
 						d.HandleError(err)
-						GetDispatcherStatusDynamicStream().Wake(d.id)
 						return
 					}
 					failpoint.Inject("BlockOrWaitReportAfterWrite", nil)
@@ -709,12 +704,18 @@ func (d *BasicDispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
 // 2. If the event is a multi-table DDL / sync point Event, it will generate a TableSpanBlockStatus message with ddl info to send to maintainer.
 func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 	if !d.shouldBlock(event) {
-		err := d.AddBlockEventToSink(event)
-		if err != nil {
-			d.HandleError(err)
-			return
-		}
-		if event.GetNeedAddedTables() != nil || event.GetNeedDroppedTables() != nil {
+		// Writing a block event may involve downstream IO (e.g. executing DDL), so it must not block
+		// the dynamic stream goroutine.
+		d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
+			err := d.AddBlockEventToSink(event)
+			if err != nil {
+				d.HandleError(err)
+				return
+			}
+			if event.GetNeedAddedTables() == nil && event.GetNeedDroppedTables() == nil {
+				return
+			}
+
 			message := &heartbeatpb.TableSpanBlockStatus{
 				ID: d.id.ToPB(),
 				State: &heartbeatpb.State{
@@ -754,7 +755,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 				d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
 			}
 			d.sharedInfo.blockStatusesChan <- message
-		}
+		})
 	} else {
 		d.blockEventStatus.setBlockEvent(event, heartbeatpb.BlockStage_WAITING)
 
