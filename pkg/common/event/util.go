@@ -33,6 +33,7 @@ import (
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/format"
+
 	// NOTE: Do not remove the `test_driver` import.
 	// For details, refer to: https://github.com/pingcap/parser/issues/43
 	_ "github.com/pingcap/tidb/pkg/parser/test_driver"
@@ -495,6 +496,11 @@ func BatchDML(dml *DMLEvent) *BatchDMLEvent {
 // Only the table with pk and no uk can always be splitted in all sinks.
 // Notice: please ensure the logic of IsSplitable is totally the same with isSplitable in utils
 func IsSplitable(tableInfo *common.TableInfo) bool {
+	// some ddl jobs do not have table info, such as drop database
+	if tableInfo == nil {
+		return true
+	}
+
 	if tableInfo.GetPkColInfo() == nil {
 		return false
 	}
