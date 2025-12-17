@@ -43,7 +43,7 @@ const (
 	// 3 is the length of "CDC", and the file number contains
 	// at least 6 digits (e.g. CDC000001.csv).
 	minFileNamePrefixLen = 3 + config.MinFileIndexWidth
-	defaultIndexFileName = "meta/CDC.index"
+	defaultIndexFileName = "meta/CDC-%s.index"
 
 	// The following constants are used to generate file paths.
 	schemaFileNameFormat = "schema_%d_%010d.json"
@@ -110,9 +110,9 @@ func generateSchemaFilePath(
 	return path.Join(dir, name)
 }
 
-func generateDataFileName(index uint64, extension string, fileIndexWidth int) string {
+func generateDataFileName(dispatcherID string, index uint64, extension string, fileIndexWidth int) string {
 	indexFmt := "%0" + strconv.Itoa(fileIndexWidth) + "d"
-	return fmt.Sprintf("CDC"+indexFmt+"%s", index, extension)
+	return fmt.Sprintf("CDC-%s-"+indexFmt+"%s", dispatcherID, index, extension)
 }
 
 type indexWithDate struct {
@@ -130,6 +130,7 @@ type VersionedTableName struct {
 	// schema storage. It can either be finished ts of a DDL event,
 	// or be the checkpoint ts when processor is restarted.
 	TableInfoVersion uint64
+	DispatcherID     commonType.DispatcherID
 }
 
 // FilePathGenerator is used to generate data file path and index file path.
@@ -303,7 +304,7 @@ func (f *FilePathGenerator) GenerateDateStr() string {
 // GenerateIndexFilePath generates a canonical path for index file.
 func (f *FilePathGenerator) GenerateIndexFilePath(tbl VersionedTableName, date string) string {
 	dir := f.generateDataDirPath(tbl, date)
-	name := defaultIndexFileName
+	name := fmt.Sprintf(defaultIndexFileName, tbl.DispatcherID.String())
 	return path.Join(dir, name)
 }
 
@@ -360,7 +361,7 @@ func (f *FilePathGenerator) generateDataFileName(
 		f.fileIndex[tbl].index = 0
 	}
 	f.fileIndex[tbl].index++
-	return generateDataFileName(f.fileIndex[tbl].index, f.extension, f.config.FileIndexWidth), nil
+	return generateDataFileName(tbl.DispatcherID.String(), f.fileIndex[tbl].index, f.extension, f.config.FileIndexWidth), nil
 }
 
 func (f *FilePathGenerator) getNextFileIdxFromIndexFile(
@@ -386,8 +387,8 @@ func (f *FilePathGenerator) getNextFileIdxFromIndexFile(
 	}
 
 	lastFilePath := path.Join(
-		f.generateDataDirPath(tbl, date),                                       // file dir
-		generateDataFileName(maxFileIdx, f.extension, f.config.FileIndexWidth), // file name
+		f.generateDataDirPath(tbl, date), // file dir
+		generateDataFileName(tbl.DispatcherID.String(), maxFileIdx, f.extension, f.config.FileIndexWidth), // file name
 	)
 	var lastFileExists, lastFileIsEmpty bool
 	lastFileExists, err = f.storage.FileExists(ctx, lastFilePath)
