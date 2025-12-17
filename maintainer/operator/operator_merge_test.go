@@ -123,7 +123,7 @@ func TestMergeOperator_NodeRemovedBeforeWorking(t *testing.T) {
 	op.OnNodeRemove(nodeA)
 
 	require.True(t, op.IsFinished())
-	require.True(t, op.removed.Load())
+	require.True(t, op.aborted.Load())
 
 	// Get the absent size before PostFinish
 	absentSizeBefore := spanController.GetAbsentSize()
@@ -159,8 +159,8 @@ func TestMergeOperator_TaskRemovedByDDLBeforeWorking(t *testing.T) {
 
 	op.OnTaskRemoved()
 	require.True(t, op.IsFinished())
-	require.True(t, op.removed.Load())
-	require.True(t, op.ddlRemoved.Load())
+	require.True(t, op.aborted.Load())
+	require.True(t, op.abortedByDDL.Load())
 
 	op.PostFinish()
 
@@ -182,4 +182,114 @@ func TestMergeOperator_NewReplicaSetCheckpointTsUsesMinOfMergedReplicas(t *testi
 	require.NotNil(t, op)
 	// The merged replica should inherit a safe checkpointTs to avoid regressing global checkpoint.
 	require.Equal(t, uint64(1000), op.newReplicaSet.GetStatus().GetCheckpointTs())
+}
+
+// TestMergeOperator_SuccessfulMerge tests the scenario where:
+// 1. A merge operation is initiated to merge multiple spans on node A
+// 2. The new merged dispatcher reports working status
+// 3. Verify that PostFinish removes the old spans and marks the merged span replicating
+func TestMergeOperator_SuccessfulMerge(t *testing.T) {
+	spanController, toMergedReplicaSets, occupyOperators, nodeA := setupMergeTestEnvironment(t)
+
+	op := NewMergeDispatcherOperator(spanController, toMergedReplicaSets, occupyOperators)
+	require.NotNil(t, op)
+
+	op.Start()
+
+	workingStatus := &heartbeatpb.TableSpanStatus{
+		ID:              op.ID().ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Working,
+		CheckpointTs:    2000,
+	}
+	op.Check(nodeA, workingStatus)
+	require.True(t, op.IsFinished())
+	require.False(t, op.aborted.Load())
+
+	op.PostFinish()
+
+	require.Nil(t, spanController.GetTaskByID(toMergedReplicaSets[0].ID))
+	require.Nil(t, spanController.GetTaskByID(toMergedReplicaSets[1].ID))
+	require.NotNil(t, spanController.GetTaskByID(op.ID()))
+	require.Equal(t, 0, spanController.GetAbsentSize())
+	require.Equal(t, 0, spanController.GetSchedulingSize())
+	require.Equal(t, 1, spanController.GetReplicatingSize())
+
+	for _, occupyOp := range occupyOperators {
+		require.True(t, occupyOp.IsFinished())
+	}
+}
+
+// TestMergeOperator_NodeRemovedAfterWorking tests the scenario where:
+// 1. A merge operation is initiated and the merged dispatcher reports working status
+// 2. Then the origin node is removed before PostFinish runs
+// 3. Verify that the merge is aborted and the old spans become absent for rescheduling
+func TestMergeOperator_NodeRemovedAfterWorking(t *testing.T) {
+	spanController, toMergedReplicaSets, occupyOperators, nodeA := setupMergeTestEnvironment(t)
+
+	op := NewMergeDispatcherOperator(spanController, toMergedReplicaSets, occupyOperators)
+	require.NotNil(t, op)
+
+	op.Start()
+
+	workingStatus := &heartbeatpb.TableSpanStatus{
+		ID:              op.ID().ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Working,
+		CheckpointTs:    2000,
+	}
+	op.Check(nodeA, workingStatus)
+	require.True(t, op.IsFinished())
+
+	op.OnNodeRemove(nodeA)
+	require.True(t, op.aborted.Load())
+
+	op.PostFinish()
+
+	require.Nil(t, spanController.GetTaskByID(op.ID()))
+	require.Equal(t, 2, spanController.GetAbsentSize())
+	require.Equal(t, 0, spanController.GetSchedulingSize())
+	require.Equal(t, 0, spanController.GetReplicatingSize())
+	require.Equal(t, "", toMergedReplicaSets[0].GetNodeID().String())
+	require.Equal(t, "", toMergedReplicaSets[1].GetNodeID().String())
+
+	for _, occupyOp := range occupyOperators {
+		require.True(t, occupyOp.IsFinished())
+	}
+}
+
+// TestMergeOperator_TaskRemovedByDDLAfterWorking tests the scenario where:
+// 1. A merge operation is initiated and the merged dispatcher reports working status
+// 2. Then a DDL removes the task before PostFinish runs
+// 3. Verify that the operator does not clear node binding of old spans
+func TestMergeOperator_TaskRemovedByDDLAfterWorking(t *testing.T) {
+	spanController, toMergedReplicaSets, occupyOperators, nodeA := setupMergeTestEnvironment(t)
+
+	op := NewMergeDispatcherOperator(spanController, toMergedReplicaSets, occupyOperators)
+	require.NotNil(t, op)
+
+	op.Start()
+
+	workingStatus := &heartbeatpb.TableSpanStatus{
+		ID:              op.ID().ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Working,
+		CheckpointTs:    2000,
+	}
+	op.Check(nodeA, workingStatus)
+	require.True(t, op.IsFinished())
+
+	op.OnTaskRemoved()
+	require.True(t, op.aborted.Load())
+	require.True(t, op.abortedByDDL.Load())
+
+	op.PostFinish()
+
+	require.Nil(t, spanController.GetTaskByID(op.ID()))
+	require.Equal(t, 0, spanController.GetAbsentSize())
+	require.Equal(t, 0, spanController.GetSchedulingSize())
+	require.Equal(t, 2, spanController.GetReplicatingSize())
+	require.Equal(t, nodeA, toMergedReplicaSets[0].GetNodeID())
+	require.Equal(t, nodeA, toMergedReplicaSets[1].GetNodeID())
+
+	for _, occupyOp := range occupyOperators {
+		require.True(t, occupyOp.IsFinished())
+	}
 }

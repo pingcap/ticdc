@@ -28,10 +28,20 @@ import (
 )
 
 // AddDispatcherOperator is an operator to schedule a table span to a dispatcher
+//
+// State transitions:
+//   - Start(): bind the span to dest and move it to scheduling.
+//   - Check(dest, Working): finish successfully and PostFinish marks the span replicating.
+//   - Check(dest, Removed) / OnNodeRemove(dest) / OnTaskRemoved(): finish as removed and PostFinish
+//     marks the span absent (if it still exists in spanController) for rescheduling.
 type AddDispatcherOperator struct {
-	replicaSet     *replica.SpanReplication
-	dest           node.ID
-	finished       atomic.Bool
+	replicaSet *replica.SpanReplication
+	dest       node.ID
+	finished   atomic.Bool
+	// removed means the add operation should not be completed successfully. It can be set when:
+	//   - The dest dispatcher reports Removed.
+	//   - The dest node is removed.
+	//   - The task is removed (for example, due to DDL).
 	removed        atomic.Bool
 	spanController *span.Controller
 
@@ -52,24 +62,26 @@ func NewAddDispatcherOperator(
 }
 
 func (m *AddDispatcherOperator) Check(from node.ID, status *heartbeatpb.TableSpanStatus) {
-	if !m.finished.Load() && from == m.dest {
-		switch status.ComponentStatus {
-		case heartbeatpb.ComponentState_Working:
-			log.Info("dispatcher report working status",
-				zap.String("changefeed", m.replicaSet.ChangefeedID.String()),
-				zap.String("replicaSet", m.replicaSet.ID.String()))
-			m.finished.Store(true)
-		case heartbeatpb.ComponentState_Removed:
-			log.Info("dispatcher report removed status",
-				zap.String("changefeed", m.replicaSet.ChangefeedID.String()),
-				zap.String("replicaSet", m.replicaSet.ID.String()))
-			m.finished.Store(true)
-			m.removed.Store(true)
-		case heartbeatpb.ComponentState_Stopped:
-			log.Warn("dispatcher report unexpected stopped status, ignore",
-				zap.String("changefeed", m.replicaSet.ChangefeedID.String()),
-				zap.String("replicaSet", m.replicaSet.ID.String()))
-		}
+	if m.finished.Load() || from != m.dest {
+		return
+	}
+
+	switch status.ComponentStatus {
+	case heartbeatpb.ComponentState_Working:
+		log.Info("dispatcher report working status",
+			zap.String("changefeed", m.replicaSet.ChangefeedID.String()),
+			zap.String("replicaSet", m.replicaSet.ID.String()))
+		m.finished.Store(true)
+	case heartbeatpb.ComponentState_Removed:
+		log.Info("dispatcher report removed status",
+			zap.String("changefeed", m.replicaSet.ChangefeedID.String()),
+			zap.String("replicaSet", m.replicaSet.ID.String()))
+		m.finished.Store(true)
+		m.removed.Store(true)
+	case heartbeatpb.ComponentState_Stopped:
+		log.Warn("dispatcher report unexpected stopped status, ignore",
+			zap.String("changefeed", m.replicaSet.ChangefeedID.String()),
+			zap.String("replicaSet", m.replicaSet.ID.String()))
 	}
 }
 
@@ -117,6 +129,9 @@ func (m *AddDispatcherOperator) PostFinish() {
 	if !m.removed.Load() {
 		m.spanController.MarkSpanReplicating(m.replicaSet)
 	} else {
+		// Only mark span absent if it still exists in spanController. When a DDL removes the task,
+		// spanController may have already deleted it. Marking an already removed span absent would
+		// reintroduce a ghost entry into the scheduling state.
 		if m.spanController.GetTaskByID(m.replicaSet.ID) != nil {
 			m.spanController.MarkSpanAbsent(m.replicaSet)
 		}

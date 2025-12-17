@@ -16,6 +16,7 @@ package operator
 import (
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -35,6 +36,14 @@ import (
 //
 // The first kind of split operator is used when splited span when it exceed the threshold and split table span when the changefeed created.
 // The second kind of split operator is used in the split balance scheduler, to split table for more balanced traffic.
+//
+// State transitions:
+//   - Start(): mark the origin span as scheduling.
+//   - Schedule(): keep sending remove requests to the origin node.
+//   - Check(origin, non-working): record a safe checkpointTs and mark finished.
+//   - OnNodeRemove(origin) / OnTaskRemoved(): abort the split and mark the original span absent in PostFinish.
+//   - PostFinish(): if not aborted, replace the original span with new spans and optionally invoke postFinish
+//     to schedule newly created spans.
 type SplitDispatcherOperator struct {
 	spanController *span.Controller
 	replicaSet     *replica.SpanReplication
@@ -43,11 +52,16 @@ type SplitDispatcherOperator struct {
 	splitSpans       []*heartbeatpb.TableSpan
 	splitSpanInfo    string
 	splitTargetNodes []node.ID
-	postFinish       func(span *replica.SpanReplication, node node.ID) bool
+	// postFinish is invoked for each newly created span after ReplaceReplicaSet. It is mainly used by
+	// the split-balance scheduler to schedule the new spans to specific nodes.
+	// Note: when postFinish is not nil, splitTargetNodes is expected to be aligned with splitSpans.
+	postFinish func(span *replica.SpanReplication, node node.ID) bool
 
 	checkpointTs uint64
 	finished     atomic.Bool
-	removed      atomic.Bool
+	// removed indicates the split is aborted and PostFinish should not execute ReplaceReplicaSet.
+	// It can be set by OnNodeRemove(origin) or OnTaskRemoved().
+	removed atomic.Bool
 
 	lck sync.Mutex
 
@@ -62,10 +76,10 @@ func NewSplitDispatcherOperator(
 	splitTargetNodes []node.ID,
 	postFinish func(span *replica.SpanReplication, node node.ID) bool,
 ) *SplitDispatcherOperator {
-	spansInfo := ""
+	var spansInfo strings.Builder
 	for _, span := range splitSpans {
-		spansInfo += fmt.Sprintf("[%s,%s]",
-			hex.EncodeToString(span.StartKey), hex.EncodeToString(span.EndKey))
+		spansInfo.WriteString(fmt.Sprintf("[%s,%s]",
+			hex.EncodeToString(span.StartKey), hex.EncodeToString(span.EndKey)))
 	}
 	op := &SplitDispatcherOperator{
 		replicaSet:       replicaSet,
@@ -73,7 +87,7 @@ func NewSplitDispatcherOperator(
 		splitSpans:       splitSpans,
 		checkpointTs:     replicaSet.GetStatus().GetCheckpointTs(),
 		spanController:   spanController,
-		splitSpanInfo:    spansInfo,
+		splitSpanInfo:    spansInfo.String(),
 		splitTargetNodes: splitTargetNodes,
 		postFinish:       postFinish,
 		sendThrottler:    newSendThrottler(),

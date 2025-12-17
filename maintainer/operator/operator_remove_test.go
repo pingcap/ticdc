@@ -94,3 +94,19 @@ func TestRemoveOperator_NotFinishedOnWaitingMerge(t *testing.T) {
 	op.Check(nodeA, stoppedStatus)
 	require.True(t, op.IsFinished())
 }
+
+func TestRemoveOperator_FinishedOnRemovedStatus(t *testing.T) {
+	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
+
+	op := newRemoveDispatcherOperator(spanController, replicaSet)
+	require.NotNil(t, op)
+
+	removedStatus := &heartbeatpb.TableSpanStatus{
+		ID:              replicaSet.ID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Removed,
+		CheckpointTs:    1500,
+	}
+	op.Check(nodeA, removedStatus)
+	require.True(t, op.IsFinished())
+	require.Equal(t, heartbeatpb.ComponentState_Removed, replicaSet.GetStatus().ComponentStatus)
+}

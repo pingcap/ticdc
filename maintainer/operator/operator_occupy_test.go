@@ -54,3 +54,27 @@ func TestOccupyOperator_NodeRemoved(t *testing.T) {
 
 	op.PostFinish()
 }
+
+// TestOccupyOperator_TaskRemoved tests the scenario where:
+// 1. An occupy operator is created to hold a replica set
+// 2. The task is removed (for example, due to DDL) while occupy operator is running
+// 3. Verify that the operator finishes without changing span state
+func TestOccupyOperator_TaskRemoved(t *testing.T) {
+	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
+	spanController.AddReplicatingSpan(replicaSet)
+
+	op := NewOccupyDispatcherOperator(spanController, replicaSet)
+	require.NotNil(t, op)
+
+	op.Start()
+	require.False(t, op.IsFinished())
+
+	absentSizeBefore := spanController.GetAbsentSize()
+	op.OnTaskRemoved()
+	require.True(t, op.IsFinished())
+	require.True(t, op.removed.Load())
+	require.Equal(t, absentSizeBefore, spanController.GetAbsentSize())
+	require.Equal(t, nodeA, replicaSet.GetNodeID())
+
+	op.PostFinish()
+}

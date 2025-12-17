@@ -918,8 +918,23 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 
 	for _, op := range allOperators {
 		op.Start()
-		op.(*operator.MoveDispatcherOperator).SetOriginNodeStopped()
-		op.Schedule()
+		msg := op.Schedule()
+		require.NotNil(t, msg)
+		origin := msg.To
+		op.Check(origin, &heartbeatpb.TableSpanStatus{
+			ID:              op.ID().ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Stopped,
+			CheckpointTs:    1,
+		})
+
+		msg = op.Schedule()
+		require.NotNil(t, msg)
+		dest := msg.To
+		op.Check(dest, &heartbeatpb.TableSpanStatus{
+			ID:              op.ID().ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		})
 		op.PostFinish()
 		controller.operatorController.RemoveOp(op.ID())
 	}

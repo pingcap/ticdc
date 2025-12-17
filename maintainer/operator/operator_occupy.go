@@ -28,6 +28,13 @@ import (
 )
 
 // OccupyDispatcherOperator is an operator to occupy a replica set not evolving.
+//
+// This operator is used as a placeholder to block other schedulers from operating on a replica set
+// during multi-span operations (for example, merge). It never sends messages to dispatchers.
+//
+// State transitions:
+//   - OnNodeRemove(replica node): mark the span absent and finish.
+//   - OnTaskRemoved(): finish without touching span state.
 type OccupyDispatcherOperator struct {
 	replicaSet     *replica.SpanReplication
 	nodeID         node.ID
