@@ -567,12 +567,6 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 		zap.Any("action", dispatcherStatus.GetAction()),
 		zap.Any("ack", dispatcherStatus.GetAck()))
 
-	defer func() {
-		log.Debug("dispatcher finish handling dispatcher status",
-			zap.Stringer("dispatcher", d.id),
-			zap.Any("action", dispatcherStatus.GetAction()),
-			zap.Any("ack", dispatcherStatus.GetAck()))
-	}()
 	// Step1: deal with the ack info
 	ack := dispatcherStatus.GetAck()
 	if ack != nil {
