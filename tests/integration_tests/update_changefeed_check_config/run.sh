@@ -58,6 +58,7 @@ function run() {
 		"max_traffic_percentage": 1.25,
 		"min_traffic_percentage": 0.8,
 		"region_count_per_span": 100,
+		"region_count_refresh_interval": 300000000000,
 		"region_threshold": 10000,
 		"scheduling_task_count_per_node": 20,
 		"write_key_threshold": 0,
