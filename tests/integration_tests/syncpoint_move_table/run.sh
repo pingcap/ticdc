@@ -35,9 +35,6 @@ run() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	# This test contains `set global tidb_external_ts = ?`, which requires super privilege.
-	run_sql "SET GLOBAL tidb_enable_external_ts_read = on;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0" --addr "127.0.0.1:8300"
 
@@ -103,8 +100,8 @@ run() {
 	fi
 
 	# Wait until the syncpoint is written downstream, then validate snapshot consistency by sync_diff.
-	ensure 30 "mysql -h${DOWN_TIDB_HOST} -P${DOWN_TIDB_PORT} -uroot -N -s -e \"SELECT secondary_ts FROM tidb_cdc.syncpoint_v1 WHERE changefeed='${CHANGEFEED_ID}' AND primary_ts='${syncpoint_ts}';\" | grep -E '^[0-9]+'"
-	secondary_ts=$(mysql -h${DOWN_TIDB_HOST} -P${DOWN_TIDB_PORT} -uroot -N -s -e "SELECT secondary_ts FROM tidb_cdc.syncpoint_v1 WHERE changefeed='${CHANGEFEED_ID}' AND primary_ts='${syncpoint_ts}';" | tail -n 1)
+	ensure 30 "mysql -h${DOWN_TIDB_HOST} -P${DOWN_TIDB_PORT} -uroot -N -s -e \"SELECT secondary_ts FROM tidb_cdc.syncpoint_v1 WHERE changefeed='default/${CHANGEFEED_ID}' AND primary_ts='${syncpoint_ts}';\" | grep -E '^[0-9]+'"
+	secondary_ts=$(mysql -h${DOWN_TIDB_HOST} -P${DOWN_TIDB_PORT} -uroot -N -s -e "SELECT secondary_ts FROM tidb_cdc.syncpoint_v1 WHERE changefeed='default/${CHANGEFEED_ID}' AND primary_ts='${syncpoint_ts}';" | tail -n 1)
 	echo "secondary_ts: $secondary_ts"
 
 	deployConfig "$syncpoint_ts" "$secondary_ts"

@@ -38,7 +38,7 @@ mysql_groups=(
 	# G03
 	'cdc move_table checkpoint_race_ddl_crash'
 	# G04
-	'complex_transaction syncpoint syncpoint_check_ts random_drop_message'
+	'complex_transaction syncpoint syncpoint_move_table syncpoint_check_ts random_drop_message'
 	# G05
 	'ddl_for_split_tables_with_merge_and_split'
 	# G06
