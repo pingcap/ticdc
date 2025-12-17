@@ -355,7 +355,7 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 			return cerror.ErrInvalidReplicaConfig.
 				FastGenByArgs("enable-active-active only supports tidb sink")
 		}
-		if c.Consistent != nil && redo.IsConsistentEnabled(c.Consistent.Level) {
+		if c.Consistent != nil && redo.IsConsistentEnabled(util.GetOrZero(c.Consistent.Level)) {
 			return cerror.ErrInvalidReplicaConfig.
 				FastGenByArgs("enable-active-active is incompatible with redo log/consistency feature, please disable redo")
 		}
