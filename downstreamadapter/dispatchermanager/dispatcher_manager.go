@@ -861,9 +861,16 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 		e.heartBeatTask.Cancel()
 	}
 
+	// Cancel the context to signal all dependent components to stop.
+	// This is important to prevent `e.sink.Close() / e.sharedInfo.Close()` from blocking,
+	// especially when a long-running DDL is being executed by the sink.
+	e.cancel()
+
 	if e.sharedInfo != nil {
 		e.sharedInfo.Close()
 	}
+
+	log.Info("shared info closed", zap.Stringer("changefeedID", e.changefeedID))
 
 	if e.RedoEnable {
 		e.redoSink.Close(removeChangefeed)
@@ -871,7 +878,8 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 		e.closeRedoMeta(removeChangefeed)
 	}
 	e.sink.Close(removeChangefeed)
-	e.cancel()
+	log.Info("sink closed", zap.Stringer("changefeedID", e.changefeedID))
+
 	e.wg.Wait()
 
 	e.removeTaskHandles.Range(func(key, value interface{}) bool {
