@@ -98,6 +98,7 @@ var defaultReplicaConfig = &ReplicaConfig{
 		WriteKeyThreshold:          util.AddressOf(0),
 		SchedulingTaskCountPerNode: util.AddressOf(20),  // TODO: choose a btter value
 		RegionCountPerSpan:         util.AddressOf(100), // TODO: choose a btter value
+		RegionCountRefreshInterval: util.AddressOf(5 * time.Minute),
 		EnableSplittableCheck:      util.AddressOf(false),
 		ForceSplit:                 util.AddressOf(false),
 		BalanceScoreThreshold:      util.AddressOf(20),
