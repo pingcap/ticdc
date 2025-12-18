@@ -299,10 +299,6 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 		}
 	}
 
-	// DEBUG
-	if IsStorageScheme(sinkURI.Scheme) {
-		c.Scheduler.EnableTableAcrossNodes = util.AddressOf(false)
-	}
 	if c.Integrity != nil {
 		switch strings.ToLower(sinkURI.Scheme) {
 		case KafkaScheme, KafkaSSLScheme:
