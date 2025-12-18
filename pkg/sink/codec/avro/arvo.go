@@ -30,6 +30,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
@@ -315,12 +316,12 @@ func (a *BatchEncoder) getDefaultValue(col *timodel.ColumnInfo) (interface{}, er
 	case mysql.TypeYear:
 		n, err := strconv.ParseInt(v, 10, 32)
 		if err != nil {
-			log.Info("avro encoder parse year value failed", zap.String("value", v), zap.Error(err))
+			log.Info("avro encoder parse year value failed", zap.String("value", util.RedactAny(v)), zap.Error(err))
 			return nil, errors.WrapError(errors.ErrAvroEncodeFailed, err)
 		}
 		return int32(n), nil
 	default:
-		log.Error("unknown mysql type", zap.Any("value", defaultVal), zap.Any("mysqlType", col.GetType()))
+		log.Error("unknown mysql type", zap.String("value", util.RedactAny(defaultVal)), zap.Any("mysqlType", col.GetType()))
 		return nil, errors.ErrAvroEncodeFailed.GenWithStack("unknown mysql type")
 	}
 }
@@ -447,7 +448,7 @@ func (a *BatchEncoder) columns2AvroData(
 		}
 	}
 
-	log.Debug("rowToAvroData", zap.Any("data", ret))
+	log.Debug("rowToAvroData", zap.String("data", util.RedactAny(ret)))
 	return ret, nil
 }
 
@@ -669,7 +670,7 @@ func (a *BatchEncoder) columnToAvroData(
 	case mysql.TypeYear:
 		return int32(d.GetInt64()), "int", nil
 	default:
-		log.Error("unknown mysql type", zap.Any("value", d.GetValue()), zap.Any("mysqlType", col.GetType()))
+		log.Error("unknown mysql type", zap.String("value", util.RedactAny(d.GetValue())), zap.Any("mysqlType", col.GetType()))
 		return nil, "", errors.ErrAvroEncodeFailed.GenWithStack("unknown mysql type")
 	}
 }

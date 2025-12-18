@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
@@ -457,7 +458,8 @@ func (t *DMLEvent) String() string {
 		t.Version, t.DispatcherID.String(), t.Seq, t.PhysicalTableID, t.StartTs, t.CommitTs, t.TableInfo.TableName.String(), t.Checksum, t.Length, t.GetSize(), rowsStringBuilder.String())
 }
 
-// safeRowToString safely converts a row to string, recovering from any panics
+// safeRowToString safely converts a row to string, recovering from any panics.
+// The row values are redacted according to the current log redaction mode.
 func safeRowToString(row chunk.Row, fields []*types.FieldType) string {
 	defer func() {
 		if r := recover(); r != nil {
@@ -470,7 +472,8 @@ func safeRowToString(row chunk.Row, fields []*types.FieldType) string {
 		return ""
 	}
 
-	return row.ToString(fields)
+	// Apply log redaction to the row string representation
+	return util.RedactValue(row.ToString(fields))
 }
 
 // SetRows sets the Rows chunk for this DMLEvent
