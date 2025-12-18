@@ -35,6 +35,19 @@ type LogLevelReq struct {
 	Level string `json:"log_level"`
 }
 
+// RedactModeReq redaction mode request
+// Use redact_info_log to match CLI flag naming convention
+// Accepts: "off", "on", "marker" (case-insensitive)
+type RedactModeReq struct {
+	Mode string `json:"redact_info_log"`
+}
+
+// RedactModeResp redaction mode response
+type RedactModeResp struct {
+	PreviousMode string `json:"previous_mode"`
+	CurrentMode  string `json:"current_mode"`
+}
+
 // ListResponse is the response for all List APIs
 type ListResponse[T any] struct {
 	Total int `json:"total"`
