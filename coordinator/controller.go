@@ -58,6 +58,8 @@ const (
 type Controller struct {
 	version int64
 
+	selfNode *node.Info
+
 	pdClient           pd.Client
 	pdClock            pdutil.Clock
 	scheduler          *scheduler.Controller
@@ -118,6 +120,7 @@ func NewController(
 	oc := operator.NewOperatorController(selfNode, changefeedDB, backend, batchSize)
 	c := &Controller{
 		version:      version,
+		selfNode:     selfNode,
 		bootstrapped: atomic.NewBool(false),
 		scheduler: scheduler.NewController(map[string]scheduler.Scheduler{
 			scheduler.BasicScheduler: coscheduler.NewBasicScheduler(
@@ -327,8 +330,8 @@ func (c *Controller) onNodeChanged() {
 		zap.Any("addedNodes", addedNodes),
 		zap.Any("removedNodes", removedNodes))
 
-	for _, node := range removedNodes {
-		c.RemoveNode(node)
+	for _, n := range removedNodes {
+		c.RemoveNode(n)
 	}
 	c.sendMessages(messages)
 	if cachedResponse != nil {
@@ -345,12 +348,11 @@ func (c *Controller) sendMessages(msgs []*messaging.TargetMessage) {
 }
 
 func (c *Controller) onMaintainerBootstrapResponse(msg *messaging.TargetMessage) {
-	log.Info("received maintainer bootstrap response",
-		zap.Stringer("node", msg.From))
-	cachedResp := c.bootstrapper.HandleBootstrapResponse(
-		msg.From,
-		msg.Message[0].(*heartbeatpb.CoordinatorBootstrapResponse),
-	)
+	response := msg.Message[0].(*heartbeatpb.CoordinatorBootstrapResponse)
+	log.Info("controller received maintainer bootstrap response",
+		zap.Stringer("node", msg.From),
+		zap.Int("maintainerCount", len(response.Statuses)))
+	cachedResp := c.bootstrapper.HandleBootstrapResponse(msg.From, response)
 	c.onBootstrapDone(cachedResp)
 }
 
@@ -368,18 +370,15 @@ func (c *Controller) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.Coordin
 	// runningCfs is the changefeeds that are already running on other nodes
 	runningCfs := make(map[common.ChangeFeedID]remoteMaintainer)
 	for node, bootstrapMsg := range cachedResp {
-		log.Info("received bootstrap response",
-			zap.Stringer("node", node),
-			zap.Int("size", len(bootstrapMsg.Statuses)))
 		for _, info := range bootstrapMsg.Statuses {
-			cfID := common.NewChangefeedIDFromPB(info.ChangefeedID)
-			if old, ok := runningCfs[cfID]; ok {
+			changeFeedID := common.NewChangefeedIDFromPB(info.ChangefeedID)
+			if old, ok := runningCfs[changeFeedID]; ok {
 				log.Panic("maintainer runs on multiple node",
 					zap.Stringer("oldNode", old.nodeID),
 					zap.Stringer("newNode", node),
-					zap.Stringer("cf", cfID))
+					zap.Stringer("cf", changeFeedID))
 			}
-			runningCfs[cfID] = remoteMaintainer{
+			runningCfs[changeFeedID] = remoteMaintainer{
 				nodeID: node,
 				status: info,
 			}
@@ -507,12 +506,13 @@ func (c *Controller) updateChangefeedStatus(
 func (c *Controller) FinishBootstrap(runningChangefeeds map[common.ChangeFeedID]remoteMaintainer) {
 	if c.bootstrapped.Load() {
 		log.Panic("already bootstrapped",
-			zap.Any("runningChangefeeds", runningChangefeeds))
+			zap.Any("nodeID", c.selfNode.ID),
+			zap.Any("changefeeds", runningChangefeeds))
 	}
 	// load all changefeeds from metastore, and check if the changefeed is already in workingMap
 	allChangefeeds, err := c.backend.GetAllChangefeeds(context.Background())
 	if err != nil {
-		log.Panic("load all changefeeds failed", zap.Error(err))
+		log.Panic("load all changefeeds failed", zap.Any("nodeID", c.selfNode.ID), zap.Error(err))
 	}
 
 	// Register keyspace
@@ -591,6 +591,7 @@ func (c *Controller) FinishBootstrap(runningChangefeeds map[common.ChangeFeedID]
 	operatorControllerHandle := c.taskScheduler.Submit(c.operatorController, time.Now())
 	c.taskHandlers = append(c.taskHandlers, operatorControllerHandle)
 	c.bootstrapped.Store(true)
+	log.Info("coordinator bootstrapped", zap.Any("nodeID", c.selfNode.ID))
 }
 
 func (c *Controller) Stop() {
@@ -791,8 +792,10 @@ func (c *Controller) submitPeriodTask() {
 	c.taskHandlers = append(c.taskHandlers, periodTaskhandler)
 }
 
-func (c *Controller) newBootstrapMessage(id node.ID) *messaging.TargetMessage {
-	log.Info("send coordinator bootstrap request", zap.Any("to", id))
+func (c *Controller) newBootstrapMessage(id node.ID, addr string) *messaging.TargetMessage {
+	log.Info("send coordinator bootstrap request",
+		zap.String("nodeAddr", addr),
+		zap.Any("nodeID", id))
 	return messaging.NewSingleTargetMessage(
 		id,
 		messaging.MaintainerManagerTopic,

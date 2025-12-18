@@ -76,11 +76,7 @@ func (b *Bootstrapper[T]) HandleNewNodes(activeNodes map[node.ID]*node.Info) (
 		}
 		// A new node is found, send a bootstrap message to it.
 		b.nodes[id] = newNodeStatus[T](info)
-		log.Info("found a new node",
-			zap.String("id", b.id),
-			zap.String("nodeAddr", info.AdvertiseAddr),
-			zap.Any("nodeID", id))
-		messages = append(messages, b.newBootstrapMsg(id))
+		messages = append(messages, b.newBootstrapMsg(id, info.AdvertiseAddr))
 		b.nodes[id].lastBootstrapTime = b.currentTime()
 		addedNodes = append(addedNodes, id)
 	}
@@ -135,7 +131,7 @@ func (b *Bootstrapper[T]) ResendBootstrapMessage() []*messaging.TargetMessage {
 	for id, status := range b.nodes {
 		if status.state == nodeStateUninitialized &&
 			now.Sub(status.lastBootstrapTime) >= b.resendInterval {
-			messages = append(messages, b.newBootstrapMsg(id))
+			messages = append(messages, b.newBootstrapMsg(id, status.node.AdvertiseAddr))
 			status.lastBootstrapTime = now
 		}
 	}
@@ -253,4 +249,4 @@ func newNodeStatus[T any](node *node.Info) *nodeStatus[T] {
 	}
 }
 
-type NewBootstrapMessageFn func(id node.ID) *messaging.TargetMessage
+type NewBootstrapMessageFn func(id node.ID, addr string) *messaging.TargetMessage
