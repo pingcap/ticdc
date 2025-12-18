@@ -43,6 +43,7 @@ func NewRedoDispatcher(
 	schemaID int64,
 	schemaIDToDispatchers *SchemaIDToDispatchers,
 	skipSyncpointAtStartTs bool,
+	skipDMLAsStartTs bool,
 	sink sink.Sink,
 	sharedInfo *SharedInfo,
 ) *RedoDispatcher {
@@ -53,7 +54,9 @@ func NewRedoDispatcher(
 		schemaID,
 		schemaIDToDispatchers,
 		skipSyncpointAtStartTs,
-		false, // skipDMLAsStartTs is not needed for redo dispatcher
+		// skipDMLAsStartTs is used when a dispatcher is recreated during an in-flight DDL barrier:
+		// we may start from (blockTs-1) to replay the DDL at blockTs, while skipping DML at blockTs (startTs+1).
+		skipDMLAsStartTs,
 		0,
 		common.RedoMode,
 		sink,

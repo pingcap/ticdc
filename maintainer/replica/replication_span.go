@@ -236,23 +236,39 @@ func (r *SpanReplication) NewAddDispatcherMessage(server node.ID) *messaging.Tar
 	// dispatcher can only enter the syncpoint barrier after all events with commitTs <= BlockTs have been pushed
 	// downstream.
 	startTs := r.status.Load().CheckpointTs
+	skipDMLAsStartTs := false
 	if state := r.blockState.Load(); state != nil &&
 		state.IsBlocked &&
-		state.IsSyncPoint &&
 		(state.Stage == heartbeatpb.BlockStage_WAITING || state.Stage == heartbeatpb.BlockStage_WRITING) &&
-		state.BlockTs > startTs {
-		startTs = state.BlockTs
+		state.BlockTs > 0 {
+		if state.IsSyncPoint {
+			if state.BlockTs > startTs {
+				startTs = state.BlockTs
+			}
+		} else {
+			// For an in-flight DDL barrier, a recreated dispatcher must start from (blockTs-1) so that it can
+			// replay the DDL at blockTs. At the same time, it should skip DML events at blockTs to avoid potential
+			// duplicate DML writes when the dispatcher is moved/recreated during the barrier.
+			blockTsMinusOne := state.BlockTs - 1
+			if blockTsMinusOne > startTs {
+				startTs = blockTsMinusOne
+			}
+			if startTs+1 == state.BlockTs {
+				skipDMLAsStartTs = true
+			}
+		}
 	}
 	return messaging.NewSingleTargetMessage(server,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.ScheduleDispatcherRequest{
 			ChangefeedID: r.ChangefeedID.ToPB(),
 			Config: &heartbeatpb.DispatcherConfig{
-				DispatcherID: r.ID.ToPB(),
-				SchemaID:     r.schemaID,
-				Span:         r.Span,
-				StartTs:      startTs,
-				Mode:         r.GetMode(),
+				DispatcherID:     r.ID.ToPB(),
+				SchemaID:         r.schemaID,
+				Span:             r.Span,
+				StartTs:          startTs,
+				SkipDMLAsStartTs: skipDMLAsStartTs,
+				Mode:             r.GetMode(),
 			},
 			ScheduleAction: heartbeatpb.ScheduleAction_Create,
 		})

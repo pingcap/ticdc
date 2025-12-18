@@ -36,7 +36,7 @@ mysql_groups=(
 	# G02
 	'ddl_for_split_tables_with_failover'
 	# G03
-	'cdc move_table checkpoint_race_ddl_crash'
+	'cdc move_table ddl_move_table checkpoint_race_ddl_crash'
 	# G04
 	'complex_transaction syncpoint syncpoint_move_table syncpoint_check_ts random_drop_message'
 	# G05

@@ -443,10 +443,10 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			}
 
 			// Skip DML events at startTs+1 when skipDMLAsStartTs is true.
-			// This handles the corner case where a DDL at ts=X crashed after writing DML but before marking finished.
-			// We return startTs=X-1 to replay the DDL, but need to skip the already-written DML at ts=X (startTs+1).
+			// This flag is used when a dispatcher starts from (blockTs-1) to replay the DDL at blockTs,
+			// while avoiding potential duplicate DML writes at blockTs.
 			if d.skipDMLAsStartTs && event.GetCommitTs() == d.startTs+1 {
-				log.Info("skip DML event at startTs+1 due to DDL crash recovery",
+				log.Info("skip DML event at startTs+1 due to skipDMLAsStartTs",
 					zap.Stringer("dispatcher", d.id),
 					zap.Uint64("startTs", d.startTs),
 					zap.Uint64("dmlCommitTs", event.GetCommitTs()),

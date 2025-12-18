@@ -125,6 +125,57 @@ func createTestManager(t *testing.T) *DispatcherManager {
 	return manager
 }
 
+func TestNewEventDispatchers_PropagateSkipDMLAsStartTs(t *testing.T) {
+	manager := createTestManager(t)
+	manager.metricTableTriggerEventDispatcherCount = metrics.TableTriggerEventDispatcherGauge.WithLabelValues(manager.changefeedID.Keyspace(), manager.changefeedID.Name(), "tableTrigger")
+	manager.metricCreateDispatcherDuration = metrics.CreateDispatcherDuration.WithLabelValues(manager.changefeedID.Keyspace(), manager.changefeedID.Name(), "eventDispatcher")
+
+	dispatcherID := common.NewDispatcherID()
+	totalSpan := common.TableIDToComparableSpan(0, 1)
+	infos := map[common.DispatcherID]dispatcherCreateInfo{
+		dispatcherID: {
+			Id:        dispatcherID,
+			TableSpan: &heartbeatpb.TableSpan{TableID: totalSpan.TableID, StartKey: totalSpan.StartKey, EndKey: totalSpan.EndKey},
+			StartTs:   99,
+			SchemaID:  1,
+
+			SkipDMLAsStartTs: true,
+		},
+	}
+	require.NoError(t, manager.newEventDispatchers(infos, false))
+
+	d, ok := manager.dispatcherMap.Get(dispatcherID)
+	require.True(t, ok)
+	require.True(t, d.GetSkipDMLAsStartTs())
+}
+
+func TestNewRedoDispatchers_PropagateSkipDMLAsStartTs(t *testing.T) {
+	manager := createTestManager(t)
+	manager.redoDispatcherMap = newDispatcherMap[*dispatcher.RedoDispatcher]()
+	manager.redoSchemaIDToDispatchers = dispatcher.NewSchemaIDToDispatchers()
+	manager.redoSink = nil
+	manager.metricRedoTableTriggerEventDispatcherCount = metrics.TableTriggerEventDispatcherGauge.WithLabelValues(manager.changefeedID.Keyspace(), manager.changefeedID.Name(), "redoDispatcher")
+	manager.metricRedoEventDispatcherCount = metrics.EventDispatcherGauge.WithLabelValues(manager.changefeedID.Keyspace(), manager.changefeedID.Name(), "redoDispatcher")
+	manager.metricRedoCreateDispatcherDuration = metrics.CreateDispatcherDuration.WithLabelValues(manager.changefeedID.Keyspace(), manager.changefeedID.Name(), "redoDispatcher")
+
+	dispatcherID := common.NewDispatcherID()
+	infos := map[common.DispatcherID]dispatcherCreateInfo{
+		dispatcherID: {
+			Id:        dispatcherID,
+			TableSpan: common.KeyspaceDDLSpan(0),
+			StartTs:   99,
+			SchemaID:  0,
+
+			SkipDMLAsStartTs: true,
+		},
+	}
+	require.NoError(t, manager.newRedoDispatchers(infos, false))
+
+	d, ok := manager.redoDispatcherMap.Get(dispatcherID)
+	require.True(t, ok)
+	require.True(t, d.GetSkipDMLAsStartTs())
+}
+
 func TestMergeDispatcherNormal(t *testing.T) {
 	manager := createTestManager(t)
 
