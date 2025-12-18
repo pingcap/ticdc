@@ -479,10 +479,25 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 		if !d.filterAndUpdateEventByCommitTs(events[0]) {
 			return false
 		}
-		ddl := events[0].Event.(*commonEvent.DDLEvent)
+		originalDDL := events[0].Event.(*commonEvent.DDLEvent)
+		// Clone the DDL event before applying routing to avoid race conditions.
+		// The same DDL event may be shared between EventDispatcher (mysql sink) and
+		// RedoDispatcher (redo sink), and both would mutate the Query and TargetSchemaName
+		// fields, causing a data race even though they use the same routing rules.
+		ddl := originalDDL.CloneForRouting()
+		events[0].Event = ddl
 		d.tableInfoVersion.Store(ddl.FinishedTs)
 		if ddl.TableInfo != nil {
-			d.tableInfo.Store(ddl.TableInfo)
+			// Apply routing to get a TableInfo with TargetSchema/TargetTable set.
+			// This returns a cloned TableInfo to avoid mutating the shared original,
+			// which may be used by other changefeeds with different routing rules.
+			routedTableInfo := d.applyRoutingToTableInfo(ddl.TableInfo)
+			ddl.TableInfo = routedTableInfo
+			d.tableInfo.Store(routedTableInfo)
+		}
+		// Also apply routing to MultipleTableInfos for multi-table DDLs (e.g., RENAME TABLE)
+		for i, tableInfo := range ddl.MultipleTableInfos {
+			ddl.MultipleTableInfos[i] = d.applyRoutingToTableInfo(tableInfo)
 		}
 		return d.target.HandleEvents(events, func() { d.wake() })
 	} else {
@@ -637,7 +652,9 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 	}
 	tableInfo := handshakeEvent.TableInfo
 	if tableInfo != nil {
-		d.tableInfo.Store(tableInfo)
+		// Apply routing and store the (possibly cloned) TableInfo
+		routedTableInfo := d.applyRoutingToTableInfo(tableInfo)
+		d.tableInfo.Store(routedTableInfo)
 	}
 	d.lastEventSeq.Store(handshakeEvent.Seq)
 }
@@ -729,4 +746,29 @@ func (d *dispatcherStat) newDispatcherRemoveRequest(serverId string) *messaging.
 			Mode:       d.target.GetMode(),
 		},
 	}
+}
+
+// applyRoutingToTableInfo applies routing rules to the TableInfo and returns a new TableInfo
+// with TargetSchema/TargetTable set. If no routing is needed (no router configured, or routing
+// results in same schema/table), returns the original tableInfo unchanged.
+// This avoids mutating shared TableInfo objects that may be used by multiple changefeeds.
+func (d *dispatcherStat) applyRoutingToTableInfo(tableInfo *common.TableInfo) *common.TableInfo {
+	if tableInfo == nil {
+		return nil
+	}
+	router := d.target.GetRouter()
+	if router == nil {
+		return tableInfo
+	}
+	sourceSchema := tableInfo.TableName.Schema
+	sourceTable := tableInfo.TableName.Table
+	targetSchema, targetTable := router.Route(sourceSchema, sourceTable)
+
+	// If routing doesn't change anything, return original to avoid unnecessary cloning
+	if targetSchema == sourceSchema && targetTable == sourceTable {
+		return tableInfo
+	}
+
+	// Clone with routing applied to avoid mutating shared TableInfo
+	return tableInfo.CloneWithRouting(targetSchema, targetTable)
 }

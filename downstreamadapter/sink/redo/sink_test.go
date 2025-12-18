@@ -26,6 +26,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/redo"
+	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
@@ -124,7 +125,7 @@ func TestRedoSinkInProcessor(t *testing.T) {
 			UseFileBackend:        util.AddressOf(useFileBackend),
 		}
 		startTs := uint64(100)
-		dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme), startTs, cfg)
+		dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme), startTs, cfg, nil)
 		defer dmlMgr.Close(false)
 
 		var eg errgroup.Group
@@ -214,7 +215,7 @@ func TestRedoSinkError(t *testing.T) {
 		EncodingWorkerNum:     util.AddressOf(workerNumberForTest),
 		FlushWorkerNum:        util.AddressOf(workerNumberForTest),
 	}
-	logMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme), 0, cfg)
+	logMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme), 0, cfg, nil)
 	defer logMgr.Close(false)
 
 	var eg errgroup.Group
@@ -273,7 +274,7 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 		FlushWorkerNum:        util.AddressOf(redo.DefaultFlushWorkerNum),
 		UseFileBackend:        util.AddressOf(useFileBackend),
 	}
-	dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme), 0, cfg)
+	dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme), 0, cfg, nil)
 	defer dmlMgr.Close(false)
 
 	var eg errgroup.Group
@@ -329,4 +330,66 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 	cancel()
 
 	require.ErrorIs(b, eg.Wait(), context.Canceled)
+}
+
+// TestRedoSinkDDLRoutingDelegation tests that the redo sink's rewriteDDLQueryWithRouting
+// method properly delegates to the shared RewriteDDLQueryWithRouting function.
+// Comprehensive tests for the core DDL routing logic are in pkg/sink/util/ddl_routing_test.go.
+func TestRedoSinkDDLRoutingDelegation(t *testing.T) {
+	t.Parallel()
+
+	// Test with routing configured
+	router, err := sinkutil.NewRouter(false, []sinkutil.RoutingRuleConfig{
+		{
+			Matcher:    []string{"source_db.*"},
+			SchemaRule: "target_db",
+			TableRule:  sinkutil.TablePlaceholder,
+		},
+	})
+	require.NoError(t, err)
+
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	s := &Sink{
+		changefeedID: changefeedID,
+		router:       router,
+	}
+
+	// Test that routing is applied and query is modified
+	ddlEvent := &commonEvent.DDLEvent{
+		Query: "CREATE TABLE `source_db`.`test_table` (id INT PRIMARY KEY)",
+		TableInfo: &common.TableInfo{
+			TableName: common.TableName{Schema: "source_db", Table: "test_table"},
+		},
+	}
+
+	err = s.rewriteDDLQueryWithRouting(ddlEvent)
+	require.NoError(t, err)
+	require.Contains(t, ddlEvent.Query, "target_db", "Query should be rewritten with target schema")
+	require.NotContains(t, ddlEvent.Query, "source_db", "Query should not contain source schema")
+
+	// Test with nil router - should be a no-op
+	sNoRouter := &Sink{
+		changefeedID: changefeedID,
+		router:       nil,
+	}
+
+	ddlEvent2 := &commonEvent.DDLEvent{
+		Query: "CREATE TABLE `source_db`.`test_table` (id INT PRIMARY KEY)",
+		TableInfo: &common.TableInfo{
+			TableName: common.TableName{Schema: "source_db", Table: "test_table"},
+		},
+	}
+
+	originalQuery := ddlEvent2.Query
+	err = sNoRouter.rewriteDDLQueryWithRouting(ddlEvent2)
+	require.NoError(t, err)
+	require.Equal(t, originalQuery, ddlEvent2.Query, "Query should not be modified when router is nil")
+
+	// Test with empty query - should be a no-op
+	ddlEvent3 := &commonEvent.DDLEvent{
+		Query: "",
+	}
+	err = s.rewriteDDLQueryWithRouting(ddlEvent3)
+	require.NoError(t, err)
+	require.Equal(t, "", ddlEvent3.Query)
 }

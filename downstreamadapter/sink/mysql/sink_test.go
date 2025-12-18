@@ -24,7 +24,9 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
+	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
 	"github.com/stretchr/testify/require"
 )
@@ -39,7 +41,7 @@ func getMysqlSink() (context.Context, *Sink, sqlmock.Sqlmock) {
 	cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
 	cfg.CachePrepStmts = false
 
-	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false)
+	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false, nil)
 	return ctx, sink, mock
 }
 
@@ -55,7 +57,7 @@ func getMysqlSinkWithDDLTs() (context.Context, *Sink, sqlmock.Sqlmock) {
 	cfg.CachePrepStmts = false
 	cfg.EnableDDLTs = true // Enable DDL-ts feature for testing
 
-	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false)
+	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false, nil)
 	return ctx, sink, mock
 }
 
@@ -434,5 +436,201 @@ func TestGetTableRecoveryInfo_RemoveDDLTs(t *testing.T) {
 	sink.Close(false)
 
 	// Check all mock expectations were met (after closing)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// getMysqlSinkWithRouter creates a sink with a router for testing DDL routing
+func getMysqlSinkWithRouter(router *util.Router) (context.Context, *Sink, sqlmock.Sqlmock) {
+	db, mock, _ := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	ctx := context.Background()
+	changefeedID := common.NewChangefeedID4Test("test", "test")
+	cfg := mysql.New()
+	cfg.WorkerCount = 1
+	cfg.DMLMaxRetry = 1
+	cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
+	cfg.CachePrepStmts = false
+
+	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false, router)
+	return ctx, sink, mock
+}
+
+// TestDDLRoutingWithTargetSchemaName tests that DDL routing correctly sets TargetSchemaName
+// which is then used by GetDDLSchemaName() for the USE command when executing DDLs.
+func TestDDLRoutingWithTargetSchemaName(t *testing.T) {
+	// Create a router that routes source_db.* to target_db.*
+	rules := []*config.DispatchRule{
+		{
+			Matcher:    []string{"source_db.*"},
+			SchemaRule: "target_db",
+			TableRule:  util.TablePlaceholder,
+		},
+	}
+	router, err := util.NewRouterFromDispatchRules(true, rules)
+	require.NoError(t, err)
+	require.NotNil(t, router)
+
+	_, sink, mock := getMysqlSinkWithRouter(router)
+
+	// Create a DDL event for CREATE TABLE source_db.test_table
+	ddlEvent := &commonEvent.DDLEvent{
+		Query:      "CREATE TABLE `source_db`.`test_table` (id INT PRIMARY KEY)",
+		SchemaName: "source_db",
+		TableName:  "test_table",
+		FinishedTs: 1,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{0},
+		},
+		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
+	}
+
+	// Verify the DDL event's initial state
+	require.Equal(t, "source_db", ddlEvent.SchemaName)
+	require.Equal(t, "", ddlEvent.TargetSchemaName)
+	require.Equal(t, "source_db", ddlEvent.GetDDLSchemaName())
+
+	// Apply routing
+	err = sink.rewriteDDLQueryWithRouting(ddlEvent)
+	require.NoError(t, err)
+
+	// After routing:
+	// - Query should be rewritten to use target_db
+	// - TargetSchemaName should be set
+	// - GetDDLSchemaName() should return the target schema
+	// Note: The parser normalizes the query (adds backticks around column names)
+	require.Contains(t, ddlEvent.Query, "`target_db`.`test_table`", "Query should reference target schema")
+	require.Equal(t, "source_db", ddlEvent.SchemaName, "Original SchemaName should be preserved")
+	require.Equal(t, "target_db", ddlEvent.TargetSchemaName, "TargetSchemaName should be set to routed schema")
+	require.Equal(t, "target_db", ddlEvent.GetDDLSchemaName(), "GetDDLSchemaName should return target schema when routing is applied")
+
+	mock.ExpectClose()
+	sink.Close(false)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestDDLRoutingPreservesSourceSchemaWhenNoRouting tests that when no routing rules match,
+// the original schema name is preserved and TargetSchemaName is not set.
+func TestDDLRoutingPreservesSourceSchemaWhenNoRouting(t *testing.T) {
+	// Create a router that only routes other_db.* (not source_db.*)
+	rules := []*config.DispatchRule{
+		{
+			Matcher:    []string{"other_db.*"},
+			SchemaRule: "target_db",
+			TableRule:  util.TablePlaceholder,
+		},
+	}
+	router, err := util.NewRouterFromDispatchRules(true, rules)
+	require.NoError(t, err)
+	require.NotNil(t, router)
+
+	_, sink, mock := getMysqlSinkWithRouter(router)
+
+	// Create a DDL event for CREATE TABLE source_db.test_table (not matched by routing rules)
+	ddlEvent := &commonEvent.DDLEvent{
+		Query:      "CREATE TABLE `source_db`.`test_table` (id INT PRIMARY KEY)",
+		SchemaName: "source_db",
+		TableName:  "test_table",
+		FinishedTs: 1,
+	}
+
+	// Apply routing (should be a no-op since source_db doesn't match the rules)
+	err = sink.rewriteDDLQueryWithRouting(ddlEvent)
+	require.NoError(t, err)
+
+	// When no routing is applied:
+	// - Query should remain unchanged
+	// - TargetSchemaName should remain empty
+	// - GetDDLSchemaName() should return the source schema
+	require.Equal(t, "CREATE TABLE `source_db`.`test_table` (id INT PRIMARY KEY)", ddlEvent.Query)
+	require.Equal(t, "source_db", ddlEvent.SchemaName)
+	require.Equal(t, "", ddlEvent.TargetSchemaName, "TargetSchemaName should not be set when no routing matches")
+	require.Equal(t, "source_db", ddlEvent.GetDDLSchemaName(), "GetDDLSchemaName should return source schema when no routing")
+
+	mock.ExpectClose()
+	sink.Close(false)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestDDLRoutingTableOnly tests routing that only changes the table name, not the schema.
+func TestDDLRoutingTableOnly(t *testing.T) {
+	// Create a router that only routes the table name: source_db.old_table -> source_db.new_table
+	rules := []*config.DispatchRule{
+		{
+			Matcher:    []string{"source_db.old_table"},
+			SchemaRule: util.SchemaPlaceholder, // Keep schema unchanged
+			TableRule:  "new_table",
+		},
+	}
+	router, err := util.NewRouterFromDispatchRules(true, rules)
+	require.NoError(t, err)
+	require.NotNil(t, router)
+
+	_, sink, mock := getMysqlSinkWithRouter(router)
+
+	ddlEvent := &commonEvent.DDLEvent{
+		Query:      "CREATE TABLE `source_db`.`old_table` (id INT PRIMARY KEY)",
+		SchemaName: "source_db",
+		TableName:  "old_table",
+		FinishedTs: 1,
+		TableInfo: &common.TableInfo{
+			TableName: common.TableName{Schema: "source_db", Table: "old_table"},
+		},
+	}
+
+	err = sink.rewriteDDLQueryWithRouting(ddlEvent)
+	require.NoError(t, err)
+
+	// Verify: schema unchanged, table renamed
+	require.Contains(t, ddlEvent.Query, "`source_db`.`new_table`", "Query should have new table name")
+	require.NotContains(t, ddlEvent.Query, "old_table", "Query should not contain old table name")
+	require.Equal(t, "source_db", ddlEvent.SchemaName, "Original SchemaName should be preserved")
+	// TargetSchemaName is set to the routed schema (which is the same as source in this case)
+	require.Equal(t, "source_db", ddlEvent.TargetSchemaName, "TargetSchemaName should be set even when schema is unchanged")
+	require.Equal(t, "source_db", ddlEvent.GetDDLSchemaName(), "GetDDLSchemaName should return source schema")
+
+	mock.ExpectClose()
+	sink.Close(false)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestDDLRoutingBothSchemaAndTable tests routing that changes both schema and table names.
+func TestDDLRoutingBothSchemaAndTable(t *testing.T) {
+	// Create a router that routes both schema and table: source_db.source_table -> target_db.target_table
+	rules := []*config.DispatchRule{
+		{
+			Matcher:    []string{"source_db.source_table"},
+			SchemaRule: "target_db",
+			TableRule:  "target_table",
+		},
+	}
+	router, err := util.NewRouterFromDispatchRules(true, rules)
+	require.NoError(t, err)
+	require.NotNil(t, router)
+
+	_, sink, mock := getMysqlSinkWithRouter(router)
+
+	ddlEvent := &commonEvent.DDLEvent{
+		Query:      "CREATE TABLE `source_db`.`source_table` (id INT PRIMARY KEY)",
+		SchemaName: "source_db",
+		TableName:  "source_table",
+		FinishedTs: 1,
+		TableInfo: &common.TableInfo{
+			TableName: common.TableName{Schema: "source_db", Table: "source_table"},
+		},
+	}
+
+	err = sink.rewriteDDLQueryWithRouting(ddlEvent)
+	require.NoError(t, err)
+
+	// Verify: both schema and table renamed
+	require.Contains(t, ddlEvent.Query, "`target_db`.`target_table`", "Query should have both new schema and table")
+	require.NotContains(t, ddlEvent.Query, "source_db", "Query should not contain source schema")
+	require.NotContains(t, ddlEvent.Query, "source_table", "Query should not contain source table")
+	require.Equal(t, "source_db", ddlEvent.SchemaName, "Original SchemaName should be preserved")
+	require.Equal(t, "target_db", ddlEvent.TargetSchemaName, "TargetSchemaName should be set to target schema")
+	require.Equal(t, "target_db", ddlEvent.GetDDLSchemaName(), "GetDDLSchemaName should return target schema")
+
+	mock.ExpectClose()
+	sink.Close(false)
 	require.NoError(t, mock.ExpectationsWereMet())
 }

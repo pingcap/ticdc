@@ -26,6 +26,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sink/util"
 )
 
 type Sink interface {
@@ -41,7 +42,7 @@ type Sink interface {
 	Run(ctx context.Context) error
 }
 
-func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.ChangeFeedID) (Sink, error) {
+func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.ChangeFeedID, router *util.Router) (Sink, error) {
 	sinkURI, err := url.Parse(cfg.SinkURI)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrSinkURIInvalid, err)
@@ -49,7 +50,7 @@ func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.
 	scheme := config.GetScheme(sinkURI)
 	switch scheme {
 	case config.MySQLScheme, config.MySQLSSLScheme, config.TiDBScheme, config.TiDBSSLScheme:
-		return mysql.New(ctx, changefeedID, cfg, sinkURI)
+		return mysql.New(ctx, changefeedID, cfg, sinkURI, router)
 	case config.KafkaScheme, config.KafkaSSLScheme:
 		return kafka.New(ctx, changefeedID, sinkURI, cfg.SinkConfig)
 	case config.PulsarScheme, config.PulsarSSLScheme, config.PulsarHTTPScheme, config.PulsarHTTPSScheme:

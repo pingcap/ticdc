@@ -114,6 +114,14 @@ func (ti *TableInfo) InitPrivateFields() {
 		return
 	}
 
+	// columnSchema may be nil for minimal TableInfo instances (e.g., in tests).
+	// In production, columnSchema is always set via WrapTableInfo or similar.
+	// Early return here without marking as initialized, so if columnSchema is
+	// set later, InitPrivateFields can be called again to properly initialize.
+	if ti.columnSchema == nil {
+		return
+	}
+
 	ti.preSQLs.mutex.Lock()
 	defer ti.preSQLs.mutex.Unlock()
 
@@ -122,11 +130,41 @@ func (ti *TableInfo) InitPrivateFields() {
 		return
 	}
 
-	ti.preSQLs.m[preSQLInsert] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLInsert], ti.TableName.QuoteString())
-	ti.preSQLs.m[preSQLReplace] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLReplace], ti.TableName.QuoteString())
-	ti.preSQLs.m[preSQLUpdate] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLUpdate], ti.TableName.QuoteString())
+	ti.preSQLs.m[preSQLInsert] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLInsert], ti.TableName.QuoteTargetString())
+	ti.preSQLs.m[preSQLReplace] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLReplace], ti.TableName.QuoteTargetString())
+	ti.preSQLs.m[preSQLUpdate] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLUpdate], ti.TableName.QuoteTargetString())
 
 	ti.preSQLs.isInitialized.Store(true)
+}
+
+// CloneWithRouting creates a shallow copy of TableInfo with routing applied.
+// The new TableInfo shares the same columnSchema, View, Sequence pointers
+// but has its own TableName (with TargetSchema/TargetTable set) and uninitialized preSQLs.
+// This is safe because:
+// - columnSchema, View, Sequence are read-only after creation
+// - preSQLs will be initialized later via InitPrivateFields() using the new TableName
+// - TableName is a value type that gets copied
+func (ti *TableInfo) CloneWithRouting(targetSchema, targetTable string) *TableInfo {
+	if ti == nil {
+		return nil
+	}
+	// Create a new TableInfo with copied basic fields
+	cloned := &TableInfo{
+		TableName:        ti.TableName, // Value copy of TableName struct
+		Charset:          ti.Charset,
+		Collate:          ti.Collate,
+		Comment:          ti.Comment,
+		columnSchema:     ti.columnSchema, // Share the pointer (read-only)
+		HasPKOrNotNullUK: ti.HasPKOrNotNullUK,
+		View:             ti.View,     // Share the pointer (read-only)
+		Sequence:         ti.Sequence, // Share the pointer (read-only)
+		UpdateTS:         ti.UpdateTS,
+		// preSQLs is zero-initialized (uninitialized mutex/atomic, empty strings)
+	}
+	// Apply routing to the cloned TableName
+	cloned.TableName.TargetSchema = targetSchema
+	cloned.TableName.TargetTable = targetTable
+	return cloned
 }
 
 func (ti *TableInfo) Marshal() ([]byte, error) {
@@ -313,6 +351,18 @@ func (ti *TableInfo) GetTableNamePtr() *string {
 // IsPartitionTable returns whether the table is partition table
 func (ti *TableInfo) IsPartitionTable() bool {
 	return ti.TableName.IsPartition
+}
+
+// GetTargetSchemaName returns the target schema name for routing.
+// If TargetSchema is empty, returns Schema.
+func (ti *TableInfo) GetTargetSchemaName() string {
+	return ti.TableName.GetTargetSchema()
+}
+
+// GetTargetTableName returns the target table name for routing.
+// If TargetTable is empty, returns Table.
+func (ti *TableInfo) GetTargetTableName() string {
+	return ti.TableName.GetTargetTable()
 }
 
 // IsView checks if TableInfo is a view.
