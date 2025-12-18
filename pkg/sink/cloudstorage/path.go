@@ -440,7 +440,11 @@ func (f *FilePathGenerator) fetchIndexFromFileName(dispatcherID string, fileName
 	}
 
 	extIdx := strings.Index(fileName, f.extension)
-	fileIdxStr := fileName[5+len(dispatcherID) : extIdx]
+	startIdx := 3
+	if f.config.EnableTableAcrossNodes {
+		startIdx = 5 + len(dispatcherID)
+	}
+	fileIdxStr := fileName[startIdx:extIdx]
 	if fileIdx, err = strconv.ParseUint(fileIdxStr, 10, 64); err != nil {
 		return 0, errors.WrapError(errors.ErrStorageSinkInvalidFileName, err)
 	}
