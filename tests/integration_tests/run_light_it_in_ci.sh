@@ -71,37 +71,37 @@ mysql_groups=(
 # 6 CPU, 16 Gi memory.
 kafka_groups=(
 	# G00
-	'kafka_log_info'
+	'event_filter charset_gbk changefeed_finish changefeed_reconstruct fail_over_ddl_A'
 	# G01
-	'kafka_log_info'
+	'foreign_key common_1 changefeed_pause_resume fail_over_ddl_B'
 	# G02
-	'kafka_log_info'
+	'new_ci_collation savepoint fail_over_ddl_C'
 	# G03
-	'kafka_log_info'
+	'kv_client_stream_reconnect fail_over_ddl_D'
 	# G04
-	'kafka_log_info'
+	'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
-	'kafka_log_info'
+	'vector simple partition_table fail_over_ddl_F'
 	# G06
-	'kafka_log_info'
+	'multi_topics mq_sink_dispatcher fail_over_ddl_G'
 	# G07
-	'kafka_log_info'
+	'kafka_messages kafka_big_messages kafka_compression fail_over_ddl_H changefeed_update_config'
 	# G08
-	'kafka_log_info'
+	'capture_session_done_during_task fail_over_ddl_I'
 	# G09
-	'kafka_log_info'
+	'cdc_server_tips ddl_sequence fail_over_ddl_J'
 	# G10
-	'kafka_log_info'
+	'changefeed_error batch_add_table fail_over_ddl_K split_table_check'
 	# G11
-	'kafka_log_info'
+	'ddl_attributes multi_tables_ddl fail_over_ddl_L'
 	# G12
-	'kafka_log_info'
+	'row_format tiflash multi_rocks fail_over_ddl_M'
 	# G13
-	'kafka_log_info'
+	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
 	# G14
-	'kafka_log_info'
+	'kafka_simple_basic avro_basic debezium_basic fail_over_ddl_O update_changefeed_check_config'
 	# G15
-	'kafka_log_info'
+	'kafka_simple_basic_avro split_region autorandom gc_safepoint kafka_log_info'
 )
 
 # Resource allocation for pulsar light integration tests in CI pipelines:

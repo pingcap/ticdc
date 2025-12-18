@@ -66,37 +66,37 @@ mysql_groups=(
 # 12 CPU cores will be allocated to run each kafka heavy group in CI pipelines.
 kafka_groups=(
 	# G00
-	'kafka_log_info'
+	'generate_column many_pk_or_uk'
 	# G01
-	'kafka_log_info'
+	'canal_json_basic canal_json_claim_check canal_json_content_compatible ddl_for_split_tables_with_random_move_table'
 	# G02
-	'kafka_log_info'
+	'canal_json_handle_key_only ddl_for_split_tables_with_failover'
 	# G03
-	'kafka_log_info'
+	'canal_json_adapter_compatibility ddl_for_split_tables_with_merge_and_split'
 	# G04
-	'kafka_log_info'
+	'open_protocol_claim_check open_protocol_handle_key_only random_drop_message'
 	# G05
-	'kafka_log_info'
+	'move_table drop_many_tables checkpoint_race_ddl_crash'
 	# G06
-	'kafka_log_info'
+	'cdc default_value ddl_for_split_tables_with_random_merge_and_split'
 	# G07
-	'kafka_log_info'
+	'merge_table resolve_lock force_replicate_table ddl_for_split_tables'
 	# G08
-	'kafka_log_info'
+	'kafka_simple_claim_check kafka_simple_claim_check_avro tidb_mysql_test'
 	# G09
-	'kafka_log_info'
+	'kafka_simple_handle_key_only kafka_simple_handle_key_only_avro mq_sink_error_resume multi_source'
 	# G10
-	'kafka_log_info'
+	'kafka_column_selector kafka_column_selector_avro ddl_with_random_move_table'
 	# G11
-	'kafka_log_info'
+	'fail_over region_merge multi_changefeeds'
 	# G12
-	'kafka_log_info'
+	'ddl_for_split_tables_random_schedule'
 	# G13
-	'kafka_log_info'
+	'debezium01 fail_over_ddl_mix'
 	# G14
-	'kafka_log_info'
+	'debezium02'
 	# G15
-	'kafka_log_info'
+	'debezium03'
 )
 
 # 12 CPU cores will be allocated to run each pulsar heavy group in CI pipelines.
