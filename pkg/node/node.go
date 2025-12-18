@@ -1,4 +1,4 @@
-// Copyright 2020 PingCAP, Inc.
+// Copyright 2025 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,9 +19,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/version"
 )
 
@@ -77,7 +76,7 @@ func (c *Info) String() string {
 func (c *Info) Marshal() ([]byte, error) {
 	data, err := json.Marshal(c)
 	if err != nil {
-		return nil, cerror.WrapError(cerror.ErrMarshalFailed, err)
+		return nil, errors.WrapError(errors.ErrMarshalFailed, err)
 	}
 
 	return data, nil
@@ -86,7 +85,7 @@ func (c *Info) Marshal() ([]byte, error) {
 // Unmarshal from binary data.
 func (c *Info) Unmarshal(data []byte) error {
 	err := json.Unmarshal(data, c)
-	return errors.Annotatef(cerror.WrapError(cerror.ErrUnmarshalFailed, err),
+	return errors.Annotatef(errors.WrapError(errors.ErrUnmarshalFailed, err),
 		"unmarshal data: %v", data)
 }
 
@@ -99,12 +98,4 @@ func CaptureInfoToNodeInfo(captureInfo *config.CaptureInfo) *Info {
 		DeployPath:     captureInfo.DeployPath,
 		StartTimestamp: captureInfo.StartTimestamp,
 	}
-}
-
-func CaptureInfosToNodeInfos(captureInfos map[config.CaptureID]*config.CaptureInfo) map[ID]*Info {
-	nodeInfos := make(map[ID]*Info)
-	for _, ci := range captureInfos {
-		nodeInfos[ID(ci.ID)] = CaptureInfoToNodeInfo(ci)
-	}
-	return nodeInfos
 }
