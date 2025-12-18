@@ -217,8 +217,8 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			}
 		}
 		if req.TableTriggerEventDispatcherId != nil {
-			tableTriggerEventDispatcher := manager.GetTableTriggerEventDispatcher()
-			if tableTriggerEventDispatcher == nil {
+			tableTriggerDispatcher := manager.GetTableTriggerEventDispatcher()
+			if tableTriggerDispatcher == nil {
 				startTs, err = manager.NewTableTriggerEventDispatcher(
 					req.TableTriggerEventDispatcherId,
 					req.StartTs,
@@ -230,7 +230,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 					return m.handleDispatcherError(from, req.ChangefeedID, err)
 				}
 			} else {
-				startTs = tableTriggerEventDispatcher.GetStartTs()
+				startTs = tableTriggerDispatcher.GetStartTs()
 			}
 		}
 	}
@@ -356,7 +356,7 @@ func createBootstrapResponse(
 		Spans:        make([]*heartbeatpb.BootstrapTableSpan, 0, manager.GetDispatcherMap().Len()),
 	}
 
-	// table trigger event dispatcher startTs
+	// table trigger dispatcher startTs
 	if startTs != 0 {
 		response.CheckpointTs = startTs
 	}

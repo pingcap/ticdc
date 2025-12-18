@@ -375,7 +375,7 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 		b.blockedEvents.Delete(getEventKey(event.commitTs, event.isSyncPoint))
 		return event, nil, "", true
 	}
-	// enqueue ddl that needs scheduling so the table trigger event dispatcher can process in order
+	// enqueue ddl that needs scheduling so the table trigger dispatcher can process in order
 	// otherwise the barrier may receive the first status of "recover table t_a" before it sees the
 	// "truncate table t_a" done status when intermediate messages are lost, and the recover ddl would
 	// be scheduled before truncate finishes, re-adding the table before drop completes and risking data loss.
