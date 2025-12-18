@@ -76,9 +76,10 @@ func (c *Controller) FinishBootstrap(
 	isMysqlCompatibleBackend bool,
 ) (*heartbeatpb.MaintainerPostBootstrapRequest, error) {
 	if c.bootstrapped {
-		log.Panic("already bootstrapped",
+		log.Info("maintainer already bootstrapped, should be caused by new node join the group",
 			zap.Stringer("changefeed", c.changefeedID),
 			zap.Any("allNodesResp", allNodesResp))
+		return nil, nil
 	}
 
 	log.Info("all nodes have sent bootstrap response, start to handle them",

@@ -806,7 +806,7 @@ func (m *Maintainer) onBlockStateRequest(msg *messaging.TargetMessage) {
 
 // onMaintainerBootstrapResponse is called when a maintainer bootstrap response(send by dispatcher manager) is received.
 func (m *Maintainer) onMaintainerBootstrapResponse(msg *messaging.TargetMessage) {
-	log.Info("received maintainer bootstrap response",
+	log.Info("maintainer received bootstrap response",
 		zap.Stringer("changefeedID", m.changefeedID),
 		zap.Stringer("sourceNodeID", msg.From))
 
@@ -819,11 +819,7 @@ func (m *Maintainer) onMaintainerBootstrapResponse(msg *messaging.TargetMessage)
 		return
 	}
 
-	cachedResp := m.bootstrapper.HandleBootstrapResponse(
-		msg.From,
-		resp,
-	)
-
+	cachedResp := m.bootstrapper.HandleBootstrapResponse(msg.From, resp)
 	if cachedResp != nil {
 		m.onBootstrapDone(cachedResp)
 	}

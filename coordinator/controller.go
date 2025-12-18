@@ -504,9 +504,10 @@ func (c *Controller) updateChangefeedStatus(
 // And construct all changefeeds state in memory.
 func (c *Controller) FinishBootstrap(runningChangefeeds map[common.ChangeFeedID]remoteMaintainer) {
 	if c.bootstrapped.Load() {
-		log.Panic("already bootstrapped",
+		log.Info("coordinator already bootstrapped, should be caused by new node join the cluster",
 			zap.Any("nodeID", c.selfNode.ID),
 			zap.Any("changefeeds", runningChangefeeds))
+		return
 	}
 	// load all changefeeds from metastore, and check if the changefeed is already in workingMap
 	allChangefeeds, err := c.backend.GetAllChangefeeds(context.Background())

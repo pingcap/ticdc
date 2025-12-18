@@ -48,36 +48,36 @@ func TestHandleNewNodes(t *testing.T) {
 
 	// not found, this should not happen in the real world,
 	// since response should be sent after the bootstrapper send request.
-	cached := b.HandleBootstrapResponse(
+	responses = b.HandleBootstrapResponse(
 		"ef",
 		&heartbeatpb.MaintainerBootstrapResponse{
 			ChangefeedID: changefeedIDPB,
 			Spans:        []*heartbeatpb.BootstrapTableSpan{{}},
 		})
 	require.False(t, b.Bootstrapped())
-	require.Nil(t, cached)
+	require.Nil(t, responses)
 
 	// receive one response, not bootstrapped yet
-	cached = b.HandleBootstrapResponse(
+	responses = b.HandleBootstrapResponse(
 		node1.ID,
 		&heartbeatpb.MaintainerBootstrapResponse{
 			ChangefeedID: changefeedIDPB,
 			Spans:        []*heartbeatpb.BootstrapTableSpan{{}},
 		})
 	require.False(t, b.Bootstrapped())
-	require.Nil(t, cached)
+	require.Nil(t, responses)
 
 	// all nodes responses received, bootstrapped
-	cached = b.HandleBootstrapResponse(
+	responses = b.HandleBootstrapResponse(
 		node2.ID,
 		&heartbeatpb.MaintainerBootstrapResponse{
 			ChangefeedID: changefeedIDPB,
 			Spans:        []*heartbeatpb.BootstrapTableSpan{{}, {}},
 		})
 	require.True(t, b.Bootstrapped())
-	require.Len(t, cached, 2)
-	require.Equal(t, 1, len(cached[node1.ID].Spans))
-	require.Equal(t, 2, len(cached[node2.ID].Spans))
+	require.Len(t, responses, 2)
+	require.Equal(t, 1, len(responses[node1.ID].Spans))
+	require.Equal(t, 2, len(responses[node2.ID].Spans))
 
 	// add one new node
 	node3 := node.NewInfo("", "")
@@ -89,14 +89,14 @@ func TestHandleNewNodes(t *testing.T) {
 	require.Len(t, msgs, 1)
 	require.Nil(t, responses)
 	require.False(t, b.Bootstrapped())
-	cached = b.HandleBootstrapResponse(
+	responses = b.HandleBootstrapResponse(
 		node3.ID,
 		&heartbeatpb.MaintainerBootstrapResponse{
 			ChangefeedID: changefeedIDPB,
 			Spans:        []*heartbeatpb.BootstrapTableSpan{{}, {}, {}},
 		})
 	require.True(t, b.Bootstrapped())
-	require.Len(t, cached, 0)
+	require.Len(t, responses, 0)
 
 	// remove a node
 	delete(nodes, node1.ID)
@@ -117,14 +117,14 @@ func TestHandleNewNodes(t *testing.T) {
 	require.Nil(t, responses)
 	require.False(t, b.Bootstrapped())
 
-	cached = b.HandleBootstrapResponse(
+	responses = b.HandleBootstrapResponse(
 		node1.ID,
 		&heartbeatpb.MaintainerBootstrapResponse{
 			ChangefeedID: changefeedIDPB,
 			Spans:        []*heartbeatpb.BootstrapTableSpan{{}},
 		})
 	require.True(t, b.Bootstrapped())
-	require.Len(t, cached, 0)
+	require.Len(t, responses, 0)
 }
 
 func TestResendBootstrapMessage(t *testing.T) {
@@ -175,18 +175,4 @@ func TestCheckAllNodeInitialized(t *testing.T) {
 			Spans:        []*heartbeatpb.BootstrapTableSpan{{}},
 		})
 	require.True(t, b.Bootstrapped())
-}
-
-func TestGetAllNodes(t *testing.T) {
-	b := NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse]("test", func(id node.ID, addr string) *messaging.TargetMessage {
-		return &messaging.TargetMessage{}
-	})
-
-	nodes := make(map[node.ID]*node.Info)
-	nodes["ab"] = node.NewInfo("", "")
-	nodes["cd"] = node.NewInfo("", "")
-
-	b.HandleNewNodes(nodes)
-	all := b.GetAllNodeIDs()
-	require.Equal(t, 2, len(all))
 }
