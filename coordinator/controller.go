@@ -322,7 +322,7 @@ func (c *Controller) RequestResolvedTsFromLogCoordinator(ctx context.Context, ch
 }
 
 func (c *Controller) onNodeChanged() {
-	addedNodes, removedNodes, messages, cachedResponse := c.bootstrapper.HandleNewNodes(c.nodeManager.GetAliveNodes())
+	addedNodes, removedNodes, requests, responses := c.bootstrapper.HandleNewNodes(c.nodeManager.GetAliveNodes())
 	log.Info("controller detects node changed",
 		zap.Int("addedCount", len(addedNodes)),
 		zap.Int("removedCount", len(removedNodes)),
@@ -332,11 +332,11 @@ func (c *Controller) onNodeChanged() {
 	for _, n := range removedNodes {
 		c.RemoveNode(n)
 	}
-	c.sendMessages(messages)
-	if cachedResponse != nil {
+	c.sendMessages(requests)
+	if responses != nil {
 		log.Info("controller bootstrap done after removed some nodes",
 			zap.Any("removedNodes", removedNodes))
-		c.onBootstrapDone(cachedResponse)
+		c.handleBootstrapResponses(responses)
 	}
 }
 
@@ -351,8 +351,8 @@ func (c *Controller) onMaintainerBootstrapResponse(msg *messaging.TargetMessage)
 	log.Info("controller received maintainer bootstrap response",
 		zap.Stringer("node", msg.From),
 		zap.Int("maintainerCount", len(response.Statuses)))
-	cachedResp := c.bootstrapper.HandleBootstrapResponse(msg.From, response)
-	c.onBootstrapDone(cachedResp)
+	responses := c.bootstrapper.HandleBootstrapResponse(msg.From, response)
+	c.handleBootstrapResponses(responses)
 }
 
 type remoteMaintainer struct {
@@ -360,30 +360,27 @@ type remoteMaintainer struct {
 	status *heartbeatpb.MaintainerStatus
 }
 
-func (c *Controller) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.CoordinatorBootstrapResponse) {
-	if cachedResp == nil {
-		return
-	}
+func (c *Controller) handleBootstrapResponses(responses map[node.ID]*heartbeatpb.CoordinatorBootstrapResponse) {
 	log.Info("all nodes bootstrap response received",
-		zap.Int("nodeCount", len(cachedResp)))
-	// runningCfs is the changefeeds that are already running on other nodes
+		zap.Int("nodeCount", len(responses)))
+	// runningCfs are changefeeds that already running on other nodes
 	runningCfs := make(map[common.ChangeFeedID]remoteMaintainer)
-	for node, bootstrapMsg := range cachedResp {
-		for _, info := range bootstrapMsg.Statuses {
-			changeFeedID := common.NewChangefeedIDFromPB(info.ChangefeedID)
+	for nodeID, resp := range responses {
+		for _, status := range resp.Statuses {
+			changeFeedID := common.NewChangefeedIDFromPB(status.ChangefeedID)
 			if old, ok := runningCfs[changeFeedID]; ok {
 				log.Panic("maintainer runs on multiple node",
+					zap.Stringer("changefeedID", changeFeedID),
 					zap.Stringer("oldNode", old.nodeID),
-					zap.Stringer("newNode", node),
-					zap.Stringer("cf", changeFeedID))
+					zap.Stringer("newNode", nodeID))
 			}
 			runningCfs[changeFeedID] = remoteMaintainer{
-				nodeID: node,
-				status: info,
+				nodeID: nodeID,
+				status: status,
 			}
 		}
 	}
-	c.FinishBootstrap(runningCfs)
+	c.finishBootstrap(runningCfs)
 }
 
 // handleMaintainerStatus handle the status report from the maintainers
@@ -498,11 +495,11 @@ func (c *Controller) updateChangefeedStatus(
 	return change
 }
 
-// FinishBootstrap is called when all nodes have sent bootstrap response
+// finishBootstrap is called when all nodes have sent bootstrap response
 // It will load all changefeeds from metastore, and compare with running changefeeds
 // Then initialize the changefeeds that are not running on other nodes
 // And construct all changefeeds state in memory.
-func (c *Controller) FinishBootstrap(runningChangefeeds map[common.ChangeFeedID]remoteMaintainer) {
+func (c *Controller) finishBootstrap(runningChangefeeds map[common.ChangeFeedID]remoteMaintainer) {
 	if c.bootstrapped.Load() {
 		log.Info("coordinator already bootstrapped, should be caused by new node join the cluster",
 			zap.Any("nodeID", c.selfNode.ID),
