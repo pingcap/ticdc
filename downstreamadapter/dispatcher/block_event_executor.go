@@ -16,54 +16,109 @@ import (
 	"sync"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/utils/chann"
 )
 
 const blockEventWorkerCount = 8
 
 type blockEventTask struct {
-	dispatcher *BasicDispatcher
-	event      commonEvent.BlockEvent
+	f func()
 }
+
 type blockEventExecutor struct {
-	queues []*chann.UnlimitedChannel[blockEventTask, any]
-	wg     sync.WaitGroup
+	// ready contains dispatcher IDs that have pending tasks.
+	//
+	// We intentionally avoid hashing a dispatcher to a fixed worker queue. A slow downstream
+	// operation (e.g. "ADD INDEX") would block the worker forever and cause head-of-line
+	// blocking for other dispatchers mapped to the same queue. With this design, each dispatcher
+	// can be processed by any idle worker.
+	ready *chann.UnlimitedChannel[common.DispatcherID, any]
+
+	// inUseDispatcher keeps track of dispatchers that are currently being processed by workers.
+	inUseDispatcher sync.Map // map[common.DispatcherID]struct{}
+
+	mu    sync.Mutex
+	tasks map[common.DispatcherID][]blockEventTask
+
+	wg sync.WaitGroup
 }
 
 func newBlockEventExecutor() *blockEventExecutor {
 	executor := &blockEventExecutor{
-		queues: make([]*chann.UnlimitedChannel[blockEventTask, any], blockEventWorkerCount),
+		ready: chann.NewUnlimitedChannelDefault[common.DispatcherID](),
+		tasks: make(map[common.DispatcherID][]blockEventTask),
 	}
 	for i := 0; i < blockEventWorkerCount; i++ {
-		queue := chann.NewUnlimitedChannelDefault[blockEventTask]()
-		executor.queues[i] = queue
 		executor.wg.Add(1)
-		go func(ch *chann.UnlimitedChannel[blockEventTask, any]) {
+		go func() {
 			defer executor.wg.Done()
 			for {
-				task, ok := ch.Get()
+				dispatcherID, ok := executor.ready.Get()
 				if !ok {
 					return
 				}
-				task.dispatcher.DealWithBlockEvent(task.event)
+
+				if _, loaded := executor.inUseDispatcher.Load(dispatcherID); loaded {
+					// Another worker is already processing this dispatcher.
+					// Re-enqueue the dispatcher ID and try later.
+					//
+					// dispatcher event ds ensures if a ddl task is not processed, there can't be new tasks from this dispatcher submitted.
+					// So there is only one case there will be two task from same dispatchers in blockEventExecutor at the same time:
+					// 1. worker 1 pop dispatcher A, start processing
+					// 2. during processing, new task from dispatcher A is submitted, and push A to ready queue
+					// Thus, we only need to check here, if this dispatcher is in process, we just re-push the dispatcher ID to the ready queue.
+					executor.ready.Push(dispatcherID)
+					continue
+				}
+
+				task, ok := executor.pop(dispatcherID)
+				if !ok || task.f == nil {
+					continue
+				}
+
+				executor.inUseDispatcher.Store(dispatcherID, struct{}{})
+				task.f()
+				executor.inUseDispatcher.Delete(dispatcherID)
 			}
-		}(queue)
+		}()
 	}
 	return executor
 }
 
-func (e *blockEventExecutor) Submit(dispatcher *BasicDispatcher, event commonEvent.BlockEvent) {
-	idx := common.GID(dispatcher.id).Hash(uint64(len(e.queues)))
-	e.queues[idx].Push(blockEventTask{dispatcher: dispatcher, event: event})
+func (e *blockEventExecutor) Submit(dispatcher *BasicDispatcher, f func()) {
+	dispatcherID := dispatcher.id
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.tasks[dispatcherID] = append(e.tasks[dispatcherID], blockEventTask{f: f})
+	e.ready.Push(dispatcherID)
+}
+
+func (e *blockEventExecutor) pop(dispatcherID common.DispatcherID) (blockEventTask, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	q, ok := e.tasks[dispatcherID]
+	if !ok || len(q) == 0 {
+		delete(e.tasks, dispatcherID)
+		return blockEventTask{}, false
+	}
+
+	task := q[0]
+	if len(q) == 1 {
+		delete(e.tasks, dispatcherID)
+		return task, true
+	}
+	e.tasks[dispatcherID] = q[1:]
+	return task, true
 }
 
 func (e *blockEventExecutor) Close() {
 	if e == nil {
 		return
 	}
-	for _, queue := range e.queues {
-		queue.Close()
-	}
+
+	e.ready.Close()
 	e.wg.Wait()
 }

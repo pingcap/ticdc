@@ -673,6 +673,19 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 		RedoWatermark:   heartbeatpb.NewMaxWatermark(),
 	}
 
+	eventServiceDispatcherHeartbeat := &event.DispatcherHeartbeat{}
+	// Collect dispatchers without watermarks so we can fill them with the
+	// final aggregated watermark after both loops are done.
+	eventDispatchersWithoutWatermark := make([]common.DispatcherID, 0)
+	redoDispatchersWithoutWatermark := make([]common.DispatcherID, 0)
+	if needCompleteStatus {
+		eventServiceDispatcherHeartbeat = &event.DispatcherHeartbeat{
+			Version:              event.DispatcherHeartbeatVersion1,
+			DispatcherCount:      0,
+			DispatcherProgresses: make([]event.DispatcherProgress, 0),
+		}
+	}
+
 	toCleanMap := make([]*cleanMap, 0)
 	dispatcherCount := 0
 
@@ -690,10 +703,19 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 				message.RedoWatermark.UpdateMin(*watermark)
 				log.Error("aggregateDispatcherHeartbeats", zap.Any("id", id), zap.Any("watermark", watermark))
 			}
+
+			if needCompleteStatus {
+				if watermark != nil {
+					eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, watermark.CheckpointTs))
+				} else {
+					redoDispatchersWithoutWatermark = append(redoDispatchersWithoutWatermark, id)
+				}
+			}
 		})
 		message.RedoWatermark.Seq = redoSeq
 		e.latestRedoWatermark.Set(message.RedoWatermark)
 	}
+
 	seq := e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.EventDispatcher) {
 		dispatcherCount++
 		status, cleanMap, watermark := getDispatcherStatus(id, dispatcherItem, needCompleteStatus)
@@ -706,7 +728,17 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 		if watermark != nil {
 			message.Watermark.Update(*watermark)
 		}
+
+		if needCompleteStatus {
+			if watermark != nil {
+				eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, watermark.CheckpointTs))
+			} else {
+				// Use the min checkpointTs of all dispatchers to report to the event service as a keepalive heartbeat.
+				eventDispatchersWithoutWatermark = append(eventDispatchersWithoutWatermark, id)
+			}
+		}
 	})
+
 	message.Watermark.Seq = seq
 	e.latestWatermark.Set(message.Watermark)
 
@@ -730,19 +762,15 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 
 	// If needCompleteStatus is true, we need to send the dispatcher heartbeat to the event service.
 	if needCompleteStatus {
-		eventServiceDispatcherHeartbeat := &event.DispatcherHeartbeat{
-			Version:              event.DispatcherHeartbeatVersion1,
-			DispatcherCount:      0,
-			DispatcherProgresses: make([]event.DispatcherProgress, 0, dispatcherCount),
-		}
-		if e.RedoEnable {
-			e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.RedoDispatcher) {
-				eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
-			})
-		}
-		e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.EventDispatcher) {
+		// Fill the missing watermarks with the final aggregated values to avoid
+		// reporting an uninitialized checkpoint.
+		for _, id := range redoDispatchersWithoutWatermark {
 			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
-		})
+		}
+		for _, id := range eventDispatchersWithoutWatermark {
+			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
+		}
+
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).SendDispatcherHeartbeat(eventServiceDispatcherHeartbeat)
 	}
 
@@ -856,9 +884,16 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 		e.heartBeatTask.Cancel()
 	}
 
+	// Cancel the context to signal all dependent components to stop.
+	// This is important to prevent `e.sink.Close() / e.sharedInfo.Close()` from blocking,
+	// especially when a long-running DDL is being executed by the sink.
+	e.cancel()
+
 	if e.sharedInfo != nil {
 		e.sharedInfo.Close()
 	}
+
+	log.Info("shared info closed", zap.Stringer("changefeedID", e.changefeedID))
 
 	if e.RedoEnable {
 		e.redoSink.Close(removeChangefeed)
@@ -866,7 +901,8 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 		e.closeRedoMeta(removeChangefeed)
 	}
 	e.sink.Close(removeChangefeed)
-	e.cancel()
+	log.Info("sink closed", zap.Stringer("changefeedID", e.changefeedID))
+
 	e.wg.Wait()
 
 	e.removeTaskHandles.Range(func(key, value interface{}) bool {
