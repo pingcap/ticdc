@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/fatih/color"
+	perrors "github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -30,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/security"
+	pkgutil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/pingcap/ticdc/server"
 	ticonfig "github.com/pingcap/tidb/pkg/config"
@@ -100,6 +102,20 @@ func (o *options) run(cmd *cobra.Command) error {
 		os.Exit(1)
 	}
 	log.Info("init log", zap.String("file", loggerConfig.File), zap.String("level", loggerConfig.Level))
+
+	// Initialize log redaction mode from config
+	// Empty string defaults to OFF (no redaction)
+	redactConfigValue := o.serverConfig.Security.RedactInfoLog.String()
+	redactMode, err := pkgutil.ParseRedactMode(redactConfigValue)
+	if err != nil {
+		cmd.Printf("invalid redact-info-log configuration: %v\n", err)
+		os.Exit(1)
+	}
+	if redactMode == "" {
+		redactMode = perrors.RedactLogDisable // Default to OFF when not set
+	}
+	perrors.RedactLogEnabled.Store(redactMode)
+	log.Info("log redaction initialized", zap.String("config", redactConfigValue), zap.String("mode", redactMode))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -295,6 +311,12 @@ func isNewArchEnabled(o *options) bool {
 }
 
 func runTiFlowServer(o *options, cmd *cobra.Command) error {
+	// Populate security credentials from CLI flags before marshaling to JSON.
+	// In old architecture mode, complete() is not called, so we need to transfer
+	// TLS credentials (--ca, --cert, --key) to serverConfig.Security here.
+	// Without this, the Security struct is empty and tiflow uses HTTP instead of HTTPS.
+	o.serverConfig.Security = o.getCredential()
+
 	cfgData, err := json.Marshal(o.serverConfig)
 	if err != nil {
 		return errors.Trace(err)
@@ -310,10 +332,6 @@ func runTiFlowServer(o *options, cmd *cobra.Command) error {
 	oldOptions.ServerConfig = &oldCfg
 	oldOptions.ServerPdAddr = strings.Join(o.pdEndpoints, ",")
 	oldOptions.ServerConfigFilePath = o.serverConfigFilePath
-	oldOptions.CaPath = o.caPath
-	oldOptions.CertPath = o.certPath
-	oldOptions.KeyPath = o.keyPath
-	oldOptions.AllowedCertCN = o.allowedCertCN
 
 	return tiflowServer.Run(&oldOptions, cmd)
 }
