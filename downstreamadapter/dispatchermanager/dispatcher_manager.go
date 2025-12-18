@@ -38,6 +38,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus"
@@ -212,8 +213,25 @@ func NewDispatcherManager(
 		}
 	}
 
+	// Create router for schema/table name routing.
+	// The router is shared between:
+	// 1. The Sink - for rewriting DDL queries (e.g., CREATE TABLE source.t -> CREATE TABLE target.t)
+	// 2. The Dispatchers (via SharedInfo) - for setting TargetSchema/TargetTable on TableInfo,
+	//    which is then used by DML SQL generation to write to the correct target table.
+	// This ensures both DDL and DML operations use consistent routing rules.
+	var router *sinkutil.Router
 	var err error
-	manager.sink, err = sink.New(ctx, manager.config, manager.changefeedID)
+	if manager.config.SinkConfig != nil && len(manager.config.SinkConfig.DispatchRules) > 0 {
+		router, err = sinkutil.NewRouterFromDispatchRules(
+			manager.config.CaseSensitive,
+			manager.config.SinkConfig.DispatchRules,
+		)
+		if err != nil {
+			return nil, 0, errors.Trace(err)
+		}
+	}
+
+	manager.sink, err = sink.New(ctx, manager.config, manager.changefeedID, router)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -238,6 +256,7 @@ func NewDispatcherManager(
 		syncPointConfig,
 		manager.config.SinkConfig.TxnAtomicity,
 		manager.config.EnableSplittableCheck,
+		router,
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
 		make(chan error, 1),

@@ -257,3 +257,107 @@ INSERT INTO test VALUES (1);
 		})
 	}
 }
+
+// TestDDLEventCloneForRouting tests the CloneForRouting method to ensure it properly
+// clones DDL events to avoid race conditions between multiple dispatchers
+func TestDDLEventCloneForRouting(t *testing.T) {
+	helper := NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.tk.MustExec("use test")
+	ddlJob := helper.DDL2Job(createTableSQL)
+	require.NotNil(t, ddlJob)
+
+	// Create original DDL event with all fields populated
+	originalTableInfo := common.WrapTableInfo(ddlJob.SchemaName, ddlJob.BinlogInfo.TableInfo)
+	originalTableInfo.InitPrivateFields()
+
+	multipleTableInfo1 := common.WrapTableInfo("schema1", ddlJob.BinlogInfo.TableInfo)
+	multipleTableInfo1.InitPrivateFields()
+	multipleTableInfo2 := common.WrapTableInfo("schema2", ddlJob.BinlogInfo.TableInfo)
+	multipleTableInfo2.InitPrivateFields()
+
+	postFlushFunc1 := func() {}
+	postFlushFunc2 := func() {}
+
+	original := &DDLEvent{
+		Version:            DDLEventVersion1,
+		DispatcherID:       common.NewDispatcherID(),
+		Type:               byte(ddlJob.Type),
+		SchemaID:           ddlJob.SchemaID,
+		SchemaName:         ddlJob.SchemaName,
+		TableName:          ddlJob.TableName,
+		TargetSchemaName:   "",
+		Query:              ddlJob.Query,
+		TableInfo:          originalTableInfo,
+		FinishedTs:         ddlJob.BinlogInfo.FinishedTS,
+		Seq:                1,
+		Epoch:              2,
+		MultipleTableInfos: []*common.TableInfo{multipleTableInfo1, multipleTableInfo2},
+		PostTxnFlushed:     []func(){postFlushFunc1, postFlushFunc2},
+		TiDBOnly:           true,
+		BDRMode:            "test-mode",
+	}
+
+	// Clone the event
+	cloned := original.CloneForRouting()
+	require.NotNil(t, cloned)
+
+	// Verify that cloned is a separate object
+	require.False(t, original == cloned, "cloned event should be a different object")
+
+	// Verify that immutable fields are shared (shallow copy)
+	require.Equal(t, original.Version, cloned.Version)
+	require.Equal(t, original.DispatcherID, cloned.DispatcherID)
+	require.Equal(t, original.Type, cloned.Type)
+	require.Equal(t, original.SchemaID, cloned.SchemaID)
+	require.Equal(t, original.SchemaName, cloned.SchemaName)
+	require.Equal(t, original.TableName, cloned.TableName)
+	require.Equal(t, original.Query, cloned.Query)
+	require.Equal(t, original.FinishedTs, cloned.FinishedTs)
+	require.Equal(t, original.Seq, cloned.Seq)
+	require.Equal(t, original.Epoch, cloned.Epoch)
+	require.Equal(t, original.TiDBOnly, cloned.TiDBOnly)
+	require.Equal(t, original.BDRMode, cloned.BDRMode)
+
+	// Verify that TableInfo pointer is shared initially
+	require.True(t, original.TableInfo == cloned.TableInfo, "TableInfo should be shared initially")
+
+	// Verify that MultipleTableInfos is a new slice (but points to same TableInfo objects initially)
+	require.False(t, &original.MultipleTableInfos[0] == &cloned.MultipleTableInfos[0], "MultipleTableInfos should be a new slice")
+	require.True(t, original.MultipleTableInfos[0] == cloned.MultipleTableInfos[0], "MultipleTableInfos elements should be shared initially")
+	require.True(t, original.MultipleTableInfos[1] == cloned.MultipleTableInfos[1], "MultipleTableInfos elements should be shared initially")
+
+	// Verify that PostTxnFlushed is shared (same slice header)
+	require.NotNil(t, cloned.PostTxnFlushed)
+	require.Equal(t, 2, len(cloned.PostTxnFlushed), "PostTxnFlushed should be shared with original")
+	require.Equal(t, 2, len(original.PostTxnFlushed), "Original PostTxnFlushed should remain unchanged")
+	// Both should point to the same underlying array since it's a shallow copy
+	require.Equal(t, &original.PostTxnFlushed[0], &cloned.PostTxnFlushed[0], "PostTxnFlushed should share the same underlying array")
+
+	// Now simulate what happens during routing: mutate the cloned event
+	cloned.TargetSchemaName = "routed_schema"
+	cloned.Query = "CREATE TABLE routed_schema.test ..."
+	newRoutedTableInfo := originalTableInfo.CloneWithRouting("routed_schema", "test")
+	cloned.TableInfo = newRoutedTableInfo
+	cloned.MultipleTableInfos[0] = multipleTableInfo1.CloneWithRouting("routed_schema1", "table1")
+	cloned.MultipleTableInfos[1] = multipleTableInfo2.CloneWithRouting("routed_schema2", "table2")
+
+	// Verify that mutations to cloned event don't affect the original
+	require.Equal(t, "", original.TargetSchemaName, "Original TargetSchemaName should be unchanged")
+	require.Equal(t, ddlJob.Query, original.Query, "Original Query should be unchanged")
+	require.True(t, original.TableInfo == originalTableInfo, "Original TableInfo should be unchanged")
+	require.True(t, original.MultipleTableInfos[0] == multipleTableInfo1, "Original MultipleTableInfos[0] should be unchanged")
+	require.True(t, original.MultipleTableInfos[1] == multipleTableInfo2, "Original MultipleTableInfos[1] should be unchanged")
+
+	// Verify that cloned event has the mutations
+	require.Equal(t, "routed_schema", cloned.TargetSchemaName)
+	require.Equal(t, "CREATE TABLE routed_schema.test ...", cloned.Query)
+	require.True(t, cloned.TableInfo == newRoutedTableInfo)
+	require.Equal(t, "routed_schema", cloned.TableInfo.TableName.TargetSchema)
+
+	// Test cloning nil event
+	var nilEvent *DDLEvent
+	clonedNil := nilEvent.CloneForRouting()
+	require.Nil(t, clonedNil)
+}

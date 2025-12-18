@@ -240,6 +240,26 @@ func (b *BatchDMLEvent) encodeV1() ([]byte, error) {
 // AssembleRows assembles the Rows from the RawRows.
 // It also sets the TableInfo and clears the RawRows.
 func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
+	if tableInfo == nil {
+		log.Panic("DMLEvent: TableInfo is nil")
+		return
+	}
+
+	// Verify schema version compatibility before replacing TableInfo
+	if b.TableInfo != nil && b.TableInfo.GetUpdateTS() != tableInfo.GetUpdateTS() {
+		log.Panic("DMLEvent: TableInfoVersion mismatch",
+			zap.Uint64("dmlEventTableInfoVersion", b.TableInfo.GetUpdateTS()),
+			zap.Uint64("tableInfoVersion", tableInfo.GetUpdateTS()))
+		return
+	}
+
+	// Always update TableInfo and DMLEvents' TableInfo to the passed tableInfo,
+	// because it may have routing applied (TargetSchema/TargetTable set).
+	// This must happen before the early return to ensure routing is applied.
+	b.TableInfo = tableInfo
+	for _, dml := range b.DMLEvents {
+		dml.TableInfo = tableInfo
+	}
 	defer func() {
 		b.TableInfo.InitPrivateFields()
 	}()
@@ -248,27 +268,17 @@ func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 	if b.Rows != nil {
 		return
 	}
-	if tableInfo == nil {
-		log.Panic("DMLEvent: TableInfo is nil")
-		return
-	}
 
 	if len(b.RawRows) == 0 {
 		log.Panic("DMLEvent: RawRows is empty")
 		return
 	}
 
-	if b.TableInfo != nil && b.TableInfo.GetUpdateTS() != tableInfo.GetUpdateTS() {
-		log.Panic("DMLEvent: TableInfoVersion mismatch", zap.Uint64("dmlEventTableInfoVersion", b.TableInfo.GetUpdateTS()), zap.Uint64("tableInfoVersion", tableInfo.GetUpdateTS()))
-		return
-	}
 	decoder := chunk.NewCodec(tableInfo.GetFieldSlice())
 	b.Rows, _ = decoder.Decode(b.RawRows)
-	b.TableInfo = tableInfo
 	b.RawRows = nil
 	for _, dml := range b.DMLEvents {
 		dml.Rows = b.Rows
-		dml.TableInfo = b.TableInfo
 	}
 }
 

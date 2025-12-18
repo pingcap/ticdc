@@ -47,7 +47,9 @@ func initRedoComponet(
 	}
 	manager.RedoEnable = true
 	manager.redoDispatcherMap = newDispatcherMap[*dispatcher.RedoDispatcher]()
-	manager.redoSink = redo.New(ctx, changefeedID, startTs, manager.config.Consistent)
+	// Pass the router to the redo sink so DDL queries are rewritten with routing
+	// before being written to the redo log. This ensures replay writes to correct target tables.
+	manager.redoSink = redo.New(ctx, changefeedID, startTs, manager.config.Consistent, manager.sharedInfo.GetRouter())
 	manager.redoSchemaIDToDispatchers = dispatcher.NewSchemaIDToDispatchers()
 
 	totalQuota := manager.sinkQuota
