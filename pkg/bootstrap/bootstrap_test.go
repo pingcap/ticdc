@@ -28,7 +28,12 @@ func TestHandleBootstrapResponse(t *testing.T) {
 	b := NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse]("test", func(id node.ID) *messaging.TargetMessage {
 		return &messaging.TargetMessage{}
 	})
-	msgs := b.HandleNewNodes([]*node.Info{{ID: "ab"}, {ID: "cd"}})
+
+	nodes := make(map[node.ID]*node.Info)
+	nodes["ab"] = node.NewInfo("", "")
+	nodes["cd"] = node.NewInfo("", "")
+
+	_, _, msgs, _ := b.HandleNewNodes(nodes)
 	require.Len(t, msgs, 2)
 
 	cfId := common.NewChangefeedID4Test("ns", "cf")
@@ -66,12 +71,16 @@ func TestAddNewNode(t *testing.T) {
 	b := NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse]("test", func(id node.ID) *messaging.TargetMessage {
 		return &messaging.TargetMessage{}
 	})
-	msgs := b.HandleNewNodes([]*node.Info{{ID: "ab"}})
+
+	nodes := make(map[node.ID]*node.Info)
+	nodes["ab"] = node.NewInfo("", "")
+
+	_, _, msgs, _ := b.HandleNewNodes(nodes)
 	require.Len(t, msgs, 1)
 	require.True(t, b.nodes["ab"].state == NodeStateUninitialized)
-	msgs = b.HandleNewNodes([]*node.Info{{
-		ID: "ab",
-	}, {ID: "cd"}})
+
+	nodes["cd"] = node.NewInfo("", "")
+	_, _, msgs, _ = b.HandleNewNodes(nodes)
 	require.Len(t, msgs, 1)
 	require.True(t, b.nodes["ab"].state == NodeStateUninitialized)
 	require.True(t, b.nodes["cd"].state == NodeStateUninitialized)
@@ -81,8 +90,14 @@ func TestHandleRemoveNodes(t *testing.T) {
 	b := NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse]("test", func(id node.ID) *messaging.TargetMessage {
 		return &messaging.TargetMessage{}
 	})
-	msgs := b.HandleNewNodes([]*node.Info{{ID: "ab"}, {ID: "cd"}})
+
+	nodes := make(map[node.ID]*node.Info)
+	nodes["ab"] = node.NewInfo("", "")
+	nodes["cd"] = node.NewInfo("", "")
+
+	_, _, msgs, _ := b.HandleNewNodes(nodes)
 	require.Len(t, msgs, 2)
+
 	// bootstrap one node and the remove another, bootstrapper should be initialized
 	cached := b.HandleRemoveNodes([]node.ID{"ef"})
 	require.Nil(t, cached)
@@ -107,12 +122,18 @@ func TestResendBootstrapMessage(t *testing.T) {
 	})
 	b.resendInterval = time.Second * 2
 	b.currentTime = func() time.Time { return time.Unix(0, 0) }
-	msgs := b.HandleNewNodes([]*node.Info{{ID: "ab"}})
+
+	nodes := make(map[node.ID]*node.Info)
+	nodes["ab"] = node.NewInfo("", "")
+
+	_, _, msgs, _ := b.HandleNewNodes(nodes)
 	require.Len(t, msgs, 1)
 	b.currentTime = func() time.Time {
 		return time.Unix(1, 0)
 	}
-	msgs = b.HandleNewNodes([]*node.Info{{ID: "cd"}})
+
+	nodes["bc"] = node.NewInfo("", "")
+	_, _, msgs, _ = b.HandleNewNodes(nodes)
 	require.Len(t, msgs, 1)
 	b.currentTime = func() time.Time {
 		return time.Unix(2, 0)
@@ -126,7 +147,11 @@ func TestCheckAllNodeInitialized(t *testing.T) {
 	b := NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse]("test", func(id node.ID) *messaging.TargetMessage {
 		return &messaging.TargetMessage{}
 	})
-	msgs := b.HandleNewNodes([]*node.Info{{ID: "ab"}})
+
+	nodes := make(map[node.ID]*node.Info)
+	nodes["ab"] = node.NewInfo("", "")
+
+	_, _, msgs, _ := b.HandleNewNodes(nodes)
 	require.Len(t, msgs, 1)
 	require.False(t, b.CheckAllNodeInitialized())
 	cfId := common.NewChangefeedID4Test("ns", "cf")
@@ -143,10 +168,12 @@ func TestGetAllNodes(t *testing.T) {
 	b := NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse]("test", func(id node.ID) *messaging.TargetMessage {
 		return &messaging.TargetMessage{}
 	})
-	b.HandleNewNodes([]*node.Info{{ID: "ab"}, {ID: "cd"}})
-	nodes := b.GetAllNodeIDs()
-	require.Equal(t, 2, len(nodes))
-	// modify nodes out of bootstrap
-	delete(nodes, "ab")
-	require.Equal(t, 1, len(nodes))
+
+	nodes := make(map[node.ID]*node.Info)
+	nodes["ab"] = node.NewInfo("", "")
+	nodes["cd"] = node.NewInfo("", "")
+
+	b.HandleNewNodes(nodes)
+	all := b.GetAllNodeIDs()
+	require.Equal(t, 2, len(all))
 }
