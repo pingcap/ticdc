@@ -321,7 +321,7 @@ func (c *consumer) syncExecDMLEvents(
 	key cloudstorage.DmlPathKey,
 	fileIdx uint64,
 ) error {
-	filePath := key.GenerateDMLFilePath(fileIdx, c.fileExtension, fileIndexWidth)
+	filePath := key.GenerateDMLFilePath(fileIdx, c.fileExtension, fileIndexWidth, c.enableTableAcrossNodes)
 	log.Debug("read from dml file path", zap.String("path", filePath))
 	content, err := c.externalStorage.ReadFile(ctx, filePath)
 	if err != nil {
@@ -374,6 +374,7 @@ func (c *consumer) parseDMLFilePath(_ context.Context, path string) error {
 	fileIdx, err := dmlkey.ParseDMLFilePath(
 		putil.GetOrZero(c.replicationCfg.Sink.DateSeparator),
 		path,
+		c.enableTableAcrossNodes,
 	)
 	if err != nil {
 		return errors.Trace(err)
