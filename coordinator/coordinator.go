@@ -157,7 +157,7 @@ func (c *coordinator) recvMessages(ctx context.Context, msg *messaging.TargetMes
 
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return context.Cause(ctx)
 	default:
 		c.eventCh.In() <- &Event{message: msg}
 	}
