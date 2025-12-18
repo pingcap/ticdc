@@ -673,7 +673,17 @@ func (c *Controller) RemoveChangefeed(ctx context.Context, id common.ChangeFeedI
 	if err != nil {
 		return 0, errors.Trace(err)
 	}
-	c.operatorController.StopChangefeed(ctx, id, true)
+	op := c.operatorController.StopChangefeed(ctx, id, true)
+	count := 0
+	for {
+		if op.IsFinished() {
+			break
+		}
+
+		time.Sleep(1 * time.Second)
+		count += 1
+		log.Info("wait for stop changefeed operator finished", zap.Int("count", count), zap.Any("id", id))
+	}
 	return cf.GetStatus().CheckpointTs, nil
 }
 
@@ -695,7 +705,18 @@ func (c *Controller) PauseChangefeed(ctx context.Context, id common.ChangeFeedID
 	}
 	clone.State = config.StateStopped
 	cf.SetInfo(clone)
-	c.operatorController.StopChangefeed(ctx, id, false)
+	op := c.operatorController.StopChangefeed(ctx, id, false)
+
+	count := 0
+	for {
+		if op.IsFinished() {
+			break
+		}
+
+		time.Sleep(1 * time.Second)
+		count += 1
+		log.Info("wait for stop changefeed operator finished", zap.Int("count", count), zap.Any("id", id))
+	}
 	return nil
 }
 
@@ -747,7 +768,12 @@ func (c *Controller) UpdateChangefeed(ctx context.Context, change *config.Change
 	if cf == nil {
 		return errors.New("changefeed not found")
 	}
-	if err := c.backend.UpdateChangefeed(ctx, change, cf.GetStatus().CheckpointTs, config.ProgressStopping); err != nil {
+	progress := config.ProgressNone
+	state := cf.GetInfo().State
+	if state == config.StateFailed || state == config.StateFinished {
+		progress = config.ProgressStopping
+	}
+	if err := c.backend.UpdateChangefeed(ctx, change, cf.GetStatus().CheckpointTs, progress); err != nil {
 		return errors.Trace(err)
 	}
 	c.changefeedDB.ReplaceStoppedChangefeed(change)
