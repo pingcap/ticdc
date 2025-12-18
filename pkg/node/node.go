@@ -153,10 +153,6 @@ func (t *Status[T]) SetInitialized() {
 	t.state = stateInitialized
 }
 
-func (t *Status[T]) Uninitialized() bool {
-	return t.state == stateInitialized
-}
-
 func (t *Status[T]) Initialized() bool {
 	return t.state == stateInitialized
 }

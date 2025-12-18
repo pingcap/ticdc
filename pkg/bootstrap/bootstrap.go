@@ -41,23 +41,23 @@ type Bootstrapper[T any] struct {
 	// nodes is a map of node id to node status
 	nodes map[node.ID]*node.Status[T]
 
-	// newBootstrapMsg is a factory function that returns a new bootstrap message
-	newBootstrapMsg NewBootstrapMessageFn
-	resendInterval  time.Duration
+	// newBootstrapRequest returns a new bootstrap message
+	newBootstrapRequest NewBootstrapRequestFn
+	resendInterval      time.Duration
 
 	// For test only
 	currentTime func() time.Time
 }
 
 // NewBootstrapper create a new bootstrapper for a distributed instance.
-func NewBootstrapper[T any](id string, newBootstrapMsg NewBootstrapMessageFn) *Bootstrapper[T] {
+func NewBootstrapper[T any](id string, newBootstrapMsg NewBootstrapRequestFn) *Bootstrapper[T] {
 	return &Bootstrapper[T]{
-		id:              id,
-		nodes:           make(map[node.ID]*node.Status[T]),
-		bootstrapped:    false,
-		newBootstrapMsg: newBootstrapMsg,
-		currentTime:     time.Now,
-		resendInterval:  defaultResendInterval,
+		id:                  id,
+		nodes:               make(map[node.ID]*node.Status[T]),
+		bootstrapped:        false,
+		newBootstrapRequest: newBootstrapMsg,
+		currentTime:         time.Now,
+		resendInterval:      defaultResendInterval,
 	}
 }
 
@@ -77,7 +77,7 @@ func (b *Bootstrapper[T]) HandleNewNodes(activeNodes map[node.ID]*node.Info) (
 		}
 		// A new node is found, send a bootstrap message to it.
 		b.nodes[id] = node.NewStatus[T](info)
-		messages = append(messages, b.newBootstrapMsg(id, info.AdvertiseAddr))
+		messages = append(messages, b.newBootstrapRequest(id, info.AdvertiseAddr))
 		b.nodes[id].SetLastBootstrapTime(b.currentTime())
 		addedNodes = append(addedNodes, id)
 	}
@@ -141,9 +141,9 @@ func (b *Bootstrapper[T]) ResendBootstrapMessage() []*messaging.TargetMessage {
 	var messages []*messaging.TargetMessage
 	now := b.currentTime()
 	for id, status := range b.nodes {
-		if status.Uninitialized() &&
-			now.Sub(status.GetLastBootstrapTime()) > b.resendInterval {
-			messages = append(messages, b.newBootstrapMsg(id, status.GetNodeInfo().AdvertiseAddr))
+		if !status.Initialized() &&
+			now.Sub(status.GetLastBootstrapTime()) >= b.resendInterval {
+			messages = append(messages, b.newBootstrapRequest(id, status.GetNodeInfo().AdvertiseAddr))
 			status.SetLastBootstrapTime(now)
 		}
 	}
@@ -206,16 +206,19 @@ func (b *Bootstrapper[T]) collectInitialBootstrapResponses() map[node.ID]*T {
 	}
 
 	for _, status := range b.nodes {
-		if status.Uninitialized() {
+		if !status.Initialized() {
 			return nil
 		}
 	}
 
 	responses := make(map[node.ID]*T, len(b.nodes))
 	for _, status := range b.nodes {
-		responses[status.GetNodeInfo().ID] = status.GetResponse()
+		resp := status.GetResponse()
+		if resp != nil {
+			responses[status.GetNodeInfo().ID] = resp
+		}
 	}
 	return responses
 }
 
-type NewBootstrapMessageFn func(id node.ID, addr string) *messaging.TargetMessage
+type NewBootstrapRequestFn func(id node.ID, addr string) *messaging.TargetMessage

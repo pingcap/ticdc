@@ -1010,7 +1010,7 @@ func (m *Maintainer) handleError(err error) {
 // - Starting checkpoint timestamp
 // - Table trigger event dispatcher ID (only for dispatcher manager on same node)
 // - Flag indicating if this is a new changefeed
-func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapMessageFn {
+func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapRequestFn {
 	// cfgBytes only holds necessary fields to initialize a changefeed dispatcher manager.
 	cfgBytes, err := json.Marshal(m.info.ToChangefeedConfig())
 	if err != nil {

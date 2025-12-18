@@ -35,16 +35,15 @@ func TestHandleNewNodes(t *testing.T) {
 	nodes[node1.ID] = node1
 	nodes[node2.ID] = node2
 
-	added, removed, msgs, responses := b.HandleNewNodes(nodes)
+	added, removed, requests, responses := b.HandleNewNodes(nodes)
 	require.Len(t, added, 2)
 	require.Len(t, removed, 0)
-	require.Len(t, msgs, 2)
+	require.Len(t, requests, 2)
 	require.Len(t, b.GetAllNodeIDs(), 2)
 	require.Nil(t, responses)
 	require.False(t, b.Bootstrapped())
 
-	cfId := common.NewChangefeedID4Test("ns", "cf")
-	changefeedIDPB := cfId.ToPB()
+	changefeedIDPB := common.NewChangefeedID4Test("ns", "cf").ToPB()
 
 	// not found, this should not happen in the real world,
 	// since response should be sent after the bootstrapper send request.
@@ -83,10 +82,10 @@ func TestHandleNewNodes(t *testing.T) {
 	node3 := node.NewInfo("", "")
 	nodes[node3.ID] = node3
 
-	added, removed, msgs, responses = b.HandleNewNodes(nodes)
+	added, removed, requests, responses = b.HandleNewNodes(nodes)
 	require.Len(t, added, 1)
 	require.Len(t, removed, 0)
-	require.Len(t, msgs, 1)
+	require.Len(t, requests, 1)
 	require.Nil(t, responses)
 	require.False(t, b.Bootstrapped())
 	responses = b.HandleBootstrapResponse(
@@ -96,24 +95,25 @@ func TestHandleNewNodes(t *testing.T) {
 			Spans:        []*heartbeatpb.BootstrapTableSpan{{}, {}, {}},
 		})
 	require.True(t, b.Bootstrapped())
-	require.Len(t, responses, 0)
+	require.Len(t, responses, 1)
+	require.Equal(t, 3, len(responses[node3.ID].Spans))
 
 	// remove a node
 	delete(nodes, node1.ID)
-	added, removed, msgs, responses = b.HandleNewNodes(nodes)
+	added, removed, requests, responses = b.HandleNewNodes(nodes)
 	require.Len(t, added, 0)
 	require.Len(t, removed, 1)
-	require.Len(t, msgs, 0)
+	require.Len(t, requests, 0)
 	require.Nil(t, responses)
 	require.True(t, b.Bootstrapped())
 
 	// add a new node, and remove one node
 	nodes[node1.ID] = node1
 	delete(nodes, node2.ID)
-	added, removed, msgs, responses = b.HandleNewNodes(nodes)
+	added, removed, requests, responses = b.HandleNewNodes(nodes)
 	require.Len(t, added, 1)
 	require.Len(t, removed, 1)
-	require.Len(t, msgs, 1)
+	require.Len(t, requests, 1)
 	require.Nil(t, responses)
 	require.False(t, b.Bootstrapped())
 
@@ -124,7 +124,8 @@ func TestHandleNewNodes(t *testing.T) {
 			Spans:        []*heartbeatpb.BootstrapTableSpan{{}},
 		})
 	require.True(t, b.Bootstrapped())
-	require.Len(t, responses, 0)
+	require.Len(t, responses, 1)
+	require.Equal(t, 1, len(responses[node1.ID].Spans))
 }
 
 func TestResendBootstrapMessage(t *testing.T) {
@@ -137,7 +138,8 @@ func TestResendBootstrapMessage(t *testing.T) {
 	b.currentTime = func() time.Time { return time.Unix(0, 0) }
 
 	nodes := make(map[node.ID]*node.Info)
-	nodes["ab"] = node.NewInfo("", "")
+	node1 := node.NewInfo("", "")
+	nodes[node1.ID] = node1
 
 	_, _, msgs, _ := b.HandleNewNodes(nodes)
 	require.Len(t, msgs, 1)
@@ -145,34 +147,16 @@ func TestResendBootstrapMessage(t *testing.T) {
 		return time.Unix(1, 0)
 	}
 
-	nodes["bc"] = node.NewInfo("", "")
+	node2 := node.NewInfo("", "")
+	nodes[node2.ID] = node2
+
 	_, _, msgs, _ = b.HandleNewNodes(nodes)
 	require.Len(t, msgs, 1)
 	b.currentTime = func() time.Time {
 		return time.Unix(2, 0)
 	}
+
 	msgs = b.ResendBootstrapMessage()
 	require.Len(t, msgs, 1)
-	require.Equal(t, msgs[0].To, node.ID("ab"))
-}
-
-func TestCheckAllNodeInitialized(t *testing.T) {
-	b := NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse]("test", func(id node.ID, addr string) *messaging.TargetMessage {
-		return &messaging.TargetMessage{}
-	})
-
-	nodes := make(map[node.ID]*node.Info)
-	nodes["ab"] = node.NewInfo("", "")
-
-	_, _, msgs, _ := b.HandleNewNodes(nodes)
-	require.Len(t, msgs, 1)
-	require.False(t, b.Bootstrapped())
-	cfId := common.NewChangefeedID4Test("ns", "cf")
-	b.HandleBootstrapResponse(
-		"ab",
-		&heartbeatpb.MaintainerBootstrapResponse{
-			ChangefeedID: cfId.ToPB(),
-			Spans:        []*heartbeatpb.BootstrapTableSpan{{}},
-		})
-	require.True(t, b.Bootstrapped())
+	require.Equal(t, msgs[0].To, node1.ID)
 }
