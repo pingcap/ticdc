@@ -30,14 +30,14 @@ const (
 // Bootstrapper handles the logic of a distributed instance(eg. changefeed maintainer, coordinator) startup.
 // When a distributed instance starts, it must wait for all nodes to report their current status.
 // Only when all nodes have reported their status can the instance bootstrap and schedule tables.
-// Note: Bootstrapper is not thread-safe! All methods except `NewBootstrapper` must be called in the same thread.
+
 type Bootstrapper[T any] struct {
 	// id is a log identifier
 	id string
+
+	mutex sync.Mutex
 	// bootstrapped is true after make sure all nodes are initialized.
 	bootstrapped bool
-
-	mutex sync.RWMutex
 	// nodes is a map of node id to node status
 	nodes map[node.ID]*nodeStatus[T]
 
@@ -67,9 +67,10 @@ func (b *Bootstrapper[T]) HandleNewNodes(activeNodes map[node.ID]*node.Info) (
 	addedNodes []node.ID,
 	removedNodes []node.ID,
 	messages []*messaging.TargetMessage,
-	cachedResponses map[node.ID]*T,
+	responses map[node.ID]*T,
 ) {
 	b.mutex.Lock()
+	defer b.mutex.Unlock()
 	for id, info := range activeNodes {
 		if _, ok := b.nodes[id]; ok {
 			continue
@@ -79,6 +80,10 @@ func (b *Bootstrapper[T]) HandleNewNodes(activeNodes map[node.ID]*node.Info) (
 		messages = append(messages, b.newBootstrapMsg(id, info.AdvertiseAddr))
 		b.nodes[id].lastBootstrapTime = b.currentTime()
 		addedNodes = append(addedNodes, id)
+	}
+
+	if len(addedNodes) > 0 {
+		b.bootstrapped = false
 	}
 
 	for id := range b.nodes {
@@ -91,8 +96,10 @@ func (b *Bootstrapper[T]) HandleNewNodes(activeNodes map[node.ID]*node.Info) (
 		}
 	}
 
-	b.mutex.Unlock()
-	cachedResponses = b.collectInitialBootstrapResponses()
+	responses = b.collectInitialBootstrapResponses()
+	if len(responses) > 0 {
+		b.bootstrapped = true
+	}
 	return
 }
 
@@ -104,9 +111,9 @@ func (b *Bootstrapper[T]) HandleBootstrapResponse(
 	from node.ID,
 	msg *T,
 ) map[node.ID]*T {
-	b.mutex.RLock()
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
 	status, ok := b.nodes[from]
-	b.mutex.RUnlock()
 	if !ok {
 		log.Warn("received bootstrap response from untracked node, ignore it",
 			zap.String("id", b.id),
@@ -115,19 +122,24 @@ func (b *Bootstrapper[T]) HandleBootstrapResponse(
 	}
 	status.cachedBootstrapResp = msg
 	status.state = nodeStateInitialized
-	return b.collectInitialBootstrapResponses()
+
+	responses := b.collectInitialBootstrapResponses()
+	if len(responses) > 0 {
+		b.bootstrapped = true
+	}
+	return responses
 }
 
 // ResendBootstrapMessage return message that need to be resent
 func (b *Bootstrapper[T]) ResendBootstrapMessage() []*messaging.TargetMessage {
-	if b.Bootstrapped() {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	if b.bootstrapped {
 		return nil
 	}
 
 	var messages []*messaging.TargetMessage
 	now := b.currentTime()
-	b.mutex.RLock()
-	defer b.mutex.RUnlock()
 	for id, status := range b.nodes {
 		if status.state == nodeStateUninitialized &&
 			now.Sub(status.lastBootstrapTime) >= b.resendInterval {
@@ -162,7 +174,7 @@ func (b *Bootstrapper[T]) PrintBootstrapStatus() {
 		}
 	}
 	log.Info("bootstrap status",
-		zap.String("changefeed", b.id),
+		zap.String("id", b.id),
 		zap.Int("bootstrappedNodeCount", len(bootstrappedNodes)),
 		zap.Int("unbootstrappedNodeCount", len(unbootstrappedNodes)),
 		zap.Any("bootstrappedNodes", bootstrappedNodes),
@@ -173,22 +185,9 @@ func (b *Bootstrapper[T]) PrintBootstrapStatus() {
 // Bootstrapped check if all nodes are initialized.
 // returns true when all nodes report the bootstrap response and bootstrapped
 func (b *Bootstrapper[T]) Bootstrapped() bool {
-	return b.bootstrapped && b.checkAllNodeInitialized()
-}
-
-// return true if all nodes have reported bootstrap response
-func (b *Bootstrapper[T]) checkAllNodeInitialized() bool {
-	b.mutex.RLock()
-	defer b.mutex.RUnlock()
-	if len(b.nodes) == 0 {
-		return false
-	}
-	for _, status := range b.nodes {
-		if status.state == nodeStateUninitialized {
-			return false
-		}
-	}
-	return true
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	return b.bootstrapped
 }
 
 // collectInitialBootstrapResponses checks if all nodes have been initialized and
@@ -200,20 +199,24 @@ func (b *Bootstrapper[T]) checkAllNodeInitialized() bool {
 //   - map[node.ID]*T containing all nodes' bootstrap responses on first successful bootstrap,
 //     after which the cached responses are cleared
 //
-// Note: This method will only return a non-nil result exactly once during the bootstrapper's lifecycle.
+// Note: this method must be called after lock.
 func (b *Bootstrapper[T]) collectInitialBootstrapResponses() map[node.ID]*T {
-	if !b.bootstrapped && b.checkAllNodeInitialized() {
-		b.bootstrapped = true
-		b.mutex.RLock()
-		defer b.mutex.RUnlock()
-		nodeBootstrapResponses := make(map[node.ID]*T, len(b.nodes))
-		for _, status := range b.nodes {
-			nodeBootstrapResponses[status.node.ID] = status.cachedBootstrapResp
-			status.cachedBootstrapResp = nil
-		}
-		return nodeBootstrapResponses
+	if b.bootstrapped {
+		return nil
 	}
-	return nil
+
+	for _, status := range b.nodes {
+		if status.state == nodeStateUninitialized {
+			return nil
+		}
+	}
+
+	responses := make(map[node.ID]*T, len(b.nodes))
+	for _, status := range b.nodes {
+		responses[status.node.ID] = status.cachedBootstrapResp
+		status.cachedBootstrapResp = nil
+	}
+	return responses
 }
 
 type nodeState int
