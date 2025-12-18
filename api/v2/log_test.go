@@ -350,51 +350,117 @@ func TestSetRedactModeSecurityRestriction(t *testing.T) {
 
 func TestSetRedactModeConcurrency(t *testing.T) {
 	// Test concurrent attempts to change redaction mode
-	// With security restriction, only increasing restriction levels succeed
+	// Validates that "most restrictive wins" under concurrent access
 	originalMode := perrors.RedactLogEnabled.Load()
 	defer perrors.RedactLogEnabled.Store(originalMode)
 
-	// Start with OFF mode
-	perrors.RedactLogEnabled.Store(perrors.RedactLogDisable)
-
-	done := make(chan bool)
 	h := &OpenAPIV2{}
-
-	// Set gin mode once before concurrent tests to avoid data race
 	gin.SetMode(gin.TestMode)
 
-	// All goroutines try to transition to different modes
-	// Some to MARKER, some to ON
-	for i := 0; i < 10; i++ {
-		go func(iteration int) {
-			mode := "on"
-			if iteration%3 == 0 {
-				mode = "marker"
-			}
+	// Test case 1: Mixed MARKER and ON requests from OFF - ON must win
+	// This validates the atomic CAS ensures no race condition allows MARKER to overwrite ON
+	t.Run("MostRestrictiveWins", func(t *testing.T) {
+		perrors.RedactLogEnabled.Store(perrors.RedactLogDisable)
 
-			w := httptest.NewRecorder()
-			c, _ := gin.CreateTestContext(w)
+		const numGoroutines = 20
+		done := make(chan bool, numGoroutines)
 
-			body, _ := json.Marshal(RedactModeReq{Mode: mode})
-			req := httptest.NewRequest("POST", "/api/v2/log/redact", bytes.NewReader(body))
-			req.Header.Set("Content-Type", "application/json")
-			c.Request = req
+		// Half try MARKER, half try ON
+		for i := 0; i < numGoroutines; i++ {
+			go func(iteration int) {
+				mode := "on"
+				if iteration%2 == 0 {
+					mode = "marker"
+				}
 
-			h.SetRedactMode(c)
+				w := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(w)
 
-			require.Equal(t, http.StatusOK, w.Code)
-			done <- true
-		}(i)
-	}
+				body, _ := json.Marshal(RedactModeReq{Mode: mode})
+				req := httptest.NewRequest("POST", "/api/v2/log/redact", bytes.NewReader(body))
+				req.Header.Set("Content-Type", "application/json")
+				c.Request = req
 
-	// Wait for all goroutines
-	for i := 0; i < 10; i++ {
-		<-done
-	}
+				h.SetRedactMode(c)
+				require.Equal(t, http.StatusOK, w.Code)
+				done <- true
+			}(i)
+		}
 
-	// Final mode should be either MARKER or ON (both more restrictive than OFF)
-	finalMode := perrors.RedactLogEnabled.Load()
-	require.True(t,
-		finalMode == perrors.RedactLogMarker || finalMode == perrors.RedactLogEnable,
-		"Expected redaction to be at more restrictive level after concurrent calls")
+		for i := 0; i < numGoroutines; i++ {
+			<-done
+		}
+
+		// With mixed MARKER and ON requests:
+		// - If MARKER wins first, ON can still upgrade → final = ON
+		// - If ON wins first, MARKER is rejected → final = ON
+		// Therefore, final mode MUST be ON
+		finalMode := perrors.RedactLogEnabled.Load()
+		require.Equal(t, perrors.RedactLogEnable, finalMode,
+			"With mixed MARKER and ON requests, ON (most restrictive) must always win")
+	})
+
+	// Test case 2: All ON requests from OFF - validates no unexpected errors
+	t.Run("AllOnRequests", func(t *testing.T) {
+		perrors.RedactLogEnabled.Store(perrors.RedactLogDisable)
+
+		const numGoroutines = 20
+		done := make(chan bool, numGoroutines)
+
+		for i := 0; i < numGoroutines; i++ {
+			go func() {
+				w := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(w)
+
+				body, _ := json.Marshal(RedactModeReq{Mode: "on"})
+				req := httptest.NewRequest("POST", "/api/v2/log/redact", bytes.NewReader(body))
+				req.Header.Set("Content-Type", "application/json")
+				c.Request = req
+
+				h.SetRedactMode(c)
+				// All should succeed (either transition or idempotent)
+				require.Equal(t, http.StatusOK, w.Code)
+				require.Empty(t, c.Errors)
+				done <- true
+			}()
+		}
+
+		for i := 0; i < numGoroutines; i++ {
+			<-done
+		}
+
+		require.Equal(t, perrors.RedactLogEnable, perrors.RedactLogEnabled.Load())
+	})
+
+	// Test case 3: Sequential transition MARKER→ON with concurrent ON requests
+	// Validates that ON requests succeed even when starting from MARKER
+	t.Run("MarkerToOnConcurrent", func(t *testing.T) {
+		perrors.RedactLogEnabled.Store(perrors.RedactLogMarker)
+
+		const numGoroutines = 10
+		done := make(chan bool, numGoroutines)
+
+		for i := 0; i < numGoroutines; i++ {
+			go func() {
+				w := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(w)
+
+				body, _ := json.Marshal(RedactModeReq{Mode: "on"})
+				req := httptest.NewRequest("POST", "/api/v2/log/redact", bytes.NewReader(body))
+				req.Header.Set("Content-Type", "application/json")
+				c.Request = req
+
+				h.SetRedactMode(c)
+				require.Equal(t, http.StatusOK, w.Code)
+				require.Empty(t, c.Errors)
+				done <- true
+			}()
+		}
+
+		for i := 0; i < numGoroutines; i++ {
+			<-done
+		}
+
+		require.Equal(t, perrors.RedactLogEnable, perrors.RedactLogEnabled.Load())
+	})
 }
