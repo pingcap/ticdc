@@ -199,8 +199,10 @@ type ChangefeedConfig struct {
 	SinkConfig            *SinkConfig   `json:"sink_config"`
 	EnableSplittableCheck bool          `json:"enable_splittable_check" default:"false"`
 	// Epoch is the epoch of a changefeed, changes on every restart.
-	Epoch   uint64 `json:"epoch"`
-	BDRMode bool   `json:"bdr_mode" default:"false"`
+	Epoch                        uint64        `json:"epoch"`
+	BDRMode                      bool          `json:"bdr_mode" default:"false"`
+	EnableActiveActive           bool          `json:"enable_active_active" default:"false"`
+	ActiveActiveProgressInterval time.Duration `json:"active_active_progress_interval" default:"30m"`
 	// redo releated
 	Consistent *ConsistentConfig `toml:"consistent" json:"consistent,omitempty"`
 }
@@ -261,23 +263,25 @@ type ChangeFeedInfo struct {
 
 func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 	return &ChangefeedConfig{
-		ChangefeedID:          info.ChangefeedID,
-		StartTS:               info.StartTs,
-		TargetTS:              info.TargetTs,
-		SinkURI:               info.SinkURI,
-		CaseSensitive:         util.GetOrZero(info.Config.CaseSensitive),
-		ForceReplicate:        util.GetOrZero(info.Config.ForceReplicate),
-		SinkConfig:            info.Config.Sink,
-		Filter:                info.Config.Filter,
-		EnableSyncPoint:       util.GetOrZero(info.Config.EnableSyncPoint),
-		SyncPointInterval:     util.GetOrZero(info.Config.SyncPointInterval),
-		SyncPointRetention:    util.GetOrZero(info.Config.SyncPointRetention),
-		EnableSplittableCheck: util.GetOrZero(info.Config.Scheduler.EnableSplittableCheck),
-		MemoryQuota:           util.GetOrZero(info.Config.MemoryQuota),
-		Epoch:                 info.Epoch,
-		BDRMode:               util.GetOrZero(info.Config.BDRMode),
-		TimeZone:              GetGlobalServerConfig().TZ,
-		Consistent:            info.Config.Consistent,
+		ChangefeedID:                 info.ChangefeedID,
+		StartTS:                      info.StartTs,
+		TargetTS:                     info.TargetTs,
+		SinkURI:                      info.SinkURI,
+		CaseSensitive:                util.GetOrZero(info.Config.CaseSensitive),
+		ForceReplicate:               util.GetOrZero(info.Config.ForceReplicate),
+		SinkConfig:                   info.Config.Sink,
+		Filter:                       info.Config.Filter,
+		EnableSyncPoint:              util.GetOrZero(info.Config.EnableSyncPoint),
+		SyncPointInterval:            util.GetOrZero(info.Config.SyncPointInterval),
+		SyncPointRetention:           util.GetOrZero(info.Config.SyncPointRetention),
+		EnableSplittableCheck:        util.GetOrZero(info.Config.Scheduler.EnableSplittableCheck),
+		MemoryQuota:                  util.GetOrZero(info.Config.MemoryQuota),
+		Epoch:                        info.Epoch,
+		BDRMode:                      util.GetOrZero(info.Config.BDRMode),
+		EnableActiveActive:           util.GetOrZero(info.Config.EnableActiveActive),
+		ActiveActiveProgressInterval: *info.Config.ActiveActiveProgressInterval,
+		TimeZone:                     GetGlobalServerConfig().TZ,
+		Consistent:                   info.Config.Consistent,
 		// other fields are not necessary for dispatcherManager
 	}
 }

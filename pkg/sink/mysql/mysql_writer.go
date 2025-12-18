@@ -56,6 +56,7 @@ type Writer struct {
 
 	ddlTsTableInit      bool
 	ddlTsTableInitMutex sync.Mutex
+	maxDDLTsBatch       int
 	tableSchemaStore    *commonEvent.TableSchemaStore
 
 	// implement stmtCache to improve performance, especially when the downstream is TiDB
@@ -83,17 +84,17 @@ func NewWriter(
 	statistics *metrics.Statistics,
 ) *Writer {
 	res := &Writer{
-		ctx:                    ctx,
-		id:                     id,
-		db:                     db,
-		cfg:                    cfg,
-		syncPointTableInit:     false,
-		ChangefeedID:           changefeedID,
-		lastCleanSyncPointTime: time.Now(),
-		ddlTsTableInit:         false,
-		stmtCache:              cfg.stmtCache,
-		statistics:             statistics,
-
+		ctx:                         ctx,
+		id:                          id,
+		db:                          db,
+		cfg:                         cfg,
+		syncPointTableInit:          false,
+		ChangefeedID:                changefeedID,
+		lastCleanSyncPointTime:      time.Now(),
+		ddlTsTableInit:              false,
+		stmtCache:                   cfg.stmtCache,
+		statistics:                  statistics,
+		maxDDLTsBatch:               cfg.MaxTxnRow,
 		isInErrorCausedSafeMode:     false,
 		errorCausedSafeModeDuration: defaultErrorCausedSafeModeDuration,
 	}

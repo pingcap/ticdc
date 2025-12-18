@@ -327,7 +327,7 @@ func TestMysqlWriter_FlushSyncPointEvent(t *testing.T) {
 	syncPointEvent := &commonEvent.SyncPointEvent{
 		CommitTs: 1,
 	}
-	tableSchemaStore := commonEvent.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{}, common.MysqlSinkType)
+	tableSchemaStore := commonEvent.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{}, common.MysqlSinkType, false)
 	writer.SetTableSchemaStore(tableSchemaStore)
 
 	// First sync point: Step 0: Create syncpoint table (only for first sync point)

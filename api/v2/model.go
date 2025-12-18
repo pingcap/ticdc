@@ -184,14 +184,16 @@ func (d *JSONDuration) UnmarshalJSON(b []byte) error {
 
 // ReplicaConfig is a duplicate of  config.ReplicaConfig
 type ReplicaConfig struct {
-	MemoryQuota           *uint64 `json:"memory_quota,omitempty"`
-	CaseSensitive         *bool   `json:"case_sensitive,omitempty"`
-	ForceReplicate        *bool   `json:"force_replicate,omitempty"`
-	IgnoreIneligibleTable *bool   `json:"ignore_ineligible_table,omitempty"`
-	CheckGCSafePoint      *bool   `json:"check_gc_safe_point,omitempty"`
-	EnableSyncPoint       *bool   `json:"enable_sync_point,omitempty"`
-	EnableTableMonitor    *bool   `json:"enable_table_monitor,omitempty"`
-	BDRMode               *bool   `json:"bdr_mode,omitempty"`
+	MemoryQuota                  *uint64       `json:"memory_quota,omitempty"`
+	CaseSensitive                *bool         `json:"case_sensitive,omitempty"`
+	ForceReplicate               *bool         `json:"force_replicate,omitempty"`
+	IgnoreIneligibleTable        *bool         `json:"ignore_ineligible_table,omitempty"`
+	CheckGCSafePoint             *bool         `json:"check_gc_safe_point,omitempty"`
+	EnableSyncPoint              *bool         `json:"enable_sync_point,omitempty"`
+	EnableTableMonitor           *bool         `json:"enable_table_monitor,omitempty"`
+	BDRMode                      *bool         `json:"bdr_mode,omitempty"`
+	EnableActiveActive           *bool         `json:"enable_active_active,omitempty"`
+	ActiveActiveProgressInterval *JSONDuration `json:"active_active_progress_interval,omitempty"`
 
 	SyncPointInterval  *JSONDuration `json:"sync_point_interval,omitempty"`
 	SyncPointRetention *JSONDuration `json:"sync_point_retention,omitempty"`
@@ -241,8 +243,13 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 	if c.SyncPointRetention != nil {
 		res.SyncPointRetention = &c.SyncPointRetention.duration
 	}
+
 	if c.BDRMode != nil {
 		res.BDRMode = c.BDRMode
+	}
+
+	if c.EnableActiveActive != nil {
+		res.EnableActiveActive = c.EnableActiveActive
 	}
 
 	if c.Filter != nil {
@@ -599,6 +606,9 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 	if c.ChangefeedErrorStuckDuration != nil {
 		res.ChangefeedErrorStuckDuration = &c.ChangefeedErrorStuckDuration.duration
 	}
+	if c.ActiveActiveProgressInterval != nil {
+		res.ActiveActiveProgressInterval = &c.ActiveActiveProgressInterval.duration
+	}
 	if c.SyncedStatus != nil {
 		if res.SyncedStatus == nil {
 			res.SyncedStatus = &config.SyncedStatusConfig{}
@@ -627,6 +637,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 		EnableSyncPoint:       cloned.EnableSyncPoint,
 		EnableTableMonitor:    cloned.EnableTableMonitor,
 		BDRMode:               cloned.BDRMode,
+		EnableActiveActive:    cloned.EnableActiveActive,
 	}
 
 	if cloned.SyncPointInterval != nil {
@@ -635,6 +646,9 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 
 	if cloned.SyncPointRetention != nil {
 		res.SyncPointRetention = &JSONDuration{*cloned.SyncPointRetention}
+	}
+	if cloned.ActiveActiveProgressInterval != nil {
+		res.ActiveActiveProgressInterval = &JSONDuration{*cloned.ActiveActiveProgressInterval}
 	}
 
 	if cloned.Filter != nil {
