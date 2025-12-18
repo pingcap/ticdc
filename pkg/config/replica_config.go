@@ -299,6 +299,10 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 		}
 	}
 
+	// DEBUG
+	if IsStorageScheme(sinkURI.Scheme) {
+		c.Scheduler.EnableTableAcrossNodes = util.AddressOf(false)
+	}
 	if c.Integrity != nil {
 		switch strings.ToLower(sinkURI.Scheme) {
 		case KafkaScheme, KafkaSSLScheme:
@@ -344,13 +348,6 @@ func (c *ReplicaConfig) FixScheduler(inheritV66 bool) {
 // FixMemoryQuota adjusts memory quota to default value
 func (c *ReplicaConfig) FixMemoryQuota() {
 	c.MemoryQuota = util.AddressOf(uint64(DefaultChangefeedMemoryQuota))
-}
-
-// isSinkCompatibleWithSpanReplication returns true if the sink uri is
-// compatible with span replication.
-func isSinkCompatibleWithSpanReplication(u *url.URL) bool {
-	return u != nil &&
-		(strings.Contains(u.Scheme, "kafka") || strings.Contains(u.Scheme, "blackhole"))
 }
 
 // MaskSensitiveData masks sensitive data in ReplicaConfig
