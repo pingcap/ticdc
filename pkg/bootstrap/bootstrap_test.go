@@ -25,7 +25,7 @@ import (
 )
 
 func TestHandleNewNodes(t *testing.T) {
-	b := NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse]("test", func(id node.ID) *messaging.TargetMessage {
+	b := NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse]("test", func(id node.ID, addr string) *messaging.TargetMessage {
 		return &messaging.TargetMessage{}
 	})
 
@@ -128,7 +128,7 @@ func TestHandleNewNodes(t *testing.T) {
 }
 
 func TestResendBootstrapMessage(t *testing.T) {
-	b := NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse]("test", func(id node.ID) *messaging.TargetMessage {
+	b := NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse]("test", func(id node.ID, addr string) *messaging.TargetMessage {
 		return &messaging.TargetMessage{
 			To: id,
 		}
@@ -157,7 +157,7 @@ func TestResendBootstrapMessage(t *testing.T) {
 }
 
 func TestCheckAllNodeInitialized(t *testing.T) {
-	b := NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse]("test", func(id node.ID) *messaging.TargetMessage {
+	b := NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse]("test", func(id node.ID, addr string) *messaging.TargetMessage {
 		return &messaging.TargetMessage{}
 	})
 
@@ -178,7 +178,7 @@ func TestCheckAllNodeInitialized(t *testing.T) {
 }
 
 func TestGetAllNodes(t *testing.T) {
-	b := NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse]("test", func(id node.ID) *messaging.TargetMessage {
+	b := NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse]("test", func(id node.ID, addr string) *messaging.TargetMessage {
 		return &messaging.TargetMessage{}
 	})
 
