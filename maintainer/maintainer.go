@@ -542,7 +542,7 @@ func (m *Maintainer) handleRedoMessage(ctx context.Context) {
 			minRedoCheckpointTsForBarrier := m.controller.redoBarrier.GetMinBlockedCheckpointTsForNewTables(newWatermark.CheckpointTs)
 
 			// if there is no tables, there must be a table trigger dispatcher
-			for id := range m.bootstrapper.GetAllNodeIDs() {
+			for _, id := range m.bootstrapper.GetAllNodeIDs() {
 				// maintainer node has the table trigger dispatcher
 				if id != m.selfNode.ID && m.controller.redoSpanController.GetTaskSizeByNodeID(id) <= 0 {
 					continue
@@ -578,7 +578,7 @@ func (m *Maintainer) handleRedoMessage(ctx context.Context) {
 			)
 			if needUpdate {
 				msgs := make([]*messaging.TargetMessage, 0, len(m.bootstrapper.GetAllNodeIDs()))
-				for id := range m.bootstrapper.GetAllNodeIDs() {
+				for _, id := range m.bootstrapper.GetAllNodeIDs() {
 					msgs = append(msgs, messaging.NewSingleTargetMessage(id, messaging.HeartbeatCollectorTopic, &heartbeatpb.RedoMessage{
 						ChangefeedID: m.redoTs.ChangefeedID,
 						CheckpointTs: m.redoTs.CheckpointTs,
@@ -657,7 +657,7 @@ func (m *Maintainer) calculateNewCheckpointTs() (*heartbeatpb.Watermark, bool) {
 
 	// Step 2: Apply heartbeat constraints from all nodes
 	updateCheckpointTs := true
-	for id := range m.bootstrapper.GetAllNodeIDs() {
+	for _, id := range m.bootstrapper.GetAllNodeIDs() {
 		// maintainer node has the table trigger dispatcher
 		if id != m.selfNode.ID && m.controller.spanController.GetTaskSizeByNodeID(id) <= 0 {
 			continue

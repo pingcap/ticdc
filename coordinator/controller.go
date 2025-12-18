@@ -260,7 +260,7 @@ func (c *Controller) onMessage(msg *messaging.TargetMessage) {
 	case messaging.TypeCoordinatorBootstrapResponse:
 		c.onMaintainerBootstrapResponse(msg)
 	case messaging.TypeMaintainerHeartbeatRequest:
-		if c.bootstrapper.CheckAllNodeInitialized() {
+		if c.bootstrapper.Bootstrapped() {
 			req := msg.Message[0].(*heartbeatpb.MaintainerHeartbeat)
 			c.handleMaintainerStatus(msg.From, req.Statuses)
 		}
