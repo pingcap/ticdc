@@ -254,7 +254,12 @@ func (b *BatchDMLEvent) CloneForRouting() *BatchDMLEvent {
 		RawRows:       b.RawRows,
 		TableInfo:     b.TableInfo,
 	}
-	copy(cloned.DMLEvents, b.DMLEvents)
+	for i, dml := range b.DMLEvents {
+		// Create a shallow copy of the DMLEvent.
+		// This is sufficient because AssembleRows only modifies the TableInfo pointer.
+		clonedDML := *dml
+		cloned.DMLEvents[i] = &clonedDML
+	}
 	return cloned
 }
 
