@@ -49,7 +49,7 @@ func testFilePathGenerator(ctx context.Context, t *testing.T, dir string) *FileP
 	replicaConfig.Sink.Protocol = util.AddressOf(config.ProtocolOpen.String())
 	replicaConfig.Sink.FileIndexWidth = util.AddressOf(6)
 	cfg := NewConfig()
-	err = cfg.Apply(ctx, sinkURI, replicaConfig.Sink)
+	err = cfg.Apply(ctx, sinkURI, replicaConfig.Sink, true)
 	require.NoError(t, err)
 
 	mockPDClock := pdutil.NewClock4Test()
@@ -232,7 +232,7 @@ func TestGenerateDataFilePathWithIndexFile(t *testing.T) {
 	f.versionMap[table] = table.TableInfoVersion
 	date := f.GenerateDateStr()
 	indexFilePath := f.GenerateIndexFilePath(table, date)
-	err := f.storage.WriteFile(ctx, indexFilePath, []byte("CDC000005.json\n"))
+	err := f.storage.WriteFile(ctx, indexFilePath, []byte(fmt.Sprintf("CDC-%s-000005.json\n", dispatcherID.String())))
 	require.NoError(t, err)
 
 	// index file exists, but the file is not exist
@@ -385,7 +385,7 @@ func TestRemoveExpiredFilesWithoutPartition(t *testing.T) {
 		FileCleanupCronSpec: util.AddressOf("* * * * * *"),
 	}
 	cfg := NewConfig()
-	err = cfg.Apply(ctx, sinkURI, replicaConfig.Sink)
+	err = cfg.Apply(ctx, sinkURI, replicaConfig.Sink, true)
 	require.NoError(t, err)
 
 	// generate some expired files

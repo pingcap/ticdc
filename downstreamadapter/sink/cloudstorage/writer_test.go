@@ -50,7 +50,7 @@ func testWriter(ctx context.Context, t *testing.T, dir string) *writer {
 	cfg := cloudstorage.NewConfig()
 	replicaConfig := config.GetDefaultReplicaConfig()
 	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
-	err = cfg.Apply(context.TODO(), sinkURI, replicaConfig.Sink)
+	err = cfg.Apply(context.TODO(), sinkURI, replicaConfig.Sink, true)
 	cfg.FileIndexWidth = 6
 	require.Nil(t, err)
 

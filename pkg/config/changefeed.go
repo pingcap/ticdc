@@ -202,7 +202,8 @@ type ChangefeedConfig struct {
 	Epoch   uint64 `json:"epoch"`
 	BDRMode bool   `json:"bdr_mode" default:"false"`
 	// redo releated
-	Consistent *ConsistentConfig `toml:"consistent" json:"consistent,omitempty"`
+	Consistent *ConsistentConfig          `toml:"consistent" json:"consistent,omitempty"`
+	Scheduler  *ChangefeedSchedulerConfig `toml:"scheduler" json:"scheduler,omitempty"`
 }
 
 // String implements fmt.Stringer interface, but hide some sensitive information
@@ -278,6 +279,7 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		BDRMode:               util.GetOrZero(info.Config.BDRMode),
 		TimeZone:              GetGlobalServerConfig().TZ,
 		Consistent:            info.Config.Consistent,
+		Scheduler:             info.Config.Scheduler,
 		// other fields are not necessary for dispatcherManager
 	}
 }

@@ -90,11 +90,11 @@ func TestDmlPathKey(t *testing.T) {
 
 	for _, tc := range testCases {
 		var dmlkey DmlPathKey
-		idx, err := dmlkey.ParseDMLFilePath("day", tc.path)
+		idx, err := dmlkey.ParseDMLFilePath("day", tc.path, true)
 		require.NoError(t, err)
 		require.Equal(t, tc.dmlkey, dmlkey)
 
-		fileName := dmlkey.GenerateDMLFilePath(idx, tc.extension, tc.fileIndexWidth)
+		fileName := dmlkey.GenerateDMLFilePath(idx, tc.extension, tc.fileIndexWidth, true)
 		require.Equal(t, tc.path, fileName)
 	}
 }
