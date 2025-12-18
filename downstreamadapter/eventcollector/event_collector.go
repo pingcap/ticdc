@@ -237,6 +237,11 @@ func (c *EventCollector) AddDispatcher(target dispatcher.DispatcherService, memo
 	c.logCoordinatorClient.requestReusableEventService(target)
 }
 
+func (c *EventCollector) HasDispatcher(dispatcherID common.DispatcherID) bool {
+	_, ok := c.dispatcherMap.Load(dispatcherID)
+	return ok
+}
+
 // PrepareAddDispatcher is used to prepare the dispatcher to be added to the event collector.
 // It will send a register request to local event service and call `readyCallback` when local event service is ready.
 func (c *EventCollector) PrepareAddDispatcher(

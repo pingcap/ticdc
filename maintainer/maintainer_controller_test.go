@@ -177,22 +177,45 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableMoreThanNodeNum(t *testing.T) {
 	s.operatorController.OnNodeRemoved("node2")
 	for _, span := range s.spanController.GetTasksBySchemaID(1) {
 		if op := s.operatorController.GetOperator(span.ID); op != nil {
+			// After the destination node is removed, the move operator must keep removing
+			// the origin dispatcher and finally mark the span absent for rescheduling.
 			op.Check("node1", &heartbeatpb.TableSpanStatus{
 				ID:              span.ID.ToPB(),
 				ComponentStatus: heartbeatpb.ComponentState_Stopped,
 			})
-			msg := op.Schedule()
-			require.NotNil(t, msg)
-			require.Equal(t, "node1", msg.To.String())
-			require.True(t, msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest).ScheduleAction ==
-				heartbeatpb.ScheduleAction_Create)
-			op.Check("node1", &heartbeatpb.TableSpanStatus{
-				ID:              span.ID.ToPB(),
-				ComponentStatus: heartbeatpb.ComponentState_Working,
-			})
 			require.True(t, op.IsFinished())
 			op.PostFinish()
+			s.operatorController.RemoveOp(span.ID)
 		}
+	}
+
+	// Reschedule absent spans back to the remaining node via basic scheduler.
+	//
+	// For split table spans, basic scheduler limits the number of scheduling spans
+	// per group per node (default 1). So we may need multiple rounds to recover all
+	// spans when multiple replicas of the same group become absent.
+	for i := 0; s.spanController.GetAbsentSize() > 0; i++ {
+		require.Less(t, i, 10)
+		prevAbsent := s.spanController.GetAbsentSize()
+
+		s.schedulerController.GetScheduler(scheduler.BasicScheduler).Execute()
+		for _, span := range s.spanController.GetTasksBySchemaID(1) {
+			if op := s.operatorController.GetOperator(span.ID); op != nil {
+				msg := op.Schedule()
+				require.NotNil(t, msg)
+				require.Equal(t, "node1", msg.To.String())
+				require.Equal(t, heartbeatpb.ScheduleAction_Create,
+					msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest).ScheduleAction)
+				op.Check("node1", &heartbeatpb.TableSpanStatus{
+					ID:              span.ID.ToPB(),
+					ComponentStatus: heartbeatpb.ComponentState_Working,
+				})
+				require.True(t, op.IsFinished())
+				op.PostFinish()
+				s.operatorController.RemoveOp(span.ID)
+			}
+		}
+		require.Less(t, s.spanController.GetAbsentSize(), prevAbsent)
 	}
 
 	require.Equal(t, 0, s.spanController.GetSchedulingSize())
@@ -924,8 +947,23 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 
 	for _, op := range allOperators {
 		op.Start()
-		op.(*operator.MoveDispatcherOperator).SetOriginNodeStopped()
-		op.Schedule()
+		msg := op.Schedule()
+		require.NotNil(t, msg)
+		origin := msg.To
+		op.Check(origin, &heartbeatpb.TableSpanStatus{
+			ID:              op.ID().ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Stopped,
+			CheckpointTs:    1,
+		})
+
+		msg = op.Schedule()
+		require.NotNil(t, msg)
+		dest := msg.To
+		op.Check(dest, &heartbeatpb.TableSpanStatus{
+			ID:              op.ID().ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		})
 		op.PostFinish()
 		controller.operatorController.RemoveOp(op.ID())
 	}
@@ -1073,22 +1111,41 @@ func TestBalance(t *testing.T) {
 	s.operatorController.OnNodeRemoved("node2")
 	for _, span := range s.spanController.GetTasksBySchemaID(1) {
 		if op := s.operatorController.GetOperator(span.ID); op != nil {
+			// After the destination node is removed, the move operator should generate
+			// a remove message for the origin dispatcher first, then mark the span absent
+			// once the origin dispatcher is confirmed stopped.
+			msg := op.Schedule()
+			require.NotNil(t, msg)
+			require.Equal(t, "node1", msg.To.String())
+			require.Equal(t, heartbeatpb.ScheduleAction_Remove,
+				msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest).ScheduleAction)
+
 			op.Check("node1", &heartbeatpb.TableSpanStatus{
 				ID:              span.ID.ToPB(),
 				ComponentStatus: heartbeatpb.ComponentState_Stopped,
 			})
-			op.Start()
+			require.True(t, op.IsFinished())
+			op.PostFinish()
+			s.operatorController.RemoveOp(span.ID)
+		}
+	}
+
+	// Reschedule absent spans back to the remaining node via basic scheduler.
+	s.schedulerController.GetScheduler(scheduler.BasicScheduler).Execute()
+	for _, span := range s.spanController.GetTasksBySchemaID(1) {
+		if op := s.operatorController.GetOperator(span.ID); op != nil {
 			msg := op.Schedule()
 			require.NotNil(t, msg)
 			require.Equal(t, "node1", msg.To.String())
-			require.True(t, msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest).ScheduleAction ==
-				heartbeatpb.ScheduleAction_Create)
+			require.Equal(t, heartbeatpb.ScheduleAction_Create,
+				msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest).ScheduleAction)
 			op.Check("node1", &heartbeatpb.TableSpanStatus{
 				ID:              span.ID.ToPB(),
 				ComponentStatus: heartbeatpb.ComponentState_Working,
 			})
 			require.True(t, op.IsFinished())
 			op.PostFinish()
+			s.operatorController.RemoveOp(span.ID)
 		}
 	}
 

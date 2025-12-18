@@ -120,6 +120,19 @@ func (t *MergeCheckTask) Execute() time.Time {
 		return time.Time{}
 	}
 
+	sinkType := getSinkType(t.mergedDispatcher, t.manager)
+	if common.IsRedoMode(t.mergedDispatcher.GetMode()) {
+		if needAbort, abortReason := shouldAbortMerge(t, t.manager.redoDispatcherMap); needAbort {
+			abortMerge(t, t.manager.redoDispatcherMap, sinkType, abortReason)
+			return time.Time{}
+		}
+	} else {
+		if needAbort, abortReason := shouldAbortMerge(t, t.manager.dispatcherMap); needAbort {
+			abortMerge(t, t.manager.dispatcherMap, sinkType, abortReason)
+			return time.Time{}
+		}
+	}
+
 	if t.mergedDispatcher.GetComponentStatus() != heartbeatpb.ComponentState_MergeReady {
 		return time.Now().Add(time.Second * 1)
 	}
@@ -136,6 +149,67 @@ func (t *MergeCheckTask) Cancel() {
 	t.taskHandle.Cancel()
 }
 
+func shouldAbortMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *DispatcherMap[T]) (bool, string) {
+	mergedID := t.mergedDispatcher.GetId()
+	mergedDispatcher, ok := dispatcherMap.Get(mergedID)
+	if !ok {
+		return true, "merged_dispatcher_missing"
+	}
+	if mergedDispatcher.GetTryRemoving() || mergedDispatcher.GetRemovingStatus() {
+		return true, "merged_dispatcher_removing"
+	}
+
+	for _, id := range t.dispatcherIDs {
+		dispatcherItem, ok := dispatcherMap.Get(id)
+		if !ok {
+			return true, "source_dispatcher_missing"
+		}
+		if dispatcherItem.GetTryRemoving() || dispatcherItem.GetRemovingStatus() {
+			return true, "source_dispatcher_removing"
+		}
+	}
+	return false, ""
+}
+
+func abortMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *DispatcherMap[T], sinkType common.SinkType, reason string) {
+	log.Info("abort merge",
+		zap.Stringer("changefeedID", t.manager.changefeedID),
+		zap.String("reason", reason),
+		zap.Int64("mode", t.mergedDispatcher.GetMode()),
+		zap.Any("dispatcherIDs", t.dispatcherIDs),
+		zap.Any("mergedDispatcher", t.mergedDispatcher.GetId()),
+	)
+
+	// Stop retrying and cleanup best-effort.
+	t.Cancel()
+
+	eventCollector := appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector)
+	memoryQuota := t.manager.sinkQuota
+	if common.IsRedoMode(t.mergedDispatcher.GetMode()) {
+		memoryQuota = t.manager.redoQuota
+	}
+
+	for _, id := range t.dispatcherIDs {
+		dispatcherItem, ok := dispatcherMap.Get(id)
+		if !ok {
+			continue
+		}
+		if dispatcherItem.GetTryRemoving() || dispatcherItem.GetRemovingStatus() {
+			continue
+		}
+		if dispatcherItem.GetComponentStatus() == heartbeatpb.ComponentState_WaitingMerge {
+			dispatcherItem.SetComponentStatus(heartbeatpb.ComponentState_Working)
+		}
+		// Merge closes and detaches source dispatchers from event collector. If merge aborts,
+		// re-register the dispatchers so they can resume receiving events.
+		if !eventCollector.HasDispatcher(id) {
+			eventCollector.AddDispatcher(dispatcherItem, memoryQuota)
+		}
+	}
+
+	removeDispatcher(t.manager, t.mergedDispatcher.GetId(), dispatcherMap, sinkType)
+}
+
 func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *DispatcherMap[T]) {
 	log.Info("do merge",
 		zap.Stringer("changefeedID", t.manager.changefeedID),
@@ -143,19 +217,25 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 		zap.Any("dispatcherIDs", t.dispatcherIDs),
 		zap.Any("mergedDispatcher", t.mergedDispatcher.GetId()),
 	)
+	sinkType := getSinkType(t.mergedDispatcher, t.manager)
+
 	// Step1: close all dispatchers to be merged, calculate the min checkpointTs of the merged dispatcher
 	minCheckpointTs := uint64(math.MaxUint64)
 	closedList := make([]bool, len(t.dispatcherIDs)) // record whether the dispatcher is closed successfully
 	closedCount := 0
 	count := 0
 	for closedCount < len(t.dispatcherIDs) {
+		if needAbort, abortReason := shouldAbortMerge(t, dispatcherMap); needAbort {
+			abortMerge(t, dispatcherMap, sinkType, abortReason)
+			return
+		}
 		for idx, id := range t.dispatcherIDs {
 			if closedList[idx] {
 				continue
 			}
 			dispatcher, ok := dispatcherMap.Get(id)
 			if !ok {
-				log.Panic("dispatcher not found when do merge", zap.Stringer("dispatcherID", id))
+				break
 			}
 			if count == 0 {
 				appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcher)
@@ -248,7 +328,10 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 	for _, id := range t.dispatcherIDs {
 		dispatcher, ok := dispatcherMap.Get(id)
 		if !ok {
-			log.Panic("dispatcher not found when do merge", zap.Stringer("dispatcherID", id))
+			log.Warn("dispatcher not found when do merge, skip remove",
+				zap.Stringer("dispatcherID", id),
+				zap.Stringer("changefeedID", t.manager.changefeedID))
+			continue
 		}
 		dispatcher.Remove()
 	}

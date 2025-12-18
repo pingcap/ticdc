@@ -31,6 +31,7 @@ import (
 // and remove it from the replication db
 type removeDispatcherOperator struct {
 	replicaSet     *replica.SpanReplication
+	nodeID         node.ID
 	finished       atomic.Bool
 	spanController *span.Controller
 
@@ -40,14 +41,20 @@ type removeDispatcherOperator struct {
 func newRemoveDispatcherOperator(spanController *span.Controller, replicaSet *replica.SpanReplication) *removeDispatcherOperator {
 	return &removeDispatcherOperator{
 		replicaSet:     replicaSet,
+		nodeID:         replicaSet.GetNodeID(),
 		spanController: spanController,
 		sendThrottler:  newSendThrottler(),
 	}
 }
 
 func (m *removeDispatcherOperator) Check(from node.ID, status *heartbeatpb.TableSpanStatus) {
-	if !m.finished.Load() && from == m.replicaSet.GetNodeID() &&
-		status.ComponentStatus != heartbeatpb.ComponentState_Working {
+	// Only treat terminal states as removal completed.
+	// During merge, a dispatcher can temporarily be in non-working states (e.g. WaitingMerge),
+	// which should not complete the remove operator, otherwise the dispatcher can be leaked.
+	if !m.finished.Load() &&
+		from == m.nodeID &&
+		(status.ComponentStatus == heartbeatpb.ComponentState_Stopped ||
+			status.ComponentStatus == heartbeatpb.ComponentState_Removed) {
 		m.replicaSet.UpdateStatus(status)
 		log.Info("dispatcher report non-working status",
 			zap.String("replicaSet", m.replicaSet.ID.String()))
@@ -60,19 +67,19 @@ func (m *removeDispatcherOperator) Schedule() *messaging.TargetMessage {
 		return nil
 	}
 
-	return m.replicaSet.NewRemoveDispatcherMessage(m.replicaSet.GetNodeID())
+	return m.replicaSet.NewRemoveDispatcherMessage(m.nodeID)
 }
 
 // OnNodeRemove is called when node offline, and the replicaset has been removed from spanController, so it's ok.
 func (m *removeDispatcherOperator) OnNodeRemove(n node.ID) {
-	if n == m.replicaSet.GetNodeID() {
+	if n == m.nodeID {
 		m.finished.Store(true)
 	}
 }
 
 // AffectedNodes returns the nodes that the operator will affect
 func (m *removeDispatcherOperator) AffectedNodes() []node.ID {
-	return []node.ID{m.replicaSet.GetNodeID()}
+	return []node.ID{m.nodeID}
 }
 
 func (m *removeDispatcherOperator) ID() common.DispatcherID {
@@ -100,7 +107,7 @@ func (m *removeDispatcherOperator) PostFinish() {
 
 func (m *removeDispatcherOperator) String() string {
 	return fmt.Sprintf("remove dispatcher operator: %s, dest %s",
-		m.replicaSet.ID, m.replicaSet.GetNodeID())
+		m.replicaSet.ID, m.nodeID)
 }
 
 func (m *removeDispatcherOperator) Type() string {
