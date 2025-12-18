@@ -99,3 +99,70 @@ func CaptureInfoToNodeInfo(captureInfo *config.CaptureInfo) *Info {
 		StartTimestamp: captureInfo.StartTimestamp,
 	}
 }
+
+type state int
+
+const (
+	// stateUninitialized means the node Status is unknown,
+	// no bootstrap response of this node received yet.
+	stateUninitialized state = iota
+	// stateInitialized means bootstrapper has received the bootstrap response of this node.
+	stateInitialized
+)
+
+// Status represents the bootstrap state and metadata of a node in the system.
+// It tracks initialization Status, node information, cached bootstrap response,
+// and timing data for bootstrap message retries.
+type Status[T any] struct {
+	state state
+	node  *Info
+
+	// response is the bootstrap response of this node.
+	response *T
+
+	// lastBootstrapTime is the time when the bootstrap message is created for this node.
+	// It approximates the time when we send the bootstrap message to the node.
+	// It is used to limit the frequency of sending bootstrap message.
+	lastBootstrapTime time.Time
+}
+
+func NewStatus[T any](node *Info) *Status[T] {
+	return &Status[T]{
+		state: stateUninitialized,
+		node:  node,
+	}
+}
+
+func (t *Status[T]) GetNodeInfo() *Info {
+	return t.node
+}
+
+func (t *Status[T]) SetLastBootstrapTime(currentTime time.Time) {
+	t.lastBootstrapTime = currentTime
+}
+
+func (t *Status[T]) GetLastBootstrapTime() time.Time {
+	return t.lastBootstrapTime
+}
+
+func (t *Status[T]) SetResponse(msg *T) {
+	t.response = msg
+}
+
+func (t *Status[T]) SetInitialized() {
+	t.state = stateInitialized
+}
+
+func (t *Status[T]) Uninitialized() bool {
+	return t.state == stateInitialized
+}
+
+func (t *Status[T]) Initialized() bool {
+	return t.state == stateInitialized
+}
+
+func (t *Status[T]) GetResponse() *T {
+	response := t.response
+	t.response = nil
+	return response
+}

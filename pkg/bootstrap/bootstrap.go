@@ -39,7 +39,7 @@ type Bootstrapper[T any] struct {
 	// bootstrapped is true after make sure all nodes are initialized.
 	bootstrapped bool
 	// nodes is a map of node id to node status
-	nodes map[node.ID]*nodeStatus[T]
+	nodes map[node.ID]*node.Status[T]
 
 	// newBootstrapMsg is a factory function that returns a new bootstrap message
 	newBootstrapMsg NewBootstrapMessageFn
@@ -53,7 +53,7 @@ type Bootstrapper[T any] struct {
 func NewBootstrapper[T any](id string, newBootstrapMsg NewBootstrapMessageFn) *Bootstrapper[T] {
 	return &Bootstrapper[T]{
 		id:              id,
-		nodes:           make(map[node.ID]*nodeStatus[T]),
+		nodes:           make(map[node.ID]*node.Status[T]),
 		bootstrapped:    false,
 		newBootstrapMsg: newBootstrapMsg,
 		currentTime:     time.Now,
@@ -76,9 +76,9 @@ func (b *Bootstrapper[T]) HandleNewNodes(activeNodes map[node.ID]*node.Info) (
 			continue
 		}
 		// A new node is found, send a bootstrap message to it.
-		b.nodes[id] = newNodeStatus[T](info)
+		b.nodes[id] = node.NewStatus[T](info)
 		messages = append(messages, b.newBootstrapMsg(id, info.AdvertiseAddr))
-		b.nodes[id].lastBootstrapTime = b.currentTime()
+		b.nodes[id].SetLastBootstrapTime(b.currentTime())
 		addedNodes = append(addedNodes, id)
 	}
 
@@ -120,8 +120,8 @@ func (b *Bootstrapper[T]) HandleBootstrapResponse(
 			zap.Any("nodeID", from))
 		return nil
 	}
-	status.cachedBootstrapResp = msg
-	status.state = nodeStateInitialized
+	status.SetResponse(msg)
+	status.SetInitialized()
 
 	responses := b.collectInitialBootstrapResponses()
 	if len(responses) > 0 {
@@ -141,10 +141,10 @@ func (b *Bootstrapper[T]) ResendBootstrapMessage() []*messaging.TargetMessage {
 	var messages []*messaging.TargetMessage
 	now := b.currentTime()
 	for id, status := range b.nodes {
-		if status.state == nodeStateUninitialized &&
-			now.Sub(status.lastBootstrapTime) >= b.resendInterval {
-			messages = append(messages, b.newBootstrapMsg(id, status.node.AdvertiseAddr))
-			status.lastBootstrapTime = now
+		if status.Uninitialized() &&
+			now.Sub(status.GetLastBootstrapTime()) > b.resendInterval {
+			messages = append(messages, b.newBootstrapMsg(id, status.GetNodeInfo().AdvertiseAddr))
+			status.SetLastBootstrapTime(now)
 		}
 	}
 	return messages
@@ -167,7 +167,7 @@ func (b *Bootstrapper[T]) PrintBootstrapStatus() {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
 	for id, status := range b.nodes {
-		if status.state == nodeStateInitialized {
+		if status.Initialized() {
 			bootstrappedNodes = append(bootstrappedNodes, id)
 		} else {
 			unbootstrappedNodes = append(unbootstrappedNodes, id)
@@ -206,50 +206,16 @@ func (b *Bootstrapper[T]) collectInitialBootstrapResponses() map[node.ID]*T {
 	}
 
 	for _, status := range b.nodes {
-		if status.state == nodeStateUninitialized {
+		if status.Uninitialized() {
 			return nil
 		}
 	}
 
 	responses := make(map[node.ID]*T, len(b.nodes))
 	for _, status := range b.nodes {
-		responses[status.node.ID] = status.cachedBootstrapResp
-		status.cachedBootstrapResp = nil
+		responses[status.GetNodeInfo().ID] = status.GetResponse()
 	}
 	return responses
-}
-
-type nodeState int
-
-const (
-	// nodeStateUninitialized means the node status is unknown,
-	// no bootstrap response of this node received yet.
-	nodeStateUninitialized nodeState = iota
-	// nodeStateInitialized means bootstrapper has received the bootstrap response of this node.
-	nodeStateInitialized
-)
-
-// nodeStatus represents the bootstrap state and metadata of a node in the system.
-// It tracks initialization status, node information, cached bootstrap response,
-// and timing data for bootstrap message retries.
-type nodeStatus[T any] struct {
-	state nodeState
-	node  *node.Info
-	// cachedBootstrapResp is the bootstrap response of this node.
-	// It is cached when the bootstrap response is received.
-	cachedBootstrapResp *T
-
-	// lastBootstrapTime is the time when the bootstrap message is created for this node.
-	// It approximates the time when we send the bootstrap message to the node.
-	// It is used to limit the frequency of sending bootstrap message.
-	lastBootstrapTime time.Time
-}
-
-func newNodeStatus[T any](node *node.Info) *nodeStatus[T] {
-	return &nodeStatus[T]{
-		state: nodeStateUninitialized,
-		node:  node,
-	}
 }
 
 type NewBootstrapMessageFn func(id node.ID, addr string) *messaging.TargetMessage
