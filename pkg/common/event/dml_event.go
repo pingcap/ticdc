@@ -237,6 +237,27 @@ func (b *BatchDMLEvent) encodeV1() ([]byte, error) {
 	return data, nil
 }
 
+// CloneForRouting creates a shallow clone of the BatchDMLEvent suitable for routing.
+// This method is used to avoid race conditions when the same BatchDMLEvent is shared
+// between multiple dispatchers (e.g., EventDispatcher and RedoDispatcher).
+// The clone shares the underlying Rows data but has its own DMLEvents slice,
+// allowing each dispatcher to independently apply routing to TableInfo.
+func (b *BatchDMLEvent) CloneForRouting() *BatchDMLEvent {
+	if b == nil {
+		return nil
+	}
+	cloned := &BatchDMLEvent{
+		Version:       b.Version,
+		DMLEventCount: b.DMLEventCount,
+		DMLEvents:     make([]*DMLEvent, len(b.DMLEvents)),
+		Rows:          b.Rows,
+		RawRows:       b.RawRows,
+		TableInfo:     b.TableInfo,
+	}
+	copy(cloned.DMLEvents, b.DMLEvents)
+	return cloned
+}
+
 // AssembleRows assembles the Rows from the RawRows.
 // It also sets the TableInfo and clears the RawRows.
 func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {

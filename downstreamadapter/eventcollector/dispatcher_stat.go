@@ -418,7 +418,13 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 			// greater than or equal to the startTs of dispatcher.
 			// FIXME: more elegant implementation
 			tableInfoVersion := max(d.tableInfoVersion.Load(), d.target.GetStartTs())
-			batchDML := event.Event.(*commonEvent.BatchDMLEvent)
+			// Clone the BatchDMLEvent before calling AssembleRows to avoid race conditions.
+			// The same BatchDMLEvent may be shared between EventDispatcher (mysql sink) and
+			// RedoDispatcher (redo sink). AssembleRows mutates TableInfo in-place, so each
+			// dispatcher needs its own copy to safely apply routing rules.
+			originalBatchDML := event.Event.(*commonEvent.BatchDMLEvent)
+			batchDML := originalBatchDML.CloneForRouting()
+			event.Event = batchDML
 			batchDML.AssembleRows(tableInfo)
 			for _, dml := range batchDML.DMLEvents {
 				// DMLs in the same batch share the same updateTs in their table info,
