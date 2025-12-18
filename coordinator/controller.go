@@ -323,7 +323,6 @@ func (c *Controller) RequestResolvedTsFromLogCoordinator(ctx context.Context, ch
 
 func (c *Controller) onNodeChanged() {
 	addedNodes, removedNodes, messages, cachedResponse := c.bootstrapper.HandleNewNodes(c.nodeManager.GetAliveNodes())
-
 	log.Info("controller detects node changed",
 		zap.Int("addedCount", len(addedNodes)),
 		zap.Int("removedCount", len(removedNodes)),
@@ -365,8 +364,8 @@ func (c *Controller) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.Coordin
 	if cachedResp == nil {
 		return
 	}
-	log.Info("all nodes have sent bootstrap response",
-		zap.Int("size", len(cachedResp)))
+	log.Info("all nodes bootstrap response received",
+		zap.Int("nodeCount", len(cachedResp)))
 	// runningCfs is the changefeeds that are already running on other nodes
 	runningCfs := make(map[common.ChangeFeedID]remoteMaintainer)
 	for node, bootstrapMsg := range cachedResp {
