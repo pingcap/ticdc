@@ -102,7 +102,7 @@ func (d *DmlPathKey) GenerateDMLFilePath(
 // DML file path pattern is as follows:
 // {schema}/{table}/{table-version-separator}/{partition-separator}/{date-separator}/, where
 // partition-separator and date-separator could be empty.
-// DML file name pattern is as follows: CDC-{dispatcher}-{num}.extension or CDC-{num}.extension
+// DML file name pattern is as follows: CDC-{dispatcher}-{num}.extension or CDC{num}.extension
 func (d *DmlPathKey) ParseDMLFilePath(dateSeparator, path string, enableTableAcrossNodes bool) (uint64, error) {
 	var partitionNum int64
 
@@ -124,7 +124,7 @@ func (d *DmlPathKey) ParseDMLFilePath(dateSeparator, path string, enableTableAcr
 		str += `CDC-(\w+)-(\d+).\w+`
 	} else {
 		// CDC-{num}.extension
-		str += `CDC-(\d+).\w+`
+		str += `CDC(\d+).\w+`
 		matchesLen = 7
 		matchesFileIdx = 6
 	}
