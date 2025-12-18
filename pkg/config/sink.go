@@ -400,6 +400,16 @@ type DispatchRule struct {
 	Columns []string `toml:"columns" json:"columns"`
 
 	TopicRule string `toml:"topic" json:"topic"`
+
+	// SchemaRule is an expression for the target schema name.
+	// Supports {schema} and {table} placeholders, e.g., "target_db" or "{schema}_backup".
+	// If empty, the source schema name is used.
+	SchemaRule string `toml:"schema" json:"schema"`
+
+	// TableRule is an expression for the target table name.
+	// Supports {schema} and {table} placeholders, e.g., "target_table" or "{schema}_{table}".
+	// If empty, the source table name is used.
+	TableRule string `toml:"table" json:"table"`
 }
 
 // ColumnSelector represents a column selector for a table.
@@ -784,6 +794,15 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 			rule.PartitionRule = rule.DispatcherRule
 			rule.DispatcherRule = ""
 		}
+		// Validate routing expressions
+		if err := ValidateRoutingExpression(rule.SchemaRule); err != nil {
+			return cerror.WrapError(cerror.ErrSinkInvalidConfig,
+				errors.New(fmt.Sprintf("invalid schema rule %q: %v", rule.SchemaRule, err)))
+		}
+		if err := ValidateRoutingExpression(rule.TableRule); err != nil {
+			return cerror.WrapError(cerror.ErrSinkInvalidConfig,
+				errors.New(fmt.Sprintf("invalid table rule %q: %v", rule.TableRule, err)))
+		}
 	}
 
 	if util.GetOrZero(s.EncoderConcurrency) < 0 {
@@ -1041,4 +1060,32 @@ type OpenProtocolConfig struct {
 // DebeziumConfig represents the configurations for debezium protocol encoding
 type DebeziumConfig struct {
 	OutputOldValue bool `toml:"output-old-value" json:"output-old-value"`
+}
+
+// ValidateRoutingExpression validates a routing expression.
+// Valid expressions can contain literal text and {schema} or {table} placeholders.
+func ValidateRoutingExpression(expr string) error {
+	if expr == "" {
+		return nil
+	}
+
+	// Check for invalid placeholders (anything in braces that isn't schema or table)
+	for i := 0; i < len(expr); i++ {
+		if expr[i] == '{' {
+			// Find closing brace
+			end := strings.Index(expr[i:], "}")
+			if end == -1 {
+				return fmt.Errorf("unbalanced braces in expression %q", expr)
+			}
+			placeholder := expr[i : i+end+1]
+			if placeholder != "{schema}" && placeholder != "{table}" {
+				return fmt.Errorf("invalid placeholder %q, only {schema} and {table} are allowed", placeholder)
+			}
+			i += end
+		} else if expr[i] == '}' {
+			return fmt.Errorf("unbalanced braces in expression %q", expr)
+		}
+	}
+
+	return nil
 }
