@@ -39,7 +39,7 @@ type Bootstrapper[T any] struct {
 
 	mutex sync.RWMutex
 	// nodes is a map of node id to node status
-	nodes map[node.ID]*NodeStatus[T]
+	nodes map[node.ID]*nodeStatus[T]
 
 	// newBootstrapMsg is a factory function that returns a new bootstrap message
 	newBootstrapMsg NewBootstrapMessageFn
@@ -53,7 +53,7 @@ type Bootstrapper[T any] struct {
 func NewBootstrapper[T any](id string, newBootstrapMsg NewBootstrapMessageFn) *Bootstrapper[T] {
 	return &Bootstrapper[T]{
 		id:              id,
-		nodes:           make(map[node.ID]*NodeStatus[T]),
+		nodes:           make(map[node.ID]*nodeStatus[T]),
 		bootstrapped:    false,
 		newBootstrapMsg: newBootstrapMsg,
 		currentTime:     time.Now,
@@ -75,7 +75,7 @@ func (b *Bootstrapper[T]) HandleNewNodes(activeNodes map[node.ID]*node.Info) (
 			continue
 		}
 		// A new node is found, send a bootstrap message to it.
-		b.nodes[id] = NewNodeStatus[T](info)
+		b.nodes[id] = newNodeStatus[T](info)
 		log.Info("found a new node",
 			zap.String("id", b.id),
 			zap.String("nodeAddr", info.AdvertiseAddr),
@@ -109,7 +109,7 @@ func (b *Bootstrapper[T]) HandleBootstrapResponse(
 	msg *T,
 ) map[node.ID]*T {
 	b.mutex.RLock()
-	nodeStatus, ok := b.nodes[from]
+	status, ok := b.nodes[from]
 	b.mutex.RUnlock()
 	if !ok {
 		log.Warn("received bootstrap response from untracked node, ignore it",
@@ -117,27 +117,29 @@ func (b *Bootstrapper[T]) HandleBootstrapResponse(
 			zap.Any("nodeID", from))
 		return nil
 	}
-	nodeStatus.cachedBootstrapResp = msg
-	nodeStatus.state = NodeStateInitialized
+	status.cachedBootstrapResp = msg
+	status.state = nodeStateInitialized
 	return b.collectInitialBootstrapResponses()
 }
 
 // ResendBootstrapMessage return message that need to be resent
 func (b *Bootstrapper[T]) ResendBootstrapMessage() []*messaging.TargetMessage {
-	var msgs []*messaging.TargetMessage
-	if !b.Bootstrapped() {
-		now := b.currentTime()
-		b.mutex.RLock()
-		defer b.mutex.RUnlock()
-		for id, status := range b.nodes {
-			if status.state == NodeStateUninitialized &&
-				now.Sub(status.lastBootstrapTime) >= b.resendInterval {
-				msgs = append(msgs, b.newBootstrapMsg(id))
-				status.lastBootstrapTime = now
-			}
+	if b.Bootstrapped() {
+		return nil
+	}
+
+	var messages []*messaging.TargetMessage
+	now := b.currentTime()
+	b.mutex.RLock()
+	defer b.mutex.RUnlock()
+	for id, status := range b.nodes {
+		if status.state == nodeStateUninitialized &&
+			now.Sub(status.lastBootstrapTime) >= b.resendInterval {
+			messages = append(messages, b.newBootstrapMsg(id))
+			status.lastBootstrapTime = now
 		}
 	}
-	return msgs
+	return messages
 }
 
 // GetAllNodeIDs return all node IDs tracked by bootstrapper
@@ -157,7 +159,7 @@ func (b *Bootstrapper[T]) PrintBootstrapStatus() {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
 	for id, status := range b.nodes {
-		if status.state == NodeStateInitialized {
+		if status.state == nodeStateInitialized {
 			bootstrappedNodes = append(bootstrappedNodes, id)
 		} else {
 			unbootstrappedNodes = append(unbootstrappedNodes, id)
@@ -185,8 +187,8 @@ func (b *Bootstrapper[T]) checkAllNodeInitialized() bool {
 	if len(b.nodes) == 0 {
 		return false
 	}
-	for _, nodeStatus := range b.nodes {
-		if nodeStatus.state == NodeStateUninitialized {
+	for _, status := range b.nodes {
+		if status.state == nodeStateUninitialized {
 			return false
 		}
 	}
@@ -218,21 +220,21 @@ func (b *Bootstrapper[T]) collectInitialBootstrapResponses() map[node.ID]*T {
 	return nil
 }
 
-type NodeState int
+type nodeState int
 
 const (
-	// NodeStateUninitialized means the node status is unknown,
+	// nodeStateUninitialized means the node status is unknown,
 	// no bootstrap response of this node received yet.
-	NodeStateUninitialized NodeState = iota
-	// NodeStateInitialized means bootstrapper has received the bootstrap response of this node.
-	NodeStateInitialized
+	nodeStateUninitialized nodeState = iota
+	// nodeStateInitialized means bootstrapper has received the bootstrap response of this node.
+	nodeStateInitialized
 )
 
-// NodeStatus represents the bootstrap state and metadata of a node in the system.
+// nodeStatus represents the bootstrap state and metadata of a node in the system.
 // It tracks initialization status, node information, cached bootstrap response,
 // and timing data for bootstrap message retries.
-type NodeStatus[T any] struct {
-	state NodeState
+type nodeStatus[T any] struct {
+	state nodeState
 	node  *node.Info
 	// cachedBootstrapResp is the bootstrap response of this node.
 	// It is cached when the bootstrap response is received.
@@ -244,9 +246,9 @@ type NodeStatus[T any] struct {
 	lastBootstrapTime time.Time
 }
 
-func NewNodeStatus[T any](node *node.Info) *NodeStatus[T] {
-	return &NodeStatus[T]{
-		state: NodeStateUninitialized,
+func newNodeStatus[T any](node *node.Info) *nodeStatus[T] {
+	return &nodeStatus[T]{
+		state: nodeStateUninitialized,
 		node:  node,
 	}
 }
