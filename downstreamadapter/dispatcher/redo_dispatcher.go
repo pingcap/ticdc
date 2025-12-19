@@ -105,8 +105,10 @@ func (rd *RedoDispatcher) SetRedoMeta(cfg *config.ConsistentConfig) {
 	}()
 }
 
-// UpdateMeta used to update redo meta log
-// only for redo table trigger event dispatcher
+// UpdateMeta used to update redo meta log.
+// The checkpoint-ts is always less than the resolved-ts because it represents the minimum checkpoint-ts of the global event dispatcher.
+// The event dispatcher does not advance until the resolved-ts exceeds the event's commit-ts.
+// only for redo table trigger event dispatcher.
 func (rd *RedoDispatcher) UpdateMeta(checkpointTs, resolvedTs common.Ts) {
 	if !rd.IsTableTriggerEventDispatcher() {
 		log.Error("UpdateMeta should be called by redo table trigger event dispatcher", zap.Any("id", rd.GetId()))

@@ -114,19 +114,6 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 		return nil
 	}
 
-	// When initializing the dispatcher manager, both the redo dispatcher and the common dispatcher exist.
-	// The common dispatcher obtains the true start timestamp (start-ts) if the sink type is MySQL,
-	// this start-ts is always greater than or equal to the global start-ts.
-	// However, the redo dispatcher must receive data before the common dispatcher, and the common dispatcher replicates based on the global redo timestamp.
-	// If the redo dispatcher’s start-ts is less than that of the common dispatcher,
-	// we will encounter a checkpoint-ts greater than the resolved-ts in the redo metadata.
-	// This results in the redo metadata recording an incorrect log, which can cause a panic if no additional redo metadata logs are flushed.
-	// Therefore, we must ensure that the start-ts remains consistent with the common dispatcher by querying the recovery info from the MySQL sink.
-	// newStartTsList, _, _, err := e.getTableRecoveryInfoFromMysqlSink(tableIds, startTsList, removeDDLTs)
-	// if err != nil {
-	// 	return errors.Trace(err)
-	// }
-
 	for idx, id := range dispatcherIds {
 		rd := dispatcher.NewRedoDispatcher(
 			id,
