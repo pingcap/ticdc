@@ -84,7 +84,7 @@ run() {
 	cdc_pid_0=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
 	kill_cdc_pid $cdc_pid_0
 
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforeWrite=sleep(20000)'
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforeWrite=1*sleep(60000)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 	check_coordinator_and_maintainer "127.0.0.1:8300" "$CHANGEFEED_ID" 60
 
