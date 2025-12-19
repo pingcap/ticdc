@@ -133,11 +133,15 @@ type BasicDispatcher struct {
 	skipSyncpointAtStartTs bool
 	// skipDMLAsStartTs indicates whether to skip DML events at startTs+1 timestamp.
 	// When true, the dispatcher should filter out DML events with commitTs == startTs+1, but keep DDL events.
-	// This flag is set to true ONLY when is_syncpoint=false AND finished=0 in ddl-ts table (non-syncpoint DDL not finished).
-	// In this case, we return startTs = ddlTs-1 to replay the DDL, and skip the already-written DML at ddlTs
-	// to avoid duplicate writes while ensuring the DDL is replayed.
+	// This flag is set to true in two secnaios:
+	// 1. when is_syncpoint=false AND finished=0 in ddl-ts table (non-syncpoint DDL not finished).
+	//    In this case, we return startTs = ddlTs-1 to replay the DDL, and skip the already-written DML at ddlTs
+	//    to avoid duplicate writes while ensuring the DDL is replayed.
 	// Note: When is_syncpoint=true AND finished=0 (DDL finished but syncpoint not finished),
 	// skipDMLAsStartTs is false because the DDL is already completed and DML should be processed normally.
+	// 2. maintainer ask dispatcher to make a move operator, while the dispatcher just dealing with a ddl event.
+	//    and the block state for ddl event is still waiting.
+	//    In this case, we also return startTs = ddlTs-1 to replay the DDL but skip the dmls.
 	skipDMLAsStartTs bool
 	// The ts from pdClock when the dispatcher is created.
 	// when downstream is mysql-class, for dml event we need to compare the commitTs with this ts

@@ -54,8 +54,6 @@ func NewRedoDispatcher(
 		schemaID,
 		schemaIDToDispatchers,
 		skipSyncpointAtStartTs,
-		// skipDMLAsStartTs is used when a dispatcher is recreated during an in-flight DDL barrier:
-		// we may start from (blockTs-1) to replay the DDL at blockTs, while skipping DML at blockTs (startTs+1).
 		skipDMLAsStartTs,
 		0,
 		common.RedoMode,

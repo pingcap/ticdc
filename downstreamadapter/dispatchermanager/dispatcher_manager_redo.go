@@ -128,7 +128,14 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 	}
 
 	for idx, id := range dispatcherIds {
-		skipDMLAsStartTs := skipDMLAsStartTsList[idx] || scheduleSkipDMLAsStartTsList[idx]
+		// if the newStartTs equals to the original startTs, we need to combine the skipDMLAsStartTs flag
+		// otherwise, we just use the skipDMLAsStartTs flag from mysql sink
+		var skipDMLAsStartTs bool
+		if newStartTsList[idx] == startTsList[idx] {
+			skipDMLAsStartTs = scheduleSkipDMLAsStartTsList[idx] || skipDMLAsStartTsList[idx]
+		} else {
+			skipDMLAsStartTs = skipDMLAsStartTsList[idx]
+		}
 		rd := dispatcher.NewRedoDispatcher(
 			id,
 			tableSpans[idx],
