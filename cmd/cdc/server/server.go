@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -104,6 +105,7 @@ func (o *options) run(cmd *cobra.Command) error {
 	defer cancel()
 
 	version.LogVersionInfo("Change Data Capture (CDC)")
+	metrics.BuildInfo.WithLabelValues(version.ReleaseVersion, version.GitHash, version.BuildTS, kerneltype.Name()).Set(1)
 	log.Info("The TiCDC release version", zap.String("ReleaseVersion", version.ReleaseVersion))
 
 	util.LogHTTPProxies()
