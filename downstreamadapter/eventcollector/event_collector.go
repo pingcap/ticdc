@@ -255,7 +255,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 		log.Info("add dispatcher done",
 			zap.Stringer("changefeedID", changefeedID),
 			zap.Stringer("dispatcherID", target.GetId()), zap.Int64("tableID", target.GetTableSpan().GetTableID()),
-			zap.Uint64("startTs", target.GetStartTs()), zap.Int64("type", target.GetMode()))
+			zap.Uint64("startTs", target.GetStartTs()), zap.Int64("mode", target.GetMode()))
 	}()
 	metrics.EventCollectorRegisteredDispatcherCount.Inc()
 

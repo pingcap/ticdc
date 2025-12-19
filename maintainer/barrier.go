@@ -362,7 +362,7 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 		}
 		return event, status, targetID, true
 	}
-	// it's not a blocked event, it must be sent by table event trigger dispatcher, just for doing scheduler
+	// it's not a blocked event, it must be sent by table event trigger event dispatcher, just for doing scheduler
 	// and the ddl already synced to downstream , e.g.: create table
 	// if ack failed, dispatcher will send a heartbeat again, so we do not need to care about resend message here
 	//
