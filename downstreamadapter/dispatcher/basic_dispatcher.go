@@ -133,7 +133,7 @@ type BasicDispatcher struct {
 	skipSyncpointAtStartTs bool
 	// skipDMLAsStartTs indicates whether to skip DML events at startTs+1 timestamp.
 	// When true, the dispatcher should filter out DML events with commitTs == startTs+1, but keep DDL events.
-	// This flag is set to true in two secnaios:
+	// This flag is set to true in two scenarios:
 	// 1. when is_syncpoint=false AND finished=0 in ddl-ts table (non-syncpoint DDL not finished).
 	//    In this case, we return startTs = ddlTs-1 to replay the DDL, and skip the already-written DML at ddlTs
 	//    to avoid duplicate writes while ensuring the DDL is replayed.
