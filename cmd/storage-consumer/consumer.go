@@ -212,6 +212,7 @@ func (c *consumer) getNewFiles(
 	}
 
 	tableDMLMap = diffDMLMaps(c.tableDMLIdxMap, origDMLIdxMap)
+	log.Debug("get tableDMLMap", zap.Any("tableDMLMap", tableDMLMap))
 	return tableDMLMap, err
 }
 
@@ -321,8 +322,8 @@ func (c *consumer) syncExecDMLEvents(
 	key cloudstorage.DmlPathKey,
 	fileIdx uint64,
 ) error {
-	filePath := key.GenerateDMLFilePath(fileIdx, c.fileExtension, fileIndexWidth, c.enableTableAcrossNodes)
-	log.Debug("read from dml file path", zap.String("path", filePath))
+	filePath := key.GenerateDMLFilePath(fileIdx, c.fileExtension, fileIndexWidth)
+	log.Debug("read from dml file path", zap.String("path", filePath), zap.Any("f", key.EnableTableAcrossNodes), zap.Any("p", key.DispatcherID))
 	content, err := c.externalStorage.ReadFile(ctx, filePath)
 	if err != nil {
 		return errors.Trace(err)
@@ -374,7 +375,6 @@ func (c *consumer) parseDMLFilePath(_ context.Context, path string) error {
 	fileIdx, err := dmlkey.ParseDMLFilePath(
 		putil.GetOrZero(c.replicationCfg.Sink.DateSeparator),
 		path,
-		c.enableTableAcrossNodes,
 	)
 	if err != nil {
 		return errors.Trace(err)
@@ -476,6 +476,7 @@ func (c *consumer) handleNewFiles(
 ) error {
 	keys := make([]cloudstorage.DmlPathKey, 0, len(dmlFileMap))
 	for k := range dmlFileMap {
+		log.Debug("append key", zap.Any("key", k))
 		keys = append(keys, k)
 	}
 	if len(keys) == 0 {
@@ -516,6 +517,7 @@ func (c *consumer) handleNewFiles(
 			continue
 		}
 
+		log.Debug("read key", zap.Any("key", key))
 		fileRange := dmlFileMap[key]
 		for i := fileRange.start; i <= fileRange.end; i++ {
 			if err := c.syncExecDMLEvents(ctx, tableDef, key, i); err != nil {
