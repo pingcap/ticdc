@@ -910,8 +910,6 @@ func (c *eventBroker) getDispatcher(id common.DispatcherID) *atomic.Pointer[disp
 }
 
 func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
-	defer c.metricsCollector.metricDispatcherCount.Inc()
-
 	id := info.GetID()
 	span := info.GetTableSpan()
 	changefeedID := info.GetChangefeedID()
@@ -984,6 +982,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		return err
 	}
 	c.dispatchers.Store(id, dispatcherPtr)
+	c.metricsCollector.metricDispatcherCount.Inc()
 	log.Info("register dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID),
 		zap.Stringer("changefeedID", changefeedID),
@@ -998,7 +997,6 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 }
 
 func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
-	defer c.metricsCollector.metricDispatcherCount.Dec()
 	id := dispatcherInfo.GetID()
 
 	statPtr, ok := c.dispatchers.Load(id)
@@ -1012,6 +1010,7 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	stat := statPtr.(*atomic.Pointer[dispatcherStat]).Load()
 
 	stat.changefeedStat.removeDispatcher(id)
+	c.metricsCollector.metricDispatcherCount.Dec()
 	changefeedID := dispatcherInfo.GetChangefeedID()
 
 	if stat.changefeedStat.isEmpty() {
