@@ -138,7 +138,7 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 	if e.latestRedoWatermark.Get().CheckpointTs == 0 {
 		// If the checkpointTs is 0, means there is no dispatchers before. So we need to init it with the smallest startTs of these dispatchers
 		smallestStartTs := int64(math.MaxInt64)
-		for _, startTs := range newStartTsList {
+		for _, startTs := range startTsList {
 			if startTs < smallestStartTs {
 				smallestStartTs = startTs
 			}
