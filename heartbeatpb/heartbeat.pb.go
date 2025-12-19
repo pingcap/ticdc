@@ -747,6 +747,8 @@ func (m *CheckpointTsMessage) GetCheckpointTs() uint64 {
 	return 0
 }
 
+// RedoMetaMessage used to send unflushed ts to update redo meta
+// from maintainer to dispatcher manager
 type RedoMetaMessage struct {
 	ChangefeedID *ChangefeedID `protobuf:"bytes,1,opt,name=changefeedID,proto3" json:"changefeedID,omitempty"`
 	ResolvedTs   uint64        `protobuf:"varint,2,opt,name=resolvedTs,proto3" json:"resolvedTs,omitempty"`
@@ -807,6 +809,8 @@ func (m *RedoMetaMessage) GetCheckpointTs() uint64 {
 	return 0
 }
 
+// RedoResolvedTsProgressMessage used to send redo meta flushed resolvedTs
+// from dispatcher manager to maintainer
 type RedoResolvedTsProgressMessage struct {
 	ChangefeedID *ChangefeedID `protobuf:"bytes,1,opt,name=changefeedID,proto3" json:"changefeedID,omitempty"`
 	ResolvedTs   uint64        `protobuf:"varint,2,opt,name=resolvedTs,proto3" json:"resolvedTs,omitempty"`
@@ -859,6 +863,8 @@ func (m *RedoResolvedTsProgressMessage) GetResolvedTs() uint64 {
 	return 0
 }
 
+// RedoResolvedTsForwardMessage used to send redoGlobalTs (redo meta flushed resolvedTs)
+// from maintainer to dispatcher manager
 type RedoResolvedTsForwardMessage struct {
 	ChangefeedID *ChangefeedID `protobuf:"bytes,1,opt,name=changefeedID,proto3" json:"changefeedID,omitempty"`
 	ResolvedTs   uint64        `protobuf:"varint,2,opt,name=resolvedTs,proto3" json:"resolvedTs,omitempty"`
