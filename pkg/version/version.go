@@ -19,8 +19,6 @@ import (
 	"github.com/coreos/go-semver/semver"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
-	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/tiflow/pkg/version"
 	"go.uber.org/zap"
 )
 
@@ -55,13 +53,6 @@ func LogVersionInfo(app string) {
 		zap.Bool("failpoint-build", false),
 		zap.String("kernel-type", kerneltype.Name()),
 	)
-
-	metrics.BuildInfo.WithLabelValues(
-		version.ReleaseVersion,
-		version.GitHash,
-		version.BuildTS,
-		kerneltype.Name(),
-	).Set(1)
 }
 
 // GetRawInfo returns basic version information string.
