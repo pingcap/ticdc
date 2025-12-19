@@ -29,17 +29,14 @@ const (
 
 // Bootstrapper handles the logic of a distributed instance(eg. changefeed maintainer, coordinator) startup.
 // When a distributed instance starts, it must wait for all nodes to report their current status.
-// Only when all nodes have reported their status can the instance bootstrap and schedule tables.
-
 type Bootstrapper[T any] struct {
 	// id is a log identifier
 	id string
 
 	mutex sync.Mutex
-	// bootstrapped is true after make sure all nodes are initialized.
+	// bootstrapped is true after get in touch with all nodes by receive their responses.
 	bootstrapped bool
-	// nodes is a map of node id to node status
-	nodes map[node.ID]*node.Status[T]
+	nodes        map[node.ID]*node.Status[T]
 
 	// newBootstrapRequest returns a new bootstrap message
 	newBootstrapRequest NewBootstrapRequestFn

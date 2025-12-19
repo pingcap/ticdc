@@ -887,8 +887,6 @@ func (m *Maintainer) onBootstrapResponses(responses map[node.ID]*heartbeatpb.Mai
 	}
 
 	if postBootstrapRequest == nil {
-		// todo: should also update this field ?
-		m.statusChanged.Store(true)
 		return
 	}
 

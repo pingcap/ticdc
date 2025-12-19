@@ -76,7 +76,7 @@ func (c *Controller) FinishBootstrap(
 	isMysqlCompatibleBackend bool,
 ) (*heartbeatpb.MaintainerPostBootstrapRequest, error) {
 	if c.bootstrapped {
-		log.Info("maintainer already bootstrapped, should be caused by new node join the group",
+		log.Info("maintainer already bootstrapped, may a new node join the cluster",
 			zap.Stringer("changefeed", c.changefeedID),
 			zap.Any("allNodesResp", allNodesResp))
 		return nil, nil
@@ -240,7 +240,7 @@ func (c *Controller) processTableSpans(
 		// Remove processed table from working task map
 		delete(workingTaskMap, table.TableID)
 	} else {
-		spanController.AddNewTable(table, c.startCheckpointTs)
+		spanController.AddNewTable(table, c.startTs)
 	}
 }
 
@@ -255,10 +255,10 @@ func (c *Controller) handleTableHoles(
 	if c.splitter != nil {
 		for _, hole := range holes {
 			spans := c.splitter.Split(context.Background(), hole, 0, split.SplitTypeRegionCount)
-			spanController.AddNewSpans(table.SchemaID, spans, c.startCheckpointTs, splitEnabled)
+			spanController.AddNewSpans(table.SchemaID, spans, c.startTs, splitEnabled)
 		}
 	} else {
-		spanController.AddNewSpans(table.SchemaID, holes, c.startCheckpointTs, splitEnabled)
+		spanController.AddNewSpans(table.SchemaID, holes, c.startTs, splitEnabled)
 	}
 }
 
@@ -282,9 +282,9 @@ func (c *Controller) initializeComponents(
 ) {
 	// Initialize barrier
 	if c.enableRedo {
-		c.redoBarrier = NewBarrier(c.redoSpanController, c.redoOperatorController, util.GetOrZero(c.cfConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.RedoMode)
+		c.redoBarrier = NewBarrier(c.redoSpanController, c.redoOperatorController, util.GetOrZero(c.replicaConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.RedoMode)
 	}
-	c.barrier = NewBarrier(c.spanController, c.operatorController, util.GetOrZero(c.cfConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.DefaultMode)
+	c.barrier = NewBarrier(c.spanController, c.operatorController, util.GetOrZero(c.replicaConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.DefaultMode)
 
 	// Start scheduler
 	c.taskHandlesMu.Lock()
@@ -329,7 +329,7 @@ func (c *Controller) createSpanReplication(spanInfo *heartbeatpb.BootstrapTableS
 
 func (c *Controller) loadTables(startTs uint64) ([]commonEvent.Table, error) {
 	// Use a empty timezone because table filter does not need it.
-	f, err := filter.NewFilter(c.cfConfig.Filter, "", util.GetOrZero(c.cfConfig.CaseSensitive), util.GetOrZero(c.cfConfig.ForceReplicate))
+	f, err := filter.NewFilter(c.replicaConfig.Filter, "", util.GetOrZero(c.replicaConfig.CaseSensitive), util.GetOrZero(c.replicaConfig.ForceReplicate))
 	if err != nil {
 		return nil, errors.Cause(err)
 	}

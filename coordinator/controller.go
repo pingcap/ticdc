@@ -166,7 +166,6 @@ func NewController(
 		},
 	)
 
-	// init bootstrapper nodes
 	nodes := c.nodeManager.GetAliveNodes()
 	log.Info("coordinator bootstrap initial nodes",
 		zap.Int("nodeNum", len(nodes)),
@@ -502,7 +501,7 @@ func (c *Controller) updateChangefeedStatus(
 // And construct all changefeeds state in memory.
 func (c *Controller) finishBootstrap(runningChangefeeds map[common.ChangeFeedID]remoteMaintainer) {
 	if c.bootstrapped.Load() {
-		log.Info("coordinator already bootstrapped, should be caused by new node join the cluster",
+		log.Info("coordinator already bootstrapped, may a new node join the cluster",
 			zap.Any("nodeID", c.selfNode.ID),
 			zap.Any("changefeeds", runningChangefeeds))
 		return
