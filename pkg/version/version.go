@@ -27,11 +27,8 @@ var (
 	ReleaseVersion = "None"
 	BuildTS        = "None"
 	GitHash        = "None"
-	// GitTag is the closest Git tag to the current commit.
-	// It is set at build time to help identify the exact binary in observability systems.
-	GitTag    = "None"
-	GitBranch = "None"
-	GoVersion = "None"
+	GitBranch      = "None"
+	GoVersion      = "None"
 )
 
 // ReleaseSemver returns a valid Semantic Versions or an empty if the
@@ -50,7 +47,6 @@ func LogVersionInfo(app string) {
 	log.Info("Welcome to "+app,
 		zap.String("release-version", ReleaseVersion),
 		zap.String("git-hash", GitHash),
-		zap.String("git-tag", GitTag),
 		zap.String("git-branch", GitBranch),
 		zap.String("utc-build-time", BuildTS),
 		zap.String("go-version", GoVersion),
@@ -64,7 +60,6 @@ func GetRawInfo() string {
 	var info string
 	info += fmt.Sprintf("Release Version: %s\n", ReleaseVersion)
 	info += fmt.Sprintf("Git Commit Hash: %s\n", GitHash)
-	info += fmt.Sprintf("Git Tag: %s\n", GitTag)
 	info += fmt.Sprintf("Git Branch: %s\n", GitBranch)
 	info += fmt.Sprintf("UTC Build Time: %s\n", BuildTS)
 	info += fmt.Sprintf("Go Version: %s\n", GoVersion)

@@ -3399,106 +3399,61 @@
 	            "alignLevel": null
 	          }
 	        },
-	        {
-	          "aliasColors": {},
-	          "bars": false,
-	          "dashLength": 10,
-	          "dashes": false,
-	          "datasource": "${DS_TEST-CLUSTER}",
-	          "description": "Build metadata of each TiCDC server instance. The metric value is always 1.",
-	          "fieldConfig": {
-	            "defaults": {},
-	            "overrides": []
-	          },
-	          "fill": 1,
-	          "fillGradient": 0,
-	          "gridPos": {
-	            "h": 9,
-	            "w": 12,
-	            "x": 12,
-	            "y": 31
-	          },
-	          "hiddenSeries": false,
-	          "id": 22473,
-	          "legend": {
-	            "alignAsTable": true,
-	            "avg": false,
-	            "current": true,
-	            "max": false,
-	            "min": false,
-	            "rightSide": false,
-	            "show": true,
-	            "total": false,
-	            "values": true
-	          },
-	          "lines": true,
-	          "linewidth": 1,
-	          "links": [],
-	          "nullPointMode": "null",
-	          "options": {
-	            "alertThreshold": true
-	          },
-	          "percentage": false,
-	          "pluginVersion": "7.5.17",
-	          "pointradius": 2,
-	          "points": false,
-	          "renderer": "flot",
-	          "seriesOverrides": [],
-	          "spaceLength": 10,
-	          "stack": false,
-	          "steppedLine": false,
-	          "targets": [
-	            {
-	              "expr": "ticdc_server_build_info{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"}",
-	              "format": "time_series",
-	              "hide": false,
-	              "intervalFactor": 1,
-		              "legendFormat": "{{instance}} | {{kernel_type}} | {{release_version}} | {{git_tag}} | {{git_hash}} | {{utc_build_time}}",
-		              "refId": "A"
-		            }
-		          ],
-	          "thresholds": [],
-	          "timeFrom": null,
-	          "timeRegions": [],
-	          "timeShift": null,
-	          "title": "Build Info",
-	          "tooltip": {
-	            "shared": true,
-	            "sort": 0,
-	            "value_type": "individual"
-	          },
-	          "type": "graph",
-	          "xaxis": {
-	            "buckets": null,
-	            "mode": "time",
-	            "name": null,
-	            "show": true,
-	            "values": []
-	          },
-	          "yaxes": [
-	            {
-	              "decimals": 0,
-	              "format": "none",
-	              "label": null,
-	              "logBase": 1,
-	              "max": "1",
-	              "min": "0",
-	              "show": true
-	            },
-	            {
-	              "format": "short",
-	              "label": null,
-	              "logBase": 1,
-	              "max": null,
-	              "min": null,
-	              "show": false
-	            }
-	          ],
-	          "yaxis": {
-	            "align": false,
-	            "alignLevel": null
-	          }
-	        }
+		        {
+		          "datasource": "${DS_TEST-CLUSTER}",
+		          "description": "Build metadata of each TiCDC server instance.",
+		          "fieldConfig": {
+		            "defaults": {},
+		            "overrides": []
+		          },
+		          "gridPos": {
+		            "h": 9,
+		            "w": 12,
+		            "x": 12,
+		            "y": 31
+		          },
+		          "id": 22473,
+		          "options": {
+		            "showHeader": true,
+		            "sortBy": []
+		          },
+			          "pluginVersion": "7.5.17",
+			          "transformations": [
+			            {
+			              "id": "labelsToFields",
+			              "options": {}
+			            },
+			            {
+			              "id": "organize",
+			              "options": {
+				                "excludeByName": {
+				                  "Metric": true,
+				                  "Time": true,
+				                  "Value": true,
+				                  "__name__": true
+				                },
+				                "indexByName": {
+				                  "instance": 0,
+				                  "kernel_type": 1,
+				                  "git_hash": 2,
+				                  "release_version": 3,
+				                  "utc_build_time": 4
+				                },
+				                "renameByName": {}
+				              }
+				            }
+				          ],
+			          "targets": [
+			            {
+				              "expr": "max by (instance, kernel_type, git_hash, release_version, utc_build_time) (ticdc_server_build_info{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"})",
+				              "format": "time_series",
+				              "instant": true,
+				              "refId": "A"
+				            }
+				          ],
+		          "title": "Build Info",
+		          "type": "table"
+		        }
 	      ],
 	      "title": "Server",
 	      "type": "row"

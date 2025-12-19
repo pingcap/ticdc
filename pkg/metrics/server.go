@@ -50,7 +50,7 @@ var (
 			Name:      "build_info",
 			Help:      "TiCDC build information as labels.",
 		},
-		[]string{"release_version", "git_hash", "git_tag", "utc_build_time", "kernel_type"},
+		[]string{"release_version", "git_hash", "utc_build_time", "kernel_type"},
 	)
 )
 
@@ -78,7 +78,6 @@ func initServerMetrics(registry *prometheus.Registry) {
 	buildInfo.WithLabelValues(
 		version.ReleaseVersion,
 		version.GitHash,
-		version.GitTag,
 		version.BuildTS,
 		kerneltype.Name(),
 	).Set(1)
