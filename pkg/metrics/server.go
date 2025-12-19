@@ -18,8 +18,6 @@ import (
 	"runtime"
 	"strconv"
 
-	"github.com/pingcap/ticdc/pkg/config/kerneltype"
-	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 )
@@ -43,7 +41,7 @@ var (
 
 	// buildInfo is a metric with a constant '1' value, labeled by the build metadata.
 	// It is used by dashboards to identify the exact binary running on each TiCDC server.
-	buildInfo = prometheus.NewGaugeVec(
+	BuildInfo = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "server",
@@ -73,12 +71,5 @@ func initServerMetrics(registry *prometheus.Registry) {
 		collectors.WithGoCollections(collectors.GoRuntimeMemStatsCollection | collectors.GoRuntimeMetricsCollection)))
 	registry.MustRegister(goGC)
 	registry.MustRegister(goMaxProcs)
-	registry.MustRegister(buildInfo)
-
-	buildInfo.WithLabelValues(
-		version.ReleaseVersion,
-		version.GitHash,
-		version.BuildTS,
-		kerneltype.Name(),
-	).Set(1)
+	registry.MustRegister(BuildInfo)
 }
