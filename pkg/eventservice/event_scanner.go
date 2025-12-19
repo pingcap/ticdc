@@ -482,7 +482,6 @@ func (s *session) exceedLimit(nBytes int64, batchDMLs ...*event.BatchDMLEvent) b
 		eventCount := len(batchDML.DMLEvents)
 		return (s.eventBytes + int64(eventCount)) >= s.limit.maxDMLBytes
 	}
-
 	return (s.eventBytes + nBytes) >= s.limit.maxDMLBytes
 }
 
