@@ -509,7 +509,7 @@ func (c *Controller) finishBootstrap(runningChangefeeds map[common.ChangeFeedID]
 	// load all changefeeds from metastore, and check if the changefeed is already in workingMap
 	allChangefeeds, err := c.backend.GetAllChangefeeds(context.Background())
 	if err != nil {
-		log.Panic("load all changefeeds failed", zap.Any("nodeID", c.selfNode.ID), zap.Error(err))
+		log.Panic("load all changefeeds failed", zap.Error(err))
 	}
 
 	// Register keyspace
