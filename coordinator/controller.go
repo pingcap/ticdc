@@ -68,7 +68,8 @@ type Controller struct {
 	backend            changefeed.Backend
 	eventCh            *chann.DrainableChann[*Event]
 
-	// bootstrapped is set to true after get in touch with all other nodes' maintainer manager.
+	// bootstrapped set to true after initialize all necessary resources,
+	// it's not affected by new node join the cluster.
 	bootstrapped *atomic.Bool
 	bootstrapper *bootstrap.Bootstrapper[heartbeatpb.CoordinatorBootstrapResponse]
 
