@@ -111,7 +111,7 @@ func (rd *RedoDispatcher) UpdateMeta(checkpointTs, resolvedTs common.Ts) {
 	if !rd.IsTableTriggerEventDispatcher() {
 		log.Error("UpdateMeta should be called by redo table trigger event dispatcher", zap.Any("id", rd.GetId()))
 	}
-	if rd.redoMeta.Running() {
+	if rd.redoMeta != nil && rd.redoMeta.Running() {
 		log.Debug("update redo meta", zap.Uint64("resolvedTs", resolvedTs), zap.Uint64("checkpointTs", checkpointTs))
 		rd.redoMeta.UpdateMeta(checkpointTs, resolvedTs)
 	}

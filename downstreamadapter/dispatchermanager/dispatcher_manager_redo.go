@@ -227,7 +227,10 @@ func (e *DispatcherManager) cleanRedoDispatcher(id common.DispatcherID, schemaID
 
 func (e *DispatcherManager) closeRedoMeta(removeChangefeed bool) {
 	if removeChangefeed {
-		e.redoTableTriggerEventDispatcher.GetRedoMeta().Cleanup(context.Background())
+		redoMeta := e.redoTableTriggerEventDispatcher.GetRedoMeta()
+		if redoMeta != nil {
+			redoMeta.Cleanup(context.Background())
+		}
 	}
 }
 
