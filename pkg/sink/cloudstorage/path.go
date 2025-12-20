@@ -41,9 +41,9 @@ import (
 
 const (
 	// 3 is the length of "CDC", and the file number contains
-	// at least 6 digits (e.g. CDC-xxx-000001.csv).
+	// at least 6 digits (e.g. CDC000001.csv).
 	minFileNamePrefixLen                 = 3 + config.MinFileIndexWidth
-	defaultTableAcrossNodesIndexFileName = "meta/CDC-%s.index"
+	defaultTableAcrossNodesIndexFileName = "meta/CDC_%s.index"
 	defaultIndexFileName                 = "meta/CDC.index"
 
 	// The following constants are used to generate file paths.
@@ -114,7 +114,7 @@ func generateSchemaFilePath(
 func generateDataFileName(enableTableAcrossNodes bool, dispatcherID string, index uint64, extension string, fileIndexWidth int) string {
 	indexFmt := "%0" + strconv.Itoa(fileIndexWidth) + "d"
 	if enableTableAcrossNodes {
-		return fmt.Sprintf("CDC-%s-"+indexFmt+"%s", dispatcherID, index, extension)
+		return fmt.Sprintf("CDC_%s_"+indexFmt+"%s", dispatcherID, index, extension)
 	}
 	return fmt.Sprintf("CDC"+indexFmt+"%s", index, extension)
 }
@@ -308,9 +308,9 @@ func (f *FilePathGenerator) GenerateDateStr() string {
 // GenerateIndexFilePath generates a canonical path for index file.
 func (f *FilePathGenerator) GenerateIndexFilePath(tbl VersionedTableName, date string) string {
 	dir := f.generateDataDirPath(tbl, date)
-	name := fmt.Sprintf(defaultTableAcrossNodesIndexFileName, tbl.DispatcherID.String())
-	if !f.config.EnableTableAcrossNodes {
-		name = defaultIndexFileName
+	name := defaultIndexFileName
+	if f.config.EnableTableAcrossNodes {
+		name = fmt.Sprintf(defaultTableAcrossNodesIndexFileName, tbl.DispatcherID.String())
 	}
 	return path.Join(dir, name)
 }

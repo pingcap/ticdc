@@ -210,7 +210,6 @@ func (c *consumer) getNewFiles(
 	}
 
 	tableDMLMap = diffDMLMaps(c.tableDMLIdxMap, origDMLIdxMap)
-	log.Debug("get tableDMLMap", zap.Any("tableDMLMap", tableDMLMap))
 	return tableDMLMap, err
 }
 
@@ -474,7 +473,6 @@ func (c *consumer) handleNewFiles(
 ) error {
 	keys := make([]cloudstorage.DmlPathKey, 0, len(dmlFileMap))
 	for k := range dmlFileMap {
-		log.Debug("append key", zap.Any("key", k))
 		keys = append(keys, k)
 	}
 	if len(keys) == 0 {
@@ -515,7 +513,6 @@ func (c *consumer) handleNewFiles(
 			continue
 		}
 
-		log.Debug("read key", zap.Any("key", key))
 		fileRange := dmlFileMap[key]
 		for i := fileRange.start; i <= fileRange.end; i++ {
 			if err := c.syncExecDMLEvents(ctx, tableDef, key, i); err != nil {

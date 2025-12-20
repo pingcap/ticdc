@@ -102,7 +102,7 @@ func (d *DmlPathKey) GenerateDMLFilePath(
 // DML file path pattern is as follows:
 // {schema}/{table}/{table-version-separator}/{partition-separator}/{date-separator}/, where
 // partition-separator and date-separator could be empty.
-// DML file name pattern is as follows: CDC-{dispatcher}-{num}.extension or CDC{num}.extension
+// DML file name pattern is as follows: CDC_{dispatcherID}_{num}.extension or CDC{num}.extension
 func (d *DmlPathKey) ParseDMLFilePath(dateSeparator, path string) (uint64, error) {
 	var partitionNum int64
 
@@ -119,8 +119,8 @@ func (d *DmlPathKey) ParseDMLFilePath(dateSeparator, path string) (uint64, error
 	}
 	matchesLen := 8
 	matchesFileIdx := 7
-	// CDC[-{dispatcher}-]{num}.extension
-	str += `CDC(?:-(\w+)-)?(\d+).\w+`
+	// CDC[_{dispatcherID}_]{num}.extension
+	str += `CDC(?:_(\w+)_)?(\d+).\w+`
 	pathRE, err := regexp.Compile(str)
 	if err != nil {
 		return 0, err
