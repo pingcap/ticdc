@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"go.uber.org/zap"
 )
 
@@ -110,11 +111,14 @@ func (rd *RedoDispatcher) SetRedoMeta(cfg *config.ConsistentConfig) {
 // The event dispatcher does not advance until the resolved-ts exceeds the event's commit-ts.
 // only for redo table trigger event dispatcher.
 func (rd *RedoDispatcher) UpdateMeta(checkpointTs, resolvedTs common.Ts) {
-	if !rd.IsTableTriggerEventDispatcher() {
-		log.Error("UpdateMeta should be called by redo table trigger event dispatcher", zap.Any("id", rd.GetId()))
-	}
 	if rd.redoMeta.Running() {
 		log.Debug("update redo meta", zap.Uint64("resolvedTs", resolvedTs), zap.Uint64("checkpointTs", checkpointTs))
 		rd.redoMeta.UpdateMeta(checkpointTs, resolvedTs)
 	}
+}
+
+// GetFlushedMeta return redo flushed meta
+// only for redo table trigger event dispatcher
+func (rd *RedoDispatcher) GetFlushedMeta() misc.LogMeta {
+	return rd.redoMeta.GetFlushedMeta()
 }

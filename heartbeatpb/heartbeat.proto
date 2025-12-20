@@ -69,10 +69,26 @@ message CheckpointTsMessage {
     uint64 checkpointTs = 2;
 }
 
-message RedoMessage {
+// RedoMetaMessage used to send unflushed ts to update redo meta 
+// from maintainer to dispatcher manager
+message RedoMetaMessage {
     ChangefeedID changefeedID = 1;
     uint64 resolvedTs = 2;
     uint64 checkpointTs = 3;
+}
+
+// RedoResolvedTsProgressMessage used to send redo meta flushed resolvedTs 
+// from dispatcher manager to maintainer
+message RedoResolvedTsProgressMessage {
+    ChangefeedID changefeedID = 1;
+    uint64 resolvedTs = 2;
+}
+
+// RedoResolvedTsForwardMessage used to send redoGlobalTs (redo meta flushed resolvedTs) 
+// from maintainer to dispatcher manager
+message RedoResolvedTsForwardMessage {
+    ChangefeedID changefeedID = 1;
+    uint64 resolvedTs = 2;
 }
 
 enum ScheduleAction {
