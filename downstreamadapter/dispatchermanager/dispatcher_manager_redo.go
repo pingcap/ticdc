@@ -15,6 +15,7 @@ package dispatchermanager
 
 import (
 	"context"
+	"math"
 	"time"
 
 	"github.com/pingcap/log"
@@ -26,6 +27,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	pkgRedo "github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -98,6 +100,12 @@ func (e *DispatcherManager) NewRedoTableTriggerEventDispatcher(id *heartbeatpb.D
 	// redo meta should keep the same node with table trigger event dispatcher
 	// table trigger event dispatcher and redo table trigger event dispatcher must exist on the same node
 	e.redoTableTriggerEventDispatcher.SetRedoMeta(e.config.Consistent)
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		err := e.collectRedoMeta(e.ctx)
+		e.handleError(e.ctx, err)
+	}()
 	log.Info("redo table trigger event dispatcher created",
 		zap.Stringer("changefeedID", e.changefeedID),
 		zap.Stringer("dispatcherID", e.redoTableTriggerEventDispatcher.GetId()),
@@ -125,6 +133,20 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 	newStartTsList, _, _, err := e.getTableRecoveryInfoFromMysqlSink(tableIds, startTsList, removeDDLTs)
 	if err != nil {
 		return errors.Trace(err)
+	}
+
+	if e.latestRedoWatermark.Get().CheckpointTs == 0 {
+		// If the checkpointTs is 0, means there is no dispatchers before. So we need to init it with the smallest startTs of these dispatchers
+		smallestStartTs := int64(math.MaxInt64)
+		for _, startTs := range newStartTsList {
+			if startTs < smallestStartTs {
+				smallestStartTs = startTs
+			}
+		}
+		e.latestRedoWatermark.Set(&heartbeatpb.Watermark{
+			CheckpointTs: uint64(smallestStartTs),
+			ResolvedTs:   uint64(smallestStartTs),
+		})
 	}
 
 	for idx, id := range dispatcherIds {
@@ -246,12 +268,52 @@ func (e *DispatcherManager) InitalizeRedoTableTriggerEventDispatcher(schemaInfo 
 	return nil
 }
 
-func (e *DispatcherManager) SetGlobalRedoTs(checkpointTs, resolvedTs uint64) bool {
+func (e *DispatcherManager) UpdateRedoMeta(checkpointTs, resolvedTs uint64) {
 	// only update meta on the one node
 	if e.redoTableTriggerEventDispatcher != nil {
 		e.redoTableTriggerEventDispatcher.UpdateMeta(checkpointTs, resolvedTs)
+		return
 	}
+	log.Error("should not reach here. only update redo meta on the redoTableTriggerEventDispatcher")
+}
+
+func (e *DispatcherManager) SetRedoResolvedTs(resolvedTs uint64) bool {
 	return util.CompareAndMonotonicIncrease(&e.redoGlobalTs, resolvedTs)
+}
+
+func (e *DispatcherManager) collectRedoMeta(ctx context.Context) error {
+	ticker := time.NewTicker(time.Duration(*e.config.Consistent.FlushIntervalInMs))
+	defer ticker.Stop()
+	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
+	var preResolvedTs uint64
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if e.redoTableTriggerEventDispatcher == nil {
+				log.Error("should not reach here. only collect redo meta on the redoTableTriggerEventDispatcher")
+				continue
+			}
+			logMeta := e.redoTableTriggerEventDispatcher.GetFlushedMeta()
+			if preResolvedTs >= logMeta.ResolvedTs {
+				continue
+			}
+			err := mc.SendCommand(
+				messaging.NewSingleTargetMessage(
+					e.GetMaintainerID(),
+					messaging.MaintainerManagerTopic,
+					&heartbeatpb.RedoResolvedTsProgressMessage{
+						ChangefeedID: e.changefeedID.ToPB(),
+						ResolvedTs:   logMeta.ResolvedTs,
+					},
+				))
+			if err != nil {
+				log.Error("failed to send redo request message", zap.Error(err))
+			}
+			preResolvedTs = logMeta.ResolvedTs
+		}
+	}
 }
 
 func (e *DispatcherManager) GetRedoDispatcherMap() *DispatcherMap[*dispatcher.RedoDispatcher] {

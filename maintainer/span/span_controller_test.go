@@ -40,7 +40,7 @@ func TestNewController(t *testing.T) {
 			CheckpointTs:    1,
 		}, "node1", false)
 	appcontext.SetService(watcher.NodeManagerName, watcher.NewNodeManager(nil, nil))
-	controller := NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	controller := NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	require.NotNil(t, controller)
 	require.Equal(t, cfID, controller.changefeedID)
 	require.False(t, controller.enableTableAcrossNodes)
@@ -61,6 +61,7 @@ func TestController_AddNewTable(t *testing.T) {
 		changefeedID,
 		ddlSpan,
 		nil, // splitter
+		nil,
 		nil,
 		common.DefaultKeyspaceID,
 		common.DefaultMode,
@@ -98,6 +99,7 @@ func TestController_GetTaskByID(t *testing.T) {
 		changefeedID,
 		ddlSpan,
 		nil, // splitter
+		nil,
 		nil,
 		common.DefaultKeyspaceID,
 		common.DefaultMode,
@@ -153,6 +155,7 @@ func TestController_GetTasksByTableID(t *testing.T) {
 		ddlSpan,
 		nil, // splitter
 		nil,
+		nil,
 		common.DefaultKeyspaceID,
 		common.DefaultMode,
 	)
@@ -189,6 +192,7 @@ func TestController_GetTasksBySchemaID(t *testing.T) {
 		changefeedID,
 		ddlSpan,
 		nil, // splitter
+		nil,
 		nil,
 		common.DefaultKeyspaceID,
 		common.DefaultMode,
@@ -231,6 +235,7 @@ func TestController_UpdateSchemaID(t *testing.T) {
 		ddlSpan,
 		nil, // splitter
 		nil,
+		nil,
 		common.DefaultKeyspaceID,
 		common.DefaultMode,
 	)
@@ -272,6 +277,7 @@ func TestController_Statistics(t *testing.T) {
 		changefeedID,
 		ddlSpan,
 		nil, // splitter
+		nil,
 		nil,
 		common.DefaultKeyspaceID,
 		common.DefaultMode,
@@ -433,6 +439,7 @@ func newControllerWithCheckerForTest(t *testing.T) *Controller {
 		ddlSpan,
 		nil,
 		&config.ChangefeedSchedulerConfig{EnableTableAcrossNodes: util.AddressOf(true)},
+		nil,
 		common.DefaultKeyspaceID,
 		common.DefaultMode,
 	)
