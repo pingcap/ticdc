@@ -513,6 +513,7 @@ func (c *consumer) handleNewFiles(
 			continue
 		}
 
+		// flush when last dml events
 		fileRange := dmlFileMap[key]
 		for i := fileRange.start; i <= fileRange.end; i++ {
 			if err := c.syncExecDMLEvents(ctx, tableDef, key, i); err != nil {
