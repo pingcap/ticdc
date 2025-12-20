@@ -81,9 +81,10 @@ func TestDmlPathKey(t *testing.T) {
 					Table:        "table1",
 					TableVersion: 123456,
 				},
-				PartitionNum: 0,
-				Date:         "2023-05-09",
-				DispatcherID: dispatcherID.String(),
+				PartitionNum:           0,
+				Date:                   "2023-05-09",
+				DispatcherID:           dispatcherID.String(),
+				EnableTableAcrossNodes: true,
 			},
 		},
 	}

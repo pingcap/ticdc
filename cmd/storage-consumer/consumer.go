@@ -66,8 +66,7 @@ type consumer struct {
 	tableIDGenerator *fakeTableIDGenerator
 	errCh            chan error
 
-	dmlCount               atomic.Int64
-	enableTableAcrossNodes bool
+	dmlCount atomic.Int64
 }
 
 func newConsumer(ctx context.Context) (*consumer, error) {
@@ -149,7 +148,6 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 		tableIDGenerator: &fakeTableIDGenerator{
 			tableIDs: make(map[string]int64),
 		},
-		enableTableAcrossNodes: putil.GetOrZero(replicaConfig.Scheduler.EnableTableAcrossNodes),
 	}, nil
 }
 
@@ -216,7 +214,7 @@ func (c *consumer) getNewFiles(
 	return tableDMLMap, err
 }
 
-func (c *consumer) appendRow2Group(dml *event.DMLEvent) {
+func (c *consumer) appendRow2Group(dml *event.DMLEvent, enableTableAcrossNodes bool) {
 	var (
 		tableID  = dml.GetTableID()
 		schema   = dml.TableInfo.GetSchemaName()
@@ -236,7 +234,7 @@ func (c *consumer) appendRow2Group(dml *event.DMLEvent) {
 			zap.Stringer("eventType", dml.RowTypes[0]))
 		return
 	}
-	if c.enableTableAcrossNodes {
+	if enableTableAcrossNodes {
 		log.Warn("DML events fallback, but enableTableAcrossNodes is true, still append it",
 			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
@@ -303,7 +301,7 @@ func (c *consumer) emitDMLEvents(
 			log.Debug("next dml event", zap.Any("commitTs", row.CommitTs), zap.Any("tableName", tableInfo.TableName.String()), zap.Any("tableID", tableID))
 
 			row.PhysicalTableID = tableID
-			c.appendRow2Group(row)
+			c.appendRow2Group(row, pathKey.EnableTableAcrossNodes)
 			filteredCnt++
 		}
 	}
@@ -323,7 +321,7 @@ func (c *consumer) syncExecDMLEvents(
 	fileIdx uint64,
 ) error {
 	filePath := key.GenerateDMLFilePath(fileIdx, c.fileExtension, fileIndexWidth)
-	log.Debug("read from dml file path", zap.String("path", filePath), zap.Any("f", key.EnableTableAcrossNodes), zap.Any("p", key.DispatcherID))
+	log.Debug("read from dml file path", zap.String("path", filePath))
 	content, err := c.externalStorage.ReadFile(ctx, filePath)
 	if err != nil {
 		return errors.Trace(err)
