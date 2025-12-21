@@ -18,13 +18,69 @@ import (
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/cdcpb"
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/tikv"
+	"go.uber.org/zap"
 )
+
+func TestGetEventSize(t *testing.T) {
+	option := dynstream.NewOption()
+	option.EnableMemoryControl = true
+	ds := dynstream.NewParallelDynamicStream(&regionEventHandler{}, option)
+	ds.Start()
+	span := heartbeatpb.TableSpan{
+		TableID:  100,
+		StartKey: common.ToComparableKey([]byte{}), // TODO: remove spanz dependency
+		EndKey:   common.ToComparableKey(common.UpperBoundKey),
+	}
+	subID := SubscriptionID(999)
+	eventCh := make(chan common.RawKVEntry, 1000)
+	consumeKVEvents := func(events []common.RawKVEntry, _ func()) bool {
+		for _, e := range events {
+			eventCh <- e
+		}
+		return false
+	}
+	advanceResolvedTs := func(ts uint64) {
+		// not used
+	}
+	subSpan := &subscribedSpan{
+		subID:             subID,
+		span:              span,
+		startTs:           1000, // not used
+		consumeKVEvents:   consumeKVEvents,
+		advanceResolvedTs: advanceResolvedTs,
+		advanceInterval:   0,
+	}
+	ds.AddPath(subID, subSpan, dynstream.AreaSettings{})
+
+	worker := &regionRequestWorker{
+		requestCache: &requestCache{},
+	}
+	region := newRegionInfo(
+		tikv.RegionVerID{},
+		span,
+		&tikv.RPCContext{},
+		subSpan,
+		false,
+	)
+	region.lockedRangeState = &regionlock.LockedRangeState{}
+	state := newRegionFeedState(region, 1, worker)
+	state.start()
+
+	regionEvent := regionEvent{
+		state:      state,
+		resolvedTs: 100,
+	}
+	log.Info("event size", zap.Int("size", regionEvent.getSize()))
+	ds.Push(subID, regionEvent)
+	require.Equal(t, 320, regionEvent.getSize())
+}
 
 // For UPDATE SQL, its prewrite event has both value and old value.
 // It is possible that TiDB prewrites multiple times for the same row when

@@ -23,6 +23,7 @@ import (
 
 	"github.com/pingcap/log"
 	. "github.com/pingcap/ticdc/pkg/errors"
+	"go.uber.org/zap"
 )
 
 // Use a hasher to select target stream for the path.
@@ -133,6 +134,14 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Push(path P, e T) {
 		timestamp: s.handler.GetTimestamp(e),
 		queueTime: time.Now(),
 	}
+	log.Info("push event to path",
+		zap.Any("area", pi.area),
+		zap.Any("path", path),
+		zap.Int64("extraSize", int64(s.eventExtraSize)),
+		zap.Int("eventRawSize", s.handler.GetSize(e)),
+		zap.Int64("eventSize", int64(ew.eventSize)),
+		zap.Int64("pathPendingSize", pi.pendingSize.Load()),
+	)
 
 	// Only release the read lock after we've finished accessing pathInfo
 	pi.stream.addEvent(ew)
