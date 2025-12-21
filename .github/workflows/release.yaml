@@ -57,19 +57,5 @@ jobs:
           \`\`\`bash
           # Pull the latest release
           docker pull pingcap/ticdc:$VERSION
-
-          # Run TiCDC container
-          docker run -d --name ticdc \\
-            -p 8300:8300 \\
-            pingcap/ticdc:$VERSION \\
-            server --pd=http://pd-server:2379
-          \`\`\`
-
-          ### 🔗 Quick Start
-          After downloading, extract the archive and run:
-          \`\`\`bash
-          tar -xzf cdc-$VERSION-linux-amd64.tar.gz
-          cd cdc-$VERSION
-          ./cdc server --pd=http://pd-server:2379
           \`\`\`"
           gh release create "$VERSION" --verify-tag -t "$TITLE" -n "$NOTE"
