@@ -121,7 +121,14 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 }
 
 func (h *regionEventHandler) GetSize(event regionEvent) int {
-	return event.getSize()
+	size := event.getSize()
+	log.Info("get region event size",
+		zap.Uint64("regionID", event.state.getRegionID()),
+		zap.Any("type", h.GetType(event)),
+		zap.Uint64("requestID", event.state.requestID),
+		zap.Uint64("workerID", event.worker.workerID),
+		zap.Int("eventSize", size))
+	return size
 }
 
 func (h *regionEventHandler) GetArea(path SubscriptionID, dest *subscribedSpan) int {
