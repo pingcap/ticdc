@@ -140,6 +140,16 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 		}
 	})
 
+	log.Info("append event to path",
+		zap.Any("area", as.area),
+		zap.Any("path", path.path),
+		zap.Int64("eventSize", int64(event.eventSize)),
+		zap.Int64("pathPendingSize", path.pendingSize.Load()),
+		zap.Int64("totalPendingSize", as.totalPendingSize.Load()),
+		zap.Float64("memoryUsageRatio", as.memoryUsageRatio()),
+		zap.String("component", as.settings.Load().component),
+	)
+
 	// Add the event to the pending queue.
 	path.pendingQueue.PushBack(event)
 	// Update the pending size.
