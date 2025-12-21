@@ -92,10 +92,3 @@ func (g *EventsGroup) Resolve(resolve uint64) []*commonEvent.DMLEvent {
 	}
 	return result
 }
-
-// GetAllEvents will get all events.
-func (g *EventsGroup) GetAllEvents() []*commonEvent.DMLEvent {
-	result := g.events
-	g.events = nil
-	return result
-}

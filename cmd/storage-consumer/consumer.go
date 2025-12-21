@@ -42,7 +42,7 @@ import (
 
 const (
 	defaultChangefeedName         = "storage-consumer"
-	defaultLogInterval            = 5 * time.Second
+	defaultLogInterval            = time.Minute
 	fakePartitionNumForSchemaFile = -1
 )
 
@@ -313,7 +313,7 @@ func (c *consumer) emitDMLEvents(
 	return err
 }
 
-func (c *consumer) syncExecDMLEvents(
+func (c *consumer) appendDMLEvents(
 	ctx context.Context,
 	tableDef cloudstorage.TableDefinition,
 	key cloudstorage.DmlPathKey,
@@ -327,12 +327,14 @@ func (c *consumer) syncExecDMLEvents(
 	}
 	tableID := c.tableIDGenerator.generateFakeTableID(
 		key.Schema, key.Table, key.PartitionNum)
-	err = c.emitDMLEvents(ctx, tableID, tableDef, key, content)
-	if err != nil {
-		return errors.Trace(err)
-	}
+	return c.emitDMLEvents(ctx, tableID, tableDef, key, content)
+}
 
-	events := c.eventsGroup[tableID].GetAllEvents()
+func (c *consumer) flushDMLEvents(ctx context.Context, ts uint64) error {
+	events := make([]*event.DMLEvent, 0)
+	for _, group := range c.eventsGroup {
+		events = append(events, group.Resolve(ts)...)
+	}
 	total := len(events)
 	if total == 0 {
 		return nil
@@ -505,6 +507,9 @@ func (c *consumer) handleNewFiles(
 			if err != nil {
 				return err
 			}
+			if err := c.flushDMLEvents(ctx, ddlEvent.GetCommitTs()); err != nil {
+				return errors.Trace(err)
+			}
 			if err := c.sink.WriteBlockEvent(ddlEvent); err != nil {
 				return errors.Trace(err)
 			}
@@ -513,16 +518,18 @@ func (c *consumer) handleNewFiles(
 			continue
 		}
 
-		// flush when last dml events
 		fileRange := dmlFileMap[key]
 		for i := fileRange.start; i <= fileRange.end; i++ {
-			if err := c.syncExecDMLEvents(ctx, tableDef, key, i); err != nil {
+			if err := c.appendDMLEvents(ctx, tableDef, key, i); err != nil {
 				return err
 			}
 		}
 	}
-
-	return nil
+	watermark, err := c.getWatermark(ctx)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	return c.flushDMLEvents(ctx, watermark)
 }
 
 func (c *consumer) handle(ctx context.Context) error {
@@ -555,6 +562,22 @@ func (c *consumer) handle(ctx context.Context) error {
 			return errors.Trace(err)
 		}
 	}
+}
+
+func (c *consumer) getWatermark(ctx context.Context) (uint64, error) {
+	if exist, err := c.externalStorage.FileExists(ctx, "metadata"); err != nil || !exist {
+		return 0, err
+	}
+	content, err := c.externalStorage.ReadFile(ctx, "metadata")
+	if err != nil {
+		return 0, err
+	}
+	var res map[string]uint64
+	err = json.Unmarshal(content, &res)
+	if err != nil {
+		return 0, err
+	}
+	return res["checkpoint-ts"], nil
 }
 
 func (c *consumer) run(ctx context.Context) error {
