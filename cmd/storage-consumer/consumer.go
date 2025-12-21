@@ -479,7 +479,11 @@ func (c *consumer) handleNewFiles(
 	}
 	if len(keys) == 0 {
 		log.Info("no new dml files found since last round")
-		return nil
+		watermark, err := c.getWatermark(ctx)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		return c.flushDMLEvents(ctx, watermark)
 	}
 	sort.Slice(keys, func(i, j int) bool {
 		if keys[i].TableVersion != keys[j].TableVersion {
