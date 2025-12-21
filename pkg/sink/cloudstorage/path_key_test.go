@@ -74,7 +74,7 @@ func TestDmlPathKey(t *testing.T) {
 			index:          10,
 			fileIndexWidth: 20,
 			extension:      ".csv",
-			path:           fmt.Sprintf("schema1/table1/123456/2023-05-09/CDC-%s-00000000000000000010.csv", dispatcherID.String()),
+			path:           fmt.Sprintf("schema1/table1/123456/2023-05-09/CDC_%s_00000000000000000010.csv", dispatcherID.String()),
 			dmlkey: DmlPathKey{
 				SchemaPathKey: SchemaPathKey{
 					Schema:       "schema1",
