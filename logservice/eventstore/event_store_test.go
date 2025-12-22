@@ -740,7 +740,8 @@ func TestWriteToEventStore(t *testing.T) {
 	require.NoError(t, err)
 	defer encoder.Close()
 
-	err = store.writeEvents(store.dbs[0], events, encoder)
+	var compressionBuf []byte
+	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf)
 	require.NoError(t, err)
 
 	// Read events back and verify.
@@ -791,6 +792,86 @@ func TestWriteToEventStore(t *testing.T) {
 	require.True(t, foundLarge, "large value entry not found")
 }
 
+func TestEventStoreCompressionAndIterDecodeBufferReuse(t *testing.T) {
+	dir := t.TempDir()
+	_, storeInt := newEventStoreForTest(dir)
+	store := storeInt.(*eventStore)
+	defer store.Close(context.Background())
+
+	const kvCount = 7
+	kvs := make([]common.RawKVEntry, 0, kvCount)
+	expectedValues := make(map[string][]byte, kvCount)
+	for i := 0; i < kvCount; i++ {
+		key := fmt.Sprintf("compression-key-%d", i)
+		value := bytes.Repeat([]byte{byte('a' + i)}, store.compressionThreshold+16)
+		entry := common.RawKVEntry{
+			OpType:  common.OpTypePut,
+			StartTs: 100 + uint64(i),
+			CRTs:    200 + uint64(i),
+			Key:     []byte(key),
+			Value:   value,
+		}
+		kvs = append(kvs, entry)
+		expectedValues[key] = append([]byte(nil), value...)
+	}
+	events := []eventWithCallback{{
+		subID:    1,
+		tableID:  1,
+		kvs:      kvs,
+		callback: func() {},
+	}}
+
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	defer encoder.Close()
+	var compressionBuf []byte
+	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf)
+	require.NoError(t, err)
+
+	innerIter, err := store.dbs[0].NewIter(&pebble.IterOptions{})
+	require.NoError(t, err)
+	decoder := store.decoderPool.Get().(*zstd.Decoder)
+	iter := &eventStoreIter{
+		tableSpan: &heartbeatpb.TableSpan{
+			TableID:  1,
+			StartKey: []byte{},
+			EndKey:   []byte{0xFF},
+		},
+		needCheckSpan: false,
+		innerIter:     innerIter,
+		decoder:       decoder,
+		decoderPool:   store.decoderPool,
+	}
+	require.True(t, iter.innerIter.First())
+
+	type readRecord struct {
+		entry    *common.RawKVEntry
+		expected []byte
+	}
+	records := make(map[string]readRecord)
+	for {
+		raw, ok := iter.Next()
+		if !ok {
+			break
+		}
+		for key, rec := range records {
+			require.Equal(t, rec.expected, rec.entry.Value, "value mutated for %s", key)
+		}
+		keyStr := string(raw.Key)
+		expectedVal, ok := expectedValues[keyStr]
+		require.True(t, ok, "unexpected key %s", keyStr)
+		require.Equal(t, expectedVal, raw.Value)
+		records[keyStr] = readRecord{
+			entry:    raw,
+			expected: append([]byte(nil), raw.Value...),
+		}
+	}
+	require.Len(t, records, len(expectedValues))
+	rowCount, err := iter.Close()
+	require.NoError(t, err)
+	require.Equal(t, int64(len(expectedValues)), rowCount)
+}
+
 func TestEventStoreGetIteratorConcurrently(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -834,7 +915,8 @@ func TestEventStoreGetIteratorConcurrently(t *testing.T) {
 	encoder, err := zstd.NewWriter(nil)
 	require.NoError(t, err)
 	defer encoder.Close()
-	err = store.(*eventStore).writeEvents(store.(*eventStore).dbs[0], events, encoder)
+	var compressionBuf []byte
+	err = store.(*eventStore).writeEvents(store.(*eventStore).dbs[0], events, encoder, &compressionBuf)
 	require.NoError(t, err)
 
 	// 3. Advance resolved ts for the subscription.
