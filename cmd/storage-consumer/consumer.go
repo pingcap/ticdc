@@ -176,6 +176,9 @@ func diffDMLMaps(
 		for fileIndexKey, val1 := range fileIndexKeyMap1 {
 			val2 := dmlPathKey2[fileIndexKey]
 			if val1 > val2 {
+				if _, ok := resMap[dmlPathKey1]; !ok {
+					resMap[dmlPathKey1] = make(fileIndexRange)
+				}
 				resMap[dmlPathKey1][fileIndexKey] = indexRange{
 					start: val2 + 1,
 					end:   val1,
@@ -196,7 +199,11 @@ func (c *consumer) getNewFiles(
 
 	origDMLIdxMap := make(map[cloudstorage.DmlPathKey]fileIndexKeyMap, len(c.tableDMLIdxMap))
 	for k, v := range c.tableDMLIdxMap {
-		origDMLIdxMap[k] = v
+		m := make(fileIndexKeyMap)
+		for fileIndexKey, val := range v {
+			m[fileIndexKey] = val
+		}
+		origDMLIdxMap[k] = m
 	}
 
 	err := c.externalStorage.WalkDir(ctx, opt, func(path string, size int64) error {
@@ -383,7 +390,7 @@ func (c *consumer) parseDMLFilePath(_ context.Context, path string) error {
 			fileIdx.FileIndexKey: fileIdx.Idx,
 		}
 	} else if fileIdx.Idx >= m[fileIdx.FileIndexKey] {
-		m[fileIdx.FileIndexKey] = fileIdx.Idx
+		c.tableDMLIdxMap[dmlkey][fileIdx.FileIndexKey] = fileIdx.Idx
 	}
 	return nil
 }
