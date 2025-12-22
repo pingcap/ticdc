@@ -278,7 +278,7 @@ func (e *DispatcherManager) UpdateRedoMeta(checkpointTs, resolvedTs uint64) {
 		e.GetRedoTableTriggerEventDispatcher().UpdateMeta(checkpointTs, resolvedTs)
 		return
 	}
-	log.Error("should not reach here. only update redo meta on the GetRedoTableTriggerEventDispatcher()")
+	log.Error("should not reach here. only update redo meta on the redoTableTriggerEventDispatcher")
 }
 
 func (e *DispatcherManager) SetRedoResolvedTs(resolvedTs uint64) bool {
