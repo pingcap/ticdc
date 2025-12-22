@@ -339,7 +339,11 @@ func (c *consumer) appendDMLEvents(
 }
 
 func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
-	events := c.eventsGroup[tableID].GetAllEvents()
+	group := c.eventsGroup[tableID]
+	if group == nil {
+		return nil
+	}
+	events := group.GetAllEvents()
 	total := len(events)
 	if total == 0 {
 		return nil
