@@ -87,7 +87,7 @@ type DmlPathKey struct {
 
 // GenerateDMLFilePath generates the dml file path.
 func (d *DmlPathKey) GenerateDMLFilePath(
-	fileIndex FileIndex, extension string, fileIndexWidth int,
+	fileIndex *FileIndex, extension string, fileIndexWidth int,
 ) string {
 	var elems []string
 

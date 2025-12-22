@@ -476,7 +476,7 @@ func RemoveExpiredFiles(
 
 	cnt := uint64(0)
 	err := util.RemoveFilesIf(ctx, storage, func(path string) bool {
-		// the path is like: <schema>/<table>/<tableVersion>/<partitionID>/<date>/CDC-{dispatcher}-{num}.extension
+		// the path is like: <schema>/<table>/<tableVersion>/<partitionID>/<date>/CDC_{dispatcher}_{num}.extension
 		// or <schema>/<table>/<tableVersion>/<partitionID>/<date>/CDC{num}.extension
 		match := dateSeparatorDayRegexp.FindString(path)
 		if match != "" && match < expiredDate {

@@ -204,7 +204,6 @@ func TestWriteDDLEvent(t *testing.T) {
 			}
 		],
 		"TableColumnsTotal": 2
-		"BlockedTables": null,
 	}`, string(tableSchema))
 }
 

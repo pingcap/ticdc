@@ -46,10 +46,12 @@ const (
 	fakePartitionNumForSchemaFile = -1
 )
 
-type fileIndexRange map[cloudstorage.FileIndexKey]indexRange
-type fileIndexKeyMap map[cloudstorage.FileIndexKey]uint64
+type (
+	fileIndexRange  map[cloudstorage.FileIndexKey]indexRange
+	fileIndexKeyMap map[cloudstorage.FileIndexKey]uint64
+)
 
-// fileIndexRange defines a range of files. eg. CDC000002.csv ~ CDC000005.csv
+// indexRange defines a range of files. eg. CDC000002.csv ~ CDC000005.csv
 type indexRange struct {
 	start uint64
 	end   uint64
@@ -158,8 +160,7 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 func diffDMLMaps(
 	map1, map2 map[cloudstorage.DmlPathKey]fileIndexKeyMap,
 ) map[cloudstorage.DmlPathKey]fileIndexRange {
-	resMap := make(map[cloudstorage.DmlPathKey]fileIndexRange)
-	// DmlPathKey -> FileIndexKey -> indexRange
+	resMap := make(map[cloudstorage.DmlPathKey]fileIndexRange) // DmlPathKey -> FileIndexKey -> indexRange
 	for dmlPathKey1, fileIndexKeyMap1 := range map1 {
 		dmlPathKey2, ok := map2[dmlPathKey1]
 		if !ok {
@@ -267,7 +268,7 @@ func (c *consumer) appendDMLEvents(
 	tableID int64,
 	tableDetail cloudstorage.TableDefinition,
 	pathKey cloudstorage.DmlPathKey,
-	fileIdx cloudstorage.FileIndex,
+	fileIdx *cloudstorage.FileIndex,
 ) error {
 	filePath := pathKey.GenerateDMLFilePath(fileIdx, c.fileExtension, fileIndexWidth)
 	log.Debug("read from dml file path", zap.String("path", filePath))
@@ -275,9 +276,7 @@ func (c *consumer) appendDMLEvents(
 	if err != nil {
 		return errors.Trace(err)
 	}
-	var (
-		decoder common.Decoder
-	)
+	var decoder common.Decoder
 
 	tableInfo, err := tableDetail.ToTableInfo()
 	if err != nil {
@@ -517,21 +516,23 @@ func (c *consumer) handleNewFiles(
 			continue
 		}
 
+		tableID := c.tableIDGenerator.generateFakeTableID(
+			key.Schema, key.Table, key.PartitionNum)
 		fileRange := dmlFileMap[key]
 		for indexKey, indexRange := range fileRange {
-			tableID := c.tableIDGenerator.generateFakeTableID(
-				key.Schema, key.Table, key.PartitionNum)
+			enableTableAcrossNodes := indexKey.EnableTableAcrossNodes
 			for i := indexRange.start; i <= indexRange.end; i++ {
-				if err := c.appendDMLEvents(ctx, tableID, tableDef, key, cloudstorage.FileIndex{
+				if err := c.appendDMLEvents(ctx, tableID, tableDef, key, &cloudstorage.FileIndex{
 					FileIndexKey: indexKey,
 					Idx:          i,
 				}); err != nil {
 					return err
 				}
 			}
-			c.flushDMLEvents(ctx, tableID, indexKey.EnableTableAcrossNodes)
+			c.flushDMLEvents(ctx, tableID, enableTableAcrossNodes)
 		}
 	}
+
 	return nil
 }
 
