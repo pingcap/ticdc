@@ -141,9 +141,11 @@ func (c *Controller) determineStartTs(allNodesResp map[node.ID]*heartbeatpb.Main
 			status := c.spanController.GetDDLDispatcher().GetStatus()
 			status.CheckpointTs = startTs
 			c.spanController.UpdateStatus(c.spanController.GetDDLDispatcher(), status)
-			redoStatus := c.redoSpanController.GetDDLDispatcher().GetStatus()
-			redoStatus.CheckpointTs = startTs
-			c.redoSpanController.UpdateStatus(c.redoSpanController.GetDDLDispatcher(), redoStatus)
+			if c.enableRedo {
+				redoStatus := c.redoSpanController.GetDDLDispatcher().GetStatus()
+				redoStatus.CheckpointTs = startTs
+				c.redoSpanController.UpdateStatus(c.redoSpanController.GetDDLDispatcher(), redoStatus)
+			}
 		}
 	}
 	if startTs == 0 {
