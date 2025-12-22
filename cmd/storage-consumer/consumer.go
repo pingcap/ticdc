@@ -330,11 +330,45 @@ func (c *consumer) appendDMLEvents(
 	return c.emitDMLEvents(ctx, tableID, tableDef, key, content)
 }
 
-func (c *consumer) flushDMLEvents(ctx context.Context, ts uint64) error {
+func (c *consumer) flushDMLEventsByDDLEvent(ctx context.Context, ddl *event.DDLEvent) error {
+	ts := ddl.GetCommitTs()
+	events := make([]*event.DMLEvent, 0)
+
+	tableIDs := make(map[int64]struct{})
+	switch ddl.GetBlockedTables().InfluenceType {
+	case event.InfluenceTypeDB, event.InfluenceTypeAll:
+		for tableID := range c.eventsGroup {
+			tableIDs[tableID] = struct{}{}
+		}
+	case event.InfluenceTypeNormal:
+		for _, item := range ddl.GetBlockedTables().TableIDs {
+			tableIDs[item] = struct{}{}
+		}
+	default:
+		log.Panic("unsupported influence type", zap.Any("influenceType", ddl.GetBlockedTables().InfluenceType))
+	}
+
+	for tableID := range tableIDs {
+		if group, ok := c.eventsGroup[tableID]; ok {
+			events = append(events, group.Resolve(ts)...)
+		}
+	}
+	return c.flushDMLEvents(ctx, events)
+}
+
+func (c *consumer) flushDMLEventsByWatermark(ctx context.Context) error {
+	ts, err := c.getWatermark(ctx)
+	if err != nil {
+		return errors.Trace(err)
+	}
 	events := make([]*event.DMLEvent, 0)
 	for _, group := range c.eventsGroup {
 		events = append(events, group.Resolve(ts)...)
 	}
+	return c.flushDMLEvents(ctx, events)
+}
+
+func (c *consumer) flushDMLEvents(ctx context.Context, events []*event.DMLEvent) error {
 	total := len(events)
 	if total == 0 {
 		return nil
@@ -479,11 +513,7 @@ func (c *consumer) handleNewFiles(
 	}
 	if len(keys) == 0 {
 		log.Info("no new dml files found since last round")
-		watermark, err := c.getWatermark(ctx)
-		if err != nil {
-			return errors.Trace(err)
-		}
-		return c.flushDMLEvents(ctx, watermark)
+		return c.flushDMLEventsByWatermark(ctx)
 	}
 	sort.Slice(keys, func(i, j int) bool {
 		if keys[i].TableVersion != keys[j].TableVersion {
@@ -511,7 +541,7 @@ func (c *consumer) handleNewFiles(
 			if err != nil {
 				return err
 			}
-			if err := c.flushDMLEvents(ctx, ddlEvent.GetCommitTs()); err != nil {
+			if err := c.flushDMLEventsByDDLEvent(ctx, ddlEvent); err != nil {
 				return errors.Trace(err)
 			}
 			if err := c.sink.WriteBlockEvent(ddlEvent); err != nil {
@@ -529,11 +559,7 @@ func (c *consumer) handleNewFiles(
 			}
 		}
 	}
-	watermark, err := c.getWatermark(ctx)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	return c.flushDMLEvents(ctx, watermark)
+	return c.flushDMLEventsByWatermark(ctx)
 }
 
 func (c *consumer) handle(ctx context.Context) error {
