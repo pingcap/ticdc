@@ -1245,7 +1245,9 @@ func (e *eventStore) writeEvents(
 				log.Panic("failed to update pebble batch", zap.Error(err))
 			}
 			if compressionType == CompressionZSTD {
-				dstBuf = value[:0]
+				// After compression, `value` holds the compressed data which is a slice of `dstBuf`'s underlying array.
+				// We can reset `dstBuf` for the next compression.
+				dstBuf = dstBuf[:0]
 			}
 		}
 	}
