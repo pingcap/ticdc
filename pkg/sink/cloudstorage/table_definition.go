@@ -188,15 +188,14 @@ func (t *TableCol) ToTiColumnInfo(colID int64) (*timodel.ColumnInfo, error) {
 // TableDefinition is the detailed table definition used for cloud storage sink.
 // TODO: find a better name for this struct.
 type TableDefinition struct {
-	Table         string                        `json:"Table"`
-	Schema        string                        `json:"Schema"`
-	Version       uint64                        `json:"Version"`
-	TableVersion  uint64                        `json:"TableVersion"`
-	Query         string                        `json:"Query"`
-	Type          byte                          `json:"Type"`
-	Columns       []TableCol                    `json:"TableColumns"`
-	TotalColumns  int                           `json:"TableColumnsTotal"`
-	BlockedTables *commonEvent.InfluencedTables `json:"BlockedTables"`
+	Table        string     `json:"Table"`
+	Schema       string     `json:"Schema"`
+	Version      uint64     `json:"Version"`
+	TableVersion uint64     `json:"TableVersion"`
+	Query        string     `json:"Query"`
+	Type         byte       `json:"Type"`
+	Columns      []TableCol `json:"TableColumns"`
+	TotalColumns int        `json:"TableColumnsTotal"`
 }
 
 // tableDefWithoutQuery is the table definition without query, which ignores the
@@ -214,7 +213,6 @@ func (t *TableDefinition) FromDDLEvent(event *commonEvent.DDLEvent, outputColumn
 	t.FromTableInfo(event.SchemaName, event.TableName, event.TableInfo, event.FinishedTs, outputColumnID)
 	t.Query = event.Query
 	t.Type = event.Type
-	t.BlockedTables = event.BlockedTables
 }
 
 // ToDDLEvent converts from TableDefinition to DDLEvent.
@@ -230,7 +228,7 @@ func (t *TableDefinition) ToDDLEvent() (*commonEvent.DDLEvent, error) {
 		Query:         t.Query,
 		SchemaName:    t.Schema,
 		TableName:     t.Table,
-		BlockedTables: t.BlockedTables,
+		BlockedTables: &commonEvent.InfluencedTables{InfluenceType: commonEvent.InfluenceTypeAll},
 	}, nil
 }
 

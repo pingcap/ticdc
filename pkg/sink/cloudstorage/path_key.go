@@ -68,18 +68,26 @@ func (s *SchemaPathKey) ParseSchemaFilePath(path string) (uint32, error) {
 	return checksum, nil
 }
 
-// DmlPathKey is the key of dml path.
-type DmlPathKey struct {
-	SchemaPathKey
-	PartitionNum           int64
-	Date                   string
+type FileIndexKey struct {
 	DispatcherID           string
 	EnableTableAcrossNodes bool
 }
 
+type FileIndex struct {
+	FileIndexKey
+	Idx uint64
+}
+
+// DmlPathKey is the key of dml path.
+type DmlPathKey struct {
+	SchemaPathKey
+	PartitionNum int64
+	Date         string
+}
+
 // GenerateDMLFilePath generates the dml file path.
 func (d *DmlPathKey) GenerateDMLFilePath(
-	idx uint64, extension string, fileIndexWidth int,
+	fileIndex FileIndex, extension string, fileIndexWidth int,
 ) string {
 	var elems []string
 
@@ -93,7 +101,7 @@ func (d *DmlPathKey) GenerateDMLFilePath(
 	if len(d.Date) != 0 {
 		elems = append(elems, d.Date)
 	}
-	elems = append(elems, generateDataFileName(d.EnableTableAcrossNodes, d.DispatcherID, idx, extension, fileIndexWidth))
+	elems = append(elems, generateDataFileName(fileIndex.EnableTableAcrossNodes, fileIndex.DispatcherID, fileIndex.Idx, extension, fileIndexWidth))
 
 	return strings.Join(elems, "/")
 }
@@ -103,7 +111,7 @@ func (d *DmlPathKey) GenerateDMLFilePath(
 // {schema}/{table}/{table-version-separator}/{partition-separator}/{date-separator}/, where
 // partition-separator and date-separator could be empty.
 // DML file name pattern is as follows: CDC_{dispatcherID}_{num}.extension or CDC{num}.extension
-func (d *DmlPathKey) ParseDMLFilePath(dateSeparator, path string) (uint64, error) {
+func (d *DmlPathKey) ParseDMLFilePath(dateSeparator, path string) (*FileIndex, error) {
 	var partitionNum int64
 
 	str := `(\w+)\/(\w+)\/(\d+)\/(\d+)?\/*`
@@ -123,29 +131,29 @@ func (d *DmlPathKey) ParseDMLFilePath(dateSeparator, path string) (uint64, error
 	str += `CDC(?:_(\w+)_)?(\d+).\w+`
 	pathRE, err := regexp.Compile(str)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 
 	matches := pathRE.FindStringSubmatch(path)
 	if len(matches) != matchesLen {
-		return 0, fmt.Errorf("cannot match dml path pattern for %s", path)
+		return nil, fmt.Errorf("cannot match dml path pattern for %s", path)
 	}
 
 	version, err := strconv.ParseUint(matches[3], 10, 64)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 
 	if len(matches[4]) > 0 {
 		partitionNum, err = strconv.ParseInt(matches[4], 10, 64)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 	}
 
 	fileIdx, err := strconv.ParseUint(strings.TrimLeft(matches[matchesFileIdx], "0"), 10, 64)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 
 	*d = DmlPathKey{
@@ -154,11 +162,15 @@ func (d *DmlPathKey) ParseDMLFilePath(dateSeparator, path string) (uint64, error
 			Table:        matches[2],
 			TableVersion: version,
 		},
-		PartitionNum:           partitionNum,
-		Date:                   matches[5],
-		DispatcherID:           matches[6],
-		EnableTableAcrossNodes: matches[6] != "",
+		PartitionNum: partitionNum,
+		Date:         matches[5],
 	}
 
-	return fileIdx, nil
+	return &FileIndex{
+		FileIndexKey: FileIndexKey{
+			DispatcherID:           matches[6],
+			EnableTableAcrossNodes: matches[6] != "",
+		},
+		Idx: fileIdx,
+	}, nil
 }
