@@ -109,13 +109,13 @@ func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 	tableDir := path.Join(parentDir, fmt.Sprintf("%s/%s/%d", job.SchemaName, job.TableName, event.TableInfoVersion))
 	fileNames := getTableFiles(t, tableDir)
 	require.Len(t, fileNames, 2)
-	require.ElementsMatch(t, []string{fmt.Sprintf("CDC_%s_000001.csv", dispatcherID.String()), fmt.Sprintf("CDC-%s.index", dispatcherID.String())}, fileNames)
+	require.ElementsMatch(t, []string{fmt.Sprintf("CDC_%s_000001.csv", dispatcherID.String()), fmt.Sprintf("CDC_%s.index", dispatcherID.String())}, fileNames)
 
 	content, err := os.ReadFile(path.Join(tableDir, fmt.Sprintf("CDC_%s_000001.csv", dispatcherID.String())))
 	require.NoError(t, err)
 	require.Greater(t, len(content), 0)
 
-	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC-%s.index", dispatcherID.String())))
+	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC_%s.index", dispatcherID.String())))
 	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("CDC_%s_000001.csv\n", dispatcherID.String()), string(content))
 	require.Equal(t, uint64(100), atomic.LoadUint64(&cnt))
@@ -134,13 +134,13 @@ func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 	fileNames = getTableFiles(t, tableDir)
 	require.Len(t, fileNames, 3)
 	require.ElementsMatch(t, []string{
-		fmt.Sprintf("CDC_%s_000001.csv", dispatcherID.String()), fmt.Sprintf("CDC_%s_000002.csv", dispatcherID.String()), fmt.Sprintf("CDC-%s.index", dispatcherID.String()),
+		fmt.Sprintf("CDC_%s_000001.csv", dispatcherID.String()), fmt.Sprintf("CDC_%s_000002.csv", dispatcherID.String()), fmt.Sprintf("CDC_%s.index", dispatcherID.String()),
 	}, fileNames)
 	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("CDC_%s_000002.csv", dispatcherID.String())))
 	require.Nil(t, err)
 	require.Greater(t, len(content), 0)
 
-	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC-%s.index", dispatcherID.String())))
+	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC_%s.index", dispatcherID.String())))
 	require.Nil(t, err)
 	require.Equal(t, fmt.Sprintf("CDC_%s_000002.csv\n", dispatcherID.String()), string(content))
 	require.Equal(t, uint64(200), atomic.LoadUint64(&cnt))
@@ -207,12 +207,12 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	tableDir := path.Join(parentDir, fmt.Sprintf("%s/%s/%d/2023-03-08", job.SchemaName, job.TableName, event.TableInfoVersion))
 	fileNames := getTableFiles(t, tableDir)
 	require.Len(t, fileNames, 2)
-	require.ElementsMatch(t, []string{fmt.Sprintf("CDC_%s_000001.csv", dispatcherID.String()), fmt.Sprintf("CDC-%s.index", dispatcherID.String())}, fileNames)
+	require.ElementsMatch(t, []string{fmt.Sprintf("CDC_%s_000001.csv", dispatcherID.String()), fmt.Sprintf("CDC_%s.index", dispatcherID.String())}, fileNames)
 	content, err := os.ReadFile(path.Join(tableDir, fmt.Sprintf("CDC_%s_000001.csv", dispatcherID.String())))
 	require.Nil(t, err)
 	require.Greater(t, len(content), 0)
 
-	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC-%s.index", dispatcherID.String())))
+	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC_%s.index", dispatcherID.String())))
 	require.Nil(t, err)
 	require.Equal(t, fmt.Sprintf("CDC_%s_000001.csv\n", dispatcherID.String()), string(content))
 
@@ -248,12 +248,12 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 
 	fileNames = getTableFiles(t, tableDir)
 	require.Len(t, fileNames, 3)
-	require.ElementsMatch(t, []string{fmt.Sprintf("CDC_%s_000001.csv", dispatcherID.String()), fmt.Sprintf("CDC_%s_000002.csv", dispatcherID.String()), fmt.Sprintf("CDC-%s.index", dispatcherID.String())}, fileNames)
+	require.ElementsMatch(t, []string{fmt.Sprintf("CDC_%s_000001.csv", dispatcherID.String()), fmt.Sprintf("CDC_%s_000002.csv", dispatcherID.String()), fmt.Sprintf("CDC_%s.index", dispatcherID.String())}, fileNames)
 	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("CDC_%s_000002.csv", dispatcherID.String())))
 	require.NoError(t, err)
 	require.Greater(t, len(content), 0)
 
-	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC-%s.index", dispatcherID.String())))
+	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC_%s.index", dispatcherID.String())))
 	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("CDC_%s_000002.csv\n", dispatcherID.String()), string(content))
 	cancel()
@@ -295,12 +295,12 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	tableDir = path.Join(parentDir, fmt.Sprintf("test/table1/%d/2023-03-09", event.TableInfoVersion))
 	fileNames = getTableFiles(t, tableDir)
 	require.Len(t, fileNames, 2)
-	require.ElementsMatch(t, []string{fmt.Sprintf("CDC_%s_000001.csv", dispatcherID.String()), fmt.Sprintf("CDC-%s.index", dispatcherID.String())}, fileNames)
+	require.ElementsMatch(t, []string{fmt.Sprintf("CDC_%s_000001.csv", dispatcherID.String()), fmt.Sprintf("CDC_%s.index", dispatcherID.String())}, fileNames)
 	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("CDC_%s_000001.csv", dispatcherID.String())))
 	require.Nil(t, err)
 	require.Greater(t, len(content), 0)
 
-	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC-%s.index", dispatcherID.String())))
+	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC_%s.index", dispatcherID.String())))
 	require.Nil(t, err)
 	require.Equal(t, fmt.Sprintf("CDC_%s_000001.csv\n", dispatcherID.String()), string(content))
 	require.Equal(t, uint64(300), atomic.LoadUint64(&cnt))
@@ -338,12 +338,12 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 
 	fileNames = getTableFiles(t, tableDir)
 	require.Len(t, fileNames, 3)
-	require.ElementsMatch(t, []string{fmt.Sprintf("CDC_%s_000001.csv", dispatcherID.String()), fmt.Sprintf("CDC_%s_000002.csv", dispatcherID.String()), fmt.Sprintf("CDC-%s.index", dispatcherID.String())}, fileNames)
+	require.ElementsMatch(t, []string{fmt.Sprintf("CDC_%s_000001.csv", dispatcherID.String()), fmt.Sprintf("CDC_%s_000002.csv", dispatcherID.String()), fmt.Sprintf("CDC_%s.index", dispatcherID.String())}, fileNames)
 	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("CDC_%s_000002.csv", dispatcherID.String())))
 	require.NoError(t, err)
 	require.Greater(t, len(content), 0)
 
-	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC-%s.index", dispatcherID.String())))
+	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC_%s.index", dispatcherID.String())))
 	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("CDC_%s_000002.csv\n", dispatcherID.String()), string(content))
 

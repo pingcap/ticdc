@@ -124,7 +124,7 @@ func TestWriterRun(t *testing.T) {
 	// check whether files for table1 has been generated
 	fileNames := getTableFiles(t, table1Dir)
 	require.Len(t, fileNames, 2)
-	require.ElementsMatch(t, []string{fmt.Sprintf("CDC_%s_000001.json", dispatcherID.String()), fmt.Sprintf("CDC-%s.index", dispatcherID.String())}, fileNames)
+	require.ElementsMatch(t, []string{fmt.Sprintf("CDC_%s_000001.json", dispatcherID.String()), fmt.Sprintf("CDC_%s.index", dispatcherID.String())}, fileNames)
 	fragCh.CloseAndDrain()
 	cancel()
 	d.close()
