@@ -16,6 +16,7 @@ package schemastore
 import (
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
@@ -41,6 +42,7 @@ func VerifyTables(f filter.Filter, storage tidbkv.Storage, startTs uint64) (
 	ineligibleTables := make([]string, 0)
 	eligibleTables := make([]string, 0)
 	for _, dbinfo := range dbinfos {
+		start := time.Now()
 		if f.ShouldIgnoreSchema(dbinfo.Name.O) {
 			log.Debug("ignore database", zap.Stringer("db", dbinfo.Name))
 			continue
@@ -50,7 +52,9 @@ func VerifyTables(f filter.Filter, storage tidbkv.Storage, startTs uint64) (
 		if err != nil {
 			return nil, nil, nil, cerror.WrapError(cerror.ErrMetaListDatabases, err)
 		}
+		log.Info("get rawTables", zap.Any("timeSpent", time.Since(start)), zap.Int("tableCount", len(rawTables)))
 		for _, r := range rawTables {
+			start = time.Now()
 			tableKey := string(r.Field)
 			if !strings.HasPrefix(tableKey, mTablePrefix) {
 				continue
@@ -62,12 +66,17 @@ func VerifyTables(f filter.Filter, storage tidbkv.Storage, startTs uint64) (
 				return nil, nil, nil, errors.Trace(err)
 			}
 
+			log.Info("unmarshal table name", zap.Any("timeSpent", time.Since(start)))
+
 			tbInfo := &timodel.TableInfo{}
 			err = json.Unmarshal(r.Value, tbInfo)
 			if err != nil {
 				return nil, nil, nil, errors.Trace(err)
 			}
+
+			log.Info("unmarshal table info", zap.Any("timeSpent", time.Since(start)))
 			tableInfo := common.WrapTableInfo(dbinfo.Name.O, tbInfo)
+			log.Info("wrap table info", zap.Any("timeSpent", time.Since(start)))
 			if f.ShouldIgnoreTable(dbinfo.Name.O, tbName.Name.O) {
 				log.Debug("ignore table", zap.String("db", dbinfo.Name.O),
 					zap.String("table", tbName.Name.O))
@@ -84,6 +93,7 @@ func VerifyTables(f filter.Filter, storage tidbkv.Storage, startTs uint64) (
 			} else {
 				eligibleTables = append(eligibleTables, tableInfo.GetTableName())
 			}
+			log.Info("check table eligible", zap.Any("timeSpent", time.Since(start)))
 		}
 	}
 
