@@ -417,7 +417,8 @@ func TestTableDefinition(t *testing.T) {
 				"ColumnType": "DATETIME"
 			}
 		],
-		"TableColumnsTotal": 4
+		"TableColumnsTotal": 4,
+		"BlockedTables": null
 	}`, string(encodedDef))
 
 	def = TableDefinition{}
@@ -467,7 +468,8 @@ func TestTableDefinition(t *testing.T) {
 				"ColumnType": "DATETIME"
 			}
 		],
-		"TableColumnsTotal": 4
+		"TableColumnsTotal": 4,
+		"BlockedTables": null
 	}`, string(encodedDef))
 
 	tableInfo, err = def.ToTableInfo()
