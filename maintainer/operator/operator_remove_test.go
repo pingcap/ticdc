@@ -16,6 +16,7 @@ package operator
 import (
 	"testing"
 
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/stretchr/testify/require"
 )
@@ -46,4 +47,66 @@ func TestRemoveOperator_NodeRemovedBeforeStopped(t *testing.T) {
 	require.True(t, op.IsFinished())
 
 	op.PostFinish()
+}
+
+func TestRemoveOperator_SnapshotNodeIDAfterMarkAbsent(t *testing.T) {
+	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
+	spanController.AddReplicatingSpan(replicaSet)
+
+	op := newRemoveDispatcherOperator(spanController, replicaSet)
+	require.NotNil(t, op)
+
+	spanController.MarkSpanAbsent(replicaSet)
+	require.Equal(t, "", replicaSet.GetNodeID().String())
+
+	msg := op.Schedule()
+	require.NotNil(t, msg)
+	require.Equal(t, nodeA.String(), msg.To.String())
+
+	nonWorkingStatus := &heartbeatpb.TableSpanStatus{
+		ID:              replicaSet.ID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Stopped,
+		CheckpointTs:    1500,
+	}
+	op.Check(nodeA, nonWorkingStatus)
+	require.True(t, op.IsFinished())
+}
+
+func TestRemoveOperator_NotFinishedOnWaitingMerge(t *testing.T) {
+	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
+
+	op := newRemoveDispatcherOperator(spanController, replicaSet)
+	require.NotNil(t, op)
+
+	waitingMergeStatus := &heartbeatpb.TableSpanStatus{
+		ID:              replicaSet.ID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_WaitingMerge,
+		CheckpointTs:    1500,
+	}
+	op.Check(nodeA, waitingMergeStatus)
+	require.False(t, op.IsFinished())
+
+	stoppedStatus := &heartbeatpb.TableSpanStatus{
+		ID:              replicaSet.ID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Stopped,
+		CheckpointTs:    1500,
+	}
+	op.Check(nodeA, stoppedStatus)
+	require.True(t, op.IsFinished())
+}
+
+func TestRemoveOperator_FinishedOnRemovedStatus(t *testing.T) {
+	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
+
+	op := newRemoveDispatcherOperator(spanController, replicaSet)
+	require.NotNil(t, op)
+
+	removedStatus := &heartbeatpb.TableSpanStatus{
+		ID:              replicaSet.ID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Removed,
+		CheckpointTs:    1500,
+	}
+	op.Check(nodeA, removedStatus)
+	require.True(t, op.IsFinished())
+	require.Equal(t, heartbeatpb.ComponentState_Removed, replicaSet.GetStatus().ComponentStatus)
 }

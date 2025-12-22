@@ -3394,15 +3394,70 @@
               "show": false
             }
           ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-        }
-      ],
-      "title": "Server",
-      "type": "row"
-    },
+	          "yaxis": {
+	            "align": false,
+	            "alignLevel": null
+	          }
+	        },
+		        {
+		          "datasource": "${DS_TEST-CLUSTER}",
+		          "description": "Build metadata of each TiCDC server instance.",
+		          "fieldConfig": {
+		            "defaults": {},
+		            "overrides": []
+		          },
+		          "gridPos": {
+		            "h": 9,
+		            "w": 12,
+		            "x": 12,
+		            "y": 31
+		          },
+		          "id": 22473,
+		          "options": {
+		            "showHeader": true,
+		            "sortBy": []
+		          },
+			          "pluginVersion": "7.5.17",
+			          "transformations": [
+			            {
+			              "id": "labelsToFields",
+			              "options": {}
+			            },
+			            {
+			              "id": "organize",
+			              "options": {
+				                "excludeByName": {
+				                  "Metric": true,
+				                  "Time": true,
+				                  "Value": true,
+				                  "__name__": true
+				                },
+				                "indexByName": {
+				                  "instance": 0,
+				                  "kernel_type": 1,
+				                  "git_hash": 2,
+				                  "release_version": 3,
+				                  "utc_build_time": 4
+				                },
+				                "renameByName": {}
+				              }
+				            }
+				          ],
+			          "targets": [
+			            {
+				              "expr": "max by (instance, kernel_type, git_hash, release_version, utc_build_time) (ticdc_server_build_info{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"})",
+				              "format": "time_series",
+				              "instant": true,
+				              "refId": "A"
+				            }
+				          ],
+		          "title": "Build Info",
+		          "type": "table"
+		        }
+	      ],
+	      "title": "Server",
+	      "type": "row"
+	    },
     {
       "collapsed": true,
       "datasource": null,
@@ -23589,5 +23644,5 @@
   "timezone": "browser",
   "title": "${DS_TEST-CLUSTER}-TiCDC-New-Arch",
   "uid": "YiGL8hBZ0aac",
-  "version": 35
+  "version": 36
 }

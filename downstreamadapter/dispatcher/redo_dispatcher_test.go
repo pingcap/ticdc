@@ -285,15 +285,17 @@ func TestRedoDispatcherHandleEvents(t *testing.T) {
 		},
 	}
 	dispatcher.HandleDispatcherStatus(dispatcherStatus)
-	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
-	require.Equal(t, true, isEmpty)
-	require.Equal(t, uint64(4), checkpointTs)
-
-	// clear pending event(TODO:add a check for the middle status)
-	blockPendingEvent, blockStage = dispatcher.blockEventStatus.getEventAndStage()
-	require.Nil(t, blockPendingEvent)
-	require.Equal(t, blockStage, heartbeatpb.BlockStage_NONE)
-	require.Equal(t, int32(5), redoCount.Load())
+	require.Eventually(t, func() bool {
+		checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
+		if !isEmpty || checkpointTs != uint64(4) {
+			return false
+		}
+		blockPendingEvent, blockStage = dispatcher.blockEventStatus.getEventAndStage()
+		if blockPendingEvent != nil || blockStage != heartbeatpb.BlockStage_NONE {
+			return false
+		}
+		return redoCount.Load() == int32(5)
+	}, 5*time.Second, 10*time.Millisecond)
 
 	// ===== resolved event =====
 	resolvedEvent := commonEvent.ResolvedEvent{
@@ -376,9 +378,10 @@ func TestRedoUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 		},
 	}
 	dispatcher.HandleDispatcherStatus(dispatcherStatus)
-	checkpointTs = dispatcher.GetCheckpointTs()
-	require.Equal(t, uint64(1), checkpointTs)
-	require.Equal(t, int32(1), redoCount.Load())
+	require.Eventually(t, func() bool {
+		checkpointTs = dispatcher.GetCheckpointTs()
+		return checkpointTs == uint64(1) && redoCount.Load() == int32(1)
+	}, 5*time.Second, 10*time.Millisecond)
 }
 
 func TestRedoTableTriggerEventDispatcherInMysql(t *testing.T) {

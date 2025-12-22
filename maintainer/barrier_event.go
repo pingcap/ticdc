@@ -41,7 +41,7 @@ type BarrierEvent struct {
 	nodeManager        *watcher.NodeManager
 	selected           atomic.Bool
 	hasNewTable        bool
-	// table trigger event dispatcher reported the block event, we should use it as the writer
+	// table trigger dispatcher reported the block event, we should use it as the writer
 	tableTriggerDispatcherRelated bool
 	writerDispatcher              common.DispatcherID
 	writerDispatcherAdvanced      bool
