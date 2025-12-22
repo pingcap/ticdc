@@ -64,6 +64,8 @@ type DispatcherManager struct {
 	ctx          context.Context
 	changefeedID common.ChangeFeedID
 	keyspaceID   uint32
+	// mu is only used for table trigger dispatcher
+	mu sync.Mutex
 
 	// meta is used to store the meta info of the event dispatcher manager
 	// it's used to avoid data race when we update the maintainerID and maintainerEpoch
@@ -304,7 +306,7 @@ func NewDispatcherManager(
 }
 
 func (e *DispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool) (uint64, error) {
-	if e.tableTriggerEventDispatcher != nil {
+	if e.GetTableTriggerEventDispatcher() != nil {
 		log.Error("table trigger event dispatcher existed!")
 	}
 	infos := map[common.DispatcherID]dispatcherCreateInfo{}
@@ -321,17 +323,17 @@ func (e *DispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.Dispa
 	}
 	log.Info("table trigger event dispatcher created",
 		zap.Stringer("changefeedID", e.changefeedID),
-		zap.Stringer("dispatcherID", e.tableTriggerEventDispatcher.GetId()),
-		zap.Uint64("startTs", e.tableTriggerEventDispatcher.GetStartTs()),
+		zap.Stringer("dispatcherID", e.GetTableTriggerEventDispatcher().GetId()),
+		zap.Uint64("startTs", e.GetTableTriggerEventDispatcher().GetStartTs()),
 	)
-	return e.tableTriggerEventDispatcher.GetStartTs(), nil
+	return e.GetTableTriggerEventDispatcher().GetStartTs(), nil
 }
 
 func (e *DispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*heartbeatpb.SchemaInfo) error {
-	if e.tableTriggerEventDispatcher == nil {
+	if e.GetTableTriggerEventDispatcher() == nil {
 		return nil
 	}
-	needAddDispatcher, err := e.tableTriggerEventDispatcher.InitializeTableSchemaStore(schemaInfo)
+	needAddDispatcher, err := e.GetTableTriggerEventDispatcher().InitializeTableSchemaStore(schemaInfo)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -339,13 +341,13 @@ func (e *DispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*h
 		return nil
 	}
 	// before bootstrap finished, cannot send any event.
-	success := e.tableTriggerEventDispatcher.EmitBootstrap()
+	success := e.GetTableTriggerEventDispatcher().EmitBootstrap()
 	if !success {
 		return errors.ErrDispatcherFailed.GenWithStackByArgs()
 	}
 
 	// table trigger event dispatcher can register to event collector to receive events after finish the initial table schema store from the maintainer.
-	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.tableTriggerEventDispatcher, e.sinkQuota)
+	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.GetTableTriggerEventDispatcher(), e.sinkQuota)
 
 	// when sink is not mysql-class, table trigger event dispatcher need to receive the checkpointTs message from maintainer.
 	if e.sink.SinkType() != common.MysqlSinkType {
@@ -445,7 +447,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 			if util.GetOrZero(e.config.SinkConfig.SendAllBootstrapAtStart) {
 				d.BootstrapState = dispatcher.BootstrapNotStarted
 			}
-			e.tableTriggerEventDispatcher = d
+			e.SetTableTriggerEventDispatcher(d)
 		} else {
 			e.schemaIDToDispatchers.Set(schemaIds[idx], id)
 			// we don't register table trigger event dispatcher in event collector, when created.
@@ -931,13 +933,14 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 func (e *DispatcherManager) cleanEventDispatcher(id common.DispatcherID, schemaID int64) {
 	e.dispatcherMap.Delete(id)
 	e.schemaIDToDispatchers.Delete(schemaID, id)
-	if e.tableTriggerEventDispatcher != nil && e.tableTriggerEventDispatcher.GetId() == id {
-		e.tableTriggerEventDispatcher = nil
+	tableTriggerEventDispatcher := e.GetTableTriggerEventDispatcher()
+	if tableTriggerEventDispatcher != nil && tableTriggerEventDispatcher.GetId() == id {
+		e.SetTableTriggerEventDispatcher(nil)
 		e.metricTableTriggerEventDispatcherCount.Dec()
 	} else {
 		e.metricEventDispatcherCount.Dec()
 	}
-	log.Info("table event dispatcher completely stopped, and delete it from event dispatcher manager",
+	log.Info("event dispatcher completely stopped, and delete it from event dispatcher manager",
 		zap.Stringer("changefeedID", e.changefeedID),
 		zap.Stringer("dispatcherID", id),
 	)

@@ -391,7 +391,7 @@ func (h *CheckpointTsMessageHandler) Handle(dispatcherManager *DispatcherManager
 		// TODO: Support batch
 		panic("invalid message count")
 	}
-	if dispatcherManager.tableTriggerEventDispatcher != nil {
+	if dispatcherManager.GetTableTriggerEventDispatcher() != nil {
 		checkpointTsMessage := messages[0]
 		dispatcherManager.sink.AddCheckpointTs(checkpointTsMessage.CheckpointTs)
 	}

@@ -82,7 +82,7 @@ func initRedoComponet(
 }
 
 func (e *DispatcherManager) NewRedoTableTriggerEventDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool) error {
-	if e.redoTableTriggerEventDispatcher != nil {
+	if e.GetTableTriggerEventDispatcher() != nil {
 		log.Error("redo table trigger event dispatcher existed!")
 	}
 	infos := map[common.DispatcherID]dispatcherCreateInfo{}
@@ -99,7 +99,7 @@ func (e *DispatcherManager) NewRedoTableTriggerEventDispatcher(id *heartbeatpb.D
 	}
 	// redo meta should keep the same node with table trigger event dispatcher
 	// table trigger event dispatcher and redo table trigger event dispatcher must exist on the same node
-	e.redoTableTriggerEventDispatcher.SetRedoMeta(e.config.Consistent)
+	e.GetRedoTableTriggerEventDispatcher().SetRedoMeta(e.config.Consistent)
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
@@ -108,8 +108,8 @@ func (e *DispatcherManager) NewRedoTableTriggerEventDispatcher(id *heartbeatpb.D
 	}()
 	log.Info("redo table trigger event dispatcher created",
 		zap.Stringer("changefeedID", e.changefeedID),
-		zap.Stringer("dispatcherID", e.redoTableTriggerEventDispatcher.GetId()),
-		zap.Uint64("startTs", e.redoTableTriggerEventDispatcher.GetStartTs()),
+		zap.Stringer("dispatcherID", e.GetRedoTableTriggerEventDispatcher().GetId()),
+		zap.Uint64("startTs", e.GetRedoTableTriggerEventDispatcher().GetStartTs()),
 	)
 	return nil
 }
@@ -165,7 +165,7 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 		}
 
 		if rd.IsTableTriggerEventDispatcher() {
-			e.redoTableTriggerEventDispatcher = rd
+			e.SetRedoTableTriggerEventDispatcher(rd)
 		} else {
 			e.redoSchemaIDToDispatchers.Set(schemaIds[idx], id)
 			appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(rd, e.redoQuota)
@@ -235,43 +235,47 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 func (e *DispatcherManager) cleanRedoDispatcher(id common.DispatcherID, schemaID int64) {
 	e.redoDispatcherMap.Delete(id)
 	e.redoSchemaIDToDispatchers.Delete(schemaID, id)
-	if e.redoTableTriggerEventDispatcher != nil && e.redoTableTriggerEventDispatcher.GetId() == id {
-		e.redoTableTriggerEventDispatcher = nil
+	redoTableTriggerEventDispatcher := e.GetTableTriggerEventDispatcher()
+	if redoTableTriggerEventDispatcher != nil && redoTableTriggerEventDispatcher.GetId() == id {
+		e.SetRedoTableTriggerEventDispatcher(nil)
 		e.metricRedoTableTriggerEventDispatcherCount.Dec()
 	} else {
 		e.metricRedoEventDispatcherCount.Dec()
 	}
-	log.Info("redo table event dispatcher completely stopped, and delete it from event dispatcher manager",
+	log.Info("redo dispatcher completely stopped, and delete it from event dispatcher manager",
 		zap.Stringer("changefeedID", e.changefeedID),
 		zap.Stringer("dispatcherID", id),
 	)
 }
 
 func (e *DispatcherManager) closeRedoMeta(removeChangefeed bool) {
-	if removeChangefeed {
-		e.redoTableTriggerEventDispatcher.GetRedoMeta().Cleanup(context.Background())
+	if removeChangefeed && e.GetRedoTableTriggerEventDispatcher() != nil {
+		redoMeta := e.GetRedoTableTriggerEventDispatcher().GetRedoMeta()
+		if redoMeta != nil {
+			redoMeta.Cleanup(context.Background())
+		}
 	}
 }
 
 func (e *DispatcherManager) InitalizeRedoTableTriggerEventDispatcher(schemaInfo []*heartbeatpb.SchemaInfo) error {
-	if e.redoTableTriggerEventDispatcher == nil {
+	if e.GetRedoTableTriggerEventDispatcher() == nil {
 		return nil
 	}
-	needAddDispatcher, err := e.redoTableTriggerEventDispatcher.InitializeTableSchemaStore(schemaInfo)
+	needAddDispatcher, err := e.GetRedoTableTriggerEventDispatcher().InitializeTableSchemaStore(schemaInfo)
 	if err != nil {
 		return errors.Trace(err)
 	}
 	if !needAddDispatcher {
 		return nil
 	}
-	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.redoTableTriggerEventDispatcher, e.redoQuota)
+	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.GetRedoTableTriggerEventDispatcher(), e.redoQuota)
 	return nil
 }
 
 func (e *DispatcherManager) UpdateRedoMeta(checkpointTs, resolvedTs uint64) {
 	// only update meta on the one node
-	if e.redoTableTriggerEventDispatcher != nil {
-		e.redoTableTriggerEventDispatcher.UpdateMeta(checkpointTs, resolvedTs)
+	if e.GetRedoTableTriggerEventDispatcher() != nil {
+		e.GetRedoTableTriggerEventDispatcher().UpdateMeta(checkpointTs, resolvedTs)
 		return
 	}
 	log.Error("should not reach here. only update redo meta on the redoTableTriggerEventDispatcher")
@@ -291,11 +295,11 @@ func (e *DispatcherManager) collectRedoMeta(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			if e.redoTableTriggerEventDispatcher == nil {
+			if e.GetRedoTableTriggerEventDispatcher() == nil {
 				log.Error("should not reach here. only collect redo meta on the redoTableTriggerEventDispatcher")
 				continue
 			}
-			logMeta := e.redoTableTriggerEventDispatcher.GetFlushedMeta()
+			logMeta := e.GetRedoTableTriggerEventDispatcher().GetFlushedMeta()
 			if preResolvedTs >= logMeta.ResolvedTs {
 				continue
 			}
@@ -321,13 +325,21 @@ func (e *DispatcherManager) GetRedoDispatcherMap() *DispatcherMap[*dispatcher.Re
 }
 
 func (e *DispatcherManager) GetRedoTableTriggerEventDispatcher() *dispatcher.RedoDispatcher {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	return e.redoTableTriggerEventDispatcher
+}
+
+func (e *DispatcherManager) SetRedoTableTriggerEventDispatcher(rd *dispatcher.RedoDispatcher) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.redoTableTriggerEventDispatcher = rd
 }
 
 func (e *DispatcherManager) GetAllRedoDispatchers(schemaID int64) []common.DispatcherID {
 	dispatcherIDs := e.redoSchemaIDToDispatchers.GetDispatcherIDs(schemaID)
-	if e.redoTableTriggerEventDispatcher != nil {
-		dispatcherIDs = append(dispatcherIDs, e.redoTableTriggerEventDispatcher.GetId())
+	if e.GetRedoTableTriggerEventDispatcher() != nil {
+		dispatcherIDs = append(dispatcherIDs, e.GetRedoTableTriggerEventDispatcher().GetId())
 	}
 	return dispatcherIDs
 }
