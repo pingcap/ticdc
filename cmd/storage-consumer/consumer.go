@@ -331,8 +331,8 @@ func (c *consumer) appendDMLEvents(
 	return err
 }
 
-func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64, enableTableAcrossNodes bool) error {
-	events := c.eventsGroup[tableID].GetAllEvents(enableTableAcrossNodes)
+func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
+	events := c.eventsGroup[tableID].GetAllEvents()
 	total := len(events)
 	if total == 0 {
 		return nil
@@ -377,11 +377,13 @@ func (c *consumer) parseDMLFilePath(_ context.Context, path string) error {
 		return errors.Trace(err)
 	}
 
-	fr, ok := c.tableDMLIdxMap[dmlkey]
-	if !ok || fr[fileIdx.FileIndexKey] >= fileIdx.Idx {
+	m, ok := c.tableDMLIdxMap[dmlkey]
+	if !ok {
 		c.tableDMLIdxMap[dmlkey] = fileIndexKeyMap{
 			fileIdx.FileIndexKey: fileIdx.Idx,
 		}
+	} else if fileIdx.Idx >= m[fileIdx.FileIndexKey] {
+		m[fileIdx.FileIndexKey] = fileIdx.Idx
 	}
 	return nil
 }
@@ -520,7 +522,6 @@ func (c *consumer) handleNewFiles(
 			key.Schema, key.Table, key.PartitionNum)
 		fileRange := dmlFileMap[key]
 		for indexKey, indexRange := range fileRange {
-			enableTableAcrossNodes := indexKey.EnableTableAcrossNodes
 			for i := indexRange.start; i <= indexRange.end; i++ {
 				if err := c.appendDMLEvents(ctx, tableID, tableDef, key, &cloudstorage.FileIndex{
 					FileIndexKey: indexKey,
@@ -529,8 +530,8 @@ func (c *consumer) handleNewFiles(
 					return err
 				}
 			}
-			c.flushDMLEvents(ctx, tableID, enableTableAcrossNodes)
 		}
+		c.flushDMLEvents(ctx, tableID)
 	}
 
 	return nil

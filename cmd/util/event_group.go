@@ -94,12 +94,7 @@ func (g *EventsGroup) Resolve(resolve uint64) []*commonEvent.DMLEvent {
 }
 
 // GetAllEvents will get all events.
-func (g *EventsGroup) GetAllEvents(enableTableAcrossNodes bool) []*commonEvent.DMLEvent {
-	if enableTableAcrossNodes {
-		sort.Slice(g.events, func(i, j int) bool {
-			return g.events[i].GetCommitTs() < g.events[j].GetCommitTs()
-		})
-	}
+func (g *EventsGroup) GetAllEvents() []*commonEvent.DMLEvent {
 	result := g.events
 	g.events = nil
 	return result
