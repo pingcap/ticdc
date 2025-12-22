@@ -331,9 +331,6 @@ func (c *consumer) appendDMLEvents(
 }
 
 func (c *consumer) flushDMLEventsByDDLEvent(ctx context.Context, ddl *event.DDLEvent) error {
-	ts := ddl.GetCommitTs()
-	events := make([]*event.DMLEvent, 0)
-
 	tableIDs := make(map[int64]struct{})
 	switch ddl.GetBlockedTables().InfluenceType {
 	case event.InfluenceTypeDB, event.InfluenceTypeAll:
@@ -341,13 +338,15 @@ func (c *consumer) flushDMLEventsByDDLEvent(ctx context.Context, ddl *event.DDLE
 			tableIDs[tableID] = struct{}{}
 		}
 	case event.InfluenceTypeNormal:
-		for _, item := range ddl.GetBlockedTables().TableIDs {
-			tableIDs[item] = struct{}{}
+		for _, tableID := range ddl.GetBlockedTables().TableIDs {
+			tableIDs[tableID] = struct{}{}
 		}
 	default:
 		log.Panic("unsupported influence type", zap.Any("influenceType", ddl.GetBlockedTables().InfluenceType))
 	}
 
+	ts := ddl.GetCommitTs()
+	events := make([]*event.DMLEvent, 0)
 	for tableID := range tableIDs {
 		if group, ok := c.eventsGroup[tableID]; ok {
 			events = append(events, group.Resolve(ts)...)

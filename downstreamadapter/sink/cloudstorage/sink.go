@@ -198,6 +198,7 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 		def.FromTableInfo(event.ExtraSchemaName, event.ExtraTableName, event.TableInfo, event.FinishedTs, s.cfg.OutputColumnID)
 		def.Query = event.Query
 		def.Type = event.Type
+		def.BlockedTables = event.BlockedTables
 		if err := s.writeFile(event, def); err != nil {
 			return err
 		}
