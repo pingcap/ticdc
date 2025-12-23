@@ -16,6 +16,7 @@ SINK_TYPE=$1
 
 DB_NAME="sp_move"
 TABLE_NAME="t"
+MERGE_TABLE_NAME="t_merge"
 CHANGEFEED_ID="test"
 dml_pid=0
 
@@ -41,7 +42,13 @@ run() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0" --addr "127.0.0.1:8300"
 
 	SINK_URI="mysql://root@127.0.0.1:3306/?max-txn-row=1"
-	do_retry 5 3 cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "$CHANGEFEED_ID"
+	cat >$WORK_DIR/changefeed_scheduler.toml <<EOF
+[scheduler]
+enable-table-across-nodes = true
+region-threshold=1
+region-count-per-span=10
+EOF
+	do_retry 5 3 cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "$CHANGEFEED_ID" --config="$WORK_DIR/changefeed_scheduler.toml"
 
 	run_sql "DROP DATABASE IF EXISTS ${DB_NAME};" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE DATABASE ${DB_NAME};" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
@@ -58,7 +65,7 @@ run() {
 	kill_cdc_pid $cdc_pid_1
 	cleanup_process $CDC_BINARY
 
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforeWrite=sleep(20000)'
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true);github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforeWrite=pause'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-1" --addr "127.0.0.1:8300"
 
 	check_coordinator_and_maintainer "127.0.0.1:8300" "$CHANGEFEED_ID" 60
@@ -67,6 +74,15 @@ run() {
 	sleep 2
 	cdc_cli_changefeed update --config="$CUR/conf/changefeed.toml" --changefeed-id="$CHANGEFEED_ID" --no-confirm
 	cdc_cli_changefeed resume --changefeed-id="$CHANGEFEED_ID"
+
+	# Prepare a split table for merge test. It should be blocked by syncpoint together with other tables.
+	run_sql "CREATE TABLE ${DB_NAME}.${MERGE_TABLE_NAME} (id INT PRIMARY KEY, v INT);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "INSERT INTO ${DB_NAME}.${MERGE_TABLE_NAME} VALUES (1, 1), (2, 2), (3, 3);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	check_table_exists "${DB_NAME}.${MERGE_TABLE_NAME}" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 60
+	merge_table_id=$(get_table_id "$DB_NAME" "$MERGE_TABLE_NAME")
+	run_sql "SPLIT TABLE ${DB_NAME}.${MERGE_TABLE_NAME} BETWEEN (1) AND (100000) REGIONS 20;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	split_table_with_retry $merge_table_id "$CHANGEFEED_ID" 10
+	query_dispatcher_count "127.0.0.1:8300" "$CHANGEFEED_ID" 22 100
 
 	# Start node2 for moving the table.
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
@@ -92,6 +108,25 @@ run() {
 	# Ensure the table-trigger dispatcher has received the maintainer action to start writing this syncpoint.
 	ensure 60 "grep \"pending event get the action\" $WORK_DIR/cdc0-1.log | grep -Eq \"(pendingEventCommitTs[^0-9]*${syncpoint_ts}.*innerAction=0|innerAction=0.*pendingEventCommitTs[^0-9]*${syncpoint_ts})\""
 
+	# Merge the split table while the syncpoint is pending.
+	merge_table_with_retry $merge_table_id "$CHANGEFEED_ID" 10
+	ensure 60 "grep -q \"merge dispatcher uses pending block event to calculate start ts\" $WORK_DIR/cdc0-1.log"
+	merge_line=$(grep "merge dispatcher uses pending block event to calculate start ts" $WORK_DIR/cdc0-1.log | grep -E "pendingCommitTs[^0-9]*${syncpoint_ts}" | tail -n 1 || true)
+	if [ -z "$merge_line" ]; then
+		echo "failed to find merge startTs decision log line"
+		exit 1
+	fi
+	merge_start_ts=$(echo "$merge_line" | grep -oE 'startTs[^0-9]*[0-9]+' | tail -n 1 | grep -oE '[0-9]+' || true)
+	merge_pending_is_syncpoint=$(echo "$merge_line" | grep -oE 'pendingIsSyncPoint[^a-zA-Z]*(true|false)' | tail -n 1 | grep -oE '(true|false)' | tail -n 1 || true)
+	if [ "$merge_start_ts" != "$syncpoint_ts" ]; then
+		echo "unexpected merged dispatcher startTs, got: $merge_start_ts, want: $syncpoint_ts"
+		exit 1
+	fi
+	if [ "$merge_pending_is_syncpoint" != "true" ]; then
+		echo "unexpected pendingIsSyncPoint, got: $merge_pending_is_syncpoint, want: true"
+		exit 1
+	fi
+
 	kill $dml_pid || true
 	wait $dml_pid || true
 
@@ -106,6 +141,12 @@ run() {
 		exit 1
 	fi
 
+	# Restart node0 to disable BlockOrWaitBeforeWrite, so the pending syncpoint can be written downstream.
+	cdc_pid_0=$(get_cdc_pid "$CDC_HOST" "$CDC_PORT")
+	kill_cdc_pid $cdc_pid_0
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true)'
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0-2" --addr "127.0.0.1:8300"
+
 	# Wait until the syncpoint is written downstream, then validate snapshot consistency by sync_diff.
 	ensure 120 "mysql -h${DOWN_TIDB_HOST} -P${DOWN_TIDB_PORT} -uroot -N -s -e \"SELECT secondary_ts FROM tidb_cdc.syncpoint_v1 WHERE changefeed='default/${CHANGEFEED_ID}' AND primary_ts='${syncpoint_ts}';\" | grep -E '^[0-9]+'"
 	secondary_ts=$(mysql -h${DOWN_TIDB_HOST} -P${DOWN_TIDB_PORT} -uroot -N -s -e "SELECT secondary_ts FROM tidb_cdc.syncpoint_v1 WHERE changefeed='default/${CHANGEFEED_ID}' AND primary_ts='${syncpoint_ts}';" | tail -n 1)
@@ -119,7 +160,7 @@ run() {
 	cleanup_process $CDC_BINARY
 }
 
-trap 'if [ "${dml_pid}" -ne 0 ]; then kill "${dml_pid}" >/dev/null 2>&1 || true; fi; stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
+trap 'stop_test $WORK_DIR' EXIT
 run $*
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
