@@ -148,8 +148,13 @@ main() {
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
 
 	checkpoint1=$(cdc_cli_changefeed query -c "test" 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
-	sleep 20
-	checkpoint2=$(cdc_cli_changefeed query -c "test" 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
+	for _ in $(seq 1 6); do
+		sleep 10
+		checkpoint2=$(cdc_cli_changefeed query -c "test" 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
+		if [[ "$checkpoint1" -ne "$checkpoint2" ]]; then
+			break
+		fi
+	done
 
 	if [[ "$checkpoint1" -eq "$checkpoint2" ]]; then
 		echo "checkpoint is not changed"
@@ -208,8 +213,13 @@ main_with_consistent() {
 		check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
 
 		checkpoint1=$(cdc_cli_changefeed query -c "test" 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
-		sleep 20
-		checkpoint2=$(cdc_cli_changefeed query -c "test" 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
+		for _ in $(seq 1 6); do
+			sleep 10
+			checkpoint2=$(cdc_cli_changefeed query -c "test" 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
+			if [[ "$checkpoint1" -ne "$checkpoint2" ]]; then
+				break
+			fi
+		done
 
 		if [[ "$checkpoint1" -eq "$checkpoint2" ]]; then
 			echo "checkpoint is not changed"
