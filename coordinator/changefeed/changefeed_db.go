@@ -349,7 +349,7 @@ func (db *ChangefeedDB) CalculateKeyspaceGCBarrier() map[common.KeyspaceMeta]uin
 	}
 	return keyspaceGCBarrier
 }
-	
+
 // ReplaceStoppedChangefeed updates the stopped changefeed
 func (db *ChangefeedDB) ReplaceStoppedChangefeed(cf *config.ChangeFeedInfo) {
 	db.lock.Lock()
