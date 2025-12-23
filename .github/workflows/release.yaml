@@ -30,12 +30,32 @@ jobs:
       - name: Publish Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
+        run: |-
           VERSION="${{needs.tag.outputs.version}}"
           TITLE="${VERSION}"
-          NOTE="Download Link:
-          \`\`\`
+          NOTE="## 📦 TiCDC $VERSION Release
+
+          ### 🐧 Linux Downloads
+          \`\`\`bash
+          # Linux AMD64
           wget https://tiup-mirrors.pingcap.com/cdc-$VERSION-linux-amd64.tar.gz
+
+          # Linux ARM64
+          wget https://tiup-mirrors.pingcap.com/cdc-$VERSION-linux-arm64.tar.gz
+          \`\`\`
+
+          ### 🍎 macOS Downloads
+          \`\`\`bash
+          # macOS AMD64 (Intel)
+          wget https://tiup-mirrors.pingcap.com/cdc-$VERSION-darwin-amd64.tar.gz
+
+          # macOS ARM64 (Apple Silicon)
+          wget https://tiup-mirrors.pingcap.com/cdc-$VERSION-darwin-arm64.tar.gz
+          \`\`\`
+
+          ### 🐳 Docker Images
+          \`\`\`bash
+          # Pull the latest release
           docker pull pingcap/ticdc:$VERSION
           \`\`\`"
           gh release create "$VERSION" --verify-tag -t "$TITLE" -n "$NOTE"

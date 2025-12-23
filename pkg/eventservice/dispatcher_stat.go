@@ -182,6 +182,8 @@ func newDispatcherStat(
 
 // copyStatistics copies statistical data that reflects the dynamic state of the dispatcher.
 func (a *dispatcherStat) copyStatistics(src *dispatcherStat) {
+	a.receivedResolvedTs.Store(src.receivedResolvedTs.Load())
+	a.eventStoreCommitTs.Store(src.eventStoreCommitTs.Load())
 	a.checkpointTs.Store(src.checkpointTs.Load())
 	a.hasReceivedFirstResolvedTs.Store(src.hasReceivedFirstResolvedTs.Load())
 
