@@ -18,13 +18,16 @@ import (
 	"encoding/json"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/pingcap/errors"
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	tidbkv "github.com/pingcap/tidb/pkg/kv"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"go.uber.org/zap"
 )
 
 // VerifyTables catalog tables specified by ReplicaConfig into
@@ -32,6 +35,10 @@ import (
 func VerifyTables(f filter.Filter, storage tidbkv.Storage, startTs uint64) (
 	[]*common.TableInfo, []string, []string, error,
 ) {
+	start := time.Now()
+	defer func() {
+		log.Info("VerifyTables took %s", zap.Any("timecost", time.Since(start)))
+	}()
 	// NOTE: We keep a fixed number of workers here. The goal is to parallelize the
 	// JSON unmarshal of timodel.TableInfo while avoiding excessive goroutines and
 	// memory pressure for huge table counts.
