@@ -159,6 +159,9 @@ cdc:
 kafka_consumer:
 	$(CONSUMER_GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_kafka_consumer ./cmd/kafka-consumer
 
+build_kafka_consumer:
+	DOCKER_BUILDKIT=1 docker build -f ./deployments/kafka-consumer.Dockerfile  -t hub.pingcap.net/ticdc/kafka-consumer:$(or $(KAFKA_CONSUMER_TAG),$(GITBRANCH)) .
+
 storage_consumer:
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_storage_consumer ./cmd/storage-consumer
 
