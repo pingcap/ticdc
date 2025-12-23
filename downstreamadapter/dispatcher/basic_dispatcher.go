@@ -614,25 +614,7 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 				actionCommitTs := action.CommitTs
 				actionIsSyncPoint := action.IsSyncPoint
 				d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
-					failpoint.Inject("BlockOrWaitBeforeWrite", nil)
-					err := d.AddBlockEventToSink(pendingEvent)
-					if err != nil {
-						d.HandleError(err)
-						return
-					}
-					failpoint.Inject("BlockOrWaitReportAfterWrite", nil)
-
-					d.sharedInfo.blockStatusesChan <- &heartbeatpb.TableSpanBlockStatus{
-						ID: d.id.ToPB(),
-						State: &heartbeatpb.State{
-							IsBlocked:   true,
-							BlockTs:     actionCommitTs,
-							IsSyncPoint: actionIsSyncPoint,
-							Stage:       heartbeatpb.BlockStage_DONE,
-						},
-						Mode: d.GetMode(),
-					}
-					GetDispatcherStatusDynamicStream().Wake(d.id)
+					d.ExecutePendingDDL(pendingEvent, actionCommitTs, actionIsSyncPoint)
 				})
 				return true
 			} else {
@@ -664,6 +646,28 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 		}
 	}
 	return false
+}
+
+func (d *BasicDispatcher) ExecutePendingDDL(pendingEvent commonEvent.BlockEvent, actionCommitTs uint64, actionIsSyncPoint bool) {
+	failpoint.Inject("BlockOrWaitBeforeWrite", nil)
+	err := d.AddBlockEventToSink(pendingEvent)
+	if err != nil {
+		d.HandleError(err)
+		return
+	}
+	failpoint.Inject("BlockOrWaitReportAfterWrite", nil)
+
+	d.sharedInfo.blockStatusesChan <- &heartbeatpb.TableSpanBlockStatus{
+		ID: d.id.ToPB(),
+		State: &heartbeatpb.State{
+			IsBlocked:   true,
+			BlockTs:     actionCommitTs,
+			IsSyncPoint: actionIsSyncPoint,
+			Stage:       heartbeatpb.BlockStage_DONE,
+		},
+		Mode: d.GetMode(),
+	}
+	GetDispatcherStatusDynamicStream().Wake(d.id)
 }
 
 // shouldBlock check whether the event should be blocked(to wait maintainer response)
