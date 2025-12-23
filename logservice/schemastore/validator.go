@@ -124,8 +124,8 @@ func (v *tableVerifier) worker() {
 		}
 
 		localInfos := make([]*common.TableInfo, 0, len(task.values))
-		localIneligible := make([]string, 0)
-		localEligible := make([]string, 0)
+		localIneligible := make([]string, 0, len(task.values))
+		localEligible := make([]string, 0, len(task.values))
 
 		for _, value := range task.values {
 			tbInfo := &timodel.TableInfo{}
