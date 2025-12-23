@@ -243,10 +243,17 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			zap.String("changefeed", cfId.Name()), zap.Uint64("epoch", cfConfig.Epoch))
 	}
 
-	startTs := manager.GetTableTriggerEventDispatcher().GetStartTs()
-	var redoStartTs uint64
+	var (
+		startTs     uint64
+		redoStartTs uint64
+	)
+	if tableTriggerDispatcher := manager.GetTableTriggerEventDispatcher(); tableTriggerDispatcher != nil {
+		startTs = tableTriggerDispatcher.GetStartTs()
+	}
 	if manager.RedoEnable {
-		redoStartTs = manager.GetRedoTableTriggerEventDispatcher().GetStartTs()
+		if redoTableTriggerDispatcher := manager.GetRedoTableTriggerEventDispatcher(); redoTableTriggerDispatcher != nil {
+			redoStartTs = redoTableTriggerDispatcher.GetStartTs()
+		}
 	}
 	response := createBootstrapResponse(req.ChangefeedID, manager, startTs, redoStartTs)
 	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
