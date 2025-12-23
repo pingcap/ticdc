@@ -72,6 +72,7 @@ type Dispatcher interface {
 	SetTryRemoving()
 	GetHeartBeatInfo(h *HeartBeatInfo)
 	GetComponentStatus() heartbeatpb.ComponentState
+	GetBlockEventStatus() *heartbeatpb.State
 	GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus
 	GetEventSizePerSecond() float32
 	IsTableTriggerEventDispatcher() bool
