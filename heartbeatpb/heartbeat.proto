@@ -177,12 +177,15 @@ message MaintainerBootstrapResponse {
     // For nodes without a table trigger event dispatcher:
     // - checkpoint_ts is set to 0
     uint64 checkpoint_ts = 4;
+    // redo_checkpoint_ts is similar to checkpoint_ts
+    uint64 redo_checkpoint_ts = 5;
 }
 
 message MaintainerPostBootstrapRequest {
     ChangefeedID changefeedID = 1;
     DispatcherID table_trigger_event_dispatcher_id = 2;
     repeated SchemaInfo schemas = 3;
+    repeated SchemaInfo redo_schemas = 4;
 }
 
 message MaintainerPostBootstrapResponse {

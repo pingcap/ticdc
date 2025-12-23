@@ -154,9 +154,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	manager, exists := m.dispatcherManagers[cfId]
 	m.mutex.Unlock()
 
-	var (
-		err error
-	)
+	var err error
 	if !exists {
 		start := time.Now()
 		manager, err = dispatchermanager.
@@ -245,8 +243,12 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			zap.String("changefeed", cfId.Name()), zap.Uint64("epoch", cfConfig.Epoch))
 	}
 
-	startTs := manager.GetStartTs()
-	response := createBootstrapResponse(req.ChangefeedID, manager, startTs)
+	startTs := manager.GetTableTriggerEventDispatcher().GetStartTs()
+	var redoStartTs uint64
+	if manager.RedoEnable {
+		redoStartTs = manager.GetRedoTableTriggerEventDispatcher().GetStartTs()
+	}
+	response := createBootstrapResponse(req.ChangefeedID, manager, startTs, redoStartTs)
 	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
 }
 
@@ -302,7 +304,7 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 		return m.handleDispatcherError(from, req.ChangefeedID, err)
 	}
 	if manager.RedoEnable {
-		err := manager.InitalizeRedoTableTriggerEventDispatcher(req.Schemas)
+		err := manager.InitalizeRedoTableTriggerEventDispatcher(req.RedoSchemas)
 		if err != nil {
 			log.Error("failed to initialize redo table trigger event dispatcher",
 				zap.Any("changefeedID", cfId.Name()), zap.Error(err))
@@ -347,7 +349,7 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 func createBootstrapResponse(
 	changefeedID *heartbeatpb.ChangefeedID,
 	manager *dispatchermanager.DispatcherManager,
-	startTs uint64,
+	startTs, redoStartTs uint64,
 ) *heartbeatpb.MaintainerBootstrapResponse {
 	response := &heartbeatpb.MaintainerBootstrapResponse{
 		ChangefeedID: changefeedID,
@@ -358,7 +360,22 @@ func createBootstrapResponse(
 	if startTs != 0 {
 		response.CheckpointTs = startTs
 	}
+	// redo table trigger dispatcher startTs
+	if redoStartTs != 0 {
+		response.RedoCheckpointTs = redoStartTs
+	}
 
+	manager.GetDispatcherMap().ForEach(func(id common.DispatcherID, d *dispatcher.EventDispatcher) {
+		response.Spans = append(response.Spans, &heartbeatpb.BootstrapTableSpan{
+			ID:              id.ToPB(),
+			SchemaID:        d.GetSchemaID(),
+			Span:            d.GetTableSpan(),
+			ComponentStatus: d.GetComponentStatus(),
+			CheckpointTs:    d.GetCheckpointTs(),
+			BlockState:      d.GetBlockEventStatus(),
+			Mode:            d.GetMode(),
+		})
+	})
 	if manager.RedoEnable {
 		manager.GetRedoDispatcherMap().ForEach(func(id common.DispatcherID, d *dispatcher.RedoDispatcher) {
 			response.Spans = append(response.Spans, &heartbeatpb.BootstrapTableSpan{
@@ -372,17 +389,6 @@ func createBootstrapResponse(
 			})
 		})
 	}
-	manager.GetDispatcherMap().ForEach(func(id common.DispatcherID, d *dispatcher.EventDispatcher) {
-		response.Spans = append(response.Spans, &heartbeatpb.BootstrapTableSpan{
-			ID:              id.ToPB(),
-			SchemaID:        d.GetSchemaID(),
-			Span:            d.GetTableSpan(),
-			ComponentStatus: d.GetComponentStatus(),
-			CheckpointTs:    d.GetCheckpointTs(),
-			BlockState:      d.GetBlockEventStatus(),
-			Mode:            d.GetMode(),
-		})
-	})
 
 	return response
 }

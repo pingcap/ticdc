@@ -83,7 +83,7 @@ func (c *Controller) FinishBootstrap(
 		zap.Int("nodeCount", len(allNodesResp)))
 
 	// Step 1: Determine start timestamp and update DDL dispatcher
-	startTs := c.determineStartTs(allNodesResp)
+	startTs, redoStartTs := c.determineStartTs(allNodesResp)
 
 	// Step 2: Load tables from schema store
 	tables, err := c.loadTables(startTs)
@@ -94,17 +94,40 @@ func (c *Controller) FinishBootstrap(
 		return nil, errors.Trace(err)
 	}
 
+	var redoTables []commonEvent.Table
+	if c.enableRedo {
+		redoTables, err = c.loadTables(redoStartTs)
+		if err != nil {
+			log.Error("load table from scheme store failed",
+				zap.String("changefeed", c.changefeedID.Name()),
+				zap.Error(err))
+			return nil, errors.Trace(err)
+		}
+	}
+
 	// Build table splitability map for later use
 	tableSplitMap := make(map[int64]bool, len(tables))
 	for _, tbl := range tables {
 		tableSplitMap[tbl.TableID] = tbl.Splitable
 	}
-
 	// Step 3: Build working task map from bootstrap responses
-	workingTaskMap, redoWorkingTaskMap := c.buildWorkingTaskMap(allNodesResp, tableSplitMap)
+	workingTaskMap := c.buildWorkingTaskMap(allNodesResp, tableSplitMap, common.DefaultMode)
 
 	// Step 4: Process tables and build schema info
-	schemaInfos := c.processTablesAndBuildSchemaInfo(tables, workingTaskMap, redoWorkingTaskMap, isMysqlCompatibleBackend)
+	schemaInfos := c.processTablesAndBuildSchemaInfo(tables, workingTaskMap, isMysqlCompatibleBackend, common.DefaultMode)
+
+	var (
+		redoWorkingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication]
+		redoSchemaInfos    map[int64]*heartbeatpb.SchemaInfo
+	)
+	if c.enableRedo {
+		redoTableSplitMap := make(map[int64]bool, len(redoTables))
+		for _, tbl := range redoTables {
+			redoTableSplitMap[tbl.TableID] = tbl.Splitable
+		}
+		redoWorkingTaskMap = c.buildWorkingTaskMap(allNodesResp, redoTableSplitMap, common.RedoMode)
+		redoSchemaInfos = c.processTablesAndBuildSchemaInfo(redoTables, redoWorkingTaskMap, isMysqlCompatibleBackend, common.RedoMode)
+	}
 
 	// Step 5: Handle any remaining working tasks (likely dropped tables)
 	c.handleRemainingWorkingTasks(workingTaskMap, redoWorkingTaskMap)
@@ -112,21 +135,20 @@ func (c *Controller) FinishBootstrap(
 	// Step 6: Initialize and start sub components
 	c.initializeComponents(allNodesResp)
 
-	// Step 7: Prepare response
-	initSchemaInfos := c.prepareSchemaInfoResponse(schemaInfos)
-
-	// Step 8: Mark the controller as bootstrapped
+	// Step 7: Mark the controller as bootstrapped
 	c.bootstrapped = true
 
 	return &heartbeatpb.MaintainerPostBootstrapRequest{
 		ChangefeedID:                  c.changefeedID.ToPB(),
 		TableTriggerEventDispatcherId: c.spanController.GetDDLDispatcherID().ToPB(),
-		Schemas:                       initSchemaInfos,
+		Schemas:                       c.prepareSchemaInfoResponse(schemaInfos),
+		RedoSchemas:                   c.prepareSchemaInfoResponse(redoSchemaInfos),
 	}, nil
 }
 
-func (c *Controller) determineStartTs(allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) uint64 {
+func (c *Controller) determineStartTs(allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) (uint64, uint64) {
 	startTs := uint64(0)
+	redoStartTs := uint64(0)
 	for node, resp := range allNodesResp {
 		log.Info("handle bootstrap response",
 			zap.Stringer("changefeed", c.changefeedID),
@@ -138,31 +160,37 @@ func (c *Controller) determineStartTs(allNodesResp map[node.ID]*heartbeatpb.Main
 			status := c.spanController.GetDDLDispatcher().GetStatus()
 			status.CheckpointTs = startTs
 			c.spanController.UpdateStatus(c.spanController.GetDDLDispatcher(), status)
-			if c.enableRedo {
-				redoStatus := c.redoSpanController.GetDDLDispatcher().GetStatus()
-				redoStatus.CheckpointTs = startTs
-				c.redoSpanController.UpdateStatus(c.redoSpanController.GetDDLDispatcher(), redoStatus)
-			}
+
+		}
+		if c.enableRedo && resp.RedoCheckpointTs > redoStartTs {
+			redoStartTs = resp.RedoCheckpointTs
+			redoStatus := c.redoSpanController.GetDDLDispatcher().GetStatus()
+			redoStatus.CheckpointTs = redoStartTs
+			c.redoSpanController.UpdateStatus(c.redoSpanController.GetDDLDispatcher(), redoStatus)
 		}
 	}
 	if startTs == 0 {
 		log.Panic("cant not found the startTs from the bootstrap response",
 			zap.String("changefeed", c.changefeedID.Name()))
 	}
-	return startTs
+	if c.enableRedo && redoStartTs == 0 {
+		log.Panic("cant not found the redoStartTs from the bootstrap response",
+			zap.String("changefeed", c.changefeedID.Name()))
+	}
+	return startTs, redoStartTs
 }
 
 func (c *Controller) buildWorkingTaskMap(
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
 	tableSplitMap map[int64]bool,
-) (
-	map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
-	map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
-) {
+	mode int64,
+) map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication] {
 	workingTaskMap := make(map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication])
-	redoWorkingTaskMap := make(map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication])
 	for node, resp := range allNodesResp {
 		for _, spanInfo := range resp.Spans {
+			if spanInfo.Mode != mode {
+				continue
+			}
 			dispatcherID := common.NewDispatcherIDFromPB(spanInfo.ID)
 			spanController := c.getSpanController(spanInfo.Mode)
 			if spanController.IsDDLDispatcher(dispatcherID) {
@@ -170,20 +198,17 @@ func (c *Controller) buildWorkingTaskMap(
 			}
 			splitEnabled := spanController.ShouldEnableSplit(tableSplitMap[spanInfo.Span.TableID])
 			spanReplication := c.createSpanReplication(spanInfo, node, splitEnabled)
-			if common.IsRedoMode(spanInfo.Mode) {
-				addToWorkingTaskMap(redoWorkingTaskMap, spanInfo.Span, spanReplication)
-			} else {
-				addToWorkingTaskMap(workingTaskMap, spanInfo.Span, spanReplication)
-			}
+			addToWorkingTaskMap(workingTaskMap, spanInfo.Span, spanReplication)
 		}
 	}
-	return workingTaskMap, redoWorkingTaskMap
+	return workingTaskMap
 }
 
 func (c *Controller) processTablesAndBuildSchemaInfo(
 	tables []commonEvent.Table,
-	workingTaskMap, redoWorkingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
+	workingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
 	isMysqlCompatibleBackend bool,
+	mode int64,
 ) map[int64]*heartbeatpb.SchemaInfo {
 	schemaInfos := make(map[int64]*heartbeatpb.SchemaInfo)
 
@@ -199,11 +224,7 @@ func (c *Controller) processTablesAndBuildSchemaInfo(
 		tableInfo := getTableInfo(table, isMysqlCompatibleBackend)
 		schemaInfos[schemaID].Tables = append(schemaInfos[schemaID].Tables, tableInfo)
 
-		// Process table spans
-		if c.enableRedo {
-			c.processTableSpans(table, redoWorkingTaskMap, common.RedoMode)
-		}
-		c.processTableSpans(table, workingTaskMap, common.DefaultMode)
+		c.processTableSpans(table, workingTaskMap, mode)
 	}
 
 	return schemaInfos
@@ -216,52 +237,20 @@ func (c *Controller) processTableSpans(
 ) {
 	tableSpans, isTableWorking := workingTaskMap[table.TableID]
 	spanController := c.getSpanController(mode)
-	// splitEnabled := spanController.ShouldEnableSplit(table.Splitable)
-
 	// Add new table if not working
 	if isTableWorking {
-		// Handle existing table spans
-		// keyspaceID := c.GetKeyspaceID()
-		// span := common.TableIDToComparableSpan(keyspaceID, table.TableID)
-		// tableSpan := &heartbeatpb.TableSpan{
-		// 	TableID:    table.TableID,
-		// 	StartKey:   span.StartKey,
-		// 	EndKey:     span.EndKey,
-		// 	KeyspaceID: keyspaceID,
-		// }
 		log.Info("table already working in other node",
 			zap.Stringer("changefeed", c.changefeedID),
 			zap.Int64("tableID", table.TableID))
 
 		spanController.AddWorkingSpans(tableSpans)
 
-		// if c.enableTableAcrossNodes {
-		// 	c.handleTableHoles(spanController, table, tableSpans, tableSpan, splitEnabled)
-		// }
 		// Remove processed table from working task map
 		delete(workingTaskMap, table.TableID)
 	} else {
 		spanController.AddNewTable(table, c.startCheckpointTs)
 	}
 }
-
-// func (c *Controller) handleTableHoles(
-// 	spanController *span.Controller,
-// 	table commonEvent.Table,
-// 	tableSpans utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
-// 	tableSpan *heartbeatpb.TableSpan,
-// 	splitEnabled bool,
-// ) {
-// 	holes := findHoles(tableSpans, tableSpan)
-// 	if c.splitter != nil {
-// 		for _, hole := range holes {
-// 			spans := c.splitter.Split(context.Background(), hole, 0, split.SplitTypeRegionCount)
-// 			spanController.AddNewSpans(table.SchemaID, spans, c.startCheckpointTs, splitEnabled)
-// 		}
-// 	} else {
-// 		spanController.AddNewSpans(table.SchemaID, holes, c.startCheckpointTs, splitEnabled)
-// 	}
-// }
 
 func (c *Controller) handleRemainingWorkingTasks(
 	workingTaskMap, redoWorkingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
