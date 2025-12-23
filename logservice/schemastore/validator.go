@@ -64,7 +64,6 @@ func VerifyTables(f filter.Filter, storage tidbkv.Storage, startTs uint64) (
 	)
 
 	setErr := func(err error) {
-
 		errOnce.Do(func() {
 			firstErr = err
 			close(done)
