@@ -15,15 +15,12 @@ package maintainer
 
 import (
 	"bytes"
-	"context"
 	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/maintainer/replica"
-	"github.com/pingcap/ticdc/maintainer/span"
-	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -219,28 +216,28 @@ func (c *Controller) processTableSpans(
 ) {
 	tableSpans, isTableWorking := workingTaskMap[table.TableID]
 	spanController := c.getSpanController(mode)
-	splitEnabled := spanController.ShouldEnableSplit(table.Splitable)
+	// splitEnabled := spanController.ShouldEnableSplit(table.Splitable)
 
 	// Add new table if not working
 	if isTableWorking {
 		// Handle existing table spans
-		keyspaceID := c.GetKeyspaceID()
-		span := common.TableIDToComparableSpan(keyspaceID, table.TableID)
-		tableSpan := &heartbeatpb.TableSpan{
-			TableID:    table.TableID,
-			StartKey:   span.StartKey,
-			EndKey:     span.EndKey,
-			KeyspaceID: keyspaceID,
-		}
+		// keyspaceID := c.GetKeyspaceID()
+		// span := common.TableIDToComparableSpan(keyspaceID, table.TableID)
+		// tableSpan := &heartbeatpb.TableSpan{
+		// 	TableID:    table.TableID,
+		// 	StartKey:   span.StartKey,
+		// 	EndKey:     span.EndKey,
+		// 	KeyspaceID: keyspaceID,
+		// }
 		log.Info("table already working in other node",
 			zap.Stringer("changefeed", c.changefeedID),
 			zap.Int64("tableID", table.TableID))
 
 		spanController.AddWorkingSpans(tableSpans)
 
-		if c.enableTableAcrossNodes {
-			c.handleTableHoles(spanController, table, tableSpans, tableSpan, splitEnabled)
-		}
+		// if c.enableTableAcrossNodes {
+		// 	c.handleTableHoles(spanController, table, tableSpans, tableSpan, splitEnabled)
+		// }
 		// Remove processed table from working task map
 		delete(workingTaskMap, table.TableID)
 	} else {
@@ -248,23 +245,23 @@ func (c *Controller) processTableSpans(
 	}
 }
 
-func (c *Controller) handleTableHoles(
-	spanController *span.Controller,
-	table commonEvent.Table,
-	tableSpans utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
-	tableSpan *heartbeatpb.TableSpan,
-	splitEnabled bool,
-) {
-	holes := findHoles(tableSpans, tableSpan)
-	if c.splitter != nil {
-		for _, hole := range holes {
-			spans := c.splitter.Split(context.Background(), hole, 0, split.SplitTypeRegionCount)
-			spanController.AddNewSpans(table.SchemaID, spans, c.startCheckpointTs, splitEnabled)
-		}
-	} else {
-		spanController.AddNewSpans(table.SchemaID, holes, c.startCheckpointTs, splitEnabled)
-	}
-}
+// func (c *Controller) handleTableHoles(
+// 	spanController *span.Controller,
+// 	table commonEvent.Table,
+// 	tableSpans utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
+// 	tableSpan *heartbeatpb.TableSpan,
+// 	splitEnabled bool,
+// ) {
+// 	holes := findHoles(tableSpans, tableSpan)
+// 	if c.splitter != nil {
+// 		for _, hole := range holes {
+// 			spans := c.splitter.Split(context.Background(), hole, 0, split.SplitTypeRegionCount)
+// 			spanController.AddNewSpans(table.SchemaID, spans, c.startCheckpointTs, splitEnabled)
+// 		}
+// 	} else {
+// 		spanController.AddNewSpans(table.SchemaID, holes, c.startCheckpointTs, splitEnabled)
+// 	}
+// }
 
 func (c *Controller) handleRemainingWorkingTasks(
 	workingTaskMap, redoWorkingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
