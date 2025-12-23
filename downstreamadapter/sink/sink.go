@@ -26,7 +26,6 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/util"
 )
 
 type Sink interface {
@@ -56,8 +55,7 @@ func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.
 	case config.PulsarScheme, config.PulsarSSLScheme, config.PulsarHTTPScheme, config.PulsarHTTPSScheme:
 		return pulsar.New(ctx, changefeedID, sinkURI, cfg.SinkConfig)
 	case config.S3Scheme, config.FileScheme, config.GCSScheme, config.GSScheme, config.AzblobScheme, config.AzureScheme, config.CloudStorageNoopScheme:
-		enableTableAcrossNodes := util.GetOrZero(cfg.Scheduler.EnableTableAcrossNodes)
-		return cloudstorage.New(ctx, changefeedID, sinkURI, cfg.SinkConfig, enableTableAcrossNodes, nil)
+		return cloudstorage.New(ctx, changefeedID, sinkURI, cfg.SinkConfig, cfg.EnableTableAcrossNodes, nil)
 	case config.BlackHoleScheme:
 		return blackhole.New()
 	}
@@ -78,8 +76,7 @@ func Verify(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID comm
 	case config.PulsarScheme, config.PulsarSSLScheme, config.PulsarHTTPScheme, config.PulsarHTTPSScheme:
 		return pulsar.Verify(ctx, changefeedID, sinkURI, cfg.SinkConfig)
 	case config.S3Scheme, config.FileScheme, config.GCSScheme, config.GSScheme, config.AzblobScheme, config.AzureScheme, config.CloudStorageNoopScheme:
-		enableTableAcrossNodes := util.GetOrZero(cfg.Scheduler.EnableTableAcrossNodes)
-		return cloudstorage.Verify(ctx, changefeedID, sinkURI, cfg.SinkConfig, enableTableAcrossNodes)
+		return cloudstorage.Verify(ctx, changefeedID, sinkURI, cfg.SinkConfig, cfg.EnableTableAcrossNodes)
 	case config.BlackHoleScheme:
 		return nil
 	}
