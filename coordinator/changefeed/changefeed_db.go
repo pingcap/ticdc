@@ -78,8 +78,8 @@ func (db *ChangefeedDB) AddAbsentChangefeed(tasks ...*Changefeed) {
 	defer db.lock.Unlock()
 
 	for _, task := range tasks {
-		db.changefeedDisplayNames[task.ID.DisplayName] = task.ID
 		db.changefeeds[task.ID] = task
+		db.changefeedDisplayNames[task.ID.DisplayName] = task.ID
 		db.AddAbsentWithoutLock(task)
 	}
 }
@@ -90,8 +90,8 @@ func (db *ChangefeedDB) AddStoppedChangefeed(task *Changefeed) {
 	defer db.lock.Unlock()
 
 	db.changefeeds[task.ID] = task
-	db.stopped[task.ID] = task
 	db.changefeedDisplayNames[task.ID.DisplayName] = task.ID
+	db.stopped[task.ID] = task
 }
 
 // AddReplicatingMaintainer adds a replicating the replicating map, that means the task is already scheduled to a maintainer
@@ -133,6 +133,7 @@ func (db *ChangefeedDB) StopByChangefeedID(cfID common.ChangeFeedID, remove bool
 	if remove {
 		log.Info("remove changefeed", zap.String("changefeed", cf.ID.String()))
 		delete(db.changefeeds, cfID)
+		delete(db.changefeedDisplayNames, cf.ID.DisplayName)
 		delete(db.stopped, cfID)
 	} else {
 		log.Info("stop changefeed", zap.String("changefeed", cfID.String()))
@@ -318,37 +319,6 @@ func (db *ChangefeedDB) CalculateGlobalGCSafepoint() uint64 {
 	return minCpts
 }
 
-// CalculateKeyspaceGCBarrier calculates the minimum keyspace-based checkpointTs of all changefeeds that replicating the upstream TiDB cluster.
-func (db *ChangefeedDB) CalculateKeyspaceGCBarrier() map[common.KeyspaceMeta]uint64 {
-	db.lock.RLock()
-	defer db.lock.RUnlock()
-
-	keyspaceGCBarrier := make(map[common.KeyspaceMeta]uint64)
-	for _, cf := range db.changefeeds {
-		info := cf.GetInfo()
-		if info == nil || !info.NeedBlockGC() {
-			continue
-		}
-
-		meta := common.KeyspaceMeta{
-			ID:   info.KeyspaceID,
-			Name: cf.ID.Keyspace(),
-		}
-
-		minCpts := keyspaceGCBarrier[meta]
-		if minCpts == 0 {
-			minCpts = math.MaxUint64
-		}
-
-		checkpointTs := cf.GetLastSavedCheckPointTs()
-		if minCpts > checkpointTs {
-			keyspaceGCBarrier[meta] = checkpointTs
-		}
-
-	}
-	return keyspaceGCBarrier
-}
-
 // ReplaceStoppedChangefeed updates the stopped changefeed
 func (db *ChangefeedDB) ReplaceStoppedChangefeed(cf *config.ChangeFeedInfo) {
 	db.lock.Lock()
@@ -363,6 +333,7 @@ func (db *ChangefeedDB) ReplaceStoppedChangefeed(cf *config.ChangeFeedInfo) {
 	newCf := NewChangefeed(cf.ChangefeedID, cf, oldCf.GetStatus().CheckpointTs, false)
 	db.stopped[cf.ChangefeedID] = newCf
 	db.changefeeds[cf.ChangefeedID] = newCf
+	db.changefeedDisplayNames[cf.ChangefeedID.DisplayName] = newCf.ID
 }
 
 func (db *ChangefeedDB) UpdateLogCoordinatorResolvedTsByID(changefeedID common.ChangeFeedID, resolvedTs uint64) {
