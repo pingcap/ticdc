@@ -99,7 +99,7 @@ func buildCreateTableSQL() string {
 	columns := make([]string, 0, wideColumnCount+4)
 	columns = append(columns, "id BIGINT PRIMARY KEY")
 	for i := 1; i <= wideColumnCount; i++ {
-		columns = append(columns, fmt.Sprintf("c%03d VARCHAR(64) NOT NULL DEFAULT ''", i))
+		columns = append(columns, fmt.Sprintf("c%03d VARCHAR(256) NOT NULL DEFAULT ''", i))
 	}
 	columns = append(columns,
 		"chunk_text MEDIUMTEXT NOT NULL",
