@@ -188,7 +188,7 @@ func assertRowWidth(db *sql.DB, id int) {
 	if err := row.Scan(&width); err != nil {
 		log.S().Fatalf("failed to scan row width: %v", err)
 	}
-	if width < minRowWidthBytes {
+	if width < int64(minRowWidthBytes) {
 		log.S().Fatalf("row %d width %d bytes is smaller than expected %d bytes", id, width, minRowWidthBytes)
 	}
 	log.S().Infof("row %d width %d bytes", id, width)

@@ -30,7 +30,9 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -821,12 +823,16 @@ func TestEventStoreCompressionAndIterDecodeBufferReuse(t *testing.T) {
 		callback: func() {},
 	}}
 
+	beforeMetric := testutil.ToFloat64(metrics.EventStoreCompressedRowsCount)
+
 	encoder, err := zstd.NewWriter(nil)
 	require.NoError(t, err)
 	defer encoder.Close()
 	var compressionBuf []byte
 	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf)
 	require.NoError(t, err)
+	afterMetric := testutil.ToFloat64(metrics.EventStoreCompressedRowsCount)
+	require.InDelta(t, float64(len(expectedValues)), afterMetric-beforeMetric, 1e-9)
 
 	innerIter, err := store.dbs[0].NewIter(&pebble.IterOptions{})
 	require.NoError(t, err)
