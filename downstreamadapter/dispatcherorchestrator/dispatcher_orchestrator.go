@@ -202,8 +202,8 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		// dispatcher manager on the new node may not have a table trigger
 		// event dispatcher configured yet.
 		if req.RedoTableTriggerEventDispatcherId != nil {
-			redoTableTriggerDispatcher := manager.GetRedoTableTriggerEventDispatcher()
-			if redoTableTriggerDispatcher == nil {
+			redoTableTriggerEventDispatcher := manager.GetRedoTableTriggerEventDispatcher()
+			if redoTableTriggerEventDispatcher == nil {
 				err = manager.NewRedoTableTriggerEventDispatcher(
 					req.RedoTableTriggerEventDispatcherId,
 					req.StartTs,

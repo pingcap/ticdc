@@ -354,8 +354,19 @@ type columnSchema struct {
 	// ColumnID -> offset in RowChangedEvents.Columns.
 	RowColumnsOffset map[int64]int `json:"row_columns_offset"`
 
-	// store handle key column ids
+	// HandleColIDs is only used for the new row format decoder, it's the same concept as the TiDB Handle.
+	// In the clustered index scenario, it contains the column ID of the primary key columns.
+	// In the non-clustered scenario, it should always be -1, to avoid be observed by the decoder.
+	HandleColID []int64 `json:"handle_col_id"`
+
+	// TiCDC only replicates table has primary key or not null unique key.
+	// * If there is primary key, it's the handle key
+	// * Otherwise, it's the unique key. If there are multiple unique keys, it's the longest one.
+	// * If there are multiple unique key with the same length, it the first one.
 	HandleKeyIDs map[int64]struct{} `json:"handle_key_ids"`
+	// HandleKeyIDList store the colID list of the HandleKeyIDs in order.
+	HandleKeyIDList []int64 `json:"handle_key_id_list"`
+
 	// IndexColumns store the colID of the columns in row changed events for
 	// unique index and primary key
 	// The reason why we need this is that the Indexes in TableInfo
@@ -370,10 +381,6 @@ type columnSchema struct {
 	// it's the same length and order with the model.TableInfo.Columns
 	RowColInfos    []rowcodec.ColInfo              `json:"row_col_infos"`
 	RowColFieldTps map[int64]*datumTypes.FieldType `json:"row_col_field_tps"`
-	// if the table has pk, the handle col id is the pk col id
-	// else if the table has not null unique key, the handle col id is the unique key col id
-	// else the handle col id is -1
-	HandleColID []int64 `json:"handle_col_id"`
 	// RowColFieldTpsSlice is used to decode chunk ∂ raw value bytes
 	RowColFieldTpsSlice []*datumTypes.FieldType `json:"row_col_field_tps_slice"`
 
@@ -432,6 +439,7 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 		NameToColID:      make(map[string]int64, len(tableInfo.Columns)),
 		RowColumnsOffset: make(map[int64]int, len(tableInfo.Columns)),
 		HandleKeyIDs:     make(map[int64]struct{}),
+		HandleKeyIDList:  make([]int64, 0),
 		HandleColID:      []int64{-1},
 		RowColInfos:      make([]rowcodec.ColInfo, len(tableInfo.Columns)),
 		RowColFieldTps:   make(map[int64]*datumTypes.FieldType, len(tableInfo.Columns)),
@@ -452,16 +460,19 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 				// pk is handle
 				colSchema.HandleKeyIDs[col.ID] = struct{}{}
 				colSchema.HandleColID = []int64{col.ID}
+				colSchema.HandleKeyIDList = append(colSchema.HandleKeyIDList, col.ID)
 				colSchema.IndexColumns = append(colSchema.IndexColumns, []int64{col.ID})
 				colSchema.PKIndex = []int64{col.ID}
 			} else if tableInfo.IsCommonHandle {
 				clear(colSchema.HandleKeyIDs)
+				colSchema.HandleKeyIDList = colSchema.HandleKeyIDList[:0]
 				colSchema.HandleColID = colSchema.HandleColID[:0]
 				pkIdx := tables.FindPrimaryIndex(tableInfo)
 				for _, pkCol := range pkIdx.Columns {
 					id := tableInfo.Columns[pkCol.Offset].ID
 					colSchema.HandleKeyIDs[id] = struct{}{}
 					colSchema.HandleColID = append(colSchema.HandleColID, id)
+					colSchema.HandleKeyIDList = append(colSchema.HandleKeyIDList, id)
 				}
 
 			}
@@ -604,6 +615,7 @@ func (s *columnSchema) initIndexColumns() {
 			if !hasPrimary {
 				for _, col := range idx.Columns {
 					s.HandleKeyIDs[s.Columns[col.Offset].ID] = struct{}{}
+					s.HandleKeyIDList = append(s.HandleKeyIDList, s.Columns[col.Offset].ID)
 				}
 				hasPrimary = true
 			}
@@ -641,17 +653,17 @@ func (s *columnSchema) initIndexColumns() {
 		}
 	}
 
-	if handleIndexOffset < 0 {
+	// if no handle index or has primary key, return directly
+	if handleIndexOffset < 0 || hasPrimary {
 		return
 	}
 
-	// set handle key with not null unique key
+	// only set handle key Ids with not null unique key when there is no primary key
 	selectCols := s.Indices[handleIndexOffset].Columns
-	s.HandleColID = make([]int64, 0, len(selectCols))
 	for _, col := range selectCols {
 		colID := s.Columns[col.Offset].ID
 		s.HandleKeyIDs[colID] = struct{}{}
-		s.HandleColID = append(s.HandleColID, colID)
+		s.HandleKeyIDList = append(s.HandleKeyIDList, colID)
 	}
 }
 

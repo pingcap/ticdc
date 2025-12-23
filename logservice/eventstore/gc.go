@@ -109,6 +109,7 @@ func (d *gcManager) run(ctx context.Context) error {
 			if len(ranges) == 0 {
 				continue
 			}
+			log.Debug("gc manager deleting ranges", zap.Int("rangeCount", len(ranges)))
 			d.doGCJob(ranges)
 			d.updateCompactRanges(ranges)
 			metrics.EventStoreDeleteRangeCount.Add(float64(len(ranges)))
@@ -157,6 +158,7 @@ func (d *gcManager) doCompaction() {
 	}
 	d.mu.Unlock()
 
+	log.Info("gc manager compacting ranges", zap.Int("rangeCount", len(toCompact)))
 	for key, endTs := range toCompact {
 		db := d.dbs[key.dbIndex]
 		if err := d.compactDataRange(db, key.uniqueKeyID, key.tableID, 0, endTs); err != nil {

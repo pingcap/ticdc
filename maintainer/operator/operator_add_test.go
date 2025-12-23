@@ -18,9 +18,33 @@ import (
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
+	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/stretchr/testify/require"
 )
+
+func newAddTestReplicaSet(
+	spanController *span.Controller,
+	changefeedID common.ChangeFeedID,
+) *replica.SpanReplication {
+	dispatcherID := common.NewDispatcherID()
+	tableSpan := &heartbeatpb.TableSpan{
+		TableID:  200,
+		StartKey: []byte("a"),
+		EndKey:   []byte("b"),
+	}
+	replicaSet := replica.NewSpanReplication(
+		changefeedID,
+		dispatcherID,
+		2,
+		tableSpan,
+		1000,
+		common.DefaultMode,
+		false,
+	)
+	spanController.AddAbsentReplicaSet(replicaSet)
+	return replicaSet
+}
 
 // TestAddOperator_DestNodeRemoved tests the scenario where:
 // 1. An add operation is initiated to create dispatcher on node A
@@ -30,25 +54,7 @@ import (
 func TestAddOperator_DestNodeRemoved(t *testing.T) {
 	spanController, changefeedID, _, _, nodeB := setupTestEnvironment(t)
 
-	// Create a new replica set for adding
-	dispatcherID := common.NewDispatcherID()
-	tableSpan := &heartbeatpb.TableSpan{
-		TableID:  200,
-		StartKey: []byte("a"),
-		EndKey:   []byte("b"),
-	}
-
-	absentReplicaSet := replica.NewSpanReplication(
-		changefeedID,
-		dispatcherID,
-		2,
-		tableSpan,
-		1000,
-		common.DefaultMode,
-		false,
-	)
-
-	spanController.AddAbsentReplicaSet(absentReplicaSet)
+	absentReplicaSet := newAddTestReplicaSet(spanController, changefeedID)
 
 	op := NewAddDispatcherOperator(spanController, absentReplicaSet, nodeB)
 	require.NotNil(t, op)
@@ -71,4 +77,116 @@ func TestAddOperator_DestNodeRemoved(t *testing.T) {
 
 	// Verify that the span is marked as absent
 	require.Equal(t, 1, spanController.GetAbsentSize())
+}
+
+// TestAddOperator_DestReportsWorking tests the scenario where:
+// 1. An add operation is initiated to create dispatcher on node B
+// 2. Node B reports working status
+// 3. Verify that the operator finishes and marks the span replicating
+func TestAddOperator_DestReportsWorking(t *testing.T) {
+	spanController, changefeedID, _, _, nodeB := setupTestEnvironment(t)
+	absentReplicaSet := newAddTestReplicaSet(spanController, changefeedID)
+
+	op := NewAddDispatcherOperator(spanController, absentReplicaSet, nodeB)
+	require.NotNil(t, op)
+
+	op.Start()
+	require.Equal(t, 0, spanController.GetAbsentSize())
+	require.Equal(t, 1, spanController.GetSchedulingSize())
+
+	workingStatus := &heartbeatpb.TableSpanStatus{
+		ID:              absentReplicaSet.ID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Working,
+		CheckpointTs:    1000,
+	}
+	op.Check(nodeB, workingStatus)
+	require.True(t, op.IsFinished())
+	require.False(t, op.removed.Load())
+	require.Nil(t, op.Schedule())
+
+	op.PostFinish()
+	require.Equal(t, 0, spanController.GetAbsentSize())
+	require.Equal(t, 0, spanController.GetSchedulingSize())
+	require.Equal(t, 1, spanController.GetReplicatingSize())
+	require.Equal(t, nodeB, absentReplicaSet.GetNodeID())
+}
+
+// TestAddOperator_DestReportsRemoved tests the scenario where:
+// 1. An add operation is initiated to create dispatcher on node B
+// 2. Node B reports removed status
+// 3. Verify that the operator finishes and marks the span absent for rescheduling
+func TestAddOperator_DestReportsRemoved(t *testing.T) {
+	spanController, changefeedID, _, _, nodeB := setupTestEnvironment(t)
+	absentReplicaSet := newAddTestReplicaSet(spanController, changefeedID)
+
+	op := NewAddDispatcherOperator(spanController, absentReplicaSet, nodeB)
+	require.NotNil(t, op)
+
+	op.Start()
+	require.Equal(t, 1, spanController.GetSchedulingSize())
+
+	removedStatus := &heartbeatpb.TableSpanStatus{
+		ID:              absentReplicaSet.ID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Removed,
+		CheckpointTs:    1000,
+	}
+	op.Check(nodeB, removedStatus)
+	require.True(t, op.IsFinished())
+	require.True(t, op.removed.Load())
+
+	op.PostFinish()
+	require.Equal(t, 1, spanController.GetAbsentSize())
+	require.Equal(t, 0, spanController.GetSchedulingSize())
+	require.Equal(t, 0, spanController.GetReplicatingSize())
+	require.Equal(t, "", absentReplicaSet.GetNodeID().String())
+}
+
+// TestAddOperator_StoppedStatusIgnored tests the scenario where:
+// 1. An add operation is initiated to create dispatcher on node B
+// 2. Node B reports stopped status
+// 3. Verify that the operator keeps running and continues scheduling create requests
+func TestAddOperator_StoppedStatusIgnored(t *testing.T) {
+	spanController, changefeedID, _, _, nodeB := setupTestEnvironment(t)
+	absentReplicaSet := newAddTestReplicaSet(spanController, changefeedID)
+
+	op := NewAddDispatcherOperator(spanController, absentReplicaSet, nodeB)
+	require.NotNil(t, op)
+
+	op.Start()
+	require.False(t, op.IsFinished())
+
+	stoppedStatus := &heartbeatpb.TableSpanStatus{
+		ID:              absentReplicaSet.ID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Stopped,
+		CheckpointTs:    1000,
+	}
+	op.Check(nodeB, stoppedStatus)
+	require.False(t, op.IsFinished())
+
+	msg := op.Schedule()
+	require.NotNil(t, msg)
+	require.Equal(t, nodeB.String(), msg.To.String())
+}
+
+// TestAddOperator_TaskRemovedDoesNotReintroduceSpan tests the scenario where:
+// 1. An add operation is initiated to create dispatcher on node B
+// 2. The span is removed from spanController before the operator is finalized
+// 3. Verify that PostFinish does not mark the span absent again
+func TestAddOperator_TaskRemovedDoesNotReintroduceSpan(t *testing.T) {
+	spanController, changefeedID, _, _, nodeB := setupTestEnvironment(t)
+	absentReplicaSet := newAddTestReplicaSet(spanController, changefeedID)
+
+	op := NewAddDispatcherOperator(spanController, absentReplicaSet, nodeB)
+	require.NotNil(t, op)
+
+	op.Start()
+	require.NotNil(t, spanController.GetTaskByID(absentReplicaSet.ID))
+
+	spanController.RemoveReplicatingSpan(absentReplicaSet)
+	require.Nil(t, spanController.GetTaskByID(absentReplicaSet.ID))
+
+	absentSizeBefore := spanController.GetAbsentSize()
+	op.OnTaskRemoved()
+	op.PostFinish()
+	require.Equal(t, absentSizeBefore, spanController.GetAbsentSize())
 }

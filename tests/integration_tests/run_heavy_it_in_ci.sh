@@ -96,7 +96,7 @@ kafka_groups=(
 	# G14
 	'debezium02'
 	# G15
-	# 'debezium03'
+	'debezium03'
 )
 
 # 12 CPU cores will be allocated to run each pulsar heavy group in CI pipelines.

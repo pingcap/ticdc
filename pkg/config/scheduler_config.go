@@ -38,6 +38,8 @@ type ChangefeedSchedulerConfig struct {
 	RegionThreshold *int `toml:"region-threshold" json:"region-threshold,omitempty"`
 	// RegionCountPerSpan is the maximax region count for each span when first splitted by RegionCountSpliiter
 	RegionCountPerSpan *int `toml:"region-count-per-span" json:"region-count-per-span,omitempty"`
+	// RegionCountRefreshInterval controls how often we refresh span region count with PD.
+	RegionCountRefreshInterval *time.Duration `toml:"region-count-refresh-interval" json:"region-count-refresh-interval,omitempty"`
 	// WriteKeyThreshold is the written keys threshold of splitting a table.
 	WriteKeyThreshold *int `toml:"write-key-threshold" json:"write-key-threshold,omitempty"`
 	// SchedulingTaskCountPerNode is the upper limit for scheduling tasks each node.
@@ -74,6 +76,9 @@ func (c *ChangefeedSchedulerConfig) FillMissingWithDefaults(defaultCfg *Changefe
 	}
 	if util.GetOrZero(c.RegionCountPerSpan) <= 0 {
 		c.RegionCountPerSpan = defaultCfg.RegionCountPerSpan
+	}
+	if c.RegionCountRefreshInterval == nil || *c.RegionCountRefreshInterval <= 0 {
+		c.RegionCountRefreshInterval = defaultCfg.RegionCountRefreshInterval
 	}
 	if util.GetOrZero(c.WriteKeyThreshold) < 0 {
 		c.WriteKeyThreshold = defaultCfg.WriteKeyThreshold
@@ -117,6 +122,9 @@ func (c *ChangefeedSchedulerConfig) ValidateAndAdjust(sinkURI *url.URL) error {
 	}
 	if util.GetOrZero(c.RegionCountPerSpan) <= 0 {
 		return errors.New("region-count-per-span must be larger than 0")
+	}
+	if c.RegionCountRefreshInterval == nil || *c.RegionCountRefreshInterval <= 0 {
+		return errors.New("region-count-refresh-interval must be larger than 0")
 	}
 
 	if util.GetOrZero(c.BalanceScoreThreshold) <= 0 {

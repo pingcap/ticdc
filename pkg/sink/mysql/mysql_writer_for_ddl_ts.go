@@ -26,6 +26,12 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	// syncPointMetaTableID is a reserved table_id in ddl_ts_v1 used to record syncpoint state.
+	// It is negative to avoid conflicting with any real table_id (including DDLSpanTableID=0).
+	syncPointMetaTableID int64 = -1
+)
+
 // FlushDDLTsPre is used to flush ddl ts before the ddl event is sent to downstream.
 // It's used to fix the potential data loss problem leading by the ddl ts event and ddl event can't be atomicly send to downstream.
 //
@@ -72,30 +78,37 @@ func (w *Writer) SendDDLTsPre(event commonEvent.BlockEvent) error {
 	ticdcClusterID := config.GetGlobalServerConfig().ClusterID
 	ddlTs := strconv.FormatUint(event.GetCommitTs(), 10)
 	var tableIds []int64
+	var isSyncpoint string
 
-	relatedTables := event.GetBlockedTables()
+	// Syncpoint should not update ddl_ts for all tables. That causes O(table_count)
+	// upserts (twice per syncpoint: pre and post) and becomes a bottleneck when the
+	// number of tables is large. Instead, we only update a single reserved row to
+	// represent the latest syncpoint state for this changefeed.
+	if event.GetType() == commonEvent.TypeSyncPointEvent {
+		tableIds = []int64{syncPointMetaTableID}
+		isSyncpoint = "1"
+	} else {
+		isSyncpoint = "0"
+		relatedTables := event.GetBlockedTables()
 
-	switch relatedTables.InfluenceType {
-	case commonEvent.InfluenceTypeNormal:
-		tableIds = append(tableIds, relatedTables.TableIDs...)
-	case commonEvent.InfluenceTypeDB:
-		ids := w.tableSchemaStore.GetTableIdsByDB(relatedTables.SchemaID)
-		tableIds = append(tableIds, ids...)
-	case commonEvent.InfluenceTypeAll:
-		ids := w.tableSchemaStore.GetAllTableIds()
-		tableIds = append(tableIds, ids...)
-	}
+		switch relatedTables.InfluenceType {
+		case commonEvent.InfluenceTypeNormal:
+			tableIds = append(tableIds, relatedTables.TableIDs...)
+		case commonEvent.InfluenceTypeDB:
+			ids := w.tableSchemaStore.GetTableIdsByDB(relatedTables.SchemaID)
+			tableIds = append(tableIds, ids...)
+		case commonEvent.InfluenceTypeAll:
+			ids := w.tableSchemaStore.GetAllTableIds()
+			tableIds = append(tableIds, ids...)
+		}
 
-	addTables := event.GetNeedAddedTables()
-	for _, table := range addTables {
-		tableIds = append(tableIds, table.TableID)
+		addTables := event.GetNeedAddedTables()
+		for _, table := range addTables {
+			tableIds = append(tableIds, table.TableID)
+		}
 	}
 
 	if len(tableIds) > 0 {
-		isSyncpoint := "1"
-		if event.GetType() == commonEvent.TypeDDLEvent {
-			isSyncpoint = "0"
-		}
 		query := insertItemQuery(tableIds, ticdcClusterID, changefeedID, ddlTs, "0", isSyncpoint)
 		log.Debug("send ddl ts table query", zap.String("query", query))
 
@@ -128,46 +141,50 @@ func (w *Writer) SendDDLTs(event commonEvent.BlockEvent) error {
 	ddlTs := strconv.FormatUint(event.GetCommitTs(), 10)
 	var tableIds []int64
 	var dropTableIds []int64
+	var isSyncpoint string
 
-	relatedTables := event.GetBlockedTables()
+	// See SendDDLTsPre: syncpoint only updates a single reserved row.
+	if event.GetType() == commonEvent.TypeSyncPointEvent {
+		tableIds = []int64{syncPointMetaTableID}
+		isSyncpoint = "1"
+	} else {
+		isSyncpoint = "0"
+		relatedTables := event.GetBlockedTables()
 
-	switch relatedTables.InfluenceType {
-	case commonEvent.InfluenceTypeNormal:
-		tableIds = append(tableIds, relatedTables.TableIDs...)
-	case commonEvent.InfluenceTypeDB:
-		ids := w.tableSchemaStore.GetTableIdsByDB(relatedTables.SchemaID)
-		tableIds = append(tableIds, ids...)
-	case commonEvent.InfluenceTypeAll:
-		ids := w.tableSchemaStore.GetAllTableIds()
-		tableIds = append(tableIds, ids...)
-	}
-
-	dropTables := event.GetNeedDroppedTables()
-	if dropTables != nil {
-		switch dropTables.InfluenceType {
+		switch relatedTables.InfluenceType {
 		case commonEvent.InfluenceTypeNormal:
-			dropTableIds = append(dropTableIds, dropTables.TableIDs...)
+			tableIds = append(tableIds, relatedTables.TableIDs...)
 		case commonEvent.InfluenceTypeDB:
-			// for drop table, we will never delete the item of table trigger, so we get normal table ids for the schemaID.
-			ids := w.tableSchemaStore.GetNormalTableIdsByDB(dropTables.SchemaID)
-			dropTableIds = append(dropTableIds, ids...)
+			ids := w.tableSchemaStore.GetTableIdsByDB(relatedTables.SchemaID)
+			tableIds = append(tableIds, ids...)
 		case commonEvent.InfluenceTypeAll:
-			// for drop table, we will never delete the item of table trigger, so we get normal table ids for the schemaID.
-			ids := w.tableSchemaStore.GetAllNormalTableIds()
-			dropTableIds = append(dropTableIds, ids...)
+			ids := w.tableSchemaStore.GetAllTableIds()
+			tableIds = append(tableIds, ids...)
 		}
-	}
 
-	addTables := event.GetNeedAddedTables()
-	for _, table := range addTables {
-		tableIds = append(tableIds, table.TableID)
+		dropTables := event.GetNeedDroppedTables()
+		if dropTables != nil {
+			switch dropTables.InfluenceType {
+			case commonEvent.InfluenceTypeNormal:
+				dropTableIds = append(dropTableIds, dropTables.TableIDs...)
+			case commonEvent.InfluenceTypeDB:
+				// for drop table, we will never delete the item of table trigger, so we get normal table ids for the schemaID.
+				ids := w.tableSchemaStore.GetNormalTableIdsByDB(dropTables.SchemaID)
+				dropTableIds = append(dropTableIds, ids...)
+			case commonEvent.InfluenceTypeAll:
+				// for drop table, we will never delete the item of table trigger, so we get normal table ids for the schemaID.
+				ids := w.tableSchemaStore.GetAllNormalTableIds()
+				dropTableIds = append(dropTableIds, ids...)
+			}
+		}
+
+		addTables := event.GetNeedAddedTables()
+		for _, table := range addTables {
+			tableIds = append(tableIds, table.TableID)
+		}
 	}
 
 	if len(tableIds) > 0 {
-		isSyncpoint := "1"
-		if event.GetType() == commonEvent.TypeDDLEvent {
-			isSyncpoint = "0"
-		}
 		query := insertItemQuery(tableIds, ticdcClusterID, changefeedID, ddlTs, "1", isSyncpoint)
 		log.Info("send ddl ts table query", zap.String("query", query))
 
@@ -261,28 +278,36 @@ func dropItemQuery(dropTableIds []int64, ticdcClusterID string, changefeedID str
 	return builder.String()
 }
 
-// GetTableRecoveryInfo queries the ddl-ts table to determine recovery information for the given tables.
+// GetTableRecoveryInfo queries ddl_ts_v1 to determine recovery information for the given tables.
 //
-// Returns:
-//   - startTsList: The startTs to use for each table
-//   - skipSyncpointAtStartTsList: Whether to skip syncpoint events at startTs for each table
-//   - skipDMLAsStartTsList: Whether to skip DML events at startTs+1 for each table
+// It reads:
+//  1. Per-table row: (table_id = tableID)
+//  2. Syncpoint meta row: (table_id = syncPointMetaTableID)
 //
-// Recovery logic based on ddl-ts table state:
-//  1. No record found (new table): Returns 0 for all values
-//  2. finished=1: DDL and optional syncpoint completed normally
+// The syncpoint meta row is only applied when the per-table row exists. If the per-table
+// row does not exist, we return 0 and let the caller use the input startTs directly.
+//
+// When both rows exist, we choose the row with larger ddl_ts (if equal, prefer the
+// syncpoint meta row), and decode it as following rules:
+//
+//  1. finished=1: DDL and optional syncpoint completed normally
 //     - Returns ddlTs
 //     - skipSyncpointAtStartTs = is_syncpoint (skip if it was a syncpoint)
 //     - skipDMLAsStartTs = false
-//  3. finished=0, is_syncpoint=false: DDL not finished (crash during DDL)
+//  2. finished=0, is_syncpoint=false: DDL not finished (crash during DDL)
 //     - Returns ddlTs-1 to replay DDL at ddlTs
 //     - skipDMLAsStartTs = true (skip already-written DML at ddlTs)
-//  4. finished=0, is_syncpoint=true: Syncpoint not finished
+//  3. finished=0, is_syncpoint=true: Syncpoint not finished
 //     - If there was a DDL at the same ts, it has already been executed
 //     (because we only write syncpoint pre after DDL is fully completed)
 //     - Returns ddlTs (no need to replay DDL even if it existed)
 //     - skipSyncpointAtStartTs = false (replay syncpoint)
 //     - skipDMLAsStartTs = false (process DML normally)
+//
+// Returns:
+//   - startTsList: The startTs to use for each table
+//   - skipSyncpointAtStartTsList: Whether to skip syncpoint events at startTs for each table
+//   - skipDMLAsStartTsList: Whether to skip DML events at startTs+1 for each table
 func (w *Writer) GetTableRecoveryInfo(tableIDs []int64) ([]int64, []bool, []bool, error) {
 	retStartTsList := make([]int64, len(tableIDs))
 	// when split table enabled, there may have some same tableID in tableIDs
@@ -314,54 +339,78 @@ func (w *Writer) GetTableRecoveryInfo(tableIDs []int64) ([]int64, []bool, []bool
 	}
 
 	defer rows.Close()
-	var ddlTs, tableId int64
-	var finished, isSyncpoint bool
+
+	type ddlTsRow struct {
+		ddlTs       int64
+		finished    bool
+		isSyncpoint bool
+	}
+
+	var (
+		syncpointRow      ddlTsRow
+		hasSyncpointRow   bool
+		tableIDToDDLTsRow = make(map[int64]ddlTsRow, len(tableIDs))
+	)
+
 	for rows.Next() {
-		err = rows.Scan(&tableId, &ddlTs, &finished, &isSyncpoint)
+		var (
+			ddlTs, tableId     int64
+			finished, isSynced bool
+		)
+		err = rows.Scan(&tableId, &ddlTs, &finished, &isSynced)
 		if err != nil {
 			return retStartTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to check ddl ts table; Query is %s", query)))
 		}
-		if finished {
-			for _, idx := range tableIdIdxMap[tableId] {
-				retStartTsList[idx] = ddlTs
-				skipSyncpointAtStartTs[idx] = isSyncpoint
+		row := ddlTsRow{
+			ddlTs:       ddlTs,
+			finished:    finished,
+			isSyncpoint: isSynced,
+		}
+		if tableId == syncPointMetaTableID {
+			syncpointRow = row
+			hasSyncpointRow = true
+			continue
+		}
+
+		if _, ok := tableIdIdxMap[tableId]; !ok {
+			continue
+		}
+		tableIDToDDLTsRow[tableId] = row
+	}
+
+	decodeRow := func(row ddlTsRow) (startTs int64, skipSyncpoint bool, skipDMLAsStartTs bool) {
+		if row.finished {
+			return row.ddlTs, row.isSyncpoint, false
+		}
+		if row.isSyncpoint {
+			// Syncpoint not finished, replay it at the same ts.
+			return row.ddlTs, false, false
+		}
+		// DDL not finished, replay it at ddlTs, but skip the already-written DML at ddlTs.
+		return row.ddlTs - 1, false, true
+	}
+
+	for tableID, idxList := range tableIdIdxMap {
+		tableRow, ok := tableIDToDDLTsRow[tableID]
+		if !ok {
+			continue
+		}
+
+		chosen := tableRow
+		if hasSyncpointRow {
+			// When ddl_ts is equal, prefer the syncpoint meta row. This keeps the
+			// behavior consistent with the legacy per-table updates where the
+			// syncpoint write overwrote the per-table row at the same ts.
+			if syncpointRow.ddlTs >= tableRow.ddlTs {
+				chosen = syncpointRow
 			}
-		} else {
-			// finished = 0, need to distinguish between DDL and Syncpoint
-			if isSyncpoint {
-				// Case: Syncpoint not finished (crashed after writing syncpoint pre).
-				// The execution order is: FlushDDLTsPre(DDL) -> execDDL() -> FlushDDLTs(DDL) -> FlushDDLTsPre(Syncpoint)
-				// If we see isSyncpoint=1 && finished=0, we crashed after FlushDDLTsPre(Syncpoint).
-				//
-				// Key insight: Since we've written syncpoint pre, any DDL at the same ts (if exists)
-				// must have already been executed and completed. We only write syncpoint pre after
-				// the DDL is fully done.
-				//
-				// Therefore:
-				// - Start from ddlTs (not ddlTs-1) - no need to replay DDL even if it existed
-				// - Set skipSyncpoint=false to receive and replay the syncpoint event
-				// - Set skipDMLAsStartTs=false because DML should be processed normally
-				for _, idx := range tableIdIdxMap[tableId] {
-					retStartTsList[idx] = ddlTs
-					skipSyncpointAtStartTs[idx] = false // Need to receive syncpoint event
-					skipDMLAsStartTsList[idx] = false   // DML should not be skipped
-				}
-			} else {
-				// Case: DDL not finished (or finished but not marked).
-				// Even in some corner case, the DDL actually executed, but ddl ts is not finished.
-				// We can tolerate to rewrite the DDL again.
-				// Because the ddl ts is not finish, so no dmls after this ddl will be flushed downstream.
-				// Besides, the granularity of DDL execution is guaranteed, so executing DDL once more will not affect its correctness.
-				//
-				// In this case, we set startTs = ddlTs - 1 to replay the DDL at ddlTs.
-				// However, the DML at ddlTs might have already been written to downstream before the crash.
-				// To avoid duplicate DML writes, we set skipDMLAsStartTs = true to filter out DML events at startTs+1 (which is ddlTs).
-				// DDL events at ddlTs will still be processed to ensure the DDL is replayed.
-				for _, idx := range tableIdIdxMap[tableId] {
-					retStartTsList[idx] = ddlTs - 1
-					skipDMLAsStartTsList[idx] = true
-				}
-			}
+		}
+
+		startTs, skipSyncpoint, skipDMLAsStartTs := decodeRow(chosen)
+		for _, idx := range idxList {
+			retStartTsList[idx] = startTs
+			skipSyncpointAtStartTs[idx] = skipSyncpoint
+			skipDMLAsStartTsList[idx] = skipDMLAsStartTs
 		}
 	}
 
@@ -388,6 +437,17 @@ func selectDDLTsQuery(tableIDs []int64, ticdcClusterID string, changefeedID stri
 			builder.WriteString(", ")
 		}
 	}
+	if len(tableIDs) > 0 {
+		builder.WriteString(", ")
+	}
+	// Always query the syncpoint meta row. It may or may not exist.
+	builder.WriteString("('")
+	builder.WriteString(ticdcClusterID)
+	builder.WriteString("', '")
+	builder.WriteString(changefeedID)
+	builder.WriteString("', ")
+	builder.WriteString(strconv.FormatInt(syncPointMetaTableID, 10))
+	builder.WriteString(")")
 	builder.WriteString(")")
 	return builder.String()
 }

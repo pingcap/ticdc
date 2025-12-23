@@ -70,7 +70,7 @@ func (o *unsafeResetOptions) addFlags(cmd *cobra.Command) {
 
 // run runs the `cli unsafe reset` command.
 func (o *unsafeResetOptions) run(cmd *cobra.Command) error {
-	ctx := context.Background()
+	ctx := cmd.Context()
 	defer o.pdClient.Close()
 	defer o.etcdClient.Close()
 
