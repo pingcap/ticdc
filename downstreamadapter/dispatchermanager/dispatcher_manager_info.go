@@ -85,12 +85,3 @@ func (e *DispatcherManager) GetAllDispatchers(schemaID int64) []common.Dispatche
 	}
 	return dispatcherIDs
 }
-
-// GetStartTs return the minimum startTs between the redoTableTriggerEventDispatcher and tableTriggerEventDispatcher
-func (e *DispatcherManager) GetStartTs() uint64 {
-	startTs := e.GetTableTriggerEventDispatcher().GetStartTs()
-	if e.RedoEnable {
-		return min(startTs, e.GetRedoTableTriggerEventDispatcher().GetStartTs())
-	}
-	return startTs
-}

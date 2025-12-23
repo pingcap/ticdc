@@ -617,7 +617,6 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 				newRedoWatermark.Seq = tableSpanStatus.Seq
 				if tableSpanStatus.CheckpointTs != 0 && tableSpanStatus.CheckpointTs < newRedoWatermark.CheckpointTs {
 					newRedoWatermark.CheckpointTs = tableSpanStatus.CheckpointTs
-					log.Error("redoDispatcherMap collectComponentStatusWhenChanged", zap.Any("id", tableSpanStatus.ID), zap.Any("watermark", newRedoWatermark))
 				}
 			}
 			delay.Reset(10 * time.Millisecond)
@@ -639,7 +638,6 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 						}
 						if tableSpanStatus.CheckpointTs != 0 && tableSpanStatus.CheckpointTs < newRedoWatermark.CheckpointTs {
 							newRedoWatermark.CheckpointTs = tableSpanStatus.CheckpointTs
-							log.Error("redoDispatcherMap collectComponentStatusWhenChanged", zap.Any("id", tableSpanStatus.ID), zap.Any("watermark", newRedoWatermark))
 						}
 					}
 				case <-delay.C:
@@ -712,7 +710,6 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 					redoDispatchersWithoutWatermark = append(redoDispatchersWithoutWatermark, id)
 				}
 			}
-			log.Error("redoDispatcherMap", zap.Any("id", id), zap.Any("watermark", watermark))
 		})
 		message.RedoWatermark.Seq = redoSeq
 		e.latestRedoWatermark.Set(message.RedoWatermark)
