@@ -19,12 +19,144 @@ import (
 	"sync"
 
 	"github.com/pingcap/errors"
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	tidbkv "github.com/pingcap/tidb/pkg/kv"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"go.uber.org/zap"
 )
+
+type tableTask struct {
+	schema string
+	values [][]byte
+}
+
+// tableVerifier encapsulates the concurrent verification logic used by VerifyTables.
+// It keeps worker coordination, error propagation, and result aggregation together to
+// reduce the complexity of VerifyTables while retaining the worker-pool optimization.
+type tableVerifier struct {
+	filter filter.Filter
+
+	tasks chan tableTask
+	done  chan struct{}
+
+	appendMu sync.Mutex
+	workerWg sync.WaitGroup
+
+	errOnce  sync.Once
+	firstErr error
+
+	tableInfos       []*common.TableInfo
+	ineligibleTables []string
+	eligibleTables   []string
+}
+
+func newTableVerifier(f filter.Filter, tableWorkers int) *tableVerifier {
+	return &tableVerifier{
+		filter: f,
+		tasks:  make(chan tableTask, tableWorkers*2),
+		done:   make(chan struct{}),
+
+		tableInfos:       make([]*common.TableInfo, 0),
+		ineligibleTables: make([]string, 0),
+		eligibleTables:   make([]string, 0),
+	}
+}
+
+func (v *tableVerifier) setErr(err error) {
+	v.errOnce.Do(func() {
+		v.firstErr = err
+		close(v.done)
+	})
+}
+
+func (v *tableVerifier) start(tableWorkers int) {
+	v.workerWg.Add(tableWorkers)
+	for i := 0; i < tableWorkers; i++ {
+		go v.worker()
+	}
+}
+
+func (v *tableVerifier) closeAndWait() {
+	close(v.tasks)
+	v.workerWg.Wait()
+}
+
+func (v *tableVerifier) sendTask(task tableTask) bool {
+	if len(task.values) == 0 {
+		return true
+	}
+	select {
+	case v.tasks <- task:
+		return true
+	case <-v.done:
+		return false
+	}
+}
+
+func (v *tableVerifier) appendResults(
+	tableInfos []*common.TableInfo, ineligibleTables []string, eligibleTables []string,
+) {
+	if len(tableInfos) == 0 {
+		return
+	}
+	v.appendMu.Lock()
+	v.tableInfos = append(v.tableInfos, tableInfos...)
+	v.ineligibleTables = append(v.ineligibleTables, ineligibleTables...)
+	v.eligibleTables = append(v.eligibleTables, eligibleTables...)
+	v.appendMu.Unlock()
+}
+
+func (v *tableVerifier) worker() {
+	defer v.workerWg.Done()
+	for {
+		var task tableTask
+		select {
+		case <-v.done:
+			return
+		case t, ok := <-v.tasks:
+			if !ok {
+				return
+			}
+			task = t
+		}
+
+		localInfos := make([]*common.TableInfo, 0, len(task.values))
+		localIneligible := make([]string, 0)
+		localEligible := make([]string, 0)
+
+		for _, value := range task.values {
+			tbInfo := &timodel.TableInfo{}
+			if err := json.Unmarshal(value, tbInfo); err != nil {
+				v.setErr(errors.Trace(err))
+				return
+			}
+
+			tableName := tbInfo.Name.O
+			if v.filter.ShouldIgnoreTable(task.schema, tableName) {
+				log.Debug("ignore table", zap.String("schema", task.schema), zap.String("table", tableName))
+				continue
+			}
+			// Sequence is not supported yet, TiCDC needs to filter all sequence tables.
+			// See https://github.com/pingcap/tiflow/issues/4559
+			if tbInfo.Sequence != nil {
+				continue
+			}
+
+			tableInfo := common.WrapTableInfo(task.schema, tbInfo)
+			localInfos = append(localInfos, tableInfo)
+			if !tableInfo.IsEligible(false /* forceReplicate */) {
+				localIneligible = append(localIneligible, tableInfo.GetTableName())
+			} else {
+				localEligible = append(localEligible, tableInfo.GetTableName())
+			}
+		}
+
+		v.appendResults(localInfos, localIneligible, localEligible)
+	}
+}
 
 // VerifyTables catalog tables specified by ReplicaConfig into
 // eligible (has an unique index or primary key) and ineligible tables.
@@ -44,121 +176,25 @@ func VerifyTables(f filter.Filter, storage tidbkv.Storage, startTs uint64) (
 		return nil, nil, nil, cerror.WrapError(cerror.ErrMetaListDatabases, err)
 	}
 
-	tableInfos := make([]*common.TableInfo, 0)
-	ineligibleTables := make([]string, 0)
-	eligibleTables := make([]string, 0)
-
-	type tableTask struct {
-		schema string
-		values [][]byte
-	}
-
-	done := make(chan struct{})
-
-	var (
-		appendMu sync.Mutex
-		workerWg sync.WaitGroup
-
-		errOnce  sync.Once
-		firstErr error
-	)
-
-	setErr := func(err error) {
-		errOnce.Do(func() {
-			firstErr = err
-			close(done)
-		})
-	}
-
-	tasks := make(chan tableTask, tableWorkers*2)
-
-	worker := func() {
-		defer workerWg.Done()
-		for {
-			var task tableTask
-			select {
-			case <-done:
-				return
-			case t, ok := <-tasks:
-				if !ok {
-					return
-				}
-				task = t
-			}
-
-			localInfos := make([]*common.TableInfo, 0, len(task.values))
-			localIneligible := make([]string, 0)
-			localEligible := make([]string, 0)
-
-			for _, value := range task.values {
-				tbInfo := &timodel.TableInfo{}
-				if err := json.Unmarshal(value, tbInfo); err != nil {
-					setErr(errors.Trace(err))
-					return
-				}
-
-				tableName := tbInfo.Name.O
-				if f.ShouldIgnoreTable(task.schema, tableName) {
-					continue
-				}
-				// Sequence is not supported yet, TiCDC needs to filter all sequence tables.
-				// See https://github.com/pingcap/tiflow/issues/4559
-				if tbInfo.Sequence != nil {
-					continue
-				}
-
-				tableInfo := common.WrapTableInfo(task.schema, tbInfo)
-				localInfos = append(localInfos, tableInfo)
-				if !tableInfo.IsEligible(false /* forceReplicate */) {
-					localIneligible = append(localIneligible, tableInfo.GetTableName())
-				} else {
-					localEligible = append(localEligible, tableInfo.GetTableName())
-				}
-			}
-
-			if len(localInfos) == 0 {
-				continue
-			}
-
-			appendMu.Lock()
-			tableInfos = append(tableInfos, localInfos...)
-			ineligibleTables = append(ineligibleTables, localIneligible...)
-			eligibleTables = append(eligibleTables, localEligible...)
-			appendMu.Unlock()
-		}
-	}
-
-	workerWg.Add(tableWorkers)
-	for i := 0; i < tableWorkers; i++ {
-		go worker()
-	}
-
-	sendTask := func(task tableTask) bool {
-		if len(task.values) == 0 {
-			return true
-		}
-		select {
-		case tasks <- task:
-			return true
-		case <-done:
-			return false
-		}
-	}
+	verifier := newTableVerifier(f, tableWorkers)
+	verifier.start(tableWorkers)
 
 dbLoop:
 	for _, dbinfo := range dbinfos {
 		select {
-		case <-done:
+		case <-verifier.done:
 			break dbLoop
 		default:
 		}
-		if f.ShouldIgnoreSchema(dbinfo.Name.O) {
+		schemaName := dbinfo.Name.O
+		if f.ShouldIgnoreSchema(schemaName) {
+			log.Debug("ignore schema", zap.String("schema", schemaName))
 			continue
 		}
 
 		rawTables, err := meta.GetMetasByDBID(dbinfo.ID)
 		if err != nil {
-			setErr(cerror.WrapError(cerror.ErrMetaListDatabases, err))
+			verifier.setErr(cerror.WrapError(cerror.ErrMetaListDatabases, err))
 			break
 		}
 
@@ -169,23 +205,22 @@ dbLoop:
 			}
 			batch = append(batch, r.Value)
 			if len(batch) >= batchSize {
-				if !sendTask(tableTask{schema: dbinfo.Name.O, values: batch}) {
+				if !verifier.sendTask(tableTask{schema: schemaName, values: batch}) {
 					break dbLoop
 				}
 				batch = make([][]byte, 0, batchSize)
 			}
 		}
 
-		if !sendTask(tableTask{schema: dbinfo.Name.O, values: batch}) {
+		if !verifier.sendTask(tableTask{schema: schemaName, values: batch}) {
 			break
 		}
 	}
 
-	close(tasks)
-	workerWg.Wait()
+	verifier.closeAndWait()
 
-	if firstErr != nil {
-		return nil, nil, nil, firstErr
+	if verifier.firstErr != nil {
+		return nil, nil, nil, verifier.firstErr
 	}
-	return tableInfos, ineligibleTables, eligibleTables, nil
+	return verifier.tableInfos, verifier.ineligibleTables, verifier.eligibleTables, nil
 }
