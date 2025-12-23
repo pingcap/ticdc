@@ -691,8 +691,7 @@ func (m *Maintainer) calculateNewCheckpointTs() (*heartbeatpb.Watermark, bool) {
 		if !ok {
 			updateCheckpointTs = false
 			log.Warn("checkpointTs can not be advanced, since missing capture heartbeat",
-				zap.Stringer("changefeedID", m.changefeedID),
-				zap.Any("node", id),
+				zap.Stringer("changefeedID", m.changefeedID), zap.Any("node", id),
 				zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
 				zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs))
 			continue
@@ -916,7 +915,7 @@ func (m *Maintainer) onBootstrapResponses(responses map[node.ID]*heartbeatpb.Mai
 	}
 
 	m.bootstrapped.Store(true)
-	log.Info("maintainer bootstrapped", zap.Stringer("changefeedID", m.changefeedID))
+	log.Info("changefeed maintainer bootstrapped", zap.Stringer("changefeedID", m.changefeedID))
 	// Memory Consumption is 64(tableName/schemaName limit) * 4(utf8.UTFMax) * 2(tableName+schemaName) * tableNum
 	// For an extreme case(100w tables, and 64 utf8 characters for each name), the memory consumption is about 488MB.
 	// For a normal case(100w tables, and 16 ascii characters for each name), the memory consumption is about 30MB.

@@ -361,8 +361,8 @@ type remoteMaintainer struct {
 }
 
 func (c *Controller) handleBootstrapResponses(responses map[node.ID]*heartbeatpb.CoordinatorBootstrapResponse) {
-	log.Info("all nodes bootstrap response received",
-		zap.Int("nodeCount", len(responses)))
+	log.Info("all new nodes bootstrap response received",
+		zap.Int("newNodeCount", len(responses)))
 	// runningCfs are changefeeds that already running on other nodes
 	runningCfs := make(map[common.ChangeFeedID]remoteMaintainer)
 	for nodeID, resp := range responses {
@@ -503,7 +503,7 @@ func (c *Controller) finishBootstrap(runningChangefeeds map[common.ChangeFeedID]
 	if c.bootstrapped.Load() {
 		log.Info("coordinator already bootstrapped, may a new node join the cluster",
 			zap.Any("nodeID", c.selfNode.ID),
-			zap.Any("changefeeds", runningChangefeeds))
+			zap.Int("changefeeds", len(runningChangefeeds)))
 		return
 	}
 	// load all changefeeds from metastore, and check if the changefeed is already in workingMap
