@@ -90,7 +90,7 @@ func TestGetTableRecoveryInfo_Comprehensive(t *testing.T) {
 		defer db.Close()
 
 		tableIDs := []int64{1, 2, 3}
-		expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1), ('default', 'test/test', 2), ('default', 'test/test', 3))"
+		expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1), ('default', 'test/test', 2), ('default', 'test/test', 3), ('default', 'test/test', -1))"
 
 		tableNotExistsErr := &mysql.MySQLError{
 			Number:  1146, // ER_NO_SUCH_TABLE
@@ -119,7 +119,7 @@ func TestGetTableRecoveryInfo_Comprehensive(t *testing.T) {
 		defer db.Close()
 
 		tableIDs := []int64{1, 2}
-		expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1), ('default', 'test/test', 2))"
+		expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1), ('default', 'test/test', 2), ('default', 'test/test', -1))"
 
 		// Mock query results: finished DDL with different syncpoint settings
 		rows := sqlmock.NewRows([]string{"table_id", "ddl_ts", "finished", "is_syncpoint"}).
@@ -150,7 +150,7 @@ func TestGetTableRecoveryInfo_Comprehensive(t *testing.T) {
 		defer db.Close()
 
 		tableIDs := []int64{1}
-		expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1))"
+		expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1), ('default', 'test/test', -1))"
 
 		rows := sqlmock.NewRows([]string{"table_id", "ddl_ts", "finished", "is_syncpoint"}).
 			AddRow(1, 100, true, true)
@@ -176,7 +176,7 @@ func TestGetTableRecoveryInfo_Comprehensive(t *testing.T) {
 		defer db.Close()
 
 		tableIDs := []int64{1}
-		expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1))"
+		expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1), ('default', 'test/test', -1))"
 
 		// Mock DDL TS query result: unfinished DDL (is_syncpoint=false)
 		rows := sqlmock.NewRows([]string{"table_id", "ddl_ts", "finished", "is_syncpoint"}).
@@ -203,7 +203,7 @@ func TestGetTableRecoveryInfo_Comprehensive(t *testing.T) {
 		defer db.Close()
 
 		tableIDs := []int64{1}
-		expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1))"
+		expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1), ('default', 'test/test', -1))"
 
 		// Mock query result: DDL finished, but Syncpoint not finished (is_syncpoint=true, finished=false)
 		// This happens when crash occurs after FlushDDLTsPre(Syncpoint) but before FlushDDLTs(Syncpoint)
@@ -229,6 +229,140 @@ func TestGetTableRecoveryInfo_Comprehensive(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
+	t.Run("SyncpointMetaRow_FinishedOverridesPerTableFinished", func(t *testing.T) {
+		writer, db, mock := newTestMysqlWriterForDDLTs(t)
+		defer db.Close()
+
+		tableIDs := []int64{1}
+		expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1), ('default', 'test/test', -1))"
+
+		rows := sqlmock.NewRows([]string{"table_id", "ddl_ts", "finished", "is_syncpoint"}).
+			AddRow(1, 90, true, false).
+			AddRow(-1, 100, true, true)
+
+		mock.ExpectQuery(expectedQuery).WillReturnRows(rows)
+
+		startTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, err := writer.GetTableRecoveryInfo(tableIDs)
+
+		require.NoError(t, err)
+		require.Len(t, startTsList, 1)
+		require.Len(t, skipSyncpointAtStartTs, 1)
+		require.Len(t, skipDMLAsStartTsList, 1)
+
+		require.Equal(t, int64(100), startTsList[0])
+		require.True(t, skipSyncpointAtStartTs[0])
+		require.False(t, skipDMLAsStartTsList[0])
+
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("SyncpointMetaRow_UnfinishedOverridesPerTableFinished", func(t *testing.T) {
+		writer, db, mock := newTestMysqlWriterForDDLTs(t)
+		defer db.Close()
+
+		tableIDs := []int64{1}
+		expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1), ('default', 'test/test', -1))"
+
+		rows := sqlmock.NewRows([]string{"table_id", "ddl_ts", "finished", "is_syncpoint"}).
+			AddRow(1, 90, true, false).
+			AddRow(-1, 100, false, true)
+
+		mock.ExpectQuery(expectedQuery).WillReturnRows(rows)
+
+		startTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, err := writer.GetTableRecoveryInfo(tableIDs)
+
+		require.NoError(t, err)
+		require.Len(t, startTsList, 1)
+		require.Len(t, skipSyncpointAtStartTs, 1)
+		require.Len(t, skipDMLAsStartTsList, 1)
+
+		require.Equal(t, int64(100), startTsList[0])
+		require.False(t, skipSyncpointAtStartTs[0])
+		require.False(t, skipDMLAsStartTsList[0])
+
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("SyncpointMetaRow_IgnoredWhenNoTableRow", func(t *testing.T) {
+		writer, db, mock := newTestMysqlWriterForDDLTs(t)
+		defer db.Close()
+
+		tableIDs := []int64{1}
+		expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1), ('default', 'test/test', -1))"
+
+		rows := sqlmock.NewRows([]string{"table_id", "ddl_ts", "finished", "is_syncpoint"}).
+			AddRow(-1, 100, true, true)
+
+		mock.ExpectQuery(expectedQuery).WillReturnRows(rows)
+
+		startTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, err := writer.GetTableRecoveryInfo(tableIDs)
+
+		require.NoError(t, err)
+		require.Len(t, startTsList, 1)
+		require.Len(t, skipSyncpointAtStartTs, 1)
+		require.Len(t, skipDMLAsStartTsList, 1)
+
+		require.Equal(t, int64(0), startTsList[0])
+		require.False(t, skipSyncpointAtStartTs[0])
+		require.False(t, skipDMLAsStartTsList[0])
+
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("SyncpointMetaRow_TiePreferMetaRow", func(t *testing.T) {
+		writer, db, mock := newTestMysqlWriterForDDLTs(t)
+		defer db.Close()
+
+		tableIDs := []int64{1}
+		expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1), ('default', 'test/test', -1))"
+
+		rows := sqlmock.NewRows([]string{"table_id", "ddl_ts", "finished", "is_syncpoint"}).
+			AddRow(1, 100, true, false).
+			AddRow(-1, 100, true, true)
+
+		mock.ExpectQuery(expectedQuery).WillReturnRows(rows)
+
+		startTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, err := writer.GetTableRecoveryInfo(tableIDs)
+
+		require.NoError(t, err)
+		require.Len(t, startTsList, 1)
+		require.Len(t, skipSyncpointAtStartTs, 1)
+		require.Len(t, skipDMLAsStartTsList, 1)
+
+		require.Equal(t, int64(100), startTsList[0])
+		require.True(t, skipSyncpointAtStartTs[0])
+		require.False(t, skipDMLAsStartTsList[0])
+
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("PerTableRowOverridesSyncpointMetaRowWhenNewer", func(t *testing.T) {
+		writer, db, mock := newTestMysqlWriterForDDLTs(t)
+		defer db.Close()
+
+		tableIDs := []int64{1}
+		expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1), ('default', 'test/test', -1))"
+
+		rows := sqlmock.NewRows([]string{"table_id", "ddl_ts", "finished", "is_syncpoint"}).
+			AddRow(1, 120, false, false).
+			AddRow(-1, 100, true, true)
+
+		mock.ExpectQuery(expectedQuery).WillReturnRows(rows)
+
+		startTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, err := writer.GetTableRecoveryInfo(tableIDs)
+
+		require.NoError(t, err)
+		require.Len(t, startTsList, 1)
+		require.Len(t, skipSyncpointAtStartTs, 1)
+		require.Len(t, skipDMLAsStartTsList, 1)
+
+		require.Equal(t, int64(119), startTsList[0])
+		require.False(t, skipSyncpointAtStartTs[0])
+		require.True(t, skipDMLAsStartTsList[0])
+
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
 	t.Run("DuplicateTableIDs", func(t *testing.T) {
 		writer, db, mock := newTestMysqlWriterForDDLTs(t)
 		defer db.Close()
@@ -236,7 +370,7 @@ func TestGetTableRecoveryInfo_Comprehensive(t *testing.T) {
 		// Test with duplicate table IDs
 		tableIDs := []int64{1, 1, 2, 1}
 		// The actual query will include duplicate entries for table ID 1
-		expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1), ('default', 'test/test', 1), ('default', 'test/test', 2), ('default', 'test/test', 1))"
+		expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1), ('default', 'test/test', 1), ('default', 'test/test', 2), ('default', 'test/test', 1), ('default', 'test/test', -1))"
 
 		rows := sqlmock.NewRows([]string{"table_id", "ddl_ts", "finished", "is_syncpoint"}).
 			AddRow(1, 100, true, true).

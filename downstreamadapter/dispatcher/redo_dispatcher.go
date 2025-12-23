@@ -111,7 +111,7 @@ func (rd *RedoDispatcher) SetRedoMeta(cfg *config.ConsistentConfig) {
 // The event dispatcher does not advance until the resolved-ts exceeds the event's commit-ts.
 // only for redo table trigger event dispatcher.
 func (rd *RedoDispatcher) UpdateMeta(checkpointTs, resolvedTs common.Ts) {
-	if rd.redoMeta.Running() {
+	if rd.redoMeta != nil && rd.redoMeta.Running() {
 		log.Debug("update redo meta", zap.Uint64("resolvedTs", resolvedTs), zap.Uint64("checkpointTs", checkpointTs))
 		rd.redoMeta.UpdateMeta(checkpointTs, resolvedTs)
 	}

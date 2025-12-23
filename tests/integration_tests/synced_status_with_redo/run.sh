@@ -308,7 +308,7 @@ function run_case_with_failpoint() {
 	stop_tidb_cluster
 }
 
-trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
+trap 'stop_test $WORK_DIR' EXIT
 # enable redo
 run_normal_case_and_unavailable_pd "conf/changefeed-redo.toml"
 run_case_with_unavailable_tikv "conf/changefeed-redo.toml"

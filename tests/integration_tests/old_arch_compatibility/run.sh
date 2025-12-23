@@ -184,7 +184,7 @@ run() {
 	run_scheduler_upgrade_case
 }
 
-trap 'stop_tidb_cluster; collect_logs $BASE_WORK_DIR' EXIT
+trap 'stop_test $BASE_WORK_DIR' EXIT
 run "$@"
 check_logs $BASE_WORK_DIR/basic
 check_logs $BASE_WORK_DIR/scheduler
