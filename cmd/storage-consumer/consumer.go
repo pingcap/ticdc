@@ -46,8 +46,13 @@ const (
 	fakePartitionNumForSchemaFile = -1
 )
 
-// fileIndexRange defines a range of files. eg. CDC000002.csv ~ CDC000005.csv
-type fileIndexRange struct {
+type (
+	fileIndexRange  map[cloudstorage.FileIndexKey]indexRange
+	fileIndexKeyMap map[cloudstorage.FileIndexKey]uint64
+)
+
+// indexRange defines a range of files. eg. CDC000002.csv ~ CDC000005.csv
+type indexRange struct {
 	start uint64
 	end   uint64
 }
@@ -58,16 +63,15 @@ type consumer struct {
 	externalStorage storage.ExternalStorage
 	fileExtension   string
 	sink            sink.Sink
-	// tableDMLIdxMap maintains a map of <dmlPathKey, max file index>
-	tableDMLIdxMap map[cloudstorage.DmlPathKey]uint64
+	// tableDMLIdxMap maintains a map of <dmlPathKey, fileIndexKeyMap>
+	tableDMLIdxMap map[cloudstorage.DmlPathKey]fileIndexKeyMap
 	eventsGroup    map[int64]*util.EventsGroup
 	// tableDefMap maintains a map of <`schema`.`table`, tableDef slice sorted by TableVersion>
 	tableDefMap      map[string]map[uint64]*cloudstorage.TableDefinition
 	tableIDGenerator *fakeTableIDGenerator
 	errCh            chan error
 
-	dmlCount               atomic.Int64
-	enableTableAcrossNodes bool
+	dmlCount atomic.Int64
 }
 
 func newConsumer(ctx context.Context) (*consumer, error) {
@@ -143,31 +147,42 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 		fileExtension:   extension,
 		sink:            sink,
 		errCh:           errCh,
-		tableDMLIdxMap:  make(map[cloudstorage.DmlPathKey]uint64),
+		tableDMLIdxMap:  make(map[cloudstorage.DmlPathKey]fileIndexKeyMap),
 		eventsGroup:     make(map[int64]*util.EventsGroup),
 		tableDefMap:     make(map[string]map[uint64]*cloudstorage.TableDefinition),
 		tableIDGenerator: &fakeTableIDGenerator{
 			tableIDs: make(map[string]int64),
 		},
-		enableTableAcrossNodes: putil.GetOrZero(replicaConfig.Scheduler.EnableTableAcrossNodes),
 	}, nil
 }
 
 // map1 - map2
 func diffDMLMaps(
-	map1, map2 map[cloudstorage.DmlPathKey]uint64,
+	map1, map2 map[cloudstorage.DmlPathKey]fileIndexKeyMap,
 ) map[cloudstorage.DmlPathKey]fileIndexRange {
-	resMap := make(map[cloudstorage.DmlPathKey]fileIndexRange)
-	for k, v := range map1 {
-		if _, ok := map2[k]; !ok {
-			resMap[k] = fileIndexRange{
-				start: 1,
-				end:   v,
+	resMap := make(map[cloudstorage.DmlPathKey]fileIndexRange) // DmlPathKey -> FileIndexKey -> indexRange
+	for dmlPathKey1, fileIndexKeyMap1 := range map1 {
+		dmlPathKey2, ok := map2[dmlPathKey1]
+		if !ok {
+			resMap[dmlPathKey1] = make(fileIndexRange)
+			for indexKey, val1 := range fileIndexKeyMap1 {
+				resMap[dmlPathKey1][indexKey] = indexRange{
+					start: 1,
+					end:   val1,
+				}
 			}
-		} else if v > map2[k] {
-			resMap[k] = fileIndexRange{
-				start: map2[k] + 1,
-				end:   v,
+			continue
+		}
+		for fileIndexKey, val1 := range fileIndexKeyMap1 {
+			val2 := dmlPathKey2[fileIndexKey]
+			if val1 > val2 {
+				if _, ok := resMap[dmlPathKey1]; !ok {
+					resMap[dmlPathKey1] = make(fileIndexRange)
+				}
+				resMap[dmlPathKey1][fileIndexKey] = indexRange{
+					start: val2 + 1,
+					end:   val1,
+				}
 			}
 		}
 	}
@@ -182,9 +197,13 @@ func (c *consumer) getNewFiles(
 	tableDMLMap := make(map[cloudstorage.DmlPathKey]fileIndexRange)
 	opt := &storage.WalkOption{SubDir: ""}
 
-	origDMLIdxMap := make(map[cloudstorage.DmlPathKey]uint64, len(c.tableDMLIdxMap))
+	origDMLIdxMap := make(map[cloudstorage.DmlPathKey]fileIndexKeyMap, len(c.tableDMLIdxMap))
 	for k, v := range c.tableDMLIdxMap {
-		origDMLIdxMap[k] = v
+		m := make(fileIndexKeyMap)
+		for fileIndexKey, val := range v {
+			m[fileIndexKey] = val
+		}
+		origDMLIdxMap[k] = m
 	}
 
 	err := c.externalStorage.WalkDir(ctx, opt, func(path string, size int64) error {
@@ -215,7 +234,7 @@ func (c *consumer) getNewFiles(
 	return tableDMLMap, err
 }
 
-func (c *consumer) appendRow2Group(dml *event.DMLEvent) {
+func (c *consumer) appendRow2Group(dml *event.DMLEvent, enableTableAcrossNodes bool) {
 	var (
 		tableID  = dml.GetTableID()
 		schema   = dml.TableInfo.GetSchemaName()
@@ -235,7 +254,7 @@ func (c *consumer) appendRow2Group(dml *event.DMLEvent) {
 			zap.Stringer("eventType", dml.RowTypes[0]))
 		return
 	}
-	if c.enableTableAcrossNodes {
+	if enableTableAcrossNodes {
 		log.Warn("DML events fallback, but enableTableAcrossNodes is true, still append it",
 			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
@@ -250,17 +269,21 @@ func (c *consumer) appendRow2Group(dml *event.DMLEvent) {
 	)
 }
 
-// emitDMLEvents decodes RowChangedEvents from file content and emit them.
-func (c *consumer) emitDMLEvents(
-	ctx context.Context, tableID int64,
+// appendDMLEvents decodes RowChangedEvents from file content and append them to event group.
+func (c *consumer) appendDMLEvents(
+	ctx context.Context,
+	tableID int64,
 	tableDetail cloudstorage.TableDefinition,
 	pathKey cloudstorage.DmlPathKey,
-	content []byte,
+	fileIdx *cloudstorage.FileIndex,
 ) error {
-	var (
-		decoder common.Decoder
-		err     error
-	)
+	filePath := pathKey.GenerateDMLFilePath(fileIdx, c.fileExtension, fileIndexWidth)
+	log.Debug("read from dml file path", zap.String("path", filePath))
+	content, err := c.externalStorage.ReadFile(ctx, filePath)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	var decoder common.Decoder
 
 	tableInfo, err := tableDetail.ToTableInfo()
 	if err != nil {
@@ -302,7 +325,7 @@ func (c *consumer) emitDMLEvents(
 			log.Debug("next dml event", zap.Any("commitTs", row.CommitTs), zap.Any("tableName", tableInfo.TableName.String()), zap.Any("tableID", tableID))
 
 			row.PhysicalTableID = tableID
-			c.appendRow2Group(row)
+			c.appendRow2Group(row, fileIdx.EnableTableAcrossNodes)
 			filteredCnt++
 		}
 	}
@@ -315,26 +338,12 @@ func (c *consumer) emitDMLEvents(
 	return err
 }
 
-func (c *consumer) syncExecDMLEvents(
-	ctx context.Context,
-	tableDef cloudstorage.TableDefinition,
-	key cloudstorage.DmlPathKey,
-	fileIdx uint64,
-) error {
-	filePath := key.GenerateDMLFilePath(fileIdx, c.fileExtension, fileIndexWidth)
-	log.Debug("read from dml file path", zap.String("path", filePath))
-	content, err := c.externalStorage.ReadFile(ctx, filePath)
-	if err != nil {
-		return errors.Trace(err)
+func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
+	group := c.eventsGroup[tableID]
+	if group == nil {
+		return nil
 	}
-	tableID := c.tableIDGenerator.generateFakeTableID(
-		key.Schema, key.Table, key.PartitionNum)
-	err = c.emitDMLEvents(ctx, tableID, tableDef, key, content)
-	if err != nil {
-		return errors.Trace(err)
-	}
-
-	events := c.eventsGroup[tableID].GetAllEvents()
+	events := group.GetAllEvents()
 	total := len(events)
 	if total == 0 {
 		return nil
@@ -379,8 +388,13 @@ func (c *consumer) parseDMLFilePath(_ context.Context, path string) error {
 		return errors.Trace(err)
 	}
 
-	if _, ok := c.tableDMLIdxMap[dmlkey]; !ok || fileIdx >= c.tableDMLIdxMap[dmlkey] {
-		c.tableDMLIdxMap[dmlkey] = fileIdx
+	m, ok := c.tableDMLIdxMap[dmlkey]
+	if !ok {
+		c.tableDMLIdxMap[dmlkey] = fileIndexKeyMap{
+			fileIdx.FileIndexKey: fileIdx.Idx,
+		}
+	} else if fileIdx.Idx >= m[fileIdx.FileIndexKey] {
+		c.tableDMLIdxMap[dmlkey][fileIdx.FileIndexKey] = fileIdx.Idx
 	}
 	return nil
 }
@@ -448,7 +462,7 @@ func (c *consumer) parseSchemaFilePath(ctx context.Context, path string) error {
 		Date:          "",
 	}
 	if _, ok := c.tableDMLIdxMap[dmlkey]; !ok {
-		c.tableDMLIdxMap[dmlkey] = 0
+		c.tableDMLIdxMap[dmlkey] = fileIndexKeyMap{}
 	} else {
 		// duplicate table schema file found, this should not happen.
 		log.Panic("duplicate schema file found",
@@ -515,12 +529,20 @@ func (c *consumer) handleNewFiles(
 			continue
 		}
 
+		tableID := c.tableIDGenerator.generateFakeTableID(
+			key.Schema, key.Table, key.PartitionNum)
 		fileRange := dmlFileMap[key]
-		for i := fileRange.start; i <= fileRange.end; i++ {
-			if err := c.syncExecDMLEvents(ctx, tableDef, key, i); err != nil {
-				return err
+		for indexKey, indexRange := range fileRange {
+			for i := indexRange.start; i <= indexRange.end; i++ {
+				if err := c.appendDMLEvents(ctx, tableID, tableDef, key, &cloudstorage.FileIndex{
+					FileIndexKey: indexKey,
+					Idx:          i,
+				}); err != nil {
+					return err
+				}
 			}
 		}
+		c.flushDMLEvents(ctx, tableID)
 	}
 
 	return nil

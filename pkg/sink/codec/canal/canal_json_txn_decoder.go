@@ -114,6 +114,7 @@ func (d *txnDecoder) canalJSONMessage2RowChange() *commonEvent.DMLEvent {
 	result.StartTs = msg.getCommitTs() // todo: how to set this correctly?
 	result.CommitTs = msg.getCommitTs()
 	result.TableInfo = tableInfo
+
 	chk := chunk.NewChunkFromPoolWithCapacity(tableInfo.GetFieldSlice(), chunk.InitialCapacity)
 	result.AddPostFlushFunc(func() {
 		chk.Destroy(chunk.InitialCapacity, tableInfo.GetFieldSlice())
