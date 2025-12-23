@@ -66,7 +66,7 @@ function run_for_force_split() {
 	stop_tidb_cluster
 }
 
-trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
+trap 'stop_test $WORK_DIR' EXIT
 run $*
 run_for_force_split $*
 check_logs $WORK_DIR

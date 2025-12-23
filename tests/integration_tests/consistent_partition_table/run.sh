@@ -14,8 +14,7 @@ mkdir -p "$WORK_DIR"
 stop() {
 	# to distinguish whether the test failed in the DML synchronization phase or the DDL synchronization phase
 	echo $(mysql -h${DOWN_TIDB_HOST} -P${DOWN_TIDB_PORT} -uroot -e "show databases;")
-	stop_tidb_cluster
-	collect_logs $WORK_DIR
+	stop_test $WORK_DIR
 }
 
 function run() {

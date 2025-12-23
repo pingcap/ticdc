@@ -304,3 +304,13 @@ func closeAllDispatchers[T dispatcher.Dispatcher](changefeedID common.ChangeFeed
 		dispatcherItem.Remove()
 	})
 }
+
+func getSinkType[T dispatcher.Dispatcher](dispatcher T, manager *DispatcherManager) common.SinkType {
+	var sinkType common.SinkType
+	if common.IsRedoMode(dispatcher.GetMode()) {
+		sinkType = manager.redoSink.SinkType()
+	} else {
+		sinkType = manager.sink.SinkType()
+	}
+	return sinkType
+}

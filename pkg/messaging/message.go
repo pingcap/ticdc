@@ -78,7 +78,7 @@ const (
 	TypeBlockStatusRequest          IOType = 18
 	TypeDispatcherHeartbeat         IOType = 19
 	TypeDispatcherHeartbeatResponse IOType = 20
-	TypeRedoMessage                 IOType = 21
+	TypeRedoMetaMessage             IOType = 21
 	TypeMergeDispatcherRequest      IOType = 22
 	TypeCongestionControl           IOType = 23
 
@@ -100,6 +100,8 @@ const (
 
 	// used to upload changefeed metrics from event store to log coordinator
 	TypeLogCoordinatorChangefeedStates IOType = 37
+	TypeRedoResolvedTsProgressMessage  IOType = 38
+	TypeRedoResolvedTsForwardMessage   IOType = 39
 )
 
 func (t IOType) String() string {
@@ -168,8 +170,12 @@ func (t IOType) String() string {
 		return "CheckpointTsMessage"
 	case TypeDispatcherHeartbeat:
 		return "DispatcherHeartbeat"
-	case TypeRedoMessage:
-		return "RedoMessage"
+	case TypeRedoMetaMessage:
+		return "RedoMetaMessage"
+	case TypeRedoResolvedTsProgressMessage:
+		return "RedoResolvedTsProgressMessage"
+	case TypeRedoResolvedTsForwardMessage:
+		return "RedoResolvedTsForwardMessage"
 
 	case TypeDispatcherHeartbeatResponse:
 		return "DispatcherHeartbeatResponse"
@@ -358,8 +364,12 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 		m = &commonEvent.DispatcherHeartbeat{}
 	case TypeDispatcherHeartbeatResponse:
 		m = &commonEvent.DispatcherHeartbeatResponse{}
-	case TypeRedoMessage:
-		m = &heartbeatpb.RedoMessage{}
+	case TypeRedoMetaMessage:
+		m = &heartbeatpb.RedoMetaMessage{}
+	case TypeRedoResolvedTsProgressMessage:
+		m = &heartbeatpb.RedoResolvedTsProgressMessage{}
+	case TypeRedoResolvedTsForwardMessage:
+		m = &heartbeatpb.RedoResolvedTsForwardMessage{}
 	case TypeCongestionControl:
 		m = &commonEvent.CongestionControl{}
 	case TypeMergeDispatcherRequest:
@@ -462,8 +472,12 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		ioType = TypeDispatcherHeartbeat
 	case *commonEvent.DispatcherHeartbeatResponse:
 		ioType = TypeDispatcherHeartbeatResponse
-	case *heartbeatpb.RedoMessage:
-		ioType = TypeRedoMessage
+	case *heartbeatpb.RedoMetaMessage:
+		ioType = TypeRedoMetaMessage
+	case *heartbeatpb.RedoResolvedTsProgressMessage:
+		ioType = TypeRedoResolvedTsProgressMessage
+	case *heartbeatpb.RedoResolvedTsForwardMessage:
+		ioType = TypeRedoResolvedTsForwardMessage
 	case *commonEvent.CongestionControl:
 		ioType = TypeCongestionControl
 	case *heartbeatpb.MergeDispatcherRequest:

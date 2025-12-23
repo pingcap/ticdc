@@ -84,7 +84,7 @@ func setupTestEnvironment(t *testing.T) (*span.Controller, common.ChangeFeedID, 
 // 1. Dispatcher 'a' is on node A, maintainer is also on node A
 // 2. A move operation is initiated to move 'a' from node A to node B
 // 3. Before node A reports non-working status, node B is removed
-// 4. Verify that dispatcher 'a' can be recreated on node A
+// 4. Verify that the move is aborted and the span is marked absent after origin is stopped
 func TestMoveOperator_DestNodeRemovedBeforeOriginStopped(t *testing.T) {
 	spanController, _, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
 
@@ -94,14 +94,12 @@ func TestMoveOperator_DestNodeRemovedBeforeOriginStopped(t *testing.T) {
 	op.Start()
 	require.False(t, op.IsFinished())
 
-	require.False(t, op.originNodeStopped.Load())
+	require.Equal(t, moveStateRemoveOrigin, op.state)
 
 	op.OnNodeRemove(nodeB)
 
-	require.False(t, op.originNodeStopped.Load())
-
-	require.True(t, op.bind)
-	require.Equal(t, nodeA, op.dest)
+	require.Equal(t, moveStateAbortRemoveOrigin, op.state)
+	require.Equal(t, nodeB, op.dest)
 	require.Equal(t, nodeA, op.origin)
 
 	msg := op.Schedule()
@@ -112,30 +110,16 @@ func TestMoveOperator_DestNodeRemovedBeforeOriginStopped(t *testing.T) {
 	require.Equal(t, heartbeatpb.ScheduleAction_Remove, scheduleMsg.ScheduleAction)
 	require.Equal(t, replicaSet.ID.ToPB(), scheduleMsg.Config.DispatcherID)
 
+	absentSizeBefore := spanController.GetAbsentSize()
 	nonWorkingStatus := &heartbeatpb.TableSpanStatus{
 		ID:              replicaSet.ID.ToPB(),
 		ComponentStatus: heartbeatpb.ComponentState_Stopped,
 		CheckpointTs:    1500,
 	}
 	op.Check(nodeA, nonWorkingStatus)
-	require.True(t, op.originNodeStopped.Load())
-
-	msg = op.Schedule()
-	require.NotNil(t, msg)
-	require.Equal(t, messaging.TypeScheduleDispatcherRequest, msg.Type)
-	scheduleMsg, ok = msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
-	require.True(t, ok)
-	require.Equal(t, heartbeatpb.ScheduleAction_Create, scheduleMsg.ScheduleAction)
-	require.Equal(t, nodeA.String(), msg.To.String())
-	require.Equal(t, replicaSet.ID.ToPB(), scheduleMsg.Config.DispatcherID)
-
-	workingStatus := &heartbeatpb.TableSpanStatus{
-		ID:              replicaSet.ID.ToPB(),
-		ComponentStatus: heartbeatpb.ComponentState_Working,
-		CheckpointTs:    2000,
-	}
-	op.Check(nodeA, workingStatus)
 	require.True(t, op.IsFinished())
+	require.Equal(t, absentSizeBefore+1, spanController.GetAbsentSize())
+	require.Equal(t, "", replicaSet.GetNodeID().String())
 }
 
 // TestMoveOperator_DestNodeRemovedAfterOriginStopped tests the scenario where:
@@ -159,14 +143,14 @@ func TestMoveOperator_DestNodeRemovedAfterOriginStopped(t *testing.T) {
 		CheckpointTs:    1500,
 	}
 	op.Check(nodeA, nonWorkingStatus)
-	require.True(t, op.originNodeStopped.Load())
+	require.Equal(t, moveStateAddDest, op.state)
 
+	absentSizeBefore := spanController.GetAbsentSize()
 	op.OnNodeRemove(nodeB)
 
-	require.True(t, op.noPostFinishNeed)
 	require.True(t, op.IsFinished())
-
-	require.Equal(t, 1, spanController.GetAbsentSize())
+	require.Equal(t, absentSizeBefore+1, spanController.GetAbsentSize())
+	require.Equal(t, "", replicaSet.GetNodeID().String())
 }
 
 // TestMoveOperator_OriginNodeRemovedBeforeOriginStopped tests the scenario where:
@@ -183,11 +167,11 @@ func TestMoveOperator_OriginNodeRemovedBeforeOriginStopped(t *testing.T) {
 	op.Start()
 	require.False(t, op.IsFinished())
 
-	require.False(t, op.originNodeStopped.Load())
+	require.Equal(t, moveStateRemoveOrigin, op.state)
 
 	op.OnNodeRemove(nodeA)
 
-	require.True(t, op.originNodeStopped.Load())
+	require.Equal(t, moveStateAddDest, op.state)
 	require.Equal(t, nodeA, op.origin)
 	require.Equal(t, nodeB, op.dest)
 
@@ -232,11 +216,10 @@ func TestMoveOperator_OriginNodeRemovedAfterOriginStopped(t *testing.T) {
 		CheckpointTs:    1500,
 	}
 	op.Check(nodeA, nonWorkingStatus)
-	require.True(t, op.originNodeStopped.Load())
+	require.Equal(t, moveStateAddDest, op.state)
 
 	op.OnNodeRemove(nodeA)
 
-	require.True(t, op.originNodeStopped.Load())
 	require.Equal(t, nodeA, op.origin)
 	require.Equal(t, nodeB, op.dest)
 
@@ -258,4 +241,78 @@ func TestMoveOperator_OriginNodeRemovedAfterOriginStopped(t *testing.T) {
 	}
 	op.Check(nodeB, workingStatus)
 	require.True(t, op.IsFinished())
+}
+
+func TestMoveOperator_BothNodesRemovedBeforeStartDoesNotLeaveSchedulingWithoutNodeID(t *testing.T) {
+	messageCenter, _, _ := messaging.NewMessageCenterForTest(t)
+	appcontext.SetService(appcontext.MessageCenter, messageCenter)
+
+	spanController, changefeedID, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
+	spanController.AddReplicatingSpan(replicaSet)
+
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	setAliveNodes(nodeManager, map[node.ID]*node.Info{})
+
+	oc := NewOperatorController(changefeedID, spanController, 1, common.DefaultMode)
+	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB)
+	require.True(t, oc.AddOperator(op))
+
+	require.Equal(t, 1, spanController.GetAbsentSize())
+	require.Equal(t, 0, spanController.GetSchedulingSize())
+	require.Equal(t, "", replicaSet.GetNodeID().String())
+}
+
+// TestMoveOperator_DestThenOriginRemovedAbortsToAbsent tests the scenario where:
+// 1. A move operation is initiated to move a span from node A to node B
+// 2. Node B is removed first
+// 3. Node A is removed later
+// 4. Verify that the move is aborted and the span becomes absent for rescheduling
+func TestMoveOperator_DestThenOriginRemovedAbortsToAbsent(t *testing.T) {
+	spanController, _, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
+
+	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB)
+	require.NotNil(t, op)
+
+	op.Start()
+	require.False(t, op.IsFinished())
+
+	op.OnNodeRemove(nodeB)
+	require.Equal(t, moveStateAbortRemoveOrigin, op.state)
+	require.False(t, op.IsFinished())
+
+	absentSizeBefore := spanController.GetAbsentSize()
+	op.OnNodeRemove(nodeA)
+	require.True(t, op.IsFinished())
+	require.Equal(t, absentSizeBefore+1, spanController.GetAbsentSize())
+
+	op.PostFinish()
+	require.Equal(t, absentSizeBefore+1, spanController.GetAbsentSize())
+	require.Equal(t, "", replicaSet.GetNodeID().String())
+}
+
+// TestMoveOperator_TaskRemovedByDDL tests the scenario where:
+// 1. A move operation is initiated
+// 2. The task is removed (for example, due to DDL) while the operator is running
+// 3. Verify that the operator finishes and restores the span to replicating state without running PostFinish
+func TestMoveOperator_TaskRemovedByDDL(t *testing.T) {
+	spanController, _, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
+	spanController.AddReplicatingSpan(replicaSet)
+
+	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB)
+	require.NotNil(t, op)
+
+	op.Start()
+	require.Equal(t, moveStateRemoveOrigin, op.state)
+	require.Equal(t, 1, spanController.GetSchedulingSize())
+
+	op.OnTaskRemoved()
+	require.True(t, op.IsFinished())
+	require.Equal(t, moveStateDoneNoPostFinish, op.state)
+	require.Equal(t, 1, spanController.GetReplicatingSize())
+	require.Equal(t, 0, spanController.GetSchedulingSize())
+	require.Equal(t, nodeA, replicaSet.GetNodeID())
+	require.Nil(t, op.Schedule())
+
+	op.PostFinish()
+	require.Equal(t, 1, spanController.GetReplicatingSize())
 }

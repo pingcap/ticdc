@@ -347,10 +347,10 @@ func (h *DispatcherStatusHandler) Path(event DispatcherStatusWithID) common.Disp
 }
 
 func (h *DispatcherStatusHandler) Handle(dispatcher Dispatcher, events ...DispatcherStatusWithID) (await bool) {
-	for _, event := range events {
-		dispatcher.HandleDispatcherStatus(event.GetDispatcherStatus())
+	if len(events) != 1 {
+		panic("invalid event count")
 	}
-	return false
+	return dispatcher.HandleDispatcherStatus(events[0].GetDispatcherStatus())
 }
 
 func (h *DispatcherStatusHandler) GetSize(event DispatcherStatusWithID) int   { return 0 }
@@ -369,7 +369,9 @@ func (h *DispatcherStatusHandler) GetTimestamp(event DispatcherStatusWithID) dyn
 }
 
 func (h *DispatcherStatusHandler) GetType(event DispatcherStatusWithID) dynstream.EventType {
-	return dynstream.DefaultEventType
+	// DispatcherStatus may trigger downstream IO (e.g. executing DDL) when handling Action_Write.
+	// Make it non-batchable to ensure we can safely return await=true for a single event.
+	return dynstream.EventType{DataGroup: 0, Property: dynstream.NonBatchable}
 }
 
 func (h *DispatcherStatusHandler) OnDrop(event DispatcherStatusWithID) interface{} {
