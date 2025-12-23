@@ -155,12 +155,11 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	m.mutex.Unlock()
 
 	var (
-		err     error
-		startTs uint64
+		err error
 	)
 	if !exists {
 		start := time.Now()
-		manager, startTs, err = dispatchermanager.
+		manager, err = dispatchermanager.
 			NewDispatcherManager(
 				req.KeyspaceId,
 				cfId,
@@ -219,7 +218,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		if req.TableTriggerEventDispatcherId != nil {
 			tableTriggerDispatcher := manager.GetTableTriggerEventDispatcher()
 			if tableTriggerDispatcher == nil {
-				startTs, err = manager.NewTableTriggerEventDispatcher(
+				err = manager.NewTableTriggerEventDispatcher(
 					req.TableTriggerEventDispatcherId,
 					req.StartTs,
 					false,
@@ -229,8 +228,6 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 						zap.Stringer("changefeedID", cfId), zap.Error(err))
 					return m.handleDispatcherError(from, req.ChangefeedID, err)
 				}
-			} else {
-				startTs = tableTriggerDispatcher.GetStartTs()
 			}
 		}
 	}
@@ -248,6 +245,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			zap.String("changefeed", cfId.Name()), zap.Uint64("epoch", cfConfig.Epoch))
 	}
 
+	startTs := manager.GetStartTs()
 	response := createBootstrapResponse(req.ChangefeedID, manager, startTs)
 	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
 }
