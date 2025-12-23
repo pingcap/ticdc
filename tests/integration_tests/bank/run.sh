@@ -24,7 +24,7 @@ function prepare() {
 	cdc_cli_changefeed create --sink-uri="blackhole://" -c "changefeed-for-find-finished-ts" --server "http://127.0.0.1:8400"
 }
 
-trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
+trap 'stop_test $WORK_DIR' EXIT
 # No need to support kafka and storage sink.
 if [ "$SINK_TYPE" == "mysql" ]; then
 	prepare $*

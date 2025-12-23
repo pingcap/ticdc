@@ -14,7 +14,7 @@ mkdir -p "$WORK_DIR"
 stop() {
 	# to distinguish whether the test failed in the DML synchronization phase or the DDL synchronization phase
 	echo $(mysql -h${DOWN_TIDB_HOST} -P${DOWN_TIDB_PORT} -uroot -e "SELECT count(*) FROM consistent_compatibility.usertable;")
-	stop_tidb_cluster
+	stop_test $WORK_DIR
 }
 
 function run() {
