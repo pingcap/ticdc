@@ -30,7 +30,7 @@ group_num=${group#G}
 # 12 CPU cores will be allocated to run each mysql heavy group in CI pipelines.
 mysql_groups=(
 	# G00
-	'api_v2 generate_column many_pk_or_uk multi_source'
+	'api_v2 generate_column many_pk_or_uk multi_source large_txn'
 	# G01
 	'ddl_for_split_tables_with_random_move_table'
 	# G02
