@@ -55,7 +55,7 @@ require (
 	github.com/pingcap/tidb v1.1.0-beta.0.20250415080739-a02630cc24cf
 	github.com/pingcap/tidb-dashboard v0.0.0-20250928152019-e111aaee93f4
 	github.com/pingcap/tidb/pkg/parser v0.0.0-20241120103608-82376c7732c1
-	github.com/pingcap/tiflow v0.0.0-20251114054540-6e617c886bfe
+	github.com/pingcap/tiflow v0.0.0-20251216025638-62c10c0907dc
 	github.com/prometheus/client_golang v1.22.0
 	github.com/r3labs/diff v1.1.0
 	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475
@@ -83,12 +83,12 @@ require (
 	go.uber.org/mock v0.5.2
 	go.uber.org/multierr v1.11.0
 	go.uber.org/zap v1.27.0
-	golang.org/x/net v0.43.0
+	golang.org/x/net v0.47.0
 	golang.org/x/oauth2 v0.30.0
-	golang.org/x/sync v0.17.0
-	golang.org/x/sys v0.35.0
-	golang.org/x/term v0.34.0
-	golang.org/x/text v0.29.0
+	golang.org/x/sync v0.18.0
+	golang.org/x/sys v0.38.0
+	golang.org/x/term v0.37.0
+	golang.org/x/text v0.31.0
 	golang.org/x/time v0.12.0
 	google.golang.org/grpc v1.65.0
 	google.golang.org/protobuf v1.36.6
@@ -165,7 +165,7 @@ require (
 	github.com/dolthub/maphash v0.1.0 // indirect
 	github.com/dolthub/swiss v0.2.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/dvsekhvalnov/jose2go v1.6.0 // indirect
+	github.com/dvsekhvalnov/jose2go v1.7.0 // indirect
 	github.com/eapache/go-resiliency v1.4.0 // indirect
 	github.com/eapache/go-xerial-snappy v0.0.0-20230731223053-c322873962e3 // indirect
 	github.com/eapache/queue v1.1.0 // indirect
@@ -341,10 +341,11 @@ require (
 	go.opentelemetry.io/otel/trace v1.24.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.1.0 // indirect
 	golang.org/x/arch v0.8.0 // indirect
-	golang.org/x/crypto v0.41.0 // indirect
+	golang.org/x/crypto v0.45.0 // indirect
 	golang.org/x/exp v0.0.0-20240909161429-701f63a606c0 // indirect
-	golang.org/x/mod v0.27.0 // indirect
-	golang.org/x/tools v0.36.0 // indirect
+	golang.org/x/mod v0.29.0 // indirect
+	golang.org/x/telemetry v0.0.0-20251008203120-078029d740a8 // indirect
+	golang.org/x/tools v0.38.0 // indirect
 	golang.org/x/xerrors v0.0.0-20231012003039-104605ab7028 // indirect
 	google.golang.org/api v0.170.0 // indirect
 	google.golang.org/genproto v0.0.0-20240401170217-c3f982113cda // indirect
