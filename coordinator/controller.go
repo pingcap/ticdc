@@ -819,9 +819,7 @@ func (c *Controller) submitPeriodTask() {
 }
 
 func (c *Controller) newBootstrapMessage(id node.ID, addr string) *messaging.TargetMessage {
-	log.Info("send coordinator bootstrap request",
-		zap.String("nodeAddr", addr),
-		zap.Any("nodeID", id))
+	log.Info("send coordinator bootstrap request", zap.Any("nodeID", id), zap.String("nodeAddr", addr))
 	return messaging.NewSingleTargetMessage(
 		id,
 		messaging.MaintainerManagerTopic,
