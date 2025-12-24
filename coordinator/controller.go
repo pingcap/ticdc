@@ -366,6 +366,11 @@ func (c *Controller) handleBootstrapResponses(responses map[node.ID]*heartbeatpb
 	if len(responses) == 0 {
 		return
 	}
+	if c.bootstrapped.Load() {
+		log.Info("coordinator already bootstrapped, may new nodes join the cluster",
+			zap.Any("nodeID", c.selfNode.ID), zap.Any("maintainerStatus", responses))
+		return
+	}
 	log.Info("all new nodes bootstrap response received",
 		zap.Int("newNodeCount", len(responses)))
 	// runningCfs are changefeeds that already running on other nodes
@@ -505,12 +510,6 @@ func (c *Controller) updateChangefeedStatus(
 // Then initialize the changefeeds that are not running on other nodes
 // And construct all changefeeds state in memory.
 func (c *Controller) finishBootstrap(runningChangefeeds map[common.ChangeFeedID]remoteMaintainer) {
-	if c.bootstrapped.Load() {
-		log.Info("coordinator already bootstrapped, may a new node join the cluster",
-			zap.Any("nodeID", c.selfNode.ID),
-			zap.Int("changefeeds", len(runningChangefeeds)))
-		return
-	}
 	// load all changefeeds from metastore, and check if the changefeed is already in workingMap
 	allChangefeeds, err := c.backend.GetAllChangefeeds(context.Background())
 	if err != nil {
