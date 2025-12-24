@@ -14,6 +14,7 @@
 package logpuller
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -328,4 +329,51 @@ func TestHandleResolvedTs(t *testing.T) {
 	require.Equal(t, uint64(10), state1.getLastResolvedTs())
 	require.Equal(t, uint64(11), state2.getLastResolvedTs())
 	require.Equal(t, uint64(8), state3.getLastResolvedTs())
+}
+
+func TestHandleBatchResolvedTsEvent(t *testing.T) {
+	subID := SubscriptionID(10)
+	worker := &regionRequestWorker{
+		requestCache: &requestCache{},
+	}
+	span := heartbeatpb.TableSpan{
+		TableID:  101,
+		StartKey: common.ToComparableKey([]byte{0}),
+		EndKey:   common.ToComparableKey(common.UpperBoundKey),
+	}
+	subSpan := &subscribedSpan{
+		subID:           subID,
+		span:            span,
+		startTs:         1,
+		rangeLock:       regionlock.NewRangeLock(uint64(subID), span.StartKey, span.EndKey, 1),
+		consumeKVEvents: func([]common.RawKVEntry, func()) bool { return false },
+		advanceInterval: 0,
+	}
+	var advancedTs uint64
+	subSpan.advanceResolvedTs = func(ts uint64) { advancedTs = ts }
+
+	lockRes := subSpan.rangeLock.LockRange(context.Background(), span.StartKey, span.EndKey, 1, 1)
+	require.Equal(t, regionlock.LockRangeStatusSuccess, lockRes.Status)
+
+	region := newRegionInfo(tikv.NewRegionVerID(1, 1, 1), span, &tikv.RPCContext{}, subSpan, false)
+	region.lockedRangeState = lockRes.LockedRangeState
+	state := newRegionFeedState(region, uint64(subID), worker)
+	state.start()
+	state.region.lockedRangeState.Initialized.Store(true)
+
+	handler := regionEventHandler{}
+	batch := newBatchResolvedTsEvent(subID, 2)
+	batch.add(state, 10)
+	batch.add(state, 12)
+	require.Equal(t, 1, batch.len())
+	batch.finalize()
+
+	await := handler.Handle(subSpan, regionEvent{
+		worker:          worker,
+		batchResolvedTs: batch,
+	})
+	require.False(t, await)
+	require.Equal(t, uint64(12), state.getLastResolvedTs())
+	require.Equal(t, uint64(12), subSpan.resolvedTs.Load())
+	require.Equal(t, uint64(12), advancedTs)
 }

@@ -42,8 +42,9 @@ type regionEvent struct {
 	worker *regionRequestWorker // TODO: remove the field
 
 	// only one of the following fields will be set
-	entries    *cdcpb.Event_Entries_
-	resolvedTs uint64
+	entries         *cdcpb.Event_Entries_
+	resolvedTs      uint64
+	batchResolvedTs *batchResolvedTsEvent
 }
 
 func (event *regionEvent) getSize() int {
@@ -61,6 +62,11 @@ func (event *regionEvent) getSize() int {
 			size += len(row.OldValue)
 		}
 	}
+	if event.batchResolvedTs != nil {
+		size += int(unsafe.Sizeof(*event.batchResolvedTs))
+		entrySize := int(unsafe.Sizeof(batchResolvedTsEntry{}))
+		size += len(event.batchResolvedTs.entries) * entrySize
+	}
 	return size
 }
 
@@ -69,6 +75,12 @@ type regionEventHandler struct {
 }
 
 func (h *regionEventHandler) Path(event regionEvent) SubscriptionID {
+	if event.batchResolvedTs != nil {
+		return event.batchResolvedTs.subscriptionID
+	}
+	if event.state == nil {
+		log.Panic("region event has no state", zap.Any("event", event))
+	}
 	return SubscriptionID(event.state.requestID)
 }
 
@@ -81,6 +93,22 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 
 	newResolvedTs := uint64(0)
 	for _, event := range events {
+		switch {
+		case event.batchResolvedTs != nil:
+			for _, batchEvent := range event.batchResolvedTs.entries {
+				if batchEvent.state.isStale() {
+					h.handleRegionError(batchEvent.state, event.worker)
+					continue
+				}
+				resolvedTs := handleResolvedTs(span, batchEvent.state, batchEvent.resolvedTs)
+				if resolvedTs > newResolvedTs {
+					newResolvedTs = resolvedTs
+				}
+			}
+			continue
+		case event.state == nil:
+			log.Panic("region event has no state", zap.Any("event", event))
+		}
 		if event.state.isStale() {
 			h.handleRegionError(event.state, event.worker)
 			continue
@@ -144,6 +172,8 @@ func (h *regionEventHandler) GetTimestamp(event regionEvent) dynstream.Timestamp
 			}
 		}
 		return 0
+	} else if event.batchResolvedTs != nil {
+		return dynstream.Timestamp(event.batchResolvedTs.minResolvedTs())
 	} else {
 		return dynstream.Timestamp(event.resolvedTs)
 	}
@@ -151,26 +181,41 @@ func (h *regionEventHandler) GetTimestamp(event regionEvent) dynstream.Timestamp
 func (h *regionEventHandler) IsPaused(event regionEvent) bool { return false }
 
 func (h *regionEventHandler) GetType(event regionEvent) dynstream.EventType {
-	if event.entries != nil || event.resolvedTs != 0 {
+	if event.entries != nil || event.resolvedTs != 0 || event.batchResolvedTs != nil {
 		// Note: resolved ts may be from different regions, so they are not periodic signal
 		return dynstream.EventType{DataGroup: DataGroupEntriesOrResolvedTs, Property: dynstream.BatchableData}
-	} else if event.state.isStale() {
+	} else if event.state != nil && event.state.isStale() {
 		return dynstream.EventType{DataGroup: DataGroupError, Property: dynstream.BatchableData}
-	} else {
-		log.Panic("unknown event type",
-			zap.Uint64("regionID", event.state.getRegionID()),
-			zap.Uint64("requestID", event.state.requestID),
-			zap.Uint64("workerID", event.worker.workerID))
 	}
+	log.Panic("unknown event type", zap.Any("event", event))
 	return dynstream.DefaultEventType
 }
 
 func (h *regionEventHandler) OnDrop(event regionEvent) interface{} {
 	// TODO: Distinguish between drop events caused by "path not found" errors and memory control.
+	if event.batchResolvedTs != nil {
+		workerID := uint64(0)
+		if event.worker != nil {
+			workerID = event.worker.workerID
+		}
+		log.Warn("drop batch resolved ts event",
+			zap.Uint64("subscriptionID", uint64(event.batchResolvedTs.subscriptionID)),
+			zap.Int("resolvedEntries", len(event.batchResolvedTs.entries)),
+			zap.Uint64("workerID", workerID))
+		return nil
+	}
+	if event.state == nil {
+		log.Warn("drop region event without state", zap.Any("event", event))
+		return nil
+	}
+	workerID := uint64(0)
+	if event.worker != nil {
+		workerID = event.worker.workerID
+	}
 	log.Warn("drop region event",
 		zap.Uint64("regionID", event.state.getRegionID()),
 		zap.Uint64("requestID", event.state.requestID),
-		zap.Uint64("workerID", event.worker.workerID),
+		zap.Uint64("workerID", workerID),
 		zap.Bool("hasEntries", event.entries != nil),
 		zap.Bool("stateIsStale", event.state.isStale()))
 	return nil

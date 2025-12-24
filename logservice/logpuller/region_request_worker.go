@@ -301,13 +301,10 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 			zap.Any("regionIDs", resolvedTsEvent.Regions))
 		return
 	}
+	batch := newBatchResolvedTsEvent(subscriptionID, len(resolvedTsEvent.Regions))
 	for _, regionID := range resolvedTsEvent.Regions {
 		if state := s.getRegionState(subscriptionID, regionID); state != nil {
-			s.client.pushRegionEventToDS(SubscriptionID(resolvedTsEvent.RequestId), regionEvent{
-				state:      state,
-				worker:     s,
-				resolvedTs: resolvedTsEvent.Ts,
-			})
+			batch.add(state, resolvedTsEvent.Ts)
 		} else {
 			log.Warn("region request worker receives a resolved ts event for an untracked region",
 				zap.Uint64("workerID", s.workerID),
@@ -316,6 +313,14 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 				zap.Uint64("resolvedTs", resolvedTsEvent.Ts))
 		}
 	}
+	if batch.len() == 0 {
+		return
+	}
+	batch.finalize()
+	s.client.pushRegionEventToDS(subscriptionID, regionEvent{
+		worker:          s,
+		batchResolvedTs: batch,
+	})
 }
 
 // processRegionSendTask receives region requests from the channel and sends them to the remote store.
