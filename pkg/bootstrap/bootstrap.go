@@ -94,7 +94,7 @@ func (b *Bootstrapper[T]) HandleNewNodes(activeNodes map[node.ID]*node.Info) (
 		}
 	}
 
-	responses = b.collectInitialBootstrapResponses()
+	responses = b.collectBootstrapResponses()
 	if len(responses) > 0 {
 		b.bootstrapped = true
 	}
@@ -120,7 +120,7 @@ func (b *Bootstrapper[T]) HandleBootstrapResponse(
 	}
 	status.SetResponse(msg)
 
-	responses := b.collectInitialBootstrapResponses()
+	responses := b.collectBootstrapResponses()
 	if len(responses) > 0 {
 		b.bootstrapped = true
 	}
@@ -187,18 +187,18 @@ func (b *Bootstrapper[T]) Bootstrapped() bool {
 	return b.bootstrapped
 }
 
-// collectInitialBootstrapResponses checks if all nodes have been initialized and
-// collects their bootstrap responses.
+// collectBootstrapResponses return all cached bootstrapped responses after make sure all nodes bootstrapped.
 // Returns:
-//   - nil if either:
-//     a) not all nodes are initialized yet, or
-//     b) bootstrap was already completed previously
-//   - map[node.ID]*T containing all nodes' bootstrap responses on first successful bootstrap,
-//     after which the cached responses are cleared
+//   - newly added nodes responses if all they are initialized, and clear all cached responses.
+//   - else nil
 //
 // Note: this method must be called after lock.
-func (b *Bootstrapper[T]) collectInitialBootstrapResponses() map[node.ID]*T {
+func (b *Bootstrapper[T]) collectBootstrapResponses() map[node.ID]*T {
 	if b.bootstrapped {
+		return nil
+	}
+
+	if len(b.nodes) == 0 {
 		return nil
 	}
 

@@ -30,12 +30,20 @@ func TestHandleNewNodes(t *testing.T) {
 	})
 
 	nodes := make(map[node.ID]*node.Info)
+
+	added, removed, requests, responses := b.HandleNewNodes(nodes)
+	require.Len(t, added, 0)
+	require.Len(t, removed, 0)
+	require.Len(t, requests, 0)
+	require.False(t, b.Bootstrapped())
+	require.Nil(t, responses, 0)
+
 	node1 := node.NewInfo("", "")
 	node2 := node.NewInfo("", "")
 	nodes[node1.ID] = node1
 	nodes[node2.ID] = node2
 
-	added, removed, requests, responses := b.HandleNewNodes(nodes)
+	added, removed, requests, responses = b.HandleNewNodes(nodes)
 	require.Len(t, added, 2)
 	require.Len(t, removed, 0)
 	require.Len(t, requests, 2)
