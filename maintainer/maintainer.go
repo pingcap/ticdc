@@ -531,9 +531,9 @@ func (m *Maintainer) onNodeChanged() {
 		zap.Any("removedNodes", removedNodes))
 
 	for _, id := range removedNodes {
+		m.controller.RemoveNode(id)
 		m.checkpointTsByCapture.Delete(id)
 		m.redoTsByCapture.Delete(id)
-		m.controller.RemoveNode(id)
 	}
 
 	m.sendMessages(requests)

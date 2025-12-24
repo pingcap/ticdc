@@ -147,9 +147,6 @@ func (t *Status[T]) GetLastBootstrapTime() time.Time {
 
 func (t *Status[T]) SetResponse(msg *T) {
 	t.response = msg
-}
-
-func (t *Status[T]) SetInitialized() {
 	t.state = stateInitialized
 }
 

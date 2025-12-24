@@ -361,6 +361,9 @@ type remoteMaintainer struct {
 }
 
 func (c *Controller) handleBootstrapResponses(responses map[node.ID]*heartbeatpb.CoordinatorBootstrapResponse) {
+	if len(responses) == 0 {
+		return
+	}
 	log.Info("all new nodes bootstrap response received",
 		zap.Int("newNodeCount", len(responses)))
 	// runningCfs are changefeeds that already running on other nodes

@@ -33,6 +33,7 @@ type Bootstrapper[T any] struct {
 	// id is a log identifier
 	id string
 
+	// mutext protect the bootstrapped and nodes, guarantee they are updated atomically.
 	mutex sync.Mutex
 	// bootstrapped is true after get in touch with all nodes by receive their responses.
 	bootstrapped bool
@@ -118,7 +119,6 @@ func (b *Bootstrapper[T]) HandleBootstrapResponse(
 		return nil
 	}
 	status.SetResponse(msg)
-	status.SetInitialized()
 
 	responses := b.collectInitialBootstrapResponses()
 	if len(responses) > 0 {
