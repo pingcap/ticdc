@@ -332,14 +332,18 @@ func TestHandleResolvedTs(t *testing.T) {
 }
 
 func TestHandleBatchResolvedTsEvent(t *testing.T) {
+	ctx := context.Background()
 	subID := SubscriptionID(10)
 	worker := &regionRequestWorker{
 		requestCache: &requestCache{},
 	}
+	startKey := common.ToComparableKey([]byte{0})
+	midKey := common.ToComparableKey([]byte{1})
+	endKey := common.ToComparableKey([]byte{2})
 	span := heartbeatpb.TableSpan{
 		TableID:  101,
-		StartKey: common.ToComparableKey([]byte{0}),
-		EndKey:   common.ToComparableKey(common.UpperBoundKey),
+		StartKey: startKey,
+		EndKey:   endKey,
 	}
 	subSpan := &subscribedSpan{
 		subID:           subID,
@@ -352,28 +356,49 @@ func TestHandleBatchResolvedTsEvent(t *testing.T) {
 	var advancedTs uint64
 	subSpan.advanceResolvedTs = func(ts uint64) { advancedTs = ts }
 
-	lockRes := subSpan.rangeLock.LockRange(context.Background(), span.StartKey, span.EndKey, 1, 1)
-	require.Equal(t, regionlock.LockRangeStatusSuccess, lockRes.Status)
+	lockRange := func(start, end []byte, region uint64) *regionlock.LockedRangeState {
+		res := subSpan.rangeLock.LockRange(ctx, start, end, region, 1)
+		require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
+		return res.LockedRangeState
+	}
 
-	region := newRegionInfo(tikv.NewRegionVerID(1, 1, 1), span, &tikv.RPCContext{}, subSpan, false)
-	region.lockedRangeState = lockRes.LockedRangeState
-	state := newRegionFeedState(region, uint64(subID), worker)
-	state.start()
-	state.region.lockedRangeState.Initialized.Store(true)
+	region1 := newRegionInfo(
+		tikv.NewRegionVerID(1, 1, 1),
+		heartbeatpb.TableSpan{StartKey: span.StartKey, EndKey: midKey},
+		&tikv.RPCContext{},
+		subSpan,
+		false,
+	)
+	region1.lockedRangeState = lockRange(span.StartKey, midKey, 1)
+	state1 := newRegionFeedState(region1, uint64(subID), worker)
+	state1.start()
+	state1.region.lockedRangeState.Initialized.Store(true)
+
+	region2 := newRegionInfo(
+		tikv.NewRegionVerID(2, 2, 2),
+		heartbeatpb.TableSpan{StartKey: midKey, EndKey: span.EndKey},
+		&tikv.RPCContext{},
+		subSpan,
+		false,
+	)
+	region2.lockedRangeState = lockRange(midKey, span.EndKey, 2)
+	state2 := newRegionFeedState(region2, uint64(subID), worker)
+	state2.start()
+	state2.region.lockedRangeState.Initialized.Store(true)
 
 	handler := regionEventHandler{}
 	batch := newBatchResolvedTsEvent(subID, 2)
-	batch.add(state, 10)
-	batch.add(state, 12)
-	require.Equal(t, 1, batch.len())
-	batch.finalize()
+	batch.add(state1, 12)
+	batch.add(state2, 12)
+	require.Equal(t, 2, batch.len())
 
 	await := handler.Handle(subSpan, regionEvent{
 		worker:          worker,
 		batchResolvedTs: batch,
 	})
 	require.False(t, await)
-	require.Equal(t, uint64(12), state.getLastResolvedTs())
+	require.Equal(t, uint64(12), state1.getLastResolvedTs())
+	require.Equal(t, uint64(12), state2.getLastResolvedTs())
 	require.Equal(t, uint64(12), subSpan.resolvedTs.Load())
 	require.Equal(t, uint64(12), advancedTs)
 }

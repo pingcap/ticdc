@@ -316,7 +316,6 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 	if batch.len() == 0 {
 		return
 	}
-	batch.finalize()
 	s.client.pushRegionEventToDS(subscriptionID, regionEvent{
 		worker:          s,
 		batchResolvedTs: batch,

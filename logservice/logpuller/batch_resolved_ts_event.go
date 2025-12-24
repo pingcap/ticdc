@@ -22,14 +22,12 @@ type batchResolvedTsEntry struct {
 type batchResolvedTsEvent struct {
 	subscriptionID SubscriptionID
 	entries        []batchResolvedTsEntry
-	dedup          map[uint64]int
 }
 
 func newBatchResolvedTsEvent(subID SubscriptionID, capacity int) *batchResolvedTsEvent {
 	return &batchResolvedTsEvent{
 		subscriptionID: subID,
 		entries:        make([]batchResolvedTsEntry, 0, capacity),
-		dedup:          make(map[uint64]int, capacity),
 	}
 }
 
@@ -37,14 +35,6 @@ func (b *batchResolvedTsEvent) add(state *regionFeedState, resolvedTs uint64) {
 	if state == nil {
 		return
 	}
-	regionID := state.getRegionID()
-	if idx, ok := b.dedup[regionID]; ok {
-		if resolvedTs > b.entries[idx].resolvedTs {
-			b.entries[idx].resolvedTs = resolvedTs
-		}
-		return
-	}
-	b.dedup[regionID] = len(b.entries)
 	b.entries = append(b.entries, batchResolvedTsEntry{
 		state:      state,
 		resolvedTs: resolvedTs,
@@ -66,8 +56,4 @@ func (b *batchResolvedTsEvent) minResolvedTs() uint64 {
 		}
 	}
 	return min
-}
-
-func (b *batchResolvedTsEvent) finalize() {
-	b.dedup = nil
 }
