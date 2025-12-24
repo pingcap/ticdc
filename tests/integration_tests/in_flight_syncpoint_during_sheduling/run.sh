@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# This test verifies that moving a table dispatcher during an in-flight syncpoint does not
+# This test verifies that moving a dispatcher/merging a dispatcher during an in-flight syncpoint does not
 # restart the dispatcher from (syncpoint_ts - 1). Otherwise, the dispatcher may re-scan and
 # re-apply events with commitTs <= syncpoint_ts while the table-trigger dispatcher is writing
 # the syncpoint, which can break the snapshot consistency semantics.
@@ -22,7 +22,7 @@ dml_pid=0
 
 deployConfig() {
 	cat $CUR/conf/diff_config_part1.toml >$CUR/conf/diff_config.toml
-	sed -i "s#output-dir = \"/tmp/tidb_cdc_test/syncpoint_move_table/sync_diff/output\"#output-dir = \"$WORK_DIR/sync_diff/output\"#g" $CUR/conf/diff_config.toml
+	sed -i "s#output-dir = \"/tmp/tidb_cdc_test/in_flight_syncpoint_during_sheduling/sync_diff/output\"#output-dir = \"$WORK_DIR/sync_diff/output\"#g" $CUR/conf/diff_config.toml
 	echo "snapshot = \"$1\"" >>$CUR/conf/diff_config.toml
 	cat $CUR/conf/diff_config_part2.toml >>$CUR/conf/diff_config.toml
 	echo "snapshot = \"$2\"" >>$CUR/conf/diff_config.toml
@@ -58,6 +58,16 @@ EOF
 	run_sql "INSERT INTO ${DB_NAME}.${TABLE_NAME} VALUES (1, 1), (2, 2), (3, 3);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	check_table_exists "${DB_NAME}.${TABLE_NAME}" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 60
 
+    # Prepare a split table for merge test. It should be blocked by syncpoint together with other tables.
+	run_sql "CREATE TABLE ${DB_NAME}.${MERGE_TABLE_NAME} (id INT PRIMARY KEY, v INT);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "INSERT INTO ${DB_NAME}.${MERGE_TABLE_NAME} VALUES (1, 1), (2, 2), (3, 3);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	check_table_exists "${DB_NAME}.${MERGE_TABLE_NAME}" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 60
+
+	merge_table_id=$(get_table_id "$DB_NAME" "$MERGE_TABLE_NAME")
+	run_sql "SPLIT TABLE ${DB_NAME}.${MERGE_TABLE_NAME} BETWEEN (1) AND (100000) REGIONS 20;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	split_table_with_retry $merge_table_id "$CHANGEFEED_ID" 10
+	query_dispatcher_count "127.0.0.1:8300" "$CHANGEFEED_ID" 3 100 ge
+
 	# Restart node1 to enable failpoints:
 	# - StopBalanceScheduler: keep the table on node1 until we explicitly move it.
 	# - BlockOrWaitBeforeWrite: block syncpoint writing on the table-trigger dispatcher.
@@ -75,16 +85,8 @@ EOF
 	cdc_cli_changefeed update --config="$CUR/conf/changefeed.toml" --changefeed-id="$CHANGEFEED_ID" --no-confirm
 	cdc_cli_changefeed resume --changefeed-id="$CHANGEFEED_ID"
 
-	# Prepare a split table for merge test. It should be blocked by syncpoint together with other tables.
-	run_sql "CREATE TABLE ${DB_NAME}.${MERGE_TABLE_NAME} (id INT PRIMARY KEY, v INT);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	run_sql "INSERT INTO ${DB_NAME}.${MERGE_TABLE_NAME} VALUES (1, 1), (2, 2), (3, 3);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	check_table_exists "${DB_NAME}.${MERGE_TABLE_NAME}" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 60
-	merge_table_id=$(get_table_id "$DB_NAME" "$MERGE_TABLE_NAME")
-	run_sql "SPLIT TABLE ${DB_NAME}.${MERGE_TABLE_NAME} BETWEEN (1) AND (100000) REGIONS 20;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	split_table_with_retry $merge_table_id "$CHANGEFEED_ID" 10
-	query_dispatcher_count "127.0.0.1:8300" "$CHANGEFEED_ID" 22 100
-
 	# Start node2 for moving the table.
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301"
 
 	# Keep generating DML until a syncpoint is triggered.

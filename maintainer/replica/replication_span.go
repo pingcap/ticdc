@@ -193,6 +193,10 @@ func (r *SpanReplication) UpdateBlockState(newState heartbeatpb.State) {
 	r.blockState.Store(&newState)
 }
 
+func (r *SpanReplication) GetBlockState() *heartbeatpb.State {
+	return r.blockState.Load()
+}
+
 func (r *SpanReplication) GetSchemaID() int64 {
 	return r.schemaID
 }

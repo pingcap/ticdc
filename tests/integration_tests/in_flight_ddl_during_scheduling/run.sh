@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# This test verifies that moving a table dispatcher during an in-flight multi-table DDL barrier
+# This test verifies that moving a dispatcher/merge a dispatcher during an in-flight multi-table DDL barrier
 # does not cause the moved dispatcher to miss the DDL, and that the recreated dispatcher starts
 # from (blockTs-1) with skipDMLAsStartTs enabled.
 
@@ -151,7 +151,7 @@ EOF
 	# The merged dispatcher must start from (ddl_ts - 1) and enable skipDMLAsStartTs to safely replay the DDL at ddl_ts.
 	run_sql "SPLIT TABLE ${DB_NAME}.${TABLE_1_NEW} BETWEEN (1) AND (100000) REGIONS 20;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	split_table_with_retry $table_1_id "$CHANGEFEED_ID" 10
-	ensure 60 "curl -s \"http://127.0.0.1:8300/api/v2/changefeeds/${CHANGEFEED_ID}/tables?mode=0&keyspace=${KEYSPACE_NAME}\" | jq -e '[.[].table_ids[] | select(. == ${table_1_id})] | length >= 2' >/dev/null"
+	query_dispatcher_count "127.0.0.1:8300" "$CHANGEFEED_ID" 3 100 ge
 
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforeWrite=pause;github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforePass=pause'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "2" --addr "127.0.0.1:8302"

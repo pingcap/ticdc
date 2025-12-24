@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/range_checker"
+	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -474,7 +475,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 		for _, tableId := range be.blockedDispatchers.TableIDs {
 			replications := be.spanController.GetTasksByTableID(tableId)
 			for _, replication := range replications {
-				if replication.GetStatus().CheckpointTs >= be.commitTs {
+				if forwardBarrierEvent(replication, be) {
 					// one related table has forward checkpointTs, means the block event can be advanced
 					be.selected.Store(true)
 					be.writerDispatcherAdvanced = true
@@ -493,7 +494,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 		schemaID := be.blockedDispatchers.SchemaID
 		replications := be.spanController.GetTasksBySchemaID(schemaID)
 		for _, replication := range replications {
-			if replication.GetStatus().CheckpointTs >= be.commitTs {
+			if forwardBarrierEvent(replication, be) {
 				// one related table has forward checkpointTs, means the block event can be advanced
 				be.selected.Store(true)
 				be.writerDispatcherAdvanced = true
@@ -510,7 +511,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 	case heartbeatpb.InfluenceType_All:
 		replications := be.spanController.GetAllTasks()
 		for _, replication := range replications {
-			if replication.GetStatus().CheckpointTs >= be.commitTs {
+			if forwardBarrierEvent(replication, be) {
 				// one related table has forward checkpointTs, means the block event can be advanced
 				be.selected.Store(true)
 				be.writerDispatcherAdvanced = true
@@ -524,6 +525,26 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 			}
 		}
 	}
+}
+
+// forwardBarrierEvent checks whether the barrier event can be forwarded for the given replication
+func forwardBarrierEvent(replication *replica.SpanReplication, event *BarrierEvent) bool {
+	if replication.GetStatus().CheckpointTs > event.commitTs {
+		return true
+	}
+
+	blockState := replication.GetBlockState()
+	if blockState != nil {
+		if blockState.BlockTs > event.commitTs {
+			return true
+		} else if blockState.BlockTs == event.commitTs {
+			// if replication is syncpoint, but event is not syncpoint, we can forward the event
+			if blockState.IsSyncPoint && !event.isSyncPoint {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
