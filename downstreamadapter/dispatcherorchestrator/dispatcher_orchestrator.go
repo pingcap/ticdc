@@ -163,7 +163,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 				cfId,
 				cfConfig,
 				req.TableTriggerEventDispatcherId,
-				req.RedoTableTriggerEventDispatcherId,
+				req.TableTriggerRedoDispatcherId,
 				req.StartTs,
 				from,
 				req.IsNewChangefeed,
@@ -213,16 +213,16 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 				}
 			}
 		}
-		if req.RedoTableTriggerEventDispatcherId != nil {
-			redoTableTriggerEventDispatcher := manager.GetRedoTableTriggerEventDispatcher()
-			if redoTableTriggerEventDispatcher == nil {
-				err = manager.NewRedoTableTriggerEventDispatcher(
-					req.RedoTableTriggerEventDispatcherId,
+		if req.TableTriggerRedoDispatcherId != nil {
+			tableTriggerRedoDispatcher := manager.GetTableTriggerRedoDispatcher()
+			if tableTriggerRedoDispatcher == nil {
+				err = manager.NewTableTriggerRedoDispatcher(
+					req.TableTriggerRedoDispatcherId,
 					req.StartTs,
 					false,
 				)
 				if err != nil {
-					log.Error("failed to create new redo table trigger event dispatcher",
+					log.Error("failed to create new table trigger redo dispatcher",
 						zap.Stringer("changefeedID", cfId), zap.Error(err))
 					return m.handleDispatcherError(from, req.ChangefeedID, err)
 				}
@@ -251,8 +251,8 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		startTs = tableTriggerDispatcher.GetStartTs()
 	}
 	if manager.RedoEnable {
-		if redoTableTriggerDispatcher := manager.GetRedoTableTriggerEventDispatcher(); redoTableTriggerDispatcher != nil {
-			redoStartTs = redoTableTriggerDispatcher.GetStartTs()
+		if tableTriggerRedoDispatcher := manager.GetTableTriggerRedoDispatcher(); tableTriggerRedoDispatcher != nil {
+			redoStartTs = tableTriggerRedoDispatcher.GetStartTs()
 		}
 	}
 	response := createBootstrapResponse(req.ChangefeedID, manager, startTs, redoStartTs)
@@ -311,9 +311,9 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 		return m.handleDispatcherError(from, req.ChangefeedID, err)
 	}
 	if manager.RedoEnable {
-		err := manager.InitalizeRedoTableTriggerEventDispatcher(req.RedoSchemas)
+		err := manager.InitalizeTableTriggerRedoDispatcher(req.RedoSchemas)
 		if err != nil {
-			log.Error("failed to initialize redo table trigger event dispatcher",
+			log.Error("failed to initialize table trigger redo dispatcher",
 				zap.Any("changefeedID", cfId.Name()), zap.Error(err))
 			return m.handleDispatcherError(from, req.ChangefeedID, err)
 		}
@@ -363,13 +363,9 @@ func createBootstrapResponse(
 		Spans:        make([]*heartbeatpb.BootstrapTableSpan, 0, manager.GetDispatcherMap().Len()),
 	}
 
-	// table trigger dispatcher startTs
+	// table trigger event dispatcher startTs
 	if startTs != 0 {
 		response.CheckpointTs = startTs
-	}
-	// redo table trigger dispatcher startTs
-	if redoStartTs != 0 {
-		response.RedoCheckpointTs = redoStartTs
 	}
 
 	manager.GetDispatcherMap().ForEach(func(id common.DispatcherID, d *dispatcher.EventDispatcher) {
@@ -384,6 +380,10 @@ func createBootstrapResponse(
 		})
 	})
 	if manager.RedoEnable {
+		// table trigger redo dispatcher startTs
+		if redoStartTs != 0 {
+			response.RedoCheckpointTs = redoStartTs
+		}
 		manager.GetRedoDispatcherMap().ForEach(func(id common.DispatcherID, d *dispatcher.RedoDispatcher) {
 			response.Spans = append(response.Spans, &heartbeatpb.BootstrapTableSpan{
 				ID:              id.ToPB(),

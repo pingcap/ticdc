@@ -1063,13 +1063,13 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapMessa
 	}
 	return func(targetNodeID node.ID) *messaging.TargetMessage {
 		msg := &heartbeatpb.MaintainerBootstrapRequest{
-			ChangefeedID:                      m.changefeedID.ToPB(),
-			Config:                            cfgBytes,
-			StartTs:                           m.startCheckpointTs,
-			TableTriggerEventDispatcherId:     nil,
-			RedoTableTriggerEventDispatcherId: nil,
-			IsNewChangefeed:                   false,
-			KeyspaceId:                        m.info.KeyspaceID,
+			ChangefeedID:                  m.changefeedID.ToPB(),
+			Config:                        cfgBytes,
+			StartTs:                       m.startCheckpointTs,
+			TableTriggerEventDispatcherId: nil,
+			TableTriggerRedoDispatcherId:  nil,
+			IsNewChangefeed:               false,
+			KeyspaceId:                    m.info.KeyspaceID,
 		}
 
 		// only send dispatcher targetNodeID to dispatcher manager on the same node
@@ -1082,7 +1082,7 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapMessa
 			)
 			msg.TableTriggerEventDispatcherId = m.ddlSpan.ID.ToPB()
 			if m.enableRedo {
-				msg.RedoTableTriggerEventDispatcherId = m.redoDDLSpan.ID.ToPB()
+				msg.TableTriggerRedoDispatcherId = m.redoDDLSpan.ID.ToPB()
 			}
 			msg.IsNewChangefeed = m.newChangefeed
 		}

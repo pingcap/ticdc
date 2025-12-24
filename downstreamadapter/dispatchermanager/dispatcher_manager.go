@@ -81,11 +81,11 @@ type DispatcherManager struct {
 
 	// tableTriggerEventDispatcher is a special dispatcher, that is responsible for handling ddl and checkpoint events.
 	tableTriggerEventDispatcher *dispatcher.EventDispatcher
-	// redoTableTriggerEventDispatcher is a special redo dispatcher, that is responsible for handling ddl and checkpoint events.
-	redoTableTriggerEventDispatcher *dispatcher.RedoDispatcher
+	// tableTriggerRedoDispatcher is a special redo dispatcher, that is responsible for handling ddl and checkpoint events.
+	tableTriggerRedoDispatcher *dispatcher.RedoDispatcher
 	// dispatcherMap restore all the dispatchers in the DispatcherManager, including table trigger event dispatcher
 	dispatcherMap *DispatcherMap[*dispatcher.EventDispatcher]
-	// redoDispatcherMap restore all the redo dispatchers in the DispatcherManager, including redo table trigger event dispatcher
+	// redoDispatcherMap restore all the redo dispatchers in the DispatcherManager, including table trigger redo dispatcher
 	redoDispatcherMap *DispatcherMap[*dispatcher.RedoDispatcher]
 	// schemaIDToDispatchers is shared in the DispatcherManager,
 	// it store all the infos about schemaID->Dispatchers
@@ -140,9 +140,9 @@ type DispatcherManager struct {
 	metricResolvedTs                       prometheus.Gauge
 	metricResolvedTsLag                    prometheus.Gauge
 
-	metricRedoTableTriggerEventDispatcherCount prometheus.Gauge
-	metricRedoEventDispatcherCount             prometheus.Gauge
-	metricRedoCreateDispatcherDuration         prometheus.Observer
+	metricTableTriggerRedoDispatcherCount prometheus.Gauge
+	metricRedoEventDispatcherCount        prometheus.Gauge
+	metricRedoCreateDispatcherDuration    prometheus.Observer
 }
 
 // return actual startTs of the table trigger event dispatcher
@@ -152,7 +152,7 @@ func NewDispatcherManager(
 	changefeedID common.ChangeFeedID,
 	cfConfig *config.ChangefeedConfig,
 	tableTriggerEventDispatcherID,
-	redoTableTriggerEventDispatcherID *heartbeatpb.DispatcherID,
+	tableTriggerRedoDispatcherID *heartbeatpb.DispatcherID,
 	startTs uint64,
 	maintainerID node.ID,
 	newChangefeed bool,
@@ -193,9 +193,9 @@ func NewDispatcherManager(
 		metricResolvedTs:                       metrics.DispatcherManagerResolvedTsGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 		metricResolvedTsLag:                    metrics.DispatcherManagerResolvedTsLagGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 
-		metricRedoTableTriggerEventDispatcherCount: metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher"),
-		metricRedoEventDispatcherCount:             metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher"),
-		metricRedoCreateDispatcherDuration:         metrics.CreateDispatcherDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher"),
+		metricTableTriggerRedoDispatcherCount: metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher"),
+		metricRedoEventDispatcherCount:        metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher"),
+		metricRedoCreateDispatcherDuration:    metrics.CreateDispatcherDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher"),
 	}
 
 	// Set the epoch and maintainerID of the event dispatcher manager
@@ -257,7 +257,7 @@ func NewDispatcherManager(
 			return nil, errors.Trace(err)
 		}
 	}
-	err = initRedoComponet(ctx, manager, changefeedID, redoTableTriggerEventDispatcherID, startTs, newChangefeed)
+	err = initRedoComponet(ctx, manager, changefeedID, tableTriggerRedoDispatcherID, startTs, newChangefeed)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}

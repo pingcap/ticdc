@@ -108,37 +108,24 @@ func (c *Controller) FinishBootstrap(
 		}
 	}
 
-	// Build table splitability map for later use
-	tableSplitMap := make(map[int64]bool, len(tables))
-	for _, tbl := range tables {
-		tableSplitMap[tbl.TableID] = tbl.Splitable
-	}
-	// Step 3: Build working task map from bootstrap responses
-	workingTaskMap := c.buildWorkingTaskMap(allNodesResp, tableSplitMap, common.DefaultMode)
-
-	// Step 4: Process tables and build schema info
-	schemaInfos := c.processTablesAndBuildSchemaInfo(tables, workingTaskMap, isMysqlCompatibleBackend, common.DefaultMode)
+	// Step 3: Build working task map from bootstrap responses and Process tables and build schema info
+	workingTaskMap, schemaInfos := c.buildTaskInfo(allNodesResp, tables, isMysqlCompatibleBackend, common.DefaultMode)
 
 	var (
 		redoWorkingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication]
 		redoSchemaInfos    map[int64]*heartbeatpb.SchemaInfo
 	)
 	if c.enableRedo {
-		redoTableSplitMap := make(map[int64]bool, len(redoTables))
-		for _, tbl := range redoTables {
-			redoTableSplitMap[tbl.TableID] = tbl.Splitable
-		}
-		redoWorkingTaskMap = c.buildWorkingTaskMap(allNodesResp, redoTableSplitMap, common.RedoMode)
-		redoSchemaInfos = c.processTablesAndBuildSchemaInfo(redoTables, redoWorkingTaskMap, isMysqlCompatibleBackend, common.RedoMode)
+		redoWorkingTaskMap, redoSchemaInfos = c.buildTaskInfo(allNodesResp, redoTables, isMysqlCompatibleBackend, common.RedoMode)
 	}
 
-	// Step 5: Handle any remaining working tasks (likely dropped tables)
+	// Step 4: Handle any remaining working tasks (likely dropped tables)
 	c.handleRemainingWorkingTasks(workingTaskMap, redoWorkingTaskMap)
 
-	// Step 6: Initialize and start sub components
+	// Step 5: Initialize and start sub components
 	c.initializeComponents(allNodesResp)
 
-	// Step 7: Mark the controller as bootstrapped
+	// Step 6: Mark the controller as bootstrapped
 	c.bootstrapped = true
 
 	return &heartbeatpb.MaintainerPostBootstrapRequest{
@@ -284,6 +271,24 @@ func (c *Controller) handleTableHoles(
 	} else {
 		spanController.AddNewSpans(table.SchemaID, holes, c.startCheckpointTs, splitEnabled)
 	}
+}
+
+func (c *Controller) buildTaskInfo(
+	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
+	tables []commonEvent.Table,
+	isMysqlCompatibleBackend bool,
+	mode int64) (
+	map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication],
+	map[int64]*heartbeatpb.SchemaInfo,
+) {
+	// Build table splitability map for later use
+	tableSplitMap := make(map[int64]bool, len(tables))
+	for _, tbl := range tables {
+		tableSplitMap[tbl.TableID] = tbl.Splitable
+	}
+	workingTaskMap := c.buildWorkingTaskMap(allNodesResp, tableSplitMap, mode)
+	schemaInfos := c.processTablesAndBuildSchemaInfo(tables, workingTaskMap, isMysqlCompatibleBackend, mode)
+	return workingTaskMap, schemaInfos
 }
 
 func (c *Controller) handleRemainingWorkingTasks(
