@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/scheduler"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"go.uber.org/zap"
@@ -76,6 +77,7 @@ func NewController(changefeedID common.ChangeFeedID,
 	cfConfig *config.ReplicaConfig,
 	ddlSpan, redoDDLSpan *replica.SpanReplication,
 	batchSize int, balanceInterval time.Duration,
+	refresher *replica.RegionCountRefresher,
 	keyspaceMeta common.KeyspaceMeta,
 	enableRedo bool,
 ) *Controller {
@@ -83,7 +85,7 @@ func NewController(changefeedID common.ChangeFeedID,
 
 	enableTableAcrossNodes := false
 	var splitter *split.Splitter
-	if cfConfig != nil && cfConfig.Scheduler.EnableTableAcrossNodes {
+	if cfConfig != nil && util.GetOrZero(cfConfig.Scheduler.EnableTableAcrossNodes) {
 		enableTableAcrossNodes = true
 		splitter = split.NewSplitter(keyspaceMeta.ID, changefeedID, cfConfig.Scheduler)
 	}
@@ -95,14 +97,14 @@ func NewController(changefeedID common.ChangeFeedID,
 	if cfConfig != nil {
 		schedulerCfg = cfConfig.Scheduler
 	}
-	spanController := span.NewController(changefeedID, ddlSpan, splitter, schedulerCfg, keyspaceMeta.ID, common.DefaultMode)
+	spanController := span.NewController(changefeedID, ddlSpan, splitter, schedulerCfg, refresher, keyspaceMeta.ID, common.DefaultMode)
 
 	var (
 		redoSpanController *span.Controller
 		redoOC             *operator.Controller
 	)
 	if enableRedo {
-		redoSpanController = span.NewController(changefeedID, redoDDLSpan, splitter, schedulerCfg, keyspaceMeta.ID, common.RedoMode)
+		redoSpanController = span.NewController(changefeedID, redoDDLSpan, splitter, schedulerCfg, refresher, keyspaceMeta.ID, common.RedoMode)
 		redoOC = operator.NewOperatorController(changefeedID, redoSpanController, batchSize, common.RedoMode)
 	}
 	// Create operator controller using spanController

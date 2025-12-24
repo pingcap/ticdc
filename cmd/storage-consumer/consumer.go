@@ -149,7 +149,7 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 		tableIDGenerator: &fakeTableIDGenerator{
 			tableIDs: make(map[string]int64),
 		},
-		enableTableAcrossNodes: replicaConfig.Scheduler.EnableTableAcrossNodes,
+		enableTableAcrossNodes: putil.GetOrZero(replicaConfig.Scheduler.EnableTableAcrossNodes),
 	}, nil
 }
 

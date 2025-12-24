@@ -36,6 +36,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/redo"
 	pkgReplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -93,8 +94,10 @@ type Maintainer struct {
 	// checkpointTs.
 	startCheckpointTs uint64
 	enableRedo        bool
-	// redoTs is global ts to forward
-	redoTs          *heartbeatpb.RedoMessage
+	// redoMetaTs is the redo meta unflushed ts to forward
+	redoMetaTs *heartbeatpb.RedoMetaMessage
+	// redoResolvedTs is the redo meta flushed resolvedTs
+	redoResolvedTs  uint64
 	redoDDLSpan     *replica.SpanReplication
 	redoTsByCapture *WatermarkCaptureMap
 
@@ -174,10 +177,12 @@ func NewMaintainer(cfID common.ChangeFeedID,
 
 	tableTriggerEventDispatcherID, ddlSpan := newDDLSpan(keyspaceID, cfID, checkpointTs, selfNode, common.DefaultMode)
 	var redoDDLSpan *replica.SpanReplication
-	enableRedo := redo.IsConsistentEnabled(info.Config.Consistent.Level)
+	enableRedo := redo.IsConsistentEnabled(util.GetOrZero(info.Config.Consistent.Level))
 	if enableRedo {
 		_, redoDDLSpan = newDDLSpan(keyspaceID, cfID, checkpointTs, selfNode, common.RedoMode)
 	}
+
+	refresher := replica.NewRegionCountRefresher(cfID, util.GetOrZero(info.Config.Scheduler.RegionCountRefreshInterval))
 
 	var (
 		keyspaceName = cfID.Keyspace()
@@ -193,7 +198,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		startCheckpointTs: checkpointTs,
 		controller: NewController(cfID, checkpointTs, taskScheduler,
-			info.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), keyspaceMeta, enableRedo),
+			info.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), refresher, keyspaceMeta, enableRedo),
 		mc:                    mc,
 		removed:               atomic.NewBool(false),
 		nodeManager:           nodeManager,
@@ -229,11 +234,12 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		CheckpointTs: checkpointTs,
 		ResolvedTs:   checkpointTs,
 	}
-	m.redoTs = &heartbeatpb.RedoMessage{
+	m.redoMetaTs = &heartbeatpb.RedoMetaMessage{
 		ChangefeedID: cfID.ToPB(),
 		CheckpointTs: checkpointTs,
 		ResolvedTs:   checkpointTs,
 	}
+	m.redoResolvedTs = checkpointTs
 	m.scheduleState.Store(int32(heartbeatpb.ComponentState_Working))
 	m.bootstrapper = bootstrap.NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse](
 		m.changefeedID.Name(),
@@ -247,7 +253,12 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	go m.runHandleEvents(ctx)
 	go m.calCheckpointTs(ctx)
 	if enableRedo {
-		go m.handleRedoMessage(ctx)
+		go m.handleRedoMetaTsMessage(ctx)
+	}
+
+	if util.GetOrZero(info.Config.Scheduler.EnableTableAcrossNodes) &&
+		util.GetOrZero(info.Config.Scheduler.RegionThreshold) > 0 {
+		go refresher.Run(ctx)
 	}
 
 	log.Info("changefeed maintainer is created",
@@ -255,7 +266,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		zap.String("state", string(info.State)),
 		zap.Uint64("checkpointTs", checkpointTs),
 		zap.String("ddlDispatcherID", tableTriggerEventDispatcherID.String()),
-		zap.String("redoTs", m.redoTs.String()),
+		zap.String("redoTs", m.redoMetaTs.String()),
 		zap.Bool("newChangefeed", newChangefeed),
 	)
 
@@ -466,6 +477,9 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 	case messaging.TypeCheckpointTsMessage:
 		req := msg.Message[0].(*heartbeatpb.CheckpointTsMessage)
 		m.onCheckpointTsPersisted(req)
+	case messaging.TypeRedoResolvedTsProgressMessage:
+		req := msg.Message[0].(*heartbeatpb.RedoResolvedTsProgressMessage)
+		m.onRedoPersisted(req)
 	default:
 		log.Warn("unknown message type, ignore it",
 			zap.Stringer("changefeedID", m.changefeedID),
@@ -495,6 +509,20 @@ func (m *Maintainer) onCheckpointTsPersisted(msg *heartbeatpb.CheckpointTsMessag
 	m.sendMessages([]*messaging.TargetMessage{
 		messaging.NewSingleTargetMessage(m.selfNode.ID, messaging.HeartbeatCollectorTopic, msg),
 	})
+}
+
+func (m *Maintainer) onRedoPersisted(req *heartbeatpb.RedoResolvedTsProgressMessage) {
+	if m.redoResolvedTs < req.ResolvedTs {
+		m.redoResolvedTs = req.ResolvedTs
+		msgs := make([]*messaging.TargetMessage, 0, len(m.bootstrapper.GetAllNodeIDs()))
+		for id := range m.bootstrapper.GetAllNodeIDs() {
+			msgs = append(msgs, messaging.NewSingleTargetMessage(id, messaging.HeartbeatCollectorTopic, &heartbeatpb.RedoResolvedTsForwardMessage{
+				ChangefeedID: req.ChangefeedID,
+				ResolvedTs:   m.redoResolvedTs,
+			}))
+		}
+		m.sendMessages(msgs)
+	}
 }
 
 func (m *Maintainer) onNodeChanged() {
@@ -527,9 +555,9 @@ func (m *Maintainer) onNodeChanged() {
 	}
 }
 
-// handleRedoMessage forwards the redoTs message to the dispatcher manager.
+// handleRedoMetaTsMessage forwards the redo meta ts message to the dispatcher manager.
 // - ResolvedTs: The commit-ts of the transaction that was finally confirmed to have been fully uploaded to external storage.
-func (m *Maintainer) handleRedoMessage(ctx context.Context) {
+func (m *Maintainer) handleRedoMetaTsMessage(ctx context.Context) {
 	ticker := time.NewTicker(periodRedoInterval)
 	defer ticker.Stop()
 
@@ -575,30 +603,28 @@ func (m *Maintainer) handleRedoMessage(ctx context.Context) {
 			newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minRedoCheckpointTsForScheduler, ResolvedTs: minRedoCheckpointTsForScheduler})
 			newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minRedoCheckpointTsForBarrier, ResolvedTs: minRedoCheckpointTsForBarrier})
 
-			if m.redoTs.ResolvedTs < newWatermark.CheckpointTs && updateCheckpointTs {
-				m.redoTs.ResolvedTs = newWatermark.CheckpointTs
+			if m.redoMetaTs.ResolvedTs < newWatermark.CheckpointTs && updateCheckpointTs {
+				m.redoMetaTs.ResolvedTs = newWatermark.CheckpointTs
 				needUpdate = true
 			}
-			if m.redoTs.CheckpointTs < m.getWatermark().CheckpointTs {
-				m.redoTs.CheckpointTs = m.getWatermark().CheckpointTs
+			if m.redoMetaTs.CheckpointTs < m.getWatermark().CheckpointTs {
+				m.redoMetaTs.CheckpointTs = m.getWatermark().CheckpointTs
 				needUpdate = true
 			}
 			log.Debug("handle redo message",
 				zap.Any("needUpdate", needUpdate),
-				zap.Any("globalRedoTs", m.redoTs),
+				zap.Any("redoMetaTs", m.redoMetaTs),
 				zap.Any("checkpointTs", m.getWatermark().CheckpointTs),
 				zap.Any("resolvedTs", newWatermark.CheckpointTs),
 			)
 			if needUpdate {
-				msgs := make([]*messaging.TargetMessage, 0, len(m.bootstrapper.GetAllNodeIDs()))
-				for id := range m.bootstrapper.GetAllNodeIDs() {
-					msgs = append(msgs, messaging.NewSingleTargetMessage(id, messaging.HeartbeatCollectorTopic, &heartbeatpb.RedoMessage{
-						ChangefeedID: m.redoTs.ChangefeedID,
-						CheckpointTs: m.redoTs.CheckpointTs,
-						ResolvedTs:   m.redoTs.ResolvedTs,
-					}))
-				}
-				m.sendMessages(msgs)
+				m.sendMessages([]*messaging.TargetMessage{
+					messaging.NewSingleTargetMessage(m.selfNode.ID, messaging.HeartbeatCollectorTopic, &heartbeatpb.RedoMetaMessage{
+						ChangefeedID: m.redoMetaTs.ChangefeedID,
+						CheckpointTs: m.redoMetaTs.CheckpointTs,
+						ResolvedTs:   m.redoMetaTs.ResolvedTs,
+					}),
+				})
 			}
 		}
 	}
@@ -883,7 +909,7 @@ func newDDLSpan(keyspaceID uint32, cfID common.ChangeFeedID, checkpointTs uint64
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    checkpointTs,
 			Mode:            mode,
-		}, selfNode.ID)
+		}, selfNode.ID, false)
 	return tableTriggerEventDispatcherID, ddlSpan
 }
 

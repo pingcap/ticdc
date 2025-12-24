@@ -93,7 +93,7 @@ function ddl_test() {
 	cdc_cli_changefeed resume --no-confirm --changefeed-id=${changefeedid} --overwrite-checkpoint-ts=$((ddl_finished_ts - 1))
 	echo "resume changefeed ${changefeedid} from ${ddl_finished_ts}"
 	ensure 10 check_ts_forward $changefeedid
-	ensure 1000000000000000 check_ddl_executed "${WORK_DIR}/cdc.log" "${WORK_DIR}/ddl_temp.sql" $is_reentrant
+	ensure 50 check_ddl_executed "${WORK_DIR}/cdc.log" "${WORK_DIR}/ddl_temp.sql" $is_reentrant
 }
 
 function run() {

@@ -59,7 +59,7 @@ type DispatcherService interface {
 type Dispatcher interface {
 	DispatcherService
 	GetSchemaID() int64
-	HandleDispatcherStatus(*heartbeatpb.DispatcherStatus)
+	HandleDispatcherStatus(*heartbeatpb.DispatcherStatus) (await bool)
 	HandleError(err error)
 	SetSeq(seq uint64)
 	SetStartTs(startTs uint64)
@@ -504,7 +504,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				}
 				wakeCallback()
 			})
-			d.sharedInfo.GetBlockEventExecutor().Submit(d, ddl)
+			d.DealWithBlockEvent(ddl)
 		case commonEvent.TypeSyncPointEvent:
 			if common.IsRedoMode(d.GetMode()) {
 				continue
@@ -523,7 +523,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			syncPoint.AddPostFlushFunc(func() {
 				wakeCallback()
 			})
-			d.sharedInfo.GetBlockEventExecutor().Submit(d, syncPoint)
+			d.DealWithBlockEvent(syncPoint)
 		case commonEvent.TypeHandshakeEvent:
 			log.Warn("Receive handshake event unexpectedly",
 				zap.Stringer("dispatcher", d.id),
@@ -550,18 +550,23 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	return block
 }
 
-// HandleDispatcherStatus is used to handle the dispatcher status from the Maintainer to deal with the block event.
+// HandleDispatcherStatus handles the dispatcher status from the maintainer to process block events.
 // Each dispatcher status may contain an ACK info or a dispatcher action or both.
 // If we get an ack info, we need to check whether the ack is for the ddl event in resend task map. If so, we can cancel the resend task.
 // If we get a dispatcher action, we need to check whether the action is for the current pending ddl event. If so, we can deal the ddl event based on the action.
 // 1. If the action is a write, we need to add the ddl event to the sink for writing to downstream.
 // 2. If the action is a pass, we just need to pass the event
-func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.DispatcherStatus) {
+//
+// For Action_Write, writing the block event may involve IO (e.g. executing DDL). To avoid blocking the
+// dispatcher status dynamic stream handler, we execute the write asynchronously and return await=true.
+// The status path will be waked up after the write finishes.
+func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.DispatcherStatus) (await bool) {
 	log.Debug("dispatcher handle dispatcher status",
 		zap.Any("dispatcherStatus", dispatcherStatus),
 		zap.Stringer("dispatcher", d.id),
 		zap.Any("action", dispatcherStatus.GetAction()),
 		zap.Any("ack", dispatcherStatus.GetAck()))
+
 	// Step1: deal with the ack info
 	ack := dispatcherStatus.GetAck()
 	if ack != nil {
@@ -583,7 +588,7 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 				zap.Uint64("actionCommitTs", action.CommitTs),
 				zap.Stringer("dispatcher", d.id))
 			// we have not received the block event, and the action is for the future event, so just ignore
-			return
+			return false
 		}
 		if d.blockEventStatus.actionMatchs(action) {
 			log.Info("pending event get the action",
@@ -601,13 +606,30 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 				d.blockEventStatus.clear()
 			})
 			if action.Action == heartbeatpb.Action_Write {
-				failpoint.Inject("BlockOrWaitBeforeWrite", nil)
-				err := d.AddBlockEventToSink(pendingEvent)
-				if err != nil {
-					d.HandleError(err)
-					return
-				}
-				failpoint.Inject("BlockOrWaitReportAfterWrite", nil)
+				actionCommitTs := action.CommitTs
+				actionIsSyncPoint := action.IsSyncPoint
+				d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
+					failpoint.Inject("BlockOrWaitBeforeWrite", nil)
+					err := d.AddBlockEventToSink(pendingEvent)
+					if err != nil {
+						d.HandleError(err)
+						return
+					}
+					failpoint.Inject("BlockOrWaitReportAfterWrite", nil)
+
+					d.sharedInfo.blockStatusesChan <- &heartbeatpb.TableSpanBlockStatus{
+						ID: d.id.ToPB(),
+						State: &heartbeatpb.State{
+							IsBlocked:   true,
+							BlockTs:     actionCommitTs,
+							IsSyncPoint: actionIsSyncPoint,
+							Stage:       heartbeatpb.BlockStage_DONE,
+						},
+						Mode: d.GetMode(),
+					}
+					GetDispatcherStatusDynamicStream().Wake(d.id)
+				})
+				return true
 			} else {
 				failpoint.Inject("BlockOrWaitBeforePass", nil)
 				d.PassBlockEventToSink(pendingEvent)
@@ -620,7 +642,7 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 					zap.Uint64("pendingEventCommitTs", ts),
 					zap.Uint64("actionCommitTs", action.CommitTs),
 					zap.Stringer("dispatcher", d.id))
-				return
+				return false
 			}
 		}
 
@@ -636,6 +658,7 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 			Mode: d.GetMode(),
 		}
 	}
+	return false
 }
 
 // shouldBlock check whether the event should be blocked(to wait maintainer response)
@@ -675,12 +698,18 @@ func (d *BasicDispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
 // 2. If the event is a multi-table DDL / sync point Event, it will generate a TableSpanBlockStatus message with ddl info to send to maintainer.
 func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 	if !d.shouldBlock(event) {
-		err := d.AddBlockEventToSink(event)
-		if err != nil {
-			d.HandleError(err)
-			return
-		}
-		if event.GetNeedAddedTables() != nil || event.GetNeedDroppedTables() != nil {
+		// Writing a block event may involve downstream IO (e.g. executing DDL), so it must not block
+		// the dynamic stream goroutine.
+		d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
+			err := d.AddBlockEventToSink(event)
+			if err != nil {
+				d.HandleError(err)
+				return
+			}
+			if event.GetNeedAddedTables() == nil && event.GetNeedDroppedTables() == nil {
+				return
+			}
+
 			message := &heartbeatpb.TableSpanBlockStatus{
 				ID: d.id.ToPB(),
 				State: &heartbeatpb.State{
@@ -720,7 +749,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 				d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
 			}
 			d.sharedInfo.blockStatusesChan <- message
-		}
+		})
 	} else {
 		d.blockEventStatus.setBlockEvent(event, heartbeatpb.BlockStage_WAITING)
 

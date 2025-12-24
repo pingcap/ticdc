@@ -177,7 +177,7 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 	}
 	log.Info("pulsar sink send DDL event",
 		zap.String("keyspace", s.changefeedID.Keyspace()), zap.String("changefeed", s.changefeedID.Name()),
-		zap.Any("commitTs", event.GetCommitTs()), zap.Any("event", event.GetDDLQuery()))
+		zap.Any("startTs", event.GetStartTs()), zap.Any("commitTs", event.GetCommitTs()), zap.Any("event", event.GetDDLQuery()))
 	return nil
 }
 

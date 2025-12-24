@@ -16,6 +16,7 @@ package coordinator
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
@@ -59,6 +60,30 @@ func TestResumeChangefeed(t *testing.T) {
 	require.Equal(t, config.StateNormal, changefeedDB.GetByID(cfID).GetInfo().State)
 }
 
+func TestResumeChangefeedOverwriteUpdatesLastSavedCheckpointTs(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	controller := &Controller{
+		backend:      backend,
+		changefeedDB: changefeedDB,
+	}
+	cfID := common.NewChangeFeedIDWithName("test-overwrite", common.DefaultKeyspaceNamme)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateStopped,
+		SinkURI:      "mysql://127.0.0.1:3306",
+	}, 100, true)
+	cf.SetLastSavedCheckPointTs(200)
+	changefeedDB.AddStoppedChangefeed(cf)
+
+	newCheckpointTs := uint64(120)
+	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+	require.Nil(t, controller.ResumeChangefeed(context.Background(), cfID, newCheckpointTs, true))
+	require.Equal(t, newCheckpointTs, changefeedDB.GetByID(cfID).GetLastSavedCheckPointTs())
+}
+
 func TestPauseChangefeed(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
@@ -85,6 +110,15 @@ func TestPauseChangefeed(t *testing.T) {
 	// no changefeed
 	require.NotNil(t, controller.PauseChangefeed(context.Background(), common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceNamme)))
 
+	go func() {
+		for {
+			op := controller.operatorController.GetOperator(cfID)
+			if op != nil {
+				op.OnTaskRemoved()
+			}
+			time.Sleep(time.Second)
+		}
+	}()
 	backend.EXPECT().PauseChangefeed(gomock.Any(), gomock.Any()).Return(errors.New("failed")).Times(1)
 	require.NotNil(t, controller.PauseChangefeed(context.Background(), cfID))
 	require.Equal(t, config.StateNormal, changefeedDB.GetByID(cfID).GetInfo().State)
@@ -182,6 +216,15 @@ func TestRemoveChangefeed(t *testing.T) {
 		SinkURI:      "mysql://127.0.0.1:3306",
 	},
 		1, true)
+	go func() {
+		for {
+			op := controller.operatorController.GetOperator(cfID)
+			if op != nil {
+				op.OnTaskRemoved()
+			}
+			time.Sleep(time.Second)
+		}
+	}()
 	changefeedDB.AddReplicatingMaintainer(cf, "node1")
 	// no changefeed
 	_, err := controller.RemoveChangefeed(context.Background(), common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceNamme))

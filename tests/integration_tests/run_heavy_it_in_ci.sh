@@ -44,7 +44,7 @@ mysql_groups=(
 	# G06
 	'ddl_for_split_tables_with_random_merge_and_split'
 	# G07
-	'consistent_compatibility consistent_partition_table consistent_replicate_gbk consistent_replicate_ddl'
+	'consistent_compatibility consistent_partition_table consistent_replicate_gbk consistent_replicate_ddl consistent_replicate_basic'
 	# G08
 	'default_value http_proxies bank ddl_for_split_tables_random_schedule'
 	# G09
@@ -56,7 +56,7 @@ mysql_groups=(
 	# G12
 	'ddl_with_random_move_table'
 	# G13
-	'tidb_mysql_test fail_over region_merge'
+	'tidb_mysql_test fail_over region_merge fail_over_ddl_mix_random_delay'
 	# G14
 	'fail_over_ddl_mix'
 	# G15
