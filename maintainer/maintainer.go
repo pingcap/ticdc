@@ -502,7 +502,7 @@ func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
 	}
 }
 
-// onCheckpointTsPersisted forwards the checkpoint message to the table trigger dispatcher,
+// onCheckpointTsPersisted forwards the checkpoint message to the table trigger event dispatcher,
 // which is co-located on the same node as the maintainer. The dispatcher will propagate
 // the watermark information to downstream sinks.
 func (m *Maintainer) onCheckpointTsPersisted(msg *heartbeatpb.CheckpointTsMessage) {
@@ -582,9 +582,9 @@ func (m *Maintainer) handleRedoMetaTsMessage(ctx context.Context) {
 			minRedoCheckpointTsForScheduler := m.controller.GetMinRedoCheckpointTs(newWatermark.CheckpointTs)
 			minRedoCheckpointTsForBarrier := m.controller.redoBarrier.GetMinBlockedCheckpointTsForNewTables(newWatermark.CheckpointTs)
 
-			// if there is no tables, there must be a table trigger dispatcher
+			// if there is no tables, there must be a table trigger redo dispatcher
 			for id := range m.bootstrapper.GetAllNodeIDs() {
-				// maintainer node has the table trigger dispatcher
+				// maintainer node has the table trigger redo dispatcher
 				if id != m.selfNode.ID && m.controller.redoSpanController.GetTaskSizeByNodeID(id) <= 0 {
 					continue
 				}
@@ -697,7 +697,7 @@ func (m *Maintainer) calculateNewCheckpointTs() (*heartbeatpb.Watermark, bool) {
 	// Step 2: Apply heartbeat constraints from all nodes
 	updateCheckpointTs := true
 	for id := range m.bootstrapper.GetAllNodeIDs() {
-		// maintainer node has the table trigger dispatcher
+		// maintainer node has the table trigger event dispatcher
 		if id != m.selfNode.ID && m.controller.spanController.GetTaskSizeByNodeID(id) <= 0 {
 			continue
 		}

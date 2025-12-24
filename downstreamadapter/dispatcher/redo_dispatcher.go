@@ -109,6 +109,7 @@ func (rd *RedoDispatcher) SetRedoMeta(cfg *config.ConsistentConfig) {
 // UpdateMeta used to update redo meta log.
 // The checkpoint-ts is always less than the resolved-ts because it represents the minimum checkpoint-ts of the global event dispatcher.
 // The event dispatcher does not advance until the resolved-ts exceeds the event's commit-ts.
+// It is possible that the checkpoint-ts is greater than resolved-ts in the beginning because the event dispatcher query the start-ts from mysql sink.
 // only for table trigger redo dispatcher.
 func (rd *RedoDispatcher) UpdateMeta(checkpointTs, resolvedTs common.Ts) {
 	if rd.redoMeta != nil && rd.redoMeta.Running() {
