@@ -108,7 +108,7 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 	for _, sortedEventGroups := range eventsGroupSortedByUpdateTs {
 		for _, eventsInGroup := range sortedEventGroups {
 			tableInfo := eventsInGroup[0].TableInfo
-			if !w.shouldGenBatchSQL(tableInfo.HasPKOrNotNullUK, tableInfo.HasVirtualColumns(), eventsInGroup) {
+			if !w.shouldGenBatchSQL(tableInfo.HasPKOrNotNullUK, eventsInGroup) {
 				queryList, argsList = w.generateNormalSQLs(eventsInGroup)
 			} else {
 				queryList, argsList = w.generateBatchSQL(eventsInGroup)
@@ -132,12 +132,12 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 // 3. The table doesn't have virtual columns
 // 4. There's more than one row in the group
 // 5. All events have the same safe mode status
-func (w *Writer) shouldGenBatchSQL(hasPKOrNotNullUK bool, hasVirtualCols bool, events []*commonEvent.DMLEvent) bool {
+func (w *Writer) shouldGenBatchSQL(hasPKOrNotNullUK bool, events []*commonEvent.DMLEvent) bool {
 	if !w.cfg.BatchDMLEnable {
 		return false
 	}
 
-	if !hasPKOrNotNullUK || hasVirtualCols {
+	if !hasPKOrNotNullUK {
 		return false
 	}
 	if len(events) == 1 && events[0].Len() == 1 {

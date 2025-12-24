@@ -180,7 +180,7 @@ func (r *RowChange) TargetTableID() string {
 func (r *RowChange) ColumnCount() int {
 	c := 0
 	for _, col := range r.sourceTableInfo.GetColumns() {
-		if !col.Hidden {
+		if !col.Hidden && !col.IsVirtualGenerated() {
 			c++
 		}
 	}
@@ -231,7 +231,9 @@ func (r *RowChange) whereColumnsAndValues() ([]string, []interface{}) {
 
 	columnNames := make([]string, 0, len(columns))
 	for _, column := range columns {
-		columnNames = append(columnNames, column.Name.O)
+		if !column.IsGenerated() {
+			columnNames = append(columnNames, column.Name.O)
+		}
 	}
 
 	failpoint.Inject("DownstreamTrackerWhereCheck", func() {
@@ -243,7 +245,10 @@ func (r *RowChange) whereColumnsAndValues() ([]string, []interface{}) {
 				zap.String("Columns", fmt.Sprintf("%v", columnNames)))
 		}
 	})
-
+	if len(columnNames) != len(values) {
+		log.Panic("columnNames are not equal values", zap.Int("len(columnNames)", len(columnNames)), zap.Int("len(values)", len(values)),
+			zap.Any("columnNames", columnNames), zap.Any("values", values), zap.Any("table", r.targetTable))
+	}
 	return columnNames, values
 }
 
