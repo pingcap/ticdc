@@ -167,15 +167,18 @@ func NewController(
 	)
 
 	nodes := c.nodeManager.GetAliveNodes()
+	added, _, requests, _ := c.bootstrapper.HandleNewNodes(nodes)
 	log.Info("coordinator bootstrap initial nodes",
-		zap.Int("nodeNum", len(nodes)),
-		zap.Any("nodes", nodes),
-	)
+		zap.Int("addedCount", len(added)), zap.Any("addedNodes", nodes))
 
-	_, _, messages, _ := c.bootstrapper.HandleNewNodes(nodes)
-	for _, msg := range messages {
-		_ = c.messageCenter.SendCommand(msg)
+	for _, req := range requests {
+		err := c.messageCenter.SendCommand(req)
+		if err != nil {
+			log.Warn("send request failed when boostrapping initial node, will be resent later",
+				zap.Any("targetNode", req.To), zap.Error(err))
+		}
 	}
+
 	c.submitPeriodTask()
 	return c
 }
@@ -255,7 +258,10 @@ func (c *Controller) checkOnNodeChanged() {
 
 func (c *Controller) onPeriodTask() {
 	// resend bootstrap message
-	c.sendMessages(c.bootstrapper.ResendBootstrapMessage())
+	requests := c.bootstrapper.ResendBootstrapMessage()
+	for _, req := range requests {
+		_ = c.messageCenter.SendCommand(req)
+	}
 }
 
 func (c *Controller) onMessage(msg *messaging.TargetMessage) {
@@ -332,26 +338,22 @@ func (c *Controller) onNodeChanged() {
 	for _, n := range removedNodes {
 		c.RemoveNode(n)
 	}
-	c.sendMessages(requests)
-	if responses != nil {
-		log.Info("controller bootstrap done after removed some nodes",
-			zap.Any("removedNodes", removedNodes))
-		c.handleBootstrapResponses(responses)
+	for _, req := range requests {
+		err := c.messageCenter.SendCommand(req)
+		if err != nil {
+			log.Warn("send request failed when boostrapping newly added node, will be resent later",
+				zap.Any("targetNode", req.To), zap.Error(err))
+		}
 	}
+	c.handleBootstrapResponses(responses)
 }
 
-func (c *Controller) sendMessages(msgs []*messaging.TargetMessage) {
-	for _, msg := range msgs {
-		_ = c.messageCenter.SendCommand(msg)
-	}
-}
-
-func (c *Controller) onMaintainerBootstrapResponse(msg *messaging.TargetMessage) {
-	response := msg.Message[0].(*heartbeatpb.CoordinatorBootstrapResponse)
+func (c *Controller) onMaintainerBootstrapResponse(req *messaging.TargetMessage) {
+	response := req.Message[0].(*heartbeatpb.CoordinatorBootstrapResponse)
 	log.Info("controller received maintainer bootstrap response",
-		zap.Stringer("node", msg.From),
+		zap.Stringer("node", req.From),
 		zap.Int("maintainerCount", len(response.Statuses)))
-	responses := c.bootstrapper.HandleBootstrapResponse(msg.From, response)
+	responses := c.bootstrapper.HandleBootstrapResponse(req.From, response)
 	c.handleBootstrapResponses(responses)
 }
 

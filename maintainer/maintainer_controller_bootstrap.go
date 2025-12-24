@@ -130,7 +130,7 @@ func (c *Controller) FinishBootstrap(
 }
 
 func (c *Controller) determineStartTs(allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) uint64 {
-	startTs := uint64(0)
+	var startTs uint64
 	for node, resp := range allNodesResp {
 		log.Info("handle bootstrap response",
 			zap.Stringer("changefeed", c.changefeedID),

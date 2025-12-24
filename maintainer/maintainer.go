@@ -741,7 +741,6 @@ func (m *Maintainer) sendMessages(msgs []*messaging.TargetMessage) {
 			log.Debug("failed to send maintainer request",
 				zap.Stringer("changefeedID", m.changefeedID),
 				zap.Any("msg", msg), zap.Error(err))
-			continue
 		}
 	}
 }

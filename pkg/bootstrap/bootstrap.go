@@ -187,7 +187,7 @@ func (b *Bootstrapper[T]) Bootstrapped() bool {
 	return b.bootstrapped
 }
 
-// collectBootstrapResponses return all cached bootstrapped responses after make sure all nodes bootstrapped.
+// collectBootstrapResponses return all cached bootstrapped responses after make sure all nodes responses received.
 // Returns:
 //   - newly added nodes responses if all they are initialized, and clear all cached responses.
 //   - else nil
