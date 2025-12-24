@@ -19,6 +19,7 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/spanz"
@@ -91,7 +92,7 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 			zap.Uint64("subscriptionID", uint64(span.subID)))
 	}
 
-	newResolvedTs := uint64(0)
+	updatedStates := make([]*regionFeedState, 0)
 	for _, event := range events {
 		switch {
 		case event.batchResolvedTs != nil:
@@ -100,9 +101,8 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 					h.handleRegionError(batchEvent.state, event.worker)
 					continue
 				}
-				resolvedTs := handleResolvedTs(span, batchEvent.state, batchEvent.resolvedTs)
-				if resolvedTs > newResolvedTs {
-					newResolvedTs = resolvedTs
+				if handleResolvedTs(batchEvent.state, batchEvent.resolvedTs) {
+					updatedStates = append(updatedStates, batchEvent.state)
 				}
 			}
 			continue
@@ -116,14 +116,14 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 		if event.entries != nil {
 			handleEventEntries(span, event.state, event.entries)
 		} else if event.resolvedTs != 0 {
-			resolvedTs := handleResolvedTs(span, event.state, event.resolvedTs)
-			if resolvedTs > newResolvedTs {
-				newResolvedTs = resolvedTs
+			if handleResolvedTs(event.state, event.resolvedTs) {
+				updatedStates = append(updatedStates, event.state)
 			}
 		} else {
 			log.Panic("should not reach", zap.Any("event", event), zap.Any("events", events))
 		}
 	}
+	newResolvedTs := h.updateSpanResolvedTs(span, updatedStates)
 	tryAdvanceResolvedTs := func() {
 		if newResolvedTs != 0 {
 			span.advanceResolvedTs(newResolvedTs)
@@ -335,9 +335,9 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 	}
 }
 
-func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs uint64) uint64 {
+func handleResolvedTs(state *regionFeedState, resolvedTs uint64) bool {
 	if state.isStale() || !state.isInitialized() {
-		return 0
+		return false
 	}
 	state.matcher.tryCleanUnmatchedValue()
 	regionID := state.getRegionID()
@@ -348,45 +348,77 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 			zap.Uint64("regionID", regionID),
 			zap.Uint64("resolvedTs", resolvedTs),
 			zap.Uint64("lastResolvedTs", lastResolvedTs))
-		return 0
+		return false
 	}
 	state.updateResolvedTs(resolvedTs)
-	span.rangeLock.UpdateLockedRangeStateHeap(state.region.lockedRangeState)
+	return true
+}
 
-	now := time.Now().UnixMilli()
-	lastAdvance := span.lastAdvanceTime.Load()
-	if now-lastAdvance >= span.advanceInterval && span.lastAdvanceTime.CompareAndSwap(lastAdvance, now) {
-		ts := span.rangeLock.GetHeapMinTs()
-		if ts > 0 && span.initialized.CompareAndSwap(false, true) {
-			log.Info("subscription client is initialized",
-				zap.Uint64("subscriptionID", uint64(span.subID)),
-				zap.Uint64("regionID", regionID),
-				zap.Uint64("resolvedTs", ts))
+func (h *regionEventHandler) updateSpanResolvedTs(span *subscribedSpan, updatedStates []*regionFeedState) uint64 {
+	if len(updatedStates) == 0 {
+		return 0
+	}
+	uniqueStates := make([]*regionFeedState, 0, len(updatedStates))
+	seen := make(map[*regionFeedState]struct{}, len(updatedStates))
+	for _, state := range updatedStates {
+		if state == nil {
+			continue
 		}
-		lastResolvedTs := span.resolvedTs.Load()
-		nextResolvedPhyTs := oracle.ExtractPhysical(ts)
-		// Generally, we don't want to send duplicate resolved ts,
-		// so we check whether `ts` is larger than `lastResolvedTs` before send it.
-		// but when `ts` == `lastResolvedTs` == `span.startTs`,
-		// the span may just be initialized and have not receive any resolved ts before,
-		// so we also send ts in this case for quick notification to downstream.
-		if ts > lastResolvedTs || (ts == lastResolvedTs && lastResolvedTs == span.startTs) {
-			resolvedPhyTs := oracle.ExtractPhysical(lastResolvedTs)
-			decreaseLag := float64(nextResolvedPhyTs-resolvedPhyTs) / 1e3
-			const largeResolvedTsAdvanceStepInSecs = 30
-			if decreaseLag > largeResolvedTsAdvanceStepInSecs {
-				log.Warn("resolved ts advance step is too large",
-					zap.Uint64("subID", uint64(span.subID)),
-					zap.Int64("tableID", span.span.TableID),
-					zap.Uint64("regionID", regionID),
-					zap.Uint64("resolvedTs", ts),
-					zap.Uint64("lastResolvedTs", lastResolvedTs),
-					zap.Float64("decreaseLag(s)", decreaseLag))
-			}
-			span.resolvedTs.Store(ts)
-			span.resolvedTsUpdated.Store(time.Now().Unix())
-			return ts
+		if _, ok := seen[state]; ok {
+			continue
 		}
+		seen[state] = struct{}{}
+		uniqueStates = append(uniqueStates, state)
+	}
+	if len(uniqueStates) == 0 {
+		return 0
+	}
+	lockStates := make([]*regionlock.LockedRangeState, 0, len(uniqueStates))
+	for _, state := range uniqueStates {
+		if state.region.lockedRangeState != nil {
+			lockStates = append(lockStates, state.region.lockedRangeState)
+		}
+	}
+	if len(lockStates) == 0 {
+		return 0
+	}
+	span.rangeLock.UpdateLockedRangeStateHeapBatch(lockStates)
+
+	ts := span.rangeLock.GetHeapMinTs()
+	if ts == 0 {
+		return 0
+	}
+
+	firstRegionID := uniqueStates[0].getRegionID()
+	if span.initialized.CompareAndSwap(false, true) {
+		log.Info("subscription client is initialized",
+			zap.Uint64("subscriptionID", uint64(span.subID)),
+			zap.Uint64("regionID", firstRegionID),
+			zap.Uint64("resolvedTs", ts))
+	}
+	lastResolvedTs := span.resolvedTs.Load()
+	nextResolvedPhyTs := oracle.ExtractPhysical(ts)
+	// Generally, we don't want to send duplicate resolved ts,
+	// so we check whether `ts` is larger than `lastResolvedTs` before send it.
+	// but when `ts` == `lastResolvedTs` == `span.startTs`,
+	// the span may just be initialized and have not receive any resolved ts before,
+	// so we also send ts in this case for quick notification to downstream.
+	if ts > lastResolvedTs || (ts == lastResolvedTs && lastResolvedTs == span.startTs) {
+		resolvedPhyTs := oracle.ExtractPhysical(lastResolvedTs)
+		decreaseLag := float64(nextResolvedPhyTs-resolvedPhyTs) / 1e3
+		const largeResolvedTsAdvanceStepInSecs = 30
+		if decreaseLag > largeResolvedTsAdvanceStepInSecs {
+			log.Warn("resolved ts advance step is too large",
+				zap.Uint64("subID", uint64(span.subID)),
+				zap.Int64("tableID", span.span.TableID),
+				zap.Uint64("regionID", firstRegionID),
+				zap.Uint64("resolvedTs", ts),
+				zap.Uint64("lastResolvedTs", lastResolvedTs),
+				zap.Float64("decreaseLag(s)", decreaseLag))
+		}
+		span.resolvedTs.Store(ts)
+		span.resolvedTsUpdated.Store(time.Now().Unix())
+		return ts
 	}
 	return 0
 }

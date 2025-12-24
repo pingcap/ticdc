@@ -420,6 +420,21 @@ func (l *RangeLock) UpdateLockedRangeStateHeap(lockedRangeState *LockedRangeStat
 	l.lockedRangeStateHeap.AddOrUpdate(lockedRangeState)
 }
 
+// UpdateLockedRangeStateHeapBatch updates multiple locked range states in one shot.
+func (l *RangeLock) UpdateLockedRangeStateHeapBatch(states []*LockedRangeState) {
+	if len(states) == 0 {
+		return
+	}
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	for _, state := range states {
+		if state == nil {
+			continue
+		}
+		l.lockedRangeStateHeap.AddOrUpdate(state)
+	}
+}
+
 // GetHeapMinTs returns the minimum ResolvedTs from the heap.
 func (l *RangeLock) GetHeapMinTs() uint64 {
 	l.mu.RLock()
