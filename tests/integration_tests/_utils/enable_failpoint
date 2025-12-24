@@ -1,0 +1,72 @@
+#!/bin/bash
+
+set -euo pipefail
+
+addr=""
+name=""
+expr=""
+
+function usage() {
+	echo "usage: enable_failpoint --name <name> --expr <expr> [--addr <ip:port>]" >&2
+	exit 1
+}
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	--addr | -a)
+		addr="$2"
+		shift 2
+		;;
+	--name | -n)
+		name="$2"
+		shift 2
+		;;
+	--expr | -e)
+		expr="$2"
+		shift 2
+		;;
+	-h | --help)
+		usage
+		;;
+	*)
+		echo "unknown argument: $1" >&2
+		usage
+		;;
+	esac
+done
+
+if [[ -z "$name" || -z "$expr" ]]; then
+	usage
+fi
+
+if [[ -z "$addr" ]]; then
+	host="${CDC_HOST:-127.0.0.1}"
+	port="${CDC_PORT:-8300}"
+	addr="${host}:${port}"
+fi
+
+function json_escape() {
+	local s="$1"
+	s=${s//\\/\\\\}
+	s=${s//\"/\\\"}
+	s=${s//$'\n'/\\n}
+	s=${s//$'\r'/\\r}
+	s=${s//$'\t'/\\t}
+	printf '%s' "$s"
+}
+
+payload=$(printf '{"name":"%s","expr":"%s"}' "$(json_escape "$name")" "$(json_escape "$expr")")
+tmpfile=$(mktemp)
+http_code=$(curl -s -o "$tmpfile" -w "%{http_code}" \
+	-X POST "http://${addr}/debug/failpoints" \
+	-H "Content-Type: application/json" \
+	--data "$payload")
+
+if [ "$http_code" != "200" ]; then
+	echo "enable failpoint failed: $name" >&2
+	cat "$tmpfile" >&2
+	rm -f "$tmpfile"
+	exit 1
+fi
+
+rm -f "$tmpfile"
