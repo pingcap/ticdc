@@ -97,7 +97,11 @@ func (c *Controller) FinishBootstrap(
 		return nil, errors.Trace(err)
 	}
 
-	var redoTables []commonEvent.Table
+	var (
+		redoTables         []commonEvent.Table
+		redoWorkingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication]
+		redoSchemaInfos    map[int64]*heartbeatpb.SchemaInfo
+	)
 	if c.enableRedo {
 		redoTables, err = c.loadTables(redoStartTs)
 		if err != nil {
@@ -111,10 +115,6 @@ func (c *Controller) FinishBootstrap(
 	// Step 3: Build working task map from bootstrap responses and Process tables and build schema info
 	workingTaskMap, schemaInfos := c.buildTaskInfo(allNodesResp, tables, isMysqlCompatibleBackend, common.DefaultMode)
 
-	var (
-		redoWorkingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication]
-		redoSchemaInfos    map[int64]*heartbeatpb.SchemaInfo
-	)
 	if c.enableRedo {
 		redoWorkingTaskMap, redoSchemaInfos = c.buildTaskInfo(allNodesResp, redoTables, isMysqlCompatibleBackend, common.RedoMode)
 	}
