@@ -58,7 +58,7 @@ EOF
 	run_sql "INSERT INTO ${DB_NAME}.${TABLE_NAME} VALUES (1, 1), (2, 2), (3, 3);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	check_table_exists "${DB_NAME}.${TABLE_NAME}" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 60
 
-    # Prepare a split table for merge test. It should be blocked by syncpoint together with other tables.
+	# Prepare a split table for merge test. It should be blocked by syncpoint together with other tables.
 	run_sql "CREATE TABLE ${DB_NAME}.${MERGE_TABLE_NAME} (id INT PRIMARY KEY, v INT);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "INSERT INTO ${DB_NAME}.${MERGE_TABLE_NAME} VALUES (1, 1), (2, 2), (3, 3);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	check_table_exists "${DB_NAME}.${MERGE_TABLE_NAME}" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 60
