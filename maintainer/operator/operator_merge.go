@@ -60,6 +60,8 @@ type MergeDispatcherOperator struct {
 	occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]
 
 	sendThrottler sendThrottler
+
+	checksumUpdater DispatcherSetChecksumUpdater
 }
 
 func buildMergedSpanInfo(toMergedSpans []*heartbeatpb.TableSpan) string {
@@ -101,6 +103,7 @@ func NewMergeDispatcherOperator(
 	spanController *span.Controller,
 	toMergedReplicaSets []*replica.SpanReplication,
 	occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus],
+	updater DispatcherSetChecksumUpdater,
 ) *MergeDispatcherOperator {
 	toMergedSpans := make([]*heartbeatpb.TableSpan, 0, len(toMergedReplicaSets))
 	for _, replicaSet := range toMergedReplicaSets {
@@ -146,6 +149,7 @@ func NewMergeDispatcherOperator(
 		occupyOperators:     occupyOperators,
 		newReplicaSet:       newReplicaSet,
 		sendThrottler:       newSendThrottler(),
+		checksumUpdater:     updater,
 	}
 	return op
 }
@@ -249,6 +253,18 @@ func (m *MergeDispatcherOperator) PostFinish() {
 	}
 
 	m.spanController.MarkSpanReplicating(m.newReplicaSet)
+	if m.checksumUpdater != nil {
+		remove := make([]common.DispatcherID, 0, len(m.toMergedReplicaSets))
+		for _, replicaSet := range m.toMergedReplicaSets {
+			remove = append(remove, replicaSet.ID)
+		}
+		m.checksumUpdater.ApplyDelta(
+			m.newReplicaSet.GetMode(),
+			m.originNode,
+			[]common.DispatcherID{m.id},
+			remove,
+		)
+	}
 	log.Info("merge dispatcher operator finished", zap.String("id", m.id.String()))
 }
 

@@ -49,7 +49,7 @@ func TestSplitOperator_OriginNodeRemovedBeforeStopped(t *testing.T) {
 	// Split targets are empty, meaning let scheduler decide
 	splitTargetNodes := []node.ID{"", ""}
 
-	op := NewSplitDispatcherOperator(spanController, replicaSet, splitSpans, splitTargetNodes, nil)
+	op := NewSplitDispatcherOperator(spanController, replicaSet, splitSpans, splitTargetNodes, nil, nil)
 	require.NotNil(t, op)
 
 	op.Start()
@@ -100,7 +100,7 @@ func TestSplitOperator_OriginNodeRemovedAfterStopped(t *testing.T) {
 	// Split targets are empty, meaning let scheduler decide
 	splitTargetNodes := []node.ID{"", ""}
 
-	op := NewSplitDispatcherOperator(spanController, replicaSet, splitSpans, splitTargetNodes, nil)
+	op := NewSplitDispatcherOperator(spanController, replicaSet, splitSpans, splitTargetNodes, nil, nil)
 	require.NotNil(t, op)
 
 	op.Start()
@@ -153,7 +153,7 @@ func TestSplitOperator_SuccessfulSplitCreatesAbsentSpans(t *testing.T) {
 		},
 	}
 
-	op := NewSplitDispatcherOperator(spanController, replicaSet, splitSpans, []node.ID{}, nil)
+	op := NewSplitDispatcherOperator(spanController, replicaSet, splitSpans, []node.ID{}, nil, nil)
 	require.NotNil(t, op)
 
 	op.Start()
@@ -244,7 +244,7 @@ func TestSplitOperator_SuccessfulSplitToSchedulingTargets(t *testing.T) {
 	}
 	splitTargetNodes := []node.ID{nodeA, nodeB}
 
-	op := NewSplitDispatcherOperator(spanController, replicaSetToSplit, splitSpans, splitTargetNodes, nil)
+	op := NewSplitDispatcherOperator(spanController, replicaSetToSplit, splitSpans, splitTargetNodes, nil, nil)
 	require.NotNil(t, op)
 
 	op.Start()
@@ -340,7 +340,8 @@ func TestSplitOperator_PostFinishCallbackFailureMarksSpanAbsent(t *testing.T) {
 	op := NewSplitDispatcherOperator(spanController, replicaSetToSplit, splitSpans, splitTargetNodes,
 		func(_ *replica.SpanReplication, target node.ID) bool {
 			return target != nodeB
-		})
+		},
+		nil)
 	require.NotNil(t, op)
 
 	op.Start()
@@ -389,7 +390,7 @@ func TestSplitOperator_TaskRemovedByDDLDoesNotSplit(t *testing.T) {
 		},
 	}
 
-	op := NewSplitDispatcherOperator(spanController, replicaSet, splitSpans, []node.ID{}, nil)
+	op := NewSplitDispatcherOperator(spanController, replicaSet, splitSpans, []node.ID{}, nil, nil)
 	require.NotNil(t, op)
 
 	op.Start()

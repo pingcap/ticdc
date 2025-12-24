@@ -74,12 +74,15 @@ type Maintainer struct {
 
 	mc messaging.MessageCenter
 
+	dispatcherSetChecksum *dispatcherSetChecksumManager
+
 	watermark struct {
 		mu sync.RWMutex
 		*heartbeatpb.Watermark
 	}
 
-	checkpointTsByCapture *WatermarkCaptureMap
+	checkpointTsByCapture  *WatermarkCaptureMap
+	checksumStateByCapture *ChecksumStateCaptureMap
 
 	scheduleState atomic.Int32
 	bootstrapper  *bootstrap.Bootstrapper[heartbeatpb.MaintainerBootstrapResponse]
@@ -97,9 +100,10 @@ type Maintainer struct {
 	// redoMetaTs is the redo meta unflushed ts to forward
 	redoMetaTs *heartbeatpb.RedoMetaMessage
 	// redoResolvedTs is the redo meta flushed resolvedTs
-	redoResolvedTs  uint64
-	redoDDLSpan     *replica.SpanReplication
-	redoTsByCapture *WatermarkCaptureMap
+	redoResolvedTs             uint64
+	redoDDLSpan                *replica.SpanReplication
+	redoTsByCapture            *WatermarkCaptureMap
+	redoChecksumStateByCapture *ChecksumStateCaptureMap
 
 	// ddlSpan represents the table trigger event dispatcher that handles DDL events.
 	// This dispatcher is always created on the same node as the maintainer and has a
@@ -199,19 +203,21 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		startCheckpointTs: checkpointTs,
 		controller: NewController(cfID, checkpointTs, taskScheduler,
 			info.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), refresher, keyspaceMeta, enableRedo),
-		mc:                    mc,
-		removed:               atomic.NewBool(false),
-		nodeManager:           nodeManager,
-		closedNodes:           make(map[node.ID]struct{}),
-		statusChanged:         atomic.NewBool(true),
-		info:                  info,
-		pdClock:               appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
-		ddlSpan:               ddlSpan,
-		redoDDLSpan:           redoDDLSpan,
-		checkpointTsByCapture: newWatermarkCaptureMap(),
-		redoTsByCapture:       newWatermarkCaptureMap(),
-		newChangefeed:         newChangefeed,
-		enableRedo:            enableRedo,
+		mc:                         mc,
+		removed:                    atomic.NewBool(false),
+		nodeManager:                nodeManager,
+		closedNodes:                make(map[node.ID]struct{}),
+		statusChanged:              atomic.NewBool(true),
+		info:                       info,
+		pdClock:                    appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		ddlSpan:                    ddlSpan,
+		redoDDLSpan:                redoDDLSpan,
+		checkpointTsByCapture:      newWatermarkCaptureMap(),
+		checksumStateByCapture:     newChecksumStateCaptureMap(),
+		redoTsByCapture:            newWatermarkCaptureMap(),
+		redoChecksumStateByCapture: newChecksumStateCaptureMap(),
+		newChangefeed:              newChangefeed,
+		enableRedo:                 enableRedo,
 
 		checkpointTsGauge:    metrics.MaintainerCheckpointTsGauge.WithLabelValues(keyspaceName, name),
 		checkpointTsLagGauge: metrics.MaintainerCheckpointTsLagGauge.WithLabelValues(keyspaceName, name),
@@ -227,6 +233,13 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		redoSpanCountGauge:     metrics.SpanCountGauge.WithLabelValues(keyspaceName, name, "redo"),
 		redoTableCountGauge:    metrics.TableCountGauge.WithLabelValues(keyspaceName, name, "redo"),
 	}
+
+	m.dispatcherSetChecksum = newDispatcherSetChecksumManager(cfID, info.Epoch, enableRedo, mc)
+	m.controller.operatorController.SetChecksumUpdater(m.dispatcherSetChecksum)
+	if m.enableRedo && m.controller.redoOperatorController != nil {
+		m.controller.redoOperatorController.SetChecksumUpdater(m.dispatcherSetChecksum)
+	}
+
 	m.nodeChanged.changed = false
 	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
 
@@ -480,6 +493,11 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 	case messaging.TypeRedoResolvedTsProgressMessage:
 		req := msg.Message[0].(*heartbeatpb.RedoResolvedTsProgressMessage)
 		m.onRedoPersisted(req)
+	case messaging.TypeDispatcherSetChecksumAck:
+		req := msg.Message[0].(*heartbeatpb.DispatcherSetChecksumAck)
+		if m.dispatcherSetChecksum != nil {
+			m.dispatcherSetChecksum.HandleAck(msg.From, req)
+		}
 	default:
 		log.Warn("unknown message type, ignore it",
 			zap.Stringer("changefeedID", m.changefeedID),
@@ -541,8 +559,13 @@ func (m *Maintainer) onNodeChanged() {
 			removedNodes = append(removedNodes, id)
 			m.checkpointTsByCapture.Delete(id)
 			m.redoTsByCapture.Delete(id)
+			m.checksumStateByCapture.Delete(id)
+			m.redoChecksumStateByCapture.Delete(id)
 			m.controller.RemoveNode(id)
 		}
+	}
+	if m.dispatcherSetChecksum != nil {
+		m.dispatcherSetChecksum.RemoveNodes(removedNodes)
 	}
 	log.Info("maintainer node changed", zap.Stringer("changefeedID", m.changefeedID),
 		zap.Int("new", len(newNodes)),
@@ -566,67 +589,83 @@ func (m *Maintainer) handleRedoMetaTsMessage(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if !m.bootstrapped.Load() {
-				log.Warn("can not advance redoTs since not bootstrapped",
-					zap.Stringer("changefeedID", m.changefeedID))
-				break
-			}
-			needUpdate := false
-			updateCheckpointTs := true
-
-			newWatermark := heartbeatpb.NewMaxWatermark()
-			// Calculate operator and barrier constraints first to ensure atomicity.
-			// This prevents a race condition where checkpointTsByCapture contains old heartbeat data
-			// while operators have completed based on newer heartbeat processing.
-			// For more detailed comments, please refer to `calculateNewCheckpointTs`.
-			minRedoCheckpointTsForScheduler := m.controller.GetMinRedoCheckpointTs(newWatermark.CheckpointTs)
-			minRedoCheckpointTsForBarrier := m.controller.redoBarrier.GetMinBlockedCheckpointTsForNewTables(newWatermark.CheckpointTs)
-
-			// if there is no tables, there must be a table trigger dispatcher
-			for id := range m.bootstrapper.GetAllNodeIDs() {
-				// maintainer node has the table trigger dispatcher
-				if id != m.selfNode.ID && m.controller.redoSpanController.GetTaskSizeByNodeID(id) <= 0 {
-					continue
-				}
-				// node level watermark reported, ignore this round
-				watermark, ok := m.redoTsByCapture.Get(id)
-				if !ok {
-					updateCheckpointTs = false
-					log.Warn("redo checkpointTs can not be advanced, since missing capture heartbeat",
-						zap.Stringer("changefeedID", m.changefeedID),
-						zap.Any("node", id))
-					continue
-				}
-				newWatermark.UpdateMin(watermark)
-			}
-
-			newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minRedoCheckpointTsForScheduler, ResolvedTs: minRedoCheckpointTsForScheduler})
-			newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minRedoCheckpointTsForBarrier, ResolvedTs: minRedoCheckpointTsForBarrier})
-
-			if m.redoMetaTs.ResolvedTs < newWatermark.CheckpointTs && updateCheckpointTs {
-				m.redoMetaTs.ResolvedTs = newWatermark.CheckpointTs
-				needUpdate = true
-			}
-			if m.redoMetaTs.CheckpointTs < m.getWatermark().CheckpointTs {
-				m.redoMetaTs.CheckpointTs = m.getWatermark().CheckpointTs
-				needUpdate = true
-			}
-			log.Debug("handle redo message",
-				zap.Any("needUpdate", needUpdate),
-				zap.Any("redoMetaTs", m.redoMetaTs),
-				zap.Any("checkpointTs", m.getWatermark().CheckpointTs),
-				zap.Any("resolvedTs", newWatermark.CheckpointTs),
-			)
-			if needUpdate {
-				m.sendMessages([]*messaging.TargetMessage{
-					messaging.NewSingleTargetMessage(m.selfNode.ID, messaging.HeartbeatCollectorTopic, &heartbeatpb.RedoMetaMessage{
-						ChangefeedID: m.redoMetaTs.ChangefeedID,
-						CheckpointTs: m.redoMetaTs.CheckpointTs,
-						ResolvedTs:   m.redoMetaTs.ResolvedTs,
-					}),
-				})
-			}
+			m.advanceRedoMetaTsOnce()
 		}
+	}
+}
+
+func (m *Maintainer) advanceRedoMetaTsOnce() {
+	if !m.bootstrapped.Load() {
+		log.Warn("can not advance redoTs since not bootstrapped",
+			zap.Stringer("changefeedID", m.changefeedID))
+		return
+	}
+
+	needUpdate := false
+	updateCheckpointTs := true
+
+	newWatermark := heartbeatpb.NewMaxWatermark()
+	// Calculate operator and barrier constraints first to ensure atomicity.
+	// This prevents a race condition where redoTsByCapture contains old heartbeat data
+	// while operators have completed based on newer heartbeat processing.
+	// For more detailed comments, please refer to `calculateNewCheckpointTs`.
+	minRedoCheckpointTsForScheduler := m.controller.GetMinRedoCheckpointTs(newWatermark.CheckpointTs)
+	minRedoCheckpointTsForBarrier := m.controller.redoBarrier.GetMinBlockedCheckpointTsForNewTables(newWatermark.CheckpointTs)
+
+	// If there is no tables, there must be a table trigger dispatcher.
+	for id := range m.bootstrapper.GetAllNodeIDs() {
+		// Maintainer node has the table trigger dispatcher.
+		if id != m.selfNode.ID && m.controller.redoSpanController.GetTaskSizeByNodeID(id) <= 0 {
+			continue
+		}
+		checksumState, ok := m.redoChecksumStateByCapture.Get(id)
+		if !ok {
+			checksumState = heartbeatpb.ChecksumState_UNINITIALIZED
+		}
+		if checksumState != heartbeatpb.ChecksumState_OK {
+			updateCheckpointTs = false
+			continue
+		}
+		// Node level watermark reported, ignore this round.
+		watermark, ok := m.redoTsByCapture.Get(id)
+		if !ok {
+			updateCheckpointTs = false
+			log.Warn("redo checkpointTs can not be advanced, since missing capture heartbeat",
+				zap.Stringer("changefeedID", m.changefeedID),
+				zap.Any("node", id))
+			continue
+		}
+		newWatermark.UpdateMin(watermark)
+	}
+
+	newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minRedoCheckpointTsForScheduler, ResolvedTs: minRedoCheckpointTsForScheduler})
+	newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minRedoCheckpointTsForBarrier, ResolvedTs: minRedoCheckpointTsForBarrier})
+
+	if updateCheckpointTs {
+		if m.redoMetaTs.ResolvedTs < newWatermark.CheckpointTs {
+			m.redoMetaTs.ResolvedTs = newWatermark.CheckpointTs
+			needUpdate = true
+		}
+		if m.redoMetaTs.CheckpointTs < m.getWatermark().CheckpointTs {
+			m.redoMetaTs.CheckpointTs = m.getWatermark().CheckpointTs
+			needUpdate = true
+		}
+	}
+
+	log.Debug("handle redo message",
+		zap.Any("needUpdate", needUpdate),
+		zap.Any("redoMetaTs", m.redoMetaTs),
+		zap.Any("checkpointTs", m.getWatermark().CheckpointTs),
+		zap.Any("resolvedTs", newWatermark.CheckpointTs),
+	)
+	if needUpdate {
+		m.sendMessages([]*messaging.TargetMessage{
+			messaging.NewSingleTargetMessage(m.selfNode.ID, messaging.HeartbeatCollectorTopic, &heartbeatpb.RedoMetaMessage{
+				ChangefeedID: m.redoMetaTs.ChangefeedID,
+				CheckpointTs: m.redoMetaTs.CheckpointTs,
+				ResolvedTs:   m.redoMetaTs.ResolvedTs,
+			}),
+		})
 	}
 }
 
@@ -701,6 +740,14 @@ func (m *Maintainer) calculateNewCheckpointTs() (*heartbeatpb.Watermark, bool) {
 		if id != m.selfNode.ID && m.controller.spanController.GetTaskSizeByNodeID(id) <= 0 {
 			continue
 		}
+		checksumState, ok := m.checksumStateByCapture.Get(id)
+		if !ok {
+			checksumState = heartbeatpb.ChecksumState_UNINITIALIZED
+		}
+		if checksumState != heartbeatpb.ChecksumState_OK {
+			updateCheckpointTs = false
+			continue
+		}
 		// node level watermark reported, ignore this round
 		watermark, ok := m.checkpointTsByCapture.Get(id)
 		if !ok {
@@ -768,6 +815,14 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 		return
 	}
 	req := msg.Message[0].(*heartbeatpb.HeartBeatRequest)
+
+	// Record dispatcher set checksum state for checkpoint gating.
+	// When checksum is not OK, we must not advance checkpoint using stale node-level watermarks.
+	m.checksumStateByCapture.Set(msg.From, req.ChecksumState)
+	m.redoChecksumStateByCapture.Set(msg.From, req.RedoChecksumState)
+	if m.dispatcherSetChecksum != nil {
+		m.dispatcherSetChecksum.ObserveHeartbeat(msg.From, req)
+	}
 
 	// ATOMIC CHECKPOINT UPDATE: Part 1 of race condition fix
 	// Update checkpointTsByCapture BEFORE processing operator status to ensure atomicity
@@ -938,6 +993,32 @@ func (m *Maintainer) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.Maintai
 	// For a normal case(100w tables, and 16 ascii characters for each name), the memory consumption is about 30MB.
 	m.postBootstrapMsg = msg
 	m.sendPostBootstrapRequest()
+
+	if m.dispatcherSetChecksum != nil {
+		nodes := make([]node.ID, 0, len(cachedResp))
+		for id := range cachedResp {
+			nodes = append(nodes, id)
+		}
+
+		defaultExpected := make(map[node.ID][]common.DispatcherID, len(nodes))
+		defaultExpected[m.selfNode.ID] = append(defaultExpected[m.selfNode.ID], m.ddlSpan.ID)
+		for _, span := range m.controller.spanController.GetReplicating() {
+			capture := span.GetNodeID()
+			defaultExpected[capture] = append(defaultExpected[capture], span.ID)
+		}
+
+		var redoExpected map[node.ID][]common.DispatcherID
+		if m.enableRedo {
+			redoExpected = make(map[node.ID][]common.DispatcherID, len(nodes))
+			redoExpected[m.selfNode.ID] = append(redoExpected[m.selfNode.ID], m.redoDDLSpan.ID)
+			for _, span := range m.controller.redoSpanController.GetReplicating() {
+				capture := span.GetNodeID()
+				redoExpected[capture] = append(redoExpected[capture], span.ID)
+			}
+		}
+
+		m.dispatcherSetChecksum.ResetAndSendFull(m.info.Epoch, nodes, defaultExpected, redoExpected)
+	}
 	// set status changed to true, trigger the maintainer manager to send heartbeat to coordinator
 	// to report the this changefeed's status
 	m.statusChanged.Store(true)
@@ -979,6 +1060,9 @@ func (m *Maintainer) handleResendMessage() {
 	if m.controller.barrier != nil {
 		// resend barrier ack messages
 		m.sendMessages(m.controller.barrier.Resend())
+	}
+	if m.dispatcherSetChecksum != nil {
+		m.dispatcherSetChecksum.ResendPending(time.Second)
 	}
 }
 

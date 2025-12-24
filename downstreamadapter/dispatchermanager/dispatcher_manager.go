@@ -115,6 +115,11 @@ type DispatcherManager struct {
 	latestWatermark     Watermark
 	latestRedoWatermark Watermark
 
+	// dispatcherSetChecksum stores the maintainer expected dispatcher-set checksum for each mode.
+	// It is used by DispatcherManager to verify whether the local dispatcher set matches maintainer
+	// expectation before allowing checkpoint advancement.
+	dispatcherSetChecksum dispatcherSetChecksumState
+
 	closing atomic.Bool
 	closed  atomic.Bool
 	cancel  context.CancelFunc
@@ -649,6 +654,14 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 			message.Statuses = statusMessage
 			message.Watermark = newWatermark
 			message.RedoWatermark = newRedoWatermark
+
+			actualDefault := e.computeDispatcherSetFingerprint(common.DefaultMode)
+			actualRedo := dispatcherSetFingerprint{}
+			if e.RedoEnable {
+				actualRedo = e.computeDispatcherSetFingerprint(common.RedoMode)
+			}
+			e.applyChecksumStateToHeartbeat(&message, actualDefault, actualRedo)
+
 			e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
 		}
 	}
@@ -688,10 +701,15 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 
 	toCleanMap := make([]*cleanMap, 0)
 	dispatcherCount := 0
+	actualDefault := dispatcherSetFingerprint{}
+	actualRedo := dispatcherSetFingerprint{}
 
 	if e.RedoEnable {
 		redoSeq := e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.RedoDispatcher) {
 			dispatcherCount++
+			if shouldIncludeDispatcherInChecksum(dispatcherItem.GetComponentStatus()) {
+				actualRedo.add(id)
+			}
 			status, cleanMap, watermark := getDispatcherStatus(id, dispatcherItem, needCompleteStatus)
 			if status != nil {
 				message.Statuses = append(message.Statuses, status)
@@ -717,6 +735,9 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 
 	seq := e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.EventDispatcher) {
 		dispatcherCount++
+		if shouldIncludeDispatcherInChecksum(dispatcherItem.GetComponentStatus()) {
+			actualDefault.add(id)
+		}
 		status, cleanMap, watermark := getDispatcherStatus(id, dispatcherItem, needCompleteStatus)
 		if status != nil {
 			message.Statuses = append(message.Statuses, status)
@@ -741,6 +762,13 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	message.Watermark.Seq = seq
 	e.latestWatermark.Set(message.Watermark)
 
+	// Dispatcher set checksum should be computed based on the dispatcher view before cleanup.
+	// This prevents watermark advancement when dispatchers are missing or duplicated due to
+	// scheduling anomalies.
+
+	aggWatermark := message.Watermark
+	e.applyChecksumStateToHeartbeat(&message, actualDefault, actualRedo)
+
 	// if the event dispatcher manager is closing, we don't to remove the stopped dispatchers.
 	if !e.closing.Load() {
 		for _, m := range toCleanMap {
@@ -764,20 +792,20 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 		// Fill the missing watermarks with the final aggregated values to avoid
 		// reporting an uninitialized checkpoint.
 		for _, id := range redoDispatchersWithoutWatermark {
-			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
+			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, aggWatermark.CheckpointTs))
 		}
 		for _, id := range eventDispatchersWithoutWatermark {
-			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
+			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, aggWatermark.CheckpointTs))
 		}
 
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).SendDispatcherHeartbeat(eventServiceDispatcherHeartbeat)
 	}
 
-	e.metricCheckpointTs.Set(float64(message.Watermark.CheckpointTs))
-	e.metricResolvedTs.Set(float64(message.Watermark.ResolvedTs))
+	e.metricCheckpointTs.Set(float64(aggWatermark.CheckpointTs))
+	e.metricResolvedTs.Set(float64(aggWatermark.ResolvedTs))
 
-	phyCheckpointTs := oracle.ExtractPhysical(message.Watermark.CheckpointTs)
-	phyResolvedTs := oracle.ExtractPhysical(message.Watermark.ResolvedTs)
+	phyCheckpointTs := oracle.ExtractPhysical(aggWatermark.CheckpointTs)
+	phyResolvedTs := oracle.ExtractPhysical(aggWatermark.ResolvedTs)
 
 	pdTime := e.pdClock.CurrentTime()
 	e.metricCheckpointTsLag.Set(float64(oracle.GetPhysical(pdTime)-phyCheckpointTs) / 1e3)
@@ -955,6 +983,20 @@ func (e *DispatcherManager) cleanMetrics() {
 	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
 	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
 	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
+
+	capture := appcontext.GetID()
+	keyspace := e.changefeedID.Keyspace()
+	changefeed := e.changefeedID.Name()
+	for _, state := range []string{"mismatch", "uninitialized"} {
+		metrics.DispatcherManagerDispatcherSetChecksumNotOKGauge.DeleteLabelValues(keyspace, changefeed, capture, "default", state)
+		metrics.DispatcherManagerDispatcherSetChecksumNotOKTotal.DeleteLabelValues(keyspace, changefeed, capture, "default", state)
+	}
+	if e.RedoEnable {
+		for _, state := range []string{"mismatch", "uninitialized"} {
+			metrics.DispatcherManagerDispatcherSetChecksumNotOKGauge.DeleteLabelValues(keyspace, changefeed, capture, "redo", state)
+			metrics.DispatcherManagerDispatcherSetChecksumNotOKTotal.DeleteLabelValues(keyspace, changefeed, capture, "redo", state)
+		}
+	}
 }
 
 // ==== remove and clean related functions END ====

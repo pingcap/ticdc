@@ -36,14 +36,21 @@ type removeDispatcherOperator struct {
 	spanController *span.Controller
 
 	sendThrottler sendThrottler
+
+	checksumUpdater DispatcherSetChecksumUpdater
 }
 
-func newRemoveDispatcherOperator(spanController *span.Controller, replicaSet *replica.SpanReplication) *removeDispatcherOperator {
+func newRemoveDispatcherOperator(
+	spanController *span.Controller,
+	replicaSet *replica.SpanReplication,
+	updater DispatcherSetChecksumUpdater,
+) *removeDispatcherOperator {
 	return &removeDispatcherOperator{
-		replicaSet:     replicaSet,
-		nodeID:         replicaSet.GetNodeID(),
-		spanController: spanController,
-		sendThrottler:  newSendThrottler(),
+		replicaSet:      replicaSet,
+		nodeID:          replicaSet.GetNodeID(),
+		spanController:  spanController,
+		sendThrottler:   newSendThrottler(),
+		checksumUpdater: updater,
 	}
 }
 
@@ -100,6 +107,14 @@ func (m *removeDispatcherOperator) Start() {
 }
 
 func (m *removeDispatcherOperator) PostFinish() {
+	if m.checksumUpdater != nil {
+		m.checksumUpdater.ApplyDelta(
+			m.replicaSet.GetMode(),
+			m.nodeID,
+			nil,
+			[]common.DispatcherID{m.replicaSet.ID},
+		)
+	}
 	log.Info("remove dispatcher operator finished",
 		zap.String("replicaSet", m.replicaSet.ID.String()),
 		zap.String("changefeed", m.replicaSet.ChangefeedID.String()))

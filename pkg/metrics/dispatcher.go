@@ -125,6 +125,22 @@ var (
 		Name:      "dropped_event_count",
 		Help:      "The number of events dropped by the event collector",
 	})
+
+	DispatcherManagerDispatcherSetChecksumNotOKGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "dispatchermanager",
+			Name:      "dispatcher_set_checksum_not_ok",
+			Help:      "Whether dispatcher set checksum state is not OK (1 means mismatch or uninitialized).",
+		}, []string{getKeyspaceLabel(), "changefeed", "capture", "mode", "state"})
+
+	DispatcherManagerDispatcherSetChecksumNotOKTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "dispatchermanager",
+			Name:      "dispatcher_set_checksum_not_ok_total",
+			Help:      "Total number of heartbeat watermarks suppressed due to dispatcher set checksum state not OK.",
+		}, []string{getKeyspaceLabel(), "changefeed", "capture", "mode", "state"})
 )
 
 func initDispatcherMetrics(registry *prometheus.Registry) {
@@ -142,4 +158,6 @@ func initDispatcherMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventCollectorReceivedEventLagDuration)
 	registry.MustRegister(EventCollectorHandleEventDuration)
 	registry.MustRegister(EventCollectorDroppedEventCount)
+	registry.MustRegister(DispatcherManagerDispatcherSetChecksumNotOKGauge)
+	registry.MustRegister(DispatcherManagerDispatcherSetChecksumNotOKTotal)
 }

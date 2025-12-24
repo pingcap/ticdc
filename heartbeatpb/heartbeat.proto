@@ -17,6 +17,16 @@ message HeartBeatRequest {
     repeated TableSpanStatus statuses = 4;
     bool compeleteStatus = 5;  // Whether includes all table spans in the changefeed?
     RunningError err = 6;
+    ChecksumState checksumState = 7;
+    ChecksumState redoChecksumState = 8;
+}
+
+enum ChecksumState {
+    // UNINITIALIZED is the default value when the field is absent in proto3.
+    // It must block checkpoint advancement until the checksum is explicitly verified as OK.
+    UNINITIALIZED = 0;
+    MISMATCH = 1;
+    OK = 2;
 }
 
 message Watermark {
@@ -89,6 +99,29 @@ message RedoResolvedTsProgressMessage {
 message RedoResolvedTsForwardMessage {
     ChangefeedID changefeedID = 1;
     uint64 resolvedTs = 2;
+}
+
+message DispatcherSetChecksumFingerprint {
+    uint64 count = 1;
+    uint64 xorHigh = 2;
+    uint64 xorLow = 3;
+    uint64 sumHigh = 4;
+    uint64 sumLow = 5;
+}
+
+message DispatcherSetChecksumUpdate {
+    ChangefeedID changefeedID = 1;
+    uint64 epoch = 2;
+    int64 mode = 3;
+    uint64 seq = 4;
+    DispatcherSetChecksumFingerprint fingerprint = 5;
+}
+
+message DispatcherSetChecksumAck {
+    ChangefeedID changefeedID = 1;
+    uint64 epoch = 2;
+    int64 mode = 3;
+    uint64 seq = 4;
 }
 
 enum ScheduleAction {

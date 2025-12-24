@@ -46,18 +46,22 @@ type AddDispatcherOperator struct {
 	spanController *span.Controller
 
 	sendThrottler sendThrottler
+
+	checksumUpdater DispatcherSetChecksumUpdater
 }
 
 func NewAddDispatcherOperator(
 	spanController *span.Controller,
 	replicaSet *replica.SpanReplication,
 	dest node.ID,
+	updater DispatcherSetChecksumUpdater,
 ) *AddDispatcherOperator {
 	return &AddDispatcherOperator{
-		replicaSet:     replicaSet,
-		dest:           dest,
-		spanController: spanController,
-		sendThrottler:  newSendThrottler(),
+		replicaSet:      replicaSet,
+		dest:            dest,
+		spanController:  spanController,
+		sendThrottler:   newSendThrottler(),
+		checksumUpdater: updater,
 	}
 }
 
@@ -128,6 +132,14 @@ func (m *AddDispatcherOperator) Start() {
 func (m *AddDispatcherOperator) PostFinish() {
 	if !m.removed.Load() {
 		m.spanController.MarkSpanReplicating(m.replicaSet)
+		if m.checksumUpdater != nil {
+			m.checksumUpdater.ApplyDelta(
+				m.replicaSet.GetMode(),
+				m.dest,
+				[]common.DispatcherID{m.replicaSet.ID},
+				nil,
+			)
+		}
 	} else {
 		// Only mark span absent if it still exists in spanController. When a DDL removes the task,
 		// spanController may have already deleted it. Marking an already removed span absent would

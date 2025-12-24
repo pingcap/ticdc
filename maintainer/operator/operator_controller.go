@@ -59,6 +59,8 @@ type Controller struct {
 	mode         int64
 	// lastWarnTime tracks the last warning time for each operator to avoid spam logs
 	lastWarnTime map[common.DispatcherID]time.Time
+
+	checksumUpdater DispatcherSetChecksumUpdater
 }
 
 // NewOperatorController creates a new operator controller
@@ -80,6 +82,18 @@ func NewOperatorController(
 		mode:           mode,
 		lastWarnTime:   make(map[common.DispatcherID]time.Time),
 	}
+}
+
+func (oc *Controller) SetChecksumUpdater(updater DispatcherSetChecksumUpdater) {
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+	oc.checksumUpdater = updater
+}
+
+func (oc *Controller) GetChecksumUpdater() DispatcherSetChecksumUpdater {
+	oc.mu.RLock()
+	defer oc.mu.RUnlock()
+	return oc.checksumUpdater
 }
 
 // Execute poll the operator from the queue and execute it
@@ -116,8 +130,9 @@ func (oc *Controller) Execute() time.Time {
 // it is only by the barrier when the schema is dropped by ddl
 func (oc *Controller) RemoveTasksBySchemaID(schemaID int64) {
 	tasks := oc.spanController.GetRemoveTasksBySchemaID(schemaID)
+	updater := oc.GetChecksumUpdater()
 	for _, task := range tasks {
-		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.spanController, task))
+		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.spanController, task, updater))
 	}
 	oc.spanController.RemoveBySchemaID(schemaID)
 }
@@ -134,8 +149,9 @@ func (oc *Controller) RemoveTasksBySchemaID(schemaID int64) {
 // NOT be executed while holding spanController's internal locks, otherwise deadlock may happen.
 func (oc *Controller) RemoveTasksByTableIDs(tables ...int64) {
 	tasks := oc.spanController.GetRemoveTasksByTableIDs(tables...)
+	updater := oc.GetChecksumUpdater()
 	for _, task := range tasks {
-		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.spanController, task))
+		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.spanController, task, updater))
 	}
 	oc.spanController.RemoveByTableIDs(tables...)
 }
@@ -378,12 +394,7 @@ func (oc *Controller) checkAffectedNodes(op operator.Operator[common.DispatcherI
 }
 
 func (oc *Controller) NewMoveOperator(replicaSet *replica.SpanReplication, origin, dest node.ID) operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
-	return &MoveDispatcherOperator{
-		replicaSet:     replicaSet,
-		origin:         origin,
-		dest:           dest,
-		spanController: oc.spanController,
-	}
+	return NewMoveDispatcherOperator(oc.spanController, replicaSet, origin, dest, oc.GetChecksumUpdater())
 }
 
 func checkMergeOperator(affectedReplicaSets []*replica.SpanReplication) bool {
@@ -444,7 +455,7 @@ func (oc *Controller) AddMergeOperator(
 		}
 	}
 
-	mergeOperator := NewMergeDispatcherOperator(oc.spanController, affectedReplicaSets, operators)
+	mergeOperator := NewMergeDispatcherOperator(oc.spanController, affectedReplicaSets, operators, oc.GetChecksumUpdater())
 	ret := oc.AddOperator(mergeOperator)
 	if !ret {
 		log.Error("failed to add merge dispatcher operator",

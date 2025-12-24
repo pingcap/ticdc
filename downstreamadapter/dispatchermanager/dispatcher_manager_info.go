@@ -47,14 +47,34 @@ func (e *DispatcherManager) GetMaintainerID() node.ID {
 
 func (e *DispatcherManager) SetMaintainerID(maintainerID node.ID) {
 	e.meta.Lock()
-	defer e.meta.Unlock()
+	changed := e.meta.maintainerID != maintainerID
 	e.meta.maintainerID = maintainerID
+	e.meta.Unlock()
+	if changed {
+		// Maintainer change means the expected dispatcher set checksum must be re-initialized
+		// by the new maintainer, otherwise stale checksum from the old maintainer can cause
+		// checkpoint advancement with missing/extra dispatchers.
+		e.ResetDispatcherSetChecksum()
+	}
 }
 
 func (e *DispatcherManager) GetMaintainerEpoch() uint64 {
 	e.meta.Lock()
 	defer e.meta.Unlock()
 	return e.meta.maintainerEpoch
+}
+
+func (e *DispatcherManager) SetMaintainerEpoch(epoch uint64) {
+	e.meta.Lock()
+	changed := e.meta.maintainerEpoch != epoch
+	e.meta.maintainerEpoch = epoch
+	e.meta.Unlock()
+	if changed {
+		// Epoch change indicates the maintainer instance is reset. The expected dispatcher-set checksum
+		// must be re-initialized by the new epoch, otherwise stale checksum can cause checkpoint
+		// advancement with missing/extra dispatchers.
+		e.ResetDispatcherSetChecksum()
+	}
 }
 
 func (e *DispatcherManager) GetTableTriggerEventDispatcher() *dispatcher.EventDispatcher {
