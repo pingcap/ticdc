@@ -86,7 +86,9 @@ type Maintainer struct {
 
 	removed *atomic.Bool
 
-	bootstrapped     atomic.Bool
+	// initialized is true after all necessary resources ready,
+	// it's not affected by new node join the cluster.
+	initialized      atomic.Bool
 	postBootstrapMsg *heartbeatpb.MaintainerPostBootstrapRequest
 
 	// startCheckpointTs is the initial checkpointTs when the maintainer is created.
@@ -261,7 +263,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		go refresher.Run(ctx)
 	}
 
-	log.Info("changefeed maintainer is created",
+	log.Info("changefeed maintainer started",
 		zap.Stringer("changefeedID", cfID),
 		zap.String("state", string(info.State)),
 		zap.Uint64("checkpointTs", checkpointTs),
@@ -373,7 +375,7 @@ func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 		State:         heartbeatpb.ComponentState(m.scheduleState.Load()),
 		CheckpointTs:  m.getWatermark().CheckpointTs,
 		Err:           runningErrors,
-		BootstrapDone: m.bootstrapped.Load(),
+		BootstrapDone: m.initialized.Load(),
 		LastSyncedTs:  m.getWatermark().LastSyncedTs,
 	}
 	return status
@@ -551,7 +553,7 @@ func (m *Maintainer) handleRedoMetaTsMessage(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if !m.bootstrapped.Load() {
+			if !m.initialized.Load() {
 				log.Warn("can not advance redoTs since not bootstrapped",
 					zap.Stringer("changefeedID", m.changefeedID))
 				break
@@ -626,7 +628,7 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if !m.bootstrapped.Load() {
+			if !m.initialized.Load() {
 				log.Warn("can not advance checkpointTs since not bootstrapped",
 					zap.Stringer("changefeedID", m.changefeedID),
 					zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
@@ -747,7 +749,7 @@ func (m *Maintainer) sendMessages(msgs []*messaging.TargetMessage) {
 
 func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 	// ignore the heartbeat if the maintainer not bootstrapped
-	if !m.bootstrapped.Load() {
+	if !m.initialized.Load() {
 		return
 	}
 	req := msg.Message[0].(*heartbeatpb.HeartBeatRequest)
@@ -810,7 +812,7 @@ func (m *Maintainer) onError(from node.ID, err *heartbeatpb.RunningError) {
 
 func (m *Maintainer) onBlockStateRequest(msg *messaging.TargetMessage) {
 	// the barrier is not initialized
-	if !m.bootstrapped.Load() {
+	if !m.initialized.Load() {
 		return
 	}
 	req := msg.Message[0].(*heartbeatpb.BlockStatusRequest)
@@ -913,7 +915,7 @@ func (m *Maintainer) onBootstrapResponses(responses map[node.ID]*heartbeatpb.Mai
 		return
 	}
 
-	m.bootstrapped.Store(true)
+	m.initialized.Store(true)
 	log.Info("changefeed maintainer bootstrapped", zap.Stringer("changefeedID", m.changefeedID))
 	// Memory Consumption is 64(tableName/schemaName limit) * 4(utf8.UTFMax) * 2(tableName+schemaName) * tableNum
 	// For an extreme case(100w tables, and 64 utf8 characters for each name), the memory consumption is about 488MB.
@@ -1083,7 +1085,7 @@ func (m *Maintainer) onPeriodTask() {
 }
 
 func (m *Maintainer) collectMetrics() {
-	if !m.bootstrapped.Load() {
+	if !m.initialized.Load() {
 		return
 	}
 	updateMetric := func(mode int64) {

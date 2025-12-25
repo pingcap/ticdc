@@ -306,7 +306,7 @@ func TestCreateChangefeed(t *testing.T) {
 		changefeedDB: changefeedDB,
 		operatorController: operator.NewOperatorController(node.NewInfo("node1", ""),
 			changefeedDB, backend, 10),
-		bootstrapped: atomic.NewBool(false),
+		initialized: atomic.NewBool(false),
 	}
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	cfConfig := &config.ChangeFeedInfo{
@@ -318,7 +318,7 @@ func TestCreateChangefeed(t *testing.T) {
 	require.NotNil(t, controller.CreateChangefeed(context.Background(), cfConfig))
 	require.Equal(t, 0, changefeedDB.GetSize())
 
-	controller.bootstrapped.Store(true)
+	controller.initialized.Store(true)
 	backend.EXPECT().CreateChangefeed(gomock.Any(), gomock.Any()).Return(errors.New("failed")).Times(1)
 	require.NotNil(t, controller.CreateChangefeed(context.Background(), cfConfig))
 	require.Equal(t, 0, changefeedDB.GetSize())

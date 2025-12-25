@@ -35,9 +35,9 @@ type Bootstrapper[T any] struct {
 
 	// mutext protect the bootstrapped and nodes, guarantee they are updated atomically.
 	mutex sync.Mutex
-	// bootstrapped is true after get in touch with all nodes by receive their responses.
-	bootstrapped bool
-	nodes        map[node.ID]*node.Status[T]
+	// allNodesReady is true after get in touch with all nodes by receive their responses.
+	allNodesReady bool
+	nodes         map[node.ID]*node.Status[T]
 
 	// newBootstrapRequest returns a new bootstrap message
 	newBootstrapRequest NewBootstrapRequestFn
@@ -52,7 +52,7 @@ func NewBootstrapper[T any](id string, newBootstrapMsg NewBootstrapRequestFn) *B
 	return &Bootstrapper[T]{
 		id:                  id,
 		nodes:               make(map[node.ID]*node.Status[T]),
-		bootstrapped:        false,
+		allNodesReady:       false,
 		newBootstrapRequest: newBootstrapMsg,
 		currentTime:         time.Now,
 		resendInterval:      defaultResendInterval,
@@ -81,7 +81,7 @@ func (b *Bootstrapper[T]) HandleNewNodes(activeNodes map[node.ID]*node.Info) (
 	}
 
 	if len(addedNodes) > 0 {
-		b.bootstrapped = false
+		b.allNodesReady = false
 	}
 
 	for id := range b.nodes {
@@ -95,9 +95,6 @@ func (b *Bootstrapper[T]) HandleNewNodes(activeNodes map[node.ID]*node.Info) (
 	}
 
 	responses = b.collectBootstrapResponses()
-	if len(responses) > 0 {
-		b.bootstrapped = true
-	}
 	return
 }
 
@@ -121,9 +118,6 @@ func (b *Bootstrapper[T]) HandleBootstrapResponse(
 	status.SetResponse(msg)
 
 	responses := b.collectBootstrapResponses()
-	if len(responses) > 0 {
-		b.bootstrapped = true
-	}
 	return responses
 }
 
@@ -131,7 +125,7 @@ func (b *Bootstrapper[T]) HandleBootstrapResponse(
 func (b *Bootstrapper[T]) ResendBootstrapMessage() []*messaging.TargetMessage {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
-	if b.bootstrapped {
+	if b.allNodesReady {
 		return nil
 	}
 
@@ -179,12 +173,10 @@ func (b *Bootstrapper[T]) PrintBootstrapStatus() {
 	)
 }
 
-// Bootstrapped check if all nodes are initialized.
-// returns true when all nodes report the bootstrap response and bootstrapped
-func (b *Bootstrapper[T]) Bootstrapped() bool {
+func (b *Bootstrapper[T]) AllNodesReady() bool {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
-	return b.bootstrapped
+	return b.allNodesReady
 }
 
 // collectBootstrapResponses return all cached bootstrapped responses after make sure all nodes responses received.
@@ -194,7 +186,7 @@ func (b *Bootstrapper[T]) Bootstrapped() bool {
 //
 // Note: this method must be called after lock.
 func (b *Bootstrapper[T]) collectBootstrapResponses() map[node.ID]*T {
-	if b.bootstrapped {
+	if b.allNodesReady {
 		return nil
 	}
 
@@ -207,6 +199,7 @@ func (b *Bootstrapper[T]) collectBootstrapResponses() map[node.ID]*T {
 			return nil
 		}
 	}
+	b.allNodesReady = true
 
 	responses := make(map[node.ID]*T, len(b.nodes))
 	for _, status := range b.nodes {

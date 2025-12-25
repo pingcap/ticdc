@@ -393,8 +393,8 @@ func (c *coordinator) GetChangefeed(ctx context.Context, changefeedDisplayName c
 	return c.controller.GetChangefeed(ctx, changefeedDisplayName)
 }
 
-func (c *coordinator) Bootstrapped() bool {
-	return c.controller.bootstrapped.Load()
+func (c *coordinator) Initialized() bool {
+	return c.controller.initialized.Load()
 }
 
 func (c *coordinator) Stop() {

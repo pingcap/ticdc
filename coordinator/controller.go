@@ -68,9 +68,9 @@ type Controller struct {
 	backend            changefeed.Backend
 	eventCh            *chann.DrainableChann[*Event]
 
-	// bootstrapped set to true after initialize all necessary resources,
+	// initialized is true after all necessary resources ready,
 	// it's not affected by new node join the cluster.
-	bootstrapped *atomic.Bool
+	initialized  *atomic.Bool
 	bootstrapper *bootstrap.Bootstrapper[heartbeatpb.CoordinatorBootstrapResponse]
 
 	nodeChanged struct {
@@ -120,9 +120,9 @@ func NewController(
 
 	oc := operator.NewOperatorController(selfNode, changefeedDB, backend, batchSize)
 	c := &Controller{
-		version:      version,
-		selfNode:     selfNode,
-		bootstrapped: atomic.NewBool(false),
+		version:     version,
+		selfNode:    selfNode,
+		initialized: atomic.NewBool(false),
 		scheduler: scheduler.NewController(map[string]scheduler.Scheduler{
 			scheduler.BasicScheduler: coscheduler.NewBasicScheduler(
 				selfNode.ID.String(),
@@ -269,7 +269,7 @@ func (c *Controller) onMessage(msg *messaging.TargetMessage) {
 	case messaging.TypeCoordinatorBootstrapResponse:
 		c.onMaintainerBootstrapResponse(msg)
 	case messaging.TypeMaintainerHeartbeatRequest:
-		if c.bootstrapper.Bootstrapped() {
+		if c.bootstrapper.AllNodesReady() {
 			req := msg.Message[0].(*heartbeatpb.MaintainerHeartbeat)
 			c.handleMaintainerStatus(msg.From, req.Statuses)
 		}
@@ -363,12 +363,7 @@ type remoteMaintainer struct {
 }
 
 func (c *Controller) handleBootstrapResponses(responses map[node.ID]*heartbeatpb.CoordinatorBootstrapResponse) {
-	if len(responses) == 0 {
-		return
-	}
-	if c.bootstrapped.Load() {
-		log.Info("coordinator already bootstrapped, may new nodes join the cluster",
-			zap.Any("nodeID", c.selfNode.ID), zap.Any("maintainerStatus", responses))
+	if c.initialized.Load() {
 		return
 	}
 	log.Info("all new nodes bootstrap response received",
@@ -591,7 +586,7 @@ func (c *Controller) finishBootstrap(runningChangefeeds map[common.ChangeFeedID]
 	c.taskHandlers = append(c.taskHandlers, c.scheduler.Start(c.taskScheduler)...)
 	operatorControllerHandle := c.taskScheduler.Submit(c.operatorController, time.Now())
 	c.taskHandlers = append(c.taskHandlers, operatorControllerHandle)
-	c.bootstrapped.Store(true)
+	c.initialized.Store(true)
 	log.Info("coordinator bootstrapped", zap.Any("nodeID", c.selfNode.ID))
 }
 
@@ -605,13 +600,12 @@ func (c *Controller) Stop() {
 }
 
 func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFeedInfo) error {
-	c.apiLock.Lock()
-	defer c.apiLock.Unlock()
-
-	if !c.bootstrapped.Load() {
+	if !c.initialized.Load() {
 		return errors.New("not initialized, wait a moment")
 	}
 
+	c.apiLock.Lock()
+	defer c.apiLock.Unlock()
 	old := c.changefeedDB.GetByChangefeedDisplayName(info.ChangefeedID.DisplayName)
 	if old != nil {
 		return errors.New("changefeed already exists")

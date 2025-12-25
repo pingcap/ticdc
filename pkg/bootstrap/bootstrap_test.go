@@ -35,7 +35,7 @@ func TestHandleNewNodes(t *testing.T) {
 	require.Len(t, added, 0)
 	require.Len(t, removed, 0)
 	require.Len(t, requests, 0)
-	require.False(t, b.Bootstrapped())
+	require.False(t, b.AllNodesReady())
 	require.Nil(t, responses, 0)
 
 	node1 := node.NewInfo("", "")
@@ -49,7 +49,7 @@ func TestHandleNewNodes(t *testing.T) {
 	require.Len(t, requests, 2)
 	require.Len(t, b.GetAllNodeIDs(), 2)
 	require.Nil(t, responses)
-	require.False(t, b.Bootstrapped())
+	require.False(t, b.AllNodesReady())
 
 	changefeedIDPB := common.NewChangefeedID4Test("ns", "cf").ToPB()
 
@@ -61,7 +61,7 @@ func TestHandleNewNodes(t *testing.T) {
 			ChangefeedID: changefeedIDPB,
 			Spans:        []*heartbeatpb.BootstrapTableSpan{{}},
 		})
-	require.False(t, b.Bootstrapped())
+	require.False(t, b.AllNodesReady())
 	require.Nil(t, responses)
 
 	// receive one response, not bootstrapped yet
@@ -71,7 +71,7 @@ func TestHandleNewNodes(t *testing.T) {
 			ChangefeedID: changefeedIDPB,
 			Spans:        []*heartbeatpb.BootstrapTableSpan{{}},
 		})
-	require.False(t, b.Bootstrapped())
+	require.False(t, b.AllNodesReady())
 	require.Nil(t, responses)
 
 	// all nodes responses received, bootstrapped
@@ -81,7 +81,7 @@ func TestHandleNewNodes(t *testing.T) {
 			ChangefeedID: changefeedIDPB,
 			Spans:        []*heartbeatpb.BootstrapTableSpan{{}, {}},
 		})
-	require.True(t, b.Bootstrapped())
+	require.True(t, b.AllNodesReady())
 	require.Len(t, responses, 2)
 	require.Equal(t, 1, len(responses[node1.ID].Spans))
 	require.Equal(t, 2, len(responses[node2.ID].Spans))
@@ -95,14 +95,14 @@ func TestHandleNewNodes(t *testing.T) {
 	require.Len(t, removed, 0)
 	require.Len(t, requests, 1)
 	require.Nil(t, responses)
-	require.False(t, b.Bootstrapped())
+	require.False(t, b.AllNodesReady())
 	responses = b.HandleBootstrapResponse(
 		node3.ID,
 		&heartbeatpb.MaintainerBootstrapResponse{
 			ChangefeedID: changefeedIDPB,
 			Spans:        []*heartbeatpb.BootstrapTableSpan{{}, {}, {}},
 		})
-	require.True(t, b.Bootstrapped())
+	require.True(t, b.AllNodesReady())
 	require.Len(t, responses, 1)
 	require.Equal(t, 3, len(responses[node3.ID].Spans))
 
@@ -113,7 +113,7 @@ func TestHandleNewNodes(t *testing.T) {
 	require.Len(t, removed, 1)
 	require.Len(t, requests, 0)
 	require.Nil(t, responses)
-	require.True(t, b.Bootstrapped())
+	require.True(t, b.AllNodesReady())
 
 	// add a new node, and remove one node
 	nodes[node1.ID] = node1
@@ -123,7 +123,7 @@ func TestHandleNewNodes(t *testing.T) {
 	require.Len(t, removed, 1)
 	require.Len(t, requests, 1)
 	require.Nil(t, responses)
-	require.False(t, b.Bootstrapped())
+	require.False(t, b.AllNodesReady())
 
 	responses = b.HandleBootstrapResponse(
 		node1.ID,
@@ -131,7 +131,7 @@ func TestHandleNewNodes(t *testing.T) {
 			ChangefeedID: changefeedIDPB,
 			Spans:        []*heartbeatpb.BootstrapTableSpan{{}},
 		})
-	require.True(t, b.Bootstrapped())
+	require.True(t, b.AllNodesReady())
 	require.Len(t, responses, 1)
 	require.Equal(t, 1, len(responses[node1.ID].Spans))
 }
