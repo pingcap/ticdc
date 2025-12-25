@@ -222,19 +222,19 @@ func TestDefaultWorkerCountByDownstream(t *testing.T) {
 
 	cfg := New()
 	cfg.IsTiDB = true
-	cfg.setDefaultWorkerCountByDownstream()
+	cfg.setWorkerCountByDownstream()
 	require.Equal(t, DefaultWorkerCount, cfg.WorkerCount)
 
 	cfg = New()
 	cfg.IsTiDB = false
-	cfg.setDefaultWorkerCountByDownstream()
+	cfg.setWorkerCountByDownstream()
 	require.Equal(t, DefaultMySQLWorkerCount, cfg.WorkerCount)
 
 	cfg = New()
 	cfg.workerCountSpecified = true
 	cfg.WorkerCount = 123
 	cfg.IsTiDB = false
-	cfg.setDefaultWorkerCountByDownstream()
+	cfg.setWorkerCountByDownstream()
 	require.Equal(t, 123, cfg.WorkerCount)
 }
 
