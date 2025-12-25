@@ -575,7 +575,7 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 }
 
 func (c *EventCollector) controlCongestion(ctx context.Context) error {
-	ticker := time.NewTicker(time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
@@ -616,7 +616,7 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 			changefeedPathMemory[cfID][dispatcherID] = uint64(available)
 		}
 		// store total available memory from AreaMemoryMetric
-		changefeedTotalMemory[cfID] = uint64(quota.AvailableMemory())
+		changefeedTotalMemory[cfID] = uint64(quota.AvailableMemory)
 	}
 
 	// collect from redo dynamic stream and take minimum
@@ -639,9 +639,9 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 		}
 		// take minimum total available memory between main and redo streams
 		if existing, exists := changefeedTotalMemory[cfID]; exists {
-			changefeedTotalMemory[cfID] = min(existing, uint64(quota.AvailableMemory()))
+			changefeedTotalMemory[cfID] = min(existing, uint64(quota.AvailableMemory))
 		} else {
-			changefeedTotalMemory[cfID] = uint64(quota.AvailableMemory())
+			changefeedTotalMemory[cfID] = uint64(quota.AvailableMemory)
 		}
 	}
 

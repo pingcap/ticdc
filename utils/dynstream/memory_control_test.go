@@ -208,12 +208,12 @@ func TestGetMetrics(t *testing.T) {
 	}, nil)
 	metrics = mc.getMetrics()
 	require.Equal(t, 1, len(metrics.AreaMemoryMetrics))
-	require.Equal(t, int64(0), metrics.AreaMemoryMetrics[0].UsedMemoryValue)
+	require.Equal(t, int64(0), metrics.AreaMemoryMetrics[0].AvailableMemory)
 	require.Equal(t, int64(100), metrics.AreaMemoryMetrics[0].MaxMemoryValue)
 
 	path.areaMemStat.totalPendingSize.Store(100)
 	metrics = mc.getMetrics()
-	require.Equal(t, int64(100), metrics.AreaMemoryMetrics[0].UsedMemoryValue)
+	require.Equal(t, int64(100), metrics.AreaMemoryMetrics[0].AvailableMemory)
 	require.Equal(t, int64(100), metrics.AreaMemoryMetrics[0].MaxMemoryValue)
 }
 
