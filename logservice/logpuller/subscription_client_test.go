@@ -260,7 +260,7 @@ func TestPushRegionEventToDSResolvedFastFailure(t *testing.T) {
 	client.cond = sync.NewCond(&client.mu)
 	client.paused.Store(true)
 
-	event := regionEvent{resolvedTs: 10}
+	event := regionEvent{subID: 1, resolvedTs: 10}
 	ok := client.pushRegionEventToDS(SubscriptionID(1), event)
 	require.False(t, ok)
 	require.Equal(t, 0, mockDS.pushCount())

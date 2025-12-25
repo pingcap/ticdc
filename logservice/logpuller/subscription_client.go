@@ -190,11 +190,17 @@ type subscriptionClient struct {
 
 	stores sync.Map
 
-	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
+	ds             dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *subscriptionEventHandler]
+	resolvedStream dynstream.DynamicStream[int, SubscriptionID, resolvedTsEvent, *subscribedSpan, *resolvedTsEventHandler]
 	// the following three fields are used to manage feedback from ds and notify other goroutines
 	mu     sync.Mutex
 	cond   *sync.Cond
 	paused atomic.Bool
+
+	pendingResolved struct {
+		sync.Mutex
+		events map[SubscriptionID]uint64
+	}
 
 	// the credential to connect tikv
 	credential *security.Credential
@@ -247,17 +253,28 @@ func NewSubscriptionClient(
 	option := dynstream.NewOption()
 	// Note: it is max batch size of the kv sent from tikv(not committed rows)
 	option.BatchCount = 1024
-	// TODO: Set `UseBuffer` to true until we refactor the `regionEventHandler.Handle` method so that it doesn't call any method of the dynamic stream. Currently, if `UseBuffer` is set to false, there will be a deadlock:
-	// 	ds.handleLoop fetch events from `ch` -> regionEventHandler.Handle -> ds.RemovePath -> send event to `ch`
+	// TODO: Set `UseBuffer` to true until we refactor the `subscriptionEventHandler.Handle` method so that it doesn't call any method of the dynamic stream. Currently, if `UseBuffer` is set to false, there will be a deadlock:
+	// 	ds.handleLoop fetch events from `ch` -> subscriptionEventHandler.Handle -> ds.RemovePath -> send event to `ch`
 	option.UseBuffer = true
 	option.EnableMemoryControl = true
 	ds := dynstream.NewParallelDynamicStream(
-		&regionEventHandler{subClient: subClient},
+		&subscriptionEventHandler{subClient: subClient},
 		option,
 	)
 	ds.Start()
 	subClient.ds = ds
+	resolvedOption := dynstream.NewOption()
+	resolvedOption.BatchCount = 1024
+	resolvedOption.UseBuffer = true
+	resolvedOption.EnableMemoryControl = false
+	resolvedStream := dynstream.NewParallelDynamicStream(
+		&resolvedTsEventHandler{subClient: subClient},
+		resolvedOption,
+	)
+	resolvedStream.Start()
+	subClient.resolvedStream = resolvedStream
 	subClient.cond = sync.NewCond(&subClient.mu)
+	subClient.pendingResolved.events = make(map[SubscriptionID]uint64)
 
 	subClient.initMetrics()
 	return subClient
@@ -362,6 +379,7 @@ func (s *subscriptionClient) Subscribe(
 
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(1*1024*1024*1024, dynstream.MemoryControlForPuller, "logPuller") // 1GB
 	s.ds.AddPath(rt.subID, rt, areaSetting)
+	s.resolvedStream.AddPath(rt.subID, rt)
 
 	select {
 	case <-s.ctx.Done():
@@ -396,24 +414,34 @@ func (s *subscriptionClient) wakeSubscription(subID SubscriptionID) {
 }
 
 func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) bool {
+	// fast path
+	if !s.paused.Load() {
+		s.ds.Push(subID, event)
+		return true
+	}
+	if event.state == nil && event.resolvedTs != 0 {
+		return false
+	}
+	// slow path: wait until paused is false
+	s.mu.Lock()
+	for s.paused.Load() {
+		s.cond.Wait()
+	}
+	s.mu.Unlock()
 	s.ds.Push(subID, event)
 	return true
-	// // fast path
-	// if !s.paused.Load() {
-	// 	s.ds.Push(subID, event)
-	// 	return true
-	// }
-	// if isBatchResolvedEvent(event) {
-	// 	return false
-	// }
-	// // slow path: wait until paused is false
-	// s.mu.Lock()
-	// for s.paused.Load() {
-	// 	s.cond.Wait()
-	// }
-	// s.mu.Unlock()
-	// s.ds.Push(subID, event)
-	// return true
+}
+
+func (s *subscriptionClient) pushResolvedTask(requestID uint64, state *regionFeedState, resolvedTs uint64, worker *regionRequestWorker) {
+	if state == nil {
+		return
+	}
+	event := resolvedTsEvent{
+		state:      state,
+		resolvedTs: resolvedTs,
+		worker:     worker,
+	}
+	s.resolvedStream.Push(SubscriptionID(requestID), event)
 }
 
 func (s *subscriptionClient) handleDSFeedBack(ctx context.Context) error {
@@ -430,6 +458,7 @@ func (s *subscriptionClient) handleDSFeedBack(ctx context.Context) error {
 				s.paused.Store(false)
 				s.cond.Broadcast()
 				log.Info("subscription client resume push region event")
+				s.flushPendingResolvedTs()
 			case dynstream.ReleasePath, dynstream.ResumePath:
 				// Ignore it, because it is no need to pause and resume a path in puller.
 			}
@@ -437,8 +466,31 @@ func (s *subscriptionClient) handleDSFeedBack(ctx context.Context) error {
 	}
 }
 
-func isBatchResolvedEvent(event regionEvent) bool {
-	return event.batchResolvedTs != nil
+func (s *subscriptionClient) emitResolvedTs(subID SubscriptionID, resolvedTs uint64) {
+	s.pendingResolved.Lock()
+	defer s.pendingResolved.Unlock()
+
+	if pending, ok := s.pendingResolved.events[subID]; ok && pending > resolvedTs {
+		resolvedTs = pending
+	}
+	if resolvedTs == 0 {
+		return
+	}
+	if s.pushRegionEventToDS(subID, regionEvent{subID: subID, resolvedTs: resolvedTs}) {
+		delete(s.pendingResolved.events, subID)
+		return
+	}
+	s.pendingResolved.events[subID] = resolvedTs
+}
+
+func (s *subscriptionClient) flushPendingResolvedTs() {
+	s.pendingResolved.Lock()
+	defer s.pendingResolved.Unlock()
+	for subID, ts := range s.pendingResolved.events {
+		if s.pushRegionEventToDS(subID, regionEvent{subID: subID, resolvedTs: ts}) {
+			delete(s.pendingResolved.events, subID)
+		}
+	}
 }
 
 func (s *subscriptionClient) Run(ctx context.Context) error {
@@ -470,6 +522,7 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 func (s *subscriptionClient) Close(ctx context.Context) error {
 	s.cancel()
 	s.ds.Close()
+	s.resolvedStream.Close()
 	s.regionTaskQueue.Close()
 	return nil
 }
@@ -496,6 +549,11 @@ func (s *subscriptionClient) onTableDrained(rt *subscribedSpan) {
 	err := s.ds.RemovePath(rt.subID)
 	if err != nil {
 		log.Warn("subscription client remove path failed",
+			zap.Uint64("subscriptionID", uint64(rt.subID)),
+			zap.Error(err))
+	}
+	if err := s.resolvedStream.RemovePath(rt.subID); err != nil {
+		log.Warn("subscription client remove resolved path failed",
 			zap.Uint64("subscriptionID", uint64(rt.subID)),
 			zap.Error(err))
 	}

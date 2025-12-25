@@ -59,8 +59,6 @@ type regionRequestWorker struct {
 
 		subscriptions map[SubscriptionID]regionFeedStates
 	}
-
-	pendingResolvedBatches map[SubscriptionID]*batchResolvedTsEvent
 }
 
 func newRegionRequestWorker(
@@ -78,7 +76,6 @@ func newRegionRequestWorker(
 		requestCache: newRequestCache(requestCacheSize),
 	}
 	worker.requestedRegions.subscriptions = make(map[SubscriptionID]regionFeedStates)
-	worker.pendingResolvedBatches = make(map[SubscriptionID]*batchResolvedTsEvent)
 
 	waitForPreFetching := func() error {
 		if worker.preFetchForConnecting != nil {
@@ -304,15 +301,9 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 			zap.Any("regionIDs", resolvedTsEvent.Regions))
 		return
 	}
-	batch := s.pendingResolvedBatches[subscriptionID]
-	if batch != nil {
-		delete(s.pendingResolvedBatches, subscriptionID)
-	} else {
-		batch = newBatchResolvedTsEvent(subscriptionID, len(resolvedTsEvent.Regions))
-	}
 	for _, regionID := range resolvedTsEvent.Regions {
 		if state := s.getRegionState(subscriptionID, regionID); state != nil {
-			batch.add(state, resolvedTsEvent.Ts)
+			s.client.pushResolvedTask(resolvedTsEvent.RequestId, state, resolvedTsEvent.Ts, s)
 		} else {
 			log.Warn("region request worker receives a resolved ts event for an untracked region",
 				zap.Uint64("workerID", s.workerID),
@@ -320,15 +311,6 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 				zap.Uint64("regionID", regionID),
 				zap.Uint64("resolvedTs", resolvedTsEvent.Ts))
 		}
-	}
-	if batch.len() == 0 {
-		return
-	}
-	if !s.client.pushRegionEventToDS(subscriptionID, regionEvent{
-		worker:          s,
-		batchResolvedTs: batch,
-	}) {
-		s.pendingResolvedBatches[subscriptionID] = batch
 	}
 }
 
