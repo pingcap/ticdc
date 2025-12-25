@@ -88,8 +88,10 @@ func (h *subscriptionEventHandler) Handle(span *subscribedSpan, events ...region
 	newResolvedTs := uint64(0)
 	for _, event := range events {
 		if event.state == nil {
-			if event.resolvedTs != 0 && event.resolvedTs > newResolvedTs {
-				newResolvedTs = event.resolvedTs
+			if event.resolvedTs != 0 {
+				if event.resolvedTs > newResolvedTs {
+					newResolvedTs = event.resolvedTs
+				}
 				continue
 			}
 			log.Panic("region event has no state", zap.Any("event", event))

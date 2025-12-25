@@ -15,6 +15,7 @@ package logpuller
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -200,6 +201,27 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 			require.True(t, false, "must get an event")
 		}
 	}
+}
+
+func TestHandleResolvedEventsWithDuplicateTs(t *testing.T) {
+	handler := &subscriptionEventHandler{}
+	var advanced atomic.Uint64
+
+	subSpan := &subscribedSpan{
+		subID: SubscriptionID(88),
+		advanceResolvedTs: func(ts uint64) {
+			advanced.Store(ts)
+		},
+	}
+
+	events := []regionEvent{
+		{subID: subSpan.subID, resolvedTs: 15},
+		{subID: subSpan.subID, resolvedTs: 15},
+		{subID: subSpan.subID, resolvedTs: 10},
+	}
+
+	require.False(t, handler.Handle(subSpan, events...))
+	require.Equal(t, uint64(15), advanced.Load())
 }
 
 func TestHandleResolvedStateUpdateSpan(t *testing.T) {
