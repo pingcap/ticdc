@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
+	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/pingcap/tidb/pkg/store/mockstore/mockcopr"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -250,6 +251,84 @@ func TestSubscriptionWithFailedTiKV(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		require.True(t, false, "reconnection not succeed in 5 second")
 	}
+}
+
+func TestPushRegionEventToDSResolvedFastFailure(t *testing.T) {
+	client := &subscriptionClient{}
+	mockDS := &mockDynamicStream{}
+	client.ds = mockDS
+	client.cond = sync.NewCond(&client.mu)
+	client.paused.Store(true)
+
+	event := regionEvent{resolvedTs: 10}
+	ok := client.pushRegionEventToDS(SubscriptionID(1), event)
+	require.False(t, ok)
+	require.Equal(t, 0, mockDS.pushCount())
+}
+
+func TestPushRegionEventToDSDataWaitsForResume(t *testing.T) {
+	client := &subscriptionClient{}
+	mockDS := &mockDynamicStream{}
+	client.ds = mockDS
+	client.cond = sync.NewCond(&client.mu)
+	client.paused.Store(true)
+
+	done := make(chan struct{})
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		client.mu.Lock()
+		client.paused.Store(false)
+		client.cond.Broadcast()
+		client.mu.Unlock()
+		close(done)
+	}()
+
+	dataEvent := regionEvent{
+		entries: &cdcpb.Event_Entries_{
+			Entries: &cdcpb.Event_Entries{},
+		},
+		state: &regionFeedState{},
+	}
+	start := time.Now()
+	ok := client.pushRegionEventToDS(SubscriptionID(2), dataEvent)
+	elapsed := time.Since(start)
+	require.True(t, ok)
+	require.GreaterOrEqual(t, mockDS.pushCount(), 1)
+	require.GreaterOrEqual(t, elapsed, 50*time.Millisecond)
+	<-done
+}
+
+type mockDynamicStream struct {
+	mu        sync.Mutex
+	pushTotal int
+}
+
+func (m *mockDynamicStream) Start() {}
+func (m *mockDynamicStream) Close() {}
+func (m *mockDynamicStream) Push(path SubscriptionID, event regionEvent) {
+	m.mu.Lock()
+	m.pushTotal++
+	m.mu.Unlock()
+}
+func (m *mockDynamicStream) Wake(path SubscriptionID) {}
+func (m *mockDynamicStream) Feedback() <-chan dynstream.Feedback[int, SubscriptionID, *subscribedSpan] {
+	return nil
+}
+func (m *mockDynamicStream) AddPath(path SubscriptionID, dest *subscribedSpan, area ...dynstream.AreaSettings) error {
+	return nil
+}
+func (m *mockDynamicStream) RemovePath(path SubscriptionID) error { return nil }
+func (m *mockDynamicStream) Release(path SubscriptionID)          {}
+func (m *mockDynamicStream) SetAreaSettings(area int, settings dynstream.AreaSettings) {
+}
+func (m *mockDynamicStream) GetMetrics() dynstream.Metrics[int, SubscriptionID] {
+	return dynstream.Metrics[int, SubscriptionID]{}
+}
+
+func (m *mockDynamicStream) pushCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.pushTotal
 }
 
 // TestErrCacheDispatchWithFullChannelAndCanceledContext tests that when errCh is full

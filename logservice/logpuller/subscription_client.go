@@ -395,11 +395,14 @@ func (s *subscriptionClient) wakeSubscription(subID SubscriptionID) {
 	s.ds.Wake(subID)
 }
 
-func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
+func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) bool {
 	// fast path
 	if !s.paused.Load() {
 		s.ds.Push(subID, event)
-		return
+		return true
+	}
+	if isBatchResolvedEvent(event) {
+		return false
 	}
 	// slow path: wait until paused is false
 	s.mu.Lock()
@@ -408,6 +411,7 @@ func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event reg
 	}
 	s.mu.Unlock()
 	s.ds.Push(subID, event)
+	return true
 }
 
 func (s *subscriptionClient) handleDSFeedBack(ctx context.Context) error {
@@ -429,6 +433,10 @@ func (s *subscriptionClient) handleDSFeedBack(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+func isBatchResolvedEvent(event regionEvent) bool {
+	return event.batchResolvedTs != nil
 }
 
 func (s *subscriptionClient) Run(ctx context.Context) error {

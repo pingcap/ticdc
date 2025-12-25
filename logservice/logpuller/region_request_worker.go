@@ -59,6 +59,8 @@ type regionRequestWorker struct {
 
 		subscriptions map[SubscriptionID]regionFeedStates
 	}
+
+	pendingResolvedBatches map[SubscriptionID]*batchResolvedTsEvent
 }
 
 func newRegionRequestWorker(
@@ -76,6 +78,7 @@ func newRegionRequestWorker(
 		requestCache: newRequestCache(requestCacheSize),
 	}
 	worker.requestedRegions.subscriptions = make(map[SubscriptionID]regionFeedStates)
+	worker.pendingResolvedBatches = make(map[SubscriptionID]*batchResolvedTsEvent)
 
 	waitForPreFetching := func() error {
 		if worker.preFetchForConnecting != nil {
@@ -130,7 +133,7 @@ func newRegionRequestWorker(
 						state:  state,
 						worker: worker,
 					}
-					worker.client.pushRegionEventToDS(subID, regionEvent)
+					_ = worker.client.pushRegionEventToDS(subID, regionEvent)
 				}
 			}
 			// The store may fail forever, so we need try to re-schedule all pending regions.
@@ -270,7 +273,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 			default:
 				log.Panic("unknown event type", zap.Any("event", event))
 			}
-			s.client.pushRegionEventToDS(SubscriptionID(event.RequestId), regionEvent)
+			_ = s.client.pushRegionEventToDS(SubscriptionID(event.RequestId), regionEvent)
 		} else {
 			switch event.Event.(type) {
 			case *cdcpb.Event_Error:
@@ -301,7 +304,12 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 			zap.Any("regionIDs", resolvedTsEvent.Regions))
 		return
 	}
-	batch := newBatchResolvedTsEvent(subscriptionID, len(resolvedTsEvent.Regions))
+	batch := s.pendingResolvedBatches[subscriptionID]
+	if batch != nil {
+		delete(s.pendingResolvedBatches, subscriptionID)
+	} else {
+		batch = newBatchResolvedTsEvent(subscriptionID, len(resolvedTsEvent.Regions))
+	}
 	for _, regionID := range resolvedTsEvent.Regions {
 		if state := s.getRegionState(subscriptionID, regionID); state != nil {
 			batch.add(state, resolvedTsEvent.Ts)
@@ -316,10 +324,12 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 	if batch.len() == 0 {
 		return
 	}
-	s.client.pushRegionEventToDS(subscriptionID, regionEvent{
+	if !s.client.pushRegionEventToDS(subscriptionID, regionEvent{
 		worker:          s,
 		batchResolvedTs: batch,
-	})
+	}) {
+		s.pendingResolvedBatches[subscriptionID] = batch
+	}
 }
 
 // processRegionSendTask receives region requests from the channel and sends them to the remote store.
@@ -386,7 +396,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 					state:  state,
 					worker: s,
 				}
-				s.client.pushRegionEventToDS(subID, regionEvent)
+				_ = s.client.pushRegionEventToDS(subID, regionEvent)
 			}
 
 		} else if region.subscribedSpan.stopped.Load() {
