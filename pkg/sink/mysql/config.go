@@ -41,8 +41,8 @@ const (
 	txnModeOptimistic  = "optimistic"
 	txnModePessimistic = "pessimistic"
 
-	// DefaultWorkerCount is the default number of workers for TiDB downstream.
-	DefaultWorkerCount = 64
+	// DefaultTiDBWorkerCount is the default number of workers for TiDB downstream.
+	DefaultTiDBWorkerCount = 64
 	// DefaultMySQLWorkerCount is the default number of workers for MySQL downstream.
 	DefaultMySQLWorkerCount = 16
 	// DefaultMaxTxnRow is the default max number of rows in a transaction.
@@ -152,7 +152,7 @@ type Config struct {
 // New returns the default mysql backend config.
 func New() *Config {
 	return &Config{
-		WorkerCount:            DefaultWorkerCount,
+		WorkerCount:            DefaultTiDBWorkerCount,
 		workerCountSpecified:   false,
 		MaxTxnRow:              DefaultMaxTxnRow,
 		MaxMultiUpdateRowCount: defaultMaxMultiUpdateRowCount,
@@ -629,7 +629,7 @@ func (c *Config) setWorkerCountByDownstream() {
 		return
 	}
 	if c.IsTiDB {
-		c.WorkerCount = DefaultWorkerCount
+		c.WorkerCount = DefaultTiDBWorkerCount
 	} else {
 		c.WorkerCount = DefaultMySQLWorkerCount
 	}

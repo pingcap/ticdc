@@ -223,7 +223,7 @@ func TestDefaultWorkerCountByDownstream(t *testing.T) {
 	cfg := New()
 	cfg.IsTiDB = true
 	cfg.setWorkerCountByDownstream()
-	require.Equal(t, DefaultWorkerCount, cfg.WorkerCount)
+	require.Equal(t, DefaultTiDBWorkerCount, cfg.WorkerCount)
 
 	cfg = New()
 	cfg.IsTiDB = false
