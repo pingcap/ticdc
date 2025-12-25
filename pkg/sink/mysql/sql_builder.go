@@ -256,7 +256,7 @@ func getArgs(row *chunk.Row, tableInfo *common.TableInfo) []interface{} {
 func getArgsWithGeneratedColumn(row *chunk.Row, tableInfo *common.TableInfo) []interface{} {
 	args := make([]interface{}, 0, len(tableInfo.GetColumns()))
 	for i, col := range tableInfo.GetColumns() {
-		if col == nil || col.IsGenerated() {
+		if col == nil {
 			continue
 		}
 		v := common.ExtractColVal(row, col, i)

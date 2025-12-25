@@ -180,7 +180,7 @@ func (r *RowChange) TargetTableID() string {
 func (r *RowChange) ColumnCount() int {
 	c := 0
 	for _, col := range r.sourceTableInfo.GetColumns() {
-		if !col.Hidden && !col.IsVirtualGenerated() {
+		if !col.Hidden {
 			c++
 		}
 	}
@@ -230,9 +230,11 @@ func (r *RowChange) whereColumnsAndValues() ([]string, []interface{}) {
 	}
 
 	columnNames := make([]string, 0, len(columns))
-	for _, column := range columns {
+	columnValues := make([]any, 0, len(columns))
+	for i, column := range columns {
 		if !column.IsGenerated() {
 			columnNames = append(columnNames, column.Name.O)
+			columnValues = append(columnValues, values[i])
 		}
 	}
 
@@ -245,11 +247,11 @@ func (r *RowChange) whereColumnsAndValues() ([]string, []interface{}) {
 				zap.String("Columns", fmt.Sprintf("%v", columnNames)))
 		}
 	})
-	if len(columnNames) != len(values) {
-		log.Panic("columnNames are not equal values", zap.Int("len(columnNames)", len(columnNames)), zap.Int("len(values)", len(values)),
-			zap.Any("columnNames", columnNames), zap.Any("values", values), zap.Any("table", r.targetTable))
+	if len(columnNames) != len(columnValues) {
+		log.Panic("columnNames are not equal columnValues", zap.Int("len(columnNames)", len(columnNames)), zap.Int("len(values)", len(columnValues)),
+			zap.Any("columnNames", columnNames), zap.Any("columnValues", columnValues), zap.Any("table", r.targetTable))
 	}
-	return columnNames, values
+	return columnNames, columnValues
 }
 
 // genWhere generates WHERE clause for UPDATE and DELETE to identify the row.
