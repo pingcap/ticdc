@@ -630,7 +630,7 @@ func (c *Config) setWorkerCountByDownstream() {
 	}
 	if c.IsTiDB {
 		c.WorkerCount = DefaultWorkerCount
-		return
+	} else {
+		c.WorkerCount = DefaultMySQLWorkerCount
 	}
-	c.WorkerCount = DefaultMySQLWorkerCount
 }
