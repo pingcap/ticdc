@@ -336,7 +336,7 @@ func GenerateDSN(ctx context.Context, cfg *Config) (string, error) {
 
 	cfg.IsTiDB = CheckIsTiDB(ctx, testDB)
 	cfg.setWorkerCountByDownstream()
-	log.Info("set worker count for mysql sink", zap.Int("worker count", cfg.WorkerCount))
+	log.Info("set worker count for mysql sink", zap.Int("workerCount", cfg.WorkerCount))
 
 	if cfg.IsTiDB {
 		// check if tidb_cdc_write_source is supported
