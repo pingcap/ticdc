@@ -273,10 +273,10 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 	//        change the component status of the merged dispatcher to Initializing
 	//        set dispatcher into dispatcherMap and related field
 	//        notify eventCollector to update the merged dispatcher startTs
-	finalStartTs, finalSkipSyncpointAtStartTs, finalSkipDMLAsStartTs := resolveMergedDispatcherStartTs(t, minCheckpointTs, pendingStates)
-	t.mergedDispatcher.SetStartTs(finalStartTs)
-	t.mergedDispatcher.SetSkipSyncpointAtStartTs(finalSkipSyncpointAtStartTs)
-	t.mergedDispatcher.SetSkipDMLAsStartTs(finalSkipDMLAsStartTs)
+	startTs, skipSyncpointAtStartTs, skipDMLAsStartTs := resolveMergedDispatcherStartTs(t, minCheckpointTs, pendingStates)
+	t.mergedDispatcher.SetStartTs(startTs)
+	t.mergedDispatcher.SetSkipSyncpointAtStartTs(skipSyncpointAtStartTs)
+	t.mergedDispatcher.SetSkipDMLAsStartTs(skipDMLAsStartTs)
 
 	t.mergedDispatcher.SetCurrentPDTs(t.manager.pdClock.CurrentTS())
 	t.mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_Initializing)
@@ -286,7 +286,7 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 		zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()),
 		zap.Int64("mode", t.mergedDispatcher.GetMode()),
 		zap.Any("tableSpan", common.FormatTableSpan(t.mergedDispatcher.GetTableSpan())),
-		zap.Uint64("startTs", finalStartTs),
+		zap.Uint64("startTs", startTs),
 	)
 
 	// Step3: cancel the merge task
