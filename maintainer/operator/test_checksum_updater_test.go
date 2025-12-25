@@ -18,8 +18,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 )
 
-// DispatcherSetChecksumUpdater updates maintainer expected dispatcher set for a capture.
-// Implementations must be safe for concurrent calls from operator executions.
-type DispatcherSetChecksumUpdater interface {
-	ApplyDelta(capture node.ID, add []common.DispatcherID, remove []common.DispatcherID)
-}
+type testChecksumUpdater struct{}
+
+func (testChecksumUpdater) ApplyDelta(node.ID, []common.DispatcherID, []common.DispatcherID) {}

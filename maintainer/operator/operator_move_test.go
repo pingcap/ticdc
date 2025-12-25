@@ -88,7 +88,7 @@ func setupTestEnvironment(t *testing.T) (*span.Controller, common.ChangeFeedID, 
 func TestMoveOperator_DestNodeRemovedBeforeOriginStopped(t *testing.T) {
 	spanController, _, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
 
-	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB, nil)
+	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB, testChecksumUpdater{})
 	require.NotNil(t, op)
 
 	op.Start()
@@ -131,7 +131,7 @@ func TestMoveOperator_DestNodeRemovedBeforeOriginStopped(t *testing.T) {
 func TestMoveOperator_DestNodeRemovedAfterOriginStopped(t *testing.T) {
 	spanController, _, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
 
-	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB, nil)
+	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB, testChecksumUpdater{})
 	require.NotNil(t, op)
 
 	op.Start()
@@ -161,7 +161,7 @@ func TestMoveOperator_DestNodeRemovedAfterOriginStopped(t *testing.T) {
 func TestMoveOperator_OriginNodeRemovedBeforeOriginStopped(t *testing.T) {
 	spanController, _, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
 
-	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB, nil)
+	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB, testChecksumUpdater{})
 	require.NotNil(t, op)
 
 	op.Start()
@@ -204,7 +204,7 @@ func TestMoveOperator_OriginNodeRemovedBeforeOriginStopped(t *testing.T) {
 func TestMoveOperator_OriginNodeRemovedAfterOriginStopped(t *testing.T) {
 	spanController, _, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
 
-	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB, nil)
+	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB, testChecksumUpdater{})
 	require.NotNil(t, op)
 
 	op.Start()
@@ -253,8 +253,8 @@ func TestMoveOperator_BothNodesRemovedBeforeStartDoesNotLeaveSchedulingWithoutNo
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	setAliveNodes(nodeManager, map[node.ID]*node.Info{})
 
-	oc := NewOperatorController(changefeedID, spanController, 1, common.DefaultMode)
-	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB, nil)
+	oc := NewOperatorController(changefeedID, spanController, 1, common.DefaultMode, nil)
+	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB, testChecksumUpdater{})
 	require.True(t, oc.AddOperator(op))
 
 	require.Equal(t, 1, spanController.GetAbsentSize())
@@ -270,7 +270,7 @@ func TestMoveOperator_BothNodesRemovedBeforeStartDoesNotLeaveSchedulingWithoutNo
 func TestMoveOperator_DestThenOriginRemovedAbortsToAbsent(t *testing.T) {
 	spanController, _, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
 
-	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB, nil)
+	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB, testChecksumUpdater{})
 	require.NotNil(t, op)
 
 	op.Start()
@@ -298,7 +298,7 @@ func TestMoveOperator_TaskRemovedByDDL(t *testing.T) {
 	spanController, _, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
 	spanController.AddReplicatingSpan(replicaSet)
 
-	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB, nil)
+	op := NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB, testChecksumUpdater{})
 	require.NotNil(t, op)
 
 	op.Start()

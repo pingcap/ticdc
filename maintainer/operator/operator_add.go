@@ -132,14 +132,11 @@ func (m *AddDispatcherOperator) Start() {
 func (m *AddDispatcherOperator) PostFinish() {
 	if !m.removed.Load() {
 		m.spanController.MarkSpanReplicating(m.replicaSet)
-		if m.checksumUpdater != nil {
-			m.checksumUpdater.ApplyDelta(
-				m.replicaSet.GetMode(),
-				m.dest,
-				[]common.DispatcherID{m.replicaSet.ID},
-				nil,
-			)
-		}
+		m.checksumUpdater.ApplyDelta(
+			m.dest,
+			[]common.DispatcherID{m.replicaSet.ID},
+			nil,
+		)
 	} else {
 		// Only mark span absent if it still exists in spanController. When a DDL removes the task,
 		// spanController may have already deleted it. Marking an already removed span absent would

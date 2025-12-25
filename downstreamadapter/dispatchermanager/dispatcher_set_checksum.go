@@ -23,50 +23,14 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/set_checksum"
 	"go.uber.org/zap"
 )
-
-type dispatcherSetFingerprint struct {
-	count   uint64
-	xorHigh uint64
-	xorLow  uint64
-	sumHigh uint64
-	sumLow  uint64
-}
-
-func dispatcherSetFingerprintFromPB(pb *heartbeatpb.DispatcherSetChecksumFingerprint) dispatcherSetFingerprint {
-	if pb == nil {
-		return dispatcherSetFingerprint{}
-	}
-	return dispatcherSetFingerprint{
-		count:   pb.Count,
-		xorHigh: pb.XorHigh,
-		xorLow:  pb.XorLow,
-		sumHigh: pb.SumHigh,
-		sumLow:  pb.SumLow,
-	}
-}
-
-func (f *dispatcherSetFingerprint) add(id common.DispatcherID) {
-	f.count++
-	f.xorHigh ^= id.High
-	f.xorLow ^= id.Low
-	f.sumHigh += id.High
-	f.sumLow += id.Low
-}
-
-func (f dispatcherSetFingerprint) equal(other dispatcherSetFingerprint) bool {
-	return f.count == other.count &&
-		f.xorHigh == other.xorHigh &&
-		f.xorLow == other.xorLow &&
-		f.sumHigh == other.sumHigh &&
-		f.sumLow == other.sumLow
-}
 
 type dispatcherSetChecksumExpected struct {
 	epoch       uint64
 	seq         uint64
-	fingerprint dispatcherSetFingerprint
+	checksum    set_checksum.Checksum
 	initialized bool
 }
 
@@ -93,7 +57,7 @@ func (e *DispatcherManager) ApplyDispatcherSetChecksumUpdate(req *heartbeatpb.Di
 	if req == nil {
 		return
 	}
-	fingerprint := dispatcherSetFingerprintFromPB(req.Fingerprint)
+	checksum := set_checksum.FromPB(req.Checksum)
 
 	e.dispatcherSetChecksum.mu.Lock()
 	defer e.dispatcherSetChecksum.mu.Unlock()
@@ -109,7 +73,7 @@ func (e *DispatcherManager) ApplyDispatcherSetChecksumUpdate(req *heartbeatpb.Di
 
 	expected.epoch = req.Epoch
 	expected.seq = req.Seq
-	expected.fingerprint = fingerprint
+	expected.checksum = checksum
 	expected.initialized = true
 }
 
@@ -134,30 +98,30 @@ func shouldIncludeDispatcherInChecksum(state heartbeatpb.ComponentState) bool {
 	}
 }
 
-func (e *DispatcherManager) computeDispatcherSetFingerprint(mode int64) dispatcherSetFingerprint {
-	var fp dispatcherSetFingerprint
+func (e *DispatcherManager) computeDispatcherSetChecksum(mode int64) set_checksum.Checksum {
+	var checksum set_checksum.Checksum
 	if common.IsRedoMode(mode) {
 		e.redoDispatcherMap.ForEach(func(id common.DispatcherID, d *dispatcher.RedoDispatcher) {
 			if !shouldIncludeDispatcherInChecksum(d.GetComponentStatus()) {
 				return
 			}
-			fp.add(id)
+			checksum.Add(id)
 		})
-		return fp
+		return checksum
 	}
 	e.dispatcherMap.ForEach(func(id common.DispatcherID, d *dispatcher.EventDispatcher) {
 		if !shouldIncludeDispatcherInChecksum(d.GetComponentStatus()) {
 			return
 		}
-		fp.add(id)
+		checksum.Add(id)
 	})
-	return fp
+	return checksum
 }
 
 func (e *DispatcherManager) applyChecksumStateToHeartbeat(
 	msg *heartbeatpb.HeartBeatRequest,
-	actualDefault dispatcherSetFingerprint,
-	actualRedo dispatcherSetFingerprint,
+	actualDefault set_checksum.Checksum,
+	actualRedo set_checksum.Checksum,
 ) {
 	if msg == nil {
 		return
@@ -204,7 +168,7 @@ func (e *DispatcherManager) incDispatcherSetChecksumNotOKTotal(mode int64, state
 	).Inc()
 }
 
-func (e *DispatcherManager) verifyDispatcherSetChecksum(mode int64, actual dispatcherSetFingerprint) heartbeatpb.ChecksumState {
+func (e *DispatcherManager) verifyDispatcherSetChecksum(mode int64, actual set_checksum.Checksum) heartbeatpb.ChecksumState {
 	now := time.Now()
 	capture := appcontext.GetID()
 	modeLabel := common.StringMode(mode)
@@ -212,18 +176,18 @@ func (e *DispatcherManager) verifyDispatcherSetChecksum(mode int64, actual dispa
 	changefeed := e.changefeedID.Name()
 
 	var (
-		state           heartbeatpb.ChecksumState
-		expectedSeq     uint64
-		expectedInit    bool
-		expectedFP      dispatcherSetFingerprint
-		oldState        heartbeatpb.ChecksumState
-		nonOKSince      time.Time
-		needGaugeUpdate bool
-		logRecovered    bool
-		logNotOKWarn    bool
-		logNotOKError   bool
-		recoveredFor    time.Duration
-		notOKFor        time.Duration
+		state            heartbeatpb.ChecksumState
+		expectedSeq      uint64
+		expectedInit     bool
+		expectedChecksum set_checksum.Checksum
+		oldState         heartbeatpb.ChecksumState
+		nonOKSince       time.Time
+		needGaugeUpdate  bool
+		logRecovered     bool
+		logNotOKWarn     bool
+		logNotOKError    bool
+		recoveredFor     time.Duration
+		notOKFor         time.Duration
 	)
 
 	e.dispatcherSetChecksum.mu.Lock()
@@ -236,11 +200,11 @@ func (e *DispatcherManager) verifyDispatcherSetChecksum(mode int64, actual dispa
 
 	expectedSeq = expected.seq
 	expectedInit = expected.initialized
-	expectedFP = expected.fingerprint
+	expectedChecksum = expected.checksum
 
 	if !expected.initialized {
 		state = heartbeatpb.ChecksumState_UNINITIALIZED
-	} else if !actual.equal(expected.fingerprint) {
+	} else if !actual.Equal(expected.checksum) {
 		state = heartbeatpb.ChecksumState_MISMATCH
 	} else {
 		state = heartbeatpb.ChecksumState_OK
@@ -329,16 +293,16 @@ func (e *DispatcherManager) verifyDispatcherSetChecksum(mode int64, actual dispa
 			zap.Duration("duration", notOKFor),
 			zap.Uint64("expectedSeq", expectedSeq),
 			zap.Bool("expectedInitialized", expectedInit),
-			zap.Uint64("actualCount", actual.count),
-			zap.Uint64("actualXorHigh", actual.xorHigh),
-			zap.Uint64("actualXorLow", actual.xorLow),
-			zap.Uint64("actualSumHigh", actual.sumHigh),
-			zap.Uint64("actualSumLow", actual.sumLow),
-			zap.Uint64("expectedCount", expectedFP.count),
-			zap.Uint64("expectedXorHigh", expectedFP.xorHigh),
-			zap.Uint64("expectedXorLow", expectedFP.xorLow),
-			zap.Uint64("expectedSumHigh", expectedFP.sumHigh),
-			zap.Uint64("expectedSumLow", expectedFP.sumLow),
+			zap.Uint64("actualCount", actual.Count),
+			zap.Uint64("actualXorHigh", actual.XorHigh),
+			zap.Uint64("actualXorLow", actual.XorLow),
+			zap.Uint64("actualSumHigh", actual.SumHigh),
+			zap.Uint64("actualSumLow", actual.SumLow),
+			zap.Uint64("expectedCount", expectedChecksum.Count),
+			zap.Uint64("expectedXorHigh", expectedChecksum.XorHigh),
+			zap.Uint64("expectedXorLow", expectedChecksum.XorLow),
+			zap.Uint64("expectedSumHigh", expectedChecksum.SumHigh),
+			zap.Uint64("expectedSumLow", expectedChecksum.SumLow),
 			zap.String("prevState", oldState.String()),
 		}
 		if level == "error" {

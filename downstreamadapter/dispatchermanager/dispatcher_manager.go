@@ -38,6 +38,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/set_checksum"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus"
@@ -655,10 +656,10 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 			message.Watermark = newWatermark
 			message.RedoWatermark = newRedoWatermark
 
-			actualDefault := e.computeDispatcherSetFingerprint(common.DefaultMode)
-			actualRedo := dispatcherSetFingerprint{}
+			actualDefault := e.computeDispatcherSetChecksum(common.DefaultMode)
+			actualRedo := set_checksum.Checksum{}
 			if e.RedoEnable {
-				actualRedo = e.computeDispatcherSetFingerprint(common.RedoMode)
+				actualRedo = e.computeDispatcherSetChecksum(common.RedoMode)
 			}
 			e.applyChecksumStateToHeartbeat(&message, actualDefault, actualRedo)
 
@@ -701,14 +702,14 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 
 	toCleanMap := make([]*cleanMap, 0)
 	dispatcherCount := 0
-	actualDefault := dispatcherSetFingerprint{}
-	actualRedo := dispatcherSetFingerprint{}
+	actualDefault := set_checksum.Checksum{}
+	actualRedo := set_checksum.Checksum{}
 
 	if e.RedoEnable {
 		redoSeq := e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.RedoDispatcher) {
 			dispatcherCount++
 			if shouldIncludeDispatcherInChecksum(dispatcherItem.GetComponentStatus()) {
-				actualRedo.add(id)
+				actualRedo.Add(id)
 			}
 			status, cleanMap, watermark := getDispatcherStatus(id, dispatcherItem, needCompleteStatus)
 			if status != nil {
@@ -736,7 +737,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	seq := e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.EventDispatcher) {
 		dispatcherCount++
 		if shouldIncludeDispatcherInChecksum(dispatcherItem.GetComponentStatus()) {
-			actualDefault.add(id)
+			actualDefault.Add(id)
 		}
 		status, cleanMap, watermark := getDispatcherStatus(id, dispatcherItem, needCompleteStatus)
 		if status != nil {

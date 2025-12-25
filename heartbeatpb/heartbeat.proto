@@ -101,7 +101,7 @@ message RedoResolvedTsForwardMessage {
     uint64 resolvedTs = 2;
 }
 
-message DispatcherSetChecksumFingerprint {
+message DispatcherSetChecksum {
     uint64 count = 1;
     uint64 xorHigh = 2;
     uint64 xorLow = 3;
@@ -114,7 +114,7 @@ message DispatcherSetChecksumUpdate {
     uint64 epoch = 2;
     int64 mode = 3;
     uint64 seq = 4;
-    DispatcherSetChecksumFingerprint fingerprint = 5;
+    DispatcherSetChecksum checksum = 5;
 }
 
 message DispatcherSetChecksumAck {

@@ -69,30 +69,24 @@ func NewOperatorController(
 	spanController *span.Controller,
 	batchSize int,
 	mode int64,
+	checksumUpdater DispatcherSetChecksumUpdater,
 ) *Controller {
 	return &Controller{
-		changefeedID:   changefeedID,
-		batchSize:      batchSize,
-		operators:      make(map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]),
-		runningQueue:   make(operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0),
-		role:           "maintainer",
-		spanController: spanController,
-		nodeManager:    appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
-		messageCenter:  appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
-		mode:           mode,
-		lastWarnTime:   make(map[common.DispatcherID]time.Time),
+		changefeedID:    changefeedID,
+		batchSize:       batchSize,
+		operators:       make(map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]),
+		runningQueue:    make(operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0),
+		role:            "maintainer",
+		spanController:  spanController,
+		nodeManager:     appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
+		messageCenter:   appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
+		mode:            mode,
+		lastWarnTime:    make(map[common.DispatcherID]time.Time),
+		checksumUpdater: checksumUpdater,
 	}
 }
 
-func (oc *Controller) SetChecksumUpdater(updater DispatcherSetChecksumUpdater) {
-	oc.mu.Lock()
-	defer oc.mu.Unlock()
-	oc.checksumUpdater = updater
-}
-
 func (oc *Controller) GetChecksumUpdater() DispatcherSetChecksumUpdater {
-	oc.mu.RLock()
-	defer oc.mu.RUnlock()
 	return oc.checksumUpdater
 }
 

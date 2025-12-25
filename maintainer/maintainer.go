@@ -74,7 +74,8 @@ type Maintainer struct {
 
 	mc messaging.MessageCenter
 
-	dispatcherSetChecksum *dispatcherSetChecksumManager
+	defaultChecksumManager *nodeSetChecksumManager
+	redoChecksumManager    *nodeSetChecksumManager
 
 	watermark struct {
 		mu sync.RWMutex
@@ -196,13 +197,20 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		ID:   keyspaceID,
 		Name: keyspaceName,
 	}
+
+	defaultChecksumManager := newNodeSetChecksumManager(cfID, info.Epoch, common.DefaultMode, mc)
+	var redoChecksumManager *nodeSetChecksumManager
+	if enableRedo {
+		redoChecksumManager = newNodeSetChecksumManager(cfID, info.Epoch, common.RedoMode, mc)
+	}
+	controller := NewController(cfID, checkpointTs, taskScheduler,
+		info.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), refresher, keyspaceMeta, enableRedo, defaultChecksumManager, redoChecksumManager)
 	m := &Maintainer{
-		changefeedID:      cfID,
-		selfNode:          selfNode,
-		eventCh:           chann.NewAutoDrainChann[*Event](),
-		startCheckpointTs: checkpointTs,
-		controller: NewController(cfID, checkpointTs, taskScheduler,
-			info.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), refresher, keyspaceMeta, enableRedo),
+		changefeedID:               cfID,
+		selfNode:                   selfNode,
+		eventCh:                    chann.NewAutoDrainChann[*Event](),
+		startCheckpointTs:          checkpointTs,
+		controller:                 controller,
 		mc:                         mc,
 		removed:                    atomic.NewBool(false),
 		nodeManager:                nodeManager,
@@ -216,6 +224,8 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		checksumStateByCapture:     newChecksumStateCaptureMap(),
 		redoTsByCapture:            newWatermarkCaptureMap(),
 		redoChecksumStateByCapture: newChecksumStateCaptureMap(),
+		defaultChecksumManager:     defaultChecksumManager,
+		redoChecksumManager:        redoChecksumManager,
 		newChangefeed:              newChangefeed,
 		enableRedo:                 enableRedo,
 
@@ -232,12 +242,6 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		redoScheduledTaskGauge: metrics.ScheduleTaskGauge.WithLabelValues(keyspaceName, name, "redo"),
 		redoSpanCountGauge:     metrics.SpanCountGauge.WithLabelValues(keyspaceName, name, "redo"),
 		redoTableCountGauge:    metrics.TableCountGauge.WithLabelValues(keyspaceName, name, "redo"),
-	}
-
-	m.dispatcherSetChecksum = newDispatcherSetChecksumManager(cfID, info.Epoch, enableRedo, mc)
-	m.controller.operatorController.SetChecksumUpdater(m.dispatcherSetChecksum)
-	if m.enableRedo && m.controller.redoOperatorController != nil {
-		m.controller.redoOperatorController.SetChecksumUpdater(m.dispatcherSetChecksum)
 	}
 
 	m.nodeChanged.changed = false
@@ -495,8 +499,12 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 		m.onRedoPersisted(req)
 	case messaging.TypeDispatcherSetChecksumAck:
 		req := msg.Message[0].(*heartbeatpb.DispatcherSetChecksumAck)
-		if m.dispatcherSetChecksum != nil {
-			m.dispatcherSetChecksum.HandleAck(msg.From, req)
+		if common.IsRedoMode(req.Mode) {
+			if m.redoChecksumManager != nil {
+				m.redoChecksumManager.HandleAck(msg.From, req)
+			}
+		} else {
+			m.defaultChecksumManager.HandleAck(msg.From, req)
 		}
 	default:
 		log.Warn("unknown message type, ignore it",
@@ -564,8 +572,9 @@ func (m *Maintainer) onNodeChanged() {
 			m.controller.RemoveNode(id)
 		}
 	}
-	if m.dispatcherSetChecksum != nil {
-		m.dispatcherSetChecksum.RemoveNodes(removedNodes)
+	m.defaultChecksumManager.RemoveNodes(removedNodes)
+	if m.redoChecksumManager != nil {
+		m.redoChecksumManager.RemoveNodes(removedNodes)
 	}
 	log.Info("maintainer node changed", zap.Stringer("changefeedID", m.changefeedID),
 		zap.Int("new", len(newNodes)),
@@ -820,8 +829,9 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 	// When checksum is not OK, we must not advance checkpoint using stale node-level watermarks.
 	m.checksumStateByCapture.Set(msg.From, req.ChecksumState)
 	m.redoChecksumStateByCapture.Set(msg.From, req.RedoChecksumState)
-	if m.dispatcherSetChecksum != nil {
-		m.dispatcherSetChecksum.ObserveHeartbeat(msg.From, req)
+	m.defaultChecksumManager.ObserveHeartbeat(msg.From, req.ChecksumState)
+	if m.redoChecksumManager != nil {
+		m.redoChecksumManager.ObserveHeartbeat(msg.From, req.RedoChecksumState)
 	}
 
 	// ATOMIC CHECKPOINT UPDATE: Part 1 of race condition fix
@@ -994,30 +1004,31 @@ func (m *Maintainer) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.Maintai
 	m.postBootstrapMsg = msg
 	m.sendPostBootstrapRequest()
 
-	if m.dispatcherSetChecksum != nil {
-		nodes := make([]node.ID, 0, len(cachedResp))
-		for id := range cachedResp {
-			nodes = append(nodes, id)
-		}
+	nodes := make([]node.ID, 0, len(cachedResp))
+	for id := range cachedResp {
+		nodes = append(nodes, id)
+	}
 
-		defaultExpected := make(map[node.ID][]common.DispatcherID, len(nodes))
-		defaultExpected[m.selfNode.ID] = append(defaultExpected[m.selfNode.ID], m.ddlSpan.ID)
-		for _, span := range m.controller.spanController.GetReplicating() {
+	defaultExpected := make(map[node.ID][]common.DispatcherID, len(nodes))
+	defaultExpected[m.selfNode.ID] = append(defaultExpected[m.selfNode.ID], m.ddlSpan.ID)
+	for _, span := range m.controller.spanController.GetReplicating() {
+		capture := span.GetNodeID()
+		defaultExpected[capture] = append(defaultExpected[capture], span.ID)
+	}
+
+	var redoExpected map[node.ID][]common.DispatcherID
+	if m.enableRedo {
+		redoExpected = make(map[node.ID][]common.DispatcherID, len(nodes))
+		redoExpected[m.selfNode.ID] = append(redoExpected[m.selfNode.ID], m.redoDDLSpan.ID)
+		for _, span := range m.controller.redoSpanController.GetReplicating() {
 			capture := span.GetNodeID()
-			defaultExpected[capture] = append(defaultExpected[capture], span.ID)
+			redoExpected[capture] = append(redoExpected[capture], span.ID)
 		}
+	}
 
-		var redoExpected map[node.ID][]common.DispatcherID
-		if m.enableRedo {
-			redoExpected = make(map[node.ID][]common.DispatcherID, len(nodes))
-			redoExpected[m.selfNode.ID] = append(redoExpected[m.selfNode.ID], m.redoDDLSpan.ID)
-			for _, span := range m.controller.redoSpanController.GetReplicating() {
-				capture := span.GetNodeID()
-				redoExpected[capture] = append(redoExpected[capture], span.ID)
-			}
-		}
-
-		m.dispatcherSetChecksum.ResetAndSendFull(m.info.Epoch, nodes, defaultExpected, redoExpected)
+	m.defaultChecksumManager.ResetAndSendFull(m.info.Epoch, nodes, defaultExpected)
+	if m.redoChecksumManager != nil {
+		m.redoChecksumManager.ResetAndSendFull(m.info.Epoch, nodes, redoExpected)
 	}
 	// set status changed to true, trigger the maintainer manager to send heartbeat to coordinator
 	// to report the this changefeed's status
@@ -1061,8 +1072,11 @@ func (m *Maintainer) handleResendMessage() {
 		// resend barrier ack messages
 		m.sendMessages(m.controller.barrier.Resend())
 	}
-	if m.dispatcherSetChecksum != nil {
-		m.dispatcherSetChecksum.ResendPending(time.Second)
+	m.defaultChecksumManager.FlushDirty()
+	m.defaultChecksumManager.ResendPending(time.Second)
+	if m.redoChecksumManager != nil {
+		m.redoChecksumManager.FlushDirty()
+		m.redoChecksumManager.ResendPending(time.Second)
 	}
 }
 

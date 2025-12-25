@@ -107,14 +107,11 @@ func (m *removeDispatcherOperator) Start() {
 }
 
 func (m *removeDispatcherOperator) PostFinish() {
-	if m.checksumUpdater != nil {
-		m.checksumUpdater.ApplyDelta(
-			m.replicaSet.GetMode(),
-			m.nodeID,
-			nil,
-			[]common.DispatcherID{m.replicaSet.ID},
-		)
-	}
+	m.checksumUpdater.ApplyDelta(
+		m.nodeID,
+		nil,
+		[]common.DispatcherID{m.replicaSet.ID},
+	)
 	log.Info("remove dispatcher operator finished",
 		zap.String("replicaSet", m.replicaSet.ID.String()),
 		zap.String("changefeed", m.replicaSet.ChangefeedID.String()))

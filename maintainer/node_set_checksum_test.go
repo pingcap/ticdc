@@ -78,6 +78,8 @@ func TestCalculateNewCheckpointTsGatedByChecksumState(t *testing.T) {
 		refresher,
 		common.KeyspaceMeta{ID: common.DefaultKeyspaceID, Name: cfID.Keyspace()},
 		false,
+		nil,
+		nil,
 	)
 	controller.barrier = NewBarrier(controller.spanController, controller.operatorController, false, nil, common.DefaultMode)
 
@@ -149,6 +151,8 @@ func TestAdvanceRedoMetaTsOnceGatedByChecksumState(t *testing.T) {
 		refresher,
 		common.KeyspaceMeta{ID: common.DefaultKeyspaceID, Name: cfID.Keyspace()},
 		true,
+		nil,
+		nil,
 	)
 	controller.redoBarrier = NewBarrier(controller.redoSpanController, controller.redoOperatorController, false, nil, common.RedoMode)
 
@@ -209,10 +213,10 @@ func TestAdvanceRedoMetaTsOnceGatedByChecksumState(t *testing.T) {
 
 func TestDispatcherSetChecksumResendAndAck(t *testing.T) {
 	mc := &recordingMessageCenter{}
-	mgr := newDispatcherSetChecksumManager(
+	mgr := newNodeSetChecksumManager(
 		common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme),
 		1,
-		false,
+		common.DefaultMode,
 		mc,
 	)
 
@@ -220,17 +224,21 @@ func TestDispatcherSetChecksumResendAndAck(t *testing.T) {
 	id1 := common.NewDispatcherID()
 	id2 := common.NewDispatcherID()
 
-	mgr.ApplyDelta(common.DefaultMode, capture, []common.DispatcherID{id1}, nil)
-	require.Len(t, mc.commands(), 1)
+	mgr.ApplyDelta(capture, []common.DispatcherID{id1}, nil)
+	mgr.ApplyDelta(capture, []common.DispatcherID{id2}, nil)
+	require.Empty(t, mc.commands())
 
-	mgr.ApplyDelta(common.DefaultMode, capture, []common.DispatcherID{id2}, nil)
-	require.Len(t, mc.commands(), 2)
-
-	mc.reset()
-	mgr.ResendPending(0)
+	mgr.FlushDirty()
 	cmds := mc.commands()
 	require.Len(t, cmds, 1)
 	update := cmds[0].Message[0].(*heartbeatpb.DispatcherSetChecksumUpdate)
+	require.Equal(t, uint64(2), update.Seq)
+
+	mc.reset()
+	mgr.ResendPending(0)
+	cmds = mc.commands()
+	require.Len(t, cmds, 1)
+	update = cmds[0].Message[0].(*heartbeatpb.DispatcherSetChecksumUpdate)
 	require.Equal(t, uint64(2), update.Seq)
 
 	mgr.HandleAck(capture, &heartbeatpb.DispatcherSetChecksumAck{

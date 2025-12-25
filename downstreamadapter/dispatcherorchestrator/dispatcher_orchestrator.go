@@ -239,14 +239,12 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		}
 	}
 
-	if manager.GetMaintainerID() != from {
-		manager.SetMaintainerID(from)
+	maintainerChanged, epochChanged := manager.UpdateMaintainer(from, cfConfig.Epoch)
+	if maintainerChanged {
 		log.Info("maintainer changed",
 			zap.String("changefeed", cfId.Name()), zap.String("maintainer", from.String()))
 	}
-
-	if manager.GetMaintainerEpoch() != cfConfig.Epoch {
-		manager.SetMaintainerEpoch(cfConfig.Epoch)
+	if epochChanged {
 		log.Info("maintainer epoch updated",
 			zap.Stringer("changefeedID", cfId),
 			zap.Uint64("epoch", cfConfig.Epoch))

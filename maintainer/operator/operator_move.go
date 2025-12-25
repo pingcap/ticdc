@@ -96,14 +96,11 @@ func (m *MoveDispatcherOperator) finishAsAbsent() {
 		zap.String("origin", m.origin.String()),
 		zap.String("dest", m.dest.String()))
 	m.spanController.MarkSpanAbsent(m.replicaSet)
-	if m.checksumUpdater != nil {
-		m.checksumUpdater.ApplyDelta(
-			m.replicaSet.GetMode(),
-			m.origin,
-			nil,
-			[]common.DispatcherID{m.replicaSet.ID},
-		)
-	}
+	m.checksumUpdater.ApplyDelta(
+		m.origin,
+		nil,
+		[]common.DispatcherID{m.replicaSet.ID},
+	)
 	m.state = moveStateDoneNoPostFinish
 }
 
@@ -282,14 +279,11 @@ func (m *MoveDispatcherOperator) PostFinish() {
 		zap.Stringer("changefeedID", m.replicaSet.ChangefeedID),
 		zap.String("dispatcherID", m.replicaSet.ID.String()))
 	m.spanController.MarkSpanReplicating(m.replicaSet)
-	if m.checksumUpdater != nil {
-		m.checksumUpdater.ApplyDelta(
-			m.replicaSet.GetMode(),
-			m.dest,
-			[]common.DispatcherID{m.replicaSet.ID},
-			nil,
-		)
-	}
+	m.checksumUpdater.ApplyDelta(
+		m.dest,
+		[]common.DispatcherID{m.replicaSet.ID},
+		nil,
+	)
 }
 
 func (m *MoveDispatcherOperator) String() string {

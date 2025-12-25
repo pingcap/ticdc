@@ -29,18 +29,14 @@ func TestDispatcherSetChecksumWatermarkSuppression(t *testing.T) {
 	t.Run("mismatch", func(t *testing.T) {
 		manager.ResetDispatcherSetChecksum()
 
-		actual := manager.computeDispatcherSetFingerprint(common.DefaultMode)
+		actual := manager.computeDispatcherSetChecksum(common.DefaultMode)
+		checksum := actual.ToPB()
+		checksum.Count++
 		manager.ApplyDispatcherSetChecksumUpdate(&heartbeatpb.DispatcherSetChecksumUpdate{
-			Epoch: 1,
-			Mode:  common.DefaultMode,
-			Seq:   1,
-			Fingerprint: &heartbeatpb.DispatcherSetChecksumFingerprint{
-				Count:   actual.count + 1,
-				XorHigh: actual.xorHigh,
-				XorLow:  actual.xorLow,
-				SumHigh: actual.sumHigh,
-				SumLow:  actual.sumLow,
-			},
+			Epoch:    1,
+			Mode:     common.DefaultMode,
+			Seq:      1,
+			Checksum: checksum,
 		})
 
 		req := manager.aggregateDispatcherHeartbeats(false)
@@ -51,18 +47,12 @@ func TestDispatcherSetChecksumWatermarkSuppression(t *testing.T) {
 	t.Run("ok", func(t *testing.T) {
 		manager.ResetDispatcherSetChecksum()
 
-		actual := manager.computeDispatcherSetFingerprint(common.DefaultMode)
+		actual := manager.computeDispatcherSetChecksum(common.DefaultMode)
 		manager.ApplyDispatcherSetChecksumUpdate(&heartbeatpb.DispatcherSetChecksumUpdate{
-			Epoch: 1,
-			Mode:  common.DefaultMode,
-			Seq:   1,
-			Fingerprint: &heartbeatpb.DispatcherSetChecksumFingerprint{
-				Count:   actual.count,
-				XorHigh: actual.xorHigh,
-				XorLow:  actual.xorLow,
-				SumHigh: actual.sumHigh,
-				SumLow:  actual.sumLow,
-			},
+			Epoch:    1,
+			Mode:     common.DefaultMode,
+			Seq:      1,
+			Checksum: actual.ToPB(),
 		})
 
 		req := manager.aggregateDispatcherHeartbeats(false)

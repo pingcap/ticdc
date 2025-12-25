@@ -175,14 +175,11 @@ func (m *SplitDispatcherOperator) PostFinish() {
 		return
 	}
 
-	if m.checksumUpdater != nil {
-		m.checksumUpdater.ApplyDelta(
-			m.replicaSet.GetMode(),
-			m.originNode,
-			nil,
-			[]common.DispatcherID{m.replicaSet.ID},
-		)
-	}
+	m.checksumUpdater.ApplyDelta(
+		m.originNode,
+		nil,
+		[]common.DispatcherID{m.replicaSet.ID},
+	)
 
 	newReplicaSets := m.spanController.ReplaceReplicaSet([]*replica.SpanReplication{m.replicaSet}, m.splitSpans, m.checkpointTs, m.splitTargetNodes)
 

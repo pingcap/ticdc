@@ -253,18 +253,15 @@ func (m *MergeDispatcherOperator) PostFinish() {
 	}
 
 	m.spanController.MarkSpanReplicating(m.newReplicaSet)
-	if m.checksumUpdater != nil {
-		remove := make([]common.DispatcherID, 0, len(m.toMergedReplicaSets))
-		for _, replicaSet := range m.toMergedReplicaSets {
-			remove = append(remove, replicaSet.ID)
-		}
-		m.checksumUpdater.ApplyDelta(
-			m.newReplicaSet.GetMode(),
-			m.originNode,
-			[]common.DispatcherID{m.id},
-			remove,
-		)
+	remove := make([]common.DispatcherID, 0, len(m.toMergedReplicaSets))
+	for _, replicaSet := range m.toMergedReplicaSets {
+		remove = append(remove, replicaSet.ID)
 	}
+	m.checksumUpdater.ApplyDelta(
+		m.originNode,
+		[]common.DispatcherID{m.id},
+		remove,
+	)
 	log.Info("merge dispatcher operator finished", zap.String("id", m.id.String()))
 }
 
