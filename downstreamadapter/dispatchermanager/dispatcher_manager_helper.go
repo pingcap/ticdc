@@ -95,6 +95,16 @@ func prepareCreateDispatcher[T dispatcher.Dispatcher](infos map[common.Dispatche
 	return dispatcherIds, tableIds, startTsList, tableSpans, schemaIds, skipDMLAsStartTsList
 }
 
+func resolveSkipDMLAsStartTs(newStartTs, originalStartTs int64, scheduleSkipDMLAsStartTs, sinkSkipDMLAsStartTs bool) bool {
+	// When the sink keeps startTs unchanged, preserve the skipDMLAsStartTs decision carried by the
+	// scheduling request (e.g. recreating a dispatcher during an in-flight DDL barrier).
+	// If the sink adjusts startTs (e.g. based on ddl_ts recovery), the sink decision dominates.
+	if newStartTs == originalStartTs {
+		return scheduleSkipDMLAsStartTs || sinkSkipDMLAsStartTs
+	}
+	return sinkSkipDMLAsStartTs
+}
+
 func prepareMergeDispatcher[T dispatcher.Dispatcher](changefeedID common.ChangeFeedID,
 	dispatcherIDs []common.DispatcherID,
 	dispatcherMap *DispatcherMap[T],

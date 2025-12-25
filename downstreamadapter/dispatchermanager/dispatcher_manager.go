@@ -425,14 +425,12 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 	}
 
 	for idx, id := range dispatcherIds {
-		// if the newStartTs equals to the original startTs, we need to combine the skipDMLAsStartTs flag
-		// otherwise, we just use the skipDMLAsStartTs flag from mysql sink
-		var skipDMLAsStartTs bool
-		if newStartTsList[idx] == startTsList[idx] {
-			skipDMLAsStartTs = scheduleSkipDMLAsStartTsList[idx] || skipDMLAsStartTsList[idx]
-		} else {
-			skipDMLAsStartTs = skipDMLAsStartTsList[idx]
-		}
+		skipDMLAsStartTs := resolveSkipDMLAsStartTs(
+			newStartTsList[idx],
+			startTsList[idx],
+			scheduleSkipDMLAsStartTsList[idx],
+			skipDMLAsStartTsList[idx],
+		)
 		d := dispatcher.NewEventDispatcher(
 			id,
 			tableSpans[idx],

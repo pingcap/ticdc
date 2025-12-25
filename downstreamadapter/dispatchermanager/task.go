@@ -308,6 +308,110 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 	}
 }
 
+type mergedStartTsCandidate struct {
+	startTs                uint64
+	skipSyncpointAtStartTs bool
+	skipDMLAsStartTs       bool
+
+	allSamePending     bool
+	pendingCommitTs    uint64
+	pendingIsSyncPoint bool
+}
+
+func buildMergedStartTsCandidate(minCheckpointTs uint64, pendingStates []*heartbeatpb.State) mergedStartTsCandidate {
+	candidate := mergedStartTsCandidate{
+		startTs:                minCheckpointTs,
+		skipSyncpointAtStartTs: false,
+		skipDMLAsStartTs:       false,
+		allSamePending:         true,
+	}
+
+	if len(pendingStates) == 0 {
+		candidate.allSamePending = false
+		return candidate
+	}
+
+	var pendingCommitTs uint64
+	var pendingIsSyncPoint bool
+	for idx, state := range pendingStates {
+		if state == nil {
+			candidate.allSamePending = false
+			break
+		}
+		if idx == 0 {
+			pendingCommitTs = state.BlockTs
+			pendingIsSyncPoint = state.IsSyncPoint
+			continue
+		}
+		if state.BlockTs != pendingCommitTs || state.IsSyncPoint != pendingIsSyncPoint {
+			candidate.allSamePending = false
+			break
+		}
+	}
+	candidate.pendingCommitTs = pendingCommitTs
+	candidate.pendingIsSyncPoint = pendingIsSyncPoint
+
+	if candidate.allSamePending {
+		if pendingIsSyncPoint {
+			candidate.startTs = pendingCommitTs
+		} else if pendingCommitTs > 0 {
+			candidate.startTs = pendingCommitTs - 1
+			candidate.skipDMLAsStartTs = true
+		}
+	}
+	return candidate
+}
+
+func mergeMergedStartTsCandidateWithMySQLRecovery(t *MergeCheckTask, candidate mergedStartTsCandidate) (uint64, bool, bool) {
+	finalStartTs := candidate.startTs
+	finalSkipSyncpointAtStartTs := candidate.skipSyncpointAtStartTs
+	finalSkipDMLAsStartTs := candidate.skipDMLAsStartTs
+
+	if !common.IsDefaultMode(t.mergedDispatcher.GetMode()) || t.manager.sink.SinkType() != common.MysqlSinkType {
+		return finalStartTs, finalSkipSyncpointAtStartTs, finalSkipDMLAsStartTs
+	}
+
+	newStartTsList, skipSyncpointAtStartTsList, skipDMLAsStartTsList, err := t.manager.sink.(*mysql.Sink).GetTableRecoveryInfo(
+		[]int64{t.mergedDispatcher.GetTableSpan().TableID},
+		[]int64{int64(candidate.startTs)},
+		false,
+	)
+	if err != nil {
+		log.Error("get table recovery info for merge dispatcher failed",
+			zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()),
+			zap.Stringer("changefeedID", t.manager.changefeedID),
+			zap.Error(err),
+		)
+		t.mergedDispatcher.HandleError(err)
+		return finalStartTs, finalSkipSyncpointAtStartTs, finalSkipDMLAsStartTs
+	}
+
+	recoveryStartTs := uint64(newStartTsList[0])
+	recoverySkipSyncpointAtStartTs := skipSyncpointAtStartTsList[0]
+	recoverySkipDMLAsStartTs := skipDMLAsStartTsList[0]
+	if recoveryStartTs > candidate.startTs {
+		finalStartTs = recoveryStartTs
+		finalSkipSyncpointAtStartTs = recoverySkipSyncpointAtStartTs
+		finalSkipDMLAsStartTs = recoverySkipDMLAsStartTs
+	} else if recoveryStartTs == candidate.startTs {
+		finalSkipSyncpointAtStartTs = candidate.skipSyncpointAtStartTs || recoverySkipSyncpointAtStartTs
+		finalSkipDMLAsStartTs = candidate.skipDMLAsStartTs || recoverySkipDMLAsStartTs
+	}
+
+	log.Info("get table recovery info for merge dispatcher",
+		zap.Stringer("changefeedID", t.manager.changefeedID),
+		zap.Uint64("mergeStartTsCandidate", candidate.startTs),
+		zap.Any("recoveryStartTs", newStartTsList),
+		zap.Any("recoverySkipSyncpointAtStartTsList", skipSyncpointAtStartTsList),
+		zap.Any("recoverySkipDMLAsStartTsList", skipDMLAsStartTsList),
+		zap.Uint64("finalStartTs", finalStartTs),
+		zap.Bool("finalSkipSyncpointAtStartTs", finalSkipSyncpointAtStartTs),
+		zap.Bool("finalSkipDMLAsStartTs", finalSkipDMLAsStartTs),
+	)
+
+	return finalStartTs, finalSkipSyncpointAtStartTs, finalSkipDMLAsStartTs
+}
+
 // resolveMergedDispatcherStartTs returns the effective startTs and skip flags for the merged dispatcher.
 //
 // Inputs:
@@ -329,37 +433,9 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 //
 // For non-MySQL and redo, the merge candidate is the final result.
 func resolveMergedDispatcherStartTs(t *MergeCheckTask, minCheckpointTs uint64, pendingStates []*heartbeatpb.State) (uint64, bool, bool) {
-	mergeStartTsCandidate := minCheckpointTs
-	mergeSkipSyncpointAtStartTsCandidate := false
-	mergeSkipDMLAsStartTsCandidate := false
-
-	// If all source dispatchers have a pending block event and they are the same one,
-	// adjust the startTs to ensure the merged dispatcher can replay it safely.
-	allSamePending := true
-	var pendingCommitTs uint64
-	var pendingIsSyncPoint bool
-	for idx, state := range pendingStates {
-		if state == nil {
-			allSamePending = false
-			break
-		}
-		if idx == 0 {
-			pendingCommitTs = state.BlockTs
-			pendingIsSyncPoint = state.IsSyncPoint
-			continue
-		}
-		if state.BlockTs != pendingCommitTs || state.IsSyncPoint != pendingIsSyncPoint {
-			allSamePending = false
-			break
-		}
-	}
-	if allSamePending {
-		if pendingIsSyncPoint {
-			mergeStartTsCandidate = pendingCommitTs
-		} else if pendingCommitTs > 0 {
-			mergeStartTsCandidate = pendingCommitTs - 1
-			mergeSkipDMLAsStartTsCandidate = true
-		} else {
+	candidate := buildMergedStartTsCandidate(minCheckpointTs, pendingStates)
+	if candidate.allSamePending {
+		if !candidate.pendingIsSyncPoint && candidate.pendingCommitTs == 0 {
 			log.Warn("pending ddl has zero commit ts, fallback to min checkpoint ts",
 				zap.Stringer("changefeedID", t.manager.changefeedID),
 				zap.Uint64("minCheckpointTs", minCheckpointTs),
@@ -368,57 +444,15 @@ func resolveMergedDispatcherStartTs(t *MergeCheckTask, minCheckpointTs uint64, p
 		log.Info("merge dispatcher uses pending block event to calculate start ts",
 			zap.Stringer("changefeedID", t.manager.changefeedID),
 			zap.Any("mergedDispatcher", t.mergedDispatcher.GetId()),
-			zap.Uint64("pendingCommitTs", pendingCommitTs),
-			zap.Bool("pendingIsSyncPoint", pendingIsSyncPoint),
-			zap.Uint64("startTs", mergeStartTsCandidate),
-			zap.Bool("skipSyncpointAtStartTs", mergeSkipSyncpointAtStartTsCandidate),
-			zap.Bool("skipDMLAsStartTs", mergeSkipDMLAsStartTsCandidate))
-	}
-
-	finalStartTs := mergeStartTsCandidate
-	finalSkipSyncpointAtStartTs := mergeSkipSyncpointAtStartTsCandidate
-	finalSkipDMLAsStartTs := mergeSkipDMLAsStartTsCandidate
-
-	if common.IsDefaultMode(t.mergedDispatcher.GetMode()) && t.manager.sink.SinkType() == common.MysqlSinkType {
-		newStartTsList, skipSyncpointAtStartTsList, skipDMLAsStartTsList, err := t.manager.sink.(*mysql.Sink).GetTableRecoveryInfo(
-			[]int64{t.mergedDispatcher.GetTableSpan().TableID},
-			[]int64{int64(mergeStartTsCandidate)},
-			false,
-		)
-		if err != nil {
-			log.Error("get table recovery info for merge dispatcher failed",
-				zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()),
-				zap.Stringer("changefeedID", t.manager.changefeedID),
-				zap.Error(err),
-			)
-			t.mergedDispatcher.HandleError(err)
-			return finalStartTs, finalSkipSyncpointAtStartTs, finalSkipDMLAsStartTs
-		}
-		recoveryStartTs := uint64(newStartTsList[0])
-		recoverySkipSyncpointAtStartTs := skipSyncpointAtStartTsList[0]
-		recoverySkipDMLAsStartTs := skipDMLAsStartTsList[0]
-		if recoveryStartTs > mergeStartTsCandidate {
-			finalStartTs = recoveryStartTs
-			finalSkipSyncpointAtStartTs = recoverySkipSyncpointAtStartTs
-			finalSkipDMLAsStartTs = recoverySkipDMLAsStartTs
-		} else if recoveryStartTs == mergeStartTsCandidate {
-			finalSkipSyncpointAtStartTs = mergeSkipSyncpointAtStartTsCandidate || recoverySkipSyncpointAtStartTs
-			finalSkipDMLAsStartTs = mergeSkipDMLAsStartTsCandidate || recoverySkipDMLAsStartTs
-		}
-
-		log.Info("get table recovery info for merge dispatcher",
-			zap.Stringer("changefeedID", t.manager.changefeedID),
-			zap.Uint64("mergeStartTsCandidate", mergeStartTsCandidate),
-			zap.Any("recoveryStartTs", newStartTsList),
-			zap.Any("recoverySkipSyncpointAtStartTsList", skipSyncpointAtStartTsList),
-			zap.Any("recoverySkipDMLAsStartTsList", skipDMLAsStartTsList),
-			zap.Uint64("finalStartTs", finalStartTs),
-			zap.Bool("finalSkipSyncpointAtStartTs", finalSkipSyncpointAtStartTs),
-			zap.Bool("finalSkipDMLAsStartTs", finalSkipDMLAsStartTs),
+			zap.Uint64("pendingCommitTs", candidate.pendingCommitTs),
+			zap.Bool("pendingIsSyncPoint", candidate.pendingIsSyncPoint),
+			zap.Uint64("startTs", candidate.startTs),
+			zap.Bool("skipSyncpointAtStartTs", candidate.skipSyncpointAtStartTs),
+			zap.Bool("skipDMLAsStartTs", candidate.skipDMLAsStartTs),
 		)
 	}
 
-	return finalStartTs, finalSkipSyncpointAtStartTs, finalSkipDMLAsStartTs
+	return mergeMergedStartTsCandidateWithMySQLRecovery(t, candidate)
 }
 
 var (
