@@ -167,7 +167,7 @@ func NewController(
 	)
 
 	nodes := c.nodeManager.GetAliveNodes()
-	added, _, requests, _ := c.bootstrapper.HandleNewNodes(nodes)
+	added, _, requests, _ := c.bootstrapper.HandleNodesChange(nodes)
 	log.Info("coordinator bootstrap initial nodes",
 		zap.Int("addedCount", len(added)), zap.Any("addedNodes", nodes))
 
@@ -328,7 +328,7 @@ func (c *Controller) RequestResolvedTsFromLogCoordinator(ctx context.Context, ch
 }
 
 func (c *Controller) onNodeChanged() {
-	addedNodes, removedNodes, requests, responses := c.bootstrapper.HandleNewNodes(c.nodeManager.GetAliveNodes())
+	addedNodes, removedNodes, requests, responses := c.bootstrapper.HandleNodesChange(c.nodeManager.GetAliveNodes())
 	log.Info("controller detects node changed",
 		zap.Int("addedCount", len(addedNodes)),
 		zap.Int("removedCount", len(removedNodes)),

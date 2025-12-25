@@ -31,7 +31,7 @@ func TestHandleNewNodes(t *testing.T) {
 
 	nodes := make(map[node.ID]*node.Info)
 
-	added, removed, requests, responses := b.HandleNewNodes(nodes)
+	added, removed, requests, responses := b.HandleNodesChange(nodes)
 	require.Len(t, added, 0)
 	require.Len(t, removed, 0)
 	require.Len(t, requests, 0)
@@ -43,7 +43,7 @@ func TestHandleNewNodes(t *testing.T) {
 	nodes[node1.ID] = node1
 	nodes[node2.ID] = node2
 
-	added, removed, requests, responses = b.HandleNewNodes(nodes)
+	added, removed, requests, responses = b.HandleNodesChange(nodes)
 	require.Len(t, added, 2)
 	require.Len(t, removed, 0)
 	require.Len(t, requests, 2)
@@ -90,7 +90,7 @@ func TestHandleNewNodes(t *testing.T) {
 	node3 := node.NewInfo("", "")
 	nodes[node3.ID] = node3
 
-	added, removed, requests, responses = b.HandleNewNodes(nodes)
+	added, removed, requests, responses = b.HandleNodesChange(nodes)
 	require.Len(t, added, 1)
 	require.Len(t, removed, 0)
 	require.Len(t, requests, 1)
@@ -108,7 +108,7 @@ func TestHandleNewNodes(t *testing.T) {
 
 	// remove a node
 	delete(nodes, node1.ID)
-	added, removed, requests, responses = b.HandleNewNodes(nodes)
+	added, removed, requests, responses = b.HandleNodesChange(nodes)
 	require.Len(t, added, 0)
 	require.Len(t, removed, 1)
 	require.Len(t, requests, 0)
@@ -118,7 +118,7 @@ func TestHandleNewNodes(t *testing.T) {
 	// add a new node, and remove one node
 	nodes[node1.ID] = node1
 	delete(nodes, node2.ID)
-	added, removed, requests, responses = b.HandleNewNodes(nodes)
+	added, removed, requests, responses = b.HandleNodesChange(nodes)
 	require.Len(t, added, 1)
 	require.Len(t, removed, 1)
 	require.Len(t, requests, 1)
@@ -149,7 +149,7 @@ func TestResendBootstrapMessage(t *testing.T) {
 	node1 := node.NewInfo("", "")
 	nodes[node1.ID] = node1
 
-	_, _, msgs, _ := b.HandleNewNodes(nodes)
+	_, _, msgs, _ := b.HandleNodesChange(nodes)
 	require.Len(t, msgs, 1)
 	b.currentTime = func() time.Time {
 		return time.Unix(1, 0)
@@ -158,7 +158,7 @@ func TestResendBootstrapMessage(t *testing.T) {
 	node2 := node.NewInfo("", "")
 	nodes[node2.ID] = node2
 
-	_, _, msgs, _ = b.HandleNewNodes(nodes)
+	_, _, msgs, _ = b.HandleNodesChange(nodes)
 	require.Len(t, msgs, 1)
 	b.currentTime = func() time.Time {
 		return time.Unix(2, 0)

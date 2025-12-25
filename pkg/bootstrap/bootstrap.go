@@ -59,9 +59,9 @@ func NewBootstrapper[T any](id string, newBootstrapMsg NewBootstrapRequestFn) *B
 	}
 }
 
-// HandleNewNodes updates the bootstrapper with the current set of active nodes.
+// HandleNodesChange updates the bootstrapper with the current set of active nodes.
 // It returns the IDs of newly added nodes, removed nodes, messages to be sent, and any cached bootstrap responses.
-func (b *Bootstrapper[T]) HandleNewNodes(activeNodes map[node.ID]*node.Info) (
+func (b *Bootstrapper[T]) HandleNodesChange(activeNodes map[node.ID]*node.Info) (
 	addedNodes []node.ID,
 	removedNodes []node.ID,
 	messages []*messaging.TargetMessage,

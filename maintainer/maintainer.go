@@ -404,7 +404,7 @@ func (m *Maintainer) initialize() error {
 		zap.Stringer("changefeedID", m.changefeedID),
 		zap.Int("nodeCount", len(nodes)))
 
-	_, _, requests, _ := m.bootstrapper.HandleNewNodes(nodes)
+	_, _, requests, _ := m.bootstrapper.HandleNodesChange(nodes)
 	m.sendMessages(requests)
 
 	log.Info("changefeed maintainer initialized",
@@ -525,7 +525,7 @@ func (m *Maintainer) onRedoPersisted(req *heartbeatpb.RedoResolvedTsProgressMess
 }
 
 func (m *Maintainer) onNodeChanged() {
-	addedNodes, removedNodes, requests, responses := m.bootstrapper.HandleNewNodes(m.nodeManager.GetAliveNodes())
+	addedNodes, removedNodes, requests, responses := m.bootstrapper.HandleNodesChange(m.nodeManager.GetAliveNodes())
 	log.Info("maintainer node changed", zap.Stringer("changefeedID", m.changefeedID),
 		zap.Int("addedCount", len(addedNodes)),
 		zap.Int("removedCount", len(removedNodes)),

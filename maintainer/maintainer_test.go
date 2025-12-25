@@ -348,7 +348,7 @@ func TestMaintainerSchedule(t *testing.T) {
 	nodes := make(map[node.ID]*node.Info)
 	nodes[n.ID] = n
 
-	_, _, messages, _ := maintainer.bootstrapper.HandleNewNodes(nodes)
+	_, _, messages, _ := maintainer.bootstrapper.HandleNodesChange(nodes)
 	maintainer.sendMessages(messages)
 
 	time.Sleep(time.Second * time.Duration(sleepTime))
