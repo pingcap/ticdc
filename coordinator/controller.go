@@ -363,7 +363,7 @@ type remoteMaintainer struct {
 }
 
 func (c *Controller) handleBootstrapResponses(responses map[node.ID]*heartbeatpb.CoordinatorBootstrapResponse) {
-	if c.initialized.Load() {
+	if c.initialized.Load() || responses == nil {
 		return
 	}
 	log.Info("all new nodes bootstrap response received",
