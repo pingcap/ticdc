@@ -280,7 +280,7 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 
 	t.mergedDispatcher.SetCurrentPDTs(t.manager.pdClock.CurrentTS())
 	t.mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_Initializing)
-	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).CommitAddDispatcher(t.mergedDispatcher, finalStartTs)
+	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).CommitAddDispatcher(t.mergedDispatcher, startTs)
 	log.Info("merge dispatcher commit",
 		zap.Stringer("changefeedID", t.manager.changefeedID),
 		zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()),
