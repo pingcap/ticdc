@@ -173,7 +173,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 				}
 				indexFilePath := d.filePathGenerator.GenerateIndexFilePath(table, date)
 
-				// then write the data file to external storage.
+				// first write the data file to external storage.
 				err = d.writeDataFile(ctx, dataFilePath, indexFilePath, task)
 				if err != nil {
 					log.Error("failed to write data file to external storage",
