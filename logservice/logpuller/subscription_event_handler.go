@@ -14,7 +14,6 @@
 package logpuller
 
 import (
-	"time"
 	"unsafe"
 
 	"github.com/pingcap/kvproto/pkg/cdcpb"
@@ -23,7 +22,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/utils/dynstream"
-	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
 
@@ -40,6 +38,7 @@ const (
 type regionEvent struct {
 	state  *regionFeedState
 	worker *regionRequestWorker // TODO: remove the field
+	subID  SubscriptionID
 
 	// only one of the following fields will be set
 	entries    *cdcpb.Event_Entries_
@@ -64,15 +63,22 @@ func (event *regionEvent) getSize() int {
 	return size
 }
 
-type regionEventHandler struct {
+type subscriptionEventHandler struct {
 	subClient *subscriptionClient
 }
 
-func (h *regionEventHandler) Path(event regionEvent) SubscriptionID {
-	return SubscriptionID(event.state.requestID)
+func (h *subscriptionEventHandler) Path(event regionEvent) SubscriptionID {
+	if event.state != nil {
+		return SubscriptionID(event.state.requestID)
+	}
+	if event.subID != 0 {
+		return event.subID
+	}
+	log.Panic("region event has no path", zap.Any("event", event))
+	return InvalidSubscriptionID
 }
 
-func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent) bool {
+func (h *subscriptionEventHandler) Handle(span *subscribedSpan, events ...regionEvent) bool {
 	if len(span.kvEventsCache) != 0 {
 		log.Panic("kvEventsCache is not empty",
 			zap.Int("kvEventsCacheLen", len(span.kvEventsCache)),
@@ -81,17 +87,21 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 
 	newResolvedTs := uint64(0)
 	for _, event := range events {
+		if event.state == nil {
+			if event.resolvedTs != 0 {
+				if event.resolvedTs > newResolvedTs {
+					newResolvedTs = event.resolvedTs
+				}
+				continue
+			}
+			log.Panic("region event has no state", zap.Any("event", event))
+		}
 		if event.state.isStale() {
 			h.handleRegionError(event.state, event.worker)
 			continue
 		}
 		if event.entries != nil {
 			handleEventEntries(span, event.state, event.entries)
-		} else if event.resolvedTs != 0 {
-			resolvedTs := handleResolvedTs(span, event.state, event.resolvedTs)
-			if resolvedTs > newResolvedTs {
-				newResolvedTs = resolvedTs
-			}
 		} else {
 			log.Panic("should not reach", zap.Any("event", event), zap.Any("events", events))
 		}
@@ -120,15 +130,15 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 	return false
 }
 
-func (h *regionEventHandler) GetSize(event regionEvent) int {
+func (h *subscriptionEventHandler) GetSize(event regionEvent) int {
 	return event.getSize()
 }
 
-func (h *regionEventHandler) GetArea(path SubscriptionID, dest *subscribedSpan) int {
+func (h *subscriptionEventHandler) GetArea(path SubscriptionID, dest *subscribedSpan) int {
 	return 0
 }
 
-func (h *regionEventHandler) GetTimestamp(event regionEvent) dynstream.Timestamp {
+func (h *subscriptionEventHandler) GetTimestamp(event regionEvent) dynstream.Timestamp {
 	if event.entries != nil && event.entries.Entries != nil {
 		for _, entry := range event.entries.Entries.GetEntries() {
 			switch entry.Type {
@@ -148,35 +158,38 @@ func (h *regionEventHandler) GetTimestamp(event regionEvent) dynstream.Timestamp
 		return dynstream.Timestamp(event.resolvedTs)
 	}
 }
-func (h *regionEventHandler) IsPaused(event regionEvent) bool { return false }
+func (h *subscriptionEventHandler) IsPaused(event regionEvent) bool { return false }
 
-func (h *regionEventHandler) GetType(event regionEvent) dynstream.EventType {
+func (h *subscriptionEventHandler) GetType(event regionEvent) dynstream.EventType {
 	if event.entries != nil || event.resolvedTs != 0 {
-		// Note: resolved ts may be from different regions, so they are not periodic signal
 		return dynstream.EventType{DataGroup: DataGroupEntriesOrResolvedTs, Property: dynstream.BatchableData}
-	} else if event.state.isStale() {
+	} else if event.state != nil && event.state.isStale() {
 		return dynstream.EventType{DataGroup: DataGroupError, Property: dynstream.BatchableData}
-	} else {
-		log.Panic("unknown event type",
-			zap.Uint64("regionID", event.state.getRegionID()),
-			zap.Uint64("requestID", event.state.requestID),
-			zap.Uint64("workerID", event.worker.workerID))
 	}
+	log.Panic("unknown event type", zap.Any("event", event))
 	return dynstream.DefaultEventType
 }
 
-func (h *regionEventHandler) OnDrop(event regionEvent) interface{} {
+func (h *subscriptionEventHandler) OnDrop(event regionEvent) interface{} {
 	// TODO: Distinguish between drop events caused by "path not found" errors and memory control.
+	if event.state == nil {
+		log.Warn("drop region event without state", zap.Any("event", event), zap.Uint64("subscriptionID", uint64(event.subID)))
+		return nil
+	}
+	workerID := uint64(0)
+	if event.worker != nil {
+		workerID = event.worker.workerID
+	}
 	log.Warn("drop region event",
 		zap.Uint64("regionID", event.state.getRegionID()),
 		zap.Uint64("requestID", event.state.requestID),
-		zap.Uint64("workerID", event.worker.workerID),
+		zap.Uint64("workerID", workerID),
 		zap.Bool("hasEntries", event.entries != nil),
 		zap.Bool("stateIsStale", event.state.isStale()))
 	return nil
 }
 
-func (h *regionEventHandler) handleRegionError(state *regionFeedState, worker *regionRequestWorker) {
+func (h *subscriptionEventHandler) handleRegionError(state *regionFeedState, worker *regionRequestWorker) {
 	stepsToRemoved := state.markRemoved()
 	err := state.takeError()
 	if err != nil {
@@ -288,60 +301,4 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 			state.matcher.rollbackRow(entry)
 		}
 	}
-}
-
-func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs uint64) uint64 {
-	if state.isStale() || !state.isInitialized() {
-		return 0
-	}
-	state.matcher.tryCleanUnmatchedValue()
-	regionID := state.getRegionID()
-	lastResolvedTs := state.getLastResolvedTs()
-	if resolvedTs < lastResolvedTs {
-		log.Info("The resolvedTs is fallen back in subscription client",
-			zap.Uint64("subscriptionID", uint64(state.region.subscribedSpan.subID)),
-			zap.Uint64("regionID", regionID),
-			zap.Uint64("resolvedTs", resolvedTs),
-			zap.Uint64("lastResolvedTs", lastResolvedTs))
-		return 0
-	}
-	state.updateResolvedTs(resolvedTs)
-	span.rangeLock.UpdateLockedRangeStateHeap(state.region.lockedRangeState)
-
-	now := time.Now().UnixMilli()
-	lastAdvance := span.lastAdvanceTime.Load()
-	if now-lastAdvance >= span.advanceInterval && span.lastAdvanceTime.CompareAndSwap(lastAdvance, now) {
-		ts := span.rangeLock.GetHeapMinTs()
-		if ts > 0 && span.initialized.CompareAndSwap(false, true) {
-			log.Info("subscription client is initialized",
-				zap.Uint64("subscriptionID", uint64(span.subID)),
-				zap.Uint64("regionID", regionID),
-				zap.Uint64("resolvedTs", ts))
-		}
-		lastResolvedTs := span.resolvedTs.Load()
-		nextResolvedPhyTs := oracle.ExtractPhysical(ts)
-		// Generally, we don't want to send duplicate resolved ts,
-		// so we check whether `ts` is larger than `lastResolvedTs` before send it.
-		// but when `ts` == `lastResolvedTs` == `span.startTs`,
-		// the span may just be initialized and have not receive any resolved ts before,
-		// so we also send ts in this case for quick notification to downstream.
-		if ts > lastResolvedTs || (ts == lastResolvedTs && lastResolvedTs == span.startTs) {
-			resolvedPhyTs := oracle.ExtractPhysical(lastResolvedTs)
-			decreaseLag := float64(nextResolvedPhyTs-resolvedPhyTs) / 1e3
-			const largeResolvedTsAdvanceStepInSecs = 30
-			if decreaseLag > largeResolvedTsAdvanceStepInSecs {
-				log.Warn("resolved ts advance step is too large",
-					zap.Uint64("subID", uint64(span.subID)),
-					zap.Int64("tableID", span.span.TableID),
-					zap.Uint64("regionID", regionID),
-					zap.Uint64("resolvedTs", ts),
-					zap.Uint64("lastResolvedTs", lastResolvedTs),
-					zap.Float64("decreaseLag(s)", decreaseLag))
-			}
-			span.resolvedTs.Store(ts)
-			span.resolvedTsUpdated.Store(time.Now().Unix())
-			return ts
-		}
-	}
-	return 0
 }
