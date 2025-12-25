@@ -23,8 +23,10 @@ import (
 	mock_changefeed "github.com/pingcap/ticdc/coordinator/changefeed/mock"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
@@ -92,11 +94,16 @@ func TestPauseChangefeed(t *testing.T) {
 	self := node.NewInfo("localhost:8300", "")
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	nodeManager.GetAliveNodes()[self.ID] = self
+
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+
 	controller := &Controller{
 		backend:      backend,
 		changefeedDB: changefeedDB,
-		operatorController: operator.NewOperatorController(nil, node.NewInfo("node1", ""),
-			changefeedDB, backend, nodeManager, 10),
+		operatorController: operator.NewOperatorController(node.NewInfo("node1", ""),
+			changefeedDB, backend, 10),
 	}
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
@@ -205,8 +212,8 @@ func TestRemoveChangefeed(t *testing.T) {
 	controller := &Controller{
 		backend:      backend,
 		changefeedDB: changefeedDB,
-		operatorController: operator.NewOperatorController(nil, node.NewInfo("node1", ""),
-			changefeedDB, backend, nodeManager, 10),
+		operatorController: operator.NewOperatorController(node.NewInfo("node1", ""),
+			changefeedDB, backend, 10),
 	}
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
@@ -250,8 +257,8 @@ func TestListChangefeed(t *testing.T) {
 	controller := &Controller{
 		backend:      backend,
 		changefeedDB: changefeedDB,
-		operatorController: operator.NewOperatorController(nil, node.NewInfo("node1", ""),
-			changefeedDB, backend, nodeManager, 10),
+		operatorController: operator.NewOperatorController(node.NewInfo("node1", ""),
+			changefeedDB, backend, 10),
 	}
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
@@ -297,9 +304,9 @@ func TestCreateChangefeed(t *testing.T) {
 	controller := &Controller{
 		backend:      backend,
 		changefeedDB: changefeedDB,
-		operatorController: operator.NewOperatorController(nil, node.NewInfo("node1", ""),
-			changefeedDB, backend, nodeManager, 10),
-		bootstrapped: atomic.NewBool(false),
+		operatorController: operator.NewOperatorController(node.NewInfo("node1", ""),
+			changefeedDB, backend, 10),
+		initialized: atomic.NewBool(false),
 	}
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	cfConfig := &config.ChangeFeedInfo{
@@ -311,7 +318,7 @@ func TestCreateChangefeed(t *testing.T) {
 	require.NotNil(t, controller.CreateChangefeed(context.Background(), cfConfig))
 	require.Equal(t, 0, changefeedDB.GetSize())
 
-	controller.bootstrapped.Store(true)
+	controller.initialized.Store(true)
 	backend.EXPECT().CreateChangefeed(gomock.Any(), gomock.Any()).Return(errors.New("failed")).Times(1)
 	require.NotNil(t, controller.CreateChangefeed(context.Background(), cfConfig))
 	require.Equal(t, 0, changefeedDB.GetSize())
