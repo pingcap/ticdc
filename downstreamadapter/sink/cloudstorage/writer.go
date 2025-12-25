@@ -266,7 +266,7 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 	d.metricWriteBytes.Add(float64(bytesCnt))
 	d.metricFileCount.Add(1)
 
-	// write the index file to external storage in the end.
+	// then write the index file to external storage in the end.
 	// the file content is simply the last data file path
 	err := d.writeIndexFile(ctx, indexFilePath, path.Base(dataFilePath)+"\n")
 	if err != nil {
