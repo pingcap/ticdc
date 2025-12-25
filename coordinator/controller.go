@@ -189,7 +189,7 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return context.Cause(ctx)
 		case <-ticker.C:
 			metrics.ChangefeedStateGauge.WithLabelValues("Total").Set(float64(c.changefeedDB.GetSize()))
 			metrics.ChangefeedStateGauge.WithLabelValues("Working").Set(float64(c.changefeedDB.GetReplicatingSize()))
@@ -219,7 +219,7 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 }
 
 // HandleEvent implements the event-driven process mode
-func (c *Controller) HandleEvent(event *Event) {
+func (c *Controller) HandleEvent(ctx context.Context, event *Event) {
 	if event == nil {
 		return
 	}
@@ -236,22 +236,22 @@ func (c *Controller) HandleEvent(event *Event) {
 
 	// Before processing the event, we need to check the online/offline nodes,
 	// the following logic is based on whether the node changed.
-	c.checkOnNodeChanged()
+	c.checkOnNodeChanged(ctx)
 
 	switch event.eventType {
 	case EventMessage:
-		c.onMessage(event.message)
+		c.onMessage(ctx, event.message)
 	case EventPeriod:
 		c.onPeriodTask()
 	}
 }
 
-func (c *Controller) checkOnNodeChanged() {
+func (c *Controller) checkOnNodeChanged(ctx context.Context) {
 	c.nodeChanged.Lock()
 	defer c.nodeChanged.Unlock()
 
 	if c.nodeChanged.changed {
-		c.onNodeChanged()
+		c.onNodeChanged(ctx)
 		c.nodeChanged.changed = false
 	}
 }
@@ -264,10 +264,10 @@ func (c *Controller) onPeriodTask() {
 	}
 }
 
-func (c *Controller) onMessage(msg *messaging.TargetMessage) {
+func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage) {
 	switch msg.Type {
 	case messaging.TypeCoordinatorBootstrapResponse:
-		c.onMaintainerBootstrapResponse(msg)
+		c.onMaintainerBootstrapResponse(ctx, msg)
 	case messaging.TypeMaintainerHeartbeatRequest:
 		if c.bootstrapper.AllNodesReady() {
 			req := msg.Message[0].(*heartbeatpb.MaintainerHeartbeat)
@@ -327,7 +327,7 @@ func (c *Controller) RequestResolvedTsFromLogCoordinator(ctx context.Context, ch
 	}
 }
 
-func (c *Controller) onNodeChanged() {
+func (c *Controller) onNodeChanged(ctx context.Context) {
 	addedNodes, removedNodes, requests, responses := c.bootstrapper.HandleNodesChange(c.nodeManager.GetAliveNodes())
 	log.Info("controller detects node changed",
 		zap.Int("addedCount", len(addedNodes)),
@@ -345,16 +345,16 @@ func (c *Controller) onNodeChanged() {
 				zap.Any("targetNode", req.To), zap.Error(err))
 		}
 	}
-	c.handleBootstrapResponses(responses)
+	c.handleBootstrapResponses(ctx, responses)
 }
 
-func (c *Controller) onMaintainerBootstrapResponse(req *messaging.TargetMessage) {
+func (c *Controller) onMaintainerBootstrapResponse(ctx context.Context, req *messaging.TargetMessage) {
 	response := req.Message[0].(*heartbeatpb.CoordinatorBootstrapResponse)
 	log.Info("controller received maintainer bootstrap response",
 		zap.Stringer("node", req.From),
 		zap.Int("maintainerCount", len(response.Statuses)))
 	responses := c.bootstrapper.HandleBootstrapResponse(req.From, response)
-	c.handleBootstrapResponses(responses)
+	c.handleBootstrapResponses(ctx, responses)
 }
 
 type remoteMaintainer struct {
@@ -362,7 +362,7 @@ type remoteMaintainer struct {
 	status *heartbeatpb.MaintainerStatus
 }
 
-func (c *Controller) handleBootstrapResponses(responses map[node.ID]*heartbeatpb.CoordinatorBootstrapResponse) {
+func (c *Controller) handleBootstrapResponses(ctx context.Context, responses map[node.ID]*heartbeatpb.CoordinatorBootstrapResponse) {
 	if c.initialized.Load() || responses == nil {
 		return
 	}
@@ -385,7 +385,7 @@ func (c *Controller) handleBootstrapResponses(responses map[node.ID]*heartbeatpb
 			}
 		}
 	}
-	c.finishBootstrap(runningCfs)
+	c.finishBootstrap(ctx, runningCfs)
 }
 
 // handleMaintainerStatus handle the status report from the maintainers
@@ -504,9 +504,9 @@ func (c *Controller) updateChangefeedStatus(
 // It will load all changefeeds from metastore, and compare with running changefeeds
 // Then initialize the changefeeds that are not running on other nodes
 // And construct all changefeeds state in memory.
-func (c *Controller) finishBootstrap(runningChangefeeds map[common.ChangeFeedID]remoteMaintainer) {
+func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map[common.ChangeFeedID]remoteMaintainer) {
 	// load all changefeeds from metastore, and check if the changefeed is already in workingMap
-	allChangefeeds, err := c.backend.GetAllChangefeeds(context.Background())
+	allChangefeeds, err := c.backend.GetAllChangefeeds(ctx)
 	if err != nil {
 		log.Panic("load all changefeeds failed", zap.Error(err))
 	}
@@ -514,7 +514,6 @@ func (c *Controller) finishBootstrap(runningChangefeeds map[common.ChangeFeedID]
 	// Register keyspace
 	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
 	registeredKeyspace := make(map[string]struct{})
-	ctx := context.Background()
 	for id := range allChangefeeds {
 		if _, ok := registeredKeyspace[id.Keyspace()]; ok {
 			continue
@@ -565,7 +564,7 @@ func (c *Controller) finishBootstrap(runningChangefeeds map[common.ChangeFeedID]
 		switch cfMeta.Status.Progress {
 		case config.ProgressStopping, config.ProgressRemoving:
 			remove := cfMeta.Status.Progress == config.ProgressRemoving
-			c.operatorController.StopChangefeed(context.Background(), cfID, remove)
+			c.operatorController.StopChangefeed(ctx, cfID, remove)
 			log.Info("stop changefeed when bootstrapping", zap.String("changefeed", cfID.String()), zap.Any("meta", cfMeta))
 		}
 	}

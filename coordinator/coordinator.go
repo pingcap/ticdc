@@ -231,9 +231,9 @@ func (c *coordinator) runHandleEvent(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return context.Cause(ctx)
 		case event := <-c.eventCh.Out():
-			c.controller.HandleEvent(event)
+			c.controller.HandleEvent(ctx, event)
 		}
 	}
 }
@@ -319,8 +319,7 @@ func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, changefeed *ch
 		log.Warn("Failed to send state change event to stateChangedCh since context timeout, "+
 			"there may be a lot of state need to be handled. Try next time",
 			zap.String("changefeed", id.String()),
-			zap.Error(ctx.Err()))
-		return
+			zap.Error(context.Cause(ctx)))
 	case c.changefeedChangeCh <- []*changefeedChange{change}:
 	}
 }
