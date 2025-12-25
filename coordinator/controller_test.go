@@ -81,7 +81,7 @@ func TestResumeChangefeedNormalState(t *testing.T) {
 	err := controller.ResumeChangefeed(context.Background(), cfID, 12, true)
 	require.NoError(t, err)
 
-// The resume operation is skipped, so the epoch is not updated and should remain its original value.
+	// The resume operation is skipped, so the epoch is not updated and should remain its original value.
 	changefeed := controller.changefeedDB.GetByID(cfID)
 	require.Equal(t, changefeed.GetInfo().Epoch, uint64(233))
 }
