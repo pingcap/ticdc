@@ -251,6 +251,12 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 					continue
 				}
 				regionEvent.entries = eventData
+			case *cdcpb.Event_ResolvedTs:
+				if eventData == nil {
+					continue
+				}
+				s.client.pushResolvedTasks(event.RequestId, eventData.ResolvedTs, []*regionFeedState{state})
+				continue
 			case *cdcpb.Event_Admin_:
 				// ignore
 				continue
@@ -262,8 +268,6 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 					zap.Bool("stateIsNil", state == nil),
 					zap.Any("error", eventData.Error))
 				state.markStopped(&eventError{err: eventData.Error})
-			case *cdcpb.Event_ResolvedTs:
-				regionEvent.resolvedTs = eventData.ResolvedTs
 			case *cdcpb.Event_LongTxn_:
 				// ignore
 				continue
@@ -276,6 +280,11 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 			case *cdcpb.Event_Error:
 				// it is normal to receive region error after deregister a subscription
 				log.Debug("region request worker receives an error for a stale region, ignore it",
+					zap.Uint64("workerID", s.workerID),
+					zap.Uint64("subscriptionID", uint64(subscriptionID)),
+					zap.Uint64("regionID", event.RegionId))
+			case *cdcpb.Event_ResolvedTs:
+				log.Debug("region request worker drop resolved ts for an untracked region",
 					zap.Uint64("workerID", s.workerID),
 					zap.Uint64("subscriptionID", uint64(subscriptionID)),
 					zap.Uint64("regionID", event.RegionId))
@@ -301,9 +310,10 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 			zap.Any("regionIDs", resolvedTsEvent.Regions))
 		return
 	}
+	resolvedStates := make([]*regionFeedState, 0, len(resolvedTsEvent.Regions))
 	for _, regionID := range resolvedTsEvent.Regions {
 		if state := s.getRegionState(subscriptionID, regionID); state != nil {
-			s.client.pushResolvedTask(resolvedTsEvent.RequestId, state, resolvedTsEvent.Ts, s)
+			resolvedStates = append(resolvedStates, state)
 		} else {
 			log.Warn("region request worker receives a resolved ts event for an untracked region",
 				zap.Uint64("workerID", s.workerID),
@@ -312,6 +322,7 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 				zap.Uint64("resolvedTs", resolvedTsEvent.Ts))
 		}
 	}
+	s.client.pushResolvedTasks(resolvedTsEvent.RequestId, resolvedTsEvent.Ts, resolvedStates)
 }
 
 // processRegionSendTask receives region requests from the channel and sends them to the remote store.

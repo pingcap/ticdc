@@ -22,28 +22,34 @@ import (
 	"go.uber.org/zap"
 )
 
-type resolvedTsEvent struct {
-	state      *regionFeedState
+type batchResolvedTsEvent struct {
+	subID      SubscriptionID
 	resolvedTs uint64
-	worker     *regionRequestWorker
+	states     []*regionFeedState
 }
 
 type resolvedTsEventHandler struct {
 	subClient *subscriptionClient
 }
 
-func (h *resolvedTsEventHandler) Path(event resolvedTsEvent) SubscriptionID {
-	return SubscriptionID(event.state.requestID)
+func (h *resolvedTsEventHandler) Path(event batchResolvedTsEvent) SubscriptionID {
+	return event.subID
 }
 
-func (h *resolvedTsEventHandler) Handle(span *subscribedSpan, events ...resolvedTsEvent) bool {
-	updatedStates := make([]*regionFeedState, 0, len(events))
+func (h *resolvedTsEventHandler) Handle(span *subscribedSpan, events ...batchResolvedTsEvent) bool {
+	total := 0
 	for _, event := range events {
-		if event.state.isStale() {
-			continue
-		}
-		if handleResolvedState(span, event.state, event.resolvedTs) {
-			updatedStates = append(updatedStates, event.state)
+		total += len(event.states)
+	}
+	updatedStates := make([]*regionFeedState, 0, total)
+	for _, event := range events {
+		for _, state := range event.states {
+			if state.isStale() {
+				continue
+			}
+			if handleResolvedState(span, state, event.resolvedTs) {
+				updatedStates = append(updatedStates, state)
+			}
 		}
 	}
 	newResolvedTs := updateSpanResolvedTs(span, updatedStates)
@@ -53,18 +59,18 @@ func (h *resolvedTsEventHandler) Handle(span *subscribedSpan, events ...resolved
 	return false
 }
 
-func (h *resolvedTsEventHandler) GetSize(resolvedTsEvent) int { return 0 }
+func (h *resolvedTsEventHandler) GetSize(batchResolvedTsEvent) int { return 0 }
 func (h *resolvedTsEventHandler) GetArea(path SubscriptionID, dest *subscribedSpan) int {
 	return 0
 }
-func (h *resolvedTsEventHandler) GetTimestamp(resolvedTsEvent) dynstream.Timestamp {
+func (h *resolvedTsEventHandler) GetTimestamp(batchResolvedTsEvent) dynstream.Timestamp {
 	return 0
 }
-func (h *resolvedTsEventHandler) GetType(resolvedTsEvent) dynstream.EventType {
+func (h *resolvedTsEventHandler) GetType(batchResolvedTsEvent) dynstream.EventType {
 	return dynstream.DefaultEventType
 }
-func (h *resolvedTsEventHandler) IsPaused(resolvedTsEvent) bool { return false }
-func (h *resolvedTsEventHandler) OnDrop(resolvedTsEvent) interface{} {
+func (h *resolvedTsEventHandler) IsPaused(batchResolvedTsEvent) bool { return false }
+func (h *resolvedTsEventHandler) OnDrop(batchResolvedTsEvent) interface{} {
 	return nil
 }
 

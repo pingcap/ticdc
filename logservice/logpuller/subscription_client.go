@@ -191,7 +191,7 @@ type subscriptionClient struct {
 	stores sync.Map
 
 	ds             dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *subscriptionEventHandler]
-	resolvedStream dynstream.DynamicStream[int, SubscriptionID, resolvedTsEvent, *subscribedSpan, *resolvedTsEventHandler]
+	resolvedStream dynstream.DynamicStream[int, SubscriptionID, batchResolvedTsEvent, *subscribedSpan, *resolvedTsEventHandler]
 	// the following three fields are used to manage feedback from ds and notify other goroutines
 	mu     sync.Mutex
 	cond   *sync.Cond
@@ -432,14 +432,14 @@ func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event reg
 	return true
 }
 
-func (s *subscriptionClient) pushResolvedTask(requestID uint64, state *regionFeedState, resolvedTs uint64, worker *regionRequestWorker) {
-	if state == nil {
+func (s *subscriptionClient) pushResolvedTasks(requestID uint64, resolvedTs uint64, states []*regionFeedState) {
+	if len(states) == 0 {
 		return
 	}
-	event := resolvedTsEvent{
-		state:      state,
+	event := batchResolvedTsEvent{
+		subID:      SubscriptionID(requestID),
 		resolvedTs: resolvedTs,
-		worker:     worker,
+		states:     states,
 	}
 	s.resolvedStream.Push(SubscriptionID(requestID), event)
 }
