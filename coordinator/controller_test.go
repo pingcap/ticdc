@@ -71,7 +71,11 @@ func TestResumeChangefeedNormalState(t *testing.T) {
 		backend:      backend,
 		changefeedDB: changefeedDB,
 	}
+<<<<<<< HEAD
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+=======
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+>>>>>>> 370e5ed55 (changefeed: ignore the resume changefeed in some state (#3801))
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),
