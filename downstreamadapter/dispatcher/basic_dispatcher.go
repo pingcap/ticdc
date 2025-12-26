@@ -849,6 +849,9 @@ func (d *BasicDispatcher) Remove() {
 // TryClose will return the watermark of current dispatcher, and return true when the dispatcher finished sending events to sink.
 // DispatcherManager will clean the dispatcher info after Remove() is called.
 func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
+	failpoint.Inject("NotReadyToCloseDispatcher", func() {
+		failpoint.Return(w, false)
+	})
 	// If sink is normal(not meet error), we need to wait all the events in sink to flushed downstream successfully
 	// If sink is not normal, we can close the dispatcher immediately.
 	if !d.sink.IsNormal() || (d.tableProgress.Empty() && !d.duringHandleEvents.Load()) {

@@ -77,7 +77,7 @@ kafka_groups=(
 	# G02
 	'new_ci_collation savepoint fail_over_ddl_C'
 	# G03
-	'kv_client_stream_reconnect fail_over_ddl_D'
+	'kv_client_stream_reconnect  fail_over_ddl_D'
 	# G04
 	'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
@@ -115,7 +115,7 @@ pulsar_groups=(
 	# G02
 	'new_ci_collation savepoint fail_over_ddl_C'
 	# G03
-	'kv_client_stream_reconnect fail_over_ddl_D'
+	'kv_client_stream_reconnect  fail_over_ddl_D'
 	# G04
 	'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
@@ -153,7 +153,7 @@ storage_groups=(
 	# G02
 	'new_ci_collation savepoint fail_over_ddl_C'
 	# G03
-	'kv_client_stream_reconnect fail_over_ddl_D'
+	'kv_client_stream_reconnect  fail_over_ddl_D'
 	# G04
 	'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05

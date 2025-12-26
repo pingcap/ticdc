@@ -68,7 +68,7 @@ func (c *Controller) moveTable(tableId int64, targetNode node.ID, mode int64) er
 	count := 0
 	maxTry := 30
 	for !op.IsFinished() && count < maxTry {
-		time.Sleep(1 * time.Second)
+		time.Sleep(2 * time.Second)
 		count += 1
 		log.Info("wait for move table operator finished", zap.Int("count", count))
 	}
