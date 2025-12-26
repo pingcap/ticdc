@@ -126,11 +126,11 @@ func newRegionRequestWorker(
 			for subID, m := range worker.clearRegionStates() {
 				for _, state := range m {
 					state.markStopped(regionErr)
-					regionEvent := regionEvent{
+					event := subscriptionEvent{
 						state:  state,
 						worker: worker,
 					}
-					worker.client.pushRegionEventToDS(subID, regionEvent)
+					worker.client.pushSubscriptionEvent(subID, event)
 				}
 			}
 			// The store may fail forever, so we need try to re-schedule all pending regions.
@@ -237,7 +237,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 		subscriptionID := SubscriptionID(event.RequestId)
 		state := s.getRegionState(subscriptionID, regionID)
 		if state != nil {
-			regionEvent := regionEvent{
+			subEvent := subscriptionEvent{
 				state:  state,
 				worker: s,
 			}
@@ -250,7 +250,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 						zap.Uint64("regionID", regionID))
 					continue
 				}
-				regionEvent.entries = eventData
+				subEvent.entries = eventData
 			case *cdcpb.Event_Admin_:
 				// ignore
 				continue
@@ -263,14 +263,24 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 					zap.Any("error", eventData.Error))
 				state.markStopped(&eventError{err: eventData.Error})
 			case *cdcpb.Event_ResolvedTs:
-				regionEvent.resolvedTs = eventData.ResolvedTs
+				span := state.region.subscribedSpan
+				if span == nil {
+					log.Warn("region request worker receives a resolved ts event for region without span",
+						zap.Uint64("workerID", s.workerID),
+						zap.Uint64("subscriptionID", uint64(subscriptionID)),
+						zap.Uint64("regionID", regionID))
+					continue
+				}
+				pool := s.client.resolvedTsWorkerPool
+				pool.submit(span, []*regionFeedState{state}, eventData.ResolvedTs)
+				continue
 			case *cdcpb.Event_LongTxn_:
 				// ignore
 				continue
 			default:
 				log.Panic("unknown event type", zap.Any("event", event))
 			}
-			s.client.pushRegionEventToDS(SubscriptionID(event.RequestId), regionEvent)
+			s.client.pushSubscriptionEvent(SubscriptionID(event.RequestId), subEvent)
 		} else {
 			switch event.Event.(type) {
 			case *cdcpb.Event_Error:
@@ -301,21 +311,39 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 			zap.Any("regionIDs", resolvedTsEvent.Regions))
 		return
 	}
+	pool := s.client.resolvedTsWorkerPool
+	var span *subscribedSpan
+	states := make([]*regionFeedState, 0, len(resolvedTsEvent.Regions))
 	for _, regionID := range resolvedTsEvent.Regions {
-		if state := s.getRegionState(subscriptionID, regionID); state != nil {
-			s.client.pushRegionEventToDS(SubscriptionID(resolvedTsEvent.RequestId), regionEvent{
-				state:      state,
-				worker:     s,
-				resolvedTs: resolvedTsEvent.Ts,
-			})
-		} else {
+		state := s.getRegionState(subscriptionID, regionID)
+		if state == nil {
 			log.Warn("region request worker receives a resolved ts event for an untracked region",
 				zap.Uint64("workerID", s.workerID),
 				zap.Uint64("subscriptionID", uint64(subscriptionID)),
 				zap.Uint64("regionID", regionID),
 				zap.Uint64("resolvedTs", resolvedTsEvent.Ts))
+			continue
 		}
+		currentSpan := state.region.subscribedSpan
+		if currentSpan == nil {
+			log.Warn("region request worker receives a resolved ts event for region without span",
+				zap.Uint64("workerID", s.workerID),
+				zap.Uint64("subscriptionID", uint64(subscriptionID)),
+				zap.Uint64("regionID", regionID))
+			continue
+		}
+
+		if span == nil {
+			span = currentSpan
+		} else if span != currentSpan {
+			log.Panic("resolved ts event contains multiple spans",
+				zap.Uint64("workerID", s.workerID),
+				zap.Uint64("subscriptionID", uint64(subscriptionID)),
+				zap.Uint64("regionID", regionID))
+		}
+		states = append(states, state)
 	}
+	pool.submit(span, states, resolvedTsEvent.Ts)
 }
 
 // processRegionSendTask receives region requests from the channel and sends them to the remote store.
@@ -378,11 +406,11 @@ func (s *regionRequestWorker) processRegionSendTask(
 			}
 			for _, state := range s.takeRegionStates(subID) {
 				state.markStopped(&requestCancelledErr{})
-				regionEvent := regionEvent{
+				subEvent := subscriptionEvent{
 					state:  state,
 					worker: s,
 				}
-				s.client.pushRegionEventToDS(subID, regionEvent)
+				s.client.pushSubscriptionEvent(subID, subEvent)
 			}
 
 		} else if region.subscribedSpan.stopped.Load() {
