@@ -46,6 +46,12 @@ func newPendingScheduleEventMap() *pendingScheduleEventMap {
 	}
 }
 
+func (m *pendingScheduleEventMap) Len() int {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	return len(m.events)
+}
+
 func (m *pendingScheduleEventMap) add(event *BarrierEvent) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
