@@ -47,6 +47,8 @@ type AddDispatcherOperator struct {
 
 	sendThrottler sendThrottler
 
+	// checksumUpdater updates maintainer-side expected dispatcher ownership on successful operator completion.
+	// It must be concurrency-safe because operators can be finalized from worker goroutines.
 	checksumUpdater DispatcherSetChecksumUpdater
 }
 

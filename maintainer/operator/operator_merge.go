@@ -61,6 +61,8 @@ type MergeDispatcherOperator struct {
 
 	sendThrottler sendThrottler
 
+	// checksumUpdater updates maintainer-side expected dispatcher ownership when old dispatchers are merged
+	// into a new dispatcher ID.
 	checksumUpdater DispatcherSetChecksumUpdater
 }
 

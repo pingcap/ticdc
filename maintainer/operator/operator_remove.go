@@ -37,6 +37,7 @@ type removeDispatcherOperator struct {
 
 	sendThrottler sendThrottler
 
+	// checksumUpdater updates maintainer-side expected dispatcher ownership once removal is confirmed.
 	checksumUpdater DispatcherSetChecksumUpdater
 }
 

@@ -75,7 +75,7 @@ import (
 func (c *Controller) FinishBootstrap(
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
 	isMysqlCompatibleBackend bool,
-) (*heartbeatpb.MaintainerPostBootstrapRequest, error) {
+) (*heartbeatpb.MaintainerPostBootstrapRequest, []*messaging.TargetMessage, error) {
 	if c.bootstrapped {
 		log.Panic("already bootstrapped",
 			zap.Stringer("changefeed", c.changefeedID),
@@ -95,7 +95,7 @@ func (c *Controller) FinishBootstrap(
 		log.Error("load table from scheme store failed",
 			zap.String("changefeed", c.changefeedID.Name()),
 			zap.Error(err))
-		return nil, errors.Trace(err)
+		return nil, nil, errors.Trace(err)
 	}
 
 	// Build table splitability map for later use
@@ -114,7 +114,7 @@ func (c *Controller) FinishBootstrap(
 	c.handleRemainingWorkingTasks(workingTaskMap, redoWorkingTaskMap)
 
 	// Step 6: Initialize and start sub components
-	c.initializeComponents(allNodesResp)
+	checksumMsgs := c.initializeComponents(allNodesResp)
 
 	// Step 7: Prepare response
 	initSchemaInfos := c.prepareSchemaInfoResponse(schemaInfos)
@@ -126,7 +126,7 @@ func (c *Controller) FinishBootstrap(
 		ChangefeedID:                  c.changefeedID.ToPB(),
 		TableTriggerEventDispatcherId: c.spanController.GetDDLDispatcherID().ToPB(),
 		Schemas:                       initSchemaInfos,
-	}, nil
+	}, checksumMsgs, nil
 }
 
 func (c *Controller) determineStartTs(allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) uint64 {
@@ -279,19 +279,21 @@ func (c *Controller) handleRemainingWorkingTasks(
 
 func (c *Controller) initializeComponents(
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
-) {
-	// Initialize dispatcher set checksum managers before starting scheduler/operator tasks.
-	// This avoids missing dispatcher set changes that could be triggered by task execution.
-	c.resetAndSendDispatcherSetChecksums(allNodesResp)
-
+) []*messaging.TargetMessage {
 	// Initialize barrier
 	if c.enableRedo {
 		c.redoBarrier = NewBarrier(c.redoSpanController, c.redoOperatorController, util.GetOrZero(c.cfConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.RedoMode)
 	}
 	c.barrier = NewBarrier(c.spanController, c.operatorController, util.GetOrZero(c.cfConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.DefaultMode)
 
-	// Start scheduler
+	// Initialize dispatcher set checksum managers before starting scheduler/operator tasks.
+	// This avoids missing dispatcher set changes that could be triggered by task execution.
+	msgs := c.resetAndBuildDispatcherSetChecksumMessages(allNodesResp)
+
 	c.taskHandlesMu.Lock()
+	defer c.taskHandlesMu.Unlock()
+
+	// Start scheduler
 	c.taskHandles = append(c.taskHandles, c.schedulerController.Start(c.taskPool)...)
 
 	if c.enableRedo {
@@ -299,14 +301,15 @@ func (c *Controller) initializeComponents(
 	}
 	// Start operator controller
 	c.taskHandles = append(c.taskHandles, c.taskPool.Submit(c.operatorController, time.Now()))
-	c.taskHandlesMu.Unlock()
+
+	return msgs
 }
 
-func (c *Controller) resetAndSendDispatcherSetChecksums(
+func (c *Controller) resetAndBuildDispatcherSetChecksumMessages(
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
-) {
+) []*messaging.TargetMessage {
 	if c.defaultChecksumManager == nil && c.redoChecksumManager == nil {
-		return
+		return nil
 	}
 
 	nodes := make([]node.ID, 0, len(allNodesResp))
@@ -314,40 +317,35 @@ func (c *Controller) resetAndSendDispatcherSetChecksums(
 		nodes = append(nodes, id)
 	}
 
-	sendMessages := func(msgs []*messaging.TargetMessage) {
-		for _, msg := range msgs {
-			if msg == nil {
-				continue
-			}
-			_ = c.messageCenter.SendCommand(msg)
-		}
-	}
+	msgs := make([]*messaging.TargetMessage, 0)
 
 	if c.defaultChecksumManager != nil {
-		expected := make(map[node.ID][]common.DispatcherID, len(nodes))
-		if ddl := c.spanController.GetDDLDispatcher(); ddl != nil {
-			expected[ddl.GetNodeID()] = append(expected[ddl.GetNodeID()], ddl.ID)
-		}
-		for _, span := range c.spanController.GetReplicating() {
-			capture := span.GetNodeID()
-			expected[capture] = append(expected[capture], span.ID)
-		}
-		epoch := c.defaultChecksumManager.epoch
-		sendMessages(c.defaultChecksumManager.ResetAndSendFull(epoch, nodes, expected))
+		msgs = append(msgs, c.resetAndBuildChecksumMessages(c.spanController, c.defaultChecksumManager, nodes)...)
 	}
 
 	if c.redoChecksumManager != nil {
-		expected := make(map[node.ID][]common.DispatcherID, len(nodes))
-		if ddl := c.redoSpanController.GetDDLDispatcher(); ddl != nil {
-			expected[ddl.GetNodeID()] = append(expected[ddl.GetNodeID()], ddl.ID)
-		}
-		for _, span := range c.redoSpanController.GetReplicating() {
-			capture := span.GetNodeID()
-			expected[capture] = append(expected[capture], span.ID)
-		}
-		epoch := c.redoChecksumManager.epoch
-		sendMessages(c.redoChecksumManager.ResetAndSendFull(epoch, nodes, expected))
+		msgs = append(msgs, c.resetAndBuildChecksumMessages(c.redoSpanController, c.redoChecksumManager, nodes)...)
 	}
+
+	return msgs
+}
+
+func (c *Controller) resetAndBuildChecksumMessages(
+	spanController *span.Controller,
+	checksumManager *captureSetChecksumManager,
+	nodes []node.ID,
+) []*messaging.TargetMessage {
+	expected := make(map[node.ID][]common.DispatcherID, len(nodes))
+	if ddl := spanController.GetDDLDispatcher(); ddl != nil {
+		expected[ddl.GetNodeID()] = append(expected[ddl.GetNodeID()], ddl.ID)
+	}
+	for _, span := range spanController.GetReplicating() {
+		capture := span.GetNodeID()
+		expected[capture] = append(expected[capture], span.ID)
+	}
+
+	epoch := checksumManager.epoch
+	return checksumManager.ResetAndSendFull(epoch, nodes, expected)
 }
 
 func (c *Controller) prepareSchemaInfoResponse(

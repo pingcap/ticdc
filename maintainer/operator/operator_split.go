@@ -67,6 +67,8 @@ type SplitDispatcherOperator struct {
 
 	sendThrottler sendThrottler
 
+	// checksumUpdater updates maintainer-side expected dispatcher ownership to reflect that the original
+	// dispatcher is removed before new split dispatchers are created.
 	checksumUpdater DispatcherSetChecksumUpdater
 }
 

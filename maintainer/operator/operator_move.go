@@ -71,6 +71,8 @@ type MoveDispatcherOperator struct {
 
 	lck sync.Mutex
 
+	// checksumUpdater updates maintainer-side expected dispatcher ownership when the move completes
+	// or aborts (for example, origin removed without a successful add on dest).
 	checksumUpdater DispatcherSetChecksumUpdater
 }
 

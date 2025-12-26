@@ -985,7 +985,7 @@ func (m *Maintainer) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.Maintai
 		m.handleError(err)
 		return
 	}
-	msg, err := m.controller.FinishBootstrap(cachedResp, isMySQLSinkCompatible)
+	msg, checksumMsgs, err := m.controller.FinishBootstrap(cachedResp, isMySQLSinkCompatible)
 	if err != nil {
 		m.handleError(err)
 		return
@@ -997,6 +997,7 @@ func (m *Maintainer) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.Maintai
 	// For a normal case(100w tables, and 16 ascii characters for each name), the memory consumption is about 30MB.
 	m.postBootstrapMsg = msg
 	m.sendPostBootstrapRequest()
+	m.sendMessages(checksumMsgs)
 	// set status changed to true, trigger the maintainer manager to send heartbeat to coordinator
 	// to report the this changefeed's status
 	m.statusChanged.Store(true)

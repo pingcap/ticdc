@@ -656,12 +656,12 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 			message.Watermark = newWatermark
 			message.RedoWatermark = newRedoWatermark
 
-			actualDefault := e.computeDispatcherSetChecksum(common.DefaultMode)
-			actualRedo := set_checksum.Checksum{}
+			defaultChecksum := e.computeDispatcherSetChecksum(common.DefaultMode)
+			redoChecksum := set_checksum.Checksum{}
 			if e.RedoEnable {
-				actualRedo = e.computeDispatcherSetChecksum(common.RedoMode)
+				redoChecksum = e.computeDispatcherSetChecksum(common.RedoMode)
 			}
-			e.applyChecksumStateToHeartbeat(&message, actualDefault, actualRedo)
+			e.applyChecksumStateToHeartbeat(&message, defaultChecksum, redoChecksum)
 
 			e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
 		}
@@ -702,14 +702,14 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 
 	toCleanMap := make([]*cleanMap, 0)
 	dispatcherCount := 0
-	actualDefault := set_checksum.Checksum{}
-	actualRedo := set_checksum.Checksum{}
+	defaultChecksum := set_checksum.Checksum{}
+	redoChecksum := set_checksum.Checksum{}
 
 	if e.RedoEnable {
 		redoSeq := e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.RedoDispatcher) {
 			dispatcherCount++
 			if shouldIncludeDispatcherInChecksum(dispatcherItem.GetComponentStatus()) {
-				actualRedo.Add(id)
+				redoChecksum.Add(id)
 			}
 			status, cleanMap, watermark := getDispatcherStatus(id, dispatcherItem, needCompleteStatus)
 			if status != nil {
@@ -737,7 +737,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	seq := e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.EventDispatcher) {
 		dispatcherCount++
 		if shouldIncludeDispatcherInChecksum(dispatcherItem.GetComponentStatus()) {
-			actualDefault.Add(id)
+			defaultChecksum.Add(id)
 		}
 		status, cleanMap, watermark := getDispatcherStatus(id, dispatcherItem, needCompleteStatus)
 		if status != nil {
@@ -763,12 +763,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	message.Watermark.Seq = seq
 	e.latestWatermark.Set(message.Watermark)
 
-	// Dispatcher set checksum should be computed based on the dispatcher view before cleanup.
-	// This prevents watermark advancement when dispatchers are missing or duplicated due to
-	// scheduling anomalies.
-
-	aggWatermark := message.Watermark
-	e.applyChecksumStateToHeartbeat(&message, actualDefault, actualRedo)
+	e.applyChecksumStateToHeartbeat(&message, defaultChecksum, redoChecksum)
 
 	// if the event dispatcher manager is closing, we don't to remove the stopped dispatchers.
 	if !e.closing.Load() {
@@ -793,20 +788,20 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 		// Fill the missing watermarks with the final aggregated values to avoid
 		// reporting an uninitialized checkpoint.
 		for _, id := range redoDispatchersWithoutWatermark {
-			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, aggWatermark.CheckpointTs))
+			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
 		}
 		for _, id := range eventDispatchersWithoutWatermark {
-			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, aggWatermark.CheckpointTs))
+			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
 		}
 
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).SendDispatcherHeartbeat(eventServiceDispatcherHeartbeat)
 	}
 
-	e.metricCheckpointTs.Set(float64(aggWatermark.CheckpointTs))
-	e.metricResolvedTs.Set(float64(aggWatermark.ResolvedTs))
+	e.metricCheckpointTs.Set(float64(message.Watermark.CheckpointTs))
+	e.metricResolvedTs.Set(float64(message.Watermark.ResolvedTs))
 
-	phyCheckpointTs := oracle.ExtractPhysical(aggWatermark.CheckpointTs)
-	phyResolvedTs := oracle.ExtractPhysical(aggWatermark.ResolvedTs)
+	phyCheckpointTs := oracle.ExtractPhysical(message.Watermark.CheckpointTs)
+	phyResolvedTs := oracle.ExtractPhysical(message.Watermark.ResolvedTs)
 
 	pdTime := e.pdClock.CurrentTime()
 	e.metricCheckpointTsLag.Set(float64(oracle.GetPhysical(pdTime)-phyCheckpointTs) / 1e3)

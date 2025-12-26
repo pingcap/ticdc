@@ -132,7 +132,7 @@ var (
 			Subsystem: "dispatchermanager",
 			Name:      "dispatcher_set_checksum_not_ok",
 			Help:      "Whether dispatcher set checksum state is not OK (1 means mismatch or uninitialized).",
-		}, []string{getKeyspaceLabel(), "changefeed", "capture", "mode", "state"})
+		}, []string{getKeyspaceLabel(), "changefeed", "mode", "state"})
 
 	DispatcherManagerDispatcherSetChecksumNotOKTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -140,7 +140,7 @@ var (
 			Subsystem: "dispatchermanager",
 			Name:      "dispatcher_set_checksum_not_ok_total",
 			Help:      "Total number of heartbeat watermarks suppressed due to dispatcher set checksum state not OK.",
-		}, []string{getKeyspaceLabel(), "changefeed", "capture", "mode", "state"})
+		}, []string{getKeyspaceLabel(), "changefeed", "mode", "state"})
 )
 
 func initDispatcherMetrics(registry *prometheus.Registry) {

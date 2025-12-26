@@ -21,12 +21,16 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
-	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/set_checksum"
 	"go.uber.org/zap"
 )
 
+// dispatcherSetChecksumExpected stores the latest expected dispatcher set checksum pushed by Maintainer.
+//
+// Maintainer sends (epoch, seq, checksum) updates to DispatcherManager. Updates can be resent and
+// reordered, so DispatcherManager keeps the newest seq for each (epoch, mode) and ignores older
+// ones to ensure eventual convergence.
 type dispatcherSetChecksumExpected struct {
 	epoch       uint64
 	seq         uint64
@@ -34,13 +38,19 @@ type dispatcherSetChecksumExpected struct {
 	initialized bool
 }
 
+// dispatcherSetChecksumRuntime tracks the runtime verification state used for metrics and log throttling.
+//
+// It records the last observed checksum state (OK / MISMATCH / UNINITIALIZED) as well as timestamps
+// to avoid spamming logs when the state stays non-OK.
 type dispatcherSetChecksumRuntime struct {
-	state            heartbeatpb.ChecksumState
-	nonOKSince       time.Time
-	lastErrorLogTime time.Time
-	gaugeInitialized bool
+	state       heartbeatpb.ChecksumState
+	nonOKSince  time.Time
+	lastLogTime time.Time
 }
 
+// dispatcherSetChecksumState maintains expected and runtime checksum states for both default and redo modes.
+//
+// It is owned by DispatcherManager and guarded by mu.
 type dispatcherSetChecksumState struct {
 	mu sync.RWMutex
 
@@ -51,6 +61,10 @@ type dispatcherSetChecksumState struct {
 	redoRuntime    dispatcherSetChecksumRuntime
 }
 
+// ApplyDispatcherSetChecksumUpdate applies a checksum update from Maintainer.
+//
+// The update is best-effort: it may be resent or reordered, and DispatcherManager will keep the
+// newest seq for each (epoch, mode).
 func (e *DispatcherManager) ApplyDispatcherSetChecksumUpdate(req *heartbeatpb.DispatcherSetChecksumUpdate) {
 	// DispatcherSetChecksumUpdate can be resent and reordered. For each (epoch, mode), keep the
 	// newest seq to ensure DispatcherManager eventually converges to the latest expected set.
@@ -77,6 +91,9 @@ func (e *DispatcherManager) ApplyDispatcherSetChecksumUpdate(req *heartbeatpb.Di
 	expected.initialized = true
 }
 
+// ResetDispatcherSetChecksum clears both expected and runtime checksum states.
+//
+// It is typically used when DispatcherManager is reset (for example, on bootstrap or epoch changes).
 func (e *DispatcherManager) ResetDispatcherSetChecksum() {
 	e.dispatcherSetChecksum.mu.Lock()
 	defer e.dispatcherSetChecksum.mu.Unlock()
@@ -87,6 +104,10 @@ func (e *DispatcherManager) ResetDispatcherSetChecksum() {
 	e.dispatcherSetChecksum.redoRuntime = dispatcherSetChecksumRuntime{}
 }
 
+// shouldIncludeDispatcherInChecksum decides whether a dispatcher should be included in runtime checksum calculation.
+//
+// Some intermediate states are excluded so that transient lifecycle stages do not incorrectly
+// flip the checksum state and block watermark reporting.
 func shouldIncludeDispatcherInChecksum(state heartbeatpb.ComponentState) bool {
 	switch state {
 	case heartbeatpb.ComponentState_Initializing,
@@ -98,6 +119,9 @@ func shouldIncludeDispatcherInChecksum(state heartbeatpb.ComponentState) bool {
 	}
 }
 
+// computeDispatcherSetChecksum computes the checksum of dispatchers that are considered "active" for the mode.
+//
+// It only includes dispatchers whose component states pass shouldIncludeDispatcherInChecksum.
 func (e *DispatcherManager) computeDispatcherSetChecksum(mode int64) set_checksum.Checksum {
 	var checksum set_checksum.Checksum
 	if common.IsRedoMode(mode) {
@@ -118,16 +142,20 @@ func (e *DispatcherManager) computeDispatcherSetChecksum(mode int64) set_checksu
 	return checksum
 }
 
+// applyChecksumStateToHeartbeat verifies dispatcher set checksums and updates heartbeat fields.
+//
+// When checksum is not OK, watermark reporting is suppressed (set to nil) to prevent Maintainer
+// from advancing checkpoint based on possibly stale dispatcher sets.
 func (e *DispatcherManager) applyChecksumStateToHeartbeat(
 	msg *heartbeatpb.HeartBeatRequest,
-	actualDefault set_checksum.Checksum,
-	actualRedo set_checksum.Checksum,
+	defaultChecksum set_checksum.Checksum,
+	redoChecksum set_checksum.Checksum,
 ) {
 	if msg == nil {
 		return
 	}
 
-	defaultState := e.verifyDispatcherSetChecksum(common.DefaultMode, actualDefault)
+	defaultState := e.verifyDispatcherSetChecksum(common.DefaultMode, defaultChecksum)
 	msg.ChecksumState = defaultState
 	if defaultState != heartbeatpb.ChecksumState_OK {
 		if msg.Watermark != nil {
@@ -137,7 +165,7 @@ func (e *DispatcherManager) applyChecksumStateToHeartbeat(
 	}
 
 	if e.RedoEnable {
-		redoState := e.verifyDispatcherSetChecksum(common.RedoMode, actualRedo)
+		redoState := e.verifyDispatcherSetChecksum(common.RedoMode, redoChecksum)
 		msg.RedoChecksumState = redoState
 		if redoState != heartbeatpb.ChecksumState_OK {
 			if msg.RedoWatermark != nil {
@@ -148,169 +176,152 @@ func (e *DispatcherManager) applyChecksumStateToHeartbeat(
 	}
 }
 
+// incDispatcherSetChecksumNotOKTotal increments the total counter when watermark reporting is suppressed.
 func (e *DispatcherManager) incDispatcherSetChecksumNotOKTotal(mode int64, state heartbeatpb.ChecksumState) {
 	if state == heartbeatpb.ChecksumState_OK {
 		return
 	}
 
-	stateLabel := "mismatch"
-	if state == heartbeatpb.ChecksumState_UNINITIALIZED {
-		stateLabel = "uninitialized"
-	}
-
-	capture := appcontext.GetID()
-	modeLabel := common.StringMode(mode)
-	keyspace := e.changefeedID.Keyspace()
-	changefeed := e.changefeedID.Name()
-
 	metrics.DispatcherManagerDispatcherSetChecksumNotOKTotal.WithLabelValues(
-		keyspace, changefeed, capture, modeLabel, stateLabel,
+		e.changefeedID.Keyspace(), e.changefeedID.Name(), common.StringMode(mode), checksumStateLabel(state),
 	).Inc()
 }
 
+// verifyDispatcherSetChecksum compares runtime checksum with expected checksum for the mode.
+//
+// It updates runtime state used for per-capture metrics and emits throttled logs when the state is non-OK.
 func (e *DispatcherManager) verifyDispatcherSetChecksum(mode int64, actual set_checksum.Checksum) heartbeatpb.ChecksumState {
 	now := time.Now()
-	capture := appcontext.GetID()
 	modeLabel := common.StringMode(mode)
 	keyspace := e.changefeedID.Keyspace()
 	changefeed := e.changefeedID.Name()
 
-	var (
-		state            heartbeatpb.ChecksumState
-		expectedSeq      uint64
-		expectedInit     bool
-		expectedChecksum set_checksum.Checksum
-		oldState         heartbeatpb.ChecksumState
-		nonOKSince       time.Time
-		needGaugeUpdate  bool
-		logRecovered     bool
-		logNotOKWarn     bool
-		logNotOKError    bool
-		recoveredFor     time.Duration
-		notOKFor         time.Duration
-	)
-
 	e.dispatcherSetChecksum.mu.Lock()
-	expected := &e.dispatcherSetChecksum.defaultExpected
-	runtime := &e.dispatcherSetChecksum.defaultRuntime
-	if common.IsRedoMode(mode) {
-		expected = &e.dispatcherSetChecksum.redoExpected
-		runtime = &e.dispatcherSetChecksum.redoRuntime
-	}
+	expected, runtime := e.getDispatcherSetChecksumStates(mode)
 
-	expectedSeq = expected.seq
-	expectedInit = expected.initialized
-	expectedChecksum = expected.checksum
+	expectedSeq := expected.seq
+	expectedInit := expected.initialized
+	expectedChecksum := expected.checksum
+	state := computeChecksumState(*expected, actual)
 
-	if !expected.initialized {
-		state = heartbeatpb.ChecksumState_UNINITIALIZED
-	} else if !actual.Equal(expected.checksum) {
-		state = heartbeatpb.ChecksumState_MISMATCH
-	} else {
-		state = heartbeatpb.ChecksumState_OK
-	}
+	oldState := runtime.state
 
-	oldState = runtime.state
-	nonOKSince = runtime.nonOKSince
-	needGaugeUpdate = !runtime.gaugeInitialized || oldState != state
-
-	const (
-		errorAfter    = 30 * time.Second
-		errorInterval = 30 * time.Second
-	)
-
-	if state == heartbeatpb.ChecksumState_OK {
-		if oldState != heartbeatpb.ChecksumState_OK && !runtime.nonOKSince.IsZero() {
-			logRecovered = true
-			recoveredFor = now.Sub(runtime.nonOKSince)
-		}
-		runtime.state = state
-		runtime.nonOKSince = time.Time{}
-		runtime.lastErrorLogTime = time.Time{}
-	} else {
-		needResetTimer := oldState == heartbeatpb.ChecksumState_OK || oldState != state
-		if needResetTimer || runtime.nonOKSince.IsZero() {
-			runtime.nonOKSince = now
-			runtime.lastErrorLogTime = time.Time{}
-			logNotOKWarn = true
-		} else {
-			notOKFor = now.Sub(runtime.nonOKSince)
-			if notOKFor >= errorAfter && now.Sub(runtime.lastErrorLogTime) >= errorInterval {
-				runtime.lastErrorLogTime = now
-				logNotOKError = true
-			}
-		}
-		runtime.state = state
-		nonOKSince = runtime.nonOKSince
-	}
-	runtime.gaugeInitialized = true
+	nonOKSince, logNotOK := updateChecksumRuntime(runtime, oldState, state, now)
 	e.dispatcherSetChecksum.mu.Unlock()
 
-	if needGaugeUpdate {
-		setGauge := func(stateLabel string, value float64) {
-			metrics.DispatcherManagerDispatcherSetChecksumNotOKGauge.WithLabelValues(
-				keyspace, changefeed, capture, modeLabel, stateLabel,
-			).Set(value)
-		}
-
-		setGauge("mismatch", 0)
-		setGauge("uninitialized", 0)
-
-		if state != heartbeatpb.ChecksumState_OK {
-			stateLabel := "mismatch"
-			if state == heartbeatpb.ChecksumState_UNINITIALIZED {
-				stateLabel = "uninitialized"
-			}
-			setGauge(stateLabel, 1)
-		}
+	if oldState != state {
+		e.updateDispatcherSetChecksumGauge(keyspace, changefeed, modeLabel, state)
 	}
 
-	if logRecovered {
-		log.Info("dispatcher set checksum recovered",
-			zap.Stringer("changefeedID", e.changefeedID),
-			zap.String("capture", capture),
-			zap.String("mode", modeLabel),
-			zap.Duration("duration", recoveredFor),
-			zap.Uint64("expectedSeq", expectedSeq),
-		)
-	}
-
-	if logNotOKWarn || logNotOKError {
-		level := "warn"
-		if logNotOKError {
-			level = "error"
-		}
-		stateStr := "mismatch"
-		if state == heartbeatpb.ChecksumState_UNINITIALIZED {
-			stateStr = "uninitialized"
-		}
-		notOKFor = now.Sub(nonOKSince)
+	if logNotOK {
+		notOKFor := now.Sub(nonOKSince)
 		fields := []zap.Field{
 			zap.Stringer("changefeedID", e.changefeedID),
-			zap.String("capture", capture),
 			zap.String("mode", modeLabel),
-			zap.String("state", stateStr),
+			zap.String("state", checksumStateLabel(state)),
 			zap.Duration("duration", notOKFor),
 			zap.Uint64("expectedSeq", expectedSeq),
 			zap.Bool("expectedInitialized", expectedInit),
-			zap.Uint64("actualCount", actual.Count),
-			zap.Uint64("actualXorHigh", actual.XorHigh),
-			zap.Uint64("actualXorLow", actual.XorLow),
-			zap.Uint64("actualSumHigh", actual.SumHigh),
-			zap.Uint64("actualSumLow", actual.SumLow),
-			zap.Uint64("expectedCount", expectedChecksum.Count),
-			zap.Uint64("expectedXorHigh", expectedChecksum.XorHigh),
-			zap.Uint64("expectedXorLow", expectedChecksum.XorLow),
-			zap.Uint64("expectedSumHigh", expectedChecksum.SumHigh),
-			zap.Uint64("expectedSumLow", expectedChecksum.SumLow),
+			zap.Any("actualChecksum", actual),
+			zap.Any("expectedChecksum", expectedChecksum),
 			zap.String("prevState", oldState.String()),
 		}
-		if level == "error" {
-			log.Error("dispatcher set checksum not ok, skip watermark reporting", fields...)
-		} else {
-			log.Warn("dispatcher set checksum not ok, skip watermark reporting", fields...)
-		}
+		log.Warn("dispatcher set checksum not ok, skip watermark reporting", fields...)
 	}
 
 	return state
+}
+
+// getDispatcherSetChecksumStates returns pointers to expected/runtime states for the given mode.
+// Caller must hold e.dispatcherSetChecksum.mu.
+func (e *DispatcherManager) getDispatcherSetChecksumStates(
+	mode int64,
+) (*dispatcherSetChecksumExpected, *dispatcherSetChecksumRuntime) {
+	if common.IsRedoMode(mode) {
+		return &e.dispatcherSetChecksum.redoExpected, &e.dispatcherSetChecksum.redoRuntime
+	}
+	return &e.dispatcherSetChecksum.defaultExpected, &e.dispatcherSetChecksum.defaultRuntime
+}
+
+// computeChecksumState compares actual checksum with expected checksum and returns the derived state.
+func computeChecksumState(expected dispatcherSetChecksumExpected, actual set_checksum.Checksum) heartbeatpb.ChecksumState {
+	if !expected.initialized {
+		return heartbeatpb.ChecksumState_UNINITIALIZED
+	}
+	if !actual.Equal(expected.checksum) {
+		return heartbeatpb.ChecksumState_MISMATCH
+	}
+	return heartbeatpb.ChecksumState_OK
+}
+
+// checksumStateLabel maps checksum states to label values used by metrics/logging.
+func checksumStateLabel(state heartbeatpb.ChecksumState) string {
+	if state == heartbeatpb.ChecksumState_UNINITIALIZED {
+		return "uninitialized"
+	}
+	return "mismatch"
+}
+
+// updateDispatcherSetChecksumGauge updates the per-capture gauge reflecting the current checksum state.
+func (e *DispatcherManager) updateDispatcherSetChecksumGauge(
+	keyspace string,
+	changefeed string,
+	modeLabel string,
+	state heartbeatpb.ChecksumState,
+) {
+	setGauge := func(stateLabel string, value float64) {
+		metrics.DispatcherManagerDispatcherSetChecksumNotOKGauge.WithLabelValues(
+			keyspace, changefeed, modeLabel, stateLabel,
+		).Set(value)
+	}
+
+	setGauge("mismatch", 0)
+	setGauge("uninitialized", 0)
+
+	if state != heartbeatpb.ChecksumState_OK {
+		setGauge(checksumStateLabel(state), 1)
+	}
+}
+
+// updateChecksumRuntime updates runtime bookkeeping and decides whether to emit a non-OK log.
+// Caller must hold e.dispatcherSetChecksum.mu for the corresponding runtime state.
+func updateChecksumRuntime(
+	runtime *dispatcherSetChecksumRuntime,
+	oldState heartbeatpb.ChecksumState,
+	newState heartbeatpb.ChecksumState,
+	now time.Time,
+) (
+	nonOKSince time.Time,
+	logNotOK bool,
+) {
+	const (
+		logAfter    = 30 * time.Second
+		logInterval = 30 * time.Second
+	)
+
+	if newState == heartbeatpb.ChecksumState_OK {
+		runtime.state = newState
+		runtime.nonOKSince = time.Time{}
+		runtime.lastLogTime = time.Time{}
+		return time.Time{}, false
+	}
+
+	needResetTimer := oldState == heartbeatpb.ChecksumState_OK || oldState != newState
+	if needResetTimer || runtime.nonOKSince.IsZero() {
+		runtime.nonOKSince = now
+		runtime.lastLogTime = time.Time{}
+	}
+
+	runtime.state = newState
+	nonOKSince = runtime.nonOKSince
+
+	notOKFor := now.Sub(nonOKSince)
+	if notOKFor < logAfter {
+		return nonOKSince, false
+	}
+	if !runtime.lastLogTime.IsZero() && now.Sub(runtime.lastLogTime) < logInterval {
+		return nonOKSince, false
+	}
+	runtime.lastLogTime = now
+	return nonOKSince, true
 }

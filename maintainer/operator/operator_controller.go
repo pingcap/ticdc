@@ -60,6 +60,8 @@ type Controller struct {
 	// lastWarnTime tracks the last warning time for each operator to avoid spam logs
 	lastWarnTime map[common.DispatcherID]time.Time
 
+	// checksumUpdater is passed to operators so they can update maintainer-side expected dispatcher ownership
+	// when they complete. It is an optional dependency in tests.
 	checksumUpdater DispatcherSetChecksumUpdater
 }
 
