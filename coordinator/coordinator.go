@@ -155,7 +155,7 @@ func (c *coordinator) recvMessages(ctx context.Context, msg *messaging.TargetMes
 
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return context.Cause(ctx)
 	default:
 		c.eventCh.In() <- &Event{message: msg}
 	}
@@ -202,7 +202,7 @@ func (c *coordinator) run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return context.Cause(ctx)
 		case <-gcTicker.C:
 			if err := c.updateGCSafepoint(ctx); err != nil {
 				log.Warn("update gc safepoint failed",
