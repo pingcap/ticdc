@@ -15,6 +15,7 @@ package logpuller
 
 import (
 	"context"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -73,6 +74,9 @@ var (
 
 	metricSubscriptionClientDSChannelSize     = metrics.DynamicStreamEventChanSize.WithLabelValues("event-store")
 	metricSubscriptionClientDSPendingQueueLen = metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-store")
+
+	metricsResolvedTsCount = metrics.PullerEventCounter.WithLabelValues("resolved_ts")
+	metricsEventCount      = metrics.PullerEventCounter.WithLabelValues("event")
 )
 
 // To generate an ID for a new subscription.
@@ -101,7 +105,7 @@ type rangeTask struct {
 	priority       TaskType
 }
 
-const kvEventsCacheMaxSize = 32
+const pendingKVEntriesMaxSize = 32
 
 // subscribedSpan represents a span to subscribe.
 // It contains a sub span of a table(or the total span of a table),
@@ -123,7 +127,7 @@ type subscribedSpan struct {
 
 	advanceInterval int64
 
-	kvEventsCache []common.RawKVEntry
+	pendingKVEntries []common.RawKVEntry
 
 	// To handle span removing.
 	stopped atomic.Bool
@@ -139,17 +143,25 @@ type subscribedSpan struct {
 	resolvedTs        atomic.Uint64
 }
 
-func (span *subscribedSpan) clearKVEventsCache() {
-	if cap(span.kvEventsCache) > kvEventsCacheMaxSize {
-		span.kvEventsCache = nil
+func (span *subscribedSpan) clearPendingKVEntries() {
+	if cap(span.pendingKVEntries) > pendingKVEntriesMaxSize {
+		span.pendingKVEntries = nil
 	} else {
-		span.kvEventsCache = span.kvEventsCache[:0]
+		span.pendingKVEntries = span.pendingKVEntries[:0]
 	}
 }
 
 type SubscriptionClientConfig struct {
 	// The number of region request workers to send region task for every tikv store
 	RegionRequestWorkerPerStore uint
+
+	// RegionEventWorkerCount is the number of fixed workers to process region events,
+	// sharded by regionID. If it is 0, it defaults to runtime.GOMAXPROCS(0).
+	RegionEventWorkerCount uint
+
+	// RegionEventWorkerQueueSize is the per-worker channel size for region events.
+	// If it is 0, it defaults to 1024.
+	RegionEventWorkerQueueSize int
 }
 
 type sharedClientMetrics struct {
@@ -190,7 +202,10 @@ type subscriptionClient struct {
 
 	stores sync.Map
 
-	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
+	ds dynstream.DynamicStream[int, SubscriptionID, subscriptionEvent, *subscribedSpan, *subscriptionEventHandler]
+	// regionEventProcessor handles region events concurrently (sharded by regionID),
+	// and pushes processed subscription events into ds.
+	regionEventProcessor *regionEventProcessor
 	// the following three fields are used to manage feedback from ds and notify other goroutines
 	mu     sync.Mutex
 	cond   *sync.Cond
@@ -245,19 +260,26 @@ func NewSubscriptionClient(
 	subClient.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
 
 	option := dynstream.NewOption()
-	// Note: it is max batch size of the kv sent from tikv(not committed rows)
+	// Note: it is max batch size of the subscription events handled by dynamic stream.
 	option.BatchCount = 1024
-	// TODO: Set `UseBuffer` to true until we refactor the `regionEventHandler.Handle` method so that it doesn't call any method of the dynamic stream. Currently, if `UseBuffer` is set to false, there will be a deadlock:
-	// 	ds.handleLoop fetch events from `ch` -> regionEventHandler.Handle -> ds.RemovePath -> send event to `ch`
-	option.UseBuffer = true
 	option.EnableMemoryControl = true
 	ds := dynstream.NewParallelDynamicStream(
-		&regionEventHandler{subClient: subClient},
+		&subscriptionEventHandler{wake: subClient.wakeSubscription},
 		option,
 	)
 	ds.Start()
 	subClient.ds = ds
 	subClient.cond = sync.NewCond(&subClient.mu)
+
+	regionWorkerCount := int(config.RegionEventWorkerCount)
+	if regionWorkerCount == 0 {
+		regionWorkerCount = runtime.GOMAXPROCS(0)
+	}
+	subClient.regionEventProcessor = newRegionEventProcessor(
+		regionWorkerCount,
+		config.RegionEventWorkerQueueSize,
+		subClient,
+	)
 
 	subClient.initMetrics()
 	return subClient
@@ -395,7 +417,7 @@ func (s *subscriptionClient) wakeSubscription(subID SubscriptionID) {
 	s.ds.Wake(subID)
 }
 
-func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
+func (s *subscriptionClient) pushSubscriptionEventToDS(subID SubscriptionID, event subscriptionEvent) {
 	// fast path
 	if !s.paused.Load() {
 		s.ds.Push(subID, event)
@@ -419,11 +441,11 @@ func (s *subscriptionClient) handleDSFeedBack(ctx context.Context) error {
 			switch feedback.FeedbackType {
 			case dynstream.PauseArea:
 				s.paused.Store(true)
-				log.Info("subscription client pause push region event")
+				log.Info("subscription client pause pushing events")
 			case dynstream.ResumeArea:
 				s.paused.Store(false)
 				s.cond.Broadcast()
-				log.Info("subscription client resume push region event")
+				log.Info("subscription client resume pushing events")
 			case dynstream.ReleasePath, dynstream.ResumePath:
 				// Ignore it, because it is no need to pause and resume a path in puller.
 			}
@@ -459,6 +481,9 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 // Close closes the client. Must be called after `Run` returns.
 func (s *subscriptionClient) Close(ctx context.Context) error {
 	s.cancel()
+	if s.regionEventProcessor != nil {
+		s.regionEventProcessor.Close()
+	}
 	s.ds.Close()
 	s.regionTaskQueue.Close()
 	return nil

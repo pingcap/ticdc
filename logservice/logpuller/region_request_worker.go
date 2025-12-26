@@ -123,14 +123,13 @@ func newRegionRequestWorker(
 				}
 				regionErr = &sendRequestToStoreErr{}
 			}
-			for subID, m := range worker.clearRegionStates() {
+			for _, m := range worker.clearRegionStates() {
 				for _, state := range m {
 					state.markStopped(regionErr)
 					regionEvent := regionEvent{
-						state:  state,
-						worker: worker,
+						state: state,
 					}
-					worker.client.pushRegionEventToDS(subID, regionEvent)
+					worker.client.regionEventProcessor.Dispatch(regionEvent)
 				}
 			}
 			// The store may fail forever, so we need try to re-schedule all pending regions.
@@ -207,7 +206,7 @@ func (s *regionRequestWorker) run(ctx context.Context, credential *security.Cred
 	return isCanceled()
 }
 
-// receiveAndDispatchChangeEventsToProcessor receives events from the grpc stream and dispatches them to ds.
+// receiveAndDispatchChangeEvents receives events from the grpc stream and dispatches them to the region event processor.
 func (s *regionRequestWorker) receiveAndDispatchChangeEvents(conn *ConnAndClient) error {
 	for {
 		changeEvent, err := conn.Client.Recv()
@@ -238,8 +237,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 		state := s.getRegionState(subscriptionID, regionID)
 		if state != nil {
 			regionEvent := regionEvent{
-				state:  state,
-				worker: s,
+				state: state,
 			}
 			switch eventData := event.Event.(type) {
 			case *cdcpb.Event_Entries_:
@@ -270,7 +268,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 			default:
 				log.Panic("unknown event type", zap.Any("event", event))
 			}
-			s.client.pushRegionEventToDS(SubscriptionID(event.RequestId), regionEvent)
+			s.client.regionEventProcessor.Dispatch(regionEvent)
 		} else {
 			switch event.Event.(type) {
 			case *cdcpb.Event_Error:
@@ -301,21 +299,53 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 			zap.Any("regionIDs", resolvedTsEvent.Regions))
 		return
 	}
-	for _, regionID := range resolvedTsEvent.Regions {
-		if state := s.getRegionState(subscriptionID, regionID); state != nil {
-			s.client.pushRegionEventToDS(SubscriptionID(resolvedTsEvent.RequestId), regionEvent{
-				state:      state,
-				worker:     s,
-				resolvedTs: resolvedTsEvent.Ts,
-			})
-		} else {
-			log.Warn("region request worker receives a resolved ts event for an untracked region",
-				zap.Uint64("workerID", s.workerID),
-				zap.Uint64("subscriptionID", uint64(subscriptionID)),
-				zap.Uint64("regionID", regionID),
-				zap.Uint64("resolvedTs", resolvedTsEvent.Ts))
-		}
+	if len(resolvedTsEvent.Regions) == 0 {
+		return
 	}
+
+	states, missingCount, missingSample := s.collectRegionStates(subscriptionID, resolvedTsEvent.Regions)
+	if missingCount > 0 {
+		log.Warn("region request worker receives a resolved ts event for untracked regions",
+			zap.Uint64("workerID", s.workerID),
+			zap.Uint64("subscriptionID", uint64(subscriptionID)),
+			zap.Uint64("resolvedTs", resolvedTsEvent.Ts),
+			zap.Int("missingCount", missingCount),
+			zap.Any("missingSampleRegionIDs", missingSample))
+	}
+	s.client.regionEventProcessor.DispatchResolvedTsBatch(resolvedTsEvent.Ts, states)
+}
+
+func (s *regionRequestWorker) collectRegionStates(
+	subID SubscriptionID,
+	regionIDs []uint64,
+) (states []*regionFeedState, missingCount int, missingSample []uint64) {
+	if len(regionIDs) == 0 {
+		return nil, 0, nil
+	}
+	missingSample = make([]uint64, 0, 8)
+
+	s.requestedRegions.RLock()
+	statesMap := s.requestedRegions.subscriptions[subID]
+	if statesMap == nil {
+		s.requestedRegions.RUnlock()
+		sampleLen := min(len(regionIDs), cap(missingSample))
+		missingSample = append(missingSample, regionIDs[:sampleLen]...)
+		return nil, len(regionIDs), missingSample
+	}
+	states = make([]*regionFeedState, 0, len(regionIDs))
+	for _, regionID := range regionIDs {
+		state := statesMap[regionID]
+		if state == nil {
+			missingCount++
+			if len(missingSample) < cap(missingSample) {
+				missingSample = append(missingSample, regionID)
+			}
+			continue
+		}
+		states = append(states, state)
+	}
+	s.requestedRegions.RUnlock()
+	return states, missingCount, missingSample
 }
 
 // processRegionSendTask receives region requests from the channel and sends them to the remote store.
@@ -379,10 +409,9 @@ func (s *regionRequestWorker) processRegionSendTask(
 			for _, state := range s.takeRegionStates(subID) {
 				state.markStopped(&requestCancelledErr{})
 				regionEvent := regionEvent{
-					state:  state,
-					worker: s,
+					state: state,
 				}
-				s.client.pushRegionEventToDS(subID, regionEvent)
+				s.client.regionEventProcessor.Dispatch(regionEvent)
 			}
 
 		} else if region.subscribedSpan.stopped.Load() {
