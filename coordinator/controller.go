@@ -710,6 +710,16 @@ func (c *Controller) ResumeChangefeed(
 	if cf == nil {
 		return errors.New("changefeed not found")
 	}
+
+	state := cf.GetInfo().State
+	switch state {
+	case config.StateFailed, config.StateStopped, config.StateFinished:
+	default:
+		log.Warn("ignore resume the changefeed",
+			zap.Stringer("changefeedID", id), zap.Any("state", state))
+		return nil
+	}
+
 	if err := c.backend.ResumeChangefeed(ctx, id, newCheckpointTs); err != nil {
 		return err
 	}

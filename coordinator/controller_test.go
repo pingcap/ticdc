@@ -62,6 +62,32 @@ func TestResumeChangefeed(t *testing.T) {
 	require.Equal(t, config.StateNormal, changefeedDB.GetByID(cfID).GetInfo().State)
 }
 
+func TestResumeChangefeedNormalState(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	controller := &Controller{
+		backend:      backend,
+		changefeedDB: changefeedDB,
+	}
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateNormal,
+		SinkURI:      "mysql://127.0.0.1:3306",
+		Epoch:        233,
+	}, 1, true)
+	changefeedDB.AddReplicatingMaintainer(cf, "node1")
+
+	err := controller.ResumeChangefeed(context.Background(), cfID, 12, true)
+	require.NoError(t, err)
+
+	// The resume operation is skipped, so the epoch is not updated and should remain its original value.
+	changefeed := controller.changefeedDB.GetByID(cfID)
+	require.Equal(t, changefeed.GetInfo().Epoch, uint64(233))
+}
+
 func TestResumeChangefeedOverwriteUpdatesLastSavedCheckpointTs(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
