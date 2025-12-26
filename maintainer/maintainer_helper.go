@@ -52,6 +52,36 @@ func (c *WatermarkCaptureMap) Delete(nodeID node.ID) {
 	delete(c.m, nodeID)
 }
 
+type ChecksumStateCaptureMap struct {
+	mu sync.RWMutex
+	m  map[node.ID]heartbeatpb.ChecksumState
+}
+
+func newChecksumStateCaptureMap() *ChecksumStateCaptureMap {
+	return &ChecksumStateCaptureMap{
+		m: make(map[node.ID]heartbeatpb.ChecksumState),
+	}
+}
+
+func (c *ChecksumStateCaptureMap) Get(nodeID node.ID) (heartbeatpb.ChecksumState, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	state, ok := c.m[nodeID]
+	return state, ok
+}
+
+func (c *ChecksumStateCaptureMap) Set(nodeID node.ID, state heartbeatpb.ChecksumState) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.m[nodeID] = state
+}
+
+func (c *ChecksumStateCaptureMap) Delete(nodeID node.ID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.m, nodeID)
+}
+
 // ========================== Exported methods for HTTP API ==========================
 
 // GetDispatcherCount returns the number of dispatchers.

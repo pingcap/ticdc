@@ -38,6 +38,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/set_checksum"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus"
@@ -116,6 +117,11 @@ type DispatcherManager struct {
 
 	latestWatermark     Watermark
 	latestRedoWatermark Watermark
+
+	// dispatcherSetChecksum stores the maintainer expected dispatcher-set checksum for each mode.
+	// It is used by DispatcherManager to verify whether the local dispatcher set matches maintainer
+	// expectation before allowing checkpoint advancement.
+	dispatcherSetChecksum dispatcherSetChecksumState
 
 	closing atomic.Bool
 	closed  atomic.Bool
@@ -651,6 +657,23 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 			message.Statuses = statusMessage
 			message.Watermark = newWatermark
 			message.RedoWatermark = newRedoWatermark
+
+			defaultChecksum := e.computeDispatcherSetChecksum(common.DefaultMode)
+			redoChecksum := set_checksum.Checksum{}
+			if e.RedoEnable {
+				redoChecksum = e.computeDispatcherSetChecksum(common.RedoMode)
+			}
+
+			discardDefaultWatermark, discardRedoWatermark := e.applyChecksumStateToHeartbeat(&message, defaultChecksum, redoChecksum)
+			if discardDefaultWatermark && message.Watermark != nil {
+				e.incDispatcherSetChecksumNotOKTotal(common.DefaultMode, message.ChecksumState)
+				message.Watermark = nil
+			}
+			if e.RedoEnable && discardRedoWatermark && message.RedoWatermark != nil {
+				e.incDispatcherSetChecksumNotOKTotal(common.RedoMode, message.RedoChecksumState)
+				message.RedoWatermark = nil
+			}
+
 			e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
 		}
 	}
@@ -690,10 +713,15 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 
 	toCleanMap := make([]*cleanMap, 0)
 	dispatcherCount := 0
+	defaultChecksum := set_checksum.Checksum{}
+	redoChecksum := set_checksum.Checksum{}
 
 	if e.RedoEnable {
 		redoSeq := e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.RedoDispatcher) {
 			dispatcherCount++
+			if shouldIncludeDispatcherInChecksum(dispatcherItem.GetComponentStatus()) {
+				redoChecksum.Add(id)
+			}
 			status, cleanMap, watermark := getDispatcherStatus(id, dispatcherItem, needCompleteStatus)
 			if status != nil {
 				message.Statuses = append(message.Statuses, status)
@@ -719,6 +747,9 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 
 	seq := e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.EventDispatcher) {
 		dispatcherCount++
+		if shouldIncludeDispatcherInChecksum(dispatcherItem.GetComponentStatus()) {
+			defaultChecksum.Add(id)
+		}
 		status, cleanMap, watermark := getDispatcherStatus(id, dispatcherItem, needCompleteStatus)
 		if status != nil {
 			message.Statuses = append(message.Statuses, status)
@@ -742,6 +773,8 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 
 	message.Watermark.Seq = seq
 	e.latestWatermark.Set(message.Watermark)
+
+	discardDefaultWatermark, discardRedoWatermark := e.applyChecksumStateToHeartbeat(&message, defaultChecksum, redoChecksum)
 
 	// if the event dispatcher manager is closing, we don't to remove the stopped dispatchers.
 	if !e.closing.Load() {
@@ -784,6 +817,15 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	pdTime := e.pdClock.CurrentTime()
 	e.metricCheckpointTsLag.Set(float64(oracle.GetPhysical(pdTime)-phyCheckpointTs) / 1e3)
 	e.metricResolvedTsLag.Set(float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3)
+
+	if discardDefaultWatermark && message.Watermark != nil {
+		e.incDispatcherSetChecksumNotOKTotal(common.DefaultMode, message.ChecksumState)
+		message.Watermark = nil
+	}
+	if e.RedoEnable && discardRedoWatermark && message.RedoWatermark != nil {
+		e.incDispatcherSetChecksumNotOKTotal(common.RedoMode, message.RedoChecksumState)
+		message.RedoWatermark = nil
+	}
 
 	return &message
 }
@@ -958,6 +1000,19 @@ func (e *DispatcherManager) cleanMetrics() {
 	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
 	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
 	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
+
+	keyspace := e.changefeedID.Keyspace()
+	changefeed := e.changefeedID.Name()
+	for _, state := range []string{"mismatch", "uninitialized"} {
+		metrics.DispatcherManagerDispatcherSetChecksumNotOKGauge.DeleteLabelValues(keyspace, changefeed, "default", state)
+		metrics.DispatcherManagerDispatcherSetChecksumNotOKTotal.DeleteLabelValues(keyspace, changefeed, "default", state)
+	}
+	if e.RedoEnable {
+		for _, state := range []string{"mismatch", "uninitialized"} {
+			metrics.DispatcherManagerDispatcherSetChecksumNotOKGauge.DeleteLabelValues(keyspace, changefeed, "redo", state)
+			metrics.DispatcherManagerDispatcherSetChecksumNotOKTotal.DeleteLabelValues(keyspace, changefeed, "redo", state)
+		}
+	}
 }
 
 // ==== remove and clean related functions END ====
