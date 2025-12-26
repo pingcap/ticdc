@@ -181,8 +181,7 @@ type BasicDispatcher struct {
 	// holdingBlockEvent is only used by the table trigger dispatcher.
 	//
 	// It is a single-slot in-memory buffer for holding a non-normal (DB/All) block event
-	// when there are still un-ACKed resend tasks in resendTaskMap (typically from non-blocking
-	// DDLs that add/drop tables).
+	// when pendingACKCount > 0 (typically from non-blocking DDLs that add/drop tables).
 	//
 	// This avoids a race where maintainer creates a DB/All range checker based on an incomplete
 	// spanController task snapshot, allowing the DB/All event (e.g. syncpoint, drop database)
