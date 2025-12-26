@@ -786,8 +786,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 			d.pendingACKCount.Load() > 0 &&
 			blockedTables != nil &&
 			blockedTables.InfluenceType != commonEvent.InfluenceTypeNormal {
-			d.blockEventStatus.setBlockEvent(event, heartbeatpb.BlockStage_WAITING)
-			d.HoldBlockEvent(event)
+			d.holdBlockEvent(event)
 			return
 		}
 
@@ -846,7 +845,7 @@ func (d *BasicDispatcher) cancelResendTask(identifier BlockEventIdentifier) {
 	}
 }
 
-func (d *BasicDispatcher) HoldBlockEvent(event commonEvent.BlockEvent) {
+func (d *BasicDispatcher) holdBlockEvent(event commonEvent.BlockEvent) {
 	d.holdingBlockEventMu.Lock()
 	// The event stream is blocked by this block event, so at most one such event can be pending here.
 	if d.holdingBlockEvent != nil {
