@@ -29,7 +29,7 @@ import (
 type regionEvent struct {
 	state *regionFeedState
 
-	// only one of the following fields will be set
+	// only one of the following fields is set
 	entries    *cdcpb.Event_Entries_
 	resolvedTs uint64
 
@@ -132,9 +132,6 @@ func (p *regionEventProcessor) run(ch <-chan regionEvent) {
 				continue
 			}
 			span := state.region.subscribedSpan
-			if span == nil {
-				continue
-			}
 
 			switch {
 			case event.entries != nil:
@@ -213,13 +210,7 @@ func (p *regionEventProcessor) handleResolvedTsBatch(resolvedTs uint64, states [
 	var span *subscribedSpan
 	var triggerRegionID uint64
 	for _, state := range states {
-		if state == nil {
-			continue
-		}
 		if state.isStale() || !state.isInitialized() {
-			continue
-		}
-		if state.region.subscribedSpan == nil || state.region.lockedRangeState == nil {
 			continue
 		}
 		if span == nil {
