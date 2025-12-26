@@ -59,6 +59,8 @@ const (
 	// Second | Minute | Hour | Dom | Month | DowOptional
 	// `0 0 2 * * ?` means 2:00:00 AM every day
 	defaultFileCleanupCronSpec = "0 0 2 * * *"
+
+	defaultEnableTableAcrossNodes = true
 )
 
 type urlConfig struct {
@@ -79,16 +81,18 @@ type Config struct {
 	EnablePartitionSeparator bool
 	OutputColumnID           bool
 	FlushConcurrency         int
+	EnableTableAcrossNodes   bool
 }
 
 // NewConfig returns the default cloud storage sink config.
 func NewConfig() *Config {
 	return &Config{
-		WorkerCount:         defaultWorkerCount,
-		FlushInterval:       defaultFlushInterval,
-		FileSize:            defaultFileSize,
-		FileExpirationDays:  defaultFileExpirationDays,
-		FileCleanupCronSpec: defaultFileCleanupCronSpec,
+		WorkerCount:            defaultWorkerCount,
+		FlushInterval:          defaultFlushInterval,
+		FileSize:               defaultFileSize,
+		FileExpirationDays:     defaultFileExpirationDays,
+		FileCleanupCronSpec:    defaultFileCleanupCronSpec,
+		EnableTableAcrossNodes: defaultEnableTableAcrossNodes,
 	}
 }
 
@@ -97,6 +101,7 @@ func (c *Config) Apply(
 	ctx context.Context,
 	sinkURI *url.URL,
 	sinkConfig *config.SinkConfig,
+	enableTableAcrossNodes bool,
 ) (err error) {
 	if sinkURI == nil {
 		return cerror.ErrStorageSinkInvalidConfig.GenWithStack(
@@ -149,6 +154,7 @@ func (c *Config) Apply(
 		c.FlushConcurrency = defaultFlushConcurrency
 	}
 
+	c.EnableTableAcrossNodes = enableTableAcrossNodes
 	return nil
 }
 

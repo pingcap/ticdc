@@ -87,13 +87,16 @@ func TestCalculateNewCheckpointTsGatedByChecksumState(t *testing.T) {
 		changefeedID:           cfID,
 		selfNode:               self,
 		controller:             controller,
-		bootstrapper:           bootstrap.NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse](cfID.Name(), func(node.ID) *messaging.TargetMessage { return nil }),
+		bootstrapper:           bootstrap.NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse](cfID.Name(), func(node.ID, string) *messaging.TargetMessage { return nil }),
 		checkpointTsByCapture:  newWatermarkCaptureMap(),
 		checksumStateByCapture: newChecksumStateCaptureMap(),
 	}
 	m.watermark.Watermark = &heartbeatpb.Watermark{CheckpointTs: 100, ResolvedTs: 100}
 
-	_ = m.bootstrapper.HandleNewNodes([]*node.Info{self, other})
+	_, _, _, _ = m.bootstrapper.HandleNodesChange(map[node.ID]*node.Info{
+		self.ID:  self,
+		other.ID: other,
+	})
 
 	spanID := common.NewDispatcherID()
 	status := &heartbeatpb.TableSpanStatus{
@@ -161,15 +164,18 @@ func TestAdvanceRedoMetaTsOnceGatedByChecksumState(t *testing.T) {
 		selfNode:                   self,
 		controller:                 controller,
 		mc:                         mc,
-		bootstrapper:               bootstrap.NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse](cfID.Name(), func(node.ID) *messaging.TargetMessage { return nil }),
+		bootstrapper:               bootstrap.NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse](cfID.Name(), func(node.ID, string) *messaging.TargetMessage { return nil }),
 		redoMetaTs:                 &heartbeatpb.RedoMetaMessage{ChangefeedID: cfID.ToPB(), CheckpointTs: 100, ResolvedTs: 100},
 		redoTsByCapture:            newWatermarkCaptureMap(),
 		redoChecksumStateByCapture: newChecksumStateCaptureMap(),
 	}
 	m.watermark.Watermark = &heartbeatpb.Watermark{CheckpointTs: 150, ResolvedTs: 150}
-	m.bootstrapped.Store(true)
+	m.initialized.Store(true)
 
-	_ = m.bootstrapper.HandleNewNodes([]*node.Info{self, other})
+	_, _, _, _ = m.bootstrapper.HandleNodesChange(map[node.ID]*node.Info{
+		self.ID:  self,
+		other.ID: other,
+	})
 
 	spanID := common.NewDispatcherID()
 	status := &heartbeatpb.TableSpanStatus{

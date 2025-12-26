@@ -67,8 +67,6 @@ import (
 // 5. Controller reports checkpoint TS
 // 6. Coordinator saves checkpoint TS to meta store
 
-var updateGCTickerInterval = 1 * time.Minute
-
 // coordinator implements the Coordinator interface
 type coordinator struct {
 	nodeInfo     *node.Info
@@ -190,6 +188,7 @@ func (c *coordinator) Run(ctx context.Context) error {
 // 2. store the changefeed checkpointTs to meta store
 // 3. handle the state changed event
 func (c *coordinator) run(ctx context.Context) error {
+	updateGCTickerInterval := time.Minute
 	failpoint.Inject("InjectUpdateGCTickerInterval", func(val failpoint.Value) {
 		updateGCTickerInterval = time.Duration(val.(int) * int(time.Millisecond))
 	})
@@ -394,8 +393,8 @@ func (c *coordinator) GetChangefeed(ctx context.Context, changefeedDisplayName c
 	return c.controller.GetChangefeed(ctx, changefeedDisplayName)
 }
 
-func (c *coordinator) Bootstrapped() bool {
-	return c.controller.bootstrapped.Load()
+func (c *coordinator) Initialized() bool {
+	return c.controller.initialized.Load()
 }
 
 func (c *coordinator) Stop() {

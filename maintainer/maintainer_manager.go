@@ -208,9 +208,14 @@ func (m *Manager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {
 	msg = m.newCoordinatorTopicMessage(response)
 	err := m.mc.SendCommand(msg)
 	if err != nil {
-		log.Warn("send command failed", zap.Error(err))
+		log.Warn("send bootstrap response failed",
+			zap.Stringer("coordinatorID", m.coordinatorID),
+			zap.Int64("coordinatorVersion", m.coordinatorVersion),
+			zap.Error(err))
 	}
-	log.Info("new coordinator online",
+
+	log.Info("new coordinator online, bootstrap response already sent",
+		zap.Stringer("coordinatorID", m.coordinatorID),
 		zap.Int64("version", m.coordinatorVersion))
 }
 
@@ -315,7 +320,6 @@ func (m *Manager) sendHeartbeat() {
 func (m *Manager) handleMessage(msg *messaging.TargetMessage) {
 	switch msg.Type {
 	case messaging.TypeCoordinatorBootstrapRequest:
-		log.Info("received coordinator bootstrap request", zap.String("from", msg.From.String()))
 		m.onCoordinatorBootstrapRequest(msg)
 	case messaging.TypeAddMaintainerRequest,
 		messaging.TypeRemoveMaintainerRequest:

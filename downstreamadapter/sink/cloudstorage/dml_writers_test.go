@@ -25,6 +25,7 @@ import (
 
 	"github.com/pingcap/failpoint"
 	pclock "github.com/pingcap/ticdc/pkg/clock"
+	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -90,11 +91,13 @@ func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 	for j := 0; j < batch; j++ {
 		dmls = append(dmls, fmt.Sprintf("insert into table1 values (%d, 'hello world')", j))
 	}
+	dispatcherID := common.NewDispatcherID()
 	event := helper.DML2Event(job.SchemaName, job.TableName, dmls...)
 	event.TableInfoVersion = job.BinlogInfo.FinishedTS
 	event.AddPostFlushFunc(func() {
 		atomic.AddUint64(&cnt, uint64(len(dmls)))
 	})
+	event.DispatcherID = dispatcherID
 
 	cloudStorageSink.AddDMLEvent(event)
 	time.Sleep(3 * time.Second)
@@ -106,15 +109,15 @@ func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 	tableDir := path.Join(parentDir, fmt.Sprintf("%s/%s/%d", job.SchemaName, job.TableName, event.TableInfoVersion))
 	fileNames := getTableFiles(t, tableDir)
 	require.Len(t, fileNames, 2)
-	require.ElementsMatch(t, []string{"CDC000001.csv", "CDC.index"}, fileNames)
+	require.ElementsMatch(t, []string{fmt.Sprintf("CDC_%s_000001.csv", dispatcherID.String()), fmt.Sprintf("CDC_%s.index", dispatcherID.String())}, fileNames)
 
-	content, err := os.ReadFile(path.Join(tableDir, "CDC000001.csv"))
+	content, err := os.ReadFile(path.Join(tableDir, fmt.Sprintf("CDC_%s_000001.csv", dispatcherID.String())))
 	require.NoError(t, err)
 	require.Greater(t, len(content), 0)
 
-	content, err = os.ReadFile(path.Join(tableDir, "meta/CDC.index"))
+	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC_%s.index", dispatcherID.String())))
 	require.NoError(t, err)
-	require.Equal(t, "CDC000001.csv\n", string(content))
+	require.Equal(t, fmt.Sprintf("CDC_%s_000001.csv\n", dispatcherID.String()), string(content))
 	require.Equal(t, uint64(100), atomic.LoadUint64(&cnt))
 
 	// generating another dml file.
@@ -123,6 +126,7 @@ func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 	event.AddPostFlushFunc(func() {
 		atomic.AddUint64(&cnt, uint64(len(dmls)))
 	})
+	event.DispatcherID = dispatcherID
 
 	cloudStorageSink.AddDMLEvent(event)
 	time.Sleep(3 * time.Second)
@@ -130,15 +134,15 @@ func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 	fileNames = getTableFiles(t, tableDir)
 	require.Len(t, fileNames, 3)
 	require.ElementsMatch(t, []string{
-		"CDC000001.csv", "CDC000002.csv", "CDC.index",
+		fmt.Sprintf("CDC_%s_000001.csv", dispatcherID.String()), fmt.Sprintf("CDC_%s_000002.csv", dispatcherID.String()), fmt.Sprintf("CDC_%s.index", dispatcherID.String()),
 	}, fileNames)
-	content, err = os.ReadFile(path.Join(tableDir, "CDC000002.csv"))
+	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("CDC_%s_000002.csv", dispatcherID.String())))
 	require.Nil(t, err)
 	require.Greater(t, len(content), 0)
 
-	content, err = os.ReadFile(path.Join(tableDir, "meta/CDC.index"))
+	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC_%s.index", dispatcherID.String())))
 	require.Nil(t, err)
-	require.Equal(t, "CDC000002.csv\n", string(content))
+	require.Equal(t, fmt.Sprintf("CDC_%s_000002.csv\n", dispatcherID.String()), string(content))
 	require.Equal(t, uint64(200), atomic.LoadUint64(&cnt))
 
 	cloudStorageSink.Close(false)
@@ -187,11 +191,14 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 		dmls = append(dmls, fmt.Sprintf("insert into table1 values (%d, 'hello world')", j))
 	}
 
+	dispatcherID := common.NewDispatcherID()
 	event := helper.DML2Event(job.SchemaName, job.TableName, dmls...)
 	event.TableInfoVersion = job.BinlogInfo.FinishedTS
 	event.AddPostFlushFunc(func() {
 		atomic.AddUint64(&cnt, uint64(len(dmls)))
 	})
+	event.DispatcherID = dispatcherID
+
 	cloudStorageSink.AddDMLEvent(event)
 	require.Eventually(t, func() bool {
 		return atomic.LoadUint64(&cnt) == uint64(batch)
@@ -200,14 +207,14 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	tableDir := path.Join(parentDir, fmt.Sprintf("%s/%s/%d/2023-03-08", job.SchemaName, job.TableName, event.TableInfoVersion))
 	fileNames := getTableFiles(t, tableDir)
 	require.Len(t, fileNames, 2)
-	require.ElementsMatch(t, []string{"CDC000001.csv", "CDC.index"}, fileNames)
-	content, err := os.ReadFile(path.Join(tableDir, "CDC000001.csv"))
+	require.ElementsMatch(t, []string{fmt.Sprintf("CDC_%s_000001.csv", dispatcherID.String()), fmt.Sprintf("CDC_%s.index", dispatcherID.String())}, fileNames)
+	content, err := os.ReadFile(path.Join(tableDir, fmt.Sprintf("CDC_%s_000001.csv", dispatcherID.String())))
 	require.Nil(t, err)
 	require.Greater(t, len(content), 0)
 
-	content, err = os.ReadFile(path.Join(tableDir, "meta/CDC.index"))
+	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC_%s.index", dispatcherID.String())))
 	require.Nil(t, err)
-	require.Equal(t, "CDC000001.csv\n", string(content))
+	require.Equal(t, fmt.Sprintf("CDC_%s_000001.csv\n", dispatcherID.String()), string(content))
 
 	cancel()
 	time.Sleep(5 * time.Second)
@@ -232,6 +239,8 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	event.AddPostFlushFunc(func() {
 		atomic.AddUint64(&cnt, uint64(len(dmls)))
 	})
+	event.DispatcherID = dispatcherID
+
 	cloudStorageSink.AddDMLEvent(event)
 	require.Eventually(t, func() bool {
 		return atomic.LoadUint64(&cnt) == 2*uint64(batch)
@@ -239,14 +248,14 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 
 	fileNames = getTableFiles(t, tableDir)
 	require.Len(t, fileNames, 3)
-	require.ElementsMatch(t, []string{"CDC000001.csv", "CDC000002.csv", "CDC.index"}, fileNames)
-	content, err = os.ReadFile(path.Join(tableDir, "CDC000002.csv"))
+	require.ElementsMatch(t, []string{fmt.Sprintf("CDC_%s_000001.csv", dispatcherID.String()), fmt.Sprintf("CDC_%s_000002.csv", dispatcherID.String()), fmt.Sprintf("CDC_%s.index", dispatcherID.String())}, fileNames)
+	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("CDC_%s_000002.csv", dispatcherID.String())))
 	require.NoError(t, err)
 	require.Greater(t, len(content), 0)
 
-	content, err = os.ReadFile(path.Join(tableDir, "meta/CDC.index"))
+	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC_%s.index", dispatcherID.String())))
 	require.NoError(t, err)
-	require.Equal(t, "CDC000002.csv\n", string(content))
+	require.Equal(t, fmt.Sprintf("CDC_%s_000002.csv\n", dispatcherID.String()), string(content))
 	cancel()
 
 	time.Sleep(5 * time.Second)
@@ -276,6 +285,8 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	event.AddPostFlushFunc(func() {
 		atomic.AddUint64(&cnt, uint64(len(dmls)))
 	})
+	event.DispatcherID = dispatcherID
+
 	cloudStorageSink.AddDMLEvent(event)
 	require.Eventually(t, func() bool {
 		return atomic.LoadUint64(&cnt) == 3*uint64(batch)
@@ -284,14 +295,14 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	tableDir = path.Join(parentDir, fmt.Sprintf("test/table1/%d/2023-03-09", event.TableInfoVersion))
 	fileNames = getTableFiles(t, tableDir)
 	require.Len(t, fileNames, 2)
-	require.ElementsMatch(t, []string{"CDC000001.csv", "CDC.index"}, fileNames)
-	content, err = os.ReadFile(path.Join(tableDir, "CDC000001.csv"))
+	require.ElementsMatch(t, []string{fmt.Sprintf("CDC_%s_000001.csv", dispatcherID.String()), fmt.Sprintf("CDC_%s.index", dispatcherID.String())}, fileNames)
+	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("CDC_%s_000001.csv", dispatcherID.String())))
 	require.Nil(t, err)
 	require.Greater(t, len(content), 0)
 
-	content, err = os.ReadFile(path.Join(tableDir, "meta/CDC.index"))
+	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC_%s.index", dispatcherID.String())))
 	require.Nil(t, err)
-	require.Equal(t, "CDC000001.csv\n", string(content))
+	require.Equal(t, fmt.Sprintf("CDC_%s_000001.csv\n", dispatcherID.String()), string(content))
 	require.Equal(t, uint64(300), atomic.LoadUint64(&cnt))
 	cloudStorageSink.Close(false)
 
@@ -318,6 +329,8 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	event.AddPostFlushFunc(func() {
 		atomic.AddUint64(&cnt, uint64(len(dmls)))
 	})
+	event.DispatcherID = dispatcherID
+
 	cloudStorageSink.AddDMLEvent(event)
 	require.Eventually(t, func() bool {
 		return atomic.LoadUint64(&cnt) == uint64(batch)
@@ -325,14 +338,14 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 
 	fileNames = getTableFiles(t, tableDir)
 	require.Len(t, fileNames, 3)
-	require.ElementsMatch(t, []string{"CDC000001.csv", "CDC000002.csv", "CDC.index"}, fileNames)
-	content, err = os.ReadFile(path.Join(tableDir, "CDC000002.csv"))
+	require.ElementsMatch(t, []string{fmt.Sprintf("CDC_%s_000001.csv", dispatcherID.String()), fmt.Sprintf("CDC_%s_000002.csv", dispatcherID.String()), fmt.Sprintf("CDC_%s.index", dispatcherID.String())}, fileNames)
+	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("CDC_%s_000002.csv", dispatcherID.String())))
 	require.NoError(t, err)
 	require.Greater(t, len(content), 0)
 
-	content, err = os.ReadFile(path.Join(tableDir, "meta/CDC.index"))
+	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC_%s.index", dispatcherID.String())))
 	require.NoError(t, err)
-	require.Equal(t, "CDC000002.csv\n", string(content))
+	require.Equal(t, fmt.Sprintf("CDC_%s_000002.csv\n", dispatcherID.String()), string(content))
 
 	cancel()
 }

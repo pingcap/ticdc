@@ -38,6 +38,8 @@ const (
 	defaultReleaseMemoryThreshold = 256
 )
 
+var failpointAPITestLogged atomic.Bool
+
 // areaMemStat is used to store the memory statistics of an area.
 // It is a global level struct, not stream level.
 type areaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
@@ -98,6 +100,12 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 ) bool {
 	defer as.updateAreaPauseState(path)
 	as.lastAppendEventTime.Store(time.Now())
+
+	failpoint.Inject("FailpointAPITestValue", func(val failpoint.Value) {
+		if failpointAPITestLogged.CompareAndSwap(false, true) {
+			log.Info("failpoint api test value", zap.Any("value", val))
+		}
+	})
 
 	// Check if we should merge periodic signals.
 	if event.eventType.Property == PeriodicSignal {
