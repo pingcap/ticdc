@@ -172,6 +172,12 @@ type BasicDispatcher struct {
 	// When we receive the ack from maintainer, we will cancel the resend task.
 	resendTaskMap *ResendTaskMap
 
+	// pendingACKCount is only used by the table trigger dispatcher.
+	//
+	// It tracks the number of DDLs that need to report to maintainer(i.e. DDLs that add/drop tables),
+	// but have not been ACKed by maintainer (i.e. maintainer has not finished scheduling add/drop tasks).
+	pendingACKCount atomic.Int64
+
 	// holdingBlockEvent is only used by the table trigger dispatcher.
 	//
 	// It is a single-slot in-memory buffer for holding a non-normal (DB/All) block event
@@ -714,6 +720,11 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 		// Writing a block event may involve downstream IO (e.g. executing DDL), so it must not block
 		// the dynamic stream goroutine.
 		d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
+			if d.IsTableTriggerEventDispatcher() && (event.GetNeedAddedTables() != nil || event.GetNeedDroppedTables() != nil) {
+				// If this is a table trigger event dispatcher, and the DDL related to adds/drops tables,
+				// we need to increment pendingACKCount to track the un-ACKed schedule-related DDL.
+				d.pendingACKCount.Add(1)
+			}
 			err := d.AddBlockEventToSink(event)
 			if err != nil {
 				d.HandleError(err)
@@ -764,15 +775,16 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 			d.sharedInfo.blockStatusesChan <- message
 		})
 	} else {
-		// Defer DB/All block events on the table trigger dispatcher until there are no pending
-		// resend tasks. This ensures maintainer observes all schedule-related DDLs (e.g. create table)
+		// Hold DB/All block events on the table trigger dispatcher until there are no pending
+		// resend tasks(by pendingACKCount, because some ddl's resend task set is after write downstream).
+		// This ensures maintainer observes all schedule-related DDLs (e.g. create table)
 		// and updates spanController tasks before it builds a DB/All range checker for this event.
 		//
-		// Note: We only defer InfluenceType_DB/All. InfluenceType_Normal does not require a global
+		// Note: We only hold InfluenceType_DB/All. InfluenceType_Normal does not require a global
 		// task snapshot to build its range checker.
 		blockedTables := event.GetBlockedTables()
 		if d.IsTableTriggerEventDispatcher() &&
-			d.resendTaskMap.Len() > 0 &&
+			d.pendingACKCount.Load() > 0 &&
 			blockedTables != nil &&
 			blockedTables.InfluenceType != commonEvent.InfluenceTypeNormal {
 			d.blockEventStatus.setBlockEvent(event, heartbeatpb.BlockStage_WAITING)
@@ -821,26 +833,40 @@ func (d *BasicDispatcher) cancelResendTask(identifier BlockEventIdentifier) {
 	task.Cancel()
 	d.resendTaskMap.Delete(identifier)
 
-	// If there is a held DB/All block event, report it as soon as all resend tasks are ACKed.
-	// For schedule-related non-blocking DDLs, the maintainer only ACKs after scheduling is done.
-	if d.IsTableTriggerEventDispatcher() && d.resendTaskMap.Len() == 0 {
-		if holding := d.popHoldingBlockEvent(); holding != nil {
-			d.reportBlockedEventToMaintainer(holding)
+	if d.IsTableTriggerEventDispatcher() {
+		d.pendingACKCount.Add(-1)
+		// If there is a held DB/All block event, report it as soon as all resend tasks are ACKed.
+		// For schedule-related non-blocking DDLs, the maintainer only ACKs after scheduling is done.
+		// For schedule-related blocking DDLs, the maintainer will only begin deal with after no pending scheduling tasks.
+		// Thus, we ensure DB/All block events can genereate correct range checkers.
+		if d.pendingACKCount.Load() == 0 {
+			if holding := d.popHoldingBlockEvent(); holding != nil {
+				d.reportBlockedEventToMaintainer(holding)
+			}
 		}
 	}
 }
 
 func (d *BasicDispatcher) HoldBlockEvent(event commonEvent.BlockEvent) {
 	d.holdingBlockEventMu.Lock()
-	defer d.holdingBlockEventMu.Unlock()
 	// The event stream is blocked by this block event, so at most one such event can be pending here.
 	if d.holdingBlockEvent != nil {
 		d.HandleError(errors.ErrDispatcherFailed.GenWithStackByArgs(
 			"hold non-normal block event failed: holdingBlockEvent is already occupied",
 		))
+		d.holdingBlockEventMu.Unlock()
 		return
 	}
 	d.holdingBlockEvent = event
+	d.holdingBlockEventMu.Unlock()
+
+	// double check here to avoid pendingACKCount becomes zero before we hold the event
+	if d.pendingACKCount.Load() == 0 {
+		holding := d.popHoldingBlockEvent()
+		if holding != nil {
+			d.reportBlockedEventToMaintainer(holding)
+		}
+	}
 }
 
 func (d *BasicDispatcher) popHoldingBlockEvent() commonEvent.BlockEvent {
@@ -852,6 +878,11 @@ func (d *BasicDispatcher) popHoldingBlockEvent() commonEvent.BlockEvent {
 }
 
 func (d *BasicDispatcher) reportBlockedEventToMaintainer(event commonEvent.BlockEvent) {
+	if d.IsTableTriggerEventDispatcher() {
+		// If this is a table trigger event dispatcher, and need to report a block event to maintainer,
+		// we need to increment pendingACKCount to track the un-ACKed schedule-related DDL.
+		d.pendingACKCount.Add(1)
+	}
 	d.blockEventStatus.setBlockEvent(event, heartbeatpb.BlockStage_WAITING)
 	message := &heartbeatpb.TableSpanBlockStatus{
 		ID: d.id.ToPB(),
