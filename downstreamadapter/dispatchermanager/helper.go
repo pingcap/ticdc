@@ -201,10 +201,11 @@ func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *Dispatcher
 		switch req.ScheduleAction {
 		case heartbeatpb.ScheduleAction_Create:
 			info := dispatcherCreateInfo{
-				Id:        dispatcherID,
-				TableSpan: config.Span,
-				StartTs:   config.StartTs,
-				SchemaID:  config.SchemaID,
+				Id:               dispatcherID,
+				TableSpan:        config.Span,
+				StartTs:          config.StartTs,
+				SchemaID:         config.SchemaID,
+				SkipDMLAsStartTs: config.SkipDMLAsStartTs,
 			}
 			if common.IsRedoMode(config.Mode) {
 				redoInfos[dispatcherID] = info

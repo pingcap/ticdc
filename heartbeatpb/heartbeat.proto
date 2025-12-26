@@ -102,6 +102,11 @@ message DispatcherConfig {
     DispatcherID dispatcherID = 3;
     int64 schemaID = 4;
     int64 mode = 5;
+    // skipDMLAsStartTs indicates whether to skip DML events at (startTs+1).
+    // It is mainly used when a dispatcher is recreated during an in-flight DDL barrier:
+    // we need to replay the DDL at blockTs by starting from (blockTs-1), while avoiding
+    // potential duplicate DML writes at blockTs.
+    bool skipDMLAsStartTs = 6;
 }
 
 message ScheduleDispatcherRequest {
