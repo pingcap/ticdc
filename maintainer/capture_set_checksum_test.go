@@ -279,6 +279,33 @@ func TestDispatcherSetChecksumResendAndAck(t *testing.T) {
 	require.Empty(t, msgs)
 }
 
+func TestCaptureSetChecksumManagerRemoveNodesCleansState(t *testing.T) {
+	mgr := newCaptureSetChecksumManager(
+		common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme),
+		1,
+		common.DefaultMode,
+	)
+
+	capture := node.ID("capture-1")
+	otherCapture := node.ID("capture-2")
+	id := common.NewDispatcherID()
+
+	mgr.ApplyDelta(capture, []common.DispatcherID{id}, nil)
+	mgr.ApplyDelta(otherCapture, []common.DispatcherID{common.NewDispatcherID()}, nil)
+
+	mgr.RemoveNodes([]node.ID{capture})
+
+	mgr.mu.Lock()
+	_, captureExists := mgr.state.captures[capture]
+	_, mappingExists := mgr.state.dispatcherToNode[id]
+	_, otherExists := mgr.state.captures[otherCapture]
+	mgr.mu.Unlock()
+
+	require.False(t, captureExists)
+	require.False(t, mappingExists)
+	require.True(t, otherExists)
+}
+
 func TestRecordingMessageCenterImplementsInterface(t *testing.T) {
 	var _ messaging.MessageCenter = (*recordingMessageCenter)(nil)
 	var _ messaging.MessageHandler = func(context.Context, *messaging.TargetMessage) error { return nil }

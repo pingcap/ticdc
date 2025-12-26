@@ -663,7 +663,16 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 			if e.RedoEnable {
 				redoChecksum = e.computeDispatcherSetChecksum(common.RedoMode)
 			}
-			e.applyChecksumStateToHeartbeat(&message, defaultChecksum, redoChecksum)
+
+			discardDefaultWatermark, discardRedoWatermark := e.applyChecksumStateToHeartbeat(&message, defaultChecksum, redoChecksum)
+			if discardDefaultWatermark && message.Watermark != nil {
+				e.incDispatcherSetChecksumNotOKTotal(common.DefaultMode, message.ChecksumState)
+				message.Watermark = nil
+			}
+			if e.RedoEnable && discardRedoWatermark && message.RedoWatermark != nil {
+				e.incDispatcherSetChecksumNotOKTotal(common.RedoMode, message.RedoChecksumState)
+				message.RedoWatermark = nil
+			}
 
 			e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
 		}
@@ -765,7 +774,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	message.Watermark.Seq = seq
 	e.latestWatermark.Set(message.Watermark)
 
-	e.applyChecksumStateToHeartbeat(&message, defaultChecksum, redoChecksum)
+	discardDefaultWatermark, discardRedoWatermark := e.applyChecksumStateToHeartbeat(&message, defaultChecksum, redoChecksum)
 
 	// if the event dispatcher manager is closing, we don't to remove the stopped dispatchers.
 	if !e.closing.Load() {
@@ -808,6 +817,15 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	pdTime := e.pdClock.CurrentTime()
 	e.metricCheckpointTsLag.Set(float64(oracle.GetPhysical(pdTime)-phyCheckpointTs) / 1e3)
 	e.metricResolvedTsLag.Set(float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3)
+
+	if discardDefaultWatermark && message.Watermark != nil {
+		e.incDispatcherSetChecksumNotOKTotal(common.DefaultMode, message.ChecksumState)
+		message.Watermark = nil
+	}
+	if e.RedoEnable && discardRedoWatermark && message.RedoWatermark != nil {
+		e.incDispatcherSetChecksumNotOKTotal(common.RedoMode, message.RedoChecksumState)
+		message.RedoWatermark = nil
+	}
 
 	return &message
 }
@@ -983,17 +1001,16 @@ func (e *DispatcherManager) cleanMetrics() {
 	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
 	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
 
-	capture := appcontext.GetID()
 	keyspace := e.changefeedID.Keyspace()
 	changefeed := e.changefeedID.Name()
 	for _, state := range []string{"mismatch", "uninitialized"} {
-		metrics.DispatcherManagerDispatcherSetChecksumNotOKGauge.DeleteLabelValues(keyspace, changefeed, capture, "default", state)
-		metrics.DispatcherManagerDispatcherSetChecksumNotOKTotal.DeleteLabelValues(keyspace, changefeed, capture, "default", state)
+		metrics.DispatcherManagerDispatcherSetChecksumNotOKGauge.DeleteLabelValues(keyspace, changefeed, "default", state)
+		metrics.DispatcherManagerDispatcherSetChecksumNotOKTotal.DeleteLabelValues(keyspace, changefeed, "default", state)
 	}
 	if e.RedoEnable {
 		for _, state := range []string{"mismatch", "uninitialized"} {
-			metrics.DispatcherManagerDispatcherSetChecksumNotOKGauge.DeleteLabelValues(keyspace, changefeed, capture, "redo", state)
-			metrics.DispatcherManagerDispatcherSetChecksumNotOKTotal.DeleteLabelValues(keyspace, changefeed, capture, "redo", state)
+			metrics.DispatcherManagerDispatcherSetChecksumNotOKGauge.DeleteLabelValues(keyspace, changefeed, "redo", state)
+			metrics.DispatcherManagerDispatcherSetChecksumNotOKTotal.DeleteLabelValues(keyspace, changefeed, "redo", state)
 		}
 	}
 }

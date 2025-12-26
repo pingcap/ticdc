@@ -144,36 +144,29 @@ func (e *DispatcherManager) computeDispatcherSetChecksum(mode int64) set_checksu
 
 // applyChecksumStateToHeartbeat verifies dispatcher set checksums and updates heartbeat fields.
 //
-// When checksum is not OK, watermark reporting is suppressed (set to nil) to prevent Maintainer
-// from advancing checkpoint based on possibly stale dispatcher sets.
+// It returns whether watermark reporting should be suppressed for each mode. Callers should only
+// nil out outgoing watermark fields when sending the heartbeat, while keeping local watermarks
+// intact for internal bookkeeping and metrics.
 func (e *DispatcherManager) applyChecksumStateToHeartbeat(
 	msg *heartbeatpb.HeartBeatRequest,
 	defaultChecksum set_checksum.Checksum,
 	redoChecksum set_checksum.Checksum,
-) {
+) (discardDefaultWatermark bool, discardRedoWatermark bool) {
 	if msg == nil {
-		return
+		return false, false
 	}
 
 	defaultState := e.verifyDispatcherSetChecksum(common.DefaultMode, defaultChecksum)
 	msg.ChecksumState = defaultState
-	if defaultState != heartbeatpb.ChecksumState_OK {
-		if msg.Watermark != nil {
-			e.incDispatcherSetChecksumNotOKTotal(common.DefaultMode, defaultState)
-		}
-		msg.Watermark = nil
-	}
+	discardDefaultWatermark = defaultState != heartbeatpb.ChecksumState_OK
 
 	if e.RedoEnable {
 		redoState := e.verifyDispatcherSetChecksum(common.RedoMode, redoChecksum)
 		msg.RedoChecksumState = redoState
-		if redoState != heartbeatpb.ChecksumState_OK {
-			if msg.RedoWatermark != nil {
-				e.incDispatcherSetChecksumNotOKTotal(common.RedoMode, redoState)
-			}
-			msg.RedoWatermark = nil
-		}
+		discardRedoWatermark = redoState != heartbeatpb.ChecksumState_OK
 	}
+
+	return discardDefaultWatermark, discardRedoWatermark
 }
 
 // incDispatcherSetChecksumNotOKTotal increments the total counter when watermark reporting is suppressed.
