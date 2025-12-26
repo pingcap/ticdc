@@ -54,12 +54,7 @@ func genKeyList(row *chunk.Row, tableInfo *common.TableInfo) []byte {
 		if !ok || info == nil {
 			return nil
 		}
-		i, ok1 := tableInfo.GetRowColumnsOffset()[colID]
-		if !ok1 {
-			log.Warn("can't find column offset", zap.Int64("colID", colID), zap.String("colName", info.Name.O))
-			return nil
-		}
-
+		i := tableInfo.MustGetColumnOffsetByID(colID)
 		value := common.ExtractColVal(row, info, i)
 		// if a column value is null, we can ignore this index
 		if value == nil {

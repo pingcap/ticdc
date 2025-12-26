@@ -232,7 +232,7 @@ func (r *RowChange) whereColumnsAndValues() ([]string, []interface{}) {
 	columnNames := make([]string, 0, len(columns))
 	columnValues := make([]any, 0, len(columns))
 	for i, column := range columns {
-		if !column.IsGenerated() {
+		if !column.IsVirtualGenerated() {
 			columnNames = append(columnNames, column.Name.O)
 			columnValues = append(columnValues, values[i])
 		}
