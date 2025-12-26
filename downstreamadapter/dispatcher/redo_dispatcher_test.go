@@ -383,7 +383,7 @@ func TestRedoUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 	}, 5*time.Second, 10*time.Millisecond)
 }
 
-func TestRedoTableTriggerEventDispatcherInMysql(t *testing.T) {
+func TestTableTriggerRedoDispatcherInMysql(t *testing.T) {
 	redoCount.Store(0)
 
 	ddlTableSpan := common.KeyspaceDDLSpan(common.DefaultKeyspaceID)
@@ -453,7 +453,7 @@ func TestRedoTableTriggerEventDispatcherInMysql(t *testing.T) {
 	require.Equal(t, int32(2), redoCount.Load())
 }
 
-func TestRedoTableTriggerEventDispatcherInKafka(t *testing.T) {
+func TestTableTriggerRedoDispatcherInKafka(t *testing.T) {
 	redoCount.Store(0)
 
 	ddlTableSpan := common.KeyspaceDDLSpan(common.DefaultKeyspaceID)
