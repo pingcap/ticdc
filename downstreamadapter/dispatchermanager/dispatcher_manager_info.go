@@ -14,10 +14,12 @@
 package dispatchermanager
 
 import (
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/node"
+	"go.uber.org/zap"
 )
 
 // event_dispatcher_mananger_info.go is used to store the basic info and function of the event dispatcher manager
@@ -51,11 +53,9 @@ func (e *DispatcherManager) GetMaintainerEpoch() uint64 {
 	return e.meta.maintainerEpoch
 }
 
-func (e *DispatcherManager) UpdateMaintainer(from node.ID, epoch uint64) (maintainerChanged, epochChanged bool) {
+func (e *DispatcherManager) UpdateMaintainer(from node.ID, epoch uint64) {
 	e.meta.Lock()
-	maintainerChanged = e.meta.maintainerID != from
-	epochChanged = e.meta.maintainerEpoch != epoch
-	changed := maintainerChanged || epochChanged
+	changed := e.meta.maintainerID != from || e.meta.maintainerEpoch != epoch
 	e.meta.maintainerID = from
 	e.meta.maintainerEpoch = epoch
 	e.meta.Unlock()
@@ -64,8 +64,11 @@ func (e *DispatcherManager) UpdateMaintainer(from node.ID, epoch uint64) (mainta
 		// otherwise stale checksum from the previous maintainer instance can cause checkpoint
 		// advancement with missing/extra dispatchers.
 		e.ResetDispatcherSetChecksum()
+		log.Info("maintainer info updated",
+			zap.String("changefeed", e.changefeedID.Name()),
+			zap.String("maintainer", from.String()),
+			zap.Uint64("epoch", epoch))
 	}
-	return maintainerChanged, epochChanged
 }
 
 func (e *DispatcherManager) GetTableTriggerEventDispatcher() *dispatcher.EventDispatcher {

@@ -29,6 +29,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils"
@@ -279,6 +280,10 @@ func (c *Controller) handleRemainingWorkingTasks(
 func (c *Controller) initializeComponents(
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
 ) {
+	// Initialize dispatcher set checksum managers before starting scheduler/operator tasks.
+	// This avoids missing dispatcher set changes that could be triggered by task execution.
+	c.resetAndSendDispatcherSetChecksums(allNodesResp)
+
 	// Initialize barrier
 	if c.enableRedo {
 		c.redoBarrier = NewBarrier(c.redoSpanController, c.redoOperatorController, util.GetOrZero(c.cfConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.RedoMode)
@@ -295,6 +300,54 @@ func (c *Controller) initializeComponents(
 	// Start operator controller
 	c.taskHandles = append(c.taskHandles, c.taskPool.Submit(c.operatorController, time.Now()))
 	c.taskHandlesMu.Unlock()
+}
+
+func (c *Controller) resetAndSendDispatcherSetChecksums(
+	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
+) {
+	if c.defaultChecksumManager == nil && c.redoChecksumManager == nil {
+		return
+	}
+
+	nodes := make([]node.ID, 0, len(allNodesResp))
+	for id := range allNodesResp {
+		nodes = append(nodes, id)
+	}
+
+	sendMessages := func(msgs []*messaging.TargetMessage) {
+		for _, msg := range msgs {
+			if msg == nil {
+				continue
+			}
+			_ = c.messageCenter.SendCommand(msg)
+		}
+	}
+
+	if c.defaultChecksumManager != nil {
+		expected := make(map[node.ID][]common.DispatcherID, len(nodes))
+		if ddl := c.spanController.GetDDLDispatcher(); ddl != nil {
+			expected[ddl.GetNodeID()] = append(expected[ddl.GetNodeID()], ddl.ID)
+		}
+		for _, span := range c.spanController.GetReplicating() {
+			capture := span.GetNodeID()
+			expected[capture] = append(expected[capture], span.ID)
+		}
+		epoch := c.defaultChecksumManager.epoch
+		sendMessages(c.defaultChecksumManager.ResetAndSendFull(epoch, nodes, expected))
+	}
+
+	if c.redoChecksumManager != nil {
+		expected := make(map[node.ID][]common.DispatcherID, len(nodes))
+		if ddl := c.redoSpanController.GetDDLDispatcher(); ddl != nil {
+			expected[ddl.GetNodeID()] = append(expected[ddl.GetNodeID()], ddl.ID)
+		}
+		for _, span := range c.redoSpanController.GetReplicating() {
+			capture := span.GetNodeID()
+			expected[capture] = append(expected[capture], span.ID)
+		}
+		epoch := c.redoChecksumManager.epoch
+		sendMessages(c.redoChecksumManager.ResetAndSendFull(epoch, nodes, expected))
+	}
 }
 
 func (c *Controller) prepareSchemaInfoResponse(

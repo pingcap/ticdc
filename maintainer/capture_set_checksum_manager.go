@@ -26,7 +26,37 @@ import (
 	"go.uber.org/zap"
 )
 
-type nodeSetChecksumCaptureState struct {
+const (
+	warnAfter    = 2 * time.Minute
+	warnInterval = 2 * time.Minute
+	// resendInterval is the minimum interval between resending unacknowledged updates to a capture.
+	// It can be overridden in tests to disable throttling.
+	resendInterval time.Duration = 1 * time.Second
+)
+
+type captureSetChecksumState struct {
+	// captures tracks per-capture checksum and resend/ack progress.
+	// dirtyCaptures is a set of captures that need a checksum update message.
+	// dispatcherToNode records the expected owner capture for each dispatcher ID.
+	captures         map[node.ID]*captureChecksumState
+	dirtyCaptures    map[node.ID]struct{}
+	dispatcherToNode map[common.DispatcherID]node.ID
+}
+
+func newCaptureSetChecksumState(captureCap int) captureSetChecksumState {
+	return captureSetChecksumState{
+		captures:         make(map[node.ID]*captureChecksumState, captureCap),
+		dirtyCaptures:    make(map[node.ID]struct{}, captureCap),
+		dispatcherToNode: make(map[common.DispatcherID]node.ID),
+	}
+}
+
+// captureChecksumState tracks expected checksum progress and heartbeat observation for a capture.
+//
+// Invariant: for any dispatcher ID that exists in captureSetChecksumState.dispatcherToNode,
+// the corresponding captureChecksumState.checksum must include that dispatcher ID, and it must
+// not be included in any other capture's checksum.
+type captureChecksumState struct {
 	seq        uint64                // Latest update sequence sent to this capture.
 	ackedSeq   uint64                // Highest acknowledged sequence from this capture.
 	checksum   set_checksum.Checksum // Expected set checksum on this capture.
@@ -37,21 +67,39 @@ type nodeSetChecksumCaptureState struct {
 	lastWarnAt        time.Time                 // Last warning time for log throttling.
 }
 
-type nodeSetChecksumState struct {
-	captures         map[node.ID]*nodeSetChecksumCaptureState
-	dirtyCaptures    map[node.ID]struct{}
-	dispatcherToNode map[common.DispatcherID]node.ID
-}
-
-func newNodeSetChecksumState(captureCap int) nodeSetChecksumState {
-	return nodeSetChecksumState{
-		captures:         make(map[node.ID]*nodeSetChecksumCaptureState, captureCap),
-		dirtyCaptures:    make(map[node.ID]struct{}, captureCap),
-		dispatcherToNode: make(map[common.DispatcherID]node.ID),
+func (s *captureChecksumState) observeHeartbeat(
+	now time.Time,
+	state heartbeatpb.ChecksumState,
+	warnAfter time.Duration,
+	warnInterval time.Duration,
+) (shouldWarn bool, duration time.Duration) {
+	if state == heartbeatpb.ChecksumState_OK {
+		s.lastObservedState = state
+		s.nonOKSince = time.Time{}
+		s.lastWarnAt = time.Time{}
+		return false, 0
 	}
+
+	needResetTimer := s.lastObservedState == heartbeatpb.ChecksumState_OK || s.lastObservedState != state
+	if needResetTimer || s.nonOKSince.IsZero() {
+		s.nonOKSince = now
+		s.lastWarnAt = time.Time{}
+	}
+
+	s.lastObservedState = state
+
+	duration = now.Sub(s.nonOKSince)
+	shouldWarn = duration >= warnAfter
+	if shouldWarn && !s.lastWarnAt.IsZero() && now.Sub(s.lastWarnAt) < warnInterval {
+		shouldWarn = false
+	}
+	if shouldWarn {
+		s.lastWarnAt = now
+	}
+	return shouldWarn, duration
 }
 
-// nodeSetChecksumManager maintains maintainer-side expected dispatcher IDs for a single mode.
+// captureSetChecksumManager maintains maintainer-side expected dispatcher IDs for a single mode.
 //
 // It computes an incremental checksum for each capture and sends it to DispatcherManager via
 // MessageCenter. DispatcherManager compares the expected checksum with the runtime dispatcher set
@@ -59,49 +107,56 @@ func newNodeSetChecksumState(captureCap int) nodeSetChecksumState {
 //
 // The manager also tracks per-capture update sequence and acknowledgements to support best-effort
 // resending when updates are missed.
-type nodeSetChecksumManager struct {
+type captureSetChecksumManager struct {
 	mu sync.Mutex
 
 	changefeedID common.ChangeFeedID
 	epoch        uint64
 	mode         int64
-	mc           messaging.MessageCenter
 
-	state nodeSetChecksumState
+	state captureSetChecksumState
 }
 
-func newNodeSetChecksumManager(
+func newCaptureSetChecksumManager(
 	changefeedID common.ChangeFeedID,
 	epoch uint64,
 	mode int64,
-	mc messaging.MessageCenter,
-) *nodeSetChecksumManager {
-	return &nodeSetChecksumManager{
+) *captureSetChecksumManager {
+	return &captureSetChecksumManager{
 		changefeedID: changefeedID,
 		epoch:        epoch,
 		mode:         mode,
-		mc:           mc,
-		state:        newNodeSetChecksumState(0),
+		state:        newCaptureSetChecksumState(0),
 	}
 }
 
-// ResetAndSendFull resets all internal states and sends full checksums to all captures.
+func (m *captureSetChecksumManager) getOrCreateCaptureStateLocked(capture node.ID) *captureChecksumState {
+	state, ok := m.state.captures[capture]
+	if ok {
+		return state
+	}
+	state = &captureChecksumState{}
+	m.state.captures[capture] = state
+	return state
+}
+
+// ResetAndSendFull resets all internal states and builds full checksum updates for all captures.
 //
 // It is typically used after an epoch change, so old acknowledgements become invalid.
-func (m *nodeSetChecksumManager) ResetAndSendFull(
+func (m *captureSetChecksumManager) ResetAndSendFull(
 	epoch uint64,
 	nodes []node.ID,
 	expected map[node.ID][]common.DispatcherID,
-) {
+) []*messaging.TargetMessage {
 	now := time.Now()
 
 	m.mu.Lock()
 	m.epoch = epoch
-	m.state = newNodeSetChecksumState(len(nodes))
+	m.state = newCaptureSetChecksumState(len(nodes))
 
 	msgs := make([]*messaging.TargetMessage, 0, len(nodes))
 	for _, capture := range nodes {
-		m.state.captures[capture] = &nodeSetChecksumCaptureState{
+		m.state.captures[capture] = &captureChecksumState{
 			seq:        1,
 			ackedSeq:   0,
 			lastSendAt: now,
@@ -116,10 +171,11 @@ func (m *nodeSetChecksumManager) ResetAndSendFull(
 	}
 	m.mu.Unlock()
 
-	m.sendMessages(msgs)
+	// Return built messages to the caller (Maintainer), which owns message sending.
+	return msgs
 }
 
-func (m *nodeSetChecksumManager) applyExpectedSet(expected map[node.ID][]common.DispatcherID) {
+func (m *captureSetChecksumManager) applyExpectedSet(expected map[node.ID][]common.DispatcherID) {
 	for capture, ids := range expected {
 		state, ok := m.state.captures[capture]
 		if !ok {
@@ -158,41 +214,25 @@ func (m *nodeSetChecksumManager) applyExpectedSet(expected map[node.ID][]common.
 //
 // It updates checksums of affected captures (including the previous owner when a dispatcher moves)
 // and marks them dirty for periodic flush.
-func (m *nodeSetChecksumManager) ApplyDelta(capture node.ID, add []common.DispatcherID, remove []common.DispatcherID) {
+func (m *captureSetChecksumManager) ApplyDelta(capture node.ID, add []common.DispatcherID, remove []common.DispatcherID) {
 	if len(add) == 0 && len(remove) == 0 {
 		return
 	}
 
 	m.mu.Lock()
+	defer m.mu.Unlock()
 
-	ensureState := func(capture node.ID) *nodeSetChecksumCaptureState {
-		state, ok := m.state.captures[capture]
-		if !ok {
-			state = &nodeSetChecksumCaptureState{}
-			m.state.captures[capture] = state
-		}
-		return state
-	}
-
-	changedCaptures := make([]node.ID, 0, 2)
-	markChanged := func(id node.ID) {
-		for _, existing := range changedCaptures {
-			if existing == id {
-				return
-			}
-		}
-		changedCaptures = append(changedCaptures, id)
-	}
+	changed := make(map[node.ID]*captureChecksumState, 2)
 
 	for _, id := range remove {
 		oldCapture, ok := m.state.dispatcherToNode[id]
 		if !ok || oldCapture != capture {
 			continue
 		}
-		state := ensureState(capture)
+		state := m.getOrCreateCaptureStateLocked(capture)
 		state.checksum.Remove(id)
 		delete(m.state.dispatcherToNode, id)
-		markChanged(capture)
+		changed[capture] = state
 	}
 
 	for _, id := range add {
@@ -201,30 +241,30 @@ func (m *nodeSetChecksumManager) ApplyDelta(capture node.ID, add []common.Dispat
 			continue
 		}
 		if exists && oldCapture != "" && oldCapture != capture {
-			state := ensureState(oldCapture)
-			state.checksum.Remove(id)
-			markChanged(oldCapture)
+			oldState, ok := m.state.captures[oldCapture]
+			if ok {
+				oldState.checksum.Remove(id)
+				changed[oldCapture] = oldState
+			}
 		}
 
-		state := ensureState(capture)
+		state := m.getOrCreateCaptureStateLocked(capture)
 		state.checksum.Add(id)
 		m.state.dispatcherToNode[id] = capture
-		markChanged(capture)
+		changed[capture] = state
 	}
 
-	for _, capture := range changedCaptures {
-		state := ensureState(capture)
+	for capture, state := range changed {
 		state.seq++
 		m.state.dirtyCaptures[capture] = struct{}{}
 	}
-	m.mu.Unlock()
 }
 
-// FlushDirty sends the latest checksum update for each dirty capture.
+// FlushDirty builds the latest checksum update for each dirty capture.
 //
 // This method is designed to be called periodically (for example, every 100ms) to coalesce
 // frequent ApplyDelta calls into fewer update messages.
-func (m *nodeSetChecksumManager) FlushDirty() {
+func (m *captureSetChecksumManager) FlushDirty() []*messaging.TargetMessage {
 	now := time.Now()
 
 	m.mu.Lock()
@@ -241,13 +281,14 @@ func (m *nodeSetChecksumManager) FlushDirty() {
 	}
 	m.mu.Unlock()
 
-	m.sendMessages(msgs)
+	// Return built messages to the caller (Maintainer), which owns message sending.
+	return msgs
 }
 
 // HandleAck updates the acknowledged sequence for the given capture.
 //
 // Acknowledgements from previous epochs are ignored.
-func (m *nodeSetChecksumManager) HandleAck(from node.ID, ack *heartbeatpb.DispatcherSetChecksumAck) {
+func (m *captureSetChecksumManager) HandleAck(from node.ID, ack *heartbeatpb.DispatcherSetChecksumAck) {
 	if ack == nil {
 		return
 	}
@@ -271,8 +312,15 @@ func (m *nodeSetChecksumManager) HandleAck(from node.ID, ack *heartbeatpb.Dispat
 	}
 }
 
-// ResendPending resends the last unacknowledged update if it has been pending for long enough.
-func (m *nodeSetChecksumManager) ResendPending(resendInterval time.Duration) {
+// FlushAndResendIfNeeded flushes dirty updates and resends unacknowledged updates when needed.
+func (m *captureSetChecksumManager) FlushAndResendIfNeeded() []*messaging.TargetMessage {
+	msgs := m.FlushDirty()
+	msgs = append(msgs, m.ResendPending()...)
+	return msgs
+}
+
+// ResendPending builds the last unacknowledged update if it has been pending for long enough.
+func (m *captureSetChecksumManager) ResendPending() []*messaging.TargetMessage {
 	now := time.Now()
 
 	m.mu.Lock()
@@ -290,11 +338,12 @@ func (m *nodeSetChecksumManager) ResendPending(resendInterval time.Duration) {
 	}
 	m.mu.Unlock()
 
-	m.sendMessages(msgs)
+	// Return built messages to the caller (Maintainer), which owns message sending.
+	return msgs
 }
 
 // RemoveNodes removes all states of the specified captures and their dispatcher mappings.
-func (m *nodeSetChecksumManager) RemoveNodes(nodes []node.ID) {
+func (m *captureSetChecksumManager) RemoveNodes(nodes []node.ID) {
 	if len(nodes) == 0 {
 		return
 	}
@@ -322,14 +371,10 @@ func (m *nodeSetChecksumManager) RemoveNodes(nodes []node.ID) {
 //
 // A warning is triggered when a capture stays in a non-OK state for warnAfter, and the log
 // emission is throttled by warnInterval.
-func (m *nodeSetChecksumManager) ObserveHeartbeat(from node.ID, state heartbeatpb.ChecksumState) {
+func (m *captureSetChecksumManager) ObserveHeartbeat(from node.ID, state heartbeatpb.ChecksumState) {
 	now := time.Now()
-	const (
-		warnAfter    = 2 * time.Minute
-		warnInterval = 2 * time.Minute
-	)
 
-	type warnInfo struct {
+	type warnSnapshot struct {
 		state      heartbeatpb.ChecksumState
 		duration   time.Duration
 		epoch      uint64
@@ -346,30 +391,8 @@ func (m *nodeSetChecksumManager) ObserveHeartbeat(from node.ID, state heartbeatp
 		m.mu.Unlock()
 		return
 	}
-	if state == heartbeatpb.ChecksumState_OK {
-		captureState.lastObservedState = state
-		captureState.nonOKSince = time.Time{}
-		captureState.lastWarnAt = time.Time{}
-		m.mu.Unlock()
-		return
-	}
-
-	needResetTimer := captureState.lastObservedState == heartbeatpb.ChecksumState_OK || captureState.lastObservedState != state
-	if needResetTimer || captureState.nonOKSince.IsZero() {
-		captureState.nonOKSince = now
-		captureState.lastWarnAt = time.Time{}
-	}
-
-	captureState.lastObservedState = state
-	duration := now.Sub(captureState.nonOKSince)
-	shouldWarn := duration >= warnAfter
-	if shouldWarn && !captureState.lastWarnAt.IsZero() && now.Sub(captureState.lastWarnAt) < warnInterval {
-		shouldWarn = false
-	}
-	if shouldWarn {
-		captureState.lastWarnAt = now
-	}
-	warn := warnInfo{
+	shouldWarn, duration := captureState.observeHeartbeat(now, state, warnAfter, warnInterval)
+	snapshot := warnSnapshot{
 		state:      state,
 		duration:   duration,
 		epoch:      m.epoch,
@@ -385,24 +408,24 @@ func (m *nodeSetChecksumManager) ObserveHeartbeat(from node.ID, state heartbeatp
 	}
 
 	stateStr := "mismatch"
-	if warn.state == heartbeatpb.ChecksumState_UNINITIALIZED {
+	if snapshot.state == heartbeatpb.ChecksumState_UNINITIALIZED {
 		stateStr = "uninitialized"
 	}
-	log.Warn("node set checksum state not ok for a long time",
-		zap.Stringer("changefeedID", warn.changefeed),
-		zap.String("capture", warn.capture.String()),
+	log.Warn("capture set checksum state not ok for a long time",
+		zap.Stringer("changefeedID", snapshot.changefeed),
+		zap.String("capture", snapshot.capture.String()),
 		zap.String("mode", common.StringMode(m.mode)),
 		zap.String("state", stateStr),
-		zap.Duration("duration", warn.duration),
-		zap.Uint64("epoch", warn.epoch),
-		zap.Uint64("expectedSeq", warn.seq),
-		zap.Uint64("ackedSeq", warn.ackedSeq),
-		zap.Time("lastSendAt", warn.lastSend),
+		zap.Duration("duration", snapshot.duration),
+		zap.Uint64("epoch", snapshot.epoch),
+		zap.Uint64("expectedSeq", snapshot.seq),
+		zap.Uint64("ackedSeq", snapshot.ackedSeq),
+		zap.Time("lastSendAt", snapshot.lastSend),
 	)
 }
 
 // buildUpdateMessage builds a checksum update command for one capture.
-func (m *nodeSetChecksumManager) buildUpdateMessage(
+func (m *captureSetChecksumManager) buildUpdateMessage(
 	to node.ID,
 	seq uint64,
 	checksum set_checksum.Checksum,
@@ -414,20 +437,4 @@ func (m *nodeSetChecksumManager) buildUpdateMessage(
 		Seq:          seq,
 		Checksum:     checksum.ToPB(),
 	})
-}
-
-// sendMessages sends checksum updates to DispatcherManager by best-effort.
-func (m *nodeSetChecksumManager) sendMessages(msgs []*messaging.TargetMessage) {
-	for _, msg := range msgs {
-		if msg == nil {
-			continue
-		}
-		if err := m.mc.SendCommand(msg); err != nil {
-			log.Debug("failed to send node set checksum message",
-				zap.Stringer("changefeedID", m.changefeedID),
-				zap.Any("msg", msg),
-				zap.Error(err),
-			)
-		}
-	}
 }

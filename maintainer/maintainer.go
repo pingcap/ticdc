@@ -74,8 +74,8 @@ type Maintainer struct {
 
 	mc messaging.MessageCenter
 
-	defaultChecksumManager *nodeSetChecksumManager
-	redoChecksumManager    *nodeSetChecksumManager
+	defaultChecksumManager *captureSetChecksumManager
+	redoChecksumManager    *captureSetChecksumManager
 
 	watermark struct {
 		mu sync.RWMutex
@@ -198,10 +198,10 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		Name: keyspaceName,
 	}
 
-	defaultChecksumManager := newNodeSetChecksumManager(cfID, info.Epoch, common.DefaultMode, mc)
-	var redoChecksumManager *nodeSetChecksumManager
+	defaultChecksumManager := newCaptureSetChecksumManager(cfID, info.Epoch, common.DefaultMode)
+	var redoChecksumManager *captureSetChecksumManager
 	if enableRedo {
-		redoChecksumManager = newNodeSetChecksumManager(cfID, info.Epoch, common.RedoMode, mc)
+		redoChecksumManager = newCaptureSetChecksumManager(cfID, info.Epoch, common.RedoMode)
 	}
 	controller := NewController(cfID, checkpointTs, taskScheduler,
 		info.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), refresher, keyspaceMeta, enableRedo, defaultChecksumManager, redoChecksumManager)
@@ -628,10 +628,7 @@ func (m *Maintainer) advanceRedoMetaTsOnce() {
 			continue
 		}
 		checksumState, ok := m.redoChecksumStateByCapture.Get(id)
-		if !ok {
-			checksumState = heartbeatpb.ChecksumState_UNINITIALIZED
-		}
-		if checksumState != heartbeatpb.ChecksumState_OK {
+		if !ok || checksumState != heartbeatpb.ChecksumState_OK {
 			updateCheckpointTs = false
 			continue
 		}
@@ -750,10 +747,7 @@ func (m *Maintainer) calculateNewCheckpointTs() (*heartbeatpb.Watermark, bool) {
 			continue
 		}
 		checksumState, ok := m.checksumStateByCapture.Get(id)
-		if !ok {
-			checksumState = heartbeatpb.ChecksumState_UNINITIALIZED
-		}
-		if checksumState != heartbeatpb.ChecksumState_OK {
+		if !ok || checksumState != heartbeatpb.ChecksumState_OK {
 			updateCheckpointTs = false
 			continue
 		}
@@ -828,9 +822,9 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 	// Record dispatcher set checksum state for checkpoint gating.
 	// When checksum is not OK, we must not advance checkpoint using stale node-level watermarks.
 	m.checksumStateByCapture.Set(msg.From, req.ChecksumState)
-	m.redoChecksumStateByCapture.Set(msg.From, req.RedoChecksumState)
 	m.defaultChecksumManager.ObserveHeartbeat(msg.From, req.ChecksumState)
-	if m.redoChecksumManager != nil {
+	if m.enableRedo {
+		m.redoChecksumStateByCapture.Set(msg.From, req.RedoChecksumState)
 		m.redoChecksumManager.ObserveHeartbeat(msg.From, req.RedoChecksumState)
 	}
 
@@ -1003,33 +997,6 @@ func (m *Maintainer) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.Maintai
 	// For a normal case(100w tables, and 16 ascii characters for each name), the memory consumption is about 30MB.
 	m.postBootstrapMsg = msg
 	m.sendPostBootstrapRequest()
-
-	nodes := make([]node.ID, 0, len(cachedResp))
-	for id := range cachedResp {
-		nodes = append(nodes, id)
-	}
-
-	defaultExpected := make(map[node.ID][]common.DispatcherID, len(nodes))
-	defaultExpected[m.selfNode.ID] = append(defaultExpected[m.selfNode.ID], m.ddlSpan.ID)
-	for _, span := range m.controller.spanController.GetReplicating() {
-		capture := span.GetNodeID()
-		defaultExpected[capture] = append(defaultExpected[capture], span.ID)
-	}
-
-	var redoExpected map[node.ID][]common.DispatcherID
-	if m.enableRedo {
-		redoExpected = make(map[node.ID][]common.DispatcherID, len(nodes))
-		redoExpected[m.selfNode.ID] = append(redoExpected[m.selfNode.ID], m.redoDDLSpan.ID)
-		for _, span := range m.controller.redoSpanController.GetReplicating() {
-			capture := span.GetNodeID()
-			redoExpected[capture] = append(redoExpected[capture], span.ID)
-		}
-	}
-
-	m.defaultChecksumManager.ResetAndSendFull(m.info.Epoch, nodes, defaultExpected)
-	if m.redoChecksumManager != nil {
-		m.redoChecksumManager.ResetAndSendFull(m.info.Epoch, nodes, redoExpected)
-	}
 	// set status changed to true, trigger the maintainer manager to send heartbeat to coordinator
 	// to report the this changefeed's status
 	m.statusChanged.Store(true)
@@ -1072,11 +1039,9 @@ func (m *Maintainer) handleResendMessage() {
 		// resend barrier ack messages
 		m.sendMessages(m.controller.barrier.Resend())
 	}
-	m.defaultChecksumManager.FlushDirty()
-	m.defaultChecksumManager.ResendPending(time.Second)
+	m.sendMessages(m.defaultChecksumManager.FlushAndResendIfNeeded())
 	if m.redoChecksumManager != nil {
-		m.redoChecksumManager.FlushDirty()
-		m.redoChecksumManager.ResendPending(time.Second)
+		m.sendMessages(m.redoChecksumManager.FlushAndResendIfNeeded())
 	}
 }
 

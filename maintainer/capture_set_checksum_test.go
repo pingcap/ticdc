@@ -212,12 +212,10 @@ func TestAdvanceRedoMetaTsOnceGatedByChecksumState(t *testing.T) {
 }
 
 func TestDispatcherSetChecksumResendAndAck(t *testing.T) {
-	mc := &recordingMessageCenter{}
-	mgr := newNodeSetChecksumManager(
+	mgr := newCaptureSetChecksumManager(
 		common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme),
 		1,
 		common.DefaultMode,
-		mc,
 	)
 
 	capture := node.ID("capture-1")
@@ -226,19 +224,19 @@ func TestDispatcherSetChecksumResendAndAck(t *testing.T) {
 
 	mgr.ApplyDelta(capture, []common.DispatcherID{id1}, nil)
 	mgr.ApplyDelta(capture, []common.DispatcherID{id2}, nil)
-	require.Empty(t, mc.commands())
 
-	mgr.FlushDirty()
-	cmds := mc.commands()
-	require.Len(t, cmds, 1)
-	update := cmds[0].Message[0].(*heartbeatpb.DispatcherSetChecksumUpdate)
+	msgs := mgr.FlushDirty()
+	require.Len(t, msgs, 1)
+	update := msgs[0].Message[0].(*heartbeatpb.DispatcherSetChecksumUpdate)
 	require.Equal(t, uint64(2), update.Seq)
 
-	mc.reset()
-	mgr.ResendPending(0)
-	cmds = mc.commands()
-	require.Len(t, cmds, 1)
-	update = cmds[0].Message[0].(*heartbeatpb.DispatcherSetChecksumUpdate)
+	mgr.mu.Lock()
+	mgr.state.captures[capture].lastSendAt = time.Time{}
+	mgr.mu.Unlock()
+
+	msgs = mgr.ResendPending()
+	require.Len(t, msgs, 1)
+	update = msgs[0].Message[0].(*heartbeatpb.DispatcherSetChecksumUpdate)
 	require.Equal(t, uint64(2), update.Seq)
 
 	mgr.HandleAck(capture, &heartbeatpb.DispatcherSetChecksumAck{
@@ -247,9 +245,11 @@ func TestDispatcherSetChecksumResendAndAck(t *testing.T) {
 		Mode:         common.DefaultMode,
 		Seq:          1,
 	})
-	mc.reset()
-	mgr.ResendPending(0)
-	require.Len(t, mc.commands(), 1)
+	mgr.mu.Lock()
+	mgr.state.captures[capture].lastSendAt = time.Time{}
+	mgr.mu.Unlock()
+	msgs = mgr.ResendPending()
+	require.Len(t, msgs, 1)
 
 	mgr.HandleAck(capture, &heartbeatpb.DispatcherSetChecksumAck{
 		ChangefeedID: mgr.changefeedID.ToPB(),
@@ -257,9 +257,8 @@ func TestDispatcherSetChecksumResendAndAck(t *testing.T) {
 		Mode:         common.DefaultMode,
 		Seq:          2,
 	})
-	mc.reset()
-	mgr.ResendPending(0)
-	require.Empty(t, mc.commands())
+	msgs = mgr.ResendPending()
+	require.Empty(t, msgs)
 }
 
 func TestRecordingMessageCenterImplementsInterface(t *testing.T) {

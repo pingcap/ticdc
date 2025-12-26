@@ -239,16 +239,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		}
 	}
 
-	maintainerChanged, epochChanged := manager.UpdateMaintainer(from, cfConfig.Epoch)
-	if maintainerChanged {
-		log.Info("maintainer changed",
-			zap.String("changefeed", cfId.Name()), zap.String("maintainer", from.String()))
-	}
-	if epochChanged {
-		log.Info("maintainer epoch updated",
-			zap.Stringer("changefeedID", cfId),
-			zap.Uint64("epoch", cfConfig.Epoch))
-	}
+	manager.UpdateMaintainer(from, cfConfig.Epoch)
 
 	response := createBootstrapResponse(req.ChangefeedID, manager, startTs)
 	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)

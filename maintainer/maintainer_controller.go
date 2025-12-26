@@ -69,6 +69,11 @@ type Controller struct {
 
 	keyspaceMeta common.KeyspaceMeta
 	enableRedo   bool
+
+	// checksum managers are optional. In production, they are provided by Maintainer and are used
+	// to initialize expected dispatcher set checksums before starting scheduler/operator tasks.
+	defaultChecksumManager *captureSetChecksumManager
+	redoChecksumManager    *captureSetChecksumManager
 }
 
 func NewController(changefeedID common.ChangeFeedID,
@@ -116,6 +121,15 @@ func NewController(changefeedID common.ChangeFeedID,
 		changefeedID, batchSize, oc, redoOC, spanController, redoSpanController, balanceInterval, splitter, schedulerCfg,
 	)
 
+	var defaultChecksumManager *captureSetChecksumManager
+	if mgr, ok := defaultChecksumUpdater.(*captureSetChecksumManager); ok {
+		defaultChecksumManager = mgr
+	}
+	var redoChecksumManager *captureSetChecksumManager
+	if mgr, ok := redoChecksumUpdater.(*captureSetChecksumManager); ok {
+		redoChecksumManager = mgr
+	}
+
 	return &Controller{
 		startCheckpointTs:      checkpointTs,
 		changefeedID:           changefeedID,
@@ -134,6 +148,8 @@ func NewController(changefeedID common.ChangeFeedID,
 		splitter:               splitter,
 		keyspaceMeta:           keyspaceMeta,
 		enableRedo:             enableRedo,
+		defaultChecksumManager: defaultChecksumManager,
+		redoChecksumManager:    redoChecksumManager,
 	}
 }
 
