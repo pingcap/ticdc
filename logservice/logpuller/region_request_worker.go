@@ -324,20 +324,22 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 				zap.Uint64("resolvedTs", resolvedTsEvent.Ts))
 			continue
 		}
-		if span == nil {
-			span = state.region.subscribedSpan
-		} else if span != state.region.subscribedSpan {
-			log.Panic("resolved ts event contains multiple spans",
-				zap.Uint64("workerID", s.workerID),
-				zap.Uint64("subscriptionID", uint64(subscriptionID)),
-				zap.Uint64("regionID", regionID))
-		}
-		if span == nil {
+		currentSpan := state.region.subscribedSpan
+		if currentSpan == nil {
 			log.Warn("region request worker receives a resolved ts event for region without span",
 				zap.Uint64("workerID", s.workerID),
 				zap.Uint64("subscriptionID", uint64(subscriptionID)),
 				zap.Uint64("regionID", regionID))
 			continue
+		}
+
+		if span == nil {
+			span = currentSpan
+		} else if span != currentSpan {
+			log.Panic("resolved ts event contains multiple spans",
+				zap.Uint64("workerID", s.workerID),
+				zap.Uint64("subscriptionID", uint64(subscriptionID)),
+				zap.Uint64("regionID", regionID))
 		}
 		states = append(states, state)
 	}
