@@ -173,20 +173,8 @@ func (d *writer) flushMessages(ctx context.Context) error {
 				}
 				indexFilePath := d.filePathGenerator.GenerateIndexFilePath(table, date)
 
-				// first write the index file to external storage.
-				// the file content is simply the last element of the data file path
-				err = d.writeIndexFile(ctx, indexFilePath, path.Base(dataFilePath)+"\n")
-				if err != nil {
-					log.Error("failed to write index file to external storage",
-						zap.Int("workerID", d.id),
-						zap.String("keyspace", d.changeFeedID.Keyspace()),
-						zap.Stringer("changefeed", d.changeFeedID.ID()),
-						zap.String("path", indexFilePath),
-						zap.Error(err))
-				}
-
-				// then write the data file to external storage.
-				err = d.writeDataFile(ctx, dataFilePath, task)
+				// first write the data file to external storage.
+				err = d.writeDataFile(ctx, dataFilePath, indexFilePath, task)
 				if err != nil {
 					log.Error("failed to write data file to external storage",
 						zap.Int("workerID", d.id),
@@ -225,7 +213,7 @@ func (d *writer) ignoreTableTask(task *singleTableTask) {
 	}
 }
 
-func (d *writer) writeDataFile(ctx context.Context, path string, task *singleTableTask) error {
+func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath string, task *singleTableTask) error {
 	var callbacks []func()
 	buf := bytes.NewBuffer(make([]byte, 0, task.size))
 	rowsCnt := 0
@@ -245,10 +233,10 @@ func (d *writer) writeDataFile(ctx context.Context, path string, task *singleTab
 	if err := d.statistics.RecordBatchExecution(func() (int, int64, error) {
 		start := time.Now()
 		if d.config.FlushConcurrency <= 1 {
-			return rowsCnt, bytesCnt, d.storage.WriteFile(ctx, path, buf.Bytes())
+			return rowsCnt, bytesCnt, d.storage.WriteFile(ctx, dataFilePath, buf.Bytes())
 		}
 
-		writer, inErr := d.storage.Create(ctx, path, &storage.WriterOption{
+		writer, inErr := d.storage.Create(ctx, dataFilePath, &storage.WriterOption{
 			Concurrency: d.config.FlushConcurrency,
 		})
 		if inErr != nil {
@@ -277,6 +265,20 @@ func (d *writer) writeDataFile(ctx context.Context, path string, task *singleTab
 
 	d.metricWriteBytes.Add(float64(bytesCnt))
 	d.metricFileCount.Add(1)
+
+	// then write the index file to external storage in the end.
+	// the file content is simply the last data file path
+	err := d.writeIndexFile(ctx, indexFilePath, path.Base(dataFilePath)+"\n")
+	if err != nil {
+		log.Error("failed to write index file to external storage",
+			zap.Int("workerID", d.id),
+			zap.String("keyspace", d.changeFeedID.Keyspace()),
+			zap.Stringer("changefeed", d.changeFeedID.ID()),
+			zap.String("path", indexFilePath),
+			zap.Error(err))
+		return errors.Trace(err)
+	}
+
 	for _, cb := range callbacks {
 		if cb != nil {
 			cb()
