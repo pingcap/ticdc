@@ -101,6 +101,10 @@ func (o *neverFinishOperator) OnTaskRemoved()           {}
 func (o *neverFinishOperator) String() string           { return "never-finish" }
 func (o *neverFinishOperator) BlockTsForward() bool     { return false }
 
+type testChecksumUpdater struct{}
+
+func (testChecksumUpdater) ApplyDelta(node.ID, []common.DispatcherID, []common.DispatcherID) {}
+
 func setAliveNodes(nodeManager *watcher.NodeManager, alive map[node.ID]*node.Info) {
 	type nodeMap = map[node.ID]*node.Info
 	v := reflect.ValueOf(nodeManager).Elem().FieldByName("nodes")

@@ -57,6 +57,10 @@ func init() {
 	replica.SetEasyThresholdForTest()
 }
 
+type testChecksumUpdater struct{}
+
+func (testChecksumUpdater) ApplyDelta(node.ID, []common.DispatcherID, []common.DispatcherID) {}
+
 func TestSchedule(t *testing.T) {
 	testutil.SetUpTestServices()
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
