@@ -17,6 +17,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
@@ -501,8 +502,9 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	if raw.IsUpdate() {
 		rowType = common.RowTypeUpdate
 	}
-
+	start := time.Now()
 	count, checksum, err := decode(raw, t.TableInfo, t.Rows)
+	DMLDecodeDuration.Observe(time.Since(start).Seconds())
 	if err != nil {
 		return err
 	}
@@ -537,12 +539,13 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 	}
 
 	if filter != nil {
+		start := time.Now()
 		skip, err := filter.ShouldIgnoreDML(rowType, preRow, row, t.TableInfo, raw.StartTs)
+		DMLIgnoreComputeDuration.Observe(time.Since(start).Seconds())
 		if err != nil {
 			return errors.Trace(err)
 		}
 		if skip {
-			log.Debug("ignore DML by filter", zap.Any("tableInfo", t.TableInfo), zap.Any("raw", raw))
 			t.Rows.TruncateTo(t.Rows.NumRows() - count) // Remove the rows that were added
 			return nil
 		}

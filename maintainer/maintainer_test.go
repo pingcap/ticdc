@@ -344,9 +344,12 @@ func TestMaintainerSchedule(t *testing.T) {
 		})
 
 	// send bootstrap message
-	maintainer.sendMessages(maintainer.bootstrapper.HandleNewNodes(
-		[]*node.Info{n},
-	))
+
+	nodes := make(map[node.ID]*node.Info)
+	nodes[n.ID] = n
+
+	_, _, messages, _ := maintainer.bootstrapper.HandleNodesChange(nodes)
+	maintainer.sendMessages(messages)
 
 	time.Sleep(time.Second * time.Duration(sleepTime))
 

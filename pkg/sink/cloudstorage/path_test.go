@@ -49,7 +49,7 @@ func testFilePathGenerator(ctx context.Context, t *testing.T, dir string) *FileP
 	replicaConfig.Sink.Protocol = util.AddressOf(config.ProtocolOpen.String())
 	replicaConfig.Sink.FileIndexWidth = util.AddressOf(6)
 	cfg := NewConfig()
-	err = cfg.Apply(ctx, sinkURI, replicaConfig.Sink)
+	err = cfg.Apply(ctx, sinkURI, replicaConfig.Sink, true)
 	require.NoError(t, err)
 
 	mockPDClock := pdutil.NewClock4Test()
@@ -69,6 +69,7 @@ func TestGenerateDataFilePath(t *testing.T) {
 			Table:  "table1",
 		},
 		TableInfoVersion: 5,
+		DispatcherID:     commonType.NewDispatcherID(),
 	}
 
 	dir := t.TempDir()
@@ -78,10 +79,10 @@ func TestGenerateDataFilePath(t *testing.T) {
 	// date-separator: none
 	path, err := f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/CDC000001.json", path)
+	require.Equal(t, fmt.Sprintf("test/table1/5/CDC_%s_000001.json", table.DispatcherID.String()), path)
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/CDC000002.json", path)
+	require.Equal(t, fmt.Sprintf("test/table1/5/CDC_%s_000002.json", table.DispatcherID.String()), path)
 
 	// date-separator: year
 	mockClock := clock.NewMock()
@@ -93,19 +94,19 @@ func TestGenerateDataFilePath(t *testing.T) {
 	date = f.GenerateDateStr()
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2022/CDC000001.json", path)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2022/CDC_%s_000001.json", table.DispatcherID.String()), path)
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2022/CDC000002.json", path)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2022/CDC_%s_000002.json", table.DispatcherID.String()), path)
 	// year changed
 	mockClock.Set(time.Date(2023, 1, 1, 0, 0, 20, 0, time.UTC))
 	date = f.GenerateDateStr()
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2023/CDC000001.json", path)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2023/CDC_%s_000001.json", table.DispatcherID.String()), path)
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2023/CDC000002.json", path)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2023/CDC_%s_000002.json", table.DispatcherID.String()), path)
 
 	// date-separator: month
 	mockClock = clock.NewMock()
@@ -118,19 +119,19 @@ func TestGenerateDataFilePath(t *testing.T) {
 	date = f.GenerateDateStr()
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2022-12/CDC000001.json", path)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2022-12/CDC_%s_000001.json", table.DispatcherID.String()), path)
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2022-12/CDC000002.json", path)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2022-12/CDC_%s_000002.json", table.DispatcherID.String()), path)
 	// month changed
 	mockClock.Set(time.Date(2023, 1, 1, 0, 0, 20, 0, time.UTC))
 	date = f.GenerateDateStr()
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2023-01/CDC000001.json", path)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2023-01/CDC_%s_000001.json", table.DispatcherID.String()), path)
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2023-01/CDC000002.json", path)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2023-01/CDC_%s_000002.json", table.DispatcherID.String()), path)
 
 	// date-separator: day
 	mockClock = clock.NewMock()
@@ -143,19 +144,19 @@ func TestGenerateDataFilePath(t *testing.T) {
 	date = f.GenerateDateStr()
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2022-12-31/CDC000001.json", path)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2022-12-31/CDC_%s_000001.json", table.DispatcherID.String()), path)
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2022-12-31/CDC000002.json", path)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2022-12-31/CDC_%s_000002.json", table.DispatcherID.String()), path)
 	// day changed
 	mockClock.Set(time.Date(2023, 1, 1, 0, 0, 20, 0, time.UTC))
 	date = f.GenerateDateStr()
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2023-01-01/CDC000001.json", path)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2023-01-01/CDC_%s_000001.json", table.DispatcherID.String()), path)
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2023-01-01/CDC000002.json", path)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2023-01-01/CDC_%s_000002.json", table.DispatcherID.String()), path)
 }
 
 func TestFetchIndexFromFileName(t *testing.T) {
@@ -197,7 +198,7 @@ func TestFetchIndexFromFileName(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		_, err := f.fetchIndexFromFileName(tc.fileName)
+		_, err := f.fetchIndexFromFileName("", tc.fileName)
 		if len(tc.wantErr) != 0 {
 			require.Contains(t, err.Error(), tc.wantErr)
 		} else {
@@ -219,23 +220,25 @@ func TestGenerateDataFilePathWithIndexFile(t *testing.T) {
 	f.SetClock(pdutil.NewMonotonicClock(mockClock))
 
 	mockClock.Set(time.Date(2023, 3, 9, 23, 59, 59, 0, time.UTC))
+	dispatcherID := commonType.NewDispatcherID()
 	table := VersionedTableName{
 		TableNameWithPhysicTableID: commonType.TableName{
 			Schema: "test",
 			Table:  "table1",
 		},
 		TableInfoVersion: 5,
+		DispatcherID:     dispatcherID,
 	}
 	f.versionMap[table] = table.TableInfoVersion
 	date := f.GenerateDateStr()
 	indexFilePath := f.GenerateIndexFilePath(table, date)
-	err := f.storage.WriteFile(ctx, indexFilePath, []byte("CDC000005.json\n"))
+	err := f.storage.WriteFile(ctx, indexFilePath, []byte(fmt.Sprintf("CDC_%s_000005.json\n", dispatcherID.String())))
 	require.NoError(t, err)
 
 	// index file exists, but the file is not exist
 	dataFilePath, err := f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2023-03-09/CDC000005.json", dataFilePath)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2023-03-09/CDC_%s_000005.json", dispatcherID.String()), dataFilePath)
 
 	// cleanup cached file index
 	delete(f.fileIndex, table)
@@ -244,7 +247,7 @@ func TestGenerateDataFilePathWithIndexFile(t *testing.T) {
 	require.NoError(t, err)
 	dataFilePath, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2023-03-09/CDC000005.json", dataFilePath)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2023-03-09/CDC_%s_000005.json", dispatcherID.String()), dataFilePath)
 
 	// cleanup cached file index
 	delete(f.fileIndex, table)
@@ -253,7 +256,7 @@ func TestGenerateDataFilePathWithIndexFile(t *testing.T) {
 	require.NoError(t, err)
 	dataFilePath, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, "test/table1/5/2023-03-09/CDC000006.json", dataFilePath)
+	require.Equal(t, fmt.Sprintf("test/table1/5/2023-03-09/CDC_%s_000006.json", dispatcherID.String()), dataFilePath)
 }
 
 func TestIsSchemaFile(t *testing.T) {
@@ -382,7 +385,7 @@ func TestRemoveExpiredFilesWithoutPartition(t *testing.T) {
 		FileCleanupCronSpec: util.AddressOf("* * * * * *"),
 	}
 	cfg := NewConfig()
-	err = cfg.Apply(ctx, sinkURI, replicaConfig.Sink)
+	err = cfg.Apply(ctx, sinkURI, replicaConfig.Sink, true)
 	require.NoError(t, err)
 
 	// generate some expired files

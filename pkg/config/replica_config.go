@@ -346,13 +346,6 @@ func (c *ReplicaConfig) FixMemoryQuota() {
 	c.MemoryQuota = util.AddressOf(uint64(DefaultChangefeedMemoryQuota))
 }
 
-// isSinkCompatibleWithSpanReplication returns true if the sink uri is
-// compatible with span replication.
-func isSinkCompatibleWithSpanReplication(u *url.URL) bool {
-	return u != nil &&
-		(strings.Contains(u.Scheme, "kafka") || strings.Contains(u.Scheme, "blackhole"))
-}
-
 // MaskSensitiveData masks sensitive data in ReplicaConfig
 func (c *ReplicaConfig) MaskSensitiveData() {
 	if c.Sink != nil {

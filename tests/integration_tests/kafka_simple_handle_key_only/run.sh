@@ -32,7 +32,7 @@ function run() {
 	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c ${changefeed_id} --config="$CUR/conf/changefeed.toml"
 	run_sql_file $CUR/data/ddl.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
-	sleep 5
+	sleep 20
 
 	cdc_cli_changefeed pause -c ${changefeed_id}
 

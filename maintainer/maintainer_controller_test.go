@@ -1428,9 +1428,10 @@ func TestFinishBootstrap(t *testing.T) {
 	require.Equal(t, 1, s.spanController.GetReplicatingSize())
 	require.Equal(t, 0, s.spanController.GetSchedulingSize())
 	require.NotNil(t, s.spanController.GetTaskByID(dispatcherID2))
-	require.Panics(t, func() {
-		_, _ = s.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{}, false)
-	})
+
+	postBootstrapRequest, err := s.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{}, false)
+	require.NoError(t, err)
+	require.Nil(t, postBootstrapRequest)
 }
 
 func TestSplitTableWhenBootstrapFinished(t *testing.T) {
