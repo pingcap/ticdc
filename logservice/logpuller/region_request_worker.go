@@ -312,9 +312,6 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 		return
 	}
 	pool := s.client.resolvedTsWorkerPool
-	if pool == nil {
-		log.Panic("resolved ts worker pool must be initialized")
-	}
 	var span *subscribedSpan
 	states := make([]*regionFeedState, 0, len(resolvedTsEvent.Regions))
 	for _, regionID := range resolvedTsEvent.Regions {
