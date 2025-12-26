@@ -74,7 +74,7 @@ func newRegionEventProcessor(workerCount int, queueSize int, subClient *subscrip
 	return p
 }
 
-func (p *regionEventProcessor) Close() {
+func (p *regionEventProcessor) close() {
 	if p == nil || !p.closed.CompareAndSwap(false, true) {
 		return
 	}
@@ -84,7 +84,7 @@ func (p *regionEventProcessor) Close() {
 	p.wg.Wait()
 }
 
-func (p *regionEventProcessor) Dispatch(event regionEvent) {
+func (p *regionEventProcessor) dispatch(event regionEvent) {
 	if p == nil || p.closed.Load() || event.state == nil {
 		return
 	}
@@ -93,7 +93,7 @@ func (p *regionEventProcessor) Dispatch(event regionEvent) {
 	p.workerChans[idx] <- event
 }
 
-func (p *regionEventProcessor) DispatchResolvedTsBatch(resolvedTs uint64, states []*regionFeedState) {
+func (p *regionEventProcessor) dispatchResolvedTsBatch(resolvedTs uint64, states []*regionFeedState) {
 	if p == nil || p.closed.Load() || resolvedTs == 0 || len(states) == 0 {
 		return
 	}

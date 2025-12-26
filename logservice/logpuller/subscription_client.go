@@ -482,7 +482,7 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 func (s *subscriptionClient) Close(ctx context.Context) error {
 	s.cancel()
 	if s.regionEventProcessor != nil {
-		s.regionEventProcessor.Close()
+		s.regionEventProcessor.close()
 	}
 	s.ds.Close()
 	s.regionTaskQueue.Close()

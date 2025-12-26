@@ -129,7 +129,7 @@ func newRegionRequestWorker(
 					regionEvent := regionEvent{
 						state: state,
 					}
-					worker.client.regionEventProcessor.Dispatch(regionEvent)
+					worker.client.regionEventProcessor.dispatch(regionEvent)
 				}
 			}
 			// The store may fail forever, so we need try to re-schedule all pending regions.
@@ -268,7 +268,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 			default:
 				log.Panic("unknown event type", zap.Any("event", event))
 			}
-			s.client.regionEventProcessor.Dispatch(regionEvent)
+			s.client.regionEventProcessor.dispatch(regionEvent)
 		} else {
 			switch event.Event.(type) {
 			case *cdcpb.Event_Error:
@@ -312,7 +312,7 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 			zap.Int("missingCount", missingCount),
 			zap.Any("missingSampleRegionIDs", missingSample))
 	}
-	s.client.regionEventProcessor.DispatchResolvedTsBatch(resolvedTsEvent.Ts, states)
+	s.client.regionEventProcessor.dispatchResolvedTsBatch(resolvedTsEvent.Ts, states)
 }
 
 func (s *regionRequestWorker) collectRegionStates(
@@ -328,7 +328,10 @@ func (s *regionRequestWorker) collectRegionStates(
 	statesMap := s.requestedRegions.subscriptions[subID]
 	if statesMap == nil {
 		s.requestedRegions.RUnlock()
-		sampleLen := min(len(regionIDs), cap(missingSample))
+		sampleLen := len(regionIDs)
+		if sampleLen > cap(missingSample) {
+			sampleLen = cap(missingSample)
+		}
 		missingSample = append(missingSample, regionIDs[:sampleLen]...)
 		return nil, len(regionIDs), missingSample
 	}
@@ -411,7 +414,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 				regionEvent := regionEvent{
 					state: state,
 				}
-				s.client.regionEventProcessor.Dispatch(regionEvent)
+				s.client.regionEventProcessor.dispatch(regionEvent)
 			}
 
 		} else if region.subscribedSpan.stopped.Load() {
