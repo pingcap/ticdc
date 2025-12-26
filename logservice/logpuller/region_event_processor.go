@@ -14,6 +14,7 @@
 package logpuller
 
 import (
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -261,9 +262,7 @@ func appendKVEntriesFromRegionEntries(
 				zap.String("startKey", spanz.HexKey(span.span.StartKey)),
 				zap.String("endKey", spanz.HexKey(span.span.EndKey)))
 			cached := state.matcher.matchCachedRow(true)
-			if len(cached) > 0 {
-				dst = growSlice(dst, len(cached))
-			}
+			dst = slices.Grow(dst, len(cached))
 			for _, cachedEvent := range cached {
 				dst = append(dst, assembleRowEvent(regionID, cachedEvent))
 			}
@@ -324,29 +323,6 @@ func appendKVEntriesFromRegionEntries(
 		}
 	}
 	return dst
-}
-
-func growSlice[T any](dst []T, extra int) []T {
-	if extra <= 0 {
-		return dst
-	}
-	if cap(dst)-len(dst) >= extra {
-		return dst
-	}
-	newCap := cap(dst)
-	need := len(dst) + extra
-	if newCap < need {
-		newCap = need
-	}
-	if newCap < cap(dst)*2 {
-		newCap = cap(dst) * 2
-		if newCap < need {
-			newCap = need
-		}
-	}
-	nd := make([]T, len(dst), newCap)
-	copy(nd, dst)
-	return nd
 }
 
 func updateRegionResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs uint64) {
