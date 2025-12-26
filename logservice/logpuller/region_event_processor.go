@@ -136,7 +136,7 @@ func (p *regionEventProcessor) run(ch <-chan regionEvent) {
 
 			switch {
 			case event.entries != nil:
-				batch := make([]common.RawKVEntry, 0, estimateKVBatchCap(event.entries))
+				batch := make([]common.RawKVEntry, 0, len(event.entries.Entries.GetEntries()))
 				batch = appendKVEntriesFromRegionEntries(batch, span, state, event.entries)
 				if len(batch) == 0 {
 					continue
@@ -175,15 +175,6 @@ func (p *regionEventProcessor) run(ch <-chan regionEvent) {
 
 		log.Panic("unknown region event", zap.Any("event", event))
 	}
-}
-
-func estimateKVBatchCap(entries *cdcpb.Event_Entries_) int {
-	if entries == nil || entries.Entries == nil {
-		return 0
-	}
-	// Upper bound is unknown due to INIT potentially flushing cached rows.
-	// Use the number of incoming rows as a reasonable baseline.
-	return len(entries.Entries.GetEntries())
 }
 
 func (p *regionEventProcessor) handleRegionError(state *regionFeedState) {
