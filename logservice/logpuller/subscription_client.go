@@ -193,7 +193,7 @@ type subscriptionClient struct {
 
 	stores sync.Map
 
-	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *subscriptionEventHandler]
+	ds dynstream.DynamicStream[int, SubscriptionID, subscriptionEvent, *subscribedSpan, *subscriptionEventHandler]
 	// resolvedTsWorkerPool processes region resolved ts events outside DS threads.
 	resolvedTsWorkerPool *resolvedTsWorkerPool
 	// the following three fields are used to manage feedback from ds and notify other goroutines
@@ -408,7 +408,7 @@ func (s *subscriptionClient) wakeSubscription(subID SubscriptionID) {
 	s.ds.Wake(subID)
 }
 
-func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
+func (s *subscriptionClient) pushSubscriptionEvent(subID SubscriptionID, event subscriptionEvent) {
 	// fast path
 	if !s.paused.Load() {
 		s.ds.Push(subID, event)
@@ -427,11 +427,11 @@ func (s *subscriptionClient) pushSpanResolvedTsEvent(span *subscribedSpan, resol
 	if span == nil || resolvedTs == 0 {
 		return
 	}
-	event := regionEvent{
+	event := subscriptionEvent{
 		spanResolvedTs: resolvedTs,
 		subID:          span.subID,
 	}
-	s.pushRegionEventToDS(span.subID, event)
+	s.pushSubscriptionEvent(span.subID, event)
 }
 
 func (s *subscriptionClient) handleDSFeedBack(ctx context.Context) error {

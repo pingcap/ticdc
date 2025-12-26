@@ -126,11 +126,11 @@ func newRegionRequestWorker(
 			for subID, m := range worker.clearRegionStates() {
 				for _, state := range m {
 					state.markStopped(regionErr)
-					regionEvent := regionEvent{
+					event := subscriptionEvent{
 						state:  state,
 						worker: worker,
 					}
-					worker.client.pushRegionEventToDS(subID, regionEvent)
+					worker.client.pushSubscriptionEvent(subID, event)
 				}
 			}
 			// The store may fail forever, so we need try to re-schedule all pending regions.
@@ -237,7 +237,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 		subscriptionID := SubscriptionID(event.RequestId)
 		state := s.getRegionState(subscriptionID, regionID)
 		if state != nil {
-			regionEvent := regionEvent{
+			subEvent := subscriptionEvent{
 				state:  state,
 				worker: s,
 			}
@@ -250,7 +250,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 						zap.Uint64("regionID", regionID))
 					continue
 				}
-				regionEvent.entries = eventData
+				subEvent.entries = eventData
 			case *cdcpb.Event_Admin_:
 				// ignore
 				continue
@@ -280,7 +280,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 			default:
 				log.Panic("unknown event type", zap.Any("event", event))
 			}
-			s.client.pushRegionEventToDS(SubscriptionID(event.RequestId), regionEvent)
+			s.client.pushSubscriptionEvent(SubscriptionID(event.RequestId), subEvent)
 		} else {
 			switch event.Event.(type) {
 			case *cdcpb.Event_Error:
@@ -404,11 +404,11 @@ func (s *regionRequestWorker) processRegionSendTask(
 			}
 			for _, state := range s.takeRegionStates(subID) {
 				state.markStopped(&requestCancelledErr{})
-				regionEvent := regionEvent{
+				subEvent := subscriptionEvent{
 					state:  state,
 					worker: s,
 				}
-				s.client.pushRegionEventToDS(subID, regionEvent)
+				s.client.pushSubscriptionEvent(subID, subEvent)
 			}
 
 		} else if region.subscribedSpan.stopped.Load() {

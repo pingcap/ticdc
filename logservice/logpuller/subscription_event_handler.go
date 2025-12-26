@@ -35,7 +35,7 @@ const (
 	DataGroupError               = 2
 )
 
-type regionEvent struct {
+type subscriptionEvent struct {
 	state  *regionFeedState
 	worker *regionRequestWorker // TODO: remove the field
 
@@ -47,7 +47,7 @@ type regionEvent struct {
 	subID          SubscriptionID
 }
 
-func (event *regionEvent) getSize() int {
+func (event *subscriptionEvent) getSize() int {
 	if event == nil {
 		return 0
 	}
@@ -69,18 +69,11 @@ type subscriptionEventHandler struct {
 	subClient *subscriptionClient
 }
 
-func (h *subscriptionEventHandler) Path(event regionEvent) SubscriptionID {
-	if event.state != nil {
-		return SubscriptionID(event.state.requestID)
-	}
-	if event.subID != 0 {
-		return event.subID
-	}
-	log.Panic("region event should have state or subscriptionID", zap.Any("event", event))
-	return InvalidSubscriptionID
+func (h *subscriptionEventHandler) Path(event subscriptionEvent) SubscriptionID {
+	return SubscriptionID(event.state.requestID)
 }
 
-func (h *subscriptionEventHandler) Handle(span *subscribedSpan, events ...regionEvent) bool {
+func (h *subscriptionEventHandler) Handle(span *subscribedSpan, events ...subscriptionEvent) bool {
 	if len(span.kvEventsCache) != 0 {
 		log.Panic("kvEventsCache is not empty",
 			zap.Int("kvEventsCacheLen", len(span.kvEventsCache)),
@@ -133,7 +126,7 @@ func (h *subscriptionEventHandler) Handle(span *subscribedSpan, events ...region
 	return false
 }
 
-func (h *subscriptionEventHandler) GetSize(event regionEvent) int {
+func (h *subscriptionEventHandler) GetSize(event subscriptionEvent) int {
 	return event.getSize()
 }
 
@@ -141,7 +134,7 @@ func (h *subscriptionEventHandler) GetArea(path SubscriptionID, dest *subscribed
 	return 0
 }
 
-func (h *subscriptionEventHandler) GetTimestamp(event regionEvent) dynstream.Timestamp {
+func (h *subscriptionEventHandler) GetTimestamp(event subscriptionEvent) dynstream.Timestamp {
 	switch {
 	case event.entries != nil && event.entries.Entries != nil:
 		for _, entry := range event.entries.Entries.GetEntries() {
@@ -163,9 +156,9 @@ func (h *subscriptionEventHandler) GetTimestamp(event regionEvent) dynstream.Tim
 	}
 	return 0
 }
-func (h *subscriptionEventHandler) IsPaused(event regionEvent) bool { return false }
+func (h *subscriptionEventHandler) IsPaused(event subscriptionEvent) bool { return false }
 
-func (h *subscriptionEventHandler) GetType(event regionEvent) dynstream.EventType {
+func (h *subscriptionEventHandler) GetType(event subscriptionEvent) dynstream.EventType {
 	if event.entries != nil || event.spanResolvedTs != 0 {
 		// Note: resolved ts may be from different regions, so they are not periodic signal
 		return dynstream.EventType{DataGroup: DataGroupEntriesOrResolvedTs, Property: dynstream.BatchableData}
@@ -182,7 +175,7 @@ func (h *subscriptionEventHandler) GetType(event regionEvent) dynstream.EventTyp
 	return dynstream.DefaultEventType
 }
 
-func (h *subscriptionEventHandler) OnDrop(event regionEvent) interface{} {
+func (h *subscriptionEventHandler) OnDrop(event subscriptionEvent) interface{} {
 	if event.state == nil {
 		log.Warn("drop span resolved event",
 			zap.Uint64("subscriptionID", uint64(event.subID)),

@@ -103,11 +103,11 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 				}},
 			},
 		}
-		regionEvent := regionEvent{
+		event := subscriptionEvent{
 			state:   state,
 			entries: events,
 		}
-		ds.Push(subID, regionEvent)
+		ds.Push(subID, event)
 	}
 
 	// Receive commit.
@@ -123,11 +123,11 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 				}},
 			},
 		}
-		regionEvent := regionEvent{
+		event := subscriptionEvent{
 			state:   state,
 			entries: events,
 		}
-		ds.Push(subID, regionEvent)
+		ds.Push(subID, event)
 	}
 
 	// Must not output event.
@@ -153,11 +153,11 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 				}},
 			},
 		}
-		regionEvent := regionEvent{
+		event := subscriptionEvent{
 			state:   state,
 			entries: events,
 		}
-		ds.Push(subID, regionEvent)
+		ds.Push(subID, event)
 	}
 
 	// Must not output event.
@@ -180,11 +180,11 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 				},
 			},
 		}
-		regionEvent := regionEvent{
+		event := subscriptionEvent{
 			state:   state,
 			entries: events,
 		}
-		ds.Push(subID, regionEvent)
+		ds.Push(subID, event)
 	}
 
 	// Must output event.
