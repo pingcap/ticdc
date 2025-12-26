@@ -15,6 +15,7 @@ package logpuller
 
 import (
 	"context"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -150,6 +151,8 @@ func (span *subscribedSpan) clearKVEventsCache() {
 type SubscriptionClientConfig struct {
 	// The number of region request workers to send region task for every tikv store
 	RegionRequestWorkerPerStore uint
+	// The number of workers handling region resolved ts events.
+	ResolvedTsWorkerCount uint
 }
 
 type sharedClientMetrics struct {
@@ -190,7 +193,9 @@ type subscriptionClient struct {
 
 	stores sync.Map
 
-	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
+	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *subscriptionEventHandler]
+	// resolvedTsWorkerPool processes region resolved ts events outside DS threads.
+	resolvedTsWorkerPool *resolvedTsWorkerPool
 	// the following three fields are used to manage feedback from ds and notify other goroutines
 	mu     sync.Mutex
 	cond   *sync.Cond
@@ -247,17 +252,25 @@ func NewSubscriptionClient(
 	option := dynstream.NewOption()
 	// Note: it is max batch size of the kv sent from tikv(not committed rows)
 	option.BatchCount = 1024
-	// TODO: Set `UseBuffer` to true until we refactor the `regionEventHandler.Handle` method so that it doesn't call any method of the dynamic stream. Currently, if `UseBuffer` is set to false, there will be a deadlock:
-	// 	ds.handleLoop fetch events from `ch` -> regionEventHandler.Handle -> ds.RemovePath -> send event to `ch`
+	// TODO: Set `UseBuffer` to true until we refactor the `subscriptionEventHandler.Handle` method so that it doesn't call any method of the dynamic stream. Currently, if `UseBuffer` is set to false, there will be a deadlock:
+	// 	ds.handleLoop fetch events from `ch` -> subscriptionEventHandler.Handle -> ds.RemovePath -> send event to `ch`
 	option.UseBuffer = true
 	option.EnableMemoryControl = true
 	ds := dynstream.NewParallelDynamicStream(
-		&regionEventHandler{subClient: subClient},
+		&subscriptionEventHandler{subClient: subClient},
 		option,
 	)
 	ds.Start()
 	subClient.ds = ds
 	subClient.cond = sync.NewCond(&subClient.mu)
+	workerCount := int(config.ResolvedTsWorkerCount)
+	if workerCount <= 0 {
+		workerCount = runtime.NumCPU()
+		if workerCount <= 0 {
+			workerCount = 1
+		}
+	}
+	subClient.resolvedTsWorkerPool = newResolvedTsWorkerPool(subClient.ctx, subClient, workerCount)
 
 	subClient.initMetrics()
 	return subClient
@@ -408,6 +421,17 @@ func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event reg
 	}
 	s.mu.Unlock()
 	s.ds.Push(subID, event)
+}
+
+func (s *subscriptionClient) pushSpanResolvedTsEvent(span *subscribedSpan, resolvedTs uint64) {
+	if span == nil || resolvedTs == 0 {
+		return
+	}
+	event := regionEvent{
+		spanResolvedTs: resolvedTs,
+		subID:          span.subID,
+	}
+	s.pushRegionEventToDS(span.subID, event)
 }
 
 func (s *subscriptionClient) handleDSFeedBack(ctx context.Context) error {

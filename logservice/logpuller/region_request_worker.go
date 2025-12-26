@@ -263,7 +263,17 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 					zap.Any("error", eventData.Error))
 				state.markStopped(&eventError{err: eventData.Error})
 			case *cdcpb.Event_ResolvedTs:
-				regionEvent.resolvedTs = eventData.ResolvedTs
+				span := state.region.subscribedSpan
+				if span == nil {
+					log.Warn("region request worker receives a resolved ts event for region without span",
+						zap.Uint64("workerID", s.workerID),
+						zap.Uint64("subscriptionID", uint64(subscriptionID)),
+						zap.Uint64("regionID", regionID))
+					continue
+				}
+				pool := s.client.resolvedTsWorkerPool
+				pool.submit(span, []*regionFeedState{state}, eventData.ResolvedTs)
+				continue
 			case *cdcpb.Event_LongTxn_:
 				// ignore
 				continue
@@ -301,21 +311,40 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 			zap.Any("regionIDs", resolvedTsEvent.Regions))
 		return
 	}
+	pool := s.client.resolvedTsWorkerPool
+	if pool == nil {
+		log.Panic("resolved ts worker pool must be initialized")
+	}
+	var span *subscribedSpan
+	states := make([]*regionFeedState, 0, len(resolvedTsEvent.Regions))
 	for _, regionID := range resolvedTsEvent.Regions {
-		if state := s.getRegionState(subscriptionID, regionID); state != nil {
-			s.client.pushRegionEventToDS(SubscriptionID(resolvedTsEvent.RequestId), regionEvent{
-				state:      state,
-				worker:     s,
-				resolvedTs: resolvedTsEvent.Ts,
-			})
-		} else {
+		state := s.getRegionState(subscriptionID, regionID)
+		if state == nil {
 			log.Warn("region request worker receives a resolved ts event for an untracked region",
 				zap.Uint64("workerID", s.workerID),
 				zap.Uint64("subscriptionID", uint64(subscriptionID)),
 				zap.Uint64("regionID", regionID),
 				zap.Uint64("resolvedTs", resolvedTsEvent.Ts))
+			continue
 		}
+		if span == nil {
+			span = state.region.subscribedSpan
+		} else if span != state.region.subscribedSpan {
+			log.Panic("resolved ts event contains multiple spans",
+				zap.Uint64("workerID", s.workerID),
+				zap.Uint64("subscriptionID", uint64(subscriptionID)),
+				zap.Uint64("regionID", regionID))
+		}
+		if span == nil {
+			log.Warn("region request worker receives a resolved ts event for region without span",
+				zap.Uint64("workerID", s.workerID),
+				zap.Uint64("subscriptionID", uint64(subscriptionID)),
+				zap.Uint64("regionID", regionID))
+			continue
+		}
+		states = append(states, state)
 	}
+	pool.submit(span, states, resolvedTsEvent.Ts)
 }
 
 // processRegionSendTask receives region requests from the channel and sends them to the remote store.
