@@ -503,7 +503,7 @@ func (w *writer) checkPartition(row *commonEvent.DMLEvent, partition int32, offs
 			log.Panic("dml event dispatched to the wrong partition",
 				zap.Int32("partition", partition), zap.Int32("expected", target),
 				zap.Int("partitionNum", len(w.progresses)), zap.Any("offset", offset),
-				zap.Int64("tableID", row.GetTableID()), zap.Any("row", row),
+				zap.Int64("tableID", row.GetTableID()), zap.Stringer("row", row),
 			)
 		}
 	}
