@@ -141,17 +141,17 @@ func (p *regionEventProcessor) run(ch <-chan regionEvent) {
 				if len(batch) == 0 {
 					continue
 				}
-				p.subClient.pushSubscriptionEventToDS(span.subID, subscriptionEvent{
-					subID:     span.subID,
-					kvEntries: batch,
-				})
+				if !span.stopped.Load() {
+					emitSeq := span.emitSeq.Add(1)
+					p.subClient.pipeline.EnqueueData(p.subClient.ctx, span, emitSeq, batch)
+				}
 			case event.resolvedTs != 0:
 				updateRegionResolvedTs(span, state, event.resolvedTs)
 				if ts := maybeAdvanceSpanResolvedTs(span, state.getRegionID()); ts != 0 {
-					p.subClient.pushSubscriptionEventToDS(span.subID, subscriptionEvent{
-						subID:      span.subID,
-						resolvedTs: ts,
-					})
+					if !span.stopped.Load() {
+						emitSeq := span.emitSeq.Add(1)
+						p.subClient.pipeline.EnqueueResolved(span, emitSeq, ts)
+					}
 				}
 			default:
 				log.Panic("unknown region event", zap.Any("event", event))
@@ -165,10 +165,10 @@ func (p *regionEventProcessor) run(ch <-chan regionEvent) {
 				continue
 			}
 			if ts := maybeAdvanceSpanResolvedTs(span, triggerRegionID); ts != 0 {
-				p.subClient.pushSubscriptionEventToDS(span.subID, subscriptionEvent{
-					subID:      span.subID,
-					resolvedTs: ts,
-				})
+				if !span.stopped.Load() {
+					emitSeq := span.emitSeq.Add(1)
+					p.subClient.pipeline.EnqueueResolved(span, emitSeq, ts)
+				}
 			}
 			continue
 		}
