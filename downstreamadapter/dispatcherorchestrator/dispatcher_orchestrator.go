@@ -373,6 +373,24 @@ func createBootstrapResponse(
 				Mode:            d.GetMode(),
 			})
 		})
+		manager.GetRedoCurrentOperatorMap().Range(func(key, value any) bool {
+			req := value.(*heartbeatpb.ScheduleDispatcherRequest)
+			_, ok := manager.GetRedoDispatcherMap().Get(common.NewDispatcherIDFromPB(req.Config.DispatcherID))
+			if !ok {
+				log.Error("Redo dispatcher not found, this should not happen",
+					zap.String("changefeed", changefeedID.String()),
+					zap.String("dispatcherID", req.Config.DispatcherID.String()),
+				)
+			}
+
+			response.Operators = append(response.Operators, &heartbeatpb.ScheduleDispatcherRequest{
+				ChangefeedID:   req.ChangefeedID,
+				Config:         req.Config,
+				ScheduleAction: req.ScheduleAction,
+				OperatorType:   req.OperatorType,
+			})
+			return true
+		})
 	}
 	manager.GetDispatcherMap().ForEach(func(id common.DispatcherID, d *dispatcher.EventDispatcher) {
 		response.Spans = append(response.Spans, &heartbeatpb.BootstrapTableSpan{
@@ -385,6 +403,24 @@ func createBootstrapResponse(
 			Mode:            d.GetMode(),
 		})
 	})
+	manager.GetCurrentOperatorMap().Range(func(key, value any) bool {
+		req := value.(*heartbeatpb.ScheduleDispatcherRequest)
+		_, ok := manager.GetDispatcherMap().Get(common.NewDispatcherIDFromPB(req.Config.DispatcherID))
+		if !ok {
+			log.Error("Dispatcher not found, this should not happen",
+				zap.String("changefeed", changefeedID.String()),
+				zap.String("dispatcherID", req.Config.DispatcherID.String()),
+			)
+		}
+		response.Operators = append(response.Operators, &heartbeatpb.ScheduleDispatcherRequest{
+			ChangefeedID:   req.ChangefeedID,
+			Config:         req.Config,
+			ScheduleAction: req.ScheduleAction,
+			OperatorType:   req.OperatorType,
+		})
+		return true
+	})
+	response.MergeOperators = append(response.MergeOperators, manager.GetMergeOperators()...)
 
 	return response
 }

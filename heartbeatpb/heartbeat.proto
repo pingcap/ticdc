@@ -96,6 +96,14 @@ enum ScheduleAction {
     Remove = 1;
 }
 
+enum OperatorType {
+    O_Add = 0;
+    O_Remove = 1;
+    O_Move = 2;
+    O_Split = 3;
+    O_Merge = 4;
+}
+
 message DispatcherConfig {
     TableSpan span = 1;
     uint64 startTs = 2;
@@ -108,6 +116,7 @@ message ScheduleDispatcherRequest {
     ChangefeedID changefeedID = 1;
     DispatcherConfig config = 2;
     ScheduleAction scheduleAction = 3;
+    OperatorType operatorType = 4;
 }
 
 message MergeDispatcherRequest {
@@ -177,6 +186,9 @@ message MaintainerBootstrapResponse {
     // For nodes without a table trigger event dispatcher:
     // - checkpoint_ts is set to 0
     uint64 checkpoint_ts = 4;
+    repeated ScheduleDispatcherRequest operators = 5;
+    // merge_operators contains in-flight merge dispatcher requests for bootstrap recovery.
+    repeated MergeDispatcherRequest merge_operators = 6;
 }
 
 message MaintainerPostBootstrapRequest {

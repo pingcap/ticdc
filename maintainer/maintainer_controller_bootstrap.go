@@ -16,11 +16,13 @@ package maintainer
 import (
 	"bytes"
 	"context"
+	"sort"
 	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
+	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/maintainer/split"
@@ -108,7 +110,14 @@ func (c *Controller) FinishBootstrap(
 	workingTaskMap, redoWorkingTaskMap := c.buildWorkingTaskMap(allNodesResp, tableSplitMap)
 
 	// Step 4: Process tables and build schema info
+	// restore current working operators first
+	if err := c.restoreCurrentWorkingOperators(allNodesResp, tableSplitMap); err != nil {
+		return nil, err
+	}
 	schemaInfos := c.processTablesAndBuildSchemaInfo(tables, workingTaskMap, redoWorkingTaskMap, isMysqlCompatibleBackend)
+	if err := c.restoreCurrentMergeOperators(allNodesResp, tableSplitMap); err != nil {
+		return nil, err
+	}
 
 	// Step 5: Handle any remaining working tasks (likely dropped tables)
 	c.handleRemainingWorkingTasks(workingTaskMap, redoWorkingTaskMap)
@@ -215,10 +224,12 @@ func (c *Controller) processTableSpans(
 ) {
 	tableSpans, isTableWorking := workingTaskMap[table.TableID]
 	spanController := c.getSpanController(mode)
+	replicaSets := spanController.GetTasksByTableID(table.TableID)
+	isTableSpanExists := replicaSets != nil && len(replicaSets) > 0
 	splitEnabled := spanController.ShouldEnableSplit(table.Splitable)
 
 	// Add new table if not working
-	if isTableWorking {
+	if isTableWorking || isTableSpanExists {
 		// Handle existing table spans
 		keyspaceID := c.GetKeyspaceID()
 		span := common.TableIDToComparableSpan(keyspaceID, table.TableID)
@@ -235,6 +246,11 @@ func (c *Controller) processTableSpans(
 		spanController.AddWorkingSpans(tableSpans)
 
 		if c.enableTableAcrossNodes {
+			if isTableSpanExists {
+				for _, replicaSet := range replicaSets {
+					tableSpans.ReplaceOrInsert(replicaSet.Span, replicaSet)
+				}
+			}
 			c.handleTableHoles(spanController, table, tableSpans, tableSpan, splitEnabled)
 		}
 		// Remove processed table from working task map
@@ -409,4 +425,337 @@ func findHoles(currentSpan utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplic
 		})
 	}
 	return holes
+}
+
+func (c *Controller) restoreCurrentWorkingOperators(
+	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
+	tableSplitMap map[int64]bool,
+) error {
+	for node, resp := range allNodesResp {
+		for _, req := range resp.Operators {
+			dispatcherID := common.NewDispatcherIDFromPB(req.Config.DispatcherID)
+			spanController := c.getSpanController(req.Config.Mode)
+			replicaSet := spanController.GetTaskByID(dispatcherID)
+			if replicaSet != nil {
+				log.Error("found duplicate replica set, which should not happen",
+					zap.String("nodeID", node.String()),
+					zap.String("changefeed", resp.ChangefeedID.String()),
+					zap.Any("replicaSet", replicaSet))
+				return errors.New("duplicate replica set found")
+			}
+			replicaSet = replica.NewSpanReplication(
+				c.changefeedID,
+				dispatcherID,
+				req.Config.SchemaID,
+				req.Config.Span,
+				req.Config.StartTs,
+				req.Config.Mode,
+				spanController.ShouldEnableSplit(tableSplitMap[req.Config.Span.TableID]),
+			)
+			spanController.AddAbsentReplicaSet(replicaSet)
+			switch req.ScheduleAction {
+			case heartbeatpb.ScheduleAction_Create:
+				switch req.OperatorType {
+				case heartbeatpb.OperatorType_O_Add, heartbeatpb.OperatorType_O_Move, heartbeatpb.OperatorType_O_Split:
+					op := operator.NewAddDispatcherOperator(spanController, replicaSet, node, heartbeatpb.OperatorType_O_Add)
+					if ok := c.operatorController.AddOperator(op); !ok {
+						log.Error("add operator failed when dealing current working operators in bootstrap, should not happen",
+							zap.String("nodeID", node.String()),
+							zap.String("changefeed", resp.ChangefeedID.String()),
+							zap.String("dispatcher", op.ID().String()),
+							zap.String("originOperatorType", req.OperatorType.String()),
+							zap.Any("operator", op),
+							zap.Any("replicaSet", replicaSet),
+						)
+						return errors.ErrOperatorIsNil.GenWithStack("add operator failed when bootstrap")
+					}
+					op.Start()
+				}
+			case heartbeatpb.ScheduleAction_Remove:
+				switch req.OperatorType {
+				case heartbeatpb.OperatorType_O_Remove:
+					op := operator.NewRemoveDispatcherOperator(
+						spanController,
+						replicaSet,
+						heartbeatpb.OperatorType_O_Remove,
+						nil,
+					)
+					if ok := c.operatorController.AddOperator(op); !ok {
+						log.Error("add operator failed when dealing current working operators in bootstrap, should not happen",
+							zap.String("nodeID", node.String()),
+							zap.String("changefeed", resp.ChangefeedID.String()),
+							zap.String("dispatcher", op.ID().String()),
+							zap.String("originOperatorType", req.OperatorType.String()),
+							zap.Any("operator", op),
+							zap.Any("replicaSet", replicaSet),
+						)
+						return errors.ErrOperatorIsNil.GenWithStack("add operator failed when bootstrap")
+					}
+					op.Start()
+				case heartbeatpb.OperatorType_O_Move, heartbeatpb.OperatorType_O_Split:
+					op := operator.NewRemoveDispatcherOperator(
+						spanController,
+						replicaSet,
+						req.OperatorType,
+						func() { // post finish
+							spanController.MarkAbsentWithoutLock(replicaSet)
+						},
+					)
+					if ok := c.operatorController.AddOperator(op); !ok {
+						log.Error("add operator failed when dealing current working operators in bootstrap, should not happen",
+							zap.String("nodeID", node.String()),
+							zap.String("changefeed", resp.ChangefeedID.String()),
+							zap.String("dispatcher", op.ID().String()),
+							zap.String("originOperatorType", req.OperatorType.String()),
+							zap.Any("operator", op),
+							zap.Any("replicaSet", replicaSet),
+						)
+						return errors.ErrOperatorIsNil.GenWithStack("add operator failed when bootstrap")
+					}
+					op.Start()
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (c *Controller) restoreCurrentMergeOperators(
+	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
+	tableSplitMap map[int64]bool,
+) error {
+	for nodeID, resp := range allNodesResp {
+		if len(resp.MergeOperators) == 0 {
+			continue
+		}
+		spanInfoByID := make(map[string]*heartbeatpb.BootstrapTableSpan, len(resp.Spans))
+		for _, spanInfo := range resp.Spans {
+			if spanInfo == nil || spanInfo.ID == nil || spanInfo.Span == nil {
+				continue
+			}
+			spanInfoByID[common.NewDispatcherIDFromPB(spanInfo.ID).String()] = spanInfo
+		}
+
+		for _, mergeReq := range resp.MergeOperators {
+			if mergeReq == nil || mergeReq.MergedDispatcherID == nil {
+				continue
+			}
+			if len(mergeReq.DispatcherIDs) < 2 {
+				log.Warn("merge operator has insufficient dispatcher IDs",
+					zap.String("nodeID", nodeID.String()),
+					zap.String("changefeed", resp.ChangefeedID.String()))
+				continue
+			}
+
+			spanController := c.getSpanController(mergeReq.Mode)
+			operatorController := c.getOperatorController(mergeReq.Mode)
+			mergedDispatcherID := common.NewDispatcherIDFromPB(mergeReq.MergedDispatcherID)
+
+			// get source replica sets
+			sourceReplicaSets := make([]*replica.SpanReplication, 0, len(mergeReq.DispatcherIDs))
+			sourceComplete := true
+			seenSources := make(map[string]struct{}, len(mergeReq.DispatcherIDs))
+			for _, idPB := range mergeReq.DispatcherIDs {
+				if idPB == nil {
+					sourceComplete = false
+					break
+				}
+				dispatcherID := common.NewDispatcherIDFromPB(idPB)
+				if _, ok := seenSources[dispatcherID.String()]; ok {
+					continue
+				}
+				seenSources[dispatcherID.String()] = struct{}{}
+
+				replicaSet := spanController.GetTaskByID(dispatcherID)
+				if replicaSet == nil {
+					spanInfo := spanInfoByID[dispatcherID.String()]
+					if spanInfo == nil {
+						sourceComplete = false
+						break
+					}
+					splitEnabled := spanController.ShouldEnableSplit(tableSplitMap[spanInfo.Span.TableID])
+					replicaSet = c.createSpanReplication(spanInfo, nodeID, splitEnabled)
+					spanController.AddReplicatingSpan(replicaSet)
+				}
+				sourceReplicaSets = append(sourceReplicaSets, replicaSet)
+			}
+
+			// process merged replica set
+			mergedSpanInfo := spanInfoByID[mergedDispatcherID.String()]
+			mergedReplicaSet := spanController.GetTaskByID(mergedDispatcherID)
+			// if merge already finished, remove source spans and mark merged span as replicating, done
+			if mergedSpanInfo != nil && mergedSpanInfo.ComponentStatus == heartbeatpb.ComponentState_Working {
+				if mergedReplicaSet == nil {
+					splitEnabled := spanController.ShouldEnableSplit(tableSplitMap[mergedSpanInfo.Span.TableID])
+					mergedReplicaSet = c.createSpanReplication(mergedSpanInfo, nodeID, splitEnabled)
+					spanController.AddReplicatingSpan(mergedReplicaSet)
+				}
+				for _, replicaSet := range sourceReplicaSets {
+					if mergedReplicaSet != nil && replicaSet.ID == mergedReplicaSet.ID {
+						continue
+					}
+					spanController.RemoveReplicatingSpan(replicaSet)
+				}
+				if mergedReplicaSet != nil {
+					spanController.MarkSpanReplicating(mergedReplicaSet)
+				}
+				log.Info("merge already finished during bootstrap",
+					zap.String("nodeID", nodeID.String()),
+					zap.String("changefeed", resp.ChangefeedID.String()),
+					zap.String("dispatcher", mergedDispatcherID.String()))
+				continue
+			}
+
+			// if merge not finished and source spans are not complete,
+			// mark source spans as scheduling and create merged span if exists and mark it as scheduling
+			if !sourceComplete || len(sourceReplicaSets) < 2 {
+				log.Warn("skip restoring merge operator due to missing source dispatchers",
+					zap.String("nodeID", nodeID.String()),
+					zap.String("changefeed", resp.ChangefeedID.String()),
+					zap.String("dispatcher", mergedDispatcherID.String()))
+				for _, replicaSet := range sourceReplicaSets {
+					spanController.MarkSpanScheduling(replicaSet)
+				}
+				if mergedSpanInfo != nil {
+					if mergedReplicaSet == nil {
+						splitEnabled := spanController.ShouldEnableSplit(tableSplitMap[mergedSpanInfo.Span.TableID])
+						mergedReplicaSet = c.createSpanReplication(mergedSpanInfo, nodeID, splitEnabled)
+						if mergedSpanInfo.ComponentStatus == heartbeatpb.ComponentState_Working {
+							spanController.AddReplicatingSpan(mergedReplicaSet)
+						} else {
+							spanController.AddSchedulingReplicaSet(mergedReplicaSet, nodeID)
+						}
+					} else if mergedSpanInfo.ComponentStatus == heartbeatpb.ComponentState_Working {
+						spanController.MarkSpanReplicating(mergedReplicaSet)
+					} else {
+						spanController.MarkSpanScheduling(mergedReplicaSet)
+					}
+				}
+				continue
+			}
+
+			// if merge not finished and source spans are complete,
+			// restore merge operator and occupy operators
+			sort.Slice(sourceReplicaSets, func(i, j int) bool {
+				return bytes.Compare(sourceReplicaSets[i].Span.StartKey, sourceReplicaSets[j].Span.StartKey) < 0
+			})
+
+			createdMerged := false
+			if mergedReplicaSet == nil {
+				if mergedSpanInfo != nil {
+					splitEnabled := spanController.ShouldEnableSplit(tableSplitMap[mergedSpanInfo.Span.TableID])
+					mergedReplicaSet = c.createSpanReplication(mergedSpanInfo, nodeID, splitEnabled)
+					spanController.AddSchedulingReplicaSet(mergedReplicaSet, nodeID)
+				} else {
+					mergedSpan, schemaID, checkpointTs, ok := buildMergedSpanFromReplicas(sourceReplicaSets)
+					if !ok {
+						log.Warn("skip restoring merge operator due to invalid merge spans",
+							zap.String("nodeID", nodeID.String()),
+							zap.String("changefeed", resp.ChangefeedID.String()),
+							zap.String("dispatcher", mergedDispatcherID.String()))
+						continue
+					}
+					splitEnabled := spanController.ShouldEnableSplit(tableSplitMap[mergedSpan.TableID])
+					status := &heartbeatpb.TableSpanStatus{
+						ID:              mergedDispatcherID.ToPB(),
+						CheckpointTs:    checkpointTs,
+						Mode:            mergeReq.Mode,
+						ComponentStatus: heartbeatpb.ComponentState_Preparing,
+					}
+					mergedReplicaSet = replica.NewWorkingSpanReplication(
+						c.changefeedID,
+						mergedDispatcherID,
+						schemaID,
+						mergedSpan,
+						status,
+						nodeID,
+						splitEnabled,
+					)
+					spanController.AddSchedulingReplicaSet(mergedReplicaSet, nodeID)
+					createdMerged = true
+				}
+			}
+
+			if mergedReplicaSet == nil {
+				log.Warn("merge replica set not found when restoring merge",
+					zap.String("nodeID", nodeID.String()),
+					zap.String("changefeed", resp.ChangefeedID.String()),
+					zap.String("dispatcher", mergedDispatcherID.String()))
+				continue
+			}
+
+			spanController.MarkSpanScheduling(mergedReplicaSet)
+
+			mergeOp := operatorController.AddRestoredMergeOperator(sourceReplicaSets, mergedReplicaSet)
+			if mergeOp == nil {
+				log.Error("restore merge operator failed",
+					zap.String("nodeID", nodeID.String()),
+					zap.String("changefeed", resp.ChangefeedID.String()),
+					zap.String("dispatcher", mergedDispatcherID.String()),
+					zap.Any("mergedReplicaSet", mergedReplicaSet),
+					zap.Any("toMergedReplicaSets", sourceReplicaSets),
+				)
+				if createdMerged {
+					spanController.RemoveReplicatingSpan(mergedReplicaSet)
+				}
+				return errors.ErrOperatorIsNil.GenWithStack("restore merge operator failed when bootstrap")
+			}
+			mergeOp.Start()
+		}
+	}
+	return nil
+}
+
+func buildMergedSpanFromReplicas(
+	replicaSets []*replica.SpanReplication,
+) (*heartbeatpb.TableSpan, int64, uint64, bool) {
+	if len(replicaSets) < 2 {
+		return nil, 0, 0, false
+	}
+	first := replicaSets[0]
+	if first == nil || first.Span == nil {
+		return nil, 0, 0, false
+	}
+	tableID := first.Span.TableID
+	keyspaceID := first.Span.KeyspaceID
+	schemaID := first.GetSchemaID()
+	nodeID := first.GetNodeID()
+	startKey := first.Span.StartKey
+	endKey := first.Span.EndKey
+	firstStatus := first.GetStatus()
+	if firstStatus == nil {
+		return nil, 0, 0, false
+	}
+	minCheckpoint := firstStatus.CheckpointTs
+	prevSpan := first.Span
+	for idx := 1; idx < len(replicaSets); idx++ {
+		replicaSet := replicaSets[idx]
+		if replicaSet == nil || replicaSet.Span == nil {
+			return nil, 0, 0, false
+		}
+		if replicaSet.Span.TableID != tableID ||
+			replicaSet.Span.KeyspaceID != keyspaceID ||
+			replicaSet.GetSchemaID() != schemaID ||
+			replicaSet.GetNodeID() != nodeID {
+			return nil, 0, 0, false
+		}
+		if !common.IsTableSpanConsecutive(prevSpan, replicaSet.Span) {
+			return nil, 0, 0, false
+		}
+		status := replicaSet.GetStatus()
+		if status == nil {
+			return nil, 0, 0, false
+		}
+		if checkpoint := status.CheckpointTs; checkpoint < minCheckpoint {
+			minCheckpoint = checkpoint
+		}
+		prevSpan = replicaSet.Span
+		endKey = replicaSet.Span.EndKey
+	}
+	return &heartbeatpb.TableSpan{
+		TableID:    tableID,
+		StartKey:   startKey,
+		EndKey:     endKey,
+		KeyspaceID: keyspaceID,
+	}, schemaID, minCheckpoint, true
 }

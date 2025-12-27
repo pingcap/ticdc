@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/span"
@@ -155,7 +156,7 @@ func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int)
 	absentReplications := s.spanController.GetAbsentByGroup(groupID, availableSize)
 
 	pkgScheduler.BasicSchedule(availableSize, absentReplications, nodeSize, func(replication *replica.SpanReplication, id node.ID) bool {
-		return s.operatorController.AddOperator(operator.NewAddDispatcherOperator(s.spanController, replication, id))
+		return s.operatorController.AddOperator(operator.NewAddDispatcherOperator(s.spanController, replication, id, heartbeatpb.OperatorType_O_Add))
 	})
 	return len(absentReplications)
 }

@@ -150,6 +150,34 @@ func NewMergeDispatcherOperator(
 	return op
 }
 
+func NewRestoredMergeDispatcherOperator(
+	spanController *span.Controller,
+	toMergedReplicaSets []*replica.SpanReplication,
+	mergedReplicaSet *replica.SpanReplication,
+	occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus],
+) *MergeDispatcherOperator {
+	toMergedSpans := make([]*heartbeatpb.TableSpan, 0, len(toMergedReplicaSets))
+	for _, replicaSet := range toMergedReplicaSets {
+		toMergedSpans = append(toMergedSpans, replicaSet.Span)
+	}
+
+	dispatcherIDs := buildDispatcherIDs(toMergedReplicaSets)
+	spansInfo := buildMergedSpanInfo(toMergedSpans)
+
+	return &MergeDispatcherOperator{
+		spanController:      spanController,
+		originNode:          toMergedReplicaSets[0].GetNodeID(),
+		id:                  mergedReplicaSet.ID,
+		dispatcherIDs:       dispatcherIDs,
+		toMergedReplicaSets: toMergedReplicaSets,
+		checkpointTs:        0,
+		mergedSpanInfo:      spansInfo,
+		occupyOperators:     occupyOperators,
+		newReplicaSet:       mergedReplicaSet,
+		sendThrottler:       newSendThrottler(),
+	}
+}
+
 func setOccupyOperatorsFinished(occupyOperators []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) {
 	for _, occupyOperator := range occupyOperators {
 		// occupyOperators are created by AddMergeOperator and are guaranteed to be OccupyDispatcherOperator.

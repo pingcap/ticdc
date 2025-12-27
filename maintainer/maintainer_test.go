@@ -25,6 +25,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/maintainer/testutil"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -256,6 +257,7 @@ func (m *mockDispatcherManager) sendHeartbeat() {
 
 func TestMaintainerSchedule(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
+	testutil.SetUpTestServices()
 	mux := http.NewServeMux()
 	registry := prometheus.NewRegistry()
 	metrics.InitMetrics(registry)

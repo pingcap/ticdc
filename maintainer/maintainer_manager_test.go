@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/maintainer/testutil"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -64,6 +65,8 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	)
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	appcontext.SetService(appcontext.RegionCache, testutil.NewMockRegionCache())
+	appcontext.SetService(appcontext.PDAPIClient, testutil.NewMockPDAPIClient())
 
 	appcontext.SetService(appcontext.SchemaStore, store)
 	mc := messaging.NewMessageCenter(ctx, selfNode.ID, config.NewDefaultMessageCenterConfig(selfNode.AdvertiseAddr), nil)
@@ -269,6 +272,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
+	testutil.SetUpTestServices()
 	selfNode := node.NewInfo("127.0.0.1:18301", "")
 	etcdClient := newMockEtcdClient(string(selfNode.ID))
 	nodeManager := watcher.NewNodeManager(nil, etcdClient)

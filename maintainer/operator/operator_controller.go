@@ -117,7 +117,7 @@ func (oc *Controller) Execute() time.Time {
 func (oc *Controller) RemoveTasksBySchemaID(schemaID int64) {
 	tasks := oc.spanController.GetRemoveTasksBySchemaID(schemaID)
 	for _, task := range tasks {
-		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.spanController, task))
+		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.spanController, task, heartbeatpb.OperatorType_O_Remove))
 	}
 	oc.spanController.RemoveBySchemaID(schemaID)
 }
@@ -135,7 +135,7 @@ func (oc *Controller) RemoveTasksBySchemaID(schemaID int64) {
 func (oc *Controller) RemoveTasksByTableIDs(tables ...int64) {
 	tasks := oc.spanController.GetRemoveTasksByTableIDs(tables...)
 	for _, task := range tasks {
-		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.spanController, task))
+		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.spanController, task, heartbeatpb.OperatorType_O_Remove))
 	}
 	oc.spanController.RemoveByTableIDs(tables...)
 }
@@ -378,12 +378,7 @@ func (oc *Controller) checkAffectedNodes(op operator.Operator[common.DispatcherI
 }
 
 func (oc *Controller) NewMoveOperator(replicaSet *replica.SpanReplication, origin, dest node.ID) operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
-	return &MoveDispatcherOperator{
-		replicaSet:     replicaSet,
-		origin:         origin,
-		dest:           dest,
-		spanController: oc.spanController,
-	}
+	return NewMoveDispatcherOperator(oc.spanController, replicaSet, origin, dest)
 }
 
 func checkMergeOperator(affectedReplicaSets []*replica.SpanReplication) bool {
@@ -458,6 +453,56 @@ func (oc *Controller) AddMergeOperator(
 		return nil
 	}
 	log.Info("add merge operator",
+		zap.String("role", oc.role),
+		zap.Stringer("changefeedID", oc.changefeedID),
+		zap.Int("affectedReplicaSets", len(affectedReplicaSets)),
+	)
+	return mergeOperator
+}
+
+func (oc *Controller) AddRestoredMergeOperator(
+	affectedReplicaSets []*replica.SpanReplication,
+	mergedReplicaSet *replica.SpanReplication,
+) operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
+	if mergedReplicaSet == nil {
+		return nil
+	}
+	if !checkMergeOperator(affectedReplicaSets) {
+		return nil
+	}
+
+	operators := make([]operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0, len(affectedReplicaSets))
+	for _, replicaSet := range affectedReplicaSets {
+		operator := NewOccupyDispatcherOperator(oc.spanController, replicaSet)
+		ret := oc.AddOperator(operator)
+		if ret {
+			operators = append(operators, operator)
+		} else {
+			log.Error("failed to add occupy dispatcher operator when restoring merge",
+				zap.Stringer("changefeedID", oc.changefeedID),
+				zap.Int64("group", replicaSet.GetGroupID()),
+				zap.String("span", common.FormatTableSpan(replicaSet.Span)),
+				zap.String("operator", operator.String()))
+			for _, op := range operators {
+				oc.cancelOperator(op.ID())
+			}
+			return nil
+		}
+	}
+
+	mergeOperator := NewRestoredMergeDispatcherOperator(oc.spanController, affectedReplicaSets, mergedReplicaSet, operators)
+	ret := oc.AddOperator(mergeOperator)
+	if !ret {
+		log.Error("failed to add merge dispatcher operator when restoring merge",
+			zap.Stringer("changefeedID", oc.changefeedID),
+			zap.Any("mergeSpans", affectedReplicaSets),
+			zap.String("operator", mergeOperator.String()))
+		for _, op := range operators {
+			oc.cancelOperator(op.ID())
+		}
+		return nil
+	}
+	log.Info("restore merge operator",
 		zap.String("role", oc.role),
 		zap.Stringer("changefeedID", oc.changefeedID),
 		zap.Int("affectedReplicaSets", len(affectedReplicaSets)),

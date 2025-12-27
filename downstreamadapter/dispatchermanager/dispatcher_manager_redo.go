@@ -16,6 +16,7 @@ package dispatchermanager
 import (
 	"context"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/pingcap/log"
@@ -233,9 +234,20 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 }
 
 func (e *DispatcherManager) cleanRedoDispatcher(id common.DispatcherID, schemaID int64) {
+	var spanStr string
+	if d, ok := e.redoDispatcherMap.m.Load(id); ok {
+		spanStr = d.(*dispatcher.RedoDispatcher).GetTableSpan().String()
+	}
 	e.redoDispatcherMap.Delete(id)
 	e.redoSchemaIDToDispatchers.Delete(schemaID, id)
-	redoTableTriggerEventDispatcher := e.GetTableTriggerEventDispatcher()
+	e.redoCurrentOperatorMap.Delete(spanStr)
+	e.redoCurrentOperatorMap.Delete(id.String())
+	log.Debug("delete current working remove operator for redo dispatcher",
+		zap.String("changefeedID", e.changefeedID.String()),
+		zap.String("dispatcherID", id.String()),
+		zap.String("span", spanStr),
+	)
+	redoTableTriggerEventDispatcher := e.GetRedoTableTriggerEventDispatcher()
 	if redoTableTriggerEventDispatcher != nil && redoTableTriggerEventDispatcher.GetId() == id {
 		e.SetRedoTableTriggerEventDispatcher(nil)
 		e.metricRedoTableTriggerEventDispatcherCount.Dec()
@@ -342,4 +354,8 @@ func (e *DispatcherManager) GetAllRedoDispatchers(schemaID int64) []common.Dispa
 		dispatcherIDs = append(dispatcherIDs, e.GetRedoTableTriggerEventDispatcher().GetId())
 	}
 	return dispatcherIDs
+}
+
+func (e *DispatcherManager) GetRedoCurrentOperatorMap() *sync.Map {
+	return &e.redoCurrentOperatorMap
 }

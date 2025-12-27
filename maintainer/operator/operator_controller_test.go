@@ -128,7 +128,7 @@ func TestController_PostFinishCalledOnceOnReplace(t *testing.T) {
 	}()
 	<-op.isFinishedCalled
 
-	oc.removeReplicaSet(newRemoveDispatcherOperator(spanController, replicaSet))
+	oc.removeReplicaSet(newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove))
 	wg.Wait()
 
 	require.Equal(t, int32(1), op.postFinishCount.Load())
