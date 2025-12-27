@@ -231,6 +231,19 @@ Goals:
 - resolved-ts is no longer blocked behind “wait for persist” delivery serialization
 - data inflight is bounded to avoid memory blow-ups
 
+## Metrics
+
+Key Prometheus metrics exposed by this implementation:
+
+- `ticdc_log_puller_span_pipeline_inflight_bytes`: approximate bytes currently held by the pipeline quota.
+- `ticdc_log_puller_span_pipeline_inflight_batches`: number of data batches currently in-flight (quota held, waiting for persist callback).
+- `ticdc_log_puller_span_pipeline_pending_resolved_barriers`: number of pending resolved barriers waiting for `ackedSeq` to pass.
+- `ticdc_log_puller_span_pipeline_reorder_buffered_messages`: number of buffered messages in the per-subscription `emitSeq` reorder buffer.
+- `ticdc_log_puller_span_pipeline_active_subscriptions`: number of active subscription spans tracked by pipeline workers.
+- `ticdc_log_puller_span_pipeline_quota_acquire_duration_seconds`: histogram of time spent waiting for quota before enqueueing data.
+- `ticdc_log_puller_span_pipeline_resolved_barrier_dropped_total`: redundant resolved barriers dropped (e.g., duplicate/obsolete ts).
+- `ticdc_log_puller_span_pipeline_resolved_barrier_compaction_total`: number of times the pending resolved queue is compacted.
+
 ## Lifecycle & Cleanup
 
 - `Subscribe`: after creating `subscribedSpan`, call `pipeline.Register(span)` so the pipeline can access `consumeKVEvents/advanceResolvedTs`.

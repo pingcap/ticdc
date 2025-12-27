@@ -18,9 +18,11 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -62,6 +64,12 @@ type spanPipelineManager struct {
 
 	quotaLimitBytes int64
 	quota           *semaphore.Weighted
+
+	inflightBytes   atomic.Int64
+	inflightBatches atomic.Int64
+	pendingResolved atomic.Int64
+	reorderBuffered atomic.Int64
+	activeSubs      atomic.Int64
 
 	closed atomic.Bool
 	wg     sync.WaitGroup
@@ -174,9 +182,12 @@ func (m *spanPipelineManager) EnqueueData(
 	if weight > m.quotaLimitBytes {
 		weight = m.quotaLimitBytes
 	}
+	start := time.Now()
 	if err := m.quota.Acquire(ctx, weight); err != nil {
 		return false
 	}
+	metrics.LogPullerSpanPipelineQuotaAcquireDuration.Observe(time.Since(start).Seconds())
+	m.addInflight(weight)
 
 	if ok := m.enqueue(pipelineMsg{
 		subID:       span.subID,
@@ -186,7 +197,7 @@ func (m *spanPipelineManager) EnqueueData(
 		kvs:         kvs,
 		quotaWeight: weight,
 	}); !ok {
-		m.quota.Release(weight)
+		m.releaseInflight(weight)
 		return false
 	}
 	return true
@@ -211,6 +222,44 @@ func (m *spanPipelineManager) enqueuePersisted(subID SubscriptionID, dataSeq uin
 		msgType: pipelineMsgPersisted,
 		dataSeq: dataSeq,
 	})
+}
+
+func (m *spanPipelineManager) addInflight(weight int64) {
+	if weight <= 0 {
+		return
+	}
+	metrics.LogPullerSpanPipelineInflightBytes.Set(float64(m.inflightBytes.Add(weight)))
+	metrics.LogPullerSpanPipelineInflightBatches.Set(float64(m.inflightBatches.Add(1)))
+}
+
+func (m *spanPipelineManager) releaseInflight(weight int64) {
+	if weight <= 0 {
+		return
+	}
+	m.quota.Release(weight)
+	metrics.LogPullerSpanPipelineInflightBytes.Set(float64(m.inflightBytes.Add(-weight)))
+	metrics.LogPullerSpanPipelineInflightBatches.Set(float64(m.inflightBatches.Add(-1)))
+}
+
+func (m *spanPipelineManager) incPendingResolved(delta int64) {
+	if delta == 0 {
+		return
+	}
+	metrics.LogPullerSpanPipelinePendingResolvedBarriers.Set(float64(m.pendingResolved.Add(delta)))
+}
+
+func (m *spanPipelineManager) incReorderBuffered(delta int64) {
+	if delta == 0 {
+		return
+	}
+	metrics.LogPullerSpanPipelineReorderBufferedMessages.Set(float64(m.reorderBuffered.Add(delta)))
+}
+
+func (m *spanPipelineManager) incActiveSubs(delta int64) {
+	if delta == 0 {
+		return
+	}
+	metrics.LogPullerSpanPipelineActiveSubscriptions.Set(float64(m.activeSubs.Add(delta)))
 }
 
 func rawKVEntriesApproxBytes(kvs []common.RawKVEntry) int64 {
@@ -249,6 +298,10 @@ func (w *spanPipelineWorker) handleMsg(msg pipelineMsg) {
 		state.span = msg.span
 	case pipelineMsgUnregister:
 		if state := w.states[msg.subID]; state != nil {
+			w.mgr.incPendingResolved(-int64(len(state.pendingResolved) - state.pendingResolvedHead))
+			if state.reorder != nil {
+				w.mgr.incReorderBuffered(-int64(len(state.reorder)))
+			}
 			state.unregistered = true
 			state.span = nil
 			state.pendingResolved = nil
@@ -257,6 +310,7 @@ func (w *spanPipelineWorker) handleMsg(msg pipelineMsg) {
 			state.reorderNextSeq = 1
 			if len(state.inflightWeight) == 0 {
 				delete(w.states, msg.subID)
+				w.mgr.incActiveSubs(-1)
 			}
 		}
 	case pipelineMsgPersisted:
@@ -267,6 +321,7 @@ func (w *spanPipelineWorker) handleMsg(msg pipelineMsg) {
 		state.onPersisted(w.mgr, msg.dataSeq)
 		if state.unregistered && len(state.inflightWeight) == 0 {
 			delete(w.states, msg.subID)
+			w.mgr.incActiveSubs(-1)
 		}
 	case pipelineMsgData, pipelineMsgResolved:
 		state := w.getOrCreateState(msg.subID)
@@ -285,6 +340,7 @@ func (w *spanPipelineWorker) getOrCreateState(subID SubscriptionID) *spanPipelin
 	}
 	st := newSpanPipelineState()
 	w.states[subID] = st
+	w.mgr.incActiveSubs(1)
 	return st
 }
 
@@ -332,6 +388,9 @@ func (s *spanPipelineState) onOrderedInput(mgr *spanPipelineManager, msg pipelin
 	if s.reorder == nil {
 		s.reorder = make(map[uint64]pipelineMsg, 16)
 	}
+	if _, exists := s.reorder[msg.emitSeq]; !exists {
+		mgr.incReorderBuffered(1)
+	}
 	s.reorder[msg.emitSeq] = msg
 
 	for {
@@ -340,6 +399,7 @@ func (s *spanPipelineState) onOrderedInput(mgr *spanPipelineManager, msg pipelin
 			return
 		}
 		delete(s.reorder, s.reorderNextSeq)
+		mgr.incReorderBuffered(-1)
 		s.reorderNextSeq++
 		s.handleInOrderInput(mgr, next)
 	}
@@ -350,8 +410,8 @@ func (s *spanPipelineState) handleInOrderInput(mgr *spanPipelineManager, msg pip
 	case pipelineMsgData:
 		s.onData(mgr, msg)
 	case pipelineMsgResolved:
-		s.onResolved(msg.ts)
-		s.flushResolvedIfReady()
+		s.onResolved(mgr, msg.ts)
+		s.flushResolvedIfReady(mgr)
 	}
 }
 
@@ -361,7 +421,7 @@ func (s *spanPipelineState) onData(mgr *spanPipelineManager, msg pipelineMsg) {
 
 	span := s.span
 	if span == nil || span.stopped.Load() {
-		mgr.quota.Release(msg.quotaWeight)
+		mgr.releaseInflight(msg.quotaWeight)
 		s.onPersisted(mgr, seq)
 		return
 	}
@@ -377,11 +437,12 @@ func (s *spanPipelineState) onData(mgr *spanPipelineManager, msg pipelineMsg) {
 	}
 }
 
-func (s *spanPipelineState) onResolved(ts uint64) {
+func (s *spanPipelineState) onResolved(mgr *spanPipelineManager, ts uint64) {
 	if ts == 0 {
 		return
 	}
 	if ts <= s.lastAdvancedTs {
+		metrics.LogPullerSpanPipelineResolvedBarrierDroppedCounter.Inc()
 		return
 	}
 
@@ -390,12 +451,14 @@ func (s *spanPipelineState) onResolved(ts uint64) {
 		// If the previous barrier has the same ts, the new one is redundant because it
 		// would advance to the same resolved-ts but requires waiting for more data.
 		if len(s.pendingResolved) != 0 && s.pendingResolved[len(s.pendingResolved)-1].ts == ts {
+			metrics.LogPullerSpanPipelineResolvedBarrierDroppedCounter.Inc()
 			return
 		}
 		s.pendingResolved = append(s.pendingResolved, resolvedBarrier{
 			waitSeq: waitSeq,
 			ts:      ts,
 		})
+		mgr.incPendingResolved(1)
 		return
 	}
 	last := &s.pendingResolved[len(s.pendingResolved)-1]
@@ -407,7 +470,7 @@ func (s *spanPipelineState) onResolved(ts uint64) {
 func (s *spanPipelineState) onPersisted(mgr *spanPipelineManager, seq uint64) {
 	if weight, ok := s.inflightWeight[seq]; ok {
 		delete(s.inflightWeight, seq)
-		mgr.quota.Release(weight)
+		mgr.releaseInflight(weight)
 	}
 
 	if seq <= s.ackedSeq {
@@ -422,10 +485,10 @@ func (s *spanPipelineState) onPersisted(mgr *spanPipelineManager, seq uint64) {
 		delete(s.doneSet, next)
 		s.ackedSeq++
 	}
-	s.flushResolvedIfReady()
+	s.flushResolvedIfReady(mgr)
 }
 
-func (s *spanPipelineState) flushResolvedIfReady() {
+func (s *spanPipelineState) flushResolvedIfReady(mgr *spanPipelineManager) {
 	for s.pendingResolvedHead < len(s.pendingResolved) {
 		barrier := s.pendingResolved[s.pendingResolvedHead]
 		if s.ackedSeq < barrier.waitSeq {
@@ -439,6 +502,7 @@ func (s *spanPipelineState) flushResolvedIfReady() {
 		if barrier.ts > s.lastAdvancedTs {
 			s.lastAdvancedTs = barrier.ts
 		}
+		mgr.incPendingResolved(-1)
 		s.pendingResolvedHead++
 	}
 
@@ -461,6 +525,7 @@ func (s *spanPipelineState) compactPendingResolvedIfNeeded() {
 	if s.pendingResolvedHead < minHeadToCompact && s.pendingResolvedHead < len(s.pendingResolved)/2 {
 		return
 	}
+	metrics.LogPullerSpanPipelineResolvedBarrierCompactionCounter.Inc()
 	s.pendingResolved = append([]resolvedBarrier(nil), s.pendingResolved[s.pendingResolvedHead:]...)
 	s.pendingResolvedHead = 0
 }
