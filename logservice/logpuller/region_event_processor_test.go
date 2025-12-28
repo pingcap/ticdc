@@ -138,3 +138,55 @@ func TestMaybeGenerateSpanResolvedTsMinAcrossRegions(t *testing.T) {
 	require.Equal(t, uint64(10), maybeAdvanceSpanResolvedTs(subSpan, state2.getRegionID()))
 	require.Equal(t, uint64(10), subSpan.resolvedTs.Load())
 }
+
+func TestRegionEventProcessor_ResolvedTsBatchCleansStaleRegionState(t *testing.T) {
+	totalSpan := heartbeatpb.TableSpan{
+		TableID:  100,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+	}
+	subSpan := &subscribedSpan{
+		subID:           SubscriptionID(1),
+		span:            totalSpan,
+		startTs:         1,
+		rangeLock:       regionlock.NewRangeLock(1, totalSpan.StartKey, totalSpan.EndKey, 1),
+		advanceInterval: 0,
+	}
+
+	worker := &regionRequestWorker{requestCache: &requestCache{}}
+	worker.requestedRegions.subscriptions = make(map[SubscriptionID]regionFeedStates)
+	worker.requestedRegions.subscriptions[subSpan.subID] = make(regionFeedStates)
+
+	res1 := subSpan.rangeLock.LockRange(context.Background(), []byte("a"), []byte("m"), 1, 1)
+	require.Equal(t, regionlock.LockRangeStatusSuccess, res1.Status)
+	region1 := newRegionInfo(tikv.NewRegionVerID(1, 1, 1), heartbeatpb.TableSpan{StartKey: []byte("a"), EndKey: []byte("m")}, &tikv.RPCContext{}, subSpan, false)
+	region1.lockedRangeState = res1.LockedRangeState
+	state1 := newRegionFeedState(region1, uint64(subSpan.subID), worker)
+	state1.start()
+	state1.setInitialized()
+	worker.requestedRegions.subscriptions[subSpan.subID][state1.getRegionID()] = state1
+
+	res2 := subSpan.rangeLock.LockRange(context.Background(), []byte("m"), []byte("z"), 2, 1)
+	require.Equal(t, regionlock.LockRangeStatusSuccess, res2.Status)
+	region2 := newRegionInfo(tikv.NewRegionVerID(2, 2, 2), heartbeatpb.TableSpan{StartKey: []byte("m"), EndKey: []byte("z")}, &tikv.RPCContext{}, subSpan, false)
+	region2.lockedRangeState = res2.LockedRangeState
+	state2 := newRegionFeedState(region2, uint64(subSpan.subID), worker)
+	state2.start()
+	state2.setInitialized()
+	worker.requestedRegions.subscriptions[subSpan.subID][state2.getRegionID()] = state2
+
+	// Mark region-1 stale, and only feed it through batch resolved-ts path.
+	state1.markStopped(&sendRequestToStoreErr{})
+
+	subClient := &subscriptionClient{errCache: newErrCache()}
+	processor := &regionEventProcessor{subClient: subClient}
+
+	require.Equal(t, 2, subSpan.rangeLock.Len())
+	span, _ := processor.handleResolvedTsBatch(10, []*regionFeedState{state1, state2})
+	require.Equal(t, subSpan, span)
+
+	// The stale region should be removed (unlock range => removed from heap) even when it only
+	// appears in batch resolved-ts events.
+	require.Equal(t, 1, subSpan.rangeLock.Len())
+	require.Nil(t, worker.getRegionState(subSpan.subID, state1.getRegionID()))
+}

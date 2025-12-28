@@ -207,7 +207,17 @@ func (p *regionEventProcessor) handleResolvedTsBatch(resolvedTs uint64, states [
 	var span *subscribedSpan
 	var triggerRegionID uint64
 	for _, state := range states {
-		if state.isStale() || !state.isInitialized() {
+		if state == nil {
+			continue
+		}
+		// A stale region state may still appear in batch resolved-ts events, and if we only
+		// skip it here, it may never get cleaned up (unlock range + remove from heap),
+		// causing the span resolved-ts to be stuck.
+		if state.isStale() {
+			p.handleRegionError(state)
+			continue
+		}
+		if !state.isInitialized() {
 			continue
 		}
 		if span == nil {
