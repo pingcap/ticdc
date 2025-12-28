@@ -349,6 +349,12 @@ func maybeAdvanceSpanResolvedTs(span *subscribedSpan, triggerRegionID uint64) ui
 	}
 
 	ts := span.rangeLock.GetHeapMinTs()
+	log.Info("maybe advance span resolved ts",
+		zap.Uint64("subscriptionID", uint64(span.subID)),
+		zap.Int64("tableID", span.span.TableID),
+		zap.Uint64("regionID", triggerRegionID),
+		zap.Uint64("resolvedTs", ts),
+		zap.Uint64("lastResolvedTs", span.resolvedTs.Load()))
 	if ts == 0 {
 		return 0
 	}
