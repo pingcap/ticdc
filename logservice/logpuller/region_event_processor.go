@@ -28,14 +28,14 @@ import (
 )
 
 type regionEvent struct {
-	state *regionFeedState
+	// states contains region feed states related to this event.
+	// For per-region events, len(states) == 1.
+	// For batch resolved-ts (a single cdcpb.ResolvedTs message), len(states) can be > 1.
+	states []*regionFeedState
 
 	// only one of the following fields is set
 	entries    *cdcpb.Event_Entries_
 	resolvedTs uint64
-
-	// resolved ts batch update (a single cdcpb.ResolvedTs message)
-	states []*regionFeedState
 }
 
 type regionEventProcessor struct {
@@ -85,10 +85,13 @@ func (p *regionEventProcessor) close() {
 }
 
 func (p *regionEventProcessor) dispatch(event regionEvent) {
-	if p == nil || p.closed.Load() || event.state == nil {
+	if len(event.states) != 1 {
+		log.Panic("should not happen: dispatch called for batch event", zap.Any("event", event))
+	}
+	if p == nil || p.closed.Load() || event.states[0] == nil {
 		return
 	}
-	regionID := event.state.getRegionID()
+	regionID := event.states[0].getRegionID()
 	idx := regionID % p.workerCount
 	p.workerChans[idx] <- event
 }
@@ -126,8 +129,8 @@ func (p *regionEventProcessor) dispatchResolvedTsBatch(resolvedTs uint64, states
 
 func (p *regionEventProcessor) run(ch <-chan regionEvent) {
 	for event := range ch {
-		if event.state != nil {
-			state := event.state
+		if len(event.states) == 1 {
+			state := event.states[0]
 			if state.isStale() {
 				p.handleRegionError(state)
 				continue
