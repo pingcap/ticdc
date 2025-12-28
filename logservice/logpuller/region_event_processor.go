@@ -326,14 +326,14 @@ func updateRegionResolvedTs(span *subscribedSpan, state *regionFeedState, resolv
 		return
 	}
 	state.matcher.tryCleanUnmatchedValue()
-	regionID := state.getRegionID()
+	// regionID := state.getRegionID()
 	lastResolvedTs := state.getLastResolvedTs()
 	if resolvedTs < lastResolvedTs {
-		log.Info("The resolvedTs is fallen back in subscription client",
-			zap.Uint64("subscriptionID", uint64(state.region.subscribedSpan.subID)),
-			zap.Uint64("regionID", regionID),
-			zap.Uint64("resolvedTs", resolvedTs),
-			zap.Uint64("lastResolvedTs", lastResolvedTs))
+		// log.Info("The resolvedTs is fallen back in subscription client",
+		// 	zap.Uint64("subscriptionID", uint64(state.region.subscribedSpan.subID)),
+		// 	zap.Uint64("regionID", regionID),
+		// 	zap.Uint64("resolvedTs", resolvedTs),
+		// 	zap.Uint64("lastResolvedTs", lastResolvedTs))
 		return
 	}
 

@@ -89,7 +89,7 @@ func newSpanPipelineManager(
 		queueSize = 409600
 	}
 	if quotaLimitBytes <= 0 {
-		quotaLimitBytes = 1 << 30 // 1GiB
+		quotaLimitBytes = 20 << 30 // 1GiB
 	}
 
 	log.Info("span pipeline manager started",
