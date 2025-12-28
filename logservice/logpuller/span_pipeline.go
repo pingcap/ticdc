@@ -86,7 +86,7 @@ func newSpanPipelineManager(
 		}
 	}
 	if queueSize <= 0 {
-		queueSize = 4096
+		queueSize = 409600
 	}
 	if quotaLimitBytes <= 0 {
 		quotaLimitBytes = 1 << 30 // 1GiB
