@@ -331,9 +331,9 @@ func (p *writeTaskPool) run(ctx context.Context) {
 						return
 					}
 					start := time.Now()
-					if err = p.store.writeEvents(p.db, events, encoder); err != nil {
-						log.Panic("write events failed", zap.Error(err))
-					}
+					// if err = p.store.writeEvents(p.db, events, encoder); err != nil {
+					// 	log.Panic("write events failed", zap.Error(err))
+					// }
 					for idx := range events {
 						events[idx].callback()
 					}
