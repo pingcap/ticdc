@@ -237,7 +237,7 @@ type eventStore struct {
 const (
 	dataDir             = "event_store"
 	dbCount             = 4
-	writeWorkerNumPerDB = 16
+	writeWorkerNumPerDB = 4
 )
 
 func New(

@@ -107,13 +107,6 @@ var (
 			Name:      "pending_resolved_barriers",
 			Help:      "Total number of pending resolved-ts barriers in the span pipeline.",
 		})
-	LogPullerSpanPipelineReorderBufferedMessages = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "log_puller_span_pipeline",
-			Name:      "reorder_buffered_messages",
-			Help:      "Total number of buffered messages waiting for in-order processing (emitSeq reorder buffer).",
-		})
 	LogPullerSpanPipelineActiveSubscriptions = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -157,7 +150,6 @@ func initLogPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(LogPullerSpanPipelineInflightBytes)
 	registry.MustRegister(LogPullerSpanPipelineInflightBatches)
 	registry.MustRegister(LogPullerSpanPipelinePendingResolvedBarriers)
-	registry.MustRegister(LogPullerSpanPipelineReorderBufferedMessages)
 	registry.MustRegister(LogPullerSpanPipelineActiveSubscriptions)
 	registry.MustRegister(LogPullerSpanPipelineQuotaAcquireDuration)
 	registry.MustRegister(LogPullerSpanPipelineResolvedBarrierDroppedCounter)

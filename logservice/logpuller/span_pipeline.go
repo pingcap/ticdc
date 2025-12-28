@@ -21,8 +21,10 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"go.uber.org/zap"
 	"golang.org/x/sync/semaphore"
 )
 
@@ -39,9 +41,6 @@ const (
 type pipelineMsg struct {
 	subID   SubscriptionID
 	msgType pipelineMsgType
-
-	// For ordering input events (Data/Resolved). Other message types ignore it.
-	emitSeq uint64
 
 	span *subscribedSpan
 
@@ -68,7 +67,6 @@ type spanPipelineManager struct {
 	inflightBytes   atomic.Int64
 	inflightBatches atomic.Int64
 	pendingResolved atomic.Int64
-	reorderBuffered atomic.Int64
 	activeSubs      atomic.Int64
 
 	closed atomic.Bool
@@ -94,6 +92,10 @@ func newSpanPipelineManager(
 		quotaLimitBytes = 1 << 30 // 1GiB
 	}
 
+	log.Info("span pipeline manager started",
+		zap.Int("workerCount", workerCount),
+		zap.Int("queueSize", queueSize),
+		zap.Int64("quotaLimitBytes", quotaLimitBytes))
 	mgr := &spanPipelineManager{
 		workerCount:     uint64(workerCount),
 		workers:         make([]spanPipelineWorker, workerCount),
@@ -168,7 +170,6 @@ func (m *spanPipelineManager) Unregister(subID SubscriptionID) {
 func (m *spanPipelineManager) EnqueueData(
 	ctx context.Context,
 	span *subscribedSpan,
-	emitSeq uint64,
 	kvs []common.RawKVEntry,
 ) bool {
 	if span == nil || len(kvs) == 0 {
@@ -192,7 +193,6 @@ func (m *spanPipelineManager) EnqueueData(
 	if ok := m.enqueue(pipelineMsg{
 		subID:       span.subID,
 		msgType:     pipelineMsgData,
-		emitSeq:     emitSeq,
 		span:        span,
 		kvs:         kvs,
 		quotaWeight: weight,
@@ -203,20 +203,22 @@ func (m *spanPipelineManager) EnqueueData(
 	return true
 }
 
-func (m *spanPipelineManager) EnqueueResolved(span *subscribedSpan, emitSeq uint64, ts uint64) bool {
+func (m *spanPipelineManager) EnqueueResolved(span *subscribedSpan, ts uint64) bool {
 	if span == nil || ts == 0 {
 		return true
 	}
 	return m.enqueue(pipelineMsg{
 		subID:   span.subID,
 		msgType: pipelineMsgResolved,
-		emitSeq: emitSeq,
 		span:    span,
 		ts:      ts,
 	})
 }
 
 func (m *spanPipelineManager) enqueuePersisted(subID SubscriptionID, dataSeq uint64) {
+	log.Info("enqueue persisted callback",
+		zap.Uint64("dataSeq", dataSeq),
+		zap.Uint64("subID", uint64(subID)))
 	_ = m.enqueue(pipelineMsg{
 		subID:   subID,
 		msgType: pipelineMsgPersisted,
@@ -246,13 +248,6 @@ func (m *spanPipelineManager) incPendingResolved(delta int64) {
 		return
 	}
 	metrics.LogPullerSpanPipelinePendingResolvedBarriers.Set(float64(m.pendingResolved.Add(delta)))
-}
-
-func (m *spanPipelineManager) incReorderBuffered(delta int64) {
-	if delta == 0 {
-		return
-	}
-	metrics.LogPullerSpanPipelineReorderBufferedMessages.Set(float64(m.reorderBuffered.Add(delta)))
 }
 
 func (m *spanPipelineManager) incActiveSubs(delta int64) {
@@ -299,15 +294,10 @@ func (w *spanPipelineWorker) handleMsg(msg pipelineMsg) {
 	case pipelineMsgUnregister:
 		if state := w.states[msg.subID]; state != nil {
 			w.mgr.incPendingResolved(-int64(len(state.pendingResolved) - state.pendingResolvedHead))
-			if state.reorder != nil {
-				w.mgr.incReorderBuffered(-int64(len(state.reorder)))
-			}
 			state.unregistered = true
 			state.span = nil
 			state.pendingResolved = nil
 			state.pendingResolvedHead = 0
-			state.reorder = nil
-			state.reorderNextSeq = 1
 			if len(state.inflightWeight) == 0 {
 				delete(w.states, msg.subID)
 				w.mgr.incActiveSubs(-1)
@@ -328,7 +318,7 @@ func (w *spanPipelineWorker) handleMsg(msg pipelineMsg) {
 		if msg.span != nil {
 			state.span = msg.span
 		}
-		state.onOrderedInput(w.mgr, msg)
+		state.handleInOrderInput(w.mgr, msg)
 	default:
 		return
 	}
@@ -364,10 +354,6 @@ type spanPipelineState struct {
 	pendingResolvedHead int
 	lastAdvancedTs      uint64
 
-	// Ensure Data/Resolved are handled in puller receive order (emitSeq).
-	reorderNextSeq uint64
-	reorder        map[uint64]pipelineMsg
-
 	unregistered bool
 }
 
@@ -376,32 +362,7 @@ func newSpanPipelineState() *spanPipelineState {
 		nextDataSeq:     1,
 		doneSet:         make(map[uint64]struct{}, 16),
 		inflightWeight:  make(map[uint64]int64, 16),
-		reorderNextSeq:  1,
 		pendingResolved: make([]resolvedBarrier, 0, 4),
-	}
-}
-
-func (s *spanPipelineState) onOrderedInput(mgr *spanPipelineManager, msg pipelineMsg) {
-	if msg.emitSeq < s.reorderNextSeq {
-		return
-	}
-	if s.reorder == nil {
-		s.reorder = make(map[uint64]pipelineMsg, 16)
-	}
-	if _, exists := s.reorder[msg.emitSeq]; !exists {
-		mgr.incReorderBuffered(1)
-	}
-	s.reorder[msg.emitSeq] = msg
-
-	for {
-		next, ok := s.reorder[s.reorderNextSeq]
-		if !ok {
-			return
-		}
-		delete(s.reorder, s.reorderNextSeq)
-		mgr.incReorderBuffered(-1)
-		s.reorderNextSeq++
-		s.handleInOrderInput(mgr, next)
 	}
 }
 
@@ -495,6 +456,11 @@ func (s *spanPipelineState) flushResolvedIfReady(mgr *spanPipelineManager) {
 			s.compactPendingResolvedIfNeeded()
 			return
 		}
+		log.Info("advance resolved ts",
+			zap.Uint64("subID", uint64(s.span.subID)),
+			zap.Uint64("ts", barrier.ts),
+			zap.Uint64("ackedSeq", s.ackedSeq),
+			zap.Uint64("waitSeq", barrier.waitSeq))
 
 		if s.span != nil && !s.span.stopped.Load() {
 			s.span.advanceResolvedTs(barrier.ts)

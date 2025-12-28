@@ -109,18 +109,30 @@ To avoid per-span goroutines, we use a pipeline manager with a fixed number of w
 
 Code entry: `logservice/logpuller/span_pipeline.go`
 
-## Defining and Enforcing “Receive Order”
+## Ordering Notes (Why No Reorder Buffer Is Needed)
 
-The puller’s region event processing is concurrent (sharded by regionID). To make the barrier semantics precise and implementable, this implementation introduces a per-`subscribedSpan` monotonic sequence `emitSeq`:
+The log puller processes region events concurrently (sharded by regionID), but the Span Pipeline does **not** maintain an additional reorder buffer. This is intentional.
 
-- `regionEventProcessor` assigns `emitSeq := span.emitSeq.Add(1)` when producing Data/Resolved, and includes it in the pipeline message.
-- The pipeline worker uses `emitSeq` as a small reorder buffer to ensure that Data/Resolved for the same `subID` enter the state machine in `emitSeq` order.
+What we must preserve is the relative order between:
 
-Code:
+- Data batches, and
+- the span-level resolved-ts signal that is derived from region resolved progress.
 
-- `emitSeq` field: `logservice/logpuller/subscription_client.go`
-- Enqueue Data/Resolved: `logservice/logpuller/region_event_processor.go`
-- Reorder logic: `logservice/logpuller/span_pipeline.go`
+Key observations:
+
+1) **Per-region event order is already serialized.**
+
+All events for the same region are processed by the same `regionEventProcessor` worker goroutine, so within a region, “entries then resolved” order is preserved.
+
+2) **Span-level resolved-ts is computed from all regions.**
+
+`maybeAdvanceSpanResolvedTs` uses the minimum resolved-ts across all regions/ranges in the span. Therefore, a span-level resolved-ts can advance to `T` only if every region/range in the span has already advanced its own resolved-ts to at least `T`.
+
+3) **A region cannot advance its resolved-ts past data it has not enqueued.**
+
+In the region worker goroutine, data batches are assembled from `entries` and immediately enqueued to the pipeline. If data enqueue is blocked (e.g., by quota), the goroutine cannot continue to process later resolved-ts events for that region, so the region’s resolved progress cannot advance. This indirectly prevents the span-level resolved-ts from advancing as well (because it is the minimum across regions).
+
+Given these properties, additional reordering at the pipeline boundary is unnecessary: the channel delivery order is sufficient, and correctness is ensured by the region-local serialization plus the “min across regions” rule for span resolved-ts.
 
 ## Puller-Side Dataflow: `regionRequestWorker` and `regionEventProcessor`
 
@@ -189,8 +201,7 @@ Handling details:
   - Matches PREWRITE/COMMIT/ROLLBACK using the matcher, and builds `common.RawKVEntry` with commitTs (`CRTs`) and regionID.
   - Enforces region-local invariants like `CommitTs > lastResolvedTs`.
 - The resulting `[]RawKVEntry` is a per-region batch; the processor emits it to the span pipeline:
-  - `emitSeq := span.emitSeq.Add(1)`
-  - `pipeline.EnqueueData(ctx, span, emitSeq, batch)`
+  - `pipeline.EnqueueData(ctx, span, batch)`
 
 2) **Per-region resolvedTs events (`cdcpb.Event_ResolvedTs`)**
 
@@ -201,8 +212,7 @@ Handling details:
   - `ts := maybeAdvanceSpanResolvedTs(span, triggerRegionID)`
   - This computes the span’s resolved-ts as the minimum resolved among all locked ranges (heap min), and applies `advanceInterval` throttling.
 - If a new span-level resolved-ts is produced, it is emitted to the span pipeline:
-  - `emitSeq := span.emitSeq.Add(1)`
-  - `pipeline.EnqueueResolved(span, emitSeq, ts)`
+  - `pipeline.EnqueueResolved(span, ts)`
 
 3) **Batch resolvedTs (`cdcpb.ResolvedTs{Ts, Regions[]}`)**
 
@@ -212,9 +222,8 @@ Handling details:
 ### Relationship to Span Pipeline semantics
 
 - `regionEventProcessor` preserves **region-local** ordering by region sharding, and produces span-level Data/Resolved outputs concurrently across regions.
-- `emitSeq` + Span Pipeline reorder buffer define the “puller receive order” for a subscription span:
-  - The barrier binding uses the order of `emitSeq`-sequenced outputs (Data/Resolved) entering the pipeline.
-- Span Pipeline then enforces the only required contract: a span-level resolved-ts is advanced only after all earlier Data batches (in that receive order) have been persisted.
+- The span pipeline relies on region-local serialization and the “min across regions” span-resolved computation to preserve the necessary ordering between Data batches and span-level resolved-ts signals.
+- Span Pipeline then enforces the only required contract: a span-level resolved-ts is advanced only after all earlier Data batches have been persisted.
 
 ## Backpressure & Memory Control (Replacing dynstream Pause/Resume)
 
@@ -238,7 +247,6 @@ Key Prometheus metrics exposed by this implementation:
 - `ticdc_log_puller_span_pipeline_inflight_bytes`: approximate bytes currently held by the pipeline quota.
 - `ticdc_log_puller_span_pipeline_inflight_batches`: number of data batches currently in-flight (quota held, waiting for persist callback).
 - `ticdc_log_puller_span_pipeline_pending_resolved_barriers`: number of pending resolved barriers waiting for `ackedSeq` to pass.
-- `ticdc_log_puller_span_pipeline_reorder_buffered_messages`: number of buffered messages in the per-subscription `emitSeq` reorder buffer.
 - `ticdc_log_puller_span_pipeline_active_subscriptions`: number of active subscription spans tracked by pipeline workers.
 - `ticdc_log_puller_span_pipeline_quota_acquire_duration_seconds`: histogram of time spent waiting for quota before enqueueing data.
 - `ticdc_log_puller_span_pipeline_resolved_barrier_dropped_total`: redundant resolved barriers dropped (e.g., duplicate/obsolete ts).

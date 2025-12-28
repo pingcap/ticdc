@@ -38,9 +38,9 @@ func TestSpanPipeline_ResolvedWaitsForPersistedPrefix(t *testing.T) {
 
 	mgr.Register(span)
 
-	require.True(t, mgr.EnqueueData(ctx, span, span.emitSeq.Add(1), []common.RawKVEntry{{Key: []byte("a"), CRTs: 1}}))
-	require.True(t, mgr.EnqueueData(ctx, span, span.emitSeq.Add(1), []common.RawKVEntry{{Key: []byte("b"), CRTs: 2}}))
-	require.True(t, mgr.EnqueueResolved(span, span.emitSeq.Add(1), 100))
+	require.True(t, mgr.EnqueueData(ctx, span, []common.RawKVEntry{{Key: []byte("a"), CRTs: 1}}))
+	require.True(t, mgr.EnqueueData(ctx, span, []common.RawKVEntry{{Key: []byte("b"), CRTs: 2}}))
+	require.True(t, mgr.EnqueueResolved(span, 100))
 
 	require.Eventually(t, func() bool {
 		mu.Lock()
@@ -96,9 +96,9 @@ func TestSpanPipeline_ResolvedMergeSameWaitSeq(t *testing.T) {
 
 	mgr.Register(span)
 
-	require.True(t, mgr.EnqueueData(ctx, span, span.emitSeq.Add(1), []common.RawKVEntry{{Key: []byte("a"), CRTs: 1}}))
-	require.True(t, mgr.EnqueueResolved(span, span.emitSeq.Add(1), 10))
-	require.True(t, mgr.EnqueueResolved(span, span.emitSeq.Add(1), 12))
+	require.True(t, mgr.EnqueueData(ctx, span, []common.RawKVEntry{{Key: []byte("a"), CRTs: 1}}))
+	require.True(t, mgr.EnqueueResolved(span, 10))
+	require.True(t, mgr.EnqueueResolved(span, 12))
 
 	require.Eventually(t, func() bool {
 		mu.Lock()
@@ -157,11 +157,11 @@ func TestSpanPipeline_MultipleSubscriptionsIndependent(t *testing.T) {
 	mgr.Register(span1)
 	mgr.Register(span2)
 
-	require.True(t, mgr.EnqueueData(ctx, span1, span1.emitSeq.Add(1), []common.RawKVEntry{{Key: []byte("a"), CRTs: 1}}))
-	require.True(t, mgr.EnqueueResolved(span1, span1.emitSeq.Add(1), 100))
+	require.True(t, mgr.EnqueueData(ctx, span1, []common.RawKVEntry{{Key: []byte("a"), CRTs: 1}}))
+	require.True(t, mgr.EnqueueResolved(span1, 100))
 
-	require.True(t, mgr.EnqueueData(ctx, span2, span2.emitSeq.Add(1), []common.RawKVEntry{{Key: []byte("b"), CRTs: 1}}))
-	require.True(t, mgr.EnqueueResolved(span2, span2.emitSeq.Add(1), 200))
+	require.True(t, mgr.EnqueueData(ctx, span2, []common.RawKVEntry{{Key: []byte("b"), CRTs: 1}}))
+	require.True(t, mgr.EnqueueResolved(span2, 200))
 
 	require.Eventually(t, func() bool {
 		mu.Lock()

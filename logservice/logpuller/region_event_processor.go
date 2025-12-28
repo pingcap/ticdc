@@ -50,12 +50,17 @@ type regionEventProcessor struct {
 }
 
 func newRegionEventProcessor(workerCount int, queueSize int, subClient *subscriptionClient) *regionEventProcessor {
-	if workerCount <= 0 {
-		workerCount = 1
-	}
-	if queueSize <= 0 {
-		queueSize = 1024
-	}
+	// if workerCount <= 0 {
+	// 	workerCount = 1
+	// }
+	// if queueSize <= 0 {
+	// 	queueSize = 1024
+	// }
+	workerCount = 64
+	queueSize = 10240
+	log.Info("region event processor started",
+		zap.Int("workerCount", workerCount),
+		zap.Int("queueSize", queueSize))
 	p := &regionEventProcessor{
 		workerCount: uint64(workerCount),
 		queueSize:   queueSize,
@@ -145,15 +150,13 @@ func (p *regionEventProcessor) run(ch <-chan regionEvent) {
 					continue
 				}
 				if !span.stopped.Load() {
-					emitSeq := span.emitSeq.Add(1)
-					p.subClient.pipeline.EnqueueData(p.subClient.ctx, span, emitSeq, batch)
+					p.subClient.pipeline.EnqueueData(p.subClient.ctx, span, batch)
 				}
 			case event.resolvedTs != 0:
 				updateRegionResolvedTs(span, state, event.resolvedTs)
 				if ts := maybeAdvanceSpanResolvedTs(span, state.getRegionID()); ts != 0 {
 					if !span.stopped.Load() {
-						emitSeq := span.emitSeq.Add(1)
-						p.subClient.pipeline.EnqueueResolved(span, emitSeq, ts)
+						p.subClient.pipeline.EnqueueResolved(span, ts)
 					}
 				}
 			default:
@@ -169,8 +172,7 @@ func (p *regionEventProcessor) run(ch <-chan regionEvent) {
 			}
 			if ts := maybeAdvanceSpanResolvedTs(span, triggerRegionID); ts != 0 {
 				if !span.stopped.Load() {
-					emitSeq := span.emitSeq.Add(1)
-					p.subClient.pipeline.EnqueueResolved(span, emitSeq, ts)
+					p.subClient.pipeline.EnqueueResolved(span, ts)
 				}
 			}
 			continue

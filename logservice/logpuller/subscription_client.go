@@ -130,10 +130,6 @@ type subscribedSpan struct {
 
 	lastAdvanceTime atomic.Int64
 
-	// emitSeq is a monotonic sequence used to define per-subscription receive order.
-	// It is shared across all goroutines emitting Data/Resolved events for this subscription.
-	emitSeq atomic.Uint64
-
 	initialized       atomic.Bool
 	resolvedTsUpdated atomic.Int64
 	resolvedTs        atomic.Uint64
