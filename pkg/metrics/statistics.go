@@ -109,7 +109,9 @@ func (b *Statistics) Close() {
 	ExecBatchHistogram.DeleteLabelValues(keyspace, changefeedID)
 	ExecBatchWriteBytesHistogram.DeleteLabelValues(keyspace, changefeedID)
 	EventSizeHistogram.DeleteLabelValues(keyspace, changefeedID)
-	ExecutionErrorCounter.DeleteLabelValues(keyspace, changefeedID)
+	ExecutionErrorCounter.DeleteLabelValues(keyspace, changefeedID, "ddl")
+	ExecutionErrorCounter.DeleteLabelValues(keyspace, changefeedID, "dml")
+	ExecDDLCounter.DeleteLabelValues(keyspace, changefeedID)
 	TotalWriteBytesCounter.DeleteLabelValues(keyspace, changefeedID)
 	ExecDMLEventCounter.DeleteLabelValues(keyspace, changefeedID)
 }
