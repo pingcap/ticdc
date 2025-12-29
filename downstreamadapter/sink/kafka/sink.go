@@ -429,7 +429,7 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		if err != nil {
 			return err
 		}
-		ddlType := event.GetDDLType().String()
+		ddlType := e.GetDDLType().String()
 		if s.partitionRule == helper.PartitionAll {
 			err = s.statistics.RecordDDLExecution(ddlType, func() error {
 				return s.ddlProducer.SendMessages(topic, partitionNum, message)
