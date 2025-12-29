@@ -873,7 +873,9 @@ func (d *BasicDispatcher) popHoldingBlockEvent() commonEvent.BlockEvent {
 	defer d.holdingBlockEventMu.Unlock()
 	event := d.holdingBlockEvent
 	d.holdingBlockEvent = nil
-	log.Info("dispatcher pop the holding block event", zap.Stringer("dispatcherID", d.id), zap.Uint64("commitTs", event.GetCommitTs()))
+	if event != nil {
+		log.Info("dispatcher pop the holding block event", zap.Stringer("dispatcherID", d.id), zap.Uint64("commitTs", event.GetCommitTs()))
+	}
 	return event
 }
 
