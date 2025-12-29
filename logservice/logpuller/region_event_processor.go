@@ -150,13 +150,23 @@ func (p *regionEventProcessor) run(ch <-chan regionEvent) {
 					continue
 				}
 				if !span.stopped.Load() {
-					p.subClient.pipeline.EnqueueData(p.subClient.ctx, span, batch)
+					if err := p.subClient.pipeline.EnqueueData(span, batch); err != nil {
+						if p.subClient.ctx.Err() != nil {
+							return
+						}
+						log.Panic("span pipeline enqueue data failed", zap.Error(err))
+					}
 				}
 			case event.resolvedTs != 0:
 				updateRegionResolvedTs(span, state, event.resolvedTs)
 				if ts := maybeAdvanceSpanResolvedTs(span, state.getRegionID()); ts != 0 {
 					if !span.stopped.Load() {
-						p.subClient.pipeline.EnqueueResolved(span, ts)
+						if err := p.subClient.pipeline.EnqueueResolved(span, ts); err != nil {
+							if p.subClient.ctx.Err() != nil {
+								return
+							}
+							log.Panic("span pipeline enqueue resolved failed", zap.Error(err))
+						}
 					}
 				}
 			default:
@@ -172,7 +182,12 @@ func (p *regionEventProcessor) run(ch <-chan regionEvent) {
 			}
 			if ts := maybeAdvanceSpanResolvedTs(span, triggerRegionID); ts != 0 {
 				if !span.stopped.Load() {
-					p.subClient.pipeline.EnqueueResolved(span, ts)
+					if err := p.subClient.pipeline.EnqueueResolved(span, ts); err != nil {
+						if p.subClient.ctx.Err() != nil {
+							return
+						}
+						log.Panic("span pipeline enqueue resolved failed", zap.Error(err))
+					}
 				}
 			}
 			continue

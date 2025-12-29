@@ -15,6 +15,7 @@ package logpuller
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -27,6 +28,8 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sync/semaphore"
 )
+
+var errSpanPipelineClosed = errors.New("span pipeline closed")
 
 type pipelineMsgType uint8
 
@@ -125,9 +128,6 @@ func (m *spanPipelineManager) Close() {
 		return
 	}
 	m.cancel()
-	for i := range m.workers {
-		close(m.workers[i].ch)
-	}
 	m.wg.Wait()
 }
 
@@ -136,16 +136,16 @@ func (m *spanPipelineManager) shard(subID SubscriptionID) *spanPipelineWorker {
 	return &m.workers[idx]
 }
 
-func (m *spanPipelineManager) enqueue(msg pipelineMsg) bool {
+func (m *spanPipelineManager) enqueue(msg pipelineMsg) error {
 	if m == nil || m.closed.Load() {
-		return false
+		return errSpanPipelineClosed
 	}
 	w := m.shard(msg.subID)
 	select {
 	case w.ch <- msg:
-		return true
+		return nil
 	case <-m.ctx.Done():
-		return false
+		return errSpanPipelineClosed
 	}
 }
 
@@ -168,12 +168,11 @@ func (m *spanPipelineManager) Unregister(subID SubscriptionID) {
 }
 
 func (m *spanPipelineManager) EnqueueData(
-	ctx context.Context,
 	span *subscribedSpan,
 	kvs []common.RawKVEntry,
-) bool {
+) error {
 	if span == nil || len(kvs) == 0 {
-		return true
+		return nil
 	}
 
 	weight := rawKVEntriesApproxBytes(kvs)
@@ -184,28 +183,28 @@ func (m *spanPipelineManager) EnqueueData(
 		weight = m.quotaLimitBytes
 	}
 	start := time.Now()
-	if err := m.quota.Acquire(ctx, weight); err != nil {
-		return false
+	if err := m.quota.Acquire(m.ctx, weight); err != nil {
+		return errSpanPipelineClosed
 	}
 	metrics.LogPullerSpanPipelineQuotaAcquireDuration.Observe(time.Since(start).Seconds())
 	m.addInflight(weight)
 
-	if ok := m.enqueue(pipelineMsg{
+	if err := m.enqueue(pipelineMsg{
 		subID:       span.subID,
 		msgType:     pipelineMsgData,
 		span:        span,
 		kvs:         kvs,
 		quotaWeight: weight,
-	}); !ok {
+	}); err != nil {
 		m.releaseInflight(weight)
-		return false
+		return err
 	}
-	return true
+	return nil
 }
 
-func (m *spanPipelineManager) EnqueueResolved(span *subscribedSpan, ts uint64) bool {
+func (m *spanPipelineManager) EnqueueResolved(span *subscribedSpan, ts uint64) error {
 	if span == nil || ts == 0 {
-		return true
+		return nil
 	}
 	return m.enqueue(pipelineMsg{
 		subID:   span.subID,
@@ -216,9 +215,6 @@ func (m *spanPipelineManager) EnqueueResolved(span *subscribedSpan, ts uint64) b
 }
 
 func (m *spanPipelineManager) enqueuePersisted(subID SubscriptionID, dataSeq uint64) {
-	log.Info("enqueue persisted callback",
-		zap.Uint64("dataSeq", dataSeq),
-		zap.Uint64("subID", uint64(subID)))
 	_ = m.enqueue(pipelineMsg{
 		subID:   subID,
 		msgType: pipelineMsgPersisted,

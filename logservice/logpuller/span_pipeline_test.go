@@ -38,9 +38,9 @@ func TestSpanPipeline_ResolvedWaitsForPersistedPrefix(t *testing.T) {
 
 	mgr.Register(span)
 
-	require.True(t, mgr.EnqueueData(ctx, span, []common.RawKVEntry{{Key: []byte("a"), CRTs: 1}}))
-	require.True(t, mgr.EnqueueData(ctx, span, []common.RawKVEntry{{Key: []byte("b"), CRTs: 2}}))
-	require.True(t, mgr.EnqueueResolved(span, 100))
+	require.NoError(t, mgr.EnqueueData(span, []common.RawKVEntry{{Key: []byte("a"), CRTs: 1}}))
+	require.NoError(t, mgr.EnqueueData(span, []common.RawKVEntry{{Key: []byte("b"), CRTs: 2}}))
+	require.NoError(t, mgr.EnqueueResolved(span, 100))
 
 	require.Eventually(t, func() bool {
 		mu.Lock()
@@ -96,9 +96,9 @@ func TestSpanPipeline_ResolvedMergeSameWaitSeq(t *testing.T) {
 
 	mgr.Register(span)
 
-	require.True(t, mgr.EnqueueData(ctx, span, []common.RawKVEntry{{Key: []byte("a"), CRTs: 1}}))
-	require.True(t, mgr.EnqueueResolved(span, 10))
-	require.True(t, mgr.EnqueueResolved(span, 12))
+	require.NoError(t, mgr.EnqueueData(span, []common.RawKVEntry{{Key: []byte("a"), CRTs: 1}}))
+	require.NoError(t, mgr.EnqueueResolved(span, 10))
+	require.NoError(t, mgr.EnqueueResolved(span, 12))
 
 	require.Eventually(t, func() bool {
 		mu.Lock()
@@ -157,11 +157,11 @@ func TestSpanPipeline_MultipleSubscriptionsIndependent(t *testing.T) {
 	mgr.Register(span1)
 	mgr.Register(span2)
 
-	require.True(t, mgr.EnqueueData(ctx, span1, []common.RawKVEntry{{Key: []byte("a"), CRTs: 1}}))
-	require.True(t, mgr.EnqueueResolved(span1, 100))
+	require.NoError(t, mgr.EnqueueData(span1, []common.RawKVEntry{{Key: []byte("a"), CRTs: 1}}))
+	require.NoError(t, mgr.EnqueueResolved(span1, 100))
 
-	require.True(t, mgr.EnqueueData(ctx, span2, []common.RawKVEntry{{Key: []byte("b"), CRTs: 1}}))
-	require.True(t, mgr.EnqueueResolved(span2, 200))
+	require.NoError(t, mgr.EnqueueData(span2, []common.RawKVEntry{{Key: []byte("b"), CRTs: 1}}))
+	require.NoError(t, mgr.EnqueueResolved(span2, 200))
 
 	require.Eventually(t, func() bool {
 		mu.Lock()
