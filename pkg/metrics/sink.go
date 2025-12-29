@@ -83,7 +83,7 @@ var (
 			Subsystem: "sink",
 			Name:      "ddl_exec_running",
 			Help:      "Total count of running ddl.",
-		}, []string{getKeyspaceLabel(), "changefeed", "type"}) // type is for `sinkType`
+		}, []string{getKeyspaceLabel(), "changefeed", "type", "ddl_type"}) // type is for `sinkType`
 
 	// ExecutionErrorCounter is the counter of execution errors.
 	ExecutionErrorCounter = prometheus.NewCounterVec(

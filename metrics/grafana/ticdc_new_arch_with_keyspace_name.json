@@ -4655,7 +4655,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_sink_ddl_exec_running{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed,instance)",
+              "expr": "sum(ticdc_sink_ddl_exec_running{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed,instance,ddl_type)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -8763,5 +8763,5 @@
   "timezone": "browser",
   "title": "${DS_TEST-CLUSTER}-TiCDC-New-Arch-KeyspaceName",
   "uid": "lGT5hED6vqTn",
-  "version": 36
+  "version": 37
 }
