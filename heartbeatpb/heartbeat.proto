@@ -160,7 +160,7 @@ message MaintainerBootstrapRequest {
     uint64 start_ts = 3;
     DispatcherID table_trigger_event_dispatcher_id = 4;
     bool is_new_changefeed = 5;                               // only true when the changefeed is new created or resumed with overwriteCheckpointTs
-    DispatcherID redo_table_trigger_event_dispatcher_id = 6;  // only for redo
+    DispatcherID table_trigger_redo_dispatcher_id = 6;  // only for redo
     uint32 keyspace_id = 7;
 }
 
@@ -177,12 +177,16 @@ message MaintainerBootstrapResponse {
     // For nodes without a table trigger event dispatcher:
     // - checkpoint_ts is set to 0
     uint64 checkpoint_ts = 4;
+    // redo_checkpoint_ts is similar to checkpoint_ts, for nodes with a table trigger redo dispatcher.
+    // It will be used when redo enable.
+    uint64 redo_checkpoint_ts = 5;
 }
 
 message MaintainerPostBootstrapRequest {
     ChangefeedID changefeedID = 1;
     DispatcherID table_trigger_event_dispatcher_id = 2;
     repeated SchemaInfo schemas = 3;
+    repeated SchemaInfo redo_schemas = 4;
 }
 
 message MaintainerPostBootstrapResponse {
