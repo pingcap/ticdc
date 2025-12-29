@@ -13361,11 +13361,11 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_sink_ddl_exec_running{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}) by (namespace,changefeed,ticdc_instance)",
+              "expr": "sum(ticdc_sink_ddl_exec_running{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}) by (namespace,changefeed,instance)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{namespace}}-{{changefeed}}-{{ticdc_instance}}",
+              "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}",
               "refId": "A"
             }
           ],
@@ -13420,8 +13420,8 @@
           "gridPos": {
             "h": 8,
             "w": 12,
-            "x": 12,
-            "y": 23
+            "x": 0,
+            "y": 31
           },
           "hiddenSeries": false,
           "id": 615,
@@ -13513,7 +13513,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 23
+            "y": 31
           },
           "hiddenSeries": false,
           "id": 616,
@@ -13601,7 +13601,7 @@
         "x": 0,
         "y": 16
       },
-      "id": 616,
+      "id": 617,
       "panels": [
         {
           "aliasColors": {},

@@ -13361,11 +13361,11 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_sink_ddl_exec_running{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed,ticdc_instance)",
+              "expr": "sum(ticdc_sink_ddl_exec_running{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed,instance)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{ticdc_instance}}",
+              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}",
               "refId": "A"
             }
           ],
@@ -13420,8 +13420,8 @@
           "gridPos": {
             "h": 8,
             "w": 12,
-            "x": 12,
-            "y": 23
+            "x": 0,
+            "y": 31
           },
           "hiddenSeries": false,
           "id": 615,
@@ -13513,7 +13513,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 23
+            "y": 31
           },
           "hiddenSeries": false,
           "id": 616,
@@ -13601,7 +13601,7 @@
         "x": 0,
         "y": 16
       },
-      "id": 616,
+      "id": 617,
       "panels": [
         {
           "aliasColors": {},
