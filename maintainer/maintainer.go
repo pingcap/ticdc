@@ -807,11 +807,13 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 
 	// Record dispatcher set checksum state for checkpoint gating.
 	// When checksum is not OK, we must not advance checkpoint using stale node-level watermarks.
-	m.checksumStateByCapture.Set(msg.From, req.ChecksumState)
-	m.defaultChecksumManager.ObserveHeartbeat(msg.From, req.ChecksumState)
+	if m.checksumStateByCapture.UpdateIfNewer(msg.From, req.ChecksumState, req.ChecksumStateSeq) {
+		m.defaultChecksumManager.ObserveHeartbeat(msg.From, req.ChecksumState)
+	}
 	if m.enableRedo {
-		m.redoChecksumStateByCapture.Set(msg.From, req.RedoChecksumState)
-		m.redoChecksumManager.ObserveHeartbeat(msg.From, req.RedoChecksumState)
+		if m.redoChecksumStateByCapture.UpdateIfNewer(msg.From, req.RedoChecksumState, req.RedoChecksumStateSeq) {
+			m.redoChecksumManager.ObserveHeartbeat(msg.From, req.RedoChecksumState)
+		}
 	}
 
 	// ATOMIC CHECKPOINT UPDATE: Part 1 of race condition fix

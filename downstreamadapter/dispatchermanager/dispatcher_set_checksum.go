@@ -43,7 +43,10 @@ type dispatcherSetChecksumExpected struct {
 // It records the last observed checksum state (OK / MISMATCH / UNINITIALIZED) as well as timestamps
 // to avoid spamming logs when the state stays non-OK.
 type dispatcherSetChecksumRuntime struct {
-	state       heartbeatpb.ChecksumState
+	state heartbeatpb.ChecksumState
+	// seq is a monotonic version for state. It is used to help Maintainer discard out-of-order
+	// heartbeats that would otherwise overwrite a newer checksum state.
+	seq         uint64
 	nonOKSince  time.Time
 	lastLogTime time.Time
 }
@@ -96,12 +99,31 @@ func (e *DispatcherManager) ApplyDispatcherSetChecksumUpdate(req *heartbeatpb.Di
 // It is typically used when DispatcherManager is reset (for example, on bootstrap or epoch changes).
 func (e *DispatcherManager) ResetDispatcherSetChecksum() {
 	e.dispatcherSetChecksum.mu.Lock()
-	defer e.dispatcherSetChecksum.mu.Unlock()
+	defaultSeq := e.dispatcherSetChecksum.defaultRuntime.seq + 1
+	redoSeq := e.dispatcherSetChecksum.redoRuntime.seq + 1
 
 	e.dispatcherSetChecksum.defaultExpected = dispatcherSetChecksumExpected{}
 	e.dispatcherSetChecksum.redoExpected = dispatcherSetChecksumExpected{}
-	e.dispatcherSetChecksum.defaultRuntime = dispatcherSetChecksumRuntime{}
-	e.dispatcherSetChecksum.redoRuntime = dispatcherSetChecksumRuntime{}
+	e.dispatcherSetChecksum.defaultRuntime = dispatcherSetChecksumRuntime{
+		state: heartbeatpb.ChecksumState_UNINITIALIZED,
+		seq:   defaultSeq,
+	}
+	e.dispatcherSetChecksum.redoRuntime = dispatcherSetChecksumRuntime{
+		state: heartbeatpb.ChecksumState_UNINITIALIZED,
+		seq:   redoSeq,
+	}
+	e.dispatcherSetChecksum.mu.Unlock()
+
+	// Force refresh gauges on reset to avoid stale values lingering after runtime state is cleared.
+	keyspace := e.changefeedID.Keyspace()
+	changefeed := e.changefeedID.Name()
+	e.updateDispatcherSetChecksumGauge(keyspace, changefeed, common.StringMode(common.DefaultMode), heartbeatpb.ChecksumState_UNINITIALIZED)
+	if e.RedoEnable {
+		e.updateDispatcherSetChecksumGauge(keyspace, changefeed, common.StringMode(common.RedoMode), heartbeatpb.ChecksumState_UNINITIALIZED)
+	} else {
+		// Clear redo gauge to avoid stale non-zero values when redo is not enabled.
+		e.updateDispatcherSetChecksumGauge(keyspace, changefeed, common.StringMode(common.RedoMode), heartbeatpb.ChecksumState_OK)
+	}
 }
 
 // shouldIncludeDispatcherInChecksum decides whether a dispatcher should be included in runtime checksum calculation.
@@ -156,13 +178,15 @@ func (e *DispatcherManager) applyChecksumStateToHeartbeat(
 		return false, false
 	}
 
-	defaultState := e.verifyDispatcherSetChecksum(common.DefaultMode, defaultChecksum)
+	defaultState, defaultSeq := e.verifyDispatcherSetChecksum(common.DefaultMode, defaultChecksum)
 	msg.ChecksumState = defaultState
+	msg.ChecksumStateSeq = defaultSeq
 	discardDefaultWatermark = defaultState != heartbeatpb.ChecksumState_OK
 
 	if e.RedoEnable {
-		redoState := e.verifyDispatcherSetChecksum(common.RedoMode, redoChecksum)
+		redoState, redoSeq := e.verifyDispatcherSetChecksum(common.RedoMode, redoChecksum)
 		msg.RedoChecksumState = redoState
+		msg.RedoChecksumStateSeq = redoSeq
 		discardRedoWatermark = redoState != heartbeatpb.ChecksumState_OK
 	}
 
@@ -183,7 +207,10 @@ func (e *DispatcherManager) incDispatcherSetChecksumNotOKTotal(mode int64, state
 // verifyDispatcherSetChecksum compares runtime checksum with expected checksum for the mode.
 //
 // It updates runtime state used for per-capture metrics and emits throttled logs when the state is non-OK.
-func (e *DispatcherManager) verifyDispatcherSetChecksum(mode int64, actual set_checksum.Checksum) heartbeatpb.ChecksumState {
+func (e *DispatcherManager) verifyDispatcherSetChecksum(
+	mode int64,
+	actual set_checksum.Checksum,
+) (state heartbeatpb.ChecksumState, stateSeq uint64) {
 	now := time.Now()
 	modeLabel := common.StringMode(mode)
 	keyspace := e.changefeedID.Keyspace()
@@ -195,11 +222,15 @@ func (e *DispatcherManager) verifyDispatcherSetChecksum(mode int64, actual set_c
 	expectedSeq := expected.seq
 	expectedInit := expected.initialized
 	expectedChecksum := expected.checksum
-	state := computeChecksumState(*expected, actual)
+	state = computeChecksumState(*expected, actual)
 
 	oldState := runtime.state
+	if oldState != state {
+		runtime.seq++
+	}
 
 	nonOKSince, logNotOK := updateChecksumRuntime(runtime, oldState, state, now)
+	stateSeq = runtime.seq
 	e.dispatcherSetChecksum.mu.Unlock()
 
 	if oldState != state {
@@ -222,7 +253,7 @@ func (e *DispatcherManager) verifyDispatcherSetChecksum(mode int64, actual set_c
 		log.Warn("dispatcher set checksum not ok, skip watermark reporting", fields...)
 	}
 
-	return state
+	return state, stateSeq
 }
 
 // getDispatcherSetChecksumStates returns pointers to expected/runtime states for the given mode.

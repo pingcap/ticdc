@@ -20,6 +20,7 @@ import (
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
+	"github.com/pingcap/ticdc/maintainer/testutil"
 	"github.com/pingcap/ticdc/pkg/bootstrap"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -71,6 +72,7 @@ func TestCalculateNewCheckpointTsGatedByChecksumState(t *testing.T) {
 	appcontext.SetService(appcontext.MessageCenter, &recordingMessageCenter{})
 	appcontext.SetService(watcher.NodeManagerName, watcher.NewNodeManager(nil, nil))
 	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+	appcontext.SetService(appcontext.RegionCache, testutil.NewMockRegionCache())
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	self := node.NewInfo("127.0.0.1:0", "127.0.0.1:0")
@@ -130,8 +132,8 @@ func TestCalculateNewCheckpointTsGatedByChecksumState(t *testing.T) {
 
 	m.checkpointTsByCapture.Set(self.ID, heartbeatpb.Watermark{CheckpointTs: 200, ResolvedTs: 200, Seq: 1})
 	m.checkpointTsByCapture.Set(other.ID, heartbeatpb.Watermark{CheckpointTs: 200, ResolvedTs: 200, Seq: 1})
-	m.checksumStateByCapture.Set(self.ID, heartbeatpb.ChecksumState_OK)
-	m.checksumStateByCapture.Set(other.ID, heartbeatpb.ChecksumState_UNINITIALIZED)
+	m.checksumStateByCapture.UpdateIfNewer(self.ID, heartbeatpb.ChecksumState_OK, 0)
+	m.checksumStateByCapture.UpdateIfNewer(other.ID, heartbeatpb.ChecksumState_UNINITIALIZED, 0)
 
 	_, ok := m.calculateNewCheckpointTs()
 	require.False(t, ok)
@@ -142,6 +144,7 @@ func TestAdvanceRedoMetaTsOnceGatedByChecksumState(t *testing.T) {
 	appcontext.SetService(appcontext.MessageCenter, mc)
 	appcontext.SetService(watcher.NodeManagerName, watcher.NewNodeManager(nil, nil))
 	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+	appcontext.SetService(appcontext.RegionCache, testutil.NewMockRegionCache())
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
 	self := node.NewInfo("127.0.0.1:0", "127.0.0.1:0")
@@ -210,8 +213,8 @@ func TestAdvanceRedoMetaTsOnceGatedByChecksumState(t *testing.T) {
 	m.redoTsByCapture.Set(self.ID, heartbeatpb.Watermark{CheckpointTs: 200, ResolvedTs: 200, Seq: 1})
 	m.redoTsByCapture.Set(other.ID, heartbeatpb.Watermark{CheckpointTs: 200, ResolvedTs: 200, Seq: 1})
 
-	m.redoChecksumStateByCapture.Set(self.ID, heartbeatpb.ChecksumState_OK)
-	m.redoChecksumStateByCapture.Set(other.ID, heartbeatpb.ChecksumState_UNINITIALIZED)
+	m.redoChecksumStateByCapture.UpdateIfNewer(self.ID, heartbeatpb.ChecksumState_OK, 0)
+	m.redoChecksumStateByCapture.UpdateIfNewer(other.ID, heartbeatpb.ChecksumState_UNINITIALIZED, 0)
 
 	mc.reset()
 	m.advanceRedoMetaTsOnce()
