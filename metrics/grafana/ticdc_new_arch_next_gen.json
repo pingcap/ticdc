@@ -13222,7 +13222,7 @@
           "gridPos": {
             "h": 8,
             "w": 12,
-            "x": 12,
+            "x": 0,
             "y": 31
           },
           "hiddenSeries": false,
@@ -23358,7 +23358,6 @@
         "x": 0,
         "y": 26
       },
-      "id": 607,
       "panels": [
         {
           "aliasColors": {},
@@ -23651,6 +23650,7 @@
           }
         }
       ],
+      "id": 607,
       "title": "DDL",
       "type": "row"
     }

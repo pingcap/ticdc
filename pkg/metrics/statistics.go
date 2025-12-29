@@ -32,8 +32,8 @@ func NewStatistics(
 
 	keyspace := changefeed.Keyspace()
 	changefeedID := changefeed.Name()
-	statistics.metricExecDDLHis = ExecDDLHistogram.WithLabelValues(keyspace, changefeedID, sinkType)
-	statistics.metricExecDDLRunningCnt = ExecDDLRunningGauge.WithLabelValues(keyspace, changefeedID, sinkType)
+	statistics.metricExecDDLHis = ExecDDLHistogram.WithLabelValues(keyspace, changefeedID)
+	statistics.metricExecDDLRunningCnt = ExecDDLRunningGauge.WithLabelValues(keyspace, changefeedID)
 	statistics.metricExecBatchHis = ExecBatchHistogram.WithLabelValues(keyspace, changefeedID, sinkType)
 	statistics.metricExecBatchBytesHis = ExecBatchWriteBytesHistogram.WithLabelValues(keyspace, changefeedID, sinkType)
 	statistics.metricTotalWriteBytesCnt = TotalWriteBytesCounter.WithLabelValues(keyspace, changefeedID, sinkType)
@@ -89,7 +89,7 @@ func (b *Statistics) RecordDDLExecution(ddlType string, executor func() error) e
 	defer b.metricExecDDLRunningCnt.Dec()
 
 	metricExecDDLCounter := ExecDDLCounter.WithLabelValues(
-		b.changefeedID.Keyspace(), b.changefeedID.Name(), b.sinkType, ddlType)
+		b.changefeedID.Keyspace(), b.changefeedID.Name(), ddlType)
 	metricExecDDLCounter.Inc()
 
 	start := time.Now()
