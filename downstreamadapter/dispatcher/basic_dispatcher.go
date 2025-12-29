@@ -855,8 +855,10 @@ func (d *BasicDispatcher) holdBlockEvent(event commonEvent.BlockEvent) {
 		d.holdingBlockEventMu.Unlock()
 		return
 	}
+
 	d.holdingBlockEvent = event
 	d.holdingBlockEventMu.Unlock()
+	log.Info("dispatcher hold block event", zap.Any("dispatcherID", d.id), zap.Any("event", event))
 
 	// double check here to avoid pendingACKCount becomes zero before we hold the event
 	if d.pendingACKCount.Load() == 0 {
@@ -872,6 +874,7 @@ func (d *BasicDispatcher) popHoldingBlockEvent() commonEvent.BlockEvent {
 	defer d.holdingBlockEventMu.Unlock()
 	event := d.holdingBlockEvent
 	d.holdingBlockEvent = nil
+	log.Info("dispatcher pop the holding block event", zap.Any("dispatcherID", d.id), zap.Any("event", event))
 	return event
 }
 
