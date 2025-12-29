@@ -174,8 +174,7 @@ type BasicDispatcher struct {
 
 	// pendingACKCount is only used by the table trigger dispatcher.
 	//
-	// It tracks the number of DDLs that need to report to maintainer(i.e. DDLs that add/drop tables),
-	// but have not been ACKed by maintainer (i.e. maintainer has not finished scheduling add/drop tasks).
+	// It tracks the number of events reported to the maintainer by the table trigger dispatcher that are awaiting an ACK.
 	pendingACKCount atomic.Int64
 
 	// holdingBlockEvent is only used by the table trigger dispatcher.
@@ -858,7 +857,7 @@ func (d *BasicDispatcher) holdBlockEvent(event commonEvent.BlockEvent) {
 
 	d.holdingBlockEvent = event
 	d.holdingBlockEventMu.Unlock()
-	log.Info("dispatcher hold block event", zap.Any("dispatcherID", d.id), zap.Any("event", event))
+	log.Info("dispatcher hold block event", zap.Stringer("dispatcherID", d.id), zap.Uint64("commitTs", event.GetCommitTs()))
 
 	// double check here to avoid pendingACKCount becomes zero before we hold the event
 	if d.pendingACKCount.Load() == 0 {
@@ -874,7 +873,7 @@ func (d *BasicDispatcher) popHoldingBlockEvent() commonEvent.BlockEvent {
 	defer d.holdingBlockEventMu.Unlock()
 	event := d.holdingBlockEvent
 	d.holdingBlockEvent = nil
-	log.Info("dispatcher pop the holding block event", zap.Any("dispatcherID", d.id), zap.Any("event", event))
+	log.Info("dispatcher pop the holding block event", zap.Stringer("dispatcherID", d.id), zap.Uint64("commitTs", event.GetCommitTs()))
 	return event
 }
 
