@@ -130,7 +130,7 @@ func newRegionRequestWorker(
 						state:  state,
 						worker: worker,
 					}
-					_ = worker.client.pushRegionEventToDS(subID, regionEvent)
+					_ = worker.client.pushRegionEventToDS(subID, regionEvent, true)
 				}
 			}
 			// The store may fail forever, so we need try to re-schedule all pending regions.
@@ -274,7 +274,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 			default:
 				log.Panic("unknown event type", zap.Any("event", event))
 			}
-			_ = s.client.pushRegionEventToDS(SubscriptionID(event.RequestId), regionEvent)
+			_ = s.client.pushRegionEventToDS(SubscriptionID(event.RequestId), regionEvent, true)
 		} else {
 			switch event.Event.(type) {
 			case *cdcpb.Event_Error:
@@ -389,7 +389,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 					state:  state,
 					worker: s,
 				}
-				_ = s.client.pushRegionEventToDS(subID, regionEvent)
+				_ = s.client.pushRegionEventToDS(subID, regionEvent, true)
 			}
 
 		} else if region.subscribedSpan.stopped.Load() {

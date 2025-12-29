@@ -413,13 +413,13 @@ func (s *subscriptionClient) wakeSubscription(subID SubscriptionID) {
 	s.ds.Wake(subID)
 }
 
-func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) bool {
+func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent, force bool) bool {
 	// fast path
 	if !s.paused.Load() {
 		s.ds.Push(subID, event)
 		return true
 	}
-	if event.state == nil && event.resolvedTs != 0 {
+	if !force {
 		return false
 	}
 	// slow path: wait until paused is false
@@ -476,7 +476,7 @@ func (s *subscriptionClient) emitResolvedTs(subID SubscriptionID, resolvedTs uin
 	if resolvedTs == 0 {
 		return
 	}
-	if s.pushRegionEventToDS(subID, regionEvent{subID: subID, resolvedTs: resolvedTs}) {
+	if s.pushRegionEventToDS(subID, regionEvent{subID: subID, resolvedTs: resolvedTs}, false) {
 		delete(s.pendingResolved.events, subID)
 		return
 	}
@@ -487,7 +487,7 @@ func (s *subscriptionClient) flushPendingResolvedTs() {
 	s.pendingResolved.Lock()
 	defer s.pendingResolved.Unlock()
 	for subID, ts := range s.pendingResolved.events {
-		if s.pushRegionEventToDS(subID, regionEvent{subID: subID, resolvedTs: ts}) {
+		if s.pushRegionEventToDS(subID, regionEvent{subID: subID, resolvedTs: ts}, false) {
 			delete(s.pendingResolved.events, subID)
 		}
 	}

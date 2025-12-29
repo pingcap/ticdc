@@ -261,7 +261,7 @@ func TestPushRegionEventToDSResolvedFastFailure(t *testing.T) {
 	client.paused.Store(true)
 
 	event := regionEvent{subID: 1, resolvedTs: 10}
-	ok := client.pushRegionEventToDS(SubscriptionID(1), event)
+	ok := client.pushRegionEventToDS(SubscriptionID(1), event, false)
 	require.False(t, ok)
 	require.Equal(t, 0, mockDS.pushCount())
 }
@@ -290,7 +290,7 @@ func TestPushRegionEventToDSDataWaitsForResume(t *testing.T) {
 		state: &regionFeedState{},
 	}
 	start := time.Now()
-	ok := client.pushRegionEventToDS(SubscriptionID(2), dataEvent)
+	ok := client.pushRegionEventToDS(SubscriptionID(2), dataEvent, true)
 	elapsed := time.Since(start)
 	require.True(t, ok)
 	require.GreaterOrEqual(t, mockDS.pushCount(), 1)
