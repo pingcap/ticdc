@@ -129,9 +129,8 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 // Batch SQL generation is used when:
 // 1. BatchDMLEnable = true, and rows > 1
 // 2. The table has a pk or not null unique key
-// 3. The table doesn't have virtual columns
-// 4. There's more than one row in the group
-// 5. All events have the same safe mode status
+// 3. There's more than one row in the group
+// 4. All events have the same safe mode status
 func (w *Writer) shouldGenBatchSQL(hasPKOrNotNullUK bool, events []*commonEvent.DMLEvent) bool {
 	if !w.cfg.BatchDMLEnable {
 		return false
