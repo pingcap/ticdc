@@ -175,6 +175,12 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 	}
 
 	if total == 0 {
+		log.Info("write DDL event to downstream",
+			zap.String("schema", ddl.GetSchemaName()),
+			zap.String("table", ddl.GetTableName()),
+			zap.Uint64("commitTs", ddl.GetCommitTs()),
+			zap.String("query", ddl.Query),
+			zap.Any("type", ddl.Type))
 		return w.mysqlSink.WriteBlockEvent(ddl)
 	}
 	for _, e := range resolvedEvents {
@@ -183,6 +189,14 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 				close(done)
 			}
 		})
+		log.Info("write DML event to downstream",
+			zap.String("schema", e.TableInfo.GetSchemaName()),
+			zap.String("table", e.TableInfo.GetTableName()),
+			zap.Int64("tableID", e.GetTableID()),
+			zap.Uint64("commitTs", e.GetCommitTs()),
+			zap.Uint64("startTs", e.GetStartTs()),
+			zap.Int32("rowCount", e.Len()),
+			zap.String("rows", e.String()))
 		w.mysqlSink.AddDMLEvent(e)
 	}
 
@@ -198,6 +212,12 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 			log.Info("flush DML events before DDL done", zap.Uint64("DDLCommitTs", commitTs),
 				zap.Int("total", total), zap.Duration("duration", time.Since(start)),
 				zap.Any("tables", tableIDs))
+			log.Info("write DDL event to downstream",
+				zap.String("schema", ddl.GetSchemaName()),
+				zap.String("table", ddl.GetTableName()),
+				zap.Uint64("commitTs", ddl.GetCommitTs()),
+				zap.String("query", ddl.Query),
+				zap.Any("type", ddl.Type))
 			return w.mysqlSink.WriteBlockEvent(ddl)
 		case <-ticker.C:
 			log.Warn("DML events cannot be flushed in time",
@@ -292,8 +312,15 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 				close(done)
 			}
 		})
+		log.Info("write DML event to downstream",
+			zap.String("schema", e.TableInfo.GetSchemaName()),
+			zap.String("table", e.TableInfo.GetTableName()),
+			zap.Int64("tableID", e.GetTableID()),
+			zap.Uint64("commitTs", e.GetCommitTs()),
+			zap.Uint64("startTs", e.GetStartTs()),
+			zap.Int32("rowCount", e.Len()),
+			zap.String("rows", e.String()))
 		w.mysqlSink.AddDMLEvent(e)
-		log.Info("flush DML event", zap.Int64("tableID", e.GetTableID()), zap.Uint64("commitTs", e.GetCommitTs()), zap.Any("startTs", e.GetStartTs()))
 	}
 
 	log.Info("flush DML events by watermark", zap.Uint64("watermark", watermark), zap.Int("total", total))
