@@ -3412,7 +3412,7 @@
             "x": 12,
             "y": 31
           },
-          "id": 22473,
+          "id": 21473,
           "options": {
             "showHeader": true,
             "sortBy": []
@@ -11299,7 +11299,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The rate of skip scan count in eventService ",
+          "description": "The rate of skip scan count in eventService",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
