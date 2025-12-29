@@ -880,8 +880,8 @@ func (d *BasicDispatcher) popHoldingBlockEvent() commonEvent.BlockEvent {
 
 func (d *BasicDispatcher) reportBlockedEventToMaintainer(event commonEvent.BlockEvent) {
 	if d.IsTableTriggerEventDispatcher() {
-		// If this is a table trigger event dispatcher, and need to report a block event to maintainer,
-		// we need to increment pendingACKCount to track the un-ACKed schedule-related DDL.
+		// If this is a table trigger event dispatcher, we need to increment pendingACKCount
+		// for any block event reported to the maintainer to track un-ACKed events.
 		d.pendingACKCount.Add(1)
 	}
 	d.blockEventStatus.setBlockEvent(event, heartbeatpb.BlockStage_WAITING)
