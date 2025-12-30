@@ -28,14 +28,11 @@ import (
 )
 
 type regionEvent struct {
-	state *regionFeedState
+	states []*regionFeedState
 
 	// only one of the following fields is set
 	entries    *cdcpb.Event_Entries_
 	resolvedTs uint64
-
-	// resolved ts batch update (a single cdcpb.ResolvedTs message)
-	states []*regionFeedState
 }
 
 type regionEventProcessor struct {
@@ -85,10 +82,13 @@ func (p *regionEventProcessor) close() {
 }
 
 func (p *regionEventProcessor) dispatch(event regionEvent) {
-	if p == nil || p.closed.Load() || event.state == nil {
+	if p == nil || p.closed.Load() || len(event.states) == 0 || event.states[0] == nil {
 		return
 	}
-	regionID := event.state.getRegionID()
+	if len(event.states) != 1 {
+		log.Panic("should not happen: dispatch multi-region event", zap.Any("event", event))
+	}
+	regionID := event.states[0].getRegionID()
 	idx := regionID % p.workerCount
 	p.workerChans[idx] <- event
 }
@@ -107,9 +107,6 @@ func (p *regionEventProcessor) dispatchResolvedTsBatch(resolvedTs uint64, states
 
 	shards := make([][]*regionFeedState, p.workerCount)
 	for _, state := range states {
-		if state == nil {
-			continue
-		}
 		idx := state.getRegionID() % p.workerCount
 		shards[idx] = append(shards[idx], state)
 	}
@@ -126,8 +123,22 @@ func (p *regionEventProcessor) dispatchResolvedTsBatch(resolvedTs uint64, states
 
 func (p *regionEventProcessor) run(ch <-chan regionEvent) {
 	for event := range ch {
-		if event.state != nil {
-			state := event.state
+		if len(event.states) != 0 && event.resolvedTs != 0 && event.entries == nil && len(event.states) > 1 {
+			span, triggerRegionID := p.handleResolvedTsBatch(event.resolvedTs, event.states)
+			if span == nil {
+				continue
+			}
+			if ts := maybeAdvanceSpanResolvedTs(span, triggerRegionID); ts != 0 {
+				p.subClient.pushSubscriptionEventToDS(span.subID, subscriptionEvent{
+					subID:      span.subID,
+					resolvedTs: ts,
+				})
+			}
+			continue
+		}
+
+		if len(event.states) == 1 && event.states[0] != nil {
+			state := event.states[0]
 			if state.isStale() {
 				p.handleRegionError(state)
 				continue
@@ -155,20 +166,6 @@ func (p *regionEventProcessor) run(ch <-chan regionEvent) {
 				}
 			default:
 				log.Panic("unknown region event", zap.Any("event", event))
-			}
-			continue
-		}
-
-		if event.resolvedTs != 0 && len(event.states) != 0 {
-			span, triggerRegionID := p.handleResolvedTsBatch(event.resolvedTs, event.states)
-			if span == nil {
-				continue
-			}
-			if ts := maybeAdvanceSpanResolvedTs(span, triggerRegionID); ts != 0 {
-				p.subClient.pushSubscriptionEventToDS(span.subID, subscriptionEvent{
-					subID:      span.subID,
-					resolvedTs: ts,
-				})
 			}
 			continue
 		}
