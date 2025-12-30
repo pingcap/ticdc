@@ -37,6 +37,15 @@ var (
 			Help:      "Total count of running ddl.",
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
+	// ExecDDLBlockingGauge records the count of blocking DDL.
+	ExecDDLBlockingGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "ddl",
+			Name:      "exec_blocking",
+			Help:      "Total count of blocking ddl.",
+		}, []string{getKeyspaceLabel(), "changefeed", "mode"})
+
 	// ExecDDLCounter records the execution count of different DDL types
 	ExecDDLCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -50,5 +59,6 @@ var (
 func initDDLMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(ExecDDLHistogram)
 	registry.MustRegister(ExecDDLRunningGauge)
+	registry.MustRegister(ExecDDLBlockingGauge)
 	registry.MustRegister(ExecDDLCounter)
 }
