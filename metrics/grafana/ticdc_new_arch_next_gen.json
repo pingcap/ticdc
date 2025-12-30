@@ -952,12 +952,12 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_dispatchermanager_table_event_dispatcher_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (instance, changefeed)",
+              "expr": "sum(ticdc_dispatchermanager_table_event_dispatcher_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (instance, changefeed, event_type)",
               "format": "time_series",
               "hide": false,
               "interval": "",
               "intervalFactor": 2,
-              "legendFormat": "{{instance}}-{{changefeed}}",
+              "legendFormat": "{{instance}}-{{changefeed}}-{{event_type}}",
               "refId": "A",
               "step": 10
             }
@@ -3394,70 +3394,70 @@
               "show": false
             }
           ],
-	          "yaxis": {
-	            "align": false,
-	            "alignLevel": null
-	          }
-	        },
-		        {
-		          "datasource": "${DS_TEST-CLUSTER}",
-		          "description": "Build metadata of each TiCDC server instance.",
-		          "fieldConfig": {
-		            "defaults": {},
-		            "overrides": []
-		          },
-		          "gridPos": {
-		            "h": 9,
-		            "w": 12,
-		            "x": 12,
-		            "y": 31
-		          },
-		          "id": 22473,
-		          "options": {
-		            "showHeader": true,
-		            "sortBy": []
-		          },
-			          "pluginVersion": "7.5.17",
-			          "transformations": [
-			            {
-			              "id": "labelsToFields",
-			              "options": {}
-			            },
-			            {
-			              "id": "organize",
-			              "options": {
-				                "excludeByName": {
-				                  "Metric": true,
-				                  "Time": true,
-				                  "Value": true,
-				                  "__name__": true
-				                },
-				                "indexByName": {
-				                  "instance": 0,
-				                  "kernel_type": 1,
-				                  "git_hash": 2,
-				                  "release_version": 3,
-				                  "utc_build_time": 4
-				                },
-				                "renameByName": {}
-				              }
-				            }
-				          ],
-			          "targets": [
-			            {
-				              "expr": "max by (instance, kernel_type, git_hash, release_version, utc_build_time) (ticdc_server_build_info{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"})",
-				              "format": "time_series",
-				              "instant": true,
-				              "refId": "A"
-				            }
-				          ],
-		          "title": "Build Info",
-		          "type": "table"
-		        }
-	      ],
-	      "title": "Server",
-	      "type": "row"
-	    },
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Build metadata of each TiCDC server instance.",
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 12,
+            "y": 31
+          },
+          "id": 22473,
+          "options": {
+            "showHeader": true,
+            "sortBy": []
+          },
+          "pluginVersion": "7.5.17",
+          "transformations": [
+            {
+              "id": "labelsToFields",
+              "options": {}
+            },
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Metric": true,
+                  "Time": true,
+                  "Value": true,
+                  "__name__": true
+                },
+                "indexByName": {
+                  "instance": 0,
+                  "kernel_type": 1,
+                  "git_hash": 2,
+                  "release_version": 3,
+                  "utc_build_time": 4
+                },
+                "renameByName": {}
+              }
+            }
+          ],
+          "targets": [
+            {
+              "expr": "max by (instance, kernel_type, git_hash, release_version, utc_build_time) (ticdc_server_build_info{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"})",
+              "format": "time_series",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "title": "Build Info",
+          "type": "table"
+        }
+      ],
+      "title": "Server",
+      "type": "row"
+    },
     {
       "collapsed": true,
       "datasource": null,
@@ -12028,12 +12028,12 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_dispatchermanager_table_event_dispatcher_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (instance, changefeed)",
+              "expr": "sum(ticdc_dispatchermanager_table_event_dispatcher_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (instance, changefeed, event_type)",
               "format": "time_series",
               "hide": false,
               "interval": "",
               "intervalFactor": 2,
-              "legendFormat": "{{instance}}-{{changefeed}}",
+              "legendFormat": "{{instance}}-{{changefeed}}-{{event_type}}",
               "refId": "A",
               "step": 10
             }
@@ -12141,12 +12141,12 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_dispatchermanager_table_trigger_event_dispatcher_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (instance, changefeed)",
+              "expr": "sum(ticdc_dispatchermanager_table_trigger_event_dispatcher_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (instance, changefeed, event_type)",
               "format": "time_series",
               "hide": false,
               "interval": "",
               "intervalFactor": 2,
-              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}",
+              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-{{event_type}}",
               "refId": "A",
               "step": 10
             }
@@ -12244,27 +12244,27 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.90, sum(rate(ticdc_sink_create_dispatcher_duration_bucket{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,changefeed,instance))",
+              "expr": "histogram_quantile(0.90, sum(rate(ticdc_sink_create_dispatcher_duration_bucket{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,changefeed,instance,event_type))",
               "interval": "",
-              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-detect-P90",
+              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-{{event_type}}-detect-P90",
               "queryType": "randomWalk",
               "refId": "C"
             },
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.95, sum(rate(ticdc_sink_create_dispatcher_duration_bucket{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,changefeed,instance))",
+              "expr": "histogram_quantile(0.95, sum(rate(ticdc_sink_create_dispatcher_duration_bucket{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,changefeed,instance,event_type))",
               "hide": false,
               "interval": "",
-              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-detect-P95",
+              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-{{event_type}}-detect-P95",
               "queryType": "randomWalk",
               "refId": "A"
             },
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.99, sum(rate(ticdc_sink_create_dispatcher_duration_bucket{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,changefeed,instance))",
+              "expr": "histogram_quantile(0.99, sum(rate(ticdc_sink_create_dispatcher_duration_bucket{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,changefeed,instance,event_type))",
               "hide": false,
               "interval": "",
-              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-detect-P99",
+              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-{{event_type}}-detect-P99",
               "queryType": "randomWalk",
               "refId": "B"
             }
