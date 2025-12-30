@@ -14,6 +14,7 @@
 package dispatcher
 
 import (
+	"fmt"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -832,15 +833,23 @@ func (d *BasicDispatcher) cancelResendTask(identifier BlockEventIdentifier) {
 
 	if d.IsTableTriggerEventDispatcher() {
 		d.pendingACKCount.Add(-1)
-		// If there is a held DB/All block event, report it as soon as all resend tasks are ACKed.
-		// For schedule-related non-blocking DDLs, the maintainer only ACKs after scheduling is done.
-		// For schedule-related blocking DDLs, the maintainer will only begin deal with after no pending scheduling tasks.
-		// Thus, we ensure DB/All block events can genereate correct range checkers.
-		if d.pendingACKCount.Load() == 0 {
-			if holding := d.popHoldingBlockEvent(); holding != nil {
-				d.reportBlockedEventToMaintainer(holding)
-			}
+		d.tryDealWithHeldBlockEvent()
+	}
+}
+
+func (d *BasicDispatcher) tryDealWithHeldBlockEvent() {
+	// If there is a held DB/All block event, report it as soon as all resend tasks are ACKed.
+	// For schedule-related non-blocking DDLs, the maintainer only ACKs after scheduling is done.
+	// For schedule-related blocking DDLs, the maintainer will only begin deal with after no pending scheduling tasks.
+	// Thus, we ensure DB/All block events can genereate correct range checkers.
+	if d.pendingACKCount.Load() == 0 {
+		if holding := d.popHoldingBlockEvent(); holding != nil {
+			d.reportBlockedEventToMaintainer(holding)
 		}
+	} else if d.pendingACKCount.Load() < 0 {
+		d.HandleError(errors.ErrDispatcherFailed.GenWithStackByArgs(
+			fmt.Sprintf(("pendingACKCount should not be negative, dispatcherID: %s, pendingACKCount: %d"), d.id, d.pendingACKCount.Load())
+		))
 	}
 }
 
@@ -860,12 +869,7 @@ func (d *BasicDispatcher) holdBlockEvent(event commonEvent.BlockEvent) {
 	log.Info("dispatcher hold block event", zap.Stringer("dispatcherID", d.id), zap.Uint64("commitTs", event.GetCommitTs()))
 
 	// double check here to avoid pendingACKCount becomes zero before we hold the event
-	if d.pendingACKCount.Load() == 0 {
-		holding := d.popHoldingBlockEvent()
-		if holding != nil {
-			d.reportBlockedEventToMaintainer(holding)
-		}
-	}
+	d.tryDealWithHeldBlockEvent()
 }
 
 func (d *BasicDispatcher) popHoldingBlockEvent() commonEvent.BlockEvent {
