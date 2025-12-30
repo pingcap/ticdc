@@ -45,10 +45,12 @@ type regionEvent struct {
 
 	// Resolved-ts events: `resolvedTs` and `resolvedTsStates` are set together.
 	// For a single-region resolved-ts event, `resolvedTsStates` contains exactly one state.
+	// Note: for resolved-ts events, `state` must be nil (see regionRequestWorker.dispatchRegionChangeEvents
+	// and regionRequestWorker.dispatchResolvedTsEvent).
 	resolvedTs       uint64
 	resolvedTsStates []*regionFeedState
 
-	worker *regionRequestWorker
+	worker *regionRequestWorker // TODO: remove the field
 }
 
 func (event *regionEvent) getSize() int {
@@ -100,7 +102,11 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 		if event.entries != nil {
 			handleEventEntries(span, event.state, event.entries)
 		} else if event.resolvedTs != 0 {
-			for _, state := range event.resolvedTsStates {
+			resolvedStates := event.resolvedTsStates
+			for _, state := range resolvedStates {
+				if state == nil {
+					continue
+				}
 				resolvedTs := handleResolvedTs(span, state, event.resolvedTs)
 				if resolvedTs > newResolvedTs {
 					newResolvedTs = resolvedTs
