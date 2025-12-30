@@ -268,6 +268,9 @@ func NewDispatcherManager(
 	if err != nil {
 		return nil, 0, errors.Trace(err)
 	}
+	// Initialize dispatcher set checksum states and related metrics on bootstrap.
+	// NewDispatcherManager sets maintainer metadata directly, so UpdateMaintainer won't be called to trigger a reset.
+	manager.ResetDispatcherSetChecksum()
 
 	manager.wg.Add(1)
 	go func() {

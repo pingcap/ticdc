@@ -98,7 +98,6 @@ func (e *DispatcherManager) ApplyDispatcherSetChecksumUpdate(req *heartbeatpb.Di
 //
 // It is typically used when DispatcherManager is reset (for example, on bootstrap or epoch changes).
 func (e *DispatcherManager) ResetDispatcherSetChecksum() {
-	log.Info("reset dispatcher set checksum")
 	e.dispatcherSetChecksum.mu.Lock()
 	defaultSeq := e.dispatcherSetChecksum.defaultRuntime.seq + 1
 	redoSeq := e.dispatcherSetChecksum.redoRuntime.seq + 1
@@ -199,10 +198,19 @@ func (e *DispatcherManager) incDispatcherSetChecksumNotOKTotal(mode int64, state
 	if state == heartbeatpb.ChecksumState_OK {
 		return
 	}
+	switch state {
+	case heartbeatpb.ChecksumState_OK:
+		return
+	case heartbeatpb.ChecksumState_MISMATCH:
+		metrics.DispatcherManagerDispatcherSetChecksumNotOKTotal.WithLabelValues(
+			e.changefeedID.Keyspace(), e.changefeedID.Name(), common.StringMode(mode), "mismatch",
+		).Inc()
+	case heartbeatpb.ChecksumState_UNINITIALIZED:
+		metrics.DispatcherManagerDispatcherSetChecksumNotOKTotal.WithLabelValues(
+			e.changefeedID.Keyspace(), e.changefeedID.Name(), common.StringMode(mode), "uninitialized",
+		).Inc()
+	}
 
-	metrics.DispatcherManagerDispatcherSetChecksumNotOKTotal.WithLabelValues(
-		e.changefeedID.Keyspace(), e.changefeedID.Name(), common.StringMode(mode), checksumStateLabel(state),
-	).Inc()
 }
 
 // verifyDispatcherSetChecksum compares runtime checksum with expected checksum for the mode.
@@ -234,16 +242,6 @@ func (e *DispatcherManager) verifyDispatcherSetChecksum(
 	stateSeq = runtime.seq
 	e.dispatcherSetChecksum.mu.Unlock()
 
-	log.Info("verified dispatcher set checksum",
-		zap.Any("oldState", oldState.String()),
-		zap.Any("newState", state.String()),
-		zap.Stringer("changefeedID", e.changefeedID),
-		zap.String("mode", modeLabel),
-		zap.Uint64("expectedSeq", expectedSeq),
-		zap.Bool("expectedInitialized", expectedInit),
-		zap.Any("actualChecksum", actual),
-		zap.Any("expectedChecksum", expectedChecksum),
-	)
 	if oldState != state {
 		e.updateDispatcherSetChecksumGauge(keyspace, changefeed, modeLabel, state)
 	}
@@ -253,7 +251,7 @@ func (e *DispatcherManager) verifyDispatcherSetChecksum(
 		fields := []zap.Field{
 			zap.Stringer("changefeedID", e.changefeedID),
 			zap.String("mode", modeLabel),
-			zap.String("state", checksumStateLabel(state)),
+			zap.String("state", state.String()),
 			zap.Duration("duration", notOKFor),
 			zap.Uint64("expectedSeq", expectedSeq),
 			zap.Bool("expectedInitialized", expectedInit),
@@ -289,14 +287,6 @@ func computeChecksumState(expected dispatcherSetChecksumExpected, actual set_che
 	return heartbeatpb.ChecksumState_OK
 }
 
-// checksumStateLabel maps checksum states to label values used by metrics/logging.
-func checksumStateLabel(state heartbeatpb.ChecksumState) string {
-	if state == heartbeatpb.ChecksumState_UNINITIALIZED {
-		return "uninitialized"
-	}
-	return "mismatch"
-}
-
 // updateDispatcherSetChecksumGauge updates the per-capture gauge reflecting the current checksum state.
 func (e *DispatcherManager) updateDispatcherSetChecksumGauge(
 	keyspace string,
@@ -304,20 +294,7 @@ func (e *DispatcherManager) updateDispatcherSetChecksumGauge(
 	modeLabel string,
 	state heartbeatpb.ChecksumState,
 ) {
-	log.Info("updating dispatcher set checksum gauge",
-		zap.String("keyspace", keyspace),
-		zap.String("changefeed", changefeed),
-		zap.String("mode", modeLabel),
-		zap.String("state", checksumStateLabel(state)),
-	)
 	setGauge := func(stateLabel string, value float64) {
-		log.Info("set dispatcher set checksum gauge",
-			zap.String("keyspace", keyspace),
-			zap.String("changefeed", changefeed),
-			zap.String("mode", modeLabel),
-			zap.String("state", stateLabel),
-			zap.Float64("value", value),
-		)
 		metrics.DispatcherManagerDispatcherSetChecksumNotOKGauge.WithLabelValues(
 			keyspace, changefeed, modeLabel, stateLabel,
 		).Set(value)
@@ -334,12 +311,6 @@ func (e *DispatcherManager) updateDispatcherSetChecksumGauge(
 		setGauge("mismatch", 0)
 		setGauge("uninitialized", 1)
 	}
-	// setGauge("mismatch", 0)
-	// setGauge("uninitialized", 0)
-
-	// if state != heartbeatpb.ChecksumState_OK {
-	// 	setGauge(checksumStateLabel(state), 1)
-	// }
 }
 
 // updateChecksumRuntime updates runtime bookkeeping and decides whether to emit a non-OK log.
