@@ -1002,16 +1002,16 @@ func (e *DispatcherManager) cleanMetrics() {
 	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
 	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
 
-	keyspace := e.changefeedID.Keyspace()
+    keyspace := e.changefeedID.Keyspace()
 	changefeed := e.changefeedID.Name()
-	for _, state := range []string{"mismatch", "uninitialized"} {
-		metrics.DispatcherManagerDispatcherSetChecksumNotOKGauge.DeleteLabelValues(keyspace, changefeed, "default", state)
-		metrics.DispatcherManagerDispatcherSetChecksumNotOKTotal.DeleteLabelValues(keyspace, changefeed, "default", state)
-	}
+	modes := []string{"default"}
 	if e.RedoEnable {
+		modes = append(modes, "redo")
+	}
+	for _, mode := range modes {
 		for _, state := range []string{"mismatch", "uninitialized"} {
-			metrics.DispatcherManagerDispatcherSetChecksumNotOKGauge.DeleteLabelValues(keyspace, changefeed, "redo", state)
-			metrics.DispatcherManagerDispatcherSetChecksumNotOKTotal.DeleteLabelValues(keyspace, changefeed, "redo", state)
+			metrics.DispatcherManagerDispatcherSetChecksumNotOKGauge.DeleteLabelValues(keyspace, changefeed, mode, state)
+			metrics.DispatcherManagerDispatcherSetChecksumNotOKTotal.DeleteLabelValues(keyspace, changefeed, mode, state)
 		}
 	}
 }
