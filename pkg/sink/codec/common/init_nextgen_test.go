@@ -16,6 +16,7 @@
 package common
 
 import (
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	ticonfig "github.com/pingcap/tidb/pkg/config"
 	"github.com/pingcap/tidb/pkg/disttask/framework/handle"
 )
