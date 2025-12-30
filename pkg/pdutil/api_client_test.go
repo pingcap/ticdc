@@ -42,11 +42,6 @@ func (m *mockPDClient) GetLeaderURL() string {
 	return m.url
 }
 
-func (m *mockPDClient) GetServiceDiscovery() pd.ServiceDiscovery {
-	// Return nil as a simple mock since servicediscovery package is not available
-	return nil
-}
-
 func newMockPDClient(normal bool) *mockPDClient {
 	mock := &mockPDClient{}
 	status := http.StatusOK
