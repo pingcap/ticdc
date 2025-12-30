@@ -64,7 +64,7 @@ func (m *gcManager) TryUpdateGCSafePoint(
 		return nil
 	}
 
-	actual, err := UnifyGetServiceGCSafepoint(ctx, m.pdClient, keyspaceID, m.gcServiceID)
+	actual, err := GetServiceGCSafepoint(ctx, m.pdClient, keyspaceID, m.gcServiceID)
 	if err != nil {
 		return err
 	}

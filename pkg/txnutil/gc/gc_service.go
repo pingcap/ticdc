@@ -56,7 +56,7 @@ func UndoEnsureChangefeedStartTsSafety(
 ) error {
 	gcServiceID := gcServiceIDPrefix + changefeedID.Keyspace() + "_" + changefeedID.Name()
 	log.Info("undo ensure changefeed start ts safety", zap.String("gcServiceID", gcServiceID))
-	err := UnifyDeleteGcSafepoint(ctx, pdCli, keyspaceID, gcServiceID)
+	err := RemoveServiceGCSafepoint(ctx, pdCli, keyspaceID, gcServiceID)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -72,14 +72,14 @@ const (
 	gcServiceMaxRetries   = 9
 )
 
-// UnifyGetServiceGCSafepoint returns a service gc safepoint on classic mode or
+// GetServiceGCSafepoint returns a service gc safepoint on classic mode or
 // a gc barrier on next-gen mode
-func UnifyGetServiceGCSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint32, serviceID string) (uint64, error) {
+func GetServiceGCSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint32, serviceID string) (uint64, error) {
 	return getServiceGCSafepoint(ctx, pdCli, keyspaceID, serviceID)
 }
 
-// UnifyDeleteGcSafepoint delete a gc safepoint on classic mode or delete a gc
+// RemoveServiceGCSafepoint delete a gc safepoint on classic mode or delete a gc
 // barrier on next-gen mode
-func UnifyDeleteGcSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint32, serviceID string) error {
+func RemoveServiceGCSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint32, serviceID string) error {
 	return removeServiceGCSafepoint(ctx, pdCli, keyspaceID, serviceID)
 }
