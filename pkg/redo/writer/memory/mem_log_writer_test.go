@@ -21,8 +21,8 @@ import (
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
-	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/tidbtype"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
