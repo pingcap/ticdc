@@ -37,7 +37,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
-	"github.com/tikv/pd/client/servicediscovery"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
@@ -482,8 +481,9 @@ func (m *mockPDClient) GetTS(ctx context.Context) (int64, int64, error) {
 	return oracle.GetPhysical(time.Now()), 0, nil
 }
 
-func (m *mockPDClient) GetServiceDiscovery() servicediscovery.ServiceDiscovery {
-	return servicediscovery.NewMockServiceDiscovery([]string{}, nil)
+func (m *mockPDClient) GetServiceDiscovery() pd.ServiceDiscovery {
+	// Return nil as a simple mock since servicediscovery package is not available
+	return nil
 }
 
 //nolint:unparam

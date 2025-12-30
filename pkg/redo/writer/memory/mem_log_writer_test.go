@@ -22,8 +22,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/tidbtype"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,15 +34,15 @@ func TestWriteDDL(t *testing.T) {
 		nil,
 		&pevent.RedoRowEvent{
 			CommitTs:  11,
-			TableInfo: common.NewTableInfo4Decoder("test", &model.TableInfo{Name: ast.NewCIStr("t1")}),
+			TableInfo: common.NewTableInfo4Decoder("test", &model.TableInfo{Name: tidbtype.NewCIStr("t1")}),
 		},
 		&pevent.RedoRowEvent{
 			CommitTs:  15,
-			TableInfo: common.NewTableInfo4Decoder("test", &model.TableInfo{Name: ast.NewCIStr("t2")}),
+			TableInfo: common.NewTableInfo4Decoder("test", &model.TableInfo{Name: tidbtype.NewCIStr("t2")}),
 		},
 		&pevent.RedoRowEvent{
 			CommitTs:  8,
-			TableInfo: common.NewTableInfo4Decoder("test", &model.TableInfo{Name: ast.NewCIStr("t2")}),
+			TableInfo: common.NewTableInfo4Decoder("test", &model.TableInfo{Name: tidbtype.NewCIStr("t2")}),
 		},
 	}
 	testWriteEvents(t, rows)

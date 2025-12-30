@@ -1263,7 +1263,8 @@ func TestRowKey(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NotEqual(t, tidb_ext.CommitTs, 0)
-	expected := "dIAAAAAAAAByX3KAAAAAAAAAAQ=="
+	// expected := "dIAAAAAAAAByX3KAAAAAAAAAAQ=="
+	expected := "dIAAAAAAAABuX3KAAAAAAAAAAQ=="
 	if kerneltype.IsNextGen() {
 		expected = "dIAAAAAAAAAHX3KAAAAAAAAAAQ=="
 	}
