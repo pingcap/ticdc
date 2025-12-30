@@ -304,6 +304,12 @@ func (e *DispatcherManager) updateDispatcherSetChecksumGauge(
 	modeLabel string,
 	state heartbeatpb.ChecksumState,
 ) {
+	log.Info("updating dispatcher set checksum gauge",
+		zap.String("keyspace", keyspace),
+		zap.String("changefeed", changefeed),
+		zap.String("mode", modeLabel),
+		zap.String("state", checksumStateLabel(state)),
+	)
 	setGauge := func(stateLabel string, value float64) {
 		log.Info("set dispatcher set checksum gauge",
 			zap.String("keyspace", keyspace),
