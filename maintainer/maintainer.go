@@ -609,13 +609,18 @@ func (m *Maintainer) advanceRedoMetaTsOnce() {
 	minRedoCheckpointTsForScheduler := m.controller.GetMinRedoCheckpointTs(newWatermark.CheckpointTs)
 	minRedoCheckpointTsForBarrier := m.controller.redoBarrier.GetMinBlockedCheckpointTsForNewTables(newWatermark.CheckpointTs)
 
-	// if there is no tables, there must be a table trigger redo dispatcher
+	// If there is no tables, there must be a table trigger dispatcher.
 	for _, id := range m.bootstrapper.GetAllNodeIDs() {
-		// maintainer node has the table trigger redo dispatcher
+		// Maintainer node has the table trigger dispatcher.
 		if id != m.selfNode.ID && m.controller.redoSpanController.GetTaskSizeByNodeID(id) <= 0 {
 			continue
 		}
-		// node level watermark reported, ignore this round
+		checksumState, ok := m.redoChecksumStateByCapture.Get(id)
+		if !ok || checksumState != heartbeatpb.ChecksumState_OK {
+			updateCheckpointTs = false
+			continue
+		}
+		// Node level watermark reported, ignore this round.
 		watermark, ok := m.redoTsByCapture.Get(id)
 		if !ok {
 			updateCheckpointTs = false
