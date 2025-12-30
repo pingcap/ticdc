@@ -233,6 +233,16 @@ func (e *DispatcherManager) verifyDispatcherSetChecksum(
 	stateSeq = runtime.seq
 	e.dispatcherSetChecksum.mu.Unlock()
 
+	log.Info("verified dispatcher set checksum",
+		zap.Any("oldState", oldState.String()),
+		zap.Any("newState", state.String()),
+		zap.Stringer("changefeedID", e.changefeedID),
+		zap.String("mode", modeLabel),
+		zap.Uint64("expectedSeq", expectedSeq),
+		zap.Bool("expectedInitialized", expectedInit),
+		zap.Any("actualChecksum", actual),
+		zap.Any("expectedChecksum", expectedChecksum),
+	)
 	if oldState != state {
 		e.updateDispatcherSetChecksumGauge(keyspace, changefeed, modeLabel, state)
 	}
@@ -294,6 +304,13 @@ func (e *DispatcherManager) updateDispatcherSetChecksumGauge(
 	state heartbeatpb.ChecksumState,
 ) {
 	setGauge := func(stateLabel string, value float64) {
+		log.Info("set dispatcher set checksum gauge",
+			zap.String("keyspace", keyspace),
+			zap.String("changefeed", changefeed),
+			zap.String("mode", modeLabel),
+			zap.String("state", stateLabel),
+			zap.Float64("value", value),
+		)
 		metrics.DispatcherManagerDispatcherSetChecksumNotOKGauge.WithLabelValues(
 			keyspace, changefeed, modeLabel, stateLabel,
 		).Set(value)
