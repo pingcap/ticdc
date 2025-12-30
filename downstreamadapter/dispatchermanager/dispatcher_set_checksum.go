@@ -210,7 +210,6 @@ func (e *DispatcherManager) incDispatcherSetChecksumNotOKTotal(mode int64, state
 			e.changefeedID.Keyspace(), e.changefeedID.Name(), common.StringMode(mode), "uninitialized",
 		).Inc()
 	}
-
 }
 
 // verifyDispatcherSetChecksum compares runtime checksum with expected checksum for the mode.
