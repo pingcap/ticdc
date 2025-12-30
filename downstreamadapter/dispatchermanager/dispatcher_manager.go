@@ -1002,7 +1002,7 @@ func (e *DispatcherManager) cleanMetrics() {
 	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
 	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
 
-    keyspace := e.changefeedID.Keyspace()
+	keyspace := e.changefeedID.Keyspace()
 	changefeed := e.changefeedID.Name()
 	modes := []string{"default"}
 	if e.RedoEnable {
