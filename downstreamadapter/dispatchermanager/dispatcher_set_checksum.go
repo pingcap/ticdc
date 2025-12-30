@@ -323,12 +323,23 @@ func (e *DispatcherManager) updateDispatcherSetChecksumGauge(
 		).Set(value)
 	}
 
-	setGauge("mismatch", 0)
-	setGauge("uninitialized", 0)
-
-	if state != heartbeatpb.ChecksumState_OK {
-		setGauge(checksumStateLabel(state), 1)
+	switch state {
+	case heartbeatpb.ChecksumState_OK:
+		setGauge("mismatch", 0)
+		setGauge("uninitialized", 0)
+	case heartbeatpb.ChecksumState_MISMATCH:
+		setGauge("mismatch", 1)
+		setGauge("uninitialized", 0)
+	case heartbeatpb.ChecksumState_UNINITIALIZED:
+		setGauge("mismatch", 0)
+		setGauge("uninitialized", 1)
 	}
+	// setGauge("mismatch", 0)
+	// setGauge("uninitialized", 0)
+
+	// if state != heartbeatpb.ChecksumState_OK {
+	// 	setGauge(checksumStateLabel(state), 1)
+	// }
 }
 
 // updateChecksumRuntime updates runtime bookkeeping and decides whether to emit a non-OK log.
