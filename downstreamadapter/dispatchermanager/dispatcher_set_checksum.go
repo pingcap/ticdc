@@ -195,9 +195,6 @@ func (e *DispatcherManager) applyChecksumStateToHeartbeat(
 
 // incDispatcherSetChecksumNotOKTotal increments the total counter when watermark reporting is suppressed.
 func (e *DispatcherManager) incDispatcherSetChecksumNotOKTotal(mode int64, state heartbeatpb.ChecksumState) {
-	if state == heartbeatpb.ChecksumState_OK {
-		return
-	}
 	switch state {
 	case heartbeatpb.ChecksumState_OK:
 		return
