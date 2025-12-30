@@ -262,11 +262,8 @@ func (e *DispatcherManager) InitalizeTableTriggerRedoDispatcher(schemaInfo []*he
 
 func (e *DispatcherManager) UpdateRedoMeta(checkpointTs, resolvedTs uint64) {
 	// only update meta on the one node
-	if e.GetTableTriggerRedoDispatcher() != nil {
-		e.GetTableTriggerRedoDispatcher().UpdateMeta(checkpointTs, resolvedTs)
-		return
-	}
-	log.Error("should not reach here. only update redo meta on the tableTriggerRedoDispatcher", zap.Any("nodeID", e.GetMaintainerID()))
+	e.GetTableTriggerRedoDispatcher().UpdateMeta(checkpointTs, resolvedTs)
+	return
 }
 
 func (e *DispatcherManager) SetRedoResolvedTs(resolvedTs uint64) bool {
