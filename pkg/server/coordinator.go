@@ -48,5 +48,5 @@ type Coordinator interface {
 	// and coordinator will update the changefeed status after receiving the resolved ts from log coordinator.
 	RequestResolvedTsFromLogCoordinator(ctx context.Context, changefeedDisplayName common.ChangeFeedDisplayName)
 
-	Bootstrapped() bool
+	Initialized() bool
 }

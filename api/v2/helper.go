@@ -106,9 +106,9 @@ func toListResponse[T any](c *gin.Context, data []T) interface{} {
 	}
 }
 
-func isBootstrapped(co server.Coordinator) (bool, error) {
-	if co == nil || !co.Bootstrapped() {
-		return false, errors.New("coordinator is not bootstrapped, wait a moment")
+func isInitialized(co server.Coordinator) (bool, error) {
+	if co == nil || !co.Initialized() {
+		return false, errors.New("coordinator is not fully initialized, wait a moment")
 	}
 	return true, nil
 }
