@@ -85,6 +85,57 @@ var (
 			Name:      "resolve_lock_task_drop_count",
 			Help:      "The number of resolve lock tasks dropped before being processed",
 		})
+
+	LogPullerSpanPipelineInflightBytes = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "log_puller_span_pipeline",
+			Name:      "inflight_bytes",
+			Help:      "Total bytes currently in-flight in the span pipeline quota (approximate).",
+		})
+	LogPullerSpanPipelineInflightBatches = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "log_puller_span_pipeline",
+			Name:      "inflight_batches",
+			Help:      "Total number of data batches currently in-flight in the span pipeline.",
+		})
+	LogPullerSpanPipelinePendingResolvedBarriers = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "log_puller_span_pipeline",
+			Name:      "pending_resolved_barriers",
+			Help:      "Total number of pending resolved-ts barriers in the span pipeline.",
+		})
+	LogPullerSpanPipelineActiveSubscriptions = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "log_puller_span_pipeline",
+			Name:      "active_subscriptions",
+			Help:      "Number of active subscription spans tracked by the span pipeline workers.",
+		})
+	LogPullerSpanPipelineQuotaAcquireDuration = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "log_puller_span_pipeline",
+			Name:      "quota_acquire_duration_seconds",
+			Help:      "Time spent waiting to acquire span pipeline quota before enqueueing a data batch.",
+			Buckets:   prometheus.ExponentialBuckets(0.00005, 2, 24), // 50us to ~838s
+		})
+	LogPullerSpanPipelineResolvedBarrierDroppedCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "log_puller_span_pipeline",
+			Name:      "resolved_barrier_dropped_total",
+			Help:      "Number of redundant resolved-ts barriers dropped by the span pipeline.",
+		})
+	LogPullerSpanPipelineResolvedBarrierCompactionCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "log_puller_span_pipeline",
+			Name:      "resolved_barrier_compaction_total",
+			Help:      "Number of times the span pipeline compacts the pending resolved-ts barrier queue.",
+		})
 )
 
 func initLogPullerMetrics(registry *prometheus.Registry) {
@@ -96,4 +147,11 @@ func initLogPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(RegionRequestFinishScanDuration)
 	registry.MustRegister(SubscriptionClientSubscribedRegionCount)
 	registry.MustRegister(SubscriptionClientResolveLockTaskDropCounter)
+	registry.MustRegister(LogPullerSpanPipelineInflightBytes)
+	registry.MustRegister(LogPullerSpanPipelineInflightBatches)
+	registry.MustRegister(LogPullerSpanPipelinePendingResolvedBarriers)
+	registry.MustRegister(LogPullerSpanPipelineActiveSubscriptions)
+	registry.MustRegister(LogPullerSpanPipelineQuotaAcquireDuration)
+	registry.MustRegister(LogPullerSpanPipelineResolvedBarrierDroppedCounter)
+	registry.MustRegister(LogPullerSpanPipelineResolvedBarrierCompactionCounter)
 }
