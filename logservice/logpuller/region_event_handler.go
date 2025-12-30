@@ -334,7 +334,7 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 	regionID := state.getRegionID()
 	lastResolvedTs := state.getLastResolvedTs()
 	if resolvedTs < lastResolvedTs {
-		log.Info("The resolvedTs is fallen back in subscription client",
+		log.Debug("The resolvedTs is fallen back in subscription client",
 			zap.Uint64("subscriptionID", uint64(state.region.subscribedSpan.subID)),
 			zap.Uint64("regionID", regionID),
 			zap.Uint64("resolvedTs", resolvedTs),
