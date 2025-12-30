@@ -98,6 +98,7 @@ func (e *DispatcherManager) ApplyDispatcherSetChecksumUpdate(req *heartbeatpb.Di
 //
 // It is typically used when DispatcherManager is reset (for example, on bootstrap or epoch changes).
 func (e *DispatcherManager) ResetDispatcherSetChecksum() {
+	log.Info("reset dispatcher set checksum")
 	e.dispatcherSetChecksum.mu.Lock()
 	defaultSeq := e.dispatcherSetChecksum.defaultRuntime.seq + 1
 	redoSeq := e.dispatcherSetChecksum.redoRuntime.seq + 1
