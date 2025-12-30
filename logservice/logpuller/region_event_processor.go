@@ -129,7 +129,7 @@ func (p *regionEventProcessor) run(ch <-chan regionEvent) {
 				continue
 			}
 			if ts := maybeAdvanceSpanResolvedTs(span, triggerRegionID); ts != 0 {
-				p.subClient.pushSubscriptionEventToDS(span.subID, subscriptionEvent{
+				p.subClient.pushSubscriptionEventToDS(subscriptionEvent{
 					subID:      span.subID,
 					resolvedTs: ts,
 				})
@@ -152,14 +152,14 @@ func (p *regionEventProcessor) run(ch <-chan regionEvent) {
 				if len(batch) == 0 {
 					continue
 				}
-				p.subClient.pushSubscriptionEventToDS(span.subID, subscriptionEvent{
+				p.subClient.pushSubscriptionEventToDS(subscriptionEvent{
 					subID:     span.subID,
 					kvEntries: batch,
 				})
 			case event.resolvedTs != 0:
 				updateRegionResolvedTs(span, state, event.resolvedTs)
 				if ts := maybeAdvanceSpanResolvedTs(span, state.getRegionID()); ts != 0 {
-					p.subClient.pushSubscriptionEventToDS(span.subID, subscriptionEvent{
+					p.subClient.pushSubscriptionEventToDS(subscriptionEvent{
 						subID:      span.subID,
 						resolvedTs: ts,
 					})

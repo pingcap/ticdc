@@ -417,10 +417,13 @@ func (s *subscriptionClient) wakeSubscription(subID SubscriptionID) {
 	s.ds.Wake(subID)
 }
 
-func (s *subscriptionClient) pushSubscriptionEventToDS(subID SubscriptionID, event subscriptionEvent) {
+func (s *subscriptionClient) pushSubscriptionEventToDS(event subscriptionEvent) {
+	if event.subID == InvalidSubscriptionID {
+		log.Panic("subscription event has invalid subscriptionID", zap.Any("event", event))
+	}
 	// fast path
 	if !s.paused.Load() {
-		s.ds.Push(subID, event)
+		s.ds.Push(event.subID, event)
 		return
 	}
 	// slow path: wait until paused is false
@@ -429,7 +432,7 @@ func (s *subscriptionClient) pushSubscriptionEventToDS(subID SubscriptionID, eve
 		s.cond.Wait()
 	}
 	s.mu.Unlock()
-	s.ds.Push(subID, event)
+	s.ds.Push(event.subID, event)
 }
 
 func (s *subscriptionClient) handleDSFeedBack(ctx context.Context) error {
