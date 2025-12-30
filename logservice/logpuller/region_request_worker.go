@@ -127,7 +127,6 @@ func newRegionRequestWorker(
 				for _, state := range m {
 					state.markStopped(regionErr)
 					regionEvent := regionEvent{
-						subID:  subID,
 						state:  state,
 						worker: worker,
 					}
@@ -239,7 +238,6 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 		state := s.getRegionState(subscriptionID, regionID)
 		if state != nil {
 			regionEvent := regionEvent{
-				subID:  subscriptionID,
 				state:  state,
 				worker: s,
 			}
@@ -320,7 +318,6 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 		return
 	}
 	s.client.pushRegionEventToDS(subscriptionID, regionEvent{
-		subID:            subscriptionID,
 		worker:           s,
 		resolvedTs:       resolvedTsEvent.Ts,
 		resolvedTsStates: resolvedStates,
@@ -388,7 +385,6 @@ func (s *regionRequestWorker) processRegionSendTask(
 			for _, state := range s.takeRegionStates(subID) {
 				state.markStopped(&requestCancelledErr{})
 				regionEvent := regionEvent{
-					subID:  subID,
 					state:  state,
 					worker: s,
 				}

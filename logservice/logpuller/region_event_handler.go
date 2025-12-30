@@ -38,8 +38,6 @@ const (
 )
 
 type regionEvent struct {
-	subID SubscriptionID
-
 	// Entry events: `state` and `entries` are set together.
 	// `state` can also be set alone for region-error/stale notifications.
 	state   *regionFeedState
@@ -50,7 +48,7 @@ type regionEvent struct {
 	resolvedTs       uint64
 	resolvedTsStates []*regionFeedState
 
-	worker *regionRequestWorker // TODO: remove the field
+	worker *regionRequestWorker
 }
 
 func (event *regionEvent) getSize() int {
@@ -79,16 +77,11 @@ type regionEventHandler struct {
 }
 
 func (h *regionEventHandler) Path(event regionEvent) SubscriptionID {
-	if event.subID != 0 {
-		return event.subID
-	}
 	if event.state != nil {
 		return SubscriptionID(event.state.requestID)
-	}
-	if len(event.resolvedTsStates) > 0 && event.resolvedTsStates[0] != nil {
+	} else {
 		return SubscriptionID(event.resolvedTsStates[0].requestID)
 	}
-	return 0
 }
 
 func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent) bool {
@@ -107,15 +100,7 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 		if event.entries != nil {
 			handleEventEntries(span, event.state, event.entries)
 		} else if event.resolvedTs != 0 {
-			resolvedStates := event.resolvedTsStates
-			// Backward-compatible fallback (should not happen in normal code paths).
-			if len(resolvedStates) == 0 && event.state != nil {
-				resolvedStates = []*regionFeedState{event.state}
-			}
-			for _, state := range resolvedStates {
-				if state == nil {
-					continue
-				}
+			for _, state := range event.resolvedTsStates {
 				resolvedTs := handleResolvedTs(span, state, event.resolvedTs)
 				if resolvedTs > newResolvedTs {
 					newResolvedTs = resolvedTs
@@ -186,7 +171,10 @@ func (h *regionEventHandler) GetType(event regionEvent) dynstream.EventType {
 	} else if event.state != nil && event.state.isStale() {
 		return dynstream.EventType{DataGroup: DataGroupError, Property: dynstream.BatchableData}
 	} else {
-		log.Panic("unknown event type", zap.Any("event", event))
+		log.Panic("unknown event type",
+			zap.Uint64("regionID", event.state.getRegionID()),
+			zap.Uint64("requestID", event.state.requestID),
+			zap.Uint64("workerID", event.worker.workerID))
 	}
 	return dynstream.DefaultEventType
 }
