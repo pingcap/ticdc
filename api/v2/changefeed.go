@@ -41,6 +41,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/tidbtype"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
@@ -98,7 +99,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	cfg.Keyspace = keyspaceName
 
 	// verify changefeed keyspace
-	if err := common.ValidateKeyspace(changefeedID.Keyspace()); err != nil {
+	if err := tidbtype.ValidateKeyspace(changefeedID.Keyspace()); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack(
 			"invalid keyspace: %s", cfg.ID))
 		return

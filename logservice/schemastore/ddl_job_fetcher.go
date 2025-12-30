@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/tidbtype"
 	"github.com/pingcap/ticdc/utils/heap"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta"
@@ -259,24 +260,24 @@ func findColumnByName(cols []*model.ColumnInfo, name string) (*model.ColumnInfo,
 func getAllDDLSpan(keyspaceID uint32) ([]heartbeatpb.TableSpan, error) {
 	spans := make([]heartbeatpb.TableSpan, 0, 2)
 
-	start, end, err := common.GetKeyspaceTableRange(keyspaceID, common.JobTableID)
+	start, end, err := common.GetKeyspaceTableRange(keyspaceID, tidbtype.JobTableID)
 	if err != nil {
 		return nil, err
 	}
 
 	spans = append(spans, heartbeatpb.TableSpan{
-		TableID:    common.JobTableID,
+		TableID:    tidbtype.JobTableID,
 		StartKey:   common.ToComparableKey(start),
 		EndKey:     common.ToComparableKey(end),
 		KeyspaceID: keyspaceID,
 	})
 
-	start, end, err = common.GetKeyspaceTableRange(keyspaceID, common.JobHistoryID)
+	start, end, err = common.GetKeyspaceTableRange(keyspaceID, tidbtype.JobHistoryID)
 	if err != nil {
 		return nil, err
 	}
 	spans = append(spans, heartbeatpb.TableSpan{
-		TableID:    common.JobHistoryID,
+		TableID:    tidbtype.JobHistoryID,
 		StartKey:   common.ToComparableKey(start),
 		EndKey:     common.ToComparableKey(end),
 		KeyspaceID: keyspaceID,

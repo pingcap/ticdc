@@ -11,22 +11,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !nextgen
+//go:build nextgen
 
-package common
+package tidbtype
 
 import (
-	"github.com/pingcap/tidb/pkg/ddl"
-)
-
-const (
-	// JobTableID is the id of `tidb_ddl_job`.
-	JobTableID = ddl.JobTableID
-	// JobHistoryID is the id of `tidb_ddl_history`
-	JobHistoryID = ddl.HistoryTableID
+	"github.com/pingcap/errors"
+	"github.com/pingcap/tidb/pkg/util/naming"
 )
 
 // ValidateKeyspace use the naming rules of TiDB to check the validation of the keyspace
 func ValidateKeyspace(keyspace string) error {
-	return nil
+	return errors.Trace(naming.CheckKeyspaceName(keyspace))
 }
