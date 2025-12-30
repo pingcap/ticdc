@@ -28,11 +28,11 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
+	"github.com/pingcap/ticdc/pkg/pdtype"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	pd "github.com/tikv/pd/client"
-	pdopt "github.com/tikv/pd/client/opt"
 	clientV3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
 	"go.uber.org/atomic"
@@ -134,9 +134,9 @@ func createPDClient(ctx context.Context,
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	return pd.NewClientWithContext(
+	return pdtype.NewClientWithContext(
 		ctx, "cdc-migrator", pdEndpoints, conf.PDSecurityOption(),
-		pdopt.WithGRPCDialOptions(
+		pdtype.WithGRPCDialOptions(
 			grpcTLSOption,
 			grpc.WithBlock(),
 			grpc.WithConnectParams(grpc.ConnectParams{
@@ -149,7 +149,7 @@ func createPDClient(ctx context.Context,
 				MinConnectTimeout: 3 * time.Second,
 			}),
 		),
-		pdopt.WithForwardingOption(config.EnablePDForwarding),
+		pdtype.WithForwardingOption(config.EnablePDForwarding),
 	)
 }
 
@@ -398,7 +398,7 @@ func (m *migrator) migrateGcServiceSafePoint(ctx context.Context,
 		}
 	}
 	if cdcGcSafePoint != nil {
-		_, err := gc.SetServiceGCSafepoint(ctx, pdClient, newGcServiceID, ttl, cdcGcSafePoint.SafePoint)
+		_, err := gc.SetServiceGCSafepoint(ctx, pdClient, common.DefaultKeyspace.ID, newGcServiceID, ttl, cdcGcSafePoint.SafePoint)
 		if err != nil {
 			log.Error("set gc service safepoint failed",
 				zap.Error(err))

@@ -70,15 +70,15 @@ ifeq ("${ENABLE_FIPS}", "1")
 endif
 ifeq ("${NEXT_GEN}", "1")
 	ifeq ($(BUILD_FLAG),)
-		BUILD_FLAG := -tags nextgen
+		BUILD_FLAG := -tags nextgen -modfile=nextgen.go.mod
 	else
-		BUILD_FLAG := $(BUILD_FLAG),nextgen
+		BUILD_FLAG := $(BUILD_FLAG),nextgen -modfile=nextgen.go.mod
 	endif
 endif
 
 TEST_FLAG=intest
 ifeq ("${NEXT_GEN}", "1")
-	TEST_FLAG := $(TEST_FLAG),nextgen
+	TEST_FLAG := $(TEST_FLAG),nextgen -modfile=nextgen.go.mod
 endif
 
 GOTEST := CGO_ENABLED=1 $(GO) test -p 3 --race --tags=$(TEST_FLAG)

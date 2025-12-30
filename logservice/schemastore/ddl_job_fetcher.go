@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/utils/heap"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta"
-	"github.com/pingcap/tidb/pkg/meta/metadef"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"go.uber.org/zap"
@@ -257,34 +256,27 @@ func findColumnByName(cols []*model.ColumnInfo, name string) (*model.ColumnInfo,
 		errors.Errorf("can't find column %s", name))
 }
 
-const (
-	// JobTableID is the id of `tidb_ddl_job`.
-	JobTableID = metadef.TiDBDDLJobTableID
-	// JobHistoryID is the id of `tidb_ddl_history`
-	JobHistoryID = metadef.TiDBDDLHistoryTableID
-)
-
 func getAllDDLSpan(keyspaceID uint32) ([]heartbeatpb.TableSpan, error) {
 	spans := make([]heartbeatpb.TableSpan, 0, 2)
 
-	start, end, err := common.GetKeyspaceTableRange(keyspaceID, JobTableID)
+	start, end, err := common.GetKeyspaceTableRange(keyspaceID, common.JobTableID)
 	if err != nil {
 		return nil, err
 	}
 
 	spans = append(spans, heartbeatpb.TableSpan{
-		TableID:    JobTableID,
+		TableID:    common.JobTableID,
 		StartKey:   common.ToComparableKey(start),
 		EndKey:     common.ToComparableKey(end),
 		KeyspaceID: keyspaceID,
 	})
 
-	start, end, err = common.GetKeyspaceTableRange(keyspaceID, JobHistoryID)
+	start, end, err = common.GetKeyspaceTableRange(keyspaceID, common.JobHistoryID)
 	if err != nil {
 		return nil, err
 	}
 	spans = append(spans, heartbeatpb.TableSpan{
-		TableID:    JobHistoryID,
+		TableID:    common.JobHistoryID,
 		StartKey:   common.ToComparableKey(start),
 		EndKey:     common.ToComparableKey(end),
 		KeyspaceID: keyspaceID,
