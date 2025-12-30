@@ -14,6 +14,8 @@
 package logpuller
 
 import (
+	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -46,7 +48,7 @@ import (
 func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 	// initialize
 	option := dynstream.NewOption()
-	ds := dynstream.NewParallelDynamicStream(&regionEventHandler{}, option)
+	ds := dynstream.NewParallelDynamicStream(&subscriptionEventHandler{}, option)
 	ds.Start()
 
 	span := heartbeatpb.TableSpan{
@@ -201,131 +203,86 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 	}
 }
 
-func TestHandleResolvedTs(t *testing.T) {
-	// initialize
-	option := dynstream.NewOption()
-	ds := dynstream.NewParallelDynamicStream(&regionEventHandler{}, option)
-	ds.Start()
+func TestHandleResolvedEventsWithDuplicateTs(t *testing.T) {
+	handler := &subscriptionEventHandler{}
+	var advanced atomic.Uint64
 
-	consumeKVEvents := func(events []common.RawKVEntry, _ func()) bool { return false } // not used
-	tsCh := make(chan uint64, 100)
-	advanceResolvedTs := func(ts uint64) {
-		tsCh <- ts
+	subSpan := &subscribedSpan{
+		subID: SubscriptionID(88),
+		advanceResolvedTs: func(ts uint64) {
+			advanced.Store(ts)
+		},
 	}
 
-	subID1 := SubscriptionID(1)
-	worker := &regionRequestWorker{
-		requestCache: &requestCache{},
-	}
-	state1 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(1, 1, 1)}, uint64(subID1), worker)
-	state1.start()
-	{
-		span := heartbeatpb.TableSpan{
-			TableID:  100,
-			StartKey: common.ToComparableKey([]byte{}), // TODO: remove spanz dependency
-			EndKey:   common.ToComparableKey(common.UpperBoundKey),
-		}
-		subSpan := &subscribedSpan{
-			subID:             subID1,
-			span:              heartbeatpb.TableSpan{},
-			rangeLock:         regionlock.NewRangeLock(uint64(subID1), span.StartKey, span.EndKey, 1),
-			consumeKVEvents:   consumeKVEvents,
-			advanceResolvedTs: advanceResolvedTs,
-			advanceInterval:   0,
-		}
-		ds.AddPath(subID1, subSpan, dynstream.AreaSettings{})
-		state1.region.subscribedSpan = subSpan
-		state1.region.lockedRangeState = &regionlock.LockedRangeState{}
-		state1.setInitialized()
-		state1.updateResolvedTs(9)
+	events := []regionEvent{
+		{subID: subSpan.subID, resolvedTs: 15},
+		{subID: subSpan.subID, resolvedTs: 15},
+		{subID: subSpan.subID, resolvedTs: 10},
 	}
 
-	subID2 := SubscriptionID(2)
-	state2 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(2, 2, 2)}, uint64(subID2), worker)
+	require.False(t, handler.Handle(subSpan, events...))
+	require.Equal(t, uint64(15), advanced.Load())
+}
+
+func TestHandleResolvedStateUpdateSpan(t *testing.T) {
+	ctx := context.Background()
+	worker := &regionRequestWorker{requestCache: &requestCache{}}
+	startKey := common.ToComparableKey([]byte{0})
+	midKey := common.ToComparableKey([]byte{1})
+	endKey := common.ToComparableKey(common.UpperBoundKey)
+	span := heartbeatpb.TableSpan{
+		TableID:  101,
+		StartKey: startKey,
+		EndKey:   endKey,
+	}
+	subSpan := &subscribedSpan{
+		subID:           SubscriptionID(42),
+		span:            span,
+		startTs:         1,
+		rangeLock:       regionlock.NewRangeLock(uint64(42), span.StartKey, span.EndKey, 1),
+		advanceInterval: 0,
+	}
+	subSpan.advanceResolvedTs = func(uint64) {}
+
+	lockRes := subSpan.rangeLock.LockRange(ctx, span.StartKey, midKey, 1, 1)
+	require.Equal(t, regionlock.LockRangeStatusSuccess, lockRes.Status)
+	lockRes.LockedRangeState.Initialized.Store(true)
+	region := newRegionInfo(
+		tikv.NewRegionVerID(1, 1, 1),
+		heartbeatpb.TableSpan{StartKey: startKey, EndKey: midKey},
+		&tikv.RPCContext{},
+		subSpan,
+		false,
+	)
+	region.lockedRangeState = lockRes.LockedRangeState
+	state := newRegionFeedState(region, uint64(subSpan.subID), worker)
+	state.start()
+	state.region.lockedRangeState.Initialized.Store(true)
+
+	require.True(t, handleResolvedState(subSpan, state, 10))
+	require.Equal(t, uint64(10), state.getLastResolvedTs())
+
+	res := updateSpanResolvedTs(subSpan, []*regionFeedState{state})
+	require.Equal(t, uint64(1), res)
+
+	res = updateSpanResolvedTs(subSpan, []*regionFeedState{state})
+	require.Equal(t, uint64(1), res)
+
+	res = updateSpanResolvedTs(subSpan, nil)
+	require.Equal(t, uint64(0), res)
+
+	lockRes2 := subSpan.rangeLock.LockRange(ctx, midKey, span.EndKey, 2, 1)
+	require.Equal(t, regionlock.LockRangeStatusSuccess, lockRes2.Status)
+	lockRes2.LockedRangeState.Initialized.Store(true)
+	state2 := newRegionFeedState(regionInfo{
+		verID:            tikv.NewRegionVerID(2, 2, 2),
+		subscribedSpan:   subSpan,
+		span:             heartbeatpb.TableSpan{StartKey: midKey, EndKey: span.EndKey},
+		lockedRangeState: lockRes2.LockedRangeState,
+	}, uint64(subSpan.subID), worker)
 	state2.start()
-	{
-		span := heartbeatpb.TableSpan{
-			TableID:  100,
-			StartKey: common.ToComparableKey([]byte{}), // TODO: remove spanz dependency
-			EndKey:   common.ToComparableKey(common.UpperBoundKey),
-		}
-		subSpan := &subscribedSpan{
-			subID:             subID2,
-			span:              span,
-			rangeLock:         regionlock.NewRangeLock(uint64(subID2), span.StartKey, span.EndKey, 1),
-			consumeKVEvents:   consumeKVEvents,
-			advanceResolvedTs: advanceResolvedTs,
-			advanceInterval:   0,
-		}
-		ds.AddPath(subID2, subSpan, dynstream.AreaSettings{})
-		state2.region.subscribedSpan = subSpan
-		state2.region.lockedRangeState = &regionlock.LockedRangeState{}
-		state2.setInitialized()
-		state2.updateResolvedTs(11)
-	}
 
-	subID3 := SubscriptionID(3)
-	state3 := newRegionFeedState(regionInfo{verID: tikv.NewRegionVerID(3, 3, 3)}, uint64(subID3), worker)
-	state3.start()
-	{
-		span := heartbeatpb.TableSpan{
-			TableID:  100,
-			StartKey: common.ToComparableKey([]byte{}), // TODO: remove spanz dependency
-			EndKey:   common.ToComparableKey(common.UpperBoundKey),
-		}
-		subSpan := &subscribedSpan{
-			subID:             subID3,
-			span:              span,
-			rangeLock:         regionlock.NewRangeLock(uint64(subID3), span.StartKey, span.EndKey, 1),
-			consumeKVEvents:   consumeKVEvents,
-			advanceResolvedTs: advanceResolvedTs,
-			advanceInterval:   0,
-		}
-		ds.AddPath(subID3, subSpan, dynstream.AreaSettings{})
-		state3.region.subscribedSpan = subSpan
-		state3.region.lockedRangeState = &regionlock.LockedRangeState{}
-		state3.updateResolvedTs(8)
-	}
-
-	{
-		regionEvent := regionEvent{
-			state:      state1,
-			resolvedTs: 10,
-		}
-		ds.Push(subID1, regionEvent)
-	}
-	{
-		regionEvent := regionEvent{
-			state:      state2,
-			resolvedTs: 10,
-		}
-		ds.Push(subID2, regionEvent)
-	}
-	{
-		regionEvent := regionEvent{
-			state:      state3,
-			resolvedTs: 10,
-		}
-		ds.Push(subID3, regionEvent)
-	}
-
-	// should only get one ts event
-	{
-		select {
-		case <-tsCh:
-			// the ts is from range lock, it is hard code in the test code
-		case <-time.NewTimer(300 * time.Millisecond).C:
-			require.True(t, false, "must get an event")
-		}
-
-		select {
-		case <-tsCh:
-			require.True(t, false, "shouldn't get an event")
-		case <-time.NewTimer(300 * time.Millisecond).C:
-		}
-	}
-
-	require.Equal(t, uint64(10), state1.getLastResolvedTs())
-	require.Equal(t, uint64(11), state2.getLastResolvedTs())
-	require.Equal(t, uint64(8), state3.getLastResolvedTs())
+	require.True(t, handleResolvedState(subSpan, state2, 12))
+	res = updateSpanResolvedTs(subSpan, []*regionFeedState{state2})
+	require.Equal(t, uint64(10), res)
 }

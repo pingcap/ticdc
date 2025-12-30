@@ -10,6 +10,8 @@ tools/workload/bin
 .DS_Store
 .test
 
+.gocache
+
 # Unit test reports
 cdc-junit-report.xml
 
