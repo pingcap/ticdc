@@ -38,12 +38,18 @@ const (
 )
 
 type regionEvent struct {
+	subID SubscriptionID
+
 	state  *regionFeedState
 	worker *regionRequestWorker // TODO: remove the field
 
 	// only one of the following fields will be set
 	entries    *cdcpb.Event_Entries_
 	resolvedTs uint64
+
+	// resolvedTsStates is used for batching resolved-ts events.
+	// For a single-region resolved-ts event, it contains exactly one state.
+	resolvedTsStates []*regionFeedState
 }
 
 func (event *regionEvent) getSize() int {
@@ -61,6 +67,9 @@ func (event *regionEvent) getSize() int {
 			size += len(row.OldValue)
 		}
 	}
+	if event.resolvedTs != 0 && len(event.resolvedTsStates) > 0 {
+		size += len(event.resolvedTsStates) * int(unsafe.Sizeof((*regionFeedState)(nil)))
+	}
 	return size
 }
 
@@ -69,7 +78,16 @@ type regionEventHandler struct {
 }
 
 func (h *regionEventHandler) Path(event regionEvent) SubscriptionID {
-	return SubscriptionID(event.state.requestID)
+	if event.subID != 0 {
+		return event.subID
+	}
+	if event.state != nil {
+		return SubscriptionID(event.state.requestID)
+	}
+	if len(event.resolvedTsStates) > 0 && event.resolvedTsStates[0] != nil {
+		return SubscriptionID(event.resolvedTsStates[0].requestID)
+	}
+	return 0
 }
 
 func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent) bool {
@@ -81,16 +99,26 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 
 	newResolvedTs := uint64(0)
 	for _, event := range events {
-		if event.state.isStale() {
+		if event.state != nil && event.state.isStale() {
 			h.handleRegionError(event.state, event.worker)
 			continue
 		}
 		if event.entries != nil {
 			handleEventEntries(span, event.state, event.entries)
 		} else if event.resolvedTs != 0 {
-			resolvedTs := handleResolvedTs(span, event.state, event.resolvedTs)
-			if resolvedTs > newResolvedTs {
-				newResolvedTs = resolvedTs
+			resolvedStates := event.resolvedTsStates
+			// Backward-compatible fallback (should not happen in normal code paths).
+			if len(resolvedStates) == 0 && event.state != nil {
+				resolvedStates = []*regionFeedState{event.state}
+			}
+			for _, state := range resolvedStates {
+				if state == nil {
+					continue
+				}
+				resolvedTs := handleResolvedTs(span, state, event.resolvedTs)
+				if resolvedTs > newResolvedTs {
+					newResolvedTs = resolvedTs
+				}
 			}
 		} else {
 			log.Panic("should not reach", zap.Any("event", event), zap.Any("events", events))
@@ -154,25 +182,38 @@ func (h *regionEventHandler) GetType(event regionEvent) dynstream.EventType {
 	if event.entries != nil || event.resolvedTs != 0 {
 		// Note: resolved ts may be from different regions, so they are not periodic signal
 		return dynstream.EventType{DataGroup: DataGroupEntriesOrResolvedTs, Property: dynstream.BatchableData}
-	} else if event.state.isStale() {
+	} else if event.state != nil && event.state.isStale() {
 		return dynstream.EventType{DataGroup: DataGroupError, Property: dynstream.BatchableData}
 	} else {
-		log.Panic("unknown event type",
-			zap.Uint64("regionID", event.state.getRegionID()),
-			zap.Uint64("requestID", event.state.requestID),
-			zap.Uint64("workerID", event.worker.workerID))
+		log.Panic("unknown event type", zap.Any("event", event))
 	}
 	return dynstream.DefaultEventType
 }
 
 func (h *regionEventHandler) OnDrop(event regionEvent) interface{} {
 	// TODO: Distinguish between drop events caused by "path not found" errors and memory control.
-	log.Warn("drop region event",
-		zap.Uint64("regionID", event.state.getRegionID()),
-		zap.Uint64("requestID", event.state.requestID),
-		zap.Uint64("workerID", event.worker.workerID),
+	fields := []zap.Field{
+		zap.Uint64("subscriptionID", uint64(h.Path(event))),
 		zap.Bool("hasEntries", event.entries != nil),
-		zap.Bool("stateIsStale", event.state.isStale()))
+		zap.Bool("hasResolvedTs", event.resolvedTs != 0),
+		zap.Int("resolvedTsStates", len(event.resolvedTsStates)),
+	}
+	if event.state != nil {
+		fields = append(fields,
+			zap.Uint64("regionID", event.state.getRegionID()),
+			zap.Uint64("requestID", event.state.requestID),
+			zap.Bool("stateIsStale", event.state.isStale()))
+	} else if len(event.resolvedTsStates) > 0 && event.resolvedTsStates[0] != nil {
+		state := event.resolvedTsStates[0]
+		fields = append(fields,
+			zap.Uint64("regionID", state.getRegionID()),
+			zap.Uint64("requestID", state.requestID),
+			zap.Bool("stateIsStale", state.isStale()))
+	}
+	if event.worker != nil {
+		fields = append(fields, zap.Uint64("workerID", event.worker.workerID))
+	}
+	log.Warn("drop region event", fields...)
 	return nil
 }
 
