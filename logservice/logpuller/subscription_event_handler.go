@@ -87,9 +87,7 @@ func (h *subscriptionEventHandler) Handle(span *subscribedSpan, events ...subscr
 	await := span.consumeKVEvents(span.pendingKVEntries, func() {
 		span.clearPendingKVEntries()
 		advanceResolvedTs()
-		if h.wake != nil {
-			h.wake(span.subID)
-		}
+		h.wake(span.subID)
 	})
 	if !await {
 		span.clearPendingKVEntries()
