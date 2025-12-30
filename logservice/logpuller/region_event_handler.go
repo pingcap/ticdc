@@ -40,16 +40,17 @@ const (
 type regionEvent struct {
 	subID SubscriptionID
 
-	state  *regionFeedState
-	worker *regionRequestWorker // TODO: remove the field
+	// Entry events: `state` and `entries` are set together.
+	// `state` can also be set alone for region-error/stale notifications.
+	state   *regionFeedState
+	entries *cdcpb.Event_Entries_
 
-	// only one of the following fields will be set
-	entries    *cdcpb.Event_Entries_
-	resolvedTs uint64
-
-	// resolvedTsStates is used for batching resolved-ts events.
-	// For a single-region resolved-ts event, it contains exactly one state.
+	// Resolved-ts events: `resolvedTs` and `resolvedTsStates` are set together.
+	// For a single-region resolved-ts event, `resolvedTsStates` contains exactly one state.
+	resolvedTs       uint64
 	resolvedTsStates []*regionFeedState
+
+	worker *regionRequestWorker // TODO: remove the field
 }
 
 func (event *regionEvent) getSize() int {
