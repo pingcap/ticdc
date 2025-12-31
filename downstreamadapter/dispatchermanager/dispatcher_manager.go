@@ -700,7 +700,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 				toCleanMap = append(toCleanMap, cleanMap)
 			}
 			if watermark != nil {
-				log.Error("aggregateDispatcherHeartbeats redo", zap.Any("watermark", watermark))
+				log.Error("aggregateDispatcherHeartbeats redo", zap.Any("watermark", watermark), zap.Any("id", id))
 				message.RedoWatermark.UpdateMin(*watermark)
 			}
 
