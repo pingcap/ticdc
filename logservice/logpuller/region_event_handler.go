@@ -169,15 +169,15 @@ func (h *regionEventHandler) GetType(event regionEvent) dynstream.EventType {
 	if event.entries != nil || event.resolvedTs != 0 {
 		// Note: resolved ts may be from different regions, so they are not periodic signal
 		return dynstream.EventType{DataGroup: DataGroupEntriesOrResolvedTs, Property: dynstream.BatchableData}
-	} else if len(event.states) == 1 && event.mustFirstState().isStale() {
-		return dynstream.EventType{DataGroup: DataGroupError, Property: dynstream.BatchableData}
-	} else {
-		state := event.mustFirstState()
-		log.Panic("unknown event type",
-			zap.Uint64("regionID", state.getRegionID()),
-			zap.Uint64("requestID", state.requestID),
-			zap.Uint64("workerID", state.worker.workerID))
 	}
+	if len(event.states) == 1 && event.mustFirstState().isStale() {
+		return dynstream.EventType{DataGroup: DataGroupError, Property: dynstream.BatchableData}
+	}
+	state := event.mustFirstState()
+	log.Panic("unknown event type",
+		zap.Uint64("regionID", state.getRegionID()),
+		zap.Uint64("requestID", state.requestID),
+		zap.Uint64("workerID", state.worker.workerID))
 	return dynstream.DefaultEventType
 }
 
