@@ -512,8 +512,10 @@ func (h *RedoMetaMessageHandler) Handle(dispatcherManager *DispatcherManager, me
 		// TODO: Support batch
 		panic("invalid message count")
 	}
-	msg := messages[0]
-	dispatcherManager.UpdateRedoMeta(msg.CheckpointTs, msg.ResolvedTs)
+	if dispatcherManager.GetTableTriggerRedoDispatcher() != nil {
+		msg := messages[0]
+		dispatcherManager.UpdateRedoMeta(msg.CheckpointTs, msg.ResolvedTs)
+	}
 	return false
 }
 

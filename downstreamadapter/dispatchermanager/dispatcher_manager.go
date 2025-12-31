@@ -441,7 +441,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 			e.heartBeatTask = newHeartBeatTask(e)
 		}
 
-		if d.IsTableTriggerEventDispatcher() {
+		if d.IsTableTriggerDispatcher() {
 			if util.GetOrZero(e.config.SinkConfig.SendAllBootstrapAtStart) {
 				d.BootstrapState = dispatcher.BootstrapNotStarted
 			}
@@ -457,7 +457,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 		seq := e.dispatcherMap.Set(id, d)
 		d.SetSeq(seq)
 
-		if d.IsTableTriggerEventDispatcher() {
+		if d.IsTableTriggerDispatcher() {
 			e.metricTableTriggerEventDispatcherCount.Inc()
 		} else {
 			e.metricEventDispatcherCount.Inc()
@@ -700,6 +700,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 				toCleanMap = append(toCleanMap, cleanMap)
 			}
 			if watermark != nil {
+				log.Error("aggregateDispatcherHeartbeats redo", zap.Any("watermark", watermark), zap.Any("id", id))
 				message.RedoWatermark.UpdateMin(*watermark)
 			}
 
