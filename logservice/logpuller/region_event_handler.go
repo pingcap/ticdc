@@ -185,7 +185,6 @@ func (h *regionEventHandler) OnDrop(event regionEvent) interface{} {
 	// TODO: Distinguish between drop events caused by "path not found" errors and memory control.
 	state := event.mustFirstState()
 	fields := []zap.Field{
-		zap.Uint64("subscriptionID", uint64(h.Path(event))),
 		zap.Bool("hasEntries", event.entries != nil),
 		zap.Uint64("resolvedTs", event.resolvedTs),
 		zap.Int("states", len(event.states)),
