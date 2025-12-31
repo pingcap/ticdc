@@ -56,7 +56,7 @@ require (
 	github.com/pingcap/tidb v1.1.0-beta.0.20250415080739-a02630cc24cf
 	github.com/pingcap/tidb-dashboard v0.0.0-20250928152019-e111aaee93f4
 	github.com/pingcap/tidb/pkg/parser v0.0.0-20241120103608-82376c7732c1
-	github.com/pingcap/tiflow v0.0.0-20251216025638-62c10c0907dc
+	github.com/pingcap/tiflow v0.0.0-20251226072601-0cb0aaf25061
 	github.com/prometheus/client_golang v1.22.0
 	github.com/r3labs/diff v1.1.0
 	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475
