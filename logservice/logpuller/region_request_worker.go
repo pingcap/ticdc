@@ -236,6 +236,9 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 		subscriptionID := SubscriptionID(event.RequestId)
 		state := s.getRegionState(subscriptionID, regionID)
 		if state != nil {
+			regionEvent := regionEvent{
+				states: []*regionFeedState{state},
+			}
 			switch eventData := event.Event.(type) {
 			case *cdcpb.Event_Entries_:
 				if eventData == nil {
@@ -245,10 +248,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 						zap.Uint64("regionID", regionID))
 					continue
 				}
-				s.client.pushRegionEventToDS(SubscriptionID(event.RequestId), regionEvent{
-					states:  []*regionFeedState{state},
-					entries: eventData,
-				})
+				regionEvent.entries = eventData
 			case *cdcpb.Event_Admin_:
 				// ignore
 				continue
@@ -259,20 +259,15 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 					zap.Uint64("regionID", event.RegionId),
 					zap.Any("error", eventData.Error))
 				state.markStopped(&eventError{err: eventData.Error})
-				s.client.pushRegionEventToDS(SubscriptionID(event.RequestId), regionEvent{
-					states: []*regionFeedState{state},
-				})
 			case *cdcpb.Event_ResolvedTs:
-				s.client.pushRegionEventToDS(SubscriptionID(event.RequestId), regionEvent{
-					resolvedTs: eventData.ResolvedTs,
-					states:     []*regionFeedState{state},
-				})
+				regionEvent.resolvedTs = eventData.ResolvedTs
 			case *cdcpb.Event_LongTxn_:
 				// ignore
 				continue
 			default:
 				log.Panic("unknown event type", zap.Any("event", event))
 			}
+			s.client.pushRegionEventToDS(SubscriptionID(event.RequestId), regionEvent)
 		} else {
 			switch event.Event.(type) {
 			case *cdcpb.Event_Error:

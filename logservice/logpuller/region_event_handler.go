@@ -49,6 +49,9 @@ type regionEvent struct {
 }
 
 func (event *regionEvent) getSize() int {
+	if event == nil {
+		return 0
+	}
 	size := int(unsafe.Sizeof(*event))
 	if event.entries != nil {
 		size += int(unsafe.Sizeof(*event.entries))
@@ -184,7 +187,7 @@ func (h *regionEventHandler) OnDrop(event regionEvent) interface{} {
 	fields := []zap.Field{
 		zap.Uint64("subscriptionID", uint64(h.Path(event))),
 		zap.Bool("hasEntries", event.entries != nil),
-		zap.Bool("hasResolvedTs", event.resolvedTs != 0),
+		zap.Uint64("resolvedTs", event.resolvedTs),
 		zap.Int("states", len(event.states)),
 		zap.Uint64("regionID", state.getRegionID()),
 		zap.Uint64("requestID", state.requestID),
