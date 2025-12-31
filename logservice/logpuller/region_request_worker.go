@@ -127,8 +127,7 @@ func newRegionRequestWorker(
 				for _, state := range m {
 					state.markStopped(regionErr)
 					regionEvent := regionEvent{
-						state:  state,
-						worker: worker,
+						states: []*regionFeedState{state},
 					}
 					worker.client.pushRegionEventToDS(subID, regionEvent)
 				}
@@ -238,8 +237,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 		state := s.getRegionState(subscriptionID, regionID)
 		if state != nil {
 			regionEvent := regionEvent{
-				state:  state,
-				worker: s,
+				states: []*regionFeedState{state},
 			}
 			switch eventData := event.Event.(type) {
 			case *cdcpb.Event_Entries_:
@@ -259,7 +257,6 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 					zap.Uint64("workerID", s.workerID),
 					zap.Uint64("subscriptionID", uint64(subscriptionID)),
 					zap.Uint64("regionID", event.RegionId),
-					zap.Bool("stateIsNil", state == nil),
 					zap.Any("error", eventData.Error))
 				state.markStopped(&eventError{err: eventData.Error})
 			case *cdcpb.Event_ResolvedTs:
@@ -301,21 +298,25 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 			zap.Any("regionIDs", resolvedTsEvent.Regions))
 		return
 	}
+	resolvedStates := make([]*regionFeedState, 0, len(resolvedTsEvent.Regions))
 	for _, regionID := range resolvedTsEvent.Regions {
 		if state := s.getRegionState(subscriptionID, regionID); state != nil {
-			s.client.pushRegionEventToDS(SubscriptionID(resolvedTsEvent.RequestId), regionEvent{
-				state:      state,
-				worker:     s,
-				resolvedTs: resolvedTsEvent.Ts,
-			})
-		} else {
-			log.Warn("region request worker receives a resolved ts event for an untracked region",
-				zap.Uint64("workerID", s.workerID),
-				zap.Uint64("subscriptionID", uint64(subscriptionID)),
-				zap.Uint64("regionID", regionID),
-				zap.Uint64("resolvedTs", resolvedTsEvent.Ts))
+			resolvedStates = append(resolvedStates, state)
+			continue
 		}
+		log.Warn("region request worker receives a resolved ts event for an untracked region",
+			zap.Uint64("workerID", s.workerID),
+			zap.Uint64("subscriptionID", uint64(subscriptionID)),
+			zap.Uint64("regionID", regionID),
+			zap.Uint64("resolvedTs", resolvedTsEvent.Ts))
 	}
+	if len(resolvedStates) == 0 {
+		return
+	}
+	s.client.pushRegionEventToDS(subscriptionID, regionEvent{
+		resolvedTs: resolvedTsEvent.Ts,
+		states:     resolvedStates,
+	})
 }
 
 // processRegionSendTask receives region requests from the channel and sends them to the remote store.
@@ -379,8 +380,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 			for _, state := range s.takeRegionStates(subID) {
 				state.markStopped(&requestCancelledErr{})
 				regionEvent := regionEvent{
-					state:  state,
-					worker: s,
+					states: []*regionFeedState{state},
 				}
 				s.client.pushRegionEventToDS(subID, regionEvent)
 			}
