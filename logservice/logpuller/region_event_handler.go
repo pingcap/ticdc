@@ -38,25 +38,17 @@ const (
 )
 
 type regionEvent struct {
-	// Entry events: `state` and `entries` are set together.
-	// `state` can also be set alone for region-error/stale notifications.
-	state   *regionFeedState
-	entries *cdcpb.Event_Entries_
+	// `states` is always non-empty.
+	// Entry events: `states` has exactly one element and `entries` is set.
+	// Region-error/stale notifications: `states` has exactly one element.
+	// Resolved-ts events: `resolvedTs` is set and `states` contains all related regions.
+	states []*regionFeedState
 
-	// Resolved-ts events: `resolvedTs` and `resolvedTsStates` are set together.
-	// For a single-region resolved-ts event, `resolvedTsStates` contains exactly one state.
-	// Note: for resolved-ts events, `state` must be nil (see regionRequestWorker.dispatchRegionChangeEvents
-	// and regionRequestWorker.dispatchResolvedTsEvent).
-	resolvedTs       uint64
-	resolvedTsStates []*regionFeedState
-
-	worker *regionRequestWorker // TODO: remove the field
+	entries    *cdcpb.Event_Entries_
+	resolvedTs uint64
 }
 
 func (event *regionEvent) getSize() int {
-	if event == nil {
-		return 0
-	}
 	size := int(unsafe.Sizeof(*event))
 	if event.entries != nil {
 		size += int(unsafe.Sizeof(*event.entries))
@@ -68,10 +60,17 @@ func (event *regionEvent) getSize() int {
 			size += len(row.OldValue)
 		}
 	}
-	if event.resolvedTs != 0 && len(event.resolvedTsStates) > 0 {
-		size += len(event.resolvedTsStates) * int(unsafe.Sizeof((*regionFeedState)(nil)))
+	if len(event.states) > 0 {
+		size += len(event.states) * int(unsafe.Sizeof((*regionFeedState)(nil)))
 	}
 	return size
+}
+
+func (event regionEvent) mustFirstState() *regionFeedState {
+	if len(event.states) == 0 || event.states[0] == nil {
+		log.Panic("region event has empty states", zap.Any("event", event))
+	}
+	return event.states[0]
 }
 
 type regionEventHandler struct {
@@ -79,11 +78,7 @@ type regionEventHandler struct {
 }
 
 func (h *regionEventHandler) Path(event regionEvent) SubscriptionID {
-	if event.state != nil {
-		return SubscriptionID(event.state.requestID)
-	} else {
-		return SubscriptionID(event.resolvedTsStates[0].requestID)
-	}
+	return SubscriptionID(event.mustFirstState().requestID)
 }
 
 func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent) bool {
@@ -95,18 +90,14 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 
 	newResolvedTs := uint64(0)
 	for _, event := range events {
-		if event.state != nil && event.state.isStale() {
-			h.handleRegionError(event.state, event.worker)
+		if len(event.states) == 1 && event.states[0].isStale() {
+			h.handleRegionError(event.states[0])
 			continue
 		}
 		if event.entries != nil {
-			handleEventEntries(span, event.state, event.entries)
+			handleEventEntries(span, event.mustFirstState(), event.entries)
 		} else if event.resolvedTs != 0 {
-			resolvedStates := event.resolvedTsStates
-			for _, state := range resolvedStates {
-				if state == nil {
-					continue
-				}
+			for _, state := range event.states {
 				resolvedTs := handleResolvedTs(span, state, event.resolvedTs)
 				if resolvedTs > newResolvedTs {
 					newResolvedTs = resolvedTs
@@ -150,10 +141,11 @@ func (h *regionEventHandler) GetArea(path SubscriptionID, dest *subscribedSpan) 
 
 func (h *regionEventHandler) GetTimestamp(event regionEvent) dynstream.Timestamp {
 	if event.entries != nil && event.entries.Entries != nil {
+		state := event.mustFirstState()
 		for _, entry := range event.entries.Entries.GetEntries() {
 			switch entry.Type {
 			case cdcpb.Event_INITIALIZED:
-				return dynstream.Timestamp(event.state.region.resolvedTs())
+				return dynstream.Timestamp(state.region.resolvedTs())
 			case cdcpb.Event_COMMITTED,
 				cdcpb.Event_PREWRITE,
 				cdcpb.Event_COMMIT,
@@ -174,47 +166,39 @@ func (h *regionEventHandler) GetType(event regionEvent) dynstream.EventType {
 	if event.entries != nil || event.resolvedTs != 0 {
 		// Note: resolved ts may be from different regions, so they are not periodic signal
 		return dynstream.EventType{DataGroup: DataGroupEntriesOrResolvedTs, Property: dynstream.BatchableData}
-	} else if event.state != nil && event.state.isStale() {
+	} else if len(event.states) == 1 && event.mustFirstState().isStale() {
 		return dynstream.EventType{DataGroup: DataGroupError, Property: dynstream.BatchableData}
 	} else {
+		state := event.mustFirstState()
 		log.Panic("unknown event type",
-			zap.Uint64("regionID", event.state.getRegionID()),
-			zap.Uint64("requestID", event.state.requestID),
-			zap.Uint64("workerID", event.worker.workerID))
+			zap.Uint64("regionID", state.getRegionID()),
+			zap.Uint64("requestID", state.requestID),
+			zap.Uint64("workerID", state.worker.workerID))
 	}
 	return dynstream.DefaultEventType
 }
 
 func (h *regionEventHandler) OnDrop(event regionEvent) interface{} {
 	// TODO: Distinguish between drop events caused by "path not found" errors and memory control.
+	state := event.mustFirstState()
 	fields := []zap.Field{
 		zap.Uint64("subscriptionID", uint64(h.Path(event))),
 		zap.Bool("hasEntries", event.entries != nil),
 		zap.Bool("hasResolvedTs", event.resolvedTs != 0),
-		zap.Int("resolvedTsStates", len(event.resolvedTsStates)),
-	}
-	if event.state != nil {
-		fields = append(fields,
-			zap.Uint64("regionID", event.state.getRegionID()),
-			zap.Uint64("requestID", event.state.requestID),
-			zap.Bool("stateIsStale", event.state.isStale()))
-	} else if len(event.resolvedTsStates) > 0 && event.resolvedTsStates[0] != nil {
-		state := event.resolvedTsStates[0]
-		fields = append(fields,
-			zap.Uint64("regionID", state.getRegionID()),
-			zap.Uint64("requestID", state.requestID),
-			zap.Bool("stateIsStale", state.isStale()))
-	}
-	if event.worker != nil {
-		fields = append(fields, zap.Uint64("workerID", event.worker.workerID))
+		zap.Int("states", len(event.states)),
+		zap.Uint64("regionID", state.getRegionID()),
+		zap.Uint64("requestID", state.requestID),
+		zap.Bool("stateIsStale", state.isStale()),
+		zap.Uint64("workerID", state.worker.workerID),
 	}
 	log.Warn("drop region event", fields...)
 	return nil
 }
 
-func (h *regionEventHandler) handleRegionError(state *regionFeedState, worker *regionRequestWorker) {
+func (h *regionEventHandler) handleRegionError(state *regionFeedState) {
 	stepsToRemoved := state.markRemoved()
 	err := state.takeError()
+	worker := state.worker
 	if err != nil {
 		log.Debug("region event handler get a region error",
 			zap.Uint64("workerID", worker.workerID),

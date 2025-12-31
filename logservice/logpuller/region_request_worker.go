@@ -127,8 +127,7 @@ func newRegionRequestWorker(
 				for _, state := range m {
 					state.markStopped(regionErr)
 					regionEvent := regionEvent{
-						state:  state,
-						worker: worker,
+						states: []*regionFeedState{state},
 					}
 					worker.client.pushRegionEventToDS(subID, regionEvent)
 				}
@@ -247,9 +246,8 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 					continue
 				}
 				s.client.pushRegionEventToDS(SubscriptionID(event.RequestId), regionEvent{
-					state:   state,
+					states:  []*regionFeedState{state},
 					entries: eventData,
-					worker:  s,
 				})
 			case *cdcpb.Event_Admin_:
 				// ignore
@@ -259,19 +257,15 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 					zap.Uint64("workerID", s.workerID),
 					zap.Uint64("subscriptionID", uint64(subscriptionID)),
 					zap.Uint64("regionID", event.RegionId),
-					zap.Bool("stateIsNil", state == nil),
 					zap.Any("error", eventData.Error))
 				state.markStopped(&eventError{err: eventData.Error})
 				s.client.pushRegionEventToDS(SubscriptionID(event.RequestId), regionEvent{
-					state:  state,
-					worker: s,
+					states: []*regionFeedState{state},
 				})
 			case *cdcpb.Event_ResolvedTs:
-				// Resolved-ts events must not set `state`; they carry states via `resolvedTsStates`.
 				s.client.pushRegionEventToDS(SubscriptionID(event.RequestId), regionEvent{
-					resolvedTs:       eventData.ResolvedTs,
-					resolvedTsStates: []*regionFeedState{state},
-					worker:           s,
+					resolvedTs: eventData.ResolvedTs,
+					states:     []*regionFeedState{state},
 				})
 			case *cdcpb.Event_LongTxn_:
 				// ignore
@@ -325,9 +319,8 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 		return
 	}
 	s.client.pushRegionEventToDS(subscriptionID, regionEvent{
-		worker:           s,
-		resolvedTs:       resolvedTsEvent.Ts,
-		resolvedTsStates: resolvedStates,
+		resolvedTs: resolvedTsEvent.Ts,
+		states:     resolvedStates,
 	})
 }
 
@@ -392,8 +385,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 			for _, state := range s.takeRegionStates(subID) {
 				state.markStopped(&requestCancelledErr{})
 				regionEvent := regionEvent{
-					state:  state,
-					worker: s,
+					states: []*regionFeedState{state},
 				}
 				s.client.pushRegionEventToDS(subID, regionEvent)
 			}
