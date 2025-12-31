@@ -237,10 +237,10 @@ func (d *BasicDispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.S
 	// Only the table trigger event dispatcher need to create a tableSchemaStore
 	// Because we only need to calculate the tableNames or TableIds in the sink
 	// when the event dispatcher manager have table trigger event dispatcher
-	if !d.tableSpan.Equal(common.KeyspaceDDLSpan(d.tableSpan.KeyspaceID)) {
-		log.Error("InitializeTableSchemaStore should only be received by table trigger event dispatcher", zap.Any("dispatcher", d.id))
-		return false, errors.ErrChangefeedInitTableTriggerEventDispatcherFailed.
-			GenWithStackByArgs("InitializeTableSchemaStore should only be received by table trigger event dispatcher")
+	if !d.IsTableTriggerDispatcher() {
+		log.Error("InitializeTableSchemaStore should only be received by table trigger dispatcher", zap.Any("dispatcher", d.id))
+		return false, errors.ErrChangefeedInitTableTriggerDispatcherFailed.
+			GenWithStackByArgs("InitializeTableSchemaStore should only be received by table trigger dispatcher")
 	}
 
 	if d.tableSchemaStore != nil {
