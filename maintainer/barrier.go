@@ -353,6 +353,32 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 			b.checkEventFinish(event)
 			return event, nil, "", true
 		}
+
+		// For DB/All block events (including syncpoint), maintainer creates the range checker based on
+		// spanController's current task snapshot when it receives the table trigger dispatcher's report
+		// (see BarrierEvent.markDispatcherEventDone -> createRangeCheckerForTypeDB/All).
+		//
+		// If there are pending schedule-required events (e.g. TRUNCATE TABLE) that have finished writing
+		// but not finished scheduling yet, this snapshot may miss newly added tables and lead to an
+		// incomplete range checker, allowing the DB/All event to advance too early.
+		//
+		// To avoid this race, when the table trigger dispatcher reports a DB/All block event and there
+		// are still pending schedule-required events, we intentionally do NOT ack or act on this report.
+		// The table trigger dispatcher will resend the block status later, after scheduling is done.
+		if dispatcherID == b.spanController.GetDDLDispatcherID() &&
+			blockState.BlockTables != nil &&
+			(blockState.BlockTables.InfluenceType != heartbeatpb.InfluenceType_Normal) {
+			if pending := b.pendingEvents.Len(); pending > 0 {
+				log.Debug("discard db/all block event from ddl dispatcher due to pending schedule events, wait next resend",
+					zap.String("changefeed", changefeedID.Name()),
+					zap.String("dispatcher", dispatcherID.String()),
+					zap.Uint64("commitTs", blockState.BlockTs),
+					zap.Bool("isSyncPoint", blockState.IsSyncPoint),
+					zap.Int("pendingScheduleEvents", pending))
+				return event, nil, "", false
+			}
+		}
+
 		// the block event, and check whether we need to send write action
 		event.markDispatcherEventDone(dispatcherID)
 		status, targetID := event.checkEventAction(dispatcherID)

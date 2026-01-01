@@ -1033,3 +1033,77 @@ func TestDispatcher_SkipDMLAsStartTs_Disabled(t *testing.T) {
 	require.True(t, block)
 	require.Equal(t, 1, len(mockSink.GetDMLs()), "DML at commitTs=100 should be processed when skipDMLAsStartTs=false")
 }
+
+func TestHoldBlockEventUntilNoResendTasks(t *testing.T) {
+	keyspaceID := getTestingKeyspaceID()
+	ddlTableSpan := common.KeyspaceDDLSpan(keyspaceID)
+	mockSink := sink.NewMockSink(common.MysqlSinkType)
+	dispatcher := newDispatcherForTest(mockSink, ddlTableSpan)
+
+	nodeID := node.NewID()
+
+	// A non-blocking DDL that adds a new table is tracked in resendTaskMap until maintainer ACKs
+	// (ACK implies scheduling is completed).
+	createTableDDL := &commonEvent.DDLEvent{
+		FinishedTs: 10,
+		StartTs:    10,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{0},
+		},
+		NeedAddedTables: []commonEvent.Table{
+			{SchemaID: 1, TableID: 101},
+		},
+	}
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, createTableDDL)}, func() {})
+	require.True(t, block)
+
+	select {
+	case msg := <-dispatcher.GetBlockStatusesChan():
+		require.False(t, msg.State.IsBlocked)
+		require.False(t, msg.State.IsSyncPoint)
+		require.Equal(t, uint64(10), msg.State.BlockTs)
+	case <-time.After(time.Second):
+		require.FailNow(t, "expected add-table block status")
+	}
+	require.Equal(t, 1, dispatcher.resendTaskMap.Len())
+
+	// A DB/All block event must be deferred until resendTaskMap becomes empty,
+	// otherwise maintainer may build an incomplete range checker.
+	dropDBDDL := &commonEvent.DDLEvent{
+		FinishedTs: 20,
+		StartTs:    20,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeDB,
+			SchemaID:      1,
+		},
+	}
+	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dropDBDDL)}, func() {})
+	require.True(t, block)
+
+	select {
+	case msg := <-dispatcher.GetBlockStatusesChan():
+		require.FailNow(t, "unexpected block status", "received=%v", msg)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	// Simulate maintainer ACK for the create table scheduling message.
+	dispatcher.HandleDispatcherStatus(&heartbeatpb.DispatcherStatus{
+		Ack: &heartbeatpb.ACK{
+			CommitTs:    10,
+			IsSyncPoint: false,
+		},
+	})
+
+	select {
+	case msg := <-dispatcher.GetBlockStatusesChan():
+		require.True(t, msg.State.IsBlocked)
+		require.False(t, msg.State.IsSyncPoint)
+		require.Equal(t, uint64(20), msg.State.BlockTs)
+		require.Equal(t, heartbeatpb.InfluenceType_DB, msg.State.BlockTables.InfluenceType)
+		require.Equal(t, int64(1), msg.State.BlockTables.SchemaID)
+		require.Equal(t, heartbeatpb.BlockStage_WAITING, msg.State.Stage)
+	case <-time.After(time.Second):
+		require.FailNow(t, "expected deferred DB-level block status")
+	}
+}
