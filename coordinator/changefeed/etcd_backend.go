@@ -309,7 +309,7 @@ func (b *EtcdBackend) SetChangefeedProgress(ctx context.Context, id common.Chang
 		return errors.Trace(err)
 	}
 	if !putResp.Succeeded {
-		err = cerror.ErrMetaOpFailed.GenWithStackByArgs(fmt.Sprintf("update changefeed to %s-%d", id.DisplayName, progress))
+		err = cerror.ErrMetaOpFailed.GenWithStackByArgs(fmt.Sprintf("update changefeed to %s-%d", id.DisplayName, progress), putResp.Responses)
 		return errors.Trace(err)
 	}
 	return nil
