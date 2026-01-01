@@ -92,8 +92,6 @@ func hashTableInfo(tableInfo *model.TableInfo) Digest {
 		binary.BigEndian.PutUint64(buf, uint64(boolToInt(columnType.IsArray())))
 		sha256Hasher.Write(buf)
 
-		// Include frequently-checked column attributes in the digest to reduce collisions
-		// and avoid linear scans within the same hash bucket.
 		binary.BigEndian.PutUint64(buf, uint64(boolToInt(col.DefaultIsExpr)))
 		sha256Hasher.Write(buf)
 		binary.BigEndian.PutUint64(buf, uint64(boolToInt(col.GeneratedStored)))
@@ -208,7 +206,6 @@ func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indice
 		if col.Version != columns[i].Version {
 			return false
 		}
-
 	}
 
 	if len(s.Indices) != len(indices) {
