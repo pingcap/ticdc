@@ -579,14 +579,16 @@ func TestGetOrSetColumnSchema_SharedSchema(t *testing.T) {
 
 func TestGetOrSetColumnSchema_SameColumnsAndIndices_ChecksAdditionalColumnAttrs(t *testing.T) {
 	tests := []struct {
-		name   string
-		mutate func(col *model.ColumnInfo) error
+		name             string
+		mutate           func(col *model.ColumnInfo) error
+		expectDigestSame bool
 	}{
 		{
 			name: "origin default value",
 			mutate: func(col *model.ColumnInfo) error {
 				return col.SetOriginDefaultValue(int64(2))
 			},
+			expectDigestSame: true,
 		},
 		{
 			name: "default is expr",
@@ -594,6 +596,7 @@ func TestGetOrSetColumnSchema_SameColumnsAndIndices_ChecksAdditionalColumnAttrs(
 				col.DefaultIsExpr = true
 				return nil
 			},
+			expectDigestSame: false,
 		},
 		{
 			name: "generated stored",
@@ -601,6 +604,7 @@ func TestGetOrSetColumnSchema_SameColumnsAndIndices_ChecksAdditionalColumnAttrs(
 				col.GeneratedStored = true
 				return nil
 			},
+			expectDigestSame: false,
 		},
 		{
 			name: "hidden column",
@@ -608,6 +612,7 @@ func TestGetOrSetColumnSchema_SameColumnsAndIndices_ChecksAdditionalColumnAttrs(
 				col.Hidden = true
 				return nil
 			},
+			expectDigestSame: false,
 		},
 		{
 			name: "generated expr string",
@@ -615,6 +620,7 @@ func TestGetOrSetColumnSchema_SameColumnsAndIndices_ChecksAdditionalColumnAttrs(
 				col.GeneratedExprString = "id + 2"
 				return nil
 			},
+			expectDigestSame: true,
 		},
 		{
 			name: "column info version",
@@ -622,6 +628,7 @@ func TestGetOrSetColumnSchema_SameColumnsAndIndices_ChecksAdditionalColumnAttrs(
 				col.Version = model.ColumnInfoVersion0
 				return nil
 			},
+			expectDigestSame: false,
 		},
 	}
 
@@ -689,9 +696,16 @@ func TestGetOrSetColumnSchema_SameColumnsAndIndices_ChecksAdditionalColumnAttrs(
 			require.NoError(t, err)
 			variantSchema := storage.GetOrSetColumnSchema(variantTable)
 
-			require.Equal(t, baseSchema.Digest, variantSchema.Digest)
-			require.NotSame(t, baseSchema, variantSchema)
-			require.Len(t, storage.m[baseSchema.Digest], 2)
+			if tt.expectDigestSame {
+				require.Equal(t, baseSchema.Digest, variantSchema.Digest)
+				require.NotSame(t, baseSchema, variantSchema)
+				require.Len(t, storage.m[baseSchema.Digest], 2)
+			} else {
+				require.NotEqual(t, baseSchema.Digest, variantSchema.Digest)
+				require.NotSame(t, baseSchema, variantSchema)
+				require.Len(t, storage.m[baseSchema.Digest], 1)
+				require.Len(t, storage.m[variantSchema.Digest], 1)
+			}
 		})
 	}
 }
