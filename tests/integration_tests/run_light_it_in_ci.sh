@@ -56,7 +56,8 @@ mysql_groups=(
 	# G11
 	'multi_tables_ddl ddl_attributes multi_cdc_cluster fail_over_ddl_L'
 	# G12
-	'row_format tiflash multi_rocks fail_over_ddl_M'
+	# ds_memory_control
+	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema'
 	# G13
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
 	# G14
@@ -94,7 +95,7 @@ kafka_groups=(
 	# G11
 	'ddl_attributes multi_tables_ddl fail_over_ddl_L'
 	# G12
-	'row_format tiflash multi_rocks fail_over_ddl_M'
+	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema'
 	# G13
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
 	# G14
@@ -132,7 +133,7 @@ pulsar_groups=(
 	# G11
 	'ddl_attributes multi_tables_ddl fail_over_ddl_L'
 	# G12
-	'row_format tiflash multi_rocks fail_over_ddl_M'
+	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema'
 	# G13
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
 	# G14
@@ -170,7 +171,7 @@ storage_groups=(
 	# G11
 	'ddl_attributes multi_tables_ddl fail_over_ddl_L'
 	# G12
-	'row_format tiflash multi_rocks fail_over_ddl_M'
+	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema'
 	# G13
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
 	# G14
