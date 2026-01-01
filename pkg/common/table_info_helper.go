@@ -176,6 +176,25 @@ func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indice
 		if col.GetDefaultValue() != columns[i].GetDefaultValue() {
 			return false
 		}
+		if col.GetOriginDefaultValue() != columns[i].GetOriginDefaultValue() {
+			return false
+		}
+		if col.DefaultIsExpr != columns[i].DefaultIsExpr {
+			return false
+		}
+		if col.GeneratedStored != columns[i].GeneratedStored {
+			return false
+		}
+		if col.Hidden != columns[i].Hidden {
+			return false
+		}
+		if col.GeneratedExprString != columns[i].GeneratedExprString {
+			return false
+		}
+		if col.Version != columns[i].Version {
+			return false
+		}
+
 	}
 
 	if len(s.Indices) != len(indices) {
