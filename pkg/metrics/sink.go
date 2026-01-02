@@ -66,6 +66,14 @@ var (
 			Help:      "Total count of DML events.",
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
+	ExecDMLEventRowsAffected = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "dml_event_affected_row_count",
+			Help:      "Total count of affected rows.",
+		}, []string{getKeyspaceLabel(), "changefeed", "type", "row_type"})
+
 	// ExecDDLHistogram records the exexution time of a DDL.
 	ExecDDLHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -246,6 +254,7 @@ func initSinkMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventSizeHistogram)
 	registry.MustRegister(ExecutionErrorCounter)
 	registry.MustRegister(ExecDMLEventCounter)
+	registry.MustRegister(ExecDMLEventRowsAffected)
 
 	// txn sink metrics
 	registry.MustRegister(ConflictDetectDuration)
