@@ -14,6 +14,7 @@
 package eventservice
 
 import (
+	"math"
 	"sync"
 	"time"
 
@@ -25,8 +26,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/utils/pqueue"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
+	"golang.org/x/time/rate"
 )
 
 const (
@@ -120,6 +123,9 @@ type dispatcherStat struct {
 	// readyInterval is the interval between two ready events in seconds.
 	// it will double the interval for next time, but cap at maxReadyEventInterval.
 	readyInterval atomic.Int64
+
+	// heapIndex is used by the priority queue to track the position of the dispatcher.
+	heapIndex atomic.Int32
 
 	// lastReceivedHeartbeatTime is the time when the dispatcher last received the heartbeat from the event service.
 	lastReceivedHeartbeatTime atomic.Int64
@@ -288,6 +294,38 @@ func (t scanTask) GetKey() common.DispatcherID {
 	return t.id
 }
 
+var _ pqueue.PriorityTask = (*dispatcherStat)(nil)
+
+func (a *dispatcherStat) Priority() int {
+	checkpoint := a.checkpointTs.Load()
+	if checkpoint > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	return int(checkpoint)
+}
+
+func (a *dispatcherStat) SetHeapIndex(index int) {
+	a.heapIndex.Store(int32(index))
+}
+
+func (a *dispatcherStat) GetHeapIndex() int {
+	return int(a.heapIndex.Load())
+}
+
+func (a *dispatcherStat) LessThan(other pqueue.PriorityTask) bool {
+	o, ok := other.(*dispatcherStat)
+	if !ok {
+		return false
+	}
+
+	aTs := a.checkpointTs.Load()
+	bTs := o.checkpointTs.Load()
+	if aTs == bTs {
+		return a.id.String() < o.id.String()
+	}
+	return aTs < bTs
+}
+
 var wrapEventPool = sync.Pool{
 	New: func() interface{} {
 		return &wrapEvent{}
@@ -421,17 +459,25 @@ func (c *resolvedTsCache) reset() {
 	c.len = 0
 }
 
+const minScanLimitRate = 1024 * 1024 // 1MB/s
+
 type changefeedStatus struct {
 	changefeedID common.ChangeFeedID
 
 	dispatchers sync.Map // common.DispatcherID -> *atomic.Pointer[dispatcherStat]
 
 	availableMemoryQuota sync.Map // nodeID -> atomic.Uint64 (memory quota in bytes)
+	scanLimit            *rate.Limiter
+	priorityQueue        *pqueue.PriorityQueue
 }
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
+	scanLimit := rate.NewLimiter(rate.Limit(minScanLimitRate), minScanLimitRate)
 	return &changefeedStatus{
-		changefeedID: changefeedID,
+		changefeedID:         changefeedID,
+		scanLimit:            scanLimit,
+		availableMemoryQuota: sync.Map{},
+		priorityQueue:        pqueue.NewBoundedPriorityQueue(1024),
 	}
 }
 

@@ -122,6 +122,12 @@ var (
 		Name:      "available_memory_quota",
 	}, []string{"changefeed"})
 
+	EventServiceScanLimitRateVec = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_service",
+		Name:      "scan_limit_rate",
+	}, []string{"changefeed"})
+
 	EventServiceScannedDMLSize = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: "ticdc",
 		Subsystem: "event_service",
@@ -187,6 +193,7 @@ func initEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceDispatcherUpdateResolvedTsDiff)
 	registry.MustRegister(EventServiceSkipResolvedTsCount)
 	registry.MustRegister(EventServiceAvailableMemoryQuotaGaugeVec)
+	registry.MustRegister(EventServiceScanLimitRateVec)
 	registry.MustRegister(EventServiceScannedDMLSize)
 	registry.MustRegister(EventServiceScannedTxnCount)
 	registry.MustRegister(EventServiceSkipScanCount)
