@@ -168,6 +168,12 @@ func TestProcessMessage(t *testing.T) {
 		dml.Seq = seq.Add(1)
 		dml.Epoch = 1
 		dml.CommitTs = ddl.FinishedTs + uint64(i)
+		// TableInfoVersion is set during event processing to ddl.FinishedTs
+		// (from tableInfoVersion = max(d.tableInfoVersion.Load(), d.target.GetStartTs())
+		// where d.tableInfoVersion is set when processing the DDL event).
+		// Since BatchDMLEvent is cloned during processing to avoid race conditions,
+		// the processed events are different objects, so we set this here on the expected events.
+		dml.TableInfoVersion = ddl.FinishedTs
 		events[dml.Seq] = dml
 	}
 
