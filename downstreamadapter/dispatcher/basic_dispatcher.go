@@ -28,6 +28,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sink/util"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -51,6 +52,9 @@ type DispatcherService interface {
 	GetCheckpointTs() uint64
 	HandleEvents(events []DispatcherEvent, wakeCallback func()) (block bool)
 	IsOutputRawChangeEvent() bool
+	// GetRouter returns the router for schema/table name routing.
+	// May return nil if no routing rules are configured.
+	GetRouter() *util.Router
 }
 
 // Dispatcher defines the interface for event dispatchers that are responsible for receiving events

@@ -41,6 +41,10 @@ type DDLEvent struct {
 	SchemaID   int64  `json:"schema_id"`
 	SchemaName string `json:"schema_name"`
 	TableName  string `json:"table_name"`
+	// TargetSchemaName is the routed schema name when sink routing is configured.
+	// When set, GetDDLSchemaName() returns this value instead of SchemaName.
+	// This field is not serialized as it's only used during sink execution.
+	TargetSchemaName string `json:"-"`
 	// the following two fields are just used for RenameTable,
 	// they are the old schema/table name of the table
 	ExtraSchemaName string            `json:"extra_schema_name"`
@@ -255,6 +259,17 @@ func (e *DDLEvent) GetDDLQuery() string {
 	return e.Query
 }
 
+func (e *DDLEvent) GetDDLSchemaName() string {
+	if e == nil {
+		return ""
+	}
+	// Return the target schema name if routing is configured
+	if e.TargetSchemaName != "" {
+		return e.TargetSchemaName
+	}
+	return e.SchemaName
+}
+
 func (e *DDLEvent) GetDDLType() model.ActionType {
 	return model.ActionType(e.Type)
 }
@@ -396,6 +411,39 @@ func (t *DDLEvent) GetSize() int64 {
 
 func (t *DDLEvent) IsPaused() bool {
 	return false
+}
+
+// CloneForRouting creates a shallow copy of the DDLEvent that can safely be mutated
+// for routing purposes without affecting the original event. This is necessary because
+// DDLEvents may be shared between multiple dispatchers (e.g., EventDispatcher and
+// RedoDispatcher) and mutating the original would cause race conditions.
+//
+// The clone shares most fields with the original (they are read-only after creation),
+// but the following fields are prepared for independent mutation:
+// - Query: will be rewritten with routed schema/table names
+// - TargetSchemaName: will be set by routing
+// - TableInfo: will be replaced with routed version (via CloneWithRouting)
+// - MultipleTableInfos: each element will be replaced with routed version
+//
+// PostTxnFlushed callbacks are shared between the original and clone since sinks
+// call PostFlush() on the event for checkpoint/progress tracking.
+func (d *DDLEvent) CloneForRouting() *DDLEvent {
+	if d == nil {
+		return nil
+	}
+
+	// Create shallow copy - this copies all fields including the PostTxnFlushed
+	// slice header, so callbacks are shared (which is correct behavior)
+	clone := *d
+
+	// MultipleTableInfos needs a new slice so each dispatcher can independently
+	// apply routing to its elements without affecting others
+	if d.MultipleTableInfos != nil {
+		clone.MultipleTableInfos = make([]*common.TableInfo, len(d.MultipleTableInfos))
+		copy(clone.MultipleTableInfos, d.MultipleTableInfos)
+	}
+
+	return &clone
 }
 
 func (t *DDLEvent) Len() int32 {

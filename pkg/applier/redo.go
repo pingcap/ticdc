@@ -463,7 +463,10 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 		SinkConfig: &config.SinkConfig{},
 	}
 	if ra.mysqlSink == nil {
-		ra.mysqlSink, err = mysql.New(egCtx, ra.rd.GetChangefeedID(), replicaConfig, sinkURI)
+		// Pass nil for router because redo logs already contain routed schema/table names.
+		// Routing was applied when events were written to redo logs, so we don't need
+		// to apply routing again during replay.
+		ra.mysqlSink, err = mysql.New(egCtx, ra.rd.GetChangefeedID(), replicaConfig, sinkURI, nil)
 		if err != nil {
 			return err
 		}
