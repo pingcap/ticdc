@@ -227,7 +227,7 @@ func NewDispatcherManager(
 			manager.config.SinkConfig.DispatchRules,
 		)
 		if err != nil {
-			return nil, 0, errors.Trace(err)
+			return nil, errors.Trace(err)
 		}
 	}
 
