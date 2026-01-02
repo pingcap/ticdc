@@ -238,7 +238,7 @@ func (b *Barrier) Resend() []*messaging.TargetMessage {
 // because on the complete checkpointTs calculation should consider the new dispatcher.
 func (b *Barrier) ShouldBlockCheckpointTs() bool {
 	flag := false
-	b.blockedEvents.RangeWoLock(func(key eventKey, barrierEvent *BarrierEvent) bool {
+	b.blockedEvents.RangeWithoutLock(func(key eventKey, barrierEvent *BarrierEvent) bool {
 		if barrierEvent.hasNewTable {
 			flag = true
 			return false

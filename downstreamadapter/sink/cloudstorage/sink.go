@@ -230,7 +230,8 @@ func (s *sink) writeFile(v *commonEvent.DDLEvent, def cloudstorage.TableDefiniti
 	}
 	log.Debug("write ddl event to external storage",
 		zap.String("path", path), zap.Any("ddl", v))
-	return s.statistics.RecordDDLExecution(func() error {
+	ddlType := v.GetDDLType().String()
+	return s.statistics.RecordDDLExecution(ddlType, func() error {
 		err = s.storage.WriteFile(s.ctx, path, encodedDef)
 		if err != nil {
 			return err

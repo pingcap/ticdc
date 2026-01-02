@@ -116,8 +116,9 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 // For 'add index' ddl, it will return immediately without waiting and will query it during the next DDL execution.
 func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 	ddlCreateTime := getDDLCreateTime(w.ctx, w.db)
+	ddlType := event.GetDDLType().String()
 	return retry.Do(w.ctx, func() error {
-		err := w.statistics.RecordDDLExecution(func() error { return w.execDDL(event) })
+		err := w.statistics.RecordDDLExecution(ddlType, func() error { return w.execDDL(event) })
 		if err != nil {
 			if errors.IsIgnorableMySQLDDLError(err) {
 				// NOTE: don't change the log, some tests depend on it.
