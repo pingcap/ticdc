@@ -434,6 +434,13 @@ func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionP
 		group = util.NewEventsGroup(progress.partition, tableID)
 		progress.eventsGroup[tableID] = group
 	}
+	if commitTs < progress.watermark {
+		log.Warn("DML Event fallback row, since less than the partition watermark, ignore it",
+			zap.Int64("tableID", tableID), zap.Int32("partition", group.Partition),
+			zap.Uint64("commitTs", commitTs), zap.Uint64("watermark", progress.watermark),
+			zap.String("schema", schema), zap.String("table", table))
+		return
+	}
 	if commitTs >= group.HighWatermark {
 		group.Append(dml, false)
 		log.Info("DML event append to the group",
