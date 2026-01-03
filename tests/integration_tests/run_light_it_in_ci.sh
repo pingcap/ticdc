@@ -50,7 +50,7 @@ mysql_groups=(
 	# G08
 	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry fail_over_ddl_I'
 	# G09
-	'sequence cdc_server_tips ddl_sequence server_config_compatibility fail_over_ddl_J'
+	'sequence cdc_server_tips ddl_sequence server_config_compatibility log_redaction fail_over_ddl_J'
 	# G10
 	'overwrite_resume_with_syncpoint restart_changefeed changefeed_error bdr_mode fail_over_ddl_K split_table_check'
 	# G11
@@ -89,7 +89,7 @@ kafka_groups=(
 	# G08
 	'capture_session_done_during_task fail_over_ddl_I'
 	# G09
-	'cdc_server_tips ddl_sequence fail_over_ddl_J'
+	'cdc_server_tips ddl_sequence log_redaction fail_over_ddl_J'
 	# G10
 	'changefeed_error batch_add_table fail_over_ddl_K split_table_check'
 	# G11
