@@ -61,9 +61,9 @@ func TestColumnSchema_GetColumnList(t *testing.T) {
 		{
 			name: "normal columns without update",
 			columns: []*model.ColumnInfo{
-				{Name: ast.CIStr{O: "id", L: "id"}, ID: 1, FieldType: types.FieldType{}},
-				{Name: ast.CIStr{O: "name", L: "name"}, ID: 2, FieldType: types.FieldType{}},
-				{Name: ast.CIStr{O: "age", L: "age"}, ID: 3, FieldType: types.FieldType{}},
+				{Name: tidbtype.CIStr{O: "id", L: "id"}, ID: 1, FieldType: types.FieldType{}},
+				{Name: tidbtype.CIStr{O: "name", L: "name"}, ID: 2, FieldType: types.FieldType{}},
+				{Name: tidbtype.CIStr{O: "age", L: "age"}, ID: 3, FieldType: types.FieldType{}},
 			},
 			columnsFlag: map[int]uint{
 				1: mysql.PriKeyFlag,
@@ -77,9 +77,9 @@ func TestColumnSchema_GetColumnList(t *testing.T) {
 		{
 			name: "normal columns with update",
 			columns: []*model.ColumnInfo{
-				{Name: ast.CIStr{O: "id", L: "id"}, ID: 1, FieldType: types.FieldType{}},
-				{Name: ast.CIStr{O: "name", L: "name"}, ID: 2, FieldType: types.FieldType{}},
-				{Name: ast.CIStr{O: "age", L: "age"}, ID: 3, FieldType: types.FieldType{}},
+				{Name: tidbtype.CIStr{O: "id", L: "id"}, ID: 1, FieldType: types.FieldType{}},
+				{Name: tidbtype.CIStr{O: "name", L: "name"}, ID: 2, FieldType: types.FieldType{}},
+				{Name: tidbtype.CIStr{O: "age", L: "age"}, ID: 3, FieldType: types.FieldType{}},
 			},
 			columnsFlag: map[int]uint{
 				1: mysql.PriKeyFlag,
@@ -93,9 +93,9 @@ func TestColumnSchema_GetColumnList(t *testing.T) {
 		{
 			name: "with generated columns",
 			columns: []*model.ColumnInfo{
-				{Name: ast.CIStr{O: "id", L: "id"}, ID: 1, FieldType: types.FieldType{}},
-				{Name: ast.CIStr{O: "name", L: "name"}, ID: 2, FieldType: types.FieldType{}},
-				{Name: ast.CIStr{O: "full_name", L: "full_name"}, ID: 3, FieldType: types.FieldType{}}, // generated column
+				{Name: tidbtype.CIStr{O: "id", L: "id"}, ID: 1, FieldType: types.FieldType{}},
+				{Name: tidbtype.CIStr{O: "name", L: "name"}, ID: 2, FieldType: types.FieldType{}},
+				{Name: tidbtype.CIStr{O: "full_name", L: "full_name"}, ID: 3, FieldType: types.FieldType{}}, // generated column
 			},
 			columnsFlag: map[int]uint{
 				1: mysql.PriKeyFlag,
@@ -109,9 +109,9 @@ func TestColumnSchema_GetColumnList(t *testing.T) {
 		{
 			name: "with nil column",
 			columns: []*model.ColumnInfo{
-				{Name: ast.CIStr{O: "id", L: "id"}, ID: 1, FieldType: types.FieldType{}},
+				{Name: tidbtype.CIStr{O: "id", L: "id"}, ID: 1, FieldType: types.FieldType{}},
 				nil,
-				{Name: ast.CIStr{O: "age", L: "age"}, ID: 3, FieldType: types.FieldType{}},
+				{Name: tidbtype.CIStr{O: "age", L: "age"}, ID: 3, FieldType: types.FieldType{}},
 			},
 			columnsFlag: map[int]uint{
 				1: mysql.PriKeyFlag,
@@ -639,7 +639,7 @@ func TestGetOrSetColumnSchema_SameColumnsAndIndices_ChecksAdditionalColumnAttrs(
 	buildTable := func(idCol, otherCol *model.ColumnInfo) *model.TableInfo {
 		return &model.TableInfo{
 			ID:         1,
-			Name:       ast.NewCIStr("t"),
+			Name:       tidbtype.NewCIStr("t"),
 			PKIsHandle: true,
 			Columns: []*model.ColumnInfo{
 				idCol,
@@ -648,13 +648,13 @@ func TestGetOrSetColumnSchema_SameColumnsAndIndices_ChecksAdditionalColumnAttrs(
 			Indices: []*model.IndexInfo{
 				{
 					ID:      1,
-					Name:    ast.NewCIStr("PRIMARY"),
+					Name:    tidbtype.NewCIStr("PRIMARY"),
 					Primary: true,
 					Unique:  true,
 					State:   model.StatePublic,
 					Columns: []*model.IndexColumn{
 						{
-							Name:   ast.NewCIStr("id"),
+							Name:   tidbtype.NewCIStr("id"),
 							Offset: 0,
 						},
 					},
