@@ -187,10 +187,7 @@ type SharedColumnSchemaStorage struct {
 func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indices []*model.IndexInfo, pkIsHandle bool, isCommonHandle bool) bool {
 	// Handle-related flags affect how rows are decoded and how handle keys are built.
 	// They must be part of schema equality.
-	if s.PKIsHandle != pkIsHandle {
-		return false
-	}
-	if s.IsCommonHandle != isCommonHandle {
+	if s.PKIsHandle != pkIsHandle || s.IsCommonHandle != isCommonHandle {
 		return false
 	}
 
