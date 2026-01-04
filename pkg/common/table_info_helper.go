@@ -104,12 +104,17 @@ func hashTableInfo(tableInfo *model.TableInfo) Digest {
 	// idx info
 	sha256Hasher.Write([]byte("idxInfo"))
 	binary.BigEndian.PutUint64(buf, uint64(len(tableInfo.Indices)))
+	sha256Hasher.Write(buf)
 	for _, idx := range tableInfo.Indices {
 		// ID
 		binary.BigEndian.PutUint64(buf, uint64(idx.ID))
 		sha256Hasher.Write(buf)
 		// name
 		sha256Hasher.Write([]byte(idx.Name.O))
+		// state
+		// Index state affects how downstream chooses usable keys during DDL.
+		binary.BigEndian.PutUint64(buf, uint64(idx.State))
+		sha256Hasher.Write(buf)
 		// columns offset
 		binary.BigEndian.PutUint64(buf, uint64(len(idx.Columns)))
 		sha256Hasher.Write(buf)
@@ -124,6 +129,13 @@ func hashTableInfo(tableInfo *model.TableInfo) Digest {
 		binary.BigEndian.PutUint64(buf, uint64(boolToInt(idx.Primary)))
 		sha256Hasher.Write(buf)
 	}
+	// Handle-related flags affect how rows are decoded and how handle keys are built.
+	// Include them in the hash to avoid incorrectly sharing schemas across tables.
+	sha256Hasher.Write([]byte("handleFlags"))
+	binary.BigEndian.PutUint64(buf, uint64(boolToInt(tableInfo.PKIsHandle)))
+	sha256Hasher.Write(buf)
+	binary.BigEndian.PutUint64(buf, uint64(boolToInt(tableInfo.IsCommonHandle)))
+	sha256Hasher.Write(buf)
 	hash := sha256Hasher.Sum(nil)
 	return ToDigest(hash)
 }
@@ -168,7 +180,16 @@ type SharedColumnSchemaStorage struct {
 	mutex sync.Mutex
 }
 
-func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indices []*model.IndexInfo) bool {
+func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indices []*model.IndexInfo, pkIsHandle bool, isCommonHandle bool) bool {
+	// Handle-related flags affect how rows are decoded and how handle keys are built.
+	// They must be part of schema equality.
+	if s.PKIsHandle != pkIsHandle {
+		return false
+	}
+	if s.IsCommonHandle != isCommonHandle {
+		return false
+	}
+
 	if len(s.Columns) != len(columns) {
 		return false
 	}
@@ -219,6 +240,9 @@ func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indice
 		if idx.Name.O != indices[i].Name.O {
 			return false
 		}
+		if idx.State != indices[i].State {
+			return false
+		}
 		if len(idx.Columns) != len(indices[i].Columns) {
 			return false
 		}
@@ -238,12 +262,12 @@ func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indice
 }
 
 func (s *columnSchema) SameWithTableInfo(tableInfo *model.TableInfo) bool {
-	return s.sameColumnsAndIndices(tableInfo.Columns, tableInfo.Indices)
+	return s.sameColumnsAndIndices(tableInfo.Columns, tableInfo.Indices, tableInfo.PKIsHandle, tableInfo.IsCommonHandle)
 }
 
 // compare the item calculated in hashTableInfo
 func (s *columnSchema) equal(columnSchema *columnSchema) bool {
-	return s.sameColumnsAndIndices(columnSchema.Columns, columnSchema.Indices)
+	return s.sameColumnsAndIndices(columnSchema.Columns, columnSchema.Indices, columnSchema.PKIsHandle, columnSchema.IsCommonHandle)
 }
 
 func (s *SharedColumnSchemaStorage) incColumnSchemaCount(columnSchema *columnSchema) {
