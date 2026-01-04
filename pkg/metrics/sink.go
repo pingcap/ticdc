@@ -66,7 +66,7 @@ var (
 			Help:      "Total count of DML events.",
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
-	ExecDMLEventRowsAffected = prometheus.NewCounterVec(
+	ExecDMLEventRowsAffectedCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "sink",
@@ -254,7 +254,7 @@ func initSinkMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventSizeHistogram)
 	registry.MustRegister(ExecutionErrorCounter)
 	registry.MustRegister(ExecDMLEventCounter)
-	registry.MustRegister(ExecDMLEventRowsAffected)
+	registry.MustRegister(ExecDMLEventRowsAffectedCounter)
 
 	// txn sink metrics
 	registry.MustRegister(ConflictDetectDuration)

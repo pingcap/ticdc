@@ -630,8 +630,11 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The number of dml rows affected that sink flushes to downstream per second.",
           "fieldConfig": {
-            "defaults": {},
+            "defaults": {
+              "links": []
+            },
             "overrides": []
           },
           "fill": 1,
@@ -641,6 +644,102 @@
             "w": 12,
             "x": 12,
             "y": 14
+          },
+          "hiddenSeries": false,
+          "id": 200031,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": false,
+            "show": true,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
+          "percentage": false,
+          "pluginVersion": "7.5.17",
+          "pointradius": 2,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "exemplar": true,
+              "expr": "sum(rate(ticdc_sink_dml_event_affected_row_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace, changefeed, type, row_type)",
+              "format": "time_series",
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{namespace}}-{{changefeed}}-{{type}}-{{row_type}}",
+              "refId": "A"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Sink Event Row Affected Count / s",
+          "tooltip": {
+            "shared": true,
+            "sort": 2,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": 0,
+              "format": "short",
+              "logBase": 1,
+              "min": "0",
+              "show": true
+            },
+            {
+              "format": "none",
+              "logBase": 1,
+              "show": false
+            }
+          ],
+          "yaxis": {
+            "align": false
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "fill": 1,
+          "fillGradient": 0,
+          "gridPos": {
+            "h": 6,
+            "w": 12,
+            "x": 0,
+            "y": 20
           },
           "hiddenSeries": false,
           "id": 20000,
@@ -860,7 +959,7 @@
           "gridPos": {
             "h": 6,
             "w": 12,
-            "x": 0,
+            "x": 12,
             "y": 20
           },
           "id": 22301,
@@ -916,8 +1015,8 @@
           "gridPos": {
             "h": 6,
             "w": 12,
-            "x": 12,
-            "y": 20
+            "x": 0,
+            "y": 26
           },
           "hiddenSeries": false,
           "id": 10049,
@@ -1015,7 +1114,7 @@
           "gridPos": {
             "h": 6,
             "w": 12,
-            "x": 0,
+            "x": 12,
             "y": 26
           },
           "hiddenSeries": false,
@@ -3394,70 +3493,70 @@
               "show": false
             }
           ],
-	          "yaxis": {
-	            "align": false,
-	            "alignLevel": null
-	          }
-	        },
-		        {
-		          "datasource": "${DS_TEST-CLUSTER}",
-		          "description": "Build metadata of each TiCDC server instance.",
-		          "fieldConfig": {
-		            "defaults": {},
-		            "overrides": []
-		          },
-		          "gridPos": {
-		            "h": 9,
-		            "w": 12,
-		            "x": 12,
-		            "y": 31
-		          },
-		          "id": 22473,
-		          "options": {
-		            "showHeader": true,
-		            "sortBy": []
-		          },
-			          "pluginVersion": "7.5.17",
-			          "transformations": [
-			            {
-			              "id": "labelsToFields",
-			              "options": {}
-			            },
-			            {
-			              "id": "organize",
-			              "options": {
-				                "excludeByName": {
-				                  "Metric": true,
-				                  "Time": true,
-				                  "Value": true,
-				                  "__name__": true
-				                },
-				                "indexByName": {
-				                  "instance": 0,
-				                  "kernel_type": 1,
-				                  "git_hash": 2,
-				                  "release_version": 3,
-				                  "utc_build_time": 4
-				                },
-				                "renameByName": {}
-				              }
-				            }
-				          ],
-			          "targets": [
-			            {
-				              "expr": "max by (instance, kernel_type, git_hash, release_version, utc_build_time) (ticdc_server_build_info{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"})",
-				              "format": "time_series",
-				              "instant": true,
-				              "refId": "A"
-				            }
-				          ],
-		          "title": "Build Info",
-		          "type": "table"
-		        }
-	      ],
-	      "title": "Server",
-	      "type": "row"
-	    },
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        },
+        {
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Build metadata of each TiCDC server instance.",
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 12,
+            "y": 31
+          },
+          "id": 22473,
+          "options": {
+            "showHeader": true,
+            "sortBy": []
+          },
+          "pluginVersion": "7.5.17",
+          "transformations": [
+            {
+              "id": "labelsToFields",
+              "options": {}
+            },
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Metric": true,
+                  "Time": true,
+                  "Value": true,
+                  "__name__": true
+                },
+                "indexByName": {
+                  "instance": 0,
+                  "kernel_type": 1,
+                  "git_hash": 2,
+                  "release_version": 3,
+                  "utc_build_time": 4
+                },
+                "renameByName": {}
+              }
+            }
+          ],
+          "targets": [
+            {
+              "expr": "max by (instance, kernel_type, git_hash, release_version, utc_build_time) (ticdc_server_build_info{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"})",
+              "format": "time_series",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "title": "Build Info",
+          "type": "table"
+        }
+      ],
+      "title": "Server",
+      "type": "row"
+    },
     {
       "collapsed": true,
       "datasource": null,

@@ -99,8 +99,8 @@ func (b *Statistics) RecordDDLExecution(executor func() error) error {
 func (b *Statistics) RecordTotalRowsAffected(actualRowsAffected, expectedRowsAffected int64) {
 	keyspace := b.changefeedID.Keyspace()
 	changefeedID := b.changefeedID.Name()
-	ExecDMLEventRowsAffected.WithLabelValues(keyspace, changefeedID, "actual", "total").Add(float64(actualRowsAffected))
-	ExecDMLEventRowsAffected.WithLabelValues(keyspace, changefeedID, "expected", "total").Add(float64(expectedRowsAffected))
+	ExecDMLEventRowsAffectedCounter.WithLabelValues(keyspace, changefeedID, "actual", "total").Add(float64(actualRowsAffected))
+	ExecDMLEventRowsAffectedCounter.WithLabelValues(keyspace, changefeedID, "expected", "total").Add(float64(expectedRowsAffected))
 }
 
 func (b *Statistics) RecordRowsAffected(rowsAffected int64, rowType common.RowType) {
@@ -115,8 +115,8 @@ func (b *Statistics) RecordRowsAffected(rowsAffected int64, rowType common.RowTy
 	}
 	keyspace := b.changefeedID.Keyspace()
 	changefeedID := b.changefeedID.Name()
-	ExecDMLEventRowsAffected.WithLabelValues(keyspace, changefeedID, "actual", rowType.String()).Add(float64(rowsAffected))
-	ExecDMLEventRowsAffected.WithLabelValues(keyspace, changefeedID, "expected", rowType.String()).Add(float64(count))
+	ExecDMLEventRowsAffectedCounter.WithLabelValues(keyspace, changefeedID, "actual", rowType.String()).Add(float64(rowsAffected))
+	ExecDMLEventRowsAffectedCounter.WithLabelValues(keyspace, changefeedID, "expected", rowType.String()).Add(float64(count))
 	b.RecordTotalRowsAffected(rowsAffected, count)
 }
 
