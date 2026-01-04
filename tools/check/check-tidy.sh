@@ -13,12 +13,6 @@ GO111MODULE=on go mod tidy
 find . -name '*_nextgen.go.bak' -exec sh -c 'mv "$1" "${1%.bak}"' _ {} \;
 find . -name '*_nextgen_test.go.bak' -exec sh -c 'mv "$1" "${1%.bak}"' _ {} \;
 
-if [ "$(git --no-pager diff go.mod go.sum | wc -c)" -ne 0 ]; then
-	echo "Please run \`go mod tidy -modfile=go.mod\` to clean up"
-	git --no-pager diff go.mod go.sum
-	exit 1
-fi
-
 # Tidy the nextgen go.mod
 echo "Tidying nextgen.go.mod..."
 # Hidding the classic files.
@@ -36,9 +30,9 @@ mv go.sum nextgen.go.sum
 mv classic.go.mod go.mod
 mv classic.go.sum go.sum
 
-if [ "$(git --no-pager diff nextgen.go.mod nextgen.go.sum 2>/dev/null | wc -c)" -ne 0 ]; then
-	echo "Please run \`go mod tidy -modfile=nextgen.go.mod\` to clean up"
-	git --no-pager diff nextgen.go.mod nextgen.go.sum 2>/dev/null || git --no-pager diff nextgen.go.mod 2>/dev/null
+if [ "$(git --no-pager diff go.mod go.sum nextgen.go.mod nextgen.go.sum | wc -c)" -ne 0 ]; then
+	echo "Please run \`make tidy\` to clean up"
+	git --no-pager diff go.mod go.sum nextgen.go.mod nextgen.go.sum
 	exit 1
 fi
 
