@@ -198,7 +198,7 @@ func TestFetchIndexFromFileName(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		_, err := f.fetchIndexFromFileName("", tc.fileName)
+		_, err := FetchIndexFromFileName(tc.fileName, f.extension)
 		if len(tc.wantErr) != 0 {
 			require.Contains(t, err.Error(), tc.wantErr)
 		} else {
