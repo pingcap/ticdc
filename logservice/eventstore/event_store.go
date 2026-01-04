@@ -311,7 +311,9 @@ func (p *writeTaskPool) run(ctx context.Context) {
 	for i := 0; i < p.workerNum; i++ {
 		go func(workerID int) {
 			defer p.store.wg.Done()
-			encoder, err := zstd.NewWriter(nil)
+			var compressionBuf []byte
+			encodeOpt := zstd.WithEncoderLevel(zstd.SpeedFastest)
+			encoder, err := zstd.NewWriter(nil, encodeOpt)
 			if err != nil {
 				log.Panic("failed to create zstd encoder", zap.Error(err))
 			}
@@ -331,7 +333,7 @@ func (p *writeTaskPool) run(ctx context.Context) {
 						return
 					}
 					start := time.Now()
-					if err = p.store.writeEvents(p.db, events, encoder); err != nil {
+					if err = p.store.writeEvents(p.db, events, encoder, &compressionBuf); err != nil {
 						log.Panic("write events failed", zap.Error(err))
 					}
 					for idx := range events {
@@ -1200,10 +1202,19 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 	metrics.EventStoreResolvedTsLagGauge.Set(eventStoreResolvedTsLagInSec)
 }
 
-func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback, encoder *zstd.Encoder) error {
+func (e *eventStore) writeEvents(
+	db *pebble.DB,
+	events []eventWithCallback,
+	encoder *zstd.Encoder,
+	compressionBuf *[]byte,
+) error {
 	metrics.EventStoreWriteRequestsCount.Inc()
 	batch := db.NewBatch()
 	kvCount := 0
+	var dstBuf []byte
+	if compressionBuf != nil {
+		dstBuf = *compressionBuf
+	}
 	for _, event := range events {
 		kvCount += len(event.kvs)
 		for _, kv := range event.kvs {
@@ -1219,7 +1230,13 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback, enco
 			compressionType := CompressionNone
 			value := kv.Encode()
 			if len(value) > e.compressionThreshold {
-				value = encoder.EncodeAll(value, nil)
+				maxEncodedSize := encoder.MaxEncodedSize(len(value))
+				if cap(dstBuf) < maxEncodedSize {
+					dstBuf = make([]byte, 0, maxEncodedSize)
+				} else {
+					dstBuf = dstBuf[:0]
+				}
+				value = encoder.EncodeAll(value, dstBuf)
 				compressionType = CompressionZSTD
 				metrics.EventStoreCompressedRowsCount.Inc()
 			}
@@ -1228,7 +1245,13 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback, enco
 			if err := batch.Set(key, value, pebble.NoSync); err != nil {
 				log.Panic("failed to update pebble batch", zap.Error(err))
 			}
+			if compressionType == CompressionZSTD {
+				dstBuf = dstBuf[:0]
+			}
 		}
+	}
+	if compressionBuf != nil {
+		*compressionBuf = dstBuf
 	}
 	kvEventCount.Add(float64(kvCount))
 	metrics.EventStoreWriteBatchEventsCountHist.Observe(float64(kvCount))
@@ -1256,6 +1279,7 @@ type eventStoreIter struct {
 
 	decoder     *zstd.Decoder
 	decoderPool *sync.Pool
+	decodeBuf   []byte
 }
 
 func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
@@ -1271,10 +1295,15 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		var decodedValue []byte
 		if compressionType == CompressionZSTD {
 			var err error
-			decodedValue, err = iter.decoder.DecodeAll(value, nil)
+			var dst []byte
+			if iter.decodeBuf != nil {
+				dst = iter.decodeBuf[:0]
+			}
+			decodedValue, err = iter.decoder.DecodeAll(value, dst)
 			if err != nil {
 				log.Panic("failed to decompress value", zap.Error(err))
 			}
+			iter.decodeBuf = decodedValue
 		} else {
 			decodedValue = value
 		}
