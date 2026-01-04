@@ -18,6 +18,7 @@ import (
 
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	"github.com/pingcap/ticdc/coordinator/operator"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/node"
 	pkgScheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
@@ -40,14 +41,13 @@ func NewBasicScheduler(
 	id string, batchSize int,
 	oc *operator.Controller,
 	changefeedDB *changefeed.ChangefeedDB,
-	nodeManager *watcher.NodeManager,
 ) *basicScheduler {
 	return &basicScheduler{
 		id:                 id,
 		batchSize:          batchSize,
 		operatorController: oc,
 		changefeedDB:       changefeedDB,
-		nodeManager:        nodeManager,
+		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 	}
 }
 

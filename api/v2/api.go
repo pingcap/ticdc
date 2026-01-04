@@ -44,6 +44,13 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 	// Integration test relies on this API to determine whether the TiCDC node is healthy.
 	router.GET("/debug/info", gin.WrapF(api.handleDebugInfo))
 
+	debugGroup := router.Group("/debug")
+	debugGroup.Use(middleware.LogMiddleware())
+	debugGroup.Use(middleware.ErrorHandleMiddleware())
+	debugGroup.POST("/failpoints", api.EnableFailpoint)
+	debugGroup.DELETE("/failpoints", api.DisableFailpoint)
+	debugGroup.GET("/failpoints", api.ListFailpoints)
+
 	coordinatorMiddleware := middleware.ForwardToCoordinatorMiddleware(api.server)
 	authenticateMiddleware := middleware.AuthenticateMiddleware(api.server)
 	keyspaceCheckerMiddleware := middleware.KeyspaceCheckerMiddleware()

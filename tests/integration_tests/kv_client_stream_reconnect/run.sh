@@ -8,6 +8,26 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 TABLE_COUNT=10
+FAILPOINT_API_TEST_NAME="github.com/pingcap/ticdc/utils/dynstream/FailpointAPITestValue"
+FAILPOINT_API_TEST_VALUE="kv_client_stream_reconnect"
+
+function check_failpoint_log_value() {
+	local value=$1
+	local log_file="$WORK_DIR/cdc.log"
+
+	for ((i = 0; i < 60; i++)); do
+		if [ -f "$log_file" ] && grep -q "failpoint api test value" "$log_file" && grep -q "$value" "$log_file"; then
+			return 0
+		fi
+		sleep 1
+	done
+
+	echo "failpoint log value not found: $value"
+	if [ -f "$log_file" ]; then
+		tail -n 200 "$log_file"
+	fi
+	return 1
+}
 
 # This test mainly verifies kv client force reconnect can work
 # Trigger force reconnect by failpoint injection
@@ -30,6 +50,7 @@ function run() {
 	# this will be triggered every 5s in logpuller
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/logservice/logpuller/InjectForceReconnect=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300" --pd $pd_addr
+	enable_failpoint --name "$FAILPOINT_API_TEST_NAME" --expr "return(\"$FAILPOINT_API_TEST_VALUE\")"
 	if [ "$SINK_TYPE" == "pulsar" ]; then
 		cat <<EOF >>$WORK_DIR/pulsar_test.toml
           [sink.pulsar-config.oauth2]
@@ -60,12 +81,15 @@ EOF
 		sleep 1
 	done
 
+	check_failpoint_log_value "$FAILPOINT_API_TEST_VALUE"
+	disable_failpoint --name "$FAILPOINT_API_TEST_NAME"
+
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 	export GO_FAILPOINTS=''
 	cleanup_process $CDC_BINARY
 }
 
-trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
+trap 'stop_test $WORK_DIR' EXIT
 run $*
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

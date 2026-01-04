@@ -78,8 +78,8 @@ func (db *ChangefeedDB) AddAbsentChangefeed(tasks ...*Changefeed) {
 	defer db.lock.Unlock()
 
 	for _, task := range tasks {
-		db.changefeedDisplayNames[task.ID.DisplayName] = task.ID
 		db.changefeeds[task.ID] = task
+		db.changefeedDisplayNames[task.ID.DisplayName] = task.ID
 		db.AddAbsentWithoutLock(task)
 	}
 }
@@ -90,8 +90,8 @@ func (db *ChangefeedDB) AddStoppedChangefeed(task *Changefeed) {
 	defer db.lock.Unlock()
 
 	db.changefeeds[task.ID] = task
-	db.stopped[task.ID] = task
 	db.changefeedDisplayNames[task.ID.DisplayName] = task.ID
+	db.stopped[task.ID] = task
 }
 
 // AddReplicatingMaintainer adds a replicating the replicating map, that means the task is already scheduled to a maintainer
@@ -133,6 +133,7 @@ func (db *ChangefeedDB) StopByChangefeedID(cfID common.ChangeFeedID, remove bool
 	if remove {
 		log.Info("remove changefeed", zap.String("changefeed", cf.ID.String()))
 		delete(db.changefeeds, cfID)
+		delete(db.changefeedDisplayNames, cf.ID.DisplayName)
 		delete(db.stopped, cfID)
 	} else {
 		log.Info("stop changefeed", zap.String("changefeed", cfID.String()))
@@ -363,6 +364,7 @@ func (db *ChangefeedDB) ReplaceStoppedChangefeed(cf *config.ChangeFeedInfo) {
 	newCf := NewChangefeed(cf.ChangefeedID, cf, oldCf.GetStatus().CheckpointTs, false)
 	db.stopped[cf.ChangefeedID] = newCf
 	db.changefeeds[cf.ChangefeedID] = newCf
+	db.changefeedDisplayNames[cf.ChangefeedID.DisplayName] = newCf.ID
 }
 
 func (db *ChangefeedDB) UpdateLogCoordinatorResolvedTsByID(changefeedID common.ChangeFeedID, resolvedTs uint64) {

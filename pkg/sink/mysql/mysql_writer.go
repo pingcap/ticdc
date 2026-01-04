@@ -64,6 +64,14 @@ type Writer struct {
 
 	statistics *metrics.Statistics
 
+	// activeActiveSyncStatsCollector accumulates conflict statistics from TiDB session
+	// variable @@tidb_active_active_sync_stats. It is shared across all DML writers
+	// in a sink to avoid double counting when sql.DB reuses sessions across workers.
+	activeActiveSyncStatsCollector *ActiveActiveSyncStatsCollector
+	activeActiveSyncStatsInterval  time.Duration
+	// lastActiveActiveSyncStatsCollectTime is writer-local throttling state.
+	lastActiveActiveSyncStatsCollectTime time.Time
+
 	// When encountered an `Duplicate entry` error, we will set the `isInErrorCausedSafeMode` to true,
 	// and set the `lastErrorCausedSafeModeTime` to the current time.
 	// After the `errorCausedSafeModeDuration`, we will set the `isInErrorCausedSafeMode` to false.
@@ -82,21 +90,24 @@ func NewWriter(
 	cfg *Config,
 	changefeedID common.ChangeFeedID,
 	statistics *metrics.Statistics,
+	activeActiveSyncStatsCollector *ActiveActiveSyncStatsCollector,
 ) *Writer {
 	res := &Writer{
-		ctx:                         ctx,
-		id:                          id,
-		db:                          db,
-		cfg:                         cfg,
-		syncPointTableInit:          false,
-		ChangefeedID:                changefeedID,
-		lastCleanSyncPointTime:      time.Now(),
-		ddlTsTableInit:              false,
-		stmtCache:                   cfg.stmtCache,
-		statistics:                  statistics,
-		maxDDLTsBatch:               cfg.MaxTxnRow,
-		isInErrorCausedSafeMode:     false,
-		errorCausedSafeModeDuration: defaultErrorCausedSafeModeDuration,
+		ctx:                            ctx,
+		id:                             id,
+		db:                             db,
+		cfg:                            cfg,
+		syncPointTableInit:             false,
+		ChangefeedID:                   changefeedID,
+		lastCleanSyncPointTime:         time.Now(),
+		ddlTsTableInit:                 false,
+		stmtCache:                      cfg.stmtCache,
+		statistics:                     statistics,
+		maxDDLTsBatch:                  cfg.MaxTxnRow,
+		isInErrorCausedSafeMode:        false,
+		errorCausedSafeModeDuration:    defaultErrorCausedSafeModeDuration,
+		activeActiveSyncStatsCollector: activeActiveSyncStatsCollector,
+		activeActiveSyncStatsInterval:  cfg.ActiveActiveSyncStatsInterval,
 	}
 
 	if cfg.DryRun && cfg.DryRunBlockInterval > 0 {

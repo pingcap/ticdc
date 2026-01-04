@@ -38,6 +38,18 @@ var (
 			Name:      "go_max_procs",
 			Help:      "The value of GOMAXPROCS",
 		})
+
+	// buildInfo is a metric with a constant '1' value, labeled by the build metadata.
+	// It is used by dashboards to identify the exact binary running on each TiCDC server.
+	BuildInfo = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "server",
+			Name:      "build_info",
+			Help:      "TiCDC build information as labels.",
+		},
+		[]string{"release_version", "git_hash", "utc_build_time", "kernel_type"},
+	)
 )
 
 // RecordGoRuntimeSettings records GOGC settings.
@@ -59,4 +71,5 @@ func initServerMetrics(registry *prometheus.Registry) {
 		collectors.WithGoCollections(collectors.GoRuntimeMemStatsCollection | collectors.GoRuntimeMetricsCollection)))
 	registry.MustRegister(goGC)
 	registry.MustRegister(goMaxProcs)
+	registry.MustRegister(BuildInfo)
 }

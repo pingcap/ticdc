@@ -58,6 +58,8 @@ type Sink struct {
 	maxTxnRows         int
 	bdrMode            bool
 	enableActiveActive bool
+
+	activeActiveSyncStatsCollector *mysql.ActiveActiveSyncStatsCollector
 }
 
 // Verify is used to verify the sink uri and config is valid
@@ -99,6 +101,24 @@ func NewMySQLSink(
 	progressInterval time.Duration,
 ) *Sink {
 	stat := metrics.NewStatistics(changefeedID, "TxnSink")
+
+	var activeActiveSyncStatsCollector *mysql.ActiveActiveSyncStatsCollector
+	if enableActiveActive && cfg.IsTiDB && cfg.ActiveActiveSyncStatsInterval > 0 {
+		supported, err := mysql.CheckActiveActiveSyncStatsSupported(ctx, db)
+		if err != nil {
+			log.Warn("failed to check tidb_active_active_sync_stats support, disable metric collection",
+				zap.String("keyspace", changefeedID.Keyspace()),
+				zap.Stringer("changefeed", changefeedID),
+				zap.Error(err))
+		} else if supported {
+			activeActiveSyncStatsCollector = mysql.NewActiveActiveSyncStatsCollector(changefeedID)
+		} else {
+			log.Info("downstream does not support tidb_active_active_sync_stats, disable metric collection",
+				zap.String("keyspace", changefeedID.Keyspace()),
+				zap.Stringer("changefeed", changefeedID))
+		}
+	}
+
 	result := &Sink{
 		changefeedID: changefeedID,
 		db:           db,
@@ -111,15 +131,16 @@ func NewMySQLSink(
 				BlockStrategy: causality.BlockStrategyWaitEmpty,
 			},
 			changefeedID),
-		isNormal:           atomic.NewBool(true),
-		maxTxnRows:         cfg.MaxTxnRow,
-		bdrMode:            bdrMode,
-		enableActiveActive: enableActiveActive,
+		isNormal:                       atomic.NewBool(true),
+		maxTxnRows:                     cfg.MaxTxnRow,
+		bdrMode:                        bdrMode,
+		enableActiveActive:             enableActiveActive,
+		activeActiveSyncStatsCollector: activeActiveSyncStatsCollector,
 	}
 	for i := 0; i < len(result.dmlWriter); i++ {
-		result.dmlWriter[i] = mysql.NewWriter(ctx, i, db, cfg, changefeedID, stat)
+		result.dmlWriter[i] = mysql.NewWriter(ctx, i, db, cfg, changefeedID, stat, activeActiveSyncStatsCollector)
 	}
-	result.ddlWriter = mysql.NewWriter(ctx, len(result.dmlWriter), db, cfg, changefeedID, stat)
+	result.ddlWriter = mysql.NewWriter(ctx, len(result.dmlWriter), db, cfg, changefeedID, stat, nil)
 	if enableActiveActive {
 		result.progressTableWriter = mysql.NewProgressTableWriter(ctx, db, changefeedID, cfg.MaxTxnRow, progressInterval)
 	}
@@ -377,5 +398,6 @@ func (s *Sink) Close(removeChangefeed bool) {
 			zap.Any("changefeed", s.changefeedID.String()),
 			zap.Error(err))
 	}
+	s.activeActiveSyncStatsCollector.Close()
 	s.statistics.Close()
 }

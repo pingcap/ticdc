@@ -359,7 +359,7 @@ func TestGetTableRecoveryInfo_StartTsGreaterThanDDLTs(t *testing.T) {
 	inputStartTsList := []int64{150, 150, 300}
 
 	// Mock the ddl_ts query
-	expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1), ('default', 'test/test', 2), ('default', 'test/test', 3))"
+	expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1), ('default', 'test/test', 2), ('default', 'test/test', 3), ('default', 'test/test', -1))"
 
 	rows := sqlmock.NewRows([]string{"table_id", "ddl_ts", "finished", "is_syncpoint"}).
 		AddRow(1, 100, false, false). // Unfinished DDL, skipDML should be true initially

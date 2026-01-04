@@ -1,8 +1,6 @@
 module github.com/pingcap/ticdc
 
-go 1.24.0
-
-toolchain go1.24.7
+go 1.25.5
 
 require (
 	cloud.google.com/go/storage v1.39.1
@@ -54,6 +52,7 @@ require (
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
 	github.com/pingcap/kvproto v0.0.0-20251109100001-1907922fbd18
 	github.com/pingcap/log v1.1.1-0.20250917021125-19901e015dc9
+	github.com/pingcap/sysutil v1.0.1-0.20240311050922-ae81ee01f3a5
 	github.com/pingcap/tidb v1.1.0-beta.0.20251121075944-8f2630e53d5d
 	github.com/pingcap/tidb-dashboard v0.0.0-20240326110213-9768844ff5d7
 	github.com/pingcap/tidb/pkg/parser v0.0.0-20251121075944-8f2630e53d5d
@@ -289,7 +288,6 @@ require (
 	github.com/pingcap/fn v1.0.0 // indirect
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989 // indirect
 	github.com/pingcap/metering_sdk v0.0.0-20251110022152-dac449ac5389 // indirect
-	github.com/pingcap/sysutil v1.0.1-0.20240311050922-ae81ee01f3a5 // indirect
 	github.com/pingcap/tipb v0.0.0-20250928030846-9fd33ded6f2c // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect

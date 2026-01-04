@@ -66,6 +66,14 @@ var (
 			Help:      "Total count of DML events.",
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
+	ActiveActiveConflictSkipRowsCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "active_active_conflict_skip_rows_total",
+			Help:      "Total number of rows skipped due to last-write-wins conflict resolution in TiDB active-active replication.",
+		}, []string{getKeyspaceLabel(), "changefeed"})
+
 	// ExecDDLHistogram records the exexution time of a DDL.
 	ExecDDLHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -246,6 +254,7 @@ func initSinkMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventSizeHistogram)
 	registry.MustRegister(ExecutionErrorCounter)
 	registry.MustRegister(ExecDMLEventCounter)
+	registry.MustRegister(ActiveActiveConflictSkipRowsCounter)
 
 	// txn sink metrics
 	registry.MustRegister(ConflictDetectDuration)

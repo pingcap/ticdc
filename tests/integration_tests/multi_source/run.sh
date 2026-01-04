@@ -37,7 +37,7 @@ function prepare() {
 	esac
 }
 
-trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
+trap 'stop_test $WORK_DIR' EXIT
 # storage is not supported yet.
 # test without fast create table
 if [ "$SINK_TYPE" != "storage" ]; then

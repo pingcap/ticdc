@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/redo/writer/factory"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -49,7 +50,7 @@ type Sink struct {
 }
 
 func Verify(ctx context.Context, changefeedID common.ChangeFeedID, cfg *config.ConsistentConfig) error {
-	if cfg == nil || !redo.IsConsistentEnabled(cfg.Level) {
+	if cfg == nil || !redo.IsConsistentEnabled(util.GetOrZero(cfg.Level)) {
 		return nil
 	}
 	return nil
@@ -66,7 +67,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 			ConsistentConfig:  *cfg,
 			CaptureID:         config.GetGlobalServerConfig().AdvertiseAddr,
 			ChangeFeedID:      changefeedID,
-			MaxLogSizeInBytes: cfg.MaxLogSize * redo.Megabyte,
+			MaxLogSizeInBytes: util.GetOrZero(cfg.MaxLogSize) * redo.Megabyte,
 		},
 		logBuffer:  chann.NewUnlimitedChannelDefault[writer.RedoEvent](),
 		isNormal:   atomic.NewBool(true),
@@ -127,6 +128,20 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	_ = s.statistics.RecordBatchExecution(func() (int, int64, error) {
+		toRowCallback := func(postTxnFlushed []func(), totalCount uint64) func() {
+			var calledCount atomic.Uint64
+			// The callback of the last row will trigger the callback of the txn.
+			return func() {
+				if calledCount.Inc() == totalCount {
+					for _, callback := range postTxnFlushed {
+						callback()
+					}
+				}
+			}
+		}
+		rowsCount := uint64(event.Len())
+		rowCallback := toRowCallback(event.PostTxnFlushed, rowsCount)
+
 		for {
 			row, ok := event.GetNextRow()
 			if !ok {
@@ -139,7 +154,7 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 				Event:           row,
 				PhysicalTableID: event.PhysicalTableID,
 				TableInfo:       event.TableInfo,
-				Callback:        event.PostFlush,
+				Callback:        rowCallback,
 			})
 		}
 		return int(event.Len()), event.GetSize(), nil

@@ -1,0 +1,5 @@
+[scheduler]
+enable-table-across-nodes = true
+region-threshold = 15
+region-count-per-span = 10
+force-split = true

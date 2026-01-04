@@ -41,8 +41,10 @@ const (
 	txnModeOptimistic  = "optimistic"
 	txnModePessimistic = "pessimistic"
 
-	// DefaultWorkerCount is the default number of workers.
-	DefaultWorkerCount = 128
+	// DefaultTiDBWorkerCount is the default number of workers for TiDB downstream.
+	DefaultTiDBWorkerCount = 64
+	// DefaultMySQLWorkerCount is the default number of workers for MySQL downstream.
+	DefaultMySQLWorkerCount = 16
 	// DefaultMaxTxnRow is the default max number of rows in a transaction.
 	DefaultMaxTxnRow = 256
 	// defaultMaxMultiUpdateRowCount is the default max number of rows in a
@@ -91,8 +93,11 @@ const (
 )
 
 type Config struct {
-	sinkURI                *url.URL
-	WorkerCount            int
+	sinkURI     *url.URL
+	WorkerCount int
+	// workerCountSpecified indicates whether WorkerCount is explicitly set by user via sink URI or changefeed config.
+	// It is used to avoid overriding user configuration when applying downstream-specific defaults.
+	workerCountSpecified   bool
 	MaxTxnRow              int
 	MaxMultiUpdateRowCount int
 	MaxMultiUpdateRowSize  int
@@ -132,6 +137,10 @@ type Config struct {
 	HasVectorType bool // HasVectorType is true if the column is vector type
 
 	EnableActiveActive bool
+	// ActiveActiveSyncStatsInterval controls how often MySQL/TiDB sink queries
+	// @@tidb_active_active_sync_stats for conflict statistics.
+	// Set it to 0 to disable the metric collection.
+	ActiveActiveSyncStatsInterval time.Duration
 
 	// DryRun is used to enable dry-run mode. In dry-run mode, the writer will not write data to the downstream.
 	DryRun bool
@@ -149,23 +158,25 @@ type Config struct {
 // New returns the default mysql backend config.
 func New() *Config {
 	return &Config{
-		WorkerCount:            DefaultWorkerCount,
-		MaxTxnRow:              DefaultMaxTxnRow,
-		MaxMultiUpdateRowCount: defaultMaxMultiUpdateRowCount,
-		MaxMultiUpdateRowSize:  defaultMaxMultiUpdateRowSize,
-		TidbTxnMode:            defaultTiDBTxnMode,
-		ReadTimeout:            defaultReadTimeout,
-		WriteTimeout:           defaultWriteTimeout,
-		DialTimeout:            defaultDialTimeout,
-		SafeMode:               defaultSafeMode,
-		BatchDMLEnable:         defaultBatchDMLEnable,
-		MultiStmtEnable:        defaultMultiStmtEnable,
-		CachePrepStmts:         defaultCachePrepStmts,
-		SourceID:               config.DefaultTiDBSourceID,
-		DMLMaxRetry:            8,
-		HasVectorType:          defaultHasVectorType,
-		EnableDDLTs:            defaultEnableDDLTs,
-		SlowQuery:              slowQuery,
+		WorkerCount:                   DefaultTiDBWorkerCount,
+		workerCountSpecified:          false,
+		MaxTxnRow:                     DefaultMaxTxnRow,
+		MaxMultiUpdateRowCount:        defaultMaxMultiUpdateRowCount,
+		MaxMultiUpdateRowSize:         defaultMaxMultiUpdateRowSize,
+		TidbTxnMode:                   defaultTiDBTxnMode,
+		ReadTimeout:                   defaultReadTimeout,
+		WriteTimeout:                  defaultWriteTimeout,
+		DialTimeout:                   defaultDialTimeout,
+		SafeMode:                      defaultSafeMode,
+		BatchDMLEnable:                defaultBatchDMLEnable,
+		MultiStmtEnable:               defaultMultiStmtEnable,
+		CachePrepStmts:                defaultCachePrepStmts,
+		SourceID:                      config.DefaultTiDBSourceID,
+		DMLMaxRetry:                   8,
+		HasVectorType:                 defaultHasVectorType,
+		EnableDDLTs:                   defaultEnableDDLTs,
+		SlowQuery:                     slowQuery,
+		ActiveActiveSyncStatsInterval: time.Minute,
 	}
 }
 
@@ -174,6 +185,9 @@ func (c *Config) mergeConfig(cfg *config.ChangefeedConfig) {
 		merge(&c.SafeMode, cfg.SinkConfig.SafeMode)
 		if cfg.SinkConfig.MySQLConfig != nil {
 			mConfig := cfg.SinkConfig.MySQLConfig
+			if mConfig.WorkerCount != nil {
+				c.workerCountSpecified = true
+			}
 			merge(&c.WorkerCount, mConfig.WorkerCount)
 			merge(&c.MaxTxnRow, mConfig.MaxTxnRow)
 			merge(&c.MaxMultiUpdateRowCount, mConfig.MaxMultiUpdateRowCount)
@@ -213,7 +227,7 @@ func (c *Config) Apply(
 	}
 
 	query := sinkURI.Query()
-	if err = getWorkerCount(query, &c.WorkerCount); err != nil {
+	if err = getWorkerCount(query, &c.WorkerCount, &c.workerCountSpecified); err != nil {
 		return err
 	}
 	if err = getMaxTxnRow(query, &c.MaxTxnRow); err != nil {
@@ -290,6 +304,7 @@ func NewMysqlConfigAndDB(
 		return nil, nil, err
 	}
 	cfg.EnableActiveActive = config.EnableActiveActive
+	cfg.ActiveActiveSyncStatsInterval = config.ActiveActiveSyncStatsInterval
 
 	dsnStr, err := GenerateDSN(ctx, cfg)
 	if err != nil {
@@ -382,7 +397,7 @@ func IsSinkSafeMode(sinkURI *url.URL, replicaConfig *config.ReplicaConfig) (bool
 	return safeMode, nil
 }
 
-func getWorkerCount(values url.Values, workerCount *int) error {
+func getWorkerCount(values url.Values, workerCount *int, workerCountSpecified *bool) error {
 	s := values.Get("worker-count")
 	if len(s) == 0 {
 		return nil
@@ -401,7 +416,8 @@ func getWorkerCount(values url.Values, workerCount *int) error {
 			zap.Int("original", c), zap.Int("override", maxWorkerCount))
 		c = maxWorkerCount
 	}
-
+	// Record whether the user explicitly sets worker-count, so we won't override it with downstream defaults.
+	*workerCountSpecified = true
 	*workerCount = c
 	return nil
 }
@@ -613,5 +629,17 @@ func getBool(values url.Values, key string, target *bool) error {
 func merge[T int | bool | string](dst, src *T) {
 	if src != nil {
 		*dst = *src
+	}
+}
+
+// setWorkerCountByDownstream sets WorkerCount based on downstream type when it is not explicitly specified by user.
+func (c *Config) setWorkerCountByDownstream() {
+	if c.workerCountSpecified {
+		return
+	}
+	if c.IsTiDB {
+		c.WorkerCount = DefaultTiDBWorkerCount
+	} else {
+		c.WorkerCount = DefaultMySQLWorkerCount
 	}
 }

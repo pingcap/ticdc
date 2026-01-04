@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"go.uber.org/zap"
 )
 
@@ -85,10 +86,10 @@ func (rd *RedoDispatcher) GetRedoMeta() *redo.RedoMeta {
 }
 
 // SetRedoMeta used to init redo meta
-// only for redo table trigger event dispatcher
+// only for table trigger redo dispatcher
 func (rd *RedoDispatcher) SetRedoMeta(cfg *config.ConsistentConfig) {
 	if !rd.IsTableTriggerEventDispatcher() {
-		log.Error("SetRedoMeta should be called by redo table trigger event dispatcher", zap.Any("id", rd.GetId()))
+		log.Error("SetRedoMeta should be called by table trigger redo dispatcher", zap.Any("id", rd.GetId()))
 	}
 	ctx := context.Background()
 	ctx, rd.cancel = context.WithCancel(ctx)
@@ -105,14 +106,19 @@ func (rd *RedoDispatcher) SetRedoMeta(cfg *config.ConsistentConfig) {
 	}()
 }
 
-// UpdateMeta used to update redo meta log
-// only for redo table trigger event dispatcher
+// UpdateMeta used to update redo meta log.
+// The checkpoint-ts is always less than the resolved-ts because it represents the minimum checkpoint-ts of the global event dispatcher.
+// The event dispatcher does not advance until the resolved-ts exceeds the event's commit-ts.
+// only for table trigger redo dispatcher.
 func (rd *RedoDispatcher) UpdateMeta(checkpointTs, resolvedTs common.Ts) {
-	if !rd.IsTableTriggerEventDispatcher() {
-		log.Error("UpdateMeta should be called by redo table trigger event dispatcher", zap.Any("id", rd.GetId()))
-	}
-	if rd.redoMeta.Running() {
+	if rd.redoMeta != nil && rd.redoMeta.Running() {
 		log.Debug("update redo meta", zap.Uint64("resolvedTs", resolvedTs), zap.Uint64("checkpointTs", checkpointTs))
 		rd.redoMeta.UpdateMeta(checkpointTs, resolvedTs)
 	}
+}
+
+// GetFlushedMeta return redo flushed meta
+// only for table trigger redo dispatcher
+func (rd *RedoDispatcher) GetFlushedMeta() misc.LogMeta {
+	return rd.redoMeta.GetFlushedMeta()
 }
