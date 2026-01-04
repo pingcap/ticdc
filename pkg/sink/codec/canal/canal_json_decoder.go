@@ -28,10 +28,10 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/tidbtype"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
 	tiTypes "github.com/pingcap/tidb/pkg/types"
@@ -530,7 +530,7 @@ func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.Tabl
 		tidbTableInfo := new(timodel.TableInfo)
 		tidbTableInfo.ID = tableIDAllocator.Allocate(schemaName, tableName)
 		tableIDAllocator.AddBlockTableID(schemaName, tableName, tidbTableInfo.ID)
-		tidbTableInfo.Name = ast.NewCIStr(tableName)
+		tidbTableInfo.Name = tidbtype.NewCIStr(tableName)
 
 		columns := newTiColumns(msg)
 		tidbTableInfo.Columns = columns
@@ -565,7 +565,7 @@ func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {
 		name := rawColumn.name
 		col := new(timodel.ColumnInfo)
 		col.ID = nextColumnID
-		col.Name = ast.NewCIStr(name)
+		col.Name = tidbtype.NewCIStr(name)
 		basicType := common.ExtractBasicMySQLType(mysqlType)
 		col.FieldType = *types.NewFieldType(basicType)
 		if common.IsBinaryMySQLType(mysqlType) {
@@ -625,7 +625,7 @@ func newTiIndices(columns []*timodel.ColumnInfo, keys map[string]struct{}) []*ti
 	}
 	indexInfo := &timodel.IndexInfo{
 		ID:      1,
-		Name:    ast.NewCIStr("primary"),
+		Name:    tidbtype.NewCIStr("primary"),
 		Columns: indexColumns,
 		Primary: true,
 		Unique:  true,

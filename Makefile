@@ -70,15 +70,15 @@ ifeq ("${ENABLE_FIPS}", "1")
 endif
 ifeq ("${NEXT_GEN}", "1")
 	ifeq ($(BUILD_FLAG),)
-		BUILD_FLAG := -tags nextgen
+		BUILD_FLAG := -tags nextgen -modfile=nextgen.go.mod
 	else
-		BUILD_FLAG := $(BUILD_FLAG),nextgen
+		BUILD_FLAG := $(BUILD_FLAG),nextgen -modfile=nextgen.go.mod
 	endif
 endif
 
 TEST_FLAG=intest
 ifeq ("${NEXT_GEN}", "1")
-	TEST_FLAG := $(TEST_FLAG),nextgen
+	TEST_FLAG := $(TEST_FLAG),nextgen -modfile=nextgen.go.mod
 endif
 
 GOTEST := CGO_ENABLED=1 $(GO) test -p 3 --race --tags=$(TEST_FLAG)
@@ -270,7 +270,9 @@ unit_test_in_verify_ci_next_gen: check_failpoint_ctl tools/bin/gotestsum tools/b
 	@export log_level=error;\
 	CGO_ENABLED=1 tools/bin/gotestsum --junitfile cdc-junit-report.xml -- -v -timeout 300s -p $(P) --race --tags=intest,nextgen \
 	-parallel=16 \
-	-covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" $(PACKAGES) \
+	-covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" \
+	-modfile=nextgen.go.mod \
+	$(PACKAGES) \
 	|| { $(FAILPOINT_DISABLE); exit 1; }
 	tools/bin/gocov convert "$(TEST_DIR)/cov.unit.out" | tools/bin/gocov-xml > cdc-coverage.xml
 	$(FAILPOINT_DISABLE)
@@ -296,6 +298,7 @@ unit_test_pkg_next_gen: check_failpoint_ctl tools/bin/gotestsum tools/bin/gocov 
 	CGO_ENABLED=1 tools/bin/gotestsum --junitfile cdc-junit-report.xml -- -v -timeout 300s -p $(P) --race --tags=intest,nextgen \
 	-parallel=16 \
 	-covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" \
+	-modfile=nextgen.go.mod \
 	$(PKG) \
 	|| { $(FAILPOINT_DISABLE); exit 1; }
 	tools/bin/gocov convert "$(TEST_DIR)/cov.unit.out" | tools/bin/gocov-xml > cdc-coverage.xml

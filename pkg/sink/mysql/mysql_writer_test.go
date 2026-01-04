@@ -28,14 +28,11 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/tidbtype"
 	"github.com/pingcap/tidb/br/pkg/version"
-	ticonfig "github.com/pingcap/tidb/pkg/config"
-	"github.com/pingcap/tidb/pkg/disttask/framework/handle"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
 	"github.com/stretchr/testify/require"
 )
 
@@ -44,7 +41,7 @@ func newTestMysqlWriter(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock) {
 
 	ctx := context.Background()
 	cfg := New()
-	cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
+	cfg.MaxAllowedPacket = int64(tidbtype.DefMaxAllowedPacket)
 	cfg.SyncPointRetention = 100 * time.Second
 	cfg.MaxTxnRow = 256
 	cfg.BatchDMLEnable = true
@@ -65,7 +62,7 @@ func newTestMysqlWriterForTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock)
 
 	ctx := context.Background()
 	cfg := New()
-	cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
+	cfg.MaxAllowedPacket = int64(tidbtype.DefMaxAllowedPacket)
 	cfg.SyncPointRetention = 100 * time.Second
 	cfg.IsTiDB = true
 	cfg.EnableDDLTs = defaultEnableDDLTs
@@ -74,12 +71,6 @@ func newTestMysqlWriterForTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock)
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	statistics := metrics.NewStatistics(changefeedID, "mysqlSink")
 	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics)
-
-	if kerneltype.IsNextGen() {
-		ticonfig.UpdateGlobal(func(conf *ticonfig.Config) {
-			conf.Instance.TiDBServiceScope = handle.NextGenTargetScope
-		})
-	}
 
 	return writer, db, mock
 }

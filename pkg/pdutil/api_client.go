@@ -35,6 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/httputil"
+	"github.com/pingcap/ticdc/pkg/pdtype"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/security"
 	pd "github.com/tikv/pd/client"
@@ -322,11 +323,7 @@ func (pc *pdAPIClient) LoadKeyspace(ctx context.Context, name string) (*keyspace
 }
 
 func (pc *pdAPIClient) GetKeyspaceMetaByID(ctx context.Context, keyspaceID uint32) (*keyspacepb.KeyspaceMeta, error) {
-	if kerneltype.IsClassic() {
-		return &keyspacepb.KeyspaceMeta{}, nil
-	}
-
-	return pc.pdHttpClient.GetKeyspaceMetaByID(ctx, keyspaceID)
+	return pdtype.GetKeyspaceMetaByID(ctx, pc.pdHttpClient, keyspaceID)
 }
 
 // ServiceSafePoint contains gc service safe point
@@ -399,18 +396,7 @@ func (pc *pdAPIClient) listGcServiceSafePoint(
 
 // CollectMemberEndpoints return all members' endpoint
 func (pc *pdAPIClient) CollectMemberEndpoints(ctx context.Context) ([]string, error) {
-	resp, err := pc.grpcClient.GetAllMembers(ctx)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-	result := make([]string, 0, len(resp.Members))
-	for _, m := range resp.Members {
-		clientUrls := m.GetClientUrls()
-		if len(clientUrls) > 0 {
-			result = append(result, clientUrls[0])
-		}
-	}
-	return result, nil
+	return pdtype.CollectMemberEndpoints(ctx, pc.grpcClient)
 }
 
 // Healthy return error if the member corresponding to the endpoint is unhealthy

@@ -26,7 +26,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/tidb-dashboard/util/distro"
 	"github.com/pingcap/tidb-dashboard/util/netutil"
-	"github.com/pingcap/tidb/pkg/domain/serverinfo"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 )
@@ -34,10 +33,6 @@ import (
 const (
 	// topologyTiCDC is /topology/ticdc/{clusterID}/{ip:port}.
 	topologyTiCDC = "/topology/ticdc/%s/%s"
-	// topologyTiDB is /topology/tidb/{ip:port}.
-	// Refer to https://github.com/pingcap/tidb/blob/release-7.5/pkg/domain/infosync/info.go#L78-L79.
-	topologyTiDB    = serverinfo.TopologyInformationPath
-	topologyTiDBTTL = serverinfo.TopologySessionTTL
 	// defaultTimeout is the default timeout for etcd and mysql operations.
 	defaultTimeout = time.Second * 2
 
