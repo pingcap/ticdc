@@ -70,10 +70,11 @@ ifeq ("${ENABLE_FIPS}", "1")
 endif
 ifeq ("${NEXT_GEN}", "1")
 	ifeq ($(BUILD_FLAG),)
-		BUILD_FLAG := -tags nextgen -modfile=nextgen.go.mod
+		BUILD_FLAG := -tags nextgen
 	else
-		BUILD_FLAG := $(BUILD_FLAG),nextgen -modfile=nextgen.go.mod
+		BUILD_FLAG := $(BUILD_FLAG),nextgen
 	endif
+	BUILD_FLAG += -modfile=nextgen.go.mod
 endif
 
 TEST_FLAG=intest
