@@ -808,7 +808,7 @@ func (w *Writer) multiStmtExecute(
 	if err != nil {
 		log.Warn("get rows affected rows failed", zap.Error(err))
 	} else {
-		// w.statistics.RecordRowsAffected(rowsAffected, dmls.rowTypes[i])
+		w.statistics.RecordTotalRowsAffected(rowsAffected, dmls.RowsAffected())
 	}
 	return nil
 }

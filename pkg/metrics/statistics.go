@@ -96,8 +96,15 @@ func (b *Statistics) RecordDDLExecution(executor func() error) error {
 	return nil
 }
 
+func (b *Statistics) RecordTotalRowsAffected(actualRowsAffected, expectedRowsAffected int64) {
+	keyspace := b.changefeedID.Keyspace()
+	changefeedID := b.changefeedID.Name()
+	ExecDMLEventRowsAffected.WithLabelValues(keyspace, changefeedID, "actual", "total").Add(float64(actualRowsAffected))
+	ExecDMLEventRowsAffected.WithLabelValues(keyspace, changefeedID, "expected", "total").Add(float64(expectedRowsAffected))
+}
+
 func (b *Statistics) RecordRowsAffected(rowsAffected int64, rowType common.RowType) {
-	var count int
+	var count int64
 	switch rowType {
 	case common.RowTypeInsert, common.RowTypeDelete:
 		count = 1
@@ -110,6 +117,7 @@ func (b *Statistics) RecordRowsAffected(rowsAffected int64, rowType common.RowTy
 	changefeedID := b.changefeedID.Name()
 	ExecDMLEventRowsAffected.WithLabelValues(keyspace, changefeedID, "actual", rowType.String()).Add(float64(rowsAffected))
 	ExecDMLEventRowsAffected.WithLabelValues(keyspace, changefeedID, "expected", rowType.String()).Add(float64(count))
+	b.RecordTotalRowsAffected(rowsAffected, count)
 }
 
 // Close release some internal resources.
