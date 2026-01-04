@@ -106,14 +106,14 @@ func NewMySQLSink(
 	if enableActiveActive && cfg.IsTiDB && cfg.ActiveActiveSyncStatsInterval > 0 {
 		supported, err := mysql.CheckActiveActiveSyncStatsSupported(ctx, db)
 		if err != nil {
-			log.Warn("failed to check tidb_active_active_sync_stats support, disable metric collection",
+			log.Warn("failed to check tidb_cdc_active_active_sync_stats support, disable metric collection",
 				zap.String("keyspace", changefeedID.Keyspace()),
 				zap.Stringer("changefeed", changefeedID),
 				zap.Error(err))
 		} else if supported {
 			activeActiveSyncStatsCollector = mysql.NewActiveActiveSyncStatsCollector(changefeedID)
 		} else {
-			log.Info("downstream does not support tidb_active_active_sync_stats, disable metric collection",
+			log.Info("downstream does not support tidb_cdc_active_active_sync_stats, disable metric collection",
 				zap.String("keyspace", changefeedID.Keyspace()),
 				zap.Stringer("changefeed", changefeedID))
 		}

@@ -176,7 +176,7 @@ type replicaConfig struct {
 	EnableActiveActive           *bool          `toml:"enable-active-active" json:"enable-active-active,omitempty"`
 	ActiveActiveProgressInterval *time.Duration `toml:"active-active-progress-interval" json:"active-active-progress-interval,omitempty"`
 	// ActiveActiveSyncStatsInterval controls how often MySQL/TiDB sink queries
-	// TiDB session variable @@tidb_active_active_sync_stats for conflict statistics.
+	// TiDB session variable @@tidb_cdc_active_active_sync_stats for conflict statistics.
 	// Set it to 0 to disable the metric collection.
 	ActiveActiveSyncStatsInterval *time.Duration `toml:"active-active-sync-stats-interval" json:"active-active-sync-stats-interval,omitempty"`
 

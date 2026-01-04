@@ -30,19 +30,19 @@ import (
 	"go.uber.org/zap"
 )
 
-const selectActiveActiveSyncStatsSQL = "SELECT CONNECTION_ID(), @@tidb_active_active_sync_stats;"
+const selectActiveActiveSyncStatsSQL = "SELECT CONNECTION_ID(), @@tidb_cdc_active_active_sync_stats;"
 
 type activeActiveSyncStats struct {
 	ConflictSkipRows uint64 `json:"conflict_skip_rows"`
 }
 
 // CheckActiveActiveSyncStatsSupported checks whether downstream TiDB supports
-// @@tidb_active_active_sync_stats session variable.
+// @@tidb_cdc_active_active_sync_stats session variable.
 //
 // This is a best-effort check used by metrics collection and should not affect
 // replication correctness.
 func CheckActiveActiveSyncStatsSupported(ctx context.Context, db *sql.DB) (bool, error) {
-	row := db.QueryRowContext(ctx, "SELECT @@tidb_active_active_sync_stats;")
+	row := db.QueryRowContext(ctx, "SELECT @@tidb_cdc_active_active_sync_stats;")
 	var v sql.NullString
 	if err := row.Scan(&v); err != nil {
 		if mysqlErr, ok := errors.Cause(err).(*dmysql.MySQLError); ok &&
@@ -57,7 +57,7 @@ func CheckActiveActiveSyncStatsSupported(ctx context.Context, db *sql.DB) (bool,
 // ActiveActiveSyncStatsCollector accumulates TiDB active-active conflict statistics
 // for a changefeed.
 //
-// Note: @@tidb_active_active_sync_stats is a session-scoped variable. Since sql.DB
+// Note: @@tidb_cdc_active_active_sync_stats is a session-scoped variable. Since sql.DB
 // can reuse sessions across different writers, we must key the last observed value
 // by CONNECTION_ID() to avoid double counting.
 type ActiveActiveSyncStatsCollector struct {
@@ -89,7 +89,7 @@ func (c *ActiveActiveSyncStatsCollector) ObserveConflictSkipRows(connID uint64, 
 		if current >= last {
 			delta = current - last
 		} else {
-			log.Warn("unexpected tidb_active_active_sync_stats decrease",
+			log.Warn("unexpected tidb_cdc_active_active_sync_stats decrease",
 				zap.String("keyspace", c.keyspace),
 				zap.String("changefeed", c.changefeed),
 				zap.Uint64("connID", connID),
@@ -128,12 +128,12 @@ func queryActiveActiveSyncStats(
 		return 0, 0, errors.Trace(err)
 	}
 	if !raw.Valid || raw.String == "" {
-		return uint64(connID), 0, errors.New("empty tidb_active_active_sync_stats value")
+		return uint64(connID), 0, errors.New("empty tidb_cdc_active_active_sync_stats value")
 	}
 
 	var parsed activeActiveSyncStats
 	if err := json.Unmarshal([]byte(raw.String), &parsed); err != nil {
-		return uint64(connID), 0, errors.Annotate(err, "unmarshal tidb_active_active_sync_stats")
+		return uint64(connID), 0, errors.Annotate(err, "unmarshal tidb_cdc_active_active_sync_stats")
 	}
 	return uint64(connID), parsed.ConflictSkipRows, nil
 }
@@ -165,7 +165,7 @@ func (w *Writer) maybeQueryActiveActiveSyncStats(
 
 	connID, conflictSkipRows, err := queryActiveActiveSyncStats(ctx, q)
 	if err != nil {
-		log.Warn("failed to query tidb_active_active_sync_stats",
+		log.Warn("failed to query tidb_cdc_active_active_sync_stats",
 			zap.String("keyspace", w.ChangefeedID.Keyspace()),
 			zap.String("changefeed", w.ChangefeedID.Name()),
 			zap.Int("writerID", w.id),

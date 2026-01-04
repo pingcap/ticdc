@@ -65,7 +65,7 @@ type Writer struct {
 	statistics *metrics.Statistics
 
 	// activeActiveSyncStatsCollector accumulates conflict statistics from TiDB session
-	// variable @@tidb_active_active_sync_stats. It is shared across all DML writers
+	// variable @@tidb_cdc_active_active_sync_stats. It is shared across all DML writers
 	// in a sink to avoid double counting when sql.DB reuses sessions across workers.
 	activeActiveSyncStatsCollector *ActiveActiveSyncStatsCollector
 	activeActiveSyncStatsInterval  time.Duration

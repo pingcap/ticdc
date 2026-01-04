@@ -138,7 +138,7 @@ type Config struct {
 
 	EnableActiveActive bool
 	// ActiveActiveSyncStatsInterval controls how often MySQL/TiDB sink queries
-	// @@tidb_active_active_sync_stats for conflict statistics.
+	// @@tidb_cdc_active_active_sync_stats for conflict statistics.
 	// Set it to 0 to disable the metric collection.
 	ActiveActiveSyncStatsInterval time.Duration
 
