@@ -64,11 +64,12 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 				return 0, 0, err
 			}
 
+			w.maybeQueryActiveActiveSyncStats(writeTimeout, tx)
+
 			if err = tx.Commit(); err != nil {
 				return 0, 0, err
 			}
 
-			w.maybeQueryActiveActiveSyncStats(writeTimeout, tx)
 			log.Debug("Exec Rows succeeded", zap.Any("rowCount", dmls.rowCount), zap.Int("writerID", w.id))
 		} else {
 			// use multi stmt way to execute the dmls

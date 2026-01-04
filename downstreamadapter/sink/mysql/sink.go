@@ -398,6 +398,8 @@ func (s *Sink) Close(removeChangefeed bool) {
 			zap.Any("changefeed", s.changefeedID.String()),
 			zap.Error(err))
 	}
-	s.activeActiveSyncStatsCollector.Close()
+	if s.activeActiveSyncStatsCollector != nil {
+		s.activeActiveSyncStatsCollector.Close()
+	}
 	s.statistics.Close()
 }

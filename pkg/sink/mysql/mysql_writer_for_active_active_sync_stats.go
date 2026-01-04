@@ -89,7 +89,7 @@ func (c *ActiveActiveSyncStatsCollector) ObserveConflictSkipRows(connID uint64, 
 		if current >= last {
 			delta = current - last
 		} else {
-			log.Warn("unexcepted tidb_active_active_sync_stats decrease",
+			log.Warn("unexpected tidb_active_active_sync_stats decrease",
 				zap.String("keyspace", c.keyspace),
 				zap.String("changefeed", c.changefeed),
 				zap.Uint64("connID", connID),
