@@ -69,6 +69,10 @@ func hashTableInfo(tableInfo *model.TableInfo) Digest {
 		sha256Hasher.Write(buf)
 		// column name
 		sha256Hasher.Write([]byte(col.Name.O))
+		// state
+		// Column state affects the visible schema during DDL.
+		binary.BigEndian.PutUint64(buf, uint64(col.State))
+		sha256Hasher.Write(buf)
 		// column type
 		columnType := col.FieldType
 		sha256Hasher.Write([]byte{columnType.GetType()})
@@ -199,6 +203,9 @@ func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indice
 			return false
 		}
 		if !col.FieldType.Equal(&columns[i].FieldType) {
+			return false
+		}
+		if col.State != columns[i].State {
 			return false
 		}
 		if col.ID != columns[i].ID {
