@@ -312,7 +312,8 @@ func (p *writeTaskPool) run(ctx context.Context) {
 		go func(workerID int) {
 			defer p.store.wg.Done()
 			var compressionBuf []byte
-			encoder, err := zstd.NewWriter(nil)
+			encodeOpt := zstd.WithEncoderLevel(zstd.SpeedFastest)
+			encoder, err := zstd.NewWriter(nil, encodeOpt)
 			if err != nil {
 				log.Panic("failed to create zstd encoder", zap.Error(err))
 			}
