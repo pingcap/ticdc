@@ -270,9 +270,7 @@ unit_test_in_verify_ci_next_gen: check_failpoint_ctl tools/bin/gotestsum tools/b
 	@export log_level=error;\
 	CGO_ENABLED=1 tools/bin/gotestsum --junitfile cdc-junit-report.xml -- -v -timeout 300s -p $(P) --race --tags=intest,nextgen \
 	-parallel=16 \
-	-covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" \
-	-modfile=nextgen.go.mod \
-	$(PACKAGES) \
+	-covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" -modfile=nextgen.go.mod $(PACKAGES) \
 	|| { $(FAILPOINT_DISABLE); exit 1; }
 	tools/bin/gocov convert "$(TEST_DIR)/cov.unit.out" | tools/bin/gocov-xml > cdc-coverage.xml
 	$(FAILPOINT_DISABLE)
@@ -297,8 +295,7 @@ unit_test_pkg_next_gen: check_failpoint_ctl tools/bin/gotestsum tools/bin/gocov 
 	@export log_level=error;\
 	CGO_ENABLED=1 tools/bin/gotestsum --junitfile cdc-junit-report.xml -- -v -timeout 300s -p $(P) --race --tags=intest,nextgen \
 	-parallel=16 \
-	-covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" \
-	-modfile=nextgen.go.mod \
+	-covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" -modfile=nextgen.go.mod \
 	$(PKG) \
 	|| { $(FAILPOINT_DISABLE); exit 1; }
 	tools/bin/gocov convert "$(TEST_DIR)/cov.unit.out" | tools/bin/gocov-xml > cdc-coverage.xml
