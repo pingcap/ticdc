@@ -399,8 +399,6 @@ func needSwitchDB(event *commonEvent.DDLEvent) bool {
 
 func needWaitAsyncExecDone(t timodel.ActionType) bool {
 	switch t {
-	case timodel.ActionCreateTable, timodel.ActionCreateTables:
-		return false
 	case timodel.ActionCreateSchema:
 		return false
 	default:

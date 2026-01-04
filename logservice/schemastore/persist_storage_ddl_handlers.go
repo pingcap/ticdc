@@ -1781,6 +1781,28 @@ func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter
 			},
 		},
 	}
+	if rawEvent.Query != "" {
+		stmt, err := parser.New().ParseOneStmt(rawEvent.Query, "", "")
+		if err != nil {
+			log.Error("parse create table ddl failed",
+				zap.String("query", rawEvent.Query),
+				zap.Error(err))
+			return ddlEvent, false, err
+		}
+		if createStmt, ok := stmt.(*ast.CreateTableStmt); ok && createStmt.ReferTable != nil {
+			refTable := createStmt.ReferTable.Name.O
+			refSchema := createStmt.ReferTable.Schema.O
+			if refSchema == "" {
+				refSchema = rawEvent.SchemaName
+			}
+			ddlEvent.BlockedTableNames = []commonEvent.SchemaTableName{
+				{
+					SchemaName: refSchema,
+					TableName:  refTable,
+				},
+			}
+		}
+	}
 	return ddlEvent, true, err
 }
 

@@ -3129,3 +3129,43 @@ func TestRenameTable(t *testing.T) {
 	})
 	assert.Equal(t, "RENAME TABLE `test`.`t1` TO `test`.`t2`", ddl.Query)
 }
+
+func TestBuildDDLEventForNewTableDDL_CreateTableLikeBlockedTableNames(t *testing.T) {
+	cases := []struct {
+		name     string
+		query    string
+		expected []commonEvent.SchemaTableName
+	}{
+		{
+			name:  "default schema",
+			query: "CREATE TABLE `b` LIKE `a`",
+			expected: []commonEvent.SchemaTableName{
+				{SchemaName: "test", TableName: "a"},
+			},
+		},
+		{
+			name:  "explicit schema",
+			query: "CREATE TABLE `b` LIKE `other`.`a`",
+			expected: []commonEvent.SchemaTableName{
+				{SchemaName: "other", TableName: "a"},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		rawEvent := &PersistedDDLEvent{
+			Type:       byte(model.ActionCreateTable),
+			SchemaID:   1,
+			TableID:    2,
+			SchemaName: "test",
+			TableName:  "b",
+			Query:      tc.query,
+			TableInfo:  &model.TableInfo{},
+		}
+
+		ddlEvent, ok, err := buildDDLEventForNewTableDDL(rawEvent, nil, 0)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, tc.expected, ddlEvent.BlockedTableNames)
+	}
+}
