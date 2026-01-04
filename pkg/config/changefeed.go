@@ -281,7 +281,7 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		Epoch:                         info.Epoch,
 		BDRMode:                       util.GetOrZero(info.Config.BDRMode),
 		EnableActiveActive:            util.GetOrZero(info.Config.EnableActiveActive),
-		ActiveActiveProgressInterval:  *info.Config.ActiveActiveProgressInterval,
+		ActiveActiveProgressInterval:  util.GetOrZero(info.Config.ActiveActiveProgressInterval),
 		ActiveActiveSyncStatsInterval: util.GetOrZero(info.Config.ActiveActiveSyncStatsInterval),
 		TimeZone:                      GetGlobalServerConfig().TZ,
 		Consistent:                    info.Config.Consistent,

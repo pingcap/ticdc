@@ -361,10 +361,6 @@ func (d *BasicDispatcher) handleActiveActiveCheck(event commonEvent.Event) error
 
 func (d *BasicDispatcher) ensureTableModeCompatibility(tableInfo *common.TableInfo) error {
 	if tableInfo == nil {
-		// if d.sharedInfo.enableActiveActive {
-		// 	return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
-		// 		"table info is nil for dispatcher %s in active-active mode", d.id.String())
-		// }
 		return nil
 	}
 
