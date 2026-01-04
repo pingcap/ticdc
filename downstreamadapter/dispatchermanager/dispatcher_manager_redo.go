@@ -118,7 +118,7 @@ func (e *DispatcherManager) NewTableTriggerRedoDispatcher(id *heartbeatpb.Dispat
 func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dispatcherCreateInfo, removeDDLTs bool) error {
 	start := time.Now()
 
-	dispatcherIds, _, startTsList, tableSpans, schemaIds := prepareCreateDispatcher(infos, e.redoDispatcherMap)
+	dispatcherIds, _, startTsList, tableSpans, schemaIds, scheduleSkipDMLAsStartTsList := prepareCreateDispatcher(infos, e.redoDispatcherMap)
 	if len(dispatcherIds) == 0 {
 		return nil
 	}
@@ -145,6 +145,7 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 			schemaIds[idx],
 			e.redoSchemaIDToDispatchers,
 			false, // skipSyncpointAtStartTs
+			scheduleSkipDMLAsStartTsList[idx],
 			e.redoSink,
 			e.sharedInfo,
 		)
@@ -172,7 +173,8 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 			zap.Stringer("changefeedID", e.changefeedID),
 			zap.Stringer("dispatcherID", id),
 			zap.String("tableSpan", common.FormatTableSpan(tableSpans[idx])),
-			zap.Int64("startTs", startTsList[idx]))
+			zap.Int64("startTs", startTsList[idx]),
+			zap.Bool("skipDMLAsStartTs", scheduleSkipDMLAsStartTsList[idx]))
 	}
 	e.metricRedoCreateDispatcherDuration.Observe(time.Since(start).Seconds() / float64(len(dispatcherIds)))
 	log.Info("batch create new redo dispatchers",
@@ -207,6 +209,7 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 		schemaID,
 		e.redoSchemaIDToDispatchers,
 		false, // skipSyncpointAtStartTs
+		false, // skipDMLAsStartTs
 		e.redoSink,
 		e.sharedInfo,
 	)

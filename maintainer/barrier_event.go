@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/range_checker"
+	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -457,7 +458,7 @@ func (be *BarrierEvent) sendPassAction(mode int64) []*messaging.TargetMessage {
 
 // check all related blocked dispatchers progress, to forward the progress of some block event,
 // to avoid the corner case that some dispatcher has forward checkpointTs.
-// If the dispatcher's checkpointTs >= commitTs of this event, means the block event is writen to the sink.
+// See forwardBarrierEvent for the exact forwarding rules.
 //
 // For example, there are two nodes A and B, and there are two dispatchers A1 and B1, maintainer is also running on A.
 // One ddl event E need the evolve of A1 and B1, and A1 finish flushing the event E downstream.
@@ -474,7 +475,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 		for _, tableId := range be.blockedDispatchers.TableIDs {
 			replications := be.spanController.GetTasksByTableID(tableId)
 			for _, replication := range replications {
-				if replication.GetStatus().CheckpointTs >= be.commitTs {
+				if forwardBarrierEvent(replication, be) {
 					// one related table has forward checkpointTs, means the block event can be advanced
 					be.selected.Store(true)
 					be.writerDispatcherAdvanced = true
@@ -493,7 +494,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 		schemaID := be.blockedDispatchers.SchemaID
 		replications := be.spanController.GetTasksBySchemaID(schemaID)
 		for _, replication := range replications {
-			if replication.GetStatus().CheckpointTs >= be.commitTs {
+			if forwardBarrierEvent(replication, be) {
 				// one related table has forward checkpointTs, means the block event can be advanced
 				be.selected.Store(true)
 				be.writerDispatcherAdvanced = true
@@ -510,7 +511,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 	case heartbeatpb.InfluenceType_All:
 		replications := be.spanController.GetAllTasks()
 		for _, replication := range replications {
-			if replication.GetStatus().CheckpointTs >= be.commitTs {
+			if forwardBarrierEvent(replication, be) {
 				// one related table has forward checkpointTs, means the block event can be advanced
 				be.selected.Store(true)
 				be.writerDispatcherAdvanced = true
@@ -524,6 +525,32 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 			}
 		}
 	}
+}
+
+// forwardBarrierEvent returns true if `replication` is known to have passed `event`.
+//
+// We intentionally avoid `checkpointTs >= commitTs`: a dispatcher may be recreated with
+// `startTs == commitTs` and not skip the syncpoint at that ts, so it may report
+// `checkpointTs == commitTs` before the syncpoint is actually flushed. We only forward when the
+// replication is strictly beyond the barrier, or when ordering guarantees it (replication is in a
+// syncpoint barrier at the same ts while `event` is a DDL barrier).
+func forwardBarrierEvent(replication *replica.SpanReplication, event *BarrierEvent) bool {
+	if replication.GetStatus().CheckpointTs > event.commitTs {
+		return true
+	}
+
+	blockState := replication.GetBlockState()
+	if blockState != nil {
+		if blockState.BlockTs > event.commitTs {
+			return true
+		} else if blockState.BlockTs == event.commitTs {
+			// if replication is syncpoint, but event is not syncpoint, we can forward the event
+			if blockState.IsSyncPoint && !event.isSyncPoint {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {

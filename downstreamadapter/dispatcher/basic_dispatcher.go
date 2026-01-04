@@ -72,6 +72,7 @@ type Dispatcher interface {
 	SetTryRemoving()
 	GetHeartBeatInfo(h *HeartBeatInfo)
 	GetComponentStatus() heartbeatpb.ComponentState
+	GetBlockEventStatus() *heartbeatpb.State
 	GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus
 	GetEventSizePerSecond() float32
 	IsTableTriggerEventDispatcher() bool
@@ -133,11 +134,15 @@ type BasicDispatcher struct {
 	skipSyncpointAtStartTs bool
 	// skipDMLAsStartTs indicates whether to skip DML events at startTs+1 timestamp.
 	// When true, the dispatcher should filter out DML events with commitTs == startTs+1, but keep DDL events.
-	// This flag is set to true ONLY when is_syncpoint=false AND finished=0 in ddl-ts table (non-syncpoint DDL not finished).
-	// In this case, we return startTs = ddlTs-1 to replay the DDL, and skip the already-written DML at ddlTs
-	// to avoid duplicate writes while ensuring the DDL is replayed.
+	// This flag is set to true in two scenarios:
+	// 1. when is_syncpoint=false AND finished=0 in ddl-ts table (non-syncpoint DDL not finished).
+	//    In this case, we return startTs = ddlTs-1 to replay the DDL, and skip the already-written DML at ddlTs
+	//    to avoid duplicate writes while ensuring the DDL is replayed.
 	// Note: When is_syncpoint=true AND finished=0 (DDL finished but syncpoint not finished),
 	// skipDMLAsStartTs is false because the DDL is already completed and DML should be processed normally.
+	// 2. maintainer ask dispatcher to make a move operator, while the dispatcher just dealing with a ddl event.
+	//    and the block state for ddl event is still waiting.
+	//    In this case, we also return startTs = ddlTs-1 to replay the DDL but skip the dmls.
 	skipDMLAsStartTs bool
 	// The ts from pdClock when the dispatcher is created.
 	// when downstream is mysql-class, for dml event we need to compare the commitTs with this ts
@@ -443,10 +448,10 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			}
 
 			// Skip DML events at startTs+1 when skipDMLAsStartTs is true.
-			// This handles the corner case where a DDL at ts=X crashed after writing DML but before marking finished.
-			// We return startTs=X-1 to replay the DDL, but need to skip the already-written DML at ts=X (startTs+1).
+			// This flag is used when a dispatcher starts from (blockTs-1) to replay the DDL at blockTs,
+			// while avoiding potential duplicate DML writes at blockTs.
 			if d.skipDMLAsStartTs && event.GetCommitTs() == d.startTs+1 {
-				log.Info("skip DML event at startTs+1 due to DDL crash recovery",
+				log.Info("skip DML event at startTs+1 due to skipDMLAsStartTs",
 					zap.Stringer("dispatcher", d.id),
 					zap.Uint64("startTs", d.startTs),
 					zap.Uint64("dmlCommitTs", event.GetCommitTs()),
@@ -609,25 +614,7 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 				actionCommitTs := action.CommitTs
 				actionIsSyncPoint := action.IsSyncPoint
 				d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
-					failpoint.Inject("BlockOrWaitBeforeWrite", nil)
-					err := d.AddBlockEventToSink(pendingEvent)
-					if err != nil {
-						d.HandleError(err)
-						return
-					}
-					failpoint.Inject("BlockOrWaitReportAfterWrite", nil)
-
-					d.sharedInfo.blockStatusesChan <- &heartbeatpb.TableSpanBlockStatus{
-						ID: d.id.ToPB(),
-						State: &heartbeatpb.State{
-							IsBlocked:   true,
-							BlockTs:     actionCommitTs,
-							IsSyncPoint: actionIsSyncPoint,
-							Stage:       heartbeatpb.BlockStage_DONE,
-						},
-						Mode: d.GetMode(),
-					}
-					GetDispatcherStatusDynamicStream().Wake(d.id)
+					d.ExecuteBlockEventDDL(pendingEvent, actionCommitTs, actionIsSyncPoint)
 				})
 				return true
 			} else {
@@ -659,6 +646,28 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 		}
 	}
 	return false
+}
+
+func (d *BasicDispatcher) ExecuteBlockEventDDL(pendingEvent commonEvent.BlockEvent, actionCommitTs uint64, actionIsSyncPoint bool) {
+	failpoint.Inject("BlockOrWaitBeforeWrite", nil)
+	err := d.AddBlockEventToSink(pendingEvent)
+	if err != nil {
+		d.HandleError(err)
+		return
+	}
+	failpoint.Inject("BlockOrWaitReportAfterWrite", nil)
+
+	d.sharedInfo.blockStatusesChan <- &heartbeatpb.TableSpanBlockStatus{
+		ID: d.id.ToPB(),
+		State: &heartbeatpb.State{
+			IsBlocked:   true,
+			BlockTs:     actionCommitTs,
+			IsSyncPoint: actionIsSyncPoint,
+			Stage:       heartbeatpb.BlockStage_DONE,
+		},
+		Mode: d.GetMode(),
+	}
+	GetDispatcherStatusDynamicStream().Wake(d.id)
 }
 
 // shouldBlock check whether the event should be blocked(to wait maintainer response)

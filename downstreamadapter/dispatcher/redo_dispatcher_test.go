@@ -57,6 +57,7 @@ func newRedoDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) 
 		1,            // schemaID
 		NewSchemaIDToDispatchers(),
 		false, // skipSyncpointAtStartTs
+		false, // skipDMLAsStartTs
 		sink,
 		sharedInfo,
 	)
