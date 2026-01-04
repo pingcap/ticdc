@@ -78,7 +78,7 @@ ifeq ("${NEXT_GEN}", "1")
 endif
 
 # gotestsum -p parameter for unit tests
-P=3
+P=8
 
 TEST_FLAG:=--tags intest
 ifeq ("${NEXT_GEN}", "1")
