@@ -21,10 +21,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/log"
-	"go.uber.org/zap"
 	"workload/schema"
 	"workload/util"
+
+	"github.com/pingcap/log"
+	"go.uber.org/zap"
 )
 
 const varcharColumnMaxLen = 16383
@@ -99,10 +100,7 @@ func NewLargeRowWorkload(
 	normalRowSize, largeRowSize int, largeRatio float64,
 ) schema.Workload {
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	columnCount := (largeRowSize + varcharColumnMaxLen - 1) / varcharColumnMaxLen
-	if columnCount <= 0 {
-		columnCount = 1
-	}
+	columnCount := int(float64(largeRowSize) / varcharColumnMaxLen)
 	smallColumnSize := int(float64(normalRowSize) / float64(columnCount))
 
 	l := &LargeRowWorkload{
