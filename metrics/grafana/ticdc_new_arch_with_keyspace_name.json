@@ -77,7 +77,7 @@
       {
         "datasource": "${DS_TEST-CLUSTER}",
         "enable": false,
-        "expr": "delta(up{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\"tikv|ticdc|tidb|pd\"}[30s]) < BOOL 0",
+        "expr": "delta(up{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\"tikv|ticdc|tidb|pd\"}[30s]) < BOOL 0",
         "hide": false,
         "iconColor": "#FF9830",
         "limit": 100,
@@ -93,7 +93,7 @@
       {
         "datasource": "${DS_TEST-CLUSTER}",
         "enable": false,
-        "expr": "sum(ALERTS{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", alertstate=\"firing\", alertname=~\"ticdc.*\"}) by (alertname) > BOOL 0",
+        "expr": "sum(ALERTS{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", alertstate=\"firing\", alertname=~\"ticdc.*\"}) by (alertname) > BOOL 0",
         "hide": false,
         "iconColor": "#B877D9",
         "limit": 100,
@@ -196,7 +196,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_owner_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",  changefeed=~\"$changefeed\"}) by (keyspace_name, changefeed)",
+              "expr": "max(ticdc_owner_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",  changefeed=~\"$changefeed\"}) by (keyspace_name, changefeed)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -293,7 +293,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_owner_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",  changefeed=~\"$changefeed\"}) by (keyspace_name, changefeed)",
+              "expr": "max(ticdc_owner_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",  changefeed=~\"$changefeed\"}) by (keyspace_name, changefeed)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -391,7 +391,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_dml_event_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed, instance)",
+              "expr": "sum(rate(ticdc_sink_dml_event_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed, instance)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -483,7 +483,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_write_bytes_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (instance, type, changefeed)",
+              "expr": "sum(rate(ticdc_sink_write_bytes_total{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (instance, type, changefeed)",
               "hide": false,
               "interval": "",
               "legendFormat": "{{instance}}-{{changefeed}}-{{type}}",
@@ -492,7 +492,7 @@
             },
             {
               "exemplar": true,
-              "expr": "avg_over_time(sum(rate(ticdc_sink_write_bytes_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (instance, type, changefeed)[1m:])",
+              "expr": "avg_over_time(sum(rate(ticdc_sink_write_bytes_total{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (instance, type, changefeed)[1m:])",
               "hide": true,
               "interval": "",
               "legendFormat": "{{instance}}-{{changefeed}}-AVG",
@@ -693,7 +693,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_owner_status{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed)",
+              "expr": "max(ticdc_owner_status{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed)",
               "format": "time_series",
               "instant": false,
               "interval": "",
@@ -763,7 +763,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_dispatchermanager_table_event_dispatcher_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (instance, changefeed)",
+              "expr": "sum(ticdc_dispatchermanager_table_event_dispatcher_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (instance, changefeed)",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -859,7 +859,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_dynamic_stream_memory_usage{k8s_cluster=~\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", area=~\"$changefeed\", instance=~\"$ticdc_instance\", module=~\"event-collector\"}) by (keyspace_name, area, instance, module, type)",
+              "expr": "sum(ticdc_dynamic_stream_memory_usage{k8s_cluster=~\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", area=~\"$changefeed\", instance=~\"$ticdc_instance\", module=~\"event-collector\"}) by (keyspace_name, area, instance, module, type)",
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{area}}-{{instance}}-{{module}}-{{type}}",
               "refId": "A"
@@ -972,7 +972,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_maintainer_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",  changefeed=~\"$changefeed\"}) by (keyspace_name, changefeed)",
+              "expr": "max(ticdc_maintainer_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",  changefeed=~\"$changefeed\"}) by (keyspace_name, changefeed)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -1069,7 +1069,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_maintainer_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed)",
+              "expr": "max(ticdc_maintainer_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -1166,7 +1166,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "ticdc_dispatchermanager_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}",
+              "expr": "ticdc_dispatchermanager_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -1264,7 +1264,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "ticdc_dispatchermanager_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}",
+              "expr": "ticdc_dispatchermanager_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -1378,7 +1378,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_batch_row_count_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed, instance)",
+              "expr": "sum(rate(ticdc_sink_batch_row_count_sum{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed, instance)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -1483,7 +1483,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_sink_batch_row_count_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed, instance)",
+              "expr": "sum(ticdc_sink_batch_row_count_sum{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed, instance)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -1607,7 +1607,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_dispatchermanager_table_event_dispatcher_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (instance)",
+              "expr": "sum(ticdc_dispatchermanager_table_event_dispatcher_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (instance)",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -1719,7 +1719,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_dispatchermanager_table_event_dispatcher_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (changefeed)",
+              "expr": "sum(ticdc_dispatchermanager_table_event_dispatcher_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (changefeed)",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -1831,7 +1831,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "max(pd_cluster_tso{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\"})",
+              "expr": "max(pd_cluster_tso{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\"})",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -1841,7 +1841,7 @@
             },
             {
               "exemplar": true,
-              "expr": "max(ticdc_owner_checkpoint_ts{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed)",
+              "expr": "max(ticdc_owner_checkpoint_ts{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed)",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -1949,7 +1949,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "max(pd_cluster_tso{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\"})",
+              "expr": "max(pd_cluster_tso{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\"})",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -1959,7 +1959,7 @@
             },
             {
               "exemplar": true,
-              "expr": "max(ticdc_owner_resolved_ts{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name, changefeed)",
+              "expr": "max(ticdc_owner_resolved_ts{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name, changefeed)",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -1969,7 +1969,7 @@
             },
             {
               "exemplar": true,
-              "expr": "max(ticdc_scheduler_slow_table_puller_resolved_ts{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name, changefeed)",
+              "expr": "max(ticdc_scheduler_slow_table_puller_resolved_ts{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name, changefeed)",
               "hide": false,
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-puller",
@@ -2072,7 +2072,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_owner_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",  changefeed=~\"$changefeed\"}) by (keyspace_name, changefeed)",
+              "expr": "max(ticdc_owner_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",  changefeed=~\"$changefeed\"}) by (keyspace_name, changefeed)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -2175,7 +2175,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_owner_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed)",
+              "expr": "max(ticdc_owner_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -2184,7 +2184,7 @@
             },
             {
               "exemplar": true,
-              "expr": "max(ticdc_scheduler_slow_table_puller_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name, changefeed)",
+              "expr": "max(ticdc_scheduler_slow_table_puller_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name, changefeed)",
               "hide": false,
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-puller",
@@ -2301,7 +2301,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_owner_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",  changefeed=~\"$changefeed\"}) by (keyspace_name, changefeed)",
+              "expr": "max(ticdc_owner_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",  changefeed=~\"$changefeed\"}) by (keyspace_name, changefeed)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -2398,7 +2398,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_owner_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed)",
+              "expr": "max(ticdc_owner_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -2499,7 +2499,7 @@
                 "uid": "PB0C37C6A9EC17FDC"
               },
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_batch_row_count_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed, instance)",
+              "expr": "sum(rate(ticdc_sink_batch_row_count_sum{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed, instance)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -2602,7 +2602,7 @@
               },
               "editorMode": "code",
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_txn_worker_flush_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_txn_worker_flush_duration_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
+              "expr": "sum(rate(ticdc_sink_txn_worker_flush_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_txn_worker_flush_duration_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 2,
@@ -2720,7 +2720,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_coordinator_changefeed_state{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\",keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed, state)",
+              "expr": "sum(ticdc_coordinator_changefeed_state{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\",keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed, state)",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -2822,7 +2822,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.999, sum(rate(ticdc_coordinator_finish_operators_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed,mode))",
+              "expr": "histogram_quantile(0.999, sum(rate(ticdc_coordinator_finish_operators_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed,mode))",
               "interval": "",
               "legendFormat": "99.9",
               "queryType": "randomWalk",
@@ -2830,7 +2830,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_coordinator_finish_operators_duration_seconds_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,mode) / \nsum(rate(ticdc_coordinator_finish_operators_duration_seconds_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,mode)",
+              "expr": "sum(rate(ticdc_coordinator_finish_operators_duration_seconds_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,mode) / \nsum(rate(ticdc_coordinator_finish_operators_duration_seconds_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,mode)",
               "hide": false,
               "interval": "",
               "legendFormat": "avg",
@@ -2947,7 +2947,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_maintainer_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",  changefeed=~\"$changefeed\"}) by (keyspace_name, changefeed)",
+              "expr": "max(ticdc_maintainer_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",  changefeed=~\"$changefeed\"}) by (keyspace_name, changefeed)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -3050,7 +3050,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_maintainer_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed)",
+              "expr": "max(ticdc_maintainer_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -3160,7 +3160,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_changefeed_maintainer_counter{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name, changefeed, instance)",
+              "expr": "sum(ticdc_changefeed_maintainer_counter{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name, changefeed, instance)",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -3261,7 +3261,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.999, sum(rate(ticdc_maintainer_handle_event_duration_bucket{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed))",
+              "expr": "histogram_quantile(0.999, sum(rate(ticdc_maintainer_handle_event_duration_bucket{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed))",
               "hide": false,
               "interval": "",
               "legendFormat": "99.9-{{keyspace_name}}-{{changefeed}}",
@@ -3270,7 +3270,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_maintainer_handle_event_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed) / \nsum(rate(ticdc_maintainer_handle_event_duration_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed)",
+              "expr": "sum(rate(ticdc_maintainer_handle_event_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed) / \nsum(rate(ticdc_maintainer_handle_event_duration_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed)",
               "hide": false,
               "interval": "",
               "legendFormat": "avg-{{keyspace_name}}-{{changefeed}}",
@@ -3397,7 +3397,7 @@
               },
               "editorMode": "code",
               "exemplar": true,
-              "expr": "sum(rate(ticdc_event_service_pending_scan_task_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name, instance)",
+              "expr": "sum(rate(ticdc_event_service_pending_scan_task_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name, instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "pending-task-{{instance}}",
@@ -3493,7 +3493,7 @@
                 "uid": "PB0C37C6A9EC17FDC"
               },
               "editorMode": "code",
-              "expr": "ticdc_event_service_dispatcher_status_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", instance=~\"$ticdc_instance\"}",
+              "expr": "ticdc_event_service_dispatcher_status_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", instance=~\"$ticdc_instance\"}",
               "hide": false,
               "legendFormat": "{{instance}}-dispatcherStatus-{{status}}",
               "queryType": "randomWalk",
@@ -3585,7 +3585,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_event_service_available_memory_quota{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (instance, changefeed)",
+              "expr": "sum(ticdc_event_service_available_memory_quota{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (instance, changefeed)",
               "interval": "",
               "legendFormat": "{{instance}}-{{changefeed}}",
               "refId": "A"
@@ -3676,7 +3676,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_event_service_channel_size{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", instance=~\"$ticdc_instance\"}[1m])) by (instance, type)",
+              "expr": "sum(rate(ticdc_event_service_channel_size{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", instance=~\"$ticdc_instance\"}[1m])) by (instance, type)",
               "interval": "",
               "intervalFactor": 1,
               "legendFormat": "{{instance}}-{{type}}",
@@ -3802,7 +3802,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_dispatchermanagermanager_event_dispatcher_manager_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (instance)",
+              "expr": "sum(ticdc_dispatchermanagermanager_event_dispatcher_manager_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (instance)",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -3914,7 +3914,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_dispatchermanager_table_event_dispatcher_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (instance, changefeed)",
+              "expr": "sum(ticdc_dispatchermanager_table_event_dispatcher_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (instance, changefeed)",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -4027,7 +4027,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_dispatchermanager_table_trigger_event_dispatcher_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (instance, changefeed)",
+              "expr": "sum(ticdc_dispatchermanager_table_trigger_event_dispatcher_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (instance, changefeed)",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -4130,7 +4130,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.90, sum(rate(ticdc_sink_create_dispatcher_duration_bucket{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,changefeed,instance))",
+              "expr": "histogram_quantile(0.90, sum(rate(ticdc_sink_create_dispatcher_duration_bucket{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,changefeed,instance))",
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-detect-P90",
               "queryType": "randomWalk",
@@ -4138,7 +4138,7 @@
             },
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.95, sum(rate(ticdc_sink_create_dispatcher_duration_bucket{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,changefeed,instance))",
+              "expr": "histogram_quantile(0.95, sum(rate(ticdc_sink_create_dispatcher_duration_bucket{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,changefeed,instance))",
               "hide": false,
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-detect-P95",
@@ -4147,7 +4147,7 @@
             },
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.99, sum(rate(ticdc_sink_create_dispatcher_duration_bucket{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,changefeed,instance))",
+              "expr": "histogram_quantile(0.99, sum(rate(ticdc_sink_create_dispatcher_duration_bucket{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,changefeed,instance))",
               "hide": false,
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-detect-P99",
@@ -4244,7 +4244,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_handle_dispatcher_request{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed, instance, type)",
+              "expr": "sum(rate(ticdc_sink_handle_dispatcher_request{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed, instance, type)",
               "hide": false,
               "interval": "",
               "legendFormat": "{{instance}}-{{target}}-{{type}}",
@@ -4358,7 +4358,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.999, sum(rate(ticdc_sink_batch_row_count_bucket{k8s_cluster=~\"$k8s_cluster\",tidb_cluster=~\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed,instance))",
+              "expr": "histogram_quantile(0.999, sum(rate(ticdc_sink_batch_row_count_bucket{k8s_cluster=~\"$k8s_cluster\",sharedpool_id=~\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed,instance))",
               "interval": "",
               "legendFormat": "99.9%-{{keyspace_name}}-{{changefeed}}-{{instance}}",
               "queryType": "randomWalk",
@@ -4366,7 +4366,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_batch_row_count_sum{k8s_cluster=~\"$k8s_cluster\",tidb_cluster=~\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / sum(rate(ticdc_sink_batch_row_count_count{k8s_cluster=~\"$k8s_cluster\",tidb_cluster=~\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
+              "expr": "sum(rate(ticdc_sink_batch_row_count_sum{k8s_cluster=~\"$k8s_cluster\",sharedpool_id=~\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / sum(rate(ticdc_sink_batch_row_count_count{k8s_cluster=~\"$k8s_cluster\",sharedpool_id=~\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "avg-{{keyspace_name}}-{{changefeed}}-{{instance}}",
@@ -4458,7 +4458,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_batch_row_count_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
+              "expr": "sum(rate(ticdc_sink_batch_row_count_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}",
               "queryType": "randomWalk",
@@ -4555,7 +4555,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_ddl_exec_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_ddl_exec_duration_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
+              "expr": "sum(rate(ticdc_sink_ddl_exec_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_ddl_exec_duration_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
               "interval": "",
               "legendFormat": "avg-{{keyspace_name}}-{{changefeed}}-{{instance}}",
               "queryType": "randomWalk",
@@ -4563,7 +4563,7 @@
             },
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.999, sum(rate(ticdc_sink_ddl_exec_duration_bucket{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed,instance))",
+              "expr": "histogram_quantile(0.999, sum(rate(ticdc_sink_ddl_exec_duration_bucket{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed,instance))",
               "hide": false,
               "interval": "",
               "legendFormat": "99.9-duration-{{keyspace_name}}-{{changefeed}}-{{instance}}",
@@ -4655,7 +4655,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_sink_ddl_exec_running{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed,instance)",
+              "expr": "sum(ticdc_sink_ddl_exec_running{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed,instance)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -4748,7 +4748,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(delta(ticdc_sink_execution_error{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
+              "expr": "sum(delta(ticdc_sink_execution_error{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}",
               "queryType": "randomWalk",
@@ -4845,7 +4845,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(increase(ticdc_sink_ddl_exec_duration_bucket{le=\"+Inf\",k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
+              "expr": "sum(increase(ticdc_sink_ddl_exec_duration_bucket{le=\"+Inf\",k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
               "interval": "",
               "legendFormat": "count-{{keyspace_name}}-{{changefeed}}-{{instance}}",
               "queryType": "randomWalk",
@@ -4952,7 +4952,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.999, sum(rate(ticdc_sink_txn_conflict_detect_duration_bucket{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,changefeed,instance))",
+              "expr": "histogram_quantile(0.999, sum(rate(ticdc_sink_txn_conflict_detect_duration_bucket{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,changefeed,instance))",
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-detect-P999",
               "queryType": "randomWalk",
@@ -4960,7 +4960,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_txn_conflict_detect_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (changefeed,instance) / \nsum(rate(ticdc_sink_txn_conflict_detect_duration_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (changefeed,instance)",
+              "expr": "sum(rate(ticdc_sink_txn_conflict_detect_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (changefeed,instance) / \nsum(rate(ticdc_sink_txn_conflict_detect_duration_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (changefeed,instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-detect-avg",
@@ -4968,7 +4968,7 @@
             },
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.999, sum(rate(ticdc_sink_txn_queue_duration_bucket{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed,instance))",
+              "expr": "histogram_quantile(0.999, sum(rate(ticdc_sink_txn_queue_duration_bucket{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed,instance))",
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-queue-P999",
               "queryType": "randomWalk",
@@ -4976,7 +4976,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_txn_queue_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_txn_queue_duration_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
+              "expr": "sum(rate(ticdc_sink_txn_queue_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_txn_queue_duration_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-queue-avg",
@@ -5074,7 +5074,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.999, sum(rate(ticdc_sink_txn_worker_flush_duration_bucket{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed,instance))",
+              "expr": "histogram_quantile(0.999, sum(rate(ticdc_sink_txn_worker_flush_duration_bucket{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed,instance))",
               "interval": "",
               "legendFormat": "99.9-{{keyspace_name}}-{{changefeed}}-{{instance}}",
               "queryType": "randomWalk",
@@ -5082,7 +5082,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_txn_worker_flush_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_txn_worker_flush_duration_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
+              "expr": "sum(rate(ticdc_sink_txn_worker_flush_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_txn_worker_flush_duration_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "avg-{{keyspace_name}}-{{changefeed}}-{{instance}}",
@@ -5180,7 +5180,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_txn_worker_batch_flush_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance,id) / sum(rate(ticdc_sink_txn_worker_total_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance,id) *100",
+              "expr": "sum(rate(ticdc_sink_txn_worker_batch_flush_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance,id) / sum(rate(ticdc_sink_txn_worker_total_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance,id) *100",
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-worker-{{id}}",
               "queryType": "randomWalk",
@@ -5277,7 +5277,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_txn_worker_handled_rows{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance,id)",
+              "expr": "sum(rate(ticdc_sink_txn_worker_handled_rows{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance,id)",
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-{{id}}",
               "queryType": "randomWalk",
@@ -5374,7 +5374,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.999, sum(rate(ticdc_sink_txn_sink_dml_batch_commit_bucket{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed,instance))",
+              "expr": "histogram_quantile(0.999, sum(rate(ticdc_sink_txn_sink_dml_batch_commit_bucket{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed,instance))",
               "interval": "",
               "legendFormat": "99.9-{{keyspace_name}}-{{changefeed}}-{{instance}}",
               "queryType": "randomWalk",
@@ -5382,7 +5382,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_txn_sink_dml_batch_commit_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_txn_sink_dml_batch_commit_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
+              "expr": "sum(rate(ticdc_sink_txn_sink_dml_batch_commit_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_txn_sink_dml_batch_commit_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "avg-{{keyspace_name}}-{{changefeed}}-{{instance}}",
@@ -5428,6 +5428,105 @@
           "yaxis": {
             "align": false,
             "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The number of dml rows affected that sink flushes to downstream per second.",
+          "fieldConfig": {
+            "defaults": {
+              "links": []
+            },
+            "overrides": []
+          },
+          "fill": 1,
+          "fillGradient": 0,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 32
+          },
+          "hiddenSeries": false,
+          "id": 636,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": false,
+            "show": true,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
+          "percentage": false,
+          "pluginVersion": "7.5.17",
+          "pointradius": 2,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "exemplar": true,
+              "expr": "sum(rate(ticdc_sink_dml_event_affected_row_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name, changefeed, type, row_type)",
+              "format": "time_series",
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{type}}-{{row_type}}",
+              "refId": "A"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Row Affected Count / s",
+          "tooltip": {
+            "shared": true,
+            "sort": 2,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": 0,
+              "format": "short",
+              "logBase": 1,
+              "min": "0",
+              "show": true
+            },
+            {
+              "format": "none",
+              "logBase": 1,
+              "show": false
+            }
+          ],
+          "yaxis": {
+            "align": false
           }
         }
       ],
@@ -5495,7 +5594,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.999, sum(rate(ticdc_sink_mq_worker_send_message_duration_bucket{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed,instance))",
+              "expr": "histogram_quantile(0.999, sum(rate(ticdc_sink_mq_worker_send_message_duration_bucket{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed,instance))",
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-P999",
               "queryType": "randomWalk",
@@ -5503,7 +5602,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_mq_worker_send_message_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_mq_worker_send_message_duration_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
+              "expr": "sum(rate(ticdc_sink_mq_worker_send_message_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_mq_worker_send_message_duration_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-avg",
@@ -5605,7 +5704,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_sink_kafka_producer_outgoing_byte_rate{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed, instance, broker)",
+              "expr": "sum(ticdc_sink_kafka_producer_outgoing_byte_rate{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed, instance, broker)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -5708,7 +5807,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_sink_kafka_producer_in_flight_requests{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed, instance, broker)",
+              "expr": "sum(ticdc_sink_kafka_producer_in_flight_requests{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed, instance, broker)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -5811,7 +5910,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_sink_kafka_producer_request_latency{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed, instance, broker, type)",
+              "expr": "sum(ticdc_sink_kafka_producer_request_latency{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed, instance, broker, type)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -5914,7 +6013,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_sink_kafka_producer_request_rate{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed, instance, broker)",
+              "expr": "sum(ticdc_sink_kafka_producer_request_rate{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed, instance, broker)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -6017,7 +6116,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_sink_kafka_producer_records_per_request{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed, instance, type)",
+              "expr": "sum(ticdc_sink_kafka_producer_records_per_request{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed, instance, type)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -6118,7 +6217,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_sink_kafka_producer_compression_ratio{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed, instance, type)",
+              "expr": "sum(ticdc_sink_kafka_producer_compression_ratio{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed, instance, type)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -6217,7 +6316,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "ticdc_sink_encoder_group_input_chan_size{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}",
+              "expr": "ticdc_sink_encoder_group_input_chan_size{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}",
               "hide": false,
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-{{index}}",
@@ -6315,7 +6414,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "ticdc_sink_encoder_group_output_chan_size{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}",
+              "expr": "ticdc_sink_encoder_group_output_chan_size{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}",
               "hide": false,
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}",
@@ -6413,7 +6512,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.999, sum(rate(ticdc_sink_mq_worker_batch_duration_bucket{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed,instance))",
+              "expr": "histogram_quantile(0.999, sum(rate(ticdc_sink_mq_worker_batch_duration_bucket{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed,instance))",
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-P999",
               "queryType": "randomWalk",
@@ -6421,7 +6520,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_mq_worker_batch_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_mq_worker_batch_duration_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
+              "expr": "sum(rate(ticdc_sink_mq_worker_batch_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_mq_worker_batch_duration_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-avg",
@@ -6519,7 +6618,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.999, sum(rate(ticdc_sink_mq_worker_batch_size_bucket{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed,instance))",
+              "expr": "histogram_quantile(0.999, sum(rate(ticdc_sink_mq_worker_batch_size_bucket{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed,instance))",
               "hide": false,
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-P999",
@@ -6528,7 +6627,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_mq_worker_batch_size_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) /\nsum(rate(ticdc_sink_mq_worker_batch_size_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
+              "expr": "sum(rate(ticdc_sink_mq_worker_batch_size_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) /\nsum(rate(ticdc_sink_mq_worker_batch_size_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-avg",
@@ -6626,7 +6725,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_mq_claim_check_send_message_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed, instance)",
+              "expr": "sum(rate(ticdc_sink_mq_claim_check_send_message_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed, instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}",
@@ -6724,7 +6823,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.999, sum(rate(ticdc_sink_mq_claim_check_send_message_duration_bucket{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed,instance))",
+              "expr": "histogram_quantile(0.999, sum(rate(ticdc_sink_mq_claim_check_send_message_duration_bucket{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed,instance))",
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-P999",
               "queryType": "randomWalk",
@@ -6830,7 +6929,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_sink_mq_checkpoint_ts_message_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed, instance)",
+              "expr": "max(ticdc_sink_mq_checkpoint_ts_message_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed, instance)",
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-P999",
               "queryType": "randomWalk",
@@ -6928,7 +7027,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.999, sum(rate(ticdc_sink_mq_checkpoint_ts_message_duration_bucket{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed,instance))",
+              "expr": "histogram_quantile(0.999, sum(rate(ticdc_sink_mq_checkpoint_ts_message_duration_bucket{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed,instance))",
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-P999",
               "queryType": "randomWalk",
@@ -6936,7 +7035,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_mq_checkpoint_ts_message_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_mq_checkpoint_ts_message_duration_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
+              "expr": "sum(rate(ticdc_sink_mq_checkpoint_ts_message_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_mq_checkpoint_ts_message_duration_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-avg",
@@ -7058,7 +7157,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_scheduler_table_replication_state{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\",keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed, state)",
+              "expr": "sum(ticdc_scheduler_table_replication_state{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\",keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed, state)",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -7171,7 +7270,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_scheduler_task{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\",keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed, scheduler, task, mode)",
+              "expr": "sum(ticdc_scheduler_task{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\",keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed, scheduler, task, mode)",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -7277,7 +7376,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_scheduler_span_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed,mode)",
+              "expr": "sum(ticdc_scheduler_span_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed,mode)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -7380,7 +7479,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_scheduler_table_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed,mode)",
+              "expr": "sum(ticdc_scheduler_table_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed,mode)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -7483,7 +7582,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_maintainer_created_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", type=\"add\"}) by (keyspace_name,changefeed,mode)",
+              "expr": "sum(ticdc_maintainer_created_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", type=\"add\"}) by (keyspace_name,changefeed,mode)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -7492,7 +7591,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(ticdc_maintainer_created_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", type=\"move\"}) by (keyspace_name,changefeed,mode)",
+              "expr": "sum(ticdc_maintainer_created_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", type=\"move\"}) by (keyspace_name,changefeed,mode)",
               "hide": false,
               "interval": "",
               "legendFormat": "move-operator-{{keyspace_name}}-{{changefeed}}-{{mode}}",
@@ -7500,7 +7599,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(ticdc_maintainer_created_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", type=\"split\"}) by (keyspace_name,changefeed,mode)",
+              "expr": "sum(ticdc_maintainer_created_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", type=\"split\"}) by (keyspace_name,changefeed,mode)",
               "hide": false,
               "interval": "",
               "legendFormat": "split-operator-{{keyspace_name}}-{{changefeed}}-{{mode}}",
@@ -7508,7 +7607,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(ticdc_maintainer_created_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", type=\"merge\"}) by (keyspace_name,changefeed,mode)",
+              "expr": "sum(ticdc_maintainer_created_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", type=\"merge\"}) by (keyspace_name,changefeed,mode)",
               "hide": false,
               "interval": "",
               "legendFormat": "merge-operator-{{keyspace_name}}-{{changefeed}}-{{mode}}",
@@ -7610,7 +7709,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_maintainer_total_operator_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\", type!=\"occupy\"}) by (keyspace_name,changefeed,type,mode)",
+              "expr": "sum(ticdc_maintainer_total_operator_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\", type!=\"occupy\"}) by (keyspace_name,changefeed,type,mode)",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -7710,7 +7809,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.999, sum(rate(ticdc_maintainer_split_span_check_duration_bucket{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed,instance))",
+              "expr": "histogram_quantile(0.999, sum(rate(ticdc_maintainer_split_span_check_duration_bucket{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed,instance))",
               "interval": "",
               "legendFormat": "99.9-{{keyspace_name}}-{{changefeed}}-{{instance}}",
               "queryType": "randomWalk",
@@ -7718,7 +7817,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_maintainer_split_span_check_duration_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_maintainer_split_span_check_duration_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
+              "expr": "sum(rate(ticdc_maintainer_split_span_check_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_maintainer_split_span_check_duration_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "avg-{{keyspace_name}}-{{changefeed}}-{{instance}}",
@@ -7816,7 +7915,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.999, sum(rate(ticdc_maintainer_finish_operators_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed,mode))",
+              "expr": "histogram_quantile(0.999, sum(rate(ticdc_maintainer_finish_operators_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le,keyspace_name,changefeed,mode))",
               "interval": "",
               "legendFormat": "99.9-{{keyspace_name}}-{{changefeed}}-{{instance}}-{{mode}}",
               "queryType": "randomWalk",
@@ -7824,7 +7923,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_maintainer_finish_operators_duration_seconds_sum{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,mode) / \nsum(rate(ticdc_maintainer_finish_operators_duration_seconds_count{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,mode)",
+              "expr": "sum(rate(ticdc_maintainer_finish_operators_duration_seconds_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,mode) / \nsum(rate(ticdc_maintainer_finish_operators_duration_seconds_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,mode)",
               "hide": false,
               "interval": "",
               "legendFormat": "avg-{{keyspace_name}}-{{changefeed}}-{{instance}}-{{mode}}",
@@ -7932,7 +8031,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(pd_cluster_tso{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\"})",
+              "expr": "max(pd_cluster_tso{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\"})",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -7942,7 +8041,7 @@
             },
             {
               "exemplar": true,
-              "expr": "max(ticdc_scheduler_slow_table_checkpoint_ts{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed)",
+              "expr": "max(ticdc_scheduler_slow_table_checkpoint_ts{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed)",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -8052,7 +8151,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_scheduler_slow_table_id{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\",keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed)",
+              "expr": "sum(ticdc_scheduler_slow_table_id{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\",keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed)",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -8166,7 +8265,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_scheduler_slow_table_replication_state{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed)",
+              "expr": "sum(ticdc_scheduler_slow_table_replication_state{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed)",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -8277,7 +8376,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(pd_cluster_tso{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\"})",
+              "expr": "max(pd_cluster_tso{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\"})",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -8287,7 +8386,7 @@
             },
             {
               "exemplar": true,
-              "expr": "max(ticdc_scheduler_slow_table_resolved_ts{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed)",
+              "expr": "max(ticdc_scheduler_slow_table_resolved_ts{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed)",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -8402,7 +8501,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_dynamic_stream_memory_usage{k8s_cluster=~\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", area=~\"$changefeed\", instance=~\"$ticdc_instance\", module=~\"event-collector-redo\"}) by (keyspace_name, area, instance, module, type)",
+              "expr": "sum(ticdc_dynamic_stream_memory_usage{k8s_cluster=~\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", area=~\"$changefeed\", instance=~\"$ticdc_instance\", module=~\"event-collector-redo\"}) by (keyspace_name, area, instance, module, type)",
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{area}}-{{instance}}-{{module}}-{{type}}",
               "refId": "A"
@@ -8500,13 +8599,13 @@
         "error": null,
         "hide": 0,
         "includeAll": false,
-        "label": "tidb_cluster",
+        "label": "sharedpool_id",
         "multi": false,
-        "name": "tidb_cluster",
+        "name": "sharedpool_id",
         "options": [],
         "query": {
-          "query": "label_values(go_goroutines{k8s_cluster=\"$k8s_cluster\"}, tidb_cluster)",
-          "refId": "local-tidb_cluster-Variable-Query"
+          "query": "label_values(go_goroutines{k8s_cluster=\"$k8s_cluster\"}, sharedpool_id)",
+          "refId": "local-sharedpool_id-Variable-Query"
         },
         "refresh": 2,
         "regex": "",
@@ -8526,7 +8625,7 @@
           "value": "$__all"
         },
         "datasource": "${DS_TEST-CLUSTER}",
-        "definition": "label_values(ticdc_owner_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\"}, keyspace_name)",
+        "definition": "label_values(ticdc_owner_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\"}, keyspace_name)",
         "description": null,
         "error": null,
         "hide": 0,
@@ -8536,7 +8635,7 @@
         "name": "keyspace_name",
         "options": [],
         "query": {
-          "query": "label_values(ticdc_owner_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\"}, keyspace_name)",
+          "query": "label_values(ticdc_owner_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\"}, keyspace_name)",
           "refId": "StandardVariableQuery"
         },
         "refresh": 2,
@@ -8557,7 +8656,7 @@
           "value": "$__all"
         },
         "datasource": "${DS_TEST-CLUSTER}",
-        "definition": "label_values(ticdc_owner_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\"}, changefeed)",
+        "definition": "label_values(ticdc_owner_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\"}, changefeed)",
         "description": null,
         "error": null,
         "hide": 0,
@@ -8567,7 +8666,7 @@
         "name": "changefeed",
         "options": [],
         "query": {
-          "query": "label_values(ticdc_owner_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\"}, changefeed)",
+          "query": "label_values(ticdc_owner_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\"}, changefeed)",
           "refId": "StandardVariableQuery"
         },
         "refresh": 2,
@@ -8588,7 +8687,7 @@
           "value": "$__all"
         },
         "datasource": "${DS_TEST-CLUSTER}",
-        "definition": "label_values(process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\"}, instance)",
+        "definition": "label_values(process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\"}, instance)",
         "description": null,
         "error": null,
         "hide": 0,
@@ -8598,7 +8697,7 @@
         "name": "ticdc_instance",
         "options": [],
         "query": {
-          "query": "label_values(process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\"}, instance)",
+          "query": "label_values(process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\"}, instance)",
           "refId": "StandardVariableQuery"
         },
         "refresh": 2,
@@ -8619,7 +8718,7 @@
           "value": "$__all"
         },
         "datasource": "${DS_TEST-CLUSTER}",
-        "definition": "label_values(tikv_engine_size_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\"}, instance)",
+        "definition": "label_values(tikv_engine_size_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\"}, instance)",
         "description": null,
         "error": null,
         "hide": 0,
@@ -8629,7 +8728,7 @@
         "name": "tikv_instance",
         "options": [],
         "query": {
-          "query": "label_values(tikv_engine_size_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\"}, instance)",
+          "query": "label_values(tikv_engine_size_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\"}, instance)",
           "refId": "local-tikv_instance-Variable-Query"
         },
         "refresh": 2,
@@ -8706,7 +8805,7 @@
           "value": "$__all"
         },
         "datasource": "${DS_TEST-CLUSTER}",
-        "definition": "label_values(process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\"}, instance)",
+        "definition": "label_values(process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\"}, instance)",
         "description": null,
         "error": null,
         "hide": 0,
@@ -8716,7 +8815,7 @@
         "name": "runtime_instance",
         "options": [],
         "query": {
-          "query": "label_values(process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\"}, instance)",
+          "query": "label_values(process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\"}, instance)",
           "refId": "local-runtime_instance-Variable-Query"
         },
         "refresh": 2,
