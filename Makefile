@@ -80,7 +80,7 @@ endif
 # gotestsum -p parameter for unit tests
 P=8
 
-TEST_FLAG:=--tags intest
+TEST_FLAG:=-tags intest
 ifeq ("${NEXT_GEN}", "1")
 	TEST_FLAG := $(TEST_FLAG),nextgen -modfile=nextgen.go.mod
 else
