@@ -52,33 +52,40 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 				log.Info("Slow Query", zap.Any("sql", dmls.LogWithoutValues()), zap.Any("writerID", w.id))
 			}
 		}()
-		if fallbackToSeqWay || !w.cfg.MultiStmtEnable {
-			// use sequence way to execute the dmls
-			tx, err := w.db.BeginTx(w.ctx, nil)
-			if err != nil {
-				return 0, 0, errors.Trace(err)
+		err := w.dmlSession.withConn(w, writeTimeout, func(conn *sql.Conn) error {
+			if fallbackToSeqWay || !w.cfg.MultiStmtEnable {
+				// use sequence way to execute the dmls
+				tx, err := conn.BeginTx(w.ctx, nil)
+				if err != nil {
+					return errors.Trace(err)
+				}
+
+				err = w.sequenceExecute(dmls, tx, writeTimeout)
+				if err != nil {
+					return err
+				}
+
+				if err = tx.Commit(); err != nil {
+					return err
+				}
+
+				log.Debug("Exec Rows succeeded", zap.Any("rowCount", dmls.rowCount), zap.Int("writerID", w.id))
+				return nil
 			}
 
-			err = w.sequenceExecute(dmls, tx, writeTimeout)
-			if err != nil {
-				return 0, 0, err
-			}
-
-			w.maybeQueryActiveActiveSyncStats(writeTimeout, tx)
-
-			if err = tx.Commit(); err != nil {
-				return 0, 0, err
-			}
-
-			log.Debug("Exec Rows succeeded", zap.Any("rowCount", dmls.rowCount), zap.Int("writerID", w.id))
-		} else {
 			// use multi stmt way to execute the dmls
-			err := w.multiStmtExecute(dmls, writeTimeout)
-			if err != nil {
-				log.Warn("multiStmtExecute failed, fallback to sequence way", zap.Error(err), zap.Any("sql", dmls.LogWithoutValues()), zap.Int("writerID", w.id))
+			if err := w.multiStmtExecute(conn, dmls, writeTimeout); err != nil {
+				log.Warn("multiStmtExecute failed, fallback to sequence way",
+					zap.Error(err),
+					zap.Any("sql", dmls.LogWithoutValues()),
+					zap.Int("writerID", w.id))
 				fallbackToSeqWay = true
-				return 0, 0, err
+				return err
 			}
+			return nil
+		})
+		if err != nil {
+			return 0, 0, err
 		}
 		return dmls.rowCount, dmls.approximateSize, nil
 	}
@@ -162,6 +169,7 @@ func (w *Writer) sequenceExecute(
 
 // multiStmtExecute runs SQLs using the multi-statements protocol with an implicit transaction.
 func (w *Writer) multiStmtExecute(
+	conn *sql.Conn,
 	dmls *preparedDMLs, writeTimeout time.Duration,
 ) error {
 	var multiStmtArgs []any
@@ -175,22 +183,14 @@ func (w *Writer) multiStmtExecute(
 	ctx, cancel := context.WithTimeout(w.ctx, writeTimeout)
 	defer cancel()
 
-	conn, err := w.db.Conn(w.ctx)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	defer conn.Close()
-
 	// we use conn.ExecContext to reduce the overhead of network latency.
 	// conn.ExecContext only use one RTT, while db.Begin + tx.ExecContext + db.Commit need three RTTs.
 	// when some error occurs, we just need to close the conn to avoid the session to be reuse unexpectedly.
 	// The txn can ensure the atomicity of the transaction.
-	_, err = conn.ExecContext(ctx, multiStmtSQLWithTxn, multiStmtArgs...)
+	_, err := conn.ExecContext(ctx, multiStmtSQLWithTxn, multiStmtArgs...)
 	if err != nil {
 		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", multiStmtSQLWithTxn, multiStmtArgs)))
 	}
-
-	w.maybeQueryActiveActiveSyncStats(writeTimeout, conn)
 	return nil
 }
 

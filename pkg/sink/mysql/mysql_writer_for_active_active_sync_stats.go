@@ -18,7 +18,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"sync"
-	"time"
 
 	dmysql "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
@@ -106,6 +105,14 @@ func (c *ActiveActiveSyncStatsCollector) ObserveConflictSkipRows(connID uint64, 
 	c.conflictSkipRows.Add(float64(delta))
 }
 
+// ForgetConn removes the last observed statistics for a connection. This prevents
+// the internal map from growing unbounded when sessions are closed and recreated.
+func (c *ActiveActiveSyncStatsCollector) ForgetConn(connID uint64) {
+	c.mu.Lock()
+	delete(c.lastConflictSkipRowsByID, connID)
+	c.mu.Unlock()
+}
+
 func (c *ActiveActiveSyncStatsCollector) Close() {
 	// Reset the series on sink rebuild.
 	metrics.ActiveActiveConflictSkipRowsCounter.DeleteLabelValues(c.keyspace, c.changefeed)
@@ -136,42 +143,4 @@ func queryActiveActiveSyncStats(
 		return uint64(connID), 0, errors.Annotate(err, "unmarshal tidb_cdc_active_active_sync_stats")
 	}
 	return uint64(connID), parsed.ConflictSkipRows, nil
-}
-
-func (w *Writer) shouldCollectActiveActiveSyncStats(now time.Time) bool {
-	if w.activeActiveSyncStatsCollector == nil || w.activeActiveSyncStatsInterval <= 0 {
-		return false
-	}
-	if w.lastActiveActiveSyncStatsCollectTime.IsZero() {
-		return true
-	}
-	return now.Sub(w.lastActiveActiveSyncStatsCollectTime) >= w.activeActiveSyncStatsInterval
-}
-
-func (w *Writer) maybeQueryActiveActiveSyncStats(
-	writeTimeout time.Duration,
-	q activeActiveSyncStatsQuerier,
-) {
-	now := time.Now()
-	if !w.shouldCollectActiveActiveSyncStats(now) {
-		return
-	}
-
-	// Throttle by time to avoid querying on every flush.
-	w.lastActiveActiveSyncStatsCollectTime = now
-
-	ctx, cancel := context.WithTimeout(w.ctx, writeTimeout)
-	defer cancel()
-
-	connID, conflictSkipRows, err := queryActiveActiveSyncStats(ctx, q)
-	if err != nil {
-		log.Warn("failed to query tidb_cdc_active_active_sync_stats",
-			zap.String("keyspace", w.ChangefeedID.Keyspace()),
-			zap.String("changefeed", w.ChangefeedID.Name()),
-			zap.Int("writerID", w.id),
-			zap.Error(err))
-		return
-	}
-
-	w.activeActiveSyncStatsCollector.ObserveConflictSkipRows(connID, conflictSkipRows)
 }

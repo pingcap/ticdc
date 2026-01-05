@@ -41,12 +41,15 @@ const (
 	defaultRunningAddIndexNewSQLVersion = "8.5.0"
 
 	defaultErrorCausedSafeModeDuration = 5 * time.Second
+
+	dmlConnIdleTimeout = 5 * time.Minute
 )
 
 // Writer is responsible for writing various dml events, ddl events, syncpoint events to mysql downstream.
 type Writer struct {
 	id           int
 	ctx          context.Context
+	cancel       context.CancelFunc
 	db           *sql.DB
 	cfg          *Config
 	ChangefeedID common.ChangeFeedID
@@ -66,11 +69,13 @@ type Writer struct {
 
 	// activeActiveSyncStatsCollector accumulates conflict statistics from TiDB session
 	// variable @@tidb_cdc_active_active_sync_stats. It is shared across all DML writers
-	// in a sink to avoid double counting when sql.DB reuses sessions across workers.
+	// in a sink.
 	activeActiveSyncStatsCollector *ActiveActiveSyncStatsCollector
 	activeActiveSyncStatsInterval  time.Duration
-	// lastActiveActiveSyncStatsCollectTime is writer-local throttling state.
-	lastActiveActiveSyncStatsCollectTime time.Time
+
+	// dmlSession is a writer-owned downstream session used for DML execution and querying
+	// @@tidb_cdc_active_active_sync_stats.
+	dmlSession dmlSession
 
 	// When encountered an `Duplicate entry` error, we will set the `isInErrorCausedSafeMode` to true,
 	// and set the `lastErrorCausedSafeModeTime` to the current time.
@@ -92,8 +97,10 @@ func NewWriter(
 	statistics *metrics.Statistics,
 	activeActiveSyncStatsCollector *ActiveActiveSyncStatsCollector,
 ) *Writer {
+	writerCtx, cancel := context.WithCancel(ctx)
 	res := &Writer{
-		ctx:                            ctx,
+		ctx:                            writerCtx,
+		cancel:                         cancel,
 		id:                             id,
 		db:                             db,
 		cfg:                            cfg,
@@ -112,6 +119,12 @@ func NewWriter(
 
 	if cfg.DryRun && cfg.DryRunBlockInterval > 0 {
 		res.blockerTicker = time.NewTicker(cfg.DryRunBlockInterval)
+	}
+
+	// Only DML writers need a dedicated session and background maintenance loop.
+	if id >= 0 && id < cfg.WorkerCount {
+		res.dmlSession.idleTimeout = dmlConnIdleTimeout
+		go res.runDMLConnLoop()
 	}
 
 	return res
@@ -280,4 +293,9 @@ func (w *Writer) Close() {
 	if w.blockerTicker != nil {
 		w.blockerTicker.Stop()
 	}
+
+	if w.cancel != nil {
+		w.cancel()
+	}
+	w.dmlSession.close(w)
 }

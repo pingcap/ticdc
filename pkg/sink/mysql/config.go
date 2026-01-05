@@ -331,9 +331,12 @@ func NewMysqlConfigAndDB(
 	// leading to exhaustion of available connections and a hang at the "Get Connection" call.
 	// This issue is less likely to occur when the connection pool is larger,
 	// as there are more connections available for use.
-	// Adding an extra connection to the connection pool solves the connection exhaustion issue.
-	db.SetMaxIdleConns(cfg.WorkerCount + 1)
-	db.SetMaxOpenConns(cfg.WorkerCount + 1)
+	// Adding extra connections to the pool helps avoid connection exhaustion.
+	// Each DML writer may hold a dedicated session for a while, and additional
+	// connections are also needed for DDL/progress writers and stmt cache misses.
+	const extraConn = 10
+	db.SetMaxIdleConns(cfg.WorkerCount + extraConn)
+	db.SetMaxOpenConns(cfg.WorkerCount + extraConn)
 
 	// Inherit the default value of the prepared statement cache from the SinkURI Options
 	cachePrepStmts := cfg.CachePrepStmts
