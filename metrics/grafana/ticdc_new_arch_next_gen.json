@@ -2698,7 +2698,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "(time() - process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\"})",
+              "expr": "(time() - process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"})",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "TiCDC-{{instance}}",
