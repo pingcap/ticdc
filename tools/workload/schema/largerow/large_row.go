@@ -138,23 +138,24 @@ func (l *LargeRowWorkload) BuildInsertSql(tableN int, batchSize int) string {
 	r := l.getRand()
 	defer l.putRand(r)
 
-	insertSQL := fmt.Sprintf("INSERT INTO %s VALUES (%d,%s)", tableName, r.Int63()%maxValue, l.getSmallRow(r))
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("INSERT INTO %s VALUES (%d,%s)", tableName, r.Int63()%maxValue, l.getSmallRow(r)))
 
 	var largeRowCount int
 	for i := 1; i < batchSize; i++ {
 		if r.Float64() < l.largeRatio {
-			insertSQL = fmt.Sprintf("%s,(%d,%s)", insertSQL, r.Int63()%maxValue, l.getLargeRow(r))
+			sb.WriteString(fmt.Sprintf(",(%d,%s)", r.Int63()%maxValue, l.getLargeRow(r)))
 			largeRowCount++
 		} else {
-			insertSQL = fmt.Sprintf("%s,(%d,%s)", insertSQL, r.Int63()%maxValue, l.getSmallRow(r))
+			sb.WriteString(fmt.Sprintf(",(%d,%s)", r.Int63()%maxValue, l.getSmallRow(r)))
 		}
 	}
 
 	log.Debug("large row workload, insert the table",
 		zap.Int("table", tableN), zap.Int("batchSize", batchSize),
-		zap.Int("largeRowCount", largeRowCount), zap.Int("length", len(insertSQL)))
+		zap.Int("largeRowCount", largeRowCount), zap.Int("length", sb.Len()))
 
-	return insertSQL
+	return sb.String()
 }
 
 func (l *LargeRowWorkload) BuildUpdateSql(opts schema.UpdateOption) string {
