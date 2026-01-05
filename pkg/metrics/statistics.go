@@ -16,10 +16,8 @@ package metrics
 import (
 	"time"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/prometheus/client_golang/prometheus"
-	"go.uber.org/zap"
 )
 
 // NewStatistics creates a statistics
@@ -104,20 +102,11 @@ func (b *Statistics) RecordTotalRowsAffected(actualRowsAffected, expectedRowsAff
 }
 
 func (b *Statistics) RecordRowsAffected(rowsAffected int64, rowType common.RowType) {
-	var count int64
-	switch rowType {
-	case common.RowTypeInsert, common.RowTypeDelete:
-		count = 1
-	case common.RowTypeUpdate:
-		count = 2
-	default:
-		log.Panic("unknown event type for the DML event", zap.Any("rowType", rowType))
-	}
 	keyspace := b.changefeedID.Keyspace()
 	changefeedID := b.changefeedID.Name()
 	ExecDMLEventRowsAffectedCounter.WithLabelValues(keyspace, changefeedID, "actual", rowType.String()).Add(float64(rowsAffected))
-	ExecDMLEventRowsAffectedCounter.WithLabelValues(keyspace, changefeedID, "expected", rowType.String()).Add(float64(count))
-	b.RecordTotalRowsAffected(rowsAffected, count)
+	ExecDMLEventRowsAffectedCounter.WithLabelValues(keyspace, changefeedID, "expected", rowType.String()).Add(1)
+	b.RecordTotalRowsAffected(rowsAffected, 1)
 }
 
 // Close release some internal resources.

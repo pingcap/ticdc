@@ -777,11 +777,6 @@ func (w *Writer) multiStmtExecute(
 	var multiStmtArgs []any
 	for _, value := range dmls.values {
 		multiStmtArgs = append(multiStmtArgs, value...)
-		// 	if err != nil {
-		// 	log.Warn("get rows affected rows failed", zap.Error(err))
-		// } else {
-		// 	w.statistics.RecordRowsAffected(rowsAffected, dmls.rowTypes[i])
-		// }
 	}
 	multiStmtSQL := strings.Join(dmls.sqls, ";")
 	// we use BEGIN and COMMIT to ensure the transaction is atomic.
