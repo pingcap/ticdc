@@ -47,7 +47,7 @@ if [ "$SINK_TYPE" != "storage" ]; then
 	prepare $*
 	cd "$(dirname "$0")"
 	set -o pipefail
-	GO111MODULE=on go run main.go -config ./config.toml 2>&1 | tee $WORK_DIR/tester.log
+	GO111MODULE=on go run $GO_RUN_TAGS main.go -config ./config.toml 2>&1 | tee $WORK_DIR/tester.log
 	check_table_exists mark.finish_mark_1 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 	check_table_exists mark.finish_mark_2 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 	# ticdc cost too much sink DDL, just leave more time here

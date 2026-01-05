@@ -32,7 +32,7 @@ if [ "$SINK_TYPE" == "mysql" ]; then
 	cd "$(dirname "$0")"
 	set -euxo pipefail
 
-	GO111MODULE=on go run bank.go case.go -u "root@tcp(${UP_TIDB_HOST}:${UP_TIDB_PORT})/bank" \
+	GO111MODULE=on go run $GO_RUN_TAGS bank.go case.go -u "root@tcp(${UP_TIDB_HOST}:${UP_TIDB_PORT})/bank" \
 		-d "root@tcp(${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT})/bank" --test-round=20000 \
 		-a "${DOWN_TIDB_HOST}:${DOWN_TIDB_STATUS}"
 

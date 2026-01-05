@@ -31,7 +31,7 @@ if [ "$SINK_TYPE" == "mysql" ]; then
 	cd "$(dirname "$0")"
 	set -euxo pipefail
 
-	GO111MODULE=on go run main.go model.go request.go cases.go
+	GO111MODULE=on go run $GO_RUN_TAGS main.go model.go request.go cases.go
 
 	cleanup_process $CDC_BINARY
 	echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

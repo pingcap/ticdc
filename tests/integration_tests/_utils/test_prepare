@@ -86,8 +86,10 @@ export MINIO_ACCESS_KEY=$MINIO_ROOT_USER
 export MINIO_SECRET_KEY=$MINIO_ROOT_PASSWORD
 
 export NEXT_GEN=${NEXT_GEN:-0}
+export GO_RUN_TAGS=""
 if [ "$NEXT_GEN" = 1 ]; then
     export KEYSPACE_NAME=${KEYSPACE_NAME:-keyspace1}
+    export GO_RUN_TAGS="-tags=nextgen"
 else
     export KEYSPACE_NAME=${KEYSPACE_NAME:-default}
 fi

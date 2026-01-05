@@ -37,7 +37,7 @@ if [ "$SINK_TYPE" == "mysql" ]; then
 
 	# Run the large transaction workload
 	# 1000 rows per txn, 10 txns per type (insert, update, delete)
-	GO111MODULE=on go run main.go \
+	GO111MODULE=on go run $GO_RUN_TAGS main.go \
 		-dsn "root@tcp(${UP_TIDB_HOST}:${UP_TIDB_PORT})/large_txn" \
 		--rows=1000 \
 		--txns=10
