@@ -42,7 +42,11 @@ prepare $*
 
 cd "$(dirname "$0")"
 set -o pipefail
-GO111MODULE=on go run main.go -config ./config.toml 2>&1 | tee $WORK_DIR/tester.log
+if [ "$NEXT_GEN" = 1 ]; then
+	GO111MODULE=on go run -tags=nextgen main.go -config ./config.toml 2>&1 | tee $WORK_DIR/tester.log
+else
+	GO111MODULE=on go run main.go -config ./config.toml 2>&1 | tee $WORK_DIR/tester.log
+fi
 check_table_exists test.t2 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 check_sync_diff $WORK_DIR $CUR/diff_config.toml
 cleanup_process $CDC_BINARY
