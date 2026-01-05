@@ -848,7 +848,7 @@ func (d *BasicDispatcher) tryDealWithHeldBlockEvent() {
 		}
 	} else if d.pendingACKCount.Load() < 0 {
 		d.HandleError(errors.ErrDispatcherFailed.GenWithStackByArgs(
-			fmt.Sprintf(("pendingACKCount should not be negative, dispatcherID: %s, pendingACKCount: %d"), d.id, d.pendingACKCount.Load())
+			fmt.Sprintf("pendingACKCount should not be negative, dispatcherID: %s, pendingACKCount: %d", d.id, d.pendingACKCount.Load()),
 		))
 	}
 }
