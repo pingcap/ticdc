@@ -23563,7 +23563,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Count of running DDL.",
+          "description": "Count of blocking DDL.",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
