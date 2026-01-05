@@ -630,7 +630,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The number of dml row affected that sink flushes to downstream per second.",
+          "description": "The number of dml rows affected that sink flushes to downstream per second.",
           "fieldConfig": {
             "defaults": {
               "links": []
