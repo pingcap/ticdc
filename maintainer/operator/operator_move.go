@@ -70,6 +70,10 @@ type MoveDispatcherOperator struct {
 	sendThrottler sendThrottler
 
 	lck sync.Mutex
+
+	// checksumUpdater updates maintainer-side expected dispatcher ownership when the move completes
+	// or aborts (for example, origin removed without a successful add on dest).
+	checksumUpdater DispatcherSetChecksumUpdater
 }
 
 // isFinished reports whether the operator has reached a terminal state.
@@ -94,16 +98,27 @@ func (m *MoveDispatcherOperator) finishAsAbsent() {
 		zap.String("origin", m.origin.String()),
 		zap.String("dest", m.dest.String()))
 	m.spanController.MarkSpanAbsent(m.replicaSet)
+	m.checksumUpdater.ApplyDelta(
+		m.origin,
+		nil,
+		[]common.DispatcherID{m.replicaSet.ID},
+	)
 	m.state = moveStateDoneNoPostFinish
 }
 
-func NewMoveDispatcherOperator(spanController *span.Controller, replicaSet *replica.SpanReplication, origin, dest node.ID) *MoveDispatcherOperator {
+func NewMoveDispatcherOperator(
+	spanController *span.Controller,
+	replicaSet *replica.SpanReplication,
+	origin, dest node.ID,
+	updater DispatcherSetChecksumUpdater,
+) *MoveDispatcherOperator {
 	return &MoveDispatcherOperator{
-		replicaSet:     replicaSet,
-		origin:         origin,
-		dest:           dest,
-		spanController: spanController,
-		sendThrottler:  newSendThrottler(),
+		replicaSet:      replicaSet,
+		origin:          origin,
+		dest:            dest,
+		spanController:  spanController,
+		sendThrottler:   newSendThrottler(),
+		checksumUpdater: updater,
 	}
 }
 
@@ -266,6 +281,11 @@ func (m *MoveDispatcherOperator) PostFinish() {
 		zap.Stringer("changefeedID", m.replicaSet.ChangefeedID),
 		zap.String("dispatcherID", m.replicaSet.ID.String()))
 	m.spanController.MarkSpanReplicating(m.replicaSet)
+	m.checksumUpdater.ApplyDelta(
+		m.dest,
+		[]common.DispatcherID{m.replicaSet.ID},
+		nil,
+	)
 }
 
 func (m *MoveDispatcherOperator) String() string {

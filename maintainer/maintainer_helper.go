@@ -52,6 +52,51 @@ func (c *WatermarkCaptureMap) Delete(nodeID node.ID) {
 	delete(c.m, nodeID)
 }
 
+type ChecksumStateCaptureMap struct {
+	mu sync.RWMutex
+	m  map[node.ID]checksumStateSnapshot
+}
+
+func newChecksumStateCaptureMap() *ChecksumStateCaptureMap {
+	return &ChecksumStateCaptureMap{
+		m: make(map[node.ID]checksumStateSnapshot),
+	}
+}
+
+func (c *ChecksumStateCaptureMap) Get(nodeID node.ID) (heartbeatpb.ChecksumState, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	snapshot, ok := c.m[nodeID]
+	return snapshot.state, ok
+}
+
+// UpdateIfNewer updates checksum state only if seq is not older than the last seen value.
+// It returns true if the update is applied.
+func (c *ChecksumStateCaptureMap) UpdateIfNewer(nodeID node.ID, state heartbeatpb.ChecksumState, seq uint64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	old, ok := c.m[nodeID]
+	if ok && seq < old.seq {
+		return false
+	}
+	c.m[nodeID] = checksumStateSnapshot{
+		state: state,
+		seq:   seq,
+	}
+	return true
+}
+
+func (c *ChecksumStateCaptureMap) Delete(nodeID node.ID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.m, nodeID)
+}
+
+type checksumStateSnapshot struct {
+	state heartbeatpb.ChecksumState
+	seq   uint64
+}
+
 // ========================== Exported methods for HTTP API ==========================
 
 // GetDispatcherCount returns the number of dispatchers.
