@@ -142,6 +142,5 @@ func queryActiveActiveSyncStats(
 	if err := json.Unmarshal([]byte(raw.String), &parsed); err != nil {
 		return uint64(connID), 0, errors.Annotate(err, "unmarshal tidb_cdc_active_active_sync_stats")
 	}
-	log.Info("queryActiveActiveSyncStats", zap.Any("connID", uint64(connID)), zap.Any("conflictSkipRows", parsed.ConflictSkipRows))
 	return uint64(connID), parsed.ConflictSkipRows, nil
 }
