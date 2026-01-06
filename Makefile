@@ -3,6 +3,7 @@
 .PHONY: clean fmt check tidy \
 	generate-protobuf generate_mock \
 	cdc kafka_consumer storage_consumer pulsar_consumer filter_helper \
+	eventstorebench \
 	prepare_test_binaries \
 	unit_test_in_verify_ci integration_test_build integration_test_build_fast integration_test_mysql integration_test_kafka integration_test_storage integration_test_pulsar \
 	generate-next-gen-grafana
@@ -170,6 +171,8 @@ oauth2_server:
 
 filter_helper:
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_filter_helper ./cmd/filter-helper/main.go
+
+eventstorebench: tools/eventstorebench/bin/eventstore-bench
 
 config-converter:
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_config_converter ./cmd/config-converter/main.go

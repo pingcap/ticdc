@@ -207,6 +207,11 @@ type eventStore struct {
 
 	messageCenter messaging.MessageCenter
 
+	// runMu protects runCancel/runDone, which are used to coordinate Run/Close.
+	runMu     sync.Mutex
+	runCancel context.CancelFunc
+	runDone   chan struct{}
+
 	coordinatorInfo struct {
 		value atomic.Value
 	}
@@ -368,41 +373,89 @@ func (e *eventStore) Run(ctx context.Context) error {
 		log.Info("event store exited")
 	}()
 
-	eg, ctx := errgroup.WithContext(ctx)
+	runCtx, cancel := context.WithCancel(ctx)
+	e.runMu.Lock()
+	// Run is expected to be invoked once per instance.
+	if e.runDone == nil {
+		e.runDone = make(chan struct{})
+	}
+	e.runCancel = cancel
+	runDone := e.runDone
+	e.runMu.Unlock()
+	defer func() {
+		e.runMu.Lock()
+		e.runCancel = nil
+		close(runDone)
+		e.runMu.Unlock()
+	}()
+
+	eg, runCtx := errgroup.WithContext(runCtx)
 	for _, p := range e.writeTaskPools {
 		eg.Go(func() error {
-			p.run(ctx)
+			p.run(runCtx)
 			return nil
 		})
 	}
 
 	// TODO: manage gcManager exit
 	eg.Go(func() error {
-		return e.gcManager.run(ctx)
+		return e.gcManager.run(runCtx)
 	})
 
 	// Delay the remove of subscription which has no dispatchers depend on it to a separate goroutine.
 	// Because the subscription may be used by later dispatchers.(e.g. after dispatcher scheduling)
 	eg.Go(func() error {
-		return e.cleanObsoleteSubscriptions(ctx)
+		return e.cleanObsoleteSubscriptions(runCtx)
 	})
 
 	eg.Go(func() error {
-		return e.runMetricsCollector(ctx)
+		return e.runMetricsCollector(runCtx)
 	})
 
 	eg.Go(func() error {
-		return e.uploadStatePeriodically(ctx)
+		return e.uploadStatePeriodically(runCtx)
 	})
 
 	return eg.Wait()
 }
 
-func (e *eventStore) Close(_ context.Context) error {
+func (e *eventStore) Close(ctx context.Context) error {
 	log.Info("event store start to close")
 	defer log.Info("event store closed")
 
 	e.closed.Store(true)
+
+	e.runMu.Lock()
+	cancel := e.runCancel
+	runDone := e.runDone
+	e.runMu.Unlock()
+
+	for _, ch := range e.chs {
+		ch.Close()
+	}
+
+	if cancel != nil {
+		cancel()
+	}
+	if runDone != nil {
+		select {
+		case <-runDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	// Wait for background write workers to finish so no one uses Pebble after DB.Close.
+	writeWorkersDone := make(chan struct{})
+	go func() {
+		e.wg.Wait()
+		close(writeWorkersDone)
+	}()
+	select {
+	case <-writeWorkersDone:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 
 	for _, db := range e.dbs {
 		if err := db.Close(); err != nil {
@@ -581,6 +634,9 @@ func (e *eventStore) RegisterDispatcher(
 	e.dispatcherMeta.Unlock()
 
 	consumeKVEvents := func(kvs []common.RawKVEntry, finishCallback func()) bool {
+		if e.closed.Load() {
+			return false
+		}
 		maxCommitTs := uint64(0)
 		// Must find the max commit ts in the kvs, since the kvs is not sorted yet.
 		for _, kv := range kvs {

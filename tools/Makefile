@@ -75,3 +75,6 @@ tools/bin/mockery: tools/check/go.mod
 
 tools/bin/workload: tools/workload/go.mod
 	cd tools/workload && $(GO) build -mod=mod -o ../bin/workload .
+
+tools/bin/eventstore-bench: tools/eventstorebench/go.mod
+	cd tools/eventstorebench && $(GO) build -mod=mod -o ../bin/eventstore-bench .

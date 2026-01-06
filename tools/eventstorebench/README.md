@@ -6,16 +6,16 @@ path directly from the `tools/` tree.
 ## Build
 
 ```bash
-cd tools
-make bin/eventstore-bench
+# From repo root:
+make eventstorebench
 ```
 
-This produces `tools/bin/eventstore-bench`.
+This produces `tools/eventstorebench/bin/eventstore-bench`.
 
 ## Usage
 
 ```bash
-./tools/bin/eventstore-bench \
+./tools/eventstorebench/bin/eventstore-bench \
   -data-dir /tmp/eventstore-bench \
   -duration 2m \
   -scenarios single-table,multi-table \
