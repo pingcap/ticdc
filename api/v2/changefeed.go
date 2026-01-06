@@ -736,6 +736,9 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 // @Failure 500,400 {object} common.HTTPError
 // @Router /api/v2/changefeeds/{changefeed_id} [put]
 func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
+	log.Info("UpdateChangefeed")
+	startTime := time.Now()
+
 	ctx := c.Request.Context()
 
 	keyspaceName := GetKeyspaceValueWithDefault(c)
@@ -760,17 +763,23 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		return
 	}
 
+	log.Info("UpdateChangefeed, fetch coordinator success", zap.Any("co", co), zap.Duration("cost", time.Since(startTime)))
+
 	ok, err := isInitialized(co)
 	if err != nil || !ok {
 		_ = c.Error(err)
 		return
 	}
 
+	log.Info("UpdateChangefeed, check isInitialized success", zap.Any("ok", ok), zap.Duration("cost", time.Since(startTime)))
+
 	oldCfInfo, status, err := co.GetChangefeed(c, changefeedDisplayName)
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
+
+	log.Info("UpdateChangefeed, get changefeed success", zap.Any("oldCfInfo", oldCfInfo), zap.Duration("cost", time.Since(startTime)))
 
 	switch oldCfInfo.State {
 	case config.StateStopped, config.StateFailed:
@@ -821,9 +830,12 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		}
 		err = oldCfInfo.Config.ValidateAndAdjust(sinkURIParsed)
 		if err != nil {
+			log.Error("UpdateChangefeed, validate and adjust replica config failed", zap.Error(err), zap.Any("oldCfInfo", oldCfInfo), zap.Duration("cost", time.Since(startTime)))
 			_ = c.Error(errors.WrapError(errors.ErrInvalidReplicaConfig, err))
 			return
 		}
+
+		log.Info("UpdateChangefeed, validate and adjust replica config success", zap.Any("oldCfInfo", oldCfInfo), zap.Duration("cost", time.Since(startTime)))
 
 		scheme := sinkURIParsed.Scheme
 		topic := ""
@@ -847,9 +859,13 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		// use checkpointTs get snapshot from kv storage
 		ineligibleTables, _, err := getVerifiedTables(ctx, oldCfInfo.Config, kvStorage, status.CheckpointTs, scheme, topic, protocol)
 		if err != nil {
+			log.Error("UpdateChangefeed, get verified tables failed", zap.Error(err), zap.Any("oldCfInfo", oldCfInfo), zap.Duration("cost", time.Since(startTime)))
 			_ = c.Error(errors.ErrChangefeedUpdateRefused.GenWithStackByCause(err))
 			return
 		}
+
+		log.Info("UpdateChangefeed, get verified tables success", zap.Any("ineligibleTables", ineligibleTables), zap.Duration("cost", time.Since(startTime)))
+
 		if !util.GetOrZero(oldCfInfo.Config.ForceReplicate) && !util.GetOrZero(oldCfInfo.Config.IgnoreIneligibleTable) {
 			if len(ineligibleTables) != 0 {
 				_ = c.Error(errors.ErrTableIneligible.GenWithStackByArgs(ineligibleTables))
@@ -861,14 +877,19 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 	// verify sink
 	err = sink.Verify(ctx, oldCfInfo.ToChangefeedConfig(), oldCfInfo.ChangefeedID)
 	if err != nil {
+		log.Error("UpdateChangefeed, verify sink failed", zap.Error(err), zap.Any("oldCfInfo", oldCfInfo), zap.Duration("cost", time.Since(startTime)))
 		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, oldCfInfo.SinkURI))
 		return
 	}
+
+	log.Info("UpdateChangefeed, verify sink success", zap.Any("oldCfInfo", oldCfInfo), zap.Duration("cost", time.Since(startTime)))
 
 	if err = co.UpdateChangefeed(ctx, oldCfInfo); err != nil {
 		_ = c.Error(err)
 		return
 	}
+
+	log.Info("UpdateChangefeed, update changefeed success", zap.Any("oldCfInfo", oldCfInfo), zap.Duration("cost", time.Since(startTime)))
 
 	c.JSON(getStatus(c), CfInfoToAPIModel(oldCfInfo, status, nil))
 }
@@ -1493,6 +1514,8 @@ func getVerifiedTables(
 	storage tidbkv.Storage, startTs uint64,
 	scheme string, topic string, protocol config.Protocol,
 ) ([]string, []string, error) {
+	time.Sleep(120 * time.Second)
+
 	f, err := filter.NewFilter(replicaConfig.Filter, "", util.GetOrZero(replicaConfig.CaseSensitive), util.GetOrZero(replicaConfig.ForceReplicate))
 	if err != nil {
 		return nil, nil, err
