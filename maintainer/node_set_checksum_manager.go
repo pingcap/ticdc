@@ -244,7 +244,7 @@ func (m *nodeSetChecksumManager) ApplyDelta(nodeID node.ID, add []common.Dispatc
 		if exists && oldNode == nodeID {
 			continue
 		}
-		if exists && oldNode != "" && oldNode != nodeID {
+		if exists && !oldNode.IsEmpty() && oldNode != nodeID {
 			oldState, ok := m.state.nodes[oldNode]
 			if ok {
 				oldState.checksum.Remove(id)
@@ -300,6 +300,9 @@ func (m *nodeSetChecksumManager) HandleAck(from node.ID, ack *heartbeatpb.Dispat
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if ack.ChangefeedID != m.changefeedID.ToPB() {
+		return
+	}
 	if ack.Epoch != m.epoch {
 		return
 	}
@@ -311,6 +314,12 @@ func (m *nodeSetChecksumManager) HandleAck(from node.ID, ack *heartbeatpb.Dispat
 	if !ok {
 		return
 	}
+
+	if ack.Seq > state.seq {
+		log.Info("The ack seq value did not meet expectations.", zap.Uint64("ackSeq", ack.Seq), zap.Uint64("state.seq", state.seq))
+		return
+	}
+
 	if ack.Seq > state.ackedSeq {
 		state.ackedSeq = ack.Seq
 	}

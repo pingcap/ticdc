@@ -333,9 +333,9 @@ enum ChecksumState {
     // UNINITIALIZED is the default value when the field is absent in proto3.
     // It must block checkpoint advancement until the checksum is explicitly verified as OK.
     UNINITIALIZED = 0;
-    // MISMATCH means the checksum comparsion failed. We need to block forwarding checkpointTs.
+    // MISMATCH means the checksum comparison failed. We need to block forwarding checkpointTs.
     MISMATCH = 1;
-    // MATCH means the checksum comparsion is successful. We can forward checkpointTs.
+    // MATCH means the checksum comparison is successful. We can forward checkpointTs.
     MATCH = 2;
 }
 

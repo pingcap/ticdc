@@ -43,7 +43,7 @@ func TestDispatcherSetChecksumResendAndAck(t *testing.T) {
 	require.Equal(t, uint64(2), update.Seq)
 
 	mgr.mu.Lock()
-	mgr.state.captures[capture].lastSendAt = time.Time{}
+	mgr.state.nodes[capture].lastSendAt = time.Time{}
 	mgr.mu.Unlock()
 
 	msgs = mgr.ResendPending()
@@ -58,7 +58,7 @@ func TestDispatcherSetChecksumResendAndAck(t *testing.T) {
 		Seq:          1,
 	})
 	mgr.mu.Lock()
-	mgr.state.captures[capture].lastSendAt = time.Time{}
+	mgr.state.nodes[capture].lastSendAt = time.Time{}
 	mgr.mu.Unlock()
 	msgs = mgr.ResendPending()
 	require.Len(t, msgs, 1)
@@ -73,7 +73,7 @@ func TestDispatcherSetChecksumResendAndAck(t *testing.T) {
 	require.Empty(t, msgs)
 }
 
-func TestCaptureSetChecksumManagerRemoveNodesCleansState(t *testing.T) {
+func TestNodeSetChecksumManagerRemoveNodesCleansState(t *testing.T) {
 	mgr := newNodeSetChecksumManager(
 		common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme),
 		1,
@@ -90,9 +90,9 @@ func TestCaptureSetChecksumManagerRemoveNodesCleansState(t *testing.T) {
 	mgr.RemoveNodes([]node.ID{capture})
 
 	mgr.mu.Lock()
-	_, captureExists := mgr.state.captures[capture]
+	_, captureExists := mgr.state.nodes[capture]
 	_, mappingExists := mgr.state.dispatcherToNode[id]
-	_, otherExists := mgr.state.captures[otherCapture]
+	_, otherExists := mgr.state.nodes[otherCapture]
 	mgr.mu.Unlock()
 
 	require.False(t, captureExists)
