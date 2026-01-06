@@ -59,10 +59,11 @@ func ensureChangefeedStartTsSafetyClassic(ctx context.Context, pdCli pd.Client, 
 	if err != nil {
 		return errors.Trace(err)
 	}
-	log.Info("set gc safepoint for changefeed",
+
+	log.Info("set service gc safepoint for changefeed",
 		zap.String("gcServiceID", gcServiceID),
-		zap.Uint64("expectedGCSafepoint", startTs),
-		zap.Uint64("actualGCSafepoint", minServiceGCTs),
+		zap.Uint64("startTs", startTs),
+		zap.Uint64("minServiceGCSafepoint", minServiceGCTs),
 		zap.Int64("ttl", ttl))
 
 	// startTs should be greater than or equal to minServiceGCTs + 1, otherwise gcManager
@@ -92,12 +93,12 @@ func UndoEnsureChangefeedStartTsSafety(
 	changefeedID common.ChangeFeedID,
 ) error {
 	gcServiceID := gcServiceIDPrefix + changefeedID.Keyspace() + "_" + changefeedID.Name()
-	log.Info("undo ensure changefeed start ts safety", zap.String("gcServiceID", gcServiceID))
 	err := UnifyDeleteGcSafepoint(ctx, pdCli, keyspaceID, gcServiceID)
 	if err != nil {
+		log.Warn("undo ensure changefeed start ts safety failed", zap.String("gcServiceID", gcServiceID), zap.Error(err))
 		return errors.Trace(err)
 	}
-
+	log.Info("undo ensure changefeed start ts safety", zap.String("gcServiceID", gcServiceID))
 	return nil
 }
 

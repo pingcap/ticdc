@@ -80,7 +80,6 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	}
 
 	keyspaceName := GetKeyspaceValueWithDefault(c)
-
 	var changefeedID common.ChangeFeedID
 	if cfg.ID == "" {
 		changefeedID = common.NewChangefeedID(keyspaceName)
@@ -149,23 +148,6 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 			"invalid start-ts %v, larger than current tso %v", cfg.StartTs, currentTSO))
 		return
 	}
-	// Ensure the start ts is valid in the next 3600 seconds, aka 1 hour
-	const ensureTTL = 60 * 60
-	createGcServiceID := h.server.GetEtcdClient().GetEnsureGCServiceID(gc.EnsureGCServiceCreating)
-	if err = gc.EnsureChangefeedStartTsSafety(
-		ctx,
-		h.server.GetPdClient(),
-		createGcServiceID,
-		keyspaceMeta.Id,
-		changefeedID,
-		ensureTTL, cfg.StartTs); err != nil {
-		if !errors.ErrStartTsBeforeGC.Equal(err) {
-			_ = c.Error(errors.ErrPDEtcdAPIError.Wrap(err))
-			return
-		}
-		_ = c.Error(err)
-		return
-	}
 
 	// verify target ts
 	if cfg.TargetTs > 0 && cfg.TargetTs <= cfg.StartTs {
@@ -198,11 +180,47 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 			return
 		}
 	}
+
+	// Ensure the start ts is valid in the next 3600 seconds, aka 1 hour
+	const ensureTTL = 60 * 60
+	createGcServiceID := h.server.GetEtcdClient().GetEnsureGCServiceID(gc.EnsureGCServiceCreating)
+	if err = gc.EnsureChangefeedStartTsSafety(
+		ctx,
+		h.server.GetPdClient(),
+		createGcServiceID,
+		keyspaceMeta.Id,
+		changefeedID,
+		ensureTTL, cfg.StartTs); err != nil {
+		if !errors.ErrStartTsBeforeGC.Equal(err) {
+			_ = c.Error(errors.ErrPDEtcdAPIError.Wrap(err))
+			return
+		}
+		_ = c.Error(err)
+		return
+	}
+
+	pdClient := h.server.GetPdClient()
+	needRemoveGCSafePoint := false
+	defer func() {
+		if !needRemoveGCSafePoint {
+			return
+		}
+
+		err = gc.UndoEnsureChangefeedStartTsSafety(
+			ctx,
+			pdClient,
+			keyspaceMeta.Id,
+			createGcServiceID,
+			changefeedID,
+		)
+	}()
+
 	protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(replicaCfg.Sink.Protocol))
 
 	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 	kvStorage, err := keyspaceManager.GetStorage(ctx, keyspaceName)
 	if err != nil {
+		needRemoveGCSafePoint = true
 		_ = c.Error(err)
 		return
 	}
@@ -217,23 +235,25 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		ID:   keyspaceMeta.Id,
 		Name: keyspaceMeta.Name,
 	}); err != nil {
+		needRemoveGCSafePoint = true
 		_ = c.Error(err)
 		return
 	}
 
 	ineligibleTables, _, err := getVerifiedTables(ctx, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
 	if err != nil {
+		needRemoveGCSafePoint = true
 		_ = c.Error(err)
 		return
 	}
 	if !util.GetOrZero(replicaCfg.ForceReplicate) && !util.GetOrZero(cfg.ReplicaConfig.IgnoreIneligibleTable) {
 		if len(ineligibleTables) != 0 {
+			needRemoveGCSafePoint = true
 			_ = c.Error(errors.ErrTableIneligible.GenWithStackByArgs(ineligibleTables))
 			return
 		}
 	}
 
-	pdClient := h.server.GetPdClient()
 	info := &config.ChangeFeedInfo{
 		UpstreamID:     pdClient.GetClusterID(ctx),
 		ChangefeedID:   changefeedID,
@@ -251,28 +271,10 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	cfConfig := info.ToChangefeedConfig()
 	err = sink.Verify(ctx, cfConfig, changefeedID)
 	if err != nil {
+		needRemoveGCSafePoint = true
 		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfg.SinkURI))
 		return
 	}
-
-	needRemoveGCSafePoint := false
-	defer func() {
-		if !needRemoveGCSafePoint {
-			return
-		}
-
-		err = gc.UndoEnsureChangefeedStartTsSafety(
-			ctx,
-			pdClient,
-			keyspaceMeta.Id,
-			createGcServiceID,
-			changefeedID,
-		)
-		if err != nil {
-			_ = c.Error(err)
-			return
-		}
-	}()
 
 	err = co.CreateChangefeed(ctx, info)
 	if err != nil {
