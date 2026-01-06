@@ -192,7 +192,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		changefeedID,
 		ensureTTL, cfg.StartTs); err != nil {
 		if !errors.ErrStartTsBeforeGC.Equal(err) {
-			_ = c.Error(errors.ErrPDEtcdAPIError.Wrap(err))
+			_ = c.Error(errors.WrapError(errors.ErrPDEtcdAPIError, (err)))
 			return
 		}
 		_ = c.Error(err)
@@ -713,6 +713,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 
 	err = co.ResumeChangefeed(ctx, cfInfo.ChangefeedID, newCheckpointTs, cfg.OverwriteCheckpointTs != 0)
 	if err != nil {
+		needRemoveGCSafePoint = true
 		_ = c.Error(err)
 		return
 	}
@@ -912,7 +913,7 @@ func verifyResumeChangefeedConfig(
 		gcTTL, overrideCheckpointTs)
 	if err != nil {
 		if !errors.ErrStartTsBeforeGC.Equal(err) {
-			return errors.ErrPDEtcdAPIError.Wrap(err)
+			return errors.WrapError(errors.ErrPDEtcdAPIError, err)
 		}
 		return err
 	}
