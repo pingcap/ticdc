@@ -8401,37 +8401,58 @@
           "pointradius": 2,
           "points": false,
           "renderer": "flot",
-          "seriesOverrides": [],
+          "seriesOverrides": [
+            {
+              "$$hashKey": "object:354",
+              "alias": "/.*-sum/",
+              "lines": true,
+              "linewidth": 3,
+              "points": false,
+              "yaxis": 2
+            },
+            {
+              "$$hashKey": "object:355",
+              "alias": "/.*-rate/",
+              "lines": true,
+              "linewidth": 3,
+              "points": false,
+              "yaxis": 1
+            }
+          ],
           "spaceLength": 10,
           "stack": false,
           "steppedLine": false,
           "targets": [
             {
               "expr": "sum(rate(ticdc_sink_active_active_conflict_skip_rows_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name, changefeed)",
-              "legendFormat": "{{keyspace_name}}-{{changefeed}}",
+              "legendFormat": "{{keyspace_name}}-{{changefeed}}-rate",
               "interval": "",
               "exemplar": true,
               "format": "time_series",
-              "intervalFactor": 1,
-              "refId": "A"
+              "hide": false,
+              "intervalFactor": 2,
+              "refId": "B",
+              "step": 10
             },
             {
               "expr": "sum(ticdc_sink_active_active_conflict_skip_rows_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name, changefeed)",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-sum",
               "interval": "",
               "exemplar": true,
-              "refId": "B",
-              "hide": true
+              "format": "time_series",
+              "hide": true,
+              "intervalFactor": 2,
+              "refId": "C",
+              "step": 10
             }
           ],
           "thresholds": [],
-          "timeFrom": null,
           "timeRegions": [],
-          "timeShift": null,
           "title": "Conflict Skip Rows / s",
           "tooltip": {
+            "msResolution": false,
             "shared": true,
-            "sort": 2,
+            "sort": 0,
             "value_type": "individual"
           },
           "type": "graph",
@@ -8444,20 +8465,29 @@
           },
           "yaxes": [
             {
-              "decimals": 0,
-              "format": "short",
+              "$$hashKey": "object:298",
+              "format": "none",
+              "label": null,
               "logBase": 1,
+              "max": null,
               "min": "0",
-              "show": true
+              "show": true,
+              "decimals": null
             },
             {
+              "$$hashKey": "object:299",
               "format": "none",
+              "label": null,
               "logBase": 1,
-              "show": false
+              "max": null,
+              "min": "0",
+              "show": true,
+              "decimals": 0
             }
           ],
           "yaxis": {
-            "align": false
+            "align": false,
+            "alignLevel": null
           }
         }
       ],

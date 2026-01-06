@@ -88,12 +88,16 @@ func (s *TableSchemaStore) Clear() {
 }
 
 func (s *TableSchemaStore) AddEvent(event *DDLEvent) {
-	switch s.sinkType {
-	case commonType.MysqlSinkType, commonType.RedoSinkType:
+	if s.sinkType == commonType.RedoSinkType || (s.sinkType == commonType.MysqlSinkType) {
 		s.TableIDStore.AddEvent(event)
-	default:
-		s.tableNameStore.AddEvent(event)
+
+		// if enableActiveActive, we need to add for both TableIDStore and tableNameStore
+		if !s.enableActiveActive {
+			return
+		}
 	}
+
+	s.tableNameStore.AddEvent(event)
 }
 
 func (s *TableSchemaStore) initialized() bool {
@@ -135,8 +139,8 @@ func (s *TableSchemaStore) GetAllNormalTableIds() []int64 {
 }
 
 // GetAllTableNames will be called in two cases:
-// 1. for non-mysqlSink case, when maintainer send message to ask dispatcher to write checkpointTs to downstream. In this case, tableNames should also include the dropped tables, needDroppedTableName will be false.
-// 2. for mysqlSink with enableActiveActive case, when maintainer send message to ask dispatcher to write checkpointTs to downstream, needDroppedTableName will be true.
+// 1. for non-mysqlSink case, when maintainer send message to ask dispatcher to write checkpointTs to downstream. In this case, tableNames should also include the dropped tables, needDroppedTableName will be true.
+// 2. for mysqlSink with enableActiveActive case, when maintainer send message to ask dispatcher to write checkpointTs to downstream, needDroppedTableName will be false.
 // the ts must be <= the latest received event ts of table trigger event dispatcher.
 func (s *TableSchemaStore) GetAllTableNames(ts uint64, needDroppedTableName bool) []*SchemaTableName {
 	if !s.initialized() || s.tableNameStore == nil {
@@ -183,8 +187,8 @@ func (s *TableNameStore) AddEvent(event *DDLEvent) {
 }
 
 // GetAllTableNames will be called in two cases:
-// 1. for non-mysqlSink case, when maintainer send message to ask dispatcher to write checkpointTs to downstream. In this case, tableNames should also include the dropped tables, needDroppedTableName will be true.
-// 2. for mysqlSink with enableActiveActive case, when maintainer send message to ask dispatcher to write checkpointTs to downstream, needDroppedTableName will be false.
+// 1. for non-mysqlSink case, when maintainer send message to ask dispatcher to write checkpointTs to downstream. In this case, tableNames should also include the dropped tables, needDroppedTableName will be false.
+// 2. for mysqlSink with enableActiveActive case, when maintainer send message to ask dispatcher to write checkpointTs to downstream, needDroppedTableName will be true.
 // the ts must be <= the latest received event ts of table trigger event dispatcher.
 func (s *TableNameStore) GetAllTableNames(ts uint64, needDroppedTableName bool) []*SchemaTableName {
 	// In non-mysqlSink cases, we have to send checkpointTs to the drop schema/tables so that consumer can know the schema/table is dropped.
