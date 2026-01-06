@@ -205,8 +205,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		if !needRemoveGCSafePoint {
 			return
 		}
-
-		err = gc.UndoEnsureChangefeedStartTsSafety(
+		_ = gc.UndoEnsureChangefeedStartTsSafety(
 			ctx,
 			pdClient,
 			keyspaceMeta.Id,
@@ -697,18 +696,13 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		if !needRemoveGCSafePoint {
 			return
 		}
-
-		err = gc.UndoEnsureChangefeedStartTsSafety(
+		_ = gc.UndoEnsureChangefeedStartTsSafety(
 			ctx,
 			h.server.GetPdClient(),
 			keyspaceMeta.Id,
 			resumeGcServiceID,
 			cfInfo.ChangefeedID,
 		)
-		if err != nil {
-			_ = c.Error(err)
-			return
-		}
 	}()
 
 	err = co.ResumeChangefeed(ctx, cfInfo.ChangefeedID, newCheckpointTs, cfg.OverwriteCheckpointTs != 0)
