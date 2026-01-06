@@ -29,17 +29,27 @@ TiCDC pulls change logs from TiDB clusters and pushes them to downstream systems
     * For MacOS x86-64: `https://tiup-mirrors.pingcap.com/cdc-${TICDC_VERSION}-darwin-amd64.tar.gz`
     * For MacOS ARM64: `https://tiup-mirrors.pingcap.com/cdc-${TICDC_VERSION}-darwin-arm64.tar.gz`
 
-#### Use TiUP to Retrieve the Download Link
+### Use a Script to Download Automatically
 
-You can also use the tiup command to get the platform-specific binary download link (defaults to the latest stable version if version is omitted):
+You can use the following script to automatically detect your operating system and architecture, and download the latest TiCDC binary:
 
 ```bash
-tiup install cdc --force
+# Detect OS and Architecture
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m)
+case $ARCH in
+    x86_64) ARCH="amd64" ;;
+    aarch64|arm64) ARCH="arm64" ;;
+esac
+
+# Get the latest version tag from GitHub
+TICDC_VERSION=$(curl -s https://api.github.com/repos/pingcap/ticdc/releases/latest | grep tag_name | cut -d '"' -f 4)
+
+# Download the package
+URL="https://tiup-mirrors.pingcap.com/cdc-${TICDC_VERSION}-${OS}-${ARCH}.tar.gz"
+echo "Downloading TiCDC ${TICDC_VERSION} for ${OS}-${ARCH}..."
+curl -L -O "$URL"
 ```
-
-This command will provide the download address for the build tailored to your platform.
-
-![TiUP Install](./docs/media/tiup-install.jpg)
 
 ### Patch to the existing TiCDC nodes
 
