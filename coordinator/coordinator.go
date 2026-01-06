@@ -193,6 +193,10 @@ func (c *coordinator) run(ctx context.Context) error {
 		updateGCTickerInterval = time.Duration(val.(int) * int(time.Millisecond))
 	})
 
+	if err := c.updateGCSafepoint(ctx); err != nil {
+		log.Warn("update gc safepoint failed at the first time", zap.Error(err))
+	}
+
 	gcTicker := time.NewTicker(updateGCTickerInterval)
 	defer gcTicker.Stop()
 

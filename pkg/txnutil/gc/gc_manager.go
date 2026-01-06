@@ -77,17 +77,18 @@ type gcManager struct {
 
 // NewManager creates a new Manager.
 func NewManager(gcServiceID string, pdClient pd.Client) Manager {
-	serverConfig := config.GetGlobalServerConfig()
 	failpoint.Inject("InjectGcSafepointUpdateInterval", func(val failpoint.Value) {
 		gcSafepointUpdateInterval = time.Duration(val.(int) * int(time.Millisecond))
 	})
+
+	now := time.Now()
 	return &gcManager{
 		gcServiceID:       gcServiceID,
 		pdClient:          pdClient,
 		pdClock:           appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
-		lastUpdatedTime:   atomic.NewTime(time.Now()),
-		lastSucceededTime: atomic.NewTime(time.Now()),
-		gcTTL:             serverConfig.GcTTL,
+		lastUpdatedTime:   atomic.NewTime(now),
+		lastSucceededTime: atomic.NewTime(now),
+		gcTTL:             config.GetGlobalServerConfig().GcTTL,
 	}
 }
 
