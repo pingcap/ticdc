@@ -75,7 +75,7 @@ func TestDispatcherSetChecksumResendAndAck(t *testing.T) {
 
 func TestNodeSetChecksumManagerRemoveNodesCleansState(t *testing.T) {
 	mgr := newNodeSetChecksumManager(
-		common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme),
+		common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
 		1,
 		common.DefaultMode,
 	)
