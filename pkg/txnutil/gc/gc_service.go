@@ -57,7 +57,7 @@ func ensureChangefeedStartTsSafetyClassic(ctx context.Context, pdCli pd.Client, 
 	// set gc safepoint for the changefeed gc service
 	minServiceGCTs, err := SetServiceGCSafepoint(ctx, pdCli, gcServiceID, ttl, startTs)
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 
 	log.Info("set service gc safepoint for changefeed",
@@ -126,7 +126,7 @@ func SetServiceGCSafepoint(
 		retry.WithBackoffBaseDelay(gcServiceBackoffDelay),
 		retry.WithMaxTries(gcServiceMaxRetries),
 		retry.WithIsRetryableErr(errors.IsRetryableError))
-	return minServiceGCTs, err
+	return minServiceGCTs, errors.WrapError(errors.ErrUpdateServiceSafepointFailed, err)
 }
 
 // UnifyGetServiceGCSafepoint returns a service gc safepoint on classic mode or
@@ -139,7 +139,7 @@ func UnifyGetServiceGCSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID
 	gcCli := pdCli.GetGCStatesClient(keyspaceID)
 	gcState, err := getGCState(ctx, gcCli)
 	if err != nil {
-		return 0, errors.Trace(errors.ErrGetGCBarrierFailed)
+		return 0, err
 	}
 	return gcState.TxnSafePoint, nil
 }
@@ -178,7 +178,11 @@ func SetGCBarrier(ctx context.Context, gcCli gc.GCStatesClient, serviceID string
 }
 
 func getGCState(ctx context.Context, gcCli gc.GCStatesClient) (gc.GCState, error) {
-	return gcCli.GetGCState(ctx)
+	state, err := gcCli.GetGCState(ctx)
+	if err != nil {
+		return state, errors.WrapError(errors.ErrGetGCBarrierFailed, err)
+	}
+	return state, nil
 }
 
 // DeleteGCBarrier Delete a GC barrier of a keyspace

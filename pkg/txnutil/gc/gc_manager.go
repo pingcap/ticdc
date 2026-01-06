@@ -106,7 +106,7 @@ func (m *gcManager) TryUpdateGCSafePoint(
 			zap.Uint64("safePointTs", checkpointTs),
 			zap.Error(err))
 		if time.Since(m.lastSucceededTime.Load()) >= time.Second*time.Duration(m.gcTTL) {
-			return errors.ErrUpdateServiceSafepointFailed.Wrap(err)
+			return err
 		}
 		return nil
 	}
