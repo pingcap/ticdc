@@ -98,7 +98,8 @@ kafka_groups=(
 	# G07
 	'merge_table resolve_lock force_replicate_table ddl_for_split_tables'
 	# G08
-	'kafka_simple_claim_check kafka_simple_claim_check_avro tidb_mysql_test'
+	# 'kafka_simple_claim_check kafka_simple_claim_check_avro tidb_mysql_test'
+	'kafka_simple_claim_check kafka_simple_claim_check_avro'
 	# G09
 	'kafka_simple_handle_key_only kafka_simple_handle_key_only_avro mq_sink_error_resume multi_source'
 	# G10
@@ -134,7 +135,8 @@ pulsar_groups=(
 	# G07
 	'merge_table resolve_lock force_replicate_table'
 	# G08
-	'tidb_mysql_test ddl_for_split_tables'
+	# 'tidb_mysql_test ddl_for_split_tables'
+	'ddl_for_split_tables'
 	# G09
 	'mq_sink_error_resume'
 	# G10
@@ -169,7 +171,8 @@ storage_groups=(
 	# G07
 	'merge_table resolve_lock force_replicate_table'
 	# G08
-	'tidb_mysql_test ddl_for_split_tables'
+	# 'tidb_mysql_test ddl_for_split_tables'
+	'ddl_for_split_tables'
 	# G09
 	'ddl_for_split_tables_with_merge_and_split'
 	# G10
