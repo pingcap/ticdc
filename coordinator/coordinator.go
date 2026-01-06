@@ -300,9 +300,6 @@ func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, changefeed *ch
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
 	errCode, _ := errors.RFCCode(err)
 	state := config.StateWarning
 	if errors.IsChangefeedGCFastFailErrorCode(errCode) {
@@ -313,6 +310,9 @@ func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, changefeed *ch
 		Code:    string(errCode),
 		Message: err.Error(),
 	})
+
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 
 	select {
 	case <-ctx.Done():
