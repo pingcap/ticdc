@@ -856,6 +856,8 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 			return
 		}
 
+		time.Sleep(120 * time.Second)
+
 		// use checkpointTs get snapshot from kv storage
 		ineligibleTables, _, err := getVerifiedTables(ctx, oldCfInfo.Config, kvStorage, status.CheckpointTs, scheme, topic, protocol)
 		if err != nil {
@@ -1514,7 +1516,6 @@ func getVerifiedTables(
 	storage tidbkv.Storage, startTs uint64,
 	scheme string, topic string, protocol config.Protocol,
 ) ([]string, []string, error) {
-	time.Sleep(120 * time.Second)
 
 	f, err := filter.NewFilter(replicaConfig.Filter, "", util.GetOrZero(replicaConfig.CaseSensitive), util.GetOrZero(replicaConfig.ForceReplicate))
 	if err != nil {
