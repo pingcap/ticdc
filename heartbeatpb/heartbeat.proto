@@ -354,7 +354,7 @@ message DispatcherSetChecksum {
     uint64 sumLow = 5;
 }
 
-// DispatcherSetChecksumAck is sent from dispatcherManager to maintainer 
+// DispatcherSetChecksumAckResponse is sent from dispatcherManager to maintainer
 // to ack the set checksum request.
 message DispatcherSetChecksumAckResponse {
     ChangefeedID changefeedID = 1;
