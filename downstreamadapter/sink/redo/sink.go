@@ -115,9 +115,9 @@ func (s *Sink) Run(ctx context.Context) error {
 func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	switch e := event.(type) {
 	case *commonEvent.DDLEvent:
-		ddlType := e.GetDDLType().String()
-		err := s.statistics.RecordDDLExecution(ddlType, func() error {
-			return s.ddlWriter.WriteEvents(s.ctx, e)
+		err := s.statistics.RecordDDLExecution(func() (string, error) {
+			ddlType := e.GetDDLType().String()
+			return ddlType, s.ddlWriter.WriteEvents(s.ctx, e)
 		})
 		if err != nil {
 			s.isNormal.Store(false)

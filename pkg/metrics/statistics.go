@@ -84,19 +84,22 @@ func (b *Statistics) RecordBatchExecution(executor func() (int, int64, error)) e
 }
 
 // RecordDDLExecution record the time cost of execute ddl
-func (b *Statistics) RecordDDLExecution(ddlType string, executor func() error) error {
+func (b *Statistics) RecordDDLExecution(executor func() (string, error)) error {
 	b.metricExecDDLRunningCnt.Inc()
 	defer b.metricExecDDLRunningCnt.Dec()
 
-	metricExecDDLCounter := ExecDDLCounter.WithLabelValues(
-		b.changefeedID.Keyspace(), b.changefeedID.Name(), ddlType)
-	metricExecDDLCounter.Inc()
-
+	var (
+		ddlType string
+		err     error
+	)
 	start := time.Now()
-	if err := executor(); err != nil {
+	if ddlType, err = executor(); err != nil {
 		b.metricExecErrCntForDDL.Inc()
 		return err
 	}
+	metricExecDDLCounter := ExecDDLCounter.WithLabelValues(
+		b.changefeedID.Keyspace(), b.changefeedID.Name(), ddlType)
+	metricExecDDLCounter.Inc()
 	b.metricExecDDLHis.Observe(time.Since(start).Seconds())
 	return nil
 }

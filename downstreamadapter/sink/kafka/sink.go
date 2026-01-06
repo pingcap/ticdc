@@ -431,12 +431,12 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		}
 		ddlType := e.GetDDLType().String()
 		if s.partitionRule == helper.PartitionAll {
-			err = s.statistics.RecordDDLExecution(ddlType, func() error {
-				return s.ddlProducer.SendMessages(topic, partitionNum, message)
+			err = s.statistics.RecordDDLExecution(func() (string, error) {
+				return ddlType, s.ddlProducer.SendMessages(topic, partitionNum, message)
 			})
 		} else {
-			err = s.statistics.RecordDDLExecution(ddlType, func() error {
-				return s.ddlProducer.SendMessage(topic, 0, message)
+			err = s.statistics.RecordDDLExecution(func() (string, error) {
+				return ddlType, s.ddlProducer.SendMessage(topic, 0, message)
 			})
 		}
 		if err != nil {
