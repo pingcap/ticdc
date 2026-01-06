@@ -41,7 +41,7 @@ type Manager interface {
 	// Manager may skip update when it thinks it is too frequent.
 	// Set `forceUpdate` to force Manager update.
 	TryUpdateGCSafePoint(ctx context.Context, checkpointTs common.Ts, forceUpdate bool) error
-	CheckStaleCheckpointTs(ctx context.Context, keyspaceID uint32, changefeedID common.ChangeFeedID, checkpointTs common.Ts) error
+	CheckStaleCheckpointTs(keyspaceID uint32, changefeedID common.ChangeFeedID, checkpointTs common.Ts) error
 	// TryUpdateKeyspaceGCBarrier tries to update gc barrier of a keyspace
 	TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID uint32, keyspaceName string, checkpointTs common.Ts, forceUpdate bool) error
 }
@@ -137,12 +137,12 @@ func (m *gcManager) TryUpdateGCSafePoint(
 }
 
 func (m *gcManager) CheckStaleCheckpointTs(
-	ctx context.Context, keyspaceID uint32, changefeedID common.ChangeFeedID, checkpointTs common.Ts,
+	keyspaceID uint32, changefeedID common.ChangeFeedID, checkpointTs common.Ts,
 ) error {
 	if kerneltype.IsClassic() {
 		return m.checkStaleCheckPointTsGlobal(changefeedID, checkpointTs)
 	}
-	return m.checkStaleCheckpointTsKeyspace(ctx, keyspaceID, changefeedID, checkpointTs)
+	return m.checkStaleCheckpointTsKeyspace(keyspaceID, changefeedID, checkpointTs)
 }
 
 func checkStaleCheckpointTs(
@@ -179,7 +179,7 @@ func checkStaleCheckpointTs(
 	return nil
 }
 
-func (m *gcManager) checkStaleCheckpointTsKeyspace(ctx context.Context, keyspaceID uint32, changefeedID common.ChangeFeedID, checkpointTs common.Ts) error {
+func (m *gcManager) checkStaleCheckpointTsKeyspace(keyspaceID uint32, changefeedID common.ChangeFeedID, checkpointTs common.Ts) error {
 	barrierInfo := new(keyspaceGCBarrierInfo)
 	o, ok := m.keyspaceGCBarrierInfoMap.Load(keyspaceID)
 	if ok {
