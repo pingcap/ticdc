@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
-
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/stretchr/testify/require"
