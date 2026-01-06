@@ -759,7 +759,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 	}
 	co, err := h.server.GetCoordinator()
 	if err != nil {
-		_ = c.Error(err)
+		_ = c.Error(errors.Trace(err))
 		return
 	}
 
@@ -767,7 +767,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 
 	ok, err := isInitialized(co)
 	if err != nil || !ok {
-		_ = c.Error(err)
+		_ = c.Error(errors.Trace(err))
 		return
 	}
 
@@ -775,7 +775,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 
 	oldCfInfo, status, err := co.GetChangefeed(c, changefeedDisplayName)
 	if err != nil {
-		_ = c.Error(err)
+		_ = c.Error(errors.Trace(err))
 		return
 	}
 
