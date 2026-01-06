@@ -63,7 +63,7 @@ type Statistics struct {
 
 	// metricExecErrCntForDDL records the error count of the Sink for DDL.
 	metricExecErrCntForDDL prometheus.Counter
-	// metricExecErrCntForDDL records the error count of the Sink for DML.
+	// metricExecErrCntForDML records the error count of the Sink for DML.
 	metricExecErrCntForDML prometheus.Counter
 	// metricExecDMLCnt records the executed DML event count of the Sink.
 	metricExecDMLCnt prometheus.Counter
