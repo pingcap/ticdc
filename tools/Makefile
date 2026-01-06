@@ -76,5 +76,8 @@ tools/bin/mockery: tools/check/go.mod
 tools/bin/workload: tools/workload/go.mod
 	cd tools/workload && $(GO) build -mod=mod -o ../bin/workload .
 
-tools/bin/eventstore-bench: tools/eventstorebench/go.mod
-	cd tools/eventstorebench && $(GO) build -mod=mod -o ../bin/eventstore-bench .
+EVENTSTOREBENCH_SOURCES := $(shell find tools/eventstorebench -name '*.go' -type f)
+
+tools/eventstorebench/bin/eventstore-bench: $(EVENTSTOREBENCH_SOURCES) go.mod
+	@mkdir -p tools/eventstorebench/bin
+	$(GOBUILD) -o tools/eventstorebench/bin/eventstore-bench ./tools/eventstorebench

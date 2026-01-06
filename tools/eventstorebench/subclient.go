@@ -1,6 +1,7 @@
 package main
 
 import (
+	"container/heap"
 	"context"
 	"encoding/binary"
 	"math/rand"
@@ -105,9 +106,40 @@ type benchSubscription struct {
 	commitTs   atomic.Uint64
 	resolvedTs atomic.Uint64
 
+	pendingMu   sync.Mutex
+	pendingHeap pendingRangeHeap
+
 	stopCh   chan struct{}
 	stopOnce sync.Once
 	wg       sync.WaitGroup
+}
+
+type pendingRange struct {
+	start uint64
+	end   uint64
+	acked atomic.Bool
+}
+
+type pendingRangeHeap []*pendingRange
+
+func (h pendingRangeHeap) Len() int { return len(h) }
+
+func (h pendingRangeHeap) Less(i, j int) bool {
+	return h[i].start < h[j].start
+}
+
+func (h pendingRangeHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+
+func (h *pendingRangeHeap) Push(x any) {
+	*h = append(*h, x.(*pendingRange))
+}
+
+func (h *pendingRangeHeap) Pop() any {
+	old := *h
+	n := len(old)
+	item := old[n-1]
+	*h = old[:n-1]
+	return item
 }
 
 func newBenchSubscription(
@@ -171,10 +203,12 @@ func (s *benchSubscription) writerLoop(workerID int) {
 		default:
 		}
 		batchSize := s.scenario.batchSize()
+		startCommitTs, _, pending := s.allocPendingRange(batchSize)
+
 		batch := make([]common.RawKVEntry, batchSize)
 		var totalBytes int64
 		for i := 0; i < batchSize; i++ {
-			commitTs := s.commitTs.Add(1)
+			commitTs := startCommitTs + uint64(i)
 			rowID := s.rowID.Add(1)
 			kv := common.RawKVEntry{
 				OpType:   common.OpTypePut,
@@ -191,10 +225,27 @@ func (s *benchSubscription) writerLoop(workerID int) {
 			batch[i] = kv
 		}
 		ack := s.stats.recordBatch(len(batch), totalBytes, time.Now())
-		if !s.consume(batch, ack) {
+		ackWithMark := func() {
+			pending.acked.Store(true)
+			ack()
+		}
+		if !s.consume(batch, ackWithMark) {
 			return
 		}
 	}
+}
+
+func (s *benchSubscription) allocPendingRange(batchSize int) (start uint64, end uint64, pending *pendingRange) {
+	if batchSize <= 0 {
+		batchSize = 1
+	}
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	end = s.commitTs.Add(uint64(batchSize))
+	start = end - uint64(batchSize) + 1
+	pending = &pendingRange{start: start, end: end}
+	heap.Push(&s.pendingHeap, pending)
+	return start, end, pending
 }
 
 func (s *benchSubscription) resolvedLoop() {
@@ -209,11 +260,11 @@ func (s *benchSubscription) resolvedLoop() {
 		case <-s.stopCh:
 			return
 		case <-ticker.C:
-			commit := s.commitTs.Load()
-			if commit <= lag {
+			floor := s.safeResolvedFloor()
+			if floor <= lag {
 				continue
 			}
-			target := commit - lag
+			target := floor - lag
 			current := s.resolvedTs.Load()
 			if target > current {
 				if s.resolvedTs.CompareAndSwap(current, target) {
@@ -222,6 +273,28 @@ func (s *benchSubscription) resolvedLoop() {
 			}
 		}
 	}
+}
+
+func (s *benchSubscription) safeResolvedFloor() uint64 {
+	s.pendingMu.Lock()
+	for s.pendingHeap.Len() > 0 {
+		head := s.pendingHeap[0]
+		if !head.acked.Load() {
+			break
+		}
+		heap.Pop(&s.pendingHeap)
+	}
+	var floor uint64
+	if s.pendingHeap.Len() > 0 {
+		floor = s.pendingHeap[0].start - 1
+	} else {
+		floor = s.commitTs.Load()
+	}
+	s.pendingMu.Unlock()
+	if floor < s.startTs {
+		return s.startTs
+	}
+	return floor
 }
 
 func (s *benchSubscription) shouldAddOldValue(rowID uint64) bool {
