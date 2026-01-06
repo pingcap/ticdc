@@ -210,11 +210,11 @@ func (c *Controller) processTablesAndBuildSchemaInfo(
 
 		// Add schema info if not exists
 		if _, ok := schemaInfos[schemaID]; !ok {
-			schemaInfos[schemaID] = getSchemaInfo(table, isMysqlCompatibleBackend, *c.replicaConfig.EnableActiveActive)
+			schemaInfos[schemaID] = getSchemaInfo(table, isMysqlCompatibleBackend, util.GetOrZero(c.replicaConfig.EnableActiveActive))
 		}
 
 		// Add table info to schema
-		tableInfo := getTableInfo(table, isMysqlCompatibleBackend, *c.replicaConfig.EnableActiveActive)
+		tableInfo := getTableInfo(table, isMysqlCompatibleBackend, util.GetOrZero(c.replicaConfig.EnableActiveActive))
 		schemaInfos[schemaID].Tables = append(schemaInfos[schemaID].Tables, tableInfo)
 
 		c.processTableSpans(table, workingTaskMap, mode)
