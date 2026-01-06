@@ -300,9 +300,6 @@ func (m *nodeSetChecksumManager) HandleAck(from node.ID, ack *heartbeatpb.Dispat
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if ack.ChangefeedID != m.changefeedID.ToPB() {
-		return
-	}
 	if ack.Epoch != m.epoch {
 		return
 	}
