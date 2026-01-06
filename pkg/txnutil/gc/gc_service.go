@@ -119,7 +119,7 @@ func SetServiceGCSafepoint(
 			var err1 error
 			minServiceGCTs, err1 = pdCli.UpdateServiceGCSafePoint(ctx, serviceID, TTL, safePoint)
 			if err1 != nil {
-				log.Warn("Set GC safepoint failed, retry later", zap.Error(err1))
+				log.Warn("set gc safepoint failed, retry later", zap.Error(err1))
 			}
 			return err1
 		},
@@ -133,6 +133,10 @@ func SetServiceGCSafepoint(
 // a gc barrier on next-gen mode
 func UnifyGetServiceGCSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint32, serviceID string) (uint64, error) {
 	if kerneltype.IsClassic() {
+		// NOTE: In classic mode, PD does not expose a dedicated "get service GC safepoint"
+		// API. Calling `UpdateServiceGCSafePoint` with TTL=0 and safePoint=0 is used
+		// as a read-only operation to get the current minimum service GC safepoint.
+		// See PD API semantics for details.
 		return SetServiceGCSafepoint(ctx, pdCli, serviceID, 0, 0)
 	}
 
@@ -152,7 +156,7 @@ func removeServiceGCSafepoint(ctx context.Context, pdCli pd.Client, serviceID st
 		func() error {
 			_, err := pdCli.UpdateServiceGCSafePoint(ctx, serviceID, int64(TTL), math.MaxUint64)
 			if err != nil {
-				log.Warn("Remove GC safepoint failed, retry later", zap.Error(err))
+				log.Warn("remove gc safepoint failed, retry later", zap.Error(err))
 			}
 			return err
 		},
@@ -166,7 +170,12 @@ func SetGCBarrier(ctx context.Context, gcCli gc.GCStatesClient, serviceID string
 	err = retry.Do(ctx, func() error {
 		barrierInfo, err1 := gcCli.SetGCBarrier(ctx, serviceID, ts, ttl)
 		if err1 != nil {
-			log.Warn("Set GC barrier failed, retry later", zap.Any("barrierInfo", barrierInfo), zap.Error(err1))
+			log.Warn("set gc barrier failed, retry later",
+				zap.String("serviceID", serviceID),
+				zap.Uint64("ts", ts),
+				zap.Duration("ttl", ttl),
+				zap.Any("barrierInfo", barrierInfo),
+				zap.Error(err1))
 			return err1
 		}
 		barrierTS = barrierInfo.BarrierTS
@@ -190,7 +199,9 @@ func DeleteGCBarrier(ctx context.Context, gcCli gc.GCStatesClient, serviceID str
 	err = retry.Do(ctx, func() error {
 		info, err1 := gcCli.DeleteGCBarrier(ctx, serviceID)
 		if err1 != nil {
-			log.Warn("Delete GC barrier failed, retry later", zap.String("serviceID", serviceID))
+			log.Warn("delete gc barrier failed, retry later",
+				zap.String("serviceID", serviceID),
+				zap.Error(err1))
 			return err1
 		}
 		barrierInfo = info
