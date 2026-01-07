@@ -15,7 +15,6 @@ package gc
 
 import (
 	"context"
-	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -78,7 +77,7 @@ func SetServiceGCSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint
 		_, err := setServiceGCSafepoint(ctx, pdCli, serviceID, TTL, safepoint)
 		return err
 	}
-	return setGCBarrier(ctx, pdCli, keyspaceID, serviceID, safepoint, time.Duration(TTL))
+	return setGCBarrier(ctx, pdCli, keyspaceID, serviceID, safepoint, TTL)
 }
 
 // GetServiceGCSafepoint returns a service gc safepoint on classic mode or a gc barrier on next-gen mode

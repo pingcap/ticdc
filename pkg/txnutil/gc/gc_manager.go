@@ -195,8 +195,7 @@ func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID u
 	}
 	m.keyspaceLastUpdatedTimeMap.Store(keyspaceID, time.Now())
 
-	ttl := time.Duration(m.gcTTL) * time.Second
-	err := setGCBarrier(ctx, m.pdClient, keyspaceID, m.gcServiceID, checkpointTs, ttl)
+	err := setGCBarrier(ctx, m.pdClient, keyspaceID, m.gcServiceID, checkpointTs, m.gcTTL)
 	// align to classic mode, if the checkpointTs is less than TxnSafePoint,
 	// we can also use the TxnSafePoint as the lastSafePointTs
 	if err != nil && !errors.IsGCBarrierTSBehindTxnSafePointError(err) {
@@ -208,7 +207,7 @@ func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID u
 			barrierInfo := barrierInfoObj.(*keyspaceGCBarrierInfo)
 			lastSucceededTime = barrierInfo.lastSucceededTime
 		}
-		if time.Since(lastSucceededTime) >= ttl {
+		if time.Since(lastSucceededTime) >= time.Duration(m.gcTTL)*time.Second {
 			return errors.WrapError(errors.ErrUpdateGCBarrierFailed, err)
 		}
 		return nil

@@ -26,15 +26,32 @@ import (
 )
 
 func ensureChangefeedStartTsSafetyNextGen(ctx context.Context, pdCli pd.Client, keyspaceID uint32, gcServiceID string, ttl int64, startTs uint64) error {
-	err := setGCBarrier(ctx, pdCli, keyspaceID, gcServiceID, startTs, time.Duration(ttl)*time.Second)
-	if err != nil {
-		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs)
+	err := setGCBarrier(ctx, pdCli, keyspaceID, gcServiceID, startTs, ttl)
+	if err == nil {
+		return nil
 	}
-	return nil
+	if !errors.IsGCBarrierTSBehindTxnSafePointError(err) {
+		return err
+	}
+
+	state, err := getGCState(ctx, pdCli, keyspaceID)
+	if err != nil {
+		log.Error("get gc barrier failed when try to get the current gc state",
+			zap.Uint64("startTs", startTs),
+			zap.Uint32("keyspaceID", keyspaceID), zap.String("gcServiceID", gcServiceID),
+			zap.Error(err))
+		return err
+	}
+
+	if startTs < state.TxnSafePoint+1 {
+		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, state.TxnSafePoint)
+	}
+	return err
 }
 
 // SetGCBarrier Set a GC Barrier of a keyspace
-func setGCBarrier(ctx context.Context, pdCli pd.Client, keyspaceID uint32, serviceID string, ts uint64, ttl time.Duration) error {
+func setGCBarrier(ctx context.Context, pdCli pd.Client, keyspaceID uint32, serviceID string, ts uint64, TTL int64) error {
+	ttl := time.Duration(TTL) * time.Second
 	cli := pdCli.GetGCStatesClient(keyspaceID)
 	err := retry.Do(ctx, func() error {
 		barrierInfo, err1 := cli.SetGCBarrier(ctx, serviceID, ts, ttl)
