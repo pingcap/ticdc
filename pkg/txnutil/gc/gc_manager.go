@@ -61,8 +61,9 @@ type gcManager struct {
 
 	lastUpdatedTime   *atomic.Time
 	lastSucceededTime *atomic.Time
-	lastSafePointTs   atomic.Uint64
-	isTiCDCBlockGC    atomic.Bool
+
+	minServiceGcSafepoint atomic.Uint64
+	isTiCDCBlockGC        atomic.Bool
 
 	// keyspaceLastUpdatedTimeMap store last updated time of each keyspace
 	// key => keyspaceID
@@ -130,7 +131,7 @@ func (m *gcManager) TryUpdateGCSafePoint(
 	// means that the service gc safe point set by TiCDC is the min service
 	// gc safe point
 	m.isTiCDCBlockGC.Store(actual == checkpointTs)
-	m.lastSafePointTs.Store(actual)
+	m.minServiceGcSafepoint.Store(actual)
 	m.lastSucceededTime.Store(time.Now())
 	minServiceGCSafePointGauge.Set(float64(oracle.ExtractPhysical(actual)))
 	cdcGCSafePointGauge.Set(float64(oracle.ExtractPhysical(checkpointTs)))
@@ -182,7 +183,7 @@ func (m *gcManager) checkStaleCheckpointTsKeyspace(keyspaceID uint32, changefeed
 }
 
 func (m *gcManager) checkStaleCheckPointTsGlobal(changefeedID common.ChangeFeedID, checkpointTs common.Ts) error {
-	return checkStaleCheckpointTs(changefeedID, checkpointTs, m.pdClock, m.isTiCDCBlockGC.Load(), m.lastSafePointTs.Load(), m.gcTTL)
+	return checkStaleCheckpointTs(changefeedID, checkpointTs, m.pdClock, m.isTiCDCBlockGC.Load(), m.minServiceGcSafepoint.Load(), m.gcTTL)
 }
 
 func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID uint32, keyspaceName string, checkpointTs common.Ts, forceUpdate bool) error {
