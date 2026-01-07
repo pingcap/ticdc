@@ -47,6 +47,14 @@ func ensureChangefeedStartTsSafetyClassic(ctx context.Context, pdCli pd.Client, 
 	return nil
 }
 
+func getServiceGCSafepoint(ctx context.Context, pdCli pd.Client, serviceID string) (minServiceGCSafepoint uint64, err error) {
+	// NOTE: In classic mode, PD does not expose a dedicated "get service GC safepoint" API.
+	// Calling `UpdateServiceGCSafePoint` with TTL=0 and safePoint=0 is used
+	// as a read-only operation to get the current minimum service GC safepoint.
+	// See PD API semantics for details.
+	return SetServiceGCSafepoint(ctx, pdCli, serviceID, 0, 0)
+}
+
 // SetServiceGCSafepoint set a service safepoint to PD.
 func SetServiceGCSafepoint(
 	ctx context.Context, pdCli pd.Client, serviceID string, TTL int64, safePoint uint64,
@@ -68,17 +76,17 @@ func SetServiceGCSafepoint(
 
 // removeServiceGCSafepoint removes a service safepoint from PD.
 func removeServiceGCSafepoint(ctx context.Context, pdCli pd.Client, serviceID string) error {
-	// Set TTL to 0 second to delete the service safe point.
-	TTL := 0
-	return retry.Do(ctx,
+	err := retry.Do(ctx,
 		func() error {
-			_, err := pdCli.UpdateServiceGCSafePoint(ctx, serviceID, int64(TTL), math.MaxUint64)
+			// Set TTL to 0 second to delete the service safe point.
+			_, err := pdCli.UpdateServiceGCSafePoint(ctx, serviceID, 0, math.MaxUint64)
 			if err != nil {
-				log.Warn("remove gc safepoint failed, retry later", zap.Error(err))
+				log.Warn("remove gc safepoint failed, retry it", zap.Error(err))
 			}
 			return err
 		},
 		retry.WithBackoffBaseDelay(gcServiceBackoffDelay), // 1s
 		retry.WithMaxTries(gcServiceMaxRetries),
 		retry.WithIsRetryableErr(errors.IsRetryableError))
+	return errors.WrapError(errors.ErrUpdateServiceSafepointFailed, err)
 }

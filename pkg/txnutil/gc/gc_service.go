@@ -77,11 +77,7 @@ func UndoEnsureChangefeedStartTsSafety(
 // a gc barrier on next-gen mode
 func UnifyGetServiceGCSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint32, serviceID string) (uint64, error) {
 	if kerneltype.IsClassic() {
-		// NOTE: In classic mode, PD does not expose a dedicated "get service GC safepoint"
-		// API. Calling `UpdateServiceGCSafePoint` with TTL=0 and safePoint=0 is used
-		// as a read-only operation to get the current minimum service GC safepoint.
-		// See PD API semantics for details.
-		return SetServiceGCSafepoint(ctx, pdCli, serviceID, 0, 0)
+		return getServiceGCSafepoint(ctx, pdCli, serviceID)
 	}
 
 	gcCli := pdCli.GetGCStatesClient(keyspaceID)
