@@ -619,7 +619,7 @@ func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFe
 	info.Epoch = pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
 	err := c.backend.CreateChangefeed(ctx, info)
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 	instance := changefeed.NewChangefeed(info.ChangefeedID, info, info.StartTs, true)
 	c.changefeedDB.AddAbsentChangefeed(instance)
