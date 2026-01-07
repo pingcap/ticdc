@@ -428,17 +428,16 @@ func (c *coordinator) sendMessages(msgs []*messaging.TargetMessage) {
 
 func (c *coordinator) updateGlobalGcSafepoint(ctx context.Context) error {
 	minCheckpointTs := c.controller.calculateGlobalGCSafepoint()
-	// check if the upstream has a changefeed, if not we should update the gc safepoint
+	// even though there is no changefeeds, still update the service-gc-safepoint
 	if minCheckpointTs == math.MaxUint64 {
 		ts := c.pdClock.CurrentTime()
 		minCheckpointTs = oracle.GoTimeToTS(ts)
 	}
-	// When the changefeed starts up, CDC will do a snapshot read at
-	// (checkpointTs - 1) from TiKV, so (checkpointTs - 1) should be an upper
-	// bound for the GC safepoint.
-	gcSafepointUpperBound := minCheckpointTs - 1
-	err := c.gcManager.TryUpdateGCSafePoint(ctx, gcSafepointUpperBound, false)
-	return errors.Trace(err)
+	// checkpoint means all data (-inf, checkpointTs] already flushed to the downstream.
+	// When the changefeed starts up, the start-ts = checkpointTs, and TiKV return data [checkpointTs + 1, +inf)
+	// TiDB guarantees that the snapshot at the gcSafepoint is reserved
+	gcSafepointUpperBound := minCheckpointTs + 1
+	return c.gcManager.TryUpdateGCSafePoint(ctx, gcSafepointUpperBound, false)
 }
 
 func (c *coordinator) updateAllKeyspaceGcBarriers(ctx context.Context) error {
@@ -455,7 +454,7 @@ func (c *coordinator) updateAllKeyspaceGcBarriers(ctx context.Context) error {
 }
 
 func (c *coordinator) updateKeyspaceGcBarrier(ctx context.Context, meta common.KeyspaceMeta, barrierTS uint64) error {
-	barrierTsUpperBound := barrierTS - 1
+	barrierTsUpperBound := barrierTS + 1
 	err := c.gcManager.TryUpdateKeyspaceGCBarrier(ctx, meta.ID, meta.Name, barrierTsUpperBound, false)
 	return errors.Trace(err)
 }

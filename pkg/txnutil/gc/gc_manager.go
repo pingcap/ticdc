@@ -123,7 +123,7 @@ func (m *gcManager) TryUpdateGCSafePoint(
 		log.Info("update gc safe point success", zap.Uint64("gcSafePointTs", checkpointTs))
 	}
 	if actual > checkpointTs {
-		log.Warn("update gc safe point failed, the gc safe point is larger than checkpointTs",
+		log.Error("update gc safe point failed, the checkpointTs is smaller than the minimum service-gc-safepoint",
 			zap.Uint64("actual", actual), zap.Uint64("checkpointTs", checkpointTs))
 	}
 	// if the min checkpoint ts is equal to the current gc safe point, it
@@ -154,28 +154,19 @@ func checkStaleCheckpointTs(
 	lastSafePointTs uint64,
 	gcTTL int64,
 ) error {
-	gcSafepointUpperBound := checkpointTs - 1
+	gcSafepointUpperBound := checkpointTs + 1
+	// TiCDC block the upstream TiDB GC for more than GC-TTL,
+	// and this changefeed is the blocker, so failed it, and won't be
+	// take into the future TiCDC service-gc-safepoint calculation.
 	if isTiCDCBlockGC {
-		pdTime := pdClock.CurrentTime()
-		if pdTime.Sub(
-			oracle.GetTimeFromTS(gcSafepointUpperBound),
-		) > time.Duration(gcTTL)*time.Second {
-			return errors.ErrGCTTLExceeded.
-				GenWithStackByArgs(
-					checkpointTs,
-					changefeedID,
-				)
+		if pdClock.CurrentTime().Sub(oracle.GetTimeFromTS(gcSafepointUpperBound)) > time.Duration(gcTTL)*time.Second {
+			return errors.ErrGCTTLExceeded.GenWithStackByArgs(checkpointTs, changefeedID)
 		}
-	} else {
-		// if `isTiCDCBlockGC` is false, it means there is another service gc
-		// point less than the min checkpoint ts.
-		if gcSafepointUpperBound < lastSafePointTs {
-			return errors.ErrSnapshotLostByGC.
-				GenWithStackByArgs(
-					checkpointTs,
-					lastSafePointTs,
-				)
-		}
+		return nil
+	}
+	// TiDB GC is blocked by other services, make sure changefeed expected data is reserved.
+	if gcSafepointUpperBound < lastSafePointTs {
+		return errors.ErrSnapshotLostByGC.GenWithStackByArgs(checkpointTs, lastSafePointTs)
 	}
 	return nil
 }
@@ -235,7 +226,7 @@ func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID u
 	})
 
 	if actual > checkpointTs {
-		log.Warn("update gc barrier failed, the gc barrier is larger than checkpointTs",
+		log.Error("update gc barrier failed, the checkpointTs is smaller than the the gc barrier",
 			zap.Uint64("actual", actual), zap.Uint64("checkpointTs", checkpointTs))
 	}
 
