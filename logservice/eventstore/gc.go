@@ -114,17 +114,10 @@ func (d *gcManager) run(ctx context.Context) error {
 		var windowMaxBatchDuration time.Duration
 
 		logDeleteRangeStats := func(now time.Time) {
-			// Avoid printing periodic logs when there is no delete activity.
-			if windowRangeCount == 0 {
-				lastInfoLog = now
-				windowStart = now
-				windowBatchCount = 0
-				windowTotalDuration = 0
-				windowMaxBatchDuration = 0
-				return
+			avgRangesPerBatch := 0.0
+			if windowBatchCount > 0 {
+				avgRangesPerBatch = float64(windowRangeCount) / float64(windowBatchCount)
 			}
-
-			avgRangesPerBatch := float64(windowRangeCount) / float64(windowBatchCount)
 			avgBatchDuration := time.Duration(0)
 			if windowBatchCount > 0 {
 				avgBatchDuration = windowTotalDuration / time.Duration(windowBatchCount)
@@ -158,6 +151,8 @@ func (d *gcManager) run(ctx context.Context) error {
 					}
 					continue
 				}
+
+				metrics.EventStoreDeleteRangeFetchedCount.Add(float64(len(ranges)))
 
 				originalRangeCount := len(ranges)
 				ranges, mergedCount := mergeDeleteRanges(ranges)
