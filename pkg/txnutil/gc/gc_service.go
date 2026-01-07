@@ -15,6 +15,7 @@ package gc
 
 import (
 	"context"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -70,6 +71,15 @@ func UndoEnsureChangefeedStartTsSafety(
 	}
 	log.Info("undo ensure changefeed start ts safety", zap.String("gcServiceID", gcServiceID))
 	return nil
+}
+
+func SetServiceGCSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint32, serviceID string, TTL int64, safepoint uint64) (uint64, error) {
+	if kerneltype.IsClassic() {
+		return setServiceGCSafepoint(ctx, pdCli, serviceID, TTL, safepoint)
+	}
+
+	gcCli := pdCli.GetGCStatesClient(keyspaceID)
+	return setGCBarrier(ctx, gcCli, serviceID, safepoint, time.Duration(TTL))
 }
 
 // GetServiceGCSafepoint returns a service gc safepoint on classic mode or a gc barrier on next-gen mode

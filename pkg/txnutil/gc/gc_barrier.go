@@ -27,7 +27,7 @@ import (
 
 func ensureChangefeedStartTsSafetyNextGen(ctx context.Context, pdCli pd.Client, gcServiceID string, keyspaceID uint32, ttl int64, startTs uint64) error {
 	gcCli := pdCli.GetGCStatesClient(keyspaceID)
-	_, err := SetGCBarrier(ctx, gcCli, gcServiceID, startTs, time.Duration(ttl)*time.Second)
+	_, err := setGCBarrier(ctx, gcCli, gcServiceID, startTs, time.Duration(ttl)*time.Second)
 	if err != nil {
 		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs)
 	}
@@ -35,7 +35,7 @@ func ensureChangefeedStartTsSafetyNextGen(ctx context.Context, pdCli pd.Client, 
 }
 
 // SetGCBarrier Set a GC Barrier of a keyspace
-func SetGCBarrier(ctx context.Context, gcCli gc.GCStatesClient, serviceID string, ts uint64, ttl time.Duration) (barrierTS uint64, err error) {
+func setGCBarrier(ctx context.Context, gcCli gc.GCStatesClient, serviceID string, ts uint64, ttl time.Duration) (barrierTS uint64, err error) {
 	err = retry.Do(ctx, func() error {
 		barrierInfo, err1 := gcCli.SetGCBarrier(ctx, serviceID, ts, ttl)
 		if err1 != nil {

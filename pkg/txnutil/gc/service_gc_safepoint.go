@@ -25,7 +25,7 @@ import (
 )
 
 func ensureChangefeedStartTsSafetyClassic(ctx context.Context, pdCli pd.Client, gcServiceID string, ttl int64, startTs uint64) error {
-	minServiceGcSafepoint, err := SetServiceGCSafepoint(ctx, pdCli, gcServiceID, ttl, startTs)
+	minServiceGcSafepoint, err := setServiceGCSafepoint(ctx, pdCli, gcServiceID, ttl, startTs)
 	if err != nil {
 		return err
 	}
@@ -52,11 +52,11 @@ func getServiceGCSafepoint(ctx context.Context, pdCli pd.Client, serviceID strin
 	// Calling `UpdateServiceGCSafePoint` with TTL=0 and safePoint=0 is used
 	// as a read-only operation to get the current minimum service GC safepoint.
 	// See PD API semantics for details.
-	return SetServiceGCSafepoint(ctx, pdCli, serviceID, 0, 0)
+	return setServiceGCSafepoint(ctx, pdCli, serviceID, 0, 0)
 }
 
 // SetServiceGCSafepoint set a service safepoint to PD.
-func SetServiceGCSafepoint(
+func setServiceGCSafepoint(
 	ctx context.Context, pdCli pd.Client, serviceID string, TTL int64, safePoint uint64,
 ) (minServiceGCTs uint64, err error) {
 	err = retry.Do(ctx,
