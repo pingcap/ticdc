@@ -104,7 +104,7 @@ func (d *gcManager) run(ctx context.Context) error {
 		deleteTicker := time.NewTicker(50 * time.Millisecond)
 		defer deleteTicker.Stop()
 
-		const deleteInfoLogInterval = 10 * time.Minute
+		const deleteInfoLogInterval = 5 * time.Minute
 		lastInfoLog := time.Now()
 		windowStart := lastInfoLog
 		var windowBatchCount int
