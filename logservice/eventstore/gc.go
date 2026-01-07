@@ -105,7 +105,45 @@ func (d *gcManager) run(ctx context.Context) error {
 		defer deleteTicker.Stop()
 
 		const deleteInfoLogInterval = 10 * time.Minute
-		var lastInfoLog time.Time
+		lastInfoLog := time.Now()
+		windowStart := lastInfoLog
+		var windowBatchCount int
+		var windowRangeCount int
+		var windowTotalDuration time.Duration
+		var windowMaxBatchDuration time.Duration
+
+		logDeleteRangeStats := func(now time.Time) {
+			// Avoid printing periodic logs when there is no delete activity.
+			if windowRangeCount == 0 {
+				lastInfoLog = now
+				windowStart = now
+				windowBatchCount = 0
+				windowTotalDuration = 0
+				windowMaxBatchDuration = 0
+				return
+			}
+
+			avgRangesPerBatch := float64(windowRangeCount) / float64(windowBatchCount)
+			avgBatchDuration := time.Duration(0)
+			if windowBatchCount > 0 {
+				avgBatchDuration = windowTotalDuration / time.Duration(windowBatchCount)
+			}
+
+			log.Info("gc manager delete range progress",
+				zap.Duration("interval", now.Sub(windowStart)),
+				zap.Int("batchCount", windowBatchCount),
+				zap.Int("deletedRangeCount", windowRangeCount),
+				zap.Float64("avgRangesPerBatch", avgRangesPerBatch),
+				zap.Duration("avgBatchDuration", avgBatchDuration),
+				zap.Duration("maxBatchDuration", windowMaxBatchDuration))
+
+			lastInfoLog = now
+			windowStart = now
+			windowBatchCount = 0
+			windowRangeCount = 0
+			windowTotalDuration = 0
+			windowMaxBatchDuration = 0
+		}
 
 		for {
 			select {
@@ -114,27 +152,30 @@ func (d *gcManager) run(ctx context.Context) error {
 			case <-deleteTicker.C:
 				ranges := d.fetchAllGCItems()
 				if len(ranges) == 0 {
+					if time.Since(lastInfoLog) >= deleteInfoLogInterval {
+						logDeleteRangeStats(time.Now())
+					}
 					continue
 				}
+
 				startTime := time.Now()
-				needInfoLog := lastInfoLog.IsZero() || startTime.Sub(lastInfoLog) >= deleteInfoLogInterval
-				if needInfoLog {
-					log.Info("gc manager deleting ranges", zap.Int("rangeCount", len(ranges)))
-					lastInfoLog = startTime
-				} else {
-					log.Debug("gc manager deleting ranges", zap.Int("rangeCount", len(ranges)))
-				}
 				d.doGCJob(ranges)
 				d.updateCompactRanges(ranges)
 				metrics.EventStoreDeleteRangeCount.Add(float64(len(ranges)))
-				if needInfoLog {
-					log.Info("gc manager deleting ranges done",
-						zap.Int("rangeCount", len(ranges)),
-						zap.Duration("duration", time.Since(startTime)))
-				} else {
-					log.Debug("gc manager deleting ranges done",
-						zap.Int("rangeCount", len(ranges)),
-						zap.Duration("duration", time.Since(startTime)))
+
+				duration := time.Since(startTime)
+				windowBatchCount++
+				windowRangeCount += len(ranges)
+				windowTotalDuration += duration
+				if duration > windowMaxBatchDuration {
+					windowMaxBatchDuration = duration
+				}
+				log.Debug("gc manager deleted ranges",
+					zap.Int("batchRangeCount", len(ranges)),
+					zap.Duration("duration", duration))
+
+				if time.Since(lastInfoLog) >= deleteInfoLogInterval {
+					logDeleteRangeStats(time.Now())
 				}
 			}
 		}
