@@ -67,7 +67,8 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	ctx := c.Request.Context()
 	cfg := &ChangefeedConfig{ReplicaConfig: GetDefaultReplicaConfig()}
 
-	if err := c.BindJSON(&cfg); err != nil {
+	var err error
+	if err = c.BindJSON(&cfg); err != nil {
 		_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
 		return
 	}
@@ -87,7 +88,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		changefeedID = common.NewChangeFeedIDWithName(cfg.ID, keyspaceName)
 	}
 	// verify changefeedID
-	if err := common.ValidateChangefeedID(changefeedID.Name()); err != nil {
+	if err = common.ValidateChangefeedID(changefeedID.Name()); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack(
 			"invalid changefeed_id: %s", cfg.ID))
 		return
@@ -97,9 +98,8 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	cfg.Keyspace = keyspaceName
 
 	// verify changefeed keyspace
-	if err := common.ValidateKeyspace(changefeedID.Keyspace()); err != nil {
-		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack(
-			"invalid keyspace: %s", cfg.ID))
+	if err = common.ValidateKeyspace(changefeedID.Keyspace()); err != nil {
+		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid keyspace: %s", cfg.ID))
 		return
 	}
 
@@ -200,9 +200,8 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	}
 
 	pdClient := h.server.GetPdClient()
-	needRemoveGCSafePoint := false
 	defer func() {
-		if !needRemoveGCSafePoint {
+		if err == nil {
 			return
 		}
 		_ = gc.UndoEnsureChangefeedStartTsSafety(
@@ -219,7 +218,6 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 	kvStorage, err := keyspaceManager.GetStorage(ctx, keyspaceName)
 	if err != nil {
-		needRemoveGCSafePoint = true
 		_ = c.Error(err)
 		return
 	}
@@ -230,25 +228,23 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	// Therefore, we cannot use the context of the HTTP request.
 	// We create a new context here.
 	schemaCxt := context.Background()
-	if err := schemaStore.RegisterKeyspace(schemaCxt, common.KeyspaceMeta{
+	if err = schemaStore.RegisterKeyspace(schemaCxt, common.KeyspaceMeta{
 		ID:   keyspaceMeta.Id,
 		Name: keyspaceMeta.Name,
 	}); err != nil {
-		needRemoveGCSafePoint = true
 		_ = c.Error(err)
 		return
 	}
 
 	ineligibleTables, _, err := getVerifiedTables(ctx, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
 	if err != nil {
-		needRemoveGCSafePoint = true
 		_ = c.Error(err)
 		return
 	}
 	if !util.GetOrZero(replicaCfg.ForceReplicate) && !util.GetOrZero(cfg.ReplicaConfig.IgnoreIneligibleTable) {
 		if len(ineligibleTables) != 0 {
-			needRemoveGCSafePoint = true
-			_ = c.Error(errors.ErrTableIneligible.GenWithStackByArgs(ineligibleTables))
+			err = errors.ErrTableIneligible.GenWithStackByArgs(ineligibleTables)
+			_ = c.Error(err)
 			return
 		}
 	}
@@ -270,14 +266,12 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	cfConfig := info.ToChangefeedConfig()
 	err = sink.Verify(ctx, cfConfig, changefeedID)
 	if err != nil {
-		needRemoveGCSafePoint = true
 		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfg.SinkURI))
 		return
 	}
 
 	err = co.CreateChangefeed(ctx, info)
 	if err != nil {
-		needRemoveGCSafePoint = true
 		_ = c.Error(err)
 		return
 	}
@@ -623,7 +617,9 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 	ctx := c.Request.Context()
 	keyspaceName := GetKeyspaceValueWithDefault(c)
 	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), keyspaceName)
-	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
+
+	var err error
+	if err = common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
 			changefeedDisplayName.Name))
 		return
@@ -640,7 +636,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 	if len(body) == 0 {
 		log.Info("resume changefeed config is empty, using defaults")
 	} else {
-		if err := json.Unmarshal(body, cfg); err != nil {
+		if err = json.Unmarshal(body, cfg); err != nil {
 			log.Error("failed to bind resume changefeed config", zap.Error(err), zap.String("body", string(body)))
 			_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
 			return
@@ -680,7 +676,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 	}
 
 	resumeGcServiceID := h.server.GetEtcdClient().GetEnsureGCServiceID(gc.EnsureGCServiceResuming)
-	if err := verifyResumeChangefeedConfig(
+	if err = verifyResumeChangefeedConfig(
 		ctx,
 		h.server.GetPdClient(),
 		resumeGcServiceID,
@@ -691,9 +687,8 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		return
 	}
 
-	needRemoveGCSafePoint := false
 	defer func() {
-		if !needRemoveGCSafePoint {
+		if err == nil {
 			return
 		}
 		_ = gc.UndoEnsureChangefeedStartTsSafety(
@@ -707,7 +702,6 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 
 	err = co.ResumeChangefeed(ctx, cfInfo.ChangefeedID, newCheckpointTs, cfg.OverwriteCheckpointTs != 0)
 	if err != nil {
-		needRemoveGCSafePoint = true
 		_ = c.Error(err)
 		return
 	}
