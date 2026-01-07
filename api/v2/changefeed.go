@@ -276,11 +276,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
-	log.Info("Create changefeed successfully!",
-		zap.String("id", info.ChangefeedID.Name()),
-		zap.String("state", string(info.State)),
-		zap.String("changefeedInfo", info.String()))
-
+	log.Info("create changefeed successfully!", zap.Any("changefeedID", info.ChangefeedID))
 	c.JSON(getStatus(c), CfInfoToAPIModel(
 		info,
 		&config.ChangeFeedStatus{

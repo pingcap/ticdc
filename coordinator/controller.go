@@ -621,7 +621,8 @@ func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFe
 	if err != nil {
 		return errors.Trace(err)
 	}
-	c.changefeedDB.AddAbsentChangefeed(changefeed.NewChangefeed(info.ChangefeedID, info, info.StartTs, true))
+	instance := changefeed.NewChangefeed(info.ChangefeedID, info, info.StartTs, true)
+	c.changefeedDB.AddAbsentChangefeed(instance)
 	return nil
 }
 

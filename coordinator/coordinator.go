@@ -192,6 +192,9 @@ func (c *coordinator) run(ctx context.Context) error {
 	failpoint.Inject("InjectUpdateGCTickerInterval", func(val failpoint.Value) {
 		updateGCTickerInterval = time.Duration(val.(int) * int(time.Millisecond))
 	})
+	failpoint.Inject("coordinator-run-with-error", func() error {
+		return errors.New("coordinator run with error")
+	})
 
 	if err := c.updateGCSafepoint(ctx); err != nil {
 		log.Warn("update gc safepoint failed at the first time", zap.Error(err))
@@ -199,10 +202,6 @@ func (c *coordinator) run(ctx context.Context) error {
 
 	gcTicker := time.NewTicker(updateGCTickerInterval)
 	defer gcTicker.Stop()
-
-	failpoint.Inject("coordinator-run-with-error", func() error {
-		return errors.New("coordinator run with error")
-	})
 	for {
 		select {
 		case <-ctx.Done():
