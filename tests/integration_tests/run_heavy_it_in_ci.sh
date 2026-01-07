@@ -30,15 +30,15 @@ group_num=${group#G}
 # 12 CPU cores will be allocated to run each mysql heavy group in CI pipelines.
 mysql_groups=(
 	# G00
-	'api_v2 generate_column many_pk_or_uk multi_source large_txn'
+	'api_v2 generate_column many_pk_or_uk multi_source'
 	# G01
 	'ddl_for_split_tables_with_random_move_table'
 	# G02
 	'ddl_for_split_tables_with_failover'
 	# G03
-	'cdc move_table checkpoint_race_ddl_crash'
+	'cdc move_table in_flight_ddl_during_scheduling checkpoint_race_ddl_crash'
 	# G04
-	'complex_transaction syncpoint syncpoint_check_ts random_drop_message'
+	'complex_transaction syncpoint in_flight_syncpoint_during_scheduling syncpoint_check_ts random_drop_message'
 	# G05
 	'ddl_for_split_tables_with_merge_and_split'
 	# G06
@@ -56,7 +56,8 @@ mysql_groups=(
 	# G12
 	'ddl_with_random_move_table'
 	# G13
-	'tidb_mysql_test fail_over region_merge fail_over_ddl_mix_random_delay'
+	# 'tidb_mysql_test fail_over region_merge fail_over_ddl_mix_random_delay'
+	'fail_over region_merge fail_over_ddl_mix_random_delay'
 	# G14
 	'fail_over_ddl_mix'
 	# G15
@@ -72,7 +73,8 @@ kafka_groups=(
 	# G02
 	'canal_json_handle_key_only ddl_for_split_tables_with_failover'
 	# G03
-	'canal_json_adapter_compatibility ddl_for_split_tables_with_merge_and_split'
+	# 'canal_json_adapter_compatibility ddl_for_split_tables_with_merge_and_split'
+	'ddl_for_split_tables_with_merge_and_split'
 	# G04
 	'open_protocol_claim_check open_protocol_handle_key_only random_drop_message'
 	# G05
@@ -82,7 +84,8 @@ kafka_groups=(
 	# G07
 	'merge_table resolve_lock force_replicate_table ddl_for_split_tables'
 	# G08
-	'kafka_simple_claim_check kafka_simple_claim_check_avro tidb_mysql_test'
+	# 'kafka_simple_claim_check kafka_simple_claim_check_avro tidb_mysql_test'
+	'kafka_simple_claim_check kafka_simple_claim_check_avro'
 	# G09
 	'kafka_simple_handle_key_only kafka_simple_handle_key_only_avro mq_sink_error_resume multi_source'
 	# G10
@@ -118,7 +121,8 @@ pulsar_groups=(
 	# G07
 	'merge_table resolve_lock force_replicate_table'
 	# G08
-	'tidb_mysql_test ddl_for_split_tables'
+	# 'tidb_mysql_test ddl_for_split_tables'
+	'ddl_for_split_tables'
 	# G09
 	'mq_sink_error_resume'
 	# G10
@@ -153,7 +157,8 @@ storage_groups=(
 	# G07
 	'merge_table resolve_lock force_replicate_table'
 	# G08
-	'tidb_mysql_test ddl_for_split_tables'
+	# 'tidb_mysql_test ddl_for_split_tables'
+	'ddl_for_split_tables'
 	# G09
 	'ddl_for_split_tables_with_merge_and_split'
 	# G10

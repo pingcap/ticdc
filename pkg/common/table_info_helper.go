@@ -17,6 +17,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"sync"
 
@@ -89,6 +90,15 @@ func hashTableInfo(tableInfo *model.TableInfo) Digest {
 			sha256Hasher.Write(buf)
 		}
 		binary.BigEndian.PutUint64(buf, uint64(boolToInt(columnType.IsArray())))
+		sha256Hasher.Write(buf)
+
+		binary.BigEndian.PutUint64(buf, uint64(boolToInt(col.DefaultIsExpr)))
+		sha256Hasher.Write(buf)
+		binary.BigEndian.PutUint64(buf, uint64(boolToInt(col.GeneratedStored)))
+		sha256Hasher.Write(buf)
+		binary.BigEndian.PutUint64(buf, uint64(boolToInt(col.Hidden)))
+		sha256Hasher.Write(buf)
+		binary.BigEndian.PutUint64(buf, col.Version)
 		sha256Hasher.Write(buf)
 	}
 	// idx info
@@ -173,7 +183,27 @@ func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indice
 		if col.ID != columns[i].ID {
 			return false
 		}
-		if col.GetDefaultValue() != columns[i].GetDefaultValue() {
+		if !reflect.DeepEqual(col.GetDefaultValue(), columns[i].GetDefaultValue()) {
+			return false
+		}
+
+		if !reflect.DeepEqual(col.GetOriginDefaultValue(), columns[i].GetOriginDefaultValue()) {
+			return false
+		}
+
+		if col.DefaultIsExpr != columns[i].DefaultIsExpr {
+			return false
+		}
+		if col.GeneratedStored != columns[i].GeneratedStored {
+			return false
+		}
+		if col.Hidden != columns[i].Hidden {
+			return false
+		}
+		if col.GeneratedExprString != columns[i].GeneratedExprString {
+			return false
+		}
+		if col.Version != columns[i].Version {
 			return false
 		}
 	}

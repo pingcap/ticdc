@@ -504,15 +504,16 @@ func TestGetOrSetColumnSchema_SharedSchema(t *testing.T) {
 		},
 	}
 
-	// Get shared column schema storage
-	storage := GetSharedColumnSchemaStorage()
+	storage := &SharedColumnSchemaStorage{
+		m: make(map[Digest][]ColumnSchemaWithCount),
+	}
 
 	// Get column schema for both tables
 	columnSchema1 := storage.GetOrSetColumnSchema(tableInfo1)
 	columnSchema2 := storage.GetOrSetColumnSchema(tableInfo2)
 
 	// Verify that both tables share the same columnSchema object
-	require.Equal(t, columnSchema1, columnSchema2, "Tables with same schema should share the same columnSchema object")
+	require.Same(t, columnSchema1, columnSchema2, "Tables with same schema should share the same columnSchema object")
 
 	// Verify that the digest is the same
 	require.Equal(t, columnSchema1.Digest, columnSchema2.Digest, "Digest should be the same for tables with same schema")
@@ -572,8 +573,141 @@ func TestGetOrSetColumnSchema_SharedSchema(t *testing.T) {
 	columnSchema3 := storage.GetOrSetColumnSchema(tableInfo3)
 
 	// Verify that different schema creates a different columnSchema object
-	require.NotEqual(t, columnSchema1, columnSchema3, "Tables with different schema should have different columnSchema objects")
+	require.NotSame(t, columnSchema1, columnSchema3, "Tables with different schema should have different columnSchema objects")
 	require.NotEqual(t, columnSchema1.Digest, columnSchema3.Digest, "Digest should be different for tables with different schema")
+}
+
+func TestGetOrSetColumnSchema_SameColumnsAndIndices_ChecksAdditionalColumnAttrs(t *testing.T) {
+	tests := []struct {
+		name             string
+		mutate           func(col *model.ColumnInfo) error
+		expectDigestSame bool
+	}{
+		{
+			name: "origin default value",
+			mutate: func(col *model.ColumnInfo) error {
+				return col.SetOriginDefaultValue(int64(2))
+			},
+			expectDigestSame: true,
+		},
+		{
+			name: "default is expr",
+			mutate: func(col *model.ColumnInfo) error {
+				col.DefaultIsExpr = true
+				return nil
+			},
+			expectDigestSame: false,
+		},
+		{
+			name: "generated stored",
+			mutate: func(col *model.ColumnInfo) error {
+				col.GeneratedStored = true
+				return nil
+			},
+			expectDigestSame: false,
+		},
+		{
+			name: "hidden column",
+			mutate: func(col *model.ColumnInfo) error {
+				col.Hidden = true
+				return nil
+			},
+			expectDigestSame: false,
+		},
+		{
+			name: "generated expr string",
+			mutate: func(col *model.ColumnInfo) error {
+				col.GeneratedExprString = "id + 2"
+				return nil
+			},
+			expectDigestSame: true,
+		},
+		{
+			name: "column info version",
+			mutate: func(col *model.ColumnInfo) error {
+				col.Version = model.ColumnInfoVersion0
+				return nil
+			},
+			expectDigestSame: false,
+		},
+	}
+
+	newStorage := func() *SharedColumnSchemaStorage {
+		return &SharedColumnSchemaStorage{m: make(map[Digest][]ColumnSchemaWithCount)}
+	}
+
+	buildTable := func(idCol, otherCol *model.ColumnInfo) *model.TableInfo {
+		return &model.TableInfo{
+			ID:         1,
+			Name:       ast.NewCIStr("t"),
+			PKIsHandle: true,
+			Columns: []*model.ColumnInfo{
+				idCol,
+				otherCol,
+			},
+			Indices: []*model.IndexInfo{
+				{
+					ID:      1,
+					Name:    ast.NewCIStr("PRIMARY"),
+					Primary: true,
+					Unique:  true,
+					State:   model.StatePublic,
+					Columns: []*model.IndexColumn{
+						{
+							Name:   ast.NewCIStr("id"),
+							Offset: 0,
+						},
+					},
+				},
+			},
+		}
+	}
+
+	buildBaseTable := func() (*model.TableInfo, error) {
+		idCol := newColumnInfo(1, "id", mysql.TypeLong, mysql.PriKeyFlag|mysql.NotNullFlag)
+		idCol.Offset = 0
+		otherCol := newColumnInfo(2, "c", mysql.TypeLong, mysql.NotNullFlag|mysql.GeneratedColumnFlag)
+		otherCol.Offset = 1
+		if err := otherCol.SetDefaultValue(int64(1)); err != nil {
+			return nil, err
+		}
+		if err := otherCol.SetOriginDefaultValue(int64(1)); err != nil {
+			return nil, err
+		}
+		otherCol.DefaultIsExpr = false
+		otherCol.GeneratedExprString = "id + 1"
+		otherCol.GeneratedStored = false
+		otherCol.Hidden = false
+		otherCol.Version = model.CurrLatestColumnInfoVersion
+		return buildTable(idCol, otherCol), nil
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			storage := newStorage()
+
+			baseTable, err := buildBaseTable()
+			require.NoError(t, err)
+			baseSchema := storage.GetOrSetColumnSchema(baseTable)
+
+			variantTable, err := buildBaseTable()
+			require.NoError(t, err)
+			err = tt.mutate(variantTable.Columns[1])
+			require.NoError(t, err)
+			variantSchema := storage.GetOrSetColumnSchema(variantTable)
+
+			if tt.expectDigestSame {
+				require.Equal(t, baseSchema.Digest, variantSchema.Digest)
+				require.NotSame(t, baseSchema, variantSchema)
+				require.Len(t, storage.m[baseSchema.Digest], 2)
+			} else {
+				require.NotEqual(t, baseSchema.Digest, variantSchema.Digest)
+				require.NotSame(t, baseSchema, variantSchema)
+				require.Len(t, storage.m[baseSchema.Digest], 1)
+				require.Len(t, storage.m[variantSchema.Digest], 1)
+			}
+		})
+	}
 }
 
 func TestIsEligible(t *testing.T) {
