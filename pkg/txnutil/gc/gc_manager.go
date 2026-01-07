@@ -151,7 +151,7 @@ func checkStaleCheckpointTs(
 	checkpointTs common.Ts,
 	pdClock pdutil.Clock,
 	isTiCDCBlockGC bool,
-	lastSafePointTs uint64,
+	minServiceGCSafepoint uint64,
 	gcTTL int64,
 ) error {
 	gcSafepointUpperBound := checkpointTs + 1
@@ -160,13 +160,19 @@ func checkStaleCheckpointTs(
 	// take into the future TiCDC service-gc-safepoint calculation.
 	if isTiCDCBlockGC {
 		if pdClock.CurrentTime().Sub(oracle.GetTimeFromTS(gcSafepointUpperBound)) > time.Duration(gcTTL)*time.Second {
+			log.Error("changefeed block the service gc safepoint too long",
+				zap.Any("changefeed", changefeedID), zap.Uint64("checkpointTs", checkpointTs))
 			return errors.ErrGCTTLExceeded.GenWithStackByArgs(checkpointTs, changefeedID)
 		}
 		return nil
 	}
 	// TiDB GC is blocked by other services, make sure changefeed expected data is reserved.
-	if gcSafepointUpperBound < lastSafePointTs {
-		return errors.ErrSnapshotLostByGC.GenWithStackByArgs(checkpointTs, lastSafePointTs)
+	if gcSafepointUpperBound < minServiceGCSafepoint {
+		log.Error("changefeed checkpoint smaller than the last minServiceGCSafepoint",
+			zap.Any("changefeed", changefeedID),
+			zap.Uint64("checkpointTs", checkpointTs),
+			zap.Uint64("minServiceGCSafepoint", minServiceGCSafepoint))
+		return errors.ErrSnapshotLostByGC.GenWithStackByArgs(checkpointTs, minServiceGCSafepoint)
 	}
 	return nil
 }
