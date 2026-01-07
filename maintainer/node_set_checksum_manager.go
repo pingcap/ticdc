@@ -84,8 +84,9 @@ func (s *nodeChecksumState) observeHeartbeat(
 		return false, 0
 	}
 
-	needResetTimer := s.lastObservedState == heartbeatpb.ChecksumState_MATCH || s.lastObservedState != state
-	if needResetTimer || s.nonMatchSince.IsZero() {
+	if s.lastObservedState == heartbeatpb.ChecksumState_MATCH ||
+		s.lastObservedState != state ||
+		s.nonMatchSince.IsZero() {
 		s.nonMatchSince = now
 		s.lastWarnAt = time.Time{}
 	}
@@ -134,6 +135,7 @@ func newNodeSetChecksumManager(
 	}
 }
 
+// Note: it's not thread safe. caller must hold m.mu
 func (m *nodeSetChecksumManager) getOrCreateNodeState(node node.ID) *nodeChecksumState {
 	state, ok := m.state.nodes[node]
 	if ok {
@@ -417,15 +419,11 @@ func (m *nodeSetChecksumManager) ObserveHeartbeat(from node.ID, state heartbeatp
 		return
 	}
 
-	stateStr := "mismatch"
-	if snapshot.state == heartbeatpb.ChecksumState_UNINITIALIZED {
-		stateStr = "uninitialized"
-	}
 	log.Warn("node set checksum state not ok for a long time",
 		zap.Stringer("changefeedID", snapshot.changefeed),
 		zap.String("node", snapshot.node.String()),
 		zap.String("mode", common.StringMode(m.mode)),
-		zap.String("state", stateStr),
+		zap.String("state", snapshot.state.String()),
 		zap.Duration("duration", snapshot.duration),
 		zap.Uint64("epoch", snapshot.epoch),
 		zap.Uint64("expectedSeq", snapshot.seq),
