@@ -245,9 +245,10 @@ func (c *coordinator) handleStateChange(
 	ctx context.Context,
 	event *changefeedChange,
 ) error {
-	cf := c.controller.getChangefeed(event.changefeedID)
+	changefeedID := event.changefeed.ID
+	cf := c.controller.getChangefeed(changefeedID)
 	if cf == nil {
-		log.Warn("changefeed not found", zap.String("changefeed", event.changefeedID.String()))
+		log.Warn("changefeed not found", zap.String("changefeed", changefeedID.String()))
 		return nil
 	}
 	cfInfo, err := cf.GetInfo().Clone()
@@ -269,23 +270,23 @@ func (c *coordinator) handleStateChange(
 
 	switch event.state {
 	case config.StateWarning:
-		c.controller.operatorController.StopChangefeed(ctx, event.changefeedID, false)
-		c.controller.updateChangefeedEpoch(ctx, event.changefeedID)
-		c.controller.moveChangefeedToSchedulingQueue(event.changefeedID, false, false)
+		c.controller.operatorController.StopChangefeed(ctx, changefeedID, false)
+		c.controller.updateChangefeedEpoch(ctx, changefeedID)
+		c.controller.moveChangefeedToSchedulingQueue(changefeedID, false, false)
 	case config.StateFailed, config.StateFinished:
-		c.controller.operatorController.StopChangefeed(ctx, event.changefeedID, false)
+		c.controller.operatorController.StopChangefeed(ctx, changefeedID, false)
 	case config.StateNormal:
 		log.Info("changefeed is resumed or created successfully, try to delete its safeguard gc safepoint",
-			zap.String("changefeed", event.changefeedID.String()))
+			zap.String("changefeed", changefeedID.String()))
 
 		// We need to clean its gc safepoint when changefeed is resumed or created
 		gcServiceID := c.getEnsureGCServiceID(gc.EnsureGCServiceCreating)
-		err := gc.UndoEnsureChangefeedStartTsSafety(ctx, c.pdClient, cfInfo.KeyspaceID, gcServiceID, event.changefeedID)
+		err := gc.UndoEnsureChangefeedStartTsSafety(ctx, c.pdClient, cfInfo.KeyspaceID, gcServiceID, changefeedID)
 		if err != nil {
 			log.Warn("failed to delete create changefeed gc safepoint", zap.Error(err))
 		}
 		gcServiceID = c.getEnsureGCServiceID(gc.EnsureGCServiceResuming)
-		err = gc.UndoEnsureChangefeedStartTsSafety(ctx, c.pdClient, cfInfo.KeyspaceID, gcServiceID, event.changefeedID)
+		err = gc.UndoEnsureChangefeedStartTsSafety(ctx, c.pdClient, cfInfo.KeyspaceID, gcServiceID, changefeedID)
 		if err != nil {
 			log.Warn("failed to delete resume changefeed gc safepoint", zap.Error(err))
 		}
@@ -331,11 +332,13 @@ func (c *coordinator) saveCheckpointTs(ctx context.Context, changes []*changefee
 	statusMap := make(map[common.ChangeFeedID]uint64)
 	cfsMap := make(map[common.ChangeFeedID]*changefeed.Changefeed)
 	for _, change := range changes {
+		// todo: shall we remove this check ?
 		if change.changeType == ChangeState {
 			continue
 		}
 		upCf := change.changefeed
 		reportedCheckpointTs := upCf.GetStatus().CheckpointTs
+		// todo: shall we remove this check ?
 		if upCf.GetLastSavedCheckPointTs() < reportedCheckpointTs {
 			statusMap[upCf.ID] = reportedCheckpointTs
 			cfsMap[upCf.ID] = upCf
