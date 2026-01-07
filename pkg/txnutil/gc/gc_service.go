@@ -52,7 +52,7 @@ func EnsureChangefeedStartTsSafety(
 	if kerneltype.IsClassic() {
 		return ensureChangefeedStartTsSafetyClassic(ctx, pdCli, gcServiceID, TTL, startTs)
 	}
-	return ensureChangefeedStartTsSafetyNextGen(ctx, pdCli, gcServiceID, keyspaceID, TTL, startTs)
+	return ensureChangefeedStartTsSafetyNextGen(ctx, pdCli, keyspaceID, gcServiceID, TTL, startTs)
 }
 
 // UndoEnsureChangefeedStartTsSafety cleans the service GC safepoint of a changefeed
@@ -73,13 +73,12 @@ func UndoEnsureChangefeedStartTsSafety(
 	return nil
 }
 
-func SetServiceGCSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint32, serviceID string, TTL int64, safepoint uint64) (uint64, error) {
+func SetServiceGCSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint32, serviceID string, TTL int64, safepoint uint64) error {
 	if kerneltype.IsClassic() {
-		return setServiceGCSafepoint(ctx, pdCli, serviceID, TTL, safepoint)
+		_, err := setServiceGCSafepoint(ctx, pdCli, serviceID, TTL, safepoint)
+		return err
 	}
-
-	gcCli := pdCli.GetGCStatesClient(keyspaceID)
-	return setGCBarrier(ctx, gcCli, serviceID, safepoint, time.Duration(TTL))
+	return setGCBarrier(ctx, pdCli, keyspaceID, serviceID, safepoint, time.Duration(TTL))
 }
 
 // GetServiceGCSafepoint returns a service gc safepoint on classic mode or a gc barrier on next-gen mode
@@ -88,8 +87,7 @@ func GetServiceGCSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint
 		return getServiceGCSafepoint(ctx, pdCli, serviceID)
 	}
 
-	gcCli := pdCli.GetGCStatesClient(keyspaceID)
-	gcState, err := getGCState(ctx, gcCli)
+	gcState, err := getGCState(ctx, pdCli, keyspaceID)
 	if err != nil {
 		return 0, err
 	}
@@ -101,8 +99,5 @@ func DeleteGcSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint32, 
 	if kerneltype.IsClassic() {
 		return removeServiceGCSafepoint(ctx, pdCli, serviceID)
 	}
-
-	gcClient := pdCli.GetGCStatesClient(keyspaceID)
-	_, err := deleteGCBarrier(ctx, gcClient, serviceID)
-	return err
+	return deleteGCBarrier(ctx, pdCli, keyspaceID, serviceID)
 }

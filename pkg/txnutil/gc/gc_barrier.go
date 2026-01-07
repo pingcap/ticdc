@@ -25,9 +25,8 @@ import (
 	"go.uber.org/zap"
 )
 
-func ensureChangefeedStartTsSafetyNextGen(ctx context.Context, pdCli pd.Client, gcServiceID string, keyspaceID uint32, ttl int64, startTs uint64) error {
-	gcCli := pdCli.GetGCStatesClient(keyspaceID)
-	_, err := setGCBarrier(ctx, gcCli, gcServiceID, startTs, time.Duration(ttl)*time.Second)
+func ensureChangefeedStartTsSafetyNextGen(ctx context.Context, pdCli pd.Client, keyspaceID uint32, gcServiceID string, ttl int64, startTs uint64) error {
+	err := setGCBarrier(ctx, pdCli, keyspaceID, gcServiceID, startTs, time.Duration(ttl)*time.Second)
 	if err != nil {
 		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs)
 	}
@@ -35,9 +34,10 @@ func ensureChangefeedStartTsSafetyNextGen(ctx context.Context, pdCli pd.Client, 
 }
 
 // SetGCBarrier Set a GC Barrier of a keyspace
-func setGCBarrier(ctx context.Context, gcCli gc.GCStatesClient, serviceID string, ts uint64, ttl time.Duration) (barrierTS uint64, err error) {
-	err = retry.Do(ctx, func() error {
-		barrierInfo, err1 := gcCli.SetGCBarrier(ctx, serviceID, ts, ttl)
+func setGCBarrier(ctx context.Context, pdCli pd.Client, keyspaceID uint32, serviceID string, ts uint64, ttl time.Duration) error {
+	cli := pdCli.GetGCStatesClient(keyspaceID)
+	err := retry.Do(ctx, func() error {
+		barrierInfo, err1 := cli.SetGCBarrier(ctx, serviceID, ts, ttl)
 		if err1 != nil {
 			log.Warn("set gc barrier failed, retry later",
 				zap.String("serviceID", serviceID),
@@ -47,33 +47,32 @@ func setGCBarrier(ctx context.Context, gcCli gc.GCStatesClient, serviceID string
 				zap.Error(err1))
 			return err1
 		}
-		barrierTS = barrierInfo.BarrierTS
 		return nil
 	}, retry.WithBackoffBaseDelay(gcServiceBackoffDelay),
 		retry.WithMaxTries(gcServiceMaxRetries),
 		retry.WithIsRetryableErr(errors.IsRetryableError))
-	return barrierTS, errors.WrapError(errors.ErrUpdateGCBarrierFailed, err)
+	return errors.WrapError(errors.ErrUpdateGCBarrierFailed, err)
 }
 
-func getGCState(ctx context.Context, gcCli gc.GCStatesClient) (gc.GCState, error) {
-	state, err := gcCli.GetGCState(ctx)
+func getGCState(ctx context.Context, pdCli pd.Client, keyspaceID uint32) (gc.GCState, error) {
+	state, err := pdCli.GetGCStatesClient(keyspaceID).GetGCState(ctx)
 	return state, errors.WrapError(errors.ErrGetGCBarrierFailed, err)
 }
 
 // deleteGCBarrier Delete a GC barrier of a keyspace
-func deleteGCBarrier(ctx context.Context, gcCli gc.GCStatesClient, serviceID string) (barrierInfo *gc.GCBarrierInfo, err error) {
-	err = retry.Do(ctx, func() error {
-		info, err1 := gcCli.DeleteGCBarrier(ctx, serviceID)
+func deleteGCBarrier(ctx context.Context, pdCli pd.Client, keyspaceID uint32, serviceID string) error {
+	cli := pdCli.GetGCStatesClient(keyspaceID)
+	err := retry.Do(ctx, func() error {
+		_, err1 := cli.DeleteGCBarrier(ctx, serviceID)
 		if err1 != nil {
 			log.Warn("delete gc barrier failed, retry later",
 				zap.String("serviceID", serviceID),
 				zap.Error(err1))
 			return err1
 		}
-		barrierInfo = info
 		return nil
 	}, retry.WithBackoffBaseDelay(gcServiceBackoffDelay),
 		retry.WithMaxTries(gcServiceMaxRetries),
 		retry.WithIsRetryableErr(errors.IsRetryableError))
-	return barrierInfo, errors.WrapError(errors.ErrDeleteGCBarrierFailed, err)
+	return errors.WrapError(errors.ErrDeleteGCBarrierFailed, err)
 }
