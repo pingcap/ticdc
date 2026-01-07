@@ -52,19 +52,16 @@ func SetGCBarrier(ctx context.Context, gcCli gc.GCStatesClient, serviceID string
 	}, retry.WithBackoffBaseDelay(gcServiceBackoffDelay),
 		retry.WithMaxTries(gcServiceMaxRetries),
 		retry.WithIsRetryableErr(errors.IsRetryableError))
-	return barrierTS, err
+	return barrierTS, errors.WrapError(errors.ErrUpdateGCBarrierFailed, err)
 }
 
 func getGCState(ctx context.Context, gcCli gc.GCStatesClient) (gc.GCState, error) {
 	state, err := gcCli.GetGCState(ctx)
-	if err != nil {
-		return state, errors.WrapError(errors.ErrGetGCBarrierFailed, err)
-	}
-	return state, nil
+	return state, errors.WrapError(errors.ErrGetGCBarrierFailed, err)
 }
 
-// DeleteGCBarrier Delete a GC barrier of a keyspace
-func DeleteGCBarrier(ctx context.Context, gcCli gc.GCStatesClient, serviceID string) (barrierInfo *gc.GCBarrierInfo, err error) {
+// deleteGCBarrier Delete a GC barrier of a keyspace
+func deleteGCBarrier(ctx context.Context, gcCli gc.GCStatesClient, serviceID string) (barrierInfo *gc.GCBarrierInfo, err error) {
 	err = retry.Do(ctx, func() error {
 		info, err1 := gcCli.DeleteGCBarrier(ctx, serviceID)
 		if err1 != nil {
@@ -78,5 +75,5 @@ func DeleteGCBarrier(ctx context.Context, gcCli gc.GCStatesClient, serviceID str
 	}, retry.WithBackoffBaseDelay(gcServiceBackoffDelay),
 		retry.WithMaxTries(gcServiceMaxRetries),
 		retry.WithIsRetryableErr(errors.IsRetryableError))
-	return barrierInfo, err
+	return barrierInfo, errors.WrapError(errors.ErrDeleteGCBarrierFailed, err)
 }

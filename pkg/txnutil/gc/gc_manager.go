@@ -212,7 +212,7 @@ func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID u
 			lastSucceededTime = barrierInfo.lastSucceededTime
 		}
 		if time.Since(lastSucceededTime) >= time.Duration(m.gcTTL)*time.Second {
-			return errors.ErrUpdateGCBarrierFailed.Wrap(err)
+			return errors.WrapError(errors.ErrUpdateGCBarrierFailed, err)
 		}
 		return nil
 	}

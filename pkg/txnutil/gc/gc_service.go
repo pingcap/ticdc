@@ -96,6 +96,6 @@ func UnifyDeleteGcSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uin
 	}
 
 	gcClient := pdCli.GetGCStatesClient(keyspaceID)
-	_, err := DeleteGCBarrier(ctx, gcClient, serviceID)
+	_, err := deleteGCBarrier(ctx, gcClient, serviceID)
 	return err
 }

@@ -584,6 +584,7 @@ var (
 		"updating service safepoint failed",
 		errors.RFCCodeText("CDC:ErrUpdateServiceSafepointFailed"),
 	)
+
 	ErrUpdateGCBarrierFailed = errors.Normalize(
 		"updating gc barrier failed",
 		errors.RFCCodeText("CDC:ErrUpdateGCBarrierFailed"),
@@ -592,6 +593,11 @@ var (
 		"get gc barrier failed",
 		errors.RFCCodeText("CDC:ErrGetGCBarrierFailed"),
 	)
+	ErrDeleteGCBarrierFailed = errors.Normalize(
+		"delete gc barrier failed",
+		errors.RFCCodeText("CDC:ErrDeleteGCBarrierFailed"),
+	)
+
 	ErrLoadKeyspaceFailed = errors.Normalize(
 		"loading keyspace failed",
 		errors.RFCCodeText("CDC:ErrLoadKeyspaceFailed"),
