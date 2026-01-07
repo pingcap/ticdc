@@ -95,49 +95,72 @@ func (d *gcManager) fetchAllGCItems() []gcRangeItem {
 }
 
 func (d *gcManager) run(ctx context.Context) error {
-	deleteTicker := time.NewTicker(50 * time.Millisecond)
-	defer deleteTicker.Stop()
-	compactTicker := time.NewTicker(10 * time.Minute)
-	defer compactTicker.Stop()
+	var wg sync.WaitGroup
+	wg.Add(2)
 
-	const deleteInfoLogInterval = 10 * time.Minute
-	var lastInfoLog time.Time
+	go func() {
+		defer wg.Done()
 
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-deleteTicker.C:
-			ranges := d.fetchAllGCItems()
-			if len(ranges) == 0 {
-				continue
+		deleteTicker := time.NewTicker(50 * time.Millisecond)
+		defer deleteTicker.Stop()
+
+		const deleteInfoLogInterval = 10 * time.Minute
+		var lastInfoLog time.Time
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-deleteTicker.C:
+				ranges := d.fetchAllGCItems()
+				if len(ranges) == 0 {
+					continue
+				}
+				startTime := time.Now()
+				needInfoLog := lastInfoLog.IsZero() || startTime.Sub(lastInfoLog) >= deleteInfoLogInterval
+				if needInfoLog {
+					log.Info("gc manager deleting ranges", zap.Int("rangeCount", len(ranges)))
+					lastInfoLog = startTime
+				} else {
+					log.Debug("gc manager deleting ranges", zap.Int("rangeCount", len(ranges)))
+				}
+				d.doGCJob(ranges)
+				d.updateCompactRanges(ranges)
+				metrics.EventStoreDeleteRangeCount.Add(float64(len(ranges)))
+				if needInfoLog {
+					log.Info("gc manager deleting ranges done",
+						zap.Int("rangeCount", len(ranges)),
+						zap.Duration("duration", time.Since(startTime)))
+				} else {
+					log.Debug("gc manager deleting ranges done",
+						zap.Int("rangeCount", len(ranges)),
+						zap.Duration("duration", time.Since(startTime)))
+				}
 			}
-			startTime := time.Now()
-			needInfoLog := lastInfoLog.IsZero() || startTime.Sub(lastInfoLog) >= deleteInfoLogInterval
-			if needInfoLog {
-				log.Info("gc manager deleting ranges", zap.Int("rangeCount", len(ranges)))
-				lastInfoLog = startTime
-			} else {
-				log.Debug("gc manager deleting ranges", zap.Int("rangeCount", len(ranges)))
-			}
-			d.doGCJob(ranges)
-			d.updateCompactRanges(ranges)
-			metrics.EventStoreDeleteRangeCount.Add(float64(len(ranges)))
-			if needInfoLog {
-				log.Info("gc manager deleting ranges done",
-					zap.Int("rangeCount", len(ranges)),
-					zap.Duration("duration", time.Since(startTime)))
-			} else {
-				log.Debug("gc manager deleting ranges done",
-					zap.Int("rangeCount", len(ranges)),
-					zap.Duration("duration", time.Since(startTime)))
-			}
-		case <-compactTicker.C:
-			// it seems pebble doesn't compact cold range(no data write),
-			// so we do a manual compaction periodically.
-			d.doCompaction()
 		}
-	}
+	}()
+
+	go func() {
+		defer wg.Done()
+
+		compactTicker := time.NewTicker(10 * time.Minute)
+		defer compactTicker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-compactTicker.C:
+				// it seems pebble doesn't compact cold range(no data write),
+				// so we do a manual compaction periodically.
+				d.doCompaction()
+			}
+		}
+	}()
+
+	<-ctx.Done()
+	wg.Wait()
+	return nil
 }
 
 func (d *gcManager) doGCJob(ranges []gcRangeItem) {
