@@ -209,8 +209,7 @@ func (c *coordinator) run(ctx context.Context) error {
 			return context.Cause(ctx)
 		case <-gcTicker.C:
 			if err := c.updateGCSafepoint(ctx); err != nil {
-				log.Warn("update gc safepoint failed",
-					zap.Error(err))
+				log.Warn("update gc safepoint failed", zap.Error(err))
 			}
 			now := time.Now()
 			metrics.CoordinatorCounter.Add(float64(now.Sub(c.lastTickTime)) / float64(time.Second))
@@ -443,14 +442,17 @@ func (c *coordinator) updateGlobalGcSafepoint(ctx context.Context) error {
 func (c *coordinator) updateAllKeyspaceGcBarriers(ctx context.Context) error {
 	barrierMap := c.controller.calculateKeyspaceGCBarrier()
 
+	var result error
 	for meta, barrierTS := range barrierMap {
 		err := c.updateKeyspaceGcBarrier(ctx, meta, barrierTS)
 		if err != nil {
-			return errors.Trace(err)
+			log.Warn("update keyspace gc barrier failed",
+				zap.Uint32("keyspaceID", meta.ID), zap.String("keyspaceName", meta.Name),
+				zap.Uint64("barrierTS", barrierTS), zap.Error(err))
+			result = err
 		}
 	}
-
-	return nil
+	return result
 }
 
 func (c *coordinator) updateKeyspaceGcBarrier(ctx context.Context, meta common.KeyspaceMeta, barrierTS uint64) error {
@@ -464,8 +466,6 @@ func (c *coordinator) updateKeyspaceGcBarrier(ctx context.Context, meta common.K
 // Otherwise we should update the global gc safepoint
 func (c *coordinator) updateGCSafepointByChangefeed(ctx context.Context, changefeedID common.ChangeFeedID) error {
 	if kerneltype.IsNextGen() {
-		barrierMap := c.controller.calculateKeyspaceGCBarrier()
-
 		cfInfo, _, err := c.GetChangefeed(ctx, changefeedID.DisplayName)
 		if err != nil {
 			return err
@@ -476,6 +476,7 @@ func (c *coordinator) updateGCSafepointByChangefeed(ctx context.Context, changef
 			Name: changefeedID.Keyspace(),
 		}
 
+		barrierMap := c.controller.calculateKeyspaceGCBarrier()
 		return c.updateKeyspaceGcBarrier(ctx, meta, barrierMap[meta])
 	}
 	return c.updateGlobalGcSafepoint(ctx)
