@@ -19,7 +19,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
-	"github.com/pingcap/ticdc/pkg/errors"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 )
@@ -64,18 +63,17 @@ func UndoEnsureChangefeedStartTsSafety(
 	changefeedID common.ChangeFeedID,
 ) error {
 	gcServiceID := gcServiceIDPrefix + changefeedID.Keyspace() + "_" + changefeedID.Name()
-	err := UnifyDeleteGcSafepoint(ctx, pdCli, keyspaceID, gcServiceID)
+	err := DeleteGcSafepoint(ctx, pdCli, keyspaceID, gcServiceID)
 	if err != nil {
 		log.Warn("undo ensure changefeed start ts safety failed", zap.String("gcServiceID", gcServiceID), zap.Error(err))
-		return errors.Trace(err)
+		return err
 	}
 	log.Info("undo ensure changefeed start ts safety", zap.String("gcServiceID", gcServiceID))
 	return nil
 }
 
-// UnifyGetServiceGCSafepoint returns a service gc safepoint on classic mode or
-// a gc barrier on next-gen mode
-func UnifyGetServiceGCSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint32, serviceID string) (uint64, error) {
+// GetServiceGCSafepoint returns a service gc safepoint on classic mode or a gc barrier on next-gen mode
+func GetServiceGCSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint32, serviceID string) (uint64, error) {
 	if kerneltype.IsClassic() {
 		return getServiceGCSafepoint(ctx, pdCli, serviceID)
 	}
@@ -88,9 +86,8 @@ func UnifyGetServiceGCSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID
 	return gcState.TxnSafePoint, nil
 }
 
-// UnifyDeleteGcSafepoint delete a gc safepoint on classic mode or delete a gc
-// barrier on next-gen mode
-func UnifyDeleteGcSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint32, serviceID string) error {
+// DeleteGcSafepoint delete a gc safepoint on classic mode or delete a gc barrier on next-gen mode
+func DeleteGcSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint32, serviceID string) error {
 	if kerneltype.IsClassic() {
 		return removeServiceGCSafepoint(ctx, pdCli, serviceID)
 	}

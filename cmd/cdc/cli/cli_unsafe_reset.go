@@ -90,7 +90,7 @@ func (o *unsafeResetOptions) run(cmd *cobra.Command) error {
 	}
 
 	if kerneltype.IsClassic() {
-		err := gc.UnifyDeleteGcSafepoint(ctx, o.pdClient, 0, o.etcdClient.GetGCServiceID())
+		err := gc.DeleteGcSafepoint(ctx, o.pdClient, 0, o.etcdClient.GetGCServiceID())
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -139,7 +139,7 @@ func removeKeyspaceGCBarrier(ctx context.Context, pdCli pd.Client, serviceID str
 			log.Warn("load keyspace error", zap.String("keyspace", keyspace), zap.Error(err))
 			continue
 		}
-		err = gc.UnifyDeleteGcSafepoint(ctx, pdCli, keyspaceMeta.Id, serviceID)
+		err = gc.DeleteGcSafepoint(ctx, pdCli, keyspaceMeta.Id, serviceID)
 		if err != nil {
 			log.Warn("DeleteGcSafepoint error", zap.Uint32("keyspaceID", keyspaceMeta.Id), zap.String("keyspace", keyspace), zap.String("serviceID", serviceID), zap.Error(err))
 			continue

@@ -85,7 +85,7 @@ func (h *OpenAPIV2) DeleteServiceGcSafePoint(c *gin.Context) {
 
 	keyspaceMeta := middleware.GetKeyspaceFromContext(c)
 
-	err := gc.UnifyDeleteGcSafepoint(
+	err := gc.DeleteGcSafepoint(
 		c,
 		pdClient,
 		keyspaceMeta.Id,
