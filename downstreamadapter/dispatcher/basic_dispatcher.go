@@ -593,6 +593,7 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 		if d.blockEventStatus.actionMatchs(action) {
 			log.Info("pending event get the action",
 				zap.Stringer("dispatcher", d.id),
+				zap.Int64("mode", d.mode),
 				zap.Any("action", action),
 				zap.Any("innerAction", int(action.Action)),
 				zap.Uint64("pendingEventCommitTs", pendingEvent.GetCommitTs()))
