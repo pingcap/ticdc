@@ -15,16 +15,12 @@ package gc
 
 import (
 	"context"
-	"math"
-	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/retry"
 	pd "github.com/tikv/pd/client"
-	"github.com/tikv/pd/client/clients/gc"
 	"go.uber.org/zap"
 )
 
@@ -33,6 +29,14 @@ const (
 	EnsureGCServiceCreating = "-creating-"
 	// EnsureGCServiceResuming is a tag of GC service id for changefeed resumption
 	EnsureGCServiceResuming = "-resuming-"
+)
+
+// PD leader switch may happen, so just gcServiceMaxRetries it.
+// The default PD election timeout is 3 seconds. Triple the timeout as
+// retry time to make sure PD leader can be elected during retry.
+const (
+	gcServiceBackoffDelay = 1000 // 1s
+	gcServiceMaxRetries   = 9
 )
 
 // EnsureChangefeedStartTsSafety checks if the startTs less than the minimum of
@@ -49,38 +53,6 @@ func EnsureChangefeedStartTsSafety(
 		return ensureChangefeedStartTsSafetyClassic(ctx, pdCli, gcServiceID, TTL, startTs)
 	}
 	return ensureChangefeedStartTsSafetyNextGen(ctx, pdCli, gcServiceID, keyspaceID, TTL, startTs)
-}
-
-func ensureChangefeedStartTsSafetyClassic(ctx context.Context, pdCli pd.Client, gcServiceID string, ttl int64, startTs uint64) error {
-	minServiceGcSafepoint, err := SetServiceGCSafepoint(ctx, pdCli, gcServiceID, ttl, startTs)
-	if err != nil {
-		return err
-	}
-	// startTs should be greater than or equal to minServiceGCTs + 1, otherwise gcManager
-	// would return a ErrSnapshotLostByGC even though the changefeed would appear to be successfully
-	// created/resumed. See issue #6350 for more detail.
-	// the TiKV snapshot at the minServiceGcSafepoint should be reserved.
-	// changefeed receive data [startTs+1, +inf)
-	if startTs < minServiceGcSafepoint+1 {
-		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, minServiceGcSafepoint)
-	}
-
-	log.Info("set service gc safepoint for changefeed",
-		zap.String("gcServiceID", gcServiceID),
-		zap.Uint64("startTs", startTs),
-		zap.Uint64("minServiceGCSafepoint", minServiceGcSafepoint),
-		zap.Int64("ttl", ttl))
-
-	return nil
-}
-
-func ensureChangefeedStartTsSafetyNextGen(ctx context.Context, pdCli pd.Client, gcServiceID string, keyspaceID uint32, ttl int64, startTs uint64) error {
-	gcCli := pdCli.GetGCStatesClient(keyspaceID)
-	_, err := SetGCBarrier(ctx, gcCli, gcServiceID, startTs, time.Duration(ttl)*time.Second)
-	if err != nil {
-		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs)
-	}
-	return nil
 }
 
 // UndoEnsureChangefeedStartTsSafety cleans the service GC safepoint of a changefeed
@@ -101,33 +73,6 @@ func UndoEnsureChangefeedStartTsSafety(
 	return nil
 }
 
-// PD leader switch may happen, so just gcServiceMaxRetries it.
-// The default PD election timeout is 3 seconds. Triple the timeout as
-// retry time to make sure PD leader can be elected during retry.
-const (
-	gcServiceBackoffDelay = 1000 // 1s
-	gcServiceMaxRetries   = 9
-)
-
-// SetServiceGCSafepoint set a service safepoint to PD.
-func SetServiceGCSafepoint(
-	ctx context.Context, pdCli pd.Client, serviceID string, TTL int64, safePoint uint64,
-) (minServiceGCTs uint64, err error) {
-	err = retry.Do(ctx,
-		func() error {
-			var err1 error
-			minServiceGCTs, err1 = pdCli.UpdateServiceGCSafePoint(ctx, serviceID, TTL, safePoint)
-			if err1 != nil {
-				log.Warn("set gc safepoint failed, retry later", zap.Error(err1))
-			}
-			return err1
-		},
-		retry.WithBackoffBaseDelay(gcServiceBackoffDelay),
-		retry.WithMaxTries(gcServiceMaxRetries),
-		retry.WithIsRetryableErr(errors.IsRetryableError))
-	return minServiceGCTs, errors.WrapError(errors.ErrUpdateServiceSafepointFailed, err)
-}
-
 // UnifyGetServiceGCSafepoint returns a service gc safepoint on classic mode or
 // a gc barrier on next-gen mode
 func UnifyGetServiceGCSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint32, serviceID string) (uint64, error) {
@@ -145,70 +90,6 @@ func UnifyGetServiceGCSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID
 		return 0, err
 	}
 	return gcState.TxnSafePoint, nil
-}
-
-// removeServiceGCSafepoint removes a service safepoint from PD.
-func removeServiceGCSafepoint(ctx context.Context, pdCli pd.Client, serviceID string) error {
-	// Set TTL to 0 second to delete the service safe point.
-	TTL := 0
-	return retry.Do(ctx,
-		func() error {
-			_, err := pdCli.UpdateServiceGCSafePoint(ctx, serviceID, int64(TTL), math.MaxUint64)
-			if err != nil {
-				log.Warn("remove gc safepoint failed, retry later", zap.Error(err))
-			}
-			return err
-		},
-		retry.WithBackoffBaseDelay(gcServiceBackoffDelay), // 1s
-		retry.WithMaxTries(gcServiceMaxRetries),
-		retry.WithIsRetryableErr(errors.IsRetryableError))
-}
-
-// SetGCBarrier Set a GC Barrier of a keyspace
-func SetGCBarrier(ctx context.Context, gcCli gc.GCStatesClient, serviceID string, ts uint64, ttl time.Duration) (barrierTS uint64, err error) {
-	err = retry.Do(ctx, func() error {
-		barrierInfo, err1 := gcCli.SetGCBarrier(ctx, serviceID, ts, ttl)
-		if err1 != nil {
-			log.Warn("set gc barrier failed, retry later",
-				zap.String("serviceID", serviceID),
-				zap.Uint64("ts", ts),
-				zap.Duration("ttl", ttl),
-				zap.Any("barrierInfo", barrierInfo),
-				zap.Error(err1))
-			return err1
-		}
-		barrierTS = barrierInfo.BarrierTS
-		return nil
-	}, retry.WithBackoffBaseDelay(gcServiceBackoffDelay),
-		retry.WithMaxTries(gcServiceMaxRetries),
-		retry.WithIsRetryableErr(errors.IsRetryableError))
-	return barrierTS, err
-}
-
-func getGCState(ctx context.Context, gcCli gc.GCStatesClient) (gc.GCState, error) {
-	state, err := gcCli.GetGCState(ctx)
-	if err != nil {
-		return state, errors.WrapError(errors.ErrGetGCBarrierFailed, err)
-	}
-	return state, nil
-}
-
-// DeleteGCBarrier Delete a GC barrier of a keyspace
-func DeleteGCBarrier(ctx context.Context, gcCli gc.GCStatesClient, serviceID string) (barrierInfo *gc.GCBarrierInfo, err error) {
-	err = retry.Do(ctx, func() error {
-		info, err1 := gcCli.DeleteGCBarrier(ctx, serviceID)
-		if err1 != nil {
-			log.Warn("delete gc barrier failed, retry later",
-				zap.String("serviceID", serviceID),
-				zap.Error(err1))
-			return err1
-		}
-		barrierInfo = info
-		return nil
-	}, retry.WithBackoffBaseDelay(gcServiceBackoffDelay),
-		retry.WithMaxTries(gcServiceMaxRetries),
-		retry.WithIsRetryableErr(errors.IsRetryableError))
-	return barrierInfo, err
 }
 
 // UnifyDeleteGcSafepoint delete a gc safepoint on classic mode or delete a gc

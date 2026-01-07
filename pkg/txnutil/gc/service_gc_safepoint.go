@@ -1,0 +1,84 @@
+// Copyright 2026 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package gc
+
+import (
+	"context"
+	"math"
+
+	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/retry"
+	pd "github.com/tikv/pd/client"
+	"go.uber.org/zap"
+)
+
+func ensureChangefeedStartTsSafetyClassic(ctx context.Context, pdCli pd.Client, gcServiceID string, ttl int64, startTs uint64) error {
+	minServiceGcSafepoint, err := SetServiceGCSafepoint(ctx, pdCli, gcServiceID, ttl, startTs)
+	if err != nil {
+		return err
+	}
+	// startTs should be greater than or equal to minServiceGCTs + 1, otherwise gcManager
+	// would return a ErrSnapshotLostByGC even though the changefeed would appear to be successfully
+	// created/resumed. See issue #6350 for more detail.
+	// the TiKV snapshot at the minServiceGcSafepoint should be reserved.
+	// changefeed receive data [startTs+1, +inf)
+	if startTs < minServiceGcSafepoint+1 {
+		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, minServiceGcSafepoint)
+	}
+
+	log.Info("set service gc safepoint for changefeed",
+		zap.String("gcServiceID", gcServiceID),
+		zap.Uint64("startTs", startTs),
+		zap.Uint64("minServiceGCSafepoint", minServiceGcSafepoint),
+		zap.Int64("ttl", ttl))
+
+	return nil
+}
+
+// SetServiceGCSafepoint set a service safepoint to PD.
+func SetServiceGCSafepoint(
+	ctx context.Context, pdCli pd.Client, serviceID string, TTL int64, safePoint uint64,
+) (minServiceGCTs uint64, err error) {
+	err = retry.Do(ctx,
+		func() error {
+			var err1 error
+			minServiceGCTs, err1 = pdCli.UpdateServiceGCSafePoint(ctx, serviceID, TTL, safePoint)
+			if err1 != nil {
+				log.Warn("set gc safepoint failed, retry later", zap.Error(err1))
+			}
+			return err1
+		},
+		retry.WithBackoffBaseDelay(gcServiceBackoffDelay),
+		retry.WithMaxTries(gcServiceMaxRetries),
+		retry.WithIsRetryableErr(errors.IsRetryableError))
+	return minServiceGCTs, errors.WrapError(errors.ErrUpdateServiceSafepointFailed, err)
+}
+
+// removeServiceGCSafepoint removes a service safepoint from PD.
+func removeServiceGCSafepoint(ctx context.Context, pdCli pd.Client, serviceID string) error {
+	// Set TTL to 0 second to delete the service safe point.
+	TTL := 0
+	return retry.Do(ctx,
+		func() error {
+			_, err := pdCli.UpdateServiceGCSafePoint(ctx, serviceID, int64(TTL), math.MaxUint64)
+			if err != nil {
+				log.Warn("remove gc safepoint failed, retry later", zap.Error(err))
+			}
+			return err
+		},
+		retry.WithBackoffBaseDelay(gcServiceBackoffDelay), // 1s
+		retry.WithMaxTries(gcServiceMaxRetries),
+		retry.WithIsRetryableErr(errors.IsRetryableError))
+}
