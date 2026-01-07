@@ -72,7 +72,8 @@ kafka_groups=(
 	# G02
 	'canal_json_handle_key_only ddl_for_split_tables_with_failover'
 	# G03
-	'canal_json_adapter_compatibility ddl_for_split_tables_with_merge_and_split'
+	# 'canal_json_adapter_compatibility ddl_for_split_tables_with_merge_and_split'
+	'ddl_for_split_tables_with_merge_and_split'
 	# G04
 	'open_protocol_claim_check open_protocol_handle_key_only random_drop_message'
 	# G05
