@@ -100,6 +100,9 @@ func (d *gcManager) run(ctx context.Context) error {
 	compactTicker := time.NewTicker(10 * time.Minute)
 	defer compactTicker.Stop()
 
+	const deleteInfoLogInterval = 10 * time.Minute
+	var lastInfoLog time.Time
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -109,10 +112,26 @@ func (d *gcManager) run(ctx context.Context) error {
 			if len(ranges) == 0 {
 				continue
 			}
-			log.Debug("gc manager deleting ranges", zap.Int("rangeCount", len(ranges)))
+			startTime := time.Now()
+			needInfoLog := lastInfoLog.IsZero() || startTime.Sub(lastInfoLog) >= deleteInfoLogInterval
+			if needInfoLog {
+				log.Info("gc manager deleting ranges", zap.Int("rangeCount", len(ranges)))
+				lastInfoLog = startTime
+			} else {
+				log.Debug("gc manager deleting ranges", zap.Int("rangeCount", len(ranges)))
+			}
 			d.doGCJob(ranges)
 			d.updateCompactRanges(ranges)
 			metrics.EventStoreDeleteRangeCount.Add(float64(len(ranges)))
+			if needInfoLog {
+				log.Info("gc manager deleting ranges done",
+					zap.Int("rangeCount", len(ranges)),
+					zap.Duration("duration", time.Since(startTime)))
+			} else {
+				log.Debug("gc manager deleting ranges done",
+					zap.Int("rangeCount", len(ranges)),
+					zap.Duration("duration", time.Since(startTime)))
+			}
 		case <-compactTicker.C:
 			// it seems pebble doesn't compact cold range(no data write),
 			// so we do a manual compaction periodically.
@@ -158,6 +177,7 @@ func (d *gcManager) doCompaction() {
 	}
 	d.mu.Unlock()
 
+	startTime := time.Now()
 	log.Info("gc manager compacting ranges", zap.Int("rangeCount", len(toCompact)))
 	for key, endTs := range toCompact {
 		db := d.dbs[key.dbIndex]
@@ -170,4 +190,7 @@ func (d *gcManager) doCompaction() {
 				zap.Error(err))
 		}
 	}
+	log.Info("gc manager compacting ranges done",
+		zap.Int("rangeCount", len(toCompact)),
+		zap.Duration("duration", time.Since(startTime)))
 }
