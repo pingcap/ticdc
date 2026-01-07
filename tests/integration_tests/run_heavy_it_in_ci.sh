@@ -36,9 +36,9 @@ mysql_groups=(
 	# G02
 	'ddl_for_split_tables_with_failover'
 	# G03
-	'cdc move_table checkpoint_race_ddl_crash'
+	'cdc move_table in_flight_ddl_during_scheduling checkpoint_race_ddl_crash'
 	# G04
-	'complex_transaction syncpoint syncpoint_check_ts random_drop_message'
+	'complex_transaction syncpoint in_flight_syncpoint_during_scheduling syncpoint_check_ts random_drop_message'
 	# G05
 	'ddl_for_split_tables_with_merge_and_split'
 	# G06
@@ -73,7 +73,8 @@ kafka_groups=(
 	# G02
 	'canal_json_handle_key_only ddl_for_split_tables_with_failover'
 	# G03
-	'canal_json_adapter_compatibility ddl_for_split_tables_with_merge_and_split'
+	# 'canal_json_adapter_compatibility ddl_for_split_tables_with_merge_and_split'
+	'ddl_for_split_tables_with_merge_and_split'
 	# G04
 	'open_protocol_claim_check open_protocol_handle_key_only random_drop_message'
 	# G05

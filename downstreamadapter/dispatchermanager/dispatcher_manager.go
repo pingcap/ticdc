@@ -387,7 +387,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 	start := time.Now()
 	currentPdTs := e.pdClock.CurrentTS()
 
-	dispatcherIds, tableIds, startTsList, tableSpans, schemaIds := prepareCreateDispatcher(infos, e.dispatcherMap)
+	dispatcherIds, tableIds, startTsList, tableSpans, schemaIds, scheduleSkipDMLAsStartTsList := prepareCreateDispatcher(infos, e.dispatcherMap)
 	if len(dispatcherIds) == 0 {
 		return nil
 	}
@@ -423,6 +423,12 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 	}
 
 	for idx, id := range dispatcherIds {
+		skipDMLAsStartTs := resolveSkipDMLAsStartTs(
+			newStartTsList[idx],
+			startTsList[idx],
+			scheduleSkipDMLAsStartTsList[idx],
+			skipDMLAsStartTsList[idx],
+		)
 		d := dispatcher.NewEventDispatcher(
 			id,
 			tableSpans[idx],
@@ -430,7 +436,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 			schemaIds[idx],
 			e.schemaIDToDispatchers,
 			skipSyncpointAtStartTsList[idx],
-			skipDMLAsStartTsList[idx],
+			skipDMLAsStartTs,
 			currentPdTs,
 			e.sink,
 			e.sharedInfo,
@@ -467,7 +473,8 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 			zap.Stringer("changefeedID", e.changefeedID),
 			zap.Stringer("dispatcherID", id),
 			zap.String("tableSpan", common.FormatTableSpan(tableSpans[idx])),
-			zap.Int64("startTs", newStartTsList[idx]))
+			zap.Int64("startTs", newStartTsList[idx]),
+			zap.Bool("skipDMLAsStartTs", skipDMLAsStartTs))
 	}
 	e.metricCreateDispatcherDuration.Observe(time.Since(start).Seconds() / float64(len(dispatcherIds)))
 	log.Info("batch create new dispatchers",
