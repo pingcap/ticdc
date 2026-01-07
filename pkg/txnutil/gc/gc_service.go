@@ -33,8 +33,6 @@ const (
 	EnsureGCServiceCreating = "-creating-"
 	// EnsureGCServiceResuming is a tag of GC service id for changefeed resumption
 	EnsureGCServiceResuming = "-resuming-"
-	// EnsureGCServiceInitializing is a tag of GC service id for changefeed initialization
-	EnsureGCServiceInitializing = "-initializing-"
 )
 
 // EnsureChangefeedStartTsSafety checks if the startTs less than the minimum of
@@ -54,25 +52,25 @@ func EnsureChangefeedStartTsSafety(
 }
 
 func ensureChangefeedStartTsSafetyClassic(ctx context.Context, pdCli pd.Client, gcServiceID string, ttl int64, startTs uint64) error {
-	// set gc safepoint for the changefeed gc service
-	minServiceGCTs, err := SetServiceGCSafepoint(ctx, pdCli, gcServiceID, ttl, startTs)
+	minServiceGcSafepoint, err := SetServiceGCSafepoint(ctx, pdCli, gcServiceID, ttl, startTs)
 	if err != nil {
 		return err
+	}
+	// startTs should be greater than or equal to minServiceGCTs + 1, otherwise gcManager
+	// would return a ErrSnapshotLostByGC even though the changefeed would appear to be successfully
+	// created/resumed. See issue #6350 for more detail.
+	// the TiKV snapshot at the minServiceGcSafepoint should be reserved.
+	// changefeed receive data [startTs+1, +inf)
+	if startTs < minServiceGcSafepoint+1 {
+		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, minServiceGcSafepoint)
 	}
 
 	log.Info("set service gc safepoint for changefeed",
 		zap.String("gcServiceID", gcServiceID),
 		zap.Uint64("startTs", startTs),
-		zap.Uint64("minServiceGCSafepoint", minServiceGCTs),
+		zap.Uint64("minServiceGCSafepoint", minServiceGcSafepoint),
 		zap.Int64("ttl", ttl))
 
-	// startTs should be greater than or equal to minServiceGCTs + 1, otherwise gcManager
-	// would return a ErrSnapshotLostByGC even though the changefeed would appear to be successfully
-	// created/resumed. See issue #6350 for more detail.
-	// todo: verify this.
-	if startTs > 0 && startTs < minServiceGCTs+1 {
-		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, minServiceGCTs)
-	}
 	return nil
 }
 
