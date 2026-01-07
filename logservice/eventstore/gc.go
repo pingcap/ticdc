@@ -15,6 +15,7 @@ package eventstore
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"time"
 
@@ -104,7 +105,7 @@ func (d *gcManager) run(ctx context.Context) error {
 		deleteTicker := time.NewTicker(50 * time.Millisecond)
 		defer deleteTicker.Stop()
 
-		const deleteInfoLogInterval = 5 * time.Minute
+		const deleteInfoLogInterval = 10 * time.Minute
 		lastInfoLog := time.Now()
 		windowStart := lastInfoLog
 		var windowBatchCount int
@@ -156,6 +157,14 @@ func (d *gcManager) run(ctx context.Context) error {
 						logDeleteRangeStats(time.Now())
 					}
 					continue
+				}
+
+				originalRangeCount := len(ranges)
+				ranges, mergedCount := mergeDeleteRanges(ranges)
+				if mergedCount > 0 {
+					log.Debug("gc manager coalesced delete ranges",
+						zap.Int("fetchedRangeCount", originalRangeCount),
+						zap.Int("deleteOpCount", len(ranges)))
 				}
 
 				startTime := time.Now()
@@ -211,6 +220,65 @@ func (d *gcManager) doGCJob(ranges []gcRangeItem) {
 			log.Warn("gc manager failed to delete data range", zap.Error(err))
 		}
 	}
+}
+
+// mergeDeleteRanges merges delete ranges for the same (dbIndex, uniqueKeyID, tableID) when they are
+// contiguous or overlapping. It is used as a best-effort mitigation for rare cases where the delete
+// goroutine is blocked for a long time and ranges accumulate.
+func mergeDeleteRanges(ranges []gcRangeItem) ([]gcRangeItem, int) {
+	if len(ranges) < 2 {
+		return ranges, 0
+	}
+
+	// Common case: at most one range per (dbIndex, uniqueKeyID, tableID), so no merge.
+	seen := make(map[compactItemKey]struct{}, len(ranges))
+	hasDuplicateKey := false
+	for _, r := range ranges {
+		key := compactItemKey{dbIndex: r.dbIndex, uniqueKeyID: r.uniqueKeyID, tableID: r.tableID}
+		if _, ok := seen[key]; ok {
+			hasDuplicateKey = true
+			break
+		}
+		seen[key] = struct{}{}
+	}
+	if !hasDuplicateKey {
+		return ranges, 0
+	}
+
+	sort.Slice(ranges, func(i, j int) bool {
+		if ranges[i].dbIndex != ranges[j].dbIndex {
+			return ranges[i].dbIndex < ranges[j].dbIndex
+		}
+		if ranges[i].uniqueKeyID != ranges[j].uniqueKeyID {
+			return ranges[i].uniqueKeyID < ranges[j].uniqueKeyID
+		}
+		if ranges[i].tableID != ranges[j].tableID {
+			return ranges[i].tableID < ranges[j].tableID
+		}
+		if ranges[i].startTs != ranges[j].startTs {
+			return ranges[i].startTs < ranges[j].startTs
+		}
+		return ranges[i].endTs < ranges[j].endTs
+	})
+
+	originalCount := len(ranges)
+	out := ranges[:0]
+	cur := ranges[0]
+
+	for _, r := range ranges[1:] {
+		sameRangeKey := cur.dbIndex == r.dbIndex && cur.uniqueKeyID == r.uniqueKeyID && cur.tableID == r.tableID
+		contiguousOrOverlapping := r.startTs <= cur.endTs
+		if sameRangeKey && contiguousOrOverlapping {
+			if r.endTs > cur.endTs {
+				cur.endTs = r.endTs
+			}
+			continue
+		}
+		out = append(out, cur)
+		cur = r
+	}
+	out = append(out, cur)
+	return out, originalCount - len(out)
 }
 
 func (d *gcManager) updateCompactRanges(ranges []gcRangeItem) {
