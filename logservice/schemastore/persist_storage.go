@@ -166,7 +166,7 @@ func newPersistentStorage(
 }
 
 func (p *persistentStorage) getGcSafePoint(ctx context.Context) (uint64, error) {
-	return gc.UnifyGetServiceGCSafepoint(ctx, p.pdCli, p.keyspaceID, defaultSchemaStoreGcServiceID)
+	return gc.UnifyGetServiceGCSafepoint(ctx, p.pdCli, p.keyspaceID)
 }
 
 func (p *persistentStorage) initialize(ctx context.Context) error {

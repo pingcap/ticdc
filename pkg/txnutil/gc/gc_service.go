@@ -81,9 +81,9 @@ func SetServiceGCSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint
 }
 
 // UnifyGetServiceGCSafepoint returns a service gc safepoint on classic mode or a gc barrier on next-gen mode
-func UnifyGetServiceGCSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint32, serviceID string) (uint64, error) {
+func UnifyGetServiceGCSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint32) (uint64, error) {
 	if kerneltype.IsClassic() {
-		return getServiceGCSafepoint(ctx, pdCli, serviceID)
+		return getServiceGCSafepoint(ctx, pdCli)
 	}
 
 	gcState, err := getGCState(ctx, pdCli, keyspaceID)

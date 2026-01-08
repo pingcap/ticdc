@@ -221,7 +221,7 @@ func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID u
 		return nil
 	}
 
-	minGCBarrier, err := UnifyGetServiceGCSafepoint(ctx, m.pdClient, keyspaceID, m.gcServiceID)
+	minGCBarrier, err := UnifyGetServiceGCSafepoint(ctx, m.pdClient, keyspaceID)
 	if err != nil {
 		return err
 	}
