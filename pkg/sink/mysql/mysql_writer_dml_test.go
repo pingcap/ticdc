@@ -122,7 +122,7 @@ func TestShouldGenBatchSQL(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := writer.shouldGenBatchSQL(tt.hasPK, tt.hasVirtualCols, tt.events)
+			got := writer.shouldGenBatchSQL(tt.hasPK, tt.events)
 			require.Equal(t, tt.want, got)
 		})
 	}
