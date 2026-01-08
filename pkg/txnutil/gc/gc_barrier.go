@@ -31,7 +31,7 @@ func ensureChangefeedStartTsSafetyNextGen(ctx context.Context, pdCli pd.Client, 
 		return nil
 	}
 	if !errors.IsGCBarrierTSBehindTxnSafePointError(err) {
-		return err
+		return errors.WrapError(errors.ErrUpdateGCBarrierFailed, err)
 	}
 
 	state, err := getGCState(ctx, pdCli, keyspaceID)
@@ -43,7 +43,7 @@ func ensureChangefeedStartTsSafetyNextGen(ctx context.Context, pdCli pd.Client, 
 		return err
 	}
 
-	if startTs < state.TxnSafePoint+1 {
+	if startTs < state.TxnSafePoint {
 		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, state.TxnSafePoint)
 	}
 	return err

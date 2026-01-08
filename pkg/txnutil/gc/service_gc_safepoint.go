@@ -29,12 +29,9 @@ func ensureChangefeedStartTsSafetyClassic(ctx context.Context, pdCli pd.Client, 
 	if err != nil {
 		return err
 	}
-	// startTs should be greater than or equal to minServiceGCTs + 1, otherwise gcManager
-	// would return a ErrSnapshotLostByGC even though the changefeed would appear to be successfully
-	// created/resumed. See issue #6350 for more detail.
-	// the TiKV snapshot at the minServiceGcSafepoint should be reserved.
-	// changefeed receive data [startTs+1, +inf)
-	if startTs < minServiceGcSafepoint+1 {
+	// the TiKV snapshot at the minServiceGcSafepoint is reserved,
+	// so startTs >= minServiceGcSafepoint is safe
+	if startTs < minServiceGcSafepoint {
 		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, minServiceGcSafepoint)
 	}
 
