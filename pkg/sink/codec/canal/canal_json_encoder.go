@@ -63,7 +63,7 @@ func fillColumns(
 			out.String(col.Name.O)
 			out.RawByte(':')
 			val := valueMap[colID]
-			if valueMap[colID] == nil {
+			if val == nil {
 				out.RawString("null")
 			} else {
 				out.String(*val)
