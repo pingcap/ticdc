@@ -311,7 +311,8 @@ func (p *writeTaskPool) run(ctx context.Context) {
 	for i := 0; i < p.workerNum; i++ {
 		go func(workerID int) {
 			defer p.store.wg.Done()
-			encoder, err := zstd.NewWriter(nil)
+			encodeOpt := zstd.WithEncoderLevel(zstd.SpeedFastest)
+			encoder, err := zstd.NewWriter(nil, encodeOpt)
 			if err != nil {
 				log.Panic("failed to create zstd encoder", zap.Error(err))
 			}
