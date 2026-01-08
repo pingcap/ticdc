@@ -403,7 +403,7 @@ func (m *migrator) migrateGcServiceSafePoint(ctx context.Context,
 			log.Error("set gc service safepoint failed", zap.Error(err))
 			return err
 		}
-		err = gc.DeleteGcSafepoint(ctx, pdClient, 0, oldGcServiceID)
+		err = gc.UnifyDeleteGcSafepoint(ctx, pdClient, 0, oldGcServiceID)
 		if err != nil {
 			log.Warn("remove old gc safepoint failed", zap.Error(err))
 		}

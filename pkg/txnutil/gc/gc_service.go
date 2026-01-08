@@ -63,7 +63,7 @@ func UndoEnsureChangefeedStartTsSafety(
 	changefeedID common.ChangeFeedID,
 ) error {
 	gcServiceID := gcServiceIDPrefix + changefeedID.Keyspace() + "_" + changefeedID.Name()
-	err := DeleteGcSafepoint(ctx, pdCli, keyspaceID, gcServiceID)
+	err := UnifyDeleteGcSafepoint(ctx, pdCli, keyspaceID, gcServiceID)
 	if err != nil {
 		log.Warn("undo ensure changefeed start ts safety failed", zap.String("gcServiceID", gcServiceID), zap.Error(err))
 		return err
@@ -80,8 +80,8 @@ func SetServiceGCSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint
 	return setGCBarrier(ctx, pdCli, keyspaceID, serviceID, safepoint, TTL)
 }
 
-// GetServiceGCSafepoint returns a service gc safepoint on classic mode or a gc barrier on next-gen mode
-func GetServiceGCSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint32, serviceID string) (uint64, error) {
+// UnifyGetServiceGCSafepoint returns a service gc safepoint on classic mode or a gc barrier on next-gen mode
+func UnifyGetServiceGCSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint32, serviceID string) (uint64, error) {
 	if kerneltype.IsClassic() {
 		return getServiceGCSafepoint(ctx, pdCli, serviceID)
 	}
@@ -93,8 +93,8 @@ func GetServiceGCSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint
 	return gcState.TxnSafePoint, nil
 }
 
-// DeleteGcSafepoint delete a gc safepoint on classic mode or delete a gc barrier on next-gen mode
-func DeleteGcSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint32, serviceID string) error {
+// UnifyDeleteGcSafepoint delete a gc safepoint on classic mode or delete a gc barrier on next-gen mode
+func UnifyDeleteGcSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint32, serviceID string) error {
 	if kerneltype.IsClassic() {
 		return removeServiceGCSafepoint(ctx, pdCli, serviceID)
 	}
