@@ -121,19 +121,21 @@ func (m *gcManager) TryUpdateServiceGCSafePoint(
 		zap.Uint64("checkpointTs", checkpointTs),
 		zap.Uint64("minServiceGCSafepoint", minServiceGCSafepoint))
 
-	if minServiceGCSafepoint == checkpointTs {
+	m.minServiceGcSafepoint.Store(minServiceGCSafepoint)
+	minServiceGCSafePointGauge.Set(float64(oracle.ExtractPhysical(minServiceGCSafepoint)))
+
+	succeed := checkpointTs >= minServiceGCSafepoint
+	// if the min checkpoint ts is equal to the current gc safe point, it
+	// means that the service gc safe point set by TiCDC is the min service gc safe point
+	if checkpointTs == minServiceGCSafepoint {
 		log.Info("update gc safe point success, cdc is blocking the gc", zap.Uint64("minServiceGCSafepoint", checkpointTs))
 	}
-	if minServiceGCSafepoint > checkpointTs {
+	if !succeed {
 		log.Error("update gc safe point failed, the checkpointTs is smaller than the minimum service-gc-safepoint",
 			zap.Uint64("minServiceGCSafepoint", minServiceGCSafepoint), zap.Uint64("checkpointTs", checkpointTs))
+		return nil
 	}
-	// if the min checkpoint ts is equal to the current gc safe point, it
-	// means that the service gc safe point set by TiCDC is the min service
-	// gc safe point
-	m.minServiceGcSafepoint.Store(minServiceGCSafepoint)
 	m.lastSucceededTime.Store(time.Now())
-	minServiceGCSafePointGauge.Set(float64(oracle.ExtractPhysical(minServiceGCSafepoint)))
 	cdcGCSafePointGauge.Set(float64(oracle.ExtractPhysical(checkpointTs)))
 	return nil
 }
@@ -234,11 +236,6 @@ func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID u
 		log.Info("update gc barrier success, cdc is blocking the gc", zap.Uint64("minGCBarrier", checkpointTs))
 	}
 
-	if minGCBarrier > checkpointTs {
-		log.Error("update gc barrier failed, the checkpointTs is smaller than the min gc barrier",
-			zap.Uint64("minGCBarrier", minGCBarrier), zap.Uint64("checkpointTs", checkpointTs))
-	}
-
 	// if the min checkpoint ts is equal to the current gc barrier ts, it means
 	// that the service gc barrier ts set by TiCDC is the min service gc barrier ts
 	newBarrierInfo := &keyspaceGCBarrierInfo{
@@ -252,6 +249,5 @@ func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID u
 
 	cdcGcBarrierMetric := cdcGCBarrierGauge.WithLabelValues(keyspaceName)
 	cdcGcBarrierMetric.Set(float64(oracle.ExtractPhysical(checkpointTs)))
-
 	return nil
 }

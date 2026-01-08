@@ -30,7 +30,8 @@ func ensureChangefeedStartTsSafetyClassic(ctx context.Context, pdCli pd.Client, 
 		return err
 	}
 	// the TiKV snapshot at the minServiceGcSafepoint is reserved,
-	// so startTs >= minServiceGcSafepoint is safe
+	// so startTs >= minServiceGcSafepoint is safe.
+	// else set the startTs as the service gc safepoint failed.
 	if startTs < minServiceGcSafepoint {
 		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, minServiceGcSafepoint)
 	}
