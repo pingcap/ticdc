@@ -196,7 +196,7 @@ func (c *coordinator) run(ctx context.Context) error {
 		return errors.New("coordinator run with error")
 	})
 
-	if err := c.updateGCSafepoint(ctx); err != nil {
+	if err := c.updateGCSafepoint(ctx, true); err != nil {
 		log.Warn("update gc safepoint failed at the first time", zap.Error(err))
 	}
 
@@ -207,7 +207,7 @@ func (c *coordinator) run(ctx context.Context) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-gcTicker.C:
-			if err := c.updateGCSafepoint(ctx); err != nil {
+			if err := c.updateGCSafepoint(ctx, false); err != nil {
 				log.Warn("update gc safepoint failed", zap.Error(err))
 			}
 			now := time.Now()
@@ -370,7 +370,7 @@ func (c *coordinator) CreateChangefeed(ctx context.Context, info *config.ChangeF
 		return errors.Trace(err)
 	}
 	// update gc safepoint after create changefeed
-	return c.updateGCSafepointByChangefeed(ctx, info.ChangefeedID)
+	return c.updateGCSafepointByChangefeed(ctx, info.ChangefeedID, true)
 }
 
 func (c *coordinator) RemoveChangefeed(ctx context.Context, id common.ChangeFeedID) (uint64, error) {
@@ -427,7 +427,7 @@ func (c *coordinator) sendMessages(msgs []*messaging.TargetMessage) {
 	}
 }
 
-func (c *coordinator) updateGlobalGcSafepoint(ctx context.Context) error {
+func (c *coordinator) updateGlobalGcSafepoint(ctx context.Context, force bool) error {
 	minCheckpointTs := c.controller.calculateGlobalGCSafepoint()
 	// even though there is no changefeeds, still update the service-gc-safepoint
 	if minCheckpointTs == math.MaxUint64 {
@@ -438,15 +438,17 @@ func (c *coordinator) updateGlobalGcSafepoint(ctx context.Context) error {
 	// When the changefeed starts up, the start-ts = checkpointTs, and TiKV return data [checkpointTs + 1, +inf)
 	// TiDB guarantees that the snapshot at the gcSafepoint is reserved
 	gcSafepointUpperBound := minCheckpointTs + 1
-	return c.gcManager.TryUpdateGCSafePoint(ctx, gcSafepointUpperBound, false)
+	return c.gcManager.TryUpdateGCSafePoint(ctx, gcSafepointUpperBound, force)
 }
 
-func (c *coordinator) updateAllKeyspaceGcBarriers(ctx context.Context) error {
+func (c *coordinator) updateAllKeyspaceGcBarriers(
+	ctx context.Context, force bool,
+) error {
 	barrierMap := c.controller.calculateKeyspaceGCBarrier()
 
 	var result error
 	for meta, barrierTS := range barrierMap {
-		err := c.updateKeyspaceGcBarrier(ctx, meta, barrierTS)
+		err := c.updateKeyspaceGcBarrier(ctx, meta, barrierTS, force)
 		if err != nil {
 			log.Warn("update keyspace gc barrier failed",
 				zap.Uint32("keyspaceID", meta.ID), zap.String("keyspaceName", meta.Name),
@@ -457,16 +459,20 @@ func (c *coordinator) updateAllKeyspaceGcBarriers(ctx context.Context) error {
 	return result
 }
 
-func (c *coordinator) updateKeyspaceGcBarrier(ctx context.Context, meta common.KeyspaceMeta, barrierTS uint64) error {
+func (c *coordinator) updateKeyspaceGcBarrier(
+	ctx context.Context, meta common.KeyspaceMeta, barrierTS uint64, force bool,
+) error {
 	barrierTsUpperBound := barrierTS + 1
-	err := c.gcManager.TryUpdateKeyspaceGCBarrier(ctx, meta.ID, meta.Name, barrierTsUpperBound, false)
+	err := c.gcManager.TryUpdateKeyspaceGCBarrier(ctx, meta.ID, meta.Name, barrierTsUpperBound, force)
 	return errors.Trace(err)
 }
 
 // updateGCSafepointByChangefeed update the gc safepoint by changefeed
 // On next gen, we should update the gc barrier for the specific keyspace
 // Otherwise we should update the global gc safepoint
-func (c *coordinator) updateGCSafepointByChangefeed(ctx context.Context, changefeedID common.ChangeFeedID) error {
+func (c *coordinator) updateGCSafepointByChangefeed(
+	ctx context.Context, changefeedID common.ChangeFeedID, force bool,
+) error {
 	if kerneltype.IsNextGen() {
 		cfInfo, _, err := c.GetChangefeed(ctx, changefeedID.DisplayName)
 		if err != nil {
@@ -479,19 +485,19 @@ func (c *coordinator) updateGCSafepointByChangefeed(ctx context.Context, changef
 		}
 
 		barrierMap := c.controller.calculateKeyspaceGCBarrier()
-		return c.updateKeyspaceGcBarrier(ctx, meta, barrierMap[meta])
+		return c.updateKeyspaceGcBarrier(ctx, meta, barrierMap[meta], force)
 	}
-	return c.updateGlobalGcSafepoint(ctx)
+	return c.updateGlobalGcSafepoint(ctx, force)
 }
 
 // updateGCSafepoint update the gc safepoint
 // On next gen, we should update the gc barrier for all keyspaces
 // Otherwise we should update the global gc safepoint
-func (c *coordinator) updateGCSafepoint(ctx context.Context) error {
+func (c *coordinator) updateGCSafepoint(ctx context.Context, force bool) error {
 	if kerneltype.IsNextGen() {
-		return c.updateAllKeyspaceGcBarriers(ctx)
+		return c.updateAllKeyspaceGcBarriers(ctx, force)
 	}
-	return c.updateGlobalGcSafepoint(ctx)
+	return c.updateGlobalGcSafepoint(ctx, force)
 }
 
 // GetEnsureGCServiceID return the prefix for the gc service id when changefeed is creating
