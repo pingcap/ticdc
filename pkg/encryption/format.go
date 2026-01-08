@@ -19,13 +19,11 @@ import (
 
 const (
 	// EncryptionHeaderSize is the size of encryption header (4 bytes)
+	// Format: [version(1 byte)][dataKeyID(3 bytes)]
 	EncryptionHeaderSize = 4
 
-	// VersionUnencrypted is the version for unencrypted data
-	VersionUnencrypted byte = 0
-
-	// VersionEncrypted is the minimum version for encrypted data
-	VersionEncrypted byte = 1
+	// VersionUnencrypted indicates data is not encrypted
+	VersionUnencrypted byte = 0x00
 )
 
 // EncryptionHeader represents the 4-byte encryption header
@@ -37,19 +35,19 @@ type EncryptionHeader struct {
 
 // EncodeEncryptedData encodes data with encryption header
 // Format: [version(1)][dataKeyID(3)][encryptedData]
-func EncodeEncryptedData(data []byte, dataKeyID string) ([]byte, error) {
+// The version byte comes from the encryption metadata obtained from TiKV
+func EncodeEncryptedData(data []byte, version byte, dataKeyID string) ([]byte, error) {
 	if len(dataKeyID) != 3 {
 		return nil, cerrors.ErrInvalidDataKeyID.GenWithStackByArgs("data key ID must be 3 bytes")
 	}
 
-	header := EncryptionHeader{
-		Version: VersionEncrypted,
+	if version == VersionUnencrypted {
+		return nil, cerrors.ErrEncryptionFailed.GenWithStackByArgs("version cannot be 0 for encrypted data")
 	}
-	copy(header.DataKeyID[:], dataKeyID)
 
 	result := make([]byte, EncryptionHeaderSize+len(data))
-	result[0] = header.Version
-	copy(result[1:4], header.DataKeyID[:])
+	result[0] = version
+	copy(result[1:4], dataKeyID)
 	copy(result[4:], data)
 
 	return result, nil
@@ -70,7 +68,9 @@ func DecodeEncryptedData(data []byte) (byte, string, []byte, error) {
 	return version, string(dataKeyID[:]), encryptedData, nil
 }
 
-// IsEncrypted checks if data is encrypted by examining the version field
+// IsEncrypted checks if data is encrypted by examining the version byte
+// Data is considered encrypted if version != 0 (VersionUnencrypted)
+// The caller should validate that the version matches expected versions from TiKV metadata
 func IsEncrypted(data []byte) bool {
 	if len(data) < EncryptionHeaderSize {
 		return false
@@ -78,8 +78,26 @@ func IsEncrypted(data []byte) bool {
 	return data[0] != VersionUnencrypted
 }
 
-// EncodeUnencryptedData encodes unencrypted data with version=0 header (optional)
-// This is used for unified format, but may not be necessary for backward compatibility
+// IsEncryptedWithVersion checks if data is encrypted with a specific version
+// This is useful when you know the expected version from TiKV metadata
+func IsEncryptedWithVersion(data []byte, expectedVersion byte) bool {
+	if len(data) < EncryptionHeaderSize {
+		return false
+	}
+	return data[0] == expectedVersion
+}
+
+// GetVersion extracts the version byte from data
+// Returns 0 if data is too short
+func GetVersion(data []byte) byte {
+	if len(data) < EncryptionHeaderSize {
+		return 0
+	}
+	return data[0]
+}
+
+// EncodeUnencryptedData encodes unencrypted data with version=0 header
+// This creates a unified format where all new data has the 4-byte header
 func EncodeUnencryptedData(data []byte) []byte {
 	result := make([]byte, EncryptionHeaderSize+len(data))
 	result[0] = VersionUnencrypted
@@ -99,13 +117,20 @@ func DecodeUnencryptedData(data []byte) ([]byte, error) {
 	}
 
 	version := data[0]
-	if version == VersionUnencrypted {
-		// Remove header
+	dataKeyID1, dataKeyID2, dataKeyID3 := data[1], data[2], data[3]
+	dataKeyIDIsZero := dataKeyID1 == 0 && dataKeyID2 == 0 && dataKeyID3 == 0
+
+	if version == VersionUnencrypted && dataKeyIDIsZero {
+		// New-format unencrypted data with header, remove header
 		return data[4:], nil
 	}
 
-	// If version != 0, this might be encrypted data
-	return nil, cerrors.ErrDecodeFailed.GenWithStackByArgs("data appears to be encrypted")
+	// For backward compatibility, treat any other format as legacy unencrypted data
+	// This includes:
+	// - Legacy data without header (any pattern)
+	// - Data that might look like encrypted but is actually legacy
+	// The caller is responsible for ensuring data is not actually encrypted
+	return data, nil
 }
 
 // ExtractDataKeyID extracts the data key ID from encrypted data
@@ -114,7 +139,19 @@ func ExtractDataKeyID(data []byte) (string, error) {
 		return "", cerrors.ErrDecodeFailed.GenWithStackByArgs("data too short")
 	}
 
-	var dataKeyID [3]byte
-	copy(dataKeyID[:], data[1:4])
-	return string(dataKeyID[:]), nil
+	version := data[0]
+	dataKeyID1, dataKeyID2, dataKeyID3 := data[1], data[2], data[3]
+	dataKeyIDIsZero := dataKeyID1 == 0 && dataKeyID2 == 0 && dataKeyID3 == 0
+
+	// Only extract key ID from data that definitively looks like new-format encrypted:
+	// - version != 0 (encrypted data has non-zero version)
+	// - DataKeyID is non-zero (encrypted data always has a valid key ID)
+	if version != VersionUnencrypted && !dataKeyIDIsZero {
+		var keyID [3]byte
+		copy(keyID[:], data[1:4])
+		return string(keyID[:]), nil
+	}
+
+	// Otherwise, this is not encrypted data (legacy data or new-format unencrypted)
+	return "", cerrors.ErrDecodeFailed.GenWithStackByArgs("data is not encrypted")
 }

@@ -40,6 +40,9 @@ type EncryptionMetaManager interface {
 	// GetCurrentDataKeyID gets the current data key ID for a keyspace
 	GetCurrentDataKeyID(ctx context.Context, keyspaceID uint32) (string, error)
 
+	// GetEncryptionVersion gets the encryption format version for a keyspace
+	GetEncryptionVersion(ctx context.Context, keyspaceID uint32) (byte, error)
+
 	// Start starts the background refresh goroutine
 	Start(ctx context.Context) error
 
@@ -136,6 +139,20 @@ func (m *encryptionMetaManager) GetCurrentDataKeyID(ctx context.Context, keyspac
 	}
 
 	return meta.CurrentDataKeyID, nil
+}
+
+// GetEncryptionVersion gets the encryption format version for a keyspace
+func (m *encryptionMetaManager) GetEncryptionVersion(ctx context.Context, keyspaceID uint32) (byte, error) {
+	meta, err := m.getMeta(ctx, keyspaceID)
+	if err != nil {
+		return 0, err
+	}
+
+	if meta == nil || !meta.Enabled {
+		return 0, cerrors.ErrDataKeyNotFound.GenWithStackByArgs("encryption not enabled")
+	}
+
+	return meta.Version, nil
 }
 
 // GetDataKeyWithAlgorithm gets a data key by ID with its encryption algorithm

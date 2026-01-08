@@ -52,22 +52,30 @@ func NewMockTiKVClient() *MockTiKVClient {
 // initDefaultMockData initializes default mock encryption metadata
 func (c *MockTiKVClient) initDefaultMockData() {
 	// Create a mock keyspace with encryption enabled
-	mockDataKeyID1 := "3F9A2C17"
-	mockDataKeyID2 := "15D3E98F"
+	// Data key IDs must be exactly 3 bytes to match the header format
+	mockDataKeyID1 := "K01"
+	mockDataKeyID2 := "K02"
 
 	// Generate mock ciphertext for data keys (32 bytes for AES-256)
 	dataKey1Ciphertext := make([]byte, 32)
-	rand.Read(dataKey1Ciphertext)
+	if _, err := rand.Read(dataKey1Ciphertext); err != nil {
+		log.Panic("failed to generate random data key ciphertext", zap.Error(err))
+	}
 
 	dataKey2Ciphertext := make([]byte, 32)
-	rand.Read(dataKey2Ciphertext)
+	if _, err := rand.Read(dataKey2Ciphertext); err != nil {
+		log.Panic("failed to generate random data key ciphertext", zap.Error(err))
+	}
 
 	// Generate mock master key ciphertext
 	masterKeyCiphertext := make([]byte, 32)
-	rand.Read(masterKeyCiphertext)
+	if _, err := rand.Read(masterKeyCiphertext); err != nil {
+		log.Panic("failed to generate random master key ciphertext", zap.Error(err))
+	}
 
 	meta := &KeyspaceEncryptionMeta{
 		Enabled: true,
+		Version: 0x01, // Encryption format version from TiKV
 		MasterKey: &MasterKey{
 			Vendor:     KMSVendorAWS,
 			CMEKID:     "foobar1",

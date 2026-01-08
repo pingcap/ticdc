@@ -103,8 +103,14 @@ func (m *encryptionManager) EncryptData(ctx context.Context, keyspaceID uint32, 
 		return nil, cerrors.ErrEncryptionFailed.Wrap(err)
 	}
 
+	// Get encryption version from metadata
+	version, err := m.metaManager.GetEncryptionVersion(ctx, keyspaceID)
+	if err != nil {
+		return nil, cerrors.ErrEncryptionFailed.Wrap(err)
+	}
+
 	// Encode with encryption header
-	result, err := EncodeEncryptedData(encryptedWithIV, currentDataKeyID)
+	result, err := EncodeEncryptedData(encryptedWithIV, version, currentDataKeyID)
 	if err != nil {
 		return nil, cerrors.ErrEncryptionFailed.Wrap(err)
 	}

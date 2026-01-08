@@ -259,15 +259,7 @@ func New(
 	}
 
 	// Try to get encryption manager from appcontext (optional)
-	var encMgr encryption.EncryptionManager
-	// Use GetService with a type assertion that won't panic if not found
-	defer func() {
-		if r := recover(); r != nil {
-			// EncryptionManager not registered, use nil
-			encMgr = nil
-		}
-	}()
-	encMgr = appcontext.GetService[encryption.EncryptionManager]("EncryptionManager")
+	encMgr, _ := appcontext.TryGetService[encryption.EncryptionManager]("EncryptionManager")
 
 	store := &eventStore{
 		pdClock:   appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
@@ -900,16 +892,17 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	}
 
 	return &eventStoreIter{
-		tableSpan:     stat.tableSpan,
-		needCheckSpan: needCheckSpan,
-		innerIter:     iter,
-		prevStartTs:   0,
-		prevCommitTs:  0,
-		startTs:       dataRange.CommitTsStart,
-		endTs:         dataRange.CommitTsEnd,
-		rowCount:      0,
-		decoder:       decoder,
-		decoderPool:   e.decoderPool,
+		tableSpan:         stat.tableSpan,
+		needCheckSpan:     needCheckSpan,
+		innerIter:         iter,
+		prevStartTs:       0,
+		prevCommitTs:      0,
+		startTs:           dataRange.CommitTsStart,
+		endTs:             dataRange.CommitTsEnd,
+		rowCount:          0,
+		decoder:           decoder,
+		decoderPool:       e.decoderPool,
+		encryptionManager: e.encryptionManager,
 	}
 }
 
@@ -1291,6 +1284,9 @@ type eventStoreIter struct {
 
 	decoder     *zstd.Decoder
 	decoderPool *sync.Pool
+
+	// encryptionManager for decrypting data (optional, can be nil)
+	encryptionManager encryption.EncryptionManager
 }
 
 func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
@@ -1302,30 +1298,16 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		key := iter.innerIter.Key()
 		value := iter.innerIter.Value()
 
-		// Decrypt if encryption is enabled (before decompression)
-		// Note: eventStoreIter doesn't have direct access to encryptionManager,
-		// so we need to get it from appcontext or pass it through
-		// This is a simplified implementation - in production, we should store encryptionManager in eventStoreIter
-		if encryption.IsEncrypted(value) {
-			// Try to get encryptionManager from appcontext
-			var encMgr encryption.EncryptionManager
-			defer func() {
-				if r := recover(); r != nil {
-					// EncryptionManager not registered, skip decryption
-					encMgr = nil
-				}
-			}()
-			encMgr = appcontext.GetService[encryption.EncryptionManager]("EncryptionManager")
-			if encMgr != nil {
-				// TODO: Get keyspaceID from dispatcher/subscription metadata
-				// For now, use default keyspaceID (0)
-				keyspaceID := uint32(0)
-				decryptedValue, err := encMgr.DecryptData(context.Background(), keyspaceID, value)
-				if err != nil {
-					log.Panic("failed to decrypt value", zap.Error(err))
-				}
-				value = decryptedValue
+		// Decrypt if encrypted data is detected and encryption manager is available
+		if encryption.IsEncrypted(value) && iter.encryptionManager != nil {
+			// TODO: Get keyspaceID from dispatcher/subscription metadata
+			// For now, use default keyspaceID (0)
+			keyspaceID := uint32(0)
+			decryptedValue, err := iter.encryptionManager.DecryptData(context.Background(), keyspaceID, value)
+			if err != nil {
+				log.Panic("failed to decrypt value", zap.Error(err))
 			}
+			value = decryptedValue
 		}
 
 		_, compressionType := DecodeKeyMetas(key)

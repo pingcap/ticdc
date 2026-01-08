@@ -66,6 +66,7 @@ type DataKey struct {
 // KeyspaceEncryptionMeta represents the encryption metadata for a keyspace
 type KeyspaceEncryptionMeta struct {
 	Enabled          bool                `json:"enabled"`
+	Version          byte                `json:"version"` // Encryption format version from TiKV
 	MasterKey        *MasterKey          `json:"master_key"`
 	CurrentDataKeyID string              `json:"current_data_key_id"`
 	DataKeyMap       map[string]*DataKey `json:"data_key_map"`
@@ -74,7 +75,7 @@ type KeyspaceEncryptionMeta struct {
 // DataKeyID represents a 3-byte data key identifier
 type DataKeyID [3]byte
 
-// ToString converts DataKeyID to hex string
+// ToString converts DataKeyID to string
 func (id DataKeyID) ToString() string {
 	return string(id[:])
 }

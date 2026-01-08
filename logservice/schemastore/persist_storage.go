@@ -149,15 +149,7 @@ func newPersistentStorage(
 	storage kv.Storage,
 ) (*persistentStorage, error) {
 	// Try to get encryption manager from appcontext (optional)
-	var encMgr encryption.EncryptionManager
-	// Use GetService with a type assertion that won't panic if not found
-	defer func() {
-		if r := recover(); r != nil {
-			// EncryptionManager not registered, use nil
-			encMgr = nil
-		}
-	}()
-	encMgr = appcontext.GetService[encryption.EncryptionManager]("EncryptionManager")
+	encMgr, _ := appcontext.TryGetService[encryption.EncryptionManager]("EncryptionManager")
 
 	dataStorage := &persistentStorage{
 		rootDir:                root,
