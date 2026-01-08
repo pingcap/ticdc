@@ -177,15 +177,15 @@ func (p *persistentStorage) initialize(ctx context.Context) error {
 		gcSafePoint, err = p.getGcSafePoint(ctx)
 		if err == nil {
 			log.Info("get gc safepoint success", zap.Uint32("keyspaceID", p.keyspaceID), zap.Any("gcSafePoint", gcSafePoint))
-			// make sure the whole initialization phase won't be failed due to TiDB GC
-			// the service-gc-safepoint is set as the current `min service-gc-safepoint+1` to make it can be set successfully.
+			// initialize data from gcSafepoint, make sure it won't be push forward by other services,
+			// to avoid initialization failed due to TiDB GC.
 			err = gc.EnsureChangefeedStartTsSafety(
 				ctx,
 				p.pdCli,
 				defaultSchemaStoreGcServiceID,
 				p.keyspaceID,
 				fakeChangefeedID,
-				defaultGcServiceTTL, gcSafePoint+1)
+				defaultGcServiceTTL, gcSafePoint)
 			if err == nil {
 				break
 			}

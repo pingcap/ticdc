@@ -434,9 +434,11 @@ func (c *coordinator) updateGlobalGcSafepoint(ctx context.Context, force bool) e
 	}
 	// checkpoint means all data (-inf, checkpointTs] already flushed to the downstream.
 	// When the changefeed starts up, the start-ts = checkpointTs, and TiKV return data [checkpointTs + 1, +inf)
-	// TiDB guarantees that the snapshot at the gcSafepoint is reserved
-	gcSafepointUpperBound := minCheckpointTs + 1
-	return c.gcManager.TryUpdateGCSafePoint(ctx, gcSafepointUpperBound, force)
+	// TiDB guarantees that the snapshot at the gcSafepoint is reserved.
+	// theoretically, we can set the gcSafepoint = checkpointTs + 1,
+	// but to be safer, set the minCheckpointTs as the TiCDC service-gc-safepoint,
+	// even though the data is already flushed.
+	return c.gcManager.TryUpdateServiceGCSafePoint(ctx, minCheckpointTs, force)
 }
 
 func (c *coordinator) updateAllKeyspaceGcBarriers(
@@ -460,8 +462,7 @@ func (c *coordinator) updateAllKeyspaceGcBarriers(
 func (c *coordinator) updateKeyspaceGcBarrier(
 	ctx context.Context, meta common.KeyspaceMeta, barrierTS uint64, force bool,
 ) error {
-	barrierTsUpperBound := barrierTS + 1
-	err := c.gcManager.TryUpdateKeyspaceGCBarrier(ctx, meta.ID, meta.Name, barrierTsUpperBound, force)
+	err := c.gcManager.TryUpdateKeyspaceGCBarrier(ctx, meta.ID, meta.Name, barrierTS, force)
 	return errors.Trace(err)
 }
 

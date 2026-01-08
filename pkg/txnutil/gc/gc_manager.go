@@ -37,10 +37,10 @@ var gcSafepointUpdateInterval = 1 * time.Minute
 
 // Manager is an interface for gc manager
 type Manager interface {
-	// TryUpdateGCSafePoint tries to update TiCDC service GC safepoint.
+	// TryUpdateServiceGCSafePoint tries to update TiCDC service GC safepoint.
 	// Manager may skip update when it thinks it is too frequent.
 	// Set `forceUpdate` to force Manager update.
-	TryUpdateGCSafePoint(ctx context.Context, checkpointTs common.Ts, forceUpdate bool) error
+	TryUpdateServiceGCSafePoint(ctx context.Context, checkpointTs common.Ts, forceUpdate bool) error
 	CheckStaleCheckpointTs(keyspaceID uint32, changefeedID common.ChangeFeedID, checkpointTs common.Ts) error
 	// TryUpdateKeyspaceGCBarrier tries to update gc barrier of a keyspace
 	TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID uint32, keyspaceName string, checkpointTs common.Ts, forceUpdate bool) error
@@ -93,7 +93,7 @@ func NewManager(gcServiceID string, pdClient pd.Client) Manager {
 	}
 }
 
-func (m *gcManager) TryUpdateGCSafePoint(
+func (m *gcManager) TryUpdateServiceGCSafePoint(
 	ctx context.Context, checkpointTs common.Ts, forceUpdate bool,
 ) error {
 	if time.Since(m.lastUpdatedTime.Load()) < gcSafepointUpdateInterval && !forceUpdate {
