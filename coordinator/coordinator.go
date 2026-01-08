@@ -331,13 +331,11 @@ func (c *coordinator) saveCheckpointTs(ctx context.Context, changes []*changefee
 	statusMap := make(map[common.ChangeFeedID]uint64)
 	cfsMap := make(map[common.ChangeFeedID]*changefeed.Changefeed)
 	for _, change := range changes {
-		// todo: shall we remove this check ?
 		if change.changeType == ChangeState {
 			continue
 		}
 		upCf := change.changefeed
 		reportedCheckpointTs := upCf.GetStatus().CheckpointTs
-		// todo: shall we remove this check ?
 		if upCf.GetLastSavedCheckPointTs() < reportedCheckpointTs {
 			statusMap[upCf.ID] = reportedCheckpointTs
 			cfsMap[upCf.ID] = upCf
