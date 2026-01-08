@@ -36,6 +36,9 @@ type DebugConfig struct {
 	SchemaStore *SchemaStoreConfig `toml:"schema-store" json:"schema_store"`
 
 	EventService *EventServiceConfig `toml:"event-service" json:"event_service"`
+
+	// Encryption is the configuration for CMEK encryption at rest
+	Encryption *EncryptionConfig `toml:"encryption" json:"encryption"`
 }
 
 // ValidateAndAdjust validates and adjusts the debug configuration
@@ -51,6 +54,9 @@ func (c *DebugConfig) ValidateAndAdjust() error {
 	}
 	if c.EventStore == nil {
 		c.EventStore = NewDefaultEventStoreConfig()
+	}
+	if c.Encryption == nil {
+		c.Encryption = NewDefaultEncryptionConfig()
 	}
 
 	return nil
@@ -137,5 +143,30 @@ func NewDefaultEventServiceConfig() *EventServiceConfig {
 		DMLEventMaxRows:          256,
 		DMLEventMaxBytes:         1024 * 1024 * 1, // 1MB
 		EnableRemoteEventService: true,
+	}
+}
+
+// EncryptionConfig represents config for CMEK encryption at rest
+type EncryptionConfig struct {
+	// EnableEncryption enables encryption for data at rest
+	EnableEncryption bool `toml:"enable-encryption" json:"enable_encryption"`
+
+	// MetaRefreshInterval is the interval for refreshing encryption metadata (default: 1 hour)
+	MetaRefreshInterval TomlDuration `toml:"meta-refresh-interval" json:"meta_refresh_interval"`
+
+	// MetaCacheTTL is the TTL for caching encryption metadata (default: 1 hour)
+	MetaCacheTTL TomlDuration `toml:"meta-cache-ttl" json:"meta_cache_ttl"`
+
+	// AllowDegradeOnError allows graceful degradation to unencrypted mode on encryption errors
+	AllowDegradeOnError bool `toml:"allow-degrade-on-error" json:"allow_degrade_on_error"`
+}
+
+// NewDefaultEncryptionConfig returns the default encryption configuration
+func NewDefaultEncryptionConfig() *EncryptionConfig {
+	return &EncryptionConfig{
+		EnableEncryption:    false,
+		MetaRefreshInterval: TomlDuration(1 * time.Hour),
+		MetaCacheTTL:        TomlDuration(1 * time.Hour),
+		AllowDegradeOnError: true,
 	}
 }
