@@ -541,7 +541,7 @@ b	b IN ('20161213')	b in ('20161213', 0)
 SELECT b, b = '121314',
 CASE b WHEN '121314' then 'found' ELSE 'not found' END FROM t8;
 b	b = '121314'	CASE b WHEN '121314' then 'found' ELSE 'not found' END
-10:13:14  0 not found
+10:13:14	0	not found
 11:13:14	0	not found
 12:13:14	1	found
 SELECT b, b in ('121314'), b in ('121314', 0) FROM t8;
