@@ -27,26 +27,7 @@ import (
 
 func ensureChangefeedStartTsSafetyNextGen(ctx context.Context, pdCli pd.Client, keyspaceID uint32, gcServiceID string, ttl int64, startTs uint64) error {
 	err := setGCBarrier(ctx, pdCli, keyspaceID, gcServiceID, startTs, ttl)
-	if err == nil {
-		return nil
-	}
-	if !errors.IsGCBarrierTSBehindTxnSafePointError(err) {
-		return errors.WrapError(errors.ErrUpdateGCBarrierFailed, err)
-	}
-
-	state, err := getGCState(ctx, pdCli, keyspaceID)
-	if err != nil {
-		log.Error("get gc barrier failed when try to get the current gc state",
-			zap.Uint64("startTs", startTs),
-			zap.Uint32("keyspaceID", keyspaceID), zap.String("gcServiceID", gcServiceID),
-			zap.Error(err))
-		return err
-	}
-
-	if startTs < state.TxnSafePoint {
-		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, state.TxnSafePoint)
-	}
-	return err
+	return errors.WrapError(errors.ErrUpdateGCBarrierFailed, err)
 }
 
 // SetGCBarrier Set a GC Barrier of a keyspace
