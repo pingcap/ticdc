@@ -732,8 +732,7 @@ func (c *Controller) ResumeChangefeed(
 	clone.Epoch = pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
 	cf.SetInfo(clone)
 
-	status := cf.GetClonedStatus()
-	status.CheckpointTs = newCheckpointTs
+	status := cf.GetStatusForResume()
 	_, _, runningErr := cf.ForceUpdateStatus(status)
 	if runningErr != nil {
 		return errors.New(runningErr.Message)
