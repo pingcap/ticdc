@@ -49,6 +49,7 @@ func getServiceGCSafepoint(ctx context.Context, pdCli pd.Client) (minServiceGCSa
 	// NOTE: In classic mode, PD does not expose a dedicated "get service GC safepoint" API.
 	// Calling `UpdateServiceGCSafePoint` with safePoint=0 is used
 	// as a read-only operation to get the current minimum service GC safepoint.
+	// use a dummy service id for reading
 	return setServiceGCSafepoint(ctx, pdCli, "min-service-gc-safepoint-reader", 0, 0)
 }
 
