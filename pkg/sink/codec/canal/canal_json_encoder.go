@@ -33,7 +33,7 @@ var bytesDecoder = charmap.ISO8859_1.NewDecoder()
 
 // TODO: we need to reorg this code later, including use util.jsonWriter and other unreasonable code
 func fillColumns(
-	valueMap map[int64]string,
+	valueMap map[int64]*string,
 	tableInfo *commonType.TableInfo,
 	onlyHandleKeyColumn bool,
 	out *jwriter.Writer,
@@ -62,10 +62,11 @@ func fillColumns(
 			}
 			out.String(col.Name.O)
 			out.RawByte(':')
-			if valueMap[colID] == "null" {
+			val := valueMap[colID]
+			if valueMap[colID] == nil {
 				out.RawString("null")
 			} else {
-				out.String(valueMap[colID])
+				out.String(*val)
 			}
 		}
 	}
@@ -75,8 +76,8 @@ func fillColumns(
 }
 
 func fillUpdateColumns(
-	newValueMap map[int64]string,
-	oldValueMap map[int64]string,
+	newValueMap map[int64]*string,
+	oldValueMap map[int64]*string,
 	tableInfo *commonType.TableInfo,
 	onlyHandleKeyColumn bool,
 	onlyOutputUpdatedColumn bool,
@@ -106,10 +107,11 @@ func fillUpdateColumns(
 			}
 			out.String(col.Name.O)
 			out.RawByte(':')
-			if oldValueMap[colID] == "null" {
+			val := oldValueMap[colID]
+			if val == nil {
 				out.RawString("null")
 			} else {
-				out.String(oldValueMap[colID])
+				out.String(*val)
 			}
 		}
 	}
@@ -203,7 +205,7 @@ func newJSONMessageForDML(
 		out.String("")
 	}
 
-	valueMap := make(map[int64]string, columnLen)                // colId -> value
+	valueMap := make(map[int64]*string, columnLen)               // colId -> value
 	javaTypeMap := make(map[int64]common.JavaSQLType, columnLen) // colId -> javaType
 
 	row := e.GetRows()
@@ -287,7 +289,7 @@ func newJSONMessageForDML(
 	} else if e.IsUpdate() {
 		out.RawString(",\"old\":")
 
-		oldValueMap := make(map[int64]string, 0) // colId -> value
+		oldValueMap := make(map[int64]*string, 0) // colId -> value
 		preRow := e.GetPreRows()
 		for idx, col := range e.TableInfo.GetColumns() {
 			if !e.ColumnSelector.Select(col) {
@@ -448,6 +450,7 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 	if err != nil {
 		return errors.Trace(err)
 	}
+	log.Error("AppendRowChangedEvent", zap.ByteString("v", value))
 
 	value, err = common.Compress(
 		c.config.ChangefeedID, c.config.LargeMessageHandle.LargeMessageHandleCompression, value,

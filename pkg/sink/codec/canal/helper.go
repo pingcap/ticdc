@@ -84,12 +84,12 @@ func mysqlType2JavaType(t byte, isBinary bool) common.JavaSQLType {
 	return common.JavaSQLTypeVARCHAR
 }
 
-func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo) (string, common.JavaSQLType) {
+func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo) (*string, common.JavaSQLType) {
 	isBinary := mysql.HasBinaryFlag(columnInfo.GetFlag())
 	javaType := mysqlType2JavaType(columnInfo.GetType(), isBinary)
 	d := row.GetDatum(idx, &columnInfo.FieldType)
 	if d.IsNull() {
-		return "null", javaType
+		return nil, javaType
 	}
 
 	var value string
@@ -197,7 +197,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo) (s
 		// Go sql support type ref to: https://github.com/golang/go/blob/go1.17.4/src/database/sql/driver/types.go#L236
 		value = fmt.Sprintf("%v", d.GetValue())
 	}
-	return value, javaType
+	return &value, javaType
 }
 
 // convert ts in tidb to timestamp(in ms) in canal
