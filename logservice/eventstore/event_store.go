@@ -1211,6 +1211,8 @@ func (e *eventStore) writeEvents(
 	metrics.EventStoreWriteRequestsCount.Inc()
 	batch := db.NewBatch()
 	kvCount := 0
+	var totalValueBytesBefore int64
+	var totalValueBytesAfter int64
 	var dstBuf []byte
 	if compressionBuf != nil {
 		dstBuf = *compressionBuf
@@ -1228,15 +1230,19 @@ func (e *eventStore) writeEvents(
 			}
 
 			compressionType := CompressionNone
-			value := kv.Encode()
-			if len(value) > e.compressionThreshold {
-				maxEncodedSize := encoder.MaxEncodedSize(len(value))
+			rawValue := kv.Encode()
+			valueBytesBefore := int64(len(rawValue))
+			valueBytesAfter := valueBytesBefore
+			value := rawValue
+			if len(rawValue) > e.compressionThreshold {
+				maxEncodedSize := encoder.MaxEncodedSize(len(rawValue))
 				if cap(dstBuf) < maxEncodedSize {
 					dstBuf = make([]byte, 0, maxEncodedSize)
 				} else {
 					dstBuf = dstBuf[:0]
 				}
-				value = encoder.EncodeAll(value, dstBuf)
+				value = encoder.EncodeAll(rawValue, dstBuf)
+				valueBytesAfter = int64(len(value))
 				compressionType = CompressionZSTD
 				metrics.EventStoreCompressedRowsCount.Inc()
 			}
@@ -1245,6 +1251,8 @@ func (e *eventStore) writeEvents(
 			if err := batch.Set(key, value, pebble.NoSync); err != nil {
 				log.Panic("failed to update pebble batch", zap.Error(err))
 			}
+			totalValueBytesBefore += valueBytesBefore
+			totalValueBytesAfter += valueBytesAfter
 			if compressionType == CompressionZSTD {
 				dstBuf = dstBuf[:0]
 			}
@@ -1257,6 +1265,9 @@ func (e *eventStore) writeEvents(
 	metrics.EventStoreWriteBatchEventsCountHist.Observe(float64(kvCount))
 	metrics.EventStoreWriteBatchSizeHist.Observe(float64(batch.Len()))
 	metrics.EventStoreWriteBytes.Add(float64(batch.Len()))
+	if totalValueBytesAfter > 0 {
+		metrics.EventStoreCompressionRatioHistogram.Observe(float64(totalValueBytesBefore) / float64(totalValueBytesAfter))
+	}
 	start := time.Now()
 	err := batch.Commit(pebble.NoSync)
 	metrics.EventStoreWriteDurationHistogram.Observe(float64(time.Since(start).Milliseconds()) / 1000)
