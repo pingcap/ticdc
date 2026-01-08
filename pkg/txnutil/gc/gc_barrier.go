@@ -27,6 +27,12 @@ import (
 
 func ensureChangefeedStartTsSafetyNextGen(ctx context.Context, pdCli pd.Client, keyspaceID uint32, gcServiceID string, ttl int64, startTs uint64) error {
 	err := setGCBarrier(ctx, pdCli, keyspaceID, gcServiceID, startTs, ttl)
+	if err == nil {
+		return nil
+	}
+	if errors.IsGCBarrierTSBehindTxnSafePointError(err) {
+		return errors.WrapError(errors.ErrStartTsBeforeGC, err)
+	}
 	return errors.WrapError(errors.ErrUpdateGCBarrierFailed, err)
 }
 

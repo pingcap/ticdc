@@ -191,10 +191,6 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		keyspaceMeta.Id,
 		changefeedID,
 		ensureTTL, cfg.StartTs); err != nil {
-		if !errors.ErrStartTsBeforeGC.Equal(err) {
-			_ = c.Error(errors.WrapError(errors.ErrPDEtcdAPIError, (err)))
-			return
-		}
 		_ = c.Error(err)
 		return
 	}
@@ -896,12 +892,8 @@ func verifyResumeChangefeedConfig(
 		changefeedID,
 		gcTTL, overrideCheckpointTs)
 	if err != nil {
-		if !errors.ErrStartTsBeforeGC.Equal(err) {
-			return errors.WrapError(errors.ErrPDEtcdAPIError, err)
-		}
 		return err
 	}
-
 	return nil
 }
 
