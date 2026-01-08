@@ -36,10 +36,6 @@ import (
 var gcServiceSafepointUpdateInterval = 1 * time.Minute
 
 // Manager is an interface for gc manager
-// it's responsible for maintain the TiCDC service-gc-safepoint on the PD
-// to prevent the data required by the TiCDC GCed.
-// TiDB GC safepoint is the minimum of all service-gc-safepoints,
-// it guarantees that the data in the range [gcSafepoint, +inf) is not GCed.
 type Manager interface {
 	// TryUpdateServiceGCSafePoint tries to update TiCDC service GC safepoint.
 	// Manager may skip update when it thinks it is too frequent.
@@ -56,6 +52,13 @@ type keyspaceGCBarrierInfo struct {
 	minGCBarrier      uint64
 }
 
+// gcManager responsible for maintain the TiCDC service-gc-safepoint on the PD
+// to prevent the data required by the TiCDC GCed.
+// TiDB gcSafepoint is calculated based on the minimum of all service-gc-safepoints,
+//
+//	gcSafepoint <= min(all service-gc-safepoints).
+//
+// it guarantees that the data in the range [gcSafepoint, +inf) is not GCed.
 type gcManager struct {
 	gcServiceID string
 	pdClient    pd.Client

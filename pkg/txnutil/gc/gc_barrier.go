@@ -27,13 +27,14 @@ import (
 
 func ensureChangefeedStartTsSafetyNextGen(ctx context.Context, pdCli pd.Client, keyspaceID uint32, gcServiceID string, ttl int64, startTs uint64) error {
 	err := setGCBarrier(ctx, pdCli, keyspaceID, gcServiceID, startTs, ttl)
-	if err == nil {
-		return nil
+	if err != nil {
+		log.Error("set gc barrier failed when try to ensure startTs safety",
+			zap.Uint64("startTs", startTs),
+			zap.Uint32("keyspaceID", keyspaceID), zap.String("gcServiceID", gcServiceID),
+			zap.Error(err))
+		return errors.WrapError(errors.ErrUpdateGCBarrierFailed, err)
 	}
-	if errors.IsGCBarrierTSBehindTxnSafePointError(err) {
-		return errors.WrapError(errors.ErrStartTsBeforeGC, err)
-	}
-	return errors.WrapError(errors.ErrUpdateGCBarrierFailed, err)
+	return nil
 }
 
 // SetGCBarrier Set a GC Barrier of a keyspace
@@ -55,12 +56,28 @@ func setGCBarrier(ctx context.Context, pdCli pd.Client, keyspaceID uint32, servi
 	}, retry.WithBackoffBaseDelay(gcServiceBackoffDelay),
 		retry.WithMaxTries(gcServiceMaxRetries),
 		retry.WithIsRetryableErr(errors.IsRetryableError))
-	return errors.WrapError(errors.ErrUpdateGCBarrierFailed, err)
+	return err
 }
 
-func getGCState(ctx context.Context, pdCli pd.Client, keyspaceID uint32) (gc.GCState, error) {
-	state, err := pdCli.GetGCStatesClient(keyspaceID).GetGCState(ctx)
-	return state, errors.WrapError(errors.ErrGetGCBarrierFailed, err)
+func getGCState(ctx context.Context, pdCli pd.Client, keyspaceID uint32) (state gc.GCState, err error) {
+	cli := pdCli.GetGCStatesClient(keyspaceID)
+	err = retry.Do(ctx, func() error {
+		result, err1 := cli.GetGCState(ctx)
+		if err1 != nil {
+			log.Warn("get gc state failed, retry later",
+				zap.Uint32("keyspaceID", keyspaceID),
+				zap.Error(err1))
+			return err1
+		}
+		state = result
+		return nil
+	}, retry.WithBackoffBaseDelay(gcServiceBackoffDelay),
+		retry.WithMaxTries(gcServiceMaxRetries),
+		retry.WithIsRetryableErr(errors.IsRetryableError))
+	if err != nil {
+		return state, errors.WrapError(errors.ErrGetGCBarrierFailed, err)
+	}
+	return state, nil
 }
 
 // deleteGCBarrier Delete a GC barrier of a keyspace
