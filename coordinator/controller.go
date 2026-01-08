@@ -733,6 +733,7 @@ func (c *Controller) ResumeChangefeed(
 	cf.SetInfo(clone)
 
 	status := cf.GetStatusForResume()
+	status.CheckpointTs = newCheckpointTs
 	_, _, runningErr := cf.ForceUpdateStatus(status)
 	if runningErr != nil {
 		return errors.New(runningErr.Message)
