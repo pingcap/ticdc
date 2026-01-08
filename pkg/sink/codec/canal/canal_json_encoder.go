@@ -450,7 +450,6 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 	if err != nil {
 		return errors.Trace(err)
 	}
-	log.Error("AppendRowChangedEvent", zap.ByteString("v", value))
 
 	value, err = common.Compress(
 		c.config.ChangefeedID, c.config.LargeMessageHandle.LargeMessageHandleCompression, value,
