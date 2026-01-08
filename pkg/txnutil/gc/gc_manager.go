@@ -103,7 +103,7 @@ func (m *gcManager) TryUpdateServiceGCSafePoint(
 
 	minServiceGCSafepoint, err := setServiceGCSafepoint(ctx, m.pdClient, m.gcServiceID, m.gcTTL, checkpointTs)
 	if err != nil {
-		log.Warn("update service gc safepoint failed", zap.Uint64("safepoint", checkpointTs),
+		log.Warn("update service gc safepoint failed", zap.Uint64("checkpointTs", checkpointTs),
 			zap.String("serviceID", m.gcServiceID), zap.Error(err))
 		if time.Since(m.lastSucceededTime.Load()) >= time.Second*time.Duration(m.gcTTL) {
 			return err
@@ -117,7 +117,7 @@ func (m *gcManager) TryUpdateServiceGCSafePoint(
 	log.Debug("update gc safe point",
 		zap.String("gcServiceID", m.gcServiceID),
 		zap.Uint64("checkpointTs", checkpointTs),
-		zap.Uint64("actual", minServiceGCSafepoint))
+		zap.Uint64("minServiceGCSafepoint", minServiceGCSafepoint))
 
 	if minServiceGCSafepoint == checkpointTs {
 		log.Info("update gc safe point success, cdc is blocking the gc", zap.Uint64("minServiceGCSafepoint", checkpointTs))
