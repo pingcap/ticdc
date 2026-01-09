@@ -14,6 +14,7 @@
 package maintainer
 
 import (
+	"sync"
 	"time"
 
 	"github.com/pingcap/log"
@@ -31,6 +32,8 @@ import (
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
+
+var logExcludeDispatcherIDDeprecatedOnce sync.Once
 
 // BarrierEvent is a barrier event that reported by dispatchers, note is a block multiple dispatchers
 // all of these dispatchers should report the same event
@@ -405,6 +408,8 @@ func (be *BarrierEvent) sendPassAction(mode int64) []*messaging.TargetMessage {
 	switch be.blockedDispatchers.InfluenceType {
 	case heartbeatpb.InfluenceType_DB:
 		spans := be.spanController.GetTasksBySchemaID(be.blockedDispatchers.SchemaID)
+		// writerDispatcher for DB Type is always table trigger dispatcher, so we need to add it too
+		spans = append(spans, be.spanController.GetTaskByID(be.writerDispatcher))
 		if len(spans) == 0 {
 			// means tables are removed, mark the event done
 			be.rangeChecker.MarkCovered()
@@ -435,9 +440,6 @@ func (be *BarrierEvent) sendPassAction(mode int64) []*messaging.TargetMessage {
 				for _, stm := range spans {
 					nodeID := stm.GetNodeID()
 					dispatcherID := stm.ID
-					if dispatcherID == be.writerDispatcher {
-						continue
-					}
 					msg, ok := msgMap[nodeID]
 					if !ok {
 						msg = be.newPassActionMessage(nodeID, mode)
@@ -670,17 +672,23 @@ func (be *BarrierEvent) newWriterActionMessage(capture node.ID, mode int64) *mes
 }
 
 func (be *BarrierEvent) newPassActionMessage(capture node.ID, mode int64) *messaging.TargetMessage {
+	influenced := &heartbeatpb.InfluencedDispatchers{
+		InfluenceType: be.blockedDispatchers.InfluenceType,
+		SchemaID:      be.blockedDispatchers.SchemaID,
+	}
+	if be.blockedDispatchers.InfluenceType != heartbeatpb.InfluenceType_Normal {
+		// ExcludeDispatcherId is deprecated. It is kept only for rolling upgrade compatibility:
+		// older dispatcher managers unconditionally dereference this field for DB/All types.
+		// New dispatcher managers should ignore it.
+		influenced.ExcludeDispatcherId = &heartbeatpb.DispatcherID{}
+	}
 	return messaging.NewSingleTargetMessage(capture, messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.HeartBeatResponse{
 			ChangefeedID: be.cfID.ToPB(),
 			DispatcherStatuses: []*heartbeatpb.DispatcherStatus{
 				{
-					Action: be.action(heartbeatpb.Action_Pass),
-					InfluencedDispatchers: &heartbeatpb.InfluencedDispatchers{
-						InfluenceType:       be.blockedDispatchers.InfluenceType,
-						SchemaID:            be.blockedDispatchers.SchemaID,
-						ExcludeDispatcherId: be.writerDispatcher.ToPB(),
-					},
+					Action:                be.action(heartbeatpb.Action_Pass),
+					InfluencedDispatchers: influenced,
 				},
 			},
 			Mode: mode,
