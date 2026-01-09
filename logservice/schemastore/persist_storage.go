@@ -323,7 +323,7 @@ func (p *persistentStorage) getAllPhysicalTables(snapTs uint64, tableFilter filt
 	})
 	if snapTs < p.gcTs {
 		p.mu.Unlock()
-		return nil, errors.ErrSnapshotLostByGC.GenWithStackByArgs("snapTs %d is smaller than gcTs %d", snapTs, p.gcTs)
+		return nil, errors.ErrSnapshotLostByGC.GenWithStackByArgs(snapTs, p.gcTs)
 	}
 
 	gcTs := p.gcTs
@@ -342,7 +342,7 @@ func (p *persistentStorage) registerTable(tableID int64, startTs uint64) error {
 	p.mu.Lock()
 	if startTs < p.gcTs {
 		p.mu.Unlock()
-		return fmt.Errorf("startTs %d is smaller than gcTs %d", startTs, p.gcTs)
+		return errors.ErrSnapshotLostByGC.GenWithStackByArgs(startTs, p.gcTs)
 	}
 	p.tableRegisteredCount[tableID] += 1
 	store, ok := p.tableInfoStoreMap[tableID]
@@ -452,7 +452,7 @@ func (p *persistentStorage) fetchTableDDLEvents(dispatcherID common.DispatcherID
 	p.mu.RLock()
 	if start < p.gcTs {
 		p.mu.RUnlock()
-		return nil, fmt.Errorf("startTs %d is smaller than gcTs %d", start, p.gcTs)
+		return nil, errors.ErrSnapshotLostByGC.GenWithStackByArgs(start, p.gcTs)
 	}
 	p.mu.RUnlock()
 
@@ -525,7 +525,7 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 		p.mu.RLock()
 		if allTargetTs[0] < p.gcTs {
 			p.mu.RUnlock()
-			return nil, fmt.Errorf("startTs %d is smaller than gcTs %d", allTargetTs[0], p.gcTs)
+			return nil, errors.ErrSnapshotLostByGC.GenWithStackByArgs(allTargetTs[0], p.gcTs)
 		}
 		p.mu.RUnlock()
 		for _, ts := range allTargetTs {

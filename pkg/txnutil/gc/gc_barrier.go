@@ -27,18 +27,28 @@ import (
 
 func ensureChangefeedStartTsSafetyNextGen(ctx context.Context, pdCli pd.Client, keyspaceID uint32, gcServiceID string, ttl int64, startTs uint64) error {
 	err := setGCBarrier(ctx, pdCli, keyspaceID, gcServiceID, startTs, ttl)
-	if err != nil {
+	if err == nil {
+		log.Info("ensure changefeed start ts safety",
+			zap.String("gcServiceID", gcServiceID),
+			zap.Uint64("startTs", startTs), zap.Int64("ttl", ttl))
+		return nil
+	}
+
+	if !errors.IsGCBarrierTSBehindTxnSafePointError(err) {
 		log.Error("set gc barrier failed when try to ensure startTs safety",
 			zap.Uint64("startTs", startTs),
-			zap.Uint32("keyspaceID", keyspaceID), zap.String("gcServiceID", gcServiceID),
+			zap.Uint32("keyspaceID", keyspaceID),
+			zap.String("gcServiceID", gcServiceID),
 			zap.Error(err))
-		return errors.WrapError(errors.ErrUpdateGCBarrierFailed, err)
+		return err
 	}
-	log.Info("ensure changefeed start ts safety",
-		zap.String("gcServiceID", gcServiceID),
-		zap.Uint64("startTs", startTs),
-		zap.Int64("ttl", ttl))
-	return nil
+
+	state, _ := getGCState(ctx, pdCli, keyspaceID)
+	log.Error("set gc barrier failed when try to ensure startTs safety, smaller than the current txn safe point",
+		zap.Uint64("startTs", startTs), zap.Uint64("txnSafePoint", state.TxnSafePoint),
+		zap.Uint32("keyspaceID", keyspaceID), zap.String("gcServiceID", gcServiceID),
+		zap.Error(err))
+	return errors.WrapError(errors.ErrStartTsBeforeGC, err, startTs, state.TxnSafePoint)
 }
 
 // SetGCBarrier Set a GC Barrier of a keyspace
@@ -48,7 +58,7 @@ func setGCBarrier(ctx context.Context, pdCli pd.Client, keyspaceID uint32, servi
 	err := retry.Do(ctx, func() error {
 		barrierInfo, err1 := cli.SetGCBarrier(ctx, serviceID, ts, ttl)
 		if err1 != nil {
-			log.Warn("set gc barrier failed, retry later",
+			log.Warn("set gc barrier failed, retry it",
 				zap.String("serviceID", serviceID),
 				zap.Uint64("ts", ts),
 				zap.Duration("ttl", ttl),
@@ -60,6 +70,7 @@ func setGCBarrier(ctx context.Context, pdCli pd.Client, keyspaceID uint32, servi
 	}, retry.WithBackoffBaseDelay(gcServiceBackoffDelay),
 		retry.WithMaxTries(gcServiceMaxRetries),
 		retry.WithIsRetryableErr(errors.IsRetryableError))
+	// do not wrap the error here, let the caller decide how to wrap it
 	return err
 }
 
