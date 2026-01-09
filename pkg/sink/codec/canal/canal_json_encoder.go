@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 	"golang.org/x/text/encoding/charmap"
 )
@@ -94,7 +95,7 @@ func fillUpdateColumns(
 		if col != nil && !col.IsVirtualGenerated() {
 			colID := col.ID
 			// column equal, do not output it
-			if onlyOutputUpdatedColumn && newValueMap[colID] == oldValueMap[colID] {
+			if onlyOutputUpdatedColumn && util.GetOrZero(newValueMap[colID]) == util.GetOrZero(oldValueMap[colID]) {
 				continue
 			}
 			if onlyHandleKeyColumn && !tableInfo.IsHandleKey(col.ID) {
