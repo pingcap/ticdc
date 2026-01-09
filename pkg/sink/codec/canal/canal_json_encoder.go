@@ -47,10 +47,10 @@ func fillColumns(
 	out.RawByte('{')
 	isFirst := true
 	for _, col := range tableInfo.GetColumns() {
-		if col.IsVirtualGenerated() || !columnSelector.Select(col) {
-			continue
-		}
 		if col != nil {
+			if col.IsVirtualGenerated() || !columnSelector.Select(col) {
+				continue
+			}
 			colID := col.ID
 			if onlyHandleKeyColumn && !tableInfo.IsHandleKey(col.ID) {
 				continue
@@ -81,6 +81,7 @@ func fillUpdateColumns(
 	onlyHandleKeyColumn bool,
 	onlyOutputUpdatedColumn bool,
 	out *jwriter.Writer,
+	columnSelector commonEvent.Selector,
 ) error {
 	if len(tableInfo.GetColumns()) == 0 {
 		out.RawString("null")
@@ -90,7 +91,10 @@ func fillUpdateColumns(
 	out.RawByte('{')
 	isFirst := true
 	for _, col := range tableInfo.GetColumns() {
-		if col != nil && !col.IsVirtualGenerated() {
+		if col != nil {
+			if col.IsVirtualGenerated() || !columnSelector.Select(col) {
+				continue
+			}
 			colID := col.ID
 			// column equal, do not output it
 			if onlyOutputUpdatedColumn && newValueMap[colID] == oldValueMap[colID] {
@@ -291,7 +295,7 @@ func newJSONMessageForDML(
 		oldValueMap := make(map[int64]optionalString, 0) // colId -> value
 		preRow := e.GetPreRows()
 		for idx, col := range e.TableInfo.GetColumns() {
-			if !e.ColumnSelector.Select(col) {
+			if col == nil || col.IsVirtualGenerated() || !e.ColumnSelector.Select(col) {
 				continue
 			}
 			value, _ := formatColumnValue(preRow, idx, col)
@@ -299,7 +303,7 @@ func newJSONMessageForDML(
 		}
 
 		if err := fillUpdateColumns(valueMap, oldValueMap, e.TableInfo, onlyHandleKey,
-			config.OnlyOutputUpdatedColumns, out); err != nil {
+			config.OnlyOutputUpdatedColumns, out, e.ColumnSelector); err != nil {
 			return nil, err
 		}
 		out.RawString(",\"data\":")
