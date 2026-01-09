@@ -47,7 +47,7 @@ func initRedoComponet(
 	}
 	manager.RedoEnable = true
 	manager.redoDispatcherMap = newDispatcherMap[*dispatcher.RedoDispatcher]()
-	manager.redoSink = redo.New(ctx, changefeedID, startTs, manager.config.Consistent)
+	manager.redoSink = redo.New(ctx, changefeedID, manager.config.Consistent)
 	manager.redoSchemaIDToDispatchers = dispatcher.NewSchemaIDToDispatchers()
 
 	totalQuota := manager.sinkQuota
