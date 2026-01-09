@@ -609,6 +609,8 @@ func (p *persistentStorage) doGc(gcTs uint64) {
 		log.Warn("gc safe point is larger than resolvedTs, ignore it",
 			zap.Uint64("gcTs", gcTs),
 			zap.Uint64("resolvedTs", p.upperBound.ResolvedTs))
+		p.mu.Unlock()
+		return
 	}
 	if gcTs <= p.gcTs {
 		p.mu.Unlock()

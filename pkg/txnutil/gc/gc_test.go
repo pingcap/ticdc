@@ -66,7 +66,7 @@ func (m *mockPDClientWithGCStates) GetGCStatesClient(keyspaceID uint32) pdgc.GCS
 	return m.gcStatesClient
 }
 
-func TestEnsureChangefeedStartTsSafetyNextGen_SetsGCBarrier(t *testing.T) {
+func TestEnsureChangefeedStartTsSafetyNextGenSetsGCBarrier(t *testing.T) {
 	mockGCClient := &mockGCStatesClient{}
 	mockPDClient := &mockPDClientWithGCStates{gcStatesClient: mockGCClient}
 
@@ -86,7 +86,7 @@ func TestEnsureChangefeedStartTsSafetyNextGen_SetsGCBarrier(t *testing.T) {
 	require.Equal(t, time.Hour, mockGCClient.setArgs.ttl)
 }
 
-func TestEnsureChangefeedStartTsSafetyNextGen_ErrorIsWrapped(t *testing.T) {
+func TestEnsureChangefeedStartTsSafetyNextGenErrorIsWrapped(t *testing.T) {
 	mockGCClient := &mockGCStatesClient{
 		setErr: fmt.Errorf("ErrGCBarrierTSBehindTxnSafePoint: %w", context.Canceled),
 	}
@@ -103,11 +103,11 @@ func TestEnsureChangefeedStartTsSafetyNextGen_ErrorIsWrapped(t *testing.T) {
 	require.Error(t, err)
 	code, ok := errors.RFCCode(err)
 	require.True(t, ok)
-	require.Equal(t, errors.ErrUpdateGCBarrierFailed.RFCCode(), code)
+	require.Equal(t, errors.ErrStartTsBeforeGC.RFCCode(), code)
 	require.Contains(t, err.Error(), "ErrGCBarrierTSBehindTxnSafePoint")
 }
 
-func TestGetServiceGCSafepoint_UsesDummyServiceIDAndReadOnlyArgs(t *testing.T) {
+func TestGetServiceGCSafepointUsesDummyServiceIDAndReadOnlyArgs(t *testing.T) {
 	var (
 		callCount int
 		gotID     string
@@ -131,7 +131,7 @@ func TestGetServiceGCSafepoint_UsesDummyServiceIDAndReadOnlyArgs(t *testing.T) {
 	require.Equal(t, uint64(0), gotTS)
 }
 
-func TestRemoveServiceGCSafepoint_UsesTTL0AndMaxUint64(t *testing.T) {
+func TestRemoveServiceGCSafepointUsesTTL0AndMaxUint64(t *testing.T) {
 	var (
 		callCount int
 		gotID     string
@@ -154,7 +154,7 @@ func TestRemoveServiceGCSafepoint_UsesTTL0AndMaxUint64(t *testing.T) {
 	require.Equal(t, uint64(math.MaxUint64), gotTS)
 }
 
-func TestCheckStaleCheckpointTs_SnapshotLostByGC(t *testing.T) {
+func TestCheckStaleCheckpointTsSnapshotLostByGC(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("cf", "ks")
 	checkpointTs := uint64(200)
 	minServiceGCSafepoint := uint64(201)
@@ -172,7 +172,7 @@ func TestCheckStaleCheckpointTs_SnapshotLostByGC(t *testing.T) {
 	require.Equal(t, errors.ErrSnapshotLostByGC.RFCCode(), code)
 }
 
-func TestCheckStaleCheckpointTs_GCTTLExceeded(t *testing.T) {
+func TestCheckStaleCheckpointTsGCTTLExceeded(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("cf", "ks")
 
 	now := time.Now()

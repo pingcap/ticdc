@@ -136,7 +136,10 @@ func (m *gcManager) TryUpdateServiceGCSafePoint(
 	if !succeed {
 		log.Error("update gc safe point failed, the checkpointTs is smaller than the minimum service-gc-safepoint",
 			zap.Uint64("minServiceGCSafepoint", minServiceGCSafepoint), zap.Uint64("checkpointTs", checkpointTs))
-		return nil
+		if !forceUpdate {
+			return nil
+		}
+		return errors.ErrSnapshotLostByGC.GenWithStackByArgs(checkpointTs, minServiceGCSafepoint)
 	}
 	m.lastSucceededTime.Store(time.Now())
 	cdcGCSafePointGauge.Set(float64(oracle.ExtractPhysical(checkpointTs)))
