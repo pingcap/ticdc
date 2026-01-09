@@ -33,6 +33,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/api"
+	"github.com/pingcap/ticdc/pkg/check"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -249,6 +250,18 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 
 	// verify sinkURI
 	cfConfig := info.ToChangefeedConfig()
+	// Check whether the upstream and downstream are the different cluster.
+	notSame, err := check.UpstreamDownstreamNotSame(ctx, pdClient, cfConfig)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	if !notSame {
+		_ = c.Error(errors.ErrSameUpstreamDownstream.GenWithStack(
+			"TiCDC does not support creating a changefeed with the same TiDB cluster " +
+				"as both the source and the target for the changefeed."))
+		return
+	}
 	err = sink.Verify(ctx, cfConfig, changefeedID)
 	if err != nil {
 		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfg.SinkURI))
@@ -678,6 +691,19 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		return
 	}
 
+	// Check whether the upstream and downstream are the different cluster.
+	notSame, err := check.UpstreamDownstreamNotSame(ctx, h.server.GetPdClient(), cfInfo.ToChangefeedConfig())
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	if !notSame {
+		_ = c.Error(errors.ErrSameUpstreamDownstream.GenWithStack(
+			"TiCDC does not support resuming a changefeed with the same TiDB cluster " +
+				"as both the source and the target for the changefeed."))
+		return
+	}
+
 	resumeGcServiceID := h.server.GetEtcdClient().GetEnsureGCServiceID(gc.EnsureGCServiceResuming)
 	if err := verifyResumeChangefeedConfig(
 		ctx,
@@ -859,6 +885,19 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 	}
 
 	// verify sink
+	// Check whether the upstream and downstream are the different cluster.
+	notSame, err := check.UpstreamDownstreamNotSame(ctx, h.server.GetPdClient(), oldCfInfo.ToChangefeedConfig())
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	if !notSame {
+		_ = c.Error(errors.ErrSameUpstreamDownstream.GenWithStack(
+			"TiCDC does not support updating a changefeed with the same TiDB cluster " +
+				"as both the source and the target for the changefeed."))
+		return
+	}
+
 	err = sink.Verify(ctx, oldCfInfo.ToChangefeedConfig(), oldCfInfo.ChangefeedID)
 	if err != nil {
 		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, oldCfInfo.SinkURI))
