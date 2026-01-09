@@ -55,6 +55,7 @@ func EvaluateRowPolicy(
 	tableInfo *common.TableInfo,
 	row *RowChange,
 	enableActiveActive bool,
+	enableActiveActiveCheck bool,
 ) (RowPolicyDecision, error) {
 	if tableInfo == nil || row == nil {
 		return RowPolicyKeep, nil
@@ -72,6 +73,10 @@ func EvaluateRowPolicy(
 
 	// When enable-active-active is true, we only drop delete events and keep the rest.
 	if enableActiveActive {
+		return RowPolicyKeep, nil
+	}
+
+	if enableActiveActiveCheck {
 		return RowPolicyKeep, nil
 	}
 
@@ -152,7 +157,7 @@ func ApplyRowPolicyDecision(row *RowChange, decision RowPolicyDecision) {
 //
 // It returns the possibly modified event, whether the event should be skipped entirely,
 // and an error if evaluation fails.
-func FilterDMLEvent(event *DMLEvent, enableActiveActive bool) (*DMLEvent, bool, error) {
+func FilterDMLEvent(event *DMLEvent, enableActiveActive bool, enableActiveActiveCheck bool) (*DMLEvent, bool, error) {
 	if event == nil {
 		return nil, true, nil
 	}
@@ -185,7 +190,7 @@ func FilterDMLEvent(event *DMLEvent, enableActiveActive bool) (*DMLEvent, bool, 
 			break
 		}
 
-		decision, err := EvaluateRowPolicy(tableInfo, &row, enableActiveActive)
+		decision, err := EvaluateRowPolicy(tableInfo, &row, enableActiveActive, enableActiveActiveCheck)
 		if err != nil {
 			event.Rewind()
 			return nil, false, err

@@ -29,11 +29,12 @@ import (
 // This eliminates the need to pass these parameters individually to each dispatcher.
 type SharedInfo struct {
 	// Basic configuration
-	changefeedID         common.ChangeFeedID
-	timezone             string
-	bdrMode              bool
-	enableActiveActive   bool
-	outputRawChangeEvent bool
+	changefeedID            common.ChangeFeedID
+	timezone                string
+	bdrMode                 bool
+	enableActiveActive      bool
+	enableActiveActiveCheck bool
+	outputRawChangeEvent    bool
 
 	// Configuration objects
 	integrityConfig *eventpb.IntegrityConfig
@@ -75,6 +76,7 @@ func NewSharedInfo(
 	timezone string,
 	bdrMode bool,
 	enableActiveActive bool,
+	enableActiveActiveCheck bool,
 	outputRawChangeEvent bool,
 	integrityConfig *eventpb.IntegrityConfig,
 	filterConfig *eventpb.FilterConfig,
@@ -86,19 +88,20 @@ func NewSharedInfo(
 	errCh chan error,
 ) *SharedInfo {
 	sharedInfo := &SharedInfo{
-		changefeedID:          changefeedID,
-		timezone:              timezone,
-		bdrMode:               bdrMode,
-		enableActiveActive:    enableActiveActive,
-		outputRawChangeEvent:  outputRawChangeEvent,
-		integrityConfig:       integrityConfig,
-		filterConfig:          filterConfig,
-		syncPointConfig:       syncPointConfig,
-		enableSplittableCheck: enableSplittableCheck,
-		statusesChan:          statusesChan,
-		blockStatusesChan:     blockStatusesChan,
-		blockExecutor:         newBlockEventExecutor(),
-		errCh:                 errCh,
+		changefeedID:            changefeedID,
+		timezone:                timezone,
+		bdrMode:                 bdrMode,
+		enableActiveActive:      enableActiveActive,
+		enableActiveActiveCheck: enableActiveActiveCheck,
+		outputRawChangeEvent:    outputRawChangeEvent,
+		integrityConfig:         integrityConfig,
+		filterConfig:            filterConfig,
+		syncPointConfig:         syncPointConfig,
+		enableSplittableCheck:   enableSplittableCheck,
+		statusesChan:            statusesChan,
+		blockStatusesChan:       blockStatusesChan,
+		blockExecutor:           newBlockEventExecutor(),
+		errCh:                   errCh,
 	}
 
 	if txnAtomicity != nil {
