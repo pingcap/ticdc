@@ -242,6 +242,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		ResolvedTs:   checkpointTs,
 	}
 	m.redoResolvedTs = checkpointTs
+
 	m.scheduleState.Store(int32(heartbeatpb.ComponentState_Working))
 	m.bootstrapper = bootstrap.NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse](
 		m.changefeedID.Name(),
