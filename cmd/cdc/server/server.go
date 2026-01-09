@@ -104,6 +104,8 @@ func (o *options) run(cmd *cobra.Command) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	logger.StartLogFileMonitor(ctx, loggerConfig.File, 30*time.Second)
+
 	version.LogVersionInfo("Change Data Capture (CDC)")
 	metrics.BuildInfo.WithLabelValues(version.ReleaseVersion, version.GitHash, version.BuildTS, kerneltype.Name()).Set(1)
 	log.Info("The TiCDC release version", zap.String("ReleaseVersion", version.ReleaseVersion))
