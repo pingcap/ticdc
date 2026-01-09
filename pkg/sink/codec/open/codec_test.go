@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Inc.
+// Copyright 2025 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -31,9 +31,11 @@ func TestOnlyOutputUpdatedColumn(t *testing.T) {
 	defer helper.Close()
 
 	helper.Tk().MustExec("use test")
-	_ = helper.DDL2Event(`create table test.t (a int primary key, b int, c int)`)
-	_ = helper.DML2Event(`insert into test.t values (1, 1, 1)`, "test", "t")
-	event := helper.DML2Event(`update test.t set a=1,b=1,c=1 where a=1`, "test", "t")
+
+	job := helper.DDL2Job(`create table test.t (a int primary key, b int, c int)`)
+	require.NotNil(t, job)
+	_ = helper.DML2Event("test", "t", `insert into test.t values (1, 1, 1)`)
+	event := helper.DML2Event("test", "t", `update test.t set a=1,b=1,c=1 where a=1`)
 	codecConfig := common.NewConfig(config.ProtocolOpen)
 	codecConfig.OnlyOutputUpdatedColumns = true
 
@@ -42,14 +44,15 @@ func TestOnlyOutputUpdatedColumn(t *testing.T) {
 	row, ok := event.GetNextRow()
 	require.True(t, ok)
 	require.NotNil(t, row)
-	_, _, length, err := encodeRowChangedEvent(&commonEvent.RowEvent{
+	_, value, _, err := encodeRowChangedEvent(&commonEvent.RowEvent{
 		TableInfo:      event.TableInfo,
 		Event:          row,
 		CommitTs:       event.CommitTs,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
 	}, columnFlags, codecConfig, false, "")
 	require.NoError(t, err)
-	require.Equal(t, length, 0)
+	require.NotContains(t, string(value), "d")
+	require.NotContains(t, string(value), "p")
 }
 
 func TestRowChanged2MsgOnlyHandleKeyColumns(t *testing.T) {
@@ -60,8 +63,9 @@ func TestRowChanged2MsgOnlyHandleKeyColumns(t *testing.T) {
 	defer helper.Close()
 
 	helper.Tk().MustExec("use test")
-	_ = helper.DDL2Event(`create table test.t(id int primary key, a int)`)
-	insertEvent := helper.DML2Event(`insert into test.t values (1, 1)`, "test", "t")
+	job := helper.DDL2Job(`create table test.t(id int primary key, a int)`)
+	require.NotNil(t, job)
+	insertEvent := helper.DML2Event("test", "t", `insert into test.t values (1, 1)`)
 
 	config := common.NewConfig(config.ProtocolOpen)
 	config.DeleteOnlyHandleKeyColumns = true
@@ -79,8 +83,8 @@ func TestRowChanged2MsgOnlyHandleKeyColumns(t *testing.T) {
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
 	}, columnFlags, config, false, "")
 	require.NoError(t, err)
-	require.Contains(t, value, "id")
-	require.Contains(t, value, "a")
+	require.Contains(t, string(value), "id")
+	require.Contains(t, string(value), "a")
 
 	config.DeleteOnlyHandleKeyColumns = false
 	key, value, _, err := encodeRowChangedEvent(&commonEvent.RowEvent{
@@ -90,12 +94,12 @@ func TestRowChanged2MsgOnlyHandleKeyColumns(t *testing.T) {
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
 	}, columnFlags, config, true, "")
 	require.NoError(t, err)
-	require.Contains(t, key, "ohk")
-	require.Contains(t, value, "id")
-	require.NotContains(t, value, "a")
+	require.Contains(t, string(key), "ohk")
+	require.Contains(t, string(value), "id")
+	require.NotContains(t, string(value), "a")
 
 	_ = helper.DDL2Event(`create table test.t1(id varchar(10), a varchar(10))`)
-	insertEventNoHandleKey := helper.DML2Event(`insert into test.t1 values ("1", "1")`, "test", "t1")
+	insertEventNoHandleKey := helper.DML2Event("test", "t1", `insert into test.t1 values ("1", "1")`)
 	columnFlags = initColumnFlags(insertEventNoHandleKey.TableInfo)
 	row, ok = insertEventNoHandleKey.GetNextRow()
 	insertEventNoHandleKey.Rewind()
@@ -122,7 +126,7 @@ func TestRowChanged2MsgOnlyHandleKeyColumns(t *testing.T) {
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
 	}, columnFlags, config, false, "")
 	require.NoError(t, err)
-	require.Contains(t, value, "a")
+	require.Contains(t, string(value), "a")
 
 	config.DeleteOnlyHandleKeyColumns = false
 	key, value, _, err = encodeRowChangedEvent(&commonEvent.RowEvent{
@@ -132,9 +136,9 @@ func TestRowChanged2MsgOnlyHandleKeyColumns(t *testing.T) {
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
 	}, columnFlags, config, true, "")
 	require.NoError(t, err)
-	require.Contains(t, key, "ohk")
-	require.NotContains(t, value, "a")
-	require.NotContains(t, value, "a")
+	require.Contains(t, string(key), "ohk")
+	require.NotContains(t, string(value), "a")
+	require.NotContains(t, string(value), "a")
 
 	row, ok = insertEventNoHandleKey.GetNextRow()
 	insertEventNoHandleKey.Rewind()
@@ -163,8 +167,8 @@ func TestRowChanged2MsgOnlyHandleKeyColumns(t *testing.T) {
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
 	}, columnFlags, config, false, "")
 	require.NoError(t, err)
-	require.Contains(t, value, "id")
-	require.NotContains(t, value, "a")
+	require.Contains(t, string(value), "id")
+	require.NotContains(t, string(value), "a")
 
 	config.DeleteOnlyHandleKeyColumns = false
 	key, value, _, err = encodeRowChangedEvent(&commonEvent.RowEvent{
@@ -174,8 +178,8 @@ func TestRowChanged2MsgOnlyHandleKeyColumns(t *testing.T) {
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
 	}, columnFlags, config, false, "")
 	require.NoError(t, err)
-	require.Contains(t, value, "id")
-	require.Contains(t, value, "a")
+	require.Contains(t, string(value), "id")
+	require.Contains(t, string(value), "a")
 
 	config.DeleteOnlyHandleKeyColumns = false
 	// key, value, err = encodeRowChangedEvent(&deleteEvent, config, true)
@@ -186,8 +190,8 @@ func TestRowChanged2MsgOnlyHandleKeyColumns(t *testing.T) {
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
 	}, columnFlags, config, true, "")
 	require.NoError(t, err)
-	require.Contains(t, key, "ohk")
-	require.NotContains(t, value, "a")
+	require.Contains(t, string(key), "ohk")
+	require.NotContains(t, string(value), "a")
 
 	row, ok = insertEventNoHandleKey.GetNextRow()
 	insertEventNoHandleKey.Rewind()
