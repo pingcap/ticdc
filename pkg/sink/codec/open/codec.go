@@ -82,14 +82,16 @@ func encodeRowChangedEvent(
 			if err != nil {
 				return
 			}
-			if !config.OnlyOutputUpdatedColumns {
-				valueWriter.WriteObjectField("p", func() {
-					err = writeColumnFieldValues(valueWriter, e.GetPreRows(), e.TableInfo, columnFlags, e.ColumnSelector, largeMessageOnlyHandleKeyColumns)
-				})
-			} else {
-				valueWriter.WriteObjectField("p", func() {
-					writeUpdatedColumnFieldValues(valueWriter, e.GetPreRows(), e.GetRows(), e.TableInfo, columnFlags, e.ColumnSelector, largeMessageOnlyHandleKeyColumns)
-				})
+			if config.OpenOutputOldValue {
+				if !config.OnlyOutputUpdatedColumns {
+					valueWriter.WriteObjectField("p", func() {
+						err = writeColumnFieldValues(valueWriter, e.GetPreRows(), e.TableInfo, columnFlags, e.ColumnSelector, largeMessageOnlyHandleKeyColumns)
+					})
+				} else {
+					valueWriter.WriteObjectField("p", func() {
+						writeUpdatedColumnFieldValues(valueWriter, e.GetPreRows(), e.GetRows(), e.TableInfo, columnFlags, e.ColumnSelector, largeMessageOnlyHandleKeyColumns)
+					})
+				}
 			}
 		})
 	}
@@ -245,10 +247,7 @@ func writeColumnFieldValues(
 	var encoded bool
 	colInfo := tableInfo.GetColumns()
 	for idx, col := range colInfo {
-		if selector.Select(col) {
-			if col.IsVirtualGenerated() {
-				continue
-			}
+		if col != nil && !col.IsVirtualGenerated() && selector.Select(col) {
 			handle := tableInfo.IsHandleKey(col.ID)
 			if onlyHandleKeyColumns && !handle {
 				continue
@@ -279,7 +278,7 @@ func writeUpdatedColumnFieldValues(
 	colInfo := tableInfo.GetColumns()
 
 	for idx, col := range colInfo {
-		if selector.Select(col) {
+		if col != nil && !col.IsVirtualGenerated() && selector.Select(col) {
 			isHandle := tableInfo.IsHandleKey(col.ID)
 			if onlyHandleKeyColumns && !isHandle {
 				continue
@@ -307,7 +306,7 @@ func writeColumnFieldValueIfUpdated(
 			if isHandle {
 				writer.WriteBoolField("h", isHandle)
 			}
-			writer.WriteUint64Field("f", uint64(flag))
+			writer.WriteUint64Field("f", columnFlag)
 			writeColumnValue()
 		})
 	}
@@ -331,7 +330,7 @@ func writeColumnFieldValueIfUpdated(
 		// Encode bits as integers to avoid pingcap/tidb#10988 (which also affects MySQL itself)
 		rowValue, _ := rowDatumPoint.GetBinaryLiteral().ToInt(types.DefaultStmtNoWarningContext)
 
-		preRowDatum := row.GetDatum(idx, &col.FieldType)
+		preRowDatum := preRow.GetDatum(idx, &col.FieldType)
 		preRowDatumPoint := &preRowDatum
 		// Encode bits as integers to avoid pingcap/tidb#10988 (which also affects MySQL itself)
 		preRowValue, _ := preRowDatumPoint.GetBinaryLiteral().ToInt(types.DefaultStmtNoWarningContext)
@@ -356,14 +355,12 @@ func writeColumnFieldValueIfUpdated(
 			if len(preRowValue) == 0 {
 				writeFunc(func() { writer.WriteNullField("v") })
 			} else {
+				str := string(preRowValue)
 				if mysql.HasBinaryFlag(flag) {
-					str := string(preRowValue)
 					str = strconv.Quote(str)
 					str = str[1 : len(str)-1]
-					writeFunc(func() { writer.WriteStringField("v", str) })
-				} else {
-					writeFunc(func() { writer.WriteStringField("v", string(preRowValue)) })
 				}
+				writeFunc(func() { writer.WriteStringField("v", str) })
 			}
 		}
 	case mysql.TypeEnum, mysql.TypeSet:
@@ -440,5 +437,4 @@ func writeColumnFieldValueIfUpdated(
 			writeFunc(func() { writer.WriteAnyField("v", preRowValue) })
 		}
 	}
-	return
 }

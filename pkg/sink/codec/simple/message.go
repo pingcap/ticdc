@@ -463,7 +463,28 @@ func encodeValue(
 		// NOTICE: GetValue() may return some types that go sql not support, which will cause sink DML fail
 		// Make specified convert upper if you need
 		// Go sql support type ref to: https://github.com/golang/go/blob/go1.17.4/src/database/sql/driver/types.go#L236
-		value = fmt.Sprintf("%v", d.GetValue())
+		switch v := d.GetValue().(type) {
+		case int64:
+			value = strconv.FormatInt(v, 10)
+		case uint64:
+			value = strconv.FormatUint(v, 10)
+		case float32:
+			value = strconv.FormatFloat(float64(v), 'f', -1, 32)
+		case float64:
+			value = strconv.FormatFloat(v, 'f', -1, 64)
+		case string:
+			value = v
+		case []byte:
+			if mysql.HasBinaryFlag(ft.GetFlag()) {
+				value = base64.StdEncoding.EncodeToString(v)
+			} else {
+				value = string(v)
+			}
+		case types.VectorFloat32:
+			value = v.String()
+		default:
+			value = fmt.Sprintf("%v", v)
+		}
 	}
 	return value
 }
