@@ -27,9 +27,6 @@ import (
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/types"
-
-	// removed unused import
-
 	"github.com/stretchr/testify/require"
 )
 
