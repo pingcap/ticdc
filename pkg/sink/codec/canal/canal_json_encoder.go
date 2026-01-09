@@ -62,11 +62,11 @@ func fillColumns(
 			}
 			out.String(col.Name.O)
 			out.RawByte(':')
-			os := valueMap[colID]
-			if os.isNull {
+			optionalStr := valueMap[colID]
+			if optionalStr.isNull {
 				out.RawString("null")
 			} else {
-				out.String(os.value)
+				out.String(optionalStr.value)
 			}
 		}
 	}
@@ -106,11 +106,11 @@ func fillUpdateColumns(
 			}
 			out.String(col.Name.O)
 			out.RawByte(':')
-			op := oldValueMap[colID]
-			if op.isNull {
+			optionalStr := oldValueMap[colID]
+			if optionalStr.isNull {
 				out.RawString("null")
 			} else {
-				out.String(op.value)
+				out.String(optionalStr.value)
 			}
 		}
 	}
