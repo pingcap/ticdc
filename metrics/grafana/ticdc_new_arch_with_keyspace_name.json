@@ -763,7 +763,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_dispatchermanager_table_event_dispatcher_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (instance, changefeed, event_type)",
+              "expr": "sum(ticdc_dispatchermanager_table_dispatcher_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (instance, changefeed, event_type)",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -1607,7 +1607,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_dispatchermanager_table_event_dispatcher_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (instance)",
+              "expr": "sum(ticdc_dispatchermanager_table_dispatcher_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (instance)",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -1719,7 +1719,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_dispatchermanager_table_event_dispatcher_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (changefeed)",
+              "expr": "sum(ticdc_dispatchermanager_table_dispatcher_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (changefeed)",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -3914,7 +3914,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_dispatchermanager_table_event_dispatcher_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (instance, changefeed, event_type)",
+              "expr": "sum(ticdc_dispatchermanager_table_dispatcher_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (instance, changefeed, event_type)",
               "format": "time_series",
               "hide": false,
               "interval": "",
@@ -4027,7 +4027,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_dispatchermanager_table_trigger_event_dispatcher_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (instance, changefeed, event_type)",
+              "expr": "sum(ticdc_dispatchermanager_table_trigger_dispatcher_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (instance, changefeed, event_type)",
               "format": "time_series",
               "hide": false,
               "interval": "",
