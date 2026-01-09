@@ -30,10 +30,12 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	mock_changefeed "github.com/pingcap/ticdc/coordinator/changefeed/mock"
+	"github.com/pingcap/ticdc/coordinator/operator"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/eventservice"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -41,9 +43,11 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/orchestrator"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	txngc "github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 	pd "github.com/tikv/pd/client"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
@@ -628,6 +632,55 @@ func TestConcurrentStopAndSendEvents(t *testing.T) {
 	err := co.recvMessages(ctx, msg)
 	require.NoError(t, err)
 	require.True(t, co.closed.Load())
+}
+
+func TestCoordinatorCreateChangefeed_CallsUpdateGCSafepointByChangefeed(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	controller := &Controller{
+		initialized:        atomic.NewBool(true),
+		operatorController: &operator.Controller{},
+		changefeedDB:       changefeed.NewChangefeedDB(1),
+		nodeManager:        watcher.NewNodeManager(nil, nil),
+	}
+
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	controller.backend = backend
+
+	gcManager := txngc.NewMockManager(ctrl)
+	co := &coordinator{
+		controller: controller,
+		gcManager:  gcManager,
+	}
+
+	startTs := uint64(100)
+	info := &config.ChangeFeedInfo{
+		ChangefeedID: common.NewChangeFeedIDWithName("cf", "ks"),
+		SinkURI:      "blackhole://",
+		StartTs:      startTs,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateNormal,
+		KeyspaceID:   1,
+	}
+
+	createCall := backend.EXPECT().CreateChangefeed(gomock.Any(), gomock.Any()).Return(nil).Times(1)
+	var updateGCCall *gomock.Call
+	if kerneltype.IsNextGen() {
+		updateGCCall = gcManager.EXPECT().
+			TryUpdateKeyspaceGCBarrier(gomock.Any(), uint32(1), "ks", common.Ts(startTs), true).
+			Return(nil).
+			Times(1)
+	} else {
+		updateGCCall = gcManager.EXPECT().
+			TryUpdateServiceGCSafePoint(gomock.Any(), common.Ts(startTs), true).
+			Return(nil).
+			Times(1)
+	}
+	gomock.InOrder(createCall, updateGCCall)
+
+	err := co.CreateChangefeed(context.Background(), info)
+	require.NoError(t, err)
 }
 
 type maintainNode struct {
