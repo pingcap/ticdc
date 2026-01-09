@@ -33,7 +33,7 @@ var bytesDecoder = charmap.ISO8859_1.NewDecoder()
 
 // TODO: we need to reorg this code later, including use util.jsonWriter and other unreasonable code
 func fillColumns(
-	valueMap map[int64]optionalString,
+	valueMap map[int64]string,
 	tableInfo *commonType.TableInfo,
 	onlyHandleKeyColumn bool,
 	out *jwriter.Writer,
@@ -62,11 +62,10 @@ func fillColumns(
 			}
 			out.String(col.Name.O)
 			out.RawByte(':')
-			optionalStr := valueMap[colID]
-			if optionalStr.isNull {
+			if valueMap[colID] == "null" {
 				out.RawString("null")
 			} else {
-				out.String(optionalStr.value)
+				out.String(valueMap[colID])
 			}
 		}
 	}
@@ -76,7 +75,8 @@ func fillColumns(
 }
 
 func fillUpdateColumns(
-	newValueMap, oldValueMap map[int64]optionalString,
+	newValueMap map[int64]string,
+	oldValueMap map[int64]string,
 	tableInfo *commonType.TableInfo,
 	onlyHandleKeyColumn bool,
 	onlyOutputUpdatedColumn bool,
@@ -106,11 +106,10 @@ func fillUpdateColumns(
 			}
 			out.String(col.Name.O)
 			out.RawByte(':')
-			optionalStr := oldValueMap[colID]
-			if optionalStr.isNull {
+			if oldValueMap[colID] == "null" {
 				out.RawString("null")
 			} else {
-				out.String(optionalStr.value)
+				out.String(oldValueMap[colID])
 			}
 		}
 	}
@@ -204,7 +203,7 @@ func newJSONMessageForDML(
 		out.String("")
 	}
 
-	valueMap := make(map[int64]optionalString, columnLen)        // colId -> value
+	valueMap := make(map[int64]string, columnLen)                // colId -> value
 	javaTypeMap := make(map[int64]common.JavaSQLType, columnLen) // colId -> javaType
 
 	row := e.GetRows()
@@ -288,7 +287,7 @@ func newJSONMessageForDML(
 	} else if e.IsUpdate() {
 		out.RawString(",\"old\":")
 
-		oldValueMap := make(map[int64]optionalString, 0) // colId -> value
+		oldValueMap := make(map[int64]string, 0) // colId -> value
 		preRow := e.GetPreRows()
 		for idx, col := range e.TableInfo.GetColumns() {
 			if !e.ColumnSelector.Select(col) {
