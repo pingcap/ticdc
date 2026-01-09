@@ -36,6 +36,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/eventservice"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -634,7 +635,57 @@ func TestConcurrentStopAndSendEvents(t *testing.T) {
 	require.True(t, co.closed.Load())
 }
 
-func TestCoordinatorCreateChangefeed_CallsUpdateGCSafepointByChangefeed(t *testing.T) {
+func TestCoordinatorCreateChangefeedMustSetServiceGCSafepointReportError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	controller := &Controller{
+		initialized:        atomic.NewBool(true),
+		operatorController: &operator.Controller{},
+		changefeedDB:       changefeed.NewChangefeedDB(1),
+		nodeManager:        watcher.NewNodeManager(nil, nil),
+	}
+
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	controller.backend = backend
+
+	gcManager := txngc.NewMockManager(ctrl)
+	co := &coordinator{
+		controller: controller,
+		gcManager:  gcManager,
+	}
+
+	startTs := uint64(100)
+	info := &config.ChangeFeedInfo{
+		ChangefeedID: common.NewChangeFeedIDWithName("cf", "ks"),
+		SinkURI:      "blackhole://",
+		StartTs:      startTs,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateNormal,
+		KeyspaceID:   1,
+	}
+
+	returnError := errors.New("gc service error")
+	createCall := backend.EXPECT().CreateChangefeed(gomock.Any(), gomock.Any()).Return(nil).Times(1)
+	var updateGCCall *gomock.Call
+	if kerneltype.IsNextGen() {
+		updateGCCall = gcManager.EXPECT().
+			TryUpdateKeyspaceGCBarrier(gomock.Any(), uint32(1), "ks", common.Ts(startTs), true).
+			Return(returnError).
+			Times(1)
+	} else {
+		updateGCCall = gcManager.EXPECT().
+			TryUpdateServiceGCSafePoint(gomock.Any(), common.Ts(startTs), true).
+			Return(returnError).
+			Times(1)
+	}
+	gomock.InOrder(createCall, updateGCCall)
+
+	err := co.CreateChangefeed(context.Background(), info)
+	require.Error(t, err)
+}
+
+func TestCoordinatorCreateChangefeedMustSetServiceGCSafepoint(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
