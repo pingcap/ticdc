@@ -36,12 +36,11 @@ func ensureChangefeedStartTsSafetyClassic(ctx context.Context, pdCli pd.Client, 
 		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, minServiceGcSafepoint)
 	}
 
-	log.Info("set service gc safepoint for changefeed",
+	log.Info("ensure changefeed start ts safety",
 		zap.String("gcServiceID", gcServiceID),
 		zap.Uint64("startTs", startTs),
-		zap.Uint64("minServiceGCSafepoint", minServiceGcSafepoint),
+		zap.Bool("isBlockingGC", startTs == minServiceGcSafepoint),
 		zap.Int64("ttl", ttl))
-
 	return nil
 }
 

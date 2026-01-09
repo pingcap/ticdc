@@ -34,6 +34,10 @@ func ensureChangefeedStartTsSafetyNextGen(ctx context.Context, pdCli pd.Client, 
 			zap.Error(err))
 		return errors.WrapError(errors.ErrUpdateGCBarrierFailed, err)
 	}
+	log.Info("ensure changefeed start ts safety",
+		zap.String("gcServiceID", gcServiceID),
+		zap.Uint64("startTs", startTs),
+		zap.Int64("ttl", ttl))
 	return nil
 }
 
