@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
-	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 	"golang.org/x/text/encoding/charmap"
 )
@@ -34,7 +33,7 @@ var bytesDecoder = charmap.ISO8859_1.NewDecoder()
 
 // TODO: we need to reorg this code later, including use util.jsonWriter and other unreasonable code
 func fillColumns(
-	valueMap map[int64]*string,
+	valueMap map[int64]optionalString,
 	tableInfo *commonType.TableInfo,
 	onlyHandleKeyColumn bool,
 	out *jwriter.Writer,
@@ -63,11 +62,11 @@ func fillColumns(
 			}
 			out.String(col.Name.O)
 			out.RawByte(':')
-			val := valueMap[colID]
-			if val == nil {
+			os := valueMap[colID]
+			if os.isNull {
 				out.RawString("null")
 			} else {
-				out.String(*val)
+				out.String(os.value)
 			}
 		}
 	}
@@ -77,8 +76,7 @@ func fillColumns(
 }
 
 func fillUpdateColumns(
-	newValueMap map[int64]*string,
-	oldValueMap map[int64]*string,
+	newValueMap, oldValueMap map[int64]optionalString,
 	tableInfo *commonType.TableInfo,
 	onlyHandleKeyColumn bool,
 	onlyOutputUpdatedColumn bool,
@@ -95,7 +93,7 @@ func fillUpdateColumns(
 		if col != nil && !col.IsVirtualGenerated() {
 			colID := col.ID
 			// column equal, do not output it
-			if onlyOutputUpdatedColumn && util.GetOrZero(newValueMap[colID]) == util.GetOrZero(oldValueMap[colID]) {
+			if onlyOutputUpdatedColumn && newValueMap[colID] == oldValueMap[colID] {
 				continue
 			}
 			if onlyHandleKeyColumn && !tableInfo.IsHandleKey(col.ID) {
@@ -108,11 +106,11 @@ func fillUpdateColumns(
 			}
 			out.String(col.Name.O)
 			out.RawByte(':')
-			val := oldValueMap[colID]
-			if val == nil {
+			op := oldValueMap[colID]
+			if op.isNull {
 				out.RawString("null")
 			} else {
-				out.String(*val)
+				out.String(op.value)
 			}
 		}
 	}
@@ -206,7 +204,7 @@ func newJSONMessageForDML(
 		out.String("")
 	}
 
-	valueMap := make(map[int64]*string, columnLen)               // colId -> value
+	valueMap := make(map[int64]optionalString, columnLen)        // colId -> value
 	javaTypeMap := make(map[int64]common.JavaSQLType, columnLen) // colId -> javaType
 
 	row := e.GetRows()
@@ -290,7 +288,7 @@ func newJSONMessageForDML(
 	} else if e.IsUpdate() {
 		out.RawString(",\"old\":")
 
-		oldValueMap := make(map[int64]*string, 0) // colId -> value
+		oldValueMap := make(map[int64]optionalString, 0) // colId -> value
 		preRow := e.GetPreRows()
 		for idx, col := range e.TableInfo.GetColumns() {
 			if !e.ColumnSelector.Select(col) {
