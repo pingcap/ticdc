@@ -28,6 +28,11 @@ import (
 	"go.uber.org/zap"
 )
 
+type optionalString struct {
+	value  string
+	isNull bool
+}
+
 func mysqlType2JavaType(t byte, isBinary bool) common.JavaSQLType {
 	switch t {
 	case mysql.TypeBit:
@@ -84,12 +89,12 @@ func mysqlType2JavaType(t byte, isBinary bool) common.JavaSQLType {
 	return common.JavaSQLTypeVARCHAR
 }
 
-func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo) (string, common.JavaSQLType) {
+func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo) (optionalString, common.JavaSQLType) {
 	isBinary := mysql.HasBinaryFlag(columnInfo.GetFlag())
 	javaType := mysqlType2JavaType(columnInfo.GetType(), isBinary)
 	d := row.GetDatum(idx, &columnInfo.FieldType)
 	if d.IsNull() {
-		return "null", javaType
+		return optionalString{isNull: true}, javaType
 	}
 
 	var value string
@@ -186,10 +191,6 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo) (s
 		value = strconv.FormatInt(d.GetInt64(), 10)
 	case mysql.TypeTiDBVectorFloat32:
 		javaType = common.JavaSQLTypeVARCHAR
-		if d.IsNull() {
-			value = "null"
-			break
-		}
 		value = d.GetVectorFloat32().String()
 	default:
 		// NOTICE: GetValue() may return some types that go sql not support, which will cause sink DML fail
@@ -197,7 +198,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo) (s
 		// Go sql support type ref to: https://github.com/golang/go/blob/go1.17.4/src/database/sql/driver/types.go#L236
 		value = fmt.Sprintf("%v", d.GetValue())
 	}
-	return value, javaType
+	return optionalString{value: value}, javaType
 }
 
 // convert ts in tidb to timestamp(in ms) in canal
