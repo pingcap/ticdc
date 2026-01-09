@@ -1,130 +1,39 @@
-# AGENTS.md
+# Repository Guidelines
 
-This file provides guidance to agents when working with code in this repository.
+## Project Structure & Module Organization
 
-## Developing Environment Tips
+- `cmd/`: buildable binaries (e.g. `cmd/cdc`, `cmd/kafka-consumer`).
+- `downstreamadapter/`: downstream adapters and sinks (e.g. `downstreamadapter/sink/kafka`).
+- `pkg/`: shared libraries (config, codec, sink implementations, errors, utilities).
+- `server/`, `coordinator/`, `maintainer/`, `logservice/`: runtime components and orchestration.
+- `tests/integration_tests/`: script-driven integration test suites.
+- `scripts/`, `tools/`: codegen, linting, and build/test tooling.
+- `docs/design/`: design docs; `server.toml` is a config example.
 
-### Prerequisites
+## Build, Test, and Development Commands
 
-- Go (see `go.mod`)
-- `git`, `make`
-- For code generation: `protoc` (optional; `make generate-protobuf` uses tools under `tools/`)
-- For integration tests: TiDB/TiKV/PD binaries and related tools in `bin/` (see `make check_third_party_binary`)
+- `make cdc`: build main binary to `bin/cdc`.
+- `make fmt`: run `gci` + `gofumports` + `shfmt`, plus log-style checks.
+- `make check`: pre-submit checks (fmt, tidy, codegen, dashboards, Makefile formatting).
+- `make unit_test`: unit tests with race + failpoints enabled (uses `--tags=intest`).
+- `make unit_test_pkg PKG=./pkg/sink/...`: narrow unit test scope.
+- `make integration_test_kafka CASE=<name>` (and `*_mysql|*_storage|*_pulsar`): run integration suites; requires binaries in `bin/` (`make check_third_party_binary`).
 
-### Code Organization
+## Coding Style & Naming Conventions
 
-**Top-level:**
+- Go: keep `gofmt` clean; use `make fmt` before pushing.
+- Naming:
+  - Functions: use camel case and **do not** include `_` (e.g. `getPartitionNum`, not `get_partition_num`).
+  - Variables: use lowerCamelCase (e.g. `flushInterval`, not `flush_interval`).
+- Logging: structured logs via `github.com/pingcap/log` + `zap` fields; message strings should **not** include function names and should avoid `-` (use spaces instead).
+- Errors: when an error comes from a third party/library call, wrap it immediately with `errors.Trace(err)` or `errors.WrapError(...)` to attach a stack trace; upstream callers should propagate wrapped errors without wrapping again.
 
-- `/cmd/` - Binary entry points (`cdc`, consumers, helpers).
-- `/server/` - Server runtime modules: leader election, HTTP/gRPC modules, watchers.
-- `/coordinator/` - Changefeed coordinator/controller and scheduling.
-- `/maintainer/` - Maintainer role: barrier/replica scheduling and orchestration.
-- `/downstreamadapter/` - Dispatcher and sink adapters for downstream systems.
-- `/logservice/` - Log pulling, schema store, and event storage.
-- `/pkg/` - Reusable libraries (config, etcd, messaging, sink, scheduler, redo, filter, metrics, ...).
-- `/tests/integration_tests/` - Script-driven integration test suites.
-- `/tools/` and `/scripts/` - Build/test toolchain and helpers.
-- `/docs/design/` - Design docs for major features/architecture.
+## Testing Guidelines
 
-## Building
+- Unit tests: `*_test.go`, favor deterministic tests; use `testify/require`.
+- Failpoints: `make unit_test` enables/disables automatically. If you enable manually, disable before committing to avoid a dirty tree.
 
-```bash
-# Build TiCDC server
-make cdc
+## Commit & Pull Request Guidelines
 
-# Other binaries
-make kafka_consumer
-make storage_consumer
-make pulsar_consumer
-make oauth2_server
-make filter_helper
-make config-converter
-
-# Build with the `nextgen` build tag
-NEXT_GEN=1 make cdc
-```
-
-## Testing
-
-### Unit Tests
-
-Prefer the Makefile targets (they enable/disable failpoints and set tags):
-
-```bash
-# Run all unit tests
-make unit_test
-
-# Run unit tests for a specific package/path
-make unit_test_pkg PKG=./pkg/sink/...
-```
-
-If you run `go test` directly, make sure failpoints are disabled afterward:
-
-```bash
-make failpoint-enable
-go test -v --race --tags=intest ./...
-make failpoint-disable
-```
-
-### Integration Tests
-
-Integration tests live under `tests/integration_tests/` and are driven by `tests/integration_tests/run.sh`.
-
-```bash
-# Build the test binary used by integration tests
-make integration_test_build
-
-# Run a specific suite
-make integration_test_mysql CASE=<case-name>
-make integration_test_kafka CASE=<case-name>
-make integration_test_storage CASE=<case-name>
-make integration_test_pulsar CASE=<case-name>
-```
-
-Integration tests require third-party binaries (TiDB/TiKV/PD, etc.) available in `bin/`:
-
-```bash
-make check_third_party_binary
-```
-
-## Code Quality
-
-```bash
-# Formatting (imports, gofmt, shell scripts) + log style checks
-make fmt
-
-# Static analysis
-make check-static
-
-# `go mod tidy` checks
-make tidy
-
-# Full pre-submit checks (fmt/tidy/generate/checks)
-make check
-```
-
-## Pull Request Instructions
-
-### PR title
-
-The PR title **must** follow one of these formats (same convention as commit messages):
-
-**Format 1 (Specific subsystems):** `subsystem [, subsystem2]: what is changed`
-
-**Format 2 (Repository-wide):** `*: what is changed`
-
-Examples:
-
-- `maintainer: fix barrier regression on reschedule`
-- `coordinator, scheduler: reduce tick overhead`
-- `*: update build tooling`
-
-### PR description
-
-The PR description **must** follow the template at `.github/pull_request_template.md` and **must** keep the HTML comment blocks unchanged.
-
-Key requirements:
-
-- There MUST be a line starting with `Issue Number:` linking relevant issues via `close #xxx` or `ref #xxx`.
-- Under `#### Tests`, ensure at least one item is selected.
-- Provide a `release-note` block (or `None` if not applicable).
+- Commit/PR title format (see `CONTRIBUTING.md`): `<subsystem>[,subsystem2]: <what changed>` or `*: <what changed>`. Subject ≤70 chars; wrap body at ~80.
+- PRs should follow `.github/pull_request_template.md` (include `Issue Number:` line, select tests, and fill the `release-note` block).
