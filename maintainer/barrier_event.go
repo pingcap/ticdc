@@ -14,7 +14,6 @@
 package maintainer
 
 import (
-	"sync"
 	"time"
 
 	"github.com/pingcap/log"
@@ -32,8 +31,6 @@ import (
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
-
-var logExcludeDispatcherIDDeprecatedOnce sync.Once
 
 // BarrierEvent is a barrier event that reported by dispatchers, note is a block multiple dispatchers
 // all of these dispatchers should report the same event
