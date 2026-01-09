@@ -729,7 +729,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 		// Writing a block event may involve downstream IO (e.g. executing DDL), so it must not block
 		// the dynamic stream goroutine.
 		d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
-			if d.IsTableTriggerEventDispatcher() && (event.GetNeedAddedTables() != nil || event.GetNeedDroppedTables() != nil) {
+			if d.IsTableTriggerDispatcher() && (event.GetNeedAddedTables() != nil || event.GetNeedDroppedTables() != nil) {
 				// If this is a table trigger event dispatcher, and the DDL related to adds/drops tables,
 				// we need to increment pendingACKCount to track the un-ACKed schedule-related DDL.
 				d.pendingACKCount.Add(1)
@@ -792,7 +792,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 		// Note: We only hold InfluenceType_DB/All. InfluenceType_Normal does not require a global
 		// task snapshot to build its range checker.
 		blockedTables := event.GetBlockedTables()
-		if d.IsTableTriggerEventDispatcher() &&
+		if d.IsTableTriggerDispatcher() &&
 			d.pendingACKCount.Load() > 0 &&
 			blockedTables != nil &&
 			blockedTables.InfluenceType != commonEvent.InfluenceTypeNormal {
@@ -841,7 +841,7 @@ func (d *BasicDispatcher) cancelResendTask(identifier BlockEventIdentifier) {
 	task.Cancel()
 	d.resendTaskMap.Delete(identifier)
 
-	if d.IsTableTriggerEventDispatcher() {
+	if d.IsTableTriggerDispatcher() {
 		d.pendingACKCount.Add(-1)
 		d.tryDealWithHeldBlockEvent()
 	}
@@ -894,7 +894,7 @@ func (d *BasicDispatcher) popHoldingBlockEvent() commonEvent.BlockEvent {
 }
 
 func (d *BasicDispatcher) reportBlockedEventToMaintainer(event commonEvent.BlockEvent) {
-	if d.IsTableTriggerEventDispatcher() {
+	if d.IsTableTriggerDispatcher() {
 		// If this is a table trigger event dispatcher, we need to increment pendingACKCount
 		// for any block event reported to the maintainer to track un-ACKed events.
 		d.pendingACKCount.Add(1)
