@@ -7,6 +7,7 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.16.0
 	github.com/BurntSushi/toml v1.5.0
 	github.com/DATA-DOG/go-sqlmock v1.5.0
+	github.com/HdrHistogram/hdrhistogram-go v1.1.2
 	github.com/IBM/sarama v1.41.2
 	github.com/KimMachineGun/automemlimit v0.2.4
 	github.com/agiledragon/gomonkey/v2 v2.11.0
