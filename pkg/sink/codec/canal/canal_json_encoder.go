@@ -47,10 +47,10 @@ func fillColumns(
 	out.RawByte('{')
 	isFirst := true
 	for _, col := range tableInfo.GetColumns() {
-		if col.IsVirtualGenerated() || !columnSelector.Select(col) {
-			continue
-		}
 		if col != nil {
+			if col.IsVirtualGenerated() || !columnSelector.Select(col) {
+				continue
+			}
 			colID := col.ID
 			if onlyHandleKeyColumn && !tableInfo.IsHandleKey(col.ID) {
 				continue
