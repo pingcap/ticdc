@@ -138,7 +138,7 @@ func newJSONMessageForDML(
 
 	columnLen := 0
 	for _, col := range e.TableInfo.GetColumns() {
-		if e.ColumnSelector.Select(col) {
+		if col != nil && !col.IsVirtualGenerated() && e.ColumnSelector.Select(col) {
 			columnLen += 1
 		}
 	}
