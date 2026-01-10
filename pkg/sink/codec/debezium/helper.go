@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/tidbtype"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -32,7 +33,7 @@ import (
 )
 
 type visiter struct {
-	columnsMap map[ast.CIStr]*timodel.ColumnInfo
+	columnsMap map[tidbtype.CIStr]*timodel.ColumnInfo
 }
 
 func (v *visiter) Enter(n ast.Node) (node ast.Node, skipChildren bool) {
@@ -97,7 +98,7 @@ func parseColumns(sql string, columns []*timodel.ColumnInfo) {
 		log.Error("format query parse one stmt failed", zap.Error(err))
 	}
 
-	columnsMap := make(map[ast.CIStr]*timodel.ColumnInfo, len(columns))
+	columnsMap := make(map[tidbtype.CIStr]*timodel.ColumnInfo, len(columns))
 	for _, col := range columns {
 		columnsMap[col.Name] = col
 	}

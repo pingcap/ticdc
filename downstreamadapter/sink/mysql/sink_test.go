@@ -25,7 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
-	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
+	"github.com/pingcap/ticdc/pkg/tidbtype"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,7 +36,7 @@ func getMysqlSink() (context.Context, *Sink, sqlmock.Sqlmock) {
 	cfg := mysql.New()
 	cfg.WorkerCount = 1
 	cfg.DMLMaxRetry = 1
-	cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
+	cfg.MaxAllowedPacket = int64(tidbtype.DefMaxAllowedPacket)
 	cfg.CachePrepStmts = false
 
 	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false)
@@ -51,7 +51,7 @@ func getMysqlSinkWithDDLTs() (context.Context, *Sink, sqlmock.Sqlmock) {
 	cfg := mysql.New()
 	cfg.WorkerCount = 1
 	cfg.DMLMaxRetry = 1
-	cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
+	cfg.MaxAllowedPacket = int64(tidbtype.DefMaxAllowedPacket)
 	cfg.CachePrepStmts = false
 	cfg.EnableDDLTs = true // Enable DDL-ts feature for testing
 

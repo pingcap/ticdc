@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
+	"github.com/pingcap/ticdc/pkg/pdtype"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/security"
@@ -35,7 +36,6 @@ import (
 	tikvconfig "github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
-	pdopt "github.com/tikv/pd/client/opt"
 	uatomic "github.com/uber-go/atomic"
 	clientV3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
@@ -153,12 +153,12 @@ func initUpstream(ctx context.Context, up *Upstream, cfg *NodeTopologyCfg) error
 	initGlobalConfig(up.SecurityConfig)
 	// default upstream always use the pdClient pass from cdc server
 	if !up.isDefaultUpstream {
-		up.PDClient, err = pd.NewClientWithContext(
+		up.PDClient, err = pdtype.NewClientWithContext(
 			ctx, "cdc-upstream", up.PdEndpoints, up.SecurityConfig.PDSecurityOption(),
 			// the default `timeout` is 3s, maybe too small if the pd is busy,
 			// set to 10s to avoid frequent timeout.
-			pdopt.WithCustomTimeoutOption(10*time.Second),
-			pdopt.WithGRPCDialOptions(
+			pdtype.WithCustomTimeoutOption(10*time.Second),
+			pdtype.WithGRPCDialOptions(
 				grpcTLSOption,
 				grpc.WithConnectParams(grpc.ConnectParams{
 					Backoff: backoff.Config{

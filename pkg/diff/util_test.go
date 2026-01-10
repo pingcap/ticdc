@@ -15,9 +15,9 @@ package diff
 
 import (
 	"github.com/pingcap/check"
+	"github.com/pingcap/ticdc/pkg/tidbtype"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
-	pmodel "github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/util/dbutil"
 	"github.com/pingcap/tidb/pkg/util/dbutil/dbutiltest"
 )
@@ -59,11 +59,11 @@ func (s *testUtilSuite) TestRowContainsCols(c *check.C) {
 
 	cols := []*model.ColumnInfo{
 		{
-			Name: pmodel.NewCIStr("a"),
+			Name: tidbtype.NewCIStr("a"),
 		}, {
-			Name: pmodel.NewCIStr("b"),
+			Name: tidbtype.NewCIStr("b"),
 		}, {
-			Name: pmodel.NewCIStr("c"),
+			Name: tidbtype.NewCIStr("c"),
 		},
 	}
 

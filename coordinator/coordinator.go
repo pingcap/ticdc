@@ -433,7 +433,7 @@ func (c *coordinator) updateGlobalGcSafepoint(ctx context.Context) error {
 	// (checkpointTs - 1) from TiKV, so (checkpointTs - 1) should be an upper
 	// bound for the GC safepoint.
 	gcSafepointUpperBound := minCheckpointTs - 1
-	err := c.gcManager.TryUpdateGCSafePoint(ctx, gcSafepointUpperBound, false)
+	err := c.gcManager.TryUpdateGCSafePoint(ctx, common.DefaultKeyspace.ID, common.DefaultKeyspace.Name, gcSafepointUpperBound, false)
 	return errors.Trace(err)
 }
 
@@ -452,7 +452,7 @@ func (c *coordinator) updateAllKeyspaceGcBarriers(ctx context.Context) error {
 
 func (c *coordinator) updateKeyspaceGcBarrier(ctx context.Context, meta common.KeyspaceMeta, barrierTS uint64) error {
 	barrierTsUpperBound := barrierTS - 1
-	err := c.gcManager.TryUpdateKeyspaceGCBarrier(ctx, meta.ID, meta.Name, barrierTsUpperBound, false)
+	err := c.gcManager.TryUpdateGCSafePoint(ctx, meta.ID, meta.Name, barrierTsUpperBound, false)
 	return errors.Trace(err)
 }
 

@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/pdtype"
 	"github.com/pingcap/ticdc/tests/integration_tests/util"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -114,7 +115,7 @@ func addLock(ctx context.Context, cfg *util.Config) error {
 		return errors.Trace(err)
 	}
 
-	pdcli, err := pd.NewClientWithContext(
+	pdcli, err := pdtype.NewClientWithContext(
 		ctx, "cdc-test-resolve-lock", strings.Split(cfg.PDAddr, ","), pd.SecurityOption{})
 	if err != nil {
 		return errors.Trace(err)

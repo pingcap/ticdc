@@ -18,8 +18,8 @@ import (
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/tidbtype"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	tiTypes "github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -259,7 +259,7 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 	}
 	tidbTableInfo := &timodel.TableInfo{
 		ID:   r.Row.Table.TableID,
-		Name: ast.NewCIStr(r.Row.Table.Table),
+		Name: tidbtype.NewCIStr(r.Row.Table.Table),
 	}
 	rawCols := r.Row.Columns
 	rawColsValue := r.Columns
@@ -270,7 +270,7 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 	for idx, col := range rawCols {
 		colInfo := &timodel.ColumnInfo{
 			ID:    int64(idx),
-			Name:  ast.NewCIStr(col.Name),
+			Name:  tidbtype.NewCIStr(col.Name),
 			State: timodel.StatePublic,
 		}
 		colInfo.SetType(col.Type)
@@ -302,7 +302,7 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 	}
 	for i, index := range r.Row.IndexColumns {
 		indexInfo := &timodel.IndexInfo{
-			Name:  ast.NewCIStr(fmt.Sprintf("index_%d", i)),
+			Name:  tidbtype.NewCIStr(fmt.Sprintf("index_%d", i)),
 			State: timodel.StatePublic,
 		}
 		firstCol := tidbTableInfo.Columns[index[0]]
@@ -317,7 +317,7 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 				isPrimary = false
 			}
 			indexInfo.Columns = append(indexInfo.Columns, &timodel.IndexColumn{
-				Name:   ast.NewCIStr(rawCols[id].Name),
+				Name:   tidbtype.NewCIStr(rawCols[id].Name),
 				Offset: id,
 			})
 		}

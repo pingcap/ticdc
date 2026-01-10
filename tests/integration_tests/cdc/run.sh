@@ -57,7 +57,7 @@ if [ "$SINK_TYPE" != "storage" ]; then
 	prepare $*
 	cd "$(dirname "$0")"
 	set -o pipefail
-	GO111MODULE=on go run cdc.go -config ./config.toml 2>&1 | tee $WORK_DIR/tester.log
+	GO111MODULE=on go run $GO_RUN_TAGS cdc.go -config ./config.toml 2>&1 | tee $WORK_DIR/tester.log
 	cleanup_process $CDC_BINARY
 	check_logs $WORK_DIR
 fi

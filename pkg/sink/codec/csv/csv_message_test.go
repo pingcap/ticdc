@@ -22,10 +22,10 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/tidbtype"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -924,7 +924,7 @@ func TestRowChangeEventConversion(t *testing.T) {
 			colInfos = append(colInfos, &c.colInfo)
 		}
 		tidbTableInfo := &model.TableInfo{
-			Name:    ast.NewCIStr(fmt.Sprintf("table%d", idx)),
+			Name:    tidbtype.NewCIStr(fmt.Sprintf("table%d", idx)),
 			Columns: colInfos,
 		}
 		e.TableInfo = commonType.WrapTableInfo("test", tidbTableInfo)

@@ -36,7 +36,7 @@ if [ "$SINK_TYPE" == "mysql" ]; then
 	echo "[$(date)] Starting complex transaction workload..."
 
 	# Run the complex transaction workload
-	GO111MODULE=on go run *.go \
+	GO111MODULE=on go run $GO_RUN_TAGS *.go \
 		-dsn "root@tcp(${UP_TIDB_HOST}:${UP_TIDB_PORT})/complex_txn" \
 		--concurrency=20 \
 		--total-txns=200000 \

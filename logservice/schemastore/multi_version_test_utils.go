@@ -15,8 +15,8 @@ package schemastore
 
 import (
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/tidbtype"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
 )
 
 func buildCreateTableEventForTest(schemaID, tableID int64, schemaName, tableName string, finishedTs uint64) *PersistedDDLEvent {
@@ -28,7 +28,7 @@ func buildCreateTableEventForTest(schemaID, tableID int64, schemaName, tableName
 		TableName:  tableName,
 		TableInfo: &model.TableInfo{
 			ID:   tableID,
-			Name: ast.NewCIStr(tableName),
+			Name: tidbtype.NewCIStr(tableName),
 		},
 		FinishedTs: finishedTs,
 	}
@@ -54,7 +54,7 @@ func buildRecoverTableEventForTest(schemaID, tableID int64, schemaName, tableNam
 		TableName:  tableName,
 		TableInfo: &model.TableInfo{
 			ID:   tableID,
-			Name: ast.NewCIStr(tableName),
+			Name: tidbtype.NewCIStr(tableName),
 		},
 		FinishedTs: finishedTs,
 	}
@@ -75,7 +75,7 @@ func buildCreatePartitionTableEventForTest(schemaID, tableID int64, schemaName, 
 		TableName:  tableName,
 		TableInfo: &model.TableInfo{
 			ID:        tableID,
-			Name:      ast.NewCIStr(tableName),
+			Name:      tidbtype.NewCIStr(tableName),
 			Partition: buildPartitionDefinitionsForTest(partitionIDs),
 		},
 		FinishedTs: finishedTs,
@@ -91,7 +91,7 @@ func buildDropPartitionTableEventForTest(schemaID, tableID int64, schemaName, ta
 		TableName:  tableName,
 		TableInfo: &model.TableInfo{
 			ID:        tableID,
-			Name:      ast.NewCIStr(tableName),
+			Name:      tidbtype.NewCIStr(tableName),
 			Partition: buildPartitionDefinitionsForTest(partitionIDs),
 		},
 		FinishedTs: finishedTs,
@@ -108,7 +108,7 @@ func buildTruncateTableEventForTest(schemaID, oldTableID, newTableID int64, sche
 		ExtraTableID: newTableID,
 		TableInfo: &model.TableInfo{
 			ID:   newTableID,
-			Name: ast.NewCIStr(tableName),
+			Name: tidbtype.NewCIStr(tableName),
 		},
 		FinishedTs: finishedTs,
 	}
@@ -127,7 +127,7 @@ func buildTruncatePartitionTableEventForTest(
 		TableName:  tableName,
 		TableInfo: &model.TableInfo{
 			ID:        newTableID,
-			Name:      ast.NewCIStr(tableName),
+			Name:      tidbtype.NewCIStr(tableName),
 			Partition: buildPartitionDefinitionsForTest(newPartitionIDs),
 		},
 		FinishedTs: finishedTs,
@@ -146,7 +146,7 @@ func buildRenameTableEventForTest(extraSchemaID, schemaID, tableID int64, extraS
 		ExtraTableName:  extraTableName,
 		TableInfo: &model.TableInfo{
 			ID:   tableID,
-			Name: ast.NewCIStr(tableName),
+			Name: tidbtype.NewCIStr(tableName),
 		},
 		FinishedTs: finishedTs,
 	}
@@ -169,12 +169,12 @@ func buildExchangePartitionTableEventForTest(
 		ExtraTableName:  partitionTableName,
 		TableInfo: &model.TableInfo{
 			ID:        partitionTableID,
-			Name:      ast.NewCIStr(partitionTableName),
+			Name:      tidbtype.NewCIStr(partitionTableName),
 			Partition: buildPartitionDefinitionsForTest(newPartitionIDs),
 		},
 		ExtraTableInfo: common.WrapTableInfo(normalSchemaName, &model.TableInfo{
 			ID:   normalTableID,
-			Name: ast.NewCIStr(normalTableName),
+			Name: tidbtype.NewCIStr(normalTableName),
 		}),
 		PrevPartitions: oldPartitionIDs,
 		FinishedTs:     finishedTs,
