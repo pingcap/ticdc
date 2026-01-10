@@ -21,6 +21,7 @@ import (
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
@@ -285,6 +286,12 @@ type messageRow struct {
 	Update     map[string]column `json:"u,omitempty"`
 	PreColumns map[string]column `json:"p,omitempty"`
 	Delete     map[string]column `json:"d,omitempty"`
+}
+
+// only for test
+func (m *messageRow) encode() ([]byte, error) {
+	data, err := json.Marshal(m)
+	return data, errors.WrapError(errors.ErrMarshalFailed, err)
 }
 
 func (m *messageRow) decode(data []byte) {
