@@ -492,3 +492,14 @@ func (c *coordinator) updateGCSafepoint(ctx context.Context) error {
 func (c *coordinator) getEnsureGCServiceID(tag string) string {
 	return c.gcServiceID + tag
 }
+
+// DrainCapture initiates drain operation for the specified capture.
+// It migrates all maintainers and dispatchers from the target node to other nodes.
+func (c *coordinator) DrainCapture(ctx context.Context, captureID node.ID) (*server.DrainCaptureResponse, error) {
+	return c.controller.DrainCapture(ctx, captureID)
+}
+
+// GetDrainStatus returns the current drain status for the specified capture.
+func (c *coordinator) GetDrainStatus(ctx context.Context, captureID node.ID) (*server.DrainStatusResponse, error) {
+	return c.controller.GetDrainStatus(ctx, captureID)
+}

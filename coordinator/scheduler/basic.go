@@ -74,7 +74,8 @@ func (s *basicScheduler) doBasicSchedule(availableSize int) {
 	absentChangefeeds := s.changefeedDB.GetAbsentByGroup(id, availableSize)
 	nodeTaskSize := s.changefeedDB.GetTaskSizePerNodeByGroup(id)
 	// add the absent node to the node size map
-	nodeIDs := s.nodeManager.GetAliveNodeIDs()
+	// Use GetSchedulableNodeIDs to exclude draining/stopping nodes
+	nodeIDs := s.nodeManager.GetSchedulableNodeIDs()
 	nodeSize := make(map[node.ID]int)
 	for _, id := range nodeIDs {
 		nodeSize[id] = nodeTaskSize[id]

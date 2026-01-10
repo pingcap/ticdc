@@ -43,6 +43,9 @@ type NodeManager struct {
 	coordinatorID atomic.Value
 	nodes         atomic.Pointer[map[node.ID]*node.Info]
 
+	// nodeLiveness tracks the liveness state of each node
+	nodeLiveness sync.Map // node.ID -> *node.Liveness
+
 	nodeChangeHandlers struct {
 		sync.RWMutex
 		m map[node.ID]NodeChangeHandler
@@ -158,6 +161,67 @@ func (c *NodeManager) GetNodeInfo(id node.ID) *node.Info {
 	return (*c.nodes.Load())[id]
 }
 
+// GetNodeLiveness returns the liveness of a node.
+// Returns LivenessCaptureAlive if the node liveness is not tracked.
+func (c *NodeManager) GetNodeLiveness(id node.ID) node.Liveness {
+	if l, ok := c.nodeLiveness.Load(id); ok {
+		return l.(*node.Liveness).Load()
+	}
+	return node.LivenessCaptureAlive
+}
+
+// SetNodeLiveness sets the liveness of a node.
+func (c *NodeManager) SetNodeLiveness(id node.ID, liveness node.Liveness) {
+	var l node.Liveness
+	actual, _ := c.nodeLiveness.LoadOrStore(id, &l)
+	actual.(*node.Liveness).Store(liveness)
+}
+
+// GetSchedulableNodes returns nodes that can accept new workloads.
+// Excludes nodes with Draining or Stopping liveness.
+func (c *NodeManager) GetSchedulableNodes() map[node.ID]*node.Info {
+	allNodes := c.GetAliveNodes()
+	result := make(map[node.ID]*node.Info)
+	for id, info := range allNodes {
+		if c.GetNodeLiveness(id) == node.LivenessCaptureAlive {
+			result[id] = info
+		}
+	}
+	return result
+}
+
+// GetSchedulableNodeIDs returns IDs of nodes that can accept new workloads.
+// Excludes nodes with Draining or Stopping liveness.
+func (c *NodeManager) GetSchedulableNodeIDs() []node.ID {
+	nodes := c.GetSchedulableNodes()
+	ids := make([]node.ID, 0, len(nodes))
+	for id := range nodes {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// GetCoordinatorCandidates returns nodes that can become coordinator.
+// Excludes nodes with Draining or Stopping liveness.
+func (c *NodeManager) GetCoordinatorCandidates() map[node.ID]*node.Info {
+	allNodes := c.GetAliveNodes()
+	result := make(map[node.ID]*node.Info)
+	for id, info := range allNodes {
+		liveness := c.GetNodeLiveness(id)
+		// Draining and Stopping nodes cannot become coordinator
+		if liveness == node.LivenessCaptureAlive {
+			result[id] = info
+		}
+	}
+	return result
+}
+
+// ClearNodeLiveness removes the liveness tracking for a node.
+// Called when a node is removed from the cluster.
+func (c *NodeManager) ClearNodeLiveness(id node.ID) {
+	c.nodeLiveness.Delete(id)
+}
+
 func (c *NodeManager) Run(ctx context.Context) error {
 	cfg := config.GetGlobalServerConfig()
 	watcher := NewEtcdWatcher(c.etcdClient,
@@ -185,4 +249,26 @@ func (c *NodeManager) RegisterOwnerChangeHandler(leaseID string, handler OwnerCh
 
 func (c *NodeManager) Close(_ context.Context) error {
 	return nil
+}
+
+// NewNodeManagerForTest creates a NodeManager for testing purposes.
+func NewNodeManagerForTest() *NodeManager {
+	m := &NodeManager{
+		nodeChangeHandlers: struct {
+			sync.RWMutex
+			m map[node.ID]NodeChangeHandler
+		}{m: make(map[node.ID]NodeChangeHandler)},
+		ownerChangeHandlers: struct {
+			sync.RWMutex
+			m map[string]OwnerChangeHandler
+		}{m: make(map[string]OwnerChangeHandler)},
+	}
+	m.nodes.Store(&map[node.ID]*node.Info{})
+	m.coordinatorID.Store("")
+	return m
+}
+
+// SetNodesForTest sets the nodes map for testing purposes.
+func (c *NodeManager) SetNodesForTest(nodes map[node.ID]*node.Info) {
+	c.nodes.Store(&nodes)
 }

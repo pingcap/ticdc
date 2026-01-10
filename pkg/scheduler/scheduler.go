@@ -25,6 +25,7 @@ const (
 	BasicScheduler            = "basic-scheduler"
 	BalanceScheduler          = "balance-scheduler"
 	BalanceSplitScheduler     = "balance-split-scheduler"
+	DrainScheduler            = "drain-scheduler"
 	RedoBasicScheduler        = "redo-basic-scheduler"
 	RedoBalanceScheduler      = "redo-balance-scheduler"
 	RedoBalanceSplitScheduler = "redo-balance-split-scheduler"

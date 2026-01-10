@@ -1507,3 +1507,22 @@ func newNodeTableInfo(nodeID string) *NodeTableInfo {
 func (t *NodeTableInfo) addTableID(tableID int64) {
 	t.TableIDs = append(t.TableIDs, tableID)
 }
+
+// DrainCaptureRequest represents the request to drain a capture
+type DrainCaptureRequest struct {
+	CaptureID string `json:"capture_id"`
+}
+
+// DrainCaptureResponse represents the response of drain capture API
+type DrainCaptureResponse struct {
+	CurrentMaintainerCount int `json:"current_maintainer_count"`
+	CurrentDispatcherCount int `json:"current_dispatcher_count"`
+}
+
+// DrainStatusResponse represents the drain status query response
+type DrainStatusResponse struct {
+	IsDraining               bool           `json:"is_draining"`
+	DrainingCaptureID        string         `json:"draining_capture_id,omitempty"`
+	RemainingMaintainerCount int            `json:"remaining_maintainer_count"`
+	RemainingDispatcherCount map[string]int `json:"remaining_dispatcher_count,omitempty"`
+}

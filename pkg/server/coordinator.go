@@ -18,7 +18,22 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/node"
 )
+
+// DrainCaptureResponse represents the response of drain capture operation
+type DrainCaptureResponse struct {
+	CurrentMaintainerCount int `json:"current_maintainer_count"`
+	CurrentDispatcherCount int `json:"current_dispatcher_count"`
+}
+
+// DrainStatusResponse represents the drain status query response
+type DrainStatusResponse struct {
+	IsDraining               bool           `json:"is_draining"`
+	DrainingCaptureID        string         `json:"draining_capture_id,omitempty"`
+	RemainingMaintainerCount int            `json:"remaining_maintainer_count"`
+	RemainingDispatcherCount map[string]int `json:"remaining_dispatcher_count,omitempty"`
+}
 
 // Coordinator is the master of the ticdc cluster,
 // 1. schedules changefeed maintainer to ticdc node
@@ -47,6 +62,13 @@ type Coordinator interface {
 	// RequestResolvedTsFromLogCoordinator requests the log coordinator to report the resolved ts of the changefeed,
 	// and coordinator will update the changefeed status after receiving the resolved ts from log coordinator.
 	RequestResolvedTsFromLogCoordinator(ctx context.Context, changefeedDisplayName common.ChangeFeedDisplayName)
+
+	// DrainCapture initiates drain operation for the specified capture.
+	// It migrates all maintainers and dispatchers from the target node to other nodes.
+	DrainCapture(ctx context.Context, captureID node.ID) (*DrainCaptureResponse, error)
+
+	// GetDrainStatus returns the current drain status for the specified capture.
+	GetDrainStatus(ctx context.Context, captureID node.ID) (*DrainStatusResponse, error)
 
 	Initialized() bool
 }

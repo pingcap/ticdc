@@ -14,101 +14,138 @@
 package node
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
-func TestLivenessConstants(t *testing.T) {
-	// Verify the constant values are as expected
-	require.Equal(t, Liveness(0), LivenessCaptureAlive)
-	require.Equal(t, Liveness(1), LivenessCaptureStopping)
-	require.Equal(t, Liveness(2), LivenessCaptureDraining)
+func TestLivenessStateTransitions(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Alive to Draining", func(t *testing.T) {
+		var l Liveness
+		l.Store(LivenessCaptureAlive)
+
+		// Should succeed: Alive -> Draining
+		ok := l.StoreDraining()
+		require.True(t, ok)
+		require.Equal(t, LivenessCaptureDraining, l.Load())
+	})
+
+	t.Run("Draining to Stopping", func(t *testing.T) {
+		var l Liveness
+		l.Store(LivenessCaptureDraining)
+
+		// Should succeed: Draining -> Stopping
+		ok := l.DrainComplete()
+		require.True(t, ok)
+		require.Equal(t, LivenessCaptureStopping, l.Load())
+	})
+
+	t.Run("Cannot transition from Stopping to Draining", func(t *testing.T) {
+		var l Liveness
+		l.Store(LivenessCaptureStopping)
+
+		// Should fail: Stopping -> Draining is not allowed
+		ok := l.StoreDraining()
+		require.False(t, ok)
+		require.Equal(t, LivenessCaptureStopping, l.Load())
+	})
+
+	t.Run("Cannot transition from Draining to Draining", func(t *testing.T) {
+		var l Liveness
+		l.Store(LivenessCaptureDraining)
+
+		// Should fail: already Draining
+		ok := l.StoreDraining()
+		require.False(t, ok)
+		require.Equal(t, LivenessCaptureDraining, l.Load())
+	})
+
+	t.Run("Cannot DrainComplete from Alive", func(t *testing.T) {
+		var l Liveness
+		l.Store(LivenessCaptureAlive)
+
+		// Should fail: must be Draining first
+		ok := l.DrainComplete()
+		require.False(t, ok)
+		require.Equal(t, LivenessCaptureAlive, l.Load())
+	})
+
+	t.Run("Cannot DrainComplete from Stopping", func(t *testing.T) {
+		var l Liveness
+		l.Store(LivenessCaptureStopping)
+
+		// Should fail: already Stopping
+		ok := l.DrainComplete()
+		require.False(t, ok)
+		require.Equal(t, LivenessCaptureStopping, l.Load())
+	})
 }
 
-func TestLivenessLoadStore(t *testing.T) {
+func TestIsSchedulable(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name        string
+		liveness    Liveness
+		schedulable bool
+	}{
+		{
+			name:        "Alive is schedulable",
+			liveness:    LivenessCaptureAlive,
+			schedulable: true,
+		},
+		{
+			name:        "Draining is not schedulable",
+			liveness:    LivenessCaptureDraining,
+			schedulable: false,
+		},
+		{
+			name:        "Stopping is not schedulable",
+			liveness:    LivenessCaptureStopping,
+			schedulable: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var l Liveness
+			l.Store(tc.liveness)
+			require.Equal(t, tc.schedulable, l.IsSchedulable())
+		})
+	}
+}
+
+func TestLivenessConcurrentAccess(t *testing.T) {
+	t.Parallel()
+
 	var l Liveness
-
-	// Default value should be Alive (0)
-	require.Equal(t, LivenessCaptureAlive, l.Load())
-
-	// Test Store and Load
-	l.Store(LivenessCaptureDraining)
-	require.Equal(t, LivenessCaptureDraining, l.Load())
-
-	l.Store(LivenessCaptureStopping)
-	require.Equal(t, LivenessCaptureStopping, l.Load())
-
 	l.Store(LivenessCaptureAlive)
-	require.Equal(t, LivenessCaptureAlive, l.Load())
-}
 
-func TestLivenessIsSchedulable(t *testing.T) {
-	var l Liveness
+	var wg sync.WaitGroup
+	successCount := 0
+	var mu sync.Mutex
 
-	// Alive node is schedulable
-	l.Store(LivenessCaptureAlive)
-	require.True(t, l.IsSchedulable())
+	// Multiple goroutines try to transition to Draining
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if l.StoreDraining() {
+				mu.Lock()
+				successCount++
+				mu.Unlock()
+			}
+		}()
+	}
 
-	// Draining node is not schedulable
-	l.Store(LivenessCaptureDraining)
-	require.False(t, l.IsSchedulable())
+	wg.Wait()
 
-	// Stopping node is not schedulable
-	l.Store(LivenessCaptureStopping)
-	require.False(t, l.IsSchedulable())
-}
-
-func TestLivenessStoreDraining(t *testing.T) {
-	var l Liveness
-
-	// Can transition from Alive to Draining
-	l.Store(LivenessCaptureAlive)
-	require.True(t, l.StoreDraining())
+	// Only one should succeed
+	require.Equal(t, 1, successCount)
 	require.Equal(t, LivenessCaptureDraining, l.Load())
-
-	// Cannot transition from Draining to Draining (already draining)
-	require.False(t, l.StoreDraining())
-	require.Equal(t, LivenessCaptureDraining, l.Load())
-
-	// Cannot transition from Stopping to Draining
-	l.Store(LivenessCaptureStopping)
-	require.False(t, l.StoreDraining())
-	require.Equal(t, LivenessCaptureStopping, l.Load())
-}
-
-func TestLivenessDrainComplete(t *testing.T) {
-	var l Liveness
-
-	// Cannot transition from Alive to Stopping via DrainComplete
-	l.Store(LivenessCaptureAlive)
-	require.False(t, l.DrainComplete())
-	require.Equal(t, LivenessCaptureAlive, l.Load())
-
-	// Can transition from Draining to Stopping
-	l.Store(LivenessCaptureDraining)
-	require.True(t, l.DrainComplete())
-	require.Equal(t, LivenessCaptureStopping, l.Load())
-
-	// Cannot transition from Stopping to Stopping (already stopping)
-	require.False(t, l.DrainComplete())
-	require.Equal(t, LivenessCaptureStopping, l.Load())
-}
-
-func TestLivenessStateTransitionFlow(t *testing.T) {
-	var l Liveness
-
-	// Test the expected state transition flow: Alive -> Draining -> Stopping
-	require.Equal(t, LivenessCaptureAlive, l.Load())
-	require.True(t, l.IsSchedulable())
-
-	// Transition to Draining
-	require.True(t, l.StoreDraining())
-	require.Equal(t, LivenessCaptureDraining, l.Load())
-	require.False(t, l.IsSchedulable())
-
-	// Transition to Stopping
-	require.True(t, l.DrainComplete())
-	require.Equal(t, LivenessCaptureStopping, l.Load())
-	require.False(t, l.IsSchedulable())
 }

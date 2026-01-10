@@ -69,7 +69,7 @@ message CheckpointTsMessage {
     uint64 checkpointTs = 2;
 }
 
-// RedoMetaMessage used to send unflushed ts to update redo meta 
+// RedoMetaMessage used to send unflushed ts to update redo meta
 // from maintainer to dispatcher manager
 message RedoMetaMessage {
     ChangefeedID changefeedID = 1;
@@ -77,14 +77,14 @@ message RedoMetaMessage {
     uint64 checkpointTs = 3;
 }
 
-// RedoResolvedTsProgressMessage used to send redo meta flushed resolvedTs 
+// RedoResolvedTsProgressMessage used to send redo meta flushed resolvedTs
 // from dispatcher manager to maintainer
 message RedoResolvedTsProgressMessage {
     ChangefeedID changefeedID = 1;
     uint64 resolvedTs = 2;
 }
 
-// RedoResolvedTsForwardMessage used to send redoGlobalTs (redo meta flushed resolvedTs) 
+// RedoResolvedTsForwardMessage used to send redoGlobalTs (redo meta flushed resolvedTs)
 // from maintainer to dispatcher manager
 message RedoResolvedTsForwardMessage {
     ChangefeedID changefeedID = 1;
@@ -124,6 +124,9 @@ message MergeDispatcherRequest {
 
 message MaintainerHeartbeat {
     repeated MaintainerStatus statuses = 1;
+    // draining_capture is the capture ID being drained, empty if no drain in progress.
+    // Maintainer should not schedule new dispatchers to this capture.
+    string draining_capture = 2;
 }
 
 message MaintainerStatus {

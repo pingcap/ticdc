@@ -75,14 +75,17 @@ func (s *balanceScheduler) Execute() time.Time {
 		return now.Add(s.checkBalanceInterval)
 	}
 
+	// Use GetSchedulableNodes to exclude draining/stopping nodes from balance decisions
+	schedulableNodes := s.nodeManager.GetSchedulableNodes()
+
 	// check the balance status
-	moveSize := pkgScheduler.CheckBalanceStatus(s.changefeedDB.GetTaskSizePerNode(), s.nodeManager.GetAliveNodes())
+	moveSize := pkgScheduler.CheckBalanceStatus(s.changefeedDB.GetTaskSizePerNode(), schedulableNodes)
 	if moveSize <= 0 {
 		// fast check the balance status, no need to do the balance,skip
 		return now.Add(s.checkBalanceInterval)
 	}
-	// balance changefeeds among the active nodes
-	movedSize := pkgScheduler.Balance(s.batchSize, s.random, s.nodeManager.GetAliveNodes(), s.changefeedDB.GetReplicating(),
+	// balance changefeeds among the active nodes (excluding draining/stopping nodes)
+	movedSize := pkgScheduler.Balance(s.batchSize, s.random, schedulableNodes, s.changefeedDB.GetReplicating(),
 		func(cf *changefeed.Changefeed, nodeID node.ID) bool {
 			return s.operatorController.AddOperator(operator.NewMoveMaintainerOperator(s.changefeedDB, cf, cf.GetNodeID(), nodeID))
 		})

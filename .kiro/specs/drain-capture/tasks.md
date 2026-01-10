@@ -329,3 +329,156 @@
   - 运行所有单元测试
   - 确保所有测试通过
   - 如有问题请询问用户
+
+
+- [ ] 5. 实现 Drain Capture Scheduler
+  - [ ] 5.1 创建 drainScheduler 结构体
+    - 创建 `coordinator/scheduler/drain.go` 文件
+    - 实现 `drainScheduler` 结构体，包含 `batchSize` 配置（默认 1）
+    - 实现 `Execute()` 方法，生成 MoveMaintainer operators
+    - 实现 `selectDestination()` 方法，选择负载最低的目标节点
+    - 实现 `countInProgressOperators()` 方法，统计进行中的 operators
+    - 实现 `allDispatchersMigrated()` 方法，检查所有 dispatchers 是否迁移完成
+    - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8_
+
+  - [ ]* 5.2 编写 drainScheduler 单元测试
+    - 测试节点排除逻辑
+    - 测试批量生成逻辑
+    - 测试目标节点选择
+    - _Requirements: 3.3, 3.5, 3.6_
+
+- [ ] 6. 集成 Scheduler 排除机制
+  - [ ] 6.1 更新 basicScheduler 使用 GetSchedulableNodes
+    - 修改 `coordinator/scheduler/basic.go`
+    - 将调度逻辑中的节点获取改为使用 `GetSchedulableNodes()`
+    - _Requirements: 5.1, 5.2_
+
+  - [ ] 6.2 更新 balanceScheduler 使用 GetSchedulableNodes
+    - 修改 `coordinator/scheduler/balance.go`
+    - 将平衡逻辑中的节点获取改为使用 `GetSchedulableNodes()`
+    - _Requirements: 5.3_
+
+- [ ] 7. Checkpoint - 确保 Scheduler 测试通过
+  - 运行所有测试，确保通过，如有问题请询问用户
+
+- [ ] 8. 扩展 Heartbeat 消息
+  - [ ] 8.1 修改 heartbeat.proto 添加 draining_capture 字段
+    - 在 `heartbeatpb/heartbeat.proto` 的 MaintainerHeartbeat 消息中添加 `draining_capture` 字段
+    - _Requirements: 10.2_
+
+  - [ ] 8.2 更新 Coordinator 心跳发送逻辑
+    - 在心跳消息中包含 draining capture ID
+    - _Requirements: 2.5, 10.1_
+
+- [ ] 9. 实现 Maintainer Drain 状态处理
+  - [ ] 9.1 添加 Maintainer draining 状态字段和方法
+    - 在 `maintainer/maintainer.go` 中添加 `drainingCapture` 字段
+    - 实现 `SetDrainingCapture()`, `GetDrainingCapture()` 方法
+    - _Requirements: 4.1, 4.2_
+
+  - [ ] 9.2 实现 Maintainer 接收 draining 通知处理
+    - 实现 `OnDrainingCaptureNotified()` 方法
+    - 处理心跳中的 draining 通知
+    - 在 bootstrap 完成后检查并迁移 draining 节点上的 dispatchers
+    - _Requirements: 4.1, 4.3, 10.3, 10.4_
+
+  - [ ]* 9.3 编写 Maintainer drain 处理单元测试
+    - 测试 draining 状态更新
+    - 测试 dispatcher 迁移触发
+    - _Requirements: 4.1, 4.3_
+
+- [ ] 10. Checkpoint - 确保 Maintainer 层测试通过
+  - 运行所有测试，确保通过，如有问题请询问用户
+
+- [ ] 11. 实现 API 层
+  - [ ] 11.1 定义 API 请求和响应结构体
+    - 在 `api/v2/model.go` 中添加 `DrainCaptureResponse`, `DrainStatusResponse` 结构体
+    - _Requirements: 1.8, 1.9, 1.10, 7.2, 7.3, 7.4, 7.5_
+
+  - [ ] 11.2 实现 DrainCapture API handler
+    - 在 `api/v2/capture.go` 中实现 `DrainCapture()` 方法
+    - 实现请求验证逻辑（目标存在、非 coordinator、非单节点、无进行中 drain）
+    - 实现请求转发到 coordinator 逻辑
+    - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8_
+
+  - [ ] 11.3 实现 GetDrainStatus API handler
+    - 实现 `GetDrainStatus()` 方法
+    - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5_
+
+  - [ ] 11.4 注册 API 路由
+    - 在 `api/v2/api.go` 中注册 drain 相关路由
+    - _Requirements: 1.1, 7.1_
+
+  - [ ]* 11.5 编写 API handler 单元测试
+    - 测试所有错误情况的验证逻辑
+    - 测试成功请求处理
+    - _Requirements: 1.3, 1.4, 1.5, 1.6, 1.7_
+
+- [ ] 12. 实现 Coordinator Drain 接口
+  - [ ] 12.1 扩展 Coordinator 接口
+    - 在 `pkg/server/coordinator.go` 中添加 `DrainCapture()`, `GetDrainStatus()` 方法声明
+    - _Requirements: 2.1, 2.2_
+
+  - [ ] 12.2 实现 Coordinator DrainCapture 方法
+    - 在 `coordinator/coordinator.go` 中实现 `DrainCapture()` 方法
+    - 实现请求验证
+    - 设置 draining target
+    - 返回当前工作负载计数
+    - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8_
+
+  - [ ] 12.3 实现 Coordinator GetDrainStatus 方法
+    - 返回当前 drain 状态和进度
+    - _Requirements: 7.2, 7.3, 7.4, 7.5_
+
+  - [ ]* 12.4 编写 Coordinator drain 方法单元测试
+    - 测试验证逻辑
+    - 测试状态管理
+    - _Requirements: 2.1, 2.3, 2.4_
+
+- [ ] 13. 集成 DrainScheduler 到 Controller
+  - [ ] 13.1 在 Controller 中初始化 DrainScheduler
+    - 修改 `coordinator/controller.go`
+    - 创建并注册 drainScheduler
+    - 设置优先级高于 balanceScheduler
+    - _Requirements: 3.1_
+
+  - [ ] 13.2 连接 DrainState 和 DrainScheduler
+    - 确保 DrainScheduler 可以访问 DrainState
+    - _Requirements: 3.2_
+
+- [ ] 14. 实现 Coordinator 选举约束
+  - [ ] 14.1 修改 Coordinator 选举逻辑
+    - 使用 `GetCoordinatorCandidates()` 获取候选节点
+    - 实现特殊情况：集群只剩 draining 节点时重置状态
+    - _Requirements: 9.6, 9.8_
+
+- [ ] 15. Checkpoint - 确保 API 和 Coordinator 集成测试通过
+  - 运行所有测试，确保通过，如有问题请询问用户
+
+- [ ] 16. 实现 Prometheus 监控指标
+  - [ ] 16.1 定义 drain 相关 metrics
+    - 在 `metrics/` 中添加 `DrainCaptureGauge`, `DrainCaptureMaintainerCount`, `DrainCaptureDispatcherCount`, `DrainCaptureDuration`
+    - _Requirements: 7.6_
+
+  - [ ] 16.2 在 DrainState 中更新 metrics
+    - 在状态变化时更新相应的 metrics
+    - _Requirements: 7.6_
+
+- [ ] 17. 添加日志记录
+  - [ ] 17.1 在关键操作点添加日志
+    - Drain 操作开始/完成
+    - Maintainer 迁移事件
+    - Dispatcher 迁移事件
+    - 错误和警告情况
+    - _Requirements: 7.7_
+
+- [ ] 18. Final Checkpoint - 确保所有测试通过
+  - 运行所有测试，确保通过，如有问题请询问用户
+
+## Notes
+
+- 标记 `*` 的任务为可选任务，可以跳过以加快 MVP 开发
+- 每个任务都引用了具体的需求以便追溯
+- Checkpoint 任务确保增量验证
+- 核心设计：Maintainer 先迁移，新 Maintainer 启动后自动迁移 dispatchers
+- 并发度配置：`batchSize` 默认为 1，可配置

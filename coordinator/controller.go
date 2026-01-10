@@ -34,6 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler"
+	"github.com/pingcap/ticdc/pkg/server"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -67,6 +68,9 @@ type Controller struct {
 	changefeedDB       *changefeed.ChangefeedDB
 	backend            changefeed.Backend
 	eventCh            *chann.DrainableChann[*Event]
+
+	// drainState tracks the drain operation state
+	drainState *DrainState
 
 	// initialized is true after all necessary resources ready,
 	// it's not affected by new node join the cluster.
@@ -117,12 +121,17 @@ func NewController(
 	pdClient pd.Client,
 ) *Controller {
 	changefeedDB := changefeed.NewChangefeedDB(version)
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+
+	// Create drain state
+	drainState := NewDrainState(nodeManager)
 
 	oc := operator.NewOperatorController(selfNode, changefeedDB, backend, batchSize)
 	c := &Controller{
 		version:     version,
 		selfNode:    selfNode,
 		initialized: atomic.NewBool(false),
+		drainState:  drainState,
 		scheduler: scheduler.NewController(map[string]scheduler.Scheduler{
 			scheduler.BasicScheduler: coscheduler.NewBasicScheduler(
 				selfNode.ID.String(),
@@ -137,12 +146,21 @@ func NewController(
 				changefeedDB,
 				balanceInterval,
 			),
+			// DrainScheduler has higher priority than BalanceScheduler
+			scheduler.DrainScheduler: coscheduler.NewDrainScheduler(
+				selfNode.ID.String(),
+				1, // default batch size for drain
+				oc,
+				changefeedDB,
+				drainState,
+				nodeManager,
+			),
 		}),
 		eventCh:            eventCh,
 		operatorController: oc,
 		messageCenter:      appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		changefeedDB:       changefeedDB,
-		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
+		nodeManager:        nodeManager,
 		taskScheduler:      threadpool.NewThreadPoolDefault(),
 		backend:            backend,
 		changefeedChangeCh: changefeedChangeCh,
@@ -871,4 +889,86 @@ func shouldRunChangefeed(state config.FeedState) bool {
 		return false
 	}
 	return true
+}
+
+// DrainCapture initiates drain operation for the specified capture.
+// It migrates all maintainers and dispatchers from the target node to other nodes.
+func (c *Controller) DrainCapture(ctx context.Context, captureID node.ID) (*server.DrainCaptureResponse, error) {
+	if !c.initialized.Load() {
+		return nil, errors.New("not initialized, wait a moment")
+	}
+
+	c.apiLock.Lock()
+	defer c.apiLock.Unlock()
+
+	// Check if drain is already in progress
+	if c.drainState.IsDraining() {
+		currentTarget := c.drainState.GetDrainingTarget()
+		if currentTarget == captureID {
+			// Same target, return current counts
+			maintainerCount := len(c.changefeedDB.GetByNodeID(captureID))
+			return &server.DrainCaptureResponse{
+				CurrentMaintainerCount: maintainerCount,
+				CurrentDispatcherCount: 0, // TODO: implement dispatcher count
+			}, nil
+		}
+		return nil, errors.New("another drain operation is in progress")
+	}
+
+	// Count maintainers on target node
+	maintainers := c.changefeedDB.GetByNodeID(captureID)
+	maintainerCount := len(maintainers)
+
+	// TODO: Count dispatchers on target node (requires heartbeat extension)
+	dispatcherCount := 0
+
+	// Set draining target
+	if err := c.drainState.SetDrainingTarget(captureID, maintainerCount, dispatcherCount); err != nil {
+		return nil, err
+	}
+
+	log.Info("drain capture initiated",
+		zap.String("captureID", captureID.String()),
+		zap.Int("maintainerCount", maintainerCount),
+		zap.Int("dispatcherCount", dispatcherCount))
+
+	return &server.DrainCaptureResponse{
+		CurrentMaintainerCount: maintainerCount,
+		CurrentDispatcherCount: dispatcherCount,
+	}, nil
+}
+
+// GetDrainStatus returns the current drain status for the specified capture.
+func (c *Controller) GetDrainStatus(ctx context.Context, captureID node.ID) (*server.DrainStatusResponse, error) {
+	if !c.initialized.Load() {
+		return nil, errors.New("not initialized, wait a moment")
+	}
+
+	c.apiLock.RLock()
+	defer c.apiLock.RUnlock()
+
+	drainingTarget := c.drainState.GetDrainingTarget()
+
+	if drainingTarget == "" || drainingTarget != captureID {
+		return &server.DrainStatusResponse{
+			IsDraining:               false,
+			DrainingCaptureID:        "",
+			RemainingMaintainerCount: 0,
+			RemainingDispatcherCount: nil,
+		}, nil
+	}
+
+	// Count remaining maintainers on draining node
+	maintainers := c.changefeedDB.GetByNodeID(captureID)
+	remainingMaintainerCount := len(maintainers)
+
+	// TODO: Count remaining dispatchers per changefeed (requires heartbeat extension)
+	remainingDispatcherCount := make(map[string]int)
+
+	return &server.DrainStatusResponse{
+		IsDraining:               true,
+		DrainingCaptureID:        captureID.String(),
+		RemainingMaintainerCount: remainingMaintainerCount,
+		RemainingDispatcherCount: remainingDispatcherCount,
+	}, nil
 }
