@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,7 +32,7 @@ func TestFormatCol(t *testing.T) {
 	row2 := new(messageRow)
 	row2.decode(rowEncode)
 	require.Equal(t, row, row2)
-	//
+	// formatColumn will change the Value from string to []byte
 	row = &messageRow{Update: map[string]column{"test": {
 		Type:  mysql.TypeBlob,
 		Value: []byte("测"),
@@ -40,6 +41,9 @@ func TestFormatCol(t *testing.T) {
 	require.NoError(t, err)
 	row2 = new(messageRow)
 	row2.decode(rowEncode)
+	for colName, column := range row2.Update {
+		row2.Update[colName] = formatColumn(column, *types.NewFieldType(mysql.TypeBlob))
+	}
 	require.Equal(t, row, row2)
 }
 

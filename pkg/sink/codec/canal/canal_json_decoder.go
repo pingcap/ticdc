@@ -454,7 +454,7 @@ func formatValue(value any, ft types.FieldType) any {
 		}
 		return result
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeTimestamp:
-		result, err := tiTypes.ParseTime(tiTypes.DefaultStmtNoWarningContext, rawValue, ft.GetType(), tiTypes.MaxFsp)
+		result, err := tiTypes.ParseTime(tiTypes.DefaultStmtNoWarningContext, rawValue, ft.GetType(), ft.GetDecimal())
 		if err != nil {
 			log.Panic("invalid column value for time", zap.Any("rawValue", rawValue),
 				zap.Int("flen", ft.GetFlen()), zap.Int("decimal", ft.GetDecimal()),
