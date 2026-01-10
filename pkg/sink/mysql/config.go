@@ -136,6 +136,12 @@ type Config struct {
 
 	HasVectorType bool // HasVectorType is true if the column is vector type
 
+	EnableActiveActive bool
+	// ActiveActiveSyncStatsInterval controls how often MySQL/TiDB sink queries
+	// @@tidb_cdc_active_active_sync_stats for conflict statistics.
+	// Set it to 0 to disable the metric collection.
+	ActiveActiveSyncStatsInterval time.Duration
+
 	// DryRun is used to enable dry-run mode. In dry-run mode, the writer will not write data to the downstream.
 	DryRun bool
 	// DryRunDelay is the delay time for dry-run mode, it is used to simulate the delay time of real write.
@@ -152,24 +158,25 @@ type Config struct {
 // New returns the default mysql backend config.
 func New() *Config {
 	return &Config{
-		WorkerCount:            DefaultTiDBWorkerCount,
-		workerCountSpecified:   false,
-		MaxTxnRow:              DefaultMaxTxnRow,
-		MaxMultiUpdateRowCount: defaultMaxMultiUpdateRowCount,
-		MaxMultiUpdateRowSize:  defaultMaxMultiUpdateRowSize,
-		TidbTxnMode:            defaultTiDBTxnMode,
-		ReadTimeout:            defaultReadTimeout,
-		WriteTimeout:           defaultWriteTimeout,
-		DialTimeout:            defaultDialTimeout,
-		SafeMode:               defaultSafeMode,
-		BatchDMLEnable:         defaultBatchDMLEnable,
-		MultiStmtEnable:        defaultMultiStmtEnable,
-		CachePrepStmts:         defaultCachePrepStmts,
-		SourceID:               config.DefaultTiDBSourceID,
-		DMLMaxRetry:            8,
-		HasVectorType:          defaultHasVectorType,
-		EnableDDLTs:            defaultEnableDDLTs,
-		SlowQuery:              slowQuery,
+		WorkerCount:                   DefaultTiDBWorkerCount,
+		workerCountSpecified:          false,
+		MaxTxnRow:                     DefaultMaxTxnRow,
+		MaxMultiUpdateRowCount:        defaultMaxMultiUpdateRowCount,
+		MaxMultiUpdateRowSize:         defaultMaxMultiUpdateRowSize,
+		TidbTxnMode:                   defaultTiDBTxnMode,
+		ReadTimeout:                   defaultReadTimeout,
+		WriteTimeout:                  defaultWriteTimeout,
+		DialTimeout:                   defaultDialTimeout,
+		SafeMode:                      defaultSafeMode,
+		BatchDMLEnable:                defaultBatchDMLEnable,
+		MultiStmtEnable:               defaultMultiStmtEnable,
+		CachePrepStmts:                defaultCachePrepStmts,
+		SourceID:                      config.DefaultTiDBSourceID,
+		DMLMaxRetry:                   8,
+		HasVectorType:                 defaultHasVectorType,
+		EnableDDLTs:                   defaultEnableDDLTs,
+		SlowQuery:                     slowQuery,
+		ActiveActiveSyncStatsInterval: time.Minute,
 	}
 }
 
@@ -296,6 +303,8 @@ func NewMysqlConfigAndDB(
 	if err != nil {
 		return nil, nil, err
 	}
+	cfg.EnableActiveActive = config.EnableActiveActive
+	cfg.ActiveActiveSyncStatsInterval = config.ActiveActiveSyncStatsInterval
 
 	dsnStr, err := GenerateDSN(ctx, cfg)
 	if err != nil {
@@ -322,9 +331,12 @@ func NewMysqlConfigAndDB(
 	// leading to exhaustion of available connections and a hang at the "Get Connection" call.
 	// This issue is less likely to occur when the connection pool is larger,
 	// as there are more connections available for use.
-	// Adding an extra connection to the connection pool solves the connection exhaustion issue.
-	db.SetMaxIdleConns(cfg.WorkerCount + 1)
-	db.SetMaxOpenConns(cfg.WorkerCount + 1)
+	// Adding extra connections to the pool helps avoid connection exhaustion.
+	// Each DML writer may hold a dedicated session for a while, and additional
+	// connections are also needed for DDL/progress writers and stmt cache misses.
+	const extraConn = 10
+	db.SetMaxIdleConns(cfg.WorkerCount + extraConn)
+	db.SetMaxOpenConns(cfg.WorkerCount + extraConn)
 
 	// Inherit the default value of the prepared statement cache from the SinkURI Options
 	cachePrepStmts := cfg.CachePrepStmts

@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/tidb/pkg/util/chunk"
+	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
@@ -239,6 +240,123 @@ func buildUpdate(tableInfo *common.TableInfo, row commonEvent.RowChange) (string
 	builder.WriteString(" LIMIT 1")
 	sql := builder.String()
 	return sql, args
+}
+
+// buildActiveActiveUpsertSQL builds the last-write-wins UPSERT used by active-active tables.
+// SQL rules:
+//  1. INSERT only contains visible business columns plus _tidb_origin_ts/_tidb_softdelete_time.
+//     _tidb_commit_ts is omitted because downstream TiDB fills it automatically.
+//  2. The VALUES for _tidb_origin_ts reuse each row's upstream _tidb_commit_ts so the origin column
+//     describes when the row was committed at the upstream cluster.
+//  3. ON DUPLICATE KEY UPDATE reuses a single @ticdc_lww_cond flag derived from downstream
+//     IFNULL(_tidb_origin_ts, _tidb_commit_ts) <= VALUES(_tidb_origin_ts) to keep LWW semantics.
+func buildActiveActiveUpsertSQL(
+	tableInfo *common.TableInfo,
+	rows []*commonEvent.RowChange,
+	commitTs []uint64,
+) (string, []interface{}) {
+	if tableInfo == nil || len(rows) == 0 {
+		return "", nil
+	}
+	if len(commitTs) != len(rows) {
+		log.Panic("mismatched commitTs and rows length",
+			zap.Int("rows", len(rows)), zap.Int("commitTs", len(commitTs)))
+	}
+
+	columns := tableInfo.GetColumns()
+	insertColumns := make([]string, 0, len(columns))
+	for _, col := range columns {
+		if col == nil || col.IsGenerated() {
+			continue
+		}
+		if col.Name.O == commonEvent.CommitTsColumn {
+			// _tidb_commit_ts is kept downstream-only; do not emit it in INSERT columns.
+			continue
+		}
+		insertColumns = append(insertColumns, col.Name.O)
+	}
+	if len(insertColumns) == 0 {
+		return "", nil
+	}
+
+	valueOffsets := make([]int, len(insertColumns))
+	useCommitTs := make([]bool, len(insertColumns))
+	for i := range valueOffsets {
+		valueOffsets[i] = -1
+	}
+	for i, colName := range insertColumns {
+		if colName == commonEvent.OriginTsColumn {
+			// VALUES(_tidb_origin_ts) should reuse upstream commitTs to record origin.
+			useCommitTs[i] = true
+			continue
+		}
+		offset, ok := tableInfo.GetColumnOffsetByName(colName)
+		if !ok {
+			log.Panic("column not found when building active-active SQL",
+				zap.String("column", colName), zap.Stringer("table", tableInfo.TableName))
+		}
+		valueOffsets[i] = offset
+	}
+
+	originQuoted := common.QuoteName(commonEvent.OriginTsColumn)
+	commitQuoted := common.QuoteName(commonEvent.CommitTsColumn)
+
+	var builder strings.Builder
+	builder.WriteString("INSERT INTO ")
+	builder.WriteString(tableInfo.TableName.QuoteString())
+	builder.WriteString(" (")
+	for i, colName := range insertColumns {
+		if i > 0 {
+			builder.WriteString(",")
+		}
+		builder.WriteString(common.QuoteName(colName))
+	}
+	builder.WriteString(") VALUES ")
+
+	args := make([]interface{}, 0, len(rows)*len(insertColumns))
+	for rowIdx, row := range rows {
+		if rowIdx > 0 {
+			builder.WriteString(",")
+		}
+		builder.WriteString("(")
+		for i := range insertColumns {
+			if i > 0 {
+				builder.WriteString(",")
+			}
+			builder.WriteString("?")
+		}
+		builder.WriteString(")")
+		for i := range insertColumns {
+			if useCommitTs[i] {
+				args = append(args, commitTs[rowIdx])
+				continue
+			}
+			offset := valueOffsets[i]
+			if offset < 0 || offset >= len(columns) {
+				log.Panic("invalid column offset when building active-active SQL",
+					zap.Int("offset", offset), zap.Int("columnCount", len(columns)))
+			}
+			col := columns[offset]
+			v := common.ExtractColVal(&row.Row, col, offset)
+			args = append(args, v)
+		}
+	}
+
+	builder.WriteString(" ON DUPLICATE KEY UPDATE ")
+
+	for i, colName := range insertColumns {
+		quoted := common.QuoteName(colName)
+		if i == 0 {
+			// The first column initializes the shared @ticdc_lww_cond condition and performs LWW update.
+			builder.WriteString(fmt.Sprintf("%s = IF((@ticdc_lww_cond := (IFNULL(%s, %s) <= VALUES(%s))), VALUES(%s), %s)",
+				quoted, originQuoted, commitQuoted, originQuoted, quoted, quoted))
+		} else {
+			builder.WriteString(",")
+			builder.WriteString(fmt.Sprintf("%s = IF(@ticdc_lww_cond, VALUES(%s), %s)", quoted, quoted, quoted))
+		}
+	}
+
+	return builder.String(), args
 }
 
 func getArgs(row *chunk.Row, tableInfo *common.TableInfo) []interface{} {
