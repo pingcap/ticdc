@@ -125,6 +125,9 @@ func (b *Barrier) HandleStatus(from node.ID,
 			zap.String("from", from.String()),
 			zap.String("changefeed", request.ChangefeedID.String()))
 	}
+	if common.IsRedoMode(b.mode) {
+		log.Error("send HandleStatus redo", zap.Any("from", actions[from]))
+	}
 
 	// send ack or write action message to dispatcher
 	msg := messaging.NewSingleTargetMessage(from,
@@ -138,6 +141,9 @@ func (b *Barrier) HandleStatus(from node.ID,
 
 	for id, action := range actions {
 		if id != from && len(action) != 0 {
+			if common.IsRedoMode(b.mode) {
+				log.Error("send HandleStatus redo", zap.Any("action", action))
+			}
 			msg := messaging.NewSingleTargetMessage(id,
 				messaging.HeartbeatCollectorTopic,
 				&heartbeatpb.HeartBeatResponse{

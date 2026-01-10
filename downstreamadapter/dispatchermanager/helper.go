@@ -304,6 +304,9 @@ func (h *HeartBeatResponseHandler) Handle(dispatcherManager *DispatcherManager, 
 	heartbeatResponse := resps[0]
 	dispatcherStatuses := heartbeatResponse.GetDispatcherStatuses()
 	for _, dispatcherStatus := range dispatcherStatuses {
+		if common.IsRedoMode(heartbeatResponse.Mode) {
+			log.Error("HeartBeatResponseHandler redo", zap.Any("dispatcherStatus", dispatcherStatus))
+		}
 		influencedDispatchersType := dispatcherStatus.InfluencedDispatchers.InfluenceType
 		switch influencedDispatchersType {
 		case heartbeatpb.InfluenceType_Normal:
@@ -315,7 +318,6 @@ func (h *HeartBeatResponseHandler) Handle(dispatcherManager *DispatcherManager, 
 			}
 		case heartbeatpb.InfluenceType_DB:
 			schemaID := dispatcherStatus.InfluencedDispatchers.SchemaID
-			excludeDispatcherID := common.NewDispatcherIDFromPB(dispatcherStatus.InfluencedDispatchers.ExcludeDispatcherId)
 			var dispatcherIds []common.DispatcherID
 			if common.IsRedoMode(heartbeatResponse.Mode) {
 				dispatcherIds = dispatcherManager.GetAllRedoDispatchers(schemaID)
@@ -323,23 +325,16 @@ func (h *HeartBeatResponseHandler) Handle(dispatcherManager *DispatcherManager, 
 				dispatcherIds = dispatcherManager.GetAllDispatchers(schemaID)
 			}
 			for _, id := range dispatcherIds {
-				if id != excludeDispatcherID {
-					h.dispatcherStatusDynamicStream.Push(id, dispatcher.NewDispatcherStatusWithID(dispatcherStatus, id))
-				}
+				h.dispatcherStatusDynamicStream.Push(id, dispatcher.NewDispatcherStatusWithID(dispatcherStatus, id))
 			}
 		case heartbeatpb.InfluenceType_All:
-			excludeDispatcherID := common.NewDispatcherIDFromPB(dispatcherStatus.InfluencedDispatchers.ExcludeDispatcherId)
 			if common.IsRedoMode(heartbeatResponse.Mode) {
 				dispatcherManager.GetRedoDispatcherMap().ForEach(func(id common.DispatcherID, _ *dispatcher.RedoDispatcher) {
-					if id != excludeDispatcherID {
-						h.dispatcherStatusDynamicStream.Push(id, dispatcher.NewDispatcherStatusWithID(dispatcherStatus, id))
-					}
+					h.dispatcherStatusDynamicStream.Push(id, dispatcher.NewDispatcherStatusWithID(dispatcherStatus, id))
 				})
 			} else {
 				dispatcherManager.GetDispatcherMap().ForEach(func(id common.DispatcherID, _ *dispatcher.EventDispatcher) {
-					if id != excludeDispatcherID {
-						h.dispatcherStatusDynamicStream.Push(id, dispatcher.NewDispatcherStatusWithID(dispatcherStatus, id))
-					}
+					h.dispatcherStatusDynamicStream.Push(id, dispatcher.NewDispatcherStatusWithID(dispatcherStatus, id))
 				})
 			}
 		}
@@ -513,8 +508,10 @@ func (h *RedoMetaMessageHandler) Handle(dispatcherManager *DispatcherManager, me
 		// TODO: Support batch
 		panic("invalid message count")
 	}
-	msg := messages[0]
-	dispatcherManager.UpdateRedoMeta(msg.CheckpointTs, msg.ResolvedTs)
+	if dispatcherManager.GetTableTriggerRedoDispatcher() != nil {
+		msg := messages[0]
+		dispatcherManager.UpdateRedoMeta(msg.CheckpointTs, msg.ResolvedTs)
+	}
 	return false
 }
 

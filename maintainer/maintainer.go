@@ -242,6 +242,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		ResolvedTs:   checkpointTs,
 	}
 	m.redoResolvedTs = checkpointTs
+
 	m.scheduleState.Store(int32(heartbeatpb.ComponentState_Working))
 	m.bootstrapper = bootstrap.NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse](
 		m.changefeedID.Name(),
@@ -584,8 +585,13 @@ func (m *Maintainer) handleRedoMetaTsMessage(ctx context.Context) {
 						zap.Any("node", id))
 					continue
 				}
+				log.Error("handle redo", zap.Any("watermark", watermark), zap.Any("id", id))
 				newWatermark.UpdateMin(watermark)
 			}
+
+			log.Error("handle redo", zap.Any("self", m.selfNode.ID),
+				zap.Any("minRedoCheckpointTsForScheduler", minRedoCheckpointTsForScheduler),
+				zap.Any("minRedoCheckpointTsForBarrier", minRedoCheckpointTsForBarrier))
 
 			newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minRedoCheckpointTsForScheduler, ResolvedTs: minRedoCheckpointTsForScheduler})
 			newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minRedoCheckpointTsForBarrier, ResolvedTs: minRedoCheckpointTsForBarrier})
