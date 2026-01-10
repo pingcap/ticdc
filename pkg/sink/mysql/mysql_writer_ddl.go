@@ -17,6 +17,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,6 +30,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/tidb/dumpling/export"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser"
+	"github.com/pingcap/tidb/pkg/parser/ast"
+	tidbmysql "github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
@@ -107,42 +111,17 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 	}
 	ddlTime := oracle.GetTimeFromTS(tsToUse)
 	// Use second-level precision to match upstream default value evaluation.
-	ddlTimestamp := ddlTime.Unix()
+	ddlTimestamp := float64(ddlTime.Unix())
 
-	// If the table info provides an origin default value (e.g. for a column with DEFAULT CURRENT_TIMESTAMP),
-	// use that timestamp to set the session timestamp. This ensures that the default value evaluated
-	// by MySQL's CURRENT_TIMESTAMP matches the upstream value exactly.
-	if event.TableInfo != nil {
-		for _, col := range event.TableInfo.GetColumns() {
-			val := col.GetOriginDefaultValue()
-			if valStr, ok := val.(string); ok {
-				ts, err := parseTimestamp(valStr, w.cfg.Timezone)
-				if err == nil {
-					// Check if the timestamp is reasonable close to StartTs (e.g. within 24 hours)
-					// to avoid using a fixed default value (like '2000-01-01') which would be incorrect
-					// for a CURRENT_TIMESTAMP column.
-					diff := ts - ddlTimestamp
-					if diff < 0 {
-						diff = -diff
-					}
-					if diff < 24*3600 {
-						ddlTimestamp = ts
-						log.Info("Using OriginDefaultValue for DDL timestamp",
-							zap.String("originDefault", valStr),
-							zap.Int64("timestamp", ddlTimestamp),
-							zap.String("timezone", w.cfg.Timezone))
-						break
-					}
-				}
-			}
-		}
+	if ts, ok := ddlSessionTimestampFromOriginDefault(event, w.cfg.Timezone); ok {
+		ddlTimestamp = ts
 	}
 
 	// Set the session timestamp to match upstream DDL execution time
 	// This is critical for preserving timestamp function behavior
 	if err := setSessionTimestamp(ctx, tx, ddlTimestamp); err != nil {
 		log.Error("Fail to set session timestamp for DDL",
-			zap.Int64("timestamp", ddlTimestamp),
+			zap.Float64("timestamp", ddlTimestamp),
 			zap.Uint64("startTs", tsToUse),
 			zap.Uint64("commitTs", event.GetCommitTs()),
 			zap.String("query", event.GetDDLQuery()),
@@ -175,17 +154,21 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Query info: %s; ", event.GetDDLQuery())))
 	}
 
+	if err = tx.Commit(); err != nil {
+		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Query info: %s; ", event.GetDDLQuery())))
+	}
+
 	// Log successful DDL execution with timestamp information for debugging
 	log.Debug("DDL executed with timestamp",
 		zap.String("query", event.GetDDLQuery()),
 		zap.Uint64("startTs", tsToUse),
-		zap.Int64("sessionTimestamp", ddlTimestamp))
+		zap.Float64("sessionTimestamp", ddlTimestamp))
 
 	return nil
 }
 
-func setSessionTimestamp(ctx context.Context, tx *sql.Tx, unixTimestamp int64) error {
-	_, err := tx.ExecContext(ctx, fmt.Sprintf("SET TIMESTAMP = %d", unixTimestamp))
+func setSessionTimestamp(ctx context.Context, tx *sql.Tx, unixTimestamp float64) error {
+	_, err := tx.ExecContext(ctx, fmt.Sprintf("SET TIMESTAMP = %s", formatUnixTimestamp(unixTimestamp)))
 	return err
 }
 
@@ -194,18 +177,136 @@ func resetSessionTimestamp(ctx context.Context, tx *sql.Tx) error {
 	return err
 }
 
-func parseTimestamp(val string, timezone string) (int64, error) {
-	loc := time.UTC
-	if timezone != "" {
-		// timezone is usually quoted, remove quotes
-		tz := strings.Trim(timezone, "\"")
-		var err error
-		loc, err = time.LoadLocation(tz)
+func formatUnixTimestamp(unixTimestamp float64) string {
+	return strconv.FormatFloat(unixTimestamp, 'f', 6, 64)
+}
+
+func ddlSessionTimestampFromOriginDefault(event *commonEvent.DDLEvent, timezone string) (float64, bool) {
+	if event == nil || event.TableInfo == nil {
+		return 0, false
+	}
+	targetColumns, err := extractCurrentTimestampDefaultColumns(event.GetDDLQuery())
+	if err != nil || len(targetColumns) == 0 {
+		return 0, false
+	}
+
+	for _, col := range event.TableInfo.GetColumns() {
+		if _, ok := targetColumns[col.Name.L]; !ok {
+			continue
+		}
+		val := col.GetOriginDefaultValue()
+		valStr, ok := val.(string)
+		if !ok || valStr == "" {
+			continue
+		}
+		ts, err := parseOriginDefaultTimestamp(valStr, col, timezone)
 		if err != nil {
-			return 0, err
+			log.Warn("Failed to parse OriginDefaultValue for DDL timestamp",
+				zap.String("column", col.Name.O),
+				zap.String("originDefault", valStr),
+				zap.Error(err))
+			continue
+		}
+		log.Info("Using OriginDefaultValue for DDL timestamp",
+			zap.String("column", col.Name.O),
+			zap.String("originDefault", valStr),
+			zap.Float64("timestamp", ts),
+			zap.String("timezone", timezone))
+		return ts, true
+	}
+
+	return 0, false
+}
+
+func extractCurrentTimestampDefaultColumns(query string) (map[string]struct{}, error) {
+	p := parser.New()
+	stmt, err := p.ParseOneStmt(query, "", "")
+	if err != nil {
+		return nil, err
+	}
+
+	cols := make(map[string]struct{})
+	switch s := stmt.(type) {
+	case *ast.CreateTableStmt:
+		for _, col := range s.Cols {
+			if hasCurrentTimestampDefault(col) {
+				cols[col.Name.Name.L] = struct{}{}
+			}
+		}
+	case *ast.AlterTableStmt:
+		for _, spec := range s.Specs {
+			switch spec.Tp {
+			case ast.AlterTableAddColumns, ast.AlterTableModifyColumn, ast.AlterTableChangeColumn, ast.AlterTableAlterColumn:
+				for _, col := range spec.NewColumns {
+					if hasCurrentTimestampDefault(col) {
+						cols[col.Name.Name.L] = struct{}{}
+					}
+				}
+			}
 		}
 	}
 
+	return cols, nil
+}
+
+func hasCurrentTimestampDefault(col *ast.ColumnDef) bool {
+	if col == nil {
+		return false
+	}
+	for _, opt := range col.Options {
+		if opt.Tp != ast.ColumnOptionDefaultValue {
+			continue
+		}
+		if isCurrentTimestampExpr(opt.Expr) {
+			return true
+		}
+	}
+	return false
+}
+
+func isCurrentTimestampExpr(expr ast.ExprNode) bool {
+	if expr == nil {
+		return false
+	}
+	switch v := expr.(type) {
+	case *ast.FuncCallExpr:
+		return isCurrentTimestampFuncName(v.FnName.L)
+	case ast.ValueExpr:
+		return isCurrentTimestampFuncName(strings.ToLower(v.GetString()))
+	default:
+		return false
+	}
+}
+
+func isCurrentTimestampFuncName(name string) bool {
+	switch name {
+	case ast.CurrentTimestamp, ast.Now, ast.LocalTime, ast.LocalTimestamp:
+		return true
+	default:
+		return false
+	}
+}
+
+func parseOriginDefaultTimestamp(val string, col *timodel.ColumnInfo, timezone string) (float64, error) {
+	loc, err := resolveOriginDefaultLocation(col, timezone)
+	if err != nil {
+		return 0, err
+	}
+	return parseTimestampInLocation(val, loc)
+}
+
+func resolveOriginDefaultLocation(col *timodel.ColumnInfo, timezone string) (*time.Location, error) {
+	if col != nil && col.GetType() == tidbmysql.TypeTimestamp && col.Version >= timodel.ColumnInfoVersion1 {
+		return time.UTC, nil
+	}
+	if timezone == "" {
+		return time.UTC, nil
+	}
+	tz := strings.Trim(timezone, "\"")
+	return time.LoadLocation(tz)
+}
+
+func parseTimestampInLocation(val string, loc *time.Location) (float64, error) {
 	formats := []string{
 		"2006-01-02 15:04:05",
 		"2006-01-02 15:04:05.999999",
@@ -213,7 +314,7 @@ func parseTimestamp(val string, timezone string) (int64, error) {
 	for _, f := range formats {
 		t, err := time.ParseInLocation(f, val, loc)
 		if err == nil {
-			return t.Unix(), nil
+			return float64(t.UnixNano()) / float64(time.Second), nil
 		}
 	}
 	return 0, fmt.Errorf("failed to parse timestamp: %s", val)
