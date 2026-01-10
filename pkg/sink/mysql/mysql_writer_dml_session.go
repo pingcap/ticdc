@@ -197,7 +197,7 @@ func (w *Writer) runDMLConnLoop() {
 		return
 	}
 
-	ticker := time.NewTicker(tickInterval)
+	ticker := time.NewTicker(tickInterval / 2)
 	defer ticker.Stop()
 
 	writeTimeout, _ := time.ParseDuration(w.cfg.WriteTimeout)
