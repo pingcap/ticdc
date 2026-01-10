@@ -459,6 +459,8 @@ func encodeValue(
 		} else {
 			value = d.GetString()
 		}
+	case mysql.TypeTiDBVectorFloat32:
+		value = d.GetVectorFloat32().String()
 	default:
 		// NOTICE: GetValue() may return some types that go sql not support, which will cause sink DML fail
 		// Make specified convert upper if you need
@@ -480,8 +482,6 @@ func encodeValue(
 			} else {
 				value = string(v)
 			}
-		case types.VectorFloat32:
-			value = v.String()
 		default:
 			value = fmt.Sprintf("%v", v)
 		}
