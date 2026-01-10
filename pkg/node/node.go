@@ -16,6 +16,7 @@ package node
 import (
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,6 +24,48 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/version"
 )
+
+// Liveness represents the liveness state of a capture node.
+type Liveness int32
+
+const (
+	// LivenessCaptureAlive means the node is running normally.
+	LivenessCaptureAlive Liveness = 0
+	// LivenessCaptureStopping means the node is gracefully shutting down.
+	LivenessCaptureStopping Liveness = 1
+	// LivenessCaptureDraining means the node is being drained.
+	LivenessCaptureDraining Liveness = 2
+)
+
+// Load atomically loads the liveness value.
+func (l *Liveness) Load() Liveness {
+	return Liveness(atomic.LoadInt32((*int32)(l)))
+}
+
+// Store atomically stores the liveness value.
+func (l *Liveness) Store(val Liveness) {
+	atomic.StoreInt32((*int32)(l), int32(val))
+}
+
+// IsSchedulable returns true if the node can accept new workloads.
+// Returns false if node is Draining or Stopping.
+func (l *Liveness) IsSchedulable() bool {
+	return l.Load() == LivenessCaptureAlive
+}
+
+// StoreDraining sets liveness to Draining. Returns true if successful.
+// Can only transition from Alive to Draining.
+func (l *Liveness) StoreDraining() bool {
+	return atomic.CompareAndSwapInt32(
+		(*int32)(l), int32(LivenessCaptureAlive), int32(LivenessCaptureDraining))
+}
+
+// DrainComplete transitions from Draining to Stopping.
+// Returns true if successful.
+func (l *Liveness) DrainComplete() bool {
+	return atomic.CompareAndSwapInt32(
+		(*int32)(l), int32(LivenessCaptureDraining), int32(LivenessCaptureStopping))
+}
 
 type ID string
 

@@ -143,7 +143,14 @@ func WriteData(w http.ResponseWriter, data interface{}) {
 	}
 }
 
-// Liveness can only be changed from alive to stopping, and no way back.
+// Liveness represents the state of a capture node.
+// State transitions:
+//   - Alive → Draining: via drain API trigger
+//   - Draining → Stopping: drain complete (all tasks migrated)
+//   - Alive → Stopping: graceful shutdown (non-drain scenario)
+//
+// Note: Draining state is one-way, cannot go back to Alive,
+// because the goal of drain is to take the node offline.
 type Liveness int32
 
 const (
@@ -151,9 +158,13 @@ const (
 	LivenessCaptureAlive Liveness = 0
 	// LivenessCaptureStopping means the capture is in the process of graceful shutdown.
 	LivenessCaptureStopping Liveness = 1
+	// LivenessCaptureDraining means the capture is being drained.
+	// No new workloads will be scheduled to this node, and existing workloads are being migrated.
+	LivenessCaptureDraining Liveness = 2
 )
 
 // Store the given liveness. Returns true if it success.
+// Can only transition from Alive to the given state.
 func (l *Liveness) Store(v Liveness) bool {
 	return atomic.CompareAndSwapInt32(
 		(*int32)(l), int32(LivenessCaptureAlive), int32(v))
@@ -164,12 +175,34 @@ func (l *Liveness) Load() Liveness {
 	return Liveness(atomic.LoadInt32((*int32)(l)))
 }
 
+// IsSchedulable returns true if the node can accept new workloads.
+// Returns false if node is Draining or Stopping.
+func (l *Liveness) IsSchedulable() bool {
+	return l.Load() == LivenessCaptureAlive
+}
+
+// StoreDraining sets liveness to Draining. Returns true if successful.
+// Can only transition from Alive to Draining.
+func (l *Liveness) StoreDraining() bool {
+	return atomic.CompareAndSwapInt32(
+		(*int32)(l), int32(LivenessCaptureAlive), int32(LivenessCaptureDraining))
+}
+
+// DrainComplete transitions from Draining to Stopping.
+// Returns true if successful.
+func (l *Liveness) DrainComplete() bool {
+	return atomic.CompareAndSwapInt32(
+		(*int32)(l), int32(LivenessCaptureDraining), int32(LivenessCaptureStopping))
+}
+
 func (l *Liveness) String() string {
 	switch *l {
 	case LivenessCaptureAlive:
 		return "Alive"
 	case LivenessCaptureStopping:
 		return "Stopping"
+	case LivenessCaptureDraining:
+		return "Draining"
 	default:
 		return "unknown"
 	}
