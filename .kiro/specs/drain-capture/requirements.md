@@ -26,6 +26,7 @@ Drain 操作需要同时处理两个层面的迁移：
 - **Operator**: 操作符，表示一个调度操作（如添加、移动、停止 maintainer）
 - **Operator_Controller**: 操作符控制器，管理和执行所有操作符
 - **Span_Replication**: 表示一个表分片的复制任务
+- **Drain_Record**: Drain 操作的持久化记录（包含 draining target、开始时间、计数与 epoch 等），用于 coordinator failover 恢复与一致性约束
 
 ## Requirements
 
@@ -56,11 +57,11 @@ Drain 操作需要同时处理两个层面的迁移：
 2. WHEN validation passes, THE Coordinator SHALL set the target node as draining target in cluster state
 3. THE Coordinator SHALL only allow one draining target at a time per cluster
 4. IF a drain operation is already in progress, THEN THE Coordinator SHALL reject new drain requests with appropriate error
-5. WHEN a node is set as draining target, THE Coordinator SHALL notify all maintainers about the draining node via heartbeat
+5. WHEN a node is set as draining target, THE Coordinator SHALL notify all maintainers about the draining node via a coordinator→maintainer notification channel (NOT via MaintainerHeartbeat)
 6. WHEN a node is set as draining target, THE Coordinator SHALL generate MoveMaintainer operators for all maintainers on that node
 7. THE Coordinator SHALL NOT schedule any new maintainers to the draining target node
 8. THE Coordinator SHALL distribute maintainers to other nodes based on workload balancing
-9. WHEN all maintainers have been migrated from the draining node, THE Coordinator SHALL clear the draining target state
+9. WHEN both maintainers AND dispatchers have been migrated from the draining node, THE Coordinator SHALL clear the draining target state
 
 ### Requirement 3: Drain Capture Scheduler
 
@@ -68,14 +69,14 @@ Drain 操作需要同时处理两个层面的迁移：
 
 #### Acceptance Criteria
 
-1. THE Drain_Capture_Scheduler SHALL be integrated into the existing scheduler framework with higher priority than balance scheduler
+1. THE Drain_Capture_Scheduler SHALL be integrated into the existing scheduler framework and MUST run deterministically before balance scheduler while draining
 2. WHEN a draining target is set, THE Drain_Capture_Scheduler SHALL generate MoveMaintainer operators in batches
 3. THE Drain_Capture_Scheduler SHALL respect the configured batch size for concurrent migrations
 4. THE Drain_Capture_Scheduler SHALL wait for current batch to complete before generating next batch
-5. WHEN selecting destination nodes, THE Drain_Capture_Scheduler SHALL choose nodes with lowest workload
+5. WHEN selecting destination nodes, THE Drain_Capture_Scheduler SHALL choose nodes with lowest workload, considering in-flight migrations in the current batch
 6. THE Drain_Capture_Scheduler SHALL exclude the draining target from destination node selection
 7. THE Drain_Capture_Scheduler SHALL skip maintainers that are not in stable state (replicating)
-8. WHEN no more maintainers remain on draining node, THE Drain_Capture_Scheduler SHALL clear the draining target
+8. WHEN no more maintainers remain on draining node AND no dispatchers remain on draining node, THE Drain_Capture_Scheduler SHALL clear the draining target
 
 ### Requirement 4: Maintainer Dispatcher 迁移
 
@@ -88,7 +89,8 @@ Drain 操作需要同时处理两个层面的迁移：
 3. WHEN a Maintainer detects dispatchers on the draining node, THE Maintainer SHALL generate MoveDispatcher operators for all those dispatchers
 4. THE Maintainer SHALL migrate dispatchers in batches to avoid overwhelming the cluster
 5. WHEN selecting destination nodes for dispatchers, THE Maintainer SHALL exclude the draining node
-6. WHEN a Maintainer receives draining notification via heartbeat, THE Maintainer SHALL update its local draining state and trigger dispatcher migration
+6. WHEN a Maintainer receives draining notification via the coordinator→maintainer notification channel, THE Maintainer SHALL update its local draining state and trigger dispatcher migration
+7. THE Maintainer SHALL report the number of remaining dispatchers on the draining node back to the Coordinator for progress tracking
 
 ### Requirement 5: 调度排除机制
 
@@ -99,7 +101,7 @@ Drain 操作需要同时处理两个层面的迁移：
 1. THE Basic_Scheduler SHALL check draining target before scheduling new maintainers
 2. WHEN a draining target is set, THE Basic_Scheduler SHALL exclude that node from available nodes list
 3. THE Balance_Scheduler SHALL exclude draining target from rebalancing decisions
-4. THE Maintainer_Scheduler SHALL exclude draining target when scheduling new dispatchers
+4. THE Maintainer_Scheduler SHALL exclude draining target when scheduling new dispatchers, based on the locally observed draining target provided by the coordinator
 
 ### Requirement 6: Maintainer 迁移执行
 
@@ -136,7 +138,7 @@ Drain 操作需要同时处理两个层面的迁移：
 
 #### Acceptance Criteria
 
-1. IF the coordinator fails during drain operation, THEN THE new coordinator SHALL detect and resume the drain operation based on node liveness state
+1. IF the coordinator fails during drain operation, THEN THE new coordinator SHALL detect and resume the drain operation based on persisted drain record and/or persisted node liveness state
 2. IF a destination node fails during migration, THEN THE System SHALL reschedule affected maintainers and dispatchers to other available nodes
 3. IF all non-draining nodes become unavailable, THEN THE System SHALL pause the drain operation and log warning
 4. THE System SHALL implement timeout for individual maintainer and dispatcher migrations
@@ -148,23 +150,23 @@ Drain 操作需要同时处理两个层面的迁移：
 
 #### Acceptance Criteria
 
-1. WHEN a drain operation starts, THE System SHALL set the target node liveness to Draining
+1. WHEN a drain operation starts, THE System SHALL set the target node liveness to Draining AND persist this information for coordinator failover recovery
 2. THE Draining state SHALL prevent new workloads from being scheduled to the node
 3. WHEN all maintainers and dispatchers have been migrated, THE System SHALL transition the node liveness to Stopping
-4. THE Stopping state is terminal and the node SHALL proceed to shutdown
+4. THE Stopping state is terminal; the node SHALL stop campaigning for coordinator election and MAY proceed to shutdown via operational control
 5. THE System SHALL NOT allow transition from Draining back to Alive except when the draining node is the only node left in cluster
 6. WHEN a node is in Draining state, THE node SHALL NOT participate in coordinator election
 7. IF the draining node crashes during drain operation, THEN THE System SHALL clear the drain state and let basic scheduler handle rescheduling
 8. IF the draining node is the only node left in cluster, THEN THE System SHALL reset its liveness to Alive and allow it to become coordinator
 
-### Requirement 10: Heartbeat 通知机制
+### Requirement 10: Drain 通知机制
 
-**User Story:** As a coordinator, I want to notify nodes about draining status via heartbeat, so that all components are aware of the drain operation.
+**User Story:** As a coordinator, I want to notify nodes about draining status via a coordinator→maintainer notification channel, so that all components are aware of the drain operation.
 
 #### Acceptance Criteria
 
-1. WHEN a node is set as draining target, THE Coordinator SHALL include draining status in heartbeat messages to maintainers
-2. THE Heartbeat message SHALL include `draining_capture` field with the draining node ID
-3. WHEN a Maintainer receives heartbeat with draining notification, THE Maintainer SHALL update its local draining state
-4. WHEN a Maintainer detects draining node, THE Maintainer SHALL notify its Dispatcher_Manager about the draining node
-5. THE System SHALL propagate draining status to all relevant components within one heartbeat cycle
+1. WHEN a node is set as draining target, THE Coordinator SHALL broadcast draining status to all nodes via a coordinator→maintainer notification channel
+2. THE notification payload SHALL include `draining_capture` field with the draining node ID (empty if no drain in progress) AND a monotonic `drain_epoch` for de-dup and stale protection
+3. WHEN a Maintainer receives draining notification, THE Maintainer SHALL update its local draining state
+4. WHEN a draining target is set, THE System SHALL propagate draining status to all relevant components within one heartbeat cycle
+5. THE Coordinator SHALL be able to observe propagation and progress via maintainer heartbeats (e.g., remaining dispatcher counts)

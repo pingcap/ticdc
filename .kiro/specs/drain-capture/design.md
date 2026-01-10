@@ -95,16 +95,22 @@ sequenceDiagram
     participant Client
     participant API as API Server
     participant Coord as Coordinator
+    participant MaintMgr as MaintainerManager (All Nodes)
     participant OldMaint as Old Maintainer (Node A)
     participant NewMaint as New Maintainer (Node B)
     participant Disp as Dispatchers
 
     Client->>API: PUT /api/v2/captures/{id}/drain
     API->>Coord: DrainCapture(captureID)
-    Coord->>Coord: Validate & Set DrainState
+    Coord->>Coord: Validate & Persist DrainRecord (epoch)
     Coord->>Coord: SetNodeLiveness(captureID, Draining)
     Coord-->>API: 202 Accepted + Counts
     API-->>Client: Response
+
+    Note over Coord,MaintMgr: Phase 0: Propagation
+    Coord->>MaintMgr: DrainNotification(draining_capture, epoch)
+    MaintMgr->>OldMaint: OnDrainNotification(...)
+    MaintMgr->>NewMaint: OnDrainNotification(...)
 
     Note over Coord,Disp: Phase 1: Maintainer Migration
     Coord->>Coord: DrainScheduler generates MoveMaintainer ops (batch)
@@ -112,18 +118,19 @@ sequenceDiagram
     OldMaint->>OldMaint: Stop & Cleanup
     Coord->>NewMaint: AddMaintainerRequest
     NewMaint->>NewMaint: Create new ddlSpan
-    NewMaint->>NewMaint: Bootstrap & discover dispatchers on draining node
+    NewMaint->>NewMaint: Bootstrap & trigger drain-dispatcher scheduler
 
-    Note over Coord,Disp: Phase 2: Dispatcher Migration (driven by new Maintainer)
-    NewMaint->>NewMaint: Generate MoveDispatcher ops for dispatchers on Node A
+    Note over Coord,Disp: Phase 2: Dispatcher Migration (driven by maintainers)
+    NewMaint->>NewMaint: Generate MoveDispatcher ops for dispatchers on draining node
     NewMaint->>Disp: Move dispatchers to other nodes
     Disp-->>NewMaint: Migration complete
+    NewMaint-->>Coord: MaintainerHeartbeat (draining_dispatcher_count)
 
     Note over Coord,Disp: Phase 3: Completion
-    Coord->>Coord: All maintainers migrated
-    Coord->>Coord: Check all dispatchers migrated
+    Coord->>Coord: RemainingMaintainers == 0
+    Coord->>Coord: RemainingDispatchers == 0 (aggregated)
     Coord->>Coord: SetNodeLiveness(captureID, Stopping)
-    Coord->>Coord: Clear DrainState
+    Coord->>Coord: Clear DrainRecord
 ```
 
 ### 组件交互图
@@ -138,13 +145,16 @@ flowchart TD
     FWD -- "yes" --> CoordAPI
 
     CoordAPI --> Validate["Validate Request"]
-    Validate --> SetDrain["Set Draining Target"]
-    SetDrain --> SetLiveness["Set Node Liveness = Draining"]
+    Validate --> SetDrain["Persist DrainRecord (epoch)"]
+    SetDrain --> SetLiveness["Persist Node Liveness = Draining"]
     SetLiveness --> Response["Return 202 + Counts"]
 
     SetDrain --> DrainSched["Drain Capture Scheduler"]
     DrainSched --> GenMaintOps["Generate MoveMaintainer Operators (batch)"]
     GenMaintOps --> OpCtrl["Operator Controller"]
+
+    SetDrain --> Notify["Broadcast DrainNotification"]
+    Notify --> MaintMgr["MaintainerManager (All Nodes)"]
 
     OpCtrl --> RemoveOld["RemoveMaintainerRequest to Old Node"]
     OpCtrl --> AddNew["AddMaintainerRequest to New Node"]
@@ -152,13 +162,15 @@ flowchart TD
     AddNew --> NewMaint["New Maintainer"]
     NewMaint --> CreateDDL["Create new ddlSpan"]
     CreateDDL --> Bootstrap["Bootstrap"]
-    Bootstrap --> CheckDrain["Check dispatchers on draining node"]
-    CheckDrain --> GenDispOps["Generate MoveDispatcher Operators"]
+    Bootstrap --> DrainDispSched["Drain-dispatcher scheduler"]
+    DrainDispSched --> GenDispOps["Generate MoveDispatcher Operators"]
     GenDispOps --> DispMigrate["Dispatcher Migration"]
+    DispMigrate --> Report["Report draining_dispatcher_count"]
+    Report --> CoordAPI
 
     DispMigrate --> Complete["All Migrations Complete"]
     Complete --> SetStopping["Set Node Liveness = Stopping"]
-    SetStopping --> ClearDrain["Clear Draining Target"]
+    SetStopping --> ClearDrain["Clear DrainRecord"]
 ```
 
 
@@ -273,19 +285,41 @@ func (c *NodeManager) GetCoordinatorCandidates() map[node.ID]*node.Info {
 }
 ```
 
-### 3. Coordinator 选举集成
+> 注意：以上 `nodeLiveness` 如果仅保存在单个 coordinator 进程内存中，将无法满足：
+> - coordinator failover 后继续 drain（新 coordinator 无法恢复 liveness / draining target）
+> - 其他节点的 elector 感知自身是否处于 Draining/Stopping，从而不参与 coordinator 选举
+>
+> 因此需要将 liveness 与 drain record 持久化到 etcd，并由各节点 watch 更新本地视图。
+
+### 3. Coordinator 选举约束集成（Elector）
+
+当前新架构里，coordinator 选举由每个节点本地的 elector 发起（`server/module_election.go`），因此“Draining/Stopping 不参与选举”的约束必须在 elector 层生效，而不是仅在 coordinator 内部“筛候选节点”。
+
+设计要点：
+
+1. **持久化 liveness**：将 capture liveness（Alive/Draining/Stopping）存入 etcd（或扩展 capture info），并由各节点 watch。
+2. **elector 选举前检查**：
+   - `Alive`：允许 campaign coordinator
+   - `Draining/Stopping`：禁止 campaign coordinator（并等待状态变化或退出）
+3. **唯一例外**：当集群只剩下一个节点且该节点为 `Draining` 时，允许该节点将自身 liveness 重置为 `Alive`，并清理 drain record（不触发 Stopping），以恢复集群可用性。
+
+伪代码（示意）：
 
 ```go
-// 在 coordinator 选举逻辑中使用 GetCoordinatorCandidates
-
-func (e *Election) GetCandidates() map[node.ID]*node.Info {
-    // Only nodes with Alive liveness can become coordinator
-    return e.nodeManager.GetCoordinatorCandidates()
+// server/module_election.go
+if livenessStore.Get(selfID) != Alive {
+    if livenessStore.Get(selfID) == Draining && livenessStore.OnlyNodeLeft(selfID) {
+        livenessStore.Set(selfID, Alive)
+        drainStore.ClearWithoutTransition()
+    } else {
+        return // do not campaign
+    }
 }
+Campaign()
 ```
 
 
-### 3. API Layer
+### 4. API Layer
 
 #### DrainCaptureResponse
 ```go
@@ -315,16 +349,37 @@ type DrainStatusResponse struct {
 // GET /api/v2/captures/{capture_id}/drain - 查询 drain 状态
 ```
 
-### 4. Coordinator Layer
+### 5. Coordinator Layer
 
 #### DrainState
+
+说明：
+
+- `DrainState` 在 coordinator 中作为**内存 cache**，用于调度与 API 查询的快速路径。
+- **source of truth** 为 etcd 持久化的 `DrainRecord` 与 per-capture `Liveness`（见 “Data Models”）。
+- `epoch` 用于 drain 通知/上报的去重与防陈旧。
+
 ```go
 // coordinator/drain_state.go
 
-// DrainState tracks the drain operation state in coordinator
+type DrainRecordStore interface {
+    // Create creates a new drain record and returns drain epoch.
+    // It must fail if another drain is already in progress.
+    Create(target node.ID, maintainerCount, dispatcherCount int) (epoch uint64, err error)
+    Clear(epoch uint64) error
+    ClearWithoutTransition(epoch uint64) error
+}
+
+type LivenessStore interface {
+    Get(id node.ID) Liveness
+    Set(id node.ID, liveness Liveness) error
+}
+
+// DrainState tracks the drain operation state in coordinator (in-memory cache).
 type DrainState struct {
     mu sync.RWMutex
 
+    epoch uint64
     // drainingTarget is the capture ID being drained, empty if no drain in progress
     drainingTarget node.ID
 
@@ -337,13 +392,14 @@ type DrainState struct {
     // initialDispatcherCount is the count when drain started
     initialDispatcherCount int
 
-    // nodeManager is used to update node liveness
-    nodeManager NodeManager
+    drainStore    DrainRecordStore
+    livenessStore LivenessStore
 }
 
-func NewDrainState(nodeManager NodeManager) *DrainState {
+func NewDrainState(drainStore DrainRecordStore, livenessStore LivenessStore) *DrainState {
     return &DrainState{
-        nodeManager: nodeManager,
+        drainStore:    drainStore,
+        livenessStore: livenessStore,
     }
 }
 
@@ -355,13 +411,19 @@ func (s *DrainState) SetDrainingTarget(target node.ID, maintainerCount, dispatch
         return errors.New("another drain operation is in progress")
     }
 
+    epoch, err := s.drainStore.Create(target, maintainerCount, dispatcherCount)
+    if err != nil {
+        return err
+    }
+
+    s.epoch = epoch
     s.drainingTarget = target
     s.startTime = time.Now()
     s.initialMaintainerCount = maintainerCount
     s.initialDispatcherCount = dispatcherCount
 
-    // Update node liveness to Draining
-    s.nodeManager.SetNodeLiveness(target, LivenessCaptureDraining)
+    // Update node liveness to Draining (persisted)
+    _ = s.livenessStore.Set(target, LivenessCaptureDraining)
 
     return nil
 }
@@ -377,9 +439,11 @@ func (s *DrainState) ClearDrainingTarget() {
     defer s.mu.Unlock()
 
     if s.drainingTarget != "" {
-        // Transition to Stopping state
-        s.nodeManager.SetNodeLiveness(s.drainingTarget, LivenessCaptureStopping)
+        // Transition to Stopping state (persisted)
+        _ = s.livenessStore.Set(s.drainingTarget, LivenessCaptureStopping)
+        _ = s.drainStore.Clear(s.epoch)
         s.drainingTarget = ""
+        s.epoch = 0
     }
 }
 
@@ -405,10 +469,18 @@ type Coordinator interface {
 }
 ```
 
-### 5. Drain Capture Scheduler
+### 6. Drain Capture Scheduler
 
 ```go
 // coordinator/scheduler/drain.go
+
+// DispatcherProgressProvider provides aggregated dispatcher counts for drain completion.
+// NOTE: dispatcher distribution is owned by maintainers; coordinator must aggregate it
+// from maintainer heartbeats, instead of querying changefeedDB directly.
+type DispatcherProgressProvider interface {
+    // RemainingDispatchersOnNode returns total remaining dispatchers on node across all changefeeds.
+    RemainingDispatchersOnNode(nodeID node.ID) int
+}
 
 // drainScheduler generates MoveMaintainer operators for draining captures
 type drainScheduler struct {
@@ -418,6 +490,7 @@ type drainScheduler struct {
     changefeedDB       *changefeed.ChangefeedDB
     nodeManager        NodeManager
     drainState         *DrainState
+    dispatcherProgress DispatcherProgressProvider
 }
 
 func NewDrainScheduler(
@@ -427,6 +500,7 @@ func NewDrainScheduler(
     changefeedDB *changefeed.ChangefeedDB,
     drainState *DrainState,
     nodeManager NodeManager,
+    dispatcherProgress DispatcherProgressProvider,
 ) *drainScheduler {
     if batchSize <= 0 {
         batchSize = 1 // default to 1
@@ -438,6 +512,7 @@ func NewDrainScheduler(
         changefeedDB:       changefeedDB,
         drainState:         drainState,
         nodeManager:        nodeManager,
+        dispatcherProgress: dispatcherProgress,
     }
 }
 
@@ -479,6 +554,8 @@ func (s *drainScheduler) Execute() time.Time {
 
     // Generate MoveMaintainer operators in batches
     batchCount := 0
+    // Track planned destination assignments in current tick to avoid concentrating a batch to one node.
+    inflight := make(map[node.ID]int)
     for _, cf := range maintainers {
         if batchCount >= availableBatch {
             break
@@ -489,8 +566,8 @@ func (s *drainScheduler) Execute() time.Time {
             continue
         }
 
-        // Select destination with lowest workload
-        destNode := s.selectDestination(schedulableNodes)
+        // Select destination with lowest workload (considering in-flight assignments)
+        destNode := s.selectDestination(schedulableNodes, inflight)
         if destNode == "" {
             continue
         }
@@ -498,6 +575,7 @@ func (s *drainScheduler) Execute() time.Time {
         op := operator.NewMoveMaintainerOperator(s.changefeedDB, cf, drainingTarget, destNode)
         if s.operatorController.AddOperator(op) {
             batchCount++
+            inflight[destNode]++
             log.Info("generated move maintainer operator for drain",
                 zap.String("changefeed", cf.ID.String()),
                 zap.String("from", drainingTarget.String()),
@@ -519,23 +597,17 @@ func (s *drainScheduler) countInProgressOperators(nodeID node.ID) int {
 }
 
 func (s *drainScheduler) allDispatchersMigrated(nodeID node.ID) bool {
-    // Check if any changefeed still has dispatchers on the draining node
-    // This information is reported via maintainer heartbeat
-    for _, cf := range s.changefeedDB.GetAll() {
-        if cf.GetDispatcherCountOnNode(nodeID) > 0 {
-            return false
-        }
-    }
-    return true
+    return s.dispatcherProgress.RemainingDispatchersOnNode(nodeID) == 0
 }
 
-func (s *drainScheduler) selectDestination(nodes map[node.ID]*node.Info) node.ID {
+func (s *drainScheduler) selectDestination(nodes map[node.ID]*node.Info, inflight map[node.ID]int) node.ID {
     var minNode node.ID
     minCount := math.MaxInt
 
     nodeTaskSize := s.changefeedDB.GetTaskSizePerNode()
     for id := range nodes {
-        if count := nodeTaskSize[id]; count < minCount {
+        // Effective workload = current workload + planned inflight migrations in this tick.
+        if count := nodeTaskSize[id] + inflight[id]; count < minCount {
             minCount = count
             minNode = id
         }
@@ -550,82 +622,91 @@ func (s *drainScheduler) Name() string {
 ```
 
 
-### 6. Heartbeat Extension
+### 7. Drain Notification & Progress Reporting
 
-```go
-// heartbeatpb/heartbeat.proto - 添加 draining_capture 字段
+在新架构中需要明确区分两类消息方向：
 
-message MaintainerHeartbeat {
-    // ... existing fields ...
+- **maintainer → coordinator**：`heartbeatpb.MaintainerHeartbeat`（已存在），用于上报 maintainer 状态与 drain 进度。
+- **coordinator → maintainer manager**：需要新增 drain 通知消息，用于广播当前 draining capture，使所有 maintainers 及时感知并触发 dispatcher 迁移/排除逻辑。
 
-    // draining_capture is the capture ID being drained, empty if no drain in progress
-    // Maintainer should not schedule new dispatchers to this capture
-    string draining_capture = N;
+#### 7.1 Coordinator → Maintainer: DrainNotification（新增）
+
+```proto
+message DrainNotification {
+  // draining_capture is the capture ID being drained, empty if no drain in progress.
+  string draining_capture = 1;
+  // drain_epoch is a monotonic identifier for the drain operation (for de-dup and stale protection).
+  uint64 drain_epoch = 2;
 }
 ```
 
-### 7. Maintainer Layer
+传播策略：
 
-新 Maintainer 启动后，通过 bootstrap 发现 draining 节点上的 dispatchers，并自动迁移：
+- 当 drain 开始/结束/目标变更时，Coordinator 立即广播一次。
+- drain 进行期间，Coordinator 周期性重发（保证“一个 maintainer 心跳周期内可达”）。
+- MaintainerManager 接收后，将 `draining_capture/drain_epoch` 分发给本机所有 Maintainers。
+
+#### 7.2 Maintainer → Coordinator: Drain progress reporting（扩展）
+
+为满足“drain 完成条件 = maintainer=0 且 dispatcher=0”，Coordinator 需要从 maintainer 侧汇总 draining 节点上的 dispatcher 数量。
+
+推荐扩展（示意）：
+
+```proto
+message MaintainerStatus {
+  // ... existing fields ...
+
+  // Optional echo for observability/debugging.
+  string draining_capture = N;
+  uint64 drain_epoch = M;
+
+  // Remaining dispatchers of this changefeed on draining_capture (0 if none or no drain).
+  uint32 draining_dispatcher_count = K;
+}
+```
+
+Coordinator 聚合所有 changefeed 的 `draining_dispatcher_count`，用于：
+
+- `GET /api/v2/captures/{capture_id}/drain` 返回 `remaining_dispatcher_count`
+- drain scheduler 判断是否可以结束 drain（完成条件）
+
+### 8. Maintainer Layer
+
+Maintainer 侧职责（每个 changefeed）：
+
+1. 维护本 changefeed 的 `draining_capture/drain_epoch` 本地状态（来自 `DrainNotification`）。
+2. 对所有 dispatcher 调度决策排除 draining capture（包括 basic/balance 以及用户触发的 move/split 等路径）。
+3. 当 draining capture 设置后，生成 `MoveDispatcher` operators 将该 changefeed 在 draining capture 上的 dispatchers 迁走（批量、限流）。
+4. 周期性上报该 changefeed 在 draining capture 上剩余 dispatcher 数量，供 Coordinator 聚合并判断 drain 完成。
+
+一个最小落地方案是：在 Maintainer 内新增一个 drain-dispatcher scheduler（优先级高于 balance），它在以下时机被触发：
+
+- 收到 `DrainNotification`（draining_capture/drain_epoch 变化）
+- maintainer 完成 bootstrap（新 maintainer 上线后立即检查一次）
+
+示意代码（状态管理）：
 
 ```go
-// maintainer/maintainer.go - 添加 drain 状态处理
-
 type Maintainer struct {
     // ... existing fields ...
-
-    // drainingCapture is the capture being drained, empty if no drain in progress
     drainingCapture atomic.Value // node.ID
+    drainEpoch      atomic.Uint64
 }
 
-func (m *Maintainer) SetDrainingCapture(captureID node.ID) {
-    m.drainingCapture.Store(captureID)
+func (m *Maintainer) OnDrainNotification(drainingCapture node.ID, epoch uint64) {
+    if m.drainEpoch.Load() == epoch && m.GetDrainingCapture() == drainingCapture {
+        return
+    }
+    m.drainingCapture.Store(drainingCapture)
+    m.drainEpoch.Store(epoch)
     m.statusChanged.Store(true)
-}
 
-func (m *Maintainer) GetDrainingCapture() node.ID {
-    if v := m.drainingCapture.Load(); v != nil {
-        return v.(node.ID)
-    }
-    return ""
-}
-
-// OnDrainingCaptureNotified is called when maintainer receives draining notification via heartbeat
-func (m *Maintainer) OnDrainingCaptureNotified(drainingCapture node.ID) {
-    oldDrainingCapture := m.GetDrainingCapture()
-    if oldDrainingCapture == drainingCapture {
-        return // No change
-    }
-
-    m.SetDrainingCapture(drainingCapture)
-
-    if drainingCapture == "" {
-        log.Info("drain completed, clearing draining capture",
-            zap.Stringer("changefeed", m.changefeedID))
-        return
-    }
-
-    log.Info("received draining capture notification",
-        zap.Stringer("changefeed", m.changefeedID),
-        zap.String("drainingCapture", drainingCapture.String()))
-
-    // Generate MoveDispatcher operators for dispatchers on draining capture
-    m.controller.GenerateMoveDispatcherOperatorsForNode(drainingCapture)
-}
-
-// Called after bootstrap completes to check for dispatchers on draining node
-func (m *Maintainer) checkAndMigrateDispatchersOnDrainingNode() {
-    drainingCapture := m.GetDrainingCapture()
-    if drainingCapture == "" {
-        return
-    }
-
-    // Generate MoveDispatcher operators for dispatchers on draining capture
-    m.controller.GenerateMoveDispatcherOperatorsForNode(drainingCapture)
+    // Trigger drain dispatcher scheduler (async).
+    m.controller.drainDispatcherScheduler.SetTarget(drainingCapture, epoch)
 }
 ```
 
-### 8. Scheduler Exclusion Integration
+### 9. Scheduler Exclusion Integration
 
 ```go
 // coordinator/scheduler/basic.go - 更新 basicScheduler
@@ -648,20 +729,50 @@ func (s *balanceScheduler) Execute() time.Time {
 }
 ```
 
+Maintainer 侧也必须做同样的排除，否则 dispatcher 仍可能被调度/迁回到 draining 节点：
+
+```go
+// maintainer/scheduler/basic.go & maintainer/scheduler/balance.go
+nodes := s.nodeManager.GetAliveNodes()
+if draining := s.drainCaptureProvider.GetDrainingCapture(); draining != "" {
+    delete(nodes, draining)
+}
+// Destination selection MUST NOT pick draining node.
+```
+
 
 ## Data Models
 
-### Drain Operation State (In-Memory)
+### Drain Record（Persisted）
+
+Drain 的一致性与 failover 恢复依赖 **持久化 drain record**（单集群最多一个 draining target），而不是仅依赖 coordinator 进程内存。
+
+建议存储在 etcd（示意）：
 
 ```go
-type DrainStatus int
+// Key (example):
+//   /{cluster_id}/__cdc_meta__/drain
+type DrainRecord struct {
+    Epoch                  uint64    `json:"epoch"` // monotonic
+    DrainingTarget         node.ID   `json:"draining_target"`
+    StartTime              time.Time `json:"start_time"`
+    InitialMaintainerCount int       `json:"initial_maintainer_count"`
+    InitialDispatcherCount int       `json:"initial_dispatcher_count"`
+}
+```
 
-const (
-    DrainStatusNotStarted DrainStatus = iota
-    DrainStatusMigratingMaintainers
-    DrainStatusMigratingDispatchers
-    DrainStatusCompleted
-)
+### Drain Progress（Aggregated in Coordinator Memory）
+
+Coordinator 通过 maintainer heartbeats 聚合 drain 进度，用于 API 查询与 drain 完成判断：
+
+```go
+type DrainProgress struct {
+    Epoch        uint64
+    Target       node.ID
+    // remaining dispatchers on target, aggregated by changefeed
+    RemainingDispatchersByChangefeed map[string]uint32
+    LastUpdatedAt time.Time
+}
 ```
 
 ### Configuration
@@ -749,7 +860,7 @@ var (
 
 ### Property 4: Drain State Transition
 
-*For any* drain operation, the node liveness SHALL transition from Alive → Draining → Stopping, and never back to Alive.
+*For any* drain operation, the node liveness SHALL transition from Alive → Draining → Stopping, and never back to Alive (except the “only draining node left” recovery case).
 
 **Validates: Requirements 9.1, 9.2, 9.3, 9.4, 9.5**
 
@@ -765,9 +876,9 @@ var (
 
 **Validates: Requirements 2.9, 3.8**
 
-### Property 7: Heartbeat Draining Notification Propagation
+### Property 7: Drain Notification Propagation
 
-*For any* draining target set in coordinator, the draining capture ID SHALL be included in heartbeat messages to all maintainers.
+*For any* draining target set in coordinator, the draining capture ID SHALL be propagated to all maintainers via the coordinator→maintainer notification channel within one heartbeat cycle.
 
 **Validates: Requirements 10.1, 10.2**
 
@@ -808,50 +919,43 @@ var (
 | Capture not found | 404 | "capture not found" |
 | Internal error | 500 | "internal server error: {details}" |
 
+> 实现提示：需要在 API 层支持按错误类型返回 404/409/503 等状态码；仅使用“400/500 二分”的通用错误处理中间件会导致该表无法落地。
+
 ### Coordinator 选举约束
 
-**Draining 节点不能成为 Coordinator**：
-- 当节点处于 `Draining` 状态时，该节点不参与 coordinator 选举
-- 这确保了 drain 操作的一致性：coordinator 负责协调 drain，不能自己 drain 自己
+当前新架构里 coordinator 选举由各节点本地 elector 发起（`server/module_election.go`），因此该约束必须落在 elector 层：
 
-**特殊情况：集群只剩 Draining 节点**：
+- 当节点处于 `Draining/Stopping` 状态时，该节点不参与 coordinator 选举（不 campaign）。
+- 这确保了 drain 操作的一致性：coordinator 负责协调 drain，不能自己 drain 自己。
+
+唯一例外（与 Requirements 9.8 对齐）：
+
 - 如果集群中只剩下一个节点，且该节点处于 `Draining` 状态
-- 该节点可以将自己的状态从 `Draining` 重置为 `Alive`
-- 然后成为 coordinator，恢复集群可用性
-- 这是唯一允许从 `Draining` 回到 `Alive` 的场景
+- 允许该节点将自己的状态从 `Draining` 重置为 `Alive`，并清理 drain record（不触发 Stopping）
+- 然后参与选举成为 coordinator，恢复集群可用性
+
+伪代码（示意）：
 
 ```go
-// 在 coordinator 选举逻辑中
-func (e *Election) TryBecomeCoordinator() bool {
-    candidates := e.nodeManager.GetCoordinatorCandidates()
-
-    // 如果没有候选节点，检查是否只剩自己（draining 状态）
-    if len(candidates) == 0 {
-        allNodes := e.nodeManager.GetAliveNodes()
-        if len(allNodes) == 1 && allNodes[e.selfID] != nil {
-            // 只剩自己，重置 draining 状态
-            if e.nodeManager.GetNodeLiveness(e.selfID) == LivenessCaptureDraining {
-                log.Warn("only draining node left in cluster, resetting to alive",
-                    zap.String("node", e.selfID.String()))
-                e.nodeManager.SetNodeLiveness(e.selfID, LivenessCaptureAlive)
-                // 清理 drain 状态
-                e.drainState.ClearDrainingTargetWithoutTransition()
-                return true
-            }
-        }
-        return false
+// server/module_election.go
+if liveness != Alive {
+    if liveness == Draining && onlySelfLeft {
+        livenessStore.Set(selfID, Alive)
+        drainStore.ClearWithoutTransition()
+    } else {
+        return // do not campaign
     }
-    // ... 正常选举逻辑
 }
+campaign()
 ```
 
 ### Recovery Scenarios
 
 1. **Coordinator Failover During Drain**
-   - New coordinator detects nodes with Draining liveness
-   - Drain operation continues from current state
-   - No explicit state persistence needed, liveness state is sufficient
-   - **注意**：Draining 节点不参与 coordinator 选举
+   - New coordinator loads persisted drain record + liveness from etcd
+   - Reconstruct in-memory drain state and continue drain scheduler from current progress
+   - If drain record exists but draining node is already gone, clear drain record and rely on basic scheduler to reschedule
+   - **注意**：Draining/Stopping 节点不参与 coordinator 选举（elector 层约束）
 
 2. **Destination Node Failure During Maintainer Migration**
    - MoveMaintainer operator 的 `OnNodeRemove` 被调用
@@ -870,7 +974,7 @@ func (e *Election) TryBecomeCoordinator() bool {
    - Maintainers on that node become absent
    - Basic scheduler reschedules them to other nodes
    - **Drain 操作自动完成**：节点已经不在了，无需继续 drain
-   - Coordinator 清理 DrainState
+   - Coordinator 清理 drain record / DrainState
 
 5. **All Non-Draining Nodes Unavailable**
    - Drain scheduler detects no available destination nodes
@@ -907,15 +1011,23 @@ func (e *Election) TryBecomeCoordinator() bool {
    - Test single draining target invariant
    - Test state transitions
    - Test concurrent access safety
+   - Test persisted drain record load/store (coordinator failover recovery)
 
 3. **Scheduler Tests**
    - Test node exclusion logic
    - Test batch size constraint
-   - Test destination node selection based on workload
+   - Test destination node selection based on workload (including in-flight batch assignments)
+   - Test deterministic ordering: drain scheduler runs before balance while draining
 
 4. **Maintainer Tests**
-   - Test draining notification handling
+   - Test drain notification handling (coordinator→maintainer)
    - Test dispatcher migration after bootstrap
+   - Test draining node exclusion in dispatcher scheduling
+   - Test draining_dispatcher_count reporting
+
+5. **Elector Tests**
+   - Test Draining/Stopping nodes do not campaign coordinator election
+   - Test “only draining node left” exception
 
 ### Integration Tests
 
@@ -936,7 +1048,7 @@ func (e *Election) TryBecomeCoordinator() bool {
 3. **Failover During Drain Test**
    - Start drain operation
    - Kill coordinator
-   - Verify new coordinator continues drain
+   - Verify new coordinator continues drain based on persisted drain record
 
 4. **Node Failure During Drain Test**
    - Start drain operation
