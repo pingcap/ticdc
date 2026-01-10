@@ -67,7 +67,8 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	ctx := c.Request.Context()
 	cfg := &ChangefeedConfig{ReplicaConfig: GetDefaultReplicaConfig()}
 
-	if err := c.BindJSON(&cfg); err != nil {
+	var err error
+	if err = c.BindJSON(&cfg); err != nil {
 		_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
 		return
 	}
@@ -80,7 +81,6 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	}
 
 	keyspaceName := GetKeyspaceValueWithDefault(c)
-
 	var changefeedID common.ChangeFeedID
 	if cfg.ID == "" {
 		changefeedID = common.NewChangefeedID(keyspaceName)
@@ -88,7 +88,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		changefeedID = common.NewChangeFeedIDWithName(cfg.ID, keyspaceName)
 	}
 	// verify changefeedID
-	if err := common.ValidateChangefeedID(changefeedID.Name()); err != nil {
+	if err = common.ValidateChangefeedID(changefeedID.Name()); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack(
 			"invalid changefeed_id: %s", cfg.ID))
 		return
@@ -98,9 +98,8 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	cfg.Keyspace = keyspaceName
 
 	// verify changefeed keyspace
-	if err := common.ValidateKeyspace(changefeedID.Keyspace()); err != nil {
-		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack(
-			"invalid keyspace: %s", cfg.ID))
+	if err = common.ValidateKeyspace(changefeedID.Keyspace()); err != nil {
+		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid keyspace: %s", cfg.ID))
 		return
 	}
 
@@ -149,23 +148,6 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 			"invalid start-ts %v, larger than current tso %v", cfg.StartTs, currentTSO))
 		return
 	}
-	// Ensure the start ts is valid in the next 3600 seconds, aka 1 hour
-	const ensureTTL = 60 * 60
-	createGcServiceID := h.server.GetEtcdClient().GetEnsureGCServiceID(gc.EnsureGCServiceCreating)
-	if err = gc.EnsureChangefeedStartTsSafety(
-		ctx,
-		h.server.GetPdClient(),
-		createGcServiceID,
-		keyspaceMeta.Id,
-		changefeedID,
-		ensureTTL, cfg.StartTs); err != nil {
-		if !errors.ErrStartTsBeforeGC.Equal(err) {
-			_ = c.Error(errors.ErrPDEtcdAPIError.Wrap(err))
-			return
-		}
-		_ = c.Error(err)
-		return
-	}
 
 	// verify target ts
 	if cfg.TargetTs > 0 && cfg.TargetTs <= cfg.StartTs {
@@ -198,6 +180,35 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 			return
 		}
 	}
+
+	// Ensure the start ts is valid in the next 3600 seconds, aka 1 hour
+	const ensureTTL = 60 * 60
+	createGcServiceID := h.server.GetEtcdClient().GetEnsureGCServiceID(gc.EnsureGCServiceCreating)
+	if err = gc.EnsureChangefeedStartTsSafety(
+		ctx,
+		h.server.GetPdClient(),
+		createGcServiceID,
+		keyspaceMeta.Id,
+		changefeedID,
+		ensureTTL, cfg.StartTs); err != nil {
+		_ = c.Error(err)
+		return
+	}
+
+	pdClient := h.server.GetPdClient()
+	defer func() {
+		if err == nil {
+			return
+		}
+		_ = gc.UndoEnsureChangefeedStartTsSafety(
+			ctx,
+			pdClient,
+			keyspaceMeta.Id,
+			createGcServiceID,
+			changefeedID,
+		)
+	}()
+
 	protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(replicaCfg.Sink.Protocol))
 
 	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
@@ -213,7 +224,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	// Therefore, we cannot use the context of the HTTP request.
 	// We create a new context here.
 	schemaCxt := context.Background()
-	if err := schemaStore.RegisterKeyspace(schemaCxt, common.KeyspaceMeta{
+	if err = schemaStore.RegisterKeyspace(schemaCxt, common.KeyspaceMeta{
 		ID:   keyspaceMeta.Id,
 		Name: keyspaceMeta.Name,
 	}); err != nil {
@@ -228,12 +239,12 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	}
 	if !util.GetOrZero(replicaCfg.ForceReplicate) && !util.GetOrZero(cfg.ReplicaConfig.IgnoreIneligibleTable) {
 		if len(ineligibleTables) != 0 {
-			_ = c.Error(errors.ErrTableIneligible.GenWithStackByArgs(ineligibleTables))
+			err = errors.ErrTableIneligible.GenWithStackByArgs(ineligibleTables)
+			_ = c.Error(err)
 			return
 		}
 	}
 
-	pdClient := h.server.GetPdClient()
 	info := &config.ChangeFeedInfo{
 		UpstreamID:     pdClient.GetClusterID(ctx),
 		ChangefeedID:   changefeedID,
@@ -255,37 +266,13 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
-	needRemoveGCSafePoint := false
-	defer func() {
-		if !needRemoveGCSafePoint {
-			return
-		}
-
-		err = gc.UndoEnsureChangefeedStartTsSafety(
-			ctx,
-			pdClient,
-			keyspaceMeta.Id,
-			createGcServiceID,
-			changefeedID,
-		)
-		if err != nil {
-			_ = c.Error(err)
-			return
-		}
-	}()
-
 	err = co.CreateChangefeed(ctx, info)
 	if err != nil {
-		needRemoveGCSafePoint = true
 		_ = c.Error(err)
 		return
 	}
 
-	log.Info("Create changefeed successfully!",
-		zap.String("id", info.ChangefeedID.Name()),
-		zap.String("state", string(info.State)),
-		zap.String("changefeedInfo", info.String()))
-
+	log.Info("create changefeed successfully!", zap.Any("changefeedID", info.ChangefeedID))
 	c.JSON(getStatus(c), CfInfoToAPIModel(
 		info,
 		&config.ChangeFeedStatus{
@@ -622,7 +609,9 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 	ctx := c.Request.Context()
 	keyspaceName := GetKeyspaceValueWithDefault(c)
 	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), keyspaceName)
-	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
+
+	var err error
+	if err = common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
 			changefeedDisplayName.Name))
 		return
@@ -639,7 +628,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 	if len(body) == 0 {
 		log.Info("resume changefeed config is empty, using defaults")
 	} else {
-		if err := json.Unmarshal(body, cfg); err != nil {
+		if err = json.Unmarshal(body, cfg); err != nil {
 			log.Error("failed to bind resume changefeed config", zap.Error(err), zap.String("body", string(body)))
 			_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
 			return
@@ -679,7 +668,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 	}
 
 	resumeGcServiceID := h.server.GetEtcdClient().GetEnsureGCServiceID(gc.EnsureGCServiceResuming)
-	if err := verifyResumeChangefeedConfig(
+	if err = verifyResumeChangefeedConfig(
 		ctx,
 		h.server.GetPdClient(),
 		resumeGcServiceID,
@@ -690,23 +679,17 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		return
 	}
 
-	needRemoveGCSafePoint := false
 	defer func() {
-		if !needRemoveGCSafePoint {
+		if err == nil {
 			return
 		}
-
-		err = gc.UndoEnsureChangefeedStartTsSafety(
+		_ = gc.UndoEnsureChangefeedStartTsSafety(
 			ctx,
 			h.server.GetPdClient(),
 			keyspaceMeta.Id,
 			resumeGcServiceID,
 			cfInfo.ChangefeedID,
 		)
-		if err != nil {
-			_ = c.Error(err)
-			return
-		}
 	}()
 
 	err = co.ResumeChangefeed(ctx, cfInfo.ChangefeedID, newCheckpointTs, cfg.OverwriteCheckpointTs != 0)
@@ -909,12 +892,8 @@ func verifyResumeChangefeedConfig(
 		changefeedID,
 		gcTTL, overrideCheckpointTs)
 	if err != nil {
-		if !errors.ErrStartTsBeforeGC.Equal(err) {
-			return errors.ErrPDEtcdAPIError.Wrap(err)
-		}
 		return err
 	}
-
 	return nil
 }
 
