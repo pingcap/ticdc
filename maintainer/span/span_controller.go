@@ -173,6 +173,9 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 // AddWorkingSpans adds working spans
 func (c *Controller) AddWorkingSpans(tableMap utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication]) {
 	tableMap.Ascend(func(span *heartbeatpb.TableSpan, stm *replica.SpanReplication) bool {
+		if c.GetTaskByID(stm.ID) != nil {
+			return true
+		}
 		c.AddReplicatingSpan(stm)
 		return true
 	})

@@ -18,6 +18,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/eventpb"
@@ -187,47 +188,191 @@ func (h *SchedulerDispatcherRequestHandler) Path(scheduleDispatcherRequest Sched
 	return common.NewChangefeedGIDFromPB(scheduleDispatcherRequest.ChangefeedID)
 }
 
+// Handle handles the SchedulerDispatcherRequest events, which are operators from the maintainer to add or remove dispatchers.
+// It will record the operators first, it's used to store the information that there is a not finished operator for a dispatcher.
+// The current working operators will be deleted after the operator is finished, i.e. the dispatcher is created or removed.
 func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *DispatcherManager, reqs ...SchedulerDispatcherRequest) bool {
 	// If req is about remove dispatcher, then there will only be one request in reqs.
 	infos := map[common.DispatcherID]dispatcherCreateInfo{}
 	redoInfos := map[common.DispatcherID]dispatcherCreateInfo{}
 	for _, req := range reqs {
-		if req.ScheduleDispatcherRequest == nil {
-			log.Warn("scheduleDispatcherRequest is nil, skip")
+		operatorKey, ok := preCheckForSchedulerHandler(req, dispatcherManager)
+		if !ok {
 			continue
 		}
-		config := req.Config
-		dispatcherID := common.NewDispatcherIDFromPB(config.DispatcherID)
 		switch req.ScheduleAction {
 		case heartbeatpb.ScheduleAction_Create:
-			info := dispatcherCreateInfo{
-				Id:               dispatcherID,
-				TableSpan:        config.Span,
-				StartTs:          config.StartTs,
-				SchemaID:         config.SchemaID,
-				SkipDMLAsStartTs: config.SkipDMLAsStartTs,
-			}
-			if common.IsRedoMode(config.Mode) {
-				redoInfos[dispatcherID] = info
-			} else {
-				infos[dispatcherID] = info
-			}
+			// store the add operator and create a info for later create dispatcher
+			handleScheduleCreate(dispatcherManager, req, operatorKey, infos, redoInfos)
 		case heartbeatpb.ScheduleAction_Remove:
 			if len(reqs) != 1 {
 				log.Error("invalid remove dispatcher request count in one batch", zap.Int("count", len(reqs)))
 			}
-			if common.IsRedoMode(config.Mode) {
-				removeDispatcher(dispatcherManager, dispatcherID, dispatcherManager.redoDispatcherMap, dispatcherManager.redoSink.SinkType())
-			} else {
-				removeDispatcher(dispatcherManager, dispatcherID, dispatcherManager.dispatcherMap, dispatcherManager.sink.SinkType())
-			}
+			// store the remove operator and remove the dispatcher directly
+			// the remove operator will be deleted after the dispatcher is removed from dispatcherMap
+			handleScheduleRemove(dispatcherManager, req, operatorKey)
 		}
 	}
 
+	// use the infos to create dispatchers, and delete the current operators after created, just indicate the operator is finished
+	if len(infos) > 0 || len(redoInfos) > 0 {
+		failpoint.Inject("BlockCreateDispatcher", nil)
+	}
+	createDispatcherByInfo(dispatcherManager, infos, redoInfos)
+	return false
+}
+
+func preCheckForSchedulerHandler(req SchedulerDispatcherRequest, dispatcherManager *DispatcherManager) (common.DispatcherID, bool) {
+	if req.ScheduleDispatcherRequest == nil {
+		log.Warn("scheduleDispatcherRequest is nil, skip")
+		return common.DispatcherID{}, false
+	}
+	if req.Config == nil {
+		log.Warn("scheduleDispatcherRequest config is nil, skip")
+		return common.DispatcherID{}, false
+	}
+	operatorKey := common.NewDispatcherIDFromPB(req.Config.DispatcherID)
+	if operatorKey.IsZero() {
+		log.Warn("scheduleDispatcherRequest has no valid operator key, skip")
+		return common.DispatcherID{}, false
+	}
+
+	isRedo := common.IsRedoMode(req.Config.Mode)
+	if isRedo && (!dispatcherManager.RedoEnable || dispatcherManager.redoDispatcherMap == nil) {
+		return common.DispatcherID{}, false
+	}
+	if _, operatorExists := dispatcherManager.currentOperatorMap.Load(operatorKey); operatorExists {
+		return common.DispatcherID{}, false
+	}
+
+	// If there is already an operator for the dispatcher, skip this request.
+	var dispatcherExists bool
+	if isRedo {
+		_, dispatcherExists = dispatcherManager.redoDispatcherMap.Get(operatorKey)
+	} else {
+		_, dispatcherExists = dispatcherManager.dispatcherMap.Get(operatorKey)
+	}
+
+	// Action-aware precheck:
+	// - Create: allow only if dispatcher does not exist (otherwise it's already created).
+	// - Remove: allow even if dispatcher does not exist, removeDispatcher will emit a Stopped status.
+	switch req.ScheduleAction {
+	case heartbeatpb.ScheduleAction_Create:
+		if dispatcherExists {
+			return common.DispatcherID{}, false
+		}
+	case heartbeatpb.ScheduleAction_Remove:
+	}
+
+	return operatorKey, true
+}
+
+func handleScheduleCreate(
+	dispatcherManager *DispatcherManager,
+	req SchedulerDispatcherRequest,
+	operatorKey common.DispatcherID,
+	infos map[common.DispatcherID]dispatcherCreateInfo,
+	redoInfos map[common.DispatcherID]dispatcherCreateInfo,
+) {
+	config := req.Config
+	dispatcherID := common.NewDispatcherIDFromPB(config.DispatcherID)
+	info := dispatcherCreateInfo{
+		Id:               dispatcherID,
+		TableSpan:        config.Span,
+		StartTs:          config.StartTs,
+		SchemaID:         config.SchemaID,
+		SkipDMLAsStartTs: config.SkipDMLAsStartTs,
+	}
+	if common.IsRedoMode(config.Mode) {
+		dispatcherManager.currentOperatorMap.Store(operatorKey, req)
+		log.Debug("store current working add operator for redo dispatcher",
+			zap.String("changefeedID", req.ChangefeedID.String()),
+			zap.String("dispatcherID", dispatcherID.String()),
+			zap.Any("operator", req),
+		)
+		redoInfos[dispatcherID] = info
+	} else {
+		dispatcherManager.currentOperatorMap.Store(operatorKey, req)
+		log.Debug("store current working add operator",
+			zap.String("changefeedID", req.ChangefeedID.String()),
+			zap.String("dispatcherID", dispatcherID.String()),
+			zap.Any("operator", req),
+		)
+		infos[dispatcherID] = info
+	}
+}
+
+func handleScheduleRemove(
+	dispatcherManager *DispatcherManager,
+	req SchedulerDispatcherRequest,
+	operatorKey common.DispatcherID,
+) {
+	config := req.Config
+	dispatcherID := common.NewDispatcherIDFromPB(config.DispatcherID)
+	if common.IsRedoMode(config.Mode) {
+		// If redo is disabled or the dispatcher does not exist, do not store the remove operator.
+		// Otherwise, the operator may never be cleaned up because cleanRedoDispatcher won't be called.
+		if dispatcherManager.redoDispatcherMap == nil {
+			return
+		}
+		if _, exists := dispatcherManager.redoDispatcherMap.Get(dispatcherID); exists {
+			dispatcherManager.currentOperatorMap.Store(operatorKey, req)
+			log.Debug("store current working remove operator for redo dispatcher",
+				zap.String("changefeedID", req.ChangefeedID.String()),
+				zap.String("dispatcherID", dispatcherID.String()),
+				zap.Any("operator", req),
+			)
+		} else {
+			log.Debug("redo dispatcher not found, skip remove operator store",
+				zap.String("changefeedID", req.ChangefeedID.String()),
+				zap.String("dispatcherID", dispatcherID.String()),
+				zap.Any("operator", req),
+			)
+		}
+		removeDispatcher(dispatcherManager, dispatcherID, dispatcherManager.redoDispatcherMap, dispatcherManager.redoSink.SinkType())
+	} else {
+		// If the dispatcher does not exist, do not store the remove operator.
+		// Otherwise, the operator may never be cleaned up because cleanEventDispatcher won't be called.
+		if _, exists := dispatcherManager.dispatcherMap.Get(dispatcherID); exists {
+			dispatcherManager.currentOperatorMap.Store(operatorKey, req)
+			log.Debug("store current working remove operator",
+				zap.String("changefeedID", req.ChangefeedID.String()),
+				zap.String("dispatcherID", dispatcherID.String()),
+				zap.Any("operator", req),
+			)
+		} else {
+			log.Debug("dispatcher not found, skip remove operator store",
+				zap.String("changefeedID", req.ChangefeedID.String()),
+				zap.String("dispatcherID", dispatcherID.String()),
+				zap.Any("operator", req),
+			)
+		}
+		removeDispatcher(dispatcherManager, dispatcherID, dispatcherManager.dispatcherMap, dispatcherManager.sink.SinkType())
+	}
+}
+
+func createDispatcherByInfo(
+	dispatcherManager *DispatcherManager,
+	infos map[common.DispatcherID]dispatcherCreateInfo,
+	redoInfos map[common.DispatcherID]dispatcherCreateInfo,
+) {
 	if len(redoInfos) > 0 {
 		err := dispatcherManager.newRedoDispatchers(redoInfos, false)
 		if err != nil {
 			dispatcherManager.handleError(context.Background(), err)
+		}
+		for _, info := range redoInfos {
+			if v, ok := dispatcherManager.currentOperatorMap.Load(info.Id); ok {
+				req := v.(SchedulerDispatcherRequest)
+				log.Debug("delete current working add operator for redo dispatcher",
+					zap.String("changefeedID", dispatcherManager.changefeedID.String()),
+					zap.String("dispatcherID", info.Id.String()),
+					zap.Any("operator", req),
+				)
+				dispatcherManager.currentOperatorMap.Delete(info.Id)
+			} else {
+				log.Error("current working operator not found for redo dispatcher, should not happen", zap.String("id", info.Id.String()))
+			}
 		}
 	}
 	if len(infos) > 0 {
@@ -235,8 +380,20 @@ func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *Dispatcher
 		if err != nil {
 			dispatcherManager.handleError(context.Background(), err)
 		}
+		for _, info := range infos {
+			if v, ok := dispatcherManager.currentOperatorMap.Load(info.Id); ok {
+				req := v.(SchedulerDispatcherRequest)
+				log.Debug("delete current working add operator",
+					zap.String("changefeedID", dispatcherManager.changefeedID.String()),
+					zap.String("dispatcherID", info.Id.String()),
+					zap.Any("operator", req),
+				)
+				dispatcherManager.currentOperatorMap.Delete(info.Id)
+			} else {
+				log.Error("current working operator not found, should not happen", zap.String("id", info.Id.String()))
+			}
+		}
 	}
-	return false
 }
 
 func (h *SchedulerDispatcherRequestHandler) GetSize(event SchedulerDispatcherRequest) int { return 0 }

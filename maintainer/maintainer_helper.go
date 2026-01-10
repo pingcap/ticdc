@@ -63,8 +63,8 @@ func (m *Maintainer) GetDispatcherCount(mode int64) int {
 }
 
 // MoveTable moves a table to a specific node.
-func (m *Maintainer) MoveTable(tableId int64, targetNode node.ID, mode int64) error {
-	return m.controller.moveTable(tableId, targetNode, mode)
+func (m *Maintainer) MoveTable(tableId int64, targetNode node.ID, mode int64, wait bool) error {
+	return m.controller.moveTable(tableId, targetNode, mode, wait)
 }
 
 // MoveSplitTable moves all the dispatchers in a split table to a specific node.

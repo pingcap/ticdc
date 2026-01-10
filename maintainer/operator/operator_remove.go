@@ -33,16 +33,36 @@ type removeDispatcherOperator struct {
 	replicaSet     *replica.SpanReplication
 	nodeID         node.ID
 	finished       atomic.Bool
+	postFinish     func()
 	spanController *span.Controller
+	// This remove operator may be a part of move/split operator
+	operatorType heartbeatpb.OperatorType
 
 	sendThrottler sendThrottler
 }
 
-func newRemoveDispatcherOperator(spanController *span.Controller, replicaSet *replica.SpanReplication) *removeDispatcherOperator {
+func NewRemoveDispatcherOperator(
+	spanController *span.Controller,
+	replicaSet *replica.SpanReplication,
+	operatorType heartbeatpb.OperatorType,
+	postFinish func(),
+) *removeDispatcherOperator {
 	return &removeDispatcherOperator{
 		replicaSet:     replicaSet,
 		nodeID:         replicaSet.GetNodeID(),
 		spanController: spanController,
+		postFinish:     postFinish,
+		operatorType:   operatorType,
+		sendThrottler:  newSendThrottler(),
+	}
+}
+
+func newRemoveDispatcherOperator(spanController *span.Controller, replicaSet *replica.SpanReplication, operatorType heartbeatpb.OperatorType) *removeDispatcherOperator {
+	return &removeDispatcherOperator{
+		replicaSet:     replicaSet,
+		nodeID:         replicaSet.GetNodeID(),
+		spanController: spanController,
+		operatorType:   operatorType,
 		sendThrottler:  newSendThrottler(),
 	}
 }
@@ -63,11 +83,11 @@ func (m *removeDispatcherOperator) Check(from node.ID, status *heartbeatpb.Table
 }
 
 func (m *removeDispatcherOperator) Schedule() *messaging.TargetMessage {
-	if !m.sendThrottler.shouldSend() {
+	if !m.sendThrottler.shouldSend() || m.finished.Load() {
 		return nil
 	}
 
-	return m.replicaSet.NewRemoveDispatcherMessage(m.nodeID)
+	return m.replicaSet.NewRemoveDispatcherMessage(m.nodeID, m.operatorType)
 }
 
 // OnNodeRemove is called when node offline, and the replicaset has been removed from spanController, so it's ok.
@@ -103,6 +123,10 @@ func (m *removeDispatcherOperator) PostFinish() {
 	log.Info("remove dispatcher operator finished",
 		zap.String("replicaSet", m.replicaSet.ID.String()),
 		zap.String("changefeed", m.replicaSet.ChangefeedID.String()))
+
+	if m.postFinish != nil {
+		m.postFinish()
+	}
 }
 
 func (m *removeDispatcherOperator) String() string {
