@@ -26,6 +26,12 @@ type TableName struct {
 	// TableID is the logic table ID
 	TableID     int64 `toml:"tbl-id" msg:"tbl-id"`
 	IsPartition bool  `toml:"is-partition" msg:"is-partition"`
+	// TargetSchema is the target schema name for routing.
+	// If empty, Schema is used as the target.
+	TargetSchema string `toml:"target-db-name" msg:"target-db-name"`
+	// TargetTable is the target table name for routing.
+	// If empty, Table is used as the target.
+	TargetTable string `toml:"target-tbl-name" msg:"target-tbl-name"`
 }
 
 // String implements fmt.Stringer interface.
@@ -36,4 +42,32 @@ func (t TableName) String() string {
 // QuoteString returns quoted full table name
 func (t TableName) QuoteString() string {
 	return QuoteSchema(t.Schema, t.Table)
+}
+
+// GetTargetSchema returns the target schema name for routing.
+// If TargetSchema is empty, returns Schema.
+func (t *TableName) GetTargetSchema() string {
+	if t.TargetSchema != "" {
+		return t.TargetSchema
+	}
+	return t.Schema
+}
+
+// GetTargetTable returns the target table name for routing.
+// If TargetTable is empty, returns Table.
+func (t *TableName) GetTargetTable() string {
+	if t.TargetTable != "" {
+		return t.TargetTable
+	}
+	return t.Table
+}
+
+// TargetString returns the target schema.table string for routing.
+func (t TableName) TargetString() string {
+	return fmt.Sprintf("%s.%s", t.GetTargetSchema(), t.GetTargetTable())
+}
+
+// QuoteTargetString returns quoted full target table name for routing.
+func (t TableName) QuoteTargetString() string {
+	return QuoteSchema(t.GetTargetSchema(), t.GetTargetTable())
 }
