@@ -638,7 +638,6 @@ func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFe
 
 func (c *Controller) RemoveChangefeed(ctx context.Context, id common.ChangeFeedID) (uint64, error) {
 	c.apiLock.Lock()
-	defer c.apiLock.Unlock()
 
 	cf := c.changefeedDB.GetByID(id)
 	if cf == nil {
@@ -649,6 +648,8 @@ func (c *Controller) RemoveChangefeed(ctx context.Context, id common.ChangeFeedI
 		return 0, errors.Trace(err)
 	}
 	op := c.operatorController.StopChangefeed(ctx, id, true)
+	c.apiLock.Unlock()
+
 	count := 0
 	for {
 		if op.IsFinished() {
@@ -664,7 +665,6 @@ func (c *Controller) RemoveChangefeed(ctx context.Context, id common.ChangeFeedI
 
 func (c *Controller) PauseChangefeed(ctx context.Context, id common.ChangeFeedID) error {
 	c.apiLock.Lock()
-	defer c.apiLock.Unlock()
 
 	cf := c.changefeedDB.GetByID(id)
 	if cf == nil {
@@ -681,6 +681,7 @@ func (c *Controller) PauseChangefeed(ctx context.Context, id common.ChangeFeedID
 	clone.State = config.StateStopped
 	cf.SetInfo(clone)
 	op := c.operatorController.StopChangefeed(ctx, id, false)
+	c.apiLock.Unlock()
 
 	count := 0
 	for {
