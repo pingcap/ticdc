@@ -28,51 +28,6 @@ const (
 	CommonIndexColumnsCount = 4
 )
 
-// SameTypeTargetAndColumns check whether two row changes have same type, target
-// and columns, so they can be merged to a multi-value DML.
-func SameTypeTargetAndColumns(lhs *RowChange, rhs *RowChange) bool {
-	if lhs.tp != rhs.tp {
-		return false
-	}
-	if lhs.sourceTable.Schema == rhs.sourceTable.Schema &&
-		lhs.sourceTable.Table == rhs.sourceTable.Table {
-		return true
-	}
-	if lhs.targetTable.Schema != rhs.targetTable.Schema ||
-		lhs.targetTable.Table != rhs.targetTable.Table {
-		return false
-	}
-
-	// when the targets are the same and the sources are not the same (same
-	// group of shard tables), this piece of code is run.
-	var lhsCols, rhsCols []string
-	switch lhs.tp {
-	case RowChangeDelete:
-		lhsCols, _ = lhs.whereColumnsAndValues()
-		rhsCols, _ = rhs.whereColumnsAndValues()
-	case RowChangeUpdate:
-		// not supported yet
-		return false
-	case RowChangeInsert:
-		for _, col := range lhs.sourceTableInfo.GetColumns() {
-			lhsCols = append(lhsCols, col.Name.L)
-		}
-		for _, col := range rhs.sourceTableInfo.GetColumns() {
-			rhsCols = append(rhsCols, col.Name.L)
-		}
-	}
-
-	if len(lhsCols) != len(rhsCols) {
-		return false
-	}
-	for i := 0; i < len(lhsCols); i++ {
-		if lhsCols[i] != rhsCols[i] {
-			return false
-		}
-	}
-	return true
-}
-
 // GenDeleteSQL generates the DELETE SQL and its arguments.
 // Input `changes` should have same target table and same columns for WHERE
 // (typically same PK/NOT NULL UK), otherwise the behaviour is undefined.
@@ -92,11 +47,29 @@ func GenDeleteSQL(changes ...*RowChange) (string, []interface{}) {
 
 	allArgs := make([]interface{}, 0, len(changes)*CommonIndexColumnsCount)
 
+	whereColumns, _ := changes[0].whereColumnsAndValues()
+	for i, col := range whereColumns {
+		if i > 0 {
+			buf.WriteString(",")
+		}
+		buf.WriteString(col)
+	}
+	buf.WriteString(")")
+
+	buf.WriteString(" IN (")
 	for i, c := range changes {
 		if i > 0 {
-			buf.WriteString(") OR (")
+			buf.WriteString(",")
 		}
-		args := c.genWhere(&buf)
+		buf.WriteString("(")
+		for k := range whereColumns {
+			if k > 0 {
+				buf.WriteString(",")
+			}
+			buf.WriteString("?")
+		}
+		buf.WriteString(")")
+		_, args := c.whereColumnsAndValues()
 		allArgs = append(allArgs, args...)
 	}
 	buf.WriteString(")")
