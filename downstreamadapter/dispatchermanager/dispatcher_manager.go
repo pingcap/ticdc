@@ -616,12 +616,16 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 		case tableSpanStatus := <-e.sharedInfo.GetStatusesChan():
 			statusMessage = append(statusMessage, tableSpanStatus.TableSpanStatus)
 			if common.IsDefaultMode(tableSpanStatus.Mode) {
-				newWatermark.Seq = tableSpanStatus.Seq
+				if newWatermark.Seq < tableSpanStatus.Seq {
+					newWatermark.Seq = tableSpanStatus.Seq
+				}
 				if tableSpanStatus.CheckpointTs != 0 && tableSpanStatus.CheckpointTs < newWatermark.CheckpointTs {
 					newWatermark.CheckpointTs = tableSpanStatus.CheckpointTs
 				}
 			} else {
-				newRedoWatermark.Seq = tableSpanStatus.Seq
+				if newRedoWatermark.Seq < tableSpanStatus.Seq {
+					newRedoWatermark.Seq = tableSpanStatus.Seq
+				}
 				if tableSpanStatus.CheckpointTs != 0 && tableSpanStatus.CheckpointTs < newRedoWatermark.CheckpointTs {
 					newRedoWatermark.CheckpointTs = tableSpanStatus.CheckpointTs
 				}
