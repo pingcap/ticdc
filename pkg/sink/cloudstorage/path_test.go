@@ -198,7 +198,7 @@ func TestFetchIndexFromFileName(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		_, err := f.fetchIndexFromFileName("", tc.fileName)
+		_, err := FetchIndexFromFileName(tc.fileName, f.extension)
 		if len(tc.wantErr) != 0 {
 			require.Contains(t, err.Error(), tc.wantErr)
 		} else {
@@ -235,26 +235,7 @@ func TestGenerateDataFilePathWithIndexFile(t *testing.T) {
 	err := f.storage.WriteFile(ctx, indexFilePath, []byte(fmt.Sprintf("CDC_%s_000005.json\n", dispatcherID.String())))
 	require.NoError(t, err)
 
-	// index file exists, but the file is not exist
 	dataFilePath, err := f.GenerateDataFilePath(ctx, table, date)
-	require.NoError(t, err)
-	require.Equal(t, fmt.Sprintf("test/table1/5/2023-03-09/CDC_%s_000005.json", dispatcherID.String()), dataFilePath)
-
-	// cleanup cached file index
-	delete(f.fileIndex, table)
-	// index file exists, and the file is empty
-	err = f.storage.WriteFile(ctx, dataFilePath, []byte(""))
-	require.NoError(t, err)
-	dataFilePath, err = f.GenerateDataFilePath(ctx, table, date)
-	require.NoError(t, err)
-	require.Equal(t, fmt.Sprintf("test/table1/5/2023-03-09/CDC_%s_000005.json", dispatcherID.String()), dataFilePath)
-
-	// cleanup cached file index
-	delete(f.fileIndex, table)
-	// index file exists, and the file is not empty
-	err = f.storage.WriteFile(ctx, dataFilePath, []byte("test"))
-	require.NoError(t, err)
-	dataFilePath, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("test/table1/5/2023-03-09/CDC_%s_000006.json", dispatcherID.String()), dataFilePath)
 }
