@@ -19,6 +19,7 @@ import (
 	perrors "github.com/pingcap/errors"
 	commonPkg "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/util"
 )
 
 // AttachMessageLogInfo binds row event diagnostic info onto sink messages.
@@ -114,7 +115,7 @@ func extractPrimaryKeys(event *commonEvent.RowEvent) []ColumnLogInfo {
 		value := commonPkg.ExtractColVal(row, col, indexes[i])
 		values = append(values, ColumnLogInfo{
 			Name:  col.Name.String(),
-			Value: value,
+			Value: util.RedactAny(value),
 		})
 	}
 	return values

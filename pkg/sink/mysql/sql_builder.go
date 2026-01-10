@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap/zapcore"
 )
@@ -78,25 +79,8 @@ func (d *preparedDMLs) LogDebug(events []*commonEvent.DMLEvent, writerID int) {
 			args = d.values[i]
 		}
 
-		// Format the arguments as a string
-		argsStr := "("
-		for j, arg := range args {
-			if j > 0 {
-				argsStr += ", "
-			}
-			if arg == nil {
-				argsStr += "NULL"
-			} else if str, ok := arg.(string); ok {
-				argsStr += fmt.Sprintf(`"%s"`, str)
-			} else {
-				argsStr += fmt.Sprintf("%v", arg)
-			}
-		}
-		argsStr += ")"
-
-		// Add formatted SQL and args to log content
 		logBuilder.WriteString(fmt.Sprintf("[%03d] Query: %s,", i+1, sql))
-		logBuilder.WriteString(fmt.Sprintf("      Args: %s,", argsStr))
+		logBuilder.WriteString(fmt.Sprintf("      Args: %s,", util.RedactArgs(args)))
 	}
 
 	// Build timestamp information
@@ -116,7 +100,10 @@ func (d *preparedDMLs) LogDebug(events []*commonEvent.DMLEvent, writerID int) {
 }
 
 func (d *preparedDMLs) String() string {
-	return fmt.Sprintf("sqls: %v, values: %v, rowCount: %d, approximateSize: %d, startTs: %v", d.fmtSqls(), d.values, d.rowCount, d.approximateSize, d.tsPairs)
+	// SQL templates contain table/column names (schema info, not sensitive user data)
+	// Only values need redaction - they contain actual user data
+	return fmt.Sprintf("sqls: %v, values: %v, rowCount: %d, approximateSize: %d, startTs: %v",
+		d.fmtSqls(), util.RedactAny(d.values), d.rowCount, d.approximateSize, d.tsPairs)
 }
 
 func (d *preparedDMLs) fmtSqls() string {

@@ -265,7 +265,7 @@ func (c *consumer) appendRow2Group(dml *event.DMLEvent, enableTableAcrossNodes b
 	log.Warn("dml event commit ts fallback, ignore",
 		zap.Uint64("commitTs", dml.CommitTs),
 		zap.Any("highWatermark", group.HighWatermark),
-		zap.Any("row", dml),
+		zap.Stringer("row", dml),
 	)
 }
 

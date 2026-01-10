@@ -15,13 +15,26 @@ package common
 import (
 	"testing"
 
+	perrors "github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	commonModel "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/stretchr/testify/require"
 )
 
+// withRedactMode is a test helper that sets redaction mode and returns a cleanup function.
+func withRedactMode(t *testing.T, mode string) func() {
+	t.Helper()
+	original := perrors.RedactLogEnabled.Load()
+	perrors.RedactLogEnabled.Store(mode)
+	return func() {
+		perrors.RedactLogEnabled.Store(original)
+	}
+}
+
 func TestBuildMessageLogInfo(t *testing.T) {
+	defer withRedactMode(t, perrors.RedactLogDisable)()
+
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
@@ -52,10 +65,12 @@ func TestBuildMessageLogInfo(t *testing.T) {
 	require.Equal(t, dml.GetCommitTs(), rowInfo.CommitTs)
 	require.Len(t, rowInfo.PrimaryKeys, 1)
 	require.Equal(t, "id", rowInfo.PrimaryKeys[0].Name)
-	require.Equal(t, int64(1), rowInfo.PrimaryKeys[0].Value)
+	require.Equal(t, "1", rowInfo.PrimaryKeys[0].Value)
 }
 
 func TestAttachMessageLogInfo(t *testing.T) {
+	defer withRedactMode(t, perrors.RedactLogDisable)()
+
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
@@ -85,7 +100,7 @@ func TestAttachMessageLogInfo(t *testing.T) {
 	require.Equal(t, "insert", message.LogInfo.Rows[0].Type)
 	require.Equal(t, dml.StartTs, message.LogInfo.Rows[0].StartTs)
 	require.Len(t, message.LogInfo.Rows[0].PrimaryKeys, 1)
-	require.Equal(t, int64(1), message.LogInfo.Rows[0].PrimaryKeys[0].Value)
+	require.Equal(t, "1", message.LogInfo.Rows[0].PrimaryKeys[0].Value)
 }
 
 func TestSetDDLMessageLogInfo(t *testing.T) {
@@ -142,4 +157,116 @@ func makeTestRowEvents(
 	}
 	require.NotEmpty(t, events)
 	return events
+}
+
+func TestExtractPrimaryKeysRedaction(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job("create table test.t (id int primary key, name varchar(32))")
+	tableInfo := helper.GetTableInfo(job)
+
+	dml := helper.DML2Event("test", "t", `insert into test.t values (42, "secret")`)
+	row, ok := dml.GetNextRow()
+	require.True(t, ok)
+
+	rowEvent := &commonEvent.RowEvent{
+		TableInfo:      tableInfo,
+		StartTs:        dml.StartTs,
+		CommitTs:       dml.GetCommitTs(),
+		Event:          row,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+	}
+
+	tests := []struct {
+		name     string
+		mode     string
+		expected string
+	}{
+		{
+			name:     "OFF mode - raw value",
+			mode:     perrors.RedactLogDisable,
+			expected: "42",
+		},
+		{
+			name:     "MARKER mode - wrapped value",
+			mode:     perrors.RedactLogMarker,
+			expected: "‹42›",
+		},
+		{
+			name:     "ON mode - fully redacted",
+			mode:     perrors.RedactLogEnable,
+			expected: "?",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer withRedactMode(t, tt.mode)()
+
+			info := buildMessageLogInfo([]*commonEvent.RowEvent{rowEvent})
+			require.NotNil(t, info)
+			require.Len(t, info.Rows, 1)
+			require.Len(t, info.Rows[0].PrimaryKeys, 1)
+			require.Equal(t, "id", info.Rows[0].PrimaryKeys[0].Name)
+			require.Equal(t, tt.expected, info.Rows[0].PrimaryKeys[0].Value)
+		})
+	}
+}
+
+func TestExtractPrimaryKeysRedactionWithStringPK(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job("create table test.t2 (email varchar(64) primary key, data text)")
+	tableInfo := helper.GetTableInfo(job)
+
+	dml := helper.DML2Event("test", "t2", `insert into test.t2 values ("user@example.com", "sensitive")`)
+	row, ok := dml.GetNextRow()
+	require.True(t, ok)
+
+	rowEvent := &commonEvent.RowEvent{
+		TableInfo:      tableInfo,
+		StartTs:        dml.StartTs,
+		CommitTs:       dml.GetCommitTs(),
+		Event:          row,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+	}
+
+	tests := []struct {
+		name     string
+		mode     string
+		expected string
+	}{
+		{
+			name:     "OFF mode - raw value",
+			mode:     perrors.RedactLogDisable,
+			expected: "user@example.com",
+		},
+		{
+			name:     "MARKER mode - wrapped value",
+			mode:     perrors.RedactLogMarker,
+			expected: "‹user@example.com›",
+		},
+		{
+			name:     "ON mode - fully redacted",
+			mode:     perrors.RedactLogEnable,
+			expected: "?",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer withRedactMode(t, tt.mode)()
+
+			info := buildMessageLogInfo([]*commonEvent.RowEvent{rowEvent})
+			require.NotNil(t, info)
+			require.Len(t, info.Rows, 1)
+			require.Len(t, info.Rows[0].PrimaryKeys, 1)
+			require.Equal(t, "email", info.Rows[0].PrimaryKeys[0].Name)
+			require.Equal(t, tt.expected, info.Rows[0].PrimaryKeys[0].Value)
+		})
+	}
 }

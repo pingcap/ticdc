@@ -16,7 +16,6 @@ package eventstore
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"fmt"
 	"math"
 	"os"
@@ -1294,7 +1293,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		}
 		log.Debug("event store iter skip kv not in table span",
 			zap.String("tableSpan", common.FormatTableSpan(iter.tableSpan)),
-			zap.String("key", hex.EncodeToString(rawKV.Key)),
+			zap.String("key", util.RedactKey(rawKV.Key)),
 			zap.Uint64("startTs", rawKV.StartTs),
 			zap.Uint64("commitTs", rawKV.CRTs),
 			zap.Bool("isInsert", rawKV.IsInsert()),
