@@ -221,7 +221,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
-	ineligibleTables, _, err := getVerifiedTables(ctx, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
+	ineligibleTables, eligibleTables, err := getVerifiedTables(ctx, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -284,7 +284,10 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	log.Info("Create changefeed successfully!",
 		zap.String("id", info.ChangefeedID.Name()),
 		zap.String("state", string(info.State)),
-		zap.String("changefeedInfo", info.String()))
+		zap.String("changefeedInfo", info.String()),
+		zap.Int("eligibleTablesLength", len(eligibleTables)),
+		zap.Int("ineligibleTablesLength", len(ineligibleTables)),
+	)
 
 	c.JSON(getStatus(c), CfInfoToAPIModel(
 		info,
@@ -812,6 +815,10 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		return
 	}
 
+	var (
+		ineligibleTables []string
+		eligibleTables   []string
+	)
 	if configUpdated || sinkURIUpdated {
 		// verify replicaConfig
 		sinkURIParsed, err := url.Parse(oldCfInfo.SinkURI)
@@ -845,7 +852,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		}
 
 		// use checkpointTs get snapshot from kv storage
-		ineligibleTables, _, err := getVerifiedTables(ctx, oldCfInfo.Config, kvStorage, status.CheckpointTs, scheme, topic, protocol)
+		ineligibleTables, eligibleTables, err = getVerifiedTables(ctx, oldCfInfo.Config, kvStorage, status.CheckpointTs, scheme, topic, protocol)
 		if err != nil {
 			_ = c.Error(errors.ErrChangefeedUpdateRefused.GenWithStackByCause(err))
 			return
@@ -869,6 +876,16 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
+
+	log.Info("Update changefeed successfully!",
+		zap.String("id", oldCfInfo.ChangefeedID.Name()),
+		zap.String("state", string(oldCfInfo.State)),
+		zap.String("changefeedInfo", oldCfInfo.String()),
+		zap.Bool("configUpdated", configUpdated),
+		zap.Bool("sinkURIUpdated", sinkURIUpdated),
+		zap.Int("eligibleTablesLength", len(eligibleTables)),
+		zap.Int("ineligibleTablesLength", len(ineligibleTables)),
+	)
 
 	c.JSON(getStatus(c), CfInfoToAPIModel(oldCfInfo, status, nil))
 }
