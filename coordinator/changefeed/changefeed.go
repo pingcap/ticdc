@@ -204,8 +204,8 @@ func (c *Changefeed) GetStatus() *heartbeatpb.MaintainerStatus {
 	return c.status.Load()
 }
 
-// GetClonedStatus returns a deep copy of the changefeed status
-func (c *Changefeed) GetClonedStatus() *heartbeatpb.MaintainerStatus {
+// GetStatusForResume returns a deep copy of the changefeed status without errors.
+func (c *Changefeed) GetStatusForResume() *heartbeatpb.MaintainerStatus {
 	status := c.status.Load()
 	if status == nil {
 		return nil
@@ -215,16 +215,8 @@ func (c *Changefeed) GetClonedStatus() *heartbeatpb.MaintainerStatus {
 		CheckpointTs: status.CheckpointTs,
 		FeedState:    status.FeedState,
 		State:        status.State,
-		Err:          make([]*heartbeatpb.RunningError, 0, len(status.Err)),
-	}
-	for _, err := range status.Err {
-		clonedErr := &heartbeatpb.RunningError{
-			Time:    err.Time,
-			Node:    err.Node,
-			Code:    err.Code,
-			Message: err.Message,
-		}
-		clone.Err = append(clone.Err, clonedErr)
+		// we don't clone the errors from status, because the old error is meaningless for the resume action, but only blocks.
+		Err: []*heartbeatpb.RunningError{},
 	}
 
 	cfID := status.ChangefeedID
