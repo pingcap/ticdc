@@ -182,9 +182,10 @@ type subscriptionStat struct {
 type subscriptionStats map[logpuller.SubscriptionID]*subscriptionStat
 
 type eventWithCallback struct {
-	subID   logpuller.SubscriptionID
-	tableID int64
-	kvs     []common.RawKVEntry
+	subID      logpuller.SubscriptionID
+	tableID    int64
+	keyspaceID uint32
+	kvs        []common.RawKVEntry
 	// kv with commitTs <= currentResolvedTs will be filtered out
 	currentResolvedTs uint64
 	callback          func()
@@ -478,6 +479,7 @@ func (e *eventStore) RegisterDispatcher(
 		dispatcherID: dispatcherID,
 		tableSpan:    dispatcherSpan,
 		checkpointTs: startTs,
+		keyspaceID:   dispatcherSpan.KeyspaceID,
 	}
 	stat.resolvedTs.Store(startTs)
 
@@ -603,6 +605,7 @@ func (e *eventStore) RegisterDispatcher(
 		subStat.eventCh.Push(eventWithCallback{
 			subID:             subStat.subID,
 			tableID:           subStat.tableSpan.TableID,
+			keyspaceID:        subStat.tableSpan.KeyspaceID,
 			kvs:               kvs,
 			currentResolvedTs: subStat.resolvedTs.Load(),
 			callback:          finishCallback,
@@ -903,6 +906,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		decoder:           decoder,
 		decoderPool:       e.decoderPool,
 		encryptionManager: e.encryptionManager,
+		keyspaceID:        stat.keyspaceID,
 	}
 }
 
@@ -1237,19 +1241,16 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback, enco
 
 			// Encrypt if encryption is enabled (after compression)
 			if e.encryptionManager != nil {
-				// TODO: Get keyspaceID from dispatcher/subscription metadata
-				// For now, use default keyspaceID (0) for classic mode
-				keyspaceID := uint32(0)
-				encryptedValue, err := e.encryptionManager.EncryptData(context.Background(), keyspaceID, value)
+				encryptedValue, err := e.encryptionManager.EncryptData(context.Background(), event.keyspaceID, value)
 				if err != nil {
-					log.Warn("encrypt event value failed, using unencrypted value",
+					log.Error("encrypt event value failed",
+						zap.Uint32("keyspaceID", event.keyspaceID),
 						zap.Uint64("subID", uint64(event.subID)),
 						zap.Int64("tableID", event.tableID),
 						zap.Error(err))
-					// Continue with unencrypted value (graceful degradation)
-				} else {
-					value = encryptedValue
+					return err
 				}
+				value = encryptedValue
 			}
 
 			key := EncodeKey(uint64(event.subID), event.tableID, &kv, compressionType)
@@ -1287,6 +1288,7 @@ type eventStoreIter struct {
 
 	// encryptionManager for decrypting data (optional, can be nil)
 	encryptionManager encryption.EncryptionManager
+	keyspaceID        uint32
 }
 
 func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
@@ -1300,10 +1302,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 
 		// Decrypt if encrypted data is detected and encryption manager is available
 		if encryption.IsEncrypted(value) && iter.encryptionManager != nil {
-			// TODO: Get keyspaceID from dispatcher/subscription metadata
-			// For now, use default keyspaceID (0)
-			keyspaceID := uint32(0)
-			decryptedValue, err := iter.encryptionManager.DecryptData(context.Background(), keyspaceID, value)
+			decryptedValue, err := iter.encryptionManager.DecryptData(context.Background(), iter.keyspaceID, value)
 			if err != nil {
 				log.Panic("failed to decrypt value", zap.Error(err))
 			}

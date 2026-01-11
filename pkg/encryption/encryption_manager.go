@@ -17,6 +17,7 @@ import (
 	"context"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/config"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/zap"
 )
@@ -45,29 +46,37 @@ func NewEncryptionManager(metaManager EncryptionMetaManager) EncryptionManager {
 
 // EncryptData encrypts data for a keyspace
 func (m *encryptionManager) EncryptData(ctx context.Context, keyspaceID uint32, data []byte) ([]byte, error) {
-	// Check if encryption is enabled
-	if !m.metaManager.IsEncryptionEnabled(ctx, keyspaceID) {
-		// Encryption not enabled, return original data
-		log.Debug("encryption not enabled for keyspace",
-			zap.Uint32("keyspaceID", keyspaceID))
-		return data, nil
+	allowDegrade := true
+	serverCfg := config.GetGlobalServerConfig()
+	if serverCfg != nil && serverCfg.Debug != nil && serverCfg.Debug.Encryption != nil {
+		allowDegrade = serverCfg.Debug.Encryption.AllowDegradeOnError
 	}
 
 	// Get current data key and algorithm
 	dataKey, algorithm, err := m.metaManager.GetCurrentDataKey(ctx, keyspaceID)
 	if err != nil {
-		log.Warn("failed to get current data key, encryption disabled",
-			zap.Uint32("keyspaceID", keyspaceID),
-			zap.Error(err))
-		// Return original data if we can't get the key (graceful degradation)
-		return data, nil
+		if allowDegrade {
+			log.Warn("failed to get current data key, degrade to plaintext",
+				zap.Uint32("keyspaceID", keyspaceID),
+				zap.Error(err))
+			return data, nil
+		}
+		return nil, cerrors.ErrEncryptionFailed.Wrap(err)
 	}
 
 	if len(dataKey) == 0 {
-		// No data key available
-		log.Warn("data key is empty, encryption disabled",
-			zap.Uint32("keyspaceID", keyspaceID))
-		return data, nil
+		if algorithm == "" {
+			log.Debug("encryption not enabled for keyspace",
+				zap.Uint32("keyspaceID", keyspaceID))
+			return data, nil
+		}
+		if allowDegrade {
+			// No data key available
+			log.Warn("data key is empty, degrade to plaintext",
+				zap.Uint32("keyspaceID", keyspaceID))
+			return data, nil
+		}
+		return nil, cerrors.ErrEncryptionFailed.GenWithStackByArgs("data key is empty")
 	}
 
 	// Get cipher for the specified algorithm
