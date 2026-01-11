@@ -160,7 +160,6 @@ func GetBlockedTables(
 		tableName  = ddl.TableName
 		action     = timodel.ActionType(ddl.Type)
 	)
-	blockedTableIDs := accessor.GetBlockedTables(schemaName, tableName)
 	if action == timodel.ActionRenameTable {
 		stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
 		if err != nil {
@@ -175,9 +174,8 @@ func GetBlockedTables(
 
 		ddl.ExtraSchemaName = schemaName
 		ddl.ExtraTableName = tableName
-		extraTableIDs := accessor.GetBlockedTables(schemaName, tableName)
-		blockedTableIDs = append(blockedTableIDs, extraTableIDs...)
 	}
+	blockedTableIDs := accessor.GetBlockedTables(schemaName, tableName)
 
 	if action == timodel.ActionExchangeTablePartition {
 		stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
