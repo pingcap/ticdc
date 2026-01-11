@@ -157,6 +157,7 @@ func (m *nodeSetChecksumManager) ResetAndSendFull(
 	now := time.Now()
 
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.epoch = epoch
 	m.state = newNodeSetChecksumState(len(nodes))
 
@@ -181,6 +182,7 @@ func (m *nodeSetChecksumManager) ResetAndSendFull(
 	return msgs
 }
 
+// Note: it's not thread safe. caller must hold m.mu
 func (m *nodeSetChecksumManager) applyExpectedSet(expected map[node.ID][]common.DispatcherID) {
 	for node, ids := range expected {
 		state, ok := m.state.nodes[node]
@@ -336,6 +338,7 @@ func (m *nodeSetChecksumManager) ResendPending() []*messaging.TargetMessage {
 	now := time.Now()
 
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	msgs := make([]*messaging.TargetMessage, 0)
 
 	for node, state := range m.state.nodes {
@@ -348,7 +351,6 @@ func (m *nodeSetChecksumManager) ResendPending() []*messaging.TargetMessage {
 		state.lastSendAt = now
 		msgs = append(msgs, m.buildUpdateMessage(node, state.seq, state.checksum))
 	}
-	m.mu.Unlock()
 
 	// Return built messages to the caller (Maintainer), which owns message sending.
 	return msgs
@@ -398,9 +400,9 @@ func (m *nodeSetChecksumManager) ObserveHeartbeat(from node.ID, state heartbeatp
 	}
 
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	nodeState, ok := m.state.nodes[from]
 	if !ok {
-		m.mu.Unlock()
 		return
 	}
 	shouldWarn, duration := nodeState.observeHeartbeat(now, state, warnAfter, warnInterval)
@@ -414,7 +416,6 @@ func (m *nodeSetChecksumManager) ObserveHeartbeat(from node.ID, state heartbeatp
 		changefeed: m.changefeedID,
 		node:       from,
 	}
-	m.mu.Unlock()
 	if !shouldWarn {
 		return
 	}
