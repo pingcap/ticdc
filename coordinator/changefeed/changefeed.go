@@ -216,7 +216,7 @@ func (c *Changefeed) GetStatusForResume() *heartbeatpb.MaintainerStatus {
 		FeedState:    status.FeedState,
 		State:        status.State,
 		// we don't clone the errors from status, because the old error is meaningless for the resume action, but only blocks.
-		Err: make([]*heartbeatpb.RunningError, 0, len(status.Err)),
+		Err: []*heartbeatpb.RunningError{},
 	}
 
 	cfID := status.ChangefeedID
