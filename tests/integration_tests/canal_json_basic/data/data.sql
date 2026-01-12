@@ -328,5 +328,9 @@ CREATE TABLE t_null (
     `id` bigint unsigned not null primary key,
     `col` varchar(64) collate utf8mb4_bin not null default ''
 );
+<<<<<<< HEAD
 
 INSERT INTO t_null VALUES (1, 'test'), (2, 'null'), (3, 'test2'), (4, 'Null'), (5, 'NULL'), (6, ''), (7, 'nüll');
+=======
+INSERT INTO t_null VALUES (1, 'test'), (2, 'null'), (3, 'test2'), (4, 'Null'), (5, 'NULL'), (6, ''), (7, 'nüll');
+>>>>>>> df2adcca5 (codec:  correct column value in canal-json protocol (#3959))
