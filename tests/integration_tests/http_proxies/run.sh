@@ -29,7 +29,7 @@ proxy_pid=""
 proxy_port=$(shuf -i 10081-20081 -n1)
 function start_proxy() {
 	echo "dumpling grpc packet to $WORK_DIR/test_proxy.log..."
-	GO111MODULE=on WORK_DIR=$WORK_DIR go run $CUR/run-proxy.go --port=$proxy_port >$WORK_DIR/test_proxy.log &
+	GO111MODULE=on WORK_DIR=$WORK_DIR go run $GO_RUN_TAGS $CUR/run-proxy.go --port=$proxy_port >$WORK_DIR/test_proxy.log &
 	proxy_pid=$!
 	echo "proxy port: $proxy_port"
 	echo "proxy pid: $proxy_pid"

@@ -16,8 +16,8 @@ package debezium
 import (
 	"testing"
 
+	"github.com/pingcap/ticdc/pkg/tidbtype"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/stretchr/testify/require"
@@ -27,23 +27,23 @@ func TestGetColumns(t *testing.T) {
 	sql := "CREATE TABLE test (id INT PRIMARY KEY, val1 datetime default current_timestamp, val2 time(2) default 0,  val3 timestamp(3) default now(), val4 YEAR(4) default 1970 comment 'first');"
 	columnInfos := []*timodel.ColumnInfo{
 		{
-			Name:      ast.NewCIStr("id"),
+			Name:      tidbtype.NewCIStr("id"),
 			FieldType: *types.NewFieldType(mysql.TypeLong),
 		},
 		{
-			Name:      ast.NewCIStr("val1"),
+			Name:      tidbtype.NewCIStr("val1"),
 			FieldType: *types.NewFieldType(mysql.TypeDatetime),
 		},
 		{
-			Name:      ast.NewCIStr("val2"),
+			Name:      tidbtype.NewCIStr("val2"),
 			FieldType: *types.NewFieldType(mysql.TypeDuration),
 		},
 		{
-			Name:      ast.NewCIStr("val3"),
+			Name:      tidbtype.NewCIStr("val3"),
 			FieldType: *types.NewFieldType(mysql.TypeTimestamp),
 		},
 		{
-			Name:      ast.NewCIStr("val4"),
+			Name:      tidbtype.NewCIStr("val4"),
 			FieldType: *types.NewFieldType(mysql.TypeYear),
 		},
 	}

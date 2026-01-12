@@ -20,8 +20,8 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/tidbtype"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
@@ -33,7 +33,7 @@ func generateTableDef() (TableDefinition, *common.TableInfo) {
 	ft := types.NewFieldType(mysql.TypeLong)
 	ft.SetFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
 	col := &timodel.ColumnInfo{
-		Name:         ast.NewCIStr("Id"),
+		Name:         tidbtype.NewCIStr("Id"),
 		FieldType:    *ft,
 		DefaultValue: 10,
 	}
@@ -43,7 +43,7 @@ func generateTableDef() (TableDefinition, *common.TableInfo) {
 	ft.SetFlag(mysql.NotNullFlag)
 	ft.SetFlen(128)
 	col = &timodel.ColumnInfo{
-		Name:         ast.NewCIStr("LastName"),
+		Name:         tidbtype.NewCIStr("LastName"),
 		FieldType:    *ft,
 		DefaultValue: "Default LastName",
 	}
@@ -52,7 +52,7 @@ func generateTableDef() (TableDefinition, *common.TableInfo) {
 	ft = types.NewFieldType(mysql.TypeVarchar)
 	ft.SetFlen(64)
 	col = &timodel.ColumnInfo{
-		Name:         ast.NewCIStr("FirstName"),
+		Name:         tidbtype.NewCIStr("FirstName"),
 		FieldType:    *ft,
 		DefaultValue: "Default FirstName",
 	}
@@ -60,7 +60,7 @@ func generateTableDef() (TableDefinition, *common.TableInfo) {
 
 	ft = types.NewFieldType(mysql.TypeDatetime)
 	col = &timodel.ColumnInfo{
-		Name:         ast.NewCIStr("Birthday"),
+		Name:         tidbtype.NewCIStr("Birthday"),
 		FieldType:    *ft,
 		DefaultValue: 12345678,
 	}
@@ -68,7 +68,7 @@ func generateTableDef() (TableDefinition, *common.TableInfo) {
 
 	tableInfo := common.WrapTableInfo("schema1", &timodel.TableInfo{
 		ID:       20,
-		Name:     ast.NewCIStr("table1"),
+		Name:     tidbtype.NewCIStr("table1"),
 		Columns:  columns,
 		UpdateTS: 100,
 	})

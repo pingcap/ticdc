@@ -23,14 +23,13 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/pkg/common"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/httputil"
+	"github.com/pingcap/ticdc/pkg/tidbtype"
 	"github.com/pingcap/tidb/pkg/tablecodec"
 	"github.com/pingcap/tidb/pkg/util/codec"
 	"github.com/stretchr/testify/require"
 	pd "github.com/tikv/pd/client"
-	"github.com/tikv/pd/client/servicediscovery"
 )
 
 type mockPDClient struct {
@@ -41,10 +40,6 @@ type mockPDClient struct {
 
 func (m *mockPDClient) GetLeaderURL() string {
 	return m.url
-}
-
-func (m *mockPDClient) GetServiceDiscovery() servicediscovery.ServiceDiscovery {
-	return servicediscovery.NewMockServiceDiscovery([]string{}, nil)
 }
 
 func newMockPDClient(normal bool) *mockPDClient {
@@ -163,12 +158,12 @@ func TestMetaLabelDecodeJSON(t *testing.T) {
 	_, startKey, err = codec.DecodeBytes(startKey, nil)
 	require.NoError(t, err)
 	require.EqualValues(
-		t, common.JobTableID, tablecodec.DecodeTableID(startKey), keys["start_key"].(string))
+		t, tidbtype.JobTableID, tablecodec.DecodeTableID(startKey), keys["start_key"].(string))
 
 	_, endKey, err = codec.DecodeBytes(endKey, nil)
 	require.NoError(t, err)
 	require.EqualValues(
-		t, common.JobTableID+1, tablecodec.DecodeTableID(endKey), keys["end_key"].(string))
+		t, tidbtype.JobTableID+1, tablecodec.DecodeTableID(endKey), keys["end_key"].(string))
 }
 
 func TestScanRegions(t *testing.T) {
