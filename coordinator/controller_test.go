@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	mock_changefeed "github.com/pingcap/ticdc/coordinator/changefeed/mock"
 	"github.com/pingcap/ticdc/coordinator/operator"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -110,6 +111,49 @@ func TestResumeChangefeedOverwriteUpdatesLastSavedCheckpointTs(t *testing.T) {
 	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
 	require.Nil(t, controller.ResumeChangefeed(context.Background(), cfID, newCheckpointTs, true))
 	require.Equal(t, newCheckpointTs, changefeedDB.GetByID(cfID).GetLastSavedCheckPointTs())
+}
+
+func TestResumeChangefeedIgnoresStaleMaintainerErrorAndSchedules(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	controller := &Controller{
+		backend:      backend,
+		changefeedDB: changefeedDB,
+	}
+	cfID := common.NewChangeFeedIDWithName("test-stale-error", common.DefaultKeyspaceNamme)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateFailed,
+		SinkURI:      "mysql://127.0.0.1:3306",
+	}, 100, true)
+	changefeedDB.AddStoppedChangefeed(cf)
+
+	// Simulate a stale maintainer error retained in the in-memory status.
+	stale := cf.GetStatusForResume()
+	stale.State = heartbeatpb.ComponentState_Working
+	stale.BootstrapDone = true
+	stale.Err = []*heartbeatpb.RunningError{{
+		Node:    "node1",
+		Code:    "CDC:ErrChangefeedRetryable",
+		Message: "stale error",
+	}}
+	_, _, err := cf.ForceUpdateStatus(stale)
+	require.NotNil(t, err)
+
+	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+	require.NoError(t, controller.ResumeChangefeed(context.Background(), cfID, 100, false))
+
+	// The changefeed should be enqueued for scheduling and should not be blocked by the stale error.
+	waiting, _ := changefeedDB.GetWaitingSchedulingChangefeeds(10)
+	require.Len(t, waiting, 1)
+	require.Equal(t, cf, waiting[0])
+
+	status := cf.GetStatus()
+	require.False(t, status.BootstrapDone)
+	require.Len(t, status.Err, 0)
+	require.True(t, cf.ShouldRun())
 }
 
 func TestPauseChangefeed(t *testing.T) {
