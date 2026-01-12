@@ -32,7 +32,7 @@ function prepare() {
 
 }
 
-trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
+trap 'stop_test $WORK_DIR' EXIT
 if [ "$SINK_TYPE" == "mysql" ]; then
 	prepare $*
 	test_owner_ha $*

@@ -118,7 +118,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
-	ok, err := isBootstrapped(co)
+	ok, err := isInitialized(co)
 	if err != nil || !ok {
 		_ = c.Error(err)
 		return
@@ -226,7 +226,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	if !replicaCfg.ForceReplicate && !cfg.ReplicaConfig.IgnoreIneligibleTable {
+	if !util.GetOrZero(replicaCfg.ForceReplicate) && !util.GetOrZero(cfg.ReplicaConfig.IgnoreIneligibleTable) {
 		if len(ineligibleTables) != 0 {
 			_ = c.Error(errors.ErrTableIneligible.GenWithStackByArgs(ineligibleTables))
 			return
@@ -313,7 +313,7 @@ func (h *OpenAPIV2) ListChangeFeeds(c *gin.Context) {
 		return
 	}
 
-	ok, err := isBootstrapped(co)
+	ok, err := isInitialized(co)
 	if err != nil || !ok {
 		_ = c.Error(err)
 		return
@@ -401,8 +401,8 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 		return
 	}
 	log.Info("verify table",
-		zap.Bool("forceReplicate", replicaCfg.ForceReplicate),
-		zap.Bool("ignoreIneligibleTable", cfg.ReplicaConfig.IgnoreIneligibleTable),
+		zap.Bool("forceReplicate", util.GetOrZero(replicaCfg.ForceReplicate)),
+		zap.Bool("ignoreIneligibleTable", util.GetOrZero(cfg.ReplicaConfig.IgnoreIneligibleTable)),
 	)
 
 	toAPIModelFunc := func(tbls []string) []TableName {
@@ -440,7 +440,7 @@ func (h *OpenAPIV2) GetChangeFeed(c *gin.Context) {
 		return
 	}
 
-	ok, err := isBootstrapped(co)
+	ok, err := isInitialized(co)
 	if err != nil || !ok {
 		_ = c.Error(err)
 		return
@@ -536,7 +536,7 @@ func (h *OpenAPIV2) DeleteChangefeed(c *gin.Context) {
 		return
 	}
 
-	ok, err := isBootstrapped(co)
+	ok, err := isInitialized(co)
 	if err != nil || !ok {
 		_ = c.Error(err)
 		return
@@ -586,7 +586,7 @@ func (h *OpenAPIV2) PauseChangefeed(c *gin.Context) {
 		return
 	}
 
-	ok, err := isBootstrapped(co)
+	ok, err := isInitialized(co)
 	if err != nil || !ok {
 		_ = c.Error(err)
 		return
@@ -652,7 +652,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		return
 	}
 
-	ok, err := isBootstrapped(co)
+	ok, err := isInitialized(co)
 	if err != nil || !ok {
 		_ = c.Error(err)
 		return
@@ -760,7 +760,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		return
 	}
 
-	ok, err := isBootstrapped(co)
+	ok, err := isInitialized(co)
 	if err != nil || !ok {
 		_ = c.Error(err)
 		return
@@ -850,7 +850,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 			_ = c.Error(errors.ErrChangefeedUpdateRefused.GenWithStackByCause(err))
 			return
 		}
-		if !oldCfInfo.Config.ForceReplicate && !oldCfInfo.Config.IgnoreIneligibleTable {
+		if !util.GetOrZero(oldCfInfo.Config.ForceReplicate) && !util.GetOrZero(oldCfInfo.Config.IgnoreIneligibleTable) {
 			if len(ineligibleTables) != 0 {
 				_ = c.Error(errors.ErrTableIneligible.GenWithStackByArgs(ineligibleTables))
 				return
@@ -1099,7 +1099,7 @@ func (h *OpenAPIV2) SplitTableByRegionCount(c *gin.Context) {
 		return
 	}
 
-	if !cfInfo.Config.Scheduler.EnableTableAcrossNodes {
+	if !util.GetOrZero(cfInfo.Config.Scheduler.EnableTableAcrossNodes) {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("enable_table_across_nodes should be true when spliting one table to multiple spans"))
 		return
 	}
@@ -1354,7 +1354,7 @@ func (h *OpenAPIV2) status(c *gin.Context) {
 		return
 	}
 
-	ok, err := isBootstrapped(co)
+	ok, err := isInitialized(co)
 	if err != nil || !ok {
 		_ = c.Error(err)
 		return
@@ -1406,7 +1406,7 @@ func (h *OpenAPIV2) synced(c *gin.Context) {
 		return
 	}
 
-	ok, err := isBootstrapped(co)
+	ok, err := isInitialized(co)
 	if err != nil || !ok {
 		_ = c.Error(err)
 		return
@@ -1418,12 +1418,14 @@ func (h *OpenAPIV2) synced(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	if info.Config.SyncedStatus.SyncedCheckInterval == 0 || info.Config.SyncedStatus.CheckpointInterval == 0 {
-		info.Config.SyncedStatus.SyncedCheckInterval = config.GetDefaultReplicaConfig().SyncedStatus.SyncedCheckInterval
-		info.Config.SyncedStatus.CheckpointInterval = config.GetDefaultReplicaConfig().SyncedStatus.CheckpointInterval
+
+	syncedCheckInterval := util.GetOrZero(info.Config.SyncedStatus.SyncedCheckInterval)
+	checkpointInterval := util.GetOrZero(info.Config.SyncedStatus.CheckpointInterval)
+
+	if syncedCheckInterval == 0 || checkpointInterval == 0 {
+		syncedCheckInterval = util.GetOrZero(config.GetDefaultReplicaConfig().SyncedStatus.SyncedCheckInterval)
+		checkpointInterval = util.GetOrZero(config.GetDefaultReplicaConfig().SyncedStatus.CheckpointInterval)
 	}
-	syncedCheckInterval := info.Config.SyncedStatus.SyncedCheckInterval
-	checkpointInterval := info.Config.SyncedStatus.CheckpointInterval
 
 	// get time from pd
 	ctx := c.Request.Context()
@@ -1491,7 +1493,7 @@ func getVerifiedTables(
 	storage tidbkv.Storage, startTs uint64,
 	scheme string, topic string, protocol config.Protocol,
 ) ([]string, []string, error) {
-	f, err := filter.NewFilter(replicaConfig.Filter, "", replicaConfig.CaseSensitive, replicaConfig.ForceReplicate)
+	f, err := filter.NewFilter(replicaConfig.Filter, "", util.GetOrZero(replicaConfig.CaseSensitive), util.GetOrZero(replicaConfig.ForceReplicate))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1512,7 +1514,7 @@ func getVerifiedTables(
 		return ineligibleTables, eligibleTables, nil
 	}
 
-	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, topic, config.IsPulsarScheme(protocol.String()), protocol == config.ProtocolAvro)
+	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, topic, config.IsPulsarScheme(scheme), protocol == config.ProtocolAvro)
 	if err != nil {
 		return nil, nil, err
 	}

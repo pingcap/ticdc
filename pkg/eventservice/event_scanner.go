@@ -122,10 +122,12 @@ func (s *eventScanner) scan(
 	defer sess.recordMetrics()
 
 	// Fetch DDL events
+	start := time.Now()
 	events, err := s.fetchDDLEvents(dispatcherStat, dataRange)
 	if err != nil {
 		return 0, nil, false, err
 	}
+	metrics.EventServiceGetDDLEventDuration.Observe(time.Since(start).Seconds())
 
 	iter := s.eventGetter.GetIterator(dispatcherStat.info.GetID(), dataRange)
 	if iter == nil {

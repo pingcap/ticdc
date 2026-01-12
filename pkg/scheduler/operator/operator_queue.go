@@ -14,6 +14,7 @@
 package operator
 
 import (
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
@@ -28,7 +29,7 @@ type OperatorWithTime[T replica.ReplicationID, S replica.ReplicationStatus] stru
 	// CreatedAt records when this operator was created
 	CreatedAt time.Time
 	// IsRemoved indicates whether this operator has been marked for removal
-	IsRemoved bool
+	IsRemoved atomic.Bool
 }
 
 func NewOperatorWithTime[T replica.ReplicationID, S replica.ReplicationStatus](op Operator[T, S], time time.Time) *OperatorWithTime[T, S] {

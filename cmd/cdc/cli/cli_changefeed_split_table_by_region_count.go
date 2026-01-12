@@ -14,8 +14,6 @@
 package cli
 
 import (
-	"context"
-
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
@@ -61,7 +59,7 @@ func (o *splitTableByRegionCountChangefeedOptions) complete(f factory.Factory) e
 // run the `cli changefeed move table` command.
 // return success or error message.
 func (o *splitTableByRegionCountChangefeedOptions) run(cmd *cobra.Command) error {
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	err := o.apiClientV2.Changefeeds().SplitTableByRegionCount(ctx, o.keyspace, o.changefeedID, o.tableId, o.mode)
 	var errStr string

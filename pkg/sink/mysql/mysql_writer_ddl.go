@@ -40,10 +40,6 @@ import (
 func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 	if w.cfg.DryRun {
 		log.Info("Dry run DDL", zap.String("sql", event.GetDDLQuery()))
-		// use RecordDDLExecution to record the metrics of execute ddl
-		w.statistics.RecordDDLExecution(func() error {
-			return nil
-		})
 		time.Sleep(w.cfg.DryRunDelay)
 		return nil
 	}
@@ -73,13 +69,18 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 		}
 	}
 
-	failpoint.Inject("MySQLSinkExecDDLDelay", func() {
+	failpoint.Inject("MySQLSinkExecDDLDelay", func(val failpoint.Value) {
+		delay := time.Hour
+		if seconds, ok := val.(string); ok && seconds != "" {
+			if v, err := strconv.Atoi(strings.TrimSpace(seconds)); err == nil && v > 0 {
+				delay = time.Duration(v) * time.Second
+			}
+		}
 		select {
 		case <-ctx.Done():
 			failpoint.Return(ctx.Err())
-		case <-time.After(time.Hour):
+		case <-time.After(delay):
 		}
-		failpoint.Return(nil)
 	})
 
 	tx, err := w.db.BeginTx(ctx, nil)
@@ -333,23 +334,26 @@ func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 				// NOTE: don't change the log, some tests depend on it.
 				log.Info("Execute DDL failed, but error can be ignored",
 					zap.String("ddl", event.Query),
+					zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()),
 					zap.Error(err))
 				// If the error is ignorable, we will ignore the error directly.
 				return nil
 			}
 			if w.cfg.IsTiDB && ddlCreateTime != "" && errors.Cause(err) == mysql.ErrInvalidConn {
 				log.Warn("Wait the asynchronous ddl to synchronize", zap.String("ddl", event.Query), zap.String("ddlCreateTime", ddlCreateTime),
+					zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()),
 					zap.String("readTimeout", w.cfg.ReadTimeout), zap.Error(err))
 				return w.waitDDLDone(w.ctx, event, ddlCreateTime)
 			}
 			log.Warn("Execute DDL with error, retry later",
 				zap.String("ddl", event.Query),
+				zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()),
 				zap.Error(err))
 			return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Execute DDL failed, Query info: %s; ", event.GetDDLQuery())))
 		}
 		log.Info("Execute DDL succeeded",
-			zap.String("changefeed", w.ChangefeedID.String()),
-			zap.Uint64("commitTs", event.GetCommitTs()), zap.String("query", event.GetDDLQuery()),
+			zap.String("changefeed", w.ChangefeedID.String()), zap.String("query", event.GetDDLQuery()),
+			zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()),
 			zap.Any("ddl", event))
 		return nil
 	}, retry.WithBackoffBaseDelay(BackoffBaseDelay.Milliseconds()),

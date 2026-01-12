@@ -26,6 +26,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/redo"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
@@ -113,14 +114,14 @@ func TestRedoSinkInProcessor(t *testing.T) {
 	testWriteDMLs := func(storage string, useFileBackend bool) {
 		ctx, cancel := context.WithCancel(ctx)
 		cfg := &config.ConsistentConfig{
-			Level:                 string(redo.ConsistentLevelEventual),
-			MaxLogSize:            redo.DefaultMaxLogSize,
-			Storage:               storage,
-			FlushIntervalInMs:     redo.MinFlushIntervalInMs,
-			MetaFlushIntervalInMs: redo.MinFlushIntervalInMs,
-			EncodingWorkerNum:     workerNumberForTest,
-			FlushWorkerNum:        workerNumberForTest,
-			UseFileBackend:        useFileBackend,
+			Level:                 util.AddressOf(string(redo.ConsistentLevelEventual)),
+			MaxLogSize:            util.AddressOf(redo.DefaultMaxLogSize),
+			Storage:               util.AddressOf(storage),
+			FlushIntervalInMs:     util.AddressOf(int64(redo.MinFlushIntervalInMs)),
+			MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
+			EncodingWorkerNum:     util.AddressOf(workerNumberForTest),
+			FlushWorkerNum:        util.AddressOf(workerNumberForTest),
+			UseFileBackend:        util.AddressOf(useFileBackend),
 		}
 		startTs := uint64(100)
 		dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme), startTs, cfg)
@@ -205,13 +206,13 @@ func TestRedoSinkError(t *testing.T) {
 	defer cancel()
 
 	cfg := &config.ConsistentConfig{
-		Level:                 string(redo.ConsistentLevelEventual),
-		MaxLogSize:            redo.DefaultMaxLogSize,
-		Storage:               "blackhole-invalid://",
-		FlushIntervalInMs:     redo.MinFlushIntervalInMs,
-		MetaFlushIntervalInMs: redo.MinFlushIntervalInMs,
-		EncodingWorkerNum:     workerNumberForTest,
-		FlushWorkerNum:        workerNumberForTest,
+		Level:                 util.AddressOf(string(redo.ConsistentLevelEventual)),
+		MaxLogSize:            util.AddressOf(redo.DefaultMaxLogSize),
+		Storage:               util.AddressOf("blackhole-invalid://"),
+		FlushIntervalInMs:     util.AddressOf(int64(redo.MinFlushIntervalInMs)),
+		MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
+		EncodingWorkerNum:     util.AddressOf(workerNumberForTest),
+		FlushWorkerNum:        util.AddressOf(workerNumberForTest),
 	}
 	logMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme), 0, cfg)
 	defer logMgr.Close(false)
@@ -263,14 +264,14 @@ func BenchmarkFileWriter(b *testing.B) {
 func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cfg := &config.ConsistentConfig{
-		Level:                 string(redo.ConsistentLevelEventual),
-		MaxLogSize:            redo.DefaultMaxLogSize,
-		Storage:               storage,
-		FlushIntervalInMs:     redo.MinFlushIntervalInMs,
-		MetaFlushIntervalInMs: redo.MinFlushIntervalInMs,
-		EncodingWorkerNum:     redo.DefaultEncodingWorkerNum,
-		FlushWorkerNum:        redo.DefaultFlushWorkerNum,
-		UseFileBackend:        useFileBackend,
+		Level:                 util.AddressOf(string(redo.ConsistentLevelEventual)),
+		MaxLogSize:            util.AddressOf(redo.DefaultMaxLogSize),
+		Storage:               util.AddressOf(storage),
+		FlushIntervalInMs:     util.AddressOf(int64(redo.MinFlushIntervalInMs)),
+		MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
+		EncodingWorkerNum:     util.AddressOf(redo.DefaultEncodingWorkerNum),
+		FlushWorkerNum:        util.AddressOf(redo.DefaultFlushWorkerNum),
+		UseFileBackend:        util.AddressOf(useFileBackend),
 	}
 	dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme), 0, cfg)
 	defer dmlMgr.Close(false)

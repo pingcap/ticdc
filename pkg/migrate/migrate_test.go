@@ -87,7 +87,7 @@ func TestMigration(t *testing.T) {
 	}
 	status2 := config.ChangeFeedStatus{CheckpointTs: 2}
 	cfg := config.GetDefaultReplicaConfig()
-	cfg.CheckGCSafePoint = false
+	cfg.CheckGCSafePoint = util.AddressOf(false)
 	cfg.Sink = &config.SinkConfig{
 		DispatchRules: []*config.DispatchRule{
 			{
@@ -108,10 +108,10 @@ func TestMigration(t *testing.T) {
 		TxnAtomicity:   util.AddressOf(config.AtomicityLevel("aa")),
 	}
 	cfg.Consistent = &config.ConsistentConfig{
-		Level:             "1",
-		MaxLogSize:        99,
-		FlushIntervalInMs: 10,
-		Storage:           "s3",
+		Level:             util.AddressOf("1"),
+		MaxLogSize:        util.AddressOf(int64(99)),
+		FlushIntervalInMs: util.AddressOf(int64(10)),
+		Storage:           util.AddressOf("s3"),
 	}
 	cfg.Filter = &config.FilterConfig{
 		Rules:            []string{"a", "b", "c"},

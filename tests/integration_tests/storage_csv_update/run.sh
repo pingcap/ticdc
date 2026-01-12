@@ -36,7 +36,7 @@ function test_update() {
 	sleep 30
 
 	table_dir="$WORK_DIR/storage_test/test/test_update"
-	ensure 60 ls "$table_dir" | grep -v "meta"
+	ensure 50 ls "$table_dir" | grep -v "meta"
 
 	version_dir=$(ls $table_dir | grep -v "meta")
 	date_dir=$(ls $table_dir/$version_dir)
@@ -57,7 +57,7 @@ function check_equal() {
 	fi
 }
 
-trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
+trap 'stop_test $WORK_DIR' EXIT
 run $*
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
+	"github.com/pingcap/ticdc/maintainer/range_checker"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/maintainer/testutil"
@@ -42,8 +43,8 @@ func TestOneBlockEvent(t *testing.T) {
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 	startTs := uint64(10)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, startTs)
@@ -174,8 +175,8 @@ func TestNormalBlock(t *testing.T) {
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 	var blockedDispatcherIDS []*heartbeatpb.DispatcherID
 	for id := 1; id < 4; id++ {
@@ -343,8 +344,8 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 	var blockedDispatcherIDS []*heartbeatpb.DispatcherID
 	for id := 1; id < 3; id++ {
@@ -491,8 +492,8 @@ func TestSchemaBlock(t *testing.T) {
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
@@ -616,7 +617,7 @@ func TestSchemaBlock(t *testing.T) {
 	require.NotNil(t, msgs)
 	require.NotEmpty(t, msgs)
 	resp = msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
-	require.Len(t, resp.DispatcherStatuses, 0)
+	require.Len(t, resp.DispatcherStatuses, 1)
 
 	// selected node write done
 	_ = barrier.HandleStatus("node2", &heartbeatpb.BlockStatusRequest{
@@ -667,8 +668,8 @@ func TestSyncPointBlock(t *testing.T) {
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
@@ -835,8 +836,8 @@ func TestNonBlocked(t *testing.T) {
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode)
 
@@ -889,8 +890,8 @@ func TestUpdateCheckpointTs(t *testing.T) {
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode)
 	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
@@ -944,8 +945,8 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 
 	var dispatcherIDs []*heartbeatpb.DispatcherID
@@ -1105,8 +1106,8 @@ func TestSyncPointBlockPerf(t *testing.T) {
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 	barrier := NewBarrier(spanController, operatorController, true, nil, common.DefaultMode)
 	for id := 1; id < 1000; id++ {
@@ -1185,8 +1186,8 @@ func TestBarrierEventWithDispatcherReallocation(t *testing.T) {
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 
 	tableID := int64(1)
@@ -1204,19 +1205,19 @@ func TestBarrierEventWithDispatcherReallocation(t *testing.T) {
 		TableID:  tableID,
 		StartKey: startKey,
 		EndKey:   append(startKey, byte('a')),
-	}, startTs, common.DefaultMode)
+	}, startTs, common.DefaultMode, false)
 
 	dispatcherB := replica.NewSpanReplication(cfID, common.NewDispatcherID(), schemaID, &heartbeatpb.TableSpan{
 		TableID:  tableID,
 		StartKey: append(startKey, byte('a')),
 		EndKey:   append(startKey, byte('b')),
-	}, startTs, common.DefaultMode)
+	}, startTs, common.DefaultMode, false)
 
 	dispatcherC := replica.NewSpanReplication(cfID, common.NewDispatcherID(), schemaID, &heartbeatpb.TableSpan{
 		TableID:  tableID,
 		StartKey: append(startKey, byte('b')),
 		EndKey:   endKey,
-	}, startTs, common.DefaultMode)
+	}, startTs, common.DefaultMode, false)
 
 	// add dispatcher to spanController and set to replicating state
 	spanController.AddReplicatingSpan(dispatcherA)
@@ -1277,19 +1278,19 @@ func TestBarrierEventWithDispatcherReallocation(t *testing.T) {
 		TableID:  tableID,
 		StartKey: append(startKey, byte('a')),
 		EndKey:   append(startKey, byte('b')),
-	}, startTs, common.DefaultMode)
+	}, startTs, common.DefaultMode, false)
 
 	dispatcherF := replica.NewSpanReplication(cfID, common.NewDispatcherID(), schemaID, &heartbeatpb.TableSpan{
 		TableID:  tableID,
 		StartKey: append(startKey, byte('b')),
 		EndKey:   endKey,
-	}, startTs, common.DefaultMode)
+	}, startTs, common.DefaultMode, false)
 
 	dispatcherG := replica.NewSpanReplication(cfID, common.NewDispatcherID(), schemaID, &heartbeatpb.TableSpan{
 		TableID:  tableID,
 		StartKey: startKey,
 		EndKey:   append(startKey, byte('a')),
-	}, startTs, common.DefaultMode)
+	}, startTs, common.DefaultMode, false)
 
 	spanController.AddReplicatingSpan(dispatcherE)
 	spanController.AddReplicatingSpan(dispatcherF)
@@ -1392,8 +1393,8 @@ func TestBarrierEventWithDispatcherScheduling(t *testing.T) {
 			ID:              tableTriggerEventDispatcherID.ToPB(),
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
-		}, "node1")
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
 
 	// Setup dispatcher A
@@ -1407,7 +1408,7 @@ func TestBarrierEventWithDispatcherScheduling(t *testing.T) {
 		TableID:  tableID,
 		StartKey: span.StartKey,
 		EndKey:   span.EndKey,
-	}, startTs, common.DefaultMode)
+	}, startTs, common.DefaultMode, false)
 
 	// Add dispatcher A to spanController and set to replicating state
 	spanController.AddReplicatingSpan(dispatcherA)
@@ -1510,4 +1511,122 @@ func TestBarrierEventWithDispatcherScheduling(t *testing.T) {
 	require.True(t, ok)
 	require.NotNil(t, event)
 	require.True(t, event.selected.Load())
+}
+
+func TestDeferAllDBBlockEventFromDDLDispatcherWhilePendingSchedule(t *testing.T) {
+	testutil.SetUpTestServices()
+	nm := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nmap := nm.GetAliveNodes()
+	for key := range nmap {
+		delete(nmap, key)
+	}
+	nmap["node1"] = &node.Info{ID: "node1"}
+
+	tableTriggerDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
+
+	oldTableID := int64(1)
+	newTableID := int64(101)
+	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: oldTableID}, 1)
+	absents := spanController.GetAbsentForTest(10000)
+	require.Len(t, absents, 1)
+	oldTableDispatcherID := absents[0].ID
+	spanController.BindSpanToNode("", "node1", absents[0])
+	spanController.MarkSpanReplicating(absents[0])
+
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode)
+
+	// Build a TRUNCATE TABLE-like block event, which requires scheduling and will be enqueued into pendingEvents
+	// when the write action is issued.
+	truncateState := &heartbeatpb.State{
+		IsBlocked: true,
+		BlockTs:   10,
+		Stage:     heartbeatpb.BlockStage_WAITING,
+		BlockTables: &heartbeatpb.InfluencedTables{
+			InfluenceType: heartbeatpb.InfluenceType_Normal,
+			TableIDs:      []int64{oldTableID, common.DDLSpanTableID},
+		},
+		NeedDroppedTables: &heartbeatpb.InfluencedTables{
+			InfluenceType: heartbeatpb.InfluenceType_Normal,
+			TableIDs:      []int64{oldTableID},
+		},
+		NeedAddedTables: []*heartbeatpb.Table{
+			{SchemaID: 1, TableID: newTableID, Splitable: false},
+		},
+	}
+	_ = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{ID: spanController.GetDDLDispatcherID().ToPB(), State: truncateState},
+			{ID: oldTableDispatcherID.ToPB(), State: truncateState},
+		},
+	})
+	require.Greater(t, barrier.pendingEvents.Len(), 0)
+
+	// Syncpoint arrives after truncate write done but before scheduling finishes.
+	syncpointState := &heartbeatpb.State{
+		IsBlocked: true,
+		BlockTs:   20,
+		Stage:     heartbeatpb.BlockStage_WAITING,
+		BlockTables: &heartbeatpb.InfluencedTables{
+			InfluenceType: heartbeatpb.InfluenceType_All,
+		},
+		IsSyncPoint: true,
+	}
+	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{ID: spanController.GetDDLDispatcherID().ToPB(), State: syncpointState},
+		},
+	})
+	require.NotEmpty(t, msgs)
+	resp := msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
+	require.Len(t, resp.DispatcherStatuses, 0)
+
+	key := getEventKey(20, true)
+	event := barrier.blockedEvents.m[key]
+	require.NotNil(t, event)
+	require.Nil(t, event.rangeChecker)
+
+	// Truncate finished writing, maintainer schedules it and removes old table task from spanController.
+	_ = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID: spanController.GetDDLDispatcherID().ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked:   true,
+					BlockTs:     10,
+					IsSyncPoint: false,
+					Stage:       heartbeatpb.BlockStage_DONE,
+				},
+			},
+		},
+	})
+	require.Equal(t, 0, barrier.pendingEvents.Len())
+
+	// Re-send syncpoint status, now maintainer should build a range checker based on the updated task set.
+	_ = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{ID: spanController.GetDDLDispatcherID().ToPB(), State: syncpointState},
+		},
+	})
+
+	event = barrier.blockedEvents.m[key]
+	require.NotNil(t, event)
+	require.NotNil(t, event.rangeChecker)
+	rc, ok := event.rangeChecker.(*range_checker.TableIDRangeChecker)
+	require.True(t, ok)
+	require.Contains(t, rc.Detail(), "uncovered tables")
+	require.Contains(t, rc.Detail(), "101")
 }

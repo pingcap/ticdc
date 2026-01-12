@@ -85,7 +85,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 		partitionTableAccessor: common.NewPartitionTableAccessor(),
 		ddlList:                make([]*commonEvent.DDLEvent, 0),
 		ddlWithMaxCommitTs:     make(map[int64]uint64),
-		enableTableAcrossNodes: o.replicaConfig.Scheduler.EnableTableAcrossNodes,
+		enableTableAcrossNodes: putil.GetOrZero(o.replicaConfig.Scheduler.EnableTableAcrossNodes),
 	}
 	var (
 		db  *sql.DB
@@ -433,6 +433,13 @@ func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionP
 	if group == nil {
 		group = util.NewEventsGroup(progress.partition, tableID)
 		progress.eventsGroup[tableID] = group
+	}
+	if commitTs < progress.watermark {
+		log.Warn("DML Event fallback row, since less than the partition watermark, ignore it",
+			zap.Int64("tableID", tableID), zap.Int32("partition", group.Partition),
+			zap.Uint64("commitTs", commitTs), zap.Uint64("watermark", progress.watermark),
+			zap.String("schema", schema), zap.String("table", table))
+		return
 	}
 	if commitTs >= group.HighWatermark {
 		group.Append(dml, false)

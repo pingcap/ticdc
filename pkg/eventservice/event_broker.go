@@ -597,6 +597,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			zap.String("changefeed", changefeedID.String()), zap.String("remote", remoteID.String()))
 		return
 	}
+
 	available := item.(*atomic.Uint64)
 	if available.Load() < c.scanLimitInBytes {
 		task.resetScanLimit()
@@ -611,12 +612,14 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			zap.Uint64("available", available.Load()),
 			zap.Uint64("required", uint64(sl.maxDMLBytes)))
 		c.sendSignalResolvedTs(task)
+		metrics.EventServiceSkipScanCount.WithLabelValues("changefeed_quota").Inc()
 		return
 	}
 
 	if uint64(sl.maxDMLBytes) > task.availableMemoryQuota.Load() {
 		log.Debug("dispatcher available memory quota is not enough, skip scan", zap.Stringer("dispatcher", task.id), zap.Uint64("available", task.availableMemoryQuota.Load()), zap.Int64("required", int64(sl.maxDMLBytes)))
 		c.sendSignalResolvedTs(task)
+		metrics.EventServiceSkipScanCount.WithLabelValues("dispatcher_quota").Inc()
 		return
 	}
 
@@ -626,6 +629,10 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		releaseQuota(available, uint64(sl.maxDMLBytes))
 	} else if scannedBytes >= 0 && scannedBytes < sl.maxDMLBytes {
 		releaseQuota(available, uint64(sl.maxDMLBytes-scannedBytes))
+	}
+
+	if interrupted {
+		metrics.EventServiceInterruptScanCount.Inc()
 	}
 
 	if err != nil {
@@ -910,8 +917,6 @@ func (c *eventBroker) getDispatcher(id common.DispatcherID) *atomic.Pointer[disp
 }
 
 func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
-	defer c.metricsCollector.metricDispatcherCount.Inc()
-
 	id := info.GetID()
 	span := info.GetTableSpan()
 	changefeedID := info.GetChangefeedID()
@@ -984,6 +989,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		return err
 	}
 	c.dispatchers.Store(id, dispatcherPtr)
+	c.metricsCollector.metricDispatcherCount.Inc()
 	log.Info("register dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID),
 		zap.Stringer("changefeedID", changefeedID),
@@ -998,7 +1004,6 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 }
 
 func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
-	defer c.metricsCollector.metricDispatcherCount.Dec()
 	id := dispatcherInfo.GetID()
 
 	statPtr, ok := c.dispatchers.Load(id)
@@ -1012,6 +1017,7 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	stat := statPtr.(*atomic.Pointer[dispatcherStat]).Load()
 
 	stat.changefeedStat.removeDispatcher(id)
+	c.metricsCollector.metricDispatcherCount.Dec()
 	changefeedID := dispatcherInfo.GetChangefeedID()
 
 	if stat.changefeedStat.isEmpty() {

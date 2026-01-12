@@ -237,6 +237,11 @@ func (c *EventCollector) AddDispatcher(target dispatcher.DispatcherService, memo
 	c.logCoordinatorClient.requestReusableEventService(target)
 }
 
+func (c *EventCollector) HasDispatcher(dispatcherID common.DispatcherID) bool {
+	_, ok := c.dispatcherMap.Load(dispatcherID)
+	return ok
+}
+
 // PrepareAddDispatcher is used to prepare the dispatcher to be added to the event collector.
 // It will send a register request to local event service and call `readyCallback` when local event service is ready.
 func (c *EventCollector) PrepareAddDispatcher(
@@ -250,7 +255,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 		log.Info("add dispatcher done",
 			zap.Stringer("changefeedID", changefeedID),
 			zap.Stringer("dispatcherID", target.GetId()), zap.Int64("tableID", target.GetTableSpan().GetTableID()),
-			zap.Uint64("startTs", target.GetStartTs()), zap.Int64("type", target.GetMode()))
+			zap.Uint64("startTs", target.GetStartTs()), zap.Int64("mode", target.GetMode()))
 	}()
 	metrics.EventCollectorRegisteredDispatcherCount.Inc()
 
@@ -476,6 +481,9 @@ func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messag
 			stat := v.(*dispatcherStat)
 			// If the serverID not match, it means the dispatcher is not registered on this server now, just ignore it the response.
 			if stat.connState.isCurrentEventService(targetMessage.From) {
+				log.Info("dispatcher removed in event service",
+					zap.Stringer("dispatcherID", ds.DispatcherID),
+					zap.Stringer("eventServiceID", targetMessage.From))
 				// register the dispatcher again
 				stat.registerTo(targetMessage.From)
 			}

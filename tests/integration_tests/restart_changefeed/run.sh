@@ -119,7 +119,7 @@ function run_pause_restart_resume() {
 	stop_tidb_cluster
 }
 
-trap 'stop_tidb_cluster; collect_logs $WORK_DIR' EXIT
+trap 'stop_test $WORK_DIR' EXIT
 run_restart_and_check $*
 run_pause_restart_resume $*
 

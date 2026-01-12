@@ -19,6 +19,7 @@ import (
 
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	"github.com/pingcap/ticdc/coordinator/operator"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/node"
 	pkgScheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/server/watcher"
@@ -47,8 +48,9 @@ type balanceScheduler struct {
 
 func NewBalanceScheduler(
 	id string, batchSize int,
-	oc *operator.Controller, changefeedDB *changefeed.ChangefeedDB,
-	nodeManager *watcher.NodeManager, balanceInterval time.Duration,
+	oc *operator.Controller,
+	changefeedDB *changefeed.ChangefeedDB,
+	balanceInterval time.Duration,
 ) *balanceScheduler {
 	return &balanceScheduler{
 		id:                   id,
@@ -56,7 +58,7 @@ func NewBalanceScheduler(
 		random:               rand.New(rand.NewSource(time.Now().UnixNano())),
 		operatorController:   oc,
 		changefeedDB:         changefeedDB,
-		nodeManager:          nodeManager,
+		nodeManager:          appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		checkBalanceInterval: balanceInterval,
 		lastRebalanceTime:    time.Now(),
 	}

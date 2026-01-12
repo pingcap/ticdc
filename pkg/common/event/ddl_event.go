@@ -48,6 +48,7 @@ type DDLEvent struct {
 	Query           string            `json:"query"`
 	StartTs         uint64            `json:"start_ts"`
 	TableInfo       *common.TableInfo `json:"-"`
+	StartTs         uint64            `json:"start_ts"`
 	FinishedTs      uint64            `json:"finished_ts"`
 	// The seq of the event. It is set by event service.
 	Seq uint64 `json:"seq"`
@@ -199,6 +200,7 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 				TableName:  info.GetTableName(),
 				TableInfo:  info,
 				Query:      queries[i],
+				StartTs:    d.StartTs,
 				FinishedTs: d.FinishedTs,
 			}
 			if model.ActionType(d.Type) == model.ActionRenameTables {

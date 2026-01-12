@@ -27,6 +27,11 @@ type dispatcherCreateInfo struct {
 	TableSpan *heartbeatpb.TableSpan
 	StartTs   uint64
 	SchemaID  int64
+	// SkipDMLAsStartTs indicates whether to skip DML events at (StartTs+1).
+	// It is used when a dispatcher is recreated during an in-flight DDL barrier:
+	// we need to replay the DDL by starting from (blockTs-1), while avoiding
+	// potential duplicate DML writes at blockTs.
+	SkipDMLAsStartTs bool
 }
 
 type cleanMap struct {
@@ -58,7 +63,15 @@ func (e *DispatcherManager) GetMaintainerEpoch() uint64 {
 }
 
 func (e *DispatcherManager) GetTableTriggerEventDispatcher() *dispatcher.EventDispatcher {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	return e.tableTriggerEventDispatcher
+}
+
+func (e *DispatcherManager) SetTableTriggerEventDispatcher(d *dispatcher.EventDispatcher) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.tableTriggerEventDispatcher = d
 }
 
 func (e *DispatcherManager) SetHeartbeatRequestQueue(heartbeatRequestQueue *HeartbeatRequestQueue) {
@@ -72,8 +85,8 @@ func (e *DispatcherManager) SetBlockStatusRequestQueue(blockStatusRequestQueue *
 // Get all dispatchers id of the specified schemaID. Including the tableTriggerEventDispatcherID if exists.
 func (e *DispatcherManager) GetAllDispatchers(schemaID int64) []common.DispatcherID {
 	dispatcherIDs := e.schemaIDToDispatchers.GetDispatcherIDs(schemaID)
-	if e.tableTriggerEventDispatcher != nil {
-		dispatcherIDs = append(dispatcherIDs, e.tableTriggerEventDispatcher.GetId())
+	if e.GetTableTriggerEventDispatcher() != nil {
+		dispatcherIDs = append(dispatcherIDs, e.GetTableTriggerEventDispatcher().GetId())
 	}
 	return dispatcherIDs
 }
