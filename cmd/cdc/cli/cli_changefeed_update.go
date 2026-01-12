@@ -38,6 +38,7 @@ type updateChangefeedOptions struct {
 	commonChangefeedOptions *changefeedCommonOptions
 	changefeedID            string
 	keyspace                string
+	verbose                 bool
 }
 
 // newUpdateChangefeedOptions creates new options for the `cli changefeed update` command.
@@ -53,6 +54,7 @@ func (o *updateChangefeedOptions) addFlags(cmd *cobra.Command) {
 	o.commonChangefeedOptions.addFlags(cmd)
 	cmd.PersistentFlags().StringVarP(&o.keyspace, "keyspace", "k", "default", "Replication task (changefeed) Keyspace")
 	cmd.PersistentFlags().StringVarP(&o.changefeedID, "changefeed-id", "c", "", "Replication task (changefeed) ID")
+	cmd.PersistentFlags().BoolVar(&o.verbose, "verbose", false, "Print verbose information during updating changefeed")
 	_ = cmd.MarkPersistentFlagRequired("changefeed-id")
 }
 
@@ -197,6 +199,10 @@ func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
 	cmd.Printf("Update changefeed config successfully! "+
 		"\nID: %s\nInfo: %s\nIneligibleTablesCount: %d\nEligibleTablesCount: %d\n", o.changefeedID, infoStr, tables.IneligibleTables, tables.EligibleTables)
 
+	if o.verbose {
+		cmd.Printf("EligibleTables: %v\n", tables.EligibleTables)
+		cmd.Printf("IneligibleTablesCount: %v\n", tables.IneligibleTables)
+	}
 	return nil
 }
 
