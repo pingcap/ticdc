@@ -60,7 +60,7 @@ func TestSpanReplication_NewAddDispatcherMessage(t *testing.T) {
 func TestSpanReplication_NewAddDispatcherMessage_UseBlockTsForInFlightSyncPoint(t *testing.T) {
 	t.Parallel()
 
-	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme), common.NewDispatcherID(), 1, getTableSpanByID(4), 9, common.DefaultMode, false)
+	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), common.NewDispatcherID(), 1, getTableSpanByID(4), 9, common.DefaultMode, false)
 	replicaSet.UpdateBlockState(heartbeatpb.State{
 		IsBlocked:   true,
 		BlockTs:     10,
@@ -77,7 +77,7 @@ func TestSpanReplication_NewAddDispatcherMessage_UseBlockTsForInFlightSyncPoint(
 func TestSpanReplication_NewAddDispatcherMessage_DontUseBlockTsAfterSyncPointDone(t *testing.T) {
 	t.Parallel()
 
-	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme), common.NewDispatcherID(), 1, getTableSpanByID(4), 20, common.DefaultMode, false)
+	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), common.NewDispatcherID(), 1, getTableSpanByID(4), 20, common.DefaultMode, false)
 	replicaSet.UpdateBlockState(heartbeatpb.State{
 		IsBlocked:   true,
 		BlockTs:     10,
@@ -94,7 +94,7 @@ func TestSpanReplication_NewAddDispatcherMessage_DontUseBlockTsAfterSyncPointDon
 func TestSpanReplication_NewAddDispatcherMessage_UseBlockTsMinusOneForDDLInFlight(t *testing.T) {
 	t.Parallel()
 
-	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme), common.NewDispatcherID(), 1, getTableSpanByID(4), 9, common.DefaultMode, false)
+	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), common.NewDispatcherID(), 1, getTableSpanByID(4), 9, common.DefaultMode, false)
 	replicaSet.UpdateBlockState(heartbeatpb.State{
 		IsBlocked:   true,
 		BlockTs:     10,
