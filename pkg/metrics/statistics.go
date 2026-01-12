@@ -114,7 +114,7 @@ func (b *Statistics) Close() {
 	EventSizeHistogram.DeleteLabelValues(keyspace, changefeedID)
 	ExecutionErrorCounter.DeleteLabelValues(keyspace, changefeedID, "ddl")
 	ExecutionErrorCounter.DeleteLabelValues(keyspace, changefeedID, "dml")
-	ExecDDLCounter.DeleteLabelValues(keyspace, changefeedID)
+	ExecDDLCounter.Remove(prometheus.Labels{getKeyspaceLabel(): keyspace, "changefeed": changefeedID})
 	TotalWriteBytesCounter.DeleteLabelValues(keyspace, changefeedID)
 	ExecDMLEventCounter.DeleteLabelValues(keyspace, changefeedID)
 }
