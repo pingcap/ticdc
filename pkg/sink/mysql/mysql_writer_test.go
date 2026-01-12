@@ -279,9 +279,9 @@ func TestMysqlWriter_FlushDDLEvent(t *testing.T) {
 		TableName:  job.TableName,
 		FinishedTs: 2,
 		BlockedTables: &commonEvent.InfluencedTables{
-		InfluenceType: commonEvent.InfluenceTypeNormal,
-		TableIDs:      []int64{1},
-	},
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{1},
+		},
 	}
 
 	// Second DDL: Step 1: FlushDDLTsPre - Insert pre-record (finished=0)
