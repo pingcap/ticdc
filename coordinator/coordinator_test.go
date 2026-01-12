@@ -44,16 +44,84 @@ import (
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 	pd "github.com/tikv/pd/client"
+	pdgc "github.com/tikv/pd/client/clients/gc"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
 
 type mockPdClient struct {
 	pd.Client
+	mu       sync.Mutex
+	gcClient map[uint32]*mockGCStatesClient
 }
 
 func (m *mockPdClient) UpdateServiceGCSafePoint(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
 	return safePoint, nil
+}
+
+func (m *mockPdClient) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.gcClient == nil {
+		m.gcClient = make(map[uint32]*mockGCStatesClient)
+	}
+	if cli, ok := m.gcClient[keyspaceID]; ok {
+		return cli
+	}
+	cli := newMockGCStatesClient(keyspaceID)
+	m.gcClient[keyspaceID] = cli
+	return cli
+}
+
+type mockGCStatesClient struct {
+	keyspaceID uint32
+
+	mu       sync.Mutex
+	barriers map[string]*pdgc.GCBarrierInfo
+}
+
+func newMockGCStatesClient(keyspaceID uint32) *mockGCStatesClient {
+	return &mockGCStatesClient{
+		keyspaceID: keyspaceID,
+		barriers:   make(map[string]*pdgc.GCBarrierInfo),
+	}
+}
+
+func (c *mockGCStatesClient) SetGCBarrier(ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration) (*pdgc.GCBarrierInfo, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	info := pdgc.NewGCBarrierInfo(barrierID, barrierTS, ttl, time.Now())
+	c.barriers[barrierID] = info
+	return info, nil
+}
+
+func (c *mockGCStatesClient) DeleteGCBarrier(ctx context.Context, barrierID string) (*pdgc.GCBarrierInfo, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	info, ok := c.barriers[barrierID]
+	if ok {
+		delete(c.barriers, barrierID)
+	}
+	return info, nil
+}
+
+func (c *mockGCStatesClient) GetGCState(ctx context.Context) (pdgc.GCState, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	barriers := make([]*pdgc.GCBarrierInfo, 0, len(c.barriers))
+	for _, info := range c.barriers {
+		barriers = append(barriers, info)
+	}
+	return pdgc.GCState{
+		KeyspaceID:   c.keyspaceID,
+		TxnSafePoint: 0,
+		GCSafePoint:  0,
+		GCBarriers:   barriers,
+	}, nil
 }
 
 type mockMaintainerManager struct {
