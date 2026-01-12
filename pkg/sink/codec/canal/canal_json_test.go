@@ -794,6 +794,7 @@ func TestLargeMessageClaimCheck(t *testing.T) {
 	require.NotNil(t, decodedInsert)
 
 	change, ok := decodedInsert.GetNextRow()
+
 	require.True(t, ok)
 	common.CompareRow(t, insertEvent.Event, insertEvent.TableInfo, change, decodedInsert.TableInfo)
 }
