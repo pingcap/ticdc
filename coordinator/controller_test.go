@@ -235,6 +235,11 @@ func TestRemoveChangefeed(t *testing.T) {
 	self := node.NewInfo("localhost:8300", "")
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	nodeManager.GetAliveNodes()[self.ID] = self
+
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+
 	controller := &Controller{
 		backend:      backend,
 		changefeedDB: changefeedDB,

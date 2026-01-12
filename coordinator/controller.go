@@ -641,10 +641,12 @@ func (c *Controller) RemoveChangefeed(ctx context.Context, id common.ChangeFeedI
 
 	cf := c.changefeedDB.GetByID(id)
 	if cf == nil {
+		c.apiLock.Unlock()
 		return 0, errors.New("changefeed not found")
 	}
 	err := c.backend.SetChangefeedProgress(ctx, id, config.ProgressRemoving)
 	if err != nil {
+		c.apiLock.Unlock()
 		return 0, errors.Trace(err)
 	}
 	op := c.operatorController.StopChangefeed(ctx, id, true)
@@ -668,14 +670,17 @@ func (c *Controller) PauseChangefeed(ctx context.Context, id common.ChangeFeedID
 
 	cf := c.changefeedDB.GetByID(id)
 	if cf == nil {
+		c.apiLock.Unlock()
 		return errors.New("changefeed not found")
 	}
 	if err := c.backend.PauseChangefeed(ctx, id); err != nil {
+		c.apiLock.Unlock()
 		return err
 	}
 
 	clone, err := cf.GetInfo().Clone()
 	if err != nil {
+		c.apiLock.Unlock()
 		return err
 	}
 	clone.State = config.StateStopped
