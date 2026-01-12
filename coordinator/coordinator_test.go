@@ -271,6 +271,7 @@ func TestCoordinatorScheduling(t *testing.T) {
 	backend := mock_changefeed.NewMockBackend(ctrl)
 	cfs := make(map[common.ChangeFeedID]*changefeed.ChangefeedMetaWrapper)
 	backend.EXPECT().GetAllChangefeeds(gomock.Any()).Return(cfs, nil).AnyTimes()
+	backend.EXPECT().UpdateChangefeed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	for i := 0; i < cfSize; i++ {
 		cfID := common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
 			Name:     fmt.Sprintf("%d", i),
@@ -342,6 +343,7 @@ func TestScaleNode(t *testing.T) {
 		}
 	}
 	backend.EXPECT().GetAllChangefeeds(gomock.Any()).Return(cfs, nil).AnyTimes()
+	backend.EXPECT().UpdateChangefeed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 	cr := New(info, &mockPdClient{}, backend, serviceID, 100, 10000, time.Millisecond*1)
 
