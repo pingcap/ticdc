@@ -14,6 +14,7 @@
 package open
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -32,7 +33,7 @@ func TestFormatCol(t *testing.T) {
 	row2 := new(messageRow)
 	row2.decode(rowEncode)
 	require.Equal(t, row, row2)
-	// formatColumn will change the Value from string to []byte
+	// toRowChangeColumn will change the Value from string to []byte
 	row = &messageRow{Update: map[string]column{"test": {
 		Type:  mysql.TypeBlob,
 		Value: []byte("测"),
@@ -53,7 +54,6 @@ func TestNonBinaryStringCol(t *testing.T) {
 		Type:  mysql.TypeString,
 		Value: "value",
 	}
-	// mqCol.FromRowChangeColumn(model.Column2ColumnDataXForTest(col))
 	row := &messageRow{Update: map[string]column{"test": mqCol}}
 	rowEncode, err := row.encode()
 	require.NoError(t, err)
@@ -65,15 +65,17 @@ func TestNonBinaryStringCol(t *testing.T) {
 func TestVarBinaryCol(t *testing.T) {
 	t.Parallel()
 	mqCol := column{
-		Type:  mysql.TypeString,
-		Flag:  binaryFlag,
-		Value: []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A},
+		Type: mysql.TypeString,
+		Flag: binaryFlag,
 	}
+	value := []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
+	str := strconv.Quote(string(value))
+	str = str[1 : len(str)-1]
+	mqCol.Value = str
 	row := &messageRow{Update: map[string]column{"test": mqCol}}
 	rowEncode, err := row.encode()
 	require.NoError(t, err)
 	row2 := new(messageRow)
 	row2.decode(rowEncode)
-	require.NoError(t, err)
 	require.Equal(t, row, row2)
 }

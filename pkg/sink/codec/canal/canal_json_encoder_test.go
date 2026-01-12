@@ -262,7 +262,6 @@ func TestCanalJSONClaimCheckE2E(t *testing.T) {
 		messageType, ok := decoder.HasNext()
 		require.Equal(t, messageType, common.MessageTypeRow)
 		require.True(t, ok)
-		require.True(t, ok)
 
 		decodedLargeEvent := decoder.NextDMLEvent()
 
@@ -270,34 +269,9 @@ func TestCanalJSONClaimCheckE2E(t *testing.T) {
 		require.Equal(t, insertEvent.TableInfo.GetSchemaName(), decodedLargeEvent.TableInfo.GetSchemaName())
 		require.Equal(t, insertEvent.TableInfo.GetTableName(), decodedLargeEvent.TableInfo.GetTableName())
 
-		// build map from decoded rows by column name
-		decodedColumns := make(map[string]any)
-		// DMLEvent holds a chunk of rows; for single-row insert the first row index is 0
-		row := decodedLargeEvent.Rows.GetRow(0)
-		for i, column := range decodedLargeEvent.TableInfo.GetColumns() {
-			d := row.GetDatum(i, &column.FieldType)
-			colName := decodedLargeEvent.TableInfo.ForceGetColumnName(column.ID)
-			decodedColumns[colName] = d.GetValue()
-		}
-		// compare with original insertEvent values
-		for i, col := range insertEvent.TableInfo.GetColumns() {
-			d := insertEvent.GetRows().GetDatum(i, &col.FieldType)
-			colName := insertEvent.TableInfo.ForceGetColumnName(col.ID)
-			decoded, ok := decodedColumns[colName]
-			require.True(t, ok)
-			switch v := d.GetValue().(type) {
-			case types.Time:
-				require.Equal(t, v.Compare(decoded.(types.Time)), 0, colName)
-			case types.Enum:
-				require.Equal(t, v.Value, decoded.(types.Enum).Value, colName)
-			case types.Set:
-				require.Equal(t, v.Value, decoded.(types.Set).Value, colName)
-			case types.BinaryLiteral:
-				require.Equal(t, v.Compare(decoded.(types.BinaryLiteral)), 0, colName)
-			default:
-				require.Equal(t, fmt.Sprintf("%v", v), fmt.Sprintf("%v", decoded), colName)
-			}
-		}
+		change, ok := decodedLargeEvent.GetNextRow()
+		require.True(t, ok)
+		common.CompareRow(t, insertEvent.Event, insertEvent.TableInfo, change, decodedLargeEvent.TableInfo)
 	}
 }
 
@@ -710,59 +684,9 @@ func TestCanalJSONContentCompatibleE2E(t *testing.T) {
 		require.Equal(t, decodedEvent.TableInfo.GetSchemaName(), event.TableInfo.GetSchemaName())
 		require.Equal(t, decodedEvent.TableInfo.GetTableName(), event.TableInfo.GetTableName())
 
-		// compare decoded row values with original event by column name
-		obtained := make(map[string]any)
-		if !event.IsDelete() {
-			for i, column := range decodedEvent.TableInfo.GetColumns() {
-				d := decodedEvent.Rows.GetRow(0).GetDatum(i, &column.FieldType)
-				colName := decodedEvent.TableInfo.ForceGetColumnName(column.ID)
-				obtained[colName] = d.GetValue()
-			}
-			for i, col := range event.TableInfo.GetColumns() {
-				event.GetRows().IsNull(i)
-				d := event.GetRows().GetDatum(i, &col.FieldType)
-				colName := event.TableInfo.ForceGetColumnName(col.ID)
-				decoded, ok := obtained[colName]
-				require.True(t, ok)
-				switch v := d.GetValue().(type) {
-				case types.Time:
-					require.Equal(t, v.Compare(decoded.(types.Time)), 0, colName)
-				case types.Enum:
-					require.Equal(t, v.Value, decoded.(types.Enum).Value, colName)
-				case types.Set:
-					require.Equal(t, v.Value, decoded.(types.Set).Value, colName)
-				case types.BinaryLiteral:
-					require.Equal(t, v.Compare(decoded.(types.BinaryLiteral)), 0, colName)
-				default:
-					require.Equal(t, fmt.Sprintf("%v", v), fmt.Sprintf("%v", decoded), colName)
-				}
-			}
-		}
-		if !event.IsInsert() {
-			for i, column := range decodedEvent.TableInfo.GetColumns() {
-				d := decodedEvent.Rows.GetRow(0).GetDatum(i, &column.FieldType)
-				colName := decodedEvent.TableInfo.ForceGetColumnName(column.ID)
-				obtained[colName] = d.GetValue()
-			}
-			for i, col := range event.TableInfo.GetColumns() {
-				d := event.GetPreRows().GetDatum(i, &col.FieldType)
-				colName := event.TableInfo.ForceGetColumnName(col.ID)
-				decoded, ok := obtained[colName]
-				require.True(t, ok)
-				switch v := d.GetValue().(type) {
-				case types.Time:
-					require.Equal(t, v.Compare(decoded.(types.Time)), 0, colName)
-				case types.Enum:
-					require.Equal(t, v.Value, decoded.(types.Enum).Value, colName)
-				case types.Set:
-					require.Equal(t, v.Value, decoded.(types.Set).Value, colName)
-				case types.BinaryLiteral:
-					require.Equal(t, v.Compare(decoded.(types.BinaryLiteral)), 0, colName)
-				default:
-					require.Equal(t, fmt.Sprintf("%v", v), fmt.Sprintf("%v", decoded), colName)
-				}
-			}
-		}
+		change, ok := decodedEvent.GetNextRow()
+		require.True(t, ok)
+		common.CompareRow(t, event.Event, event.TableInfo, change, decodedEvent.TableInfo)
 	}
 }
 

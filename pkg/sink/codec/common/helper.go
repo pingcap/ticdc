@@ -81,6 +81,9 @@ func IsUnsignedMySQLType(mysqlType string) bool {
 }
 
 func ExtractFlenDecimal(mysqlType string, tp byte) (int, int) {
+	if strings.HasPrefix(mysqlType, "enum") || strings.HasPrefix(mysqlType, "set") {
+		return 0, 0
+	}
 	start := strings.Index(mysqlType, "(")
 	end := strings.Index(mysqlType, ")")
 	if start == -1 || end == -1 {
@@ -94,7 +97,7 @@ func ExtractFlenDecimal(mysqlType string, tp byte) (int, int) {
 	data := strings.Split(mysqlType[start+1:end], ",")
 	flen, err := strconv.ParseInt(data[0], 10, 64)
 	if err != nil {
-		log.Panic("parse flen failed", zap.String("flen", data[0]), zap.Error(err))
+		log.Panic("parse flen failed", zap.String("flen", data[0]), zap.String("mysqlType", mysqlType), zap.Error(err))
 	}
 
 	if len(data) != 2 {

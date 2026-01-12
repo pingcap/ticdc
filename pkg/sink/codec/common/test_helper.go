@@ -95,8 +95,11 @@ func compareDatum(t *testing.T, a, b *tiTypes.Datum, col *model.ColumnInfo) {
 		require.Equal(t, a.GetMysqlSet().Value, b.GetMysqlSet().Value)
 	case mysql.TypeBit:
 		require.Equal(t, a.GetMysqlBit().Compare(b.GetMysqlBit()), 0)
-	case mysql.TypeTimestamp:
-		require.Equal(t, a.GetMysqlTime(), b.GetMysqlTime())
+	case mysql.TypeTimestamp, mysql.TypeDatetime:
+		require.Equal(t, a.GetMysqlTime().Compare(b.GetMysqlTime()), 0)
+	case mysql.TypeDuration:
+		require.Equal(t, a.GetMysqlDuration().Compare(b.GetMysqlDuration()), 0)
+
 	case mysql.TypeString:
 		if mysql.HasBinaryFlag(col.GetFlag()) {
 			actual := a.GetString()

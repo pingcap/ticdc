@@ -796,6 +796,10 @@ func TestLargeMessageClaimCheck(t *testing.T) {
 	change, ok := decodedInsert.GetNextRow()
 	require.True(t, ok)
 
+	// fmt.Println("xx")
+	// fmt.Println("xx")
+	// fmt.Println("xx")
+	// fmt.Println("xx", insertEvent.TableInfo.ForceGetColumnIDByName(), decodedInsert.TableInfo.GetColumns())
 	common.CompareRow(t, insertEvent.Event, insertEvent.TableInfo, change, decodedInsert.TableInfo)
 }
 
