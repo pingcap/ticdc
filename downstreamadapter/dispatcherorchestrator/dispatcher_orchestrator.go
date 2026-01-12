@@ -168,25 +168,21 @@ func (m *DispatcherOrchestrator) RecvMaintainerRequest(
 }
 
 func getPendingMessageKey(msg *messaging.TargetMessage) (pendingMessageKey, bool) {
+	var changefeedID *heartbeatpb.ChangefeedID
 	switch req := msg.Message[0].(type) {
 	case *heartbeatpb.MaintainerBootstrapRequest:
-		return pendingMessageKey{
-			changefeedID: common.NewChangefeedIDFromPB(req.ChangefeedID),
-			msgType:      msg.Type,
-		}, true
+		changefeedID = req.ChangefeedID
 	case *heartbeatpb.MaintainerPostBootstrapRequest:
-		return pendingMessageKey{
-			changefeedID: common.NewChangefeedIDFromPB(req.ChangefeedID),
-			msgType:      msg.Type,
-		}, true
+		changefeedID = req.ChangefeedID
 	case *heartbeatpb.MaintainerCloseRequest:
-		return pendingMessageKey{
-			changefeedID: common.NewChangefeedIDFromPB(req.ChangefeedID),
-			msgType:      msg.Type,
-		}, true
+		changefeedID = req.ChangefeedID
 	default:
 		return pendingMessageKey{}, false
 	}
+	return pendingMessageKey{
+		changefeedID: common.NewChangefeedIDFromPB(changefeedID),
+		msgType:      msg.Type,
+	}, true
 }
 
 // handleMessages processes messages from the queue
@@ -199,11 +195,6 @@ func (m *DispatcherOrchestrator) handleMessages(ctx context.Context) error {
 		}
 
 		msg := m.msgQueue.Get(key)
-		if msg == nil {
-			m.msgQueue.Done(key)
-			continue
-		}
-
 		// Process the message
 		switch req := msg.Message[0].(type) {
 		case *heartbeatpb.MaintainerBootstrapRequest:
