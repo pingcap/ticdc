@@ -107,7 +107,6 @@ type DispatcherOrchestrator struct {
 	// Fields for asynchronous message processing
 	msgQueue *pendingMessageQueue
 	wg       sync.WaitGroup
-	cancel   context.CancelFunc
 
 	// closed indicates Close has been invoked and no more messages should be enqueued.
 	closed atomic.Bool
@@ -126,19 +125,13 @@ func New() *DispatcherOrchestrator {
 }
 
 // Run starts the message handling goroutine
-func (m *DispatcherOrchestrator) Run(ctx context.Context) {
-	ctx, cancel := context.WithCancel(ctx)
-	m.cancel = cancel
-
+func (m *DispatcherOrchestrator) Run() {
 	log.Info("dispatcher orchestrator is running")
 
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
-		err := m.handleMessages(ctx)
-		if err != nil && err != context.Canceled {
-			log.Error("failed to handle messages", zap.Error(err))
-		}
+		m.handleMessages()
 	}()
 }
 
@@ -186,12 +179,11 @@ func getPendingMessageKey(msg *messaging.TargetMessage) (pendingMessageKey, bool
 }
 
 // handleMessages processes messages from the queue
-func (m *DispatcherOrchestrator) handleMessages(ctx context.Context) error {
+func (m *DispatcherOrchestrator) handleMessages() {
 	for {
 		key, ok := m.msgQueue.Pop()
 		if !ok {
 			log.Info("dispatcher orchestrator is shutting down, exit handleMessages")
-			return ctx.Err()
 		}
 
 		msg := m.msgQueue.Get(key)
@@ -504,10 +496,6 @@ func (m *DispatcherOrchestrator) Close() {
 	// Close the message queue to unblock handleMessages.
 	m.msgQueue.Close()
 
-	// Stop the message handling goroutine
-	if m.cancel != nil {
-		m.cancel()
-	}
 	m.wg.Wait()
 
 	m.mutex.Lock()
