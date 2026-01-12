@@ -304,9 +304,6 @@ func (h *HeartBeatResponseHandler) Handle(dispatcherManager *DispatcherManager, 
 	heartbeatResponse := resps[0]
 	dispatcherStatuses := heartbeatResponse.GetDispatcherStatuses()
 	for _, dispatcherStatus := range dispatcherStatuses {
-		if common.IsRedoMode(heartbeatResponse.Mode) {
-			log.Error("HeartBeatResponseHandler redo", zap.Any("dispatcherStatus", dispatcherStatus))
-		}
 		influencedDispatchersType := dispatcherStatus.InfluencedDispatchers.InfluenceType
 		switch influencedDispatchersType {
 		case heartbeatpb.InfluenceType_Normal:
