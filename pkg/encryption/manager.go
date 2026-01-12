@@ -54,20 +54,15 @@ type encryptionMetaManager struct {
 	tikvClient TiKVEncryptionClient
 	kmsClient  kms.KMSClient
 
-	// Cache for encryption metadata
-	metaCache map[uint32]*cachedMeta
-	metaMu    sync.RWMutex
-
-	// Cache for decrypted data keys
+	metaCache    map[uint32]*cachedMeta
+	metaMu       sync.RWMutex
 	dataKeyCache map[uint32]map[string]*cachedDataKey
 	dataKeyMu    sync.RWMutex
 
-	// TTL for cache refresh
-	ttl time.Duration
-
-	// Background refresh
+	ttl             time.Duration
 	refreshInterval time.Duration
 	stopCh          chan struct{}
+	stopOnce        sync.Once
 	wg              sync.WaitGroup
 }
 
@@ -301,9 +296,10 @@ func (m *encryptionMetaManager) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop stops the background refresh goroutine
 func (m *encryptionMetaManager) Stop() {
-	close(m.stopCh)
+	m.stopOnce.Do(func() {
+		close(m.stopCh)
+	})
 	m.wg.Wait()
 }
 
@@ -326,7 +322,6 @@ func (m *encryptionMetaManager) refreshLoop(ctx context.Context) {
 	}
 }
 
-// refreshAll refreshes all cached encryption metadata
 func (m *encryptionMetaManager) refreshAll(ctx context.Context) {
 	m.metaMu.RLock()
 	keyspaceIDs := make([]uint32, 0, len(m.metaCache))
@@ -336,7 +331,10 @@ func (m *encryptionMetaManager) refreshAll(ctx context.Context) {
 	m.metaMu.RUnlock()
 
 	for _, keyspaceID := range keyspaceIDs {
-		// Force refresh by getting meta again
+		m.metaMu.Lock()
+		delete(m.metaCache, keyspaceID)
+		m.metaMu.Unlock()
+
 		_, err := m.getMeta(ctx, keyspaceID)
 		if err != nil {
 			log.Warn("failed to refresh encryption meta",

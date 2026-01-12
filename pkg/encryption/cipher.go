@@ -96,9 +96,8 @@ func NewAES256GCMCipher() *AES256GCMCipher {
 	return &AES256GCMCipher{}
 }
 
-// IVSize returns the IV size for AES-256-GCM (12 bytes recommended, but we use 16 for compatibility)
 func (c *AES256GCMCipher) IVSize() int {
-	return 12 // GCM standard nonce size
+	return 12
 }
 
 // Encrypt encrypts data using AES-256-GCM

@@ -1,6 +1,3 @@
-//go:build intest
-// +build intest
-
 // Copyright 2025 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -52,7 +49,7 @@ func (m *mockMetaManager) GetEncryptionVersion(ctx context.Context, keyspaceID u
 }
 
 func (m *mockMetaManager) Start(ctx context.Context) error { return nil }
-func (m *mockMetaManager) Stop()                        {}
+func (m *mockMetaManager) Stop()                           {}
 
 func setAllowDegradeOnError(t *testing.T, allow bool) func() {
 	t.Helper()
