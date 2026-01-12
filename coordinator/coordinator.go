@@ -370,7 +370,7 @@ func (c *coordinator) CreateChangefeed(ctx context.Context, info *config.ChangeF
 	// update gc safepoint after create changefeed
 	err = c.updateGCSafepointByChangefeed(ctx, info.ChangefeedID, true)
 	if err != nil {
-		log.Warn("update gc safepoint failed when creating the changefeed",
+		log.Error("update gc safepoint failed when creating the changefeed",
 			zap.Any("changefeedID", info.ChangefeedID), zap.Error(err))
 	}
 	return nil

@@ -134,7 +134,7 @@ func (m *gcManager) TryUpdateServiceGCSafePoint(
 		log.Info("update gc safe point success, cdc is blocking the gc", zap.Uint64("minServiceGCSafepoint", checkpointTs))
 	}
 	if !succeed {
-		log.Error("update gc safe point failed, the checkpointTs is smaller than the minimum service-gc-safepoint",
+		log.Warn("update gc safe point failed, the checkpointTs is smaller than the minimum service-gc-safepoint",
 			zap.Uint64("minServiceGCSafepoint", minServiceGCSafepoint), zap.Uint64("checkpointTs", checkpointTs))
 		if !forceUpdate {
 			return nil
