@@ -48,7 +48,6 @@ type DDLEvent struct {
 	Query           string            `json:"query"`
 	StartTs         uint64            `json:"start_ts"`
 	TableInfo       *common.TableInfo `json:"-"`
-	StartTs         uint64            `json:"start_ts"`
 	FinishedTs      uint64            `json:"finished_ts"`
 	// The seq of the event. It is set by event service.
 	Seq uint64 `json:"seq"`
@@ -156,13 +155,6 @@ func (d *DDLEvent) GetExtraSchemaName() string {
 
 func (d *DDLEvent) GetExtraTableName() string {
 	return d.ExtraTableName
-}
-
-func (e *DDLEvent) GetDDLSchemaName() string {
-	if e == nil {
-		return ""
-	}
-	return e.SchemaName
 }
 
 // GetTableID returns the logic table ID of the event.

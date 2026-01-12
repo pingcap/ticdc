@@ -230,7 +230,6 @@ func TestMysqlWriter_FlushDDLEvent(t *testing.T) {
 		},
 		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
 	}
-	ddlTimestamp := ddlSessionTimestampForTest(ddlEvent, writer.cfg.Timezone)
 
 	// Step 1: FlushDDLTsPre - Create ddl_ts table and insert pre-record (finished=0)
 	mock.ExpectBegin()
@@ -256,9 +255,7 @@ func TestMysqlWriter_FlushDDLEvent(t *testing.T) {
 	// Step 2: execDDLWithMaxRetries - Execute the actual DDL
 	mock.ExpectBegin()
 	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("SET TIMESTAMP = " + ddlTimestamp).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("create table t (id int primary key, name varchar(32));").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
 	// Step 3: FlushDDLTs - Update ddl_ts record (finished=1)
@@ -282,11 +279,10 @@ func TestMysqlWriter_FlushDDLEvent(t *testing.T) {
 		TableName:  job.TableName,
 		FinishedTs: 2,
 		BlockedTables: &commonEvent.InfluencedTables{
-			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      []int64{1},
-		},
+		InfluenceType: commonEvent.InfluenceTypeNormal,
+		TableIDs:      []int64{1},
+	},
 	}
-	ddlTimestamp = ddlSessionTimestampForTest(ddlEvent, writer.cfg.Timezone)
 
 	// Second DDL: Step 1: FlushDDLTsPre - Insert pre-record (finished=0)
 	mock.ExpectBegin()
@@ -296,9 +292,7 @@ func TestMysqlWriter_FlushDDLEvent(t *testing.T) {
 	// Step 2: execDDLWithMaxRetries - Execute the actual DDL
 	mock.ExpectBegin()
 	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("SET TIMESTAMP = " + ddlTimestamp).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("alter table t add column age int;").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
 	// Step 3: FlushDDLTs - Update ddl_ts record (finished=1)
@@ -476,9 +470,6 @@ func TestMysqlWriter_AsyncDDL(t *testing.T) {
 		},
 		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
 	}
-	ddlTimestamp1 := ddlSessionTimestampForTest(ddlEvent, writer.cfg.Timezone)
-	ddlTimestamp2 := ddlSessionTimestampForTest(&commonEvent.DDLEvent{FinishedTs: 2}, writer.cfg.Timezone)
-	ddlTimestamp3 := ddlSessionTimestampForTest(&commonEvent.DDLEvent{FinishedTs: 3}, writer.cfg.Timezone)
 
 	mock.ExpectBegin()
 	mock.ExpectExec("CREATE DATABASE IF NOT EXISTS tidb_cdc").WillReturnResult(sqlmock.NewResult(1, 1))
@@ -503,9 +494,7 @@ func TestMysqlWriter_AsyncDDL(t *testing.T) {
 	mock.ExpectQuery("BEGIN; SET @ticdc_ts := TIDB_PARSE_TSO(@@tidb_current_ts); ROLLBACK; SELECT @ticdc_ts; SET @ticdc_ts=NULL;").WillReturnRows(sqlmock.NewRows([]string{"@ticdc_ts"}).AddRow("2021-05-26 11:33:37.776000"))
 	mock.ExpectBegin()
 	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("SET TIMESTAMP = " + ddlTimestamp1).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("create table t (id int primary key, name varchar(32));").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, finished, is_syncpoint) VALUES ('default', 'test/test', '1', 0, 1, 0), ('default', 'test/test', '1', 1, 1, 0) ON DUPLICATE KEY UPDATE finished=VALUES(finished), ddl_ts=VALUES(ddl_ts), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
@@ -525,11 +514,9 @@ func TestMysqlWriter_AsyncDDL(t *testing.T) {
 	mock.ExpectQuery("BEGIN; SET @ticdc_ts := TIDB_PARSE_TSO(@@tidb_current_ts); ROLLBACK; SELECT @ticdc_ts; SET @ticdc_ts=NULL;").WillReturnRows(sqlmock.NewRows([]string{"@ticdc_ts"}).AddRow("2021-05-26 11:33:37.776000"))
 	mock.ExpectBegin()
 	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("SET TIMESTAMP = " + ddlTimestamp1).WillReturnResult(sqlmock.NewResult(1, 1))
 	log.Info("before add index")
 	mock.ExpectExec("alter table t add index nameIndex(name);").WillDelayFor(10 * time.Second).WillReturnError(mysql.ErrInvalidConn)
 	log.Info("after add index")
-	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectRollback()
 	mock.ExpectQuery(fmt.Sprintf(checkRunningSQL, "2021-05-26 11:33:37.776000", "alter table t add index nameIndex(name);")).
 		WillReturnRows(sqlmock.NewRows([]string{"JOB_ID", "JOB_TYPE", "SCHEMA_STATE", "SCHEMA_ID", "TABLE_ID", "STATE", "QUERY"}).
@@ -550,9 +537,7 @@ func TestMysqlWriter_AsyncDDL(t *testing.T) {
 	mock.ExpectQuery("BEGIN; SET @ticdc_ts := TIDB_PARSE_TSO(@@tidb_current_ts); ROLLBACK; SELECT @ticdc_ts; SET @ticdc_ts=NULL;").WillReturnRows(sqlmock.NewRows([]string{"@ticdc_ts"}).AddRow("2021-05-26 11:33:37.776000"))
 	mock.ExpectBegin()
 	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("SET TIMESTAMP = " + ddlTimestamp2).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("create table t1 (id int primary key, name varchar(32));").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, finished, is_syncpoint) VALUES ('default', 'test/test', '2', 0, 1, 0), ('default', 'test/test', '2', 2, 1, 0) ON DUPLICATE KEY UPDATE finished=VALUES(finished), ddl_ts=VALUES(ddl_ts), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
@@ -566,9 +551,7 @@ func TestMysqlWriter_AsyncDDL(t *testing.T) {
 	mock.ExpectQuery("BEGIN; SET @ticdc_ts := TIDB_PARSE_TSO(@@tidb_current_ts); ROLLBACK; SELECT @ticdc_ts; SET @ticdc_ts=NULL;").WillReturnRows(sqlmock.NewRows([]string{"@ticdc_ts"}).AddRow("2021-05-26 11:33:37.776000"))
 	mock.ExpectBegin()
 	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("SET TIMESTAMP = " + ddlTimestamp3).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("alter table t add column age int;").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO tidb_cdc.ddl_ts_v1 (ticdc_cluster_id, changefeed, ddl_ts, table_id, finished, is_syncpoint) VALUES ('default', 'test/test', '3', 1, 1, 0) ON DUPLICATE KEY UPDATE finished=VALUES(finished), ddl_ts=VALUES(ddl_ts), is_syncpoint=VALUES(is_syncpoint);").WillReturnResult(sqlmock.NewResult(1, 1))
