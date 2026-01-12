@@ -32,8 +32,70 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/zap"
 )
+
+type pendingMessageKey struct {
+	changefeedID common.ChangeFeedID
+	msgType      messaging.IOType
+}
+
+// pendingMessageQueue de-duplicates messages by (changefeedID, messageType) to prevent
+// floods of retry messages from blocking or starving other requests.
+//
+// The queue keeps the first message while it is pending or being processed. Subsequent
+// messages with the same key are dropped. This is safe because the sender periodically
+// retries until it receives a response.
+type pendingMessageQueue struct {
+	mu      sync.Mutex
+	pending map[pendingMessageKey]*messaging.TargetMessage
+	queue   *chann.UnlimitedChannel[pendingMessageKey, any]
+}
+
+func newPendingMessageQueue() *pendingMessageQueue {
+	return &pendingMessageQueue{
+		pending: make(map[pendingMessageKey]*messaging.TargetMessage),
+		queue:   chann.NewUnlimitedChannelDefault[pendingMessageKey](),
+	}
+}
+
+// TryEnqueue enqueues the message if there is no pending message with the same key.
+// It returns true if the message is accepted, otherwise false.
+func (q *pendingMessageQueue) TryEnqueue(key pendingMessageKey, msg *messaging.TargetMessage) bool {
+	q.mu.Lock()
+	if _, ok := q.pending[key]; ok {
+		q.mu.Unlock()
+		return false
+	}
+	q.pending[key] = msg
+	q.mu.Unlock()
+
+	q.queue.Push(key)
+	return true
+}
+
+// Pop blocks until a key is available or the queue is closed.
+// The returned key is removed from the queue but remains pending until Done is called.
+func (q *pendingMessageQueue) Pop() (pendingMessageKey, bool) {
+	return q.queue.Get()
+}
+
+func (q *pendingMessageQueue) Get(key pendingMessageKey) *messaging.TargetMessage {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.pending[key]
+}
+
+func (q *pendingMessageQueue) Done(key pendingMessageKey) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	delete(q.pending, key)
+}
+
+func (q *pendingMessageQueue) Close() {
+	q.queue.Close()
+}
 
 // DispatcherOrchestrator coordinates the creation, deletion, and management of event dispatcher managers
 // for different change feeds based on maintainer bootstrap messages.
@@ -43,9 +105,9 @@ type DispatcherOrchestrator struct {
 	dispatcherManagers map[common.ChangeFeedID]*dispatchermanager.DispatcherManager
 
 	// Fields for asynchronous message processing
-	msgChan chan *messaging.TargetMessage
-	wg      sync.WaitGroup
-	cancel  context.CancelFunc
+	msgQueue *pendingMessageQueue
+	wg       sync.WaitGroup
+	cancel   context.CancelFunc
 
 	// closed indicates Close has been invoked and no more messages should be enqueued.
 	closed atomic.Bool
@@ -57,7 +119,7 @@ func New() *DispatcherOrchestrator {
 	m := &DispatcherOrchestrator{
 		mc:                 appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		dispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
-		msgChan:            make(chan *messaging.TargetMessage, 1024), // buffer size 1024
+		msgQueue:           newPendingMessageQueue(),
 	}
 	m.mc.RegisterHandler(messaging.DispatcherManagerManagerTopic, m.RecvMaintainerRequest)
 	return m
@@ -81,7 +143,7 @@ func (m *DispatcherOrchestrator) Run(ctx context.Context) {
 }
 
 // RecvMaintainerRequest is the handler for the maintainer request message.
-// It puts the message into a channel for asynchronous processing to avoid blocking the message center.
+// It puts the message into a queue for asynchronous processing to avoid blocking the message center.
 func (m *DispatcherOrchestrator) RecvMaintainerRequest(
 	_ context.Context,
 	msg *messaging.TargetMessage,
@@ -92,49 +154,78 @@ func (m *DispatcherOrchestrator) RecvMaintainerRequest(
 	}
 	defer m.msgGuardWaitGroup.Done()
 
-	// Put message into channel for asynchronous processing by another goroutine
-	select {
-	case m.msgChan <- msg:
+	key, ok := getPendingMessageKey(msg)
+	if !ok {
+		log.Warn("unknown message type, drop message",
+			zap.String("type", msg.Type.String()),
+			zap.Any("message", msg.Message))
 		return nil
+	}
+
+	// De-duplicate by (changefeedID, messageType) to avoid floods of retry messages.
+	_ = m.msgQueue.TryEnqueue(key, msg)
+	return nil
+}
+
+func getPendingMessageKey(msg *messaging.TargetMessage) (pendingMessageKey, bool) {
+	switch req := msg.Message[0].(type) {
+	case *heartbeatpb.MaintainerBootstrapRequest:
+		return pendingMessageKey{
+			changefeedID: common.NewChangefeedIDFromPB(req.ChangefeedID),
+			msgType:      msg.Type,
+		}, true
+	case *heartbeatpb.MaintainerPostBootstrapRequest:
+		return pendingMessageKey{
+			changefeedID: common.NewChangefeedIDFromPB(req.ChangefeedID),
+			msgType:      msg.Type,
+		}, true
+	case *heartbeatpb.MaintainerCloseRequest:
+		return pendingMessageKey{
+			changefeedID: common.NewChangefeedIDFromPB(req.ChangefeedID),
+			msgType:      msg.Type,
+		}, true
 	default:
-		// Channel is full, log warning and drop the message
-		log.Warn("message channel is full, dropping message", zap.Any("message", msg.Message))
-		return nil
+		return pendingMessageKey{}, false
 	}
 }
 
-// handleMessages processes messages from the channel
+// handleMessages processes messages from the queue
 func (m *DispatcherOrchestrator) handleMessages(ctx context.Context) error {
 	for {
-		select {
-		case <-ctx.Done():
+		key, ok := m.msgQueue.Pop()
+		if !ok {
 			log.Info("dispatcher orchestrator is shutting down, exit handleMessages")
 			return ctx.Err()
-		case msg := <-m.msgChan:
-			if msg == nil {
-				continue
-			}
-			// Process the message
-			switch req := msg.Message[0].(type) {
-			case *heartbeatpb.MaintainerBootstrapRequest:
-				if err := m.handleBootstrapRequest(msg.From, req); err != nil {
-					log.Error("failed to handle bootstrap request", zap.Error(err))
-				}
-			case *heartbeatpb.MaintainerPostBootstrapRequest:
-				// Only the event dispatcher manager with table trigger event dispatcher will receive the post bootstrap request
-				if err := m.handlePostBootstrapRequest(msg.From, req); err != nil {
-					log.Error("failed to handle post bootstrap request", zap.Error(err))
-				}
-			case *heartbeatpb.MaintainerCloseRequest:
-				if err := m.handleCloseRequest(msg.From, req); err != nil {
-					log.Error("failed to handle close request", zap.Error(err))
-				}
-			default:
-				log.Warn("unknown message type, ignore it",
-					zap.String("type", msg.Type.String()),
-					zap.Any("message", msg.Message))
-			}
 		}
+
+		msg := m.msgQueue.Get(key)
+		if msg == nil {
+			m.msgQueue.Done(key)
+			continue
+		}
+
+		// Process the message
+		switch req := msg.Message[0].(type) {
+		case *heartbeatpb.MaintainerBootstrapRequest:
+			if err := m.handleBootstrapRequest(msg.From, req); err != nil {
+				log.Error("failed to handle bootstrap request", zap.Error(err))
+			}
+		case *heartbeatpb.MaintainerPostBootstrapRequest:
+			// Only the event dispatcher manager with table trigger event dispatcher will receive the post bootstrap request
+			if err := m.handlePostBootstrapRequest(msg.From, req); err != nil {
+				log.Error("failed to handle post bootstrap request", zap.Error(err))
+			}
+		case *heartbeatpb.MaintainerCloseRequest:
+			if err := m.handleCloseRequest(msg.From, req); err != nil {
+				log.Error("failed to handle close request", zap.Error(err))
+			}
+		default:
+			log.Warn("unknown message type, ignore it",
+				zap.String("type", msg.Type.String()),
+				zap.Any("message", msg.Message))
+		}
+
+		m.msgQueue.Done(key)
 	}
 }
 
@@ -416,17 +507,17 @@ func (m *DispatcherOrchestrator) Close() {
 	log.Info("dispatcher orchestrator is closing")
 	m.mc.DeRegisterHandler(messaging.DispatcherManagerManagerTopic)
 
-	// Wait until all in-flight RecvMaintainerRequest calls finish using msgChan.
+	// Wait until all in-flight RecvMaintainerRequest calls finish using msgQueue.
 	m.msgGuardWaitGroup.Wait()
+
+	// Close the message queue to unblock handleMessages.
+	m.msgQueue.Close()
 
 	// Stop the message handling goroutine
 	if m.cancel != nil {
 		m.cancel()
 	}
 	m.wg.Wait()
-
-	// Close the message channel
-	close(m.msgChan)
 
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
