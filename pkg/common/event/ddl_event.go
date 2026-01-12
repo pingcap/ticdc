@@ -46,8 +46,8 @@ type DDLEvent struct {
 	ExtraSchemaName string            `json:"extra_schema_name"`
 	ExtraTableName  string            `json:"extra_table_name"`
 	Query           string            `json:"query"`
-	StartTs         uint64            `json:"start_ts"`
 	TableInfo       *common.TableInfo `json:"-"`
+	StartTs         uint64            `json:"start_ts"`
 	FinishedTs      uint64            `json:"finished_ts"`
 	// The seq of the event. It is set by event service.
 	Seq uint64 `json:"seq"`
