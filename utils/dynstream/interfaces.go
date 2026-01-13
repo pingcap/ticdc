@@ -174,7 +174,7 @@ type DynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] inter
 	// AddPath add the path to the dynamic stream to receive the events.
 	// An event of a path not already added will be dropped.
 	// Return ErrorTypeDuplicate if the path already exists.
-	AddPath(path P, dest D, area ...AreaSettings) error
+	AddPath(path P, dest D, area ...AreaSettings[T]) error
 
 	// RemovePath removes the path from the dynamic stream.
 	// After this call return, future events with the path will be dropped, including events which are already in the stream.
@@ -187,7 +187,7 @@ type DynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] inter
 
 	// SetAreaSettings sets the settings of the area. An area uses the default settings if it is not set.
 	// This method can be called at any time. But to avoid the memory leak, setting on a area without existing paths is a no-op.
-	SetAreaSettings(area A, settings AreaSettings)
+	SetAreaSettings(area A, settings AreaSettings[T])
 
 	GetMetrics() Metrics[A, P]
 }
@@ -233,7 +233,7 @@ func (o *Option) fix() {
 	}
 }
 
-type AreaSettings struct {
+type AreaSettings[T Event] struct {
 	component          string
 	maxPendingSize     uint64        // The max memory usage of the pending events of the area. Must be larger than 0. By default 1GB.
 	pathMaxPendingSize uint64        // The max memory usage of the pending events of the path. Must be larger than 0. By default 10% of the area max pending size.
@@ -241,10 +241,10 @@ type AreaSettings struct {
 	// Remove it when we determine the v2 is working well.
 	algorithm int // The algorithm of the memory control.
 
-	batcher batcher
+	batcher *batcher[T]
 }
 
-func (s *AreaSettings) fix() {
+func (s *AreaSettings[T]) fix() {
 	if s.maxPendingSize <= 0 {
 		s.maxPendingSize = DefaultMaxPendingSize
 	}
@@ -254,16 +254,19 @@ func (s *AreaSettings) fix() {
 	}
 }
 
-func NewAreaSettingsWithMaxPendingSize(quota uint64, memoryControlAlgorithm int, component string, batchSizePolicy SizePolicy) AreaSettings {
+func NewAreaSettingsWithMaxPendingSize[T Event](
+	quota uint64, memoryControlAlgorithm int, component string,
+	batchType BatchType, batchCapacity int,
+) AreaSettings[T] {
 	// The path max pending size is at least 1MB.
 	pathMaxPendingSize := max(quota/10, 1*1024*1024)
-	return AreaSettings{
+	return AreaSettings[T]{
 		component:          component,
 		feedbackInterval:   DefaultFeedbackInterval,
 		maxPendingSize:     quota,
 		pathMaxPendingSize: pathMaxPendingSize,
 		algorithm:          memoryControlAlgorithm,
-		batcher:            newBatcher(batchSizePolicy),
+		batcher:            newBatcher[T](batchType, batchCapacity),
 	}
 }
 

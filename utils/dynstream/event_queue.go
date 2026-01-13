@@ -96,12 +96,12 @@ func (q *eventQueue[A, P, T, D, H]) wakePath(path *pathInfo[A, P, T, D, H]) {
 	}
 }
 
-func (q *eventQueue[A, P, T, D, H]) popEvents(batcher batcher[T]) *pathInfo[A, P, T, D, H] {
+func (q *eventQueue[A, P, T, D, H]) popEvents() ([]T, *pathInfo[A, P, T, D, H]) {
 	for {
 		// We are going to update the signal directly, so we need the reference.
 		signal, ok := q.signalQueue.FrontRef()
 		if !ok {
-			return nil
+			return nil, nil
 		}
 
 		if signal.eventCount == 0 {
@@ -130,11 +130,13 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(batcher batcher[T]) *pathInfo[A, P
 		firstGroup := firstEvent.eventType.DataGroup
 		firstProperty := firstEvent.eventType.Property
 
-		batcher.addEvent(firstEvent.event)
+		var count int
+		batcher := path.batcher
+		batcher.addEvent(firstEvent.event, firstEvent.eventSize)
 		path.popEvent()
+		count++
 
 		// Try to batch events with the same data group.
-		count := 1
 		for count < signal.eventCount && !batcher.isFull() {
 			// Get the reference of the front event of the path.
 			// We don't use PopFront here because we need to keep the event in the path.
@@ -147,7 +149,7 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(batcher batcher[T]) *pathInfo[A, P
 				front.eventType.Property == NonBatchable {
 				break
 			}
-			batcher.addEvent(front.event)
+			batcher.addEvent(front.event, front.eventSize)
 			path.popEvent()
 			count++
 		}
@@ -157,7 +159,6 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(batcher batcher[T]) *pathInfo[A, P
 			q.signalQueue.PopFront()
 		}
 		q.totalPendingLength.Add(-int64(count))
-
-		return path
+		return batcher.reset(), path
 	}
 }

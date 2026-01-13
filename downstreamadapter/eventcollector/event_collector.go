@@ -267,9 +267,10 @@ func (c *EventCollector) PrepareAddDispatcher(
 	cfStat.dispatcherCount.Add(1)
 
 	ds := c.getDynamicStream(target.GetMode())
-	sizePolicy := newSizePolicy(target.GetSink().SinkType(), target.GetSink().BatchCapacity())
-	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(
-		memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector", sizePolicy,
+	batchType := batchTypeBySink(target.GetSink().SinkType())
+	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize[dispatcher.DispatcherEvent](
+		memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector",
+		batchType, target.GetSink().BatchCapacity(),
 	)
 	err := ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
@@ -278,17 +279,12 @@ func (c *EventCollector) PrepareAddDispatcher(
 	stat.run()
 }
 
-func newSizePolicy(sinkType common.SinkType, capacity int) dynstream.SizePolicy {
-	switch sinkType {
-	case common.MysqlSinkType, common.KafkaSinkType, common.PulsarSinkType, common.BlackHoleSinkType,
-		common.RedoSinkType:
-		return dynstream.NewCountPolicy(capacity)
-	case common.CloudStorageSinkType:
-		return dynstream.NewBytesPolicy(capacity)
-	default:
+func batchTypeBySink(sinkType common.SinkType) dynstream.BatchType {
+	batchType := dynstream.BatchTypeCount
+	if sinkType == common.CloudStorageSinkType {
+		batchType = dynstream.BatchTypeSize
 	}
-	log.Panic("unknown sink type")
-	return nil
+	return batchType
 }
 
 // CommitAddDispatcher notify local event service that the dispatcher is ready to receive events.

@@ -35,10 +35,6 @@ type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 
 	handler Handler[A, P, T, D]
 
-	// batchers tracks the batcher for each area.
-	m        sync.Mutex
-	batchers map[A]batcher[T]
-
 	// These fields are used when UseBuffer is true.
 	// They are used to buffer the events between the receiver and the handleLoop.
 	bufferCount atomic.Int64
@@ -70,7 +66,6 @@ func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	s := &stream[A, P, T, D, H]{
 		id:         id,
 		handler:    handler,
-		batchers:   make(map[A]batcher[T]),
 		eventQueue: newEventQueue(handler),
 		option:     option,
 		startTime:  time.Now(),
@@ -207,9 +202,6 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 		case e.wake:
 			s.eventQueue.wakePath(e.pathInfo)
 		case e.newPath:
-			s.m.Lock()
-			s.batchers[e.pathInfo.area] = e.pathInfo.batcher
-			s.m.Unlock()
 			s.eventQueue.initPath(e.pathInfo)
 		case e.release:
 			s.eventQueue.releasePath(e.pathInfo)
@@ -240,6 +232,7 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 	var (
 		eventQueueEmpty = false
 		path            *pathInfo[A, P, T, D, H]
+		eventBuf        []T
 	)
 
 	// 1. Drain the eventChan to pendingQueue.
@@ -277,8 +270,7 @@ Loop:
 				handleEvent(e)
 				eventQueueEmpty = false
 			default:
-				path = s.eventQueue.popEvents(path.batcher)
-				eventBuf := path.batcher.reset()
+				eventBuf, path = s.eventQueue.popEvents()
 				if len(eventBuf) == 0 {
 					eventQueueEmpty = true
 					continue Loop
@@ -289,6 +281,7 @@ Loop:
 
 				path.lastHandleEventTs.Store(uint64(s.handler.GetTimestamp(eventBuf[0])))
 
+				// todo: shall we clear the event buf after it's handle here, instead of the batcher?
 				path.blocking.Store(s.handler.Handle(path.dest, eventBuf...))
 
 				if path.blocking.Load() {
@@ -329,18 +322,21 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	areaMemStat *areaMemStat[A, P, T, D, H]
 
 	// batcher used to batch events
-	batcher batcher[T]
+	batcher *batcher[T]
 
 	pendingSize atomic.Int64 // The total size(bytes) of pending events in the pendingQueue of the path.
 
 	lastHandleEventTs atomic.Uint64
 }
 
-func newPathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](area A, path P, dest D) *pathInfo[A, P, T, D, H] {
+func newPathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
+	area A, path P, dest D, batcher *batcher[T],
+) *pathInfo[A, P, T, D, H] {
 	pi := &pathInfo[A, P, T, D, H]{
 		area:         area,
 		path:         path,
 		dest:         dest,
+		batcher:      batcher,
 		pendingQueue: deque.NewDeque[eventWrap[A, P, T, D, H]](BlockLenInPendingQueue),
 	}
 	return pi
