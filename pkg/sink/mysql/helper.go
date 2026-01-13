@@ -397,17 +397,6 @@ func needSwitchDB(event *commonEvent.DDLEvent) bool {
 	return true
 }
 
-func needWaitAsyncExecDone(t timodel.ActionType) bool {
-	switch t {
-	case timodel.ActionCreateTable, timodel.ActionCreateTables:
-		return false
-	case timodel.ActionCreateSchema:
-		return false
-	default:
-		return true
-	}
-}
-
 func getTiDBVersion(db *sql.DB) version.ServerInfo {
 	versionInfo, err := export.SelectVersion(db)
 	if err != nil {
