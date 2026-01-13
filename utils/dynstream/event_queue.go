@@ -27,7 +27,7 @@ type eventSignal[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct 
 }
 
 type eventQueue[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
-	option  Option
+	option  option
 	handler H
 	// Used to reduce the block allocation in the paths' pending queue.
 	eventBlockAlloc *deque.BlockAllocator[eventWrap[A, P, T, D, H]]
@@ -37,7 +37,7 @@ type eventQueue[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	totalPendingLength *atomic.Int64 // The total signal count in the queue.
 }
 
-func newEventQueue[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](option Option, handler H) eventQueue[A, P, T, D, H] {
+func newEventQueue[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](option option, handler H) eventQueue[A, P, T, D, H] {
 	eq := eventQueue[A, P, T, D, H]{
 		option:             option,
 		handler:            handler,
@@ -128,7 +128,7 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, 
 			continue
 		}
 
-		batchSize := min(signal.eventCount, q.option.BatchCount)
+		batchSize := min(signal.eventCount, q.option.batchCount)
 
 		firstEvent, ok := pendingQueue.FrontRef()
 		if !ok {

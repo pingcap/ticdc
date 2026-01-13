@@ -23,17 +23,8 @@ import (
 )
 
 func NewEventDynamicStream(collector *EventCollector) dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
-	option := dynstream.NewOption()
-	option.BatchCount = 4096
-	option.UseBuffer = false
 	// Enable memory control for dispatcher events dynamic stream.
-	option.EnableMemoryControl = true
-	if option.EnableMemoryControl {
-		log.Info("New EventDynamicStream, memory control is enabled")
-	} else {
-		log.Info("New EventDynamicStream, memory control is disabled")
-	}
-
+	option := dynstream.NewOption(4096, true, false)
 	eventsHandler := &EventsHandler{}
 	stream := dynstream.NewParallelDynamicStream(eventsHandler, option)
 	stream.Start()
