@@ -55,7 +55,15 @@ func NewAddMaintainerOperator(
 }
 
 func (m *AddMaintainerOperator) Check(from node.ID, status *heartbeatpb.MaintainerStatus) {
-	if !m.finished.Load() && from == m.dest && status.State == heartbeatpb.ComponentState_Working {
+	if status == nil {
+		return
+	}
+
+	// Require bootstrap to be done before considering the maintainer successfully started.
+	// This avoids false positives when a removal-only maintainer reports Working.
+	if !m.finished.Load() && from == m.dest &&
+		status.State == heartbeatpb.ComponentState_Working &&
+		status.BootstrapDone {
 		log.Info("maintainer report working status",
 			zap.String("changefeed", m.cf.ID.String()))
 		m.finished.Store(true)

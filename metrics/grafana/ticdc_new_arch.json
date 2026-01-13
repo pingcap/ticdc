@@ -1264,7 +1264,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_maintainer_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",  changefeed=~\"$changefeed\"}) by (namespace, changefeed)",
+              "expr": "max(ticdc_maintainer_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",  changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (namespace, changefeed)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -1361,7 +1361,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_maintainer_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", changefeed=~\"$changefeed\"}) by (namespace,changefeed)",
+              "expr": "max(ticdc_maintainer_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (namespace,changefeed)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -2058,7 +2058,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "ticdc_kvclient_pull_event_count",
+              "expr": "ticdc_kvclient_pull_event_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}",
               "hide": false,
               "interval": "",
               "legendFormat": "{{instance}}-{{type}}",
@@ -2683,7 +2683,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_sink_batch_row_count_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\"}) by (namespace,changefeed, instance)",
+              "expr": "sum(ticdc_sink_batch_row_count_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (namespace,changefeed, instance)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -2801,7 +2801,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "(time() - process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\"})",
+              "expr": "(time() - process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"})",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "TiCDC-{{instance}}",
@@ -2926,14 +2926,14 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "rate(process_cpu_seconds_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\"}[1m])",
+              "expr": "rate(process_cpu_seconds_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"}[1m])",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "{{instance}}",
               "refId": "A"
             },
             {
-              "expr": "ticdc_server_go_max_procs{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\"}",
+              "expr": "ticdc_server_go_max_procs{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"}",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "quota-{{instance}}",
@@ -3034,14 +3034,14 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": " go_goroutines{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\"}",
+              "expr": " go_goroutines{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"}",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "{{instance}}",
               "refId": "A"
             },
             {
-              "expr": "go_threads{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\"}",
+              "expr": "go_threads{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"}",
               "format": "time_series",
               "hide": true,
               "intervalFactor": 1,
@@ -3144,14 +3144,14 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "process_resident_memory_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\"}",
+              "expr": "process_resident_memory_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"}",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "process-{{instance}}",
               "refId": "A"
             },
             {
-              "expr": "go_memstats_heap_alloc_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\"}",
+              "expr": "go_memstats_heap_alloc_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"}",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "heap-{{instance}}",
@@ -3252,7 +3252,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "process_open_fds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\"}",
+              "expr": "process_open_fds{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"}",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "{{instance}}",
@@ -3351,7 +3351,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_owner_ownership_counter{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\"}[240s])) by (instance) > BOOL 0.5",
+              "expr": "sum(rate(ticdc_owner_ownership_counter{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[240s])) by (instance) > BOOL 0.5",
               "format": "time_series",
               "interval": "30s",
               "intervalFactor": 1,
@@ -3556,6 +3556,220 @@
           ],
           "title": "Build Info",
           "type": "table"
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "decimals": 1,
+          "description": "Log write speed of each TiCDC instance.",
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "fill": 1,
+          "fillGradient": 0,
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 0,
+            "y": 40
+          },
+          "hiddenSeries": false,
+          "id": 60000,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": false,
+            "min": false,
+            "rightSide": false,
+            "show": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
+          "paceLength": 10,
+          "percentage": false,
+          "pluginVersion": "7.5.17",
+          "pointradius": 2,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(rate(ticdc_logger_write_bytes_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"}[1m])) by (instance)",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}",
+              "refId": "A"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Log Write Speed",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "Bps",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "bytes",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": false
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "decimals": 1,
+          "description": "Log size and disk usage of the filesystem containing each TiCDC log file directory.",
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "fill": 1,
+          "fillGradient": 0,
+          "gridPos": {
+            "h": 9,
+            "w": 12,
+            "x": 12,
+            "y": 40
+          },
+          "hiddenSeries": false,
+          "id": 60001,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": false,
+            "min": false,
+            "rightSide": false,
+            "show": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
+          "paceLength": 10,
+          "percentage": false,
+          "pluginVersion": "7.5.17",
+          "pointradius": 2,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "max by (instance) (ticdc_logger_total_size_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"})",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}-log_total",
+              "refId": "A"
+            },
+            {
+              "expr": "max by (instance) (ticdc_logger_disk_used_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"})",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}-disk_used",
+              "refId": "B"
+            },
+            {
+              "expr": "max by (instance) (ticdc_logger_disk_total_bytes{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"})",
+              "format": "time_series",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}-disk_total",
+              "refId": "C"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Log Size & Disk Usage",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "bytes",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "format": "bytes",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": false
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
         }
       ],
       "title": "Server",
@@ -6478,7 +6692,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_owner_ownership_counter{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\"}[240s])) by (instance) > BOOL 0.5",
+              "expr": "sum(rate(ticdc_owner_ownership_counter{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[240s])) by (instance) > BOOL 0.5",
               "format": "time_series",
               "interval": "30s",
               "intervalFactor": 1,
@@ -6597,7 +6811,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_maintainer_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",  changefeed=~\"$changefeed\"}) by (namespace, changefeed)",
+              "expr": "max(ticdc_maintainer_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",  changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (namespace, changefeed)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -6700,7 +6914,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_maintainer_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", changefeed=~\"$changefeed\"}) by (namespace,changefeed)",
+              "expr": "max(ticdc_maintainer_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (namespace,changefeed)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -7155,7 +7369,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "ticdc_subscription_client_requested_region_count",
+              "expr": "ticdc_subscription_client_requested_region_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}",
               "hide": false,
               "interval": "",
               "legendFormat": "{{instance}}-count",
@@ -7355,7 +7569,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "ticdc_subscription_client_subscribed_region_count",
+              "expr": "ticdc_subscription_client_subscribed_region_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}",
               "hide": false,
               "interval": "",
               "legendFormat": "{{instance}}-count",
@@ -7618,7 +7832,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_subscription_client_resolve_lock_task_drop_count[1m])) by (instance)",
+              "expr": "sum(rate(ticdc_subscription_client_resolve_lock_task_drop_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "{{instance}}",
@@ -15639,7 +15853,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_sink_mq_checkpoint_ts_message_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\"}) by (namespace,changefeed, instance)",
+              "expr": "max(ticdc_sink_mq_checkpoint_ts_message_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (namespace,changefeed, instance)",
               "interval": "",
               "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}-P999",
               "queryType": "randomWalk",
@@ -19697,7 +19911,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_redo_total_rows_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", changefeed=~\"$changefeed\"}[1m])) by (changefeed)",
+              "expr": "sum(rate(ticdc_redo_total_rows_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (changefeed)",
               "format": "time_series",
               "hide": false,
               "interval": "",

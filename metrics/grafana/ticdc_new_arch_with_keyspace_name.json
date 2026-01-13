@@ -1075,7 +1075,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_maintainer_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",  changefeed=~\"$changefeed\"}) by (keyspace_name, changefeed)",
+              "expr": "max(ticdc_maintainer_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",  changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name, changefeed)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -1172,7 +1172,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_maintainer_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed)",
+              "expr": "max(ticdc_maintainer_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -1586,7 +1586,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_sink_batch_row_count_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed, instance)",
+              "expr": "sum(ticdc_sink_batch_row_count_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed, instance)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -3050,7 +3050,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_maintainer_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",  changefeed=~\"$changefeed\"}) by (keyspace_name, changefeed)",
+              "expr": "max(ticdc_maintainer_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",  changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name, changefeed)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -3153,7 +3153,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_maintainer_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed)",
+              "expr": "max(ticdc_maintainer_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -6933,7 +6933,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_sink_mq_checkpoint_ts_message_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed, instance)",
+              "expr": "max(ticdc_sink_mq_checkpoint_ts_message_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed, instance)",
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-P999",
               "queryType": "randomWalk",
