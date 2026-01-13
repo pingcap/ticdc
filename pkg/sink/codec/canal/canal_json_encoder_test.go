@@ -17,7 +17,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"testing"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
@@ -26,7 +25,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/tidb/pkg/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -92,30 +90,7 @@ func TestDMLE2E(t *testing.T) {
 		require.Equal(t, insertEvent.TableInfo.GetSchemaName(), decodedEvent.TableInfo.GetSchemaName())
 		require.Equal(t, insertEvent.TableInfo.GetTableName(), decodedEvent.TableInfo.GetTableName())
 
-		decodedColumns := make(map[string]any)
-		for i, column := range decodedEvent.TableInfo.GetColumns() {
-			d := decodedEvent.GetRows().GetDatum(i, &column.FieldType)
-			colName := decodedEvent.TableInfo.ForceGetColumnName(column.ID)
-			decodedColumns[colName] = d.GetValue()
-		}
-		for i, col := range insertEvent.TableInfo.GetColumns() {
-			d := insertEvent.GetRows().GetDatum(i, &col.FieldType)
-			colName := insertEvent.TableInfo.ForceGetColumnName(col.ID)
-			decoded, ok := decodedColumns[colName]
-			require.True(t, ok)
-			switch v := d.GetValue().(type) {
-			case types.Time:
-				require.Equal(t, v.Compare(decoded.(types.Time)), 0, colName)
-			case types.Enum:
-				require.Equal(t, v.Value, decoded.(types.Enum).Value, colName)
-			case types.Set:
-				require.Equal(t, v.Value, decoded.(types.Set).Value, colName)
-			case types.BinaryLiteral:
-				require.Equal(t, v.Compare(decoded.(types.BinaryLiteral)), 0, colName)
-			default:
-				require.Equal(t, fmt.Sprintf("%v", v), fmt.Sprintf("%v", decoded), colName)
-			}
-		}
+		common.CompareRow(t, insertEvent.Event, insertEvent.TableInfo, decodedEvent.Event, decodedEvent.TableInfo)
 
 		err = encoder.AppendRowChangedEvent(ctx, "", updateEvent)
 		require.NoError(t, err)
