@@ -240,6 +240,15 @@ func (m *MockChangefeedInterface) VerifyTable(ctx context.Context, cfg *v2.Verif
 	return ret0, ret1
 }
 
+// GetAllTables mocks base method.
+func (m *MockChangefeedInterface) GetAllTables(ctx context.Context, cfg *v2.VerifyTableConfig, keyspace string) (*v2.Tables, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetAllTables", ctx, cfg, keyspace)
+	ret0, _ := ret[0].(*v2.Tables)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
 // VerifyTable indicates an expected call of VerifyTable.
 func (mr *MockChangefeedInterfaceMockRecorder) VerifyTable(ctx, cfg, keyspace interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
