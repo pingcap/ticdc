@@ -518,7 +518,7 @@ func (b *decoder) assembleDMLEvent(value *messageRow) *commonEvent.DMLEvent {
 		common.AppendRow2Chunk(data, columns, chk)
 		result.RowTypes = append(result.RowTypes, commonType.RowTypeUpdate, commonType.RowTypeUpdate)
 	} else if len(value.Update) != 0 {
-		// if OpenOutputOldValue is true, the PreColumns is nil, but Update is not nil,
+		// if OpenOutputOldValue is false, the PreColumns is nil, but Update is not nil,
 		// we will treat it as an insert event.
 		data := collectAllColumnsValue(value.Update, columns)
 		common.AppendRow2Chunk(data, columns, chk)

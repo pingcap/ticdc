@@ -87,7 +87,7 @@ func ExtractFlenDecimal(mysqlType string, tp byte) (int, int) {
 	start := strings.Index(mysqlType, "(")
 	end := strings.Index(mysqlType, ")")
 	if start == -1 || end == -1 {
-		if strings.HasPrefix("mysqlType", "bit") {
+		if strings.HasPrefix(mysqlType, "bit") {
 			return 8, 0
 		}
 		flen, _ := mysql.GetDefaultFieldLengthAndDecimal(tp)
