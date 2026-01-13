@@ -93,6 +93,74 @@ func TestPendingMessageQueue_PopReturnsAfterClose(t *testing.T) {
 	}
 }
 
+func TestPendingMessageQueue_CloseRequestRemovedTrueOverridesPendingFalse(t *testing.T) {
+	t.Parallel()
+
+	q := newPendingMessageQueue()
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	key := pendingMessageKey{
+		changefeedID: cfID,
+		msgType:      messaging.TypeMaintainerCloseRequest,
+	}
+
+	msgFalse := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerCloseRequest{ChangefeedID: cfID.ToPB(), Removed: false},
+	)
+	msgTrue := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerCloseRequest{ChangefeedID: cfID.ToPB(), Removed: true},
+	)
+
+	require.True(t, q.TryEnqueue(key, msgFalse))
+	require.True(t, q.TryEnqueue(key, msgTrue))
+
+	poppedKey, ok := q.Pop()
+	require.True(t, ok)
+	require.Equal(t, key, poppedKey)
+	poppedMsg := q.Get(poppedKey)
+	require.NotNil(t, poppedMsg)
+	req := poppedMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
+	require.True(t, req.Removed)
+	q.Done(key)
+}
+
+func TestPendingMessageQueue_CloseRequestUpgradeBetweenPopAndGet(t *testing.T) {
+	t.Parallel()
+
+	q := newPendingMessageQueue()
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	key := pendingMessageKey{
+		changefeedID: cfID,
+		msgType:      messaging.TypeMaintainerCloseRequest,
+	}
+
+	msgFalse := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerCloseRequest{ChangefeedID: cfID.ToPB(), Removed: false},
+	)
+	msgTrue := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerCloseRequest{ChangefeedID: cfID.ToPB(), Removed: true},
+	)
+
+	require.True(t, q.TryEnqueue(key, msgFalse))
+	poppedKey, ok := q.Pop()
+	require.True(t, ok)
+	require.Equal(t, key, poppedKey)
+
+	require.True(t, q.TryEnqueue(key, msgTrue))
+	poppedMsg := q.Get(poppedKey)
+	require.NotNil(t, poppedMsg)
+	req2 := poppedMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
+	require.True(t, req2.Removed)
+	q.Done(key)
+}
+
 func TestGetPendingMessageKey_SupportedTypes(t *testing.T) {
 	t.Parallel()
 

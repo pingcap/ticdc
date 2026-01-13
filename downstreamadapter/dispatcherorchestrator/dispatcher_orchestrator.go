@@ -122,9 +122,10 @@ func (m *DispatcherOrchestrator) handleMessages() {
 		key, ok := m.msgQueue.Pop()
 		if !ok {
 			log.Info("dispatcher orchestrator is shutting down, exit handleMessages")
+			return
 		}
-
 		msg := m.msgQueue.Get(key)
+
 		// Process the message
 		switch req := msg.Message[0].(type) {
 		case *heartbeatpb.MaintainerBootstrapRequest:
