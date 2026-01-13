@@ -635,9 +635,10 @@ func (c *Controller) restoreCurrentWorkingOperators(
 					return err
 				}
 				if req.OperatorType == heartbeatpb.OperatorType_O_Remove {
-					// If the table is already dropped (not present in schema store at startTs),
-					// keep the replica set only long enough to finish the remove operator, then drop it.
 					if _, ok := tableSplitMap[span.TableID]; !ok {
+						// The table is already dropped (not present in schema store at startTs).
+						// Keep the remove operator so the runtime dispatcher can be cleaned up, but remove the task
+						// from spanController to avoid rescheduling a table that no longer exists.
 						spanController.RemoveReplicatingSpan(replicaSet)
 					}
 				}

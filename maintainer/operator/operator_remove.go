@@ -83,6 +83,8 @@ func (m *removeDispatcherOperator) Check(from node.ID, status *heartbeatpb.Table
 }
 
 func (m *removeDispatcherOperator) Schedule() *messaging.TargetMessage {
+	// Once finished, stop emitting remove requests; otherwise we may reintroduce a stale in-flight
+	// operator into dispatcher manager bootstrap responses after the dispatcher is already cleaned up.
 	if !m.sendThrottler.shouldSend() || m.finished.Load() {
 		return nil
 	}

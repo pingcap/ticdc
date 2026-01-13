@@ -126,6 +126,8 @@ func (m *AddDispatcherOperator) OnTaskRemoved() {
 }
 
 func (m *AddDispatcherOperator) Start() {
+	// Start can race with task cleanup (OnTaskRemoved / PostFinish) during DDL / failover.
+	// Avoid rebinding the span after the operator is already marked removed/finished.
 	if m.removed.Load() || m.finished.Load() {
 		return
 	}

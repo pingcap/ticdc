@@ -64,6 +64,9 @@ func (c *Controller) moveTable(tableID int64, targetNode node.ID, mode int64, wa
 		op := operatorController.NewMoveOperator(replication, replication.GetNodeID(), targetNode)
 		ret := operatorController.AddOperator(op)
 		if !ret {
+			// moveTable is a test helper and can be called while another operator is already running
+			// for the same table (e.g. bootstrap add / DDL-triggered scheduling). Reuse or wait for the
+			// existing operator to avoid creating conflicting operators in tests.
 			existing := operatorController.GetOperator(op.ID())
 			if existing == nil {
 				return errors.ErrOperatorIsNil.GenWithStackByArgs("add operator failed")
