@@ -189,8 +189,17 @@ func (h *SchedulerDispatcherRequestHandler) Path(scheduleDispatcherRequest Sched
 }
 
 // Handle handles the SchedulerDispatcherRequest events, which are operators from the maintainer to add or remove dispatchers.
-// It will record the operators first, it's used to store the information that there is a not finished operator for a dispatcher.
-// The current working operators will be deleted after the operator is finished, i.e. the dispatcher is created or removed.
+//
+// We persist each request in `dispatcherManager.currentOperatorMap` before executing it. This map acts as a small
+// "bootstrap journal": if the maintainer fails over, dispatcher manager will include unfinished requests in its
+// bootstrap response, so the new maintainer can reconstruct in-flight operators and keep the system converging.
+//
+// Lifecycle expectations:
+//   - Create: store -> create dispatcher -> delete entry after dispatcher is created.
+//   - Remove: store -> remove dispatcher -> delete entry when dispatcher is fully cleaned up.
+//
+// Some requests are intentionally dropped (see preCheckForSchedulerHandler / handleScheduleRemove) to avoid
+// leaking operator entries in cases where we have no cleanup callback (e.g. remove a non-existent dispatcher).
 func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *DispatcherManager, reqs ...SchedulerDispatcherRequest) bool {
 	// If req is about remove dispatcher, then there will only be one request in reqs.
 	infos := map[common.DispatcherID]dispatcherCreateInfo{}
@@ -216,12 +225,25 @@ func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *Dispatcher
 
 	// use the infos to create dispatchers, and delete the current operators after created, just indicate the operator is finished
 	if len(infos) > 0 || len(redoInfos) > 0 {
+		// Used by unit tests to force an interleaving where the operator is stored but dispatcher creation is blocked.
 		failpoint.Inject("BlockCreateDispatcher", nil)
 	}
 	createDispatcherByInfo(dispatcherManager, infos, redoInfos)
 	return false
 }
 
+// preCheckForSchedulerHandler validates a scheduling request and decides whether it should be applied.
+//
+// It returns the stable key used in currentOperatorMap (dispatcherID), and a boolean indicating whether the
+// request should proceed. The precheck filters out:
+//   - invalid requests (nil request/config/dispatcherID),
+//   - redo requests when redo is disabled,
+//   - duplicate in-flight operators for the same dispatcherID,
+//   - Create requests for an already-existing dispatcher (idempotent no-op).
+//
+// Note: Remove requests are allowed to proceed even if the dispatcher doesn't exist (we still want to emit a
+// terminal status to the maintainer), but we must be careful not to store such requests (see handleScheduleRemove),
+// otherwise the operator entry would never be cleaned up.
 func preCheckForSchedulerHandler(req SchedulerDispatcherRequest, dispatcherManager *DispatcherManager) (common.DispatcherID, bool) {
 	if req.ScheduleDispatcherRequest == nil {
 		log.Warn("scheduleDispatcherRequest is nil, skip")
@@ -329,6 +351,8 @@ func handleScheduleRemove(
 				zap.Any("operator", req),
 			)
 		}
+		// Even if the dispatcher doesn't exist, we still call removeDispatcher so the dispatcher manager
+		// can emit a terminal status back to the maintainer and help it converge.
 		removeDispatcher(dispatcherManager, dispatcherID, dispatcherManager.redoDispatcherMap, dispatcherManager.redoSink.SinkType())
 	} else {
 		// If the dispatcher does not exist, do not store the remove operator.
@@ -347,6 +371,8 @@ func handleScheduleRemove(
 				zap.Any("operator", req),
 			)
 		}
+		// Even if the dispatcher doesn't exist, we still call removeDispatcher so the dispatcher manager
+		// can emit a terminal status back to the maintainer and help it converge.
 		removeDispatcher(dispatcherManager, dispatcherID, dispatcherManager.dispatcherMap, dispatcherManager.sink.SinkType())
 	}
 }
@@ -362,6 +388,8 @@ func createDispatcherByInfo(
 			dispatcherManager.handleError(context.Background(), err)
 		}
 		for _, info := range redoInfos {
+			// Create requests are stored in currentOperatorMap before creation.
+			// If we can't find it here, something already deleted it or skipped storing unexpectedly.
 			if v, ok := dispatcherManager.currentOperatorMap.Load(info.Id); ok {
 				req := v.(SchedulerDispatcherRequest)
 				log.Debug("delete current working add operator for redo dispatcher",
@@ -381,6 +409,8 @@ func createDispatcherByInfo(
 			dispatcherManager.handleError(context.Background(), err)
 		}
 		for _, info := range infos {
+			// Create requests are stored in currentOperatorMap before creation.
+			// If we can't find it here, something already deleted it or skipped storing unexpectedly.
 			if v, ok := dispatcherManager.currentOperatorMap.Load(info.Id); ok {
 				req := v.(SchedulerDispatcherRequest)
 				log.Debug("delete current working add operator",
