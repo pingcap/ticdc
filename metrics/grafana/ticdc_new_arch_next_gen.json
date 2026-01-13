@@ -23414,7 +23414,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_ddl_exec_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_sink_ddl_exec_duration_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
+              "expr": "sum(rate(ticdc_ddl_exec_duration_sum{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance) / \nsum(rate(ticdc_ddl_exec_duration_count{k8s_cluster=\"$k8s_cluster\",sharedpool_id=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name,changefeed,instance)",
               "interval": "",
               "legendFormat": "avg-{{keyspace_name}}-{{changefeed}}-{{instance}}",
               "queryType": "randomWalk",

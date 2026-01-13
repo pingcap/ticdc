@@ -28,6 +28,7 @@ func NewStatistics(
 	statistics := &Statistics{
 		sinkType:     sinkType,
 		changefeedID: changefeed,
+		ddlTypes:     make(map[string]struct{}),
 	}
 
 	keyspace := changefeed.Keyspace()
@@ -48,6 +49,7 @@ func NewStatistics(
 type Statistics struct {
 	sinkType     string
 	changefeedID common.ChangeFeedID
+	ddlTypes     map[string]struct{}
 
 	// metricExecDDLHis records each DDL execution time duration.
 	metricExecDDLHis prometheus.Observer
@@ -100,6 +102,7 @@ func (b *Statistics) RecordDDLExecution(executor func() (string, error)) error {
 	metricExecDDLCounter := ExecDDLCounter.WithLabelValues(
 		b.changefeedID.Keyspace(), b.changefeedID.Name(), ddlType)
 	metricExecDDLCounter.Inc()
+	b.ddlTypes[ddlType] = struct{}{}
 	b.metricExecDDLHis.Observe(time.Since(start).Seconds())
 	return nil
 }
@@ -114,7 +117,9 @@ func (b *Statistics) Close() {
 	EventSizeHistogram.DeleteLabelValues(keyspace, changefeedID)
 	ExecutionErrorCounter.DeleteLabelValues(keyspace, changefeedID, "ddl")
 	ExecutionErrorCounter.DeleteLabelValues(keyspace, changefeedID, "dml")
-	ExecDDLCounter.Remove(prometheus.Labels{getKeyspaceLabel(): keyspace, "changefeed": changefeedID})
+	for ddlType := range b.ddlTypes {
+		ExecDDLCounter.DeleteLabelValues(keyspace, changefeedID, ddlType)
+	}
 	TotalWriteBytesCounter.DeleteLabelValues(keyspace, changefeedID)
 	ExecDMLEventCounter.DeleteLabelValues(keyspace, changefeedID)
 }
