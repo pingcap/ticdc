@@ -135,7 +135,7 @@ type Handler[A Area, P Path, T Event, D Dest] interface {
 
 	// OnDrop is called when an event is dropped. Could be caused by the memory control or cannot find the path.
 	// Do nothing by default implementation.
-	OnDrop(event T) interface{}
+	OnDrop(event T) any
 }
 
 type PathAndDest[P Path, D Dest] struct {
@@ -230,61 +230,6 @@ func (o *Option) fix() {
 	}
 	if o.StreamCount == 0 {
 		o.StreamCount = runtime.NumCPU()
-	}
-}
-
-type SizePolicy interface {
-	fmt.Stringer
-	currentSize() int
-}
-
-// The batch count of handling events. <= 1 means no batch. By default 1.
-type countPolicy struct {
-	capacity int
-	current  int
-}
-
-func NewCountPolicy(capacity int) countPolicy {
-	return countPolicy{
-		capacity: capacity,
-	}
-}
-
-func (c countPolicy) String() string {
-	return "count-policy"
-}
-
-func (c countPolicy) currentSize() int {
-	return c.current
-}
-
-// The max bytes of the batch. <= 1 means no limit. By default 0.
-type bytesPolicy struct {
-	capacity int
-	current  int
-}
-
-func NewBytesPolicy(capacity int) bytesPolicy {
-	return bytesPolicy{
-		capacity: capacity,
-	}
-}
-
-func (c bytesPolicy) currentSize() int {
-	return c.current
-}
-
-func (b bytesPolicy) String() string {
-	return "bytes-policy"
-}
-
-type batcher struct {
-	policy SizePolicy
-}
-
-func newBatcher(policy SizePolicy) batcher {
-	return batcher{
-		policy: policy,
 	}
 }
 

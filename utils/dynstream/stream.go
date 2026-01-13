@@ -35,6 +35,10 @@ type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 
 	handler Handler[A, P, T, D]
 
+	// batchers tracks the batcher for each area.
+	m        sync.Mutex
+	batchers map[A]batcher[T]
+
 	// These fields are used when UseBuffer is true.
 	// They are used to buffer the events between the receiver and the handleLoop.
 	bufferCount atomic.Int64
@@ -66,6 +70,7 @@ func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	s := &stream[A, P, T, D, H]{
 		id:         id,
 		handler:    handler,
+		batchers:   make(map[A]batcher[T]),
 		eventQueue: newEventQueue(handler),
 		option:     option,
 		startTime:  time.Now(),
@@ -105,7 +110,6 @@ func (s *stream[A, P, T, D, H]) addEvent(event eventWrap[A, P, T, D, H]) {
 	// Fast path: try direct send without blocking to avoid context check
 	select {
 	case eventChan <- event:
-		return
 	default:
 		// Slow path: with close check while waiting
 		select {
@@ -157,10 +161,10 @@ func (s *stream[A, P, T, D, H]) receiver() {
 	}()
 
 	for {
-		event, ok := buffer.FrontRef()
 		if s.closed.Load() {
 			return
 		}
+		event, ok := buffer.FrontRef()
 		if !ok {
 			select {
 			case <-s.ctx.Done():
@@ -203,6 +207,9 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 		case e.wake:
 			s.eventQueue.wakePath(e.pathInfo)
 		case e.newPath:
+			s.m.Lock()
+			s.batchers[e.pathInfo.area] = e.pathInfo.batcher
+			s.m.Unlock()
 			s.eventQueue.initPath(e.pathInfo)
 		case e.release:
 			s.eventQueue.releasePath(e.pathInfo)
@@ -223,25 +230,17 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 		s.wg.Done()
 	}()
 
-	// Variables below will be used in the Loop below.
-	// Declared here to avoid repeated allocation.
-	var (
-		eventQueueEmpty = false
-		eventBuf        = make([]T, 0, s.option.BatchCount)
-		zeroT           T
-		cleanUpEventBuf = func() {
-			for i := range eventBuf {
-				eventBuf[i] = zeroT
-			}
-			eventBuf = eventBuf[:0]
-		}
-		path *pathInfo[A, P, T, D, H]
-	)
-
 	// For testing. Don't handle events until this wait group is done.
 	if s.option.handleWait != nil {
 		s.option.handleWait.Wait()
 	}
+
+	// Variables below will be used in the Loop below.
+	// Declared here to avoid repeated allocation.
+	var (
+		eventQueueEmpty = false
+		path            *pathInfo[A, P, T, D, H]
+	)
 
 	// 1. Drain the eventChan to pendingQueue.
 	// 2. Pop events from the eventQueue and handle them.
@@ -278,13 +277,13 @@ Loop:
 				handleEvent(e)
 				eventQueueEmpty = false
 			default:
-				eventBuf, path = s.eventQueue.popEvents(eventBuf)
+				path = s.eventQueue.popEvents(path.batcher)
+				eventBuf := path.batcher.reset()
 				if len(eventBuf) == 0 {
 					eventQueueEmpty = true
 					continue Loop
 				}
 				if path.removed.Load() {
-					cleanUpEventBuf()
 					continue Loop
 				}
 
@@ -295,8 +294,6 @@ Loop:
 				if path.blocking.Load() {
 					s.eventQueue.blockPath(path)
 				}
-
-				cleanUpEventBuf()
 			}
 		}
 	}
@@ -330,6 +327,9 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 
 	// Fields used by the memory control.
 	areaMemStat *areaMemStat[A, P, T, D, H]
+
+	// batcher used to batch events
+	batcher batcher[T]
 
 	pendingSize atomic.Int64 // The total size(bytes) of pending events in the pendingQueue of the path.
 
