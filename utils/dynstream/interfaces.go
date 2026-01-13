@@ -207,8 +207,6 @@ type Option struct {
 	ReportInterval    time.Duration // The interval of reporting the status of stream, the status is used by the scheduler.
 
 	StreamCount int // The count of streams. I.e. the count of goroutines to handle events. By default 0, means runtime.NumCPU().
-	BatchCount  int // The batch count of handling events. <= 1 means no batch. By default 1.
-	BatchBytes  int // The max bytes of the batch. <= 1 means no limit. By default 0.
 
 	EnableMemoryControl bool // Enable the memory control. By default false.
 
@@ -222,7 +220,6 @@ func NewOption() Option {
 		SchedulerInterval: DefaultSchedulerInterval,
 		ReportInterval:    DefaultReportInterval,
 		StreamCount:       0,
-		BatchCount:        1,
 		UseBuffer:         false,
 	}
 }
@@ -234,9 +231,41 @@ func (o *Option) fix() {
 	if o.StreamCount == 0 {
 		o.StreamCount = runtime.NumCPU()
 	}
-	if o.BatchCount <= 0 {
-		o.BatchCount = 1
-	}
+}
+
+type sizePolicy interface {
+	fmt.Stringer
+	currentSize() int
+}
+
+// The batch count of handling events. <= 1 means no batch. By default 1.
+type countPolicy struct {
+	current int
+}
+
+func (c countPolicy) String() string {
+	return "count-policy"
+}
+
+func (c countPolicy) currentSize() int {
+	return c.current
+}
+
+// The max bytes of the batch. <= 1 means no limit. By default 0.
+type bytesPolicy struct {
+	current int
+}
+
+func (c bytesPolicy) currentSize() int {
+	return c.current
+}
+
+func (b bytesPolicy) String() string {
+	return "bytes-policy"
+}
+
+type batcher struct {
+	policy sizePolicy
 }
 
 type AreaSettings struct {
@@ -246,6 +275,8 @@ type AreaSettings struct {
 	feedbackInterval   time.Duration // The interval of the feedback. By default 1000ms.
 	// Remove it when we determine the v2 is working well.
 	algorithm int // The algorithm of the memory control.
+
+	batcher batcher
 }
 
 func (s *AreaSettings) fix() {
