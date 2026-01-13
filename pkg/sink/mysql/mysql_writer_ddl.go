@@ -96,15 +96,14 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 	ddlTimestamp, useSessionTimestamp := ddlSessionTimestampFromOriginDefault(event, w.cfg.Timezone)
 
 	if useSessionTimestamp {
-		// Set the session timestamp to match upstream DDL execution time
-		// This is critical for preserving timestamp function behavior
+		// set the session timestamp to match upstream DDL execution time
 		if err := setSessionTimestamp(ctx, tx, ddlTimestamp); err != nil {
 			log.Error("Fail to set session timestamp for DDL",
 				zap.Float64("timestamp", ddlTimestamp),
 				zap.String("query", event.GetDDLQuery()),
 				zap.Error(err))
 			if rbErr := tx.Rollback(); rbErr != nil {
-				log.Error("Failed to rollback", zap.Error(err))
+				log.Error("Failed to rollback", zap.String("changefeed", w.ChangefeedID.String()), zap.Error(rbErr))
 			}
 			return err
 		}
@@ -120,17 +119,17 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 			}
 		}
 		if rbErr := tx.Rollback(); rbErr != nil {
-			log.Error("Failed to rollback", zap.String("sql", event.GetDDLQuery()), zap.Error(err))
+			log.Error("Failed to rollback", zap.String("sql", event.GetDDLQuery()), zap.Error(rbErr))
 		}
 		return err
 	}
 
 	if useSessionTimestamp {
-		// Reset session timestamp after DDL execution to avoid affecting subsequent operations
+		// reset session timestamp after DDL execution to avoid affecting subsequent operations
 		if err := resetSessionTimestamp(ctx, tx); err != nil {
 			log.Error("Failed to reset session timestamp after DDL execution", zap.Error(err))
 			if rbErr := tx.Rollback(); rbErr != nil {
-				log.Error("Failed to rollback", zap.String("sql", event.GetDDLQuery()), zap.Error(err))
+				log.Error("Failed to rollback", zap.String("sql", event.GetDDLQuery()), zap.Error(rbErr))
 			}
 			return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Query info: %s; ", event.GetDDLQuery())))
 		}
@@ -141,7 +140,7 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 	}
 
 	if useSessionTimestamp {
-		// Log successful DDL execution with timestamp information for debugging
+		// log successful DDL execution with timestamp information for debugging
 		log.Debug("DDL executed with timestamp",
 			zap.String("query", event.GetDDLQuery()),
 			zap.Float64("sessionTimestamp", ddlTimestamp))
