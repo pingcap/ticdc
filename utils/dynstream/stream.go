@@ -66,7 +66,7 @@ func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	s := &stream[A, P, T, D, H]{
 		id:         id,
 		handler:    handler,
-		eventQueue: newEventQueue(option, handler),
+		eventQueue: newEventQueue(handler),
 		option:     option,
 		startTime:  time.Now(),
 	}
