@@ -339,7 +339,7 @@ func (o *createChangefeedOptions) run(ctx context.Context, cmd *cobra.Command) e
 	if err != nil {
 		return err
 	}
-	cmd.Printf("Create changefeed successfully!\nID: %s\nInfo: %s\nIneligibleTablesCount: %d\nEligibleTablesCount: %d\n", info.ID, infoStr, tables.IneligibleTables, tables.EligibleTables)
+	cmd.Printf("Create changefeed successfully!\nID: %s\nInfo: %s\nIneligibleTablesCount: %d\nEligibleTablesCount: %d\n", info.ID, infoStr, len(tables.IneligibleTables), len(tables.EligibleTables))
 	if o.verbose {
 		cmd.Printf("EligibleTables: %v\n", tables.EligibleTables)
 		cmd.Printf("IneligibleTablesCount: %v\n", tables.IneligibleTables)

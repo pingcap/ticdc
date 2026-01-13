@@ -15,7 +15,6 @@ package cli
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	"github.com/pingcap/log"
@@ -23,7 +22,6 @@ import (
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
-	"github.com/pingcap/ticdc/pkg/filter"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/r3labs/diff"
 	"github.com/spf13/cobra"
@@ -106,6 +104,7 @@ func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
 		return err
 	}
 	// sink uri is not changed, set old to empty to skip diff
+	// old sink uri may contain sensitive information, the password part is masked
 	if newInfo.SinkURI == "" {
 		old.SinkURI = ""
 	}
@@ -133,60 +132,6 @@ func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
 
 	changefeedConfig := o.getChangefeedConfig(cmd, newInfo)
 
-	verifyTableConfig := &v2.VerifyTableConfig{
-		PDConfig: v2.PDConfig{
-			PDAddrs:       changefeedConfig.PDAddrs,
-			CAPath:        changefeedConfig.CAPath,
-			CertPath:      changefeedConfig.CertPath,
-			KeyPath:       changefeedConfig.KeyPath,
-			CertAllowedCN: changefeedConfig.CertAllowedCN,
-		},
-		ReplicaConfig: changefeedConfig.ReplicaConfig,
-		StartTs:       changefeedConfig.StartTs,
-		SinkURI:       changefeedConfig.SinkURI,
-	}
-
-	tables, err := o.apiV2Client.Changefeeds().VerifyTable(ctx, verifyTableConfig, o.keyspace)
-	if err != nil {
-		if strings.Contains(err.Error(), "ErrInvalidIgnoreEventType") {
-			supportedEventTypes := filter.SupportedEventTypes()
-			eventTypesStr := make([]string, 0, len(supportedEventTypes))
-			for _, eventType := range supportedEventTypes {
-				eventTypesStr = append(eventTypesStr, string(eventType))
-			}
-			cmd.Println(fmt.Sprintf("Invalid input, 'ignore-event' parameters can only accept [%s]",
-				strings.Join(eventTypesStr, ", ")))
-		}
-		return err
-	}
-
-	ignoreIneligibleTables := false
-	if len(tables.IneligibleTables) != 0 {
-		if putil.GetOrZero(newInfo.Config.ForceReplicate) {
-			cmd.Printf("[WARN] Force to replicate some ineligible tables, "+
-				"these tables do not have a primary key or a not-null unique key: %#v\n"+
-				"[WARN] This may cause data redundancy, "+
-				"please refer to the official documentation for details.\n",
-				tables.IneligibleTables)
-		} else {
-			cmd.Printf("[WARN] Some tables are not eligible to replicate, "+
-				"because they do not have a primary key or a not-null unique key: %#v\n",
-				tables.IneligibleTables)
-			if !o.commonChangefeedOptions.noConfirm {
-				ignoreIneligibleTables, err = confirmIgnoreIneligibleTables(cmd)
-				if err != nil {
-					return err
-				}
-			}
-		}
-	}
-
-	if o.commonChangefeedOptions.noConfirm {
-		ignoreIneligibleTables = true
-	}
-
-	changefeedConfig.ReplicaConfig.IgnoreIneligibleTable = putil.AddressOf(ignoreIneligibleTables)
-
 	info, err := o.apiV2Client.Changefeeds().Update(ctx, changefeedConfig, o.keyspace, o.changefeedID)
 	if err != nil {
 		return err
@@ -197,12 +142,8 @@ func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
 	}
 
 	cmd.Printf("Update changefeed config successfully! "+
-		"\nID: %s\nInfo: %s\nIneligibleTablesCount: %d\nEligibleTablesCount: %d\n", o.changefeedID, infoStr, tables.IneligibleTables, tables.EligibleTables)
+		"\nID: %s\nInfo: %s", o.changefeedID, infoStr)
 
-	if o.verbose {
-		cmd.Printf("EligibleTables: %v\n", tables.EligibleTables)
-		cmd.Printf("IneligibleTablesCount: %v\n", tables.IneligibleTables)
-	}
 	return nil
 }
 

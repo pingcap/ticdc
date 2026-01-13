@@ -712,12 +712,47 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		}
 	}()
 
+	sinkURIParsed, err := url.Parse(cfInfo.SinkURI)
+	if err != nil {
+		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfInfo.SinkURI))
+		return
+	}
+	scheme := sinkURIParsed.Scheme
+	topic := ""
+	if config.IsMQScheme(scheme) {
+		topic, err = helper.GetTopic(sinkURIParsed)
+		if err != nil {
+			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfInfo.SinkURI))
+			return
+		}
+	}
+	protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(cfInfo.Config.Sink.Protocol))
+
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
+	kvStorage, err := keyspaceManager.GetStorage(ctx, keyspaceName)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	ineligibleTables, eligibleTables, err := getVerifiedTables(ctx, cfInfo.Config, kvStorage, newCheckpointTs, scheme, topic, protocol)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
 	err = co.ResumeChangefeed(ctx, cfInfo.ChangefeedID, newCheckpointTs, cfg.OverwriteCheckpointTs != 0)
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
 	c.Errors = nil
+	log.Info("Resume changefeed successfully!",
+		zap.String("id", cfInfo.ChangefeedID.Name()),
+		zap.String("state", string(cfInfo.State)),
+		zap.String("changefeedInfo", cfInfo.String()),
+		zap.Int("eligibleTablesLength", len(eligibleTables)),
+		zap.Int("ineligibleTablesLength", len(ineligibleTables)),
+	)
 	c.JSON(getStatus(c), &EmptyResponse{})
 }
 
