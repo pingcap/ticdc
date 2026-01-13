@@ -267,12 +267,28 @@ func (c *EventCollector) PrepareAddDispatcher(
 	cfStat.dispatcherCount.Add(1)
 
 	ds := c.getDynamicStream(target.GetMode())
-	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector")
+	sizePolicy := newSizePolicy(target.GetSink().SinkType(), target.GetSink().BatchCapacity())
+	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(
+		memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector", sizePolicy,
+	)
 	err := ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
 		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
 	}
 	stat.run()
+}
+
+func newSizePolicy(sinkType common.SinkType, capacity int) dynstream.SizePolicy {
+	switch sinkType {
+	case common.MysqlSinkType, common.KafkaSinkType, common.PulsarSinkType, common.BlackHoleSinkType,
+		common.RedoSinkType:
+		return dynstream.NewCountPolicy(capacity)
+	case common.CloudStorageSinkType:
+		return dynstream.NewBytesPolicy(capacity)
+	default:
+	}
+	log.Panic("unknown sink type")
+	return nil
 }
 
 // CommitAddDispatcher notify local event service that the dispatcher is ready to receive events.

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
+	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -39,6 +40,12 @@ type mockEventDispatcher struct {
 	tableSpan    *heartbeatpb.TableSpan
 	handle       func(commonEvent.Event)
 	changefeedID common.ChangeFeedID
+
+	sink sink.Sink
+}
+
+func (m *mockEventDispatcher) GetSink() sink.Sink {
+	return m.sink
 }
 
 func (m *mockEventDispatcher) GetId() common.DispatcherID {

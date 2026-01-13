@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
+	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -44,7 +45,13 @@ type mockDispatcher struct {
 	events       []dispatcher.DispatcherEvent
 	checkPointTs uint64
 
+	sink sink.Sink
+
 	skipSyncpointAtStartTs bool
+}
+
+func (m *mockDispatcher) GetSink() sink.Sink {
+	return m.sink
 }
 
 func newMockDispatcher(id common.DispatcherID, startTs uint64) *mockDispatcher {
@@ -53,6 +60,7 @@ func newMockDispatcher(id common.DispatcherID, startTs uint64) *mockDispatcher {
 		startTs:      startTs,
 		changefeedID: mockChangefeedID,
 		checkPointTs: startTs,
+		sink:         sink.NewMockSink(common.BlackHoleSinkType),
 	}
 }
 

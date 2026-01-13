@@ -233,14 +233,21 @@ func (o *Option) fix() {
 	}
 }
 
-type sizePolicy interface {
+type SizePolicy interface {
 	fmt.Stringer
 	currentSize() int
 }
 
 // The batch count of handling events. <= 1 means no batch. By default 1.
 type countPolicy struct {
-	current int
+	capacity int
+	current  int
+}
+
+func NewCountPolicy(capacity int) countPolicy {
+	return countPolicy{
+		capacity: capacity,
+	}
 }
 
 func (c countPolicy) String() string {
@@ -253,7 +260,14 @@ func (c countPolicy) currentSize() int {
 
 // The max bytes of the batch. <= 1 means no limit. By default 0.
 type bytesPolicy struct {
-	current int
+	capacity int
+	current  int
+}
+
+func NewBytesPolicy(capacity int) bytesPolicy {
+	return bytesPolicy{
+		capacity: capacity,
+	}
 }
 
 func (c bytesPolicy) currentSize() int {
@@ -265,7 +279,13 @@ func (b bytesPolicy) String() string {
 }
 
 type batcher struct {
-	policy sizePolicy
+	policy SizePolicy
+}
+
+func newBatcher(policy SizePolicy) batcher {
+	return batcher{
+		policy: policy,
+	}
 }
 
 type AreaSettings struct {
@@ -289,16 +309,16 @@ func (s *AreaSettings) fix() {
 	}
 }
 
-func NewAreaSettingsWithMaxPendingSize(size uint64, memoryControlAlgorithm int, component string) AreaSettings {
+func NewAreaSettingsWithMaxPendingSize(quota uint64, memoryControlAlgorithm int, component string, batchSizePolicy SizePolicy) AreaSettings {
 	// The path max pending size is at least 1MB.
-	pathMaxPendingSize := max(size/10, 1*1024*1024)
-
+	pathMaxPendingSize := max(quota/10, 1*1024*1024)
 	return AreaSettings{
 		component:          component,
 		feedbackInterval:   DefaultFeedbackInterval,
-		maxPendingSize:     size,
+		maxPendingSize:     quota,
 		pathMaxPendingSize: pathMaxPendingSize,
 		algorithm:          memoryControlAlgorithm,
+		batcher:            newBatcher(batchSizePolicy),
 	}
 }
 

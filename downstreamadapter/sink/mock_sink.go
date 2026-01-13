@@ -28,6 +28,10 @@ type mockSink struct {
 	sinkType common.SinkType
 }
 
+func (s *mockSink) BatchCapacity() int {
+	return 4096
+}
+
 func (s *mockSink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

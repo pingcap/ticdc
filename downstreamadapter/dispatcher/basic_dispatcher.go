@@ -52,6 +52,7 @@ type DispatcherService interface {
 	GetCheckpointTs() uint64
 	HandleEvents(events []DispatcherEvent, wakeCallback func()) (block bool)
 	IsOutputRawChangeEvent() bool
+	GetSink() sink.Sink
 }
 
 // Dispatcher defines the interface for event dispatchers that are responsible for receiving events
@@ -213,6 +214,10 @@ type BasicDispatcher struct {
 	mode int64
 
 	BootstrapState bootstrapState
+}
+
+func (d *BasicDispatcher) GetSink() sink.Sink {
+	return d.sink
 }
 
 func NewBasicDispatcher(
