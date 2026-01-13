@@ -139,12 +139,15 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Query info: %s; ", event.GetDDLQuery())))
 	}
 
-	if useSessionTimestamp {
-		// log successful DDL execution with timestamp information for debugging
-		log.Info("DDL executed with timestamp",
-			zap.String("query", event.GetDDLQuery()),
-			zap.Float64("sessionTimestamp", ddlTimestamp))
+	logFields := []zap.Field{
+		zap.String("query", event.GetDDLQuery()),
 	}
+
+	if useSessionTimestamp {
+		logFields = append(logFields, zap.Float64("sessionTimestamp", ddlTimestamp))
+	}
+
+	log.Info("Exec DDL succeeded", logFields...)
 
 	return nil
 }
