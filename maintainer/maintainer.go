@@ -80,6 +80,8 @@ type Maintainer struct {
 		*heartbeatpb.Watermark
 	}
 
+	latestWatermark *heartbeatpb.Watermark
+
 	checkpointTsByCapture *WatermarkCaptureMap
 
 	scheduleState atomic.Int32
@@ -234,6 +236,10 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
 
 	m.watermark.Watermark = &heartbeatpb.Watermark{
+		CheckpointTs: checkpointTs,
+		ResolvedTs:   checkpointTs,
+	}
+	m.latestWatermark = &heartbeatpb.Watermark{
 		CheckpointTs: checkpointTs,
 		ResolvedTs:   checkpointTs,
 	}
@@ -722,6 +728,17 @@ func (m *Maintainer) calculateNewCheckpointTs() (*heartbeatpb.Watermark, bool) {
 		zap.Uint64("minCheckpointTsForScheduler", minCheckpointTsForScheduler),
 		zap.Uint64("minCheckpointTsForBarrier", minCheckpointTsForBarrier),
 	)
+
+	if newWatermark.CheckpointTs < m.latestWatermark.CheckpointTs {
+		log.Info("checkpointTs backward", zap.Uint64("newCheckpointTs", newWatermark.CheckpointTs), zap.Uint64("oldCheckpointTs", m.latestWatermark.CheckpointTs))
+		newWatermark.CheckpointTs = m.latestWatermark.CheckpointTs
+	}
+	if newWatermark.ResolvedTs < m.latestWatermark.ResolvedTs {
+		log.Info("resolvedTs backward", zap.Uint64("newResolvedTs", newWatermark.ResolvedTs), zap.Uint64("oldResolvedTs", m.latestWatermark.ResolvedTs))
+		newWatermark.ResolvedTs = m.latestWatermark.ResolvedTs
+	}
+
+	m.latestWatermark = newWatermark
 
 	return newWatermark, true
 }
