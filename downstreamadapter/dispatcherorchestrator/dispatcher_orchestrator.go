@@ -373,8 +373,9 @@ func createBootstrapResponse(
 			response.RedoCheckpointTs = redoStartTs
 		}
 		retrieveRedoDispatcherSpanForBootstrapResponse(manager, response)
+	} else {
+		retrieveDispatcherSpanForBootstrapResponse(manager, response)
 	}
-	retrieveDispatcherSpanForBootstrapResponse(manager, response)
 	retrieveOperatorsForBootstrapResponse(changefeedID, manager, response)
 
 	return response
