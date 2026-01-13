@@ -141,7 +141,7 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 
 	if useSessionTimestamp {
 		// log successful DDL execution with timestamp information for debugging
-		log.Debug("DDL executed with timestamp",
+		log.Info("DDL executed with timestamp",
 			zap.String("query", event.GetDDLQuery()),
 			zap.Float64("sessionTimestamp", ddlTimestamp))
 	}
