@@ -18,9 +18,12 @@ import (
 	"net"
 	"time"
 
+	"github.com/pingcap/kvproto/pkg/diagnosticspb"
 	"github.com/pingcap/log"
+	"github.com/pingcap/sysutil"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
 	"go.uber.org/zap"
@@ -52,6 +55,8 @@ func NewGrpcServer(lis net.Listener) common.SubModule {
 
 	grpcServer := grpc.NewServer(option...)
 	proto.RegisterMessageServiceServer(grpcServer, messaging.NewMessageCenterServer(appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)))
+	diagSvc := sysutil.NewDiagnosticsServer(config.GetGlobalServerConfig().LogFile)
+	diagnosticspb.RegisterDiagnosticsServer(grpcServer, diagSvc)
 	return &GrpcModule{
 		grpcServer: grpcServer,
 		lis:        lis,

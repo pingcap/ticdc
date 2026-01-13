@@ -24,6 +24,7 @@ import (
 
 func InitMetrics(registry *prometheus.Registry) {
 	initServerMetrics(registry)
+	initLoggerMetrics(registry)
 	initSchedulerMetrics(registry)
 	initChangefeedMetrics(registry)
 	initLogCoordinatorMetrics(registry)

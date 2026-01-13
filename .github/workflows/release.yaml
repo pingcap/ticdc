@@ -58,4 +58,4 @@ jobs:
           # Pull the latest release
           docker pull pingcap/ticdc:$VERSION
           \`\`\`"
-          gh release create "$VERSION" --verify-tag -t "$TITLE" -n "$NOTE"
+          gh release create "$VERSION" --prerelease --verify-tag -t "$TITLE" -n "$NOTE"

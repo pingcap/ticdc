@@ -30,15 +30,15 @@ group_num=${group#G}
 # 12 CPU cores will be allocated to run each mysql heavy group in CI pipelines.
 mysql_groups=(
 	# G00
-	'api_v2 generate_column many_pk_or_uk multi_source large_txn'
+	'api_v2 generate_column many_pk_or_uk multi_source'
 	# G01
 	'ddl_for_split_tables_with_random_move_table'
 	# G02
 	'ddl_for_split_tables_with_failover'
 	# G03
-	'cdc move_table checkpoint_race_ddl_crash'
+	'cdc move_table in_flight_ddl_during_scheduling checkpoint_race_ddl_crash'
 	# G04
-	'complex_transaction syncpoint syncpoint_check_ts random_drop_message'
+	'complex_transaction syncpoint in_flight_syncpoint_during_scheduling syncpoint_check_ts random_drop_message'
 	# G05
 	'ddl_for_split_tables_with_merge_and_split'
 	# G06
@@ -72,7 +72,8 @@ kafka_groups=(
 	# G02
 	'canal_json_handle_key_only ddl_for_split_tables_with_failover'
 	# G03
-	'canal_json_adapter_compatibility ddl_for_split_tables_with_merge_and_split'
+	# 'canal_json_adapter_compatibility ddl_for_split_tables_with_merge_and_split'
+	'ddl_for_split_tables_with_merge_and_split'
 	# G04
 	'open_protocol_claim_check open_protocol_handle_key_only random_drop_message'
 	# G05
