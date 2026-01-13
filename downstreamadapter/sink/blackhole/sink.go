@@ -84,3 +84,7 @@ func (s *sink) Run(ctx context.Context) error {
 		}
 	}
 }
+
+func (s *sink) BatchCapacity() int {
+	return 4096
+}

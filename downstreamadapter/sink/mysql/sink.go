@@ -342,3 +342,7 @@ func (s *Sink) Close(removeChangefeed bool) {
 	}
 	s.statistics.Close()
 }
+
+func (s *Sink) BatchCapacity() int {
+	return s.maxTxnRows * len(s.dmlWriter)
+}

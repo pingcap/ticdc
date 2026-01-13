@@ -432,3 +432,7 @@ func (s *sink) Close(_ bool) {
 	}
 	s.storage.Close()
 }
+
+func (s *sink) BatchCapacity() int {
+	return s.cfg.FileSize
+}

@@ -538,3 +538,7 @@ func (s *sink) Close(_ bool) {
 	s.comp.close()
 	s.statistics.Close()
 }
+
+func (s *sink) BatchCapacity() int {
+	return 4096
+}
