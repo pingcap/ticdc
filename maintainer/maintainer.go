@@ -1174,9 +1174,11 @@ func (m *Maintainer) setWatermark(newWatermark heartbeatpb.Watermark) {
 		if newWatermark.CheckpointTs < old {
 			log.Panic(fmt.Sprintf("checkpoint regressed: old=%d new=%d", old, newWatermark.CheckpointTs))
 		}
-		m.watermark.CheckpointTs = newWatermark.CheckpointTs
+		if newWatermark.CheckpointTs > old {
+			m.watermark.CheckpointTs = newWatermark.CheckpointTs
+		}
 	}
-	if newWatermark.ResolvedTs != math.MaxUint64 {
+	if newWatermark.ResolvedTs != math.MaxUint64 && newWatermark.ResolvedTs > m.watermark.ResolvedTs {
 		m.watermark.ResolvedTs = newWatermark.ResolvedTs
 	}
 }
