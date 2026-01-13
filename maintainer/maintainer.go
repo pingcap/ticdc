@@ -699,6 +699,11 @@ func (m *Maintainer) calculateNewCheckpointTs() (*heartbeatpb.Watermark, bool) {
 				zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs))
 			continue
 		}
+		log.Info("capture heartbeat for checkpointTs",
+			zap.Stringer("changefeedID", m.changefeedID),
+			zap.Any("node", id),
+			zap.Uint64("checkpointTs", watermark.CheckpointTs),
+			zap.Uint64("resolvedTs", watermark.ResolvedTs))
 		// Apply heartbeat constraint - can only make checkpointTs smaller (safer)
 		newWatermark.UpdateMin(watermark)
 	}
