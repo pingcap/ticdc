@@ -268,7 +268,8 @@ func (c *EventCollector) PrepareAddDispatcher(
 
 	ds := c.getDynamicStream(target.GetMode())
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector")
-	err := ds.AddPath(target.GetId(), stat, areaSetting)
+	ds.AddArea(changefeedID.ID(), areaSetting)
+	err := ds.AddPath(target.GetId(), stat)
 	if err != nil {
 		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
 	}
@@ -329,6 +330,8 @@ func (c *EventCollector) RemoveDispatcher(target dispatcher.DispatcherService) {
 			stat.removeMetrics()
 			log.Info("last dispatcher removed, clean up changefeed stat", zap.Stringer("changefeedID", target.GetChangefeedID()))
 		}
+		c.ds.RemoveArea(changefeedID.ID())
+		c.redoDs.RemoveArea(changefeedID.ID())
 	}
 }
 

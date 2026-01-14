@@ -111,7 +111,8 @@ func TestParallelDynamicStreamMemoryControl(t *testing.T) {
 	require.NotNil(t, stream.feedbackChan)
 	settings := AreaSettings{maxPendingSize: 1024, feedbackInterval: 10 * time.Millisecond}
 	// The path is belong to area 0
-	stream.AddPath("path1", "dest1", settings)
+	stream.AddArea(0, settings)
+	stream.AddPath("path1", "dest1")
 	stream.pathMap.RLock()
 	require.Equal(t, 1, len(stream.pathMap.m))
 	pi := stream.pathMap.m["path1"]
