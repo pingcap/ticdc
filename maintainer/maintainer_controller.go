@@ -189,9 +189,28 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 		}
 		spanController.UpdateStatus(stm, status)
 
-		// If a dispatcher becomes non-working but there's no operator handling it,
-		// it means the dispatcher is removed unexpectedly (e.g. maintainer failover loses the operator),
-		// and we must reschedule it to avoid the dispatcher being lost forever.
+		// Fallback: dispatcher becomes non-working without an operator.
+		//
+		// In normal scheduling flow, a dispatcher should transition to Stopped/Removed as part of a maintainer
+		// operator (Remove/Move/Split...). However, after maintainer failover we can lose operatorController state
+		// while dispatcher managers keep executing the already-issued requests.
+		//
+		// A real example is a "remove request in transit" during bootstrap:
+		// - Old maintainer sends a Remove (e.g. the remove-origin phase of Move), but the request hasn't reached
+		//   dispatcher manager yet.
+		// - New maintainer bootstraps from dispatcher manager snapshots and sees the dispatcher as Working, with
+		//   no in-flight operator reported in bootstrap response.
+		// - After bootstrap, the in-transit Remove arrives, the dispatcher is removed, and the new maintainer
+		//   observes a terminal status without a corresponding operator.
+		//
+		// In these cases we'd observe a non-working status but have no operator to drive the follow-up
+		// rescheduling, so we mark the span absent to let the scheduler recreate it.
+		//
+		// Safety against message reordering/resend:
+		// - We only reach here when stm != nil and stm.GetNodeID() == from (checked above). If the span was already
+		//   rebound to a different node, we skip it, so late statuses from the old node won't trigger rescheduling.
+		// - MarkSpanAbsent is idempotent and only affects the scheduler state, so even if we get duplicate terminal
+		//   statuses, the worst case is an extra no-op absent mark.
 		if status.ComponentStatus == heartbeatpb.ComponentState_Stopped ||
 			status.ComponentStatus == heartbeatpb.ComponentState_Removed {
 			if op := operatorController.GetOperator(dispatcherID); op == nil {

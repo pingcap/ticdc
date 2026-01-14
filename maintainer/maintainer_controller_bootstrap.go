@@ -240,11 +240,14 @@ func (c *Controller) processTableSpans(
 	replicaSets := spanController.GetTasksByTableID(table.TableID)
 	isTableSpanExists := replicaSets != nil && len(replicaSets) > 0
 	splitEnabled := spanController.ShouldEnableSplit(table.Splitable)
-	// During bootstrap we may have already created replica sets in spanController (for example by restoring
-	// in-flight create/remove operators from dispatcher managers). Those replica sets may not show up in
-	// workingTaskMap (which only comes from resp.Spans snapshots). Treat them as existing so we don't
-	// create duplicate spans and so hole detection sees a complete span coverage picture.
-	// Add new table if not working
+	// During bootstrap we have two sources of "table already exists" information:
+	//   - workingTaskMap: dispatchers reported by dispatcher managers (bootstrap snapshots resp.Spans).
+	//   - spanController tasks: replica sets created locally by the maintainer bootstrap (for example by restoring
+	//     in-flight create/remove operators), which may not be visible in workingTaskMap yet.
+	//
+	// Therefore it is possible that isTableWorking==false but isTableSpanExists==true: the table exists in
+	// maintainer state, but the dispatcher is not observed as Working on any node snapshot (e.g. a Create operator
+	// is still in-flight). In this case we must not create another replica set for the same table.
 	if isTableWorking || isTableSpanExists {
 		// Handle existing table spans
 		keyspaceID := c.GetKeyspaceID()
@@ -255,9 +258,15 @@ func (c *Controller) processTableSpans(
 			EndKey:     span.EndKey,
 			KeyspaceID: keyspaceID,
 		}
-		log.Info("table already working in other node",
-			zap.Stringer("changefeed", c.changefeedID),
-			zap.Int64("tableID", table.TableID))
+		if isTableWorking {
+			log.Info("table already reported by bootstrap snapshots",
+				zap.Stringer("changefeed", c.changefeedID),
+				zap.Int64("tableID", table.TableID))
+		} else {
+			log.Info("table spans already exist in span controller during bootstrap",
+				zap.Stringer("changefeed", c.changefeedID),
+				zap.Int64("tableID", table.TableID))
+		}
 
 		if isTableWorking {
 			spanController.AddWorkingSpans(tableSpans)
@@ -500,7 +509,7 @@ func indexBootstrapSpans(
 
 // restoreCurrentWorkingOperators rebuilds maintainer-side operators from dispatcher managers' bootstrap responses.
 //
-// Why this exists:
+// Why:
 //   - The dispatcher manager may still be executing scheduling requests (create/remove dispatcher) issued by a
 //     previous maintainer instance.
 //   - After a maintainer failover/restart, operatorController state is lost. If we ignore these in-flight requests,
@@ -549,8 +558,13 @@ func (c *Controller) restoreCurrentWorkingOperators(
 			spanInfo := spanInfoByID[dispatcherID]
 			span := req.Config.Span
 			schemaID := req.Config.SchemaID
-			// Dispatcher managers may report an operator with partial config (e.g. remove after the dispatcher
-			// already disappeared). When possible, enrich it from the node's span snapshot.
+			// Dispatcher managers may report an operator with partial config.
+			// - For Create: the request is stored before the dispatcher is created, so it won't appear in resp.Spans yet.
+			// - For Remove: maintainer may remove an "orphan dispatcher" without knowing the exact span/schemaID, so
+			//   Config.Span/SchemaID can be missing (protobuf default zero values).
+			//
+			// When possible, enrich missing fields from the node's span snapshot so we can rebuild SpanReplication
+			// and restore maintainer-side operators deterministically.
 			if spanInfo != nil {
 				if span == nil {
 					span = spanInfo.Span
@@ -571,6 +585,13 @@ func (c *Controller) restoreCurrentWorkingOperators(
 			spanController := c.getSpanController(req.Config.Mode)
 			replicaSet := spanController.GetTaskByID(dispatcherID)
 
+			// From this point on:
+			// - span/schemaID are best-effort normalized (using resp.Spans when possible).
+			// - replicaSet reflects maintainer's current in-memory task state (may be nil before tasks are rebuilt).
+			// - spanInfo reflects runtime snapshot on this node (nil when the dispatcher does not exist on the node).
+			//
+			// The branches below handle the expected combinations we can observe during failover and turn them
+			// back into maintainer-side operators so the system keeps converging.
 			switch req.ScheduleAction {
 			case heartbeatpb.ScheduleAction_Create:
 				// Create is only meaningful if the dispatcher does not already exist. If the node snapshot already
@@ -626,8 +647,10 @@ func (c *Controller) restoreCurrentWorkingOperators(
 					)
 					spanController.AddReplicatingSpan(replicaSet)
 				} else if replicaSet.GetNodeID() == "" {
-					// A restored replica set created from schema store may not be bound to a node yet.
-					// Bind it so the remove operator sends the request to the correct dispatcher manager.
+					// A replica set reconstructed from schema store (during maintainer restart) may not be
+					// bound to a node yet, because we haven't processed bootstrap snapshots to learn the
+					// actual runtime placement. Bind it so the remove operator sends the request to the
+					// correct dispatcher manager.
 					replicaSet.SetNodeID(node)
 				}
 				err, done := c.handleCurrentWorkingRemove(req, spanController, replicaSet, node, resp)

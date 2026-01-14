@@ -44,7 +44,17 @@ type AddDispatcherOperator struct {
 	//   - The task is removed (for example, due to DDL).
 	removed        atomic.Bool
 	spanController *span.Controller
-	// This add operator may be a part of move/split operator
+	// operatorType is copied into ScheduleDispatcherRequest.OperatorType when we send add requests to
+	// dispatcher managers.
+	//
+	// Why we need it:
+	// Dispatcher managers persist unfinished scheduling requests in their bootstrap responses, so a new
+	// maintainer can restore in-flight operators after failover. operatorType tells the maintainer which
+	// high-level operator this "create dispatcher" request belongs to (Add vs Split, etc.), even though the
+	// dispatcher manager itself only executes Create/Remove.
+	//
+	// Note: Not every maintainer operator needs this field. Operators that use dedicated message types
+	// (for example merge) don't go through ScheduleDispatcherRequest and therefore don't need operatorType here.
 	operatorType heartbeatpb.OperatorType
 
 	sendThrottler sendThrottler

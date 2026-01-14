@@ -238,8 +238,12 @@ func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *Dispatcher
 // request should proceed. The precheck filters out:
 //   - invalid requests (nil request/config/dispatcherID),
 //   - redo requests when redo is disabled,
-//   - duplicate in-flight operators for the same dispatcherID,
+//   - duplicate Create requests for the same dispatcherID while another operator is in-flight,
 //   - Create requests for an already-existing dispatcher (idempotent no-op).
+//
+// Remove requests are treated as "terminal": they are allowed to proceed even when another operator is
+// currently in-flight for the same dispatcher. This prevents a dropped Remove from leaving a dispatcher
+// behind (for example, when a table is dropped while a Move operator is in the "add dest" phase).
 //
 // Note: Remove requests are allowed to proceed even if the dispatcher doesn't exist (we still want to emit a
 // terminal status to the maintainer), but we must be careful not to store such requests (see handleScheduleRemove),
@@ -263,8 +267,27 @@ func preCheckForSchedulerHandler(req SchedulerDispatcherRequest, dispatcherManag
 	if isRedo && (!dispatcherManager.RedoEnable || dispatcherManager.redoDispatcherMap == nil) {
 		return common.DispatcherID{}, false
 	}
-	if _, operatorExists := dispatcherManager.currentOperatorMap.Load(operatorKey); operatorExists {
-		return common.DispatcherID{}, false
+	if existing, operatorExists := dispatcherManager.currentOperatorMap.Load(operatorKey); operatorExists {
+		// Create requests must be serialized per dispatcherID; otherwise we can end up creating multiple
+		// dispatchers for the same span/dispatcherID.
+		//
+		// Remove requests are special: if a higher-level operator (e.g. Move) is in progress and a table
+		// gets dropped, the maintainer can legitimately send a Remove while we still have an in-flight Create.
+		// We allow Remove to proceed and proactively cancel any stored Create request to avoid creating a
+		// dispatcher after it should have been removed.
+		if req.ScheduleAction == heartbeatpb.ScheduleAction_Create {
+			return common.DispatcherID{}, false
+		}
+		if existingReq, ok := existing.(SchedulerDispatcherRequest); ok &&
+			existingReq.ScheduleAction == heartbeatpb.ScheduleAction_Create {
+			dispatcherManager.currentOperatorMap.Delete(operatorKey)
+			log.Info("cancel in-flight create operator due to incoming remove request",
+				zap.String("changefeedID", dispatcherManager.changefeedID.String()),
+				zap.String("dispatcherID", operatorKey.String()),
+				zap.String("originOperatorType", existingReq.OperatorType.String()),
+				zap.String("incomingOperatorType", req.OperatorType.String()),
+			)
+		}
 	}
 
 	// If there is already an operator for the dispatcher, skip this request.
@@ -383,44 +406,94 @@ func createDispatcherByInfo(
 	redoInfos map[common.DispatcherID]dispatcherCreateInfo,
 ) {
 	if len(redoInfos) > 0 {
-		err := dispatcherManager.newRedoDispatchers(redoInfos, false)
-		if err != nil {
-			dispatcherManager.handleError(context.Background(), err)
+		// Create can be cancelled by a concurrent Remove (e.g. table is dropped while a Move operator is in-flight).
+		// Before creating dispatchers, re-check currentOperatorMap to avoid creating a dispatcher after its Create
+		// operator is already superseded/cancelled.
+		filteredRedoInfos := make(map[common.DispatcherID]dispatcherCreateInfo, len(redoInfos))
+		for id, info := range redoInfos {
+			if v, ok := dispatcherManager.currentOperatorMap.Load(id); ok {
+				operator := v.(SchedulerDispatcherRequest)
+				if operator.ScheduleAction == heartbeatpb.ScheduleAction_Create {
+					filteredRedoInfos[id] = info
+					continue
+				}
+			}
+			log.Debug("skip creating redo dispatcher because create operator is cancelled or superseded",
+				zap.String("changefeedID", dispatcherManager.changefeedID.String()),
+				zap.String("dispatcherID", id.String()),
+			)
 		}
-		for _, info := range redoInfos {
-			// Create requests are stored in currentOperatorMap before creation.
-			// If we can't find it here, something already deleted it or skipped storing unexpectedly.
-			if v, ok := dispatcherManager.currentOperatorMap.Load(info.Id); ok {
-				req := v.(SchedulerDispatcherRequest)
-				log.Debug("delete current working add operator for redo dispatcher",
-					zap.String("changefeedID", dispatcherManager.changefeedID.String()),
-					zap.String("dispatcherID", info.Id.String()),
-					zap.Any("operator", req),
-				)
-				dispatcherManager.currentOperatorMap.Delete(info.Id)
-			} else {
-				log.Error("current working operator not found for redo dispatcher, should not happen", zap.String("id", info.Id.String()))
+		if len(filteredRedoInfos) > 0 {
+			err := dispatcherManager.newRedoDispatchers(filteredRedoInfos, false)
+			if err != nil {
+				dispatcherManager.handleError(context.Background(), err)
+			}
+			for _, info := range filteredRedoInfos {
+				// Create requests are stored in currentOperatorMap before creation and should be deleted once the
+				// dispatcher is created, unless it has been superseded by a Remove.
+				if v, ok := dispatcherManager.currentOperatorMap.Load(info.Id); ok {
+					req := v.(SchedulerDispatcherRequest)
+					if req.ScheduleAction == heartbeatpb.ScheduleAction_Create {
+						log.Debug("delete current working add operator for redo dispatcher",
+							zap.String("changefeedID", dispatcherManager.changefeedID.String()),
+							zap.String("dispatcherID", info.Id.String()),
+							zap.Any("operator", req),
+						)
+						dispatcherManager.currentOperatorMap.Delete(info.Id)
+					}
+				} else {
+					// The operator may have been cancelled by a concurrent Remove request; not an error.
+					log.Debug("current working create operator already gone for redo dispatcher",
+						zap.String("changefeedID", dispatcherManager.changefeedID.String()),
+						zap.String("dispatcherID", info.Id.String()),
+					)
+				}
 			}
 		}
 	}
 	if len(infos) > 0 {
-		err := dispatcherManager.newEventDispatchers(infos, false)
-		if err != nil {
-			dispatcherManager.handleError(context.Background(), err)
+		// Create can be cancelled by a concurrent Remove (e.g. table is dropped while a Move operator is in-flight).
+		// Before creating dispatchers, re-check currentOperatorMap to avoid creating a dispatcher after its Create
+		// operator is already superseded/cancelled.
+		filteredInfos := make(map[common.DispatcherID]dispatcherCreateInfo, len(infos))
+		for id, info := range infos {
+			if v, ok := dispatcherManager.currentOperatorMap.Load(id); ok {
+				operator := v.(SchedulerDispatcherRequest)
+				if operator.ScheduleAction == heartbeatpb.ScheduleAction_Create {
+					filteredInfos[id] = info
+					continue
+				}
+			}
+			log.Debug("skip creating dispatcher because create operator is cancelled or superseded",
+				zap.String("changefeedID", dispatcherManager.changefeedID.String()),
+				zap.String("dispatcherID", id.String()),
+			)
 		}
-		for _, info := range infos {
-			// Create requests are stored in currentOperatorMap before creation.
-			// If we can't find it here, something already deleted it or skipped storing unexpectedly.
-			if v, ok := dispatcherManager.currentOperatorMap.Load(info.Id); ok {
-				req := v.(SchedulerDispatcherRequest)
-				log.Debug("delete current working add operator",
-					zap.String("changefeedID", dispatcherManager.changefeedID.String()),
-					zap.String("dispatcherID", info.Id.String()),
-					zap.Any("operator", req),
-				)
-				dispatcherManager.currentOperatorMap.Delete(info.Id)
-			} else {
-				log.Error("current working operator not found, should not happen", zap.String("id", info.Id.String()))
+		if len(filteredInfos) > 0 {
+			err := dispatcherManager.newEventDispatchers(filteredInfos, false)
+			if err != nil {
+				dispatcherManager.handleError(context.Background(), err)
+			}
+			for _, info := range filteredInfos {
+				// Create requests are stored in currentOperatorMap before creation and should be deleted once the
+				// dispatcher is created, unless it has been superseded by a Remove.
+				if v, ok := dispatcherManager.currentOperatorMap.Load(info.Id); ok {
+					req := v.(SchedulerDispatcherRequest)
+					if req.ScheduleAction == heartbeatpb.ScheduleAction_Create {
+						log.Debug("delete current working add operator",
+							zap.String("changefeedID", dispatcherManager.changefeedID.String()),
+							zap.String("dispatcherID", info.Id.String()),
+							zap.Any("operator", req),
+						)
+						dispatcherManager.currentOperatorMap.Delete(info.Id)
+					}
+				} else {
+					// The operator may have been cancelled by a concurrent Remove request; not an error.
+					log.Debug("current working create operator already gone",
+						zap.String("changefeedID", dispatcherManager.changefeedID.String()),
+						zap.String("dispatcherID", info.Id.String()),
+					)
+				}
 			}
 		}
 	}

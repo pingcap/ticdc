@@ -2,6 +2,23 @@
 
 set -eu
 
+# This integration test verifies operator consistency across maintainer failover.
+#
+# What it validates:
+# - Dispatcher managers persist "in-flight" scheduling requests (Create/Remove with an OperatorType).
+# - After the maintainer fails over, the new maintainer can restore these unfinished operators from
+#   bootstrap responses and keep table scheduling converging instead of leaking or duplicating dispatchers.
+#
+# Main steps (per subcase):
+# 1) Start a 3-capture CDC cluster and create a changefeed.
+# 2) Trigger Move / Split / Remove / Create operators and keep them in-progress using failpoints.
+# 3) Kill the current maintainer capture to force a maintainer move.
+# 4) Disable failpoints and verify tables eventually converge (scheduled on a live capture, dropped table
+#    stays dropped, and downstream data matches upstream via sync-diff).
+#
+# Subcases:
+# - mode=0 (default): run on all supported sink types.
+# - mode=1 (redo): only run for mysql sink because redo config requires DB downstream.
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
 ROOT_WORK_DIR=$OUT_DIR/$TEST_NAME

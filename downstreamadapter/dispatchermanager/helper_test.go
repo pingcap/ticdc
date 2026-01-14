@@ -221,3 +221,49 @@ func TestCheckpointTsMessageHandlerDeadlock(t *testing.T) {
 		}
 	})
 }
+
+func TestPreCheckForSchedulerHandler_RemoveCancelsInFlightCreate(t *testing.T) {
+	t.Parallel()
+
+	// Scenario:
+	// 1) Dispatcher manager has already recorded a Create request in currentOperatorMap,
+	//    but the dispatcher isn't created yet (for example, move is in add-dest phase).
+	// 2) The table is dropped and maintainer sends a Remove request for the same dispatcherID.
+	//
+	// Expectation:
+	// The Remove request must not be dropped, and the stored Create operator should be cancelled so we don't
+	// create a dispatcher after the table should have been removed.
+	dispatcherID := common.NewDispatcherID()
+	dm := &DispatcherManager{
+		changefeedID:  common.NewChangeFeedIDWithName("test-changefeed", "test-namespace"),
+		dispatcherMap: newDispatcherMap[*dispatcher.EventDispatcher](),
+	}
+
+	createReq := NewSchedulerDispatcherRequest(&heartbeatpb.ScheduleDispatcherRequest{
+		ChangefeedID: &heartbeatpb.ChangefeedID{Keyspace: "test-namespace", Name: "test-changefeed"},
+		Config: &heartbeatpb.DispatcherConfig{
+			DispatcherID: dispatcherID.ToPB(),
+			Mode:         0,
+		},
+		ScheduleAction: heartbeatpb.ScheduleAction_Create,
+		OperatorType:   heartbeatpb.OperatorType_O_Move,
+	})
+	dm.currentOperatorMap.Store(dispatcherID, createReq)
+
+	removeReq := NewSchedulerDispatcherRequest(&heartbeatpb.ScheduleDispatcherRequest{
+		ChangefeedID: &heartbeatpb.ChangefeedID{Keyspace: "test-namespace", Name: "test-changefeed"},
+		Config: &heartbeatpb.DispatcherConfig{
+			DispatcherID: dispatcherID.ToPB(),
+			Mode:         0,
+		},
+		ScheduleAction: heartbeatpb.ScheduleAction_Remove,
+		OperatorType:   heartbeatpb.OperatorType_O_Remove,
+	})
+
+	operatorKey, ok := preCheckForSchedulerHandler(removeReq, dm)
+	require.True(t, ok)
+	require.Equal(t, dispatcherID, operatorKey)
+
+	_, operatorExists := dm.currentOperatorMap.Load(dispatcherID)
+	require.False(t, operatorExists, "create operator should be cancelled by remove")
+}

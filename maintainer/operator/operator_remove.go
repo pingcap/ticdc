@@ -35,7 +35,17 @@ type removeDispatcherOperator struct {
 	finished       atomic.Bool
 	postFinish     func()
 	spanController *span.Controller
-	// This remove operator may be a part of move/split operator
+	// operatorType is copied into ScheduleDispatcherRequest.OperatorType when we send remove requests to
+	// dispatcher managers.
+	//
+	// Why we need it:
+	// Dispatcher managers include unfinished scheduling requests in their bootstrap responses so a new maintainer
+	// can restore in-flight operators after failover. operatorType tells the maintainer which high-level operator
+	// the removal belongs to (standalone Remove vs being part of Move/Split, etc.), while the dispatcher manager
+	// itself only performs Create/Remove actions.
+	//
+	// Note: Some operators do not carry operatorType because they use dedicated request types instead of
+	// ScheduleDispatcherRequest (for example merge-related messages).
 	operatorType heartbeatpb.OperatorType
 
 	sendThrottler sendThrottler
