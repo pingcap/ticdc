@@ -832,6 +832,11 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 }
 
 func (d *BasicDispatcher) cancelResendTask(identifier BlockEventIdentifier) {
+	defer func() {
+		log.Info("cancel resend task",
+			zap.Stringer("dispatcherID", d.id),
+			zap.Any("identifier", identifier))
+	}()
 	task := d.resendTaskMap.Get(identifier)
 	if task == nil {
 		return
