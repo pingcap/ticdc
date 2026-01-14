@@ -267,13 +267,8 @@ func (c *EventCollector) PrepareAddDispatcher(
 	cfStat.dispatcherCount.Add(1)
 
 	ds := c.getDynamicStream(target.GetMode())
-	s := target.GetSink()
-	batchType := dynstream.BatchTypeCount
-	batchCapacity := 1
-	if s != nil {
-		batchType = batchTypeBySink(s.SinkType())
-		batchCapacity = s.BatchCapacity()
-	}
+
+	batchType, batchCapacity := batchTypeBySinkAndCapacity(target)
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize[dispatcher.DispatcherEvent](
 		memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector",
 		batchType, batchCapacity,
@@ -285,12 +280,17 @@ func (c *EventCollector) PrepareAddDispatcher(
 	stat.run()
 }
 
-func batchTypeBySink(sinkType common.SinkType) dynstream.BatchType {
+func batchTypeBySinkAndCapacity(dispatcher dispatcher.DispatcherService) (dynstream.BatchType, int) {
+	sink := dispatcher.GetSink()
+	if sink == nil {
+		return dynstream.BatchTypeCount, 1
+	}
+	capacity := sink.BatchCapacity()
 	batchType := dynstream.BatchTypeCount
-	if sinkType == common.CloudStorageSinkType {
+	if sink.SinkType() == common.CloudStorageSinkType {
 		batchType = dynstream.BatchTypeSize
 	}
-	return batchType
+	return batchType, capacity
 }
 
 // CommitAddDispatcher notify local event service that the dispatcher is ready to receive events.
