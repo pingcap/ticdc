@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -34,10 +35,17 @@ func UpstreamDownstreamNotSame(
 	}
 
 	upID := upPD.GetClusterID(ctx)
-	downID, isTiDB, err := getClusterIDBySinkURIFn(ctx, changefeedCfg.SinkURI, changefeedCfg)
+	upKeyspace := changefeedCfg.ChangefeedID.Keyspace()
+	if upKeyspace == "" {
+		upKeyspace = common.DefaultKeyspaceNamme
+	}
+
+	downID, downKeyspace, isTiDB, err := getClusterIDBySinkURIFn(ctx, changefeedCfg.SinkURI, changefeedCfg)
 	log.Debug("check upstream and downstream cluster",
 		zap.Uint64("upID", upID),
+		zap.String("upKeyspace", upKeyspace),
 		zap.Uint64("downID", downID),
+		zap.String("downKeyspace", downKeyspace),
 		zap.Bool("isTiDB", isTiDB),
 		zap.String("sinkURI", util.MaskSensitiveDataInURI(changefeedCfg.SinkURI)))
 	if err != nil {
@@ -49,27 +57,41 @@ func UpstreamDownstreamNotSame(
 	if !isTiDB {
 		return true, nil
 	}
-	return upID != downID, nil
+
+	// In TiDB Classic, `cluster_id` identifies the whole cluster. In TiDB Next-Gen, a physical
+	// cluster can contain multiple logical clusters (keyspaces), and all keyspaces share the same
+	// `cluster_id`. To avoid blocking valid cross-keyspace replication, treat (cluster_id, keyspace)
+	// as the cluster identity when both sides are TiDB and keyspace is available.
+	if upID != downID {
+		return true, nil
+	}
+	if downKeyspace == "" {
+		// If the downstream keyspace can't be determined, keep the legacy behavior: treat the same
+		// physical cluster as "same" to prevent accidental self-replication loops.
+		return false, nil
+	}
+	return !strings.EqualFold(upKeyspace, downKeyspace), nil
 }
 
-// getClusterIDBySinkURI gets the cluster ID by the sink URI.
-// Returns the cluster ID, whether it is a TiDB cluster, and an error.
+// getClusterIDBySinkURI gets the downstream TiDB cluster ID and keyspace name by the sink URI.
+// Returns the cluster ID, keyspace name (empty if unavailable), whether it is a TiDB cluster,
+// and an error.
 func getClusterIDBySinkURI(
 	ctx context.Context, sinkURI string, changefeedCfg *config.ChangefeedConfig,
-) (uint64, bool, error) {
+) (uint64, string, bool, error) {
 	uri, err := url.Parse(sinkURI)
 	if err != nil {
-		return 0, false, cerrors.WrapError(cerrors.ErrSinkURIInvalid, err, sinkURI)
+		return 0, "", false, cerrors.WrapError(cerrors.ErrSinkURIInvalid, err, sinkURI)
 	}
 
 	scheme := config.GetScheme(uri)
 	if !config.IsMySQLCompatibleScheme(scheme) {
-		return 0, false, nil
+		return 0, "", false, nil
 	}
 
 	_, db, err := newMySQLConfigAndDBFn(ctx, changefeedCfg.ChangefeedID, uri, changefeedCfg)
 	if err != nil {
-		return 0, true, cerrors.Trace(err)
+		return 0, "", true, cerrors.Trace(err)
 	}
 	defer func() { _ = db.Close() }()
 
@@ -85,22 +107,68 @@ func getClusterIDBySinkURI(
 	if err != nil {
 		// If the cluster ID is unavailable (for example, legacy TiDB),
 		// do not block creating/updating/resuming a changefeed.
-		return 0, false, nil
+		return 0, "", false, nil
 	}
 	clusterID, err := strconv.ParseUint(clusterIDStr, 10, 64)
 	if err != nil {
-		return 0, true, cerrors.Trace(err)
+		return 0, "", true, cerrors.Trace(err)
 	}
-	return clusterID, true, nil
+
+	keyspace, err := getTiDBKeyspaceName(ctx, db)
+	if err != nil {
+		// The keyspace is only used to distinguish logical clusters in Next-Gen.
+		// If it can't be determined, fall back to the legacy physical-cluster-only check.
+		log.Debug("failed to get downstream TiDB keyspace name",
+			zap.String("sinkURI", util.MaskSensitiveDataInURI(sinkURI)),
+			zap.Error(err))
+		keyspace = ""
+	}
+	return clusterID, keyspace, true, nil
+}
+
+func getTiDBKeyspaceName(ctx context.Context, db *sql.DB) (string, error) {
+	// TiDB exposes the current keyspace via `SHOW CONFIG`. It returns one row per TiDB instance.
+	// For this check we only need the keyspace name, and we expect all instances to agree.
+	rows, err := db.QueryContext(ctx,
+		"show config where type = 'tidb' and name = 'keyspace-name'")
+	if err != nil {
+		return "", cerrors.Trace(err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var keyspace string
+	var hasRow bool
+	for rows.Next() {
+		// Columns: Type | Instance | Name | Value
+		var typ, instance, name, value string
+		if err := rows.Scan(&typ, &instance, &name, &value); err != nil {
+			return "", cerrors.Trace(err)
+		}
+		if !hasRow {
+			keyspace = value
+			hasRow = true
+			continue
+		}
+		if value != keyspace {
+			return "", cerrors.New("downstream TiDB reports inconsistent keyspace-name across instances")
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", cerrors.Trace(err)
+	}
+	if !hasRow {
+		return "", cerrors.Trace(sql.ErrNoRows)
+	}
+	return keyspace, nil
 }
 
 // GetGetClusterIDBySinkURIFn returns the getClusterIDBySinkURIFn function. It is used for testing.
-func GetGetClusterIDBySinkURIFn() func(context.Context, string, *config.ChangefeedConfig) (uint64, bool, error) {
+func GetGetClusterIDBySinkURIFn() func(context.Context, string, *config.ChangefeedConfig) (uint64, string, bool, error) {
 	return getClusterIDBySinkURIFn
 }
 
 // SetGetClusterIDBySinkURIFnForTest sets the getClusterIDBySinkURIFn function for testing.
-func SetGetClusterIDBySinkURIFnForTest(fn func(context.Context, string, *config.ChangefeedConfig) (uint64, bool, error)) {
+func SetGetClusterIDBySinkURIFnForTest(fn func(context.Context, string, *config.ChangefeedConfig) (uint64, string, bool, error)) {
 	getClusterIDBySinkURIFn = fn
 }
 

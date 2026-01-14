@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/url"
+	"regexp"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -26,6 +27,8 @@ func (m *mockPDClient) GetClusterID(ctx context.Context) uint64 {
 }
 
 func TestGetClusterIDBySinkURI(t *testing.T) {
+	// This test uses sqlmock to emulate different downstream flavors and failure modes,
+	// and verifies we can determine TiDB `cluster_id` and (when available) the keyspace name.
 	oldNewFn := newMySQLConfigAndDBFn
 	defer func() { newMySQLConfigAndDBFn = oldNewFn }()
 
@@ -41,21 +44,23 @@ func TestGetClusterIDBySinkURI(t *testing.T) {
 			return nil, nil, errors.New("should not be called")
 		}
 
-		id, isTiDB, err := getClusterIDBySinkURI(context.Background(), "kafka://127.0.0.1:9092/topic", changefeedCfg)
+		id, keyspace, isTiDB, err := getClusterIDBySinkURI(context.Background(), "kafka://127.0.0.1:9092/topic", changefeedCfg)
 		require.NoError(t, err)
 		require.False(t, isTiDB)
 		require.Equal(t, uint64(0), id)
+		require.Equal(t, "", keyspace)
 		require.False(t, called)
 	})
 
 	t.Run("invalid uri", func(t *testing.T) {
-		id, isTiDB, err := getClusterIDBySinkURI(context.Background(), "mysql://[::1", changefeedCfg)
+		id, keyspace, isTiDB, err := getClusterIDBySinkURI(context.Background(), "mysql://[::1", changefeedCfg)
 		require.Error(t, err)
 		code, ok := cerrors.RFCCode(err)
 		require.True(t, ok)
 		require.Equal(t, cerrors.ErrSinkURIInvalid.RFCCode(), code)
 		require.False(t, isTiDB)
 		require.Equal(t, uint64(0), id)
+		require.Equal(t, "", keyspace)
 	})
 
 	t.Run("connect error", func(t *testing.T) {
@@ -63,7 +68,7 @@ func TestGetClusterIDBySinkURI(t *testing.T) {
 			return nil, nil, errors.New("connect error")
 		}
 
-		_, _, err := getClusterIDBySinkURI(context.Background(), "mysql://root@127.0.0.1:3306/", changefeedCfg)
+		_, _, _, err := getClusterIDBySinkURI(context.Background(), "mysql://root@127.0.0.1:3306/", changefeedCfg)
 		require.ErrorContains(t, err, "connect error")
 	})
 
@@ -79,14 +84,17 @@ func TestGetClusterIDBySinkURI(t *testing.T) {
 			return &mysqlsink.Config{IsTiDB: false}, db, nil
 		}
 
-		id, isTiDB, err := getClusterIDBySinkURI(context.Background(), "mysql://root@127.0.0.1:3306/", changefeedCfg)
+		id, keyspace, isTiDB, err := getClusterIDBySinkURI(context.Background(), "mysql://root@127.0.0.1:3306/", changefeedCfg)
 		require.NoError(t, err)
 		require.False(t, isTiDB)
 		require.Equal(t, uint64(0), id)
+		require.Equal(t, "", keyspace)
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
 	t.Run("cluster id available even if IsTiDB false", func(t *testing.T) {
+		// Even if TiDB detection via `SELECT tidb_version()` fails, being able to read
+		// `mysql.tidb.cluster_id` is a reliable indicator that the sink is TiDB.
 		db, mock, err := sqlmock.New()
 		require.NoError(t, err)
 		defer db.Close()
@@ -95,14 +103,20 @@ func TestGetClusterIDBySinkURI(t *testing.T) {
 		mock.ExpectQuery("SELECT VARIABLE_VALUE FROM mysql.tidb WHERE VARIABLE_NAME = 'cluster_id'").
 			WillReturnRows(rows)
 
+		keyspaceRows := sqlmock.NewRows([]string{"Type", "Instance", "Name", "Value"}).
+			AddRow("tidb", "127.0.0.1:4000", "keyspace-name", "default")
+		mock.ExpectQuery(regexp.QuoteMeta("show config where type = 'tidb' and name = 'keyspace-name'")).
+			WillReturnRows(keyspaceRows)
+
 		newMySQLConfigAndDBFn = func(context.Context, common.ChangeFeedID, *url.URL, *config.ChangefeedConfig) (*mysqlsink.Config, *sql.DB, error) {
 			return &mysqlsink.Config{IsTiDB: false}, db, nil
 		}
 
-		id, isTiDB, err := getClusterIDBySinkURI(context.Background(), "mysql://root@127.0.0.1:3306/", changefeedCfg)
+		id, keyspace, isTiDB, err := getClusterIDBySinkURI(context.Background(), "mysql://root@127.0.0.1:3306/", changefeedCfg)
 		require.NoError(t, err)
 		require.True(t, isTiDB)
 		require.Equal(t, uint64(12345), id)
+		require.Equal(t, "default", keyspace)
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
@@ -118,10 +132,11 @@ func TestGetClusterIDBySinkURI(t *testing.T) {
 			return &mysqlsink.Config{IsTiDB: true}, db, nil
 		}
 
-		id, isTiDB, err := getClusterIDBySinkURI(context.Background(), "mysql://root@127.0.0.1:3306/", changefeedCfg)
+		id, keyspace, isTiDB, err := getClusterIDBySinkURI(context.Background(), "mysql://root@127.0.0.1:3306/", changefeedCfg)
 		require.NoError(t, err)
 		require.False(t, isTiDB)
 		require.Equal(t, uint64(0), id)
+		require.Equal(t, "", keyspace)
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
@@ -134,19 +149,28 @@ func TestGetClusterIDBySinkURI(t *testing.T) {
 		mock.ExpectQuery("SELECT VARIABLE_VALUE FROM mysql.tidb WHERE VARIABLE_NAME = 'cluster_id'").
 			WillReturnRows(rows)
 
+		keyspaceRows := sqlmock.NewRows([]string{"Type", "Instance", "Name", "Value"}).
+			AddRow("tidb", "127.0.0.1:4000", "keyspace-name", "default")
+		mock.ExpectQuery(regexp.QuoteMeta("show config where type = 'tidb' and name = 'keyspace-name'")).
+			WillReturnRows(keyspaceRows)
+
 		newMySQLConfigAndDBFn = func(context.Context, common.ChangeFeedID, *url.URL, *config.ChangefeedConfig) (*mysqlsink.Config, *sql.DB, error) {
 			return &mysqlsink.Config{IsTiDB: true}, db, nil
 		}
 
-		id, isTiDB, err := getClusterIDBySinkURI(context.Background(), "mysql://root@127.0.0.1:3306/", changefeedCfg)
+		id, keyspace, isTiDB, err := getClusterIDBySinkURI(context.Background(), "mysql://root@127.0.0.1:3306/", changefeedCfg)
 		require.NoError(t, err)
 		require.True(t, isTiDB)
 		require.Equal(t, uint64(12345), id)
+		require.Equal(t, "default", keyspace)
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 }
 
 func TestUpstreamDownstreamNotSame(t *testing.T) {
+	// This test verifies the tuple-based identity check:
+	// - TiDB Classic: compare physical `cluster_id`
+	// - TiDB Next-Gen: compare (cluster_id, keyspace) when keyspace is available.
 	oldFn := GetGetClusterIDBySinkURIFn()
 	defer func() { SetGetClusterIDBySinkURIFnForTest(oldFn) }()
 
@@ -158,37 +182,51 @@ func TestUpstreamDownstreamNotSame(t *testing.T) {
 	testCases := []struct {
 		name         string
 		upClusterID  uint64
-		mockDownFunc func(context.Context, string, *config.ChangefeedConfig) (uint64, bool, error)
+		changefeedID common.ChangeFeedID
+		mockDownFunc func(context.Context, string, *config.ChangefeedConfig) (uint64, string, bool, error)
 		wantResult   bool
 		wantErr      string
 	}{
 		{
-			name:        "same cluster",
-			upClusterID: 123,
-			mockDownFunc: func(context.Context, string, *config.ChangefeedConfig) (uint64, bool, error) {
-				return 123, true, nil
+			name:         "same cluster",
+			upClusterID:  123,
+			changefeedID: common.NewChangefeedID4Test("default", "test"),
+			mockDownFunc: func(context.Context, string, *config.ChangefeedConfig) (uint64, string, bool, error) {
+				return 123, "default", true, nil
 			},
 			wantResult: false,
 		},
 		{
-			name:        "different cluster",
-			upClusterID: 123,
-			mockDownFunc: func(context.Context, string, *config.ChangefeedConfig) (uint64, bool, error) {
-				return 456, true, nil
+			name:         "different cluster",
+			upClusterID:  123,
+			changefeedID: common.NewChangefeedID4Test("default", "test"),
+			mockDownFunc: func(context.Context, string, *config.ChangefeedConfig) (uint64, string, bool, error) {
+				return 456, "default", true, nil
 			},
 			wantResult: true,
 		},
 		{
-			name: "not tidb",
-			mockDownFunc: func(context.Context, string, *config.ChangefeedConfig) (uint64, bool, error) {
-				return 0, false, nil
+			name:         "same physical cluster but different keyspace",
+			upClusterID:  123,
+			changefeedID: common.NewChangefeedID4Test("keyspace1", "test"),
+			mockDownFunc: func(context.Context, string, *config.ChangefeedConfig) (uint64, string, bool, error) {
+				return 123, "keyspace2", true, nil
 			},
 			wantResult: true,
 		},
 		{
-			name: "error case",
-			mockDownFunc: func(context.Context, string, *config.ChangefeedConfig) (uint64, bool, error) {
-				return 0, false, errors.New("mock error")
+			name:         "not tidb",
+			changefeedID: common.NewChangefeedID4Test("default", "test"),
+			mockDownFunc: func(context.Context, string, *config.ChangefeedConfig) (uint64, string, bool, error) {
+				return 0, "", false, nil
+			},
+			wantResult: true,
+		},
+		{
+			name:         "error case",
+			changefeedID: common.NewChangefeedID4Test("default", "test"),
+			mockDownFunc: func(context.Context, string, *config.ChangefeedConfig) (uint64, string, bool, error) {
+				return 0, "", false, errors.New("mock error")
 			},
 			wantErr: "mock error",
 		},
@@ -196,6 +234,7 @@ func TestUpstreamDownstreamNotSame(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			changefeedCfg.ChangefeedID = tc.changefeedID
 			SetGetClusterIDBySinkURIFnForTest(tc.mockDownFunc)
 			mockPD := &mockPDClient{clusterID: tc.upClusterID}
 
