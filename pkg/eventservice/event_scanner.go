@@ -140,7 +140,7 @@ func (s *eventScanner) scan(
 
 	// Execute event scanning and merging
 	merger := newEventMerger(events)
-	interrupted, err := s.scanAndMergeEvents(sess, merger, iter)
+	interrupted, err := s.scanAndMergeEvents(sess, merger, iter, s.mode)
 	return sess.eventBytes, sess.events, interrupted, err
 }
 
@@ -187,10 +187,11 @@ func (s *eventScanner) scanAndMergeEvents(
 	session *session,
 	merger *eventMerger,
 	iter eventstore.EventIterator,
+	mode int64,
 ) (bool, error) {
 	tableID := session.dataRange.Span.TableID
 	dispatcher := session.dispatcherStat
-	processor := newDMLProcessor(s.mounter, s.schemaGetter, dispatcher.filter, dispatcher.info.IsOutputRawChangeEvent())
+	processor := newDMLProcessor(s.mounter, s.schemaGetter, dispatcher.filter, dispatcher.info.IsOutputRawChangeEvent(), mode)
 
 	for {
 		shouldStop, err := s.checkScanConditions(session)
@@ -675,12 +676,13 @@ type dmlProcessor struct {
 
 	batchDML             *event.BatchDMLEvent
 	outputRawChangeEvent bool
+	mode                 int64
 }
 
 // newDMLProcessor creates a new DML processor
 func newDMLProcessor(
 	mounter event.Mounter, schemaGetter schemaGetter,
-	filter filter.Filter, outputRawChangeEvent bool,
+	filter filter.Filter, outputRawChangeEvent bool, mode int64,
 ) *dmlProcessor {
 	return &dmlProcessor{
 		mounter:              mounter,
@@ -689,6 +691,7 @@ func newDMLProcessor(
 		batchDML:             event.NewBatchDMLEvent(),
 		insertRowCache:       make([]*common.RawKVEntry, 0),
 		outputRawChangeEvent: outputRawChangeEvent,
+		mode:                 mode,
 	}
 }
 
@@ -754,7 +757,9 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 
 	rawEvent.Key = event.RemoveKeyspacePrefix(rawEvent.Key)
 
+	rawType := rawEvent.GetType()
 	if !rawEvent.IsUpdate() {
+		updateMetricEventServiceSendDMLTypeCount(p.mode, rawType, false)
 		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)
 	}
 
@@ -762,14 +767,13 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 		shouldSplit bool
 		err         error
 	)
-	if !p.outputRawChangeEvent {
-		shouldSplit, err = event.IsUKChanged(rawEvent, p.currentTxn.CurrentDMLEvent.TableInfo)
-		if err != nil {
-			return err
-		}
+	shouldSplit, err = event.IsUKChanged(rawEvent, p.currentTxn.CurrentDMLEvent.TableInfo)
+	if err != nil {
+		return err
 	}
+	updateMetricEventServiceSendDMLTypeCount(p.mode, rawType, shouldSplit)
 
-	if !shouldSplit {
+	if p.outputRawChangeEvent && !shouldSplit {
 		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)
 	}
 
