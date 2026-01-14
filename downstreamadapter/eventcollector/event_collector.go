@@ -282,15 +282,17 @@ func (c *EventCollector) PrepareAddDispatcher(
 
 func batchTypeBySinkAndCapacity(dispatcher dispatcher.DispatcherService) (dynstream.BatchType, int) {
 	sink := dispatcher.GetSink()
-	if sink == nil {
-		return dynstream.BatchTypeCount, 1
-	}
-	capacity := sink.BatchCapacity()
 	batchType := dynstream.BatchTypeCount
-	if sink.SinkType() == common.CloudStorageSinkType {
+	if sink != nil && sink.SinkType() == common.CloudStorageSinkType {
 		batchType = dynstream.BatchTypeSize
 	}
-	return batchType, capacity
+	if capOverride := dispatcher.GetEventCollectorBatchCapacity(); capOverride > 0 {
+		return batchType, capOverride
+	}
+	if sink == nil {
+		return batchType, 1
+	}
+	return batchType, sink.BatchCapacity()
 }
 
 // CommitAddDispatcher notify local event service that the dispatcher is ready to receive events.

@@ -137,10 +137,13 @@ func (d *Duration) UnmarshalText(text []byte) error {
 type ReplicaConfig replicaConfig
 
 type replicaConfig struct {
-	MemoryQuota      *uint64 `toml:"memory-quota" json:"memory-quota,omitempty"`
-	CaseSensitive    *bool   `toml:"case-sensitive" json:"case-sensitive,omitempty"`
-	ForceReplicate   *bool   `toml:"force-replicate" json:"force-replicate,omitempty"`
-	CheckGCSafePoint *bool   `toml:"check-gc-safe-point" json:"check-gc-safe-point,omitempty"`
+	MemoryQuota *uint64 `toml:"memory-quota" json:"memory-quota,omitempty"`
+	// EventCollectorBatchCapacity is used by the event collector dynamic stream to achieve better batch performance.
+	// For most sinks, it means the max events per batch; for cloud storage sinks, it means the max bytes per batch.
+	EventCollectorBatchCapacity *int  `toml:"event-collector-batch-capacity" json:"event-collector-batch-capacity,omitempty"`
+	CaseSensitive               *bool `toml:"case-sensitive" json:"case-sensitive,omitempty"`
+	ForceReplicate              *bool `toml:"force-replicate" json:"force-replicate,omitempty"`
+	CheckGCSafePoint            *bool `toml:"check-gc-safe-point" json:"check-gc-safe-point,omitempty"`
 	// EnableSyncPoint is only available when the downstream is a Database.
 	EnableSyncPoint    *bool `toml:"enable-sync-point" json:"enable-sync-point,omitempty"`
 	EnableTableMonitor *bool `toml:"enable-table-monitor" json:"enable-table-monitor"`
@@ -328,6 +331,11 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 				fmt.Sprintf("The ChangefeedErrorStuckDuration:%f must be larger than %f Seconds",
 					c.ChangefeedErrorStuckDuration.Seconds(),
 					minChangeFeedErrorStuckDuration.Seconds()))
+	}
+
+	if c.EventCollectorBatchCapacity != nil && *c.EventCollectorBatchCapacity <= 0 {
+		return cerror.ErrInvalidReplicaConfig.FastGenByArgs(
+			fmt.Sprintf("The EventCollectorBatchCapacity:%d must be larger than 0", *c.EventCollectorBatchCapacity))
 	}
 
 	return nil

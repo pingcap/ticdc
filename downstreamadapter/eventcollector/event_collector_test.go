@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/stretchr/testify/require"
 )
 
@@ -42,6 +43,8 @@ type mockEventDispatcher struct {
 	changefeedID common.ChangeFeedID
 
 	sink sink.Sink
+
+	eventCollectorBatchCapacity int
 }
 
 func (m *mockEventDispatcher) GetSink() sink.Sink {
@@ -66,6 +69,10 @@ func (m *mockEventDispatcher) GetBDRMode() bool {
 
 func (m *mockEventDispatcher) GetChangefeedID() common.ChangeFeedID {
 	return m.changefeedID
+}
+
+func (m *mockEventDispatcher) GetEventCollectorBatchCapacity() int {
+	return m.eventCollectorBatchCapacity
 }
 
 func (m *mockEventDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
@@ -201,6 +208,31 @@ func TestProcessMessage(t *testing.T) {
 	case <-ctx1.Done():
 		require.Fail(t, "timeout")
 	}
+}
+
+func TestBatchTypeBySinkAndCapacityWithOverride(t *testing.T) {
+	d := &mockEventDispatcher{
+		sink:                        sink.NewMockSink(common.BlackHoleSinkType),
+		eventCollectorBatchCapacity: 123,
+	}
+	batchType, capacity := batchTypeBySinkAndCapacity(d)
+	require.Equal(t, dynstream.BatchTypeCount, batchType)
+	require.Equal(t, 123, capacity)
+
+	d = &mockEventDispatcher{
+		sink:                        sink.NewMockSink(common.CloudStorageSinkType),
+		eventCollectorBatchCapacity: 456,
+	}
+	batchType, capacity = batchTypeBySinkAndCapacity(d)
+	require.Equal(t, dynstream.BatchTypeSize, batchType)
+	require.Equal(t, 456, capacity)
+
+	d = &mockEventDispatcher{
+		sink: sink.NewMockSink(common.CloudStorageSinkType),
+	}
+	batchType, capacity = batchTypeBySinkAndCapacity(d)
+	require.Equal(t, dynstream.BatchTypeSize, batchType)
+	require.Equal(t, d.sink.BatchCapacity(), capacity)
 }
 
 func TestRemoveLastDispatcher(t *testing.T) {

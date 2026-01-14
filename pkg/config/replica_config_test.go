@@ -193,3 +193,25 @@ func TestReplicaConfig_EnableSplittableCheck_DefaultValue(t *testing.T) {
 	require.NotNil(t, config.Scheduler)
 	require.False(t, util.GetOrZero(config.Scheduler.EnableSplittableCheck))
 }
+
+func TestReplicaConfig_EventCollectorBatchCapacity_Invalid(t *testing.T) {
+	cfg := GetDefaultReplicaConfig()
+	cfg.EventCollectorBatchCapacity = util.AddressOf(0)
+
+	sinkURI, err := url.Parse("mysql://localhost:3306/test")
+	require.NoError(t, err)
+
+	err = cfg.ValidateAndAdjust(sinkURI)
+	require.Error(t, err)
+}
+
+func TestReplicaConfig_EventCollectorBatchCapacity_Valid(t *testing.T) {
+	cfg := GetDefaultReplicaConfig()
+	cfg.EventCollectorBatchCapacity = util.AddressOf(1)
+
+	sinkURI, err := url.Parse("mysql://localhost:3306/test")
+	require.NoError(t, err)
+
+	err = cfg.ValidateAndAdjust(sinkURI)
+	require.NoError(t, err)
+}
