@@ -120,7 +120,11 @@ func (c *HeartBeatCollector) RegisterDispatcherManager(m *DispatcherManager) err
 	if err != nil {
 		return errors.Trace(err)
 	}
-	err = c.schedulerDispatcherRequestDynamicStream.AddPath(m.changefeedID.Id, m)
+	err = c.schedulerDispatcherRequestDynamicStream.AddPath(
+		m.changefeedID.Id,
+		m,
+		dynstream.NewAreaSettingsWithBatcher[SchedulerDispatcherRequest](dynstream.BatchTypeCount, 1024),
+	)
 	if err != nil {
 		return errors.Trace(err)
 	}

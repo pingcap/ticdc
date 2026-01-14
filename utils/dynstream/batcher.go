@@ -16,7 +16,7 @@ package dynstream
 type BatchType int
 
 const (
-	BatchTypeCount = iota
+	BatchTypeCount BatchType = iota
 	BatchTypeSize
 )
 
@@ -28,15 +28,31 @@ type batcher[T Event] struct {
 }
 
 func newDefaultBatcher[T Event]() *batcher[T] {
-	return newBatcher[T](BatchTypeCount, 128)
+	// Keep the default behavior consistent with the legacy Option.BatchCount=1:
+	// no batching unless explicitly configured by the caller.
+	return newBatcher[T](BatchTypeCount, 1)
 }
 
 func newBatcher[T Event](batchType BatchType, capacity int) *batcher[T] {
+	if capacity <= 0 {
+		capacity = 1
+	}
+	bufCap := 128
+	if batchType == BatchTypeCount {
+		bufCap = min(bufCap, capacity)
+	}
 	return &batcher[T]{
 		batchType: batchType,
 		capacity:  capacity,
-		buf:       make([]T, 4096),
+		buf:       make([]T, 0, bufCap),
 	}
+}
+
+func (b *batcher[T]) clone() *batcher[T] {
+	if b == nil {
+		return nil
+	}
+	return newBatcher[T](b.batchType, b.capacity)
 }
 
 func (b *batcher[T]) addEvent(event T, size int) {

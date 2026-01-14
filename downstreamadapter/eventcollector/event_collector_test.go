@@ -175,7 +175,11 @@ func TestProcessMessage(t *testing.T) {
 
 	seq.Store(1)
 	done := make(chan struct{})
-	d := &mockEventDispatcher{id: did, tableSpan: &heartbeatpb.TableSpan{TableID: 1}}
+	d := &mockEventDispatcher{
+		id:        did,
+		tableSpan: &heartbeatpb.TableSpan{TableID: 1},
+		sink:      sink.NewMockSink(common.BlackHoleSinkType),
+	}
 	d.handle = func(e commonEvent.Event) {
 		require.Equal(t, e.GetSeq(), seq.Add(1))
 		require.Equal(t, events[e.GetSeq()], e)
@@ -213,9 +217,24 @@ func TestRemoveLastDispatcher(t *testing.T) {
 	cfID1 := common.NewChangefeedID(common.DefaultKeyspaceNamme)
 	cfID2 := common.NewChangefeedID(common.DefaultKeyspaceNamme)
 
-	d1 := &mockEventDispatcher{id: common.NewDispatcherID(), tableSpan: &heartbeatpb.TableSpan{TableID: 1}, changefeedID: cfID1}
-	d2 := &mockEventDispatcher{id: common.NewDispatcherID(), tableSpan: &heartbeatpb.TableSpan{TableID: 2}, changefeedID: cfID1}
-	d3 := &mockEventDispatcher{id: common.NewDispatcherID(), tableSpan: &heartbeatpb.TableSpan{TableID: 3}, changefeedID: cfID2}
+	d1 := &mockEventDispatcher{
+		id:           common.NewDispatcherID(),
+		tableSpan:    &heartbeatpb.TableSpan{TableID: 1},
+		changefeedID: cfID1,
+		sink:         sink.NewMockSink(common.BlackHoleSinkType),
+	}
+	d2 := &mockEventDispatcher{
+		id:           common.NewDispatcherID(),
+		tableSpan:    &heartbeatpb.TableSpan{TableID: 2},
+		changefeedID: cfID1,
+		sink:         sink.NewMockSink(common.BlackHoleSinkType),
+	}
+	d3 := &mockEventDispatcher{
+		id:           common.NewDispatcherID(),
+		tableSpan:    &heartbeatpb.TableSpan{TableID: 3},
+		changefeedID: cfID2,
+		sink:         sink.NewMockSink(common.BlackHoleSinkType),
+	}
 
 	// Add dispatchers
 	c.AddDispatcher(d1, 1024)

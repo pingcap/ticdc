@@ -254,6 +254,16 @@ func (s *AreaSettings[T]) fix() {
 	}
 }
 
+// NewAreaSettingsWithBatcher returns an AreaSettings that only configures batching.
+//
+// For BatchTypeCount, batchCapacity is the max events per batch.
+// For BatchTypeSize, batchCapacity is the max bytes per batch.
+func NewAreaSettingsWithBatcher[T Event](batchType BatchType, batchCapacity int) AreaSettings[T] {
+	return AreaSettings[T]{
+		batcher: newBatcher[T](batchType, batchCapacity),
+	}
+}
+
 func NewAreaSettingsWithMaxPendingSize[T Event](
 	quota uint64, memoryControlAlgorithm int, component string,
 	batchType BatchType, batchCapacity int,

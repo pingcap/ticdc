@@ -267,10 +267,16 @@ func (c *EventCollector) PrepareAddDispatcher(
 	cfStat.dispatcherCount.Add(1)
 
 	ds := c.getDynamicStream(target.GetMode())
-	batchType := batchTypeBySink(target.GetSink().SinkType())
+	s := target.GetSink()
+	batchType := dynstream.BatchTypeCount
+	batchCapacity := 1
+	if s != nil {
+		batchType = batchTypeBySink(s.SinkType())
+		batchCapacity = s.BatchCapacity()
+	}
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize[dispatcher.DispatcherEvent](
 		memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector",
-		batchType, target.GetSink().BatchCapacity(),
+		batchType, batchCapacity,
 	)
 	err := ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {

@@ -276,17 +276,18 @@ Loop:
 					continue Loop
 				}
 				if path.removed.Load() {
+					clear(eventBuf)
 					continue Loop
 				}
 
 				path.lastHandleEventTs.Store(uint64(s.handler.GetTimestamp(eventBuf[0])))
 
-				// todo: shall we clear the event buf after it's handle here, instead of the batcher?
 				path.blocking.Store(s.handler.Handle(path.dest, eventBuf...))
 
 				if path.blocking.Load() {
 					s.eventQueue.blockPath(path)
 				}
+				clear(eventBuf)
 			}
 		}
 	}

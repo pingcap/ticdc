@@ -361,7 +361,7 @@ func (s *subscriptionClient) Subscribe(
 
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize[regionEvent](
 		1*1024*1024*1024, dynstream.MemoryControlForPuller, "logPuller",
-		dynstream.BatchTypeCount, 4096) // 1GB
+		dynstream.BatchTypeCount, 1024) // 1GB
 	s.ds.AddPath(rt.subID, rt, areaSetting)
 
 	select {

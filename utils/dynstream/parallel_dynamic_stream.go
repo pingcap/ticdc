@@ -202,8 +202,10 @@ func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...Are
 	area := s.handler.GetArea(path, dest)
 
 	var batcher *batcher[T]
-	if len(as) > 0 {
-		batcher = as[0].batcher
+	if len(as) > 0 && as[0].batcher != nil {
+		// AreaSettings can be reused by callers across multiple paths.
+		// Clone it to avoid sharing mutable batcher state among paths.
+		batcher = as[0].batcher.clone()
 	} else {
 		batcher = newDefaultBatcher[T]()
 	}
