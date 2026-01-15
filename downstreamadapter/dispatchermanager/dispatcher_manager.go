@@ -553,7 +553,7 @@ func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
 		message.BlockStatuses = blockStatusMessage
 		message.Mode = mode
 		e.blockStatusRequestQueue.Enqueue(&BlockStatusRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
-		metrics.HeartbeatCollectorBlockStatusRequestQueueLenGauge.Set(float64(len(e.blockStatusRequestQueue.queue)))
+		metrics.HeartbeatCollectorBlockStatusRequestQueueLenGauge.Set(float64(e.blockStatusRequestQueue.Len()))
 	}
 	for {
 		blockStatusMessage := make([]*heartbeatpb.TableSpanBlockStatus, 0)

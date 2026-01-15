@@ -82,6 +82,10 @@ func (q *BlockStatusRequestQueue) Dequeue(ctx context.Context) *BlockStatusReque
 	}
 }
 
+func (q *BlockStatusRequestQueue) Len() int {
+	return len(q.queue)
+}
+
 func (q *BlockStatusRequestQueue) Close() {
 	close(q.queue)
 }
