@@ -15,6 +15,7 @@ package v2
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	perrors "github.com/pingcap/errors"
@@ -92,6 +93,8 @@ func (h *OpenAPIV2) SetRedactMode(c *gin.Context) {
 
 	// Parse and validate the requested redaction mode
 	// API requires non-empty mode (unlike config where empty means "use default")
+	// Trim whitespace for robustness (common for REST APIs)
+	req.Mode = strings.TrimSpace(req.Mode)
 	if req.Mode == "" {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("missing required field 'redact_info_log': must be 'off', 'on', or 'marker'"))
 		return

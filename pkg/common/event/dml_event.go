@@ -74,8 +74,44 @@ func NewBatchDMLEvent() *BatchDMLEvent {
 }
 
 func (b *BatchDMLEvent) String() string {
-	return fmt.Sprintf("BatchDMLEvent{Version: %d, DMLEvents: %v, Rows: %v, RawRows: %v, Table: %v, Len: %d}",
-		b.Version, b.DMLEvents, b.Rows, b.RawRows, b.TableInfo.TableName.String(), b.Len())
+	var rowsStr string
+	if b.Rows != nil && b.TableInfo != nil {
+		defer func() {
+			if r := recover(); r != nil {
+				rowsStr = "<error>"
+			}
+		}()
+
+		var sb strings.Builder
+		sb.WriteString("[")
+		numRows := b.Rows.NumRows()
+		fields := b.TableInfo.GetFieldSlice()
+		for i := 0; i < numRows; i++ {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			row := b.Rows.GetRow(i)
+			if str := safeRowToString(row, fields); str != "" {
+				sb.WriteString(str)
+			} else {
+				sb.WriteString("<error>")
+			}
+		}
+		sb.WriteString("]")
+		rowsStr = sb.String()
+	} else {
+		rowsStr = "<nil>"
+	}
+
+	var rawRowsStr string
+	if b.RawRows != nil {
+		rawRowsStr = util.RedactBytes(b.RawRows)
+	} else {
+		rawRowsStr = "<nil>"
+	}
+
+	return fmt.Sprintf("BatchDMLEvent{Version: %d, DMLEvents: %v, Rows: %s, RawRows: %s, Table: %v, Len: %d}",
+		b.Version, b.DMLEvents, rowsStr, rawRowsStr, b.TableInfo.TableName.String(), b.Len())
 }
 
 // PopHeadDMLEvents pops the first `count` DMLEvents from the BatchDMLEvent and returns a new BatchDMLEvent.
