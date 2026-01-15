@@ -95,6 +95,20 @@ func TestMoveToSchedulingQueue(t *testing.T) {
 	require.NotContains(t, db.stopped, cf.ID)
 }
 
+func TestMoveToSchedulingQueueResetBackoffAlsoResetsCheckpointBaseline(t *testing.T) {
+	db := NewChangefeedDB(1216)
+	cf := &Changefeed{ID: common.NewChangeFeedIDWithName("test-baseline", common.DefaultKeyspaceNamme)}
+	db.AddStoppedChangefeed(cf)
+	cf.backoff = NewBackoff(cf.ID, 0, 200)
+	cf.status = atomic.NewPointer(&heartbeatpb.MaintainerStatus{
+		CheckpointTs: 120,
+	})
+
+	db.MoveToSchedulingQueue(cf.ID, true, false)
+
+	require.Equal(t, uint64(120), cf.backoff.checkpointTs)
+}
+
 func TestRemoveChangefeed(t *testing.T) {
 	db := NewChangefeedDB(1216)
 	cf := &Changefeed{ID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)}
