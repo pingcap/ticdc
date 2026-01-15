@@ -737,8 +737,6 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 			}
 			err := d.AddBlockEventToSink(event)
 			if err != nil {
-				// If the write fails, we won't create a resend task and thus will never receive an ACK.
-				// Roll back pendingACKCount to avoid holding subsequent DB/All events forever.
 				if needsScheduleACKTracking {
 					d.pendingACKCount.Add(-1)
 				}
