@@ -516,6 +516,26 @@ func getSchemaID(tableMap map[int64]*BasicTableInfo, tableID int64) int64 {
 	return tableInfo.SchemaID
 }
 
+// schemaName should be "Name.O"
+func findSchemaIDByName(databaseMap map[int64]*BasicDatabaseInfo, schemaName string) (int64, bool) {
+	for id, info := range databaseMap {
+		if info.Name == schemaName {
+			return id, true
+		}
+	}
+	return 0, false
+}
+
+// tableName should be "Name.O"
+func findTableIDByName(tableMap map[int64]*BasicTableInfo, schemaID int64, tableName string) (int64, bool) {
+	for id, info := range tableMap {
+		if info.SchemaID == schemaID && info.Name == tableName {
+			return id, true
+		}
+	}
+	return 0, false
+}
+
 // =======
 // buildPersistedDDLEventFunc start
 // =======
@@ -587,7 +607,53 @@ func buildPersistedDDLEventForCreateTable(args buildPersistedDDLEventFuncArgs) P
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = event.TableInfo.Name.O
+	setReferTableForCreateTableLike(&event, args)
 	return event
+}
+
+func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersistedDDLEventFuncArgs) {
+	if event.Query == "" {
+		return
+	}
+	stmt, err := parser.New().ParseOneStmt(event.Query, "", "")
+	if err != nil {
+		log.Error("parse create table ddl failed",
+			zap.String("query", event.Query),
+			zap.Error(err))
+		return
+	}
+	createStmt, ok := stmt.(*ast.CreateTableStmt)
+	if !ok || createStmt.ReferTable == nil {
+		return
+	}
+	refTable := createStmt.ReferTable.Name.O
+	refSchema := createStmt.ReferTable.Schema.O
+	if refSchema == "" {
+		refSchema = event.SchemaName
+	}
+	refSchemaID, ok := findSchemaIDByName(args.databaseMap, refSchema)
+	if !ok {
+		log.Warn("refer schema not found for create table like",
+			zap.String("schema", refSchema),
+			zap.String("table", refTable),
+			zap.String("query", event.Query))
+		return
+	}
+	refTableID, ok := findTableIDByName(args.tableMap, refSchemaID, refTable)
+	if !ok {
+		log.Warn("refer table not found for create table like",
+			zap.String("schema", refSchema),
+			zap.String("table", refTable),
+			zap.String("query", event.Query))
+		return
+	}
+	event.ExtraTableID = refTableID
+	if partitions, ok := args.partitionMap[refTableID]; ok {
+		event.ReferTablePartitionIDs = event.ReferTablePartitionIDs[:0]
+		for id := range partitions {
+			event.ReferTablePartitionIDs = append(event.ReferTablePartitionIDs, id)
+		}
+	}
 }
 
 func buildPersistedDDLEventForDropTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
@@ -871,8 +937,8 @@ func updateDDLHistoryForSchemaDDL(args updateDDLHistoryFuncArgs) []uint64 {
 
 func updateDDLHistoryForAddDropTable(args updateDDLHistoryFuncArgs) []uint64 {
 	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
-	// Note: for create table, this ddl event will not be sent to table dispatchers.
-	// add it to ddl history is just for building table info store.
+	// Note: for create table, this ddl event will not be sent to table dispatchers by default.
+	// adding it to ddl history is just for building table info store.
 	if isPartitionTable(args.ddlEvent.TableInfo) {
 		// for partition table, we only care the ddl history of physical table ids.
 		for _, partitionID := range getAllPartitionIDs(args.ddlEvent.TableInfo) {
@@ -880,6 +946,13 @@ func updateDDLHistoryForAddDropTable(args updateDDLHistoryFuncArgs) []uint64 {
 		}
 	} else {
 		args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, args.ddlEvent.TableID)
+	}
+	if args.ddlEvent.Type == byte(model.ActionCreateTable) && args.ddlEvent.ExtraTableID != 0 {
+		if len(args.ddlEvent.ReferTablePartitionIDs) > 0 {
+			args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, args.ddlEvent.ReferTablePartitionIDs...)
+		} else {
+			args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, args.ddlEvent.ExtraTableID)
+		}
 	}
 	return args.tableTriggerDDLHistory
 }
@@ -1382,6 +1455,21 @@ func extractTableInfoFuncForSingleTableDDL(event *PersistedDDLEvent, tableID int
 			return common.WrapTableInfo(event.SchemaName, event.TableInfo), false
 		}
 	}
+
+	// The DDL "CREATE TABLE ... LIKE ..." may be added to the ddl history of the referenced table
+	// (or its physical partition IDs) to ensure those tables are blocked while this DDL is executing.
+	// It does not change the schema of the referenced table itself, so we should ignore it when
+	// building the table info store for the referenced table.
+	if event.Type == byte(model.ActionCreateTable) && event.ExtraTableID != 0 {
+		if tableID == event.ExtraTableID {
+			return nil, false
+		}
+		for _, id := range event.ReferTablePartitionIDs {
+			if tableID == id {
+				return nil, false
+			}
+		}
+	}
 	log.Panic("should not reach here",
 		zap.Any("type", event.Type),
 		zap.String("query", event.Query),
@@ -1753,6 +1841,13 @@ func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter
 		InfluenceType: commonEvent.InfluenceTypeNormal,
 		TableIDs:      []int64{common.DDLSpanTableID},
 	}
+	if rawEvent.ExtraTableID != 0 {
+		if len(rawEvent.ReferTablePartitionIDs) > 0 {
+			ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, rawEvent.ReferTablePartitionIDs...)
+		} else {
+			ddlEvent.BlockedTables.TableIDs = append(ddlEvent.BlockedTables.TableIDs, rawEvent.ExtraTableID)
+		}
+	}
 	if isPartitionTable(rawEvent.TableInfo) {
 		physicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
 		ddlEvent.NeedAddedTables = make([]commonEvent.Table, 0, len(physicalIDs))
@@ -1780,6 +1875,28 @@ func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter
 				TableName:  rawEvent.TableName,
 			},
 		},
+	}
+	if rawEvent.Query != "" {
+		stmt, err := parser.New().ParseOneStmt(rawEvent.Query, "", "")
+		if err != nil {
+			log.Error("parse create table ddl failed",
+				zap.String("query", rawEvent.Query),
+				zap.Error(err))
+			return ddlEvent, false, err
+		}
+		if createStmt, ok := stmt.(*ast.CreateTableStmt); ok && createStmt.ReferTable != nil {
+			refTable := createStmt.ReferTable.Name.O
+			refSchema := createStmt.ReferTable.Schema.O
+			if refSchema == "" {
+				refSchema = rawEvent.SchemaName
+			}
+			ddlEvent.BlockedTableNames = []commonEvent.SchemaTableName{
+				{
+					SchemaName: refSchema,
+					TableName:  refTable,
+				},
+			}
+		}
 	}
 	return ddlEvent, true, err
 }

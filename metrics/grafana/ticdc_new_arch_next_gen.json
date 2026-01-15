@@ -1161,7 +1161,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_maintainer_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",  changefeed=~\"$changefeed\"}) by (keyspace_name, changefeed)",
+              "expr": "max(ticdc_maintainer_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",  changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name, changefeed)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -1258,7 +1258,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_maintainer_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed)",
+              "expr": "max(ticdc_maintainer_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -1955,7 +1955,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "ticdc_kvclient_pull_event_count",
+              "expr": "ticdc_kvclient_pull_event_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}",
               "hide": false,
               "interval": "",
               "legendFormat": "{{instance}}-{{type}}",
@@ -2580,7 +2580,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(ticdc_sink_batch_row_count_sum{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed, instance)",
+              "expr": "sum(ticdc_sink_batch_row_count_sum{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed, instance)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -2698,7 +2698,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "(time() - process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\"})",
+              "expr": "(time() - process_start_time_seconds{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"})",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "TiCDC-{{instance}}",
@@ -2823,14 +2823,14 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "rate(process_cpu_seconds_total{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\"}[1m])",
+              "expr": "rate(process_cpu_seconds_total{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"}[1m])",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "{{instance}}",
               "refId": "A"
             },
             {
-              "expr": "ticdc_server_go_max_procs{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\"}",
+              "expr": "ticdc_server_go_max_procs{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"}",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "quota-{{instance}}",
@@ -2931,14 +2931,14 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": " go_goroutines{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\"}",
+              "expr": " go_goroutines{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"}",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "{{instance}}",
               "refId": "A"
             },
             {
-              "expr": "go_threads{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\"}",
+              "expr": "go_threads{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"}",
               "format": "time_series",
               "hide": true,
               "intervalFactor": 1,
@@ -3041,14 +3041,14 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "process_resident_memory_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\"}",
+              "expr": "process_resident_memory_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"}",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "process-{{instance}}",
               "refId": "A"
             },
             {
-              "expr": "go_memstats_heap_alloc_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\"}",
+              "expr": "go_memstats_heap_alloc_bytes{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"}",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "heap-{{instance}}",
@@ -3149,7 +3149,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "process_open_fds{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\"}",
+              "expr": "process_open_fds{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"}",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "{{instance}}",
@@ -3248,7 +3248,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_owner_ownership_counter{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\"}[240s])) by (instance) > BOOL 0.5",
+              "expr": "sum(rate(ticdc_owner_ownership_counter{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[240s])) by (instance) > BOOL 0.5",
               "format": "time_series",
               "interval": "30s",
               "intervalFactor": 1,
@@ -6589,7 +6589,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_owner_ownership_counter{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\"}[240s])) by (instance) > BOOL 0.5",
+              "expr": "sum(rate(ticdc_owner_ownership_counter{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[240s])) by (instance) > BOOL 0.5",
               "format": "time_series",
               "interval": "30s",
               "intervalFactor": 1,
@@ -6708,7 +6708,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_maintainer_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",  changefeed=~\"$changefeed\"}) by (keyspace_name, changefeed)",
+              "expr": "max(ticdc_maintainer_checkpoint_ts_lag{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",  changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name, changefeed)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -6811,7 +6811,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_maintainer_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed)",
+              "expr": "max(ticdc_maintainer_resolved_ts_lag{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -7266,7 +7266,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "ticdc_subscription_client_requested_region_count",
+              "expr": "ticdc_subscription_client_requested_region_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}",
               "hide": false,
               "interval": "",
               "legendFormat": "{{instance}}-count",
@@ -7466,7 +7466,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "ticdc_subscription_client_subscribed_region_count",
+              "expr": "ticdc_subscription_client_subscribed_region_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}",
               "hide": false,
               "interval": "",
               "legendFormat": "{{instance}}-count",
@@ -7729,7 +7729,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_subscription_client_resolve_lock_task_drop_count[1m])) by (instance)",
+              "expr": "sum(rate(ticdc_subscription_client_resolve_lock_task_drop_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "{{instance}}",
@@ -15750,7 +15750,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "max(ticdc_sink_mq_checkpoint_ts_message_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed, instance)",
+              "expr": "max(ticdc_sink_mq_checkpoint_ts_message_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name,changefeed, instance)",
               "interval": "",
               "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}-P999",
               "queryType": "randomWalk",
@@ -19911,7 +19911,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_redo_total_rows_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", changefeed=~\"$changefeed\"}[1m])) by (changefeed)",
+              "expr": "sum(rate(ticdc_redo_total_rows_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (changefeed)",
               "format": "time_series",
               "hide": false,
               "interval": "",
