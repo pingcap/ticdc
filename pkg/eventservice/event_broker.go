@@ -392,6 +392,21 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		return false, common.DataRange{}
 	}
 
+	remoteID := node.ID(task.info.GetServerID())
+	if item, ok := task.changefeedStat.scanMaxTs.Load(remoteID); ok {
+		scanMaxTs := item.(*atomic.Uint64).Load()
+		// scanMaxTs == 0 means no limit.
+		if scanMaxTs > 0 && scanMaxTs < dataRange.CommitTsEnd {
+			// If the scan window is fully consumed, skip scanning and only send a "signal" resolved-ts.
+			if scanMaxTs <= dataRange.CommitTsStart {
+				c.sendSignalResolvedTs(task)
+				metrics.EventServiceSkipScanCount.WithLabelValues("scan_window").Inc()
+				return false, common.DataRange{}
+			}
+			dataRange.CommitTsEnd = scanMaxTs
+		}
+	}
+
 	keyspaceMeta := common.KeyspaceMeta{
 		ID:   task.info.GetTableSpan().KeyspaceID,
 		Name: task.changefeedStat.changefeedID.Keyspace(),
@@ -1177,9 +1192,11 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 	}
 
 	holder := make(map[common.GID]uint64, len(availables))
+	scanMaxTsHolder := make(map[common.GID]uint64, len(availables))
 	dispatcherAvailable := make(map[common.DispatcherID]uint64, len(availables))
 	for _, item := range availables {
 		holder[item.Gid] = item.Available
+		scanMaxTsHolder[item.Gid] = item.ScanMaxTs
 		for dispatcherID, available := range item.DispatcherAvailable {
 			dispatcherAvailable[dispatcherID] = available
 		}
@@ -1192,6 +1209,9 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 		if ok {
 			changefeed.availableMemoryQuota.Store(from, atomic.NewUint64(available))
 			metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(available))
+		}
+		if scanMaxTs, ok := scanMaxTsHolder[changefeedID.ID()]; ok {
+			changefeed.scanMaxTs.Store(from, atomic.NewUint64(scanMaxTs))
 		}
 		return true
 	})

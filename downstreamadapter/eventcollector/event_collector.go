@@ -83,6 +83,8 @@ type changefeedStat struct {
 	metricMemoryUsageMaxRedo  prometheus.Gauge
 	metricMemoryUsageUsedRedo prometheus.Gauge
 	dispatcherCount           atomic.Int32
+	dispatcherIDs             sync.Map // common.DispatcherID -> struct{}
+	scanWindow                *adaptiveScanWindow
 }
 
 func newChangefeedStat(changefeedID common.ChangeFeedID) *changefeedStat {
@@ -92,6 +94,7 @@ func newChangefeedStat(changefeedID common.ChangeFeedID) *changefeedStat {
 		metricMemoryUsageUsed:     metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector", "used", changefeedID.Keyspace(), changefeedID.Name()),
 		metricMemoryUsageMaxRedo:  metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector-redo", "max", changefeedID.Keyspace(), changefeedID.Name()),
 		metricMemoryUsageUsedRedo: metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector-redo", "used", changefeedID.Keyspace(), changefeedID.Name()),
+		scanWindow:                newAdaptiveScanWindow(),
 	}
 }
 
@@ -265,6 +268,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 	v, _ := c.changefeedMap.LoadOrStore(changefeedID.ID(), newChangefeedStat(changefeedID))
 	cfStat := v.(*changefeedStat)
 	cfStat.dispatcherCount.Add(1)
+	cfStat.dispatcherIDs.Store(target.GetId(), struct{}{})
 
 	ds := c.getDynamicStream(target.GetMode())
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector")
@@ -320,6 +324,7 @@ func (c *EventCollector) RemoveDispatcher(target dispatcher.DispatcherService) {
 	}
 	cfStat := v.(*changefeedStat)
 	remaining := cfStat.dispatcherCount.Add(-1)
+	cfStat.dispatcherIDs.Delete(target.GetId())
 	log.Info("remove dispatcher from changefeed stat",
 		zap.Stringer("changefeedID", changefeedID),
 		zap.Int32("remaining", remaining))
@@ -600,6 +605,7 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 	// collect path-level available memory and total available memory for each changefeed
 	changefeedPathMemory := make(map[common.ChangeFeedID]map[common.DispatcherID]uint64)
 	changefeedTotalMemory := make(map[common.ChangeFeedID]uint64)
+	changefeedMemoryUsageRatio := make(map[common.ChangeFeedID]float64)
 
 	// collect from main dynamic stream
 	for _, quota := range c.ds.GetMetrics().MemoryControl.AreaMemoryMetrics {
@@ -617,6 +623,9 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 		}
 		// store total available memory from AreaMemoryMetric
 		changefeedTotalMemory[cfID] = uint64(quota.AvailableMemory())
+		if maxMem := quota.MaxMemory(); maxMem > 0 {
+			changefeedMemoryUsageRatio[cfID] = max(changefeedMemoryUsageRatio[cfID], float64(quota.MemoryUsage())/float64(maxMem))
+		}
 	}
 
 	// collect from redo dynamic stream and take minimum
@@ -642,6 +651,9 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 			changefeedTotalMemory[cfID] = min(existing, uint64(quota.AvailableMemory()))
 		} else {
 			changefeedTotalMemory[cfID] = uint64(quota.AvailableMemory())
+		}
+		if maxMem := quota.MaxMemory(); maxMem > 0 {
+			changefeedMemoryUsageRatio[cfID] = max(changefeedMemoryUsageRatio[cfID], float64(quota.MemoryUsage())/float64(maxMem))
 		}
 	}
 
@@ -678,6 +690,15 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 
 	// build congestion control messages for each node
 	result := make(map[node.ID]*event.CongestionControl)
+	scanMaxTsByChangefeed := make(map[common.ChangeFeedID]uint64)
+
+	c.changefeedMap.Range(func(_, v any) bool {
+		cfStat := v.(*changefeedStat)
+		ratio := changefeedMemoryUsageRatio[cfStat.changefeedID]
+		scanMaxTsByChangefeed[cfStat.changefeedID] = c.updateScanMaxTsForChangefeed(cfStat, ratio)
+		return true
+	})
+
 	for nodeID, changefeedDispatchers := range nodeDispatcherMemory {
 		congestionControl := event.NewCongestionControl()
 
@@ -688,13 +709,12 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 
 			// get total available memory directly from AreaMemoryMetric
 			totalAvailable := uint64(changefeedTotalMemory[changefeedID])
-			if totalAvailable > 0 {
-				congestionControl.AddAvailableMemoryWithDispatchers(
-					changefeedID.ID(),
-					totalAvailable,
-					dispatcherMemory,
-				)
-			}
+			congestionControl.AddAvailableMemoryWithDispatchersAndScanMaxTs(
+				changefeedID.ID(),
+				totalAvailable,
+				scanMaxTsByChangefeed[changefeedID],
+				dispatcherMemory,
+			)
 		}
 
 		if len(congestionControl.GetAvailables()) > 0 {
