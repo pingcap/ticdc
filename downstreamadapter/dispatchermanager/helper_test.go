@@ -222,33 +222,20 @@ func TestCheckpointTsMessageHandlerDeadlock(t *testing.T) {
 	})
 }
 
-func TestPreCheckForSchedulerHandler_RemoveCancelsInFlightCreate(t *testing.T) {
+func TestPreCheckForSchedulerHandler_RemoveAllowedWhenDispatcherMissing(t *testing.T) {
 	t.Parallel()
 
 	// Scenario:
-	// 1) Dispatcher manager has already recorded a Create request in currentOperatorMap,
-	//    but the dispatcher isn't created yet (for example, move is in add-dest phase).
-	// 2) The table is dropped and maintainer sends a Remove request for the same dispatcherID.
+	// 1) Dispatcher manager receives a Remove request for a dispatcherID that does not exist locally yet.
 	//
 	// Expectation:
-	// The Remove request must not be dropped, and the stored Create operator should be cancelled so we don't
-	// create a dispatcher after the table should have been removed.
+	// preCheckForSchedulerHandler should allow the request to proceed so dispatcher manager can emit
+	// a terminal (Stopped) status back to the maintainer and help it converge.
 	dispatcherID := common.NewDispatcherID()
 	dm := &DispatcherManager{
 		changefeedID:  common.NewChangeFeedIDWithName("test-changefeed", "test-namespace"),
 		dispatcherMap: newDispatcherMap[*dispatcher.EventDispatcher](),
 	}
-
-	createReq := NewSchedulerDispatcherRequest(&heartbeatpb.ScheduleDispatcherRequest{
-		ChangefeedID: &heartbeatpb.ChangefeedID{Keyspace: "test-namespace", Name: "test-changefeed"},
-		Config: &heartbeatpb.DispatcherConfig{
-			DispatcherID: dispatcherID.ToPB(),
-			Mode:         0,
-		},
-		ScheduleAction: heartbeatpb.ScheduleAction_Create,
-		OperatorType:   heartbeatpb.OperatorType_O_Move,
-	})
-	dm.currentOperatorMap.Store(dispatcherID, createReq)
 
 	removeReq := NewSchedulerDispatcherRequest(&heartbeatpb.ScheduleDispatcherRequest{
 		ChangefeedID: &heartbeatpb.ChangefeedID{Keyspace: "test-namespace", Name: "test-changefeed"},
@@ -263,7 +250,33 @@ func TestPreCheckForSchedulerHandler_RemoveCancelsInFlightCreate(t *testing.T) {
 	operatorKey, ok := preCheckForSchedulerHandler(removeReq, dm)
 	require.True(t, ok)
 	require.Equal(t, dispatcherID, operatorKey)
+}
 
-	_, operatorExists := dm.currentOperatorMap.Load(dispatcherID)
-	require.False(t, operatorExists, "create operator should be cancelled by remove")
+func TestPreCheckForSchedulerHandler_CreateSkippedWhenDispatcherExists(t *testing.T) {
+	t.Parallel()
+
+	// Scenario:
+	// 1) Dispatcher manager already has a dispatcher in its local dispatcherMap (e.g. duplicate Create after retry).
+	//
+	// Expectation:
+	// preCheckForSchedulerHandler should drop the Create request as an idempotent no-op.
+	dispatcherID := common.NewDispatcherID()
+	dm := &DispatcherManager{
+		changefeedID:  common.NewChangeFeedIDWithName("test-changefeed", "test-namespace"),
+		dispatcherMap: newDispatcherMap[*dispatcher.EventDispatcher](),
+	}
+	dm.dispatcherMap.Set(dispatcherID, &dispatcher.EventDispatcher{})
+
+	createReq := NewSchedulerDispatcherRequest(&heartbeatpb.ScheduleDispatcherRequest{
+		ChangefeedID: &heartbeatpb.ChangefeedID{Keyspace: "test-namespace", Name: "test-changefeed"},
+		Config: &heartbeatpb.DispatcherConfig{
+			DispatcherID: dispatcherID.ToPB(),
+			Mode:         0,
+		},
+		ScheduleAction: heartbeatpb.ScheduleAction_Create,
+		OperatorType:   heartbeatpb.OperatorType_O_Add,
+	})
+
+	_, ok := preCheckForSchedulerHandler(createReq, dm)
+	require.False(t, ok)
 }
