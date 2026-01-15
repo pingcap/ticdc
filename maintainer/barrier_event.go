@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/range_checker"
+	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -41,7 +42,7 @@ type BarrierEvent struct {
 	nodeManager        *watcher.NodeManager
 	selected           atomic.Bool
 	hasNewTable        bool
-	// table trigger event dispatcher reported the block event, we should use it as the writer
+	// table trigger dispatcher reported the block event, we should use it as the writer
 	tableTriggerDispatcherRelated bool
 	writerDispatcher              common.DispatcherID
 	writerDispatcherAdvanced      bool
@@ -51,7 +52,8 @@ type BarrierEvent struct {
 	newTables          []*heartbeatpb.Table
 	schemaIDChange     []*heartbeatpb.SchemaIDChange
 	isSyncPoint        bool
-	// if the split table is enable for this changefeeed, if not we can use table id to check coverage
+	needSchedule       bool
+	// if the split table is enable for this changefeed, if not we can use tableID to check coverage
 	dynamicSplitEnabled bool
 
 	// Used to record reported dispatchers and has two main functions:
@@ -91,7 +93,8 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		newTables:          status.NeedAddedTables,
 		schemaIDChange:     status.UpdatedSchemas,
 		isSyncPoint:        status.IsSyncPoint,
-		// if the split table is enable for this changefeeed, if not we can use table id to check coverage
+		needSchedule:       needSchedule(status),
+		// if the split table is enable for this changefeed, if not we can use tableID to check coverage
 		dynamicSplitEnabled: dynamicSplitEnabled,
 
 		reportedDispatchers: make(map[common.DispatcherID]struct{}),
@@ -106,7 +109,7 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 			if dynamicSplitEnabled {
 				event.rangeChecker = range_checker.NewTableSpanRangeChecker(spanController.GetkeyspaceID(), status.BlockTables.TableIDs)
 			} else {
-				event.rangeChecker = range_checker.NewTableCountChecker(len(status.BlockTables.TableIDs))
+				event.rangeChecker = range_checker.NewTableCountChecker(status.BlockTables.TableIDs)
 			}
 		}
 	}
@@ -119,41 +122,52 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 	return event
 }
 
+func needSchedule(state *heartbeatpb.State) bool {
+	if state.NeedDroppedTables != nil {
+		return true
+	}
+	if len(state.NeedAddedTables) > 0 {
+		return true
+	}
+	if len(state.UpdatedSchemas) > 0 {
+		return true
+	}
+	return false
+}
+
 func (be *BarrierEvent) createRangeCheckerForTypeAll() {
+	reps := be.spanController.GetAllTasks()
+	tbls := make([]int64, 0, len(reps))
+	for _, rep := range reps {
+		tbls = append(tbls, rep.Span.TableID)
+	}
 	if be.dynamicSplitEnabled {
-		reps := be.spanController.GetAllTasks()
-		tbls := make([]int64, 0, len(reps))
-		for _, rep := range reps {
-			tbls = append(tbls, rep.Span.TableID)
-		}
-		tbls = append(tbls, common.DDLSpanTableID)
 		be.rangeChecker = range_checker.NewTableSpanRangeChecker(be.spanController.GetkeyspaceID(), tbls)
 	} else {
-		be.rangeChecker = range_checker.NewTableCountChecker(be.spanController.TaskSize())
+		be.rangeChecker = range_checker.NewTableCountChecker(tbls)
 	}
 	log.Info("create range checker for block event", zap.Any("influcenceType", be.blockedDispatchers.InfluenceType), zap.Any("commitTs", be.commitTs))
 }
 
 func (be *BarrierEvent) createRangeCheckerForTypeDB() {
-	if be.dynamicSplitEnabled {
-		reps := be.spanController.GetTasksBySchemaID(be.blockedDispatchers.SchemaID)
-		tbls := make([]int64, 0, len(reps))
-		for _, rep := range reps {
-			tbls = append(tbls, rep.Span.TableID)
-		}
+	reps := be.spanController.GetTasksBySchemaID(be.blockedDispatchers.SchemaID)
+	tbls := make([]int64, 0, len(reps))
+	for _, rep := range reps {
+		tbls = append(tbls, rep.Span.TableID)
+	}
 
-		tbls = append(tbls, common.DDLSpanTableID)
+	tbls = append(tbls, common.DDLSpanTableID)
+	if be.dynamicSplitEnabled {
 		be.rangeChecker = range_checker.NewTableSpanRangeChecker(be.spanController.GetkeyspaceID(), tbls)
 	} else {
-		be.rangeChecker = range_checker.NewTableCountChecker(
-			be.spanController.GetTaskSizeBySchemaID(be.blockedDispatchers.SchemaID) + 1 /*table trigger event dispatcher*/)
+		be.rangeChecker = range_checker.NewTableCountChecker(tbls)
 	}
 	log.Info("create range checker for block event", zap.Any("influcenceType", be.blockedDispatchers.InfluenceType), zap.Any("commitTs", be.commitTs))
 }
 
-func (be *BarrierEvent) checkEventAction(dispatcherID common.DispatcherID) *heartbeatpb.DispatcherStatus {
+func (be *BarrierEvent) checkEventAction(dispatcherID common.DispatcherID) (*heartbeatpb.DispatcherStatus, node.ID) {
 	if !be.allDispatcherReported() {
-		return nil
+		return nil, ""
 	}
 	return be.onAllDispatcherReportedBlockEvent(dispatcherID)
 }
@@ -161,7 +175,7 @@ func (be *BarrierEvent) checkEventAction(dispatcherID common.DispatcherID) *hear
 // onAllDispatcherReportedBlockEvent is called when all dispatcher reported the block event
 // it will select a dispatcher as the writer, reset the range checker ,and move the event to the selected state
 // returns the dispatcher status to the dispatcher manager
-func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.DispatcherID) *heartbeatpb.DispatcherStatus {
+func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.DispatcherID) (*heartbeatpb.DispatcherStatus, node.ID) {
 	var dispatcher common.DispatcherID
 	switch be.blockedDispatchers.InfluenceType {
 	case heartbeatpb.InfluenceType_DB, heartbeatpb.InfluenceType_All:
@@ -191,19 +205,20 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 
 	be.selected.Store(true)
 	be.writerDispatcher = dispatcher
+	be.lastResendTime = time.Now()
 	log.Info("all dispatcher reported heartbeat, schedule it, and select one to write",
 		zap.String("changefeed", be.cfID.Name()),
 		zap.String("dispatcher", be.writerDispatcher.String()),
 		zap.Uint64("commitTs", be.commitTs),
 		zap.String("barrierType", be.blockedDispatchers.InfluenceType.String()))
-	be.scheduleBlockEvent()
+	stm := be.spanController.GetTaskByID(be.writerDispatcher)
 	return &heartbeatpb.DispatcherStatus{
 		InfluencedDispatchers: &heartbeatpb.InfluencedDispatchers{
 			InfluenceType: heartbeatpb.InfluenceType_Normal,
 			DispatcherIDs: []*heartbeatpb.DispatcherID{be.writerDispatcher.ToPB()},
 		},
 		Action: be.action(heartbeatpb.Action_Write),
-	}
+	}, stm.GetNodeID()
 }
 
 func (be *BarrierEvent) scheduleBlockEvent() {
@@ -245,7 +260,7 @@ func (be *BarrierEvent) scheduleBlockEvent() {
 	}
 
 	for _, change := range be.schemaIDChange {
-		log.Info("update schema id",
+		log.Info("update schemaID for table",
 			zap.String("changefeed", be.cfID.Name()),
 			zap.Uint64("commitTs", be.commitTs),
 			zap.Int64("newSchema", change.OldSchemaID),
@@ -327,10 +342,8 @@ func (be *BarrierEvent) allDispatcherReported() bool {
 	//    Because the DDL was executed before the DML, the DML execution failed.
 	// 5. Therefore, when checking the reported status, we need to check for expired dispatchers
 	//    to avoid this situation.
+	ddlDispatcherExist := true
 	for dispatcherID := range be.reportedDispatchers {
-		if dispatcherID == be.spanController.GetDDLDispatcherID() {
-			continue
-		}
 		task := be.spanController.GetTaskByID(dispatcherID)
 		if task == nil {
 			log.Info("unexisted dispatcher, remove it from barrier event",
@@ -340,38 +353,43 @@ func (be *BarrierEvent) allDispatcherReported() bool {
 			)
 			needDoubleCheck = true
 			delete(be.reportedDispatchers, dispatcherID)
-		} else {
-			if !be.spanController.IsReplicating(task) {
-				log.Info("unreplicating dispatcher, remove it from barrier event",
-					zap.String("changefeed", be.cfID.Name()),
-					zap.String("dispatcher", dispatcherID.String()),
-					zap.Uint64("commitTs", be.commitTs),
-				)
-				needDoubleCheck = true
-				delete(be.reportedDispatchers, dispatcherID)
+			if be.spanController.IsDDLDispatcher(dispatcherID) {
+				ddlDispatcherExist = false
 			}
+		} else if !be.spanController.IsDDLDispatcher(dispatcherID) && !be.spanController.IsReplicating(task) { // TODO:fix ddlReplicating status
+			log.Info("unreplicating dispatcher, remove it from barrier event",
+				zap.String("changefeed", be.cfID.Name()),
+				zap.String("dispatcher", dispatcherID.String()),
+				zap.Uint64("commitTs", be.commitTs),
+			)
+			needDoubleCheck = true
+			delete(be.reportedDispatchers, dispatcherID)
 		}
 	}
 
 	if needDoubleCheck {
 		be.rangeChecker.Reset()
 
-		switch be.blockedDispatchers.InfluenceType {
-		case heartbeatpb.InfluenceType_Normal:
-			if be.dynamicSplitEnabled {
-				be.rangeChecker = range_checker.NewTableSpanRangeChecker(be.spanController.GetkeyspaceID(), be.blockedDispatchers.TableIDs)
-			} else {
-				be.rangeChecker = range_checker.NewTableCountChecker(len(be.blockedDispatchers.TableIDs))
+		if ddlDispatcherExist {
+			switch be.blockedDispatchers.InfluenceType {
+			case heartbeatpb.InfluenceType_Normal:
+				if be.dynamicSplitEnabled {
+					be.rangeChecker = range_checker.NewTableSpanRangeChecker(be.spanController.GetkeyspaceID(), be.blockedDispatchers.TableIDs)
+				} else {
+					be.rangeChecker = range_checker.NewTableCountChecker(be.blockedDispatchers.TableIDs)
+				}
+			case heartbeatpb.InfluenceType_DB:
+				be.createRangeCheckerForTypeDB()
+			case heartbeatpb.InfluenceType_All:
+				be.createRangeCheckerForTypeAll()
 			}
-		case heartbeatpb.InfluenceType_DB:
-			be.createRangeCheckerForTypeDB()
-		case heartbeatpb.InfluenceType_All:
-			be.createRangeCheckerForTypeAll()
+
+			be.addDispatchersToRangeChecker()
+
+			return be.rangeChecker.IsFullyCovered()
+		} else {
+			return false
 		}
-
-		be.addDispatchersToRangeChecker()
-
-		return be.rangeChecker.IsFullyCovered()
 	}
 
 	return true
@@ -440,7 +458,7 @@ func (be *BarrierEvent) sendPassAction(mode int64) []*messaging.TargetMessage {
 
 // check all related blocked dispatchers progress, to forward the progress of some block event,
 // to avoid the corner case that some dispatcher has forward checkpointTs.
-// If the dispatcher's checkpointTs >= commitTs of this event, means the block event is writen to the sink.
+// See forwardBarrierEvent for the exact forwarding rules.
 //
 // For example, there are two nodes A and B, and there are two dispatchers A1 and B1, maintainer is also running on A.
 // One ddl event E need the evolve of A1 and B1, and A1 finish flushing the event E downstream.
@@ -457,7 +475,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 		for _, tableId := range be.blockedDispatchers.TableIDs {
 			replications := be.spanController.GetTasksByTableID(tableId)
 			for _, replication := range replications {
-				if replication.GetStatus().CheckpointTs >= be.commitTs {
+				if forwardBarrierEvent(replication, be) {
 					// one related table has forward checkpointTs, means the block event can be advanced
 					be.selected.Store(true)
 					be.writerDispatcherAdvanced = true
@@ -476,7 +494,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 		schemaID := be.blockedDispatchers.SchemaID
 		replications := be.spanController.GetTasksBySchemaID(schemaID)
 		for _, replication := range replications {
-			if replication.GetStatus().CheckpointTs >= be.commitTs {
+			if forwardBarrierEvent(replication, be) {
 				// one related table has forward checkpointTs, means the block event can be advanced
 				be.selected.Store(true)
 				be.writerDispatcherAdvanced = true
@@ -493,7 +511,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 	case heartbeatpb.InfluenceType_All:
 		replications := be.spanController.GetAllTasks()
 		for _, replication := range replications {
-			if replication.GetStatus().CheckpointTs >= be.commitTs {
+			if forwardBarrierEvent(replication, be) {
 				// one related table has forward checkpointTs, means the block event can be advanced
 				be.selected.Store(true)
 				be.writerDispatcherAdvanced = true
@@ -507,6 +525,32 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 			}
 		}
 	}
+}
+
+// forwardBarrierEvent returns true if `replication` is known to have passed `event`.
+//
+// We intentionally avoid `checkpointTs >= commitTs`: a dispatcher may be recreated with
+// `startTs == commitTs` and not skip the syncpoint at that ts, so it may report
+// `checkpointTs == commitTs` before the syncpoint is actually flushed. We only forward when the
+// replication is strictly beyond the barrier, or when ordering guarantees it (replication is in a
+// syncpoint barrier at the same ts while `event` is a DDL barrier).
+func forwardBarrierEvent(replication *replica.SpanReplication, event *BarrierEvent) bool {
+	if replication.GetStatus().CheckpointTs > event.commitTs {
+		return true
+	}
+
+	blockState := replication.GetBlockState()
+	if blockState != nil {
+		if blockState.BlockTs > event.commitTs {
+			return true
+		} else if blockState.BlockTs == event.commitTs {
+			// if replication is syncpoint, but event is not syncpoint, we can forward the event
+			if blockState.IsSyncPoint && !event.isSyncPoint {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
@@ -606,7 +650,7 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 }
 
 func (be *BarrierEvent) newWriterActionMessage(capture node.ID, mode int64) *messaging.TargetMessage {
-	return messaging.NewSingleTargetMessage(capture, messaging.HeartbeatCollectorTopic,
+	msg := messaging.NewSingleTargetMessage(capture, messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.HeartBeatResponse{
 			ChangefeedID: be.cfID.ToPB(),
 			DispatcherStatuses: []*heartbeatpb.DispatcherStatus{
@@ -622,6 +666,7 @@ func (be *BarrierEvent) newWriterActionMessage(capture node.ID, mode int64) *mes
 			},
 			Mode: mode,
 		})
+	return msg
 }
 
 func (be *BarrierEvent) newPassActionMessage(capture node.ID, mode int64) *messaging.TargetMessage {

@@ -33,10 +33,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
-	"github.com/tikv/client-go/v2/tikv"
 	"go.uber.org/zap"
 )
 
@@ -154,10 +154,10 @@ type SplitSpanChecker struct {
 	mergeThreshold  int
 	mergeCheckCount int
 
-	regionCache split.RegionCache
 	nodeManager *watcher.NodeManager
 	pdClock     pdutil.Clock
 
+	refresher              *RegionCountRefresher
 	splitSpanCheckDuration prometheus.Observer
 }
 
@@ -169,45 +169,56 @@ type splitSpanStatus struct {
 	// idx = 0 is the latest traffic
 	lastThreeTraffic []float64
 
-	regionCount     int
-	regionCheckTime time.Time
+	regionCount int
 }
 
-func NewSplitSpanChecker(changefeedID common.ChangeFeedID, groupID replica.GroupID, schedulerCfg *config.ChangefeedSchedulerConfig) *SplitSpanChecker {
+func NewSplitSpanChecker(
+	changefeedID common.ChangeFeedID,
+	groupID replica.GroupID,
+	schedulerCfg *config.ChangefeedSchedulerConfig,
+	refresher *RegionCountRefresher,
+) *SplitSpanChecker {
 	if schedulerCfg == nil {
 		log.Panic("scheduler config is nil, please check the config", zap.String("changefeed", changefeedID.Name()))
 	}
-	regionCache := appcontext.GetService[split.RegionCache](appcontext.RegionCache)
 	return &SplitSpanChecker{
 		changefeedID:           changefeedID,
 		groupID:                groupID,
 		allTasks:               make(map[common.DispatcherID]*splitSpanStatus),
-		writeThreshold:         schedulerCfg.WriteKeyThreshold,
-		regionThreshold:        schedulerCfg.RegionThreshold,
-		balanceScoreThreshold:  schedulerCfg.BalanceScoreThreshold,
-		minTrafficPercentage:   schedulerCfg.MinTrafficPercentage,
-		maxTrafficPercentage:   schedulerCfg.MaxTrafficPercentage,
-		regionCache:            regionCache,
+		writeThreshold:         util.GetOrZero(schedulerCfg.WriteKeyThreshold),
+		regionThreshold:        util.GetOrZero(schedulerCfg.RegionThreshold),
+		balanceScoreThreshold:  util.GetOrZero(schedulerCfg.BalanceScoreThreshold),
+		minTrafficPercentage:   util.GetOrZero(schedulerCfg.MinTrafficPercentage),
+		maxTrafficPercentage:   util.GetOrZero(schedulerCfg.MaxTrafficPercentage),
 		mergeThreshold:         mergeThreshold,
 		mergeCheckCount:        0,
 		nodeManager:            appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		pdClock:                appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		splitSpanCheckDuration: metrics.SplitSpanCheckDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), replica.GetGroupName(groupID)),
+
+		refresher: refresher,
 	}
 }
 
 func (s *SplitSpanChecker) AddReplica(replica *SpanReplication) {
 	s.allTasks[replica.ID] = &splitSpanStatus{
 		SpanReplication:  replica,
-		regionCheckTime:  time.Now().Add(-regionCheckInterval), // Ensure the first time update status will calculate the region count
 		regionCount:      0,
 		trafficScore:     0,
 		lastThreeTraffic: make([]float64, 3),
+	}
+
+	if s.regionThreshold > 0 {
+		s.refresher.addDispatcher(context.Background(), replica.ID, replica.Span)
 	}
 }
 
 func (s *SplitSpanChecker) RemoveReplica(replica *SpanReplication) {
 	delete(s.allTasks, replica.ID)
+
+	if s.regionThreshold > 0 {
+		s.refresher.removeDispatcher(replica.ID)
+	}
 }
 
 func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
@@ -230,7 +241,7 @@ func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
 			status.trafficScore++
 			log.Debug("update traffic score",
 				zap.String("changefeed", s.changefeedID.String()),
-				zap.Int64("group", int64(s.groupID)),
+				zap.Int64("group", s.groupID),
 				zap.String("span", status.SpanReplication.ID.String()),
 				zap.Any("trafficScore", status.trafficScore),
 				zap.Any("eventSizePerSecond", status.GetStatus().EventSizePerSecond),
@@ -243,16 +254,7 @@ func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
 	}
 
 	if s.regionThreshold > 0 {
-		// check region count, because the change of region count is not frequent, so we can check less frequently
-		if time.Since(status.regionCheckTime) > regionCheckInterval {
-			regions, err := s.regionCache.LoadRegionsInKeyRange(tikv.NewBackoffer(context.Background(), 500), status.Span.StartKey, status.Span.EndKey)
-			if err != nil {
-				log.Warn("list regions failed, skip check region count", zap.String("changefeed", s.changefeedID.Name()), zap.String("span", status.Span.String()), zap.Error(err))
-			} else {
-				status.regionCount = len(regions)
-				status.regionCheckTime = time.Now()
-			}
-		}
+		status.regionCount = s.refresher.getRegionCount(replica.ID)
 	}
 
 	s.balanceCondition.statusUpdated = true
@@ -263,7 +265,6 @@ func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
 		zap.Any("replica", replica.ID),
 		zap.Any("status", status.GetStatus()),
 		zap.Int("status.regionCount", status.regionCount),
-		zap.Any("status.regionCheckTime", status.regionCheckTime),
 		zap.Int("status.trafficScore", status.trafficScore),
 		zap.Any("status.lastThreeTraffic", status.lastThreeTraffic),
 	)
@@ -283,7 +284,7 @@ type SplitSpanCheckResult struct {
 	TargetNode node.ID
 }
 
-func (s *SplitSpanChecker) checkAllTaskAvailable() bool {
+func (s *SplitSpanChecker) checkAllTaskAvailableLocked() bool {
 	for _, task := range s.allTasks {
 		for _, traffic := range task.lastThreeTraffic {
 			if traffic == 0 {
@@ -311,7 +312,7 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 		zap.Any("batch", batch))
 	results := make([]SplitSpanCheckResult, 0)
 
-	if !s.checkAllTaskAvailable() {
+	if !s.checkAllTaskAvailableLocked() {
 		log.Debug("some task is not available, skip check",
 			zap.String("changefeed", s.changefeedID.String()),
 			zap.Int64("group", int64(s.groupID)),
@@ -851,7 +852,7 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 	if len(mergeSpans) > 1 {
 		log.Info("chooseMergedSpans merge spans",
 			zap.String("changefeed", s.changefeedID.String()),
-			zap.Int64("group", int64(s.groupID)),
+			zap.Int64("group", s.groupID),
 			zap.Any("mergeSpans", mergeSpans),
 			zap.Any("node", mergeSpans[0].GetNodeID()),
 		)
@@ -947,7 +948,10 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 	for _, status := range s.allTasks {
 		nodeID := status.GetNodeID()
 		if nodeID == "" {
-			log.Info("split span checker: node id is empty, please check the node id", zap.String("changefeed", s.changefeedID.Name()), zap.String("dispatcherID", status.ID.String()), zap.String("span", status.Span.String()))
+			log.Info("split span checker: node id is empty, please check the node id",
+				zap.String("changefeed", s.changefeedID.Name()),
+				zap.String("dispatcherID", status.ID.String()),
+				zap.String("span", common.FormatTableSpan(status.Span)))
 			continue
 		}
 
@@ -971,7 +975,7 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 			if status.trafficScore > trafficScoreThreshold {
 				log.Info("chooseSplitSpans split span by traffic",
 					zap.String("changefeed", s.changefeedID.String()),
-					zap.Int64("group", int64(s.groupID)),
+					zap.Int64("group", s.groupID),
 					zap.String("splitSpan", status.SpanReplication.ID.String()),
 					zap.Any("splitTargetNodes", status.GetNodeID()),
 				)
@@ -996,8 +1000,8 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 			if status.regionCount > s.regionThreshold {
 				log.Info("chooseSplitSpans split span by region",
 					zap.String("changefeed", s.changefeedID.String()),
-					zap.Int64("group", int64(s.groupID)),
 					zap.String("splitSpan", status.SpanReplication.ID.String()),
+					zap.Int64("group", s.groupID),
 					zap.Any("splitTargetNodes", status.GetNodeID()),
 				)
 
@@ -1184,7 +1188,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	if len(moveSpans) > 0 {
 		log.Info("checkBalanceTraffic move spans",
 			zap.String("changefeed", s.changefeedID.String()),
-			zap.Int64("group", int64(s.groupID)),
+			zap.Int64("group", s.groupID),
 			zap.Any("moveSpans", moveSpans),
 			zap.Any("minTrafficNodeID", minTrafficNodeID),
 		)
@@ -1206,9 +1210,9 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 	}
 
 	log.Info("checkBalanceTraffic split span",
-		zap.String("changefeed", s.changefeedID.String()),
-		zap.Int64("group", int64(s.groupID)),
+		zap.Stringer("changefeed", s.changefeedID),
 		zap.String("splitSpan", span.SpanReplication.ID.String()),
+		zap.Int64("group", s.groupID),
 		zap.Any("splitTargetNodes", []node.ID{minTrafficNodeID, maxTrafficNodeID}),
 	)
 
@@ -1263,6 +1267,5 @@ func (s *SplitSpanChecker) Name() string {
 func SetEasyThresholdForTest() {
 	minTrafficBalanceThreshold = 1
 	maxLagThreshold = 120
-	regionCheckInterval = time.Second * 10
 	mergeThreshold = 1
 }

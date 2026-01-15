@@ -186,6 +186,7 @@ func TestApplySinkURIParamsToConfig(t *testing.T) {
 	t.Parallel()
 
 	expected := New()
+	expected.workerCountSpecified = true
 	expected.WorkerCount = 64
 	expected.MaxTxnRow = 20
 	expected.MaxMultiUpdateRowCount = 80
@@ -194,7 +195,7 @@ func TestApplySinkURIParamsToConfig(t *testing.T) {
 	// expected.BatchReplaceSize = 50
 	expected.SafeMode = false
 	expected.Timezone = `"UTC"`
-	expected.tidbTxnMode = "pessimistic"
+	expected.TidbTxnMode = "pessimistic"
 	// expected.EnableOldValue = true
 	uriStr := "mysql://127.0.0.1:3306/?time-zone=UTC&worker-count=64&max-txn-row=20" +
 		"&max-multi-update-row=80&max-multi-update-row-size=512" +
@@ -214,6 +215,27 @@ func TestApplySinkURIParamsToConfig(t *testing.T) {
 
 	expected.sinkURI = uri
 	require.Equal(t, expected, cfg)
+}
+
+func TestDefaultWorkerCountByDownstream(t *testing.T) {
+	t.Parallel()
+
+	cfg := New()
+	cfg.IsTiDB = true
+	cfg.setWorkerCountByDownstream()
+	require.Equal(t, DefaultTiDBWorkerCount, cfg.WorkerCount)
+
+	cfg = New()
+	cfg.IsTiDB = false
+	cfg.setWorkerCountByDownstream()
+	require.Equal(t, DefaultMySQLWorkerCount, cfg.WorkerCount)
+
+	cfg = New()
+	cfg.workerCountSpecified = true
+	cfg.WorkerCount = 123
+	cfg.IsTiDB = false
+	cfg.setWorkerCountByDownstream()
+	require.Equal(t, 123, cfg.WorkerCount)
 }
 
 func TestParseSinkURIOverride(t *testing.T) {
@@ -254,7 +276,7 @@ func TestParseSinkURIOverride(t *testing.T) {
 	}, {
 		uri: "mysql://127.0.0.1:3306/?tidb-txn-mode=badmode",
 		checker: func(sp *Config) {
-			require.EqualValues(t, sp.tidbTxnMode, defaultTiDBTxnMode)
+			require.EqualValues(t, sp.TidbTxnMode, defaultTiDBTxnMode)
 		},
 	}, {
 		uri: "mysql://127.0.0.1:3306/?multi-stmt-enable=false",

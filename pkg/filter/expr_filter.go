@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/expression"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -31,7 +32,6 @@ import (
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/pingcap/tidb/pkg/util/dbterror/plannererrors"
 	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
-	"github.com/pingcap/tiflow/dm/pkg/utils"
 	"go.uber.org/zap"
 )
 
@@ -164,8 +164,8 @@ func (r *dmlExprFilterRule) getInsertExpr(tableInfo *common.TableInfo) (
 	if r.insertExprs[tableName] != nil {
 		return r.insertExprs[tableName], nil
 	}
-	if r.config.IgnoreInsertValueExpr != "" {
-		expr, err := r.getSimpleExprOfTable(r.config.IgnoreInsertValueExpr, tableInfo.ToTiDBTableInfo())
+	if util.GetOrZero(r.config.IgnoreInsertValueExpr) != "" {
+		expr, err := r.getSimpleExprOfTable(util.GetOrZero(r.config.IgnoreInsertValueExpr), tableInfo.ToTiDBTableInfo())
 		if err != nil {
 			return nil, err
 		}
@@ -182,8 +182,8 @@ func (r *dmlExprFilterRule) getUpdateOldExpr(tableInfo *common.TableInfo) (
 		return r.updateOldExprs[tableName], nil
 	}
 
-	if r.config.IgnoreUpdateOldValueExpr != "" {
-		expr, err := r.getSimpleExprOfTable(r.config.IgnoreUpdateOldValueExpr, tableInfo.ToTiDBTableInfo())
+	if util.GetOrZero(r.config.IgnoreUpdateOldValueExpr) != "" {
+		expr, err := r.getSimpleExprOfTable(util.GetOrZero(r.config.IgnoreUpdateOldValueExpr), tableInfo.ToTiDBTableInfo())
 		if err != nil {
 			return nil, err
 		}
@@ -200,8 +200,8 @@ func (r *dmlExprFilterRule) getUpdateNewExpr(tableInfo *common.TableInfo) (
 		return r.updateNewExprs[tableName], nil
 	}
 
-	if r.config.IgnoreUpdateNewValueExpr != "" {
-		expr, err := r.getSimpleExprOfTable(r.config.IgnoreUpdateNewValueExpr, tableInfo.ToTiDBTableInfo())
+	if util.GetOrZero(r.config.IgnoreUpdateNewValueExpr) != "" {
+		expr, err := r.getSimpleExprOfTable(util.GetOrZero(r.config.IgnoreUpdateNewValueExpr), tableInfo.ToTiDBTableInfo())
 		if err != nil {
 			return nil, err
 		}
@@ -218,8 +218,8 @@ func (r *dmlExprFilterRule) getDeleteExpr(tableInfo *common.TableInfo) (
 		return r.deleteExprs[tableName], nil
 	}
 
-	if r.config.IgnoreDeleteValueExpr != "" {
-		expr, err := r.getSimpleExprOfTable(r.config.IgnoreDeleteValueExpr, tableInfo.ToTiDBTableInfo())
+	if util.GetOrZero(r.config.IgnoreDeleteValueExpr) != "" {
+		expr, err := r.getSimpleExprOfTable(util.GetOrZero(r.config.IgnoreDeleteValueExpr), tableInfo.ToTiDBTableInfo())
 		if err != nil {
 			return nil, err
 		}
@@ -404,7 +404,7 @@ func newExprFilter(
 	cfg *config.FilterConfig,
 ) (*dmlExprFilter, error) {
 	res := &dmlExprFilter{}
-	sessCtx := utils.NewSessionCtx(map[string]string{
+	sessCtx := util.NewSessionCtx(map[string]string{
 		"time_zone": timezone,
 	})
 	for _, rule := range cfg.EventFilters {

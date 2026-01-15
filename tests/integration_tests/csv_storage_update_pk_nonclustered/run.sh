@@ -20,7 +20,12 @@ function run_changefeed() {
 	sleep 8
 
 	cp $CUR/conf/diff_config.toml $WORK_DIR/diff_config.toml
-	sed -i "s/<suffix>/$changefeed_id/" $WORK_DIR/diff_config.toml
+	if [[ $(sed --version 2>/dev/null) == *"GNU"* ]]; then
+		sed -i "s/<suffix>/$changefeed_id/" $WORK_DIR/diff_config.toml
+	else
+		sed -i "" "s/<suffix>/$changefeed_id/" $WORK_DIR/diff_config.toml
+	fi
+
 	if [[ $should_pass_check == true ]]; then
 		check_sync_diff $WORK_DIR $WORK_DIR/diff_config.toml 100
 	else
@@ -42,7 +47,6 @@ function run() {
 
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 	start_tidb_cluster --workdir $WORK_DIR
-	cd $WORK_DIR
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
@@ -58,7 +62,7 @@ function run() {
 	run_changefeed "changefeed4" $start_ts 20 true
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_test $WORK_DIR' EXIT
 run $*
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

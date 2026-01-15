@@ -25,12 +25,14 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/fsutil"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/codec"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/prometheus/client_golang/prometheus"
@@ -47,6 +49,7 @@ type fileWriter interface {
 	GetInputCh() chan writer.RedoEvent
 	Flush() error
 	Close() error
+	SetTableSchemaStore(*commonEvent.TableSchemaStore)
 }
 
 // fileWriter is a redo log event fileWriter which writes redo log events to a file.
@@ -76,6 +79,7 @@ type Writer struct {
 	metricFsyncDuration    prometheus.Observer
 	metricFlushAllDuration prometheus.Observer
 	metricWriteBytes       prometheus.Gauge
+	tableSchemaStore       *commonEvent.TableSchemaStore
 }
 
 // NewFileWriter return a file rotated writer, TODO: extract to a common rotate Writer
@@ -105,7 +109,7 @@ func NewFileWriter(
 		cfg:       cfg,
 		logType:   logType,
 		op:        op,
-		inputCh:   make(chan writer.RedoEvent, redo.DefaultEncodingInputChanSize*cfg.FlushWorkerNum),
+		inputCh:   make(chan writer.RedoEvent, redo.DefaultEncodingInputChanSize*util.GetOrZero(cfg.FlushWorkerNum)),
 		uint64buf: make([]byte, 8),
 		storage:   extStorage,
 
@@ -141,6 +145,10 @@ func NewFileWriter(
 
 	w.running.Store(true)
 	return w, nil
+}
+
+func (w *Writer) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
+	w.tableSchemaStore = tableSchemaStore
 }
 
 func (w *Writer) Run(ctx context.Context) error {
@@ -249,6 +257,9 @@ func (w *Writer) GetInputCh() chan writer.RedoEvent {
 
 func (w *Writer) write(event writer.RedoEvent) error {
 	rl := event.ToRedoLog()
+	if rl.Type == commonEvent.RedoLogTypeDDL {
+		rl.RedoDDL.SetTableSchemaStore(w.tableSchemaStore)
+	}
 	data, err := codec.MarshalRedoLog(rl, nil)
 	if err != nil {
 		return errors.WrapError(errors.ErrMarshalFailed, err)
@@ -275,7 +286,7 @@ func (w *Writer) SyncWrite(event writer.RedoEvent) error {
 }
 
 func (w *Writer) encode(ctx context.Context) error {
-	d := time.Duration(w.cfg.FlushIntervalInMs) * time.Millisecond
+	d := time.Duration(util.GetOrZero(w.cfg.FlushIntervalInMs)) * time.Millisecond
 	ticker := time.NewTicker(d)
 	defer ticker.Stop()
 	num := 0

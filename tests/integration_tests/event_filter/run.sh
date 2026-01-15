@@ -11,7 +11,6 @@ SINK_TYPE=$1
 function run() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 	start_tidb_cluster --workdir $WORK_DIR
-	cd $WORK_DIR
 
 	export GO_FAILPOINTS=''
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --addr "127.0.0.1:8300" --pd "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}"
@@ -49,7 +48,7 @@ function run() {
 	check_table_exists "event_filter.t_name2" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_table_exists "event_filter.t_name3" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_table_exists "event_filter.t_virtual" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-	sleep 10
+	sleep 20
 
 	# check those rows that are not filtered are synced to downstream
 	run_sql "select count(1) from event_filter.t1;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
@@ -118,10 +117,25 @@ function run() {
 	sleep 10
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 
+	run_sql "create database foo;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	check_db_exists "foo" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	sleep 10
+	check_db_not_exists "foo" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+
+	# only capture table filter.t1, so filter.t2 should not be replicated
+	run_sql "create database if not exists filter;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "create database if not exists filter;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	run_sql "create table filter.t1 (id int primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	check_table_exists "filter.t1" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	run_sql "create table filter.t2 (id int primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	check_table_exists "filter.t2" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	sleep 10
+	check_table_not_exists "filter.t2" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+
 	cleanup_process $CDC_BINARY
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_test $WORK_DIR' EXIT
 run $*
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

@@ -74,7 +74,7 @@ func (m *regionCountSplitter) split(
 	if err != nil {
 		log.Warn("load regions failed, skip split span",
 			zap.String("changefeed", m.changefeedID.Name()),
-			zap.String("span", span.String()),
+			zap.String("span", common.FormatTableSpan(span)),
 			zap.Error(err))
 		return []*heartbeatpb.TableSpan{span}
 	}
@@ -82,7 +82,7 @@ func (m *regionCountSplitter) split(
 	if spansNum == 0 && (m.regionThreshold == 0 || len(regions) <= m.regionThreshold) {
 		log.Info("skip split span because region count is less than region threshold or region threshold is 0",
 			zap.String("changefeed", m.changefeedID.Name()),
-			zap.String("span", span.String()),
+			zap.String("span", common.FormatTableSpan(span)),
 			zap.Int("regionCount", len(regions)),
 			zap.Int("regionThreshold", m.regionThreshold))
 		return []*heartbeatpb.TableSpan{span}
@@ -90,7 +90,7 @@ func (m *regionCountSplitter) split(
 	if spansNum > 0 && len(regions) < spansNum {
 		log.Info("skip split span because region count is less than target spans num",
 			zap.String("changefeed", m.changefeedID.Name()),
-			zap.String("span", span.String()),
+			zap.String("span", common.FormatTableSpan(span)),
 			zap.Int("regionCount", len(regions)),
 			zap.Int("targetSpansNum", spansNum))
 		return []*heartbeatpb.TableSpan{span}
@@ -108,7 +108,7 @@ func (m *regionCountSplitter) split(
 			log.Warn("schedulerv3: list region out of order detected",
 				zap.String("keyspace", m.changefeedID.Keyspace()),
 				zap.String("changefeed", m.changefeedID.Name()),
-				zap.String("span", span.String()),
+				zap.String("span", common.FormatTableSpan(span)),
 				zap.Stringer("lastSpan", spans[len(spans)-1]),
 				zap.Any("startKey", startKey),
 				zap.Any("endKey", endKey))
@@ -140,7 +140,7 @@ func (m *regionCountSplitter) split(
 	log.Info("split span by region count",
 		zap.Uint32("keyspaceID", span.KeyspaceID),
 		zap.String("changefeed", m.changefeedID.Name()),
-		zap.String("span", span.String()),
+		zap.String("span", common.FormatTableSpan(span)),
 		zap.Int("spans", len(spans)),
 		zap.Int("regionCount", len(regions)),
 		zap.Int("regionCountPerSpan", m.regionCountPerSpan),

@@ -13,8 +13,6 @@ function prepare() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	cd $WORK_DIR
-
 	# create table to upstream.
 	run_sql "CREATE DATABASE bank" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE DATABASE bank" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
@@ -26,7 +24,7 @@ function prepare() {
 	cdc_cli_changefeed create --sink-uri="blackhole://" -c "changefeed-for-find-finished-ts" --server "http://127.0.0.1:8400"
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_test $WORK_DIR' EXIT
 # No need to support kafka and storage sink.
 if [ "$SINK_TYPE" == "mysql" ]; then
 	prepare $*

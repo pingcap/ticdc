@@ -33,8 +33,6 @@ function run() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	cd $WORK_DIR
-
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 	run_sql "CREATE DATABASE changefeed_error;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	go-ycsb load mysql -P $CUR/conf/workload -p mysql.host=${UP_TIDB_HOST} -p mysql.port=${UP_TIDB_PORT} -p mysql.user=root -p mysql.db=changefeed_error
@@ -124,7 +122,7 @@ function run() {
 	echo "Pass case 3"
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_test $WORK_DIR' EXIT
 run $*
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

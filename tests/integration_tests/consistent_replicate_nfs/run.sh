@@ -11,7 +11,7 @@ SINK_TYPE=$1
 stop() {
 	# to distinguish whether the test failed in the DML synchronization phase or the DDL synchronization phase
 	echo $(mysql -h${DOWN_TIDB_HOST} -P${DOWN_TIDB_PORT} -uroot -e "select count(*) from consistent_replicate_nfs.usertable;")
-	stop_tidb_cluster
+	stop_test $WORK_DIR
 }
 
 function run() {
@@ -23,8 +23,6 @@ function run() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
 	start_tidb_cluster --workdir $WORK_DIR
-
-	cd $WORK_DIR
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
@@ -46,8 +44,8 @@ function run() {
 	sed "s/<placeholder>/$rts/g" $CUR/conf/diff_config.toml >$WORK_DIR/diff_config.toml
 
 	cat $WORK_DIR/diff_config.toml
-	cdc redo apply --tmp-dir="$tmp_download_path/apply" --storage="$storage_path" --sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
-	check_sync_diff $WORK_DIR $WORK_DIR/diff_config.toml
+	cdc redo apply --log-level debug --tmp-dir="$tmp_download_path/apply" --storage="$storage_path" --sink-uri="mysql://normal:123456@127.0.0.1:3306/" >$WORK_DIR/cdc_redo.log
+	check_sync_diff $WORK_DIR $WORK_DIR/diff_config.toml 100
 }
 
 trap stop EXIT

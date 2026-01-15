@@ -17,6 +17,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"sync"
 
@@ -68,6 +69,10 @@ func hashTableInfo(tableInfo *model.TableInfo) Digest {
 		sha256Hasher.Write(buf)
 		// column name
 		sha256Hasher.Write([]byte(col.Name.O))
+		// state
+		// Column state affects the visible schema during DDL.
+		binary.BigEndian.PutUint64(buf, uint64(col.State))
+		sha256Hasher.Write(buf)
 		// column type
 		columnType := col.FieldType
 		sha256Hasher.Write([]byte{columnType.GetType()})
@@ -90,16 +95,30 @@ func hashTableInfo(tableInfo *model.TableInfo) Digest {
 		}
 		binary.BigEndian.PutUint64(buf, uint64(boolToInt(columnType.IsArray())))
 		sha256Hasher.Write(buf)
+
+		binary.BigEndian.PutUint64(buf, uint64(boolToInt(col.DefaultIsExpr)))
+		sha256Hasher.Write(buf)
+		binary.BigEndian.PutUint64(buf, uint64(boolToInt(col.GeneratedStored)))
+		sha256Hasher.Write(buf)
+		binary.BigEndian.PutUint64(buf, uint64(boolToInt(col.Hidden)))
+		sha256Hasher.Write(buf)
+		binary.BigEndian.PutUint64(buf, col.Version)
+		sha256Hasher.Write(buf)
 	}
 	// idx info
 	sha256Hasher.Write([]byte("idxInfo"))
 	binary.BigEndian.PutUint64(buf, uint64(len(tableInfo.Indices)))
+	sha256Hasher.Write(buf)
 	for _, idx := range tableInfo.Indices {
 		// ID
 		binary.BigEndian.PutUint64(buf, uint64(idx.ID))
 		sha256Hasher.Write(buf)
 		// name
 		sha256Hasher.Write([]byte(idx.Name.O))
+		// state
+		// Index state affects how downstream chooses usable keys during DDL.
+		binary.BigEndian.PutUint64(buf, uint64(idx.State))
+		sha256Hasher.Write(buf)
 		// columns offset
 		binary.BigEndian.PutUint64(buf, uint64(len(idx.Columns)))
 		sha256Hasher.Write(buf)
@@ -114,6 +133,13 @@ func hashTableInfo(tableInfo *model.TableInfo) Digest {
 		binary.BigEndian.PutUint64(buf, uint64(boolToInt(idx.Primary)))
 		sha256Hasher.Write(buf)
 	}
+	// Handle-related flags affect how rows are decoded and how handle keys are built.
+	// Include them in the hash to avoid incorrectly sharing schemas across tables.
+	sha256Hasher.Write([]byte("handleFlags"))
+	binary.BigEndian.PutUint64(buf, uint64(boolToInt(tableInfo.PKIsHandle)))
+	sha256Hasher.Write(buf)
+	binary.BigEndian.PutUint64(buf, uint64(boolToInt(tableInfo.IsCommonHandle)))
+	sha256Hasher.Write(buf)
 	hash := sha256Hasher.Sum(nil)
 	return ToDigest(hash)
 }
@@ -158,7 +184,13 @@ type SharedColumnSchemaStorage struct {
 	mutex sync.Mutex
 }
 
-func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indices []*model.IndexInfo) bool {
+func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indices []*model.IndexInfo, pkIsHandle bool, isCommonHandle bool) bool {
+	// Handle-related flags affect how rows are decoded and how handle keys are built.
+	// They must be part of schema equality.
+	if s.PKIsHandle != pkIsHandle || s.IsCommonHandle != isCommonHandle {
+		return false
+	}
+
 	if len(s.Columns) != len(columns) {
 		return false
 	}
@@ -170,10 +202,33 @@ func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indice
 		if !col.FieldType.Equal(&columns[i].FieldType) {
 			return false
 		}
+		if col.State != columns[i].State {
+			return false
+		}
 		if col.ID != columns[i].ID {
 			return false
 		}
-		if col.GetDefaultValue() != columns[i].GetDefaultValue() {
+		if !reflect.DeepEqual(col.GetDefaultValue(), columns[i].GetDefaultValue()) {
+			return false
+		}
+
+		if !reflect.DeepEqual(col.GetOriginDefaultValue(), columns[i].GetOriginDefaultValue()) {
+			return false
+		}
+
+		if col.DefaultIsExpr != columns[i].DefaultIsExpr {
+			return false
+		}
+		if col.GeneratedStored != columns[i].GeneratedStored {
+			return false
+		}
+		if col.Hidden != columns[i].Hidden {
+			return false
+		}
+		if col.GeneratedExprString != columns[i].GeneratedExprString {
+			return false
+		}
+		if col.Version != columns[i].Version {
 			return false
 		}
 	}
@@ -187,6 +242,9 @@ func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indice
 			return false
 		}
 		if idx.Name.O != indices[i].Name.O {
+			return false
+		}
+		if idx.State != indices[i].State {
 			return false
 		}
 		if len(idx.Columns) != len(indices[i].Columns) {
@@ -208,12 +266,12 @@ func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indice
 }
 
 func (s *columnSchema) SameWithTableInfo(tableInfo *model.TableInfo) bool {
-	return s.sameColumnsAndIndices(tableInfo.Columns, tableInfo.Indices)
+	return s.sameColumnsAndIndices(tableInfo.Columns, tableInfo.Indices, tableInfo.PKIsHandle, tableInfo.IsCommonHandle)
 }
 
 // compare the item calculated in hashTableInfo
 func (s *columnSchema) equal(columnSchema *columnSchema) bool {
-	return s.sameColumnsAndIndices(columnSchema.Columns, columnSchema.Indices)
+	return s.sameColumnsAndIndices(columnSchema.Columns, columnSchema.Indices, columnSchema.PKIsHandle, columnSchema.IsCommonHandle)
 }
 
 func (s *SharedColumnSchemaStorage) incColumnSchemaCount(columnSchema *columnSchema) {
@@ -354,8 +412,19 @@ type columnSchema struct {
 	// ColumnID -> offset in RowChangedEvents.Columns.
 	RowColumnsOffset map[int64]int `json:"row_columns_offset"`
 
-	// store handle key column ids
+	// HandleColIDs is only used for the new row format decoder, it's the same concept as the TiDB Handle.
+	// In the clustered index scenario, it contains the column ID of the primary key columns.
+	// In the non-clustered scenario, it should always be -1, to avoid be observed by the decoder.
+	HandleColID []int64 `json:"handle_col_id"`
+
+	// TiCDC only replicates table has primary key or not null unique key.
+	// * If there is primary key, it's the handle key
+	// * Otherwise, it's the unique key. If there are multiple unique keys, it's the longest one.
+	// * If there are multiple unique key with the same length, it the first one.
 	HandleKeyIDs map[int64]struct{} `json:"handle_key_ids"`
+	// HandleKeyIDList store the colID list of the HandleKeyIDs in order.
+	HandleKeyIDList []int64 `json:"handle_key_id_list"`
+
 	// IndexColumns store the colID of the columns in row changed events for
 	// unique index and primary key
 	// The reason why we need this is that the Indexes in TableInfo
@@ -363,17 +432,13 @@ type columnSchema struct {
 	// create table t (a int primary key, b int unique key);
 	// Every element in first dimension is a index, and the second dimension is the columns offset
 	IndexColumns [][]int64 `json:"index_columns"`
-
 	// PKIndex store the colID of the columns in row changed events for primary key
 	PKIndex []int64 `json:"pk_index"`
-
 	// The following 3 fields, should only be used to decode datum from the raw value bytes, do not abuse those field.
 	// RowColInfos extend the model.ColumnInfo with some extra information
 	// it's the same length and order with the model.TableInfo.Columns
 	RowColInfos    []rowcodec.ColInfo              `json:"row_col_infos"`
 	RowColFieldTps map[int64]*datumTypes.FieldType `json:"row_col_field_tps"`
-	// only for new row format decoder
-	HandleColID []int64 `json:"handle_col_id"`
 	// RowColFieldTpsSlice is used to decode chunk ∂ raw value bytes
 	RowColFieldTpsSlice []*datumTypes.FieldType `json:"row_col_field_tps_slice"`
 
@@ -432,6 +497,7 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 		NameToColID:      make(map[string]int64, len(tableInfo.Columns)),
 		RowColumnsOffset: make(map[int64]int, len(tableInfo.Columns)),
 		HandleKeyIDs:     make(map[int64]struct{}),
+		HandleKeyIDList:  make([]int64, 0),
 		HandleColID:      []int64{-1},
 		RowColInfos:      make([]rowcodec.ColInfo, len(tableInfo.Columns)),
 		RowColFieldTps:   make(map[int64]*datumTypes.FieldType, len(tableInfo.Columns)),
@@ -452,16 +518,19 @@ func newColumnSchema(tableInfo *model.TableInfo, digest Digest) *columnSchema {
 				// pk is handle
 				colSchema.HandleKeyIDs[col.ID] = struct{}{}
 				colSchema.HandleColID = []int64{col.ID}
+				colSchema.HandleKeyIDList = append(colSchema.HandleKeyIDList, col.ID)
 				colSchema.IndexColumns = append(colSchema.IndexColumns, []int64{col.ID})
 				colSchema.PKIndex = []int64{col.ID}
 			} else if tableInfo.IsCommonHandle {
 				clear(colSchema.HandleKeyIDs)
+				colSchema.HandleKeyIDList = colSchema.HandleKeyIDList[:0]
 				colSchema.HandleColID = colSchema.HandleColID[:0]
 				pkIdx := tables.FindPrimaryIndex(tableInfo)
 				for _, pkCol := range pkIdx.Columns {
 					id := tableInfo.Columns[pkCol.Offset].ID
 					colSchema.HandleKeyIDs[id] = struct{}{}
 					colSchema.HandleColID = append(colSchema.HandleColID, id)
+					colSchema.HandleKeyIDList = append(colSchema.HandleKeyIDList, id)
 				}
 
 			}
@@ -604,6 +673,7 @@ func (s *columnSchema) initIndexColumns() {
 			if !hasPrimary {
 				for _, col := range idx.Columns {
 					s.HandleKeyIDs[s.Columns[col.Offset].ID] = struct{}{}
+					s.HandleKeyIDList = append(s.HandleKeyIDList, s.Columns[col.Offset].ID)
 				}
 				hasPrimary = true
 			}
@@ -640,13 +710,18 @@ func (s *columnSchema) initIndexColumns() {
 			}
 		}
 	}
-	if handleIndexOffset < 0 {
+
+	// if no handle index or has primary key, return directly
+	if handleIndexOffset < 0 || hasPrimary {
 		return
 	}
 
+	// only set handle key Ids with not null unique key when there is no primary key
 	selectCols := s.Indices[handleIndexOffset].Columns
 	for _, col := range selectCols {
-		s.HandleKeyIDs[s.Columns[col.Offset].ID] = struct{}{}
+		colID := s.Columns[col.Offset].ID
+		s.HandleKeyIDs[colID] = struct{}{}
+		s.HandleKeyIDList = append(s.HandleKeyIDList, colID)
 	}
 }
 

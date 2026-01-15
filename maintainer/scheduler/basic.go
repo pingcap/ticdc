@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	pkgScheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	pkgreplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"go.uber.org/zap"
 )
@@ -73,8 +74,8 @@ func NewBasicScheduler(
 		mode:                       mode,
 	}
 
-	if schedulerCfg != nil && schedulerCfg.SchedulingTaskCountPerNode > 0 {
-		scheduler.schedulingTaskCountPerNode = schedulerCfg.SchedulingTaskCountPerNode
+	if schedulerCfg != nil && util.GetOrZero(schedulerCfg.SchedulingTaskCountPerNode) > 0 {
+		scheduler.schedulingTaskCountPerNode = util.GetOrZero(schedulerCfg.SchedulingTaskCountPerNode)
 	}
 
 	return scheduler

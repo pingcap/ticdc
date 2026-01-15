@@ -161,13 +161,17 @@ func (d *dispatcherStat) clear() {
 
 // registerTo register the dispatcher to the specified event service.
 func (d *dispatcherStat) registerTo(serverID node.ID) {
-	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRegisterRequest(d.eventCollector.getLocalServerID().String(), false))
+	// `onlyReuse` is used to control the register behavior at logservice side
+	// it should be set to `false` when register to a local event service,
+	// and set to `true` when register to a remote event service.
+	onlyReuse := serverID != d.eventCollector.getLocalServerID()
+	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRegisterRequest(d.eventCollector.getLocalServerID().String(), onlyReuse))
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
 // commitReady is used to notify the event service to start sending events.
 func (d *dispatcherStat) commitReady(serverID node.ID) {
-	d.doReset(serverID, d.target.GetStartTs())
+	d.doReset(serverID, d.getResetTs())
 }
 
 // reset is used to reset the dispatcher to the specified commitTs,
@@ -180,9 +184,10 @@ func (d *dispatcherStat) doReset(serverID node.ID, resetTs uint64) {
 	epoch := d.epoch.Add(1)
 	d.lastEventSeq.Store(0)
 	// remove the dispatcher from the dynamic stream
-	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherResetRequest(d.eventCollector.getLocalServerID().String(), resetTs, epoch))
+	resetRequest := d.newDispatcherResetRequest(d.eventCollector.getLocalServerID().String(), resetTs, epoch)
+	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, resetRequest)
 	d.eventCollector.enqueueMessageForSend(msg)
-	log.Info("Send reset dispatcher request to event service to reset the dispatcher",
+	log.Info("send reset dispatcher request to event service",
 		zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 		zap.Stringer("dispatcher", d.getDispatcherID()),
 		zap.Stringer("eventServiceID", serverID),
@@ -209,7 +214,7 @@ func (d *dispatcherStat) remove() {
 
 // removeFrom is used to remove the dispatcher from the specified event service.
 func (d *dispatcherStat) removeFrom(serverID node.ID) {
-	log.Info("Send remove dispatcher request to event service",
+	log.Info("send remove dispatcher request to event service",
 		zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 		zap.Stringer("dispatcher", d.getDispatcherID()),
 		zap.Stringer("eventServiceID", serverID))
@@ -232,6 +237,15 @@ func (d *dispatcherStat) getDispatcherID() common.DispatcherID {
 // verifyEventSequence verifies if the event's sequence number is continuous with previous events.
 // Returns false if sequence is discontinuous (indicating dropped events), which requires dispatcher reset.
 func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) bool {
+	// check the invariant that handshake event is the first event of every epoch
+	if event.GetType() != commonEvent.TypeHandshakeEvent && d.lastEventSeq.Load() == 0 {
+		log.Warn("receive non-handshake event before handshake event, reset the dispatcher",
+			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+			zap.Stringer("dispatcher", d.getDispatcherID()),
+			zap.Any("event", event.Event))
+		return false
+	}
+
 	switch event.GetType() {
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeDDLEvent,
@@ -258,7 +272,7 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) b
 		}
 
 		if event.GetSeq() != expectedSeq {
-			log.Warn("Received an out-of-order event, reset the dispatcher",
+			log.Warn("receive an out-of-order event, reset the dispatcher",
 				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 				zap.Stringer("dispatcher", d.getDispatcherID()),
 				zap.String("eventType", commonEvent.TypeToString(event.GetType())),
@@ -280,7 +294,7 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) b
 
 			expectedSeq := d.lastEventSeq.Add(1)
 			if e.Seq != expectedSeq {
-				log.Warn("Received an out-of-order batch DML event, reset the dispatcher",
+				log.Warn("receive an out-of-order batch DML event, reset the dispatcher",
 					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 					zap.Stringer("dispatcher", d.getDispatcherID()),
 					zap.String("eventType", commonEvent.TypeToString(event.GetType())),
@@ -315,7 +329,7 @@ func (d *dispatcherStat) filterAndUpdateEventByCommitTs(event dispatcher.Dispatc
 		}
 	}
 	if shouldIgnore {
-		log.Warn("Receive a event older than sendCommitTs, ignore it",
+		log.Warn("receive a event older than sendCommitTs, ignore it",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Int64("tableID", d.target.GetTableSpan().TableID),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
@@ -358,18 +372,7 @@ func (d *dispatcherStat) isFromCurrentEpoch(event dispatcher.DispatcherEvent) bo
 			}
 		}
 	}
-	if event.GetEpoch() != d.epoch.Load() {
-		return false
-	}
-	// check the invariant that handshake event is the first event of every epoch
-	if event.GetType() != commonEvent.TypeHandshakeEvent && d.lastEventSeq.Load() == 0 {
-		log.Warn("receive non-handshake event before handshake event, ignore it",
-			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-			zap.Stringer("dispatcher", d.getDispatcherID()),
-			zap.Any("event", event.Event))
-		return false
-	}
-	return true
+	return event.GetEpoch() == d.epoch.Load()
 }
 
 // handleBatchDataEvents processes a batch of DML and Resolved events with the following algorithm:
@@ -625,6 +628,13 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 			zap.Any("event", event.Event))
 		return
 	}
+	if event.GetSeq() != 1 {
+		log.Warn("should not happen: handshake event sequence number is not 1",
+			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+			zap.Stringer("dispatcher", d.getDispatcherID()),
+			zap.Uint64("sequence", event.GetSeq()))
+		return
+	}
 	tableInfo := handshakeEvent.TableInfo
 	if tableInfo != nil {
 		d.tableInfo.Store(tableInfo)
@@ -669,6 +679,7 @@ func (d *dispatcherStat) newDispatcherRegisterRequest(serverId string, onlyReuse
 			Timezone:             d.target.GetTimezone(),
 			Integrity:            d.target.GetIntegrityConfig(),
 			OutputRawChangeEvent: d.target.IsOutputRawChangeEvent(),
+			TxnAtomicity:         string(d.target.GetTxnAtomicity()),
 		},
 	}
 }

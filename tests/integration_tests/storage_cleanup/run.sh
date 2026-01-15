@@ -92,7 +92,6 @@ function run() {
 
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 	start_tidb_cluster --workdir $WORK_DIR
-	cd $WORK_DIR
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
 	generate_historic_files
@@ -114,7 +113,7 @@ function run() {
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 100
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_test $WORK_DIR' EXIT
 run $*
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

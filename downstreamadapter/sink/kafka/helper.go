@@ -103,7 +103,7 @@ func newKafkaSinkComponentWithFactory(ctx context.Context,
 		return kafkaComponent, protocol, errors.Trace(err)
 	}
 
-	kafkaComponent.adminClient, err = kafkaComponent.factory.AdminClient()
+	kafkaComponent.adminClient, err = kafkaComponent.factory.AdminClient(ctx)
 	if err != nil {
 		return kafkaComponent, protocol, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}

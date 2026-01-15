@@ -14,8 +14,6 @@
 package redo
 
 import (
-	"context"
-
 	"github.com/pingcap/ticdc/pkg/applier"
 	"github.com/spf13/cobra"
 )
@@ -32,18 +30,18 @@ func newMetaOptions() *metaOptions {
 
 // run runs the `redo meta` command.
 func (o *metaOptions) run(cmd *cobra.Command) error {
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	cfg := &applier.RedoApplierConfig{
 		Storage: o.storage,
 		Dir:     o.dir,
 	}
 	ap := applier.NewRedoApplier(cfg)
-	checkpointTs, resolvedTs, err := ap.ReadMeta(ctx)
+	checkpointTs, resolvedTs, version, err := ap.ReadMeta(ctx)
 	if err != nil {
 		return err
 	}
-	cmd.Printf("checkpoint-ts:%d, resolved-ts:%d\n", checkpointTs, resolvedTs)
+	cmd.Printf("checkpoint-ts:%d, resolved-ts:%d version:%d\n", checkpointTs, resolvedTs, version)
 	return nil
 }
 

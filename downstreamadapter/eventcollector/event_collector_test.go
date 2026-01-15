@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
 
@@ -86,6 +87,10 @@ func (m *mockEventDispatcher) GetSyncPointInterval() time.Duration {
 
 func (m *mockEventDispatcher) GetSkipSyncpointAtStartTs() bool {
 	return false
+}
+
+func (m *mockEventDispatcher) GetTxnAtomicity() config.AtomicityLevel {
+	return config.DefaultAtomicityLevel()
 }
 
 func (m *mockEventDispatcher) GetResolvedTs() uint64 {
@@ -171,7 +176,7 @@ func TestProcessMessage(t *testing.T) {
 			done <- struct{}{}
 		}
 	}
-	c.AddDispatcher(d, config.GetDefaultReplicaConfig().MemoryQuota)
+	c.AddDispatcher(d, util.GetOrZero(config.GetDefaultReplicaConfig().MemoryQuota))
 
 	ch <- newMessage(node.ID, &readyEvent)
 	ch <- newMessage(node.ID, &handshakeEvent)

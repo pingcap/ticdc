@@ -58,6 +58,8 @@ const (
 type Controller struct {
 	version int64
 
+	selfNode *node.Info
+
 	pdClient           pd.Client
 	pdClock            pdutil.Clock
 	scheduler          *scheduler.Controller
@@ -66,7 +68,9 @@ type Controller struct {
 	backend            changefeed.Backend
 	eventCh            *chann.DrainableChann[*Event]
 
-	bootstrapped *atomic.Bool
+	// initialized is true after all necessary resources ready,
+	// it's not affected by new node join the cluster.
+	initialized  *atomic.Bool
 	bootstrapper *bootstrap.Bootstrapper[heartbeatpb.CoordinatorBootstrapResponse]
 
 	nodeChanged struct {
@@ -80,11 +84,11 @@ type Controller struct {
 	taskHandlers     []*threadpool.TaskHandle
 	messageCenter    messaging.MessageCenter
 
-	changefeedChangeCh chan []*ChangefeedChange
+	changefeedChangeCh chan []*changefeedChange
 	apiLock            sync.RWMutex
 }
 
-type ChangefeedChange struct {
+type changefeedChange struct {
 	changefeedID common.ChangeFeedID
 	changefeed   *changefeed.Changefeed
 	state        config.FeedState
@@ -92,46 +96,53 @@ type ChangefeedChange struct {
 	err          *config.RunningError
 }
 
+func newChangefeedChange(changefeed *changefeed.Changefeed, state config.FeedState, changeType ChangeType, err *config.RunningError) *changefeedChange {
+	return &changefeedChange{
+		changefeedID: changefeed.ID,
+		changefeed:   changefeed,
+		state:        state,
+		changeType:   changeType,
+		err:          err,
+	}
+}
+
 func NewController(
 	version int64,
 	selfNode *node.Info,
-	changefeedChangeCh chan []*ChangefeedChange,
+	changefeedChangeCh chan []*changefeedChange,
 	backend changefeed.Backend,
 	eventCh *chann.DrainableChann[*Event],
 	batchSize int,
 	balanceInterval time.Duration,
 	pdClient pd.Client,
 ) *Controller {
-	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	changefeedDB := changefeed.NewChangefeedDB(version)
 
-	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
-	oc := operator.NewOperatorController(mc, selfNode, changefeedDB, backend, nodeManager, batchSize)
+	oc := operator.NewOperatorController(selfNode, changefeedDB, backend, batchSize)
 	c := &Controller{
-		version:      version,
-		bootstrapped: atomic.NewBool(false),
+		version:     version,
+		selfNode:    selfNode,
+		initialized: atomic.NewBool(false),
 		scheduler: scheduler.NewController(map[string]scheduler.Scheduler{
 			scheduler.BasicScheduler: coscheduler.NewBasicScheduler(
 				selfNode.ID.String(),
 				batchSize,
 				oc,
 				changefeedDB,
-				nodeManager,
 			),
 			scheduler.BalanceScheduler: coscheduler.NewBalanceScheduler(
 				selfNode.ID.String(),
 				batchSize,
 				oc,
 				changefeedDB,
-				nodeManager,
 				balanceInterval,
 			),
 		}),
 		eventCh:            eventCh,
 		operatorController: oc,
-		messageCenter:      mc,
+		messageCenter:      appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		changefeedDB:       changefeedDB,
-		nodeManager:        nodeManager,
+		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		taskScheduler:      threadpool.NewThreadPoolDefault(),
 		backend:            backend,
 		changefeedChangeCh: changefeedChangeCh,
@@ -145,8 +156,6 @@ func NewController(
 		c.newBootstrapMessage,
 	)
 
-	// init bootstrapper nodes
-	nodes := c.nodeManager.GetAliveNodes()
 	// detect the capture changes
 	c.nodeManager.RegisterNodeChangeHandler(
 		nodeChangeHandlerID,
@@ -157,18 +166,19 @@ func NewController(
 		},
 	)
 
+	nodes := c.nodeManager.GetAliveNodes()
+	added, _, requests, _ := c.bootstrapper.HandleNodesChange(nodes)
 	log.Info("coordinator bootstrap initial nodes",
-		zap.Int("nodeNum", len(nodes)),
-		zap.Any("nodes", nodes),
-	)
+		zap.Int("addedCount", len(added)), zap.Any("addedNodes", nodes))
 
-	newNodes := make([]*node.Info, 0, len(nodes))
-	for _, n := range nodes {
-		newNodes = append(newNodes, n)
+	for _, req := range requests {
+		err := c.messageCenter.SendCommand(req)
+		if err != nil {
+			log.Warn("send request failed when boostrapping initial node, will be resent later",
+				zap.Any("targetNode", req.To), zap.Error(err))
+		}
 	}
-	for _, msg := range c.bootstrapper.HandleNewNodes(newNodes) {
-		_ = c.messageCenter.SendCommand(msg)
-	}
+
 	c.submitPeriodTask()
 	return c
 }
@@ -179,7 +189,7 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return context.Cause(ctx)
 		case <-ticker.C:
 			metrics.ChangefeedStateGauge.WithLabelValues("Total").Set(float64(c.changefeedDB.GetSize()))
 			metrics.ChangefeedStateGauge.WithLabelValues("Working").Set(float64(c.changefeedDB.GetReplicatingSize()))
@@ -209,7 +219,7 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 }
 
 // HandleEvent implements the event-driven process mode
-func (c *Controller) HandleEvent(event *Event) {
+func (c *Controller) HandleEvent(ctx context.Context, event *Event) {
 	if event == nil {
 		return
 	}
@@ -226,37 +236,40 @@ func (c *Controller) HandleEvent(event *Event) {
 
 	// Before processing the event, we need to check the online/offline nodes,
 	// the following logic is based on whether the node changed.
-	c.checkOnNodeChanged()
+	c.checkOnNodeChanged(ctx)
 
 	switch event.eventType {
 	case EventMessage:
-		c.onMessage(event.message)
+		c.onMessage(ctx, event.message)
 	case EventPeriod:
 		c.onPeriodTask()
 	}
 }
 
-func (c *Controller) checkOnNodeChanged() {
+func (c *Controller) checkOnNodeChanged(ctx context.Context) {
 	c.nodeChanged.Lock()
 	defer c.nodeChanged.Unlock()
 
 	if c.nodeChanged.changed {
-		c.onNodeChanged()
+		c.onNodeChanged(ctx)
 		c.nodeChanged.changed = false
 	}
 }
 
 func (c *Controller) onPeriodTask() {
 	// resend bootstrap message
-	c.sendMessages(c.bootstrapper.ResendBootstrapMessage())
+	requests := c.bootstrapper.ResendBootstrapMessage()
+	for _, req := range requests {
+		_ = c.messageCenter.SendCommand(req)
+	}
 }
 
-func (c *Controller) onMessage(msg *messaging.TargetMessage) {
+func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage) {
 	switch msg.Type {
 	case messaging.TypeCoordinatorBootstrapResponse:
-		c.onMaintainerBootstrapResponse(msg)
+		c.onMaintainerBootstrapResponse(ctx, msg)
 	case messaging.TypeMaintainerHeartbeatRequest:
-		if c.bootstrapper.CheckAllNodeInitialized() {
+		if c.bootstrapper.AllNodesReady() {
 			req := msg.Message[0].(*heartbeatpb.MaintainerHeartbeat)
 			c.handleMaintainerStatus(msg.From, req.Statuses)
 		}
@@ -314,54 +327,34 @@ func (c *Controller) RequestResolvedTsFromLogCoordinator(ctx context.Context, ch
 	}
 }
 
-func (c *Controller) onNodeChanged() {
-	currentNodes := c.bootstrapper.GetAllNodeIDs()
+func (c *Controller) onNodeChanged(ctx context.Context) {
+	addedNodes, removedNodes, requests, responses := c.bootstrapper.HandleNodesChange(c.nodeManager.GetAliveNodes())
+	log.Info("controller detects node changed",
+		zap.Int("addedCount", len(addedNodes)),
+		zap.Int("removedCount", len(removedNodes)),
+		zap.Any("addedNodes", addedNodes),
+		zap.Any("removedNodes", removedNodes))
 
-	activeNodes := c.nodeManager.GetAliveNodes()
-	newNodes := make([]*node.Info, 0, len(activeNodes))
-	for id, n := range activeNodes {
-		if _, ok := currentNodes[id]; !ok {
-			newNodes = append(newNodes, n)
+	for _, n := range removedNodes {
+		c.RemoveNode(n)
+	}
+	for _, req := range requests {
+		err := c.messageCenter.SendCommand(req)
+		if err != nil {
+			log.Warn("send request failed when boostrapping newly added node, will be resent later",
+				zap.Any("targetNode", req.To), zap.Error(err))
 		}
 	}
-	var removedNodes []node.ID
-	for id := range currentNodes {
-		if _, ok := activeNodes[id]; !ok {
-			removedNodes = append(removedNodes, id)
-			c.RemoveNode(id)
-		}
-	}
-
-	log.Info("node changed",
-		zap.Int("newNodeNum", len(newNodes)),
-		zap.Int("removedNodeNum", len(removedNodes)),
-		zap.Any("newNodes", newNodes),
-		zap.Any("removedNodes", removedNodes),
-	)
-
-	c.sendMessages(c.bootstrapper.HandleNewNodes(newNodes))
-	cachedResponse := c.bootstrapper.HandleRemoveNodes(removedNodes)
-	if cachedResponse != nil {
-		log.Info("bootstrap done after removed some nodes",
-			zap.Any("removedNodes", removedNodes))
-		c.onBootstrapDone(cachedResponse)
-	}
+	c.handleBootstrapResponses(ctx, responses)
 }
 
-func (c *Controller) sendMessages(msgs []*messaging.TargetMessage) {
-	for _, msg := range msgs {
-		_ = c.messageCenter.SendCommand(msg)
-	}
-}
-
-func (c *Controller) onMaintainerBootstrapResponse(msg *messaging.TargetMessage) {
-	log.Info("received maintainer bootstrap response",
-		zap.Stringer("node", msg.From))
-	cachedResp := c.bootstrapper.HandleBootstrapResponse(
-		msg.From,
-		msg.Message[0].(*heartbeatpb.CoordinatorBootstrapResponse),
-	)
-	c.onBootstrapDone(cachedResp)
+func (c *Controller) onMaintainerBootstrapResponse(ctx context.Context, req *messaging.TargetMessage) {
+	response := req.Message[0].(*heartbeatpb.CoordinatorBootstrapResponse)
+	log.Info("controller received maintainer bootstrap response",
+		zap.Stringer("node", req.From),
+		zap.Int("maintainerCount", len(response.Statuses)))
+	responses := c.bootstrapper.HandleBootstrapResponse(req.From, response)
+	c.handleBootstrapResponses(ctx, responses)
 }
 
 type remoteMaintainer struct {
@@ -369,38 +362,35 @@ type remoteMaintainer struct {
 	status *heartbeatpb.MaintainerStatus
 }
 
-func (c *Controller) onBootstrapDone(cachedResp map[node.ID]*heartbeatpb.CoordinatorBootstrapResponse) {
-	if cachedResp == nil {
+func (c *Controller) handleBootstrapResponses(ctx context.Context, responses map[node.ID]*heartbeatpb.CoordinatorBootstrapResponse) {
+	if c.initialized.Load() || responses == nil {
 		return
 	}
-	log.Info("all nodes have sent bootstrap response",
-		zap.Int("size", len(cachedResp)))
-	// runningCfs is the changefeeds that are already running on other nodes
+	log.Info("all new nodes bootstrap response received",
+		zap.Int("newNodeCount", len(responses)))
+	// runningCfs are changefeeds that already running on other nodes
 	runningCfs := make(map[common.ChangeFeedID]remoteMaintainer)
-	for node, bootstrapMsg := range cachedResp {
-		log.Info("received bootstrap response",
-			zap.Stringer("node", node),
-			zap.Int("size", len(bootstrapMsg.Statuses)))
-		for _, info := range bootstrapMsg.Statuses {
-			cfID := common.NewChangefeedIDFromPB(info.ChangefeedID)
-			if old, ok := runningCfs[cfID]; ok {
+	for nodeID, resp := range responses {
+		for _, status := range resp.Statuses {
+			changeFeedID := common.NewChangefeedIDFromPB(status.ChangefeedID)
+			if old, ok := runningCfs[changeFeedID]; ok {
 				log.Panic("maintainer runs on multiple node",
+					zap.Stringer("changefeedID", changeFeedID),
 					zap.Stringer("oldNode", old.nodeID),
-					zap.Stringer("newNode", node),
-					zap.Stringer("cf", cfID))
+					zap.Stringer("newNode", nodeID))
 			}
-			runningCfs[cfID] = remoteMaintainer{
-				nodeID: node,
-				status: info,
+			runningCfs[changeFeedID] = remoteMaintainer{
+				nodeID: nodeID,
+				status: status,
 			}
 		}
 	}
-	c.FinishBootstrap(runningCfs)
+	c.finishBootstrap(ctx, runningCfs)
 }
 
 // handleMaintainerStatus handle the status report from the maintainers
 func (c *Controller) handleMaintainerStatus(from node.ID, statusList []*heartbeatpb.MaintainerStatus) {
-	changes := make([]*ChangefeedChange, 0, len(statusList))
+	changes := make([]*changefeedChange, 0, len(statusList))
 	for _, status := range statusList {
 		cfID := common.NewChangefeedIDFromPB(status.ChangefeedID)
 		change := c.handleSingleMaintainerStatus(from, status, cfID)
@@ -420,7 +410,7 @@ func (c *Controller) handleSingleMaintainerStatus(
 	from node.ID,
 	status *heartbeatpb.MaintainerStatus,
 	cfID common.ChangeFeedID,
-) *ChangefeedChange {
+) *changefeedChange {
 	// Update the operator status first
 	c.operatorController.UpdateOperatorStatus(cfID, from, status)
 
@@ -485,20 +475,11 @@ func (c *Controller) updateChangefeedStatus(
 	cf *changefeed.Changefeed,
 	cfID common.ChangeFeedID,
 	status *heartbeatpb.MaintainerStatus,
-) *ChangefeedChange {
+) *changefeedChange {
 	changed, state, err := cf.UpdateStatus(status)
-	change := &ChangefeedChange{
-		changefeedID: cfID,
-		changefeed:   cf,
-		state:        state,
-		changeType:   ChangeStateAndTs,
-	}
-	if !changed {
-		change.changeType = ChangeTs
-		return change
-	}
+	var runningErr *config.RunningError
 	if err != nil {
-		change.err = &config.RunningError{
+		runningErr = &config.RunningError{
 			Time:    time.Now(),
 			Addr:    err.Node,
 			Code:    err.Code,
@@ -506,24 +487,26 @@ func (c *Controller) updateChangefeedStatus(
 		}
 	}
 
-	log.Info("changefeed status changed",
-		zap.Stringer("changefeed", cfID),
-		zap.String("state", string(change.state)),
-		zap.Stringer("error", err))
+	changeType := ChangeTs
+	if changed {
+		changeType = ChangeStateAndTs
+		log.Info("changefeed status changed",
+			zap.Stringer("changefeed", cfID),
+			zap.String("state", string(state)),
+			zap.Stringer("error", err))
+	}
+
+	change := newChangefeedChange(cf, state, changeType, runningErr)
 	return change
 }
 
-// FinishBootstrap is called when all nodes have sent bootstrap response
+// finishBootstrap is called when all nodes have sent bootstrap response
 // It will load all changefeeds from metastore, and compare with running changefeeds
 // Then initialize the changefeeds that are not running on other nodes
 // And construct all changefeeds state in memory.
-func (c *Controller) FinishBootstrap(runningChangefeeds map[common.ChangeFeedID]remoteMaintainer) {
-	if c.bootstrapped.Load() {
-		log.Panic("already bootstrapped",
-			zap.Any("runningChangefeeds", runningChangefeeds))
-	}
+func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map[common.ChangeFeedID]remoteMaintainer) {
 	// load all changefeeds from metastore, and check if the changefeed is already in workingMap
-	allChangefeeds, err := c.backend.GetAllChangefeeds(context.Background())
+	allChangefeeds, err := c.backend.GetAllChangefeeds(ctx)
 	if err != nil {
 		log.Panic("load all changefeeds failed", zap.Error(err))
 	}
@@ -531,7 +514,6 @@ func (c *Controller) FinishBootstrap(runningChangefeeds map[common.ChangeFeedID]
 	// Register keyspace
 	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
 	registeredKeyspace := make(map[string]struct{})
-	ctx := context.Background()
 	for id := range allChangefeeds {
 		if _, ok := registeredKeyspace[id.Keyspace()]; ok {
 			continue
@@ -582,7 +564,7 @@ func (c *Controller) FinishBootstrap(runningChangefeeds map[common.ChangeFeedID]
 		switch cfMeta.Status.Progress {
 		case config.ProgressStopping, config.ProgressRemoving:
 			remove := cfMeta.Status.Progress == config.ProgressRemoving
-			c.operatorController.StopChangefeed(context.Background(), cfID, remove)
+			c.operatorController.StopChangefeed(ctx, cfID, remove)
 			log.Info("stop changefeed when bootstrapping", zap.String("changefeed", cfID.String()), zap.Any("meta", cfMeta))
 		}
 	}
@@ -603,7 +585,8 @@ func (c *Controller) FinishBootstrap(runningChangefeeds map[common.ChangeFeedID]
 	c.taskHandlers = append(c.taskHandlers, c.scheduler.Start(c.taskScheduler)...)
 	operatorControllerHandle := c.taskScheduler.Submit(c.operatorController, time.Now())
 	c.taskHandlers = append(c.taskHandlers, operatorControllerHandle)
-	c.bootstrapped.Store(true)
+	c.initialized.Store(true)
+	log.Info("coordinator bootstrapped", zap.Any("nodeID", c.selfNode.ID))
 }
 
 func (c *Controller) Stop() {
@@ -616,13 +599,12 @@ func (c *Controller) Stop() {
 }
 
 func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFeedInfo) error {
-	c.apiLock.Lock()
-	defer c.apiLock.Unlock()
-
-	if !c.bootstrapped.Load() {
+	if !c.initialized.Load() {
 		return errors.New("not initialized, wait a moment")
 	}
 
+	c.apiLock.Lock()
+	defer c.apiLock.Unlock()
 	old := c.changefeedDB.GetByChangefeedDisplayName(info.ChangefeedID.DisplayName)
 	if old != nil {
 		return errors.New("changefeed already exists")
@@ -666,7 +648,17 @@ func (c *Controller) RemoveChangefeed(ctx context.Context, id common.ChangeFeedI
 	if err != nil {
 		return 0, errors.Trace(err)
 	}
-	c.operatorController.StopChangefeed(ctx, id, true)
+	op := c.operatorController.StopChangefeed(ctx, id, true)
+	count := 0
+	for {
+		if op.IsFinished() {
+			break
+		}
+
+		time.Sleep(1 * time.Second)
+		count += 1
+		log.Info("wait for stop changefeed operator finished", zap.Int("count", count), zap.Any("id", id))
+	}
 	return cf.GetStatus().CheckpointTs, nil
 }
 
@@ -688,7 +680,18 @@ func (c *Controller) PauseChangefeed(ctx context.Context, id common.ChangeFeedID
 	}
 	clone.State = config.StateStopped
 	cf.SetInfo(clone)
-	c.operatorController.StopChangefeed(ctx, id, false)
+	op := c.operatorController.StopChangefeed(ctx, id, false)
+
+	count := 0
+	for {
+		if op.IsFinished() {
+			break
+		}
+
+		time.Sleep(1 * time.Second)
+		count += 1
+		log.Info("wait for stop changefeed operator finished", zap.Int("count", count), zap.Any("id", id))
+	}
 	return nil
 }
 
@@ -706,6 +709,16 @@ func (c *Controller) ResumeChangefeed(
 	if cf == nil {
 		return errors.New("changefeed not found")
 	}
+
+	state := cf.GetInfo().State
+	switch state {
+	case config.StateFailed, config.StateStopped, config.StateFinished:
+	default:
+		log.Warn("ignore resume the changefeed",
+			zap.Stringer("changefeedID", id), zap.Any("state", state))
+		return nil
+	}
+
 	if err := c.backend.ResumeChangefeed(ctx, id, newCheckpointTs); err != nil {
 		return err
 	}
@@ -719,11 +732,14 @@ func (c *Controller) ResumeChangefeed(
 	clone.Epoch = pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
 	cf.SetInfo(clone)
 
-	status := cf.GetClonedStatus()
+	status := cf.GetStatusForResume()
 	status.CheckpointTs = newCheckpointTs
 	_, _, runningErr := cf.ForceUpdateStatus(status)
 	if runningErr != nil {
 		return errors.New(runningErr.Message)
+	}
+	if overwriteCheckpointTs {
+		cf.SetLastSavedCheckPointTs(newCheckpointTs)
 	}
 	c.moveChangefeedToSchedulingQueue(id, true, overwriteCheckpointTs)
 	return nil
@@ -737,7 +753,12 @@ func (c *Controller) UpdateChangefeed(ctx context.Context, change *config.Change
 	if cf == nil {
 		return errors.New("changefeed not found")
 	}
-	if err := c.backend.UpdateChangefeed(ctx, change, cf.GetStatus().CheckpointTs, config.ProgressStopping); err != nil {
+	progress := config.ProgressNone
+	state := cf.GetInfo().State
+	if state == config.StateFailed || state == config.StateFinished {
+		progress = config.ProgressStopping
+	}
+	if err := c.backend.UpdateChangefeed(ctx, change, cf.GetStatus().CheckpointTs, progress); err != nil {
 		return errors.Trace(err)
 	}
 	c.changefeedDB.ReplaceStoppedChangefeed(change)
@@ -804,8 +825,8 @@ func (c *Controller) submitPeriodTask() {
 	c.taskHandlers = append(c.taskHandlers, periodTaskhandler)
 }
 
-func (c *Controller) newBootstrapMessage(id node.ID) *messaging.TargetMessage {
-	log.Info("send coordinator bootstrap request", zap.Any("to", id))
+func (c *Controller) newBootstrapMessage(id node.ID, addr string) *messaging.TargetMessage {
+	log.Info("send coordinator bootstrap request", zap.Any("nodeID", id), zap.String("nodeAddr", addr))
 	return messaging.NewSingleTargetMessage(
 		id,
 		messaging.MaintainerManagerTopic,

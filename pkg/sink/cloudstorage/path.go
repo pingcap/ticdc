@@ -16,7 +16,6 @@ package cloudstorage
 import (
 	"context"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -42,8 +41,9 @@ import (
 const (
 	// 3 is the length of "CDC", and the file number contains
 	// at least 6 digits (e.g. CDC000001.csv).
-	minFileNamePrefixLen = 3 + config.MinFileIndexWidth
-	defaultIndexFileName = "meta/CDC.index"
+	minFileNamePrefixLen                 = 3 + config.MinFileIndexWidth
+	defaultTableAcrossNodesIndexFileName = "meta/CDC_%s.index"
+	defaultIndexFileName                 = "meta/CDC.index"
 
 	// The following constants are used to generate file paths.
 	schemaFileNameFormat = "schema_%d_%010d.json"
@@ -110,8 +110,11 @@ func generateSchemaFilePath(
 	return path.Join(dir, name)
 }
 
-func generateDataFileName(index uint64, extension string, fileIndexWidth int) string {
+func generateDataFileName(enableTableAcrossNodes bool, dispatcherID string, index uint64, extension string, fileIndexWidth int) string {
 	indexFmt := "%0" + strconv.Itoa(fileIndexWidth) + "d"
+	if enableTableAcrossNodes {
+		return fmt.Sprintf("CDC_%s_"+indexFmt+"%s", dispatcherID, index, extension)
+	}
 	return fmt.Sprintf("CDC"+indexFmt+"%s", index, extension)
 }
 
@@ -130,6 +133,7 @@ type VersionedTableName struct {
 	// schema storage. It can either be finished ts of a DDL event,
 	// or be the checkpoint ts when processor is restarted.
 	TableInfoVersion uint64
+	DispatcherID     commonType.DispatcherID
 }
 
 // FilePathGenerator is used to generate data file path and index file path.
@@ -304,6 +308,9 @@ func (f *FilePathGenerator) GenerateDateStr() string {
 func (f *FilePathGenerator) GenerateIndexFilePath(tbl VersionedTableName, date string) string {
 	dir := f.generateDataDirPath(tbl, date)
 	name := defaultIndexFileName
+	if f.config.EnableTableAcrossNodes {
+		name = fmt.Sprintf(defaultTableAcrossNodesIndexFileName, tbl.DispatcherID.String())
+	}
 	return path.Join(dir, name)
 }
 
@@ -341,7 +348,7 @@ func (f *FilePathGenerator) generateDataFileName(
 	ctx context.Context, tbl VersionedTableName, date string,
 ) (string, error) {
 	if idx, ok := f.fileIndex[tbl]; !ok {
-		fileIdx, err := f.getNextFileIdxFromIndexFile(ctx, tbl, date)
+		fileIdx, err := f.getFileIdxFromIndexFile(ctx, tbl, date)
 		if err != nil {
 			return "", err
 		}
@@ -360,10 +367,10 @@ func (f *FilePathGenerator) generateDataFileName(
 		f.fileIndex[tbl].index = 0
 	}
 	f.fileIndex[tbl].index++
-	return generateDataFileName(f.fileIndex[tbl].index, f.extension, f.config.FileIndexWidth), nil
+	return generateDataFileName(f.config.EnableTableAcrossNodes, tbl.DispatcherID.String(), f.fileIndex[tbl].index, f.extension, f.config.FileIndexWidth), nil
 }
 
-func (f *FilePathGenerator) getNextFileIdxFromIndexFile(
+func (f *FilePathGenerator) getFileIdxFromIndexFile(
 	ctx context.Context, tbl VersionedTableName, date string,
 ) (uint64, error) {
 	indexFile := f.GenerateIndexFilePath(tbl, date)
@@ -380,64 +387,28 @@ func (f *FilePathGenerator) getNextFileIdxFromIndexFile(
 		return 0, err
 	}
 	fileName := strings.TrimSuffix(string(data), "\n")
-	maxFileIdx, err := f.fetchIndexFromFileName(fileName)
-	if err != nil {
-		return 0, err
-	}
-
-	lastFilePath := path.Join(
-		f.generateDataDirPath(tbl, date),                                       // file dir
-		generateDataFileName(maxFileIdx, f.extension, f.config.FileIndexWidth), // file name
-	)
-	var lastFileExists, lastFileIsEmpty bool
-	lastFileExists, err = f.storage.FileExists(ctx, lastFilePath)
-	if err != nil {
-		return 0, err
-	}
-
-	if lastFileExists {
-		fileReader, err := f.storage.Open(ctx, lastFilePath, nil)
-		if err != nil {
-			return 0, err
-		}
-		readBytes, err := fileReader.Read(make([]byte, 1))
-		if err != nil && err != io.EOF {
-			return 0, err
-		}
-		lastFileIsEmpty = readBytes == 0
-		if err := fileReader.Close(); err != nil {
-			return 0, err
-		}
-	}
-
-	var fileIdx uint64
-	if lastFileExists && !lastFileIsEmpty {
-		fileIdx = maxFileIdx
-	} else {
-		// Reuse the old index number if the last file does not exist.
-		fileIdx = maxFileIdx - 1
-	}
-	return fileIdx, nil
+	return FetchIndexFromFileName(fileName, f.extension)
 }
 
-func (f *FilePathGenerator) fetchIndexFromFileName(fileName string) (uint64, error) {
-	var fileIdx uint64
-	var err error
-
-	if len(fileName) < minFileNamePrefixLen+len(f.extension) ||
+func FetchIndexFromFileName(fileName string, extension string) (uint64, error) {
+	if len(fileName) < minFileNamePrefixLen+len(extension) ||
 		!strings.HasPrefix(fileName, "CDC") ||
-		!strings.HasSuffix(fileName, f.extension) {
+		!strings.HasSuffix(fileName, extension) {
 		return 0, errors.WrapError(errors.ErrStorageSinkInvalidFileName,
 			fmt.Errorf("'%s' is a invalid file name", fileName))
 	}
 
-	extIdx := strings.Index(fileName, f.extension)
-	fileIdxStr := fileName[3:extIdx]
-	if fileIdx, err = strconv.ParseUint(fileIdxStr, 10, 64); err != nil {
-		return 0, errors.WrapError(errors.ErrStorageSinkInvalidFileName, err)
+	// CDC[_{dispatcherID}_]{num}.fileExtension
+	pathRE, err := regexp.Compile(`CDC(?:_(\w+)_)?(\d+).\w+`)
+	if err != nil {
+		return 0, err
 	}
 
-	return fileIdx, nil
+	matches := pathRE.FindStringSubmatch(fileName)
+	if len(matches) != 3 {
+		return 0, fmt.Errorf("cannot match dml path pattern for %s", fileName)
+	}
+	return strconv.ParseUint(matches[2], 10, 64)
 }
 
 var dateSeparatorDayRegexp *regexp.Regexp
@@ -464,7 +435,8 @@ func RemoveExpiredFiles(
 
 	cnt := uint64(0)
 	err := util.RemoveFilesIf(ctx, storage, func(path string) bool {
-		// the path is like: <schema>/<table>/<tableVersion>/<partitionID>/<date>/CDC{num}.extension
+		// the path is like: <schema>/<table>/<tableVersion>/<partitionID>/<date>/CDC_{dispatcher}_{num}.extension
+		// or <schema>/<table>/<tableVersion>/<partitionID>/<date>/CDC{num}.extension
 		match := dateSeparatorDayRegexp.FindString(path)
 		if match != "" && match < expiredDate {
 			cnt++

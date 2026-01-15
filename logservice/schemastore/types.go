@@ -45,8 +45,10 @@ type PersistedDDLEvent struct {
 	// - for TruncateTable, it the table ID of the new table
 	ExtraTableID int64 `msg:"extra_table_id"`
 	// ExtraSchemaName corresponds to ExtraSchemaID
+	// - for RenameTable, it is the schema name of the old table
 	ExtraSchemaName string `msg:"extra_schema_name"`
 	// ExtraTableName corresponds to ExtraTableID
+	// - for RenameTable, it is the table name of the old table
 	ExtraTableName string `msg:"extra_table_name"`
 
 	// the following fields are only used for RenameTables
@@ -59,6 +61,9 @@ type PersistedDDLEvent struct {
 	// the following fields are only set when the ddl job involves a partition table
 	// it is the partition info of the table before this ddl
 	PrevPartitions []int64 `msg:"prev_partitions"`
+	// ReferTablePartitionIDs is only set for CREATE TABLE ... LIKE ... when the referenced table is partitioned.
+	// It records the physical partition IDs of the referenced table.
+	ReferTablePartitionIDs []int64 `msg:"refer_table_partitions"`
 
 	Query         string `msg:"query"`
 	SchemaVersion int64  `msg:"schema_version"`

@@ -15,6 +15,7 @@ package eventservice
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -28,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -41,8 +43,8 @@ func newEventBrokerForTest() (*eventBroker, *mockEventStore, *mockSchemaStore, c
 	mc := messaging.NewMockMessageCenter()
 	outputCh := mc.GetMessageChannel()
 	return newEventBroker(context.Background(), 1, es, ss, mc, time.UTC, &integrity.Config{
-		IntegrityCheckLevel:   integrity.CheckLevelNone,
-		CorruptionHandleLevel: integrity.CorruptionHandleLevelWarn,
+		IntegrityCheckLevel:   util.AddressOf(integrity.CheckLevelNone),
+		CorruptionHandleLevel: util.AddressOf(integrity.CorruptionHandleLevelWarn),
 	}), es, ss, outputCh
 }
 
@@ -528,4 +530,19 @@ func TestSendHandshakeIfNeedConcurrency(t *testing.T) {
 		require.Equal(t, 1, handshakeCount, "Expected exactly 1 handshake event")
 		require.True(t, disp.isHandshaked(), "Dispatcher should be marked as handshaked")
 	})
+}
+
+func TestAddDispatcherFailure(t *testing.T) {
+	broker, _, ss, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	// Simulate schema store failure
+	ss.registerTableError = errors.New("mock error")
+
+	dispInfo := newMockDispatcherInfoForTest(t)
+	err := broker.addDispatcher(dispInfo)
+	require.Error(t, err)
+
+	_, ok := broker.changefeedMap.Load(dispInfo.GetChangefeedID())
+	require.False(t, ok, "changefeedStatus should be removed after failed registration")
 }

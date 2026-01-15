@@ -32,28 +32,28 @@ jobs:
     ## Only run ci when PR is not draft
     if: github.event.pull_request.draft == false
 
-    runs-on: ubuntu-latest 
+    runs-on: ubuntu-latest
     name: E2E Test Group
     steps:
       - name: Check out code
         uses: actions/checkout@v2
 
       - name: Setup Go environment
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@v6
         with:
-          go-version: '1.23'
+          go-version-file: 'go.mod'
 
       # - name: Integration Build
       #   run: |
       #     tests/scripts/download-integration-test-binaries.sh master true
-      #     go build -o ./tools/bin/failpoint-ctl github.com/pingcap/failpoint/failpoint-ctl 
+      #     go build -o ./tools/bin/failpoint-ctl github.com/pingcap/failpoint/failpoint-ctl
       #     make integration_test_build
       #     ls -l bin/ && ls -l tools/bin/
 
       # - name: Test charset_gbk
       #   run: |
       #     pwd && ls -l bin/ && ls -l tools/bin/
-      #     export TICDC_NEWARCH=true && make integration_test CASE=charset_gbk 
+      #     export TICDC_NEWARCH=true && make integration_test CASE=charset_gbk
 
       - name: Note
         run: |
@@ -63,8 +63,8 @@ jobs:
           echo "we can use GitHub Actions as a convenient way to do so. You can achieve this by adding your"
           echo "test case to the group and pushing a PR to run them concurrently in the GitHub Actions environment."
 
-      # - name: Upload test logs
-      #   if: always()
-      #   uses: ./.github/actions/upload-test-logs
-      #   with:
-      #     log-name: e2e_test_group_1
+        # - name: Upload test logs
+        #   if: always()
+        #   uses: ./.github/actions/upload-test-logs
+        #   with:
+        #     log-name: e2e_test_group_1

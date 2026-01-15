@@ -44,7 +44,6 @@ function run() {
 
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 	start_tidb_cluster --workdir $WORK_DIR
-	cd $WORK_DIR
 
 	pd_addr="http://$UP_PD_HOST_1:$UP_PD_PORT_1"
 	SINK_URI="mysql://normal:123456@127.0.0.1:3306/?max-txn-row=1"
@@ -55,7 +54,7 @@ function run() {
 	run_sql "CREATE table kill_owner_with_ddl.t1 (id int primary key auto_increment, val int);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	check_table_exists "kill_owner_with_ddl.t1" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkExecDDLDelay=return(true);github.com/pingcap/tiflow/cdc/capture/ownerFlushIntervalInject=return(10)'
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkExecDDLDelay=return("3600");github.com/pingcap/tiflow/cdc/capture/ownerFlushIntervalInject=return(10)'
 	kill_cdc_and_restart $pd_addr $WORK_DIR $CDC_BINARY
 
 	for i in $(seq 2 3); do
@@ -84,7 +83,7 @@ function run() {
 	cleanup_process $CDC_BINARY
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_test $WORK_DIR' EXIT
 run $*
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

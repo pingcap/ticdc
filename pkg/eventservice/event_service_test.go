@@ -289,7 +289,9 @@ func (m *mockEventStore) RegisterDispatcher(
 	_ bool,
 	_ bool,
 ) bool {
-	log.Info("subscribe table span", zap.Any("span", span), zap.Uint64("startTs", startTS), zap.Any("dispatcherID", dispatcherID))
+	log.Info("subscribe table span", zap.Any("dispatcherID", dispatcherID),
+		zap.Uint64("startTs", startTS),
+		zap.Any("span", common.FormatTableSpan(span)))
 	spanStats := &mockSpanStats{
 		startTs:            startTS,
 		resolvedTsNotifier: notifier,
@@ -498,6 +500,10 @@ func (m *mockDispatcherInfo) GetEpoch() uint64 {
 
 func (m *mockDispatcherInfo) IsOutputRawChangeEvent() bool {
 	return false
+}
+
+func (m *mockDispatcherInfo) GetTxnAtomicity() config.AtomicityLevel {
+	return config.DefaultAtomicityLevel()
 }
 
 func genEvents(helper *commonEvent.EventTestHelper, ddl string, dmls ...string) (commonEvent.DDLEvent, []*common.RawKVEntry) {

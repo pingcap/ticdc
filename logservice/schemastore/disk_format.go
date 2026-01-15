@@ -806,7 +806,7 @@ func loadAllPhysicalTablesAtTs(
 			log.Panic("table info not found", zap.Int64("tableID", tableID))
 		}
 		if tableFilter != nil {
-			if tableFilter.ShouldIgnoreTable(schemaName, tableInfo.Name, common.WrapTableInfo(schemaName, fullTableInfo)) {
+			if tableFilter.ShouldIgnoreTable(schemaName, tableInfo.Name) {
 				continue
 			}
 			if !tableFilter.IsEligibleTable(common.WrapTableInfo(schemaName, fullTableInfo)) {

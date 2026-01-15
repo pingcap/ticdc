@@ -30,10 +30,9 @@ function prepare() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	cd $WORK_DIR
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_test $WORK_DIR' EXIT
 if [ "$SINK_TYPE" == "mysql" ]; then
 	prepare $*
 	test_owner_ha $*

@@ -11,7 +11,6 @@ SINK_TYPE=$1
 function run() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 	start_tidb_cluster --workdir $WORK_DIR
-	cd $WORK_DIR
 
 	pd_addr="http://$UP_PD_HOST_1:$UP_PD_PORT_1"
 
@@ -75,7 +74,7 @@ function run() {
 	cleanup_process $CDC_BINARY
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_test $WORK_DIR' EXIT
 run $*
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

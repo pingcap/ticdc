@@ -8,7 +8,7 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
-# use kafka-consumer with canal-json decoder to sync data from kafka to mysql
+# test MQ sink only in this case
 function run() {
 	if [ "$SINK_TYPE" != "kafka" ] && [ "$SINK_TYPE" != "pulsar" ]; then
 		return
@@ -19,8 +19,6 @@ function run() {
 
 	# start tidb cluster
 	start_tidb_cluster --workdir $WORK_DIR
-
-	cd $WORK_DIR
 
 	TOPIC_NAME="ticdc-canal-json-content-compatible-$RANDOM"
 
@@ -62,7 +60,7 @@ function run() {
 	cleanup_process $CDC_BINARY
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_test $WORK_DIR' EXIT
 run $*
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

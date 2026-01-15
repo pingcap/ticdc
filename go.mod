@@ -1,8 +1,6 @@
 module github.com/pingcap/ticdc
 
-go 1.24.0
-
-toolchain go1.24.7
+go 1.25.5
 
 require (
 	cloud.google.com/go/storage v1.39.1
@@ -14,10 +12,10 @@ require (
 	github.com/agiledragon/gomonkey/v2 v2.11.0
 	github.com/apache/pulsar-client-go v0.13.0
 	github.com/aws/aws-sdk-go v1.55.5
-	github.com/aws/aws-sdk-go-v2 v1.38.1
-	github.com/aws/aws-sdk-go-v2/config v1.27.37
-	github.com/aws/aws-sdk-go-v2/credentials v1.17.35
-	github.com/aws/aws-sdk-go-v2/service/glue v1.58.1
+	github.com/aws/aws-sdk-go-v2 v1.40.0
+	github.com/aws/aws-sdk-go-v2/config v1.32.2
+	github.com/aws/aws-sdk-go-v2/credentials v1.19.2
+	github.com/aws/aws-sdk-go-v2/service/glue v1.134.1
 	github.com/benbjohnson/clock v1.3.5
 	github.com/bradleyjkemp/grpc-tools v0.2.5
 	github.com/cenkalti/backoff/v4 v4.2.1
@@ -54,6 +52,7 @@ require (
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
 	github.com/pingcap/kvproto v0.0.0-20251104104744-291054671541
 	github.com/pingcap/log v1.1.1-0.20250917021125-19901e015dc9
+	github.com/pingcap/sysutil v1.0.1-0.20240311050922-ae81ee01f3a5
 	github.com/pingcap/tidb v1.1.0-beta.0.20251112140053-9e38acfdbfaf
 	github.com/pingcap/tidb-dashboard v0.0.0-20240326110213-9768844ff5d7
 	github.com/pingcap/tidb/pkg/parser v0.0.0-20251113060050-3acae2d60724
@@ -71,7 +70,7 @@ require (
 	github.com/tikv/client-go/v2 v2.0.8-0.20251028065425-b7d4dfd8520e
 	github.com/tikv/pd v1.1.0-beta.0.20240407022249-7179657d129b
 	github.com/tikv/pd/client v0.0.0-20250901035025-22b7ce6d4993
-	github.com/tinylib/msgp v1.1.6
+	github.com/tinylib/msgp v1.5.0
 	github.com/uber-go/atomic v1.4.0
 	github.com/xdg/scram v1.0.5
 	github.com/zeebo/assert v1.3.0
@@ -92,13 +91,13 @@ require (
 	golang.org/x/term v0.34.0
 	golang.org/x/text v0.29.0
 	golang.org/x/time v0.12.0
-	google.golang.org/grpc v1.67.1
+	google.golang.org/grpc v1.65.0
 	google.golang.org/protobuf v1.36.6
 )
 
 require (
 	cloud.google.com/go v0.112.2 // indirect
-	cloud.google.com/go/compute/metadata v0.5.0 // indirect
+	cloud.google.com/go/compute/metadata v0.3.0 // indirect
 	cloud.google.com/go/iam v1.1.7 // indirect
 	cloud.google.com/go/kms v1.15.8 // indirect
 	filippo.io/edwards25519 v1.1.0 // indirect
@@ -132,21 +131,22 @@ require (
 	github.com/apache/thrift v0.21.0 // indirect
 	github.com/ardielle/ardielle-go v1.5.2 // indirect
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
-	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.0 // indirect
-	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.16.14 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.4 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.4 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/ini v1.8.1 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.4 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.0 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.8.4 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.4 // indirect
-	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.19.4 // indirect
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.87.1 // indirect
-	github.com/aws/aws-sdk-go-v2/service/sso v1.23.1 // indirect
-	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.27.1 // indirect
-	github.com/aws/aws-sdk-go-v2/service/sts v1.31.1 // indirect
-	github.com/aws/smithy-go v1.22.5 // indirect
+	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.3 // indirect
+	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.14 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.14 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.14 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/ini v1.8.4 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.14 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.3 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.9.5 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.14 // indirect
+	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.19.14 // indirect
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.92.1 // indirect
+	github.com/aws/aws-sdk-go-v2/service/signin v1.0.2 // indirect
+	github.com/aws/aws-sdk-go-v2/service/sso v1.30.5 // indirect
+	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.10 // indirect
+	github.com/aws/aws-sdk-go-v2/service/sts v1.41.2 // indirect
+	github.com/aws/smithy-go v1.23.2 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.14.3 // indirect
 	github.com/blacktear23/go-proxyprotocol v1.0.6 // indirect
@@ -277,13 +277,12 @@ require (
 	github.com/opentracing/opentracing-go v1.2.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.0.8 // indirect
 	github.com/petermattis/goid v0.0.0-20250813065127-a731cc31b4fe // indirect
-	github.com/philhofer/fwd v1.1.1 // indirect
+	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/pierrec/lz4 v2.6.1+incompatible // indirect
 	github.com/pingcap/badger v1.5.1-0.20241015064302-38533b6cbf8d // indirect
 	github.com/pingcap/fn v1.0.0 // indirect
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989 // indirect
 	github.com/pingcap/metering_sdk v0.0.0-20251110022152-dac449ac5389 // indirect
-	github.com/pingcap/sysutil v1.0.1-0.20240311050922-ae81ee01f3a5 // indirect
 	github.com/pingcap/tipb v0.0.0-20250928030846-9fd33ded6f2c // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect
@@ -386,7 +385,7 @@ require (
 )
 
 replace (
-	github.com/IBM/sarama v1.41.2 => github.com/pingcap/sarama v1.41.2-pingcap-20250416
+	github.com/IBM/sarama v1.41.2 => github.com/pingcap/sarama v1.41.2-pingcap-20251202-x
 
 	// Downgrade grpc to v1.63.2, as well as other related modules.
 	github.com/apache/arrow-go/v18 => github.com/joechenrh/arrow-go/v18 v18.0.0-20250911101656-62c34c9a3b82

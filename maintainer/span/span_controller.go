@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/node"
 	pkgreplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils"
 	"go.uber.org/zap"
@@ -85,23 +86,28 @@ func NewController(
 	ddlSpan *replica.SpanReplication,
 	splitter *split.Splitter,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
+	refresher *replica.RegionCountRefresher,
 	keyspaceID uint32,
 	mode int64,
 ) *Controller {
 	c := &Controller{
 		changefeedID:           changefeedID,
 		ddlSpan:                ddlSpan,
-		newGroupChecker:        replica.GetNewGroupChecker(changefeedID, schedulerCfg),
+		newGroupChecker:        replica.GetNewGroupChecker(changefeedID, schedulerCfg, refresher),
 		nodeManager:            appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		splitter:               splitter,
 		ddlDispatcherID:        ddlSpan.ID,
 		mode:                   mode,
-		enableTableAcrossNodes: schedulerCfg != nil && schedulerCfg.EnableTableAcrossNodes,
-		enableSplittableCheck:  schedulerCfg != nil && schedulerCfg.EnableSplittableCheck,
+		enableTableAcrossNodes: schedulerCfg != nil && util.GetOrZero(schedulerCfg.EnableTableAcrossNodes),
+		enableSplittableCheck:  schedulerCfg != nil && util.GetOrZero(schedulerCfg.EnableSplittableCheck),
 		keyspaceID:             keyspaceID,
-	}
 
-	c.reset(c.ddlSpan)
+		schemaTasks: make(map[int64]map[common.DispatcherID]*replica.SpanReplication),
+		tableTasks:  make(map[int64]map[common.DispatcherID]*replica.SpanReplication),
+		allTasks:    make(map[common.DispatcherID]*replica.SpanReplication),
+	}
+	c.ReplicationDB = pkgreplica.NewReplicationDB(changefeedID.String(), c.doWithRLock, c.newGroupChecker)
+	c.initializeDDLSpan(ddlSpan)
 	return c
 }
 
@@ -112,13 +118,12 @@ func (c *Controller) doWithRLock(action func()) {
 	action()
 }
 
-// reset resets the maps of Controller
-func (c *Controller) reset(ddlSpan *replica.SpanReplication) {
-	c.schemaTasks = make(map[int64]map[common.DispatcherID]*replica.SpanReplication)
-	c.tableTasks = make(map[int64]map[common.DispatcherID]*replica.SpanReplication)
-	c.allTasks = make(map[common.DispatcherID]*replica.SpanReplication)
-	c.ReplicationDB = pkgreplica.NewReplicationDB(c.changefeedID.String(), c.doWithRLock, c.newGroupChecker)
-	c.initializeDDLSpan(ddlSpan)
+// ShouldEnableSplit returns whether split is allowed for a table given its splittable flag and controller config.
+func (c *Controller) ShouldEnableSplit(splitable bool) bool {
+	if !c.enableSplittableCheck {
+		return true
+	}
+	return splitable
 }
 
 func (c *Controller) initializeDDLSpan(ddlSpan *replica.SpanReplication) {
@@ -156,12 +161,13 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 		KeyspaceID: keyspaceID,
 	}
 	tableSpans := []*heartbeatpb.TableSpan{tableSpan}
+	enableSplit := c.ShouldEnableSplit(table.Splitable)
 
 	// Determine if the table can be split based on configuration and table splittable status
-	if c.enableTableAcrossNodes && c.splitter != nil && (table.Splitable || !c.enableSplittableCheck) {
+	if c.enableTableAcrossNodes && c.splitter != nil && enableSplit {
 		tableSpans = c.splitter.Split(context.Background(), tableSpan, 0, split.SplitTypeRegionCount)
 	}
-	c.AddNewSpans(table.SchemaID, tableSpans, startTs)
+	c.AddNewSpans(table.SchemaID, tableSpans, startTs, enableSplit)
 }
 
 // AddWorkingSpans adds working spans
@@ -174,11 +180,11 @@ func (c *Controller) AddWorkingSpans(tableMap utils.Map[*heartbeatpb.TableSpan, 
 
 // AddNewSpans creates new spans for the given schema and table spans
 // This is a complex business logic method that handles span creation
-func (c *Controller) AddNewSpans(schemaID int64, tableSpans []*heartbeatpb.TableSpan, startTs uint64) {
+func (c *Controller) AddNewSpans(schemaID int64, tableSpans []*heartbeatpb.TableSpan, startTs uint64, enabledSplit bool) {
 	for _, span := range tableSpans {
 		dispatcherID := common.NewDispatcherID()
 		span.KeyspaceID = c.GetkeyspaceID()
-		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs, c.mode)
+		replicaSet := replica.NewSpanReplication(c.changefeedID, dispatcherID, schemaID, span, startTs, c.mode, enabledSplit)
 		c.AddAbsentReplicaSet(replicaSet)
 	}
 }
@@ -430,7 +436,8 @@ func (c *Controller) ReplaceReplicaSet(
 			common.NewDispatcherID(),
 			old.GetSchemaID(),
 			span, checkpointTs,
-			old.GetMode())
+			old.GetMode(),
+			old.IsSplitEnabled())
 		news = append(news, new)
 	}
 
@@ -475,49 +482,53 @@ func (c *Controller) CheckByGroup(groupID pkgreplica.GroupID, batch int) pkgrepl
 	return checker.Check(batch)
 }
 
-// RemoveAll reset the db and return all the replicating and scheduling tasks
-func (c *Controller) RemoveAll() []*replica.SpanReplication {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	tasks := make([]*replica.SpanReplication, 0)
-	tasks = append(tasks, c.GetReplicatingWithoutLock()...)
-	tasks = append(tasks, c.GetSchedulingWithoutLock()...)
-
-	c.reset(c.ddlSpan)
-	return tasks
-}
-
-// RemoveByTableIDs removes the tasks by the table ids and return the scheduled tasks
-func (c *Controller) RemoveByTableIDs(tableIDs ...int64) []*replica.SpanReplication {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	tasks := make([]*replica.SpanReplication, 0)
+func (c *Controller) GetRemoveTasksByTableIDs(tableIDs ...int64) []*replica.SpanReplication {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	taskList := make([]*replica.SpanReplication, 0)
 	for _, tblID := range tableIDs {
 		for _, task := range c.tableTasks[tblID] {
-			c.removeSpanWithoutLock(task)
 			if task.IsScheduled() {
-				tasks = append(tasks, task)
+				taskList = append(taskList, task)
 			}
 		}
 	}
-	return tasks
+	return taskList
 }
 
-// RemoveBySchemaID removes the tasks by the schema id and return the scheduled tasks
-func (c *Controller) RemoveBySchemaID(schemaID int64) []*replica.SpanReplication {
+func (c *Controller) GetRemoveTasksBySchemaID(schemaID int64) []*replica.SpanReplication {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	taskList := make([]*replica.SpanReplication, 0)
+	for _, task := range c.schemaTasks[schemaID] {
+		if task.IsScheduled() {
+			taskList = append(taskList, task)
+		}
+	}
+	return taskList
+}
+
+// RemoveByTableIDs removes the tasks by the table ids.
+func (c *Controller) RemoveByTableIDs(tableIDs ...int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	tasks := make([]*replica.SpanReplication, 0)
-	for _, task := range c.schemaTasks[schemaID] {
-		c.removeSpanWithoutLock(task)
-		if task.IsScheduled() {
-			tasks = append(tasks, task)
+	for _, tblID := range tableIDs {
+		for _, task := range c.tableTasks[tblID] {
+			c.removeSpanWithoutLock(task)
 		}
 	}
-	return tasks
+}
+
+// RemoveBySchemaID removes the tasks by the schema id.
+func (c *Controller) RemoveBySchemaID(schemaID int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for _, task := range c.schemaTasks[schemaID] {
+		c.removeSpanWithoutLock(task)
+	}
 }
 
 // removeSpanWithoutLock removes the spans from the db without lock

@@ -220,6 +220,7 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 		lastStartTs = dml.GetStartTs()
 		lastCommitTs = dml.GetCommitTs()
 		log.Debug("send dml event to dispatcher",
+			zap.Stringer("changefeedID", d.changefeedStat.changefeedID),
 			zap.Stringer("dispatcherID", d.id), zap.Int64("tableID", d.info.GetTableSpan().GetTableID()),
 			zap.Uint64("seq", dml.Seq),
 			zap.Uint64("lastCommitTs", lastCommitTs), zap.Uint64("lastStartTs", lastStartTs))
@@ -244,14 +245,11 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 		updateMetricEventServiceSendDDLCount(d.info.GetMode())
 	}
 
-	tableID := int64(0)
-	if e.TableInfo != nil {
-		tableID = e.TableInfo.TableName.TableID
-	}
 	log.Info("send ddl event to dispatcher",
+		zap.Stringer("changefeedID", d.changefeedStat.changefeedID),
 		zap.Stringer("dispatcherID", d.id),
 		zap.Int64("DDLSpanTableID", d.info.GetTableSpan().TableID),
-		zap.Int64("EventTableID", tableID),
+		zap.Int64("EventTableID", e.GetTableID()),
 		zap.String("query", e.Query), zap.Uint64("commitTs", e.FinishedTs),
 		zap.Uint64("seq", e.Seq), zap.Int64("mode", d.info.GetMode()))
 }
@@ -363,14 +361,18 @@ func (c *eventBroker) logUninitializedDispatchers(ctx context.Context) error {
 			c.dispatchers.Range(func(key, value interface{}) bool {
 				dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
 				if isUninitialized(dispatcher) {
-					log.Info("dispatcher not reset", zap.Any("dispatcherID", dispatcher.id))
+					log.Info("dispatcher not reset",
+						zap.Stringer("changefeedID", dispatcher.changefeedStat.changefeedID),
+						zap.Any("dispatcherID", dispatcher.id))
 				}
 				return true
 			})
 			c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
 				dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
 				if isUninitialized(dispatcher) {
-					log.Info("table trigger dispatcher not reset", zap.Any("dispatcherID", dispatcher.id))
+					log.Info("table trigger dispatcher not reset",
+						zap.Stringer("changefeedID", dispatcher.changefeedStat.changefeedID),
+						zap.Any("dispatcherID", dispatcher.id))
 				}
 				return true
 			})
@@ -464,7 +466,8 @@ func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 		event := event.NewReadyEvent(task.info.GetID())
 		wrapEvent := newWrapReadyEvent(remoteID, event)
 		c.getMessageCh(task.messageWorkerIndex, common.IsRedoMode(task.info.GetMode())) <- wrapEvent
-		log.Debug("send ready event to dispatcher", zap.Stringer("dispatcherID", task.id))
+		log.Debug("send ready event to dispatcher",
+			zap.Stringer("changefeedID", task.changefeedStat.changefeedID), zap.Stringer("dispatcherID", task.id))
 		task.lastReadySendTime.Store(now)
 		newInterval := currentInterval * 2
 		if newInterval > maxReadyEventIntervalSeconds {
@@ -493,6 +496,7 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 	remoteID := node.ID(task.info.GetServerID())
 	event := event.NewHandshakeEvent(task.id, task.startTs, task.epoch, task.startTableInfo)
 	log.Info("send handshake event to dispatcher",
+		zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
 		zap.Stringer("dispatcherID", task.id),
 		zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
 		zap.Uint64("commitTs", event.GetCommitTs()),
@@ -514,32 +518,19 @@ func (c *eventBroker) hasSyncPointEventsBeforeTs(ts uint64, d *dispatcherStat) b
 // emitSyncPointEventIfNeeded emits a sync point event if the current ts is greater than the next sync point, and updates the next sync point.
 // We need call this function every time we send a event(whether dml/ddl/resolvedTs),
 // thus to ensure the sync point event is in correct order for each dispatcher.
-// When a period of time, there is no other dml and ddls, we will batch multiple sync point commit ts in one sync point event to enhance the speed.
 func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, remoteID node.ID) {
-	commitTsList := make([]uint64, 0)
 	for d.enableSyncPoint && ts > d.nextSyncPoint.Load() {
-		commitTsList = append(commitTsList, d.nextSyncPoint.Load())
-		d.nextSyncPoint.Store(oracle.GoTimeToTS(oracle.GetTimeFromTS(d.nextSyncPoint.Load()).Add(d.syncPointInterval)))
-	}
-	for len(commitTsList) > 0 {
-		// we limit a sync point event to contain at most 16 commit ts, to avoid a too large event.
-		newCommitTsList := commitTsList
-		if len(commitTsList) > 16 {
-			newCommitTsList = commitTsList[:16]
-		}
-		e := event.NewSyncPointEvent(d.id, newCommitTsList, d.seq.Add(1), d.epoch)
+		commitTs := d.nextSyncPoint.Load()
+		d.nextSyncPoint.Store(oracle.GoTimeToTS(oracle.GetTimeFromTS(commitTs).Add(d.syncPointInterval)))
+
+		e := event.NewSyncPointEvent(d.id, commitTs, d.seq.Add(1), d.epoch)
 		log.Debug("send syncpoint event to dispatcher",
+			zap.Stringer("changefeedID", d.changefeedStat.changefeedID),
 			zap.Stringer("dispatcherID", d.id), zap.Int64("tableID", d.info.GetTableSpan().GetTableID()),
 			zap.Uint64("commitTs", e.GetCommitTs()), zap.Uint64("seq", e.GetSeq()))
 
 		syncPointEvent := newWrapSyncPointEvent(remoteID, e)
 		c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- syncPointEvent
-
-		if len(commitTsList) > 16 {
-			commitTsList = commitTsList[16:]
-		} else {
-			break
-		}
 	}
 }
 
@@ -569,8 +560,8 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	// To avoid the useless scan task.
 	if !c.msgSender.IsReadyToSend(remoteID) {
 		log.Info("The remote target is not ready, skip scan",
-			zap.String("changefeed", changefeedID.String()),
-			zap.String("dispatcherID", task.id.String()),
+			zap.Stringer("changefeed", changefeedID),
+			zap.Stringer("dispatcherID", task.id),
 			zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
 			zap.String("remote", remoteID.String()))
 		return
@@ -606,6 +597,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			zap.String("changefeed", changefeedID.String()), zap.String("remote", remoteID.String()))
 		return
 	}
+
 	available := item.(*atomic.Uint64)
 	if available.Load() < c.scanLimitInBytes {
 		task.resetScanLimit()
@@ -620,12 +612,14 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			zap.Uint64("available", available.Load()),
 			zap.Uint64("required", uint64(sl.maxDMLBytes)))
 		c.sendSignalResolvedTs(task)
+		metrics.EventServiceSkipScanCount.WithLabelValues("changefeed_quota").Inc()
 		return
 	}
 
 	if uint64(sl.maxDMLBytes) > task.availableMemoryQuota.Load() {
 		log.Debug("dispatcher available memory quota is not enough, skip scan", zap.Stringer("dispatcher", task.id), zap.Uint64("available", task.availableMemoryQuota.Load()), zap.Int64("required", int64(sl.maxDMLBytes)))
 		c.sendSignalResolvedTs(task)
+		metrics.EventServiceSkipScanCount.WithLabelValues("dispatcher_quota").Inc()
 		return
 	}
 
@@ -637,8 +631,13 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		releaseQuota(available, uint64(sl.maxDMLBytes-scannedBytes))
 	}
 
+	if interrupted {
+		metrics.EventServiceInterruptScanCount.Inc()
+	}
+
 	if err != nil {
 		log.Error("scan events failed",
+			zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
 			zap.Stringer("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
 			zap.Any("dataRange", dataRange), zap.Uint64("receivedResolvedTs", task.receivedResolvedTs.Load()),
 			zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
@@ -858,7 +857,9 @@ func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context, tickInter
 			})
 
 			for _, d := range inActiveDispatchers {
-				log.Warn("remove in-active dispatcher", zap.Stringer("dispatcherID", d.id), zap.Time("lastReceivedHeartbeatTime", time.Unix(d.lastReceivedHeartbeatTime.Load(), 0)))
+				log.Warn("remove in-active dispatcher",
+					zap.Stringer("changefeedID", d.changefeedStat.changefeedID),
+					zap.Stringer("dispatcherID", d.id), zap.Time("lastReceivedHeartbeatTime", time.Unix(d.lastReceivedHeartbeatTime.Load(), 0)))
 				c.removeDispatcher(d.info)
 			}
 		}
@@ -916,8 +917,6 @@ func (c *eventBroker) getDispatcher(id common.DispatcherID) *atomic.Pointer[disp
 }
 
 func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
-	defer c.metricsCollector.metricDispatcherCount.Inc()
-
 	id := info.GetID()
 	span := info.GetTableSpan()
 	changefeedID := info.GetChangefeedID()
@@ -959,8 +958,13 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	if !success {
 		if !info.IsOnlyReuse() {
 			log.Error("register dispatcher to eventStore failed",
+				zap.Stringer("changefeedID", changefeedID),
 				zap.Stringer("dispatcherID", id), zap.Int64("tableID", span.GetTableID()),
 				zap.Uint64("startTs", info.GetStartTs()), zap.String("span", common.FormatTableSpan(span)))
+		}
+		status.removeDispatcher(id)
+		if status.isEmpty() {
+			c.changefeedMap.Delete(changefeedID)
 		}
 		c.sendNotReusableEvent(node.ID(info.GetServerID()), dispatcher)
 		return nil
@@ -978,9 +982,14 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 			zap.Uint64("startTs", info.GetStartTs()), zap.String("span", common.FormatTableSpan(span)),
 			zap.Error(err),
 		)
+		status.removeDispatcher(id)
+		if status.isEmpty() {
+			c.changefeedMap.Delete(changefeedID)
+		}
 		return err
 	}
 	c.dispatchers.Store(id, dispatcherPtr)
+	c.metricsCollector.metricDispatcherCount.Inc()
 	log.Info("register dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID),
 		zap.Stringer("changefeedID", changefeedID),
@@ -989,12 +998,12 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		zap.Int64("tableID", span.GetTableID()),
 		zap.String("span", common.FormatTableSpan(span)),
 		zap.Uint64("startTs", info.GetStartTs()),
+		zap.String("txnAtomocity", string(info.GetTxnAtomicity())),
 		zap.Duration("duration", time.Since(start)))
 	return nil
 }
 
 func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
-	defer c.metricsCollector.metricDispatcherCount.Dec()
 	id := dispatcherInfo.GetID()
 
 	statPtr, ok := c.dispatchers.Load(id)
@@ -1008,6 +1017,7 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	stat := statPtr.(*atomic.Pointer[dispatcherStat]).Load()
 
 	stat.changefeedStat.removeDispatcher(id)
+	c.metricsCollector.metricDispatcherCount.Dec()
 	changefeedID := dispatcherInfo.GetChangefeedID()
 
 	if stat.changefeedStat.isEmpty() {
@@ -1050,6 +1060,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			zap.Uint64("startTs", dispatcherInfo.GetStartTs()))
 		return nil
 	}
+	metrics.EventServiceResetDispatcherCount.Inc()
 
 	oldStat := statPtr.Load()
 	// stale reset request, ignore it.
@@ -1076,6 +1087,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		tableInfo, err = c.schemaStore.GetTableInfo(keyspaceMeta, span.GetTableID(), dispatcherInfo.GetStartTs())
 		if err != nil {
 			log.Error("get table info from schemaStore failed",
+				zap.Stringer("changefeedID", changefeedID),
 				zap.Stringer("dispatcherID", dispatcherID),
 				zap.Int64("tableID", span.GetTableID()),
 				zap.Uint64("startTs", dispatcherInfo.GetStartTs()),

@@ -17,9 +17,11 @@ import (
 	"context"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -57,9 +59,13 @@ func NewLogWriter(
 		cfg:      cfg,
 		fileType: fileType,
 	}
-	lw.fileWorkers = newFileWorkerGroup(cfg, cfg.FlushWorkerNum, fileType, extStorage, opts...)
+	lw.fileWorkers = newFileWorkerGroup(cfg, util.GetOrZero(cfg.FlushWorkerNum), fileType, extStorage, opts...)
 
 	return lw, nil
+}
+
+func (l *memoryLogWriter) SetTableSchemaStore(tableSchemaStore *event.TableSchemaStore) {
+	l.fileWorkers.tableSchemaStore = tableSchemaStore
 }
 
 func (l *memoryLogWriter) Run(ctx context.Context) error {

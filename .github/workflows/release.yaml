@@ -1,0 +1,61 @@
+name: Auto Release
+permissions:
+  contents: write
+  packages: write
+on:
+  push:
+    tags:
+      - '*'
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - name: Get the version
+        id: tag
+        run: echo "version=$(echo $GITHUB_REF | cut -d / -f 3)" >> $GITHUB_OUTPUT
+      - name: Echo tag
+        run: echo ${{ steps.tag.outputs.version }}
+  release:
+    name: release
+    needs: tag
+    if: '!contains(needs.tag.outputs.version, ''nextgen'')'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Publish Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |-
+          VERSION="${{needs.tag.outputs.version}}"
+          TITLE="${VERSION}"
+          NOTE="## 📦 TiCDC $VERSION Release
+
+          ### 🐧 Linux Downloads
+          \`\`\`bash
+          # Linux AMD64
+          wget https://tiup-mirrors.pingcap.com/cdc-$VERSION-linux-amd64.tar.gz
+
+          # Linux ARM64
+          wget https://tiup-mirrors.pingcap.com/cdc-$VERSION-linux-arm64.tar.gz
+          \`\`\`
+
+          ### 🍎 macOS Downloads
+          \`\`\`bash
+          # macOS AMD64 (Intel)
+          wget https://tiup-mirrors.pingcap.com/cdc-$VERSION-darwin-amd64.tar.gz
+
+          # macOS ARM64 (Apple Silicon)
+          wget https://tiup-mirrors.pingcap.com/cdc-$VERSION-darwin-arm64.tar.gz
+          \`\`\`
+
+          ### 🐳 Docker Images
+          \`\`\`bash
+          # Pull the latest release
+          docker pull pingcap/ticdc:$VERSION
+          \`\`\`"
+          gh release create "$VERSION" --prerelease --verify-tag -t "$TITLE" -n "$NOTE"

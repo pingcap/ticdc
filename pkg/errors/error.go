@@ -254,7 +254,7 @@ var (
 		errors.RFCCodeText("CDC:ErrSinkInvalidConfig"),
 	)
 	ErrMessageTooLarge = errors.Normalize(
-		"message is too large",
+		"message is too large. table:%s, length:%d, maxMessageBytes:%d",
 		errors.RFCCodeText("CDC:ErrMessageTooLarge"),
 	)
 	ErrStorageSinkInvalidDateSeparator = errors.Normalize(
@@ -802,6 +802,11 @@ var (
 	ErrTableAfterDDLNotSplitable = errors.Normalize(
 		"the ddl event will break splitable of this table",
 		errors.RFCCodeText("CDC:ErrTableAfterNotSplitable"),
+	)
+
+	ErrConfigInvalidTimezone = errors.Normalize(
+		"invalid timezone string: %s",
+		errors.RFCCodeText("CDC:ErrConfigInvalidTimezone"),
 	)
 
 	ErrUnimplementedIOType = errors.Normalize(

@@ -74,7 +74,7 @@ func NewRedoMeta(
 		uuidGenerator:     uuid.NewGenerator(),
 		cfg:               cfg,
 		startTs:           checkpoint,
-		flushIntervalInMs: cfg.MetaFlushIntervalInMs,
+		flushIntervalInMs: util.GetOrZero(cfg.MetaFlushIntervalInMs),
 	}
 
 	if m.flushIntervalInMs < redo.MinFlushIntervalInMs {
@@ -94,7 +94,7 @@ func (m *RedoMeta) Running() bool {
 }
 
 func (m *RedoMeta) PreStart(ctx context.Context) error {
-	uri, err := storage.ParseRawURL(m.cfg.Storage)
+	uri, err := storage.ParseRawURL(util.GetOrZero(m.cfg.Storage))
 	if err != nil {
 		return err
 	}
@@ -169,7 +169,7 @@ func (m *RedoMeta) UpdateMeta(checkpointTs, resolvedTs common.Ts) {
 func (m *RedoMeta) GetFlushedMeta() misc.LogMeta {
 	checkpointTs := m.metaCheckpointTs.getFlushed()
 	resolvedTs := m.metaResolvedTs.getFlushed()
-	return misc.LogMeta{CheckpointTs: checkpointTs, ResolvedTs: resolvedTs}
+	return misc.NewMeta(checkpointTs, resolvedTs)
 }
 
 // initMeta will read the meta file from external storage and
@@ -181,8 +181,9 @@ func (m *RedoMeta) initMeta(ctx context.Context) error {
 	default:
 	}
 
+	meta := misc.NewMeta(m.startTs, m.startTs)
 	metas := []*misc.LogMeta{
-		{CheckpointTs: m.startTs, ResolvedTs: m.startTs},
+		&meta,
 	}
 	var toRemoveMetaFiles []string
 	err := m.extStorage.WalkDir(ctx, nil, func(path string, size int64) error {
@@ -314,7 +315,7 @@ func (m *RedoMeta) deleteAllLogs(ctx context.Context) error {
 	// otherwise it should have already meet panic during changefeed running time.
 	// the extStorage may be nil in the unit test, so just set the external storage to make unit test happy.
 	if m.extStorage == nil {
-		uri, err := storage.ParseRawURL(m.cfg.Storage)
+		uri, err := storage.ParseRawURL(util.GetOrZero(m.cfg.Storage))
 		redo.FixLocalScheme(uri)
 		if err != nil {
 			return err
@@ -347,7 +348,7 @@ func (m *RedoMeta) maybeFlushMeta(ctx context.Context) error {
 	if !hasChange {
 		// check stuck
 		if time.Since(m.lastFlushTime) > redo.FlushWarnDuration {
-			log.Debug("Redo meta has not changed for a long time, owner may be stuck",
+			log.Debug("Redo meta has not changed for a long time, table trigger redo dispatcher may be stuck",
 				zap.String("keyspace", m.changeFeedID.Keyspace()),
 				zap.String("changefeed", m.changeFeedID.Name()),
 				zap.Duration("lastFlushTime", time.Since(m.lastFlushTime)),
@@ -371,11 +372,11 @@ func (m *RedoMeta) maybeFlushMeta(ctx context.Context) error {
 // PrepareForFlushMeta determines whether should advance.
 // If the unflushed ts exceeds the flushed ts, the redo meta will flush the persisted unflushed ts.
 func (m *RedoMeta) prepareForFlushMeta() (bool, misc.LogMeta) {
-	flushed := misc.LogMeta{}
+	flushed := misc.DefaultMeta()
 	flushed.CheckpointTs = m.metaCheckpointTs.getFlushed()
 	flushed.ResolvedTs = m.metaResolvedTs.getFlushed()
 
-	unflushed := misc.LogMeta{}
+	unflushed := misc.DefaultMeta()
 	unflushed.CheckpointTs = m.metaCheckpointTs.getUnflushed()
 	unflushed.ResolvedTs = m.metaResolvedTs.getUnflushed()
 

@@ -46,9 +46,9 @@ func TestInitAndWriteMeta(t *testing.T) {
 
 	// write some meta and log files
 	metas := []misc.LogMeta{
-		{CheckpointTs: 1, ResolvedTs: 2},
-		{CheckpointTs: 8, ResolvedTs: 9},
-		{CheckpointTs: 9, ResolvedTs: 11},
+		misc.NewMeta(1, 2),
+		misc.NewMeta(8, 9),
+		misc.NewMeta(9, 11),
 	}
 
 	var toRemoveFiles []string
@@ -72,13 +72,13 @@ func TestInitAndWriteMeta(t *testing.T) {
 
 	startTs := uint64(10)
 	cfg := &config.ConsistentConfig{
-		Level:                 string(redo.ConsistentLevelEventual),
-		MaxLogSize:            redo.DefaultMaxLogSize,
-		Storage:               uri.String(),
-		FlushIntervalInMs:     redo.MinFlushIntervalInMs,
-		MetaFlushIntervalInMs: redo.MinFlushIntervalInMs,
-		EncodingWorkerNum:     redo.DefaultEncodingWorkerNum,
-		FlushWorkerNum:        redo.DefaultFlushWorkerNum,
+		Level:                 util.AddressOf(string(redo.ConsistentLevelEventual)),
+		MaxLogSize:            util.AddressOf(redo.DefaultMaxLogSize),
+		Storage:               util.AddressOf(uri.String()),
+		FlushIntervalInMs:     util.AddressOf(int64(redo.MinFlushIntervalInMs)),
+		MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
+		EncodingWorkerNum:     util.AddressOf(redo.DefaultEncodingWorkerNum),
+		FlushWorkerNum:        util.AddressOf(redo.DefaultFlushWorkerNum),
 	}
 	m := NewRedoMeta(changefeedID, startTs, cfg)
 
@@ -130,10 +130,10 @@ func TestPreCleanupAndWriteMeta(t *testing.T) {
 
 	// write some meta and log files
 	metas := []misc.LogMeta{
-		{CheckpointTs: 1, ResolvedTs: 2},
-		{CheckpointTs: 8, ResolvedTs: 9},
-		{CheckpointTs: 9, ResolvedTs: 11},
-		{CheckpointTs: 11, ResolvedTs: 12},
+		misc.NewMeta(1, 2),
+		misc.NewMeta(8, 9),
+		misc.NewMeta(9, 11),
+		misc.NewMeta(11, 12),
 	}
 	var toRemoveFiles []string
 	for _, meta := range metas {
@@ -156,13 +156,13 @@ func TestPreCleanupAndWriteMeta(t *testing.T) {
 
 	startTs := uint64(10)
 	cfg := &config.ConsistentConfig{
-		Level:                 string(redo.ConsistentLevelEventual),
-		MaxLogSize:            redo.DefaultMaxLogSize,
-		Storage:               uri.String(),
-		FlushIntervalInMs:     redo.MinFlushIntervalInMs,
-		MetaFlushIntervalInMs: redo.MinFlushIntervalInMs,
-		EncodingWorkerNum:     redo.DefaultEncodingWorkerNum,
-		FlushWorkerNum:        redo.DefaultFlushWorkerNum,
+		Level:                 util.AddressOf(string(redo.ConsistentLevelEventual)),
+		MaxLogSize:            util.AddressOf(redo.DefaultMaxLogSize),
+		Storage:               util.AddressOf(uri.String()),
+		FlushIntervalInMs:     util.AddressOf(int64(redo.MinFlushIntervalInMs)),
+		MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
+		EncodingWorkerNum:     util.AddressOf(redo.DefaultEncodingWorkerNum),
+		FlushWorkerNum:        util.AddressOf(redo.DefaultFlushWorkerNum),
 	}
 	m := NewRedoMeta(changefeedID, startTs, cfg)
 
@@ -293,13 +293,13 @@ func TestGCAndCleanup(t *testing.T) {
 
 	startTs := uint64(3)
 	cfg := &config.ConsistentConfig{
-		Level:                 string(redo.ConsistentLevelEventual),
-		MaxLogSize:            redo.DefaultMaxLogSize,
-		Storage:               uri.String(),
-		FlushIntervalInMs:     redo.MinFlushIntervalInMs,
-		MetaFlushIntervalInMs: redo.MinFlushIntervalInMs,
-		EncodingWorkerNum:     redo.DefaultEncodingWorkerNum,
-		FlushWorkerNum:        redo.DefaultFlushWorkerNum,
+		Level:                 util.AddressOf(string(redo.ConsistentLevelEventual)),
+		MaxLogSize:            util.AddressOf(redo.DefaultMaxLogSize),
+		Storage:               util.AddressOf(uri.String()),
+		FlushIntervalInMs:     util.AddressOf(int64(redo.MinFlushIntervalInMs)),
+		MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
+		EncodingWorkerNum:     util.AddressOf(redo.DefaultEncodingWorkerNum),
+		FlushWorkerNum:        util.AddressOf(redo.DefaultFlushWorkerNum),
 	}
 
 	m := NewRedoMeta(changefeedID, startTs, cfg)

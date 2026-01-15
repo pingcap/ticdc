@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
-	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -53,7 +52,7 @@ type sink struct {
 	partitionRule helper.DDLDispatchRule
 
 	checkpointChan   chan uint64
-	tableSchemaStore *util.TableSchemaStore
+	tableSchemaStore *commonEvent.TableSchemaStore
 
 	eventChan *chann.UnlimitedChannel[*commonEvent.DMLEvent, any]
 	rowChan   *chann.UnlimitedChannel[*commonEvent.MQRowEvent, any]
@@ -87,16 +86,15 @@ func New(
 	}()
 
 	statistics := metrics.NewStatistics(changefeedID, "sink")
-	asyncProducer, err := comp.factory.AsyncProducer()
+	asyncProducer, err := comp.factory.AsyncProducer(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	syncProducer, err := comp.factory.SyncProducer()
+	syncProducer, err := comp.factory.SyncProducer(ctx)
 	if err != nil {
 		return nil, err
 	}
-
 	return &sink{
 		changefeedID:     changefeedID,
 		dmlProducer:      asyncProducer,
@@ -416,7 +414,7 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 			return err
 		}
 		if message == nil {
-			log.Info("Skip ddl event", zap.Uint64("commitTs", e.GetCommitTs()),
+			log.Info("Skip ddl event", zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", e.GetCommitTs()),
 				zap.String("query", e.Query),
 				zap.Stringer("changefeed", s.changefeedID))
 			continue
@@ -433,11 +431,11 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		}
 		if s.partitionRule == helper.PartitionAll {
 			err = s.statistics.RecordDDLExecution(func() error {
-				return s.ddlProducer.SendMessages(s.ctx, topic, partitionNum, message)
+				return s.ddlProducer.SendMessages(topic, partitionNum, message)
 			})
 		} else {
 			err = s.statistics.RecordDDLExecution(func() error {
-				return s.ddlProducer.SendMessage(s.ctx, topic, 0, message)
+				return s.ddlProducer.SendMessage(topic, 0, message)
 			})
 		}
 		if err != nil {
@@ -446,7 +444,7 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 	}
 	log.Info("kafka sink send DDL event",
 		zap.String("keyspace", s.changefeedID.Keyspace()), zap.String("changefeed", s.changefeedID.Name()),
-		zap.Any("commitTs", event.GetCommitTs()), zap.Any("event", event.GetDDLQuery()),
+		zap.Any("startTs", event.GetStartTs()), zap.Any("commitTs", event.GetCommitTs()), zap.Any("event", event.GetDDLQuery()),
 		zap.String("schema", event.GetSchemaName()), zap.String("table", event.GetTableName()))
 	return nil
 }
@@ -456,7 +454,7 @@ func (s *sink) AddCheckpointTs(ts uint64) {
 	case s.checkpointChan <- ts:
 	case <-s.ctx.Done():
 		return
-		// We can just drop the checkpoint ts if the channel is full to avoid blocking since the  checkpointTs will come indefinitely
+		// We can just drop the checkpoint ts if the channel is full to avoid blocking since the checkpointTs will come indefinitely
 	default:
 	}
 }
@@ -511,7 +509,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 				if err != nil {
 					return err
 				}
-				err = s.ddlProducer.SendMessages(ctx, topic, partitionNum, msg)
+				err = s.ddlProducer.SendMessages(topic, partitionNum, msg)
 				if err != nil {
 					return err
 				}
@@ -522,7 +520,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 					if err != nil {
 						return err
 					}
-					err = s.ddlProducer.SendMessages(ctx, topic, partitionNum, msg)
+					err = s.ddlProducer.SendMessages(topic, partitionNum, msg)
 					if err != nil {
 						return err
 					}
@@ -534,7 +532,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 	}
 }
 
-func (s *sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
+func (s *sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
 	s.tableSchemaStore = tableSchemaStore
 }
 

@@ -18,7 +18,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"go.uber.org/zap"
 )
 
 // TableProgress maintains event timestamp information in the sink.
@@ -33,7 +35,7 @@ import (
 type TableProgress struct {
 	rwMutex     sync.RWMutex
 	list        *list.List
-	elemMap     map[Ts]*list.Element
+	elemMap     map[Ts]*ElementList
 	maxCommitTs uint64
 	// lastSyncedTs is the last commit ts that has been synced to downstream.
 	// It's used in /:changefeed_id/synced API.
@@ -52,39 +54,58 @@ type Ts struct {
 	startTs  uint64
 }
 
+// When Splitting Txn, there may be multiple events with the same (startTs, commitTs).
+// So we need to maintain a list of elements for each (startTs, commitTs) pair.
+// elements is the list of elements with the same (startTs, commitTs).
+// idx is the index of the next element to be popped.
+type ElementList struct {
+	elements []*list.Element
+	idx      int
+}
+
+func (el *ElementList) Push(elem *list.Element) {
+	el.elements = append(el.elements, elem)
+}
+
+// Pop pops the next element from the ElementList.
+// Each time we only pop the first element.
+// When all elements are popped once, it returns finish=true.
+// Means the startTs/commitTs pair has no elements left.
+func (el *ElementList) Pop() (*list.Element, bool) {
+	if el.idx >= len(el.elements) {
+		log.Error("ElementList Pop called but no elements left", zap.Int("el.idx", el.idx))
+		return nil, true
+	}
+
+	elem := el.elements[el.idx]
+	el.idx++
+	return elem, el.idx >= len(el.elements)
+}
+
 // NewTableProgress creates and initializes a new TableProgress instance.
 func NewTableProgress() *TableProgress {
 	return &TableProgress{
 		list:              list.New(),
-		elemMap:           make(map[Ts]*list.Element),
+		elemMap:           make(map[Ts]*ElementList),
 		maxCommitTs:       0,
 		cumulateEventSize: 0,
 		lastQueryTime:     time.Now(),
 	}
 }
 
-func getFinalCommitTs(event commonEvent.Event) uint64 {
-	commitTs := event.GetCommitTs()
-	if event.GetType() == commonEvent.TypeSyncPointEvent {
-		// if the event is a sync point event, we use the last commitTs(the largest commitTs in the event) to calculate the progress.
-		// because a sync point event with multiple commitTs means there is no ddl / dmls between these commitTs.
-		// So we can just use the largest commitTs in the sync point event to calculate the progress.
-		commitTsList := event.(*commonEvent.SyncPointEvent).GetCommitTsList()
-		commitTs = commitTsList[len(commitTsList)-1]
-	}
-	return commitTs
-}
-
 // Add inserts a new event into the TableProgress.
 func (p *TableProgress) Add(event commonEvent.FlushableEvent) {
-	commitTs := getFinalCommitTs(event)
+	commitTs := event.GetCommitTs()
 	ts := Ts{startTs: event.GetStartTs(), commitTs: commitTs}
 
 	p.rwMutex.Lock()
 	defer p.rwMutex.Unlock()
 
 	elem := p.list.PushBack(ts)
-	p.elemMap[ts] = elem
+	if _, ok := p.elemMap[ts]; !ok {
+		p.elemMap[ts] = &ElementList{}
+	}
+	p.elemMap[ts].Push(elem)
 	p.maxCommitTs = commitTs
 	event.PushFrontFlushFunc(func() {
 		p.Remove(event)
@@ -94,13 +115,18 @@ func (p *TableProgress) Add(event commonEvent.FlushableEvent) {
 // Remove deletes an event from the TableProgress.
 // Note: Consider implementing batch removal in the future if needed.
 func (p *TableProgress) Remove(event commonEvent.FlushableEvent) {
-	ts := Ts{startTs: event.GetStartTs(), commitTs: getFinalCommitTs(event)}
+	ts := Ts{startTs: event.GetStartTs(), commitTs: event.GetCommitTs()}
 	p.rwMutex.Lock()
 	defer p.rwMutex.Unlock()
 
-	if elem, ok := p.elemMap[ts]; ok {
-		p.list.Remove(elem)
-		delete(p.elemMap, ts)
+	if elemLists, ok := p.elemMap[ts]; ok {
+		elem, finish := elemLists.Pop()
+		if elem != nil {
+			p.list.Remove(elem)
+		}
+		if finish {
+			delete(p.elemMap, ts)
+		}
 		// Get the bigger last synced ts of dispatcher.
 		// We don't allow lastSyncedTs to move backwards here.
 		if p.lastSyncedTs < ts.commitTs {
@@ -122,7 +148,7 @@ func (p *TableProgress) Pass(event commonEvent.FlushableEvent) {
 	p.rwMutex.Lock()
 	defer p.rwMutex.Unlock()
 
-	p.maxCommitTs = getFinalCommitTs(event)
+	p.maxCommitTs = event.GetCommitTs()
 }
 
 func (p *TableProgress) Len() int {

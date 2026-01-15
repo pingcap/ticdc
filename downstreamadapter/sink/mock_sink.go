@@ -19,7 +19,6 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
 )
 
 type mockSink struct {
@@ -43,7 +42,7 @@ func (s *mockSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 func (s *mockSink) AddCheckpointTs(_ uint64) {
 }
 
-func (s *mockSink) SetTableSchemaStore(_ *sinkutil.TableSchemaStore) {
+func (s *mockSink) SetTableSchemaStore(_ *commonEvent.TableSchemaStore) {
 }
 
 func (s *mockSink) Close(bool) {}

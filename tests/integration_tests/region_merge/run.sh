@@ -36,8 +36,6 @@ function run() {
 
 	start_tidb_cluster --workdir $WORK_DIR --multiple-upstream-pd true --pd-config $CUR/conf/pd_config.toml
 
-	cd $WORK_DIR
-
 	pd_addr="http://$UP_PD_HOST_1:$UP_PD_PORT_1"
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 	TOPIC_NAME="ticdc-region-merge-test-$RANDOM"
@@ -83,7 +81,7 @@ EOF
 	cleanup_process $CDC_BINARY
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_test $WORK_DIR' EXIT
 run $*
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

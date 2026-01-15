@@ -17,8 +17,6 @@ function run() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	cd $WORK_DIR
-
 	run_sql_file $CUR/data/create_table.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql_file $CUR/data/create_table.sql ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
@@ -45,7 +43,7 @@ function run() {
 	cleanup_process $CDC_BINARY
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_test $WORK_DIR' EXIT
 run $*
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

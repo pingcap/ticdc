@@ -91,3 +91,5 @@ if [ "$NEXT_GEN" = 1 ]; then
 else
     export KEYSPACE_NAME=${KEYSPACE_NAME:-default}
 fi
+
+export TEST_OUT_DATA_DIR=test_out_data

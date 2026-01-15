@@ -147,8 +147,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	cfConfig := &config.ChangefeedConfig{}
 	if err := json.Unmarshal(req.Config, cfConfig); err != nil {
 		log.Panic("failed to unmarshal changefeed config",
-			zap.String("changefeedID", cfId.Name()), zap.Error(err))
-		return err
+			zap.String("changefeedID", cfId.Name()), zap.Any("data", req.Config), zap.Error(err))
 	}
 
 	m.mutex.Lock()
@@ -156,16 +155,15 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	m.mutex.Unlock()
 
 	var err error
-	var startTs uint64
 	if !exists {
 		start := time.Now()
-		manager, startTs, err = dispatchermanager.
+		manager, err = dispatchermanager.
 			NewDispatcherManager(
 				req.KeyspaceId,
 				cfId,
 				cfConfig,
 				req.TableTriggerEventDispatcherId,
-				req.RedoTableTriggerEventDispatcherId,
+				req.TableTriggerRedoDispatcherId,
 				req.StartTs,
 				from,
 				req.IsNewChangefeed,
@@ -200,25 +198,10 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		// This is necessary during maintainer node migration, as the existing
 		// dispatcher manager on the new node may not have a table trigger
 		// event dispatcher configured yet.
-		if req.RedoTableTriggerEventDispatcherId != nil {
-			redoTableTriggerDispatcher := manager.GetRedoTableTriggerEventDispatcher()
-			if redoTableTriggerDispatcher == nil {
-				err = manager.NewRedoTableTriggerEventDispatcher(
-					req.RedoTableTriggerEventDispatcherId,
-					req.StartTs,
-					false,
-				)
-				if err != nil {
-					log.Error("failed to create new redo table trigger event dispatcher",
-						zap.Stringer("changefeedID", cfId), zap.Error(err))
-					return m.handleDispatcherError(from, req.ChangefeedID, err)
-				}
-			}
-		}
 		if req.TableTriggerEventDispatcherId != nil {
 			tableTriggerDispatcher := manager.GetTableTriggerEventDispatcher()
 			if tableTriggerDispatcher == nil {
-				startTs, err = manager.NewTableTriggerEventDispatcher(
+				err = manager.NewTableTriggerEventDispatcher(
 					req.TableTriggerEventDispatcherId,
 					req.StartTs,
 					false,
@@ -228,8 +211,21 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 						zap.Stringer("changefeedID", cfId), zap.Error(err))
 					return m.handleDispatcherError(from, req.ChangefeedID, err)
 				}
-			} else {
-				startTs = tableTriggerDispatcher.GetStartTs()
+			}
+		}
+		if req.TableTriggerRedoDispatcherId != nil {
+			tableTriggerRedoDispatcher := manager.GetTableTriggerRedoDispatcher()
+			if tableTriggerRedoDispatcher == nil {
+				err = manager.NewTableTriggerRedoDispatcher(
+					req.TableTriggerRedoDispatcherId,
+					req.StartTs,
+					false,
+				)
+				if err != nil {
+					log.Error("failed to create new table trigger redo dispatcher",
+						zap.Stringer("changefeedID", cfId), zap.Error(err))
+					return m.handleDispatcherError(from, req.ChangefeedID, err)
+				}
 			}
 		}
 	}
@@ -247,7 +243,19 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			zap.String("changefeed", cfId.Name()), zap.Uint64("epoch", cfConfig.Epoch))
 	}
 
-	response := createBootstrapResponse(req.ChangefeedID, manager, startTs)
+	var (
+		startTs     uint64
+		redoStartTs uint64
+	)
+	if tableTriggerDispatcher := manager.GetTableTriggerEventDispatcher(); tableTriggerDispatcher != nil {
+		startTs = tableTriggerDispatcher.GetStartTs()
+	}
+	if manager.RedoEnable {
+		if tableTriggerRedoDispatcher := manager.GetTableTriggerRedoDispatcher(); tableTriggerRedoDispatcher != nil {
+			redoStartTs = tableTriggerRedoDispatcher.GetStartTs()
+		}
+	}
+	response := createBootstrapResponse(req.ChangefeedID, manager, startTs, redoStartTs)
 	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
 }
 
@@ -302,6 +310,14 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 			zap.Any("changefeedID", cfId.Name()), zap.Error(err))
 		return m.handleDispatcherError(from, req.ChangefeedID, err)
 	}
+	if manager.RedoEnable {
+		err := manager.InitalizeTableTriggerRedoDispatcher(req.RedoSchemas)
+		if err != nil {
+			log.Error("failed to initialize table trigger redo dispatcher",
+				zap.Any("changefeedID", cfId.Name()), zap.Error(err))
+			return m.handleDispatcherError(from, req.ChangefeedID, err)
+		}
+	}
 
 	response := &heartbeatpb.MaintainerPostBootstrapResponse{
 		ChangefeedID:                  req.ChangefeedID,
@@ -340,19 +356,34 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 func createBootstrapResponse(
 	changefeedID *heartbeatpb.ChangefeedID,
 	manager *dispatchermanager.DispatcherManager,
-	startTs uint64,
+	startTs, redoStartTs uint64,
 ) *heartbeatpb.MaintainerBootstrapResponse {
 	response := &heartbeatpb.MaintainerBootstrapResponse{
 		ChangefeedID: changefeedID,
 		Spans:        make([]*heartbeatpb.BootstrapTableSpan, 0, manager.GetDispatcherMap().Len()),
 	}
 
-	// table trigger dispatcher startTs
+	// table trigger event dispatcher startTs
 	if startTs != 0 {
 		response.CheckpointTs = startTs
 	}
 
+	manager.GetDispatcherMap().ForEach(func(id common.DispatcherID, d *dispatcher.EventDispatcher) {
+		response.Spans = append(response.Spans, &heartbeatpb.BootstrapTableSpan{
+			ID:              id.ToPB(),
+			SchemaID:        d.GetSchemaID(),
+			Span:            d.GetTableSpan(),
+			ComponentStatus: d.GetComponentStatus(),
+			CheckpointTs:    d.GetCheckpointTs(),
+			BlockState:      d.GetBlockEventStatus(),
+			Mode:            d.GetMode(),
+		})
+	})
 	if manager.RedoEnable {
+		// table trigger redo dispatcher startTs
+		if redoStartTs != 0 {
+			response.RedoCheckpointTs = redoStartTs
+		}
 		manager.GetRedoDispatcherMap().ForEach(func(id common.DispatcherID, d *dispatcher.RedoDispatcher) {
 			response.Spans = append(response.Spans, &heartbeatpb.BootstrapTableSpan{
 				ID:              id.ToPB(),
@@ -365,17 +396,6 @@ func createBootstrapResponse(
 			})
 		})
 	}
-	manager.GetDispatcherMap().ForEach(func(id common.DispatcherID, d *dispatcher.EventDispatcher) {
-		response.Spans = append(response.Spans, &heartbeatpb.BootstrapTableSpan{
-			ID:              id.ToPB(),
-			SchemaID:        d.GetSchemaID(),
-			Span:            d.GetTableSpan(),
-			ComponentStatus: d.GetComponentStatus(),
-			CheckpointTs:    d.GetCheckpointTs(),
-			BlockState:      d.GetBlockEventStatus(),
-			Mode:            d.GetMode(),
-		})
-	})
 
 	return response
 }

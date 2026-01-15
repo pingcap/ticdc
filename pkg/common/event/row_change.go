@@ -50,7 +50,7 @@ type RowChangedEvent struct {
 	Checksum *integrity.Checksum
 }
 
-// GetTableID returns the table ID of the event.
+// GetTableID returns the physical table ID of the event.
 func (r *RowChangedEvent) GetTableID() int64 {
 	return r.PhysicalTableID
 }

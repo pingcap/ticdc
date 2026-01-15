@@ -15,7 +15,6 @@ function run() {
 
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 	start_tidb_cluster --workdir $WORK_DIR
-	cd $WORK_DIR
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
 	# Enable tidb extension to generate the commit ts.
@@ -36,7 +35,7 @@ function run() {
 	done
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_test $WORK_DIR' EXIT
 run $*
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

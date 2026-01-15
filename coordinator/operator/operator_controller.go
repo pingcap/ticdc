@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -47,23 +48,22 @@ type Controller struct {
 	nodeManger    *watcher.NodeManager
 }
 
-func NewOperatorController(mc messaging.MessageCenter,
+func NewOperatorController(
 	selfNode *node.Info,
 	db *changefeed.ChangefeedDB,
 	backend changefeed.Backend,
-	nodeManger *watcher.NodeManager,
 	batchSize int,
 ) *Controller {
 	oc := &Controller{
 		role:          "coordinator",
 		operators:     make(map[common.ChangeFeedID]*operator.OperatorWithTime[common.ChangeFeedID, *heartbeatpb.MaintainerStatus]),
 		runningQueue:  make(operator.OperatorQueue[common.ChangeFeedID, *heartbeatpb.MaintainerStatus], 0),
-		messageCenter: mc,
+		messageCenter: appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		batchSize:     batchSize,
 		changefeedDB:  db,
 		selfNode:      selfNode,
 		backend:       backend,
-		nodeManger:    nodeManger,
+		nodeManger:    appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 	}
 	return oc
 }
@@ -123,7 +123,7 @@ func (oc *Controller) AddOperator(op operator.Operator[common.ChangeFeedID, *hea
 // StopChangefeed stop changefeed when the changefeed is stopped/removed.
 // if remove is true, it will remove the changefeed from the chagnefeed DB
 // if remove is false, it only marks as the changefeed stooped in changefeed DB, so we will not schedule the changefeed again
-func (oc *Controller) StopChangefeed(_ context.Context, cfID common.ChangeFeedID, removed bool) {
+func (oc *Controller) StopChangefeed(_ context.Context, cfID common.ChangeFeedID, removed bool) operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus] {
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
 
@@ -139,13 +139,13 @@ func (oc *Controller) StopChangefeed(_ context.Context, cfID common.ChangeFeedID
 	changefeed := oc.changefeedDB.GetByID(cfID)
 	keyspaceID := changefeed.GetKeyspaceID()
 
-	oc.pushStopChangefeedOperator(keyspaceID, cfID, scheduledNode, removed)
+	return oc.pushStopChangefeedOperator(keyspaceID, cfID, scheduledNode, removed)
 }
 
 // pushStopChangefeedOperator pushes a stop changefeed operator to the controller.
 // it checks if the operator already exists, if exists, it will replace the old one.
 // if the old operator is the removing operator, it will skip this operator.
-func (oc *Controller) pushStopChangefeedOperator(keyspaceID uint32, cfID common.ChangeFeedID, nodeID node.ID, remove bool) {
+func (oc *Controller) pushStopChangefeedOperator(keyspaceID uint32, cfID common.ChangeFeedID, nodeID node.ID, remove bool) operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus] {
 	op := NewStopChangefeedOperator(keyspaceID, cfID, nodeID, oc.selfNode.ID, oc.backend, remove)
 	if old, ok := oc.operators[cfID]; ok {
 		oldStop, ok := old.OP.(*StopChangefeedOperator)
@@ -154,7 +154,7 @@ func (oc *Controller) pushStopChangefeedOperator(keyspaceID uint32, cfID common.
 				log.Info("changefeed is in removing progress, skip the stop operator",
 					zap.String("role", oc.role),
 					zap.String("changefeed", cfID.Name()))
-				return
+				return oldStop
 			}
 		}
 		log.Info("changefeed is stopped, replace the old one",
@@ -163,10 +163,11 @@ func (oc *Controller) pushStopChangefeedOperator(keyspaceID uint32, cfID common.
 			zap.String("operator", old.OP.String()))
 		old.OP.OnTaskRemoved()
 		old.OP.PostFinish()
-		old.IsRemoved = true
+		old.IsRemoved.Store(true)
 		delete(oc.operators, old.OP.ID())
 	}
 	oc.pushOperator(op)
+	return op
 }
 
 func (oc *Controller) UpdateOperatorStatus(id common.ChangeFeedID, from node.ID,
@@ -242,7 +243,7 @@ func (oc *Controller) pollQueueingOperator() (operator.Operator[common.ChangeFee
 		return nil, false
 	}
 	item := heap.Pop(&oc.runningQueue).(*operator.OperatorWithTime[common.ChangeFeedID, *heartbeatpb.MaintainerStatus])
-	if item.IsRemoved {
+	if item.IsRemoved.Load() {
 		return nil, true
 	}
 	op := item.OP
@@ -250,7 +251,7 @@ func (oc *Controller) pollQueueingOperator() (operator.Operator[common.ChangeFee
 	// always call the PostFinish method to ensure the operator is cleaned up by itself.
 	if op.IsFinished() {
 		op.PostFinish()
-		item.IsRemoved = true
+		item.IsRemoved.Store(true)
 		delete(oc.operators, opID)
 		metrics.CoordinatorFinishedOperatorCount.WithLabelValues(op.Type()).Inc()
 		metrics.CoordinatorOperatorDuration.WithLabelValues(op.Type()).Observe(time.Since(item.CreatedAt).Seconds())

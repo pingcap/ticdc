@@ -25,13 +25,14 @@ import (
 	"github.com/pierrec/lz4/v4"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/common/event"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/compression"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/codec"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/prometheus/client_golang/prometheus"
@@ -101,6 +102,7 @@ type fileWorkerGroup struct {
 
 	metricWriteBytes       prometheus.Gauge
 	metricFlushAllDuration prometheus.Observer
+	tableSchemaStore       *commonEvent.TableSchemaStore
 }
 
 // newFileWorkerGroup create a fileWorkerGroup
@@ -203,7 +205,7 @@ func (f *fileWorkerGroup) bgFlushFileCache(egCtx context.Context) error {
 
 func (f *fileWorkerGroup) multiPartUpload(ctx context.Context, file *fileCache) error {
 	multipartWrite, err := f.extStorage.Create(ctx, file.filename, &storage.WriterOption{
-		Concurrency: f.cfg.FlushConcurrency,
+		Concurrency: util.GetOrZero(f.cfg.FlushConcurrency),
 	})
 	if err != nil {
 		return errors.Trace(err)
@@ -217,7 +219,7 @@ func (f *fileWorkerGroup) multiPartUpload(ctx context.Context, file *fileCache) 
 func (f *fileWorkerGroup) bgWriteLogs(
 	egCtx context.Context, inputCh <-chan writer.RedoEvent,
 ) (err error) {
-	d := time.Duration(f.cfg.FlushIntervalInMs) * time.Millisecond
+	d := time.Duration(util.GetOrZero(f.cfg.FlushIntervalInMs)) * time.Millisecond
 	ticker := time.NewTicker(d)
 	defer ticker.Stop()
 	num := 0
@@ -285,7 +287,7 @@ func (f *fileWorkerGroup) syncWriteFile(egCtx context.Context, file *fileCache) 
 	if err = file.writer.Close(); err != nil {
 		return err
 	}
-	if f.cfg.FlushConcurrency <= 1 {
+	if util.GetOrZero(f.cfg.FlushConcurrency) <= 1 {
 		err = f.extStorage.WriteFile(egCtx, file.filename, file.writer.buf.Bytes())
 	} else {
 		err = f.multiPartUpload(egCtx, file)
@@ -313,7 +315,7 @@ func (f *fileWorkerGroup) newFileCache(data []byte, commitTs common.Ts) *fileCac
 	)
 	bufferWriter := bytes.NewBuffer(buf)
 	wr = bufferWriter
-	if f.cfg.Compression == compression.LZ4 {
+	if util.GetOrZero(f.cfg.Compression) == compression.LZ4 {
 		wr = lz4.NewWriter(bufferWriter)
 		closer = wr.(io.Closer)
 	}
@@ -338,8 +340,11 @@ func (f *fileWorkerGroup) newFileCache(data []byte, commitTs common.Ts) *fileCac
 	}
 }
 
-func (f *fileWorkerGroup) encodeData(event writer.RedoEvent) (*event.RedoLog, []byte, error) {
+func (f *fileWorkerGroup) encodeData(event writer.RedoEvent) (*commonEvent.RedoLog, []byte, error) {
 	rl := event.ToRedoLog()
+	if rl.Type == commonEvent.RedoLogTypeDDL {
+		rl.RedoDDL.SetTableSchemaStore(f.tableSchemaStore)
+	}
 	rawData, err := codec.MarshalRedoLog(rl, nil)
 	if err != nil {
 		return nil, nil, err
@@ -364,7 +369,7 @@ func (f *fileWorkerGroup) writeToCache(
 	}
 	writeLen := int64(len(data))
 	if writeLen > f.cfg.MaxLogSizeInBytes {
-		// TODO: maybe we need to deal with the oversized event.
+		// TODO: maybe we need to deal with the oversized commonEvent.
 		return errors.ErrRedoFileSizeExceed.GenWithStackByArgs(writeLen, f.cfg.MaxLogSizeInBytes)
 	}
 	defer f.metricWriteBytes.Add(float64(writeLen))
@@ -384,7 +389,7 @@ func (f *fileWorkerGroup) writeToCache(
 		}
 		file := f.newFileCache(data, rl.GetCommitTs())
 		f.files = append(f.files, file)
-		return err
+		return nil
 	}
 
 	_, err = file.writer.Write(data)

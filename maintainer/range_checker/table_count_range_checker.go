@@ -14,22 +14,25 @@
 package range_checker
 
 import (
-	"fmt"
+	"strconv"
+	"strings"
 	"sync/atomic"
 )
 
 // TableIDRangeChecker is used to check if all table IDs are covered.
 type TableIDRangeChecker struct {
 	needCount   int
+	tableIDs    []int64
 	reportedMap map[int64]struct{}
 	covered     atomic.Bool
 }
 
 // NewTableCountChecker creates a new TableIDRangeChecker.
-func NewTableCountChecker(tables int) *TableIDRangeChecker {
+func NewTableCountChecker(tableIDs []int64) *TableIDRangeChecker {
 	tc := &TableIDRangeChecker{
-		needCount:   tables,
-		reportedMap: make(map[int64]struct{}, tables),
+		tableIDs:    tableIDs,
+		needCount:   len(tableIDs),
+		reportedMap: make(map[int64]struct{}, len(tableIDs)),
 		covered:     atomic.Bool{},
 	}
 	return tc
@@ -52,7 +55,25 @@ func (rc *TableIDRangeChecker) Reset() {
 }
 
 func (rc *TableIDRangeChecker) Detail() string {
-	return fmt.Sprintf("reported count: %d, require count: %d", len(rc.reportedMap), rc.needCount)
+	buf := &strings.Builder{}
+	buf.WriteString("reported count: ")
+	buf.WriteString(strconv.FormatInt(int64(len(rc.reportedMap)), 10))
+	buf.WriteString(", require count: ")
+	buf.WriteString(strconv.FormatInt(int64(rc.needCount), 10))
+
+	var uncoveredIDs []string
+	for _, id := range rc.tableIDs {
+		if _, ok := rc.reportedMap[id]; !ok {
+			uncoveredIDs = append(uncoveredIDs, strconv.FormatInt(id, 10))
+		}
+	}
+
+	if len(uncoveredIDs) > 0 {
+		buf.WriteString(", uncovered tables: ")
+		buf.WriteString(strings.Join(uncoveredIDs, ", "))
+	}
+
+	return buf.String()
 }
 
 func (rc *TableIDRangeChecker) MarkCovered() {

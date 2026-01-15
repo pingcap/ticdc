@@ -106,6 +106,10 @@ func (m *mockDispatcher) GetCheckpointTs() uint64 {
 	return m.checkPointTs
 }
 
+func (m *mockDispatcher) GetTxnAtomicity() config.AtomicityLevel {
+	return config.DefaultAtomicityLevel()
+}
+
 func (m *mockDispatcher) HandleEvents(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
 	if m.handleEvents == nil {
 		return false
@@ -191,6 +195,28 @@ func TestVerifyEventSequence(t *testing.T) {
 		expectedResult bool
 	}{
 		{
+			name:         "first event is handshake",
+			lastEventSeq: 0,
+			event: dispatcher.DispatcherEvent{
+				Event: &mockEvent{
+					eventType: commonEvent.TypeHandshakeEvent,
+					seq:       1,
+				},
+			},
+			expectedResult: true,
+		},
+		{
+			name:         "first event is not handshake",
+			lastEventSeq: 0,
+			event: dispatcher.DispatcherEvent{
+				Event: &mockEvent{
+					eventType: commonEvent.TypeDMLEvent,
+					seq:       1,
+				},
+			},
+			expectedResult: false,
+		},
+		{
 			name:         "continuous DML event sequence",
 			lastEventSeq: 1,
 			event: dispatcher.DispatcherEvent{
@@ -265,8 +291,8 @@ func TestVerifyEventSequence(t *testing.T) {
 			lastEventSeq: 3,
 			event: dispatcher.DispatcherEvent{
 				Event: &commonEvent.SyncPointEvent{
-					CommitTsList: []uint64{100},
-					Seq:          5,
+					CommitTs: 100,
+					Seq:      5,
 				},
 			},
 			expectedResult: false,
@@ -646,7 +672,7 @@ func TestIsFromCurrentEpoch(t *testing.T) {
 		expectedResult bool
 	}{
 		{
-			name: "first event is not handshake",
+			name: "first event is not handshake but epoch matches",
 			event: dispatcher.DispatcherEvent{
 				Event: &mockEvent{
 					eventType: commonEvent.TypeResolvedEvent,
@@ -655,7 +681,7 @@ func TestIsFromCurrentEpoch(t *testing.T) {
 			},
 			epoch:          1,
 			lastEventSeq:   0,
-			expectedResult: false,
+			expectedResult: true,
 		},
 		{
 			name: "first event is handshake",
@@ -1268,4 +1294,49 @@ func TestNewDispatcherResetRequest(t *testing.T) {
 			require.Equal(t, tc.expectedSyncPointTs, resetReq.SyncPointTs)
 		})
 	}
+}
+
+func TestRegisterTo(t *testing.T) {
+	localServerID := node.ID("local-server")
+	remoteServerID := node.ID("remote-server")
+	dispatcherID := common.NewDispatcherID()
+
+	// Create a mock dispatcher and event collector
+	mockDisp := newMockDispatcher(dispatcherID, 0)
+	mockEventCollector := newTestEventCollector(localServerID)
+	stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
+
+	// Test case 1: Register to local server
+	t.Run("register to local server", func(t *testing.T) {
+		stat.registerTo(localServerID)
+
+		select {
+		case msg := <-mockEventCollector.dispatcherMessageChan.Out():
+			require.Equal(t, localServerID, msg.Message.To)
+			req, ok := msg.Message.Message[0].(*messaging.DispatcherRequest)
+			require.True(t, ok)
+			require.Equal(t, eventpb.ActionType_ACTION_TYPE_REGISTER, req.ActionType)
+			require.False(t, req.OnlyReuse, "OnlyReuse should be false for local registration")
+			require.Equal(t, dispatcherID.ToPB(), req.DispatcherId)
+		case <-time.After(1 * time.Second):
+			require.Fail(t, "timed out waiting for message")
+		}
+	})
+
+	// Test case 2: Register to remote server
+	t.Run("register to remote server", func(t *testing.T) {
+		stat.registerTo(remoteServerID)
+
+		select {
+		case msg := <-mockEventCollector.dispatcherMessageChan.Out():
+			require.Equal(t, remoteServerID, msg.Message.To)
+			req, ok := msg.Message.Message[0].(*messaging.DispatcherRequest)
+			require.True(t, ok)
+			require.Equal(t, eventpb.ActionType_ACTION_TYPE_REGISTER, req.ActionType)
+			require.True(t, req.OnlyReuse, "OnlyReuse should be true for remote registration")
+			require.Equal(t, dispatcherID.ToPB(), req.DispatcherId)
+		case <-time.After(1 * time.Second):
+			require.Fail(t, "timed out waiting for message")
+		}
+	})
 }

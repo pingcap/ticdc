@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -103,7 +104,10 @@ func (o *options) run(cmd *cobra.Command) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	logger.StartLogFileMonitor(ctx, loggerConfig.File, 30*time.Second)
+
 	version.LogVersionInfo("Change Data Capture (CDC)")
+	metrics.BuildInfo.WithLabelValues(version.ReleaseVersion, version.GitHash, version.BuildTS, kerneltype.Name()).Set(1)
 	log.Info("The TiCDC release version", zap.String("ReleaseVersion", version.ReleaseVersion))
 
 	util.LogHTTPProxies()
@@ -293,6 +297,12 @@ func isNewArchEnabled(o *options) bool {
 }
 
 func runTiFlowServer(o *options, cmd *cobra.Command) error {
+	// Populate security credentials from CLI flags before marshaling to JSON.
+	// In old architecture mode, complete() is not called, so we need to transfer
+	// TLS credentials (--ca, --cert, --key) to serverConfig.Security here.
+	// Without this, the Security struct is empty and tiflow uses HTTP instead of HTTPS.
+	o.serverConfig.Security = o.getCredential()
+
 	cfgData, err := json.Marshal(o.serverConfig)
 	if err != nil {
 		return errors.Trace(err)
@@ -308,10 +318,6 @@ func runTiFlowServer(o *options, cmd *cobra.Command) error {
 	oldOptions.ServerConfig = &oldCfg
 	oldOptions.ServerPdAddr = strings.Join(o.pdEndpoints, ",")
 	oldOptions.ServerConfigFilePath = o.serverConfigFilePath
-	oldOptions.CaPath = o.caPath
-	oldOptions.CertPath = o.certPath
-	oldOptions.KeyPath = o.keyPath
-	oldOptions.AllowedCertCN = o.allowedCertCN
 
 	return tiflowServer.Run(&oldOptions, cmd)
 }
@@ -322,7 +328,7 @@ func NewCmdServer() *cobra.Command {
 
 	command := &cobra.Command{
 		Use:   "server",
-		Short: "Start a TiCDC server server",
+		Short: "Start a TiCDC server",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if isNewArchEnabled(o) {

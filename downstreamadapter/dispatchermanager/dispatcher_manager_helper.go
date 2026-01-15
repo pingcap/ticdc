@@ -72,13 +72,14 @@ func getDispatcherStatus(id common.DispatcherID, dispatcherItem dispatcher.Dispa
 }
 
 func prepareCreateDispatcher[T dispatcher.Dispatcher](infos map[common.DispatcherID]dispatcherCreateInfo, dispatcherMap *DispatcherMap[T]) (
-	[]common.DispatcherID, []int64, []int64, []*heartbeatpb.TableSpan, []int64,
+	[]common.DispatcherID, []int64, []int64, []*heartbeatpb.TableSpan, []int64, []bool,
 ) {
 	dispatcherIds := make([]common.DispatcherID, 0, len(infos))
 	tableIds := make([]int64, 0, len(infos))
 	startTsList := make([]int64, 0, len(infos))
 	tableSpans := make([]*heartbeatpb.TableSpan, 0, len(infos))
 	schemaIds := make([]int64, 0, len(infos))
+	skipDMLAsStartTsList := make([]bool, 0, len(infos))
 	for _, info := range infos {
 		id := info.Id
 		if _, ok := dispatcherMap.Get(id); ok {
@@ -89,8 +90,19 @@ func prepareCreateDispatcher[T dispatcher.Dispatcher](infos map[common.Dispatche
 		startTsList = append(startTsList, int64(info.StartTs))
 		tableSpans = append(tableSpans, info.TableSpan)
 		schemaIds = append(schemaIds, info.SchemaID)
+		skipDMLAsStartTsList = append(skipDMLAsStartTsList, info.SkipDMLAsStartTs)
 	}
-	return dispatcherIds, tableIds, startTsList, tableSpans, schemaIds
+	return dispatcherIds, tableIds, startTsList, tableSpans, schemaIds, skipDMLAsStartTsList
+}
+
+func resolveSkipDMLAsStartTs(newStartTs, originalStartTs int64, scheduleSkipDMLAsStartTs, sinkSkipDMLAsStartTs bool) bool {
+	// When the sink keeps startTs unchanged, preserve the skipDMLAsStartTs decision carried by the
+	// scheduling request (e.g. recreating a dispatcher during an in-flight DDL barrier).
+	// If the sink adjusts startTs (e.g. based on ddl_ts recovery), the sink decision dominates.
+	if newStartTs == originalStartTs {
+		return scheduleSkipDMLAsStartTs || sinkSkipDMLAsStartTs
+	}
+	return sinkSkipDMLAsStartTs
 }
 
 func prepareMergeDispatcher[T dispatcher.Dispatcher](changefeedID common.ChangeFeedID,
@@ -231,7 +243,10 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 
 	dispatcherItem, ok := dispatcherMap.Get(id)
 	if ok {
-		if dispatcherItem.GetRemovingStatus() {
+		if dispatcherItem.GetTryRemoving() {
+			log.Info("dispatcher is already in removing state, skip repeated remove request",
+				zap.Stringer("changefeedID", changefeedID),
+				zap.Stringer("dispatcherID", id))
 			return
 		}
 
@@ -260,6 +275,8 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 
 		// Save taskHandle for later cancellation
 		e.removeTaskHandles.Store(id, taskHandle)
+
+		dispatcherItem.SetTryRemoving()
 
 		log.Info("submitted async remove task",
 			zap.Stringer("changefeedID", changefeedID),
@@ -298,4 +315,14 @@ func closeAllDispatchers[T dispatcher.Dispatcher](changefeedID common.ChangeFeed
 		dispatcherItem.TryClose()
 		dispatcherItem.Remove()
 	})
+}
+
+func getSinkType[T dispatcher.Dispatcher](dispatcher T, manager *DispatcherManager) common.SinkType {
+	var sinkType common.SinkType
+	if common.IsRedoMode(dispatcher.GetMode()) {
+		sinkType = manager.redoSink.SinkType()
+	} else {
+		sinkType = manager.sink.SinkType()
+	}
+	return sinkType
 }

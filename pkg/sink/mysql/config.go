@@ -32,6 +32,7 @@ import (
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/tidb/br/pkg/version"
 	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
 	"go.uber.org/zap"
 )
@@ -40,8 +41,10 @@ const (
 	txnModeOptimistic  = "optimistic"
 	txnModePessimistic = "pessimistic"
 
-	// DefaultWorkerCount is the default number of workers.
-	DefaultWorkerCount = 16
+	// DefaultTiDBWorkerCount is the default number of workers for TiDB downstream.
+	DefaultTiDBWorkerCount = 64
+	// DefaultMySQLWorkerCount is the default number of workers for MySQL downstream.
+	DefaultMySQLWorkerCount = 16
 	// DefaultMaxTxnRow is the default max number of rows in a transaction.
 	DefaultMaxTxnRow = 256
 	// defaultMaxMultiUpdateRowCount is the default max number of rows in a
@@ -85,21 +88,29 @@ const (
 	defaultHasVectorType = false
 
 	defaultEnableDDLTs = true
+
+	slowQuery = 5 * time.Second
 )
 
 type Config struct {
-	sinkURI                *url.URL
-	WorkerCount            int
+	sinkURI     *url.URL
+	WorkerCount int
+	// workerCountSpecified indicates whether WorkerCount is explicitly set by user via sink URI or changefeed config.
+	// It is used to avoid overriding user configuration when applying downstream-specific defaults.
+	workerCountSpecified   bool
 	MaxTxnRow              int
 	MaxMultiUpdateRowCount int
 	MaxMultiUpdateRowSize  int
-	tidbTxnMode            string
+	TidbTxnMode            string
 	ReadTimeout            string
 	WriteTimeout           string
 	DialTimeout            string
 	SafeMode               bool
 	Timezone               string
 	TLS                    string
+	SSLCa                  string
+	SSLCert                string
+	SSLKey                 string
 
 	// retry number for dml
 	DMLMaxRetry uint64
@@ -131,16 +142,22 @@ type Config struct {
 	DryRunDelay time.Duration
 	// DryRunBlockInterval is the interval time for blocking in dry-run mode.
 	DryRunBlockInterval time.Duration
+	// SlowQuery is the threshold time above which the query will be logged.
+	SlowQuery time.Duration
+
+	// ServerInfo is the version info of the downstream
+	ServerInfo version.ServerInfo
 }
 
 // New returns the default mysql backend config.
 func New() *Config {
 	return &Config{
-		WorkerCount:            DefaultWorkerCount,
+		WorkerCount:            DefaultTiDBWorkerCount,
+		workerCountSpecified:   false,
 		MaxTxnRow:              DefaultMaxTxnRow,
 		MaxMultiUpdateRowCount: defaultMaxMultiUpdateRowCount,
 		MaxMultiUpdateRowSize:  defaultMaxMultiUpdateRowSize,
-		tidbTxnMode:            defaultTiDBTxnMode,
+		TidbTxnMode:            defaultTiDBTxnMode,
 		ReadTimeout:            defaultReadTimeout,
 		WriteTimeout:           defaultWriteTimeout,
 		DialTimeout:            defaultDialTimeout,
@@ -152,6 +169,34 @@ func New() *Config {
 		DMLMaxRetry:            8,
 		HasVectorType:          defaultHasVectorType,
 		EnableDDLTs:            defaultEnableDDLTs,
+		SlowQuery:              slowQuery,
+	}
+}
+
+func (c *Config) mergeConfig(cfg *config.ChangefeedConfig) {
+	if cfg.SinkConfig != nil {
+		merge(&c.SafeMode, cfg.SinkConfig.SafeMode)
+		if cfg.SinkConfig.MySQLConfig != nil {
+			mConfig := cfg.SinkConfig.MySQLConfig
+			if mConfig.WorkerCount != nil {
+				c.workerCountSpecified = true
+			}
+			merge(&c.WorkerCount, mConfig.WorkerCount)
+			merge(&c.MaxTxnRow, mConfig.MaxTxnRow)
+			merge(&c.MaxMultiUpdateRowCount, mConfig.MaxMultiUpdateRowCount)
+			merge(&c.MaxMultiUpdateRowSize, mConfig.MaxMultiUpdateRowSize)
+			merge(&c.TidbTxnMode, mConfig.TiDBTxnMode)
+			merge(&c.SSLCa, mConfig.SSLCa)
+			merge(&c.SSLCert, mConfig.SSLCert)
+			merge(&c.SSLKey, mConfig.SSLKey)
+			merge(&c.Timezone, mConfig.TimeZone)
+			merge(&c.WriteTimeout, mConfig.WriteTimeout)
+			merge(&c.ReadTimeout, mConfig.ReadTimeout)
+			merge(&c.DialTimeout, mConfig.Timeout)
+			merge(&c.BatchDMLEnable, mConfig.EnableBatchDML)
+			merge(&c.MultiStmtEnable, mConfig.EnableMultiStatement)
+			merge(&c.CachePrepStmts, mConfig.EnableCachePreparedStatement)
+		}
 	}
 }
 
@@ -169,8 +214,13 @@ func (c *Config) Apply(
 	if !config.IsMySQLCompatibleScheme(scheme) {
 		return cerror.ErrMySQLInvalidConfig.GenWithStack("can't create MySQL sink with unsupported scheme: %s", scheme)
 	}
+
+	if cfg != nil {
+		c.mergeConfig(cfg)
+	}
+
 	query := sinkURI.Query()
-	if err = getWorkerCount(query, &c.WorkerCount); err != nil {
+	if err = getWorkerCount(query, &c.WorkerCount, &c.workerCountSpecified); err != nil {
 		return err
 	}
 	if err = getMaxTxnRow(query, &c.MaxTxnRow); err != nil {
@@ -182,10 +232,10 @@ func (c *Config) Apply(
 	if err = getMaxMultiUpdateRowSize(query, &c.MaxMultiUpdateRowSize); err != nil {
 		return err
 	}
-	if err = getTiDBTxnMode(query, &c.tidbTxnMode); err != nil {
+	if err = getTiDBTxnMode(query, &c.TidbTxnMode); err != nil {
 		return err
 	}
-	if err = getSSLCA(query, changefeedID, &c.TLS); err != nil {
+	if err = c.getSSLCA(query, changefeedID, &c.TLS); err != nil {
 		return err
 	}
 	if err = getSafeMode(query, &c.SafeMode); err != nil {
@@ -257,7 +307,8 @@ func NewMysqlConfigAndDB(
 		return nil, nil, err
 	}
 
-	cfg.HasVectorType = ShouldFormatVectorType(db, cfg)
+	cfg.ServerInfo = getTiDBVersion(db)
+	cfg.HasVectorType = shouldFormatVectorType(cfg)
 
 	// By default, cache-prep-stmts=true, an LRU cache is used for prepared statements,
 	// two connections are required to process a transaction.
@@ -337,7 +388,7 @@ func IsSinkSafeMode(sinkURI *url.URL, replicaConfig *config.ReplicaConfig) (bool
 	return safeMode, nil
 }
 
-func getWorkerCount(values url.Values, workerCount *int) error {
+func getWorkerCount(values url.Values, workerCount *int, workerCountSpecified *bool) error {
 	s := values.Get("worker-count")
 	if len(s) == 0 {
 		return nil
@@ -356,7 +407,8 @@ func getWorkerCount(values url.Values, workerCount *int) error {
 			zap.Int("original", c), zap.Int("override", maxWorkerCount))
 		c = maxWorkerCount
 	}
-
+	// Record whether the user explicitly sets worker-count, so we won't override it with downstream defaults.
+	*workerCountSpecified = true
 	*workerCount = c
 	return nil
 }
@@ -445,17 +497,29 @@ func getTiDBTxnMode(values url.Values, mode *string) error {
 	return nil
 }
 
-func getSSLCA(values url.Values, changefeedID common.ChangeFeedID, tls *string) error {
-	s := values.Get("ssl-ca")
-	if len(s) == 0 {
+func (c *Config) getSSLCA(values url.Values, changefeedID common.ChangeFeedID, tls *string) error {
+	credential := security.Credential{
+		CAPath:   c.SSLCa,
+		CertPath: c.SSLCert,
+		KeyPath:  c.SSLKey,
+	}
+
+	if v := values.Get("ssl-ca"); v != "" {
+		credential.CAPath = v
+	}
+
+	if v := values.Get("ssl-cert"); v != "" {
+		credential.CertPath = v
+	}
+
+	if v := values.Get("ssl-key"); v != "" {
+		credential.KeyPath = v
+	}
+
+	if credential.CAPath == "" {
 		return nil
 	}
 
-	credential := security.Credential{
-		CAPath:   values.Get("ssl-ca"),
-		CertPath: values.Get("ssl-cert"),
-		KeyPath:  values.Get("ssl-key"),
-	}
 	tlsCfg, err := credential.ToTLSConfig()
 	if err != nil {
 		return errors.Trace(err)
@@ -551,4 +615,22 @@ func getBool(values url.Values, key string, target *bool) error {
 		*target = enable
 	}
 	return nil
+}
+
+func merge[T int | bool | string](dst, src *T) {
+	if src != nil {
+		*dst = *src
+	}
+}
+
+// setWorkerCountByDownstream sets WorkerCount based on downstream type when it is not explicitly specified by user.
+func (c *Config) setWorkerCountByDownstream() {
+	if c.workerCountSpecified {
+		return
+	}
+	if c.IsTiDB {
+		c.WorkerCount = DefaultTiDBWorkerCount
+	} else {
+		c.WorkerCount = DefaultMySQLWorkerCount
+	}
 }

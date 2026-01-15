@@ -32,7 +32,7 @@ func compareKeys(firstKey, secondKey []byte) bool {
 func genKeyAndHash(row *chunk.Row, tableInfo *common.TableInfo) (uint64, []byte) {
 	key := genKeyList(row, tableInfo)
 	if len(key) == 0 {
-		log.Panic("the table has no primary key", zap.Any("tableInfo", tableInfo))
+		log.Panic("the table has no primary key or not-null unique key", zap.Any("tableInfo", tableInfo))
 	}
 
 	hasher := fnv.New32a()
@@ -45,18 +45,22 @@ func genKeyAndHash(row *chunk.Row, tableInfo *common.TableInfo) (uint64, []byte)
 
 func genKeyList(row *chunk.Row, tableInfo *common.TableInfo) []byte {
 	var key []byte
-	for _, colID := range tableInfo.GetPKIndex() {
-		info, ok := tableInfo.GetColumnInfo(colID)
-		if !ok || info == nil {
-			return nil
-		}
-		i, ok1 := tableInfo.GetRowColumnsOffset()[colID]
-		if !ok1 {
-			log.Warn("can't find column offset", zap.Int64("colID", colID), zap.String("colName", info.Name.O))
+	keyColumns := tableInfo.GetOrderedHandleKeyColumnIDs()
+	if len(keyColumns) == 0 {
+		return nil
+	}
+	for _, colID := range keyColumns {
+		// chunk.Row is laid out in schema column order (TableInfo.GetColumns()).
+		// RowColumnsOffset is based on CDC-visible columns and may skip virtual generated columns,
+		// which would cause extracting a different column value and break row identity.
+		//  Thus, we should not use RowColumnsOffset here.
+		schemaIdx := tableInfo.MustGetColumnOffsetByID(colID)
+		info := tableInfo.GetColumns()[schemaIdx]
+		if info == nil || info.ID != colID {
 			return nil
 		}
 
-		value := common.ExtractColVal(row, info, i)
+		value := common.ExtractColVal(row, info, schemaIdx)
 		// if a column value is null, we can ignore this index
 		if value == nil {
 			return nil

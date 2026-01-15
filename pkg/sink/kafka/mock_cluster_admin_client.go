@@ -14,7 +14,6 @@
 package kafka
 
 import (
-	"context"
 	"fmt"
 	"strconv"
 
@@ -98,15 +97,12 @@ func NewClusterAdminClientMockImpl() *ClusterAdminClientMockImpl {
 func (c *ClusterAdminClientMockImpl) Heartbeat() {}
 
 // GetAllBrokers implement the ClusterAdminClient interface
-func (c *ClusterAdminClientMockImpl) GetAllBrokers(context.Context) []Broker {
+func (c *ClusterAdminClientMockImpl) GetAllBrokers() []Broker {
 	return nil
 }
 
 // GetBrokerConfig implement the ClusterAdminClient interface
-func (c *ClusterAdminClientMockImpl) GetBrokerConfig(
-	_ context.Context,
-	configName string,
-) (string, error) {
+func (c *ClusterAdminClientMockImpl) GetBrokerConfig(configName string) (string, error) {
 	value, ok := c.brokerConfigs[configName]
 	if !ok {
 		return "", errors.ErrKafkaConfigNotFound.GenWithStack(
@@ -116,7 +112,7 @@ func (c *ClusterAdminClientMockImpl) GetBrokerConfig(
 }
 
 // GetTopicConfig implement the ClusterAdminClient interface
-func (c *ClusterAdminClientMockImpl) GetTopicConfig(ctx context.Context, topicName string, configName string) (string, error) {
+func (c *ClusterAdminClientMockImpl) GetTopicConfig(topicName string, configName string) (string, error) {
 	if _, ok := c.topics[topicName]; !ok {
 		return "", errors.ErrKafkaConfigNotFound.GenWithStack("cannot find the `%s` from the topic's configuration", topicName)
 	}
@@ -144,11 +140,7 @@ func (c *ClusterAdminClientMockImpl) SetRemainingFetchesUntilTopicVisible(
 }
 
 // GetTopicsMeta implement the ClusterAdminClient interface
-func (c *ClusterAdminClientMockImpl) GetTopicsMeta(
-	_ context.Context,
-	topics []string,
-	_ bool,
-) (map[string]TopicDetail, error) {
+func (c *ClusterAdminClientMockImpl) GetTopicsMeta(topics []string, ignoreTopicError bool) (map[string]TopicDetail, error) {
 	result := make(map[string]TopicDetail, len(topics))
 	for _, topic := range topics {
 		details, ok := c.topics[topic]
@@ -164,9 +156,7 @@ func (c *ClusterAdminClientMockImpl) GetTopicsMeta(
 }
 
 // GetTopicsPartitionsNum implement the ClusterAdminClient interface
-func (c *ClusterAdminClientMockImpl) GetTopicsPartitionsNum(
-	_ context.Context, topics []string,
-) (map[string]int32, error) {
+func (c *ClusterAdminClientMockImpl) GetTopicsPartitionsNum(topics []string) (map[string]int32, error) {
 	result := make(map[string]int32, len(topics))
 	for _, topic := range topics {
 		result[topic] = c.topics[topic].NumPartitions
@@ -175,11 +165,7 @@ func (c *ClusterAdminClientMockImpl) GetTopicsPartitionsNum(
 }
 
 // CreateTopic adds topic into map.
-func (c *ClusterAdminClientMockImpl) CreateTopic(
-	_ context.Context,
-	detail *TopicDetail,
-	_ bool,
-) error {
+func (c *ClusterAdminClientMockImpl) CreateTopic(detail *TopicDetail, validateOnly bool) error {
 	if detail.ReplicationFactor > defaultReplicationFactor {
 		return sarama.ErrInvalidReplicationFactor
 	}

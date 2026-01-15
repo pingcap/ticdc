@@ -28,7 +28,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
-	"github.com/pingcap/ticdc/pkg/sink/util"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -58,7 +57,7 @@ type sink struct {
 	lastCheckpointTs         atomic.Uint64
 	lastSendCheckpointTsTime time.Time
 
-	tableSchemaStore *util.TableSchemaStore
+	tableSchemaStore *commonEvent.TableSchemaStore
 	cron             *cron.Cron
 	statistics       *metrics.Statistics
 
@@ -69,9 +68,9 @@ type sink struct {
 	ctx context.Context
 }
 
-func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
+func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, enableTableAcrossNodes bool) error {
 	cfg := cloudstorage.NewConfig()
-	err := cfg.Apply(ctx, sinkURI, sinkConfig)
+	err := cfg.Apply(ctx, sinkURI, sinkConfig, enableTableAcrossNodes)
 	if err != nil {
 		return err
 	}
@@ -92,12 +91,12 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 }
 
 func New(
-	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
+	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, enableTableAcrossNodes bool,
 	cleanupJobs []func(), /* only for test */
 ) (*sink, error) {
 	// create cloud storage config and then apply the params of sinkURI to it.
 	cfg := cloudstorage.NewConfig()
-	err := cfg.Apply(ctx, sinkURI, sinkConfig)
+	err := cfg.Apply(ctx, sinkURI, sinkConfig, enableTableAcrossNodes)
 	if err != nil {
 		return nil, err
 	}
@@ -309,7 +308,7 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 	}
 }
 
-func (s *sink) SetTableSchemaStore(tableSchemaStore *util.TableSchemaStore) {
+func (s *sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
 	s.tableSchemaStore = tableSchemaStore
 }
 
