@@ -18,6 +18,7 @@ import (
 	"os"
 
 	"github.com/BurntSushi/toml"
+	"github.com/pingcap/ticdc/pkg/security"
 )
 
 // Config represents the configuration for multi-cluster consistency checker
@@ -38,16 +39,28 @@ type GlobalConfig struct {
 	// RetryCount  int           `toml:"retry-count" json:"retry-count"`
 }
 
+type DownstreamClusterChangefeedConfig struct {
+	// ChangefeedID is the changefeed ID for the changefeed
+	ChangefeedID string `toml:"changefeed-id" json:"changefeed-id"`
+}
+
 // ClusterConfig represents configuration for a single cluster
 type ClusterConfig struct {
 	// PDAddr is the address of the PD (Placement Driver) server
 	PDAddr string `toml:"pd-addr" json:"pd-addr"`
 
-	// CDCAddr is the address of the CDC server
-	CDCAddr string `toml:"cdc-addr" json:"cdc-addr"`
-
 	// S3SinkURI is the S3 sink URI for this cluster
 	S3SinkURI string `toml:"s3-sink-uri" json:"s3-sink-uri"`
+
+	// S3ChangefeedID is the changefeed ID for the S3 changefeed
+	S3ChangefeedID string `toml:"s3-changefeed-id" json:"s3-changefeed-id"`
+
+	// SecurityConfig is the security configuration for the cluster
+	SecurityConfig *security.Credential `toml:"security-config" json:"security-config"`
+
+	// DownstreamClusterChangefeedConfig is the configuration for the changefeed of the downstream cluster
+	// mapping from downstream cluster ID to the changefeed configuration
+	DownstreamClusterChangefeedConfig map[string]DownstreamClusterChangefeedConfig `toml:"downstream-cluster-changefeed-config" json:"downstream-cluster-changefeed-config"`
 }
 
 // loadConfig loads the configuration from a TOML file
@@ -76,11 +89,19 @@ func loadConfig(path string) (*Config, error) {
 		if cluster.PDAddr == "" {
 			return nil, fmt.Errorf("cluster '%s': pd-addr is required", name)
 		}
-		if cluster.CDCAddr == "" {
-			return nil, fmt.Errorf("cluster '%s': cdc-addr is required", name)
-		}
 		if cluster.S3SinkURI == "" {
 			return nil, fmt.Errorf("cluster '%s': s3-sink-uri is required", name)
+		}
+		if cluster.S3ChangefeedID == "" {
+			return nil, fmt.Errorf("cluster '%s': s3-changefeed-id is required", name)
+		}
+		if len(cluster.DownstreamClusterChangefeedConfig) != len(cfg.Clusters)-1 {
+			return nil, fmt.Errorf("cluster '%s': downstream-cluster-changefeed-config is not entirely configured", name)
+		}
+		for downstreamClusterID, downstreamClusterChangefeedConfig := range cluster.DownstreamClusterChangefeedConfig {
+			if downstreamClusterChangefeedConfig.ChangefeedID == "" {
+				return nil, fmt.Errorf("cluster '%s': downstream-cluster-changefeed-config[%s]: changefeed-id is required", name, downstreamClusterID)
+			}
 		}
 	}
 

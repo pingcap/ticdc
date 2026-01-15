@@ -14,6 +14,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -67,10 +68,8 @@ func run(cmd *cobra.Command, args []string) {
 	for name, cluster := range cfg.Clusters {
 		fmt.Printf("  Cluster: %s\n", name)
 		fmt.Printf("    PD Address: %s\n", cluster.PDAddr)
-		fmt.Printf("    CDC Address: %s\n", cluster.CDCAddr)
 		fmt.Printf("    S3 Sink URI: %s\n", cluster.S3SinkURI)
 	}
 
-	// TODO: Implement actual consistency checking logic
-	fmt.Println("\nConsistency checking logic will be implemented here")
+	runTask(context.Background(), cfg)
 }

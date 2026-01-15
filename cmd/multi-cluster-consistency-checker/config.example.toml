@@ -10,17 +10,28 @@
   # First cluster configuration
   [clusters.cluster1]
   pd-addr = "127.0.0.1:2379"
-  cdc-addr = "127.0.0.1:8300"
   s3-sink-uri = "s3://bucket-name/cluster1/"
+  s3-changefeed-id = "s3-changefeed-id-1"
+  # security-config = { ca-path = "ca.crt", cert-path = "cert.crt", key-path = "key.crt" }
+  [clusters.cluster1.downstream-cluster-changefeed-config]
+  cluster2 = { changefeed-id = "active-active-changefeed-id-from-cluster1-to-cluster2" }
 
   # Second cluster configuration
   [clusters.cluster2]
   pd-addr = "127.0.0.1:2479"
-  cdc-addr = "127.0.0.1:8400"
   s3-sink-uri = "s3://bucket-name/cluster2/"
+  s3-changefeed-id = "s3-changefeed-id-2"
+  # security-config = { ca-path = "ca.crt", cert-path = "cert.crt", key-path = "key.crt" }
+  [clusters.cluster2.downstream-cluster-changefeed-config]
+  cluster1 = { changefeed-id = "active-active-changefeed-id-from-cluster2-to-cluster1" }
 
   # Third cluster configuration (optional)
   # [clusters.cluster3]
   # pd-addr = "127.0.0.1:2579"
   # cdc-addr = "127.0.0.1:8500"
   # s3-sink-uri = "s3://bucket-name/cluster3/"
+  # s3-changefeed-id = "s3-changefeed-id-3"
+  # security-config = { ca-path = "ca.crt", cert-path = "cert.crt", key-path = "key.crt" }
+  # [clusters.cluster3.downstream-cluster-changefeed-config]
+  # cluster1 = { changefeed-id = "active-active-changefeed-id-from-cluster3-to-cluster1" }
+  # cluster2 = { changefeed-id = "active-active-changefeed-id-from-cluster3-to-cluster2" }
