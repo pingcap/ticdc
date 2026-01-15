@@ -229,11 +229,8 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 
 	// Variables below will be used in the Loop below.
 	// Declared here to avoid repeated allocation.
-	var (
-		eventQueueEmpty = false
-		path            *pathInfo[A, P, T, D, H]
-		eventBuf        []T
-	)
+	// todo: shall we preallocate the event buff and path here ?
+	var eventQueueEmpty = false
 
 	// 1. Drain the eventChan to pendingQueue.
 	// 2. Pop events from the eventQueue and handle them.
@@ -270,13 +267,12 @@ Loop:
 				handleEvent(e)
 				eventQueueEmpty = false
 			default:
-				eventBuf, path = s.eventQueue.popEvents()
+				eventBuf, path := s.eventQueue.popEvents()
 				if len(eventBuf) == 0 {
 					eventQueueEmpty = true
 					continue Loop
 				}
 				if path.removed.Load() {
-					clear(eventBuf)
 					continue Loop
 				}
 
@@ -287,7 +283,6 @@ Loop:
 				if path.blocking.Load() {
 					s.eventQueue.blockPath(path)
 				}
-				clear(eventBuf)
 			}
 		}
 	}

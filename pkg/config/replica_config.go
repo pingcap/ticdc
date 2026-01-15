@@ -138,12 +138,13 @@ type ReplicaConfig replicaConfig
 
 type replicaConfig struct {
 	MemoryQuota *uint64 `toml:"memory-quota" json:"memory-quota,omitempty"`
-	// EventCollectorBatchCapacity is used by the event collector dynamic stream to achieve better batch performance.
-	// For most sinks, it means the max events per batch; for cloud storage sinks, it means the max bytes per batch.
-	EventCollectorBatchCapacity *int  `toml:"event-collector-batch-capacity" json:"event-collector-batch-capacity,omitempty"`
-	CaseSensitive               *bool `toml:"case-sensitive" json:"case-sensitive,omitempty"`
-	ForceReplicate              *bool `toml:"force-replicate" json:"force-replicate,omitempty"`
-	CheckGCSafePoint            *bool `toml:"check-gc-safe-point" json:"check-gc-safe-point,omitempty"`
+	// EventCollectorBatchCount/Bytes are used by the event collector dynamic stream to achieve better batch performance.
+	// When set, they override sink-specific batching behavior.
+	EventCollectorBatchCount *int  `toml:"event-collector-batch-count" json:"event-collector-batch-count,omitempty"`
+	EventCollectorBatchBytes *int  `toml:"event-collector-batch-bytes" json:"event-collector-batch-bytes,omitempty"`
+	CaseSensitive            *bool `toml:"case-sensitive" json:"case-sensitive,omitempty"`
+	ForceReplicate           *bool `toml:"force-replicate" json:"force-replicate,omitempty"`
+	CheckGCSafePoint         *bool `toml:"check-gc-safe-point" json:"check-gc-safe-point,omitempty"`
 	// EnableSyncPoint is only available when the downstream is a Database.
 	EnableSyncPoint    *bool `toml:"enable-sync-point" json:"enable-sync-point,omitempty"`
 	EnableTableMonitor *bool `toml:"enable-table-monitor" json:"enable-table-monitor"`
@@ -333,9 +334,13 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 					minChangeFeedErrorStuckDuration.Seconds()))
 	}
 
-	if c.EventCollectorBatchCapacity != nil && *c.EventCollectorBatchCapacity <= 0 {
+	if c.EventCollectorBatchCount != nil && *c.EventCollectorBatchCount <= 0 {
 		return cerror.ErrInvalidReplicaConfig.FastGenByArgs(
-			fmt.Sprintf("The EventCollectorBatchCapacity:%d must be larger than 0", *c.EventCollectorBatchCapacity))
+			fmt.Sprintf("The EventCollectorBatchCount:%d must be larger than 0", *c.EventCollectorBatchCount))
+	}
+	if c.EventCollectorBatchBytes != nil && *c.EventCollectorBatchBytes <= 0 {
+		return cerror.ErrInvalidReplicaConfig.FastGenByArgs(
+			fmt.Sprintf("The EventCollectorBatchBytes:%d must be larger than 0", *c.EventCollectorBatchBytes))
 	}
 
 	return nil

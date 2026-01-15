@@ -15,6 +15,7 @@ package eventcollector
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -30,7 +31,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/stretchr/testify/require"
 )
 
@@ -215,29 +215,64 @@ func TestProcessMessage(t *testing.T) {
 	}
 }
 
-func TestBatchTypeBySinkAndCapacityWithOverride(t *testing.T) {
-	d := &mockEventDispatcher{
-		sink:                        sink.NewMockSink(common.BlackHoleSinkType),
-		eventCollectorBatchCapacity: 123,
-	}
-	batchType, capacity := batchTypeBySinkAndCapacity(d)
-	require.Equal(t, dynstream.BatchTypeCount, batchType)
-	require.Equal(t, 123, capacity)
+type testSink struct {
+	sinkType    common.SinkType
+	batchCount  int
+	batchBytes  int
+	isNormal    bool
+	schemaStore *commonEvent.TableSchemaStore
+}
 
-	d = &mockEventDispatcher{
-		sink:                        sink.NewMockSink(common.CloudStorageSinkType),
-		eventCollectorBatchCapacity: 456,
-	}
-	batchType, capacity = batchTypeBySinkAndCapacity(d)
-	require.Equal(t, dynstream.BatchTypeSize, batchType)
-	require.Equal(t, 456, capacity)
+func (s *testSink) SinkType() common.SinkType { return s.sinkType }
+func (s *testSink) IsNormal() bool            { return s.isNormal }
+func (s *testSink) AddDMLEvent(_ *commonEvent.DMLEvent) {
+}
+func (s *testSink) WriteBlockEvent(_ commonEvent.BlockEvent) error { return nil }
+func (s *testSink) AddCheckpointTs(_ uint64)                       {}
+func (s *testSink) SetTableSchemaStore(store *commonEvent.TableSchemaStore) {
+	s.schemaStore = store
+}
+func (s *testSink) Close(bool) {}
+func (s *testSink) Run(context.Context) error {
+	return errors.New("not implemented")
+}
+func (s *testSink) BatchCount() int { return s.batchCount }
+func (s *testSink) BatchBytes() int { return s.batchBytes }
 
-	d = &mockEventDispatcher{
-		sink: sink.NewMockSink(common.CloudStorageSinkType),
-	}
-	batchType, capacity = batchTypeBySinkAndCapacity(d)
-	require.Equal(t, dynstream.BatchTypeSize, batchType)
-	require.Equal(t, d.sink.BatchCapacity(), capacity)
+func TestGetBatchCountAndBytes(t *testing.T) {
+	t.Run("default from sink", func(t *testing.T) {
+		d := &mockEventDispatcher{
+			sink: sink.NewMockSink(common.BlackHoleSinkType),
+		}
+		count, bytes := getBatchCountAndBytes(d)
+		require.Equal(t, d.sink.BatchCount(), count)
+		require.Equal(t, d.sink.BatchBytes(), bytes)
+	})
+
+	t.Run("override from dispatcher", func(t *testing.T) {
+		d := &mockEventDispatcher{
+			sink:                     sink.NewMockSink(common.BlackHoleSinkType),
+			eventCollectorBatchCount: 123,
+			eventCollectorBatchBytes: 456,
+		}
+		count, bytes := getBatchCountAndBytes(d)
+		require.Equal(t, 123, count)
+		require.Equal(t, 456, bytes)
+	})
+
+	t.Run("sink bytes 0 treated as unlimited", func(t *testing.T) {
+		d := &mockEventDispatcher{
+			sink: &testSink{
+				sinkType:   common.KafkaSinkType,
+				batchCount: 100,
+				batchBytes: 0,
+				isNormal:   true,
+			},
+		}
+		count, bytes := getBatchCountAndBytes(d)
+		require.Equal(t, 100, count)
+		require.Greater(t, bytes, 0)
+	})
 }
 
 func TestRemoveLastDispatcher(t *testing.T) {
