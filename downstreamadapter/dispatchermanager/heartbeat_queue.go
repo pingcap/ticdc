@@ -17,6 +17,7 @@ import (
 	"context"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 )
 
@@ -71,6 +72,7 @@ func NewBlockStatusRequestQueue() *BlockStatusRequestQueue {
 
 func (q *BlockStatusRequestQueue) Enqueue(request *BlockStatusRequestWithTargetID) {
 	q.queue <- request
+	metrics.HeartbeatCollectorBlockStatusRequestQueueLenGauge.Set(float64(len(q.queue)))
 }
 
 func (q *BlockStatusRequestQueue) Dequeue(ctx context.Context) *BlockStatusRequestWithTargetID {
@@ -78,12 +80,9 @@ func (q *BlockStatusRequestQueue) Dequeue(ctx context.Context) *BlockStatusReque
 	case <-ctx.Done():
 		return nil
 	case request := <-q.queue:
+		metrics.HeartbeatCollectorBlockStatusRequestQueueLenGauge.Set(float64(len(q.queue)))
 		return request
 	}
-}
-
-func (q *BlockStatusRequestQueue) Len() int {
-	return len(q.queue)
 }
 
 func (q *BlockStatusRequestQueue) Close() {
