@@ -39,7 +39,7 @@ func setupTestComponents() (*memControl[int, string, *mockEvent, any, *mockHandl
 
 func TestMemControlAddRemovePath(t *testing.T) {
 	mc, path := setupTestComponents()
-	settings := AreaSettings[*mockEvent]{
+	settings := AreaSettings{
 		maxPendingSize:   1000,
 		feedbackInterval: time.Second,
 		algorithm:        MemoryControlForPuller,
@@ -59,7 +59,7 @@ func TestMemControlAddRemovePath(t *testing.T) {
 
 func TestAreaMemStatAppendEvent(t *testing.T) {
 	mc, path1 := setupTestComponents()
-	settings := AreaSettings[*mockEvent]{
+	settings := AreaSettings{
 		maxPendingSize:   15,
 		feedbackInterval: time.Millisecond * 10,
 		algorithm:        MemoryControlForPuller,
@@ -133,7 +133,7 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 	require.True(t, path1.areaMemStat.paused.Load())
 
 	// 4. Change the settings, enlarge the max pending size
-	newSettings := AreaSettings[*mockEvent]{
+	newSettings := AreaSettings{
 		maxPendingSize:   1000,
 		feedbackInterval: time.Millisecond * 10,
 		algorithm:        MemoryControlForPuller,
@@ -167,7 +167,7 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 func TestSetAreaSettings(t *testing.T) {
 	mc, path := setupTestComponents()
 	// Case 1: Set the initial settings.
-	initialSettings := AreaSettings[*mockEvent]{
+	initialSettings := AreaSettings{
 		maxPendingSize:   1000,
 		feedbackInterval: time.Second,
 		algorithm:        MemoryControlForPuller,
@@ -177,7 +177,7 @@ func TestSetAreaSettings(t *testing.T) {
 	require.Equal(t, initialSettings, *path.areaMemStat.settings.Load())
 
 	// Case 2: Set the new settings.
-	newSettings := AreaSettings[*mockEvent]{
+	newSettings := AreaSettings{
 		maxPendingSize:   2000,
 		feedbackInterval: 2 * time.Second,
 		algorithm:        MemoryControlForPuller,
@@ -186,7 +186,7 @@ func TestSetAreaSettings(t *testing.T) {
 	require.Equal(t, newSettings, *path.areaMemStat.settings.Load())
 
 	// Case 3: Set a invalid settings.
-	invalidSettings := AreaSettings[*mockEvent]{
+	invalidSettings := AreaSettings{
 		maxPendingSize:   0,
 		feedbackInterval: 0,
 		algorithm:        MemoryControlForEventCollector,
@@ -202,7 +202,7 @@ func TestGetMetrics(t *testing.T) {
 	metrics := mc.getMetrics()
 	require.Equal(t, 0, len(metrics.AreaMemoryMetrics))
 
-	mc.addPathToArea(path, AreaSettings[*mockEvent]{
+	mc.addPathToArea(path, AreaSettings{
 		maxPendingSize:   100,
 		feedbackInterval: time.Second,
 	}, nil)
@@ -219,7 +219,7 @@ func TestGetMetrics(t *testing.T) {
 
 func TestUpdateAreaPauseState(t *testing.T) {
 	mc, path := setupTestComponents()
-	settings := AreaSettings[*mockEvent]{
+	settings := AreaSettings{
 		maxPendingSize:   100,
 		feedbackInterval: time.Millisecond * 100,
 	}
@@ -265,7 +265,7 @@ func TestUpdateAreaPauseState(t *testing.T) {
 func TestReleaseMemory(t *testing.T) {
 	mc := newMemControl[int, string, *mockEvent, any, *mockHandler]()
 	area := 1
-	settings := AreaSettings[*mockEvent]{
+	settings := AreaSettings{
 		maxPendingSize:   1000,
 		feedbackInterval: time.Second,
 		algorithm:        MemoryControlForEventCollector,

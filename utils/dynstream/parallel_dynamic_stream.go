@@ -191,7 +191,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Feedback() <-chan Feedback[A, P, 
 	return s.feedbackChan
 }
 
-func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...AreaSettings[T]) error {
+func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...AreaSettings) error {
 	s.pathMap.Lock()
 	_, ok := s.pathMap.m[path]
 	if ok {
@@ -202,10 +202,8 @@ func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...Are
 	area := s.handler.GetArea(path, dest)
 
 	var batcher *batcher[T]
-	if len(as) > 0 && as[0].batcher != nil {
-		// AreaSettings can be reused by callers across multiple paths.
-		// Clone it to avoid sharing mutable batcher state among paths.
-		batcher = as[0].batcher.clone()
+	if len(as) > 0 {
+		batcher = newBatcher[T](as[0].batchConfig)
 	} else {
 		batcher = newDefaultBatcher[T]()
 	}
@@ -249,7 +247,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) RemovePath(path P) error {
 	return nil
 }
 
-func (s *parallelDynamicStream[A, P, T, D, H]) SetAreaSettings(area A, settings AreaSettings[T]) {
+func (s *parallelDynamicStream[A, P, T, D, H]) SetAreaSettings(area A, settings AreaSettings) {
 	if s.memControl != nil {
 		s.memControl.setAreaSettings(area, settings)
 	}
@@ -272,10 +270,10 @@ func (s *parallelDynamicStream[A, P, T, D, H]) GetMetrics() Metrics[A, P] {
 
 func (s *parallelDynamicStream[A, P, T, D, H]) setMemControl(
 	pi *pathInfo[A, P, T, D, H],
-	as ...AreaSettings[T],
+	as ...AreaSettings,
 ) {
 	if s.memControl != nil {
-		setting := AreaSettings[T]{}
+		setting := AreaSettings{}
 		if len(as) > 0 {
 			setting = as[0]
 		}

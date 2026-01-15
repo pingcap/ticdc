@@ -13,65 +13,62 @@
 
 package dynstream
 
-type BatchType int
+type batchConfig struct {
+	maxCount int
+	maxBytes int
+}
 
-const (
-	BatchTypeCount BatchType = iota
-	BatchTypeSize
-)
+func newDefaultBatchConfig() batchConfig {
+	// Keep the default behavior consistent with the legacy Option.BatchCount=1:
+	// no batching unless explicitly configured by the caller.
+	return batchConfig{
+		maxCount: 1,
+	}
+}
+
+func NewBatchConfig(count, nBytes int) batchConfig {
+	return batchConfig{
+		maxCount: count,
+		maxBytes: nBytes,
+	}
+}
 
 type batcher[T Event] struct {
-	capacity  int
-	current   int
-	batchType BatchType
-	buf       []T
+	config batchConfig
+	count  int
+	nBytes int
+	buf    []T
 }
 
 func newDefaultBatcher[T Event]() *batcher[T] {
-	// Keep the default behavior consistent with the legacy Option.BatchCount=1:
-	// no batching unless explicitly configured by the caller.
-	return newBatcher[T](BatchTypeCount, 1)
+	return newBatcher[T](newDefaultBatchConfig())
 }
 
-func newBatcher[T Event](batchType BatchType, capacity int) *batcher[T] {
-	if capacity <= 0 {
-		capacity = 1
-	}
-	bufCap := 128
-	if batchType == BatchTypeCount {
-		bufCap = min(bufCap, capacity)
+func newBatcher[T Event](cfg batchConfig) *batcher[T] {
+	if cfg.maxCount <= 0 {
+		cfg.maxCount = 1
 	}
 	return &batcher[T]{
-		batchType: batchType,
-		capacity:  capacity,
-		buf:       make([]T, 0, bufCap),
+		config: cfg,
+		buf:    make([]T, 0, cfg.maxCount),
 	}
-}
-
-func (b *batcher[T]) clone() *batcher[T] {
-	if b == nil {
-		return nil
-	}
-	return newBatcher[T](b.batchType, b.capacity)
 }
 
 func (b *batcher[T]) addEvent(event T, size int) {
 	b.buf = append(b.buf, event)
-	switch b.batchType {
-	case BatchTypeCount:
-		b.current++
-	case BatchTypeSize:
-		b.current += size
-	}
+	b.count++
+	b.nBytes += size
 }
 
+// todo: revise this condition, aims to make it as full as possible, and also keeps low latency.
 func (b *batcher[T]) isFull() bool {
-	return b.current >= b.capacity
+	return b.count >= b.config.maxCount || b.nBytes >= b.config.maxBytes
 }
 
 func (b *batcher[T]) reset() []T {
 	events := b.buf
 	b.buf = b.buf[:0]
-	b.current = 0
+	b.count = 0
+	b.nBytes = 0
 	return events
 }

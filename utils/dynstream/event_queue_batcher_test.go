@@ -23,7 +23,7 @@ func TestBatchEventsBySize(t *testing.T) {
 	handler := mockHandler{}
 	eq := newEventQueue(&handler)
 
-	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", nil, newBatcher[*mockEvent](BatchTypeSize, 10))
+	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", nil, newBatcher[*mockEvent](NewBatchConfig(10, 1024*1024)))
 	eq.initPath(path)
 
 	for i := 1; i <= 4; i++ {

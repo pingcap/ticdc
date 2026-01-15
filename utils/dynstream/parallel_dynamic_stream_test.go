@@ -109,7 +109,7 @@ func TestParallelDynamicStreamMemoryControl(t *testing.T) {
 	// case 1: memory control enabled
 	require.NotNil(t, stream.memControl)
 	require.NotNil(t, stream.feedbackChan)
-	settings := AreaSettings[*mockEvent]{maxPendingSize: 1024, feedbackInterval: 10 * time.Millisecond}
+	settings := AreaSettings{maxPendingSize: 1024, feedbackInterval: 10 * time.Millisecond}
 	// The path is belong to area 0
 	stream.AddPath("path1", "dest1", settings)
 	stream.pathMap.RLock()

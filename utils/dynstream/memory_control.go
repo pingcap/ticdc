@@ -49,7 +49,7 @@ type areaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct 
 	// Reverse reference to the memControl this area belongs to.
 	memControl *memControl[A, P, T, D, H]
 
-	settings     atomic.Pointer[AreaSettings[T]]
+	settings     atomic.Pointer[AreaSettings]
 	feedbackChan chan<- Feedback[A, P, D]
 
 	pathCount            atomic.Int64
@@ -66,7 +66,7 @@ type areaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct 
 func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	area A,
 	memoryControl *memControl[A, P, T, D, H],
-	settings AreaSettings[T],
+	settings AreaSettings,
 	feedbackChan chan<- Feedback[A, P, D],
 ) *areaMemStat[A, P, T, D, H] {
 	settings.fix()
@@ -305,7 +305,7 @@ func newMemControl[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]]() *me
 	}
 }
 
-func (m *memControl[A, P, T, D, H]) setAreaSettings(area A, settings AreaSettings[T]) {
+func (m *memControl[A, P, T, D, H]) setAreaSettings(area A, settings AreaSettings) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 	// Update the settings
@@ -315,7 +315,7 @@ func (m *memControl[A, P, T, D, H]) setAreaSettings(area A, settings AreaSetting
 	}
 }
 
-func (m *memControl[A, P, T, D, H]) addPathToArea(path *pathInfo[A, P, T, D, H], settings AreaSettings[T], feedbackChan chan<- Feedback[A, P, D]) {
+func (m *memControl[A, P, T, D, H]) addPathToArea(path *pathInfo[A, P, T, D, H], settings AreaSettings, feedbackChan chan<- Feedback[A, P, D]) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
