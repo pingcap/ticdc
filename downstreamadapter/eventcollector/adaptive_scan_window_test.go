@@ -33,11 +33,7 @@ func TestAdaptiveScanWindowAdjust(t *testing.T) {
 	require.False(t, needReset)
 	require.Equal(t, 5*time.Second, interval)
 
-	// Reset after 30 seconds above 150%.
-	for range 29 {
-		interval, needReset = w.observe(1.51, maxInterval)
-		require.False(t, needReset)
-	}
+	// Reset immediately above 150%.
 	interval, needReset = w.observe(1.51, maxInterval)
 	require.True(t, needReset)
 	require.Equal(t, 1*time.Second, interval)
@@ -50,4 +46,3 @@ func TestAdaptiveScanWindowAdjust(t *testing.T) {
 	require.LessOrEqual(t, interval, 2*time.Second)
 	require.GreaterOrEqual(t, interval, 1*time.Second)
 }
-
