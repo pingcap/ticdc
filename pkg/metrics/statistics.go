@@ -14,6 +14,7 @@
 package metrics
 
 import (
+	"sync"
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -28,7 +29,7 @@ func NewStatistics(
 	statistics := &Statistics{
 		sinkType:     sinkType,
 		changefeedID: changefeed,
-		ddlTypes:     make(map[string]struct{}),
+		ddlTypes:     sync.Map{},
 	}
 
 	keyspace := changefeed.Keyspace()
@@ -49,7 +50,7 @@ func NewStatistics(
 type Statistics struct {
 	sinkType     string
 	changefeedID common.ChangeFeedID
-	ddlTypes     map[string]struct{}
+	ddlTypes     sync.Map
 
 	// metricExecDDLHis records each DDL execution time duration.
 	metricExecDDLHis prometheus.Observer
@@ -102,7 +103,7 @@ func (b *Statistics) RecordDDLExecution(executor func() (string, error)) error {
 	metricExecDDLCounter := ExecDDLCounter.WithLabelValues(
 		b.changefeedID.Keyspace(), b.changefeedID.Name(), ddlType)
 	metricExecDDLCounter.Inc()
-	b.ddlTypes[ddlType] = struct{}{}
+	b.ddlTypes.Store(ddlType, struct{}{})
 	b.metricExecDDLHis.Observe(time.Since(start).Seconds())
 	return nil
 }
@@ -117,9 +118,11 @@ func (b *Statistics) Close() {
 	EventSizeHistogram.DeleteLabelValues(keyspace, changefeedID)
 	ExecutionErrorCounter.DeleteLabelValues(keyspace, changefeedID, "ddl")
 	ExecutionErrorCounter.DeleteLabelValues(keyspace, changefeedID, "dml")
-	for ddlType := range b.ddlTypes {
+	b.ddlTypes.Range(func(key, value any) bool {
+		ddlType := key.(string)
 		ExecDDLCounter.DeleteLabelValues(keyspace, changefeedID, ddlType)
-	}
+		return true
+	})
 	TotalWriteBytesCounter.DeleteLabelValues(keyspace, changefeedID)
 	ExecDMLEventCounter.DeleteLabelValues(keyspace, changefeedID)
 }
