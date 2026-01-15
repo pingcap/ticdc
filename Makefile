@@ -85,7 +85,7 @@ GOTEST := CGO_ENABLED=1 $(GO) test -p 3 --race --tags=$(TEST_FLAG)
 
 RELEASE_VERSION =
 ifeq ($(RELEASE_VERSION),)
-	RELEASE_VERSION := $(shell git describe --tags --dirty)
+	RELEASE_VERSION := $(shell git describe --tags --dirty || true)
 endif
 ifeq ($(RELEASE_VERSION),)
 	RELEASE_VERSION := v8.5.4-release
