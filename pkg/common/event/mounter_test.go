@@ -499,7 +499,7 @@ func TestGetDefaultZeroValue(t *testing.T) {
 		},
 	}
 
-	tz := time.Local
+	tz := time.FixedZone("CST", 8*60*60)
 	for _, tc := range testCases {
 		_, val, _, _, _ := getDefaultOrZeroValue(&tc.ColInfo, tz)
 		require.Equal(t, tc.Res, val, tc.Name)

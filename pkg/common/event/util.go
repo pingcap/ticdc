@@ -89,7 +89,7 @@ func NewEventTestHelperWithTimeZone(t testing.TB, tz *time.Location) *EventTestH
 
 // NewEventTestHelper creates a SchemaTestHelper
 func NewEventTestHelper(t testing.TB) *EventTestHelper {
-	return NewEventTestHelperWithTimeZone(t, time.Local)
+	return NewEventTestHelperWithTimeZone(t, time.FixedZone("CST", 8*60*60))
 }
 
 func (s *EventTestHelper) ApplyJob(job *timodel.Job) {

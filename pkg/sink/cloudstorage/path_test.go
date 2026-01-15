@@ -425,7 +425,7 @@ func TestRemoveExpiredFilesWithoutPartition(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	currTime := time.Date(2021, 1, 3, 0, 0, 0, 0, time.Local)
+	currTime := time.Date(2021, 1, 3, 0, 0, 0, 0, time.FixedZone("CST", 8*60*60))
 	checkpointTs := oracle.GoTimeToTS(currTime)
 	cnt, err := RemoveExpiredFiles(ctx, commonType.ChangeFeedID{}, storage, cfg, checkpointTs)
 	require.NoError(t, err)
