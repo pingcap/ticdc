@@ -416,7 +416,7 @@ func newMockDispatcherInfo(t *testing.T, startTs uint64, dispatcherID common.Dis
 		filter:     filter,
 		bdrMode:    false,
 		integrity:  config.GetDefaultReplicaConfig().Integrity,
-		tz:         time.FixedZone("CST", 8*60*60),
+		tz:         time.Local,
 	}
 }
 
