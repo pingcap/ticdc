@@ -358,12 +358,9 @@ func (s *subscriptionClient) Subscribe(
 	s.totalSpans.spanMap[subID] = rt
 	s.totalSpans.Unlock()
 
-	gb := 1024 * 1024 * 1024 // 1GB
-	// todo: consider there are data whose size is 1MB, which is too large.
-	// adjust the maxBytes for batch based on the event size.
-	batchConfig := dynstream.NewBatchConfig(1024, gb)
+	batchConfig := dynstream.NewBatchConfig(1024, 1024*1024)
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(
-		uint64(gb), dynstream.MemoryControlForPuller, "logPuller", batchConfig,
+		1024*1024*1024, dynstream.MemoryControlForPuller, "logPuller", batchConfig,
 	)
 	s.ds.AddPath(rt.subID, rt, areaSetting)
 

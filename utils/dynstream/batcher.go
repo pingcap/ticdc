@@ -21,9 +21,7 @@ type batchConfig struct {
 func newDefaultBatchConfig() batchConfig {
 	// Keep the default behavior consistent with the legacy Option.BatchCount=1:
 	// no batching unless explicitly configured by the caller.
-	return batchConfig{
-		maxCount: 1,
-	}
+	return NewBatchConfig(1, 0)
 }
 
 func NewBatchConfig(count, nBytes int) batchConfig {
