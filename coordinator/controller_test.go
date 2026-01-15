@@ -121,7 +121,7 @@ func TestResumeChangefeedIgnoresStaleMaintainerErrorAndSchedules(t *testing.T) {
 		backend:      backend,
 		changefeedDB: changefeedDB,
 	}
-	cfID := common.NewChangeFeedIDWithName("test-stale-error", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test-stale-error", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),

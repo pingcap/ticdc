@@ -97,7 +97,7 @@ func TestMoveToSchedulingQueue(t *testing.T) {
 
 func TestMoveToSchedulingQueueResetBackoffAlsoResetsCheckpointBaseline(t *testing.T) {
 	db := NewChangefeedDB(1216)
-	cf := &Changefeed{ID: common.NewChangeFeedIDWithName("test-baseline", common.DefaultKeyspaceNamme)}
+	cf := &Changefeed{ID: common.NewChangeFeedIDWithName("test-baseline", common.DefaultKeyspaceName)}
 	db.AddStoppedChangefeed(cf)
 	cf.backoff = NewBackoff(cf.ID, 0, 200)
 	cf.status = atomic.NewPointer(&heartbeatpb.MaintainerStatus{
