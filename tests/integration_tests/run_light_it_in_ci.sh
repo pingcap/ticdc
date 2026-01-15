@@ -46,9 +46,9 @@ mysql_groups=(
 	# G06
 	'http_api http_api_tls fail_over_ddl_G synced_status'
 	# G07
-	'http_api_tls_with_user_auth fail_over_ddl_H changefeed_update_config synced_status_with_redo'
+	'http_api_tls_with_user_auth fail_over_ddl_H changefeed_update_config synced_status_with_redo redo_apply_schema_routing'
 	# G08
-	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry fail_over_ddl_I'
+	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry fail_over_ddl_I sink_routing'
 	# G09
 	'sequence cdc_server_tips ddl_sequence server_config_compatibility fail_over_ddl_J'
 	# G10

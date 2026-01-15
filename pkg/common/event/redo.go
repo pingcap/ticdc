@@ -141,10 +141,12 @@ func (r *RedoRowEvent) ToRedoLog() *RedoLog {
 	}
 	if r.TableInfo != nil {
 		redoLog.RedoRow.Row.Table = &commonType.TableName{
-			Schema:      r.TableInfo.TableName.Schema,
-			Table:       r.TableInfo.TableName.Table,
-			TableID:     r.PhysicalTableID,
-			IsPartition: r.TableInfo.TableName.IsPartition,
+			Schema:       r.TableInfo.TableName.Schema,
+			Table:        r.TableInfo.TableName.Table,
+			TableID:      r.PhysicalTableID,
+			IsPartition:  r.TableInfo.TableName.IsPartition,
+			TargetSchema: r.TableInfo.TableName.TargetSchema,
+			TargetTable:  r.TableInfo.TableName.TargetTable,
 		}
 		redoLog.RedoRow.Row.IndexColumns = getIndexColumns(r.TableInfo)
 
@@ -324,8 +326,18 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 		indexInfo.Primary = isPrimary
 		tidbTableInfo.Indices = append(tidbTableInfo.Indices, indexInfo)
 	}
+	tableInfo := commonType.NewTableInfo4Decoder(r.Row.Table.Schema, tidbTableInfo)
+	// Restore routing info from redo log (TargetSchema/TargetTable for sink routing).
+	// We must use CloneWithRouting because NewTableInfo4Decoder already called InitPrivateFields()
+	// which pre-computed SQL statements using the source schema/table. CloneWithRouting creates
+	// a new TableInfo with routing applied and uninitialized preSQLs that will be computed
+	// correctly when InitPrivateFields() is called.
+	if r.Row.Table.TargetSchema != "" || r.Row.Table.TargetTable != "" {
+		tableInfo = tableInfo.CloneWithRouting(r.Row.Table.TargetSchema, r.Row.Table.TargetTable)
+		tableInfo.InitPrivateFields()
+	}
 	event := &DMLEvent{
-		TableInfo:       commonType.NewTableInfo4Decoder(r.Row.Table.Schema, tidbTableInfo),
+		TableInfo:       tableInfo,
 		CommitTs:        r.Row.CommitTs,
 		StartTs:         r.Row.StartTs,
 		Length:          1,
