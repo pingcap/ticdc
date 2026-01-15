@@ -48,10 +48,6 @@ type EventDispatcher struct {
 	}
 }
 
-func (d *EventDispatcher) GetSink() sink.Sink {
-	return d.sink
-}
-
 // All event dispatchers in the changefeed will share the same Sink.
 // Here is a special dispatcher will deal with the events of the DDLSpan in one changefeed, we call it TableTriggerEventDispatcher
 // One changefeed across multiple nodes only will have one TableTriggerEventDispatcher.

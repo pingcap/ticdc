@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
-	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -38,20 +37,13 @@ var mockChangefeedID = common.NewChangeFeedIDWithName("dispatcher_stat_test", co
 // mockDispatcher implements the dispatcher.EventDispatcher interface for testing
 type mockDispatcher struct {
 	dispatcher.EventDispatcher
-	startTs      uint64
-	id           common.DispatcherID
-	changefeedID common.ChangeFeedID
-	handleEvents func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool)
-	events       []dispatcher.DispatcherEvent
-	checkPointTs uint64
-
-	sink sink.Sink
-
+	startTs                uint64
+	id                     common.DispatcherID
+	changefeedID           common.ChangeFeedID
+	handleEvents           func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool)
+	events                 []dispatcher.DispatcherEvent
+	checkPointTs           uint64
 	skipSyncpointAtStartTs bool
-}
-
-func (m *mockDispatcher) GetSink() sink.Sink {
-	return m.sink
 }
 
 func newMockDispatcher(id common.DispatcherID, startTs uint64) *mockDispatcher {
@@ -60,7 +52,6 @@ func newMockDispatcher(id common.DispatcherID, startTs uint64) *mockDispatcher {
 		startTs:      startTs,
 		changefeedID: mockChangefeedID,
 		checkPointTs: startTs,
-		sink:         sink.NewMockSink(common.BlackHoleSinkType),
 	}
 }
 

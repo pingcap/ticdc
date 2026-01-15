@@ -36,10 +36,6 @@ type RedoDispatcher struct {
 	cancel   context.CancelFunc
 }
 
-func (rd *RedoDispatcher) GetSink() sink.Sink {
-	return rd.sink
-}
-
 // RedoDispatcher is similar with BasicDispatcher.
 func NewRedoDispatcher(
 	id common.DispatcherID,

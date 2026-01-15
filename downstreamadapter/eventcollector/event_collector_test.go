@@ -48,10 +48,6 @@ type mockEventDispatcher struct {
 	eventCollectorBatchBytes int
 }
 
-func (m *mockEventDispatcher) GetSink() sink.Sink {
-	return m.sink
-}
-
 func (m *mockEventDispatcher) GetId() common.DispatcherID {
 	return m.id
 }
