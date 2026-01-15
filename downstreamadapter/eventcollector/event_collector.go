@@ -268,10 +268,11 @@ func (c *EventCollector) PrepareAddDispatcher(
 
 	ds := c.getDynamicStream(target.GetMode())
 
-	batchType, batchCapacity := batchTypeBySinkAndCapacity(target)
-	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize[dispatcher.DispatcherEvent](
+	batchCount, batchBytes := getBatchCountAndBytes(target)
+	batchConfig := dynstream.NewBatchConfig(batchCount, batchBytes)
+	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(
 		memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector",
-		batchType, batchCapacity,
+		batchConfig,
 	)
 	err := ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
@@ -280,20 +281,24 @@ func (c *EventCollector) PrepareAddDispatcher(
 	stat.run()
 }
 
-func batchTypeBySinkAndCapacity(dispatcher dispatcher.DispatcherService) (dynstream.BatchType, int) {
-	sink := dispatcher.GetSink()
-	batchType := dynstream.BatchTypeCount
-	if sink != nil && sink.SinkType() == common.CloudStorageSinkType {
-		batchType = dynstream.BatchTypeSize
-	}
-	if capOverride := dispatcher.GetEventCollectorBatchCapacity(); capOverride > 0 {
-		return batchType, capOverride
-	}
-	if sink == nil {
-		return batchType, 1
-	}
-	return batchType, sink.BatchCapacity()
+func getBatchCountAndBytes(dispatcher dispatcher.DispatcherService) (int, int) {
+	return 0, 0
 }
+
+// func batchTypeBySinkAndCapacity(dispatcher dispatcher.DispatcherService) (dynstream.BatchType, int) {
+// 	sink := dispatcher.GetSink()
+// 	batchType := dynstream.BatchTypeCount
+// 	if sink != nil && sink.SinkType() == common.CloudStorageSinkType {
+// 		batchType = dynstream.BatchTypeSize
+// 	}
+// 	if capOverride := dispatcher.GetEventCollectorBatchCapacity(); capOverride > 0 {
+// 		return batchType, capOverride
+// 	}
+// 	if sink == nil {
+// 		return batchType, 1
+// 	}
+// 	return batchType, sink.BatchCapacity()
+// }
 
 // CommitAddDispatcher notify local event service that the dispatcher is ready to receive events.
 func (c *EventCollector) CommitAddDispatcher(target dispatcher.DispatcherService, startTs uint64) {

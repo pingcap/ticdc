@@ -220,6 +220,11 @@ func (s *Sink) sendMessages(ctx context.Context) error {
 
 func (s *Sink) AddCheckpointTs(_ uint64) {}
 
-func (s *Sink) BatchCapacity() int {
+func (s *Sink) BatchCount() int {
 	return 4096
+}
+
+// todo: how to set this ?
+func (s *Sink) BatchBytes() int {
+	return 0
 }

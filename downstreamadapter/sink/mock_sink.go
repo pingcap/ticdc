@@ -28,8 +28,12 @@ type mockSink struct {
 	sinkType common.SinkType
 }
 
-func (s *mockSink) BatchCapacity() int {
+func (s *mockSink) BatchCount() int {
 	return 4096
+}
+
+func (s *mockSink) BatchBytes() int {
+	return 1024 * 1024 * 1024
 }
 
 func (s *mockSink) AddDMLEvent(event *commonEvent.DMLEvent) {

@@ -51,9 +51,10 @@ type SharedInfo struct {
 	// will break the splittability of this table.
 	enableSplittableCheck bool
 
-	// eventCollectorBatchCapacity is used by the event collector dynamic stream to achieve better batch performance.
 	// 0 means not set and the default sink-specific capacity will be used.
-	eventCollectorBatchCapacity int
+	eventCollectorBatchCount int
+	// 0 means not set and the default sink-specific capacity will be used.
+	eventCollectorBatchBytes int
 
 	// Shared resources
 	// statusesChan is used to store the status of dispatchers when status changed
@@ -83,25 +84,27 @@ func NewSharedInfo(
 	syncPointConfig *syncpoint.SyncPointConfig,
 	txnAtomicity *config.AtomicityLevel,
 	enableSplittableCheck bool,
-	eventCollectorBatchCapacity int,
+	eventCollectorBatchCount int,
+	eventCollectorBatchBytes int,
 	statusesChan chan TableSpanStatusWithSeq,
 	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus,
 	errCh chan error,
 ) *SharedInfo {
 	sharedInfo := &SharedInfo{
-		changefeedID:                changefeedID,
-		timezone:                    timezone,
-		bdrMode:                     bdrMode,
-		outputRawChangeEvent:        outputRawChangeEvent,
-		integrityConfig:             integrityConfig,
-		filterConfig:                filterConfig,
-		syncPointConfig:             syncPointConfig,
-		enableSplittableCheck:       enableSplittableCheck,
-		eventCollectorBatchCapacity: eventCollectorBatchCapacity,
-		statusesChan:                statusesChan,
-		blockStatusesChan:           blockStatusesChan,
-		blockExecutor:               newBlockEventExecutor(),
-		errCh:                       errCh,
+		changefeedID:             changefeedID,
+		timezone:                 timezone,
+		bdrMode:                  bdrMode,
+		outputRawChangeEvent:     outputRawChangeEvent,
+		integrityConfig:          integrityConfig,
+		filterConfig:             filterConfig,
+		syncPointConfig:          syncPointConfig,
+		enableSplittableCheck:    enableSplittableCheck,
+		eventCollectorBatchCount: eventCollectorBatchCount,
+		eventCollectorBatchBytes: eventCollectorBatchBytes,
+		statusesChan:             statusesChan,
+		blockStatusesChan:        blockStatusesChan,
+		blockExecutor:            newBlockEventExecutor(),
+		errCh:                    errCh,
 	}
 
 	if txnAtomicity != nil {
@@ -128,8 +131,12 @@ func (d *BasicDispatcher) GetChangefeedID() common.ChangeFeedID {
 	return d.sharedInfo.changefeedID
 }
 
-func (d *BasicDispatcher) GetEventCollectorBatchCapacity() int {
-	return d.sharedInfo.eventCollectorBatchCapacity
+func (d *BasicDispatcher) GetEventCollectorBatchCount() int {
+	return d.sharedInfo.eventCollectorBatchCount
+}
+
+func (d *BasicDispatcher) GetEventCollectorBatchBytes() int {
+	return d.sharedInfo.eventCollectorBatchBytes
 }
 
 func (d *BasicDispatcher) GetComponentStatus() heartbeatpb.ComponentState {

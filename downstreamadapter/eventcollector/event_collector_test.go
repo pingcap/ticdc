@@ -44,7 +44,8 @@ type mockEventDispatcher struct {
 
 	sink sink.Sink
 
-	eventCollectorBatchCapacity int
+	eventCollectorBatchCount int
+	eventCollectorBatchBytes int
 }
 
 func (m *mockEventDispatcher) GetSink() sink.Sink {
@@ -71,8 +72,12 @@ func (m *mockEventDispatcher) GetChangefeedID() common.ChangeFeedID {
 	return m.changefeedID
 }
 
-func (m *mockEventDispatcher) GetEventCollectorBatchCapacity() int {
-	return m.eventCollectorBatchCapacity
+func (d *mockEventDispatcher) GetEventCollectorBatchCount() int {
+	return d.eventCollectorBatchCount
+}
+
+func (d *mockEventDispatcher) GetEventCollectorBatchBytes() int {
+	return d.eventCollectorBatchBytes
 }
 
 func (m *mockEventDispatcher) GetTableSpan() *heartbeatpb.TableSpan {

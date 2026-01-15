@@ -40,8 +40,8 @@ type Sink interface {
 	Close(removeChangefeed bool)
 	Run(ctx context.Context) error
 
-	// BatchCapacity is used by the dynamic stream to achieve better batch performance.
-	BatchCapacity() int
+	BatchCount() int
+	BatchBytes() int
 }
 
 func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.ChangeFeedID) (Sink, error) {
