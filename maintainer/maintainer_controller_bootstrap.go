@@ -535,137 +535,251 @@ func (c *Controller) restoreCurrentWorkingOperators(
 	tableSplitMap map[int64]bool,
 	mode int64,
 ) error {
-	for node, resp := range allNodesResp {
-		spanInfoByID := indexBootstrapSpans(resp.Spans, mode)
-		for _, req := range resp.Operators {
-			// Validate
-			if req == nil || req.Config == nil || req.Config.DispatcherID == nil {
-				log.Warn("bootstrap operator config is nil, skip restoring it",
-					zap.String("nodeID", node.String()),
-					zap.String("changefeed", resp.ChangefeedID.String()))
-				continue
-			}
-			dispatcherID := common.NewDispatcherIDFromPB(req.Config.DispatcherID)
-			if dispatcherID.IsZero() {
-				log.Warn("bootstrap operator has invalid dispatcher id, skip restoring it",
-					zap.String("nodeID", node.String()),
-					zap.String("changefeed", resp.ChangefeedID.String()))
-				continue
-			}
-			if req.Config.Mode != mode {
-				continue
-			}
-			spanInfo := spanInfoByID[dispatcherID]
-			span := req.Config.Span
-			schemaID := req.Config.SchemaID
-			// Dispatcher managers may report an operator with partial config.
-			// - For Create: the request is stored before the dispatcher is created, so it won't appear in resp.Spans yet.
-			// - For Remove: maintainer may remove an "orphan dispatcher" without knowing the exact span/schemaID, so
-			//   Config.Span/SchemaID can be missing (protobuf default zero values).
-			//
-			// When possible, enrich missing fields from the node's span snapshot so we can rebuild SpanReplication
-			// and restore maintainer-side operators deterministically.
-			if spanInfo != nil {
-				if span == nil {
-					span = spanInfo.Span
-				}
-				if schemaID == 0 {
-					schemaID = spanInfo.SchemaID
-				}
-			}
-			if span == nil {
-				log.Warn("bootstrap operator missing span, skip restoring it",
-					zap.String("nodeID", node.String()),
-					zap.String("changefeed", resp.ChangefeedID.String()),
-					zap.String("dispatcherID", dispatcherID.String()),
-					zap.String("operatorType", req.OperatorType.String()),
-					zap.String("scheduleAction", req.ScheduleAction.String()))
-				continue
-			}
-			spanController := c.getSpanController(req.Config.Mode)
-			replicaSet := spanController.GetTaskByID(dispatcherID)
+	spanController := c.getSpanController(mode)
+	for nodeID, resp := range allNodesResp {
+		if err := c.restoreCurrentWorkingOperatorsForNode(nodeID, resp, spanController, tableSplitMap, mode); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
-			// From this point on:
-			// - span/schemaID are best-effort normalized (using resp.Spans when possible).
-			// - replicaSet reflects maintainer's current in-memory task state (may be nil before tasks are rebuilt).
-			// - spanInfo reflects runtime snapshot on this node (nil when the dispatcher does not exist on the node).
-			//
-			// The branches below handle the expected combinations we can observe during failover and turn them
-			// back into maintainer-side operators so the system keeps converging.
-			switch req.ScheduleAction {
-			case heartbeatpb.ScheduleAction_Create:
-				// Create is only meaningful if the dispatcher does not already exist. If the node snapshot already
-				// contains the dispatcher (or maintainer already bound the span), treat it as done.
-				if spanInfo != nil {
-					log.Debug("dispatcher already exists, skip restoring add operator",
-						zap.String("nodeID", node.String()),
-						zap.String("changefeed", resp.ChangefeedID.String()),
-						zap.String("dispatcherID", dispatcherID.String()))
-					continue
-				}
-				if replicaSet != nil && replicaSet.IsScheduled() {
-					log.Debug("dispatcher already scheduled, skip restoring add operator",
-						zap.String("nodeID", node.String()),
-						zap.String("changefeed", resp.ChangefeedID.String()),
-						zap.String("dispatcherID", dispatcherID.String()))
-					continue
-				}
-				if replicaSet == nil {
-					// Create a new absent replica set for the add operator.
-					replicaSet = replica.NewSpanReplication(
-						c.changefeedID,
-						dispatcherID,
-						schemaID,
-						span,
-						req.Config.StartTs,
-						req.Config.Mode,
-						spanController.ShouldEnableSplit(tableSplitMap[span.TableID]),
-					)
-					spanController.AddAbsentReplicaSet(replicaSet)
-				}
-				err, done := c.handleCurrentWorkingAdd(req, spanController, replicaSet, node, resp)
-				if done {
-					return err
-				}
-			case heartbeatpb.ScheduleAction_Remove:
-				// For Remove we may not have a replica set if the table was dropped concurrently or if maintainer
-				// hasn't rebuilt its table map yet. When possible, reconstruct it from the node snapshot so the
-				// remove operator can be completed and cleaned up.
-				if replicaSet == nil {
-					if spanInfo == nil {
-						log.Warn("bootstrap remove operator missing span info, skip restoring it",
-							zap.String("nodeID", node.String()),
-							zap.String("changefeed", resp.ChangefeedID.String()),
-							zap.String("dispatcherID", dispatcherID.String()),
-							zap.String("operatorType", req.OperatorType.String()))
-						continue
-					}
-					replicaSet = c.createSpanReplication(
-						spanInfo,
-						node,
-						spanController.ShouldEnableSplit(tableSplitMap[spanInfo.Span.TableID]),
-					)
-					spanController.AddReplicatingSpan(replicaSet)
-				} else if replicaSet.GetNodeID() == "" {
-					// A replica set reconstructed from schema store (during maintainer restart) may not be
-					// bound to a node yet, because we haven't processed bootstrap snapshots to learn the
-					// actual runtime placement. Bind it so the remove operator sends the request to the
-					// correct dispatcher manager.
-					replicaSet.SetNodeID(node)
-				}
-				err, done := c.handleCurrentWorkingRemove(req, spanController, replicaSet, node, resp)
-				if done {
-					return err
-				}
-				if req.OperatorType == heartbeatpb.OperatorType_O_Remove {
-					if _, ok := tableSplitMap[span.TableID]; !ok {
-						// The table is already dropped (not present in schema store at startTs).
-						// Keep the remove operator so the runtime dispatcher can be cleaned up, but remove the task
-						// from spanController to avoid rescheduling a table that no longer exists.
-						spanController.RemoveReplicatingSpan(replicaSet)
-					}
-				}
-			}
+// validateBootstrapOperatorRequest extracts and validates the dispatcherID in a bootstrap operator request.
+//
+// A bootstrap snapshot can contain stale or partial requests. We validate early so we don't create
+// maintainer-side tasks/operators from invalid data, and we filter by mode to avoid mixing normal/redo
+// scheduling states.
+func validateBootstrapOperatorRequest(
+	nodeID node.ID,
+	resp *heartbeatpb.MaintainerBootstrapResponse,
+	req *heartbeatpb.ScheduleDispatcherRequest,
+	mode int64,
+) (common.DispatcherID, bool) {
+	if req == nil || req.Config == nil || req.Config.DispatcherID == nil {
+		log.Warn("bootstrap operator config is nil, skip restoring it",
+			zap.String("nodeID", nodeID.String()),
+			zap.String("changefeed", resp.ChangefeedID.String()))
+		return common.DispatcherID{}, false
+	}
+	dispatcherID := common.NewDispatcherIDFromPB(req.Config.DispatcherID)
+	if dispatcherID.IsZero() {
+		log.Warn("bootstrap operator has invalid dispatcher id, skip restoring it",
+			zap.String("nodeID", nodeID.String()),
+			zap.String("changefeed", resp.ChangefeedID.String()))
+		return common.DispatcherID{}, false
+	}
+	if req.Config.Mode != mode {
+		return common.DispatcherID{}, false
+	}
+	return dispatcherID, true
+}
+
+// normalizeBootstrapOperatorSpanAndSchemaID fills missing Span/SchemaID fields using the node's span snapshot.
+//
+// Why:
+//   - For Create, the dispatcher manager can persist the request before the dispatcher appears in resp.Spans.
+//   - For Remove, maintainer may remove an orphan dispatcher without knowing its exact span/schemaID, so the
+//     request can omit them (protobuf default zero values).
+//
+// Having a concrete span is required to rebuild SpanReplication and to drive correct operator restoration.
+func normalizeBootstrapOperatorSpanAndSchemaID(
+	nodeID node.ID,
+	resp *heartbeatpb.MaintainerBootstrapResponse,
+	req *heartbeatpb.ScheduleDispatcherRequest,
+	dispatcherID common.DispatcherID,
+	spanInfo *heartbeatpb.BootstrapTableSpan,
+) (*heartbeatpb.TableSpan, int64, bool) {
+	span := req.Config.Span
+	schemaID := req.Config.SchemaID
+	if spanInfo != nil {
+		if span == nil {
+			span = spanInfo.Span
+		}
+		if schemaID == 0 {
+			schemaID = spanInfo.SchemaID
+		}
+	}
+	if span == nil {
+		log.Warn("bootstrap operator missing span, skip restoring it",
+			zap.String("nodeID", nodeID.String()),
+			zap.String("changefeed", resp.ChangefeedID.String()),
+			zap.String("dispatcherID", dispatcherID.String()),
+			zap.String("operatorType", req.OperatorType.String()),
+			zap.String("scheduleAction", req.ScheduleAction.String()))
+		return nil, 0, false
+	}
+	return span, schemaID, true
+}
+
+func (c *Controller) restoreCurrentWorkingOperatorsForNode(
+	nodeID node.ID,
+	resp *heartbeatpb.MaintainerBootstrapResponse,
+	spanController *span.Controller,
+	tableSplitMap map[int64]bool,
+	mode int64,
+) error {
+	spanInfoByID := indexBootstrapSpans(resp.Spans, mode)
+	for _, req := range resp.Operators {
+		if err := c.restoreCurrentWorkingOperatorForRequest(
+			nodeID,
+			resp,
+			req,
+			spanController,
+			spanInfoByID,
+			tableSplitMap,
+			mode,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Controller) restoreCurrentWorkingOperatorForRequest(
+	nodeID node.ID,
+	resp *heartbeatpb.MaintainerBootstrapResponse,
+	req *heartbeatpb.ScheduleDispatcherRequest,
+	spanController *span.Controller,
+	spanInfoByID map[common.DispatcherID]*heartbeatpb.BootstrapTableSpan,
+	tableSplitMap map[int64]bool,
+	mode int64,
+) error {
+	dispatcherID, ok := validateBootstrapOperatorRequest(nodeID, resp, req, mode)
+	if !ok {
+		return nil
+	}
+
+	spanInfo := spanInfoByID[dispatcherID]
+	span, schemaID, ok := normalizeBootstrapOperatorSpanAndSchemaID(nodeID, resp, req, dispatcherID, spanInfo)
+	if !ok {
+		return nil
+	}
+
+	// At this point:
+	// - span/schemaID are best-effort normalized (using resp.Spans when possible).
+	// - replicaSet reflects maintainer's current in-memory task state (may be nil before tasks are rebuilt).
+	// - spanInfo reflects runtime snapshot on this node (nil when the dispatcher does not exist on the node).
+	replicaSet := spanController.GetTaskByID(dispatcherID)
+
+	switch req.ScheduleAction {
+	case heartbeatpb.ScheduleAction_Create:
+		return c.restoreCurrentWorkingCreateAction(
+			nodeID,
+			resp,
+			req,
+			dispatcherID,
+			span,
+			schemaID,
+			spanInfo,
+			spanController,
+			replicaSet,
+			tableSplitMap,
+		)
+	case heartbeatpb.ScheduleAction_Remove:
+		return c.restoreCurrentWorkingRemoveAction(
+			nodeID,
+			resp,
+			req,
+			dispatcherID,
+			span,
+			spanInfo,
+			spanController,
+			replicaSet,
+			tableSplitMap,
+		)
+	}
+	return nil
+}
+
+func (c *Controller) restoreCurrentWorkingCreateAction(
+	nodeID node.ID,
+	resp *heartbeatpb.MaintainerBootstrapResponse,
+	req *heartbeatpb.ScheduleDispatcherRequest,
+	dispatcherID common.DispatcherID,
+	span *heartbeatpb.TableSpan,
+	schemaID int64,
+	spanInfo *heartbeatpb.BootstrapTableSpan,
+	spanController *span.Controller,
+	replicaSet *replica.SpanReplication,
+	tableSplitMap map[int64]bool,
+) error {
+	// Create is only meaningful if the dispatcher does not already exist. If the node snapshot already contains
+	// the dispatcher (or maintainer already bound the span), treat it as done.
+	if spanInfo != nil {
+		log.Debug("dispatcher already exists, skip restoring add operator",
+			zap.String("nodeID", nodeID.String()),
+			zap.String("changefeed", resp.ChangefeedID.String()),
+			zap.String("dispatcherID", dispatcherID.String()))
+		return nil
+	}
+	if replicaSet != nil && replicaSet.IsScheduled() {
+		log.Debug("dispatcher already scheduled, skip restoring add operator",
+			zap.String("nodeID", nodeID.String()),
+			zap.String("changefeed", resp.ChangefeedID.String()),
+			zap.String("dispatcherID", dispatcherID.String()))
+		return nil
+	}
+	if replicaSet == nil {
+		// Create a new absent replica set for the add operator.
+		replicaSet = replica.NewSpanReplication(
+			c.changefeedID,
+			dispatcherID,
+			schemaID,
+			span,
+			req.Config.StartTs,
+			req.Config.Mode,
+			spanController.ShouldEnableSplit(tableSplitMap[span.TableID]),
+		)
+		spanController.AddAbsentReplicaSet(replicaSet)
+	}
+	return c.handleCurrentWorkingAdd(req, spanController, replicaSet, nodeID, resp)
+}
+
+func (c *Controller) restoreCurrentWorkingRemoveAction(
+	nodeID node.ID,
+	resp *heartbeatpb.MaintainerBootstrapResponse,
+	req *heartbeatpb.ScheduleDispatcherRequest,
+	dispatcherID common.DispatcherID,
+	span *heartbeatpb.TableSpan,
+	spanInfo *heartbeatpb.BootstrapTableSpan,
+	spanController *span.Controller,
+	replicaSet *replica.SpanReplication,
+	tableSplitMap map[int64]bool,
+) error {
+	// For Remove we may not have a replica set if the table was dropped concurrently or if maintainer hasn't
+	// rebuilt its table map yet. When possible, reconstruct it from the node snapshot so the remove operator can
+	// be completed and cleaned up.
+	if replicaSet == nil {
+		if spanInfo == nil {
+			log.Warn("bootstrap remove operator missing span info, skip restoring it",
+				zap.String("nodeID", nodeID.String()),
+				zap.String("changefeed", resp.ChangefeedID.String()),
+				zap.String("dispatcherID", dispatcherID.String()),
+				zap.String("operatorType", req.OperatorType.String()))
+			return nil
+		}
+		replicaSet = c.createSpanReplication(
+			spanInfo,
+			nodeID,
+			spanController.ShouldEnableSplit(tableSplitMap[spanInfo.Span.TableID]),
+		)
+		spanController.AddReplicatingSpan(replicaSet)
+	} else if replicaSet.GetNodeID() == "" {
+		// A replica set reconstructed from schema store (during maintainer restart) may not be bound to a node yet,
+		// because we haven't processed bootstrap snapshots to learn the actual runtime placement. Bind it so the
+		// remove operator sends the request to the correct dispatcher manager.
+		replicaSet.SetNodeID(nodeID)
+	}
+
+	if err := c.handleCurrentWorkingRemove(req, spanController, replicaSet, nodeID, resp); err != nil {
+		return err
+	}
+
+	// If the table is already dropped (not present in schema store at startTs), keep the remove operator so the
+	// runtime dispatcher can be cleaned up, but remove the task to avoid rescheduling a table that no longer exists.
+	if req.OperatorType == heartbeatpb.OperatorType_O_Remove {
+		if _, ok := tableSplitMap[span.TableID]; !ok {
+			spanController.RemoveReplicatingSpan(replicaSet)
 		}
 	}
 	return nil
@@ -677,7 +791,7 @@ func (c *Controller) handleCurrentWorkingAdd(
 	replicaSet *replica.SpanReplication,
 	node node.ID,
 	resp *heartbeatpb.MaintainerBootstrapResponse,
-) (error, bool) {
+) error {
 	// handleCurrentWorkingAdd translates a bootstrap Create request back into a maintainer-side operator.
 	// Dispatcher managers only understand create/remove, while maintainer operators are higher-level:
 	// - Add: create dispatcher.
@@ -703,10 +817,10 @@ func (c *Controller) handleCurrentWorkingAdd(
 				zap.Any("operator", op),
 				zap.Any("replicaSet", replicaSet),
 			)
-			return errors.ErrOperatorIsNil.GenWithStack("add operator failed when bootstrap"), true
+			return errors.ErrOperatorIsNil.GenWithStack("add operator failed when bootstrap")
 		}
 	}
-	return nil, false
+	return nil
 }
 
 func (c *Controller) handleCurrentWorkingRemove(
@@ -715,7 +829,7 @@ func (c *Controller) handleCurrentWorkingRemove(
 	replicaSet *replica.SpanReplication,
 	node node.ID,
 	resp *heartbeatpb.MaintainerBootstrapResponse,
-) (error, bool) {
+) error {
 	operatorController := c.getOperatorController(req.Config.Mode)
 	// handleCurrentWorkingRemove translates a bootstrap Remove request back into a maintainer-side operator.
 	//
@@ -743,7 +857,7 @@ func (c *Controller) handleCurrentWorkingRemove(
 				zap.Any("operator", op),
 				zap.Any("replicaSet", replicaSet),
 			)
-			return errors.ErrOperatorIsNil.GenWithStack("add operator failed when bootstrap"), true
+			return errors.ErrOperatorIsNil.GenWithStack("add operator failed when bootstrap")
 		}
 	// 2. If the original operator is move or split, which contains a remove part,
 	// we just need to finish the first remove part, this is enough to keep the operator consistent.
@@ -770,8 +884,8 @@ func (c *Controller) handleCurrentWorkingRemove(
 				zap.Any("operator", op),
 				zap.Any("replicaSet", replicaSet),
 			)
-			return errors.ErrOperatorIsNil.GenWithStack("add operator failed when bootstrap"), true
+			return errors.ErrOperatorIsNil.GenWithStack("add operator failed when bootstrap")
 		}
 	}
-	return nil, false
+	return nil
 }
