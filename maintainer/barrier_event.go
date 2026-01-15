@@ -405,8 +405,6 @@ func (be *BarrierEvent) sendPassAction(mode int64) []*messaging.TargetMessage {
 	switch be.blockedDispatchers.InfluenceType {
 	case heartbeatpb.InfluenceType_DB:
 		spans := be.spanController.GetTasksBySchemaID(be.blockedDispatchers.SchemaID)
-		// writerDispatcher for DB Type is always table trigger dispatcher, so we need to add it too
-		spans = append(spans, be.spanController.GetTaskByID(be.writerDispatcher))
 		if len(spans) == 0 {
 			// means tables are removed, mark the event done
 			be.rangeChecker.MarkCovered()
