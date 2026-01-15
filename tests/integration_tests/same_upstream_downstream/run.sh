@@ -21,8 +21,9 @@ function run() {
 	start_tidb_cluster --workdir $WORK_DIR
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
-	UP_SINK_URI="mysql://root@127.0.0.1:4000/"
-	DOWN_SINK_URI="mysql://root@127.0.0.1:3306/"
+	UP_SINK_URI="mysql://root@${UP_TIDB_HOST}:${UP_TIDB_PORT}/"
+	DOWN_SINK_URI="mysql://root@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/"
+	UP_PD_ENDPOINTS="${UP_PD_HOST_1}:${UP_PD_PORT_1}"
 
 	# 1) Create should be rejected when sink points to upstream cluster.
 	result=$(cdc_cli_changefeed create --sink-uri="$UP_SINK_URI" -c "same-up-down-create" 2>&1 || true)
@@ -46,9 +47,9 @@ function run() {
 
 	# 3) Resume should be rejected even if the sink URI is modified via etcd directly (e.g. legacy metadata).
 	info_key="/tidb/cdc/default/$KEYSPACE_NAME/changefeed/info/$changefeed_id"
-	info_value=$(ETCDCTL_API=3 etcdctl get "$info_key" --print-value-only)
+	info_value=$(ETCDCTL_API=3 etcdctl --endpoints="$UP_PD_ENDPOINTS" get "$info_key" --print-value-only)
 	new_info_value=$(echo "$info_value" | jq -c --arg uri "$UP_SINK_URI" '.["sink-uri"]=$uri')
-	ETCDCTL_API=3 etcdctl put "$info_key" "$new_info_value"
+	ETCDCTL_API=3 etcdctl --endpoints="$UP_PD_ENDPOINTS" put "$info_key" "$new_info_value"
 
 	result=$(cdc_cli_changefeed resume -c "$changefeed_id" 2>&1 || true)
 	if [[ "$result" != *"CDC:ErrSameUpstreamDownstream"* ]] || [[ "$result" != *"resuming a changefeed"* ]]; then
