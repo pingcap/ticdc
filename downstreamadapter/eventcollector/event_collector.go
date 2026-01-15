@@ -268,8 +268,9 @@ func (c *EventCollector) PrepareAddDispatcher(
 
 	ds := c.getDynamicStream(target.GetMode())
 
-	batchCount, batchBytes := getBatchCountAndBytes(target)
-	batchConfig := dynstream.NewBatchConfig(batchCount, batchBytes)
+	batchCounts := target.GetEventCollectorBatchCount()
+	batchBytes := target.GetEventCollectorBatchBytes()
+	batchConfig := dynstream.NewBatchConfig(batchCounts, batchBytes)
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(
 		memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector",
 		batchConfig,
@@ -279,34 +280,6 @@ func (c *EventCollector) PrepareAddDispatcher(
 		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
 	}
 	stat.run()
-}
-
-func getBatchCountAndBytes(dispatcher dispatcher.DispatcherService) (int, int) {
-	batchCount := 1
-	batchBytes := 0
-
-	sink := dispatcher.GetSink()
-	if sink != nil {
-		batchCount = sink.BatchCount()
-		batchBytes = sink.BatchBytes()
-	}
-
-	if countOverride := dispatcher.GetEventCollectorBatchCount(); countOverride > 0 {
-		batchCount = countOverride
-	}
-	if bytesOverride := dispatcher.GetEventCollectorBatchBytes(); bytesOverride > 0 {
-		batchBytes = bytesOverride
-	}
-
-	// Always keep these values positive, otherwise the batcher would flush immediately.
-	if batchCount <= 0 {
-		batchCount = 1
-	}
-	if batchBytes <= 0 {
-		batchBytes = int(^uint(0) >> 1)
-	}
-
-	return batchCount, batchBytes
 }
 
 // CommitAddDispatcher notify local event service that the dispatcher is ready to receive events.
