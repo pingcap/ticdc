@@ -37,12 +37,13 @@ var mockChangefeedID = common.NewChangeFeedIDWithName("dispatcher_stat_test", co
 // mockDispatcher implements the dispatcher.EventDispatcher interface for testing
 type mockDispatcher struct {
 	dispatcher.EventDispatcher
-	startTs                uint64
-	id                     common.DispatcherID
-	changefeedID           common.ChangeFeedID
-	handleEvents           func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool)
-	events                 []dispatcher.DispatcherEvent
-	checkPointTs           uint64
+	startTs      uint64
+	id           common.DispatcherID
+	changefeedID common.ChangeFeedID
+	handleEvents func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool)
+	events       []dispatcher.DispatcherEvent
+	checkPointTs uint64
+
 	skipSyncpointAtStartTs bool
 }
 

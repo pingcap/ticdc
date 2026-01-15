@@ -238,15 +238,17 @@ type AreaSettings struct {
 	maxPendingSize     uint64        // The max memory usage of the pending events of the area. Must be larger than 0. By default 1GB.
 	pathMaxPendingSize uint64        // The max memory usage of the pending events of the path. Must be larger than 0. By default 10% of the area max pending size.
 	feedbackInterval   time.Duration // The interval of the feedback. By default 1000ms.
+
 	// Remove it when we determine the v2 is working well.
-	algorithm int // The algorithm of the memory control.
+	// The algorithm of the memory control.
+	method memoryControlType
 
 	// control how to control events
 	batchConfig batchConfig
 }
 
 func NewAreaSettingsWithMaxPendingSize(
-	quota uint64, memoryControlAlgorithm int, component string,
+	quota uint64, method memoryControlType, component string,
 	batchConfig batchConfig,
 ) AreaSettings {
 	// The path max pending size is at least 1MB.
@@ -256,7 +258,7 @@ func NewAreaSettingsWithMaxPendingSize(
 		feedbackInterval:   DefaultFeedbackInterval,
 		maxPendingSize:     quota,
 		pathMaxPendingSize: pathMaxPendingSize,
-		algorithm:          memoryControlAlgorithm,
+		method:             method,
 		batchConfig:        batchConfig,
 	}
 }

@@ -15,13 +15,11 @@ package eventcollector
 
 import (
 	"context"
-	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
-	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -37,13 +35,10 @@ import (
 var _ dispatcher.DispatcherService = (*mockEventDispatcher)(nil)
 
 type mockEventDispatcher struct {
-	id           common.DispatcherID
-	tableSpan    *heartbeatpb.TableSpan
-	handle       func(commonEvent.Event)
-	changefeedID common.ChangeFeedID
-
-	sink sink.Sink
-
+	id                       common.DispatcherID
+	tableSpan                *heartbeatpb.TableSpan
+	handle                   func(commonEvent.Event)
+	changefeedID             common.ChangeFeedID
 	eventCollectorBatchCount int
 	eventCollectorBatchBytes int
 }
@@ -186,7 +181,6 @@ func TestProcessMessage(t *testing.T) {
 	d := &mockEventDispatcher{
 		id:        did,
 		tableSpan: &heartbeatpb.TableSpan{TableID: 1},
-		sink:      sink.NewMockSink(common.BlackHoleSinkType),
 	}
 	d.handle = func(e commonEvent.Event) {
 		require.Equal(t, e.GetSeq(), seq.Add(1))
@@ -211,66 +205,6 @@ func TestProcessMessage(t *testing.T) {
 	}
 }
 
-type testSink struct {
-	sinkType    common.SinkType
-	batchCount  int
-	batchBytes  int
-	isNormal    bool
-	schemaStore *commonEvent.TableSchemaStore
-}
-
-func (s *testSink) SinkType() common.SinkType { return s.sinkType }
-func (s *testSink) IsNormal() bool            { return s.isNormal }
-func (s *testSink) AddDMLEvent(_ *commonEvent.DMLEvent) {
-}
-func (s *testSink) WriteBlockEvent(_ commonEvent.BlockEvent) error { return nil }
-func (s *testSink) AddCheckpointTs(_ uint64)                       {}
-func (s *testSink) SetTableSchemaStore(store *commonEvent.TableSchemaStore) {
-	s.schemaStore = store
-}
-func (s *testSink) Close(bool) {}
-func (s *testSink) Run(context.Context) error {
-	return errors.New("not implemented")
-}
-func (s *testSink) BatchCount() int { return s.batchCount }
-func (s *testSink) BatchBytes() int { return s.batchBytes }
-
-func TestGetBatchCountAndBytes(t *testing.T) {
-	t.Run("default from sink", func(t *testing.T) {
-		d := &mockEventDispatcher{
-			sink: sink.NewMockSink(common.BlackHoleSinkType),
-		}
-		count, bytes := getBatchCountAndBytes(d)
-		require.Equal(t, d.sink.BatchCount(), count)
-		require.Equal(t, d.sink.BatchBytes(), bytes)
-	})
-
-	t.Run("override from dispatcher", func(t *testing.T) {
-		d := &mockEventDispatcher{
-			sink:                     sink.NewMockSink(common.BlackHoleSinkType),
-			eventCollectorBatchCount: 123,
-			eventCollectorBatchBytes: 456,
-		}
-		count, bytes := getBatchCountAndBytes(d)
-		require.Equal(t, 123, count)
-		require.Equal(t, 456, bytes)
-	})
-
-	t.Run("sink bytes 0 treated as unlimited", func(t *testing.T) {
-		d := &mockEventDispatcher{
-			sink: &testSink{
-				sinkType:   common.KafkaSinkType,
-				batchCount: 100,
-				batchBytes: 0,
-				isNormal:   true,
-			},
-		}
-		count, bytes := getBatchCountAndBytes(d)
-		require.Equal(t, 100, count)
-		require.Greater(t, bytes, 0)
-	})
-}
-
 func TestRemoveLastDispatcher(t *testing.T) {
 	ctx := context.Background()
 	nodeInfo := node.NewInfo("127.0.0.1:18300", "")
@@ -289,19 +223,16 @@ func TestRemoveLastDispatcher(t *testing.T) {
 		id:           common.NewDispatcherID(),
 		tableSpan:    &heartbeatpb.TableSpan{TableID: 1},
 		changefeedID: cfID1,
-		sink:         sink.NewMockSink(common.BlackHoleSinkType),
 	}
 	d2 := &mockEventDispatcher{
 		id:           common.NewDispatcherID(),
 		tableSpan:    &heartbeatpb.TableSpan{TableID: 2},
 		changefeedID: cfID1,
-		sink:         sink.NewMockSink(common.BlackHoleSinkType),
 	}
 	d3 := &mockEventDispatcher{
 		id:           common.NewDispatcherID(),
 		tableSpan:    &heartbeatpb.TableSpan{TableID: 3},
 		changefeedID: cfID2,
-		sink:         sink.NewMockSink(common.BlackHoleSinkType),
 	}
 
 	// Add dispatchers
