@@ -609,7 +609,9 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	item, ok = status.availableMemoryQuota.Load(remoteID)
 	if !ok {
 		log.Info("available memory quota is not set, skip scan",
-			zap.String("changefeed", changefeedID.String()), zap.String("remote", remoteID.String()))
+			zap.String("changefeed", changefeedID.String()),
+			zap.Stringer("dispatcherID", task.id),
+			zap.String("remote", remoteID.String()))
 		return
 	}
 
@@ -623,6 +625,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	if !ok {
 		log.Debug("changefeed available memory quota is not enough, skip scan",
 			zap.String("changefeed", changefeedID.String()),
+			zap.Stringer("dispatcherID", task.id),
 			zap.String("remote", remoteID.String()),
 			zap.Uint64("available", available.Load()),
 			zap.Uint64("required", uint64(sl.maxDMLBytes)))
@@ -633,10 +636,15 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter, task.info.GetMode())
 	scannedBytes, events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
-	if scannedBytes < 0 {
+	if scannedBytes <= 0 {
 		releaseQuota(available, uint64(sl.maxDMLBytes))
-	} else if scannedBytes >= 0 && scannedBytes < sl.maxDMLBytes {
-		releaseQuota(available, uint64(sl.maxDMLBytes-scannedBytes))
+	} else if scannedBytes > 0 {
+		if scannedBytes < sl.maxDMLBytes {
+			releaseQuota(available, uint64(sl.maxDMLBytes-scannedBytes))
+		} else if scannedBytes > int64(sl.maxDMLBytes) {
+			extra := scannedBytes - int64(sl.maxDMLBytes)
+			allocQuota(available, uint64(extra))
+		}
 	}
 
 	if interrupted {

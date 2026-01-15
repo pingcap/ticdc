@@ -3,9 +3,7 @@ package eventcollector
 import (
 	"time"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	"go.uber.org/zap"
 )
 
 func (c *EventCollector) updateScanMaxTsForChangefeed(cfStat *changefeedStat, memoryUsageRatio float64) uint64 {
@@ -48,40 +46,6 @@ func (c *EventCollector) updateScanMaxTsForChangefeed(cfStat *changefeedStat, me
 		maxInterval = min(maxInterval, minSyncPointInterval)
 	}
 
-	interval, needReset := cfStat.scanWindow.observe(memoryUsageRatio, maxInterval)
-	if needReset {
-		log.Warn("changefeed memory usage exceeds reset threshold for too long, reset dispatchers",
-			zap.Stringer("changefeedID", cfStat.changefeedID),
-			zap.Float64("memoryUsageRatio", memoryUsageRatio),
-			zap.Duration("scanInterval", interval),
-			zap.Duration("maxInterval", maxInterval),
-		)
-		c.resetChangefeedDispatchers(cfStat)
-	}
-
-	return calcScanMaxTs(scanLimitBaseTs, interval)
-}
-
-func (c *EventCollector) resetChangefeedDispatchers(cfStat *changefeedStat) {
-	cfStat.dispatcherIDs.Range(func(k, _ any) bool {
-		dispatcherID := k.(common.DispatcherID)
-		v, ok := c.dispatcherMap.Load(dispatcherID)
-		if !ok {
-			return true
-		}
-		stat := v.(*dispatcherStat)
-
-		// Best-effort: drop buffered events first to free memory quickly.
-		if common.IsRedoMode(stat.target.GetMode()) {
-			c.redoDs.Release(dispatcherID)
-		} else {
-			c.ds.Release(dispatcherID)
-		}
-
-		eventServiceID := stat.connState.getEventServiceID()
-		if eventServiceID != "" {
-			stat.reset(eventServiceID)
-		}
-		return true
-	})
+	scanInterval := cfStat.scanWindow.observe(memoryUsageRatio, maxInterval)
+	return calcScanMaxTs(scanLimitBaseTs, scanInterval)
 }

@@ -16,8 +16,7 @@ const (
 
 	adaptiveScanWindowAdjustAfter = 30 * time.Second
 
-	adaptiveScanWindowShrinkThreshold = 1.10
-	adaptiveScanWindowResetThreshold  = 1.50
+	adaptiveScanWindowShrinkThreshold = 1.20
 	adaptiveScanWindowGrowThreshold   = 0.50
 )
 
@@ -36,7 +35,7 @@ func newAdaptiveScanWindow() *adaptiveScanWindow {
 	}
 }
 
-func (w *adaptiveScanWindow) observe(memoryUsageRatio float64, maxInterval time.Duration) (interval time.Duration, needReset bool) {
+func (w *adaptiveScanWindow) observe(memoryUsageRatio float64, maxInterval time.Duration) (interval time.Duration) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -58,13 +57,6 @@ func (w *adaptiveScanWindow) observe(memoryUsageRatio float64, maxInterval time.
 	}
 	if w.interval > maxInterval {
 		w.interval = maxInterval
-	}
-
-	if memoryUsageRatio > adaptiveScanWindowResetThreshold {
-		w.overShrinkFor = 0
-		w.underGrowFor = 0
-		w.interval = adaptiveScanWindowMin
-		return w.interval, true
 	}
 
 	if memoryUsageRatio > adaptiveScanWindowShrinkThreshold {
@@ -97,7 +89,7 @@ func (w *adaptiveScanWindow) observe(memoryUsageRatio float64, maxInterval time.
 	if w.interval < adaptiveScanWindowMin {
 		w.interval = adaptiveScanWindowMin
 	}
-	return w.interval, false
+	return w.interval
 }
 
 func calcScanMaxTs(scanLimitBaseTs uint64, interval time.Duration) uint64 {
