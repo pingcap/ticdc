@@ -6,11 +6,22 @@ on:
     branches:
       - master
       - "release-[0-9].[0-9]*"
-    paths-ignore:
-      - '**/*.md'
-      - '**/OWNERS'
-      - 'OWNERS'
-      - 'OWNERS_ALIASES'
+    paths:
+      - '**'
+      - '!**/*.md'
+      - '!**/*.png'
+      - '!**/*.jpeg'
+      - '!**/*.jpg'
+      - '!**/*.gif'
+      - '!**/*.svg'
+      - '!**/*.pdf'
+      - '!**/*.yaml'
+      - '!**/*.json'
+      - '!**/*.toml'
+      - '!**/Dockerfile'
+      - '!**/OWNERS'
+      - '!**/OWNERS_ALIASES'
+      - '.github/workflows/**'
 
 # See: https://docs.github.com/en/actions/reference/workflow-syntax-for-github-actions#concurrency.
 concurrency:
@@ -19,9 +30,6 @@ concurrency:
 
 jobs:
   build_and_test:
-    # Only run ci when PR is not draft
-    if: github.event.pull_request.draft == false
-
     runs-on: ubuntu-latest
     name: Build and Unit Test
     steps:
@@ -43,5 +51,8 @@ jobs:
       - name: Build CDC
         run: make cdc
 
-      - name: Run Unit Tests
-        run: make unit_test
+      - name: Run Classic Unit Tests
+        run: make unit_test_in_verify_ci
+
+      - name: Run Next-Gen Unit Tests
+        run: make unit_test_in_verify_ci_next_gen
