@@ -3,15 +3,18 @@ package eventcollector
 import (
 	"time"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"go.uber.org/zap"
 )
 
 func (c *EventCollector) updateScanMaxTsForChangefeed(cfStat *changefeedStat, memoryUsageRatio float64) uint64 {
 	var (
 		scanLimitBaseTs uint64 = ^uint64(0)
 
-		hasSyncPoint         bool
-		minSyncPointInterval time.Duration
+		syncPointSeen     bool
+		syncPointEnabled  bool
+		syncPointInterval time.Duration
 	)
 
 	cfStat.dispatcherIDs.Range(func(k, _ any) bool {
@@ -27,11 +30,25 @@ func (c *EventCollector) updateScanMaxTsForChangefeed(cfStat *changefeedStat, me
 			scanLimitBaseTs = checkpointTs
 		}
 
-		if stat.target.EnableSyncPoint() {
-			interval := stat.target.GetSyncPointInterval()
-			if interval > 0 && (!hasSyncPoint || interval < minSyncPointInterval) {
-				hasSyncPoint = true
-				minSyncPointInterval = interval
+		enableSyncPoint := stat.target.EnableSyncPoint()
+		interval := stat.target.GetSyncPointInterval()
+		if !syncPointSeen {
+			syncPointSeen = true
+			syncPointEnabled = enableSyncPoint
+			syncPointInterval = interval
+		} else {
+			if enableSyncPoint != syncPointEnabled {
+				log.Panic("syncpoint enabled mismatch among dispatchers",
+					zap.Stringer("changefeedID", cfStat.changefeedID),
+					zap.Stringer("dispatcherID", dispatcherID),
+					zap.Bool("enableSyncPoint", enableSyncPoint))
+			}
+			if interval != syncPointInterval {
+				log.Panic("syncpoint interval mismatch among dispatchers",
+					zap.Stringer("changefeedID", cfStat.changefeedID),
+					zap.Stringer("dispatcherID", dispatcherID),
+					zap.Duration("syncPointInterval", syncPointInterval),
+					zap.Duration("interval", interval))
 			}
 		}
 		return true
@@ -42,8 +59,8 @@ func (c *EventCollector) updateScanMaxTsForChangefeed(cfStat *changefeedStat, me
 	}
 
 	maxInterval := adaptiveScanWindowMax
-	if hasSyncPoint && minSyncPointInterval > 0 {
-		maxInterval = min(maxInterval, minSyncPointInterval)
+	if syncPointEnabled && syncPointInterval > 0 {
+		maxInterval = min(maxInterval, syncPointInterval)
 	}
 
 	scanInterval := cfStat.scanWindow.observe(memoryUsageRatio, maxInterval)

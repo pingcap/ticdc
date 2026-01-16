@@ -8,15 +8,13 @@ import (
 )
 
 const (
-	adaptiveScanWindowTickInterval = time.Second
-
 	adaptiveScanWindowInitial = 5 * time.Second
 	adaptiveScanWindowMin     = 1 * time.Second
 	adaptiveScanWindowMax     = 30 * time.Minute
 
 	adaptiveScanWindowAdjustAfter = 30 * time.Second
 
-	adaptiveScanWindowShrinkThreshold = 1.20
+	adaptiveScanWindowShrinkThreshold = 1.10
 	adaptiveScanWindowGrowThreshold   = 0.50
 )
 
@@ -25,13 +23,19 @@ type adaptiveScanWindow struct {
 
 	interval time.Duration
 
+	lastObserveTime time.Time
+	now             func() time.Time
+
 	overShrinkFor time.Duration
 	underGrowFor  time.Duration
 }
 
 func newAdaptiveScanWindow() *adaptiveScanWindow {
+	now := time.Now
 	return &adaptiveScanWindow{
-		interval: adaptiveScanWindowInitial,
+		interval:        adaptiveScanWindowInitial,
+		now:             now,
+		lastObserveTime: now(),
 	}
 }
 
@@ -39,8 +43,19 @@ func (w *adaptiveScanWindow) observe(memoryUsageRatio float64, maxInterval time.
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	now := time.Now
+	if w.now != nil {
+		now = w.now
+	}
+	currentTime := now()
+	delta := currentTime.Sub(w.lastObserveTime)
+	if delta < 0 {
+		delta = 0
+	}
+	w.lastObserveTime = currentTime
+
 	if maxInterval <= 0 {
-		maxInterval = adaptiveScanWindowMin
+		maxInterval = adaptiveScanWindowMax
 	}
 	if maxInterval > adaptiveScanWindowMax {
 		maxInterval = adaptiveScanWindowMax
@@ -60,13 +75,13 @@ func (w *adaptiveScanWindow) observe(memoryUsageRatio float64, maxInterval time.
 	}
 
 	if memoryUsageRatio > adaptiveScanWindowShrinkThreshold {
-		w.overShrinkFor += adaptiveScanWindowTickInterval
+		w.overShrinkFor += delta
 	} else {
 		w.overShrinkFor = 0
 	}
 
 	if memoryUsageRatio >= 0 && memoryUsageRatio < adaptiveScanWindowGrowThreshold {
-		w.underGrowFor += adaptiveScanWindowTickInterval
+		w.underGrowFor += delta
 	} else {
 		w.underGrowFor = 0
 	}

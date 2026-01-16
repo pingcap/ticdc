@@ -11,38 +11,41 @@ func TestAdaptiveScanWindowAdjust(t *testing.T) {
 	t.Parallel()
 
 	w := newAdaptiveScanWindow()
-	maxInterval := 30 * time.Minute
+	now := time.Unix(0, 0)
+	w.now = func() time.Time { return now }
+	w.lastObserveTime = now
+
+	step := func(ratio float64, maxInterval time.Duration) time.Duration {
+		now = now.Add(time.Second)
+		return w.observe(ratio, maxInterval)
+	}
 
 	// Grow after 30 seconds below 50%.
 	for range 29 {
-		interval, needReset := w.observe(0.49, maxInterval)
-		require.False(t, needReset)
+		interval := step(0.49, adaptiveScanWindowMax)
 		require.Equal(t, 5*time.Second, interval)
 	}
-	interval, needReset := w.observe(0.49, maxInterval)
-	require.False(t, needReset)
+	interval := step(0.49, adaptiveScanWindowMax)
 	require.Equal(t, 10*time.Second, interval)
 
 	// Shrink after 30 seconds above 110%.
 	for range 29 {
-		interval, needReset = w.observe(1.11, maxInterval)
-		require.False(t, needReset)
+		interval = step(1.11, adaptiveScanWindowMax)
 		require.Equal(t, 10*time.Second, interval)
 	}
-	interval, needReset = w.observe(1.11, maxInterval)
-	require.False(t, needReset)
+	interval = step(1.11, adaptiveScanWindowMax)
 	require.Equal(t, 5*time.Second, interval)
 
-	// Reset immediately above 150%.
-	interval, needReset = w.observe(1.51, maxInterval)
-	require.True(t, needReset)
-	require.Equal(t, 1*time.Second, interval)
-
-	// Clamp to max interval.
-	for range 120 {
-		interval, needReset = w.observe(0.0, 2*time.Second)
-		require.False(t, needReset)
+	// Above 150% uses the same shrink logic (no reset here).
+	for range 29 {
+		interval = step(1.51, adaptiveScanWindowMax)
+		require.Equal(t, 5*time.Second, interval)
 	}
-	require.LessOrEqual(t, interval, 2*time.Second)
-	require.GreaterOrEqual(t, interval, 1*time.Second)
+	interval = step(1.51, adaptiveScanWindowMax)
+	require.Equal(t, 2500*time.Millisecond, interval)
+
+	// Clamp to provided max interval.
+	w.interval = 100 * time.Hour
+	interval = step(0.0, 2*time.Second)
+	require.Equal(t, 2*time.Second, interval)
 }
