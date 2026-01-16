@@ -15,11 +15,13 @@ package dynstream
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/deque"
 	"go.uber.org/zap"
 )
@@ -235,7 +237,8 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 			}
 			eventBuf = eventBuf[:0]
 		}
-		path *pathInfo[A, P, T, D, H]
+		path   *pathInfo[A, P, T, D, H]
+		nBytes int
 	)
 
 	// For testing. Don't handle events until this wait group is done.
@@ -278,7 +281,12 @@ Loop:
 				handleEvent(e)
 				eventQueueEmpty = false
 			default:
-				eventBuf, path = s.eventQueue.popEvents(eventBuf)
+				start := time.Now()
+				eventBuf, path, nBytes = s.eventQueue.popEvents(eventBuf)
+				metrics.DynamicStreamBatchDuration.WithLabelValues(path.areaStr).Observe(float64(time.Since(start)))
+				metrics.DynamicStreamBatchCount.WithLabelValues(path.areaStr).Observe(float64(len(eventBuf)))
+				metrics.DynamicStreamBatchBytes.WithLabelValues(path.areaStr).Observe(float64(nBytes))
+
 				if len(eventBuf) == 0 {
 					eventQueueEmpty = true
 					continue Loop
@@ -315,6 +323,8 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	path P
 	dest D
 
+	areaStr string
+
 	// The current stream this path belongs to.
 	stream *stream[A, P, T, D, H]
 	// This field is used to mark the path as removed, so that the handle goroutine can ignore it.
@@ -339,6 +349,7 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 func newPathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](area A, path P, dest D) *pathInfo[A, P, T, D, H] {
 	pi := &pathInfo[A, P, T, D, H]{
 		area:         area,
+		areaStr:      fmt.Sprint(area),
 		path:         path,
 		dest:         dest,
 		pendingQueue: deque.NewDeque[eventWrap[A, P, T, D, H]](BlockLenInPendingQueue),
