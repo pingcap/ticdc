@@ -311,10 +311,6 @@ func (db *ChangefeedDB) CalculateGlobalGCSafepoint() uint64 {
 
 	var minCpts uint64 = math.MaxUint64
 
-	if len(db.changefeeds) == 0 {
-		log.Warn("no changefeed found when calculate gc safepoint")
-	}
-
 	for _, cf := range db.changefeeds {
 		info := cf.GetInfo()
 		if info == nil || !info.NeedBlockGC() {

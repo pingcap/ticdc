@@ -758,6 +758,30 @@ func TestCoordinatorCreateChangefeedSnapshotLostByGCNoNeedReportError(t *testing
 	require.NoError(t, err)
 }
 
+func TestUpdateGlobalGcSafepointSkipWhenControllerNotInitialized(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	gcManager := txngc.NewMockManager(ctrl)
+	gcManager.EXPECT().
+		TryUpdateServiceGCSafePoint(gomock.Any(), gomock.Any(), gomock.Any()).
+		Times(0)
+
+	controller := &Controller{
+		initialized:  atomic.NewBool(false),
+		changefeedDB: changefeed.NewChangefeedDB(1),
+	}
+
+	co := &coordinator{
+		controller: controller,
+		gcManager:  gcManager,
+		pdClock:    pdutil.NewClock4Test(),
+	}
+
+	err := co.updateGlobalGcSafepoint(context.Background(), true)
+	require.NoError(t, err)
+}
+
 type maintainNode struct {
 	cancel  context.CancelFunc
 	mc      messaging.MessageCenter

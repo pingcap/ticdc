@@ -196,10 +196,6 @@ func (c *coordinator) run(ctx context.Context) error {
 		return errors.New("coordinator run with error")
 	})
 
-	if err := c.updateGCSafepoint(ctx, true); err != nil {
-		log.Warn("update gc safepoint failed at the first time", zap.Error(err))
-	}
-
 	gcTicker := time.NewTicker(updateGCTickerInterval)
 	defer gcTicker.Stop()
 	for {
@@ -436,8 +432,6 @@ func (c *coordinator) updateGlobalGcSafepoint(ctx context.Context, force bool) e
 	if minCheckpointTs == math.MaxUint64 {
 		ts := c.pdClock.CurrentTime()
 		minCheckpointTs = oracle.GoTimeToTS(ts)
-		log.Warn("no changefeed found, set minCheckpointTs as the current pd tso",
-			zap.Uint64("minCheckpointTs", minCheckpointTs), zap.Bool("force", force))
 	}
 	// checkpoint means all data (-inf, checkpointTs] already flushed to the downstream.
 	// When the changefeed starts up, the start-ts = checkpointTs, and TiKV return data [checkpointTs + 1, +inf)
@@ -479,6 +473,13 @@ func (c *coordinator) updateKeyspaceGcBarrier(
 func (c *coordinator) updateGCSafepointByChangefeed(
 	ctx context.Context, changefeedID common.ChangeFeedID, force bool,
 ) error {
+	// During bootstrap, `changefeedDB` can be empty or partially populated. Updating gc safepoint at this time may
+	// incorrectly advance the TiCDC service gc safepoint and cause snapshot loss for existing changefeeds.
+	if !c.controller.initialized.Load() {
+		log.Warn("skip update gc safepoint because coordinator is not initialized yet", zap.Bool("force", force))
+		return nil
+	}
+
 	if kerneltype.IsNextGen() {
 		cfInfo, _, err := c.GetChangefeed(ctx, changefeedID.DisplayName)
 		if err != nil {
@@ -500,6 +501,13 @@ func (c *coordinator) updateGCSafepointByChangefeed(
 // On next gen, we should update the gc barrier for all keyspaces
 // Otherwise we should update the global gc safepoint
 func (c *coordinator) updateGCSafepoint(ctx context.Context, force bool) error {
+	// During bootstrap, `changefeedDB` can be empty or partially populated. Updating gc safepoint at this time may
+	// incorrectly advance the TiCDC service gc safepoint and cause snapshot loss for existing changefeeds.
+	if !c.controller.initialized.Load() {
+		log.Warn("skip update gc safepoint because coordinator is not initialized yet", zap.Bool("force", force))
+		return nil
+	}
+
 	if kerneltype.IsNextGen() {
 		return c.updateAllKeyspaceGcBarriers(ctx, force)
 	}
