@@ -279,7 +279,6 @@ Loop:
 				path.lastHandleEventTs.Store(uint64(s.handler.GetTimestamp(eventBuf[0])))
 
 				path.blocking.Store(s.handler.Handle(path.dest, eventBuf...))
-
 				if path.blocking.Load() {
 					s.eventQueue.blockPath(path)
 				}
@@ -317,7 +316,6 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	// Fields used by the memory control.
 	areaMemStat *areaMemStat[A, P, T, D, H]
 
-	// batcher used to batch events
 	batcher *batcher[T]
 
 	pendingSize atomic.Int64 // The total size(bytes) of pending events in the pendingQueue of the path.

@@ -14,10 +14,12 @@
 package dynstream
 
 import (
+	"fmt"
 	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/deque"
 )
 
@@ -159,6 +161,12 @@ func (q *eventQueue[A, P, T, D, H]) popEvents() ([]T, *pathInfo[A, P, T, D, H]) 
 			q.signalQueue.PopFront()
 		}
 		q.totalPendingLength.Add(-int64(count))
-		return batcher.reset(), path
+		events, nBytes, duration := batcher.flush()
+
+		area := fmt.Sprint(path.area)
+		metrics.DynamicStreamBatchSize.WithLabelValues(area).Observe(float64(len(events)))
+		metrics.DynamicStreamBatchBytes.WithLabelValues(area).Observe(float64(nBytes))
+		metrics.DynamicStreamBatchDuration.WithLabelValues(area).Observe(float64(duration))
+		return events, path
 	}
 }

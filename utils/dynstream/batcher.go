@@ -13,6 +13,8 @@
 
 package dynstream
 
+import "time"
+
 type batchConfig struct {
 	maxCount int
 	maxBytes int
@@ -36,6 +38,8 @@ type batcher[T Event] struct {
 	count  int
 	nBytes int
 	buf    []T
+
+	start time.Time
 }
 
 func newDefaultBatcher[T Event]() *batcher[T] {
@@ -53,6 +57,9 @@ func newBatcher[T Event](cfg batchConfig) *batcher[T] {
 }
 
 func (b *batcher[T]) addEvent(event T, size int) {
+	if len(b.buf) == 0 {
+		b.start = time.Now()
+	}
 	b.buf = append(b.buf, event)
 	b.count++
 	b.nBytes += size
@@ -63,10 +70,12 @@ func (b *batcher[T]) isFull() bool {
 	return b.count >= b.config.maxCount || b.nBytes >= b.config.maxBytes
 }
 
-func (b *batcher[T]) reset() []T {
+func (b *batcher[T]) flush() ([]T, int, time.Duration) {
 	events := b.buf
+	nBytes := b.nBytes
 	b.buf = b.buf[:0]
 	b.count = 0
 	b.nBytes = 0
-	return events
+
+	return events, nBytes, time.Since(b.start)
 }
