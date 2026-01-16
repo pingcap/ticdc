@@ -124,8 +124,8 @@
   "editable": true,
   "gnetId": null,
   "graphTooltip": 1,
-  "id": 33,
-  "iteration": 1764311940562,
+  "id": 34,
+  "iteration": 1768558869284,
   "links": [],
   "panels": [
     {
@@ -3279,7 +3279,6 @@
           ],
           "thresholds": [
             {
-              "$$hashKey": "object:411",
               "colorMode": "critical",
               "fill": true,
               "line": true,
@@ -3306,7 +3305,6 @@
           },
           "yaxes": [
             {
-              "$$hashKey": "object:283",
               "decimals": 0,
               "format": "s",
               "label": null,
@@ -3316,7 +3314,6 @@
               "show": true
             },
             {
-              "$$hashKey": "object:284",
               "format": "short",
               "label": null,
               "logBase": 1,
@@ -3465,7 +3462,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 42
+            "y": 73
           },
           "hiddenSeries": false,
           "id": 20025,
@@ -3561,7 +3558,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 42
+            "y": 73
           },
           "hiddenSeries": false,
           "id": 22258,
@@ -3657,7 +3654,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 50
+            "y": 81
           },
           "hiddenSeries": false,
           "id": 22266,
@@ -3747,7 +3744,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 50
+            "y": 81
           },
           "hiddenSeries": false,
           "id": 22260,
@@ -8976,7 +8973,7 @@
     ]
   },
   "timezone": "browser",
-  "title": "${DS_TEST-CLUSTER}-TiCDC-New-Arch-KeyspaceName",
-  "uid": "lGT5hED6vqTn",
-  "version": 36
+  "title": "test-cluster-TiCDC-New-Arch",
+  "uid": "lGT5hED6vqTnxx",
+  "version": 3
 }
