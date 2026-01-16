@@ -58,3 +58,28 @@ func TestPendingScheduleEventMapPopIfHead(t *testing.T) {
 	require.True(t, ready)
 	require.Equal(t, event2, candidate)
 }
+
+// TestPendingScheduleEventMapOrdersDDLBeforeSyncpointAtSameTs verifies event ordering when DDL and syncpoint
+// share the same commitTs. This matters because scheduling must respect the DDL-before-syncpoint ordering
+// guarantee to avoid advancing a syncpoint before the corresponding DDL barrier is handled.
+func TestPendingScheduleEventMapOrdersDDLBeforeSyncpointAtSameTs(t *testing.T) {
+	m := newPendingScheduleEventMap()
+	ddlBarrier := &BarrierEvent{commitTs: 10, isSyncPoint: false}
+	syncpointBarrier := &BarrierEvent{commitTs: 10, isSyncPoint: true}
+
+	// Add in reverse order to ensure ordering is determined by the heap, not insertion order.
+	m.add(syncpointBarrier)
+	m.add(ddlBarrier)
+
+	ready, candidate := m.popIfHead(syncpointBarrier)
+	require.False(t, ready)
+	require.Equal(t, ddlBarrier, candidate)
+
+	ready, candidate = m.popIfHead(ddlBarrier)
+	require.True(t, ready)
+	require.Equal(t, ddlBarrier, candidate)
+
+	ready, candidate = m.popIfHead(syncpointBarrier)
+	require.True(t, ready)
+	require.Equal(t, syncpointBarrier, candidate)
+}
