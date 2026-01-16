@@ -34,7 +34,7 @@ const (
 	// we consider it is in-active and remove it.
 	heartbeatTimeout = time.Second * 3600
 
-	minScanLimitInBytes     = 1024        // 1KB
+	minScanLimitInBytes     = 8 * 1024    // 8KB
 	maxScanLimitInBytes     = 1024 * 1024 // 1MB
 	updateScanLimitInterval = time.Second * 10
 )
@@ -92,7 +92,6 @@ type dispatcherStat struct {
 	maxScanLimitInBytes     atomic.Int64
 	lastUpdateScanLimitTime atomic.Time
 	lastScanBytes           atomic.Int64
-	availableMemoryQuota    atomic.Uint64
 
 	lastReceivedResolvedTsTime atomic.Time
 	lastSentResolvedTsTime     atomic.Time
@@ -154,7 +153,6 @@ func newDispatcherStat(
 
 	// A small value to avoid too many scan tasks at the first place.
 	dispStat.lastScanBytes.Store(minScanLimitInBytes)
-	dispStat.availableMemoryQuota.Store(minScanLimitInBytes)
 
 	if info.SyncPointEnabled() {
 		dispStat.enableSyncPoint = true
@@ -427,6 +425,7 @@ type changefeedStatus struct {
 	dispatchers sync.Map // common.DispatcherID -> *atomic.Pointer[dispatcherStat]
 
 	availableMemoryQuota sync.Map // nodeID -> atomic.Uint64 (memory quota in bytes)
+	scanMaxTs            sync.Map // nodeID -> atomic.Uint64 (scan max ts in tso, 0 means no limit)
 }
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {

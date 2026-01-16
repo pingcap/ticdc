@@ -36,7 +36,7 @@ func TestCongestionControl(t *testing.T) {
 	// Event type (2 bytes)
 	require.Equal(t, uint16(TypeCongestionControl), binary.BigEndian.Uint16(bytes[4:6]), "event type")
 	// Version (2 bytes)
-	require.Equal(t, uint16(CongestionControlVersion1), binary.BigEndian.Uint16(bytes[6:8]), "version")
+	require.Equal(t, uint16(CongestionControlVersion2), binary.BigEndian.Uint16(bytes[6:8]), "version")
 
 	var decoded CongestionControl
 	err = decoded.Unmarshal(bytes)
@@ -293,6 +293,7 @@ func TestCongestionControlVersionCompatibility(t *testing.T) {
 
 	// Test that we can successfully marshal and unmarshal with Version1
 	control := NewCongestionControl()
+	control.version = CongestionControlVersion1
 	control.clusterID = 54321
 	gid := common.NewGID()
 	control.AddAvailableMemory(gid, 2048)
@@ -308,4 +309,26 @@ func TestCongestionControlVersionCompatibility(t *testing.T) {
 	require.Len(t, decoded.availables, 1)
 	require.Equal(t, gid, decoded.availables[0].Gid)
 	require.Equal(t, uint64(2048), decoded.availables[0].Available)
+}
+
+func TestCongestionControlV2ScanMaxTs(t *testing.T) {
+	t.Parallel()
+
+	control := NewCongestionControl()
+	control.clusterID = 11111
+	gid := common.NewGID()
+	dispatcherAvailable := map[common.DispatcherID]uint64{
+		common.NewDispatcherID(): 500,
+	}
+	control.AddAvailableMemoryWithDispatchersAndScanMaxTs(gid, 1024, 2048, dispatcherAvailable)
+
+	data, err := control.Marshal()
+	require.NoError(t, err)
+
+	var decoded CongestionControl
+	err = decoded.Unmarshal(data)
+	require.NoError(t, err)
+	require.Equal(t, CongestionControlVersion2, decoded.version)
+	require.Len(t, decoded.availables, 1)
+	require.Equal(t, uint64(2048), decoded.availables[0].ScanMaxTs)
 }

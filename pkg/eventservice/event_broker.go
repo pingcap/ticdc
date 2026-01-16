@@ -392,6 +392,21 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		return false, common.DataRange{}
 	}
 
+	remoteID := node.ID(task.info.GetServerID())
+	if item, ok := task.changefeedStat.scanMaxTs.Load(remoteID); ok {
+		scanMaxTs := item.(*atomic.Uint64).Load()
+		// scanMaxTs == 0 means no limit.
+		if scanMaxTs > 0 && scanMaxTs < dataRange.CommitTsEnd {
+			// If the scan window is fully consumed, skip scanning and only send a "signal" resolved-ts.
+			if scanMaxTs <= dataRange.CommitTsStart {
+				c.sendSignalResolvedTs(task)
+				metrics.EventServiceSkipScanCount.WithLabelValues("scan_window").Inc()
+				return false, common.DataRange{}
+			}
+			dataRange.CommitTsEnd = scanMaxTs
+		}
+	}
+
 	keyspaceMeta := common.KeyspaceMeta{
 		ID:   task.info.GetTableSpan().KeyspaceID,
 		Name: task.changefeedStat.changefeedID.Keyspace(),
@@ -594,7 +609,9 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	item, ok = status.availableMemoryQuota.Load(remoteID)
 	if !ok {
 		log.Info("available memory quota is not set, skip scan",
-			zap.String("changefeed", changefeedID.String()), zap.String("remote", remoteID.String()))
+			zap.String("changefeed", changefeedID.String()),
+			zap.Stringer("dispatcherID", task.id),
+			zap.String("remote", remoteID.String()))
 		return
 	}
 
@@ -608,6 +625,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	if !ok {
 		log.Debug("changefeed available memory quota is not enough, skip scan",
 			zap.String("changefeed", changefeedID.String()),
+			zap.Stringer("dispatcherID", task.id),
 			zap.String("remote", remoteID.String()),
 			zap.Uint64("available", available.Load()),
 			zap.Uint64("required", uint64(sl.maxDMLBytes)))
@@ -616,19 +634,17 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	if uint64(sl.maxDMLBytes) > task.availableMemoryQuota.Load() {
-		log.Debug("dispatcher available memory quota is not enough, skip scan", zap.Stringer("dispatcher", task.id), zap.Uint64("available", task.availableMemoryQuota.Load()), zap.Int64("required", int64(sl.maxDMLBytes)))
-		c.sendSignalResolvedTs(task)
-		metrics.EventServiceSkipScanCount.WithLabelValues("dispatcher_quota").Inc()
-		return
-	}
-
 	scanner := newEventScanner(c.eventStore, c.schemaStore, c.mounter, task.info.GetMode())
 	scannedBytes, events, interrupted, err := scanner.scan(ctx, task, dataRange, sl)
-	if scannedBytes < 0 {
+	if scannedBytes <= 0 {
 		releaseQuota(available, uint64(sl.maxDMLBytes))
-	} else if scannedBytes >= 0 && scannedBytes < sl.maxDMLBytes {
-		releaseQuota(available, uint64(sl.maxDMLBytes-scannedBytes))
+	} else if scannedBytes > 0 {
+		if scannedBytes < sl.maxDMLBytes {
+			releaseQuota(available, uint64(sl.maxDMLBytes-scannedBytes))
+		} else if scannedBytes > int64(sl.maxDMLBytes) {
+			extra := scannedBytes - int64(sl.maxDMLBytes)
+			allocQuota(available, uint64(extra))
+		}
 	}
 
 	if interrupted {
@@ -1177,12 +1193,10 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 	}
 
 	holder := make(map[common.GID]uint64, len(availables))
-	dispatcherAvailable := make(map[common.DispatcherID]uint64, len(availables))
+	scanMaxTsHolder := make(map[common.GID]uint64, len(availables))
 	for _, item := range availables {
 		holder[item.Gid] = item.Available
-		for dispatcherID, available := range item.DispatcherAvailable {
-			dispatcherAvailable[dispatcherID] = available
-		}
+		scanMaxTsHolder[item.Gid] = item.ScanMaxTs
 	}
 
 	c.changefeedMap.Range(func(k, v interface{}) bool {
@@ -1193,15 +1207,8 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 			changefeed.availableMemoryQuota.Store(from, atomic.NewUint64(available))
 			metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(available))
 		}
-		return true
-	})
-
-	c.dispatchers.Range(func(k, v interface{}) bool {
-		dispatcherID := k.(common.DispatcherID)
-		dispatcher := v.(*atomic.Pointer[dispatcherStat]).Load()
-		available, ok := dispatcherAvailable[dispatcherID]
-		if ok {
-			dispatcher.availableMemoryQuota.Store(available)
+		if scanMaxTs, ok := scanMaxTsHolder[changefeedID.ID()]; ok {
+			changefeed.scanMaxTs.Store(from, atomic.NewUint64(scanMaxTs))
 		}
 		return true
 	})

@@ -21,26 +21,30 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 )
 
-const CongestionControlVersion1 = 1
+const (
+	CongestionControlVersion1 = 1
+	CongestionControlVersion2 = 2
+)
 
 type AvailableMemory struct {
 	Version             byte                           // 1 byte, it should be the same as CongestionControlVersion
 	Gid                 common.GID                     // GID is the internal representation of ChangeFeedID
 	Available           uint64                         // in bytes, used to report the Available memory
+	ScanMaxTs           uint64                         // in tso, used to limit scan window (0 means no limit)
 	DispatcherCount     uint32                         // used to report the number of dispatchers
 	DispatcherAvailable map[common.DispatcherID]uint64 // in bytes, used to report the memory usage of each dispatcher
 }
 
 func NewAvailableMemory(gid common.GID, available uint64) AvailableMemory {
 	return AvailableMemory{
-		Version:             CongestionControlVersion1,
+		Version:             CongestionControlVersion2,
 		Gid:                 gid,
 		Available:           available,
 		DispatcherAvailable: make(map[common.DispatcherID]uint64),
 	}
 }
 
-func (m AvailableMemory) Marshal() []byte {
+func (m AvailableMemory) marshalV1() []byte {
 	buf := bytes.NewBuffer(make([]byte, 0))
 	buf.Write(m.Gid.Marshal())
 	binary.Write(buf, binary.BigEndian, m.Available)
@@ -52,9 +56,23 @@ func (m AvailableMemory) Marshal() []byte {
 	return buf.Bytes()
 }
 
-func (m *AvailableMemory) Unmarshal(buf *bytes.Buffer) {
+func (m AvailableMemory) marshalV2() []byte {
+	buf := bytes.NewBuffer(make([]byte, 0))
+	buf.Write(m.Gid.Marshal())
+	binary.Write(buf, binary.BigEndian, m.Available)
+	binary.Write(buf, binary.BigEndian, m.ScanMaxTs)
+	binary.Write(buf, binary.BigEndian, m.DispatcherCount)
+	for dispatcherID, available := range m.DispatcherAvailable {
+		buf.Write(dispatcherID.Marshal())
+		binary.Write(buf, binary.BigEndian, available)
+	}
+	return buf.Bytes()
+}
+
+func (m *AvailableMemory) unmarshalV1(buf *bytes.Buffer) {
 	m.Gid.Unmarshal(buf.Next(m.Gid.GetSize()))
 	m.Available = binary.BigEndian.Uint64(buf.Next(8))
+	m.ScanMaxTs = 0
 	m.DispatcherCount = binary.BigEndian.Uint32(buf.Next(4))
 	m.DispatcherAvailable = make(map[common.DispatcherID]uint64)
 	for range m.DispatcherCount {
@@ -64,7 +82,20 @@ func (m *AvailableMemory) Unmarshal(buf *bytes.Buffer) {
 	}
 }
 
-func (m AvailableMemory) GetSize() int {
+func (m *AvailableMemory) unmarshalV2(buf *bytes.Buffer) {
+	m.Gid.Unmarshal(buf.Next(m.Gid.GetSize()))
+	m.Available = binary.BigEndian.Uint64(buf.Next(8))
+	m.ScanMaxTs = binary.BigEndian.Uint64(buf.Next(8))
+	m.DispatcherCount = binary.BigEndian.Uint32(buf.Next(4))
+	m.DispatcherAvailable = make(map[common.DispatcherID]uint64)
+	for range m.DispatcherCount {
+		dispatcherID := common.DispatcherID{}
+		dispatcherID.Unmarshal(buf.Next(dispatcherID.GetSize()))
+		m.DispatcherAvailable[dispatcherID] = binary.BigEndian.Uint64(buf.Next(8))
+	}
+}
+
+func (m AvailableMemory) getSizeV1() int {
 	// changefeedID size + changefeed available size
 	size := m.Gid.GetSize() + 8
 	size += 4 // dispatcher count
@@ -74,6 +105,10 @@ func (m AvailableMemory) GetSize() int {
 		size += dispatcherID.GetSize() + 8
 	}
 	return size
+}
+
+func (m AvailableMemory) getSizeV2() int {
+	return m.getSizeV1() + 8 // scanMaxTs
 }
 
 type CongestionControl struct {
@@ -86,7 +121,7 @@ type CongestionControl struct {
 
 func NewCongestionControl() *CongestionControl {
 	return &CongestionControl{
-		version: CongestionControlVersion1,
+		version: CongestionControlVersion2,
 	}
 }
 
@@ -94,7 +129,15 @@ func (c *CongestionControl) GetSize() int {
 	size := 8 // clusterID
 	size += 4 // changefeed count
 	for _, mem := range c.availables {
-		size += mem.GetSize()
+		switch c.version {
+		case CongestionControlVersion1:
+			size += mem.getSizeV1()
+		case CongestionControlVersion2:
+			size += mem.getSizeV2()
+		default:
+			// Best-effort: fall back to v2 sizing.
+			size += mem.getSizeV2()
+		}
 	}
 	return size
 }
@@ -106,6 +149,11 @@ func (c *CongestionControl) Marshal() ([]byte, error) {
 	switch c.version {
 	case CongestionControlVersion1:
 		payload, err = c.encodeV1()
+		if err != nil {
+			return nil, err
+		}
+	case CongestionControlVersion2:
+		payload, err = c.encodeV2()
 		if err != nil {
 			return nil, err
 		}
@@ -123,7 +171,19 @@ func (c *CongestionControl) encodeV1() ([]byte, error) {
 	_ = binary.Write(buf, binary.BigEndian, c.changefeedCount)
 
 	for _, item := range c.availables {
-		data := item.Marshal()
+		data := item.marshalV1()
+		buf.Write(data)
+	}
+	return buf.Bytes(), nil
+}
+
+func (c *CongestionControl) encodeV2() ([]byte, error) {
+	buf := bytes.NewBuffer(make([]byte, 0))
+	_ = binary.Write(buf, binary.BigEndian, c.clusterID)
+	_ = binary.Write(buf, binary.BigEndian, c.changefeedCount)
+
+	for _, item := range c.availables {
+		data := item.marshalV2()
 		buf.Write(data)
 	}
 	return buf.Bytes(), nil
@@ -143,6 +203,8 @@ func (c *CongestionControl) Unmarshal(data []byte) error {
 	switch version {
 	case CongestionControlVersion1:
 		return c.decodeV1(payload)
+	case CongestionControlVersion2:
+		return c.decodeV2(payload)
 	default:
 		return fmt.Errorf("unsupported CongestionControl version: %d", version)
 	}
@@ -155,7 +217,20 @@ func (c *CongestionControl) decodeV1(data []byte) error {
 	c.availables = make([]AvailableMemory, 0, c.changefeedCount)
 	for i := uint32(0); i < c.changefeedCount; i++ {
 		var item AvailableMemory
-		item.Unmarshal(buf)
+		item.unmarshalV1(buf)
+		c.availables = append(c.availables, item)
+	}
+	return nil
+}
+
+func (c *CongestionControl) decodeV2(data []byte) error {
+	buf := bytes.NewBuffer(data)
+	c.clusterID = binary.BigEndian.Uint64(buf.Next(8))
+	c.changefeedCount = binary.BigEndian.Uint32(buf.Next(4))
+	c.availables = make([]AvailableMemory, 0, c.changefeedCount)
+	for i := uint32(0); i < c.changefeedCount; i++ {
+		var item AvailableMemory
+		item.unmarshalV2(buf)
 		c.availables = append(c.availables, item)
 	}
 	return nil
@@ -169,6 +244,20 @@ func (c *CongestionControl) AddAvailableMemory(gid common.GID, available uint64)
 func (c *CongestionControl) AddAvailableMemoryWithDispatchers(gid common.GID, available uint64, dispatcherAvailable map[common.DispatcherID]uint64) {
 	c.changefeedCount++
 	availMem := NewAvailableMemory(gid, available)
+	availMem.DispatcherAvailable = dispatcherAvailable
+	availMem.DispatcherCount = uint32(len(dispatcherAvailable))
+	c.availables = append(c.availables, availMem)
+}
+
+func (c *CongestionControl) AddAvailableMemoryWithDispatchersAndScanMaxTs(
+	gid common.GID,
+	available uint64,
+	scanMaxTs uint64,
+	dispatcherAvailable map[common.DispatcherID]uint64,
+) {
+	c.changefeedCount++
+	availMem := NewAvailableMemory(gid, available)
+	availMem.ScanMaxTs = scanMaxTs
 	availMem.DispatcherAvailable = dispatcherAvailable
 	availMem.DispatcherCount = uint32(len(dispatcherAvailable))
 	c.availables = append(c.availables, availMem)

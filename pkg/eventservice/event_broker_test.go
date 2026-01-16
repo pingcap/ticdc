@@ -261,6 +261,34 @@ func TestResetDispatcher(t *testing.T) {
 	require.Equal(t, dispInfo.GetID(), newStat.id)
 }
 
+func TestGetScanTaskDataRangeRespectsScanMaxTs(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.startTs = 100
+	info.epoch = 1
+
+	status := broker.getOrSetChangefeedStatus(info.GetChangefeedID())
+	disp := newDispatcherStat(info, 1, 1, nil, status)
+	disp.setHandshaked()
+
+	disp.lastScannedCommitTs.Store(100)
+	disp.lastScannedStartTs.Store(0)
+	disp.receivedResolvedTs.Store(200)
+	disp.eventStoreCommitTs.Store(100)
+
+	status.scanMaxTs.Store(node.ID(info.serverID), atomic.NewUint64(150))
+	ok, dr := broker.getScanTaskDataRange(disp)
+	require.True(t, ok)
+	require.Equal(t, uint64(150), dr.CommitTsEnd)
+
+	// Fully consumed scan window.
+	status.scanMaxTs.Store(node.ID(info.serverID), atomic.NewUint64(100))
+	ok, _ = broker.getScanTaskDataRange(disp)
+	require.False(t, ok)
+}
+
 func TestResetDispatcherConcurrently(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	defer broker.close()
