@@ -728,8 +728,8 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 		// Writing a block event may involve downstream IO (e.g. executing DDL), so it must not block
 		// the dynamic stream goroutine.
 		d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
-			needsScheduleACKTracking := d.IsTableTriggerEventDispatcher() &&
-				(event.GetNeedAddedTables() != nil || event.GetNeedDroppedTables() != nil)
+			noNeedAddAndDrop := event.GetNeedAddedTables() == nil && event.GetNeedDroppedTables() == nil
+			needsScheduleACKTracking := d.IsTableTriggerEventDispatcher() && !noNeedAddAndDrop
 			if needsScheduleACKTracking {
 				// If this is a table trigger event dispatcher, and the DDL leads to add/drop tables,
 				// we track it as a pending schedule-related event until the maintainer ACKs it.
@@ -743,7 +743,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 				d.HandleError(err)
 				return
 			}
-			if event.GetNeedAddedTables() == nil && event.GetNeedDroppedTables() == nil {
+			if noNeedAddAndDrop {
 				return
 			}
 
