@@ -139,6 +139,7 @@ type DispatcherManager struct {
 	metricCheckpointTsLag                  prometheus.Gauge
 	metricResolvedTs                       prometheus.Gauge
 	metricResolvedTsLag                    prometheus.Gauge
+	metricBlockStatusesChanLen             prometheus.Gauge
 
 	metricTableTriggerRedoDispatcherCount prometheus.Gauge
 	metricRedoEventDispatcherCount        prometheus.Gauge
@@ -192,6 +193,7 @@ func NewDispatcherManager(
 		metricCheckpointTsLag:                  metrics.DispatcherManagerCheckpointTsLagGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 		metricResolvedTs:                       metrics.DispatcherManagerResolvedTsGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 		metricResolvedTsLag:                    metrics.DispatcherManagerResolvedTsLagGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		metricBlockStatusesChanLen:             metrics.DispatcherManagerBlockStatusesChanLenGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 
 		metricTableTriggerRedoDispatcherCount: metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher"),
 		metricRedoEventDispatcherCount:        metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher"),
@@ -579,6 +581,7 @@ func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
 				}
 			}
 
+			e.metricBlockStatusesChanLen.Set(float64(len(e.sharedInfo.GetBlockStatusesChan())))
 			if len(blockStatusMessage) != 0 {
 				enqueueBlockStatus(blockStatusMessage, common.DefaultMode)
 			}
@@ -616,12 +619,25 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 		case tableSpanStatus := <-e.sharedInfo.GetStatusesChan():
 			statusMessage = append(statusMessage, tableSpanStatus.TableSpanStatus)
 			if common.IsDefaultMode(tableSpanStatus.Mode) {
-				newWatermark.Seq = tableSpanStatus.Seq
+				// Note: tableSpanStatus.Seq is the seq assigned when that dispatcher was created.
+				// status messages can arrive out-of-order and Seq has no ordering relationship with
+				// per-dispatcher checkpoint/resolved ts.
+				//
+				// - Keep Watermark.Seq monotonic to avoid maintainer dropping the watermark as stale
+				//   while still applying status updates (statuses are handled regardless of watermark Seq).
+				// - Still update CheckpointTs with min() regardless of Seq ordering; the periodic
+				//   aggregateDispatcherHeartbeats() is responsible for advancing the watermark.
+				if newWatermark.Seq < tableSpanStatus.Seq {
+					newWatermark.Seq = tableSpanStatus.Seq
+				}
 				if tableSpanStatus.CheckpointTs != 0 && tableSpanStatus.CheckpointTs < newWatermark.CheckpointTs {
 					newWatermark.CheckpointTs = tableSpanStatus.CheckpointTs
 				}
 			} else {
-				newRedoWatermark.Seq = tableSpanStatus.Seq
+				// Same rule applies to redo watermark.
+				if newRedoWatermark.Seq < tableSpanStatus.Seq {
+					newRedoWatermark.Seq = tableSpanStatus.Seq
+				}
 				if tableSpanStatus.CheckpointTs != 0 && tableSpanStatus.CheckpointTs < newRedoWatermark.CheckpointTs {
 					newRedoWatermark.CheckpointTs = tableSpanStatus.CheckpointTs
 				}
@@ -852,7 +868,7 @@ func (e *DispatcherManager) TryClose(removeChangefeed bool) bool {
 	if e.closing.Load() {
 		return e.closed.Load()
 	}
-	e.cleanMetrics()
+
 	e.closing.Store(true)
 	go e.close(removeChangefeed)
 	return false
@@ -917,17 +933,7 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 		return true
 	})
 
-	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "eventDispatcher")
-	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "eventDispatcher")
-	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "eventDispatcher")
-	metrics.DispatcherManagerCheckpointTsGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
-	metrics.DispatcherManagerResolvedTsGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
-	metrics.DispatcherManagerCheckpointTsLagGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
-	metrics.DispatcherManagerResolvedTsLagGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
-
-	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
-	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
-	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
+	e.cleanMetrics()
 
 	e.closed.Store(true)
 	log.Info("event dispatcher manager closed",
@@ -959,6 +965,7 @@ func (e *DispatcherManager) cleanMetrics() {
 	metrics.DispatcherManagerResolvedTsGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
 	metrics.DispatcherManagerCheckpointTsLagGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
 	metrics.DispatcherManagerResolvedTsLagGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
+	metrics.DispatcherManagerBlockStatusesChanLenGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
 
 	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
 	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
