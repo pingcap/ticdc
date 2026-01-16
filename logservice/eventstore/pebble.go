@@ -32,8 +32,7 @@ const (
 
 func newPebbleOptions(dbNum int) *pebble.Options {
 	opts := &pebble.Options{
-		// Disable WAL to decrease io
-		DisableWAL: true,
+		DisableWAL: false,
 
 		MaxOpenFiles: 10000,
 
