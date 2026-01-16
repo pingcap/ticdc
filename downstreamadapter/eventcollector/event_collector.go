@@ -624,7 +624,7 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 		// store total available memory from AreaMemoryMetric
 		changefeedTotalMemory[cfID] = uint64(quota.AvailableMemory())
 		if maxMem := quota.MaxMemory(); maxMem > 0 {
-			changefeedMemoryUsageRatio[cfID] = max(changefeedMemoryUsageRatio[cfID], float64(quota.MemoryUsage())/float64(maxMem))
+			changefeedMemoryUsageRatio[cfID] = float64(quota.MemoryUsage()) / float64(maxMem)
 		}
 	}
 
@@ -653,7 +653,7 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 			changefeedTotalMemory[cfID] = uint64(quota.AvailableMemory())
 		}
 		if maxMem := quota.MaxMemory(); maxMem > 0 {
-			changefeedMemoryUsageRatio[cfID] = max(changefeedMemoryUsageRatio[cfID], float64(quota.MemoryUsage())/float64(maxMem))
+			changefeedMemoryUsageRatio[cfID] = float64(quota.MemoryUsage()) / float64(maxMem)
 		}
 	}
 

@@ -12,7 +12,7 @@ const (
 	adaptiveScanWindowMin     = 1 * time.Second
 	adaptiveScanWindowMax     = 30 * time.Minute
 
-	adaptiveScanWindowAdjustAfter = 30 * time.Second
+	adaptiveScanWindowAdjustAfter = 10 * time.Second
 
 	adaptiveScanWindowShrinkThreshold = 1.10
 	adaptiveScanWindowGrowThreshold   = 0.50
@@ -54,9 +54,6 @@ func (w *adaptiveScanWindow) observe(memoryUsageRatio float64, maxInterval time.
 	}
 	w.lastObserveTime = currentTime
 
-	if maxInterval <= 0 {
-		maxInterval = adaptiveScanWindowMax
-	}
 	if maxInterval > adaptiveScanWindowMax {
 		maxInterval = adaptiveScanWindowMax
 	}
