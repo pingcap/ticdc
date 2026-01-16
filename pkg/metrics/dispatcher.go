@@ -28,16 +28,16 @@ var (
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dispatchermanager",
-			Name:      "table_trigger_event_dispatcher_count",
-			Help:      "The number of table event dispatchers",
+			Name:      "table_trigger_dispatcher_count",
+			Help:      "The number of table dispatchers",
 		}, []string{getKeyspaceLabel(), "changefeed", "event_type"})
 
 	EventDispatcherGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dispatchermanager",
-			Name:      "table_event_dispatcher_count",
-			Help:      "The number of table event dispatchers",
+			Name:      "table_dispatcher_count",
+			Help:      "The number of table dispatchers",
 		}, []string{getKeyspaceLabel(), "changefeed", "event_type"})
 
 	CreateDispatcherDuration = prometheus.NewHistogramVec(

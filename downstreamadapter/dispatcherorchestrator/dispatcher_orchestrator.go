@@ -300,7 +300,7 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 			zap.String("actualDispatcherID",
 				common.NewDispatcherIDFromPB(req.TableTriggerEventDispatcherId).String()))
 
-		err := errors.ErrChangefeedInitTableTriggerEventDispatcherFailed.
+		err := errors.ErrChangefeedInitTableTriggerDispatcherFailed.
 			GenWithStackByArgs("Receive post bootstrap request but the table trigger event dispatcher id is not match")
 
 		response := &heartbeatpb.MaintainerPostBootstrapResponse{

@@ -201,7 +201,10 @@ func (c *HeartBeatCollector) RemoveRedoMessage(changefeedID common.ChangeFeedID)
 		return nil
 	}
 	err = c.redoMetaMessageDynamicStream.RemovePath(changefeedID.Id)
-	return errors.Trace(err)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	return nil
 }
 
 func (c *HeartBeatCollector) sendHeartBeatMessages(ctx context.Context) error {

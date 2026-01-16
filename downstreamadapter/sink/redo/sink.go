@@ -58,7 +58,6 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, cfg *config.C
 
 // New creates a new redo sink.
 func New(ctx context.Context, changefeedID common.ChangeFeedID,
-	startTs common.Ts,
 	cfg *config.ConsistentConfig,
 ) *Sink {
 	s := &Sink{
