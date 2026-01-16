@@ -758,7 +758,7 @@ func TestCoordinatorCreateChangefeedSnapshotLostByGCNoNeedReportError(t *testing
 	require.NoError(t, err)
 }
 
-func TestUpdateGlobalGcSafepointSkipWhenControllerNotInitialized(t *testing.T) {
+func TestUpdateGCSafepointSkipWhenControllerNotInitialized(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -766,11 +766,25 @@ func TestUpdateGlobalGcSafepointSkipWhenControllerNotInitialized(t *testing.T) {
 	gcManager.EXPECT().
 		TryUpdateServiceGCSafePoint(gomock.Any(), gomock.Any(), gomock.Any()).
 		Times(0)
+	gcManager.EXPECT().
+		TryUpdateKeyspaceGCBarrier(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Times(0)
+
+	cfID := common.NewChangeFeedIDWithName("cf", "ks")
+	cfInfo := &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		SinkURI:      "blackhole://",
+		StartTs:      100,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateNormal,
+		KeyspaceID:   1,
+	}
 
 	controller := &Controller{
 		initialized:  atomic.NewBool(false),
 		changefeedDB: changefeed.NewChangefeedDB(1),
 	}
+	controller.changefeedDB.AddAbsentChangefeed(changefeed.NewChangefeed(cfID, cfInfo, cfInfo.StartTs, false))
 
 	co := &coordinator{
 		controller: controller,
@@ -778,7 +792,46 @@ func TestUpdateGlobalGcSafepointSkipWhenControllerNotInitialized(t *testing.T) {
 		pdClock:    pdutil.NewClock4Test(),
 	}
 
-	err := co.updateGlobalGcSafepoint(context.Background(), true)
+	err := co.updateGCSafepoint(context.Background(), true)
+	require.NoError(t, err)
+}
+
+func TestUpdateGCSafepointByChangefeedSkipWhenControllerNotInitialized(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	gcManager := txngc.NewMockManager(ctrl)
+	gcManager.EXPECT().
+		TryUpdateServiceGCSafePoint(gomock.Any(), gomock.Any(), gomock.Any()).
+		Times(0)
+	gcManager.EXPECT().
+		TryUpdateKeyspaceGCBarrier(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Times(0)
+
+	cfID := common.NewChangeFeedIDWithName("cf", "ks")
+	cfInfo := &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		SinkURI:      "blackhole://",
+		StartTs:      100,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateNormal,
+		KeyspaceID:   1,
+	}
+
+	controller := &Controller{
+		initialized:  atomic.NewBool(false),
+		changefeedDB: changefeed.NewChangefeedDB(1),
+		nodeManager:  watcher.NewNodeManager(nil, nil),
+	}
+	controller.changefeedDB.AddAbsentChangefeed(changefeed.NewChangefeed(cfID, cfInfo, cfInfo.StartTs, false))
+
+	co := &coordinator{
+		controller: controller,
+		gcManager:  gcManager,
+		pdClock:    pdutil.NewClock4Test(),
+	}
+
+	err := co.updateGCSafepointByChangefeed(context.Background(), cfID, true)
 	require.NoError(t, err)
 }
 
