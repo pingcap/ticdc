@@ -117,7 +117,10 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 	ddlCreateTime := getDDLCreateTime(w.ctx, w.db)
 	return retry.Do(w.ctx, func() error {
-		err := w.statistics.RecordDDLExecution(func() error { return w.execDDL(event) })
+		err := w.statistics.RecordDDLExecution(func() (string, error) {
+			ddlType := event.GetDDLType().String()
+			return ddlType, w.execDDL(event)
+		})
 		if err != nil {
 			if errors.IsIgnorableMySQLDDLError(err) {
 				// NOTE: don't change the log, some tests depend on it.
