@@ -192,10 +192,6 @@ func (w *Writer) waitDDLDone(ctx context.Context, ddl *commonEvent.DDLEvent, ddl
 
 // waitAsyncDDLDone wait previous ddl
 func (w *Writer) waitAsyncDDLDone(event *commonEvent.DDLEvent) {
-	if !needWaitAsyncExecDone(event.GetDDLType()) {
-		return
-	}
-
 	switch event.GetBlockedTables().InfluenceType {
 	// db-class, all-class ddl with not affect by async ddl, just return
 	case commonEvent.InfluenceTypeDB, commonEvent.InfluenceTypeAll:

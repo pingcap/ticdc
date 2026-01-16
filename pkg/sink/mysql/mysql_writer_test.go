@@ -445,6 +445,32 @@ func TestMysqlWriter_RemoveDDLTsTable(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestWaitAsyncDDLDone_CreateTableLikeShouldQueryDownstreamAddIndexJob(t *testing.T) {
+	writer, db, mock := newTestMysqlWriterForTiDB(t)
+	defer db.Close()
+
+	event := &commonEvent.DDLEvent{
+		Type: byte(timodel.ActionCreateTable),
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{0},
+		},
+		BlockedTableNames: []commonEvent.SchemaTableName{
+			{
+				SchemaName: "test",
+				TableName:  "a",
+			},
+		},
+	}
+
+	expected := fmt.Sprintf(checkRunningAddIndexSQL, "test", "a")
+	mock.ExpectQuery(expected).
+		WillReturnRows(sqlmock.NewRows([]string{"JOB_ID", "JOB_TYPE", "SCHEMA_STATE", "STATE", "QUERY"}))
+
+	writer.waitAsyncDDLDone(event)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 // Test the async ddl can be write successfully
 func TestMysqlWriter_AsyncDDL(t *testing.T) {
 	writer, db, mock := newTestMysqlWriterForTiDB(t)
