@@ -33,6 +33,7 @@ type tsPair struct {
 type preparedDMLs struct {
 	sqls            []string
 	values          [][]interface{}
+	rowTypes        []common.RowType
 	rowCount        int
 	approximateSize int64
 	tsPairs         []tsPair
@@ -126,6 +127,20 @@ func (d *preparedDMLs) fmtSqls() string {
 		builder.WriteString(";")
 	}
 	return builder.String()
+}
+
+func (d *preparedDMLs) RowsAffected() int64 {
+	var count int64
+	for _, rowType := range d.rowTypes {
+		switch rowType {
+		case common.RowTypeInsert, common.RowTypeDelete:
+			count += 1
+		case common.RowTypeUpdate:
+			count += 2
+		default:
+		}
+	}
+	return count
 }
 
 var dmlsPool = sync.Pool{

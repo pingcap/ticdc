@@ -94,6 +94,21 @@ func (b *Statistics) RecordDDLExecution(executor func() error) error {
 	return nil
 }
 
+func (b *Statistics) RecordTotalRowsAffected(actualRowsAffected, expectedRowsAffected int64) {
+	keyspace := b.changefeedID.Keyspace()
+	changefeedID := b.changefeedID.Name()
+	ExecDMLEventRowsAffectedCounter.WithLabelValues(keyspace, changefeedID, "actual", "total").Add(float64(actualRowsAffected))
+	ExecDMLEventRowsAffectedCounter.WithLabelValues(keyspace, changefeedID, "expected", "total").Add(float64(expectedRowsAffected))
+}
+
+func (b *Statistics) RecordRowsAffected(rowsAffected int64, rowType common.RowType) {
+	keyspace := b.changefeedID.Keyspace()
+	changefeedID := b.changefeedID.Name()
+	ExecDMLEventRowsAffectedCounter.WithLabelValues(keyspace, changefeedID, "actual", rowType.String()).Add(float64(rowsAffected))
+	ExecDMLEventRowsAffectedCounter.WithLabelValues(keyspace, changefeedID, "expected", rowType.String()).Add(1)
+	b.RecordTotalRowsAffected(rowsAffected, 1)
+}
+
 // Close release some internal resources.
 func (b *Statistics) Close() {
 	keyspace := b.changefeedID.Keyspace()
