@@ -119,10 +119,10 @@ func (m *gcManager) TryUpdateServiceGCSafePoint(
 		minServiceGCSafepoint = uint64(val.(int))
 	})
 
-	log.Debug("update gc safe point",
+	log.Info("update gc safe point",
 		zap.String("gcServiceID", m.gcServiceID),
 		zap.Uint64("checkpointTs", checkpointTs),
-		zap.Uint64("minServiceGCSafepoint", minServiceGCSafepoint))
+		zap.Uint64("minServiceGCSafepoint", minServiceGCSafepoint), zap.Bool("force", forceUpdate))
 
 	m.minServiceGcSafepoint.Store(minServiceGCSafepoint)
 	minServiceGCSafePointGauge.Set(float64(oracle.ExtractPhysical(minServiceGCSafepoint)))

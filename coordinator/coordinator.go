@@ -436,6 +436,8 @@ func (c *coordinator) updateGlobalGcSafepoint(ctx context.Context, force bool) e
 	if minCheckpointTs == math.MaxUint64 {
 		ts := c.pdClock.CurrentTime()
 		minCheckpointTs = oracle.GoTimeToTS(ts)
+		log.Warn("no changefeed found, set minCheckpointTs as the current pd tso",
+			zap.Uint64("minCheckpointTs", minCheckpointTs), zap.Bool("force", force))
 	}
 	// checkpoint means all data (-inf, checkpointTs] already flushed to the downstream.
 	// When the changefeed starts up, the start-ts = checkpointTs, and TiKV return data [checkpointTs + 1, +inf)
