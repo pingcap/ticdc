@@ -244,13 +244,12 @@ func NewSubscriptionClient(
 	subClient.ctx, subClient.cancel = context.WithCancel(context.Background())
 	subClient.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
 
-	option := dynstream.NewOption()
-	// Note: it is max batch size of the kv sent from tikv(not committed rows)
-	option.BatchCount = 1024
-	// TODO: Set `UseBuffer` to true until we refactor the `regionEventHandler.Handle` method so that it doesn't call any method of the dynamic stream. Currently, if `UseBuffer` is set to false, there will be a deadlock:
+	// Note: BatchCount is max batch size of the kv sent from tikv(not committed rows)
+	// TODO: Set `UseBuffer` to true until we refactor the `regionEventHandler.Handle` method
+	// so that it doesn't call any method of the dynamic stream.
+	// Currently, if `UseBuffer` is set to false, there will be a deadlock:
 	// 	ds.handleLoop fetch events from `ch` -> regionEventHandler.Handle -> ds.RemovePath -> send event to `ch`
-	option.UseBuffer = true
-	option.EnableMemoryControl = true
+	option := dynstream.NewOption(1024, true, true)
 	ds := dynstream.NewParallelDynamicStream(
 		&regionEventHandler{subClient: subClient},
 		option,

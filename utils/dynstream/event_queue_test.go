@@ -21,7 +21,8 @@ import (
 
 func TestNewEventQueue(t *testing.T) {
 	handler := mockHandler{}
-	option := Option{BatchCount: 10}
+	option := newDefaultOption()
+	option.streamCount = 10
 
 	eq := newEventQueue(option, &handler)
 
@@ -35,7 +36,9 @@ func TestNewEventQueue(t *testing.T) {
 
 func TestAppendAndPopSingleEvent(t *testing.T) {
 	handler := mockHandler{}
-	eq := newEventQueue(Option{BatchCount: 10}, &handler)
+	option := newDefaultOption()
+	option.streamCount = 10
+	eq := newEventQueue(option, &handler)
 
 	// create a path
 	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", nil)
@@ -68,7 +71,9 @@ func TestAppendAndPopSingleEvent(t *testing.T) {
 
 func TestBlockAndWakePath(t *testing.T) {
 	handler := mockHandler{}
-	eq := newEventQueue(Option{BatchCount: 10}, &handler)
+	option := newDefaultOption()
+	option.streamCount = 10
+	eq := newEventQueue(option, &handler)
 
 	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", nil)
 	eq.initPath(path)
@@ -107,7 +112,9 @@ func TestBlockAndWakePath(t *testing.T) {
 
 func TestBatchEvents(t *testing.T) {
 	handler := mockHandler{}
-	eq := newEventQueue(Option{BatchCount: 3}, &handler)
+	option := newDefaultOption()
+	option.streamCount = 3
+	eq := newEventQueue(option, &handler)
 
 	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", nil)
 	eq.initPath(path)
@@ -141,7 +148,9 @@ func TestBatchEvents(t *testing.T) {
 
 func TestBatchableAndNonBatchableEvents(t *testing.T) {
 	handler := mockHandler{}
-	eq := newEventQueue(Option{BatchCount: 3}, &handler)
+	option := newDefaultOption()
+	option.streamCount = 3
+	eq := newEventQueue(option, &handler)
 
 	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", nil)
 	eq.initPath(path)
@@ -245,7 +254,9 @@ func TestBatchableAndNonBatchableEvents(t *testing.T) {
 
 func TestRemovePath(t *testing.T) {
 	handler := mockHandler{}
-	eq := newEventQueue(Option{BatchCount: 3}, &handler)
+	option := newDefaultOption()
+	option.streamCount = 3
+	eq := newEventQueue(option, &handler)
 
 	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", nil)
 	eq.initPath(path)

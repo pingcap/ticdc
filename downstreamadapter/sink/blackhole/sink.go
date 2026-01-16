@@ -84,3 +84,11 @@ func (s *sink) Run(ctx context.Context) error {
 		}
 	}
 }
+
+func (s *sink) BatchCount() int {
+	return 4096
+}
+
+func (s *sink) BatchBytes() int {
+	return 0
+}

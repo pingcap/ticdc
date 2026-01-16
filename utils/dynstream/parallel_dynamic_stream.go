@@ -45,8 +45,7 @@ type parallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D
 	closed               atomic.Bool
 }
 
-func newParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](handler H, option Option) *parallelDynamicStream[A, P, T, D, H] {
-	option.fix()
+func newParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](handler H, option option) *parallelDynamicStream[A, P, T, D, H] {
 	var (
 		eventExtraSize int
 		zero           T
@@ -66,12 +65,12 @@ func newParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T
 
 	s.pathMap.m = make(map[P]*pathInfo[A, P, T, D, H])
 
-	if option.EnableMemoryControl {
+	if option.enableMemoryControl {
 		log.Info("Dynamic stream enable memory control")
 		s.feedbackChan = make(chan Feedback[A, P, D], 1024)
 		s.memControl = newMemControl[A, P, T, D, H]()
 	}
-	for i := range option.StreamCount {
+	for i := range option.streamCount {
 		s.streams = append(s.streams, newStream(i, handler, option))
 	}
 	return s

@@ -27,7 +27,8 @@ import (
 
 func TestParallelDynamicStreamBasic(t *testing.T) {
 	handler := &mockHandler{}
-	option := Option{StreamCount: 4}
+	option := newDefaultOption()
+	option.streamCount = 4
 	stream := NewParallelDynamicStream(handler, option)
 	stream.Start()
 	defer stream.Close()
@@ -51,7 +52,8 @@ func TestParallelDynamicStreamBasic(t *testing.T) {
 
 func TestParallelDynamicStreamPush(t *testing.T) {
 	handler := &mockHandler{}
-	option := Option{StreamCount: 4}
+	option := newDefaultOption()
+	option.streamCount = 4
 	stream := newParallelDynamicStream(handler, option)
 	stream.Start()
 	defer stream.Close()
@@ -74,7 +76,8 @@ func TestParallelDynamicStreamPush(t *testing.T) {
 
 func TestParallelDynamicStreamMetrics(t *testing.T) {
 	handler := &mockHandler{}
-	option := Option{StreamCount: 4}
+	option := newDefaultOption()
+	option.streamCount = 4
 	stream := newParallelDynamicStream(handler, option)
 
 	stream.Start()
@@ -97,10 +100,9 @@ func TestParallelDynamicStreamMetrics(t *testing.T) {
 
 func TestParallelDynamicStreamMemoryControl(t *testing.T) {
 	handler := &mockHandler{}
-	option := Option{
-		StreamCount:         4,
-		EnableMemoryControl: true,
-	}
+	option := NewOption(1, true, false)
+	option.streamCount = 4
+
 	stream := newParallelDynamicStream(handler, option)
 
 	stream.Start()
@@ -157,10 +159,11 @@ func TestParallelDynamicStreamStress(t *testing.T) {
 	handlers := make([]*mockHandler, streamCount)
 	done := make(chan struct{})
 
+	option := newDefaultOption()
+	option.streamCount = 4
 	// Create all streams
 	for i := 0; i < streamCount; i++ {
 		handlers[i] = &mockHandler{}
-		option := Option{StreamCount: 4}
 		streams[i] = newParallelDynamicStream(handlers[i], option)
 		streams[i].Start()
 	}
@@ -268,10 +271,11 @@ func TestParallelDynamicStreamConcurrentClose(t *testing.T) {
 		closers    = 5  // Number of goroutines closing streams
 	)
 
+	option := newDefaultOption()
+	option.streamCount = 4
 	for iter := 0; iter < iterations; iter++ {
 		t.Run(fmt.Sprintf("iteration_%d", iter), func(t *testing.T) {
 			handler := &mockHandler{}
-			option := Option{StreamCount: 4}
 			stream := newParallelDynamicStream(handler, option)
 			stream.Start()
 

@@ -68,9 +68,6 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 	mc.addPathToArea(path1, settings, feedbackChan)
 
 	handler := &mockHandler{}
-	option := NewOption()
-	option.EnableMemoryControl = true
-
 	// 1. Append normal event, it should be accepted, and the path and area should not be paused
 	normalEvent1 := eventWrap[int, string, *mockEvent, any, *mockHandler]{
 		event:     &mockEvent{id: 1, path: "test-path"},
@@ -193,8 +190,8 @@ func TestSetAreaSettings(t *testing.T) {
 	}
 	mc.setAreaSettings(path.area, invalidSettings)
 	require.NotEqual(t, invalidSettings, *path.areaMemStat.settings.Load())
-	require.Equal(t, DefaultFeedbackInterval, path.areaMemStat.settings.Load().feedbackInterval)
-	require.Equal(t, DefaultMaxPendingSize, path.areaMemStat.settings.Load().maxPendingSize)
+	require.Equal(t, defaultFeedbackInterval, path.areaMemStat.settings.Load().feedbackInterval)
+	require.Equal(t, defaultMaxPendingSize, path.areaMemStat.settings.Load().maxPendingSize)
 }
 
 func TestGetMetrics(t *testing.T) {

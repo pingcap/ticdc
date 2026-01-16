@@ -432,3 +432,11 @@ func (s *sink) Close(_ bool) {
 	}
 	s.storage.Close()
 }
+
+func (s *sink) BatchCount() int {
+	return 4096
+}
+
+func (s *sink) BatchBytes() int {
+	return s.cfg.FileSize
+}

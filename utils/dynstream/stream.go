@@ -47,7 +47,7 @@ type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	// The queue to store the pending events of this stream.
 	eventQueue eventQueue[A, P, T, D, H]
 
-	option Option
+	option option
 
 	wg sync.WaitGroup
 
@@ -61,7 +61,7 @@ type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	id int,
 	handler H,
-	option Option,
+	option option,
 ) *stream[A, P, T, D, H] {
 	s := &stream[A, P, T, D, H]{
 		id:         id,
@@ -72,7 +72,7 @@ func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 
-	if option.UseBuffer {
+	if option.useBuffer {
 		s.inChan = make(chan eventWrap[A, P, T, D, H], 64)
 		s.outChan = make(chan eventWrap[A, P, T, D, H], 64)
 
@@ -88,7 +88,7 @@ func (s *stream[A, P, T, D, H]) addPath(path *pathInfo[A, P, T, D, H]) {
 }
 
 func (s *stream[A, P, T, D, H]) getPendingSize() int {
-	if s.option.UseBuffer {
+	if s.option.useBuffer {
 		return len(s.inChan) + int(s.bufferCount.Load()) + len(s.outChan) + int(s.eventQueue.totalPendingLength.Load())
 	}
 	return len(s.eventChan) + int(s.eventQueue.totalPendingLength.Load())
@@ -99,7 +99,7 @@ func (s *stream[A, P, T, D, H]) addEvent(event eventWrap[A, P, T, D, H]) {
 		return
 	}
 	eventChan := s.eventChan
-	if s.option.UseBuffer {
+	if s.option.useBuffer {
 		eventChan = s.inChan
 	}
 	// Fast path: try direct send without blocking to avoid context check
@@ -121,7 +121,7 @@ func (s *stream[A, P, T, D, H]) start() {
 		panic("The stream has been closed.")
 	}
 
-	if s.option.UseBuffer {
+	if s.option.useBuffer {
 		s.wg.Add(1)
 		go s.receiver()
 	}
@@ -227,7 +227,7 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 	// Declared here to avoid repeated allocation.
 	var (
 		eventQueueEmpty = false
-		eventBuf        = make([]T, 0, s.option.BatchCount)
+		eventBuf        = make([]T, 0, s.option.batchCount)
 		zeroT           T
 		cleanUpEventBuf = func() {
 			for i := range eventBuf {

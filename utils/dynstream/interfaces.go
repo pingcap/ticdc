@@ -135,7 +135,7 @@ type Handler[A Area, P Path, T Event, D Dest] interface {
 
 	// OnDrop is called when an event is dropped. Could be caused by the memory control or cannot find the path.
 	// Do nothing by default implementation.
-	OnDrop(event T) interface{}
+	OnDrop(event T) any
 }
 
 type PathAndDest[P Path, D Dest] struct {
@@ -193,50 +193,61 @@ type DynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] inter
 }
 
 const (
-	DefaultInputBufferSize   = 1024
-	DefaultSchedulerInterval = 16 * time.Second
-	DefaultReportInterval    = 10 * time.Second
-	DefaultMaxPendingSize    = uint64(1024 * 1024 * 1024) // 1 GB
-	DefaultFeedbackInterval  = 1000 * time.Millisecond
+	defaultInputBufferSize   = 1024
+	defaultSchedulerInterval = 16 * time.Second
+	defaultReportInterval    = 10 * time.Second
+	defaultFeedbackInterval  = time.Second
+	defaultMaxPendingSize    = uint64(1024 * 1024 * 1024) // 1 GB
 )
 
-type Option struct {
-	InputChanSize int // The buffer size of the input channel. By default 0, means 1024.
+type option struct {
+	// The buffer size of the input channel. By default 0, means 1024.
+	inputChanSize int
 
-	SchedulerInterval time.Duration // The interval of the scheduler. The scheduler is used to balance the paths between streams.
-	ReportInterval    time.Duration // The interval of reporting the status of stream, the status is used by the scheduler.
+	// The interval of the scheduler. The scheduler is used to balance the paths between streams.
+	schedulerInterval time.Duration
 
-	StreamCount int // The count of streams. I.e. the count of goroutines to handle events. By default 0, means runtime.NumCPU().
-	BatchCount  int // The batch count of handling events. <= 1 means no batch. By default 1.
-	BatchBytes  int // The max bytes of the batch. <= 1 means no limit. By default 0.
+	// The interval of reporting the status of stream, the status is used by the scheduler.
+	reportInterval time.Duration
 
-	EnableMemoryControl bool // Enable the memory control. By default false.
+	// The count of streams. I.e. the count of goroutines to handle events. By default set to runtime.NumCPU().
+	streamCount int
 
-	UseBuffer bool // Use buffers inside the dynamic stream. By default false.
+	// batchCount and BatchBytes control the dynamic stream batch behavior, they will overload the area level same name settings.
+	// The batch count of handling events. <= 1 means no batch. By default 1.
+	batchCount int
+	// The max bytes of the batch. <= 1 means no limit. By default 0.
+	batchBytes int
 
-	handleWait *sync.WaitGroup // For testing. Don't handle events until this wait group is done.
+	// Enable the memory control. By default false.
+	enableMemoryControl bool
+
+	// Use buffers inside the dynamic stream. By default false.
+	useBuffer bool
+
+	// For testing. Don't handle events until this wait group is done.
+	handleWait *sync.WaitGroup
 }
 
-func NewOption() Option {
-	return Option{
-		SchedulerInterval: DefaultSchedulerInterval,
-		ReportInterval:    DefaultReportInterval,
-		StreamCount:       0,
-		BatchCount:        1,
-		UseBuffer:         false,
+func newDefaultOption() option {
+	return option{
+		schedulerInterval: defaultSchedulerInterval,
+		reportInterval:    defaultReportInterval,
+		streamCount:       runtime.NumCPU(),
+		batchCount:        1,
+		inputChanSize:     defaultInputBufferSize,
 	}
 }
 
-func (o *Option) fix() {
-	if o.InputChanSize <= 0 {
-		o.InputChanSize = DefaultInputBufferSize
+func NewOption(batchCount int, enableMemoryCount bool, useBuff bool) option {
+	if batchCount <= 0 {
+		batchCount = 1
 	}
-	if o.StreamCount == 0 {
-		o.StreamCount = runtime.NumCPU()
-	}
-	if o.BatchCount <= 0 {
-		o.BatchCount = 1
-	}
+	result := newDefaultOption()
+	result.batchCount = batchCount
+	result.enableMemoryControl = enableMemoryCount
+	result.useBuffer = useBuff
+	return result
 }
 
 type AreaSettings struct {
@@ -246,15 +257,19 @@ type AreaSettings struct {
 	feedbackInterval   time.Duration // The interval of the feedback. By default 1000ms.
 	// Remove it when we determine the v2 is working well.
 	algorithm int // The algorithm of the memory control.
+
+	// Both fields can be configured at the settings level, and can be overloaded by the dynamic stream level configuration.
+	batchSize  int
+	batchCount int
 }
 
 func (s *AreaSettings) fix() {
 	if s.maxPendingSize <= 0 {
-		s.maxPendingSize = DefaultMaxPendingSize
+		s.maxPendingSize = defaultMaxPendingSize
 	}
 
 	if s.feedbackInterval == 0 {
-		s.feedbackInterval = DefaultFeedbackInterval
+		s.feedbackInterval = defaultFeedbackInterval
 	}
 }
 
@@ -264,7 +279,7 @@ func NewAreaSettingsWithMaxPendingSize(size uint64, memoryControlAlgorithm int, 
 
 	return AreaSettings{
 		component:          component,
-		feedbackInterval:   DefaultFeedbackInterval,
+		feedbackInterval:   defaultFeedbackInterval,
 		maxPendingSize:     size,
 		pathMaxPendingSize: pathMaxPendingSize,
 		algorithm:          memoryControlAlgorithm,
@@ -307,10 +322,10 @@ func (f *Feedback[A, P, D]) String() string {
 	return fmt.Sprintf("DynamicStream Feedback{Area: %v, Path: %v, FeedbackType: %s}", f.Area, f.Path, f.FeedbackType.String())
 }
 
-func NewParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](handler H, option ...Option) DynamicStream[A, P, T, D, H] {
-	opt := NewOption()
-	if len(option) > 0 {
-		opt = option[0]
+func NewParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](handler H, options ...option) DynamicStream[A, P, T, D, H] {
+	opt := newDefaultOption()
+	if len(options) > 0 {
+		opt = options[0]
 	}
 	return newParallelDynamicStream(handler, opt)
 }

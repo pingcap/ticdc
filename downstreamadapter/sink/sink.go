@@ -39,6 +39,10 @@ type Sink interface {
 	SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore)
 	Close(removeChangefeed bool)
 	Run(ctx context.Context) error
+
+	// BatchCount and BatchBytes are used by the dynamic stream to achive better batch performance.
+	BatchCount() int
+	BatchBytes() int
 }
 
 func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.ChangeFeedID) (Sink, error) {
