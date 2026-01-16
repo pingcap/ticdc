@@ -121,7 +121,7 @@ func (c *HeartBeatCollector) RegisterDispatcherManager(m *DispatcherManager) err
 		return errors.Trace(err)
 	}
 
-	batchConfig := dynstream.NewBatchConfig(1024, 1024*1024*1024)
+	batchConfig := dynstream.NewBatchConfig(1024, 0)
 	// since memory control not enabled, so that quota and method won't take effect.
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(0, dynstream.MemoryControlNone, "heart-beat-collector", batchConfig)
 	err = c.schedulerDispatcherRequestDynamicStream.AddPath(

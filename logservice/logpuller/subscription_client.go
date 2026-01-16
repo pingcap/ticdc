@@ -358,7 +358,7 @@ func (s *subscriptionClient) Subscribe(
 	s.totalSpans.spanMap[subID] = rt
 	s.totalSpans.Unlock()
 
-	batchConfig := dynstream.NewBatchConfig(1024, 1024*1024)
+	batchConfig := dynstream.NewBatchConfig(1024, 0)
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(
 		1024*1024*1024, dynstream.MemoryControlForPuller, "logPuller", batchConfig,
 	)
