@@ -475,6 +475,100 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 	require.Len(t, barrier.blockedEvents.m, 0)
 }
 
+// TestBarrierDiscardDBBlockEventWhilePendingScheduleEvents verifies the barrier does not ACK DB-level block events
+// reported by the table trigger dispatcher while there are pending schedule-required DDL events.
+// This matters because building DB/All range checkers based on an incomplete task snapshot can cause the barrier
+// to advance incorrectly and break ordering/correctness guarantees.
+func TestBarrierDiscardDBBlockEventWhilePendingScheduleEvents(t *testing.T) {
+	testutil.SetUpTestServices()
+
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
+
+	// Create one replicating table so the normal block event can be fully covered by the range checker.
+	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 10)
+	stm := spanController.GetTasksByTableID(1)[0]
+	spanController.BindSpanToNode("", "node1", stm)
+	spanController.MarkSpanReplicating(stm)
+
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode)
+
+	// Step 1: Create a schedule-required normal block event so pendingScheduleEventMap becomes non-empty.
+	_ = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID: stm.ID.ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked: true,
+					BlockTs:   10,
+					BlockTables: &heartbeatpb.InfluencedTables{
+						InfluenceType: heartbeatpb.InfluenceType_Normal,
+						TableIDs:      []int64{0, 1},
+					},
+					NeedDroppedTables: &heartbeatpb.InfluencedTables{
+						InfluenceType: heartbeatpb.InfluenceType_Normal,
+						TableIDs:      []int64{1},
+					},
+				},
+			},
+			{
+				ID: tableTriggerEventDispatcherID.ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked: true,
+					BlockTs:   10,
+					BlockTables: &heartbeatpb.InfluencedTables{
+						InfluenceType: heartbeatpb.InfluenceType_Normal,
+						TableIDs:      []int64{0, 1},
+					},
+					NeedDroppedTables: &heartbeatpb.InfluencedTables{
+						InfluenceType: heartbeatpb.InfluenceType_Normal,
+						TableIDs:      []int64{1},
+					},
+				},
+			},
+		},
+	})
+	require.Greater(t, barrier.pendingEvents.Len(), 0)
+
+	// Step 2: A DB-level block event from the table trigger dispatcher must be discarded (no ACK) while pending exists.
+	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID: tableTriggerEventDispatcherID.ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked: true,
+					BlockTs:   20,
+					BlockTables: &heartbeatpb.InfluencedTables{
+						InfluenceType: heartbeatpb.InfluenceType_DB,
+						SchemaID:      1,
+					},
+					IsSyncPoint: false,
+				},
+			},
+		},
+	})
+	require.NotNil(t, msgs)
+	resp := msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
+	require.Len(t, resp.DispatcherStatuses, 0)
+
+	// The event is tracked but should not have a range checker yet, because the report is discarded.
+	key := getEventKey(20, false)
+	event, ok := barrier.blockedEvents.Get(key)
+	require.True(t, ok)
+	require.Nil(t, event.rangeChecker)
+}
+
 func TestSchemaBlock(t *testing.T) {
 	testutil.SetUpTestServices()
 	nm := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
