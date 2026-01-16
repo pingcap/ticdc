@@ -266,6 +266,10 @@ func (e *DispatcherManager) InitalizeTableTriggerRedoDispatcher(schemaInfo []*he
 func (e *DispatcherManager) UpdateRedoMeta(checkpointTs, resolvedTs uint64) {
 	// only update meta on the one node
 	d := e.GetTableTriggerRedoDispatcher()
+	if d == nil {
+		log.Warn("should not reach here. only update redo meta on the tableTriggerRedoDispatcher")
+		return
+	}
 	d.UpdateMeta(checkpointTs, resolvedTs)
 }
 

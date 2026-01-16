@@ -474,7 +474,7 @@ func (h *RedoResolvedTsForwardMessageHandler) OnDrop(event RedoResolvedTsForward
 	return nil
 }
 
-// newRedoMetaMessageDynamicStream is responsible for push RedoMetaMessage to the corresponding table trigger event dispatcher.
+// newRedoMetaMessageDynamicStream is responsible for push RedoMetaMessage to the corresponding table trigger dispatcher.
 func newRedoMetaMessageDynamicStream() dynstream.DynamicStream[int, common.GID, RedoMetaMessage, *DispatcherManager, *RedoMetaMessageHandler] {
 	ds := dynstream.NewParallelDynamicStream(
 		&RedoMetaMessageHandler{})
