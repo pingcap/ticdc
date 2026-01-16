@@ -33,16 +33,46 @@ type removeDispatcherOperator struct {
 	replicaSet     *replica.SpanReplication
 	nodeID         node.ID
 	finished       atomic.Bool
+	postFinish     func()
 	spanController *span.Controller
+	// operatorType is copied into ScheduleDispatcherRequest.OperatorType when we send remove requests to
+	// dispatcher managers.
+	//
+	// Why we need it:
+	// Dispatcher managers include unfinished scheduling requests in their bootstrap responses so a new maintainer
+	// can restore in-flight operators after failover. operatorType tells the maintainer which high-level operator
+	// the removal belongs to (standalone Remove vs being part of Move/Split, etc.), while the dispatcher manager
+	// itself only performs Create/Remove actions.
+	//
+	// Note: Some operators do not carry operatorType because they use dedicated request types instead of
+	// ScheduleDispatcherRequest (for example merge-related messages).
+	operatorType heartbeatpb.OperatorType
 
 	sendThrottler sendThrottler
 }
 
-func newRemoveDispatcherOperator(spanController *span.Controller, replicaSet *replica.SpanReplication) *removeDispatcherOperator {
+func NewRemoveDispatcherOperator(
+	spanController *span.Controller,
+	replicaSet *replica.SpanReplication,
+	operatorType heartbeatpb.OperatorType,
+	postFinish func(),
+) *removeDispatcherOperator {
 	return &removeDispatcherOperator{
 		replicaSet:     replicaSet,
 		nodeID:         replicaSet.GetNodeID(),
 		spanController: spanController,
+		postFinish:     postFinish,
+		operatorType:   operatorType,
+		sendThrottler:  newSendThrottler(),
+	}
+}
+
+func newRemoveDispatcherOperator(spanController *span.Controller, replicaSet *replica.SpanReplication, operatorType heartbeatpb.OperatorType) *removeDispatcherOperator {
+	return &removeDispatcherOperator{
+		replicaSet:     replicaSet,
+		nodeID:         replicaSet.GetNodeID(),
+		spanController: spanController,
+		operatorType:   operatorType,
 		sendThrottler:  newSendThrottler(),
 	}
 }
@@ -63,11 +93,13 @@ func (m *removeDispatcherOperator) Check(from node.ID, status *heartbeatpb.Table
 }
 
 func (m *removeDispatcherOperator) Schedule() *messaging.TargetMessage {
-	if !m.sendThrottler.shouldSend() {
+	// Once finished, stop emitting remove requests; otherwise we may reintroduce a stale in-flight
+	// operator into dispatcher manager bootstrap responses after the dispatcher is already cleaned up.
+	if !m.sendThrottler.shouldSend() || m.finished.Load() {
 		return nil
 	}
 
-	return m.replicaSet.NewRemoveDispatcherMessage(m.nodeID)
+	return m.replicaSet.NewRemoveDispatcherMessage(m.nodeID, m.operatorType)
 }
 
 // OnNodeRemove is called when node offline, and the replicaset has been removed from spanController, so it's ok.
@@ -103,6 +135,10 @@ func (m *removeDispatcherOperator) PostFinish() {
 	log.Info("remove dispatcher operator finished",
 		zap.String("replicaSet", m.replicaSet.ID.String()),
 		zap.String("changefeed", m.replicaSet.ChangefeedID.String()))
+
+	if m.postFinish != nil {
+		m.postFinish()
+	}
 }
 
 func (m *removeDispatcherOperator) String() string {
