@@ -16,30 +16,86 @@ package canal
 import (
 	"testing"
 
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/types"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
 
 func TestTxnDecoderDecodeFromTxnEncoder(t *testing.T) {
 	t.Parallel()
 
-	helper := commonEvent.NewEventTestHelper(t)
-	defer helper.Close()
+	tidbTableInfo := &timodel.TableInfo{
+		ID:   1,
+		Name: ast.NewCIStr("t"),
+		Columns: []*timodel.ColumnInfo{
+			{
+				ID:   1,
+				Name: ast.NewCIStr("id"),
+				FieldType: func() types.FieldType {
+					ft := *types.NewFieldType(mysql.TypeLong)
+					ft.AddFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
+					return ft
+				}(),
+				State: timodel.StatePublic,
+			},
+			{
+				ID:   2,
+				Name: ast.NewCIStr("name"),
+				FieldType: func() types.FieldType {
+					ft := *types.NewFieldType(mysql.TypeVarchar)
+					ft.SetFlen(32)
+					ft.SetCharset("utf8mb4")
+					ft.SetCollate("utf8mb4_bin")
+					return ft
+				}(),
+				State: timodel.StatePublic,
+			},
+		},
+		Indices: []*timodel.IndexInfo{
+			{
+				ID:      1,
+				Name:    ast.NewCIStr("PRIMARY"),
+				State:   timodel.StatePublic,
+				Primary: true,
+				Unique:  true,
+				Columns: []*timodel.IndexColumn{{Name: ast.NewCIStr("id"), Offset: 0}},
+			},
+		},
+		PKIsHandle: true,
+	}
+	tableInfo := commonType.NewTableInfo4Decoder("test", tidbTableInfo)
 
-	helper.Tk().MustExec("use test")
-	_ = helper.DDL2Event(`create table test.t(id int primary key, name varchar(32))`)
-	dmlEvent := helper.DML2Event("test", "t", `insert into test.t values(1, "aa"),(2, "bb")`)
-	require.NotNil(t, dmlEvent)
+	rows := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 2)
+	rows.AppendInt64(0, 1)
+	rows.AppendString(1, "aa")
+	rows.AppendInt64(0, 2)
+	rows.AppendString(1, "bb")
+
+	dmlEvent := commonEvent.NewDMLEvent(commonType.NewDispatcherID(), tableInfo.TableName.TableID, 1, 2, tableInfo)
+	dmlEvent.SetRows(rows)
+	dmlEvent.RowTypes = []commonType.RowType{commonType.RowTypeInsert, commonType.RowTypeInsert}
+	dmlEvent.Length = 2
+	require.Len(t, dmlEvent.RowTypes, 2)
+	_, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
+	dmlEvent.Rewind()
 
 	for _, encodeEnable := range []bool{false, true} {
 		encodeConfig := codecCommon.NewConfig(config.ProtocolCanalJSON)
 		encodeConfig.EnableTiDBExtension = encodeEnable
 		encodeConfig.Terminator = "\n"
 
+		dmlEvent.Rewind()
 		encoder := NewJSONTxnEventEncoder(encodeConfig)
 		require.NoError(t, encoder.AppendTxnEvent(dmlEvent))
+		require.Equal(t, 2, encoder.(*JSONTxnEventEncoder).batchSize)
 		messages := encoder.Build()
 		require.Len(t, messages, 1)
 

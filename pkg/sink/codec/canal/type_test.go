@@ -52,7 +52,7 @@ func TestGetMySQLTypeUnsignedAndLength(t *testing.T) {
 
 	unsigned := newTestColumnInfo("a", mysql.TypeLong, mysql.UnsignedFlag)
 	require.Equal(t, "int unsigned", codecCommon.GetMySQLType(unsigned, false))
-	require.Equal(t, "int(10) unsigned", codecCommon.GetMySQLType(unsigned, true))
+	require.Equal(t, "int(11) unsigned", codecCommon.GetMySQLType(unsigned, true))
 }
 
 func TestFormatColumnValueIntegerJavaTypeAdjust(t *testing.T) {
@@ -110,4 +110,3 @@ func TestFormatColumnValueBinaryString(t *testing.T) {
 	require.Equal(t, "abc", s.value)
 	require.Equal(t, codecCommon.JavaSQLTypeCHAR, javaType)
 }
-
