@@ -81,6 +81,14 @@ var (
 			Help:      "Checkpoint ts lag of event dispatcher manager(changefeed) in seconds",
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
+	DispatcherManagerBlockStatusesChanLenGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "dispatchermanager",
+			Name:      "block_statuses_chan_len",
+			Help:      "length of dispatcher manager block statuses channel",
+		}, []string{getKeyspaceLabel(), "changefeed"})
+
 	HandleDispatcherRequsetCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
@@ -125,6 +133,14 @@ var (
 		Name:      "dropped_event_count",
 		Help:      "The number of events dropped by the event collector",
 	})
+
+	HeartbeatCollectorBlockStatusRequestQueueLenGauge = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "heartbeat_collector",
+			Name:      "block_status_request_queue_len",
+			Help:      "length of heartbeat collector block status request queue",
+		})
 )
 
 func initDispatcherMetrics(registry *prometheus.Registry) {
@@ -136,10 +152,12 @@ func initDispatcherMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(DispatcherManagerResolvedTsLagGauge)
 	registry.MustRegister(DispatcherManagerCheckpointTsGauge)
 	registry.MustRegister(DispatcherManagerCheckpointTsLagGauge)
+	registry.MustRegister(DispatcherManagerBlockStatusesChanLenGauge)
 	registry.MustRegister(HandleDispatcherRequsetCounter)
 	registry.MustRegister(DispatcherReceivedEventCount)
 	registry.MustRegister(EventCollectorRegisteredDispatcherCount)
 	registry.MustRegister(EventCollectorReceivedEventLagDuration)
 	registry.MustRegister(EventCollectorHandleEventDuration)
 	registry.MustRegister(EventCollectorDroppedEventCount)
+	registry.MustRegister(HeartbeatCollectorBlockStatusRequestQueueLenGauge)
 }
