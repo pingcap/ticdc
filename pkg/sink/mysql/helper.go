@@ -532,7 +532,6 @@ func getDDLStateFromTiDB(ctx context.Context, db *sql.DB, ddl string, createTime
 	}, retry.WithBackoffBaseDelay(BackoffBaseDelay.Milliseconds()),
 		retry.WithBackoffMaxDelay(BackoffMaxDelay.Milliseconds()),
 		retry.WithMaxTries(defaultDDLMaxRetry))
-
 	if err != nil {
 		return timodel.JobStateNone, err
 	}
