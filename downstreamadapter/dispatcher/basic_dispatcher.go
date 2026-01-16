@@ -840,6 +840,10 @@ func (d *BasicDispatcher) cancelResendTask(identifier BlockEventIdentifier) {
 	task.Cancel()
 	d.resendTaskMap.Delete(identifier)
 
+	log.Info("cancel resend task",
+		zap.Stringer("dispatcherID", d.id),
+		zap.Any("identifier", identifier))
+
 	if d.IsTableTriggerEventDispatcher() {
 		d.pendingACKCount.Add(-1)
 		d.tryDealWithHeldBlockEvent()
