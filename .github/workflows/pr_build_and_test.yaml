@@ -35,6 +35,8 @@ jobs:
       fail-fast: true
       matrix:
         task:
+          - name: Check
+            command: make check
           - name: Build CDC
             command: make cdc
           - name: Classic Unit Tests
