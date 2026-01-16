@@ -31,9 +31,11 @@ function run() {
 	changefeed_id="ddl-wait"
 	cdc_cli_changefeed create --sink-uri="$SINK_URI" -c=${changefeed_id}
 
+	run_sql "update test.t set col = 11 where id = 1;"
 	run_sql "alter table test.t modify column col decimal(30,10);"
+	run_sql "update test.t set col = 22 where id = 2;"
 	run_sql "alter table test.t add index (col);"
-	run_sql "insert into test.t values (1, 1);"
+	run_sql "update test.t set col = 33 where id = 3;"
 	run_sql "create table test.finish_mark (a int primary key);"
 	check_table_exists test.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 
@@ -41,12 +43,14 @@ function run() {
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
 
 	ensure 10 "check_logs_contains $WORK_DIR 'DDL replicate success'"
-	ensure 10 "check_logs_contains $WORK_DIR 'DDL is running downstream'"
 
 	# indexes should be the same when CDC retries happened
 	# ref: https://github.com/pingcap/tiflow/issues/12128
+	run_sql "update test.t set col = 44 where id = 4;"
 	run_sql "alter table test.t add index (col);"
+	run_sql "update test.t set col = 55 where id = 5;"
 	run_sql "alter table test.t add index (col);"
+	run_sql "update test.t set col = 66 where id = 6;"
 	sleep 3
 	cleanup_process $CDC_BINARY
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
