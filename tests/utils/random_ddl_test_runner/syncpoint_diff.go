@@ -32,6 +32,16 @@ func (r *runner) syncpointDiffLoop(
 	_ = up
 	_ = trace
 
+	// syncpointDiffLoop periodically runs snapshot diffs based on TiCDC syncpoints.
+	//
+	// Motivation:
+	//   - The final diff runs at the end of the test and may not pinpoint when divergence happened.
+	//   - Syncpoints provide pairs of (primary_ts on upstream, secondary_ts on downstream) that
+	//     can be used for snapshot reads. Running diffs at several syncpoints helps localize issues.
+	//
+	// Practicality:
+	//   - Snapshot diffing is fragile near DDL windows. We conservatively skip candidates that fall
+	//     into TiDB DDL windows obtained from upstream /ddl/history.
 	if r.cfg.MySQL.DiffInterval.Duration <= 0 {
 		return nil
 	}
@@ -74,6 +84,7 @@ func (r *runner) runSyncpointDiffChecks(
 	lastPrimary *uint64,
 	allowInDDLWindow bool,
 ) (int, error) {
+	// Run up to "required" syncpoint diffs and update lastPrimary to advance the cursor.
 	if required <= 0 {
 		return 0, nil
 	}
@@ -189,6 +200,8 @@ func pickNextSyncpointCandidate(ctx context.Context, down *sql.DB, after uint64)
 }
 
 func fetchDDLWindows(ctx context.Context, host string, port int) ([]ddlWindow, error) {
+	// TiDB exposes recent DDL jobs via /ddl/history. We treat the job runtime as a window
+	// where snapshot reads may be inconsistent across schema versions.
 	u := fmt.Sprintf("http://%s:%d/ddl/history", host, port)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
@@ -339,6 +352,8 @@ func isSkippableSyncDiffFailure(outputTail string) bool {
 }
 
 func runSyncDiffInspector(ctx context.Context, confPath, logPath string, retries int) (string, error) {
+	// sync_diff_inspector output can be large. Keep a tail buffer for diagnostics while
+	// still appending full logs to a file in the workdir.
 	if retries < 1 {
 		retries = 1
 	}

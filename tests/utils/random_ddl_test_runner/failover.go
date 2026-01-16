@@ -16,6 +16,13 @@ func (r *runner) failoverLoop(ctx context.Context, motifStep *int32, trace *ddlT
 	_ = motifStep
 	_ = trace
 
+	// failoverLoop randomly kills and restarts captures to simulate process-level failover.
+	//
+	// This is only meaningful when the integration harness has started multiple captures
+	// (and the addresses are provided via config.failover.capture_addrs).
+	//
+	// The restart uses the integration helper scripts (run_cdc_server/kill_cdc_pid) which
+	// are expected to be in PATH when run under tests/integration_tests/*.
 	minD := r.cfg.Failover.MinInterval.Duration
 	maxD := r.cfg.Failover.MaxInterval.Duration
 	if maxD < minD {
@@ -44,6 +51,8 @@ func (r *runner) failoverLoop(ctx context.Context, motifStep *int32, trace *ddlT
 		}
 
 		if rng.Float64() < r.cfg.Failover.GatedProbability {
+			// Optional gating: avoid failover when checkpoint is not advancing to reduce
+			// the chance of amplifying an existing stall.
 			st1, err := r.getChangefeedStatus(ctx)
 			if err != nil {
 				return err

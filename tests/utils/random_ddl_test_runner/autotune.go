@@ -18,6 +18,11 @@ func autoTuneStep(
 	soft time.Duration,
 	hard time.Duration,
 ) autoTuneResult {
+	// autoTuneStep adjusts concurrency to keep replication progressing:
+	//   - If checkpoint is stalled beyond "soft" or DML success rate collapses, scale down first.
+	//   - If checkpoint is healthy, gradually scale up toward configured maxima.
+	//
+	// It returns fail=true only when checkpoint is stalled beyond "hard".
 	if sinceAdvance >= hard {
 		return autoTuneResult{fail: true}
 	}

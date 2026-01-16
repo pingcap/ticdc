@@ -67,6 +67,17 @@ func ddlWorker(
 	trace *ddlTrace,
 	logger *log.Logger,
 ) {
+	// ddlWorker is a best-effort DDL submitter.
+	//
+	// Concurrency control:
+	//   - Spawn MaxWorkers goroutines, but only workers with workerID < activeWorkers are "active".
+	//   - healthAndAutotuneLoop adjusts activeWorkers based on checkpoint liveness.
+	//
+	// Correctness model:
+	//   - Each DDL kind returns (sql, apply). apply updates the in-memory model and is invoked only
+	//     when the DDL succeeds, so subsequent DML/DDL generation can track schema evolution.
+	//   - DDL failures are expected under concurrency (e.g., conflicts, missing tables) and do not
+	//     stop the worker.
 	rng := rand.New(rand.NewSource(seed + int64(workerID)))
 
 	for {

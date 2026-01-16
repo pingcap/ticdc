@@ -7,15 +7,25 @@ import (
 )
 
 type ddlKind struct {
+	// name is used for logging and selector tracking.
 	name       string
 	domain     domain
 	baseWeight float64
-	lossy      bool
+	// lossy marks DDLs that can drop data or schema information (e.g., DROP/TRUNCATE/DROP COLUMN).
+	// These are still useful for coverage, but are typically constrained to churn domain.
+	lossy bool
 
+	// gen returns:
+	//   - sql: the DDL statement to execute on upstream.
+	//   - apply: a callback that mutates the in-memory model when and only when the DDL succeeds.
 	gen func(rng *rand.Rand, t *table) (sql string, apply func())
 }
 
 func defaultDDLKinds() []ddlKind {
+	// DDL kinds are grouped by domain:
+	//   - stable: schema changes that are relatively friendly to snapshot-based diffing.
+	//   - churn: destructive or fragile DDLs that can invalidate snapshot reads and diff configs.
+	//   - split_candidate: a subset used to stress split/region pressure with larger tables.
 	return []ddlKind{
 		{
 			name:       "add_column",

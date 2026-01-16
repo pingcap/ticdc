@@ -9,6 +9,11 @@ import (
 )
 
 func (r *runner) bootstrap() error {
+	// bootstrap creates an identical starting point on upstream and downstream.
+	//
+	// Rationale:
+	//   - The workload phase only writes to upstream. Downstream changes must come from TiCDC replication.
+	//   - A deterministic baseline makes end-to-end diffs and triage reproducible (seeded by cfg.Seed).
 	ctx := context.Background()
 	r.logger.Printf("bootstrap start: workdir=%s profile=%s", r.cfg.Workdir, r.cfg.Profile)
 
@@ -84,6 +89,7 @@ func insertInitialRows(ctx context.Context, up, down *sql.DB, tbl *table, rows i
 	schema := tbl.schema.clone()
 	tbl.mu.Unlock()
 
+	// Use placeholders for values to keep SQL ASCII-only while allowing any binary/JSON payloads.
 	var cols []column
 	for _, c := range schema.columns {
 		if c.generated != "" {
@@ -147,6 +153,8 @@ func backtickJoin(cols []string) string {
 }
 
 func buildDeterministicRowArgs(tbl *table, cols []column, rowID int64) []any {
+	// Deterministic values make bootstrap reproducible. Avoid non-ASCII in the SQL text by
+	// passing bytes/JSON via placeholders rather than embedding literals into the statement.
 	args := make([]any, 0, len(cols))
 	for _, c := range cols {
 		switch strings.ToUpper(c.typ.base) {

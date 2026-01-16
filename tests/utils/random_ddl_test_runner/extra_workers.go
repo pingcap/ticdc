@@ -18,6 +18,9 @@ func bigTxnWorker(
 	cfg dmlConfig,
 	activeWorkers *int32,
 ) {
+	// bigTxnWorker periodically runs large insert transactions to stress:
+	//   - large message paths for MQ sinks,
+	//   - large commit and apply paths for MySQL sink.
 	if !cfg.BigTxnEnabled || cfg.BigTxnInterval.Duration <= 0 {
 		return
 	}
@@ -50,6 +53,7 @@ func bigTxnWorker(
 }
 
 func runBigInsertTxn(ctx context.Context, db *sql.DB, tbl *table, rows int) error {
+	// Build a single multi-row INSERT inside a transaction to create a "big txn" workload.
 	tbl.mu.Lock()
 	if !tbl.exists {
 		tbl.mu.Unlock()
@@ -121,6 +125,8 @@ func conflictWriter(
 	cfg dmlConfig,
 	counters *dmlCounters,
 ) {
+	// conflictWriter continuously upserts into a small key space to create write conflicts.
+	// This targets row-level contention and duplicate key paths.
 	if !cfg.KeyConflictEnabled || cfg.KeyConflictKeyspace <= 0 {
 		return
 	}
@@ -167,6 +173,7 @@ func conflictWriter(
 }
 
 func collectConflictTables(model *clusterModel) []*table {
+	// Pick a stable target table for conflict writes to keep the workload deterministic.
 	var out []*table
 	for _, t := range model.churnTables {
 		// Use a single, deterministic churn family (t10) which is guaranteed to have `id` PK in initial schema.

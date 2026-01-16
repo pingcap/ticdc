@@ -306,6 +306,7 @@ func defaultTableFamilies() []tableFamily {
 }
 
 type table struct {
+	// mu guards mutable state (schema, name, exists, nextID, and motif markers).
 	mu            sync.Mutex
 	db            string
 	name          string
@@ -332,6 +333,8 @@ func (t *table) fqName() string {
 }
 
 type clusterModel struct {
+	// clusterModel is an in-memory approximation of the workload surface used for
+	// generating DML and DDL. It is updated only when a DDL succeeds on upstream.
 	dbs          []string
 	tables       []*table
 	hotTables    []*table
@@ -342,6 +345,8 @@ type clusterModel struct {
 }
 
 func buildInitialModel(cfg *config) *clusterModel {
+	// buildInitialModel constructs the initial schema model used by both bootstrap and workload.
+	// It must remain deterministic for a given config so tests can be reproduced by seed.
 	dbs := defaultDatabaseNames()
 	families := defaultTableFamilies()
 
@@ -403,6 +408,7 @@ func buildInitialModel(cfg *config) *clusterModel {
 }
 
 func (m *clusterModel) pickTableForDML(rng *rand.Rand, hotspotRatio float64) *table {
+	// Prefer "hot" tables with a configurable probability to create hotspot pressure.
 	if len(m.hotTables) == 0 || len(m.coldTables) == 0 {
 		return m.tables[rng.Intn(len(m.tables))]
 	}

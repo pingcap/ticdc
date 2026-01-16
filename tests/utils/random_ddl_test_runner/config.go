@@ -133,6 +133,8 @@ func loadConfig(path string) (*config, error) {
 }
 
 func (c *config) applyDefaultsAndValidate() error {
+	// Defaults should keep the smoke profile fast while still exercising key paths.
+	// "weekly" uses larger concurrency / data volumes to increase coverage.
 	if c.Workdir == "" {
 		return fmt.Errorf("workdir is required")
 	}
@@ -305,6 +307,10 @@ func (c *config) applyDefaultsAndValidate() error {
 	}
 
 	// Basic validation.
+	// Keep the schema shape stable so that:
+	//   - bootstrap can create a predictable workload surface,
+	//   - the integration scripts can pre-create storage sink directories deterministically,
+	//   - the model can assume fixed database/table sets.
 	if c.Bootstrap.DBCount != 5 {
 		return fmt.Errorf("db_count must be 5 to match the design doc, got %d", c.Bootstrap.DBCount)
 	}

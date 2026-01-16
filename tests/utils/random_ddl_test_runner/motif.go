@@ -23,6 +23,13 @@ func runPrimaryMotif(
 	logger *log.Logger,
 	profile string,
 ) {
+	// The motif is a deterministic DDL sequence on a single table family (t03) intended to
+	// cover tricky replication cases:
+	//   - adding a new NOT NULL column with different defaults per database
+	//   - unifying defaults over time
+	//   - evolving primary keys after data already exists
+	//
+	// DML workers consult motifStep to adjust their write patterns accordingly.
 	step1At, step2At, step3At := motifSchedule(profile)
 
 	if err := sleepWithContext(ctx, step1At); err != nil {
@@ -48,6 +55,8 @@ func runPrimaryMotif(
 }
 
 func motifSchedule(profile string) (time.Duration, time.Duration, time.Duration) {
+	// Use a profile-based schedule so that smoke runs complete all steps quickly,
+	// while weekly runs keep more steady-state time between transitions.
 	if profile == "weekly" {
 		return 2 * time.Minute, 10 * time.Minute, 20 * time.Minute
 	}

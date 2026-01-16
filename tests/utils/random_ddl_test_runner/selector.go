@@ -14,6 +14,8 @@ type ddlSelector struct {
 }
 
 func newDDLSelector(kinds []ddlKind, windowSize int) *ddlSelector {
+	// The selector is stateful: it reduces weight for DDL kinds that were recently successful,
+	// which helps spread coverage and avoids repeatedly hammering the same schema change.
 	return &ddlSelector{
 		windowSize: windowSize,
 		counts:     make(map[string]int),
@@ -22,6 +24,9 @@ func newDDLSelector(kinds []ddlKind, windowSize int) *ddlSelector {
 }
 
 func (s *ddlSelector) pick(rng *rand.Rand) ddlKind {
+	// Pick with dynamic weights:
+	//   weight(kind) = baseWeight / (1 + recentSuccessCount(kind))
+	// where recentSuccessCount is tracked in a sliding window of the last N successes.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -48,6 +53,7 @@ func (s *ddlSelector) pick(rng *rand.Rand) ddlKind {
 }
 
 func (s *ddlSelector) record(kindName string) {
+	// Record a successful DDL kind for weight dampening in a bounded window.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

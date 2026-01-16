@@ -13,6 +13,13 @@ import (
 )
 
 func scanLogsForPatterns(workdir string, patterns []string, failOnMatch bool, logger *log.Logger) error {
+	// scanLogsForPatterns is a lightweight alternative to external tools (e.g., rg) so the
+	// runner can be used in minimal environments.
+	//
+	// Implementation notes:
+	//   - Convert to lowercase on the fly and use bytes.Contains for substring search.
+	//   - Use bufio.Reader.ReadLine to cap memory and handle very long lines by stitching
+	//     a small suffix ("carry") across fragments.
 	files, err := collectLogFiles(workdir)
 	if err != nil {
 		return err

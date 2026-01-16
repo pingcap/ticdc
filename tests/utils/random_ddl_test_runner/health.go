@@ -17,6 +17,10 @@ type changefeedStatus struct {
 }
 
 func (r *runner) getChangefeedStatus(ctx context.Context) (changefeedStatus, error) {
+	// Query TiCDC OpenAPI to obtain changefeed state and checkpoint tso.
+	//
+	// The integration tests use a fixed basic auth user/password. This runner keeps the
+	// request logic small and dependency-free to remain easy to vendor into test envs.
 	if r.cfg.CDC.ChangefeedID == "" {
 		return changefeedStatus{}, fmt.Errorf("cdc.changefeed_id is required")
 	}
@@ -65,6 +69,7 @@ func (r *runner) getChangefeedStatus(ctx context.Context) (changefeedStatus, err
 }
 
 func parseUint64(v any) uint64 {
+	// TiCDC API fields may be encoded as number or string depending on endpoint/version.
 	switch x := v.(type) {
 	case float64:
 		if x < 0 {

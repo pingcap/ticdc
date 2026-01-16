@@ -23,6 +23,8 @@ type dmlCounters struct {
 }
 
 func (c *dmlCounters) record(err error) {
+	// DML errors are expected under concurrent DDL and are not fatal by themselves.
+	// Counters are used by the health loop to infer a success rate for auto-tuning.
 	atomic.AddUint64(&c.total, 1)
 	if err == nil {
 		atomic.AddUint64(&c.success, 1)
@@ -76,6 +78,15 @@ func dmlWorker(
 	counters *dmlCounters,
 	motifStep *int32,
 ) {
+	// dmlWorker generates best-effort DML against upstream.
+	//
+	// Concurrency control:
+	//   - Spawn MaxWorkers goroutines, but only workerID < activeWorkers are "active".
+	//   - healthAndAutotuneLoop adjusts activeWorkers based on checkpoint liveness.
+	//
+	// Schema handling:
+	//   - DML generation reads the table schema under lock and then executes outside the lock.
+	//   - DDL may race with DML, so unknown table/column errors are tracked and tolerated.
 	rng := rand.New(rand.NewSource(seed + int64(workerID)))
 
 	for {
@@ -125,27 +136,32 @@ func buildGenericDML(rng *rand.Rand, tbl *table) (string, []any, error) {
 		return "", nil, nil
 	}
 
-	// Keyless tables: insert only.
-	if len(tbl.schema.primaryKey) == 0 {
-		return buildInsertLocked(rng, tbl, nil)
-	}
-
-	// Composite PK: insert only (simplify).
-	if len(tbl.schema.primaryKey) != 1 {
-		return buildInsertLocked(rng, tbl, nil)
-	}
-
+	// Keep the overall mix stable:
+	//   - INSERT is the dominant operation
+	//   - UPDATE/DELETE provide mutation pressure
+	//
+	// For tables without a single-column primary key (keyless or composite PK), UPDATE/DELETE
+	// fall back to bounded operations using LIMIT 1 to avoid requiring key materialization.
 	switch rng.Intn(10) {
 	case 0, 1:
-		return buildDeleteLocked(rng, tbl)
+		stmt, args, err := buildDeleteLocked(rng, tbl)
+		if stmt != "" || err != nil {
+			return stmt, args, err
+		}
 	case 2, 3:
-		return buildUpdateLocked(rng, tbl)
+		stmt, args, err := buildUpdateLocked(rng, tbl)
+		if stmt != "" || err != nil {
+			return stmt, args, err
+		}
 	default:
-		return buildInsertLocked(rng, tbl, nil)
+		// Fall through to INSERT.
 	}
+	return buildInsertLocked(rng, tbl, nil)
 }
 
 func buildMotifDML(rng *rand.Rand, tbl *table, step int32) (string, []any, error) {
+	// Motif DML intentionally omits some columns to exercise default value drift
+	// and schema evolution patterns coordinated by motif.go.
 	tbl.mu.Lock()
 	defer tbl.mu.Unlock()
 	if !tbl.exists {
@@ -174,6 +190,7 @@ func buildMotifDML(rng *rand.Rand, tbl *table, step int32) (string, []any, error
 }
 
 func buildInsertLocked(rng *rand.Rand, tbl *table, omitCols map[string]struct{}) (string, []any, error) {
+	// Inserts are generated from a schema snapshot taken under table lock.
 	schema := tbl.schema.clone()
 	rowID := tbl.nextID
 	tbl.nextID++
@@ -213,51 +230,83 @@ func buildInsertLocked(rng *rand.Rand, tbl *table, omitCols map[string]struct{})
 
 func buildUpdateLocked(rng *rand.Rand, tbl *table) (string, []any, error) {
 	schema := tbl.schema.clone()
-	if len(schema.primaryKey) != 1 {
-		return "", nil, nil
-	}
-	pk := schema.primaryKey[0]
-	if tbl.nextID <= 1 {
-		return "", nil, nil
-	}
-	key := int64(rng.Intn(int(tbl.nextID-1)) + 1)
 
 	var candidates []column
 	for _, c := range schema.columns {
 		if c.generated != "" {
 			continue
 		}
-		if c.name == pk {
+		if containsString(schema.primaryKey, c.name) {
 			continue
 		}
 		candidates = append(candidates, c)
+	}
+
+	if len(schema.primaryKey) == 1 {
+		// Single-column PK: do targeted updates by PK to keep the operation deterministic.
+		pk := schema.primaryKey[0]
+		if tbl.nextID <= 1 {
+			return "", nil, nil
+		}
+		key := int64(rng.Intn(int(tbl.nextID-1)) + 1)
+		if len(candidates) == 0 {
+			// As a last resort, update the PK itself to still generate UPDATE traffic.
+			// Pick a new key different from the old one.
+			newKey := key + int64(rng.Intn(1024)+1)
+			stmt := fmt.Sprintf("UPDATE %s SET `%s`=? WHERE `%s`=?",
+				tbl.fqName(),
+				pk,
+				pk,
+			)
+			return stmt, []any{newKey, key}, nil
+		}
+		col := candidates[rng.Intn(len(candidates))]
+		stmt := fmt.Sprintf("UPDATE %s SET `%s`=? WHERE `%s`=?",
+			tbl.fqName(),
+			col.name,
+			pk,
+		)
+		args := []any{buildRandomValue(rng, tbl, col, key), key}
+		return stmt, args, nil
+	}
+
+	// Keyless or composite PK tables: do a bounded update without relying on key materialization.
+	if len(candidates) == 0 {
+		for _, c := range schema.columns {
+			if c.generated != "" {
+				continue
+			}
+			candidates = append(candidates, c)
+		}
 	}
 	if len(candidates) == 0 {
 		return "", nil, nil
 	}
 	col := candidates[rng.Intn(len(candidates))]
-
-	stmt := fmt.Sprintf("UPDATE %s SET `%s`=? WHERE `%s`=?",
+	rowID := tbl.nextID
+	if rowID <= 0 {
+		rowID = 1
+	}
+	stmt := fmt.Sprintf("UPDATE %s SET `%s`=? LIMIT 1",
 		tbl.fqName(),
 		col.name,
-		pk,
 	)
-	args := []any{buildRandomValue(rng, tbl, col, key), key}
-	return stmt, args, nil
+	return stmt, []any{buildRandomValue(rng, tbl, col, rowID)}, nil
 }
 
 func buildDeleteLocked(rng *rand.Rand, tbl *table) (string, []any, error) {
 	schema := tbl.schema.clone()
-	if len(schema.primaryKey) != 1 {
-		return "", nil, nil
+	if len(schema.primaryKey) == 1 {
+		pk := schema.primaryKey[0]
+		if tbl.nextID <= 1 {
+			return "", nil, nil
+		}
+		key := int64(rng.Intn(int(tbl.nextID-1)) + 1)
+		stmt := fmt.Sprintf("DELETE FROM %s WHERE `%s`=?", tbl.fqName(), pk)
+		return stmt, []any{key}, nil
 	}
-	pk := schema.primaryKey[0]
-	if tbl.nextID <= 1 {
-		return "", nil, nil
-	}
-	key := int64(rng.Intn(int(tbl.nextID-1)) + 1)
-	stmt := fmt.Sprintf("DELETE FROM %s WHERE `%s`=?", tbl.fqName(), pk)
-	return stmt, []any{key}, nil
+	// Keyless or composite PK tables: do a bounded delete without requiring keys.
+	return fmt.Sprintf("DELETE FROM %s LIMIT 1", tbl.fqName()), nil, nil
 }
 
 func buildMotifUpdateAfterUnifiedLocked(rng *rand.Rand, tbl *table) (string, []any, error) {
@@ -278,6 +327,7 @@ func buildMotifUpdateAfterUnifiedLocked(rng *rand.Rand, tbl *table) (string, []a
 }
 
 func buildRandomValue(rng *rand.Rand, tbl *table, c column, rowID int64) any {
+	// Keep payloads deterministic enough for triage, and keep SQL text ASCII-only by using placeholders.
 	switch strings.ToUpper(c.typ.base) {
 	case "BIGINT":
 		if c.name == "id" {

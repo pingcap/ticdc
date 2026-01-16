@@ -15,6 +15,15 @@ import (
 )
 
 func (r *runner) workload() error {
+	// workload runs a bounded-duration stress workload against upstream only, while verifying:
+	//   - the changefeed remains in "normal" state,
+	//   - checkpoint continues advancing (with auto-tuning on stalls),
+	//   - optional snapshot diffs at TiCDC syncpoints (MySQL sink),
+	//   - optional capture failover recovery (multi-capture failover case).
+	//
+	// After the time budget is consumed, the runner inserts a finish mark row on upstream and
+	// waits for it to appear on downstream as a "catch-up" barrier, then writes a final
+	// diff_config.toml for sync_diff_inspector.
 	ctx, cancel := context.WithTimeout(context.Background(), r.cfg.Duration.Duration)
 	defer cancel()
 
@@ -224,6 +233,10 @@ func (r *runner) healthAndAutotuneLoop(
 	activeDMLWorkers *int32,
 	activeDDLWorkers *int32,
 ) error {
+	// This loop is the guardrail for the stress test:
+	//   - It continuously checks changefeed state and checkpoint progress.
+	//   - It degrades worker concurrency on stalls or low DML success rate to help recovery.
+	//   - It fails the run if checkpoint does not advance for NoAdvanceHard.
 	ticker := time.NewTicker(r.cfg.Verify.HealthInterval.Duration)
 	defer ticker.Stop()
 
@@ -386,6 +399,9 @@ func listExistingBaseTables(ctx context.Context, db *sql.DB, dbs []string) ([]st
 }
 
 func (r *runner) createAndWaitFinishMark(ctx context.Context, up, down *sql.DB, model *clusterModel) error {
+	// The finish mark is a replication barrier: the workload is already stopped, but the
+	// sink / consumer may still be draining. Waiting for the finish mark to appear on
+	// downstream provides a deterministic "catch up" point before running the final diff.
 	if len(model.dbs) == 0 {
 		return fmt.Errorf("no databases in model")
 	}
