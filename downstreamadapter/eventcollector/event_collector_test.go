@@ -203,8 +203,8 @@ func TestRemoveLastDispatcher(t *testing.T) {
 	c.Run(ctx)
 	defer c.Close()
 
-	cfID1 := common.NewChangefeedID(common.DefaultKeyspaceNamme)
-	cfID2 := common.NewChangefeedID(common.DefaultKeyspaceNamme)
+	cfID1 := common.NewChangefeedID(common.DefaultKeyspaceName)
+	cfID2 := common.NewChangefeedID(common.DefaultKeyspaceName)
 
 	d1 := &mockEventDispatcher{id: common.NewDispatcherID(), tableSpan: &heartbeatpb.TableSpan{TableID: 1}, changefeedID: cfID1}
 	d2 := &mockEventDispatcher{id: common.NewDispatcherID(), tableSpan: &heartbeatpb.TableSpan{TableID: 2}, changefeedID: cfID1}
