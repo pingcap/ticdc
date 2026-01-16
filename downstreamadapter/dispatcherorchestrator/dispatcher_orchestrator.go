@@ -367,14 +367,13 @@ func createBootstrapResponse(
 		response.CheckpointTs = startTs
 	}
 
+	retrieveDispatcherSpanForBootstrapResponse(manager, response)
 	if manager.RedoEnable {
 		// table trigger redo dispatcher startTs
 		if redoStartTs != 0 {
 			response.RedoCheckpointTs = redoStartTs
 		}
 		retrieveRedoDispatcherSpanForBootstrapResponse(manager, response)
-	} else {
-		retrieveDispatcherSpanForBootstrapResponse(manager, response)
 	}
 	retrieveOperatorsForBootstrapResponse(changefeedID, manager, response)
 
