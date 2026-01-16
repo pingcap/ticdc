@@ -104,7 +104,7 @@ func TestBatchEvents(t *testing.T) {
 	handler := mockHandler{}
 	eq := newEventQueue(&handler)
 
-	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", nil, newBatcher[*mockEvent](NewBatchConfig(3, 1024*1024)))
+	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", nil, newBatcher[*mockEvent](NewBatchConfig(3, 0)))
 	eq.initPath(path)
 
 	// append multiple events with the same DataGroup
@@ -137,7 +137,7 @@ func TestBatchableAndNonBatchableEvents(t *testing.T) {
 	handler := mockHandler{}
 	eq := newEventQueue(&handler)
 
-	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", nil, newBatcher[*mockEvent](NewBatchConfig(3, 1024*1024)))
+	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", nil, newBatcher[*mockEvent](NewBatchConfig(3, 0)))
 	eq.initPath(path)
 
 	// append a non-batchable event

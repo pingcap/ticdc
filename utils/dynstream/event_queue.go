@@ -151,6 +151,13 @@ func (q *eventQueue[A, P, T, D, H]) popEvents() ([]T, *pathInfo[A, P, T, D, H]) 
 				front.eventType.Property == NonBatchable {
 				break
 			}
+			// Make sure we don't exceed the hard bytes limit (best-effort).
+			// If a single event itself exceeds hardBytes, we still need to process it.
+			if batcher.config.hardBytes > 0 &&
+				batcher.nBytes > 0 &&
+				batcher.nBytes+front.eventSize > batcher.config.hardBytes {
+				break
+			}
 			batcher.addEvent(front.event, front.eventSize)
 			path.popEvent()
 			count++
