@@ -19,12 +19,13 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
-	"github.com/pingcap/ticdc/cdc/model"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
+	"go.uber.org/atomic"
 )
 
 func TestUpdateGCSafePoint(t *testing.T) {
@@ -32,8 +33,14 @@ func TestUpdateGCSafePoint(t *testing.T) {
 
 	mockPDClient := &MockPDClient{}
 	pdClock := pdutil.NewClock4Test()
-	gcManager := NewManager(etcd.GcServiceIDForTest(),
-		mockPDClient, pdClock).(*gcManager)
+	gcManager := &gcManager{
+		gcServiceID:       etcd.GcServiceIDForTest(),
+		pdClient:          mockPDClient,
+		pdClock:           pdClock,
+		gcTTL:             60,
+		lastUpdatedTime:   atomic.NewTime(time.Now().Add(-gcSafepointUpdateInterval)),
+		lastSucceededTime: atomic.NewTime(time.Now()),
+	}
 	ctx := context.Background()
 
 	startTs := oracle.GoTimeToTS(time.Now())
@@ -47,13 +54,13 @@ func TestUpdateGCSafePoint(t *testing.T) {
 	require.Nil(t, err)
 
 	// gcManager must not update frequent.
-	gcManager.lastUpdatedTime = time.Now()
+	gcManager.lastUpdatedTime.Store(time.Now())
 	startTs++
 	err = gcManager.TryUpdateGCSafePoint(ctx, startTs, false /* forceUpdate */)
 	require.Nil(t, err)
 
 	// Assume that the gc safe point updated gcSafepointUpdateInterval ago.
-	gcManager.lastUpdatedTime = time.Now().Add(-gcSafepointUpdateInterval)
+	gcManager.lastUpdatedTime.Store(time.Now().Add(-gcSafepointUpdateInterval))
 	startTs++
 	mockPDClient.UpdateServiceGCSafePointFunc = func(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
 		require.Equal(t, startTs, safePoint)
@@ -88,18 +95,26 @@ func TestCheckStaleCheckpointTs(t *testing.T) {
 
 	mockPDClient := &MockPDClient{}
 	pdClock := pdutil.NewClock4Test()
-	gcManager := NewManager(etcd.GcServiceIDForTest(),
-		mockPDClient, pdClock).(*gcManager)
+	gcManager := &gcManager{
+		gcServiceID:       etcd.GcServiceIDForTest(),
+		pdClient:          mockPDClient,
+		pdClock:           pdClock,
+		gcTTL:             60,
+		lastUpdatedTime:   atomic.NewTime(time.Now().Add(-gcSafepointUpdateInterval)),
+		lastSucceededTime: atomic.NewTime(time.Now()),
+	}
 	ctx := context.Background()
 
 	time.Sleep(1 * time.Second)
 
-	cfID := model.DefaultChangeFeedID("cfID")
-	err := gcManager.CheckStaleCheckpointTs(ctx, cfID, oracle.GoTimeToTS(time.Now()))
+	cfID := commonType.NewChangeFeedIDWithName("cfID", "")
+	err := gcManager.CheckStaleCheckpointTs(ctx, 0, cfID, oracle.GoTimeToTS(time.Now()))
 	require.Nil(t, err)
 
 	gcManager.lastSafePointTs.Store(20)
-	err = gcManager.CheckStaleCheckpointTs(ctx, cfID, 10)
+	err = gcManager.CheckStaleCheckpointTs(ctx, 0, cfID, 10)
 	require.True(t, cerror.ErrSnapshotLostByGC.Equal(errors.Cause(err)))
-	require.True(t, cerror.IsChangefeedGCFastFailError(err))
+	rfcCode, ok := cerror.RFCCode(err)
+	require.True(t, ok)
+	require.True(t, cerror.IsChangefeedGCFastFailErrorCode(rfcCode))
 }

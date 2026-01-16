@@ -18,6 +18,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/config"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
@@ -42,10 +43,10 @@ func BenchmarkSkipDML(b *testing.B) {
 		EventFilters: []*config.EventFilterRule{
 			{
 				Matcher:                  []string{"test.student"},
-				IgnoreInsertValueExpr:    "name = 'Will'",
-				IgnoreDeleteValueExpr:    "age >= 32",
-				IgnoreUpdateOldValueExpr: "gender = 'female'",
-				IgnoreUpdateNewValueExpr: "age > 28",
+				IgnoreInsertValueExpr:    util.AddressOf("name = 'Will'"),
+				IgnoreDeleteValueExpr:    util.AddressOf("age >= 32"),
+				IgnoreUpdateOldValueExpr: util.AddressOf("gender = 'female'"),
+				IgnoreUpdateNewValueExpr: util.AddressOf("age > 28"),
 			},
 		},
 	}

@@ -42,19 +42,19 @@ func TestIsSchema(t *testing.T) {
 		{TiCDCSystemSchema, true},
 	}
 	for _, c := range cases {
-		require.Equal(t, c.result, isSysSchema(c.schema), "case +%v", c)
+		require.Equal(t, c.result, IsSysSchema(c.schema), "case +%v", c)
 	}
 }
 
 func BenchmarkIsSysSchemaInputLower(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		isSysSchema("mysql")
+		IsSysSchema("mysql")
 	}
 }
 
 func BenchmarkIsSysSchemaInputUpper(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		isSysSchema("MYSQL")
+		IsSysSchema("MYSQL")
 	}
 }
 

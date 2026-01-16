@@ -21,7 +21,11 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	leakutil.SetUpLeakTest(m,
+	opts := []goleak.Option{
 		goleak.IgnoreAnyFunction("github.com/godbus/dbus.(*Conn).Auth"),
-	)
+		goleak.IgnoreAnyFunction("github.com/godbus/dbus.(*Conn).inWorker"),
+		goleak.IgnoreCurrent(),
+	}
+
+	leakutil.SetUpLeakTest(m, opts...)
 }

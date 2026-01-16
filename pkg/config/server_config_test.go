@@ -27,7 +27,7 @@ func TestServerConfigMarshal(t *testing.T) {
 	b, err := conf.Marshal()
 	require.NoError(t, err)
 	conf2 := new(ServerConfig)
-	err = conf2.Unmarshal(b)
+	err = conf2.Unmarshal([]byte(b))
 	require.NoError(t, err)
 	require.Equal(t, conf, conf2)
 }

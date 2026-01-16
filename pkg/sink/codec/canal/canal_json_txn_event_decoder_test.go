@@ -14,108 +14,102 @@
 package canal
 
 import (
-	"context"
 	"testing"
 
-	"github.com/pingcap/ticdc/cdc/model"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/utils"
-	"github.com/pingcap/tidb/pkg/types"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewCanalJSONBatchDecoder4RowMessage(t *testing.T) {
-	_, insertEvent, _, _ := utils.NewLargeEvent4Test(t, config.GetDefaultReplicaConfig())
-	ctx := context.Background()
+func TestTxnDecoderDecodeFromTxnEncoder(t *testing.T) {
+	t.Parallel()
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	_ = helper.DDL2Event(`create table test.t(id int primary key, name varchar(32))`)
+	dmlEvent := helper.DML2Event("test", "t", `insert into test.t values(1, "aa"),(2, "bb")`)
+	require.NotNil(t, dmlEvent)
 
 	for _, encodeEnable := range []bool{false, true} {
-		encodeConfig := common.NewConfig(config.ProtocolCanalJSON)
+		encodeConfig := codecCommon.NewConfig(config.ProtocolCanalJSON)
 		encodeConfig.EnableTiDBExtension = encodeEnable
-		encodeConfig.Terminator = config.CRLF
+		encodeConfig.Terminator = "\n"
 
-		builder, err := NewJSONRowEventEncoderBuilder(ctx, encodeConfig)
-		require.NoError(t, err)
-		encoder := builder.Build()
-
-		err = encoder.AppendRowChangedEvent(ctx, "", insertEvent, nil)
-		require.NoError(t, err)
-
+		encoder := NewJSONTxnEventEncoder(encodeConfig)
+		require.NoError(t, encoder.AppendTxnEvent(dmlEvent))
 		messages := encoder.Build()
-		require.Equal(t, 1, len(messages))
+		require.Len(t, messages, 1)
+
 		msg := messages[0]
+		require.Equal(t, 2, msg.GetRowsCount())
 
 		for _, decodeEnable := range []bool{false, true} {
-			decodeConfig := common.NewConfig(config.ProtocolCanalJSON)
+			decodeConfig := codecCommon.NewConfig(config.ProtocolCanalJSON)
 			decodeConfig.EnableTiDBExtension = decodeEnable
+			decodeConfig.Terminator = "\n"
 
-			decoder := NewCanalJSONTxnEventDecoder(decodeConfig)
-			err = decoder.AddKeyValue(msg.Key, msg.Value)
-			require.NoError(t, err)
+			decoder := NewTxnDecoder(decodeConfig)
+			decoder.AddKeyValue(msg.Key, msg.Value)
 
-			ty, hasNext, err := decoder.HasNext()
-			require.NoError(t, err)
-			require.True(t, hasNext)
-			require.Equal(t, model.MessageTypeRow, ty)
-
-			decodedEvent, err := decoder.NextRowChangedEvent()
-			require.NoError(t, err)
-
-			if encodeEnable && decodeEnable {
-				require.Equal(t, insertEvent.CommitTs, decodedEvent.CommitTs)
-			}
-			require.Equal(t, insertEvent.TableInfo.GetSchemaName(), decodedEvent.TableInfo.GetSchemaName())
-			require.Equal(t, insertEvent.TableInfo.GetTableName(), decodedEvent.TableInfo.GetTableName())
-
-			decodedColumns := make(map[string]*model.ColumnData, len(decodedEvent.Columns))
-			for _, column := range decodedEvent.Columns {
-				colName := decodedEvent.TableInfo.ForceGetColumnName(column.ColumnID)
-				decodedColumns[colName] = column
-			}
-			for _, col := range insertEvent.Columns {
-				colName := insertEvent.TableInfo.ForceGetColumnName(col.ColumnID)
-				decoded, ok := decodedColumns[colName]
-				require.True(t, ok)
-				switch v := col.Value.(type) {
-				case types.VectorFloat32:
-					require.EqualValues(t, v.String(), decoded.Value)
-				default:
-					require.EqualValues(t, v, decoded.Value)
+			dmlEvent.Rewind()
+			decodedCount := 0
+			for {
+				ty, hasNext := decoder.HasNext()
+				if !hasNext {
+					break
 				}
+				require.Equal(t, codecCommon.MessageTypeRow, ty)
+
+				decoded := decoder.NextDMLEvent()
+				require.NotNil(t, decoded)
+
+				if encodeEnable && decodeEnable {
+					require.Equal(t, dmlEvent.GetCommitTs(), decoded.GetCommitTs())
+				} else {
+					require.Equal(t, uint64(0), decoded.GetCommitTs())
+				}
+				require.Equal(t, dmlEvent.TableInfo.GetSchemaName(), decoded.TableInfo.GetSchemaName())
+				require.Equal(t, dmlEvent.TableInfo.GetTableName(), decoded.TableInfo.GetTableName())
+
+				originChange, ok := dmlEvent.GetNextRow()
+				require.True(t, ok)
+				decodedChange, ok := decoded.GetNextRow()
+				require.True(t, ok)
+				codecCommon.CompareRow(t, originChange, dmlEvent.TableInfo, decodedChange, decoded.TableInfo)
+
+				_, ok = decoded.GetNextRow()
+				require.False(t, ok)
+				decodedCount++
 			}
-
-			_, hasNext, _ = decoder.HasNext()
-			require.False(t, hasNext)
-
-			decodedEvent, err = decoder.NextRowChangedEvent()
-			require.Error(t, err)
-			require.Nil(t, decodedEvent)
+			require.Equal(t, 2, decodedCount)
 		}
 	}
 }
 
-func TestCanalJSONBatchDecoderWithTerminator(t *testing.T) {
+func TestTxnDecoderWithTerminator(t *testing.T) {
+	t.Parallel()
+
 	encodedValue := `{"id":0,"database":"test","table":"employee","pkNames":["id"],"isDdl":false,"type":"INSERT","es":1668067205238,"ts":1668067206650,"sql":"","sqlType":{"FirstName":12,"HireDate":91,"LastName":12,"OfficeLocation":12,"id":4},"mysqlType":{"FirstName":"varchar","HireDate":"date","LastName":"varchar","OfficeLocation":"varchar","id":"int"},"data":[{"FirstName":"Bob","HireDate":"2014-06-04","LastName":"Smith","OfficeLocation":"New York","id":"101"}],"old":null}
 {"id":0,"database":"test","table":"employee","pkNames":["id"],"isDdl":false,"type":"UPDATE","es":1668067229137,"ts":1668067230720,"sql":"","sqlType":{"FirstName":12,"HireDate":91,"LastName":12,"OfficeLocation":12,"id":4},"mysqlType":{"FirstName":"varchar","HireDate":"date","LastName":"varchar","OfficeLocation":"varchar","id":"int"},"data":[{"FirstName":"Bob","HireDate":"2015-10-08","LastName":"Smith","OfficeLocation":"Los Angeles","id":"101"}],"old":[{"FirstName":"Bob","HireDate":"2014-06-04","LastName":"Smith","OfficeLocation":"New York","id":"101"}]}
 {"id":0,"database":"test","table":"employee","pkNames":["id"],"isDdl":false,"type":"DELETE","es":1668067230388,"ts":1668067231725,"sql":"","sqlType":{"FirstName":12,"HireDate":91,"LastName":12,"OfficeLocation":12,"id":4},"mysqlType":{"FirstName":"varchar","HireDate":"date","LastName":"varchar","OfficeLocation":"varchar","id":"int"},"data":[{"FirstName":"Bob","HireDate":"2015-10-08","LastName":"Smith","OfficeLocation":"Los Angeles","id":"101"}],"old":null}`
-	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
+	codecConfig := codecCommon.NewConfig(config.ProtocolCanalJSON)
 	codecConfig.Terminator = "\n"
-	decoder := NewCanalJSONTxnEventDecoder(codecConfig)
+	decoder := NewTxnDecoder(codecConfig)
 
-	err := decoder.AddKeyValue(nil, []byte(encodedValue))
-	require.NoError(t, err)
+	decoder.AddKeyValue(nil, []byte(encodedValue))
 
 	cnt := 0
 	for {
-		tp, hasNext, err := decoder.HasNext()
+		tp, hasNext := decoder.HasNext()
 		if !hasNext {
 			break
 		}
-		require.NoError(t, err)
-		require.Equal(t, model.MessageTypeRow, tp)
+		require.Equal(t, codecCommon.MessageTypeRow, tp)
 		cnt++
-		event, err := decoder.NextRowChangedEvent()
-		require.NoError(t, err)
+		event := decoder.NextDMLEvent()
 		require.NotNil(t, event)
 	}
 	require.Equal(t, 3, cnt)

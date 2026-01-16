@@ -17,15 +17,17 @@ import (
 	"context"
 	"testing"
 
-	"github.com/pingcap/ticdc/cdc/model"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/stretchr/testify/require"
 )
 
 func TestClaimCheck(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
-	changefeedID := model.DefaultChangeFeedID("test")
+	changefeedID := commonType.NewChangeFeedIDWithName("test", "")
 	largeHandleConfig := config.NewDefaultLargeMessageHandleConfig()
 
 	claimCheck, err := New(ctx, largeHandleConfig, changefeedID)
