@@ -33,6 +33,9 @@ type DispatcherMap[T dispatcher.Dispatcher] struct {
 	m sync.Map
 	// sequence number is increasing when dispatcher is added.
 	//
+	// Seq is a generation marker for heartbeat reordering/deduplication only. It is NOT correlated with
+	// checkpointTs/resolvedTs progress: a larger Seq does not imply a larger checkpointTs.
+	//
 	// Seq is used to prevent the fallback of changefeed's checkpointTs.
 	// When some new dispatcher(table) is being added, the maintainer will block the forward of changefeed's checkpointTs
 	// until the maintainer receive the message that the new dispatcher's component status change to working.
@@ -315,7 +318,6 @@ func (h *HeartBeatResponseHandler) Handle(dispatcherManager *DispatcherManager, 
 			}
 		case heartbeatpb.InfluenceType_DB:
 			schemaID := dispatcherStatus.InfluencedDispatchers.SchemaID
-			excludeDispatcherID := common.NewDispatcherIDFromPB(dispatcherStatus.InfluencedDispatchers.ExcludeDispatcherId)
 			var dispatcherIds []common.DispatcherID
 			if common.IsRedoMode(heartbeatResponse.Mode) {
 				dispatcherIds = dispatcherManager.GetAllRedoDispatchers(schemaID)
@@ -323,23 +325,16 @@ func (h *HeartBeatResponseHandler) Handle(dispatcherManager *DispatcherManager, 
 				dispatcherIds = dispatcherManager.GetAllDispatchers(schemaID)
 			}
 			for _, id := range dispatcherIds {
-				if id != excludeDispatcherID {
-					h.dispatcherStatusDynamicStream.Push(id, dispatcher.NewDispatcherStatusWithID(dispatcherStatus, id))
-				}
+				h.dispatcherStatusDynamicStream.Push(id, dispatcher.NewDispatcherStatusWithID(dispatcherStatus, id))
 			}
 		case heartbeatpb.InfluenceType_All:
-			excludeDispatcherID := common.NewDispatcherIDFromPB(dispatcherStatus.InfluencedDispatchers.ExcludeDispatcherId)
 			if common.IsRedoMode(heartbeatResponse.Mode) {
 				dispatcherManager.GetRedoDispatcherMap().ForEach(func(id common.DispatcherID, _ *dispatcher.RedoDispatcher) {
-					if id != excludeDispatcherID {
-						h.dispatcherStatusDynamicStream.Push(id, dispatcher.NewDispatcherStatusWithID(dispatcherStatus, id))
-					}
+					h.dispatcherStatusDynamicStream.Push(id, dispatcher.NewDispatcherStatusWithID(dispatcherStatus, id))
 				})
 			} else {
 				dispatcherManager.GetDispatcherMap().ForEach(func(id common.DispatcherID, _ *dispatcher.EventDispatcher) {
-					if id != excludeDispatcherID {
-						h.dispatcherStatusDynamicStream.Push(id, dispatcher.NewDispatcherStatusWithID(dispatcherStatus, id))
-					}
+					h.dispatcherStatusDynamicStream.Push(id, dispatcher.NewDispatcherStatusWithID(dispatcherStatus, id))
 				})
 			}
 		}
@@ -482,7 +477,7 @@ func (h *RedoResolvedTsForwardMessageHandler) OnDrop(event RedoResolvedTsForward
 	return nil
 }
 
-// newRedoMetaMessageDynamicStream is responsible for push RedoMetaMessage to the corresponding table trigger event dispatcher.
+// newRedoMetaMessageDynamicStream is responsible for push RedoMetaMessage to the corresponding table trigger dispatcher.
 func newRedoMetaMessageDynamicStream() dynstream.DynamicStream[int, common.GID, RedoMetaMessage, *DispatcherManager, *RedoMetaMessageHandler] {
 	ds := dynstream.NewParallelDynamicStream(
 		&RedoMetaMessageHandler{})
@@ -513,8 +508,10 @@ func (h *RedoMetaMessageHandler) Handle(dispatcherManager *DispatcherManager, me
 		// TODO: Support batch
 		panic("invalid message count")
 	}
-	msg := messages[0]
-	dispatcherManager.UpdateRedoMeta(msg.CheckpointTs, msg.ResolvedTs)
+	if dispatcherManager.GetTableTriggerRedoDispatcher() != nil {
+		msg := messages[0]
+		dispatcherManager.UpdateRedoMeta(msg.CheckpointTs, msg.ResolvedTs)
+	}
 	return false
 }
 

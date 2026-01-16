@@ -343,7 +343,7 @@ func TestCoordinatorScheduling(t *testing.T) {
 	for i := 0; i < cfSize; i++ {
 		cfID := common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
 			Name:     fmt.Sprintf("%d", i),
-			Keyspace: common.DefaultKeyspaceNamme,
+			Keyspace: common.DefaultKeyspaceName,
 		})
 		cfs[cfID] = &changefeed.ChangefeedMetaWrapper{
 			Info: &config.ChangeFeedInfo{
@@ -399,7 +399,7 @@ func TestScaleNode(t *testing.T) {
 	for i := 0; i < changefeedNumber; i++ {
 		cfID := common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
 			Name:     fmt.Sprintf("%d", i),
-			Keyspace: common.DefaultKeyspaceNamme,
+			Keyspace: common.DefaultKeyspaceName,
 		})
 		cfs[cfID] = &changefeed.ChangefeedMetaWrapper{
 			Info: &config.ChangeFeedInfo{
@@ -503,7 +503,7 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 
 	removingCf1 := &changefeed.ChangefeedMetaWrapper{
 		Info: &config.ChangeFeedInfo{
-			ChangefeedID: common.NewChangeFeedIDWithName("cf1", common.DefaultKeyspaceNamme),
+			ChangefeedID: common.NewChangeFeedIDWithName("cf1", common.DefaultKeyspaceName),
 			Config:       config.GetDefaultReplicaConfig(),
 			State:        config.StateNormal,
 		},
@@ -511,7 +511,7 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 	}
 	removingCf2 := &changefeed.ChangefeedMetaWrapper{
 		Info: &config.ChangeFeedInfo{
-			ChangefeedID: common.NewChangeFeedIDWithName("cf2", common.DefaultKeyspaceNamme),
+			ChangefeedID: common.NewChangeFeedIDWithName("cf2", common.DefaultKeyspaceName),
 			Config:       config.GetDefaultReplicaConfig(),
 			State:        config.StateNormal,
 		},
@@ -519,7 +519,7 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 	}
 	stopingCf1 := &changefeed.ChangefeedMetaWrapper{
 		Info: &config.ChangeFeedInfo{
-			ChangefeedID: common.NewChangeFeedIDWithName("cf1", common.DefaultKeyspaceNamme),
+			ChangefeedID: common.NewChangeFeedIDWithName("cf1", common.DefaultKeyspaceName),
 			Config:       config.GetDefaultReplicaConfig(),
 			State:        config.StateStopped,
 		},
@@ -528,7 +528,7 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 
 	stopingCf2 := &changefeed.ChangefeedMetaWrapper{
 		Info: &config.ChangeFeedInfo{
-			ChangefeedID: common.NewChangeFeedIDWithName("cf2", common.DefaultKeyspaceNamme),
+			ChangefeedID: common.NewChangeFeedIDWithName("cf2", common.DefaultKeyspaceName),
 			Config:       config.GetDefaultReplicaConfig(),
 			State:        config.StateStopped,
 		},
