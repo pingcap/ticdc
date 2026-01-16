@@ -130,7 +130,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 	log.Info("event router created", zap.Any("protocol", o.protocol),
 		zap.Any("topic", o.topic), zap.Any("dispatcherRules", o.sinkConfig.DispatchRules))
 
-	changefeedID := commonType.NewChangeFeedIDWithName("kafka-consumer", commonType.DefaultKeyspaceNamme)
+	changefeedID := commonType.NewChangeFeedIDWithName("kafka-consumer", commonType.DefaultKeyspaceName)
 	cfg := &config.ChangefeedConfig{
 		ChangefeedID: changefeedID,
 		SinkURI:      o.downstreamURI,

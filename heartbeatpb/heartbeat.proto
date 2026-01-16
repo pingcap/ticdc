@@ -333,3 +333,47 @@ message LogCoordinatorResolvedTsResponse {
     ChangefeedID changefeedID = 1;
     uint64 resolvedTs = 2;
 }
+
+enum ChecksumState {
+    // UNINITIALIZED is the default value when the field is absent in proto3.
+    // It must block checkpoint advancement until the checksum is explicitly verified as OK.
+    UNINITIALIZED = 0;
+    // MISMATCH means the checksum comparison failed. We need to block forwarding checkpointTs.
+    MISMATCH = 1;
+    // MATCH means the checksum comparison is successful. We can forward checkpointTs.
+    MATCH = 2;
+}
+
+message ChecksumMeta {
+    ChecksumState state = 1;
+    // checksumStateSeq is a monotonic version for checksumState, 
+    // used to discard out-of-order meta info.
+    uint64 checksumStateSeq = 2;
+}
+
+message DispatcherSetChecksum {
+    uint64 count = 1;
+    uint64 xorHigh = 2;
+    uint64 xorLow = 3;
+    uint64 sumHigh = 4;
+    uint64 sumLow = 5;
+}
+
+// DispatcherSetChecksumAckResponse is sent from dispatcherManager to maintainer
+// to ack the set checksum request.
+message DispatcherSetChecksumAckResponse {
+    ChangefeedID changefeedID = 1;
+    uint64 epoch = 2;
+    int64 mode = 3;
+    uint64 seq = 4;
+}
+
+// DispatcherSetChecksumUpdateRequest is sent from maintainer to dispatcherManager
+// to update the set checksum.
+message DispatcherSetChecksumUpdateRequest {
+    ChangefeedID changefeedID = 1;
+    uint64 epoch = 2;
+    int64 mode = 3;
+    uint64 seq = 4;
+    DispatcherSetChecksum checksum = 5;
+}

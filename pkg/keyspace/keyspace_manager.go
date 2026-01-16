@@ -54,7 +54,7 @@ type manager struct {
 }
 
 var defaultKeyspaceMeta = &keyspacepb.KeyspaceMeta{
-	Name: common.DefaultKeyspaceNamme,
+	Name: common.DefaultKeyspaceName,
 	Id:   common.DefaultKeyspaceID,
 }
 
