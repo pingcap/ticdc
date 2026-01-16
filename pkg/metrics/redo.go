@@ -60,7 +60,7 @@ var (
 	}, []string{getKeyspaceLabel(), "changefeed", "type"})
 )
 
-func InitRedoMetrics(registry *prometheus.Registry) {
+func initRedoMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(RedoFsyncDurationHistogram)
 	registry.MustRegister(RedoWriteBytesGauge)
 	registry.MustRegister(RedoFlushAllDurationHistogram)
