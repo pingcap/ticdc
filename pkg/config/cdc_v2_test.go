@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Inc.
+// Copyright 2023 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,21 +11,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package reader
+package config
 
 import (
 	"testing"
 
-	"github.com/pingcap/ticdc/pkg/leakutil"
-	"go.uber.org/goleak"
+	"github.com/stretchr/testify/require"
 )
 
-func TestMain(m *testing.M) {
-	opts := []goleak.Option{
-		goleak.IgnoreAnyFunction("github.com/godbus/dbus.(*Conn).Auth"),
-		goleak.IgnoreAnyFunction("github.com/godbus/dbus.(*Conn).inWorker"),
-		goleak.IgnoreCurrent(),
-	}
+func TestDebugConfigValidateAndAdjustFillsEventStoreDefault(t *testing.T) {
+	t.Parallel()
 
-	leakutil.SetUpLeakTest(m, opts...)
+	cfg := GetDefaultServerConfig()
+	cfg.Debug.EventStore = nil
+
+	require.NoError(t, cfg.ValidateAndAdjust())
+	require.NotNil(t, cfg.Debug)
+	require.NotNil(t, cfg.Debug.EventStore)
+	require.Equal(t, NewDefaultEventStoreConfig(), cfg.Debug.EventStore)
 }
