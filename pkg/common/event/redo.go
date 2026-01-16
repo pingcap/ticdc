@@ -18,6 +18,7 @@ import (
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -481,13 +482,13 @@ func appendCol2Chunk(idx int, raw interface{}, ft tiTypes.FieldType, chk *chunk.
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeTimestamp:
 		val, err := tiTypes.ParseTime(tiTypes.DefaultStmtNoWarningContext, raw.(string), ft.GetType(), tiTypes.MaxFsp)
 		if err != nil {
-			log.Panic("invalid column value for data time", zap.Any("raw", raw), zap.Error(err))
+			log.Panic("invalid column value for data time", zap.String("raw", util.RedactAny(raw)), zap.Error(err))
 		}
 		chk.AppendTime(idx, val)
 	case mysql.TypeDuration:
 		val, _, err := tiTypes.ParseDuration(tiTypes.DefaultStmtNoWarningContext, raw.(string), tiTypes.MaxFsp)
 		if err != nil {
-			log.Panic("invalid column value for duration", zap.Any("raw", raw), zap.Error(err))
+			log.Panic("invalid column value for duration", zap.String("raw", util.RedactAny(raw)), zap.Error(err))
 		}
 		chk.AppendDuration(idx, val)
 	case mysql.TypeEnum:
@@ -501,16 +502,16 @@ func appendCol2Chunk(idx int, raw interface{}, ft tiTypes.FieldType, chk *chunk.
 	case mysql.TypeJSON:
 		result, err := tiTypes.ParseBinaryJSONFromString(raw.(string))
 		if err != nil {
-			log.Panic("invalid column value for json", zap.Any("raw", raw), zap.Error(err))
+			log.Panic("invalid column value for json", zap.String("raw", util.RedactAny(raw)), zap.Error(err))
 		}
 		chk.AppendJSON(idx, result)
 	case mysql.TypeTiDBVectorFloat32:
 		result, err := tiTypes.ParseVectorFloat32(raw.(string))
 		if err != nil {
-			log.Panic("cannot parse vector32 value from string", zap.Any("raw", raw), zap.Error(err))
+			log.Panic("cannot parse vector32 value from string", zap.String("raw", util.RedactAny(raw)), zap.Error(err))
 		}
 		chk.AppendVectorFloat32(idx, result)
 	default:
-		log.Panic("unknown column type", zap.Any("type", ft.GetType()), zap.Any("raw", raw))
+		log.Panic("unknown column type", zap.Any("type", ft.GetType()), zap.String("raw", util.RedactAny(raw)))
 	}
 }
