@@ -11,17 +11,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package kafka
+package util
 
 import (
 	"testing"
 
-	"github.com/pingcap/ticdc/pkg/leakutil"
-	"go.uber.org/goleak"
+	"github.com/stretchr/testify/require"
 )
 
-func TestMain(m *testing.M) {
-	leakutil.SetUpLeakTest(m,
-		goleak.IgnoreAnyFunction("github.com/godbus/dbus.(*Conn).Auth"),
-	)
+func TestGetMemoryLimit(t *testing.T) {
+	t.Parallel()
+	limit, err := GetMemoryLimit()
+	require.NoError(t, err)
+	require.Less(t, limit, memoryMax)
 }
