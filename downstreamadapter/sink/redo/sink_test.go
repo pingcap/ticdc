@@ -123,7 +123,6 @@ func TestRedoSinkInProcessor(t *testing.T) {
 			FlushWorkerNum:        util.AddressOf(workerNumberForTest),
 			UseFileBackend:        util.AddressOf(useFileBackend),
 		}
-		startTs := uint64(100)
 		dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
 		defer dmlMgr.Close(false)
 
