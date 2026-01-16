@@ -558,7 +558,6 @@ func (s *sink) BatchCount() int {
 	return 4096
 }
 
-// todo: how to set this ?
 func (s *sink) BatchBytes() int {
 	return 0
 }

@@ -224,7 +224,6 @@ func (s *Sink) BatchCount() int {
 	return 4096
 }
 
-// todo: how to set this ?
 func (s *Sink) BatchBytes() int {
-	return 0
+	return int(s.cfg.MaxLogSizeInBytes)
 }
