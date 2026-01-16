@@ -283,10 +283,6 @@ Loop:
 			default:
 				start := time.Now()
 				eventBuf, path, nBytes = s.eventQueue.popEvents(eventBuf)
-				metrics.DynamicStreamBatchDuration.WithLabelValues(path.areaStr).Observe(float64(time.Since(start)))
-				metrics.DynamicStreamBatchCount.WithLabelValues(path.areaStr).Observe(float64(len(eventBuf)))
-				metrics.DynamicStreamBatchBytes.WithLabelValues(path.areaStr).Observe(float64(nBytes))
-
 				if len(eventBuf) == 0 {
 					eventQueueEmpty = true
 					continue Loop
@@ -295,6 +291,10 @@ Loop:
 					cleanUpEventBuf()
 					continue Loop
 				}
+
+				metrics.DynamicStreamBatchDuration.WithLabelValues(path.areaStr).Observe(float64(time.Since(start)))
+				metrics.DynamicStreamBatchCount.WithLabelValues(path.areaStr).Observe(float64(len(eventBuf)))
+				metrics.DynamicStreamBatchBytes.WithLabelValues(path.areaStr).Observe(float64(nBytes))
 
 				path.lastHandleEventTs.Store(uint64(s.handler.GetTimestamp(eventBuf[0])))
 
