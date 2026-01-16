@@ -21,7 +21,9 @@ while [[ $count -lt $retryCount ]]; do
 	success=$(
 		printf '%s' "$result" |
 			jq -Rrs '
-				([scan("\\{.*?\\}"; "s")[] | try (fromjson | select(type=="object" and has("success"))) catch empty] | last | .success) // false
+				# scan returns a *stream* (not an array) in jq, and its regex flags do not support dotall.
+				# Use "[\\s\\S]" to match across newlines so pretty-printed JSON objects are detected.
+				([scan("\\{[\\s\\S]*?\\}") | try (fromjson | select(type=="object" and has("success"))) catch empty] | last | .success) // false
 			'
 	)
 
