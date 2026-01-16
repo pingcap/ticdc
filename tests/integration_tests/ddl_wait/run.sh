@@ -51,7 +51,7 @@ function run() {
 	run_sql "update test.t set col = 55 where id = 5;"
 	run_sql "alter table test.t add index (col);"
 	run_sql "update test.t set col = 66 where id = 6;"
-	sleep 3
+	sleep 10
 	cleanup_process $CDC_BINARY
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 	# make sure all tables are equal in upstream and downstream
