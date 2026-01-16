@@ -31,7 +31,17 @@ concurrency:
 jobs:
   build_and_test:
     runs-on: ubuntu-latest
-    name: Build and Unit Test
+    strategy:
+      fail-fast: true
+      matrix:
+        task:
+          - name: Build CDC
+            command: make cdc
+          - name: Classic Unit Tests
+            command: make unit_test_in_verify_ci
+          - name: Next Gen Unit Tests
+            command: make unit_test_in_verify_ci_next_gen
+    name: ${{ matrix.task.name }}
     steps:
       - name: Check out code
         uses: actions/checkout@v3
@@ -48,8 +58,5 @@ jobs:
           path: tools/bin
           key: ubuntu-latest-ticdc-tools-${{ hashFiles('tools/check/go.sum') }}
 
-      - name: Build CDC
-        run: make cdc
-
-      - name: Run Classic Unit Tests
-        run: make unit_test_in_verify_ci
+      - name: ${{ matrix.task.name }}
+        run: ${{ matrix.task.command }}
