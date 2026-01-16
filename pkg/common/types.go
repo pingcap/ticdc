@@ -193,7 +193,7 @@ func NewChangefeedID(keyspace string) ChangeFeedID {
 	}
 
 	if keyspace == "" {
-		keyspace = DefaultKeyspaceNamme
+		keyspace = DefaultKeyspaceName
 	}
 
 	cfID.DisplayName = ChangeFeedDisplayName{
@@ -205,7 +205,7 @@ func NewChangefeedID(keyspace string) ChangeFeedID {
 
 func NewChangeFeedIDWithName(name string, keyspace string) ChangeFeedID {
 	if keyspace == "" {
-		keyspace = DefaultKeyspaceNamme
+		keyspace = DefaultKeyspaceName
 	}
 
 	return ChangeFeedID{
@@ -364,13 +364,13 @@ type KeyspaceMeta struct {
 }
 
 const (
-	// DefaultKeyspaceNamme is the default keyspace value,
+	// DefaultKeyspaceName is the default keyspace value,
 	// all the old changefeed will be put into default keyspace
-	DefaultKeyspaceNamme = "default"
-	DefaultKeyspaceID    = uint32(0)
+	DefaultKeyspaceName = "default"
+	DefaultKeyspaceID   = uint32(0)
 )
 
 var DefaultKeyspace = KeyspaceMeta{
 	ID:   DefaultKeyspaceID,
-	Name: DefaultKeyspaceNamme,
+	Name: DefaultKeyspaceName,
 }
