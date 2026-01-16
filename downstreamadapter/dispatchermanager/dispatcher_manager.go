@@ -449,7 +449,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 			e.heartBeatTask = newHeartBeatTask(e)
 		}
 
-		if d.IsTableTriggerEventDispatcher() {
+		if d.IsTableTriggerDispatcher() {
 			if util.GetOrZero(e.config.SinkConfig.SendAllBootstrapAtStart) {
 				d.BootstrapState = dispatcher.BootstrapNotStarted
 			}
@@ -465,7 +465,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 		seq := e.dispatcherMap.Set(id, d)
 		d.SetSeq(seq)
 
-		if d.IsTableTriggerEventDispatcher() {
+		if d.IsTableTriggerDispatcher() {
 			e.metricTableTriggerEventDispatcherCount.Inc()
 		} else {
 			e.metricEventDispatcherCount.Inc()
@@ -883,6 +883,14 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 		closeAllDispatchers(e.changefeedID, e.redoDispatcherMap, e.redoSink.SinkType())
 		log.Info("closed all redo dispatchers",
 			zap.Stringer("changefeedID", e.changefeedID))
+		err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveRedoMessage(e.changefeedID)
+		if err != nil {
+			log.Error("remove redo message failed",
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Error(err),
+			)
+			return
+		}
 	}
 
 	closeAllDispatchers(e.changefeedID, e.dispatcherMap, e.sink.SinkType())
@@ -891,7 +899,7 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 
 	err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveDispatcherManager(e.changefeedID)
 	if err != nil {
-		log.Error("remove event dispatcher manager from heartbeat collector failed",
+		log.Error("remove dispatcher manager from heartbeat collector failed",
 			zap.Stringer("changefeedID", e.changefeedID),
 			zap.Error(err),
 		)
