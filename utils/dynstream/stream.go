@@ -292,7 +292,7 @@ Loop:
 					continue Loop
 				}
 
-				metrics.DynamicStreamBatchDuration.WithLabelValues(path.areaStr).Observe(float64(time.Since(start)))
+				metrics.DynamicStreamBatchDuration.WithLabelValues(path.areaStr).Observe(float64(time.Since(start).Seconds()))
 				metrics.DynamicStreamBatchCount.WithLabelValues(path.areaStr).Observe(float64(len(eventBuf)))
 				metrics.DynamicStreamBatchBytes.WithLabelValues(path.areaStr).Observe(float64(nBytes))
 
