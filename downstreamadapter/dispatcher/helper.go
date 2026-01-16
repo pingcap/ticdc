@@ -244,13 +244,14 @@ type HeartBeatInfo struct {
 	IsRemoving      bool
 }
 
-// Resend Task is reponsible for resending the TableSpanBlockStatus message with ddl info to maintainer each 50ms.
-// The task will be cancelled when the the dispatcher received the ack message from the maintainer
+// ResendTask is responsible for periodically resending the TableSpanBlockStatus message to the maintainer.
+// The task will be cancelled when the dispatcher receives the ACK message from the maintainer.
 type ResendTask struct {
-	message    *heartbeatpb.TableSpanBlockStatus
-	dispatcher Dispatcher
-	callback   func() // function need to be called when the task is cancelled
-	taskHandle *threadpool.TaskHandle
+	message      *heartbeatpb.TableSpanBlockStatus
+	dispatcher   Dispatcher
+	callback     func() // function need to be called when the task is cancelled
+	taskHandle   *threadpool.TaskHandle
+	executeCount uint64
 }
 
 const resendTimeInterval = 5 * time.Second
@@ -269,6 +270,14 @@ func newResendTask(message *heartbeatpb.TableSpanBlockStatus, dispatcher Dispatc
 func (t *ResendTask) Execute() time.Time {
 	log.Debug("resend task", zap.Any("message", t.message), zap.Any("dispatcherID", t.dispatcher.GetId()))
 	t.dispatcher.GetBlockStatusesChan() <- t.message
+
+	executeCount := atomic.AddUint64(&t.executeCount, 1)
+	if executeCount%10 == 0 {
+		log.Info("resend task periodic resend",
+			zap.Any("dispatcherID", t.dispatcher.GetId()),
+			zap.Any("message", t.message),
+			zap.Uint64("executeCount", executeCount))
+	}
 	return time.Now().Add(resendTimeInterval)
 }
 
