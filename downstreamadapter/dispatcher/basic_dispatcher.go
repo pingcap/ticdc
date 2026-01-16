@@ -78,6 +78,7 @@ type Dispatcher interface {
 	GetEventSizePerSecond() float32
 	IsTableTriggerEventDispatcher() bool
 	DealWithBlockEvent(event commonEvent.BlockEvent)
+	EnableActiveActive() bool
 	TryClose() (w heartbeatpb.Watermark, ok bool)
 	Remove()
 }
@@ -213,6 +214,12 @@ type BasicDispatcher struct {
 	mode int64
 
 	BootstrapState bootstrapState
+
+	// activeActiveChecked indicates whether we have already validated that
+	// the table matches the current active-active configuration. The first
+	// DML/DDL must trigger this validation, afterwards only DDL events need
+	// to keep checking.
+	activeActiveChecked bool
 }
 
 func NewBasicDispatcher(
@@ -254,6 +261,46 @@ func NewBasicDispatcher(
 	return dispatcher
 }
 
+// AddDMLEventsToSink filters events for special tables and only returns true when
+// at least one event remains to be written to the downstream sink.
+func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) bool {
+	// Normal DML dispatch: most tables just pass through this function unchanged.
+	// Active-active or soft-delete tables are re-written by FilterDMLEvent before
+	// being handed over to the sink.
+	filteredEvents := make([]*commonEvent.DMLEvent, 0, len(events))
+	for _, event := range events {
+		// FilterDMLEvent returns the original event for normal tables and only
+		// allocates a new event when the table needs active-active or soft-delete
+		// processing. Skip is only true when every row in the event should be dropped.
+		filtered, skip, err := commonEvent.FilterDMLEvent(event, d.sharedInfo.enableActiveActive)
+		if err != nil {
+			d.HandleError(err)
+			continue
+		}
+		if skip || filtered == nil {
+			continue
+		}
+		filteredEvents = append(filteredEvents, filtered)
+	}
+	if len(filteredEvents) == 0 {
+		log.Debug("all events all filtered")
+		// Nothing left to flush. Caller will treat this batch as non-blocking.
+		return false
+	}
+
+	// for one batch events, we need to add all them in table progress first, then add them to sink
+	// because we need to ensure the wakeCallback only will be called when
+	// all these events are flushed to downstream successfully
+	for _, event := range filteredEvents {
+		d.tableProgress.Add(event)
+	}
+	for _, event := range filteredEvents {
+		d.sink.AddDMLEvent(event)
+		failpoint.Inject("BlockAddDMLEvents", nil)
+	}
+	return true
+}
+
 // InitializeTableSchemaStore initializes the tableSchemaStore for the table trigger event dispatcher.
 // It returns true if the tableSchemaStore is initialized successfully, otherwise returns fals
 func (d *BasicDispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo) (ok bool, err error) {
@@ -271,22 +318,9 @@ func (d *BasicDispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.S
 		return false, nil
 	}
 
-	d.tableSchemaStore = commonEvent.NewTableSchemaStore(schemaInfo, d.sink.SinkType())
+	d.tableSchemaStore = commonEvent.NewTableSchemaStore(schemaInfo, d.sink.SinkType(), d.EnableActiveActive())
 	d.sink.SetTableSchemaStore(d.tableSchemaStore)
 	return true, nil
-}
-
-func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) {
-	// for one batch events, we need to add all them in table progress first, then add them to sink
-	// because we need to ensure the wakeCallback only will be called when
-	// all these events are flushed to downstream successfully
-	for _, event := range events {
-		d.tableProgress.Add(event)
-	}
-	for _, event := range events {
-		d.sink.AddDMLEvent(event)
-		failpoint.Inject("BlockAddDMLEvents", nil)
-	}
 }
 
 func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {
@@ -309,6 +343,69 @@ func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) erro
 func (d *BasicDispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) {
 	d.tableProgress.Pass(event)
 	event.PostFlush()
+}
+
+func (d *BasicDispatcher) ensureActiveActiveTableInfo(tableInfo *common.TableInfo) error {
+	if !d.sharedInfo.enableActiveActive {
+		return nil
+	}
+	if tableInfo == nil {
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			"table info is nil for dispatcher %s in active-active mode", d.id.String())
+	}
+	if !tableInfo.IsActiveActiveTable() {
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			"table %s.%s(id=%d) is not active-active but enable-active-active is true",
+			tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID)
+	}
+	requiredCols := []string{
+		commonEvent.OriginTsColumn,
+		commonEvent.SoftDeleteTimeColumn,
+	}
+	for _, col := range requiredCols {
+		if _, ok := tableInfo.GetColumnInfoByName(col); !ok {
+			return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+				"table %s.%s(id=%d) missing required column %s for enable-active-active",
+				tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, col)
+		}
+	}
+	return nil
+}
+
+func (d *BasicDispatcher) handleActiveActiveCheck(event commonEvent.Event) error {
+	switch ev := event.(type) {
+	case *commonEvent.DMLEvent:
+		return d.ensureTableModeCompatibility(ev.TableInfo)
+	case *commonEvent.DDLEvent:
+		return d.ensureTableModeCompatibility(ev.TableInfo)
+	}
+	return nil
+}
+
+func (d *BasicDispatcher) ensureTableModeCompatibility(tableInfo *common.TableInfo) error {
+	if tableInfo == nil {
+		return nil
+	}
+
+	if d.sharedInfo.enableActiveActive {
+		return d.ensureActiveActiveTableInfo(tableInfo)
+	}
+
+	if d.sink.SinkType() != common.MysqlSinkType {
+		return nil
+	}
+
+	if tableInfo.IsActiveActiveTable() {
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			"table %s.%s(id=%d) is active-active but enable-active-active is false",
+			tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID)
+	}
+	if tableInfo.IsSoftDeleteTable() {
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			"table %s.%s(id=%d) is soft delete but enable-active-active is false",
+			tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID)
+	}
+	return nil
 }
 
 func (d *BasicDispatcher) isFirstEvent(event commonEvent.Event) bool {
@@ -452,7 +549,8 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 
 		// only when we receive the first event, we can regard the dispatcher begin syncing data
 		// then turning into working status.
-		if d.isFirstEvent(event) {
+		firstEvent := d.isFirstEvent(event)
+		if firstEvent {
 			d.updateDispatcherStatusToWorking()
 		}
 
@@ -460,6 +558,13 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 		case commonEvent.TypeResolvedEvent:
 			latestResolvedTs = event.(commonEvent.ResolvedEvent).ResolvedTs
 		case commonEvent.TypeDMLEvent:
+			if !d.activeActiveChecked {
+				if err := d.handleActiveActiveCheck(event); err != nil {
+					d.HandleError(err)
+					return block
+				}
+				d.activeActiveChecked = true
+			}
 			dml := event.(*commonEvent.DMLEvent)
 			if dml.Len() == 0 {
 				continue
@@ -493,6 +598,12 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				log.Panic("ddl event should only be singly handled",
 					zap.Stringer("dispatcherID", d.id))
 			}
+			if err := d.handleActiveActiveCheck(event); err != nil {
+				d.HandleError(err)
+				return block
+			}
+			d.activeActiveChecked = true
+
 			failpoint.Inject("BlockOrWaitBeforeDealWithDDL", nil)
 			block = true
 			ddl := event.(*commonEvent.DDLEvent)
@@ -565,7 +676,11 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	// the checkpointTs may be incorrect set as the new resolvedTs,
 	// due to the tableProgress is empty before dml events add into sink.
 	if len(dmlEvents) > 0 {
-		d.AddDMLEventsToSink(dmlEvents)
+		hasDMLToFlush := d.AddDMLEventsToSink(dmlEvents)
+		if !hasDMLToFlush {
+			// All DML events were filtered out, so they no longer block dispatcher progress.
+			block = false
+		}
 	}
 	if latestResolvedTs > 0 {
 		atomic.StoreUint64(&d.resolvedTs, latestResolvedTs)

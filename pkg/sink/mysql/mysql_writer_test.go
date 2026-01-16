@@ -51,7 +51,8 @@ func newTestMysqlWriter(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock) {
 	cfg.EnableDDLTs = defaultEnableDDLTs
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	statistics := metrics.NewStatistics(changefeedID, "mysqlSink")
-	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics)
+	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics, nil)
+	t.Cleanup(writer.Close)
 	// assign a no-op stmt cache to bypass actual DB operations in unit tests
 	cache, err := lru.New(prepStmtCacheSize)
 	require.NoError(t, err)
@@ -73,7 +74,8 @@ func newTestMysqlWriterForTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock)
 
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	statistics := metrics.NewStatistics(changefeedID, "mysqlSink")
-	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics)
+	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics, nil)
+	t.Cleanup(writer.Close)
 
 	if kerneltype.IsNextGen() {
 		ticonfig.UpdateGlobal(func(conf *ticonfig.Config) {
@@ -327,7 +329,7 @@ func TestMysqlWriter_FlushSyncPointEvent(t *testing.T) {
 	syncPointEvent := &commonEvent.SyncPointEvent{
 		CommitTs: 1,
 	}
-	tableSchemaStore := commonEvent.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{}, common.MysqlSinkType)
+	tableSchemaStore := commonEvent.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{}, common.MysqlSinkType, false)
 	writer.SetTableSchemaStore(tableSchemaStore)
 
 	// First sync point: Step 0: Create syncpoint table (only for first sync point)

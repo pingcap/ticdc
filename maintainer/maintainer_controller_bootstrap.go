@@ -210,11 +210,11 @@ func (c *Controller) processTablesAndBuildSchemaInfo(
 
 		// Add schema info if not exists
 		if _, ok := schemaInfos[schemaID]; !ok {
-			schemaInfos[schemaID] = getSchemaInfo(table, isMysqlCompatibleBackend)
+			schemaInfos[schemaID] = getSchemaInfo(table, isMysqlCompatibleBackend, util.GetOrZero(c.replicaConfig.EnableActiveActive))
 		}
 
 		// Add table info to schema
-		tableInfo := getTableInfo(table, isMysqlCompatibleBackend)
+		tableInfo := getTableInfo(table, isMysqlCompatibleBackend, util.GetOrZero(c.replicaConfig.EnableActiveActive))
 		schemaInfos[schemaID].Tables = append(schemaInfos[schemaID].Tables, tableInfo)
 
 		c.processTableSpans(table, workingTaskMap, mode)
@@ -371,19 +371,19 @@ func (c *Controller) loadTables(startTs uint64) ([]commonEvent.Table, error) {
 	return tables, err
 }
 
-func getSchemaInfo(table commonEvent.Table, isMysqlCompatibleBackend bool) *heartbeatpb.SchemaInfo {
+func getSchemaInfo(table commonEvent.Table, isMysqlCompatibleBackend bool, enableActiveActive bool) *heartbeatpb.SchemaInfo {
 	schemaInfo := &heartbeatpb.SchemaInfo{}
 	schemaInfo.SchemaID = table.SchemaID
-	if !isMysqlCompatibleBackend {
+	if commonEvent.NeedTableNameStoreAndCheckpointTs(isMysqlCompatibleBackend, enableActiveActive) {
 		schemaInfo.SchemaName = table.SchemaName
 	}
 	return schemaInfo
 }
 
-func getTableInfo(table commonEvent.Table, isMysqlCompatibleBackend bool) *heartbeatpb.TableInfo {
+func getTableInfo(table commonEvent.Table, isMysqlCompatibleBackend bool, enableActiveActive bool) *heartbeatpb.TableInfo {
 	tableInfo := &heartbeatpb.TableInfo{}
 	tableInfo.TableID = table.TableID
-	if !isMysqlCompatibleBackend {
+	if commonEvent.NeedTableNameStoreAndCheckpointTs(isMysqlCompatibleBackend, enableActiveActive) {
 		tableInfo.TableName = table.TableName
 	}
 	return tableInfo
