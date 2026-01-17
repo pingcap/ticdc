@@ -192,21 +192,19 @@ func (c *coordinator) run(ctx context.Context) error {
 	failpoint.Inject("InjectUpdateGCTickerInterval", func(val failpoint.Value) {
 		updateGCTickerInterval = time.Duration(val.(int) * int(time.Millisecond))
 	})
-
-	gcTicker := time.NewTicker(updateGCTickerInterval)
-	defer gcTicker.Stop()
-
 	failpoint.Inject("coordinator-run-with-error", func() error {
 		return errors.New("coordinator run with error")
 	})
+
+	gcTicker := time.NewTicker(updateGCTickerInterval)
+	defer gcTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-gcTicker.C:
-			if err := c.updateGCSafepoint(ctx); err != nil {
-				log.Warn("update gc safepoint failed",
-					zap.Error(err))
+			if err := c.updateGCSafepoint(ctx, false); err != nil {
+				log.Warn("update gc safepoint failed", zap.Error(err))
 			}
 			now := time.Now()
 			metrics.CoordinatorCounter.Add(float64(now.Sub(c.lastTickTime)) / float64(time.Second))
@@ -242,9 +240,10 @@ func (c *coordinator) handleStateChange(
 	ctx context.Context,
 	event *changefeedChange,
 ) error {
-	cf := c.controller.getChangefeed(event.changefeedID)
+	changefeedID := event.changefeed.ID
+	cf := c.controller.getChangefeed(changefeedID)
 	if cf == nil {
-		log.Warn("changefeed not found", zap.String("changefeed", event.changefeedID.String()))
+		log.Warn("changefeed not found", zap.String("changefeed", changefeedID.String()))
 		return nil
 	}
 	cfInfo, err := cf.GetInfo().Clone()
@@ -266,23 +265,23 @@ func (c *coordinator) handleStateChange(
 
 	switch event.state {
 	case config.StateWarning:
-		c.controller.operatorController.StopChangefeed(ctx, event.changefeedID, false)
-		c.controller.updateChangefeedEpoch(ctx, event.changefeedID)
-		c.controller.moveChangefeedToSchedulingQueue(event.changefeedID, false, false)
+		c.controller.operatorController.StopChangefeed(ctx, changefeedID, false)
+		c.controller.updateChangefeedEpoch(ctx, changefeedID)
+		c.controller.moveChangefeedToSchedulingQueue(changefeedID, false, false)
 	case config.StateFailed, config.StateFinished:
-		c.controller.operatorController.StopChangefeed(ctx, event.changefeedID, false)
+		c.controller.operatorController.StopChangefeed(ctx, changefeedID, false)
 	case config.StateNormal:
 		log.Info("changefeed is resumed or created successfully, try to delete its safeguard gc safepoint",
-			zap.String("changefeed", event.changefeedID.String()))
+			zap.String("changefeed", changefeedID.String()))
 
 		// We need to clean its gc safepoint when changefeed is resumed or created
 		gcServiceID := c.getEnsureGCServiceID(gc.EnsureGCServiceCreating)
-		err := gc.UndoEnsureChangefeedStartTsSafety(ctx, c.pdClient, cfInfo.KeyspaceID, gcServiceID, event.changefeedID)
+		err := gc.UndoEnsureChangefeedStartTsSafety(ctx, c.pdClient, cfInfo.KeyspaceID, gcServiceID, changefeedID)
 		if err != nil {
 			log.Warn("failed to delete create changefeed gc safepoint", zap.Error(err))
 		}
 		gcServiceID = c.getEnsureGCServiceID(gc.EnsureGCServiceResuming)
-		err = gc.UndoEnsureChangefeedStartTsSafety(ctx, c.pdClient, cfInfo.KeyspaceID, gcServiceID, event.changefeedID)
+		err = gc.UndoEnsureChangefeedStartTsSafety(ctx, c.pdClient, cfInfo.KeyspaceID, gcServiceID, changefeedID)
 		if err != nil {
 			log.Warn("failed to delete resume changefeed gc safepoint", zap.Error(err))
 		}
@@ -295,13 +294,10 @@ func (c *coordinator) handleStateChange(
 // checkStaleCheckpointTs checks if the checkpointTs is stale, if it is, it will send a state change event to the stateChangedCh
 func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, changefeed *changefeed.Changefeed, reportedCheckpointTs uint64) {
 	id := changefeed.ID
-	err := c.gcManager.CheckStaleCheckpointTs(ctx, changefeed.GetKeyspaceID(), id, reportedCheckpointTs)
+	err := c.gcManager.CheckStaleCheckpointTs(changefeed.GetKeyspaceID(), id, reportedCheckpointTs)
 	if err == nil {
 		return
 	}
-
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
 
 	errCode, _ := errors.RFCCode(err)
 	state := config.StateWarning
@@ -313,6 +309,9 @@ func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, changefeed *ch
 		Code:    string(errCode),
 		Message: err.Error(),
 	})
+
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 
 	select {
 	case <-ctx.Done():
@@ -365,7 +364,12 @@ func (c *coordinator) CreateChangefeed(ctx context.Context, info *config.ChangeF
 		return errors.Trace(err)
 	}
 	// update gc safepoint after create changefeed
-	return c.updateGCSafepointByChangefeed(ctx, info.ChangefeedID)
+	err = c.updateGCSafepointByChangefeed(ctx, info.ChangefeedID, true)
+	if err != nil {
+		log.Error("update gc safepoint failed when creating the changefeed",
+			zap.Any("changefeedID", info.ChangefeedID), zap.Error(err))
+	}
+	return nil
 }
 
 func (c *coordinator) RemoveChangefeed(ctx context.Context, id common.ChangeFeedID) (uint64, error) {
@@ -422,47 +426,61 @@ func (c *coordinator) sendMessages(msgs []*messaging.TargetMessage) {
 	}
 }
 
-func (c *coordinator) updateGlobalGcSafepoint(ctx context.Context) error {
+func (c *coordinator) updateGlobalGcSafepoint(ctx context.Context, force bool) error {
 	minCheckpointTs := c.controller.calculateGlobalGCSafepoint()
-	// check if the upstream has a changefeed, if not we should update the gc safepoint
+	// even though there is no changefeeds, still update the service-gc-safepoint
 	if minCheckpointTs == math.MaxUint64 {
 		ts := c.pdClock.CurrentTime()
 		minCheckpointTs = oracle.GoTimeToTS(ts)
 	}
-	// When the changefeed starts up, CDC will do a snapshot read at
-	// (checkpointTs - 1) from TiKV, so (checkpointTs - 1) should be an upper
-	// bound for the GC safepoint.
-	gcSafepointUpperBound := minCheckpointTs - 1
-	err := c.gcManager.TryUpdateGCSafePoint(ctx, gcSafepointUpperBound, false)
-	return errors.Trace(err)
+	// checkpoint means all data (-inf, checkpointTs] already flushed to the downstream.
+	// When the changefeed starts up, the start-ts = checkpointTs, and TiKV return data [checkpointTs + 1, +inf)
+	// TiDB guarantees that the snapshot at the gcSafepoint is reserved.
+	// theoretically, we can set the gcSafepoint = checkpointTs + 1,
+	// but to be safer, set the minCheckpointTs as the TiCDC service-gc-safepoint,
+	// even though the data is already flushed.
+	return c.gcManager.TryUpdateServiceGCSafePoint(ctx, minCheckpointTs, force)
 }
 
-func (c *coordinator) updateAllKeyspaceGcBarriers(ctx context.Context) error {
+func (c *coordinator) updateAllKeyspaceGcBarriers(
+	ctx context.Context, force bool,
+) error {
 	barrierMap := c.controller.calculateKeyspaceGCBarrier()
 
+	var result error
 	for meta, barrierTS := range barrierMap {
-		err := c.updateKeyspaceGcBarrier(ctx, meta, barrierTS)
+		err := c.updateKeyspaceGcBarrier(ctx, meta, barrierTS, force)
 		if err != nil {
-			return errors.Trace(err)
+			log.Warn("update keyspace gc barrier failed",
+				zap.Uint32("keyspaceID", meta.ID), zap.String("keyspaceName", meta.Name),
+				zap.Uint64("barrierTS", barrierTS), zap.Error(err))
+			result = err
 		}
 	}
-
-	return nil
+	return result
 }
 
-func (c *coordinator) updateKeyspaceGcBarrier(ctx context.Context, meta common.KeyspaceMeta, barrierTS uint64) error {
-	barrierTsUpperBound := barrierTS - 1
-	err := c.gcManager.TryUpdateKeyspaceGCBarrier(ctx, meta.ID, meta.Name, barrierTsUpperBound, false)
+func (c *coordinator) updateKeyspaceGcBarrier(
+	ctx context.Context, meta common.KeyspaceMeta, barrierTS uint64, force bool,
+) error {
+	err := c.gcManager.TryUpdateKeyspaceGCBarrier(ctx, meta.ID, meta.Name, barrierTS, force)
 	return errors.Trace(err)
 }
 
 // updateGCSafepointByChangefeed update the gc safepoint by changefeed
 // On next gen, we should update the gc barrier for the specific keyspace
 // Otherwise we should update the global gc safepoint
-func (c *coordinator) updateGCSafepointByChangefeed(ctx context.Context, changefeedID common.ChangeFeedID) error {
-	if kerneltype.IsNextGen() {
-		barrierMap := c.controller.calculateKeyspaceGCBarrier()
+func (c *coordinator) updateGCSafepointByChangefeed(
+	ctx context.Context, changefeedID common.ChangeFeedID, force bool,
+) error {
+	// During bootstrap, `changefeedDB` can be empty or partially populated. Updating gc safepoint at this time may
+	// incorrectly advance the TiCDC service gc safepoint and cause snapshot loss for existing changefeeds.
+	if !c.controller.initialized.Load() {
+		log.Warn("skip update gc safepoint because coordinator is not initialized yet", zap.Bool("force", force))
+		return nil
+	}
 
+	if kerneltype.IsNextGen() {
 		cfInfo, _, err := c.GetChangefeed(ctx, changefeedID.DisplayName)
 		if err != nil {
 			return err
@@ -473,19 +491,27 @@ func (c *coordinator) updateGCSafepointByChangefeed(ctx context.Context, changef
 			Name: changefeedID.Keyspace(),
 		}
 
-		return c.updateKeyspaceGcBarrier(ctx, meta, barrierMap[meta])
+		barrierMap := c.controller.calculateKeyspaceGCBarrier()
+		return c.updateKeyspaceGcBarrier(ctx, meta, barrierMap[meta], force)
 	}
-	return c.updateGlobalGcSafepoint(ctx)
+	return c.updateGlobalGcSafepoint(ctx, force)
 }
 
 // updateGCSafepoint update the gc safepoint
 // On next gen, we should update the gc barrier for all keyspaces
 // Otherwise we should update the global gc safepoint
-func (c *coordinator) updateGCSafepoint(ctx context.Context) error {
-	if kerneltype.IsNextGen() {
-		return c.updateAllKeyspaceGcBarriers(ctx)
+func (c *coordinator) updateGCSafepoint(ctx context.Context, force bool) error {
+	// During bootstrap, `changefeedDB` can be empty or partially populated. Updating gc safepoint at this time may
+	// incorrectly advance the TiCDC service gc safepoint and cause snapshot loss for existing changefeeds.
+	if !c.controller.initialized.Load() {
+		log.Warn("skip update gc safepoint because coordinator is not initialized yet", zap.Bool("force", force))
+		return nil
 	}
-	return c.updateGlobalGcSafepoint(ctx)
+
+	if kerneltype.IsNextGen() {
+		return c.updateAllKeyspaceGcBarriers(ctx, force)
+	}
+	return c.updateGlobalGcSafepoint(ctx, force)
 }
 
 // GetEnsureGCServiceID return the prefix for the gc service id when changefeed is creating
