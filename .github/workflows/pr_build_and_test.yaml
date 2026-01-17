@@ -37,8 +37,10 @@ jobs:
         task:
           - name: Check
             command: make check
-          - name: Build CDC
+          - name: Build Classic CDC
             command: make cdc
+          - name: Build Next Gen CDC
+            command: NEXT_GEN=1 make cdc
           - name: Classic Unit Tests
             command: make unit_test_in_verify_ci
           - name: Next Gen Unit Tests
