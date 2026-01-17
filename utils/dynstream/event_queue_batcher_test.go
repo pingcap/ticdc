@@ -78,3 +78,54 @@ func TestBatchEventsBySize_NotExceedHardBytes(t *testing.T) {
 	require.Len(t, events, 1)
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
 }
+
+func TestBatcherIsFull_Empty(t *testing.T) {
+	b := newBatcher[int](NewBatchConfig(3, 0))
+	require.False(t, b.isFull())
+}
+
+func TestBatcherIsFull_CountOnly(t *testing.T) {
+	b := newBatcher[int](NewBatchConfig(3, 0))
+
+	b.addEvent(1, 1)
+	require.False(t, b.isFull())
+	b.addEvent(2, 1)
+	require.False(t, b.isFull())
+	b.addEvent(3, 1)
+	require.True(t, b.isFull())
+}
+
+func TestBatcherIsFull_HardBytesLimit(t *testing.T) {
+	b := newBatcher[int](NewBatchConfig(10, 12))
+
+	b.addEvent(1, 4)
+	require.False(t, b.isFull())
+	b.addEvent(2, 4)
+	require.False(t, b.isFull())
+	b.addEvent(3, 4)
+	require.True(t, b.isFull())
+}
+
+func TestBatcherIsFull_HardBytesEnabled_SoftCountNotHardLimit(t *testing.T) {
+	b := newBatcher[int](NewBatchConfig(3, 100))
+
+	for i := 0; i < 9; i++ {
+		b.addEvent(i, 10)
+	}
+	require.False(t, b.isFull())
+
+	b.addEvent(9, 10)
+	require.True(t, b.isFull())
+}
+
+func TestBatcherIsFull_ProtectiveHardCount(t *testing.T) {
+	b := newBatcher[int](NewBatchConfig(3, 1000))
+
+	for i := 0; i < 11; i++ {
+		b.addEvent(i, 1)
+	}
+	require.False(t, b.isFull())
+
+	b.addEvent(11, 1)
+	require.True(t, b.isFull())
+}
