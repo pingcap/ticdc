@@ -174,8 +174,8 @@ func New(serverId node.ID) *EventCollector {
 	}
 
 	eventCollector.logCoordinatorClient = newLogCoordinatorClient(eventCollector)
-	eventCollector.ds = NewEventDynamicStream(eventCollector)
-	eventCollector.redoDs = NewEventDynamicStream(eventCollector)
+	eventCollector.ds = NewEventDynamicStream()
+	eventCollector.redoDs = NewEventDynamicStream()
 	eventCollector.mc.RegisterHandler(messaging.EventCollectorTopic, eventCollector.MessageCenterHandler)
 	eventCollector.mc.RegisterHandler(messaging.RedoEventCollectorTopic, eventCollector.RedoMessageCenterHandler)
 
@@ -267,7 +267,14 @@ func (c *EventCollector) PrepareAddDispatcher(
 	cfStat.dispatcherCount.Add(1)
 
 	ds := c.getDynamicStream(target.GetMode())
-	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector")
+
+	batchCounts := target.GetEventCollectorBatchCount()
+	batchBytes := target.GetEventCollectorBatchBytes()
+	batchConfig := dynstream.NewBatchConfig(batchCounts, batchBytes)
+	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(
+		memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector",
+		batchConfig,
+	)
 	err := ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
 		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))

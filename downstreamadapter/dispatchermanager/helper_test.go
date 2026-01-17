@@ -50,6 +50,14 @@ func (m *mockKafkaSink) SinkType() common.SinkType {
 	return common.KafkaSinkType
 }
 
+func (m *mockKafkaSink) BatchCount() int {
+	return 4096
+}
+
+func (s *mockKafkaSink) BatchBytes() int {
+	return 1024 * 1024 * 1024
+}
+
 func (m *mockKafkaSink) IsNormal() bool {
 	return true
 }

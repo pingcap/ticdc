@@ -13,6 +13,19 @@
 
 package dynstream
 
+type memoryControlType int
+
+const (
+	MemoryControlNone memoryControlType = iota
+	// MemoryControlForPuller is the algorithm of the memory control.
+	// It sill send pause and resume [area, path] feedback.
+	MemoryControlForPuller = 1
+	// MemoryControlForEventCollector is the algorithm of the memory control.
+	// It will only send pause and resume [path] feedback.
+	// For now, we only use it in event collector.
+	MemoryControlForEventCollector = 2
+)
+
 // MemoryControlAlgorithm defines the interface for memory control algorithms.
 // It provides methods to determine when to pause/resume paths and areas.
 type MemoryControlAlgorithm interface {
@@ -26,8 +39,8 @@ type MemoryControlAlgorithm interface {
 }
 
 // NewMemoryControlAlgorithm creates a new MemoryControlAlgorithm based on the algorithm type.
-func NewMemoryControlAlgorithm(algorithm int) MemoryControlAlgorithm {
-	switch algorithm {
+func NewMemoryControlAlgorithm(method memoryControlType) MemoryControlAlgorithm {
+	switch method {
 	case MemoryControlForEventCollector:
 		return &EventCollectorMemoryControl{}
 	default:

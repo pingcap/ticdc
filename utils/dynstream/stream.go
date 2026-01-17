@@ -66,7 +66,7 @@ func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	s := &stream[A, P, T, D, H]{
 		id:         id,
 		handler:    handler,
-		eventQueue: newEventQueue(option, handler),
+		eventQueue: newEventQueue(handler),
 		option:     option,
 		startTime:  time.Now(),
 	}
@@ -105,7 +105,6 @@ func (s *stream[A, P, T, D, H]) addEvent(event eventWrap[A, P, T, D, H]) {
 	// Fast path: try direct send without blocking to avoid context check
 	select {
 	case eventChan <- event:
-		return
 	default:
 		// Slow path: with close check while waiting
 		select {
@@ -157,10 +156,10 @@ func (s *stream[A, P, T, D, H]) receiver() {
 	}()
 
 	for {
-		event, ok := buffer.FrontRef()
 		if s.closed.Load() {
 			return
 		}
+		event, ok := buffer.FrontRef()
 		if !ok {
 			select {
 			case <-s.ctx.Done():
@@ -223,25 +222,15 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 		s.wg.Done()
 	}()
 
-	// Variables below will be used in the Loop below.
-	// Declared here to avoid repeated allocation.
-	var (
-		eventQueueEmpty = false
-		eventBuf        = make([]T, 0, s.option.BatchCount)
-		zeroT           T
-		cleanUpEventBuf = func() {
-			for i := range eventBuf {
-				eventBuf[i] = zeroT
-			}
-			eventBuf = eventBuf[:0]
-		}
-		path *pathInfo[A, P, T, D, H]
-	)
-
 	// For testing. Don't handle events until this wait group is done.
 	if s.option.handleWait != nil {
 		s.option.handleWait.Wait()
 	}
+
+	// Variables below will be used in the Loop below.
+	// Declared here to avoid repeated allocation.
+	// todo: shall we preallocate the event buff and path here ?
+	var eventQueueEmpty = false
 
 	// 1. Drain the eventChan to pendingQueue.
 	// 2. Pop events from the eventQueue and handle them.
@@ -278,25 +267,21 @@ Loop:
 				handleEvent(e)
 				eventQueueEmpty = false
 			default:
-				eventBuf, path = s.eventQueue.popEvents(eventBuf)
+				eventBuf, path := s.eventQueue.popEvents()
 				if len(eventBuf) == 0 {
 					eventQueueEmpty = true
 					continue Loop
 				}
 				if path.removed.Load() {
-					cleanUpEventBuf()
 					continue Loop
 				}
 
 				path.lastHandleEventTs.Store(uint64(s.handler.GetTimestamp(eventBuf[0])))
 
 				path.blocking.Store(s.handler.Handle(path.dest, eventBuf...))
-
 				if path.blocking.Load() {
 					s.eventQueue.blockPath(path)
 				}
-
-				cleanUpEventBuf()
 			}
 		}
 	}
@@ -331,16 +316,21 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	// Fields used by the memory control.
 	areaMemStat *areaMemStat[A, P, T, D, H]
 
+	batcher *batcher[T]
+
 	pendingSize atomic.Int64 // The total size(bytes) of pending events in the pendingQueue of the path.
 
 	lastHandleEventTs atomic.Uint64
 }
 
-func newPathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](area A, path P, dest D) *pathInfo[A, P, T, D, H] {
+func newPathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
+	area A, path P, dest D, batcher *batcher[T],
+) *pathInfo[A, P, T, D, H] {
 	pi := &pathInfo[A, P, T, D, H]{
 		area:         area,
 		path:         path,
 		dest:         dest,
+		batcher:      batcher,
 		pendingQueue: deque.NewDeque[eventWrap[A, P, T, D, H]](BlockLenInPendingQueue),
 	}
 	return pi
