@@ -153,6 +153,7 @@ type Maintainer struct {
 
 	resolvedTsGauge    prometheus.Gauge
 	resolvedTsLagGauge prometheus.Gauge
+	eventChLenGauge    prometheus.Gauge
 
 	scheduledTaskGauge  prometheus.Gauge
 	spanCountGauge      prometheus.Gauge
@@ -219,6 +220,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		checkpointTsLagGauge: metrics.MaintainerCheckpointTsLagGauge.WithLabelValues(keyspaceName, name),
 		resolvedTsGauge:      metrics.MaintainerResolvedTsGauge.WithLabelValues(keyspaceName, name),
 		resolvedTsLagGauge:   metrics.MaintainerResolvedTsLagGauge.WithLabelValues(keyspaceName, name),
+		eventChLenGauge:      metrics.MaintainerEventChLenGauge.WithLabelValues(keyspaceName, name),
 
 		scheduledTaskGauge:  metrics.ScheduleTaskGauge.WithLabelValues(keyspaceName, name, "default"),
 		spanCountGauge:      metrics.SpanCountGauge.WithLabelValues(keyspaceName, name, "default"),
@@ -422,6 +424,7 @@ func (m *Maintainer) cleanupMetrics() {
 	metrics.MaintainerCheckpointTsGauge.DeleteLabelValues(keyspace, name)
 	metrics.MaintainerCheckpointTsLagGauge.DeleteLabelValues(keyspace, name)
 	metrics.MaintainerHandleEventDuration.DeleteLabelValues(keyspace, name)
+	metrics.MaintainerEventChLenGauge.DeleteLabelValues(keyspace, name)
 	metrics.MaintainerResolvedTsGauge.DeleteLabelValues(keyspace, name)
 	metrics.MaintainerResolvedTsLagGauge.DeleteLabelValues(keyspace, name)
 
@@ -1103,19 +1106,24 @@ func (m *Maintainer) collectMetrics() {
 		working := spanController.GetReplicatingSize()
 		absent := spanController.GetAbsentSize()
 
+		var blockingLen int
 		if common.IsDefaultMode(mode) {
 			m.spanCountGauge.Set(float64(totalSpanCount))
 			m.tableCountGauge.Set(float64(totalTableCount))
 			m.scheduledTaskGauge.Set(float64(scheduling))
+			blockingLen = m.controller.barrier.blockedEvents.Len()
 		} else {
 			m.redoSpanCountGauge.Set(float64(totalSpanCount))
 			m.redoTableCountGauge.Set(float64(totalTableCount))
 			m.redoScheduledTaskGauge.Set(float64(scheduling))
+			blockingLen = m.controller.redoBarrier.blockedEvents.Len()
 		}
+		metrics.ExecDDLBlockingGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), common.StringMode(mode)).Set(float64(blockingLen))
 		metrics.TableStateGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), "Absent", common.StringMode(mode)).Set(float64(absent))
 		metrics.TableStateGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), "Working", common.StringMode(mode)).Set(float64(working))
 	}
 	if time.Since(m.lastPrintStatusTime) > time.Second*20 {
+		m.eventChLenGauge.Set(float64(m.eventCh.Len()))
 		updateMetric(common.DefaultMode)
 		if m.enableRedo {
 			updateMetric(common.RedoMode)
