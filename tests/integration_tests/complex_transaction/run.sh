@@ -38,7 +38,7 @@ if [ "$SINK_TYPE" == "mysql" ]; then
 	# Run the complex transaction workload
 	GO111MODULE=on go run *.go \
 		-dsn "root@tcp(${UP_TIDB_HOST}:${UP_TIDB_PORT})/complex_txn" \
-		--concurrency=20 \
+		--concurrency=2000 \
 		--total-txns=200000 \
 		--products=200 \
 		--users=2000
