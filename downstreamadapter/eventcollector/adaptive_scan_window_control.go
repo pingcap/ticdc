@@ -8,9 +8,14 @@ import (
 	"go.uber.org/zap"
 )
 
-func (c *EventCollector) updateScanMaxTsForChangefeed(cfStat *changefeedStat, memoryUsageRatio float64) uint64 {
+func (c *EventCollector) updateScanMaxTsForChangefeed(
+	cfStat *changefeedStat,
+	memoryUsageRatio float64,
+) uint64 {
 	var (
-		scanLimitBaseTs uint64 = ^uint64(0)
+		scanLimitBaseTs          uint64 = ^uint64(0)
+		scanLimitBaseTsCandidate uint64 = ^uint64(0)
+		hasEligible              bool
 
 		syncPointSeen     bool
 		syncPointEnabled  bool
@@ -26,8 +31,17 @@ func (c *EventCollector) updateScanMaxTsForChangefeed(cfStat *changefeedStat, me
 		stat := v.(*dispatcherStat)
 
 		checkpointTs := stat.target.GetCheckpointTs()
-		if checkpointTs > 0 && checkpointTs < scanLimitBaseTs {
-			scanLimitBaseTs = checkpointTs
+		if checkpointTs > 0 && checkpointTs < scanLimitBaseTsCandidate {
+			scanLimitBaseTsCandidate = checkpointTs
+		}
+
+		// Ignore dispatchers that never received any resolved-ts event.
+		// These dispatchers are typically still in initial incremental scan/bootstrap phase.
+		if stat.hasReceivedResolvedTsOnce.Load() {
+			hasEligible = true
+			if checkpointTs > 0 && checkpointTs < scanLimitBaseTs {
+				scanLimitBaseTs = checkpointTs
+			}
 		}
 
 		enableSyncPoint := stat.target.EnableSyncPoint()
@@ -54,15 +68,38 @@ func (c *EventCollector) updateScanMaxTsForChangefeed(cfStat *changefeedStat, me
 		return true
 	})
 
-	if scanLimitBaseTs == ^uint64(0) {
-		scanLimitBaseTs = 0
+	if hasEligible && scanLimitBaseTs != ^uint64(0) {
+		cfStat.scanLimitMu.Lock()
+		if !cfStat.lastScanLimitBaseTsValid || cfStat.lastScanLimitBaseTs != scanLimitBaseTs {
+			cfStat.lastScanLimitBaseTs = scanLimitBaseTs
+			cfStat.lastScanLimitBaseTsValid = true
+		}
+		cfStat.scanLimitMu.Unlock()
+	} else {
+		// No eligible dispatcher in this tick, reuse last base if available.
+		// If base hasn't been initialized yet, fall back to the min checkpointTs among all dispatchers.
+		cfStat.scanLimitMu.Lock()
+		if cfStat.lastScanLimitBaseTsValid {
+			scanLimitBaseTs = cfStat.lastScanLimitBaseTs
+		} else if scanLimitBaseTsCandidate != ^uint64(0) {
+			scanLimitBaseTs = scanLimitBaseTsCandidate
+			cfStat.lastScanLimitBaseTs = scanLimitBaseTs
+			cfStat.lastScanLimitBaseTsValid = true
+		} else {
+			scanLimitBaseTs = 0
+		}
+		cfStat.scanLimitMu.Unlock()
 	}
 
 	maxInterval := adaptiveScanWindowMax
-	if syncPointEnabled && syncPointInterval > 0 {
+	_ = syncPointEnabled
+	if syncPointInterval > 0 {
 		maxInterval = min(maxInterval, syncPointInterval)
 	}
 
 	scanInterval := cfStat.scanWindow.observe(memoryUsageRatio, maxInterval)
-	return calcScanMaxTs(scanLimitBaseTs, scanInterval)
+	scanMaxTs := calcScanMaxTs(scanLimitBaseTs, scanInterval)
+	cfStat.metricScanInterval.Set(scanInterval.Seconds())
+	cfStat.metricScanMaxTs.Set(float64(scanMaxTs))
+	return scanMaxTs
 }

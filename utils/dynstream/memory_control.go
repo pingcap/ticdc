@@ -36,6 +36,14 @@ const (
 	defaultReleaseMemoryRatio     = 0.4
 	defaultDeadlockDuration       = 5 * time.Second
 	defaultReleaseMemoryThreshold = 256
+
+	// Deadlock detection for EventCollector:
+	// - memory usage ratio > 90% for 30s, AND
+	// - the slowest (min) handled event timestamp doesn't advance for 5s.
+	//
+	// This avoids being trapped by paths that haven't produced any event yet (ts==0).
+	defaultDeadlockMemoryThreshold = 0.90
+	defaultDeadlockHighFor         = 30 * time.Second
 )
 
 var failpointAPITestLogged atomic.Bool
@@ -61,6 +69,12 @@ type areaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct 
 	lastAppendEventTime   atomic.Value
 	lastSizeDecreaseTime  atomic.Value
 	lastReleaseMemoryTime atomic.Value
+
+	// Deadlock detection state.
+	deadlockLastCheckUnixNano               atomic.Int64
+	deadlockOverHighWatermarkUnixNano       atomic.Int64
+	deadlockMinHandleEventTs                atomic.Uint64
+	deadlockMinHandleEventTsChangedUnixNano atomic.Int64
 }
 
 func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
@@ -83,6 +97,9 @@ func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	res.lastSendFeedbackTime.Store(time.Now())
 	res.lastSizeDecreaseTime.Store(time.Now())
 	res.lastReleaseMemoryTime.Store(time.Now())
+	now := time.Now()
+	res.deadlockLastCheckUnixNano.Store(now.UnixNano())
+	res.deadlockMinHandleEventTsChangedUnixNano.Store(now.UnixNano())
 	res.settings.Store(&settings)
 	return res
 }
@@ -164,11 +181,68 @@ func (as *areaMemStat[A, P, T, D, H]) checkDeadlock() bool {
 		return false
 	}
 
-	hasEventComeButNotOut := time.Since(as.lastAppendEventTime.Load().(time.Time)) < defaultDeadlockDuration && time.Since(as.lastSizeDecreaseTime.Load().(time.Time)) > defaultDeadlockDuration
+	now := time.Now()
+	nowNs := now.UnixNano()
 
-	memoryHighWaterMark := as.memoryUsageRatio() > (1 - defaultReleaseMemoryRatio)
+	// Avoid over-counting in concurrent calls: only one goroutine updates the timer per check.
+	lastNs := as.deadlockLastCheckUnixNano.Load()
+	if lastNs == 0 {
+		as.deadlockLastCheckUnixNano.Store(nowNs)
+		as.deadlockMinHandleEventTsChangedUnixNano.Store(nowNs)
+		return false
+	}
+	if !as.deadlockLastCheckUnixNano.CompareAndSwap(lastNs, nowNs) {
+		return false
+	}
+	deltaNs := nowNs - lastNs
+	if deltaNs < 0 {
+		deltaNs = 0
+	}
 
-	return hasEventComeButNotOut && memoryHighWaterMark
+	memoryHighWaterMark := as.memoryUsageRatio() > defaultDeadlockMemoryThreshold
+	if !memoryHighWaterMark {
+		as.deadlockOverHighWatermarkUnixNano.Store(0)
+		return false
+	}
+	as.deadlockOverHighWatermarkUnixNano.Add(deltaNs)
+
+	// Find the slowest (minimum) handled timestamp among blocking paths with pending data.
+	// Ignore paths with 0 timestamp (haven't produced any event yet).
+	var minHandleTs uint64
+	as.pathMap.Range(func(_, v interface{}) bool {
+		path := v.(*pathInfo[A, P, T, D, H])
+		if !path.blocking.Load() || path.pendingSize.Load() <= 0 {
+			return true
+		}
+		ts := path.lastHandleEventTs.Load()
+		if ts == 0 {
+			return true
+		}
+		if minHandleTs == 0 || ts < minHandleTs {
+			minHandleTs = ts
+		}
+		return true
+	})
+	if minHandleTs == 0 {
+		return false
+	}
+
+	prevMin := as.deadlockMinHandleEventTs.Load()
+	if minHandleTs != prevMin {
+		as.deadlockMinHandleEventTs.Store(minHandleTs)
+		as.deadlockMinHandleEventTsChangedUnixNano.Store(nowNs)
+		return false
+	}
+
+	overFor := time.Duration(as.deadlockOverHighWatermarkUnixNano.Load())
+	if overFor < defaultDeadlockHighFor {
+		return false
+	}
+	stallNs := nowNs - as.deadlockMinHandleEventTsChangedUnixNano.Load()
+	if stallNs < 0 {
+		stallNs = 0
+	}
+	return time.Duration(stallNs) >= defaultDeadlockDuration
 }
 
 func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {

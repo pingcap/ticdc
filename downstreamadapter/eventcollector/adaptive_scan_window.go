@@ -14,7 +14,7 @@ const (
 
 	adaptiveScanWindowAdjustAfter = 10 * time.Second
 
-	adaptiveScanWindowShrinkThreshold = 1.10
+	adaptiveScanWindowShrinkThreshold = 0.80
 	adaptiveScanWindowGrowThreshold   = 0.50
 )
 

@@ -126,6 +126,9 @@ type dispatcherStat struct {
 	gotDDLOnTs atomic.Bool
 	// gotSyncpointOnTS indicates whether a sync point was received at the sentCommitTs.
 	gotSyncpointOnTS atomic.Bool
+	// hasReceivedResolvedTsOnce is used by scan-window control to ignore dispatchers that haven't entered
+	// steady event production yet (typically still in initial incremental scan/bootstrap phase).
+	hasReceivedResolvedTsOnce atomic.Bool
 	// tableInfo is the latest table info of the dispatcher's corresponding table.
 	tableInfo atomic.Value
 	// tableInfoVersion is the latest table info version of the dispatcher's corresponding table.
@@ -401,6 +404,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 			return false
 		}
 		if event.GetType() == commonEvent.TypeResolvedEvent {
+			d.hasReceivedResolvedTsOnce.Store(true)
 			validEvents = append(validEvents, event)
 		} else if event.GetType() == commonEvent.TypeDMLEvent {
 			if d.filterAndUpdateEventByCommitTs(event) {

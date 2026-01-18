@@ -450,3 +450,101 @@ func TestReleaseMemory(t *testing.T) {
 		// Pass
 	}
 }
+
+func TestCheckDeadlockEventCollector(t *testing.T) {
+	mc := newMemControl[int, string, *mockEvent, any, *mockHandler]()
+	area := 1
+	settings := AreaSettings{
+		maxPendingSize:   1000,
+		feedbackInterval: time.Second,
+		algorithm:        MemoryControlForEventCollector,
+	}
+	feedbackChan := make(chan Feedback[int, string, any], 10)
+
+	path := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
+		area:         area,
+		path:         "path-1",
+		dest:         "dest-1",
+		pendingQueue: deque.NewDeque[eventWrap[int, string, *mockEvent, any, *mockHandler]](32),
+	}
+	path.blocking.Store(true)
+	path.pendingSize.Store(500)
+	path.lastHandleEventTs.Store(100)
+	mc.addPathToArea(path, settings, feedbackChan)
+
+	as := path.areaMemStat
+	as.totalPendingSize.Store(910) // 0.91 > 0.90
+
+	now := time.Now()
+	as.deadlockMinHandleEventTs.Store(100)
+	as.deadlockMinHandleEventTsChangedUnixNano.Store(now.Add(-6 * time.Second).UnixNano())
+	as.deadlockOverHighWatermarkUnixNano.Store((defaultDeadlockHighFor - time.Second).Nanoseconds())
+	as.deadlockLastCheckUnixNano.Store(now.Add(-time.Second).UnixNano())
+
+	require.True(t, as.checkDeadlock())
+}
+
+func TestCheckDeadlockIgnoresUnstartedPath(t *testing.T) {
+	mc := newMemControl[int, string, *mockEvent, any, *mockHandler]()
+	area := 1
+	settings := AreaSettings{
+		maxPendingSize:   1000,
+		feedbackInterval: time.Second,
+		algorithm:        MemoryControlForEventCollector,
+	}
+	feedbackChan := make(chan Feedback[int, string, any], 10)
+
+	path := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
+		area:         area,
+		path:         "path-1",
+		dest:         "dest-1",
+		pendingQueue: deque.NewDeque[eventWrap[int, string, *mockEvent, any, *mockHandler]](32),
+	}
+	path.blocking.Store(true)
+	path.pendingSize.Store(500)
+	path.lastHandleEventTs.Store(0) // not started yet
+	mc.addPathToArea(path, settings, feedbackChan)
+
+	as := path.areaMemStat
+	as.totalPendingSize.Store(910) // 0.91 > 0.90
+
+	now := time.Now()
+	as.deadlockMinHandleEventTs.Store(0)
+	as.deadlockMinHandleEventTsChangedUnixNano.Store(now.Add(-6 * time.Second).UnixNano())
+	as.deadlockOverHighWatermarkUnixNano.Store((defaultDeadlockHighFor + time.Second).Nanoseconds())
+	as.deadlockLastCheckUnixNano.Store(now.Add(-time.Second).UnixNano())
+
+	require.False(t, as.checkDeadlock())
+}
+
+func TestCheckDeadlockResetsWhenMemoryNormal(t *testing.T) {
+	mc := newMemControl[int, string, *mockEvent, any, *mockHandler]()
+	area := 1
+	settings := AreaSettings{
+		maxPendingSize:   1000,
+		feedbackInterval: time.Second,
+		algorithm:        MemoryControlForEventCollector,
+	}
+	feedbackChan := make(chan Feedback[int, string, any], 10)
+
+	path := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
+		area:         area,
+		path:         "path-1",
+		dest:         "dest-1",
+		pendingQueue: deque.NewDeque[eventWrap[int, string, *mockEvent, any, *mockHandler]](32),
+	}
+	path.blocking.Store(true)
+	path.pendingSize.Store(500)
+	path.lastHandleEventTs.Store(100)
+	mc.addPathToArea(path, settings, feedbackChan)
+
+	as := path.areaMemStat
+	as.totalPendingSize.Store(100) // 0.10 <= 0.90
+
+	as.deadlockOverHighWatermarkUnixNano.Store((defaultDeadlockHighFor + time.Second).Nanoseconds())
+	now := time.Now()
+	as.deadlockLastCheckUnixNano.Store(now.Add(-time.Second).UnixNano())
+
+	require.False(t, as.checkDeadlock())
+	require.Equal(t, int64(0), as.deadlockOverHighWatermarkUnixNano.Load())
+}

@@ -82,9 +82,15 @@ type changefeedStat struct {
 	metricMemoryUsageUsed     prometheus.Gauge
 	metricMemoryUsageMaxRedo  prometheus.Gauge
 	metricMemoryUsageUsedRedo prometheus.Gauge
+	metricScanInterval        prometheus.Gauge
+	metricScanMaxTs           prometheus.Gauge
 	dispatcherCount           atomic.Int32
 	dispatcherIDs             sync.Map // common.DispatcherID -> struct{}
 	scanWindow                *adaptiveScanWindow
+
+	scanLimitMu              sync.Mutex
+	lastScanLimitBaseTs      uint64
+	lastScanLimitBaseTsValid bool
 }
 
 func newChangefeedStat(changefeedID common.ChangeFeedID) *changefeedStat {
@@ -94,6 +100,8 @@ func newChangefeedStat(changefeedID common.ChangeFeedID) *changefeedStat {
 		metricMemoryUsageUsed:     metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector", "used", changefeedID.Keyspace(), changefeedID.Name()),
 		metricMemoryUsageMaxRedo:  metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector-redo", "max", changefeedID.Keyspace(), changefeedID.Name()),
 		metricMemoryUsageUsedRedo: metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector-redo", "used", changefeedID.Keyspace(), changefeedID.Name()),
+		metricScanInterval:        metrics.EventCollectorScanIntervalGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		metricScanMaxTs:           metrics.EventCollectorScanMaxTsGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 		scanWindow:                newAdaptiveScanWindow(),
 	}
 }
@@ -103,6 +111,8 @@ func (c *changefeedStat) removeMetrics() {
 	metrics.DynamicStreamMemoryUsage.DeleteLabelValues("event-collector", "used", c.changefeedID.Keyspace(), c.changefeedID.Name())
 	metrics.DynamicStreamMemoryUsage.DeleteLabelValues("event-collector-redo", "max", c.changefeedID.Keyspace(), c.changefeedID.Name())
 	metrics.DynamicStreamMemoryUsage.DeleteLabelValues("event-collector-redo", "used", c.changefeedID.Keyspace(), c.changefeedID.Name())
+	metrics.EventCollectorScanIntervalGauge.DeleteLabelValues(c.changefeedID.Keyspace(), c.changefeedID.Name())
+	metrics.EventCollectorScanMaxTsGauge.DeleteLabelValues(c.changefeedID.Keyspace(), c.changefeedID.Name())
 }
 
 /*

@@ -20,24 +20,24 @@ func TestAdaptiveScanWindowAdjust(t *testing.T) {
 		return w.observe(ratio, maxInterval)
 	}
 
-	// Grow after 30 seconds below 50%.
-	for range 29 {
+	// Grow after 10 seconds below 50%.
+	for range 9 {
 		interval := step(0.49, adaptiveScanWindowMax)
 		require.Equal(t, 5*time.Second, interval)
 	}
 	interval := step(0.49, adaptiveScanWindowMax)
 	require.Equal(t, 10*time.Second, interval)
 
-	// Shrink after 30 seconds above 110%.
-	for range 29 {
-		interval = step(1.11, adaptiveScanWindowMax)
+	// Shrink after 10 seconds above 80%.
+	for range 9 {
+		interval = step(0.81, adaptiveScanWindowMax)
 		require.Equal(t, 10*time.Second, interval)
 	}
-	interval = step(1.11, adaptiveScanWindowMax)
+	interval = step(0.81, adaptiveScanWindowMax)
 	require.Equal(t, 5*time.Second, interval)
 
-	// Above 150% uses the same shrink logic (no reset here).
-	for range 29 {
+	// Above 150% uses the same shrink logic (reset is handled elsewhere).
+	for range 9 {
 		interval = step(1.51, adaptiveScanWindowMax)
 		require.Equal(t, 5*time.Second, interval)
 	}
