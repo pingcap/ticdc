@@ -476,15 +476,15 @@ func TestCheckDeadlockEventCollector(t *testing.T) {
 	as.totalPendingSize.Store(910) // 0.91 > 0.90
 
 	now := time.Now()
-	as.deadlockMinHandleEventTs.Store(100)
-	as.deadlockMinHandleEventTsChangedUnixNano.Store(now.Add(-6 * time.Second).UnixNano())
+	as.lastAppendDataTime.Store(now.Add(-time.Second))
+	as.lastSizeDecreaseTime.Store(now.Add(-(defaultDeadlockHighFor + time.Second)))
 	as.deadlockOverHighWatermarkUnixNano.Store((defaultDeadlockHighFor - time.Second).Nanoseconds())
 	as.deadlockLastCheckUnixNano.Store(now.Add(-time.Second).UnixNano())
 
 	require.True(t, as.checkDeadlock())
 }
 
-func TestCheckDeadlockIgnoresUnstartedPath(t *testing.T) {
+func TestCheckDeadlockIgnoresOnlyPeriodicSignal(t *testing.T) {
 	mc := newMemControl[int, string, *mockEvent, any, *mockHandler]()
 	area := 1
 	settings := AreaSettings{
@@ -502,15 +502,16 @@ func TestCheckDeadlockIgnoresUnstartedPath(t *testing.T) {
 	}
 	path.blocking.Store(true)
 	path.pendingSize.Store(500)
-	path.lastHandleEventTs.Store(0) // not started yet
 	mc.addPathToArea(path, settings, feedbackChan)
 
 	as := path.areaMemStat
 	as.totalPendingSize.Store(910) // 0.91 > 0.90
 
 	now := time.Now()
-	as.deadlockMinHandleEventTs.Store(0)
-	as.deadlockMinHandleEventTsChangedUnixNano.Store(now.Add(-6 * time.Second).UnixNano())
+	// Only periodic signals coming should not be treated as "events keep coming".
+	as.lastAppendEventTime.Store(now.Add(-time.Second))
+	as.lastAppendDataTime.Store(now.Add(-10 * time.Second))
+	as.lastSizeDecreaseTime.Store(now.Add(-(defaultDeadlockHighFor + time.Second)))
 	as.deadlockOverHighWatermarkUnixNano.Store((defaultDeadlockHighFor + time.Second).Nanoseconds())
 	as.deadlockLastCheckUnixNano.Store(now.Add(-time.Second).UnixNano())
 

@@ -48,6 +48,13 @@ var (
 			Name:      "remove_path_num",
 			Help:      "The number of remove path command",
 		}, []string{"module"})
+	DynamicStreamDeadlockDetected = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "dynamic_stream",
+			Name:      "deadlock_detected_total",
+			Help:      "The total count of deadlock detections by memory control",
+		}, []string{"component"})
 )
 
 func initDynamicStreamMetrics(registry *prometheus.Registry) {
@@ -56,4 +63,5 @@ func initDynamicStreamMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(DynamicStreamPendingQueueLen)
 	registry.MustRegister(DynamicStreamAddPathNum)
 	registry.MustRegister(DynamicStreamRemovePathNum)
+	registry.MustRegister(DynamicStreamDeadlockDetected)
 }

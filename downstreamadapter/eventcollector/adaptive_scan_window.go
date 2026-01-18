@@ -95,12 +95,6 @@ func (w *adaptiveScanWindow) observe(memoryUsageRatio float64, maxInterval time.
 		w.interval = min(w.interval*2, maxInterval)
 	}
 
-	if w.interval > maxInterval {
-		w.interval = maxInterval
-	}
-	if w.interval < adaptiveScanWindowMin {
-		w.interval = adaptiveScanWindowMin
-	}
 	return w.interval
 }
 

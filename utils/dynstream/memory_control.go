@@ -21,6 +21,7 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"go.uber.org/zap"
 )
 
@@ -39,9 +40,7 @@ const (
 
 	// Deadlock detection for EventCollector:
 	// - memory usage ratio > 90% for 30s, AND
-	// - the slowest (min) handled event timestamp doesn't advance for 5s.
-	//
-	// This avoids being trapped by paths that haven't produced any event yet (ts==0).
+	// - real (non-periodic-signal) events keep coming, but no pending size decrease for 30s.
 	defaultDeadlockMemoryThreshold = 0.90
 	defaultDeadlockHighFor         = 30 * time.Second
 )
@@ -67,14 +66,13 @@ type areaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct 
 	algorithm            MemoryControlAlgorithm
 
 	lastAppendEventTime   atomic.Value
+	lastAppendDataTime    atomic.Value
 	lastSizeDecreaseTime  atomic.Value
 	lastReleaseMemoryTime atomic.Value
 
 	// Deadlock detection state.
-	deadlockLastCheckUnixNano               atomic.Int64
-	deadlockOverHighWatermarkUnixNano       atomic.Int64
-	deadlockMinHandleEventTs                atomic.Uint64
-	deadlockMinHandleEventTsChangedUnixNano atomic.Int64
+	deadlockLastCheckUnixNano         atomic.Int64
+	deadlockOverHighWatermarkUnixNano atomic.Int64
 }
 
 func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
@@ -94,12 +92,12 @@ func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	}
 
 	res.lastAppendEventTime.Store(time.Now())
+	res.lastAppendDataTime.Store(time.Now())
 	res.lastSendFeedbackTime.Store(time.Now())
 	res.lastSizeDecreaseTime.Store(time.Now())
 	res.lastReleaseMemoryTime.Store(time.Now())
 	now := time.Now()
 	res.deadlockLastCheckUnixNano.Store(now.UnixNano())
-	res.deadlockMinHandleEventTsChangedUnixNano.Store(now.UnixNano())
 	res.settings.Store(&settings)
 	return res
 }
@@ -117,6 +115,9 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 ) bool {
 	defer as.updateAreaPauseState(path)
 	as.lastAppendEventTime.Store(time.Now())
+	if event.eventType.Property != PeriodicSignal {
+		as.lastAppendDataTime.Store(time.Now())
+	}
 
 	failpoint.Inject("FailpointAPITestValue", func(val failpoint.Value) {
 		if failpointAPITestLogged.CompareAndSwap(false, true) {
@@ -188,7 +189,6 @@ func (as *areaMemStat[A, P, T, D, H]) checkDeadlock() bool {
 	lastNs := as.deadlockLastCheckUnixNano.Load()
 	if lastNs == 0 {
 		as.deadlockLastCheckUnixNano.Store(nowNs)
-		as.deadlockMinHandleEventTsChangedUnixNano.Store(nowNs)
 		return false
 	}
 	if !as.deadlockLastCheckUnixNano.CompareAndSwap(lastNs, nowNs) {
@@ -206,43 +206,20 @@ func (as *areaMemStat[A, P, T, D, H]) checkDeadlock() bool {
 	}
 	as.deadlockOverHighWatermarkUnixNano.Add(deltaNs)
 
-	// Find the slowest (minimum) handled timestamp among blocking paths with pending data.
-	// Ignore paths with 0 timestamp (haven't produced any event yet).
-	var minHandleTs uint64
-	as.pathMap.Range(func(_, v interface{}) bool {
-		path := v.(*pathInfo[A, P, T, D, H])
-		if !path.blocking.Load() || path.pendingSize.Load() <= 0 {
-			return true
-		}
-		ts := path.lastHandleEventTs.Load()
-		if ts == 0 {
-			return true
-		}
-		if minHandleTs == 0 || ts < minHandleTs {
-			minHandleTs = ts
-		}
-		return true
-	})
-	if minHandleTs == 0 {
-		return false
-	}
-
-	prevMin := as.deadlockMinHandleEventTs.Load()
-	if minHandleTs != prevMin {
-		as.deadlockMinHandleEventTs.Store(minHandleTs)
-		as.deadlockMinHandleEventTsChangedUnixNano.Store(nowNs)
-		return false
-	}
-
 	overFor := time.Duration(as.deadlockOverHighWatermarkUnixNano.Load())
 	if overFor < defaultDeadlockHighFor {
 		return false
 	}
-	stallNs := nowNs - as.deadlockMinHandleEventTsChangedUnixNano.Load()
-	if stallNs < 0 {
-		stallNs = 0
+
+	lastAppendDataTime := as.lastAppendDataTime.Load().(time.Time)
+	lastSizeDecreaseTime := as.lastSizeDecreaseTime.Load().(time.Time)
+
+	hasEventComeButNotOut := now.Sub(lastAppendDataTime) < defaultDeadlockDuration &&
+		now.Sub(lastSizeDecreaseTime) > defaultDeadlockHighFor
+	if hasEventComeButNotOut {
+		metrics.DynamicStreamDeadlockDetected.WithLabelValues(as.settings.Load().component).Inc()
 	}
-	return time.Duration(stallNs) >= defaultDeadlockDuration
+	return hasEventComeButNotOut
 }
 
 func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
