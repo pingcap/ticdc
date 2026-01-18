@@ -64,7 +64,6 @@ func (c *EventCollector) updateScanMaxTsForChangefeed(
 	})
 
 	maxInterval := adaptiveScanWindowMax
-	_ = syncPointEnabled
 	if syncPointInterval > 0 {
 		maxInterval = min(maxInterval, syncPointInterval)
 	}
