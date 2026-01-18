@@ -35,12 +35,12 @@ const (
 	MemoryControlForEventCollector = 1
 
 	defaultReleaseMemoryRatio     = 0.4
-	defaultDeadlockDuration       = 5 * time.Second
+	defaultDeadlockDuration       = 10 * time.Second
 	defaultReleaseMemoryThreshold = 256
 
 	// Deadlock detection for EventCollector:
 	// - memory usage ratio > 90% for 30s, AND
-	// - real (non-periodic-signal) events keep coming, but no pending size decrease for 30s.
+	// - no non-periodic event popped for 10s.
 	defaultDeadlockMemoryThreshold = 0.90
 	defaultDeadlockHighFor         = 30 * time.Second
 )
@@ -66,12 +66,13 @@ type areaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct 
 	algorithm            MemoryControlAlgorithm
 
 	lastAppendEventTime   atomic.Value
-	lastAppendDataTime    atomic.Value
 	lastSizeDecreaseTime  atomic.Value
 	lastReleaseMemoryTime atomic.Value
 
 	// Deadlock detection state.
-	deadlockLastCheckUnixNano         atomic.Int64
+	// deadlockOverHighWatermarkUnixNano stores the start time (UnixNano) when
+	// memory usage ratio first exceeds defaultDeadlockMemoryThreshold.
+	// It is reset to 0 when memory usage ratio goes back to normal.
 	deadlockOverHighWatermarkUnixNano atomic.Int64
 }
 
@@ -92,12 +93,9 @@ func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	}
 
 	res.lastAppendEventTime.Store(time.Now())
-	res.lastAppendDataTime.Store(time.Now())
 	res.lastSendFeedbackTime.Store(time.Now())
 	res.lastSizeDecreaseTime.Store(time.Now())
 	res.lastReleaseMemoryTime.Store(time.Now())
-	now := time.Now()
-	res.deadlockLastCheckUnixNano.Store(now.UnixNano())
 	res.settings.Store(&settings)
 	return res
 }
@@ -115,9 +113,6 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 ) bool {
 	defer as.updateAreaPauseState(path)
 	as.lastAppendEventTime.Store(time.Now())
-	if event.eventType.Property != PeriodicSignal {
-		as.lastAppendDataTime.Store(time.Now())
-	}
 
 	failpoint.Inject("FailpointAPITestValue", func(val failpoint.Value) {
 		if failpointAPITestLogged.CompareAndSwap(false, true) {
@@ -185,37 +180,27 @@ func (as *areaMemStat[A, P, T, D, H]) checkDeadlock() bool {
 	now := time.Now()
 	nowNs := now.UnixNano()
 
-	// Avoid over-counting in concurrent calls: only one goroutine updates the timer per check.
-	lastNs := as.deadlockLastCheckUnixNano.Load()
-	if lastNs == 0 {
-		as.deadlockLastCheckUnixNano.Store(nowNs)
-		return false
-	}
-	if !as.deadlockLastCheckUnixNano.CompareAndSwap(lastNs, nowNs) {
-		return false
-	}
-	deltaNs := nowNs - lastNs
-	if deltaNs < 0 {
-		deltaNs = 0
-	}
-
-	memoryHighWaterMark := as.memoryUsageRatio() > defaultDeadlockMemoryThreshold
-	if !memoryHighWaterMark {
+	if as.memoryUsageRatio() <= defaultDeadlockMemoryThreshold {
 		as.deadlockOverHighWatermarkUnixNano.Store(0)
 		return false
 	}
-	as.deadlockOverHighWatermarkUnixNano.Add(deltaNs)
 
-	overFor := time.Duration(as.deadlockOverHighWatermarkUnixNano.Load())
+	highSinceNs := as.deadlockOverHighWatermarkUnixNano.Load()
+	if highSinceNs == 0 {
+		// Initialize the start time once when crossing the threshold.
+		as.deadlockOverHighWatermarkUnixNano.CompareAndSwap(0, nowNs)
+		return false
+	}
+	overFor := time.Duration(nowNs - highSinceNs)
 	if overFor < defaultDeadlockHighFor {
 		return false
 	}
 
-	lastAppendDataTime := as.lastAppendDataTime.Load().(time.Time)
+	lastAppendEventTime := as.lastAppendEventTime.Load().(time.Time)
 	lastSizeDecreaseTime := as.lastSizeDecreaseTime.Load().(time.Time)
 
-	hasEventComeButNotOut := now.Sub(lastAppendDataTime) < defaultDeadlockDuration &&
-		now.Sub(lastSizeDecreaseTime) > defaultDeadlockHighFor
+	hasEventComeButNotOut := now.Sub(lastAppendEventTime) < defaultDeadlockDuration &&
+		now.Sub(lastSizeDecreaseTime) > defaultDeadlockDuration
 	if hasEventComeButNotOut {
 		metrics.DynamicStreamDeadlockDetected.WithLabelValues(as.settings.Load().component).Inc()
 	}

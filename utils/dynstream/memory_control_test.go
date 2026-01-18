@@ -476,46 +476,11 @@ func TestCheckDeadlockEventCollector(t *testing.T) {
 	as.totalPendingSize.Store(910) // 0.91 > 0.90
 
 	now := time.Now()
-	as.lastAppendDataTime.Store(now.Add(-time.Second))
-	as.lastSizeDecreaseTime.Store(now.Add(-(defaultDeadlockHighFor + time.Second)))
-	as.deadlockOverHighWatermarkUnixNano.Store((defaultDeadlockHighFor - time.Second).Nanoseconds())
-	as.deadlockLastCheckUnixNano.Store(now.Add(-time.Second).UnixNano())
+	as.lastAppendEventTime.Store(now.Add(-time.Second))
+	as.lastSizeDecreaseTime.Store(now.Add(-(defaultDeadlockDuration + time.Second)))
+	as.deadlockOverHighWatermarkUnixNano.Store(now.Add(-(defaultDeadlockHighFor + time.Second)).UnixNano())
 
 	require.True(t, as.checkDeadlock())
-}
-
-func TestCheckDeadlockIgnoresOnlyPeriodicSignal(t *testing.T) {
-	mc := newMemControl[int, string, *mockEvent, any, *mockHandler]()
-	area := 1
-	settings := AreaSettings{
-		maxPendingSize:   1000,
-		feedbackInterval: time.Second,
-		algorithm:        MemoryControlForEventCollector,
-	}
-	feedbackChan := make(chan Feedback[int, string, any], 10)
-
-	path := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
-		area:         area,
-		path:         "path-1",
-		dest:         "dest-1",
-		pendingQueue: deque.NewDeque[eventWrap[int, string, *mockEvent, any, *mockHandler]](32),
-	}
-	path.blocking.Store(true)
-	path.pendingSize.Store(500)
-	mc.addPathToArea(path, settings, feedbackChan)
-
-	as := path.areaMemStat
-	as.totalPendingSize.Store(910) // 0.91 > 0.90
-
-	now := time.Now()
-	// Only periodic signals coming should not be treated as "events keep coming".
-	as.lastAppendEventTime.Store(now.Add(-time.Second))
-	as.lastAppendDataTime.Store(now.Add(-10 * time.Second))
-	as.lastSizeDecreaseTime.Store(now.Add(-(defaultDeadlockHighFor + time.Second)))
-	as.deadlockOverHighWatermarkUnixNano.Store((defaultDeadlockHighFor + time.Second).Nanoseconds())
-	as.deadlockLastCheckUnixNano.Store(now.Add(-time.Second).UnixNano())
-
-	require.False(t, as.checkDeadlock())
 }
 
 func TestCheckDeadlockResetsWhenMemoryNormal(t *testing.T) {
@@ -542,9 +507,8 @@ func TestCheckDeadlockResetsWhenMemoryNormal(t *testing.T) {
 	as := path.areaMemStat
 	as.totalPendingSize.Store(100) // 0.10 <= 0.90
 
-	as.deadlockOverHighWatermarkUnixNano.Store((defaultDeadlockHighFor + time.Second).Nanoseconds())
 	now := time.Now()
-	as.deadlockLastCheckUnixNano.Store(now.Add(-time.Second).UnixNano())
+	as.deadlockOverHighWatermarkUnixNano.Store(now.Add(-(defaultDeadlockHighFor + time.Second)).UnixNano())
 
 	require.False(t, as.checkDeadlock())
 	require.Equal(t, int64(0), as.deadlockOverHighWatermarkUnixNano.Load())
