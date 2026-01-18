@@ -13,9 +13,8 @@ func (c *EventCollector) updateScanMaxTsForChangefeed(
 	memoryUsageRatio float64,
 ) uint64 {
 	var (
-		scanLimitBaseTs          uint64 = ^uint64(0)
-		scanLimitBaseTsCandidate uint64 = ^uint64(0)
-		hasEligible              bool
+		scanLimitBaseTs uint64 = ^uint64(0)
+		hasEligible     bool
 
 		syncPointSeen     bool
 		syncPointEnabled  bool
@@ -31,13 +30,9 @@ func (c *EventCollector) updateScanMaxTsForChangefeed(
 		stat := v.(*dispatcherStat)
 
 		checkpointTs := stat.target.GetCheckpointTs()
-		if checkpointTs > 0 && checkpointTs < scanLimitBaseTsCandidate {
-			scanLimitBaseTsCandidate = checkpointTs
-		}
 
-		// Ignore dispatchers that never received any handshake event.
-		// These dispatchers haven't started a new event stream yet (handshake not received for current epoch).
-		if stat.hasReceivedHandshakeEventOnce.Load() {
+		// Ignore dispatchers that never received any resolved-ts event.
+		if stat.hasReceivedResolvedTs.Load() {
 			hasEligible = true
 			if checkpointTs > 0 && checkpointTs < scanLimitBaseTs {
 				scanLimitBaseTs = checkpointTs
@@ -68,29 +63,6 @@ func (c *EventCollector) updateScanMaxTsForChangefeed(
 		return true
 	})
 
-	if hasEligible && scanLimitBaseTs != ^uint64(0) {
-		cfStat.scanLimitMu.Lock()
-		if !cfStat.lastScanLimitBaseTsValid || cfStat.lastScanLimitBaseTs != scanLimitBaseTs {
-			cfStat.lastScanLimitBaseTs = scanLimitBaseTs
-			cfStat.lastScanLimitBaseTsValid = true
-		}
-		cfStat.scanLimitMu.Unlock()
-	} else {
-		// No eligible dispatcher in this tick, reuse last base if available.
-		// If base hasn't been initialized yet, fall back to the min checkpointTs among all dispatchers.
-		cfStat.scanLimitMu.Lock()
-		if cfStat.lastScanLimitBaseTsValid {
-			scanLimitBaseTs = cfStat.lastScanLimitBaseTs
-		} else if scanLimitBaseTsCandidate != ^uint64(0) {
-			scanLimitBaseTs = scanLimitBaseTsCandidate
-			cfStat.lastScanLimitBaseTs = scanLimitBaseTs
-			cfStat.lastScanLimitBaseTsValid = true
-		} else {
-			scanLimitBaseTs = 0
-		}
-		cfStat.scanLimitMu.Unlock()
-	}
-
 	maxInterval := adaptiveScanWindowMax
 	_ = syncPointEnabled
 	if syncPointInterval > 0 {
@@ -98,8 +70,15 @@ func (c *EventCollector) updateScanMaxTsForChangefeed(
 	}
 
 	scanInterval := cfStat.scanWindow.observe(memoryUsageRatio, maxInterval)
-	scanMaxTs := calcScanMaxTs(scanLimitBaseTs, scanInterval)
 	cfStat.metricScanInterval.Set(scanInterval.Seconds())
+
+	if !hasEligible || scanLimitBaseTs == ^uint64(0) {
+		// scanMaxTs == 0 means no scan window limit in EventService.
+		cfStat.metricScanMaxTs.Set(0)
+		return 0
+	}
+
+	scanMaxTs := calcScanMaxTs(scanLimitBaseTs, scanInterval)
 	cfStat.metricScanMaxTs.Set(float64(scanMaxTs))
 	return scanMaxTs
 }

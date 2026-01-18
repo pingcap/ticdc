@@ -87,10 +87,6 @@ type changefeedStat struct {
 	dispatcherCount           atomic.Int32
 	dispatcherIDs             sync.Map // common.DispatcherID -> struct{}
 	scanWindow                *adaptiveScanWindow
-
-	scanLimitMu              sync.Mutex
-	lastScanLimitBaseTs      uint64
-	lastScanLimitBaseTsValid bool
 }
 
 func newChangefeedStat(changefeedID common.ChangeFeedID) *changefeedStat {
