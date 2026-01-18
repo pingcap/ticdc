@@ -612,8 +612,7 @@ func (c *EventCollector) controlCongestion(ctx context.Context) error {
 }
 
 func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.CongestionControl {
-	// collect path-level available memory and total available memory for each changefeed
-	changefeedPathMemory := make(map[common.ChangeFeedID]map[common.DispatcherID]uint64)
+	// collect total available memory for each changefeed
 	changefeedTotalMemory := make(map[common.ChangeFeedID]uint64)
 	changefeedMemoryUsageRatio := make(map[common.ChangeFeedID]float64)
 
@@ -624,13 +623,6 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 			continue
 		}
 		cfID := statValue.(*changefeedStat).changefeedID
-		if changefeedPathMemory[cfID] == nil {
-			changefeedPathMemory[cfID] = make(map[common.DispatcherID]uint64)
-		}
-		// merge path-level available memory
-		for dispatcherID, available := range quota.PathMetrics() {
-			changefeedPathMemory[cfID][dispatcherID] = uint64(available)
-		}
 		// store total available memory from AreaMemoryMetric
 		changefeedTotalMemory[cfID] = uint64(quota.AvailableMemory())
 		if maxMem := quota.MaxMemory(); maxMem > 0 {
@@ -645,17 +637,6 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 			continue
 		}
 		cfID := statValue.(*changefeedStat).changefeedID
-		if changefeedPathMemory[cfID] == nil {
-			changefeedPathMemory[cfID] = make(map[common.DispatcherID]uint64)
-		}
-		// take minimum between main and redo streams
-		for dispatcherID, available := range quota.PathMetrics() {
-			if existing, exists := changefeedPathMemory[cfID][dispatcherID]; exists {
-				changefeedPathMemory[cfID][dispatcherID] = min(existing, uint64(available))
-			} else {
-				changefeedPathMemory[cfID][dispatcherID] = uint64(available)
-			}
-		}
 		// take minimum total available memory between main and redo streams
 		if existing, exists := changefeedTotalMemory[cfID]; exists {
 			changefeedTotalMemory[cfID] = min(existing, uint64(quota.AvailableMemory()))
@@ -667,12 +648,12 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 		}
 	}
 
-	if len(changefeedPathMemory) == 0 {
+	if len(changefeedTotalMemory) == 0 {
 		return nil
 	}
 
-	// group dispatchers by node and calculate node-level available memory
-	nodeDispatcherMemory := make(map[node.ID]map[common.ChangeFeedID]map[common.DispatcherID]uint64)
+	// group changefeeds by node
+	nodeChangefeeds := make(map[node.ID]map[common.ChangeFeedID]struct{})
 
 	c.dispatcherMap.Range(func(k, v interface{}) bool {
 		stat := v.(*dispatcherStat)
@@ -681,20 +662,12 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 			return true
 		}
 
-		dispatcherID := stat.target.GetId()
 		changefeedID := stat.target.GetChangefeedID()
 
-		if nodeDispatcherMemory[eventServiceID] == nil {
-			nodeDispatcherMemory[eventServiceID] = make(map[common.ChangeFeedID]map[common.DispatcherID]uint64)
+		if nodeChangefeeds[eventServiceID] == nil {
+			nodeChangefeeds[eventServiceID] = make(map[common.ChangeFeedID]struct{})
 		}
-		if nodeDispatcherMemory[eventServiceID][changefeedID] == nil {
-			nodeDispatcherMemory[eventServiceID][changefeedID] = make(map[common.DispatcherID]uint64)
-		}
-
-		// get available memory for this dispatcher
-		if pathMemory, exists := changefeedPathMemory[changefeedID][dispatcherID]; exists {
-			nodeDispatcherMemory[eventServiceID][changefeedID][dispatcherID] = uint64(pathMemory)
-		}
+		nodeChangefeeds[eventServiceID][changefeedID] = struct{}{}
 		return true
 	})
 
@@ -709,21 +682,19 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 		return true
 	})
 
-	for nodeID, changefeedDispatchers := range nodeDispatcherMemory {
+	for nodeID, changefeedSet := range nodeChangefeeds {
 		congestionControl := event.NewCongestionControl()
 
-		for changefeedID, dispatcherMemory := range changefeedDispatchers {
-			if len(dispatcherMemory) == 0 {
+		for changefeedID := range changefeedSet {
+			totalAvailable, ok := changefeedTotalMemory[changefeedID]
+			if !ok {
 				continue
 			}
-
-			// get total available memory directly from AreaMemoryMetric
-			totalAvailable := uint64(changefeedTotalMemory[changefeedID])
 			congestionControl.AddAvailableMemoryWithDispatchersAndScanMaxTs(
 				changefeedID.ID(),
 				totalAvailable,
 				scanMaxTsByChangefeed[changefeedID],
-				dispatcherMemory,
+				nil,
 			)
 		}
 

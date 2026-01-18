@@ -35,9 +35,9 @@ func (c *EventCollector) updateScanMaxTsForChangefeed(
 			scanLimitBaseTsCandidate = checkpointTs
 		}
 
-		// Ignore dispatchers that never received any resolved-ts event.
-		// These dispatchers are typically still in initial incremental scan/bootstrap phase.
-		if stat.hasReceivedResolvedTsOnce.Load() {
+		// Ignore dispatchers that never received any handshake event.
+		// These dispatchers haven't started a new event stream yet (handshake not received for current epoch).
+		if stat.hasReceivedHandshakeEventOnce.Load() {
 			hasEligible = true
 			if checkpointTs > 0 && checkpointTs < scanLimitBaseTs {
 				scanLimitBaseTs = checkpointTs

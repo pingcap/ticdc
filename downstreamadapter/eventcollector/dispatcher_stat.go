@@ -126,9 +126,9 @@ type dispatcherStat struct {
 	gotDDLOnTs atomic.Bool
 	// gotSyncpointOnTS indicates whether a sync point was received at the sentCommitTs.
 	gotSyncpointOnTS atomic.Bool
-	// hasReceivedResolvedTsOnce is used by scan-window control to ignore dispatchers that haven't entered
-	// steady event production yet (typically still in initial incremental scan/bootstrap phase).
-	hasReceivedResolvedTsOnce atomic.Bool
+	// hasReceivedHandshakeEventOnce is used by scan-window control to ignore dispatchers that haven't started
+	// a new event stream (handshake not received yet for the current epoch).
+	hasReceivedHandshakeEventOnce atomic.Bool
 	// tableInfo is the latest table info of the dispatcher's corresponding table.
 	tableInfo atomic.Value
 	// tableInfoVersion is the latest table info version of the dispatcher's corresponding table.
@@ -186,6 +186,7 @@ func (d *dispatcherStat) reset(serverID node.ID) {
 func (d *dispatcherStat) doReset(serverID node.ID, resetTs uint64) {
 	epoch := d.epoch.Add(1)
 	d.lastEventSeq.Store(0)
+	d.hasReceivedHandshakeEventOnce.Store(false)
 	// remove the dispatcher from the dynamic stream
 	resetRequest := d.newDispatcherResetRequest(d.eventCollector.getLocalServerID().String(), resetTs, epoch)
 	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, resetRequest)
@@ -404,7 +405,6 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 			return false
 		}
 		if event.GetType() == commonEvent.TypeResolvedEvent {
-			d.hasReceivedResolvedTsOnce.Store(true)
 			validEvents = append(validEvents, event)
 		} else if event.GetType() == commonEvent.TypeDMLEvent {
 			if d.filterAndUpdateEventByCommitTs(event) {
@@ -644,6 +644,7 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 		d.tableInfo.Store(tableInfo)
 	}
 	d.lastEventSeq.Store(handshakeEvent.Seq)
+	d.hasReceivedHandshakeEventOnce.Store(true)
 }
 
 func (d *dispatcherStat) setRemoteCandidates(nodes []string) {
