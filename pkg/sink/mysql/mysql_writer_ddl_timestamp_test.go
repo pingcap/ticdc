@@ -35,6 +35,8 @@ func ddlSessionTimestampForTest(event *commonEvent.DDLEvent, timezone string) (s
 
 func expectDDLExec(mock sqlmock.Sqlmock, event *commonEvent.DDLEvent, timezone string) {
 	ddlTimestamp, ok := ddlSessionTimestampForTest(event, timezone)
+	mock.ExpectExec("SET TIMESTAMP = DEFAULT").
+		WillReturnResult(sqlmock.NewResult(1, 1))
 	if ok {
 		mock.ExpectExec("SET TIMESTAMP = " + ddlTimestamp).
 			WillReturnResult(sqlmock.NewResult(1, 1))

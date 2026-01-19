@@ -93,6 +93,18 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 		}
 	}
 
+	// Reset session timestamp before DDL to avoid leaking from pooled connections.
+	if err := resetSessionTimestamp(ctx, tx); err != nil {
+		log.Error("Failed to reset session timestamp before DDL execution",
+			zap.String("changefeed", w.ChangefeedID.String()),
+			zap.String("query", event.GetDDLQuery()),
+			zap.Error(err))
+		if rbErr := tx.Rollback(); rbErr != nil {
+			log.Error("Failed to rollback", zap.String("changefeed", w.ChangefeedID.String()), zap.Error(rbErr))
+		}
+		return err
+	}
+
 	ddlTimestamp, useSessionTimestamp := ddlSessionTimestampFromOriginDefault(event, w.cfg.Timezone)
 
 	if useSessionTimestamp {
