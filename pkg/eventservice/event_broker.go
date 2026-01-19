@@ -399,11 +399,19 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		if scanMaxTs > 0 && scanMaxTs < dataRange.CommitTsEnd {
 			// If the scan window is fully consumed, skip scanning and only send a "signal" resolved-ts.
 			if scanMaxTs <= dataRange.CommitTsStart {
-				c.sendSignalResolvedTs(task)
-				metrics.EventServiceSkipScanCount.WithLabelValues("scan_window").Inc()
-				return false, common.DataRange{}
+				// If the previous scan is interrupted at the same commit-ts, we MUST continue scanning
+				// (at least for commitTs == CommitTsStart) to avoid getting stuck forever.
+				// In such case, `lastScannedStartTs != 0` indicates there are still entries at the same
+				// commit-ts remaining to be scanned/sent.
+				if task.lastScannedStartTs.Load() == 0 {
+					c.sendSignalResolvedTs(task)
+					metrics.EventServiceSkipScanCount.WithLabelValues("scan_window").Inc()
+					return false, common.DataRange{}
+				}
+				dataRange.CommitTsEnd = dataRange.CommitTsStart
+			} else {
+				dataRange.CommitTsEnd = scanMaxTs
 			}
-			dataRange.CommitTsEnd = scanMaxTs
 		}
 	}
 
@@ -420,7 +428,11 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	}
 	dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, ddlState.ResolvedTs)
 
-	if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
+	// Normally we require CommitTsEnd > CommitTsStart. However, when resuming an interrupted scan
+	// at the same commit-ts (CommitTsEnd == CommitTsStart and lastScannedStartTs != 0), we still
+	// need to scan remaining entries at commitTs == CommitTsStart.
+	if dataRange.CommitTsEnd < dataRange.CommitTsStart ||
+		(dataRange.CommitTsEnd == dataRange.CommitTsStart && task.lastScannedStartTs.Load() == 0) {
 		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
 		return false, common.DataRange{}
 	}

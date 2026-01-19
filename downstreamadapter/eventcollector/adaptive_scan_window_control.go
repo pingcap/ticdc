@@ -79,5 +79,11 @@ func (c *EventCollector) updateScanMaxTsForChangefeed(
 
 	scanMaxTs := calcScanMaxTs(scanLimitBaseTs, scanInterval)
 	cfStat.metricScanMaxTs.Set(float64(scanMaxTs))
+	log.Info("update scan max ts for changefeed",
+		zap.Stringer("changefeedID", cfStat.changefeedID),
+		zap.Uint64("scanLimitBaseTs", scanLimitBaseTs),
+		zap.Duration("scanInterval", scanInterval),
+		zap.Uint64("scanMaxTs", scanMaxTs),
+	)
 	return scanMaxTs
 }
