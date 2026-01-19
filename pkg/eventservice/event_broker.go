@@ -387,6 +387,13 @@ func (c *eventBroker) logUninitializedDispatchers(ctx context.Context) error {
 func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRange) {
 	// 1. Get the data range of the dispatcher.
 	dataRange, needScan := task.getDataRange()
+	log.Info("determine scan data range start",
+		zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
+		zap.Stringer("dispatcherID", task.id),
+		zap.Any("dataRange", dataRange),
+		zap.Uint64("lastScannedStartTs", task.lastScannedStartTs.Load()),
+		zap.Uint64("eventStoreCommitTs", task.eventStoreCommitTs.Load()))
+
 	if !needScan {
 		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
 		return false, common.DataRange{}
@@ -402,6 +409,13 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	remoteID := node.ID(task.info.GetServerID())
 	if item, ok := task.changefeedStat.scanMaxTs.Load(remoteID); ok {
 		scanMaxTs := item.(*atomic.Uint64).Load()
+		log.Info("determine scan data range start with max ts",
+			zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
+			zap.Stringer("dispatcherID", task.id),
+			zap.Any("dataRange", dataRange),
+			zap.Uint64("scanMaxTs", scanMaxTs),
+			zap.Uint64("lastScannedStartTs", task.lastScannedStartTs.Load()),
+			zap.Uint64("eventStoreCommitTs", task.eventStoreCommitTs.Load()))
 		// scanMaxTs == 0 means no limit.
 		if scanMaxTs > 0 && scanMaxTs < dataRange.CommitTsEnd {
 			// If the scan window is fully consumed, skip scanning and only send a "signal" resolved-ts.
@@ -421,12 +435,6 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 			}
 		}
 	}
-	log.Info("determine scan data range",
-		zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
-		zap.Stringer("dispatcherID", task.id),
-		zap.Any("dataRange", dataRange),
-		zap.Uint64("lastScannedStartTs", task.lastScannedStartTs.Load()),
-		zap.Uint64("eventStoreCommitTs", task.eventStoreCommitTs.Load()))
 
 	keyspaceMeta := common.KeyspaceMeta{
 		ID:   task.info.GetTableSpan().KeyspaceID,
