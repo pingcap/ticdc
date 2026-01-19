@@ -17,15 +17,8 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/leakutil"
-	"go.uber.org/goleak"
 )
 
 func TestMain(m *testing.M) {
-	opts := []goleak.Option{
-		goleak.IgnoreAnyFunction("github.com/godbus/dbus.(*Conn).Auth"),
-		goleak.IgnoreAnyFunction("github.com/godbus/dbus.(*Conn).inWorker"),
-		goleak.IgnoreCurrent(),
-	}
-
-	leakutil.SetUpLeakTest(m, opts...)
+	leakutil.SetUpLeakTest(m)
 }
