@@ -392,12 +392,12 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		return false, common.DataRange{}
 	}
 
-	log.Info("determine scan data range begin",
-		zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
-		zap.Stringer("dispatcherID", task.id),
-		zap.Any("dataRange", dataRange),
-		zap.Uint64("lastScannedStartTs", task.lastScannedStartTs.Load()),
-		zap.Uint64("eventStoreCommitTs", task.eventStoreCommitTs.Load()))
+	// log.Info("determine scan data range begin",
+	// 	zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
+	// 	zap.Stringer("dispatcherID", task.id),
+	// 	zap.Any("dataRange", dataRange),
+	// 	zap.Uint64("lastScannedStartTs", task.lastScannedStartTs.Load()),
+	// 	zap.Uint64("eventStoreCommitTs", task.eventStoreCommitTs.Load()))
 
 	remoteID := node.ID(task.info.GetServerID())
 	if item, ok := task.changefeedStat.scanMaxTs.Load(remoteID); ok {
