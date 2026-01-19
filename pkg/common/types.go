@@ -158,17 +158,19 @@ func NewGIDWithValue(Low uint64, High uint64) GID {
 type ChangeFeedDisplayName struct {
 	Name     string `json:"name"`
 	Keyspace string `json:"keyspace"`
+	display  string
 }
 
 func NewChangeFeedDisplayName(name string, keyspace string) ChangeFeedDisplayName {
 	return ChangeFeedDisplayName{
 		Name:     name,
 		Keyspace: keyspace,
+		display:  keyspace + "/" + name,
 	}
 }
 
 func (r ChangeFeedDisplayName) String() string {
-	return r.Keyspace + "/" + r.Name
+	return r.display
 }
 
 // ChangeFeedID is the unique identifier of a changefeed.

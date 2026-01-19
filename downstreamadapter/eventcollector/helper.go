@@ -22,7 +22,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func NewEventDynamicStream(collector *EventCollector) dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
+func NewEventDynamicStream(collector *EventCollector) dynstream.DynamicStream[string, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
 	option := dynstream.NewOption()
 	option.BatchCount = 4096
 	option.UseBuffer = false
@@ -149,8 +149,8 @@ func (h *EventsHandler) GetSize(event dispatcher.DispatcherEvent) int { return i
 
 func (h *EventsHandler) IsPaused(event dispatcher.DispatcherEvent) bool { return event.IsPaused() }
 
-func (h *EventsHandler) GetArea(path common.DispatcherID, dest *dispatcherStat) common.GID {
-	return dest.target.GetChangefeedID().ID()
+func (h *EventsHandler) GetArea(path common.DispatcherID, dest *dispatcherStat) string {
+	return dest.target.GetChangefeedID().String()
 }
 
 func (h *EventsHandler) GetTimestamp(event dispatcher.DispatcherEvent) dynstream.Timestamp {
