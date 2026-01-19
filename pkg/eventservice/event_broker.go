@@ -435,6 +435,12 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 			}
 		}
 	}
+	log.Info("determine scan data range stage 2",
+		zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
+		zap.Stringer("dispatcherID", task.id),
+		zap.Any("dataRange", dataRange),
+		zap.Uint64("lastScannedStartTs", task.lastScannedStartTs.Load()),
+		zap.Uint64("eventStoreCommitTs", task.eventStoreCommitTs.Load()))
 
 	keyspaceMeta := common.KeyspaceMeta{
 		ID:   task.info.GetTableSpan().KeyspaceID,
@@ -458,6 +464,13 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		return false, common.DataRange{}
 	}
 
+	log.Info("determine scan data range stage 3",
+		zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
+		zap.Stringer("dispatcherID", task.id),
+		zap.Any("dataRange", dataRange),
+		zap.Uint64("lastScannedStartTs", task.lastScannedStartTs.Load()),
+		zap.Uint64("eventStoreCommitTs", task.eventStoreCommitTs.Load()))
+
 	// 3. Check whether there is any events in the data range
 	// Note: target range is (dataRange.CommitTsStart-dataRange.LastScannedTxnStartTs, dataRange.CommitTsEnd]
 	// when `dataRange.CommitTsStart` equals `task.eventStoreCommitTs.Load()`,
@@ -472,6 +485,12 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		c.sendResolvedTs(task, dataRange.CommitTsEnd)
 		return false, common.DataRange{}
 	}
+	log.Info("determine scan data range stage 4",
+		zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
+		zap.Stringer("dispatcherID", task.id),
+		zap.Any("dataRange", dataRange),
+		zap.Uint64("lastScannedStartTs", task.lastScannedStartTs.Load()),
+		zap.Uint64("eventStoreCommitTs", task.eventStoreCommitTs.Load()))
 	return true, dataRange
 }
 
