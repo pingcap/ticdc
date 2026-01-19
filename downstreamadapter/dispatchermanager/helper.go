@@ -33,6 +33,9 @@ type DispatcherMap[T dispatcher.Dispatcher] struct {
 	m sync.Map
 	// sequence number is increasing when dispatcher is added.
 	//
+	// Seq is a generation marker for heartbeat reordering/deduplication only. It is NOT correlated with
+	// checkpointTs/resolvedTs progress: a larger Seq does not imply a larger checkpointTs.
+	//
 	// Seq is used to prevent the fallback of changefeed's checkpointTs.
 	// When some new dispatcher(table) is being added, the maintainer will block the forward of changefeed's checkpointTs
 	// until the maintainer receive the message that the new dispatcher's component status change to working.
@@ -505,8 +508,10 @@ func (h *RedoMetaMessageHandler) Handle(dispatcherManager *DispatcherManager, me
 		// TODO: Support batch
 		panic("invalid message count")
 	}
-	msg := messages[0]
-	dispatcherManager.UpdateRedoMeta(msg.CheckpointTs, msg.ResolvedTs)
+	if dispatcherManager.GetTableTriggerRedoDispatcher() != nil {
+		msg := messages[0]
+		dispatcherManager.UpdateRedoMeta(msg.CheckpointTs, msg.ResolvedTs)
+	}
 	return false
 }
 

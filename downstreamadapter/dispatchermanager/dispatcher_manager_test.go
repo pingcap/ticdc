@@ -13,6 +13,7 @@
 package dispatchermanager
 
 import (
+	"context"
 	"math"
 	"sync/atomic"
 	"testing"
@@ -91,6 +92,7 @@ func createTestManager(t *testing.T) *DispatcherManager {
 		schemaIDToDispatchers:   dispatcher.NewSchemaIDToDispatchers(),
 		sinkQuota:               util.GetOrZero(config.GetDefaultReplicaConfig().MemoryQuota),
 		latestWatermark:         NewWatermark(0),
+		latestRedoWatermark:     NewWatermark(0),
 		closing:                 atomic.Bool{},
 		pdClock:                 pdutil.NewClock4Test(),
 		config: &config.ChangefeedConfig{
@@ -125,6 +127,71 @@ func createTestManager(t *testing.T) *DispatcherManager {
 	ec := eventcollector.New(nodeID)
 	appcontext.SetService(appcontext.EventCollector, ec)
 	return manager
+}
+
+func TestCollectComponentStatusWhenChangedWatermarkSeqNoFallback(t *testing.T) {
+	manager := createTestManager(t)
+
+	manager.latestWatermark.Set(&heartbeatpb.Watermark{
+		CheckpointTs: 1000,
+		ResolvedTs:   1000,
+		Seq:          100,
+	})
+	manager.latestRedoWatermark.Set(&heartbeatpb.Watermark{
+		CheckpointTs: 1000,
+		ResolvedTs:   1000,
+		Seq:          200,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		manager.collectComponentStatusWhenChanged(ctx)
+		close(done)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	statusesChan := manager.sharedInfo.GetStatusesChan()
+	statusesChan <- dispatcher.TableSpanStatusWithSeq{
+		TableSpanStatus: &heartbeatpb.TableSpanStatus{
+			ID:              common.NewDispatcherID().ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    900,
+			Mode:            common.DefaultMode,
+		},
+		Seq: 10,
+	}
+
+	dequeueCtx, cancelDequeue := context.WithTimeout(context.Background(), time.Second)
+	req := manager.heartbeatRequestQueue.Dequeue(dequeueCtx)
+	cancelDequeue()
+
+	require.NotNil(t, req)
+	require.NotNil(t, req.Request)
+	require.NotNil(t, req.Request.Watermark)
+	require.Equal(t, uint64(100), req.Request.Watermark.Seq)
+
+	statusesChan <- dispatcher.TableSpanStatusWithSeq{
+		TableSpanStatus: &heartbeatpb.TableSpanStatus{
+			ID:              common.NewDispatcherID().ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    800,
+			Mode:            common.RedoMode,
+		},
+		Seq: 20,
+	}
+
+	dequeueCtx, cancelDequeue = context.WithTimeout(context.Background(), time.Second)
+	req = manager.heartbeatRequestQueue.Dequeue(dequeueCtx)
+	cancelDequeue()
+
+	require.NotNil(t, req)
+	require.NotNil(t, req.Request)
+	require.NotNil(t, req.Request.RedoWatermark)
+	require.Equal(t, uint64(200), req.Request.RedoWatermark.Seq)
 }
 
 func TestMergeDispatcherNormal(t *testing.T) {

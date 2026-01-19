@@ -1106,15 +1106,19 @@ func (m *Maintainer) collectMetrics() {
 		working := spanController.GetReplicatingSize()
 		absent := spanController.GetAbsentSize()
 
+		var blockingLen int
 		if common.IsDefaultMode(mode) {
 			m.spanCountGauge.Set(float64(totalSpanCount))
 			m.tableCountGauge.Set(float64(totalTableCount))
 			m.scheduledTaskGauge.Set(float64(scheduling))
+			blockingLen = m.controller.barrier.blockedEvents.Len()
 		} else {
 			m.redoSpanCountGauge.Set(float64(totalSpanCount))
 			m.redoTableCountGauge.Set(float64(totalTableCount))
 			m.redoScheduledTaskGauge.Set(float64(scheduling))
+			blockingLen = m.controller.redoBarrier.blockedEvents.Len()
 		}
+		metrics.ExecDDLBlockingGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), common.StringMode(mode)).Set(float64(blockingLen))
 		metrics.TableStateGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), "Absent", common.StringMode(mode)).Set(float64(absent))
 		metrics.TableStateGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), "Working", common.StringMode(mode)).Set(float64(working))
 	}
