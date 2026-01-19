@@ -414,6 +414,12 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 			}
 		}
 	}
+	log.Info("determine scan data range",
+		zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
+		zap.Stringer("dispatcherID", task.id),
+		zap.Any("dataRange", dataRange),
+		zap.Uint64("lastScannedStartTs", task.lastScannedStartTs.Load()),
+		zap.Uint64("eventStoreCommitTs", task.eventStoreCommitTs.Load()))
 
 	keyspaceMeta := common.KeyspaceMeta{
 		ID:   task.info.GetTableSpan().KeyspaceID,
@@ -671,6 +677,15 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()), zap.Error(err))
 		return
 	}
+
+	log.Info("scan events",
+		zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
+		zap.Stringer("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
+		zap.Any("dataRange", dataRange), zap.Int("eventCount", len(events)),
+		zap.Uint64("receivedResolvedTs", task.receivedResolvedTs.Load()),
+		zap.Uint64("sentResolvedTs", task.sentResolvedTs.Load()),
+		zap.Int64("scannedBytes", scannedBytes),
+		zap.Bool("interrupted", interrupted))
 
 	if scannedBytes > int64(c.scanLimitInBytes) {
 		log.Info("scan bytes exceeded the limit, there must be a big transaction", zap.Stringer("dispatcher", task.id), zap.Int64("scannedBytes", scannedBytes), zap.Int64("limit", int64(c.scanLimitInBytes)))

@@ -289,6 +289,34 @@ func TestGetScanTaskDataRangeRespectsScanMaxTs(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestGetScanTaskDataRangeAllowsResumeInterruptedScanWhenScanWindowConsumed(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.startTs = 100
+	info.epoch = 1
+
+	status := broker.getOrSetChangefeedStatus(info.GetChangefeedID())
+	disp := newDispatcherStat(info, 1, 1, nil, status)
+	disp.setHandshaked()
+
+	// Simulate an interrupted scan at the same commit-ts:
+	// - lastScannedCommitTs is the commit-ts we are stuck on
+	// - lastScannedStartTs != 0 indicates there are remaining entries at the same commit-ts
+	disp.lastScannedCommitTs.Store(100)
+	disp.lastScannedStartTs.Store(80)
+	disp.receivedResolvedTs.Store(200)
+	disp.eventStoreCommitTs.Store(100)
+
+	// scanMaxTs is fully consumed, but we still need to scan remaining entries at commitTs==CommitTsStart.
+	status.scanMaxTs.Store(node.ID(info.serverID), atomic.NewUint64(100))
+	ok, dr := broker.getScanTaskDataRange(disp)
+	require.True(t, ok)
+	require.Equal(t, uint64(100), dr.CommitTsStart)
+	require.Equal(t, uint64(100), dr.CommitTsEnd)
+}
+
 func TestResetDispatcherConcurrently(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	defer broker.close()
