@@ -365,7 +365,7 @@ func (h *DispatcherStatusHandler) Handle(dispatcher Dispatcher, events ...Dispat
 func (h *DispatcherStatusHandler) GetSize(event DispatcherStatusWithID) int   { return 0 }
 func (h *DispatcherStatusHandler) IsPaused(event DispatcherStatusWithID) bool { return false }
 func (h *DispatcherStatusHandler) GetArea(path common.DispatcherID, dest Dispatcher) string {
-	return dest.GetChangefeedID().ID().String()
+	return dest.GetChangefeedID().String()
 }
 
 func (h *DispatcherStatusHandler) GetTimestamp(event DispatcherStatusWithID) dynstream.Timestamp {
