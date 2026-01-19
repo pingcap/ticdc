@@ -139,7 +139,7 @@ func (h *regionEventHandler) GetSize(event regionEvent) int {
 }
 
 func (h *regionEventHandler) GetArea(path SubscriptionID, dest *subscribedSpan) string {
-	return ""
+	return "log-puller"
 }
 
 func (h *regionEventHandler) GetTimestamp(event regionEvent) dynstream.Timestamp {

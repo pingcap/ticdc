@@ -248,7 +248,7 @@ func (h *SchedulerDispatcherRequestHandler) IsPaused(event SchedulerDispatcherRe
 }
 
 func (h *SchedulerDispatcherRequestHandler) GetArea(path common.GID, dest *DispatcherManager) string {
-	return ""
+	return dest.changefeedID.String()
 }
 
 func (h *SchedulerDispatcherRequestHandler) GetTimestamp(event SchedulerDispatcherRequest) dynstream.Timestamp {
@@ -345,7 +345,7 @@ func (h *HeartBeatResponseHandler) Handle(dispatcherManager *DispatcherManager, 
 func (h *HeartBeatResponseHandler) GetSize(event HeartBeatResponse) int   { return 0 }
 func (h *HeartBeatResponseHandler) IsPaused(event HeartBeatResponse) bool { return false }
 func (h *HeartBeatResponseHandler) GetArea(path common.GID, dest *DispatcherManager) string {
-	return ""
+	return dest.changefeedID.String()
 }
 
 func (h *HeartBeatResponseHandler) GetTimestamp(event HeartBeatResponse) dynstream.Timestamp {
@@ -397,7 +397,7 @@ func (h *CheckpointTsMessageHandler) Handle(dispatcherManager *DispatcherManager
 func (h *CheckpointTsMessageHandler) GetSize(event CheckpointTsMessage) int   { return 0 }
 func (h *CheckpointTsMessageHandler) IsPaused(event CheckpointTsMessage) bool { return false }
 func (h *CheckpointTsMessageHandler) GetArea(path common.GID, dest *DispatcherManager) string {
-	return ""
+	return dest.changefeedID.String()
 }
 
 func (h *CheckpointTsMessageHandler) GetTimestamp(event CheckpointTsMessage) dynstream.Timestamp {
@@ -462,7 +462,7 @@ func (h *RedoResolvedTsForwardMessageHandler) IsPaused(event RedoResolvedTsForwa
 }
 
 func (h *RedoResolvedTsForwardMessageHandler) GetArea(path common.GID, dest *DispatcherManager) string {
-	return ""
+	return dest.changefeedID.String()
 }
 
 func (h *RedoResolvedTsForwardMessageHandler) GetTimestamp(event RedoResolvedTsForwardMessage) dynstream.Timestamp {
@@ -518,7 +518,7 @@ func (h *RedoMetaMessageHandler) Handle(dispatcherManager *DispatcherManager, me
 func (h *RedoMetaMessageHandler) GetSize(event RedoMetaMessage) int   { return 0 }
 func (h *RedoMetaMessageHandler) IsPaused(event RedoMetaMessage) bool { return false }
 func (h *RedoMetaMessageHandler) GetArea(path common.GID, dest *DispatcherManager) string {
-	return ""
+	return dest.changefeedID.String()
 }
 
 func (h *RedoMetaMessageHandler) GetTimestamp(event RedoMetaMessage) dynstream.Timestamp {
@@ -571,7 +571,7 @@ func (h *MergeDispatcherRequestHandler) Handle(dispatcherManager *DispatcherMana
 func (h *MergeDispatcherRequestHandler) GetSize(event MergeDispatcherRequest) int   { return 0 }
 func (h *MergeDispatcherRequestHandler) IsPaused(event MergeDispatcherRequest) bool { return false }
 func (h *MergeDispatcherRequestHandler) GetArea(path common.GID, dest *DispatcherManager) string {
-	return ""
+	return dest.changefeedID.String()
 }
 
 func (h *MergeDispatcherRequestHandler) GetTimestamp(event MergeDispatcherRequest) dynstream.Timestamp {
