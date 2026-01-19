@@ -15,6 +15,7 @@ func (c *EventCollector) updateScanMaxTsForChangefeed(
 	var (
 		scanLimitBaseTs uint64 = ^uint64(0)
 		hasEligible     bool
+		slowestID       common.DispatcherID
 
 		syncPointSeen     bool
 		syncPointEnabled  bool
@@ -36,6 +37,7 @@ func (c *EventCollector) updateScanMaxTsForChangefeed(
 			hasEligible = true
 			if checkpointTs > 0 && checkpointTs < scanLimitBaseTs {
 				scanLimitBaseTs = checkpointTs
+				slowestID = dispatcherID
 			}
 		}
 
@@ -81,6 +83,7 @@ func (c *EventCollector) updateScanMaxTsForChangefeed(
 	cfStat.metricScanMaxTs.Set(float64(scanMaxTs))
 	log.Info("update scan max ts for changefeed",
 		zap.Stringer("changefeedID", cfStat.changefeedID),
+		zap.Stringer("slowestDispatcherID", slowestID),
 		zap.Uint64("scanLimitBaseTs", scanLimitBaseTs),
 		zap.Duration("scanInterval", scanInterval),
 		zap.Uint64("scanMaxTs", scanMaxTs),
