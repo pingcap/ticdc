@@ -42,15 +42,15 @@ var failpointAPITestLogged atomic.Bool
 
 // areaMemStat is used to store the memory statistics of an area.
 // It is a global level struct, not stream level.
-type areaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
-	area    A
+type areaMemStat[P Path, T Event, D Dest, H Handler[P, T, D]] struct {
+	area    string
 	pathMap sync.Map // key: path, value: pathInfo
 
 	// Reverse reference to the memControl this area belongs to.
-	memControl *memControl[A, P, T, D, H]
+	memControl *memControl[P, T, D, H]
 
 	settings     atomic.Pointer[AreaSettings]
-	feedbackChan chan<- Feedback[A, P, D]
+	feedbackChan chan<- Feedback[P, D]
 
 	pathCount            atomic.Int64
 	totalPendingSize     atomic.Int64
@@ -63,14 +63,14 @@ type areaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct 
 	lastReleaseMemoryTime atomic.Value
 }
 
-func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
-	area A,
-	memoryControl *memControl[A, P, T, D, H],
+func newAreaMemStat[P Path, T Event, D Dest, H Handler[P, T, D]](
+	area string,
+	memoryControl *memControl[P, T, D, H],
 	settings AreaSettings,
-	feedbackChan chan<- Feedback[A, P, D],
-) *areaMemStat[A, P, T, D, H] {
+	feedbackChan chan<- Feedback[P, D],
+) *areaMemStat[P, T, D, H] {
 	settings.fix()
-	res := &areaMemStat[A, P, T, D, H]{
+	res := &areaMemStat[P, T, D, H]{
 		area:                 area,
 		memControl:           memoryControl,
 		feedbackChan:         feedbackChan,
@@ -93,9 +93,9 @@ func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 // It returns true if the event is appended successfully.
 // This method is called by streams' handleLoop concurrently, but it is thread safe.
 // We use atomic operations to update the totalPendingSize and the path's pendingSize.
-func (as *areaMemStat[A, P, T, D, H]) appendEvent(
-	path *pathInfo[A, P, T, D, H],
-	event eventWrap[A, P, T, D, H],
+func (as *areaMemStat[P, T, D, H]) appendEvent(
+	path *pathInfo[P, T, D, H],
+	event eventWrap[P, T, D, H],
 	handler H,
 ) bool {
 	defer as.updateAreaPauseState(path)
@@ -156,7 +156,7 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	return true
 }
 
-func (as *areaMemStat[A, P, T, D, H]) checkDeadlock() bool {
+func (as *areaMemStat[P, T, D, H]) checkDeadlock() bool {
 	failpoint.Inject("InjectDeadlock", func() { failpoint.Return(true) })
 
 	if as.settings.Load().algorithm !=
@@ -171,15 +171,15 @@ func (as *areaMemStat[A, P, T, D, H]) checkDeadlock() bool {
 	return hasEventComeButNotOut && memoryHighWaterMark
 }
 
-func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
+func (as *areaMemStat[P, T, D, H]) releaseMemory() {
 	if time.Since(as.lastReleaseMemoryTime.Load().(time.Time)) < 1*time.Second {
 		return
 	}
 	as.lastReleaseMemoryTime.Store(time.Now())
 
-	paths := make([]*pathInfo[A, P, T, D, H], 0, as.pathCount.Load())
+	paths := make([]*pathInfo[P, T, D, H], 0, as.pathCount.Load())
 	as.pathMap.Range(func(k, v interface{}) bool {
-		paths = append(paths, v.(*pathInfo[A, P, T, D, H]))
+		paths = append(paths, v.(*pathInfo[P, T, D, H]))
 		return true
 	})
 
@@ -190,7 +190,7 @@ func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
 
 	sizeToRelease := int64(float64(as.totalPendingSize.Load()) * defaultReleaseMemoryRatio)
 	releasedSize := int64(0)
-	releasedPaths := make([]*pathInfo[A, P, T, D, H], 0)
+	releasedPaths := make([]*pathInfo[P, T, D, H], 0)
 
 	log.Info("release memory", zap.Any("area", as.area), zap.Int64("sizeToRelease", sizeToRelease), zap.Int64("totalPendingSize", as.totalPendingSize.Load()), zap.Float64("releaseMemoryRatio", defaultReleaseMemoryRatio))
 
@@ -208,7 +208,7 @@ func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
 
 	for _, path := range releasedPaths {
 		log.Debug("release path", zap.Any("area", as.area), zap.Any("path", path.path), zap.Any("dest", path.dest), zap.Int64("releasedSize", path.pendingSize.Load()))
-		as.feedbackChan <- Feedback[A, P, D]{
+		as.feedbackChan <- Feedback[P, D]{
 			Area:         as.area,
 			Path:         path.path,
 			Dest:         path.dest,
@@ -218,11 +218,11 @@ func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
 	as.lastSizeDecreaseTime.Store(time.Now())
 }
 
-func (as *areaMemStat[A, P, T, D, H]) memoryUsageRatio() float64 {
+func (as *areaMemStat[P, T, D, H]) memoryUsageRatio() float64 {
 	return float64(as.totalPendingSize.Load()) / float64(as.settings.Load().maxPendingSize)
 }
 
-func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, T, D, H]) {
+func (as *areaMemStat[P, T, D, H]) updateAreaPauseState(path *pathInfo[P, T, D, H]) {
 	pause, resume, memoryUsageRatio := as.algorithm.ShouldPauseArea(
 		as.paused.Load(),
 		as.totalPendingSize.Load(),
@@ -242,7 +242,7 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 			feedbackType = ResumeArea
 		}
 
-		as.feedbackChan <- Feedback[A, P, D]{
+		as.feedbackChan <- Feedback[P, D]{
 			Area:         as.area,
 			Path:         path.path,
 			Dest:         path.dest,
@@ -280,7 +280,7 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 	}
 }
 
-func (as *areaMemStat[A, P, T, D, H]) decPendingSize(path *pathInfo[A, P, T, D, H], size int64) {
+func (as *areaMemStat[P, T, D, H]) decPendingSize(path *pathInfo[P, T, D, H], size int64) {
 	as.totalPendingSize.Add(int64(-size))
 	if as.totalPendingSize.Load() < 0 {
 		log.Debug("Total pending size is less than 0, reset it to 0", zap.Int64("totalPendingSize", as.totalPendingSize.Load()), zap.String("component", as.settings.Load().component))
@@ -292,20 +292,20 @@ func (as *areaMemStat[A, P, T, D, H]) decPendingSize(path *pathInfo[A, P, T, D, 
 
 // A memControl is used to control the memory usage of the dynamic stream.
 // It is a global level struct, not stream level.
-type memControl[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
+type memControl[P Path, T Event, D Dest, H Handler[P, T, D]] struct {
 	// Since this struct is global level, different streams may access it concurrently.
 	mutex sync.Mutex
 
-	areaStatMap map[A]*areaMemStat[A, P, T, D, H]
+	areaStatMap map[string]*areaMemStat[P, T, D, H]
 }
 
-func newMemControl[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]]() *memControl[A, P, T, D, H] {
-	return &memControl[A, P, T, D, H]{
-		areaStatMap: make(map[A]*areaMemStat[A, P, T, D, H]),
+func newMemControl[P Path, T Event, D Dest, H Handler[P, T, D]]() *memControl[P, T, D, H] {
+	return &memControl[P, T, D, H]{
+		areaStatMap: make(map[string]*areaMemStat[P, T, D, H]),
 	}
 }
 
-func (m *memControl[A, P, T, D, H]) setAreaSettings(area A, settings AreaSettings) {
+func (m *memControl[P, T, D, H]) setAreaSettings(area string, settings AreaSettings) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 	// Update the settings
@@ -315,7 +315,7 @@ func (m *memControl[A, P, T, D, H]) setAreaSettings(area A, settings AreaSetting
 	}
 }
 
-func (m *memControl[A, P, T, D, H]) addPathToArea(path *pathInfo[A, P, T, D, H], settings AreaSettings, feedbackChan chan<- Feedback[A, P, D]) {
+func (m *memControl[P, T, D, H]) addPathToArea(path *pathInfo[P, T, D, H], settings AreaSettings, feedbackChan chan<- Feedback[P, D]) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
@@ -333,7 +333,7 @@ func (m *memControl[A, P, T, D, H]) addPathToArea(path *pathInfo[A, P, T, D, H],
 }
 
 // This method is called after the path is removed.
-func (m *memControl[A, P, T, D, H]) removePathFromArea(path *pathInfo[A, P, T, D, H]) {
+func (m *memControl[P, T, D, H]) removePathFromArea(path *pathInfo[P, T, D, H]) {
 	area := path.areaMemStat
 	area.decPendingSize(path, int64(path.pendingSize.Load()))
 
@@ -347,12 +347,12 @@ func (m *memControl[A, P, T, D, H]) removePathFromArea(path *pathInfo[A, P, T, D
 }
 
 // FIXME/TODO: We use global metric here, which is not good for multiple streams.
-func (m *memControl[A, P, T, D, H]) getMetrics() MemoryMetric[A, P] {
+func (m *memControl[P, T, D, H]) getMetrics() MemoryMetric[P] {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
-	metrics := MemoryMetric[A, P]{}
+	metrics := MemoryMetric[P]{}
 	for _, area := range m.areaStatMap {
-		areaMetric := AreaMemoryMetric[A, P]{
+		areaMetric := AreaMemoryMetric[P]{
 			AreaValue:           area.area,
 			PathAvailableMemory: make(map[P]int64),
 			UsedMemoryValue:     area.totalPendingSize.Load(),
@@ -360,7 +360,7 @@ func (m *memControl[A, P, T, D, H]) getMetrics() MemoryMetric[A, P] {
 			PathMaxMemoryValue:  int64(area.settings.Load().pathMaxPendingSize),
 		}
 		area.pathMap.Range(func(k, v interface{}) bool {
-			usedMemory := v.(*pathInfo[A, P, T, D, H]).pendingSize.Load()
+			usedMemory := v.(*pathInfo[P, T, D, H]).pendingSize.Load()
 			availableMemory := max(0, areaMetric.PathMaxMemoryValue-usedMemory)
 			areaMetric.PathAvailableMemory[k.(P)] = availableMemory
 			return true
@@ -370,38 +370,38 @@ func (m *memControl[A, P, T, D, H]) getMetrics() MemoryMetric[A, P] {
 	return metrics
 }
 
-type MemoryMetric[A Area, P Path] struct {
-	AreaMemoryMetrics []AreaMemoryMetric[A, P]
+type MemoryMetric[P Path] struct {
+	AreaMemoryMetrics []AreaMemoryMetric[P]
 }
 
-type AreaMemoryMetric[A Area, P Path] struct {
-	AreaValue           A
+type AreaMemoryMetric[P Path] struct {
+	AreaValue           string
 	PathAvailableMemory map[P]int64
 	UsedMemoryValue     int64
 	MaxMemoryValue      int64
 	PathMaxMemoryValue  int64
 }
 
-func (a *AreaMemoryMetric[A, P]) MemoryUsageRatio() float64 {
+func (a *AreaMemoryMetric[P]) MemoryUsageRatio() float64 {
 	return float64(a.UsedMemoryValue) / float64(a.MaxMemoryValue)
 }
 
-func (a *AreaMemoryMetric[A, P]) MemoryUsage() int64 {
+func (a *AreaMemoryMetric[P]) MemoryUsage() int64 {
 	return a.UsedMemoryValue
 }
 
-func (a *AreaMemoryMetric[A, P]) MaxMemory() int64 {
+func (a *AreaMemoryMetric[P]) MaxMemory() int64 {
 	return a.MaxMemoryValue
 }
 
-func (a *AreaMemoryMetric[A, P]) AvailableMemory() int64 {
+func (a *AreaMemoryMetric[P]) AvailableMemory() int64 {
 	return max(0, a.MaxMemoryValue-a.UsedMemoryValue)
 }
 
-func (a *AreaMemoryMetric[A, P]) Area() A {
+func (a *AreaMemoryMetric[P]) Area() string {
 	return a.AreaValue
 }
 
-func (a *AreaMemoryMetric[A, P]) PathMetrics() map[P]int64 {
+func (a *AreaMemoryMetric[P]) PathMetrics() map[P]int64 {
 	return a.PathAvailableMemory
 }

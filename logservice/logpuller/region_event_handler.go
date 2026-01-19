@@ -138,8 +138,8 @@ func (h *regionEventHandler) GetSize(event regionEvent) int {
 	return event.getSize()
 }
 
-func (h *regionEventHandler) GetArea(path SubscriptionID, dest *subscribedSpan) int {
-	return 0
+func (h *regionEventHandler) GetArea(path SubscriptionID, dest *subscribedSpan) string {
+	return ""
 }
 
 func (h *regionEventHandler) GetTimestamp(event regionEvent) dynstream.Timestamp {

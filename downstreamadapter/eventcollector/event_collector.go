@@ -126,9 +126,9 @@ type EventCollector struct {
 	// ds is the dynamicStream for dispatcher events.
 	// All the events from event service will be sent to ds to handle.
 	// ds will dispatch the events to different dispatchers according to the dispatcherID.
-	ds dynstream.DynamicStream[string, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler]
+	ds dynstream.DynamicStream[common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler]
 	// redoDs is the dynamicStream for redo dispatcher events.
-	redoDs dynstream.DynamicStream[string, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler]
+	redoDs dynstream.DynamicStream[common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler]
 
 	g      *errgroup.Group
 	cancel context.CancelFunc
@@ -744,7 +744,7 @@ func (c *EventCollector) updateMetrics(ctx context.Context) error {
 	}
 }
 
-func (c *EventCollector) getDynamicStream(mode int64) dynstream.DynamicStream[string, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
+func (c *EventCollector) getDynamicStream(mode int64) dynstream.DynamicStream[common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
 	if common.IsRedoMode(mode) {
 		return c.redoDs
 	}

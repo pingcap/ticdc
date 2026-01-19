@@ -48,18 +48,18 @@ func (h *incHandler) Handle(dest D, events ...*inc) (await bool) {
 	return false
 }
 
-func (h *incHandler) GetSize(event *inc) int            { return 0 }
-func (h *incHandler) GetArea(path string, dest D) int   { return 0 }
-func (h *incHandler) GetTimestamp(event *inc) Timestamp { return 0 }
-func (h *incHandler) GetType(event *inc) EventType      { return DefaultEventType }
-func (h *incHandler) IsPaused(event *inc) bool          { return false }
-func (h *incHandler) OnDrop(event *inc) interface{}     { return nil }
+func (h *incHandler) GetSize(event *inc) int             { return 0 }
+func (h *incHandler) GetArea(path string, dest D) string { return "" }
+func (h *incHandler) GetTimestamp(event *inc) Timestamp  { return 0 }
+func (h *incHandler) GetType(event *inc) EventType       { return DefaultEventType }
+func (h *incHandler) IsPaused(event *inc) bool           { return false }
+func (h *incHandler) OnDrop(event *inc) interface{}      { return nil }
 
 func runStream(eventCount int, times int) {
 	handler := &incHandler{}
 
-	pi := newPathInfo[int, string, *inc, D, *incHandler](0, "p1", D{})
-	stream := newStream[int, string, *inc, D](1 /*id*/, handler, NewOption())
+	pi := newPathInfo[string, *inc, D, *incHandler]("area1", "p1", D{})
+	stream := newStream[string, *inc, D, *incHandler](1 /*id*/, handler, NewOption())
 	stream.start()
 
 	total := &atomic.Int64{}
@@ -67,7 +67,7 @@ func runStream(eventCount int, times int) {
 
 	done.Add(eventCount)
 	for i := 0; i < eventCount; i++ {
-		stream.addEvent(eventWrap[int, string, *inc, D, *incHandler]{event: &inc{times: times, n: total, done: done}, pathInfo: pi})
+		stream.addEvent(eventWrap[string, *inc, D, *incHandler]{event: &inc{times: times, n: total, done: done}, pathInfo: pi})
 	}
 
 	done.Wait()
@@ -134,9 +134,9 @@ func BenchmarkSLoop100000x100(b *testing.B) {
 }
 
 // addEventDirectSend simulates direct channel send without select
-func addEventDirectSend[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
-	ch chan eventWrap[A, P, T, D, H],
-	event eventWrap[A, P, T, D, H],
+func addEventDirectSend[P Path, T Event, D Dest, H Handler[P, T, D]](
+	ch chan eventWrap[P, T, D, H],
+	event eventWrap[P, T, D, H],
 ) bool {
 	ch <- event
 	return true
@@ -154,8 +154,8 @@ func addEventDirectSend[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 // PASS
 // ok      github.com/pingcap/ticdc/utils/dynstream        6.454s
 func BenchmarkChannelDirectSend(b *testing.B) {
-	ch := make(chan eventWrap[int, string, *inc, D, *incHandler], 1000)
-	event := eventWrap[int, string, *inc, D, *incHandler]{
+	ch := make(chan eventWrap[string, *inc, D, *incHandler], 1000)
+	event := eventWrap[string, *inc, D, *incHandler]{
 		event: &inc{times: 1, n: &atomic.Int64{}, done: &sync.WaitGroup{}},
 	}
 
@@ -173,8 +173,8 @@ func BenchmarkChannelDirectSend(b *testing.B) {
 }
 
 func BenchmarkChannelDirectSendHighContention(b *testing.B) {
-	ch := make(chan eventWrap[int, string, *inc, D, *incHandler], 10) // Small buffer to create contention
-	event := eventWrap[int, string, *inc, D, *incHandler]{
+	ch := make(chan eventWrap[string, *inc, D, *incHandler], 10) // Small buffer to create contention
+	event := eventWrap[string, *inc, D, *incHandler]{
 		event: &inc{times: 1, n: &atomic.Int64{}, done: &sync.WaitGroup{}},
 	}
 
@@ -194,11 +194,11 @@ func BenchmarkChannelDirectSendHighContention(b *testing.B) {
 }
 
 // addEventOptimized implements the fast path optimization with atomic check first
-func addEventWithContextAndCloseCheck[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
+func addEventWithContextAndCloseCheck[P Path, T Event, D Dest, H Handler[P, T, D]](
 	closed *atomic.Bool,
 	ctx context.Context,
-	ch chan eventWrap[A, P, T, D, H],
-	event eventWrap[A, P, T, D, H],
+	ch chan eventWrap[P, T, D, H],
+	event eventWrap[P, T, D, H],
 ) bool {
 	if closed.Load() {
 		return false
@@ -221,9 +221,9 @@ func addEventWithContextAndCloseCheck[A Area, P Path, T Event, D Dest, H Handler
 
 func BenchmarkChannelOptimizedWithContext(b *testing.B) {
 	ctx := context.Background()
-	ch := make(chan eventWrap[int, string, *inc, D, *incHandler], 1000)
+	ch := make(chan eventWrap[string, *inc, D, *incHandler], 1000)
 	closed := &atomic.Bool{}
-	event := eventWrap[int, string, *inc, D, *incHandler]{
+	event := eventWrap[string, *inc, D, *incHandler]{
 		event: &inc{times: 1, n: &atomic.Int64{}, done: &sync.WaitGroup{}},
 	}
 
@@ -243,9 +243,9 @@ func BenchmarkChannelOptimizedWithContext(b *testing.B) {
 // High contention benchmarks for optimized versions
 func BenchmarkChannelOptimizedWithContextHighContention(b *testing.B) {
 	ctx := context.Background()
-	ch := make(chan eventWrap[int, string, *inc, D, *incHandler], 10) // Small buffer to create contention
+	ch := make(chan eventWrap[string, *inc, D, *incHandler], 10) // Small buffer to create contention
 	closed := &atomic.Bool{}
-	event := eventWrap[int, string, *inc, D, *incHandler]{
+	event := eventWrap[string, *inc, D, *incHandler]{
 		event: &inc{times: 1, n: &atomic.Int64{}, done: &sync.WaitGroup{}},
 	}
 
@@ -265,14 +265,14 @@ func BenchmarkChannelOptimizedWithContextHighContention(b *testing.B) {
 }
 
 // receiverOnlyEventCh simulates receiver that only listens to event channel (no ctx.Done())
-func receiverOnlyEventCh[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
-	inChan <-chan eventWrap[A, P, T, D, H],
-	outChan chan<- eventWrap[A, P, T, D, H],
+func receiverOnlyEventCh[P Path, T Event, D Dest, H Handler[P, T, D]](
+	inChan <-chan eventWrap[P, T, D, H],
+	outChan chan<- eventWrap[P, T, D, H],
 	closed *atomic.Bool,
 	bufferCount *atomic.Int64,
 	wg *sync.WaitGroup,
 ) {
-	buffer := deque.NewDeque[eventWrap[A, P, T, D, H]](BlockLenInPendingQueue)
+	buffer := deque.NewDeque[eventWrap[P, T, D, H]](BlockLenInPendingQueue)
 	defer func() {
 		// Move all remaining events out of the buffer.
 		for {
@@ -322,15 +322,15 @@ func receiverOnlyEventCh[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]]
 }
 
 // receiverWithContextCheck simulates receiver that listens to both event channel and ctx.Done()
-func receiverWithContextCheck[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
+func receiverWithContextCheck[P Path, T Event, D Dest, H Handler[P, T, D]](
 	ctx context.Context,
-	inChan <-chan eventWrap[A, P, T, D, H],
-	outChan chan<- eventWrap[A, P, T, D, H],
+	inChan <-chan eventWrap[P, T, D, H],
+	outChan chan<- eventWrap[P, T, D, H],
 	closed *atomic.Bool,
 	bufferCount *atomic.Int64,
 	wg *sync.WaitGroup,
 ) {
-	buffer := deque.NewDeque[eventWrap[A, P, T, D, H]](BlockLenInPendingQueue)
+	buffer := deque.NewDeque[eventWrap[P, T, D, H]](BlockLenInPendingQueue)
 	defer func() {
 		// Move all remaining events out of the buffer.
 		for {
@@ -386,8 +386,8 @@ func receiverWithContextCheck[A Area, P Path, T Event, D Dest, H Handler[A, P, T
 
 // runReceiverBenchmark runs a benchmark for receiver performance
 func runReceiverBenchmark(eventCount int, withContext bool) {
-	inChan := make(chan eventWrap[int, string, *inc, D, *incHandler], 1000)
-	outChan := make(chan eventWrap[int, string, *inc, D, *incHandler], 1000)
+	inChan := make(chan eventWrap[string, *inc, D, *incHandler], 1000)
+	outChan := make(chan eventWrap[string, *inc, D, *incHandler], 1000)
 	closed := &atomic.Bool{}
 	bufferCount := &atomic.Int64{}
 	wg := &sync.WaitGroup{}
@@ -417,9 +417,9 @@ func runReceiverBenchmark(eventCount int, withContext bool) {
 	}()
 
 	// Send events
-	pi := newPathInfo[int, string, *inc, D, *incHandler](0, "p1", D{})
+	pi := newPathInfo[string, *inc, D, *incHandler]("area1", "p1", D{})
 	for i := 0; i < eventCount; i++ {
-		event := eventWrap[int, string, *inc, D, *incHandler]{
+		event := eventWrap[string, *inc, D, *incHandler]{
 			event:    &inc{times: 1, n: &atomic.Int64{}, done: &sync.WaitGroup{}},
 			pathInfo: pi,
 		}

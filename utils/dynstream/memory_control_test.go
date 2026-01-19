@@ -23,16 +23,16 @@ import (
 )
 
 // Helper function to create test components
-func setupTestComponents() (*memControl[int, string, *mockEvent, any, *mockHandler], *pathInfo[int, string, *mockEvent, any, *mockHandler]) {
-	mc := newMemControl[int, string, *mockEvent, any, *mockHandler]()
+func setupTestComponents() (*memControl[string, *mockEvent, any, *mockHandler], *pathInfo[string, *mockEvent, any, *mockHandler]) {
+	mc := newMemControl[string, *mockEvent, any, *mockHandler]()
 
-	area := 1
+	area := "area1"
 
-	path := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
+	path := &pathInfo[string, *mockEvent, any, *mockHandler]{
 		area:         area,
 		path:         "test-path",
 		dest:         "test-dest",
-		pendingQueue: deque.NewDeque[eventWrap[int, string, *mockEvent, any, *mockHandler]](32),
+		pendingQueue: deque.NewDeque[eventWrap[string, *mockEvent, any, *mockHandler]](32),
 	}
 	return mc, path
 }
@@ -44,7 +44,7 @@ func TestMemControlAddRemovePath(t *testing.T) {
 		feedbackInterval: time.Second,
 		algorithm:        MemoryControlForPuller,
 	}
-	feedbackChan := make(chan Feedback[int, string, any], 10)
+	feedbackChan := make(chan Feedback[string, any], 10)
 
 	// Test adding path
 	mc.addPathToArea(path, settings, feedbackChan)
@@ -64,7 +64,7 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		feedbackInterval: time.Millisecond * 10,
 		algorithm:        MemoryControlForPuller,
 	}
-	feedbackChan := make(chan Feedback[int, string, any], 10)
+	feedbackChan := make(chan Feedback[string, any], 10)
 	mc.addPathToArea(path1, settings, feedbackChan)
 
 	handler := &mockHandler{}
@@ -72,7 +72,7 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 	option.EnableMemoryControl = true
 
 	// 1. Append normal event, it should be accepted, and the path and area should not be paused
-	normalEvent1 := eventWrap[int, string, *mockEvent, any, *mockHandler]{
+	normalEvent1 := eventWrap[string, *mockEvent, any, *mockHandler]{
 		event:     &mockEvent{id: 1, path: "test-path"},
 		timestamp: 1,
 		eventSize: 1,
@@ -84,7 +84,7 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 	require.False(t, path1.areaMemStat.paused.Load())
 
 	// Append 2 periodic signals, and the second one will replace the first one
-	periodicEvent := eventWrap[int, string, *mockEvent, any, *mockHandler]{
+	periodicEvent := eventWrap[string, *mockEvent, any, *mockHandler]{
 		event:     &mockEvent{id: 2, path: "test-path"},
 		eventSize: 1,
 		timestamp: 2,
@@ -97,7 +97,7 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 	require.Equal(t, 2, path1.pendingQueue.Length())
 	back, _ := path1.pendingQueue.BackRef()
 	require.Equal(t, periodicEvent.timestamp, back.timestamp)
-	periodicEvent2 := eventWrap[int, string, *mockEvent, any, *mockHandler]{
+	periodicEvent2 := eventWrap[string, *mockEvent, any, *mockHandler]{
 		event:     &mockEvent{id: 3, path: "test-path"},
 		timestamp: 3,
 		eventSize: 5,
@@ -116,7 +116,7 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 	require.False(t, path1.areaMemStat.paused.Load())
 
 	// 3. Add a normal event, and it should not be dropped, but the path should be paused
-	normalEvent2 := eventWrap[int, string, *mockEvent, any, *mockHandler]{
+	normalEvent2 := eventWrap[string, *mockEvent, any, *mockHandler]{
 		event:     &mockEvent{id: 4, path: "test-path"},
 		eventSize: 20,
 		queueTime: time.Now(),
@@ -149,7 +149,7 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 
 	// 5. Add a normal event, and it should be accepted, and the path, area should be resumed
 	//  because the total pending size is less than the max pending size
-	normalEvent3 := eventWrap[int, string, *mockEvent, any, *mockHandler]{
+	normalEvent3 := eventWrap[string, *mockEvent, any, *mockHandler]{
 		event:     &mockEvent{id: 5, path: "test-path"},
 		eventSize: 20,
 		queueTime: time.Now(),
@@ -172,7 +172,7 @@ func TestSetAreaSettings(t *testing.T) {
 		feedbackInterval: time.Second,
 		algorithm:        MemoryControlForPuller,
 	}
-	feedbackChan := make(chan Feedback[int, string, any], 10)
+	feedbackChan := make(chan Feedback[string, any], 10)
 	mc.addPathToArea(path, initialSettings, feedbackChan)
 	require.Equal(t, initialSettings, *path.areaMemStat.settings.Load())
 
@@ -224,7 +224,7 @@ func TestUpdateAreaPauseState(t *testing.T) {
 		feedbackInterval: time.Millisecond * 100,
 	}
 
-	feedbackChan := make(chan Feedback[int, string, any], 10)
+	feedbackChan := make(chan Feedback[string, any], 10)
 	mc.addPathToArea(path, settings, feedbackChan)
 	areaMemStat := path.areaMemStat
 
@@ -263,34 +263,34 @@ func TestUpdateAreaPauseState(t *testing.T) {
 }
 
 func TestReleaseMemory(t *testing.T) {
-	mc := newMemControl[int, string, *mockEvent, any, *mockHandler]()
-	area := 1
+	mc := newMemControl[string, *mockEvent, any, *mockHandler]()
+	area := "area1"
 	settings := AreaSettings{
 		maxPendingSize:   1000,
 		feedbackInterval: time.Second,
 		algorithm:        MemoryControlForEventCollector,
 	}
-	feedbackChan := make(chan Feedback[int, string, any], 10)
+	feedbackChan := make(chan Feedback[string, any], 10)
 
 	// Create 3 paths with different last handle event timestamps
-	path1 := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
+	path1 := &pathInfo[string, *mockEvent, any, *mockHandler]{
 		area:         area,
 		path:         "path-1",
 		dest:         "dest-1",
-		pendingQueue: deque.NewDeque[eventWrap[int, string, *mockEvent, any, *mockHandler]](32),
+		pendingQueue: deque.NewDeque[eventWrap[string, *mockEvent, any, *mockHandler]](32),
 	}
 
-	path2 := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
+	path2 := &pathInfo[string, *mockEvent, any, *mockHandler]{
 		area:         area,
 		path:         "path-2",
 		dest:         "dest-2",
-		pendingQueue: deque.NewDeque[eventWrap[int, string, *mockEvent, any, *mockHandler]](32),
+		pendingQueue: deque.NewDeque[eventWrap[string, *mockEvent, any, *mockHandler]](32),
 	}
-	path3 := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
+	path3 := &pathInfo[string, *mockEvent, any, *mockHandler]{
 		area:         area,
 		path:         "path-3",
 		dest:         "dest-3",
-		pendingQueue: deque.NewDeque[eventWrap[int, string, *mockEvent, any, *mockHandler]](32),
+		pendingQueue: deque.NewDeque[eventWrap[string, *mockEvent, any, *mockHandler]](32),
 	}
 
 	path1.blocking.Store(true)
@@ -314,7 +314,7 @@ func TestReleaseMemory(t *testing.T) {
 	// Add events to each path
 	// Each event has size 100
 	for i := 0; i < 4; i++ {
-		event := eventWrap[int, string, *mockEvent, any, *mockHandler]{
+		event := eventWrap[string, *mockEvent, any, *mockHandler]{
 			event:     &mockEvent{id: i, path: path1.path},
 			eventSize: 100,
 		}
@@ -323,7 +323,7 @@ func TestReleaseMemory(t *testing.T) {
 	}
 
 	for i := 0; i < 3; i++ {
-		event := eventWrap[int, string, *mockEvent, any, *mockHandler]{
+		event := eventWrap[string, *mockEvent, any, *mockHandler]{
 			event:     &mockEvent{id: i + 10, path: path2.path},
 			eventSize: 100,
 		}
@@ -332,7 +332,7 @@ func TestReleaseMemory(t *testing.T) {
 	}
 
 	for i := 0; i < 3; i++ {
-		event := eventWrap[int, string, *mockEvent, any, *mockHandler]{
+		event := eventWrap[string, *mockEvent, any, *mockHandler]{
 			event:     &mockEvent{id: i + 20, path: path3.path},
 			eventSize: 100,
 		}
@@ -355,7 +355,7 @@ func TestReleaseMemory(t *testing.T) {
 	path1.areaMemStat.lastReleaseMemoryTime.Store(time.Now().Add(-2 * time.Second))
 	path1.areaMemStat.releaseMemory()
 
-	feedbacks := make([]Feedback[int, string, any], 0)
+	feedbacks := make([]Feedback[string, any], 0)
 	for i := 0; i < 1; i++ {
 		select {
 		case fb := <-feedbackChan:
@@ -383,21 +383,21 @@ func TestReleaseMemory(t *testing.T) {
 	}
 
 	// Add 1 event per path with size 200
-	event1 := eventWrap[int, string, *mockEvent, any, *mockHandler]{
+	event1 := eventWrap[string, *mockEvent, any, *mockHandler]{
 		event:     &mockEvent{id: 1, path: path1.path},
 		eventSize: 300,
 	}
 	path1.pendingQueue.PushBack(event1)
 	path1.pendingSize.Store(300)
 
-	event2 := eventWrap[int, string, *mockEvent, any, *mockHandler]{
+	event2 := eventWrap[string, *mockEvent, any, *mockHandler]{
 		event:     &mockEvent{id: 2, path: path2.path},
 		eventSize: 300,
 	}
 	path2.pendingQueue.PushBack(event2)
 	path2.pendingSize.Store(300)
 
-	event3 := eventWrap[int, string, *mockEvent, any, *mockHandler]{
+	event3 := eventWrap[string, *mockEvent, any, *mockHandler]{
 		event:     &mockEvent{id: 3, path: path3.path},
 		eventSize: 300,
 	}
@@ -415,7 +415,7 @@ func TestReleaseMemory(t *testing.T) {
 
 	// Verify feedback messages
 	// Should receive 2 ResetPath feedbacks
-	feedbacks = make([]Feedback[int, string, any], 0)
+	feedbacks = make([]Feedback[string, any], 0)
 	timer := time.After(100 * time.Millisecond)
 	for i := 0; i < 2; i++ {
 		select {

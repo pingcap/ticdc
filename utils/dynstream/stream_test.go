@@ -79,7 +79,7 @@ func (h *mockHandler) Handle(dest any, events ...*mockEvent) (await bool) {
 }
 
 func (h *mockHandler) GetSize(event *mockEvent) int            { return 0 }
-func (h *mockHandler) GetArea(path string, dest any) int       { return 0 }
+func (h *mockHandler) GetArea(path string, dest any) string    { return "" }
 func (h *mockHandler) GetTimestamp(event *mockEvent) Timestamp { return 0 }
 func (h *mockHandler) GetType(event *mockEvent) EventType      { return DefaultEventType }
 func (h *mockHandler) IsPaused(event *mockEvent) bool          { return false }
@@ -122,20 +122,20 @@ func newInc(num int64, inc *atomic.Int64, notify ...*sync.WaitGroup) *Inc {
 
 func TestStreamBasic(t *testing.T) {
 	handler := mockHandler{}
-	stream := newStream(1, &handler, Option{UseBuffer: false})
+	stream := newStream[string, *mockEvent, any, *mockHandler](1, &handler, Option{UseBuffer: false})
 	require.Equal(t, 0, stream.getPendingSize())
 
 	stream.start()
 	defer stream.close()
-	pi := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test/path", nil)
+	pi := newPathInfo[string, *mockEvent, any, *mockHandler]("area1", "test/path", nil)
 	stream.addPath(pi)
 	// Test basic event handling
 	inc := &atomic.Int64{}
 	// notify is used to wait for the event to be processed
 	notify := &sync.WaitGroup{}
 
-	newEvent := func(num int) eventWrap[int, string, *mockEvent, any, *mockHandler] {
-		return eventWrap[int, string, *mockEvent, any, *mockHandler]{
+	newEvent := func(num int) eventWrap[string, *mockEvent, any, *mockHandler] {
+		return eventWrap[string, *mockEvent, any, *mockHandler]{
 			pathInfo: pi,
 			event:    newMockEvent(num, pi.path, 0, newInc(int64(num), inc, notify), nil, nil),
 		}
@@ -161,20 +161,20 @@ func TestStreamBasic(t *testing.T) {
 
 func TestStreamBasicWithBuffer(t *testing.T) {
 	handler := mockHandler{}
-	stream := newStream(1, &handler, Option{UseBuffer: true})
+	stream := newStream[string, *mockEvent, any, *mockHandler](1, &handler, Option{UseBuffer: true})
 	require.Equal(t, 0, stream.getPendingSize())
 
 	stream.start()
 	defer stream.close()
-	pi := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test/path", nil)
+	pi := newPathInfo[string, *mockEvent, any, *mockHandler]("area1", "test/path", nil)
 	stream.addPath(pi)
 	// Test basic event handling
 	inc := &atomic.Int64{}
 	// notify is used to wait for the event to be processed
 	notify := &sync.WaitGroup{}
 
-	newEvent := func(num int) eventWrap[int, string, *mockEvent, any, *mockHandler] {
-		return eventWrap[int, string, *mockEvent, any, *mockHandler]{
+	newEvent := func(num int) eventWrap[string, *mockEvent, any, *mockHandler] {
+		return eventWrap[string, *mockEvent, any, *mockHandler]{
 			pathInfo: pi,
 			event:    newMockEvent(num, pi.path, 0, newInc(int64(num), inc, notify), nil, nil),
 		}
@@ -200,8 +200,8 @@ func TestStreamBasicWithBuffer(t *testing.T) {
 
 func TestPathInfo(t *testing.T) {
 	// case 1: new path info
-	pi := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test/path", nil)
-	require.Equal(t, 1, pi.area)
+	pi := newPathInfo[string, *mockEvent, any, *mockHandler]("area1", "test/path", nil)
+	require.Equal(t, "area1", pi.area)
 	require.Equal(t, "test/path", pi.path)
 	require.Equal(t, int64(0), pi.pendingSize.Load())
 }

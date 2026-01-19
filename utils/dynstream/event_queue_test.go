@@ -23,7 +23,7 @@ func TestNewEventQueue(t *testing.T) {
 	handler := mockHandler{}
 	option := Option{BatchCount: 10}
 
-	eq := newEventQueue(option, &handler)
+	eq := newEventQueue[string, *mockEvent, any, *mockHandler](option, &handler)
 
 	require.NotNil(t, eq.eventBlockAlloc)
 	require.NotNil(t, eq.signalQueue)
@@ -35,14 +35,14 @@ func TestNewEventQueue(t *testing.T) {
 
 func TestAppendAndPopSingleEvent(t *testing.T) {
 	handler := mockHandler{}
-	eq := newEventQueue(Option{BatchCount: 10}, &handler)
+	eq := newEventQueue[string, *mockEvent, any, *mockHandler](Option{BatchCount: 10}, &handler)
 
 	// create a path
-	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", nil)
+	path := newPathInfo[string, *mockEvent, any, *mockHandler]("area1", "test", nil)
 	eq.initPath(path)
 
 	// append an event
-	event := eventWrap[int, string, *mockEvent, any, *mockHandler]{
+	event := eventWrap[string, *mockEvent, any, *mockHandler]{
 		pathInfo: path,
 		event:    &mockEvent{value: 1},
 		eventType: EventType{
@@ -68,13 +68,13 @@ func TestAppendAndPopSingleEvent(t *testing.T) {
 
 func TestBlockAndWakePath(t *testing.T) {
 	handler := mockHandler{}
-	eq := newEventQueue(Option{BatchCount: 10}, &handler)
+	eq := newEventQueue[string, *mockEvent, any, *mockHandler](Option{BatchCount: 10}, &handler)
 
-	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", nil)
+	path := newPathInfo[string, *mockEvent, any, *mockHandler]("area1", "test", nil)
 	eq.initPath(path)
 
 	// append an event
-	event := eventWrap[int, string, *mockEvent, any, *mockHandler]{
+	event := eventWrap[string, *mockEvent, any, *mockHandler]{
 		pathInfo: path,
 		event:    &mockEvent{value: 1},
 		eventType: EventType{
@@ -107,14 +107,14 @@ func TestBlockAndWakePath(t *testing.T) {
 
 func TestBatchEvents(t *testing.T) {
 	handler := mockHandler{}
-	eq := newEventQueue(Option{BatchCount: 3}, &handler)
+	eq := newEventQueue[string, *mockEvent, any, *mockHandler](Option{BatchCount: 3}, &handler)
 
-	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", nil)
+	path := newPathInfo[string, *mockEvent, any, *mockHandler]("area1", "test", nil)
 	eq.initPath(path)
 
 	// append multiple events with the same DataGroup
 	for i := 1; i <= 5; i++ {
-		event := eventWrap[int, string, *mockEvent, any, *mockHandler]{
+		event := eventWrap[string, *mockEvent, any, *mockHandler]{
 			pathInfo: path,
 			event:    &mockEvent{value: i},
 			eventType: EventType{
@@ -141,13 +141,13 @@ func TestBatchEvents(t *testing.T) {
 
 func TestBatchableAndNonBatchableEvents(t *testing.T) {
 	handler := mockHandler{}
-	eq := newEventQueue(Option{BatchCount: 3}, &handler)
+	eq := newEventQueue[string, *mockEvent, any, *mockHandler](Option{BatchCount: 3}, &handler)
 
-	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", nil)
+	path := newPathInfo[string, *mockEvent, any, *mockHandler]("area1", "test", nil)
 	eq.initPath(path)
 
 	// append a non-batchable event
-	event1 := eventWrap[int, string, *mockEvent, any, *mockHandler]{
+	event1 := eventWrap[string, *mockEvent, any, *mockHandler]{
 		pathInfo: path,
 		event:    &mockEvent{value: 1},
 		eventType: EventType{
@@ -159,7 +159,7 @@ func TestBatchableAndNonBatchableEvents(t *testing.T) {
 
 	// append 2 batchable events
 	for i := 1; i <= 2; i++ {
-		e := eventWrap[int, string, *mockEvent, any, *mockHandler]{
+		e := eventWrap[string, *mockEvent, any, *mockHandler]{
 			pathInfo: path,
 			event:    &mockEvent{value: i},
 			eventType: EventType{
@@ -172,7 +172,7 @@ func TestBatchableAndNonBatchableEvents(t *testing.T) {
 
 	// add 2 non-batchable events
 	for i := 1; i <= 2; i++ {
-		e := eventWrap[int, string, *mockEvent, any, *mockHandler]{
+		e := eventWrap[string, *mockEvent, any, *mockHandler]{
 			pathInfo: path,
 			event:    &mockEvent{value: i},
 			eventType: EventType{
@@ -185,7 +185,7 @@ func TestBatchableAndNonBatchableEvents(t *testing.T) {
 
 	// append 5 batchable events
 	for i := 1; i <= 5; i++ {
-		e := eventWrap[int, string, *mockEvent, any, *mockHandler]{
+		e := eventWrap[string, *mockEvent, any, *mockHandler]{
 			pathInfo: path,
 			event:    &mockEvent{value: i},
 			eventType: EventType{
@@ -245,12 +245,12 @@ func TestBatchableAndNonBatchableEvents(t *testing.T) {
 
 func TestRemovePath(t *testing.T) {
 	handler := mockHandler{}
-	eq := newEventQueue(Option{BatchCount: 3}, &handler)
+	eq := newEventQueue[string, *mockEvent, any, *mockHandler](Option{BatchCount: 3}, &handler)
 
-	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", nil)
+	path := newPathInfo[string, *mockEvent, any, *mockHandler]("area1", "test", nil)
 	eq.initPath(path)
 
-	e := eventWrap[int, string, *mockEvent, any, *mockHandler]{
+	e := eventWrap[string, *mockEvent, any, *mockHandler]{
 		pathInfo: path,
 		event:    &mockEvent{value: 1},
 		eventType: EventType{

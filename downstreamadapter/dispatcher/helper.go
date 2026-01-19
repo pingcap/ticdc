@@ -364,8 +364,8 @@ func (h *DispatcherStatusHandler) Handle(dispatcher Dispatcher, events ...Dispat
 
 func (h *DispatcherStatusHandler) GetSize(event DispatcherStatusWithID) int   { return 0 }
 func (h *DispatcherStatusHandler) IsPaused(event DispatcherStatusWithID) bool { return false }
-func (h *DispatcherStatusHandler) GetArea(path common.DispatcherID, dest Dispatcher) common.GID {
-	return dest.GetChangefeedID().ID()
+func (h *DispatcherStatusHandler) GetArea(path common.DispatcherID, dest Dispatcher) string {
+	return dest.GetChangefeedID().ID().String()
 }
 
 func (h *DispatcherStatusHandler) GetTimestamp(event DispatcherStatusWithID) dynstream.Timestamp {
@@ -390,11 +390,11 @@ func (h *DispatcherStatusHandler) OnDrop(event DispatcherStatusWithID) interface
 // dispatcherStatusDS is the dynamic stream for dispatcher status.
 // It's a server level singleton, so we use a sync.Once to ensure the instance is created only once.
 var (
-	dispatcherStatusDS     dynstream.DynamicStream[common.GID, common.DispatcherID, DispatcherStatusWithID, Dispatcher, *DispatcherStatusHandler]
+	dispatcherStatusDS     dynstream.DynamicStream[common.DispatcherID, DispatcherStatusWithID, Dispatcher, *DispatcherStatusHandler]
 	dispatcherStatusDSOnce sync.Once
 )
 
-func GetDispatcherStatusDynamicStream() dynstream.DynamicStream[common.GID, common.DispatcherID, DispatcherStatusWithID, Dispatcher, *DispatcherStatusHandler] {
+func GetDispatcherStatusDynamicStream() dynstream.DynamicStream[common.DispatcherID, DispatcherStatusWithID, Dispatcher, *DispatcherStatusHandler] {
 	dispatcherStatusDSOnce.Do(func() {
 		dispatcherStatusDS = dynstream.NewParallelDynamicStream(&DispatcherStatusHandler{})
 		dispatcherStatusDS.Start()

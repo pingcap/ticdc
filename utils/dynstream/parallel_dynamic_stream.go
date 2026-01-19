@@ -27,49 +27,49 @@ import (
 
 // Use a hasher to select target stream for the path.
 // It implements the DynamicStream interface.
-type parallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
+type parallelDynamicStream[P Path, T Event, D Dest, H Handler[P, T, D]] struct {
 	handler H
-	streams []*stream[A, P, T, D, H]
+	streams []*stream[P, T, D, H]
 	pathMap struct {
 		sync.RWMutex
-		m map[P]*pathInfo[A, P, T, D, H]
+		m map[P]*pathInfo[P, T, D, H]
 	}
 
 	eventExtraSize int
-	memControl     *memControl[A, P, T, D, H]
+	memControl     *memControl[P, T, D, H]
 
-	feedbackChan chan Feedback[A, P, D]
+	feedbackChan chan Feedback[P, D]
 
 	_statAddPathCount    atomic.Int64
 	_statRemovePathCount atomic.Int64
 	closed               atomic.Bool
 }
 
-func newParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](handler H, option Option) *parallelDynamicStream[A, P, T, D, H] {
+func newParallelDynamicStream[P Path, T Event, D Dest, H Handler[P, T, D]](handler H, option Option) *parallelDynamicStream[P, T, D, H] {
 	option.fix()
 	var (
 		eventExtraSize int
 		zero           T
 	)
 	if reflect.TypeOf(zero).Kind() == reflect.Pointer {
-		eventExtraSize = int(unsafe.Sizeof(eventWrap[A, P, T, D, H]{}))
+		eventExtraSize = int(unsafe.Sizeof(eventWrap[P, T, D, H]{}))
 	} else {
-		a := unsafe.Sizeof(eventWrap[A, P, T, D, H]{})
+		a := unsafe.Sizeof(eventWrap[P, T, D, H]{})
 		b := unsafe.Sizeof(zero)
 		eventExtraSize = int(a - b)
 	}
 
-	s := &parallelDynamicStream[A, P, T, D, H]{
+	s := &parallelDynamicStream[P, T, D, H]{
 		handler:        handler,
 		eventExtraSize: eventExtraSize,
 	}
 
-	s.pathMap.m = make(map[P]*pathInfo[A, P, T, D, H])
+	s.pathMap.m = make(map[P]*pathInfo[P, T, D, H])
 
 	if option.EnableMemoryControl {
 		log.Info("Dynamic stream enable memory control")
-		s.feedbackChan = make(chan Feedback[A, P, D], 1024)
-		s.memControl = newMemControl[A, P, T, D, H]()
+		s.feedbackChan = make(chan Feedback[P, D], 1024)
+		s.memControl = newMemControl[P, T, D, H]()
 	}
 	for i := range option.StreamCount {
 		s.streams = append(s.streams, newStream(i, handler, option))
@@ -77,13 +77,13 @@ func newParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T
 	return s
 }
 
-func (s *parallelDynamicStream[A, P, T, D, H]) Start() {
+func (s *parallelDynamicStream[P, T, D, H]) Start() {
 	for _, ds := range s.streams {
 		ds.start()
 	}
 }
 
-func (s *parallelDynamicStream[A, P, T, D, H]) Close() {
+func (s *parallelDynamicStream[P, T, D, H]) Close() {
 	// Use atomic operation to ensure Close() is called only once
 	if !s.closed.CompareAndSwap(false, true) {
 		return // Already closed
@@ -100,7 +100,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Close() {
 	}
 }
 
-func (s *parallelDynamicStream[A, P, T, D, H]) Push(path P, e T) {
+func (s *parallelDynamicStream[P, T, D, H]) Push(path P, e T) {
 	// Check if the stream is closed first to avoid accessing freed pathInfo
 	if s.closed.Load() {
 		s.handler.OnDrop(e)
@@ -124,7 +124,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Push(path P, e T) {
 	}
 
 	// Keep the read lock until we finish using pathInfo to prevent it from being freed
-	ew := eventWrap[A, P, T, D, H]{
+	ew := eventWrap[P, T, D, H]{
 		event:     e,
 		pathInfo:  pi,
 		paused:    s.handler.IsPaused(e),
@@ -139,7 +139,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Push(path P, e T) {
 	s.pathMap.RUnlock()
 }
 
-func (s *parallelDynamicStream[A, P, T, D, H]) Wake(path P) {
+func (s *parallelDynamicStream[P, T, D, H]) Wake(path P) {
 	// Check if the stream is closed first
 	if s.closed.Load() {
 		return
@@ -159,11 +159,11 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Wake(path P) {
 	}
 
 	// Keep the read lock until we finish using pathInfo
-	pi.stream.addEvent(eventWrap[A, P, T, D, H]{wake: true, pathInfo: pi})
+	pi.stream.addEvent(eventWrap[P, T, D, H]{wake: true, pathInfo: pi})
 	s.pathMap.RUnlock()
 }
 
-func (s *parallelDynamicStream[A, P, T, D, H]) Release(path P) {
+func (s *parallelDynamicStream[P, T, D, H]) Release(path P) {
 	// Check if the stream is closed first
 	if s.closed.Load() {
 		return
@@ -183,15 +183,15 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Release(path P) {
 	}
 
 	// Keep the read lock until we finish using pathInfo
-	pi.stream.addEvent(eventWrap[A, P, T, D, H]{release: true, pathInfo: pi})
+	pi.stream.addEvent(eventWrap[P, T, D, H]{release: true, pathInfo: pi})
 	s.pathMap.RUnlock()
 }
 
-func (s *parallelDynamicStream[A, P, T, D, H]) Feedback() <-chan Feedback[A, P, D] {
+func (s *parallelDynamicStream[P, T, D, H]) Feedback() <-chan Feedback[P, D] {
 	return s.feedbackChan
 }
 
-func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...AreaSettings) error {
+func (s *parallelDynamicStream[P, T, D, H]) AddPath(path P, dest D, as ...AreaSettings) error {
 	s.pathMap.Lock()
 	_, ok := s.pathMap.m[path]
 	if ok {
@@ -200,7 +200,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...Are
 	}
 
 	area := s.handler.GetArea(path, dest)
-	pi := newPathInfo[A, P, T, D, H](area, path, dest)
+	pi := newPathInfo[P, T, D, H](area, path, dest)
 
 	streamID := s._statAddPathCount.Load() % int64(len(s.streams))
 	pi.setStream(s.streams[streamID])
@@ -219,7 +219,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...Are
 	return nil
 }
 
-func (s *parallelDynamicStream[A, P, T, D, H]) RemovePath(path P) error {
+func (s *parallelDynamicStream[P, T, D, H]) RemovePath(path P) error {
 	s.pathMap.Lock()
 
 	pi, ok := s.pathMap.m[path]
@@ -235,19 +235,19 @@ func (s *parallelDynamicStream[A, P, T, D, H]) RemovePath(path P) error {
 	}
 	delete(s.pathMap.m, path)
 	s.pathMap.Unlock()
-	pi.stream.addEvent(eventWrap[A, P, T, D, H]{pathInfo: pi})
+	pi.stream.addEvent(eventWrap[P, T, D, H]{pathInfo: pi})
 	s._statRemovePathCount.Add(1)
 	return nil
 }
 
-func (s *parallelDynamicStream[A, P, T, D, H]) SetAreaSettings(area A, settings AreaSettings) {
+func (s *parallelDynamicStream[P, T, D, H]) SetAreaSettings(area string, settings AreaSettings) {
 	if s.memControl != nil {
 		s.memControl.setAreaSettings(area, settings)
 	}
 }
 
-func (s *parallelDynamicStream[A, P, T, D, H]) GetMetrics() Metrics[A, P] {
-	metrics := Metrics[A, P]{}
+func (s *parallelDynamicStream[P, T, D, H]) GetMetrics() Metrics[P] {
+	metrics := Metrics[P]{}
 	for _, ds := range s.streams {
 		metrics.PendingQueueLen += ds.getPendingSize()
 	}
@@ -261,8 +261,8 @@ func (s *parallelDynamicStream[A, P, T, D, H]) GetMetrics() Metrics[A, P] {
 	return metrics
 }
 
-func (s *parallelDynamicStream[A, P, T, D, H]) setMemControl(
-	pi *pathInfo[A, P, T, D, H],
+func (s *parallelDynamicStream[P, T, D, H]) setMemControl(
+	pi *pathInfo[P, T, D, H],
 	as ...AreaSettings,
 ) {
 	if s.memControl != nil {

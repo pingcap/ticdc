@@ -116,7 +116,7 @@ func TestParallelDynamicStreamMemoryControl(t *testing.T) {
 	require.Equal(t, 1, len(stream.pathMap.m))
 	pi := stream.pathMap.m["path1"]
 	stream.pathMap.RUnlock()
-	require.Equal(t, 0, pi.area)
+	require.Equal(t, "", pi.area)
 	require.Equal(t, uint64(1024), pi.areaMemStat.settings.Load().maxPendingSize)
 	require.Equal(t, 10*time.Millisecond, pi.areaMemStat.settings.Load().feedbackInterval)
 
@@ -134,7 +134,7 @@ func TestParallelDynamicStreamMemoryControl(t *testing.T) {
 
 func TestFeedBack(t *testing.T) {
 	t.Parallel()
-	fb1 := Feedback[int, string, any]{
+	fb1 := Feedback[string, any]{
 		FeedbackType: PauseArea,
 	}
 	require.Equal(t, PauseArea, fb1.FeedbackType)
@@ -153,7 +153,7 @@ func TestParallelDynamicStreamStress(t *testing.T) {
 		testDuration = 200 * time.Millisecond // How long to run the test
 	)
 
-	streams := make([]*parallelDynamicStream[int, string, *mockEvent, any, *mockHandler], streamCount)
+	streams := make([]*parallelDynamicStream[string, *mockEvent, any, *mockHandler], streamCount)
 	handlers := make([]*mockHandler, streamCount)
 	done := make(chan struct{})
 

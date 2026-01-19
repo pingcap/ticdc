@@ -30,22 +30,22 @@ const BlockLenInPendingQueue = 32
 // The receiver receives the events and buffers them.
 // The handleLoop handles the events.
 // While if UseBuffer is false, the receiver is not needed, and the handleLoop directly receives the events.
-type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
+type stream[P Path, T Event, D Dest, H Handler[P, T, D]] struct {
 	id int
 
-	handler Handler[A, P, T, D]
+	handler H
 
 	// These fields are used when UseBuffer is true.
 	// They are used to buffer the events between the receiver and the handleLoop.
 	bufferCount atomic.Int64
-	inChan      chan eventWrap[A, P, T, D, H] // The buffer channel to receive the events.
-	outChan     chan eventWrap[A, P, T, D, H] // The buffer channel to send the events.
+	inChan      chan eventWrap[P, T, D, H] // The buffer channel to receive the events.
+	outChan     chan eventWrap[P, T, D, H] // The buffer channel to send the events.
 
 	// The channel used by the handleLoop to receive the events.
-	eventChan chan eventWrap[A, P, T, D, H]
+	eventChan chan eventWrap[P, T, D, H]
 
 	// The queue to store the pending events of this stream.
-	eventQueue eventQueue[A, P, T, D, H]
+	eventQueue eventQueue[P, T, D, H]
 
 	option Option
 
@@ -58,12 +58,12 @@ type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	cancel context.CancelFunc
 }
 
-func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
+func newStream[P Path, T Event, D Dest, H Handler[P, T, D]](
 	id int,
 	handler H,
 	option Option,
-) *stream[A, P, T, D, H] {
-	s := &stream[A, P, T, D, H]{
+) *stream[P, T, D, H] {
+	s := &stream[P, T, D, H]{
 		id:         id,
 		handler:    handler,
 		eventQueue: newEventQueue(option, handler),
@@ -73,28 +73,28 @@ func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 
 	if option.UseBuffer {
-		s.inChan = make(chan eventWrap[A, P, T, D, H], 64)
-		s.outChan = make(chan eventWrap[A, P, T, D, H], 64)
+		s.inChan = make(chan eventWrap[P, T, D, H], 64)
+		s.outChan = make(chan eventWrap[P, T, D, H], 64)
 
 		s.eventChan = s.outChan
 	} else {
-		s.eventChan = make(chan eventWrap[A, P, T, D, H], 1024*16)
+		s.eventChan = make(chan eventWrap[P, T, D, H], 1024*16)
 	}
 	return s
 }
 
-func (s *stream[A, P, T, D, H]) addPath(path *pathInfo[A, P, T, D, H]) {
-	s.addEvent(eventWrap[A, P, T, D, H]{pathInfo: path, newPath: true})
+func (s *stream[P, T, D, H]) addPath(path *pathInfo[P, T, D, H]) {
+	s.addEvent(eventWrap[P, T, D, H]{pathInfo: path, newPath: true})
 }
 
-func (s *stream[A, P, T, D, H]) getPendingSize() int {
+func (s *stream[P, T, D, H]) getPendingSize() int {
 	if s.option.UseBuffer {
 		return len(s.inChan) + int(s.bufferCount.Load()) + len(s.outChan) + int(s.eventQueue.totalPendingLength.Load())
 	}
 	return len(s.eventChan) + int(s.eventQueue.totalPendingLength.Load())
 }
 
-func (s *stream[A, P, T, D, H]) addEvent(event eventWrap[A, P, T, D, H]) {
+func (s *stream[P, T, D, H]) addEvent(event eventWrap[P, T, D, H]) {
 	if s.closed.Load() {
 		return
 	}
@@ -116,7 +116,7 @@ func (s *stream[A, P, T, D, H]) addEvent(event eventWrap[A, P, T, D, H]) {
 }
 
 // Start the stream.
-func (s *stream[A, P, T, D, H]) start() {
+func (s *stream[P, T, D, H]) start() {
 	if s.closed.Load() {
 		panic("The stream has been closed.")
 	}
@@ -132,15 +132,15 @@ func (s *stream[A, P, T, D, H]) start() {
 
 // Close the stream and wait for all goroutines to exit.
 // wait is by default true, which means to wait for the goroutines to exit.
-func (s *stream[A, P, T, D, H]) close() {
+func (s *stream[P, T, D, H]) close() {
 	if s.closed.CompareAndSwap(false, true) {
 		s.cancel()
 	}
 	s.wg.Wait()
 }
 
-func (s *stream[A, P, T, D, H]) receiver() {
-	buffer := deque.NewDeque[eventWrap[A, P, T, D, H]](BlockLenInPendingQueue)
+func (s *stream[P, T, D, H]) receiver() {
+	buffer := deque.NewDeque[eventWrap[P, T, D, H]](BlockLenInPendingQueue)
 	defer func() {
 		// Move all remaining events out of the buffer.
 		for {
@@ -197,8 +197,8 @@ func (s *stream[A, P, T, D, H]) receiver() {
 
 // handleLoop is the main loop of the stream.
 // It handles the events.
-func (s *stream[A, P, T, D, H]) handleLoop() {
-	handleEvent := func(e eventWrap[A, P, T, D, H]) {
+func (s *stream[P, T, D, H]) handleLoop() {
+	handleEvent := func(e eventWrap[P, T, D, H]) {
 		switch {
 		case e.wake:
 			s.eventQueue.wakePath(e.pathInfo)
@@ -235,7 +235,7 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 			}
 			eventBuf = eventBuf[:0]
 		}
-		path *pathInfo[A, P, T, D, H]
+		path *pathInfo[P, T, D, H]
 	)
 
 	// For testing. Don't handle events until this wait group is done.
@@ -310,13 +310,13 @@ Loop:
 // We use one struct to store them together to avoid mapping by path in different places in many times,
 // and to avoid the overhead of creating a new struct.
 
-type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
-	area A
+type pathInfo[P Path, T Event, D Dest, H Handler[P, T, D]] struct {
+	area string
 	path P
 	dest D
 
 	// The current stream this path belongs to.
-	stream *stream[A, P, T, D, H]
+	stream *stream[P, T, D, H]
 	// This field is used to mark the path as removed, so that the handle goroutine can ignore it.
 	// Note that we should not need to use a atomic.Bool here, because this field is set by the RemovePaths method,
 	// and we use sync.WaitGroup to wait for finish. So if RemovePaths is called in the handle goroutine, it should be
@@ -326,33 +326,33 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	blocking atomic.Bool
 
 	// The pending events of the path.
-	pendingQueue *deque.Deque[eventWrap[A, P, T, D, H]]
+	pendingQueue *deque.Deque[eventWrap[P, T, D, H]]
 
 	// Fields used by the memory control.
-	areaMemStat *areaMemStat[A, P, T, D, H]
+	areaMemStat *areaMemStat[P, T, D, H]
 
 	pendingSize atomic.Int64 // The total size(bytes) of pending events in the pendingQueue of the path.
 
 	lastHandleEventTs atomic.Uint64
 }
 
-func newPathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](area A, path P, dest D) *pathInfo[A, P, T, D, H] {
-	pi := &pathInfo[A, P, T, D, H]{
+func newPathInfo[P Path, T Event, D Dest, H Handler[P, T, D]](area string, path P, dest D) *pathInfo[P, T, D, H] {
+	pi := &pathInfo[P, T, D, H]{
 		area:         area,
 		path:         path,
 		dest:         dest,
-		pendingQueue: deque.NewDeque[eventWrap[A, P, T, D, H]](BlockLenInPendingQueue),
+		pendingQueue: deque.NewDeque[eventWrap[P, T, D, H]](BlockLenInPendingQueue),
 	}
 	return pi
 }
 
-func (pi *pathInfo[A, P, T, D, H]) setStream(stream *stream[A, P, T, D, H]) {
+func (pi *pathInfo[P, T, D, H]) setStream(stream *stream[P, T, D, H]) {
 	pi.stream = stream
 }
 
 // appendEvent appends an event to the pending queue.
 // It returns true if the event is appended successfully.
-func (pi *pathInfo[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H], handler H) bool {
+func (pi *pathInfo[P, T, D, H]) appendEvent(event eventWrap[P, T, D, H], handler H) bool {
 	if pi.areaMemStat != nil {
 		return pi.areaMemStat.appendEvent(pi, event, handler)
 	}
@@ -376,10 +376,10 @@ func (pi *pathInfo[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H], h
 	}
 }
 
-func (pi *pathInfo[A, P, T, D, H]) popEvent() (eventWrap[A, P, T, D, H], bool) {
+func (pi *pathInfo[P, T, D, H]) popEvent() (eventWrap[P, T, D, H], bool) {
 	e, ok := pi.pendingQueue.PopFront()
 	if !ok {
-		return eventWrap[A, P, T, D, H]{}, false
+		return eventWrap[P, T, D, H]{}, false
 	}
 
 	pi.updatePendingSize(int64(-e.eventSize))
@@ -392,7 +392,7 @@ func (pi *pathInfo[A, P, T, D, H]) popEvent() (eventWrap[A, P, T, D, H], bool) {
 	return e, true
 }
 
-func (pi *pathInfo[A, P, T, D, H]) updatePendingSize(delta int64) {
+func (pi *pathInfo[P, T, D, H]) updatePendingSize(delta int64) {
 	pi.pendingSize.Add(delta)
 	if pi.pendingSize.Load() < 0 {
 		log.Debug("pendingSize is negative", zap.Int64("pendingSize", pi.pendingSize.Load()))
@@ -402,13 +402,13 @@ func (pi *pathInfo[A, P, T, D, H]) updatePendingSize(delta int64) {
 
 // eventWrap contains the event and the path info.
 // It can be a event or a wake signal.
-type eventWrap[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
+type eventWrap[P Path, T Event, D Dest, H Handler[P, T, D]] struct {
 	event   T
 	wake    bool
 	newPath bool
 	release bool
 
-	pathInfo *pathInfo[A, P, T, D, H]
+	pathInfo *pathInfo[P, T, D, H]
 
 	paused    bool
 	eventSize int

@@ -46,13 +46,13 @@ func (h *intEventHandler) Handle(dest D, events ...intEvent) (await bool) {
 }
 
 func (h *intEventHandler) GetSize(event intEvent) int            { return 0 }
-func (h *intEventHandler) GetArea(path int, dest D) int          { return 0 }
+func (h *intEventHandler) GetArea(path int, dest D) string       { return "" }
 func (h *intEventHandler) GetTimestamp(event intEvent) Timestamp { return 0 }
 func (h *intEventHandler) GetType(event intEvent) EventType      { return DefaultEventType }
 func (h *intEventHandler) IsPaused(event intEvent) bool          { return false }
 func (h *intEventHandler) OnDrop(event intEvent) interface{}     { return nil }
 
-func prepareDynamicStream(pathCount int, eventCount int, times int) (DynamicStream[int, int, intEvent, D, *intEventHandler], *atomic.Int64, *sync.WaitGroup) {
+func prepareDynamicStream(pathCount int, eventCount int, times int) (DynamicStream[int, intEvent, D, *intEventHandler], *atomic.Int64, *sync.WaitGroup) {
 	wg := &sync.WaitGroup{}
 	wg.Add(eventCount * pathCount)
 	inc := &atomic.Int64{}
@@ -73,7 +73,7 @@ func prepareDynamicStream(pathCount int, eventCount int, times int) (DynamicStre
 	return ds, inc, wg
 }
 
-func runDynamicStream(ds DynamicStream[int, int, intEvent, D, *intEventHandler], pathCount int, eventCount int) {
+func runDynamicStream(ds DynamicStream[int, intEvent, D, *intEventHandler], pathCount int, eventCount int) {
 	cpuCount := runtime.NumCPU()
 	step := int(math.Ceil(float64(pathCount) / float64(cpuCount)))
 	for s := 0; s < cpuCount; s++ {

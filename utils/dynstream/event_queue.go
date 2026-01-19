@@ -21,39 +21,39 @@ import (
 	"github.com/pingcap/ticdc/utils/deque"
 )
 
-type eventSignal[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
-	pathInfo   *pathInfo[A, P, T, D, H]
+type eventSignal[P Path, T Event, D Dest, H Handler[P, T, D]] struct {
+	pathInfo   *pathInfo[P, T, D, H]
 	eventCount int
 }
 
-type eventQueue[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
+type eventQueue[P Path, T Event, D Dest, H Handler[P, T, D]] struct {
 	option  Option
 	handler H
 	// Used to reduce the block allocation in the paths' pending queue.
-	eventBlockAlloc *deque.BlockAllocator[eventWrap[A, P, T, D, H]]
+	eventBlockAlloc *deque.BlockAllocator[eventWrap[P, T, D, H]]
 
 	// Signal queue is used to decide which path's events should be popped.
-	signalQueue        *deque.Deque[eventSignal[A, P, T, D, H]]
+	signalQueue        *deque.Deque[eventSignal[P, T, D, H]]
 	totalPendingLength *atomic.Int64 // The total signal count in the queue.
 }
 
-func newEventQueue[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](option Option, handler H) eventQueue[A, P, T, D, H] {
-	eq := eventQueue[A, P, T, D, H]{
+func newEventQueue[P Path, T Event, D Dest, H Handler[P, T, D]](option Option, handler H) eventQueue[P, T, D, H] {
+	eq := eventQueue[P, T, D, H]{
 		option:             option,
 		handler:            handler,
-		eventBlockAlloc:    deque.NewBlockAllocator[eventWrap[A, P, T, D, H]](32, 1024),
-		signalQueue:        deque.NewDeque(1024, deque.NewBlockAllocator[eventSignal[A, P, T, D, H]](1024, 32)),
+		eventBlockAlloc:    deque.NewBlockAllocator[eventWrap[P, T, D, H]](32, 1024),
+		signalQueue:        deque.NewDeque(1024, deque.NewBlockAllocator[eventSignal[P, T, D, H]](1024, 32)),
 		totalPendingLength: &atomic.Int64{},
 	}
 
 	return eq
 }
 
-func (q *eventQueue[A, P, T, D, H]) initPath(path *pathInfo[A, P, T, D, H]) {
+func (q *eventQueue[P, T, D, H]) initPath(path *pathInfo[P, T, D, H]) {
 	path.pendingQueue.SetBlockAllocator(q.eventBlockAlloc)
 }
 
-func (q *eventQueue[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H]) {
+func (q *eventQueue[P, T, D, H]) appendEvent(event eventWrap[P, T, D, H]) {
 	path := event.pathInfo
 
 	addSignal := func() {
@@ -61,7 +61,7 @@ func (q *eventQueue[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H]) 
 		if ok && back.pathInfo == path {
 			back.eventCount++
 		} else {
-			q.signalQueue.PushBack(eventSignal[A, P, T, D, H]{pathInfo: path, eventCount: 1})
+			q.signalQueue.PushBack(eventSignal[P, T, D, H]{pathInfo: path, eventCount: 1})
 		}
 		q.totalPendingLength.Add(1)
 	}
@@ -71,7 +71,7 @@ func (q *eventQueue[A, P, T, D, H]) appendEvent(event eventWrap[A, P, T, D, H]) 
 	}
 }
 
-func (q *eventQueue[A, P, T, D, H]) releasePath(path *pathInfo[A, P, T, D, H]) {
+func (q *eventQueue[P, T, D, H]) releasePath(path *pathInfo[P, T, D, H]) {
 	for {
 		_, ok := path.pendingQueue.PopFront()
 		if !ok {
@@ -87,22 +87,22 @@ func (q *eventQueue[A, P, T, D, H]) releasePath(path *pathInfo[A, P, T, D, H]) {
 	path.pendingSize.Store(0)
 }
 
-func (q *eventQueue[A, P, T, D, H]) blockPath(path *pathInfo[A, P, T, D, H]) {
+func (q *eventQueue[P, T, D, H]) blockPath(path *pathInfo[P, T, D, H]) {
 	path.blocking.Store(true)
 }
 
-func (q *eventQueue[A, P, T, D, H]) wakePath(path *pathInfo[A, P, T, D, H]) {
+func (q *eventQueue[P, T, D, H]) wakePath(path *pathInfo[P, T, D, H]) {
 	path.blocking.Store(false)
 	count := path.pendingQueue.Length()
 	if count > 0 {
-		q.signalQueue.PushFront(eventSignal[A, P, T, D, H]{pathInfo: path, eventCount: count})
+		q.signalQueue.PushFront(eventSignal[P, T, D, H]{pathInfo: path, eventCount: count})
 		q.totalPendingLength.Add(int64(count))
 	}
 }
 
-func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, D, H]) {
+func (q *eventQueue[P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[P, T, D, H]) {
 	// Append the event to the buffer
-	appendToBuf := func(event *eventWrap[A, P, T, D, H], path *pathInfo[A, P, T, D, H]) {
+	appendToBuf := func(event *eventWrap[P, T, D, H], path *pathInfo[P, T, D, H]) {
 		buf = append(buf, event.event)
 		path.popEvent()
 	}

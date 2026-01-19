@@ -51,13 +51,13 @@ type HeartBeatCollector struct {
 	heartBeatReqQueue   *HeartbeatRequestQueue
 	blockStatusReqQueue *BlockStatusRequestQueue
 
-	dispatcherStatusDynamicStream             dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, dispatcher.Dispatcher, *dispatcher.DispatcherStatusHandler]
-	heartBeatResponseDynamicStream            dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *DispatcherManager, *HeartBeatResponseHandler]
-	schedulerDispatcherRequestDynamicStream   dynstream.DynamicStream[int, common.GID, SchedulerDispatcherRequest, *DispatcherManager, *SchedulerDispatcherRequestHandler]
-	checkpointTsMessageDynamicStream          dynstream.DynamicStream[int, common.GID, CheckpointTsMessage, *DispatcherManager, *CheckpointTsMessageHandler]
-	redoResolvedTsForwardMessageDynamicStream dynstream.DynamicStream[int, common.GID, RedoResolvedTsForwardMessage, *DispatcherManager, *RedoResolvedTsForwardMessageHandler]
-	redoMetaMessageDynamicStream              dynstream.DynamicStream[int, common.GID, RedoMetaMessage, *DispatcherManager, *RedoMetaMessageHandler]
-	mergeDispatcherRequestDynamicStream       dynstream.DynamicStream[int, common.GID, MergeDispatcherRequest, *DispatcherManager, *MergeDispatcherRequestHandler]
+	dispatcherStatusDynamicStream             dynstream.DynamicStream[common.DispatcherID, dispatcher.DispatcherStatusWithID, dispatcher.Dispatcher, *dispatcher.DispatcherStatusHandler]
+	heartBeatResponseDynamicStream            dynstream.DynamicStream[common.GID, HeartBeatResponse, *DispatcherManager, *HeartBeatResponseHandler]
+	schedulerDispatcherRequestDynamicStream   dynstream.DynamicStream[common.GID, SchedulerDispatcherRequest, *DispatcherManager, *SchedulerDispatcherRequestHandler]
+	checkpointTsMessageDynamicStream          dynstream.DynamicStream[common.GID, CheckpointTsMessage, *DispatcherManager, *CheckpointTsMessageHandler]
+	redoResolvedTsForwardMessageDynamicStream dynstream.DynamicStream[common.GID, RedoResolvedTsForwardMessage, *DispatcherManager, *RedoResolvedTsForwardMessageHandler]
+	redoMetaMessageDynamicStream              dynstream.DynamicStream[common.GID, RedoMetaMessage, *DispatcherManager, *RedoMetaMessageHandler]
+	mergeDispatcherRequestDynamicStream       dynstream.DynamicStream[common.GID, MergeDispatcherRequest, *DispatcherManager, *MergeDispatcherRequestHandler]
 	mc                                        messaging.MessageCenter
 
 	wg       sync.WaitGroup

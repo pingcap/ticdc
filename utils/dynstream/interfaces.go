@@ -23,9 +23,6 @@ import (
 // Path is a unique identifier of a destination.
 type Path comparable
 
-// Area manages a group of paths, usually a GID.
-type Area comparable
-
 // The timestamp an event carries. E.g. the commit TS of a DML.
 // Normally, events with smaller timestamps are processed first among the same Area, but it is not guaranteed.
 // In a path, events come earlier should have smaller timestamps. DynamicStream will not check the
@@ -86,7 +83,7 @@ func (p Property) String() string {
 }
 
 // The handler interface. The handler processes the event.
-type Handler[A Area, P Path, T Event, D Dest] interface {
+type Handler[P Path, T Event, D Dest] interface {
 	// Path of the event. This method is called once for each event.
 	Path(event T) P
 
@@ -114,10 +111,10 @@ type Handler[A Area, P Path, T Event, D Dest] interface {
 	IsPaused(event T) bool
 
 	// GetArea Get the area of the path. This method is called once for each path.
-	// Return zero by default implementation. I.e. all paths are in the default area.
+	// Return empty string by default implementation. I.e. all paths are in the default area.
 	//
 	// Used in deciding the handle priority of the events from different areas.
-	GetArea(path P, dest D) A
+	GetArea(path P, dest D) string
 
 	// GetTimestamp Get the timestamp of the event. This method is called once for each event.
 	// Events are processed in the order of the timestamps.
@@ -150,7 +147,7 @@ DynamicStream is a stream that can process events with from different paths conc
 
 We assume that the handler is CPU-bound and should not be blocked by any waiting. Otherwise, events from other paths will be blocked.
 */
-type DynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] interface {
+type DynamicStream[P Path, T Event, D Dest, H Handler[P, T, D]] interface {
 	// Start starts the dynamic stream.
 	// It should be called before any other methods.
 	Start()
@@ -169,7 +166,7 @@ type DynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] inter
 	// Feedback returns the channel to receive the feedbacks for the listener.
 	// Current the feedbacks are used for the memory control.
 	// Return nil if Option.EnableMemoryControl is false.
-	Feedback() <-chan Feedback[A, P, D]
+	Feedback() <-chan Feedback[P, D]
 
 	// AddPath add the path to the dynamic stream to receive the events.
 	// An event of a path not already added will be dropped.
@@ -187,9 +184,9 @@ type DynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] inter
 
 	// SetAreaSettings sets the settings of the area. An area uses the default settings if it is not set.
 	// This method can be called at any time. But to avoid the memory leak, setting on a area without existing paths is a no-op.
-	SetAreaSettings(area A, settings AreaSettings)
+	SetAreaSettings(area string, settings AreaSettings)
 
-	GetMetrics() Metrics[A, P]
+	GetMetrics() Metrics[P]
 }
 
 const (
@@ -295,19 +292,19 @@ func (f FeedbackType) String() string {
 	}
 }
 
-type Feedback[A Area, P Path, D Dest] struct {
-	Area A
+type Feedback[P Path, D Dest] struct {
+	Area string
 	Path P
 	Dest D
 
 	FeedbackType FeedbackType
 }
 
-func (f *Feedback[A, P, D]) String() string {
+func (f *Feedback[P, D]) String() string {
 	return fmt.Sprintf("DynamicStream Feedback{Area: %v, Path: %v, FeedbackType: %s}", f.Area, f.Path, f.FeedbackType.String())
 }
 
-func NewParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](handler H, option ...Option) DynamicStream[A, P, T, D, H] {
+func NewParallelDynamicStream[P Path, T Event, D Dest, H Handler[P, T, D]](handler H, option ...Option) DynamicStream[P, T, D, H] {
 	opt := NewOption()
 	if len(option) > 0 {
 		opt = option[0]
@@ -315,11 +312,11 @@ func NewParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T
 	return newParallelDynamicStream(handler, opt)
 }
 
-type Metrics[A Area, P Path] struct {
+type Metrics[P Path] struct {
 	EventChanSize   int
 	PendingQueueLen int
 	AddPath         int
 	RemovePath      int
 
-	MemoryControl MemoryMetric[A, P]
+	MemoryControl MemoryMetric[P]
 }
