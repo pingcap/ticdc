@@ -82,14 +82,16 @@ func encodeRowChangedEvent(
 			if err != nil {
 				return
 			}
-			if !config.OnlyOutputUpdatedColumns {
-				valueWriter.WriteObjectField("p", func() {
-					err = writeColumnFieldValues(valueWriter, e.GetPreRows(), e.TableInfo, columnFlags, e.ColumnSelector, largeMessageOnlyHandleKeyColumns)
-				})
-			} else {
-				valueWriter.WriteObjectField("p", func() {
-					writeUpdatedColumnFieldValues(valueWriter, e.GetPreRows(), e.GetRows(), e.TableInfo, columnFlags, e.ColumnSelector, largeMessageOnlyHandleKeyColumns)
-				})
+			if config.OpenOutputOldValue {
+				if !config.OnlyOutputUpdatedColumns {
+					valueWriter.WriteObjectField("p", func() {
+						err = writeColumnFieldValues(valueWriter, e.GetPreRows(), e.TableInfo, columnFlags, e.ColumnSelector, largeMessageOnlyHandleKeyColumns)
+					})
+				} else {
+					valueWriter.WriteObjectField("p", func() {
+						writeUpdatedColumnFieldValues(valueWriter, e.GetPreRows(), e.GetRows(), e.TableInfo, columnFlags, e.ColumnSelector, largeMessageOnlyHandleKeyColumns)
+					})
+				}
 			}
 		})
 	}
@@ -245,10 +247,7 @@ func writeColumnFieldValues(
 	var encoded bool
 	colInfo := tableInfo.GetColumns()
 	for idx, col := range colInfo {
-		if selector.Select(col) {
-			if col.IsVirtualGenerated() {
-				continue
-			}
+		if col != nil && !col.IsVirtualGenerated() && selector.Select(col) {
 			handle := tableInfo.IsHandleKey(col.ID)
 			if onlyHandleKeyColumns && !handle {
 				continue
@@ -279,7 +278,7 @@ func writeUpdatedColumnFieldValues(
 	colInfo := tableInfo.GetColumns()
 
 	for idx, col := range colInfo {
-		if selector.Select(col) {
+		if col != nil && !col.IsVirtualGenerated() && selector.Select(col) {
 			isHandle := tableInfo.IsHandleKey(col.ID)
 			if onlyHandleKeyColumns && !isHandle {
 				continue
@@ -307,7 +306,7 @@ func writeColumnFieldValueIfUpdated(
 			if isHandle {
 				writer.WriteBoolField("h", isHandle)
 			}
-			writer.WriteUint64Field("f", uint64(flag))
+			writer.WriteUint64Field("f", columnFlag)
 			writeColumnValue()
 		})
 	}
@@ -331,7 +330,7 @@ func writeColumnFieldValueIfUpdated(
 		// Encode bits as integers to avoid pingcap/tidb#10988 (which also affects MySQL itself)
 		rowValue, _ := rowDatumPoint.GetBinaryLiteral().ToInt(types.DefaultStmtNoWarningContext)
 
-		preRowDatum := row.GetDatum(idx, &col.FieldType)
+		preRowDatum := preRow.GetDatum(idx, &col.FieldType)
 		preRowDatumPoint := &preRowDatum
 		// Encode bits as integers to avoid pingcap/tidb#10988 (which also affects MySQL itself)
 		preRowValue, _ := preRowDatumPoint.GetBinaryLiteral().ToInt(types.DefaultStmtNoWarningContext)
@@ -343,88 +342,54 @@ func writeColumnFieldValueIfUpdated(
 		rowValue := row.GetBytes(idx)
 		preRowValue := preRow.GetBytes(idx)
 		if !bytes.Equal(rowValue, preRowValue) {
-			if len(preRowValue) == 0 {
-				writeFunc(func() { writer.WriteNullField("v") })
-			} else {
-				writeFunc(func() { writer.WriteBase64StringField("v", preRowValue) })
-			}
+			writeFunc(func() { writer.WriteBase64StringField("v", preRowValue) })
 		}
 	case mysql.TypeVarchar, mysql.TypeString, mysql.TypeVarString:
 		rowValue := row.GetBytes(idx)
 		preRowValue := preRow.GetBytes(idx)
 		if !bytes.Equal(rowValue, preRowValue) {
-			if len(preRowValue) == 0 {
-				writeFunc(func() { writer.WriteNullField("v") })
-			} else {
-				if mysql.HasBinaryFlag(flag) {
-					str := string(preRowValue)
-					str = strconv.Quote(str)
-					str = str[1 : len(str)-1]
-					writeFunc(func() { writer.WriteStringField("v", str) })
-				} else {
-					writeFunc(func() { writer.WriteStringField("v", string(preRowValue)) })
-				}
+			str := string(preRowValue)
+			if mysql.HasBinaryFlag(flag) {
+				str = strconv.Quote(str)
+				str = str[1 : len(str)-1]
 			}
+			writeFunc(func() { writer.WriteStringField("v", str) })
 		}
 	case mysql.TypeEnum, mysql.TypeSet:
 		rowValue := row.GetEnum(idx).Value
 		preRowValue := preRow.GetEnum(idx).Value
 		if rowValue != preRowValue {
-			if preRowValue == 0 {
-				writeFunc(func() { writer.WriteNullField("v") })
-			} else {
-				writeFunc(func() { writer.WriteUint64Field("v", preRowValue) })
-			}
+			writeFunc(func() { writer.WriteUint64Field("v", preRowValue) })
 		}
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeNewDate, mysql.TypeTimestamp:
 		rowValue := row.GetTime(idx)
 		preRowValue := preRow.GetTime(idx)
 		if rowValue != preRowValue {
-			if preRowValue.IsZero() {
-				writeFunc(func() { writer.WriteNullField("v") })
-			} else {
-				writeFunc(func() { writer.WriteStringField("v", preRowValue.String()) })
-			}
+			writeFunc(func() { writer.WriteStringField("v", preRowValue.String()) })
 		}
 	case mysql.TypeDuration:
 		rowValue := row.GetDuration(idx, 0)
 		preRowValue := preRow.GetDuration(idx, 0)
 		if rowValue != preRowValue {
-			if preRowValue.ToNumber().IsZero() {
-				writeFunc(func() { writer.WriteNullField("v") })
-			} else {
-				writeFunc(func() { writer.WriteStringField("v", preRowValue.String()) })
-			}
+			writeFunc(func() { writer.WriteStringField("v", preRowValue.String()) })
 		}
 	case mysql.TypeJSON:
 		rowValue := row.GetJSON(idx).String()
 		preRowValue := preRow.GetJSON(idx).String()
 		if rowValue != preRowValue {
-			if preRow.GetJSON(idx).IsZero() {
-				writeFunc(func() { writer.WriteNullField("v") })
-			} else {
-				writeFunc(func() { writer.WriteStringField("v", preRowValue) })
-			}
+			writeFunc(func() { writer.WriteStringField("v", preRowValue) })
 		}
 	case mysql.TypeNewDecimal:
 		rowValue := row.GetMyDecimal(idx)
 		preValue := preRow.GetMyDecimal(idx)
 		if rowValue.Compare(preValue) != 0 {
-			if preValue.IsZero() {
-				writeFunc(func() { writer.WriteNullField("v") })
-			} else {
-				writeFunc(func() { writer.WriteStringField("v", preValue.String()) })
-			}
+			writeFunc(func() { writer.WriteStringField("v", preValue.String()) })
 		}
 	case mysql.TypeTiDBVectorFloat32:
 		rowValue := row.GetVectorFloat32(idx)
 		preValue := preRow.GetVectorFloat32(idx)
 		if rowValue.Compare(preValue) != 0 {
-			if preValue.IsZeroValue() {
-				writeFunc(func() { writer.WriteNullField("v") })
-			} else {
-				writeFunc(func() { writer.WriteStringField("v", preValue.String()) })
-			}
+			writeFunc(func() { writer.WriteStringField("v", preValue.String()) })
 		}
 	default:
 		rowDatum := row.GetDatum(idx, &col.FieldType)
@@ -440,5 +405,4 @@ func writeColumnFieldValueIfUpdated(
 			writeFunc(func() { writer.WriteAnyField("v", preRowValue) })
 		}
 	}
-	return
 }
