@@ -45,7 +45,10 @@ type parallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D
 	closed               atomic.Bool
 }
 
-func newParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](handler H, option Option) *parallelDynamicStream[A, P, T, D, H] {
+func newParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
+	component string,
+	handler H, option Option,
+) *parallelDynamicStream[A, P, T, D, H] {
 	option.fix()
 	var (
 		eventExtraSize int
@@ -72,7 +75,7 @@ func newParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T
 		s.memControl = newMemControl[A, P, T, D, H]()
 	}
 	for i := range option.StreamCount {
-		s.streams = append(s.streams, newStream(i, handler, option))
+		s.streams = append(s.streams, newStream(i, component, handler, option))
 	}
 	return s
 }
@@ -200,7 +203,8 @@ func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...Are
 	}
 
 	area := s.handler.GetArea(path, dest)
-	pi := newPathInfo[A, P, T, D, H](area, path, dest)
+	metricLabel := s.handler.GetMetricLabel(dest)
+	pi := newPathInfo[A, P, T, D, H](area, metricLabel, path, dest)
 
 	streamID := s._statAddPathCount.Load() % int64(len(s.streams))
 	pi.setStream(s.streams[streamID])

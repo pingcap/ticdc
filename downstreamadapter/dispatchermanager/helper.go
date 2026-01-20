@@ -170,7 +170,7 @@ func (w *Watermark) Set(watermark *heartbeatpb.Watermark) {
 func newSchedulerDispatcherRequestDynamicStream() dynstream.DynamicStream[int, common.GID, SchedulerDispatcherRequest, *DispatcherManager, *SchedulerDispatcherRequestHandler] {
 	option := dynstream.NewOption()
 	option.BatchCount = 1024
-	ds := dynstream.NewParallelDynamicStream(
+	ds := dynstream.NewParallelDynamicStream("scheduler-dispatcher-request",
 		&SchedulerDispatcherRequestHandler{}, option)
 	ds.Start()
 	return ds
@@ -251,6 +251,10 @@ func (h *SchedulerDispatcherRequestHandler) GetArea(path common.GID, dest *Dispa
 	return 0
 }
 
+func (h *SchedulerDispatcherRequestHandler) GetMetricLabel(dest *DispatcherManager) string {
+	return dest.changefeedID.String()
+}
+
 func (h *SchedulerDispatcherRequestHandler) GetTimestamp(event SchedulerDispatcherRequest) dynstream.Timestamp {
 	return 0
 }
@@ -273,7 +277,7 @@ func (h *SchedulerDispatcherRequestHandler) OnDrop(event SchedulerDispatcherRequ
 }
 
 func newHeartBeatResponseDynamicStream(dds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, dispatcher.Dispatcher, *dispatcher.DispatcherStatusHandler]) dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *DispatcherManager, *HeartBeatResponseHandler] {
-	ds := dynstream.NewParallelDynamicStream(
+	ds := dynstream.NewParallelDynamicStream("heartbeat-response",
 		newHeartBeatResponseHandler(dds))
 	ds.Start()
 	return ds
@@ -348,6 +352,10 @@ func (h *HeartBeatResponseHandler) GetArea(path common.GID, dest *DispatcherMana
 	return 0
 }
 
+func (h *HeartBeatResponseHandler) GetMetricLabel(dest *DispatcherManager) string {
+	return dest.changefeedID.String()
+}
+
 func (h *HeartBeatResponseHandler) GetTimestamp(event HeartBeatResponse) dynstream.Timestamp {
 	return 0
 }
@@ -362,7 +370,7 @@ func (h *HeartBeatResponseHandler) OnDrop(event HeartBeatResponse) interface{} {
 
 // checkpointTsMessageDynamicStream is responsible for push checkpointTsMessage to the corresponding table trigger event dispatcher.
 func newCheckpointTsMessageDynamicStream() dynstream.DynamicStream[int, common.GID, CheckpointTsMessage, *DispatcherManager, *CheckpointTsMessageHandler] {
-	ds := dynstream.NewParallelDynamicStream(
+	ds := dynstream.NewParallelDynamicStream("checkpoint-ts",
 		&CheckpointTsMessageHandler{})
 	ds.Start()
 	return ds
@@ -400,6 +408,10 @@ func (h *CheckpointTsMessageHandler) GetArea(path common.GID, dest *DispatcherMa
 	return 0
 }
 
+func (h *CheckpointTsMessageHandler) GetMetricLabel(dest *DispatcherManager) string {
+	return dest.changefeedID.String()
+}
+
 func (h *CheckpointTsMessageHandler) GetTimestamp(event CheckpointTsMessage) dynstream.Timestamp {
 	return 0
 }
@@ -414,7 +426,7 @@ func (h *CheckpointTsMessageHandler) OnDrop(event CheckpointTsMessage) interface
 
 // RedoResolvedTsForwardMessageDynamicStream is responsible for push RedoResolvedTsForwardMessage to the corresponding table trigger event dispatcher.
 func newRedoResolvedTsForwardMessageDynamicStream() dynstream.DynamicStream[int, common.GID, RedoResolvedTsForwardMessage, *DispatcherManager, *RedoResolvedTsForwardMessageHandler] {
-	ds := dynstream.NewParallelDynamicStream(
+	ds := dynstream.NewParallelDynamicStream("redo-resolved-ts",
 		&RedoResolvedTsForwardMessageHandler{})
 	ds.Start()
 	return ds
@@ -465,6 +477,10 @@ func (h *RedoResolvedTsForwardMessageHandler) GetArea(path common.GID, dest *Dis
 	return 0
 }
 
+func (h *RedoResolvedTsForwardMessageHandler) GetMetricLabel(dest *DispatcherManager) string {
+	return dest.changefeedID.String()
+}
+
 func (h *RedoResolvedTsForwardMessageHandler) GetTimestamp(event RedoResolvedTsForwardMessage) dynstream.Timestamp {
 	return 0
 }
@@ -479,7 +495,7 @@ func (h *RedoResolvedTsForwardMessageHandler) OnDrop(event RedoResolvedTsForward
 
 // newRedoMetaMessageDynamicStream is responsible for push RedoMetaMessage to the corresponding table trigger dispatcher.
 func newRedoMetaMessageDynamicStream() dynstream.DynamicStream[int, common.GID, RedoMetaMessage, *DispatcherManager, *RedoMetaMessageHandler] {
-	ds := dynstream.NewParallelDynamicStream(
+	ds := dynstream.NewParallelDynamicStream("redo-meta",
 		&RedoMetaMessageHandler{})
 	ds.Start()
 	return ds
@@ -521,6 +537,10 @@ func (h *RedoMetaMessageHandler) GetArea(path common.GID, dest *DispatcherManage
 	return 0
 }
 
+func (h *RedoMetaMessageHandler) GetMetricLabel(dest *DispatcherManager) string {
+	return dest.changefeedID.String()
+}
+
 func (h *RedoMetaMessageHandler) GetTimestamp(event RedoMetaMessage) dynstream.Timestamp {
 	return 0
 }
@@ -534,7 +554,7 @@ func (h *RedoMetaMessageHandler) OnDrop(event RedoMetaMessage) interface{} {
 }
 
 func newMergeDispatcherRequestDynamicStream() dynstream.DynamicStream[int, common.GID, MergeDispatcherRequest, *DispatcherManager, *MergeDispatcherRequestHandler] {
-	ds := dynstream.NewParallelDynamicStream(
+	ds := dynstream.NewParallelDynamicStream("merge-dispatcher-request",
 		&MergeDispatcherRequestHandler{})
 	ds.Start()
 	return ds
@@ -572,6 +592,10 @@ func (h *MergeDispatcherRequestHandler) GetSize(event MergeDispatcherRequest) in
 func (h *MergeDispatcherRequestHandler) IsPaused(event MergeDispatcherRequest) bool { return false }
 func (h *MergeDispatcherRequestHandler) GetArea(path common.GID, dest *DispatcherManager) int {
 	return 0
+}
+
+func (h *MergeDispatcherRequestHandler) GetMetricLabel(dest *DispatcherManager) string {
+	return dest.changefeedID.String()
 }
 
 func (h *MergeDispatcherRequestHandler) GetTimestamp(event MergeDispatcherRequest) dynstream.Timestamp {

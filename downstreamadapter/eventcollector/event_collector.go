@@ -174,8 +174,8 @@ func New(serverId node.ID) *EventCollector {
 	}
 
 	eventCollector.logCoordinatorClient = newLogCoordinatorClient(eventCollector)
-	eventCollector.ds = NewEventDynamicStream(eventCollector)
-	eventCollector.redoDs = NewEventDynamicStream(eventCollector)
+	eventCollector.ds = NewEventDynamicStream(false)
+	eventCollector.redoDs = NewEventDynamicStream(true)
 	eventCollector.mc.RegisterHandler(messaging.EventCollectorTopic, eventCollector.MessageCenterHandler)
 	eventCollector.mc.RegisterHandler(messaging.RedoEventCollectorTopic, eventCollector.RedoMessageCenterHandler)
 

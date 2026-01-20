@@ -142,6 +142,10 @@ func (h *regionEventHandler) GetArea(path SubscriptionID, dest *subscribedSpan) 
 	return 0
 }
 
+func (h *regionEventHandler) GetMetricLabel(_ *subscribedSpan) string {
+	return "log-puller"
+}
+
 func (h *regionEventHandler) GetTimestamp(event regionEvent) dynstream.Timestamp {
 	if event.entries != nil && event.entries.Entries != nil {
 		state := event.mustFirstState()
