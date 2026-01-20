@@ -200,7 +200,8 @@ func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...Are
 	}
 
 	area := s.handler.GetArea(path, dest)
-	pi := newPathInfo[A, P, T, D, H](area, path, dest)
+	metricLabel := s.handler.GetMetricLabel(dest)
+	pi := newPathInfo[A, P, T, D, H](area, metricLabel, path, dest)
 
 	streamID := s._statAddPathCount.Load() % int64(len(s.streams))
 	pi.setStream(s.streams[streamID])

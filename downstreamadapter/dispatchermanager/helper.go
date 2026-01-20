@@ -248,6 +248,10 @@ func (h *SchedulerDispatcherRequestHandler) GetArea(path common.GID, dest *Dispa
 	return 0
 }
 
+func (h *SchedulerDispatcherRequestHandler) GetMetricLabel(dest *DispatcherManager) string {
+	return dest.changefeedID.String()
+}
+
 func (h *SchedulerDispatcherRequestHandler) GetTimestamp(event SchedulerDispatcherRequest) dynstream.Timestamp {
 	return 0
 }
@@ -345,6 +349,10 @@ func (h *HeartBeatResponseHandler) GetArea(path common.GID, dest *DispatcherMana
 	return 0
 }
 
+func (h *HeartBeatResponseHandler) GetMetricLabel(dest *DispatcherManager) string {
+	return dest.changefeedID.String()
+}
+
 func (h *HeartBeatResponseHandler) GetTimestamp(event HeartBeatResponse) dynstream.Timestamp {
 	return 0
 }
@@ -395,6 +403,10 @@ func (h *CheckpointTsMessageHandler) GetSize(event CheckpointTsMessage) int   { 
 func (h *CheckpointTsMessageHandler) IsPaused(event CheckpointTsMessage) bool { return false }
 func (h *CheckpointTsMessageHandler) GetArea(path common.GID, dest *DispatcherManager) int {
 	return 0
+}
+
+func (h *CheckpointTsMessageHandler) GetMetricLabel(dest *DispatcherManager) string {
+	return dest.changefeedID.String()
 }
 
 func (h *CheckpointTsMessageHandler) GetTimestamp(event CheckpointTsMessage) dynstream.Timestamp {
@@ -462,6 +474,10 @@ func (h *RedoResolvedTsForwardMessageHandler) GetArea(path common.GID, dest *Dis
 	return 0
 }
 
+func (h *RedoResolvedTsForwardMessageHandler) GetMetricLabel(dest *DispatcherManager) string {
+	return dest.changefeedID.String()
+}
+
 func (h *RedoResolvedTsForwardMessageHandler) GetTimestamp(event RedoResolvedTsForwardMessage) dynstream.Timestamp {
 	return 0
 }
@@ -516,6 +532,10 @@ func (h *RedoMetaMessageHandler) GetArea(path common.GID, dest *DispatcherManage
 	return 0
 }
 
+func (h *RedoMetaMessageHandler) GetMetricLabel(dest *DispatcherManager) string {
+	return dest.changefeedID.String()
+}
+
 func (h *RedoMetaMessageHandler) GetTimestamp(event RedoMetaMessage) dynstream.Timestamp {
 	return 0
 }
@@ -567,6 +587,10 @@ func (h *MergeDispatcherRequestHandler) GetSize(event MergeDispatcherRequest) in
 func (h *MergeDispatcherRequestHandler) IsPaused(event MergeDispatcherRequest) bool { return false }
 func (h *MergeDispatcherRequestHandler) GetArea(path common.GID, dest *DispatcherManager) int {
 	return 0
+}
+
+func (h *MergeDispatcherRequestHandler) GetMetricLabel(dest *DispatcherManager) string {
+	return dest.changefeedID.String()
 }
 
 func (h *MergeDispatcherRequestHandler) GetTimestamp(event MergeDispatcherRequest) dynstream.Timestamp {

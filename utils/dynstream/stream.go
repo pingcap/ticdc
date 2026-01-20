@@ -15,7 +15,6 @@ package dynstream
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -292,9 +291,9 @@ Loop:
 					continue Loop
 				}
 
-				metrics.DynamicStreamBatchDuration.WithLabelValues(path.areaStr).Observe(float64(time.Since(start).Seconds()))
-				metrics.DynamicStreamBatchCount.WithLabelValues(path.areaStr).Observe(float64(len(eventBuf)))
-				metrics.DynamicStreamBatchBytes.WithLabelValues(path.areaStr).Observe(float64(nBytes))
+				metrics.DynamicStreamBatchDuration.WithLabelValues(path.metricLabel).Observe(float64(time.Since(start).Seconds()))
+				metrics.DynamicStreamBatchCount.WithLabelValues(path.metricLabel).Observe(float64(len(eventBuf)))
+				metrics.DynamicStreamBatchBytes.WithLabelValues(path.metricLabel).Observe(float64(nBytes))
 
 				path.lastHandleEventTs.Store(uint64(s.handler.GetTimestamp(eventBuf[0])))
 
@@ -323,7 +322,10 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	path P
 	dest D
 
-	areaStr string
+	// metricLabel is used as the prometheus "module" label for batch metrics.
+	// It is initialized to the string representation of area and can be overridden
+	// by handler.GetMetricLabel(dest) when adding the path.
+	metricLabel string
 
 	// The current stream this path belongs to.
 	stream *stream[A, P, T, D, H]
@@ -346,10 +348,12 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	lastHandleEventTs atomic.Uint64
 }
 
-func newPathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](area A, path P, dest D) *pathInfo[A, P, T, D, H] {
+func newPathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
+	area A, metricLabel string, path P, dest D,
+) *pathInfo[A, P, T, D, H] {
 	pi := &pathInfo[A, P, T, D, H]{
 		area:         area,
-		areaStr:      fmt.Sprint(area),
+		metricLabel:  metricLabel,
 		path:         path,
 		dest:         dest,
 		pendingQueue: deque.NewDeque[eventWrap[A, P, T, D, H]](BlockLenInPendingQueue),

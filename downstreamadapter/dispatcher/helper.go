@@ -368,6 +368,10 @@ func (h *DispatcherStatusHandler) GetArea(path common.DispatcherID, dest Dispatc
 	return dest.GetChangefeedID().ID()
 }
 
+func (h *DispatcherStatusHandler) GetMetricLabel(dest Dispatcher) string {
+	return dest.GetChangefeedID().String()
+}
+
 func (h *DispatcherStatusHandler) GetTimestamp(event DispatcherStatusWithID) dynstream.Timestamp {
 	if event.GetDispatcherStatus().Action != nil {
 		return dynstream.Timestamp(event.GetDispatcherStatus().Action.CommitTs)
