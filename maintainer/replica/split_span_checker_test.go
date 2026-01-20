@@ -116,7 +116,7 @@ func TestSplitTableSpanIntoMultiple_Properties(t *testing.T) {
 
 func TestSplitSpanChecker_AddReplica(t *testing.T) {
 	testutil.SetUpTestServices()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold:          util.AddressOf(1000),
@@ -152,7 +152,7 @@ func TestSplitSpanChecker_AddReplica(t *testing.T) {
 
 func TestSplitSpanChecker_RemoveReplica(t *testing.T) {
 	testutil.SetUpTestServices()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold:          util.AddressOf(1000),
@@ -197,7 +197,7 @@ func TestSplitSpanChecker_RemoveReplica(t *testing.T) {
 
 func TestSplitSpanChecker_UpdateStatus_Traffic(t *testing.T) {
 	testutil.SetUpTestServices()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold:          util.AddressOf(1000),
@@ -274,7 +274,7 @@ func TestSplitSpanChecker_UpdateStatus_Traffic(t *testing.T) {
 
 func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
 	testutil.SetUpTestServices()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		EnableTableAcrossNodes:     util.AddressOf(true),
@@ -328,7 +328,7 @@ func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
 
 func TestSplitSpanChecker_UpdateStatus_NonWorking(t *testing.T) {
 	testutil.SetUpTestServices()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold:          util.AddressOf(1000),
@@ -370,7 +370,7 @@ func TestSplitSpanChecker_UpdateStatus_NonWorking(t *testing.T) {
 
 func TestSplitSpanChecker_ChooseSplitSpans_Traffic(t *testing.T) {
 	testutil.SetUpTestServices()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold:          util.AddressOf(1000),
@@ -426,7 +426,7 @@ func TestSplitSpanChecker_ChooseSplitSpans_Traffic(t *testing.T) {
 
 func TestSplitSpanChecker_ChooseSplitSpans_Region(t *testing.T) {
 	testutil.SetUpTestServices()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold:          util.AddressOf(1000),
@@ -478,7 +478,7 @@ func TestSplitSpanChecker_ChooseSplitSpans_Region(t *testing.T) {
 
 func TestSplitSpanChecker_CheckMergeWhole_SingleNode(t *testing.T) {
 	testutil.SetUpTestServices()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold:          util.AddressOf(2000),
@@ -524,7 +524,7 @@ func TestSplitSpanChecker_CheckMergeWhole_SingleNode(t *testing.T) {
 
 func TestSplitSpanChecker_CheckMergeWhole_MultiNode(t *testing.T) {
 	testutil.SetUpTestServices()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold:     util.AddressOf(2000),
@@ -571,7 +571,7 @@ func TestSplitSpanChecker_CheckMergeWhole_MultiNode(t *testing.T) {
 
 func TestSplitSpanChecker_CheckMergeWhole_ThresholdNotMet(t *testing.T) {
 	testutil.SetUpTestServices()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold:          util.AddressOf(1000),
@@ -615,7 +615,7 @@ func TestSplitSpanChecker_CheckMergeWhole_ThresholdNotMet(t *testing.T) {
 
 func TestSplitSpanChecker_CheckBalanceTraffic_Balance(t *testing.T) {
 	testutil.SetUpTestServices()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold:          util.AddressOf(1000),
@@ -681,7 +681,7 @@ func TestSplitSpanChecker_CheckBalanceTraffic_Balance(t *testing.T) {
 
 func TestSplitSpanChecker_CheckBalanceTraffic_NoBalanceNeeded(t *testing.T) {
 	testutil.SetUpTestServices()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold:     util.AddressOf(1000),
@@ -728,7 +728,7 @@ func TestSplitSpanChecker_CheckBalanceTraffic_NoBalanceNeeded(t *testing.T) {
 
 func TestSplitSpanChecker_CheckBalanceTraffic_SplitIfNoMove(t *testing.T) {
 	testutil.SetUpTestServices()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold:     util.AddressOf(1000),
@@ -783,7 +783,7 @@ func TestSplitSpanChecker_CheckBalanceTraffic_SplitIfNoMove(t *testing.T) {
 
 func TestSplitSpanChecker_CheckBalanceTraffic_SingleNode(t *testing.T) {
 	testutil.SetUpTestServices()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold:     util.AddressOf(1000),
@@ -828,7 +828,7 @@ func TestSplitSpanChecker_CheckBalanceTraffic_SingleNode(t *testing.T) {
 
 func TestSplitSpanChecker_CheckBalanceTraffic_TrafficFluctuation(t *testing.T) {
 	testutil.SetUpTestServices()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold:     util.AddressOf(1000),
@@ -901,7 +901,7 @@ func TestSplitSpanChecker_CheckBalanceTraffic_TrafficFluctuation(t *testing.T) {
 
 func TestSplitSpanChecker_ChooseMergedSpans_LargeLag(t *testing.T) {
 	testutil.SetUpTestServices()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold:     util.AddressOf(1000),
@@ -939,7 +939,7 @@ func TestSplitSpanChecker_ChooseMergedSpans_LargeLag(t *testing.T) {
 
 func TestSplitSpanChecker_ChooseMergedSpans_Continuous(t *testing.T) {
 	testutil.SetUpTestServices()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold:     util.AddressOf(1000),
@@ -996,7 +996,7 @@ func TestSplitSpanChecker_ChooseMergedSpans_Continuous(t *testing.T) {
 
 func TestSplitSpanChecker_ChooseMoveSpans_SimpleMove(t *testing.T) {
 	testutil.SetUpTestServices()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold:     util.AddressOf(1000),
@@ -1065,7 +1065,7 @@ func TestSplitSpanChecker_ChooseMoveSpans_SimpleMove(t *testing.T) {
 
 func TestSplitSpanChecker_ChooseMoveSpans_ExchangeMove(t *testing.T) {
 	testutil.SetUpTestServices()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold:     util.AddressOf(1000),
@@ -1127,7 +1127,7 @@ func TestSplitSpanChecker_ChooseMoveSpans_ExchangeMove(t *testing.T) {
 
 func TestSplitSpanChecker_Check_FullFlow(t *testing.T) {
 	testutil.SetUpTestServices()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold:     util.AddressOf(1000),
@@ -1203,7 +1203,7 @@ func TestSplitSpanChecker_Check_FullFlow(t *testing.T) {
 
 func TestSplitSpanChecker_Check_FullFlow_WriteThresholdZero(t *testing.T) {
 	testutil.SetUpTestServices()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold:     util.AddressOf(0), // No write threshold
@@ -1279,7 +1279,7 @@ func TestSplitSpanChecker_Check_FullFlow_WriteThresholdZero(t *testing.T) {
 
 func TestSplitSpanChecker_Check_FullFlow_RegionThresholdZero(t *testing.T) {
 	testutil.SetUpTestServices()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold:     util.AddressOf(1000),
@@ -1355,7 +1355,7 @@ func TestSplitSpanChecker_Check_FullFlow_RegionThresholdZero(t *testing.T) {
 
 func TestSplitSpanChecker_Check_PerformanceWithManySpans(t *testing.T) {
 	testutil.SetUpTestServices()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	spanCount := 10000
 	regionCount := 3

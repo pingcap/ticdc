@@ -270,7 +270,7 @@ func (c *server) setPreServices(ctx context.Context) error {
 
 	// Set DispatcherOrchestrator to Global Context
 	dispatcherOrchestrator := dispatcherorchestrator.New()
-	dispatcherOrchestrator.Run(ctx)
+	dispatcherOrchestrator.Run()
 	appctx.SetService(appctx.DispatcherOrchestrator, dispatcherOrchestrator)
 	c.preServices = append(c.preServices, dispatcherOrchestrator)
 
