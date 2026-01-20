@@ -22,7 +22,9 @@ import (
 	mock_changefeed "github.com/pingcap/ticdc/coordinator/changefeed/mock"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
@@ -35,9 +37,13 @@ func TestController_StopChangefeed(t *testing.T) {
 	self := node.NewInfo("localhost:8300", "")
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	nodeManager.GetAliveNodes()[self.ID] = self
-	oc := NewOperatorController(nil, node.NewInfo("localhost:8300", ""), changefeedDB,
-		backend, nodeManager, 10)
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+
+	oc := NewOperatorController(self, changefeedDB, backend, 10)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),
@@ -63,9 +69,8 @@ func TestController_AddOperator(t *testing.T) {
 	self := node.NewInfo("localhost:8300", "")
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	nodeManager.GetAliveNodes()[self.ID] = self
-	oc := NewOperatorController(nil, node.NewInfo("localhost:8300", ""), changefeedDB,
-		backend, nodeManager, 10)
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	oc := NewOperatorController(self, changefeedDB, backend, 10)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),
@@ -76,7 +81,7 @@ func TestController_AddOperator(t *testing.T) {
 
 	require.True(t, oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf, "n2")))
 	require.False(t, oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf, "n2")))
-	cf2ID := common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceNamme)
+	cf2ID := common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceName)
 	cf2 := changefeed.NewChangefeed(cf2ID, &config.ChangeFeedInfo{
 		ChangefeedID: cf2ID,
 		Config:       config.GetDefaultReplicaConfig(),
@@ -100,10 +105,10 @@ func TestController_StopChangefeedDuringAddOperator(t *testing.T) {
 	self := node.NewInfo("localhost:8300", "")
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	nodeManager.GetAliveNodes()[self.ID] = self
-	oc := NewOperatorController(nil, self, changefeedDB, backend, nodeManager, 10)
+	oc := NewOperatorController(self, changefeedDB, backend, 10)
 
 	// Create changefeed and add it to absent state (simulating a newly created changefeed)
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),

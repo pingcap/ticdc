@@ -186,6 +186,7 @@ func TestApplySinkURIParamsToConfig(t *testing.T) {
 	t.Parallel()
 
 	expected := New()
+	expected.workerCountSpecified = true
 	expected.WorkerCount = 64
 	expected.MaxTxnRow = 20
 	expected.MaxMultiUpdateRowCount = 80
@@ -214,6 +215,27 @@ func TestApplySinkURIParamsToConfig(t *testing.T) {
 
 	expected.sinkURI = uri
 	require.Equal(t, expected, cfg)
+}
+
+func TestDefaultWorkerCountByDownstream(t *testing.T) {
+	t.Parallel()
+
+	cfg := New()
+	cfg.IsTiDB = true
+	cfg.setWorkerCountByDownstream()
+	require.Equal(t, DefaultTiDBWorkerCount, cfg.WorkerCount)
+
+	cfg = New()
+	cfg.IsTiDB = false
+	cfg.setWorkerCountByDownstream()
+	require.Equal(t, DefaultMySQLWorkerCount, cfg.WorkerCount)
+
+	cfg = New()
+	cfg.workerCountSpecified = true
+	cfg.WorkerCount = 123
+	cfg.IsTiDB = false
+	cfg.setWorkerCountByDownstream()
+	require.Equal(t, 123, cfg.WorkerCount)
 }
 
 func TestParseSinkURIOverride(t *testing.T) {

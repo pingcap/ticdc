@@ -37,7 +37,7 @@ import (
 
 const (
 	emitBatch             = mysql.DefaultMaxTxnRow
-	defaultReaderChanSize = mysql.DefaultWorkerCount * emitBatch
+	defaultReaderChanSize = mysql.DefaultTiDBWorkerCount * emitBatch
 	maxTotalMemoryUsage   = 80.0
 	maxWaitDuration       = time.Minute * 2
 )

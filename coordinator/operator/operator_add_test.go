@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/coordinator/changefeed"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,4 +42,20 @@ func TestAddMaintainerOperator_OnTaskRemoved(t *testing.T) {
 	require.True(t, op.finished.Load())
 
 	require.Nil(t, op.Schedule())
+}
+
+func TestAddMaintainerOperator_CheckRequiresBootstrapDone(t *testing.T) {
+	op := NewAddMaintainerOperator(nil, &changefeed.Changefeed{}, "n1")
+
+	op.Check("n1", &heartbeatpb.MaintainerStatus{
+		State:         heartbeatpb.ComponentState_Working,
+		BootstrapDone: false,
+	})
+	require.False(t, op.finished.Load())
+
+	op.Check("n1", &heartbeatpb.MaintainerStatus{
+		State:         heartbeatpb.ComponentState_Working,
+		BootstrapDone: true,
+	})
+	require.True(t, op.finished.Load())
 }

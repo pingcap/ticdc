@@ -708,7 +708,7 @@ func SetupEncoderAndSchemaRegistry4Testing(
 	}
 
 	return &BatchEncoder{
-		keyspace: commonType.DefaultKeyspaceNamme,
+		keyspace: commonType.DefaultKeyspaceName,
 		schemaM:  schemaM,
 		result:   make([]*common.Message, 0, 1),
 		config:   config,

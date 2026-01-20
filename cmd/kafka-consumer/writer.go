@@ -130,7 +130,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 	log.Info("event router created", zap.Any("protocol", o.protocol),
 		zap.Any("topic", o.topic), zap.Any("dispatcherRules", o.sinkConfig.DispatchRules))
 
-	changefeedID := commonType.NewChangeFeedIDWithName("kafka-consumer", commonType.DefaultKeyspaceNamme)
+	changefeedID := commonType.NewChangeFeedIDWithName("kafka-consumer", commonType.DefaultKeyspaceName)
 	cfg := &config.ChangefeedConfig{
 		ChangefeedID: changefeedID,
 		SinkURI:      o.downstreamURI,
@@ -523,6 +523,14 @@ func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionP
 	if group == nil {
 		group = util.NewEventsGroup(progress.partition, tableID)
 		progress.eventsGroup[tableID] = group
+	}
+	if commitTs < progress.watermark {
+		log.Warn("DML Event fallback row, since less than the partition watermark, ignore it",
+			zap.Int64("tableID", tableID), zap.Int32("partition", group.Partition),
+			zap.Uint64("commitTs", commitTs), zap.Any("offset", offset),
+			zap.Uint64("watermark", progress.watermark), zap.Any("watermarkOffset", progress.watermarkOffset),
+			zap.String("schema", schema), zap.String("table", table))
+		return
 	}
 	if commitTs >= group.HighWatermark {
 		group.Append(dml, false)
