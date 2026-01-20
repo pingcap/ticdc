@@ -335,6 +335,8 @@ func GenerateDSN(ctx context.Context, cfg *Config) (string, error) {
 	dsn.Params["sql_mode"] = strconv.Quote(dsn.Params["sql_mode"])
 
 	cfg.IsTiDB = CheckIsTiDB(ctx, testDB)
+	cfg.setWorkerCountByDownstream()
+	log.Info("set worker count for mysql sink", zap.Int("workerCount", cfg.WorkerCount))
 
 	if cfg.IsTiDB {
 		// check if tidb_cdc_write_source is supported
@@ -393,17 +395,6 @@ func needSwitchDB(event *commonEvent.DDLEvent) bool {
 		return false
 	}
 	return true
-}
-
-func needWaitAsyncExecDone(t timodel.ActionType) bool {
-	switch t {
-	case timodel.ActionCreateTable, timodel.ActionCreateTables:
-		return false
-	case timodel.ActionCreateSchema:
-		return false
-	default:
-		return true
-	}
 }
 
 func getTiDBVersion(db *sql.DB) version.ServerInfo {

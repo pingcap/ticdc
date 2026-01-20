@@ -313,7 +313,7 @@ func TestMaintainerSchedule(t *testing.T) {
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[n.ID] = n
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	dispatcherManager := MockDispatcherManager(mc, n.ID)
 
 	wg := &sync.WaitGroup{}
@@ -344,9 +344,12 @@ func TestMaintainerSchedule(t *testing.T) {
 		})
 
 	// send bootstrap message
-	maintainer.sendMessages(maintainer.bootstrapper.HandleNewNodes(
-		[]*node.Info{n},
-	))
+
+	nodes := make(map[node.ID]*node.Info)
+	nodes[n.ID] = n
+
+	_, _, messages, _ := maintainer.bootstrapper.HandleNodesChange(nodes)
+	maintainer.sendMessages(messages)
 
 	time.Sleep(time.Second * time.Duration(sleepTime))
 

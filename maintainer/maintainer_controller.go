@@ -38,7 +38,10 @@ import (
 // Controller schedules and balance tables
 // there are 3 main components in the controller, scheduler, span controller and operator controller
 type Controller struct {
+	// bootstrapped set to true after initialize all necessary resources,
+	// it's not affected by new node join the cluster.
 	bootstrapped bool
+	startTs      uint64
 
 	schedulerController    *scheduler.Controller
 	operatorController     *operator.Controller
@@ -53,10 +56,8 @@ type Controller struct {
 
 	splitter *split.Splitter
 
-	startCheckpointTs uint64
-
-	cfConfig     *config.ReplicaConfig
-	changefeedID common.ChangeFeedID
+	replicaConfig *config.ReplicaConfig
+	changefeedID  common.ChangeFeedID
 
 	taskPool threadpool.ThreadPool
 
@@ -74,7 +75,7 @@ type Controller struct {
 func NewController(changefeedID common.ChangeFeedID,
 	checkpointTs uint64,
 	taskPool threadpool.ThreadPool,
-	cfConfig *config.ReplicaConfig,
+	replicaConfig *config.ReplicaConfig,
 	ddlSpan, redoDDLSpan *replica.SpanReplication,
 	batchSize int, balanceInterval time.Duration,
 	refresher *replica.RegionCountRefresher,
@@ -83,19 +84,21 @@ func NewController(changefeedID common.ChangeFeedID,
 ) *Controller {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 
-	enableTableAcrossNodes := false
-	var splitter *split.Splitter
-	if cfConfig != nil && util.GetOrZero(cfConfig.Scheduler.EnableTableAcrossNodes) {
+	var (
+		enableTableAcrossNodes bool
+		splitter               *split.Splitter
+	)
+	if replicaConfig != nil && util.GetOrZero(replicaConfig.Scheduler.EnableTableAcrossNodes) {
 		enableTableAcrossNodes = true
-		splitter = split.NewSplitter(keyspaceMeta.ID, changefeedID, cfConfig.Scheduler)
+		splitter = split.NewSplitter(keyspaceMeta.ID, changefeedID, replicaConfig.Scheduler)
 	}
 
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 
 	// Create span controller
 	var schedulerCfg *config.ChangefeedSchedulerConfig
-	if cfConfig != nil {
-		schedulerCfg = cfConfig.Scheduler
+	if replicaConfig != nil {
+		schedulerCfg = replicaConfig.Scheduler
 	}
 	spanController := span.NewController(changefeedID, ddlSpan, splitter, schedulerCfg, refresher, keyspaceMeta.ID, common.DefaultMode)
 
@@ -115,7 +118,7 @@ func NewController(changefeedID common.ChangeFeedID,
 	)
 
 	return &Controller{
-		startCheckpointTs:      checkpointTs,
+		startTs:                checkpointTs,
 		changefeedID:           changefeedID,
 		bootstrapped:           false,
 		schedulerController:    sc,
@@ -126,7 +129,7 @@ func NewController(changefeedID common.ChangeFeedID,
 		messageCenter:          mc,
 		nodeManager:            nodeManager,
 		taskPool:               taskPool,
-		cfConfig:               cfConfig,
+		replicaConfig:          replicaConfig,
 		enableTableAcrossNodes: enableTableAcrossNodes,
 		batchSize:              batchSize,
 		splitter:               splitter,

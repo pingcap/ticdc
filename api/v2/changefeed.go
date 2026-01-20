@@ -118,7 +118,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
-	ok, err := isBootstrapped(co)
+	ok, err := isInitialized(co)
 	if err != nil || !ok {
 		_ = c.Error(err)
 		return
@@ -313,7 +313,7 @@ func (h *OpenAPIV2) ListChangeFeeds(c *gin.Context) {
 		return
 	}
 
-	ok, err := isBootstrapped(co)
+	ok, err := isInitialized(co)
 	if err != nil || !ok {
 		_ = c.Error(err)
 		return
@@ -440,7 +440,7 @@ func (h *OpenAPIV2) GetChangeFeed(c *gin.Context) {
 		return
 	}
 
-	ok, err := isBootstrapped(co)
+	ok, err := isInitialized(co)
 	if err != nil || !ok {
 		_ = c.Error(err)
 		return
@@ -536,7 +536,7 @@ func (h *OpenAPIV2) DeleteChangefeed(c *gin.Context) {
 		return
 	}
 
-	ok, err := isBootstrapped(co)
+	ok, err := isInitialized(co)
 	if err != nil || !ok {
 		_ = c.Error(err)
 		return
@@ -586,7 +586,7 @@ func (h *OpenAPIV2) PauseChangefeed(c *gin.Context) {
 		return
 	}
 
-	ok, err := isBootstrapped(co)
+	ok, err := isInitialized(co)
 	if err != nil || !ok {
 		_ = c.Error(err)
 		return
@@ -652,7 +652,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		return
 	}
 
-	ok, err := isBootstrapped(co)
+	ok, err := isInitialized(co)
 	if err != nil || !ok {
 		_ = c.Error(err)
 		return
@@ -711,6 +711,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 
 	err = co.ResumeChangefeed(ctx, cfInfo.ChangefeedID, newCheckpointTs, cfg.OverwriteCheckpointTs != 0)
 	if err != nil {
+		needRemoveGCSafePoint = true
 		_ = c.Error(err)
 		return
 	}
@@ -760,7 +761,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		return
 	}
 
-	ok, err := isBootstrapped(co)
+	ok, err := isInitialized(co)
 	if err != nil || !ok {
 		_ = c.Error(err)
 		return
@@ -1354,7 +1355,7 @@ func (h *OpenAPIV2) status(c *gin.Context) {
 		return
 	}
 
-	ok, err := isBootstrapped(co)
+	ok, err := isInitialized(co)
 	if err != nil || !ok {
 		_ = c.Error(err)
 		return
@@ -1406,7 +1407,7 @@ func (h *OpenAPIV2) synced(c *gin.Context) {
 		return
 	}
 
-	ok, err := isBootstrapped(co)
+	ok, err := isInitialized(co)
 	if err != nil || !ok {
 		_ = c.Error(err)
 		return
@@ -1541,12 +1542,12 @@ func getVerifiedTables(
 
 func GetKeyspaceValueWithDefault(c *gin.Context) string {
 	if kerneltype.IsClassic() {
-		return common.DefaultKeyspaceNamme
+		return common.DefaultKeyspaceName
 	}
 
 	keyspace := c.Query(api.APIOpVarKeyspace)
 	if keyspace == "" {
-		keyspace = common.DefaultKeyspaceNamme
+		keyspace = common.DefaultKeyspaceName
 	}
 	return keyspace
 }
