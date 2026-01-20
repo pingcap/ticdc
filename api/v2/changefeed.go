@@ -501,11 +501,14 @@ func shouldShowRunningError(state config.FeedState) bool {
 	}
 }
 
-func toAPIModelFunc(tbls []string) []TableName {
+func toAPIModelFunc(tbls []common.TableName) []TableName {
 	var apiModels []TableName
 	for _, tbl := range tbls {
 		apiModels = append(apiModels, TableName{
-			Table: tbl,
+			Schema:      tbl.Schema,
+			Table:       tbl.Table,
+			TableID:     tbl.TableID,
+			IsPartition: tbl.IsPartition,
 		})
 	}
 	return apiModels
@@ -757,9 +760,9 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 	}()
 
 	var (
-		eligibleTables   []string
-		ineligibleTables []string
-		allTables        []string
+		eligibleTables   []common.TableName
+		ineligibleTables []common.TableName
+		allTables        []common.TableName
 	)
 	if overwriteCheckpointTs {
 		sinkURIParsed, err := url.Parse(cfInfo.SinkURI)
@@ -905,9 +908,9 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 	}
 
 	var (
-		ineligibleTables []string
-		eligibleTables   []string
-		allTables        []string
+		ineligibleTables []common.TableName
+		eligibleTables   []common.TableName
+		allTables        []common.TableName
 	)
 	if configUpdated || sinkURIUpdated {
 		// verify replicaConfig
@@ -1600,7 +1603,7 @@ func getVerifiedTables(
 	replicaConfig *config.ReplicaConfig,
 	storage tidbkv.Storage, startTs uint64,
 	scheme string, topic string, protocol config.Protocol,
-) ([]string, []string, []string, error) {
+) ([]common.TableName, []common.TableName, []common.TableName, error) {
 	f, err := filter.NewFilter(replicaConfig.Filter, "", util.GetOrZero(replicaConfig.CaseSensitive), util.GetOrZero(replicaConfig.ForceReplicate))
 	if err != nil {
 		return nil, nil, nil, err
