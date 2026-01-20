@@ -16,6 +16,7 @@ package cloudstorage
 import (
 	"context"
 
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/hash"
@@ -39,7 +40,17 @@ type eventFragment struct {
 	encodedMsgs []*common.Message
 }
 
-func newEventFragment(seq uint64, version cloudstorage.VersionedTableName, event *commonEvent.DMLEvent) eventFragment {
+func newEventFragment(seq uint64, event *commonEvent.DMLEvent) eventFragment {
+	version := cloudstorage.VersionedTableName{
+		TableNameWithPhysicTableID: commonType.TableName{
+			Schema:      event.TableInfo.GetSchemaName(),
+			Table:       event.TableInfo.GetTableName(),
+			TableID:     event.PhysicalTableID,
+			IsPartition: event.TableInfo.IsPartitionTable(),
+		},
+		TableInfoVersion: event.TableInfoVersion,
+		DispatcherID:     event.GetDispatcherID(),
+	}
 	return eventFragment{
 		seqNumber:      seq,
 		versionedTable: version,

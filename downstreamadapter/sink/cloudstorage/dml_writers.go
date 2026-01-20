@@ -102,20 +102,10 @@ func (d *dmlWriters) Run(ctx context.Context) error {
 }
 
 func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
-	tbl := cloudstorage.VersionedTableName{
-		TableNameWithPhysicTableID: commonType.TableName{
-			Schema:      event.TableInfo.GetSchemaName(),
-			Table:       event.TableInfo.GetTableName(),
-			TableID:     event.PhysicalTableID,
-			IsPartition: event.TableInfo.IsPartitionTable(),
-		},
-		TableInfoVersion: event.TableInfoVersion,
-		DispatcherID:     event.GetDispatcherID(),
-	}
 	seq := atomic.AddUint64(&d.lastSeqNum, 1)
 	_ = d.statistics.RecordBatchExecution(func() (int, int64, error) {
 		// emit a TxnCallbackableEvent encoupled with a sequence number starting from one.
-		d.msgCh.Push(newEventFragment(seq, tbl, event))
+		d.msgCh.Push(newEventFragment(seq, event))
 		return int(event.Len()), event.GetSize(), nil
 	})
 }
