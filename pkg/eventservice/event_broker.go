@@ -180,6 +180,10 @@ func newEventBroker(
 		return c.metricsCollector.Run(ctx)
 	})
 
+	g.Go(func() error {
+		return c.refreshMinSentResolvedTs(ctx)
+	})
+
 	log.Info("new event broker created", zap.Uint64("id", id), zap.Uint64("scanLimitInBytes", c.scanLimitInBytes))
 	return c
 }
@@ -252,6 +256,23 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 		zap.Int64("EventTableID", e.GetTableID()),
 		zap.String("query", e.Query), zap.Uint64("commitTs", e.FinishedTs),
 		zap.Uint64("seq", e.Seq), zap.Int64("mode", d.info.GetMode()))
+}
+
+func (c *eventBroker) refreshMinSentResolvedTs(ctx context.Context) error {
+	ticker := time.NewTicker(time.Second * 1)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-ticker.C:
+			c.changefeedMap.Range(func(key, value interface{}) bool {
+				status := value.(*changefeedStatus)
+				status.refreshMinSentResolvedTs()
+				return true
+			})
+		}
+	}
 }
 
 func (c *eventBroker) sendSignalResolvedTs(d *dispatcherStat) {
@@ -1022,7 +1043,6 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	stat := statPtr.(*atomic.Pointer[dispatcherStat]).Load()
 
 	stat.changefeedStat.removeDispatcher(id)
-	stat.changefeedStat.refreshMinCheckpointTs()
 	c.metricsCollector.metricDispatcherCount.Dec()
 	changefeedID := dispatcherInfo.GetChangefeedID()
 
@@ -1176,9 +1196,6 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 		// Update the last received heartbeat time to the current time.
 		dispatcher.lastReceivedHeartbeatTime.Store(now)
 		changedChangefeeds[dispatcher.changefeedStat] = struct{}{}
-	}
-	for status := range changedChangefeeds {
-		status.refreshMinCheckpointTs()
 	}
 	c.sendDispatcherResponse(responseMap)
 }

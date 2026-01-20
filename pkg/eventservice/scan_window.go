@@ -145,25 +145,25 @@ func (c *changefeedStatus) maxScanInterval() time.Duration {
 	return maxScanInterval
 }
 
-func (c *changefeedStatus) refreshMinCheckpointTs() {
-	minCheckpoint := ^uint64(0)
+func (c *changefeedStatus) refreshMinSentResolvedTs() {
+	minSentResolvedTs := ^uint64(0)
 	c.dispatchers.Range(func(_ any, value any) bool {
 		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
 		if dispatcher == nil || dispatcher.isRemoved.Load() || dispatcher.seq.Load() == 0 {
 			return true
 		}
-		checkpoint := dispatcher.checkpointTs.Load()
-		if checkpoint < minCheckpoint {
-			minCheckpoint = checkpoint
+		sentResolvedTs := dispatcher.sentResolvedTs.Load()
+		if sentResolvedTs < minSentResolvedTs {
+			minSentResolvedTs = sentResolvedTs
 		}
 		return true
 	})
 
-	if minCheckpoint == ^uint64(0) {
+	if minSentResolvedTs == ^uint64(0) {
 		c.minCheckpointTs.Store(0)
 		return
 	}
-	c.minCheckpointTs.Store(minCheckpoint)
+	c.minCheckpointTs.Store(minSentResolvedTs)
 }
 
 func (c *changefeedStatus) getScanMaxTs() uint64 {
