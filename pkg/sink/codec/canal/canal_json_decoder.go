@@ -597,7 +597,7 @@ func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {
 		case mysql.TypeEnum, mysql.TypeSet:
 			elements := common.ExtractElements(mysqlType)
 			col.SetElems(elements)
-		case mysql.TypeDuration:
+		case mysql.TypeDuration, mysql.TypeTimestamp, mysql.TypeDatetime, mysql.TypeDate:
 			decimal = common.ExtractDecimal(mysqlType)
 			col.FieldType.SetDecimal(decimal)
 		default:
