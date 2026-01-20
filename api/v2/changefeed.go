@@ -384,6 +384,7 @@ func (h *OpenAPIV2) GetAllTables(c *gin.Context) {
 	_, ineligibleTables, eligibleTables, err := schemastore.
 		VerifyTables(f, kvStorage, cfg.StartTs)
 	if err != nil {
+		_ = c.Error(err)
 		return
 	}
 	tables := &Tables{
