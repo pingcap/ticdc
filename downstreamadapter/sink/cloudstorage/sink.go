@@ -53,9 +53,8 @@ type sink struct {
 
 	dmlWriters *dmlWriters
 
-	checkpointChan           chan uint64
-	lastCheckpointTs         atomic.Uint64
-	lastSendCheckpointTsTime time.Time
+	checkpointChan   chan uint64
+	lastCheckpointTs atomic.Uint64
 
 	tableSchemaStore *commonEvent.TableSchemaStore
 	cron             *cron.Cron
@@ -105,7 +104,7 @@ func New(
 		putil.GetOrZero(sinkConfig.Protocol),
 	)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	// get cloud storage file extension according to the specific protocol.
 	ext := helper.GetFileExtension(protocol)
@@ -113,25 +112,24 @@ func New(
 	// batch protocols in mq scenario. In cloud storage sink, we just set it to max int.
 	encoderConfig, err := helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	storage, err := putil.GetExternalStorageWithDefaultTimeout(ctx, sinkURI.String())
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapError(errors.ErrFailToCreateExternalStorage, err)
 	}
 	statistics := metrics.NewStatistics(changefeedID, "cloudstorage")
 	return &sink{
-		changefeedID:             changefeedID,
-		sinkURI:                  sinkURI,
-		cfg:                      cfg,
-		cleanupJobs:              cleanupJobs,
-		storage:                  storage,
-		dmlWriters:               newDMLWriters(changefeedID, storage, cfg, encoderConfig, ext, statistics),
-		checkpointChan:           make(chan uint64, 16),
-		lastSendCheckpointTsTime: time.Now(),
-		outputRawChangeEvent:     sinkConfig.CloudStorageConfig.GetOutputRawChangeEvent(),
-		statistics:               statistics,
-		isNormal:                 atomic.NewBool(true),
+		changefeedID:         changefeedID,
+		sinkURI:              sinkURI,
+		cfg:                  cfg,
+		cleanupJobs:          cleanupJobs,
+		storage:              storage,
+		dmlWriters:           newDMLWriters(changefeedID, storage, cfg, encoderConfig, ext, statistics),
+		checkpointChan:       make(chan uint64, 16),
+		outputRawChangeEvent: sinkConfig.CloudStorageConfig.GetOutputRawChangeEvent(),
+		statistics:           statistics,
+		isNormal:             atomic.NewBool(true),
 
 		ctx: ctx,
 	}, nil
@@ -244,7 +242,7 @@ func (s *sink) AddCheckpointTs(ts uint64) {
 	case s.checkpointChan <- ts:
 	case <-s.ctx.Done():
 		return
-		// We can just drop the checkpoint ts if the channel is full to avoid blocking since the  checkpointTs will come indefinitely
+		// We can just drop the checkpoint ts if the channel is full to avoid blocking since the checkpointTs will come indefinitely
 	default:
 	}
 }
@@ -257,6 +255,7 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 		metrics.CheckpointTsMessageCount.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
 	}()
 
+	lastSendCheckpointTsTime := time.Now()
 	var (
 		checkpoint uint64
 		ok         bool
@@ -264,7 +263,7 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
+			return context.Cause(ctx)
 		case checkpoint, ok = <-s.checkpointChan:
 			if !ok {
 				log.Warn("cloud storage sink checkpoint channel closed",
@@ -274,8 +273,8 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 			}
 		}
 
-		if time.Since(s.lastSendCheckpointTsTime) < 2*time.Second {
-			log.Warn("skip write checkpoint ts to external storage",
+		if time.Since(lastSendCheckpointTsTime) < 2*time.Second {
+			log.Debug("skip write checkpoint ts to external storage",
 				zap.Any("changefeedID", s.changefeedID),
 				zap.Uint64("checkpoint", checkpoint))
 			continue
@@ -293,14 +292,14 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 		}
 		err = s.storage.WriteFile(ctx, "metadata", message)
 		if err != nil {
-			log.Error("CloudStorageSink storage write file failed",
+			log.Error("CloudStorageSink storage update checkpoint to metadata file failed",
 				zap.String("keyspace", s.changefeedID.Keyspace()),
 				zap.String("changefeed", s.changefeedID.Name()),
 				zap.Duration("duration", time.Since(start)),
 				zap.Error(err))
-			return errors.Trace(err)
+			return errors.WrapError(errors.ErrStorageSinkSendFailed, err)
 		}
-		s.lastSendCheckpointTsTime = time.Now()
+		lastSendCheckpointTsTime = time.Now()
 		s.lastCheckpointTs.Store(checkpoint)
 
 		checkpointTsMessageCount.Inc()

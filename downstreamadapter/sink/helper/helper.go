@@ -54,7 +54,7 @@ func GetEncoderConfig(
 ) (*common.Config, error) {
 	encoderConfig := common.NewConfig(protocol)
 	if err := encoderConfig.Apply(sinkURI, sinkConfig); err != nil {
-		return nil, errors.WrapError(errors.ErrSinkInvalidConfig, err)
+		return nil, err
 	}
 	// Always set encoder's `MaxMessageBytes` equal to producer's `MaxMessageBytes`
 	// to prevent that the encoder generate batched message too large
@@ -65,12 +65,12 @@ func GetEncoderConfig(
 
 	tz, err := util.GetTimezone(config.GetGlobalServerConfig().TZ)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrSinkInvalidConfig, err)
+		return nil, err
 	}
 	encoderConfig.TimeZone = tz
 
 	if err = encoderConfig.Validate(); err != nil {
-		return nil, errors.WrapError(errors.ErrSinkInvalidConfig, err)
+		return nil, err
 	}
 
 	return encoderConfig, nil
@@ -91,7 +91,7 @@ func GetTopic(sinkURI *url.URL) (string, error) {
 func GetProtocol(protocolStr string) (config.Protocol, error) {
 	protocol, err := config.ParseSinkProtocolFromString(protocolStr)
 	if err != nil {
-		return protocol, errors.WrapError(errors.ErrKafkaInvalidConfig, err)
+		return protocol, err
 	}
 
 	return protocol, nil
