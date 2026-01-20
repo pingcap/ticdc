@@ -167,7 +167,7 @@ func TestStreamBasicWithBuffer(t *testing.T) {
 
 	stream.start()
 	defer stream.close()
-	pi := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test/path", nil)
+	pi := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test", "test/path", nil)
 	stream.addPath(pi)
 	// Test basic event handling
 	inc := &atomic.Int64{}
