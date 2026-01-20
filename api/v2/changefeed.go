@@ -221,7 +221,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
-	ineligibleTables, eligibleTables, err := getVerifiedTables(ctx, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
+	ineligibleTables, eligibleTables, allTables, err := getVerifiedTables(ctx, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -287,6 +287,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		zap.String("changefeedInfo", info.String()),
 		zap.Int("eligibleTablesLength", len(eligibleTables)),
 		zap.Int("ineligibleTablesLength", len(ineligibleTables)),
+		zap.Int("allTablesLength", len(allTables)),
 	)
 
 	c.JSON(getStatus(c), CfInfoToAPIModel(
@@ -381,7 +382,7 @@ func (h *OpenAPIV2) GetAllTables(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	_, ineligibleTables, eligibleTables, err := schemastore.
+	_, ineligibleTables, eligibleTables, allTables, err := schemastore.
 		VerifyTables(f, kvStorage, cfg.StartTs)
 	if err != nil {
 		_ = c.Error(err)
@@ -390,6 +391,7 @@ func (h *OpenAPIV2) GetAllTables(c *gin.Context) {
 	tables := &Tables{
 		IneligibleTables: toAPIModelFunc(ineligibleTables),
 		EligibleTables:   toAPIModelFunc(eligibleTables),
+		AllTables:        toAPIModelFunc(allTables),
 	}
 	c.JSON(http.StatusOK, tables)
 }
@@ -436,7 +438,7 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	ineligibleTables, eligibleTables, err := getVerifiedTables(ctx, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
+	ineligibleTables, eligibleTables, allTables, err := getVerifiedTables(ctx, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -449,6 +451,7 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 	tables := &Tables{
 		IneligibleTables: toAPIModelFunc(ineligibleTables),
 		EligibleTables:   toAPIModelFunc(eligibleTables),
+		AllTables:        toAPIModelFunc(allTables),
 	}
 	c.JSON(http.StatusOK, tables)
 }
@@ -756,6 +759,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 	var (
 		eligibleTables   []string
 		ineligibleTables []string
+		allTables        []string
 	)
 	if overwriteCheckpointTs {
 		sinkURIParsed, err := url.Parse(cfInfo.SinkURI)
@@ -780,7 +784,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 			_ = c.Error(err)
 			return
 		}
-		ineligibleTables, eligibleTables, err = getVerifiedTables(ctx, cfInfo.Config, kvStorage, newCheckpointTs, scheme, topic, protocol)
+		ineligibleTables, eligibleTables, allTables, err = getVerifiedTables(ctx, cfInfo.Config, kvStorage, newCheckpointTs, scheme, topic, protocol)
 		if err != nil {
 			_ = c.Error(err)
 			return
@@ -801,6 +805,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		zap.Bool("overwriteCheckpointTs", overwriteCheckpointTs),
 		zap.Int("eligibleTablesLength", len(eligibleTables)),
 		zap.Int("ineligibleTablesLength", len(ineligibleTables)),
+		zap.Int("allTablesLength", len(allTables)),
 	)
 	c.JSON(getStatus(c), &EmptyResponse{})
 }
@@ -902,6 +907,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 	var (
 		ineligibleTables []string
 		eligibleTables   []string
+		allTables        []string
 	)
 	if configUpdated || sinkURIUpdated {
 		// verify replicaConfig
@@ -936,7 +942,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		}
 
 		// use checkpointTs get snapshot from kv storage
-		ineligibleTables, eligibleTables, err = getVerifiedTables(ctx, oldCfInfo.Config, kvStorage, status.CheckpointTs, scheme, topic, protocol)
+		ineligibleTables, eligibleTables, allTables, err = getVerifiedTables(ctx, oldCfInfo.Config, kvStorage, status.CheckpointTs, scheme, topic, protocol)
 		if err != nil {
 			_ = c.Error(errors.ErrChangefeedUpdateRefused.GenWithStackByCause(err))
 			return
@@ -969,6 +975,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		zap.Bool("sinkURIUpdated", sinkURIUpdated),
 		zap.Int("eligibleTablesLength", len(eligibleTables)),
 		zap.Int("ineligibleTablesLength", len(ineligibleTables)),
+		zap.Int("allTables", len(allTables)),
 	)
 
 	c.JSON(getStatus(c), CfInfoToAPIModel(oldCfInfo, status, nil))
@@ -1593,15 +1600,15 @@ func getVerifiedTables(
 	replicaConfig *config.ReplicaConfig,
 	storage tidbkv.Storage, startTs uint64,
 	scheme string, topic string, protocol config.Protocol,
-) ([]string, []string, error) {
+) ([]string, []string, []string, error) {
 	f, err := filter.NewFilter(replicaConfig.Filter, "", util.GetOrZero(replicaConfig.CaseSensitive), util.GetOrZero(replicaConfig.ForceReplicate))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	tableInfos, ineligibleTables, eligibleTables, err := schemastore.
+	tableInfos, ineligibleTables, eligibleTables, allTables, err := schemastore.
 		VerifyTables(f, storage, startTs)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	log.Info("verifyTables completed",
 		zap.Int("tableCount", len(tableInfos)),
@@ -1609,35 +1616,35 @@ func getVerifiedTables(
 
 	err = f.Verify(tableInfos)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if !config.IsMQScheme(scheme) {
-		return ineligibleTables, eligibleTables, nil
+		return ineligibleTables, eligibleTables, allTables, nil
 	}
 
 	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, topic, config.IsPulsarScheme(scheme), protocol == config.ProtocolAvro)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	err = eventRouter.VerifyTables(tableInfos)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	selectors, err := columnselector.New(replicaConfig.Sink)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	err = selectors.VerifyTables(tableInfos, eventRouter)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	if ctx.Err() != nil {
-		return nil, nil, errors.Trace(ctx.Err())
+		return nil, nil, nil, errors.Trace(ctx.Err())
 	}
 
-	return ineligibleTables, eligibleTables, nil
+	return ineligibleTables, eligibleTables, allTables, nil
 }
 
 func GetKeyspaceValueWithDefault(c *gin.Context) string {

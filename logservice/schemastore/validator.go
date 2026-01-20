@@ -51,6 +51,7 @@ type tableVerifier struct {
 	tableInfos       []*common.TableInfo
 	ineligibleTables []string
 	eligibleTables   []string
+	allTables        []string
 }
 
 func newTableVerifier(f filter.Filter, tableWorkers int) *tableVerifier {
@@ -97,7 +98,7 @@ func (v *tableVerifier) sendTask(task tableTask) bool {
 }
 
 func (v *tableVerifier) appendResults(
-	tableInfos []*common.TableInfo, ineligibleTables []string, eligibleTables []string,
+	tableInfos []*common.TableInfo, ineligibleTables, eligibleTables, allTables []string,
 ) {
 	if len(tableInfos) == 0 {
 		return
@@ -106,6 +107,7 @@ func (v *tableVerifier) appendResults(
 	v.tableInfos = append(v.tableInfos, tableInfos...)
 	v.ineligibleTables = append(v.ineligibleTables, ineligibleTables...)
 	v.eligibleTables = append(v.eligibleTables, eligibleTables...)
+	v.allTables = append(v.allTables, allTables...)
 	v.appendMu.Unlock()
 }
 
@@ -126,6 +128,7 @@ func (v *tableVerifier) worker() {
 		localInfos := make([]*common.TableInfo, 0, len(task.values))
 		localIneligible := make([]string, 0, len(task.values))
 		localEligible := make([]string, 0, len(task.values))
+		localAll := make([]string, 0, len(task.values))
 
 		for _, value := range task.values {
 			tbInfo := &timodel.TableInfo{}
@@ -133,7 +136,8 @@ func (v *tableVerifier) worker() {
 				v.setErr(errors.Trace(err))
 				return
 			}
-
+			tableInfo := common.WrapTableInfo(task.schema, tbInfo)
+			localAll = append(localAll, tableInfo.GetTableName())
 			tableName := tbInfo.Name.O
 			if v.filter.ShouldIgnoreTable(task.schema, tableName) {
 				log.Debug("ignore table", zap.String("schema", task.schema), zap.String("table", tableName))
@@ -145,7 +149,6 @@ func (v *tableVerifier) worker() {
 				continue
 			}
 
-			tableInfo := common.WrapTableInfo(task.schema, tbInfo)
 			localInfos = append(localInfos, tableInfo)
 			if !tableInfo.IsEligible(false /* forceReplicate */) {
 				localIneligible = append(localIneligible, tableInfo.GetTableName())
@@ -154,14 +157,14 @@ func (v *tableVerifier) worker() {
 			}
 		}
 
-		v.appendResults(localInfos, localIneligible, localEligible)
+		v.appendResults(localInfos, localIneligible, localEligible, localAll)
 	}
 }
 
 // VerifyTables catalog tables specified by ReplicaConfig into
 // eligible (has an unique index or primary key) and ineligible tables.
 func VerifyTables(f filter.Filter, storage tidbkv.Storage, startTs uint64) (
-	[]*common.TableInfo, []string, []string, error,
+	[]*common.TableInfo, []string, []string, []string, error,
 ) {
 	const (
 		// A fixed-size worker pool is used to parallelize the JSON unmarshal of
@@ -173,7 +176,7 @@ func VerifyTables(f filter.Filter, storage tidbkv.Storage, startTs uint64) (
 	meta := getSnapshotMeta(storage, startTs)
 	dbinfos, err := meta.ListDatabases()
 	if err != nil {
-		return nil, nil, nil, cerror.WrapError(cerror.ErrMetaListDatabases, err)
+		return nil, nil, nil, nil, cerror.WrapError(cerror.ErrMetaListDatabases, err)
 	}
 
 	verifier := newTableVerifier(f, tableWorkers)
@@ -220,7 +223,7 @@ dbLoop:
 	verifier.closeAndWait()
 
 	if verifier.firstErr != nil {
-		return nil, nil, nil, verifier.firstErr
+		return nil, nil, nil, nil, verifier.firstErr
 	}
-	return verifier.tableInfos, verifier.ineligibleTables, verifier.eligibleTables, nil
+	return verifier.tableInfos, verifier.ineligibleTables, verifier.eligibleTables, verifier.allTables, nil
 }

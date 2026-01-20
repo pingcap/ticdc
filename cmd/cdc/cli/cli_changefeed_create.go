@@ -127,7 +127,7 @@ func (o *createChangefeedOptions) addFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().BoolVarP(&o.disableGCSafePointCheck, "disable-gc-check", "", false, "Disable GC safe point check")
 	cmd.PersistentFlags().Uint64Var(&o.startTs, "start-ts", 0, "Start ts of changefeed")
 	cmd.PersistentFlags().StringVar(&o.timezone, "tz", "SYSTEM", "timezone used when checking sink uri (changefeed timezone is determined by cdc server)")
-	cmd.PersistentFlags().BoolVar(&o.verbose, "verbose", false, "Print verbose information when creating a changefeed. Caution: This will list all tables to be replicated by the changefeed. If the number of tables is extremely large, it may flood your screen.")
+	cmd.PersistentFlags().BoolVarP(&o.verbose, "verbose", "v", false, "Print verbose information when creating a changefeed. Caution: This will list all tables to be replicated by the changefeed. If the number of tables is extremely large, it may flood your screen.")
 	// we don't support specify these flags below when cdc version >= 6.2.0
 	_ = cmd.PersistentFlags().MarkHidden("tz")
 }
@@ -339,10 +339,11 @@ func (o *createChangefeedOptions) run(ctx context.Context, cmd *cobra.Command) e
 	if err != nil {
 		return err
 	}
-	cmd.Printf("Create changefeed successfully!\nID: %s\nInfo: %s\nIneligibleTablesCount: %d\nEligibleTablesCount: %d\n", info.ID, infoStr, len(tables.IneligibleTables), len(tables.EligibleTables))
+	cmd.Printf("Create changefeed successfully!\nID: %s\nInfo: %s\nIneligibleTablesCount: %d\nEligibleTablesCount: %d\nAllTablesCount: %d\n", info.ID, infoStr, len(tables.IneligibleTables), len(tables.EligibleTables), len(tables.AllTables))
 	if o.verbose {
 		cmd.Printf("EligibleTables: %v\n", tables.EligibleTables)
-cmd.Printf("IneligibleTables: %v\n", tables.IneligibleTables)
+		cmd.Printf("IneligibleTables: %v\n", tables.IneligibleTables)
+		cmd.Printf("AllTables: %v\n", tables.AllTables)
 	}
 	return nil
 }

@@ -68,7 +68,7 @@ func (o *resumeChangefeedOptions) addFlags(cmd *cobra.Command) {
 		"Certificate path for TLS connection to upstream")
 	cmd.PersistentFlags().StringVar(&o.upstreamKeyPath, "upstream-key", "",
 		"Private key path for TLS connection to upstream")
-	cmd.PersistentFlags().BoolVar(&o.verbose, "verbose", false, "Print verbose information when updating a changefeed. Caution: This will list all tables to be replicated by the changefeed. If the number of tables is extremely large, it may flood your screen.")
+	cmd.PersistentFlags().BoolVarP(&o.verbose, "verbose", "v", false, "Print verbose information when updating a changefeed. Caution: This will list all tables to be replicated by the changefeed. If the number of tables is extremely large, it may flood your screen.")
 	// we don't support specify there flags below when cdc version <= 6.3.0
 	_ = cmd.PersistentFlags().MarkHidden("upstream-pd")
 	_ = cmd.PersistentFlags().MarkHidden("upstream-ca")
@@ -240,10 +240,11 @@ func (o *resumeChangefeedOptions) run(cmd *cobra.Command) error {
 	}
 	// o.checkpointTs != 0
 	cmd.Printf("Resume changefeed successfully! "+
-		"\nID: %s\nOverwriteCheckpointTs: %t\nIneligibleTablesCount: %d\nEligibleTablesCount: %d\n", o.changefeedID, o.checkpointTs != 0, len(tables.IneligibleTables), len(tables.EligibleTables))
+		"\nID: %s\nOverwriteCheckpointTs: %t\nIneligibleTablesCount: %d\nEligibleTablesCount: %d\nAllTablesCount: %d\n", o.changefeedID, o.checkpointTs != 0, len(tables.IneligibleTables), len(tables.EligibleTables), len(tables.AllTables))
 	if o.verbose {
 		cmd.Printf("EligibleTables: %v\n", tables.EligibleTables)
 		cmd.Printf("IneligibleTables: %v\n", tables.IneligibleTables)
+		cmd.Printf("AllTables: %v\n", tables.AllTables)
 	}
 	return err
 }
