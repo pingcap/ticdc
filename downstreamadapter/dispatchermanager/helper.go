@@ -170,7 +170,7 @@ func (w *Watermark) Set(watermark *heartbeatpb.Watermark) {
 func newSchedulerDispatcherRequestDynamicStream() dynstream.DynamicStream[int, common.GID, SchedulerDispatcherRequest, *DispatcherManager, *SchedulerDispatcherRequestHandler] {
 	option := dynstream.NewOption()
 	option.BatchCount = 1024
-	ds := dynstream.NewParallelDynamicStream(
+	ds := dynstream.NewParallelDynamicStream("scheduler-dispatcher-request",
 		&SchedulerDispatcherRequestHandler{}, option)
 	ds.Start()
 	return ds
@@ -277,7 +277,7 @@ func (h *SchedulerDispatcherRequestHandler) OnDrop(event SchedulerDispatcherRequ
 }
 
 func newHeartBeatResponseDynamicStream(dds dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, dispatcher.Dispatcher, *dispatcher.DispatcherStatusHandler]) dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *DispatcherManager, *HeartBeatResponseHandler] {
-	ds := dynstream.NewParallelDynamicStream(
+	ds := dynstream.NewParallelDynamicStream("heartbeat-response",
 		newHeartBeatResponseHandler(dds))
 	ds.Start()
 	return ds
@@ -370,7 +370,7 @@ func (h *HeartBeatResponseHandler) OnDrop(event HeartBeatResponse) interface{} {
 
 // checkpointTsMessageDynamicStream is responsible for push checkpointTsMessage to the corresponding table trigger event dispatcher.
 func newCheckpointTsMessageDynamicStream() dynstream.DynamicStream[int, common.GID, CheckpointTsMessage, *DispatcherManager, *CheckpointTsMessageHandler] {
-	ds := dynstream.NewParallelDynamicStream(
+	ds := dynstream.NewParallelDynamicStream("checkpoint-ts",
 		&CheckpointTsMessageHandler{})
 	ds.Start()
 	return ds
@@ -426,7 +426,7 @@ func (h *CheckpointTsMessageHandler) OnDrop(event CheckpointTsMessage) interface
 
 // RedoResolvedTsForwardMessageDynamicStream is responsible for push RedoResolvedTsForwardMessage to the corresponding table trigger event dispatcher.
 func newRedoResolvedTsForwardMessageDynamicStream() dynstream.DynamicStream[int, common.GID, RedoResolvedTsForwardMessage, *DispatcherManager, *RedoResolvedTsForwardMessageHandler] {
-	ds := dynstream.NewParallelDynamicStream(
+	ds := dynstream.NewParallelDynamicStream("redo-resolved-ts",
 		&RedoResolvedTsForwardMessageHandler{})
 	ds.Start()
 	return ds
@@ -495,7 +495,7 @@ func (h *RedoResolvedTsForwardMessageHandler) OnDrop(event RedoResolvedTsForward
 
 // newRedoMetaMessageDynamicStream is responsible for push RedoMetaMessage to the corresponding table trigger dispatcher.
 func newRedoMetaMessageDynamicStream() dynstream.DynamicStream[int, common.GID, RedoMetaMessage, *DispatcherManager, *RedoMetaMessageHandler] {
-	ds := dynstream.NewParallelDynamicStream(
+	ds := dynstream.NewParallelDynamicStream("redo-meta",
 		&RedoMetaMessageHandler{})
 	ds.Start()
 	return ds
@@ -554,7 +554,7 @@ func (h *RedoMetaMessageHandler) OnDrop(event RedoMetaMessage) interface{} {
 }
 
 func newMergeDispatcherRequestDynamicStream() dynstream.DynamicStream[int, common.GID, MergeDispatcherRequest, *DispatcherManager, *MergeDispatcherRequestHandler] {
-	ds := dynstream.NewParallelDynamicStream(
+	ds := dynstream.NewParallelDynamicStream("merge-dispatcher-request",
 		&MergeDispatcherRequestHandler{})
 	ds.Start()
 	return ds

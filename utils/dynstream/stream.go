@@ -32,7 +32,8 @@ const BlockLenInPendingQueue = 32
 // The handleLoop handles the events.
 // While if UseBuffer is false, the receiver is not needed, and the handleLoop directly receives the events.
 type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
-	id int
+	module string
+	id     int
 
 	handler Handler[A, P, T, D]
 
@@ -61,10 +62,12 @@ type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 
 func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	id int,
+	component string,
 	handler H,
 	option Option,
 ) *stream[A, P, T, D, H] {
 	s := &stream[A, P, T, D, H]{
+		module:     component,
 		id:         id,
 		handler:    handler,
 		eventQueue: newEventQueue(option, handler),
@@ -295,9 +298,9 @@ Loop:
 
 				path.blocking.Store(s.handler.Handle(path.dest, eventBuf...))
 
-				metrics.DynamicStreamBatchDuration.WithLabelValues(path.metricLabel).Observe(float64(time.Since(start).Seconds()))
-				metrics.DynamicStreamBatchCount.WithLabelValues(path.metricLabel).Observe(float64(len(eventBuf)))
-				metrics.DynamicStreamBatchBytes.WithLabelValues(path.metricLabel).Observe(float64(nBytes))
+				metrics.DynamicStreamBatchDuration.WithLabelValues(s.module, path.metricLabel).Observe(float64(time.Since(start).Seconds()))
+				metrics.DynamicStreamBatchCount.WithLabelValues(s.module, path.metricLabel).Observe(float64(len(eventBuf)))
+				metrics.DynamicStreamBatchBytes.WithLabelValues(s.module, path.metricLabel).Observe(float64(nBytes))
 
 				if path.blocking.Load() {
 					s.eventQueue.blockPath(path)

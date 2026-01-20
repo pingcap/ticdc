@@ -13597,9 +13597,9 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.99, sum(rate(ticdc_dynamic_stream_batch_count_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance, module, le))",
+              "expr": "histogram_quantile(0.99, sum(rate(ticdc_dynamic_stream_batch_count_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance, module, area, le))",
               "interval": "",
-              "legendFormat": "{{module}}-{{instance}}",
+              "legendFormat": "{{module}}-{{instance}}-{{area}}",
               "refId": "A"
             }
           ],
@@ -13692,9 +13692,9 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_dynamic_stream_batch_count_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance, module, le) /\nsum(rate(ticdc_dynamic_stream_batch_count_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance, module, le)",
+              "expr": "sum(rate(ticdc_dynamic_stream_batch_count_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance, module, area, le) /\nsum(rate(ticdc_dynamic_stream_batch_count_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance, module, area, le)",
               "interval": "",
-              "legendFormat": "{{module}}-{{instance}}",
+              "legendFormat": "{{module}}-{{instance}}-{{area}}",
               "refId": "A"
             }
           ],
@@ -13787,9 +13787,9 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.99, sum(rate(ticdc_dynamic_stream_batch_bytes_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance, module, le))",
+              "expr": "histogram_quantile(0.99, sum(rate(ticdc_dynamic_stream_batch_bytes_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance, module, area, le))",
               "interval": "",
-              "legendFormat": "{{module}}-{{instance}}",
+              "legendFormat": "{{module}}-{{instance}}-{{area}}",
               "refId": "A"
             }
           ],
@@ -13882,9 +13882,9 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_dynamic_stream_batch_bytes_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance, module, le) /\nsum(rate(ticdc_dynamic_stream_batch_bytes_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance, module, le)",
+              "expr": "sum(rate(ticdc_dynamic_stream_batch_bytes_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance, module, area, le) /\nsum(rate(ticdc_dynamic_stream_batch_bytes_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance, module, area, le)",
               "interval": "",
-              "legendFormat": "{{module}}-{{instance}}",
+              "legendFormat": "{{module}}-{{instance}}-{{area}}",
               "refId": "A"
             }
           ],
@@ -13977,9 +13977,9 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.99, sum(rate(ticdc_dynamic_stream_batch_duration_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance, module, le))",
+              "expr": "histogram_quantile(0.99, sum(rate(ticdc_dynamic_stream_batch_duration_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance, module, area, le))",
               "interval": "",
-              "legendFormat": "{{module}}-{{instance}}",
+              "legendFormat": "{{module}}-{{instance}}-{{area}}",
               "refId": "A"
             }
           ],
@@ -14072,9 +14072,9 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_dynamic_stream_batch_duration_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance, module, le) /\nsum(rate(ticdc_dynamic_stream_batch_duration_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance, module, le)",
+              "expr": "sum(rate(ticdc_dynamic_stream_batch_duration_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance, module, area, le) /\nsum(rate(ticdc_dynamic_stream_batch_duration_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance, module, area, le)",
               "interval": "",
-              "legendFormat": "{{module}}-{{instance}}",
+              "legendFormat": "{{module}}-{{instance}}-{{area}}",
               "refId": "A"
             }
           ],
