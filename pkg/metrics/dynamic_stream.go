@@ -71,7 +71,7 @@ var (
 			Subsystem: "dynamic_stream",
 			Name:      "batch_duration",
 			Help:      "The duration of batch each batch in dynamic stream",
-			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 19), // 40us to 10s
+			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 18), // 40us to 5s
 		}, []string{"module"})
 )
 
