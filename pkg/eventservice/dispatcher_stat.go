@@ -427,12 +427,22 @@ type changefeedStatus struct {
 	dispatchers sync.Map // common.DispatcherID -> *atomic.Pointer[dispatcherStat]
 
 	availableMemoryQuota sync.Map // nodeID -> atomic.Uint64 (memory quota in bytes)
+	minCheckpointTs      atomic.Uint64
+	scanInterval         atomic.Int64
+	lastAdjustTime       atomic.Time
+	usageWindow          *memoryUsageWindow
+	syncPointEnabled     atomic.Bool
+	syncPointInterval    atomic.Int64
 }
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
-	return &changefeedStatus{
+	status := &changefeedStatus{
 		changefeedID: changefeedID,
+		usageWindow:  newMemoryUsageWindow(memoryUsageWindowDuration),
 	}
+	status.scanInterval.Store(int64(defaultScanInterval))
+	status.lastAdjustTime.Store(time.Time{})
+	return status
 }
 
 func (c *changefeedStatus) addDispatcher(id common.DispatcherID, dispatcher *atomic.Pointer[dispatcherStat]) {

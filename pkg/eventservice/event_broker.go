@@ -404,6 +404,10 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		return false, common.DataRange{}
 	}
 	dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, ddlState.ResolvedTs)
+	scanMaxTs := task.changefeedStat.getScanMaxTs()
+	if scanMaxTs > 0 {
+		dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, scanMaxTs)
+	}
 
 	if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
 		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
@@ -922,6 +926,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	changefeedID := info.GetChangefeedID()
 
 	status := c.getOrSetChangefeedStatus(changefeedID)
+	status.updateSyncPointConfig(info)
 	dispatcher := newDispatcherStat(info, uint64(len(c.taskChan)), uint64(len(c.messageCh)), nil, status)
 	dispatcherPtr := &atomic.Pointer[dispatcherStat]{}
 	dispatcherPtr.Store(dispatcher)
@@ -1017,6 +1022,7 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	stat := statPtr.(*atomic.Pointer[dispatcherStat]).Load()
 
 	stat.changefeedStat.removeDispatcher(id)
+	stat.changefeedStat.refreshMinCheckpointTs()
 	c.metricsCollector.metricDispatcherCount.Dec()
 	changefeedID := dispatcherInfo.GetChangefeedID()
 
@@ -1097,6 +1103,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		}
 	}
 	status := c.getOrSetChangefeedStatus(changefeedID)
+	status.updateSyncPointConfig(dispatcherInfo)
 	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.taskChan)), uint64(len(c.messageCh)), tableInfo, status)
 	newStat.copyStatistics(oldStat)
 
@@ -1147,6 +1154,8 @@ func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID)
 
 func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWithServerID) {
 	responseMap := make(map[string]*event.DispatcherHeartbeatResponse)
+	changedChangefeeds := make(map[*changefeedStatus]struct{})
+	now := time.Now().Unix()
 	for _, dp := range heartbeat.heartbeat.DispatcherProgresses {
 		dispatcherPtr := c.getDispatcher(dp.DispatcherID)
 		// Can't find the dispatcher, it means the dispatcher is removed.
@@ -1165,7 +1174,11 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 			dispatcher.checkpointTs.Store(dp.CheckpointTs)
 		}
 		// Update the last received heartbeat time to the current time.
-		dispatcher.lastReceivedHeartbeatTime.Store(time.Now().Unix())
+		dispatcher.lastReceivedHeartbeatTime.Store(now)
+		changedChangefeeds[dispatcher.changefeedStat] = struct{}{}
+	}
+	for status := range changedChangefeeds {
+		status.refreshMinCheckpointTs()
 	}
 	c.sendDispatcherResponse(responseMap)
 }
@@ -1177,14 +1190,27 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 	}
 
 	holder := make(map[common.GID]uint64, len(availables))
+	type usageInfo struct {
+		used uint64
+		max  uint64
+	}
+	usage := make(map[common.GID]usageInfo, len(availables))
 	dispatcherAvailable := make(map[common.DispatcherID]uint64, len(availables))
+	hasUsage := m.GetVersion() >= event.CongestionControlVersion2
 	for _, item := range availables {
 		holder[item.Gid] = item.Available
+		if hasUsage && item.Max > 0 {
+			usage[item.Gid] = usageInfo{
+				used: item.Used,
+				max:  item.Max,
+			}
+		}
 		for dispatcherID, available := range item.DispatcherAvailable {
 			dispatcherAvailable[dispatcherID] = available
 		}
 	}
 
+	now := time.Now()
 	c.changefeedMap.Range(func(k, v interface{}) bool {
 		changefeedID := k.(common.ChangeFeedID)
 		changefeed := v.(*changefeedStatus)
@@ -1192,6 +1218,11 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 		if ok {
 			changefeed.availableMemoryQuota.Store(from, atomic.NewUint64(available))
 			metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(available))
+		}
+		if hasUsage {
+			if info, ok := usage[changefeedID.ID()]; ok {
+				changefeed.updateMemoryUsage(now, info.used, info.max)
+			}
 		}
 		return true
 	})

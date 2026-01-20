@@ -1,0 +1,213 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package eventservice
+
+import (
+	"sync"
+	"time"
+
+	"github.com/tikv/client-go/v2/oracle"
+	"go.uber.org/atomic"
+)
+
+const (
+	defaultScanInterval          = 5 * time.Second
+	minScanInterval              = 1 * time.Second
+	maxScanInterval              = 30 * time.Minute
+	scanIntervalAdjustCooldown   = 30 * time.Second
+	memoryUsageWindowDuration    = 30 * time.Second
+	memoryUsageHighThreshold     = 1.10
+	memoryUsageCriticalThreshold = 1.50
+	memoryUsageLowThreshold      = 0.50
+)
+
+type memoryUsageSample struct {
+	ts    time.Time
+	ratio float64
+}
+
+type memoryUsageWindow struct {
+	window  time.Duration
+	mu      sync.Mutex
+	samples []memoryUsageSample
+}
+
+func newMemoryUsageWindow(window time.Duration) *memoryUsageWindow {
+	return &memoryUsageWindow{
+		window: window,
+	}
+}
+
+func (w *memoryUsageWindow) addSample(now time.Time, ratio float64) {
+	if ratio < 0 {
+		ratio = 0
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	w.samples = append(w.samples, memoryUsageSample{ts: now, ratio: ratio})
+	w.pruneLocked(now)
+}
+
+func (w *memoryUsageWindow) average(now time.Time) (float64, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	w.pruneLocked(now)
+	if len(w.samples) == 0 {
+		return 0, false
+	}
+	fullWindow := now.Sub(w.samples[0].ts) >= w.window
+	var sum float64
+	for _, sample := range w.samples {
+		sum += sample.ratio
+	}
+	return sum / float64(len(w.samples)), fullWindow
+}
+
+func (w *memoryUsageWindow) pruneLocked(now time.Time) {
+	cutoff := now.Add(-w.window)
+	idx := 0
+	for idx < len(w.samples) && w.samples[idx].ts.Before(cutoff) {
+		idx++
+	}
+	if idx > 0 {
+		w.samples = w.samples[idx:]
+	}
+}
+
+func (c *changefeedStatus) updateMemoryUsage(now time.Time, used uint64, max uint64) {
+	if max == 0 || c.usageWindow == nil {
+		return
+	}
+	ratio := float64(used) / float64(max)
+	c.usageWindow.addSample(now, ratio)
+	avg, full := c.usageWindow.average(now)
+	if !full {
+		return
+	}
+	c.adjustScanInterval(now, avg)
+}
+
+func (c *changefeedStatus) adjustScanInterval(now time.Time, avg float64) {
+	lastAdjust := c.lastAdjustTime.Load()
+	if !lastAdjust.IsZero() && now.Sub(lastAdjust) < scanIntervalAdjustCooldown {
+		return
+	}
+
+	current := time.Duration(c.scanInterval.Load())
+	if current <= 0 {
+		current = defaultScanInterval
+	}
+	maxInterval := c.maxScanInterval()
+	if maxInterval < minScanInterval {
+		maxInterval = minScanInterval
+	}
+
+	newInterval := current
+	switch {
+	case avg > memoryUsageCriticalThreshold:
+		newInterval = minScanInterval
+	case avg > memoryUsageHighThreshold:
+		newInterval = maxDuration(current/2, minScanInterval)
+	case avg < memoryUsageLowThreshold:
+		newInterval = minDuration(current*2, maxInterval)
+	}
+
+	if newInterval != current {
+		c.scanInterval.Store(int64(newInterval))
+		c.lastAdjustTime.Store(now)
+	}
+}
+
+func (c *changefeedStatus) maxScanInterval() time.Duration {
+	if !c.syncPointEnabled.Load() {
+		return maxScanInterval
+	}
+	interval := time.Duration(c.syncPointInterval.Load())
+	if interval <= 0 {
+		return maxScanInterval
+	}
+	if interval < maxScanInterval {
+		return interval
+	}
+	return maxScanInterval
+}
+
+func (c *changefeedStatus) refreshMinCheckpointTs() {
+	minCheckpoint := ^uint64(0)
+	c.dispatchers.Range(func(_ any, value any) bool {
+		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
+		if dispatcher == nil || dispatcher.isRemoved.Load() || dispatcher.seq.Load() == 0 {
+			return true
+		}
+		checkpoint := dispatcher.checkpointTs.Load()
+		if checkpoint < minCheckpoint {
+			minCheckpoint = checkpoint
+		}
+		return true
+	})
+
+	if minCheckpoint == ^uint64(0) {
+		c.minCheckpointTs.Store(0)
+		return
+	}
+	c.minCheckpointTs.Store(minCheckpoint)
+}
+
+func (c *changefeedStatus) getScanMaxTs() uint64 {
+	baseTs := c.minCheckpointTs.Load()
+	if baseTs == 0 {
+		return 0
+	}
+	interval := time.Duration(c.scanInterval.Load())
+	if interval <= 0 {
+		interval = defaultScanInterval
+	}
+	return oracle.GoTimeToTS(oracle.GetTimeFromTS(baseTs).Add(interval))
+}
+
+func (c *changefeedStatus) updateSyncPointConfig(info DispatcherInfo) {
+	if !info.SyncPointEnabled() {
+		return
+	}
+	c.syncPointEnabled.Store(true)
+	interval := info.GetSyncPointInterval()
+	if interval <= 0 {
+		return
+	}
+	for {
+		current := time.Duration(c.syncPointInterval.Load())
+		if current != 0 && interval >= current {
+			return
+		}
+		if c.syncPointInterval.CompareAndSwap(int64(current), int64(interval)) {
+			return
+		}
+	}
+}
+
+func minDuration(a time.Duration, b time.Duration) time.Duration {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxDuration(a time.Duration, b time.Duration) time.Duration {
+	if a > b {
+		return a
+	}
+	return b
+}
