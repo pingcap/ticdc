@@ -322,9 +322,6 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	path P
 	dest D
 
-	// metricLabel is used as the prometheus "module" label for batch metrics.
-	// It is initialized to the string representation of area and can be overridden
-	// by handler.GetMetricLabel(dest) when adding the path.
 	metricLabel string
 
 	// The current stream this path belongs to.
