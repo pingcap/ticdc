@@ -74,14 +74,20 @@ ifeq ("${NEXT_GEN}", "1")
 	else
 		BUILD_FLAG := $(BUILD_FLAG),nextgen
 	endif
+	BUILD_FLAG += -modfile=nextgen.go.mod
 endif
 
-TEST_FLAG=intest
+# gotestsum -p parameter for unit tests
+P=8
+
+TEST_FLAG:=-tags intest
 ifeq ("${NEXT_GEN}", "1")
-	TEST_FLAG := $(TEST_FLAG),nextgen
+	TEST_FLAG := $(TEST_FLAG),nextgen -modfile=nextgen.go.mod
+else
 endif
+TEST_FLAG += -race -p $(P)
 
-GOTEST := CGO_ENABLED=1 $(GO) test -p 3 --race --tags=$(TEST_FLAG)
+GOTEST := CGO_ENABLED=1 $(GO) test $(TEST_FLAG)
 
 RELEASE_VERSION =
 ifeq ($(RELEASE_VERSION),)
@@ -126,9 +132,6 @@ FAILPOINT_DIR := $$(for p in $(PACKAGES); do echo $${p\#"github.com/pingcap/$(PR
 FAILPOINT := tools/bin/failpoint-ctl
 FAILPOINT_ENABLE  := $$(echo $(FAILPOINT_DIR) | xargs $(FAILPOINT) enable >/dev/null)
 FAILPOINT_DISABLE := $$(echo $(FAILPOINT_DIR) | xargs $(FAILPOINT) disable >/dev/null)
-
-# gotestsum -p parameter for unit tests
-P=3
 
 include tools/Makefile
 
@@ -255,32 +258,23 @@ unit_test_in_verify_ci: check_failpoint_ctl tools/bin/gotestsum tools/bin/gocov 
 	mkdir -p "$(TEST_DIR)"
 	$(FAILPOINT_ENABLE)
 	@echo "Running unit tests..."
-	@export log_level=error;\
-	CGO_ENABLED=1 tools/bin/gotestsum --junitfile cdc-junit-report.xml -- -v -timeout 300s -p $(P) --race --tags=intest \
+	export log_level=error;\
+	CGO_ENABLED=1 tools/bin/gotestsum --junitfile cdc-junit-report.xml -- -v -timeout 1200s $(TEST_FLAG) \
 	-parallel=16 \
 	-covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" $(PACKAGES) \
 	|| { $(FAILPOINT_DISABLE); exit 1; }
 	tools/bin/gocov convert "$(TEST_DIR)/cov.unit.out" | tools/bin/gocov-xml > cdc-coverage.xml
 	$(FAILPOINT_DISABLE)
 
-unit_test_in_verify_ci_next_gen: check_failpoint_ctl tools/bin/gotestsum tools/bin/gocov tools/bin/gocov-xml
-	mkdir -p "$(TEST_DIR)"
-	$(FAILPOINT_ENABLE)
-	@echo "Running unit tests..."
-	@export log_level=error;\
-	CGO_ENABLED=1 tools/bin/gotestsum --junitfile cdc-junit-report.xml -- -v -timeout 300s -p $(P) --race --tags=intest,nextgen \
-	-parallel=16 \
-	-covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" $(PACKAGES) \
-	|| { $(FAILPOINT_DISABLE); exit 1; }
-	tools/bin/gocov convert "$(TEST_DIR)/cov.unit.out" | tools/bin/gocov-xml > cdc-coverage.xml
-	$(FAILPOINT_DISABLE)
+unit_test_in_verify_ci_next_gen:
+	NEXT_GEN=1 make unit_test_in_verify_ci
 
 unit_test_pkg: check_failpoint_ctl tools/bin/gotestsum tools/bin/gocov tools/bin/gocov-xml
 	mkdir -p "$(TEST_DIR)"
 	$(FAILPOINT_ENABLE)
 	@echo "Running unit tests..."
-	@export log_level=error;\
-	CGO_ENABLED=1 tools/bin/gotestsum --junitfile cdc-junit-report.xml -- -v -timeout 300s -p $(P) --race --tags=intest \
+	export log_level=error;\
+	CGO_ENABLED=1 tools/bin/gotestsum --junitfile cdc-junit-report.xml -- -v -timeout 1200s $(TEST_FLAG) \
 	-parallel=16 \
 	-covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" \
 	$(PKG) \
@@ -288,18 +282,8 @@ unit_test_pkg: check_failpoint_ctl tools/bin/gotestsum tools/bin/gocov tools/bin
 	tools/bin/gocov convert "$(TEST_DIR)/cov.unit.out" | tools/bin/gocov-xml > cdc-coverage.xml
 	$(FAILPOINT_DISABLE)
 
-unit_test_pkg_next_gen: check_failpoint_ctl tools/bin/gotestsum tools/bin/gocov tools/bin/gocov-xml
-	mkdir -p "$(TEST_DIR)"
-	$(FAILPOINT_ENABLE)
-	@echo "Running unit tests..."
-	@export log_level=error;\
-	CGO_ENABLED=1 tools/bin/gotestsum --junitfile cdc-junit-report.xml -- -v -timeout 300s -p $(P) --race --tags=intest,nextgen \
-	-parallel=16 \
-	-covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" \
-	$(PKG) \
-	|| { $(FAILPOINT_DISABLE); exit 1; }
-	tools/bin/gocov convert "$(TEST_DIR)/cov.unit.out" | tools/bin/gocov-xml > cdc-coverage.xml
-	$(FAILPOINT_DISABLE)
+unit_test_pkg_next_gen:
+	NEXT_GEN=1 make unit_test_pkg
 
 tidy:
 	@echo "go mod tidy"

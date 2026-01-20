@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/retry"
+	"github.com/pingcap/ticdc/pkg/tidbtype"
 	"github.com/pingcap/ticdc/pkg/upstream"
 	"github.com/pingcap/tidb/pkg/kv"
 	"go.uber.org/zap"
@@ -136,7 +137,7 @@ func (k *manager) Close() {
 	for _, storage := range k.storageMap {
 		err := storage.Close()
 		if err != nil {
-			log.Error("close storage", zap.String("keyspace", storage.GetKeyspace()), zap.Error(err))
+			log.Error("close storage", zap.String("keyspace", tidbtype.KeyspaceOfStorage(storage)), zap.Error(err))
 		}
 	}
 }

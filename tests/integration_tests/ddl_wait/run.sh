@@ -23,7 +23,7 @@ function run() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
 	cd $CUR
-	GO111MODULE=on go run test.go
+	GO111MODULE=on go run $GO_RUN_TAGS test.go
 
 	TOPIC_NAME="ticdc-ddl-wait-test-$RANDOM"
 	SINK_URI="mysql://root@127.0.0.1:3306/?read-timeout=300ms"

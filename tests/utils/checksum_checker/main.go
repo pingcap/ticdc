@@ -26,8 +26,8 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/tidbtype"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/zap"
 )
 
@@ -205,7 +205,7 @@ func getColumns(tx *sql.Tx, schema, table string, selector *columnselector.Colum
 		if err := rows.Scan(&t.Field, &t.Type, &t.Null, &t.Key, &t.Default, &t.Extra); err != nil {
 			return result, errors.Trace(err)
 		}
-		colInfo := &model.ColumnInfo{Name: ast.NewCIStr(t.Field)}
+		colInfo := &model.ColumnInfo{Name: tidbtype.NewCIStr(t.Field)}
 		if selector.Select(colInfo) {
 			result = append(result, t.Field)
 		}

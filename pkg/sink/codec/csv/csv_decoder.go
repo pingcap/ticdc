@@ -62,15 +62,16 @@ func NewDecoder(ctx context.Context,
 	if len(codecConfig.Quote) == 0 {
 		backslashEscape = true
 	}
-	cfg := &lconfig.CSVConfig{
-		FieldsTerminatedBy: codecConfig.Delimiter,
-		FieldsEnclosedBy:   codecConfig.Quote,
-		LinesTerminatedBy:  codecConfig.Terminator,
-		FieldNullDefinedBy: []string{codecConfig.NullString},
-		BackslashEscape:    backslashEscape,
-		HeaderSchemaMatch:  true,
-		Header:             codecConfig.CSVOutputFieldHeader,
-	}
+	cfg := newCSVConfig(
+		codecConfig.Delimiter,
+		codecConfig.Quote,
+		codecConfig.Terminator,
+		[]string{codecConfig.NullString},
+		backslashEscape,
+		true,
+		codecConfig.CSVOutputFieldHeader,
+	)
+
 	csvParser, err := mydump.NewCSVParser(ctx, cfg,
 		mydump.NewStringReader(string(value)),
 		int64(lconfig.ReadBlockSize),

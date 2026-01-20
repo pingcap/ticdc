@@ -49,7 +49,7 @@ if [ "$SINK_TYPE" != "storage" ]; then
 	run_sql "set global tidb_enable_fast_create_table=off" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	cd "$(dirname "$0")"
 	set -o pipefail
-	GO111MODULE=on go run main.go -config ./config.toml 2>&1 | tee $WORK_DIR/tester.log
+	GO111MODULE=on go run $GO_RUN_TAGS main.go -config ./config.toml 2>&1 | tee $WORK_DIR/tester.log
 	check_table_exists mark.finish_mark_0 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 	check_table_exists mark.finish_mark_1 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 	check_table_exists mark.finish_mark_2 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
@@ -72,7 +72,7 @@ if [ "$SINK_TYPE" != "storage" ]; then
 	run_sql "set global tidb_enable_fast_create_table=on" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	cd "$(dirname "$0")"
 	set -o pipefail
-	GO111MODULE=on go run main.go -config ./config.toml 2>&1 | tee $WORK_DIR/tester.log
+	GO111MODULE=on go run $GO_RUN_TAGS main.go -config ./config.toml 2>&1 | tee $WORK_DIR/tester.log
 	check_table_exists mark.finish_mark_0 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 	check_table_exists mark.finish_mark_1 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 	check_table_exists mark.finish_mark_2 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300

@@ -29,10 +29,10 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/tidbtype"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
 	tiTypes "github.com/pingcap/tidb/pkg/types"
@@ -337,7 +337,7 @@ func (b *decoder) newTableInfo(key *messageKey, value *messageRow) *commonType.T
 	key.Partition = &physicalTableID
 	tableInfo := new(timodel.TableInfo)
 	tableInfo.ID = *key.Partition
-	tableInfo.Name = ast.NewCIStr(key.Table)
+	tableInfo.Name = tidbtype.NewCIStr(key.Table)
 
 	var rawColumns map[string]column
 	if value.Update != nil {
@@ -379,7 +379,7 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 		raw := pair.column
 		col := new(timodel.ColumnInfo)
 		col.ID = nextColumnID
-		col.Name = ast.NewCIStr(name)
+		col.Name = tidbtype.NewCIStr(name)
 		col.FieldType = *types.NewFieldType(raw.Type)
 
 		if isPrimary(raw.Flag) || isHandle(raw.Flag) {
@@ -448,7 +448,7 @@ func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
 			})
 			indices = append(indices, &timodel.IndexInfo{
 				ID:      1,
-				Name:    ast.NewCIStr("primary"),
+				Name:    tidbtype.NewCIStr("primary"),
 				Columns: indexColumns,
 				Primary: true,
 				Unique:  true,
@@ -461,7 +461,7 @@ func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
 			})
 			indices = append(indices, &timodel.IndexInfo{
 				ID:      1 + int64(len(indices)),
-				Name:    ast.NewCIStr(col.Name.O + "_idx"),
+				Name:    tidbtype.NewCIStr(col.Name.O + "_idx"),
 				Columns: indexColumns,
 				Unique:  true,
 			})
@@ -477,7 +477,7 @@ func newTiIndices(columns []*timodel.ColumnInfo) []*timodel.IndexInfo {
 	if len(multiColumns) != 0 {
 		indices = append(indices, &timodel.IndexInfo{
 			ID:      1 + int64(len(indices)),
-			Name:    ast.NewCIStr("multi_idx"),
+			Name:    tidbtype.NewCIStr("multi_idx"),
 			Columns: multiColumns,
 			Unique:  false,
 		})
