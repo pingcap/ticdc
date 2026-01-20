@@ -766,9 +766,9 @@ var (
 		"changefeed is in retryable state",
 		errors.RFCCodeText("CDC:ErrChangefeedRetryable"),
 	)
-	ErrChangefeedInitTableTriggerEventDispatcherFailed = errors.Normalize(
-		"failed to init table trigger event dispatcher",
-		errors.RFCCodeText("CDC:ErrChangefeedInitTableTriggerEventDispatcherFailed"),
+	ErrChangefeedInitTableTriggerDispatcherFailed = errors.Normalize(
+		"failed to init table trigger dispatcher",
+		errors.RFCCodeText("CDC:ErrChangefeedInitTableTriggerDispatcherFailed"),
 	)
 	ErrDDLEventError = errors.Normalize(
 		"ddl event meets error",

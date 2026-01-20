@@ -38,9 +38,9 @@ mysql_groups=(
 	# G03
 	'cdc move_table in_flight_ddl_during_scheduling checkpoint_race_ddl_crash'
 	# G04
-	'complex_transaction syncpoint in_flight_syncpoint_during_scheduling syncpoint_check_ts random_drop_message'
+	'complex_transaction'
 	# G05
-	'ddl_for_split_tables_with_merge_and_split'
+	'ddl_for_split_tables_with_merge_and_split syncpoint in_flight_syncpoint_during_scheduling syncpoint_check_ts random_drop_message'
 	# G06
 	'ddl_for_split_tables_with_random_merge_and_split'
 	# G07
