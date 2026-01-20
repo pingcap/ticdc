@@ -68,7 +68,7 @@ func (o *resumeChangefeedOptions) addFlags(cmd *cobra.Command) {
 		"Certificate path for TLS connection to upstream")
 	cmd.PersistentFlags().StringVar(&o.upstreamKeyPath, "upstream-key", "",
 		"Private key path for TLS connection to upstream")
-	cmd.PersistentFlags().BoolVar(&o.verbose, "verbose", false, "Print verbose information during updating changefeed")
+	cmd.PersistentFlags().BoolVar(&o.verbose, "verbose", false, "Print verbose information when updating a changefeed. Caution: This will list all tables to be replicated by the changefeed. If the number of tables is extremely large, it may flood your screen.")
 	// we don't support specify there flags below when cdc version <= 6.3.0
 	_ = cmd.PersistentFlags().MarkHidden("upstream-pd")
 	_ = cmd.PersistentFlags().MarkHidden("upstream-ca")

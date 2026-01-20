@@ -52,7 +52,7 @@ func (o *updateChangefeedOptions) addFlags(cmd *cobra.Command) {
 	o.commonChangefeedOptions.addFlags(cmd)
 	cmd.PersistentFlags().StringVarP(&o.keyspace, "keyspace", "k", "default", "Replication task (changefeed) Keyspace")
 	cmd.PersistentFlags().StringVarP(&o.changefeedID, "changefeed-id", "c", "", "Replication task (changefeed) ID")
-	cmd.PersistentFlags().BoolVar(&o.verbose, "verbose", false, "Print verbose information during updating changefeed")
+	cmd.PersistentFlags().BoolVar(&o.verbose, "verbose", false, "Print verbose information when updating a changefeed. Caution: This will list all tables to be replicated by the changefeed. If the number of tables is extremely large, it may flood your screen.")
 	_ = cmd.MarkPersistentFlagRequired("changefeed-id")
 }
 
