@@ -180,7 +180,7 @@ func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
 		"\nID: %s\nInfo: %s\nIneligibleTablesCount: %d\nEligibleTablesCount: %d\n", info.ID, infoStr, len(tables.IneligibleTables), len(tables.EligibleTables))
 	if o.verbose {
 		cmd.Printf("EligibleTables: %v\n", tables.EligibleTables)
-		cmd.Printf("IneligibleTablesCount: %v\n", tables.IneligibleTables)
+cmd.Printf("IneligibleTables: %v\n", tables.IneligibleTables)
 	}
 	return nil
 }
