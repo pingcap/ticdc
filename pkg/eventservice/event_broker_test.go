@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -261,30 +262,37 @@ func TestResetDispatcher(t *testing.T) {
 	require.Equal(t, dispInfo.GetID(), newStat.id)
 }
 
-func TestGetScanTaskDataRangeRespectsScanMaxTs(t *testing.T) {
+func TestGetScanTaskDataRangeRespectsScanWindow(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	broker.close()
 
 	info := newMockDispatcherInfoForTest(t)
-	info.startTs = 100
+	info.startTs = oracle.GoTimeToTS(time.Unix(1, 0))
 	info.epoch = 1
 
 	status := broker.getOrSetChangefeedStatus(info.GetChangefeedID())
 	disp := newDispatcherStat(info, 1, 1, nil, status)
+	dispPtr := &atomic.Pointer[dispatcherStat]{}
+	dispPtr.Store(disp)
+	status.addDispatcher(info.GetID(), dispPtr)
 	disp.setHandshaked()
+	disp.hasReceivedFirstResolvedTs.Store(true)
 
-	disp.lastScannedCommitTs.Store(100)
+	disp.lastScannedCommitTs.Store(info.startTs)
 	disp.lastScannedStartTs.Store(0)
-	disp.receivedResolvedTs.Store(200)
-	disp.eventStoreCommitTs.Store(100)
+	disp.receivedResolvedTs.Store(oracle.GoTimeToTS(time.Unix(3, 0)))
+	disp.eventStoreCommitTs.Store(info.startTs)
 
-	status.scanMaxTs.Store(node.ID(info.serverID), atomic.NewUint64(150))
+	status.getOrCreateScanWindowStat(node.ID(info.serverID)).windowNs.Store(uint64(time.Second))
+	status.getOrCreateScanWindowStat(node.ID(info.serverID)).lastCompute.Store(0)
 	ok, dr := broker.getScanTaskDataRange(disp)
 	require.True(t, ok)
-	require.Equal(t, uint64(150), dr.CommitTsEnd)
+	require.Equal(t, oracle.GoTimeToTS(time.Unix(2, 0)), dr.CommitTsEnd)
 
 	// Fully consumed scan window.
-	status.scanMaxTs.Store(node.ID(info.serverID), atomic.NewUint64(100))
+	disp.checkpointTs.Store(oracle.GoTimeToTS(time.Unix(0, 500*int64(time.Millisecond)))) // 0.5s
+	status.getOrCreateScanWindowStat(node.ID(info.serverID)).windowNs.Store(uint64(400 * time.Millisecond))
+	status.getOrCreateScanWindowStat(node.ID(info.serverID)).lastCompute.Store(0)
 	ok, _ = broker.getScanTaskDataRange(disp)
 	require.False(t, ok)
 }
@@ -294,27 +302,33 @@ func TestGetScanTaskDataRangeAllowsResumeInterruptedScanWhenScanWindowConsumed(t
 	broker.close()
 
 	info := newMockDispatcherInfoForTest(t)
-	info.startTs = 100
+	info.startTs = oracle.GoTimeToTS(time.Unix(1, 0))
 	info.epoch = 1
 
 	status := broker.getOrSetChangefeedStatus(info.GetChangefeedID())
 	disp := newDispatcherStat(info, 1, 1, nil, status)
+	dispPtr := &atomic.Pointer[dispatcherStat]{}
+	dispPtr.Store(disp)
+	status.addDispatcher(info.GetID(), dispPtr)
 	disp.setHandshaked()
+	disp.hasReceivedFirstResolvedTs.Store(true)
 
 	// Simulate an interrupted scan at the same commit-ts:
 	// - lastScannedCommitTs is the commit-ts we are stuck on
 	// - lastScannedStartTs != 0 indicates there are remaining entries at the same commit-ts
-	disp.lastScannedCommitTs.Store(100)
+	disp.lastScannedCommitTs.Store(info.startTs)
 	disp.lastScannedStartTs.Store(80)
-	disp.receivedResolvedTs.Store(200)
-	disp.eventStoreCommitTs.Store(100)
+	disp.receivedResolvedTs.Store(oracle.GoTimeToTS(time.Unix(3, 0)))
+	disp.eventStoreCommitTs.Store(info.startTs)
 
 	// scanMaxTs is fully consumed, but we still need to scan remaining entries at commitTs==CommitTsStart.
-	status.scanMaxTs.Store(node.ID(info.serverID), atomic.NewUint64(100))
+	disp.checkpointTs.Store(oracle.GoTimeToTS(time.Unix(0, 500*int64(time.Millisecond)))) // 0.5s
+	status.getOrCreateScanWindowStat(node.ID(info.serverID)).windowNs.Store(uint64(400 * time.Millisecond))
+	status.getOrCreateScanWindowStat(node.ID(info.serverID)).lastCompute.Store(0)
 	ok, dr := broker.getScanTaskDataRange(disp)
 	require.True(t, ok)
-	require.Equal(t, uint64(100), dr.CommitTsStart)
-	require.Equal(t, uint64(100), dr.CommitTsEnd)
+	require.Equal(t, info.startTs, dr.CommitTsStart)
+	require.Equal(t, info.startTs, dr.CommitTsEnd)
 }
 
 func TestResetDispatcherConcurrently(t *testing.T) {

@@ -8,15 +8,11 @@ import (
 	"go.uber.org/zap"
 )
 
-func (c *EventCollector) updateScanMaxTsForChangefeed(
+func (c *EventCollector) updateScanWindowForChangefeed(
 	cfStat *changefeedStat,
 	memoryUsageRatio float64,
-) uint64 {
+) time.Duration {
 	var (
-		scanLimitBaseTs uint64 = ^uint64(0)
-		hasEligible     bool
-		slowestID       common.DispatcherID
-
 		syncPointSeen     bool
 		syncPointEnabled  bool
 		syncPointInterval time.Duration
@@ -29,17 +25,6 @@ func (c *EventCollector) updateScanMaxTsForChangefeed(
 			return true
 		}
 		stat := v.(*dispatcherStat)
-
-		checkpointTs := stat.target.GetCheckpointTs()
-
-		// Ignore dispatchers that never received any resolved-ts event.
-		if stat.hasReceivedResolvedTs.Load() {
-			hasEligible = true
-			if checkpointTs > 0 && checkpointTs < scanLimitBaseTs {
-				scanLimitBaseTs = checkpointTs
-				slowestID = dispatcherID
-			}
-		}
 
 		enableSyncPoint := stat.target.EnableSyncPoint()
 		interval := stat.target.GetSyncPointInterval()
@@ -72,21 +57,5 @@ func (c *EventCollector) updateScanMaxTsForChangefeed(
 
 	scanInterval := cfStat.scanWindow.observe(memoryUsageRatio, maxInterval)
 	cfStat.metricScanInterval.Set(scanInterval.Seconds())
-
-	if !hasEligible || scanLimitBaseTs == ^uint64(0) {
-		// scanMaxTs == 0 means no scan window limit in EventService.
-		cfStat.metricScanMaxTs.Set(0)
-		return 0
-	}
-
-	scanMaxTs := calcScanMaxTs(scanLimitBaseTs, scanInterval)
-	cfStat.metricScanMaxTs.Set(float64(scanMaxTs))
-	log.Info("update scan max ts for changefeed",
-		zap.Stringer("changefeedID", cfStat.changefeedID),
-		zap.Stringer("slowestDispatcherID", slowestID),
-		zap.Uint64("scanLimitBaseTs", scanLimitBaseTs),
-		zap.Duration("scanInterval", scanInterval),
-		zap.Uint64("scanMaxTs", scanMaxTs),
-	)
-	return scanMaxTs
+	return scanInterval
 }

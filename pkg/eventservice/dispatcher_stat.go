@@ -425,7 +425,25 @@ type changefeedStatus struct {
 	dispatchers sync.Map // common.DispatcherID -> *atomic.Pointer[dispatcherStat]
 
 	availableMemoryQuota sync.Map // nodeID -> atomic.Uint64 (memory quota in bytes)
-	scanMaxTs            sync.Map // nodeID -> atomic.Uint64 (scan max ts in tso, 0 means no limit)
+	scanWindow           sync.Map // nodeID -> *scanWindowStat (scan window in nanoseconds, 0 means no limit)
+}
+
+type scanWindowStat struct {
+	windowNs    atomic.Uint64
+	lastCompute atomic.Int64 // UnixNano
+
+	baseTs   atomic.Uint64
+	scanMaxTs atomic.Uint64
+}
+
+func (c *changefeedStatus) getOrCreateScanWindowStat(id node.ID) *scanWindowStat {
+	item, ok := c.scanWindow.Load(id)
+	if ok {
+		return item.(*scanWindowStat)
+	}
+	stat := &scanWindowStat{}
+	actual, _ := c.scanWindow.LoadOrStore(id, stat)
+	return actual.(*scanWindowStat)
 }
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {

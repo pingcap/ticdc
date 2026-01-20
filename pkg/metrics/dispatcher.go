@@ -133,14 +133,6 @@ var (
 			Name:      "scan_interval_seconds",
 			Help:      "Current scan interval (seconds) used for EventService scan window cap",
 		}, []string{getKeyspaceLabel(), "changefeed"})
-
-	EventCollectorScanMaxTsGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "event_collector",
-			Name:      "scan_max_ts",
-			Help:      "Current scan max ts (tso) sent to EventService",
-		}, []string{getKeyspaceLabel(), "changefeed"})
 )
 
 func initDispatcherMetrics(registry *prometheus.Registry) {
@@ -159,5 +151,4 @@ func initDispatcherMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventCollectorHandleEventDuration)
 	registry.MustRegister(EventCollectorDroppedEventCount)
 	registry.MustRegister(EventCollectorScanIntervalGauge)
-	registry.MustRegister(EventCollectorScanMaxTsGauge)
 }

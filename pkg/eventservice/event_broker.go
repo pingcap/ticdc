@@ -380,6 +380,79 @@ func (c *eventBroker) logUninitializedDispatchers(ctx context.Context) error {
 	}
 }
 
+const scanWindowComputeInterval = time.Second
+
+func (c *eventBroker) computeGroupMinCheckpointTs(
+	changefeed *changefeedStatus,
+	remoteID node.ID,
+) (scanLimitBaseTs uint64, slowestDispatcherID common.DispatcherID) {
+	scanLimitBaseTs = ^uint64(0)
+	hasEligible := false
+
+	changefeed.dispatchers.Range(func(_, v any) bool {
+		dispatcher := v.(*atomic.Pointer[dispatcherStat]).Load()
+		if dispatcher.isRemoved.Load() {
+			return true
+		}
+		if node.ID(dispatcher.info.GetServerID()) != remoteID {
+			return true
+		}
+		// Ignore dispatchers that haven't received any resolved-ts from event store yet.
+		// This helps avoid dragging scan window by dispatchers still in early data production stage.
+		if !dispatcher.hasReceivedFirstResolvedTs.Load() {
+			return true
+		}
+
+		checkpointTs := dispatcher.checkpointTs.Load()
+		if checkpointTs > 0 && checkpointTs < scanLimitBaseTs {
+			hasEligible = true
+			scanLimitBaseTs = checkpointTs
+			slowestDispatcherID = dispatcher.id
+		}
+		return true
+	})
+
+	if !hasEligible || scanLimitBaseTs == ^uint64(0) {
+		return 0, common.DispatcherID{}
+	}
+	return scanLimitBaseTs, slowestDispatcherID
+}
+
+func (c *eventBroker) getOrComputeScanWindowScanMaxTs(
+	changefeed *changefeedStatus,
+	remoteID node.ID,
+) (windowNs uint64, scanLimitBaseTs uint64, scanMaxTs uint64, slowestDispatcherID common.DispatcherID) {
+	s := changefeed.getOrCreateScanWindowStat(remoteID)
+	windowNs = s.windowNs.Load()
+	if windowNs == 0 {
+		s.baseTs.Store(0)
+		s.scanMaxTs.Store(0)
+		return 0, 0, 0, common.DispatcherID{}
+	}
+
+	now := time.Now().UnixNano()
+	last := s.lastCompute.Load()
+	if last > 0 && now-last < int64(scanWindowComputeInterval) {
+		return windowNs, s.baseTs.Load(), s.scanMaxTs.Load(), common.DispatcherID{}
+	}
+	if !s.lastCompute.CAS(last, now) {
+		return windowNs, s.baseTs.Load(), s.scanMaxTs.Load(), common.DispatcherID{}
+	}
+
+	scanLimitBaseTs, slowestDispatcherID = c.computeGroupMinCheckpointTs(changefeed, remoteID)
+	s.baseTs.Store(scanLimitBaseTs)
+
+	if scanLimitBaseTs == 0 {
+		scanMaxTs = 0
+	} else {
+		scanMaxTs = oracle.GoTimeToTS(oracle.GetTimeFromTS(scanLimitBaseTs).Add(time.Duration(windowNs)))
+	}
+	s.scanMaxTs.Store(scanMaxTs)
+	metrics.EventServiceScanMaxTsGaugeVec.WithLabelValues(changefeed.changefeedID.Keyspace(), changefeed.changefeedID.Name(), remoteID.String()).
+		Set(float64(scanMaxTs))
+	return windowNs, scanLimitBaseTs, scanMaxTs, slowestDispatcherID
+}
+
 // getScanTaskDataRange determines the valid data range for scanning a given task.
 // It checks various conditions (dispatcher status, DDL state, max commit ts of dml event)
 // to decide whether scanning is needed and returns the appropriate time range.
@@ -407,15 +480,19 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	// 	zap.Uint64("eventStoreCommitTs", task.eventStoreCommitTs.Load()))
 
 	remoteID := node.ID(task.info.GetServerID())
-	if item, ok := task.changefeedStat.scanMaxTs.Load(remoteID); ok {
-		scanMaxTs := item.(*atomic.Uint64).Load()
-		log.Info("determine scan data range start with max ts",
+	windowNs, scanLimitBaseTs, scanMaxTs, slowestDispatcherID := c.getOrComputeScanWindowScanMaxTs(task.changefeedStat, remoteID)
+	if windowNs > 0 {
+		log.Info("determine scan data range start with scan window",
 			zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
 			zap.Stringer("dispatcherID", task.id),
 			zap.Any("dataRange", dataRange),
+			zap.Stringer("slowestDispatcherID", slowestDispatcherID),
+			zap.Uint64("scanLimitBaseTs", scanLimitBaseTs),
+			zap.Duration("scanWindow", time.Duration(windowNs)),
 			zap.Uint64("scanMaxTs", scanMaxTs),
 			zap.Uint64("lastScannedStartTs", task.lastScannedStartTs.Load()),
 			zap.Uint64("eventStoreCommitTs", task.eventStoreCommitTs.Load()))
+
 		// scanMaxTs == 0 means no limit.
 		if scanMaxTs > 0 && scanMaxTs < dataRange.CommitTsEnd {
 			// If the scan window is fully consumed, skip scanning and only send a "signal" resolved-ts.
@@ -1254,10 +1331,10 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 	}
 
 	holder := make(map[common.GID]uint64, len(availables))
-	scanMaxTsHolder := make(map[common.GID]uint64, len(availables))
+	scanWindowHolder := make(map[common.GID]uint64, len(availables))
 	for _, item := range availables {
 		holder[item.Gid] = item.Available
-		scanMaxTsHolder[item.Gid] = item.ScanMaxTs
+		scanWindowHolder[item.Gid] = item.ScanWindow
 	}
 
 	c.changefeedMap.Range(func(k, v interface{}) bool {
@@ -1268,8 +1345,12 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 			changefeed.availableMemoryQuota.Store(from, atomic.NewUint64(available))
 			metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(available))
 		}
-		if scanMaxTs, ok := scanMaxTsHolder[changefeedID.ID()]; ok {
-			changefeed.scanMaxTs.Store(from, atomic.NewUint64(scanMaxTs))
+		if scanWindow, ok := scanWindowHolder[changefeedID.ID()]; ok {
+			s := changefeed.getOrCreateScanWindowStat(from)
+			s.windowNs.Store(scanWindow)
+			s.lastCompute.Store(0)
+			metrics.EventServiceScanWindowGaugeVec.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), from.String()).
+				Set(time.Duration(scanWindow).Seconds())
 		}
 		return true
 	})

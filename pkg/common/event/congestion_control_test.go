@@ -311,7 +311,7 @@ func TestCongestionControlVersionCompatibility(t *testing.T) {
 	require.Equal(t, uint64(2048), decoded.availables[0].Available)
 }
 
-func TestCongestionControlV2ScanMaxTs(t *testing.T) {
+func TestCongestionControlV2ScanWindow(t *testing.T) {
 	t.Parallel()
 
 	control := NewCongestionControl()
@@ -320,7 +320,7 @@ func TestCongestionControlV2ScanMaxTs(t *testing.T) {
 	dispatcherAvailable := map[common.DispatcherID]uint64{
 		common.NewDispatcherID(): 500,
 	}
-	control.AddAvailableMemoryWithDispatchersAndScanMaxTs(gid, 1024, 2048, dispatcherAvailable)
+	control.AddAvailableMemoryWithDispatchersAndScanWindow(gid, 1024, 2048, dispatcherAvailable)
 
 	data, err := control.Marshal()
 	require.NoError(t, err)
@@ -330,5 +330,5 @@ func TestCongestionControlV2ScanMaxTs(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, CongestionControlVersion2, decoded.version)
 	require.Len(t, decoded.availables, 1)
-	require.Equal(t, uint64(2048), decoded.availables[0].ScanMaxTs)
+	require.Equal(t, uint64(2048), decoded.availables[0].ScanWindow)
 }

@@ -122,6 +122,20 @@ var (
 		Name:      "available_memory_quota",
 	}, []string{"changefeed"})
 
+	EventServiceScanWindowGaugeVec = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_service",
+		Name:      "scan_window_seconds",
+		Help:      "Current scan window size (seconds) received from EventCollector, grouped by (changefeed, server)",
+	}, []string{getKeyspaceLabel(), "changefeed", "server"})
+
+	EventServiceScanMaxTsGaugeVec = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_service",
+		Name:      "scan_max_ts",
+		Help:      "Current scan max ts (tso) computed in EventService, grouped by (changefeed, server)",
+	}, []string{getKeyspaceLabel(), "changefeed", "server"})
+
 	EventServiceScannedDMLSize = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: "ticdc",
 		Subsystem: "event_service",
@@ -187,6 +201,8 @@ func initEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceDispatcherUpdateResolvedTsDiff)
 	registry.MustRegister(EventServiceSkipResolvedTsCount)
 	registry.MustRegister(EventServiceAvailableMemoryQuotaGaugeVec)
+	registry.MustRegister(EventServiceScanWindowGaugeVec)
+	registry.MustRegister(EventServiceScanMaxTsGaugeVec)
 	registry.MustRegister(EventServiceScannedDMLSize)
 	registry.MustRegister(EventServiceScannedTxnCount)
 	registry.MustRegister(EventServiceSkipScanCount)

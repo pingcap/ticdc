@@ -30,7 +30,7 @@ type AvailableMemory struct {
 	Version             byte                           // 1 byte, it should be the same as CongestionControlVersion
 	Gid                 common.GID                     // GID is the internal representation of ChangeFeedID
 	Available           uint64                         // in bytes, used to report the Available memory
-	ScanMaxTs           uint64                         // in tso, used to limit scan window (0 means no limit)
+	ScanWindow          uint64                         // in nanoseconds, used to report scan window size (0 means no limit)
 	DispatcherCount     uint32                         // used to report the number of dispatchers
 	DispatcherAvailable map[common.DispatcherID]uint64 // in bytes, used to report the memory usage of each dispatcher
 }
@@ -60,7 +60,7 @@ func (m AvailableMemory) marshalV2() []byte {
 	buf := bytes.NewBuffer(make([]byte, 0))
 	buf.Write(m.Gid.Marshal())
 	binary.Write(buf, binary.BigEndian, m.Available)
-	binary.Write(buf, binary.BigEndian, m.ScanMaxTs)
+	binary.Write(buf, binary.BigEndian, m.ScanWindow)
 	binary.Write(buf, binary.BigEndian, m.DispatcherCount)
 	for dispatcherID, available := range m.DispatcherAvailable {
 		buf.Write(dispatcherID.Marshal())
@@ -72,7 +72,7 @@ func (m AvailableMemory) marshalV2() []byte {
 func (m *AvailableMemory) unmarshalV1(buf *bytes.Buffer) {
 	m.Gid.Unmarshal(buf.Next(m.Gid.GetSize()))
 	m.Available = binary.BigEndian.Uint64(buf.Next(8))
-	m.ScanMaxTs = 0
+	m.ScanWindow = 0
 	m.DispatcherCount = binary.BigEndian.Uint32(buf.Next(4))
 	m.DispatcherAvailable = make(map[common.DispatcherID]uint64)
 	for range m.DispatcherCount {
@@ -85,7 +85,7 @@ func (m *AvailableMemory) unmarshalV1(buf *bytes.Buffer) {
 func (m *AvailableMemory) unmarshalV2(buf *bytes.Buffer) {
 	m.Gid.Unmarshal(buf.Next(m.Gid.GetSize()))
 	m.Available = binary.BigEndian.Uint64(buf.Next(8))
-	m.ScanMaxTs = binary.BigEndian.Uint64(buf.Next(8))
+	m.ScanWindow = binary.BigEndian.Uint64(buf.Next(8))
 	m.DispatcherCount = binary.BigEndian.Uint32(buf.Next(4))
 	m.DispatcherAvailable = make(map[common.DispatcherID]uint64)
 	for range m.DispatcherCount {
@@ -108,7 +108,7 @@ func (m AvailableMemory) getSizeV1() int {
 }
 
 func (m AvailableMemory) getSizeV2() int {
-	return m.getSizeV1() + 8 // scanMaxTs
+	return m.getSizeV1() + 8 // scan window
 }
 
 type CongestionControl struct {
@@ -249,15 +249,15 @@ func (c *CongestionControl) AddAvailableMemoryWithDispatchers(gid common.GID, av
 	c.availables = append(c.availables, availMem)
 }
 
-func (c *CongestionControl) AddAvailableMemoryWithDispatchersAndScanMaxTs(
+func (c *CongestionControl) AddAvailableMemoryWithDispatchersAndScanWindow(
 	gid common.GID,
 	available uint64,
-	scanMaxTs uint64,
+	scanWindow uint64,
 	dispatcherAvailable map[common.DispatcherID]uint64,
 ) {
 	c.changefeedCount++
 	availMem := NewAvailableMemory(gid, available)
-	availMem.ScanMaxTs = scanMaxTs
+	availMem.ScanWindow = scanWindow
 	availMem.DispatcherAvailable = dispatcherAvailable
 	availMem.DispatcherCount = uint32(len(dispatcherAvailable))
 	c.availables = append(c.availables, availMem)

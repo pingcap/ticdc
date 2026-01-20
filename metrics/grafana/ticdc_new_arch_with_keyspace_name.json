@@ -3882,7 +3882,7 @@
             },
             {
               "exemplar": true,
-              "expr": "floor((max(ticdc_event_collector_scan_max_ts{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (instance, changefeed)) / 262144)",
+              "expr": "floor((max(ticdc_event_service_scan_max_ts{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (instance, changefeed)) / 262144)",
               "interval": "",
               "intervalFactor": 1,
               "legendFormat": "{{instance}}-{{changefeed}}",

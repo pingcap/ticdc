@@ -83,7 +83,6 @@ type changefeedStat struct {
 	metricMemoryUsageMaxRedo  prometheus.Gauge
 	metricMemoryUsageUsedRedo prometheus.Gauge
 	metricScanInterval        prometheus.Gauge
-	metricScanMaxTs           prometheus.Gauge
 	dispatcherCount           atomic.Int32
 	dispatcherIDs             sync.Map // common.DispatcherID -> struct{}
 	scanWindow                *adaptiveScanWindow
@@ -97,7 +96,6 @@ func newChangefeedStat(changefeedID common.ChangeFeedID) *changefeedStat {
 		metricMemoryUsageMaxRedo:  metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector-redo", "max", changefeedID.Keyspace(), changefeedID.Name()),
 		metricMemoryUsageUsedRedo: metrics.DynamicStreamMemoryUsage.WithLabelValues("event-collector-redo", "used", changefeedID.Keyspace(), changefeedID.Name()),
 		metricScanInterval:        metrics.EventCollectorScanIntervalGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
-		metricScanMaxTs:           metrics.EventCollectorScanMaxTsGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 		scanWindow:                newAdaptiveScanWindow(),
 	}
 }
@@ -108,7 +106,6 @@ func (c *changefeedStat) removeMetrics() {
 	metrics.DynamicStreamMemoryUsage.DeleteLabelValues("event-collector-redo", "max", c.changefeedID.Keyspace(), c.changefeedID.Name())
 	metrics.DynamicStreamMemoryUsage.DeleteLabelValues("event-collector-redo", "used", c.changefeedID.Keyspace(), c.changefeedID.Name())
 	metrics.EventCollectorScanIntervalGauge.DeleteLabelValues(c.changefeedID.Keyspace(), c.changefeedID.Name())
-	metrics.EventCollectorScanMaxTsGauge.DeleteLabelValues(c.changefeedID.Keyspace(), c.changefeedID.Name())
 }
 
 /*
@@ -669,12 +666,12 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 
 	// build congestion control messages for each node
 	result := make(map[node.ID]*event.CongestionControl)
-	scanMaxTsByChangefeed := make(map[common.ChangeFeedID]uint64)
+	scanWindowByChangefeed := make(map[common.ChangeFeedID]time.Duration)
 
 	c.changefeedMap.Range(func(_, v any) bool {
 		cfStat := v.(*changefeedStat)
 		ratio := changefeedMemoryUsageRatio[cfStat.changefeedID]
-		scanMaxTsByChangefeed[cfStat.changefeedID] = c.updateScanMaxTsForChangefeed(cfStat, ratio)
+		scanWindowByChangefeed[cfStat.changefeedID] = c.updateScanWindowForChangefeed(cfStat, ratio)
 		return true
 	})
 
@@ -686,10 +683,10 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 			if !ok {
 				continue
 			}
-			congestionControl.AddAvailableMemoryWithDispatchersAndScanMaxTs(
+			congestionControl.AddAvailableMemoryWithDispatchersAndScanWindow(
 				changefeedID.ID(),
 				totalAvailable,
-				scanMaxTsByChangefeed[changefeedID],
+				uint64(scanWindowByChangefeed[changefeedID]),
 				nil,
 			)
 		}

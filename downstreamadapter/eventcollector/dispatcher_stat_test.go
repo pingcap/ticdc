@@ -44,6 +44,9 @@ type mockDispatcher struct {
 	events       []dispatcher.DispatcherEvent
 	checkPointTs uint64
 
+	enableSyncPoint    bool
+	syncPointInterval  time.Duration
+	blockEventStatus   *heartbeatpb.State
 	skipSyncpointAtStartTs bool
 }
 
@@ -53,6 +56,8 @@ func newMockDispatcher(id common.DispatcherID, startTs uint64) *mockDispatcher {
 		startTs:      startTs,
 		changefeedID: mockChangefeedID,
 		checkPointTs: startTs,
+		enableSyncPoint:   false,
+		syncPointInterval: time.Second * 10,
 	}
 }
 
@@ -87,15 +92,19 @@ func (m *mockDispatcher) GetFilterConfig() *eventpb.FilterConfig {
 }
 
 func (m *mockDispatcher) EnableSyncPoint() bool {
-	return false
+	return m.enableSyncPoint
 }
 
 func (m *mockDispatcher) GetSyncPointInterval() time.Duration {
-	return time.Second * 10
+	return m.syncPointInterval
 }
 
 func (m *mockDispatcher) GetSkipSyncpointAtStartTs() bool {
 	return m.skipSyncpointAtStartTs
+}
+
+func (m *mockDispatcher) GetBlockEventStatus() *heartbeatpb.State {
+	return m.blockEventStatus
 }
 
 func (m *mockDispatcher) GetResolvedTs() uint64 {
