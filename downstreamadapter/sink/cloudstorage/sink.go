@@ -169,20 +169,18 @@ func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 }
 
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
-	var err error
 	switch e := event.(type) {
 	case *commonEvent.DDLEvent:
-		err = s.writeDDLEvent(e)
+		err := s.writeDDLEvent(e)
+		if err != nil {
+			s.isNormal.Store(false)
+			return err
+		}
 	default:
-		log.Error("cloudstorage sink doesn't support this type of block event",
+		log.Error("cloudstorage sink doesn't support this type of block event, skip it",
 			zap.String("namespace", s.changefeedID.Keyspace()),
 			zap.String("changefeed", s.changefeedID.Name()),
 			zap.String("eventType", commonEvent.TypeToString(event.GetType())))
-		return errors.ErrInvalidEventType.GenWithStackByArgs(commonEvent.TypeToString(event.GetType()))
-	}
-	if err != nil {
-		s.isNormal.Store(false)
-		return err
 	}
 	event.PostFlush()
 	return nil
@@ -196,19 +194,19 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 		def.FromTableInfo(event.ExtraSchemaName, event.ExtraTableName, event.TableInfo, event.FinishedTs, s.cfg.OutputColumnID)
 		def.Query = event.Query
 		def.Type = event.Type
-		if err := s.writeFile(event, def); err != nil {
+		if err := s.writeDDLEvent2File(event, def); err != nil {
 			return err
 		}
 		var sourceTableDef cloudstorage.TableDefinition
 		sourceTableDef.FromTableInfo(event.SchemaName, event.TableName, event.MultipleTableInfos[1], event.FinishedTs, s.cfg.OutputColumnID)
-		if err := s.writeFile(event, sourceTableDef); err != nil {
+		if err := s.writeDDLEvent2File(event, sourceTableDef); err != nil {
 			return err
 		}
 	} else {
 		for _, e := range event.GetEvents() {
 			var def cloudstorage.TableDefinition
 			def.FromDDLEvent(e, s.cfg.OutputColumnID)
-			if err := s.writeFile(e, def); err != nil {
+			if err := s.writeDDLEvent2File(e, def); err != nil {
 				return err
 			}
 		}
@@ -216,15 +214,15 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 	return nil
 }
 
-func (s *sink) writeFile(v *commonEvent.DDLEvent, def cloudstorage.TableDefinition) error {
+func (s *sink) writeDDLEvent2File(v *commonEvent.DDLEvent, def cloudstorage.TableDefinition) error {
 	encodedDef, err := def.MarshalWithQuery()
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 
 	path, err := def.GenerateSchemaFilePath()
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 	log.Debug("write ddl event to external storage",
 		zap.String("path", path), zap.Any("ddl", v))
