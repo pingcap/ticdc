@@ -213,7 +213,7 @@ func (o *resumeChangefeedOptions) run(cmd *cobra.Command) error {
 		if err != nil {
 			return err
 		}
-		tables, err := o.apiClient.Changefeeds().GetAllTables(ctx, &v2.VerifyTableConfig{
+tables, err = o.apiClient.Changefeeds().GetAllTables(ctx, &v2.VerifyTableConfig{
 			ReplicaConfig: cf.Config,
 			StartTs:       cf.CheckpointTs,
 		}, o.keyspace)
