@@ -15,6 +15,7 @@ package eventstore
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"time"
 
@@ -95,30 +96,116 @@ func (d *gcManager) fetchAllGCItems() []gcRangeItem {
 }
 
 func (d *gcManager) run(ctx context.Context) error {
-	deleteTicker := time.NewTicker(50 * time.Millisecond)
-	defer deleteTicker.Stop()
-	compactTicker := time.NewTicker(10 * time.Minute)
-	defer compactTicker.Stop()
+	var wg sync.WaitGroup
+	wg.Add(2)
 
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-deleteTicker.C:
-			ranges := d.fetchAllGCItems()
-			if len(ranges) == 0 {
-				continue
+	go func() {
+		defer wg.Done()
+
+		deleteTicker := time.NewTicker(50 * time.Millisecond)
+		defer deleteTicker.Stop()
+
+		const deleteInfoLogInterval = 10 * time.Minute
+		lastInfoLog := time.Now()
+		windowStart := lastInfoLog
+		var windowBatchCount int
+		var windowRangeCount int
+		var windowTotalDuration time.Duration
+		var windowMaxBatchDuration time.Duration
+
+		logDeleteRangeStats := func(now time.Time) {
+			avgRangesPerBatch := 0.0
+			if windowBatchCount > 0 {
+				avgRangesPerBatch = float64(windowRangeCount) / float64(windowBatchCount)
 			}
-			log.Debug("gc manager deleting ranges", zap.Int("rangeCount", len(ranges)))
-			d.doGCJob(ranges)
-			d.updateCompactRanges(ranges)
-			metrics.EventStoreDeleteRangeCount.Add(float64(len(ranges)))
-		case <-compactTicker.C:
-			// it seems pebble doesn't compact cold range(no data write),
-			// so we do a manual compaction periodically.
-			d.doCompaction()
+			avgBatchDuration := time.Duration(0)
+			if windowBatchCount > 0 {
+				avgBatchDuration = windowTotalDuration / time.Duration(windowBatchCount)
+			}
+
+			log.Info("gc manager delete range progress",
+				zap.Duration("interval", now.Sub(windowStart)),
+				zap.Int("batchCount", windowBatchCount),
+				zap.Int("deletedRangeCount", windowRangeCount),
+				zap.Float64("avgRangesPerBatch", avgRangesPerBatch),
+				zap.Duration("avgBatchDuration", avgBatchDuration),
+				zap.Duration("maxBatchDuration", windowMaxBatchDuration))
+
+			lastInfoLog = now
+			windowStart = now
+			windowBatchCount = 0
+			windowRangeCount = 0
+			windowTotalDuration = 0
+			windowMaxBatchDuration = 0
 		}
-	}
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-deleteTicker.C:
+				ranges := d.fetchAllGCItems()
+				if len(ranges) == 0 {
+					if time.Since(lastInfoLog) >= deleteInfoLogInterval {
+						logDeleteRangeStats(time.Now())
+					}
+					continue
+				}
+
+				metrics.EventStoreDeleteRangeFetchedCount.Add(float64(len(ranges)))
+
+				originalRangeCount := len(ranges)
+				ranges, mergedCount := mergeDeleteRanges(ranges)
+				if mergedCount > 0 {
+					log.Debug("gc manager coalesced delete ranges",
+						zap.Int("fetchedRangeCount", originalRangeCount),
+						zap.Int("deleteOpCount", len(ranges)))
+				}
+
+				startTime := time.Now()
+				d.doGCJob(ranges)
+				d.updateCompactRanges(ranges)
+				metrics.EventStoreDeleteRangeCount.Add(float64(len(ranges)))
+
+				duration := time.Since(startTime)
+				windowBatchCount++
+				windowRangeCount += len(ranges)
+				windowTotalDuration += duration
+				if duration > windowMaxBatchDuration {
+					windowMaxBatchDuration = duration
+				}
+				log.Debug("gc manager deleted ranges",
+					zap.Int("batchRangeCount", len(ranges)),
+					zap.Duration("duration", duration))
+
+				if time.Since(lastInfoLog) >= deleteInfoLogInterval {
+					logDeleteRangeStats(time.Now())
+				}
+			}
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+
+		compactTicker := time.NewTicker(10 * time.Minute)
+		defer compactTicker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-compactTicker.C:
+				// it seems pebble doesn't compact cold range(no data write),
+				// so we do a manual compaction periodically.
+				d.doCompaction()
+			}
+		}
+	}()
+
+	<-ctx.Done()
+	wg.Wait()
+	return nil
 }
 
 func (d *gcManager) doGCJob(ranges []gcRangeItem) {
@@ -128,6 +215,65 @@ func (d *gcManager) doGCJob(ranges []gcRangeItem) {
 			log.Warn("gc manager failed to delete data range", zap.Error(err))
 		}
 	}
+}
+
+// mergeDeleteRanges merges delete ranges for the same (dbIndex, uniqueKeyID, tableID) when they are
+// contiguous or overlapping. It is used as a best-effort mitigation for rare cases where the delete
+// goroutine is blocked for a long time and ranges accumulate.
+func mergeDeleteRanges(ranges []gcRangeItem) ([]gcRangeItem, int) {
+	if len(ranges) < 2 {
+		return ranges, 0
+	}
+
+	// Common case: at most one range per (dbIndex, uniqueKeyID, tableID), so no merge.
+	seen := make(map[compactItemKey]struct{}, len(ranges))
+	hasDuplicateKey := false
+	for _, r := range ranges {
+		key := compactItemKey{dbIndex: r.dbIndex, uniqueKeyID: r.uniqueKeyID, tableID: r.tableID}
+		if _, ok := seen[key]; ok {
+			hasDuplicateKey = true
+			break
+		}
+		seen[key] = struct{}{}
+	}
+	if !hasDuplicateKey {
+		return ranges, 0
+	}
+
+	sort.Slice(ranges, func(i, j int) bool {
+		if ranges[i].dbIndex != ranges[j].dbIndex {
+			return ranges[i].dbIndex < ranges[j].dbIndex
+		}
+		if ranges[i].uniqueKeyID != ranges[j].uniqueKeyID {
+			return ranges[i].uniqueKeyID < ranges[j].uniqueKeyID
+		}
+		if ranges[i].tableID != ranges[j].tableID {
+			return ranges[i].tableID < ranges[j].tableID
+		}
+		if ranges[i].startTs != ranges[j].startTs {
+			return ranges[i].startTs < ranges[j].startTs
+		}
+		return ranges[i].endTs < ranges[j].endTs
+	})
+
+	originalCount := len(ranges)
+	out := ranges[:0]
+	cur := ranges[0]
+
+	for _, r := range ranges[1:] {
+		sameRangeKey := cur.dbIndex == r.dbIndex && cur.uniqueKeyID == r.uniqueKeyID && cur.tableID == r.tableID
+		contiguousOrOverlapping := r.startTs <= cur.endTs
+		if sameRangeKey && contiguousOrOverlapping {
+			if r.endTs > cur.endTs {
+				cur.endTs = r.endTs
+			}
+			continue
+		}
+		out = append(out, cur)
+		cur = r
+	}
+	out = append(out, cur)
+	return out, originalCount - len(out)
 }
 
 func (d *gcManager) updateCompactRanges(ranges []gcRangeItem) {
@@ -158,6 +304,7 @@ func (d *gcManager) doCompaction() {
 	}
 	d.mu.Unlock()
 
+	startTime := time.Now()
 	log.Info("gc manager compacting ranges", zap.Int("rangeCount", len(toCompact)))
 	for key, endTs := range toCompact {
 		db := d.dbs[key.dbIndex]
@@ -170,4 +317,7 @@ func (d *gcManager) doCompaction() {
 				zap.Error(err))
 		}
 	}
+	log.Info("gc manager compacting ranges done",
+		zap.Int("rangeCount", len(toCompact)),
+		zap.Duration("duration", time.Since(startTime)))
 }
