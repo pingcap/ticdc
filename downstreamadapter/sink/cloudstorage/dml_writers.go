@@ -90,12 +90,9 @@ func (d *dmlWriters) Run(ctx context.Context) error {
 		return d.defragmenter.Run(ctx)
 	})
 
-	for i := 0; i < len(d.writers); i++ {
+	for _, w := range d.writers {
 		eg.Go(func() error {
-			// UnlimitedChannel will block when there is no event, they cannot dirrectly find ctx.Done()
-			// Thus, we need to close the channel when the context is done
-			defer d.encodeGroup.inputCh.Close()
-			return d.writers[i].Run(ctx)
+			return w.Run(ctx)
 		})
 	}
 	return eg.Wait()

@@ -104,7 +104,7 @@ func (d *defragmenter) Run(ctx context.Context) error {
 			} else {
 				log.Error("fragment out of order, this should not happen.",
 					zap.Uint64("expected", next), zap.Uint64("seq", frag.seqNumber))
-				return errors.ErrStorageSinkSendFailed.FastGen("out of order fragment")
+				return errors.ErrStorageSinkSendFailed.FastGen("out of order fragment, expect %d, but got %d", next, frag.seqNumber)
 			}
 		}
 	}

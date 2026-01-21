@@ -177,6 +177,8 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 			return err
 		}
 	default:
+		// cloud storage sink only handle the DDL event, if other kinds of block event also send
+		// to it by mistake, can be skipped silently, does not affect the overall correctness.
 		log.Error("cloudstorage sink doesn't support this type of block event, skip it",
 			zap.String("namespace", s.changefeedID.Keyspace()),
 			zap.String("changefeed", s.changefeedID.Name()),
