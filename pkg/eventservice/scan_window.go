@@ -90,6 +90,22 @@ func (w *memoryUsageWindow) pruneLocked(now time.Time) {
 	}
 }
 
+func (w *memoryUsageWindow) span(now time.Time) time.Duration {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.pruneLocked(now)
+	if len(w.samples) == 0 {
+		return 0
+	}
+	return now.Sub(w.samples[0].ts)
+}
+
+func (w *memoryUsageWindow) count() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return len(w.samples)
+}
+
 func (c *changefeedStatus) updateMemoryUsage(now time.Time, used uint64, max uint64) {
 	if max == 0 || c.usageWindow == nil {
 		c.logUsageMissing(now, used, max)
@@ -98,6 +114,7 @@ func (c *changefeedStatus) updateMemoryUsage(now time.Time, used uint64, max uin
 	ratio := float64(used) / float64(max)
 	c.usageWindow.addSample(now, ratio)
 	avg, full := c.usageWindow.average(now)
+	c.logUsageWindow(now, avg, full)
 	if !full {
 		return
 	}
@@ -216,6 +233,27 @@ func (c *changefeedStatus) logUsageMissing(now time.Time, used uint64, max uint6
 		zap.Stringer("changefeedID", c.changefeedID),
 		zap.Uint64("used", used),
 		zap.Uint64("max", max),
+	)
+}
+
+func (c *changefeedStatus) logUsageWindow(now time.Time, avg float64, full bool) {
+	last := c.lastUsageLogTime.Load()
+	nowUnix := now.Unix()
+	if nowUnix-last < int64(usageLogInterval.Seconds()) {
+		return
+	}
+	if !c.lastUsageLogTime.CompareAndSwap(last, nowUnix) {
+		return
+	}
+	windowSpan := c.usageWindow.span(now)
+	log.Info("scan window usage",
+		zap.Stringer("changefeedID", c.changefeedID),
+		zap.Int("sampleCount", c.usageWindow.count()),
+		zap.Duration("windowSpan", windowSpan),
+		zap.Bool("fullWindow", full),
+		zap.Float64("avgUsage", avg),
+		zap.Duration("scanInterval", time.Duration(c.scanInterval.Load())),
+		zap.Duration("maxInterval", c.maxScanInterval()),
 	)
 }
 
