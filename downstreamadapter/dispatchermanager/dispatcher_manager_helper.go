@@ -72,13 +72,14 @@ func getDispatcherStatus(id common.DispatcherID, dispatcherItem dispatcher.Dispa
 }
 
 func prepareCreateDispatcher[T dispatcher.Dispatcher](infos map[common.DispatcherID]dispatcherCreateInfo, dispatcherMap *DispatcherMap[T]) (
-	[]common.DispatcherID, []int64, []int64, []*heartbeatpb.TableSpan, []int64,
+	[]common.DispatcherID, []int64, []int64, []*heartbeatpb.TableSpan, []int64, []bool,
 ) {
 	dispatcherIds := make([]common.DispatcherID, 0, len(infos))
 	tableIds := make([]int64, 0, len(infos))
 	startTsList := make([]int64, 0, len(infos))
 	tableSpans := make([]*heartbeatpb.TableSpan, 0, len(infos))
 	schemaIds := make([]int64, 0, len(infos))
+	skipDMLAsStartTsList := make([]bool, 0, len(infos))
 	for _, info := range infos {
 		id := info.Id
 		if _, ok := dispatcherMap.Get(id); ok {
@@ -89,8 +90,19 @@ func prepareCreateDispatcher[T dispatcher.Dispatcher](infos map[common.Dispatche
 		startTsList = append(startTsList, int64(info.StartTs))
 		tableSpans = append(tableSpans, info.TableSpan)
 		schemaIds = append(schemaIds, info.SchemaID)
+		skipDMLAsStartTsList = append(skipDMLAsStartTsList, info.SkipDMLAsStartTs)
 	}
-	return dispatcherIds, tableIds, startTsList, tableSpans, schemaIds
+	return dispatcherIds, tableIds, startTsList, tableSpans, schemaIds, skipDMLAsStartTsList
+}
+
+func resolveSkipDMLAsStartTs(newStartTs, originalStartTs int64, scheduleSkipDMLAsStartTs, sinkSkipDMLAsStartTs bool) bool {
+	// When the sink keeps startTs unchanged, preserve the skipDMLAsStartTs decision carried by the
+	// scheduling request (e.g. recreating a dispatcher during an in-flight DDL barrier).
+	// If the sink adjusts startTs (e.g. based on ddl_ts recovery), the sink decision dominates.
+	if newStartTs == originalStartTs {
+		return scheduleSkipDMLAsStartTs || sinkSkipDMLAsStartTs
+	}
+	return sinkSkipDMLAsStartTs
 }
 
 func prepareMergeDispatcher[T dispatcher.Dispatcher](changefeedID common.ChangeFeedID,
@@ -242,7 +254,7 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcherItem)
 
 		// for non-mysql class sink, only the event dispatcher manager with table trigger event dispatcher need to receive the checkpointTs message.
-		if common.IsDefaultMode(dispatcherItem.GetMode()) && dispatcherItem.IsTableTriggerEventDispatcher() && sinkType != common.MysqlSinkType {
+		if common.IsDefaultMode(dispatcherItem.GetMode()) && dispatcherItem.IsTableTriggerDispatcher() && sinkType != common.MysqlSinkType {
 			err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveCheckpointTsMessage(changefeedID)
 			if err != nil {
 				log.Error("remove checkpointTs message failed",
@@ -291,7 +303,7 @@ func closeAllDispatchers[T dispatcher.Dispatcher](changefeedID common.ChangeFeed
 		// Remove dispatcher from eventService
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcherItem)
 
-		if common.IsDefaultMode(dispatcherItem.GetMode()) && dispatcherItem.IsTableTriggerEventDispatcher() && sinkType != common.MysqlSinkType {
+		if common.IsDefaultMode(dispatcherItem.GetMode()) && dispatcherItem.IsTableTriggerDispatcher() && sinkType != common.MysqlSinkType {
 			err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveCheckpointTsMessage(changefeedID)
 			if err != nil {
 				log.Error("remove checkpointTs message failed",

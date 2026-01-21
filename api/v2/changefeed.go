@@ -222,7 +222,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
-	ineligibleTables, _, err := getVerifiedTables(ctx, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
+	ineligibleTables, eligibleTables, allTables, err := getVerifiedTables(ctx, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -297,7 +297,11 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	log.Info("Create changefeed successfully!",
 		zap.String("id", info.ChangefeedID.Name()),
 		zap.String("state", string(info.State)),
-		zap.String("changefeedInfo", info.String()))
+		zap.String("changefeedInfo", info.String()),
+		zap.Int("eligibleTablesLength", len(eligibleTables)),
+		zap.Int("ineligibleTablesLength", len(ineligibleTables)),
+		zap.Int("allTablesLength", len(allTables)),
+	)
 
 	c.JSON(getStatus(c), CfInfoToAPIModel(
 		info,
@@ -365,7 +369,46 @@ func (h *OpenAPIV2) ListChangeFeeds(c *gin.Context) {
 	c.JSON(http.StatusOK, toListResponse(c, commonInfos))
 }
 
-// VerifyTable verify table, return ineligibleTables and EligibleTables.
+// GetAllTables return ineligibleTables and EligibleTables.
+func (h *OpenAPIV2) GetAllTables(c *gin.Context) {
+	ctx := c.Request.Context()
+	cfg := &ChangefeedConfig{ReplicaConfig: GetDefaultReplicaConfig()}
+
+	if err := c.BindJSON(&cfg); err != nil {
+		_ = c.Error(errors.WrapError(errors.ErrAPIInvalidParam, err))
+		return
+	}
+
+	// fill replicaConfig
+	replicaCfg := cfg.ReplicaConfig.ToInternalReplicaConfig()
+
+	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
+	keyspaceName := GetKeyspaceValueWithDefault(c)
+	kvStorage, err := keyspaceManager.GetStorage(ctx, keyspaceName)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
+	f, err := filter.NewFilter(replicaCfg.Filter, "", util.GetOrZero(replicaCfg.CaseSensitive), util.GetOrZero(replicaCfg.ForceReplicate))
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	_, ineligibleTables, eligibleTables, allTables, err := schemastore.
+		VerifyTables(f, kvStorage, cfg.StartTs)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	tables := &Tables{
+		IneligibleTables: toAPIModelFunc(ineligibleTables),
+		EligibleTables:   toAPIModelFunc(eligibleTables),
+		AllTables:        toAPIModelFunc(allTables),
+	}
+	c.JSON(http.StatusOK, tables)
+}
+
 func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 	ctx := c.Request.Context()
 	cfg := &ChangefeedConfig{ReplicaConfig: GetDefaultReplicaConfig()}
@@ -408,7 +451,7 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	ineligibleTables, eligibleTables, err := getVerifiedTables(ctx, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
+	ineligibleTables, eligibleTables, allTables, err := getVerifiedTables(ctx, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -418,18 +461,10 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 		zap.Bool("ignoreIneligibleTable", util.GetOrZero(cfg.ReplicaConfig.IgnoreIneligibleTable)),
 	)
 
-	toAPIModelFunc := func(tbls []string) []TableName {
-		var apiModels []TableName
-		for _, tbl := range tbls {
-			apiModels = append(apiModels, TableName{
-				Table: tbl,
-			})
-		}
-		return apiModels
-	}
 	tables := &Tables{
 		IneligibleTables: toAPIModelFunc(ineligibleTables),
 		EligibleTables:   toAPIModelFunc(eligibleTables),
+		AllTables:        toAPIModelFunc(allTables),
 	}
 	c.JSON(http.StatusOK, tables)
 }
@@ -477,6 +512,19 @@ func shouldShowRunningError(state config.FeedState) bool {
 	default:
 		return true
 	}
+}
+
+func toAPIModelFunc(tbls []common.TableName) []TableName {
+	var apiModels []TableName
+	for _, tbl := range tbls {
+		apiModels = append(apiModels, TableName{
+			Schema:      tbl.Schema,
+			Table:       tbl.Table,
+			TableID:     tbl.TableID,
+			IsPartition: tbl.IsPartition,
+		})
+	}
+	return apiModels
 }
 
 func CfInfoToAPIModel(
@@ -679,8 +727,10 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 
 	// If there is no overrideCheckpointTs, then check whether the currentCheckpointTs is smaller than gc safepoint or not.
 	newCheckpointTs := status.CheckpointTs
+	overwriteCheckpointTs := false
 	if cfg.OverwriteCheckpointTs != 0 {
 		newCheckpointTs = cfg.OverwriteCheckpointTs
+		overwriteCheckpointTs = true
 	}
 
 	keyspaceMeta := middleware.GetKeyspaceFromContext(c)
@@ -735,12 +785,57 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		}
 	}()
 
-	err = co.ResumeChangefeed(ctx, cfInfo.ChangefeedID, newCheckpointTs, cfg.OverwriteCheckpointTs != 0)
+	var (
+		eligibleTables   []common.TableName
+		ineligibleTables []common.TableName
+		allTables        []common.TableName
+	)
+	if overwriteCheckpointTs {
+		sinkURIParsed, err := url.Parse(cfInfo.SinkURI)
+		if err != nil {
+			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfInfo.SinkURI))
+			return
+		}
+		scheme := sinkURIParsed.Scheme
+		topic := ""
+		if config.IsMQScheme(scheme) {
+			topic, err = helper.GetTopic(sinkURIParsed)
+			if err != nil {
+				_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfInfo.SinkURI))
+				return
+			}
+		}
+		protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(cfInfo.Config.Sink.Protocol))
+
+		keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
+		kvStorage, err := keyspaceManager.GetStorage(ctx, keyspaceName)
+		if err != nil {
+			_ = c.Error(err)
+			return
+		}
+		ineligibleTables, eligibleTables, allTables, err = getVerifiedTables(ctx, cfInfo.Config, kvStorage, newCheckpointTs, scheme, topic, protocol)
+		if err != nil {
+			_ = c.Error(err)
+			return
+		}
+	}
+
+	err = co.ResumeChangefeed(ctx, cfInfo.ChangefeedID, newCheckpointTs, overwriteCheckpointTs)
 	if err != nil {
+		needRemoveGCSafePoint = true
 		_ = c.Error(err)
 		return
 	}
 	c.Errors = nil
+	log.Info("Resume changefeed successfully!",
+		zap.String("id", cfInfo.ChangefeedID.Name()),
+		zap.String("state", string(cfInfo.State)),
+		zap.String("changefeedInfo", cfInfo.String()),
+		zap.Bool("overwriteCheckpointTs", overwriteCheckpointTs),
+		zap.Int("eligibleTablesLength", len(eligibleTables)),
+		zap.Int("ineligibleTablesLength", len(ineligibleTables)),
+		zap.Int("allTablesLength", len(allTables)),
+	)
 	c.JSON(getStatus(c), &EmptyResponse{})
 }
 
@@ -838,6 +933,11 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		return
 	}
 
+	var (
+		ineligibleTables []common.TableName
+		eligibleTables   []common.TableName
+		allTables        []common.TableName
+	)
 	if configUpdated || sinkURIUpdated {
 		// verify replicaConfig
 		sinkURIParsed, err := url.Parse(oldCfInfo.SinkURI)
@@ -871,7 +971,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		}
 
 		// use checkpointTs get snapshot from kv storage
-		ineligibleTables, _, err := getVerifiedTables(ctx, oldCfInfo.Config, kvStorage, status.CheckpointTs, scheme, topic, protocol)
+		ineligibleTables, eligibleTables, allTables, err = getVerifiedTables(ctx, oldCfInfo.Config, kvStorage, status.CheckpointTs, scheme, topic, protocol)
 		if err != nil {
 			_ = c.Error(errors.ErrChangefeedUpdateRefused.GenWithStackByCause(err))
 			return
@@ -908,6 +1008,17 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
+
+	log.Info("Update changefeed successfully!",
+		zap.String("id", oldCfInfo.ChangefeedID.Name()),
+		zap.String("state", string(oldCfInfo.State)),
+		zap.String("changefeedInfo", oldCfInfo.String()),
+		zap.Bool("configUpdated", configUpdated),
+		zap.Bool("sinkURIUpdated", sinkURIUpdated),
+		zap.Int("eligibleTablesLength", len(eligibleTables)),
+		zap.Int("ineligibleTablesLength", len(ineligibleTables)),
+		zap.Int("allTables", len(allTables)),
+	)
 
 	c.JSON(getStatus(c), CfInfoToAPIModel(oldCfInfo, status, nil))
 }
@@ -1531,15 +1642,15 @@ func getVerifiedTables(
 	replicaConfig *config.ReplicaConfig,
 	storage tidbkv.Storage, startTs uint64,
 	scheme string, topic string, protocol config.Protocol,
-) ([]string, []string, error) {
+) ([]common.TableName, []common.TableName, []common.TableName, error) {
 	f, err := filter.NewFilter(replicaConfig.Filter, "", util.GetOrZero(replicaConfig.CaseSensitive), util.GetOrZero(replicaConfig.ForceReplicate))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	tableInfos, ineligibleTables, eligibleTables, err := schemastore.
+	tableInfos, ineligibleTables, eligibleTables, allTables, err := schemastore.
 		VerifyTables(f, storage, startTs)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	log.Info("verifyTables completed",
 		zap.Int("tableCount", len(tableInfos)),
@@ -1547,45 +1658,45 @@ func getVerifiedTables(
 
 	err = f.Verify(tableInfos)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if !config.IsMQScheme(scheme) {
-		return ineligibleTables, eligibleTables, nil
+		return ineligibleTables, eligibleTables, allTables, nil
 	}
 
 	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, topic, config.IsPulsarScheme(scheme), protocol == config.ProtocolAvro)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	err = eventRouter.VerifyTables(tableInfos)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	selectors, err := columnselector.New(replicaConfig.Sink)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	err = selectors.VerifyTables(tableInfos, eventRouter)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	if ctx.Err() != nil {
-		return nil, nil, errors.Trace(ctx.Err())
+		return nil, nil, nil, errors.Trace(ctx.Err())
 	}
 
-	return ineligibleTables, eligibleTables, nil
+	return ineligibleTables, eligibleTables, allTables, nil
 }
 
 func GetKeyspaceValueWithDefault(c *gin.Context) string {
 	if kerneltype.IsClassic() {
-		return common.DefaultKeyspaceNamme
+		return common.DefaultKeyspaceName
 	}
 
 	keyspace := c.Query(api.APIOpVarKeyspace)
 	if keyspace == "" {
-		keyspace = common.DefaultKeyspaceNamme
+		keyspace = common.DefaultKeyspaceName
 	}
 	return keyspace
 }
