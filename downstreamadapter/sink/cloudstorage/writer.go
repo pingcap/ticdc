@@ -111,17 +111,17 @@ func (d *writer) SetClock(pdClock pdutil.Clock) {
 // flushMessages flushed messages of active tables to cloud storage.
 // active tables are those tables that have received events after the last flush.
 func (d *writer) flushMessages(ctx context.Context) error {
-	var flushTimeSlice time.Duration
-	overseerDuration := d.config.FlushInterval * 2
-	overseerTicker := time.NewTicker(overseerDuration)
-	defer overseerTicker.Stop()
+	ticker := time.NewTicker(d.config.FlushInterval * 2)
+	defer ticker.Stop()
+
+	var busy time.Duration
 	for {
 		select {
 		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
-		case <-overseerTicker.C:
-			d.metricsWorkerBusyRatio.Add(flushTimeSlice.Seconds())
-			flushTimeSlice = 0
+			return context.Cause(ctx)
+		case <-ticker.C:
+			d.metricsWorkerBusyRatio.Add(busy.Seconds())
+			busy = 0
 		case batchedTask := <-d.toBeFlushedCh:
 			if d.closed.Load() {
 				return nil
@@ -192,15 +192,13 @@ func (d *writer) flushMessages(ctx context.Context) error {
 					zap.String("path", dataFilePath),
 				)
 			}
-			flushTimeSlice += time.Since(start)
+			busy += time.Since(start)
 		}
 	}
 }
 
 func (d *writer) writeIndexFile(ctx context.Context, path, content string) error {
-	start := time.Now()
 	err := d.storage.WriteFile(ctx, path, []byte(content))
-	d.metricFlushDuration.Observe(time.Since(start).Seconds())
 	return errors.WrapError(errors.ErrStorageSinkSendFailed, err)
 }
 
@@ -235,8 +233,7 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 
 	start := time.Now()
 	defer func() {
-		duration := time.Since(start).Seconds()
-		d.metricFlushDuration.Observe(duration)
+		d.metricFlushDuration.Observe(time.Since(start).Seconds())
 	}()
 	if err := d.statistics.RecordBatchExecution(func() (int, int64, error) {
 		if d.config.FlushConcurrency <= 1 {
