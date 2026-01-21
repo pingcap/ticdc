@@ -107,10 +107,18 @@ func (w *memoryUsageWindow) count() int {
 }
 
 func (c *changefeedStatus) updateMemoryUsage(now time.Time, used uint64, max uint64) {
+
+	log.Info("fizz update memory usage",
+		zap.Stringer("changefeedID", c.changefeedID),
+		zap.Uint64("used", used),
+		zap.Uint64("max", max),
+	)
+
 	if max == 0 || c.usageWindow == nil {
 		c.logUsageMissing(now, used, max)
 		return
 	}
+
 	ratio := float64(used) / float64(max)
 	c.usageWindow.addSample(now, ratio)
 	avg, full := c.usageWindow.average(now)
@@ -122,8 +130,16 @@ func (c *changefeedStatus) updateMemoryUsage(now time.Time, used uint64, max uin
 }
 
 func (c *changefeedStatus) adjustScanInterval(now time.Time, avg float64) {
+	log.Info("fizz adjust scan interval",
+		zap.Stringer("changefeedID", c.changefeedID),
+		zap.Float64("avgUsage", avg),
+	)
 	lastAdjust := c.lastAdjustTime.Load()
-	if !lastAdjust.IsZero() && now.Sub(lastAdjust) < scanIntervalAdjustCooldown {
+	if now.Sub(lastAdjust) < scanIntervalAdjustCooldown {
+		log.Info("fizz adjust scan interval cooldown",
+			zap.Stringer("changefeedID", c.changefeedID),
+			zap.Duration("cooldown", scanIntervalAdjustCooldown),
+		)
 		return
 	}
 
@@ -222,13 +238,11 @@ func (c *changefeedStatus) storeMinSentTs(value uint64) {
 
 func (c *changefeedStatus) logUsageMissing(now time.Time, used uint64, max uint64) {
 	last := c.lastUsageLogTime.Load()
-	nowUnix := now.Unix()
-	if nowUnix-last < int64(usageLogInterval.Seconds()) {
+	if now.Sub(last) < usageLogInterval {
 		return
 	}
-	if !c.lastUsageLogTime.CompareAndSwap(last, nowUnix) {
-		return
-	}
+	c.lastUsageLogTime.Store(now)
+
 	log.Info("memory usage max is zero",
 		zap.Stringer("changefeedID", c.changefeedID),
 		zap.Uint64("used", used),
@@ -237,14 +251,11 @@ func (c *changefeedStatus) logUsageMissing(now time.Time, used uint64, max uint6
 }
 
 func (c *changefeedStatus) logUsageWindow(now time.Time, avg float64, full bool) {
-	last := c.lastUsageLogTime.Load()
-	nowUnix := now.Unix()
-	if nowUnix-last < int64(usageLogInterval.Seconds()) {
+	last := c.lastUsageWindowLogTime.Load()
+	if now.Sub(last) < usageLogInterval {
 		return
 	}
-	if !c.lastUsageLogTime.CompareAndSwap(last, nowUnix) {
-		return
-	}
+	c.lastUsageWindowLogTime.Store(now)
 	windowSpan := c.usageWindow.span(now)
 	log.Info("scan window usage",
 		zap.Stringer("changefeedID", c.changefeedID),
