@@ -39,8 +39,6 @@ func TestBuildOpenProtocolBatchEncoder(t *testing.T) {
 }
 
 func TestMaxMessageBytes(t *testing.T) {
-	t.Parallel()
-
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
@@ -83,8 +81,6 @@ func TestMaxMessageBytes(t *testing.T) {
 }
 
 func TestMaxBatchSizeAndCallback(t *testing.T) {
-	t.Parallel()
-
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 

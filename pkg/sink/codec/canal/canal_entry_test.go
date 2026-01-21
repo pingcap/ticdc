@@ -20,17 +20,16 @@ import (
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	canal "github.com/pingcap/tiflow/proto/canal"
 	"github.com/stretchr/testify/require"
 )
 
 func TestConvertDdlEventType(t *testing.T) {
 	t.Parallel()
 
-	require.Equal(t, canal.EventType_CREATE, convertDdlEventType(byte(timodel.ActionCreateTable)))
-	require.Equal(t, canal.EventType_ERASE, convertDdlEventType(byte(timodel.ActionDropTable)))
-	require.Equal(t, canal.EventType_TRUNCATE, convertDdlEventType(byte(timodel.ActionTruncateTable)))
-	require.Equal(t, canal.EventType_ALTER, convertDdlEventType(byte(timodel.ActionAddColumn)))
+	require.Equal(t, "CREATE", convertDdlEventType(byte(timodel.ActionCreateTable)).String())
+	require.Equal(t, "ERASE", convertDdlEventType(byte(timodel.ActionDropTable)).String())
+	require.Equal(t, "TRUNCATE", convertDdlEventType(byte(timodel.ActionTruncateTable)).String())
+	require.Equal(t, "ALTER", convertDdlEventType(byte(timodel.ActionAddColumn)).String())
 }
 
 func TestFormatColumnValueBlob(t *testing.T) {

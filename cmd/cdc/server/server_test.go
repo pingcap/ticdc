@@ -17,13 +17,13 @@ import (
 	"encoding/json"
 	"testing"
 
-	tiflowConfig "github.com/pingcap/tiflow/pkg/config"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRunTiFlowServerPopulatesSecurityConfig(t *testing.T) {
 	// This test verifies that TLS credentials from CLI flags are properly
-	// transferred to serverConfig.Security before being passed to tiflow.
+	// transferred to serverConfig.Security before being passed to the runtime.
 	// See https://github.com/pingcap/ticdc/issues/3718
 
 	o := newOptions()
@@ -50,12 +50,12 @@ func TestRunTiFlowServerPopulatesSecurityConfig(t *testing.T) {
 	cfgData, err := json.Marshal(o.serverConfig)
 	require.NoError(t, err)
 
-	var oldCfg tiflowConfig.ServerConfig
+	var oldCfg config.ServerConfig
 	err = json.Unmarshal(cfgData, &oldCfg)
 	require.NoError(t, err)
 
-	// This is the critical assertion: tiflow's ServerConfig.Security
-	// should have the TLS credentials after unmarshaling
+	// This is the critical assertion: ServerConfig.Security should have the TLS
+	// credentials after unmarshaling.
 	require.Equal(t, "/path/to/ca.crt", oldCfg.Security.CAPath)
 	require.Equal(t, "/path/to/server.crt", oldCfg.Security.CertPath)
 	require.Equal(t, "/path/to/server.key", oldCfg.Security.KeyPath)

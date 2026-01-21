@@ -37,8 +37,6 @@ func TestBuildCanalJSONRowEventEncoder(t *testing.T) {
 }
 
 func TestCanalJSONRowEncoderDecodeBasic(t *testing.T) {
-	t.Parallel()
-
 	ctx := context.Background()
 	ddlEvent, insertEvent, _, _ := codecCommon.NewLargeEvent4Test(t)
 
@@ -74,4 +72,3 @@ func TestCanalJSONRowEncoderDecodeBasic(t *testing.T) {
 		require.NotNil(t, decoder.NextDMLEvent())
 	}
 }
-

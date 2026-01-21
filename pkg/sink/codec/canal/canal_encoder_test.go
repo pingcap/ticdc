@@ -23,8 +23,6 @@ import (
 )
 
 func TestCanalJSONRowEventEncoderBuildAndCallbacks(t *testing.T) {
-	t.Parallel()
-
 	ctx := context.Background()
 	_, insertEvent, updateEvent, _ := codecCommon.NewLargeEvent4Test(t)
 

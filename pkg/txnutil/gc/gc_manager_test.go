@@ -105,8 +105,6 @@ func TestCheckStaleCheckpointTs(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	time.Sleep(1 * time.Second)
-
 	cfID := commonType.NewChangeFeedIDWithName("cfID", "")
 	err := gcManager.CheckStaleCheckpointTs(ctx, 0, cfID, oracle.GoTimeToTS(time.Now()))
 	require.Nil(t, err)

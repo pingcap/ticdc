@@ -268,7 +268,7 @@ func TestApplySASL(t *testing.T) {
 			err = binding.Query.Bind(req, urlParameter)
 			require.NoError(t, err)
 			if test.exceptErr == "" {
-				require.Nil(t, options.applySASL(urlParameter, test.replicaConfig().Sink))
+				require.NoError(t, options.applySASL(urlParameter, test.replicaConfig().Sink))
 			} else {
 				require.Regexp(t, test.exceptErr,
 					options.applySASL(urlParameter, test.replicaConfig().Sink).Error())
@@ -339,7 +339,7 @@ func TestApplyTLS(t *testing.T) {
 			err = binding.Query.Bind(req, urlParameter)
 			require.NoError(t, err)
 			if test.exceptErr == "" {
-				require.Nil(t, options.applyTLS(urlParameter))
+				require.NoError(t, options.applyTLS(urlParameter))
 			} else {
 				require.Regexp(t, test.exceptErr, options.applyTLS(urlParameter).Error())
 			}

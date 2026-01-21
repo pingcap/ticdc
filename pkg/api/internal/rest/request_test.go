@@ -123,7 +123,7 @@ func TestRequestDoContext(t *testing.T) {
 
 func TestRequestDoContextTimeout(t *testing.T) {
 	testServer := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		time.Sleep(2 * time.Second)
+		time.Sleep(200 * time.Millisecond)
 		rw.WriteHeader(http.StatusOK)
 	}))
 	defer testServer.Close()
@@ -139,7 +139,7 @@ func TestRequestDoContextTimeout(t *testing.T) {
 	require.Nil(t, err)
 	err = c.Get().
 		WithPrefix("/test").
-		WithTimeout(time.Second).
+		WithTimeout(50 * time.Millisecond).
 		Do(ctx).
 		Error()
 	require.NotNil(t, err)
