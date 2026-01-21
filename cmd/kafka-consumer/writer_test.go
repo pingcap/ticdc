@@ -37,16 +37,20 @@ func (s *recordingSink) SinkType() common.SinkType { return common.MysqlSinkType
 func (s *recordingSink) IsNormal() bool            { return true }
 func (s *recordingSink) AddDMLEvent(_ *commonEvent.DMLEvent) {
 }
+
 func (s *recordingSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	if ddl, ok := event.(*commonEvent.DDLEvent); ok {
 		s.ddls = append(s.ddls, ddl.Query)
 	}
 	return nil
 }
+
 func (s *recordingSink) AddCheckpointTs(_ uint64) {
 }
+
 func (s *recordingSink) SetTableSchemaStore(_ *commonEvent.TableSchemaStore) {
 }
+
 func (s *recordingSink) Close(_ bool) {
 }
 func (s *recordingSink) Run(_ context.Context) error { return nil }
