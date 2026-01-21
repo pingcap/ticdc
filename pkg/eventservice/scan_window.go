@@ -29,9 +29,9 @@ const (
 	maxScanInterval              = 30 * time.Minute
 	scanIntervalAdjustCooldown   = 30 * time.Second
 	memoryUsageWindowDuration    = 30 * time.Second
-	memoryUsageHighThreshold     = 1.10
-	memoryUsageCriticalThreshold = 1.50
-	memoryUsageLowThreshold      = 0.50
+	memoryUsageHighThreshold     = 0.7
+	memoryUsageCriticalThreshold = 0.9
+	memoryUsageLowThreshold      = 0.2
 	usageLogInterval             = time.Minute
 )
 
@@ -63,20 +63,19 @@ func (w *memoryUsageWindow) addSample(now time.Time, ratio float64) {
 	w.pruneLocked(now)
 }
 
-func (w *memoryUsageWindow) average(now time.Time) (float64, bool) {
+func (w *memoryUsageWindow) average(now time.Time) float64 {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	w.pruneLocked(now)
 	if len(w.samples) == 0 {
-		return 0, false
+		return 0
 	}
-	fullWindow := now.Sub(w.samples[0].ts) >= w.window
 	var sum float64
 	for _, sample := range w.samples {
 		sum += sample.ratio
 	}
-	return sum / float64(len(w.samples)), fullWindow
+	return sum / float64(len(w.samples))
 }
 
 func (w *memoryUsageWindow) pruneLocked(now time.Time) {
@@ -107,13 +106,6 @@ func (w *memoryUsageWindow) count() int {
 }
 
 func (c *changefeedStatus) updateMemoryUsage(now time.Time, used uint64, max uint64) {
-
-	log.Info("fizz update memory usage",
-		zap.Stringer("changefeedID", c.changefeedID),
-		zap.Uint64("used", used),
-		zap.Uint64("max", max),
-	)
-
 	if max == 0 || c.usageWindow == nil {
 		c.logUsageMissing(now, used, max)
 		return
@@ -121,25 +113,18 @@ func (c *changefeedStatus) updateMemoryUsage(now time.Time, used uint64, max uin
 
 	ratio := float64(used) / float64(max)
 	c.usageWindow.addSample(now, ratio)
-	avg, full := c.usageWindow.average(now)
-	c.logUsageWindow(now, avg, full)
-	// if !full {
-	// 	return
-	// }
+	avg := c.usageWindow.average(now)
 	c.adjustScanInterval(now, avg)
 }
 
 func (c *changefeedStatus) adjustScanInterval(now time.Time, avg float64) {
-	log.Info("fizz adjust scan interval",
+	log.Info("fizz enter adjust scan interval",
 		zap.Stringer("changefeedID", c.changefeedID),
 		zap.Float64("avgUsage", avg),
 	)
+
 	lastAdjust := c.lastAdjustTime.Load()
-	if now.Sub(lastAdjust) < scanIntervalAdjustCooldown {
-		log.Info("fizz adjust scan interval cooldown",
-			zap.Stringer("changefeedID", c.changefeedID),
-			zap.Duration("cooldown", scanIntervalAdjustCooldown),
-		)
+	if time.Since(lastAdjust) < scanIntervalAdjustCooldown {
 		return
 	}
 
@@ -247,24 +232,6 @@ func (c *changefeedStatus) logUsageMissing(now time.Time, used uint64, max uint6
 		zap.Stringer("changefeedID", c.changefeedID),
 		zap.Uint64("used", used),
 		zap.Uint64("max", max),
-	)
-}
-
-func (c *changefeedStatus) logUsageWindow(now time.Time, avg float64, full bool) {
-	last := c.lastUsageWindowLogTime.Load()
-	if now.Sub(last) < usageLogInterval {
-		return
-	}
-	c.lastUsageWindowLogTime.Store(now)
-	windowSpan := c.usageWindow.span(now)
-	log.Info("scan window usage",
-		zap.Stringer("changefeedID", c.changefeedID),
-		zap.Int("sampleCount", c.usageWindow.count()),
-		zap.Duration("windowSpan", windowSpan),
-		zap.Bool("fullWindow", full),
-		zap.Float64("avgUsage", avg),
-		zap.Duration("scanInterval", time.Duration(c.scanInterval.Load())),
-		zap.Duration("maxInterval", c.maxScanInterval()),
 	)
 }
 

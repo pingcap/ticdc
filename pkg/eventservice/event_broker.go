@@ -433,7 +433,7 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	if scanMaxTs > 0 {
 		dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, scanMaxTs)
 		if dataRange.CommitTsEnd < commitTsEndBeforeWindow {
-			log.Info("scan window capped",
+			log.Debug("fizz scan window capped",
 				zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
 				zap.Stringer("dispatcherID", task.id),
 				zap.Uint64("baseTs", task.changefeedStat.minSentTs.Load()),
