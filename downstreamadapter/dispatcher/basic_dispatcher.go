@@ -76,7 +76,7 @@ type Dispatcher interface {
 	GetBlockEventStatus() *heartbeatpb.State
 	GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus
 	GetEventSizePerSecond() float32
-	IsTableTriggerEventDispatcher() bool
+	IsTableTriggerDispatcher() bool
 	DealWithBlockEvent(event commonEvent.BlockEvent)
 	TryClose() (w heartbeatpb.Watermark, ok bool)
 	Remove()
@@ -260,10 +260,10 @@ func (d *BasicDispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.S
 	// Only the table trigger event dispatcher need to create a tableSchemaStore
 	// Because we only need to calculate the tableNames or TableIds in the sink
 	// when the event dispatcher manager have table trigger event dispatcher
-	if !d.tableSpan.Equal(common.KeyspaceDDLSpan(d.tableSpan.KeyspaceID)) {
-		log.Error("InitializeTableSchemaStore should only be received by table trigger event dispatcher", zap.Any("dispatcher", d.id))
-		return false, errors.ErrChangefeedInitTableTriggerEventDispatcherFailed.
-			GenWithStackByArgs("InitializeTableSchemaStore should only be received by table trigger event dispatcher")
+	if !d.IsTableTriggerDispatcher() {
+		log.Error("InitializeTableSchemaStore should only be received by table trigger dispatcher", zap.Any("dispatcher", d.id))
+		return false, errors.ErrChangefeedInitTableTriggerDispatcherFailed.
+			GenWithStackByArgs("InitializeTableSchemaStore should only be received by table trigger dispatcher")
 	}
 
 	if d.tableSchemaStore != nil {
@@ -616,6 +616,7 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 		if d.blockEventStatus.actionMatchs(action) {
 			log.Info("pending event get the action",
 				zap.Stringer("dispatcher", d.id),
+				zap.Int64("mode", d.mode),
 				zap.Any("action", action),
 				zap.Any("innerAction", int(action.Action)),
 				zap.Uint64("pendingEventCommitTs", pendingEvent.GetCommitTs()))
@@ -728,17 +729,22 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 		// Writing a block event may involve downstream IO (e.g. executing DDL), so it must not block
 		// the dynamic stream goroutine.
 		d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
-			if d.IsTableTriggerEventDispatcher() && (event.GetNeedAddedTables() != nil || event.GetNeedDroppedTables() != nil) {
-				// If this is a table trigger event dispatcher, and the DDL related to adds/drops tables,
-				// we need to increment pendingACKCount to track the un-ACKed schedule-related DDL.
+			noNeedAddAndDrop := event.GetNeedAddedTables() == nil && event.GetNeedDroppedTables() == nil
+			needsScheduleACKTracking := d.IsTableTriggerDispatcher() && !noNeedAddAndDrop
+			if needsScheduleACKTracking {
+				// If this is a table trigger dispatcher, and the DDL leads to add/drop tables,
+				// we track it as a pending schedule-related event until the maintainer ACKs it.
 				d.pendingACKCount.Add(1)
 			}
 			err := d.AddBlockEventToSink(event)
 			if err != nil {
+				if needsScheduleACKTracking {
+					d.pendingACKCount.Add(-1)
+				}
 				d.HandleError(err)
 				return
 			}
-			if event.GetNeedAddedTables() == nil && event.GetNeedDroppedTables() == nil {
+			if noNeedAddAndDrop {
 				return
 			}
 
@@ -791,7 +797,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 		// Note: We only hold InfluenceType_DB/All. InfluenceType_Normal does not require a global
 		// task snapshot to build its range checker.
 		blockedTables := event.GetBlockedTables()
-		if d.IsTableTriggerEventDispatcher() &&
+		if d.IsTableTriggerDispatcher() &&
 			d.pendingACKCount.Load() > 0 &&
 			blockedTables != nil &&
 			blockedTables.InfluenceType != commonEvent.InfluenceTypeNormal {
@@ -811,7 +817,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 	// So there won't be a related db-level ddl event is in dealing when we get update schema id events.
 	// Thus, whether to update schema id before or after current ddl event is not important.
 	// To make it easier, we choose to directly update schema id here.
-	if event.GetUpdatedSchemas() != nil && !d.IsTableTriggerEventDispatcher() {
+	if event.GetUpdatedSchemas() != nil && !d.IsTableTriggerDispatcher() {
 		for _, schemaIDChange := range event.GetUpdatedSchemas() {
 			if schemaIDChange.TableID == d.tableSpan.TableID {
 				if schemaIDChange.OldSchemaID != d.schemaID {
@@ -840,7 +846,11 @@ func (d *BasicDispatcher) cancelResendTask(identifier BlockEventIdentifier) {
 	task.Cancel()
 	d.resendTaskMap.Delete(identifier)
 
-	if d.IsTableTriggerEventDispatcher() {
+	log.Info("cancel resend task",
+		zap.Stringer("dispatcherID", d.id),
+		zap.Any("identifier", identifier))
+
+	if d.IsTableTriggerDispatcher() {
 		d.pendingACKCount.Add(-1)
 		d.tryDealWithHeldBlockEvent()
 	}
@@ -893,7 +903,7 @@ func (d *BasicDispatcher) popHoldingBlockEvent() commonEvent.BlockEvent {
 }
 
 func (d *BasicDispatcher) reportBlockedEventToMaintainer(event commonEvent.BlockEvent) {
-	if d.IsTableTriggerEventDispatcher() {
+	if d.IsTableTriggerDispatcher() {
 		// If this is a table trigger event dispatcher, we need to increment pendingACKCount
 		// for any block event reported to the maintainer to track un-ACKed events.
 		d.pendingACKCount.Add(1)
@@ -962,7 +972,7 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 		w.CheckpointTs = d.GetCheckpointTs()
 		w.ResolvedTs = d.GetResolvedTs()
 
-		if d.IsTableTriggerEventDispatcher() && d.tableSchemaStore != nil {
+		if d.IsTableTriggerDispatcher() && d.tableSchemaStore != nil {
 			d.tableSchemaStore.Clear()
 		}
 		log.Info("dispatcher component has stopped and is ready for cleanup",

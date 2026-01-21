@@ -499,8 +499,6 @@ func TestGetDefaultZeroValue(t *testing.T) {
 		},
 	}
 
-	// Use a fixed timezone to make assertions deterministic across environments.
-	// Timestamp default value conversion behavior can vary with `time.Local`.
 	tz := time.UTC
 	for _, tc := range testCases {
 		_, val, _, _, _ := getDefaultOrZeroValue(&tc.ColInfo, tz)
@@ -522,16 +520,22 @@ func TestGetDefaultZeroValue(t *testing.T) {
 		FieldType:          *ftTypeTimestampNotNull,
 	}
 	_, val, _, _, _ = getDefaultOrZeroValue(&colInfo, tz)
-	originDefaultValue := colInfo.OriginDefaultValue.(string)
-	require.Equal(t, originDefaultValue, val, "mysql.TypeTimestamp + notnull + default")
+	expected, err := types.ParseTimeFromFloatString(
+		types.DefaultStmtNoWarningContext,
+		"2020-11-19 12:12:12", colInfo.FieldType.GetType(), colInfo.FieldType.GetDecimal())
+	require.NoError(t, err)
+	require.Equal(t, expected.String(), val, "mysql.TypeTimestamp + notnull + default")
 
 	colInfo = timodel.ColumnInfo{
 		OriginDefaultValue: "2020-11-19 12:12:12",
 		FieldType:          *ftTypeTimestampNull,
 	}
 	_, val, _, _, _ = getDefaultOrZeroValue(&colInfo, tz)
-	originDefaultValue = colInfo.OriginDefaultValue.(string)
-	require.Equal(t, originDefaultValue, val, "mysql.TypeTimestamp + null + default")
+	expected, err = types.ParseTimeFromFloatString(
+		types.DefaultStmtNoWarningContext,
+		"2020-11-19 12:12:12", colInfo.FieldType.GetType(), colInfo.FieldType.GetDecimal())
+	require.NoError(t, err)
+	require.Equal(t, expected.String(), val, "mysql.TypeTimestamp + null + default")
 
 	colInfo = timodel.ColumnInfo{
 		OriginDefaultValue: "e1",
