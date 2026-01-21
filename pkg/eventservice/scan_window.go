@@ -205,6 +205,9 @@ func (c *changefeedStatus) getScanMaxTs() uint64 {
 	if interval <= 0 {
 		interval = defaultScanInterval
 	}
+
+	interval = defaultScanInterval
+
 	return oracle.GoTimeToTS(oracle.GetTimeFromTS(baseTs).Add(interval))
 }
 
