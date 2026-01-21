@@ -204,6 +204,7 @@ type BasicDispatcher struct {
 	tryRemoving atomic.Bool
 	// is able to remove, and removing now
 	isRemoving atomic.Bool
+
 	// duringHandleEvents is used to indicate whether the dispatcher is currently handling events.
 	// This field prevents a race condition where TryClose is called while events are being processed.
 	// In this corner case, `tableProgress` might be empty, which could lead to the dispatcher being removed prematurely.
@@ -418,11 +419,12 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	d.duringHandleEvents.Store(true)
 	defer d.duringHandleEvents.Store(false)
 
-	// Only return false when all events are resolvedTs Event.
-	block := false
+	var (
+		block            bool
+		latestResolvedTs uint64
+	)
 	dmlWakeOnce := &sync.Once{}
 	dmlEvents := make([]*commonEvent.DMLEvent, 0, len(dispatcherEvents))
-	latestResolvedTs := uint64(0)
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
 		if log.GetLevel() == zapcore.DebugLevel {
@@ -442,11 +444,11 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 		// Pre-check, make sure the event is not stale
 		if event.GetCommitTs() < d.GetResolvedTs() {
 			log.Warn("Received a stale event, should ignore it",
+				zap.Stringer("dispatcher", d.id),
 				zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
 				zap.Uint64("eventCommitTs", event.GetCommitTs()),
 				zap.Uint64("seq", event.GetSeq()),
-				zap.Int("eventType", event.GetType()),
-				zap.Stringer("dispatcher", d.id))
+				zap.Int("eventType", event.GetType()))
 			continue
 		}
 
@@ -477,6 +479,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				continue
 			}
 
+			// todo: we have to decide whether to block by the sink type and inflight data size.
 			block = true
 			dml.ReplicatingTs = d.creationPDTs
 			dml.AddPostFlushFunc(func() {
@@ -517,8 +520,8 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 
 			log.Info("dispatcher receive ddl event",
 				zap.Stringer("dispatcher", d.id),
-				zap.String("query", ddl.Query),
 				zap.Int64("table", ddl.GetTableID()),
+				zap.String("query", ddl.Query),
 				zap.Uint64("commitTs", event.GetCommitTs()),
 				zap.Uint64("seq", event.GetSeq()))
 			ddl.AddPostFlushFunc(func() {
