@@ -28,7 +28,7 @@ import (
 func TestParallelDynamicStreamBasic(t *testing.T) {
 	handler := &mockHandler{}
 	option := Option{StreamCount: 4}
-	stream := NewParallelDynamicStream(handler, option)
+	stream := NewParallelDynamicStream("test", handler, option)
 	stream.Start()
 	defer stream.Close()
 
@@ -52,7 +52,7 @@ func TestParallelDynamicStreamBasic(t *testing.T) {
 func TestParallelDynamicStreamPush(t *testing.T) {
 	handler := &mockHandler{}
 	option := Option{StreamCount: 4}
-	stream := newParallelDynamicStream(handler, option)
+	stream := newParallelDynamicStream("test", handler, option)
 	stream.Start()
 	defer stream.Close()
 
@@ -75,7 +75,7 @@ func TestParallelDynamicStreamPush(t *testing.T) {
 func TestParallelDynamicStreamMetrics(t *testing.T) {
 	handler := &mockHandler{}
 	option := Option{StreamCount: 4}
-	stream := newParallelDynamicStream(handler, option)
+	stream := newParallelDynamicStream("test", handler, option)
 
 	stream.Start()
 	defer stream.Close()
@@ -101,7 +101,7 @@ func TestParallelDynamicStreamMemoryControl(t *testing.T) {
 		StreamCount:         4,
 		EnableMemoryControl: true,
 	}
-	stream := newParallelDynamicStream(handler, option)
+	stream := newParallelDynamicStream("test", handler, option)
 
 	stream.Start()
 	defer stream.Close()
@@ -161,7 +161,7 @@ func TestParallelDynamicStreamStress(t *testing.T) {
 	for i := 0; i < streamCount; i++ {
 		handlers[i] = &mockHandler{}
 		option := Option{StreamCount: 4}
-		streams[i] = newParallelDynamicStream(handlers[i], option)
+		streams[i] = newParallelDynamicStream("test", handlers[i], option)
 		streams[i].Start()
 	}
 
@@ -272,7 +272,7 @@ func TestParallelDynamicStreamConcurrentClose(t *testing.T) {
 		t.Run(fmt.Sprintf("iteration_%d", iter), func(t *testing.T) {
 			handler := &mockHandler{}
 			option := Option{StreamCount: 4}
-			stream := newParallelDynamicStream(handler, option)
+			stream := newParallelDynamicStream("test", handler, option)
 			stream.Start()
 
 			// Add some initial paths
