@@ -30,9 +30,20 @@ import (
 // removeDispatcherOperator is an operator to remove a table span from a dispatcher
 // and remove it from the replication db
 type removeDispatcherOperator struct {
-	replicaSet     *replica.SpanReplication
-	nodeID         node.ID
-	finished       atomic.Bool
+	replicaSet *replica.SpanReplication
+	nodeID     node.ID
+	finished   atomic.Bool
+	// removed is set when the underlying span replication task is deleted (for example by a DDL).
+	//
+	// Why we need it:
+	// A task removal can race with failover/bootstrap and cause the barrier to enqueue the same remove
+	// operator multiple times. The operator controller replaces the old operator and calls OnTaskRemoved
+	// before PostFinish. For remove operators that carry a postFinish hook (e.g. the remove phase of
+	// move/split which would MarkSpanAbsent), running that hook during task deletion can reintroduce a
+	// ghost span or wipe the nodeID needed by other removals.
+	//
+	// When removed is true we treat the operator as canceled and skip postFinish.
+	removed        atomic.Bool
 	postFinish     func()
 	spanController *span.Controller
 	// operatorType is copied into ScheduleDispatcherRequest.OperatorType when we send remove requests to
@@ -123,7 +134,11 @@ func (m *removeDispatcherOperator) IsFinished() bool {
 }
 
 func (m *removeDispatcherOperator) OnTaskRemoved() {
-	panic("unreachable")
+	// Task removal means the replica set is no longer managed by the scheduler (e.g. DROP TABLE).
+	// Mark the operator finished to stop scheduling, and skip postFinish hooks that could mutate
+	// spanController state for a task that is being deleted.
+	m.removed.Store(true)
+	m.finished.Store(true)
 }
 
 func (m *removeDispatcherOperator) Start() {
@@ -134,9 +149,12 @@ func (m *removeDispatcherOperator) Start() {
 func (m *removeDispatcherOperator) PostFinish() {
 	log.Info("remove dispatcher operator finished",
 		zap.String("replicaSet", m.replicaSet.ID.String()),
-		zap.String("changefeed", m.replicaSet.ChangefeedID.String()))
+		zap.String("changefeed", m.replicaSet.ChangefeedID.String()),
+		zap.Bool("taskRemoved", m.removed.Load()))
 
-	if m.postFinish != nil {
+	// If the task is removed, the span will be cleaned up by spanController, and we must not run
+	// post-finish hooks that may mark it absent and reintroduce a ghost entry.
+	if !m.removed.Load() && m.postFinish != nil {
 		m.postFinish()
 	}
 }
