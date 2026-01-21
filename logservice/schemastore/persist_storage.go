@@ -115,7 +115,7 @@ func exists(path string) bool {
 
 func openDB(dbPath string) *pebble.DB {
 	opts := &pebble.Options{
-		DisableWAL:   false,
+		DisableWAL:   true,
 		MemTableSize: 8 << 20,
 	}
 	opts.Levels = make([]pebble.LevelOptions, 7)
