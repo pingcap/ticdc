@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/keyspace"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/tikv/client-go/v2/oracle"
@@ -230,6 +231,7 @@ type schemaStore struct {
 	pdClock pdutil.Clock
 	pdCli   pd.Client
 	root    string
+	mc      messaging.MessageCenter
 
 	// keyspaceSchemaStoreMap is a map to store *keyspaceSchemaStore for every keyspace.
 	// The key is keyspaceID
@@ -242,8 +244,10 @@ func New(root string, pdCli pd.Client) SchemaStore {
 		pdClock:                appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		pdCli:                  pdCli,
 		root:                   root,
+		mc:                     appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		keyspaceSchemaStoreMap: make(map[uint32]*keyspaceSchemaStore),
 	}
+	s.mc.RegisterHandler(messaging.SchemaStoreTopic, s.handleMessage)
 	return s
 }
 
@@ -300,6 +304,10 @@ func (s *schemaStore) Run(ctx context.Context) error {
 }
 
 func (s *schemaStore) Close(_ context.Context) error {
+	if s.mc != nil {
+		s.mc.DeRegisterHandler(messaging.SchemaStoreTopic)
+	}
+
 	s.keyspaceLocker.Lock()
 	defer s.keyspaceLocker.Unlock()
 
