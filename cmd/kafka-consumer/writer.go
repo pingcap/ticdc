@@ -424,14 +424,26 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool {
 	watermark := w.globalWatermark()
 	ddlList := make([]*commonEvent.DDLEvent, 0)
-	for _, todoDDL := range w.ddlList {
-		// watermark is the min value for all partitions,
-		// the DDL only executed by the first partition, other partitions may be slow
-		// so that the watermark can be smaller than the DDL's commitTs,
-		// which means some DML events may not be consumed yet, so cannot execute the DDL right now.
-		if todoDDL.GetCommitTs() > watermark {
-			ddlList = append(ddlList, todoDDL)
-			continue
+	for i, todoDDL := range w.ddlList {
+		// DDL ordering must follow commitTs (see appendDDL). Traditionally we wait until the global
+		// resolved-ts (watermark) has reached the DDL commitTs, which guarantees all partitions have
+		// consumed events <= commitTs.
+		//
+		// However, some DDLs (e.g. CREATE DATABASE / CREATE TABLE) don't block any table (InfluenceTypeNormal
+		// with an empty TableIDs list). For these DDLs, waiting for watermark is unnecessary and can cause
+		// a deadlock in integration tests: the upstream may intentionally pause dispatcher creation (so the
+		// changefeed resolved-ts cannot advance), while the consumer waits for resolved-ts to execute the DDL.
+		//
+		// To keep the downstream schema advancing without violating DDL order, we allow "no blocked tables"
+		// DDLs to be executed as soon as they are received, but still stop at the first DDL that truly needs
+		// watermark to preserve ordering with potentially-unconsumed DMLs.
+		blockedTables := todoDDL.GetBlockedTables()
+		bypassWatermark := blockedTables != nil &&
+			blockedTables.InfluenceType == commonEvent.InfluenceTypeNormal &&
+			len(blockedTables.TableIDs) == 0
+		if !bypassWatermark && todoDDL.GetCommitTs() > watermark {
+			ddlList = append(ddlList, w.ddlList[i:]...)
+			break
 		}
 		if err := w.flushDDLEvent(ctx, todoDDL); err != nil {
 			log.Panic("write DDL event failed", zap.Error(err),

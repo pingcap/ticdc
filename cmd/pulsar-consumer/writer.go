@@ -364,14 +364,21 @@ func (w *writer) WriteMessage(ctx context.Context, message pulsar.Message) bool 
 func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool {
 	watermark := w.globalWatermark()
 	ddlList := make([]*commonEvent.DDLEvent, 0)
-	for _, todoDDL := range w.ddlList {
-		// watermark is the min value for all partitions,
-		// the DDL only executed by the first partition, other partitions may be slow
-		// so that the watermark can be smaller than the DDL's commitTs,
-		// which means some DML events may not be consumed yet, so cannot execute the DDL right now.
-		if todoDDL.GetCommitTs() > watermark {
-			ddlList = append(ddlList, todoDDL)
-			continue
+	for i, todoDDL := range w.ddlList {
+		// Preserve commitTs order for all DDLs (see appendDDL). For DDLs that may block other tables,
+		// we wait for the global resolved-ts (watermark) to reach commitTs so all partitions have consumed
+		// the corresponding DMLs before executing the DDL.
+		//
+		// Some DDLs (e.g. CREATE DATABASE / CREATE TABLE) don't block any table (InfluenceTypeNormal with an
+		// empty TableIDs list). For these, waiting for watermark is unnecessary and can stall schema creation
+		// when upstream resolved-ts is intentionally held back (e.g. by failpoints in integration tests).
+		blockedTables := todoDDL.GetBlockedTables()
+		bypassWatermark := blockedTables != nil &&
+			blockedTables.InfluenceType == commonEvent.InfluenceTypeNormal &&
+			len(blockedTables.TableIDs) == 0
+		if !bypassWatermark && todoDDL.GetCommitTs() > watermark {
+			ddlList = append(ddlList, w.ddlList[i:]...)
+			break
 		}
 		if err := w.flushDDLEvent(ctx, todoDDL); err != nil {
 			log.Panic("write DDL event failed", zap.Error(err),
