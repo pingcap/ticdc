@@ -43,13 +43,13 @@ func TestCanalJSONTxnEventEncoderMaxMessageBytes(t *testing.T) {
 	cfg := common.NewConfig(config.ProtocolCanalJSON).WithMaxMessageBytes(maxMessageBytes)
 	encoder := NewJSONTxnEventEncoder(cfg)
 	err := encoder.AppendTxnEvent(testEvent)
-	require.NoError(t, err)
+	require.Nil(t, err)
 
 	// the test message length is larger than max-message-bytes
 	cfg = cfg.WithMaxMessageBytes(100)
 	encoder = NewJSONTxnEventEncoder(cfg)
 	err = encoder.AppendTxnEvent(testEvent)
-	require.Error(t, err)
+	require.NotNil(t, err)
 }
 
 func TestCanalJSONAppendTxnEventEncoderWithCallback(t *testing.T) {
@@ -76,7 +76,7 @@ func TestCanalJSONAppendTxnEventEncoderWithCallback(t *testing.T) {
 		count++
 	})
 	err := encoder.AppendTxnEvent(event)
-	require.NoError(t, err)
+	require.Nil(t, err)
 	require.Equal(t, 0, count, "nothing should be called")
 
 	msgs = encoder.Build()
