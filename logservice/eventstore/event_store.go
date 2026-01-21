@@ -649,12 +649,30 @@ func (e *eventStore) UnregisterDispatcher(changefeedID common.ChangeFeedID, disp
 	if e.closed.Load() {
 		return
 	}
+	enableDataSharing := config.GetGlobalServerConfig().Debug.EventStore.EnableDataSharing
 	e.dispatcherMeta.Lock()
 	if stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]; ok {
-		e.detachFromSubStat(dispatcherID, stat.subStat)
-		e.detachFromSubStat(dispatcherID, stat.pendingSubStat)
-		e.detachFromSubStat(dispatcherID, stat.removingSubStat)
+		subStats := []*subscriptionStat{stat.subStat, stat.pendingSubStat, stat.removingSubStat}
+		for _, subStat := range subStats {
+			e.detachFromSubStat(dispatcherID, subStat)
+		}
 		delete(e.dispatcherMeta.dispatcherStats, dispatcherID)
+
+		// If data sharing is disabled, no other dispatchers will reuse these subscriptions.
+		// Remove unused subscriptions immediately to avoid delayed cleanup.
+		if !enableDataSharing {
+			seen := make(map[logpuller.SubscriptionID]struct{}, len(subStats))
+			for _, subStat := range subStats {
+				if subStat == nil {
+					continue
+				}
+				if _, ok := seen[subStat.subID]; ok {
+					continue
+				}
+				seen[subStat.subID] = struct{}{}
+				e.removeSubscriptionIfUnusedLocked(subStat)
+			}
+		}
 	}
 	e.dispatcherMeta.Unlock()
 	log.Info("unregister dispatcher done", zap.Stringer("changefeedID", changefeedID),
@@ -979,6 +997,46 @@ func (e *eventStore) addSubscriberToSubStat(subStat *subscriptionStat, dispatche
 	// It is safe to call Store without checking oldData here,
 	// as all modifications to subStat are guarded by the dispatcherMeta lock.
 	subStat.subscribers.Store(newData)
+}
+
+func (e *eventStore) removeSubscriptionIfUnusedLocked(subStat *subscriptionStat) {
+	if subStat == nil {
+		return
+	}
+	subData := subStat.subscribers.Load()
+	if subData == nil || len(subData.subscribers) != 0 {
+		return
+	}
+
+	tableID := subStat.tableSpan.TableID
+	subStats, ok := e.dispatcherMeta.tableStats[tableID]
+	if !ok {
+		return
+	}
+	current, ok := subStats[subStat.subID]
+	if !ok || current != subStat {
+		return
+	}
+
+	log.Info("remove unused subscription",
+		zap.Uint64("subscriptionID", uint64(subStat.subID)),
+		zap.Int("dbIndex", subStat.dbIndex),
+		zap.Int64("tableID", tableID))
+	e.subClient.Unsubscribe(subStat.subID)
+	db := e.dbs[subStat.dbIndex]
+	if err := deleteDataRange(db, uint64(subStat.subID), tableID, 0, math.MaxUint64); err != nil {
+		log.Warn("fail to delete events", zap.Error(err))
+	}
+	delete(subStats, subStat.subID)
+	e.subscriptionChangeCh.In() <- SubscriptionChange{
+		ChangeType: SubscriptionChangeTypeRemove,
+		SubID:      uint64(subStat.subID),
+		Span:       subStat.tableSpan,
+	}
+	metrics.EventStoreSubscriptionGauge.Dec()
+	if len(subStats) == 0 {
+		delete(e.dispatcherMeta.tableStats, tableID)
+	}
 }
 
 func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
