@@ -41,25 +41,15 @@ func TestShouldGenBatchSQL(t *testing.T) {
 		want           bool
 	}{
 		{
-			name:           "table without primary key should not use batch SQL",
-			hasPK:          false,
-			hasVirtualCols: false,
-			events:         []*commonEvent.DMLEvent{newDMLEvent(t, 1, 1, 1)},
-			config:         &Config{SafeMode: false, BatchDMLEnable: true},
-			want:           false,
+			name:   "table without primary key should not use batch SQL",
+			hasPK:  false,
+			events: []*commonEvent.DMLEvent{newDMLEvent(t, 1, 1, 1), newDMLEvent(t, 1, 1, 1)},
+			config: &Config{SafeMode: false, BatchDMLEnable: true},
+			want:   false,
 		},
 		{
-			name:           "table with virtual columns should not use batch SQL",
-			hasPK:          true,
-			hasVirtualCols: true,
-			events:         []*commonEvent.DMLEvent{newDMLEvent(t, 1, 1, 1)},
-			config:         &Config{SafeMode: false, BatchDMLEnable: true},
-			want:           false,
-		},
-		{
-			name:           "single row event should not use batch SQL",
-			hasPK:          true,
-			hasVirtualCols: false,
+			name:  "single row event should not use batch SQL",
+			hasPK: true,
 			events: []*commonEvent.DMLEvent{
 				newDMLEvent(t, 1, 1, 1),
 			},
@@ -67,9 +57,8 @@ func TestShouldGenBatchSQL(t *testing.T) {
 			want:   false,
 		},
 		{
-			name:           "all rows in same safe mode should use batch SQL",
-			hasPK:          true,
-			hasVirtualCols: false,
+			name:  "all rows in same safe mode should use batch SQL",
+			hasPK: true,
 			events: []*commonEvent.DMLEvent{
 				newDMLEvent(t, 1, 2, 2),
 				newDMLEvent(t, 2, 3, 2),
@@ -78,9 +67,8 @@ func TestShouldGenBatchSQL(t *testing.T) {
 			want:   true,
 		},
 		{
-			name:           "multiple rows with primary key in different safe mode should not use batch SQL",
-			hasPK:          true,
-			hasVirtualCols: false,
+			name:  "multiple rows with primary key in different safe mode should not use batch SQL",
+			hasPK: true,
 			events: []*commonEvent.DMLEvent{
 				newDMLEvent(t, 2, 1, 2),
 				newDMLEvent(t, 1, 2, 2),
@@ -89,9 +77,8 @@ func TestShouldGenBatchSQL(t *testing.T) {
 			want:   false,
 		},
 		{
-			name:           "multiple rows with primary key in unsafe mode should use batch SQL",
-			hasPK:          true,
-			hasVirtualCols: false,
+			name:  "multiple rows with primary key in unsafe mode should use batch SQL",
+			hasPK: true,
 			events: []*commonEvent.DMLEvent{
 				newDMLEvent(t, 2, 1, 2),
 				newDMLEvent(t, 3, 1, 2),
@@ -100,9 +87,8 @@ func TestShouldGenBatchSQL(t *testing.T) {
 			want:   true,
 		},
 		{
-			name:           "global safe mode should use batch SQL",
-			hasPK:          true,
-			hasVirtualCols: false,
+			name:  "global safe mode should use batch SQL",
+			hasPK: true,
 			events: []*commonEvent.DMLEvent{
 				newDMLEvent(t, 2, 1, 2),
 			},
@@ -110,12 +96,11 @@ func TestShouldGenBatchSQL(t *testing.T) {
 			want:   true,
 		},
 		{
-			name:           "batch dml is disabled",
-			hasPK:          true,
-			hasVirtualCols: false,
-			events:         []*commonEvent.DMLEvent{newDMLEvent(t, 1, 1, 1)},
-			config:         &Config{SafeMode: false, BatchDMLEnable: false},
-			want:           false,
+			name:   "batch dml is disabled",
+			hasPK:  true,
+			events: []*commonEvent.DMLEvent{newDMLEvent(t, 1, 1, 1)},
+			config: &Config{SafeMode: false, BatchDMLEnable: false},
+			want:   false,
 		},
 	}
 
