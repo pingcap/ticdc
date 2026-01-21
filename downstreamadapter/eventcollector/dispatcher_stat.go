@@ -400,13 +400,14 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 			d.reset(d.connState.getEventServiceID())
 			return false
 		}
-		if event.GetType() == commonEvent.TypeResolvedEvent {
+		switch event.GetType() {
+		case commonEvent.TypeResolvedEvent:
 			validEvents = append(validEvents, event)
-		} else if event.GetType() == commonEvent.TypeDMLEvent {
+		case commonEvent.TypeDMLEvent:
 			if d.filterAndUpdateEventByCommitTs(event) {
 				validEvents = append(validEvents, event)
 			}
-		} else if event.GetType() == commonEvent.TypeBatchDMLEvent {
+		case commonEvent.TypeBatchDMLEvent:
 			tableInfo := d.tableInfo.Load().(*common.TableInfo)
 			if tableInfo == nil {
 				log.Panic("should not happen: table info should be set before batch DML event",
@@ -431,7 +432,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 					validEvents = append(validEvents, dmlEvent)
 				}
 			}
-		} else {
+		default:
 			log.Panic("should not happen: unknown event type in batch data events",
 				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 				zap.Stringer("dispatcherID", d.getDispatcherID()),
