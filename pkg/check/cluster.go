@@ -35,9 +35,18 @@ var (
 	getClusterIDBySinkURIFn = getClusterIDBySinkURI
 )
 
-// UpstreamDownstreamNotSame checks whether the upstream and downstream are not the same cluster.
-// It will return true if downstream is not a TiDB cluster, or downstream cluster ID is unavailable.
-func UpstreamDownstreamNotSame(
+// IsSameUpstreamDownstream returns whether the upstream and downstream are the same TiDB logical cluster.
+//
+// Why this exists: TiCDC does not support using the same TiDB logical cluster as both upstream and downstream,
+// because it can easily lead to self-replication loops.
+//
+// Compatibility and trade-offs:
+//   - If the sink is not TiDB, or the downstream `cluster_id` is unavailable, this returns false (keep legacy behavior).
+//   - In TiDB Next-Gen, multiple keyspaces share the same physical `cluster_id`. When the downstream keyspace
+//     can be determined, we treat (cluster_id, keyspace) as the cluster identity to allow cross-keyspace replication.
+//   - If the downstream keyspace cannot be determined while `cluster_id` matches, we conservatively return true
+//     to avoid accidental self-replication.
+func IsSameUpstreamDownstream(
 	ctx context.Context, upPD pd.Client, changefeedCfg *config.ChangefeedConfig,
 ) (bool, error) {
 	if upPD == nil {
@@ -68,7 +77,7 @@ func UpstreamDownstreamNotSame(
 		return false, cerrors.Trace(err)
 	}
 	if !isTiDB {
-		return true, nil
+		return false, nil
 	}
 
 	// In TiDB Classic, `cluster_id` identifies the whole cluster. In TiDB Next-Gen, a physical
@@ -76,14 +85,14 @@ func UpstreamDownstreamNotSame(
 	// `cluster_id`. To avoid blocking valid cross-keyspace replication, treat (cluster_id, keyspace)
 	// as the cluster identity when both sides are TiDB and keyspace is available.
 	if upID != downID {
-		return true, nil
+		return false, nil
 	}
 	if downKeyspace == "" {
 		// If the downstream keyspace can't be determined, keep the legacy behavior: treat the same
 		// physical cluster as "same" to prevent accidental self-replication loops.
-		return false, nil
+		return true, nil
 	}
-	return !strings.EqualFold(upKeyspace, downKeyspace), nil
+	return strings.EqualFold(upKeyspace, downKeyspace), nil
 }
 
 // getClusterIDBySinkURI gets the downstream TiDB cluster ID and keyspace name by the sink URI.

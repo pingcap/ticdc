@@ -250,13 +250,13 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 
 	// verify sinkURI
 	cfConfig := info.ToChangefeedConfig()
-	// Check whether the upstream and downstream are the different cluster.
-	notSame, err := check.UpstreamDownstreamNotSame(ctx, pdClient, cfConfig)
+	// Reject a changefeed if the downstream is the same TiDB logical cluster as the upstream.
+	isSame, err := check.IsSameUpstreamDownstream(ctx, pdClient, cfConfig)
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
-	if !notSame {
+	if isSame {
 		_ = c.Error(errors.ErrSameUpstreamDownstream.GenWithStack(
 			"TiCDC does not support creating a changefeed with the same TiDB cluster " +
 				"as both the source and the target for the changefeed."))
@@ -691,13 +691,13 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		return
 	}
 
-	// Check whether the upstream and downstream are the different cluster.
-	notSame, err := check.UpstreamDownstreamNotSame(ctx, h.server.GetPdClient(), cfInfo.ToChangefeedConfig())
+	// Reject a changefeed if the downstream is the same TiDB logical cluster as the upstream.
+	isSame, err := check.IsSameUpstreamDownstream(ctx, h.server.GetPdClient(), cfInfo.ToChangefeedConfig())
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
-	if !notSame {
+	if isSame {
 		_ = c.Error(errors.ErrSameUpstreamDownstream.GenWithStack(
 			"TiCDC does not support resuming a changefeed with the same TiDB cluster " +
 				"as both the source and the target for the changefeed."))
@@ -885,13 +885,13 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 	}
 
 	// verify sink
-	// Check whether the upstream and downstream are the different cluster.
-	notSame, err := check.UpstreamDownstreamNotSame(ctx, h.server.GetPdClient(), oldCfInfo.ToChangefeedConfig())
+	// Reject a changefeed if the downstream is the same TiDB logical cluster as the upstream.
+	isSame, err := check.IsSameUpstreamDownstream(ctx, h.server.GetPdClient(), oldCfInfo.ToChangefeedConfig())
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
-	if !notSame {
+	if isSame {
 		_ = c.Error(errors.ErrSameUpstreamDownstream.GenWithStack(
 			"TiCDC does not support updating a changefeed with the same TiDB cluster " +
 				"as both the source and the target for the changefeed."))

@@ -180,7 +180,7 @@ func TestGetClusterIDBySinkURI(t *testing.T) {
 	})
 }
 
-func TestUpstreamDownstreamNotSame(t *testing.T) {
+func TestIsSameUpstreamDownstream(t *testing.T) {
 	// This test verifies the tuple-based identity check:
 	// - TiDB Classic: compare physical `cluster_id`
 	// - TiDB Next-Gen: compare (cluster_id, keyspace) when keyspace is available.
@@ -207,7 +207,7 @@ func TestUpstreamDownstreamNotSame(t *testing.T) {
 			mockDownFunc: func(context.Context, string, *config.ChangefeedConfig) (uint64, string, bool, error) {
 				return 123, "default", true, nil
 			},
-			wantResult: false,
+			wantResult: true,
 		},
 		{
 			name:         "different cluster",
@@ -216,7 +216,7 @@ func TestUpstreamDownstreamNotSame(t *testing.T) {
 			mockDownFunc: func(context.Context, string, *config.ChangefeedConfig) (uint64, string, bool, error) {
 				return 456, "default", true, nil
 			},
-			wantResult: true,
+			wantResult: false,
 		},
 		{
 			name:         "same physical cluster but different keyspace",
@@ -225,7 +225,7 @@ func TestUpstreamDownstreamNotSame(t *testing.T) {
 			mockDownFunc: func(context.Context, string, *config.ChangefeedConfig) (uint64, string, bool, error) {
 				return 123, "keyspace2", true, nil
 			},
-			wantResult: true,
+			wantResult: false,
 		},
 		{
 			name:         "not tidb",
@@ -233,7 +233,7 @@ func TestUpstreamDownstreamNotSame(t *testing.T) {
 			mockDownFunc: func(context.Context, string, *config.ChangefeedConfig) (uint64, string, bool, error) {
 				return 0, "", false, nil
 			},
-			wantResult: true,
+			wantResult: false,
 		},
 		{
 			name:         "error case",
@@ -251,7 +251,7 @@ func TestUpstreamDownstreamNotSame(t *testing.T) {
 			SetGetClusterIDBySinkURIFnForTest(tc.mockDownFunc)
 			mockPD := &mockPDClient{clusterID: tc.upClusterID}
 
-			result, err := UpstreamDownstreamNotSame(context.Background(), mockPD, changefeedCfg)
+			result, err := IsSameUpstreamDownstream(context.Background(), mockPD, changefeedCfg)
 			if tc.wantErr != "" {
 				require.ErrorContains(t, err, tc.wantErr)
 				return
