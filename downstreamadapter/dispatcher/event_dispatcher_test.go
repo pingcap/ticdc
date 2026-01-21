@@ -16,7 +16,6 @@ package dispatcher
 import (
 	"context"
 	"math"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -710,40 +709,6 @@ func TestDispatcherClose(t *testing.T) {
 	}
 }
 
-type recordingSink struct {
-	mu          sync.Mutex
-	sinkType    common.SinkType
-	blockEvents []commonEvent.BlockEvent
-}
-
-func (s *recordingSink) SinkType() common.SinkType { return s.sinkType }
-
-func (s *recordingSink) IsNormal() bool { return true }
-
-func (s *recordingSink) AddDMLEvent(_ *commonEvent.DMLEvent) {}
-
-func (s *recordingSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
-	s.mu.Lock()
-	s.blockEvents = append(s.blockEvents, event)
-	s.mu.Unlock()
-	event.PostFlush()
-	return nil
-}
-
-func (s *recordingSink) AddCheckpointTs(_ uint64) {}
-
-func (s *recordingSink) SetTableSchemaStore(_ *commonEvent.TableSchemaStore) {}
-
-func (s *recordingSink) Close(bool) {}
-
-func (s *recordingSink) Run(context.Context) error { return nil }
-
-func (s *recordingSink) getBlockEvents() []commonEvent.BlockEvent {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]commonEvent.BlockEvent(nil), s.blockEvents...)
-}
-
 func TestEmitBootstrapFetchesTableInfosByMessage(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -817,8 +782,8 @@ func TestEmitBootstrapFetchesTableInfosByMessage(t *testing.T) {
 	})
 
 	ddlTableSpan := common.KeyspaceDDLSpan(getTestingKeyspaceID())
-	sink := &recordingSink{sinkType: common.KafkaSinkType}
-	dispatcher := newDispatcherForTest(sink, ddlTableSpan)
+	mockSink := sink.NewMockSink(common.KafkaSinkType)
+	dispatcher := newDispatcherForTest(mockSink, ddlTableSpan)
 
 	ok, err := dispatcher.InitializeTableSchemaStore([]*heartbeatpb.SchemaInfo{
 		{
@@ -843,7 +808,7 @@ func TestEmitBootstrapFetchesTableInfosByMessage(t *testing.T) {
 	default:
 	}
 
-	events := sink.getBlockEvents()
+	events := mockSink.GetBlockEvents()
 	require.Len(t, events, 2)
 
 	gotTableIDs := make(map[int64]bool)
