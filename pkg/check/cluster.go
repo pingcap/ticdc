@@ -59,7 +59,7 @@ func IsSameUpstreamDownstream(
 	upID := upPD.GetClusterID(ctx)
 	upKeyspace := changefeedCfg.ChangefeedID.Keyspace()
 	if upKeyspace == "" {
-		upKeyspace = common.DefaultKeyspaceNamme
+		upKeyspace = common.DefaultKeyspaceName
 	}
 
 	downID, downKeyspace, isTiDB, err := getClusterIDBySinkURIFn(ctx, changefeedCfg.SinkURI, changefeedCfg)
