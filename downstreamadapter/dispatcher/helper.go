@@ -439,19 +439,25 @@ type schemaStoreClient struct {
 }
 
 var (
-	schemaStoreClientMu       sync.Mutex
-	schemaStoreClientInstance *schemaStoreClient
+	schemaStoreClientMu sync.Mutex
+	// schemaStoreClientInstance is a server-level singleton. It's created lazily,
+	// because EmitBootstrap is the only caller and MessageCenter is wired by server bootstrap.
+	schemaStoreClientInstance atomic.Pointer[schemaStoreClient]
 )
 
 func getSchemaStoreClient() *schemaStoreClient {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 
+	if c := schemaStoreClientInstance.Load(); c != nil && c.mc == mc {
+		return c
+	}
+
 	schemaStoreClientMu.Lock()
 	defer schemaStoreClientMu.Unlock()
 
 	// Allow tests to swap message center by rebuilding the client when mc changed.
-	if schemaStoreClientInstance != nil && schemaStoreClientInstance.mc == mc {
-		return schemaStoreClientInstance
+	if c := schemaStoreClientInstance.Load(); c != nil && c.mc == mc {
+		return c
 	}
 
 	c := &schemaStoreClient{
@@ -459,7 +465,7 @@ func getSchemaStoreClient() *schemaStoreClient {
 		pending: make(map[uint64]chan *messaging.SchemaStoreTableInfosResponse),
 	}
 	c.mc.RegisterHandler(messaging.SchemaStoreClientTopic, c.handleMessage)
-	schemaStoreClientInstance = c
+	schemaStoreClientInstance.Store(c)
 	return c
 }
 
