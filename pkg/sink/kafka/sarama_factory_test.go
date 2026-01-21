@@ -80,20 +80,23 @@ func newFakeAsyncProducer() *fakeAsyncProducer {
 	}
 }
 
-func (p *fakeAsyncProducer) AsyncClose()                                 {}
-func (p *fakeAsyncProducer) Close() error                                { return nil }
-func (p *fakeAsyncProducer) Input() chan<- *sarama.ProducerMessage       { return p.input }
-func (p *fakeAsyncProducer) Successes() <-chan *sarama.ProducerMessage   { return p.successes }
-func (p *fakeAsyncProducer) Errors() <-chan *sarama.ProducerError        { return p.errors }
-func (p *fakeAsyncProducer) IsTransactional() bool                       { return false }
-func (p *fakeAsyncProducer) TxnStatus() sarama.ProducerTxnStatusFlag     { return 0 }
-func (p *fakeAsyncProducer) BeginTxn() error                             { return nil }
-func (p *fakeAsyncProducer) CommitTxn() error                            { return nil }
-func (p *fakeAsyncProducer) AbortTxn() error                             { return nil }
+func (p *fakeAsyncProducer) AsyncClose()                               {}
+func (p *fakeAsyncProducer) Close() error                              { return nil }
+func (p *fakeAsyncProducer) Input() chan<- *sarama.ProducerMessage     { return p.input }
+func (p *fakeAsyncProducer) Successes() <-chan *sarama.ProducerMessage { return p.successes }
+func (p *fakeAsyncProducer) Errors() <-chan *sarama.ProducerError      { return p.errors }
+func (p *fakeAsyncProducer) IsTransactional() bool                     { return false }
+func (p *fakeAsyncProducer) TxnStatus() sarama.ProducerTxnStatusFlag   { return 0 }
+func (p *fakeAsyncProducer) BeginTxn() error                           { return nil }
+func (p *fakeAsyncProducer) CommitTxn() error                          { return nil }
+func (p *fakeAsyncProducer) AbortTxn() error                           { return nil }
 func (p *fakeAsyncProducer) AddOffsetsToTxn(map[string][]*sarama.PartitionOffsetMetadata, string) error {
 	return nil
 }
-func (p *fakeAsyncProducer) AddMessageToTxn(*sarama.ConsumerMessage, string, *string) error { return nil }
+
+func (p *fakeAsyncProducer) AddMessageToTxn(*sarama.ConsumerMessage, string, *string) error {
+	return nil
+}
 
 func TestSaramaAsyncProducerHeartbeatCallsBrokers(t *testing.T) {
 	t.Parallel()

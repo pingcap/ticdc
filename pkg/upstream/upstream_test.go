@@ -115,7 +115,7 @@ func TestRegisterTopo(t *testing.T) {
 	info := node.NewInfo("localhost:8300", "test")
 	info.Version = "test.1.0"
 	err = up.registerTopologyInfo(ctx, &NodeTopologyCfg{
-		Info: info,
+		Info:        info,
 		GCServiceID: "clusterID",
 		SessionTTL:  2,
 	})

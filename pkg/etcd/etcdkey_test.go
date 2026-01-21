@@ -79,11 +79,11 @@ func TestEtcdKey(t *testing.T) {
 	}, {
 		key: "/tidb/cdc/default/name/task/position/6bbc01c8-0605-4f86-a0f9-b3119109b225/test-changefeed",
 		expected: &CDCKey{
-			Tp: CDCKeyTypeTaskPosition,
+			Tp:           CDCKeyTypeTaskPosition,
 			ChangefeedID: common.ChangeFeedID{DisplayName: common.NewChangeFeedDisplayName("test-changefeed", "name")},
-			CaptureID: "6bbc01c8-0605-4f86-a0f9-b3119109b225",
-			ClusterID: DefaultCDCClusterID,
-			Keyspace:  "name",
+			CaptureID:    "6bbc01c8-0605-4f86-a0f9-b3119109b225",
+			ClusterID:    DefaultCDCClusterID,
+			Keyspace:     "name",
 		},
 	}, {
 		key: DefaultClusterAndKeyspacePrefix +
