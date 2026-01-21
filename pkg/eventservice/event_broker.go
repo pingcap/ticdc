@@ -425,9 +425,21 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		return false, common.DataRange{}
 	}
 	dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, ddlState.ResolvedTs)
+	commitTsEndBeforeWindow := dataRange.CommitTsEnd
 	scanMaxTs := task.changefeedStat.getScanMaxTs()
 	if scanMaxTs > 0 {
 		dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, scanMaxTs)
+		if dataRange.CommitTsEnd < commitTsEndBeforeWindow {
+			log.Info("scan window capped",
+				zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
+				zap.Stringer("dispatcherID", task.id),
+				zap.Uint64("baseTs", task.changefeedStat.minSentTs.Load()),
+				zap.Uint64("scanMaxTs", scanMaxTs),
+				zap.Uint64("beforeEndTs", commitTsEndBeforeWindow),
+				zap.Uint64("afterEndTs", dataRange.CommitTsEnd),
+				zap.Duration("scanInterval", time.Duration(task.changefeedStat.scanInterval.Load())),
+			)
+		}
 	}
 
 	if dataRange.CommitTsEnd <= dataRange.CommitTsStart {

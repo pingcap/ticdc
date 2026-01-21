@@ -17,8 +17,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pingcap/log"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
+	"go.uber.org/zap"
 )
 
 const (
@@ -30,6 +32,7 @@ const (
 	memoryUsageHighThreshold     = 1.10
 	memoryUsageCriticalThreshold = 1.50
 	memoryUsageLowThreshold      = 0.50
+	usageLogInterval             = time.Minute
 )
 
 type memoryUsageSample struct {
@@ -89,6 +92,7 @@ func (w *memoryUsageWindow) pruneLocked(now time.Time) {
 
 func (c *changefeedStatus) updateMemoryUsage(now time.Time, used uint64, max uint64) {
 	if max == 0 || c.usageWindow == nil {
+		c.logUsageMissing(now, used, max)
 		return
 	}
 	ratio := float64(used) / float64(max)
@@ -128,6 +132,14 @@ func (c *changefeedStatus) adjustScanInterval(now time.Time, avg float64) {
 	if newInterval != current {
 		c.scanInterval.Store(int64(newInterval))
 		c.lastAdjustTime.Store(now)
+		log.Info("scan interval adjusted",
+			zap.Stringer("changefeedID", c.changefeedID),
+			zap.Duration("oldInterval", current),
+			zap.Duration("newInterval", newInterval),
+			zap.Duration("maxInterval", maxInterval),
+			zap.Float64("avgUsage", avg),
+			zap.Bool("syncPointEnabled", c.syncPointEnabled.Load()),
+		)
 	}
 }
 
@@ -160,14 +172,14 @@ func (c *changefeedStatus) refreshMinSentResolvedTs() {
 	})
 
 	if minSentResolvedTs == ^uint64(0) {
-		c.minCheckpointTs.Store(0)
+		c.storeMinSentTs(0)
 		return
 	}
-	c.minCheckpointTs.Store(minSentResolvedTs)
+	c.storeMinSentTs(minSentResolvedTs)
 }
 
 func (c *changefeedStatus) getScanMaxTs() uint64 {
-	baseTs := c.minCheckpointTs.Load()
+	baseTs := c.minSentTs.Load()
 	if baseTs == 0 {
 		return 0
 	}
@@ -176,6 +188,35 @@ func (c *changefeedStatus) getScanMaxTs() uint64 {
 		interval = defaultScanInterval
 	}
 	return oracle.GoTimeToTS(oracle.GetTimeFromTS(baseTs).Add(interval))
+}
+
+func (c *changefeedStatus) storeMinSentTs(value uint64) {
+	prev := c.minSentTs.Load()
+	if prev == value {
+		return
+	}
+	c.minSentTs.Store(value)
+	log.Info("scan window base updated",
+		zap.Stringer("changefeedID", c.changefeedID),
+		zap.Uint64("oldBaseTs", prev),
+		zap.Uint64("newBaseTs", value),
+	)
+}
+
+func (c *changefeedStatus) logUsageMissing(now time.Time, used uint64, max uint64) {
+	last := c.lastUsageLogTime.Load()
+	nowUnix := now.Unix()
+	if nowUnix-last < int64(usageLogInterval.Seconds()) {
+		return
+	}
+	if !c.lastUsageLogTime.CompareAndSwap(last, nowUnix) {
+		return
+	}
+	log.Info("memory usage max is zero",
+		zap.Stringer("changefeedID", c.changefeedID),
+		zap.Uint64("used", used),
+		zap.Uint64("max", max),
+	)
 }
 
 func (c *changefeedStatus) updateSyncPointConfig(info DispatcherInfo) {

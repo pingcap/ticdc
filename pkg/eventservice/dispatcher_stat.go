@@ -427,12 +427,13 @@ type changefeedStatus struct {
 	dispatchers sync.Map // common.DispatcherID -> *atomic.Pointer[dispatcherStat]
 
 	availableMemoryQuota sync.Map // nodeID -> atomic.Uint64 (memory quota in bytes)
-	minCheckpointTs      atomic.Uint64
+	minSentTs            atomic.Uint64
 	scanInterval         atomic.Int64
 	lastAdjustTime       atomic.Time
 	usageWindow          *memoryUsageWindow
 	syncPointEnabled     atomic.Bool
 	syncPointInterval    atomic.Int64
+	lastUsageLogTime     atomic.Int64
 }
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
