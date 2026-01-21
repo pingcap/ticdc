@@ -628,17 +628,20 @@ func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFe
 
 func (c *Controller) RemoveChangefeed(ctx context.Context, id common.ChangeFeedID) (uint64, error) {
 	c.apiLock.Lock()
-	defer c.apiLock.Unlock()
 
 	cf := c.changefeedDB.GetByID(id)
 	if cf == nil {
+		c.apiLock.Unlock()
 		return 0, errors.New("changefeed not found")
 	}
 	err := c.backend.SetChangefeedProgress(ctx, id, config.ProgressRemoving)
 	if err != nil {
+		c.apiLock.Unlock()
 		return 0, errors.Trace(err)
 	}
 	op := c.operatorController.StopChangefeed(ctx, id, true)
+	c.apiLock.Unlock()
+
 	count := 0
 	for {
 		if op.IsFinished() {
@@ -654,23 +657,26 @@ func (c *Controller) RemoveChangefeed(ctx context.Context, id common.ChangeFeedI
 
 func (c *Controller) PauseChangefeed(ctx context.Context, id common.ChangeFeedID) error {
 	c.apiLock.Lock()
-	defer c.apiLock.Unlock()
 
 	cf := c.changefeedDB.GetByID(id)
 	if cf == nil {
+		c.apiLock.Unlock()
 		return errors.New("changefeed not found")
 	}
 	if err := c.backend.PauseChangefeed(ctx, id); err != nil {
+		c.apiLock.Unlock()
 		return err
 	}
 
 	clone, err := cf.GetInfo().Clone()
 	if err != nil {
+		c.apiLock.Unlock()
 		return err
 	}
 	clone.State = config.StateStopped
 	cf.SetInfo(clone)
 	op := c.operatorController.StopChangefeed(ctx, id, false)
+	c.apiLock.Unlock()
 
 	count := 0
 	for {

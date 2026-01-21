@@ -89,7 +89,7 @@ func (rd *RedoDispatcher) GetRedoMeta() *redo.RedoMeta {
 // SetRedoMeta used to init redo meta
 // only for table trigger redo dispatcher
 func (rd *RedoDispatcher) SetRedoMeta(cfg *config.ConsistentConfig) {
-	if !rd.IsTableTriggerEventDispatcher() {
+	if !rd.IsTableTriggerDispatcher() {
 		log.Error("SetRedoMeta should be called by table trigger redo dispatcher", zap.Any("id", rd.GetId()))
 	}
 	ctx := context.Background()

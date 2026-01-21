@@ -1520,12 +1520,12 @@ func getVerifiedTables(
 
 func GetKeyspaceValueWithDefault(c *gin.Context) string {
 	if kerneltype.IsClassic() {
-		return common.DefaultKeyspaceNamme
+		return common.DefaultKeyspaceName
 	}
 
 	keyspace := c.Query(api.APIOpVarKeyspace)
 	if keyspace == "" {
-		keyspace = common.DefaultKeyspaceNamme
+		keyspace = common.DefaultKeyspaceName
 	}
 	return keyspace
 }

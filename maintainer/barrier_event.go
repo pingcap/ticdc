@@ -410,6 +410,12 @@ func (be *BarrierEvent) sendPassAction(mode int64) []*messaging.TargetMessage {
 			be.rangeChecker.MarkCovered()
 			return nil
 		} else {
+			// writerDispatcher for DB Type is always table trigger dispatcher, so we need to add it too
+			writerDispatcherTask := be.spanController.GetTaskByID(be.writerDispatcher)
+			if writerDispatcherTask != nil {
+				spans = append(spans, writerDispatcherTask)
+			}
+
 			for _, stm := range spans {
 				nodeID := stm.GetNodeID()
 				if nodeID == "" {
@@ -435,9 +441,6 @@ func (be *BarrierEvent) sendPassAction(mode int64) []*messaging.TargetMessage {
 				for _, stm := range spans {
 					nodeID := stm.GetNodeID()
 					dispatcherID := stm.ID
-					if dispatcherID == be.writerDispatcher {
-						continue
-					}
 					msg, ok := msgMap[nodeID]
 					if !ok {
 						msg = be.newPassActionMessage(nodeID, mode)
@@ -670,17 +673,23 @@ func (be *BarrierEvent) newWriterActionMessage(capture node.ID, mode int64) *mes
 }
 
 func (be *BarrierEvent) newPassActionMessage(capture node.ID, mode int64) *messaging.TargetMessage {
+	influenced := &heartbeatpb.InfluencedDispatchers{
+		InfluenceType: be.blockedDispatchers.InfluenceType,
+		SchemaID:      be.blockedDispatchers.SchemaID,
+	}
+	if be.blockedDispatchers.InfluenceType != heartbeatpb.InfluenceType_Normal {
+		// ExcludeDispatcherId is deprecated. It is kept only for rolling upgrade compatibility:
+		// older dispatcher managers unconditionally dereference this field for DB/All types.
+		// New dispatcher managers should ignore it.
+		influenced.ExcludeDispatcherId = &heartbeatpb.DispatcherID{}
+	}
 	return messaging.NewSingleTargetMessage(capture, messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.HeartBeatResponse{
 			ChangefeedID: be.cfID.ToPB(),
 			DispatcherStatuses: []*heartbeatpb.DispatcherStatus{
 				{
-					Action: be.action(heartbeatpb.Action_Pass),
-					InfluencedDispatchers: &heartbeatpb.InfluencedDispatchers{
-						InfluenceType:       be.blockedDispatchers.InfluenceType,
-						SchemaID:            be.blockedDispatchers.SchemaID,
-						ExcludeDispatcherId: be.writerDispatcher.ToPB(),
-					},
+					Action:                be.action(heartbeatpb.Action_Pass),
+					InfluencedDispatchers: influenced,
 				},
 			},
 			Mode: mode,
