@@ -113,6 +113,8 @@ type EventCollector struct {
 	dispatcherMap sync.Map // key: dispatcherID, value: dispatcherStat
 	changefeedMap sync.Map // key: changefeedID.GID, value: *changefeedStat
 
+	lastCongestionLogTime int64
+
 	mc messaging.MessageCenter
 
 	logCoordinatorClient *LogCoordinatorClient
@@ -602,6 +604,8 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 	changefeedTotalMemory := make(map[common.ChangeFeedID]uint64)
 	changefeedUsedMemory := make(map[common.ChangeFeedID]uint64)
 	changefeedMaxMemory := make(map[common.ChangeFeedID]uint64)
+	totalDispatchers := 0
+	dispatchersWithoutService := 0
 
 	// collect from main dynamic stream
 	for _, quota := range c.ds.GetMetrics().MemoryControl.AreaMemoryMetrics {
@@ -669,7 +673,9 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 	c.dispatcherMap.Range(func(k, v interface{}) bool {
 		stat := v.(*dispatcherStat)
 		eventServiceID := stat.connState.getEventServiceID()
+		totalDispatchers++
 		if eventServiceID == "" {
+			dispatchersWithoutService++
 			return true
 		}
 
@@ -692,6 +698,7 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 
 	// build congestion control messages for each node
 	result := make(map[node.ID]*event.CongestionControl)
+	changefeedsInMessages := 0
 	for nodeID, changefeedDispatchers := range nodeDispatcherMemory {
 		congestionControl := event.NewCongestionControlWithVersion(event.CongestionControlVersion2)
 
@@ -710,12 +717,26 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 					changefeedMaxMemory[changefeedID],
 					dispatcherMemory,
 				)
+				changefeedsInMessages++
 			}
 		}
 
 		if len(congestionControl.GetAvailables()) > 0 {
 			result[nodeID] = congestionControl
 		}
+	}
+
+	nowUnix := time.Now().Unix()
+	lastLog := atomic.LoadInt64(&c.lastCongestionLogTime)
+	if nowUnix-lastLog >= int64(time.Minute.Seconds()) &&
+		atomic.CompareAndSwapInt64(&c.lastCongestionLogTime, lastLog, nowUnix) {
+		log.Info("congestion control build summary",
+			zap.Int("dispatchers", totalDispatchers),
+			zap.Int("dispatchersWithoutService", dispatchersWithoutService),
+			zap.Int("changefeedsWithMetrics", len(changefeedPathMemory)),
+			zap.Int("changefeedsInMessages", changefeedsInMessages),
+			zap.Int("nodes", len(result)),
+		)
 	}
 
 	return result

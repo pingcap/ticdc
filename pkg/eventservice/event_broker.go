@@ -51,6 +51,7 @@ const (
 	maxReadyEventIntervalSeconds = 10
 	// defaultSendResolvedTsInterval use to control whether to send a resolvedTs event to the dispatcher when its scan is skipped.
 	defaultSendResolvedTsInterval = time.Second * 2
+	congestionControlLogInterval  = time.Minute
 )
 
 // eventBroker get event from the eventStore, and send the event to the dispatchers.
@@ -93,6 +94,8 @@ type eventBroker struct {
 
 	scanRateLimiter  *rate.Limiter
 	scanLimitInBytes uint64
+
+	lastCongestionLogTime atomic.Int64
 }
 
 func newEventBroker(
@@ -1226,6 +1229,8 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 	usage := make(map[common.GID]usageInfo, len(availables))
 	dispatcherAvailable := make(map[common.DispatcherID]uint64, len(availables))
 	hasUsage := m.GetVersion() >= event.CongestionControlVersion2
+	usageCount := 0
+	zeroMaxCount := 0
 	for _, item := range availables {
 		holder[item.Gid] = item.Available
 		if hasUsage && item.Max > 0 {
@@ -1233,6 +1238,9 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 				used: item.Used,
 				max:  item.Max,
 			}
+			usageCount++
+		} else if hasUsage {
+			zeroMaxCount++
 		}
 		for dispatcherID, available := range item.DispatcherAvailable {
 			dispatcherAvailable[dispatcherID] = available
@@ -1265,6 +1273,19 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 		}
 		return true
 	})
+
+	nowUnix := now.Unix()
+	lastLog := c.lastCongestionLogTime.Load()
+	if nowUnix-lastLog >= int64(congestionControlLogInterval.Seconds()) &&
+		c.lastCongestionLogTime.CompareAndSwap(lastLog, nowUnix) {
+		log.Info("congestion control received",
+			zap.Uint16("version", uint16(m.GetVersion())),
+			zap.Int("changefeedCount", len(availables)),
+			zap.Int("usageCount", usageCount),
+			zap.Int("zeroMaxCount", zeroMaxCount),
+			zap.Int("dispatcherCount", len(dispatcherAvailable)),
+		)
+	}
 }
 
 func (c *eventBroker) sendDispatcherResponse(responseMap map[string]*event.DispatcherHeartbeatResponse) {
