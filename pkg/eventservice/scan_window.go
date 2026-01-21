@@ -123,9 +123,9 @@ func (c *changefeedStatus) updateMemoryUsage(now time.Time, used uint64, max uin
 	c.usageWindow.addSample(now, ratio)
 	avg, full := c.usageWindow.average(now)
 	c.logUsageWindow(now, avg, full)
-	if !full {
-		return
-	}
+	// if !full {
+	// 	return
+	// }
 	c.adjustScanInterval(now, avg)
 }
 
