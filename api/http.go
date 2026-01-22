@@ -14,11 +14,13 @@
 package api
 
 import (
+	"net/http"
 	"net/http/pprof"
 
 	"github.com/gin-gonic/gin"
 	v1 "github.com/pingcap/ticdc/api/v1"
 	v2 "github.com/pingcap/ticdc/api/v2"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/server"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -34,6 +36,9 @@ func RegisterRoutes(
 	v2.RegisterOpenAPIV2Routes(router, v2.NewOpenAPIV2(server))
 	// Open API V1
 	v1.RegisterOpenAPIV1Routes(router, v1.NewOpenAPIV1(server))
+	router.GET("/config", func(c *gin.Context) {
+		c.JSON(http.StatusOK, config.GetGlobalServerConfig())
+	})
 	// pprof debug API
 	pprofGroup := router.Group("/debug/pprof/")
 	pprofGroup.GET("", gin.WrapF(pprof.Index))

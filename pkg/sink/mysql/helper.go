@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/tidb/br/pkg/version"
 	"github.com/pingcap/tidb/dumpling/export"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
@@ -397,17 +398,6 @@ func needSwitchDB(event *commonEvent.DDLEvent) bool {
 	return true
 }
 
-func needWaitAsyncExecDone(t timodel.ActionType) bool {
-	switch t {
-	case timodel.ActionCreateTable, timodel.ActionCreateTables:
-		return false
-	case timodel.ActionCreateSchema:
-		return false
-	default:
-		return true
-	}
-}
-
 func getTiDBVersion(db *sql.DB) version.ServerInfo {
 	versionInfo, err := export.SelectVersion(db)
 	if err != nil {
@@ -514,17 +504,27 @@ func getDDLCreateTime(ctx context.Context, db *sql.DB) string {
 func getDDLStateFromTiDB(ctx context.Context, db *sql.DB, ddl string, createTime string) (timodel.JobState, error) {
 	// ddlCreateTime and createTime are both based on UTC timezone of downstream
 	showJobs := fmt.Sprintf(checkRunningSQL, createTime, ddl)
-	//nolint:rowserrcheck
-	jobsRows, err := db.QueryContext(ctx, showJobs)
+	var jobsResults [][]string
+	err := retry.Do(ctx, func() error {
+		//nolint:rowserrcheck
+		jobsRows, err := db.QueryContext(ctx, showJobs)
+		if err != nil {
+			log.Warn("failed to query from downstream to get ddl state", zap.Error(err))
+			return err
+		}
+		jobsResults, err = export.GetSpecifiedColumnValuesAndClose(jobsRows, "QUERY", "STATE", "JOB_ID", "JOB_TYPE", "SCHEMA_STATE")
+		if err != nil {
+			log.Warn("get jobs results failed", zap.Error(err))
+			return err
+		}
+		return nil
+	}, retry.WithBackoffBaseDelay(BackoffBaseDelay.Milliseconds()),
+		retry.WithBackoffMaxDelay(BackoffMaxDelay.Milliseconds()),
+		retry.WithMaxTries(defaultDDLMaxRetry))
 	if err != nil {
 		return timodel.JobStateNone, err
 	}
 
-	var jobsResults [][]string
-	jobsResults, err = export.GetSpecifiedColumnValuesAndClose(jobsRows, "QUERY", "STATE", "JOB_ID", "JOB_TYPE", "SCHEMA_STATE")
-	if err != nil {
-		return timodel.JobStateNone, err
-	}
 	if len(jobsResults) > 0 {
 		result := jobsResults[0]
 		state, jobID, jobType, schemaState := result[1], result[2], result[3], result[4]

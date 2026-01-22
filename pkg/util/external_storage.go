@@ -69,14 +69,14 @@ func getExternalStorage(
 	})
 	if err != nil {
 		retErr := errors.ErrFailToCreateExternalStorage.Wrap(errors.Trace(err))
-		return nil, retErr.GenWithStackByArgs("creating ExternalStorage for s3")
+		return nil, retErr.GenWithStackByArgs("creating ExternalStorage")
 	}
 
 	// Check the connection and ignore the returned bool value, since we don't care if the file exists.
 	_, err = ret.FileExists(ctx, "test")
 	if err != nil {
 		retErr := errors.ErrFailToCreateExternalStorage.Wrap(errors.Trace(err))
-		return nil, retErr.GenWithStackByArgs("creating ExternalStorage for s3")
+		return nil, retErr.GenWithStackByArgs("creating ExternalStorage")
 	}
 	return ret, nil
 }
@@ -244,21 +244,104 @@ func (s *extStorageWithTimeout) WalkDir(
 	return err
 }
 
+func withTimeoutIfNoDeadline(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	// Some call sites pass context.Background() down to external storage APIs.
+	// For cloud providers, that can translate into "wait forever" on network stalls.
+	// We only apply a default timeout when the caller didn't set a deadline.
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, nil
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
 // Create opens a file writer by path. path is relative path to storage base path
 func (s *extStorageWithTimeout) Create(
 	ctx context.Context, path string, option *storage.WriterOption,
 ) (storage.ExternalFileWriter, error) {
-	if option.Concurrency <= 1 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, s.timeout)
-		defer cancel()
+	// Some backends (notably S3 multipart uploads) spawn background goroutines which
+	// are bound to the context passed to Create(). If the caller uses a context
+	// without deadline, those goroutines can hang indefinitely on network stalls.
+	//
+	// To keep callers simple and avoid hidden goroutine leaks, we:
+	// - wrap Write/Close calls with a default timeout if the caller didn't set one;
+	// - for multipart uploads (Concurrency > 1), pass a cancellable context to Create()
+	//   and cancel it when Write/Close times out/cancels.
+	concurrency := 1
+	if option != nil && option.Concurrency > 0 {
+		concurrency = option.Concurrency
 	}
-	// multipart uploading spawns a background goroutine, can't set timeout
+
+	var cancelCreate context.CancelFunc
+	if concurrency > 1 {
+		ctx, cancelCreate = context.WithCancel(ctx)
+	}
+
 	writer, err := s.ExternalStorage.Create(ctx, path, option)
 	if err != nil {
+		if cancelCreate != nil {
+			cancelCreate()
+		}
 		err = errors.ErrExternalStorageAPI.Wrap(err).GenWithStackByArgs("Create")
+		return nil, err
 	}
-	return writer, err
+	return &writerWithCancelAndTimeout{
+		ExternalFileWriter: writer,
+		timeout:            s.timeout,
+		cancelCreate:       cancelCreate,
+	}, nil
+}
+
+type writerWithCancelAndTimeout struct {
+	storage.ExternalFileWriter
+	timeout      time.Duration
+	cancelCreate context.CancelFunc
+}
+
+func (w *writerWithCancelAndTimeout) Write(ctx context.Context, p []byte) (int, error) {
+	ctx, cancel := withTimeoutIfNoDeadline(ctx, w.timeout)
+	var stop func() bool
+	if w.cancelCreate != nil {
+		// If the backend binds background uploads to the Create() context, ensure a
+		// Write timeout/cancel also aborts the background work so the call unblocks.
+		stop = context.AfterFunc(ctx, w.cancelCreate)
+	}
+
+	n, err := w.ExternalFileWriter.Write(ctx, p)
+
+	if stop != nil {
+		stop()
+	}
+	if cancel != nil {
+		cancel()
+	}
+	if err != nil {
+		err = errors.ErrExternalStorageAPI.Wrap(err).GenWithStackByArgs("Write")
+	}
+	return n, err
+}
+
+func (w *writerWithCancelAndTimeout) Close(ctx context.Context) error {
+	ctx, cancel := withTimeoutIfNoDeadline(ctx, w.timeout)
+	var stop func() bool
+	if w.cancelCreate != nil {
+		// Same rationale as Write(): on multipart backends the ctx argument is often
+		// ignored in Close(), so we must cancel the Create() context to abort uploads.
+		stop = context.AfterFunc(ctx, w.cancelCreate)
+		defer w.cancelCreate()
+	}
+
+	err := w.ExternalFileWriter.Close(ctx)
+
+	if stop != nil {
+		stop()
+	}
+	if cancel != nil {
+		cancel()
+	}
+	if err != nil {
+		err = errors.ErrExternalStorageAPI.Wrap(err).GenWithStackByArgs("Close")
+	}
+	return err
 }
 
 // Rename file name from oldFileName to newFileName
