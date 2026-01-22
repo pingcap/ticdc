@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -76,6 +77,7 @@ func TestWriterWrite_executesDDLWithNoBlockedTablesWithoutWatermark(t *testing.T
 			Query:      "CREATE TABLE `test`.`t` (`id` INT PRIMARY KEY)",
 			SchemaName: "test",
 			TableName:  "t",
+			Type:       byte(timodel.ActionCreateTable),
 			FinishedTs: 100,
 			BlockedTables: &commonEvent.InfluencedTables{
 				InfluenceType: commonEvent.InfluenceTypeNormal,
@@ -110,6 +112,7 @@ func TestWriterWrite_preservesOrderWhenBlockedDDLNotReady(t *testing.T) {
 			Query:      "ALTER TABLE `test`.`t` ADD COLUMN `c2` INT",
 			SchemaName: "test",
 			TableName:  "t",
+			Type:       byte(timodel.ActionAddColumn),
 			FinishedTs: 100,
 			BlockedTables: &commonEvent.InfluencedTables{
 				InfluenceType: commonEvent.InfluenceTypeNormal,
@@ -120,6 +123,7 @@ func TestWriterWrite_preservesOrderWhenBlockedDDLNotReady(t *testing.T) {
 			Query:      "CREATE TABLE `test`.`t2` (`id` INT PRIMARY KEY)",
 			SchemaName: "test",
 			TableName:  "t2",
+			Type:       byte(timodel.ActionCreateTable),
 			FinishedTs: 110,
 			BlockedTables: &commonEvent.InfluencedTables{
 				InfluenceType: commonEvent.InfluenceTypeNormal,

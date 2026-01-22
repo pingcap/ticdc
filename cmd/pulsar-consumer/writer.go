@@ -369,13 +369,14 @@ func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool
 		// we wait for the global resolved-ts (watermark) to reach commitTs so all partitions have consumed
 		// the corresponding DMLs before executing the DDL.
 		//
-		// Some DDLs (e.g. CREATE DATABASE / CREATE TABLE) don't block any table (InfluenceTypeNormal with an
-		// empty TableIDs list). For these, waiting for watermark is unnecessary and can stall schema creation
-		// when upstream resolved-ts is intentionally held back (e.g. by failpoints in integration tests).
-		blockedTables := todoDDL.GetBlockedTables()
-		bypassWatermark := blockedTables != nil &&
-			blockedTables.InfluenceType == commonEvent.InfluenceTypeNormal &&
-			len(blockedTables.TableIDs) == 0
+		// Some DDLs are safe to execute as soon as they are received. In particular, CREATE SCHEMA / CREATE
+		// TABLE do not need to wait for watermark to protect DML ordering of an existing table, and waiting
+		// can deadlock integration tests that intentionally pause dispatcher creation (thus holding back the
+		// upstream resolved-ts/watermark).
+		//
+		// Safety guard: use the DDL action type instead of relying on BlockedTables.TableIDs being empty.
+		action := timodel.ActionType(todoDDL.Type)
+		bypassWatermark := action == timodel.ActionCreateSchema || action == timodel.ActionCreateTable
 		if !bypassWatermark && todoDDL.GetCommitTs() > watermark {
 			ddlList = append(ddlList, w.ddlList[i:]...)
 			break
