@@ -104,6 +104,23 @@ var (
 		Help:      "The number of events received by the dispatcher",
 	}, []string{"type", "event_type"})
 
+	AsyncSinkInflightBudgetBlockedDispatcherCount = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "dispatcher",
+			Name:      "async_sink_inflight_budget_blocked_dispatcher_count",
+			Help:      "The number of dispatchers blocked by inflight budget for async sinks",
+		}, []string{getKeyspaceLabel(), "changefeed", "type"})
+
+	AsyncSinkInflightBudgetBlockedDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "dispatcher",
+			Name:      "async_sink_inflight_budget_blocked_duration",
+			Help:      "Bucketed histogram of how long a dispatcher stays blocked by inflight budget for async sinks (s)",
+			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 20), // 10ms~2912s
+		}, []string{getKeyspaceLabel(), "changefeed", "type"})
+
 	EventCollectorRegisteredDispatcherCount = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: "ticdc",
 		Subsystem: "dispatcher",
@@ -155,6 +172,8 @@ func initDispatcherMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(DispatcherManagerBlockStatusesChanLenGauge)
 	registry.MustRegister(HandleDispatcherRequsetCounter)
 	registry.MustRegister(DispatcherReceivedEventCount)
+	registry.MustRegister(AsyncSinkInflightBudgetBlockedDispatcherCount)
+	registry.MustRegister(AsyncSinkInflightBudgetBlockedDuration)
 	registry.MustRegister(EventCollectorRegisteredDispatcherCount)
 	registry.MustRegister(EventCollectorReceivedEventLagDuration)
 	registry.MustRegister(EventCollectorHandleEventDuration)

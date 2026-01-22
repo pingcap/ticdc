@@ -274,8 +274,16 @@ func (f *fileWorkerGroup) syncWrite(egCtx context.Context, event writer.RedoEven
 		return err
 	}
 	file := f.newFileCache(data, rl.GetCommitTs())
-	f.syncWriteFile(egCtx, file)
-	// flush
+	if file == nil {
+		return errors.ErrRedoFileOp.GenWithStackByArgs()
+	}
+	err = f.syncWriteFile(egCtx, file)
+	if err != nil {
+		bufPtr := &file.data
+		file.data = nil
+		f.pool.Put(bufPtr)
+		return err
+	}
 	event.PostFlush()
 	return nil
 }

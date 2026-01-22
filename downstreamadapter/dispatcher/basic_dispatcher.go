@@ -210,6 +210,8 @@ type BasicDispatcher struct {
 	// In this corner case, `tableProgress` might be empty, which could lead to the dispatcher being removed prematurely.
 	duringHandleEvents atomic.Bool
 
+	inflightBudget inflightBudget
+
 	seq  uint64
 	mode int64
 
@@ -242,6 +244,7 @@ func NewBasicDispatcher(
 		resolvedTs:             startTs,
 		isRemoving:             atomic.Bool{},
 		duringHandleEvents:     atomic.Bool{},
+		inflightBudget:         newInflightBudget(sink.SinkType(), sharedInfo.changefeedID, id),
 		blockEventStatus:       BlockEventStatus{blockPendingEvent: nil},
 		tableProgress:          NewTableProgress(),
 		schemaID:               schemaID,
@@ -348,12 +351,6 @@ func (d *BasicDispatcher) GetLastSyncedTs() uint64 {
 
 func (d *BasicDispatcher) GetCheckpointTs() uint64 {
 	checkpointTs, isEmpty := d.tableProgress.GetCheckpointTs()
-	if checkpointTs == 0 {
-		// This means the dispatcher has never send events to the sink,
-		// so we use resolvedTs as checkpointTs
-		return d.GetResolvedTs()
-	}
-
 	if isEmpty {
 		return max(checkpointTs, d.GetResolvedTs())
 	}
@@ -406,10 +403,14 @@ func (d *BasicDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // because they are block events.
 // We ensure we only will receive one event when it's ddl event or sync point event
 // by setting them with different event types in DispatcherEventsHandler.GetType
-// When we handle events, we don't have any previous events still in sink.
+// For most sink types, we ensure there are no previous DML events still in sink
+// (DML batch returns await=true, wake happens after all in-flight events are flushed).
+// For CloudStorage/Redo sinks, we may allow multiple DML batches to be in-flight at the same time,
+// controlled by a per-dispatcher in-flight budget.
 //
 // wakeCallback is used to wake the dynamic stream to handle the next batch events.
-// It will be called when all the events are flushed to downstream successfully.
+// For most sink types, it will be called when all the events are flushed to downstream successfully.
+// For CloudStorage/Redo sinks, it will be called when the per-dispatcher in-flight bytes fall back to perLow.
 func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
 	if d.GetRemovingStatus() {
 		log.Warn("dispatcher is removing", zap.Any("id", d.id))
@@ -422,9 +423,9 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	var (
 		block            bool
 		latestResolvedTs uint64
+
+		dmlEvents = make([]*commonEvent.DMLEvent, 0, len(dispatcherEvents))
 	)
-	dmlWakeOnce := &sync.Once{}
-	dmlEvents := make([]*commonEvent.DMLEvent, 0, len(dispatcherEvents))
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
 		if log.GetLevel() == zapcore.DebugLevel {
@@ -479,17 +480,21 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				continue
 			}
 
-			// todo: we have to decide whether to block by the sink type and inflight data size.
-			block = true
 			dml.ReplicatingTs = d.creationPDTs
-			dml.AddPostFlushFunc(func() {
-				// Considering dml event in sink may be written to downstream not in order,
-				// thus, we use tableProgress.Empty() to ensure these events are flushed to downstream completely
-				// and wake dynamic stream to handle the next events.
-				if d.tableProgress.Empty() {
-					dmlWakeOnce.Do(wakeCallback)
-				}
-			})
+			if !d.inflightBudget.isEnabled() {
+				block = true
+				dmlWakeOnce := &sync.Once{}
+				dml.AddPostFlushFunc(func() {
+					// Considering dml event in sink may be written to downstream not in order,
+					// thus, we use tableProgress.Empty() to ensure these events are flushed to downstream completely
+					// and wake dynamic stream to handle the next events.
+					if d.tableProgress.Empty() {
+						dmlWakeOnce.Do(wakeCallback)
+					}
+				})
+			} else {
+				d.inflightBudget.trackDML(dml, wakeCallback)
+			}
 			dmlEvents = append(dmlEvents, dml)
 		case commonEvent.TypeDDLEvent:
 			if len(dispatcherEvents) != 1 {
@@ -569,6 +574,9 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	// due to the tableProgress is empty before dml events add into sink.
 	if len(dmlEvents) > 0 {
 		d.AddDMLEventsToSink(dmlEvents)
+		if !block && d.inflightBudget.tryBlock() {
+			block = true
+		}
 	}
 	if latestResolvedTs > 0 {
 		atomic.StoreUint64(&d.resolvedTs, latestResolvedTs)

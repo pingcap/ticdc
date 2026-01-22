@@ -106,6 +106,117 @@ func callback() {
 	count.Add(1)
 }
 
+func TestDispatcherInflightBudgetDoesNotBlockBelowHigh(t *testing.T) {
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+
+	mockSink := sink.NewMockSink(common.CloudStorageSinkType)
+	dispatcher := newDispatcherForTest(mockSink, tableSpan)
+	t.Cleanup(dispatcher.sharedInfo.Close)
+
+	nodeID := node.NewID()
+	var wakeCount atomic.Int32
+	wakeCallback := func() {
+		wakeCount.Add(1)
+	}
+
+	dml := &commonEvent.DMLEvent{
+		StartTs:         1,
+		CommitTs:        2,
+		Length:          1,
+		ApproximateSize: 10 << 20,
+	}
+
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dml)}, wakeCallback)
+	require.False(t, block)
+	require.Equal(t, int32(0), wakeCount.Load())
+
+	require.Equal(t, uint64(1), dispatcher.GetCheckpointTs())
+
+	dml.PostFlush()
+	require.Equal(t, int32(0), wakeCount.Load())
+}
+
+func TestDispatcherInflightBudgetBlocksAndWakes(t *testing.T) {
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+
+	mockSink := sink.NewMockSink(common.CloudStorageSinkType)
+	dispatcher := newDispatcherForTest(mockSink, tableSpan)
+	t.Cleanup(dispatcher.sharedInfo.Close)
+
+	nodeID := node.NewID()
+	var wakeCount atomic.Int32
+	wakeCallback := func() {
+		wakeCount.Add(1)
+	}
+
+	dml1 := &commonEvent.DMLEvent{
+		StartTs:         1,
+		CommitTs:        2,
+		Length:          1,
+		ApproximateSize: 40 << 20,
+	}
+	dml2 := &commonEvent.DMLEvent{
+		StartTs:         1,
+		CommitTs:        3,
+		Length:          1,
+		ApproximateSize: 40 << 20,
+	}
+
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dml1)}, wakeCallback)
+	require.False(t, block)
+
+	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dml2)}, wakeCallback)
+	require.True(t, block)
+	require.True(t, dispatcher.inflightBudget.isBlocked())
+	require.Equal(t, int32(0), wakeCount.Load())
+
+	require.Equal(t, uint64(1), dispatcher.GetCheckpointTs())
+
+	dml1.PostFlush()
+	require.True(t, dispatcher.inflightBudget.isBlocked())
+	require.Equal(t, int32(0), wakeCount.Load())
+	require.Equal(t, uint64(2), dispatcher.GetCheckpointTs())
+
+	dml2.PostFlush()
+	require.False(t, dispatcher.inflightBudget.isBlocked())
+	require.Equal(t, int32(1), wakeCount.Load())
+}
+
+func TestDispatcherInflightBudgetDoesNotAffectDDL(t *testing.T) {
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+
+	mockSink := sink.NewMockSink(common.CloudStorageSinkType)
+	dispatcher := newDispatcherForTest(mockSink, tableSpan)
+	t.Cleanup(dispatcher.sharedInfo.Close)
+
+	nodeID := node.NewID()
+	wakeCh := make(chan struct{}, 1)
+	wakeCallback := func() {
+		wakeCh <- struct{}{}
+	}
+
+	ddl := &commonEvent.DDLEvent{
+		FinishedTs: 2,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{0},
+		},
+	}
+
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddl)}, wakeCallback)
+	require.True(t, block)
+	require.False(t, dispatcher.inflightBudget.isBlocked())
+
+	select {
+	case <-wakeCh:
+	case <-time.After(3 * time.Second):
+		require.FailNow(t, "wake callback not called")
+	}
+}
+
 // test different events can be correctly handled by the dispatcher
 func TestDispatcherHandleEvents(t *testing.T) {
 	count.Swap(0)
