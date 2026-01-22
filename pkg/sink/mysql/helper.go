@@ -26,6 +26,7 @@ import (
 	"github.com/coreos/go-semver/semver"
 	dmysql "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
@@ -602,6 +603,7 @@ func setSessionTimestamp(ctx context.Context, tx *sql.Tx, unixTimestamp float64)
 }
 
 func resetSessionTimestamp(ctx context.Context, tx *sql.Tx) error {
+	// Reset @@timestamp to prevent stale values from leaking across DDLs.
 	_, err := tx.ExecContext(ctx, "SET TIMESTAMP = DEFAULT")
 	return err
 }
@@ -747,4 +749,21 @@ func parseTimestampInLocation(val string, loc *time.Location) (float64, error) {
 		}
 	}
 	return 0, fmt.Errorf("failed to parse timestamp: %s", val)
+}
+
+func matchFailpointValue(val failpoint.Value, ddlQuery string) bool {
+	if val == nil {
+		return true
+	}
+	switch v := val.(type) {
+	case bool:
+		return v
+	case string:
+		if v == "" {
+			return true
+		}
+		return strings.Contains(strings.ToLower(ddlQuery), strings.ToLower(v))
+	default:
+		return true
+	}
 }
