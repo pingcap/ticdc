@@ -1010,16 +1010,24 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	id := dispatcherInfo.GetID()
 
+	var isTableTriggerDispatcher bool
 	statPtr, ok := c.dispatchers.Load(id)
 	if !ok {
 		statPtr, ok = c.tableTriggerDispatchers.Load(id)
 		if !ok {
 			return
 		}
-		c.tableTriggerDispatchers.Delete(id)
+		isTableTriggerDispatcher = true
 	}
+
 	stat := statPtr.(*atomic.Pointer[dispatcherStat]).Load()
 	stat.isRemoved.Store(true)
+
+	if isTableTriggerDispatcher {
+		c.tableTriggerDispatchers.Delete(id)
+	} else {
+		c.dispatchers.Delete(id)
+	}
 
 	stat.changefeedStat.removeDispatcher(id)
 	c.metricsCollector.metricDispatcherCount.Dec()
@@ -1041,7 +1049,6 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		Name: changefeedID.Keyspace(),
 	}
 	c.schemaStore.UnregisterTable(keyspaceMeta, span.TableID)
-	c.dispatchers.Delete(id)
 
 	log.Info("remove dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID), zap.Stringer("changefeedID", changefeedID),
