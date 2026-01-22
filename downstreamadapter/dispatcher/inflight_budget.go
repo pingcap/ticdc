@@ -8,6 +8,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
 
@@ -41,6 +42,9 @@ type inflightBudget struct {
 
 	changefeedID common.ChangeFeedID
 	dispatcherID common.DispatcherID
+
+	inflightBudgetBlockDuration prometheus.Observer
+	inflightBudgetBlockedCount  prometheus.Gauge
 }
 
 func newInflightBudget(
@@ -49,6 +53,10 @@ func newInflightBudget(
 	dispatcherID common.DispatcherID,
 ) inflightBudget {
 	enabled := sinkType == common.CloudStorageSinkType || sinkType == common.RedoSinkType
+	// just return zero value to reduce the memory allocation
+	if !enabled {
+		return inflightBudget{}
+	}
 	return inflightBudget{
 		enabled:      enabled,
 		low:          inflightDefaultPerLowBytes,
@@ -56,6 +64,11 @@ func newInflightBudget(
 		changefeedID: changefeedID,
 		dispatcherID: dispatcherID,
 		multiplier:   inflightBytesMultiplier,
+
+		inflightBudgetBlockDuration: metrics.AsyncSinkInflightBudgetBlockedDuration.
+			WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), sinkType.String()),
+		inflightBudgetBlockedCount: metrics.AsyncSinkInflightBudgetBlockedDispatcherCount.
+			WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), sinkType.String()),
 	}
 }
 
@@ -78,12 +91,8 @@ func (b *inflightBudget) trackDML(dml *commonEvent.DMLEvent, wakeCallback func()
 		if b.blocked.Load() && inFlightBytes <= b.low {
 			if b.blocked.CompareAndSwap(true, false) {
 				if blockedAt := b.blockedAt.Swap(0); blockedAt > 0 {
-					metrics.AsyncSinkInflightBudgetBlockedDuration.
-						WithLabelValues(b.changefeedID.Keyspace(), b.changefeedID.Name()).
-						Observe(time.Since(time.Unix(0, blockedAt)).Seconds())
-					metrics.AsyncSinkInflightBudgetBlockedDispatcherCount.
-						WithLabelValues(b.changefeedID.Keyspace(), b.changefeedID.Name()).
-						Dec()
+					b.inflightBudgetBlockDuration.Observe(time.Since(time.Unix(0, blockedAt)).Seconds())
+					b.inflightBudgetBlockedCount.Dec()
 					log.Info("dispatcher unblocked by inflight budget",
 						zap.Stringer("changefeedID", b.changefeedID),
 						zap.Stringer("dispatcher", b.dispatcherID),
@@ -107,9 +116,7 @@ func (b *inflightBudget) tryBlock() bool {
 	}
 	if b.blocked.CompareAndSwap(false, true) {
 		b.blockedAt.Store(time.Now().UnixNano())
-		metrics.AsyncSinkInflightBudgetBlockedDispatcherCount.
-			WithLabelValues(b.changefeedID.Keyspace(), b.changefeedID.Name()).
-			Inc()
+		b.inflightBudgetBlockedCount.Inc()
 		log.Info("dispatcher blocked by inflight bytes",
 			zap.Stringer("changefeedID", b.changefeedID),
 			zap.Stringer("dispatcher", b.dispatcherID),

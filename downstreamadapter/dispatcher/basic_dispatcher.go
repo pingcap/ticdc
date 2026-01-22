@@ -426,6 +426,11 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 
 		dmlEvents = make([]*commonEvent.DMLEvent, 0, len(dispatcherEvents))
 	)
+
+	var dmlWakeOnce *sync.Once
+	if !d.inflightBudget.isEnabled() {
+		dmlWakeOnce = &sync.Once{}
+	}
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
 		if log.GetLevel() == zapcore.DebugLevel {
@@ -483,7 +488,6 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			dml.ReplicatingTs = d.creationPDTs
 			if !d.inflightBudget.isEnabled() {
 				block = true
-				dmlWakeOnce := &sync.Once{}
 				dml.AddPostFlushFunc(func() {
 					// Considering dml event in sink may be written to downstream not in order,
 					// thus, we use tableProgress.Empty() to ensure these events are flushed to downstream completely
