@@ -193,12 +193,13 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
+	// do not shadow err after this point
 	pdClient := h.server.GetPdClient()
 	defer func() {
 		if err == nil {
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		undoErr := gc.UndoEnsureChangefeedStartTsSafety(
 			ctx,
 			pdClient,
@@ -283,7 +284,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
-	log.Info("create changefeed successfully!",
+	log.Info("create changefeed successfully",
 		zap.String("changefeedID", info.ChangefeedID.Name()),
 		zap.String("state", string(info.State)),
 		zap.String("changefeedInfo", info.String()),
@@ -732,6 +733,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		return
 	}
 
+	// do not shadow err after this point
 	resumeGcServiceID := h.server.GetEtcdClient().GetEnsureGCServiceID(gc.EnsureGCServiceResuming)
 	if err = verifyResumeChangefeedConfig(
 		ctx,
@@ -747,7 +749,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		if err == nil {
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		undoErr := gc.UndoEnsureChangefeedStartTsSafety(
 			ctx,
 			h.server.GetPdClient(),
@@ -809,7 +811,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		return
 	}
 	c.Errors = nil
-	log.Info("resume changefeed successfully!",
+	log.Info("resume changefeed successfully",
 		zap.String("changefeedID", cfInfo.ChangefeedID.Name()),
 		zap.String("state", string(cfInfo.State)),
 		zap.String("changefeedInfo", cfInfo.String()),
@@ -978,7 +980,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		return
 	}
 
-	log.Info("Update changefeed successfully!",
+	log.Info("Update changefeed successfully",
 		zap.String("id", oldCfInfo.ChangefeedID.Name()),
 		zap.String("state", string(oldCfInfo.State)),
 		zap.String("changefeedInfo", oldCfInfo.String()),
