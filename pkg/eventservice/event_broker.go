@@ -600,7 +600,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 
 	if task.enableSyncPoint {
 		lastSyncPoint := task.lastSyncPoint.Load()
-		if task.sentResolvedTs.Load() > lastSyncPoint {
+		if task.sentResolvedTs.Load() > lastSyncPoint && task.changefeedStat.minSentTs.Load() < lastSyncPoint {
 			return
 		}
 	}
