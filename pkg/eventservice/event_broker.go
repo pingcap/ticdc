@@ -571,6 +571,7 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 
 		syncPointEvent := newWrapSyncPointEvent(remoteID, e)
 		c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- syncPointEvent
+		d.lastSyncPoint.Store(commitTs)
 	}
 }
 
@@ -596,6 +597,14 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	if task.isRemoved.Load() {
 		return
 	}
+
+	if task.enableSyncPoint {
+		lastSyncPoint := task.lastSyncPoint.Load()
+		if task.sentResolvedTs.Load() > lastSyncPoint {
+			return
+		}
+	}
+
 	// If the target is not ready to send, we don't need to scan the event store.
 	// To avoid the useless scan task.
 	if !c.msgSender.IsReadyToSend(remoteID) {
