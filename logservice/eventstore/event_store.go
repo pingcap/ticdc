@@ -1008,9 +1008,17 @@ func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 }
 
 func (e *eventStore) cleanObsoleteSubscriptionsOnce(deltaMs int64) {
-	e.dispatcherMeta.Lock()
-	defer e.dispatcherMeta.Unlock()
+	type obsoleteSubscription struct {
+		subID   logpuller.SubscriptionID
+		tableID int64
+		dbIndex int
+		span    *heartbeatpb.TableSpan
+		idleAt  time.Time
+	}
 
+	obsoleteSubs := make([]obsoleteSubscription, 0)
+
+	e.dispatcherMeta.Lock()
 	for tableID, subStats := range e.dispatcherMeta.tableStats {
 		for subID, subStat := range subStats {
 			subData := subStat.subscribers.Load()
@@ -1030,27 +1038,38 @@ func (e *eventStore) cleanObsoleteSubscriptionsOnce(deltaMs int64) {
 				continue
 			}
 
-			log.Info("clean obsolete subscription",
-				zap.Uint64("subscriptionID", uint64(subID)),
-				zap.Int("dbIndex", subStat.dbIndex),
-				zap.Int64("tableID", tableID),
-				zap.Time("idleAt", time.UnixMilli(subData.idleTime).In(time.Local)))
-			e.subClient.Unsubscribe(subID)
-			db := e.dbs[subStat.dbIndex]
-			if err := deleteDataRange(db, uint64(subID), tableID, 0, math.MaxUint64); err != nil {
-				log.Warn("fail to delete events", zap.Error(err))
-			}
+			obsoleteSubs = append(obsoleteSubs, obsoleteSubscription{
+				subID:   subID,
+				tableID: tableID,
+				dbIndex: subStat.dbIndex,
+				span:    subStat.tableSpan,
+				idleAt:  time.UnixMilli(subData.idleTime).In(time.Local),
+			})
 			delete(subStats, subID)
-			e.subscriptionChangeCh.In() <- SubscriptionChange{
-				ChangeType: SubscriptionChangeTypeRemove,
-				SubID:      uint64(subStat.subID),
-				Span:       subStat.tableSpan,
-			}
-			metrics.EventStoreSubscriptionGauge.Dec()
 		}
 		if len(subStats) == 0 {
 			delete(e.dispatcherMeta.tableStats, tableID)
 		}
+	}
+	e.dispatcherMeta.Unlock()
+
+	for _, sub := range obsoleteSubs {
+		log.Info("clean obsolete subscription",
+			zap.Uint64("subscriptionID", uint64(sub.subID)),
+			zap.Int("dbIndex", sub.dbIndex),
+			zap.Int64("tableID", sub.tableID),
+			zap.Time("idleAt", sub.idleAt))
+		e.subClient.Unsubscribe(sub.subID)
+		db := e.dbs[sub.dbIndex]
+		if err := deleteDataRange(db, uint64(sub.subID), sub.tableID, 0, math.MaxUint64); err != nil {
+			log.Warn("fail to delete events", zap.Error(err))
+		}
+		e.subscriptionChangeCh.In() <- SubscriptionChange{
+			ChangeType: SubscriptionChangeTypeRemove,
+			SubID:      uint64(sub.subID),
+			Span:       sub.span,
+		}
+		metrics.EventStoreSubscriptionGauge.Dec()
 	}
 }
 
