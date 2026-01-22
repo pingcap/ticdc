@@ -587,7 +587,11 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 
 	item, ok := c.changefeedMap.Load(changefeedID)
 	if !ok {
-		log.Panic("cannot found the changefeed status", zap.Any("changefeed", changefeedID.String()))
+		log.Info("changefeed status is not found, skip scan",
+			zap.Stringer("changefeed", changefeedID),
+			zap.Stringer("dispatcherID", task.id),
+			zap.Int64("tableID", task.info.GetTableSpan().GetTableID()))
+		return
 	}
 
 	status := item.(*changefeedStatus)
@@ -1015,6 +1019,7 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		c.tableTriggerDispatchers.Delete(id)
 	}
 	stat := statPtr.(*atomic.Pointer[dispatcherStat]).Load()
+	stat.isRemoved.Store(true)
 
 	stat.changefeedStat.removeDispatcher(id)
 	c.metricsCollector.metricDispatcherCount.Dec()
@@ -1028,7 +1033,6 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String())
 	}
 
-	stat.isRemoved.Store(true)
 	c.eventStore.UnregisterDispatcher(changefeedID, id)
 
 	span := dispatcherInfo.GetTableSpan()
