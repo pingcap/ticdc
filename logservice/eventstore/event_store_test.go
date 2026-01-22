@@ -478,6 +478,12 @@ func TestEventStoreUnregisterDispatcherWithoutDataSharingRemovesSubscription(t *
 	store.UnregisterDispatcher(cfID, dispatcherID)
 
 	mockSubClient.mu.Lock()
+	require.Equal(t, 1, len(mockSubClient.subscriptions))
+	mockSubClient.mu.Unlock()
+
+	es.cleanObsoleteSubscriptionsOnce(0)
+
+	mockSubClient.mu.Lock()
 	require.Equal(t, 0, len(mockSubClient.subscriptions))
 	mockSubClient.mu.Unlock()
 
@@ -509,6 +515,12 @@ func TestEventStoreUnregisterDispatcherWithDataSharingKeepsSubscriptionForTTL(t 
 	store.UnregisterDispatcher(cfID, dispatcherID)
 
 	mockSubClient := subClient.(*mockSubscriptionClient)
+	mockSubClient.mu.Lock()
+	require.Equal(t, 1, len(mockSubClient.subscriptions))
+	mockSubClient.mu.Unlock()
+
+	es.cleanObsoleteSubscriptionsOnce(0)
+
 	mockSubClient.mu.Lock()
 	require.Equal(t, 1, len(mockSubClient.subscriptions))
 	mockSubClient.mu.Unlock()

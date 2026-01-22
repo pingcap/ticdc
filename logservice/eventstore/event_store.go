@@ -931,10 +931,6 @@ func (e *eventStore) detachFromSubStat(dispatcherID common.DispatcherID, subStat
 	// It is safe to call Store without checking oldData here,
 	// as all modifications to subStat are guarded by the dispatcherMeta lock.
 	subStat.subscribers.Store(newData)
-
-	if len(newMap) == 0 && subStat.remainingLifetimeMs.Load() == 0 {
-		e.removeSubscriptionIfUnusedLocked(subStat)
-	}
 }
 
 func (e *eventStore) stopReceiveEventFromSubStat(dispatcherID common.DispatcherID, subStat *subscriptionStat) {
@@ -993,46 +989,6 @@ func (e *eventStore) addSubscriberToSubStat(subStat *subscriptionStat, dispatche
 	subStat.remainingLifetimeMs.Store(0)
 }
 
-func (e *eventStore) removeSubscriptionIfUnusedLocked(subStat *subscriptionStat) {
-	if subStat == nil {
-		return
-	}
-	subData := subStat.subscribers.Load()
-	if subData == nil || len(subData.subscribers) != 0 {
-		return
-	}
-
-	tableID := subStat.tableSpan.TableID
-	subStats, ok := e.dispatcherMeta.tableStats[tableID]
-	if !ok {
-		return
-	}
-	current, ok := subStats[subStat.subID]
-	if !ok || current != subStat {
-		return
-	}
-
-	log.Info("clean obsolete subscription",
-		zap.Uint64("subscriptionID", uint64(subStat.subID)),
-		zap.Int("dbIndex", subStat.dbIndex),
-		zap.Int64("tableID", tableID))
-	e.subClient.Unsubscribe(subStat.subID)
-	db := e.dbs[subStat.dbIndex]
-	if err := deleteDataRange(db, uint64(subStat.subID), tableID, 0, math.MaxUint64); err != nil {
-		log.Warn("fail to delete events", zap.Error(err))
-	}
-	delete(subStats, subStat.subID)
-	e.subscriptionChangeCh.In() <- SubscriptionChange{
-		ChangeType: SubscriptionChangeTypeRemove,
-		SubID:      uint64(subStat.subID),
-		Span:       subStat.tableSpan,
-	}
-	metrics.EventStoreSubscriptionGauge.Dec()
-	if len(subStats) == 0 {
-		delete(e.dispatcherMeta.tableStats, tableID)
-	}
-}
-
 func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 	ticker := time.NewTicker(10 * time.Second)
 	lastTick := time.Now()
@@ -1044,30 +1000,53 @@ func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 			nowTick := time.Now()
 			deltaMs := int64(nowTick.Sub(lastTick) / time.Millisecond)
 			lastTick = nowTick
-			e.dispatcherMeta.Lock()
-			for tableID, subStats := range e.dispatcherMeta.tableStats {
-				for _, subStat := range subStats {
-					subData := subStat.subscribers.Load()
-					if subData == nil || len(subData.subscribers) != 0 || subData.idleTime <= 0 {
-						continue
-					}
-					remainingMs := subStat.remainingLifetimeMs.Load()
-					if remainingMs > 0 {
-						remainingMs -= deltaMs
-						if remainingMs < 0 {
-							remainingMs = 0
-						}
-						subStat.remainingLifetimeMs.Store(remainingMs)
-					}
-					if remainingMs == 0 {
-						e.removeSubscriptionIfUnusedLocked(subStat)
-					}
-				}
-				if len(subStats) == 0 {
-					delete(e.dispatcherMeta.tableStats, tableID)
-				}
+			e.cleanObsoleteSubscriptionsOnce(deltaMs)
+		}
+	}
+}
+
+func (e *eventStore) cleanObsoleteSubscriptionsOnce(deltaMs int64) {
+	e.dispatcherMeta.Lock()
+	defer e.dispatcherMeta.Unlock()
+
+	for tableID, subStats := range e.dispatcherMeta.tableStats {
+		for subID, subStat := range subStats {
+			subData := subStat.subscribers.Load()
+			if subData == nil || len(subData.subscribers) != 0 || subData.idleTime <= 0 {
+				continue
 			}
-			e.dispatcherMeta.Unlock()
+
+			remainingMs := subStat.remainingLifetimeMs.Load()
+			if remainingMs > 0 {
+				remainingMs -= deltaMs
+				if remainingMs < 0 {
+					remainingMs = 0
+				}
+				subStat.remainingLifetimeMs.Store(remainingMs)
+			}
+			if remainingMs != 0 {
+				continue
+			}
+
+			log.Info("clean obsolete subscription",
+				zap.Uint64("subscriptionID", uint64(subID)),
+				zap.Int("dbIndex", subStat.dbIndex),
+				zap.Int64("tableID", tableID))
+			e.subClient.Unsubscribe(subID)
+			db := e.dbs[subStat.dbIndex]
+			if err := deleteDataRange(db, uint64(subID), tableID, 0, math.MaxUint64); err != nil {
+				log.Warn("fail to delete events", zap.Error(err))
+			}
+			delete(subStats, subID)
+			e.subscriptionChangeCh.In() <- SubscriptionChange{
+				ChangeType: SubscriptionChangeTypeRemove,
+				SubID:      uint64(subStat.subID),
+				Span:       subStat.tableSpan,
+			}
+			metrics.EventStoreSubscriptionGauge.Dec()
+		}
+		if len(subStats) == 0 {
+			delete(e.dispatcherMeta.tableStats, tableID)
 		}
 	}
 }
