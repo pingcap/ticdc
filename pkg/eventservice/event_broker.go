@@ -1174,6 +1174,11 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		oldStat.isRemoved.Store(true)
 	}
 
+	if newStat.epoch > 1 {
+		newStat.changefeedStat.scanInterval.Store(int64(defaultScanInterval))
+		newStat.changefeedStat.lastAdjustTime.Store(time.Now())
+	}
+
 	log.Info("reset dispatcher",
 		zap.Stringer("changefeedID", newStat.changefeedStat.changefeedID),
 		zap.Stringer("dispatcherID", newStat.id), zap.Int64("tableID", newStat.info.GetTableSpan().GetTableID()),
