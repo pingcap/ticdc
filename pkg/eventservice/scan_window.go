@@ -113,8 +113,8 @@ func (c *changefeedStatus) updateMemoryUsage(now time.Time, used uint64, max uin
 
 	ratio := float64(used) / float64(max)
 	c.usageWindow.addSample(now, ratio)
-	avg := c.usageWindow.average(now)
-	c.adjustScanInterval(now, avg)
+	//avg := c.usageWindow.average(now)
+	c.adjustScanInterval(now, ratio)
 }
 
 func (c *changefeedStatus) adjustScanInterval(now time.Time, avg float64) {
@@ -124,7 +124,8 @@ func (c *changefeedStatus) adjustScanInterval(now time.Time, avg float64) {
 	)
 
 	lastAdjust := c.lastAdjustTime.Load()
-	if time.Since(lastAdjust) < scanIntervalAdjustCooldown {
+	// slow grow, fast shrink
+	if c.lastRatio.Load() < avg && time.Since(lastAdjust) < scanIntervalAdjustCooldown {
 		return
 	}
 
