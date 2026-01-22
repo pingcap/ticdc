@@ -598,12 +598,12 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		return
 	}
 
-	if task.enableSyncPoint {
-		lastSyncPoint := task.lastSyncPoint.Load()
-		if task.sentResolvedTs.Load() > lastSyncPoint && task.changefeedStat.minSentTs.Load() < lastSyncPoint {
-			return
-		}
-	}
+	// if task.enableSyncPoint {
+	// 	lastSyncPoint := task.lastSyncPoint.Load()
+	// 	if task.sentResolvedTs.Load() > lastSyncPoint && task.changefeedStat.minSentTs.Load() < lastSyncPoint {
+	// 		return
+	// 	}
+	// }
 
 	// If the target is not ready to send, we don't need to scan the event store.
 	// To avoid the useless scan task.

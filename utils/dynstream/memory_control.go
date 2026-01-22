@@ -33,7 +33,7 @@ const (
 	// For now, we only use it in event collector.
 	MemoryControlForEventCollector = 1
 
-	defaultReleaseMemoryRatio     = 0.9
+	defaultReleaseMemoryRatio     = 0.6
 	defaultDeadlockDuration       = 5 * time.Second
 	defaultReleaseMemoryThreshold = 256
 )
