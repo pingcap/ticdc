@@ -535,7 +535,7 @@ func TestEventStoreUnregisterDispatcherWithDataSharingKeepsSubscriptionForTTL(t 
 		break
 	}
 	require.NotNil(t, subStat)
-	require.Equal(t, int64(time.Minute/time.Millisecond), subStat.remainingLifetimeMs.Load())
+	require.Equal(t, int64(subscriptionIdleTTL/time.Millisecond), subStat.remainingLifetimeMs.Load())
 	es.dispatcherMeta.RUnlock()
 }
 

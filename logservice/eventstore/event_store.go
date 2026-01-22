@@ -59,6 +59,8 @@ var (
 	metricEventStoreCloseReadDurationHistogram = metrics.EventStoreReadDurationHistogram.WithLabelValues("close")
 )
 
+const subscriptionIdleTTL = time.Minute
+
 type ResolvedTsNotifier func(watermark uint64, latestCommitTs uint64)
 
 // Subscriber represents the dispatcher which depends on the subscription.
@@ -923,7 +925,7 @@ func (e *eventStore) detachFromSubStat(dispatcherID common.DispatcherID, subStat
 		idleTime = time.Now().UnixMilli()
 		ttlMs := int64(0)
 		if config.GetGlobalServerConfig().Debug.EventStore.EnableDataSharing {
-			ttlMs = int64(time.Minute / time.Millisecond)
+			ttlMs = int64(subscriptionIdleTTL / time.Millisecond)
 		}
 		subStat.remainingLifetimeMs.Store(ttlMs)
 	}
@@ -1031,7 +1033,8 @@ func (e *eventStore) cleanObsoleteSubscriptionsOnce(deltaMs int64) {
 			log.Info("clean obsolete subscription",
 				zap.Uint64("subscriptionID", uint64(subID)),
 				zap.Int("dbIndex", subStat.dbIndex),
-				zap.Int64("tableID", tableID))
+				zap.Int64("tableID", tableID),
+				zap.Time("idleAt", time.UnixMilli(subData.idleTime).In(time.Local)))
 			e.subClient.Unsubscribe(subID)
 			db := e.dbs[subStat.dbIndex]
 			if err := deleteDataRange(db, uint64(subID), tableID, 0, math.MaxUint64); err != nil {
