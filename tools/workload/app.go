@@ -32,6 +32,7 @@ import (
 	"workload/schema/bankupdate"
 	pcrawler "workload/schema/crawler"
 	pdc "workload/schema/dc"
+	pfastslow "workload/schema/fastslow"
 	"workload/schema/largerow"
 	"workload/schema/shop"
 	psysbench "workload/schema/sysbench"
@@ -76,6 +77,7 @@ const (
 	bank2      = "bank2"
 	bankUpdate = "bank_update"
 	dc         = "dc"
+	fastSlow   = "fast_slow"
 )
 
 // stmtCacheKey is used as the key for statement cache
@@ -134,6 +136,8 @@ func (app *WorkloadApp) createWorkload() schema.Workload {
 		workload = bankupdate.NewBankUpdateWorkload(app.Config.TotalRowCount, app.Config.UpdateLargeColumnSize)
 	case dc:
 		workload = pdc.NewDCWorkload()
+	case fastSlow:
+		workload = pfastslow.NewFastSlowWorkload(app.Config.TableStartIndex, app.Config.FastTableCount, app.Config.SlowTableCount)
 	default:
 		plog.Panic("unsupported workload type", zap.String("workload", app.Config.WorkloadType))
 	}
@@ -164,6 +168,10 @@ func (app *WorkloadApp) executeWorkload(wg *sync.WaitGroup) error {
 	if !app.Config.SkipCreateTable && app.Config.Action == "prepare" {
 		app.handlePrepareAction(insertConcurrency, wg)
 		return nil
+	}
+
+	if app.Config.WorkloadType == fastSlow && app.Config.SlowTableCount > 0 {
+		app.startFastSlowDDLWorkers(wg)
 	}
 
 	if app.Config.OnlyDDL {

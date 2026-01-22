@@ -56,6 +56,28 @@ Additional parameters for update:
 - large-ratio: Ratio of large rows in the dataset
 - percentage-for-update: Percentage of rows to update
 
+### 3. Fast/Slow Tables (CDC Lag Simulation)
+
+Create a mix of fast tables (DML only) and slow tables (DML + periodic `ADD COLUMN` DDL on slow tables):
+
+```bash
+./workload -action write \
+    -database-host 127.0.0.1 \
+    -database-port 4000 \
+    -database-db-name test \
+    -workload-type fast_slow \
+    -fast-table-count 8 \
+    -slow-table-count 2 \
+    -slow-ddl-interval 30s \
+    -slow-ddl-start-delay 1m \
+    -slow-ddl-max-columns 128
+```
+
+Notes:
+
+- Fast tables are named `fast_sbtest<index>`, slow tables are named `slow_sbtest<index>` (suffix uses `table-start-index`).
+- Slow table DDL uses `ALTER TABLE ... ADD COLUMN ...` periodically; customize with `-slow-ddl-options` (example: `ALGORITHM=COPY LOCK=EXCLUSIVE`).
+
 ## Notes
 
 - Ensure the database is properly configured and has the necessary permissions.
