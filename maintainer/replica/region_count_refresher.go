@@ -38,8 +38,9 @@ type RegionCountRefresher struct {
 }
 
 func NewRegionCountRefresher(changefeedID common.ChangeFeedID, interval time.Duration) *RegionCountRefresher {
-	// if rolling upgrade from a lower version which does not have region refresh counter functionality,
-	// may receive interval is 0, adjust it here to prevent panic.
+	// During rolling upgrades from versions without the region refresh counter,
+	// the configured interval may be zero, which would cause time.NewTicker to panic.
+	// Normalize such values to the default refresh interval.
 	if interval <= 0 {
 		interval = config.DefaultRegionRefreshInterval
 	}
