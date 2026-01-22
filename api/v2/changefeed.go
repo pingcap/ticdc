@@ -206,7 +206,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 			createGcServiceID,
 			changefeedID,
 		)
-		if err != nil {
+		if undoErr != nil {
 			log.Warn("undo ensure changefeed start ts safety failed when creating the changefeed",
 				zap.String("changefeedID", changefeedID.Name()), zap.Uint64("startTs", cfg.StartTs),
 				zap.String("gcServiceID", createGcServiceID),
@@ -755,7 +755,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 			resumeGcServiceID,
 			cfInfo.ChangefeedID,
 		)
-		if err != nil {
+		if undoErr != nil {
 			log.Warn("undo ensure changefeed start ts safety failed when resuming the changefeed",
 				zap.String("changefeedID", cfInfo.ChangefeedID.Name()), zap.Uint64("startTs", newCheckpointTs),
 				zap.String("gcServiceID", resumeGcServiceID),
