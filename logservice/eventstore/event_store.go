@@ -151,8 +151,9 @@ type subscriptionStat struct {
 	// data span of the subscription, it can support dispatchers with smaller span
 	tableSpan   *heartbeatpb.TableSpan
 	subscribers atomic.Pointer[subscribersWithIdleTime]
-	// markedDeleteTime is the time when the subscription is marked for deletion.
-	markedDeleteTime atomic.Int64
+	// remainingLifetimeMs is the remaining time before the subscription can be deleted after it becomes idle.
+	// 0 means it can be deleted immediately once idle.
+	remainingLifetimeMs atomic.Int64
 	// the index of the db which stores the data of the subscription
 	// used to clean obselete data of the subscription
 	dbIndex int
@@ -649,7 +650,6 @@ func (e *eventStore) UnregisterDispatcher(changefeedID common.ChangeFeedID, disp
 	if e.closed.Load() {
 		return
 	}
-	enableDataSharing := config.GetGlobalServerConfig().Debug.EventStore.EnableDataSharing
 	e.dispatcherMeta.Lock()
 	if stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]; ok {
 		subStats := []*subscriptionStat{stat.subStat, stat.pendingSubStat, stat.removingSubStat}
@@ -657,22 +657,6 @@ func (e *eventStore) UnregisterDispatcher(changefeedID common.ChangeFeedID, disp
 			e.detachFromSubStat(dispatcherID, subStat)
 		}
 		delete(e.dispatcherMeta.dispatcherStats, dispatcherID)
-
-		// If data sharing is disabled, no other dispatchers will reuse these subscriptions.
-		// Remove unused subscriptions immediately to avoid delayed cleanup.
-		if !enableDataSharing {
-			seen := make(map[logpuller.SubscriptionID]struct{}, len(subStats))
-			for _, subStat := range subStats {
-				if subStat == nil {
-					continue
-				}
-				if _, ok := seen[subStat.subID]; ok {
-					continue
-				}
-				seen[subStat.subID] = struct{}{}
-				e.removeSubscriptionIfUnusedLocked(subStat)
-			}
-		}
 	}
 	e.dispatcherMeta.Unlock()
 	log.Info("unregister dispatcher done", zap.Stringer("changefeedID", changefeedID),
@@ -937,11 +921,20 @@ func (e *eventStore) detachFromSubStat(dispatcherID common.DispatcherID, subStat
 	idleTime := int64(0)
 	if len(newMap) == 0 {
 		idleTime = time.Now().UnixMilli()
+		ttlMs := int64(0)
+		if config.GetGlobalServerConfig().Debug.EventStore.EnableDataSharing {
+			ttlMs = int64(time.Minute / time.Millisecond)
+		}
+		subStat.remainingLifetimeMs.Store(ttlMs)
 	}
 	newData := &subscribersWithIdleTime{subscribers: newMap, idleTime: idleTime}
 	// It is safe to call Store without checking oldData here,
 	// as all modifications to subStat are guarded by the dispatcherMeta lock.
 	subStat.subscribers.Store(newData)
+
+	if len(newMap) == 0 && subStat.remainingLifetimeMs.Load() == 0 {
+		e.removeSubscriptionIfUnusedLocked(subStat)
+	}
 }
 
 func (e *eventStore) stopReceiveEventFromSubStat(dispatcherID common.DispatcherID, subStat *subscriptionStat) {
@@ -997,6 +990,7 @@ func (e *eventStore) addSubscriberToSubStat(subStat *subscriptionStat, dispatche
 	// It is safe to call Store without checking oldData here,
 	// as all modifications to subStat are guarded by the dispatcherMeta lock.
 	subStat.subscribers.Store(newData)
+	subStat.remainingLifetimeMs.Store(0)
 }
 
 func (e *eventStore) removeSubscriptionIfUnusedLocked(subStat *subscriptionStat) {
@@ -1018,7 +1012,7 @@ func (e *eventStore) removeSubscriptionIfUnusedLocked(subStat *subscriptionStat)
 		return
 	}
 
-	log.Info("remove unused subscription",
+	log.Info("clean obsolete subscription",
 		zap.Uint64("subscriptionID", uint64(subStat.subID)),
 		zap.Int("dbIndex", subStat.dbIndex),
 		zap.Int64("tableID", tableID))
@@ -1040,39 +1034,37 @@ func (e *eventStore) removeSubscriptionIfUnusedLocked(subStat *subscriptionStat)
 }
 
 func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
-	ticker := time.NewTicker(1 * time.Minute)
-	ttlInMsForMarkDeletion := int64(60 * 1000) // 1min
+	ticker := time.NewTicker(10 * time.Second)
+	lastTick := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			now := time.Now().UnixMilli()
+			nowTick := time.Now()
+			deltaMs := int64(nowTick.Sub(lastTick) / time.Millisecond)
+			lastTick = nowTick
 			e.dispatcherMeta.Lock()
 			for tableID, subStats := range e.dispatcherMeta.tableStats {
-				for subID, subStat := range subStats {
+				for _, subStat := range subStats {
 					subData := subStat.subscribers.Load()
-					if subData != nil && len(subData.subscribers) == 0 && subData.idleTime > 0 && now-subData.idleTime > ttlInMsForMarkDeletion {
-						log.Info("clean obsolete subscription",
-							zap.Uint64("subscriptionID", uint64(subID)),
-							zap.Int("dbIndex", subStat.dbIndex),
-							zap.Int64("tableID", subStat.tableSpan.TableID))
-						e.subClient.Unsubscribe(subID)
-						db := e.dbs[subStat.dbIndex]
-						if err := deleteDataRange(db, uint64(subID), subStat.tableSpan.TableID, 0, math.MaxUint64); err != nil {
-							log.Warn("fail to delete events", zap.Error(err))
-						}
-						delete(subStats, subID)
-						e.subscriptionChangeCh.In() <- SubscriptionChange{
-							ChangeType: SubscriptionChangeTypeRemove,
-							SubID:      uint64(subStat.subID),
-							Span:       subStat.tableSpan,
-						}
-						metrics.EventStoreSubscriptionGauge.Dec()
-						if len(subStats) == 0 {
-							delete(e.dispatcherMeta.tableStats, tableID)
-						}
+					if subData == nil || len(subData.subscribers) != 0 || subData.idleTime <= 0 {
+						continue
 					}
+					remainingMs := subStat.remainingLifetimeMs.Load()
+					if remainingMs > 0 {
+						remainingMs -= deltaMs
+						if remainingMs < 0 {
+							remainingMs = 0
+						}
+						subStat.remainingLifetimeMs.Store(remainingMs)
+					}
+					if remainingMs == 0 {
+						e.removeSubscriptionIfUnusedLocked(subStat)
+					}
+				}
+				if len(subStats) == 0 {
+					delete(e.dispatcherMeta.tableStats, tableID)
 				}
 			}
 			e.dispatcherMeta.Unlock()

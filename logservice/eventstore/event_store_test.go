@@ -21,6 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/pebble"
 	"github.com/klauspost/compress/zstd"
@@ -485,6 +486,44 @@ func TestEventStoreUnregisterDispatcherWithoutDataSharingRemovesSubscription(t *
 	require.False(t, ok)
 	_, ok = es.dispatcherMeta.tableStats[tableID]
 	require.False(t, ok)
+	es.dispatcherMeta.RUnlock()
+}
+
+func TestEventStoreUnregisterDispatcherWithDataSharingKeepsSubscriptionForTTL(t *testing.T) {
+	restoreCfg := setDataSharingForTest(t, true)
+	defer restoreCfg()
+
+	subClient, store := newEventStoreForTest(fmt.Sprintf("/tmp/%s", t.Name()))
+	es := store.(*eventStore)
+
+	tableID := int64(1)
+	cfID := common.NewChangefeedID4Test("default", "test-cf")
+	dispatcherID := common.NewDispatcherID()
+	span := &heartbeatpb.TableSpan{
+		TableID:  tableID,
+		StartKey: []byte("a"),
+		EndKey:   []byte("h"),
+	}
+	require.True(t, store.RegisterDispatcher(cfID, dispatcherID, span, 100, func(uint64, uint64) {}, false, false))
+
+	store.UnregisterDispatcher(cfID, dispatcherID)
+
+	mockSubClient := subClient.(*mockSubscriptionClient)
+	mockSubClient.mu.Lock()
+	require.Equal(t, 1, len(mockSubClient.subscriptions))
+	mockSubClient.mu.Unlock()
+
+	es.dispatcherMeta.RLock()
+	subStats, ok := es.dispatcherMeta.tableStats[tableID]
+	require.True(t, ok)
+	require.Equal(t, 1, len(subStats))
+	var subStat *subscriptionStat
+	for _, s := range subStats {
+		subStat = s
+		break
+	}
+	require.NotNil(t, subStat)
+	require.Equal(t, int64(time.Minute/time.Millisecond), subStat.remainingLifetimeMs.Load())
 	es.dispatcherMeta.RUnlock()
 }
 
