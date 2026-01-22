@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/tikv/client-go/v2/tikv"
 	"go.uber.org/zap"
 )
@@ -37,6 +38,11 @@ type RegionCountRefresher struct {
 }
 
 func NewRegionCountRefresher(changefeedID common.ChangeFeedID, interval time.Duration) *RegionCountRefresher {
+	// if rolling upgrade from a lower version which does not have region refresh counter functionality,
+	// may receive interval is 0, adjust it here to prevent panic.
+	if interval <= 0 {
+		interval = config.DefaultRegionRefreshInterval
+	}
 	return &RegionCountRefresher{
 		regionCache:  appcontext.GetService[split.RegionCache](appcontext.RegionCache),
 		interval:     interval,
