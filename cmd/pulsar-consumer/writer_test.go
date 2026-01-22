@@ -56,13 +56,13 @@ func (s *recordingSink) Close(_ bool) {
 }
 func (s *recordingSink) Run(_ context.Context) error { return nil }
 
-func TestWriterWrite_executesDDLWithNoBlockedTablesWithoutWatermark(t *testing.T) {
+func TestWriterWrite_executesIndependentCreateTableWithoutWatermark(t *testing.T) {
 	// Scenario: If upstream resolved-ts is held back (e.g. failpoints in integration tests), the consumer
-	// watermark can stall below CREATE TABLE / CREATE DATABASE commitTs. These DDLs don't block any table's
-	// DML ordering and should still be applied to advance downstream schema.
+	// watermark can stall below CREATE TABLE / CREATE DATABASE commitTs. Independent CREATE TABLE DDLs don't
+	// depend on any existing table schema and should still be applied to advance downstream schema.
 	//
 	// Steps:
-	// 1) Enqueue a "no blocked tables" DDL with commitTs > watermark.
+	// 1) Enqueue an independent CREATE TABLE DDL with commitTs > watermark.
 	// 2) Call writer.Write and expect the DDL is executed even without watermark catching up.
 	ctx := context.Background()
 	s := &recordingSink{}
@@ -81,7 +81,9 @@ func TestWriterWrite_executesDDLWithNoBlockedTablesWithoutWatermark(t *testing.T
 			FinishedTs: 100,
 			BlockedTables: &commonEvent.InfluencedTables{
 				InfluenceType: commonEvent.InfluenceTypeNormal,
-				TableIDs:      nil,
+				// DDLSpanTableID is always present; having only it means the DDL does not block any
+				// existing table's DML ordering (unlike CREATE TABLE ... LIKE ...).
+				TableIDs: []int64{common.DDLSpanTableID},
 			},
 		},
 	}
@@ -94,10 +96,10 @@ func TestWriterWrite_executesDDLWithNoBlockedTablesWithoutWatermark(t *testing.T
 
 func TestWriterWrite_preservesOrderWhenBlockedDDLNotReady(t *testing.T) {
 	// Scenario: DDLs must execute in commitTs order. A later non-blocking DDL must not bypass an earlier
-	// blocking DDL that is waiting for watermark.
+	// blocking DDL that is waiting for watermark, even if the later DDL is an independent CREATE TABLE.
 	//
 	// Steps:
-	// 1) Enqueue a blocking DDL followed by a non-blocking DDL, with watermark behind the first DDL.
+	// 1) Enqueue a blocking DDL followed by an independent CREATE TABLE DDL, with watermark behind the first DDL.
 	// 2) Call writer.Write and expect nothing executes.
 	// 3) Advance watermark beyond the first DDL and expect both execute in order.
 	ctx := context.Background()
@@ -116,7 +118,7 @@ func TestWriterWrite_preservesOrderWhenBlockedDDLNotReady(t *testing.T) {
 			FinishedTs: 100,
 			BlockedTables: &commonEvent.InfluencedTables{
 				InfluenceType: commonEvent.InfluenceTypeNormal,
-				TableIDs:      []int64{1},
+				TableIDs:      []int64{common.DDLSpanTableID, 1},
 			},
 		},
 		{
@@ -127,7 +129,7 @@ func TestWriterWrite_preservesOrderWhenBlockedDDLNotReady(t *testing.T) {
 			FinishedTs: 110,
 			BlockedTables: &commonEvent.InfluencedTables{
 				InfluenceType: commonEvent.InfluenceTypeNormal,
-				TableIDs:      nil,
+				TableIDs:      []int64{common.DDLSpanTableID},
 			},
 		},
 	}
@@ -142,5 +144,48 @@ func TestWriterWrite_preservesOrderWhenBlockedDDLNotReady(t *testing.T) {
 		"ALTER TABLE `test`.`t` ADD COLUMN `c2` INT",
 		"CREATE TABLE `test`.`t2` (`id` INT PRIMARY KEY)",
 	}, s.ddls)
+	require.Empty(t, w.ddlList)
+}
+
+func TestWriterWrite_doesNotBypassWatermarkForCreateTableLike(t *testing.T) {
+	// Scenario: CREATE TABLE ... LIKE ... depends on the referenced table schema being present and
+	// up-to-date downstream, so it must not bypass watermark gating.
+	//
+	// Steps:
+	// 1) Enqueue a CREATE TABLE ... LIKE ... DDL with commitTs > watermark.
+	// 2) Call writer.Write and expect the DDL is NOT executed.
+	// 3) Advance watermark beyond the DDL commitTs and expect the DDL executes.
+	ctx := context.Background()
+	s := &recordingSink{}
+	p := &partitionProgress{partition: 0, watermark: 0}
+	w := &writer{
+		progresses: []*partitionProgress{p},
+		mysqlSink:  s,
+	}
+	w.ddlList = []*commonEvent.DDLEvent{
+		{
+			Query:      "CREATE TABLE `test`.`t2` LIKE `test`.`t1`",
+			SchemaName: "test",
+			TableName:  "t2",
+			Type:       byte(timodel.ActionCreateTable),
+			FinishedTs: 100,
+			BlockedTables: &commonEvent.InfluencedTables{
+				InfluenceType: commonEvent.InfluenceTypeNormal,
+				// Besides the special DDL span, this DDL also blocks the referenced table (or its partitions).
+				TableIDs: []int64{common.DDLSpanTableID, 101},
+			},
+			BlockedTableNames: []commonEvent.SchemaTableName{
+				{SchemaName: "test", TableName: "t1"},
+			},
+		},
+	}
+
+	w.Write(ctx, codeccommon.MessageTypeDDL)
+	require.Empty(t, s.ddls)
+	require.Len(t, w.ddlList, 1)
+
+	p.watermark = 200
+	w.Write(ctx, codeccommon.MessageTypeDDL)
+	require.Equal(t, []string{"CREATE TABLE `test`.`t2` LIKE `test`.`t1`"}, s.ddls)
 	require.Empty(t, w.ddlList)
 }

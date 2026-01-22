@@ -430,14 +430,29 @@ func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool
 		// consumed events <= commitTs.
 		//
 		// However, some DDLs are safe to execute as soon as they are received. In particular, CREATE
-		// SCHEMA / CREATE TABLE do not need to wait for watermark to protect DML ordering of an existing
-		// table, and waiting can deadlock integration tests that intentionally pause dispatcher creation
-		// (thus holding back the upstream resolved-ts/watermark).
+		// SCHEMA and "independent" CREATE TABLE (i.e. ones that do not depend on any existing table)
+		// do not need to wait for watermark to protect DML ordering, and waiting can deadlock integration
+		// tests that intentionally pause dispatcher creation (thus holding back the upstream resolved-ts/
+		// watermark).
 		//
-		// Safety guard: use the DDL action type instead of relying on BlockedTables.TableIDs being empty,
-		// which could be empty for reasons unrelated to "safe to bypass".
+		// Safety guard: CREATE TABLE ... LIKE ... is also ActionCreateTable, but it depends on the referenced
+		// table schema being present and up-to-date downstream. The event builder encodes that dependency by
+		// populating BlockedTableNames and/or adding referenced table IDs (or partition IDs) into
+		// BlockedTables.TableIDs. We only bypass watermark for CREATE TABLE when the DDL only blocks the
+		// special DDL span and has no referenced blocked table names.
 		action := timodel.ActionType(todoDDL.Type)
-		bypassWatermark := action == timodel.ActionCreateSchema || action == timodel.ActionCreateTable
+		bypassWatermark := false
+		switch action {
+		case timodel.ActionCreateSchema:
+			bypassWatermark = true
+		case timodel.ActionCreateTable:
+			blockedTables := todoDDL.GetBlockedTables()
+			bypassWatermark = blockedTables != nil &&
+				blockedTables.InfluenceType == commonEvent.InfluenceTypeNormal &&
+				len(blockedTables.TableIDs) == 1 &&
+				blockedTables.TableIDs[0] == commonType.DDLSpanTableID &&
+				len(todoDDL.GetBlockedTableNames()) == 0
+		}
 		if !bypassWatermark && todoDDL.GetCommitTs() > watermark {
 			ddlList = append(ddlList, w.ddlList[i:]...)
 			break
