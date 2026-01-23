@@ -359,14 +359,17 @@ func (c *coordinator) saveCheckpointTs(ctx context.Context, changes []*changefee
 }
 
 func (c *coordinator) CreateChangefeed(ctx context.Context, info *config.ChangeFeedInfo) error {
-	// update the service gc safepoint by force before write it to the etcd.
-	err := c.updateGCSafepointByChangefeed(ctx, info.ChangefeedID)
+	err := c.controller.CreateChangefeed(ctx, info)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	// update the service gc safepoint by force,
+	err = c.updateGCSafepointByChangefeed(ctx, info.ChangefeedID)
 	if err != nil {
 		log.Error("update gc safepoint failed when creating the changefeed",
 			zap.Any("changefeedID", info.ChangefeedID), zap.Error(err))
-		return err
 	}
-	return c.controller.CreateChangefeed(ctx, info)
+	return nil
 }
 
 func (c *coordinator) RemoveChangefeed(ctx context.Context, id common.ChangeFeedID) (uint64, error) {
@@ -443,11 +446,12 @@ func (c *coordinator) updateAllKeyspaceGcBarriers(ctx context.Context) error {
 
 	var retErr error
 	for meta, barrierTS := range barrierMap {
-		err := c.updateKeyspaceGcBarrier(ctx, meta, barrierTS, false)
-		log.Warn("update keyspace gc barrier failed",
-			zap.Uint32("keyspaceID", meta.ID), zap.String("keyspaceName", meta.Name),
-			zap.Uint64("barrierTS", barrierTS), zap.Error(err))
-		retErr = err
+		if err := c.updateKeyspaceGcBarrier(ctx, meta, barrierTS, false); err != nil {
+			log.Warn("update keyspace gc barrier failed",
+				zap.Uint32("keyspaceID", meta.ID), zap.String("keyspaceName", meta.Name),
+				zap.Uint64("barrierTS", barrierTS), zap.Error(err))
+			retErr = err
+		}
 	}
 	return retErr
 }
