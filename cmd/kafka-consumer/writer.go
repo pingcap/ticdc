@@ -17,6 +17,7 @@ import (
 	"context"
 	"database/sql"
 	"math"
+	"sort"
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
@@ -230,10 +231,13 @@ func (w *writer) getBlockTableIDs(ddl *commonEvent.DDLEvent) map[int64]struct{} 
 	return tableIDs
 }
 
-// append DDL wait to be handled, only consider the constraint among DDLs.
-// for DDL a / b received in the order, a.CommitTs < b.CommitTs should be true.
+// appendDDL enqueues a DDL event to be flushed later.
+//
+// DDLs may be received out of commit-ts order (e.g. due to MQ delivery or buffering), so Write() sorts
+// ddlList by commit-ts before executing. ddlWithMaxCommitTs is a guard against per-table commit-ts
+// regressions: executing an older DDL after a newer one may corrupt downstream schema/DML ordering.
 func (w *writer) appendDDL(ddl *commonEvent.DDLEvent) {
-	// DDL CommitTs fallback, just crash it to indicate the bug.
+	// If commitTs goes backwards for a blocked table, ignore this DDL instead of applying it out of order.
 	tableIDs := w.getBlockTableIDs(ddl)
 	for tableID := range tableIDs {
 		maxCommitTs, ok := w.ddlWithMaxCommitTs[tableID]
@@ -422,6 +426,17 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 
 // Write will synchronously write data downstream
 func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool {
+	// DDL events can be received out of commit-ts order (e.g. due to protocol-level broadcasting and
+	// buffering differences between DDL kinds). We must execute DDLs in commit-ts order; otherwise a
+	// "future" DDL that is not yet eligible (commitTs > watermark) can block executing earlier DDLs
+	// that are already eligible, and the subsequent watermark-based DML flush can observe an out-of-date
+	// downstream schema (e.g. DML applied before its ALTER TABLE), causing test failures like common_1.
+	if len(w.ddlList) > 1 {
+		sort.SliceStable(w.ddlList, func(i, j int) bool {
+			return w.ddlList[i].GetCommitTs() < w.ddlList[j].GetCommitTs()
+		})
+	}
+
 	watermark := w.globalWatermark()
 	ddlList := make([]*commonEvent.DDLEvent, 0)
 	for i, todoDDL := range w.ddlList {

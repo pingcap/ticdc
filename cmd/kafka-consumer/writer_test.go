@@ -190,3 +190,87 @@ func TestWriterWrite_doesNotBypassWatermarkForCreateTableLike(t *testing.T) {
 	require.Equal(t, []string{"CREATE TABLE `test`.`t2` LIKE `test`.`t1`"}, s.ddls)
 	require.Empty(t, w.ddlList)
 }
+
+func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
+	// Scenario: In real Kafka topics, DDL messages can be received out of commit-ts order. For example,
+	// a "future" CREATE TABLE might be observed before an earlier ALTER TABLE.
+	//
+	// Steps:
+	// 1) Provide a ddlList whose slice order is out of commit-ts order, and set watermark such that a
+	//    later DDL at the front is not yet eligible (commitTs > watermark).
+	// 2) Call writer.Write and expect all DDLs with commitTs <= watermark execute (in commit-ts order),
+	//    and only the truly "future" DDL remains pending.
+	ctx := context.Background()
+	s := &recordingSink{}
+	p := &partitionProgress{partition: 0, watermark: 944040962}
+	w := &writer{
+		progresses: []*partitionProgress{p},
+		mysqlSink:  s,
+	}
+	w.ddlList = []*commonEvent.DDLEvent{
+		{
+			Query:      "CREATE TABLE `common_1`.`add_and_drop_columns` (`id` INT(11) NOT NULL PRIMARY KEY)",
+			SchemaName: "common_1",
+			TableName:  "add_and_drop_columns",
+			Type:       byte(timodel.ActionCreateTable),
+			FinishedTs: 786754590,
+			BlockedTables: &commonEvent.InfluencedTables{
+				InfluenceType: commonEvent.InfluenceTypeNormal,
+			},
+		},
+		{
+			Query:      "CREATE DATABASE `common`",
+			SchemaName: "common",
+			Type:       byte(timodel.ActionCreateSchema),
+			FinishedTs: 931195931,
+			BlockedTables: &commonEvent.InfluencedTables{
+				InfluenceType: commonEvent.InfluenceTypeNormal,
+			},
+		},
+		{
+			// This DDL is just barely in the future of watermark, and would block later DDLs if we
+			// execute in slice order instead of commit-ts order.
+			Query:      "CREATE TABLE `common_1`.`a` (`a` BIGINT PRIMARY KEY,`b` INT)",
+			SchemaName: "common_1",
+			TableName:  "a",
+			Type:       byte(timodel.ActionCreateTable),
+			FinishedTs: 944040963,
+			BlockedTables: &commonEvent.InfluencedTables{
+				InfluenceType: commonEvent.InfluenceTypeNormal,
+			},
+		},
+		{
+			Query:      "ALTER TABLE `common_1`.`add_and_drop_columns` ADD COLUMN `col1` INT NULL, ADD COLUMN `col2` INT NULL, ADD COLUMN `col3` INT NULL",
+			SchemaName: "common_1",
+			TableName:  "add_and_drop_columns",
+			Type:       byte(timodel.ActionAddColumn),
+			FinishedTs: 852290601,
+			BlockedTables: &commonEvent.InfluencedTables{
+				InfluenceType: commonEvent.InfluenceTypeNormal,
+				TableIDs:      []int64{9},
+			},
+		},
+		{
+			Query:      "ALTER TABLE `common_1`.`add_and_drop_columns` DROP COLUMN `col1`, DROP COLUMN `col2`",
+			SchemaName: "common_1",
+			TableName:  "add_and_drop_columns",
+			Type:       byte(timodel.ActionDropColumn),
+			FinishedTs: 904719361,
+			BlockedTables: &commonEvent.InfluencedTables{
+				InfluenceType: commonEvent.InfluenceTypeNormal,
+				TableIDs:      []int64{9},
+			},
+		},
+	}
+
+	w.Write(ctx, codeccommon.MessageTypeDDL)
+
+	require.Equal(t, []string{
+		"CREATE TABLE `common_1`.`add_and_drop_columns` (`id` INT(11) NOT NULL PRIMARY KEY)",
+		"ALTER TABLE `common_1`.`add_and_drop_columns` ADD COLUMN `col1` INT NULL, ADD COLUMN `col2` INT NULL, ADD COLUMN `col3` INT NULL",
+		"ALTER TABLE `common_1`.`add_and_drop_columns` DROP COLUMN `col1`, DROP COLUMN `col2`",
+		"CREATE DATABASE `common`",
+	}, s.ddls)
+	require.Len(t, w.ddlList, 1)
+	require.Equal(t, "CREATE TABLE `common_1`.`a` (`a` BIGINT PRIMARY KEY,`b` INT)", w.ddlList[0].Query)
+}
