@@ -746,6 +746,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		return
 	}
 
+<<<<<<< HEAD
 	// Reject a changefeed if the downstream is the same TiDB logical cluster as the upstream.
 	isSame, err := check.IsSameUpstreamDownstream(ctx, h.server.GetPdClient(), cfInfo.ToChangefeedConfig())
 	if err != nil {
@@ -759,6 +760,8 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		return
 	}
 
+=======
+>>>>>>> 8683e6fc6 (api: undo the start ts safety when creating and resume changefeed failed (#4048))
 	// do not shadow err after this point
 	resumeGcServiceID := h.server.GetEtcdClient().GetEnsureGCServiceID(gc.EnsureGCServiceResuming)
 	if err = verifyResumeChangefeedConfig(
