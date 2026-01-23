@@ -73,14 +73,10 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
-	// verify sinkURI
-	if cfg.SinkURI == "" {
-		_ = c.Error(errors.ErrSinkURIInvalid.GenWithStackByArgs(
-			"sink_uri is empty, cannot create a changefeed without sink_uri"))
-		return
-	}
-
 	keyspaceName := GetKeyspaceValueWithDefault(c)
+	// We use the keyspace in the query parameter
+	cfg.Keyspace = keyspaceName
+
 	var changefeedID common.ChangeFeedID
 	if cfg.ID == "" {
 		changefeedID = common.NewChangefeedID(keyspaceName)
@@ -89,13 +85,9 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	}
 	// verify changefeedID
 	if err = common.ValidateChangefeedID(changefeedID.Name()); err != nil {
-		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack(
-			"invalid changefeed_id: %s", cfg.ID))
+		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s", cfg.ID))
 		return
 	}
-
-	// We use the keyspace in the query parameter
-	cfg.Keyspace = keyspaceName
 
 	// verify changefeed keyspace
 	if err = common.ValidateKeyspace(changefeedID.Keyspace()); err != nil {
@@ -104,7 +96,6 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	}
 
 	keyspaceMeta := middleware.GetKeyspaceFromContext(c)
-
 	if keyspaceMeta.State != keyspacepb.KeyspaceState_ENABLED {
 		c.IndentedJSON(http.StatusBadRequest, errors.ErrAPIInvalidParam)
 		c.Abort()
@@ -134,6 +125,27 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
+	if cfg.SinkURI == "" {
+		_ = c.Error(errors.ErrSinkURIInvalid.GenWithStackByArgs(
+			"sink_uri is empty, cannot create a changefeed without sink_uri"))
+		return
+	}
+	sinkURIParsed, err := url.Parse(cfg.SinkURI)
+	if err != nil {
+		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfg.SinkURI))
+		return
+	}
+
+	scheme := sinkURIParsed.Scheme
+	var topic string
+	if config.IsMQScheme(scheme) {
+		topic, err = helper.GetTopic(sinkURIParsed)
+		if err != nil {
+			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfg.SinkURI))
+			return
+		}
+	}
+
 	ts, logical, err := h.server.GetPdClient().GetTS(ctx)
 	if err != nil {
 		_ = c.Error(errors.ErrPDEtcdAPIError.GenWithStackByArgs("fail to get ts from pd client"))
@@ -151,34 +163,16 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 
 	// verify target ts
 	if cfg.TargetTs > 0 && cfg.TargetTs <= cfg.StartTs {
-		_ = c.Error(errors.ErrTargetTsBeforeStartTs.GenWithStackByArgs(
-			cfg.TargetTs, cfg.StartTs))
+		_ = c.Error(errors.ErrTargetTsBeforeStartTs.GenWithStackByArgs(cfg.TargetTs, cfg.StartTs))
 		return
 	}
 
 	// fill replicaConfig
 	replicaCfg := cfg.ReplicaConfig.ToInternalReplicaConfig()
-
-	// verify replicaConfig
-	sinkURIParsed, err := url.Parse(cfg.SinkURI)
-	if err != nil {
-		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfg.SinkURI))
-		return
-	}
 	err = replicaCfg.ValidateAndAdjust(sinkURIParsed)
 	if err != nil {
 		_ = c.Error(errors.WrapError(errors.ErrInvalidReplicaConfig, err))
 		return
-	}
-
-	scheme := sinkURIParsed.Scheme
-	topic := ""
-	if config.IsMQScheme(scheme) {
-		topic, err = helper.GetTopic(sinkURIParsed)
-		if err != nil {
-			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfg.SinkURI))
-			return
-		}
 	}
 
 	// Ensure the start ts is valid in the next 3600 seconds, aka 1 hour
@@ -191,28 +185,40 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		keyspaceMeta.Id,
 		changefeedID,
 		ensureTTL, cfg.StartTs); err != nil {
+		if !errors.ErrStartTsBeforeGC.Equal(err) {
+			_ = c.Error(errors.ErrPDEtcdAPIError.Wrap(err))
+			return
+		}
 		_ = c.Error(err)
 		return
 	}
 
+	// do not shadow err after this point
 	pdClient := h.server.GetPdClient()
 	defer func() {
 		if err == nil {
 			return
 		}
-		_ = gc.UndoEnsureChangefeedStartTsSafety(
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		undoErr := gc.UndoEnsureChangefeedStartTsSafety(
 			ctx,
 			pdClient,
 			keyspaceMeta.Id,
 			createGcServiceID,
 			changefeedID,
 		)
+		if undoErr != nil {
+			log.Warn("undo ensure changefeed start ts safety failed when creating the changefeed",
+				zap.String("changefeedID", changefeedID.Name()), zap.Uint64("startTs", cfg.StartTs),
+				zap.String("gcServiceID", createGcServiceID),
+				zap.Error(undoErr))
+		}
+		cancel()
 	}()
 
-	protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(replicaCfg.Sink.Protocol))
-
+	var kvStorage tidbkv.Storage
 	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
-	kvStorage, err := keyspaceManager.GetStorage(ctx, keyspaceName)
+	kvStorage, err = keyspaceManager.GetStorage(ctx, keyspaceName)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -232,7 +238,13 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
-	ineligibleTables, eligibleTables, allTables, err := getVerifiedTables(ctx, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
+	var (
+		ineligibleTables []common.TableName
+		eligibleTables   []common.TableName
+		allTables        []common.TableName
+	)
+	protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(replicaCfg.Sink.Protocol))
+	ineligibleTables, eligibleTables, allTables, err = getVerifiedTables(ctx, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -272,8 +284,8 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
-	log.Info("create changefeed successfully!",
-		zap.String("id", info.ChangefeedID.Name()),
+	log.Info("create changefeed successfully",
+		zap.String("changefeedID", info.ChangefeedID.Name()),
 		zap.String("state", string(info.State)),
 		zap.String("changefeedInfo", info.String()),
 		zap.Int("eligibleTablesLength", len(eligibleTables)),
@@ -659,10 +671,10 @@ func (h *OpenAPIV2) PauseChangefeed(c *gin.Context) {
 // @Router	/api/v2/changefeeds/{changefeed_id}/resume [post]
 func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 	ctx := c.Request.Context()
-	keyspaceName := GetKeyspaceValueWithDefault(c)
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), keyspaceName)
 
 	var err error
+	keyspaceName := GetKeyspaceValueWithDefault(c)
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), keyspaceName)
 	if err = common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
 			changefeedDisplayName.Name))
@@ -721,6 +733,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		return
 	}
 
+	// do not shadow err after this point
 	resumeGcServiceID := h.server.GetEtcdClient().GetEnsureGCServiceID(gc.EnsureGCServiceResuming)
 	if err = verifyResumeChangefeedConfig(
 		ctx,
@@ -732,18 +745,25 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-
 	defer func() {
 		if err == nil {
 			return
 		}
-		_ = gc.UndoEnsureChangefeedStartTsSafety(
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		undoErr := gc.UndoEnsureChangefeedStartTsSafety(
 			ctx,
 			h.server.GetPdClient(),
 			keyspaceMeta.Id,
 			resumeGcServiceID,
 			cfInfo.ChangefeedID,
 		)
+		if undoErr != nil {
+			log.Warn("undo ensure changefeed start ts safety failed when resuming the changefeed",
+				zap.String("changefeedID", cfInfo.ChangefeedID.Name()), zap.Uint64("startTs", newCheckpointTs),
+				zap.String("gcServiceID", resumeGcServiceID),
+				zap.Error(undoErr))
+		}
+		cancel()
 	}()
 
 	var (
@@ -752,13 +772,16 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		allTables        []common.TableName
 	)
 	if overwriteCheckpointTs {
-		sinkURIParsed, err := url.Parse(cfInfo.SinkURI)
+		var (
+			sinkURIParsed *url.URL
+			topic         string
+		)
+		sinkURIParsed, err = url.Parse(cfInfo.SinkURI)
 		if err != nil {
 			_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfInfo.SinkURI))
 			return
 		}
 		scheme := sinkURIParsed.Scheme
-		topic := ""
 		if config.IsMQScheme(scheme) {
 			topic, err = helper.GetTopic(sinkURIParsed)
 			if err != nil {
@@ -768,8 +791,9 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		}
 		protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(cfInfo.Config.Sink.Protocol))
 
+		var kvStorage tidbkv.Storage
 		keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
-		kvStorage, err := keyspaceManager.GetStorage(ctx, keyspaceName)
+		kvStorage, err = keyspaceManager.GetStorage(ctx, keyspaceName)
 		if err != nil {
 			_ = c.Error(err)
 			return
@@ -787,8 +811,8 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		return
 	}
 	c.Errors = nil
-	log.Info("Resume changefeed successfully!",
-		zap.String("id", cfInfo.ChangefeedID.Name()),
+	log.Info("resume changefeed successfully",
+		zap.String("changefeedID", cfInfo.ChangefeedID.Name()),
 		zap.String("state", string(cfInfo.State)),
 		zap.String("changefeedInfo", cfInfo.String()),
 		zap.Bool("overwriteCheckpointTs", overwriteCheckpointTs),
@@ -956,7 +980,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		return
 	}
 
-	log.Info("Update changefeed successfully!",
+	log.Info("Update changefeed successfully",
 		zap.String("id", oldCfInfo.ChangefeedID.Name()),
 		zap.String("state", string(oldCfInfo.State)),
 		zap.String("changefeedInfo", oldCfInfo.String()),
