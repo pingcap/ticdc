@@ -33,7 +33,6 @@ const (
 	memoryUsageCriticalThreshold = 0.9
 	memoryUsageLowThreshold      = 0.2
 	memoryUsageVeryLowThreshold  = 0.1
-	usageLogInterval             = time.Minute
 )
 
 type memoryUsageSample struct {
@@ -108,7 +107,6 @@ func (w *memoryUsageWindow) count() int {
 
 func (c *changefeedStatus) updateMemoryUsage(now time.Time, used uint64, max uint64) {
 	if max == 0 || c.usageWindow == nil {
-		c.logUsageMissing(now, used, max)
 		return
 	}
 
@@ -220,20 +218,6 @@ func (c *changefeedStatus) storeMinSentTs(value uint64) {
 		zap.Stringer("changefeedID", c.changefeedID),
 		zap.Uint64("oldBaseTs", prev),
 		zap.Uint64("newBaseTs", value),
-	)
-}
-
-func (c *changefeedStatus) logUsageMissing(now time.Time, used uint64, max uint64) {
-	last := c.lastUsageLogTime.Load()
-	if now.Sub(last) < usageLogInterval {
-		return
-	}
-	c.lastUsageLogTime.Store(now)
-
-	log.Info("memory usage max is zero",
-		zap.Stringer("changefeedID", c.changefeedID),
-		zap.Uint64("used", used),
-		zap.Uint64("max", max),
 	)
 }
 
