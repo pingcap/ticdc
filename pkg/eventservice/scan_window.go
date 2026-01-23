@@ -137,10 +137,12 @@ func (c *changefeedStatus) adjustScanInterval(now time.Time, avg float64) {
 		newInterval = minScanInterval
 	case avg > memoryUsageHighThreshold:
 		newInterval = maxDuration(current/2, minScanInterval)
-	case avg < memoryUsageLowThreshold:
-		newInterval = minDuration(current*2, maxInterval)
 	case avg < memoryUsageVeryLowThreshold:
+		// When memory pressure is very low, allow the scan interval to grow beyond
+		// the sync point interval cap.
 		maxInterval = maxScanInterval
+		newInterval = minDuration(current*2, maxInterval)
+	case avg < memoryUsageLowThreshold:
 		newInterval = minDuration(current*2, maxInterval)
 	}
 

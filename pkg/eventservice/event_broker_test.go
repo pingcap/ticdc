@@ -191,10 +191,10 @@ func TestScanRangeCappedByScanWindow(t *testing.T) {
 
 	baseTime := time.Now()
 	baseTs := oracle.GoTimeToTS(baseTime)
-	disp.checkpointTs.Store(baseTs)
+	disp.sentResolvedTs.Store(baseTs)
 	disp.receivedResolvedTs.Store(oracle.GoTimeToTS(baseTime.Add(20 * time.Second)))
 	disp.eventStoreCommitTs.Store(oracle.GoTimeToTS(baseTime.Add(15 * time.Second)))
-	changefeedStatus.refreshMinCheckpointTs()
+	changefeedStatus.refreshMinSentResolvedTs()
 
 	needScan, dataRange := broker.getScanTaskDataRange(disp)
 	require.True(t, needScan)
