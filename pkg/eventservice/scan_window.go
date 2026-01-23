@@ -32,7 +32,7 @@ const (
 	memoryUsageHighThreshold     = 0.7
 	memoryUsageCriticalThreshold = 0.9
 	memoryUsageLowThreshold      = 0.2
-	memoryUsageVeryLowThreshold  = 0.05
+	memoryUsageVeryLowThreshold  = 0.1
 	usageLogInterval             = time.Minute
 )
 
