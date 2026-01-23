@@ -20,6 +20,7 @@ import (
 
 	"github.com/pingcap/errors"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -110,6 +111,11 @@ func TestCheckStaleCheckpointTs(t *testing.T) {
 	require.Nil(t, err)
 
 	gcManager.lastSafePointTs.Store(20)
+	if !kerneltype.IsClassic() {
+		gcManager.keyspaceGCBarrierInfoMap.Store(uint32(0), &keyspaceGCBarrierInfo{
+			lastSafePointTs: 20,
+		})
+	}
 	err = gcManager.CheckStaleCheckpointTs(ctx, 0, cfID, 10)
 	require.True(t, cerror.ErrSnapshotLostByGC.Equal(errors.Cause(err)))
 	rfcCode, ok := cerror.RFCCode(err)
