@@ -217,6 +217,138 @@ func TestDispatcherInflightBudgetDoesNotAffectDDL(t *testing.T) {
 	}
 }
 
+func TestRedoSinkDeferDDLUntilDMLFlushed(t *testing.T) {
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+
+	mockSink := sink.NewMockSink(common.RedoSinkType)
+	dispatcher := newDispatcherForTest(mockSink, tableSpan)
+	t.Cleanup(dispatcher.sharedInfo.Close)
+
+	nodeID := node.NewID()
+	wakeCh := make(chan struct{}, 4)
+	wakeCallback := func() {
+		wakeCh <- struct{}{}
+	}
+
+	dml := &commonEvent.DMLEvent{
+		StartTs:         1,
+		CommitTs:        2,
+		Length:          1,
+		ApproximateSize: 1,
+	}
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dml)}, wakeCallback)
+	require.False(t, block)
+
+	ddl := &commonEvent.DDLEvent{
+		StartTs:    2,
+		FinishedTs: 3,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{0},
+		},
+	}
+	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddl)}, wakeCallback)
+	require.True(t, block)
+	require.NotNil(t, dispatcher.pendingBlockEvent.Load())
+
+	select {
+	case <-wakeCh:
+		require.FailNow(t, "unexpected wake before DML flushed")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	mockSink.FlushDMLs()
+
+	select {
+	case <-wakeCh:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "wake callback not called for deferred DDL")
+	}
+	require.Eventually(t, func() bool {
+		return dispatcher.pendingBlockEvent.Load() == nil && dispatcher.tableProgress.Empty()
+	}, 5*time.Second, 10*time.Millisecond)
+	require.Equal(t, uint64(2), dispatcher.GetCheckpointTs())
+}
+
+func TestRedoSinkDeferDDLUntilACKClearsTableProgress(t *testing.T) {
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+
+	mockSink := sink.NewMockSink(common.RedoSinkType)
+	dispatcher := newDispatcherForTest(mockSink, tableSpan)
+	t.Cleanup(dispatcher.sharedInfo.Close)
+
+	nodeID := node.NewID()
+	wakeCh := make(chan struct{}, 8)
+	wakeCallback := func() {
+		wakeCh <- struct{}{}
+	}
+
+	ddl1 := &commonEvent.DDLEvent{
+		StartTs:    1,
+		FinishedTs: 2,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{0},
+		},
+		NeedAddedTables: []commonEvent.Table{
+			{SchemaID: 1, TableID: 1},
+		},
+	}
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddl1)}, wakeCallback)
+	require.True(t, block)
+
+	require.Eventually(t, func() bool {
+		return dispatcher.resendTaskMap.Len() == 1 && !dispatcher.tableProgress.Empty()
+	}, 5*time.Second, 10*time.Millisecond)
+
+	// DDL1 flush wakes the dispatcher, but it stays in tableProgress until ACK.
+	select {
+	case <-wakeCh:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "wake callback not called for DDL1")
+	}
+
+	ddl2 := &commonEvent.DDLEvent{
+		StartTs:    2,
+		FinishedTs: 3,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{0},
+		},
+	}
+	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddl2)}, wakeCallback)
+	require.True(t, block)
+	require.NotNil(t, dispatcher.pendingBlockEvent.Load())
+
+	select {
+	case <-wakeCh:
+		require.FailNow(t, "unexpected wake before ACK clears tableProgress")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	dispatcher.HandleDispatcherStatus(&heartbeatpb.DispatcherStatus{
+		Ack: &heartbeatpb.ACK{
+			CommitTs:    ddl1.FinishedTs,
+			IsSyncPoint: false,
+		},
+	})
+	require.Eventually(t, func() bool {
+		return dispatcher.resendTaskMap.Len() == 0
+	}, 5*time.Second, 10*time.Millisecond)
+
+	select {
+	case <-wakeCh:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "wake callback not called for deferred DDL2")
+	}
+	require.Eventually(t, func() bool {
+		return dispatcher.pendingBlockEvent.Load() == nil && dispatcher.tableProgress.Empty()
+	}, 5*time.Second, 10*time.Millisecond)
+	require.Equal(t, uint64(2), dispatcher.GetCheckpointTs())
+}
+
 // test different events can be correctly handled by the dispatcher
 func TestDispatcherHandleEvents(t *testing.T) {
 	count.Swap(0)

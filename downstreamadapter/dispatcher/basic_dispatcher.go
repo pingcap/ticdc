@@ -212,12 +212,13 @@ type BasicDispatcher struct {
 
 	inflightBudget inflightBudget
 
-	// pendingBlockEvent is used to defer a block event (DDL / SyncPoint) until all
-	// previously enqueued events are flushed.
+	// pendingBlockEvent is used to defer a DDL block event until all previously enqueued
+	// events are flushed.
 	//
-	// This is required for cloudstorage/file sinks when in-flight budget is enabled,
-	// because DML batches may no longer block the dynstream path, and a later DDL may
-	// otherwise be written to external storage before earlier DML is flushed.
+	// This is required when in-flight budget is enabled:
+	// - For cloudstorage/file sinks: avoid "newer schema visible first" causing earlier DML stale-drop.
+	// - For redo sinks: enforce per-dispatcher DDL-after-DML durable order, since DML/DDL are written by
+	//   different writers and may otherwise be persisted out of order.
 	pendingBlockEvent atomic.Pointer[pendingBlockEvent]
 
 	seq  uint64
@@ -554,7 +555,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				}
 				wakeCallback()
 			})
-			if d.shouldDeferBlockEvent() {
+			if d.shouldDeferDDLEvent() {
 				d.deferBlockEvent(ddl)
 				// Double-check here to avoid missing the last flush callback due to races.
 				d.trySchedulePendingBlockEvent()
@@ -579,11 +580,6 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			syncPoint.AddPostFlushFunc(func() {
 				wakeCallback()
 			})
-			if d.shouldDeferBlockEvent() {
-				d.deferBlockEvent(syncPoint)
-				d.trySchedulePendingBlockEvent()
-				return block
-			}
 			d.DealWithBlockEvent(syncPoint)
 		case commonEvent.TypeHandshakeEvent:
 			log.Warn("Receive handshake event unexpectedly",
@@ -614,16 +610,18 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	return block
 }
 
-func (d *BasicDispatcher) shouldDeferBlockEvent() bool {
+func (d *BasicDispatcher) shouldDeferDDLEvent() bool {
 	if !d.inflightBudget.isEnabled() {
 		return false
 	}
-	// Only cloudstorage/file sinks have the schema-version visibility constraint that can
-	// cause stale-drop of earlier DML when a later DDL schema file is written first.
-	if d.sink.SinkType() != common.CloudStorageSinkType {
+	switch d.sink.SinkType() {
+	case common.CloudStorageSinkType, common.RedoSinkType:
+		return !d.tableProgress.Empty()
+	default:
+		// Other sinks always have await=true for DML batches, so a DDL cannot be executed
+		// while earlier DML is still in-flight for the same dispatcher.
 		return false
 	}
-	return !d.tableProgress.Empty()
 }
 
 func (d *BasicDispatcher) deferBlockEvent(event commonEvent.BlockEvent) {
@@ -927,6 +925,14 @@ func (d *BasicDispatcher) executeNonBlockingBlockEvent(event commonEvent.BlockEv
 		// Thus, we add the event to tableProgress again, and call event postFunc when the ack is received from maintainer.
 		event.ClearPostFlushFunc()
 		d.tableProgress.Add(event)
+		// When DDL deferral is enabled, the pending DDL should be scheduled as soon as all
+		// previously enqueued events are flushed. If tableProgress becomes empty due to an ACK
+		// (instead of a DML PostFlush), we need to trigger scheduling here to avoid deadlock.
+		if d.inflightBudget.isEnabled() {
+			event.AddPostFlushFunc(func() {
+				d.trySchedulePendingBlockEvent()
+			})
+		}
 		d.resendTaskMap.Set(identifier, newResendTask(message, d, event.PostFlush))
 	} else {
 		d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
