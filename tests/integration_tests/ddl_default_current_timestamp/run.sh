@@ -20,7 +20,7 @@ function run() {
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkForceSingleConnection=return(true);github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkSkipResetSessionTimestampAfterDDL=return("c2");github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkSkipSetSessionTimestamp=return("d2")'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
-	SINK_URI="mysql://normal:123456@127.0.0.1:3306/"
+	SINK_URI="mysql://normal:123456@127.0.0.1:3306/?time-zone=UTC"
 	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
 
 	run_sql "DROP DATABASE IF EXISTS ${DB_NAME};" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
