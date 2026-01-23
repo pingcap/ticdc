@@ -32,6 +32,7 @@ const (
 	memoryUsageHighThreshold     = 0.7
 	memoryUsageCriticalThreshold = 0.9
 	memoryUsageLowThreshold      = 0.2
+	memoryUsageVeryLowThreshold  = 0.05
 	usageLogInterval             = time.Minute
 )
 
@@ -113,8 +114,8 @@ func (c *changefeedStatus) updateMemoryUsage(now time.Time, used uint64, max uin
 
 	ratio := float64(used) / float64(max)
 	c.usageWindow.addSample(now, ratio)
-	//avg := c.usageWindow.average(now)
-	c.adjustScanInterval(now, ratio)
+	avg := c.usageWindow.average(now)
+	c.adjustScanInterval(now, avg)
 }
 
 func (c *changefeedStatus) adjustScanInterval(now time.Time, avg float64) {
@@ -122,12 +123,6 @@ func (c *changefeedStatus) adjustScanInterval(now time.Time, avg float64) {
 		zap.Stringer("changefeedID", c.changefeedID),
 		zap.Float64("avgUsage", avg),
 	)
-
-	lastAdjust := c.lastAdjustTime.Load()
-	// slow grow, fast shrink
-	if c.lastRatio.Load() < avg && time.Since(lastAdjust) < scanIntervalAdjustCooldown {
-		return
-	}
 
 	current := time.Duration(c.scanInterval.Load())
 	if current <= 0 {
@@ -145,6 +140,9 @@ func (c *changefeedStatus) adjustScanInterval(now time.Time, avg float64) {
 	case avg > memoryUsageHighThreshold:
 		newInterval = maxDuration(current/2, minScanInterval)
 	case avg < memoryUsageLowThreshold:
+		newInterval = minDuration(current*2, maxInterval)
+	case avg < memoryUsageVeryLowThreshold:
+		maxInterval = maxScanInterval
 		newInterval = minDuration(current*2, maxInterval)
 	}
 
