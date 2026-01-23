@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package config
 
 import (
 	"fmt"
@@ -56,7 +56,7 @@ type ClusterConfig struct {
 	S3ChangefeedID string `toml:"s3-changefeed-id" json:"s3-changefeed-id"`
 
 	// SecurityConfig is the security configuration for the cluster
-	SecurityConfig *security.Credential `toml:"security-config" json:"security-config"`
+	SecurityConfig security.Credential `toml:"security-config" json:"security-config"`
 
 	// DownstreamClusterChangefeedConfig is the configuration for the changefeed of the downstream cluster
 	// mapping from downstream cluster ID to the changefeed configuration
@@ -64,7 +64,7 @@ type ClusterConfig struct {
 }
 
 // loadConfig loads the configuration from a TOML file
-func loadConfig(path string) (*Config, error) {
+func LoadConfig(path string) (*Config, error) {
 	// Check if file exists
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil, fmt.Errorf("config file does not exist: %s", path)

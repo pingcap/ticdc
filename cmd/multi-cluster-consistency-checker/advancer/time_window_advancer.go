@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package advancer
 
 import (
 	"context"
@@ -19,7 +19,10 @@ import (
 	"sync"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/consumer"
+	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/watcher"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -28,16 +31,23 @@ import (
 
 // TimeWindow is the time window of the cluster, including the left boundary, right boundary and checkpoint ts
 // Assert 1: LeftBoundary < CheckpointTs < RightBoundary
-// Assert 2: The checkpoint timestamp of next time window should be larger than the MaxPDTimestampAfterTimeWindow
+// Assert 2: The other cluster's checkpoint timestamp of next time window should be larger than the PDTimestampAfterTimeWindow saved in this cluster's time window
+// Assert 3: CheckpointTs of this cluster should be larger than other clusters' RightBoundary of previous time window
+// Assert 4: RightBoundary of this cluster should be larger than other clusters' CheckpointTs of this time window
 type TimeWindow struct {
 	LeftBoundary  uint64
 	RightBoundary uint64
 	// CheckpointTs is the checkpoint timestamp for each changefeed from upstream cluster,
 	// mapping from downstream cluster ID to the checkpoint timestamp
 	CheckpointTs map[string]uint64
-	// MaxPDTimestampAfterTimeWindow is the max PD timestamp after the time window for each downstream cluster,
+	// PDTimestampAfterTimeWindow is the max PD timestamp after the time window for each downstream cluster,
 	// mapping from upstream cluster ID to the max PD timestamp
-	MaxPDTimestampAfterTimeWindow map[string]uint64
+	PDTimestampAfterTimeWindow map[string]uint64
+}
+
+type TimeWindowData struct {
+	TimeWindow
+	Data map[cloudstorage.DmlPathKey]consumer.IncrementalData
 }
 
 type TimeWindowAdvancer struct {
@@ -49,40 +59,63 @@ type TimeWindowAdvancer struct {
 
 	// checkpointWatcher is the Active-Active checkpoint watcher for each cluster,
 	// mapping from cluster ID to the downstream cluster ID to the checkpoint watcher
-	checkpointWatcher map[string]map[string]*checkpointWatcher
+	checkpointWatcher map[string]map[string]*watcher.CheckpointWatcher
 
 	// s3checkpointWatcher is the S3 checkpoint watcher for each cluster, mapping from cluster ID to the s3 checkpoint watcher
-	s3Watcher map[string]*s3Watcher
+	s3Watcher map[string]*watcher.S3Watcher
 
 	// pdClients is the pd clients for each cluster, mapping from cluster ID to the pd client
 	pdClients map[string]pd.Client
 }
 
 func NewTimeWindowAdvancer(
-	checkpointWatchers map[string]map[string]*checkpointWatcher,
-	s3Watchers map[string]*s3Watcher,
+	checkpointWatchers map[string]map[string]*watcher.CheckpointWatcher,
+	s3Watchers map[string]*watcher.S3Watcher,
 	pdClients map[string]pd.Client,
 ) *TimeWindowAdvancer {
+	timeWindowTriplet := make(map[string][3]TimeWindow)
+	for clusterID := range pdClients {
+		timeWindowTriplet[clusterID] = [3]TimeWindow{}
+	}
 	return &TimeWindowAdvancer{
 		round:             0,
-		timeWindowTriplet: make(map[string][3]TimeWindow),
+		timeWindowTriplet: timeWindowTriplet,
 		checkpointWatcher: checkpointWatchers,
 		s3Watcher:         s3Watchers,
 		pdClients:         pdClients,
 	}
 }
 
-func (t *TimeWindowAdvancer) AdvanceTimeWindow(pctx context.Context) error {
+// AdvanceTimeWindow advances the time window for each cluster. Here is the steps:
+// 1. Advance the checkpoint ts for each upstream-downstream cluster changefeed.
+//
+// For any upstream-downstream cluster changefeed, the checkpoint ts should be advanced to
+// the maximum of pd timestamp after previouds time window of downstream advanced and
+// the right boundary of previouds time window of every clusters.
+//
+// 2. Advance the right boundary for each cluster.
+//
+// For any cluster, the right boundary should be advanced to the maximum of pd timestamp of
+// the cluster after the checkpoint ts of its upstream cluster advanced and the previous
+// timewindow's checkpoint ts of changefeed where the cluster is the upstream cluster or
+// the downstream cluster.
+//
+// 3. Update the time window for each cluster.
+//
+// For any cluster, the time window should be updated to the new time window.
+func (t *TimeWindowAdvancer) AdvanceTimeWindow(
+	pctx context.Context,
+) (map[string]TimeWindowData, error) {
 	log.Info("advance time window", zap.Uint64("round", t.round))
 	// mapping from upstream cluster ID to the downstream cluster ID to the min checkpoint timestamp
 	minCheckpointTsMap := make(map[string]map[string]uint64)
 	maxTimeWindowRightBoundary := uint64(0)
 	for downstreamClusterID, triplet := range t.timeWindowTriplet {
-		for upstreamClusterID, maxPDTimestampAfterTimeWindow := range triplet[2].MaxPDTimestampAfterTimeWindow {
+		for upstreamClusterID, pdTimestampAfterTimeWindow := range triplet[2].PDTimestampAfterTimeWindow {
 			if _, ok := minCheckpointTsMap[upstreamClusterID]; !ok {
 				minCheckpointTsMap[upstreamClusterID] = make(map[string]uint64)
 			}
-			minCheckpointTsMap[upstreamClusterID][downstreamClusterID] = max(minCheckpointTsMap[upstreamClusterID][downstreamClusterID], maxPDTimestampAfterTimeWindow)
+			minCheckpointTsMap[upstreamClusterID][downstreamClusterID] = max(minCheckpointTsMap[upstreamClusterID][downstreamClusterID], pdTimestampAfterTimeWindow)
 		}
 		maxTimeWindowRightBoundary = max(maxTimeWindowRightBoundary, triplet[2].RightBoundary)
 	}
@@ -98,7 +131,7 @@ func (t *TimeWindowAdvancer) AdvanceTimeWindow(pctx context.Context) error {
 		for downstreamClusterID, checkpointWatcher := range downstreamCheckpointWatcherMap {
 			mincheckpointTs := max(minCheckpointTsMap[upstreamClusterID][downstreamClusterID], maxTimeWindowRightBoundary)
 			eg.Go(func() error {
-				checkpointTs, err := checkpointWatcher.advanceCheckpointTs(ctx, mincheckpointTs)
+				checkpointTs, err := checkpointWatcher.AdvanceCheckpointTs(ctx, mincheckpointTs)
 				if err != nil {
 					return errors.Trace(err)
 				}
@@ -124,16 +157,17 @@ func (t *TimeWindowAdvancer) AdvanceTimeWindow(pctx context.Context) error {
 		}
 	}
 	if err := eg.Wait(); err != nil {
-		return errors.Annotate(err, "advance checkpoint timestamp failed")
+		return nil, errors.Annotate(err, "advance checkpoint timestamp failed")
 	}
 
 	// Update the time window for each cluster
+	newDataMap := make(map[string]map[cloudstorage.DmlPathKey]consumer.IncrementalData)
 	eg, ctx = errgroup.WithContext(pctx)
-	for clusterID := range t.timeWindowTriplet {
+	for clusterID, triplet := range t.timeWindowTriplet {
 		minTimeWindowRightBoundary := max(maxCheckpointTs[clusterID], maxPDTimestampAfterCheckpointTs[clusterID])
 		s3Watcher := t.s3Watcher[clusterID]
 		eg.Go(func() error {
-			s3CheckpointTs, err := s3Watcher.advanceS3CheckpointTs(ctx, minTimeWindowRightBoundary)
+			s3CheckpointTs, newData, err := s3Watcher.AdvanceS3CheckpointTs(ctx, minTimeWindowRightBoundary)
 			if err != nil {
 				return errors.Trace(err)
 			}
@@ -142,21 +176,23 @@ func (t *TimeWindowAdvancer) AdvanceTimeWindow(pctx context.Context) error {
 				return errors.Trace(err)
 			}
 			lock.Lock()
+			newDataMap[clusterID] = newData
 			timeWindow := newTimeWindow[clusterID]
+			timeWindow.LeftBoundary = triplet[2].RightBoundary
 			timeWindow.RightBoundary = s3CheckpointTs
-			timeWindow.MaxPDTimestampAfterTimeWindow = make(map[string]uint64)
-			maps.Copy(timeWindow.MaxPDTimestampAfterTimeWindow, pdtsos)
+			timeWindow.PDTimestampAfterTimeWindow = make(map[string]uint64)
+			maps.Copy(timeWindow.PDTimestampAfterTimeWindow, pdtsos)
 			newTimeWindow[clusterID] = timeWindow
 			lock.Unlock()
 			return nil
 		})
 	}
 	if err := eg.Wait(); err != nil {
-		return errors.Annotate(err, "advance time window failed")
+		return nil, errors.Annotate(err, "advance time window failed")
 	}
 	t.updateTimeWindow(newTimeWindow)
 	t.round += 1
-	return nil
+	return newTimeWindowData(newTimeWindow, newDataMap), nil
 }
 
 func (t *TimeWindowAdvancer) updateTimeWindow(newTimeWindow map[string]TimeWindow) {
@@ -164,17 +200,16 @@ func (t *TimeWindowAdvancer) updateTimeWindow(newTimeWindow map[string]TimeWindo
 		triplet := t.timeWindowTriplet[clusterID]
 		triplet[0] = triplet[1]
 		triplet[1] = triplet[2]
-		timeWindow.LeftBoundary = triplet[2].RightBoundary
 		triplet[2] = timeWindow
 		t.timeWindowTriplet[clusterID] = triplet
 		log.Info("update time window", zap.String("clusterID", clusterID), zap.Any("timeWindow", timeWindow))
 	}
 }
 
-func (t *TimeWindowAdvancer) getPDTsFromOtherClusters(ctx context.Context, clusterID string) (map[string]uint64, error) {
+func (t *TimeWindowAdvancer) getPDTsFromOtherClusters(pctx context.Context, clusterID string) (map[string]uint64, error) {
 	var lock sync.Mutex
 	pdtsos := make(map[string]uint64)
-	eg, ctx := errgroup.WithContext(ctx)
+	eg, ctx := errgroup.WithContext(pctx)
 	for otherClusterID := range t.pdClients {
 		if otherClusterID == clusterID {
 			continue
@@ -192,5 +227,19 @@ func (t *TimeWindowAdvancer) getPDTsFromOtherClusters(ctx context.Context, clust
 			return nil
 		})
 	}
+	if err := eg.Wait(); err != nil {
+		return nil, errors.Trace(err)
+	}
 	return pdtsos, nil
+}
+
+func newTimeWindowData(newTimeWindow map[string]TimeWindow, newDataMap map[string]map[cloudstorage.DmlPathKey]consumer.IncrementalData) map[string]TimeWindowData {
+	timeWindowDatas := make(map[string]TimeWindowData)
+	for clusterID, timeWindow := range newTimeWindow {
+		timeWindowDatas[clusterID] = TimeWindowData{
+			TimeWindow: timeWindow,
+			Data:       newDataMap[clusterID],
+		}
+	}
+	return timeWindowDatas
 }

@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package watcher
 
 import (
 	"context"
@@ -25,7 +25,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type checkpointWatcher struct {
+type CheckpointWatcher struct {
 	upstreamClusterID   string
 	downstreamClusterID string
 	changefeedID        common.ChangeFeedID
@@ -35,8 +35,8 @@ type checkpointWatcher struct {
 func NewCheckpointWatcher(
 	upstreamClusterID, downstreamClusterID, changefeedID string,
 	etcdClient etcd.CDCEtcdClient,
-) *checkpointWatcher {
-	return &checkpointWatcher{
+) *CheckpointWatcher {
+	return &CheckpointWatcher{
 		upstreamClusterID:   upstreamClusterID,
 		downstreamClusterID: downstreamClusterID,
 		changefeedID:        common.NewChangeFeedIDWithName(changefeedID, "default"),
@@ -45,7 +45,7 @@ func NewCheckpointWatcher(
 }
 
 // advanceCheckpointTs waits for the checkpoint to exceed minCheckpointTs
-func (cw *checkpointWatcher) advanceCheckpointTs(ctx context.Context, minCheckpointTs uint64) (uint64, error) {
+func (cw *CheckpointWatcher) AdvanceCheckpointTs(ctx context.Context, minCheckpointTs uint64) (uint64, error) {
 	// First, get the current chceckpoint status from etcd
 	status, modRev, err := cw.etcdClient.GetChangeFeedStatus(ctx, cw.changefeedID)
 	if err != nil {

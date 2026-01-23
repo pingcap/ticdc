@@ -525,6 +525,15 @@ func (ti *TableInfo) GetPkColInfo() *model.ColumnInfo {
 	return ti.columnSchema.GetPkColInfo()
 }
 
+func (ti *TableInfo) GetPrimaryKeyColumnInfos() []*model.IndexColumn {
+	for _, idx := range ti.columnSchema.Indices {
+		if idx.Primary {
+			return idx.Columns
+		}
+	}
+	return nil
+}
+
 // GetPrimaryKeyColumnNames returns the primary key column names
 func (ti *TableInfo) GetPrimaryKeyColumnNames() []string {
 	var result []string

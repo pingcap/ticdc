@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/config"
 	"github.com/spf13/cobra"
 )
 
@@ -58,7 +59,7 @@ func run(cmd *cobra.Command, args []string) {
 		os.Exit(ExitCodeInvalidConfig)
 	}
 
-	cfg, err := loadConfig(cfgPath)
+	cfg, err := config.LoadConfig(cfgPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
 		os.Exit(ExitCodeDecodeConfigFailed)
