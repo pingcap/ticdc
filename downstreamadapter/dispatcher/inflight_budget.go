@@ -30,6 +30,8 @@ const (
 // This struct is concurrency-safe: it is accessed by the dynstream handler goroutine (enqueue),
 // and by sink flush callbacks (dequeue).
 type inflightBudget struct {
+	_ noCopy
+
 	enabled bool
 
 	low        int64
@@ -46,6 +48,12 @@ type inflightBudget struct {
 	inflightBudgetBlockDuration prometheus.Observer
 	inflightBudgetBlockedCount  prometheus.Gauge
 }
+
+// noCopy is used to help `go vet` detect accidental copies of structs containing atomics.
+// See https://github.com/golang/go/issues/8005
+type noCopy struct{}
+
+func (*noCopy) Lock() {}
 
 func newInflightBudget(
 	sinkType common.SinkType,
@@ -88,17 +96,26 @@ func (b *inflightBudget) trackDML(dml *commonEvent.DMLEvent, wakeCallback func()
 	b.inflight.Add(effectiveBytes)
 	dml.AddPostFlushFunc(func() {
 		inFlightBytes := b.inflight.Add(-effectiveBytes)
+		if inFlightBytes < 0 {
+			log.Warn("inflight bytes underflow",
+				zap.Stringer("changefeedID", b.changefeedID),
+				zap.Stringer("dispatcher", b.dispatcherID),
+				zap.Int64("inFlightBytes", inFlightBytes),
+			)
+			b.inflight.Store(0)
+			inFlightBytes = 0
+		}
 		if b.blocked.Load() && inFlightBytes <= b.low {
 			if b.blocked.CompareAndSwap(true, false) {
 				if blockedAt := b.blockedAt.Swap(0); blockedAt > 0 {
 					b.inflightBudgetBlockDuration.Observe(time.Since(time.Unix(0, blockedAt)).Seconds())
-					b.inflightBudgetBlockedCount.Dec()
-					log.Info("dispatcher unblocked by inflight budget",
-						zap.Stringer("changefeedID", b.changefeedID),
-						zap.Stringer("dispatcher", b.dispatcherID),
-						zap.Int64("inFlightBytes", inFlightBytes),
-					)
 				}
+				b.inflightBudgetBlockedCount.Dec()
+				log.Debug("dispatcher unblocked by inflight budget",
+					zap.Stringer("changefeedID", b.changefeedID),
+					zap.Stringer("dispatcher", b.dispatcherID),
+					zap.Int64("inFlightBytes", inFlightBytes),
+				)
 				wakeCallback()
 			}
 		}
@@ -117,11 +134,24 @@ func (b *inflightBudget) tryBlock() bool {
 	if b.blocked.CompareAndSwap(false, true) {
 		b.blockedAt.Store(time.Now().UnixNano())
 		b.inflightBudgetBlockedCount.Inc()
-		log.Info("dispatcher blocked by inflight bytes",
+		log.Debug("dispatcher blocked by inflight bytes",
 			zap.Stringer("changefeedID", b.changefeedID),
 			zap.Stringer("dispatcher", b.dispatcherID),
 			zap.Int64("inFlightBytes", b.inflight.Load()),
 		)
 	}
 	return true
+}
+
+func (b *inflightBudget) cleanup() {
+	if !b.enabled {
+		return
+	}
+	if !b.blocked.CompareAndSwap(true, false) {
+		return
+	}
+	if blockedAt := b.blockedAt.Swap(0); blockedAt > 0 {
+		b.inflightBudgetBlockDuration.Observe(time.Since(time.Unix(0, blockedAt)).Seconds())
+	}
+	b.inflightBudgetBlockedCount.Dec()
 }
