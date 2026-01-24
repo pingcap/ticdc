@@ -8,7 +8,7 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 DB_NAME=ddl_default_current_timestamp
-TIME_ZONE=UTC
+TIME_ZONE=Asia/Shanghai
 
 function run() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
@@ -18,9 +18,9 @@ function run() {
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 	# Force a single session and skip set/reset for targeted DDLs to simulate leakage.
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkForceSingleConnection=return(true);github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkSkipResetSessionTimestampAfterDDL=return("c2");github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkSkipSetSessionTimestamp=return("d2")'
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --config "$CUR/conf/server.toml"
 
-	SINK_URI="mysql://normal:123456@127.0.0.1:3306/?time-zone=UTC"
+	SINK_URI="mysql://normal:123456@127.0.0.1:3306/?time-zone=Asia%2FShanghai"
 	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
 
 	run_sql "DROP DATABASE IF EXISTS ${DB_NAME};" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
@@ -44,7 +44,7 @@ function run() {
 	run_sql "INSERT INTO ${DB_NAME}.t_fp VALUES (1, 10), (2, 20);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	run_sql "SET time_zone = '${TIME_ZONE}'; SET @@timestamp = 1000000000.123456; ALTER TABLE ${DB_NAME}.t_fp ADD COLUMN c2 DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	expected_ts="2001-09-09 01:46:40.123456"
+	expected_ts="2001-09-09 09:46:40.123456"
 	down_c2=""
 	for i in $(seq 1 30); do
 		down_c2=$(mysql -uroot -h${DOWN_TIDB_HOST} -P${DOWN_TIDB_PORT} --default-character-set utf8mb4 --init-command="set time_zone='${TIME_ZONE}'" -Nse "SELECT c2 FROM ${DB_NAME}.t_fp WHERE id=1;" 2>/dev/null || true)
