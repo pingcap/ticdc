@@ -271,7 +271,7 @@ func TestRedoSinkDeferDDLUntilDMLFlushed(t *testing.T) {
 	require.Equal(t, uint64(2), dispatcher.GetCheckpointTs())
 }
 
-func TestRedoSinkDeferDDLUntilACKClearsTableProgress(t *testing.T) {
+func TestRedoSinkDeferDDLDoesNotWaitForACK(t *testing.T) {
 	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
 	require.NoError(t, err)
 
@@ -320,13 +320,15 @@ func TestRedoSinkDeferDDLUntilACKClearsTableProgress(t *testing.T) {
 	}
 	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddl2)}, wakeCallback)
 	require.True(t, block)
-	require.NotNil(t, dispatcher.deferredDDLEvent.Load())
+	require.Nil(t, dispatcher.deferredDDLEvent.Load())
 
+	// DDL2 should flush and wake without waiting for DDL1's ACK.
 	select {
 	case <-wakeCh:
-		require.FailNow(t, "unexpected wake before ACK clears tableProgress")
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "wake callback not called for DDL2")
 	}
+	require.False(t, dispatcher.tableProgress.Empty())
 
 	dispatcher.HandleDispatcherStatus(&heartbeatpb.DispatcherStatus{
 		Ack: &heartbeatpb.ACK{
@@ -337,14 +339,8 @@ func TestRedoSinkDeferDDLUntilACKClearsTableProgress(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return dispatcher.resendTaskMap.Len() == 0
 	}, 5*time.Second, 10*time.Millisecond)
-
-	select {
-	case <-wakeCh:
-	case <-time.After(5 * time.Second):
-		require.FailNow(t, "wake callback not called for deferred DDL2")
-	}
 	require.Eventually(t, func() bool {
-		return dispatcher.deferredDDLEvent.Load() == nil && dispatcher.tableProgress.Empty()
+		return dispatcher.tableProgress.Empty()
 	}, 5*time.Second, 10*time.Millisecond)
 	require.Equal(t, uint64(2), dispatcher.GetCheckpointTs())
 }
