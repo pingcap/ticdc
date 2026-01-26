@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -147,6 +148,7 @@ func (c *changefeedStatus) adjustScanInterval(now time.Time, avg float64) {
 
 	if newInterval != current {
 		c.scanInterval.Store(int64(newInterval))
+		metrics.EventServiceScanWindowIntervalGaugeVec.WithLabelValues(c.changefeedID.String()).Set(newInterval.Seconds())
 		c.lastAdjustTime.Store(now)
 		log.Info("scan interval adjusted",
 			zap.Stringer("changefeedID", c.changefeedID),
@@ -213,6 +215,7 @@ func (c *changefeedStatus) storeMinSentTs(value uint64) {
 		return
 	}
 	c.minSentTs.Store(value)
+	metrics.EventServiceScanWindowBaseTsGaugeVec.WithLabelValues(c.changefeedID.String()).Set(float64(value))
 	log.Info("scan window base updated",
 		zap.Stringer("changefeedID", c.changefeedID),
 		zap.Uint64("oldBaseTs", prev),

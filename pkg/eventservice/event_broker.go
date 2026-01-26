@@ -1012,6 +1012,9 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		status.removeDispatcher(id)
 		if status.isEmpty() {
 			c.changefeedMap.Delete(changefeedID)
+			metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String())
+			metrics.EventServiceScanWindowBaseTsGaugeVec.DeleteLabelValues(changefeedID.String())
+			metrics.EventServiceScanWindowIntervalGaugeVec.DeleteLabelValues(changefeedID.String())
 		}
 		c.sendNotReusableEvent(node.ID(info.GetServerID()), dispatcher)
 		return nil
@@ -1032,6 +1035,9 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		status.removeDispatcher(id)
 		if status.isEmpty() {
 			c.changefeedMap.Delete(changefeedID)
+			metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String())
+			metrics.EventServiceScanWindowBaseTsGaugeVec.DeleteLabelValues(changefeedID.String())
+			metrics.EventServiceScanWindowIntervalGaugeVec.DeleteLabelValues(changefeedID.String())
 		}
 		return err
 	}
@@ -1082,6 +1088,8 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		)
 		c.changefeedMap.Delete(changefeedID)
 		metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String())
+		metrics.EventServiceScanWindowBaseTsGaugeVec.DeleteLabelValues(changefeedID.String())
+		metrics.EventServiceScanWindowIntervalGaugeVec.DeleteLabelValues(changefeedID.String())
 	}
 
 	c.eventStore.UnregisterDispatcher(changefeedID, id)
@@ -1180,6 +1188,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 
 	if newStat.epoch > 1 {
 		newStat.changefeedStat.scanInterval.Store(int64(defaultScanInterval))
+		metrics.EventServiceScanWindowIntervalGaugeVec.WithLabelValues(changefeedID.String()).Set(defaultScanInterval.Seconds())
 		newStat.changefeedStat.lastAdjustTime.Store(time.Now())
 	}
 
@@ -1201,6 +1210,8 @@ func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID)
 		stat = newChangefeedStatus(changefeedID)
 		log.Info("new changefeed status", zap.Stringer("changefeedID", changefeedID))
 		c.changefeedMap.Store(changefeedID, stat)
+		metrics.EventServiceScanWindowBaseTsGaugeVec.WithLabelValues(changefeedID.String()).Set(0)
+		metrics.EventServiceScanWindowIntervalGaugeVec.WithLabelValues(changefeedID.String()).Set(defaultScanInterval.Seconds())
 	}
 	return stat.(*changefeedStatus)
 }
