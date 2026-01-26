@@ -162,13 +162,14 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		if err != nil {
 			return err
 		}
+		ddlType := e.GetDDLType().String()
 		if s.partitionRule == helper.PartitionAll {
-			err = s.statistics.RecordDDLExecution(func() error {
-				return s.ddlProducer.syncBroadcastMessage(s.ctx, topic, message)
+			err = s.statistics.RecordDDLExecution(func() (string, error) {
+				return ddlType, s.ddlProducer.syncBroadcastMessage(s.ctx, topic, message)
 			})
 		} else {
-			err = s.statistics.RecordDDLExecution(func() error {
-				return s.ddlProducer.syncSendMessage(s.ctx, topic, message)
+			err = s.statistics.RecordDDLExecution(func() (string, error) {
+				return ddlType, s.ddlProducer.syncSendMessage(s.ctx, topic, message)
 			})
 		}
 		if err != nil {

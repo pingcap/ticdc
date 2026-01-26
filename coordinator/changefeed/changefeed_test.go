@@ -26,7 +26,7 @@ import (
 )
 
 func TestNewChangefeed(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
 		State:   config.StateNormal,
@@ -42,7 +42,7 @@ func TestNewChangefeed(t *testing.T) {
 }
 
 func TestChangefeed_GetSetInfo(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
 		State:   config.StateNormal,
@@ -60,7 +60,7 @@ func TestChangefeed_GetSetInfo(t *testing.T) {
 }
 
 func TestChangefeed_GetSetNodeID(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
 		State:   config.StateNormal,
@@ -74,7 +74,7 @@ func TestChangefeed_GetSetNodeID(t *testing.T) {
 }
 
 func TestChangefeed_UpdateStatus(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
 		State:   config.StateNormal,
@@ -91,7 +91,7 @@ func TestChangefeed_UpdateStatus(t *testing.T) {
 }
 
 func TestChangefeed_IsMQSink(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
 		State:   config.StateNormal,
@@ -133,7 +133,7 @@ func TestChangefeed_NeedCheckpointMysqlDisabled(t *testing.T) {
 }
 
 func TestChangefeed_GetSetLastSavedCheckPointTs(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
 		State:   config.StateNormal,
@@ -147,7 +147,7 @@ func TestChangefeed_GetSetLastSavedCheckPointTs(t *testing.T) {
 }
 
 func TestChangefeed_NewAddMaintainerMessage(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
 		State:   config.StateNormal,
@@ -162,7 +162,7 @@ func TestChangefeed_NewAddMaintainerMessage(t *testing.T) {
 }
 
 func TestChangefeed_NewRemoveMaintainerMessage(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
 		State:   config.StateNormal,
@@ -177,7 +177,7 @@ func TestChangefeed_NewRemoveMaintainerMessage(t *testing.T) {
 }
 
 func TestChangefeed_NewCheckpointTsMessage(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{
 		SinkURI: "kafka://127.0.0.1:9092",
 		State:   config.StateNormal,
@@ -192,14 +192,14 @@ func TestChangefeed_NewCheckpointTsMessage(t *testing.T) {
 }
 
 func TestRemoveMaintainerMessage(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	server := node.ID("server-1")
 	msg := RemoveMaintainerMessage(common.DefaultKeyspaceID, cfID, server, true, true)
 	require.Equal(t, server, msg.To)
 	require.Equal(t, messaging.MaintainerManagerTopic, msg.Topic)
 }
 
-func TestChangefeedGetCloneStatus(t *testing.T) {
+func TestChangefeedGetStatusForResume(t *testing.T) {
 	// Prepare test data
 	originalStatus := &heartbeatpb.MaintainerStatus{
 		ChangefeedID: &heartbeatpb.ChangefeedID{
@@ -227,7 +227,7 @@ func TestChangefeedGetCloneStatus(t *testing.T) {
 	}
 
 	// Get the cloned status
-	clonedStatus := cf.GetClonedStatus()
+	clonedStatus := cf.GetStatusForResume()
 
 	// Check if the cloned status is equal to the original status
 	require.Equal(t, originalStatus.ChangefeedID.High, clonedStatus.ChangefeedID.High)
@@ -237,22 +237,8 @@ func TestChangefeedGetCloneStatus(t *testing.T) {
 	require.Equal(t, originalStatus.CheckpointTs, clonedStatus.CheckpointTs)
 	require.Equal(t, originalStatus.FeedState, clonedStatus.FeedState)
 	require.Equal(t, originalStatus.State, clonedStatus.State)
-	require.Equal(t, len(originalStatus.Err), len(clonedStatus.Err))
 
-	// Check if the error array elements are the same
-	if len(originalStatus.Err) > 0 {
-		require.Equal(t, originalStatus.Err[0].Time, clonedStatus.Err[0].Time)
-		require.Equal(t, originalStatus.Err[0].Node, clonedStatus.Err[0].Node)
-		require.Equal(t, originalStatus.Err[0].Code, clonedStatus.Err[0].Code)
-		require.Equal(t, originalStatus.Err[0].Message, clonedStatus.Err[0].Message)
-	}
-
-	// Check if the cloned status is a new object
-	require.NotSame(t, originalStatus, clonedStatus)
-	require.NotSame(t, originalStatus.ChangefeedID, clonedStatus.ChangefeedID)
-	if len(originalStatus.Err) > 0 {
-		require.NotSame(t, originalStatus.Err[0], clonedStatus.Err[0])
-	}
+	require.Equal(t, 0, len(clonedStatus.Err))
 }
 
 func TestChangefeed_GetKeyspaceID(t *testing.T) {

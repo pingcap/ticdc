@@ -37,7 +37,7 @@ func redoCallback() {
 func newRedoDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *RedoDispatcher {
 	defaultAtomicity := config.DefaultAtomicityLevel()
 	sharedInfo := NewSharedInfo(
-		common.NewChangefeedID(common.DefaultKeyspaceNamme),
+		common.NewChangefeedID(common.DefaultKeyspaceName),
 		"system",
 		false,
 		false,
@@ -58,6 +58,7 @@ func newRedoDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) 
 		1,            // schemaID
 		NewSchemaIDToDispatchers(),
 		false, // skipSyncpointAtStartTs
+		false, // skipDMLAsStartTs
 		sink,
 		sharedInfo,
 	)

@@ -37,16 +37,27 @@ show_help() {
 }
 
 get_latest_tidb_version() {
-	local latest_version="v8.5.2" # fallback version
-	# Try to get latest version from GitHub API
+	local fallback_version="v8.5.4"
+	local latest_url="https://github.com/pingcap/tidb/releases/latest"
+	local effective_url=""
+	local latest_version=""
+
+	# Prefer GitHub releases page redirect (more stable than GitHub API rate limits).
 	if command -v curl &>/dev/null; then
-		latest_version=$(curl -s https://api.github.com/repos/pingcap/tidb/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+		effective_url=$(
+			curl -sSL --max-time 10 --retry 3 --retry-delay 1 \
+				-o /dev/null -w '%{url_effective}' "$latest_url" 2>/dev/null || true
+		)
 	elif command -v wget &>/dev/null; then
-		latest_version=$(wget -qO- https://api.github.com/repos/pingcap/tidb/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+		effective_url=$(
+			wget --spider --server-response --max-redirect=20 --timeout=10 --tries=3 \
+				"$latest_url" 2>&1 | awk '/^  Location: / {url=$2} END {print url}' | tr -d '\r' || true
+		)
 	fi
-	# If version extraction failed, use fallback
+
+	latest_version="${effective_url##*/}"
 	if [[ ! "$latest_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
-		latest_version="v8.5.2"
+		latest_version="$fallback_version"
 	fi
 	echo "$latest_version"
 }

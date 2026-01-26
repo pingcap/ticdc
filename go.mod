@@ -4,7 +4,7 @@ go 1.25.5
 
 require (
 	cloud.google.com/go/storage v1.39.1
-	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.16.0
+	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.20.0
 	github.com/BurntSushi/toml v1.5.0
 	github.com/DATA-DOG/go-sqlmock v1.5.0
 	github.com/IBM/sarama v1.41.2
@@ -65,7 +65,7 @@ require (
 	github.com/soheilhy/cmux v0.1.5
 	github.com/spf13/cobra v1.9.1
 	github.com/spf13/pflag v1.0.7
-	github.com/stretchr/testify v1.10.0
+	github.com/stretchr/testify v1.11.1
 	github.com/thanhpk/randstr v1.0.6
 	github.com/tikv/client-go/v2 v2.0.8-0.20251112113123-1264c1278595
 	github.com/tikv/pd v1.1.0-beta.0.20240407022249-7179657d129b
@@ -78,6 +78,7 @@ require (
 	go.etcd.io/etcd/client/pkg/v3 v3.5.15
 	go.etcd.io/etcd/client/v3 v3.5.15
 	go.etcd.io/etcd/pkg/v3 v3.5.15
+	go.etcd.io/etcd/raft/v3 v3.5.15
 	go.etcd.io/etcd/server/v3 v3.5.15
 	go.uber.org/atomic v1.11.0
 	go.uber.org/goleak v1.3.0
@@ -101,7 +102,6 @@ replace (
 	cloud.google.com/go/kms => cloud.google.com/go/kms v1.15.8
 	cloud.google.com/go/pubsub => cloud.google.com/go/pubsub v1.37.0
 	cloud.google.com/go/storage => cloud.google.com/go/storage v1.39.1
-	github.com/apache/arrow-go/v18 => github.com/joechenrh/arrow-go/v18 v18.0.0-20250911101656-62c34c9a3b82
 	google.golang.org/api => google.golang.org/api v0.170.0
 	google.golang.org/grpc => google.golang.org/grpc v1.65.0
 )
@@ -115,11 +115,11 @@ require (
 	github.com/99designs/go-keychain v0.0.0-20191008050251-8e49817e8af4 // indirect
 	github.com/99designs/keyring v1.2.1 // indirect
 	github.com/AthenZ/athenz v1.10.39 // indirect
-	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.7.0 // indirect
-	github.com/Azure/azure-sdk-for-go/sdk/internal v1.10.0 // indirect
+	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.10.1 // indirect
+	github.com/Azure/azure-sdk-for-go/sdk/internal v1.11.2 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.0.0 // indirect
 	github.com/Azure/go-ntlmssp v0.0.0-20221128193559-754e69321358 // indirect
-	github.com/AzureAD/microsoft-authentication-library-for-go v1.2.2 // indirect
+	github.com/AzureAD/microsoft-authentication-library-for-go v1.4.2 // indirect
 	github.com/DataDog/zstd v1.5.5 // indirect
 	github.com/Masterminds/semver v1.5.0 // indirect
 	github.com/VividCortex/ewma v1.2.0 // indirect
@@ -347,7 +347,6 @@ require (
 	github.com/zyedidia/generic v1.2.1 // indirect
 	go.etcd.io/bbolt v1.3.10 // indirect
 	go.etcd.io/etcd/client/v2 v2.305.15 // indirect
-	go.etcd.io/etcd/raft/v3 v3.5.15 // indirect
 	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.49.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.49.0 // indirect
@@ -386,7 +385,13 @@ require (
 	sourcegraph.com/sourcegraph/appdash-data v0.0.0-20151005221446-73f23eafcf67 // indirect
 )
 
-// copy from TiDB
-replace github.com/go-ldap/ldap/v3 v3.4.4 => github.com/yangkeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
+replace (
+	github.com/IBM/sarama v1.41.2 => github.com/pingcap/sarama v1.41.2-pingcap-20251202-x
 
-replace github.com/IBM/sarama v1.41.2 => github.com/pingcap/sarama v1.41.2-pingcap-20251202-x
+	// Downgrade grpc to v1.63.2, as well as other related modules.
+	github.com/apache/arrow-go/v18 => github.com/joechenrh/arrow-go/v18 v18.0.0-20250911101656-62c34c9a3b82
+	// copy from TiDB
+	github.com/go-ldap/ldap/v3 v3.4.4 => github.com/yangkeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
+
+	google.golang.org/grpc v1.67.1 => google.golang.org/grpc v1.65.0
+)
