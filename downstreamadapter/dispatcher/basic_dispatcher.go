@@ -610,8 +610,7 @@ func (d *BasicDispatcher) shouldDeferDDLEvent(ddlCommitTs uint64) bool {
 	if !d.inflightBudget.isEnabled() {
 		return false
 	}
-	// inflightBudget is enabled only for CloudStorage/Redo sinks.
-	return d.inflightBudget.hasInflightDMLBeforeCommitTs(ddlCommitTs)
+	return d.inflightBudget.hasInflightBeforeCommitTs(ddlCommitTs)
 }
 
 func (d *BasicDispatcher) deferDDLEvent(event *commonEvent.DDLEvent) {
@@ -627,7 +626,7 @@ func (d *BasicDispatcher) tryScheduleDeferredDDLEvent() {
 	if pending == nil {
 		return
 	}
-	if d.inflightBudget.hasInflightDMLBeforeCommitTs(pending.GetCommitTs()) {
+	if d.inflightBudget.hasInflightBeforeCommitTs(pending.GetCommitTs()) {
 		return
 	}
 	if !d.deferredDDLEvent.CompareAndSwap(pending, nil) {

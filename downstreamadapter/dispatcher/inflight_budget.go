@@ -128,7 +128,8 @@ func (b *inflightBudget) trackDML(dml *commonEvent.DMLEvent, wakeCallback func()
 	})
 }
 
-func (b *inflightBudget) hasInflightDMLBeforeCommitTs(commitTs uint64) bool {
+// return true if there is inflight DMLs whose commit-ts smaller than the passed in commitTs.
+func (b *inflightBudget) hasInflightBeforeCommitTs(commitTs uint64) bool {
 	if !b.enabled || b.dmlProgress == nil {
 		return false
 	}
@@ -141,8 +142,6 @@ func (b *inflightBudget) hasInflightDMLBeforeCommitTs(commitTs uint64) bool {
 	return earliestUnflushedCommitTs < commitTs
 }
 
-// tryBlock returns true if the caller should block the dynstream path due to exceeding high watermark.
-// It also handles metrics/logging when entering blocked state.
 func (b *inflightBudget) tryBlock() bool {
 	if !b.enabled {
 		return false
