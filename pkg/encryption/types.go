@@ -54,6 +54,7 @@ type MasterKey struct {
 	Vendor     KMSVendor `json:"vendor"`
 	CMEKID     string    `json:"cmek_id"`
 	Region     string    `json:"region"`
+	Endpoint   string    `json:"endpoint"`
 	Ciphertext []byte    `json:"ciphertext"`
 }
 

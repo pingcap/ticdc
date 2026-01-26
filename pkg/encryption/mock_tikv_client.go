@@ -15,9 +15,12 @@ package encryption
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/encryption/kms"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/zap"
 )
@@ -56,21 +59,43 @@ func (c *MockTiKVClient) initDefaultMockData() {
 	mockDataKeyID1 := "K01"
 	mockDataKeyID2 := "K02"
 
-	// Generate mock ciphertext for data keys (32 bytes for AES-256)
-	dataKey1Ciphertext := make([]byte, 32)
-	if _, err := rand.Read(dataKey1Ciphertext); err != nil {
-		log.Panic("failed to generate random data key ciphertext", zap.Error(err))
+	// Generate mock master key plaintext (32 bytes for AES-256)
+	masterKeyPlaintext := make([]byte, 32)
+	if _, err := rand.Read(masterKeyPlaintext); err != nil {
+		log.Panic("failed to generate random master key plaintext", zap.Error(err))
 	}
 
-	dataKey2Ciphertext := make([]byte, 32)
-	if _, err := rand.Read(dataKey2Ciphertext); err != nil {
-		log.Panic("failed to generate random data key ciphertext", zap.Error(err))
+	// Generate mock data key plaintext (32 bytes for AES-256)
+	dataKey1Plaintext := make([]byte, 32)
+	if _, err := rand.Read(dataKey1Plaintext); err != nil {
+		log.Panic("failed to generate random data key plaintext", zap.Error(err))
+	}
+	dataKey2Plaintext := make([]byte, 32)
+	if _, err := rand.Read(dataKey2Plaintext); err != nil {
+		log.Panic("failed to generate random data key plaintext", zap.Error(err))
 	}
 
-	// Generate mock master key ciphertext
-	masterKeyCiphertext := make([]byte, 32)
-	if _, err := rand.Read(masterKeyCiphertext); err != nil {
-		log.Panic("failed to generate random master key ciphertext", zap.Error(err))
+	// Encrypt data keys using master key (AES-256-CTR with zero IV)
+	block, err := aes.NewCipher(masterKeyPlaintext)
+	if err != nil {
+		log.Panic("failed to create AES cipher for data key encryption", zap.Error(err))
+	}
+	iv := make([]byte, aes.BlockSize)
+	stream := cipher.NewCTR(block, iv)
+
+	dataKey1Ciphertext := make([]byte, len(dataKey1Plaintext))
+	stream.XORKeyStream(dataKey1Ciphertext, dataKey1Plaintext)
+
+	// Reset stream by creating a new CTR stream to ensure deterministic encryption per key.
+	stream = cipher.NewCTR(block, iv)
+	dataKey2Ciphertext := make([]byte, len(dataKey2Plaintext))
+	stream.XORKeyStream(dataKey2Ciphertext, dataKey2Plaintext)
+
+	// Encrypt master key plaintext via mock KMS to generate a realistic ciphertext.
+	kmsClient := kms.NewMockKMSClient()
+	masterKeyCiphertext, err := kmsClient.EncryptMasterKey(masterKeyPlaintext)
+	if err != nil {
+		log.Panic("failed to encrypt master key via mock KMS", zap.Error(err))
 	}
 
 	meta := &KeyspaceEncryptionMeta{
@@ -90,7 +115,7 @@ func (c *MockTiKVClient) initDefaultMockData() {
 			},
 			mockDataKeyID2: {
 				Ciphertext:          dataKey2Ciphertext,
-				EncryptionAlgorithm: AES256GCM,
+				EncryptionAlgorithm: AES256CTR,
 			},
 		},
 	}

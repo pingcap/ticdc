@@ -267,24 +267,25 @@ func (m *encryptionMetaManager) decryptDataKey(ctx context.Context, masterKey *M
 		return nil, cerrors.ErrDecodeFailed.Wrap(err)
 	}
 
+	if len(masterKeyPlaintext) != 32 {
+		return nil, cerrors.ErrDecodeFailed.GenWithStackByArgs("master key plaintext must be 32 bytes")
+	}
+
 	// Decrypt data key using master key (AES-256-CTR)
 	block, err := aes.NewCipher(masterKeyPlaintext)
 	if err != nil {
 		return nil, cerrors.ErrDecodeFailed.Wrap(err)
 	}
 
-	if len(dataKeyCiphertext) < aes.BlockSize {
-		return nil, cerrors.ErrDecodeFailed.GenWithStackByArgs("data key ciphertext too short")
+	if len(dataKeyCiphertext) != 32 {
+		return nil, cerrors.ErrDecodeFailed.GenWithStackByArgs("data key ciphertext must be 32 bytes")
 	}
 
-	// Extract IV from the beginning
-	iv := dataKeyCiphertext[:aes.BlockSize]
-	encryptedData := dataKeyCiphertext[aes.BlockSize:]
-
-	// Decrypt using CTR mode
+	// The ciphertext is encrypted using AES-256-CTR with a zero IV.
+	iv := make([]byte, aes.BlockSize)
 	stream := cipher.NewCTR(block, iv)
-	plaintext := make([]byte, len(encryptedData))
-	stream.XORKeyStream(plaintext, encryptedData)
+	plaintext := make([]byte, len(dataKeyCiphertext))
+	stream.XORKeyStream(plaintext, dataKeyCiphertext)
 
 	return plaintext, nil
 }
@@ -301,6 +302,10 @@ func (m *encryptionMetaManager) Stop() {
 		close(m.stopCh)
 	})
 	m.wg.Wait()
+}
+
+func (m *encryptionMetaManager) Close() {
+	m.Stop()
 }
 
 // refreshLoop periodically refreshes encryption metadata
