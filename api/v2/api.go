@@ -86,6 +86,8 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 
 	verifyTableGroup := v2.Group("/verify_table")
 	verifyTableGroup.POST("", api.VerifyTable)
+	getAllTablesGroup := v2.Group("/get_all_tables")
+	getAllTablesGroup.POST("", api.GetAllTables)
 
 	// processor apis
 	// Note: They are not useful in new arch cdc,
