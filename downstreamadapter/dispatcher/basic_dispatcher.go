@@ -212,23 +212,19 @@ type BasicDispatcher struct {
 
 	inflightBudget inflightBudget
 
-	// pendingBlockEvent is used to defer a DDL block event until all previously enqueued
+	// deferredDDLEvent is used to defer a DDL block event until all previously enqueued
 	// events are flushed.
 	//
 	// This is required when in-flight budget is enabled:
 	// - For cloudstorage/file sinks: avoid "newer schema visible first" causing earlier DML stale-drop.
 	// - For redo sinks: enforce per-dispatcher DDL-after-DML durable order, since DML/DDL are written by
 	//   different writers and may otherwise be persisted out of order.
-	pendingBlockEvent atomic.Pointer[pendingBlockEvent]
+	deferredDDLEvent atomic.Pointer[commonEvent.DDLEvent]
 
 	seq  uint64
 	mode int64
 
 	BootstrapState bootstrapState
-}
-
-type pendingBlockEvent struct {
-	event commonEvent.BlockEvent
 }
 
 func NewBasicDispatcher(
@@ -512,7 +508,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			} else {
 				d.inflightBudget.trackDML(dml, wakeCallback)
 				dml.AddPostFlushFunc(func() {
-					d.trySchedulePendingBlockEvent()
+					d.tryScheduleDeferredDDLEvent()
 				})
 			}
 			dmlEvents = append(dmlEvents, dml)
@@ -556,9 +552,9 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				wakeCallback()
 			})
 			if d.shouldDeferDDLEvent() {
-				d.deferBlockEvent(ddl)
+				d.deferDDLEvent(ddl)
 				// Double-check here to avoid missing the last flush callback due to races.
-				d.trySchedulePendingBlockEvent()
+				d.tryScheduleDeferredDDLEvent()
 				return block
 			}
 			d.DealWithBlockEvent(ddl)
@@ -624,27 +620,27 @@ func (d *BasicDispatcher) shouldDeferDDLEvent() bool {
 	}
 }
 
-func (d *BasicDispatcher) deferBlockEvent(event commonEvent.BlockEvent) {
-	if !d.pendingBlockEvent.CompareAndSwap(nil, &pendingBlockEvent{event: event}) {
+func (d *BasicDispatcher) deferDDLEvent(event *commonEvent.DDLEvent) {
+	if !d.deferredDDLEvent.CompareAndSwap(nil, event) {
 		d.HandleError(errors.ErrDispatcherFailed.GenWithStackByArgs(
-			"defer block event failed: pending block event already exists",
+			"defer block event failed: pending DDL block event already exists",
 		))
 	}
 }
 
-func (d *BasicDispatcher) trySchedulePendingBlockEvent() {
-	pending := d.pendingBlockEvent.Load()
+func (d *BasicDispatcher) tryScheduleDeferredDDLEvent() {
+	pending := d.deferredDDLEvent.Load()
 	if pending == nil {
 		return
 	}
 	if !d.tableProgress.Empty() {
 		return
 	}
-	if !d.pendingBlockEvent.CompareAndSwap(pending, nil) {
+	if !d.deferredDDLEvent.CompareAndSwap(pending, nil) {
 		return
 	}
 	d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
-		d.dealWithBlockEvent(pending.event, false)
+		d.dealWithBlockEvent(pending, false)
 	})
 }
 
@@ -930,7 +926,7 @@ func (d *BasicDispatcher) executeNonBlockingBlockEvent(event commonEvent.BlockEv
 		// (instead of a DML PostFlush), we need to trigger scheduling here to avoid deadlock.
 		if d.inflightBudget.isEnabled() {
 			event.AddPostFlushFunc(func() {
-				d.trySchedulePendingBlockEvent()
+				d.tryScheduleDeferredDDLEvent()
 			})
 		}
 		d.resendTaskMap.Set(identifier, newResendTask(message, d, event.PostFlush))

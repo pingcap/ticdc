@@ -250,7 +250,7 @@ func TestRedoSinkDeferDDLUntilDMLFlushed(t *testing.T) {
 	}
 	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddl)}, wakeCallback)
 	require.True(t, block)
-	require.NotNil(t, dispatcher.pendingBlockEvent.Load())
+	require.NotNil(t, dispatcher.deferredDDLEvent.Load())
 
 	select {
 	case <-wakeCh:
@@ -266,7 +266,7 @@ func TestRedoSinkDeferDDLUntilDMLFlushed(t *testing.T) {
 		require.FailNow(t, "wake callback not called for deferred DDL")
 	}
 	require.Eventually(t, func() bool {
-		return dispatcher.pendingBlockEvent.Load() == nil && dispatcher.tableProgress.Empty()
+		return dispatcher.deferredDDLEvent.Load() == nil && dispatcher.tableProgress.Empty()
 	}, 5*time.Second, 10*time.Millisecond)
 	require.Equal(t, uint64(2), dispatcher.GetCheckpointTs())
 }
@@ -320,7 +320,7 @@ func TestRedoSinkDeferDDLUntilACKClearsTableProgress(t *testing.T) {
 	}
 	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddl2)}, wakeCallback)
 	require.True(t, block)
-	require.NotNil(t, dispatcher.pendingBlockEvent.Load())
+	require.NotNil(t, dispatcher.deferredDDLEvent.Load())
 
 	select {
 	case <-wakeCh:
@@ -344,7 +344,7 @@ func TestRedoSinkDeferDDLUntilACKClearsTableProgress(t *testing.T) {
 		require.FailNow(t, "wake callback not called for deferred DDL2")
 	}
 	require.Eventually(t, func() bool {
-		return dispatcher.pendingBlockEvent.Load() == nil && dispatcher.tableProgress.Empty()
+		return dispatcher.deferredDDLEvent.Load() == nil && dispatcher.tableProgress.Empty()
 	}, 5*time.Second, 10*time.Millisecond)
 	require.Equal(t, uint64(2), dispatcher.GetCheckpointTs())
 }
