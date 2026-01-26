@@ -297,6 +297,7 @@ func (f *fileWorkerGroup) syncWriteFile(egCtx context.Context, file *fileCache) 
 		return err
 	}
 	file.markFlushed()
+
 	bufPtr := &file.data
 	file.data = nil
 	f.pool.Put(bufPtr)
@@ -375,9 +376,6 @@ func (f *fileWorkerGroup) writeToCache(
 
 	if len(f.files) == 0 {
 		file := f.newFileCache(data, rl.GetCommitTs())
-		if err != nil {
-			return err
-		}
 		f.files = append(f.files, file)
 		return nil
 	}
@@ -390,9 +388,6 @@ func (f *fileWorkerGroup) writeToCache(
 		case f.flushCh <- file:
 		}
 		file := f.newFileCache(data, rl.GetCommitTs())
-		if err != nil {
-			return err
-		}
 		f.files = append(f.files, file)
 		return nil
 	}
