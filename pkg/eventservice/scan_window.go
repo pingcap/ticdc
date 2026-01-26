@@ -29,6 +29,7 @@ const (
 	minScanInterval              = 1 * time.Second
 	maxScanInterval              = 30 * time.Minute
 	scanIntervalAdjustCooldown   = 30 * time.Second
+	scanTrendAdjustCooldown      = 5 * time.Second
 	memoryUsageWindowDuration    = 30 * time.Second
 	memoryUsageHighThreshold     = 0.7
 	memoryUsageCriticalThreshold = 0.9
@@ -185,32 +186,34 @@ func (c *changefeedStatus) adjustScanInterval(now time.Time, usage memoryUsageSt
 	}
 
 	const (
-		minTrendSamples            = 4
-		increasingTrendEpsilon     = 0.02
-		increasingTrendStrongDelta = 0.05
+		minTrendSamples           = 4
+		increasingTrendEpsilon    = 0.02
+		increasingTrendStartRatio = 0.3
 	)
 
 	trendDelta := usage.last - usage.first
 	isIncreasing := usage.cnt >= minTrendSamples && trendDelta > increasingTrendEpsilon
+	isAboveTrendStart := usage.last > increasingTrendStartRatio
+	canAdjustOnTrend := now.Sub(c.lastTrendAdjustTime.Load()) >= scanTrendAdjustCooldown
+	shouldDampOnTrend := isAboveTrendStart && isIncreasing && canAdjustOnTrend
 
 	allowedToIncrease := now.Sub(c.lastAdjustTime.Load()) >= scanIntervalAdjustCooldown &&
 		usage.cnt > 0 &&
 		usage.span >= memoryUsageWindowDuration &&
-		!isIncreasing
+		!(isAboveTrendStart && isIncreasing)
 
+	adjustedOnTrend := false
 	newInterval := current
 	switch {
 	case usage.last > memoryUsageCriticalThreshold || usage.max > memoryUsageCriticalThreshold:
 		newInterval = maxDuration(current/4, minScanInterval)
 	case usage.last > memoryUsageHighThreshold || usage.max > memoryUsageHighThreshold:
 		newInterval = maxDuration(current/2, minScanInterval)
-	case isIncreasing && trendDelta >= increasingTrendStrongDelta:
-		// When pressure keeps increasing, it usually indicates downstream can't keep up.
-		// Decrease scan interval proactively to avoid sudden memory quota exhaustion.
-		newInterval = maxDuration(current/2, minScanInterval)
-	case isIncreasing:
-		// Mild damping for increasing pressure.
+	case shouldDampOnTrend:
+		// When pressure is above a safe level and still increasing, it usually indicates
+		// downstream can't keep up. Decrease scan interval gradually to avoid quota exhaustion.
 		newInterval = maxDuration(scaleDuration(current, 9, 10), minScanInterval)
+		adjustedOnTrend = true
 	case allowedToIncrease && usage.max < memoryUsageVeryLowThreshold && usage.avg < memoryUsageVeryLowThreshold:
 		// When memory pressure stays very low for a full window, allow the scan interval
 		// to grow beyond the sync point interval cap, but increase slowly to avoid burst.
@@ -229,6 +232,9 @@ func (c *changefeedStatus) adjustScanInterval(now time.Time, usage memoryUsageSt
 		c.scanInterval.Store(int64(newInterval))
 		metrics.EventServiceScanWindowIntervalGaugeVec.WithLabelValues(c.changefeedID.String()).Set(newInterval.Seconds())
 		c.lastAdjustTime.Store(now)
+		if adjustedOnTrend {
+			c.lastTrendAdjustTime.Store(now)
+		}
 		log.Info("scan interval adjusted",
 			zap.Stringer("changefeedID", c.changefeedID),
 			zap.Duration("oldInterval", current),

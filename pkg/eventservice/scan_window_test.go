@@ -98,21 +98,22 @@ func TestAdjustScanIntervalDecreasesWhenUsageIncreasing(t *testing.T) {
 	status.updateMemoryUsage(now.Add(1*time.Second), 11, 100, 100)
 	status.updateMemoryUsage(now.Add(2*time.Second), 12, 100, 100)
 	status.updateMemoryUsage(now.Add(3*time.Second), 13, 100, 100)
-	require.Equal(t, int64(36*time.Second), status.scanInterval.Load())
+	require.Equal(t, int64(40*time.Second), status.scanInterval.Load())
 }
 
-func TestAdjustScanIntervalDecreasesMoreWhenUsageIncreasingFast(t *testing.T) {
+func TestAdjustScanIntervalDecreasesWhenUsageIncreasingAboveThirtyPercent(t *testing.T) {
 	t.Parallel()
 
 	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"))
 	now := time.Now()
 	status.lastAdjustTime.Store(now)
+	status.lastTrendAdjustTime.Store(now.Add(-scanTrendAdjustCooldown - time.Second))
 
 	status.scanInterval.Store(int64(40 * time.Second))
 
-	status.updateMemoryUsage(now, 10, 100, 100)
-	status.updateMemoryUsage(now.Add(1*time.Second), 20, 100, 100)
-	status.updateMemoryUsage(now.Add(2*time.Second), 30, 100, 100)
-	status.updateMemoryUsage(now.Add(3*time.Second), 40, 100, 100)
-	require.Equal(t, int64(20*time.Second), status.scanInterval.Load())
+	status.updateMemoryUsage(now, 31, 100, 100)
+	status.updateMemoryUsage(now.Add(1*time.Second), 32, 100, 100)
+	status.updateMemoryUsage(now.Add(2*time.Second), 33, 100, 100)
+	status.updateMemoryUsage(now.Add(3*time.Second), 34, 100, 100)
+	require.Equal(t, int64(36*time.Second), status.scanInterval.Load())
 }
