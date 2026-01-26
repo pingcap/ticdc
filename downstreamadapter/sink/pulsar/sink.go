@@ -265,6 +265,11 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 	}
 }
 
+func (s *sink) close() {
+	s.eventChan.Close()
+	s.rowChan.Close()
+}
+
 func (s *sink) sendDMLEvent(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
@@ -280,6 +285,9 @@ func (s *sink) sendDMLEvent(ctx context.Context) error {
 		return s.nonBatchEncodeRun(ctx)
 	})
 	g.Go(func() error {
+		// UnlimitedChannel will block when there is no event, they cannot dirrectly find ctx.Done()
+		// Thus, we need to close the channel when the context is done
+		defer s.close()
 		return s.sendMessages(ctx)
 	})
 	g.Go(func() error {
@@ -385,7 +393,7 @@ func (s *sink) batchEncodeRun(ctx context.Context) error {
 	msgsBuf := make([]*commonEvent.MQRowEvent, batchSize)
 	for {
 		start := time.Now()
-		msgCount, err := s.batch(ctx, msgsBuf, ticker)
+		msgs, err := s.batch(ctx, msgsBuf, ticker)
 		if err != nil {
 			log.Error("pulsar sink batch dml events failed",
 				zap.String("keyspace", s.changefeedID.Keyspace()),
@@ -393,14 +401,13 @@ func (s *sink) batchEncodeRun(ctx context.Context) error {
 				zap.Error(err))
 			return errors.Trace(err)
 		}
-		if msgCount == 0 {
+		if len(msgs) == 0 {
 			continue
 		}
 
-		metricBatchSize.Observe(float64(msgCount))
+		metricBatchSize.Observe(float64(len(msgs)))
 		metricBatchDuration.Observe(time.Since(start).Seconds())
 
-		msgs := msgsBuf[:msgCount]
 		// Group messages by its TopicPartitionKey before adding them to the encoder group.
 		groupedMsgs := s.group(msgs)
 		for key, msg := range groupedMsgs {
@@ -412,54 +419,22 @@ func (s *sink) batchEncodeRun(ctx context.Context) error {
 }
 
 // batch collects a batch of messages from w.msgChan into buffer.
-// It returns the number of messages collected.
 // Note: It will block until at least one message is received.
-func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, ticker *time.Ticker) (int, error) {
-	msgCount := 0
-	maxBatchSize := len(buffer)
+func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, ticker *time.Ticker) ([]*commonEvent.MQRowEvent, error) {
 	// We need to receive at least one message or be interrupted,
 	// otherwise it will lead to idling.
 	select {
 	case <-ctx.Done():
-		return msgCount, ctx.Err()
+		return nil, ctx.Err()
 	default:
-		msg, ok := s.rowChan.Get()
+		msgs, ok := s.rowChan.GetMultipleNoGroup(buffer)
 		if !ok {
 			log.Info("pulsar sink row event channel closed",
 				zap.String("keyspace", s.changefeedID.Keyspace()),
 				zap.String("changefeed", s.changefeedID.Name()))
-			return msgCount, nil
+			return nil, nil
 		}
-
-		buffer[msgCount] = msg
-		msgCount++
-	}
-
-	// Reset the ticker to start a new batching.
-	// We need to stop batching when the interval is reached.
-	ticker.Reset(batchInterval)
-	for {
-		select {
-		case <-ctx.Done():
-			return msgCount, ctx.Err()
-		default:
-			msg, ok := s.rowChan.Get()
-			if !ok {
-				log.Info("pulsar sink row event channel closed",
-					zap.String("keyspace", s.changefeedID.Keyspace()),
-					zap.String("changefeed", s.changefeedID.Name()))
-				return msgCount, nil
-			}
-
-			buffer[msgCount] = msg
-			msgCount++
-
-			if msgCount >= maxBatchSize {
-				return msgCount, nil
-			}
-		case <-ticker.C:
-			return msgCount, nil
-		}
+		return msgs, nil
 	}
 }
 
@@ -549,6 +524,4 @@ func (s *sink) Close(_ bool) {
 	s.dmlProducer.close()
 	s.comp.close()
 	s.statistics.Close()
-	s.eventChan.Close()
-	s.rowChan.Close()
 }
