@@ -103,7 +103,7 @@ func TestChangefeed_IsMQSink(t *testing.T) {
 }
 
 func TestChangefeed_NeedCheckpointMysqlActiveActive(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cfg := config.GetDefaultReplicaConfig()
 	enable := true
 	cfg.EnableActiveActive = &enable
@@ -118,7 +118,7 @@ func TestChangefeed_NeedCheckpointMysqlActiveActive(t *testing.T) {
 }
 
 func TestChangefeed_NeedCheckpointMysqlDisabled(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cfg := config.GetDefaultReplicaConfig()
 	disable := false
 	cfg.EnableActiveActive = &disable

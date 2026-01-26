@@ -271,6 +271,7 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 		// This drop action can be executed multiple times without side effect.
 		// Thus, we execute it before flush ddl event.
 		// Even if after removeTables, cdc crash before flush ddl event, it is safe to removeTables again.
+		// Even if the bdr mode is non primary, we still need to remove the tables from progress table
 		if s.enableActiveActive {
 			err := s.progressTableWriter.RemoveTables(ddl)
 			if err != nil {

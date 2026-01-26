@@ -283,7 +283,7 @@ func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) boo
 		filteredEvents = append(filteredEvents, filtered)
 	}
 	if len(filteredEvents) == 0 {
-		log.Debug("all events all filtered")
+		log.Debug("all events filtered")
 		// Nothing left to flush. Caller will treat this batch as non-blocking.
 		return false
 	}
@@ -481,6 +481,8 @@ func (d *BasicDispatcher) updateDispatcherStatusToWorking() {
 	}
 }
 
+// HandleError will report the error to the error channel in sharedInfo
+// to report the error to maintainer, leading to the reconstruction of the dispatcher manager.
 func (d *BasicDispatcher) HandleError(err error) {
 	select {
 	case d.sharedInfo.errCh <- err:
