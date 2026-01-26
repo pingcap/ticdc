@@ -160,7 +160,7 @@ func (s *dmlSession) maybeQueryActiveActiveSyncStatsLocked(
 	w *Writer,
 	now time.Time,
 	writeTimeout time.Duration,
-	q activeActiveSyncStatsQuerier,
+	conn *sql.Conn,
 ) {
 	if !s.shouldCollectActiveActiveSyncStatsLocked(w, now) {
 		return
@@ -172,7 +172,7 @@ func (s *dmlSession) maybeQueryActiveActiveSyncStatsLocked(
 	ctx, cancel := context.WithTimeout(w.ctx, writeTimeout)
 	defer cancel()
 
-	connID, conflictSkipRows, err := queryActiveActiveSyncStats(ctx, q)
+	connID, conflictSkipRows, err := queryActiveActiveSyncStats(ctx, conn)
 	if err != nil {
 		log.Info("failed to query tidb_cdc_active_active_sync_stats",
 			zap.String("keyspace", w.ChangefeedID.Keyspace()),

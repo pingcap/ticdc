@@ -118,15 +118,11 @@ func (c *ActiveActiveSyncStatsCollector) Close() {
 	metrics.ActiveActiveConflictSkipRowsCounter.DeleteLabelValues(c.keyspace, c.changefeed)
 }
 
-type activeActiveSyncStatsQuerier interface {
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
-
 func queryActiveActiveSyncStats(
 	ctx context.Context,
-	q activeActiveSyncStatsQuerier,
+	conn *sql.Conn,
 ) (uint64, uint64, error) {
-	row := q.QueryRowContext(ctx, selectActiveActiveSyncStatsSQL)
+	row := conn.QueryRowContext(ctx, selectActiveActiveSyncStatsSQL)
 	var (
 		connID int64
 		raw    sql.NullString
