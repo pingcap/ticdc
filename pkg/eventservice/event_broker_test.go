@@ -199,6 +199,8 @@ func TestScanRangeCappedByScanWindow(t *testing.T) {
 	needScan, dataRange := broker.getScanTaskDataRange(disp)
 	require.True(t, needScan)
 	require.Equal(t, oracle.GoTimeToTS(baseTime.Add(defaultScanInterval)), dataRange.CommitTsEnd)
+}
+
 func TestDoScanSkipWhenChangefeedStatusNotFound(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	broker.close()

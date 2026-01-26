@@ -1187,9 +1187,10 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	}
 
 	if newStat.epoch > 1 {
+		now := time.Now()
 		newStat.changefeedStat.scanInterval.Store(int64(defaultScanInterval))
 		metrics.EventServiceScanWindowIntervalGaugeVec.WithLabelValues(changefeedID.String()).Set(defaultScanInterval.Seconds())
-		newStat.changefeedStat.lastAdjustTime.Store(time.Now())
+		newStat.changefeedStat.lastAdjustTime.Store(now)
 	}
 
 	log.Info("reset dispatcher",
@@ -1280,14 +1281,14 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 	c.changefeedMap.Range(func(k, v interface{}) bool {
 		changefeedID := k.(common.ChangeFeedID)
 		changefeed := v.(*changefeedStatus)
-		available, ok := holder[changefeedID.ID()]
+		availableInMsg, ok := holder[changefeedID.ID()]
 		if ok {
-			changefeed.availableMemoryQuota.Store(from, atomic.NewUint64(available))
-			metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(available))
+			changefeed.availableMemoryQuota.Store(from, atomic.NewUint64(availableInMsg))
+			metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(availableInMsg))
 		}
 		if hasUsage {
-			if info, ok := usage[changefeedID.ID()]; ok {
-				changefeed.updateMemoryUsage(now, info.used, info.max)
+			if info, okUsage := usage[changefeedID.ID()]; okUsage && ok {
+				changefeed.updateMemoryUsage(now, info.used, info.max, availableInMsg)
 			}
 		}
 		return true

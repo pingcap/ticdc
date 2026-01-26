@@ -47,6 +47,15 @@ type memoryUsageWindow struct {
 	samples []memoryUsageSample
 }
 
+type memoryUsageStats struct {
+	avg   float64
+	max   float64
+	first float64
+	last  float64
+	span  time.Duration
+	cnt   int
+}
+
 func newMemoryUsageWindow(window time.Duration) *memoryUsageWindow {
 	return &memoryUsageWindow{
 		window: window,
@@ -79,6 +88,35 @@ func (w *memoryUsageWindow) average(now time.Time) float64 {
 	return sum / float64(len(w.samples))
 }
 
+func (w *memoryUsageWindow) stats(now time.Time) memoryUsageStats {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	w.pruneLocked(now)
+	if len(w.samples) == 0 {
+		return memoryUsageStats{}
+	}
+
+	sum := 0.0
+	firstRatio := w.samples[0].ratio
+	maxRatio := firstRatio
+	for _, sample := range w.samples {
+		sum += sample.ratio
+		if sample.ratio > maxRatio {
+			maxRatio = sample.ratio
+		}
+	}
+
+	return memoryUsageStats{
+		avg:   sum / float64(len(w.samples)),
+		max:   maxRatio,
+		first: firstRatio,
+		last:  w.samples[len(w.samples)-1].ratio,
+		span:  now.Sub(w.samples[0].ts),
+		cnt:   len(w.samples),
+	}
+}
+
 func (w *memoryUsageWindow) pruneLocked(now time.Time) {
 	cutoff := now.Add(-w.window)
 	idx := 0
@@ -106,22 +144,37 @@ func (w *memoryUsageWindow) count() int {
 	return len(w.samples)
 }
 
-func (c *changefeedStatus) updateMemoryUsage(now time.Time, used uint64, max uint64) {
+func (c *changefeedStatus) updateMemoryUsage(now time.Time, used uint64, max uint64, available uint64) {
 	if max == 0 || c.usageWindow == nil {
 		return
 	}
 
-	ratio := float64(used) / float64(max)
-	c.usageWindow.addSample(now, ratio)
-	avg := c.usageWindow.average(now)
-	c.adjustScanInterval(now, avg)
-}
-
-func (c *changefeedStatus) adjustScanInterval(now time.Time, avg float64) {
-	if time.Since(c.lastAdjustTime.Load()) < scanIntervalAdjustCooldown {
-		return
+	pressure := float64(used) / float64(max)
+	if pressure < 0 {
+		pressure = 0
+	}
+	if pressure > 1 {
+		pressure = 1
 	}
 
+	availableRatio := float64(available) / float64(max)
+	if availableRatio < 0 {
+		availableRatio = 0
+	}
+	if availableRatio > 1 {
+		availableRatio = 1
+	}
+	pressureFromAvailable := 1 - availableRatio
+	if pressureFromAvailable > pressure {
+		pressure = pressureFromAvailable
+	}
+
+	c.usageWindow.addSample(now, pressure)
+	stats := c.usageWindow.stats(now)
+	c.adjustScanInterval(now, stats)
+}
+
+func (c *changefeedStatus) adjustScanInterval(now time.Time, usage memoryUsageStats) {
 	current := time.Duration(c.scanInterval.Load())
 	if current <= 0 {
 		current = defaultScanInterval
@@ -131,19 +184,45 @@ func (c *changefeedStatus) adjustScanInterval(now time.Time, avg float64) {
 		maxInterval = minScanInterval
 	}
 
+	const (
+		minTrendSamples            = 4
+		increasingTrendEpsilon     = 0.02
+		increasingTrendStrongDelta = 0.05
+	)
+
+	trendDelta := usage.last - usage.first
+	isIncreasing := usage.cnt >= minTrendSamples && trendDelta > increasingTrendEpsilon
+
+	allowedToIncrease := now.Sub(c.lastAdjustTime.Load()) >= scanIntervalAdjustCooldown &&
+		usage.cnt > 0 &&
+		usage.span >= memoryUsageWindowDuration &&
+		!isIncreasing
+
 	newInterval := current
 	switch {
-	case avg > memoryUsageCriticalThreshold:
-		newInterval = minScanInterval
-	case avg > memoryUsageHighThreshold:
+	case usage.last > memoryUsageCriticalThreshold || usage.max > memoryUsageCriticalThreshold:
+		newInterval = maxDuration(current/4, minScanInterval)
+	case usage.last > memoryUsageHighThreshold || usage.max > memoryUsageHighThreshold:
 		newInterval = maxDuration(current/2, minScanInterval)
-	case avg < memoryUsageVeryLowThreshold:
-		// When memory pressure is very low, allow the scan interval to grow beyond
-		// the sync point interval cap.
+	case isIncreasing && trendDelta >= increasingTrendStrongDelta:
+		// When pressure keeps increasing, it usually indicates downstream can't keep up.
+		// Decrease scan interval proactively to avoid sudden memory quota exhaustion.
+		newInterval = maxDuration(current/2, minScanInterval)
+	case isIncreasing:
+		// Mild damping for increasing pressure.
+		newInterval = maxDuration(scaleDuration(current, 9, 10), minScanInterval)
+	case allowedToIncrease && usage.max < memoryUsageVeryLowThreshold && usage.avg < memoryUsageVeryLowThreshold:
+		// When memory pressure stays very low for a full window, allow the scan interval
+		// to grow beyond the sync point interval cap, but increase slowly to avoid burst.
 		maxInterval = maxScanInterval
-		newInterval = minDuration(current*2, maxInterval)
-	case avg < memoryUsageLowThreshold:
-		newInterval = minDuration(current*2, maxInterval)
+		newInterval = minDuration(scaleDuration(current, 3, 2), maxInterval)
+	case allowedToIncrease && usage.max < memoryUsageLowThreshold && usage.avg < memoryUsageLowThreshold:
+		newInterval = minDuration(scaleDuration(current, 5, 4), maxInterval)
+	}
+
+	// Prevent rapid oscillation: always apply decreases immediately, but throttle increases.
+	if newInterval > current && !allowedToIncrease {
+		return
 	}
 
 	if newInterval != current {
@@ -155,7 +234,12 @@ func (c *changefeedStatus) adjustScanInterval(now time.Time, avg float64) {
 			zap.Duration("oldInterval", current),
 			zap.Duration("newInterval", newInterval),
 			zap.Duration("maxInterval", maxInterval),
-			zap.Float64("avgUsage", avg),
+			zap.Float64("avgUsage", usage.avg),
+			zap.Float64("maxUsage", usage.max),
+			zap.Float64("firstUsage", usage.first),
+			zap.Float64("lastUsage", usage.last),
+			zap.Float64("trendDelta", trendDelta),
+			zap.Int("usageSamples", usage.cnt),
 			zap.Bool("syncPointEnabled", c.syncPointEnabled.Load()),
 		)
 	}
@@ -255,4 +339,11 @@ func maxDuration(a time.Duration, b time.Duration) time.Duration {
 		return a
 	}
 	return b
+}
+
+func scaleDuration(d time.Duration, numerator int64, denominator int64) time.Duration {
+	if numerator <= 0 || denominator <= 0 {
+		return d
+	}
+	return time.Duration(int64(d) * numerator / denominator)
 }
