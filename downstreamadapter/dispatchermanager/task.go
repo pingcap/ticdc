@@ -222,6 +222,7 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 	// Step1: close all dispatchers to be merged, calculate the min checkpointTs of the merged dispatcher
 	minCheckpointTs := uint64(math.MaxUint64)
 	closedList := make([]bool, len(t.dispatcherIDs)) // record whether the dispatcher is closed successfully
+	pendingStates := make([]*heartbeatpb.State, len(t.dispatcherIDs))
 	closedCount := 0
 	count := 0
 	for closedCount < len(t.dispatcherIDs) {
@@ -246,6 +247,10 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 				if watermark.CheckpointTs < minCheckpointTs {
 					minCheckpointTs = watermark.CheckpointTs
 				}
+				// Record pending block event status when the source dispatcher is closed successfully.
+				// This is used to derive a safe startTs for merged dispatcher when all source dispatchers
+				// are waiting for the same block event (DDL or syncpoint).
+				pendingStates[idx] = dispatcher.GetBlockEventStatus()
 				closedList[idx] = true
 				closedCount++
 			} else {
@@ -263,59 +268,25 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 		)
 	}
 
-	// Step2: set the minCheckpointTs as the startTs of the merged dispatcher,
+	// Step2: resolve startTs and skip flags for the merged dispatcher,
 	//        set the pd clock currentTs as the currentPDTs of the merged dispatcher,
 	//        change the component status of the merged dispatcher to Initializing
 	//        set dispatcher into dispatcherMap and related field
 	//        notify eventCollector to update the merged dispatcher startTs
-	//
-	// if the sink is mysql, we need to calculate the real startTs of the merged dispatcher based on minCheckpointTs
-	// Here is a example to show why we need to calculate the real startTs:
-	// 1. we have 5 dispatchers of a split-table, and deal with a ts=t1 ddl.
-	// 2. the ddl is flushed in one dispatcher, but not finish passing in other dispatchers.
-	// 3. if we don't calculate the real startTs, the final startTs of the merged dispatcher will be t1-x,
-	//    which will lead to the new dispatcher receive the previous dml and ddl, which is not match the new schema,
-	//    leading to writing downstream failed.
-	// 4. so we need to calculate the real startTs of the merged dispatcher by the tableID based on ddl_ts.
-	//
-	// For redo
-	// We don't need to calculate the true start timestamp (start-ts) because the redo metadata records the minimum checkpoint timestamp and resolved timestamp.
-	// The merger dispatcher operates by first creating a dispatcher and then removing it.
-	// Even if the redo dispatcher’s start-ts is less than that of the common dispatcher, we still record the correct redo metadata log.
-	if common.IsDefaultMode(t.mergedDispatcher.GetMode()) && t.manager.sink.SinkType() == common.MysqlSinkType {
-		newStartTsList, skipSyncpointAtStartTsList, skipDMLAsStartTsList, err := t.manager.sink.(*mysql.Sink).GetTableRecoveryInfo([]int64{t.mergedDispatcher.GetTableSpan().TableID}, []int64{int64(minCheckpointTs)}, false)
-		if err != nil {
-			log.Error("get table recovery info for merge dispatcher failed",
-				zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()),
-				zap.Stringer("changefeedID", t.manager.changefeedID),
-				zap.Error(err),
-			)
-			t.mergedDispatcher.HandleError(err)
-			return
-		}
-		log.Info("get table recovery info for Merge Dispatcher",
-			zap.Stringer("changefeedID", t.manager.changefeedID),
-			zap.Any("receiveStartTs", minCheckpointTs),
-			zap.Any("realStartTs", newStartTsList),
-			zap.Any("skipSyncpointAtStartTsList", skipSyncpointAtStartTsList),
-			zap.Any("skipDMLAsStartTsList", skipDMLAsStartTsList),
-		)
-		t.mergedDispatcher.SetStartTs(uint64(newStartTsList[0]))
-		t.mergedDispatcher.SetSkipSyncpointAtStartTs(skipSyncpointAtStartTsList[0])
-		t.mergedDispatcher.SetSkipDMLAsStartTs(skipDMLAsStartTsList[0])
-	} else {
-		t.mergedDispatcher.SetStartTs(minCheckpointTs)
-	}
+	startTs, skipSyncpointAtStartTs, skipDMLAsStartTs := resolveMergedDispatcherStartTs(t, minCheckpointTs, pendingStates)
+	t.mergedDispatcher.SetStartTs(startTs)
+	t.mergedDispatcher.SetSkipSyncpointAtStartTs(skipSyncpointAtStartTs)
+	t.mergedDispatcher.SetSkipDMLAsStartTs(skipDMLAsStartTs)
 
 	t.mergedDispatcher.SetCurrentPDTs(t.manager.pdClock.CurrentTS())
 	t.mergedDispatcher.SetComponentStatus(heartbeatpb.ComponentState_Initializing)
-	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).CommitAddDispatcher(t.mergedDispatcher, minCheckpointTs)
+	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).CommitAddDispatcher(t.mergedDispatcher, startTs)
 	log.Info("merge dispatcher commit",
 		zap.Stringer("changefeedID", t.manager.changefeedID),
 		zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()),
 		zap.Int64("mode", t.mergedDispatcher.GetMode()),
 		zap.Any("tableSpan", common.FormatTableSpan(t.mergedDispatcher.GetTableSpan())),
-		zap.Uint64("startTs", minCheckpointTs),
+		zap.Uint64("startTs", startTs),
 	)
 
 	// Step3: cancel the merge task
@@ -335,6 +306,153 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 		}
 		dispatcher.Remove()
 	}
+}
+
+type mergedStartTsCandidate struct {
+	startTs                uint64
+	skipSyncpointAtStartTs bool
+	skipDMLAsStartTs       bool
+
+	allSamePending     bool
+	pendingCommitTs    uint64
+	pendingIsSyncPoint bool
+}
+
+func buildMergedStartTsCandidate(minCheckpointTs uint64, pendingStates []*heartbeatpb.State) mergedStartTsCandidate {
+	candidate := mergedStartTsCandidate{
+		startTs:                minCheckpointTs,
+		skipSyncpointAtStartTs: false,
+		skipDMLAsStartTs:       false,
+		allSamePending:         true,
+	}
+
+	if len(pendingStates) == 0 {
+		candidate.allSamePending = false
+		return candidate
+	}
+
+	var pendingCommitTs uint64
+	var pendingIsSyncPoint bool
+	for idx, state := range pendingStates {
+		if state == nil {
+			candidate.allSamePending = false
+			break
+		}
+		if idx == 0 {
+			pendingCommitTs = state.BlockTs
+			pendingIsSyncPoint = state.IsSyncPoint
+			continue
+		}
+		if state.BlockTs != pendingCommitTs || state.IsSyncPoint != pendingIsSyncPoint {
+			candidate.allSamePending = false
+			break
+		}
+	}
+	candidate.pendingCommitTs = pendingCommitTs
+	candidate.pendingIsSyncPoint = pendingIsSyncPoint
+
+	if candidate.allSamePending {
+		if pendingIsSyncPoint {
+			candidate.startTs = pendingCommitTs
+		} else if pendingCommitTs > 0 {
+			candidate.startTs = pendingCommitTs - 1
+			candidate.skipDMLAsStartTs = true
+		}
+	}
+	return candidate
+}
+
+func mergeMergedStartTsCandidateWithMySQLRecovery(t *MergeCheckTask, candidate mergedStartTsCandidate) (uint64, bool, bool) {
+	finalStartTs := candidate.startTs
+	finalSkipSyncpointAtStartTs := candidate.skipSyncpointAtStartTs
+	finalSkipDMLAsStartTs := candidate.skipDMLAsStartTs
+
+	if !common.IsDefaultMode(t.mergedDispatcher.GetMode()) || t.manager.sink.SinkType() != common.MysqlSinkType {
+		return finalStartTs, finalSkipSyncpointAtStartTs, finalSkipDMLAsStartTs
+	}
+
+	newStartTsList, skipSyncpointAtStartTsList, skipDMLAsStartTsList, err := t.manager.sink.(*mysql.Sink).GetTableRecoveryInfo(
+		[]int64{t.mergedDispatcher.GetTableSpan().TableID},
+		[]int64{int64(candidate.startTs)},
+		false,
+	)
+	if err != nil {
+		log.Error("get table recovery info for merge dispatcher failed",
+			zap.Stringer("dispatcherID", t.mergedDispatcher.GetId()),
+			zap.Stringer("changefeedID", t.manager.changefeedID),
+			zap.Error(err),
+		)
+		t.mergedDispatcher.HandleError(err)
+		return finalStartTs, finalSkipSyncpointAtStartTs, finalSkipDMLAsStartTs
+	}
+
+	recoveryStartTs := uint64(newStartTsList[0])
+	recoverySkipSyncpointAtStartTs := skipSyncpointAtStartTsList[0]
+	recoverySkipDMLAsStartTs := skipDMLAsStartTsList[0]
+	if recoveryStartTs > candidate.startTs {
+		finalStartTs = recoveryStartTs
+		finalSkipSyncpointAtStartTs = recoverySkipSyncpointAtStartTs
+		finalSkipDMLAsStartTs = recoverySkipDMLAsStartTs
+	} else if recoveryStartTs == candidate.startTs {
+		finalSkipSyncpointAtStartTs = candidate.skipSyncpointAtStartTs || recoverySkipSyncpointAtStartTs
+		finalSkipDMLAsStartTs = candidate.skipDMLAsStartTs || recoverySkipDMLAsStartTs
+	}
+
+	log.Info("get table recovery info for merge dispatcher",
+		zap.Stringer("changefeedID", t.manager.changefeedID),
+		zap.Uint64("mergeStartTsCandidate", candidate.startTs),
+		zap.Any("recoveryStartTs", newStartTsList),
+		zap.Any("recoverySkipSyncpointAtStartTsList", skipSyncpointAtStartTsList),
+		zap.Any("recoverySkipDMLAsStartTsList", skipDMLAsStartTsList),
+		zap.Uint64("finalStartTs", finalStartTs),
+		zap.Bool("finalSkipSyncpointAtStartTs", finalSkipSyncpointAtStartTs),
+		zap.Bool("finalSkipDMLAsStartTs", finalSkipDMLAsStartTs),
+	)
+
+	return finalStartTs, finalSkipSyncpointAtStartTs, finalSkipDMLAsStartTs
+}
+
+// resolveMergedDispatcherStartTs returns the effective startTs and skip flags for the merged dispatcher.
+//
+// Inputs:
+// - minCheckpointTs: min checkpointTs among all source dispatchers, collected after they are closed.
+// - pendingStates: per-source block state from GetBlockEventStatus() captured at close time.
+//
+// Algorithm:
+//  1. Build a merge candidate from minCheckpointTs.
+//     If all source dispatchers have a non-nil pending block state and they refer to the same (commitTs, isSyncPoint),
+//     adjust the merge candidate so the merged dispatcher can replay that block event safely:
+//     - DDL: startTs = commitTs - 1, skipDMLAsStartTs = true.
+//     - SyncPoint: startTs = commitTs.
+//     The merge candidate always uses skipSyncpointAtStartTs = false.
+//  2. If the sink is MySQL, query downstream ddl_ts recovery info using the merge candidate startTs and merge the results:
+//     - If recoveryStartTs > mergeStartTsCandidate: use recoveryStartTs and its skip flags.
+//     - If recoveryStartTs == mergeStartTsCandidate: OR the skip flags.
+//     - If recoveryStartTs < mergeStartTsCandidate: keep the merge candidate.
+//     If the query fails, the error is reported via mergedDispatcher.HandleError and the merge candidate is returned.
+//
+// For non-MySQL and redo, the merge candidate is the final result.
+func resolveMergedDispatcherStartTs(t *MergeCheckTask, minCheckpointTs uint64, pendingStates []*heartbeatpb.State) (uint64, bool, bool) {
+	candidate := buildMergedStartTsCandidate(minCheckpointTs, pendingStates)
+	if candidate.allSamePending {
+		if !candidate.pendingIsSyncPoint && candidate.pendingCommitTs == 0 {
+			log.Warn("pending ddl has zero commit ts, fallback to min checkpoint ts",
+				zap.Stringer("changefeedID", t.manager.changefeedID),
+				zap.Uint64("minCheckpointTs", minCheckpointTs),
+				zap.Any("mergedDispatcher", t.mergedDispatcher.GetId()))
+		}
+		log.Info("merge dispatcher uses pending block event to calculate start ts",
+			zap.Stringer("changefeedID", t.manager.changefeedID),
+			zap.Any("mergedDispatcher", t.mergedDispatcher.GetId()),
+			zap.Uint64("pendingCommitTs", candidate.pendingCommitTs),
+			zap.Bool("pendingIsSyncPoint", candidate.pendingIsSyncPoint),
+			zap.Uint64("startTs", candidate.startTs),
+			zap.Bool("skipSyncpointAtStartTs", candidate.skipSyncpointAtStartTs),
+			zap.Bool("skipDMLAsStartTs", candidate.skipDMLAsStartTs),
+		)
+	}
+
+	return mergeMergedStartTsCandidateWithMySQLRecovery(t, candidate)
 }
 
 var (

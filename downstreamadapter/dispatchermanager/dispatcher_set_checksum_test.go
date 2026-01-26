@@ -44,7 +44,7 @@ func TestDispatcherSetChecksumWatermarkSuppression(t *testing.T) {
 		actual := manager.computeDispatcherSetChecksum(common.DefaultMode)
 		checksum := actual.ToPB()
 		checksum.Count++
-		manager.ApplyDispatcherSetChecksumUpdate(&heartbeatpb.DispatcherSetChecksumUpdate{
+		manager.ApplyDispatcherSetChecksumUpdate(&heartbeatpb.DispatcherSetChecksumUpdateRequest{
 			Epoch:    1,
 			Mode:     common.DefaultMode,
 			Seq:      1,
@@ -60,7 +60,7 @@ func TestDispatcherSetChecksumWatermarkSuppression(t *testing.T) {
 		manager.ResetDispatcherSetChecksum()
 
 		actual := manager.computeDispatcherSetChecksum(common.DefaultMode)
-		manager.ApplyDispatcherSetChecksumUpdate(&heartbeatpb.DispatcherSetChecksumUpdate{
+		manager.ApplyDispatcherSetChecksumUpdate(&heartbeatpb.DispatcherSetChecksumUpdateRequest{
 			Epoch:    1,
 			Mode:     common.DefaultMode,
 			Seq:      1,
@@ -68,7 +68,7 @@ func TestDispatcherSetChecksumWatermarkSuppression(t *testing.T) {
 		})
 
 		req := manager.aggregateDispatcherHeartbeats(false)
-		require.Equal(t, heartbeatpb.ChecksumState_OK, req.ChecksumState)
+		require.Equal(t, heartbeatpb.ChecksumState_MATCH, req.ChecksumState)
 		require.NotNil(t, req.Watermark)
 	})
 }

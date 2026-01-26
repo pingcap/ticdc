@@ -26,14 +26,14 @@ func TestChecksumStateCaptureMapUpdateIfNewerDropsOldSeq(t *testing.T) {
 	capture := node.ID("capture-1")
 
 	require.True(t, m.UpdateIfNewer(capture, heartbeatpb.ChecksumState_MISMATCH, 2))
-	require.False(t, m.UpdateIfNewer(capture, heartbeatpb.ChecksumState_OK, 1))
+	require.False(t, m.UpdateIfNewer(capture, heartbeatpb.ChecksumState_MATCH, 1))
 
 	state, ok := m.Get(capture)
 	require.True(t, ok)
 	require.Equal(t, heartbeatpb.ChecksumState_MISMATCH, state)
 
-	require.True(t, m.UpdateIfNewer(capture, heartbeatpb.ChecksumState_OK, 3))
+	require.True(t, m.UpdateIfNewer(capture, heartbeatpb.ChecksumState_MATCH, 3))
 	state, ok = m.Get(capture)
 	require.True(t, ok)
-	require.Equal(t, heartbeatpb.ChecksumState_OK, state)
+	require.Equal(t, heartbeatpb.ChecksumState_MATCH, state)
 }

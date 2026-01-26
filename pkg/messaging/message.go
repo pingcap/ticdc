@@ -99,11 +99,11 @@ const (
 	TypeMessageHandShake IOType = 36
 
 	// used to upload changefeed metrics from event store to log coordinator
-	TypeLogCoordinatorChangefeedStates IOType = 37
-	TypeRedoResolvedTsProgressMessage  IOType = 38
-	TypeRedoResolvedTsForwardMessage   IOType = 39
-	TypeDispatcherSetChecksumUpdate    IOType = 40
-	TypeDispatcherSetChecksumAck       IOType = 41
+	TypeLogCoordinatorChangefeedStates     IOType = 37
+	TypeRedoResolvedTsProgressMessage      IOType = 38
+	TypeRedoResolvedTsForwardMessage       IOType = 39
+	TypeDispatcherSetChecksumUpdateRequest IOType = 40
+	TypeDispatcherSetChecksumAckResponse   IOType = 41
 )
 
 func (t IOType) String() string {
@@ -178,11 +178,10 @@ func (t IOType) String() string {
 		return "RedoResolvedTsProgressMessage"
 	case TypeRedoResolvedTsForwardMessage:
 		return "RedoResolvedTsForwardMessage"
-	case TypeDispatcherSetChecksumUpdate:
-		return "DispatcherSetChecksumUpdate"
-	case TypeDispatcherSetChecksumAck:
-		return "DispatcherSetChecksumAck"
-
+	case TypeDispatcherSetChecksumUpdateRequest:
+		return "DispatcherSetChecksumUpdateRequest"
+	case TypeDispatcherSetChecksumAckResponse:
+		return "DispatcherSetChecksumAckResponse"
 	case TypeDispatcherHeartbeatResponse:
 		return "DispatcherHeartbeatResponse"
 	case TypeCongestionControl:
@@ -376,10 +375,10 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 		m = &heartbeatpb.RedoResolvedTsProgressMessage{}
 	case TypeRedoResolvedTsForwardMessage:
 		m = &heartbeatpb.RedoResolvedTsForwardMessage{}
-	case TypeDispatcherSetChecksumUpdate:
-		m = &heartbeatpb.DispatcherSetChecksumUpdate{}
-	case TypeDispatcherSetChecksumAck:
-		m = &heartbeatpb.DispatcherSetChecksumAck{}
+	case TypeDispatcherSetChecksumUpdateRequest:
+		m = &heartbeatpb.DispatcherSetChecksumUpdateRequest{}
+	case TypeDispatcherSetChecksumAckResponse:
+		m = &heartbeatpb.DispatcherSetChecksumAckResponse{}
 	case TypeCongestionControl:
 		m = &commonEvent.CongestionControl{}
 	case TypeMergeDispatcherRequest:
@@ -488,10 +487,10 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		ioType = TypeRedoResolvedTsProgressMessage
 	case *heartbeatpb.RedoResolvedTsForwardMessage:
 		ioType = TypeRedoResolvedTsForwardMessage
-	case *heartbeatpb.DispatcherSetChecksumUpdate:
-		ioType = TypeDispatcherSetChecksumUpdate
-	case *heartbeatpb.DispatcherSetChecksumAck:
-		ioType = TypeDispatcherSetChecksumAck
+	case *heartbeatpb.DispatcherSetChecksumUpdateRequest:
+		ioType = TypeDispatcherSetChecksumUpdateRequest
+	case *heartbeatpb.DispatcherSetChecksumAckResponse:
+		ioType = TypeDispatcherSetChecksumAckResponse
 	case *commonEvent.CongestionControl:
 		ioType = TypeCongestionControl
 	case *heartbeatpb.MergeDispatcherRequest:

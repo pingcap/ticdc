@@ -29,6 +29,11 @@ type dispatcherCreateInfo struct {
 	TableSpan *heartbeatpb.TableSpan
 	StartTs   uint64
 	SchemaID  int64
+	// SkipDMLAsStartTs indicates whether to skip DML events at (StartTs+1).
+	// It is used when a dispatcher is recreated during an in-flight DDL barrier:
+	// we need to replay the DDL by starting from (blockTs-1), while avoiding
+	// potential duplicate DML writes at blockTs.
+	SkipDMLAsStartTs bool
 }
 
 type cleanMap struct {

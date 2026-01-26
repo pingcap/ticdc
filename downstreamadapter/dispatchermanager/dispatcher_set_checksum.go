@@ -68,7 +68,7 @@ type dispatcherSetChecksumState struct {
 //
 // The update is best-effort: it may be resent or reordered, and DispatcherManager will keep the
 // newest seq for each (epoch, mode).
-func (e *DispatcherManager) ApplyDispatcherSetChecksumUpdate(req *heartbeatpb.DispatcherSetChecksumUpdate) {
+func (e *DispatcherManager) ApplyDispatcherSetChecksumUpdate(req *heartbeatpb.DispatcherSetChecksumUpdateRequest) {
 	// DispatcherSetChecksumUpdate can be resent and reordered. For each (epoch, mode), keep the
 	// newest seq to ensure DispatcherManager eventually converges to the latest expected set.
 	if req == nil {
@@ -122,7 +122,7 @@ func (e *DispatcherManager) ResetDispatcherSetChecksum() {
 		e.updateDispatcherSetChecksumGauge(keyspace, changefeed, common.StringMode(common.RedoMode), heartbeatpb.ChecksumState_UNINITIALIZED)
 	} else {
 		// Clear redo gauge to avoid stale non-zero values when redo is not enabled.
-		e.updateDispatcherSetChecksumGauge(keyspace, changefeed, common.StringMode(common.RedoMode), heartbeatpb.ChecksumState_OK)
+		e.updateDispatcherSetChecksumGauge(keyspace, changefeed, common.StringMode(common.RedoMode), heartbeatpb.ChecksumState_MATCH)
 	}
 }
 
@@ -181,13 +181,13 @@ func (e *DispatcherManager) applyChecksumStateToHeartbeat(
 	defaultState, defaultSeq := e.verifyDispatcherSetChecksum(common.DefaultMode, defaultChecksum)
 	msg.ChecksumState = defaultState
 	msg.ChecksumStateSeq = defaultSeq
-	discardDefaultWatermark = defaultState != heartbeatpb.ChecksumState_OK
+	discardDefaultWatermark = defaultState != heartbeatpb.ChecksumState_MATCH
 
 	if e.RedoEnable {
 		redoState, redoSeq := e.verifyDispatcherSetChecksum(common.RedoMode, redoChecksum)
 		msg.RedoChecksumState = redoState
 		msg.RedoChecksumStateSeq = redoSeq
-		discardRedoWatermark = redoState != heartbeatpb.ChecksumState_OK
+		discardRedoWatermark = redoState != heartbeatpb.ChecksumState_MATCH
 	}
 
 	return discardDefaultWatermark, discardRedoWatermark
@@ -196,7 +196,7 @@ func (e *DispatcherManager) applyChecksumStateToHeartbeat(
 // incDispatcherSetChecksumNotOKTotal increments the total counter when watermark reporting is suppressed.
 func (e *DispatcherManager) incDispatcherSetChecksumNotOKTotal(mode int64, state heartbeatpb.ChecksumState) {
 	switch state {
-	case heartbeatpb.ChecksumState_OK:
+	case heartbeatpb.ChecksumState_MATCH:
 		return
 	case heartbeatpb.ChecksumState_MISMATCH:
 		metrics.DispatcherManagerDispatcherSetChecksumNotOKTotal.WithLabelValues(
@@ -280,7 +280,7 @@ func computeChecksumState(expected dispatcherSetChecksumExpected, actual set_che
 	if !actual.Equal(expected.checksum) {
 		return heartbeatpb.ChecksumState_MISMATCH
 	}
-	return heartbeatpb.ChecksumState_OK
+	return heartbeatpb.ChecksumState_MATCH
 }
 
 // updateDispatcherSetChecksumGauge updates the per-capture gauge reflecting the current checksum state.
@@ -297,7 +297,7 @@ func (e *DispatcherManager) updateDispatcherSetChecksumGauge(
 	}
 
 	switch state {
-	case heartbeatpb.ChecksumState_OK:
+	case heartbeatpb.ChecksumState_MATCH:
 		setGauge("mismatch", 0)
 		setGauge("uninitialized", 0)
 	case heartbeatpb.ChecksumState_MISMATCH:
@@ -325,14 +325,14 @@ func updateChecksumRuntime(
 		logInterval = 30 * time.Second
 	)
 
-	if newState == heartbeatpb.ChecksumState_OK {
+	if newState == heartbeatpb.ChecksumState_MATCH {
 		runtime.state = newState
 		runtime.nonOKSince = time.Time{}
 		runtime.lastLogTime = time.Time{}
 		return time.Time{}, false
 	}
 
-	needResetTimer := oldState == heartbeatpb.ChecksumState_OK || oldState != newState
+	needResetTimer := oldState == heartbeatpb.ChecksumState_MATCH || oldState != newState
 	if needResetTimer || runtime.nonOKSince.IsZero() {
 		runtime.nonOKSince = now
 		runtime.lastLogTime = time.Time{}

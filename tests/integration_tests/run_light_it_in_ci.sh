@@ -42,9 +42,9 @@ mysql_groups=(
 	# G04
 	'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
-	'vector simple partition_table fail_over_ddl_F'
+	'vector simple partition_table fail_over_ddl_F conflict_key_generated_column'
 	# G06
-	'http_api http_api_tls fail_over_ddl_G synced_status'
+	'http_api http_api_tls fail_over_ddl_G synced_status same_upstream_downstream'
 	# G07
 	'http_api_tls_with_user_auth fail_over_ddl_H changefeed_update_config synced_status_with_redo'
 	# G08
@@ -57,7 +57,7 @@ mysql_groups=(
 	'kill_owner_with_ddl multi_tables_ddl ddl_attributes multi_cdc_cluster fail_over_ddl_L'
 	# G12
 	# ds_memory_control
-	'row_format tiflash multi_rocks fail_over_ddl_M'
+	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema'
 	# G13
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
 	# G14
@@ -81,7 +81,7 @@ kafka_groups=(
 	# G04
 	'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
-	'vector simple partition_table fail_over_ddl_F'
+	'vector simple partition_table fail_over_ddl_F conflict_key_generated_column'
 	# G06
 	'multi_topics mq_sink_dispatcher fail_over_ddl_G'
 	# G07
@@ -95,7 +95,7 @@ kafka_groups=(
 	# G11
 	'ddl_attributes multi_tables_ddl fail_over_ddl_L'
 	# G12
-	'row_format tiflash multi_rocks fail_over_ddl_M'
+	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema'
 	# G13
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
 	# G14
@@ -119,7 +119,7 @@ pulsar_groups=(
 	# G04
 	'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
-	'vector simple partition_table fail_over_ddl_F'
+	'vector simple partition_table fail_over_ddl_F conflict_key_generated_column'
 	# G06
 	'multi_topics mq_sink_dispatcher fail_over_ddl_G'
 	# G07
@@ -133,7 +133,7 @@ pulsar_groups=(
 	# G11
 	'ddl_attributes multi_tables_ddl fail_over_ddl_L'
 	# G12
-	'row_format tiflash multi_rocks fail_over_ddl_M'
+	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema'
 	# G13
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
 	# G14
@@ -157,7 +157,7 @@ storage_groups=(
 	# G04
 	'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
-	'vector simple partition_table fail_over_ddl_F'
+	'vector simple partition_table fail_over_ddl_F conflict_key_generated_column'
 	# G06
 	'lossy_ddl fail_over_ddl_G'
 	# G07
@@ -171,7 +171,7 @@ storage_groups=(
 	# G11
 	'ddl_attributes multi_tables_ddl fail_over_ddl_L'
 	# G12
-	'row_format tiflash multi_rocks fail_over_ddl_M'
+	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema'
 	# G13
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
 	# G14

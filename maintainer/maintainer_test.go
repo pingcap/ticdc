@@ -90,7 +90,7 @@ func (m *mockDispatcherManager) handleMessage(msg *messaging.TargetMessage) {
 		m.onPostBootstrapRequest(msg)
 	case messaging.TypeScheduleDispatcherRequest:
 		m.onDispatchRequest(msg)
-	case messaging.TypeDispatcherSetChecksumUpdate:
+	case messaging.TypeDispatcherSetChecksumUpdateRequest:
 		m.onDispatcherSetChecksumUpdate(msg)
 	case messaging.TypeMaintainerCloseRequest:
 		m.onMaintainerCloseRequest(msg)
@@ -117,7 +117,7 @@ func (m *mockDispatcherManager) recvMessages(ctx context.Context, msg *messaging
 	case messaging.TypeScheduleDispatcherRequest,
 		messaging.TypeMaintainerBootstrapRequest,
 		messaging.TypeMaintainerPostBootstrapRequest,
-		messaging.TypeDispatcherSetChecksumUpdate,
+		messaging.TypeDispatcherSetChecksumUpdateRequest,
 		messaging.TypeMaintainerCloseRequest:
 		select {
 		case <-ctx.Done():
@@ -132,8 +132,8 @@ func (m *mockDispatcherManager) recvMessages(ctx context.Context, msg *messaging
 }
 
 func (m *mockDispatcherManager) onDispatcherSetChecksumUpdate(msg *messaging.TargetMessage) {
-	req := msg.Message[0].(*heartbeatpb.DispatcherSetChecksumUpdate)
-	ack := &heartbeatpb.DispatcherSetChecksumAck{
+	req := msg.Message[0].(*heartbeatpb.DispatcherSetChecksumUpdateRequest)
+	ack := &heartbeatpb.DispatcherSetChecksumAckResponse{
 		ChangefeedID: req.ChangefeedID,
 		Epoch:        req.Epoch,
 		Mode:         req.Mode,
@@ -244,8 +244,8 @@ func (m *mockDispatcherManager) onDispatchRequest(
 						ResolvedTs:   m.checkpointTs,
 					},
 					Statuses:          []*heartbeatpb.TableSpanStatus{newStatus},
-					ChecksumState:     heartbeatpb.ChecksumState_OK,
-					RedoChecksumState: heartbeatpb.ChecksumState_OK,
+					ChecksumState:     heartbeatpb.ChecksumState_MATCH,
+					RedoChecksumState: heartbeatpb.ChecksumState_MATCH,
 				}
 				m.sendMessages(response)
 			}
@@ -271,8 +271,8 @@ func (m *mockDispatcherManager) sendHeartbeat() {
 				ResolvedTs:   m.checkpointTs,
 			},
 			Statuses:          m.dispatchers,
-			ChecksumState:     heartbeatpb.ChecksumState_OK,
-			RedoChecksumState: heartbeatpb.ChecksumState_OK,
+			ChecksumState:     heartbeatpb.ChecksumState_MATCH,
+			RedoChecksumState: heartbeatpb.ChecksumState_MATCH,
 		}
 		m.checkpointTs++
 		m.sendMessages(response)
@@ -338,7 +338,7 @@ func TestMaintainerSchedule(t *testing.T) {
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[n.ID] = n
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	dispatcherManager := MockDispatcherManager(mc, n.ID)
 
 	wg := &sync.WaitGroup{}

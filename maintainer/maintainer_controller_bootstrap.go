@@ -365,7 +365,7 @@ func (c *Controller) resetAndBuildDispatcherSetChecksumMessages(
 
 func (c *Controller) resetAndBuildChecksumMessages(
 	spanController *span.Controller,
-	checksumManager *captureSetChecksumManager,
+	checksumManager *nodeSetChecksumManager,
 	nodes []node.ID,
 ) []*messaging.TargetMessage {
 	expected := make(map[node.ID][]common.DispatcherID, len(nodes))

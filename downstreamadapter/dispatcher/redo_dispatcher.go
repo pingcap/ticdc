@@ -44,6 +44,7 @@ func NewRedoDispatcher(
 	schemaID int64,
 	schemaIDToDispatchers *SchemaIDToDispatchers,
 	skipSyncpointAtStartTs bool,
+	skipDMLAsStartTs bool,
 	sink sink.Sink,
 	sharedInfo *SharedInfo,
 ) *RedoDispatcher {
@@ -54,7 +55,7 @@ func NewRedoDispatcher(
 		schemaID,
 		schemaIDToDispatchers,
 		skipSyncpointAtStartTs,
-		false, // skipDMLAsStartTs is not needed for redo dispatcher
+		skipDMLAsStartTs,
 		0,
 		common.RedoMode,
 		sink,
@@ -88,7 +89,7 @@ func (rd *RedoDispatcher) GetRedoMeta() *redo.RedoMeta {
 // SetRedoMeta used to init redo meta
 // only for table trigger redo dispatcher
 func (rd *RedoDispatcher) SetRedoMeta(cfg *config.ConsistentConfig) {
-	if !rd.IsTableTriggerEventDispatcher() {
+	if !rd.IsTableTriggerDispatcher() {
 		log.Error("SetRedoMeta should be called by table trigger redo dispatcher", zap.Any("id", rd.GetId()))
 	}
 	ctx := context.Background()

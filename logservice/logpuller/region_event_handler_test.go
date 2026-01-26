@@ -46,7 +46,7 @@ import (
 func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 	// initialize
 	option := dynstream.NewOption()
-	ds := dynstream.NewParallelDynamicStream(&regionEventHandler{}, option)
+	ds := dynstream.NewParallelDynamicStream("test", &regionEventHandler{}, option)
 	ds.Start()
 
 	span := heartbeatpb.TableSpan{
@@ -104,7 +104,7 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 			},
 		}
 		regionEvent := regionEvent{
-			state:   state,
+			states:  []*regionFeedState{state},
 			entries: events,
 		}
 		ds.Push(subID, regionEvent)
@@ -124,7 +124,7 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 			},
 		}
 		regionEvent := regionEvent{
-			state:   state,
+			states:  []*regionFeedState{state},
 			entries: events,
 		}
 		ds.Push(subID, regionEvent)
@@ -154,7 +154,7 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 			},
 		}
 		regionEvent := regionEvent{
-			state:   state,
+			states:  []*regionFeedState{state},
 			entries: events,
 		}
 		ds.Push(subID, regionEvent)
@@ -181,7 +181,7 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 			},
 		}
 		regionEvent := regionEvent{
-			state:   state,
+			states:  []*regionFeedState{state},
 			entries: events,
 		}
 		ds.Push(subID, regionEvent)
@@ -204,7 +204,7 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 func TestHandleResolvedTs(t *testing.T) {
 	// initialize
 	option := dynstream.NewOption()
-	ds := dynstream.NewParallelDynamicStream(&regionEventHandler{}, option)
+	ds := dynstream.NewParallelDynamicStream("test", &regionEventHandler{}, option)
 	ds.Start()
 
 	consumeKVEvents := func(events []common.RawKVEntry, _ func()) bool { return false } // not used
@@ -289,22 +289,22 @@ func TestHandleResolvedTs(t *testing.T) {
 
 	{
 		regionEvent := regionEvent{
-			state:      state1,
 			resolvedTs: 10,
+			states:     []*regionFeedState{state1},
 		}
 		ds.Push(subID1, regionEvent)
 	}
 	{
 		regionEvent := regionEvent{
-			state:      state2,
 			resolvedTs: 10,
+			states:     []*regionFeedState{state2},
 		}
 		ds.Push(subID2, regionEvent)
 	}
 	{
 		regionEvent := regionEvent{
-			state:      state3,
 			resolvedTs: 10,
+			states:     []*regionFeedState{state3},
 		}
 		ds.Push(subID3, regionEvent)
 	}

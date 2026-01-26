@@ -193,6 +193,10 @@ func (r *SpanReplication) UpdateBlockState(newState heartbeatpb.State) {
 	r.blockState.Store(&newState)
 }
 
+func (r *SpanReplication) GetBlockState() *heartbeatpb.State {
+	return r.blockState.Load()
+}
+
 func (r *SpanReplication) GetSchemaID() int64 {
 	return r.schemaID
 }
@@ -229,16 +233,44 @@ func (r *SpanReplication) GetGroupID() replica.GroupID {
 }
 
 func (r *SpanReplication) NewAddDispatcherMessage(server node.ID) *messaging.TargetMessage {
+	startTs := r.status.Load().CheckpointTs
+	skipDMLAsStartTs := false
+	if state := r.blockState.Load(); state != nil && state.IsBlocked &&
+		(state.Stage == heartbeatpb.BlockStage_WAITING || state.Stage == heartbeatpb.BlockStage_WRITING) && state.BlockTs > 0 {
+		if state.IsSyncPoint {
+			// When a syncpoint is in-flight (WAITING/WRITING), the maintainer will force the span checkpoint to BlockTs-1
+			// when handling block status. If we start a moved/recreated dispatcher from that forced checkpoint, it may re-scan
+			// and re-apply events with commitTs <= BlockTs, which can race with the syncpoint write and corrupt the snapshot
+			// semantics of that syncpoint. Starting from BlockTs avoids replaying those events, and is safe because the
+			// dispatcher can only enter the syncpoint barrier after all events with commitTs <= BlockTs have been pushed
+			// downstream.
+			if state.BlockTs > startTs {
+				startTs = state.BlockTs
+			}
+		} else {
+			// For an in-flight DDL barrier, a recreated dispatcher must start from (blockTs-1) so that it can
+			// replay the DDL at blockTs. At the same time, it should skip DML events at blockTs to avoid potential
+			// duplicate DML writes when the dispatcher is moved/recreated during the barrier.
+			blockTsMinusOne := state.BlockTs - 1
+			if blockTsMinusOne > startTs {
+				startTs = blockTsMinusOne
+			}
+			if startTs+1 == state.BlockTs {
+				skipDMLAsStartTs = true
+			}
+		}
+	}
 	return messaging.NewSingleTargetMessage(server,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.ScheduleDispatcherRequest{
 			ChangefeedID: r.ChangefeedID.ToPB(),
 			Config: &heartbeatpb.DispatcherConfig{
-				DispatcherID: r.ID.ToPB(),
-				SchemaID:     r.schemaID,
-				Span:         r.Span,
-				StartTs:      r.status.Load().CheckpointTs,
-				Mode:         r.GetMode(),
+				DispatcherID:     r.ID.ToPB(),
+				SchemaID:         r.schemaID,
+				Span:             r.Span,
+				StartTs:          startTs,
+				SkipDMLAsStartTs: skipDMLAsStartTs,
+				Mode:             r.GetMode(),
 			},
 			ScheduleAction: heartbeatpb.ScheduleAction_Create,
 		})

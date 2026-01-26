@@ -100,10 +100,12 @@ func (q *eventQueue[A, P, T, D, H]) wakePath(path *pathInfo[A, P, T, D, H]) {
 	}
 }
 
-func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, D, H]) {
+func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, D, H], int) {
 	// Append the event to the buffer
+	var totalBytes int
 	appendToBuf := func(event *eventWrap[A, P, T, D, H], path *pathInfo[A, P, T, D, H]) {
 		buf = append(buf, event.event)
+		totalBytes += event.eventSize
 		path.popEvent()
 	}
 
@@ -111,7 +113,7 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, 
 		// We are going to update the signal directly, so we need the reference.
 		signal, ok := q.signalQueue.FrontRef()
 		if !ok {
-			return buf, nil
+			return buf, nil, totalBytes
 		}
 
 		path := signal.pathInfo
@@ -167,6 +169,6 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, 
 		}
 		q.totalPendingLength.Add(-int64(count))
 
-		return buf, path
+		return buf, path, totalBytes
 	}
 }
