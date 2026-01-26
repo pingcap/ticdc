@@ -46,7 +46,7 @@ func (c component) close() {
 		c.topicManager.Close()
 	}
 	if c.client != nil {
-		go c.client.Close()
+		c.client.Close()
 	}
 }
 
@@ -78,6 +78,11 @@ func newPulsarSinkComponentWithFactory(ctx context.Context,
 	protocol, err := helper.GetProtocol(putil.GetOrZero(sinkConfig.Protocol))
 	if err != nil {
 		return pulsarComponent, config.ProtocolUnknown, errors.Trace(err)
+	}
+	if !config.IsPulsarSupportedProtocols(protocol) {
+		return pulsarComponent, protocol, errors.ErrSinkURIInvalid.
+			GenWithStackByArgs("unsupported protocol, " +
+				"pulsar sink currently only support these protocols: [canal-json]")
 	}
 
 	pulsarComponent.config, err = pulsar.NewPulsarConfig(sinkURI, sinkConfig.PulsarConfig)

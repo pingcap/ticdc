@@ -62,6 +62,8 @@ type dmlProducers struct {
 	// failpointCh is used to inject failpoints to the run loop.
 	// Only used in test.
 	failpointCh chan error
+	// closeCh is send error
+	errChan chan error
 }
 
 // newDMLProducers creates a new pulsar producer.
@@ -104,6 +106,7 @@ func newDMLProducers(
 		producers:    producers,
 		closed:       false,
 		failpointCh:  failpointCh,
+		errChan:      make(chan error, 1),
 	}
 	log.Info("Pulsar DML producer created", zap.Stringer("changefeed", p.changefeedID),
 		zap.Duration("duration", time.Since(start)))
@@ -117,6 +120,8 @@ func (p *dmlProducers) run(ctx context.Context) error {
 			return ctx.Err()
 		case err := <-p.failpointCh:
 			return errors.Trace(err)
+		case err := <-p.errChan:
+			return errors.Trace(err)
 		}
 	}
 }
@@ -125,8 +130,6 @@ func (p *dmlProducers) run(ctx context.Context) error {
 func (p *dmlProducers) asyncSendMessage(
 	ctx context.Context, topic string, message *common.Message,
 ) error {
-	// wrapperSchemaAndTopic(message)
-
 	// We have to hold the lock to avoid writing to a closed producer.
 	// Close may be blocked for a long time.
 	p.closedMu.RLock()
@@ -173,9 +176,8 @@ func (p *dmlProducers) asyncSendMessage(
 				select {
 				case <-ctx.Done():
 					return
+				case p.errChan <- e:
 				default:
-					if e != nil {
-					}
 					log.Warn("Error channel is full in pulsar DML producer",
 						zap.Stringer("changefeed", p.changefeedID), zap.Error(e))
 				}
@@ -247,37 +249,3 @@ func (p *dmlProducers) getProducerByTopic(topicName string) (producer pulsar.Pro
 
 	return producer, nil
 }
-
-// wrapperSchemaAndTopic wrapper schema and topic
-// func wrapperSchemaAndTopic(m *common.Message) {
-// 	if m.Schema == nil {
-// 		if m.Protocol == config.ProtocolMaxwell {
-// 			mx := &maxwellMessage{}
-// 			err := json.Unmarshal(m.Value, mx)
-// 			if err != nil {
-// 				log.Error("unmarshal maxwell message failed", zap.Error(err))
-// 				return
-// 			}
-// 			if len(mx.Database) > 0 {
-// 				m.Schema = &mx.Database
-// 			}
-// 			if len(mx.Table) > 0 {
-// 				m.Table = &mx.Table
-// 			}
-// 		}
-// 		if m.Protocol == config.ProtocolCanal { // canal protocol set multi schemas in one topic
-// 			m.Schema = str2Pointer("multi_schema")
-// 		}
-// 	}
-// }
-
-// // maxwellMessage is the message format of maxwell
-// type maxwellMessage struct {
-// 	Database string `json:"database"`
-// 	Table    string `json:"table"`
-// }
-
-// // str2Pointer returns the pointer of the string.
-// func str2Pointer(str string) *string {
-// 	return &str
-// }

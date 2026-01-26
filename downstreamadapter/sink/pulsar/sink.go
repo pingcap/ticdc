@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -49,8 +50,8 @@ type sink struct {
 
 	tableSchemaStore *commonEvent.TableSchemaStore
 	checkpointTsChan chan uint64
-	eventChan        chan *commonEvent.DMLEvent
-	rowChan          chan *commonEvent.MQRowEvent
+	eventChan        *chann.UnlimitedChannel[*commonEvent.DMLEvent, any]
+	rowChan          *chann.UnlimitedChannel[*commonEvent.MQRowEvent, any]
 }
 
 func (s *sink) SinkType() commonType.SinkType {
@@ -94,8 +95,8 @@ func New(
 		ddlProducer:  ddlProducer,
 
 		checkpointTsChan: make(chan uint64, 16),
-		eventChan:        make(chan *commonEvent.DMLEvent, 32),
-		rowChan:          make(chan *commonEvent.MQRowEvent, 32),
+		eventChan:        chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
+		rowChan:          chann.NewUnlimitedChannelDefault[*commonEvent.MQRowEvent](),
 
 		protocol:      protocol,
 		partitionRule: helper.GetDDLDispatchRule(protocol),
@@ -124,7 +125,7 @@ func (s *sink) IsNormal() bool {
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	s.eventChan <- event
+	s.eventChan.Push(event)
 }
 
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
@@ -292,7 +293,14 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
-		case event := <-s.eventChan:
+		default:
+			event, ok := s.eventChan.Get()
+			if !ok {
+				log.Info("pulsar sink event channel closed",
+					zap.String("keyspace", s.changefeedID.Keyspace()),
+					zap.String("changefeed", s.changefeedID.Name()))
+				return nil
+			}
 			schema := event.TableInfo.GetSchemaName()
 			table := event.TableInfo.GetTableName()
 			topic := s.comp.eventRouter.GetTopicForRowChange(schema, table)
@@ -348,7 +356,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 						Checksum:        row.Checksum,
 					},
 				}
-				s.rowChan <- mqEvent
+				s.rowChan.Push(mqEvent)
 			}
 		}
 	}
@@ -414,7 +422,8 @@ func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, tick
 	select {
 	case <-ctx.Done():
 		return msgCount, ctx.Err()
-	case msg, ok := <-s.rowChan:
+	default:
+		msg, ok := s.rowChan.Get()
 		if !ok {
 			log.Info("pulsar sink row event channel closed",
 				zap.String("keyspace", s.changefeedID.Keyspace()),
@@ -433,7 +442,8 @@ func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, tick
 		select {
 		case <-ctx.Done():
 			return msgCount, ctx.Err()
-		case msg, ok := <-s.rowChan:
+		default:
+			msg, ok := s.rowChan.Get()
 			if !ok {
 				log.Info("pulsar sink row event channel closed",
 					zap.String("keyspace", s.changefeedID.Keyspace()),
@@ -471,7 +481,8 @@ func (s *sink) nonBatchEncodeRun(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
-		case event, ok := <-s.rowChan:
+		default:
+			event, ok := s.rowChan.Get()
 			if !ok {
 				log.Info("pulsar sink row event channel closed",
 					zap.String("keyspace", s.changefeedID.Keyspace()),
