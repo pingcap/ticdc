@@ -123,7 +123,7 @@ func (m *gcManager) TryUpdateServiceGCSafepoint(
 	}
 
 	if checkpointTs < minServiceGCSafepoint {
-		log.Warn("update gc safe point failed, the checkpointTs is smaller than the minimum service-gc-safepoint",
+		log.Warn("update gc safe point failed, the checkpointTs is smaller than the minimum service gc safepoint",
 			zap.Uint64("minServiceGCSafepoint", minServiceGCSafepoint), zap.Uint64("checkpointTs", checkpointTs),
 			zap.String("serviceID", m.gcServiceID))
 		if !forceUpdate {
