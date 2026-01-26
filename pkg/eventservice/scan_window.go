@@ -117,10 +117,9 @@ func (c *changefeedStatus) updateMemoryUsage(now time.Time, used uint64, max uin
 }
 
 func (c *changefeedStatus) adjustScanInterval(now time.Time, avg float64) {
-	log.Info("fizz enter adjust scan interval",
-		zap.Stringer("changefeedID", c.changefeedID),
-		zap.Float64("avgUsage", avg),
-	)
+	if time.Since(c.lastAdjustTime.Load()) < scanIntervalAdjustCooldown {
+		return
+	}
 
 	current := time.Duration(c.scanInterval.Load())
 	if current <= 0 {
@@ -204,8 +203,6 @@ func (c *changefeedStatus) getScanMaxTs() uint64 {
 	if interval <= 0 {
 		interval = defaultScanInterval
 	}
-
-	//interval = defaultScanInterval
 
 	return oracle.GoTimeToTS(oracle.GetTimeFromTS(baseTs).Add(interval))
 }
