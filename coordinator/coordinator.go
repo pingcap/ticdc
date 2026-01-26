@@ -294,7 +294,7 @@ func (c *coordinator) handleStateChange(
 // checkStaleCheckpointTs checks if the checkpointTs is stale, if it is, it will send a state change event to the stateChangedCh
 func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, changefeed *changefeed.Changefeed, reportedCheckpointTs uint64) {
 	id := changefeed.ID
-	err := c.gcManager.CheckStaleCheckpointTs(ctx, changefeed.GetKeyspaceID(), id, reportedCheckpointTs)
+	err := c.gcManager.CheckStaleCheckpointTs(changefeed.GetKeyspaceID(), id, reportedCheckpointTs)
 	if err == nil {
 		return
 	}
@@ -437,7 +437,7 @@ func (c *coordinator) updateGlobalGcSafepoint(ctx context.Context, force bool) e
 	// (checkpointTs - 1) from TiKV, so (checkpointTs - 1) should be an upper
 	// bound for the GC safepoint.
 	gcSafepointUpperBound := minCheckpointTs - 1
-	err := c.gcManager.TryUpdateGCSafePoint(ctx, gcSafepointUpperBound, force)
+	err := c.gcManager.TryUpdateServiceGCSafepoint(ctx, gcSafepointUpperBound, force)
 	return errors.Trace(err)
 }
 
