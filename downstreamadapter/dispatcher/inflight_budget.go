@@ -42,6 +42,10 @@ type inflightBudget struct {
 	blocked   atomic.Bool
 	blockedAt atomic.Int64
 
+	// dmlProgress tracks in-flight DML events only.
+	// It's used for commitTs-based DDL deferral when in-flight budget is enabled.
+	dmlProgress *TableProgress
+
 	changefeedID common.ChangeFeedID
 	dispatcherID common.DispatcherID
 
@@ -72,6 +76,7 @@ func newInflightBudget(
 		changefeedID: changefeedID,
 		dispatcherID: dispatcherID,
 		multiplier:   inflightBytesMultiplier,
+		dmlProgress:  NewTableProgress(),
 
 		inflightBudgetBlockDuration: metrics.AsyncSinkInflightBudgetBlockedDuration.
 			WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), sinkType.String()),
@@ -92,6 +97,7 @@ func (b *inflightBudget) trackDML(dml *commonEvent.DMLEvent, wakeCallback func()
 	if !b.enabled {
 		return
 	}
+	b.dmlProgress.Add(dml)
 	effectiveBytes := dml.GetSize() * b.multiplier
 	b.inflight.Add(effectiveBytes)
 	dml.AddPostFlushFunc(func() {
@@ -120,6 +126,19 @@ func (b *inflightBudget) trackDML(dml *commonEvent.DMLEvent, wakeCallback func()
 			}
 		}
 	})
+}
+
+func (b *inflightBudget) hasInflightDMLBeforeCommitTs(commitTs uint64) bool {
+	if !b.enabled || b.dmlProgress == nil {
+		return false
+	}
+	checkpointTs, isEmpty := b.dmlProgress.GetCheckpointTs()
+	if isEmpty {
+		return false
+	}
+	// When dmlProgress is not empty, its checkpoint is (earliestUnflushedCommitTs - 1).
+	earliestUnflushedCommitTs := checkpointTs + 1
+	return earliestUnflushedCommitTs < commitTs
 }
 
 // tryBlock returns true if the caller should block the dynstream path due to exceeding high watermark.

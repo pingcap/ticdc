@@ -173,10 +173,6 @@ type BasicDispatcher struct {
 	// tableProgress is used to calculate the checkpointTs of the dispatcher
 	tableProgress *TableProgress
 
-	// dmlProgress tracks in-flight DML events only.
-	// It's used for commitTs-based DDL deferral when in-flight budget is enabled.
-	dmlProgress *TableProgress
-
 	// resendTaskMap is store all the resend task of ddl/sync point event current.
 	// When we meet a block event that need to report to maintainer, we will create a resend task and store it in the map(avoid message lost)
 	// When we receive the ack from maintainer, we will cancel the resend task.
@@ -267,9 +263,6 @@ func NewBasicDispatcher(
 		mode:                   mode,
 		BootstrapState:         BootstrapFinished,
 	}
-	if dispatcher.inflightBudget.isEnabled() {
-		dispatcher.dmlProgress = NewTableProgress()
-	}
 
 	return dispatcher
 }
@@ -301,9 +294,6 @@ func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) {
 	// because we need to ensure the wakeCallback only will be called when
 	// all these events are flushed to downstream successfully
 	for _, event := range events {
-		if d.dmlProgress != nil {
-			d.dmlProgress.Add(event)
-		}
 		d.tableProgress.Add(event)
 	}
 	for _, event := range events {
@@ -620,27 +610,8 @@ func (d *BasicDispatcher) shouldDeferDDLEvent(ddlCommitTs uint64) bool {
 	if !d.inflightBudget.isEnabled() {
 		return false
 	}
-	switch d.sink.SinkType() {
-	case common.CloudStorageSinkType, common.RedoSinkType:
-		return d.hasInflightDMLEventsBeforeCommitTs(ddlCommitTs)
-	default:
-		// Other sinks always have await=true for DML batches, so a DDL cannot be executed
-		// while earlier DML is still in-flight for the same dispatcher.
-		return false
-	}
-}
-
-func (d *BasicDispatcher) hasInflightDMLEventsBeforeCommitTs(commitTs uint64) bool {
-	if d.dmlProgress == nil {
-		return false
-	}
-	checkpointTs, isEmpty := d.dmlProgress.GetCheckpointTs()
-	if isEmpty {
-		return false
-	}
-	// When dmlProgress is not empty, its checkpoint is (earliestUnflushedCommitTs - 1).
-	earliestUnflushedCommitTs := checkpointTs + 1
-	return earliestUnflushedCommitTs < commitTs
+	// inflightBudget is enabled only for CloudStorage/Redo sinks.
+	return d.inflightBudget.hasInflightDMLBeforeCommitTs(ddlCommitTs)
 }
 
 func (d *BasicDispatcher) deferDDLEvent(event *commonEvent.DDLEvent) {
@@ -656,7 +627,7 @@ func (d *BasicDispatcher) tryScheduleDeferredDDLEvent() {
 	if pending == nil {
 		return
 	}
-	if d.hasInflightDMLEventsBeforeCommitTs(pending.GetCommitTs()) {
+	if d.inflightBudget.hasInflightDMLBeforeCommitTs(pending.GetCommitTs()) {
 		return
 	}
 	if !d.deferredDDLEvent.CompareAndSwap(pending, nil) {
