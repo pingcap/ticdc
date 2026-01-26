@@ -51,6 +51,7 @@ type inflightBudget struct {
 
 	inflightBudgetBlockDuration prometheus.Observer
 	inflightBudgetBlockedCount  prometheus.Gauge
+	inflightBudgetBytes         prometheus.Gauge
 }
 
 // noCopy is used to help `go vet` detect accidental copies of structs containing atomics.
@@ -78,9 +79,11 @@ func newInflightBudget(
 		multiplier:   inflightBytesMultiplier,
 		dmlProgress:  NewTableProgress(),
 
-		inflightBudgetBlockDuration: metrics.AsyncSinkInflightBudgetBlockedDuration.
+		inflightBudgetBlockDuration: metrics.InflightBudgetBlockedDurationHist.
 			WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), sinkType.String()),
-		inflightBudgetBlockedCount: metrics.AsyncSinkInflightBudgetBlockedDispatcherCount.
+		inflightBudgetBlockedCount: metrics.InflightBudgetBlockedDispatcherCountGauge.
+			WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), sinkType.String()),
+		inflightBudgetBytes: metrics.InflightBudgetUnflushedBytesGauage.
 			WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), sinkType.String()),
 	}
 }
@@ -100,8 +103,10 @@ func (b *inflightBudget) trackDML(dml *commonEvent.DMLEvent, wakeCallback func()
 	b.dmlProgress.Add(dml)
 	effectiveBytes := dml.GetSize() * b.multiplier
 	b.inflight.Add(effectiveBytes)
+	b.inflightBudgetBytes.Add(float64(effectiveBytes))
 	dml.AddPostFlushFunc(func() {
 		inFlightBytes := b.inflight.Add(-effectiveBytes)
+		b.inflightBudgetBytes.Sub(float64(effectiveBytes))
 		if inFlightBytes < 0 {
 			log.Warn("inflight bytes underflow",
 				zap.Stringer("changefeedID", b.changefeedID),
@@ -165,6 +170,8 @@ func (b *inflightBudget) cleanup() {
 	if !b.enabled {
 		return
 	}
+
+	b.inflightBudgetBytes.Sub(float64(b.inflight.Load()))
 	if !b.blocked.CompareAndSwap(true, false) {
 		return
 	}
