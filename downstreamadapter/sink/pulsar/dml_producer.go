@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/apache/pulsar-client-go/pulsar"
+	pulsarClient "github.com/apache/pulsar-client-go/pulsar"
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
@@ -26,7 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	pulsarPkg "github.com/pingcap/ticdc/pkg/sink/pulsar"
+	"github.com/pingcap/ticdc/pkg/sink/pulsar"
 	"go.uber.org/zap"
 )
 
@@ -90,7 +90,7 @@ func newDMLProducers(
 
 	producers, err := lru.NewWithEvict(producerCacheSize, func(key interface{}, value interface{}) {
 		// this is call when lru Remove producer or auto remove producer
-		pulsarProducer, ok := value.(pulsar.Producer)
+		pulsarProducer, ok := value.(pulsarClient.Producer)
 		if ok && pulsarProducer != nil {
 			pulsarProducer.Close()
 		}
@@ -148,7 +148,7 @@ func (p *dmlProducers) asyncSendMessage(
 		p.failpointCh <- errors.New("pulsar sink injected error")
 		failpoint.Return(nil)
 	})
-	data := &pulsar.ProducerMessage{
+	data := &pulsarClient.ProducerMessage{
 		Payload: message.Value,
 		Key:     message.GetPartitionKey(),
 	}
@@ -161,7 +161,7 @@ func (p *dmlProducers) asyncSendMessage(
 	// if for stress test record , add count to message callback function
 
 	producer.SendAsync(ctx, data,
-		func(id pulsar.MessageID, m *pulsar.ProducerMessage, err error) {
+		func(id pulsarClient.MessageID, m *pulsarClient.ProducerMessage, err error) {
 			// fail
 			if err != nil {
 				e := errors.WrapError(errors.ErrPulsarAsyncSendMessage, err)
@@ -171,7 +171,7 @@ func (p *dmlProducers) asyncSendMessage(
 					zap.Int("messageSize", len(m.Payload)),
 					zap.String("topic", topic),
 					zap.Error(err))
-				pulsarPkg.IncPublishedDMLFail(topic, p.changefeedID.String())
+				pulsar.IncPublishedDMLFail(topic, p.changefeedID.String())
 				// use this select to avoid send error to a closed channel
 				// the ctx will always be called before the errChan is closed
 				select {
@@ -185,11 +185,11 @@ func (p *dmlProducers) asyncSendMessage(
 			} else if message.Callback != nil {
 				// success
 				message.Callback()
-				pulsarPkg.IncPublishedDMLSuccess(topic, p.changefeedID.String())
+				pulsar.IncPublishedDMLSuccess(topic, p.changefeedID.String())
 			}
 		})
 
-	pulsarPkg.IncPublishedDMLCount(topic, p.changefeedID.String())
+	pulsar.IncPublishedDMLCount(topic, p.changefeedID.String())
 
 	return nil
 }
@@ -220,10 +220,10 @@ func (p *dmlProducers) close() { // We have to hold the lock to synchronize clos
 	}
 }
 
-func (p *dmlProducers) getProducer(topic string) (pulsar.Producer, bool) {
+func (p *dmlProducers) getProducer(topic string) (pulsarClient.Producer, bool) {
 	target, ok := p.producers.Get(topic)
 	if ok {
-		producer, ok := target.(pulsar.Producer)
+		producer, ok := target.(pulsarClient.Producer)
 		if ok {
 			return producer, true
 		}
@@ -234,7 +234,7 @@ func (p *dmlProducers) getProducer(topic string) (pulsar.Producer, bool) {
 // getProducerByTopic get producer by topicName,
 // if not exist, it will create a producer with topicName, and set in LRU cache
 // more meta info at dmlProducers's producers
-func (p *dmlProducers) getProducerByTopic(topicName string) (producer pulsar.Producer, err error) {
+func (p *dmlProducers) getProducerByTopic(topicName string) (producer pulsarClient.Producer, err error) {
 	getProducer, ok := p.getProducer(topicName)
 	if ok && getProducer != nil {
 		return getProducer, nil

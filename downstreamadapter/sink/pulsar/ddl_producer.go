@@ -17,14 +17,14 @@ import (
 	"context"
 	"sync"
 
-	"github.com/apache/pulsar-client-go/pulsar"
+	pulsarClient "github.com/apache/pulsar-client-go/pulsar"
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	pulsarPkg "github.com/pingcap/ticdc/pkg/sink/pulsar"
+	"github.com/pingcap/ticdc/pkg/sink/pulsar"
 	"go.uber.org/zap"
 )
 
@@ -75,7 +75,7 @@ func newDDLProducers(
 
 	producers, err := lru.NewWithEvict(producerCacheSize, func(key interface{}, value interface{}) {
 		// remove producer
-		pulsarProducer, ok := value.(pulsar.Producer)
+		pulsarProducer, ok := value.(pulsarClient.Producer)
 		if ok && pulsarProducer != nil {
 			pulsarProducer.Close()
 		}
@@ -105,35 +105,35 @@ func (p *ddlProducers) syncBroadcastMessage(ctx context.Context, topic string, m
 // SyncSendMessage sends a message
 // partitionNum is not used, pulsar consume all partitions
 func (p *ddlProducers) syncSendMessage(ctx context.Context, topic string, message *common.Message, messageType common.MessageType) error {
-	pulsarPkg.IncPublishedDDLCount(topic, p.changefeedID.String(), messageType)
+	pulsar.IncPublishedDDLCount(topic, p.changefeedID.String(), messageType)
 	producer, err := p.getProducerByTopic(topic)
 	if err != nil {
 		log.Error("ddl SyncSendMessage GetProducerByTopic fail", zap.Error(err))
 		return err
 	}
 
-	data := &pulsar.ProducerMessage{
+	data := &pulsarClient.ProducerMessage{
 		Payload: message.Value,
 		Key:     message.GetPartitionKey(),
 	}
 	mID, err := producer.Send(ctx, data)
 	if err != nil {
 		log.Error("ddl producer send fail", zap.Error(err))
-		pulsarPkg.IncPublishedDDLFail(topic, p.changefeedID.String(), messageType)
+		pulsar.IncPublishedDDLFail(topic, p.changefeedID.String(), messageType)
 		return err
 	}
 
 	log.Debug("ddlProducers SyncSendMessage success",
 		zap.Any("mID", mID), zap.String("topic", topic))
 
-	pulsarPkg.IncPublishedDDLSuccess(topic, p.changefeedID.String(), messageType)
+	pulsar.IncPublishedDDLSuccess(topic, p.changefeedID.String(), messageType)
 	return nil
 }
 
-func (p *ddlProducers) getProducer(topic string) (pulsar.Producer, bool) {
+func (p *ddlProducers) getProducer(topic string) (pulsarClient.Producer, bool) {
 	target, ok := p.producers.Get(topic)
 	if ok {
-		producer, ok := target.(pulsar.Producer)
+		producer, ok := target.(pulsarClient.Producer)
 		if ok {
 			return producer, true
 		}
@@ -142,7 +142,7 @@ func (p *ddlProducers) getProducer(topic string) (pulsar.Producer, bool) {
 }
 
 // getProducerByTopic get producer by topicName
-func (p *ddlProducers) getProducerByTopic(topicName string) (producer pulsar.Producer, err error) {
+func (p *ddlProducers) getProducerByTopic(topicName string) (producer pulsarClient.Producer, err error) {
 	getProducer, ok := p.getProducer(topicName)
 	if ok && getProducer != nil {
 		return getProducer, nil
@@ -168,40 +168,4 @@ func (p *ddlProducers) close() {
 	for _, topic := range keys {
 		p.producers.Remove(topic) // callback func will be called
 	}
-}
-
-// newProducer creates a pulsar producer
-// One topic is used by one producer
-func newProducer(
-	pConfig *config.PulsarConfig,
-	client pulsar.Client,
-	topicName string,
-) (pulsar.Producer, error) {
-	maxReconnectToBroker := uint(config.DefaultMaxReconnectToPulsarBroker)
-	option := pulsar.ProducerOptions{
-		Topic:                topicName,
-		MaxReconnectToBroker: &maxReconnectToBroker,
-	}
-	if pConfig.BatchingMaxMessages != nil {
-		option.BatchingMaxMessages = *pConfig.BatchingMaxMessages
-	}
-	if pConfig.BatchingMaxPublishDelay != nil {
-		option.BatchingMaxPublishDelay = pConfig.BatchingMaxPublishDelay.Duration()
-	}
-	if pConfig.CompressionType != nil {
-		option.CompressionType = pConfig.CompressionType.Value()
-		option.CompressionLevel = pulsar.Default
-	}
-	if pConfig.SendTimeout != nil {
-		option.SendTimeout = pConfig.SendTimeout.Duration()
-	}
-
-	producer, err := client.CreateProducer(option)
-	if err != nil {
-		return nil, err
-	}
-
-	log.Info("create pulsar producer success", zap.String("topic", topicName))
-
-	return producer, nil
 }
