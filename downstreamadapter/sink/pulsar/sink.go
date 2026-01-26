@@ -549,4 +549,6 @@ func (s *sink) Close(_ bool) {
 	s.dmlProducer.close()
 	s.comp.close()
 	s.statistics.Close()
+	s.eventChan.Close()
+	s.rowChan.Close()
 }
