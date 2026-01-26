@@ -65,8 +65,3 @@ func (m *pulsarTopicManager) CreateTopicAndWaitUntilVisible(ctx context.Context,
 // Close
 func (m *pulsarTopicManager) Close() {
 }
-
-// str2Pointer returns the pointer of the string.
-func str2Pointer(str string) *string {
-	return &str
-}

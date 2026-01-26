@@ -20,6 +20,7 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,7 +49,7 @@ func TestPulsarSyncSendMessage(t *testing.T) {
 				changefeedID: commonType.NewChangefeedID4Test("test_keyspace", "test"),
 				message: &common.Message{
 					Value:        []byte("this value for test input data"),
-					PartitionKey: str2Pointer("test_key"),
+					PartitionKey: util.AddressOf("test_key"),
 				},
 				errCh: make(chan error),
 			},
@@ -91,7 +92,7 @@ func TestPulsarSyncBroadcastMessage(t *testing.T) {
 				changefeedID: commonType.NewChangefeedID4Test("test_keyspace", "test"),
 				message: &common.Message{
 					Value:        []byte("this value for test input data"),
-					PartitionKey: str2Pointer("test_key"),
+					PartitionKey: util.AddressOf("test_key"),
 				},
 				errCh: make(chan error),
 			},
