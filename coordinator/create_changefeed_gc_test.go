@@ -86,7 +86,7 @@ func TestCreateChangefeedForcesUpdateGCSafepoint(t *testing.T) {
 	require.Equal(t, 0, changefeedDB.GetStoppedSize())
 }
 
-func TestCreateChangefeedUpdateGCSafepointFailMarksChangefeedFailed(t *testing.T) {
+func TestCreateChangefeedUpdateGCSafepointFailDoesNotFailChangefeed(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
 	gcManager := gc.NewMockManager(ctrl)
@@ -103,35 +103,20 @@ func TestCreateChangefeedUpdateGCSafepointFailMarksChangefeedFailed(t *testing.T
 		KeyspaceID:   1,
 	}
 
-	updateErr := cerrors.ErrSnapshotLostByGC.GenWithStackByArgs(info.StartTs-1, info.StartTs)
-	updateErrCode, _ := cerrors.RFCCode(updateErr)
+	updateErr := cerrors.ErrUpdateServiceSafepointFailed.GenWithStackByArgs("pd is unstable")
 
 	backend.EXPECT().CreateChangefeed(gomock.Any(), gomock.Any()).Return(nil).Times(1)
 	gcManager.EXPECT().
 		TryUpdateServiceGCSafepoint(gomock.Any(), common.Ts(info.StartTs-1), true).
 		Return(updateErr).Times(1)
 
-	backend.EXPECT().
-		UpdateChangefeed(gomock.Any(), gomock.Any(), info.StartTs, config.ProgressStopping).
-		DoAndReturn(func(_ context.Context, gotInfo *config.ChangeFeedInfo, _ uint64, _ config.Progress) error {
-			require.Equal(t, config.StateFailed, gotInfo.State)
-			require.NotNil(t, gotInfo.Error)
-			require.Equal(t, string(updateErrCode), gotInfo.Error.Code)
-			require.Equal(t, updateErr.Error(), gotInfo.Error.Message)
-			return nil
-		}).
-		Times(1)
-
 	err := co.CreateChangefeed(context.Background(), info)
-	require.Error(t, err)
-	errCode, _ := cerrors.RFCCode(err)
-	require.Equal(t, cerrors.ErrSnapshotLostByGC.RFCCode(), errCode)
+	require.NoError(t, err)
 
-	require.Equal(t, 0, changefeedDB.GetAbsentSize())
-	require.Equal(t, 1, changefeedDB.GetStoppedSize())
+	require.Equal(t, 1, changefeedDB.GetAbsentSize())
+	require.Equal(t, 0, changefeedDB.GetStoppedSize())
 	cf := changefeedDB.GetByID(cfID)
 	require.NotNil(t, cf)
-	require.Equal(t, config.StateFailed, cf.GetInfo().State)
-	require.NotNil(t, cf.GetInfo().Error)
-	require.Equal(t, string(updateErrCode), cf.GetInfo().Error.Code)
+	require.Equal(t, config.StateNormal, cf.GetInfo().State)
+	require.Nil(t, cf.GetInfo().Error)
 }

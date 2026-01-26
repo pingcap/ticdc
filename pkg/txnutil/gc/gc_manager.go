@@ -104,6 +104,9 @@ func (m *gcManager) TryUpdateServiceGCSafepoint(
 	if err != nil {
 		log.Warn("update service gc safepoint failed", zap.Uint64("checkpointTs", checkpointTs),
 			zap.String("serviceID", m.gcServiceID), zap.Error(err))
+		if forceUpdate {
+			return errors.WrapError(errors.ErrUpdateServiceSafepointFailed, err)
+		}
 		if time.Since(m.lastSucceededTime.Load()) >= time.Second*time.Duration(m.gcTTL) {
 			return errors.WrapError(errors.ErrUpdateServiceSafepointFailed, err)
 		}
@@ -223,6 +226,9 @@ func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID u
 		log.Warn("update keyspace gc barrier failed",
 			zap.Uint32("keyspaceID", keyspaceID), zap.Uint64("checkpointTs", checkpointTs),
 			zap.String("serviceID", m.gcServiceID), zap.Error(err))
+		if forceUpdate {
+			return errors.WrapError(errors.ErrUpdateGCBarrierFailed, err)
+		}
 		var lastSucceededTime time.Time
 		if barrierInfoObj, ok := m.keyspaceGCBarrierInfoMap.Load(keyspaceID); ok {
 			barrierInfo := barrierInfoObj.(*keyspaceGCBarrierInfo)
