@@ -41,7 +41,7 @@ import (
 )
 
 type fileCache struct {
-	bufPtr *[]byte
+	data        []byte
 	fileSize    int64
 	maxCommitTs common.Ts
 	// After memoryWriter become stable, this field would be used to
@@ -273,14 +273,9 @@ func (f *fileWorkerGroup) syncWrite(egCtx context.Context, event writer.RedoEven
 	if err != nil {
 		return err
 	}
-	file, err := f.newFileCache(data, rl.GetCommitTs())
-	if err != nil {
-		return err
-	}
-	err = f.syncWriteFile(egCtx, file)
-	if err != nil {
-		return err
-	}
+	file := f.newFileCache(data, rl.GetCommitTs())
+	f.syncWriteFile(egCtx, file)
+	// flush
 	event.PostFlush()
 	return nil
 }
@@ -290,7 +285,6 @@ func (f *fileWorkerGroup) syncWriteFile(egCtx context.Context, file *fileCache) 
 	start := time.Now()
 	file.filename = f.getLogFileName(file.maxCommitTs)
 	if err = file.writer.Close(); err != nil {
-		f.releaseFileCache(file)
 		return err
 	}
 	if util.GetOrZero(f.cfg.FlushConcurrency) <= 1 {
@@ -300,17 +294,17 @@ func (f *fileWorkerGroup) syncWriteFile(egCtx context.Context, file *fileCache) 
 	}
 	f.metricFlushAllDuration.Observe(time.Since(start).Seconds())
 	if err != nil {
-		f.releaseFileCache(file)
 		return err
 	}
 	file.markFlushed()
-
-	f.releaseFileCache(file)
+	bufPtr := &file.data
+	file.data = nil
+	f.pool.Put(bufPtr)
 	return nil
 }
 
 // newFileCache write event to a new file cache.
-func (f *fileWorkerGroup) newFileCache(data []byte, commitTs common.Ts) (*fileCache, error) {
+func (f *fileWorkerGroup) newFileCache(data []byte, commitTs common.Ts) *fileCache {
 	bufPtr := f.pool.Get().(*[]byte)
 	buf := *bufPtr
 	buf = buf[:0]
@@ -327,9 +321,7 @@ func (f *fileWorkerGroup) newFileCache(data []byte, commitTs common.Ts) (*fileCa
 	_, err := wr.Write(data)
 	if err != nil {
 		log.Error("write to new file failed", zap.Error(err))
-		*bufPtr = buf[:0]
-		f.pool.Put(bufPtr)
-		return nil, errors.ErrRedoFileOp.GenWithStackByArgs()
+		return nil
 	}
 
 	dw := &dataWriter{
@@ -338,23 +330,13 @@ func (f *fileWorkerGroup) newFileCache(data []byte, commitTs common.Ts) (*fileCa
 		closer: closer,
 	}
 	return &fileCache{
-		bufPtr:      bufPtr,
+		data:        buf,
 		fileSize:    int64(len(data)),
 		maxCommitTs: commitTs,
 		minCommitTs: commitTs,
 		flushed:     make(chan struct{}),
 		writer:      dw,
-	}, nil
-}
-
-func (f *fileWorkerGroup) releaseFileCache(file *fileCache) {
-	if file == nil || file.bufPtr == nil {
-		return
 	}
-	buf := file.writer.buf.Bytes()
-	*file.bufPtr = buf[:0]
-	f.pool.Put(file.bufPtr)
-	file.bufPtr = nil
 }
 
 func (f *fileWorkerGroup) encodeData(event writer.RedoEvent) (*commonEvent.RedoLog, []byte, error) {
@@ -392,7 +374,7 @@ func (f *fileWorkerGroup) writeToCache(
 	defer f.metricWriteBytes.Add(float64(writeLen))
 
 	if len(f.files) == 0 {
-		file, err := f.newFileCache(data, rl.GetCommitTs())
+		file := f.newFileCache(data, rl.GetCommitTs())
 		if err != nil {
 			return err
 		}
@@ -407,7 +389,7 @@ func (f *fileWorkerGroup) writeToCache(
 			return errors.Trace(egCtx.Err())
 		case f.flushCh <- file:
 		}
-		file, err := f.newFileCache(data, rl.GetCommitTs())
+		file := f.newFileCache(data, rl.GetCommitTs())
 		if err != nil {
 			return err
 		}
