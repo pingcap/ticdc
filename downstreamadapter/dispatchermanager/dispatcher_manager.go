@@ -234,6 +234,7 @@ func NewDispatcherManager(
 		manager.config.TimeZone,
 		manager.config.BDRMode,
 		manager.config.EnableActiveActive,
+		manager.config.EnableActiveActiveCheck,
 		outputRawChangeEvent,
 		integrityCfg,
 		filterCfg,
