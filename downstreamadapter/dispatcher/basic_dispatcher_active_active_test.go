@@ -131,6 +131,7 @@ func newTestBasicDispatcher(t *testing.T, sinkType common.SinkType, enableActive
 		false,
 		enableActiveActive,
 		false,
+		false,
 		nil,
 		nil,
 		nil,
