@@ -56,7 +56,7 @@ func TestPulsarSyncSendMessage(t *testing.T) {
 	}
 	for _, tt := range tests {
 		p := newMockDDLProducer()
-		err := p.syncSendMessage(tt.args.ctx, tt.args.topic, tt.args.message)
+		err := p.syncSendMessage(tt.args.ctx, tt.args.topic, tt.args.message, common.MessageTypeDDL)
 		require.NoError(t, err)
 		require.Len(t, p.(*mockProducer).GetEvents(tt.args.topic), 1)
 
@@ -99,7 +99,7 @@ func TestPulsarSyncBroadcastMessage(t *testing.T) {
 	}
 	for _, tt := range tests {
 		p := newMockDDLProducer()
-		err := p.syncSendMessage(tt.args.ctx, tt.args.topic, tt.args.message)
+		err := p.syncSendMessage(tt.args.ctx, tt.args.topic, tt.args.message, common.MessageTypeDDL)
 		require.NoError(t, err)
 		require.Len(t, p.(*mockProducer).GetEvents(tt.args.topic), 1)
 

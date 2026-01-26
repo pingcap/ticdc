@@ -24,6 +24,7 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	pulsarPkg "github.com/pingcap/ticdc/pkg/sink/pulsar"
 	"go.uber.org/zap"
 )
 
@@ -31,11 +32,11 @@ import (
 type ddlProducer interface {
 	// syncBroadcastMessage broadcasts a message synchronously.
 	syncBroadcastMessage(
-		ctx context.Context, topic string, message *common.Message,
+		ctx context.Context, topic string, message *common.Message, messageType common.MessageType,
 	) error
 	// syncSendMessage sends a message for a partition synchronously.
 	syncSendMessage(
-		ctx context.Context, topic string, message *common.Message,
+		ctx context.Context, topic string, message *common.Message, messageType common.MessageType,
 	) error
 	// close closes the producer.
 	close()
@@ -94,20 +95,17 @@ func newDDLProducers(
 
 // SyncBroadcastMessage pulsar consume all partitions
 // totalPartitionsNum is not used
-func (p *ddlProducers) syncBroadcastMessage(ctx context.Context, topic string, message *common.Message,
+func (p *ddlProducers) syncBroadcastMessage(ctx context.Context, topic string, message *common.Message, messageType common.MessageType,
 ) error {
 	// call SyncSendMessage
 	// pulsar consumer all partitions
-	return p.syncSendMessage(ctx, topic, message)
+	return p.syncSendMessage(ctx, topic, message, messageType)
 }
 
 // SyncSendMessage sends a message
 // partitionNum is not used, pulsar consume all partitions
-func (p *ddlProducers) syncSendMessage(ctx context.Context, topic string, message *common.Message) error {
-	// TODO
-	// wrapperSchemaAndTopic(message)
-	// mq.IncPublishedDDLCount(topic, p.id.ID().String(), message)
-
+func (p *ddlProducers) syncSendMessage(ctx context.Context, topic string, message *common.Message, messageType common.MessageType) error {
+	pulsarPkg.IncPublishedDDLCount(topic, p.changefeedID.String(), messageType)
 	producer, err := p.getProducerByTopic(topic)
 	if err != nil {
 		log.Error("ddl SyncSendMessage GetProducerByTopic fail", zap.Error(err))
@@ -121,14 +119,14 @@ func (p *ddlProducers) syncSendMessage(ctx context.Context, topic string, messag
 	mID, err := producer.Send(ctx, data)
 	if err != nil {
 		log.Error("ddl producer send fail", zap.Error(err))
-		// mq.IncPublishedDDLFail(topic, p.id.ID().String(), message)
+		pulsarPkg.IncPublishedDDLFail(topic, p.changefeedID.String(), messageType)
 		return err
 	}
 
 	log.Debug("ddlProducers SyncSendMessage success",
 		zap.Any("mID", mID), zap.String("topic", topic))
 
-	// mq.IncPublishedDDLSuccess(topic, p.id.ID().String(), message)
+	pulsarPkg.IncPublishedDDLSuccess(topic, p.changefeedID.String(), messageType)
 	return nil
 }
 
@@ -170,40 +168,6 @@ func (p *ddlProducers) close() {
 	for _, topic := range keys {
 		p.producers.Remove(topic) // callback func will be called
 	}
-}
-
-// wrapperSchemaAndTopic wrapper schema and topic
-// func wrapperSchemaAndTopic(m *common.Message) {
-// 	if m.Schema == nil {
-// 		if m.Protocol == config.ProtocolMaxwell {
-// 			mx := &maxwellMessage{}
-// 			err := json.Unmarshal(m.Value, mx)
-// 			if err != nil {
-// 				log.Error("unmarshal maxwell message failed", zap.Error(err))
-// 				return
-// 			}
-// 			if len(mx.Database) > 0 {
-// 				m.Schema = &mx.Database
-// 			}
-// 			if len(mx.Table) > 0 {
-// 				m.Table = &mx.Table
-// 			}
-// 		}
-// 		if m.Protocol == config.ProtocolCanal { // canal protocol set multi schemas in one topic
-// 			m.Schema = str2Pointer("multi_schema")
-// 		}
-// 	}
-// }
-
-// maxwellMessage is the message format of maxwell
-type maxwellMessage struct {
-	Database string `json:"database"`
-	Table    string `json:"table"`
-}
-
-// str2Pointer returns the pointer of the string.
-func str2Pointer(str string) *string {
-	return &str
 }
 
 // newProducer creates a pulsar producer

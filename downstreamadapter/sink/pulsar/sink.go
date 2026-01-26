@@ -154,6 +154,15 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		if err != nil {
 			return err
 		}
+		if message == nil {
+			log.Info("Skip ddl event",
+				zap.Uint64("startTs", event.GetStartTs()),
+				zap.Uint64("commitTs", e.GetCommitTs()),
+				zap.String("query", e.Query),
+				zap.Stringer("changefeed", s.changefeedID))
+			continue
+		}
+		common.SetDDLMessageLogInfo(message, e)
 		topic := s.comp.eventRouter.GetTopicForDDL(e)
 		// Notice: We must call GetPartitionNum here,
 		// which will be responsible for automatically creating topics when they don't exist.
@@ -166,11 +175,11 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		ddlType := e.GetDDLType().String()
 		if s.partitionRule == helper.PartitionAll {
 			err = s.statistics.RecordDDLExecution(func() (string, error) {
-				return ddlType, s.ddlProducer.syncBroadcastMessage(s.ctx, topic, message)
+				return ddlType, s.ddlProducer.syncBroadcastMessage(s.ctx, topic, message, common.MessageTypeDDL)
 			})
 		} else {
 			err = s.statistics.RecordDDLExecution(func() (string, error) {
-				return ddlType, s.ddlProducer.syncSendMessage(s.ctx, topic, message)
+				return ddlType, s.ddlProducer.syncSendMessage(s.ctx, topic, message, common.MessageTypeDDL)
 			})
 		}
 		if err != nil {
@@ -230,6 +239,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 			if msg == nil {
 				continue
 			}
+			common.SetCheckpointMessageLogInfo(msg, ts)
 
 			tableNames := s.getAllTableNames(ts)
 			// NOTICE: When there are no tables to replicate,
@@ -241,7 +251,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 				if err != nil {
 					return errors.Trace(err)
 				}
-				err = s.ddlProducer.syncBroadcastMessage(ctx, topic, msg)
+				err = s.ddlProducer.syncBroadcastMessage(ctx, topic, msg, common.MessageTypeResolved)
 				if err != nil {
 					return errors.Trace(err)
 				}
@@ -252,7 +262,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 					if err != nil {
 						return errors.Trace(err)
 					}
-					err = s.ddlProducer.syncBroadcastMessage(ctx, topic, msg)
+					err = s.ddlProducer.syncBroadcastMessage(ctx, topic, msg, common.MessageTypeResolved)
 					if err != nil {
 						return errors.Trace(err)
 					}
