@@ -364,31 +364,7 @@ func (c *coordinator) CreateChangefeed(ctx context.Context, info *config.ChangeF
 		return errors.Trace(err)
 	}
 	// update the service gc safepoint by force,
-	err = c.updateGCSafepointByChangefeed(ctx, info.ChangefeedID)
-	if err != nil {
-		log.Error("update gc safepoint failed when creating the changefeed",
-			zap.Any("changefeedID", info.ChangefeedID), zap.Error(err))
-		errCode, _ := errors.RFCCode(err)
-		// Changefeed meta is already created at this point. Mark it as failed so the
-		// user can observe and delete it instead of retrying the creation.
-		change := &changefeedChange{
-			changefeedID: info.ChangefeedID,
-			state:        config.StateFailed,
-			changeType:   ChangeState,
-			err: &config.RunningError{
-				Code:    string(errCode),
-				Message: err.Error(),
-			},
-		}
-		markCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if stateErr := c.handleStateChange(markCtx, change); stateErr != nil {
-			log.Warn("failed to update changefeed state after gc safepoint update failed",
-				zap.Any("changefeedID", info.ChangefeedID),
-				zap.Error(stateErr))
-		}
-	}
-	return err
+	return c.updateGCSafepointByChangefeed(ctx, info.ChangefeedID)
 }
 
 func (c *coordinator) RemoveChangefeed(ctx context.Context, id common.ChangeFeedID) (uint64, error) {
