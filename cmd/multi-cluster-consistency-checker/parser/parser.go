@@ -33,6 +33,31 @@ import (
 	"go.uber.org/zap"
 )
 
+func getPkColumnOffset(tableInfo *commonType.TableInfo) (map[int64]int, error) {
+	if tableInfo.PKIsHandle() {
+		pkColInfo := tableInfo.GetPkColInfo()
+		if pkColInfo == nil {
+			return nil, errors.Errorf("table %s has no primary key", tableInfo.GetTableName())
+		}
+		return map[int64]int{pkColInfo.ID: 0}, nil
+	}
+
+	pkColInfos := tableInfo.GetPrimaryKeyColumnInfos()
+	if len(pkColInfos) == 0 {
+		return nil, errors.Errorf("table %s has no primary key", tableInfo.GetTableName())
+	}
+
+	columns := tableInfo.GetColumns()
+	pkColumnOffsets := make(map[int64]int)
+	for i, pkColInfo := range pkColInfos {
+		if pkColInfo.Offset < 0 || pkColInfo.Offset >= len(columns) {
+			return nil, errors.Errorf("primary key column offset (%d) out of range for column (%d) in table %s", pkColInfo.Offset, len(columns), tableInfo.GetTableName())
+		}
+		pkColumnOffsets[columns[pkColInfo.Offset].ID] = i
+	}
+	return pkColumnOffsets, nil
+}
+
 type tableParser struct {
 	tableKey        string
 	tableInfo       *common.TableInfo
@@ -69,27 +94,15 @@ func (pt *tableParser) parseTableInfo(tableKey string, content []byte) error {
 		return errors.Trace(err)
 	}
 
-	pkColInfos := tableInfo.GetPrimaryKeyColumnInfos()
-	if len(pkColInfos) == 0 {
-		log.Error("table has no primary key",
+	pkColumnOffsets, err := getPkColumnOffset(tableInfo)
+	if err != nil {
+		log.Error("failed to get primary key column offsets",
 			zap.String("tableKey", tableKey),
-			zap.ByteString("content", content))
-		return errors.Errorf("table %s has no primary key", tableKey)
+			zap.ByteString("content", content),
+			zap.Error(err))
+		return errors.Annotate(err, "failed to get primary key column offsets")
 	}
 
-	columns := tableInfo.GetColumns()
-	pkColumnOffsets := make(map[int64]int)
-	for i, pkColInfo := range pkColInfos {
-		if pkColInfo.Offset < 0 || pkColInfo.Offset >= len(columns) {
-			log.Error("primary key column offset out of range",
-				zap.String("tableKey", tableKey),
-				zap.Int("offset", pkColInfo.Offset),
-				zap.Int("len(columns)", len(columns)),
-				zap.ByteString("content", content))
-			return errors.Errorf("primary key column offset out of range for column %d in table %s", pkColInfo.Offset, tableKey)
-		}
-		pkColumnOffsets[columns[pkColInfo.Offset].ID] = i
-	}
 	pt.tableKey = tableKey
 	pt.tableInfo = tableInfo
 	pt.pkColumnOffsets = pkColumnOffsets
@@ -133,7 +146,7 @@ func (pt *tableParser) parseRecord(row *chunk.Row, commitTs uint64) (*utils.Reco
 		if col.Name.O == event.OriginTsColumn {
 			var ok bool
 			originTs, ok = colValue.(uint64)
-			if !ok {
+			if !ok && colValue != nil {
 				log.Error("origin ts column value is not uint64",
 					zap.String("tableKey", pt.tableKey),
 					zap.Int64("colID", colInfo.ID),
