@@ -63,6 +63,34 @@ var (
 			Name:      "cloud_storage_worker_busy_ratio",
 			Help:      "Busy ratio for cloud storage sink dml worker.",
 		}, []string{"namespace", "changefeed", "id"})
+
+	CloudStorageUnflushedRawBytesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "cloud_storage_unflushed_raw_bytes",
+		Help:      "Approximate size of unflushed DML events in cloud storage sink (based on DMLEvent.GetSize)",
+	}, []string{"namespace", "changefeed"})
+
+	CloudStorageUnflushedEncodedBytesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "cloud_storage_unflushed_encoded_bytes",
+		Help:      "Encoded size of unflushed DML events in cloud storage sink (sum of encoded message key/value bytes)",
+	}, []string{"namespace", "changefeed"})
+
+	CloudStorageDMLRawBytesCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "cloud_storage_dml_raw_bytes_total",
+		Help:      "Total approximate size of DML events accepted by cloud storage sink (based on DMLEvent.GetSize)",
+	}, []string{"namespace", "changefeed"})
+
+	CloudStorageDMLEncodedBytesCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "cloud_storage_dml_encoded_bytes_total",
+		Help:      "Total encoded size produced by cloud storage sink encoder (sum of encoded message key/value bytes)",
+	}, []string{"namespace", "changefeed"})
 )
 
 // InitCloudStorageMetrics registers all metrics in this file.
@@ -72,4 +100,8 @@ func InitCloudStorageMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(CloudStorageWriteDurationHistogram)
 	registry.MustRegister(CloudStorageFlushDurationHistogram)
 	registry.MustRegister(CloudStorageWorkerBusyRatio)
+	registry.MustRegister(CloudStorageUnflushedRawBytesGauge)
+	registry.MustRegister(CloudStorageUnflushedEncodedBytesGauge)
+	registry.MustRegister(CloudStorageDMLRawBytesCounter)
+	registry.MustRegister(CloudStorageDMLEncodedBytesCounter)
 }
