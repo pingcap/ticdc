@@ -173,6 +173,11 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 // AddWorkingSpans adds working spans
 func (c *Controller) AddWorkingSpans(tableMap utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication]) {
 	tableMap.Ascend(func(span *heartbeatpb.TableSpan, stm *replica.SpanReplication) bool {
+		// Bootstrap may already have created a replica set with the same dispatcherID (for example when
+		// restoring in-flight operators). Skip duplicates to avoid overriding the existing scheduling state.
+		if c.GetTaskByID(stm.ID) != nil {
+			return true
+		}
 		c.AddReplicatingSpan(stm)
 		return true
 	})
