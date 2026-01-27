@@ -11,7 +11,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -51,15 +50,16 @@ func newTestCoordinatorWithGCManager(
 	}
 
 	co := &coordinator{
-		controller: controller,
-		backend:    backend,
-		gcManager:  gcManager,
-		pdClock:    pdutil.NewClock4Test(),
+		controller:                        controller,
+		backend:                           backend,
+		gcManager:                         gcManager,
+		pdClock:                           pdutil.NewClock4Test(),
+		pendingChangefeedServiceSafepoint: newPendingChangefeedServiceSafepoint(),
 	}
 	return co, changefeedDB
 }
 
-func TestCreateChangefeedForcesUpdateGCSafepoint(t *testing.T) {
+func TestCreateChangefeedDoesNotUpdateGCSafepoint(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
 	gcManager := gc.NewMockManager(ctrl)
@@ -78,15 +78,20 @@ func TestCreateChangefeedForcesUpdateGCSafepoint(t *testing.T) {
 
 	backend.EXPECT().CreateChangefeed(gomock.Any(), gomock.Any()).Return(nil).Times(1)
 	gcManager.EXPECT().
-		TryUpdateServiceGCSafepoint(gomock.Any(), common.Ts(info.StartTs-1), true).
-		Return(nil).Times(1)
+		TryUpdateServiceGCSafepoint(gomock.Any(), gomock.Any()).
+		Times(0)
 
 	require.NoError(t, co.CreateChangefeed(context.Background(), info))
 	require.Equal(t, 1, changefeedDB.GetAbsentSize())
 	require.Equal(t, 0, changefeedDB.GetStoppedSize())
+	entry := co.pendingChangefeedServiceSafepoint.pending[cfID]
+	require.NotNil(t, entry)
+	require.Equal(t, uint32(1), entry.keyspaceID)
+	require.True(t, entry.needCreating)
+	require.False(t, entry.needResuming)
 }
 
-func TestCreateChangefeedUpdateGCSafepointFailDoesNotFailChangefeed(t *testing.T) {
+func TestUpdateGCSafepointCallsGCManagerUpdate(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
 	gcManager := gc.NewMockManager(ctrl)
@@ -103,15 +108,13 @@ func TestCreateChangefeedUpdateGCSafepointFailDoesNotFailChangefeed(t *testing.T
 		KeyspaceID:   1,
 	}
 
-	updateErr := cerrors.ErrUpdateServiceSafepointFailed.GenWithStackByArgs("pd is unstable")
-
-	backend.EXPECT().CreateChangefeed(gomock.Any(), gomock.Any()).Return(nil).Times(1)
 	gcManager.EXPECT().
-		TryUpdateServiceGCSafepoint(gomock.Any(), common.Ts(info.StartTs-1), true).
-		Return(updateErr).Times(1)
+		TryUpdateServiceGCSafepoint(gomock.Any(), common.Ts(info.StartTs-1)).
+		Return(nil).Times(1)
 
-	err := co.CreateChangefeed(context.Background(), info)
-	require.NoError(t, err)
+	changefeedDB.AddAbsentChangefeed(changefeed.NewChangefeed(cfID, info, info.StartTs, true))
+
+	require.NoError(t, co.updateGCSafepoint(context.Background()))
 
 	require.Equal(t, 1, changefeedDB.GetAbsentSize())
 	require.Equal(t, 0, changefeedDB.GetStoppedSize())

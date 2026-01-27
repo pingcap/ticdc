@@ -32,25 +32,19 @@ import (
 	"go.uber.org/zap"
 )
 
-// gcServiceSafepointUpdateInterval is the minimum interval that CDC can update gc safepoint
-var gcServiceSafepointUpdateInterval = 1 * time.Minute
-
 // Manager is an interface for gc manager
 type Manager interface {
 	// TryUpdateServiceGCSafepoint tries to update TiCDC service GC safepoint.
-	// Manager may skip update when it thinks it is too frequent.
-	// Set `forceUpdate` to force Manager update.
-	TryUpdateServiceGCSafepoint(ctx context.Context, checkpointTs common.Ts, forceUpdate bool) error
+	TryUpdateServiceGCSafepoint(ctx context.Context, checkpointTs common.Ts) error
 	CheckStaleCheckpointTs(keyspaceID uint32, changefeedID common.ChangeFeedID, checkpointTs common.Ts) error
 	// TryUpdateKeyspaceGCBarrier tries to update gc barrier of a keyspace
-	TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID uint32, keyspaceName string, checkpointTs common.Ts, forceUpdate bool) error
+	TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID uint32, keyspaceName string, checkpointTs common.Ts) error
 }
 
 // keyspaceGCBarrierInfo is the gc info for a keyspace
 type keyspaceGCBarrierInfo struct {
-	lastSucceededTime time.Time
-	lastSafePointTs   uint64
-	isTiCDCBlockGC    bool
+	lastSafePointTs uint64
+	isTiCDCBlockGC  bool
 }
 
 type gcManager struct {
@@ -59,15 +53,8 @@ type gcManager struct {
 	pdClock     pdutil.Clock
 	gcTTL       int64
 
-	lastUpdatedTime   *atomic.Time
-	lastSucceededTime *atomic.Time
-	lastSafePointTs   atomic.Uint64
-	isTiCDCBlockGC    atomic.Bool
-
-	// keyspaceLastUpdatedTimeMap store last updated time of each keyspace
-	// key => keyspaceID
-	// value => time.Time
-	keyspaceLastUpdatedTimeMap sync.Map
+	lastSafePointTs atomic.Uint64
+	isTiCDCBlockGC  atomic.Bool
 
 	// keyspaceGCBarrierInfoMap store gc info of each keyspace
 	// key => keyspaceID
@@ -77,40 +64,22 @@ type gcManager struct {
 
 // NewManager creates a new Manager.
 func NewManager(gcServiceID string, pdClient pd.Client) Manager {
-	failpoint.Inject("InjectGcSafepointUpdateInterval", func(val failpoint.Value) {
-		gcServiceSafepointUpdateInterval = time.Duration(val.(int) * int(time.Millisecond))
-	})
-
-	now := time.Now()
 	return &gcManager{
-		gcServiceID:       gcServiceID,
-		pdClient:          pdClient,
-		pdClock:           appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
-		lastUpdatedTime:   atomic.NewTime(now),
-		lastSucceededTime: atomic.NewTime(now),
-		gcTTL:             config.GetGlobalServerConfig().GcTTL,
+		gcServiceID: gcServiceID,
+		pdClient:    pdClient,
+		pdClock:     appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		gcTTL:       config.GetGlobalServerConfig().GcTTL,
 	}
 }
 
 func (m *gcManager) TryUpdateServiceGCSafepoint(
-	ctx context.Context, checkpointTs common.Ts, forceUpdate bool,
+	ctx context.Context, checkpointTs common.Ts,
 ) error {
-	if time.Since(m.lastUpdatedTime.Load()) < gcServiceSafepointUpdateInterval && !forceUpdate {
-		return nil
-	}
-	m.lastUpdatedTime.Store(time.Now())
-
 	minServiceGCSafepoint, err := SetServiceGCSafepoint(ctx, m.pdClient, m.gcServiceID, m.gcTTL, checkpointTs)
 	if err != nil {
 		log.Warn("update service gc safepoint failed", zap.Uint64("checkpointTs", checkpointTs),
 			zap.String("serviceID", m.gcServiceID), zap.Error(err))
-		if forceUpdate {
-			return errors.WrapError(errors.ErrUpdateServiceSafepointFailed, err)
-		}
-		if time.Since(m.lastSucceededTime.Load()) >= time.Second*time.Duration(m.gcTTL) {
-			return errors.WrapError(errors.ErrUpdateServiceSafepointFailed, err)
-		}
-		return nil
+		return errors.WrapError(errors.ErrUpdateServiceSafepointFailed, err)
 	}
 	failpoint.Inject("InjectActualGCSafePoint", func(val failpoint.Value) {
 		minServiceGCSafepoint = uint64(val.(int))
@@ -129,9 +98,6 @@ func (m *gcManager) TryUpdateServiceGCSafepoint(
 		log.Warn("update gc safe point failed, the checkpointTs is smaller than the minimum service gc safepoint",
 			zap.Uint64("minServiceGCSafepoint", minServiceGCSafepoint), zap.Uint64("checkpointTs", checkpointTs),
 			zap.String("serviceID", m.gcServiceID))
-		if !forceUpdate {
-			return nil
-		}
 		return errors.ErrSnapshotLostByGC.GenWithStackByArgs(checkpointTs, minServiceGCSafepoint)
 	}
 
@@ -140,7 +106,6 @@ func (m *gcManager) TryUpdateServiceGCSafepoint(
 	// gc safe point
 	m.isTiCDCBlockGC.Store(minServiceGCSafepoint == checkpointTs)
 	m.lastSafePointTs.Store(minServiceGCSafepoint)
-	m.lastSucceededTime.Store(time.Now())
 	minServiceGCSafePointGauge.Set(float64(oracle.ExtractPhysical(minServiceGCSafepoint)))
 	cdcGCSafePointGauge.Set(float64(oracle.ExtractPhysical(checkpointTs)))
 	return nil
@@ -203,16 +168,7 @@ func (m *gcManager) checkStaleCheckPointTsGlobal(changefeedID common.ChangeFeedI
 	return checkStaleCheckpointTs(changefeedID, checkpointTs, m.pdClock, m.isTiCDCBlockGC.Load(), m.lastSafePointTs.Load(), m.gcTTL)
 }
 
-func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID uint32, keyspaceName string, checkpointTs common.Ts, forceUpdate bool) error {
-	var lastUpdatedTime time.Time
-	if lastUpdatedTimeResult, ok := m.keyspaceLastUpdatedTimeMap.Load(keyspaceID); ok {
-		lastUpdatedTime = lastUpdatedTimeResult.(time.Time)
-	}
-	if time.Since(lastUpdatedTime) < gcServiceSafepointUpdateInterval && !forceUpdate {
-		return nil
-	}
-	m.keyspaceLastUpdatedTimeMap.Store(keyspaceID, time.Now())
-
+func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID uint32, keyspaceName string, checkpointTs common.Ts) error {
 	gcCli := m.pdClient.GetGCStatesClient(keyspaceID)
 	ttl := time.Duration(m.gcTTL) * time.Second
 	_, err := SetGCBarrier(ctx, gcCli, m.gcServiceID, checkpointTs, ttl)
@@ -226,18 +182,7 @@ func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID u
 		log.Warn("update keyspace gc barrier failed",
 			zap.Uint32("keyspaceID", keyspaceID), zap.Uint64("checkpointTs", checkpointTs),
 			zap.String("serviceID", m.gcServiceID), zap.Error(err))
-		if forceUpdate {
-			return errors.WrapError(errors.ErrUpdateGCBarrierFailed, err)
-		}
-		var lastSucceededTime time.Time
-		if barrierInfoObj, ok := m.keyspaceGCBarrierInfoMap.Load(keyspaceID); ok {
-			barrierInfo := barrierInfoObj.(*keyspaceGCBarrierInfo)
-			lastSucceededTime = barrierInfo.lastSucceededTime
-		}
-		if time.Since(lastSucceededTime) >= time.Duration(m.gcTTL)*time.Second {
-			return errors.WrapError(errors.ErrUpdateGCBarrierFailed, err)
-		}
-		return nil
+		return errors.WrapError(errors.ErrUpdateGCBarrierFailed, err)
 	}
 
 	minGCBarrier, err := UnifyGetServiceGCSafepoint(ctx, m.pdClient, keyspaceID, m.gcServiceID)
@@ -251,9 +196,8 @@ func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID u
 	// if the min checkpoint ts is equal to the current gc barrier ts, it means
 	// that the service gc barrier ts set by TiCDC is the min service gc barrier ts
 	newBarrierInfo := &keyspaceGCBarrierInfo{
-		lastSucceededTime: time.Now(),
-		lastSafePointTs:   minGCBarrier,
-		isTiCDCBlockGC:    minGCBarrier == checkpointTs,
+		lastSafePointTs: minGCBarrier,
+		isTiCDCBlockGC:  minGCBarrier == checkpointTs,
 	}
 	m.keyspaceGCBarrierInfoMap.Store(keyspaceID, newBarrierInfo)
 
