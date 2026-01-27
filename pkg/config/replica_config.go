@@ -173,11 +173,16 @@ type replicaConfig struct {
 	ChangefeedErrorStuckDuration *time.Duration      `toml:"changefeed-error-stuck-duration" json:"changefeed-error-stuck-duration,omitempty"`
 	SyncedStatus                 *SyncedStatusConfig `toml:"synced-status" json:"synced-status,omitempty"`
 
-	EnableActiveActive           *bool          `toml:"enable-active-active" json:"enable-active-active,omitempty"`
+	// EnableActiveActive enables active-active replication mode on top of BDR.
+	// It requires BDRMode to be true and is only supported by TiDB and storage sinks.
+	EnableActiveActive *bool `toml:"enable-active-active" json:"enable-active-active,omitempty"`
+	// ActiveActiveProgressInterval controls how often the MySQL/TiDB sink updates the
+	// active-active progress table in EnableActiveActive mode (for hard delete safety checks).
 	ActiveActiveProgressInterval *time.Duration `toml:"active-active-progress-interval" json:"active-active-progress-interval,omitempty"`
 	// ActiveActiveSyncStatsInterval controls how often MySQL/TiDB sink queries
-	// TiDB session variable @@tidb_cdc_active_active_sync_stats for conflict statistics.
-	// Set it to 0 to disable the metric collection.
+	// the TiDB session variable @@tidb_cdc_active_active_sync_stats for conflict statistics.
+	// Set it to 0 to disable metric collection.
+	// This option only takes effect when EnableActiveActive is true and the downstream is TiDB.
 	ActiveActiveSyncStatsInterval *time.Duration `toml:"active-active-sync-stats-interval" json:"active-active-sync-stats-interval,omitempty"`
 
 	// Deprecated: we don't use this field since v8.0.0.

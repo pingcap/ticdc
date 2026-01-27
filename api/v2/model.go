@@ -185,16 +185,24 @@ func (d *JSONDuration) UnmarshalJSON(b []byte) error {
 
 // ReplicaConfig is a duplicate of  config.ReplicaConfig
 type ReplicaConfig struct {
-	MemoryQuota                   *uint64       `json:"memory_quota,omitempty"`
-	CaseSensitive                 *bool         `json:"case_sensitive,omitempty"`
-	ForceReplicate                *bool         `json:"force_replicate,omitempty"`
-	IgnoreIneligibleTable         *bool         `json:"ignore_ineligible_table,omitempty"`
-	CheckGCSafePoint              *bool         `json:"check_gc_safe_point,omitempty"`
-	EnableSyncPoint               *bool         `json:"enable_sync_point,omitempty"`
-	EnableTableMonitor            *bool         `json:"enable_table_monitor,omitempty"`
-	BDRMode                       *bool         `json:"bdr_mode,omitempty"`
-	EnableActiveActive            *bool         `json:"enable_active_active,omitempty"`
-	ActiveActiveProgressInterval  *JSONDuration `json:"active_active_progress_interval,omitempty"`
+	MemoryQuota           *uint64 `json:"memory_quota,omitempty"`
+	CaseSensitive         *bool   `json:"case_sensitive,omitempty"`
+	ForceReplicate        *bool   `json:"force_replicate,omitempty"`
+	IgnoreIneligibleTable *bool   `json:"ignore_ineligible_table,omitempty"`
+	CheckGCSafePoint      *bool   `json:"check_gc_safe_point,omitempty"`
+	EnableSyncPoint       *bool   `json:"enable_sync_point,omitempty"`
+	EnableTableMonitor    *bool   `json:"enable_table_monitor,omitempty"`
+	BDRMode               *bool   `json:"bdr_mode,omitempty"`
+	// EnableActiveActive enables active-active replication mode on top of BDR.
+	// It requires BDRMode to be true and is only supported by TiDB and storage sinks.
+	EnableActiveActive *bool `json:"enable_active_active,omitempty"`
+	// ActiveActiveProgressInterval controls how often the MySQL/TiDB sink updates the
+	// active-active progress table in EnableActiveActive mode (for hard delete safety checks).
+	ActiveActiveProgressInterval *JSONDuration `json:"active_active_progress_interval,omitempty"`
+	// ActiveActiveSyncStatsInterval controls how often the MySQL/TiDB sink queries
+	// the TiDB session variable @@tidb_cdc_active_active_sync_stats for conflict statistics.
+	// Set it to 0 to disable metric collection.
+	// This option only takes effect when EnableActiveActive is true and the downstream is TiDB.
 	ActiveActiveSyncStatsInterval *JSONDuration `json:"active_active_sync_stats_interval,omitempty"`
 
 	SyncPointInterval  *JSONDuration `json:"sync_point_interval,omitempty"`
@@ -250,6 +258,12 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 	}
 	if c.EnableActiveActive != nil {
 		res.EnableActiveActive = c.EnableActiveActive
+	}
+	if c.ActiveActiveProgressInterval != nil {
+		res.ActiveActiveProgressInterval = &c.ActiveActiveProgressInterval.duration
+	}
+	if c.ActiveActiveSyncStatsInterval != nil {
+		res.ActiveActiveSyncStatsInterval = &c.ActiveActiveSyncStatsInterval.duration
 	}
 
 	if c.Filter != nil {
@@ -605,12 +619,6 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 	}
 	if c.ChangefeedErrorStuckDuration != nil {
 		res.ChangefeedErrorStuckDuration = &c.ChangefeedErrorStuckDuration.duration
-	}
-	if c.ActiveActiveProgressInterval != nil {
-		res.ActiveActiveProgressInterval = &c.ActiveActiveProgressInterval.duration
-	}
-	if c.ActiveActiveSyncStatsInterval != nil {
-		res.ActiveActiveSyncStatsInterval = &c.ActiveActiveSyncStatsInterval.duration
 	}
 	if c.SyncedStatus != nil {
 		if res.SyncedStatus == nil {
