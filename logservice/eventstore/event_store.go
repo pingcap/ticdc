@@ -1145,6 +1145,19 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 			memorySize += uint64(stats.BlockCache.Size)
 		}
 		metrics.EventStoreInMemoryDataSizeGauge.WithLabelValues(id).Set(float64(memorySize))
+
+		metrics.EventStorePebbleIteratorGauge.WithLabelValues(id).Set(float64(stats.TableIters))
+		metrics.EventStorePebbleCompactionDebtGauge.WithLabelValues(id).Set(float64(stats.Compact.EstimatedDebt))
+		metrics.EventStorePebbleCompactionInProgressGauge.WithLabelValues(id).Set(float64(stats.Compact.NumInProgress))
+		metrics.EventStorePebbleCompactionInProgressBytesGauge.WithLabelValues(id).Set(float64(stats.Compact.InProgressBytes))
+		metrics.EventStorePebbleFlushInProgressGauge.WithLabelValues(id).Set(float64(stats.Flush.NumInProgress))
+		metrics.EventStorePebbleReadAmpGauge.WithLabelValues(id).Set(float64(stats.ReadAmp()))
+
+		for level, metric := range stats.Levels {
+			metrics.EventStorePebbleLevelFilesGauge.WithLabelValues(id, strconv.Itoa(level)).Set(float64(metric.NumFiles))
+		}
+		metrics.EventStorePebbleBlockCacheAccess.WithLabelValues(id, "hit").Set(float64(stats.BlockCache.Hits))
+		metrics.EventStorePebbleBlockCacheAccess.WithLabelValues(id, "miss").Set(float64(stats.BlockCache.Misses))
 	}
 
 	pdCurrentTime := e.pdClock.CurrentTime()

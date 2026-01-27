@@ -215,6 +215,92 @@ var (
 			Help:      "total duration (s) event store write worker.",
 			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms~524s
 		}, []string{"db", "worker"})
+
+	EventStorePebbleIteratorGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_store",
+		Name:      "pebble_iterator_count",
+		Help:      "The number of sstable iterators by event store pebble DB",
+	}, []string{"id"})
+
+	EventStorePebbleLevelFilesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_store",
+		Name:      "pebble_level_files",
+		Help:      "The number of files in each level by event store pebble DB",
+	}, []string{"id", "level"})
+
+	EventStorePebbleBlockCacheAccess = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_store",
+		Name:      "pebble_block_cache_access_total",
+		Help:      "The total number of event store pebble block cache access",
+	}, []string{"id", "type"})
+
+	EventStorePebbleWriteStallCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_store",
+		Name:      "pebble_write_stall_total",
+		Help:      "The total number of event store pebble write stalls",
+	}, []string{"id", "reason"})
+
+	EventStorePebbleWriteStallDuration = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_store",
+		Name:      "pebble_write_stall_duration_seconds_total",
+		Help:      "The total duration (s) of event store pebble write stalls",
+	}, []string{"id", "reason"})
+
+	EventStorePebbleCompactionDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_store",
+		Name:      "pebble_compaction_duration_seconds",
+		Help:      "Bucketed histogram of event store pebble compaction duration (s)",
+		Buckets:   prometheus.ExponentialBuckets(0.004, 2.0, 20),
+	}, []string{"id"})
+
+	EventStorePebbleFlushDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_store",
+		Name:      "pebble_flush_duration_seconds",
+		Help:      "Bucketed histogram of event store pebble flush duration (s)",
+		Buckets:   prometheus.ExponentialBuckets(0.004, 2.0, 20),
+	}, []string{"id"})
+
+	EventStorePebbleCompactionDebtGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_store",
+		Name:      "pebble_compaction_debt_bytes",
+		Help:      "The estimated compaction debt in bytes for event store pebble DB",
+	}, []string{"id"})
+
+	EventStorePebbleCompactionInProgressGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_store",
+		Name:      "pebble_compaction_in_progress",
+		Help:      "The number of in progress compactions for event store pebble DB",
+	}, []string{"id"})
+
+	EventStorePebbleCompactionInProgressBytesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_store",
+		Name:      "pebble_compaction_in_progress_bytes",
+		Help:      "The total bytes of in progress compactions for event store pebble DB",
+	}, []string{"id"})
+
+	EventStorePebbleFlushInProgressGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_store",
+		Name:      "pebble_flush_in_progress",
+		Help:      "The number of in progress flushes for event store pebble DB",
+	}, []string{"id"})
+
+	EventStorePebbleReadAmpGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_store",
+		Name:      "pebble_read_amplification",
+		Help:      "The read amplification for event store pebble DB",
+	}, []string{"id"})
 )
 
 func initEventStoreMetrics(registry *prometheus.Registry) {
@@ -242,4 +328,16 @@ func initEventStoreMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventStoreRegisterDispatcherStartTsLagHist)
 	registry.MustRegister(EventStoreWriteWorkerIODuration)
 	registry.MustRegister(EventStoreWriteWorkerTotalDuration)
+	registry.MustRegister(EventStorePebbleIteratorGauge)
+	registry.MustRegister(EventStorePebbleLevelFilesGauge)
+	registry.MustRegister(EventStorePebbleBlockCacheAccess)
+	registry.MustRegister(EventStorePebbleWriteStallCount)
+	registry.MustRegister(EventStorePebbleWriteStallDuration)
+	registry.MustRegister(EventStorePebbleCompactionDurationHistogram)
+	registry.MustRegister(EventStorePebbleFlushDurationHistogram)
+	registry.MustRegister(EventStorePebbleCompactionDebtGauge)
+	registry.MustRegister(EventStorePebbleCompactionInProgressGauge)
+	registry.MustRegister(EventStorePebbleCompactionInProgressBytesGauge)
+	registry.MustRegister(EventStorePebbleFlushInProgressGauge)
+	registry.MustRegister(EventStorePebbleReadAmpGauge)
 }
