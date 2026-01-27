@@ -24,15 +24,6 @@ var (
 		Help:      "Total number of files managed by a cloud storage sink",
 	}, []string{"namespace", "changefeed"})
 
-	// CloudStorageWriteDurationHistogram records the latency distributions of writeLog.
-	CloudStorageWriteDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Namespace: "ticdc",
-		Subsystem: "sink",
-		Name:      "cloud_storage_write_duration_seconds",
-		Help:      "The latency distributions of write storage by a cloud storage sink",
-		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 13),
-	}, []string{"namespace", "changefeed"})
-
 	// CloudStorageFlushDurationHistogram records the latency distributions of flushLog.
 	CloudStorageFlushDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: "ticdc",
@@ -83,7 +74,6 @@ var (
 // initCloudStorageMetrics registers all metrics in this file.
 func initCloudStorageMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(CloudStorageFileCountCounter)
-	registry.MustRegister(CloudStorageWriteDurationHistogram)
 	registry.MustRegister(CloudStorageFlushDurationHistogram)
 	registry.MustRegister(CloudStorageWriterBusyRatio)
 	registry.MustRegister(CloudStorageUnflushedRawBytesGauge)

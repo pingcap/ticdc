@@ -36,8 +36,6 @@ func newMetricsCollector(changefeedID common.ChangeFeedID) *metricsCollector {
 	return &metricsCollector{
 		fileCount: metrics.CloudStorageFileCountCounter.
 			WithLabelValues(namespace, changefeed),
-		writeDuration: metrics.CloudStorageWriteDurationHistogram.
-			WithLabelValues(namespace, changefeed),
 		flushDuration: metrics.CloudStorageFlushDurationHistogram.
 			WithLabelValues(namespace, changefeed),
 
