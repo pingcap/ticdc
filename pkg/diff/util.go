@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/dbutil"
@@ -106,14 +107,19 @@ func rowContainsCols(row map[string]*dbutil.ColumnData, cols []*model.ColumnInfo
 	return true
 }
 
-func rowToString(row map[string]*dbutil.ColumnData) string {
+// redactRowToString converts a database row to a string representation for logging.
+// Column names are preserved (not redacted), but column values are redacted according
+// to the current redaction mode. This allows debugging logs to show which columns
+// are involved while protecting the actual data values.
+// Format: "{ col1: <redacted_value>, col2: IsNull,  }"
+func redactRowToString(row map[string]*dbutil.ColumnData) string {
 	var s strings.Builder
 	s.WriteString("{ ")
 	for key, val := range row {
 		if val.IsNull {
 			s.WriteString(fmt.Sprintf("%s: IsNull, ", key))
 		} else {
-			s.WriteString(fmt.Sprintf("%s: %s, ", key, val.Data))
+			s.WriteString(fmt.Sprintf("%s: %s, ", key, util.RedactValue(string(val.Data))))
 		}
 	}
 	s.WriteString(" }")
