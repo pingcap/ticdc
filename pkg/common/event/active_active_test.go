@@ -32,8 +32,7 @@ func TestFilterDMLEventNormalTablePassthrough(t *testing.T) {
 		{int64(1)},
 	})
 
-	filtered, skip, err := FilterDMLEvent(event, false)
-	require.NoError(t, err)
+	filtered, skip := FilterDMLEvent(event, false, nil)
 	require.False(t, skip)
 	require.Equal(t, event, filtered)
 	require.Equal(t, int32(1), filtered.Len())
@@ -48,8 +47,7 @@ func TestFilterDMLEventActiveActiveWithEnableDropsDeletes(t *testing.T) {
 			{int64(2), nil}, // insert row
 		})
 
-	filtered, skip, err := FilterDMLEvent(event, true)
-	require.NoError(t, err)
+	filtered, skip := FilterDMLEvent(event, true, nil)
 	require.False(t, skip)
 	require.NotEqual(t, event, filtered)
 	require.Equal(t, int32(1), filtered.Len())
@@ -75,8 +73,7 @@ func TestFilterDMLEventActiveActiveSkipsDeleteButKeepsFollowingRows(t *testing.T
 			{int64(3), nil}, // insert row
 		})
 
-	filtered, skip, err := FilterDMLEvent(event, true)
-	require.NoError(t, err)
+	filtered, skip := FilterDMLEvent(event, true, nil)
 	require.False(t, skip)
 	require.NotNil(t, filtered)
 	require.NotEqual(t, event, filtered)
@@ -107,8 +104,7 @@ func TestFilterDMLEventSoftDeleteConvertUpdate(t *testing.T) {
 			{int64(1), ts},  // post row with soft delete timestamp
 		})
 
-	filtered, skip, err := FilterDMLEvent(event, false)
-	require.NoError(t, err)
+	filtered, skip := FilterDMLEvent(event, false, nil)
 	require.False(t, skip)
 	require.NotEqual(t, event, filtered)
 	require.Equal(t, int32(1), filtered.Len())
@@ -132,8 +128,7 @@ func TestFilterDMLEventActiveActiveConvertWhenDisabled(t *testing.T) {
 			{int64(2), ts},
 		})
 
-	filtered, skip, err := FilterDMLEvent(event, false)
-	require.NoError(t, err)
+	filtered, skip := FilterDMLEvent(event, false, nil)
 	require.False(t, skip)
 	require.NotEqual(t, event, filtered)
 	require.Equal(t, int32(1), filtered.Len())
@@ -157,8 +152,7 @@ func TestFilterDMLEventActiveActiveKeepUpdateWhenEnabled(t *testing.T) {
 			{int64(3), ts},
 		})
 
-	filtered, skip, err := FilterDMLEvent(event, true)
-	require.NoError(t, err)
+	filtered, skip := FilterDMLEvent(event, true, nil)
 	require.False(t, skip)
 	require.Equal(t, event, filtered)
 	require.Equal(t, int32(1), filtered.Len())
@@ -180,10 +174,43 @@ func TestFilterDMLEventAllRowsSkipped(t *testing.T) {
 			{int64(1), nil},
 		})
 
-	filtered, skip, err := FilterDMLEvent(event, false)
-	require.NoError(t, err)
+	filtered, skip := FilterDMLEvent(event, false, nil)
 	require.True(t, skip)
 	require.Nil(t, filtered)
+}
+
+func TestFilterDMLEventMissingSoftDeleteColumnReportsError(t *testing.T) {
+	ti := newTestTableInfo(t, true, false)
+	event := newDMLEventForTest(t, ti,
+		[]commonpkg.RowType{commonpkg.RowTypeInsert},
+		[][]interface{}{
+			{int64(1)},
+		})
+
+	var handledErr error
+	filtered, skip := FilterDMLEvent(event, true, func(err error) { handledErr = err })
+	require.True(t, skip)
+	require.Nil(t, filtered)
+	require.Error(t, handledErr)
+	require.Contains(t, handledErr.Error(), SoftDeleteTimeColumn)
+}
+
+func TestFilterDMLEventSoftDeleteTableMissingColumnReportsError(t *testing.T) {
+	ti := newTestTableInfo(t, false, false)
+	ti.SoftDeleteTable = true
+	event := newDMLEventForTest(t, ti,
+		[]commonpkg.RowType{commonpkg.RowTypeUpdate},
+		[][]interface{}{
+			{int64(1)},
+			{int64(1)},
+		})
+
+	var handledErr error
+	filtered, skip := FilterDMLEvent(event, false, func(err error) { handledErr = err })
+	require.True(t, skip)
+	require.Nil(t, filtered)
+	require.Error(t, handledErr)
+	require.Contains(t, handledErr.Error(), SoftDeleteTimeColumn)
 }
 
 func newTestTableInfo(t *testing.T, activeActive, softDelete bool) *commonpkg.TableInfo {

@@ -16,6 +16,7 @@ package event
 import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -45,6 +46,8 @@ const (
 
 // EvaluateRowPolicy decides how special tables (active-active/soft-delete)
 // should behave under the given changefeed mode.
+// softDeleteTimeCol and softDeleteTimeColIndex must refer to `_tidb_softdelete_time`
+// when enableActiveActive is false and the table participates in soft-delete handling.
 // The decision order is:
 //  1. Tables with neither feature are returned untouched.
 //  2. Delete rows are skipped no matter which mode we run in.
@@ -57,56 +60,45 @@ func EvaluateRowPolicy(
 	tableInfo *common.TableInfo,
 	row *RowChange,
 	enableActiveActive bool,
-) (RowPolicyDecision, error) {
+	softDeleteTimeCol *model.ColumnInfo,
+	softDeleteTimeColIndex int,
+) RowPolicyDecision {
 	if tableInfo == nil || row == nil {
-		return RowPolicyKeep, nil
+		return RowPolicyKeep
 	}
 
 	isActiveActive := tableInfo.IsActiveActiveTable()
 	isSoftDelete := tableInfo.IsSoftDeleteTable()
 	if !isActiveActive && !isSoftDelete {
-		return RowPolicyKeep, nil
+		return RowPolicyKeep
 	}
 
 	if row.RowType == common.RowTypeDelete {
-		return RowPolicySkip, nil
+		return RowPolicySkip
 	}
 
 	// When enable-active-active is true, we only drop delete events and keep the rest.
 	if enableActiveActive {
-		return RowPolicyKeep, nil
+		return RowPolicyKeep
 	}
 
 	if row.RowType != common.RowTypeUpdate {
-		return RowPolicyKeep, nil
+		return RowPolicyKeep
 	}
 
-	convert, err := needConvertUpdateToDelete(tableInfo, row)
-	if err != nil {
-		return RowPolicyKeep, err
+	if needConvertUpdateToDelete(row, softDeleteTimeColIndex, softDeleteTimeCol) {
+		return RowPolicyConvertToDelete
 	}
-	if convert {
-		return RowPolicyConvertToDelete, nil
-	}
-	return RowPolicyKeep, nil
+	return RowPolicyKeep
 }
 
-func needConvertUpdateToDelete(tableInfo *common.TableInfo, row *RowChange) (bool, error) {
-	if tableInfo == nil || row == nil {
-		return false, nil
+// needConvertUpdateToDelete returns true when this update represents a soft-delete transition.
+// The caller must ensure `softDeleteTimeCol` and `softDeleteTimeColIndex` are valid for the row.
+func needConvertUpdateToDelete(row *RowChange, softDeleteTimeColIndex int, softDeleteTimeCol *model.ColumnInfo) bool {
+	if row == nil || softDeleteTimeCol == nil {
+		return false
 	}
-	// Soft-delete is modeled as `_tidb_softdelete_time` changing from NULL/zero to
-	// a non-zero timestamp. Only when the table exposes this column do we attempt
-	// the conversion.
-	colInfo, ok := tableInfo.GetColumnInfoByName(SoftDeleteTimeColumn)
-	if !ok {
-		return false, nil
-	}
-	offset, ok := tableInfo.GetColumnOffsetByName(SoftDeleteTimeColumn)
-	if !ok {
-		return false, nil
-	}
-	return isSoftDeleteTransition(row.PreRow, row.Row, offset, colInfo), nil
+	return isSoftDeleteTransition(row.PreRow, row.Row, softDeleteTimeColIndex, softDeleteTimeCol)
 }
 
 func isSoftDeleteTransition(preRow, row chunk.Row, offset int, colInfo *model.ColumnInfo) bool {
@@ -145,33 +137,35 @@ func ApplyRowPolicyDecision(row *RowChange, decision RowPolicyDecision) {
 
 // FilterDMLEvent applies row policy decisions to each row in the DMLEvent.
 //   - Normal tables simply fall through: the original event is returned as-is.
-//   - Active-active tables:
-//   - enable-active-active = true: only delete rows are removed, other rows pass through.
-//   - enable-active-active = false: delete rows are removed and updates that flip
+//   - Active-active tables when enable-active-active = true: only delete rows are removed,
+//     other rows pass through.
+//   - Active-active tables when enable-active-active = false: delete rows are removed and
+//     updates that flip
 //     `_tidb_softdelete_time` from zero to non-zero will be converted to delete events.
 //   - Soft-delete tables behave the same as the second bullet: delete rows are removed and
 //     soft-delete transitions are converted into deletes.
 //
-// It returns the possibly modified event, whether the event should be skipped entirely,
-// and an error if evaluation fails.
-func FilterDMLEvent(event *DMLEvent, enableActiveActive bool) (*DMLEvent, bool, error) {
+// `handleError` is used to report unexpected schema issues and is expected to stop the
+// owning dispatcher. When it is invoked, the returned event must be treated as dropped.
+func FilterDMLEvent(event *DMLEvent, enableActiveActive bool, handleError func(error)) (*DMLEvent, bool) {
 	if event == nil {
-		return nil, true, nil
+		return nil, true
 	}
 
 	tableInfo := event.TableInfo
 	if tableInfo == nil || event.Rows == nil {
-		return event, false, nil
+		return event, false
 	}
 
-	needProcess := enableActiveActive || tableInfo.IsActiveActiveTable() || tableInfo.IsSoftDeleteTable()
-	if !needProcess {
-		return event, false, nil
+	isActiveActive := tableInfo.IsActiveActiveTable()
+	isSoftDelete := tableInfo.IsSoftDeleteTable()
+	if !isActiveActive && !isSoftDelete {
+		return event, false
 	}
 
 	fieldTypes := tableInfo.GetFieldSlice()
 	if fieldTypes == nil {
-		return event, false, nil
+		return event, false
 	}
 
 	var (
@@ -179,16 +173,33 @@ func FilterDMLEvent(event *DMLEvent, enableActiveActive bool) (*DMLEvent, bool, 
 		softDeleteTimeColIndex int
 		hasSoftDeleteTimeCol   bool
 	)
-	if enableActiveActive {
+	needSoftDeleteTimeCol := (enableActiveActive && isActiveActive) || (!enableActiveActive && (isActiveActive || isSoftDelete))
+	if needSoftDeleteTimeCol {
 		colInfo, ok := tableInfo.GetColumnInfoByName(SoftDeleteTimeColumn)
-		if ok {
-			offset, ok := tableInfo.GetColumnOffsetByName(SoftDeleteTimeColumn)
-			if ok {
-				softDeleteTimeCol = colInfo
-				softDeleteTimeColIndex = offset
-				hasSoftDeleteTimeCol = true
-			}
+		if !ok {
+			handleError(errors.Errorf(
+				"dispatcher %s table %s.%s missing required column %s",
+				event.DispatcherID.String(),
+				tableInfo.GetSchemaName(),
+				tableInfo.GetTableName(),
+				SoftDeleteTimeColumn,
+			))
+			return nil, true
 		}
+		offset, ok := tableInfo.GetColumnOffsetByName(SoftDeleteTimeColumn)
+		if !ok {
+			handleError(errors.Errorf(
+				"dispatcher %s table %s.%s missing required column offset %s",
+				event.DispatcherID.String(),
+				tableInfo.GetSchemaName(),
+				tableInfo.GetTableName(),
+				SoftDeleteTimeColumn,
+			))
+			return nil, true
+		}
+		softDeleteTimeCol = colInfo
+		softDeleteTimeColIndex = offset
+		hasSoftDeleteTimeCol = true
 	}
 
 	newChunk := chunk.NewChunkWithCapacity(fieldTypes, event.Rows.NumRows())
@@ -204,11 +215,7 @@ func FilterDMLEvent(event *DMLEvent, enableActiveActive bool) (*DMLEvent, bool, 
 			break
 		}
 
-		decision, err := EvaluateRowPolicy(tableInfo, &row, enableActiveActive)
-		if err != nil {
-			event.Rewind()
-			return nil, false, err
-		}
+		decision := EvaluateRowPolicy(tableInfo, &row, enableActiveActive, softDeleteTimeCol, softDeleteTimeColIndex)
 
 		switch decision {
 		case RowPolicySkip:
@@ -218,6 +225,7 @@ func FilterDMLEvent(event *DMLEvent, enableActiveActive bool) (*DMLEvent, bool, 
 				softDeleteTime := common.ExtractColVal(&row.PreRow, softDeleteTimeCol, softDeleteTimeColIndex)
 				if softDeleteTime == nil {
 					log.Info("received hard delete row",
+						zap.Stringer("dispatcherID", event.DispatcherID),
 						zap.Uint64("commitTs", uint64(event.CommitTs)))
 				}
 			}
@@ -231,7 +239,7 @@ func FilterDMLEvent(event *DMLEvent, enableActiveActive bool) (*DMLEvent, bool, 
 
 		appendRowChangeToChunk(newChunk, &row)
 		// RowTypes/RowKeys are indexed by physical row slots in `DMLEvent.Rows`.
-		// An update occupies two slots (pre and post image), so we need to append
+		// An update occupies two slots (pre and post), so we need to append
 		// its type/key twice to keep `GetNextRow()` semantics intact.
 		physicalSlots := 1
 		if row.RowType == common.RowTypeUpdate {
@@ -247,35 +255,47 @@ func FilterDMLEvent(event *DMLEvent, enableActiveActive bool) (*DMLEvent, bool, 
 	event.Rewind()
 
 	if !filtered {
-		return event, false, nil
+		return event, false
 	}
 
 	if kept == 0 {
-		return nil, true, nil
+		return nil, true
 	}
 
-	newEvent := NewDMLEvent(event.DispatcherID, event.PhysicalTableID, event.StartTs, event.CommitTs, event.TableInfo)
-	newEvent.TableInfoVersion = event.TableInfoVersion
-	newEvent.Seq = event.Seq
-	newEvent.Epoch = event.Epoch
-	newEvent.ReplicatingTs = event.ReplicatingTs
-	newEvent.PostTxnFlushed = event.PostTxnFlushed
-	event.PostTxnFlushed = nil
+	return newFilteredDMLEvent(event, newChunk, rowTypes, rowKeys, checksums, kept), false
+}
 
-	newEvent.SetRows(newChunk)
+// newFilteredDMLEvent builds a new DMLEvent from the filtered rows while preserving
+// dispatcher-managed metadata from the source event.
+func newFilteredDMLEvent(
+	source *DMLEvent,
+	rows *chunk.Chunk,
+	rowTypes []common.RowType,
+	rowKeys [][]byte,
+	checksums []*integrity.Checksum,
+	kept int,
+) *DMLEvent {
+	newEvent := NewDMLEvent(source.DispatcherID, source.PhysicalTableID, source.StartTs, source.CommitTs, source.TableInfo)
+	newEvent.TableInfoVersion = source.TableInfoVersion
+	newEvent.Seq = source.Seq
+	newEvent.Epoch = source.Epoch
+	newEvent.ReplicatingTs = source.ReplicatingTs
+	newEvent.PostTxnFlushed = source.PostTxnFlushed
+	source.PostTxnFlushed = nil
+
+	newEvent.SetRows(rows)
 	newEvent.RowTypes = rowTypes
 	newEvent.RowKeys = rowKeys
 	newEvent.Checksum = checksums
 	newEvent.Length = int32(kept)
 	newEvent.PreviousTotalOffset = 0
 
-	if event.Len() == 0 {
+	if source.Len() == 0 {
 		newEvent.ApproximateSize = 0
 	} else {
-		newEvent.ApproximateSize = event.ApproximateSize * int64(kept) / int64(event.Len())
+		newEvent.ApproximateSize = source.ApproximateSize * int64(kept) / int64(source.Len())
 	}
-
-	return newEvent, false, nil
+	return newEvent
 }
 
 func appendRowChangeToChunk(chk *chunk.Chunk, row *RowChange) {

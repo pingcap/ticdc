@@ -271,12 +271,10 @@ func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) boo
 	for _, event := range events {
 		// FilterDMLEvent returns the original event for normal tables and only
 		// allocates a new event when the table needs active-active or soft-delete
-		// processing. Skip is only true when every row in the event should be dropped.
-		filtered, skip, err := commonEvent.FilterDMLEvent(event, d.sharedInfo.enableActiveActive)
-		if err != nil {
-			d.HandleError(err)
-			continue
-		}
+		// processing. Skip is true when every row in the event is dropped, or when
+		// the event contains unexpected schema issues that have been reported via
+		// HandleError.
+		filtered, skip := commonEvent.FilterDMLEvent(event, d.sharedInfo.enableActiveActive, d.HandleError)
 		if skip || filtered == nil {
 			continue
 		}
