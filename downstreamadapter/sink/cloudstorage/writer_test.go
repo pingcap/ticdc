@@ -61,7 +61,7 @@ func testWriter(ctx context.Context, t *testing.T, dir string) *writer {
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 	d := newWriter(1, changefeedID, storage,
-		cfg, ".json", chann.NewAutoDrainChann[eventFragment](), statistics, newMetricsCollector(changefeedID))
+		cfg, ".json", chann.NewAutoDrainChann[eventFragment](), statistics)
 	return d
 }
 

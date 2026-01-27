@@ -50,9 +50,9 @@ type writer struct {
 	statistics        *metrics.Statistics
 	filePathGenerator *cloudstorage.FilePathGenerator
 
-	collector     *metricsCollector
 	busyRatio     prometheus.Counter
 	flushDuration prometheus.Observer
+	fileCount     prometheus.Counter
 }
 
 func newWriter(
@@ -63,8 +63,11 @@ func newWriter(
 	extension string,
 	inputCh *chann.DrainableChann[eventFragment],
 	statistics *metrics.Statistics,
-	collector *metricsCollector,
 ) *writer {
+	var (
+		namespace = changefeedID.Keyspace()
+		name      = changefeedID.Name()
+	)
 	d := &writer{
 		id:                id,
 		changeFeedID:      changefeedID,
@@ -75,11 +78,9 @@ func newWriter(
 		statistics:        statistics,
 		filePathGenerator: cloudstorage.NewFilePathGenerator(changefeedID, config, storage, extension),
 
-		collector: collector,
-		busyRatio: metrics.CloudStorageWriterBusyRatio.
-			WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), strconv.Itoa(id)),
-		flushDuration: metrics.CloudStorageFlushDurationHistogram.
-			WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		busyRatio:     metrics.CloudStorageWriterBusyRatio.WithLabelValues(namespace, name, strconv.Itoa(id)),
+		flushDuration: metrics.CloudStorageFlushDurationHistogram.WithLabelValues(namespace, name),
+		fileCount:     metrics.CloudStorageFileCountCounter.WithLabelValues(namespace, name),
 	}
 
 	return d
@@ -257,7 +258,7 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 	}); err != nil {
 		return err
 	}
-	d.collector.fileCount.Inc()
+	d.fileCount.Inc()
 
 	// then write the index file to external storage in the end.
 	// the file content is simply the last data file path
@@ -340,8 +341,13 @@ func (d *writer) close() {
 	if !atomic.CompareAndSwapUint64(&d.isClosed, 0, 1) {
 		return
 	}
-	metrics.CloudStorageWriterBusyRatio.DeleteLabelValues(d.changeFeedID.Keyspace(), d.changeFeedID.Name())
-	metrics.CloudStorageFlushDurationHistogram.DeleteLabelValues(d.changeFeedID.Keyspace(), d.changeFeedID.Name())
+	var (
+		namespace = d.changeFeedID.Keyspace()
+		name      = d.changeFeedID.Name()
+	)
+	metrics.CloudStorageWriterBusyRatio.DeleteLabelValues(namespace, name)
+	metrics.CloudStorageFlushDurationHistogram.DeleteLabelValues(namespace, name)
+	metrics.CloudStorageFileCountCounter.DeleteLabelValues(namespace, name)
 }
 
 // batchedTask contains a set of singleTableTask.

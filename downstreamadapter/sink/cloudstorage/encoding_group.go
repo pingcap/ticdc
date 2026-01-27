@@ -39,8 +39,6 @@ type encodingGroup struct {
 	inputCh  *chann.UnlimitedChannel[eventFragment, any]
 	outputCh chan<- eventFragment
 
-	collector *metricsCollector
-
 	closed *atomic.Bool
 }
 
@@ -50,7 +48,6 @@ func newEncodingGroup(
 	concurrency int,
 	inputCh *chann.UnlimitedChannel[eventFragment, any],
 	outputCh chan<- eventFragment,
-	collector *metricsCollector,
 ) *encodingGroup {
 	return &encodingGroup{
 		changeFeedID: changefeedID,
@@ -58,7 +55,6 @@ func newEncodingGroup(
 		concurrency:  concurrency,
 		inputCh:      inputCh,
 		outputCh:     outputCh,
-		collector:    collector,
 
 		closed: atomic.NewBool(false),
 	}
@@ -94,7 +90,6 @@ func (eg *encodingGroup) runEncoder(ctx context.Context) error {
 				return err
 			}
 			frag.encodedMsgs = encoder.Build()
-			eg.recordEncodedBytes(&frag)
 
 			select {
 			case <-ctx.Done():
@@ -107,22 +102,4 @@ func (eg *encodingGroup) runEncoder(ctx context.Context) error {
 
 func (eg *encodingGroup) close() {
 	eg.closed.Store(true)
-}
-
-func (eg *encodingGroup) recordEncodedBytes(frag *eventFragment) {
-	if eg.collector == nil || frag == nil || frag.event == nil {
-		return
-	}
-	var encodedBytes int64
-	for _, msg := range frag.encodedMsgs {
-		encodedBytes += int64(len(msg.Key) + len(msg.Value))
-	}
-	if encodedBytes <= 0 {
-		return
-	}
-	eg.collector.unflushedEncodedBytes.Add(encodedBytes)
-	eg.collector.totalEncodedBytes.Add(encodedBytes)
-	frag.event.AddPostFlushFunc(func() {
-		eg.collector.unflushedEncodedBytes.Sub(encodedBytes)
-	})
 }
