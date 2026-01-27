@@ -215,11 +215,11 @@ type BasicDispatcher struct {
 
 	BootstrapState bootstrapState
 
-	// activeActiveChecked indicates whether we have already validated that
-	// the table matches the current active-active configuration. The first
-	// DML/DDL must trigger this validation, afterwards only DDL events need
-	// to keep checking.
-	activeActiveChecked bool
+	// tableModeCompatibilityChecked indicates whether we have already validated that
+	// the table schema is compatible with the current replication mode configuration.
+	// The first DML/DDL must trigger this validation. After that, only DDL events need
+	// to keep checking because they may change the table schema.
+	tableModeCompatibilityChecked bool
 }
 
 func NewBasicDispatcher(
@@ -353,8 +353,8 @@ func (d *BasicDispatcher) ensureActiveActiveTableInfo(tableInfo *common.TableInf
 	}
 	if !tableInfo.IsActiveActiveTable() {
 		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
-			"table %s.%s(id=%d) is not active-active but enable-active-active is true",
-			tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID)
+			"table %s.%s(id=%d) in dispatcher %s is not active-active but enable-active-active is true",
+			tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String())
 	}
 	requiredCols := []string{
 		commonEvent.OriginTsColumn,
@@ -363,14 +363,18 @@ func (d *BasicDispatcher) ensureActiveActiveTableInfo(tableInfo *common.TableInf
 	for _, col := range requiredCols {
 		if _, ok := tableInfo.GetColumnInfoByName(col); !ok {
 			return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
-				"table %s.%s(id=%d) missing required column %s for enable-active-active",
-				tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, col)
+				"table %s.%s(id=%d) in dispatcher %s missing required column %s for enable-active-active",
+				tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String(), col)
 		}
 	}
 	return nil
 }
 
-func (d *BasicDispatcher) handleActiveActiveCheck(event commonEvent.Event) error {
+// checkTableModeCompatibility validates that the table schema matches the current replication mode configuration.
+func (d *BasicDispatcher) checkTableModeCompatibility(event commonEvent.Event) error {
+	defer func() {
+		d.tableModeCompatibilityChecked = true
+	}()
 	switch ev := event.(type) {
 	case *commonEvent.DMLEvent:
 		return d.ensureTableModeCompatibility(ev.TableInfo)
@@ -389,19 +393,21 @@ func (d *BasicDispatcher) ensureTableModeCompatibility(tableInfo *common.TableIn
 		return d.ensureActiveActiveTableInfo(tableInfo)
 	}
 
+	// If downstream is non-tidb mysql class, and enableActiveActive is false,
+	// then the table must not be active-active or soft delete.
 	if d.sink.SinkType() != common.MysqlSinkType {
 		return nil
 	}
 
 	if tableInfo.IsActiveActiveTable() {
 		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
-			"table %s.%s(id=%d) is active-active but enable-active-active is false",
-			tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID)
+			"table %s.%s(id=%d) in dispatcher %s is active-active but enable-active-active is false",
+			tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String())
 	}
 	if tableInfo.IsSoftDeleteTable() {
 		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
-			"table %s.%s(id=%d) is soft delete but enable-active-active is false",
-			tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID)
+			"table %s.%s(id=%d) in dispatcher %s is soft delete but enable-active-active is false",
+			tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String())
 	}
 	return nil
 }
@@ -549,8 +555,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 
 		// only when we receive the first event, we can regard the dispatcher begin syncing data
 		// then turning into working status.
-		firstEvent := d.isFirstEvent(event)
-		if firstEvent {
+		if d.isFirstEvent(event) {
 			d.updateDispatcherStatusToWorking()
 		}
 
@@ -558,12 +563,11 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 		case commonEvent.TypeResolvedEvent:
 			latestResolvedTs = event.(commonEvent.ResolvedEvent).ResolvedTs
 		case commonEvent.TypeDMLEvent:
-			if !d.activeActiveChecked {
-				if err := d.handleActiveActiveCheck(event); err != nil {
+			if !d.tableModeCompatibilityChecked {
+				if err := d.checkTableModeCompatibility(event); err != nil {
 					d.HandleError(err)
 					return block
 				}
-				d.activeActiveChecked = true
 			}
 			dml := event.(*commonEvent.DMLEvent)
 			if dml.Len() == 0 {
@@ -598,11 +602,10 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				log.Panic("ddl event should only be singly handled",
 					zap.Stringer("dispatcherID", d.id))
 			}
-			if err := d.handleActiveActiveCheck(event); err != nil {
+			if err := d.checkTableModeCompatibility(event); err != nil {
 				d.HandleError(err)
 				return block
 			}
-			d.activeActiveChecked = true
 
 			failpoint.Inject("BlockOrWaitBeforeDealWithDDL", nil)
 			block = true

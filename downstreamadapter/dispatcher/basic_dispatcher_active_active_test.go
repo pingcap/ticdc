@@ -99,7 +99,7 @@ func TestHandleEventsIgnoreSpecialTableOnNonMySQLSink(t *testing.T) {
 
 func TestDDLEventsAlwaysValidateActiveActive(t *testing.T) {
 	dispatcher := newTestBasicDispatcher(t, common.MysqlSinkType, false)
-	dispatcher.activeActiveChecked = true
+	dispatcher.tableModeCompatibilityChecked = true
 
 	tableInfo := &common.TableInfo{
 		TableName:       common.TableName{Schema: "test", Table: "ddl", TableID: 45},
