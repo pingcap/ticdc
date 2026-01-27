@@ -147,11 +147,11 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 
 			start = time.Now()
 			tryAdvanceResolvedTs()
-			metrics.SubscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("advanceResolvedTs").Observe(time.Since(startTime).Seconds())
+			metrics.SubscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("advanceResolvedTs").Observe(time.Since(start).Seconds())
 
 			start = time.Now()
 			h.subClient.wakeSubscription(span.subID)
-			metrics.SubscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("wakeSubscription").Observe(time.Since(startTime).Seconds())
+			metrics.SubscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("wakeSubscription").Observe(time.Since(start).Seconds())
 		})
 		// if not await, the wake callback will not be called, we need clear the cache manually.
 		if !await {
