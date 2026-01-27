@@ -37,38 +37,18 @@ func (w *Writer) generateActiveActiveNormalSQLs(events []*commonEvent.DMLEvent) 
 		if event.Len() == 0 {
 			continue
 		}
-		var (
-			originTsCol    *model.ColumnInfo
-			originTsOffset int
-			checkOriginTs  bool
-		)
-		if w.cfg.IsTiDB {
-			colInfo, ok := event.TableInfo.GetColumnInfoByName(commonEvent.OriginTsColumn)
-			if ok {
-				offset, ok := event.TableInfo.GetColumnOffsetByName(commonEvent.OriginTsColumn)
-				if ok {
-					originTsCol = colInfo
-					originTsOffset = offset
-					checkOriginTs = true
-				}
-			}
-		}
+		originTsChecker := w.newOriginTsChecker(event.TableInfo, event.GetTableID())
 		for {
 			row, ok := event.GetNextRow()
 			if !ok {
 				event.Rewind()
 				break
 			}
-			if checkOriginTs && row.RowType != common.RowTypeDelete && !row.Row.IsEmpty() && originTsOffset < row.Row.Len() {
-				// In active-active replication with TiDB downstream, TiCDC assumes user-managed
-				// DMLs keep `_tidb_origin_ts` as NULL. A non-NULL value indicates the row was
-				// written by TiCDC and should be dropped to avoid replication loops.
-				originTs := common.ExtractColVal(&row.Row, originTsCol, originTsOffset)
-				if originTs != nil {
-					log.Info("drop row with non null origin ts",
-						zap.Uint64("commitTs", event.CommitTs))
-					continue
-				}
+			// In active-active replication with TiDB downstream, TiCDC assumes user-managed
+			// DMLs keep `_tidb_origin_ts` as NULL. A non-NULL value indicates the row was
+			// written by TiCDC and should be dropped to avoid replication loops.
+			if originTsChecker.shouldDropRow(&row, event.CommitTs) {
+				continue
 			}
 			sql, args := buildActiveActiveUpsertSQL(
 				event.TableInfo,
@@ -132,7 +112,7 @@ func (w *Writer) generateActiveActiveBatchSQL(events []*commonEvent.DMLEvent) ([
 			zap.Error(err), zap.Any("events", events), zap.Int("writerID", w.id))
 		return []string{}, [][]interface{}{}
 	}
-	return w.batchSingleTxnActiveRows(rowChanges, commitTs, tableInfo)
+	return w.batchSingleTxnActiveRows(rowChanges, commitTs, tableInfo, events[0].GetTableID())
 }
 
 // ===== Helpers =====
@@ -160,22 +140,7 @@ func (w *Writer) collectActiveActiveRowsForWrite(event *commonEvent.DMLEvent) ([
 	rows := make([]*commonEvent.RowChange, 0, event.Len())
 	commitTs := make([]uint64, 0, event.Len())
 
-	var (
-		originTsCol    *model.ColumnInfo
-		originTsOffset int
-		checkOriginTs  bool
-	)
-	if w.cfg.IsTiDB {
-		colInfo, ok := event.TableInfo.GetColumnInfoByName(commonEvent.OriginTsColumn)
-		if ok {
-			offset, ok := event.TableInfo.GetColumnOffsetByName(commonEvent.OriginTsColumn)
-			if ok {
-				originTsCol = colInfo
-				originTsOffset = offset
-				checkOriginTs = true
-			}
-		}
-	}
+	originTsChecker := w.newOriginTsChecker(event.TableInfo, event.GetTableID())
 
 	for {
 		row, ok := event.GetNextRow()
@@ -183,14 +148,9 @@ func (w *Writer) collectActiveActiveRowsForWrite(event *commonEvent.DMLEvent) ([
 			event.Rewind()
 			break
 		}
-		if checkOriginTs && row.RowType != common.RowTypeDelete && !row.Row.IsEmpty() && originTsOffset < row.Row.Len() {
-			// See the comment in generateActiveActiveNormalSQLs for the invariant.
-			originTs := common.ExtractColVal(&row.Row, originTsCol, originTsOffset)
-			if originTs != nil {
-				log.Info("drop row with non null origin ts",
-					zap.Uint64("commitTs", event.CommitTs))
-				continue
-			}
+		// See the comment in generateActiveActiveNormalSQLs for the invariant.
+		if originTsChecker.shouldDropRow(&row, event.CommitTs) {
+			continue
 		}
 		rowCopy := row
 		rows = append(rows, &rowCopy)
@@ -204,6 +164,7 @@ func (w *Writer) batchSingleTxnActiveRows(
 	rows []*commonEvent.RowChange,
 	commitTs []uint64,
 	tableInfo *common.TableInfo,
+	tableID int64,
 ) ([]string, [][]interface{}) {
 	if len(rows) != len(commitTs) {
 		log.Panic("mismatched rows and commitTs for active-active batch",
@@ -211,33 +172,13 @@ func (w *Writer) batchSingleTxnActiveRows(
 	}
 	filteredRows := make([]*commonEvent.RowChange, 0, len(rows))
 	filteredCommitTs := make([]uint64, 0, len(rows))
-	var (
-		originTsCol    *model.ColumnInfo
-		originTsOffset int
-		checkOriginTs  bool
-	)
-	if w.cfg.IsTiDB {
-		colInfo, ok := tableInfo.GetColumnInfoByName(commonEvent.OriginTsColumn)
-		if ok {
-			offset, ok := tableInfo.GetColumnOffsetByName(commonEvent.OriginTsColumn)
-			if ok {
-				originTsCol = colInfo
-				originTsOffset = offset
-				checkOriginTs = true
-			}
-		}
-	}
+	originTsChecker := w.newOriginTsChecker(tableInfo, tableID)
 	for i, row := range rows {
 		if row == nil || row.Row.IsEmpty() {
 			continue
 		}
-		if checkOriginTs && row.RowType != common.RowTypeDelete && originTsOffset < row.Row.Len() {
-			originTs := common.ExtractColVal(&row.Row, originTsCol, originTsOffset)
-			if originTs != nil {
-				log.Info("drop row with non null origin ts",
-					zap.Uint64("commitTs", commitTs[i]))
-				continue
-			}
+		if originTsChecker.shouldDropRow(row, commitTs[i]) {
+			continue
 		}
 		filteredRows = append(filteredRows, row)
 		filteredCommitTs = append(filteredCommitTs, commitTs[i])
@@ -247,4 +188,67 @@ func (w *Writer) batchSingleTxnActiveRows(
 	}
 	sql, args := buildActiveActiveUpsertSQL(tableInfo, filteredRows, filteredCommitTs)
 	return []string{sql}, [][]interface{}{args}
+}
+
+// originTsChecker filters out rows whose upstream payload already contains a non-NULL _tidb_origin_ts.
+type originTsChecker struct {
+	enabled bool
+	tableID int64
+	col     *model.ColumnInfo
+	offset  int
+}
+
+func (w *Writer) newOriginTsChecker(tableInfo *common.TableInfo, tableID int64) originTsChecker {
+	if !w.cfg.EnableActiveActive || !w.cfg.IsTiDB {
+		return originTsChecker{}
+	}
+	// Active-active mode relies on _tidb_origin_ts being present in the table schema.
+	// Missing metadata indicates a schema mismatch and must fail fast.
+	if tableInfo == nil {
+		log.Panic("table info is nil when origin ts checker is enabled",
+			zap.Int64("tableID", tableID))
+		return originTsChecker{}
+	}
+	colInfo, ok := tableInfo.GetColumnInfoByName(commonEvent.OriginTsColumn)
+	if !ok {
+		log.Panic("origin ts column not found when origin ts checker is enabled",
+			zap.Int64("tableID", tableID),
+			zap.Int64("logicalTableID", tableInfo.TableName.TableID),
+			zap.String("column", commonEvent.OriginTsColumn))
+		return originTsChecker{}
+	}
+	offset, ok := tableInfo.GetColumnOffsetByName(commonEvent.OriginTsColumn)
+	if !ok {
+		log.Panic("origin ts column offset not found when origin ts checker is enabled",
+			zap.Int64("tableID", tableID),
+			zap.Int64("logicalTableID", tableInfo.TableName.TableID),
+			zap.String("column", commonEvent.OriginTsColumn))
+		return originTsChecker{}
+	}
+	return originTsChecker{
+		enabled: true,
+		tableID: tableID,
+		col:     colInfo,
+		offset:  offset,
+	}
+}
+
+func (c originTsChecker) shouldDropRow(row *commonEvent.RowChange, commitTs uint64) bool {
+	if !c.enabled || row == nil {
+		return false
+	}
+	if row.RowType == common.RowTypeDelete || row.Row.IsEmpty() || c.offset >= row.Row.Len() {
+		return false
+	}
+	originTs := common.ExtractColVal(&row.Row, c.col, c.offset)
+	if originTs == nil {
+		return false
+	}
+	log.Info("drop row with non null origin ts",
+		zap.Uint64("commitTs", commitTs),
+		zap.Int64("tableID", c.tableID),
+		zap.Uint8("rowType", uint8(row.RowType)),
+		zap.Binary("rowKey", row.RowKey),
+		zap.Int("rowLen", row.Row.Len()))
+	return true
 }
