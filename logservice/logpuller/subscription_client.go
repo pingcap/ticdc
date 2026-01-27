@@ -191,10 +191,8 @@ type subscriptionClient struct {
 	stores sync.Map
 
 	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
-	// the following three fields are used to manage feedback from ds and notify other goroutines
-	mu     sync.Mutex
-	cond   *sync.Cond
-	paused atomic.Bool
+	// pauseGate blocks pushes when dynstream requests pausing the whole area.
+	pauseGate *pauseGate
 
 	// the credential to connect tikv
 	credential *security.Credential
@@ -258,7 +256,7 @@ func NewSubscriptionClient(
 	)
 	ds.Start()
 	subClient.ds = ds
-	subClient.cond = sync.NewCond(&subClient.mu)
+	subClient.pauseGate = newPauseGate()
 
 	subClient.initMetrics()
 	return subClient
@@ -361,7 +359,7 @@ func (s *subscriptionClient) Subscribe(
 	s.totalSpans.spanMap[subID] = rt
 	s.totalSpans.Unlock()
 
-	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(100*1024*1024*1024, dynstream.MemoryControlForPuller, "logPuller") // 1GB
+	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(1*1024*1024*1024, dynstream.MemoryControlForPuller, "logPuller") // 1GB
 	s.ds.AddPath(rt.subID, rt, areaSetting)
 
 	select {
@@ -397,17 +395,9 @@ func (s *subscriptionClient) wakeSubscription(subID SubscriptionID) {
 }
 
 func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
-	// fast path
-	if !s.paused.Load() {
-		s.ds.Push(subID, event)
+	if !s.pauseGate.wait(s.ctx) {
 		return
 	}
-	// slow path: wait until paused is false
-	s.mu.Lock()
-	for s.paused.Load() {
-		s.cond.Wait()
-	}
-	s.mu.Unlock()
 	s.ds.Push(subID, event)
 }
 
@@ -419,11 +409,10 @@ func (s *subscriptionClient) handleDSFeedBack(ctx context.Context) error {
 		case feedback := <-s.ds.Feedback():
 			switch feedback.FeedbackType {
 			case dynstream.PauseArea:
-				s.paused.Store(true)
+				s.pauseGate.pause()
 				log.Info("subscription client pause push region event")
 			case dynstream.ResumeArea:
-				s.paused.Store(false)
-				s.cond.Broadcast()
+				s.pauseGate.resume()
 				log.Info("subscription client resume push region event")
 			case dynstream.ReleasePath, dynstream.ResumePath:
 				// Ignore it, because it is no need to pause and resume a path in puller.
