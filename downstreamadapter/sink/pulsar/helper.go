@@ -18,6 +18,7 @@ import (
 	"net/url"
 
 	pulsarClient "github.com/apache/pulsar-client-go/pulsar"
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
@@ -29,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/pulsar"
 	putil "github.com/pingcap/ticdc/pkg/util"
+	"go.uber.org/zap"
 )
 
 type component struct {
@@ -46,7 +48,7 @@ func (c component) close() {
 		c.topicManager.Close()
 	}
 	if c.client != nil {
-		go c.client.Close()
+		c.client.Close()
 	}
 }
 
@@ -78,6 +80,11 @@ func newPulsarSinkComponentWithFactory(ctx context.Context,
 	protocol, err := helper.GetProtocol(putil.GetOrZero(sinkConfig.Protocol))
 	if err != nil {
 		return pulsarComponent, config.ProtocolUnknown, errors.Trace(err)
+	}
+	if !config.IsPulsarSupportedProtocols(protocol) {
+		return pulsarComponent, protocol, errors.ErrSinkURIInvalid.
+			GenWithStackByArgs("unsupported protocol, " +
+				"pulsar sink currently only support these protocols: [canal-json]")
 	}
 
 	pulsarComponent.config, err = pulsar.NewPulsarConfig(sinkURI, sinkConfig.PulsarConfig)
@@ -126,4 +133,40 @@ func newPulsarSinkComponentWithFactory(ctx context.Context,
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 	return pulsarComponent, protocol, nil
+}
+
+// newProducer creates a pulsar producer
+// One topic is used by one producer
+func newProducer(
+	pConfig *config.PulsarConfig,
+	client pulsarClient.Client,
+	topicName string,
+) (pulsarClient.Producer, error) {
+	maxReconnectToBroker := uint(config.DefaultMaxReconnectToPulsarBroker)
+	option := pulsarClient.ProducerOptions{
+		Topic:                topicName,
+		MaxReconnectToBroker: &maxReconnectToBroker,
+	}
+	if pConfig.BatchingMaxMessages != nil {
+		option.BatchingMaxMessages = *pConfig.BatchingMaxMessages
+	}
+	if pConfig.BatchingMaxPublishDelay != nil {
+		option.BatchingMaxPublishDelay = pConfig.BatchingMaxPublishDelay.Duration()
+	}
+	if pConfig.CompressionType != nil {
+		option.CompressionType = pConfig.CompressionType.Value()
+		option.CompressionLevel = pulsarClient.Default
+	}
+	if pConfig.SendTimeout != nil {
+		option.SendTimeout = pConfig.SendTimeout.Duration()
+	}
+
+	producer, err := client.CreateProducer(option)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Info("create pulsar producer success", zap.String("topic", topicName))
+
+	return producer, nil
 }
