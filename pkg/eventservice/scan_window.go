@@ -189,6 +189,10 @@ func (c *changefeedStatus) adjustScanInterval(now time.Time, usage memoryUsageSt
 		minTrendSamples           = 4
 		increasingTrendEpsilon    = 0.02
 		increasingTrendStartRatio = 0.3
+
+		minIncreaseSamples         = 10
+		minIncreaseSpanNumerator   = 4
+		minIncreaseSpanDenominator = 5
 	)
 
 	trendDelta := usage.last - usage.first
@@ -197,9 +201,10 @@ func (c *changefeedStatus) adjustScanInterval(now time.Time, usage memoryUsageSt
 	canAdjustOnTrend := now.Sub(c.lastTrendAdjustTime.Load()) >= scanTrendAdjustCooldown
 	shouldDampOnTrend := isAboveTrendStart && isIncreasing && canAdjustOnTrend
 
+	minIncreaseSpan := memoryUsageWindowDuration * minIncreaseSpanNumerator / minIncreaseSpanDenominator
 	allowedToIncrease := now.Sub(c.lastAdjustTime.Load()) >= scanIntervalAdjustCooldown &&
-		usage.cnt > 0 &&
-		usage.span >= memoryUsageWindowDuration &&
+		usage.cnt >= minIncreaseSamples &&
+		usage.span >= minIncreaseSpan &&
 		!(isAboveTrendStart && isIncreasing)
 
 	adjustedOnTrend := false

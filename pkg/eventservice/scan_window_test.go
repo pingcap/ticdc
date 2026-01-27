@@ -85,6 +85,27 @@ func TestAdjustScanIntervalUsesAvailableAsPressureSignal(t *testing.T) {
 	require.Equal(t, int64(10*time.Second), status.scanInterval.Load())
 }
 
+func TestAdjustScanIntervalIncreaseWithJitteredSamples(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"))
+	status.syncPointEnabled.Store(true)
+	status.syncPointInterval.Store(int64(1 * time.Minute))
+
+	start := time.Now()
+	status.lastAdjustTime.Store(start.Add(-scanIntervalAdjustCooldown - time.Second))
+
+	status.scanInterval.Store(int64(40 * time.Second))
+
+	// Use a >1s interval to simulate heartbeat jitter, so the window span will be
+	// slightly less than memoryUsageWindowDuration.
+	step := 1100 * time.Millisecond
+	for i := 0; i < 28; i++ {
+		status.updateMemoryUsage(start.Add(time.Duration(i)*step), 15, 100, 100)
+	}
+	require.Equal(t, int64(50*time.Second), status.scanInterval.Load())
+}
+
 func TestAdjustScanIntervalDecreasesWhenUsageIncreasing(t *testing.T) {
 	t.Parallel()
 
