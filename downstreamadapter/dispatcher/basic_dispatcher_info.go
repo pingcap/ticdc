@@ -158,7 +158,7 @@ func (d *BasicDispatcher) GetBDRMode() bool {
 }
 
 func (d *BasicDispatcher) EnableActiveActive() bool {
-	return d.sharedInfo.enableActiveActive
+	return d.sharedInfo.EnableActiveActive()
 }
 
 func (d *BasicDispatcher) GetTimezone() string {

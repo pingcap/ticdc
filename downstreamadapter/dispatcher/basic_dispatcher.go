@@ -343,6 +343,12 @@ func (d *BasicDispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) {
 	event.PostFlush()
 }
 
+// ensureActiveActiveTableInfo validates the table schema requirements for active-active mode.
+//
+// When active-active is enabled, the dispatcher requires the table to be marked as active-active and
+// to contain required columns (_tidb_origin_ts and _tidb_softdelete_time). These columns
+// are used by downstream SQL rewriting to preserve last-write-wins semantics and to prevent
+// replication loops.
 func (d *BasicDispatcher) ensureActiveActiveTableInfo(tableInfo *common.TableInfo) error {
 	if !d.sharedInfo.enableActiveActive {
 		return nil
@@ -371,6 +377,10 @@ func (d *BasicDispatcher) ensureActiveActiveTableInfo(tableInfo *common.TableInf
 }
 
 // checkTableModeCompatibility validates that the table schema matches the current replication mode configuration.
+//
+// It prevents misconfigurations where a special table (active-active / soft-delete) is replicated with
+// incompatible settings. It also marks tableModeCompatibilityChecked so DML events can skip repeated
+// checks, while DDL events continue to validate because they may change the table schema.
 func (d *BasicDispatcher) checkTableModeCompatibility(event commonEvent.Event) error {
 	defer func() {
 		d.tableModeCompatibilityChecked = true
