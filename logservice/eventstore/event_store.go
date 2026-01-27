@@ -26,6 +26,7 @@ import (
 
 	"github.com/cockroachdb/pebble"
 	"github.com/klauspost/compress/zstd"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
@@ -1285,6 +1286,9 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback, enco
 	metrics.EventStoreWriteBatchSizeHist.Observe(float64(batch.Len()))
 	metrics.EventStoreWriteBytes.Add(float64(batch.Len()))
 	start := time.Now()
+	// Used to simulate a one-shot disk stall when writing events.
+	// Trigger via HTTP failpoint API with expr like `1*sleep(5000)`.
+	failpoint.Inject("eventStoreWriteEventsDelayOnce", func() {})
 	err := batch.Commit(pebble.NoSync)
 	metrics.EventStoreWriteDurationHistogram.Observe(float64(time.Since(start).Milliseconds()) / 1000)
 	return err
