@@ -367,7 +367,20 @@ func (d *BasicDispatcher) GetLastSyncedTs() uint64 {
 func (d *BasicDispatcher) GetCheckpointTs() uint64 {
 	checkpointTs, isEmpty := d.tableProgress.GetCheckpointTs()
 	if isEmpty {
-		return max(checkpointTs, d.GetResolvedTs())
+		checkpointTs = max(checkpointTs, d.GetResolvedTs())
+	}
+
+	// When a DDL is deferred (i.e., submitted but not yet enqueued into tableProgress),
+	// we must not report checkpoint beyond (ddlCommitTs-1). Otherwise the watermark may
+	// virtually advance past an unexecuted DDL barrier.
+	if ddl := d.deferredDDLEvent.Load(); ddl != nil {
+		ddlCommitTs := ddl.GetCommitTs()
+		if ddlCommitTs > 0 {
+			ddlCheckpointUpperBound := ddlCommitTs - 1
+			if checkpointTs > ddlCheckpointUpperBound {
+				checkpointTs = ddlCheckpointUpperBound
+			}
+		}
 	}
 	return checkpointTs
 }
