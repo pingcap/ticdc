@@ -101,6 +101,10 @@ func (o *neverFinishOperator) OnTaskRemoved()           {}
 func (o *neverFinishOperator) String() string           { return "never-finish" }
 func (o *neverFinishOperator) BlockTsForward() bool     { return false }
 
+type testChecksumUpdater struct{}
+
+func (testChecksumUpdater) ApplyDelta(node.ID, []common.DispatcherID, []common.DispatcherID) {}
+
 func setAliveNodes(nodeManager *watcher.NodeManager, alive map[node.ID]*node.Info) {
 	type nodeMap = map[node.ID]*node.Info
 	v := reflect.ValueOf(nodeManager).Elem().FieldByName("nodes")
@@ -116,7 +120,7 @@ func TestController_PostFinishCalledOnceOnReplace(t *testing.T) {
 	spanController, changefeedID, replicaSet, _, _ := setupTestEnvironment(t)
 	spanController.AddReplicatingSpan(replicaSet)
 
-	oc := NewOperatorController(changefeedID, spanController, 1, common.DefaultMode)
+	oc := NewOperatorController(changefeedID, spanController, 1, common.DefaultMode, nil)
 	op := newBlockingFinishOperator(replicaSet.ID)
 	require.True(t, oc.AddOperator(op))
 
@@ -128,7 +132,7 @@ func TestController_PostFinishCalledOnceOnReplace(t *testing.T) {
 	}()
 	<-op.isFinishedCalled
 
-	oc.removeReplicaSet(newRemoveDispatcherOperator(spanController, replicaSet))
+	oc.removeReplicaSet(newRemoveDispatcherOperator(spanController, replicaSet, testChecksumUpdater{}))
 	wg.Wait()
 
 	require.Equal(t, int32(1), op.postFinishCount.Load())
@@ -144,7 +148,7 @@ func TestController_OnNodeRemoved_WithOccupyOperatorMarksSpanAbsent(t *testing.T
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	setAliveNodes(nodeManager, map[node.ID]*node.Info{nodeA: {ID: nodeA}})
 
-	oc := NewOperatorController(changefeedID, spanController, 1, common.DefaultMode)
+	oc := NewOperatorController(changefeedID, spanController, 1, common.DefaultMode, nil)
 	require.True(t, oc.AddOperator(NewOccupyDispatcherOperator(spanController, replicaSet)))
 
 	absentSizeBefore := spanController.GetAbsentSize()
@@ -162,7 +166,7 @@ func TestController_AddMergeOperatorFailureCleansOccupyOperators(t *testing.T) {
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	setAliveNodes(nodeManager, map[node.ID]*node.Info{nodeA: {ID: nodeA}})
 
-	oc := NewOperatorController(toMergedReplicaSets[0].ChangefeedID, spanController, 1, common.DefaultMode)
+	oc := NewOperatorController(toMergedReplicaSets[0].ChangefeedID, spanController, 1, common.DefaultMode, nil)
 
 	// Make adding occupy operator for the second replica set fail.
 	require.True(t, oc.AddOperator(&neverFinishOperator{id: toMergedReplicaSets[1].ID}))

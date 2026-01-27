@@ -66,6 +66,10 @@ type SplitDispatcherOperator struct {
 	lck sync.Mutex
 
 	sendThrottler sendThrottler
+
+	// checksumUpdater updates maintainer-side expected dispatcher ownership to reflect that the original
+	// dispatcher is removed before new split dispatchers are created.
+	checksumUpdater DispatcherSetChecksumUpdater
 }
 
 // NewSplitDispatcherOperator creates a new SplitDispatcherOperator
@@ -75,6 +79,7 @@ func NewSplitDispatcherOperator(
 	splitSpans []*heartbeatpb.TableSpan,
 	splitTargetNodes []node.ID,
 	postFinish func(span *replica.SpanReplication, node node.ID) bool,
+	updater DispatcherSetChecksumUpdater,
 ) *SplitDispatcherOperator {
 	var spansInfo strings.Builder
 	for _, span := range splitSpans {
@@ -91,6 +96,7 @@ func NewSplitDispatcherOperator(
 		splitTargetNodes: splitTargetNodes,
 		postFinish:       postFinish,
 		sendThrottler:    newSendThrottler(),
+		checksumUpdater:  updater,
 	}
 	return op
 }
@@ -170,6 +176,12 @@ func (m *SplitDispatcherOperator) PostFinish() {
 		m.spanController.MarkSpanAbsent(m.replicaSet)
 		return
 	}
+
+	m.checksumUpdater.ApplyDelta(
+		m.originNode,
+		nil,
+		[]common.DispatcherID{m.replicaSet.ID},
+	)
 
 	newReplicaSets := m.spanController.ReplaceReplicaSet([]*replica.SpanReplication{m.replicaSet}, m.splitSpans, m.checkpointTs, m.splitTargetNodes)
 

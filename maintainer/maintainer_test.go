@@ -90,6 +90,8 @@ func (m *mockDispatcherManager) handleMessage(msg *messaging.TargetMessage) {
 		m.onPostBootstrapRequest(msg)
 	case messaging.TypeScheduleDispatcherRequest:
 		m.onDispatchRequest(msg)
+	case messaging.TypeDispatcherSetChecksumUpdateRequest:
+		m.onDispatcherSetChecksumUpdate(msg)
 	case messaging.TypeMaintainerCloseRequest:
 		m.onMaintainerCloseRequest(msg)
 	default:
@@ -115,6 +117,7 @@ func (m *mockDispatcherManager) recvMessages(ctx context.Context, msg *messaging
 	case messaging.TypeScheduleDispatcherRequest,
 		messaging.TypeMaintainerBootstrapRequest,
 		messaging.TypeMaintainerPostBootstrapRequest,
+		messaging.TypeDispatcherSetChecksumUpdateRequest,
 		messaging.TypeMaintainerCloseRequest:
 		select {
 		case <-ctx.Done():
@@ -126,6 +129,24 @@ func (m *mockDispatcherManager) recvMessages(ctx context.Context, msg *messaging
 		log.Panic("unknown message type", zap.Any("message", msg.Message), zap.Any("type", msg.Type))
 	}
 	return nil
+}
+
+func (m *mockDispatcherManager) onDispatcherSetChecksumUpdate(msg *messaging.TargetMessage) {
+	req := msg.Message[0].(*heartbeatpb.DispatcherSetChecksumUpdateRequest)
+	ack := &heartbeatpb.DispatcherSetChecksumAckResponse{
+		ChangefeedID: req.ChangefeedID,
+		Epoch:        req.Epoch,
+		Mode:         req.Mode,
+		Seq:          req.Seq,
+	}
+	err := m.mc.SendCommand(messaging.NewSingleTargetMessage(
+		m.maintainerID,
+		messaging.MaintainerManagerTopic,
+		ack,
+	))
+	if err != nil {
+		log.Warn("send command failed", zap.Error(err))
+	}
 }
 
 func (m *mockDispatcherManager) onBootstrapRequest(msg *messaging.TargetMessage) {
@@ -222,7 +243,9 @@ func (m *mockDispatcherManager) onDispatchRequest(
 						CheckpointTs: m.checkpointTs,
 						ResolvedTs:   m.checkpointTs,
 					},
-					Statuses: []*heartbeatpb.TableSpanStatus{newStatus},
+					Statuses:          []*heartbeatpb.TableSpanStatus{newStatus},
+					ChecksumState:     heartbeatpb.ChecksumState_MATCH,
+					RedoChecksumState: heartbeatpb.ChecksumState_MATCH,
 				}
 				m.sendMessages(response)
 			}
@@ -247,7 +270,9 @@ func (m *mockDispatcherManager) sendHeartbeat() {
 				CheckpointTs: m.checkpointTs,
 				ResolvedTs:   m.checkpointTs,
 			},
-			Statuses: m.dispatchers,
+			Statuses:          m.dispatchers,
+			ChecksumState:     heartbeatpb.ChecksumState_MATCH,
+			RedoChecksumState: heartbeatpb.ChecksumState_MATCH,
 		}
 		m.checkpointTs++
 		m.sendMessages(response)

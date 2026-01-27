@@ -243,18 +243,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		}
 	}
 
-	if manager.GetMaintainerID() != from {
-		manager.SetMaintainerID(from)
-		log.Info("maintainer changed",
-			zap.String("changefeed", cfId.Name()), zap.String("maintainer", from.String()))
-	}
-
-	// FIXME(fizz): This is a temporary check to ensure the maintainer epoch is consistent.
-	// I will remove this after fully testing the new maintainer epoch mechanism.
-	if manager.GetMaintainerEpoch() != cfConfig.Epoch {
-		log.Error("maintainer epoch changed, this should not happen, please report this issue",
-			zap.String("changefeed", cfId.Name()), zap.Uint64("epoch", cfConfig.Epoch))
-	}
+	manager.UpdateMaintainer(from, cfConfig.Epoch)
 
 	var (
 		startTs     uint64
@@ -270,6 +259,58 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	}
 	response := createBootstrapResponse(req.ChangefeedID, manager, startTs, redoStartTs)
 	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
+}
+
+func (m *DispatcherOrchestrator) handleDispatcherSetChecksumUpdate(
+	from node.ID,
+	req *heartbeatpb.DispatcherSetChecksumUpdateRequest,
+) error {
+	cfId := common.NewChangefeedIDFromPB(req.ChangefeedID)
+
+	m.mutex.Lock()
+	manager, exists := m.dispatcherManagers[cfId]
+	m.mutex.Unlock()
+	if !exists {
+		log.Debug("dispatcher manager not found, ignore dispatcher set checksum update",
+			zap.Stringer("changefeedID", cfId),
+			zap.String("from", from.String()),
+			zap.Uint64("epoch", req.Epoch),
+			zap.Int64("mode", req.Mode),
+			zap.Uint64("seq", req.Seq))
+		return nil
+	}
+
+	if manager.GetMaintainerID() != from {
+		log.Debug("maintainer id mismatch, ignore dispatcher set checksum update",
+			zap.Stringer("changefeedID", cfId),
+			zap.String("from", from.String()),
+			zap.String("expectedMaintainer", manager.GetMaintainerID().String()),
+			zap.Uint64("epoch", req.Epoch),
+			zap.Int64("mode", req.Mode),
+			zap.Uint64("seq", req.Seq))
+		return nil
+	}
+
+	if manager.GetMaintainerEpoch() != req.Epoch {
+		log.Debug("maintainer epoch mismatch, ignore dispatcher set checksum update",
+			zap.Stringer("changefeedID", cfId),
+			zap.String("from", from.String()),
+			zap.Uint64("expectedEpoch", manager.GetMaintainerEpoch()),
+			zap.Uint64("epoch", req.Epoch),
+			zap.Int64("mode", req.Mode),
+			zap.Uint64("seq", req.Seq))
+		return nil
+	}
+
+	manager.ApplyDispatcherSetChecksumUpdate(req)
+
+	ack := &heartbeatpb.DispatcherSetChecksumAckResponse{
+		ChangefeedID: req.ChangefeedID,
+		Epoch:        req.Epoch,
+		Mode:         req.Mode,
+		Seq:          req.Seq,
+	}
+	return m.sendResponse(from, messaging.MaintainerManagerTopic, ack)
 }
 
 // handlePostBootstrapRequest handles the maintainer post-bootstrap request message.

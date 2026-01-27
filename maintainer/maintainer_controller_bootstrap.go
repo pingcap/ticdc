@@ -29,6 +29,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils"
@@ -74,12 +75,12 @@ import (
 func (c *Controller) FinishBootstrap(
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
 	isMysqlCompatibleBackend bool,
-) (*heartbeatpb.MaintainerPostBootstrapRequest, error) {
+) (*heartbeatpb.MaintainerPostBootstrapRequest, []*messaging.TargetMessage, error) {
 	if c.bootstrapped {
 		log.Info("maintainer already bootstrapped, may a new node join the cluster",
 			zap.Stringer("changefeed", c.changefeedID),
 			zap.Any("allNodesResp", allNodesResp))
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	log.Info("all nodes have sent bootstrap response, start to handle them",
@@ -95,7 +96,7 @@ func (c *Controller) FinishBootstrap(
 		log.Error("load table from scheme store failed",
 			zap.String("changefeed", c.changefeedID.Name()),
 			zap.Error(err))
-		return nil, errors.Trace(err)
+		return nil, nil, errors.Trace(err)
 	}
 
 	var (
@@ -109,7 +110,7 @@ func (c *Controller) FinishBootstrap(
 			log.Error("load table from scheme store failed",
 				zap.String("changefeed", c.changefeedID.Name()),
 				zap.Error(err))
-			return nil, errors.Trace(err)
+			return nil, nil, errors.Trace(err)
 		}
 	}
 
@@ -123,8 +124,8 @@ func (c *Controller) FinishBootstrap(
 	// Step 4: Handle any remaining working tasks (likely dropped tables)
 	c.handleRemainingWorkingTasks(workingTaskMap, redoWorkingTaskMap)
 
-	// Step 5: Initialize and start sub components
-	c.initializeComponents(allNodesResp)
+	// Step 6: Initialize and start sub components
+	checksumMsgs := c.initializeComponents(allNodesResp)
 
 	// Step 6: Mark the controller as bootstrapped
 	c.bootstrapped = true
@@ -134,7 +135,7 @@ func (c *Controller) FinishBootstrap(
 		TableTriggerEventDispatcherId: c.spanController.GetDDLDispatcherID().ToPB(),
 		Schemas:                       c.prepareSchemaInfoResponse(schemaInfos),
 		RedoSchemas:                   c.prepareSchemaInfoResponse(redoSchemaInfos),
-	}, nil
+	}, checksumMsgs, nil
 }
 
 func (c *Controller) determineStartTs(allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) (uint64, uint64) {
@@ -311,15 +312,21 @@ func (c *Controller) handleRemainingWorkingTasks(
 
 func (c *Controller) initializeComponents(
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
-) {
+) []*messaging.TargetMessage {
 	// Initialize barrier
 	if c.enableRedo {
 		c.redoBarrier = NewBarrier(c.redoSpanController, c.redoOperatorController, util.GetOrZero(c.replicaConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.RedoMode)
 	}
 	c.barrier = NewBarrier(c.spanController, c.operatorController, util.GetOrZero(c.replicaConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.DefaultMode)
 
-	// Start scheduler
+	// Initialize dispatcher set checksum managers before starting scheduler/operator tasks.
+	// This avoids missing dispatcher set changes that could be triggered by task execution.
+	msgs := c.resetAndBuildDispatcherSetChecksumMessages(allNodesResp)
+
 	c.taskHandlesMu.Lock()
+	defer c.taskHandlesMu.Unlock()
+
+	// Start scheduler
 	c.taskHandles = append(c.taskHandles, c.schedulerController.Start(c.taskPool)...)
 
 	if c.enableRedo {
@@ -327,7 +334,51 @@ func (c *Controller) initializeComponents(
 	}
 	// Start operator controller
 	c.taskHandles = append(c.taskHandles, c.taskPool.Submit(c.operatorController, time.Now()))
-	c.taskHandlesMu.Unlock()
+
+	return msgs
+}
+
+func (c *Controller) resetAndBuildDispatcherSetChecksumMessages(
+	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
+) []*messaging.TargetMessage {
+	if c.defaultChecksumManager == nil && c.redoChecksumManager == nil {
+		return nil
+	}
+
+	nodes := make([]node.ID, 0, len(allNodesResp))
+	for id := range allNodesResp {
+		nodes = append(nodes, id)
+	}
+
+	msgs := make([]*messaging.TargetMessage, 0)
+
+	if c.defaultChecksumManager != nil {
+		msgs = append(msgs, c.resetAndBuildChecksumMessages(c.spanController, c.defaultChecksumManager, nodes)...)
+	}
+
+	if c.redoChecksumManager != nil {
+		msgs = append(msgs, c.resetAndBuildChecksumMessages(c.redoSpanController, c.redoChecksumManager, nodes)...)
+	}
+
+	return msgs
+}
+
+func (c *Controller) resetAndBuildChecksumMessages(
+	spanController *span.Controller,
+	checksumManager *nodeSetChecksumManager,
+	nodes []node.ID,
+) []*messaging.TargetMessage {
+	expected := make(map[node.ID][]common.DispatcherID, len(nodes))
+	if ddl := spanController.GetDDLDispatcher(); ddl != nil {
+		expected[ddl.GetNodeID()] = append(expected[ddl.GetNodeID()], ddl.ID)
+	}
+	for _, span := range spanController.GetReplicating() {
+		capture := span.GetNodeID()
+		expected[capture] = append(expected[capture], span.ID)
+	}
+
+	epoch := checksumManager.epoch
+	return checksumManager.ResetAndSendFull(epoch, nodes, expected)
 }
 
 func (c *Controller) prepareSchemaInfoResponse(

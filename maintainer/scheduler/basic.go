@@ -155,7 +155,14 @@ func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int)
 	absentReplications := s.spanController.GetAbsentByGroup(groupID, availableSize)
 
 	pkgScheduler.BasicSchedule(availableSize, absentReplications, nodeSize, func(replication *replica.SpanReplication, id node.ID) bool {
-		return s.operatorController.AddOperator(operator.NewAddDispatcherOperator(s.spanController, replication, id))
+		return s.operatorController.AddOperator(
+			operator.NewAddDispatcherOperator(
+				s.spanController,
+				replication,
+				id,
+				s.operatorController.GetChecksumUpdater(),
+			),
+		)
 	})
 	return len(absentReplications)
 }

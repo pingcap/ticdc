@@ -17,6 +17,12 @@ message HeartBeatRequest {
     repeated TableSpanStatus statuses = 4;
     bool compeleteStatus = 5;  // Whether includes all table spans in the changefeed?
     RunningError err = 6;
+    ChecksumState checksumState = 7;
+    ChecksumState redoChecksumState = 8;
+    // checksumStateSeq is a monotonic version for checksumState, used to discard out-of-order heartbeats.
+    uint64 checksumStateSeq = 9;
+    // redoChecksumStateSeq is a monotonic version for redoChecksumState, used to discard out-of-order heartbeats.
+    uint64 redoChecksumStateSeq = 10;
 }
 
 message Watermark {
