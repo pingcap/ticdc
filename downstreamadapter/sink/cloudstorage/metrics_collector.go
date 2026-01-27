@@ -20,10 +20,9 @@ import (
 )
 
 type metricsCollector struct {
-	totalWriteBytes prometheus.Gauge
-	fileCount       prometheus.Gauge
-	writeDuration   prometheus.Observer
-	flushDuration   prometheus.Observer
+	fileCount     prometheus.Counter
+	writeDuration prometheus.Observer
+	flushDuration prometheus.Observer
 
 	unflushedRawBytes     prometheus.Gauge
 	unflushedEncodedBytes prometheus.Gauge
@@ -35,9 +34,7 @@ func newMetricsCollector(changefeedID common.ChangeFeedID) *metricsCollector {
 	namespace := changefeedID.Keyspace()
 	changefeed := changefeedID.Name()
 	return &metricsCollector{
-		totalWriteBytes: metrics.CloudStorageWriteBytesGauge.
-			WithLabelValues(namespace, changefeed),
-		fileCount: metrics.CloudStorageFileCountGauge.
+		fileCount: metrics.CloudStorageFileCountCounter.
 			WithLabelValues(namespace, changefeed),
 		writeDuration: metrics.CloudStorageWriteDurationHistogram.
 			WithLabelValues(namespace, changefeed),

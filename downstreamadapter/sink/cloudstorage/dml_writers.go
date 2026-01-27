@@ -30,9 +30,7 @@ import (
 // dmlWriters denotes a worker responsible for writing messages to cloud storage.
 type dmlWriters struct {
 	changefeedID commonType.ChangeFeedID
-	statistics   *metrics.Statistics
-
-	collector *metricsCollector
+	collector    *metricsCollector
 
 	// msgCh is a channel to hold eventFragment.
 	// The caller of WriteEvents will write eventFragment to msgCh and
@@ -73,7 +71,6 @@ func newDMLWriters(
 
 	return &dmlWriters{
 		changefeedID: changefeedID,
-		statistics:   statistics,
 		collector:    collector,
 		msgCh:        messageCh,
 
@@ -126,11 +123,7 @@ func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
 		DispatcherID:     event.GetDispatcherID(),
 	}
 	seq := atomic.AddUint64(&d.lastSeqNum, 1)
-	_ = d.statistics.RecordBatchExecution(func() (int, int64, error) {
-		// emit a TxnCallbackableEvent encoupled with a sequence number starting from one.
-		d.msgCh.Push(newEventFragment(seq, tbl, event))
-		return int(event.Len()), event.GetSize(), nil
-	})
+	d.msgCh.Push(newEventFragment(seq, tbl, event))
 }
 
 func (d *dmlWriters) close() {

@@ -254,9 +254,7 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 	}); err != nil {
 		return err
 	}
-
-	d.collector.totalWriteBytes.Add(float64(bytesCnt))
-	d.collector.fileCount.Add(1)
+	d.collector.fileCount.Inc()
 
 	// then write the index file to external storage in the end.
 	// the file content is simply the last data file path
