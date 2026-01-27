@@ -44,8 +44,11 @@ const (
 type Sink struct {
 	changefeedID common.ChangeFeedID
 
-	dmlWriter           []*mysql.Writer
-	ddlWriter           *mysql.Writer
+	dmlWriter []*mysql.Writer
+	ddlWriter *mysql.Writer
+	// progressTableWriter writes progress rows to the downstream progress table for
+	// active-active replication (hard delete safety checks). It is nil when
+	// enableActiveActive is false.
 	progressTableWriter *mysql.ProgressTableWriter
 
 	db         *sql.DB
@@ -54,11 +57,15 @@ type Sink struct {
 	conflictDetector *causality.ConflictDetector
 
 	// isNormal indicate whether the sink is in the normal state.
-	isNormal           *atomic.Bool
-	maxTxnRows         int
-	bdrMode            bool
+	isNormal   *atomic.Bool
+	maxTxnRows int
+	bdrMode    bool
+	// enableActiveActive enables active-active replication behaviors in the MySQL-class sink.
 	enableActiveActive bool
 
+	// activeActiveSyncStatsCollector collects conflict statistics from TiDB session
+	// variable @@tidb_cdc_active_active_sync_stats and is shared by all DML writers.
+	// It is nil when disabled or unsupported by downstream.
 	activeActiveSyncStatsCollector *mysql.ActiveActiveSyncStatsCollector
 }
 
@@ -254,6 +261,7 @@ func (s *Sink) SinkType() common.SinkType {
 func (s *Sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
 	s.ddlWriter.SetTableSchemaStore(tableSchemaStore)
 	if s.progressTableWriter != nil {
+		// ProgressTableWriter needs table name snapshots to build progress rows.
 		s.progressTableWriter.SetTableSchemaStore(tableSchemaStore)
 	}
 }
@@ -302,9 +310,9 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 }
 
 // AddCheckpointTs is invoked by dispatcher manager whenever Maintainer broadcasts a
-// new changefeed-level checkpoint. We only flush the active-active progress table when
-// the feature is enabled and the progress writer has been initialized, and we throttle
-// updates via progressUpdateInterval to avoid hammering downstream on every tick.
+// new changefeed-level checkpoint. It updates the active-active progress table on a
+// best-effort basis. ProgressTableWriter throttles updates internally to avoid
+// hammering downstream on every tick.
 func (s *Sink) AddCheckpointTs(ts uint64) {
 	if !s.enableActiveActive || s.progressTableWriter == nil {
 		return

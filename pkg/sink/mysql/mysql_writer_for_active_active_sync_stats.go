@@ -37,9 +37,6 @@ type activeActiveSyncStats struct {
 
 // CheckActiveActiveSyncStatsSupported checks whether downstream TiDB supports
 // @@tidb_cdc_active_active_sync_stats session variable.
-//
-// This is a best-effort check used by metrics collection and should not affect
-// replication correctness.
 func CheckActiveActiveSyncStatsSupported(ctx context.Context, db *sql.DB) (bool, error) {
 	row := db.QueryRowContext(ctx, "SELECT @@tidb_cdc_active_active_sync_stats;")
 	var v sql.NullString
