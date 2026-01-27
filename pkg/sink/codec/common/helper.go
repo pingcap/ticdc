@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	ptypes "github.com/pingcap/tidb/pkg/parser/types"
@@ -300,7 +301,7 @@ func queryRowChecksumAux(
 	err = conn.QueryRowContext(ctx, query).Scan(&result)
 	if err != nil {
 		log.Panic("scan row failed",
-			zap.String("query", query),
+			zap.String("query", util.RedactValue(query)),
 			zap.String("schema", schema), zap.String("table", table),
 			zap.Uint64("commitTs", commitTs), zap.Error(err))
 	}
@@ -351,7 +352,7 @@ func MustSnapshotQuery(
 	rows, err := conn.QueryContext(ctx, query)
 	if err != nil {
 		log.Panic("query row failed",
-			zap.String("query", query),
+			zap.String("query", util.RedactValue(query)),
 			zap.String("schema", schema), zap.String("table", table),
 			zap.Uint64("commitTs", commitTs), zap.Error(err))
 	}
@@ -360,7 +361,7 @@ func MustSnapshotQuery(
 	holder, err := newColumnHolder(rows)
 	if err != nil {
 		log.Panic("obtain the columns holder failed",
-			zap.String("query", query),
+			zap.String("query", util.RedactValue(query)),
 			zap.String("schema", schema), zap.String("table", table),
 			zap.Uint64("commitTs", commitTs), zap.Error(err))
 	}
@@ -368,7 +369,7 @@ func MustSnapshotQuery(
 		err = rows.Scan(holder.ValuePointers...)
 		if err != nil {
 			log.Panic("scan row failed",
-				zap.String("query", query),
+				zap.String("query", util.RedactValue(query)),
 				zap.String("schema", schema), zap.String("table", table),
 				zap.Uint64("commitTs", commitTs), zap.Error(err))
 		}
