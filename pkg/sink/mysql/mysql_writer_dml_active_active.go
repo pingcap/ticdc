@@ -191,6 +191,11 @@ func (w *Writer) batchSingleTxnActiveRows(
 }
 
 // originTsChecker filters out rows whose upstream payload already contains a non-NULL _tidb_origin_ts.
+//
+// Business invariant: application DMLs are expected to keep _tidb_origin_ts as NULL. The only expected
+// non-NULL values come from manual operational changes (for example, directly updating the column).
+// To make such incidents visible and to prevent replication loops, TiCDC logs the row metadata and
+// skips these rows during replication.
 type originTsChecker struct {
 	enabled bool
 	tableID int64
