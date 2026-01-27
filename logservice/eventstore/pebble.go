@@ -87,7 +87,7 @@ func createPebbleDBs(rootDir string, dbNum int) []*pebble.DB {
 		opts.TableCache = tableCache
 		opts.EventListener = &pebble.EventListener{
 			BackgroundError: func(err error) {
-				log.Error("pebble background error", zap.String("id", id), zap.Error(err))
+				log.Warn("pebble background error", zap.String("id", id), zap.Error(err))
 			},
 			CompactionEnd: func(info pebble.CompactionInfo) {
 				metrics.EventStorePebbleCompactionDurationHistogram.WithLabelValues(id).Observe(info.TotalDuration.Seconds())
