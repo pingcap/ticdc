@@ -479,6 +479,9 @@ func (w *Writer) RemoveDDLTsItem() error {
 	_, err = tx.Exec(query)
 	if err != nil {
 		if errors.IsTableNotExistsErr(err) {
+			if rbErr := tx.Rollback(); rbErr != nil {
+				log.Error("failed to rollback", zap.Error(rbErr))
+			}
 			// If this table is not existed, this means the changefeed has not table, so we just return nil.
 			log.Info("ddl ts table is not found when RemoveDDLTsItem",
 				zap.String("keyspace", w.ChangefeedID.Keyspace()),
