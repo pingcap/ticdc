@@ -5,6 +5,11 @@
 # timeout = "30s"
 # retry-count = 3
 
+# Tables configuration
+[global.tables]
+  schema1 = ["table1", "table2"]
+  schema2 = ["table1", "table2"]
+
 # Cluster configurations
 [clusters]
   # First cluster configuration

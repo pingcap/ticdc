@@ -76,7 +76,7 @@ type Consumer struct {
 	fileExtension  string
 	dateSeparator  string
 	fileIndexWidth int
-	tables         map[string]map[string]struct{}
+	tables         map[string][]string
 
 	versionMapMu           sync.RWMutex
 	currentTableVersionMap map[schemaKey]uint64
@@ -88,7 +88,7 @@ type Consumer struct {
 
 func NewConsumer(
 	s3Storage storage.ExternalStorage,
-	tables map[string]map[string]struct{},
+	tables map[string][]string,
 ) *Consumer {
 	return &Consumer{
 		s3Storage:              s3Storage,
@@ -419,7 +419,7 @@ func (c *Consumer) ConsumeNewFiles(
 	result := make(map[cloudstorage.DmlPathKey]IncrementalData)
 	eg, egCtx := errgroup.WithContext(ctx)
 	for schema, tables := range c.tables {
-		for table := range tables {
+		for _, table := range tables {
 			eg.Go(func() error {
 				newVersions, err := c.discoverAndDownloadNewTableVersions(egCtx, schema, table)
 				if err != nil {

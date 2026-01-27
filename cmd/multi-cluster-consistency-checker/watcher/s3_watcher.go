@@ -30,7 +30,7 @@ type S3Watcher struct {
 func NewS3Watcher(
 	checkpointWatcher *CheckpointWatcher,
 	s3Storage storage.ExternalStorage,
-	tables map[string]map[string]struct{},
+	tables map[string][]string,
 ) *S3Watcher {
 	consumer := consumer.NewConsumer(s3Storage, tables)
 	return &S3Watcher{

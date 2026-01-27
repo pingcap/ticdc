@@ -31,14 +31,9 @@ type Config struct {
 }
 
 // GlobalConfig contains global configuration settings
-// This is reserved for future use
 type GlobalConfig struct {
-	// Add global configuration fields here as needed
-	// For example:
-	// Timeout     time.Duration `toml:"timeout" json:"timeout"`
-	// RetryCount  int           `toml:"retry-count" json:"retry-count"`
-	LogLevel string                         `toml:"log-level" json:"log-level"`
-	Tables   map[string]map[string]struct{} `toml:"tables" json:"tables"`
+	LogLevel string              `toml:"log-level" json:"log-level"`
+	Tables   map[string][]string `toml:"tables" json:"tables"`
 }
 
 type DownstreamClusterChangefeedConfig struct {
