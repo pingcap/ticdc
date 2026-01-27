@@ -120,9 +120,9 @@ func (eg *encodingGroup) recordEncodedBytes(frag *eventFragment) {
 	if encodedBytes <= 0 {
 		return
 	}
-	eg.collector.unflushedEncodedBytes.Add(float64(encodedBytes))
-	eg.collector.encodedBytesTotal.Add(float64(encodedBytes))
+	eg.collector.unflushedEncodedBytes.Add(encodedBytes)
+	eg.collector.totalEncodedBytes.Add(encodedBytes)
 	frag.event.AddPostFlushFunc(func() {
-		eg.collector.unflushedEncodedBytes.Sub(float64(encodedBytes))
+		eg.collector.unflushedEncodedBytes.Sub(encodedBytes)
 	})
 }

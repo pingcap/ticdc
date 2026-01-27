@@ -22,7 +22,7 @@ var (
 		Subsystem: "sink",
 		Name:      "cloud_storage_file_count",
 		Help:      "Total number of files managed by a cloud storage sink",
-	}, []string{"namespace", "changefeed"})
+	}, []string{getKeyspaceLabel(), "changefeed"})
 
 	// CloudStorageFlushDurationHistogram records the latency distributions of flushLog.
 	CloudStorageFlushDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
@@ -31,7 +31,7 @@ var (
 		Name:      "cloud_storage_flush_duration_seconds",
 		Help:      "The latency distributions of flush storage by a cloud storage sink",
 		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 13),
-	}, []string{"namespace", "changefeed"})
+	}, []string{getKeyspaceLabel(), "changefeed"})
 
 	// CloudStorageWriterBusyRatio records the busy ratio of CloudStorage writer.
 	CloudStorageWriterBusyRatio = prometheus.NewCounterVec(
@@ -40,35 +40,21 @@ var (
 			Subsystem: "sink",
 			Name:      "cloud_storage_writer_busy_ratio",
 			Help:      "Busy ratio for cloud storage sink dml writer.",
-		}, []string{"namespace", "changefeed", "id"})
+		}, []string{getKeyspaceLabel(), "changefeed", "id"})
 
-	CloudStorageUnflushedRawBytesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+	CloudStorageRawBytesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: "ticdc",
 		Subsystem: "sink",
-		Name:      "cloud_storage_unflushed_raw_bytes",
+		Name:      "cloud_storage_raw_bytes",
 		Help:      "Approximate size of unflushed DML events in cloud storage sink (based on DMLEvent.GetSize)",
-	}, []string{"namespace", "changefeed"})
+	}, []string{getKeyspaceLabel(), "changefeed", "type"})
 
-	CloudStorageUnflushedEncodedBytesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+	CloudStorageEncodedBytesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: "ticdc",
 		Subsystem: "sink",
-		Name:      "cloud_storage_unflushed_encoded_bytes",
+		Name:      "cloud_storage_encoded_bytes",
 		Help:      "Encoded size of unflushed DML events in cloud storage sink (sum of encoded message key/value bytes)",
-	}, []string{"namespace", "changefeed"})
-
-	CloudStorageDMLRawBytesCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "ticdc",
-		Subsystem: "sink",
-		Name:      "cloud_storage_dml_raw_bytes_total",
-		Help:      "Total approximate size of DML events accepted by cloud storage sink (based on DMLEvent.GetSize)",
-	}, []string{"namespace", "changefeed"})
-
-	CloudStorageDMLEncodedBytesCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "ticdc",
-		Subsystem: "sink",
-		Name:      "cloud_storage_dml_encoded_bytes_total",
-		Help:      "Total encoded size produced by cloud storage sink encoder (sum of encoded message key/value bytes)",
-	}, []string{"namespace", "changefeed"})
+	}, []string{getKeyspaceLabel(), "changefeed", "type"})
 )
 
 // initCloudStorageMetrics registers all metrics in this file.
@@ -76,8 +62,6 @@ func initCloudStorageMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(CloudStorageFileCountCounter)
 	registry.MustRegister(CloudStorageFlushDurationHistogram)
 	registry.MustRegister(CloudStorageWriterBusyRatio)
-	registry.MustRegister(CloudStorageUnflushedRawBytesGauge)
-	registry.MustRegister(CloudStorageUnflushedEncodedBytesGauge)
-	registry.MustRegister(CloudStorageDMLRawBytesCounter)
-	registry.MustRegister(CloudStorageDMLEncodedBytesCounter)
+	registry.MustRegister(CloudStorageRawBytesGauge)
+	registry.MustRegister(CloudStorageEncodedBytesGauge)
 }

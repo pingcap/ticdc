@@ -84,6 +84,11 @@ func (d *dmlWriters) Run(ctx context.Context) error {
 	eg, ctx := errgroup.WithContext(ctx)
 
 	eg.Go(func() error {
+		d.collector.run(ctx)
+		return nil
+	})
+
+	eg.Go(func() error {
 		return d.encodeGroup.Run(ctx)
 	})
 
@@ -105,10 +110,10 @@ func (d *dmlWriters) Run(ctx context.Context) error {
 func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
 	rawBytes := event.GetSize()
 	if rawBytes > 0 && d.collector != nil {
-		d.collector.unflushedRawBytes.Add(float64(rawBytes))
-		d.collector.rawBytesTotal.Add(float64(rawBytes))
+		d.collector.unflushedRawBytes.Add(rawBytes)
+		d.collector.totalRawBytes.Add(rawBytes)
 		event.AddPostFlushFunc(func() {
-			d.collector.unflushedRawBytes.Sub(float64(rawBytes))
+			d.collector.unflushedRawBytes.Sub(rawBytes)
 		})
 	}
 

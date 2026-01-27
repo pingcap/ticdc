@@ -14,38 +14,64 @@
 package cloudstorage
 
 import (
+	"context"
+	"time"
+
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/prometheus/client_golang/prometheus"
+	"go.uber.org/atomic"
 )
 
 type metricsCollector struct {
-	fileCount     prometheus.Counter
-	writeDuration prometheus.Observer
-	flushDuration prometheus.Observer
+	changefeedID common.ChangeFeedID
 
-	unflushedRawBytes     prometheus.Gauge
-	unflushedEncodedBytes prometheus.Gauge
-	rawBytesTotal         prometheus.Counter
-	encodedBytesTotal     prometheus.Counter
+	fileCount atomic.Uint64
+
+	unflushedRawBytes atomic.Int64
+	totalRawBytes     atomic.Int64
+
+	unflushedEncodedBytes atomic.Int64
+	totalEncodedBytes     atomic.Int64
 }
 
 func newMetricsCollector(changefeedID common.ChangeFeedID) *metricsCollector {
-	namespace := changefeedID.Keyspace()
-	changefeed := changefeedID.Name()
 	return &metricsCollector{
-		fileCount: metrics.CloudStorageFileCountCounter.
-			WithLabelValues(namespace, changefeed),
-		flushDuration: metrics.CloudStorageFlushDurationHistogram.
-			WithLabelValues(namespace, changefeed),
+		changefeedID: changefeedID,
+	}
+}
 
-		unflushedRawBytes: metrics.CloudStorageUnflushedRawBytesGauge.
-			WithLabelValues(namespace, changefeed),
-		unflushedEncodedBytes: metrics.CloudStorageUnflushedEncodedBytesGauge.
-			WithLabelValues(namespace, changefeed),
-		rawBytesTotal: metrics.CloudStorageDMLRawBytesCounter.
-			WithLabelValues(namespace, changefeed),
-		encodedBytesTotal: metrics.CloudStorageDMLEncodedBytesCounter.
-			WithLabelValues(namespace, changefeed),
+func (m *metricsCollector) run(ctx context.Context) {
+	namespace := m.changefeedID.Keyspace()
+	changefeed := m.changefeedID.Name()
+
+	fileCount := metrics.CloudStorageFileCountCounter.WithLabelValues(namespace, changefeed)
+	unflushedRawBytes := metrics.CloudStorageRawBytesGauge.WithLabelValues(namespace, changefeed, "unflushed")
+	totalRawBytes := metrics.CloudStorageRawBytesGauge.WithLabelValues(namespace, changefeed, "total")
+
+	unflushedEncodedBytes := metrics.CloudStorageEncodedBytesGauge.WithLabelValues(namespace, changefeed, "unflushed")
+	totalEncodedBytes := metrics.CloudStorageEncodedBytesGauge.WithLabelValues(namespace, changefeed, "total")
+
+	ticker := time.NewTicker(5 * time.Second)
+
+	defer func() {
+		ticker.Stop()
+		metrics.CloudStorageFileCountCounter.DeleteLabelValues(namespace, changefeed)
+		metrics.CloudStorageFlushDurationHistogram.DeleteLabelValues(namespace, changefeed)
+		metrics.CloudStorageRawBytesGauge.DeleteLabelValues(namespace, changefeed, "unflushed")
+		metrics.CloudStorageEncodedBytesGauge.DeleteLabelValues(namespace, changefeed, "total")
+		metrics.CloudStorageRawBytesGauge.DeleteLabelValues(namespace, changefeed, "unflushed")
+		metrics.CloudStorageEncodedBytesGauge.DeleteLabelValues(namespace, changefeed, "total")
+	}()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			fileCount.Add(float64(m.fileCount.Load()))
+			unflushedRawBytes.Set(float64(m.unflushedRawBytes.Load()))
+			totalRawBytes.Set(float64(m.totalRawBytes.Load()))
+			unflushedEncodedBytes.Set(float64(m.unflushedEncodedBytes.Load()))
+			totalEncodedBytes.Set(float64(m.totalEncodedBytes.Load()))
+		}
 	}
 }

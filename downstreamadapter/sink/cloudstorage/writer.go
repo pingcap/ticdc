@@ -50,8 +50,9 @@ type writer struct {
 	statistics        *metrics.Statistics
 	filePathGenerator *cloudstorage.FilePathGenerator
 
-	collector *metricsCollector
-	busyRatio prometheus.Counter
+	collector     *metricsCollector
+	busyRatio     prometheus.Counter
+	flushDuration prometheus.Observer
 }
 
 func newWriter(
@@ -77,6 +78,8 @@ func newWriter(
 		collector: collector,
 		busyRatio: metrics.CloudStorageWriterBusyRatio.
 			WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), strconv.Itoa(id)),
+		flushDuration: metrics.CloudStorageFlushDurationHistogram.
+			WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 	}
 
 	return d
@@ -193,7 +196,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 func (d *writer) writeIndexFile(ctx context.Context, path, content string) error {
 	start := time.Now()
 	err := d.storage.WriteFile(ctx, path, []byte(content))
-	d.collector.flushDuration.Observe(time.Since(start).Seconds())
+	d.flushDuration.Observe(time.Since(start).Seconds())
 	return err
 }
 
@@ -249,7 +252,7 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 			return 0, 0, inErr
 		}
 
-		d.collector.flushDuration.Observe(time.Since(start).Seconds())
+		d.flushDuration.Observe(time.Since(start).Seconds())
 		return rowsCnt, bytesCnt, nil
 	}); err != nil {
 		return err
@@ -337,6 +340,8 @@ func (d *writer) close() {
 	if !atomic.CompareAndSwapUint64(&d.isClosed, 0, 1) {
 		return
 	}
+	metrics.CloudStorageWriterBusyRatio.DeleteLabelValues(d.changeFeedID.Keyspace(), d.changeFeedID.Name())
+	metrics.CloudStorageFlushDurationHistogram.DeleteLabelValues(d.changeFeedID.Keyspace(), d.changeFeedID.Name())
 }
 
 // batchedTask contains a set of singleTableTask.
