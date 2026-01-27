@@ -361,7 +361,7 @@ func (s *subscriptionClient) Subscribe(
 	s.totalSpans.spanMap[subID] = rt
 	s.totalSpans.Unlock()
 
-	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(1*1024*1024*1024, dynstream.MemoryControlForPuller, "logPuller") // 1GB
+	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(100*1024*1024*1024, dynstream.MemoryControlForPuller, "logPuller") // 1GB
 	s.ds.AddPath(rt.subID, rt, areaSetting)
 
 	select {
