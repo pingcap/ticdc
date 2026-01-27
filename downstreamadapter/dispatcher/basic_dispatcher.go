@@ -220,6 +220,10 @@ type BasicDispatcher struct {
 	// - For redo sinks: enforce per-dispatcher DDL-after-DML durable order, since DML/DDL are written by
 	//   different writers and may otherwise be persisted out of order.
 	deferredDDLEvent atomic.Pointer[commonEvent.DDLEvent]
+	// deferredDDLEventScheduled indicates the deferred DDL has been submitted to the block event executor.
+	// We intentionally keep deferredDDLEvent non-nil until the DDL is actually enqueued into tableProgress,
+	// to avoid TryClose() races when the executor is backlogged.
+	deferredDDLEventScheduled atomic.Bool
 
 	seq  uint64
 	mode int64
@@ -316,11 +320,13 @@ func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) erro
 		}
 	}
 	d.tableProgress.Add(event)
+	d.clearDeferredDDLEventIfEnqueued(event)
 	return d.sink.WriteBlockEvent(event)
 }
 
 func (d *BasicDispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) {
 	d.tableProgress.Pass(event)
+	d.clearDeferredDDLEventIfEnqueued(event)
 	event.PostFlush()
 }
 
@@ -618,7 +624,9 @@ func (d *BasicDispatcher) deferDDLEvent(event *commonEvent.DDLEvent) {
 		d.HandleError(errors.ErrDispatcherFailed.GenWithStackByArgs(
 			"defer block event failed: pending DDL block event already exists",
 		))
+		return
 	}
+	d.deferredDDLEventScheduled.Store(false)
 }
 
 func (d *BasicDispatcher) tryScheduleDeferredDDLEvent() {
@@ -629,12 +637,27 @@ func (d *BasicDispatcher) tryScheduleDeferredDDLEvent() {
 	if d.inflightBudget.hasInflightBeforeCommitTs(pending.GetCommitTs()) {
 		return
 	}
-	if !d.deferredDDLEvent.CompareAndSwap(pending, nil) {
+	if !d.deferredDDLEventScheduled.CompareAndSwap(false, true) {
 		return
 	}
 	d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
 		d.dealWithBlockEvent(pending, false)
 	})
+}
+
+func (d *BasicDispatcher) clearDeferredDDLEventIfEnqueued(event commonEvent.BlockEvent) {
+	ddl, ok := event.(*commonEvent.DDLEvent)
+	if !ok {
+		return
+	}
+
+	pending := d.deferredDDLEvent.Load()
+	if pending != ddl {
+		return
+	}
+	if d.deferredDDLEvent.CompareAndSwap(ddl, nil) {
+		d.deferredDDLEventScheduled.Store(false)
+	}
 }
 
 // HandleDispatcherStatus handles the dispatcher status from the maintainer to process block events.
@@ -1052,7 +1075,7 @@ func (d *BasicDispatcher) Remove() {
 func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 	// If sink is normal(not meet error), we need to wait all the events in sink to flushed downstream successfully
 	// If sink is not normal, we can close the dispatcher immediately.
-	if !d.sink.IsNormal() || (d.tableProgress.Empty() && !d.duringHandleEvents.Load()) {
+	if !d.sink.IsNormal() || (d.tableProgress.Empty() && !d.duringHandleEvents.Load() && d.deferredDDLEvent.Load() == nil) {
 		w.CheckpointTs = d.GetCheckpointTs()
 		w.ResolvedTs = d.GetResolvedTs()
 
@@ -1074,6 +1097,7 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 		zap.Stringer("dispatcher", d.id),
 		zap.Int64("mode", d.mode),
 		zap.Bool("sinkIsNormal", d.sink.IsNormal()),
+		zap.Bool("hasDeferredDDLEvent", d.deferredDDLEvent.Load() != nil),
 		zap.Bool("tableProgressEmpty", d.tableProgress.Empty()),
 		zap.Int("tableProgressLen", d.tableProgress.Len()),
 		zap.Uint64("tableProgressMaxCommitTs", d.tableProgress.MaxCommitTs())) // check whether continue receive new events.
