@@ -14,22 +14,36 @@
 package cloudstorage
 
 import (
-	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
-	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 type metricsCollector struct {
+	totalWriteBytes prometheus.Gauge
+	fileCount       prometheus.Gauge
+	writeDuration   prometheus.Observer
+	flushDuration   prometheus.Observer
+
 	unflushedRawBytes     prometheus.Gauge
 	unflushedEncodedBytes prometheus.Gauge
 	rawBytesTotal         prometheus.Counter
 	encodedBytesTotal     prometheus.Counter
 }
 
-func newMetricsCollector(changefeedID commonType.ChangeFeedID) *metricsCollector {
+func newMetricsCollector(changefeedID common.ChangeFeedID) *metricsCollector {
 	namespace := changefeedID.Keyspace()
 	changefeed := changefeedID.Name()
 	return &metricsCollector{
+		totalWriteBytes: metrics.CloudStorageWriteBytesGauge.
+			WithLabelValues(namespace, changefeed),
+		fileCount: metrics.CloudStorageFileCountGauge.
+			WithLabelValues(namespace, changefeed),
+		writeDuration: metrics.CloudStorageWriteDurationHistogram.
+			WithLabelValues(namespace, changefeed),
+		flushDuration: metrics.CloudStorageFlushDurationHistogram.
+			WithLabelValues(namespace, changefeed),
+
 		unflushedRawBytes: metrics.CloudStorageUnflushedRawBytesGauge.
 			WithLabelValues(namespace, changefeed),
 		unflushedEncodedBytes: metrics.CloudStorageUnflushedEncodedBytesGauge.

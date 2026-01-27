@@ -23,10 +23,9 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
-	pmetrics "github.com/pingcap/ticdc/pkg/metrics"
+	metrics "github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -45,16 +44,14 @@ type writer struct {
 	storage      storage.ExternalStorage
 	config       *cloudstorage.Config
 	// toBeFlushedCh contains a set of batchedTask waiting to be flushed to cloud storage.
-	toBeFlushedCh          chan batchedTask
-	inputCh                *chann.DrainableChann[eventFragment]
-	isClosed               uint64
-	statistics             *pmetrics.Statistics
-	filePathGenerator      *cloudstorage.FilePathGenerator
-	metricWriteBytes       prometheus.Gauge
-	metricFileCount        prometheus.Gauge
-	metricWriteDuration    prometheus.Observer
-	metricFlushDuration    prometheus.Observer
-	metricsWorkerBusyRatio prometheus.Counter
+	toBeFlushedCh     chan batchedTask
+	inputCh           *chann.DrainableChann[eventFragment]
+	isClosed          uint64
+	statistics        *metrics.Statistics
+	filePathGenerator *cloudstorage.FilePathGenerator
+
+	collector *metricsCollector
+	busyRatio prometheus.Counter
 }
 
 func newWriter(
@@ -64,7 +61,8 @@ func newWriter(
 	config *cloudstorage.Config,
 	extension string,
 	inputCh *chann.DrainableChann[eventFragment],
-	statistics *pmetrics.Statistics,
+	statistics *metrics.Statistics,
+	collector *metricsCollector,
 ) *writer {
 	d := &writer{
 		id:                id,
@@ -75,16 +73,10 @@ func newWriter(
 		toBeFlushedCh:     make(chan batchedTask, 64),
 		statistics:        statistics,
 		filePathGenerator: cloudstorage.NewFilePathGenerator(changefeedID, config, storage, extension),
-		metricWriteBytes: metrics.CloudStorageWriteBytesGauge.
-			WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String()),
-		metricFileCount: metrics.CloudStorageFileCountGauge.
-			WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String()),
-		metricWriteDuration: metrics.CloudStorageWriteDurationHistogram.
-			WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String()),
-		metricFlushDuration: metrics.CloudStorageFlushDurationHistogram.
-			WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String()),
-		metricsWorkerBusyRatio: metrics.CloudStorageWorkerBusyRatio.
-			WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String(), strconv.Itoa(id)),
+
+		collector: collector,
+		busyRatio: metrics.CloudStorageWriterBusyRatio.
+			WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), strconv.Itoa(id)),
 	}
 
 	return d
@@ -121,7 +113,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
 		case <-overseerTicker.C:
-			d.metricsWorkerBusyRatio.Add(flushTimeSlice.Seconds())
+			d.busyRatio.Add(flushTimeSlice.Seconds())
 			flushTimeSlice = 0
 		case batchedTask := <-d.toBeFlushedCh:
 			if atomic.LoadUint64(&d.isClosed) == 1 {
@@ -201,7 +193,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 func (d *writer) writeIndexFile(ctx context.Context, path, content string) error {
 	start := time.Now()
 	err := d.storage.WriteFile(ctx, path, []byte(content))
-	d.metricFlushDuration.Observe(time.Since(start).Seconds())
+	d.collector.flushDuration.Observe(time.Since(start).Seconds())
 	return err
 }
 
@@ -257,14 +249,14 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 			return 0, 0, inErr
 		}
 
-		d.metricFlushDuration.Observe(time.Since(start).Seconds())
+		d.collector.flushDuration.Observe(time.Since(start).Seconds())
 		return rowsCnt, bytesCnt, nil
 	}); err != nil {
 		return err
 	}
 
-	d.metricWriteBytes.Add(float64(bytesCnt))
-	d.metricFileCount.Add(1)
+	d.collector.totalWriteBytes.Add(float64(bytesCnt))
+	d.collector.fileCount.Add(1)
 
 	// then write the index file to external storage in the end.
 	// the file content is simply the last data file path

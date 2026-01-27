@@ -68,7 +68,7 @@ func newDMLWriters(
 	for i := 0; i < config.WorkerCount; i++ {
 		inputCh := chann.NewAutoDrainChann[eventFragment]()
 		writerInputChs[i] = inputCh
-		writers[i] = newWriter(i, changefeedID, storage, config, extension, inputCh, statistics)
+		writers[i] = newWriter(i, changefeedID, storage, config, extension, inputCh, statistics, collector)
 	}
 
 	return &dmlWriters{

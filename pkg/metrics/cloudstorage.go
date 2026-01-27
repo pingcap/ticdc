@@ -50,13 +50,13 @@ var (
 		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 13),
 	}, []string{"namespace", "changefeed"})
 
-	// CloudStorageWorkerBusyRatio records the busy ratio of CloudStorage bgUpdateLog worker.
-	CloudStorageWorkerBusyRatio = prometheus.NewCounterVec(
+	// CloudStorageWriterBusyRatio records the busy ratio of CloudStorage writer.
+	CloudStorageWriterBusyRatio = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "cloud_storage",
-			Name:      "worker_busy_ratio",
-			Help:      "Busy ratio for cloud storage sink dml worker.",
+			Name:      "writer_busy_ratio",
+			Help:      "Busy ratio for cloud storage sink dml writer.",
 		}, []string{"namespace", "changefeed", "id"})
 
 	CloudStorageUnflushedRawBytesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -94,7 +94,7 @@ func initCloudStorageMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(CloudStorageFileCountGauge)
 	registry.MustRegister(CloudStorageWriteDurationHistogram)
 	registry.MustRegister(CloudStorageFlushDurationHistogram)
-	registry.MustRegister(CloudStorageWorkerBusyRatio)
+	registry.MustRegister(CloudStorageWriterBusyRatio)
 	registry.MustRegister(CloudStorageUnflushedRawBytesGauge)
 	registry.MustRegister(CloudStorageUnflushedEncodedBytesGauge)
 	registry.MustRegister(CloudStorageDMLRawBytesCounter)
