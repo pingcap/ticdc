@@ -1107,7 +1107,9 @@ func diskSpaceUsage(m *pebble.Metrics) uint64 {
 	}
 	usageBytes += m.Table.ObsoleteSize
 	usageBytes += m.Table.ZombieSize
-	usageBytes += uint64(m.Compact.InProgressBytes)
+	if m.Compact.InProgressBytes > 0 {
+		usageBytes += uint64(m.Compact.InProgressBytes)
+	}
 	return usageBytes
 }
 
