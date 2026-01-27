@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/utils.go"
+	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/utils"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
@@ -58,15 +58,15 @@ func getPkColumnOffset(tableInfo *commonType.TableInfo) (map[int64]int, error) {
 	return pkColumnOffsets, nil
 }
 
-type tableParser struct {
+type TableParser struct {
 	tableKey        string
 	tableInfo       *common.TableInfo
 	pkColumnOffsets map[int64]int
 	csvDecoder      *csvDecoder
 }
 
-func NewTableParser(tableKey string, content []byte) (*tableParser, error) {
-	tableParser := &tableParser{}
+func NewTableParser(tableKey string, content []byte) (*TableParser, error) {
+	tableParser := &TableParser{}
 	if err := tableParser.parseTableInfo(tableKey, content); err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -74,7 +74,7 @@ func NewTableParser(tableKey string, content []byte) (*tableParser, error) {
 	return tableParser, nil
 }
 
-func (pt *tableParser) parseTableInfo(tableKey string, content []byte) error {
+func (pt *TableParser) parseTableInfo(tableKey string, content []byte) error {
 	// Parse schema content to get tableInfo
 	var tableDef cloudstorage.TableDefinition
 	if err := json.Unmarshal(content, &tableDef); err != nil {
@@ -109,7 +109,7 @@ func (pt *tableParser) parseTableInfo(tableKey string, content []byte) error {
 	return nil
 }
 
-func (pt *tableParser) parseRecord(row *chunk.Row, commitTs uint64) (*utils.Record, error) {
+func (pt *TableParser) parseRecord(row *chunk.Row, commitTs uint64) (*utils.Record, error) {
 	originTs := uint64(0)
 	pkCount := 0
 	colInfos := pt.tableInfo.GetColInfosForRowChangedEvent()
@@ -182,7 +182,7 @@ func (pt *tableParser) parseRecord(row *chunk.Row, commitTs uint64) (*utils.Reco
 	}, nil
 }
 
-func (pt *tableParser) DecodeFiles(ctx context.Context, content []byte) ([]*utils.Record, error) {
+func (pt *TableParser) DecodeFiles(ctx context.Context, content []byte) ([]*utils.Record, error) {
 	records := make([]*utils.Record, 0)
 
 	decoder, err := pt.csvDecoder.NewDecoder(ctx, pt.tableInfo, content)

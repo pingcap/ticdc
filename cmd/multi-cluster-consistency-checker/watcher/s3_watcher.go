@@ -24,31 +24,35 @@ import (
 
 type S3Watcher struct {
 	checkpointWatcher *CheckpointWatcher
-	consumer          *consumer.S3Consumer
+	consumer          *consumer.Consumer
 }
 
 func NewS3Watcher(
 	checkpointWatcher *CheckpointWatcher,
 	s3Storage storage.ExternalStorage,
+	tables map[string]map[string]struct{},
 ) *S3Watcher {
-	consumer := consumer.NewS3Consumer(s3Storage)
+	consumer := consumer.NewConsumer(s3Storage, tables)
 	return &S3Watcher{
 		checkpointWatcher: checkpointWatcher,
 		consumer:          consumer,
 	}
 }
 
-func (sw *S3Watcher) AdvanceS3CheckpointTs(ctx context.Context, minCheckpointTs uint64) (uint64, map[cloudstorage.DmlPathKey]consumer.IncrementalData, error) {
+func (sw *S3Watcher) AdvanceS3CheckpointTs(ctx context.Context, minCheckpointTs uint64) (uint64, error) {
 	checkpointTs, err := sw.checkpointWatcher.AdvanceCheckpointTs(ctx, minCheckpointTs)
 	if err != nil {
-		return 0, nil, errors.Annotate(err, "advance s3 checkpoint timestamp failed")
+		return 0, errors.Annotate(err, "advance s3 checkpoint timestamp failed")
 	}
 
+	return checkpointTs, nil
+}
+
+func (sw *S3Watcher) ConsumeNewFiles(ctx context.Context) (map[cloudstorage.DmlPathKey]consumer.IncrementalData, error) {
 	// TODO: get the index updated from the s3
 	newData, err := sw.consumer.ConsumeNewFiles(ctx)
 	if err != nil {
-		return 0, nil, errors.Annotate(err, "consume new files failed")
+		return nil, errors.Annotate(err, "consume new files failed")
 	}
-
-	return checkpointTs, newData, nil
+	return newData, nil
 }

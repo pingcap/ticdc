@@ -20,8 +20,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/advancer"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/config"
-	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/parser"
-	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/utils.go"
+	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/utils"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/zap"
 )
@@ -367,13 +366,13 @@ func (c *DataChecker) FindClusterUpstreamData(downstreamClusterID string, pk uti
 		if clusterDataChecker.clusterID == downstreamClusterID {
 			continue
 		}
+		if clusterDataChecker.findClusterUpstreamDataInTimeWindow(0, pk, commitTs) {
+			return true
+		}
 		if clusterDataChecker.findClusterUpstreamDataInTimeWindow(1, pk, commitTs) {
 			return true
 		}
 		if clusterDataChecker.findClusterUpstreamDataInTimeWindow(2, pk, commitTs) {
-			return true
-		}
-		if clusterDataChecker.findClusterUpstreamDataInTimeWindow(3, pk, commitTs) {
 			return true
 		}
 	}
@@ -403,16 +402,11 @@ func (c *DataChecker) decodeNewTimeWindowData(ctx context.Context, newTimeWindow
 		if err := clusterDataChecker.PrepareNextTimeWindowData(timeWindowData.TimeWindow); err != nil {
 			return errors.Trace(err)
 		}
-		for dmlPathKey, incrementalData := range timeWindowData.Data {
-			tableParser, err := parser.NewTableParser(dmlPathKey.GetKey(), incrementalData.SchemaContent)
-			if err != nil {
-				return errors.Trace(err)
-			}
-
+		for _, incrementalData := range timeWindowData.Data {
 			// Parse CSV data from all file slices
 			for _, contents := range incrementalData.DataContentSlices {
 				for _, content := range contents {
-					records, err := tableParser.DecodeFiles(ctx, content)
+					records, err := incrementalData.Parser.DecodeFiles(ctx, content)
 					if err != nil {
 						return errors.Trace(err)
 					}

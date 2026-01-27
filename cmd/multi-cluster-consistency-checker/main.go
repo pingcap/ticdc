@@ -17,6 +17,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/config"
 	"github.com/spf13/cobra"
@@ -72,5 +74,35 @@ func run(cmd *cobra.Command, args []string) {
 		fmt.Printf("    S3 Sink URI: %s\n", cluster.S3SinkURI)
 	}
 
-	runTask(context.Background(), cfg)
+	// Create a context that can be cancelled by signals
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Set up signal handling for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	// Start the task in a goroutine
+	errChan := make(chan error, 1)
+	go func() {
+		errChan <- runTask(ctx, cfg)
+	}()
+
+	// Wait for either a signal or task completion
+	select {
+	case sig := <-sigChan:
+		fmt.Fprintf(os.Stdout, "\nReceived signal: %v, shutting down gracefully...\n", sig)
+		cancel()
+		// Wait for the task to finish
+		if err := <-errChan; err != nil && err != context.Canceled {
+			fmt.Fprintf(os.Stderr, "task error: %v\n", err)
+			os.Exit(ExitCodeExecuteFailed)
+		}
+		fmt.Fprintf(os.Stdout, "Shutdown complete\n")
+	case err := <-errChan:
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to run task: %v\n", err)
+			os.Exit(ExitCodeExecuteFailed)
+		}
+	}
 }

@@ -43,6 +43,8 @@ type TimeWindow struct {
 	// PDTimestampAfterTimeWindow is the max PD timestamp after the time window for each downstream cluster,
 	// mapping from upstream cluster ID to the max PD timestamp
 	PDTimestampAfterTimeWindow map[string]uint64
+	// NextMinLeftBoundary is the minimum left boundary of the next time window for the cluster
+	NextMinLeftBoundary uint64
 }
 
 type TimeWindowData struct {
@@ -164,10 +166,18 @@ func (t *TimeWindowAdvancer) AdvanceTimeWindow(
 	newDataMap := make(map[string]map[cloudstorage.DmlPathKey]consumer.IncrementalData)
 	eg, ctx = errgroup.WithContext(pctx)
 	for clusterID, triplet := range t.timeWindowTriplet {
-		minTimeWindowRightBoundary := max(maxCheckpointTs[clusterID], maxPDTimestampAfterCheckpointTs[clusterID])
+		minTimeWindowRightBoundary := max(maxCheckpointTs[clusterID], maxPDTimestampAfterCheckpointTs[clusterID], triplet[2].NextMinLeftBoundary)
 		s3Watcher := t.s3Watcher[clusterID]
 		eg.Go(func() error {
-			s3CheckpointTs, newData, err := s3Watcher.AdvanceS3CheckpointTs(ctx, minTimeWindowRightBoundary)
+			s3CheckpointTs, err := s3Watcher.AdvanceS3CheckpointTs(ctx, minTimeWindowRightBoundary)
+			if err != nil {
+				return errors.Trace(err)
+			}
+			newData, err := s3Watcher.ConsumeNewFiles(ctx)
+			if err != nil {
+				return errors.Trace(err)
+			}
+			pdtso, err := t.getPDTsFromCluster(ctx, clusterID)
 			if err != nil {
 				return errors.Trace(err)
 			}
@@ -181,6 +191,7 @@ func (t *TimeWindowAdvancer) AdvanceTimeWindow(
 			timeWindow.LeftBoundary = triplet[2].RightBoundary
 			timeWindow.RightBoundary = s3CheckpointTs
 			timeWindow.PDTimestampAfterTimeWindow = make(map[string]uint64)
+			timeWindow.NextMinLeftBoundary = pdtso
 			maps.Copy(timeWindow.PDTimestampAfterTimeWindow, pdtsos)
 			newTimeWindow[clusterID] = timeWindow
 			lock.Unlock()
@@ -204,6 +215,16 @@ func (t *TimeWindowAdvancer) updateTimeWindow(newTimeWindow map[string]TimeWindo
 		t.timeWindowTriplet[clusterID] = triplet
 		log.Info("update time window", zap.String("clusterID", clusterID), zap.Any("timeWindow", timeWindow))
 	}
+}
+
+func (t *TimeWindowAdvancer) getPDTsFromCluster(ctx context.Context, clusterID string) (uint64, error) {
+	pdClient := t.pdClients[clusterID]
+	phyTs, logicTs, err := pdClient.GetTS(ctx)
+	if err != nil {
+		return 0, errors.Trace(err)
+	}
+	ts := oracle.ComposeTS(phyTs, logicTs)
+	return ts, nil
 }
 
 func (t *TimeWindowAdvancer) getPDTsFromOtherClusters(pctx context.Context, clusterID string) (map[string]uint64, error) {
