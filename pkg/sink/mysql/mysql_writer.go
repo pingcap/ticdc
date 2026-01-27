@@ -215,6 +215,12 @@ func (w *Writer) Flush(events []*commonEvent.DMLEvent) error {
 	if dmls.rowCount == 0 {
 		return nil
 	}
+	if len(dmls.sqls) == 0 {
+		for _, event := range events {
+			event.PostFlush()
+		}
+		return nil
+	}
 
 	if !w.cfg.DryRun {
 		err = w.execDMLWithMaxRetries(dmls)

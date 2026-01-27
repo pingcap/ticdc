@@ -63,6 +63,40 @@ func TestFilterDMLEventActiveActiveWithEnableDropsDeletes(t *testing.T) {
 	filtered.Rewind()
 }
 
+func TestFilterDMLEventActiveActiveSkipsDeleteButKeepsFollowingRows(t *testing.T) {
+	ti := newTestTableInfo(t, true, true)
+	ts := newTimestampValue(time.Date(2025, time.March, 10, 3, 0, 0, 0, time.UTC))
+	event := newDMLEventForTest(t, ti,
+		[]commonpkg.RowType{commonpkg.RowTypeDelete, commonpkg.RowTypeUpdate, commonpkg.RowTypeInsert},
+		[][]interface{}{
+			{int64(1), nil}, // delete row pre image
+			{int64(2), nil}, // update pre row
+			{int64(2), ts},  // update post row
+			{int64(3), nil}, // insert row
+		})
+
+	filtered, skip, err := FilterDMLEvent(event, true)
+	require.NoError(t, err)
+	require.False(t, skip)
+	require.NotNil(t, filtered)
+	require.NotEqual(t, event, filtered)
+	require.Equal(t, int32(2), filtered.Len())
+
+	row, ok := filtered.GetNextRow()
+	require.True(t, ok)
+	require.Equal(t, commonpkg.RowTypeUpdate, row.RowType)
+	require.Equal(t, int64(2), row.Row.GetInt64(0))
+
+	row, ok = filtered.GetNextRow()
+	require.True(t, ok)
+	require.Equal(t, commonpkg.RowTypeInsert, row.RowType)
+	require.Equal(t, int64(3), row.Row.GetInt64(0))
+
+	_, ok = filtered.GetNextRow()
+	require.False(t, ok)
+	filtered.Rewind()
+}
+
 func TestFilterDMLEventSoftDeleteConvertUpdate(t *testing.T) {
 	ti := newTestTableInfo(t, false, true)
 	ts := newTimestampValue(time.Date(2025, time.March, 10, 0, 0, 0, 0, time.UTC))
@@ -197,7 +231,12 @@ func newDMLEventForTest(t *testing.T, tableInfo *commonpkg.TableInfo, rowTypes [
 	}
 	event := NewDMLEvent(commonpkg.NewDispatcherID(), tableInfo.TableName.TableID, 1, 1, tableInfo)
 	event.SetRows(chk)
-	event.RowTypes = append(event.RowTypes, rowTypes...)
+	for _, rowType := range rowTypes {
+		event.RowTypes = append(event.RowTypes, rowType)
+		if rowType == commonpkg.RowTypeUpdate {
+			event.RowTypes = append(event.RowTypes, rowType)
+		}
+	}
 	event.Length = int32(len(rowTypes))
 	return event
 }

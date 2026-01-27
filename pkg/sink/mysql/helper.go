@@ -242,7 +242,11 @@ func generateDSNByConfig(
 		dsnCfg.Params["allow_auto_random_explicit_insert"] = autoRandom
 	}
 
-	txnMode, err := checkTiDBVariable(testDB, "tidb_txn_mode", cfg.TidbTxnMode)
+	tidbTxnMode := cfg.TidbTxnMode
+	if cfg.IsTiDB && cfg.EnableActiveActive && !cfg.tidbTxnModeSpecified {
+		tidbTxnMode = txnModePessimistic
+	}
+	txnMode, err := checkTiDBVariable(testDB, "tidb_txn_mode", tidbTxnMode)
 	if err != nil {
 		return "", err
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"go.uber.org/zap"
 )
 
@@ -36,11 +37,38 @@ func (w *Writer) generateActiveActiveNormalSQLs(events []*commonEvent.DMLEvent) 
 		if event.Len() == 0 {
 			continue
 		}
+		var (
+			originTsCol    *model.ColumnInfo
+			originTsOffset int
+			checkOriginTs  bool
+		)
+		if w.cfg.IsTiDB {
+			colInfo, ok := event.TableInfo.GetColumnInfoByName(commonEvent.OriginTsColumn)
+			if ok {
+				offset, ok := event.TableInfo.GetColumnOffsetByName(commonEvent.OriginTsColumn)
+				if ok {
+					originTsCol = colInfo
+					originTsOffset = offset
+					checkOriginTs = true
+				}
+			}
+		}
 		for {
 			row, ok := event.GetNextRow()
 			if !ok {
 				event.Rewind()
 				break
+			}
+			if checkOriginTs && row.RowType != common.RowTypeDelete && !row.Row.IsEmpty() && originTsOffset < row.Row.Len() {
+				// In active-active replication with TiDB downstream, TiCDC assumes user-managed
+				// DMLs keep `_tidb_origin_ts` as NULL. A non-NULL value indicates the row was
+				// written by TiCDC and should be dropped to avoid replication loops.
+				originTs := common.ExtractColVal(&row.Row, originTsCol, originTsOffset)
+				if originTs != nil {
+					log.Info("drop row with non null origin ts",
+						zap.Uint64("commitTs", event.CommitTs))
+					continue
+				}
 			}
 			sql, args := buildActiveActiveUpsertSQL(
 				event.TableInfo,
@@ -75,7 +103,7 @@ func (w *Writer) generateActiveActiveBatchSQLForPerEvent(events []*commonEvent.D
 
 // generateActiveActiveSQLForSingleEvent merges rows from a single event into one active-active UPSERT.
 func (w *Writer) generateActiveActiveSQLForSingleEvent(event *commonEvent.DMLEvent) ([]string, [][]interface{}) {
-	rows, commitTs := collectActiveActiveRows(event)
+	rows, commitTs := w.collectActiveActiveRowsForWrite(event)
 	if len(rows) == 0 {
 		return nil, nil
 	}
@@ -126,6 +154,51 @@ func collectActiveActiveRows(event *commonEvent.DMLEvent) ([]*commonEvent.RowCha
 	return rows, commitTs
 }
 
+// collectActiveActiveRowsForWrite collects rows for active-active SQL generation and applies
+// downstream-specific filtering rules.
+func (w *Writer) collectActiveActiveRowsForWrite(event *commonEvent.DMLEvent) ([]*commonEvent.RowChange, []uint64) {
+	rows := make([]*commonEvent.RowChange, 0, event.Len())
+	commitTs := make([]uint64, 0, event.Len())
+
+	var (
+		originTsCol    *model.ColumnInfo
+		originTsOffset int
+		checkOriginTs  bool
+	)
+	if w.cfg.IsTiDB {
+		colInfo, ok := event.TableInfo.GetColumnInfoByName(commonEvent.OriginTsColumn)
+		if ok {
+			offset, ok := event.TableInfo.GetColumnOffsetByName(commonEvent.OriginTsColumn)
+			if ok {
+				originTsCol = colInfo
+				originTsOffset = offset
+				checkOriginTs = true
+			}
+		}
+	}
+
+	for {
+		row, ok := event.GetNextRow()
+		if !ok {
+			event.Rewind()
+			break
+		}
+		if checkOriginTs && row.RowType != common.RowTypeDelete && !row.Row.IsEmpty() && originTsOffset < row.Row.Len() {
+			// See the comment in generateActiveActiveNormalSQLs for the invariant.
+			originTs := common.ExtractColVal(&row.Row, originTsCol, originTsOffset)
+			if originTs != nil {
+				log.Info("drop row with non null origin ts",
+					zap.Uint64("commitTs", event.CommitTs))
+				continue
+			}
+		}
+		rowCopy := row
+		rows = append(rows, &rowCopy)
+		commitTs = append(commitTs, event.CommitTs)
+	}
+	return rows, commitTs
+}
+
 // batchSingleTxnActiveRows wraps multiple row changes into one active-active UPSERT statement.
 func (w *Writer) batchSingleTxnActiveRows(
 	rows []*commonEvent.RowChange,
@@ -138,9 +211,33 @@ func (w *Writer) batchSingleTxnActiveRows(
 	}
 	filteredRows := make([]*commonEvent.RowChange, 0, len(rows))
 	filteredCommitTs := make([]uint64, 0, len(rows))
+	var (
+		originTsCol    *model.ColumnInfo
+		originTsOffset int
+		checkOriginTs  bool
+	)
+	if w.cfg.IsTiDB {
+		colInfo, ok := tableInfo.GetColumnInfoByName(commonEvent.OriginTsColumn)
+		if ok {
+			offset, ok := tableInfo.GetColumnOffsetByName(commonEvent.OriginTsColumn)
+			if ok {
+				originTsCol = colInfo
+				originTsOffset = offset
+				checkOriginTs = true
+			}
+		}
+	}
 	for i, row := range rows {
 		if row == nil || row.Row.IsEmpty() {
 			continue
+		}
+		if checkOriginTs && row.RowType != common.RowTypeDelete && originTsOffset < row.Row.Len() {
+			originTs := common.ExtractColVal(&row.Row, originTsCol, originTsOffset)
+			if originTs != nil {
+				log.Info("drop row with non null origin ts",
+					zap.Uint64("commitTs", commitTs[i]))
+				continue
+			}
 		}
 		filteredRows = append(filteredRows, row)
 		filteredCommitTs = append(filteredCommitTs, commitTs[i])

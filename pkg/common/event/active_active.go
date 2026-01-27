@@ -14,10 +14,12 @@
 package event
 
 import (
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/util/chunk"
+	"go.uber.org/zap"
 )
 
 const (
@@ -172,6 +174,23 @@ func FilterDMLEvent(event *DMLEvent, enableActiveActive bool) (*DMLEvent, bool, 
 		return event, false, nil
 	}
 
+	var (
+		softDeleteTimeCol      *model.ColumnInfo
+		softDeleteTimeColIndex int
+		hasSoftDeleteTimeCol   bool
+	)
+	if enableActiveActive {
+		colInfo, ok := tableInfo.GetColumnInfoByName(SoftDeleteTimeColumn)
+		if ok {
+			offset, ok := tableInfo.GetColumnOffsetByName(SoftDeleteTimeColumn)
+			if ok {
+				softDeleteTimeCol = colInfo
+				softDeleteTimeColIndex = offset
+				hasSoftDeleteTimeCol = true
+			}
+		}
+	}
+
 	newChunk := chunk.NewChunkWithCapacity(fieldTypes, event.Rows.NumRows())
 	rowTypes := make([]common.RowType, 0, len(event.RowTypes))
 	rowKeys := make([][]byte, 0, len(event.RowTypes))
@@ -193,6 +212,15 @@ func FilterDMLEvent(event *DMLEvent, enableActiveActive bool) (*DMLEvent, bool, 
 
 		switch decision {
 		case RowPolicySkip:
+			if enableActiveActive && row.RowType == common.RowTypeDelete && hasSoftDeleteTimeCol && !row.PreRow.IsEmpty() && softDeleteTimeColIndex < row.PreRow.Len() {
+				// For active-active tables, TiCDC expects user-managed hard deletes to keep
+				// `_tidb_softdelete_time` as NULL, so we log it for observability.
+				softDeleteTime := common.ExtractColVal(&row.PreRow, softDeleteTimeCol, softDeleteTimeColIndex)
+				if softDeleteTime == nil {
+					log.Info("received hard delete row",
+						zap.Uint64("commitTs", uint64(event.CommitTs)))
+				}
+			}
 			filtered = true
 			continue
 		case RowPolicyConvertToDelete:
@@ -202,8 +230,17 @@ func FilterDMLEvent(event *DMLEvent, enableActiveActive bool) (*DMLEvent, bool, 
 		}
 
 		appendRowChangeToChunk(newChunk, &row)
-		rowTypes = append(rowTypes, row.RowType)
-		rowKeys = append(rowKeys, cloneRowKey(row.RowKey))
+		// RowTypes/RowKeys are indexed by physical row slots in `DMLEvent.Rows`.
+		// An update occupies two slots (pre and post image), so we need to append
+		// its type/key twice to keep `GetNextRow()` semantics intact.
+		physicalSlots := 1
+		if row.RowType == common.RowTypeUpdate {
+			physicalSlots = 2
+		}
+		for i := 0; i < physicalSlots; i++ {
+			rowTypes = append(rowTypes, row.RowType)
+			rowKeys = append(rowKeys, cloneRowKey(row.RowKey))
+		}
 		checksums = append(checksums, row.Checksum)
 		kept++
 	}

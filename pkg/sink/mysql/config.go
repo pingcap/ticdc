@@ -102,15 +102,18 @@ type Config struct {
 	MaxMultiUpdateRowCount int
 	MaxMultiUpdateRowSize  int
 	TidbTxnMode            string
-	ReadTimeout            string
-	WriteTimeout           string
-	DialTimeout            string
-	SafeMode               bool
-	Timezone               string
-	TLS                    string
-	SSLCa                  string
-	SSLCert                string
-	SSLKey                 string
+	// tidbTxnModeSpecified indicates whether TidbTxnMode is explicitly set by user via sink URI or changefeed config.
+	// It is used to avoid overriding user configuration when applying downstream-specific defaults.
+	tidbTxnModeSpecified bool
+	ReadTimeout          string
+	WriteTimeout         string
+	DialTimeout          string
+	SafeMode             bool
+	Timezone             string
+	TLS                  string
+	SSLCa                string
+	SSLCert              string
+	SSLKey               string
 
 	// retry number for dml
 	DMLMaxRetry uint64
@@ -164,6 +167,7 @@ func New() *Config {
 		MaxMultiUpdateRowCount:        defaultMaxMultiUpdateRowCount,
 		MaxMultiUpdateRowSize:         defaultMaxMultiUpdateRowSize,
 		TidbTxnMode:                   defaultTiDBTxnMode,
+		tidbTxnModeSpecified:          false,
 		ReadTimeout:                   defaultReadTimeout,
 		WriteTimeout:                  defaultWriteTimeout,
 		DialTimeout:                   defaultDialTimeout,
@@ -187,6 +191,9 @@ func (c *Config) mergeConfig(cfg *config.ChangefeedConfig) {
 			mConfig := cfg.SinkConfig.MySQLConfig
 			if mConfig.WorkerCount != nil {
 				c.workerCountSpecified = true
+			}
+			if mConfig.TiDBTxnMode != nil {
+				c.tidbTxnModeSpecified = true
 			}
 			merge(&c.WorkerCount, mConfig.WorkerCount)
 			merge(&c.MaxTxnRow, mConfig.MaxTxnRow)
@@ -239,7 +246,7 @@ func (c *Config) Apply(
 	if err = getMaxMultiUpdateRowSize(query, &c.MaxMultiUpdateRowSize); err != nil {
 		return err
 	}
-	if err = getTiDBTxnMode(query, &c.TidbTxnMode); err != nil {
+	if err = getTiDBTxnMode(query, &c.TidbTxnMode, &c.tidbTxnModeSpecified); err != nil {
 		return err
 	}
 	if err = c.getSSLCA(query, changefeedID, &c.TLS); err != nil {
@@ -495,12 +502,13 @@ func getMaxMultiUpdateRowSize(values url.Values, maxMultiUpdateRowSize *int) err
 	return nil
 }
 
-func getTiDBTxnMode(values url.Values, mode *string) error {
+func getTiDBTxnMode(values url.Values, mode *string, modeSpecified *bool) error {
 	s := values.Get("tidb-txn-mode")
 	if len(s) == 0 {
 		return nil
 	}
 	if s == txnModeOptimistic || s == txnModePessimistic {
+		*modeSpecified = true
 		*mode = s
 	} else {
 		log.Warn("invalid tidb-txn-mode, should be pessimistic or optimistic",
