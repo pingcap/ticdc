@@ -17,7 +17,6 @@ import (
 	"context"
 	"sync/atomic"
 
-	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -25,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tidb/br/pkg/storage"
-	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -34,7 +32,7 @@ type dmlWriters struct {
 	changefeedID commonType.ChangeFeedID
 	statistics   *metrics.Statistics
 
-	bufferMetrics *cloudStorageBufferMetrics
+	collector *metricsCollector
 
 	// msgCh is a channel to hold eventFragment.
 	// The caller of WriteEvents will write eventFragment to msgCh and
@@ -52,28 +50,6 @@ type dmlWriters struct {
 	lastSeqNum uint64
 }
 
-type cloudStorageBufferMetrics struct {
-	unflushedRawBytes     prometheus.Gauge
-	unflushedEncodedBytes prometheus.Gauge
-	rawBytesTotal         prometheus.Counter
-	encodedBytesTotal     prometheus.Counter
-}
-
-func newCloudStorageBufferMetrics(changefeedID commonType.ChangeFeedID) *cloudStorageBufferMetrics {
-	namespace := changefeedID.Keyspace()
-	changefeed := changefeedID.ID().String()
-	return &cloudStorageBufferMetrics{
-		unflushedRawBytes: sinkmetrics.CloudStorageUnflushedRawBytesGauge.
-			WithLabelValues(namespace, changefeed),
-		unflushedEncodedBytes: sinkmetrics.CloudStorageUnflushedEncodedBytesGauge.
-			WithLabelValues(namespace, changefeed),
-		rawBytesTotal: sinkmetrics.CloudStorageDMLRawBytesCounter.
-			WithLabelValues(namespace, changefeed),
-		encodedBytesTotal: sinkmetrics.CloudStorageDMLEncodedBytesCounter.
-			WithLabelValues(namespace, changefeed),
-	}
-}
-
 func newDMLWriters(
 	changefeedID commonType.ChangeFeedID,
 	storage storage.ExternalStorage,
@@ -82,10 +58,10 @@ func newDMLWriters(
 	extension string,
 	statistics *metrics.Statistics,
 ) *dmlWriters {
-	bufferMetrics := newCloudStorageBufferMetrics(changefeedID)
+	collector := newMetricsCollector(changefeedID)
 	messageCh := chann.NewUnlimitedChannelDefault[eventFragment]()
 	encodedOutCh := make(chan eventFragment, defaultChannelSize)
-	encoderGroup := newEncodingGroup(changefeedID, encoderConfig, defaultEncodingConcurrency, messageCh, encodedOutCh, bufferMetrics)
+	encoderGroup := newEncodingGroup(changefeedID, encoderConfig, defaultEncodingConcurrency, messageCh, encodedOutCh, collector)
 
 	writers := make([]*writer, config.WorkerCount)
 	writerInputChs := make([]*chann.DrainableChann[eventFragment], config.WorkerCount)
@@ -96,10 +72,10 @@ func newDMLWriters(
 	}
 
 	return &dmlWriters{
-		changefeedID:  changefeedID,
-		statistics:    statistics,
-		bufferMetrics: bufferMetrics,
-		msgCh:         messageCh,
+		changefeedID: changefeedID,
+		statistics:   statistics,
+		collector:    collector,
+		msgCh:        messageCh,
 
 		encodeGroup:  encoderGroup,
 		defragmenter: newDefragmenter(encodedOutCh, writerInputChs),
@@ -131,11 +107,11 @@ func (d *dmlWriters) Run(ctx context.Context) error {
 
 func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
 	rawBytes := event.GetSize()
-	if rawBytes > 0 && d.bufferMetrics != nil {
-		d.bufferMetrics.unflushedRawBytes.Add(float64(rawBytes))
-		d.bufferMetrics.rawBytesTotal.Add(float64(rawBytes))
+	if rawBytes > 0 && d.collector != nil {
+		d.collector.unflushedRawBytes.Add(float64(rawBytes))
+		d.collector.rawBytesTotal.Add(float64(rawBytes))
 		event.AddPostFlushFunc(func() {
-			d.bufferMetrics.unflushedRawBytes.Sub(float64(rawBytes))
+			d.collector.unflushedRawBytes.Sub(float64(rawBytes))
 		})
 	}
 

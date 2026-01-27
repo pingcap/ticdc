@@ -39,7 +39,7 @@ type encodingGroup struct {
 	inputCh  *chann.UnlimitedChannel[eventFragment, any]
 	outputCh chan<- eventFragment
 
-	bufferMetrics *cloudStorageBufferMetrics
+	collector *metricsCollector
 
 	closed *atomic.Bool
 }
@@ -50,15 +50,15 @@ func newEncodingGroup(
 	concurrency int,
 	inputCh *chann.UnlimitedChannel[eventFragment, any],
 	outputCh chan<- eventFragment,
-	bufferMetrics *cloudStorageBufferMetrics,
+	collector *metricsCollector,
 ) *encodingGroup {
 	return &encodingGroup{
-		changeFeedID:  changefeedID,
-		codecConfig:   codecConfig,
-		concurrency:   concurrency,
-		inputCh:       inputCh,
-		outputCh:      outputCh,
-		bufferMetrics: bufferMetrics,
+		changeFeedID: changefeedID,
+		codecConfig:  codecConfig,
+		concurrency:  concurrency,
+		inputCh:      inputCh,
+		outputCh:     outputCh,
+		collector:    collector,
 
 		closed: atomic.NewBool(false),
 	}
@@ -110,7 +110,7 @@ func (eg *encodingGroup) close() {
 }
 
 func (eg *encodingGroup) recordEncodedBytes(frag *eventFragment) {
-	if eg.bufferMetrics == nil || frag == nil || frag.event == nil {
+	if eg.collector == nil || frag == nil || frag.event == nil {
 		return
 	}
 	var encodedBytes int64
@@ -120,9 +120,9 @@ func (eg *encodingGroup) recordEncodedBytes(frag *eventFragment) {
 	if encodedBytes <= 0 {
 		return
 	}
-	eg.bufferMetrics.unflushedEncodedBytes.Add(float64(encodedBytes))
-	eg.bufferMetrics.encodedBytesTotal.Add(float64(encodedBytes))
+	eg.collector.unflushedEncodedBytes.Add(float64(encodedBytes))
+	eg.collector.encodedBytesTotal.Add(float64(encodedBytes))
 	frag.event.AddPostFlushFunc(func() {
-		eg.bufferMetrics.unflushedEncodedBytes.Sub(float64(encodedBytes))
+		eg.collector.unflushedEncodedBytes.Sub(float64(encodedBytes))
 	})
 }
