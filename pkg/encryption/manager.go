@@ -262,6 +262,7 @@ func (m *encryptionMetaManager) decryptDataKey(ctx context.Context, masterKey *M
 		masterKey.CMEKID,
 		masterKey.Vendor.String(),
 		masterKey.Region,
+		masterKey.Endpoint,
 	)
 	if err != nil {
 		return nil, cerrors.ErrDecodeFailed.Wrap(err)

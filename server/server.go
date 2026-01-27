@@ -287,8 +287,14 @@ func (c *server) setPreServices(ctx context.Context) error {
 			return errors.Trace(err)
 		}
 
-		// TODO: Replace mock KMS client with a real implementation.
-		kmsClient := kms.NewMockKMSClient()
+		kmsClient, err := kms.NewClient(conf.Debug.Encryption)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		if closeable, ok := kmsClient.(common.Closeable); ok {
+			c.preServices = append(c.preServices, closeable)
+		}
+
 		metaManager := encryption.NewEncryptionMetaManager(tikvClient, kmsClient)
 		if err := metaManager.Start(ctx); err != nil {
 			return errors.Trace(err)

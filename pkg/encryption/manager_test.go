@@ -27,7 +27,7 @@ type staticKMSClient struct {
 	plaintext []byte
 }
 
-func (c *staticKMSClient) DecryptMasterKey(ctx context.Context, ciphertext []byte, keyID string, vendor string, region string) ([]byte, error) {
+func (c *staticKMSClient) DecryptMasterKey(ctx context.Context, ciphertext []byte, keyID string, vendor string, region string, endpoint string) ([]byte, error) {
 	return c.plaintext, nil
 }
 

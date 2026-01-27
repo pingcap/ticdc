@@ -159,6 +159,41 @@ type EncryptionConfig struct {
 
 	// AllowDegradeOnError allows graceful degradation to unencrypted mode on encryption errors
 	AllowDegradeOnError bool `toml:"allow-degrade-on-error" json:"allow_degrade_on_error"`
+
+	// KMS contains optional KMS client overrides. If unset, TiCDC will use the
+	// default credential chain of the corresponding cloud provider.
+	KMS *KMSConfig `toml:"kms" json:"kms"`
+}
+
+// KMSConfig contains KMS configuration for different cloud providers.
+type KMSConfig struct {
+	AWS *AWSKMSConfig `toml:"aws" json:"aws"`
+	GCP *GCPKMSConfig `toml:"gcp" json:"gcp"`
+}
+
+type AWSKMSConfig struct {
+	// Region overrides the region from TiKV encryption metadata.
+	Region string `toml:"region" json:"region"`
+	// Endpoint overrides the endpoint from TiKV encryption metadata.
+	Endpoint string `toml:"endpoint" json:"endpoint"`
+
+	// Profile configures the AWS shared config profile to use.
+	Profile string `toml:"profile" json:"profile"`
+
+	// Static credentials. If AccessKey is set, SecretAccessKey must also be set.
+	AccessKey       string `toml:"access-key" json:"access_key"`
+	SecretAccessKey string `toml:"secret-access-key" json:"secret_access_key"`
+	SessionToken    string `toml:"session-token" json:"session_token"`
+}
+
+type GCPKMSConfig struct {
+	// Endpoint overrides the endpoint from TiKV encryption metadata.
+	Endpoint string `toml:"endpoint" json:"endpoint"`
+
+	// CredentialsFile specifies a service account JSON file path.
+	CredentialsFile string `toml:"credentials-file" json:"credentials_file"`
+	// CredentialsJSON specifies a service account JSON content.
+	CredentialsJSON string `toml:"credentials-json" json:"credentials_json"`
 }
 
 // NewDefaultEncryptionConfig returns the default encryption configuration
@@ -168,5 +203,9 @@ func NewDefaultEncryptionConfig() *EncryptionConfig {
 		MetaRefreshInterval: TomlDuration(1 * time.Hour),
 		MetaCacheTTL:        TomlDuration(1 * time.Hour),
 		AllowDegradeOnError: true,
+		KMS: &KMSConfig{
+			AWS: &AWSKMSConfig{},
+			GCP: &GCPKMSConfig{},
+		},
 	}
 }

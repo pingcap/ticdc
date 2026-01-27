@@ -27,7 +27,7 @@ import (
 // KMSClient is the interface for Key Management Service operations
 type KMSClient interface {
 	// DecryptMasterKey decrypts the master key using the specified KMS parameters
-	DecryptMasterKey(ctx context.Context, ciphertext []byte, keyID string, vendor string, region string) ([]byte, error)
+	DecryptMasterKey(ctx context.Context, ciphertext []byte, keyID string, vendor string, region string, endpoint string) ([]byte, error)
 }
 
 // MockKMSClient is a mock implementation of KMSClient for development and testing
@@ -54,7 +54,7 @@ func NewMockKMSClient() *MockKMSClient {
 
 // DecryptMasterKey decrypts the master key using mock KMS
 // In a real implementation, this would call the actual KMS service
-func (c *MockKMSClient) DecryptMasterKey(ctx context.Context, ciphertext []byte, keyID string, vendor string, region string) ([]byte, error) {
+func (c *MockKMSClient) DecryptMasterKey(ctx context.Context, ciphertext []byte, keyID string, vendor string, region string, endpoint string) ([]byte, error) {
 	if len(ciphertext) < aes.BlockSize {
 		return nil, cerrors.ErrDecodeFailed.GenWithStackByArgs("ciphertext too short")
 	}
