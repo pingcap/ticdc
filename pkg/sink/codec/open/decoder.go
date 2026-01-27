@@ -164,13 +164,13 @@ func (b *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	if err != nil {
 		log.Panic("decompress failed",
 			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
-			zap.Any("value", value), zap.Error(err))
+			zap.Any("value", util.RedactAny(value)), zap.Error(err))
 	}
 
 	var m messageDDL
 	err = json.Unmarshal(value, &m)
 	if err != nil {
-		log.Panic("decode message DDL failed", zap.Any("data", value), zap.Error(err))
+		log.Panic("decode message DDL failed", zap.String("data", util.RedactAny(value)), zap.Error(err))
 	}
 
 	result := new(commonEvent.DDLEvent)
@@ -205,7 +205,7 @@ func (b *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	if err != nil {
 		log.Panic("decompress failed",
 			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
-			zap.Any("value", value), zap.Error(err))
+			zap.Any("value", util.RedactAny(value)), zap.Error(err))
 	}
 
 	nextRow := new(messageRow)
@@ -296,7 +296,7 @@ func (b *decoder) assembleEventFromClaimCheckStorage(ctx context.Context) *commo
 	}
 	claimCheckM, err := common.UnmarshalClaimCheckMessage(data)
 	if err != nil {
-		log.Panic("unmarshal claim check message failed", zap.Any("data", data), zap.Error(err))
+		log.Panic("unmarshal claim check message failed", zap.String("data", util.RedactAny(data)), zap.Error(err))
 	}
 
 	version := binary.BigEndian.Uint64(claimCheckM.Key[:8])
@@ -316,7 +316,7 @@ func (b *decoder) assembleEventFromClaimCheckStorage(ctx context.Context) *commo
 	if err != nil {
 		log.Panic("decompress large message failed",
 			zap.String("compression", b.config.LargeMessageHandle.LargeMessageHandleCompression),
-			zap.Any("value", value), zap.Error(err))
+			zap.Any("value", util.RedactAny(value)), zap.Error(err))
 	}
 
 	rowMsg := new(messageRow)
@@ -558,12 +558,12 @@ func formatColumn(c column, ft types.FieldType) column {
 			if isBinary(c.Flag) {
 				v, err = strconv.Unquote("\"" + v + "\"")
 				if err != nil {
-					log.Panic("invalid column value, please report a bug", zap.Any("value", data), zap.Error(err))
+					log.Panic("invalid column value, please report a bug", zap.String("value", util.RedactAny(data)), zap.Error(err))
 				}
 			}
 			data = []byte(v)
 		default:
-			log.Panic("invalid column value, please report a bug", zap.Any("value", c.Value), zap.Any("type", v))
+			log.Panic("invalid column value, please report a bug", zap.String("value", util.RedactAny(c.Value)), zap.Any("type", v))
 		}
 		c.Value = data
 	case mysql.TypeTinyBlob, mysql.TypeMediumBlob,
@@ -575,10 +575,10 @@ func formatColumn(c column, ft types.FieldType) column {
 		case string:
 			data, err = base64.StdEncoding.DecodeString(v)
 		default:
-			log.Panic("invalid column value, please report a bug", zap.Any("value", c.Value), zap.Any("type", v))
+			log.Panic("invalid column value, please report a bug", zap.String("value", util.RedactAny(c.Value)), zap.Any("type", v))
 		}
 		if err != nil {
-			log.Panic("invalid column value, please report a bug", zap.Any("col", c), zap.Error(err))
+			log.Panic("invalid column value, please report a bug", zap.String("col", util.RedactAny(c)), zap.Error(err))
 		}
 		c.Value = data
 	case mysql.TypeFloat, mysql.TypeDouble:
@@ -589,10 +589,10 @@ func formatColumn(c column, ft types.FieldType) column {
 		case json.Number:
 			data, err = v.Float64()
 		default:
-			log.Panic("invalid column value, please report a bug", zap.Any("col", c), zap.Any("type", v))
+			log.Panic("invalid column value, please report a bug", zap.String("col", util.RedactAny(c)), zap.Any("type", v))
 		}
 		if err != nil {
-			log.Panic("invalid column value, please report a bug", zap.Any("col", c), zap.Error(err))
+			log.Panic("invalid column value, please report a bug", zap.String("col", util.RedactAny(c)), zap.Error(err))
 		}
 		c.Value = data
 		if c.Type == mysql.TypeFloat {
@@ -606,7 +606,7 @@ func formatColumn(c column, ft types.FieldType) column {
 		case []uint8:
 			data = string(v)
 		default:
-			log.Panic("invalid column value, please report a bug", zap.Any("col", c), zap.Any("type", v))
+			log.Panic("invalid column value, please report a bug", zap.String("col", util.RedactAny(c)), zap.Any("type", v))
 		}
 		if isUnsigned(c.Flag) {
 			c.Value, err = strconv.ParseUint(data, 10, 64)
@@ -614,7 +614,7 @@ func formatColumn(c column, ft types.FieldType) column {
 			c.Value, err = strconv.ParseInt(data, 10, 64)
 		}
 		if err != nil {
-			log.Panic("invalid column value, please report a bug", zap.Any("col", c), zap.Error(err))
+			log.Panic("invalid column value, please report a bug", zap.String("col", util.RedactAny(c)), zap.Error(err))
 		}
 	case mysql.TypeYear:
 		var value int64
@@ -624,10 +624,10 @@ func formatColumn(c column, ft types.FieldType) column {
 		case []uint8:
 			value, err = strconv.ParseInt(string(v), 10, 64)
 		default:
-			log.Panic("invalid column value for year", zap.Any("value", c.Value), zap.Any("type", v))
+			log.Panic("invalid column value for year", zap.String("value", util.RedactAny(c.Value)), zap.Any("type", v))
 		}
 		if err != nil {
-			log.Panic("invalid column value for year", zap.Any("value", c.Value), zap.Error(err))
+			log.Panic("invalid column value for year", zap.String("value", util.RedactAny(c.Value)), zap.Error(err))
 		}
 		c.Value = value
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeTimestamp:
@@ -638,11 +638,11 @@ func formatColumn(c column, ft types.FieldType) column {
 		case string:
 			data = v
 		default:
-			log.Panic("invalid column value for date / datetime / timestamp", zap.Any("value", c.Value), zap.Any("type", v))
+			log.Panic("invalid column value for date / datetime / timestamp", zap.String("value", util.RedactAny(c.Value)), zap.Any("type", v))
 		}
 		c.Value, err = tiTypes.ParseTime(tiTypes.DefaultStmtNoWarningContext, data, ft.GetType(), ft.GetDecimal())
 		if err != nil {
-			log.Panic("invalid column value for date / datetime / timestamp", zap.Any("value", c.Value), zap.Error(err))
+			log.Panic("invalid column value for date / datetime / timestamp", zap.String("value", util.RedactAny(c.Value)), zap.Error(err))
 		}
 	// todo: shall we also convert timezone for the mysql.TypeTimestamp ?
 	//if mysqlType == mysql.TypeTimestamp && decoder.loc != nil && !t.IsZero() {
@@ -659,11 +659,11 @@ func formatColumn(c column, ft types.FieldType) column {
 		case string:
 			data = v
 		default:
-			log.Panic("invalid column value for duration", zap.Any("value", c.Value), zap.Any("type", v))
+			log.Panic("invalid column value for duration", zap.String("value", util.RedactAny(c.Value)), zap.Any("type", v))
 		}
 		c.Value, _, err = tiTypes.ParseDuration(tiTypes.DefaultStmtNoWarningContext, data, ft.GetDecimal())
 		if err != nil {
-			log.Panic("invalid column value for duration", zap.Any("value", c.Value), zap.Error(err))
+			log.Panic("invalid column value for duration", zap.String("value", util.RedactAny(c.Value)), zap.Error(err))
 		}
 	case mysql.TypeBit:
 		var intVal uint64
@@ -673,11 +673,11 @@ func formatColumn(c column, ft types.FieldType) column {
 		case json.Number:
 			a, err := v.Int64()
 			if err != nil {
-				log.Panic("invalid column value for the bit type", zap.Any("value", c.Value), zap.Error(err))
+				log.Panic("invalid column value for the bit type", zap.String("value", util.RedactAny(c.Value)), zap.Error(err))
 			}
 			intVal = uint64(a)
 		default:
-			log.Panic("invalid column value for the bit type", zap.Any("value", c.Value), zap.Any("type", v))
+			log.Panic("invalid column value for the bit type", zap.String("value", util.RedactAny(c.Value)), zap.Any("type", v))
 		}
 		c.Value = tiTypes.NewBinaryLiteralFromUint(intVal, -1)
 	case mysql.TypeEnum:
@@ -688,10 +688,10 @@ func formatColumn(c column, ft types.FieldType) column {
 		case []uint8:
 			enumValue, err = strconv.ParseInt(string(v), 10, 64)
 		default:
-			log.Panic("invalid column value for enum", zap.Any("value", c.Value), zap.Any("type", v))
+			log.Panic("invalid column value for enum", zap.String("value", util.RedactAny(c.Value)), zap.Any("type", v))
 		}
 		if err != nil {
-			log.Panic("invalid column value for enum", zap.Any("value", c.Value), zap.Error(err))
+			log.Panic("invalid column value for enum", zap.String("value", util.RedactAny(c.Value)), zap.Error(err))
 		}
 		// only enum's value accessed by the MySQL Sink, and lack the elements, so let's make a compromise.
 		c.Value = tiTypes.Enum{
@@ -705,10 +705,10 @@ func formatColumn(c column, ft types.FieldType) column {
 		case []uint8:
 			setValue, err = strconv.ParseInt(string(v), 10, 64)
 		default:
-			log.Panic("invalid column value for set", zap.Any("value", c.Value), zap.Any("type", v))
+			log.Panic("invalid column value for set", zap.String("value", util.RedactAny(c.Value)), zap.Any("type", v))
 		}
 		if err != nil {
-			log.Panic("invalid column value for set", zap.Any("value", c.Value), zap.Error(err))
+			log.Panic("invalid column value for set", zap.String("value", util.RedactAny(c.Value)), zap.Error(err))
 		}
 		// only set's value accessed by the MySQL Sink, and lack the elements, so let's make a compromise.
 		c.Value = tiTypes.Set{
@@ -722,11 +722,11 @@ func formatColumn(c column, ft types.FieldType) column {
 		case string:
 			data = v
 		default:
-			log.Panic("invalid column value for JSON", zap.Any("value", c.Value), zap.Any("type", v))
+			log.Panic("invalid column value for JSON", zap.String("value", util.RedactAny(c.Value)), zap.Any("type", v))
 		}
 		c.Value, err = tiTypes.ParseBinaryJSONFromString(data)
 		if err != nil {
-			log.Panic("invalid column value for json", zap.Any("value", c.Value), zap.Error(err))
+			log.Panic("invalid column value for json", zap.String("value", util.RedactAny(c.Value)), zap.Error(err))
 		}
 	case mysql.TypeNewDecimal:
 		var data []byte
@@ -736,12 +736,12 @@ func formatColumn(c column, ft types.FieldType) column {
 		case string:
 			data = []byte(v)
 		default:
-			log.Panic("invalid column value for decimal", zap.Any("value", c.Value), zap.Any("type", v))
+			log.Panic("invalid column value for decimal", zap.String("value", util.RedactAny(c.Value)), zap.Any("type", v))
 		}
 		dec := new(tiTypes.MyDecimal)
 		err = dec.FromString(data)
 		if err != nil {
-			log.Panic("invalid column value for decimal", zap.Any("value", c.Value), zap.Error(err))
+			log.Panic("invalid column value for decimal", zap.String("value", util.RedactAny(c.Value)), zap.Error(err))
 		}
 		c.Value = dec
 	case mysql.TypeTiDBVectorFloat32:
@@ -752,14 +752,14 @@ func formatColumn(c column, ft types.FieldType) column {
 		case string:
 			data = v
 		default:
-			log.Panic("invalid column value for vector float32", zap.Any("value", c.Value), zap.Any("type", v))
+			log.Panic("invalid column value for vector float32", zap.String("value", util.RedactAny(c.Value)), zap.Any("type", v))
 		}
 		c.Value, err = tiTypes.ParseVectorFloat32(data)
 		if err != nil {
-			log.Panic("invalid column value for vector float32", zap.Any("value", c.Value), zap.Error(err))
+			log.Panic("invalid column value for vector float32", zap.String("value", util.RedactAny(c.Value)), zap.Error(err))
 		}
 	default:
-		log.Panic("unknown data type found", zap.Any("type", c.Type), zap.Any("value", c.Value))
+		log.Panic("unknown data type found", zap.Any("type", c.Type), zap.String("value", util.RedactAny(c.Value)))
 	}
 	return c
 }
