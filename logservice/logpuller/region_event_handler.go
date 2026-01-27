@@ -86,6 +86,25 @@ func (h *regionEventHandler) Path(event regionEvent) SubscriptionID {
 }
 
 func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent) bool {
+	startTime := time.Now()
+	hasEntries := false
+	hasResolved := false
+	hasError := false
+	defer func() {
+		eventType := "error"
+		switch {
+		case hasEntries && hasResolved:
+			eventType = "mixed"
+		case hasEntries:
+			eventType = "entries"
+		case hasResolved:
+			eventType = "resolved"
+		case hasError:
+			eventType = "error"
+		}
+		metrics.SubscriptionClientRegionEventHandleDuration.WithLabelValues(eventType).Observe(time.Since(startTime).Seconds())
+	}()
+
 	if len(span.kvEventsCache) != 0 {
 		log.Panic("kvEventsCache is not empty",
 			zap.Int("kvEventsCacheLen", len(span.kvEventsCache)),
@@ -95,12 +114,15 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 	newResolvedTs := uint64(0)
 	for _, event := range events {
 		if len(event.states) == 1 && event.states[0].isStale() {
+			hasError = true
 			h.handleRegionError(event.states[0])
 			continue
 		}
 		if event.entries != nil {
+			hasEntries = true
 			handleEventEntries(span, event.mustFirstState(), event.entries)
 		} else if event.resolvedTs != 0 {
+			hasResolved = true
 			for _, state := range event.states {
 				resolvedTs := handleResolvedTs(span, state, event.resolvedTs)
 				if resolvedTs > newResolvedTs {
@@ -119,9 +141,17 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 	if len(span.kvEventsCache) > 0 {
 		metricsEventCount.Add(float64(len(span.kvEventsCache)))
 		await := span.consumeKVEvents(span.kvEventsCache, func() {
+			start := time.Now()
 			span.clearKVEventsCache()
+			metrics.SubscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("clearCache").Observe(time.Since(start).Seconds())
+
+			start = time.Now()
 			tryAdvanceResolvedTs()
+			metrics.SubscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("advanceResolvedTs").Observe(time.Since(startTime).Seconds())
+
+			start = time.Now()
 			h.subClient.wakeSubscription(span.subID)
+			metrics.SubscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("wakeSubscription").Observe(time.Since(startTime).Seconds())
 		})
 		// if not await, the wake callback will not be called, we need clear the cache manually.
 		if !await {

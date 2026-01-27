@@ -216,6 +216,22 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.001, 2, 20), // 1ms~524s
 		}, []string{"db", "worker"})
 
+	EventStoreWriteQueueDurationHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_store",
+		Name:      "write_queue_duration",
+		Help:      "duration (s) events wait in event store write queue before being processed",
+		Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
+	})
+
+	EventStoreWritePrepareDurationHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_store",
+		Name:      "write_prepare_duration",
+		Help:      "duration (s) for event store to build pebble write batch",
+		Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
+	})
+
 	EventStorePebbleIteratorGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: "ticdc",
 		Subsystem: "event_store",
@@ -328,6 +344,8 @@ func initEventStoreMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventStoreRegisterDispatcherStartTsLagHist)
 	registry.MustRegister(EventStoreWriteWorkerIODuration)
 	registry.MustRegister(EventStoreWriteWorkerTotalDuration)
+	registry.MustRegister(EventStoreWriteQueueDurationHistogram)
+	registry.MustRegister(EventStoreWritePrepareDurationHistogram)
 	registry.MustRegister(EventStorePebbleIteratorGauge)
 	registry.MustRegister(EventStorePebbleLevelFilesGauge)
 	registry.MustRegister(EventStorePebbleBlockCacheAccess)
