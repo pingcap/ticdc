@@ -159,7 +159,7 @@ func NewRangeLock(
 
 	// HACK: for testing table 930, limit locked ranges to 30
 	if tableID == 930 {
-		l.hackLimitLock = 30
+		l.hackLimitLock = 2
 		go l.logStatsLoop()
 	}
 
