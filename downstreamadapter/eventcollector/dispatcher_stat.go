@@ -192,7 +192,12 @@ func (d *dispatcherStat) doReset(serverID node.ID, resetTs uint64) {
 		zap.Stringer("dispatcher", d.getDispatcherID()),
 		zap.Stringer("eventServiceID", serverID),
 		zap.Uint64("epoch", epoch),
-		zap.Uint64("resetTs", resetTs))
+		zap.Uint64("resetTs", resetTs),
+		zap.Uint64("checkpointTs", d.target.GetCheckpointTs()),
+		zap.Uint64("resolvedTs", d.target.GetResolvedTs()),
+		zap.Uint64("startTs", d.target.GetStartTs()),
+		zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()),
+		zap.Uint64("lastEventSeq", d.lastEventSeq.Load()))
 }
 
 // getResetTs is used to get the resetTs of the dispatcher.

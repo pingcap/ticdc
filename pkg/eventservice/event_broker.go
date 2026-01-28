@@ -1098,7 +1098,11 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	}
 	status := c.getOrSetChangefeedStatus(changefeedID)
 	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.taskChan)), uint64(len(c.messageCh)), tableInfo, status)
+	log.Info("before reset dispatcher", zap.Any("dispatcherID", dispatcherID),
+		zap.Uint64("checkpointTs", newStat.checkpointTs.Load()))
 	newStat.copyStatistics(oldStat)
+	log.Info("after reset dispatcher", zap.Any("dispatcherID", dispatcherID),
+		zap.Uint64("checkpointTs", newStat.checkpointTs.Load()))
 
 	for {
 		if statPtr.CompareAndSwap(oldStat, newStat) {
@@ -1162,6 +1166,11 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 		dispatcher := dispatcherPtr.Load()
 		// TODO: Should we check if the dispatcher's serverID is the same as the heartbeat's serverID?
 		if dispatcher.checkpointTs.Load() < dp.CheckpointTs {
+			log.Info("update dispatcher checkpoint by the heartbeat",
+				zap.Any("dispatcherID", dispatcher.id),
+				zap.Uint64("oldCheckpointTs", dispatcher.checkpointTs.Load()),
+				zap.Uint64("newCheckpointTs", dp.CheckpointTs),
+			)
 			dispatcher.checkpointTs.Store(dp.CheckpointTs)
 		}
 		// Update the last received heartbeat time to the current time.
