@@ -364,9 +364,10 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 	}
 	state.updateResolvedTs(resolvedTs)
 
-	now := time.Now().UnixMilli()
-	lastAdvance := span.lastAdvanceTime.Load()
-	if now-lastAdvance >= span.advanceInterval && span.lastAdvanceTime.CompareAndSwap(lastAdvance, now) {
+	now := time.Now()
+	lastAdvance := span.lastAdvanceTime.Load().(time.Time)
+	if time.Since(lastAdvance) > time.Duration(span.advanceInterval)*time.Millisecond {
+		span.lastAdvanceTime.Store(now)
 		span.rangeLock.UpdateLockedRangeStateHeap(state.region.lockedRangeState)
 		ts := span.rangeLock.ResolvedTs()
 		if ts > 0 && span.initialized.CompareAndSwap(false, true) {
