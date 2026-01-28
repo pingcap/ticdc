@@ -466,6 +466,11 @@ func (l *RangeLock) GetHeapMinTs() uint64 {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
+	// HACK: inject delay for table 930 to simulate slow GetHeapMinTs
+	if l.hackLimitLock > 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+
 	minTs := uint64(math.MaxUint64)
 	if minEntry, ok := l.lockedRangeStateHeap.PeekTop(); ok {
 		minTs = minEntry.ResolvedTs.Load()
