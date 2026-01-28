@@ -20,8 +20,11 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/config"
+	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/spf13/cobra"
+	"go.uber.org/zap"
 )
 
 var (
@@ -66,6 +69,21 @@ func run(cmd *cobra.Command, args []string) {
 		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
 		os.Exit(ExitCodeDecodeConfigFailed)
 	}
+
+	// Initialize logger with configured log level
+	logLevel := cfg.GlobalConfig.LogLevel
+	if logLevel == "" {
+		logLevel = "info" // default log level
+	}
+	loggerConfig := &logger.Config{
+		Level: logLevel,
+	}
+	err = logger.InitLogger(loggerConfig)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to init logger: %v\n", err)
+		os.Exit(ExitCodeExecuteFailed)
+	}
+	log.Info("Logger initialized", zap.String("level", logLevel))
 
 	fmt.Printf("Loaded configuration with %d cluster(s)\n", len(cfg.Clusters))
 	for name, cluster := range cfg.Clusters {

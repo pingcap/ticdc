@@ -1,11 +1,13 @@
 # Example configuration file for multi-cluster consistency checker
 
-# Global configuration (reserved for future use)
+# Global configuration
 [global]
 
+# Log level: debug, info, warn, error, fatal, panic
+log-level = "info"
+
 # Report configuration
-[global.report-dir]
-  report-dir = "/tmp/multi-cluster-consistency-checker-reports"
+report-dir = "/tmp/multi-cluster-consistency-checker-reports"
 
 # Tables configuration
 [global.tables]

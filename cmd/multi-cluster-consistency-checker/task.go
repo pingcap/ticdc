@@ -42,7 +42,10 @@ func runTask(ctx context.Context, cfg *config.Config) error {
 	defer cleanupClients(pdClients, etcdClients)
 
 	timeWindowAdvancer := advancer.NewTimeWindowAdvancer(checkpointWatchers, s3Watchers, pdClients)
-	recorder := recorder.NewRecorder(cfg.GlobalConfig.ReportDir)
+	recorder, err := recorder.NewRecorder(cfg.GlobalConfig.ReportDir)
+	if err != nil {
+		return errors.Trace(err)
+	}
 	dataChecker := checker.NewDataChecker(cfg.Clusters)
 
 	log.Info("Starting consistency checker task")
@@ -65,7 +68,9 @@ func runTask(ctx context.Context, cfg *config.Config) error {
 			return errors.Trace(err)
 		}
 
-		recorder.RecordTimeWindow(newTimeWindowData, report)
+		if err := recorder.RecordTimeWindow(newTimeWindowData, report); err != nil {
+			return errors.Trace(err)
+		}
 	}
 }
 

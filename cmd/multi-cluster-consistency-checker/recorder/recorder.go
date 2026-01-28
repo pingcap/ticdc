@@ -28,10 +28,14 @@ type Recorder struct {
 	recordDir string
 }
 
-func NewRecorder(reportDir string) *Recorder {
+func NewRecorder(reportDir string) (*Recorder, error) {
+	err := os.MkdirAll(reportDir, 0755)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
 	return &Recorder{
 		recordDir: reportDir,
-	}
+	}, nil
 }
 
 func (r *Recorder) RecordTimeWindow(timeWindowData map[string]advancer.TimeWindowData, report *Report) error {
@@ -52,5 +56,5 @@ func (r *Recorder) RecordTimeWindow(timeWindowData map[string]advancer.TimeWindo
 func (r *Recorder) flushReport(report *Report) error {
 	filename := path.Join(r.recordDir, fmt.Sprintf("report-%d.log", report.Round))
 	data := report.MarshalReport()
-	return os.WriteFile(filename, []byte(data), 0644)
+	return os.WriteFile(filename, []byte(data), 0600)
 }
