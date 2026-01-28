@@ -125,6 +125,9 @@ type RangeLock struct {
 	mu sync.RWMutex
 	// unlockedRanges is used to store the resolvedTs of unlocked ranges.
 	unlockedRanges *rangeTsMap
+	// unlockedRangesMinTs caches the minimum resolvedTs among unlocked ranges.
+	// It is protected by `mu`.
+	unlockedRangesMinTs uint64
 	// lockedRanges is a btree that stores all locked ranges.
 	lockedRanges *btree.BTreeG[*rangeLockEntry]
 	// regionIDToLockedRanges is used to quickly locate the lock entry by regionID.
@@ -144,6 +147,7 @@ func NewRangeLock(
 		id:                     id,
 		totalSpan:              heartbeatpb.TableSpan{StartKey: startKey, EndKey: endKey},
 		unlockedRanges:         newRangeTsMap(startKey, endKey, startTs),
+		unlockedRangesMinTs:    startTs,
 		lockedRanges:           btree.NewG(16, rangeLockEntryLess),
 		regionIDToLockedRanges: make(map[uint64]*rangeLockEntry),
 		lockedRangeStateHeap:   h,
@@ -244,6 +248,7 @@ func (l *RangeLock) UnlockRange(
 	}
 
 	l.unlockedRanges.set(startKey, endKey, newResolvedTs)
+	l.unlockedRangesMinTs = l.unlockedRanges.getMinTs()
 	log.Debug("unlocked range",
 		zap.Uint64("lockID", l.id), zap.Uint64("regionID", entry.regionID),
 		zap.Uint64("resolvedTs", newResolvedTs),
@@ -265,18 +270,12 @@ func (l *RangeLock) ResolvedTs() uint64 {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	var minTs uint64 = math.MaxUint64
-	l.lockedRanges.Ascend(func(item *rangeLockEntry) bool {
-		ts := item.lockedRangeState.ResolvedTs.Load()
-		if ts < minTs {
-			minTs = ts
-		}
-		return true
-	})
-
-	unlockedMinTs := l.unlockedRanges.getMinTs()
-	if unlockedMinTs < minTs {
-		minTs = unlockedMinTs
+	minTs := uint64(math.MaxUint64)
+	if minEntry, ok := l.lockedRangeStateHeap.PeekTop(); ok {
+		minTs = minEntry.ResolvedTs.Load()
+	}
+	if l.unlockedRangesMinTs < minTs {
+		minTs = l.unlockedRangesMinTs
 	}
 
 	return minTs
@@ -469,6 +468,7 @@ func (l *RangeLock) tryLockRange(startKey, endKey []byte, regionID, regionVersio
 		l.lockedRangeStateHeap.AddOrUpdate(&newEntry.lockedRangeState)
 
 		l.unlockedRanges.unset(startKey, endKey)
+		l.unlockedRangesMinTs = l.unlockedRanges.getMinTs()
 		log.Debug("range locked",
 			zap.Uint64("lockID", l.id),
 			zap.Uint64("regionID", regionID),
