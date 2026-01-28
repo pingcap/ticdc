@@ -210,6 +210,7 @@ def update_changefeed():
     url = BASE_URL0 + "/changefeeds/changefeed-test1?keyspace=keyspace1"
     data = json.dumps({
         "replica_config": {
+            "ignore_ineligible_table": True,
             "mounter": {
                 "worker_num": 32
             }
@@ -224,6 +225,7 @@ def update_changefeed():
     url = BASE_URL0 + "/changefeeds/changefeed-test2?keyspace=keyspace1"
     data = json.dumps({
         "replica_config": {
+            "ignore_ineligible_table": True,
             "mounter": {
                 "worker_num": 32
             }
