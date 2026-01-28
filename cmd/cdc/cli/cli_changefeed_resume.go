@@ -207,17 +207,20 @@ func (o *resumeChangefeedOptions) run(cmd *cobra.Command) error {
 	if err := o.confirmResumeChangefeedCheck(cmd); err != nil {
 		return err
 	}
-	tables := &v2.Tables{}
+	var (
+		tables = &v2.Tables{}
+		err1   error
+	)
 	if o.checkpointTs != 0 {
 		cf, err := o.apiClient.Changefeeds().Get(ctx, o.keyspace, o.changefeedID)
 		if err != nil {
 			return err
 		}
-		tables, err = o.apiClient.Changefeeds().GetAllTables(ctx, &v2.VerifyTableConfig{
+		tables, err1 = o.apiClient.Changefeeds().GetAllTables(ctx, &v2.VerifyTableConfig{
 			ReplicaConfig: cf.Config,
 			StartTs:       cf.CheckpointTs,
 		}, o.keyspace)
-		if err == nil {
+		if err1 == nil {
 			if len(tables.IneligibleTables) != 0 {
 				if putil.GetOrZero(cf.Config.ForceReplicate) {
 					cmd.Printf("[WARN] Force to replicate some ineligible tables, "+
@@ -238,7 +241,7 @@ func (o *resumeChangefeedOptions) run(cmd *cobra.Command) error {
 		return err
 	}
 	cmd.Printf("Resume changefeed successfully! "+
-		"\nID: %s\nOverwriteCheckpointTs: %t\nIneligibleTablesCount: %d\nEligibleTablesCount: %d\nAllTablesCount: %d\n", o.changefeedID, o.checkpointTs != 0, len(tables.IneligibleTables), len(tables.EligibleTables), len(tables.AllTables))
+		"\nID: %s\nOverwriteCheckpointTs: %t\nIneligibleTablesCount: %d\nEligibleTablesCount: %d\nAllTablesCount: %d\nWarning: %s\n", o.changefeedID, o.checkpointTs != 0, len(tables.IneligibleTables), len(tables.EligibleTables), len(tables.AllTables), err1)
 	if o.verbose {
 		cmd.Printf("EligibleTables: %s\n", formatTableNames(tables.EligibleTables))
 		cmd.Printf("IneligibleTables: %s\n", formatTableNames(tables.IneligibleTables))

@@ -132,11 +132,11 @@ func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
 
 	changefeedConfig := o.getChangefeedConfig(cmd, newInfo)
 
-	tables, err := o.apiV2Client.Changefeeds().GetAllTables(ctx, &v2.VerifyTableConfig{
+	tables, err1 := o.apiV2Client.Changefeeds().GetAllTables(ctx, &v2.VerifyTableConfig{
 		ReplicaConfig: changefeedConfig.ReplicaConfig,
 		StartTs:       newInfo.CheckpointTs,
 	}, o.keyspace)
-	if err == nil {
+	if err1 == nil {
 		ignoreIneligibleTables := false
 		if len(tables.IneligibleTables) != 0 {
 			if putil.GetOrZero(newInfo.Config.ForceReplicate) {
@@ -175,7 +175,7 @@ func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
 	}
 
 	cmd.Printf("Update changefeed config successfully! "+
-		"\nID: %s\nInfo: %s\nIneligibleTablesCount: %d\nEligibleTablesCount: %d\nAllTablesCount: %d\n", info.ID, infoStr, len(tables.IneligibleTables), len(tables.EligibleTables), len(tables.AllTables))
+		"\nID: %s\nInfo: %s\nIneligibleTablesCount: %d\nEligibleTablesCount: %d\nAllTablesCount: %d\nWarning: %s\n", info.ID, infoStr, len(tables.IneligibleTables), len(tables.EligibleTables), len(tables.AllTables), err1)
 	if o.verbose {
 		cmd.Printf("EligibleTables: %s\n", formatTableNames(tables.EligibleTables))
 		cmd.Printf("IneligibleTables: %s\n", formatTableNames(tables.IneligibleTables))
