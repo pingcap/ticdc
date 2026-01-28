@@ -1032,7 +1032,7 @@ func (s *subscriptionClient) newSubscribedSpan(
 	advanceResolvedTs func(ts uint64),
 	advanceInterval int64,
 ) *subscribedSpan {
-	rangeLock := regionlock.NewRangeLock(uint64(subID), span.StartKey, span.EndKey, startTs)
+	rangeLock := regionlock.NewRangeLock(uint64(subID), span.StartKey, span.EndKey, startTs, span.TableID)
 
 	rt := &subscribedSpan{
 		subID:     subID,

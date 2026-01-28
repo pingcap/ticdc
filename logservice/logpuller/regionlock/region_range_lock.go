@@ -135,22 +135,60 @@ type RangeLock struct {
 	// lockedRangeStateHeap is a min heap of all LockedRangeState based on ResolvedTs
 	lockedRangeStateHeap *heap.Heap[*LockedRangeState]
 	stopped              bool
+
+	// HACK: for testing table 930, limit locked ranges to 30
+	hackLimitLock int
 }
 
 // NewRangeLock creates a new RangeLock.
 func NewRangeLock(
 	id uint64,
 	startKey, endKey []byte, startTs uint64,
+	tableID int64,
 ) *RangeLock {
 	h := heap.NewHeap[*LockedRangeState]()
-	return &RangeLock{
+	l := &RangeLock{
 		id:                     id,
-		totalSpan:              heartbeatpb.TableSpan{StartKey: startKey, EndKey: endKey},
+		totalSpan:              heartbeatpb.TableSpan{TableID: tableID, StartKey: startKey, EndKey: endKey},
 		unlockedRanges:         newRangeTsMap(startKey, endKey, startTs),
 		unlockedRangesMinTs:    startTs,
 		lockedRanges:           btree.NewG(16, rangeLockEntryLess),
 		regionIDToLockedRanges: make(map[uint64]*rangeLockEntry),
 		lockedRangeStateHeap:   h,
+	}
+
+	// HACK: for testing table 930, limit locked ranges to 30
+	if tableID == 930 {
+		l.hackLimitLock = 30
+		go l.logStatsLoop()
+	}
+
+	return l
+}
+
+// HACK: logStatsLoop prints stats every 30 seconds for debugging
+func (l *RangeLock) logStatsLoop() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		l.mu.RLock()
+		lockedCount := l.lockedRanges.Len()
+		unlockedCount := l.unlockedRanges.countRanges()
+		stopped := l.stopped
+		l.mu.RUnlock()
+
+		if stopped {
+			log.Info("HACK rangeLock stats loop stopped",
+				zap.Uint64("lockID", l.id),
+				zap.Int64("tableID", l.totalSpan.TableID))
+			return
+		}
+
+		log.Info("HACK rangeLock stats",
+			zap.Uint64("lockID", l.id),
+			zap.Int64("tableID", l.totalSpan.TableID),
+			zap.Int("lockedRanges", lockedCount),
+			zap.Int("unlockedRanges", unlockedCount))
 	}
 }
 
@@ -448,6 +486,13 @@ func (l *RangeLock) tryLockRange(startKey, endKey []byte, regionID, regionVersio
 	defer l.mu.Unlock()
 	if l.stopped {
 		return LockRangeResult{Status: LockRangeStatusCancel}, nil
+	}
+
+	// HACK: for testing table 930, limit locked ranges to hackLimitLock
+	if l.hackLimitLock > 0 && l.lockedRanges.Len() >= l.hackLimitLock {
+		ch := make(chan interface{}, 1)
+		// Return wait status so it keeps retrying but never succeeds
+		return LockRangeResult{Status: LockRangeStatusWait}, []<-chan interface{}{ch}
 	}
 
 	overlappedRangeLocks := l.getOverlappedLockEntries(startKey, endKey, regionID)

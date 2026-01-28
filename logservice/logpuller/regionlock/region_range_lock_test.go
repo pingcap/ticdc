@@ -93,7 +93,7 @@ func TestRegionRangeLock(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.TODO()
-	l := NewRangeLock(1, []byte("a"), []byte("h"), math.MaxUint64)
+	l := NewRangeLock(1, []byte("a"), []byte("h"), math.MaxUint64, 0)
 	mustLockRangeSuccess(ctx, t, l, "a", "e", 1, 1, math.MaxUint64)
 	unlockRange(l, "a", "e", 1, 1, 100)
 
@@ -110,7 +110,7 @@ func TestRegionRangeLock(t *testing.T) {
 func TestRegionRangeLockStale(t *testing.T) {
 	t.Parallel()
 
-	l := NewRangeLock(1, []byte("a"), []byte("z"), math.MaxUint64)
+	l := NewRangeLock(1, []byte("a"), []byte("z"), math.MaxUint64, 0)
 	ctx := context.TODO()
 	mustLockRangeSuccess(ctx, t, l, "c", "g", 1, 10, math.MaxUint64)
 	mustLockRangeSuccess(ctx, t, l, "j", "n", 2, 8, math.MaxUint64)
@@ -133,7 +133,7 @@ func TestRegionRangeLockLockingRegionID(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.TODO()
-	l := NewRangeLock(1, []byte("a"), []byte("z"), math.MaxUint64)
+	l := NewRangeLock(1, []byte("a"), []byte("z"), math.MaxUint64, 0)
 	mustLockRangeSuccess(ctx, t, l, "c", "d", 1, 10, math.MaxUint64)
 
 	mustLockRangeStale(ctx, t, l, "e", "f", 1, 5, "e", "f")
@@ -169,7 +169,7 @@ func TestRegionRangeLockCanBeCancelled(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	l := NewRangeLock(1, []byte("a"), []byte("z"), math.MaxUint64)
+	l := NewRangeLock(1, []byte("a"), []byte("z"), math.MaxUint64, 0)
 	mustLockRangeSuccess(ctx, t, l, "g", "h", 1, 10, math.MaxUint64)
 	wait := mustLockRangeWait(ctx, t, l, "g", "h", 1, 12)
 	cancel()
@@ -209,7 +209,7 @@ func TestRegionRangeLockCollect(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	l := NewRangeLock(1, []byte("a"), []byte("z"), 100)
+	l := NewRangeLock(1, []byte("a"), []byte("z"), 100, 0)
 	attrs := l.IterAll(nil)
 	require.Equal(t, 1, len(attrs.UnLockedRanges))
 
@@ -237,7 +237,7 @@ func TestRegionRangeLockCollect(t *testing.T) {
 }
 
 func TestCalculateMinResolvedTs(t *testing.T) {
-	l := NewRangeLock(1, []byte("a"), []byte("z"), 100)
+	l := NewRangeLock(1, []byte("a"), []byte("z"), 100, 0)
 
 	res := l.LockRange(context.Background(), []byte("m"), []byte("x"), 1, 1)
 	res.LockedRangeState.ResolvedTs.Store(101)
@@ -259,7 +259,7 @@ func TestCalculateMinResolvedTs(t *testing.T) {
 func Benchmark100KRegions(b *testing.B) {
 	ctx := context.Background()
 	startKey, endKey, _ := common.GetKeyspaceTableRange(common.DefaultKeyspaceID, 1)
-	l := NewRangeLock(1, startKey, endKey, 100)
+	l := NewRangeLock(1, startKey, endKey, 100, 0)
 
 	for i := 1; i <= 100*1000; i++ {
 		var rangeStart, rangeEnd []byte
@@ -298,11 +298,11 @@ func TestRangeLockGetHeapMinTs(t *testing.T) {
 	}
 
 	// Test case 1: empty heap
-	l := NewRangeLock(1, []byte("a"), []byte("z"), 100)
+	l := NewRangeLock(1, []byte("a"), []byte("z"), 100, 0)
 	require.Equal(t, uint64(100), l.GetHeapMinTs())
 
 	// Test case 2: Lock a range and then unlock it
-	l = NewRangeLock(1, []byte("a"), []byte("z"), 50)
+	l = NewRangeLock(1, []byte("a"), []byte("z"), 50, 0)
 	res := l.LockRange(context.Background(), []byte("a"), []byte("m"), 1, 1)
 	updateLockedRangeResolvedTs(l, res.LockedRangeState, 101)
 	require.Equal(t, LockRangeStatusSuccess, res.Status)
@@ -320,7 +320,7 @@ func TestRangeLockGetHeapMinTs(t *testing.T) {
 	require.Equal(t, uint64(100), l.GetHeapMinTs())
 	require.Equal(t, l.ResolvedTs(), l.GetHeapMinTs())
 
-	l = NewRangeLock(1, []byte("a"), []byte("z"), 100)
+	l = NewRangeLock(1, []byte("a"), []byte("z"), 100, 0)
 	res = l.LockRange(context.Background(), []byte("a"), []byte("m"), 1, 1)
 	updateLockedRangeResolvedTs(l, res.LockedRangeState, 101)
 	require.Equal(t, LockRangeStatusSuccess, res.Status)
@@ -343,7 +343,7 @@ func TestRangeLockGetHeapMinTs(t *testing.T) {
 func setupRangeLockForBenchmark(lockedCount, unlockedCount int) *RangeLock {
 	ctx := context.Background()
 	startKey, endKey, _ := common.GetKeyspaceTableRange(common.DefaultKeyspaceID, 1)
-	l := NewRangeLock(1, startKey, endKey, 100)
+	l := NewRangeLock(1, startKey, endKey, 100, 0)
 
 	// Total ranges = lockedCount + unlockedCount
 	// We interleave locked and unlocked ranges to create the desired structure

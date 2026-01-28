@@ -228,7 +228,7 @@ func TestHandleResolvedTs(t *testing.T) {
 		subSpan := &subscribedSpan{
 			subID:             subID1,
 			span:              heartbeatpb.TableSpan{},
-			rangeLock:         regionlock.NewRangeLock(uint64(subID1), span.StartKey, span.EndKey, 1),
+			rangeLock:         regionlock.NewRangeLock(uint64(subID1), span.StartKey, span.EndKey, 1, span.TableID),
 			consumeKVEvents:   consumeKVEvents,
 			advanceResolvedTs: advanceResolvedTs,
 			advanceInterval:   0,
@@ -252,7 +252,7 @@ func TestHandleResolvedTs(t *testing.T) {
 		subSpan := &subscribedSpan{
 			subID:             subID2,
 			span:              span,
-			rangeLock:         regionlock.NewRangeLock(uint64(subID2), span.StartKey, span.EndKey, 1),
+			rangeLock:         regionlock.NewRangeLock(uint64(subID2), span.StartKey, span.EndKey, 1, span.TableID),
 			consumeKVEvents:   consumeKVEvents,
 			advanceResolvedTs: advanceResolvedTs,
 			advanceInterval:   0,
@@ -276,7 +276,7 @@ func TestHandleResolvedTs(t *testing.T) {
 		subSpan := &subscribedSpan{
 			subID:             subID3,
 			span:              span,
-			rangeLock:         regionlock.NewRangeLock(uint64(subID3), span.StartKey, span.EndKey, 1),
+			rangeLock:         regionlock.NewRangeLock(uint64(subID3), span.StartKey, span.EndKey, 1, span.TableID),
 			consumeKVEvents:   consumeKVEvents,
 			advanceResolvedTs: advanceResolvedTs,
 			advanceInterval:   0,

@@ -212,6 +212,18 @@ func (m *rangeTsMap) getMinTs() uint64 {
 	return ts
 }
 
+// countRanges returns the count of unlocked ranges (entries with isSet=true).
+func (m *rangeTsMap) countRanges() int {
+	count := 0
+	m.m.Ascend(func(i rangeTsEntry) bool {
+		if i.isSet {
+			count++
+		}
+		return true
+	})
+	return count
+}
+
 // rangeTsEntry is the entry of rangeTsMap.
 type rangeTsEntry struct {
 	// Only startKey is necessary. End key can be inferred by the next item,
