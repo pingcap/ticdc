@@ -257,7 +257,7 @@ func NewBasicDispatcher(
 		resolvedTs:             startTs,
 		isRemoving:             atomic.Bool{},
 		duringHandleEvents:     atomic.Bool{},
-		inflightBudget:         newInflightBudget(sink.SinkType(), sharedInfo.changefeedID, id),
+		inflightBudget:         newInflightBudget(sink.SinkType(), sharedInfo.changefeedID, id, sharedInfo),
 		blockEventStatus:       BlockEventStatus{blockPendingEvent: nil},
 		tableProgress:          NewTableProgress(),
 		schemaID:               schemaID,
@@ -615,7 +615,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	// due to the tableProgress is empty before dml events add into sink.
 	if len(dmlEvents) > 0 {
 		d.AddDMLEventsToSink(dmlEvents)
-		if !block && d.inflightBudget.tryBlock() {
+		if !block && d.inflightBudget.tryBlock(wakeCallback) {
 			block = true
 		}
 	}

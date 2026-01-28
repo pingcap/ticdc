@@ -32,15 +32,19 @@ const (
 type inflightBudget struct {
 	_ noCopy
 
-	enabled bool
+	enabled  bool
+	sinkType common.SinkType
+
+	sharedInfo *SharedInfo
 
 	low        int64
 	high       int64
 	multiplier int64
 
-	inflight  atomic.Int64
-	blocked   atomic.Bool
-	blockedAt atomic.Int64
+	inflight      atomic.Int64
+	blocked       atomic.Bool
+	blockedAt     atomic.Int64
+	globalBlocked atomic.Bool
 
 	// dmlProgress tracks in-flight DML events only.
 	// It's used for commitTs-based DDL deferral when in-flight budget is enabled.
@@ -64,6 +68,7 @@ func newInflightBudget(
 	sinkType common.SinkType,
 	changefeedID common.ChangeFeedID,
 	dispatcherID common.DispatcherID,
+	sharedInfo *SharedInfo,
 ) inflightBudget {
 	enabled := sinkType == common.CloudStorageSinkType || sinkType == common.RedoSinkType
 	// just return zero value to reduce the memory allocation
@@ -72,6 +77,8 @@ func newInflightBudget(
 	}
 	return inflightBudget{
 		enabled:      enabled,
+		sinkType:     sinkType,
+		sharedInfo:   sharedInfo,
 		low:          inflightDefaultPerLowBytes,
 		high:         inflightDefaultPerHighBytes,
 		changefeedID: changefeedID,
@@ -93,7 +100,14 @@ func (b *inflightBudget) isEnabled() bool {
 }
 
 func (b *inflightBudget) isBlocked() bool {
-	return b.blocked.Load()
+	return b.blocked.Load() || b.globalBlocked.Load()
+}
+
+func (b *inflightBudget) global() *changefeedInflightBudget {
+	if b.sharedInfo == nil {
+		return nil
+	}
+	return b.sharedInfo.getChangefeedInflightBudget(b.sinkType)
 }
 
 func (b *inflightBudget) trackDML(dml *commonEvent.DMLEvent, wakeCallback func()) {
@@ -104,9 +118,15 @@ func (b *inflightBudget) trackDML(dml *commonEvent.DMLEvent, wakeCallback func()
 	effectiveBytes := dml.GetSize() * b.multiplier
 	b.inflight.Add(effectiveBytes)
 	b.inflightBudgetBytes.Add(float64(effectiveBytes))
+	if global := b.global(); global != nil {
+		global.OnEnqueue(effectiveBytes)
+	}
 	dml.AddPostFlushFunc(func() {
 		inFlightBytes := b.inflight.Add(-effectiveBytes)
 		b.inflightBudgetBytes.Sub(float64(effectiveBytes))
+		if global := b.global(); global != nil {
+			global.OnFlush(effectiveBytes)
+		}
 		if inFlightBytes < 0 {
 			log.Warn("inflight bytes underflow",
 				zap.Stringer("changefeedID", b.changefeedID),
@@ -127,10 +147,29 @@ func (b *inflightBudget) trackDML(dml *commonEvent.DMLEvent, wakeCallback func()
 					zap.Stringer("dispatcher", b.dispatcherID),
 					zap.Int64("inFlightBytes", inFlightBytes),
 				)
+				if b.globalBlocked.Load() {
+					return
+				}
+				if global := b.global(); global != nil && global.TryBlock(b.dispatcherID, b.makeGlobalWake(wakeCallback)) {
+					b.globalBlocked.Store(true)
+					return
+				}
 				wakeCallback()
 			}
 		}
 	})
+}
+
+func (b *inflightBudget) makeGlobalWake(wakeCallback func()) func() {
+	return func() {
+		if !b.globalBlocked.CompareAndSwap(true, false) {
+			return
+		}
+		if b.blocked.Load() {
+			return
+		}
+		wakeCallback()
+	}
 }
 
 // return true if there is inflight DMLs whose commit-ts smaller than the passed in commitTs.
@@ -147,21 +186,33 @@ func (b *inflightBudget) hasInflightBeforeCommitTs(commitTs uint64) bool {
 	return earliestUnflushedCommitTs < commitTs
 }
 
-func (b *inflightBudget) tryBlock() bool {
+func (b *inflightBudget) tryBlock(wakeCallback func()) bool {
 	if !b.enabled {
 		return false
 	}
-	if b.inflight.Load() < b.high {
-		return false
+
+	perBlocked := false
+	if b.inflight.Load() >= b.high {
+		perBlocked = true
+		if b.blocked.CompareAndSwap(false, true) {
+			b.blockedAt.Store(time.Now().UnixNano())
+			b.inflightBudgetBlockedCount.Inc()
+			log.Debug("dispatcher blocked by inflight bytes",
+				zap.Stringer("changefeedID", b.changefeedID),
+				zap.Stringer("dispatcher", b.dispatcherID),
+				zap.Int64("inFlightBytes", b.inflight.Load()),
+			)
+		}
 	}
-	if b.blocked.CompareAndSwap(false, true) {
-		b.blockedAt.Store(time.Now().UnixNano())
-		b.inflightBudgetBlockedCount.Inc()
-		log.Debug("dispatcher blocked by inflight bytes",
-			zap.Stringer("changefeedID", b.changefeedID),
-			zap.Stringer("dispatcher", b.dispatcherID),
-			zap.Int64("inFlightBytes", b.inflight.Load()),
-		)
+
+	globalBlocked := false
+	if global := b.global(); global != nil && global.TryBlock(b.dispatcherID, b.makeGlobalWake(wakeCallback)) {
+		globalBlocked = true
+		b.globalBlocked.Store(true)
+	}
+
+	if !perBlocked && !globalBlocked {
+		return false
 	}
 	return true
 }
@@ -172,6 +223,12 @@ func (b *inflightBudget) cleanup() {
 	}
 
 	b.inflightBudgetBytes.Sub(float64(b.inflight.Load()))
+
+	if global := b.global(); global != nil {
+		global.CleanupDispatcher(b.dispatcherID)
+	}
+	b.globalBlocked.Store(false)
+
 	if !b.blocked.CompareAndSwap(true, false) {
 		return
 	}
