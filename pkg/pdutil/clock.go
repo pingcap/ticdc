@@ -35,6 +35,8 @@ type Clock interface {
 	CurrentTime() time.Time
 	// CurrentTS returns the current timestamp from pd.
 	CurrentTS() uint64
+	// CurrentPhysicalTS returns the current physical timestamp from pd last time we get it.
+	CurrentPhysicalTS() time.Time
 	Run(ctx context.Context)
 	Close()
 }
@@ -133,6 +135,12 @@ func (c *clock) CurrentTS() uint64 {
 	return oracle.ComposeTS(physical, c.mu.logicTs)
 }
 
+func (c *clock) CurrentPhysicalTS() time.Time {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return time.UnixMilli(c.mu.physicalTs)
+}
+
 // Stop clock.
 func (c *clock) Close() {
 	c.mu.Lock()
@@ -160,6 +168,10 @@ func (c *Clock4Test) CurrentTime() time.Time {
 
 func (c *Clock4Test) CurrentTS() uint64 {
 	return c.ts
+}
+
+func (c *Clock4Test) CurrentPhysicalTS() time.Time {
+	return c.CurrentTime()
 }
 
 func (c *Clock4Test) SetTS(ts uint64) {
@@ -212,6 +224,10 @@ func (c *monotonicClock) CurrentTime() time.Time {
 
 func (c *monotonicClock) CurrentTS() uint64 {
 	return oracle.ComposeTS(c.clock.Now().UnixNano(), 0)
+}
+
+func (c *monotonicClock) CurrentPhysicalTS() time.Time {
+	return c.clock.Now()
 }
 
 func (c *monotonicClock) Run(ctx context.Context) {

@@ -44,12 +44,15 @@ func TestTimeFromPD(t *testing.T) {
 	time.Sleep(1 * time.Second)
 
 	t1 := clock.CurrentTime()
+	pt1 := clock.CurrentPhysicalTS()
 
 	time.Sleep(400 * time.Millisecond)
 	// assume that the gc safe point updated one hour ago
 	t2 := clock.CurrentTime()
+	pt2 := clock.CurrentPhysicalTS()
 	// should return new time
 	require.NotEqual(t, t1, t2)
+	require.True(t, pt2.After(pt1))
 }
 
 func TestEventTimeAndProcessingTime(t *testing.T) {
