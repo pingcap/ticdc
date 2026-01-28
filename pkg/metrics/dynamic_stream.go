@@ -48,6 +48,31 @@ var (
 			Name:      "remove_path_num",
 			Help:      "The number of remove path command",
 		}, []string{"module"})
+
+	DynamicStreamBatchCount = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "dynamic_stream",
+			Name:      "batch_count",
+			Help:      "The number of events in each batch processed by dynamic stream",
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 15), // 1 ~ 16384
+		}, []string{"module", "area"})
+	DynamicStreamBatchBytes = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "dynamic_stream",
+			Name:      "batch_bytes",
+			Help:      "The total bytes in each batch processed by dynamic stream",
+			Buckets:   prometheus.ExponentialBuckets(1024, 2, 18), // 1KB ~ 128MB
+		}, []string{"module", "area"})
+	DynamicStreamBatchDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "dynamic_stream",
+			Name:      "batch_duration",
+			Help:      "The duration of batch each batch in dynamic stream",
+			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 18), // 40us to 5s
+		}, []string{"module", "area"})
 )
 
 func initDynamicStreamMetrics(registry *prometheus.Registry) {
@@ -56,4 +81,7 @@ func initDynamicStreamMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(DynamicStreamPendingQueueLen)
 	registry.MustRegister(DynamicStreamAddPathNum)
 	registry.MustRegister(DynamicStreamRemovePathNum)
+	registry.MustRegister(DynamicStreamBatchCount)
+	registry.MustRegister(DynamicStreamBatchBytes)
+	registry.MustRegister(DynamicStreamBatchDuration)
 }

@@ -20,6 +20,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
@@ -27,6 +28,11 @@ import (
 	canal "github.com/pingcap/tiflow/proto/canal"
 	"go.uber.org/zap"
 )
+
+type optionalString struct {
+	value  string
+	isNull bool
+}
 
 func mysqlType2JavaType(t byte, isBinary bool) common.JavaSQLType {
 	switch t {
@@ -84,12 +90,12 @@ func mysqlType2JavaType(t byte, isBinary bool) common.JavaSQLType {
 	return common.JavaSQLTypeVARCHAR
 }
 
-func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo) (string, common.JavaSQLType) {
+func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo) (optionalString, common.JavaSQLType) {
 	isBinary := mysql.HasBinaryFlag(columnInfo.GetFlag())
 	javaType := mysqlType2JavaType(columnInfo.GetType(), isBinary)
 	d := row.GetDatum(idx, &columnInfo.FieldType)
 	if d.IsNull() {
-		return "null", javaType
+		return optionalString{isNull: true}, javaType
 	}
 
 	var value string
@@ -97,7 +103,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo) (s
 	case mysql.TypeBit:
 		uintValue, err := d.GetMysqlBit().ToInt(types.DefaultStmtNoWarningContext)
 		if err != nil {
-			log.Panic("failed to convert bit to int", zap.Any("data", d), zap.Error(err))
+			log.Panic("failed to convert bit to int", zap.String("data", util.RedactAny(d)), zap.Error(err))
 		}
 		value = strconv.FormatUint(uintValue, 10)
 	case mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob,
@@ -106,7 +112,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo) (s
 		if isBinary {
 			decoded, err := bytesDecoder.Bytes(bytes)
 			if err != nil {
-				log.Panic("failed to decode bytes", zap.Any("bytes", bytes), zap.Error(err))
+				log.Panic("failed to decode bytes", zap.String("bytes", util.RedactAny(bytes)), zap.Error(err))
 			}
 			value = string(decoded)
 		} else {
@@ -186,10 +192,6 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo) (s
 		value = strconv.FormatInt(d.GetInt64(), 10)
 	case mysql.TypeTiDBVectorFloat32:
 		javaType = common.JavaSQLTypeVARCHAR
-		if d.IsNull() {
-			value = "null"
-			break
-		}
 		value = d.GetVectorFloat32().String()
 	default:
 		// NOTICE: GetValue() may return some types that go sql not support, which will cause sink DML fail
@@ -197,7 +199,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo) (s
 		// Go sql support type ref to: https://github.com/golang/go/blob/go1.17.4/src/database/sql/driver/types.go#L236
 		value = fmt.Sprintf("%v", d.GetValue())
 	}
-	return value, javaType
+	return optionalString{value: value}, javaType
 }
 
 // convert ts in tidb to timestamp(in ms) in canal

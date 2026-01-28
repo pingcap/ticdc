@@ -17,6 +17,7 @@ import (
 	"context"
 	"database/sql"
 	"math"
+	"sort"
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
@@ -130,7 +131,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 	log.Info("event router created", zap.Any("protocol", o.protocol),
 		zap.Any("topic", o.topic), zap.Any("dispatcherRules", o.sinkConfig.DispatchRules))
 
-	changefeedID := commonType.NewChangeFeedIDWithName("kafka-consumer", commonType.DefaultKeyspaceNamme)
+	changefeedID := commonType.NewChangeFeedIDWithName("kafka-consumer", commonType.DefaultKeyspaceName)
 	cfg := &config.ChangefeedConfig{
 		ChangefeedID: changefeedID,
 		SinkURI:      o.downstreamURI,
@@ -230,10 +231,13 @@ func (w *writer) getBlockTableIDs(ddl *commonEvent.DDLEvent) map[int64]struct{} 
 	return tableIDs
 }
 
-// append DDL wait to be handled, only consider the constraint among DDLs.
-// for DDL a / b received in the order, a.CommitTs < b.CommitTs should be true.
+// appendDDL enqueues a DDL event to be flushed later.
+//
+// DDLs may be received out of commit-ts order (e.g. due to MQ delivery or buffering), so Write() sorts
+// ddlList by commit-ts before executing. ddlWithMaxCommitTs is a guard against per-table commit-ts
+// regressions: executing an older DDL after a newer one may corrupt downstream schema/DML ordering.
 func (w *writer) appendDDL(ddl *commonEvent.DDLEvent) {
-	// DDL CommitTs fallback, just crash it to indicate the bug.
+	// If commitTs goes backwards for a blocked table, ignore this DDL instead of applying it out of order.
 	tableIDs := w.getBlockTableIDs(ddl)
 	for tableID := range tableIDs {
 		maxCommitTs, ok := w.ddlWithMaxCommitTs[tableID]
@@ -422,16 +426,51 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 
 // Write will synchronously write data downstream
 func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool {
+	// DDL events can be received out of commit-ts order (e.g. due to protocol-level broadcasting and
+	// buffering differences between DDL kinds). We must execute DDLs in commit-ts order; otherwise a
+	// "future" DDL that is not yet eligible (commitTs > watermark) can block executing earlier DDLs
+	// that are already eligible, and the subsequent watermark-based DML flush can observe an out-of-date
+	// downstream schema (e.g. DML applied before its ALTER TABLE), causing test failures like common_1.
+	if len(w.ddlList) > 1 {
+		sort.SliceStable(w.ddlList, func(i, j int) bool {
+			return w.ddlList[i].GetCommitTs() < w.ddlList[j].GetCommitTs()
+		})
+	}
+
 	watermark := w.globalWatermark()
 	ddlList := make([]*commonEvent.DDLEvent, 0)
-	for _, todoDDL := range w.ddlList {
-		// watermark is the min value for all partitions,
-		// the DDL only executed by the first partition, other partitions may be slow
-		// so that the watermark can be smaller than the DDL's commitTs,
-		// which means some DML events may not be consumed yet, so cannot execute the DDL right now.
-		if todoDDL.GetCommitTs() > watermark {
-			ddlList = append(ddlList, todoDDL)
-			continue
+	for i, todoDDL := range w.ddlList {
+		// DDL ordering must follow commitTs (see appendDDL). Traditionally we wait until the global
+		// resolved-ts (watermark) has reached the DDL commitTs, which guarantees all partitions have
+		// consumed events <= commitTs.
+		//
+		// However, some DDLs are safe to execute as soon as they are received. In particular, CREATE
+		// SCHEMA and "independent" CREATE TABLE (i.e. ones that do not depend on any existing table)
+		// do not need to wait for watermark to protect DML ordering, and waiting can deadlock integration
+		// tests that intentionally pause dispatcher creation (thus holding back the upstream resolved-ts/
+		// watermark).
+		//
+		// Safety guard: CREATE TABLE ... LIKE ... is also ActionCreateTable, but it depends on the referenced
+		// table schema being present and up-to-date downstream. The event builder encodes that dependency by
+		// populating BlockedTableNames and/or adding referenced table IDs (or partition IDs) into
+		// BlockedTables.TableIDs. We only bypass watermark for CREATE TABLE when the DDL only blocks the
+		// special DDL span and has no referenced blocked table names.
+		action := timodel.ActionType(todoDDL.Type)
+		bypassWatermark := false
+		switch action {
+		case timodel.ActionCreateSchema:
+			bypassWatermark = true
+		case timodel.ActionCreateTable:
+			blockedTables := todoDDL.GetBlockedTables()
+			bypassWatermark = blockedTables != nil &&
+				blockedTables.InfluenceType == commonEvent.InfluenceTypeNormal &&
+				len(blockedTables.TableIDs) == 1 &&
+				blockedTables.TableIDs[0] == commonType.DDLSpanTableID &&
+				len(todoDDL.GetBlockedTableNames()) == 0
+		}
+		if !bypassWatermark && todoDDL.GetCommitTs() > watermark {
+			ddlList = append(ddlList, w.ddlList[i:]...)
+			break
 		}
 		if err := w.flushDDLEvent(ctx, todoDDL); err != nil {
 			log.Panic("write DDL event failed", zap.Error(err),
@@ -503,7 +542,7 @@ func (w *writer) checkPartition(row *commonEvent.DMLEvent, partition int32, offs
 			log.Panic("dml event dispatched to the wrong partition",
 				zap.Int32("partition", partition), zap.Int32("expected", target),
 				zap.Int("partitionNum", len(w.progresses)), zap.Any("offset", offset),
-				zap.Int64("tableID", row.GetTableID()), zap.Any("row", row),
+				zap.Int64("tableID", row.GetTableID()), zap.Stringer("row", row),
 			)
 		}
 	}

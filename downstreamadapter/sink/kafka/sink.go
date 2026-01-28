@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -385,7 +386,7 @@ func (s *sink) sendMessages(ctx context.Context) error {
 				start := time.Now()
 				if err = s.statistics.RecordBatchExecution(func() (int, int64, error) {
 					message.SetPartitionKey(future.Key.PartitionKey)
-					log.Debug("send message to kafka", zap.String("messageKey", string(message.Key)), zap.String("messageValue", string(message.Value)))
+					log.Debug("send message to kafka", zap.String("messageKey", util.RedactBytes(message.Key)), zap.String("messageValue", util.RedactBytes(message.Value)))
 					if err = s.dmlProducer.AsyncSend(
 						ctx,
 						future.Key.Topic,
@@ -429,13 +430,14 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		if err != nil {
 			return err
 		}
+		ddlType := e.GetDDLType().String()
 		if s.partitionRule == helper.PartitionAll {
-			err = s.statistics.RecordDDLExecution(func() error {
-				return s.ddlProducer.SendMessages(topic, partitionNum, message)
+			err = s.statistics.RecordDDLExecution(func() (string, error) {
+				return ddlType, s.ddlProducer.SendMessages(topic, partitionNum, message)
 			})
 		} else {
-			err = s.statistics.RecordDDLExecution(func() error {
-				return s.ddlProducer.SendMessage(topic, 0, message)
+			err = s.statistics.RecordDDLExecution(func() (string, error) {
+				return ddlType, s.ddlProducer.SendMessage(topic, 0, message)
 			})
 		}
 		if err != nil {

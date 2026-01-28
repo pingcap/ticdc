@@ -41,7 +41,7 @@ func newTestDefaultChecker(t *testing.T, cfID common.ChangeFeedID, schedulerCfg 
 }
 
 func TestDefaultSpanSplitChecker_AddReplica(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold:          util.AddressOf(1000),
 		RegionThreshold:            util.AddressOf(10),
@@ -75,7 +75,7 @@ func TestDefaultSpanSplitChecker_AddReplica(t *testing.T) {
 func TestDefaultSpanSplitChecker_RemoveReplica(t *testing.T) {
 	testutil.SetUpTestServices()
 
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold:          util.AddressOf(1000),
 		RegionThreshold:            util.AddressOf(10),
@@ -97,7 +97,7 @@ func TestDefaultSpanSplitChecker_RemoveReplica(t *testing.T) {
 }
 
 func TestDefaultSpanSplitChecker_UpdateStatus_TrafficCheck(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		EnableTableAcrossNodes:     util.AddressOf(true),
 		WriteKeyThreshold:          util.AddressOf(1000),
@@ -156,7 +156,7 @@ func TestDefaultSpanSplitChecker_UpdateStatus_TrafficCheck(t *testing.T) {
 func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheck(t *testing.T) {
 	testutil.SetUpTestServices()
 
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		EnableTableAcrossNodes:     util.AddressOf(true),
 		WriteKeyThreshold:          util.AddressOf(1000),
@@ -202,7 +202,7 @@ func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheck(t *testing.T) {
 func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheckError(t *testing.T) {
 	testutil.SetUpTestServices()
 
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold:          util.AddressOf(1000),
 		RegionThreshold:            util.AddressOf(5),
@@ -237,7 +237,7 @@ func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheckError(t *testing.T) {
 func TestDefaultSpanSplitChecker_UpdateStatus_NonWorkingStatus(t *testing.T) {
 	testutil.SetUpTestServices()
 
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold:          util.AddressOf(1000),
 		RegionThreshold:            util.AddressOf(5),
@@ -267,7 +267,7 @@ func TestDefaultSpanSplitChecker_UpdateStatus_NonWorkingStatus(t *testing.T) {
 func TestDefaultSpanSplitChecker_CheckRegionSplit(t *testing.T) {
 	testutil.SetUpTestServices()
 
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		EnableTableAcrossNodes:     util.AddressOf(true),
 		WriteKeyThreshold:          util.AddressOf(1000),
@@ -316,7 +316,7 @@ func TestDefaultSpanSplitChecker_CheckRegionSplit(t *testing.T) {
 func TestDefaultSpanSplitChecker_Check_BatchLimit(t *testing.T) {
 	testutil.SetUpTestServices()
 
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold:          util.AddressOf(1000),
 		RegionThreshold:            util.AddressOf(5),
@@ -352,7 +352,7 @@ func TestDefaultSpanSplitChecker_Check_BatchLimit(t *testing.T) {
 func TestDefaultSpanSplitChecker_Check_EmptyResults(t *testing.T) {
 	testutil.SetUpTestServices()
 
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold:          util.AddressOf(1000),
 		RegionThreshold:            util.AddressOf(5),
@@ -386,7 +386,7 @@ func TestDefaultSpanSplitChecker_Check_EmptyResults(t *testing.T) {
 func TestDefaultSpanSplitChecker_Stat(t *testing.T) {
 	testutil.SetUpTestServices()
 
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
 		WriteKeyThreshold:          util.AddressOf(1000),
 		RegionThreshold:            util.AddressOf(5),

@@ -110,6 +110,10 @@ var (
 		"cluster ID mismatch, tikv cluster ID is %d and request cluster ID is %d",
 		errors.RFCCodeText("CDC:ErrClusterIDMismatch"),
 	)
+	ErrSameUpstreamDownstream = errors.Normalize(
+		"upstream and downstream are the same, %s",
+		errors.RFCCodeText("CDC:ErrSameUpstreamDownstream"),
+	)
 	ErrMultipleCDCClustersExist = errors.Normalize(
 		"multiple TiCDC clusters exist while using --pd",
 		errors.RFCCodeText("CDC:ErrMultipleCDCClustersExist"),
@@ -766,9 +770,9 @@ var (
 		"changefeed is in retryable state",
 		errors.RFCCodeText("CDC:ErrChangefeedRetryable"),
 	)
-	ErrChangefeedInitTableTriggerEventDispatcherFailed = errors.Normalize(
-		"failed to init table trigger event dispatcher",
-		errors.RFCCodeText("CDC:ErrChangefeedInitTableTriggerEventDispatcherFailed"),
+	ErrChangefeedInitTableTriggerDispatcherFailed = errors.Normalize(
+		"failed to init table trigger dispatcher",
+		errors.RFCCodeText("CDC:ErrChangefeedInitTableTriggerDispatcherFailed"),
 	)
 	ErrDDLEventError = errors.Normalize(
 		"ddl event meets error",
