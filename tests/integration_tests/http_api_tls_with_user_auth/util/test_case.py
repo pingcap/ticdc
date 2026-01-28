@@ -208,7 +208,13 @@ def update_changefeed():
     # update fail
     # can only update a stopped changefeed
     url = BASE_URL0 + "/changefeeds/changefeed-test1?keyspace=keyspace1"
-    data = json.dumps({"mounter_worker_num": 32})
+    data = json.dumps({
+        "replica_config": {
+            "mounter": {
+                "worker_num": 32
+            }
+        }
+    })
     headers = {"Content-Type": "application/json"}
     resp = rq.put(url, data=data, auth=Auth,
                   headers=headers, cert=CERT, verify=VERIFY)
@@ -216,7 +222,13 @@ def update_changefeed():
 
     # update success
     url = BASE_URL0 + "/changefeeds/changefeed-test2?keyspace=keyspace1"
-    data = json.dumps({"mounter_worker_num": 32})
+    data = json.dumps({
+        "replica_config": {
+            "mounter": {
+                "worker_num": 32
+            }
+        }
+    })
     headers = {"Content-Type": "application/json"}
     resp = rq.put(url, data=data, auth=Auth,
                   headers=headers, cert=CERT, verify=VERIFY)
@@ -258,7 +270,10 @@ def update_changefeed():
 def resume_changefeed():
     # resume changefeed
     url = BASE_URL1 + "/changefeeds/changefeed-test2/resume?keyspace=keyspace1"
-    resp = rq.post(url, auth=Auth, cert=CERT, verify=VERIFY)
+    data = json.dumps({})
+    headers = {"Content-Type": "application/json"}
+    resp = rq.post(url, data=data, auth=Auth, headers=headers,
+                  cert=CERT, verify=VERIFY)
     assert resp.status_code == rq.codes.ok
 
     # check if resume changefeed success
