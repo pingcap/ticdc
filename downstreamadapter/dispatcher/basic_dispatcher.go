@@ -375,17 +375,19 @@ func (d *BasicDispatcher) GetCheckpointTs() uint64 {
 	// virtually advance past an unexecuted DDL barrier.
 	if ddl := d.deferredDDLEvent.Load(); ddl != nil {
 		ddlCommitTs := ddl.GetCommitTs()
-		if ddlCommitTs > 0 {
-			ddlCheckpointUpperBound := ddlCommitTs - 1
-			if checkpointTs > ddlCheckpointUpperBound {
-				log.Warn("disaptcher commitTs bounded by the deferred DDL event",
-					zap.Any("dispatcherID", d.id),
-					zap.Uint64("originCheckpointTs", checkpointTs),
-					zap.Uint64("newCheckpointTs", ddlCheckpointUpperBound),
-					zap.Uint64("ddlCommitTs", ddlCommitTs),
-					zap.Any("deferredDDL", ddl))
-				checkpointTs = ddlCheckpointUpperBound
-			}
+		log.Warn("deferred DDL found when get checkpointTs",
+			zap.Any("dispatcherID", d.id),
+			zap.Uint64("checkpointTs", checkpointTs),
+			zap.Uint64("ddlCommitTs", ddlCommitTs))
+		ddlCheckpointUpperBound := ddlCommitTs - 1
+		if checkpointTs > ddlCheckpointUpperBound {
+			log.Warn("disaptcher commitTs bounded by the deferred DDL event",
+				zap.Any("dispatcherID", d.id),
+				zap.Uint64("originCheckpointTs", checkpointTs),
+				zap.Uint64("newCheckpointTs", ddlCheckpointUpperBound),
+				zap.Uint64("ddlCommitTs", ddlCommitTs),
+				zap.Any("deferredDDL", ddl))
+			checkpointTs = ddlCheckpointUpperBound
 		}
 	}
 	return checkpointTs
