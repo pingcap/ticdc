@@ -136,36 +136,34 @@ func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
 		ReplicaConfig: changefeedConfig.ReplicaConfig,
 		StartTs:       newInfo.CheckpointTs,
 	}, o.keyspace)
-	if err != nil {
-		return err
-	}
-
-	ignoreIneligibleTables := false
-	if len(tables.IneligibleTables) != 0 {
-		if putil.GetOrZero(newInfo.Config.ForceReplicate) {
-			cmd.Printf("[WARN] Force to replicate some ineligible tables, "+
-				"these tables do not have a primary key or a not-null unique key: %#v\n"+
-				"[WARN] This may cause data redundancy, "+
-				"please refer to the official documentation for details.\n",
-				tables.IneligibleTables)
-		} else {
-			cmd.Printf("[WARN] Some tables are not eligible to replicate, "+
-				"because they do not have a primary key or a not-null unique key: %#v\n",
-				tables.IneligibleTables)
-			if !o.commonChangefeedOptions.noConfirm {
-				ignoreIneligibleTables, err = confirmIgnoreIneligibleTables(cmd)
-				if err != nil {
-					return err
+	if err == nil {
+		ignoreIneligibleTables := false
+		if len(tables.IneligibleTables) != 0 {
+			if putil.GetOrZero(newInfo.Config.ForceReplicate) {
+				cmd.Printf("[WARN] Force to replicate some ineligible tables, "+
+					"these tables do not have a primary key or a not-null unique key: %#v\n"+
+					"[WARN] This may cause data redundancy, "+
+					"please refer to the official documentation for details.\n",
+					tables.IneligibleTables)
+			} else {
+				cmd.Printf("[WARN] Some tables are not eligible to replicate, "+
+					"because they do not have a primary key or a not-null unique key: %#v\n",
+					tables.IneligibleTables)
+				if !o.commonChangefeedOptions.noConfirm {
+					ignoreIneligibleTables, err = confirmIgnoreIneligibleTables(cmd)
+					if err != nil {
+						return err
+					}
 				}
 			}
 		}
-	}
 
-	if o.commonChangefeedOptions.noConfirm {
-		ignoreIneligibleTables = true
-	}
+		if o.commonChangefeedOptions.noConfirm {
+			ignoreIneligibleTables = true
+		}
 
-	changefeedConfig.ReplicaConfig.IgnoreIneligibleTable = putil.AddressOf(ignoreIneligibleTables)
+		changefeedConfig.ReplicaConfig.IgnoreIneligibleTable = putil.AddressOf(ignoreIneligibleTables)
+	}
 
 	info, err := o.apiV2Client.Changefeeds().Update(ctx, changefeedConfig, o.keyspace, o.changefeedID)
 	if err != nil {

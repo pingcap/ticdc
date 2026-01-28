@@ -217,20 +217,19 @@ func (o *resumeChangefeedOptions) run(cmd *cobra.Command) error {
 			ReplicaConfig: cf.Config,
 			StartTs:       cf.CheckpointTs,
 		}, o.keyspace)
-		if err != nil {
-			return err
-		}
-		if len(tables.IneligibleTables) != 0 {
-			if putil.GetOrZero(cf.Config.ForceReplicate) {
-				cmd.Printf("[WARN] Force to replicate some ineligible tables, "+
-					"these tables do not have a primary key or a not-null unique key: %#v\n"+
-					"[WARN] This may cause data redundancy, "+
-					"please refer to the official documentation for details.\n",
-					tables.IneligibleTables)
-			} else {
-				cmd.Printf("[WARN] Some tables are not eligible to replicate, "+
-					"because they do not have a primary key or a not-null unique key: %#v\n",
-					tables.IneligibleTables)
+		if err == nil {
+			if len(tables.IneligibleTables) != 0 {
+				if putil.GetOrZero(cf.Config.ForceReplicate) {
+					cmd.Printf("[WARN] Force to replicate some ineligible tables, "+
+						"these tables do not have a primary key or a not-null unique key: %#v\n"+
+						"[WARN] This may cause data redundancy, "+
+						"please refer to the official documentation for details.\n",
+						tables.IneligibleTables)
+				} else {
+					cmd.Printf("[WARN] Some tables are not eligible to replicate, "+
+						"because they do not have a primary key or a not-null unique key: %#v\n",
+						tables.IneligibleTables)
+				}
 			}
 		}
 	}
