@@ -157,9 +157,10 @@ func NewRangeLock(
 		lockedRangeStateHeap:   h,
 	}
 
-	// HACK: for testing table 930, limit locked ranges to 30
+	// HACK: for testing table 930, split into 6000 ranges, keep unlockedRanges > 5000
 	if tableID == 930 {
-		l.hackLimitLock = 2
+		l.unlockedRanges.hackSplitInto(6000, startTs)
+		l.hackLimitLock = 1000 // max 1000 locked, so unlocked stays > 5000
 		go l.logStatsLoop()
 	}
 
