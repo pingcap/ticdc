@@ -46,8 +46,10 @@ type gcpDecryptor interface {
 	Close() error
 }
 
-type awsDecryptorFactory func(ctx context.Context, cfg awsClientConfig) (awsDecryptor, error)
-type gcpDecryptorFactory func(ctx context.Context, cfg gcpClientConfig) (gcpDecryptor, error)
+type (
+	awsDecryptorFactory func(ctx context.Context, cfg awsClientConfig) (awsDecryptor, error)
+	gcpDecryptorFactory func(ctx context.Context, cfg gcpClientConfig) (gcpDecryptor, error)
+)
 
 type ClientOption func(*client)
 
