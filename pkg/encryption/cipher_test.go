@@ -16,15 +16,8 @@ package encryption
 import (
 	"testing"
 
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
-
-func TestGetCipherUnsupported(t *testing.T) {
-	_, err := GetCipher(EncryptionAlgorithm("UNKNOWN"))
-	require.Error(t, err)
-	require.True(t, cerrors.ErrUnsupportedEncryptionAlgorithm.Equal(err))
-}
 
 func TestAES256CTREncryptDecrypt(t *testing.T) {
 	key := []byte("0123456789abcdef0123456789abcdef") // 32 bytes

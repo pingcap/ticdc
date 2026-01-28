@@ -28,13 +28,13 @@ import (
 // TiKVEncryptionClient is the interface for getting encryption metadata from TiKV
 type TiKVEncryptionClient interface {
 	// GetKeyspaceEncryptionMeta gets the encryption metadata for a keyspace
-	GetKeyspaceEncryptionMeta(ctx context.Context, keyspaceID uint32) (*KeyspaceEncryptionMeta, error)
+	GetKeyspaceEncryptionMeta(ctx context.Context, keyspaceID uint32) (*EncryptionMeta, error)
 }
 
 // MockTiKVClient is a mock implementation of TiKVEncryptionClient for development and testing
 type MockTiKVClient struct {
 	// metaMap stores mock encryption metadata by keyspace ID
-	metaMap map[uint32]*KeyspaceEncryptionMeta
+	metaMap map[uint32]*EncryptionMeta
 	// notFoundKeyspaces stores keyspace IDs that should return ErrEncryptionMetaNotFound
 	notFoundKeyspaces map[uint32]bool
 }
@@ -42,7 +42,7 @@ type MockTiKVClient struct {
 // NewMockTiKVClient creates a new mock TiKV client
 func NewMockTiKVClient() *MockTiKVClient {
 	client := &MockTiKVClient{
-		metaMap:           make(map[uint32]*KeyspaceEncryptionMeta),
+		metaMap:           make(map[uint32]*EncryptionMeta),
 		notFoundKeyspaces: make(map[uint32]bool),
 	}
 
@@ -55,9 +55,9 @@ func NewMockTiKVClient() *MockTiKVClient {
 // initDefaultMockData initializes default mock encryption metadata
 func (c *MockTiKVClient) initDefaultMockData() {
 	// Create a mock keyspace with encryption enabled
-	// Data key IDs must be exactly 3 bytes to match the header format
-	mockDataKeyID1 := "K01"
-	mockDataKeyID2 := "K02"
+	// Data key IDs carry the encryption format version in their low 8 bits.
+	mockDataKeyID1 := uint32(0x010001)
+	mockDataKeyID2 := uint32(0x020001)
 
 	// Generate mock master key plaintext (32 bytes for AES-256)
 	masterKeyPlaintext := make([]byte, 32)
@@ -98,40 +98,35 @@ func (c *MockTiKVClient) initDefaultMockData() {
 		log.Panic("failed to encrypt master key via mock KMS", zap.Error(err))
 	}
 
-	meta := &KeyspaceEncryptionMeta{
-		Enabled: true,
-		Version: 0x01, // Encryption format version from TiKV
+	meta := &EncryptionMeta{
+		KeyspaceId: 1,
+		Current: &EncryptionEpoch{
+			FileId:    1,
+			DataKeyId: mockDataKeyID2,
+			CreatedAt: 0,
+		},
 		MasterKey: &MasterKey{
-			Vendor:     KMSVendorAWS,
-			CMEKID:     "foobar1",
+			Vendor:     "aws-kms",
+			CmekId:     "foobar1",
 			Region:     "us-west-1",
 			Ciphertext: masterKeyCiphertext,
 		},
-		CurrentDataKeyID: mockDataKeyID2,
-		DataKeyMap: map[string]*DataKey{
-			mockDataKeyID1: {
-				Ciphertext:          dataKey1Ciphertext,
-				EncryptionAlgorithm: AES256CTR,
-			},
-			mockDataKeyID2: {
-				Ciphertext:          dataKey2Ciphertext,
-				EncryptionAlgorithm: AES256CTR,
-			},
+		DataKeys: map[uint32]*DataKey{
+			mockDataKeyID1: {Ciphertext: dataKey1Ciphertext},
+			mockDataKeyID2: {Ciphertext: dataKey2Ciphertext},
 		},
+		History: nil,
 	}
 
 	// Use keyspace ID 1 as default enabled keyspace
 	c.metaMap[1] = meta
 
-	// Create a mock keyspace with encryption disabled
-	disabledMeta := &KeyspaceEncryptionMeta{
-		Enabled: false,
-	}
-	c.metaMap[2] = disabledMeta
+	// Create a mock keyspace with encryption disabled.
+	c.notFoundKeyspaces[2] = true
 }
 
 // GetKeyspaceEncryptionMeta gets the encryption metadata for a keyspace
-func (c *MockTiKVClient) GetKeyspaceEncryptionMeta(ctx context.Context, keyspaceID uint32) (*KeyspaceEncryptionMeta, error) {
+func (c *MockTiKVClient) GetKeyspaceEncryptionMeta(ctx context.Context, keyspaceID uint32) (*EncryptionMeta, error) {
 	// Check if this keyspace should return not found error
 	if c.notFoundKeyspaces[keyspaceID] {
 		log.Debug("mock TiKV client: encryption meta not found",
@@ -143,7 +138,7 @@ func (c *MockTiKVClient) GetKeyspaceEncryptionMeta(ctx context.Context, keyspace
 	if meta, ok := c.metaMap[keyspaceID]; ok {
 		log.Debug("mock TiKV client: returning encryption meta",
 			zap.Uint32("keyspaceID", keyspaceID),
-			zap.Bool("enabled", meta.Enabled))
+			zap.Bool("enabled", meta != nil))
 		return meta, nil
 	}
 
@@ -155,7 +150,7 @@ func (c *MockTiKVClient) GetKeyspaceEncryptionMeta(ctx context.Context, keyspace
 }
 
 // SetKeyspaceMeta sets mock encryption metadata for a keyspace (for testing)
-func (c *MockTiKVClient) SetKeyspaceMeta(keyspaceID uint32, meta *KeyspaceEncryptionMeta) {
+func (c *MockTiKVClient) SetKeyspaceMeta(keyspaceID uint32, meta *EncryptionMeta) {
 	c.metaMap[keyspaceID] = meta
 }
 
@@ -170,7 +165,7 @@ func (c *MockTiKVClient) ClearKeyspaceNotFound(keyspaceID uint32) {
 }
 
 // GetKeyspaceMeta gets the stored mock metadata (for testing)
-func (c *MockTiKVClient) GetKeyspaceMeta(keyspaceID uint32) (*KeyspaceEncryptionMeta, bool) {
+func (c *MockTiKVClient) GetKeyspaceMeta(keyspaceID uint32) (*EncryptionMeta, bool) {
 	meta, ok := c.metaMap[keyspaceID]
 	return meta, ok
 }

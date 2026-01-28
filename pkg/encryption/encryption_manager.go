@@ -52,8 +52,8 @@ func (m *encryptionManager) EncryptData(ctx context.Context, keyspaceID uint32, 
 		allowDegrade = serverCfg.Debug.Encryption.AllowDegradeOnError
 	}
 
-	// Get current data key and algorithm
-	dataKey, algorithm, err := m.metaManager.GetCurrentDataKey(ctx, keyspaceID)
+	// Get current data key.
+	dataKey, err := m.metaManager.GetCurrentDataKey(ctx, keyspaceID)
 	if err != nil {
 		if allowDegrade {
 			log.Warn("failed to get current data key, degrade to plaintext",
@@ -65,38 +65,21 @@ func (m *encryptionManager) EncryptData(ctx context.Context, keyspaceID uint32, 
 	}
 
 	if len(dataKey) == 0 {
-		if algorithm == "" {
-			log.Debug("encryption not enabled for keyspace",
-				zap.Uint32("keyspaceID", keyspaceID))
-			return data, nil
-		}
-		if allowDegrade {
-			// No data key available
-			log.Warn("data key is empty, degrade to plaintext",
-				zap.Uint32("keyspaceID", keyspaceID))
-			return data, nil
-		}
-		return nil, cerrors.ErrEncryptionFailed.GenWithStackByArgs("data key is empty")
+		log.Debug("encryption not enabled for keyspace",
+			zap.Uint32("keyspaceID", keyspaceID))
+		return data, nil
 	}
 
-	// Get cipher for the specified algorithm
-	cipher, err := GetCipher(algorithm)
-	if err != nil {
-		log.Error("unsupported encryption algorithm",
-			zap.Uint32("keyspaceID", keyspaceID),
-			zap.String("algorithm", string(algorithm)),
-			zap.Error(err))
-		return nil, err
-	}
+	cipherImpl := NewAES256CTRCipher()
 
 	// Generate IV
-	iv, err := GenerateIV(cipher.IVSize())
+	iv, err := GenerateIV(cipherImpl.IVSize())
 	if err != nil {
 		return nil, cerrors.ErrEncryptionFailed.Wrap(err)
 	}
 
 	// Encrypt data
-	encryptedData, err := cipher.Encrypt(data, dataKey, iv)
+	encryptedData, err := cipherImpl.Encrypt(data, dataKey, iv)
 	if err != nil {
 		return nil, cerrors.ErrEncryptionFailed.Wrap(err)
 	}
@@ -126,7 +109,6 @@ func (m *encryptionManager) EncryptData(ctx context.Context, keyspaceID uint32, 
 
 	log.Debug("data encrypted successfully",
 		zap.Uint32("keyspaceID", keyspaceID),
-		zap.String("algorithm", string(algorithm)),
 		zap.String("dataKeyID", currentDataKeyID),
 		zap.Int("originalSize", len(data)),
 		zap.Int("encryptedSize", len(result)))
@@ -155,8 +137,7 @@ func (m *encryptionManager) DecryptData(ctx context.Context, keyspaceID uint32, 
 		return dataWithIV, nil
 	}
 
-	// Get data key and algorithm
-	dataKey, algorithm, err := m.metaManager.GetDataKeyWithAlgorithm(ctx, keyspaceID, dataKeyID)
+	dataKey, err := m.metaManager.GetDataKey(ctx, keyspaceID, dataKeyID)
 	if err != nil {
 		return nil, cerrors.ErrDecryptionFailed.Wrap(err)
 	}
@@ -165,14 +146,10 @@ func (m *encryptionManager) DecryptData(ctx context.Context, keyspaceID uint32, 
 		return nil, cerrors.ErrDecryptionFailed.GenWithStackByArgs("data key is empty")
 	}
 
-	// Get cipher for the specified algorithm
-	cipher, err := GetCipher(algorithm)
-	if err != nil {
-		return nil, cerrors.ErrDecryptionFailed.Wrap(err)
-	}
+	cipherImpl := NewAES256CTRCipher()
 
 	// Extract IV from the beginning of data
-	ivSize := cipher.IVSize()
+	ivSize := cipherImpl.IVSize()
 	if len(dataWithIV) < ivSize {
 		return nil, cerrors.ErrDecryptionFailed.GenWithStackByArgs("data too short for IV")
 	}
@@ -181,14 +158,13 @@ func (m *encryptionManager) DecryptData(ctx context.Context, keyspaceID uint32, 
 	encryptedDataOnly := dataWithIV[ivSize:]
 
 	// Decrypt data
-	plaintext, err := cipher.Decrypt(encryptedDataOnly, dataKey, iv)
+	plaintext, err := cipherImpl.Decrypt(encryptedDataOnly, dataKey, iv)
 	if err != nil {
 		return nil, cerrors.ErrDecryptionFailed.Wrap(err)
 	}
 
 	log.Debug("data decrypted successfully",
 		zap.Uint32("keyspaceID", keyspaceID),
-		zap.String("algorithm", string(algorithm)),
 		zap.String("dataKeyID", dataKeyID),
 		zap.Int("encryptedSize", len(encryptedData)),
 		zap.Int("plaintextSize", len(plaintext)))

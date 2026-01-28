@@ -34,11 +34,11 @@ func (c *staticKMSClient) DecryptMasterKey(ctx context.Context, ciphertext []byt
 var _ kms.KMSClient = (*staticKMSClient)(nil)
 
 type staticTiKVEncryptionClient struct {
-	meta *KeyspaceEncryptionMeta
+	meta *EncryptionMeta
 	err  error
 }
 
-func (c *staticTiKVEncryptionClient) GetKeyspaceEncryptionMeta(ctx context.Context, keyspaceID uint32) (*KeyspaceEncryptionMeta, error) {
+func (c *staticTiKVEncryptionClient) GetKeyspaceEncryptionMeta(ctx context.Context, keyspaceID uint32) (*EncryptionMeta, error) {
 	return c.meta, c.err
 }
 
@@ -62,21 +62,23 @@ func TestEncryptionMetaManagerDecryptDataKeyUsesZeroIV(t *testing.T) {
 	dataKeyCiphertext := make([]byte, len(dataKeyPlaintext))
 	stream.XORKeyStream(dataKeyCiphertext, dataKeyPlaintext)
 
-	meta := &KeyspaceEncryptionMeta{
-		Enabled: true,
-		Version: 0x01,
+	dataKeyID := uint32(0x4b3031) // "K01"
+
+	meta := &EncryptionMeta{
+		KeyspaceId: 1,
+		Current: &EncryptionEpoch{
+			FileId:    1,
+			DataKeyId: dataKeyID,
+			CreatedAt: 0,
+		},
 		MasterKey: &MasterKey{
-			Vendor:     KMSVendor("aws-kms"),
-			CMEKID:     "cmek-1",
+			Vendor:     "aws-kms",
+			CmekId:     "cmek-1",
 			Region:     "us-west-1",
 			Ciphertext: []byte{1, 2, 3},
 		},
-		CurrentDataKeyID: "K01",
-		DataKeyMap: map[string]*DataKey{
-			"K01": {
-				Ciphertext:          dataKeyCiphertext,
-				EncryptionAlgorithm: AES256CTR,
-			},
+		DataKeys: map[uint32]*DataKey{
+			dataKeyID: {Ciphertext: dataKeyCiphertext},
 		},
 	}
 
@@ -84,8 +86,7 @@ func TestEncryptionMetaManagerDecryptDataKeyUsesZeroIV(t *testing.T) {
 	kmsClient := &staticKMSClient{plaintext: masterKeyPlaintext}
 	mgr := NewEncryptionMetaManager(tikvClient, kmsClient)
 
-	gotKey, alg, err := mgr.GetDataKeyWithAlgorithm(context.Background(), 1, "K01")
+	gotKey, err := mgr.GetDataKey(context.Background(), 1, "K01")
 	require.NoError(t, err)
-	require.Equal(t, AES256CTR, alg)
 	require.Equal(t, dataKeyPlaintext, gotKey)
 }

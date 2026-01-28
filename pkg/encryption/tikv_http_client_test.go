@@ -85,15 +85,17 @@ func TestTiKVEncryptionHTTPClientGetKeyspaceEncryptionMeta(t *testing.T) {
 	meta, err := client.GetKeyspaceEncryptionMeta(context.Background(), keyspaceID)
 	require.NoError(t, err)
 	require.NotNil(t, meta)
-	require.True(t, meta.Enabled)
+	require.Equal(t, keyspaceID, meta.KeyspaceId)
+	require.NotNil(t, meta.Current)
 
 	expectedKeyID := string([]byte{0x01, 0x02, 0x03})
-	require.Equal(t, expectedKeyID, meta.CurrentDataKeyID)
-	require.Equal(t, byte(dataKeyID&0xFF), meta.Version)
+	currentKeyID, err := encodeDataKeyID24BE(meta.Current.DataKeyId)
+	require.NoError(t, err)
+	require.Equal(t, expectedKeyID, currentKeyID)
+	require.Equal(t, dataKeyID, meta.Current.DataKeyId)
 
-	dk, ok := meta.DataKeyMap[expectedKeyID]
+	dk, ok := meta.DataKeys[dataKeyID]
 	require.True(t, ok)
-	require.Equal(t, AES256CTR, dk.EncryptionAlgorithm)
 	require.Len(t, dk.Ciphertext, 32)
 }
 

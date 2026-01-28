@@ -33,7 +33,8 @@ func TestMockTiKVClientEnabledKeyspace(t *testing.T) {
 	meta, err := cli.GetKeyspaceEncryptionMeta(context.Background(), 1)
 	require.NoError(t, err)
 	require.NotNil(t, meta)
-	require.True(t, meta.Enabled)
-	require.NotEmpty(t, meta.CurrentDataKeyID)
-	require.NotEmpty(t, meta.DataKeyMap)
+	require.Equal(t, uint32(1), meta.KeyspaceId)
+	require.NotNil(t, meta.Current)
+	require.NotZero(t, meta.Current.DataKeyId)
+	require.NotEmpty(t, meta.DataKeys)
 }
