@@ -25,11 +25,11 @@ import (
 
 func defaultCsvCodecConfig(protocol config.Protocol) *codecCommon.Config {
 	codecConfig := codecCommon.NewConfig(protocol)
-	codecConfig.Delimiter = ","
-	codecConfig.Quote = "\""
-	codecConfig.NullString = "NULL"
+	codecConfig.Delimiter = config.Comma
+	codecConfig.Quote = string(config.DoubleQuoteChar)
+	codecConfig.NullString = config.NULL
 	codecConfig.IncludeCommitTs = true
-	codecConfig.Terminator = "\r\n"
+	codecConfig.Terminator = config.CRLF
 	return codecConfig
 }
 

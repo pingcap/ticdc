@@ -108,7 +108,7 @@ func NewTimeWindowAdvancer(
 func (t *TimeWindowAdvancer) AdvanceTimeWindow(
 	pctx context.Context,
 ) (map[string]TimeWindowData, error) {
-	log.Info("advance time window", zap.Uint64("round", t.round))
+	log.Debug("advance time window", zap.Uint64("round", t.round))
 	// mapping from upstream cluster ID to the downstream cluster ID to the min checkpoint timestamp
 	minCheckpointTsMap := make(map[string]map[string]uint64)
 	maxTimeWindowRightBoundary := uint64(0)
@@ -213,7 +213,7 @@ func (t *TimeWindowAdvancer) updateTimeWindow(newTimeWindow map[string]TimeWindo
 		triplet[1] = triplet[2]
 		triplet[2] = timeWindow
 		t.timeWindowTriplet[clusterID] = triplet
-		log.Info("update time window", zap.String("clusterID", clusterID), zap.Any("timeWindow", timeWindow))
+		log.Debug("update time window", zap.String("clusterID", clusterID), zap.Any("timeWindow", timeWindow))
 	}
 }
 

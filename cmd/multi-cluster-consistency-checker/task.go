@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/advancer"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/checker"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/config"
+	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/recorder"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/watcher"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
@@ -41,6 +42,7 @@ func runTask(ctx context.Context, cfg *config.Config) error {
 	defer cleanupClients(pdClients, etcdClients)
 
 	timeWindowAdvancer := advancer.NewTimeWindowAdvancer(checkpointWatchers, s3Watchers, pdClients)
+	recorder := recorder.NewRecorder()
 	dataChecker := checker.NewDataChecker(cfg.Clusters)
 
 	log.Info("Starting consistency checker task")
@@ -61,6 +63,8 @@ func runTask(ctx context.Context, cfg *config.Config) error {
 		if err := dataChecker.CheckInNextTimeWindow(ctx, newTimeWindowData); err != nil {
 			return errors.Trace(err)
 		}
+
+		recorder.RecordTimeWindow(newTimeWindowData)
 	}
 }
 

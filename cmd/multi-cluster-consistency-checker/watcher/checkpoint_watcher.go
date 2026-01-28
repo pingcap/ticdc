@@ -55,7 +55,7 @@ func (cw *CheckpointWatcher) AdvanceCheckpointTs(ctx context.Context, minCheckpo
 	// Watch for checkpoint updates
 	watchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	log.Info("Starting to watch checkpoint",
+	log.Debug("Starting to watch checkpoint",
 		zap.String("changefeedID", cw.changefeedID.String()),
 		zap.String("statusKey", statusKey),
 		zap.String("upstreamClusterID", cw.upstreamClusterID),
@@ -96,14 +96,14 @@ func (cw *CheckpointWatcher) AdvanceCheckpointTs(ctx context.Context, minCheckpo
 				}
 
 				checkpointTs := status.CheckpointTs
-				log.Info("Checkpoint updated",
+				log.Debug("Checkpoint updated",
 					zap.String("changefeedID", cw.changefeedID.String()),
 					zap.Uint64("checkpoint", checkpointTs),
 					zap.Uint64("minCheckpointTs", minCheckpointTs))
 
 				// Check if checkpoint exceeds minCheckpointTs
 				if checkpointTs > minCheckpointTs {
-					log.Info("Checkpoint exceeds minCheckpointTs, getting TSO from downstream",
+					log.Debug("Checkpoint exceeds minCheckpointTs, getting TSO from downstream",
 						zap.String("changefeedID", cw.changefeedID.String()),
 						zap.Uint64("checkpoint", checkpointTs))
 					return checkpointTs, nil

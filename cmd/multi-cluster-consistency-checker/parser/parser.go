@@ -142,18 +142,19 @@ func (pt *TableParser) parseRecord(row *chunk.Row, commitTs uint64) (*utils.Reco
 			pkCount += 1
 			continue
 		}
-		colValue := commonType.ExtractColVal(row, col, rowColOffset)
 		if col.Name.O == event.OriginTsColumn {
-			var ok bool
-			originTs, ok = colValue.(uint64)
-			if !ok && colValue != nil {
-				log.Error("origin ts column value is not uint64",
-					zap.String("tableKey", pt.tableKey),
-					zap.Int64("colID", colInfo.ID),
-					zap.Any("colValue", colValue))
-				return nil, errors.Errorf("origin ts column value is not uint64 for column %d in table %s", colInfo.ID, pt.tableKey)
+			if !row.IsNull(rowColOffset) {
+				d := row.GetDatum(rowColOffset, &col.FieldType)
+				if d.Kind() != types.KindInt64 && d.Kind() != types.KindUint64 {
+					log.Error("origin ts column value is not int64 or uint64",
+						zap.String("tableKey", pt.tableKey),
+						zap.String("datum", d.String()))
+					return nil, errors.Errorf("origin ts column value is not int64 or uint64 for column %d in table %s", colInfo.ID, pt.tableKey)
+				}
+				originTs = d.GetUint64()
 			}
 		} else {
+			colValue := commonType.ExtractColVal(row, col, rowColOffset)
 			columnValues = append(columnValues, utils.ColumnValue{
 				ColumnID: colInfo.ID,
 				Value:    colValue,
