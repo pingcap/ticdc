@@ -14,29 +14,43 @@
 package recorder
 
 import (
+	"fmt"
+	"os"
+	"path"
+
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/advancer"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/zap"
 )
 
 type Recorder struct {
-	round uint64
+	recordDir string
 }
 
-func NewRecorder() *Recorder {
+func NewRecorder(reportDir string) *Recorder {
 	return &Recorder{
-		round: 0,
+		recordDir: reportDir,
 	}
 }
 
-func (r *Recorder) RecordTimeWindow(timeWindowData map[string]advancer.TimeWindowData) {
+func (r *Recorder) RecordTimeWindow(timeWindowData map[string]advancer.TimeWindowData, report *Report) error {
 	for clusterID, timeWindow := range timeWindowData {
 		log.Info("time window advanced",
-			zap.Uint64("round", r.round),
+			zap.Uint64("round", report.Round),
 			zap.String("clusterID", clusterID),
 			zap.Uint64("window left boundary", timeWindow.LeftBoundary),
 			zap.Uint64("window right boundary", timeWindow.RightBoundary),
 			zap.Any("checkpoint ts", timeWindow.CheckpointTs))
 	}
-	r.round += 1
+	if err := r.flushReport(report); err != nil {
+		return errors.Trace(err)
+	}
+	return nil
+}
+
+func (r *Recorder) flushReport(report *Report) error {
+	filename := path.Join(r.recordDir, fmt.Sprintf("report-%d.log", report.Round))
+	data := report.MarshalReport()
+	return os.WriteFile(filename, []byte(data), 0644)
 }

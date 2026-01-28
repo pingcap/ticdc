@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/advancer"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/config"
+	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/recorder"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/utils"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/zap"
@@ -42,7 +43,7 @@ func newClusterViolationChecker(clusterID string) *clusterViolationChecker {
 	}
 }
 
-func (c *clusterViolationChecker) Check(r *utils.Record) {
+func (c *clusterViolationChecker) Check(r *utils.Record, report *recorder.ClusterReport) {
 	entry, exists := c.twoPreviousTimeWindowKeyVersionCache[r.Pk]
 	if !exists {
 		c.twoPreviousTimeWindowKeyVersionCache[r.Pk] = versionCacheEntry{
@@ -63,6 +64,8 @@ func (c *clusterViolationChecker) Check(r *utils.Record) {
 			zap.String("clusterID", c.clusterID),
 			zap.Any("entry", entry),
 			zap.Any("record", r))
+		report.AddLWWViolationItem(string(r.Pk), entry.cdcVersion.OriginTs, entry.cdcVersion.CommitTs, r.OriginTs, r.CommitTs)
+		return
 	}
 	c.twoPreviousTimeWindowKeyVersionCache[r.Pk] = versionCacheEntry{
 		previous:   0,
@@ -146,6 +149,8 @@ type clusterDataChecker struct {
 	overDataCaches []*utils.Record
 
 	clusterViolationChecker *clusterViolationChecker
+
+	report *recorder.ClusterReport
 }
 
 func newClusterDataChecker(clusterID string) *clusterDataChecker {
@@ -233,12 +238,14 @@ func (cd *clusterDataChecker) dataLossDetection(checker *DataChecker) {
 						zap.String("upstreamClusterID", cd.clusterID),
 						zap.String("downstreamClusterID", downstreamClusterID),
 						zap.Any("record", record))
+					cd.report.AddDataLossItem(downstreamClusterID, string(record.Pk), record.OriginTs, record.CommitTs, false)
 				} else if !record.EqualDownstreamRecord(downstreamRecord) {
 					// data inconsistent detected
 					log.Error("data inconsistent detected",
 						zap.String("upstreamClusterID", cd.clusterID),
 						zap.String("downstreamClusterID", downstreamClusterID),
 						zap.Any("record", record))
+					cd.report.AddDataLossItem(downstreamClusterID, string(record.Pk), record.OriginTs, record.CommitTs, true)
 				}
 			}
 		}
@@ -259,12 +266,14 @@ func (cd *clusterDataChecker) dataLossDetection(checker *DataChecker) {
 						zap.String("upstreamClusterID", cd.clusterID),
 						zap.String("downstreamClusterID", downstreamClusterID),
 						zap.Any("record", record))
+					cd.report.AddDataLossItem(downstreamClusterID, string(record.Pk), record.OriginTs, record.CommitTs, false)
 				} else if !record.EqualDownstreamRecord(downstreamRecord) {
 					// data inconsistent detected
 					log.Error("data inconsistent detected",
 						zap.String("upstreamClusterID", cd.clusterID),
 						zap.String("downstreamClusterID", downstreamClusterID),
 						zap.Any("record", record))
+					cd.report.AddDataLossItem(downstreamClusterID, string(record.Pk), record.OriginTs, record.CommitTs, true)
 				}
 			}
 		}
@@ -282,6 +291,7 @@ func (cd *clusterDataChecker) dataRedundantDetection(checker *DataChecker) {
 				log.Error("data redundant detected",
 					zap.String("downstreamClusterID", cd.clusterID),
 					zap.Any("record", record))
+				cd.report.AddDataRedundantItem(string(record.Pk), record.OriginTs, record.CommitTs)
 			}
 		}
 	}
@@ -302,7 +312,7 @@ func (cd *clusterDataChecker) lwwViolationDetection() {
 			return pkRecords[i].CommitTs < pkRecords[j].CommitTs
 		})
 		for _, record := range pkRecords {
-			cd.clusterViolationChecker.Check(record)
+			cd.clusterViolationChecker.Check(record, cd.report)
 		}
 	}
 	for pk, downstreamRecords := range cd.timeWindowDataCaches[2].downstreamDataCache {
@@ -317,7 +327,7 @@ func (cd *clusterDataChecker) lwwViolationDetection() {
 			return pkRecords[i].CommitTs < pkRecords[j].CommitTs
 		})
 		for _, record := range pkRecords {
-			cd.clusterViolationChecker.Check(record)
+			cd.clusterViolationChecker.Check(record, cd.report)
 		}
 	}
 
@@ -325,6 +335,7 @@ func (cd *clusterDataChecker) lwwViolationDetection() {
 }
 
 func (cd *clusterDataChecker) Check(checker *DataChecker) {
+	cd.report = recorder.NewClusterReport(cd.clusterID)
 	// CHECK 1 - Data Loss Detection
 	cd.dataLossDetection(checker)
 	// CHECK 2 - Data Redundant Detection
@@ -333,7 +344,12 @@ func (cd *clusterDataChecker) Check(checker *DataChecker) {
 	cd.lwwViolationDetection()
 }
 
+func (cd *clusterDataChecker) GetReport() *recorder.ClusterReport {
+	return cd.report
+}
+
 type DataChecker struct {
+	round               uint64
 	clusterDataCheckers map[string]*clusterDataChecker
 }
 
@@ -343,6 +359,7 @@ func NewDataChecker(clusterConfig map[string]config.ClusterConfig) *DataChecker 
 		clusterDataChecker[clusterID] = newClusterDataChecker(clusterID)
 	}
 	return &DataChecker{
+		round:               0,
 		clusterDataCheckers: clusterDataChecker,
 	}
 }
@@ -379,15 +396,18 @@ func (c *DataChecker) FindClusterUpstreamData(downstreamClusterID string, pk uti
 	return false
 }
 
-func (c *DataChecker) CheckInNextTimeWindow(ctx context.Context, newTimeWindowData map[string]advancer.TimeWindowData) error {
+func (c *DataChecker) CheckInNextTimeWindow(ctx context.Context, newTimeWindowData map[string]advancer.TimeWindowData) (*recorder.Report, error) {
 	if err := c.decodeNewTimeWindowData(ctx, newTimeWindowData); err != nil {
 		log.Error("failed to decode new time window data", zap.Error(err))
-		return errors.Annotate(err, "failed to decode new time window data")
+		return nil, errors.Annotate(err, "failed to decode new time window data")
 	}
-	for _, clusterDataChecker := range c.clusterDataCheckers {
+	report := recorder.NewReport(c.round)
+	for clusterID, clusterDataChecker := range c.clusterDataCheckers {
 		clusterDataChecker.Check(c)
+		report.AddClusterReport(clusterID, clusterDataChecker.GetReport())
 	}
-	return nil
+	c.round += 1
+	return report, nil
 }
 
 func (c *DataChecker) decodeNewTimeWindowData(ctx context.Context, newTimeWindowData map[string]advancer.TimeWindowData) error {

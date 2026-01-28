@@ -2,8 +2,10 @@
 
 # Global configuration (reserved for future use)
 [global]
-# timeout = "30s"
-# retry-count = 3
+
+# Report configuration
+[global.report-dir]
+  report-dir = "/tmp/multi-cluster-consistency-checker-reports"
 
 # Tables configuration
 [global.tables]
