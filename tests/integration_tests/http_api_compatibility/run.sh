@@ -9,6 +9,6 @@ if [ "${NEXT_GEN:-0}" = 1 ]; then
 	exit 0
 fi
 
-unset TICDC_NEWARCH
-
+export TICDC_NEWARCH=false
 bash "$CUR/../http_api/run.sh" "$@"
+export TICDC_NEWARCH=true
