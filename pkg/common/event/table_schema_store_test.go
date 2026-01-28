@@ -219,3 +219,37 @@ func TestTableSchemaStoreWhenNonMysqlSink(t *testing.T) {
 	tableNames = tableSchemaStore.GetAllTableNames(7, true)
 	require.Equal(t, 4, len(tableNames))
 }
+
+func TestTableSchemaStoreNonMysqlTableIDsBootstrapOnly(t *testing.T) {
+	schemaInfos := []*heartbeatpb.SchemaInfo{
+		{
+			SchemaID:   1,
+			SchemaName: "db1",
+			Tables: []*heartbeatpb.TableInfo{
+				{TableID: 10, TableName: "t1"},
+				{TableID: 20, TableName: "t2"},
+			},
+		},
+	}
+
+	store := NewTableSchemaStore(schemaInfos, common.KafkaSinkType, false)
+	require.ElementsMatch(t, []int64{10, 20}, store.GetAllNormalTableIds())
+
+	// For non-MySQL sinks, table IDs are used for bootstrap only and do not need
+	// to be updated by DDL events after initialization.
+	store.AddEvent(&DDLEvent{
+		FinishedTs: 100,
+		NeedAddedTables: []Table{
+			{SchemaID: 1, TableID: 30},
+		},
+		NeedDroppedTables: &InfluencedTables{
+			InfluenceType: InfluenceTypeNormal,
+			TableIDs:      []int64{10},
+		},
+		UpdatedSchemas: []SchemaIDChange{
+			{TableID: 20, OldSchemaID: 1, NewSchemaID: 2},
+		},
+	})
+
+	require.ElementsMatch(t, []int64{10, 20}, store.GetAllNormalTableIds())
+}

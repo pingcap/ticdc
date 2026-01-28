@@ -36,6 +36,74 @@ func NeedTableNameStoreAndCheckpointTs(isMysqlCompatibleBackend bool, enableActi
 	return enableActiveActive
 }
 
+type tableSchemaStoreRequirements struct {
+	needTableIDs   bool
+	updateTableIDs bool
+	needTableNames bool
+}
+
+// tableSchemaStoreRequirements documents which metadata classes TableSchemaStore must
+// track for each sink type and mode.
+//
+// Table IDs:
+//   - MySQL-class sink: used by the DDL-ts writer to expand InfluenceTypeDB/All into table IDs.
+//     See pkg/sink/mysql/mysql_writer_for_ddl_ts.go.
+//   - Redo pipeline: attached to redo DDL logs for InfluenceTypeDB/All expansion, and consumed
+//     by redo applier to expand dropped tables for cleanup/skip decisions.
+//     See pkg/common/event/redo.go and pkg/applier/redo.go.
+//   - Kafka/Pulsar (simple protocol, send-all-bootstrap-at-start): used by the table trigger dispatcher
+//     to list all current tables and emit bootstrap schema messages at changefeed start.
+//     See downstreamadapter/dispatcher/event_dispatcher.go.
+//
+// Table names:
+//   - Kafka/Pulsar: used to route checkpointTs to active topics (and include dropped names for tombstones).
+//     See downstreamadapter/sink/kafka/sink.go, downstreamadapter/sink/pulsar/sink.go,
+//     downstreamadapter/sink/eventrouter/event_router.go.
+//   - MySQL-class sink with enable-active-active: used by ProgressTableWriter to build progress rows.
+//     See pkg/sink/mysql/progress_table_writer.go.
+//
+// Note: Some sink types may not use TableSchemaStore metadata directly, but the store is still
+// initialized on the table trigger dispatcher and receives DDL updates.
+func newTableSchemaStoreRequirements(
+	sinkType commonType.SinkType, enableActiveActive bool,
+) tableSchemaStoreRequirements {
+	switch sinkType {
+	case commonType.MysqlSinkType:
+		return tableSchemaStoreRequirements{
+			needTableIDs:   true,
+			updateTableIDs: true,
+			needTableNames: enableActiveActive,
+		}
+	case commonType.RedoSinkType:
+		// Redo log only needs table IDs for schema/table expansion in non-normal DDLs.
+		// Table names are not used for redo.
+		return tableSchemaStoreRequirements{
+			needTableIDs:   true,
+			updateTableIDs: true,
+			needTableNames: false,
+		}
+	case commonType.KafkaSinkType, commonType.PulsarSinkType:
+		// Kafka/Pulsar use table names for checkpoint routing, and may need table IDs for
+		// bootstrap messages at changefeed start (simple protocol).
+		// Table ID updates are not needed after initialization.
+		return tableSchemaStoreRequirements{
+			needTableIDs:   true,
+			updateTableIDs: false,
+			needTableNames: true,
+		}
+	case commonType.CloudStorageSinkType, commonType.BlackHoleSinkType:
+		// These sinks currently do not consume TableSchemaStore metadata.
+		return tableSchemaStoreRequirements{
+			needTableIDs:   false,
+			updateTableIDs: false,
+			needTableNames: false,
+		}
+	default:
+		log.Panic("Unknown sink type for TableSchemaStore requirements", zap.Any("sinkType", sinkType))
+		return tableSchemaStoreRequirements{}
+	}
+}
+
 // TableSchemaStore is store some schema info for dispatchers.
 // It is responsible for
 // 1. [By TableNameStore]provide all the table name of the specified ts(only support incremental ts), mainly for generate topic for kafka sink when send watermark.
@@ -43,28 +111,30 @@ func NeedTableNameStoreAndCheckpointTs(isMysqlCompatibleBackend bool, enableActi
 //
 // TableSchemaStore only exists in the table trigger event dispatcher, and the same instance's sink of this changefeed,
 // which means each changefeed only has one TableSchemaStore.
-// for mysql sink with non-enable-active-active, tableSchemaStore only need the id-class infos;
-// otherwise, need both id-class and name-class, but id-class just for bootstrap, don't need to update it later.
 type TableSchemaStore struct {
-	sinkType           commonType.SinkType `msg:"-"`
-	enableActiveActive bool                `msg:"-"`
-	tableNameStore     *TableNameStore     `msg:"-"`
+	sinkType           commonType.SinkType          `msg:"-"`
+	enableActiveActive bool                         `msg:"-"`
+	req                tableSchemaStoreRequirements `msg:"-"`
+	tableNameStore     *TableNameStore              `msg:"-"`
 	// TableIDStore will be used in redo ddl event to record all block tables id,
 	// so it has to support Marshal/Unmarshal
 	TableIDStore *TableIDStore `msg:"table_id_store"`
 }
 
 func NewTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo, sinkType commonType.SinkType, enableActiveActive bool) *TableSchemaStore {
+	req := newTableSchemaStoreRequirements(sinkType, enableActiveActive)
 	tableSchemaStore := &TableSchemaStore{
 		sinkType:           sinkType,
 		enableActiveActive: enableActiveActive,
-		TableIDStore: &TableIDStore{
+		req:                req,
+	}
+	if req.needTableIDs {
+		tableSchemaStore.TableIDStore = &TableIDStore{
 			SchemaIDToTableIDs: make(map[int64]map[int64]interface{}),
 			TableIDToSchemaID:  make(map[int64]int64),
-		},
+		}
 	}
-	needTableNameStore := NeedTableNameStoreAndCheckpointTs(sinkType == commonType.MysqlSinkType, enableActiveActive)
-	if needTableNameStore {
+	if req.needTableNames {
 		tableSchemaStore.tableNameStore = &TableNameStore{
 			existingTables:         make(map[string]map[string]*SchemaTableName),
 			latestTableNameChanges: &LatestTableNameChanges{m: make(map[uint64]*TableNameChange)},
@@ -75,7 +145,9 @@ func NewTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo, sinkType commonTy
 		schemaID := schema.SchemaID
 		for _, table := range schema.Tables {
 			tableID := table.TableID
-			tableSchemaStore.TableIDStore.Add(schemaID, tableID)
+			if tableSchemaStore.TableIDStore != nil {
+				tableSchemaStore.TableIDStore.Add(schemaID, tableID)
+			}
 			if tableSchemaStore.tableNameStore != nil {
 				tableSchemaStore.tableNameStore.Add(schema.SchemaName, table.TableName)
 			}
@@ -89,28 +161,37 @@ func (s *TableSchemaStore) Clear() {
 }
 
 func (s *TableSchemaStore) AddEvent(event *DDLEvent) {
-	if s.sinkType == commonType.RedoSinkType || (s.sinkType == commonType.MysqlSinkType) {
-		s.TableIDStore.AddEvent(event)
-
-		// if enableActiveActive, we need to add for both TableIDStore and tableNameStore
-		if !s.enableActiveActive {
-			return
-		}
+	if !s.initialized() {
+		return
 	}
-
-	s.tableNameStore.AddEvent(event)
+	// Routing is decided at initialization time. If a store is nil, this instance
+	// does not track that class of metadata.
+	if s.TableIDStore != nil && s.req.updateTableIDs {
+		s.TableIDStore.AddEvent(event)
+	}
+	if s.tableNameStore != nil {
+		s.tableNameStore.AddEvent(event)
+	}
 }
 
 func (s *TableSchemaStore) initialized() bool {
-	if s == nil || (s.TableIDStore == nil && s.tableNameStore == nil) {
+	if s == nil {
 		log.Panic("TableSchemaStore is not initialized", zap.Any("tableSchemaStore", s))
+		return false
+	}
+	if s.req.needTableIDs && s.TableIDStore == nil {
+		log.Panic("TableSchemaStore is missing TableIDStore", zap.Any("tableSchemaStore", s))
+		return false
+	}
+	if s.req.needTableNames && s.tableNameStore == nil {
+		log.Panic("TableSchemaStore is missing TableNameStore", zap.Any("tableSchemaStore", s))
 		return false
 	}
 	return true
 }
 
 func (s *TableSchemaStore) GetTableIdsByDB(schemaID int64) []int64 {
-	if !s.initialized() {
+	if !s.initialized() || s.TableIDStore == nil {
 		return nil
 	}
 	return s.TableIDStore.GetTableIdsByDB(schemaID)
@@ -118,14 +199,14 @@ func (s *TableSchemaStore) GetTableIdsByDB(schemaID int64) []int64 {
 
 // GetNormalTableIdsByDB will not return table id = 0 , this is the only different between GetTableIdsByDB and GetNormalTableIdsByDB
 func (s *TableSchemaStore) GetNormalTableIdsByDB(schemaID int64) []int64 {
-	if !s.initialized() {
+	if !s.initialized() || s.TableIDStore == nil {
 		return nil
 	}
 	return s.TableIDStore.GetNormalTableIdsByDB(schemaID)
 }
 
 func (s *TableSchemaStore) GetAllTableIds() []int64 {
-	if !s.initialized() {
+	if !s.initialized() || s.TableIDStore == nil {
 		return nil
 	}
 	return s.TableIDStore.GetAllTableIds()
@@ -133,7 +214,7 @@ func (s *TableSchemaStore) GetAllTableIds() []int64 {
 
 // GetAllNormalTableIds will not return table id = 0 , this is the only different between GetAllNormalTableIds and GetAllTableIds
 func (s *TableSchemaStore) GetAllNormalTableIds() []int64 {
-	if !s.initialized() {
+	if !s.initialized() || s.TableIDStore == nil {
 		return nil
 	}
 	return s.TableIDStore.GetAllNormalTableIds()
