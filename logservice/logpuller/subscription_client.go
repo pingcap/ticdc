@@ -132,7 +132,7 @@ type subscribedSpan struct {
 	tryResolveLock     func(regionID uint64, state *regionlock.LockedRangeState)
 	staleLocksTargetTs atomic.Uint64
 
-	lastAdvanceTime atomic.Value
+	lastAdvanceTime atomic.Int64
 
 	initialized       atomic.Bool
 	resolvedTsUpdated atomic.Int64
@@ -1047,7 +1047,6 @@ func (s *subscriptionClient) newSubscribedSpan(
 	rt.initialized.Store(false)
 	rt.resolvedTsUpdated.Store(time.Now().Unix())
 	rt.resolvedTs.Store(startTs)
-	rt.lastAdvanceTime.Store(time.Now())
 
 	rt.tryResolveLock = func(regionID uint64, state *regionlock.LockedRangeState) {
 		targetTs := rt.staleLocksTargetTs.Load()
