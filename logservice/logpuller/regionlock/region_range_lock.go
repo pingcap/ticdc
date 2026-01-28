@@ -286,8 +286,11 @@ func (l *RangeLock) UnlockRange(
 		newResolvedTs = entry.lockedRangeState.ResolvedTs.Load()
 	}
 
-	l.unlockedRanges.set(startKey, endKey, newResolvedTs)
-	l.unlockedRangesMinTs = l.unlockedRanges.getMinTs()
+	// HACK: skip set in hack mode to preserve the split ranges
+	if !l.unlockedRanges.isHackMode() {
+		l.unlockedRanges.set(startKey, endKey, newResolvedTs)
+		l.unlockedRangesMinTs = l.unlockedRanges.getMinTs()
+	}
 	log.Debug("unlocked range",
 		zap.Uint64("lockID", l.id), zap.Uint64("regionID", entry.regionID),
 		zap.Uint64("resolvedTs", newResolvedTs),
@@ -513,8 +516,11 @@ func (l *RangeLock) tryLockRange(startKey, endKey []byte, regionID, regionVersio
 		l.regionIDToLockedRanges[regionID] = newEntry
 		l.lockedRangeStateHeap.AddOrUpdate(&newEntry.lockedRangeState)
 
-		l.unlockedRanges.unset(startKey, endKey)
-		l.unlockedRangesMinTs = l.unlockedRanges.getMinTs()
+		// HACK: skip unset in hack mode to preserve the split ranges
+		if !l.unlockedRanges.isHackMode() {
+			l.unlockedRanges.unset(startKey, endKey)
+			l.unlockedRangesMinTs = l.unlockedRanges.getMinTs()
+		}
 		log.Debug("range locked",
 			zap.Uint64("lockID", l.id),
 			zap.Uint64("regionID", regionID),
