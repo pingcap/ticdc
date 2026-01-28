@@ -363,6 +363,9 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 		return 0
 	}
 	state.updateResolvedTs(resolvedTs)
+
+	// Maintain the locked range state heap may cause performance issue when there is a huge amount region in a single table, such as 500k region.
+	// We need to find a better way to handle huge amount resolvedTs.
 	span.rangeLock.UpdateLockedRangeStateHeap(state.region.lockedRangeState)
 
 	now := time.Now().UnixMilli()

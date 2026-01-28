@@ -125,6 +125,9 @@ type RangeLock struct {
 	mu sync.RWMutex
 	// unlockedRanges is used to store the resolvedTs of unlocked ranges.
 	unlockedRanges *rangeTsMap
+	// unlockedRangesMinTs caches the minimum resolvedTs among unlocked ranges.
+	// It is protected by `mu`.
+	unlockedRangesMinTs uint64
 	// lockedRanges is a btree that stores all locked ranges.
 	lockedRanges *btree.BTreeG[*rangeLockEntry]
 	// regionIDToLockedRanges is used to quickly locate the lock entry by regionID.
@@ -132,21 +135,61 @@ type RangeLock struct {
 	// lockedRangeStateHeap is a min heap of all LockedRangeState based on ResolvedTs
 	lockedRangeStateHeap *heap.Heap[*LockedRangeState]
 	stopped              bool
+
+	// HACK: for testing table 930, limit locked ranges to 30
+	hackLimitLock int
 }
 
 // NewRangeLock creates a new RangeLock.
 func NewRangeLock(
 	id uint64,
 	startKey, endKey []byte, startTs uint64,
+	tableID int64,
 ) *RangeLock {
 	h := heap.NewHeap[*LockedRangeState]()
-	return &RangeLock{
+	l := &RangeLock{
 		id:                     id,
-		totalSpan:              heartbeatpb.TableSpan{StartKey: startKey, EndKey: endKey},
+		totalSpan:              heartbeatpb.TableSpan{TableID: tableID, StartKey: startKey, EndKey: endKey},
 		unlockedRanges:         newRangeTsMap(startKey, endKey, startTs),
+		unlockedRangesMinTs:    startTs,
 		lockedRanges:           btree.NewG(16, rangeLockEntryLess),
 		regionIDToLockedRanges: make(map[uint64]*rangeLockEntry),
 		lockedRangeStateHeap:   h,
+	}
+
+	// HACK: for testing table 930, split into 6000 ranges, keep unlockedRanges > 5000
+	if tableID == 930 {
+		l.unlockedRanges.hackSplitInto(6000, startTs)
+		l.hackLimitLock = 1000 // max 1000 locked, so unlocked stays > 5000
+		go l.logStatsLoop()
+	}
+
+	return l
+}
+
+// HACK: logStatsLoop prints stats every 30 seconds for debugging
+func (l *RangeLock) logStatsLoop() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		l.mu.RLock()
+		lockedCount := l.lockedRanges.Len()
+		unlockedCount := l.unlockedRanges.countRanges()
+		stopped := l.stopped
+		l.mu.RUnlock()
+
+		if stopped {
+			log.Info("HACK rangeLock stats loop stopped",
+				zap.Uint64("lockID", l.id),
+				zap.Int64("tableID", l.totalSpan.TableID))
+			return
+		}
+
+		log.Info("HACK rangeLock stats",
+			zap.Uint64("lockID", l.id),
+			zap.Int64("tableID", l.totalSpan.TableID),
+			zap.Int("lockedRanges", lockedCount),
+			zap.Int("unlockedRanges", unlockedCount))
 	}
 }
 
@@ -243,7 +286,11 @@ func (l *RangeLock) UnlockRange(
 		newResolvedTs = entry.lockedRangeState.ResolvedTs.Load()
 	}
 
-	l.unlockedRanges.set(startKey, endKey, newResolvedTs)
+	// HACK: skip set in hack mode to preserve the split ranges
+	if !l.unlockedRanges.isHackMode() {
+		l.unlockedRanges.set(startKey, endKey, newResolvedTs)
+		l.unlockedRangesMinTs = l.unlockedRanges.getMinTs()
+	}
 	log.Debug("unlocked range",
 		zap.Uint64("lockID", l.id), zap.Uint64("regionID", entry.regionID),
 		zap.Uint64("resolvedTs", newResolvedTs),
@@ -265,18 +312,12 @@ func (l *RangeLock) ResolvedTs() uint64 {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	var minTs uint64 = math.MaxUint64
-	l.lockedRanges.Ascend(func(item *rangeLockEntry) bool {
-		ts := item.lockedRangeState.ResolvedTs.Load()
-		if ts < minTs {
-			minTs = ts
-		}
-		return true
-	})
-
-	unlockedMinTs := l.unlockedRanges.getMinTs()
-	if unlockedMinTs < minTs {
-		minTs = unlockedMinTs
+	minTs := uint64(math.MaxUint64)
+	if minEntry, ok := l.lockedRangeStateHeap.PeekTop(); ok {
+		minTs = minEntry.ResolvedTs.Load()
+	}
+	if l.unlockedRangesMinTs < minTs {
+		minTs = l.unlockedRangesMinTs
 	}
 
 	return minTs
@@ -425,6 +466,11 @@ func (l *RangeLock) GetHeapMinTs() uint64 {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
+	// HACK: inject delay for table 930 to simulate slow GetHeapMinTs
+	if l.hackLimitLock > 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+
 	minTs := uint64(math.MaxUint64)
 	if minEntry, ok := l.lockedRangeStateHeap.PeekTop(); ok {
 		minTs = minEntry.ResolvedTs.Load()
@@ -451,6 +497,13 @@ func (l *RangeLock) tryLockRange(startKey, endKey []byte, regionID, regionVersio
 		return LockRangeResult{Status: LockRangeStatusCancel}, nil
 	}
 
+	// HACK: for testing table 930, limit locked ranges to hackLimitLock
+	if l.hackLimitLock > 0 && l.lockedRanges.Len() >= l.hackLimitLock {
+		ch := make(chan interface{}, 1)
+		// Return wait status so it keeps retrying but never succeeds
+		return LockRangeResult{Status: LockRangeStatusWait}, []<-chan interface{}{ch}
+	}
+
 	overlappedRangeLocks := l.getOverlappedLockEntries(startKey, endKey, regionID)
 
 	// 1. If the range is totally disjointed with all locked ranges, it will be directly locked.
@@ -468,7 +521,11 @@ func (l *RangeLock) tryLockRange(startKey, endKey []byte, regionID, regionVersio
 		l.regionIDToLockedRanges[regionID] = newEntry
 		l.lockedRangeStateHeap.AddOrUpdate(&newEntry.lockedRangeState)
 
-		l.unlockedRanges.unset(startKey, endKey)
+		// HACK: skip unset in hack mode to preserve the split ranges
+		if !l.unlockedRanges.isHackMode() {
+			l.unlockedRanges.unset(startKey, endKey)
+			l.unlockedRangesMinTs = l.unlockedRanges.getMinTs()
+		}
 		log.Debug("range locked",
 			zap.Uint64("lockID", l.id),
 			zap.Uint64("regionID", regionID),
