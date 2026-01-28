@@ -237,6 +237,7 @@ func FilterDMLEvent(event *DMLEvent, enableActiveActive bool, handleError func(e
 				if softDeleteTime == nil {
 					log.Info("received hard delete row",
 						zap.Stringer("dispatcherID", event.DispatcherID),
+						zap.Int64("tableID", tableInfo.TableName.TableID),
 						zap.Uint64("commitTs", uint64(event.CommitTs)))
 				}
 			}
