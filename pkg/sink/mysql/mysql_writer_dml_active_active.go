@@ -17,6 +17,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"go.uber.org/zap"
 )
@@ -107,7 +108,7 @@ func (w *Writer) generateActiveActiveBatchSQL(events []*commonEvent.DMLEvent) ([
 	rowChanges, commitTs, err := w.buildRowChangesForUnSafeBatch(events, tableInfo)
 	if err != nil {
 		sql, values := w.generateActiveActiveBatchSQLForPerEvent(events)
-		log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values), zap.Int("writerID", w.id))
+		log.Info("normal sql should be", zap.Any("sql", sql), zap.String("values", util.RedactAny(values)), zap.Int("writerID", w.id))
 		log.Panic("invalid rows when generating batch active active SQL",
 			zap.Error(err), zap.Any("events", events), zap.Int("writerID", w.id))
 		return []string{}, [][]interface{}{}

@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/redo/reader"
+	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -358,11 +359,11 @@ func (ra *RedoApplier) applyRow(
 		tableDDLTs = ra.getTableDDLTs(tableID)
 	}
 	if tableDDLTs.ts >= int64(row.Row.CommitTs) {
-		log.Warn("ignore the dml event since the commitTs is less than startTs", zap.Int64("ts", tableDDLTs.ts), zap.Any("row", row))
+		log.Warn("ignore the dml event since the commitTs is less than startTs", zap.Int64("ts", tableDDLTs.ts), zap.String("row", util.RedactAny(row)))
 		return nil
 	}
 	if tableDDLTs.skipDML && int64(row.Row.CommitTs)-1 == tableDDLTs.ts {
-		log.Warn("ignore the dml event since the ddl is not finished", zap.Int64("ts", tableDDLTs.ts), zap.Any("row", row))
+		log.Warn("ignore the dml event since the ddl is not finished", zap.Int64("ts", tableDDLTs.ts), zap.String("row", util.RedactAny(row)))
 		return nil
 	}
 

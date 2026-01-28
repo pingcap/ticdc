@@ -19,6 +19,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/sqlmodel"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
 )
@@ -366,7 +367,7 @@ func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([
 	finalRowLists, _, err := w.buildRowChangesForUnSafeBatch(events, tableInfo)
 	if err != nil {
 		sql, values := w.generateBatchSQLsPerEvent(events)
-		log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values), zap.Int("writerID", w.id))
+		log.Info("normal sql should be", zap.Any("sql", sql), zap.String("values", util.RedactAny(values)), zap.Int("writerID", w.id))
 		log.Panic("invalid rows when generating batch SQL in unsafe mode",
 			zap.Error(err), zap.Any("events", events), zap.Int("writerID", w.id))
 	}
@@ -454,7 +455,7 @@ func (w *Writer) generateBatchSQLInSafeMode(events []*commonEvent.DMLEvent) ([]s
 			rowType := rowChanges[i].RowType
 			if rowType == prevType {
 				sql, values := w.generateBatchSQLsPerEvent(events)
-				log.Info("normal sql should be", zap.Any("sql", sql), zap.Any("values", values), zap.Int("writerID", w.id))
+				log.Info("normal sql should be", zap.Any("sql", sql), zap.String("values", util.RedactAny(values)), zap.Int("writerID", w.id))
 				log.Panic("invalid row changes", zap.String("schemaName", tableInfo.GetSchemaName()),
 					zap.String("tableName", tableInfo.GetTableName()), zap.Any("rowChanges", rowChanges),
 					zap.Any("prevType", prevType), zap.Any("currentType", rowType), zap.Int("writerID", w.id))

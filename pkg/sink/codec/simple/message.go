@@ -23,6 +23,7 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
@@ -415,7 +416,7 @@ func (a *avroMarshaller) encodeValue4Avro(row *chunk.Row, i int, ft *types.Field
 	case mysql.TypeBit:
 		v, err := d.GetMysqlBit().ToInt(types.DefaultStmtNoWarningContext)
 		if err != nil {
-			log.Panic("invalid column value for bit", zap.Any("value", d.GetValue()), zap.Error(err))
+			log.Panic("invalid column value for bit", zap.String("value", util.RedactAny(d.GetValue())), zap.Error(err))
 		}
 		return strconv.FormatUint(v, 10), "string"
 	case mysql.TypeJSON:
@@ -440,7 +441,7 @@ func encodeValue(
 	case mysql.TypeBit:
 		v, err := d.GetMysqlBit().ToInt(types.DefaultStmtNoWarningContext)
 		if err != nil {
-			log.Panic("invalid column value for bit", zap.Any("value", value), zap.Error(err))
+			log.Panic("invalid column value for bit", zap.String("value", util.RedactAny(value)), zap.Error(err))
 		}
 		value = strconv.FormatUint(v, 10)
 	case mysql.TypeTimestamp:
