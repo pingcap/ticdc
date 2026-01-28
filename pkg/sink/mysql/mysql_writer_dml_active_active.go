@@ -84,7 +84,7 @@ func (w *Writer) generateActiveActiveBatchSQLForPerEvent(events []*commonEvent.D
 
 // generateActiveActiveSQLForSingleEvent merges rows from a single event into one active-active UPSERT.
 func (w *Writer) generateActiveActiveSQLForSingleEvent(event *commonEvent.DMLEvent) ([]string, [][]interface{}) {
-	rows, commitTs := w.collectActiveActiveRowsForWrite(event)
+	rows, commitTs := w.collectActiveActiveRows(event)
 	if len(rows) == 0 {
 		return nil, nil
 	}
@@ -117,27 +117,9 @@ func (w *Writer) generateActiveActiveBatchSQL(events []*commonEvent.DMLEvent) ([
 }
 
 // ===== Helpers =====
-
-// collectActiveActiveRows copies all row changes inside the event, keeping GetNextRow semantics intact.
-func collectActiveActiveRows(event *commonEvent.DMLEvent) ([]*commonEvent.RowChange, []uint64) {
-	rows := make([]*commonEvent.RowChange, 0, event.Len())
-	commitTs := make([]uint64, 0, event.Len())
-	for {
-		row, ok := event.GetNextRow()
-		if !ok {
-			event.Rewind()
-			break
-		}
-		rowCopy := row
-		rows = append(rows, &rowCopy)
-		commitTs = append(commitTs, event.CommitTs)
-	}
-	return rows, commitTs
-}
-
-// collectActiveActiveRowsForWrite collects rows for active-active SQL generation and applies
+// collectActiveActiveRows collects rows for active-active SQL generation and applies
 // downstream-specific filtering rules.
-func (w *Writer) collectActiveActiveRowsForWrite(event *commonEvent.DMLEvent) ([]*commonEvent.RowChange, []uint64) {
+func (w *Writer) collectActiveActiveRows(event *commonEvent.DMLEvent) ([]*commonEvent.RowChange, []uint64) {
 	rows := make([]*commonEvent.RowChange, 0, event.Len())
 	commitTs := make([]uint64, 0, event.Len())
 

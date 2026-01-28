@@ -34,7 +34,7 @@ func TestBuildActiveActiveUpsertSQLMultiRows(t *testing.T) {
 		"insert into t values (1, 'alice', 10, NULL)",
 		"insert into t values (2, 'bob', 11, NULL)",
 	)
-	rows, commitTs := collectActiveActiveRows(event)
+	rows, commitTs := writer.collectActiveActiveRows(event)
 	sql, args := buildActiveActiveUpsertSQL(event.TableInfo, rows, commitTs)
 	require.Equal(t,
 		"INSERT INTO `test`.`t` (`id`,`name`,`_tidb_origin_ts`,`_tidb_softdelete_time`) VALUES (?,?,?,?),(?,?,?,?) ON DUPLICATE KEY UPDATE `id` = IF((@ticdc_lww_cond := (IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`))), VALUES(`id`), `id`),`name` = IF(@ticdc_lww_cond, VALUES(`name`), `name`),`_tidb_origin_ts` = IF(@ticdc_lww_cond, VALUES(`_tidb_origin_ts`), `_tidb_origin_ts`),`_tidb_softdelete_time` = IF(@ticdc_lww_cond, VALUES(`_tidb_softdelete_time`), `_tidb_softdelete_time`)",
