@@ -14,7 +14,7 @@ import (
 
 const defaultMaxWakePerRound = 64
 
-type changefeedInflightBudget struct {
+type globalInflightBudget struct {
 	_ noCopy
 
 	enabled bool
@@ -27,7 +27,7 @@ type changefeedInflightBudget struct {
 	mu           sync.Mutex
 	blockedSet   map[common.DispatcherID]blockedEntry
 	blockedQueue []common.DispatcherID
-	queueHead    int
+	currentIdx   int
 
 	maxWakePerRound int
 
@@ -44,23 +44,35 @@ type blockedEntry struct {
 	blockedAt int64
 }
 
-func newChangefeedInflightBudget(
+func newGlobalInflightBudget(
 	sinkType common.SinkType,
 	changefeedID common.ChangeFeedID,
 	highBytes int64,
 	lowBytes int64,
-) *changefeedInflightBudget {
+) *globalInflightBudget {
+	switch sinkType {
+	case common.CloudStorageSinkType, common.RedoSinkType:
+	default:
+		// just return zero value to reduce the memory allocation
+		return &globalInflightBudget{}
+	}
+
+	var (
+		namespace = changefeedID.Keyspace()
+		name      = changefeedID.Name()
+		t         = sinkType.String()
+	)
 	if highBytes <= 0 || lowBytes <= 0 || lowBytes >= highBytes {
 		log.Warn("invalid inflight budget watermarks, budget disabled",
 			zap.Stringer("changefeedID", changefeedID),
-			zap.String("sinkType", sinkType.String()),
+			zap.String("sinkType", t),
 			zap.Int64("highBytes", highBytes),
 			zap.Int64("lowBytes", lowBytes),
 		)
-		return &changefeedInflightBudget{}
+		return &globalInflightBudget{}
 	}
 
-	b := &changefeedInflightBudget{
+	b := &globalInflightBudget{
 		enabled:         true,
 		blockedSet:      make(map[common.DispatcherID]blockedEntry),
 		maxWakePerRound: defaultMaxWakePerRound,
@@ -68,18 +80,18 @@ func newChangefeedInflightBudget(
 		sinkType:        sinkType,
 
 		globalBlockedDuration: metrics.InflightBudgetGlobalBlockedDurationHist.
-			WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), sinkType.String()),
+			WithLabelValues(namespace, name, t),
 		globalBlockedCount: metrics.InflightBudgetGlobalBlockedDispatcherCountGauge.
-			WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), sinkType.String()),
+			WithLabelValues(namespace, name, t),
 		globalBytes: metrics.InflightBudgetGlobalUnflushedBytesGauge.
-			WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), sinkType.String()),
+			WithLabelValues(namespace, name, t),
 	}
 	b.high.Store(highBytes)
 	b.low.Store(lowBytes)
 	return b
 }
 
-func (b *changefeedInflightBudget) OnEnqueue(bytes int64) {
+func (b *globalInflightBudget) acquire(bytes int64) {
 	if !b.enabled || bytes <= 0 {
 		return
 	}
@@ -87,18 +99,18 @@ func (b *changefeedInflightBudget) OnEnqueue(bytes int64) {
 	b.globalBytes.Add(float64(bytes))
 }
 
-func (b *changefeedInflightBudget) TryBlock(dispatcherID common.DispatcherID, wake func()) bool {
+func (b *globalInflightBudget) TryBlock(dispatcherID common.DispatcherID, wake func()) bool {
 	if !b.enabled {
 		return false
 	}
 	if b.inflight.Load() < b.high.Load() {
 		return false
 	}
-	b.registerBlocked(dispatcherID, wake)
+	b.addBlockedEntry(dispatcherID, wake)
 	return true
 }
 
-func (b *changefeedInflightBudget) registerBlocked(dispatcherID common.DispatcherID, wake func()) {
+func (b *globalInflightBudget) addBlockedEntry(dispatcherID common.DispatcherID, wake func()) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -116,7 +128,7 @@ func (b *changefeedInflightBudget) registerBlocked(dispatcherID common.Dispatche
 	b.globalBlockedCount.Inc()
 }
 
-func (b *changefeedInflightBudget) OnFlush(bytes int64) {
+func (b *globalInflightBudget) release(bytes int64) {
 	if !b.enabled || bytes <= 0 {
 		return
 	}
@@ -138,19 +150,19 @@ func (b *changefeedInflightBudget) OnFlush(bytes int64) {
 	b.wakeBlockedDispatchers()
 }
 
-func (b *changefeedInflightBudget) wakeBlockedDispatchers() {
-	now := time.Now()
-	toWake := make([]func(), 0, b.maxWakePerRound)
-	blockedAts := make([]int64, 0, b.maxWakePerRound)
-
+func (b *globalInflightBudget) wakeBlockedDispatchers() {
+	var (
+		now     = time.Now()
+		entries = make([]blockedEntry, 0, b.maxWakePerRound)
+	)
 	b.mu.Lock()
-	for len(toWake) < b.maxWakePerRound && b.queueHead < len(b.blockedQueue) {
+	for len(entries) < b.maxWakePerRound && b.currentIdx < len(b.blockedQueue) {
 		if b.inflight.Load() >= b.high.Load() {
 			break
 		}
 
-		dispatcherID := b.blockedQueue[b.queueHead]
-		b.queueHead++
+		dispatcherID := b.blockedQueue[b.currentIdx]
+		b.currentIdx++
 
 		entry, ok := b.blockedSet[dispatcherID]
 		if !ok {
@@ -158,29 +170,28 @@ func (b *changefeedInflightBudget) wakeBlockedDispatchers() {
 		}
 		delete(b.blockedSet, dispatcherID)
 		b.globalBlockedCount.Dec()
-		toWake = append(toWake, entry.wake)
-		blockedAts = append(blockedAts, entry.blockedAt)
+		entries = append(entries, entry)
 	}
 
-	if b.queueHead >= len(b.blockedQueue) {
+	if b.currentIdx >= len(b.blockedQueue) {
 		b.blockedQueue = b.blockedQueue[:0]
-		b.queueHead = 0
-	} else if b.queueHead > 1024 && b.queueHead*2 > len(b.blockedQueue) {
-		copy(b.blockedQueue, b.blockedQueue[b.queueHead:])
-		b.blockedQueue = b.blockedQueue[:len(b.blockedQueue)-b.queueHead]
-		b.queueHead = 0
+		b.currentIdx = 0
+	} else if b.currentIdx > 1024 && b.currentIdx*2 > len(b.blockedQueue) {
+		copy(b.blockedQueue, b.blockedQueue[b.currentIdx:])
+		b.blockedQueue = b.blockedQueue[:len(b.blockedQueue)-b.currentIdx]
+		b.currentIdx = 0
 	}
 	b.mu.Unlock()
 
-	for i, wake := range toWake {
-		if blockedAt := blockedAts[i]; blockedAt > 0 {
-			b.globalBlockedDuration.Observe(now.Sub(time.Unix(0, blockedAt)).Seconds())
+	for _, entry := range entries {
+		if entry.blockedAt > 0 {
+			b.globalBlockedDuration.Observe(now.Sub(time.Unix(0, entry.blockedAt)).Seconds())
 		}
-		wake()
+		entry.wake()
 	}
 }
 
-func (b *changefeedInflightBudget) CleanupDispatcher(dispatcherID common.DispatcherID) {
+func (b *globalInflightBudget) cleanupDispatcher(dispatcherID common.DispatcherID) {
 	if !b.enabled {
 		return
 	}

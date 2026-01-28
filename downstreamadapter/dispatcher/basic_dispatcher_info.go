@@ -68,8 +68,8 @@ type SharedInfo struct {
 	// such as error of flush ddl events
 	errCh chan error
 
-	cloudStorageInflightBudget atomic.Pointer[changefeedInflightBudget]
-	redoInflightBudget         atomic.Pointer[changefeedInflightBudget]
+	cloudStorageInflightBudget atomic.Pointer[globalInflightBudget]
+	redoInflightBudget         atomic.Pointer[globalInflightBudget]
 }
 
 // NewSharedInfo creates a new SharedInfo with the given parameters
@@ -115,7 +115,7 @@ func (s *SharedInfo) InitChangefeedInflightBudget(sinkType common.SinkType, area
 		return
 	}
 
-	var target *atomic.Pointer[changefeedInflightBudget]
+	var target *atomic.Pointer[globalInflightBudget]
 	switch sinkType {
 	case common.CloudStorageSinkType:
 		target = &s.cloudStorageInflightBudget
@@ -141,10 +141,10 @@ func (s *SharedInfo) InitChangefeedInflightBudget(sinkType common.SinkType, area
 	}
 	globalLow := globalHigh / 2
 
-	target.Store(newChangefeedInflightBudget(sinkType, s.changefeedID, globalHigh, globalLow))
+	target.Store(newGlobalInflightBudget(sinkType, s.changefeedID, globalHigh, globalLow))
 }
 
-func (s *SharedInfo) getChangefeedInflightBudget(sinkType common.SinkType) *changefeedInflightBudget {
+func (s *SharedInfo) getChangefeedInflightBudget(sinkType common.SinkType) *globalInflightBudget {
 	switch sinkType {
 	case common.CloudStorageSinkType:
 		return s.cloudStorageInflightBudget.Load()

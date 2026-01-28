@@ -36,17 +36,17 @@ func newSharedInfoForInflightBudgetTest() *SharedInfo {
 
 func TestChangefeedInflightBudgetBlocksAndWakes(t *testing.T) {
 	changefeedID := common.NewChangefeedID(common.DefaultKeyspaceName)
-	budget := newChangefeedInflightBudget(common.CloudStorageSinkType, changefeedID, 100, 50)
+	budget := newGlobalInflightBudget(common.CloudStorageSinkType, changefeedID, 100, 50)
 
 	var wakeCount atomic.Int32
 	dispatcherID := common.NewDispatcherID()
 
-	budget.OnEnqueue(120)
+	budget.acquire(120)
 	require.True(t, budget.TryBlock(dispatcherID, func() { wakeCount.Add(1) }))
 	require.Equal(t, int32(0), wakeCount.Load())
 
 	// in-flight falls to low watermark, should wake once.
-	budget.OnFlush(70)
+	budget.release(70)
 	require.Equal(t, int32(1), wakeCount.Load())
 }
 
@@ -55,26 +55,26 @@ func TestChangefeedInflightBudgetDedupAndCleanup(t *testing.T) {
 	dispatcherID := common.NewDispatcherID()
 
 	t.Run("dedup", func(t *testing.T) {
-		budget := newChangefeedInflightBudget(common.CloudStorageSinkType, changefeedID, 100, 50)
+		budget := newGlobalInflightBudget(common.CloudStorageSinkType, changefeedID, 100, 50)
 		var wakeCount atomic.Int32
 
-		budget.OnEnqueue(120)
+		budget.acquire(120)
 		require.True(t, budget.TryBlock(dispatcherID, func() { wakeCount.Add(1) }))
 		require.True(t, budget.TryBlock(dispatcherID, func() { wakeCount.Add(1) }))
 
-		budget.OnFlush(70)
+		budget.release(70)
 		require.Equal(t, int32(1), wakeCount.Load())
 	})
 
 	t.Run("cleanup", func(t *testing.T) {
-		budget := newChangefeedInflightBudget(common.CloudStorageSinkType, changefeedID, 100, 50)
+		budget := newGlobalInflightBudget(common.CloudStorageSinkType, changefeedID, 100, 50)
 		var wakeCount atomic.Int32
 
-		budget.OnEnqueue(120)
+		budget.acquire(120)
 		require.True(t, budget.TryBlock(dispatcherID, func() { wakeCount.Add(1) }))
-		budget.CleanupDispatcher(dispatcherID)
+		budget.cleanupDispatcher(dispatcherID)
 
-		budget.OnFlush(70)
+		budget.release(70)
 		require.Equal(t, int32(0), wakeCount.Load())
 	})
 }
