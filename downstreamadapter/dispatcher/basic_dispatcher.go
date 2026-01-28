@@ -378,6 +378,12 @@ func (d *BasicDispatcher) GetCheckpointTs() uint64 {
 		if ddlCommitTs > 0 {
 			ddlCheckpointUpperBound := ddlCommitTs - 1
 			if checkpointTs > ddlCheckpointUpperBound {
+				log.Warn("disaptcher commitTs bounded by the deferred DDL event",
+					zap.Any("dispatcherID", d.id),
+					zap.Uint64("originCheckpointTs", checkpointTs),
+					zap.Uint64("newCheckpointTs", ddlCheckpointUpperBound),
+					zap.Uint64("ddlCommitTs", ddlCommitTs),
+					zap.Any("deferredDDL", ddl))
 				checkpointTs = ddlCheckpointUpperBound
 			}
 		}
