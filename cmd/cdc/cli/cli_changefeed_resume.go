@@ -238,7 +238,6 @@ func (o *resumeChangefeedOptions) run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	// o.checkpointTs != 0
 	cmd.Printf("Resume changefeed successfully! "+
 		"\nID: %s\nOverwriteCheckpointTs: %t\nIneligibleTablesCount: %d\nEligibleTablesCount: %d\nAllTablesCount: %d\n", o.changefeedID, o.checkpointTs != 0, len(tables.IneligibleTables), len(tables.EligibleTables), len(tables.AllTables))
 	if o.verbose {

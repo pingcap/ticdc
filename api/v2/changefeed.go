@@ -297,7 +297,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
-	log.Info("create changefeed successfully",
+	log.Info("Create changefeed successfully!",
 		zap.String("changefeedID", info.ChangefeedID.Name()),
 		zap.String("state", string(info.State)),
 		zap.String("changefeedInfo", info.String()),
