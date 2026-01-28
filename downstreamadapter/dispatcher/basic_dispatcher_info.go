@@ -151,8 +151,8 @@ func (s *SharedInfo) getChangefeedInflightBudget(sinkType common.SinkType) *chan
 	case common.RedoSinkType:
 		return s.redoInflightBudget.Load()
 	default:
-		return nil
 	}
+	return nil
 }
 
 func (d *BasicDispatcher) GetId() common.DispatcherID {

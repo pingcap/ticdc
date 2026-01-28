@@ -48,6 +48,7 @@ type inflightBudget struct {
 
 	// dmlProgress tracks in-flight DML events only.
 	// It's used for commitTs-based DDL deferral when in-flight budget is enabled.
+	// it's not relevant to the dispatcher checkpointTs calculation.
 	dmlProgress *TableProgress
 
 	changefeedID common.ChangeFeedID
@@ -75,6 +76,11 @@ func newInflightBudget(
 	if !enabled {
 		return inflightBudget{}
 	}
+	var (
+		namespace = changefeedID.Keyspace()
+		name      = changefeedID.Name()
+		t         = sinkType.String()
+	)
 	return inflightBudget{
 		enabled:      enabled,
 		sinkType:     sinkType,
@@ -87,11 +93,11 @@ func newInflightBudget(
 		dmlProgress:  NewTableProgress(),
 
 		inflightBudgetBlockDuration: metrics.InflightBudgetBlockedDurationHist.
-			WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), sinkType.String()),
+			WithLabelValues(namespace, name, t),
 		inflightBudgetBlockedCount: metrics.InflightBudgetBlockedDispatcherCountGauge.
-			WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), sinkType.String()),
+			WithLabelValues(namespace, name, t),
 		inflightBudgetBytes: metrics.InflightBudgetUnflushedBytesGauage.
-			WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), sinkType.String()),
+			WithLabelValues(namespace, name, t),
 	}
 }
 
