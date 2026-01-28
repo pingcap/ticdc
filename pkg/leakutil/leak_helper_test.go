@@ -15,21 +15,22 @@ package leakutil
 
 import (
 	"testing"
+
+	"go.uber.org/goleak"
 )
 
 func TestSetUpLeakTest(t *testing.T) {
 	leakChan := make(chan struct{})
-	done := make(chan struct{})
 
 	go func() {
-		defer close(done)
 		<-leakChan
 	}()
-
-	close(leakChan)
-	<-done
 }
 
 func TestMain(m *testing.M) {
-	SetUpLeakTest(m)
+	opts := []goleak.Option{
+		goleak.IgnoreTopFunction("github.com/pingcap/ticdc/pkg/leakutil.TestSetUpLeakTest.func1"),
+	}
+
+	SetUpLeakTest(m, opts...)
 }
