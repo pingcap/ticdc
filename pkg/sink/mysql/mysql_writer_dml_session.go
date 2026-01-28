@@ -25,7 +25,12 @@ import (
 )
 
 type dmlSessionStats struct {
-	connID      uint64
+	// connID is the downstream connection ID used as a stable key in the
+	// active-active sync stats collector.
+	connID uint64
+
+	// lastCollect is the last time we attempted the stats query. It is updated on
+	// attempt (even if the query fails) to avoid tight retry loops.
 	lastCollect time.Time
 }
 
@@ -34,20 +39,32 @@ type dmlSessionStats struct {
 // Note: sql.Conn is not safe for concurrent use. This struct serializes DML execution
 // and background maintenance (stats query and idle close) on the same session.
 type dmlSession struct {
-	mu          sync.Mutex
-	conn        *sql.Conn
-	lastActive  time.Time
+	mu   sync.Mutex
+	conn *sql.Conn
+
+	// lastActive is updated after a successful DML execution via withConn.
+	// It is used by the background loop to close idle sessions.
+	lastActive time.Time
+
+	// idleTimeout is the threshold used by the background loop to decide whether
+	// the session can be closed. A non-positive value disables idle closing.
 	idleTimeout time.Duration
 
 	stats dmlSessionStats
 }
 
+// NewDMLSession creates a dmlSession that will close the underlying connection
+// after it has been idle for at least idleTimeout.
 func NewDMLSession(idleTimeout time.Duration) *dmlSession {
 	return &dmlSession{
 		idleTimeout: idleTimeout,
 	}
 }
 
+// withConn executes fn with the session-owned connection while holding the session lock.
+//
+// The lock is held during fn to guarantee that the underlying sql.Conn is never
+// used concurrently by DML execution and background maintenance.
 func (s *dmlSession) withConn(
 	w *Writer,
 	writeTimeout time.Duration,
@@ -69,6 +86,12 @@ func (s *dmlSession) withConn(
 	return nil
 }
 
+// CheckStats performs best-effort maintenance for the current session:
+//   - query active-active sync stats at a fixed interval
+//   - close the session when it has been idle for too long
+//
+// It is called periodically from runDMLConnLoop and shares the same lock as DML
+// execution to ensure the sql.Conn is never used concurrently.
 func (s *dmlSession) CheckStats(w *Writer, now time.Time, writeTimeout time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -77,7 +100,7 @@ func (s *dmlSession) CheckStats(w *Writer, now time.Time, writeTimeout time.Dura
 		return
 	}
 
-	s.maybeQueryActiveActiveSyncStatsLocked(w, now, writeTimeout, s.conn)
+	s.tryQueryActiveActiveSyncStatsLocked(w, now, writeTimeout, s.conn)
 	if s.shouldCloseLocked(now) {
 		// Give up pending stats collection after idle timeout.
 		s.closeLocked(w)
@@ -100,6 +123,8 @@ func (s *dmlSession) shouldCloseLocked(now time.Time) bool {
 	return now.Sub(s.lastActive) >= s.idleTimeout
 }
 
+// closeLocked closes the session connection and clears per-connection state in
+// the active-active stats collector, if any.
 func (s *dmlSession) closeLocked(w *Writer) {
 	if s.conn == nil {
 		return
@@ -114,6 +139,12 @@ func (s *dmlSession) closeLocked(w *Writer) {
 	s.stats = dmlSessionStats{}
 }
 
+// getOrCreateLocked returns the existing session connection, or creates a new
+// one on demand.
+//
+// Any failure during active-active stats baseline query is treated as best-effort:
+// stats should not block DML execution, so the connection is kept alive and the
+// error is only logged.
 func (s *dmlSession) getOrCreateLocked(w *Writer, writeTimeout time.Duration) (*sql.Conn, error) {
 	if s.conn != nil {
 		return s.conn, nil
@@ -150,6 +181,8 @@ func (s *dmlSession) getOrCreateLocked(w *Writer, writeTimeout time.Duration) (*
 	return conn, nil
 }
 
+// shouldCollectActiveActiveSyncStatsLocked decides whether it's time to query
+// @@tidb_cdc_active_active_sync_stats again for this session.
 func (s *dmlSession) shouldCollectActiveActiveSyncStatsLocked(w *Writer, now time.Time) bool {
 	if w.activeActiveSyncStatsCollector == nil ||
 		w.activeActiveSyncStatsInterval <= 0 ||
@@ -162,7 +195,8 @@ func (s *dmlSession) shouldCollectActiveActiveSyncStatsLocked(w *Writer, now tim
 	return now.Sub(s.stats.lastCollect) >= w.activeActiveSyncStatsInterval
 }
 
-func (s *dmlSession) maybeQueryActiveActiveSyncStatsLocked(
+// tryQueryActiveActiveSyncStatsLocked runs the stats query and updates the collector.
+func (s *dmlSession) tryQueryActiveActiveSyncStatsLocked(
 	w *Writer,
 	now time.Time,
 	writeTimeout time.Duration,
@@ -172,7 +206,6 @@ func (s *dmlSession) maybeQueryActiveActiveSyncStatsLocked(
 		return
 	}
 
-	// Treat a query attempt as "collected" to avoid tight retries on errors.
 	s.stats.lastCollect = now
 
 	ctx, cancel := context.WithTimeout(w.ctx, writeTimeout)
@@ -193,6 +226,12 @@ func (s *dmlSession) maybeQueryActiveActiveSyncStatsLocked(
 }
 
 func (w *Writer) runDMLConnLoop() {
+	// The loop frequency is determined by the smallest positive interval among:
+	//   - the idle timeout for closing the session
+	//   - the stats collection interval
+	//
+	// The ticker runs at half of that interval to bound overshoot when lastActive
+	// is updated just after a tick.
 	tickInterval := w.dmlSession.idleTimeout
 	if w.activeActiveSyncStatsCollector != nil &&
 		w.activeActiveSyncStatsInterval > 0 &&
