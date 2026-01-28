@@ -401,13 +401,17 @@ func (c *Controller) addSchedulingReplicaSetWithoutLock(span *replica.SpanReplic
 	c.addToSchemaAndTableMap(span)
 }
 
-// ReplaceReplicaSet replaces replica sets
+// ReplaceReplicaSet replaces old replica sets with new spans and returns the newly created replicas.
+//
+// replicasInScheduling indicates whether the new replicas are placed in scheduling state with the
+// provided splitTargetNodes. When replicasInScheduling is false, all new replicas are placed absent
+// so that the basic scheduler can schedule them.
 func (c *Controller) ReplaceReplicaSet(
 	oldReplications []*replica.SpanReplication,
 	newSpans []*heartbeatpb.TableSpan,
 	checkpointTs uint64,
 	splitTargetNodes []node.ID,
-) []*replica.SpanReplication {
+) (news []*replica.SpanReplication, replicasInScheduling bool) {
 	// we need to ensure the create the new spans and drop the old span should be protected by mutex
 	// Then GetMinCheckpointTsForNonReplicatingSpans will not get incorrect min checkpoint ts
 	c.mu.Lock()
@@ -428,7 +432,6 @@ func (c *Controller) ReplaceReplicaSet(
 	}
 
 	// 2. create the new replica set
-	var news []*replica.SpanReplication
 	old := oldReplications[0]
 	for _, span := range newSpans {
 		new := replica.NewSpanReplication(
@@ -441,8 +444,9 @@ func (c *Controller) ReplaceReplicaSet(
 		news = append(news, new)
 	}
 
-	if len(splitTargetNodes) > 0 && len(splitTargetNodes) == len(news) {
-		// the spans have the target nodes
+	replicasInScheduling = len(splitTargetNodes) > 0 && len(splitTargetNodes) == len(news)
+	if replicasInScheduling {
+		// The new replicas have aligned target nodes and can be placed in scheduling state directly.
 		for idx, newSpan := range news {
 			c.addSchedulingReplicaSetWithoutLock(newSpan, splitTargetNodes[idx])
 		}
@@ -450,7 +454,7 @@ func (c *Controller) ReplaceReplicaSet(
 		c.addAbsentReplicaSetWithoutLock(news...)
 	}
 
-	return news
+	return news, replicasInScheduling
 }
 
 // IsDDLDispatcher checks if the dispatcher is a DDL dispatcher
