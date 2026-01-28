@@ -28,12 +28,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type mockTableSchemaStore struct {
-	names []*event.SchemaTableName
-}
+func newTestTableSchemaStore(tables []*event.SchemaTableName) *commonEvent.TableSchemaStore {
+	schemaByName := make(map[string]*heartbeatpb.SchemaInfo)
+	nextSchemaID := int64(1)
+	nextTableID := int64(1)
 
-func (m *mockTableSchemaStore) GetAllTableNames(uint64, bool) []*event.SchemaTableName {
-	return m.names
+	for _, tbl := range tables {
+		schema := schemaByName[tbl.SchemaName]
+		if schema == nil {
+			schema = &heartbeatpb.SchemaInfo{
+				SchemaID:   nextSchemaID,
+				SchemaName: tbl.SchemaName,
+			}
+			nextSchemaID++
+			schemaByName[tbl.SchemaName] = schema
+		}
+		schema.Tables = append(schema.Tables, &heartbeatpb.TableInfo{
+			TableID:   nextTableID,
+			TableName: tbl.TableName,
+		})
+		nextTableID++
+	}
+
+	schemaInfos := make([]*heartbeatpb.SchemaInfo, 0, len(schemaByName))
+	for _, schemaInfo := range schemaByName {
+		schemaInfos = append(schemaInfos, schemaInfo)
+	}
+	return commonEvent.NewTableSchemaStore(schemaInfos, common.MysqlSinkType, true)
 }
 
 func TestProgressTableWriterFlushSingleBatch(t *testing.T) {
@@ -48,8 +69,8 @@ func TestProgressTableWriterFlushSingleBatch(t *testing.T) {
 		{SchemaName: "db1", TableName: "t1"},
 		{SchemaName: "db1", TableName: "t2"},
 	}
-	tableSchemaStore := commonEvent.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{}, common.MysqlSinkType, false)
-	writer.SetTableSchemaStore(&mockTableSchemaStore{names: tables})
+	tableSchemaStore := newTestTableSchemaStore(tables)
+	writer.SetTableSchemaStore(tableSchemaStore)
 
 	expectProgressTableInit(mock)
 	expectProgressInsert(mock, "ks/cf", "cluster-single", 42, tables)
@@ -73,7 +94,7 @@ func TestProgressTableWriterFlushMultiBatch(t *testing.T) {
 		{SchemaName: "db1", TableName: "t2"},
 		{SchemaName: "db1", TableName: "t3"},
 	}
-	writer.SetTableSchemaStore(&mockTableSchemaStore{names: allTables})
+	writer.SetTableSchemaStore(newTestTableSchemaStore(allTables))
 
 	expectProgressTableInit(mock)
 	expectProgressInsert(mock, "ks/cf", "cluster-multi", 99, allTables[:2])

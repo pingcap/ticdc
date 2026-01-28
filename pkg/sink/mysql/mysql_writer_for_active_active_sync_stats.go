@@ -66,6 +66,8 @@ type ActiveActiveSyncStatsCollector struct {
 	lastConflictSkipRowsByID map[uint64]uint64
 }
 
+// NewActiveActiveSyncStatsCollector creates a metric collector for active-active
+// conflict statistics of a changefeed.
 func NewActiveActiveSyncStatsCollector(changefeedID common.ChangeFeedID) *ActiveActiveSyncStatsCollector {
 	keyspace := changefeedID.Keyspace()
 	changefeed := changefeedID.Name()
@@ -77,6 +79,11 @@ func NewActiveActiveSyncStatsCollector(changefeedID common.ChangeFeedID) *Active
 	}
 }
 
+// ObserveConflictSkipRows records an observation from a downstream connection.
+//
+// The session variable is monotonically increasing within a connection. Since sql.DB
+// may reuse connections across different writers, this method computes a delta per
+// CONNECTION_ID() to avoid double counting.
 func (c *ActiveActiveSyncStatsCollector) ObserveConflictSkipRows(connID uint64, current uint64) {
 	var delta uint64
 	c.mu.Lock()
@@ -110,11 +117,14 @@ func (c *ActiveActiveSyncStatsCollector) ForgetConn(connID uint64) {
 	c.mu.Unlock()
 }
 
+// Close releases metric series held by this collector.
 func (c *ActiveActiveSyncStatsCollector) Close() {
 	// Reset the series on sink rebuild.
 	metrics.ActiveActiveConflictSkipRowsCounter.DeleteLabelValues(c.keyspace, c.changefeed)
 }
 
+// queryActiveActiveSyncStats queries CONNECTION_ID() and the session variable
+// @@tidb_cdc_active_active_sync_stats from the given connection.
 func queryActiveActiveSyncStats(
 	ctx context.Context,
 	conn *sql.Conn,

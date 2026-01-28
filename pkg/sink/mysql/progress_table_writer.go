@@ -112,6 +112,9 @@ func (w *ProgressTableWriter) Flush(checkpoint uint64) error {
 	return nil
 }
 
+// flushBatch writes a batch of progress rows in a single INSERT statement.
+// The progress table is keyed by (changefeed_id, cluster_id, database_name, table_name),
+// so repeated writes for the same table are idempotent.
 func (w *ProgressTableWriter) flushBatch(
 	tableNames []*event.SchemaTableName,
 	checkpoint uint64,
@@ -139,6 +142,8 @@ func (w *ProgressTableWriter) flushBatch(
 	return err
 }
 
+// initProgressTable lazily creates the system database and progress table.
+// It is safe to call multiple times and caches initialization after success.
 func (w *ProgressTableWriter) initProgressTable(ctx context.Context) error {
 	if w.progressTableInit {
 		return nil
@@ -164,6 +169,8 @@ func (w *ProgressTableWriter) initProgressTable(ctx context.Context) error {
 	return nil
 }
 
+// RemoveTables removes progress rows for dropped tables or databases described in the DDL event.
+// This is needed to keep downstream hard delete safety checks accurate after schema changes.
 func (w *ProgressTableWriter) RemoveTables(ddl *event.DDLEvent) error {
 	tableNameChange := ddl.TableNameChange
 	if tableNameChange == nil {
@@ -207,6 +214,7 @@ func (w *ProgressTableWriter) RemoveTables(ddl *event.DDLEvent) error {
 	return nil
 }
 
+// removeTableBatch deletes progress rows for a batch of (database_name, table_name) pairs.
 func (w *ProgressTableWriter) removeTableBatch(changefeed, clusterID string, tables []event.SchemaTableName) error {
 	var builder strings.Builder
 	builder.WriteString("DELETE FROM `")
@@ -231,6 +239,7 @@ func (w *ProgressTableWriter) removeTableBatch(changefeed, clusterID string, tab
 	return err
 }
 
+// removeDatabase deletes all progress rows for a database name.
 func (w *ProgressTableWriter) removeDatabase(changefeed, clusterID, dbName string) error {
 	var builder strings.Builder
 	builder.WriteString("DELETE FROM `")
