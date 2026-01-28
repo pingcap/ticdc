@@ -42,6 +42,12 @@ type dmlSession struct {
 	stats dmlSessionStats
 }
 
+func NewDMLSession(idleTimeout time.Duration) *dmlSession {
+	return &dmlSession{
+		idleTimeout: idleTimeout,
+	}
+}
+
 func (s *dmlSession) withConn(
 	w *Writer,
 	writeTimeout time.Duration,

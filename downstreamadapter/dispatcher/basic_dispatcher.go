@@ -265,8 +265,9 @@ func NewBasicDispatcher(
 // at least one event remains to be written to the downstream sink.
 func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) bool {
 	// Normal DML dispatch: most tables just pass through this function unchanged.
-	// Active-active or soft-delete tables are re-written by FilterDMLEvent before
-	// being handed over to the sink.
+	// Active-active or soft-delete tables are processed by FilterDMLEvent before
+	// being handed over to the sink (delete rows dropped; soft-delete transitions may
+	// be rewritten into deletes when enable-active-active is disabled).
 	filteredEvents := make([]*commonEvent.DMLEvent, 0, len(events))
 	for _, event := range events {
 		// FilterDMLEvent returns the original event for normal tables and only
@@ -345,10 +346,11 @@ func (d *BasicDispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) {
 
 // ensureActiveActiveTableInfo validates the table schema requirements for active-active mode.
 //
-// When active-active is enabled, the dispatcher requires the table to be marked as active-active and
-// to contain required columns (_tidb_origin_ts and _tidb_softdelete_time). These columns
-// are used by downstream SQL rewriting to preserve last-write-wins semantics and to prevent
-// replication loops.
+// When enable-active-active is enabled, TiCDC relies on `_tidb_origin_ts` and
+// `_tidb_softdelete_time` to implement last-write-wins replication and to prevent
+// replication loops. Delete rows for active-active tables are filtered out by
+// FilterDMLEvent, and hard deletes are expected to keep `_tidb_softdelete_time`
+// as NULL for observability and safety checks.
 func (d *BasicDispatcher) ensureActiveActiveTableInfo(tableInfo *common.TableInfo) error {
 	if !d.sharedInfo.enableActiveActive {
 		return nil

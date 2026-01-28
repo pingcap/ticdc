@@ -275,11 +275,10 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	switch event.GetType() {
 	case commonEvent.TypeDDLEvent:
 		ddl := event.(*commonEvent.DDLEvent)
-		// if enable active-active progress table, we need to remove the dropped/renamed tables from progress table
-		// This drop action can be executed multiple times without side effect.
-		// Thus, we execute it before flush ddl event.
-		// Even if after removeTables, cdc crash before flush ddl event, it is safe to removeTables again.
-		// Even if the bdr mode is non primary, we still need to remove the tables from progress table
+		// In enable-active-active mode, TiCDC maintains a downstream progress table for
+		// hard delete safety checks. DDLs that drop/rename tables must also clean up the
+		// corresponding progress rows. The cleanup is idempotent and must run before
+		// flushing the DDL event (and regardless of the BDR role).
 		if s.enableActiveActive {
 			err := s.progressTableWriter.RemoveTables(ddl)
 			if err != nil {

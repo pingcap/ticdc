@@ -19,8 +19,10 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/stretchr/testify/require"
@@ -46,6 +48,7 @@ func TestProgressTableWriterFlushSingleBatch(t *testing.T) {
 		{SchemaName: "db1", TableName: "t1"},
 		{SchemaName: "db1", TableName: "t2"},
 	}
+	tableSchemaStore := commonEvent.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{}, common.MysqlSinkType, false)
 	writer.SetTableSchemaStore(&mockTableSchemaStore{names: tables})
 
 	expectProgressTableInit(mock)

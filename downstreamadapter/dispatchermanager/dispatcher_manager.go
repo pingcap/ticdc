@@ -351,7 +351,9 @@ func (e *DispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*h
 	// table trigger event dispatcher can register to event collector to receive events after finish the initial table schema store from the maintainer.
 	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.GetTableTriggerEventDispatcher(), e.sinkQuota)
 
-	// only when sink is mysql sink, and not enable active-active, table trigger event dispatcher does not need to receive the checkpointTs message from maintainer.
+	// The table trigger event dispatcher needs changefeed-level checkpoint updates only
+	// when downstream components must maintain table names (for non-MySQL sinks), or
+	// when MySQL/TiDB sink runs in enable-active-active mode to update the progress table.
 	needCheckpointUpdates := commonEvent.NeedTableNameStoreAndCheckpointTs(e.sink.SinkType() == common.MysqlSinkType, e.sharedInfo.EnableActiveActive())
 	if needCheckpointUpdates {
 		appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RegisterCheckpointTsMessageDs(e)

@@ -341,7 +341,7 @@ func NewMysqlConfigAndDB(
 	// Adding extra connections to the pool helps avoid connection exhaustion.
 	// Each DML writer may hold a dedicated session for a while, and additional
 	// connections are also needed for DDL/progress writers and stmt cache misses.
-	const extraConn = 10
+	extraConn := 10
 	db.SetMaxIdleConns(cfg.WorkerCount + extraConn)
 	db.SetMaxOpenConns(cfg.WorkerCount + extraConn)
 

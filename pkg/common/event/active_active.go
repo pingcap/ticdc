@@ -47,7 +47,7 @@ const (
 // EvaluateRowPolicy decides how special tables (active-active/soft-delete)
 // should behave under the given changefeed mode.
 // softDeleteTimeCol and softDeleteTimeColIndex must refer to `_tidb_softdelete_time`
-// when enableActiveActive is false and the table participates in soft-delete handling.
+// when enableActiveActive is false and the table is active-active or soft-delete.
 // The decision order is:
 //  1. Tables with neither feature are returned untouched.
 //  2. Delete rows are skipped no matter which mode we run in.
@@ -136,14 +136,13 @@ func ApplyRowPolicyDecision(row *RowChange, decision RowPolicyDecision) {
 }
 
 // FilterDMLEvent applies row policy decisions to each row in the DMLEvent.
-//   - Normal tables simply fall through: the original event is returned as-is.
-//   - Active-active tables when enable-active-active = true: only delete rows are removed,
-//     other rows pass through.
-//   - Active-active tables when enable-active-active = false: delete rows are removed and
-//     updates that flip
-//     `_tidb_softdelete_time` from zero to non-zero will be converted to delete events.
-//   - Soft-delete tables behave the same as the second bullet: delete rows are removed and
-//     soft-delete transitions are converted into deletes.
+//   - Normal tables: the original event is returned as-is.
+//   - Active-active tables: delete rows are removed in both modes. When enable-active-active is
+//     false, updates that flip `_tidb_softdelete_time` from zero to non-zero are converted into
+//     delete events. When enable-active-active is true, inserts/updates pass through so downstream
+//     LWW SQL can resolve conflicts.
+//   - Soft-delete tables: delete rows are removed. When enable-active-active is false, updates that
+//     flip `_tidb_softdelete_time` from zero to non-zero are converted into deletes.
 //
 // `handleError` is used to report unexpected schema issues and is expected to stop the
 // owning dispatcher. When it is invoked, the returned event must be treated as dropped.
@@ -163,17 +162,16 @@ func FilterDMLEvent(event *DMLEvent, enableActiveActive bool, handleError func(e
 		return event, false
 	}
 
-	fieldTypes := tableInfo.GetFieldSlice()
-	if fieldTypes == nil {
-		return event, false
-	}
-
 	var (
 		softDeleteTimeCol      *model.ColumnInfo
 		softDeleteTimeColIndex int
 		hasSoftDeleteTimeCol   bool
 	)
-	needSoftDeleteTimeCol := (enableActiveActive && isActiveActive) || (!enableActiveActive && (isActiveActive || isSoftDelete))
+	// `_tidb_softdelete_time` metadata is required for:
+	//   - active-active tables: for logging hard deletes (enable-active-active) and converting
+	//     soft-delete transitions (disabled).
+	//   - soft-delete tables: for converting soft-delete transitions when enable-active-active is disabled.
+	needSoftDeleteTimeCol := isActiveActive || (!enableActiveActive && isSoftDelete)
 	if needSoftDeleteTimeCol {
 		colInfo, ok := tableInfo.GetColumnInfoByName(SoftDeleteTimeColumn)
 		if !ok {
@@ -200,6 +198,19 @@ func FilterDMLEvent(event *DMLEvent, enableActiveActive bool, handleError func(e
 		softDeleteTimeCol = colInfo
 		softDeleteTimeColIndex = offset
 		hasSoftDeleteTimeCol = true
+	}
+
+	// When enable-active-active is true, the only transformation is dropping delete rows.
+	// Fast path: after validating schema requirements, avoid iterating/copying rows when
+	// the event contains no delete rows.
+	if enableActiveActive && !hasRowType(event.RowTypes, common.RowTypeDelete) {
+		event.Rewind()
+		return event, false
+	}
+
+	fieldTypes := tableInfo.GetFieldSlice()
+	if fieldTypes == nil {
+		return event, false
 	}
 
 	newChunk := chunk.NewChunkWithCapacity(fieldTypes, event.Rows.NumRows())
@@ -328,4 +339,13 @@ func cloneRowKey(rowKey []byte) []byte {
 	cp := make([]byte, len(rowKey))
 	copy(cp, rowKey)
 	return cp
+}
+
+func hasRowType(rowTypes []common.RowType, target common.RowType) bool {
+	for _, rowType := range rowTypes {
+		if rowType == target {
+			return true
+		}
+	}
+	return false
 }

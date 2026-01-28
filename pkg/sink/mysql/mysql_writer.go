@@ -111,6 +111,7 @@ func NewWriter(
 		stmtCache:                      cfg.stmtCache,
 		statistics:                     statistics,
 		maxDDLTsBatch:                  cfg.MaxTxnRow,
+		dmlSession:                     *NewDMLSession(dmlConnIdleTimeout),
 		isInErrorCausedSafeMode:        false,
 		errorCausedSafeModeDuration:    defaultErrorCausedSafeModeDuration,
 		activeActiveSyncStatsCollector: activeActiveSyncStatsCollector,
@@ -123,7 +124,6 @@ func NewWriter(
 
 	// Only DML writers need a dedicated session and background maintenance loop.
 	if id >= 0 && id < cfg.WorkerCount {
-		res.dmlSession.idleTimeout = dmlConnIdleTimeout
 		go res.runDMLConnLoop()
 	}
 
