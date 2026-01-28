@@ -363,12 +363,12 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 		return 0
 	}
 	state.updateResolvedTs(resolvedTs)
+	span.rangeLock.UpdateLockedRangeStateHeap(state.region.lockedRangeState)
 
 	now := time.Now()
-	lastAdvance := span.lastAdvanceTime.Load().(time.Time)
-	if time.Since(lastAdvance) > time.Duration(span.advanceInterval)*time.Millisecond {
+	lastAdvance, _ := span.lastAdvanceTime.Load().(time.Time)
+	if now.Sub(lastAdvance) >= time.Duration(span.advanceInterval)*time.Millisecond {
 		span.lastAdvanceTime.Store(now)
-		span.rangeLock.UpdateLockedRangeStateHeap(state.region.lockedRangeState)
 		ts := span.rangeLock.ResolvedTs()
 		if ts > 0 && span.initialized.CompareAndSwap(false, true) {
 			log.Info("subscription client is initialized",

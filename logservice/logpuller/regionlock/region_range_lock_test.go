@@ -241,15 +241,18 @@ func TestCalculateMinResolvedTs(t *testing.T) {
 
 	res := l.LockRange(context.Background(), []byte("m"), []byte("x"), 1, 1)
 	res.LockedRangeState.ResolvedTs.Store(101)
+	l.UpdateLockedRangeStateHeap(res.LockedRangeState)
 	require.Equal(t, LockRangeStatusSuccess, res.Status)
 	require.Equal(t, uint64(100), l.ResolvedTs())
 
 	res = l.LockRange(context.Background(), []byte("a"), []byte("m"), 2, 1)
 	require.Equal(t, LockRangeStatusSuccess, res.Status)
 	res.LockedRangeState.ResolvedTs.Store(102)
+	l.UpdateLockedRangeStateHeap(res.LockedRangeState)
 	res = l.LockRange(context.Background(), []byte("x"), []byte("z"), 3, 1)
 	require.Equal(t, LockRangeStatusSuccess, res.Status)
 	res.LockedRangeState.ResolvedTs.Store(103)
+	l.UpdateLockedRangeStateHeap(res.LockedRangeState)
 	require.Equal(t, uint64(101), l.ResolvedTs())
 }
 
