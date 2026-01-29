@@ -36,7 +36,7 @@ type globalInflightBudget struct {
 
 	globalBlockedDuration prometheus.Observer
 	globalBlockedCount    prometheus.Gauge
-	globalBytes           prometheus.Gauge
+	globalInflightBytes   prometheus.Gauge
 }
 
 type blockedEntry struct {
@@ -79,11 +79,11 @@ func newGlobalInflightBudget(
 		changefeedID:    changefeedID,
 		sinkType:        sinkType,
 
-		globalBlockedDuration: metrics.InflightBudgetGlobalBlockedDurationHist.
+		globalBlockedDuration: metrics.GlobalInflightBlockedDurationHist.
 			WithLabelValues(namespace, name, t),
-		globalBlockedCount: metrics.InflightBudgetGlobalBlockedDispatcherCountGauge.
+		globalBlockedCount: metrics.GlobalInflightBlockedCountGauge.
 			WithLabelValues(namespace, name, t),
-		globalBytes: metrics.InflightBudgetGlobalUnflushedBytesGauge.
+		globalInflightBytes: metrics.GlobalInflightBytesGauge.
 			WithLabelValues(namespace, name, t),
 	}
 	b.high.Store(highBytes)
@@ -96,7 +96,7 @@ func (b *globalInflightBudget) acquire(bytes int64) {
 		return
 	}
 	b.inflight.Add(bytes)
-	b.globalBytes.Add(float64(bytes))
+	b.globalInflightBytes.Add(float64(bytes))
 }
 
 func (b *globalInflightBudget) TryBlock(dispatcherID common.DispatcherID, wake func()) bool {
@@ -133,7 +133,7 @@ func (b *globalInflightBudget) release(bytes int64) {
 		return
 	}
 	inFlightBytes := b.inflight.Add(-bytes)
-	b.globalBytes.Sub(float64(bytes))
+	b.globalInflightBytes.Sub(float64(bytes))
 	if inFlightBytes < 0 {
 		log.Warn("global inflight bytes underflow",
 			zap.Stringer("changefeedID", b.changefeedID),

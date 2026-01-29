@@ -216,9 +216,10 @@ type BasicDispatcher struct {
 	// CommitTs less than the DDL's CommitTs are flushed.
 	//
 	// This is required when in-flight budget is enabled:
-	// - For cloudstorage/file sinks: avoid "newer schema visible first" causing earlier DML stale-drop.
+	// - For cloudstorage sinks: avoid "newer schema visible first" causing earlier DML stale-drop.
 	// - For redo sinks: enforce per-dispatcher DDL-after-DML durable order, since DML/DDL are written by
 	//   different writers and may otherwise be persisted out of order.
+	// it's set to nil after the DDL event is flushed to the downstream system.
 	deferredDDLEvent atomic.Pointer[commonEvent.DDLEvent]
 	// deferredDDLEventScheduled indicates the deferred DDL has been submitted to the block event executor.
 	// We intentionally keep deferredDDLEvent non-nil until the DDL is actually enqueued into tableProgress,
@@ -401,7 +402,6 @@ func (d *BasicDispatcher) updateDispatcherStatusToWorking() {
 	log.Info("update dispatcher status to working",
 		zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
 		zap.Stringer("dispatcher", d.id),
-		zap.String("table", common.FormatTableSpan(d.tableSpan)),
 		zap.Uint64("checkpointTs", d.GetCheckpointTs()),
 		zap.Uint64("resolvedTs", d.GetResolvedTs()),
 	)
@@ -462,11 +462,9 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	var (
 		block            bool
 		latestResolvedTs uint64
-
-		dmlEvents = make([]*commonEvent.DMLEvent, 0, len(dispatcherEvents))
+		dmlWakeOnce      *sync.Once
+		dmlEvents        = make([]*commonEvent.DMLEvent, 0, len(dispatcherEvents))
 	)
-
-	var dmlWakeOnce *sync.Once
 	if !d.inflightBudget.isEnabled() {
 		dmlWakeOnce = &sync.Once{}
 	}
@@ -490,8 +488,8 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 		if event.GetCommitTs() < d.GetResolvedTs() {
 			log.Warn("Received a stale event, should ignore it",
 				zap.Stringer("dispatcher", d.id),
-				zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
 				zap.Uint64("eventCommitTs", event.GetCommitTs()),
+				zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
 				zap.Uint64("seq", event.GetSeq()),
 				zap.Int("eventType", event.GetType()))
 			continue
@@ -1110,7 +1108,6 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 			zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
 			zap.Stringer("dispatcher", d.id),
 			zap.Int64("mode", d.mode),
-			zap.String("table", common.FormatTableSpan(d.tableSpan)),
 			zap.Uint64("checkpointTs", d.GetCheckpointTs()),
 			zap.Uint64("resolvedTs", d.GetResolvedTs()),
 		)
@@ -1121,8 +1118,8 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 		zap.Stringer("dispatcher", d.id),
 		zap.Int64("mode", d.mode),
 		zap.Bool("sinkIsNormal", d.sink.IsNormal()),
+		zap.Bool("duringHandleEvents", d.duringHandleEvents.Load()),
 		zap.Bool("hasDeferredDDLEvent", d.deferredDDLEvent.Load() != nil),
-		zap.Bool("tableProgressEmpty", d.tableProgress.Empty()),
 		zap.Int("tableProgressLen", d.tableProgress.Len()),
 		zap.Uint64("tableProgressMaxCommitTs", d.tableProgress.MaxCommitTs())) // check whether continue receive new events.
 	return w, false

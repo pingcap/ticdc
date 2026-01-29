@@ -104,12 +104,12 @@ var (
 		Help:      "The number of events received by the dispatcher",
 	}, []string{"type", "event_type"})
 
-	InflightBudgetBlockedDispatcherCountGauge = prometheus.NewGaugeVec(
+	InflightBudgetBlockedCountGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dispatcher",
-			Name:      "inflight_budget_blocked_dispatcher_count",
-			Help:      "The number of dispatchers blocked by inflight budget",
+			Name:      "inflight_budget_blocked_count",
+			Help:      "The number blocked by inflight budget",
 		}, []string{getKeyspaceLabel(), "changefeed", "type"})
 
 	InflightBudgetBlockedDurationHist = prometheus.NewHistogramVec(
@@ -117,11 +117,11 @@ var (
 			Namespace: "ticdc",
 			Subsystem: "dispatcher",
 			Name:      "inflight_budget_blocked_duration",
-			Help:      "Bucketed histogram of how long a dispatcher stays blocked by inflight budget (s)",
-			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 20), // 10ms~2912s
+			Help:      "Bucketed histogram of how long a blocked stays by inflight budget (s)",
+			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 12), // 10ms ~ 20.48s
 		}, []string{getKeyspaceLabel(), "changefeed", "type"})
 
-	InflightBudgetUnflushedBytesGauage = prometheus.NewGaugeVec(
+	InflightBudgetBytesGuage = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dispatcher",
@@ -129,28 +129,28 @@ var (
 			Help:      "Bucketed histogram of how much data inflight",
 		}, []string{getKeyspaceLabel(), "changefeed", "type"})
 
-	InflightBudgetGlobalBlockedDispatcherCountGauge = prometheus.NewGaugeVec(
+	GlobalInflightBlockedCountGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dispatcher",
-			Name:      "inflight_budget_global_blocked_dispatcher_count",
-			Help:      "The number of dispatchers blocked by changefeed global inflight budget",
+			Name:      "global_inflight_budget_blocked_count",
+			Help:      "The number blocked by global inflight budget",
 		}, []string{getKeyspaceLabel(), "changefeed", "type"})
 
-	InflightBudgetGlobalBlockedDurationHist = prometheus.NewHistogramVec(
+	GlobalInflightBlockedDurationHist = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "dispatcher",
-			Name:      "inflight_budget_global_blocked_duration",
-			Help:      "Bucketed histogram of how long a dispatcher stays blocked by changefeed global inflight budget (s)",
-			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 20), // 10ms~2912s
+			Name:      "global_inflight_budget_blocked_duration",
+			Help:      "Bucketed histogram of how long a blocked stays by changefeed global inflight budget (s)",
+			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 16), // 10ms ~ 327.68s (~5m28s)
 		}, []string{getKeyspaceLabel(), "changefeed", "type"})
 
-	InflightBudgetGlobalUnflushedBytesGauge = prometheus.NewGaugeVec(
+	GlobalInflightBytesGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "dispatcher",
-			Name:      "inflight_budget_global_bytes",
+			Name:      "global_inflight_budget_bytes",
 			Help:      "The in-flight bytes tracked by changefeed global inflight budget",
 		}, []string{getKeyspaceLabel(), "changefeed", "type"})
 
@@ -205,12 +205,12 @@ func initDispatcherMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(DispatcherManagerBlockStatusesChanLenGauge)
 	registry.MustRegister(HandleDispatcherRequsetCounter)
 	registry.MustRegister(DispatcherReceivedEventCount)
-	registry.MustRegister(InflightBudgetBlockedDispatcherCountGauge)
+	registry.MustRegister(InflightBudgetBlockedCountGauge)
 	registry.MustRegister(InflightBudgetBlockedDurationHist)
-	registry.MustRegister(InflightBudgetUnflushedBytesGauage)
-	registry.MustRegister(InflightBudgetGlobalBlockedDispatcherCountGauge)
-	registry.MustRegister(InflightBudgetGlobalBlockedDurationHist)
-	registry.MustRegister(InflightBudgetGlobalUnflushedBytesGauge)
+	registry.MustRegister(InflightBudgetBytesGuage)
+	registry.MustRegister(GlobalInflightBlockedCountGauge)
+	registry.MustRegister(GlobalInflightBlockedDurationHist)
+	registry.MustRegister(GlobalInflightBytesGauge)
 	registry.MustRegister(EventCollectorRegisteredDispatcherCount)
 	registry.MustRegister(EventCollectorReceivedEventLagDuration)
 	registry.MustRegister(EventCollectorHandleEventDuration)

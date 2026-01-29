@@ -91,9 +91,9 @@ func newInflightBudget(
 
 		inflightBudgetBlockDuration: metrics.InflightBudgetBlockedDurationHist.
 			WithLabelValues(namespace, name, t),
-		inflightBudgetBlockedCount: metrics.InflightBudgetBlockedDispatcherCountGauge.
+		inflightBudgetBlockedCount: metrics.InflightBudgetBlockedCountGauge.
 			WithLabelValues(namespace, name, t),
-		inflightBudgetBytes: metrics.InflightBudgetUnflushedBytesGauage.
+		inflightBudgetBytes: metrics.InflightBudgetBytesGuage.
 			WithLabelValues(namespace, name, t),
 	}
 }
