@@ -242,7 +242,11 @@ func generateDSNByConfig(
 		dsnCfg.Params["allow_auto_random_explicit_insert"] = autoRandom
 	}
 
-	txnMode, err := checkTiDBVariable(testDB, "tidb_txn_mode", cfg.TidbTxnMode)
+	tidbTxnMode := cfg.TidbTxnMode
+	if cfg.IsTiDB && cfg.EnableActiveActive && !cfg.tidbTxnModeSpecified {
+		tidbTxnMode = txnModePessimistic
+	}
+	txnMode, err := checkTiDBVariable(testDB, "tidb_txn_mode", tidbTxnMode)
 	if err != nil {
 		return "", err
 	}
@@ -348,6 +352,11 @@ func GenerateDSN(ctx context.Context, cfg *Config) (string, error) {
 		}
 		if bdrModeSupported {
 			dsn.Params["tidb_cdc_write_source"] = "1"
+		}
+		if cfg.EnableActiveActive {
+			// LWW mode relies on TiDB preserving _tidb_softdelete_time column semantics,
+			// so disable the softdelete SQL translation on each new session.
+			dsn.Params["tidb_translate_softdelete_sql"] = "\"OFF\""
 		}
 	}
 

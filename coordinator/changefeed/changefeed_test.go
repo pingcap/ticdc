@@ -102,6 +102,36 @@ func TestChangefeed_IsMQSink(t *testing.T) {
 	require.True(t, cf.NeedCheckpointTsMessage())
 }
 
+func TestChangefeed_NeedCheckpointMysqlActiveActive(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cfg := config.GetDefaultReplicaConfig()
+	enable := true
+	cfg.EnableActiveActive = &enable
+	info := &config.ChangeFeedInfo{
+		SinkURI: "mysql://127.0.0.1:4000/",
+		State:   config.StateNormal,
+		Config:  cfg,
+	}
+	cf := NewChangefeed(cfID, info, 100, true)
+
+	require.True(t, cf.NeedCheckpointTsMessage())
+}
+
+func TestChangefeed_NeedCheckpointMysqlDisabled(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cfg := config.GetDefaultReplicaConfig()
+	disable := false
+	cfg.EnableActiveActive = &disable
+	info := &config.ChangeFeedInfo{
+		SinkURI: "mysql://127.0.0.1:4000/",
+		State:   config.StateNormal,
+		Config:  cfg,
+	}
+	cf := NewChangefeed(cfID, info, 100, true)
+
+	require.False(t, cf.NeedCheckpointTsMessage())
+}
+
 func TestChangefeed_GetSetLastSavedCheckPointTs(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{
