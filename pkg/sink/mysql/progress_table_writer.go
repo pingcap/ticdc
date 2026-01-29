@@ -17,6 +17,7 @@ import (
 	"context"
 	"database/sql"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pingcap/log"
@@ -50,6 +51,9 @@ type ProgressTableWriter struct {
 	lastProgressUpdate time.Time
 	lastDDLCommitTs    atomic.Uint64
 
+	// initMu serializes initProgressTable and protects progressTableInit.
+	// It allows retries when initialization fails.
+	initMu            sync.Mutex
 	progressTableInit bool
 
 	maxTableNameCount int
@@ -146,6 +150,9 @@ func (w *ProgressTableWriter) flushBatch(
 // initProgressTable lazily creates the system database and progress table.
 // It is safe to call multiple times and caches initialization after success.
 func (w *ProgressTableWriter) initProgressTable(ctx context.Context) error {
+	w.initMu.Lock()
+	defer w.initMu.Unlock()
+
 	if w.progressTableInit {
 		return nil
 	}
