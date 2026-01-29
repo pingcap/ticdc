@@ -77,7 +77,8 @@ type DDLEventInRedoLog struct {
 	StartTs           uint64            `msg:"start-ts"`
 	CommitTs          uint64            `msg:"commit-ts"`
 	Query             string            `msg:"query"`
-	BlockTables       *InfluencedTables `msg:"block-tables"`
+	BlockedTables     *InfluencedTables `msg:"blocked-tables"`
+	BlockedTableNames []SchemaTableName `msg:"blocked-table-names"`
 	NeedDroppedTables *InfluencedTables `msg:"need-dropped-tables"`
 	NeedAddedTables   []Table           `msg:"need_added_tables"`
 }
@@ -208,7 +209,8 @@ func (d *DDLEvent) ToRedoLog() *RedoLog {
 				StartTs:           d.GetStartTs(),
 				CommitTs:          d.GetCommitTs(),
 				Query:             d.Query,
-				BlockTables:       d.BlockedTables,
+				BlockedTables:     d.BlockedTables,
+				BlockedTableNames: d.BlockedTableNames,
 				NeedDroppedTables: d.NeedDroppedTables,
 				NeedAddedTables:   d.NeedAddedTables,
 			},
@@ -357,6 +359,12 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 }
 
 func (r *RedoDDLEvent) ToDDLEvent() *DDLEvent {
+	blockedTables := r.DDL.BlockedTables
+	blockedTableNames := r.DDL.BlockedTableNames
+	if blockedTables == nil {
+		blockedTables = &InfluencedTables{InfluenceType: InfluenceTypeNormal}
+		blockedTableNames = []SchemaTableName{{SchemaName: r.TableName.Schema, TableName: r.TableName.Table}}
+	}
 	return &DDLEvent{
 		TableInfo: &commonType.TableInfo{
 			TableName: r.TableName,
@@ -367,13 +375,15 @@ func (r *RedoDDLEvent) ToDDLEvent() *DDLEvent {
 		TableName:         r.TableName.Table,
 		FinishedTs:        r.DDL.CommitTs,
 		StartTs:           r.DDL.StartTs,
-		BlockedTables:     r.DDL.BlockTables,
+		BlockedTables:     blockedTables,
+		BlockedTableNames: blockedTableNames,
 		NeedDroppedTables: r.DDL.NeedDroppedTables,
+		NeedAddedTables:   r.DDL.NeedAddedTables,
 	}
 }
 
 func (r *RedoDDLEvent) SetTableSchemaStore(tableSchemaStore *TableSchemaStore) {
-	if r.DDL.BlockTables != nil && r.DDL.BlockTables.InfluenceType != InfluenceTypeNormal {
+	if r.DDL.BlockedTables != nil && r.DDL.BlockedTables.InfluenceType != InfluenceTypeNormal {
 		r.TableSchemaStore = tableSchemaStore
 	}
 }
