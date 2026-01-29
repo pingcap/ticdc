@@ -51,7 +51,7 @@ func (c *AES256CTRCipher) Encrypt(data, key, iv []byte) ([]byte, error) {
 	if len(key) != 32 {
 		return nil, cerrors.ErrEncryptionFailed.GenWithStackByArgs("key must be 32 bytes for AES-256")
 	}
-	if len(iv) != aes.BlockSize {
+	if len(iv) != c.IVSize() {
 		return nil, cerrors.ErrEncryptionFailed.GenWithStackByArgs("IV must be 16 bytes")
 	}
 
@@ -72,7 +72,7 @@ func (c *AES256CTRCipher) Decrypt(data, key, iv []byte) ([]byte, error) {
 	if len(key) != 32 {
 		return nil, cerrors.ErrDecryptionFailed.GenWithStackByArgs("key must be 32 bytes for AES-256")
 	}
-	if len(iv) != aes.BlockSize {
+	if len(iv) != c.IVSize() {
 		return nil, cerrors.ErrDecryptionFailed.GenWithStackByArgs("IV must be 16 bytes")
 	}
 
