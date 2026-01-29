@@ -24,6 +24,8 @@ import (
 
 type mockMetaManager struct {
 	currentKey    []byte
+	currentKeyID  string
+	version       byte
 	currentKeyErr error
 }
 
@@ -31,20 +33,12 @@ func (m *mockMetaManager) IsEncryptionEnabled(ctx context.Context, keyspaceID ui
 	return true
 }
 
-func (m *mockMetaManager) GetCurrentDataKey(ctx context.Context, keyspaceID uint32) ([]byte, error) {
-	return m.currentKey, m.currentKeyErr
+func (m *mockMetaManager) GetCurrentDataKey(ctx context.Context, keyspaceID uint32) ([]byte, string, byte, error) {
+	return m.currentKey, m.currentKeyID, m.version, m.currentKeyErr
 }
 
 func (m *mockMetaManager) GetDataKey(ctx context.Context, keyspaceID uint32, dataKeyID string) ([]byte, error) {
 	return nil, nil
-}
-
-func (m *mockMetaManager) GetCurrentDataKeyID(ctx context.Context, keyspaceID uint32) (string, error) {
-	return "k01", nil
-}
-
-func (m *mockMetaManager) GetEncryptionVersion(ctx context.Context, keyspaceID uint32) (byte, error) {
-	return 0x01, nil
 }
 
 func (m *mockMetaManager) Start(ctx context.Context) error { return nil }

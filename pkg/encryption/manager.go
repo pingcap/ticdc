@@ -31,17 +31,15 @@ type EncryptionMetaManager interface {
 	// IsEncryptionEnabled checks if encryption is enabled for a keyspace
 	IsEncryptionEnabled(ctx context.Context, keyspaceID uint32) bool
 
-	// GetCurrentDataKey gets the current data key for a keyspace
-	GetCurrentDataKey(ctx context.Context, keyspaceID uint32) ([]byte, error)
+	// GetCurrentDataKey gets the current data key for a keyspace.
+	// It returns the plaintext data key, the 3-byte data key ID used in the encryption header,
+	// and the encryption format version (derived from current.data_key_id & 0xFF).
+	//
+	// Returning key and key ID together avoids mismatches if TiKV rotates keys between calls.
+	GetCurrentDataKey(ctx context.Context, keyspaceID uint32) (dataKey []byte, dataKeyID string, version byte, err error)
 
 	// GetDataKey gets a data key by ID.
 	GetDataKey(ctx context.Context, keyspaceID uint32, dataKeyID string) ([]byte, error)
-
-	// GetCurrentDataKeyID gets the current data key ID for a keyspace
-	GetCurrentDataKeyID(ctx context.Context, keyspaceID uint32) (string, error)
-
-	// GetEncryptionVersion gets the encryption format version for a keyspace
-	GetEncryptionVersion(ctx context.Context, keyspaceID uint32) (byte, error)
 
 	// Start starts the background refresh goroutine
 	Start(ctx context.Context) error
@@ -100,72 +98,65 @@ func (m *encryptionMetaManager) IsEncryptionEnabled(ctx context.Context, keyspac
 }
 
 // GetCurrentDataKey gets the current data key for a keyspace
-func (m *encryptionMetaManager) GetCurrentDataKey(ctx context.Context, keyspaceID uint32) ([]byte, error) {
+func (m *encryptionMetaManager) GetCurrentDataKey(ctx context.Context, keyspaceID uint32) ([]byte, string, byte, error) {
 	meta, err := m.getMeta(ctx, keyspaceID)
 	if err != nil {
-		return nil, err
+		return nil, "", 0, err
 	}
 
 	if meta == nil {
-		return nil, nil
+		return nil, "", 0, nil
 	}
 
 	if meta.Current == nil || meta.Current.DataKeyId == 0 {
-		return nil, cerrors.ErrDataKeyNotFound.GenWithStackByArgs("current data key ID is empty")
+		return nil, "", 0, cerrors.ErrDataKeyNotFound.GenWithStackByArgs("current data key ID is empty")
 	}
 
 	currentKeyID, err := encodeDataKeyID24BE(meta.Current.DataKeyId)
 	if err != nil {
-		return nil, err
-	}
-
-	return m.GetDataKey(ctx, keyspaceID, currentKeyID)
-}
-
-// GetCurrentDataKeyID gets the current data key ID for a keyspace
-func (m *encryptionMetaManager) GetCurrentDataKeyID(ctx context.Context, keyspaceID uint32) (string, error) {
-	meta, err := m.getMeta(ctx, keyspaceID)
-	if err != nil {
-		return "", err
-	}
-
-	if meta == nil {
-		return "", cerrors.ErrDataKeyNotFound.GenWithStackByArgs("encryption not enabled")
-	}
-
-	if meta.Current == nil || meta.Current.DataKeyId == 0 {
-		return "", cerrors.ErrDataKeyNotFound.GenWithStackByArgs("current data key ID is empty")
-	}
-
-	currentKeyID, err := encodeDataKeyID24BE(meta.Current.DataKeyId)
-	if err != nil {
-		return "", err
-	}
-
-	return currentKeyID, nil
-}
-
-// GetEncryptionVersion gets the encryption format version for a keyspace
-func (m *encryptionMetaManager) GetEncryptionVersion(ctx context.Context, keyspaceID uint32) (byte, error) {
-	meta, err := m.getMeta(ctx, keyspaceID)
-	if err != nil {
-		return 0, err
-	}
-
-	if meta == nil {
-		return 0, cerrors.ErrDataKeyNotFound.GenWithStackByArgs("encryption not enabled")
-	}
-
-	if meta.Current == nil || meta.Current.DataKeyId == 0 {
-		return 0, cerrors.ErrDataKeyNotFound.GenWithStackByArgs("current data key ID is empty")
+		return nil, "", 0, err
 	}
 
 	version := byte(meta.Current.DataKeyId & 0xFF)
 	if version == VersionUnencrypted {
-		return 0, cerrors.ErrEncryptionFailed.GenWithStackByArgs("version must be non-zero")
+		return nil, "", 0, cerrors.ErrEncryptionFailed.GenWithStackByArgs("version must be non-zero")
 	}
 
-	return version, nil
+	// Check cache first.
+	m.dataKeyMu.RLock()
+	if keyspaceCache, ok := m.dataKeyCache[keyspaceID]; ok {
+		if cached, ok := keyspaceCache[currentKeyID]; ok {
+			if time.Since(cached.timestamp) < m.ttl {
+				key := make([]byte, len(cached.key))
+				copy(key, cached.key)
+				m.dataKeyMu.RUnlock()
+				return key, currentKeyID, version, nil
+			}
+		}
+	}
+	m.dataKeyMu.RUnlock()
+
+	dataKey, ok := meta.DataKeys[meta.Current.DataKeyId]
+	if !ok {
+		return nil, "", 0, cerrors.ErrDataKeyNotFound.GenWithStackByArgs("current data key not found")
+	}
+
+	plaintextKey, err := m.decryptDataKey(ctx, meta.MasterKey, dataKey.Ciphertext)
+	if err != nil {
+		return nil, "", 0, err
+	}
+
+	m.dataKeyMu.Lock()
+	if m.dataKeyCache[keyspaceID] == nil {
+		m.dataKeyCache[keyspaceID] = make(map[string]*cachedDataKey)
+	}
+	m.dataKeyCache[keyspaceID][currentKeyID] = &cachedDataKey{
+		key:       plaintextKey,
+		timestamp: time.Now(),
+	}
+	m.dataKeyMu.Unlock()
+
+	return plaintextKey, currentKeyID, version, nil
 }
 
 // GetDataKey gets a data key by ID.

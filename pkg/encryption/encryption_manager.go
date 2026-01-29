@@ -52,8 +52,8 @@ func (m *encryptionManager) EncryptData(ctx context.Context, keyspaceID uint32, 
 		allowDegrade = serverCfg.Debug.Encryption.AllowDegradeOnError
 	}
 
-	// Get current data key.
-	dataKey, err := m.metaManager.GetCurrentDataKey(ctx, keyspaceID)
+	// Get current data key, key ID and version together to avoid mismatch when keys rotate.
+	dataKey, currentDataKeyID, version, err := m.metaManager.GetCurrentDataKey(ctx, keyspaceID)
 	if err != nil {
 		if allowDegrade {
 			log.Warn("failed to get current data key, degrade to plaintext",
@@ -88,18 +88,6 @@ func (m *encryptionManager) EncryptData(ctx context.Context, keyspaceID uint32, 
 	encryptedWithIV := make([]byte, len(iv)+len(encryptedData))
 	copy(encryptedWithIV, iv)
 	copy(encryptedWithIV[len(iv):], encryptedData)
-
-	// Get current data key ID
-	currentDataKeyID, err := m.metaManager.GetCurrentDataKeyID(ctx, keyspaceID)
-	if err != nil {
-		return nil, cerrors.ErrEncryptionFailed.Wrap(err)
-	}
-
-	// Get encryption version from metadata
-	version, err := m.metaManager.GetEncryptionVersion(ctx, keyspaceID)
-	if err != nil {
-		return nil, cerrors.ErrEncryptionFailed.Wrap(err)
-	}
 
 	// Encode with encryption header
 	result, err := EncodeEncryptedData(encryptedWithIV, version, currentDataKeyID)
