@@ -20,6 +20,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
@@ -102,7 +103,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo) (o
 	case mysql.TypeBit:
 		uintValue, err := d.GetMysqlBit().ToInt(types.DefaultStmtNoWarningContext)
 		if err != nil {
-			log.Panic("failed to convert bit to int", zap.Any("data", d), zap.Error(err))
+			log.Panic("failed to convert bit to int", zap.String("data", util.RedactAny(d)), zap.Error(err))
 		}
 		value = strconv.FormatUint(uintValue, 10)
 	case mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob,
@@ -111,7 +112,7 @@ func formatColumnValue(row *chunk.Row, idx int, columnInfo *model.ColumnInfo) (o
 		if isBinary {
 			decoded, err := bytesDecoder.Bytes(bytes)
 			if err != nil {
-				log.Panic("failed to decode bytes", zap.Any("bytes", bytes), zap.Error(err))
+				log.Panic("failed to decode bytes", zap.String("bytes", util.RedactAny(bytes)), zap.Error(err))
 			}
 			value = string(decoded)
 		} else {
