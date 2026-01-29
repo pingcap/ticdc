@@ -221,10 +221,10 @@ type BasicDispatcher struct {
 	//   different writers and may otherwise be persisted out of order.
 	// it's set to nil after the DDL event is flushed to the downstream system.
 	deferredDDLEvent atomic.Pointer[commonEvent.DDLEvent]
-	// deferredDDLEventScheduled indicates the deferred DDL has been submitted to the block event executor.
+	// deferredSubmitted indicates the deferred DDL has been submitted to the block event executor.
 	// We intentionally keep deferredDDLEvent non-nil until the DDL is actually enqueued into tableProgress,
 	// to avoid TryClose() races when the executor is backlogged.
-	deferredDDLEventScheduled atomic.Bool
+	deferredSubmitted atomic.Bool
 
 	seq  uint64
 	mode int64
@@ -643,12 +643,18 @@ func (d *BasicDispatcher) shouldDeferDDLEvent(ddlCommitTs uint64) bool {
 
 func (d *BasicDispatcher) deferDDLEvent(event *commonEvent.DDLEvent) {
 	if !d.deferredDDLEvent.CompareAndSwap(nil, event) {
+		deferred := d.deferredDDLEvent.Load()
+		log.Error("dispatcher defer DDL event failed since there is one not flushed yet",
+			zap.String("DDL", event.Query), zap.Uint64("commitTs", event.GetCommitTs()),
+			zap.String("deferredDDL", deferred.Query), zap.Uint64("deferredDDLCommitTs", deferred.GetCommitTs()),
+			zap.Bool("deferredScheduled", d.deferredSubmitted.Load()),
+		)
 		d.HandleError(errors.ErrDispatcherFailed.GenWithStackByArgs(
 			"defer block event failed: pending DDL block event already exists",
 		))
 		return
 	}
-	d.deferredDDLEventScheduled.Store(false)
+	d.deferredSubmitted.Store(false)
 }
 
 func (d *BasicDispatcher) tryScheduleDeferredDDLEvent() {
@@ -659,9 +665,10 @@ func (d *BasicDispatcher) tryScheduleDeferredDDLEvent() {
 	if d.inflightBudget.hasInflightBeforeCommitTs(pending.GetCommitTs()) {
 		return
 	}
-	if !d.deferredDDLEventScheduled.CompareAndSwap(false, true) {
+	if !d.deferredSubmitted.CompareAndSwap(false, true) {
 		return
 	}
+	// already in the executor, so set async = false.
 	d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
 		d.dealWithBlockEvent(pending, false)
 	})
@@ -678,7 +685,7 @@ func (d *BasicDispatcher) clearDeferredDDLEventIfEnqueued(event commonEvent.Bloc
 		return
 	}
 	if d.deferredDDLEvent.CompareAndSwap(ddl, nil) {
-		d.deferredDDLEventScheduled.Store(false)
+		d.deferredSubmitted.Store(false)
 	}
 }
 
