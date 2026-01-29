@@ -14,22 +14,20 @@
 package main
 
 import (
-	"testing"
-
 	"context"
+	"testing"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pingcap/ticdc/cmd/util"
+	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
-
-	"github.com/pingcap/ticdc/downstreamadapter/sink"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
 )
 
 // recordingSink is a minimal sink.Sink implementation that records which DDLs are executed.
