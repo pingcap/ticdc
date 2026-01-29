@@ -37,7 +37,7 @@ func TestBuildActiveActiveUpsertSQLMultiRows(t *testing.T) {
 	rows, commitTs := writer.collectActiveActiveRows(event)
 	sql, args := buildActiveActiveUpsertSQL(event.TableInfo, rows, commitTs)
 	require.Equal(t,
-		"INSERT INTO `test`.`t` (`id`,`name`,`_tidb_origin_ts`,`_tidb_softdelete_time`) VALUES (?,?,?,?),(?,?,?,?) ON DUPLICATE KEY UPDATE `id` = IF((@ticdc_lww_cond := (IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`))), VALUES(`id`), `id`),`name` = IF(@ticdc_lww_cond, VALUES(`name`), `name`),`_tidb_origin_ts` = IF(@ticdc_lww_cond, VALUES(`_tidb_origin_ts`), `_tidb_origin_ts`),`_tidb_softdelete_time` = IF(@ticdc_lww_cond, VALUES(`_tidb_softdelete_time`), `_tidb_softdelete_time`)",
+		"INSERT INTO `test`.`t` (`id`,`name`,`_tidb_origin_ts`,`_tidb_softdelete_time`) VALUES (?,?,?,?),(?,?,?,?) ON DUPLICATE KEY UPDATE `id` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`id`), `id`),`name` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`name`), `name`),`_tidb_origin_ts` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`_tidb_origin_ts`), `_tidb_origin_ts`),`_tidb_softdelete_time` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`_tidb_softdelete_time`), `_tidb_softdelete_time`)",
 		sql)
 	expectedArgs := []interface{}{
 		int64(1), "alice", event.CommitTs, nil,
@@ -68,7 +68,7 @@ func TestActiveActiveNormalSQLs(t *testing.T) {
 	sqls, args := writer.generateActiveActiveNormalSQLs([]*commonEvent.DMLEvent{event})
 	require.Len(t, sqls, 3)
 	require.Len(t, args, 3)
-	expectedSQL := "INSERT INTO `test`.`t` (`id`,`name`,`_tidb_origin_ts`,`_tidb_softdelete_time`) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE `id` = IF((@ticdc_lww_cond := (IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`))), VALUES(`id`), `id`),`name` = IF(@ticdc_lww_cond, VALUES(`name`), `name`),`_tidb_origin_ts` = IF(@ticdc_lww_cond, VALUES(`_tidb_origin_ts`), `_tidb_origin_ts`),`_tidb_softdelete_time` = IF(@ticdc_lww_cond, VALUES(`_tidb_softdelete_time`), `_tidb_softdelete_time`)"
+	expectedSQL := "INSERT INTO `test`.`t` (`id`,`name`,`_tidb_origin_ts`,`_tidb_softdelete_time`) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE `id` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`id`), `id`),`name` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`name`), `name`),`_tidb_origin_ts` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`_tidb_origin_ts`), `_tidb_origin_ts`),`_tidb_softdelete_time` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`_tidb_softdelete_time`), `_tidb_softdelete_time`)"
 	require.Equal(t, expectedSQL, sqls[0])
 	require.Equal(t, expectedSQL, sqls[1])
 	require.Equal(t, expectedSQL, sqls[2])
@@ -98,7 +98,7 @@ func TestActiveActivePerEventBatch(t *testing.T) {
 	sqls, args := writer.generateActiveActiveBatchSQLForPerEvent([]*commonEvent.DMLEvent{event})
 	require.Len(t, sqls, 1)
 	require.Len(t, args, 1)
-	expectedSQL := "INSERT INTO `test`.`t` (`id`,`name`,`_tidb_origin_ts`,`_tidb_softdelete_time`) VALUES (?,?,?,?),(?,?,?,?) ON DUPLICATE KEY UPDATE `id` = IF((@ticdc_lww_cond := (IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`))), VALUES(`id`), `id`),`name` = IF(@ticdc_lww_cond, VALUES(`name`), `name`),`_tidb_origin_ts` = IF(@ticdc_lww_cond, VALUES(`_tidb_origin_ts`), `_tidb_origin_ts`),`_tidb_softdelete_time` = IF(@ticdc_lww_cond, VALUES(`_tidb_softdelete_time`), `_tidb_softdelete_time`)"
+	expectedSQL := "INSERT INTO `test`.`t` (`id`,`name`,`_tidb_origin_ts`,`_tidb_softdelete_time`) VALUES (?,?,?,?),(?,?,?,?) ON DUPLICATE KEY UPDATE `id` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`id`), `id`),`name` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`name`), `name`),`_tidb_origin_ts` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`_tidb_origin_ts`), `_tidb_origin_ts`),`_tidb_softdelete_time` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`_tidb_softdelete_time`), `_tidb_softdelete_time`)"
 	require.Equal(t, expectedSQL, sqls[0])
 	require.Equal(t, []interface{}{
 		int64(1), "a", event.CommitTs, nil,
@@ -129,7 +129,7 @@ func TestActiveActiveCrossEventBatch(t *testing.T) {
 	sqls, args := writer.generateActiveActiveBatchSQL([]*commonEvent.DMLEvent{eventA, eventB})
 	require.Len(t, sqls, 1)
 	require.Len(t, args, 1)
-	expectedSQL := "INSERT INTO `test`.`t` (`id`,`name`,`_tidb_origin_ts`,`_tidb_softdelete_time`) VALUES (?,?,?,?),(?,?,?,?) ON DUPLICATE KEY UPDATE `id` = IF((@ticdc_lww_cond := (IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`))), VALUES(`id`), `id`),`name` = IF(@ticdc_lww_cond, VALUES(`name`), `name`),`_tidb_origin_ts` = IF(@ticdc_lww_cond, VALUES(`_tidb_origin_ts`), `_tidb_origin_ts`),`_tidb_softdelete_time` = IF(@ticdc_lww_cond, VALUES(`_tidb_softdelete_time`), `_tidb_softdelete_time`)"
+	expectedSQL := "INSERT INTO `test`.`t` (`id`,`name`,`_tidb_origin_ts`,`_tidb_softdelete_time`) VALUES (?,?,?,?),(?,?,?,?) ON DUPLICATE KEY UPDATE `id` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`id`), `id`),`name` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`name`), `name`),`_tidb_origin_ts` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`_tidb_origin_ts`), `_tidb_origin_ts`),`_tidb_softdelete_time` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`_tidb_softdelete_time`), `_tidb_softdelete_time`)"
 	require.Equal(t, expectedSQL, sqls[0])
 	require.Equal(t, []interface{}{
 		int64(1), "a", eventA.CommitTs, nil,

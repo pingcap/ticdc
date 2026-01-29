@@ -235,8 +235,10 @@ func buildUpdate(tableInfo *common.TableInfo, row commonEvent.RowChange) (string
 //     _tidb_commit_ts is omitted because downstream TiDB fills it automatically.
 //  2. The VALUES for _tidb_origin_ts reuse each row's upstream _tidb_commit_ts so the origin column
 //     describes when the row was committed at the upstream cluster.
-//  3. ON DUPLICATE KEY UPDATE reuses a single @ticdc_lww_cond flag derived from downstream
-//     IFNULL(_tidb_origin_ts, _tidb_commit_ts) <= VALUES(_tidb_origin_ts) to keep LWW semantics.
+//  3. ON DUPLICATE KEY UPDATE applies the LWW condition inline for every updated column:
+//     IFNULL(_tidb_origin_ts, _tidb_commit_ts) <= VALUES(_tidb_origin_ts).
+//     Avoid user variables (for example, @ticdc_lww_cond) because their evaluation order is not
+//     guaranteed and can cause cross-row/cross-column contamination in multi-row UPSERT statements.
 func buildActiveActiveUpsertSQL(
 	tableInfo *common.TableInfo,
 	rows []*commonEvent.RowChange,
@@ -331,16 +333,13 @@ func buildActiveActiveUpsertSQL(
 
 	builder.WriteString(" ON DUPLICATE KEY UPDATE ")
 
+	cond := fmt.Sprintf("IFNULL(%s, %s) <= VALUES(%s)", originQuoted, commitQuoted, originQuoted)
 	for i, colName := range insertColumns {
 		quoted := common.QuoteName(colName)
-		if i == 0 {
-			// The first column initializes the shared @ticdc_lww_cond condition and performs LWW update.
-			builder.WriteString(fmt.Sprintf("%s = IF((@ticdc_lww_cond := (IFNULL(%s, %s) <= VALUES(%s))), VALUES(%s), %s)",
-				quoted, originQuoted, commitQuoted, originQuoted, quoted, quoted))
-		} else {
+		if i > 0 {
 			builder.WriteString(",")
-			builder.WriteString(fmt.Sprintf("%s = IF(@ticdc_lww_cond, VALUES(%s), %s)", quoted, quoted, quoted))
 		}
+		builder.WriteString(fmt.Sprintf("%s = IF((%s), VALUES(%s), %s)", quoted, cond, quoted, quoted))
 	}
 
 	return builder.String(), args

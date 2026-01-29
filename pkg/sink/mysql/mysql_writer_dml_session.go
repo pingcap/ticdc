@@ -78,6 +78,9 @@ func (s *dmlSession) withConn(
 		return err
 	}
 	if err := fn(conn); err != nil {
+		// fn must best-effort clean up any explicit transaction state it started on conn
+		// (e.g. rollback) before returning an error. This method discards the session
+		// handle on error to avoid reusing a connection with uncertain state.
 		// Discard the session on error to avoid reusing a session with unknown txn state.
 		s.closeLocked(w)
 		return err

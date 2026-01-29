@@ -185,10 +185,18 @@ func (w *Writer) multiStmtExecute(
 
 	// we use conn.ExecContext to reduce the overhead of network latency.
 	// conn.ExecContext only use one RTT, while db.Begin + tx.ExecContext + db.Commit need three RTTs.
-	// when some error occurs, we just need to close the conn to avoid the session to be reuse unexpectedly.
-	// The txn can ensure the atomicity of the transaction.
+	// When an error happens before COMMIT, the server session can be left with an open transaction.
+	// Best-effort rollback is required to ensure the connection can be safely reused by the pool.
 	_, err := conn.ExecContext(ctx, multiStmtSQLWithTxn, multiStmtArgs...)
 	if err != nil {
+		rbCtx, rbCancel := context.WithTimeout(w.ctx, writeTimeout)
+		_, rbErr := conn.ExecContext(rbCtx, "ROLLBACK")
+		rbCancel()
+		if rbErr != nil {
+			log.Info("failed to rollback after multi statement exec error",
+				zap.Int("writerID", w.id),
+				zap.Error(rbErr))
+		}
 		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", multiStmtSQLWithTxn, util.RedactArgs(multiStmtArgs))))
 	}
 	return nil
