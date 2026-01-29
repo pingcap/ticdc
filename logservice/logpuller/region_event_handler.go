@@ -367,6 +367,8 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 
 	ts := uint64(0)
 	shouldAdvance := false
+	// advanceInterval defaults to 100ms; setting it to 0 means resolving the timestamp as soon as possible.
+	// Note: If a single span contains an extremely large number of regions (e.g., 500k), advanceInterval = 0 may cause performance issues.
 	if span.advanceInterval == 0 {
 		span.rangeLock.UpdateLockedRangeStateHeap(state.region.lockedRangeState)
 		ts = span.rangeLock.GetHeapMinTs()
