@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/apache/pulsar-client-go/pulsar"
+	pulsarClient "github.com/apache/pulsar-client-go/pulsar"
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/pulsar"
 	"go.uber.org/zap"
 )
 
@@ -62,6 +63,8 @@ type dmlProducers struct {
 	// failpointCh is used to inject failpoints to the run loop.
 	// Only used in test.
 	failpointCh chan error
+	// closeCh is send error
+	errChan chan error
 }
 
 // newDMLProducers creates a new pulsar producer.
@@ -87,7 +90,7 @@ func newDMLProducers(
 
 	producers, err := lru.NewWithEvict(producerCacheSize, func(key interface{}, value interface{}) {
 		// this is call when lru Remove producer or auto remove producer
-		pulsarProducer, ok := value.(pulsar.Producer)
+		pulsarProducer, ok := value.(pulsarClient.Producer)
 		if ok && pulsarProducer != nil {
 			pulsarProducer.Close()
 		}
@@ -104,6 +107,7 @@ func newDMLProducers(
 		producers:    producers,
 		closed:       false,
 		failpointCh:  failpointCh,
+		errChan:      make(chan error, 1),
 	}
 	log.Info("Pulsar DML producer created", zap.Stringer("changefeed", p.changefeedID),
 		zap.Duration("duration", time.Since(start)))
@@ -117,6 +121,8 @@ func (p *dmlProducers) run(ctx context.Context) error {
 			return ctx.Err()
 		case err := <-p.failpointCh:
 			return errors.Trace(err)
+		case err := <-p.errChan:
+			return errors.Trace(err)
 		}
 	}
 }
@@ -125,8 +131,6 @@ func (p *dmlProducers) run(ctx context.Context) error {
 func (p *dmlProducers) asyncSendMessage(
 	ctx context.Context, topic string, message *common.Message,
 ) error {
-	// wrapperSchemaAndTopic(message)
-
 	// We have to hold the lock to avoid writing to a closed producer.
 	// Close may be blocked for a long time.
 	p.closedMu.RLock()
@@ -144,7 +148,7 @@ func (p *dmlProducers) asyncSendMessage(
 		p.failpointCh <- errors.New("pulsar sink injected error")
 		failpoint.Return(nil)
 	})
-	data := &pulsar.ProducerMessage{
+	data := &pulsarClient.ProducerMessage{
 		Payload: message.Value,
 		Key:     message.GetPartitionKey(),
 	}
@@ -157,7 +161,7 @@ func (p *dmlProducers) asyncSendMessage(
 	// if for stress test record , add count to message callback function
 
 	producer.SendAsync(ctx, data,
-		func(id pulsar.MessageID, m *pulsar.ProducerMessage, err error) {
+		func(id pulsarClient.MessageID, m *pulsarClient.ProducerMessage, err error) {
 			// fail
 			if err != nil {
 				e := errors.WrapError(errors.ErrPulsarAsyncSendMessage, err)
@@ -167,26 +171,25 @@ func (p *dmlProducers) asyncSendMessage(
 					zap.Int("messageSize", len(m.Payload)),
 					zap.String("topic", topic),
 					zap.Error(err))
-				// mq.IncPublishedDMLFail(topic, p.id.ID().String(), message.GetSchema())
+				pulsar.IncPublishedDMLFail(topic, p.changefeedID.String())
 				// use this select to avoid send error to a closed channel
 				// the ctx will always be called before the errChan is closed
 				select {
 				case <-ctx.Done():
 					return
+				case p.errChan <- e:
 				default:
-					if e != nil {
-					}
 					log.Warn("Error channel is full in pulsar DML producer",
 						zap.Stringer("changefeed", p.changefeedID), zap.Error(e))
 				}
 			} else if message.Callback != nil {
 				// success
 				message.Callback()
-				// mq.IncPublishedDMLSuccess(topic, p.id.ID().String(), message.GetSchema())
+				pulsar.IncPublishedDMLSuccess(topic, p.changefeedID.String())
 			}
 		})
 
-	// mq.IncPublishedDMLCount(topic, p.id.ID().String(), message.GetSchema())
+	pulsar.IncPublishedDMLCount(topic, p.changefeedID.String())
 
 	return nil
 }
@@ -217,10 +220,10 @@ func (p *dmlProducers) close() { // We have to hold the lock to synchronize clos
 	}
 }
 
-func (p *dmlProducers) getProducer(topic string) (pulsar.Producer, bool) {
+func (p *dmlProducers) getProducer(topic string) (pulsarClient.Producer, bool) {
 	target, ok := p.producers.Get(topic)
 	if ok {
-		producer, ok := target.(pulsar.Producer)
+		producer, ok := target.(pulsarClient.Producer)
 		if ok {
 			return producer, true
 		}
@@ -231,7 +234,7 @@ func (p *dmlProducers) getProducer(topic string) (pulsar.Producer, bool) {
 // getProducerByTopic get producer by topicName,
 // if not exist, it will create a producer with topicName, and set in LRU cache
 // more meta info at dmlProducers's producers
-func (p *dmlProducers) getProducerByTopic(topicName string) (producer pulsar.Producer, err error) {
+func (p *dmlProducers) getProducerByTopic(topicName string) (producer pulsarClient.Producer, err error) {
 	getProducer, ok := p.getProducer(topicName)
 	if ok && getProducer != nil {
 		return getProducer, nil
@@ -247,37 +250,3 @@ func (p *dmlProducers) getProducerByTopic(topicName string) (producer pulsar.Pro
 
 	return producer, nil
 }
-
-// wrapperSchemaAndTopic wrapper schema and topic
-// func wrapperSchemaAndTopic(m *common.Message) {
-// 	if m.Schema == nil {
-// 		if m.Protocol == config.ProtocolMaxwell {
-// 			mx := &maxwellMessage{}
-// 			err := json.Unmarshal(m.Value, mx)
-// 			if err != nil {
-// 				log.Error("unmarshal maxwell message failed", zap.Error(err))
-// 				return
-// 			}
-// 			if len(mx.Database) > 0 {
-// 				m.Schema = &mx.Database
-// 			}
-// 			if len(mx.Table) > 0 {
-// 				m.Table = &mx.Table
-// 			}
-// 		}
-// 		if m.Protocol == config.ProtocolCanal { // canal protocol set multi schemas in one topic
-// 			m.Schema = str2Pointer("multi_schema")
-// 		}
-// 	}
-// }
-
-// // maxwellMessage is the message format of maxwell
-// type maxwellMessage struct {
-// 	Database string `json:"database"`
-// 	Table    string `json:"table"`
-// }
-
-// // str2Pointer returns the pointer of the string.
-// func str2Pointer(str string) *string {
-// 	return &str
-// }
