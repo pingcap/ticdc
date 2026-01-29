@@ -322,6 +322,8 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 				IndexName:      rule.IndexName,
 				Columns:        rule.Columns,
 				TopicRule:      rule.TopicRule,
+				SchemaRule:     rule.SchemaRule,
+				TableRule:      rule.TableRule,
 			})
 		}
 		var columnSelectors []*config.ColumnSelector
@@ -672,6 +674,8 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 				IndexName:     rule.IndexName,
 				Columns:       rule.Columns,
 				TopicRule:     rule.TopicRule,
+				SchemaRule:    rule.SchemaRule,
+				TableRule:     rule.TableRule,
 			})
 		}
 		var columnSelectors []*ColumnSelector
@@ -1161,6 +1165,12 @@ type DispatchRule struct {
 	IndexName     string   `json:"index,omitempty"`
 	Columns       []string `json:"columns,omitempty"`
 	TopicRule     string   `json:"topic,omitempty"`
+	// SchemaRule is an expression for the target schema name.
+	// Supports {schema} and {table} placeholders.
+	SchemaRule string `json:"schema,omitempty"`
+	// TableRule is an expression for the target table name.
+	// Supports {schema} and {table} placeholders.
+	TableRule string `json:"table,omitempty"`
 }
 
 // ColumnSelector represents a column selector for a table.
