@@ -61,6 +61,9 @@ func (m *encryptionManager) EncryptData(ctx context.Context, keyspaceID uint32, 
 				zap.Error(err))
 			return data, nil
 		}
+		log.Error("failed to get current data key",
+			zap.Uint32("keyspaceID", keyspaceID),
+			zap.Error(err))
 		return nil, cerrors.ErrEncryptionFailed.Wrap(err)
 	}
 
@@ -75,12 +78,18 @@ func (m *encryptionManager) EncryptData(ctx context.Context, keyspaceID uint32, 
 	// Generate IV
 	iv, err := GenerateIV(cipherImpl.IVSize())
 	if err != nil {
+		log.Error("failed to generate IV",
+			zap.Uint32("keyspaceID", keyspaceID),
+			zap.Error(err))
 		return nil, cerrors.ErrEncryptionFailed.Wrap(err)
 	}
 
 	// Encrypt data
 	encryptedData, err := cipherImpl.Encrypt(data, dataKey, iv)
 	if err != nil {
+		log.Error("failed to encrypt data",
+			zap.Uint32("keyspaceID", keyspaceID),
+			zap.Error(err))
 		return nil, cerrors.ErrEncryptionFailed.Wrap(err)
 	}
 
@@ -92,6 +101,11 @@ func (m *encryptionManager) EncryptData(ctx context.Context, keyspaceID uint32, 
 	// Encode with encryption header
 	result, err := EncodeEncryptedData(encryptedWithIV, version, currentDataKeyID)
 	if err != nil {
+		log.Error("failed to encode encrypted data",
+			zap.Uint32("keyspaceID", keyspaceID),
+			zap.Uint8("version", version),
+			zap.Binary("dataKeyID", []byte(currentDataKeyID)),
+			zap.Error(err))
 		return nil, cerrors.ErrEncryptionFailed.Wrap(err)
 	}
 
@@ -117,6 +131,10 @@ func (m *encryptionManager) DecryptData(ctx context.Context, keyspaceID uint32, 
 	// Decode encryption header
 	version, dataKeyID, dataWithIV, err := DecodeEncryptedData(encryptedData)
 	if err != nil {
+		log.Warn("failed to decode encrypted data header",
+			zap.Uint32("keyspaceID", keyspaceID),
+			zap.Int("encryptedSize", len(encryptedData)),
+			zap.Error(err))
 		return nil, cerrors.ErrDecryptionFailed.Wrap(err)
 	}
 
@@ -127,10 +145,19 @@ func (m *encryptionManager) DecryptData(ctx context.Context, keyspaceID uint32, 
 
 	dataKey, err := m.metaManager.GetDataKey(ctx, keyspaceID, dataKeyID)
 	if err != nil {
+		log.Warn("failed to get data key for decryption",
+			zap.Uint32("keyspaceID", keyspaceID),
+			zap.Uint8("version", version),
+			zap.Binary("dataKeyID", []byte(dataKeyID)),
+			zap.Error(err))
 		return nil, cerrors.ErrDecryptionFailed.Wrap(err)
 	}
 
 	if len(dataKey) == 0 {
+		log.Warn("data key is empty for decryption",
+			zap.Uint32("keyspaceID", keyspaceID),
+			zap.Uint8("version", version),
+			zap.Binary("dataKeyID", []byte(dataKeyID)))
 		return nil, cerrors.ErrDecryptionFailed.GenWithStackByArgs("data key is empty")
 	}
 
@@ -139,6 +166,12 @@ func (m *encryptionManager) DecryptData(ctx context.Context, keyspaceID uint32, 
 	// Extract IV from the beginning of data
 	ivSize := cipherImpl.IVSize()
 	if len(dataWithIV) < ivSize {
+		log.Warn("encrypted data too short for IV",
+			zap.Uint32("keyspaceID", keyspaceID),
+			zap.Uint8("version", version),
+			zap.Binary("dataKeyID", []byte(dataKeyID)),
+			zap.Int("dataWithIVSize", len(dataWithIV)),
+			zap.Int("expectedIVSize", ivSize))
 		return nil, cerrors.ErrDecryptionFailed.GenWithStackByArgs("data too short for IV")
 	}
 
@@ -148,6 +181,11 @@ func (m *encryptionManager) DecryptData(ctx context.Context, keyspaceID uint32, 
 	// Decrypt data
 	plaintext, err := cipherImpl.Decrypt(encryptedDataOnly, dataKey, iv)
 	if err != nil {
+		log.Warn("failed to decrypt data",
+			zap.Uint32("keyspaceID", keyspaceID),
+			zap.Uint8("version", version),
+			zap.Binary("dataKeyID", []byte(dataKeyID)),
+			zap.Error(err))
 		return nil, cerrors.ErrDecryptionFailed.Wrap(err)
 	}
 

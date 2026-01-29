@@ -23,12 +23,14 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
+	"github.com/pingcap/log"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/httputil"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/tidb/pkg/util/engine"
 	pd "github.com/tikv/pd/client"
 	"github.com/tikv/pd/client/opt"
+	"go.uber.org/zap"
 )
 
 type tikvEncryptionHTTPClient struct {
@@ -60,6 +62,9 @@ func NewTiKVEncryptionHTTPClient(pdClient pd.Client, credential *security.Creden
 func (c *tikvEncryptionHTTPClient) GetKeyspaceEncryptionMeta(ctx context.Context, keyspaceID uint32) (*EncryptionMeta, error) {
 	stores, err := c.pdClient.GetAllStores(ctx, opt.WithExcludeTombstone())
 	if err != nil {
+		log.Warn("failed to list TiKV stores",
+			zap.Uint32("keyspaceID", keyspaceID),
+			zap.Error(err))
 		return nil, errors.Trace(err)
 	}
 
@@ -74,7 +79,7 @@ func (c *tikvEncryptionHTTPClient) GetKeyspaceEncryptionMeta(ctx context.Context
 			continue
 		}
 
-		meta, err := c.getEncryptionMetaFromStore(ctx, statusAddr, keyspaceID)
+		meta, err := c.getEncryptionMetaFromStore(ctx, store.GetId(), statusAddr, keyspaceID)
 		if err == nil {
 			return meta, nil
 		}
@@ -91,7 +96,7 @@ func (c *tikvEncryptionHTTPClient) GetKeyspaceEncryptionMeta(ctx context.Context
 	return nil, lastErr
 }
 
-func (c *tikvEncryptionHTTPClient) getEncryptionMetaFromStore(ctx context.Context, statusAddr string, keyspaceID uint32) (*EncryptionMeta, error) {
+func (c *tikvEncryptionHTTPClient) getEncryptionMetaFromStore(ctx context.Context, storeID uint64, statusAddr string, keyspaceID uint32) (*EncryptionMeta, error) {
 	storeURL := c.buildStatusURL(statusAddr, keyspaceID)
 
 	reqCtx, cancel := context.WithTimeout(ctx, c.httpTimeout)
@@ -99,28 +104,71 @@ func (c *tikvEncryptionHTTPClient) getEncryptionMetaFromStore(ctx context.Contex
 
 	resp, err := c.httpClient.Get(reqCtx, storeURL)
 	if err != nil {
+		log.Warn("failed to fetch encryption meta from TiKV store",
+			zap.Uint64("storeID", storeID),
+			zap.String("statusAddr", statusAddr),
+			zap.Uint32("keyspaceID", keyspaceID),
+			zap.String("url", storeURL),
+			zap.Error(err))
 		return nil, errors.Trace(err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		log.Warn("failed to read encryption meta response body",
+			zap.Uint64("storeID", storeID),
+			zap.String("statusAddr", statusAddr),
+			zap.Uint32("keyspaceID", keyspaceID),
+			zap.String("url", storeURL),
+			zap.Error(err))
 		return nil, errors.Trace(err)
 	}
 
 	if resp.StatusCode == http.StatusNotFound {
+		log.Debug("encryption meta not found on TiKV store",
+			zap.Uint64("storeID", storeID),
+			zap.String("statusAddr", statusAddr),
+			zap.Uint32("keyspaceID", keyspaceID),
+			zap.String("url", storeURL))
 		return nil, cerrors.ErrEncryptionMetaNotFound
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		log.Warn("unexpected encryption meta response status",
+			zap.Uint64("storeID", storeID),
+			zap.String("statusAddr", statusAddr),
+			zap.Uint32("keyspaceID", keyspaceID),
+			zap.String("url", storeURL),
+			zap.Int("statusCode", resp.StatusCode),
+			zap.Int("bodySize", len(body)),
+			zap.String("body", truncateBytesForLog(body, 256)))
 		return nil, errors.Errorf("[%d] %s", resp.StatusCode, body)
 	}
 
 	var metaResp encryptionMetaResponse
 	if err := json.Unmarshal(body, &metaResp); err != nil {
+		log.Warn("failed to decode encryption meta response",
+			zap.Uint64("storeID", storeID),
+			zap.String("statusAddr", statusAddr),
+			zap.Uint32("keyspaceID", keyspaceID),
+			zap.String("url", storeURL),
+			zap.Int("bodySize", len(body)),
+			zap.String("body", truncateBytesForLog(body, 256)),
+			zap.Error(err))
 		return nil, errors.Trace(err)
 	}
 
-	return metaResp.toEncryptionMeta()
+	meta, err := metaResp.toEncryptionMeta()
+	if err != nil {
+		log.Warn("failed to convert encryption meta response",
+			zap.Uint64("storeID", storeID),
+			zap.String("statusAddr", statusAddr),
+			zap.Uint32("keyspaceID", keyspaceID),
+			zap.String("url", storeURL),
+			zap.Error(err))
+		return nil, err
+	}
+	return meta, nil
 }
 
 func (c *tikvEncryptionHTTPClient) buildStatusURL(statusAddr string, keyspaceID uint32) string {
@@ -205,4 +253,11 @@ func (r *masterKeyResponse) toMasterKey() *MasterKey {
 		Endpoint:   r.Endpoint,
 		Ciphertext: []byte(r.Ciphertext),
 	}
+}
+
+func truncateBytesForLog(b []byte, max int) string {
+	if len(b) <= max {
+		return string(b)
+	}
+	return fmt.Sprintf("%s...(truncated, %d bytes total)", string(b[:max]), len(b))
 }
