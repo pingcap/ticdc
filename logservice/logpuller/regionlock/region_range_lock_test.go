@@ -93,7 +93,7 @@ func TestRegionRangeLock(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.TODO()
-	l := NewRangeLock(1, []byte("a"), []byte("h"), math.MaxUint64)
+	l := NewRangeLock(1, []byte("a"), []byte("h"), math.MaxUint64, 0)
 	mustLockRangeSuccess(ctx, t, l, "a", "e", 1, 1, math.MaxUint64)
 	unlockRange(l, "a", "e", 1, 1, 100)
 
@@ -110,7 +110,7 @@ func TestRegionRangeLock(t *testing.T) {
 func TestRegionRangeLockStale(t *testing.T) {
 	t.Parallel()
 
-	l := NewRangeLock(1, []byte("a"), []byte("z"), math.MaxUint64)
+	l := NewRangeLock(1, []byte("a"), []byte("z"), math.MaxUint64, 0)
 	ctx := context.TODO()
 	mustLockRangeSuccess(ctx, t, l, "c", "g", 1, 10, math.MaxUint64)
 	mustLockRangeSuccess(ctx, t, l, "j", "n", 2, 8, math.MaxUint64)
@@ -133,7 +133,7 @@ func TestRegionRangeLockLockingRegionID(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.TODO()
-	l := NewRangeLock(1, []byte("a"), []byte("z"), math.MaxUint64)
+	l := NewRangeLock(1, []byte("a"), []byte("z"), math.MaxUint64, 0)
 	mustLockRangeSuccess(ctx, t, l, "c", "d", 1, 10, math.MaxUint64)
 
 	mustLockRangeStale(ctx, t, l, "e", "f", 1, 5, "e", "f")
@@ -169,7 +169,7 @@ func TestRegionRangeLockCanBeCancelled(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	l := NewRangeLock(1, []byte("a"), []byte("z"), math.MaxUint64)
+	l := NewRangeLock(1, []byte("a"), []byte("z"), math.MaxUint64, 0)
 	mustLockRangeSuccess(ctx, t, l, "g", "h", 1, 10, math.MaxUint64)
 	wait := mustLockRangeWait(ctx, t, l, "g", "h", 1, 12)
 	cancel()
@@ -209,7 +209,7 @@ func TestRegionRangeLockCollect(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	l := NewRangeLock(1, []byte("a"), []byte("z"), 100)
+	l := NewRangeLock(1, []byte("a"), []byte("z"), 100, 0)
 	attrs := l.IterAll(nil)
 	require.Equal(t, 1, len(attrs.UnLockedRanges))
 
@@ -237,26 +237,29 @@ func TestRegionRangeLockCollect(t *testing.T) {
 }
 
 func TestCalculateMinResolvedTs(t *testing.T) {
-	l := NewRangeLock(1, []byte("a"), []byte("z"), 100)
+	l := NewRangeLock(1, []byte("a"), []byte("z"), 100, 0)
 
 	res := l.LockRange(context.Background(), []byte("m"), []byte("x"), 1, 1)
 	res.LockedRangeState.ResolvedTs.Store(101)
+	l.UpdateLockedRangeStateHeap(res.LockedRangeState)
 	require.Equal(t, LockRangeStatusSuccess, res.Status)
 	require.Equal(t, uint64(100), l.ResolvedTs())
 
 	res = l.LockRange(context.Background(), []byte("a"), []byte("m"), 2, 1)
 	require.Equal(t, LockRangeStatusSuccess, res.Status)
 	res.LockedRangeState.ResolvedTs.Store(102)
+	l.UpdateLockedRangeStateHeap(res.LockedRangeState)
 	res = l.LockRange(context.Background(), []byte("x"), []byte("z"), 3, 1)
 	require.Equal(t, LockRangeStatusSuccess, res.Status)
 	res.LockedRangeState.ResolvedTs.Store(103)
+	l.UpdateLockedRangeStateHeap(res.LockedRangeState)
 	require.Equal(t, uint64(101), l.ResolvedTs())
 }
 
 func Benchmark100KRegions(b *testing.B) {
 	ctx := context.Background()
 	startKey, endKey, _ := common.GetKeyspaceTableRange(common.DefaultKeyspaceID, 1)
-	l := NewRangeLock(1, startKey, endKey, 100)
+	l := NewRangeLock(1, startKey, endKey, 100, 0)
 
 	for i := 1; i <= 100*1000; i++ {
 		var rangeStart, rangeEnd []byte
@@ -295,11 +298,11 @@ func TestRangeLockGetHeapMinTs(t *testing.T) {
 	}
 
 	// Test case 1: empty heap
-	l := NewRangeLock(1, []byte("a"), []byte("z"), 100)
+	l := NewRangeLock(1, []byte("a"), []byte("z"), 100, 0)
 	require.Equal(t, uint64(100), l.GetHeapMinTs())
 
 	// Test case 2: Lock a range and then unlock it
-	l = NewRangeLock(1, []byte("a"), []byte("z"), 50)
+	l = NewRangeLock(1, []byte("a"), []byte("z"), 50, 0)
 	res := l.LockRange(context.Background(), []byte("a"), []byte("m"), 1, 1)
 	updateLockedRangeResolvedTs(l, res.LockedRangeState, 101)
 	require.Equal(t, LockRangeStatusSuccess, res.Status)
@@ -317,7 +320,7 @@ func TestRangeLockGetHeapMinTs(t *testing.T) {
 	require.Equal(t, uint64(100), l.GetHeapMinTs())
 	require.Equal(t, l.ResolvedTs(), l.GetHeapMinTs())
 
-	l = NewRangeLock(1, []byte("a"), []byte("z"), 100)
+	l = NewRangeLock(1, []byte("a"), []byte("z"), 100, 0)
 	res = l.LockRange(context.Background(), []byte("a"), []byte("m"), 1, 1)
 	updateLockedRangeResolvedTs(l, res.LockedRangeState, 101)
 	require.Equal(t, LockRangeStatusSuccess, res.Status)
@@ -331,4 +334,128 @@ func TestRangeLockGetHeapMinTs(t *testing.T) {
 	updateLockedRangeResolvedTs(l, res.LockedRangeState, 50)
 	require.Equal(t, uint64(50), l.GetHeapMinTs())
 	require.Equal(t, l.ResolvedTs(), l.GetHeapMinTs())
+}
+
+// setupRangeLockForBenchmark creates a RangeLock with the specified number of locked regions
+// and unlocked ranges for benchmarking purposes.
+// lockedCount: number of LockedRangeState entries (locked regions)
+// unlockedCount: number of unlocked range entries
+func setupRangeLockForBenchmark(lockedCount, unlockedCount int) *RangeLock {
+	ctx := context.Background()
+	startKey, endKey, _ := common.GetKeyspaceTableRange(common.DefaultKeyspaceID, 1)
+	l := NewRangeLock(1, startKey, endKey, 100, 0)
+
+	// Total ranges = lockedCount + unlockedCount
+	// We interleave locked and unlocked ranges to create the desired structure
+	totalRanges := lockedCount + unlockedCount
+
+	// Generate all range boundaries
+	// Each range is [startKey + i*8, startKey + (i+1)*8)
+	makeKey := func(index int) []byte {
+		key := make([]byte, len(startKey)+8)
+		copy(key, startKey)
+		binary.BigEndian.PutUint64(key[len(startKey):], uint64(index))
+		return key
+	}
+
+	// First, lock all ranges
+	lockedRegions := make([]struct {
+		start, end []byte
+		regionID   uint64
+	}, 0, lockedCount)
+
+	regionID := uint64(1)
+	rangeIndex := 0
+
+	// Calculate the step to evenly distribute unlocked ranges
+	// We want to create `unlockedCount` gaps among `totalRanges` positions
+	var unlockedPositions map[int]bool
+	if unlockedCount > 0 {
+		unlockedPositions = make(map[int]bool)
+		step := float64(totalRanges) / float64(unlockedCount)
+		for i := 0; i < unlockedCount; i++ {
+			pos := int(float64(i) * step)
+			unlockedPositions[pos] = true
+		}
+	}
+
+	for rangeIndex < totalRanges {
+		rangeStart := makeKey(rangeIndex)
+		var rangeEnd []byte
+		if rangeIndex+1 < totalRanges {
+			rangeEnd = makeKey(rangeIndex + 1)
+		} else {
+			rangeEnd = make([]byte, len(endKey))
+			copy(rangeEnd, endKey)
+		}
+
+		if unlockedPositions != nil && unlockedPositions[rangeIndex] {
+			// Skip this range to leave it unlocked
+			rangeIndex++
+			continue
+		}
+
+		// Lock this range
+		lockRes := l.LockRange(ctx, rangeStart, rangeEnd, regionID, 1)
+		if lockRes.Status != LockRangeStatusSuccess {
+			panic(fmt.Sprintf("bad lock range, rangeIndex: %d, regionID: %d", rangeIndex, regionID))
+		}
+		lockRes.LockedRangeState.ResolvedTs.Store(uint64(100 + regionID))
+		l.UpdateLockedRangeStateHeap(lockRes.LockedRangeState)
+
+		lockedRegions = append(lockedRegions, struct {
+			start, end []byte
+			regionID   uint64
+		}{rangeStart, rangeEnd, regionID})
+
+		regionID++
+		rangeIndex++
+
+		// Stop if we have enough locked regions
+		if len(lockedRegions) >= lockedCount {
+			break
+		}
+	}
+
+	return l
+}
+
+func BenchmarkGetHeapMinTs(b *testing.B) {
+	const lockedCount = 100000 // 10万个 LockedRangeState
+	unlockedCounts := []int{0, 100, 1000, 5000}
+
+	for _, unlockedCount := range unlockedCounts {
+		b.Run(fmt.Sprintf("Locked_%d_Unlocked_%d", lockedCount, unlockedCount), func(b *testing.B) {
+			l := setupRangeLockForBenchmark(lockedCount, unlockedCount)
+
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				l.GetHeapMinTs()
+			}
+		})
+	}
+}
+
+// BenchmarkGetHeapMinTsVsResolvedTs compares the performance of GetHeapMinTs and ResolvedTs
+func BenchmarkGetHeapMinTsVsResolvedTs(b *testing.B) {
+	const lockedCount = 100000
+	unlockedCounts := []int{0, 100, 1000, 5000}
+
+	for _, unlockedCount := range unlockedCounts {
+		l := setupRangeLockForBenchmark(lockedCount, unlockedCount)
+
+		b.Run(fmt.Sprintf("GetHeapMinTs_Locked_%d_Unlocked_%d", lockedCount, unlockedCount), func(b *testing.B) {
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				l.GetHeapMinTs()
+			}
+		})
+
+		b.Run(fmt.Sprintf("ResolvedTs_Locked_%d_Unlocked_%d", lockedCount, unlockedCount), func(b *testing.B) {
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				l.ResolvedTs()
+			}
+		})
+	}
 }

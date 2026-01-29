@@ -15,6 +15,7 @@ package regionlock
 
 import (
 	"bytes"
+	"encoding/binary"
 	"math"
 
 	"github.com/google/btree"
@@ -27,6 +28,9 @@ type rangeTsMap struct {
 	m     *btree.BTreeG[rangeTsEntry]
 	start []byte
 	end   []byte
+
+	// HACK: hackMode prevents set/unset from modifying entries
+	hackMode bool
 }
 
 // newRangeTsMap creates a RangeTsMap.
@@ -210,6 +214,48 @@ func (m *rangeTsMap) getMinTs() uint64 {
 	})
 
 	return ts
+}
+
+// countRanges returns the count of unlocked ranges (entries with isSet=true).
+func (m *rangeTsMap) countRanges() int {
+	count := 0
+	m.m.Ascend(func(i rangeTsEntry) bool {
+		if i.isSet {
+			count++
+		}
+		return true
+	})
+	return count
+}
+
+// HACK: hackSplitInto splits the range into n parts for testing.
+// Each part will have isSet=true with the given ts.
+// It also enables hackMode which prevents set/unset from modifying entries.
+func (m *rangeTsMap) hackSplitInto(n int, ts uint64) {
+	// Clear existing entries
+	m.m.Clear(false)
+
+	// Create n entries with intermediate keys
+	for i := 0; i < n; i++ {
+		var key []byte
+		if i == 0 {
+			key = m.start
+		} else {
+			// Create intermediate keys by appending index as 8 bytes
+			key = make([]byte, len(m.start)+8)
+			copy(key, m.start)
+			binary.BigEndian.PutUint64(key[len(m.start):], uint64(i))
+		}
+		m.m.ReplaceOrInsert(rangeTsEntry{startKey: key, ts: ts, isSet: true})
+	}
+
+	// Enable hack mode to prevent merging
+	m.hackMode = true
+}
+
+// HACK: isHackMode returns true if in hack mode
+func (m *rangeTsMap) isHackMode() bool {
+	return m.hackMode
 }
 
 // rangeTsEntry is the entry of rangeTsMap.
