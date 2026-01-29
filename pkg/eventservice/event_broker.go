@@ -1055,9 +1055,9 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		log.Warn("reset a non-exist dispatcher, ignore it",
 			zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
 			zap.Stringer("dispatcherID", dispatcherID),
+			zap.Uint64("startTs", dispatcherInfo.GetStartTs()),
 			zap.Int64("tableID", dispatcherInfo.GetTableSpan().GetTableID()),
-			zap.String("span", common.FormatTableSpan(dispatcherInfo.GetTableSpan())),
-			zap.Uint64("startTs", dispatcherInfo.GetStartTs()))
+			zap.String("span", common.FormatTableSpan(dispatcherInfo.GetTableSpan())))
 		return nil
 	}
 	metrics.EventServiceResetDispatcherCount.Inc()
@@ -1112,12 +1112,12 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		log.Warn("reset dispatcher failed since the dispatcher is changed concurrently",
 			zap.Stringer("changefeedID", changefeedID),
 			zap.Stringer("dispatcherID", dispatcherID),
-			zap.Int64("tableID", span.GetTableID()),
-			zap.String("span", common.FormatTableSpan(span)),
 			zap.Uint64("oldStartTs", oldStat.info.GetStartTs()),
 			zap.Uint64("newStartTs", dispatcherInfo.GetStartTs()),
 			zap.Uint64("oldEpoch", oldStat.epoch),
-			zap.Uint64("newEpoch", newStat.epoch))
+			zap.Uint64("newEpoch", newStat.epoch),
+			zap.Int64("tableID", span.GetTableID()),
+			zap.String("span", common.FormatTableSpan(span)))
 		// The dispatcher is changed concurrently, retry it.
 		oldStat = statPtr.Load()
 		// stale reset request, ignore it.
@@ -1129,12 +1129,13 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 
 	log.Info("reset dispatcher",
 		zap.Stringer("changefeedID", newStat.changefeedStat.changefeedID),
-		zap.Stringer("dispatcherID", newStat.id), zap.Int64("tableID", newStat.info.GetTableSpan().GetTableID()),
-		zap.String("span", common.FormatTableSpan(newStat.info.GetTableSpan())),
+		zap.Stringer("dispatcherID", newStat.id),
 		zap.Uint64("originStartTs", oldStat.info.GetStartTs()),
 		zap.Uint64("newStartTs", dispatcherInfo.GetStartTs()),
 		zap.Uint64("newEpoch", newStat.epoch),
-		zap.Duration("resetTime", time.Since(start)))
+		zap.Duration("resetTime", time.Since(start)),
+		zap.Int64("tableID", newStat.info.GetTableSpan().GetTableID()),
+		zap.String("span", common.FormatTableSpan(newStat.info.GetTableSpan())))
 
 	return nil
 }

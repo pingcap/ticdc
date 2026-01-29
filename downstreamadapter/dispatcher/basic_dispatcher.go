@@ -366,9 +366,15 @@ func (d *BasicDispatcher) GetLastSyncedTs() uint64 {
 }
 
 func (d *BasicDispatcher) GetCheckpointTs() uint64 {
+	resolvedTs := d.GetResolvedTs()
 	checkpointTs, isEmpty := d.tableProgress.GetCheckpointTs()
+	if checkpointTs == 0 {
+		// This means the dispatcher has never send events to the sink,
+		// so we use resolvedTs as checkpointTs
+		return resolvedTs
+	}
 	if isEmpty {
-		checkpointTs = max(checkpointTs, d.GetResolvedTs())
+		checkpointTs = max(checkpointTs, resolvedTs)
 	}
 
 	deferred := d.deferredDDLEvent.Load()
