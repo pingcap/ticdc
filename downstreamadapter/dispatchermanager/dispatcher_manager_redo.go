@@ -57,6 +57,7 @@ func initRedoComponet(
 	}
 	manager.redoQuota = totalQuota * consistentMemoryUsage.MemoryQuotaPercentage / 100
 	manager.sinkQuota = totalQuota - manager.redoQuota
+	manager.sharedInfo.InitChangefeedInflightBudget(common.RedoSinkType, manager.redoQuota)
 
 	// init table trigger redo dispatcher when tableTriggerRedoDispatcherID is not nil
 	if tableTriggerRedoDispatcherID != nil {

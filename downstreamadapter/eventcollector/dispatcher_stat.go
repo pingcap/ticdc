@@ -192,7 +192,12 @@ func (d *dispatcherStat) doReset(serverID node.ID, resetTs uint64) {
 		zap.Stringer("dispatcher", d.getDispatcherID()),
 		zap.Stringer("eventServiceID", serverID),
 		zap.Uint64("epoch", epoch),
-		zap.Uint64("resetTs", resetTs))
+		zap.Uint64("resetTs", resetTs),
+		zap.Uint64("checkpointTs", d.target.GetCheckpointTs()),
+		zap.Uint64("resolvedTs", d.target.GetResolvedTs()),
+		zap.Uint64("startTs", d.target.GetStartTs()),
+		zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()),
+		zap.Uint64("lastEventSeq", d.lastEventSeq.Load()))
 }
 
 // getResetTs is used to get the resetTs of the dispatcher.
@@ -400,13 +405,14 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 			d.reset(d.connState.getEventServiceID())
 			return false
 		}
-		if event.GetType() == commonEvent.TypeResolvedEvent {
+		switch event.GetType() {
+		case commonEvent.TypeResolvedEvent:
 			validEvents = append(validEvents, event)
-		} else if event.GetType() == commonEvent.TypeDMLEvent {
+		case commonEvent.TypeDMLEvent:
 			if d.filterAndUpdateEventByCommitTs(event) {
 				validEvents = append(validEvents, event)
 			}
-		} else if event.GetType() == commonEvent.TypeBatchDMLEvent {
+		case commonEvent.TypeBatchDMLEvent:
 			tableInfo := d.tableInfo.Load().(*common.TableInfo)
 			if tableInfo == nil {
 				log.Panic("should not happen: table info should be set before batch DML event",
@@ -431,7 +437,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 					validEvents = append(validEvents, dmlEvent)
 				}
 			}
-		} else {
+		default:
 			log.Panic("should not happen: unknown event type in batch data events",
 				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 				zap.Stringer("dispatcherID", d.getDispatcherID()),
@@ -444,53 +450,50 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 	return d.target.HandleEvents(validEvents, func() { d.wake() })
 }
 
-// handleSingleDataEvents processes single DDL, SyncPoint or BatchDML events with the following algorithm:
+// handleSingleDataEvents processes single DDL and SyncPoint event with the following algorithm:
 // 1. Validate event count (must be exactly 1)
 // 2. Check if event comes from current epoch
 // 3. Verify event sequence number
 // 4. Process event based on type:
-//   - BatchDML: Split into individual DML events
 //   - DDL: Update table info if present
 //   - SyncPoint: Forward directly
 //
 // 5. For all types: Filter by commitTs before forwarding
 func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEvent) bool {
 	if len(events) != 1 {
-		log.Panic("should not happen: only one event should be sent for DDL/SyncPoint/Handshake event")
+		log.Panic("should not happen: only one event should be sent for DDL / SyncPoint event")
 	}
-	from := events[0].From
-	if !d.isFromCurrentEpoch(events[0]) {
-		log.Info("receive DDL/SyncPoint/Handshake event from a stale epoch, ignore it",
+	event := events[0]
+	if !d.isFromCurrentEpoch(event) {
+		log.Info("receive DDL / SyncPoint event from a stale epoch, ignore it",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
-			zap.String("eventType", commonEvent.TypeToString(events[0].GetType())),
-			zap.Any("event", events[0].Event),
-			zap.Uint64("eventEpoch", events[0].GetEpoch()),
+			zap.String("eventType", commonEvent.TypeToString(event.GetType())),
+			zap.Any("event", event.Event),
+			zap.Uint64("eventEpoch", event.GetEpoch()),
 			zap.Uint64("dispatcherEpoch", d.epoch.Load()),
-			zap.Stringer("staleEventService", *from),
+			zap.Stringer("staleEventService", *event.From),
 			zap.Stringer("currentEventService", d.connState.getEventServiceID()))
 		return false
 	}
-	if !d.verifyEventSequence(events[0]) {
+	if !d.verifyEventSequence(event) {
 		d.reset(d.connState.getEventServiceID())
 		return false
 	}
-	if events[0].GetType() == commonEvent.TypeDDLEvent {
-		if !d.filterAndUpdateEventByCommitTs(events[0]) {
-			return false
-		}
-		ddl := events[0].Event.(*commonEvent.DDLEvent)
+
+	if !d.filterAndUpdateEventByCommitTs(event) {
+		return false
+	}
+
+	if event.GetType() == commonEvent.TypeDDLEvent {
+		ddl := event.Event.(*commonEvent.DDLEvent)
 		d.tableInfoVersion.Store(ddl.FinishedTs)
 		if ddl.TableInfo != nil {
 			d.tableInfo.Store(ddl.TableInfo)
 		}
-		return d.target.HandleEvents(events, func() { d.wake() })
-	} else {
-		if !d.filterAndUpdateEventByCommitTs(events[0]) {
-			return false
-		}
-		return d.target.HandleEvents(events, func() { d.wake() })
 	}
+
+	return d.target.HandleEvents(events, func() { d.wake() })
 }
 
 func (d *dispatcherStat) handleDataEvents(events ...dispatcher.DispatcherEvent) bool {

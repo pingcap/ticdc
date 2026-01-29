@@ -104,6 +104,56 @@ var (
 		Help:      "The number of events received by the dispatcher",
 	}, []string{"type", "event_type"})
 
+	InflightBudgetBlockedDispatcherCountGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "dispatcher",
+			Name:      "inflight_budget_blocked_dispatcher_count",
+			Help:      "The number of dispatchers blocked by inflight budget",
+		}, []string{getKeyspaceLabel(), "changefeed", "type"})
+
+	InflightBudgetBlockedDurationHist = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "dispatcher",
+			Name:      "inflight_budget_blocked_duration",
+			Help:      "Bucketed histogram of how long a dispatcher stays blocked by inflight budget (s)",
+			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 20), // 10ms~2912s
+		}, []string{getKeyspaceLabel(), "changefeed", "type"})
+
+	InflightBudgetUnflushedBytesGauage = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "dispatcher",
+			Name:      "inflight_budget_bytes",
+			Help:      "Bucketed histogram of how much data inflight",
+		}, []string{getKeyspaceLabel(), "changefeed", "type"})
+
+	InflightBudgetGlobalBlockedDispatcherCountGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "dispatcher",
+			Name:      "inflight_budget_global_blocked_dispatcher_count",
+			Help:      "The number of dispatchers blocked by changefeed global inflight budget",
+		}, []string{getKeyspaceLabel(), "changefeed", "type"})
+
+	InflightBudgetGlobalBlockedDurationHist = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "dispatcher",
+			Name:      "inflight_budget_global_blocked_duration",
+			Help:      "Bucketed histogram of how long a dispatcher stays blocked by changefeed global inflight budget (s)",
+			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 20), // 10ms~2912s
+		}, []string{getKeyspaceLabel(), "changefeed", "type"})
+
+	InflightBudgetGlobalUnflushedBytesGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "dispatcher",
+			Name:      "inflight_budget_global_bytes",
+			Help:      "The in-flight bytes tracked by changefeed global inflight budget",
+		}, []string{getKeyspaceLabel(), "changefeed", "type"})
+
 	EventCollectorRegisteredDispatcherCount = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: "ticdc",
 		Subsystem: "dispatcher",
@@ -155,6 +205,12 @@ func initDispatcherMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(DispatcherManagerBlockStatusesChanLenGauge)
 	registry.MustRegister(HandleDispatcherRequsetCounter)
 	registry.MustRegister(DispatcherReceivedEventCount)
+	registry.MustRegister(InflightBudgetBlockedDispatcherCountGauge)
+	registry.MustRegister(InflightBudgetBlockedDurationHist)
+	registry.MustRegister(InflightBudgetUnflushedBytesGauage)
+	registry.MustRegister(InflightBudgetGlobalBlockedDispatcherCountGauge)
+	registry.MustRegister(InflightBudgetGlobalBlockedDurationHist)
+	registry.MustRegister(InflightBudgetGlobalUnflushedBytesGauge)
 	registry.MustRegister(EventCollectorRegisteredDispatcherCount)
 	registry.MustRegister(EventCollectorReceivedEventLagDuration)
 	registry.MustRegister(EventCollectorHandleEventDuration)

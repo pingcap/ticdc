@@ -15,6 +15,7 @@ package dispatcher
 
 import (
 	"math"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -104,6 +105,518 @@ var count atomic.Int32
 
 func callback() {
 	count.Add(1)
+}
+
+func TestDispatcherInflightBudgetDoesNotBlockBelowHigh(t *testing.T) {
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+
+	mockSink := sink.NewMockSink(common.CloudStorageSinkType)
+	dispatcher := newDispatcherForTest(mockSink, tableSpan)
+	t.Cleanup(dispatcher.sharedInfo.Close)
+
+	nodeID := node.NewID()
+	var wakeCount atomic.Int32
+	wakeCallback := func() {
+		wakeCount.Add(1)
+	}
+
+	dml := &commonEvent.DMLEvent{
+		StartTs:         1,
+		CommitTs:        2,
+		Length:          1,
+		ApproximateSize: 10 << 20,
+	}
+
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dml)}, wakeCallback)
+	require.False(t, block)
+	require.Equal(t, int32(0), wakeCount.Load())
+
+	require.Equal(t, uint64(1), dispatcher.GetCheckpointTs())
+
+	dml.PostFlush()
+	require.Equal(t, int32(0), wakeCount.Load())
+}
+
+func TestDispatcherInflightBudgetBlocksAndWakes(t *testing.T) {
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+
+	mockSink := sink.NewMockSink(common.CloudStorageSinkType)
+	dispatcher := newDispatcherForTest(mockSink, tableSpan)
+	t.Cleanup(dispatcher.sharedInfo.Close)
+
+	nodeID := node.NewID()
+	var wakeCount atomic.Int32
+	wakeCallback := func() {
+		wakeCount.Add(1)
+	}
+
+	dml1 := &commonEvent.DMLEvent{
+		StartTs:         1,
+		CommitTs:        2,
+		Length:          1,
+		ApproximateSize: 40 << 20,
+	}
+	dml2 := &commonEvent.DMLEvent{
+		StartTs:         1,
+		CommitTs:        3,
+		Length:          1,
+		ApproximateSize: 40 << 20,
+	}
+
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dml1)}, wakeCallback)
+	require.False(t, block)
+
+	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dml2)}, wakeCallback)
+	require.True(t, block)
+	require.True(t, dispatcher.inflightBudget.isBlocked())
+	require.Equal(t, int32(0), wakeCount.Load())
+
+	require.Equal(t, uint64(1), dispatcher.GetCheckpointTs())
+
+	dml1.PostFlush()
+	require.True(t, dispatcher.inflightBudget.isBlocked())
+	require.Equal(t, int32(0), wakeCount.Load())
+	require.Equal(t, uint64(2), dispatcher.GetCheckpointTs())
+
+	dml2.PostFlush()
+	require.False(t, dispatcher.inflightBudget.isBlocked())
+	require.Equal(t, int32(1), wakeCount.Load())
+}
+
+func TestDispatcherInflightBudgetDoesNotAffectDDL(t *testing.T) {
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+
+	mockSink := sink.NewMockSink(common.CloudStorageSinkType)
+	dispatcher := newDispatcherForTest(mockSink, tableSpan)
+	t.Cleanup(dispatcher.sharedInfo.Close)
+
+	nodeID := node.NewID()
+	wakeCh := make(chan struct{}, 1)
+	wakeCallback := func() {
+		wakeCh <- struct{}{}
+	}
+
+	ddl := &commonEvent.DDLEvent{
+		FinishedTs: 2,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{0},
+		},
+	}
+
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddl)}, wakeCallback)
+	require.True(t, block)
+	require.False(t, dispatcher.inflightBudget.isBlocked())
+
+	select {
+	case <-wakeCh:
+	case <-time.After(3 * time.Second):
+		require.FailNow(t, "wake callback not called")
+	}
+}
+
+func TestRedoSinkDeferDDLUntilDMLFlushed(t *testing.T) {
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+
+	mockSink := sink.NewMockSink(common.RedoSinkType)
+	dispatcher := newDispatcherForTest(mockSink, tableSpan)
+	t.Cleanup(dispatcher.sharedInfo.Close)
+
+	nodeID := node.NewID()
+	wakeCh := make(chan struct{}, 4)
+	wakeCallback := func() {
+		wakeCh <- struct{}{}
+	}
+
+	dml := &commonEvent.DMLEvent{
+		StartTs:         1,
+		CommitTs:        2,
+		Length:          1,
+		ApproximateSize: 1,
+	}
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dml)}, wakeCallback)
+	require.False(t, block)
+
+	ddl := &commonEvent.DDLEvent{
+		StartTs:    2,
+		FinishedTs: 3,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{0},
+		},
+	}
+	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddl)}, wakeCallback)
+	require.True(t, block)
+	require.NotNil(t, dispatcher.deferredDDLEvent.Load())
+
+	select {
+	case <-wakeCh:
+		require.FailNow(t, "unexpected wake before DML flushed")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	mockSink.FlushDMLs()
+
+	select {
+	case <-wakeCh:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "wake callback not called for deferred DDL")
+	}
+	require.Eventually(t, func() bool {
+		return dispatcher.deferredDDLEvent.Load() == nil && dispatcher.tableProgress.Empty()
+	}, 5*time.Second, 10*time.Millisecond)
+	require.Equal(t, uint64(2), dispatcher.GetCheckpointTs())
+}
+
+func TestDispatcherTryCloseDoesNotSkipDeferredDDL(t *testing.T) {
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+
+	mockSink := sink.NewMockSink(common.RedoSinkType)
+	dispatcher := newDispatcherForTest(mockSink, tableSpan)
+	t.Cleanup(dispatcher.sharedInfo.Close)
+
+	// Occupy all block event executor workers to make the deferred DDL task pending (submitted but not executed yet).
+	blockCh := make(chan struct{})
+	var unblockOnce sync.Once
+	unblock := func() {
+		unblockOnce.Do(func() {
+			close(blockCh)
+		})
+	}
+	t.Cleanup(unblock)
+
+	startedCh := make(chan struct{}, blockEventWorkerCount)
+	schemaIDToDispatchers := NewSchemaIDToDispatchers()
+	for i := 0; i < blockEventWorkerCount; i++ {
+		blocker := NewBasicDispatcher(
+			common.NewDispatcherID(),
+			tableSpan,
+			common.Ts(0),
+			1,
+			schemaIDToDispatchers,
+			false,
+			false,
+			common.Ts(0),
+			common.DefaultMode,
+			mockSink,
+			dispatcher.sharedInfo,
+		)
+		dispatcher.sharedInfo.GetBlockEventExecutor().Submit(blocker, func() {
+			startedCh <- struct{}{}
+			<-blockCh
+		})
+	}
+	for i := 0; i < blockEventWorkerCount; i++ {
+		select {
+		case <-startedCh:
+		case <-time.After(5 * time.Second):
+			require.FailNow(t, "failed to occupy block event executor workers")
+		}
+	}
+
+	nodeID := node.NewID()
+	wakeCh := make(chan struct{}, 1)
+	wakeCallback := func() {
+		wakeCh <- struct{}{}
+	}
+
+	dml := &commonEvent.DMLEvent{
+		StartTs:         1,
+		CommitTs:        2,
+		Length:          1,
+		ApproximateSize: 1,
+	}
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dml)}, wakeCallback)
+	require.False(t, block)
+
+	ddl := &commonEvent.DDLEvent{
+		StartTs:    2,
+		FinishedTs: 3,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{0},
+		},
+	}
+	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddl)}, wakeCallback)
+	require.True(t, block)
+	require.NotNil(t, dispatcher.deferredDDLEvent.Load())
+
+	mockSink.FlushDMLs()
+
+	select {
+	case <-wakeCh:
+		require.FailNow(t, "unexpected wake before deferred DDL executed")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	_, ok := dispatcher.TryClose()
+	require.False(t, ok)
+
+	unblock()
+
+	select {
+	case <-wakeCh:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "wake callback not called for deferred DDL")
+	}
+	require.Eventually(t, func() bool {
+		return dispatcher.deferredDDLEvent.Load() == nil && dispatcher.tableProgress.Empty()
+	}, 5*time.Second, 10*time.Millisecond)
+
+	_, ok = dispatcher.TryClose()
+	require.True(t, ok)
+}
+
+func TestDispatcherCheckpointDoesNotAdvancePastDeferredDDL(t *testing.T) {
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+
+	mockSink := sink.NewMockSink(common.RedoSinkType)
+	dispatcher := newDispatcherForTest(mockSink, tableSpan)
+	t.Cleanup(dispatcher.sharedInfo.Close)
+
+	// Occupy all block event executor workers to make the deferred DDL task pending (submitted but not executed yet).
+	blockCh := make(chan struct{})
+	var unblockOnce sync.Once
+	unblock := func() {
+		unblockOnce.Do(func() {
+			close(blockCh)
+		})
+	}
+	t.Cleanup(unblock)
+
+	startedCh := make(chan struct{}, blockEventWorkerCount)
+	schemaIDToDispatchers := NewSchemaIDToDispatchers()
+	for i := 0; i < blockEventWorkerCount; i++ {
+		blocker := NewBasicDispatcher(
+			common.NewDispatcherID(),
+			tableSpan,
+			common.Ts(0),
+			1,
+			schemaIDToDispatchers,
+			false,
+			false,
+			common.Ts(0),
+			common.DefaultMode,
+			mockSink,
+			dispatcher.sharedInfo,
+		)
+		dispatcher.sharedInfo.GetBlockEventExecutor().Submit(blocker, func() {
+			startedCh <- struct{}{}
+			<-blockCh
+		})
+	}
+	for i := 0; i < blockEventWorkerCount; i++ {
+		select {
+		case <-startedCh:
+		case <-time.After(5 * time.Second):
+			require.FailNow(t, "failed to occupy block event executor workers")
+		}
+	}
+
+	nodeID := node.NewID()
+	wakeCallback := func() {}
+
+	dml := &commonEvent.DMLEvent{
+		StartTs:         1,
+		CommitTs:        2,
+		Length:          1,
+		ApproximateSize: 1,
+	}
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dml)}, wakeCallback)
+	require.False(t, block)
+
+	ddl := &commonEvent.DDLEvent{
+		StartTs:    2,
+		FinishedTs: 3,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{0},
+		},
+	}
+	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddl)}, wakeCallback)
+	require.True(t, block)
+	require.NotNil(t, dispatcher.deferredDDLEvent.Load())
+
+	mockSink.FlushDMLs()
+
+	require.Eventually(t, func() bool {
+		return dispatcher.tableProgress.Empty() && dispatcher.deferredDDLEvent.Load() != nil
+	}, 5*time.Second, 10*time.Millisecond)
+
+	atomic.StoreUint64(&dispatcher.resolvedTs, 100)
+	require.Equal(t, uint64(2), dispatcher.GetCheckpointTs())
+}
+
+func TestDispatcherDDLSequenceOrderUnderBudgetMode(t *testing.T) {
+	for _, sinkType := range []common.SinkType{common.CloudStorageSinkType, common.RedoSinkType} {
+		t.Run(sinkType.String(), func(t *testing.T) {
+			tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+			require.NoError(t, err)
+
+			mockSink := sink.NewMockSink(sinkType)
+			dispatcher := newDispatcherForTest(mockSink, tableSpan)
+			t.Cleanup(dispatcher.sharedInfo.Close)
+
+			nodeID := node.NewID()
+			wakeCh := make(chan struct{}, 8)
+			wakeCallback := func() {
+				wakeCh <- struct{}{}
+			}
+
+			dml1 := &commonEvent.DMLEvent{
+				StartTs:         1,
+				CommitTs:        1,
+				Length:          1,
+				ApproximateSize: 1,
+			}
+			block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dml1)}, wakeCallback)
+			require.False(t, block)
+
+			dml2 := &commonEvent.DMLEvent{
+				StartTs:         1,
+				CommitTs:        2,
+				Length:          1,
+				ApproximateSize: 1,
+			}
+			block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dml2)}, wakeCallback)
+			require.False(t, block)
+
+			ddl3 := &commonEvent.DDLEvent{
+				StartTs:    2,
+				FinishedTs: 3,
+				BlockedTables: &commonEvent.InfluencedTables{
+					InfluenceType: commonEvent.InfluenceTypeNormal,
+					TableIDs:      []int64{0},
+				},
+			}
+			block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddl3)}, wakeCallback)
+			require.True(t, block)
+			require.NotNil(t, dispatcher.deferredDDLEvent.Load())
+
+			select {
+			case <-wakeCh:
+				require.FailNow(t, "unexpected wake before DML flushed")
+			case <-time.After(200 * time.Millisecond):
+			}
+
+			mockSink.FlushDMLs()
+			select {
+			case <-wakeCh:
+			case <-time.After(5 * time.Second):
+				require.FailNow(t, "wake callback not called for deferred DDL3")
+			}
+			require.Eventually(t, func() bool {
+				return dispatcher.deferredDDLEvent.Load() == nil && dispatcher.tableProgress.Empty()
+			}, 5*time.Second, 10*time.Millisecond)
+
+			ddl4 := &commonEvent.DDLEvent{
+				StartTs:    3,
+				FinishedTs: 4,
+				BlockedTables: &commonEvent.InfluencedTables{
+					InfluenceType: commonEvent.InfluenceTypeNormal,
+					TableIDs:      []int64{0},
+				},
+			}
+			block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddl4)}, wakeCallback)
+			require.True(t, block)
+			require.Nil(t, dispatcher.deferredDDLEvent.Load())
+
+			select {
+			case <-wakeCh:
+			case <-time.After(5 * time.Second):
+				require.FailNow(t, "wake callback not called for DDL4")
+			}
+
+			dml5 := &commonEvent.DMLEvent{
+				StartTs:         4,
+				CommitTs:        5,
+				Length:          1,
+				ApproximateSize: 1,
+			}
+			block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dml5)}, wakeCallback)
+			require.False(t, block)
+		})
+	}
+}
+
+func TestRedoSinkDeferDDLDoesNotWaitForACK(t *testing.T) {
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+
+	mockSink := sink.NewMockSink(common.RedoSinkType)
+	dispatcher := newDispatcherForTest(mockSink, tableSpan)
+	t.Cleanup(dispatcher.sharedInfo.Close)
+
+	nodeID := node.NewID()
+	wakeCh := make(chan struct{}, 8)
+	wakeCallback := func() {
+		wakeCh <- struct{}{}
+	}
+
+	ddl1 := &commonEvent.DDLEvent{
+		StartTs:    1,
+		FinishedTs: 2,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{0},
+		},
+		NeedAddedTables: []commonEvent.Table{
+			{SchemaID: 1, TableID: 1},
+		},
+	}
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddl1)}, wakeCallback)
+	require.True(t, block)
+
+	require.Eventually(t, func() bool {
+		return dispatcher.resendTaskMap.Len() == 1 && !dispatcher.tableProgress.Empty()
+	}, 5*time.Second, 10*time.Millisecond)
+
+	// DDL1 flush wakes the dispatcher, but it stays in tableProgress until ACK.
+	select {
+	case <-wakeCh:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "wake callback not called for DDL1")
+	}
+
+	ddl2 := &commonEvent.DDLEvent{
+		StartTs:    2,
+		FinishedTs: 3,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{0},
+		},
+	}
+	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddl2)}, wakeCallback)
+	require.True(t, block)
+	require.Nil(t, dispatcher.deferredDDLEvent.Load())
+
+	// DDL2 should flush and wake without waiting for DDL1's ACK.
+	select {
+	case <-wakeCh:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "wake callback not called for DDL2")
+	}
+	require.False(t, dispatcher.tableProgress.Empty())
+
+	dispatcher.HandleDispatcherStatus(&heartbeatpb.DispatcherStatus{
+		Ack: &heartbeatpb.ACK{
+			CommitTs:    ddl1.FinishedTs,
+			IsSyncPoint: false,
+		},
+	})
+	require.Eventually(t, func() bool {
+		return dispatcher.resendTaskMap.Len() == 0
+	}, 5*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return dispatcher.tableProgress.Empty()
+	}, 5*time.Second, 10*time.Millisecond)
+	require.Equal(t, uint64(2), dispatcher.GetCheckpointTs())
 }
 
 // test different events can be correctly handled by the dispatcher

@@ -204,10 +204,26 @@ type BasicDispatcher struct {
 	tryRemoving atomic.Bool
 	// is able to remove, and removing now
 	isRemoving atomic.Bool
+
 	// duringHandleEvents is used to indicate whether the dispatcher is currently handling events.
 	// This field prevents a race condition where TryClose is called while events are being processed.
 	// In this corner case, `tableProgress` might be empty, which could lead to the dispatcher being removed prematurely.
 	duringHandleEvents atomic.Bool
+
+	inflightBudget inflightBudget
+
+	// deferredDDLEvent is used to defer a DDL block event until all DML events with
+	// CommitTs less than the DDL's CommitTs are flushed.
+	//
+	// This is required when in-flight budget is enabled:
+	// - For cloudstorage/file sinks: avoid "newer schema visible first" causing earlier DML stale-drop.
+	// - For redo sinks: enforce per-dispatcher DDL-after-DML durable order, since DML/DDL are written by
+	//   different writers and may otherwise be persisted out of order.
+	deferredDDLEvent atomic.Pointer[commonEvent.DDLEvent]
+	// deferredDDLEventScheduled indicates the deferred DDL has been submitted to the block event executor.
+	// We intentionally keep deferredDDLEvent non-nil until the DDL is actually enqueued into tableProgress,
+	// to avoid TryClose() races when the executor is backlogged.
+	deferredDDLEventScheduled atomic.Bool
 
 	seq  uint64
 	mode int64
@@ -241,6 +257,7 @@ func NewBasicDispatcher(
 		resolvedTs:             startTs,
 		isRemoving:             atomic.Bool{},
 		duringHandleEvents:     atomic.Bool{},
+		inflightBudget:         newInflightBudget(id, sharedInfo, sink.SinkType()),
 		blockEventStatus:       BlockEventStatus{blockPendingEvent: nil},
 		tableProgress:          NewTableProgress(),
 		schemaID:               schemaID,
@@ -303,11 +320,13 @@ func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) erro
 		}
 	}
 	d.tableProgress.Add(event)
+	d.clearDeferredDDLEventIfEnqueued(event)
 	return d.sink.WriteBlockEvent(event)
 }
 
 func (d *BasicDispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) {
 	d.tableProgress.Pass(event)
+	d.clearDeferredDDLEventIfEnqueued(event)
 	event.PostFlush()
 }
 
@@ -347,14 +366,32 @@ func (d *BasicDispatcher) GetLastSyncedTs() uint64 {
 
 func (d *BasicDispatcher) GetCheckpointTs() uint64 {
 	checkpointTs, isEmpty := d.tableProgress.GetCheckpointTs()
-	if checkpointTs == 0 {
-		// This means the dispatcher has never send events to the sink,
-		// so we use resolvedTs as checkpointTs
-		return d.GetResolvedTs()
+	if isEmpty {
+		checkpointTs = max(checkpointTs, d.GetResolvedTs())
 	}
 
-	if isEmpty {
-		return max(checkpointTs, d.GetResolvedTs())
+	deferred := d.deferredDDLEvent.Load()
+	if deferred == nil {
+		return checkpointTs
+	}
+
+	// When a DDL is deferred (i.e., submitted but not yet enqueued into tableProgress),
+	// we must not report checkpoint beyond (ddlCommitTs-1). Otherwise the watermark may
+	// virtually advance past an unexecuted DDL barrier.
+	ddlCommitTs := deferred.GetCommitTs()
+	log.Warn("deferred DDL found when get checkpointTs",
+		zap.Any("dispatcherID", d.id),
+		zap.Uint64("checkpointTs", checkpointTs),
+		zap.Uint64("ddlCommitTs", ddlCommitTs))
+	ddlCheckpointUpperBound := ddlCommitTs - 1
+	if checkpointTs > ddlCheckpointUpperBound {
+		log.Warn("disaptcher commitTs bounded by the deferred DDL event",
+			zap.Any("dispatcherID", d.id),
+			zap.Uint64("originCheckpointTs", checkpointTs),
+			zap.Uint64("newCheckpointTs", ddlCheckpointUpperBound),
+			zap.Uint64("ddlCommitTs", ddlCommitTs),
+			zap.Any("deferredDDL", deferred))
+		checkpointTs = ddlCheckpointUpperBound
 	}
 	return checkpointTs
 }
@@ -405,10 +442,14 @@ func (d *BasicDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // because they are block events.
 // We ensure we only will receive one event when it's ddl event or sync point event
 // by setting them with different event types in DispatcherEventsHandler.GetType
-// When we handle events, we don't have any previous events still in sink.
+// For most sink types, we ensure there are no previous DML events still in sink
+// (DML batch returns await=true, wake happens after all in-flight events are flushed).
+// For CloudStorage/Redo sinks, we may allow multiple DML batches to be in-flight at the same time,
+// controlled by a per-dispatcher in-flight budget.
 //
 // wakeCallback is used to wake the dynamic stream to handle the next batch events.
-// It will be called when all the events are flushed to downstream successfully.
+// For most sink types, it will be called when all the events are flushed to downstream successfully.
+// For CloudStorage/Redo sinks, it will be called when the per-dispatcher in-flight bytes fall back to perLow.
 func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
 	if d.GetRemovingStatus() {
 		log.Warn("dispatcher is removing", zap.Any("id", d.id))
@@ -418,11 +459,17 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	d.duringHandleEvents.Store(true)
 	defer d.duringHandleEvents.Store(false)
 
-	// Only return false when all events are resolvedTs Event.
-	block := false
-	dmlWakeOnce := &sync.Once{}
-	dmlEvents := make([]*commonEvent.DMLEvent, 0, len(dispatcherEvents))
-	latestResolvedTs := uint64(0)
+	var (
+		block            bool
+		latestResolvedTs uint64
+
+		dmlEvents = make([]*commonEvent.DMLEvent, 0, len(dispatcherEvents))
+	)
+
+	var dmlWakeOnce *sync.Once
+	if !d.inflightBudget.isEnabled() {
+		dmlWakeOnce = &sync.Once{}
+	}
 	// Dispatcher is ready, handle the events
 	for _, dispatcherEvent := range dispatcherEvents {
 		if log.GetLevel() == zapcore.DebugLevel {
@@ -442,11 +489,11 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 		// Pre-check, make sure the event is not stale
 		if event.GetCommitTs() < d.GetResolvedTs() {
 			log.Warn("Received a stale event, should ignore it",
+				zap.Stringer("dispatcher", d.id),
 				zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
 				zap.Uint64("eventCommitTs", event.GetCommitTs()),
 				zap.Uint64("seq", event.GetSeq()),
-				zap.Int("eventType", event.GetType()),
-				zap.Stringer("dispatcher", d.id))
+				zap.Int("eventType", event.GetType()))
 			continue
 		}
 
@@ -477,16 +524,23 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				continue
 			}
 
-			block = true
 			dml.ReplicatingTs = d.creationPDTs
-			dml.AddPostFlushFunc(func() {
-				// Considering dml event in sink may be written to downstream not in order,
-				// thus, we use tableProgress.Empty() to ensure these events are flushed to downstream completely
-				// and wake dynamic stream to handle the next events.
-				if d.tableProgress.Empty() {
-					dmlWakeOnce.Do(wakeCallback)
-				}
-			})
+			if !d.inflightBudget.isEnabled() {
+				block = true
+				dml.AddPostFlushFunc(func() {
+					// Considering dml event in sink may be written to downstream not in order,
+					// thus, we use tableProgress.Empty() to ensure these events are flushed to downstream completely
+					// and wake dynamic stream to handle the next events.
+					if d.tableProgress.Empty() {
+						dmlWakeOnce.Do(wakeCallback)
+					}
+				})
+			} else {
+				d.inflightBudget.trackDML(dml, wakeCallback)
+				dml.AddPostFlushFunc(func() {
+					d.tryScheduleDeferredDDLEvent()
+				})
+			}
 			dmlEvents = append(dmlEvents, dml)
 		case commonEvent.TypeDDLEvent:
 			if len(dispatcherEvents) != 1 {
@@ -517,8 +571,8 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 
 			log.Info("dispatcher receive ddl event",
 				zap.Stringer("dispatcher", d.id),
-				zap.String("query", ddl.Query),
 				zap.Int64("table", ddl.GetTableID()),
+				zap.String("query", ddl.Query),
 				zap.Uint64("commitTs", event.GetCommitTs()),
 				zap.Uint64("seq", event.GetSeq()))
 			ddl.AddPostFlushFunc(func() {
@@ -527,6 +581,12 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				}
 				wakeCallback()
 			})
+			if d.shouldDeferDDLEvent(ddl.GetCommitTs()) {
+				d.deferDDLEvent(ddl)
+				// Double-check here to avoid missing the last flush callback due to races.
+				d.tryScheduleDeferredDDLEvent()
+				return block
+			}
 			d.DealWithBlockEvent(ddl)
 		case commonEvent.TypeSyncPointEvent:
 			if common.IsRedoMode(d.GetMode()) {
@@ -566,11 +626,62 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	// due to the tableProgress is empty before dml events add into sink.
 	if len(dmlEvents) > 0 {
 		d.AddDMLEventsToSink(dmlEvents)
+		if !block && d.inflightBudget.tryBlock(wakeCallback) {
+			block = true
+		}
 	}
 	if latestResolvedTs > 0 {
 		atomic.StoreUint64(&d.resolvedTs, latestResolvedTs)
 	}
 	return block
+}
+
+func (d *BasicDispatcher) shouldDeferDDLEvent(ddlCommitTs uint64) bool {
+	if !d.inflightBudget.isEnabled() {
+		return false
+	}
+	return d.inflightBudget.hasInflightBeforeCommitTs(ddlCommitTs)
+}
+
+func (d *BasicDispatcher) deferDDLEvent(event *commonEvent.DDLEvent) {
+	if !d.deferredDDLEvent.CompareAndSwap(nil, event) {
+		d.HandleError(errors.ErrDispatcherFailed.GenWithStackByArgs(
+			"defer block event failed: pending DDL block event already exists",
+		))
+		return
+	}
+	d.deferredDDLEventScheduled.Store(false)
+}
+
+func (d *BasicDispatcher) tryScheduleDeferredDDLEvent() {
+	pending := d.deferredDDLEvent.Load()
+	if pending == nil {
+		return
+	}
+	if d.inflightBudget.hasInflightBeforeCommitTs(pending.GetCommitTs()) {
+		return
+	}
+	if !d.deferredDDLEventScheduled.CompareAndSwap(false, true) {
+		return
+	}
+	d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
+		d.dealWithBlockEvent(pending, false)
+	})
+}
+
+func (d *BasicDispatcher) clearDeferredDDLEventIfEnqueued(event commonEvent.BlockEvent) {
+	ddl, ok := event.(*commonEvent.DDLEvent)
+	if !ok {
+		return
+	}
+
+	pending := d.deferredDDLEvent.Load()
+	if pending != ddl {
+		return
+	}
+	if d.deferredDDLEvent.CompareAndSwap(ddl, nil) {
+		d.deferredDDLEventScheduled.Store(false)
+	}
 }
 
 // HandleDispatcherStatus handles the dispatcher status from the maintainer to process block events.
@@ -725,89 +836,47 @@ func (d *BasicDispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
 // If the ddl leads to add new tables or drop tables, it should send heartbeat to maintainer
 // 2. If the event is a multi-table DDL / sync point Event, it will generate a TableSpanBlockStatus message with ddl info to send to maintainer.
 func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
+	d.dealWithBlockEvent(event, true)
+}
+
+func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent, async bool) {
 	if !d.shouldBlock(event) {
 		// Writing a block event may involve downstream IO (e.g. executing DDL), so it must not block
 		// the dynamic stream goroutine.
-		d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
-			noNeedAddAndDrop := event.GetNeedAddedTables() == nil && event.GetNeedDroppedTables() == nil
-			needsScheduleACKTracking := d.IsTableTriggerDispatcher() && !noNeedAddAndDrop
-			if needsScheduleACKTracking {
-				// If this is a table trigger dispatcher, and the DDL leads to add/drop tables,
-				// we track it as a pending schedule-related event until the maintainer ACKs it.
-				d.pendingACKCount.Add(1)
-			}
-			err := d.AddBlockEventToSink(event)
-			if err != nil {
-				if needsScheduleACKTracking {
-					d.pendingACKCount.Add(-1)
-				}
-				d.HandleError(err)
-				return
-			}
-			if noNeedAddAndDrop {
-				return
-			}
-
-			message := &heartbeatpb.TableSpanBlockStatus{
-				ID: d.id.ToPB(),
-				State: &heartbeatpb.State{
-					IsBlocked:         false,
-					BlockTs:           event.GetCommitTs(),
-					NeedDroppedTables: event.GetNeedDroppedTables().ToPB(),
-					NeedAddedTables:   commonEvent.ToTablesPB(event.GetNeedAddedTables()),
-					IsSyncPoint:       false, // sync point event must should block
-					Stage:             heartbeatpb.BlockStage_NONE,
-				},
-				Mode: d.GetMode(),
-			}
-			identifier := BlockEventIdentifier{
-				CommitTs:    event.GetCommitTs(),
-				IsSyncPoint: false,
-			}
-
-			if event.GetNeedAddedTables() != nil {
-				// When the ddl need add tables, we need the maintainer to block the forwarding of checkpointTs
-				// Because the new add table should join the calculation of checkpointTs
-				// So the forwarding of checkpointTs should be blocked until the new dispatcher is created.
-				// While there is a time gap between dispatcher send the block status and
-				// maintainer begin to create dispatcher(and block the forwaring checkpoint)
-				// in order to avoid the checkpointTs forward unexceptedly,
-				// we need to block the checkpoint forwarding in this dispatcher until receive the ack from maintainer.
-				//
-				//     |----> block checkpointTs forwaring of this dispatcher ------>|-----> forwarding checkpointTs normally
-				//     |        send block stauts                 send ack           |
-				// dispatcher -------------------> maintainer ----------------> dispatcher
-				//                                     |
-				//                                     |----------> Block CheckpointTs Forwarding and create new dispatcher
-				// Thus, we add the event to tableProgress again, and call event postFunc when the ack is received from maintainer.
-				event.ClearPostFlushFunc()
-				d.tableProgress.Add(event)
-				d.resendTaskMap.Set(identifier, newResendTask(message, d, event.PostFlush))
-			} else {
-				d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
-			}
-			d.sharedInfo.blockStatusesChan <- message
-		})
-	} else {
-		// Hold DB/All block events on the table trigger dispatcher until there are no pending
-		// resend tasks(by pendingACKCount, because some ddl's resend task set is after write downstream).
-		// This ensures maintainer observes all schedule-related DDLs (e.g. create table)
-		// and updates spanController tasks before it builds a DB/All range checker for this event.
-		//
-		// Note: We only hold InfluenceType_DB/All. InfluenceType_Normal does not require a global
-		// task snapshot to build its range checker.
-		blockedTables := event.GetBlockedTables()
-		if d.IsTableTriggerDispatcher() &&
-			d.pendingACKCount.Load() > 0 &&
-			blockedTables != nil &&
-			blockedTables.InfluenceType != commonEvent.InfluenceTypeNormal {
-			d.holdBlockEvent(event)
+		if async {
+			d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
+				d.executeNonBlockingBlockEvent(event)
+			})
+			d.updateSchemaIDIfNeeded(event)
 			return
 		}
-
-		d.reportBlockedEventToMaintainer(event)
+		d.executeNonBlockingBlockEvent(event)
+		d.updateSchemaIDIfNeeded(event)
+		return
 	}
 
+	// Hold DB/All block events on the table trigger dispatcher until there are no pending
+	// resend tasks(by pendingACKCount, because some ddl's resend task set is after write downstream).
+	// This ensures maintainer observes all schedule-related DDLs (e.g. create table)
+	// and updates spanController tasks before it builds a DB/All range checker for this event.
+	//
+	// Note: We only hold InfluenceType_DB/All. InfluenceType_Normal does not require a global
+	// task snapshot to build its range checker.
+	blockedTables := event.GetBlockedTables()
+	if d.IsTableTriggerDispatcher() &&
+		d.pendingACKCount.Load() > 0 &&
+		blockedTables != nil &&
+		blockedTables.InfluenceType != commonEvent.InfluenceTypeNormal {
+		d.holdBlockEvent(event)
+		return
+	}
+
+	d.reportBlockedEventToMaintainer(event)
+
+	d.updateSchemaIDIfNeeded(event)
+}
+
+func (d *BasicDispatcher) updateSchemaIDIfNeeded(event commonEvent.BlockEvent) {
 	// dealing with events which update schema ids
 	// Only rename table and rename tables may update schema ids(rename db1.table1 to db2.table2)
 	// Here we directly update schema id of dispatcher when we begin to handle the ddl event,
@@ -817,24 +886,86 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 	// So there won't be a related db-level ddl event is in dealing when we get update schema id events.
 	// Thus, whether to update schema id before or after current ddl event is not important.
 	// To make it easier, we choose to directly update schema id here.
-	if event.GetUpdatedSchemas() != nil && !d.IsTableTriggerDispatcher() {
-		for _, schemaIDChange := range event.GetUpdatedSchemas() {
-			if schemaIDChange.TableID == d.tableSpan.TableID {
-				if schemaIDChange.OldSchemaID != d.schemaID {
-					log.Error("Wrong Schema ID",
-						zap.Stringer("dispatcherID", d.id),
-						zap.Int64("exceptSchemaID", schemaIDChange.OldSchemaID),
-						zap.Int64("actualSchemaID", d.schemaID),
-						zap.String("tableSpan", common.FormatTableSpan(d.tableSpan)))
-					return
-				} else {
-					d.schemaID = schemaIDChange.NewSchemaID
-					d.schemaIDToDispatchers.Update(schemaIDChange.OldSchemaID, schemaIDChange.NewSchemaID)
-					return
-				}
-			}
-		}
+	if event.GetUpdatedSchemas() == nil || d.IsTableTriggerDispatcher() {
+		return
 	}
+	for _, schemaIDChange := range event.GetUpdatedSchemas() {
+		if schemaIDChange.TableID != d.tableSpan.TableID {
+			continue
+		}
+		if schemaIDChange.OldSchemaID != d.schemaID {
+			log.Error("Wrong Schema ID",
+				zap.Stringer("dispatcherID", d.id),
+				zap.Int64("exceptSchemaID", schemaIDChange.OldSchemaID),
+				zap.Int64("actualSchemaID", d.schemaID),
+				zap.String("tableSpan", common.FormatTableSpan(d.tableSpan)))
+			return
+		}
+		d.schemaID = schemaIDChange.NewSchemaID
+		d.schemaIDToDispatchers.Update(schemaIDChange.OldSchemaID, schemaIDChange.NewSchemaID)
+		return
+	}
+}
+
+func (d *BasicDispatcher) executeNonBlockingBlockEvent(event commonEvent.BlockEvent) {
+	noNeedAddAndDrop := event.GetNeedAddedTables() == nil && event.GetNeedDroppedTables() == nil
+	needsScheduleACKTracking := d.IsTableTriggerDispatcher() && !noNeedAddAndDrop
+	if needsScheduleACKTracking {
+		// If this is a table trigger dispatcher, and the DDL leads to add/drop tables,
+		// we track it as a pending schedule-related event until the maintainer ACKs it.
+		d.pendingACKCount.Add(1)
+	}
+	err := d.AddBlockEventToSink(event)
+	if err != nil {
+		if needsScheduleACKTracking {
+			d.pendingACKCount.Add(-1)
+		}
+		d.HandleError(err)
+		return
+	}
+	if noNeedAddAndDrop {
+		return
+	}
+
+	message := &heartbeatpb.TableSpanBlockStatus{
+		ID: d.id.ToPB(),
+		State: &heartbeatpb.State{
+			IsBlocked:         false,
+			BlockTs:           event.GetCommitTs(),
+			NeedDroppedTables: event.GetNeedDroppedTables().ToPB(),
+			NeedAddedTables:   commonEvent.ToTablesPB(event.GetNeedAddedTables()),
+			IsSyncPoint:       false, // sync point event must should block
+			Stage:             heartbeatpb.BlockStage_NONE,
+		},
+		Mode: d.GetMode(),
+	}
+	identifier := BlockEventIdentifier{
+		CommitTs:    event.GetCommitTs(),
+		IsSyncPoint: false,
+	}
+
+	if event.GetNeedAddedTables() != nil {
+		// When the ddl need add tables, we need the maintainer to block the forwarding of checkpointTs
+		// Because the new add table should join the calculation of checkpointTs
+		// So the forwarding of checkpointTs should be blocked until the new dispatcher is created.
+		// While there is a time gap between dispatcher send the block status and
+		// maintainer begin to create dispatcher(and block the forwaring checkpoint)
+		// in order to avoid the checkpointTs forward unexceptedly,
+		// we need to block the checkpoint forwarding in this dispatcher until receive the ack from maintainer.
+		//
+		//     |----> block checkpointTs forwaring of this dispatcher ------>|-----> forwarding checkpointTs normally
+		//     |        send block stauts                 send ack           |
+		// dispatcher -------------------> maintainer ----------------> dispatcher
+		//                                     |
+		//                                     |----------> Block CheckpointTs Forwarding and create new dispatcher
+		// Thus, we add the event to tableProgress again, and call event postFunc when the ack is received from maintainer.
+		event.ClearPostFlushFunc()
+		d.tableProgress.Add(event)
+		d.resendTaskMap.Set(identifier, newResendTask(message, d, event.PostFlush))
+	} else {
+		d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
+	}
+	d.sharedInfo.blockStatusesChan <- message
 }
 
 func (d *BasicDispatcher) cancelResendTask(identifier BlockEventIdentifier) {
@@ -968,7 +1099,7 @@ func (d *BasicDispatcher) Remove() {
 func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 	// If sink is normal(not meet error), we need to wait all the events in sink to flushed downstream successfully
 	// If sink is not normal, we can close the dispatcher immediately.
-	if !d.sink.IsNormal() || (d.tableProgress.Empty() && !d.duringHandleEvents.Load()) {
+	if !d.sink.IsNormal() || (d.tableProgress.Empty() && !d.duringHandleEvents.Load() && d.deferredDDLEvent.Load() == nil) {
 		w.CheckpointTs = d.GetCheckpointTs()
 		w.ResolvedTs = d.GetResolvedTs()
 
@@ -990,6 +1121,7 @@ func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
 		zap.Stringer("dispatcher", d.id),
 		zap.Int64("mode", d.mode),
 		zap.Bool("sinkIsNormal", d.sink.IsNormal()),
+		zap.Bool("hasDeferredDDLEvent", d.deferredDDLEvent.Load() != nil),
 		zap.Bool("tableProgressEmpty", d.tableProgress.Empty()),
 		zap.Int("tableProgressLen", d.tableProgress.Len()),
 		zap.Uint64("tableProgressMaxCommitTs", d.tableProgress.MaxCommitTs())) // check whether continue receive new events.
@@ -1023,4 +1155,6 @@ func (d *BasicDispatcher) removeDispatcher() {
 			zap.Any("identifier", identifier),
 			zap.Stringer("dispatcherID", d.id))
 	}
+
+	d.inflightBudget.cleanup()
 }
