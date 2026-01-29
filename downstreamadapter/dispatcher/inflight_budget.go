@@ -35,7 +35,8 @@ type inflightBudget struct {
 	enabled  bool
 	sinkType common.SinkType
 
-	sharedInfo *SharedInfo
+	sharedInfo   *SharedInfo
+	dispatcherID common.DispatcherID
 
 	low        int64
 	high       int64
@@ -51,9 +52,6 @@ type inflightBudget struct {
 	// it's not relevant to the dispatcher checkpointTs calculation.
 	dmlProgress *TableProgress
 
-	changefeedID common.ChangeFeedID
-	dispatcherID common.DispatcherID
-
 	inflightBudgetBlockDuration prometheus.Observer
 	inflightBudgetBlockedCount  prometheus.Gauge
 	inflightBudgetBytes         prometheus.Gauge
@@ -66,10 +64,9 @@ type noCopy struct{}
 func (*noCopy) Lock() {}
 
 func newInflightBudget(
-	sinkType common.SinkType,
-	changefeedID common.ChangeFeedID,
 	dispatcherID common.DispatcherID,
 	sharedInfo *SharedInfo,
+	sinkType common.SinkType,
 ) inflightBudget {
 	switch sinkType {
 	case common.CloudStorageSinkType, common.RedoSinkType:
@@ -78,8 +75,8 @@ func newInflightBudget(
 		return inflightBudget{}
 	}
 	var (
-		namespace = changefeedID.Keyspace()
-		name      = changefeedID.Name()
+		namespace = sharedInfo.changefeedID.Keyspace()
+		name      = sharedInfo.changefeedID.Name()
 		t         = sinkType.String()
 	)
 	return inflightBudget{
@@ -88,7 +85,6 @@ func newInflightBudget(
 		sharedInfo:   sharedInfo,
 		low:          inflightDefaultPerLowBytes,
 		high:         inflightDefaultPerHighBytes,
-		changefeedID: changefeedID,
 		dispatcherID: dispatcherID,
 		multiplier:   inflightBytesMultiplier,
 		dmlProgress:  NewTableProgress(),
@@ -136,7 +132,7 @@ func (b *inflightBudget) trackDML(dml *commonEvent.DMLEvent, wakeCallback func()
 		}
 		if inFlightBytes < 0 {
 			log.Warn("inflight bytes underflow",
-				zap.Stringer("changefeedID", b.changefeedID),
+				zap.Stringer("changefeedID", b.sharedInfo.changefeedID),
 				zap.Stringer("dispatcher", b.dispatcherID),
 				zap.Int64("inFlightBytes", inFlightBytes),
 			)
@@ -150,7 +146,7 @@ func (b *inflightBudget) trackDML(dml *commonEvent.DMLEvent, wakeCallback func()
 			}
 			b.inflightBudgetBlockedCount.Dec()
 			log.Debug("dispatcher unblocked by inflight budget",
-				zap.Stringer("changefeedID", b.changefeedID),
+				zap.Stringer("changefeedID", b.sharedInfo.changefeedID),
 				zap.Stringer("dispatcher", b.dispatcherID),
 				zap.Int64("inFlightBytes", inFlightBytes),
 			)
@@ -204,7 +200,7 @@ func (b *inflightBudget) tryBlock(wakeCallback func()) bool {
 			b.blockedAt.Store(time.Now().UnixNano())
 			b.inflightBudgetBlockedCount.Inc()
 			log.Debug("dispatcher blocked by inflight bytes",
-				zap.Stringer("changefeedID", b.changefeedID),
+				zap.Stringer("changefeedID", b.sharedInfo.changefeedID),
 				zap.Stringer("dispatcher", b.dispatcherID),
 				zap.Int64("inFlightBytes", b.inflight.Load()),
 			)

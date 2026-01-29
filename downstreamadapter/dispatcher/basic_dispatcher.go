@@ -257,7 +257,7 @@ func NewBasicDispatcher(
 		resolvedTs:             startTs,
 		isRemoving:             atomic.Bool{},
 		duringHandleEvents:     atomic.Bool{},
-		inflightBudget:         newInflightBudget(sink.SinkType(), sharedInfo.changefeedID, id, sharedInfo),
+		inflightBudget:         newInflightBudget(id, sharedInfo, sink.SinkType()),
 		blockEventStatus:       BlockEventStatus{blockPendingEvent: nil},
 		tableProgress:          NewTableProgress(),
 		schemaID:               schemaID,

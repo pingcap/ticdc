@@ -45,8 +45,8 @@ type blockedEntry struct {
 }
 
 func newGlobalInflightBudget(
-	sinkType common.SinkType,
 	changefeedID common.ChangeFeedID,
+	sinkType common.SinkType,
 	highBytes int64,
 	lowBytes int64,
 ) *globalInflightBudget {

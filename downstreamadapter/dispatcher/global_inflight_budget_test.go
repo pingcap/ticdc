@@ -36,7 +36,7 @@ func newSharedInfoForInflightBudgetTest() *SharedInfo {
 
 func TestChangefeedInflightBudgetBlocksAndWakes(t *testing.T) {
 	changefeedID := common.NewChangefeedID(common.DefaultKeyspaceName)
-	budget := newGlobalInflightBudget(common.CloudStorageSinkType, changefeedID, 100, 50)
+	budget := newGlobalInflightBudget(changefeedID, common.CloudStorageSinkType, 100, 50)
 
 	var wakeCount atomic.Int32
 	dispatcherID := common.NewDispatcherID()
@@ -55,7 +55,7 @@ func TestChangefeedInflightBudgetDedupAndCleanup(t *testing.T) {
 	dispatcherID := common.NewDispatcherID()
 
 	t.Run("dedup", func(t *testing.T) {
-		budget := newGlobalInflightBudget(common.CloudStorageSinkType, changefeedID, 100, 50)
+		budget := newGlobalInflightBudget(changefeedID, common.CloudStorageSinkType, 100, 50)
 		var wakeCount atomic.Int32
 
 		budget.acquire(120)
@@ -67,7 +67,7 @@ func TestChangefeedInflightBudgetDedupAndCleanup(t *testing.T) {
 	})
 
 	t.Run("cleanup", func(t *testing.T) {
-		budget := newGlobalInflightBudget(common.CloudStorageSinkType, changefeedID, 100, 50)
+		budget := newGlobalInflightBudget(changefeedID, common.CloudStorageSinkType, 100, 50)
 		var wakeCount atomic.Int32
 
 		budget.acquire(120)
@@ -87,10 +87,8 @@ func TestInflightBudgetGlobalWakeWhenOtherDispatcherFlushes(t *testing.T) {
 	// globalHigh = quota/2 = 100, globalLow = 50.
 	sharedInfo.InitChangefeedInflightBudget(common.CloudStorageSinkType, 200)
 
-	changefeedID := sharedInfo.changefeedID
-
-	b1 := newInflightBudget(common.CloudStorageSinkType, changefeedID, common.NewDispatcherID(), sharedInfo)
-	b2 := newInflightBudget(common.CloudStorageSinkType, changefeedID, common.NewDispatcherID(), sharedInfo)
+	b1 := newInflightBudget(common.NewDispatcherID(), sharedInfo, common.CloudStorageSinkType)
+	b2 := newInflightBudget(common.NewDispatcherID(), sharedInfo, common.CloudStorageSinkType)
 
 	var wake1 atomic.Int32
 	var wake2 atomic.Int32

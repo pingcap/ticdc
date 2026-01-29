@@ -111,10 +111,6 @@ func NewSharedInfo(
 }
 
 func (s *SharedInfo) InitChangefeedInflightBudget(sinkType common.SinkType, areaQuotaBytes uint64) {
-	if sinkType != common.CloudStorageSinkType && sinkType != common.RedoSinkType {
-		return
-	}
-
 	var target *atomic.Pointer[globalInflightBudget]
 	switch sinkType {
 	case common.CloudStorageSinkType:
@@ -141,7 +137,7 @@ func (s *SharedInfo) InitChangefeedInflightBudget(sinkType common.SinkType, area
 	}
 	globalLow := globalHigh / 2
 
-	target.Store(newGlobalInflightBudget(sinkType, s.changefeedID, globalHigh, globalLow))
+	target.Store(newGlobalInflightBudget(s.changefeedID, sinkType, globalHigh, globalLow))
 }
 
 func (s *SharedInfo) getChangefeedInflightBudget(sinkType common.SinkType) *globalInflightBudget {
