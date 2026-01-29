@@ -126,10 +126,13 @@ func (s *sink) IsNormal() bool {
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.eventChan.Push(event)
+<<<<<<< HEAD
 }
 
 func (s *sink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
 	return nil
+=======
+>>>>>>> 1da0fa90a (sink: make pulsar sink more robust (#4067))
 }
 
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
@@ -366,7 +369,12 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 						ColumnSelector:  selector,
 						Checksum:        row.Checksum,
 					},
+<<<<<<< HEAD
 				})
+=======
+				}
+				s.rowChan.Push(mqEvent)
+>>>>>>> 1da0fa90a (sink: make pulsar sink more robust (#4067))
 			}
 			s.rowChan.Push(events...)
 		}
@@ -437,7 +445,10 @@ func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, tick
 				zap.String("changefeed", s.changefeedID.Name()))
 			return nil, nil
 		}
+<<<<<<< HEAD
 		buffer = buffer[:0]
+=======
+>>>>>>> 1da0fa90a (sink: make pulsar sink more robust (#4067))
 		return msgs, nil
 	}
 }
