@@ -318,32 +318,36 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) b
 // filterAndUpdateEventByCommitTs verifies if the event's commit timestamp is valid.
 // Note: this function must be called on every event received.
 func (d *dispatcherStat) filterAndUpdateEventByCommitTs(event dispatcher.DispatcherEvent) bool {
-	shouldIgnore := false
-	if event.GetCommitTs() < d.lastEventCommitTs.Load() {
-		shouldIgnore = true
-	} else if event.GetCommitTs() == d.lastEventCommitTs.Load() {
+	var (
+		ignore            bool
+		commitTs          = event.GetCommitTs()
+		lastEventCommitTs = d.lastEventCommitTs.Load()
+	)
+	if commitTs < lastEventCommitTs {
+		ignore = true
+	} else if commitTs == lastEventCommitTs {
 		// Avoid send the same DDL event or SyncPoint event multiple times.
 		switch event.GetType() {
 		case commonEvent.TypeDDLEvent:
-			shouldIgnore = d.gotDDLOnTs.Load()
+			ignore = d.gotDDLOnTs.Load()
 		case commonEvent.TypeSyncPointEvent:
-			shouldIgnore = d.gotSyncpointOnTS.Load()
+			ignore = d.gotSyncpointOnTS.Load()
 		default:
 			// TODO: check whether it is ok for other types of events?
 			// a commit ts may have multiple transactions, it is ok to send the same txn multiple times?
 		}
 	}
-	if shouldIgnore {
+	if ignore {
 		log.Warn("receive a event older than sendCommitTs, ignore it",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Int64("tableID", d.target.GetTableSpan().TableID),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
 			zap.Any("event", event.Event),
-			zap.Uint64("eventCommitTs", event.GetCommitTs()),
-			zap.Uint64("sentCommitTs", d.lastEventCommitTs.Load()))
+			zap.Uint64("eventCommitTs", commitTs),
+			zap.Uint64("sentCommitTs", lastEventCommitTs))
 		return false
 	}
-	if event.GetCommitTs() > d.lastEventCommitTs.Load() {
+	if commitTs > lastEventCommitTs {
 		// if the commit ts is larger than the last sent commit ts,
 		// we need to reset the DDL and SyncPoint flags.
 		d.gotDDLOnTs.Store(false)
@@ -362,7 +366,7 @@ func (d *dispatcherStat) filterAndUpdateEventByCommitTs(event dispatcher.Dispatc
 		commonEvent.TypeDMLEvent,
 		commonEvent.TypeBatchDMLEvent,
 		commonEvent.TypeSyncPointEvent:
-		d.lastEventCommitTs.Store(event.GetCommitTs())
+		d.lastEventCommitTs.Store(commitTs)
 	}
 
 	return true

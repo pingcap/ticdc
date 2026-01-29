@@ -374,6 +374,8 @@ func (d *BasicDispatcher) GetCheckpointTs() uint64 {
 		return resolvedTs
 	}
 	if isEmpty {
+		log.Info("table progress empty", zap.Any("dispatcherID", d.id),
+			zap.Uint64("checkpointTs", checkpointTs), zap.Uint64("resolvedTs", resolvedTs))
 		checkpointTs = max(checkpointTs, resolvedTs)
 	}
 
@@ -546,6 +548,14 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				})
 			}
 			dmlEvents = append(dmlEvents, dml)
+			commitTs := event.GetCommitTs()
+			checkpointTs := d.GetCheckpointTs()
+			if commitTs <= checkpointTs {
+				log.Warn("add dml event whose commitTs less than the checkpointTs",
+					zap.Any("dispatcherID", d.GetId()),
+					zap.Uint64("commitTs", commitTs),
+					zap.Uint64("checkpointTs", checkpointTs))
+			}
 		case commonEvent.TypeDDLEvent:
 			if len(dispatcherEvents) != 1 {
 				log.Panic("ddl event should only be singly handled",
