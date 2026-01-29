@@ -370,13 +370,15 @@ func (d *BasicDispatcher) GetCheckpointTs() uint64 {
 	checkpointTs, isEmpty := d.tableProgress.GetCheckpointTs()
 	if checkpointTs == 0 {
 		// This means the dispatcher has never send events to the sink,
-		// so we use resolvedTs as checkpointTs
+		// so we use resolvedTs as checkpointTs.
 		return resolvedTs
 	}
 	if isEmpty {
 		log.Info("table progress empty", zap.Any("dispatcherID", d.id),
 			zap.Uint64("checkpointTs", checkpointTs), zap.Uint64("resolvedTs", resolvedTs))
-		checkpointTs = max(checkpointTs, resolvedTs)
+		if !d.inflightBudget.isEnabled() {
+			checkpointTs = max(checkpointTs, resolvedTs)
+		}
 	}
 
 	deferred := d.deferredDDLEvent.Load()
