@@ -26,10 +26,13 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/util"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
+
+// Pulsar sink does not support routing yet.
 
 type sink struct {
 	changefeedID commonType.ChangeFeedID
@@ -55,6 +58,11 @@ type sink struct {
 
 func (s *sink) SinkType() commonType.SinkType {
 	return commonType.PulsarSinkType
+}
+
+// GetRouter returns nil as Pulsar sink does not support routing yet.
+func (s *sink) GetRouter() *util.Router {
+	return nil
 }
 
 func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
