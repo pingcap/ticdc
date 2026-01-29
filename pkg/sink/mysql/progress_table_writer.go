@@ -45,6 +45,8 @@ type ProgressTableWriter struct {
 
 	progressUpdateInterval time.Duration
 
+	// lastProgressUpdate is the last time Flush successfully wrote progress rows.
+	// Zero value means Flush has never succeeded and should not be throttled.
 	lastProgressUpdate time.Time
 	lastDDLCommitTs    atomic.Uint64
 
@@ -64,7 +66,6 @@ func NewProgressTableWriter(ctx context.Context, db *sql.DB, changefeedID common
 		changefeedID:           changefeedID,
 		maxTableNameCount:      maxTableNameCount,
 		progressUpdateInterval: progressUpdateInterval,
-		lastProgressUpdate:     time.Now(),
 	}
 }
 
@@ -79,7 +80,7 @@ func (w *ProgressTableWriter) Flush(checkpoint uint64) error {
 		return nil
 	}
 
-	if time.Since(w.lastProgressUpdate) < w.progressUpdateInterval {
+	if !w.lastProgressUpdate.IsZero() && time.Since(w.lastProgressUpdate) < w.progressUpdateInterval {
 		return nil
 	}
 	// skip checkpointTs less than or equal to last DDL commit ts

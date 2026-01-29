@@ -279,7 +279,7 @@ func buildActiveActiveUpsertSQL(
 		}
 		offset, ok := tableInfo.GetColumnOffsetByName(colName)
 		if !ok {
-			log.Panic("column not found when building active-active SQL",
+			log.Panic("column not found when building active active SQL",
 				zap.String("column", colName), zap.Stringer("table", tableInfo.TableName))
 		}
 		valueOffsets[i] = offset
@@ -320,7 +320,7 @@ func buildActiveActiveUpsertSQL(
 			}
 			offset := valueOffsets[i]
 			if offset < 0 || offset >= len(columns) {
-				log.Panic("invalid column offset when building active-active SQL",
+				log.Panic("invalid column offset when building active active SQL",
 					zap.Int("offset", offset), zap.Int("columnCount", len(columns)))
 			}
 			col := columns[offset]

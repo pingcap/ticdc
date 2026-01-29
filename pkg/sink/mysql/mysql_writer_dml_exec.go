@@ -127,7 +127,7 @@ func (w *Writer) sequenceExecute(
 ) error {
 	for i, query := range dmls.sqls {
 		args := dmls.values[i]
-		log.Debug("exec row", zap.String("sql", query), zap.Any("args", args), zap.Int("writerID", w.id))
+		log.Debug("exec row", zap.String("sql", query), zap.String("args", util.RedactArgs(args)), zap.Int("writerID", w.id))
 		ctx, cancelFunc := context.WithTimeout(w.ctx, writeTimeout)
 
 		var prepStmt *sql.Stmt
@@ -160,7 +160,7 @@ func (w *Writer) sequenceExecute(
 				}
 			}
 			cancelFunc()
-			return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(execError, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", query, args)))
+			return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(execError, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", query, util.RedactArgs(args))))
 		}
 		cancelFunc()
 	}
@@ -189,7 +189,7 @@ func (w *Writer) multiStmtExecute(
 	// The txn can ensure the atomicity of the transaction.
 	_, err := conn.ExecContext(ctx, multiStmtSQLWithTxn, multiStmtArgs...)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", multiStmtSQLWithTxn, multiStmtArgs)))
+		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", multiStmtSQLWithTxn, util.RedactArgs(multiStmtArgs))))
 	}
 	return nil
 }

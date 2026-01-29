@@ -75,7 +75,6 @@ func TestProgressTableWriterFlushSingleBatch(t *testing.T) {
 	expectProgressTableInit(mock)
 	expectProgressInsert(mock, "ks/cf", "cluster-single", 42, tables)
 
-	time.Sleep(time.Second)
 	err = writer.Flush(42)
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -100,7 +99,6 @@ func TestProgressTableWriterFlushMultiBatch(t *testing.T) {
 	expectProgressInsert(mock, "ks/cf", "cluster-multi", 99, allTables[:2])
 	expectProgressInsert(mock, "ks/cf", "cluster-multi", 99, allTables[2:])
 
-	time.Sleep(time.Second)
 	err = writer.Flush(99)
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())

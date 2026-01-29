@@ -150,7 +150,7 @@ func (w *Writer) batchSingleTxnActiveRows(
 	tableID int64,
 ) ([]string, [][]interface{}) {
 	if len(rows) != len(commitTs) {
-		log.Panic("mismatched rows and commitTs for active-active batch",
+		log.Panic("mismatched rows and commitTs for active active batch",
 			zap.Int("rows", len(rows)), zap.Int("commitTs", len(commitTs)))
 	}
 	filteredRows := make([]*commonEvent.RowChange, 0, len(rows))

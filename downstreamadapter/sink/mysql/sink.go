@@ -277,7 +277,7 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 		ddl := event.(*commonEvent.DDLEvent)
 		// In enable-active-active mode, TiCDC maintains a downstream progress table for
 		// hard delete safety checks. DDLs that drop/rename tables must also clean up the
-		// corresponding progress rows. The cleanup is idempotent and must run before
+		// corresponding progress rows by TiCDC. The cleanup is idempotent and must run before
 		// flushing the DDL event (and regardless of the BDR role).
 		if s.enableActiveActive {
 			err := s.progressTableWriter.RemoveTables(ddl)
@@ -318,7 +318,7 @@ func (s *Sink) AddCheckpointTs(ts uint64) {
 	}
 
 	if err := s.progressTableWriter.Flush(ts); err != nil {
-		log.Warn("failed to update active-active progress table",
+		log.Warn("failed to update active active progress table",
 			zap.String("changefeed", s.changefeedID.DisplayName.String()),
 			zap.Error(err))
 		return

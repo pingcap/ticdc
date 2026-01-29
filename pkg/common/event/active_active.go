@@ -216,7 +216,11 @@ func FilterDMLEvent(event *DMLEvent, enableActiveActive bool, handleError func(e
 	newChunk := chunk.NewChunkWithCapacity(fieldTypes, event.Rows.NumRows())
 	rowTypes := make([]common.RowType, 0, len(event.RowTypes))
 	rowKeys := make([][]byte, 0, len(event.RowTypes))
-	checksums := make([]*integrity.Checksum, 0, len(event.RowTypes))
+	hasChecksum := len(event.Checksum) != 0
+	var checksums []*integrity.Checksum
+	if hasChecksum {
+		checksums = make([]*integrity.Checksum, 0, len(event.Checksum))
+	}
 
 	filtered := false
 	kept := 0
@@ -261,7 +265,9 @@ func FilterDMLEvent(event *DMLEvent, enableActiveActive bool, handleError func(e
 			rowTypes = append(rowTypes, row.RowType)
 			rowKeys = append(rowKeys, cloneRowKey(row.RowKey))
 		}
-		checksums = append(checksums, row.Checksum)
+		if hasChecksum {
+			checksums = append(checksums, row.Checksum)
+		}
 		kept++
 	}
 	event.Rewind()
