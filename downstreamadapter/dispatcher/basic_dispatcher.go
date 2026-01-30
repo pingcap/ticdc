@@ -29,6 +29,8 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	tidbTypes "github.com/pingcap/tidb/pkg/types"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -374,6 +376,34 @@ func (d *BasicDispatcher) ensureActiveActiveTableInfo(tableInfo *common.TableInf
 				"table %s.%s(id=%d) in dispatcher %s missing required column %s for enable-active-active",
 				tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String(), col)
 		}
+	}
+
+	if _, ok := tableInfo.GetColumnOffsetByName(commonEvent.SoftDeleteTimeColumn); !ok {
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			"table %s.%s(id=%d) in dispatcher %s missing required column offset %s for enable-active-active",
+			tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String(), commonEvent.SoftDeleteTimeColumn)
+	}
+
+	softDeleteCol, ok := tableInfo.GetColumnInfoByName(commonEvent.SoftDeleteTimeColumn)
+	if !ok {
+		// Defensive check. The column existence has already been validated above.
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			"table %s.%s(id=%d) in dispatcher %s missing required column %s for enable-active-active",
+			tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String(), commonEvent.SoftDeleteTimeColumn)
+	}
+	notNull := mysql.HasNotNullFlag(softDeleteCol.GetFlag())
+	if softDeleteCol.GetType() != mysql.TypeTimestamp || softDeleteCol.FieldType.GetDecimal() != tidbTypes.MaxFsp || notNull {
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			"table %s.%s(id=%d) in dispatcher %s invalid column %s, expect TIMESTAMP(6) NULL, got type %d fsp %d notNull %t",
+			tableInfo.GetSchemaName(),
+			tableInfo.GetTableName(),
+			tableInfo.TableName.TableID,
+			d.id.String(),
+			commonEvent.SoftDeleteTimeColumn,
+			softDeleteCol.GetType(),
+			softDeleteCol.FieldType.GetDecimal(),
+			notNull,
+		)
 	}
 	return nil
 }

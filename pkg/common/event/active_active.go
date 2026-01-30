@@ -162,6 +162,34 @@ func getSoftDeleteTimeColumnIndex(event *DMLEvent, handleError func(error)) (idx
 	return offset, true
 }
 
+// getSoftDeleteTimeColumnOffset returns the column offset for `_tidb_softdelete_time` without validating
+// its type semantics. It reports schema issues via `handleError` and returns ok=false in that case.
+func getSoftDeleteTimeColumnOffset(event *DMLEvent, handleError func(error)) (idx int, ok bool) {
+	tableInfo := event.TableInfo
+	if _, ok := tableInfo.GetColumnInfoByName(SoftDeleteTimeColumn); !ok {
+		handleError(errors.Errorf(
+			"dispatcher %s table %s.%s missing required column %s",
+			event.DispatcherID.String(),
+			tableInfo.GetSchemaName(),
+			tableInfo.GetTableName(),
+			SoftDeleteTimeColumn,
+		))
+		return 0, false
+	}
+	offset, ok := tableInfo.GetColumnOffsetByName(SoftDeleteTimeColumn)
+	if !ok {
+		handleError(errors.Errorf(
+			"dispatcher %s table %s.%s missing required column offset %s",
+			event.DispatcherID.String(),
+			tableInfo.GetSchemaName(),
+			tableInfo.GetTableName(),
+			SoftDeleteTimeColumn,
+		))
+		return 0, false
+	}
+	return offset, true
+}
+
 // ApplyRowPolicyDecision mutates the row based on decision.
 func ApplyRowPolicyDecision(row *RowChange, decision RowPolicyDecision) {
 	switch decision {
@@ -217,7 +245,11 @@ func FilterDMLEvent(event *DMLEvent, enableActiveActive bool, handleError func(e
 	//   - soft-delete tables: for converting soft-delete transitions when enable-active-active is disabled.
 	needSoftDeleteTimeCol := isActiveActive || (!enableActiveActive && isSoftDelete)
 	if needSoftDeleteTimeCol {
-		offset, ok := getSoftDeleteTimeColumnIndex(event, handleError)
+		var (
+			offset int
+			ok     bool
+		)
+		offset, ok = getSoftDeleteTimeColumnOffset(event, handleError)
 		if !ok {
 			return nil, true
 		}
@@ -259,7 +291,7 @@ func filterDMLEventSlowPath(
 		return event, false
 	}
 
-	newChunk := chunk.NewChunkWithCapacity(fieldTypes, event.Rows.NumRows())
+	newChunk := chunk.NewChunkWithCapacity(fieldTypes, len(event.RowTypes))
 	rowTypes := make([]common.RowType, 0, len(event.RowTypes))
 	hasRowKeys := len(event.RowKeys) != 0
 	var rowKeys [][]byte
