@@ -359,35 +359,35 @@ func (d *BasicDispatcher) ensureActiveActiveTableInfo(tableInfo *common.TableInf
 	}
 	if tableInfo == nil {
 		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
-			"table info is nil for dispatcher %s in active-active mode", d.id.String())
+			fmt.Sprintf("table info is nil for dispatcher %s in active-active mode", d.id.String()))
 	}
 	if !tableInfo.IsActiveActiveTable() {
 		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
-			"table %s.%s(id=%d) in dispatcher %s is not active-active but enable-active-active is true",
-			tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String())
+			fmt.Sprintf("table %s.%s(id=%d) in dispatcher %s is not active-active but enable-active-active is true",
+				tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String()))
 	}
 
 	if _, ok := tableInfo.GetColumnInfoByName(commonEvent.OriginTsColumn); !ok {
 		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
-			"table %s.%s(id=%d) in dispatcher %s missing required column %s for enable-active-active",
-			tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String(), commonEvent.OriginTsColumn)
+			fmt.Sprintf("table %s.%s(id=%d) in dispatcher %s missing required column %s for enable-active-active",
+				tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String(), commonEvent.OriginTsColumn))
 	}
 
 	if _, ok := tableInfo.GetColumnOffsetByName(commonEvent.SoftDeleteTimeColumn); !ok {
 		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
-			"table %s.%s(id=%d) in dispatcher %s missing required column offset %s for enable-active-active",
-			tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String(), commonEvent.SoftDeleteTimeColumn)
+			fmt.Sprintf("table %s.%s(id=%d) in dispatcher %s missing required column offset %s for enable-active-active",
+				tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String(), commonEvent.SoftDeleteTimeColumn))
 	}
 
 	softDeleteCol, ok := tableInfo.GetColumnInfoByName(commonEvent.SoftDeleteTimeColumn)
 	if !ok {
 		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
-			"table %s.%s(id=%d) in dispatcher %s missing required column %s for enable-active-active",
-			tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String(), commonEvent.SoftDeleteTimeColumn)
+			fmt.Sprintf("table %s.%s(id=%d) in dispatcher %s missing required column %s for enable-active-active",
+				tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String(), commonEvent.SoftDeleteTimeColumn))
 	}
 	notNull := mysql.HasNotNullFlag(softDeleteCol.GetFlag())
 	if softDeleteCol.GetType() != mysql.TypeTimestamp || softDeleteCol.FieldType.GetDecimal() != tidbTypes.MaxFsp || notNull {
-		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(fmt.Sprintf(
 			"table %s.%s(id=%d) in dispatcher %s invalid column %s, expect TIMESTAMP(6) NULL, got type %d fsp %d notNull %t",
 			tableInfo.GetSchemaName(),
 			tableInfo.GetTableName(),
@@ -397,7 +397,7 @@ func (d *BasicDispatcher) ensureActiveActiveTableInfo(tableInfo *common.TableInf
 			softDeleteCol.GetType(),
 			softDeleteCol.FieldType.GetDecimal(),
 			notNull,
-		)
+		))
 	}
 	return nil
 }
@@ -437,13 +437,13 @@ func (d *BasicDispatcher) ensureTableModeCompatibility(tableInfo *common.TableIn
 
 	if tableInfo.IsActiveActiveTable() {
 		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
-			"table %s.%s(id=%d) in dispatcher %s is active-active but enable-active-active is false",
-			tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String())
+			fmt.Sprintf("table %s.%s(id=%d) in dispatcher %s is active-active but enable-active-active is false",
+				tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String()))
 	}
 	if tableInfo.IsSoftDeleteTable() {
 		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
-			"table %s.%s(id=%d) in dispatcher %s is soft delete but enable-active-active is false",
-			tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String())
+			fmt.Sprintf("table %s.%s(id=%d) in dispatcher %s is soft delete but enable-active-active is false",
+				tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String()))
 	}
 	return nil
 }
