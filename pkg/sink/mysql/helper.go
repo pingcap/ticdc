@@ -343,6 +343,11 @@ func GenerateDSN(ctx context.Context, cfg *Config) (string, error) {
 	dsn.Params["sql_mode"] = strconv.Quote(dsn.Params["sql_mode"])
 
 	cfg.IsTiDB = CheckIsTiDB(ctx, testDB)
+	if cfg.EnableActiveActive && !cfg.IsTiDB {
+		return "", cerror.ErrMySQLInvalidConfig.GenWithStack(
+			"enable-active-active requires downstream TiDB")
+	}
+
 	cfg.setWorkerCountByDownstream()
 	log.Info("set worker count for mysql sink", zap.Int("workerCount", cfg.WorkerCount))
 

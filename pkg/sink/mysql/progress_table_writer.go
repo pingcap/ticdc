@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
@@ -42,7 +41,7 @@ type ProgressTableWriter struct {
 	db           *sql.DB
 	changefeedID common.ChangeFeedID
 
-	tableSchemaStore *commonEvent.TableSchemaStore
+	tableSchemaStore *event.TableSchemaStore
 
 	progressUpdateInterval time.Duration
 
@@ -74,7 +73,7 @@ func NewProgressTableWriter(ctx context.Context, db *sql.DB, changefeedID common
 }
 
 // SetTableSchemaStore injects the schema store.
-func (w *ProgressTableWriter) SetTableSchemaStore(store *commonEvent.TableSchemaStore) {
+func (w *ProgressTableWriter) SetTableSchemaStore(store *event.TableSchemaStore) {
 	w.tableSchemaStore = store
 }
 
