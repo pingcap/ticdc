@@ -26,6 +26,7 @@ import (
 	dmysql "github.com/go-sql-driver/mysql"
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/pingcap/errors"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -344,6 +345,10 @@ func NewMysqlConfigAndDB(
 	extraConn := 10
 	db.SetMaxIdleConns(cfg.WorkerCount + extraConn)
 	db.SetMaxOpenConns(cfg.WorkerCount + extraConn)
+	failpoint.Inject("MySQLSinkForceSingleConnection", func() {
+		db.SetMaxIdleConns(1)
+		db.SetMaxOpenConns(1)
+	})
 
 	// Inherit the default value of the prepared statement cache from the SinkURI Options
 	cachePrepStmts := cfg.CachePrepStmts

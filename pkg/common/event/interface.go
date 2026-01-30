@@ -175,6 +175,11 @@ func ToTablesPB(tables []Table) []*heartbeatpb.Table {
 	return res
 }
 
+type SchemaTableName struct {
+	SchemaName string `msg:"schema-name"`
+	TableName  string `msg:"table-name"`
+}
+
 type Table struct {
 	SchemaID         int64 `msg:"-"`
 	TableID          int64 `msg:"table"`

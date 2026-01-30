@@ -252,4 +252,7 @@ func initSinkMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(WorkerBatchDuration)
 	registry.MustRegister(CheckpointTsMessageDuration)
 	registry.MustRegister(CheckpointTsMessageCount)
+
+	// pulsar sink metrics
+	initPulsarMetrics(registry)
 }
