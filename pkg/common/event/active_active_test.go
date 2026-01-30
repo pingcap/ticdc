@@ -192,6 +192,31 @@ func TestFilterDMLEventSoftDeleteTransitionNullSemantics(t *testing.T) {
 	}
 }
 
+func TestFilterDMLEventSoftDeletePassthroughFastPathNoAllocs(t *testing.T) {
+	ti := newTestTableInfo(t, false, true)
+	preTs := newTimestampValue(time.Date(2025, time.March, 10, 6, 0, 0, 0, time.UTC))
+	postTs := newTimestampValue(time.Date(2025, time.March, 10, 7, 0, 0, 0, time.UTC))
+	event := newDMLEventForTest(t, ti,
+		[]commonpkg.RowType{commonpkg.RowTypeUpdate},
+		[][]interface{}{
+			{int64(1), preTs},
+			{int64(1), postTs},
+		})
+
+	// Warm up any lazily initialized caches before measuring allocations.
+	filtered, skip := FilterDMLEvent(event, false, nil)
+	require.False(t, skip)
+	require.Equal(t, event, filtered)
+
+	allocs := testing.AllocsPerRun(100, func() {
+		filtered, skip := FilterDMLEvent(event, false, nil)
+		if skip || filtered != event {
+			t.Fatalf("unexpected filter result: skip=%v filtered=%v", skip, filtered)
+		}
+	})
+	require.Zero(t, allocs)
+}
+
 func TestFilterDMLEventActiveActiveConvertWhenDisabled(t *testing.T) {
 	ti := newTestTableInfo(t, true, true)
 	ts := newTimestampValue(time.Date(2025, time.March, 10, 1, 0, 0, 0, time.UTC))
@@ -267,6 +292,28 @@ func TestFilterDMLEventActiveActiveKeepUpdateWhenEnabled(t *testing.T) {
 	require.False(t, row.Row.IsEmpty())
 	require.Equal(t, int64(3), row.Row.GetInt64(0))
 	filtered.Rewind()
+}
+
+func TestFilterDMLEventAllDeletesFastPathNoAllocs(t *testing.T) {
+	ti := newTestTableInfo(t, true, true)
+	event := newDMLEventForTest(t, ti,
+		[]commonpkg.RowType{commonpkg.RowTypeDelete},
+		[][]interface{}{
+			{int64(1), nil},
+		})
+
+	// Warm up any lazily initialized caches before measuring allocations.
+	filtered, skip := FilterDMLEvent(event, false, nil)
+	require.True(t, skip)
+	require.Nil(t, filtered)
+
+	allocs := testing.AllocsPerRun(100, func() {
+		filtered, skip := FilterDMLEvent(event, false, nil)
+		if !skip || filtered != nil {
+			t.Fatalf("unexpected filter result: skip=%v filtered=%v", skip, filtered)
+		}
+	})
+	require.Zero(t, allocs)
 }
 
 func TestFilterDMLEventAllRowsSkipped(t *testing.T) {

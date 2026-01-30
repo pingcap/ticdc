@@ -203,6 +203,10 @@ func FilterDMLEvent(event *DMLEvent, enableActiveActive bool, handleError func(e
 		return event, false
 	}
 
+	// FilterDMLEvent iterates rows via GetNextRow. Always start from the beginning to
+	// keep the filtering result independent of the caller's current offset.
+	event.Rewind()
+
 	var (
 		softDeleteTimeColIndex int
 		hasSoftDeleteTimeCol   bool
@@ -221,12 +225,52 @@ func FilterDMLEvent(event *DMLEvent, enableActiveActive bool, handleError func(e
 		hasSoftDeleteTimeCol = true
 	}
 
+	rowTypeSummary := summarizeRowTypes(event.RowTypes)
+
 	// When enable-active-active is true, the only transformation is dropping delete rows.
 	// Fast path: after validating schema requirements, avoid iterating/copying rows when
 	// the event contains no delete rows.
-	if enableActiveActive && !hasRowType(event.RowTypes, common.RowTypeDelete) {
+	if enableActiveActive && !rowTypeSummary.hasDelete {
 		event.Rewind()
 		return event, false
+	}
+
+	// When enable-active-active is false, delete rows are always dropped and soft-delete
+	// transitions are rewritten into deletes.
+	//
+	// Fast path: when the event contains only delete rows, drop it without iterating the
+	// underlying chunk. When there are no delete rows, scan for the first soft-delete
+	// transition and return the original event if none exists.
+	if !enableActiveActive {
+		if rowTypeSummary.allDelete {
+			event.Rewind()
+			return nil, true
+		}
+		if !rowTypeSummary.hasDelete {
+			if !rowTypeSummary.hasUpdate {
+				event.Rewind()
+				return event, false
+			}
+
+			needRewrite := false
+			for {
+				row, ok := event.GetNextRow()
+				if !ok {
+					break
+				}
+				if row.RowType != common.RowTypeUpdate {
+					continue
+				}
+				if needConvertUpdateToDelete(&row, softDeleteTimeColIndex) {
+					needRewrite = true
+					break
+				}
+			}
+			event.Rewind()
+			if !needRewrite {
+				return event, false
+			}
+		}
 	}
 
 	fieldTypes := tableInfo.GetFieldSlice()
@@ -368,11 +412,26 @@ func cloneRowKey(rowKey []byte) []byte {
 	return cp
 }
 
-func hasRowType(rowTypes []common.RowType, target common.RowType) bool {
+type rowTypeSummary struct {
+	hasDelete bool
+	hasUpdate bool
+	allDelete bool
+}
+
+func summarizeRowTypes(rowTypes []common.RowType) rowTypeSummary {
+	summary := rowTypeSummary{
+		allDelete: len(rowTypes) != 0,
+	}
 	for _, rowType := range rowTypes {
-		if rowType == target {
-			return true
+		switch rowType {
+		case common.RowTypeDelete:
+			summary.hasDelete = true
+		case common.RowTypeUpdate:
+			summary.hasUpdate = true
+			summary.allDelete = false
+		default:
+			summary.allDelete = false
 		}
 	}
-	return false
+	return summary
 }
