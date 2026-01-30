@@ -283,8 +283,8 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) b
 				zap.String("eventType", commonEvent.TypeToString(event.GetType())),
 				zap.Uint64("lastEventSeq", lastEventSeq),
 				zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()),
-				zap.Uint64("receivedSeq", event.GetSeq()),
 				zap.Uint64("expectedSeq", expectedSeq),
+				zap.Uint64("receivedSeq", event.GetSeq()),
 				zap.Uint64("commitTs", event.GetCommitTs()))
 			return false
 		}
