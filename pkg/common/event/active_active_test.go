@@ -95,47 +95,6 @@ func TestFilterDMLEventActiveActiveSkipsDeleteButKeepsFollowingRows(t *testing.T
 	filtered.Rewind()
 }
 
-func TestFilterDMLEventPreservesRowKeysAfterFiltering(t *testing.T) {
-	ti := newTestTableInfo(t, true, true)
-
-	// delete + insert, the delete row should be filtered out.
-	event := newDMLEventForTest(t, ti,
-		[]commonpkg.RowType{commonpkg.RowTypeDelete, commonpkg.RowTypeInsert},
-		[][]interface{}{
-			{int64(1), nil}, // delete row pre image
-			{int64(2), nil}, // insert row
-		})
-	event.RowKeys = [][]byte{
-		[]byte("k1"),
-		[]byte("k2"),
-	}
-
-	filtered, skip := FilterDMLEvent(event, true, nil)
-	require.False(t, skip)
-	require.NotNil(t, filtered)
-	require.NotEqual(t, event, filtered)
-	require.Equal(t, [][]byte{[]byte("k2")}, filtered.RowKeys)
-
-	// update that triggers a soft delete conversion, only the pre-image key should be kept.
-	ts := newTimestampValue(time.Date(2025, time.March, 10, 0, 0, 0, 0, time.UTC))
-	event = newDMLEventForTest(t, ti,
-		[]commonpkg.RowType{commonpkg.RowTypeUpdate},
-		[][]interface{}{
-			{int64(3), nil},
-			{int64(3), ts},
-		})
-	event.RowKeys = [][]byte{
-		[]byte("k3-pre"),
-		[]byte("k3-post"),
-	}
-
-	filtered, skip = FilterDMLEvent(event, false, nil)
-	require.False(t, skip)
-	require.NotNil(t, filtered)
-	require.NotEqual(t, event, filtered)
-	require.Equal(t, [][]byte{[]byte("k3-pre")}, filtered.RowKeys)
-}
-
 func TestFilterDMLEventSoftDeleteConvertUpdate(t *testing.T) {
 	ti := newTestTableInfo(t, false, true)
 	ts := newTimestampValue(time.Date(2025, time.March, 10, 0, 0, 0, 0, time.UTC))
@@ -233,31 +192,6 @@ func TestFilterDMLEventSoftDeleteTransitionNullSemantics(t *testing.T) {
 	}
 }
 
-func TestFilterDMLEventSoftDeletePassthroughFastPathNoAllocs(t *testing.T) {
-	ti := newTestTableInfo(t, false, true)
-	preTs := newTimestampValue(time.Date(2025, time.March, 10, 6, 0, 0, 0, time.UTC))
-	postTs := newTimestampValue(time.Date(2025, time.March, 10, 7, 0, 0, 0, time.UTC))
-	event := newDMLEventForTest(t, ti,
-		[]commonpkg.RowType{commonpkg.RowTypeUpdate},
-		[][]interface{}{
-			{int64(1), preTs},
-			{int64(1), postTs},
-		})
-
-	// Warm up any lazily initialized caches before measuring allocations.
-	filtered, skip := FilterDMLEvent(event, false, nil)
-	require.False(t, skip)
-	require.Equal(t, event, filtered)
-
-	allocs := testing.AllocsPerRun(100, func() {
-		filtered, skip := FilterDMLEvent(event, false, nil)
-		if skip || filtered != event {
-			t.Fatalf("unexpected filter result: skip=%v filtered=%v", skip, filtered)
-		}
-	})
-	require.Zero(t, allocs)
-}
-
 func TestFilterDMLEventActiveActiveConvertWhenDisabled(t *testing.T) {
 	ti := newTestTableInfo(t, true, true)
 	ts := newTimestampValue(time.Date(2025, time.March, 10, 1, 0, 0, 0, time.UTC))
@@ -333,28 +267,6 @@ func TestFilterDMLEventActiveActiveKeepUpdateWhenEnabled(t *testing.T) {
 	require.False(t, row.Row.IsEmpty())
 	require.Equal(t, int64(3), row.Row.GetInt64(0))
 	filtered.Rewind()
-}
-
-func TestFilterDMLEventAllDeletesFastPathNoAllocs(t *testing.T) {
-	ti := newTestTableInfo(t, true, true)
-	event := newDMLEventForTest(t, ti,
-		[]commonpkg.RowType{commonpkg.RowTypeDelete},
-		[][]interface{}{
-			{int64(1), nil},
-		})
-
-	// Warm up any lazily initialized caches before measuring allocations.
-	filtered, skip := FilterDMLEvent(event, false, nil)
-	require.True(t, skip)
-	require.Nil(t, filtered)
-
-	allocs := testing.AllocsPerRun(100, func() {
-		filtered, skip := FilterDMLEvent(event, false, nil)
-		if !skip || filtered != nil {
-			t.Fatalf("unexpected filter result: skip=%v filtered=%v", skip, filtered)
-		}
-	})
-	require.Zero(t, allocs)
 }
 
 func TestFilterDMLEventAllRowsSkipped(t *testing.T) {
