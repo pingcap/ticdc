@@ -133,6 +133,11 @@ type Maintainer struct {
 	// the changefeed is removed, notify the dispatcher manager to clear ddl_ts table
 	changefeedRemoved atomic.Bool
 
+	// ignoredNonCascadeRemoveBeforeBootstrap indicates whether we have already logged
+	// a non-cascade remove request received before bootstrap. This avoids log spam when
+	// coordinator retries move/remove while the maintainer is still bootstrapping.
+	ignoredNonCascadeRemoveBeforeBootstrap atomic.Bool
+
 	lastPrintStatusTime time.Time
 	// lastCheckpointTsTime time.Time
 
@@ -491,6 +496,16 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 }
 
 func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
+	if !m.initialized.Load() && !cascade && !changefeedRemoved {
+		// A non-cascade remove can arrive before bootstrap finishes in move/restart scenarios.
+		// If we mark the maintainer as removing here, later bootstrap responses may be dropped,
+		// leaving the maintainer permanently not bootstrapped and the coordinator stuck retrying.
+		if m.ignoredNonCascadeRemoveBeforeBootstrap.CompareAndSwap(false, true) {
+			log.Info("ignore non-cascade remove request before bootstrap",
+				zap.Stringer("changefeedID", m.changefeedID))
+		}
+		return
+	}
 	m.removing.Store(true)
 	m.cascadeRemoving.Store(cascade)
 	m.changefeedRemoved.Store(changefeedRemoved)
