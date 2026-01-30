@@ -42,7 +42,6 @@ func newRedoDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) 
 		false,
 		false,
 		false,
-		false,
 		nil,
 		nil,
 		nil, // redo dispatcher doesn't need syncPointConfig

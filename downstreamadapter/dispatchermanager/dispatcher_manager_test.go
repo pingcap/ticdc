@@ -53,7 +53,6 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 		false,
 		false,
 		false,
-		false,
 		nil,
 		nil,
 		nil,
@@ -112,7 +111,6 @@ func createTestManager(t *testing.T) *DispatcherManager {
 		"system",
 		manager.config.BDRMode,
 		manager.config.EnableActiveActive,
-		false,
 		false, // outputRawChangeEvent
 		nil,   // integrityConfig
 		nil,   // filterConfig

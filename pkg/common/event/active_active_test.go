@@ -32,7 +32,7 @@ func TestFilterDMLEventNormalTablePassthrough(t *testing.T) {
 		{int64(1)},
 	})
 
-	filtered, skip, err := FilterDMLEvent(event, false, false)
+	filtered, skip, err := FilterDMLEvent(event, false)
 	require.NoError(t, err)
 	require.False(t, skip)
 	require.Equal(t, event, filtered)
@@ -48,7 +48,7 @@ func TestFilterDMLEventActiveActiveWithEnableDropsDeletes(t *testing.T) {
 			{int64(2), nil}, // insert row
 		})
 
-	filtered, skip, err := FilterDMLEvent(event, true, false)
+	filtered, skip, err := FilterDMLEvent(event, true)
 	require.NoError(t, err)
 	require.False(t, skip)
 	require.NotEqual(t, event, filtered)
@@ -73,7 +73,7 @@ func TestFilterDMLEventSoftDeleteConvertUpdate(t *testing.T) {
 			{int64(1), ts},  // post row with soft delete timestamp
 		})
 
-	filtered, skip, err := FilterDMLEvent(event, false, false)
+	filtered, skip, err := FilterDMLEvent(event, false)
 	require.NoError(t, err)
 	require.False(t, skip)
 	require.NotEqual(t, event, filtered)
@@ -98,7 +98,7 @@ func TestFilterDMLEventActiveActiveConvertWhenDisabled(t *testing.T) {
 			{int64(2), ts},
 		})
 
-	filtered, skip, err := FilterDMLEvent(event, false, false)
+	filtered, skip, err := FilterDMLEvent(event, false)
 	require.NoError(t, err)
 	require.False(t, skip)
 	require.NotEqual(t, event, filtered)
@@ -123,7 +123,7 @@ func TestFilterDMLEventActiveActiveKeepUpdateWhenEnabled(t *testing.T) {
 			{int64(3), ts},
 		})
 
-	filtered, skip, err := FilterDMLEvent(event, true, false)
+	filtered, skip, err := FilterDMLEvent(event, true)
 	require.NoError(t, err)
 	require.False(t, skip)
 	require.Equal(t, event, filtered)
@@ -146,7 +146,7 @@ func TestFilterDMLEventAllRowsSkipped(t *testing.T) {
 			{int64(1), nil},
 		})
 
-	filtered, skip, err := FilterDMLEvent(event, false, false)
+	filtered, skip, err := FilterDMLEvent(event, false)
 	require.NoError(t, err)
 	require.True(t, skip)
 	require.Nil(t, filtered)

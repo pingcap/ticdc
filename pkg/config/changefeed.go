@@ -202,7 +202,6 @@ type ChangefeedConfig struct {
 	Epoch                         uint64        `json:"epoch"`
 	BDRMode                       bool          `json:"bdr_mode" default:"false"`
 	EnableActiveActive            bool          `json:"enable_active_active" default:"false"`
-	EnableActiveActiveCheck       bool          `json:"enable_active_active_check" default:"false"`
 	ActiveActiveProgressInterval  time.Duration `json:"active_active_progress_interval" default:"30m"`
 	ActiveActiveSyncStatsInterval time.Duration `json:"active_active_sync_stats_interval" default:"1m"`
 	// redo releated
@@ -282,7 +281,6 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		Epoch:                         info.Epoch,
 		BDRMode:                       util.GetOrZero(info.Config.BDRMode),
 		EnableActiveActive:            util.GetOrZero(info.Config.EnableActiveActive),
-		EnableActiveActiveCheck:       util.GetOrZero(info.Config.EnableActiveActiveCheck),
 		ActiveActiveProgressInterval:  util.GetOrZero(info.Config.ActiveActiveProgressInterval),
 		ActiveActiveSyncStatsInterval: util.GetOrZero(info.Config.ActiveActiveSyncStatsInterval),
 		TimeZone:                      GetGlobalServerConfig().TZ,

@@ -193,7 +193,6 @@ type ReplicaConfig struct {
 	EnableTableMonitor            *bool         `json:"enable_table_monitor,omitempty"`
 	BDRMode                       *bool         `json:"bdr_mode,omitempty"`
 	EnableActiveActive            *bool         `json:"enable_active_active,omitempty"`
-	EnableActiveActiveCheck       *bool         `json:"enable_active_active_check,omitempty"`
 	ActiveActiveProgressInterval  *JSONDuration `json:"active_active_progress_interval,omitempty"`
 	ActiveActiveSyncStatsInterval *JSONDuration `json:"active_active_sync_stats_interval,omitempty"`
 
@@ -250,9 +249,6 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 	}
 	if c.EnableActiveActive != nil {
 		res.EnableActiveActive = c.EnableActiveActive
-	}
-	if c.EnableActiveActiveCheck != nil {
-		res.EnableActiveActiveCheck = c.EnableActiveActiveCheck
 	}
 
 	if c.Filter != nil {
@@ -635,16 +631,15 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 	cloned := c.Clone()
 
 	res := &ReplicaConfig{
-		MemoryQuota:             cloned.MemoryQuota,
-		CaseSensitive:           cloned.CaseSensitive,
-		ForceReplicate:          cloned.ForceReplicate,
-		IgnoreIneligibleTable:   cloned.IgnoreIneligibleTable,
-		CheckGCSafePoint:        cloned.CheckGCSafePoint,
-		EnableSyncPoint:         cloned.EnableSyncPoint,
-		EnableTableMonitor:      cloned.EnableTableMonitor,
-		BDRMode:                 cloned.BDRMode,
-		EnableActiveActive:      cloned.EnableActiveActive,
-		EnableActiveActiveCheck: cloned.EnableActiveActiveCheck,
+		MemoryQuota:           cloned.MemoryQuota,
+		CaseSensitive:         cloned.CaseSensitive,
+		ForceReplicate:        cloned.ForceReplicate,
+		IgnoreIneligibleTable: cloned.IgnoreIneligibleTable,
+		CheckGCSafePoint:      cloned.CheckGCSafePoint,
+		EnableSyncPoint:       cloned.EnableSyncPoint,
+		EnableTableMonitor:    cloned.EnableTableMonitor,
+		BDRMode:               cloned.BDRMode,
+		EnableActiveActive:    cloned.EnableActiveActive,
 	}
 
 	if cloned.SyncPointInterval != nil {

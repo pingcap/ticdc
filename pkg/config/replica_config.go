@@ -174,7 +174,6 @@ type replicaConfig struct {
 	SyncedStatus                 *SyncedStatusConfig `toml:"synced-status" json:"synced-status,omitempty"`
 
 	EnableActiveActive           *bool          `toml:"enable-active-active" json:"enable-active-active,omitempty"`
-	EnableActiveActiveCheck      *bool          `toml:"enable-active-active-check" json:"enable-active-active-check,omitempty"`
 	ActiveActiveProgressInterval *time.Duration `toml:"active-active-progress-interval" json:"active-active-progress-interval,omitempty"`
 	// ActiveActiveSyncStatsInterval controls how often MySQL/TiDB sink queries
 	// TiDB session variable @@tidb_cdc_active_active_sync_stats for conflict statistics.
