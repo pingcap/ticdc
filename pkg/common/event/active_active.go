@@ -18,7 +18,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
-	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	tidbTypes "github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
 )
@@ -46,7 +47,7 @@ const (
 
 // EvaluateRowPolicy decides how special tables (active-active/soft-delete)
 // should behave under the given changefeed mode.
-// softDeleteTimeCol and softDeleteTimeColIndex must refer to `_tidb_softdelete_time`
+// softDeleteTimeColIndex must refer to `_tidb_softdelete_time`
 // when enableActiveActive is false and the table is active-active or soft-delete.
 // The decision order is:
 //  1. Tables with neither feature are returned untouched.
@@ -60,7 +61,6 @@ func EvaluateRowPolicy(
 	tableInfo *common.TableInfo,
 	row *RowChange,
 	enableActiveActive bool,
-	softDeleteTimeCol *model.ColumnInfo,
 	softDeleteTimeColIndex int,
 ) RowPolicyDecision {
 	if tableInfo == nil || row == nil {
@@ -86,44 +86,80 @@ func EvaluateRowPolicy(
 		return RowPolicyKeep
 	}
 
-	if needConvertUpdateToDelete(row, softDeleteTimeColIndex, softDeleteTimeCol) {
+	if needConvertUpdateToDelete(row, softDeleteTimeColIndex) {
 		return RowPolicyConvertToDelete
 	}
 	return RowPolicyKeep
 }
 
 // needConvertUpdateToDelete returns true when this update represents a soft-delete transition.
-// The caller must ensure `softDeleteTimeCol` and `softDeleteTimeColIndex` are valid for the row.
-func needConvertUpdateToDelete(row *RowChange, softDeleteTimeColIndex int, softDeleteTimeCol *model.ColumnInfo) bool {
-	if row == nil || softDeleteTimeCol == nil {
+// The caller must ensure `softDeleteTimeColIndex` is valid for the row.
+func needConvertUpdateToDelete(row *RowChange, softDeleteTimeColIndex int) bool {
+	if row == nil {
 		return false
 	}
-	return isSoftDeleteTransition(row.PreRow, row.Row, softDeleteTimeColIndex, softDeleteTimeCol)
+	return isSoftDeleteTransition(row.PreRow, row.Row, softDeleteTimeColIndex)
 }
 
-func isSoftDeleteTransition(preRow, row chunk.Row, offset int, colInfo *model.ColumnInfo) bool {
+// isSoftDeleteTransition determines whether an update represents a soft-delete transition.
+//
+// It relies on the invariant that `_tidb_softdelete_time` is defined as `TIMESTAMP(6) NULL`,
+// and NULL is the only representation of "not deleted". Under this invariant, a transition
+// from not-deleted to deleted is strictly a NULL -> non-NULL change.
+func isSoftDeleteTransition(preRow, row chunk.Row, offset int) bool {
 	if preRow.IsEmpty() || row.IsEmpty() {
 		return false
 	}
 	if offset >= preRow.Len() || offset >= row.Len() {
 		return false
 	}
-	oldVal := common.ExtractColVal(&preRow, colInfo, offset)
-	newVal := common.ExtractColVal(&row, colInfo, offset)
-	return isZeroSoftDeleteValue(oldVal) && !isZeroSoftDeleteValue(newVal)
+	return preRow.IsNull(offset) && !row.IsNull(offset)
 }
 
-// isZeroSoftDeleteValue assumes `_tidb_softdelete_time` is defined as `TIMESTAMP NULL`
-// and ExtractColVal always returns either nil or its string representation.
-func isZeroSoftDeleteValue(val interface{}) bool {
-	if val == nil {
-		return true
-	}
-	str, ok := val.(string)
+// getSoftDeleteTimeColumnIndex returns the column offset for `_tidb_softdelete_time` after validating
+// its semantics. It reports schema issues via `handleError` and returns ok=false in that case.
+//
+// The soft-delete transition detection relies on the invariant that `_tidb_softdelete_time` is
+// defined as `TIMESTAMP(6) NULL`, and NULL is the only representation of "not deleted".
+func getSoftDeleteTimeColumnIndex(event *DMLEvent, handleError func(error)) (idx int, ok bool) {
+	tableInfo := event.TableInfo
+	colInfo, ok := tableInfo.GetColumnInfoByName(SoftDeleteTimeColumn)
 	if !ok {
-		return false
+		handleError(errors.Errorf(
+			"dispatcher %s table %s.%s missing required column %s",
+			event.DispatcherID.String(),
+			tableInfo.GetSchemaName(),
+			tableInfo.GetTableName(),
+			SoftDeleteTimeColumn,
+		))
+		return 0, false
 	}
-	return str == "" || str == "0"
+	offset, ok := tableInfo.GetColumnOffsetByName(SoftDeleteTimeColumn)
+	if !ok {
+		handleError(errors.Errorf(
+			"dispatcher %s table %s.%s missing required column offset %s",
+			event.DispatcherID.String(),
+			tableInfo.GetSchemaName(),
+			tableInfo.GetTableName(),
+			SoftDeleteTimeColumn,
+		))
+		return 0, false
+	}
+	notNull := mysql.HasNotNullFlag(colInfo.GetFlag())
+	if colInfo.GetType() != mysql.TypeTimestamp || colInfo.FieldType.GetDecimal() != tidbTypes.MaxFsp || notNull {
+		handleError(errors.Errorf(
+			"dispatcher %s table %s.%s invalid column %s, expect TIMESTAMP(6) NULL, got type %d fsp %d notNull %t",
+			event.DispatcherID.String(),
+			tableInfo.GetSchemaName(),
+			tableInfo.GetTableName(),
+			SoftDeleteTimeColumn,
+			colInfo.GetType(),
+			colInfo.FieldType.GetDecimal(),
+			notNull,
+		))
+		return 0, false
+	}
+	return offset, true
 }
 
 // ApplyRowPolicyDecision mutates the row based on decision.
@@ -132,17 +168,22 @@ func ApplyRowPolicyDecision(row *RowChange, decision RowPolicyDecision) {
 	case RowPolicyConvertToDelete:
 		row.RowType = common.RowTypeDelete
 		row.Row = chunk.Row{}
+		// When converting an update to a delete, only the pre-image is retained. Clear the
+		// current checksum so downstream verification does not attempt to checksum an empty row.
+		if row.Checksum != nil {
+			row.Checksum.Current = 0
+		}
 	}
 }
 
 // FilterDMLEvent applies row policy decisions to each row in the DMLEvent.
 //   - Normal tables: the original event is returned as-is.
 //   - Active-active tables: delete rows are removed in both modes. When enable-active-active is
-//     false, updates that flip `_tidb_softdelete_time` from zero to non-zero are converted into
-//     delete events. When enable-active-active is true, inserts/updates pass through so downstream
-//     LWW SQL can resolve conflicts.
+//     false, updates that flip `_tidb_softdelete_time` from NULL to non-NULL are converted into delete
+//     events. When enable-active-active is true, inserts/updates pass through so downstream LWW SQL can
+//     resolve conflicts.
 //   - Soft-delete tables: delete rows are removed. When enable-active-active is false, updates that
-//     flip `_tidb_softdelete_time` from zero to non-zero are converted into deletes.
+//     flip `_tidb_softdelete_time` from NULL to non-NULL are converted into deletes.
 //
 // `handleError` is used to report unexpected schema issues and is expected to stop the
 // owning dispatcher. When it is invoked, the returned event must be treated as dropped.
@@ -163,7 +204,6 @@ func FilterDMLEvent(event *DMLEvent, enableActiveActive bool, handleError func(e
 	}
 
 	var (
-		softDeleteTimeCol      *model.ColumnInfo
 		softDeleteTimeColIndex int
 		hasSoftDeleteTimeCol   bool
 	)
@@ -173,29 +213,10 @@ func FilterDMLEvent(event *DMLEvent, enableActiveActive bool, handleError func(e
 	//   - soft-delete tables: for converting soft-delete transitions when enable-active-active is disabled.
 	needSoftDeleteTimeCol := isActiveActive || (!enableActiveActive && isSoftDelete)
 	if needSoftDeleteTimeCol {
-		colInfo, ok := tableInfo.GetColumnInfoByName(SoftDeleteTimeColumn)
+		offset, ok := getSoftDeleteTimeColumnIndex(event, handleError)
 		if !ok {
-			handleError(errors.Errorf(
-				"dispatcher %s table %s.%s missing required column %s",
-				event.DispatcherID.String(),
-				tableInfo.GetSchemaName(),
-				tableInfo.GetTableName(),
-				SoftDeleteTimeColumn,
-			))
 			return nil, true
 		}
-		offset, ok := tableInfo.GetColumnOffsetByName(SoftDeleteTimeColumn)
-		if !ok {
-			handleError(errors.Errorf(
-				"dispatcher %s table %s.%s missing required column offset %s",
-				event.DispatcherID.String(),
-				tableInfo.GetSchemaName(),
-				tableInfo.GetTableName(),
-				SoftDeleteTimeColumn,
-			))
-			return nil, true
-		}
-		softDeleteTimeCol = colInfo
 		softDeleteTimeColIndex = offset
 		hasSoftDeleteTimeCol = true
 	}
@@ -230,15 +251,14 @@ func FilterDMLEvent(event *DMLEvent, enableActiveActive bool, handleError func(e
 			break
 		}
 
-		decision := EvaluateRowPolicy(tableInfo, &row, enableActiveActive, softDeleteTimeCol, softDeleteTimeColIndex)
+		decision := EvaluateRowPolicy(tableInfo, &row, enableActiveActive, softDeleteTimeColIndex)
 
 		switch decision {
 		case RowPolicySkip:
 			if enableActiveActive && row.RowType == common.RowTypeDelete && hasSoftDeleteTimeCol && !row.PreRow.IsEmpty() && softDeleteTimeColIndex < row.PreRow.Len() {
 				// For active-active tables, TiCDC expects user-managed hard deletes to keep
 				// `_tidb_softdelete_time` as NULL, so we log it for observability.
-				softDeleteTime := common.ExtractColVal(&row.PreRow, softDeleteTimeCol, softDeleteTimeColIndex)
-				if softDeleteTime == nil {
+				if row.PreRow.IsNull(softDeleteTimeColIndex) {
 					log.Info("received hard delete row",
 						zap.Stringer("dispatcherID", event.DispatcherID),
 						zap.Int64("tableID", tableInfo.TableName.TableID),

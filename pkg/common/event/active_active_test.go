@@ -18,6 +18,7 @@ import (
 	"time"
 
 	commonpkg "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -118,6 +119,79 @@ func TestFilterDMLEventSoftDeleteConvertUpdate(t *testing.T) {
 	filtered.Rewind()
 }
 
+func TestFilterDMLEventSoftDeleteTransitionNullSemantics(t *testing.T) {
+	ti := newTestTableInfo(t, false, true)
+	preTs := newTimestampValue(time.Date(2025, time.March, 10, 4, 0, 0, 0, time.UTC))
+	postTs := newTimestampValue(time.Date(2025, time.March, 10, 5, 0, 0, 0, time.UTC))
+
+	testCases := []struct {
+		name        string
+		preValue    interface{}
+		postValue   interface{}
+		wantConvert bool
+	}{
+		{
+			name:        "null to non null",
+			preValue:    nil,
+			postValue:   postTs,
+			wantConvert: true,
+		},
+		{
+			name:        "non null to non null",
+			preValue:    preTs,
+			postValue:   postTs,
+			wantConvert: false,
+		},
+		{
+			name:        "non null to null",
+			preValue:    preTs,
+			postValue:   nil,
+			wantConvert: false,
+		},
+		{
+			name:        "null to null",
+			preValue:    nil,
+			postValue:   nil,
+			wantConvert: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			event := newDMLEventForTest(t, ti,
+				[]commonpkg.RowType{commonpkg.RowTypeUpdate},
+				[][]interface{}{
+					{int64(1), tc.preValue},
+					{int64(1), tc.postValue},
+				})
+
+			filtered, skip := FilterDMLEvent(event, false, nil)
+			require.False(t, skip)
+			require.NotNil(t, filtered)
+
+			row, ok := filtered.GetNextRow()
+			require.True(t, ok)
+
+			if tc.wantConvert {
+				require.NotEqual(t, event, filtered)
+				require.Equal(t, commonpkg.RowTypeDelete, row.RowType)
+				require.True(t, row.Row.IsEmpty())
+				require.False(t, row.PreRow.IsEmpty())
+				require.True(t, row.PreRow.IsNull(1))
+			} else {
+				require.Equal(t, event, filtered)
+				require.Equal(t, commonpkg.RowTypeUpdate, row.RowType)
+				require.False(t, row.PreRow.IsEmpty())
+				require.False(t, row.Row.IsEmpty())
+				require.Equal(t, tc.preValue == nil, row.PreRow.IsNull(1))
+				require.Equal(t, tc.postValue == nil, row.Row.IsNull(1))
+			}
+
+			filtered.Rewind()
+		})
+	}
+}
+
 func TestFilterDMLEventActiveActiveConvertWhenDisabled(t *testing.T) {
 	ti := newTestTableInfo(t, true, true)
 	ts := newTimestampValue(time.Date(2025, time.March, 10, 1, 0, 0, 0, time.UTC))
@@ -139,6 +213,35 @@ func TestFilterDMLEventActiveActiveConvertWhenDisabled(t *testing.T) {
 	require.True(t, row.Row.IsEmpty())
 	require.False(t, row.PreRow.IsEmpty())
 	require.Equal(t, int64(2), row.PreRow.GetInt64(0))
+	filtered.Rewind()
+}
+
+func TestFilterDMLEventConvertUpdateToDeleteClearsCurrentChecksum(t *testing.T) {
+	ti := newTestTableInfo(t, true, true)
+	ts := newTimestampValue(time.Date(2025, time.March, 10, 1, 0, 0, 0, time.UTC))
+	event := newDMLEventForTest(t, ti,
+		[]commonpkg.RowType{commonpkg.RowTypeUpdate},
+		[][]interface{}{
+			{int64(2), nil},
+			{int64(2), ts},
+		})
+	event.Checksum = []*integrity.Checksum{
+		{Current: 1, Previous: 2},
+	}
+
+	filtered, skip := FilterDMLEvent(event, false, nil)
+	require.False(t, skip)
+	require.NotEqual(t, event, filtered)
+	require.Equal(t, int32(1), filtered.Len())
+
+	row, ok := filtered.GetNextRow()
+	require.True(t, ok)
+	require.Equal(t, commonpkg.RowTypeDelete, row.RowType)
+	require.True(t, row.Row.IsEmpty())
+	require.False(t, row.PreRow.IsEmpty())
+	require.NotNil(t, row.Checksum)
+	require.Equal(t, uint32(0), row.Checksum.Current)
+	require.Equal(t, uint32(2), row.Checksum.Previous)
 	filtered.Rewind()
 }
 
