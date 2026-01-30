@@ -55,6 +55,20 @@ var (
 			Name:      "resolved_ts_lag",
 			Help:      "resolved ts lag of eventService in seconds",
 		}, []string{"type"})
+	EventServiceScanWindowBaseTsGaugeVec = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "scan_window_base_ts",
+			Help:      "The base ts of the scan window for each changefeed",
+		}, []string{"changefeed"})
+	EventServiceScanWindowIntervalGaugeVec = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "scan_window_interval",
+			Help:      "The scan window interval in seconds for each changefeed",
+		}, []string{"changefeed"})
 	EventServiceScanDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
@@ -178,6 +192,8 @@ func initEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceSendEventDuration)
 	registry.MustRegister(EventServiceResolvedTsGauge)
 	registry.MustRegister(EventServiceResolvedTsLagGauge)
+	registry.MustRegister(EventServiceScanWindowBaseTsGaugeVec)
+	registry.MustRegister(EventServiceScanWindowIntervalGaugeVec)
 	registry.MustRegister(EventServiceScanDuration)
 	registry.MustRegister(EventServiceScannedCount)
 	registry.MustRegister(EventServiceDispatcherGauge)
