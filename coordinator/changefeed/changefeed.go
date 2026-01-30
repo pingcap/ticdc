@@ -188,7 +188,7 @@ func (c *Changefeed) ForceUpdateStatus(newStatus *heartbeatpb.MaintainerStatus) 
 
 func (c *Changefeed) NeedCheckpointTsMessage() bool {
 	switch c.sinkType {
-	case common.KafkaSinkType, common.PulsarSinkType, common.CloudStorageSinkType, common.BlackHoleSinkType:
+	case common.KafkaSinkType, common.PulsarSinkType, common.CloudStorageSinkType, common.IcebergSinkType, common.BlackHoleSinkType:
 		return true
 	}
 	return false
@@ -287,6 +287,9 @@ func getSinkType(scheme string) common.SinkType {
 	}
 	if config.IsStorageScheme(scheme) {
 		return common.CloudStorageSinkType
+	}
+	if config.IsIcebergScheme(scheme) {
+		return common.IcebergSinkType
 	}
 	return common.BlackHoleSinkType
 }
