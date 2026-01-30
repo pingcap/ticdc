@@ -24,14 +24,13 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/sync/errgroup"
 )
 
 // dmlWriters denotes a worker responsible for writing messages to cloud storage.
 type dmlWriters struct {
 	changefeedID commonType.ChangeFeedID
-	statistics   *metrics.Statistics
-
 	// msgCh is a channel to hold eventFragment.
 	// The caller of WriteEvents will write eventFragment to msgCh and
 	// the encodingWorkers will read eventFragment from msgCh to encode events.
@@ -46,6 +45,8 @@ type dmlWriters struct {
 
 	// last sequence number
 	lastSeqNum uint64
+
+	totalRawBytes prometheus.Counter
 }
 
 func newDMLWriters(
@@ -70,12 +71,13 @@ func newDMLWriters(
 
 	return &dmlWriters{
 		changefeedID: changefeedID,
-		statistics:   statistics,
 		msgCh:        messageCh,
 
 		encodeGroup:  encoderGroup,
 		defragmenter: newDefragmenter(encodedOutCh, writerInputChs),
 		writers:      writers,
+
+		totalRawBytes: metrics.CloudStorageRawBytesCounter.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 	}
 }
 
@@ -102,6 +104,11 @@ func (d *dmlWriters) Run(ctx context.Context) error {
 }
 
 func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
+	rawBytes := event.GetSize()
+	if rawBytes > 0 {
+		d.totalRawBytes.Add(float64(rawBytes))
+	}
+
 	tbl := cloudstorage.VersionedTableName{
 		TableNameWithPhysicTableID: commonType.TableName{
 			Schema:      event.TableInfo.GetSchemaName(),
@@ -113,11 +120,7 @@ func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
 		DispatcherID:     event.GetDispatcherID(),
 	}
 	seq := atomic.AddUint64(&d.lastSeqNum, 1)
-	_ = d.statistics.RecordBatchExecution(func() (int, int64, error) {
-		// emit a TxnCallbackableEvent encoupled with a sequence number starting from one.
-		d.msgCh.Push(newEventFragment(seq, tbl, event))
-		return int(event.Len()), event.GetSize(), nil
-	})
+	d.msgCh.Push(newEventFragment(seq, tbl, event))
 }
 
 func (d *dmlWriters) close() {
@@ -126,4 +129,5 @@ func (d *dmlWriters) close() {
 	for _, w := range d.writers {
 		w.close()
 	}
+	metrics.CloudStorageRawBytesCounter.DeleteLabelValues(d.changefeedID.Keyspace(), d.changefeedID.Name())
 }

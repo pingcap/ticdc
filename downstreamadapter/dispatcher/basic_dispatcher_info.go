@@ -14,6 +14,7 @@
 package dispatcher
 
 import (
+	"math"
 	"sync/atomic"
 	"time"
 
@@ -66,6 +67,9 @@ type SharedInfo struct {
 	// errCh is used to collect the errors that need to report to maintainer
 	// such as error of flush ddl events
 	errCh chan error
+
+	cloudStorageInflightBudget atomic.Pointer[globalInflightBudget]
+	redoInflightBudget         atomic.Pointer[globalInflightBudget]
 }
 
 // NewSharedInfo creates a new SharedInfo with the given parameters
@@ -104,6 +108,47 @@ func NewSharedInfo(
 		sharedInfo.txnAtomicity = config.DefaultAtomicityLevel()
 	}
 	return sharedInfo
+}
+
+func (s *SharedInfo) InitChangefeedInflightBudget(sinkType common.SinkType, areaQuotaBytes uint64) {
+	var target *atomic.Pointer[globalInflightBudget]
+	switch sinkType {
+	case common.CloudStorageSinkType:
+		target = &s.cloudStorageInflightBudget
+	case common.RedoSinkType:
+		target = &s.redoInflightBudget
+	default:
+		return
+	}
+	if target.Load() != nil {
+		return
+	}
+
+	quotaBytes := int64(areaQuotaBytes)
+	if areaQuotaBytes > math.MaxInt64 {
+		quotaBytes = math.MaxInt64
+	}
+
+	globalHigh := int64(inflightDefaultPerHighBytes) * 4
+	if quotaBytes > 0 {
+		if v := quotaBytes / 2; v < globalHigh {
+			globalHigh = v
+		}
+	}
+	globalLow := globalHigh / 2
+
+	target.Store(newGlobalInflightBudget(s.changefeedID, sinkType, globalHigh, globalLow))
+}
+
+func (s *SharedInfo) getChangefeedInflightBudget(sinkType common.SinkType) *globalInflightBudget {
+	switch sinkType {
+	case common.CloudStorageSinkType:
+		return s.cloudStorageInflightBudget.Load()
+	case common.RedoSinkType:
+		return s.redoInflightBudget.Load()
+	default:
+	}
+	return nil
 }
 
 func (d *BasicDispatcher) GetId() common.DispatcherID {

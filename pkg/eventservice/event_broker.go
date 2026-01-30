@@ -391,7 +391,6 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
 		return false, common.DataRange{}
 	}
-
 	keyspaceMeta := common.KeyspaceMeta{
 		ID:   task.info.GetTableSpan().KeyspaceID,
 		Name: task.changefeedStat.changefeedID.Keyspace(),
@@ -494,7 +493,7 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 	}
 
 	remoteID := node.ID(task.info.GetServerID())
-	event := event.NewHandshakeEvent(task.id, task.startTs, task.epoch, task.startTableInfo)
+	event := event.NewHandshakeEvent(task.id, task.checkpointTs.Load(), task.epoch, task.tableInfo)
 	log.Info("send handshake event to dispatcher",
 		zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
 		zap.Stringer("dispatcherID", task.id),
@@ -926,7 +925,9 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	changefeedID := info.GetChangefeedID()
 
 	status := c.getOrSetChangefeedStatus(changefeedID)
-	dispatcher := newDispatcherStat(info, uint64(len(c.taskChan)), uint64(len(c.messageCh)), nil, status)
+
+	checkpointTs := info.GetStartTs()
+	dispatcher := newDispatcherStat(info, checkpointTs, uint64(len(c.taskChan)), uint64(len(c.messageCh)), nil, status)
 	dispatcherPtr := &atomic.Pointer[dispatcherStat]{}
 	dispatcherPtr.Store(dispatcher)
 	status.addDispatcher(id, dispatcherPtr)
@@ -936,8 +937,9 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 			zap.Uint64("clusterID", c.tidbClusterID),
 			zap.Stringer("changefeedID", changefeedID),
 			zap.Stringer("dispatcherID", id),
+			zap.Uint64("checkpointTs", checkpointTs),
 			zap.String("span", common.FormatTableSpan(span)),
-			zap.Uint64("startTs", info.GetStartTs()))
+		)
 		return nil
 	}
 
@@ -946,7 +948,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		changefeedID,
 		id,
 		span,
-		info.GetStartTs(),
+		checkpointTs,
 		func(resolvedTs uint64, latestCommitTs uint64) {
 			d := dispatcherPtr.Load()
 			// If the dispatcher is removed, just ignore the notification.
@@ -963,8 +965,10 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		if !info.IsOnlyReuse() {
 			log.Error("register dispatcher to eventStore failed",
 				zap.Stringer("changefeedID", changefeedID),
-				zap.Stringer("dispatcherID", id), zap.Int64("tableID", span.GetTableID()),
-				zap.Uint64("startTs", info.GetStartTs()), zap.String("span", common.FormatTableSpan(span)))
+				zap.Stringer("dispatcherID", id),
+				zap.Uint64("checkpointTs", checkpointTs),
+				zap.Int64("tableID", span.GetTableID()),
+				zap.String("span", common.FormatTableSpan(span)))
 		}
 		status.removeDispatcher(id)
 		if status.isEmpty() {
@@ -978,12 +982,12 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		ID:   span.KeyspaceID,
 		Name: changefeedID.Keyspace(),
 	}
-	err := c.schemaStore.RegisterTable(keyspaceMeta, span.GetTableID(), info.GetStartTs())
+	err := c.schemaStore.RegisterTable(keyspaceMeta, span.GetTableID(), checkpointTs)
 	if err != nil {
 		log.Error("register table to schemaStore failed",
 			zap.Uint32("keyspaceID", span.KeyspaceID),
-			zap.Stringer("dispatcherID", id), zap.Int64("tableID", span.GetTableID()),
-			zap.Uint64("startTs", info.GetStartTs()), zap.String("span", common.FormatTableSpan(span)),
+			zap.Stringer("dispatcherID", id), zap.Uint64("checkpointTs", checkpointTs),
+			zap.Int64("tableID", span.GetTableID()), zap.String("span", common.FormatTableSpan(span)),
 			zap.Error(err),
 		)
 		status.removeDispatcher(id)
@@ -1001,7 +1005,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		zap.Int64("mode", info.GetMode()),
 		zap.Int64("tableID", span.GetTableID()),
 		zap.String("span", common.FormatTableSpan(span)),
-		zap.Uint64("startTs", info.GetStartTs()),
+		zap.Uint64("checkpointTs", checkpointTs),
 		zap.String("txnAtomocity", string(info.GetTxnAtomicity())),
 		zap.Duration("duration", time.Since(start)))
 	return nil
@@ -1058,17 +1062,23 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 }
 
 func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
-	dispatcherID := dispatcherInfo.GetID()
-	start := time.Now()
+	var (
+		changefeedID = dispatcherInfo.GetChangefeedID()
+		dispatcherID = dispatcherInfo.GetID()
+		startTs      = dispatcherInfo.GetStartTs()
+		span         = dispatcherInfo.GetTableSpan()
+		tableID      = dispatcherInfo.GetTableSpan().GetTableID()
+		start        = time.Now()
+	)
 	statPtr := c.getDispatcher(dispatcherID)
 	if statPtr == nil {
 		// The dispatcher is not registered, ignore it.
 		log.Warn("reset a non-exist dispatcher, ignore it",
-			zap.Stringer("changefeedID", dispatcherInfo.GetChangefeedID()),
+			zap.Stringer("changefeedID", changefeedID),
 			zap.Stringer("dispatcherID", dispatcherID),
-			zap.Int64("tableID", dispatcherInfo.GetTableSpan().GetTableID()),
-			zap.String("span", common.FormatTableSpan(dispatcherInfo.GetTableSpan())),
-			zap.Uint64("startTs", dispatcherInfo.GetStartTs()))
+			zap.Uint64("startTs", startTs),
+			zap.Int64("tableID", tableID),
+			zap.String("span", common.FormatTableSpan(span)))
 		return nil
 	}
 	metrics.EventServiceResetDispatcherCount.Inc()
@@ -1086,8 +1096,8 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 
 	// Create a new dispatcherStat and replace the old one.
 	// The new dispatcherStat will be used for all future operations.
-	changefeedID := dispatcherInfo.GetChangefeedID()
-	span := dispatcherInfo.GetTableSpan()
+	oldCheckpoint := oldStat.checkpointTs.Load()
+	newCheckpoint := max(startTs, oldCheckpoint)
 	var tableInfo *common.TableInfo
 	if !span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
 		var err error
@@ -1095,22 +1105,21 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			ID:   span.KeyspaceID,
 			Name: changefeedID.Keyspace(),
 		}
-		tableInfo, err = c.schemaStore.GetTableInfo(keyspaceMeta, span.GetTableID(), dispatcherInfo.GetStartTs())
+		tableInfo, err = c.schemaStore.GetTableInfo(keyspaceMeta, tableID, newCheckpoint)
 		if err != nil {
 			log.Error("get table info from schemaStore failed",
 				zap.Stringer("changefeedID", changefeedID),
 				zap.Stringer("dispatcherID", dispatcherID),
-				zap.Int64("tableID", span.GetTableID()),
-				zap.Uint64("startTs", dispatcherInfo.GetStartTs()),
+				zap.Int64("tableID", tableID),
+				zap.Uint64("checkpointTs", newCheckpoint),
 				zap.String("span", common.FormatTableSpan(span)),
 				zap.Error(err))
 			return err
 		}
 	}
 	status := c.getOrSetChangefeedStatus(changefeedID)
-	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.taskChan)), uint64(len(c.messageCh)), tableInfo, status)
+	newStat := newDispatcherStat(dispatcherInfo, newCheckpoint, uint64(len(c.taskChan)), uint64(len(c.messageCh)), tableInfo, status)
 	newStat.copyStatistics(oldStat)
-
 	for {
 		if statPtr.CompareAndSwap(oldStat, newStat) {
 			status.addDispatcher(dispatcherID, statPtr)
@@ -1119,12 +1128,12 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		log.Warn("reset dispatcher failed since the dispatcher is changed concurrently",
 			zap.Stringer("changefeedID", changefeedID),
 			zap.Stringer("dispatcherID", dispatcherID),
-			zap.Int64("tableID", span.GetTableID()),
-			zap.String("span", common.FormatTableSpan(span)),
-			zap.Uint64("oldStartTs", oldStat.info.GetStartTs()),
-			zap.Uint64("newStartTs", dispatcherInfo.GetStartTs()),
+			zap.Uint64("oldCheckpoint", oldCheckpoint),
+			zap.Uint64("newCheckpoint", newStat.checkpointTs.Load()),
 			zap.Uint64("oldEpoch", oldStat.epoch),
-			zap.Uint64("newEpoch", newStat.epoch))
+			zap.Uint64("newEpoch", newStat.epoch),
+			zap.Int64("tableID", tableID),
+			zap.String("span", common.FormatTableSpan(span)))
 		// The dispatcher is changed concurrently, retry it.
 		oldStat = statPtr.Load()
 		// stale reset request, ignore it.
@@ -1136,12 +1145,13 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 
 	log.Info("reset dispatcher",
 		zap.Stringer("changefeedID", newStat.changefeedStat.changefeedID),
-		zap.Stringer("dispatcherID", newStat.id), zap.Int64("tableID", newStat.info.GetTableSpan().GetTableID()),
-		zap.String("span", common.FormatTableSpan(newStat.info.GetTableSpan())),
-		zap.Uint64("originStartTs", oldStat.info.GetStartTs()),
-		zap.Uint64("newStartTs", dispatcherInfo.GetStartTs()),
+		zap.Stringer("dispatcherID", newStat.id),
+		zap.Uint64("oldCheckpoint", oldCheckpoint),
+		zap.Uint64("newCheckpoint", newStat.checkpointTs.Load()),
 		zap.Uint64("newEpoch", newStat.epoch),
-		zap.Duration("resetTime", time.Since(start)))
+		zap.Duration("resetTime", time.Since(start)),
+		zap.Int64("tableID", newStat.info.GetTableSpan().GetTableID()),
+		zap.String("span", common.FormatTableSpan(newStat.info.GetTableSpan())))
 
 	return nil
 }
@@ -1173,6 +1183,11 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 		dispatcher := dispatcherPtr.Load()
 		// TODO: Should we check if the dispatcher's serverID is the same as the heartbeat's serverID?
 		if dispatcher.checkpointTs.Load() < dp.CheckpointTs {
+			log.Info("update dispatcher checkpoint by the heartbeat",
+				zap.Any("dispatcherID", dispatcher.id),
+				zap.Uint64("oldCheckpointTs", dispatcher.checkpointTs.Load()),
+				zap.Uint64("newCheckpointTs", dp.CheckpointTs),
+			)
 			dispatcher.checkpointTs.Store(dp.CheckpointTs)
 		}
 		// Update the last received heartbeat time to the current time.

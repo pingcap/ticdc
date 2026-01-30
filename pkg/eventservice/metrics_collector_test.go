@@ -43,7 +43,7 @@ func TestCollectSlowestDispatchersByCheckpointTs(t *testing.T) {
 		checkpointTs := uint64(100 + i*10)
 		info := newMockDispatcherInfo(t, checkpointTs, common.NewDispatcherID(), int64(i+1), eventpb.ActionType_ACTION_TYPE_REGISTER)
 		status := newChangefeedStatus(info.GetChangefeedID())
-		stat := newDispatcherStat(info, 1, 1, nil, status)
+		stat := newDispatcherStat(info, checkpointTs, 1, 1, nil, status)
 		stat.checkpointTs.Store(checkpointTs)
 		stat.receivedResolvedTs.Store(checkpointTs + 10)
 		stat.sentResolvedTs.Store(checkpointTs + 5)
@@ -105,7 +105,7 @@ func TestCollectSlowestDispatchersLessThan10(t *testing.T) {
 		checkpointTs := uint64(100 + i*10)
 		info := newMockDispatcherInfo(t, checkpointTs, common.NewDispatcherID(), int64(i+1), eventpb.ActionType_ACTION_TYPE_REGISTER)
 		status := newChangefeedStatus(info.GetChangefeedID())
-		stat := newDispatcherStat(info, 1, 1, nil, status)
+		stat := newDispatcherStat(info, checkpointTs, 1, 1, nil, status)
 		stat.checkpointTs.Store(checkpointTs)
 		stat.receivedResolvedTs.Store(checkpointTs + 10)
 		stat.sentResolvedTs.Store(checkpointTs + 5)
@@ -148,12 +148,12 @@ func TestDispatcherHeapItem(t *testing.T) {
 	// Create two dispatchers with different checkpointTs
 	info1 := newMockDispatcherInfo(t, 100, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
 	status1 := newChangefeedStatus(info1.GetChangefeedID())
-	stat1 := newDispatcherStat(info1, 1, 1, nil, status1)
+	stat1 := newDispatcherStat(info1, 100, 1, 1, nil, status1)
 	stat1.checkpointTs.Store(100)
 
 	info2 := newMockDispatcherInfo(t, 200, common.NewDispatcherID(), 2, eventpb.ActionType_ACTION_TYPE_REGISTER)
 	status2 := newChangefeedStatus(info2.GetChangefeedID())
-	stat2 := newDispatcherStat(info2, 1, 1, nil, status2)
+	stat2 := newDispatcherStat(info2, 200, 1, 1, nil, status2)
 	stat2.checkpointTs.Store(200)
 
 	// Create heap items

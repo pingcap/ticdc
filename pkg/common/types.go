@@ -302,6 +302,24 @@ const (
 	RedoSinkType
 )
 
+func (s SinkType) String() string {
+	switch s {
+	case MysqlSinkType:
+		return "mysql"
+	case KafkaSinkType:
+		return "kafka"
+	case PulsarSinkType:
+		return "pulsar"
+	case CloudStorageSinkType:
+		return "cloudstorage"
+	case BlackHoleSinkType:
+		return "blackhole"
+	case RedoSinkType:
+		return "redo"
+	}
+	return "unknown"
+}
+
 type RowType byte
 
 const (

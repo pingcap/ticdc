@@ -67,7 +67,7 @@ func TestEventScanner(t *testing.T) {
 
 	ctx := context.Background()
 
-	disp := newDispatcherStat(disInfo, 1, 1, nil, changefeedStatus)
+	disp := newDispatcherStat(disInfo, disInfo.startTs, 1, 1, nil, changefeedStatus)
 	makeDispatcherReady(disp)
 	err := broker.addDispatcher(disp.info)
 	require.NoError(t, err)
@@ -375,7 +375,7 @@ func TestEventScannerWithDeleteTable(t *testing.T) {
 	tableID := disInfo.GetTableSpan().TableID
 	dispatcherID := disInfo.GetID()
 
-	disp := newDispatcherStat(disInfo, 1, 1, nil, changefeedStatus)
+	disp := newDispatcherStat(disInfo, disInfo.startTs, 1, 1, nil, changefeedStatus)
 	makeDispatcherReady(disp)
 	err := broker.addDispatcher(disp.info)
 	require.NoError(t, err)
@@ -453,7 +453,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 	tableID := disInfo.GetTableSpan().TableID
 	dispatcherID := disInfo.GetID()
 
-	disp := newDispatcherStat(disInfo, 1, 1, nil, changefeedStatus)
+	disp := newDispatcherStat(disInfo, disInfo.startTs, 1, 1, nil, changefeedStatus)
 	makeDispatcherReady(disp)
 
 	err := broker.addDispatcher(disp.info)
@@ -1540,7 +1540,7 @@ func TestGetTableInfo4Txn(t *testing.T) {
 	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
 	tableID := disInfo.GetTableSpan().TableID
 
-	disp := newDispatcherStat(disInfo, 1, 1, nil, changefeedStatus)
+	disp := newDispatcherStat(disInfo, disInfo.startTs, 1, 1, nil, changefeedStatus)
 
 	// Prepare a table info for success case
 	helper := event.NewEventTestHelper(t)

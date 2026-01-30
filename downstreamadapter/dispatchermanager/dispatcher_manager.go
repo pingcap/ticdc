@@ -263,6 +263,7 @@ func NewDispatcherManager(
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+	manager.sharedInfo.InitChangefeedInflightBudget(manager.sink.SinkType(), manager.sinkQuota)
 
 	manager.wg.Add(1)
 	go func() {
