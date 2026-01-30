@@ -219,7 +219,7 @@ type BasicDispatcher struct {
 	// - For cloudstorage sinks: avoid "newer schema visible first" causing earlier DML stale-drop.
 	// - For redo sinks: enforce per-dispatcher DDL-after-DML durable order, since DML/DDL are written by
 	//   different writers and may otherwise be persisted out of order.
-	// it's set to nil after the DDL event is flushed to the downstream system.
+	// it's set to nil after the DDL event is enqueued into the tableProgress.
 	deferredDDLEvent atomic.Pointer[commonEvent.DDLEvent]
 	// deferredSubmitted indicates the deferred DDL has been submitted to the block event executor.
 	// We intentionally keep deferredDDLEvent non-nil until the DDL is actually enqueued into tableProgress,
@@ -376,9 +376,7 @@ func (d *BasicDispatcher) GetCheckpointTs() uint64 {
 	if isEmpty {
 		log.Info("table progress empty", zap.Any("dispatcherID", d.id),
 			zap.Uint64("checkpointTs", checkpointTs), zap.Uint64("resolvedTs", resolvedTs))
-		if !d.inflightBudget.isEnabled() {
-			checkpointTs = max(checkpointTs, resolvedTs)
-		}
+		checkpointTs = max(checkpointTs, resolvedTs)
 	}
 
 	deferred := d.deferredDDLEvent.Load()
