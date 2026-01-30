@@ -27,8 +27,20 @@ type EventsGroup struct {
 	Partition int32
 	tableID   int64
 
-	events        []*commonEvent.DMLEvent
+	events []*commonEvent.DMLEvent
+	// HighWatermark is the maximum CommitTs ever observed in this group.
+	//
+	// It is a "seen" watermark, not a "flushed/applied" watermark. When the
+	// consumer reads faster than it flushes to downstream, HighWatermark can be
+	// larger than AppliedWatermark.
 	HighWatermark uint64
+	// AppliedWatermark is the maximum CommitTs that has been successfully flushed
+	// to the downstream for this group.
+	//
+	// It is used to distinguish "safe to ignore" replays (CommitTs <=
+	// AppliedWatermark) from "still needed" events that arrive late due to sink
+	// retries / restarts.
+	AppliedWatermark uint64
 }
 
 // NewEventsGroup will create new event group.
@@ -51,23 +63,35 @@ func (g *EventsGroup) Append(row *commonEvent.DMLEvent, force bool) {
 		lastDMLEvent = g.events[len(g.events)-1]
 	}
 
+	mergeDMLEvent := func(dst, src *commonEvent.DMLEvent) {
+		dst.Rows.Append(src.Rows, 0, src.Rows.NumRows())
+		dst.RowTypes = append(dst.RowTypes, src.RowTypes...)
+		dst.Length += src.Length
+		dst.PostTxnFlushed = append(dst.PostTxnFlushed, src.PostTxnFlushed...)
+	}
+
 	if lastDMLEvent == nil || lastDMLEvent.GetCommitTs() < row.GetCommitTs() {
 		g.events = append(g.events, row)
 		return
 	}
 
 	if lastDMLEvent.GetCommitTs() == row.GetCommitTs() {
-		lastDMLEvent.Rows.Append(row.Rows, 0, row.Rows.NumRows())
-		lastDMLEvent.RowTypes = append(lastDMLEvent.RowTypes, row.RowTypes...)
-		lastDMLEvent.Length += row.Length
-		lastDMLEvent.PostTxnFlushed = append(lastDMLEvent.PostTxnFlushed, row.PostTxnFlushed...)
+		mergeDMLEvent(lastDMLEvent, row)
 		return
 	}
 
 	if force {
+		// A smaller CommitTs can appear at a larger Kafka offset after a TiCDC
+		// restart/retry (at-least-once replay). In this case we need to insert the
+		// event by CommitTs order. If the CommitTs already exists, merge it so one
+		// upstream transaction isn't split into multiple downstream transactions.
 		i := sort.Search(len(g.events), func(i int) bool {
 			return g.events[i].CommitTs > row.CommitTs
 		})
+		if i > 0 && g.events[i-1].CommitTs == row.CommitTs {
+			mergeDMLEvent(g.events[i-1], row)
+			return
+		}
 		g.events = slices.Insert(g.events, i, row)
 		return
 	}
