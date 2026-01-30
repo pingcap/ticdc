@@ -1127,7 +1127,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		zap.Stringer("changefeedID", newStat.changefeedStat.changefeedID),
 		zap.Stringer("dispatcherID", newStat.id),
 		zap.Uint64("originStartTs", oldStat.info.GetStartTs()),
-		zap.Uint64("newStartTs", dispatcherInfo.GetStartTs()),
+		zap.Uint64("newStartTs", newStat.startTs),
 		zap.Uint64("newEpoch", newStat.epoch),
 		zap.Duration("resetTime", time.Since(start)),
 		zap.Int64("tableID", newStat.info.GetTableSpan().GetTableID()),
