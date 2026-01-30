@@ -185,6 +185,12 @@ func (a *dispatcherStat) copyStatistics(src *dispatcherStat) {
 	a.receivedResolvedTs.Store(src.receivedResolvedTs.Load())
 	a.eventStoreCommitTs.Store(src.eventStoreCommitTs.Load())
 	a.checkpointTs.Store(src.checkpointTs.Load())
+	a.startTs = src.startTs
+	if a.startTs < src.startTs {
+		log.Warn("reset dispatcher meet start-ts regression, set to the larger one",
+			zap.Uint64("newStartTs", a.startTs), zap.Uint64("oldStartTs", src.startTs))
+		a.startTs = src.startTs
+	}
 	a.hasReceivedFirstResolvedTs.Store(src.hasReceivedFirstResolvedTs.Load())
 
 	a.currentScanLimitInBytes.Store(src.currentScanLimitInBytes.Load())
