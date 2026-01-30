@@ -95,6 +95,47 @@ func TestFilterDMLEventActiveActiveSkipsDeleteButKeepsFollowingRows(t *testing.T
 	filtered.Rewind()
 }
 
+func TestFilterDMLEventPreservesRowKeysAfterFiltering(t *testing.T) {
+	ti := newTestTableInfo(t, true, true)
+
+	// delete + insert, the delete row should be filtered out.
+	event := newDMLEventForTest(t, ti,
+		[]commonpkg.RowType{commonpkg.RowTypeDelete, commonpkg.RowTypeInsert},
+		[][]interface{}{
+			{int64(1), nil}, // delete row pre image
+			{int64(2), nil}, // insert row
+		})
+	event.RowKeys = [][]byte{
+		[]byte("k1"),
+		[]byte("k2"),
+	}
+
+	filtered, skip := FilterDMLEvent(event, true, nil)
+	require.False(t, skip)
+	require.NotNil(t, filtered)
+	require.NotEqual(t, event, filtered)
+	require.Equal(t, [][]byte{[]byte("k2")}, filtered.RowKeys)
+
+	// update that triggers a soft delete conversion, only the pre-image key should be kept.
+	ts := newTimestampValue(time.Date(2025, time.March, 10, 0, 0, 0, 0, time.UTC))
+	event = newDMLEventForTest(t, ti,
+		[]commonpkg.RowType{commonpkg.RowTypeUpdate},
+		[][]interface{}{
+			{int64(3), nil},
+			{int64(3), ts},
+		})
+	event.RowKeys = [][]byte{
+		[]byte("k3-pre"),
+		[]byte("k3-post"),
+	}
+
+	filtered, skip = FilterDMLEvent(event, false, nil)
+	require.False(t, skip)
+	require.NotNil(t, filtered)
+	require.NotEqual(t, event, filtered)
+	require.Equal(t, [][]byte{[]byte("k3-pre")}, filtered.RowKeys)
+}
+
 func TestFilterDMLEventSoftDeleteConvertUpdate(t *testing.T) {
 	ti := newTestTableInfo(t, false, true)
 	ts := newTimestampValue(time.Date(2025, time.March, 10, 0, 0, 0, 0, time.UTC))

@@ -226,53 +226,34 @@ func FilterDMLEvent(event *DMLEvent, enableActiveActive bool, handleError func(e
 	}
 
 	rowTypeSummary := summarizeRowTypes(event.RowTypes)
-
-	// When enable-active-active is true, the only transformation is dropping delete rows.
-	// Fast path: after validating schema requirements, avoid iterating/copying rows when
-	// the event contains no delete rows.
-	if enableActiveActive && !rowTypeSummary.hasDelete {
-		event.Rewind()
-		return event, false
+	if filtered, skip, ok := filterDMLEventFastPath(
+		event,
+		tableInfo,
+		enableActiveActive,
+		softDeleteTimeColIndex,
+		rowTypeSummary,
+	); ok {
+		return filtered, skip
 	}
 
-	// When enable-active-active is false, delete rows are always dropped and soft-delete
-	// transitions are rewritten into deletes.
-	//
-	// Fast path: when the event contains only delete rows, drop it without iterating the
-	// underlying chunk. When there are no delete rows, scan for the first soft-delete
-	// transition and return the original event if none exists.
-	if !enableActiveActive {
-		if rowTypeSummary.allDelete {
-			event.Rewind()
-			return nil, true
-		}
-		if !rowTypeSummary.hasDelete {
-			if !rowTypeSummary.hasUpdate {
-				event.Rewind()
-				return event, false
-			}
+	return filterDMLEventSlowPath(
+		event,
+		tableInfo,
+		enableActiveActive,
+		softDeleteTimeColIndex,
+		hasSoftDeleteTimeCol,
+	)
+}
 
-			needRewrite := false
-			for {
-				row, ok := event.GetNextRow()
-				if !ok {
-					break
-				}
-				if row.RowType != common.RowTypeUpdate {
-					continue
-				}
-				if needConvertUpdateToDelete(&row, softDeleteTimeColIndex) {
-					needRewrite = true
-					break
-				}
-			}
-			event.Rewind()
-			if !needRewrite {
-				return event, false
-			}
-		}
-	}
-
+// filterDMLEventSlowPath rebuilds the event by applying the row policy decisions to each row.
+// The caller must ensure the input event has been rewound.
+func filterDMLEventSlowPath(
+	event *DMLEvent,
+	tableInfo *common.TableInfo,
+	enableActiveActive bool,
+	softDeleteTimeColIndex int,
+	hasSoftDeleteTimeCol bool,
+) (*DMLEvent, bool) {
 	fieldTypes := tableInfo.GetFieldSlice()
 	if fieldTypes == nil {
 		return event, false
@@ -280,7 +261,11 @@ func FilterDMLEvent(event *DMLEvent, enableActiveActive bool, handleError func(e
 
 	newChunk := chunk.NewChunkWithCapacity(fieldTypes, event.Rows.NumRows())
 	rowTypes := make([]common.RowType, 0, len(event.RowTypes))
-	rowKeys := make([][]byte, 0, len(event.RowTypes))
+	hasRowKeys := len(event.RowKeys) != 0
+	var rowKeys [][]byte
+	if hasRowKeys {
+		rowKeys = make([][]byte, 0, len(event.RowTypes))
+	}
 	hasChecksum := len(event.Checksum) != 0
 	var checksums []*integrity.Checksum
 	if hasChecksum {
@@ -327,7 +312,15 @@ func FilterDMLEvent(event *DMLEvent, enableActiveActive bool, handleError func(e
 		}
 		for i := 0; i < physicalSlots; i++ {
 			rowTypes = append(rowTypes, row.RowType)
-			rowKeys = append(rowKeys, cloneRowKey(row.RowKey))
+		}
+		if hasRowKeys {
+			rowKey := row.RowKey
+			if len(rowKey) == 0 {
+				rowKey = nil
+			}
+			for i := 0; i < physicalSlots; i++ {
+				rowKeys = append(rowKeys, rowKey)
+			}
 		}
 		if hasChecksum {
 			checksums = append(checksums, row.Checksum)
@@ -345,6 +338,62 @@ func FilterDMLEvent(event *DMLEvent, enableActiveActive bool, handleError func(e
 	}
 
 	return newFilteredDMLEvent(event, newChunk, rowTypes, rowKeys, checksums, kept), false
+}
+
+// filterDMLEventFastPath returns early when the row policy would not change the event,
+// or when every row is dropped. It keeps the logic aligned with EvaluateRowPolicy to
+// avoid diverging behavior between fast and slow paths.
+//
+// The input event must have been rewound. On return, the event is guaranteed to be
+// rewound as well.
+func filterDMLEventFastPath(
+	event *DMLEvent,
+	tableInfo *common.TableInfo,
+	enableActiveActive bool,
+	softDeleteTimeColIndex int,
+	rowTypeSummary rowTypeSummary,
+) (*DMLEvent, bool, bool) {
+	if event == nil {
+		return nil, true, true
+	}
+
+	// enable-active-active only removes delete rows. When there is no delete row, return
+	// the original event directly.
+	if enableActiveActive && !rowTypeSummary.hasDelete {
+		return event, false, true
+	}
+
+	// When enable-active-active is false, delete rows are always dropped and soft-delete
+	// transitions are rewritten into deletes.
+	//
+	// If the event contains only delete rows, drop it without iterating the underlying
+	// chunk. When there is no delete row, scan for the first row that would be mutated
+	// by EvaluateRowPolicy and return the original event if none exists.
+	if !enableActiveActive {
+		if rowTypeSummary.allDelete {
+			return nil, true, true
+		}
+		if !rowTypeSummary.hasDelete {
+			if !rowTypeSummary.hasUpdate {
+				return event, false, true
+			}
+
+			for {
+				row, ok := event.GetNextRow()
+				if !ok {
+					break
+				}
+				if EvaluateRowPolicy(tableInfo, &row, enableActiveActive, softDeleteTimeColIndex) != RowPolicyKeep {
+					event.Rewind()
+					return nil, false, false
+				}
+			}
+			event.Rewind()
+			return event, false, true
+		}
+	}
+
+	return nil, false, false
 }
 
 // newFilteredDMLEvent builds a new DMLEvent from the filtered rows while preserving
@@ -401,15 +450,6 @@ func appendRowChangeToChunk(chk *chunk.Chunk, row *RowChange) {
 			chk.AppendRow(row.Row)
 		}
 	}
-}
-
-func cloneRowKey(rowKey []byte) []byte {
-	if len(rowKey) == 0 {
-		return nil
-	}
-	cp := make([]byte, len(rowKey))
-	copy(cp, rowKey)
-	return cp
 }
 
 type rowTypeSummary struct {
