@@ -41,12 +41,15 @@ const (
 	defaultRunningAddIndexNewSQLVersion = "8.5.0"
 
 	defaultErrorCausedSafeModeDuration = 5 * time.Second
+
+	dmlConnIdleTimeout = 5 * time.Minute
 )
 
 // Writer is responsible for writing various dml events, ddl events, syncpoint events to mysql downstream.
 type Writer struct {
 	id           int
 	ctx          context.Context
+	cancel       context.CancelFunc
 	db           *sql.DB
 	cfg          *Config
 	ChangefeedID common.ChangeFeedID
@@ -56,12 +59,23 @@ type Writer struct {
 
 	ddlTsTableInit      bool
 	ddlTsTableInitMutex sync.Mutex
+	maxDDLTsBatch       int
 	tableSchemaStore    *commonEvent.TableSchemaStore
 
 	// implement stmtCache to improve performance, especially when the downstream is TiDB
 	stmtCache *lru.Cache
 
 	statistics *metrics.Statistics
+
+	// activeActiveSyncStatsCollector accumulates conflict statistics from TiDB session
+	// variable @@tidb_cdc_active_active_sync_stats. It is shared across all DML writers
+	// in a sink.
+	activeActiveSyncStatsCollector *ActiveActiveSyncStatsCollector
+	activeActiveSyncStatsInterval  time.Duration
+
+	// dmlSession is a writer-owned downstream session used for DML execution and querying
+	// @@tidb_cdc_active_active_sync_stats.
+	dmlSession dmlSession
 
 	// When encountered an `Duplicate entry` error, we will set the `isInErrorCausedSafeMode` to true,
 	// and set the `lastErrorCausedSafeModeTime` to the current time.
@@ -81,25 +95,36 @@ func NewWriter(
 	cfg *Config,
 	changefeedID common.ChangeFeedID,
 	statistics *metrics.Statistics,
+	activeActiveSyncStatsCollector *ActiveActiveSyncStatsCollector,
 ) *Writer {
+	writerCtx, cancel := context.WithCancel(ctx)
 	res := &Writer{
-		ctx:                    ctx,
-		id:                     id,
-		db:                     db,
-		cfg:                    cfg,
-		syncPointTableInit:     false,
-		ChangefeedID:           changefeedID,
-		lastCleanSyncPointTime: time.Now(),
-		ddlTsTableInit:         false,
-		stmtCache:              cfg.stmtCache,
-		statistics:             statistics,
-
-		isInErrorCausedSafeMode:     false,
-		errorCausedSafeModeDuration: defaultErrorCausedSafeModeDuration,
+		ctx:                            writerCtx,
+		cancel:                         cancel,
+		id:                             id,
+		db:                             db,
+		cfg:                            cfg,
+		syncPointTableInit:             false,
+		ChangefeedID:                   changefeedID,
+		lastCleanSyncPointTime:         time.Now(),
+		ddlTsTableInit:                 false,
+		stmtCache:                      cfg.stmtCache,
+		statistics:                     statistics,
+		maxDDLTsBatch:                  cfg.MaxTxnRow,
+		dmlSession:                     *NewDMLSession(dmlConnIdleTimeout),
+		isInErrorCausedSafeMode:        false,
+		errorCausedSafeModeDuration:    defaultErrorCausedSafeModeDuration,
+		activeActiveSyncStatsCollector: activeActiveSyncStatsCollector,
+		activeActiveSyncStatsInterval:  cfg.ActiveActiveSyncStatsInterval,
 	}
 
 	if cfg.DryRun && cfg.DryRunBlockInterval > 0 {
 		res.blockerTicker = time.NewTicker(cfg.DryRunBlockInterval)
+	}
+
+	// Only DML writers need a dedicated session and background maintenance loop.
+	if id >= 0 && id < cfg.WorkerCount {
+		go res.runDMLConnLoop()
 	}
 
 	return res
@@ -190,6 +215,12 @@ func (w *Writer) Flush(events []*commonEvent.DMLEvent) error {
 	if dmls.rowCount == 0 {
 		return nil
 	}
+	if len(dmls.sqls) == 0 {
+		for _, event := range events {
+			event.PostFlush()
+		}
+		return nil
+	}
 
 	if !w.cfg.DryRun {
 		err = w.execDMLWithMaxRetries(dmls)
@@ -268,4 +299,9 @@ func (w *Writer) Close() {
 	if w.blockerTicker != nil {
 		w.blockerTicker.Stop()
 	}
+
+	if w.cancel != nil {
+		w.cancel()
+	}
+	w.dmlSession.close(w)
 }
