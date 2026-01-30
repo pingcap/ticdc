@@ -51,8 +51,8 @@ type dispatcherStat struct {
 	messageWorkerIndex int
 	info               DispatcherInfo
 	filter             filter.Filter
-	// startTableInfo is the table info at the `startTs` of the dispatcher
-	startTableInfo *common.TableInfo
+	// tableInfo is the table info when the dispatcher start or reset.
+	tableInfo *common.TableInfo
 	// The epoch of the dispatcher.
 	// It should not be changed after the dispatcher is created.
 	epoch uint64
@@ -131,6 +131,7 @@ type dispatcherStat struct {
 
 func newDispatcherStat(
 	info DispatcherInfo,
+	checkpointTs uint64,
 	scanWorkerCount uint64,
 	messageWorkerCount uint64,
 	startTableInfo *common.TableInfo,
@@ -145,7 +146,7 @@ func newDispatcherStat(
 		info:               info,
 		filter:             info.GetFilter(),
 		epoch:              info.GetEpoch(),
-		startTableInfo:     startTableInfo,
+		tableInfo:          startTableInfo,
 		txnAtomicity:       info.GetTxnAtomicity(),
 	}
 
@@ -158,13 +159,12 @@ func newDispatcherStat(
 		dispStat.nextSyncPoint.Store(info.GetSyncPointTs())
 		dispStat.syncPointInterval = info.GetSyncPointInterval()
 	}
-	startTs := info.GetStartTs()
-	dispStat.receivedResolvedTs.Store(startTs)
-	dispStat.checkpointTs.Store(startTs)
+	dispStat.receivedResolvedTs.Store(checkpointTs)
+	dispStat.checkpointTs.Store(checkpointTs)
 
-	dispStat.sentResolvedTs.Store(startTs)
+	dispStat.sentResolvedTs.Store(checkpointTs)
 
-	dispStat.lastScannedCommitTs.Store(startTs)
+	dispStat.lastScannedCommitTs.Store(checkpointTs)
 	dispStat.lastScannedStartTs.Store(0)
 	dispStat.lastReadySendTime.Store(0)
 	dispStat.readyInterval.Store(1)
@@ -178,20 +178,18 @@ func newDispatcherStat(
 }
 
 // copyStatistics copies statistical data that reflects the dynamic state of the dispatcher.
-func (a *dispatcherStat) copyStatistics(src *dispatcherStat) {
-	a.receivedResolvedTs.Store(src.receivedResolvedTs.Load())
-	a.eventStoreCommitTs.Store(src.eventStoreCommitTs.Load())
-	a.checkpointTs.Store(src.checkpointTs.Load())
-	a.lastScannedCommitTs.Store(a.checkpointTs.Load())
+func (a *dispatcherStat) copyStatistics(old *dispatcherStat) {
+	a.receivedResolvedTs.Store(old.receivedResolvedTs.Load())
+	a.eventStoreCommitTs.Store(old.eventStoreCommitTs.Load())
 
-	a.hasReceivedFirstResolvedTs.Store(src.hasReceivedFirstResolvedTs.Load())
-	a.currentScanLimitInBytes.Store(src.currentScanLimitInBytes.Load())
-	a.maxScanLimitInBytes.Store(src.maxScanLimitInBytes.Load())
-	a.lastUpdateScanLimitTime.Store(src.lastUpdateScanLimitTime.Load())
-	a.lastScanBytes.Store(src.lastScanBytes.Load())
+	a.hasReceivedFirstResolvedTs.Store(old.hasReceivedFirstResolvedTs.Load())
+	a.currentScanLimitInBytes.Store(old.currentScanLimitInBytes.Load())
+	a.maxScanLimitInBytes.Store(old.maxScanLimitInBytes.Load())
+	a.lastUpdateScanLimitTime.Store(old.lastUpdateScanLimitTime.Load())
+	a.lastScanBytes.Store(old.lastScanBytes.Load())
 
-	a.lastReceivedResolvedTsTime.Store(src.lastReceivedResolvedTsTime.Load())
-	a.lastSentResolvedTsTime.Store(src.lastSentResolvedTsTime.Load())
+	a.lastReceivedResolvedTsTime.Store(old.lastReceivedResolvedTsTime.Load())
+	a.lastSentResolvedTsTime.Store(old.lastSentResolvedTsTime.Load())
 }
 
 func (a *dispatcherStat) isHandshaked() bool {
