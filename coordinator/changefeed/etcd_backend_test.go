@@ -234,6 +234,37 @@ func TestSetChangefeedProgress(t *testing.T) {
 	require.Nil(t, err)
 }
 
+func TestSetChangefeedProgressRetriesOnCASConflict(t *testing.T) {
+	// Scenario: SetChangefeedProgress races with another writer updating the same etcd key.
+	// Steps:
+	// 1) First CAS attempt fails (TxnResponse.Succeeded=false) due to ModRevision mismatch.
+	// 2) The function retries (re-reads status + re-attempts Txn) and succeeds.
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	cdcClient := etcd.NewMockCDCEtcdClient(ctrl)
+	etcdClient := etcd.NewMockClient(ctrl)
+	cdcClient.EXPECT().GetEtcdClient().Return(etcdClient).AnyTimes()
+	cdcClient.EXPECT().GetClusterID().Return("test-cluster-id").AnyTimes()
+	backend := NewEtcdBackend(cdcClient)
+
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+
+	// The first read observes modRevision=1; CAS fails. The second read observes modRevision=2; CAS succeeds.
+	cdcClient.EXPECT().GetChangeFeedStatus(gomock.Any(), changefeedID).
+		Return(&config.ChangeFeedStatus{Progress: config.ProgressNone}, int64(1), nil).Times(1)
+	cdcClient.EXPECT().GetChangeFeedStatus(gomock.Any(), changefeedID).
+		Return(&config.ChangeFeedStatus{Progress: config.ProgressNone}, int64(2), nil).Times(1)
+
+	etcdClient.EXPECT().Txn(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(&clientv3.TxnResponse{Succeeded: false}, nil).Times(1)
+	etcdClient.EXPECT().Txn(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(&clientv3.TxnResponse{Succeeded: true}, nil).Times(1)
+
+	err := backend.SetChangefeedProgress(context.Background(), changefeedID, config.ProgressRemoving)
+	require.NoError(t, err)
+}
+
 func TestUpdateChangefeedCheckpointTs(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
