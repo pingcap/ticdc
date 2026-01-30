@@ -64,6 +64,8 @@ type ClusterReport struct {
 	DataLossItems      []DataLossItem
 	DataRedundantItems []DataRedundantItem
 	LWWViolationItems  []LWWViolationItem
+
+	needFlush bool
 }
 
 func NewClusterReport(clusterID string) *ClusterReport {
@@ -72,6 +74,7 @@ func NewClusterReport(clusterID string) *ClusterReport {
 		DataLossItems:      make([]DataLossItem, 0),
 		DataRedundantItems: make([]DataRedundantItem, 0),
 		LWWViolationItems:  make([]LWWViolationItem, 0),
+		needFlush:          false,
 	}
 }
 
@@ -83,6 +86,7 @@ func (r *ClusterReport) AddDataLossItem(downstreamClusterID, pk string, originTS
 		CommitTS:            commitTS,
 		Inconsistent:        inconsistent,
 	})
+	r.needFlush = true
 }
 
 func (r *ClusterReport) AddDataRedundantItem(pk string, originTS, commitTS uint64) {
@@ -91,6 +95,7 @@ func (r *ClusterReport) AddDataRedundantItem(pk string, originTS, commitTS uint6
 		OriginTS: originTS,
 		CommitTS: commitTS,
 	})
+	r.needFlush = true
 }
 
 func (r *ClusterReport) AddLWWViolationItem(
@@ -105,42 +110,59 @@ func (r *ClusterReport) AddLWWViolationItem(
 		OriginTS:         originTS,
 		CommitTS:         commitTS,
 	})
+	r.needFlush = true
 }
 
 type Report struct {
 	Round          uint64
 	ClusterReports map[string]*ClusterReport
+	needFlush      bool
 }
 
 func NewReport(round uint64) *Report {
 	return &Report{
 		Round:          round,
 		ClusterReports: make(map[string]*ClusterReport),
+		needFlush:      false,
 	}
 }
 
 func (r *Report) AddClusterReport(clusterID string, clusterReport *ClusterReport) {
 	r.ClusterReports[clusterID] = clusterReport
+	r.needFlush = r.needFlush || clusterReport.needFlush
 }
 
 func (r *Report) MarshalReport() string {
 	var reportMsg strings.Builder
-	reportMsg.WriteString(fmt.Sprintf("round: %d\n", r.Round))
+	fmt.Fprintf(&reportMsg, "round: %d\n", r.Round)
 	for clusterID, clusterReport := range r.ClusterReports {
-		reportMsg.WriteString(fmt.Sprintf("\n[cluster: %s]\n", clusterID))
-		reportMsg.WriteString(fmt.Sprintf("  - [data loss items: %d]\n", len(clusterReport.DataLossItems)))
-		for _, dataLossItem := range clusterReport.DataLossItems {
-			reportMsg.WriteString(fmt.Sprintf("    - [%s]\n", dataLossItem.String()))
+		if !clusterReport.needFlush {
+			continue
 		}
-		reportMsg.WriteString(fmt.Sprintf("  - [data redundant items: %d]\n", len(clusterReport.DataRedundantItems)))
-		for _, dataRedundantItem := range clusterReport.DataRedundantItems {
-			reportMsg.WriteString(fmt.Sprintf("    - [%s]\n", dataRedundantItem.String()))
+		fmt.Fprintf(&reportMsg, "\n[cluster: %s]\n", clusterID)
+		if len(clusterReport.DataLossItems) > 0 {
+			fmt.Fprintf(&reportMsg, "  - [data loss items: %d]\n", len(clusterReport.DataLossItems))
+			for _, dataLossItem := range clusterReport.DataLossItems {
+				fmt.Fprintf(&reportMsg, "    - [%s]\n", dataLossItem.String())
+			}
 		}
-		reportMsg.WriteString(fmt.Sprintf("  - [lww violation items: %d]\n", len(clusterReport.LWWViolationItems)))
-		for _, lwwViolationItem := range clusterReport.LWWViolationItems {
-			reportMsg.WriteString(fmt.Sprintf("    - [%s]\n", lwwViolationItem.String()))
+		if len(clusterReport.DataRedundantItems) > 0 {
+			fmt.Fprintf(&reportMsg, "  - [data redundant items: %d]\n", len(clusterReport.DataRedundantItems))
+			for _, dataRedundantItem := range clusterReport.DataRedundantItems {
+				fmt.Fprintf(&reportMsg, "    - [%s]\n", dataRedundantItem.String())
+			}
+		}
+		if len(clusterReport.LWWViolationItems) > 0 {
+			fmt.Fprintf(&reportMsg, "  - [lww violation items: %d]\n", len(clusterReport.LWWViolationItems))
+			for _, lwwViolationItem := range clusterReport.LWWViolationItems {
+				fmt.Fprintf(&reportMsg, "    - [%s]\n", lwwViolationItem.String())
+			}
 		}
 	}
 	reportMsg.WriteString("\n")
 	return reportMsg.String()
+}
+
+func (r *Report) NeedFlush() bool {
+	return r.needFlush
 }

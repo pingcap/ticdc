@@ -19,6 +19,7 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sink/codec/canal"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/csv"
 )
@@ -49,5 +50,32 @@ func (d *csvDecoder) NewDecoder(ctx context.Context, tableInfo *commonType.Table
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+	return decoder, nil
+}
+
+func defaultCanalJSONCodecConfig(protocol config.Protocol) *codecCommon.Config {
+	codecConfig := codecCommon.NewConfig(protocol)
+	// Always enable tidb extension for canal-json protocol
+	// because we need to get the commit ts from the extension field.
+	codecConfig.EnableTiDBExtension = true
+	return codecConfig
+}
+
+type canalJSONDecoder struct {
+	codecConfig *codecCommon.Config
+}
+
+func NewCanalJSONDecoder() *canalJSONDecoder {
+	codecConfig := defaultCanalJSONCodecConfig(config.ProtocolCanalJSON)
+	return &canalJSONDecoder{
+		codecConfig: codecConfig,
+	}
+}
+
+func (d *canalJSONDecoder) NewDecoder(ctx context.Context, tableInfo *commonType.TableInfo, content []byte) (codecCommon.Decoder, error) {
+	// For S3 sink with canal-json format, use NewTxnDecoder
+	// which is designed for batch decoding from storage
+	decoder := canal.NewTxnDecoder(d.codecConfig)
+	decoder.AddKeyValue(nil, content)
 	return decoder, nil
 }

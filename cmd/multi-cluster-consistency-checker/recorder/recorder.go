@@ -47,8 +47,10 @@ func (r *Recorder) RecordTimeWindow(timeWindowData map[string]advancer.TimeWindo
 			zap.Uint64("window right boundary", timeWindow.RightBoundary),
 			zap.Any("checkpoint ts", timeWindow.CheckpointTs))
 	}
-	if err := r.flushReport(report); err != nil {
-		return errors.Trace(err)
+	if report.NeedFlush() {
+		if err := r.flushReport(report); err != nil {
+			return errors.Trace(err)
+		}
 	}
 	return nil
 }

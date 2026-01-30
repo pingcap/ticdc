@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -58,19 +59,34 @@ func getPkColumnOffset(tableInfo *commonType.TableInfo) (map[int64]int, error) {
 	return pkColumnOffsets, nil
 }
 
+type decoderFactory interface {
+	NewDecoder(ctx context.Context, tableInfo *commonType.TableInfo, content []byte) (codecCommon.Decoder, error)
+}
+
 type TableParser struct {
 	tableKey        string
 	tableInfo       *common.TableInfo
 	pkColumnOffsets map[int64]int
-	csvDecoder      *csvDecoder
+	decoderFactory  decoderFactory
 }
 
 func NewTableParser(tableKey string, content []byte) (*TableParser, error) {
+	return NewTableParserWithFormat(tableKey, content, config.ProtocolCsv)
+}
+
+func NewTableParserWithFormat(tableKey string, content []byte, protocol config.Protocol) (*TableParser, error) {
 	tableParser := &TableParser{}
 	if err := tableParser.parseTableInfo(tableKey, content); err != nil {
 		return nil, errors.Trace(err)
 	}
-	tableParser.csvDecoder = NewCsvDecoder()
+	switch protocol {
+	case config.ProtocolCsv:
+		tableParser.decoderFactory = NewCsvDecoder()
+	case config.ProtocolCanalJSON:
+		tableParser.decoderFactory = NewCanalJSONDecoder()
+	default:
+		return nil, errors.Errorf("unsupported protocol: %s", protocol)
+	}
 	return tableParser, nil
 }
 
@@ -186,7 +202,7 @@ func (pt *TableParser) parseRecord(row *chunk.Row, commitTs uint64) (*utils.Reco
 func (pt *TableParser) DecodeFiles(ctx context.Context, content []byte) ([]*utils.Record, error) {
 	records := make([]*utils.Record, 0)
 
-	decoder, err := pt.csvDecoder.NewDecoder(ctx, pt.tableInfo, content)
+	decoder, err := pt.decoderFactory.NewDecoder(ctx, pt.tableInfo, content)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
