@@ -60,7 +60,7 @@ func (p *partitionProgress) updateWatermark(newWatermark uint64, offset kafka.Of
 	if newWatermark >= p.watermark {
 		p.watermark = newWatermark
 		p.watermarkOffset = offset
-		log.Info("watermark received", zap.Int32("partition", p.partition), zap.Any("offset", offset),
+		log.Debug("watermark received", zap.Int32("partition", p.partition), zap.Any("offset", offset),
 			zap.Uint64("watermark", newWatermark))
 		return
 	}
@@ -171,18 +171,19 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 			if !ok {
 				continue
 			}
-			events := g.Resolve(commitTs)
-			resolvedCount := len(events)
+			before := len(resolvedEvents)
+			resolvedEvents = g.ResolveInto(commitTs, resolvedEvents)
+			resolvedCount := len(resolvedEvents) - before
 			if resolvedCount == 0 {
 				continue
 			}
-			resolvedEvents = append(resolvedEvents, events...)
+
 			resolvedGroups = append(resolvedGroups, struct {
 				group       *util.EventsGroup
 				maxCommitTs uint64
 			}{
 				group:       g,
-				maxCommitTs: events[resolvedCount-1].GetCommitTs(),
+				maxCommitTs: resolvedEvents[len(resolvedEvents)-1].GetCommitTs(),
 			})
 			total += resolvedCount
 		}
@@ -302,18 +303,19 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 	}, 0)
 	for _, p := range w.progresses {
 		for _, group := range p.eventsGroup {
-			events := group.Resolve(watermark)
-			resolvedCount := len(events)
+			before := len(resolvedEvents)
+			resolvedEvents = group.ResolveInto(watermark, resolvedEvents)
+			resolvedCount := len(resolvedEvents) - before
 			if resolvedCount == 0 {
 				continue
 			}
-			resolvedEvents = append(resolvedEvents, events...)
+
 			resolvedGroups = append(resolvedGroups, struct {
 				group       *util.EventsGroup
 				maxCommitTs uint64
 			}{
 				group:       group,
-				maxCommitTs: events[resolvedCount-1].GetCommitTs(),
+				maxCommitTs: resolvedEvents[len(resolvedEvents)-1].GetCommitTs(),
 			})
 			total += resolvedCount
 		}
@@ -328,7 +330,8 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 			}
 		})
 		w.mysqlSink.AddDMLEvent(e)
-		log.Info("flush DML event", zap.Int64("tableID", e.GetTableID()), zap.Uint64("commitTs", e.GetCommitTs()), zap.Any("startTs", e.GetStartTs()))
+		log.Debug("flush DML event", zap.Int64("tableID", e.GetTableID()),
+			zap.Uint64("commitTs", e.GetCommitTs()), zap.Any("startTs", e.GetStartTs()))
 	}
 
 	log.Info("flush DML events by watermark", zap.Uint64("watermark", watermark), zap.Int("total", total))
@@ -423,7 +426,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 				log.Panic("DML event is nil, it's not expected",
 					zap.Int32("partition", partition), zap.Any("offset", offset))
 			}
-			log.Warn("DML event is nil, it's cached ", zap.Int32("partition", partition), zap.Any("offset", offset))
+			log.Debug("DML event is nil, it's cached", zap.Int32("partition", partition), zap.Any("offset", offset))
 			break
 		}
 
@@ -612,7 +615,6 @@ func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionP
 			zap.String("schema", schema), zap.String("table", table), zap.Any("protocol", w.protocol))
 		return
 	}
-
 	forceInsert := commitTs < group.HighWatermark || commitTs < progress.watermark || w.enableTableAcrossNodes
 	if forceInsert {
 		log.Warn("DML event commit ts fallback, append with forceInsert",
