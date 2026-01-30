@@ -52,6 +52,8 @@ type DispatcherService interface {
 	GetCheckpointTs() uint64
 	HandleEvents(events []DispatcherEvent, wakeCallback func()) (block bool)
 	IsOutputRawChangeEvent() bool
+	GetEpoch() uint64
+	AddEpoch()
 }
 
 // Dispatcher defines the interface for event dispatchers that are responsible for receiving events
@@ -116,6 +118,10 @@ The workflow related to the dispatcher is as follows:
 type BasicDispatcher struct {
 	id       common.DispatcherID
 	schemaID int64
+
+	// epoch is used to filter invalid events.
+	// It is incremented when the dispatcher is reset.
+	epoch atomic.Uint64
 
 	tableSpan *heartbeatpb.TableSpan
 	// isCompleteTable indicates whether this dispatcher is responsible for a complete table
@@ -292,6 +298,14 @@ func (d *BasicDispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.S
 	d.tableSchemaStore = commonEvent.NewTableSchemaStore(schemaInfo, d.sink.SinkType())
 	d.sink.SetTableSchemaStore(d.tableSchemaStore)
 	return true, nil
+}
+
+func (d *BasicDispatcher) GetEpoch() uint64 {
+	return d.epoch.Load()
+}
+
+func (d *BasicDispatcher) AddEpoch() {
+	d.epoch.Add(1)
 }
 
 func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) {
@@ -551,7 +565,8 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			if commitTs <= checkpointTs {
 				log.Warn("add dml event whose commitTs less than or equal the checkpointTs",
 					zap.Any("dispatcherID", d.GetId()),
-					zap.Any("epoch", event.GetEpoch()),
+					zap.Any("eventEpoch", event.GetEpoch()),
+					zap.Any("dispatcherEpoch", d.epoch.Load()),
 					zap.Uint64("commitTs", commitTs),
 					zap.Uint64("checkpointTs", checkpointTs))
 			}

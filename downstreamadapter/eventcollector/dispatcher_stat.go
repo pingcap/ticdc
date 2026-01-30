@@ -114,9 +114,6 @@ type dispatcherStat struct {
 
 	connState dispatcherConnState
 
-	// epoch is used to filter invalid events.
-	// It is incremented when the dispatcher is reset.
-	epoch atomic.Uint64
 	// lastEventSeq is the sequence number of the last received DML/DDL/Handshake event.
 	// It is used to ensure the order of events.
 	lastEventSeq atomic.Uint64
@@ -181,7 +178,8 @@ func (d *dispatcherStat) reset(serverID node.ID) {
 }
 
 func (d *dispatcherStat) doReset(serverID node.ID, resetTs uint64) {
-	epoch := d.epoch.Add(1)
+	d.target.AddEpoch()
+	epoch := d.target.GetEpoch()
 	d.lastEventSeq.Store(0)
 	// remove the dispatcher from the dynamic stream
 	resetRequest := d.newDispatcherResetRequest(d.eventCollector.getLocalServerID().String(), resetTs, epoch)
@@ -373,15 +371,16 @@ func (d *dispatcherStat) filterAndUpdateEventByCommitTs(event dispatcher.Dispatc
 }
 
 func (d *dispatcherStat) isFromCurrentEpoch(event dispatcher.DispatcherEvent) bool {
+	epoch := d.target.GetEpoch()
 	if event.GetType() == commonEvent.TypeBatchDMLEvent {
 		batchDML := event.Event.(*commonEvent.BatchDMLEvent)
 		for _, dml := range batchDML.DMLEvents {
-			if dml.GetEpoch() != d.epoch.Load() {
+			if dml.GetEpoch() != epoch {
 				return false
 			}
 		}
 	}
-	return event.GetEpoch() == d.epoch.Load()
+	return event.GetEpoch() == epoch
 }
 
 // handleBatchDataEvents processes a batch of DML and Resolved events with the following algorithm:
@@ -475,7 +474,7 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 			zap.String("eventType", commonEvent.TypeToString(event.GetType())),
 			zap.Any("event", event.Event),
 			zap.Uint64("eventEpoch", event.GetEpoch()),
-			zap.Uint64("dispatcherEpoch", d.epoch.Load()),
+			zap.Uint64("dispatcherEpoch", d.target.GetEpoch()),
 			zap.Stringer("staleEventService", *event.From),
 			zap.Stringer("currentEventService", d.connState.getEventServiceID()))
 		return false
