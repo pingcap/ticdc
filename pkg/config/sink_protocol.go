@@ -135,6 +135,8 @@ const (
 	AzureScheme = "azure"
 	// CloudStorageNoopScheme indicates the scheme is noop.
 	CloudStorageNoopScheme = "noop"
+	// IcebergScheme indicates the scheme is iceberg.
+	IcebergScheme = "iceberg"
 	// PulsarScheme  indicates the scheme is pulsar
 	PulsarScheme = "pulsar"
 	// PulsarSSLScheme indicates the scheme is pulsar+ssl
@@ -161,6 +163,11 @@ func IsMySQLCompatibleScheme(scheme string) bool {
 func IsStorageScheme(scheme string) bool {
 	return scheme == FileScheme || scheme == S3Scheme || scheme == GCSScheme ||
 		scheme == GSScheme || scheme == AzblobScheme || scheme == AzureScheme || scheme == CloudStorageNoopScheme
+}
+
+// IsIcebergScheme returns true if the scheme is iceberg.
+func IsIcebergScheme(scheme string) bool {
+	return scheme == IcebergScheme
 }
 
 // IsPulsarScheme returns true if the scheme belong to pulsar scheme.

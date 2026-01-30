@@ -12,9 +12,9 @@ group_num=${group#G}
 # If we implement a new test case, which is light, we should add it to this file.
 # If the new test case is heavy, please add it to run_heavy_it_in_ci.sh.
 #
-# Here are four groups of tests defined below, corresponding to four sink types: mysql, kafka, pulsar, and storage.
+# Here are groups of tests defined below, corresponding to sink types: mysql, kafka, pulsar, storage, and iceberg.
 # Please add the new test case to each group according to the sink type.
-# For example, the case "batch_add_table" should be added to all four groups, because it should be tested in all sink types.
+# For example, the case "batch_add_table" should be added to all sink-type groups, because it should be tested in all sink types.
 # The case "kafka_big_messages" should be added to the kafka group only, because it is a kafka-specific test case.
 # The case will not be executed on a sink type if it is not added to the corresponding group.
 #
@@ -26,6 +26,9 @@ group_num=${group#G}
 # For kafka: https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pull_cdc_kafka_integration_light.groovy
 # For pulsar: https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pull_cdc_pulsar_integration_light.groovy
 # For storage: https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pull_cdc_storage_integration_light.groovy
+#
+# For iceberg (GitHub Actions): .github/workflows/integration_test_iceberg.yaml
+# For iceberg (PingCAP-QE CI): add a corresponding pipeline that calls this script with sink_type=iceberg.
 
 # Resource allocation for mysql light integration tests in CI pipelines:
 # https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pod-pull_cdc_mysql_integration_light.yaml
@@ -180,6 +183,41 @@ storage_groups=(
 	'split_region autorandom gc_safepoint'
 )
 
+iceberg_groups=(
+	# G00
+	'iceberg_append_basic'
+	# G01
+	'iceberg_upsert_basic'
+	# G02
+	''
+	# G03
+	''
+	# G04
+	''
+	# G05
+	''
+	# G06
+	''
+	# G07
+	''
+	# G08
+	''
+	# G09
+	''
+	# G10
+	''
+	# G11
+	''
+	# G12
+	''
+	# G13
+	''
+	# G14
+	''
+	# G15
+	''
+)
+
 # Source shared functions and check test coverage
 source "$CUR/_utils/check_coverage.sh"
 check_test_coverage "$CUR"
@@ -189,6 +227,7 @@ mysql) groups=("${mysql_groups[@]}") ;;
 kafka) groups=("${kafka_groups[@]}") ;;
 pulsar) groups=("${pulsar_groups[@]}") ;;
 storage) groups=("${storage_groups[@]}") ;;
+iceberg) groups=("${iceberg_groups[@]}") ;;
 *)
 	echo "Error: unknown sink type: ${sink_type}"
 	exit 1

@@ -1,0 +1,86 @@
+name: Iceberg Integration Test (Light)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches:
+      - master
+      - "release-[0-9].[0-9]*"
+    paths:
+      - downstreamadapter/sink/iceberg/**
+      - pkg/sink/iceberg/**
+      - cmd/iceberg-bootstrap/**
+      - cmd/iceberg-maintenance/**
+      - tests/integration_tests/iceberg_*/**
+      - tests/integration_tests/_utils/iceberg_spark_sql_scalar
+      - tests/integration_tests/_utils/start_tidb_cluster_impl
+      - tests/integration_tests/run_light_it_in_ci.sh
+      - Makefile
+      - .github/workflows/integration_test_iceberg.yaml
+
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  iceberg_light_it:
+    # Only run CI when PR is not draft (workflow_dispatch doesn't have pull_request payload).
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [G00, G01]
+    name: Iceberg Light IT ${{ matrix.group }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v3
+
+      - name: Setup Go environment
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Cache Tools
+        id: cache-tools
+        uses: actions/cache@v3
+        with:
+          path: tools/bin
+          key: ubuntu-latest-ticdc-tools-${{ hashFiles('tools/check/go.sum') }}
+
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            curl \
+            lsof \
+            mariadb-client \
+            psmisc \
+            unzip \
+            wget
+
+      - name: Prepare integration test third-party binaries (community)
+        run: |
+          make prepare_test_binaries community=true ver=v8.5.4 os=linux arch=amd64
+          make check_third_party_binary
+
+      - name: Build TiCDC binaries for integration tests
+        run: |
+          make check_failpoint_ctl
+          make integration_test_build_fast
+
+      - name: Run iceberg integration tests
+        env:
+          # Iceberg tests don't require TiFlash; skipping reduces CI resource usage and flakiness.
+          SKIP_TIFLASH: "1"
+        run: |
+          tests/integration_tests/run_light_it_in_ci.sh iceberg "${{ matrix.group }}"
+
+      - name: Upload test logs
+        if: always()
+        uses: ./.github/actions/upload-test-logs
+        with:
+          log-name: iceberg-light-it-${{ matrix.group }}
+

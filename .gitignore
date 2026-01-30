@@ -17,3 +17,4 @@ cdc-junit-report.xml
 
 # temp files
 *.tmp
+metastore_db/

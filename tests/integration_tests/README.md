@@ -108,6 +108,13 @@ Some useful tips:
 
    > `MySQL sink` will be used by default, if you want to test `Kafka sink`, please run with `make integration_test_kafka CASE=simple`.
 
+   > `Iceberg sink` can be tested with `make integration_test_iceberg CASE=iceberg_append_basic`.
+
+   > Iceberg Spark readback (optional): set `ICEBERG_SPARK_READBACK=1` and provide Iceberg Spark runtime via
+   > `ICEBERG_SPARK_PACKAGES='<maven-coordinates>'` or `ICEBERG_SPARK_JARS='<jar-paths>'`. The test will then run Spark SQL
+   > queries against the local warehouse to validate read semantics. Use `ICEBERG_SPARK_WORKDIR` / `ICEBERG_SPARK_IVY_DIR`
+   > to control Spark/Ivy temp directories when needed.
+
 3. After executing the tests, run `make coverage` to get a coverage report at `/tmp/tidb_cdc_test/all_cov.html`.
 
 ## Writing new tests
@@ -115,7 +122,9 @@ Some useful tips:
 1. New integration tests can be written as shell scripts in `tests/integration_tests/TEST_NAME/run.sh`. The script should
 exit with a nonzero error code on failure.
 
-2. Add TEST_NAME to existing group in [run_group.sh](./run_group.sh), or add a new group for it.
+2. Add `TEST_NAME` to the appropriate CI group list:
+   - `run_light_it_in_ci.sh` for light test cases
+   - `run_heavy_it_in_ci.sh` for heavy test cases
 
 3. If you add a new group, the name of the new group must be added to CI.
    * [cdc-kafka-integration-light](https://github.com/PingCAP-QE/ci/blob/main/pipelines/pingcap/ticdc/latest/pod-pull_cdc_kafka_integration_light.yaml)

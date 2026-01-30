@@ -243,6 +243,9 @@ integration_test_storage: check_third_party_binary
 integration_test_pulsar: check_third_party_binary
 	tests/integration_tests/run.sh pulsar "$(CASE)" "$(START_AT)"
 
+integration_test_iceberg: check_third_party_binary
+	tests/integration_tests/run.sh iceberg "$(CASE)" "$(START_AT)"
+
 unit_test: check_failpoint_ctl generate-protobuf
 	mkdir -p "$(TEST_DIR)"
 	$(FAILPOINT_ENABLE)
