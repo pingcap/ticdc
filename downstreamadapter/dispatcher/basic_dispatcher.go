@@ -366,16 +366,11 @@ func (d *BasicDispatcher) ensureActiveActiveTableInfo(tableInfo *common.TableInf
 			"table %s.%s(id=%d) in dispatcher %s is not active-active but enable-active-active is true",
 			tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String())
 	}
-	requiredCols := []string{
-		commonEvent.OriginTsColumn,
-		commonEvent.SoftDeleteTimeColumn,
-	}
-	for _, col := range requiredCols {
-		if _, ok := tableInfo.GetColumnInfoByName(col); !ok {
-			return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
-				"table %s.%s(id=%d) in dispatcher %s missing required column %s for enable-active-active",
-				tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String(), col)
-		}
+
+	if _, ok := tableInfo.GetColumnInfoByName(commonEvent.OriginTsColumn); !ok {
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			"table %s.%s(id=%d) in dispatcher %s missing required column %s for enable-active-active",
+			tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String(), commonEvent.OriginTsColumn)
 	}
 
 	if _, ok := tableInfo.GetColumnOffsetByName(commonEvent.SoftDeleteTimeColumn); !ok {
@@ -386,7 +381,6 @@ func (d *BasicDispatcher) ensureActiveActiveTableInfo(tableInfo *common.TableInf
 
 	softDeleteCol, ok := tableInfo.GetColumnInfoByName(commonEvent.SoftDeleteTimeColumn)
 	if !ok {
-		// Defensive check. The column existence has already been validated above.
 		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
 			"table %s.%s(id=%d) in dispatcher %s missing required column %s for enable-active-active",
 			tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String(), commonEvent.SoftDeleteTimeColumn)
