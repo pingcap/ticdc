@@ -51,8 +51,6 @@ type dispatcherStat struct {
 	messageWorkerIndex int
 	info               DispatcherInfo
 	filter             filter.Filter
-	// the start ts of the dispatcher
-	startTs uint64
 	// startTableInfo is the table info at the `startTs` of the dispatcher
 	startTableInfo *common.TableInfo
 	// The epoch of the dispatcher.
@@ -146,7 +144,6 @@ func newDispatcherStat(
 		messageWorkerIndex: (common.GID)(id).Hash(messageWorkerCount),
 		info:               info,
 		filter:             info.GetFilter(),
-		startTs:            info.GetStartTs(),
 		epoch:              info.GetEpoch(),
 		startTableInfo:     startTableInfo,
 		txnAtomicity:       info.GetTxnAtomicity(),
@@ -185,12 +182,7 @@ func (a *dispatcherStat) copyStatistics(src *dispatcherStat) {
 	a.receivedResolvedTs.Store(src.receivedResolvedTs.Load())
 	a.eventStoreCommitTs.Store(src.eventStoreCommitTs.Load())
 	a.checkpointTs.Store(src.checkpointTs.Load())
-	if a.startTs < src.startTs {
-		log.Warn("reset dispatcher meet start-ts regression, set to the larger one",
-			zap.Uint64("newStartTs", a.startTs), zap.Uint64("oldStartTs", src.startTs))
-		a.startTs = src.startTs
-	}
-	a.lastScannedCommitTs.Store(a.startTs)
+	a.lastScannedCommitTs.Store(a.checkpointTs.Load())
 
 	a.hasReceivedFirstResolvedTs.Store(src.hasReceivedFirstResolvedTs.Load())
 	a.currentScanLimitInBytes.Store(src.currentScanLimitInBytes.Load())
