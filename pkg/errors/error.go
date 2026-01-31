@@ -469,7 +469,7 @@ var (
 	)
 	ErrStartTsBeforeGC = errors.Normalize(
 		"fail to create or maintain changefeed because start-ts %d "+
-			"is earlier than or equal to GC safepoint at %d",
+			"is earlier than the GC safepoint at %d",
 		errors.RFCCodeText("CDC:ErrStartTsBeforeGC"),
 	)
 	ErrTargetTsBeforeStartTs = errors.Normalize(
@@ -478,7 +478,7 @@ var (
 	)
 	ErrSnapshotLostByGC = errors.Normalize(
 		"fail to create or maintain changefeed due to snapshot loss"+
-			" caused by GC. checkpoint-ts %d is earlier than or equal to GC safepoint at %d",
+			" caused by GC. checkpoint-ts %d is earlier than the GC safepoint at %d",
 		errors.RFCCodeText("CDC:ErrSnapshotLostByGC"),
 	)
 	ErrGCTTLExceeded = errors.Normalize(
@@ -595,6 +595,10 @@ var (
 	ErrGetGCBarrierFailed = errors.Normalize(
 		"get gc barrier failed",
 		errors.RFCCodeText("CDC:ErrGetGCBarrierFailed"),
+	)
+	ErrDeleteGCBarrierFailed = errors.Normalize(
+		"delete gc barrier failed",
+		errors.RFCCodeText("CDC:ErrDeleteGCBarrierFailed"),
 	)
 	ErrLoadKeyspaceFailed = errors.Normalize(
 		"loading keyspace failed",
