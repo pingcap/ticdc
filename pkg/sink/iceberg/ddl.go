@@ -23,6 +23,7 @@ import (
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 )
 
+// TruncateTable overwrites a table with an empty snapshot at the given resolved-ts.
 func (w *TableWriter) TruncateTable(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,

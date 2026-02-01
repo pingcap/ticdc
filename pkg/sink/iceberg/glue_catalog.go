@@ -250,6 +250,7 @@ func (w *TableWriter) ensureGlueTable(
 	return err
 }
 
+// RenameGlueTable renames a Glue table within the configured database.
 func (w *TableWriter) RenameGlueTable(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
@@ -411,6 +412,7 @@ func (w *TableWriter) RenameGlueTable(
 	return err
 }
 
+// VerifyCatalog checks that the catalog configuration is usable.
 func (w *TableWriter) VerifyCatalog(ctx context.Context) error {
 	if w == nil || w.cfg == nil {
 		return cerror.ErrSinkURIInvalid.GenWithStackByArgs("iceberg config is nil")

@@ -32,6 +32,7 @@ const (
 	globalCheckpointTableName = "__tidb_global_checkpoints"
 )
 
+// RecordCheckpoint writes checkpoint records into the per-table checkpoint table.
 func (w *TableWriter) RecordCheckpoint(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
@@ -84,6 +85,7 @@ func (w *TableWriter) RecordCheckpoint(
 	return err
 }
 
+// RecordGlobalCheckpoint writes checkpoint records into the global checkpoint table.
 func (w *TableWriter) RecordGlobalCheckpoint(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,

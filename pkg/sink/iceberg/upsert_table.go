@@ -25,6 +25,7 @@ import (
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 )
 
+// Upsert writes data and equality deletes for upsert mode.
 func (w *TableWriter) Upsert(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,

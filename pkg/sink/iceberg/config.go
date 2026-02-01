@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package iceberg implements an Apache Iceberg sink for TiCDC.
 package iceberg
 
 import (
@@ -38,28 +39,39 @@ const (
 	defaultPartitioning = "days(_tidb_commit_time)"
 )
 
+// Mode defines the write semantics for an Iceberg table.
 type Mode string
 
 const (
+	// ModeAppend writes append-only changelog rows.
 	ModeAppend Mode = "append"
+	// ModeUpsert writes merge-on-read rows using equality deletes.
 	ModeUpsert Mode = "upsert"
 )
 
+// CatalogType defines the Iceberg catalog backend.
 type CatalogType string
 
 const (
+	// CatalogHadoop uses the Hadoop catalog (file/warehouse based).
 	CatalogHadoop CatalogType = "hadoop"
-	CatalogGlue   CatalogType = "glue"
-	CatalogRest   CatalogType = "rest"
+	// CatalogGlue uses the AWS Glue catalog.
+	CatalogGlue CatalogType = "glue"
+	// CatalogRest uses the REST catalog (reserved).
+	CatalogRest CatalogType = "rest"
 )
 
+// SchemaMode controls how schema evolution is handled.
 type SchemaMode string
 
 const (
+	// SchemaModeStrict rejects incompatible schema changes.
 	SchemaModeStrict SchemaMode = "strict"
+	// SchemaModeEvolve allows compatible schema evolution.
 	SchemaModeEvolve SchemaMode = "evolve"
 )
 
+// Config stores Iceberg sink configuration values.
 type Config struct {
 	WarehouseURI      string
 	WarehouseLocation string
@@ -91,6 +103,7 @@ type Config struct {
 	MaxBufferedBytesPerTable int64
 }
 
+// NewConfig returns a Config initialized with default values.
 func NewConfig() *Config {
 	return &Config{
 		Namespace:                   defaultNamespace,
@@ -112,6 +125,7 @@ func NewConfig() *Config {
 	}
 }
 
+// Apply parses the sink URI and applies Iceberg-specific options.
 func (c *Config) Apply(_ context.Context, sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 	if sinkURI == nil {
 		return cerror.ErrSinkURIInvalid.GenWithStackByArgs("sink uri is empty")

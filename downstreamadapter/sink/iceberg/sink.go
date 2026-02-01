@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package iceberg wires the Iceberg sink into the downstream adapter.
 package iceberg
 
 import (
@@ -112,6 +113,7 @@ type upsertKeyState struct {
 	dataRow       *sinkiceberg.ChangeRow
 }
 
+// Verify validates the Iceberg sink URI and configuration.
 func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 	cfg := sinkiceberg.NewConfig()
 	if err := cfg.Apply(ctx, sinkURI, sinkConfig); err != nil {
@@ -151,6 +153,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 	return nil
 }
 
+// New constructs an Iceberg sink for the given changefeed.
 func New(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,

@@ -80,6 +80,7 @@ const (
 	fileSizeTunerMaxRatio     = 10.0
 )
 
+// ChangeRow carries the row fields used for Iceberg writes.
 type ChangeRow struct {
 	Op         string
 	CommitTs   string
@@ -87,6 +88,7 @@ type ChangeRow struct {
 	Columns    map[string]*string
 }
 
+// FileInfo describes a file written to the Iceberg table.
 type FileInfo struct {
 	Location       string
 	RelativePath   string
@@ -95,6 +97,7 @@ type FileInfo struct {
 	FileFormatName string
 }
 
+// CommitResult summarizes a successful Iceberg commit.
 type CommitResult struct {
 	SnapshotID       int64
 	CommitUUID       string
@@ -114,6 +117,7 @@ type tableFileSizeTuner struct {
 	deleteRatio float64
 }
 
+// TableWriter writes TiCDC change rows into Iceberg tables.
 type TableWriter struct {
 	cfg     *Config
 	storage storage.ExternalStorage
@@ -134,6 +138,7 @@ type TableWriter struct {
 	fileSizeTuners map[int64]*tableFileSizeTuner
 }
 
+// NewTableWriter creates a TableWriter for the given config and storage.
 func NewTableWriter(cfg *Config, storage storage.ExternalStorage) *TableWriter {
 	return &TableWriter{
 		cfg:            cfg,
@@ -220,6 +225,7 @@ func (w *TableWriter) updateFileSizeTuner(tableID int64, isDelete bool, estimate
 	w.tunerMu.Unlock()
 }
 
+// GetLastCommittedResolvedTs returns the last committed resolved-ts for a table.
 func (w *TableWriter) GetLastCommittedResolvedTs(ctx context.Context, tableInfo *common.TableInfo) (uint64, error) {
 	if tableInfo == nil {
 		return 0, cerror.ErrSinkURIInvalid.GenWithStackByArgs("table info is nil")
@@ -250,6 +256,7 @@ func (w *TableWriter) GetLastCommittedResolvedTs(ctx context.Context, tableInfo 
 	return resolvedTs, nil
 }
 
+// EnsureTable ensures the target Iceberg table exists and schema is aligned.
 func (w *TableWriter) EnsureTable(ctx context.Context, changefeedID common.ChangeFeedID, tableInfo *common.TableInfo) error {
 	if tableInfo == nil {
 		return cerror.ErrSinkURIInvalid.GenWithStackByArgs("table info is nil")
@@ -352,6 +359,7 @@ func (w *TableWriter) EnsureTable(ctx context.Context, changefeedID common.Chang
 	return w.writeVersionHint(ctx, metadataDirRel, nextVersion)
 }
 
+// AppendChangelog writes append-mode changelog rows to Iceberg.
 func (w *TableWriter) AppendChangelog(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
