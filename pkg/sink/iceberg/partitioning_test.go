@@ -25,13 +25,41 @@ import (
 	"github.com/linkedin/goavro/v2"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/tidb/br/pkg/storage"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
-	"github.com/spaolacci/murmur3"
 	"github.com/stretchr/testify/require"
 )
+
+func readManifestEntries(
+	t *testing.T,
+	ctx context.Context,
+	extStorage storage.ExternalStorage,
+	tableWriter *TableWriter,
+	manifestListRecords []map[string]any,
+) []map[string]any {
+	t.Helper()
+
+	var entries []map[string]any
+	for _, rec := range manifestListRecords {
+		manifestPath := rec["manifest_path"].(string)
+		manifestRel, err := tableWriter.relativePathFromLocation(manifestPath)
+		require.NoError(t, err)
+		manifestBytes, err := extStorage.ReadFile(ctx, manifestRel)
+		require.NoError(t, err)
+
+		manifestReader, err := goavro.NewOCFReader(bytes.NewReader(manifestBytes))
+		require.NoError(t, err)
+		for manifestReader.Scan() {
+			entryAny, err := manifestReader.Read()
+			require.NoError(t, err)
+			entries = append(entries, entryAny.(map[string]any))
+		}
+	}
+	return entries
+}
 
 func TestAppendChangelogPartitionsByCommitTimeDay(t *testing.T) {
 	ctx := context.Background()
@@ -110,23 +138,12 @@ func TestAppendChangelogPartitionsByCommitTimeDay(t *testing.T) {
 		require.NoError(t, err)
 		manifestListRecords = append(manifestListRecords, r.(map[string]any))
 	}
-	require.Len(t, manifestListRecords, 2)
+	require.NotEmpty(t, manifestListRecords)
 
 	epochDays := make(map[int32]struct{})
-	for _, rec := range manifestListRecords {
-		manifestPath := rec["manifest_path"].(string)
-		manifestRel, err := tableWriter.relativePathFromLocation(manifestPath)
-		require.NoError(t, err)
-		manifestBytes, err := extStorage.ReadFile(ctx, manifestRel)
-		require.NoError(t, err)
-
-		manifestReader, err := goavro.NewOCFReader(bytes.NewReader(manifestBytes))
-		require.NoError(t, err)
-		require.True(t, manifestReader.Scan())
-		entryAny, err := manifestReader.Read()
-		require.NoError(t, err)
-
-		entry := entryAny.(map[string]any)
+	entries := readManifestEntries(t, ctx, extStorage, tableWriter, manifestListRecords)
+	require.NotEmpty(t, entries)
+	for _, entry := range entries {
 		dataFile := entry["data_file"].(map[string]any)
 		partition := dataFile["partition"].(map[string]any)
 		require.Contains(t, partition, "_tidb_commit_time_day")
@@ -312,23 +329,12 @@ func TestUpsertPartitionsDeletesWhenDerivedFromEqualityFields(t *testing.T) {
 
 	bucketBytes, err := bucketHashBytes("int", id)
 	require.NoError(t, err)
-	expectedBucket := int32(((int(int32(murmur3.Sum32(bucketBytes))) % 16) + 16) % 16)
+	expectedBucket := int32(((int(int32(murmur3Sum32(bucketBytes))) % 16) + 16) % 16)
 
 	var sawData, sawDeletes bool
-	for _, rec := range manifestListRecords {
-		manifestPath := rec["manifest_path"].(string)
-		manifestRel, err := tableWriter.relativePathFromLocation(manifestPath)
-		require.NoError(t, err)
-		manifestBytes, err := extStorage.ReadFile(ctx, manifestRel)
-		require.NoError(t, err)
-
-		manifestReader, err := goavro.NewOCFReader(bytes.NewReader(manifestBytes))
-		require.NoError(t, err)
-		require.True(t, manifestReader.Scan())
-		entryAny, err := manifestReader.Read()
-		require.NoError(t, err)
-
-		entry := entryAny.(map[string]any)
+	entries := readManifestEntries(t, ctx, extStorage, tableWriter, manifestListRecords)
+	require.NotEmpty(t, entries)
+	for _, entry := range entries {
 		dataFile := entry["data_file"].(map[string]any)
 		content := dataFile["content"].(int32)
 
@@ -428,23 +434,12 @@ func TestAppendChangelogPartitionsByIdentityInt(t *testing.T) {
 		require.NoError(t, err)
 		manifestListRecords = append(manifestListRecords, r.(map[string]any))
 	}
-	require.Len(t, manifestListRecords, 2)
+	require.NotEmpty(t, manifestListRecords)
 
 	values := make(map[int32]struct{})
-	for _, rec := range manifestListRecords {
-		manifestPath := rec["manifest_path"].(string)
-		manifestRel, err := tableWriter.relativePathFromLocation(manifestPath)
-		require.NoError(t, err)
-		manifestBytes, err := extStorage.ReadFile(ctx, manifestRel)
-		require.NoError(t, err)
-
-		manifestReader, err := goavro.NewOCFReader(bytes.NewReader(manifestBytes))
-		require.NoError(t, err)
-		require.True(t, manifestReader.Scan())
-		entryAny, err := manifestReader.Read()
-		require.NoError(t, err)
-
-		entry := entryAny.(map[string]any)
+	entries := readManifestEntries(t, ctx, extStorage, tableWriter, manifestListRecords)
+	require.NotEmpty(t, entries)
+	for _, entry := range entries {
 		dataFile := entry["data_file"].(map[string]any)
 		partition := dataFile["partition"].(map[string]any)
 		union := partition["col1_identity"].(map[string]any)
@@ -534,23 +529,12 @@ func TestAppendChangelogPartitionsByTruncateString(t *testing.T) {
 		require.NoError(t, err)
 		manifestListRecords = append(manifestListRecords, r.(map[string]any))
 	}
-	require.Len(t, manifestListRecords, 2)
+	require.NotEmpty(t, manifestListRecords)
 
 	values := make(map[string]struct{})
-	for _, rec := range manifestListRecords {
-		manifestPath := rec["manifest_path"].(string)
-		manifestRel, err := tableWriter.relativePathFromLocation(manifestPath)
-		require.NoError(t, err)
-		manifestBytes, err := extStorage.ReadFile(ctx, manifestRel)
-		require.NoError(t, err)
-
-		manifestReader, err := goavro.NewOCFReader(bytes.NewReader(manifestBytes))
-		require.NoError(t, err)
-		require.True(t, manifestReader.Scan())
-		entryAny, err := manifestReader.Read()
-		require.NoError(t, err)
-
-		entry := entryAny.(map[string]any)
+	entries := readManifestEntries(t, ctx, extStorage, tableWriter, manifestListRecords)
+	require.NotEmpty(t, entries)
+	for _, entry := range entries {
 		dataFile := entry["data_file"].(map[string]any)
 		partition := dataFile["partition"].(map[string]any)
 		union := partition["s_truncate_2"].(map[string]any)
@@ -641,23 +625,12 @@ func TestAppendChangelogPartitionsByHour(t *testing.T) {
 		require.NoError(t, err)
 		manifestListRecords = append(manifestListRecords, r.(map[string]any))
 	}
-	require.Len(t, manifestListRecords, 2)
+	require.NotEmpty(t, manifestListRecords)
 
 	values := make(map[int32]struct{})
-	for _, rec := range manifestListRecords {
-		manifestPath := rec["manifest_path"].(string)
-		manifestRel, err := tableWriter.relativePathFromLocation(manifestPath)
-		require.NoError(t, err)
-		manifestBytes, err := extStorage.ReadFile(ctx, manifestRel)
-		require.NoError(t, err)
-
-		manifestReader, err := goavro.NewOCFReader(bytes.NewReader(manifestBytes))
-		require.NoError(t, err)
-		require.True(t, manifestReader.Scan())
-		entryAny, err := manifestReader.Read()
-		require.NoError(t, err)
-
-		entry := entryAny.(map[string]any)
+	entries := readManifestEntries(t, ctx, extStorage, tableWriter, manifestListRecords)
+	require.NotEmpty(t, entries)
+	for _, entry := range entries {
 		dataFile := entry["data_file"].(map[string]any)
 		partition := dataFile["partition"].(map[string]any)
 		union := partition["ts_hour"].(map[string]any)

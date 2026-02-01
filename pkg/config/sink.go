@@ -729,6 +729,8 @@ type IcebergConfig struct {
 	CommitInterval *string `toml:"commit-interval" json:"commit-interval,omitempty"`
 	// TargetFileSize is the target size (bytes) for a single data file.
 	TargetFileSize *int64 `toml:"target-file-size" json:"target-file-size,omitempty"`
+	// AutoTuneFileSize controls whether TiCDC adjusts file splitting based on observed file sizes.
+	AutoTuneFileSize *bool `toml:"auto-tune-file-size" json:"auto-tune-file-size,omitempty"`
 
 	// Partitioning is the Iceberg partition spec expression, for example:
 	// - "days(_tidb_commit_time)"

@@ -73,6 +73,13 @@ const (
 	tablePropertyChangefeedGID = "tidb.changefeed_gid"
 )
 
+const (
+	maxManifestEntriesPerFile = 1000
+	fileSizeTunerAlpha        = 0.2
+	fileSizeTunerMinRatio     = 0.1
+	fileSizeTunerMaxRatio     = 10.0
+)
+
 type ChangeRow struct {
 	Op         string
 	CommitTs   string
@@ -102,6 +109,11 @@ type CommitResult struct {
 	DeleteBytesWritten int64
 }
 
+type tableFileSizeTuner struct {
+	dataRatio   float64
+	deleteRatio float64
+}
+
 type TableWriter struct {
 	cfg     *Config
 	storage storage.ExternalStorage
@@ -117,13 +129,95 @@ type TableWriter struct {
 	globalCheckpointOnce      sync.Once
 	globalCheckpointTableInfo *common.TableInfo
 	globalCheckpointTableErr  error
+
+	tunerMu        sync.Mutex
+	fileSizeTuners map[int64]*tableFileSizeTuner
 }
 
 func NewTableWriter(cfg *Config, storage storage.ExternalStorage) *TableWriter {
 	return &TableWriter{
-		cfg:     cfg,
-		storage: storage,
+		cfg:            cfg,
+		storage:        storage,
+		fileSizeTuners: make(map[int64]*tableFileSizeTuner),
 	}
+}
+
+func (w *TableWriter) effectiveTargetFileSizeBytes(tableID int64, isDelete bool) int64 {
+	if w == nil || w.cfg == nil {
+		return defaultTargetFileSizeBytes
+	}
+	target := w.cfg.TargetFileSizeBytes
+	if !w.cfg.AutoTuneFileSize || tableID == 0 {
+		return target
+	}
+
+	ratio := 1.0
+	w.tunerMu.Lock()
+	if tuner := w.fileSizeTuners[tableID]; tuner != nil {
+		if isDelete {
+			if tuner.deleteRatio > 0 {
+				ratio = tuner.deleteRatio
+			}
+		} else {
+			if tuner.dataRatio > 0 {
+				ratio = tuner.dataRatio
+			}
+		}
+	}
+	w.tunerMu.Unlock()
+
+	if ratio < fileSizeTunerMinRatio {
+		ratio = fileSizeTunerMinRatio
+	}
+	if ratio > fileSizeTunerMaxRatio {
+		ratio = fileSizeTunerMaxRatio
+	}
+	adjusted := float64(target) / ratio
+	if adjusted < float64(minTargetFileSizeBytes) {
+		adjusted = float64(minTargetFileSizeBytes)
+	}
+	if adjusted > float64(maxTargetFileSizeBytes) {
+		adjusted = float64(maxTargetFileSizeBytes)
+	}
+	return int64(adjusted)
+}
+
+func (w *TableWriter) updateFileSizeTuner(tableID int64, isDelete bool, estimatedBytes, actualBytes int64) {
+	if w == nil || w.cfg == nil || !w.cfg.AutoTuneFileSize {
+		return
+	}
+	if tableID == 0 || estimatedBytes <= 0 || actualBytes <= 0 {
+		return
+	}
+
+	newRatio := float64(actualBytes) / float64(estimatedBytes)
+	if newRatio < fileSizeTunerMinRatio {
+		newRatio = fileSizeTunerMinRatio
+	}
+	if newRatio > fileSizeTunerMaxRatio {
+		newRatio = fileSizeTunerMaxRatio
+	}
+
+	w.tunerMu.Lock()
+	tuner := w.fileSizeTuners[tableID]
+	if tuner == nil {
+		tuner = &tableFileSizeTuner{}
+		w.fileSizeTuners[tableID] = tuner
+	}
+	if isDelete {
+		if tuner.deleteRatio <= 0 {
+			tuner.deleteRatio = newRatio
+		} else {
+			tuner.deleteRatio = tuner.deleteRatio*(1-fileSizeTunerAlpha) + newRatio*fileSizeTunerAlpha
+		}
+	} else {
+		if tuner.dataRatio <= 0 {
+			tuner.dataRatio = newRatio
+		} else {
+			tuner.dataRatio = tuner.dataRatio*(1-fileSizeTunerAlpha) + newRatio*fileSizeTunerAlpha
+		}
+	}
+	w.tunerMu.Unlock()
 }
 
 func (w *TableWriter) GetLastCommittedResolvedTs(ctx context.Context, tableInfo *common.TableInfo) (uint64, error) {
@@ -308,7 +402,6 @@ func (w *TableWriter) AppendChangelog(
 	}
 
 	var (
-		entries    []manifestListEntryInput
 		totalBytes int64
 		dataBytes  int64
 	)
@@ -316,11 +409,13 @@ func (w *TableWriter) AppendChangelog(
 	if err != nil {
 		return nil, err
 	}
-	entries = make([]manifestListEntryInput, 0, len(partitionGroups))
+	manifestEntries := make([]manifestEntryInput, 0, len(partitionGroups))
 	dataFilesWritten := 0
+	targetSize := w.effectiveTargetFileSizeBytes(physicalTableID, false)
 	for _, group := range partitionGroups {
-		rowChunks := splitRowsByTargetSize(group.rows, w.cfg.TargetFileSizeBytes, w.cfg.EmitMetadataColumns)
-		for _, chunkRows := range rowChunks {
+		rowChunks := splitRowsByTargetSize(group.rows, targetSize, w.cfg.EmitMetadataColumns)
+		for _, chunk := range rowChunks {
+			chunkRows := chunk.rows
 			fileUUID := fmt.Sprintf("%s-%06d", commitUUID, dataFilesWritten)
 			dataFilesWritten++
 			dataFile, err := w.writeDataFile(ctx, tableRootRel, fileUUID, snapshotFilePrefix, tableInfo, chunkRows)
@@ -329,39 +424,36 @@ func (w *TableWriter) AppendChangelog(
 			}
 			totalBytes += dataFile.SizeBytes
 			dataBytes += dataFile.SizeBytes
-
-			manifestUUID := uuid.NewString()
-			manifestFile, err := w.writeManifestFile(
-				ctx,
-				tableRootRel,
-				manifestUUID,
-				snapshotID,
-				snapshotSequenceNumber,
-				snapshotSequenceNumber,
-				dataFileContentData,
-				nil,
-				dataFile,
-				icebergSchemaBytes,
-				group.partition,
-				partitionSpec.partitionSpecJSON,
-				partitionSpec.manifestEntrySchemaV2,
-			)
-			if err != nil {
-				return nil, err
-			}
-			totalBytes += manifestFile.SizeBytes
-
-			entries = append(entries, manifestListEntryInput{
-				manifestFile:      manifestFile,
-				partitionSpecID:   int32(partitionSpec.spec.SpecID),
-				content:           manifestContentData,
-				sequenceNumber:    snapshotSequenceNumber,
-				minSequenceNumber: snapshotSequenceNumber,
+			w.updateFileSizeTuner(physicalTableID, false, chunk.estimatedBytes, dataFile.SizeBytes)
+			manifestEntries = append(manifestEntries, manifestEntryInput{
+				snapshotID:         snapshotID,
+				dataSequenceNumber: snapshotSequenceNumber,
+				fileSequenceNumber: snapshotSequenceNumber,
+				fileContent:        dataFileContentData,
+				dataFile:           dataFile,
+				partitionRecord:    group.partition,
 			})
 		}
 	}
 
-	manifestListFile, err := w.writeManifestListFile(ctx, tableRootRel, commitUUID, snapshotID, entries)
+	manifestListEntries, manifestBytes, err := w.writeManifestFiles(
+		ctx,
+		tableRootRel,
+		manifestEntries,
+		icebergSchemaBytes,
+		partitionSpec.partitionSpecJSON,
+		partitionSpec.manifestEntrySchemaV2,
+		int32(partitionSpec.spec.SpecID),
+		manifestContentData,
+		snapshotSequenceNumber,
+		snapshotSequenceNumber,
+	)
+	if err != nil {
+		return nil, err
+	}
+	totalBytes += manifestBytes
+
+	manifestListFile, err := w.writeManifestListFile(ctx, tableRootRel, commitUUID, snapshotID, manifestListEntries)
 	if err != nil {
 		return nil, err
 	}
@@ -565,41 +657,46 @@ func (w *TableWriter) writeManifestFile(
 	ctx context.Context,
 	tableRootRel string,
 	manifestUUID string,
-	snapshotID int64,
-	dataSequenceNumber int64,
-	fileSequenceNumber int64,
-	fileContent int32,
-	equalityFieldIDs []int,
-	dataFile *FileInfo,
+	entries []manifestEntryInput,
 	icebergSchemaJSON []byte,
-	partitionRecord map[string]any,
 	partitionSpecJSON []byte,
 	manifestEntrySchema string,
 ) (*FileInfo, error) {
-	var equalityIDs any
-	if len(equalityFieldIDs) > 0 {
-		ids := make([]any, 0, len(equalityFieldIDs))
-		for _, id := range equalityFieldIDs {
-			ids = append(ids, int32(id))
-		}
-		equalityIDs = wrapUnion("array", ids)
+	if len(entries) == 0 {
+		return nil, cerror.ErrSinkURIInvalid.GenWithStackByArgs("manifest entries are empty")
 	}
 
-	manifestEntry := map[string]any{
-		"status":               manifestStatusAdded,
-		"snapshot_id":          wrapUnion("long", snapshotID),
-		"sequence_number":      wrapUnion("long", dataSequenceNumber),
-		"file_sequence_number": wrapUnion("long", fileSequenceNumber),
-		"data_file": map[string]any{
-			"content":            fileContent,
-			"file_path":          dataFile.Location,
-			"file_format":        dataFile.FileFormatName,
-			"partition":          partitionRecord,
-			"record_count":       dataFile.RecordCount,
-			"file_size_in_bytes": dataFile.SizeBytes,
-			"equality_ids":       equalityIDs,
-			"sort_order_id":      nil,
-		},
+	records := make([]any, 0, len(entries))
+	for _, entry := range entries {
+		if entry.dataFile == nil {
+			return nil, cerror.ErrSinkURIInvalid.GenWithStackByArgs("manifest data file is nil")
+		}
+
+		var equalityIDs any
+		if len(entry.equalityFieldIDs) > 0 {
+			ids := make([]any, 0, len(entry.equalityFieldIDs))
+			for _, id := range entry.equalityFieldIDs {
+				ids = append(ids, int32(id))
+			}
+			equalityIDs = wrapUnion("array", ids)
+		}
+
+		records = append(records, map[string]any{
+			"status":               manifestStatusAdded,
+			"snapshot_id":          wrapUnion("long", entry.snapshotID),
+			"sequence_number":      wrapUnion("long", entry.dataSequenceNumber),
+			"file_sequence_number": wrapUnion("long", entry.fileSequenceNumber),
+			"data_file": map[string]any{
+				"content":            entry.fileContent,
+				"file_path":          entry.dataFile.Location,
+				"file_format":        entry.dataFile.FileFormatName,
+				"partition":          entry.partitionRecord,
+				"record_count":       entry.dataFile.RecordCount,
+				"file_size_in_bytes": entry.dataFile.SizeBytes,
+				"equality_ids":       equalityIDs,
+				"sort_order_id":      nil,
+			},
+		})
 	}
 
 	meta := map[string][]byte{
@@ -607,7 +704,7 @@ func (w *TableWriter) writeManifestFile(
 		"partition-spec": partitionSpecJSON,
 	}
 
-	manifestBytes, err := writeOCF(manifestEntrySchema, meta, avroCompressionSnappy, []any{manifestEntry})
+	manifestBytes, err := writeOCF(manifestEntrySchema, meta, avroCompressionSnappy, records)
 	if err != nil {
 		return nil, cerror.WrapError(cerror.ErrSinkURIInvalid, err)
 	}
@@ -625,10 +722,62 @@ func (w *TableWriter) writeManifestFile(
 	return &FileInfo{
 		Location:       manifestLocation,
 		RelativePath:   manifestRel,
-		RecordCount:    1,
+		RecordCount:    int64(len(entries)),
 		SizeBytes:      int64(len(manifestBytes)),
 		FileFormatName: "AVRO",
 	}, nil
+}
+
+func (w *TableWriter) writeManifestFiles(
+	ctx context.Context,
+	tableRootRel string,
+	entries []manifestEntryInput,
+	icebergSchemaJSON []byte,
+	partitionSpecJSON []byte,
+	manifestEntrySchema string,
+	partitionSpecID int32,
+	content int32,
+	sequenceNumber int64,
+	minSequenceNumber int64,
+) ([]manifestListEntryInput, int64, error) {
+	if len(entries) == 0 {
+		return nil, 0, nil
+	}
+
+	if partitionSpecID == 0 {
+		partitionSpecID = int32(icebergPartitionSpecID)
+	}
+
+	manifestEntries := make([]manifestListEntryInput, 0, (len(entries)+maxManifestEntriesPerFile-1)/maxManifestEntriesPerFile)
+	var totalBytes int64
+	for start := 0; start < len(entries); start += maxManifestEntriesPerFile {
+		end := start + maxManifestEntriesPerFile
+		if end > len(entries) {
+			end = len(entries)
+		}
+		manifestUUID := uuid.NewString()
+		manifestFile, err := w.writeManifestFile(
+			ctx,
+			tableRootRel,
+			manifestUUID,
+			entries[start:end],
+			icebergSchemaJSON,
+			partitionSpecJSON,
+			manifestEntrySchema,
+		)
+		if err != nil {
+			return nil, 0, err
+		}
+		totalBytes += manifestFile.SizeBytes
+		manifestEntries = append(manifestEntries, manifestListEntryInput{
+			manifestFile:      manifestFile,
+			partitionSpecID:   partitionSpecID,
+			content:           content,
+			sequenceNumber:    sequenceNumber,
+			minSequenceNumber: minSequenceNumber,
+		})
+	}
+	return manifestEntries, totalBytes, nil
 }
 
 func (w *TableWriter) writeManifestListFile(
@@ -692,6 +841,16 @@ type manifestListEntryInput struct {
 	content           int32
 	sequenceNumber    int64
 	minSequenceNumber int64
+}
+
+type manifestEntryInput struct {
+	snapshotID         int64
+	dataSequenceNumber int64
+	fileSequenceNumber int64
+	fileContent        int32
+	equalityFieldIDs   []int
+	dataFile           *FileInfo
+	partitionRecord    map[string]any
 }
 
 func (w *TableWriter) commitSnapshot(

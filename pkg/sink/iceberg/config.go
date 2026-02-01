@@ -72,6 +72,7 @@ type Config struct {
 
 	CommitInterval      time.Duration
 	TargetFileSizeBytes int64
+	AutoTuneFileSize    bool
 	Partitioning        string
 
 	SchemaMode SchemaMode
@@ -97,6 +98,7 @@ func NewConfig() *Config {
 		Mode:                        ModeAppend,
 		CommitInterval:              defaultCommitInterval,
 		TargetFileSizeBytes:         defaultTargetFileSizeBytes,
+		AutoTuneFileSize:            false,
 		Partitioning:                "",
 		SchemaMode:                  SchemaModeStrict,
 		EmitMetadataColumns:         true,
@@ -121,6 +123,7 @@ func (c *Config) Apply(_ context.Context, sinkURI *url.URL, sinkConfig *config.S
 
 	query := sinkURI.Query()
 	catalogSpecified := false
+	autoTuneSpecified := false
 
 	if sinkConfig != nil && sinkConfig.IcebergConfig != nil {
 		if v := strings.TrimSpace(getOrEmpty(sinkConfig.IcebergConfig.Warehouse)); v != "" {
@@ -160,6 +163,10 @@ func (c *Config) Apply(_ context.Context, sinkURI *url.URL, sinkConfig *config.S
 			if err := c.setTargetFileSize(*sinkConfig.IcebergConfig.TargetFileSize); err != nil {
 				return err
 			}
+		}
+		if sinkConfig.IcebergConfig.AutoTuneFileSize != nil {
+			c.AutoTuneFileSize = *sinkConfig.IcebergConfig.AutoTuneFileSize
+			autoTuneSpecified = true
 		}
 		if v := strings.TrimSpace(getOrEmpty(sinkConfig.IcebergConfig.Partitioning)); v != "" {
 			c.Partitioning = v
@@ -239,6 +246,14 @@ func (c *Config) Apply(_ context.Context, sinkURI *url.URL, sinkConfig *config.S
 		if err := c.setTargetFileSize(fileSizeBytes); err != nil {
 			return err
 		}
+	}
+	if v := strings.TrimSpace(query.Get("auto-tune-file-size")); v != "" {
+		autoTune, err := strconv.ParseBool(v)
+		if err != nil {
+			return cerror.WrapError(cerror.ErrSinkURIInvalid, err)
+		}
+		c.AutoTuneFileSize = autoTune
+		autoTuneSpecified = true
 	}
 
 	if v := strings.TrimSpace(query.Get("partitioning")); v != "" {
@@ -329,6 +344,9 @@ func (c *Config) Apply(_ context.Context, sinkURI *url.URL, sinkConfig *config.S
 	}
 	if !c.EmitMetadataColumns && partitioningUsesMetadataColumns(c.Partitioning) {
 		return cerror.ErrSinkURIInvalid.GenWithStackByArgs("partitioning requires emit-metadata-columns=true")
+	}
+	if !autoTuneSpecified && c.Mode == ModeUpsert {
+		c.AutoTuneFileSize = true
 	}
 
 	if c.MaxBufferedRows < 0 || c.MaxBufferedBytes < 0 || c.MaxBufferedRowsPerTable < 0 || c.MaxBufferedBytesPerTable < 0 {

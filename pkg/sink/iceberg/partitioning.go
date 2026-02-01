@@ -24,8 +24,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/spaolacci/murmur3"
-
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 )
 
@@ -504,7 +502,7 @@ func computePartitionValue(field resolvedPartitionField, row ChangeRow) (any, er
 			if err != nil {
 				return nil, err
 			}
-			hash := int32(murmur3.Sum32(data))
+			hash := int32(murmur3Sum32(data))
 			n := field.numBuckets
 			return int32(((int(hash) % n) + n) % n), nil
 		}
@@ -1034,4 +1032,49 @@ func parseEpochDaysString(raw string) (int32, error) {
 		return 0, cerror.WrapError(cerror.ErrSinkURIInvalid, err)
 	}
 	return int32(n), nil
+}
+
+func murmur3Sum32(data []byte) uint32 {
+	const (
+		c1 = 0xcc9e2d51
+		c2 = 0x1b873593
+	)
+
+	var h1 uint32
+	nblocks := len(data) / 4
+	for i := 0; i < nblocks; i++ {
+		k1 := binary.LittleEndian.Uint32(data[i*4:])
+		k1 *= c1
+		k1 = (k1 << 15) | (k1 >> 17)
+		k1 *= c2
+
+		h1 ^= k1
+		h1 = (h1 << 13) | (h1 >> 19)
+		h1 = h1*5 + 0xe6546b64
+	}
+
+	tail := data[nblocks*4:]
+	var k1 uint32
+	switch len(tail) & 3 {
+	case 3:
+		k1 ^= uint32(tail[2]) << 16
+		fallthrough
+	case 2:
+		k1 ^= uint32(tail[1]) << 8
+		fallthrough
+	case 1:
+		k1 ^= uint32(tail[0])
+		k1 *= c1
+		k1 = (k1 << 15) | (k1 >> 17)
+		k1 *= c2
+		h1 ^= k1
+	}
+
+	h1 ^= uint32(len(data))
+	h1 ^= h1 >> 16
+	h1 *= 0x85ebca6b
+	h1 ^= h1 >> 13
+	h1 *= 0xc2b2ae35
+	h1 ^= h1 >> 16
+	return h1
 }

@@ -81,21 +81,24 @@ func (w *TableWriter) Upsert(
 		return nil, cerror.WrapError(cerror.ErrSinkURIInvalid, err)
 	}
 
-	entries := make([]manifestListEntryInput, 0, 2)
 	totalBytes := int64(0)
 	dataFilesWritten := 0
 	deleteFilesWritten := 0
 	dataBytes := int64(0)
 	deleteBytes := int64(0)
+	manifestListEntries := make([]manifestListEntryInput, 0, 2)
 
 	if len(dataRows) > 0 {
 		partitionGroups, err := resolvedSpec.groupRows(dataRows)
 		if err != nil {
 			return nil, err
 		}
+		dataEntries := make([]manifestEntryInput, 0, len(partitionGroups))
+		targetSize := w.effectiveTargetFileSizeBytes(physicalTableID, false)
 		for _, group := range partitionGroups {
-			rowChunks := splitRowsByTargetSize(group.rows, w.cfg.TargetFileSizeBytes, w.cfg.EmitMetadataColumns)
-			for _, chunkRows := range rowChunks {
+			rowChunks := splitRowsByTargetSize(group.rows, targetSize, w.cfg.EmitMetadataColumns)
+			for _, chunk := range rowChunks {
+				chunkRows := chunk.rows
 				dataUUID := fmt.Sprintf("%s-%06d", commitUUID, dataFilesWritten)
 				dataFilesWritten++
 				dataFile, err := w.writeDataFile(ctx, tableRootRel, dataUUID, snapshotFilePrefix, tableInfo, chunkRows)
@@ -103,36 +106,36 @@ func (w *TableWriter) Upsert(
 					return nil, err
 				}
 				dataBytes += dataFile.SizeBytes
+				totalBytes += dataFile.SizeBytes
+				w.updateFileSizeTuner(physicalTableID, false, chunk.estimatedBytes, dataFile.SizeBytes)
 
-				dataManifestUUID := uuid.NewString()
-				dataManifestFile, err := w.writeManifestFile(
-					ctx,
-					tableRootRel,
-					dataManifestUUID,
-					snapshotID,
-					snapshotSequenceNumber,
-					snapshotSequenceNumber,
-					dataFileContentData,
-					nil,
-					dataFile,
-					icebergSchemaBytes,
-					group.partition,
-					resolvedSpec.partitionSpecJSON,
-					resolvedSpec.manifestEntrySchemaV2,
-				)
-				if err != nil {
-					return nil, err
-				}
-				entries = append(entries, manifestListEntryInput{
-					manifestFile:      dataManifestFile,
-					partitionSpecID:   int32(resolvedSpec.spec.SpecID),
-					content:           manifestContentData,
-					sequenceNumber:    snapshotSequenceNumber,
-					minSequenceNumber: snapshotSequenceNumber,
+				dataEntries = append(dataEntries, manifestEntryInput{
+					snapshotID:         snapshotID,
+					dataSequenceNumber: snapshotSequenceNumber,
+					fileSequenceNumber: snapshotSequenceNumber,
+					fileContent:        dataFileContentData,
+					dataFile:           dataFile,
+					partitionRecord:    group.partition,
 				})
-				totalBytes += dataFile.SizeBytes + dataManifestFile.SizeBytes
 			}
 		}
+		dataManifestEntries, manifestBytes, err := w.writeManifestFiles(
+			ctx,
+			tableRootRel,
+			dataEntries,
+			icebergSchemaBytes,
+			resolvedSpec.partitionSpecJSON,
+			resolvedSpec.manifestEntrySchemaV2,
+			int32(resolvedSpec.spec.SpecID),
+			manifestContentData,
+			snapshotSequenceNumber,
+			snapshotSequenceNumber,
+		)
+		if err != nil {
+			return nil, err
+		}
+		totalBytes += manifestBytes
+		manifestListEntries = append(manifestListEntries, dataManifestEntries...)
 	}
 
 	if len(deleteRows) > 0 {
@@ -153,9 +156,12 @@ func (w *TableWriter) Upsert(
 			return nil, groupErr
 		}
 
+		deleteEntries := make([]manifestEntryInput, 0, len(deleteGroups))
+		targetSize := w.effectiveTargetFileSizeBytes(physicalTableID, true)
 		for _, group := range deleteGroups {
-			rowChunks := splitRowsByTargetSize(group.rows, w.cfg.TargetFileSizeBytes, w.cfg.EmitMetadataColumns)
-			for _, chunkRows := range rowChunks {
+			rowChunks := splitRowsByTargetSize(group.rows, targetSize, w.cfg.EmitMetadataColumns)
+			for _, chunk := range rowChunks {
+				chunkRows := chunk.rows
 				deleteUUID := fmt.Sprintf("%s-%06d", commitUUID, deleteFilesWritten)
 				deleteFilesWritten++
 				deleteFile, err := w.writeDataFile(ctx, tableRootRel, deleteUUID, deleteFilePrefix, tableInfo, chunkRows)
@@ -163,39 +169,40 @@ func (w *TableWriter) Upsert(
 					return nil, err
 				}
 				deleteBytes += deleteFile.SizeBytes
+				totalBytes += deleteFile.SizeBytes
+				w.updateFileSizeTuner(physicalTableID, true, chunk.estimatedBytes, deleteFile.SizeBytes)
 
-				deleteManifestUUID := uuid.NewString()
-				deleteManifestFile, err := w.writeManifestFile(
-					ctx,
-					tableRootRel,
-					deleteManifestUUID,
-					snapshotID,
-					baseSequenceNumber,
-					snapshotSequenceNumber,
-					dataFileContentEqualityDeletes,
-					equalityFieldIDs,
-					deleteFile,
-					icebergSchemaBytes,
-					group.partition,
-					deletePartitionSpecJSON,
-					deleteManifestEntrySchema,
-				)
-				if err != nil {
-					return nil, err
-				}
-				entries = append(entries, manifestListEntryInput{
-					manifestFile:      deleteManifestFile,
-					partitionSpecID:   deletePartitionSpecID,
-					content:           manifestContentDeletes,
-					sequenceNumber:    snapshotSequenceNumber,
-					minSequenceNumber: baseSequenceNumber,
+				deleteEntries = append(deleteEntries, manifestEntryInput{
+					snapshotID:         snapshotID,
+					dataSequenceNumber: baseSequenceNumber,
+					fileSequenceNumber: snapshotSequenceNumber,
+					fileContent:        dataFileContentEqualityDeletes,
+					equalityFieldIDs:   equalityFieldIDs,
+					dataFile:           deleteFile,
+					partitionRecord:    group.partition,
 				})
-				totalBytes += deleteFile.SizeBytes + deleteManifestFile.SizeBytes
 			}
 		}
+		deleteManifestEntries, manifestBytes, err := w.writeManifestFiles(
+			ctx,
+			tableRootRel,
+			deleteEntries,
+			icebergSchemaBytes,
+			deletePartitionSpecJSON,
+			deleteManifestEntrySchema,
+			deletePartitionSpecID,
+			manifestContentDeletes,
+			snapshotSequenceNumber,
+			baseSequenceNumber,
+		)
+		if err != nil {
+			return nil, err
+		}
+		totalBytes += manifestBytes
+		manifestListEntries = append(manifestListEntries, deleteManifestEntries...)
 	}
 
-	manifestListFile, err := w.writeManifestListFile(ctx, tableRootRel, commitUUID, snapshotID, entries)
+	manifestListFile, err := w.writeManifestListFile(ctx, tableRootRel, commitUUID, snapshotID, manifestListEntries)
 	if err != nil {
 		return nil, err
 	}

@@ -52,6 +52,19 @@ type pendingTxn struct {
 	callback       func()
 }
 
+type columnPlanColumn struct {
+	idx  int
+	name string
+	ft   *types.FieldType
+}
+
+type tableColumnPlan struct {
+	updateTs       uint64
+	dataColumns    []columnPlanColumn
+	keyColumns     []columnPlanColumn
+	keyColumnNames []string
+}
+
 type tableBuffer struct {
 	pending []pendingTxn
 }
@@ -77,7 +90,9 @@ type sink struct {
 
 	commitMu      sync.Mutex
 	mu            sync.Mutex
+	planMu        sync.Mutex
 	buffers       map[int64]*tableBuffer
+	columnPlans   map[int64]*tableColumnPlan
 	committed     map[int64]uint64
 	bufferedRows  map[int64]int64
 	bufferedBytes map[int64]int64
@@ -180,6 +195,7 @@ func New(
 		tableWriter:      sinkiceberg.NewTableWriter(cfg, warehouseStorage),
 		dmlCh:            chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
 		buffers:          make(map[int64]*tableBuffer),
+		columnPlans:      make(map[int64]*tableColumnPlan),
 		committed:        make(map[int64]uint64),
 		bufferedRows:     make(map[int64]int64),
 		bufferedBytes:    make(map[int64]int64),
@@ -384,10 +400,15 @@ func (s *sink) bufferLoop(ctx context.Context) error {
 				rows []sinkiceberg.ChangeRow
 				err  error
 			)
+			plan, err := s.getColumnPlan(ev.PhysicalTableID, ev.TableInfo)
+			if err != nil {
+				s.isNormal.Store(false)
+				return err
+			}
 			if s.cfg.Mode == sinkiceberg.ModeUpsert {
-				rows, err = convertToUpsertOps(ev)
+				rows, err = convertToUpsertOps(ev, plan)
 			} else {
-				rows, err = convertToChangeRows(ev)
+				rows, err = convertToChangeRows(ev, plan)
 			}
 			if err != nil {
 				s.isNormal.Store(false)
@@ -514,32 +535,15 @@ func (s *sink) commitLoop(ctx context.Context) error {
 	}
 }
 
-func collapseUpsertTxns(tableInfo *common.TableInfo, txns []pendingTxn, equalityFieldIDs []int) ([]sinkiceberg.ChangeRow, []sinkiceberg.ChangeRow, error) {
+func collapseUpsertTxns(tableInfo *common.TableInfo, txns []pendingTxn, keyColumnNames []string) ([]sinkiceberg.ChangeRow, []sinkiceberg.ChangeRow, error) {
 	if tableInfo == nil {
 		return nil, nil, errors.ErrSinkURIInvalid.GenWithStackByArgs("table info is nil")
 	}
 	if len(txns) == 0 {
 		return nil, nil, nil
 	}
-	if len(equalityFieldIDs) == 0 {
-		return nil, nil, errors.ErrSinkURIInvalid.GenWithStackByArgs("equality field ids are empty")
-	}
-
-	idToName := make(map[int]string, len(tableInfo.GetColumns()))
-	for _, col := range tableInfo.GetColumns() {
-		if col == nil || col.IsVirtualGenerated() {
-			continue
-		}
-		idToName[int(col.ID)] = col.Name.O
-	}
-
-	keyColumnNames := make([]string, 0, len(equalityFieldIDs))
-	for _, id := range equalityFieldIDs {
-		name, ok := idToName[id]
-		if !ok {
-			return nil, nil, errors.ErrSinkURIInvalid.GenWithStackByArgs(fmt.Sprintf("handle key column not found in table columns: %d", id))
-		}
-		keyColumnNames = append(keyColumnNames, name)
+	if len(keyColumnNames) == 0 {
+		return nil, nil, errors.ErrSinkURIInvalid.GenWithStackByArgs("handle key columns are empty")
 	}
 
 	buildKey := func(row sinkiceberg.ChangeRow) (string, error) {
@@ -708,7 +712,11 @@ func (s *sink) commitOnce(ctx context.Context, resolvedTs uint64) error {
 				if err != nil {
 					return 0, 0, err
 				}
-				collapsedRows, collapsedDeleteRows, err := collapseUpsertTxns(t.tableInfo, t.txns, equalityFieldIDs)
+				plan, err := s.getColumnPlan(t.tableID, t.tableInfo)
+				if err != nil {
+					return 0, 0, err
+				}
+				collapsedRows, collapsedDeleteRows, err := collapseUpsertTxns(t.tableInfo, t.txns, plan.keyColumnNames)
 				if err != nil {
 					return 0, 0, err
 				}
@@ -954,6 +962,72 @@ func estimateChangeRowsBytes(rows []sinkiceberg.ChangeRow, emitMetadata bool) in
 	return size
 }
 
+func (s *sink) getColumnPlan(tableID int64, tableInfo *common.TableInfo) (*tableColumnPlan, error) {
+	if tableInfo == nil {
+		return nil, errors.ErrSinkURIInvalid.GenWithStackByArgs("table info is nil")
+	}
+	updateTs := tableInfo.UpdateTS
+	s.planMu.Lock()
+	plan := s.columnPlans[tableID]
+	if plan != nil && plan.updateTs == updateTs {
+		s.planMu.Unlock()
+		return plan, nil
+	}
+	newPlan, err := buildColumnPlan(tableInfo)
+	if err != nil {
+		s.planMu.Unlock()
+		return nil, err
+	}
+	newPlan.updateTs = updateTs
+	s.columnPlans[tableID] = newPlan
+	s.planMu.Unlock()
+	return newPlan, nil
+}
+
+func buildColumnPlan(tableInfo *common.TableInfo) (*tableColumnPlan, error) {
+	if tableInfo == nil {
+		return nil, errors.ErrSinkURIInvalid.GenWithStackByArgs("table info is nil")
+	}
+
+	colInfos := tableInfo.GetColumns()
+	if len(colInfos) == 0 {
+		return &tableColumnPlan{}, nil
+	}
+
+	dataColumns := make([]columnPlanColumn, 0, len(colInfos))
+	idToColumn := make(map[int64]columnPlanColumn, len(colInfos))
+	for idx, colInfo := range colInfos {
+		if colInfo == nil || colInfo.IsVirtualGenerated() {
+			continue
+		}
+		col := columnPlanColumn{
+			idx:  idx,
+			name: colInfo.Name.O,
+			ft:   &colInfo.FieldType,
+		}
+		dataColumns = append(dataColumns, col)
+		idToColumn[colInfo.ID] = col
+	}
+
+	keyIDs := tableInfo.GetOrderedHandleKeyColumnIDs()
+	keyColumns := make([]columnPlanColumn, 0, len(keyIDs))
+	keyColumnNames := make([]string, 0, len(keyIDs))
+	for _, id := range keyIDs {
+		col, ok := idToColumn[id]
+		if !ok {
+			return nil, errors.ErrSinkURIInvalid.GenWithStackByArgs(fmt.Sprintf("handle key column not found in table columns: %d", id))
+		}
+		keyColumns = append(keyColumns, col)
+		keyColumnNames = append(keyColumnNames, col.name)
+	}
+
+	return &tableColumnPlan{
+		dataColumns:    dataColumns,
+		keyColumns:     keyColumns,
+		keyColumnNames: keyColumnNames,
+	}, nil
+}
+
 func estimateChangeRowBytes(row sinkiceberg.ChangeRow, emitMetadata bool) int64 {
 	var size int64
 	if emitMetadata {
@@ -972,13 +1046,12 @@ func estimateChangeRowBytes(row sinkiceberg.ChangeRow, emitMetadata bool) int64 
 	return size
 }
 
-func convertToChangeRows(event *commonEvent.DMLEvent) ([]sinkiceberg.ChangeRow, error) {
+func convertToChangeRows(event *commonEvent.DMLEvent, plan *tableColumnPlan) ([]sinkiceberg.ChangeRow, error) {
 	commitTime := oracle.GetTimeFromTS(event.CommitTs).UTC()
 	commitTimeStr := commitTime.Format(time.RFC3339Nano)
 	commitTsStr := strconv.FormatUint(event.CommitTs, 10)
 
-	colInfos := event.TableInfo.GetColumns()
-	if len(colInfos) == 0 {
+	if plan == nil || len(plan.dataColumns) == 0 {
 		return nil, nil
 	}
 
@@ -1010,16 +1083,13 @@ func convertToChangeRows(event *commonEvent.DMLEvent) ([]sinkiceberg.ChangeRow, 
 			continue
 		}
 
-		columns := make(map[string]*string, len(colInfos))
-		for idx, colInfo := range colInfos {
-			if colInfo == nil || colInfo.IsVirtualGenerated() {
-				continue
-			}
-			v, err := formatColumnAsString(&row, idx, &colInfo.FieldType)
+		columns := make(map[string]*string, len(plan.dataColumns))
+		for _, col := range plan.dataColumns {
+			v, err := formatColumnAsString(&row, col.idx, col.ft)
 			if err != nil {
 				return nil, err
 			}
-			columns[colInfo.Name.O] = v
+			columns[col.name] = v
 		}
 
 		rows = append(rows, sinkiceberg.ChangeRow{
@@ -1032,51 +1102,17 @@ func convertToChangeRows(event *commonEvent.DMLEvent) ([]sinkiceberg.ChangeRow, 
 	return rows, nil
 }
 
-func convertToUpsertOps(event *commonEvent.DMLEvent) ([]sinkiceberg.ChangeRow, error) {
+func convertToUpsertOps(event *commonEvent.DMLEvent, plan *tableColumnPlan) ([]sinkiceberg.ChangeRow, error) {
 	commitTime := oracle.GetTimeFromTS(event.CommitTs).UTC()
 	commitTimeStr := commitTime.Format(time.RFC3339Nano)
 	commitTsStr := strconv.FormatUint(event.CommitTs, 10)
 
-	colInfos := event.TableInfo.GetColumns()
-	if len(colInfos) == 0 {
+	if plan == nil || len(plan.dataColumns) == 0 {
 		return nil, nil
 	}
 
-	keyIDs := event.TableInfo.GetOrderedHandleKeyColumnIDs()
-	if len(keyIDs) == 0 {
+	if len(plan.keyColumns) == 0 {
 		return nil, errors.ErrSinkURIInvalid.GenWithStackByArgs("upsert requires a primary key or not null unique key")
-	}
-
-	idToIndex := make(map[int64]int, len(colInfos))
-	idToName := make(map[int64]string, len(colInfos))
-	for idx, colInfo := range colInfos {
-		if colInfo == nil || colInfo.IsVirtualGenerated() {
-			continue
-		}
-		idToIndex[colInfo.ID] = idx
-		idToName[colInfo.ID] = colInfo.Name.O
-	}
-
-	keyColumns := make([]struct {
-		idx  int
-		name string
-		ft   *types.FieldType
-	}, 0, len(keyIDs))
-	for _, id := range keyIDs {
-		idx, ok := idToIndex[id]
-		if !ok {
-			return nil, errors.ErrSinkURIInvalid.GenWithStackByArgs(fmt.Sprintf("handle key column not found in table columns: %d", id))
-		}
-		colInfo := colInfos[idx]
-		keyColumns = append(keyColumns, struct {
-			idx  int
-			name string
-			ft   *types.FieldType
-		}{
-			idx:  idx,
-			name: idToName[id],
-			ft:   &colInfo.FieldType,
-		})
 	}
 
 	event.Rewind()
@@ -1092,16 +1128,13 @@ func convertToUpsertOps(event *commonEvent.DMLEvent) ([]sinkiceberg.ChangeRow, e
 		switch change.RowType {
 		case common.RowTypeInsert:
 			row := change.Row
-			columns := make(map[string]*string, len(colInfos))
-			for idx, colInfo := range colInfos {
-				if colInfo == nil || colInfo.IsVirtualGenerated() {
-					continue
-				}
-				v, err := formatColumnAsString(&row, idx, &colInfo.FieldType)
+			columns := make(map[string]*string, len(plan.dataColumns))
+			for _, col := range plan.dataColumns {
+				v, err := formatColumnAsString(&row, col.idx, col.ft)
 				if err != nil {
 					return nil, err
 				}
-				columns[colInfo.Name.O] = v
+				columns[col.name] = v
 			}
 			rows = append(rows, sinkiceberg.ChangeRow{
 				Op:         "I",
@@ -1111,8 +1144,8 @@ func convertToUpsertOps(event *commonEvent.DMLEvent) ([]sinkiceberg.ChangeRow, e
 			})
 		case common.RowTypeDelete:
 			row := change.PreRow
-			columns := make(map[string]*string, len(keyColumns))
-			for _, key := range keyColumns {
+			columns := make(map[string]*string, len(plan.keyColumns))
+			for _, key := range plan.keyColumns {
 				v, err := formatColumnAsString(&row, key.idx, key.ft)
 				if err != nil {
 					return nil, err
@@ -1132,8 +1165,8 @@ func convertToUpsertOps(event *commonEvent.DMLEvent) ([]sinkiceberg.ChangeRow, e
 			before := change.PreRow
 			after := change.Row
 
-			delColumns := make(map[string]*string, len(keyColumns))
-			for _, key := range keyColumns {
+			delColumns := make(map[string]*string, len(plan.keyColumns))
+			for _, key := range plan.keyColumns {
 				v, err := formatColumnAsString(&before, key.idx, key.ft)
 				if err != nil {
 					return nil, err
@@ -1150,16 +1183,13 @@ func convertToUpsertOps(event *commonEvent.DMLEvent) ([]sinkiceberg.ChangeRow, e
 				Columns:    delColumns,
 			})
 
-			columns := make(map[string]*string, len(colInfos))
-			for idx, colInfo := range colInfos {
-				if colInfo == nil || colInfo.IsVirtualGenerated() {
-					continue
-				}
-				v, err := formatColumnAsString(&after, idx, &colInfo.FieldType)
+			columns := make(map[string]*string, len(plan.dataColumns))
+			for _, col := range plan.dataColumns {
+				v, err := formatColumnAsString(&after, col.idx, col.ft)
 				if err != nil {
 					return nil, err
 				}
-				columns[colInfo.Name.O] = v
+				columns[col.name] = v
 			}
 			rows = append(rows, sinkiceberg.ChangeRow{
 				Op:         "U",

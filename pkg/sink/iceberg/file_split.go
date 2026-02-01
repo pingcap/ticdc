@@ -13,38 +13,68 @@
 
 package iceberg
 
-func splitRowsByTargetSize(rows []ChangeRow, targetSizeBytes int64, emitMetadata bool) [][]ChangeRow {
+type rowChunk struct {
+	rows           []ChangeRow
+	estimatedBytes int64
+}
+
+func splitRowsByTargetSize(rows []ChangeRow, targetSizeBytes int64, emitMetadata bool) []rowChunk {
 	if len(rows) == 0 {
 		return nil
 	}
+
 	if targetSizeBytes <= 0 || len(rows) == 1 {
-		return [][]ChangeRow{rows}
+		return []rowChunk{{
+			rows:           rows,
+			estimatedBytes: estimateRowsSize(rows, emitMetadata),
+		}}
 	}
 
-	chunks := make([][]ChangeRow, 0, 1)
+	chunks := make([]rowChunk, 0, 1)
 	start := 0
 	var currentSize int64
 	for i := range rows {
-		currentSize += estimateChangeRowSize(rows[i], emitMetadata)
-		if currentSize < targetSizeBytes {
+		rowSize := estimateChangeRowSize(rows[i], emitMetadata)
+		if currentSize+rowSize < targetSizeBytes {
+			currentSize += rowSize
 			continue
 		}
 		if i == start {
 			// One row is already too large, write it as a single file.
-			chunks = append(chunks, rows[start:i+1])
+			chunks = append(chunks, rowChunk{
+				rows:           rows[start : i+1],
+				estimatedBytes: rowSize,
+			})
 			start = i + 1
 			currentSize = 0
 			continue
 		}
-		chunks = append(chunks, rows[start:i])
+		chunks = append(chunks, rowChunk{
+			rows:           rows[start:i],
+			estimatedBytes: currentSize,
+		})
 		start = i
-		currentSize = estimateChangeRowSize(rows[i], emitMetadata)
+		currentSize = rowSize
 	}
 
 	if start < len(rows) {
-		chunks = append(chunks, rows[start:])
+		chunks = append(chunks, rowChunk{
+			rows:           rows[start:],
+			estimatedBytes: currentSize,
+		})
 	}
 	return chunks
+}
+
+func estimateRowsSize(rows []ChangeRow, emitMetadata bool) int64 {
+	if len(rows) == 0 {
+		return 0
+	}
+	var size int64
+	for _, row := range rows {
+		size += estimateChangeRowSize(row, emitMetadata)
+	}
+	return size
 }
 
 func estimateChangeRowSize(row ChangeRow, emitMetadata bool) int64 {
