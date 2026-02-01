@@ -16,6 +16,7 @@ package iceberg
 import (
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -548,14 +549,14 @@ func collapseUpsertTxns(tableInfo *common.TableInfo, txns []pendingTxn, keyColum
 
 	buildKey := func(row sinkiceberg.ChangeRow) (string, error) {
 		var b strings.Builder
-		for idx, name := range keyColumnNames {
+		var lenBuf [binary.MaxVarintLen64]byte
+		for _, name := range keyColumnNames {
 			v, ok := row.Columns[name]
 			if !ok || v == nil {
 				return "", errors.ErrSinkURIInvalid.GenWithStackByArgs(fmt.Sprintf("handle key column is null: %s", name))
 			}
-			if idx > 0 {
-				b.WriteByte(0x1f)
-			}
+			n := binary.PutUvarint(lenBuf[:], uint64(len(*v)))
+			_, _ = b.Write(lenBuf[:n])
 			b.WriteString(*v)
 		}
 		return b.String(), nil

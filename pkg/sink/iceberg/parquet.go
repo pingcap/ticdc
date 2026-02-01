@@ -316,8 +316,7 @@ func newValueAppender(b array.Builder, ft *types.FieldType, mapped mappedColumnT
 			}
 			decoded, err := base64.StdEncoding.DecodeString(*v)
 			if err != nil {
-				builder.Append([]byte(*v))
-				return nil
+				return err
 			}
 			builder.Append(decoded)
 			return nil

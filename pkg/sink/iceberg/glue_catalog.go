@@ -173,11 +173,19 @@ func (w *TableWriter) ensureGlueTable(
 				if err != nil {
 					var exists *gluetypes.AlreadyExistsException
 					if cerror.As(err, &exists) {
-						return nil
+						getTableOut, err = client.GetTable(ctx, &glue.GetTableInput{
+							DatabaseName: aws.String(dbName),
+							Name:         aws.String(glueTableName),
+						})
+						if err != nil {
+							return cerror.Trace(err)
+						}
+					} else {
+						return cerror.Trace(err)
 					}
-					return cerror.Trace(err)
+				} else {
+					return nil
 				}
-				return nil
 			}
 
 			params := getTableOut.Table.Parameters

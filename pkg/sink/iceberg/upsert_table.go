@@ -35,6 +35,9 @@ func (w *TableWriter) Upsert(
 	equalityFieldIDs []int,
 	resolvedTs uint64,
 ) (*CommitResult, error) {
+	if w == nil || w.cfg == nil {
+		return nil, cerror.ErrSinkURIInvalid.GenWithStackByArgs("iceberg config is nil")
+	}
 	if tableInfo == nil {
 		return nil, cerror.ErrSinkURIInvalid.GenWithStackByArgs("table info is nil")
 	}
@@ -74,7 +77,7 @@ func (w *TableWriter) Upsert(
 		baseSequenceNumber = currentMetadata.LastSequenceNumber
 	}
 	snapshotSequenceNumber := baseSequenceNumber + 1
-	snapshotID := now.UnixMilli()
+	snapshotID := nextSnapshotID(now, currentMetadata)
 
 	icebergSchemaBytes, err := json.Marshal(icebergSchema)
 	if err != nil {

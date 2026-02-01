@@ -67,7 +67,7 @@ func (w *TableWriter) TruncateTable(
 	now := time.Now().UTC()
 	commitUUID := uuid.NewString()
 	committedAt := now.Format(time.RFC3339Nano)
-	snapshotID := now.UnixMilli()
+	snapshotID := nextSnapshotID(now, currentMetadata)
 
 	manifestListFile, err := w.writeManifestListFile(ctx, tableRootRel, commitUUID, snapshotID, nil)
 	if err != nil {

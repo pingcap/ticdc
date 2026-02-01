@@ -36,7 +36,7 @@ jobs:
     name: Iceberg Light IT ${{ matrix.group }}
     steps:
       - name: Check out code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v5
 
       - name: Setup Go environment
         uses: actions/setup-go@v6
@@ -45,7 +45,7 @@ jobs:
 
       - name: Cache Tools
         id: cache-tools
-        uses: actions/cache@v3
+        uses: actions/cache@v5
         with:
           path: tools/bin
           key: ubuntu-latest-ticdc-tools-${{ hashFiles('tools/check/go.sum') }}
@@ -63,7 +63,7 @@ jobs:
 
       - name: Prepare integration test third-party binaries (community)
         run: |
-          make prepare_test_binaries community=true ver=v8.5.4 os=linux arch=amd64
+          make prepare_test_binaries community=true ver=v8.5.5 os=linux arch=amd64
           make check_third_party_binary
 
       - name: Build TiCDC binaries for integration tests
@@ -83,4 +83,3 @@ jobs:
         uses: ./.github/actions/upload-test-logs
         with:
           log-name: iceberg-light-it-${{ matrix.group }}
-

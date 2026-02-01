@@ -365,7 +365,7 @@ func (s *resolvedPartitionSpec) groupRows(rows []ChangeRow) ([]partitionGroup, e
 	groups := make(map[string]*partitionGroup)
 	order := make([]string, 0, 8)
 	for _, row := range rows {
-		keyParts := make([]string, 0, len(s.fields))
+		var keyBuilder strings.Builder
 		values := make(map[string]any, len(s.fields))
 		for _, f := range s.fields {
 			raw, err := computePartitionValue(f, row)
@@ -373,13 +373,10 @@ func (s *resolvedPartitionSpec) groupRows(rows []ChangeRow) ([]partitionGroup, e
 				return nil, err
 			}
 			values[f.name] = wrapUnion(f.avroUnionType, raw)
-			if raw == nil {
-				keyParts = append(keyParts, "null")
-			} else {
-				keyParts = append(keyParts, fmt.Sprint(raw))
-			}
+			keyBuilder.WriteString(encodePartitionKeyPart(raw))
+			keyBuilder.WriteByte(0x1f)
 		}
-		key := strings.Join(keyParts, "|")
+		key := keyBuilder.String()
 		g := groups[key]
 		if g == nil {
 			record := make(map[string]any, len(s.fields))
@@ -398,6 +395,21 @@ func (s *resolvedPartitionSpec) groupRows(rows []ChangeRow) ([]partitionGroup, e
 		out = append(out, *groups[key])
 	}
 	return out, nil
+}
+
+func encodePartitionKeyPart(raw any) string {
+	switch v := raw.(type) {
+	case nil:
+		return "n"
+	case string:
+		return "s:" + strconv.Itoa(len(v)) + ":" + v
+	case []byte:
+		enc := base64.StdEncoding.EncodeToString(v)
+		return "b:" + strconv.Itoa(len(enc)) + ":" + enc
+	default:
+		s := fmt.Sprint(v)
+		return "t:" + strconv.Itoa(len(s)) + ":" + s
+	}
 }
 
 func (s *resolvedPartitionSpec) isSafeForEqualityDeletes(equalityFieldIDs []int) bool {

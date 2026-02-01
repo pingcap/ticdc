@@ -13,6 +13,17 @@ if [ "$SINK_TYPE" != "iceberg" ]; then
 	exit 0
 fi
 
+if [ -z "${ICEBERG_SPARK_READBACK:-}" ]; then
+	if command -v spark-sql >/dev/null 2>&1; then
+		export ICEBERG_SPARK_READBACK=1
+	else
+		export ICEBERG_SPARK_READBACK=0
+	fi
+fi
+if [ "${ICEBERG_SPARK_READBACK}" = "1" ]; then
+	export ICEBERG_SPARK_PACKAGES="${ICEBERG_SPARK_PACKAGES:-org.apache.iceberg:iceberg-spark-runtime-4.0_2.13:1.10.1}"
+fi
+
 function prepare() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 

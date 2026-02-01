@@ -395,7 +395,7 @@ func (w *TableWriter) AppendChangelog(
 		snapshotSequenceNumber = currentMetadata.LastSequenceNumber + 1
 	}
 
-	snapshotID := now.UnixMilli()
+	snapshotID := nextSnapshotID(now, currentMetadata)
 	icebergSchemaBytes, err := json.Marshal(icebergSchema)
 	if err != nil {
 		return nil, cerror.WrapError(cerror.ErrSinkURIInvalid, err)
@@ -1448,6 +1448,27 @@ func nextSchemaID(m *tableMetadata) int {
 		}
 	}
 	return maxID + 1
+}
+
+func nextSnapshotID(now time.Time, m *tableMetadata) int64 {
+	snapshotID := now.UnixMilli()
+	if m == nil {
+		return snapshotID
+	}
+	lastID := int64(0)
+	if m.CurrentSnapshotID != nil {
+		lastID = *m.CurrentSnapshotID
+	} else {
+		for i := range m.Snapshots {
+			if m.Snapshots[i].SnapshotID > lastID {
+				lastID = m.Snapshots[i].SnapshotID
+			}
+		}
+	}
+	if snapshotID <= lastID {
+		snapshotID = lastID + 1
+	}
+	return snapshotID
 }
 
 func icebergColumnNames(tableInfo *common.TableInfo) []string {

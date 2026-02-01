@@ -273,22 +273,22 @@ func parseChangefeedDisplayName(raw string) (string, string, error) {
 func getSnapshotPoint(ctx context.Context, db *sql.DB) (uint64, string, error) {
 	var tsoStr string
 	if err := db.QueryRowContext(ctx, "select @@tidb_current_ts").Scan(&tsoStr); err != nil {
-		return 0, "", err
+		return 0, "", errors.Trace(err)
 	}
 	tsoStr = strings.TrimSpace(tsoStr)
 	tso, err := strconv.ParseUint(tsoStr, 10, 64)
 	if err != nil {
-		return 0, "", err
+		return 0, "", errors.Trace(err)
 	}
 
 	var tsStr string
 	if err := db.QueryRowContext(ctx, "select TIDB_PARSE_TSO(?)", tsoStr).Scan(&tsStr); err != nil {
-		return 0, "", err
+		return 0, "", errors.Trace(err)
 	}
 
 	parsed, err := time.ParseInLocation("2006-01-02 15:04:05.999999", strings.TrimSpace(tsStr), time.UTC)
 	if err != nil {
-		return 0, "", err
+		return 0, "", errors.Trace(err)
 	}
 	return tso, parsed.UTC().Format(time.RFC3339Nano), nil
 }
@@ -296,16 +296,16 @@ func getSnapshotPoint(ctx context.Context, db *sql.DB) (uint64, string, error) {
 func setTiDBSnapshot(ctx context.Context, db *sql.DB, snapshotTimeRFC3339 string) error {
 	t, err := time.Parse(time.RFC3339Nano, snapshotTimeRFC3339)
 	if err != nil {
-		return err
+		return errors.Trace(err)
 	}
 	snapshot := t.UTC().Format("2006-01-02 15:04:05.999999")
 	_, err = db.ExecContext(ctx, "set @@tidb_snapshot = ?", snapshot)
-	return err
+	return errors.Trace(err)
 }
 
 func clearTiDBSnapshot(ctx context.Context, db *sql.DB) error {
 	_, err := db.ExecContext(ctx, "set @@tidb_snapshot = ''")
-	return err
+	return errors.Trace(err)
 }
 
 func buildSelectColumns(tableInfo *common.TableInfo) ([]string, []*timodel.ColumnInfo) {
