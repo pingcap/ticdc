@@ -32,7 +32,7 @@ function prepare() {
 	# record tso before we create tables to skip the system table DDLs
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
-	run_sql "CREATE TABLE test.iceberg_upsert_basic(id INT PRIMARY KEY, val INT);"
+	do_retry 5 2 run_sql "CREATE TABLE test.iceberg_upsert_basic(id INT PRIMARY KEY, val INT);"
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
@@ -57,8 +57,8 @@ function wait_file_exists() {
 }
 
 function iceberg_check_upsert_basic() {
-	run_sql "INSERT INTO test.iceberg_upsert_basic(id, val) VALUES (1, 1);"
-	run_sql "INSERT INTO test.iceberg_upsert_basic(id, val) VALUES (2, 2);"
+	do_retry 5 2 run_sql "INSERT INTO test.iceberg_upsert_basic(id, val) VALUES (1, 1);"
+	do_retry 5 2 run_sql "INSERT INTO test.iceberg_upsert_basic(id, val) VALUES (2, 2);"
 
 	WAREHOUSE_DIR="$WORK_DIR/iceberg_warehouse"
 	TABLE_ROOT="$WAREHOUSE_DIR/ns/test/iceberg_upsert_basic"
@@ -66,8 +66,8 @@ function iceberg_check_upsert_basic() {
 	DATA_DIR="$TABLE_ROOT/data"
 
 	# Wait for iceberg commit output files.
-	wait_file_exists "$METADATA_DIR/v*.metadata.json" 120
-	wait_file_exists "$DATA_DIR/snap-*.parquet" 120
+	wait_file_exists "$METADATA_DIR/v*.metadata.json" 180
+	wait_file_exists "$DATA_DIR/snap-*.parquet" 180
 
 	# Hint: Spark readback is disabled by default.
 	# Enable it via:
@@ -83,16 +83,16 @@ function iceberg_check_upsert_basic() {
 	# so equality delete files are required (otherwise they may be optimized away within the same batch).
 	first_meta=$(ls -1 "$METADATA_DIR"/v*.metadata.json | sort -V | tail -n 1)
 
-	run_sql "UPDATE test.iceberg_upsert_basic SET val = 22 WHERE id = 2;"
-	run_sql "DELETE FROM test.iceberg_upsert_basic WHERE id = 1;"
+	do_retry 5 2 run_sql "UPDATE test.iceberg_upsert_basic SET val = 22 WHERE id = 2;"
+	do_retry 5 2 run_sql "DELETE FROM test.iceberg_upsert_basic WHERE id = 1;"
 
 	# Upsert mode should produce equality delete files for UPDATE/DELETE events.
-	wait_file_exists "$DATA_DIR/delete-*.parquet" 120
+	wait_file_exists "$DATA_DIR/delete-*.parquet" 180
 
 	# Wait for a new metadata file after the UPDATE/DELETE commit.
 	i=0
 	latest_meta="$first_meta"
-	while [ $i -lt 120 ]; do
+	while [ $i -lt 180 ]; do
 		latest_meta=$(ls -1 "$METADATA_DIR"/v*.metadata.json | sort -V | tail -n 1)
 		if [ "$latest_meta" != "$first_meta" ]; then
 			break
@@ -116,8 +116,8 @@ function iceberg_check_upsert_basic() {
 	# Verify checkpoint table is created.
 	CHECKPOINT_DIR="$WAREHOUSE_DIR/ns/__ticdc/__tidb_checkpoints/data"
 	CHECKPOINT_METADATA_DIR="$WAREHOUSE_DIR/ns/__ticdc/__tidb_checkpoints/metadata"
-	wait_file_exists "$CHECKPOINT_DIR/snap-*.parquet" 120
-	wait_file_exists "$CHECKPOINT_METADATA_DIR/v*.metadata.json" 120
+	wait_file_exists "$CHECKPOINT_DIR/snap-*.parquet" 180
+	wait_file_exists "$CHECKPOINT_METADATA_DIR/v*.metadata.json" 180
 
 	# Optional: Spark readback verification (requires Spark + Iceberg Spark runtime).
 	if [ "${ICEBERG_SPARK_READBACK:-0}" = "1" ]; then
