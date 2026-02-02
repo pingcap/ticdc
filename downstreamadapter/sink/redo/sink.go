@@ -189,6 +189,11 @@ func (s *Sink) SinkType() common.SinkType {
 	return common.RedoSinkType
 }
 
+// GetRouter returns the router for schema/table name routing.
+func (s *Sink) GetRouter() *sinkutil.Router {
+	return s.router
+}
+
 func (s *Sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
 	s.ddlWriter.SetTableSchemaStore(tableSchemaStore)
 }

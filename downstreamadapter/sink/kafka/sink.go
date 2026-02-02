@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
+	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
@@ -61,10 +62,18 @@ type sink struct {
 	// isNormal indicate whether the sink is in the normal state.
 	isNormal *atomic.Bool
 	ctx      context.Context
+
+	// router is used to route source schema/table names to target schema/table names.
+	router *sinkutil.Router
 }
 
 func (s *sink) SinkType() commonType.SinkType {
 	return commonType.KafkaSinkType
+}
+
+// GetRouter returns the router for schema/table name routing.
+func (s *sink) GetRouter() *sinkutil.Router {
+	return s.router
 }
 
 func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.URL, sinkConfig *config.SinkConfig) error {
@@ -74,7 +83,7 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 }
 
 func New(
-	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
+	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, router *sinkutil.Router,
 ) (*sink, error) {
 	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
@@ -113,6 +122,7 @@ func New(
 
 		isNormal: atomic.NewBool(true),
 		ctx:      ctx,
+		router:   router,
 	}, nil
 }
 

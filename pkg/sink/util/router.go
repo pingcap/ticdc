@@ -14,11 +14,11 @@
 package util
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
 	"go.uber.org/zap"
 )
@@ -68,15 +68,15 @@ func NewRouter(caseSensitive bool, rules []RoutingRuleConfig) (*Router, error) {
 		}
 
 		if err := config.ValidateRoutingExpression(ruleConfig.SchemaRule); err != nil {
-			return nil, fmt.Errorf("invalid schema rule %q: %w", ruleConfig.SchemaRule, err)
+			return nil, cerror.ErrInvalidRoutingRule.GenWithStackByArgs("schema rule", ruleConfig.SchemaRule, err.Error())
 		}
 		if err := config.ValidateRoutingExpression(ruleConfig.TableRule); err != nil {
-			return nil, fmt.Errorf("invalid table rule %q: %w", ruleConfig.TableRule, err)
+			return nil, cerror.ErrInvalidRoutingRule.GenWithStackByArgs("table rule", ruleConfig.TableRule, err.Error())
 		}
 
 		f, err := tfilter.Parse(ruleConfig.Matcher)
 		if err != nil {
-			return nil, fmt.Errorf("invalid matcher %v: %w", ruleConfig.Matcher, err)
+			return nil, cerror.ErrInvalidRoutingRule.GenWithStackByArgs("matcher", ruleConfig.Matcher, err.Error())
 		}
 		if !caseSensitive {
 			f = tfilter.CaseInsensitive(f)

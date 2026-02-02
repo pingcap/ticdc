@@ -266,6 +266,11 @@ func (s *Sink) SinkType() common.SinkType {
 	return common.MysqlSinkType
 }
 
+// GetRouter returns the router for schema/table name routing.
+func (s *Sink) GetRouter() *util.Router {
+	return s.router
+}
+
 func (s *Sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
 	s.ddlWriter.SetTableSchemaStore(tableSchemaStore)
 	if s.progressTableWriter != nil {

@@ -796,12 +796,10 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 		}
 		// Validate routing expressions
 		if err := ValidateRoutingExpression(rule.SchemaRule); err != nil {
-			return cerror.WrapError(cerror.ErrSinkInvalidConfig,
-				errors.New(fmt.Sprintf("invalid schema rule %q: %v", rule.SchemaRule, err)))
+			return cerror.ErrInvalidRoutingRule.GenWithStackByArgs("schema rule", rule.SchemaRule, err.Error())
 		}
 		if err := ValidateRoutingExpression(rule.TableRule); err != nil {
-			return cerror.WrapError(cerror.ErrSinkInvalidConfig,
-				errors.New(fmt.Sprintf("invalid table rule %q: %v", rule.TableRule, err)))
+			return cerror.ErrInvalidRoutingRule.GenWithStackByArgs("table rule", rule.TableRule, err.Error())
 		}
 	}
 

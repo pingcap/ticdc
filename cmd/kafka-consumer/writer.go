@@ -137,7 +137,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 		SinkURI:      o.downstreamURI,
 		SinkConfig:   o.sinkConfig,
 	}
-	w.mysqlSink, err = sink.New(ctx, cfg, changefeedID, nil)
+	w.mysqlSink, err = sink.New(ctx, cfg, changefeedID)
 	if err != nil {
 		log.Panic("cannot create the mysql sink", zap.Error(err))
 	}
