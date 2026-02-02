@@ -18,7 +18,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -33,20 +33,20 @@ func TestGenKeyListUsesSchemaIndexWithVirtualGeneratedColumn(t *testing.T) {
 
 	tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
 		ID:         100,
-		Name:       ast.NewCIStr("t"),
+		Name:       model.NewCIStr("t"),
 		PKIsHandle: true,
 		Columns: []*timodel.ColumnInfo{
 			{
 				ID:        1,
 				Offset:    0,
-				Name:      ast.NewCIStr("a"),
+				Name:      model.NewCIStr("a"),
 				State:     timodel.StatePublic,
 				FieldType: *types.NewFieldType(mysql.TypeLong),
 			},
 			{
 				ID:                  2,
 				Offset:              1,
-				Name:                ast.NewCIStr("v"),
+				Name:                model.NewCIStr("v"),
 				State:               timodel.StatePublic,
 				GeneratedExprString: "a + 1",
 				FieldType:           *types.NewFieldType(mysql.TypeLong),
@@ -54,14 +54,14 @@ func TestGenKeyListUsesSchemaIndexWithVirtualGeneratedColumn(t *testing.T) {
 			{
 				ID:        3,
 				Offset:    2,
-				Name:      ast.NewCIStr("b"),
+				Name:      model.NewCIStr("b"),
 				State:     timodel.StatePublic,
 				FieldType: *types.NewFieldType(mysql.TypeLong),
 			},
 			{
 				ID:        4,
 				Offset:    3,
-				Name:      ast.NewCIStr("id"),
+				Name:      model.NewCIStr("id"),
 				State:     timodel.StatePublic,
 				FieldType: *idFieldType,
 			},

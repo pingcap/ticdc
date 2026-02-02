@@ -100,7 +100,6 @@ select get_format(TIMESTAMP, 'eur') as a;
 select get_format(DATE, 'TEST') as a;
 select str_to_date('15-01-2001 12:59:59', GET_FORMAT(DATE,'USA'));
 
-
 #
 # Test of date_format()
 #

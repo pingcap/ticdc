@@ -1262,5 +1262,5 @@ func TestRowKey(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NotEqual(t, tidb_ext.CommitTs, 0)
-	require.Equal(t, "dIAAAAAAAABuX3KAAAAAAAAAAQ==", tidb_ext.Rowkey)
+	require.Equal(t, "dIAAAAAAAABwX3KAAAAAAAAAAQ==", tidb_ext.Rowkey)
 }
