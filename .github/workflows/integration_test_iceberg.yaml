@@ -64,8 +64,8 @@ jobs:
       - name: Install OCI download tools
         run: |
           set -euo pipefail
-          ORAS_VERSION="1.2.0"
-          YQ_VERSION="4.44.3"
+          ORAS_VERSION="1.3.0"
+          YQ_VERSION="4.52.1"
           curl -fsSL "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz" -o /tmp/oras.tar.gz
           sudo tar -xzf /tmp/oras.tar.gz -C /usr/local/bin oras
           sudo chmod +x /usr/local/bin/oras

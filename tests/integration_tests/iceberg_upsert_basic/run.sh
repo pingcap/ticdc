@@ -3,12 +3,12 @@
 set -eu
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-source $CUR/../_utils/test_prepare
-WORK_DIR=$OUT_DIR/$TEST_NAME
+source "$CUR/../_utils/test_prepare"
+WORK_DIR="$OUT_DIR/$TEST_NAME"
 CDC_BINARY=cdc.test
-SINK_TYPE=$1
+SINK_TYPE=${1:-}
 
-if [ "$SINK_TYPE" != "iceberg" ]; then
+if [ -z "$SINK_TYPE" ] || [ "$SINK_TYPE" != "iceberg" ]; then
 	echo "skip iceberg integration test, sink type is $SINK_TYPE"
 	exit 0
 fi
@@ -25,19 +25,20 @@ if [ "${ICEBERG_SPARK_READBACK}" = "1" ]; then
 fi
 
 function prepare() {
-	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
+	rm -rf "$WORK_DIR" && mkdir -p "$WORK_DIR"
 
-	start_tidb_cluster --workdir $WORK_DIR
+	start_tidb_cluster --workdir "$WORK_DIR"
 
 	do_retry 5 2 run_sql "CREATE TABLE test.iceberg_upsert_basic(id INT PRIMARY KEY, val INT);"
 	# record tso after table creation so the table exists at start-ts
-	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
+	start_ts=$(run_cdc_cli_tso_query "${UP_PD_HOST_1}" "${UP_PD_PORT_1}")
 
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY"
 
 	WAREHOUSE_DIR="$WORK_DIR/iceberg_warehouse"
 	SINK_URI="iceberg://?warehouse=file://$WAREHOUSE_DIR&catalog=hadoop&namespace=ns&mode=upsert&commit-interval=1s&enable-checkpoint-table=true&partitioning=none"
-	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
+	changefeed_id=$(cdc_cli_changefeed create --start-ts="$start_ts" --sink-uri="$SINK_URI" | grep '^ID:' | head -n1 | awk '{print $2}')
+	wait_changefeed_table_assigned "$changefeed_id" "test" "iceberg_upsert_basic"
 }
 
 function wait_file_exists() {
@@ -52,6 +53,68 @@ function wait_file_exists() {
 		sleep 1
 	done
 	echo "file not found after ${check_time}s: ${file_pattern}"
+	return 1
+}
+
+function wait_changefeed_table_assigned() {
+	changefeed_id=$1
+	db_name=$2
+	table_name=$3
+
+	if [ "${TICDC_NEWARCH:-}" != "true" ]; then
+		return 0
+	fi
+
+	table_id=$(get_table_id "$db_name" "$table_name")
+	echo "wait table ${db_name}.${table_name} (id=${table_id}) assigned to changefeed ${changefeed_id}"
+
+	auth_user=${TICDC_USER:-ticdc}
+	auth_pass=${TICDC_PASSWORD:-ticdc_secret}
+	url="http://127.0.0.1:8300/api/v2/changefeeds/${changefeed_id}/tables?keyspace=${KEYSPACE_NAME}"
+	last_body=""
+	last_code=""
+
+	i=0
+	while [ $i -lt 60 ]; do
+		resp=$(curl -sS -w '\n%{http_code}' --user "${auth_user}:${auth_pass}" "$url" 2>&1 || true)
+		body=${resp%$'\n'*}
+		code=${resp##*$'\n'}
+		last_body=$body
+		last_code=$code
+
+		if [ "$code" != "200" ]; then
+			echo "wait table ${db_name}.${table_name}: http $code response: $body"
+			sleep 2
+			((i++))
+			continue
+		fi
+
+		if ! echo "$body" | jq -e . >/dev/null 2>&1; then
+			echo "wait table ${db_name}.${table_name}: invalid json response: $body"
+			sleep 2
+			((i++))
+			continue
+		fi
+
+		if echo "$body" | jq -e --argjson tid "$table_id" \
+			'def items: (if type=="array" then . else .items // [] end); items[]?.table_ids[]? | select(. == $tid)' >/dev/null; then
+			echo "table ${db_name}.${table_name} assigned to changefeed ${changefeed_id}"
+			return 0
+		fi
+
+		if [ $((i % 10)) -eq 0 ]; then
+			items_count=$(echo "$body" | jq -r 'if type=="array" then length else (.items | length) end' 2>/dev/null || echo "unknown")
+			echo "wait table ${db_name}.${table_name}: not assigned yet (items=${items_count})"
+		fi
+
+		sleep 2
+		((i++))
+	done
+
+	echo "table ${db_name}.${table_name} not assigned to changefeed ${changefeed_id} after $((i * 2))s (last_http=${last_code})"
+	if [ -n "$last_body" ]; then
+		echo "last response: $last_body"
+	fi
 	return 1
 }
 
@@ -147,11 +210,11 @@ function iceberg_check_upsert_basic() {
 		fi
 	fi
 
-	cleanup_process $CDC_BINARY
+	cleanup_process "$CDC_BINARY"
 }
 
-trap 'stop_test $WORK_DIR' EXIT
+trap 'stop_test "$WORK_DIR"' EXIT
 prepare "$@"
 iceberg_check_upsert_basic "$@"
-check_logs $WORK_DIR
+check_logs "$WORK_DIR"
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
