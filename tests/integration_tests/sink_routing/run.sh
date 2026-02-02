@@ -32,7 +32,7 @@ function run() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --cluster-id "$KEYSPACE_NAME"
 
 	SINK_URI="mysql://normal:123456@127.0.0.1:3306/"
-	run_cdc_cli changefeed create --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml"
+	cdc_cli_changefeed create --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml"
 
 	# Run the prepare SQL to create source tables and insert initial data
 	run_sql_file $CUR/data/prepare.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
@@ -155,12 +155,12 @@ function run() {
 	# Verify DML: INSERT, UPDATE, DELETE on products
 	# ============================================
 	echo "Verifying DML operations on products table..."
-	# Started with ids 1,2
+	# Started with ids 1,2 (prices 9.99, 19.99)
 	# Updated id 1 (price to 12.99)
-	# Deleted where price < 15.00 (deletes both since 12.99 < 15)
-	# Final count should be 0
+	# Deleted where price < 15.00 (deletes id=1 since 12.99 < 15, keeps id=2 since 19.99 >= 15)
+	# Final count should be 1
 	run_sql "SELECT COUNT(*) as cnt FROM target_db.products_routed" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-	check_contains "cnt: 0"
+	check_contains "cnt: 1"
 
 	echo "All routing verifications passed!"
 

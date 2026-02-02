@@ -274,32 +274,6 @@ func (b *BatchDMLEvent) encodeV1() ([]byte, error) {
 	return data, nil
 }
 
-// CloneForRouting creates a shallow clone of the BatchDMLEvent suitable for routing.
-// This method is used to avoid race conditions when the same BatchDMLEvent is shared
-// between multiple dispatchers (e.g., EventDispatcher and RedoDispatcher).
-// The clone shares the underlying Rows data but has its own DMLEvents slice,
-// allowing each dispatcher to independently apply routing to TableInfo.
-func (b *BatchDMLEvent) CloneForRouting() *BatchDMLEvent {
-	if b == nil {
-		return nil
-	}
-	cloned := &BatchDMLEvent{
-		Version:       b.Version,
-		DMLEventCount: b.DMLEventCount,
-		DMLEvents:     make([]*DMLEvent, len(b.DMLEvents)),
-		Rows:          b.Rows,
-		RawRows:       b.RawRows,
-		TableInfo:     b.TableInfo,
-	}
-	for i, dml := range b.DMLEvents {
-		// Create a shallow copy of the DMLEvent.
-		// This is sufficient because AssembleRows only modifies the TableInfo pointer.
-		clonedDML := *dml
-		cloned.DMLEvents[i] = &clonedDML
-	}
-	return cloned
-}
-
 // AssembleRows assembles the Rows from the RawRows.
 // It also sets the TableInfo and clears the RawRows.
 // For local events (same node, b.Rows already set), it only applies routing
@@ -315,18 +289,15 @@ func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 	}()
 
 	// For local events (same node), rows are already set.
-	// We only need to apply routing (TargetSchema/TargetTable) without replacing
-	// the entire TableInfo, which preserves schema version compatibility.
+	// If routing is configured, reassign the TableInfo pointer to the passed tableInfo
+	// (which already has TargetSchema/TargetTable set via CloneWithRouting).
+	// IMPORTANT: We modify the POINTER, not the object it points to, because the
+	// original TableInfo is shared from the schema store across all dispatchers.
 	if b.Rows != nil {
-		// Apply routing fields from the passed tableInfo (which has routing applied)
-		// to the event's existing TableInfo. This is safe because it doesn't change
-		// the schema structure, only adds routing information.
 		if tableInfo.TableName.TargetSchema != "" || tableInfo.TableName.TargetTable != "" {
-			b.TableInfo.TableName.TargetSchema = tableInfo.TableName.TargetSchema
-			b.TableInfo.TableName.TargetTable = tableInfo.TableName.TargetTable
+			b.TableInfo = tableInfo
 			for _, dml := range b.DMLEvents {
-				dml.TableInfo.TableName.TargetSchema = tableInfo.TableName.TargetSchema
-				dml.TableInfo.TableName.TargetTable = tableInfo.TableName.TargetTable
+				dml.TableInfo = tableInfo
 			}
 		}
 		return

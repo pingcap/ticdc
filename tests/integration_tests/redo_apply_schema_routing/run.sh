@@ -23,7 +23,7 @@ SINK_TYPE=$1
 MAX_RETRIES=20
 
 REDO_DIR="/tmp/tidb_cdc_test/redo_apply_schema_routing/redo"
-SQL_RES_FILE="$OUT_DIR/sql_res.$TEST_NAME.txt"
+SQL_RES_FILE="$OUT_DIR/$TEST_NAME/sql_res.$TEST_NAME.log"
 
 function cleanup_redo_dir() {
 	rm -rf $REDO_DIR
@@ -71,7 +71,7 @@ function run() {
 	changefeedid="redo-schema-routing-test"
 
 	# Create changefeed with redo log AND schema routing enabled
-	run_cdc_cli changefeed create \
+	cdc_cli_changefeed create \
 		--start-ts=$start_ts \
 		--sink-uri="$SINK_URI" \
 		--changefeed-id=$changefeedid \
@@ -116,7 +116,7 @@ function run() {
 	# Then we can apply redo log to reach an eventual consistent state in downstream.
 	echo "Restarting CDC with MySQLSinkHangLongTime failpoint..."
 	cleanup_process $CDC_BINARY
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/cdc/sink/dmlsink/txn/mysql/MySQLSinkHangLongTime=return(true)'
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkHangLongTime=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --cluster-id "$KEYSPACE_NAME"
 
 	# Insert more data - this will go to redo logs but NOT to downstream (due to failpoint)

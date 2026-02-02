@@ -414,9 +414,8 @@ func (t *DDLEvent) IsPaused() bool {
 }
 
 // CloneForRouting creates a shallow copy of the DDLEvent that can safely be mutated
-// for routing purposes without affecting the original event. This is necessary because
-// DDLEvents may be shared between multiple dispatchers (e.g., EventDispatcher and
-// RedoDispatcher) and mutating the original would cause race conditions.
+// for routing purposes without affecting the original event. This is defensive to
+// ensure we don't mutate an event that may be referenced elsewhere.
 //
 // The clone shares most fields with the original (they are read-only after creation),
 // but the following fields are prepared for independent mutation:

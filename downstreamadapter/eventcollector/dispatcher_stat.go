@@ -418,13 +418,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 			// greater than or equal to the startTs of dispatcher.
 			// FIXME: more elegant implementation
 			tableInfoVersion := max(d.tableInfoVersion.Load(), d.target.GetStartTs())
-			// Clone the BatchDMLEvent before calling AssembleRows to avoid race conditions.
-			// The same BatchDMLEvent may be shared between EventDispatcher (mysql sink) and
-			// RedoDispatcher (redo sink). AssembleRows mutates TableInfo in-place, so each
-			// dispatcher needs its own copy to safely apply routing rules.
-			originalBatchDML := event.Event.(*commonEvent.BatchDMLEvent)
-			batchDML := originalBatchDML.CloneForRouting()
-			event.Event = batchDML
+			batchDML := event.Event.(*commonEvent.BatchDMLEvent)
 			batchDML.AssembleRows(tableInfo)
 			for _, dml := range batchDML.DMLEvents {
 				// DMLs in the same batch share the same updateTs in their table info,
@@ -486,10 +480,9 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 			return false
 		}
 		originalDDL := events[0].Event.(*commonEvent.DDLEvent)
-		// Clone the DDL event before applying routing to avoid race conditions.
-		// The same DDL event may be shared between EventDispatcher (mysql sink) and
-		// RedoDispatcher (redo sink), and both would mutate the Query and TargetSchemaName
-		// fields, causing a data race even though they use the same routing rules.
+		// Clone the DDL event before applying routing. This is defensive to ensure
+		// we don't mutate the original event which may be referenced elsewhere.
+		// The clone allows us to safely modify Query and TargetSchemaName fields.
 		ddl := originalDDL.CloneForRouting()
 		events[0].Event = ddl
 		d.tableInfoVersion.Store(ddl.FinishedTs)
