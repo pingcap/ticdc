@@ -57,6 +57,10 @@ func (m *MoveMaintainerOperator) Check(from node.ID, status *heartbeatpb.Maintai
 	m.lck.Lock()
 	defer m.lck.Unlock()
 
+	if status == nil {
+		return
+	}
+
 	if from == m.origin && status.State != heartbeatpb.ComponentState_Working {
 		log.Info("changefeed changefeedIsRemoved from origin node",
 			zap.String("changefeed", m.changefeed.ID.String()))
