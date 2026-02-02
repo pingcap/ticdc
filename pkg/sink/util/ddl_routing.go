@@ -25,12 +25,21 @@ import (
 // DDLRoutingResult contains the result of DDL routing rewriting.
 type DDLRoutingResult struct {
 	// NewQuery is the rewritten DDL query with target table names.
+	// May be identical to the original query even when routing was applied
+	// (e.g., if parser normalization produces the same string).
 	NewQuery string
 	// TargetSchemaName is the target schema to use for the USE statement (if needed).
-	// This is set to the first target table's schema.
+	// This is set to the first target table's schema when routing rules match.
 	TargetSchemaName string
-	// WasRewritten indicates whether the query was actually rewritten (had routing applied).
-	WasRewritten bool
+	// RoutingApplied indicates whether routing rules matched and were applied.
+	// This is true when target names differ from source names, regardless of
+	// whether the query string actually changed. Use this to determine if
+	// TargetSchemaName should be used for the USE statement.
+	RoutingApplied bool
+	// QueryChanged indicates whether the query string was actually modified.
+	// This is a subset of RoutingApplied - when true, NewQuery differs from
+	// the original query and should be used.
+	QueryChanged bool
 }
 
 // RewriteDDLQueryWithRouting rewrites a DDL query by applying routing rules
@@ -50,11 +59,12 @@ type DDLRoutingResult struct {
 //     is not acceptable as it could lead to data going to wrong tables.
 //
 // IMPORTANT: This function does NOT mutate ddl.Query. Callers are responsible
-// for applying the returned NewQuery to the DDL event if WasRewritten is true.
+// for applying the returned NewQuery to the DDL event if QueryChanged is true.
 func RewriteDDLQueryWithRouting(router *Router, ddl *commonEvent.DDLEvent, changefeedID string) (*DDLRoutingResult, error) {
 	result := &DDLRoutingResult{
-		NewQuery:     ddl.Query,
-		WasRewritten: false,
+		NewQuery:       ddl.Query,
+		RoutingApplied: false,
+		QueryChanged:   false,
 	}
 
 	// Early returns for no-op cases
@@ -105,6 +115,20 @@ func RewriteDDLQueryWithRouting(router *Router, ddl *commonEvent.DDLEvent, chang
 		return result, nil
 	}
 
+	// Routing rules matched - mark as applied regardless of whether query changes
+	result.RoutingApplied = true
+
+	// Set the target schema for the USE command when executing the DDL.
+	// We use the first target table's schema because:
+	// 1. For single-table DDLs, this is the correct target schema
+	// 2. For multi-table DDLs (e.g., RENAME TABLE), all table references in the
+	//    rewritten query are fully qualified, so the USE command just needs to
+	//    switch to any database the user has access to - the first target schema
+	//    is guaranteed to be accessible since routing was configured for it.
+	if len(targetTables) > 0 {
+		result.TargetSchemaName = targetTables[0].Schema
+	}
+
 	// Rewrite the DDL with target tables
 	newQuery, err := RenameDDLTable(stmt, targetTables)
 	if err != nil {
@@ -117,18 +141,7 @@ func RewriteDDLQueryWithRouting(router *Router, ddl *commonEvent.DDLEvent, chang
 			zap.String("originalQuery", ddl.Query),
 			zap.String("newQuery", newQuery))
 		result.NewQuery = newQuery
-		result.WasRewritten = true
-	}
-
-	// Set the target schema for the USE command when executing the DDL.
-	// We use the first target table's schema because:
-	// 1. For single-table DDLs, this is the correct target schema
-	// 2. For multi-table DDLs (e.g., RENAME TABLE), all table references in the
-	//    rewritten query are fully qualified, so the USE command just needs to
-	//    switch to any database the user has access to - the first target schema
-	//    is guaranteed to be accessible since routing was configured for it.
-	if len(targetTables) > 0 {
-		result.TargetSchemaName = targetTables[0].Schema
+		result.QueryChanged = true
 	}
 
 	return result, nil

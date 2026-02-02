@@ -248,7 +248,7 @@ func (s *Sink) AddCheckpointTs(_ uint64) {}
 // rewriteDDLQueryWithRouting rewrites the DDL query by applying routing rules
 // to transform source table names to target table names.
 //
-// IMPORTANT: This function mutates ddl.Query in place. This is safe because:
+// IMPORTANT: This function mutates ddl.Query and ddl.BlockedTableNames in place. This is safe because:
 // 1. This is only called once per DDL event at the start of WriteBlockEvent
 // 2. The redo writer's WriteEvents has no internal retries for DDL events
 // 3. If WriteBlockEvent fails, the dispatcher reports an error and does not retry with the same event
@@ -258,10 +258,32 @@ func (s *Sink) rewriteDDLQueryWithRouting(ddl *commonEvent.DDLEvent) error {
 		return errors.Trace(err)
 	}
 
-	if result.WasRewritten {
+	// Only update the query if it actually changed
+	if result.QueryChanged {
 		ddl.Query = result.NewQuery
-		// Note: TargetSchemaName is not used by redo sink (no USE statement needed for redo logs)
 	}
+	// Note: TargetSchemaName is not used by redo sink (no USE statement needed for redo logs)
+
+	// Route BlockedTableNames to maintain consistency between the rewritten query and
+	// the table names stored in redo logs. This ensures that when redo logs are replayed,
+	// the BlockedTableNames match the routed table names in the query.
+	s.routeBlockedTableNames(ddl)
 
 	return nil
+}
+
+// routeBlockedTableNames applies routing rules to BlockedTableNames so that
+// redo logs contain consistent target table names throughout.
+func (s *Sink) routeBlockedTableNames(ddl *commonEvent.DDLEvent) {
+	if s.router == nil || len(ddl.BlockedTableNames) == 0 {
+		return
+	}
+
+	for i := range ddl.BlockedTableNames {
+		srcSchema := ddl.BlockedTableNames[i].SchemaName
+		srcTable := ddl.BlockedTableNames[i].TableName
+		targetSchema, targetTable := s.router.Route(srcSchema, srcTable)
+		ddl.BlockedTableNames[i].SchemaName = targetSchema
+		ddl.BlockedTableNames[i].TableName = targetTable
+	}
 }

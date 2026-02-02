@@ -636,3 +636,132 @@ func TestDDLRoutingBothSchemaAndTable(t *testing.T) {
 	sink.Close(false)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestRoutingBlockedTableNames tests that BlockedTableNames are routed correctly
+// so that waitAsyncDDLDone queries the correct downstream tables.
+func TestRoutingBlockedTableNames(t *testing.T) {
+	// Create a router that routes source_db.source_table -> target_db.target_table
+	rules := []*config.DispatchRule{
+		{
+			Matcher:    []string{"source_db.source_table"},
+			SchemaRule: "target_db",
+			TableRule:  "target_table",
+		},
+		{
+			Matcher:    []string{"source_db.other_table"},
+			SchemaRule: "target_db",
+			TableRule:  "other_routed",
+		},
+	}
+	router, err := util.NewRouterFromDispatchRules(true, rules)
+	require.NoError(t, err)
+	require.NotNil(t, router)
+
+	_, sink, mock := getMysqlSinkWithRouter(router)
+
+	// Create a DDL event with BlockedTableNames (e.g., ADD INDEX on source_table)
+	ddlEvent := &commonEvent.DDLEvent{
+		Query:      "ALTER TABLE `source_db`.`source_table` ADD INDEX idx_col(col)",
+		SchemaName: "source_db",
+		TableName:  "source_table",
+		FinishedTs: 1,
+		TableInfo: &common.TableInfo{
+			TableName: common.TableName{Schema: "source_db", Table: "source_table"},
+		},
+		BlockedTableNames: []commonEvent.SchemaTableName{
+			{SchemaName: "source_db", TableName: "source_table"},
+		},
+	}
+
+	err = sink.rewriteDDLQueryWithRouting(ddlEvent)
+	require.NoError(t, err)
+
+	// Verify: BlockedTableNames should be routed to target names
+	require.Len(t, ddlEvent.BlockedTableNames, 1)
+	require.Equal(t, "target_db", ddlEvent.BlockedTableNames[0].SchemaName,
+		"BlockedTableNames schema should be routed")
+	require.Equal(t, "target_table", ddlEvent.BlockedTableNames[0].TableName,
+		"BlockedTableNames table should be routed")
+
+	mock.ExpectClose()
+	sink.Close(false)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestRoutingBlockedTableNamesMultiple tests routing of multiple BlockedTableNames.
+func TestRoutingBlockedTableNamesMultiple(t *testing.T) {
+	// Create a router with multiple rules
+	rules := []*config.DispatchRule{
+		{
+			Matcher:    []string{"db1.*"},
+			SchemaRule: "target_db1",
+			TableRule:  util.TablePlaceholder,
+		},
+		{
+			Matcher:    []string{"db2.*"},
+			SchemaRule: "target_db2",
+			TableRule:  util.TablePlaceholder,
+		},
+	}
+	router, err := util.NewRouterFromDispatchRules(true, rules)
+	require.NoError(t, err)
+	require.NotNil(t, router)
+
+	_, sink, mock := getMysqlSinkWithRouter(router)
+
+	// Create a DDL event with multiple BlockedTableNames (e.g., partition DDL)
+	ddlEvent := &commonEvent.DDLEvent{
+		Query:      "ALTER TABLE `db1`.`t1` ADD PARTITION",
+		SchemaName: "db1",
+		TableName:  "t1",
+		FinishedTs: 1,
+		TableInfo: &common.TableInfo{
+			TableName: common.TableName{Schema: "db1", Table: "t1"},
+		},
+		BlockedTableNames: []commonEvent.SchemaTableName{
+			{SchemaName: "db1", TableName: "t1"},
+			{SchemaName: "db2", TableName: "t2"},
+		},
+	}
+
+	err = sink.rewriteDDLQueryWithRouting(ddlEvent)
+	require.NoError(t, err)
+
+	// Verify: all BlockedTableNames should be routed
+	require.Len(t, ddlEvent.BlockedTableNames, 2)
+	require.Equal(t, "target_db1", ddlEvent.BlockedTableNames[0].SchemaName)
+	require.Equal(t, "t1", ddlEvent.BlockedTableNames[0].TableName)
+	require.Equal(t, "target_db2", ddlEvent.BlockedTableNames[1].SchemaName)
+	require.Equal(t, "t2", ddlEvent.BlockedTableNames[1].TableName)
+
+	mock.ExpectClose()
+	sink.Close(false)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestRoutingBlockedTableNamesNoRouter tests that BlockedTableNames are unchanged when no router.
+func TestRoutingBlockedTableNamesNoRouter(t *testing.T) {
+	_, sink, mock := getMysqlSink()
+
+	ddlEvent := &commonEvent.DDLEvent{
+		Query:      "ALTER TABLE `source_db`.`source_table` ADD INDEX idx_col(col)",
+		SchemaName: "source_db",
+		TableName:  "source_table",
+		FinishedTs: 1,
+		BlockedTableNames: []commonEvent.SchemaTableName{
+			{SchemaName: "source_db", TableName: "source_table"},
+		},
+	}
+
+	// No routing should happen without a router
+	sink.routeBlockedTableNames(ddlEvent)
+
+	// Verify: BlockedTableNames unchanged
+	require.Len(t, ddlEvent.BlockedTableNames, 1)
+	require.Equal(t, "source_db", ddlEvent.BlockedTableNames[0].SchemaName)
+	require.Equal(t, "source_table", ddlEvent.BlockedTableNames[0].TableName)
+
+	mock.ExpectClose()
+	sink.Close(false)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

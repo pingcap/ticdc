@@ -35,7 +35,7 @@ func TestRewriteDDLQueryWithNilRouter(t *testing.T) {
 	originalQuery := ddlEvent.Query
 	result, err := RewriteDDLQueryWithRouting(nil, ddlEvent, "test-changefeed")
 	require.NoError(t, err)
-	require.False(t, result.WasRewritten, "Query should not be rewritten when router is nil")
+	require.False(t, result.RoutingApplied, "Query should not be rewritten when router is nil")
 	require.Equal(t, originalQuery, result.NewQuery, "Query should not be modified when router is nil")
 }
 
@@ -58,7 +58,7 @@ func TestRewriteDDLQueryWithEmptyQuery(t *testing.T) {
 
 	result, err := RewriteDDLQueryWithRouting(router, ddlEvent, "test-changefeed")
 	require.NoError(t, err)
-	require.False(t, result.WasRewritten)
+	require.False(t, result.RoutingApplied)
 	require.Equal(t, "", result.NewQuery)
 }
 
@@ -87,7 +87,7 @@ func TestRewriteDDLQueryWithBasicRouting(t *testing.T) {
 
 	result, err := RewriteDDLQueryWithRouting(router, ddlEvent, "test-changefeed")
 	require.NoError(t, err)
-	require.True(t, result.WasRewritten)
+	require.True(t, result.RoutingApplied)
 	require.Contains(t, result.NewQuery, "target_db")
 	require.Contains(t, result.NewQuery, "test_table")
 	require.NotContains(t, result.NewQuery, "source_db")
@@ -104,7 +104,7 @@ func TestRewriteDDLQueryWithBasicRouting(t *testing.T) {
 	originalQuery := ddlEvent2.Query
 	result2, err := RewriteDDLQueryWithRouting(router, ddlEvent2, "test-changefeed")
 	require.NoError(t, err)
-	require.False(t, result2.WasRewritten, "Query should not be rewritten when no routing rule matches")
+	require.False(t, result2.RoutingApplied, "Query should not be rewritten when no routing rule matches")
 	require.Equal(t, originalQuery, result2.NewQuery, "Query should not be modified when no routing rule matches")
 }
 
@@ -179,7 +179,7 @@ func TestRewriteDDLQueryWithSchemaAndTableRouting(t *testing.T) {
 
 			result, err := RewriteDDLQueryWithRouting(router, ddlEvent, "test-changefeed")
 			require.NoError(t, err)
-			require.True(t, result.WasRewritten)
+			require.True(t, result.RoutingApplied)
 			require.Contains(t, result.NewQuery, tt.expectedQuery, "Query should contain routed schema and table")
 			require.NotContains(t, result.NewQuery, "source_db", "Query should not contain source schema")
 			require.NotContains(t, result.NewQuery, "test_table`", "Query should not contain source table (checking with backtick to avoid matching test_table_routed)")
@@ -260,7 +260,7 @@ func TestRewriteDDLQueryWithSchemaOnlyRouting(t *testing.T) {
 
 			result, err := RewriteDDLQueryWithRouting(router, ddlEvent, "test-changefeed")
 			require.NoError(t, err)
-			require.True(t, result.WasRewritten)
+			require.True(t, result.RoutingApplied)
 			require.Contains(t, result.NewQuery, tt.expectedQuery, "Query should contain routed schema with original table")
 			require.NotContains(t, result.NewQuery, "source_db", "Query should not contain source schema")
 			require.Equal(t, "target_db", result.TargetSchemaName)
@@ -333,7 +333,7 @@ func TestRewriteDDLQueryWithTableOnlyRouting(t *testing.T) {
 
 			result, err := RewriteDDLQueryWithRouting(router, ddlEvent, "test-changefeed")
 			require.NoError(t, err)
-			require.True(t, result.WasRewritten)
+			require.True(t, result.RoutingApplied)
 			require.Contains(t, result.NewQuery, tt.expectedQuery, "Query should contain original schema with routed table")
 			require.NotContains(t, result.NewQuery, "old_table", "Query should not contain source table")
 			require.Equal(t, "mydb", result.TargetSchemaName)
@@ -611,7 +611,7 @@ func TestRewriteDDLQueryWithConsolidatedRouting(t *testing.T) {
 		expectedQuery := "CREATE TABLE `target1`.`users` LIKE `target2`.`users`"
 		require.Equal(t, expectedQuery, result.NewQuery,
 			"Same table name in different schemas should route to their respective targets")
-		require.True(t, result.WasRewritten, "Query should be marked as rewritten")
+		require.True(t, result.RoutingApplied, "Query should be marked as rewritten")
 		require.Equal(t, "target1", result.TargetSchemaName, "TargetSchemaName should be set to first target schema")
 	})
 
@@ -631,7 +631,7 @@ func TestRewriteDDLQueryWithConsolidatedRouting(t *testing.T) {
 		expectedQuery := "RENAME TABLE `target1`.`users` TO `target2`.`users`"
 		require.Equal(t, expectedQuery, result.NewQuery,
 			"RENAME TABLE should apply different routing to each schema")
-		require.True(t, result.WasRewritten)
+		require.True(t, result.RoutingApplied)
 		require.Equal(t, "target1", result.TargetSchemaName)
 	})
 }
@@ -687,7 +687,7 @@ func TestRewriteDDLQueryWithErrors(t *testing.T) {
 
 		result, err := RewriteDDLQueryWithRouting(router, ddlEvent, "test-changefeed")
 		require.NoError(t, err, "Database-level DDL with no tables should not error")
-		require.False(t, result.WasRewritten, "Database DDL should not be rewritten")
+		require.False(t, result.RoutingApplied, "Database DDL should not be rewritten")
 		require.Equal(t, ddlEvent.Query, result.NewQuery, "Query should remain unchanged")
 	})
 }

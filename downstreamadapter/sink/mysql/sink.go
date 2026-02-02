@@ -328,7 +328,7 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 // to transform source table names to target table names.
 // Returns an error if DDL rewriting fails, as silent fallback could lead to data going to wrong tables.
 //
-// IMPORTANT: This function mutates ddl.Query in place. It is safe because:
+// IMPORTANT: This function mutates ddl.Query and ddl.BlockedTableNames in place. It is safe because:
 // 1. This is only called once per DDL event at the start of WriteBlockEvent
 // 2. Internal retries in FlushDDLEvent/execDDLWithMaxRetries reuse the already-rewritten query
 // 3. If WriteBlockEvent fails, the dispatcher reports an error and does not retry with the same event
@@ -340,12 +340,39 @@ func (s *Sink) rewriteDDLQueryWithRouting(ddl *commonEvent.DDLEvent) error {
 		return errors.Trace(err)
 	}
 
-	if result.WasRewritten {
-		ddl.Query = result.NewQuery
+	// Set TargetSchemaName whenever routing rules match, even if query string didn't change.
+	// This ensures the USE statement switches to the correct target schema.
+	if result.RoutingApplied {
 		ddl.TargetSchemaName = result.TargetSchemaName
 	}
 
+	// Only update the query if it actually changed
+	if result.QueryChanged {
+		ddl.Query = result.NewQuery
+	}
+
+	// Route BlockedTableNames so that waitAsyncDDLDone queries the correct downstream tables.
+	// This is necessary because async DDL waiting (e.g., for ADD INDEX) queries the downstream
+	// by table name, and when routing is active, the downstream tables have target names.
+	s.routeBlockedTableNames(ddl)
+
 	return nil
+}
+
+// routeBlockedTableNames applies routing rules to BlockedTableNames so that
+// downstream queries (like async DDL status checks) use the correct target table names.
+func (s *Sink) routeBlockedTableNames(ddl *commonEvent.DDLEvent) {
+	if s.router == nil || len(ddl.BlockedTableNames) == 0 {
+		return
+	}
+
+	for i := range ddl.BlockedTableNames {
+		srcSchema := ddl.BlockedTableNames[i].SchemaName
+		srcTable := ddl.BlockedTableNames[i].TableName
+		targetSchema, targetTable := s.router.Route(srcSchema, srcTable)
+		ddl.BlockedTableNames[i].SchemaName = targetSchema
+		ddl.BlockedTableNames[i].TableName = targetTable
+	}
 }
 
 // AddCheckpointTs is invoked by dispatcher manager whenever Maintainer broadcasts a
