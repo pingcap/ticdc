@@ -22,7 +22,7 @@ make
 Run DDL workload based on a TOML config file:
 
 ```bash
-./workload -action ddl \
+./bin/workload -action ddl \
     -database-host 127.0.0.1 \
     -database-port 4000 \
     -database-db-name test \
@@ -67,7 +67,7 @@ truncate_table = 0
 Insert test data using sysbench-compatible schema:
 
 ```bash
-./workload -action insert \
+./bin/workload -action insert \
     -database-host 127.0.0.1 \
     -database-port 4000 \
     -database-db-name db1 \
@@ -83,7 +83,7 @@ Insert test data using sysbench-compatible schema:
 Update existing data with large row operations:
 
 ```bash
-./workload -action update \
+./bin/workload -action update \
     -database-host 127.0.0.1 \
     -database-port 4000 \
     -database-db-name large \
