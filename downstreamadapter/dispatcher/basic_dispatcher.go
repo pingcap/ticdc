@@ -400,19 +400,9 @@ func (d *BasicDispatcher) GetCheckpointTs() uint64 {
 	// we must not report checkpoint beyond (ddlCommitTs-1). Otherwise the watermark may
 	// virtually advance past an unexecuted DDL barrier.
 	ddlCommitTs := deferred.GetCommitTs()
-	log.Warn("deferred DDL found when get checkpointTs",
-		zap.Any("dispatcherID", d.id),
-		zap.Uint64("checkpointTs", checkpointTs),
-		zap.Uint64("ddlCommitTs", ddlCommitTs))
-	ddlCheckpointUpperBound := ddlCommitTs - 1
-	if checkpointTs > ddlCheckpointUpperBound {
-		log.Warn("disaptcher commitTs bounded by the deferred DDL event",
-			zap.Any("dispatcherID", d.id),
-			zap.Uint64("originCheckpointTs", checkpointTs),
-			zap.Uint64("newCheckpointTs", ddlCheckpointUpperBound),
-			zap.Uint64("ddlCommitTs", ddlCommitTs),
-			zap.Any("deferredDDL", deferred))
-		checkpointTs = ddlCheckpointUpperBound
+	upperBound := ddlCommitTs - 1
+	if checkpointTs > upperBound {
+		checkpointTs = upperBound
 	}
 	return checkpointTs
 }
@@ -698,8 +688,8 @@ func (d *BasicDispatcher) tryScheduleDeferredDDLEvent() {
 	if !d.deferredSubmitted.CompareAndSwap(false, true) {
 		return
 	}
-	// already in the executor, so set async = false.
 	d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
+		// already in the executor, so set async = false.
 		d.dealWithBlockEvent(pending, false)
 	})
 }
@@ -730,14 +720,16 @@ func (d *BasicDispatcher) clearDeferredDDLEventIfEnqueued(event commonEvent.Bloc
 // dispatcher status dynamic stream handler, we execute the write asynchronously and return await=true.
 // The status path will be waked up after the write finishes.
 func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.DispatcherStatus) (await bool) {
+	var (
+		dispatcherID = d.GetId()
+		ack          = dispatcherStatus.GetAck()
+		action       = dispatcherStatus.GetAction()
+	)
 	log.Debug("dispatcher handle dispatcher status",
-		zap.Any("dispatcherStatus", dispatcherStatus),
-		zap.Stringer("dispatcher", d.id),
-		zap.Any("action", dispatcherStatus.GetAction()),
-		zap.Any("ack", dispatcherStatus.GetAck()))
+		zap.Stringer("dispatcher", dispatcherID),
+		zap.Any("dispatcherStatus", dispatcherStatus))
 
 	// Step1: deal with the ack info
-	ack := dispatcherStatus.GetAck()
 	if ack != nil {
 		identifier := BlockEventIdentifier{
 			CommitTs:    ack.CommitTs,
@@ -747,21 +739,23 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 	}
 
 	// Step2: deal with the dispatcher action
-	action := dispatcherStatus.GetAction()
 	if action != nil {
-		pendingEvent := d.blockEventStatus.getEvent()
-		if pendingEvent == nil && action.CommitTs > d.GetResolvedTs() {
+		var (
+			pendingEvent = d.blockEventStatus.getEvent()
+			resolvedTs   = d.GetResolvedTs()
+		)
+		if pendingEvent == nil && action.CommitTs > resolvedTs {
 			// we have not received the block event, and the action is for the future event, so just ignore
 			log.Debug("pending event is nil, and the action's commit is larger than dispatchers resolvedTs",
-				zap.Uint64("resolvedTs", d.GetResolvedTs()),
+				zap.Stringer("dispatcher", dispatcherID),
 				zap.Uint64("actionCommitTs", action.CommitTs),
-				zap.Stringer("dispatcher", d.id))
+				zap.Uint64("resolvedTs", resolvedTs))
 			// we have not received the block event, and the action is for the future event, so just ignore
 			return false
 		}
 		if d.blockEventStatus.actionMatchs(action) {
 			log.Info("pending event get the action",
-				zap.Stringer("dispatcher", d.id),
+				zap.Stringer("dispatcher", dispatcherID),
 				zap.Int64("mode", d.mode),
 				zap.Any("action", action),
 				zap.Any("innerAction", int(action.Action)),
@@ -793,14 +787,14 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 				log.Debug("pending event's commitTs is smaller than the action's commitTs, just ignore it",
 					zap.Uint64("pendingEventCommitTs", ts),
 					zap.Uint64("actionCommitTs", action.CommitTs),
-					zap.Stringer("dispatcher", d.id))
+					zap.Stringer("dispatcher", dispatcherID))
 				return false
 			}
 		}
 
 		// Step3: whether the outdate message or not, we need to return message show we have finished the event.
 		d.sharedInfo.blockStatusesChan <- &heartbeatpb.TableSpanBlockStatus{
-			ID: d.id.ToPB(),
+			ID: dispatcherID.ToPB(),
 			State: &heartbeatpb.State{
 				IsBlocked:   true,
 				BlockTs:     dispatcherStatus.GetAction().CommitTs,
@@ -809,6 +803,9 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 			},
 			Mode: d.GetMode(),
 		}
+	} else {
+		log.Warn("dispatcher receive nil action",
+			zap.Any("dispatcherID", dispatcherID), zap.Uint64("commitTs", ack.CommitTs))
 	}
 	return false
 }
@@ -882,6 +879,7 @@ func (d *BasicDispatcher) dealWithBlockEvent(event commonEvent.BlockEvent, async
 			d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
 				d.executeNonBlockingBlockEvent(event)
 			})
+			// todo: is this should be called in the above block, due to the async execution?
 			d.updateSchemaIDIfNeeded(event)
 			return
 		}
