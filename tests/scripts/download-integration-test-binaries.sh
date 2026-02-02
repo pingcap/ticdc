@@ -77,6 +77,7 @@ download_community_binaries() {
 	local toolkit_file_name="tidb-community-toolkit-$dist"
 	local toolkit_tar_name="${toolkit_file_name}.tar.gz"
 	local toolkit_url="https://download.pingcap.org/$toolkit_tar_name"
+	local schema_registry_url="${FILE_SERVER_URL}/download/builds/pingcap/cdc/schema-registry.tar.gz"
 
 	log_green "Downloading community binaries..."
 	download_file "$tidb_url" "$tidb_tar_name" "${TMP_DIR}/$tidb_tar_name"
@@ -93,6 +94,7 @@ download_community_binaries() {
 	tar -xz -C ${THIRD_BIN_DIR} pd-ctl -f ${TMP_DIR}/$tidb_file_name/ctl-${dist}.tar.gz
 	tar -xz -C ${THIRD_BIN_DIR} $toolkit_file_name/etcdctl $toolkit_file_name/sync_diff_inspector -f ${TMP_DIR}/$toolkit_tar_name
 	mv ${THIRD_BIN_DIR}/$toolkit_file_name/* ${THIRD_BIN_DIR} && rm -rf ${THIRD_BIN_DIR}/$toolkit_file_name
+	download_and_extract "$schema_registry_url" "schema-registry.tar.gz"
 
 	# Download additional tools
 	download_ycsb
