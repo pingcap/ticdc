@@ -167,6 +167,17 @@ func (ti *TableInfo) CloneWithRouting(targetSchema, targetTable string) *TableIn
 	// Apply routing to the cloned TableName
 	cloned.TableName.TargetSchema = targetSchema
 	cloned.TableName.TargetTable = targetTable
+
+	// Increment refcount for the shared columnSchema and set finalizer to decrement
+	// when the clone is garbage collected. This prevents use-after-free if the
+	// original TableInfo is GC'd before the clone.
+	if ti.columnSchema != nil {
+		GetSharedColumnSchemaStorage().incColumnSchemaCount(ti.columnSchema)
+		runtime.SetFinalizer(cloned, func(ti *TableInfo) {
+			GetSharedColumnSchemaStorage().tryReleaseColumnSchema(ti.columnSchema)
+		})
+	}
+
 	return cloned
 }
 
