@@ -175,6 +175,21 @@ func (c *changefeedStatus) updateMemoryUsage(now time.Time, used uint64, max uin
 	c.adjustScanInterval(now, stats)
 }
 
+// adjustScanInterval dynamically adjusts the scan interval based on memory pressure.
+//
+// Algorithm overview:
+//   - "Fast brake, slow accelerate": Decreases are applied immediately when memory
+//     pressure is high, while increases require cooldown periods and stable conditions.
+//   - Tiered response: Different thresholds trigger different adjustment magnitudes.
+//   - Trend prediction: Detects rising memory pressure early and proactively reduces
+//     the interval before hitting critical thresholds.
+//
+// Thresholds and actions:
+//   - Critical (>80%): Reduce interval to 1/4 (aggressive)
+//   - High (>60%): Reduce interval to 1/2
+//   - Trend damping (>30% AND rising): Reduce interval by 10%
+//   - Low (<40% max AND avg): Increase interval by 25%
+//   - Very low (<20% max AND avg): Increase interval by 50%, may exceed normal cap
 func (c *changefeedStatus) adjustScanInterval(now time.Time, usage memoryUsageStats) {
 	current := time.Duration(c.scanInterval.Load())
 	if current <= 0 {
@@ -185,50 +200,61 @@ func (c *changefeedStatus) adjustScanInterval(now time.Time, usage memoryUsageSt
 		maxInterval = minScanInterval
 	}
 
+	// Constants for trend detection and increase eligibility.
 	const (
-		minTrendSamples           = 4
-		increasingTrendEpsilon    = 0.02
-		increasingTrendStartRatio = 0.3
+		minTrendSamples           = 4    // Minimum samples needed to detect a valid trend
+		increasingTrendEpsilon    = 0.02 // Minimum delta to consider as "increasing"
+		increasingTrendStartRatio = 0.3  // Threshold (30%) above which trend damping kicks in
 
-		minIncreaseSamples         = 10
-		minIncreaseSpanNumerator   = 4
+		minIncreaseSamples         = 10 // Minimum samples needed before allowing increase
+		minIncreaseSpanNumerator   = 4  // Observation span must be at least 4/5 of window
 		minIncreaseSpanDenominator = 5
 	)
 
+	// Trend detection: check if memory usage is rising over the observation window.
+	// This enables proactive intervention before hitting high thresholds.
 	trendDelta := usage.last - usage.first
 	isIncreasing := usage.cnt >= minTrendSamples && trendDelta > increasingTrendEpsilon
 	isAboveTrendStart := usage.last > increasingTrendStartRatio
 	canAdjustOnTrend := now.Sub(c.lastTrendAdjustTime.Load()) >= scanTrendAdjustCooldown
 	shouldDampOnTrend := isAboveTrendStart && isIncreasing && canAdjustOnTrend
 
+	// Increase eligibility: conservative conditions to prevent oscillation.
+	// Requires: cooldown passed, enough samples, sufficient observation span,
+	// and NOT in an increasing trend situation (to avoid fighting against pressure).
 	minIncreaseSpan := memoryUsageWindowDuration * minIncreaseSpanNumerator / minIncreaseSpanDenominator
 	allowedToIncrease := now.Sub(c.lastAdjustTime.Load()) >= scanIntervalAdjustCooldown &&
 		usage.cnt >= minIncreaseSamples &&
 		usage.span >= minIncreaseSpan &&
 		!(isAboveTrendStart && isIncreasing)
 
+	// Determine the new interval based on memory pressure levels.
+	// Priority order: critical > high > trend damping > very low > low
 	adjustedOnTrend := false
 	newInterval := current
 	switch {
 	case usage.last > memoryUsageCriticalThreshold || usage.max > memoryUsageCriticalThreshold:
+		// Critical pressure: aggressive reduction to 1/4
 		newInterval = maxDuration(current/4, minScanInterval)
 	case usage.last > memoryUsageHighThreshold || usage.max > memoryUsageHighThreshold:
+		// High pressure: reduce to 1/2
 		newInterval = maxDuration(current/2, minScanInterval)
 	case shouldDampOnTrend:
-		// When pressure is above a safe level and still increasing, it usually indicates
-		// downstream can't keep up. Decrease scan interval gradually to avoid quota exhaustion.
+		// Trend damping: pressure is moderate (>30%) but rising. Reduce by 10% to
+		// preemptively slow down before downstream gets overwhelmed.
 		newInterval = maxDuration(scaleDuration(current, 9, 10), minScanInterval)
 		adjustedOnTrend = true
 	case allowedToIncrease && usage.max < memoryUsageVeryLowThreshold && usage.avg < memoryUsageVeryLowThreshold:
-		// When memory pressure stays very low for a full window, allow the scan interval
-		// to grow beyond the sync point interval cap, but increase slowly to avoid burst.
+		// Very low pressure (<20%): increase by 50%, allowed to exceed sync point cap.
 		maxInterval = maxScanInterval
 		newInterval = minDuration(scaleDuration(current, 3, 2), maxInterval)
 	case allowedToIncrease && usage.max < memoryUsageLowThreshold && usage.avg < memoryUsageLowThreshold:
+		// Low pressure (<40%): increase by 25%, capped by sync point interval.
 		newInterval = minDuration(scaleDuration(current, 5, 4), maxInterval)
 	}
 
-	// Prevent rapid oscillation: always apply decreases immediately, but throttle increases.
+	// Anti-oscillation guard: decreases are always applied immediately,
+	// but increases are blocked if cooldown conditions aren't met.
 	if newInterval > current && !allowedToIncrease {
 		return
 	}
