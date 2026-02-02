@@ -424,6 +424,8 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 	etcdClient := newMockEtcdClient(string(info.ID))
 	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+	appcontext.SetService(appcontext.SchemaStore, eventservice.NewMockSchemaStore())
 	nodeManager.GetAliveNodes()[info.ID] = info
 
 	mc1 := messaging.NewMessageCenter(ctx, info.ID, config.NewDefaultMessageCenterConfig(info.AdvertiseAddr), nil)
@@ -471,12 +473,14 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 	mNode.manager.bootstrapResponse = &heartbeatpb.CoordinatorBootstrapResponse{
 		Statuses: []*heartbeatpb.MaintainerStatus{
 			{
-				ChangefeedID: removingCf1.Info.ChangefeedID.ToPB(),
-				State:        heartbeatpb.ComponentState_Working,
+				ChangefeedID:  removingCf1.Info.ChangefeedID.ToPB(),
+				State:         heartbeatpb.ComponentState_Working,
+				BootstrapDone: true,
 			},
 			{
-				ChangefeedID: stopingCf1.Info.ChangefeedID.ToPB(),
-				State:        heartbeatpb.ComponentState_Working,
+				ChangefeedID:  stopingCf1.Info.ChangefeedID.ToPB(),
+				State:         heartbeatpb.ComponentState_Working,
+				BootstrapDone: true,
 			},
 		},
 	}
