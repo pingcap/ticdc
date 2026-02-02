@@ -85,7 +85,7 @@ GOTEST := CGO_ENABLED=1 $(GO) test -p 3 --race --tags=$(TEST_FLAG)
 
 RELEASE_VERSION =
 ifeq ($(RELEASE_VERSION),)
-	RELEASE_VERSION := $(shell git describe --tags --dirty)
+	RELEASE_VERSION := $(shell git describe --tags --dirty 2>/dev/null || true)
 endif
 ifeq ($(RELEASE_VERSION),)
 	RELEASE_VERSION := v8.5.4-release
@@ -197,7 +197,7 @@ check_third_party_binary:
 	@which bin/sync_diff_inspector
 	@which bin/go-ycsb
 	@which bin/etcdctl
-	@which bin/jq
+	@if command -v jq >/dev/null 2>&1; then command -v jq; else which bin/jq; fi
 	@which bin/minio
 	@which bin/bin/schema-registry-start
 

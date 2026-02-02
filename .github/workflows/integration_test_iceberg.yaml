@@ -61,9 +61,65 @@ jobs:
             unzip \
             wget
 
-      - name: Prepare integration test third-party binaries (community)
+      - name: Install OCI download tools
         run: |
-          make prepare_test_binaries community=true ver=v8.5.5 os=linux arch=amd64
+          set -euo pipefail
+          ORAS_VERSION="1.2.0"
+          YQ_VERSION="4.44.3"
+          curl -fsSL "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz" -o /tmp/oras.tar.gz
+          sudo tar -xzf /tmp/oras.tar.gz -C /usr/local/bin oras
+          sudo chmod +x /usr/local/bin/oras
+          curl -fsSL "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64" -o /tmp/yq
+          sudo mv /tmp/yq /usr/local/bin/yq
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Prepare integration test third-party binaries (OCI)
+        env:
+          OCI_ARTIFACT_HOST: us-docker.pkg.dev/pingcap-testing-account/hub
+          OCI_TAG_PD: v8.5.5
+          OCI_TAG_TIDB: v8.5.5
+          OCI_TAG_TIKV: v8.5.5
+          OCI_TAG_TIFLASH: v8.5.5
+          OCI_TAG_SYNC_DIFF_INSPECTOR: master
+          OCI_TAG_MINIO: RELEASE.2025-07-23T15-54-02Z
+          OCI_TAG_ETCD: v3.5.15
+          OCI_TAG_YCSB: v1.0.3
+          OCI_TAG_SCHEMA_REGISTRY: latest
+        run: |
+          set -euo pipefail
+          script="${RUNNER_TEMP}/download_pingcap_oci_artifact.sh"
+          curl -fsSL "https://raw.githubusercontent.com/PingCAP-QE/ci/main/scripts/artifacts/download_pingcap_oci_artifact.sh" -o "$script"
+          chmod +x "$script"
+          python - "$script" <<'PY'
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          text = path.read_text()
+          needle = 'mv -v "$tarball_file" "$file_path"'
+          replacement = 'if [[ "$tarball_file" != "$file_path" ]]; then mv -v "$tarball_file" "$file_path"; fi'
+          if needle not in text:
+              raise SystemExit("failed to patch download script: target not found")
+          path.write_text(text.replace(needle, replacement))
+          PY
+          mkdir -p bin
+          pushd bin
+          "$script" \
+            --pd="${OCI_TAG_PD}" \
+            --pd-ctl="${OCI_TAG_PD}" \
+            --tikv="${OCI_TAG_TIKV}" \
+            --tidb="${OCI_TAG_TIDB}" \
+            --tiflash="${OCI_TAG_TIFLASH}" \
+            --sync-diff-inspector="${OCI_TAG_SYNC_DIFF_INSPECTOR}" \
+            --minio="${OCI_TAG_MINIO}" \
+            --etcdctl="${OCI_TAG_ETCD}" \
+            --ycsb="${OCI_TAG_YCSB}" \
+            --schema-registry="${OCI_TAG_SCHEMA_REGISTRY}"
+          ls -d tiflash
+          mv tiflash tiflash-dir
+          mv tiflash-dir/* .
+          rm -rf tiflash-dir
+          popd
           make check_third_party_binary
 
       - name: Build TiCDC binaries for integration tests
