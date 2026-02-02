@@ -17,7 +17,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"go.uber.org/zap"
 )
@@ -107,11 +106,16 @@ func (w *Writer) generateActiveActiveBatchSQL(events []*commonEvent.DMLEvent) ([
 	tableInfo := events[0].TableInfo
 	rowChanges, commitTs, err := w.buildRowChangesForUnSafeBatch(events, tableInfo)
 	if err != nil {
-		sql, values := w.generateActiveActiveBatchSQLForPerEvent(events)
-		log.Info("normal sql should be", zap.Any("sql", sql), zap.String("values", util.RedactAny(values)), zap.Int("writerID", w.id))
-		log.Panic("invalid rows when generating batch active active SQL",
-			zap.Error(err), zap.Any("events", events), zap.Int("writerID", w.id))
-		return []string{}, [][]interface{}{}
+		// In active active mode, when the upstream tidb_translate_softdelete_sql = off,  and insert A + delete A + insert A
+		// tidb_translate_softdelete_sql = off will lead to delete be a hard delete, which event will be discarded
+		// Then here we will only get insert A + insert A, which may meet error in batch optimization in buildRowChangesForUnSafeBatch
+		// So here we fallback to per-event batching
+		log.Warn("meet error when building row changes for active-active unsafe batch, "+
+			"falling back to per-event batching",
+			zap.Error(err),
+			zap.Int("eventCount", len(events)),
+			zap.Int64("tableID", events[0].GetTableID()))
+		return w.generateActiveActiveBatchSQLForPerEvent(events)
 	}
 	return w.batchSingleTxnActiveRows(rowChanges, commitTs, tableInfo, events[0].GetTableID())
 }
