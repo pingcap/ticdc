@@ -423,17 +423,25 @@ func (t *DDLEvent) IsPaused() bool {
 // - TargetSchemaName: will be set by routing
 // - TableInfo: will be replaced with routed version (via CloneWithRouting)
 // - MultipleTableInfos: each element will be replaced with routed version
-//
-// PostTxnFlushed callbacks are shared between the original and clone since sinks
-// call PostFlush() on the event for checkpoint/progress tracking.
+// - PostTxnFlushed: independent slice to allow safe callback appends
 func (d *DDLEvent) CloneForRouting() *DDLEvent {
 	if d == nil {
 		return nil
 	}
 
-	// Create shallow copy - this copies all fields including the PostTxnFlushed
-	// slice header, so callbacks are shared (which is correct behavior)
+	// Create shallow copy
 	clone := *d
+
+	// PostTxnFlushed needs its own backing array to prevent potential races.
+	// Currently, DDL events arrive with nil PostTxnFlushed (callbacks are added
+	// downstream by basic_dispatcher.go), so append(nil, f) naturally creates a
+	// fresh slice. However, we make an explicit copy here for future-proofing:
+	// if any code path later adds callbacks before cloning, sharing the backing
+	// array could cause nondeterministic callback visibility or data races.
+	if d.PostTxnFlushed != nil {
+		clone.PostTxnFlushed = make([]func(), len(d.PostTxnFlushed))
+		copy(clone.PostTxnFlushed, d.PostTxnFlushed)
+	}
 
 	// MultipleTableInfos needs a new slice so each dispatcher can independently
 	// apply routing to its elements without affecting others

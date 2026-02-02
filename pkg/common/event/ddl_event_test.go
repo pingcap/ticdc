@@ -328,12 +328,19 @@ func TestDDLEventCloneForRouting(t *testing.T) {
 	require.True(t, original.MultipleTableInfos[0] == cloned.MultipleTableInfos[0], "MultipleTableInfos elements should be shared initially")
 	require.True(t, original.MultipleTableInfos[1] == cloned.MultipleTableInfos[1], "MultipleTableInfos elements should be shared initially")
 
-	// Verify that PostTxnFlushed is shared (same slice header)
+	// Verify that PostTxnFlushed is an independent copy (not shared)
+	// This is defensive: currently DDL events arrive with nil PostTxnFlushed,
+	// but we copy it to prevent races if callbacks are ever added before cloning.
 	require.NotNil(t, cloned.PostTxnFlushed)
-	require.Equal(t, 2, len(cloned.PostTxnFlushed), "PostTxnFlushed should be shared with original")
+	require.Equal(t, 2, len(cloned.PostTxnFlushed), "PostTxnFlushed should have same length as original")
 	require.Equal(t, 2, len(original.PostTxnFlushed), "Original PostTxnFlushed should remain unchanged")
-	// Both should point to the same underlying array since it's a shallow copy
-	require.Equal(t, &original.PostTxnFlushed[0], &cloned.PostTxnFlushed[0], "PostTxnFlushed should share the same underlying array")
+	// Verify independent backing arrays - appending to clone should not affect original
+	require.NotEqual(t, &original.PostTxnFlushed[0], &cloned.PostTxnFlushed[0], "PostTxnFlushed should have independent backing arrays")
+
+	// Verify that appending to cloned PostTxnFlushed doesn't affect original
+	cloned.AddPostFlushFunc(func() {})
+	require.Equal(t, 3, len(cloned.PostTxnFlushed), "Clone should have appended callback")
+	require.Equal(t, 2, len(original.PostTxnFlushed), "Original should be unaffected by clone's append")
 
 	// Now simulate what happens during routing: mutate the cloned event
 	cloned.TargetSchemaName = "routed_schema"
