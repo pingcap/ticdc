@@ -29,19 +29,15 @@ function prepare() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	# record tso before we create tables to skip the system table DDLs
-	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 	do_retry 5 2 run_sql "CREATE TABLE test.iceberg_upsert_basic(id INT PRIMARY KEY, val INT);"
+	# record tso after table creation so the table exists at start-ts
+	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
 	WAREHOUSE_DIR="$WORK_DIR/iceberg_warehouse"
 	SINK_URI="iceberg://?warehouse=file://$WAREHOUSE_DIR&catalog=hadoop&namespace=ns&mode=upsert&commit-interval=1s&enable-checkpoint-table=true&partitioning=none"
-	create_output=$(cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI")
-	echo "$create_output"
-	changefeed_id=$(echo "$create_output" | grep '^ID:' | head -n1 | awk '{print $2}')
-	table_id=$(get_table_id test iceberg_upsert_basic)
-	wait_table_assigned "$changefeed_id" "$table_id"
+	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
 }
 
 function wait_file_exists() {
@@ -56,24 +52,6 @@ function wait_file_exists() {
 		sleep 1
 	done
 	echo "file not found after ${check_time}s: ${file_pattern}"
-	return 1
-}
-
-function wait_table_assigned() {
-	changefeed_id=$1
-	table_id=$2
-	check_time=${3:-60}
-	i=0
-	while [ $i -lt $check_time ]; do
-		tables=$(curl -s "http://127.0.0.1:8300/api/v2/changefeeds/${changefeed_id}/tables?keyspace=$KEYSPACE_NAME")
-		if echo "$tables" | jq -e --argjson tid "$table_id" '.items[].table_ids[]? | select(. == $tid)' >/dev/null 2>&1; then
-			return 0
-		fi
-		((i++))
-		sleep 2
-	done
-	echo "table id ${table_id} not assigned to changefeed ${changefeed_id} after ${check_time} checks"
-	echo "$tables"
 	return 1
 }
 
