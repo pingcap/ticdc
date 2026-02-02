@@ -372,10 +372,4 @@ replace github.com/go-ldap/ldap/v3 v3.4.4 => github.com/yangkeao/ldap/v3 v3.4.5-
 // copy from TiDB to downgrade grpc
 replace github.com/apache/arrow-go/v18 => github.com/joechenrh/arrow-go/v18 v18.0.0-20250911101656-62c34c9a3b82
 
-replace github.com/tikv/pd/client => github.com/tikv/pd/client v0.0.0-20251219084741-029eb6e7d5d0
-
-replace github.com/pingcap/tipb => github.com/pingcap/tipb v0.0.0-20251125085256-097db0b2c02a
-
-replace github.com/pingcap/kvproto => github.com/pingcap/kvproto v0.0.0-20260127035637-77643524c499
-
 replace github.com/IBM/sarama v1.41.2 => github.com/pingcap/sarama v1.41.2-pingcap-20251202-x
