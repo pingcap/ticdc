@@ -71,7 +71,6 @@ type dispatcherStat struct {
 	nextSyncPoint     atomic.Uint64
 	syncPointInterval time.Duration
 	txnAtomicity      config.AtomicityLevel
-	lastSyncPoint     atomic.Uint64
 
 	// =============================================================================
 	// ================== below are fields need copied when reset ==================

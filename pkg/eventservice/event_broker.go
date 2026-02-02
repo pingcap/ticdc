@@ -51,7 +51,6 @@ const (
 	maxReadyEventIntervalSeconds = 10
 	// defaultSendResolvedTsInterval use to control whether to send a resolvedTs event to the dispatcher when its scan is skipped.
 	defaultSendResolvedTsInterval = time.Second * 2
-	congestionControlLogInterval  = time.Minute
 )
 
 // eventBroker get event from the eventStore, and send the event to the dispatchers.
@@ -433,7 +432,7 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	if scanMaxTs > 0 {
 		dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, scanMaxTs)
 		if dataRange.CommitTsEnd < commitTsEndBeforeWindow {
-			log.Debug("fizz scan window capped",
+			log.Debug("scan window capped",
 				zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
 				zap.Stringer("dispatcherID", task.id),
 				zap.Uint64("baseTs", task.changefeedStat.minSentTs.Load()),
@@ -571,7 +570,6 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 
 		syncPointEvent := newWrapSyncPointEvent(remoteID, e)
 		c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- syncPointEvent
-		d.lastSyncPoint.Store(commitTs)
 	}
 }
 
@@ -1303,19 +1301,6 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 		}
 		return true
 	})
-
-	nowUnix := now.Unix()
-	lastLog := c.lastCongestionLogTime.Load()
-	if nowUnix-lastLog >= int64(congestionControlLogInterval.Seconds()) &&
-		c.lastCongestionLogTime.CompareAndSwap(lastLog, nowUnix) {
-		log.Info("congestion control received",
-			zap.Uint16("version", uint16(m.GetVersion())),
-			zap.Int("changefeedCount", len(availables)),
-			zap.Int("usageCount", usageCount),
-			zap.Int("zeroMaxCount", zeroMaxCount),
-			zap.Int("dispatcherCount", len(dispatcherAvailable)),
-		)
-	}
 }
 
 func (c *eventBroker) sendDispatcherResponse(responseMap map[string]*event.DispatcherHeartbeatResponse) {
