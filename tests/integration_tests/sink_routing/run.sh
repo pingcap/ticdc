@@ -31,7 +31,7 @@ function run() {
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --cluster-id "$KEYSPACE_NAME"
 
-	SINK_URI="mysql://normal:123456@127.0.0.1:3306/"
+	SINK_URI="mysql://normal:123456@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/"
 	cdc_cli_changefeed create --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml"
 
 	# Run the prepare SQL to create source tables and insert initial data
@@ -44,6 +44,55 @@ function run() {
 	# source_db.finish_mark -> target_db.finish_mark_routed
 	echo "Waiting for routing to complete..."
 	check_table_exists target_db.finish_mark_routed ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+
+	# ============================================
+	# Diagnostic: Check finish_mark_routed (skip strict check - DML may still be in flight)
+	# ============================================
+	echo "=== DIAGNOSTIC: Checking finish_mark_routed ==="
+	run_sql "SELECT COUNT(*) as cnt FROM target_db.finish_mark_routed" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	cat "$WORK_DIR/sql_res.$TEST_NAME.log"
+
+	# ============================================
+	# Diagnostic: Check upstream state for products
+	# ============================================
+	echo "=== DIAGNOSTIC: Upstream products table state ==="
+	run_sql "SELECT id, name, price FROM source_db.products ORDER BY id" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	echo "Upstream products query result:"
+	cat "$WORK_DIR/sql_res.$TEST_NAME.log"
+
+	# ============================================
+	# Diagnostic: Check downstream state for products
+	# ============================================
+	echo "=== DIAGNOSTIC: Downstream products_routed table state ==="
+	run_sql "SELECT id, name, price FROM target_db.products_routed ORDER BY id" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	echo "Downstream products_routed query result:"
+	cat "$WORK_DIR/sql_res.$TEST_NAME.log"
+
+	# ============================================
+	# Diagnostic: Check users table to compare (created before changefeed)
+	# ============================================
+	echo "=== DIAGNOSTIC: Upstream users table state ==="
+	run_sql "SELECT id, name, email FROM source_db.users ORDER BY id" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	cat "$WORK_DIR/sql_res.$TEST_NAME.log"
+	echo "=== DIAGNOSTIC: Downstream users_routed table state ==="
+	run_sql "SELECT id, name, email FROM target_db.users_routed ORDER BY id" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	cat "$WORK_DIR/sql_res.$TEST_NAME.log"
+
+	# ============================================
+	# Diagnostic: Check CDC server logs for errors
+	# ============================================
+	echo "=== DIAGNOSTIC: Checking CDC logs for errors ==="
+	grep -i "error\|panic\|fail" $WORK_DIR/cdc.log 2>/dev/null | tail -20 || echo "No errors found in CDC log"
+
+	# ============================================
+	# Diagnostic: Check routing debug logs
+	# ============================================
+	echo "=== DIAGNOSTIC: Routing debug logs ==="
+	grep -E "handleHandshakeEvent|handleBatchDataEvents|applyRoutingToTableInfo|DROPPED" $WORK_DIR/cdc.log 2>/dev/null | grep -i "products\|finish_mark" | tail -30 || echo "No routing logs found"
+
+	# Also check for any DROPPED events globally
+	echo "=== DIAGNOSTIC: All DROPPED events ==="
+	grep -E "DROPPED" $WORK_DIR/cdc.log 2>/dev/null | tail -20 || echo "No DROPPED events found"
 
 	# ============================================
 	# Verify schema routing: tables should be in target_db, not source_db
@@ -155,10 +204,14 @@ function run() {
 	# Verify DML: INSERT, UPDATE, DELETE on products
 	# ============================================
 	echo "Verifying DML operations on products table..."
-	# Started with ids 1,2 (prices 9.99, 19.99)
-	# Updated id 1 (price to 12.99)
-	# Deleted where price < 15.00 (deletes id=1 since 12.99 < 15, keeps id=2 since 19.99 >= 15)
-	# Final count should be 1
+	# Started with ids 1,2 (prices 29.99, 19.99)
+	# Updated id=1 (price 29.99 -> 12.99)
+	# Deleted where price < 15.00:
+	#   - If UPDATE worked: id=1 has price 12.99 < 15.00, so it gets deleted
+	#   - If UPDATE didn't work: id=1 has price 29.99 >= 15.00, so it survives
+	# Expected: UPDATE works, DELETE works -> only id=2 remains -> count = 1
+	# If count = 2 with id=1 price = 29.99: UPDATE didn't work
+	# If count = 2 with id=1 price = 12.99: UPDATE worked but DELETE didn't
 	run_sql "SELECT COUNT(*) as cnt FROM target_db.products_routed" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_contains "cnt: 1"
 

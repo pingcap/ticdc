@@ -452,7 +452,7 @@ func getMysqlSinkWithRouter(router *util.Router) (context.Context, *Sink, sqlmoc
 	cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
 	cfg.CachePrepStmts = false
 
-	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false, router)
+	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false, false, time.Minute, router)
 	return ctx, sink, mock
 }
 

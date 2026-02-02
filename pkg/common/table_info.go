@@ -153,15 +153,17 @@ func (ti *TableInfo) CloneWithRouting(targetSchema, targetTable string) *TableIn
 	}
 	// Create a new TableInfo with copied basic fields
 	cloned := &TableInfo{
-		TableName:        ti.TableName, // Value copy of TableName struct
-		Charset:          ti.Charset,
-		Collate:          ti.Collate,
-		Comment:          ti.Comment,
-		columnSchema:     ti.columnSchema, // Share the pointer (read-only)
-		HasPKOrNotNullUK: ti.HasPKOrNotNullUK,
-		View:             ti.View,     // Share the pointer (read-only)
-		Sequence:         ti.Sequence, // Share the pointer (read-only)
-		UpdateTS:         ti.UpdateTS,
+		TableName:         ti.TableName, // Value copy of TableName struct
+		Charset:           ti.Charset,
+		Collate:           ti.Collate,
+		Comment:           ti.Comment,
+		columnSchema:      ti.columnSchema, // Share the pointer (read-only)
+		HasPKOrNotNullUK:  ti.HasPKOrNotNullUK,
+		View:              ti.View,     // Share the pointer (read-only)
+		Sequence:          ti.Sequence, // Share the pointer (read-only)
+		UpdateTS:          ti.UpdateTS,
+		ActiveActiveTable: ti.ActiveActiveTable,
+		SoftDeleteTable:   ti.SoftDeleteTable,
 		// preSQLs is zero-initialized (uninitialized mutex/atomic, empty strings)
 	}
 	// Apply routing to the cloned TableName

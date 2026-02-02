@@ -138,7 +138,9 @@ type SinkConfig struct {
 	// Protocol is NOT available when the downstream is DB.
 	Protocol *string `toml:"protocol" json:"protocol,omitempty"`
 
-	// DispatchRules is only available when the downstream is MQ.
+	// DispatchRules configures event routing. For MQ sinks, rules control partition
+	// dispatching. For MySQL/TiDB sinks, rules with SchemaRule/TableRule enable
+	// schema and table name routing to write to different target tables.
 	DispatchRules []*DispatchRule `toml:"dispatchers" json:"dispatchers,omitempty"`
 
 	ColumnSelectors []*ColumnSelector `toml:"column-selectors" json:"column-selectors,omitempty"`

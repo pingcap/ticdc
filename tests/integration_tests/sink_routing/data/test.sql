@@ -32,7 +32,9 @@ CREATE TABLE products (
     price DECIMAL(10, 2)
 );
 
-INSERT INTO products VALUES (1, 'Widget', 9.99);
+-- Widget starts at 29.99 (>= 15.00), so DELETE WHERE price < 15.00 won't affect it
+-- unless the UPDATE (price = 12.99) is applied first
+INSERT INTO products VALUES (1, 'Widget', 29.99);
 INSERT INTO products VALUES (2, 'Gadget', 19.99);
 
 -- ============================================
@@ -40,7 +42,7 @@ INSERT INTO products VALUES (2, 'Gadget', 19.99);
 -- ============================================
 CREATE TABLE products_backup LIKE products;
 
-INSERT INTO products_backup VALUES (1, 'Widget', 9.99);
+INSERT INTO products_backup VALUES (1, 'Widget', 29.99);
 
 -- ============================================
 -- DDL: ALTER TABLE DROP COLUMN
