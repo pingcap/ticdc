@@ -13,7 +13,7 @@
 #   8. Verify all data is replayed to target_db.t1 (schema routing preserved in redo logs)
 #   9. Restart CDC without failpoint and verify normal replication resumes
 
-set -eu
+set -euo pipefail
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
