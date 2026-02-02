@@ -29,7 +29,7 @@ function run() {
 	run_sql "DROP DATABASE IF EXISTS target_db" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	run_sql "CREATE DATABASE target_db" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --cluster-id "$KEYSPACE_NAME"
 
 	SINK_URI="mysql://normal:123456@127.0.0.1:3306/"
 	run_cdc_cli changefeed create --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml"

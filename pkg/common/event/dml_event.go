@@ -302,33 +302,41 @@ func (b *BatchDMLEvent) CloneForRouting() *BatchDMLEvent {
 
 // AssembleRows assembles the Rows from the RawRows.
 // It also sets the TableInfo and clears the RawRows.
+// For local events (same node, b.Rows already set), it only applies routing
+// without replacing the TableInfo to preserve schema version compatibility.
 func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 	if tableInfo == nil {
 		log.Panic("DMLEvent: TableInfo is nil")
 		return
 	}
 
-	// Verify schema version compatibility before replacing TableInfo
+	defer func() {
+		b.TableInfo.InitPrivateFields()
+	}()
+
+	// For local events (same node), rows are already set.
+	// We only need to apply routing (TargetSchema/TargetTable) without replacing
+	// the entire TableInfo, which preserves schema version compatibility.
+	if b.Rows != nil {
+		// Apply routing fields from the passed tableInfo (which has routing applied)
+		// to the event's existing TableInfo. This is safe because it doesn't change
+		// the schema structure, only adds routing information.
+		if tableInfo.TableName.TargetSchema != "" || tableInfo.TableName.TargetTable != "" {
+			b.TableInfo.TableName.TargetSchema = tableInfo.TableName.TargetSchema
+			b.TableInfo.TableName.TargetTable = tableInfo.TableName.TargetTable
+			for _, dml := range b.DMLEvents {
+				dml.TableInfo.TableName.TargetSchema = tableInfo.TableName.TargetSchema
+				dml.TableInfo.TableName.TargetTable = tableInfo.TableName.TargetTable
+			}
+		}
+		return
+	}
+
+	// For remote events, verify schema version compatibility before replacing TableInfo
 	if b.TableInfo != nil && b.TableInfo.GetUpdateTS() != tableInfo.GetUpdateTS() {
 		log.Panic("DMLEvent: TableInfoVersion mismatch",
 			zap.Uint64("dmlEventTableInfoVersion", b.TableInfo.GetUpdateTS()),
 			zap.Uint64("tableInfoVersion", tableInfo.GetUpdateTS()))
-		return
-	}
-
-	// Always update TableInfo and DMLEvents' TableInfo to the passed tableInfo,
-	// because it may have routing applied (TargetSchema/TargetTable set).
-	// This must happen before the early return to ensure routing is applied.
-	b.TableInfo = tableInfo
-	for _, dml := range b.DMLEvents {
-		dml.TableInfo = tableInfo
-	}
-	defer func() {
-		b.TableInfo.InitPrivateFields()
-	}()
-	// rows is already set, no need to assemble again
-	// When the event is passed from the same node, the Rows is already set.
-	if b.Rows != nil {
 		return
 	}
 
@@ -339,9 +347,11 @@ func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 
 	decoder := chunk.NewCodec(tableInfo.GetFieldSlice())
 	b.Rows, _ = decoder.Decode(b.RawRows)
+	b.TableInfo = tableInfo
 	b.RawRows = nil
 	for _, dml := range b.DMLEvents {
 		dml.Rows = b.Rows
+		dml.TableInfo = b.TableInfo
 	}
 }
 

@@ -65,7 +65,7 @@ function run() {
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
 	# Start CDC server
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --cluster-id "$KEYSPACE_NAME"
 
 	SINK_URI="mysql://root@127.0.0.1:3306/"
 	changefeedid="redo-schema-routing-test"
@@ -117,7 +117,7 @@ function run() {
 	echo "Restarting CDC with MySQLSinkHangLongTime failpoint..."
 	cleanup_process $CDC_BINARY
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/cdc/sink/dmlsink/txn/mysql/MySQLSinkHangLongTime=return(true)'
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --cluster-id "$KEYSPACE_NAME"
 
 	# Insert more data - this will go to redo logs but NOT to downstream (due to failpoint)
 	echo "Inserting additional data (will be captured in redo but blocked from sink)..."
@@ -207,7 +207,7 @@ function run() {
 
 	# Verify changefeed resumes normally after redo apply (without failpoint)
 	echo "Verifying changefeed resumes normally after redo apply..."
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --cluster-id "$KEYSPACE_NAME"
 
 	# Insert more data to verify normal replication still works
 	echo "Inserting additional data to verify normal replication..."
