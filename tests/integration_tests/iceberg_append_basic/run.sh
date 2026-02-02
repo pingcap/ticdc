@@ -29,10 +29,9 @@ function prepare() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	# record tso before we create tables to skip the system table DDLs
-	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
-
 	do_retry 5 2 run_sql "CREATE TABLE test.iceberg_append_basic(id INT PRIMARY KEY, val INT);"
+	# record tso after table creation so the table exists at start-ts
+	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
