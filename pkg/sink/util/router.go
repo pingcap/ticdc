@@ -68,15 +68,15 @@ func NewRouter(caseSensitive bool, rules []RoutingRuleConfig) (*Router, error) {
 		}
 
 		if err := config.ValidateRoutingExpression(ruleConfig.SchemaRule); err != nil {
-			return nil, cerror.ErrInvalidRoutingRule.GenWithStackByArgs("schema rule", ruleConfig.SchemaRule, err.Error())
+			return nil, cerror.WrapError(cerror.ErrInvalidRoutingRule, err, "schema rule", ruleConfig.SchemaRule)
 		}
 		if err := config.ValidateRoutingExpression(ruleConfig.TableRule); err != nil {
-			return nil, cerror.ErrInvalidRoutingRule.GenWithStackByArgs("table rule", ruleConfig.TableRule, err.Error())
+			return nil, cerror.WrapError(cerror.ErrInvalidRoutingRule, err, "table rule", ruleConfig.TableRule)
 		}
 
 		f, err := tfilter.Parse(ruleConfig.Matcher)
 		if err != nil {
-			return nil, cerror.ErrInvalidRoutingRule.GenWithStackByArgs("matcher", ruleConfig.Matcher, err.Error())
+			return nil, cerror.WrapError(cerror.ErrInvalidRoutingRule, err, "matcher", ruleConfig.Matcher)
 		}
 		if !caseSensitive {
 			f = tfilter.CaseInsensitive(f)

@@ -450,6 +450,10 @@ func (d *DDLEvent) CloneForRouting() *DDLEvent {
 		copy(clone.MultipleTableInfos, d.MultipleTableInfos)
 	}
 
+	if d.BlockedTableNames != nil {
+		clone.BlockedTableNames = append([]SchemaTableName(nil), d.BlockedTableNames...)
+	}
+
 	return &clone
 }
 

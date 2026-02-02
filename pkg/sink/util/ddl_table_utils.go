@@ -134,10 +134,19 @@ func RenameDDLTable(stmt ast.StmtNode, targetTables []*filter.Table) (string, er
 
 	switch v := stmt.(type) {
 	case *ast.AlterDatabaseStmt:
+		if len(targetTables) != 1 {
+			return "", fmt.Errorf("failed to rewrite DDL: expected 1 target table, got %d", len(targetTables))
+		}
 		v.Name = ast.NewCIStr(targetTables[0].Schema)
 	case *ast.CreateDatabaseStmt:
+		if len(targetTables) != 1 {
+			return "", fmt.Errorf("failed to rewrite DDL: expected 1 target table, got %d", len(targetTables))
+		}
 		v.Name = ast.NewCIStr(targetTables[0].Schema)
 	case *ast.DropDatabaseStmt:
+		if len(targetTables) != 1 {
+			return "", fmt.Errorf("failed to rewrite DDL: expected 1 target table, got %d", len(targetTables))
+		}
 		v.Name = ast.NewCIStr(targetTables[0].Schema)
 	default:
 		visitor := &tableRenameVisitor{
@@ -160,7 +169,7 @@ func RenameDDLTable(stmt ast.StmtNode, targetTables []*filter.Table) (string, er
 		In:    bf,
 	})
 	if err != nil {
-		return "", fmt.Errorf("failed to restore DDL AST: %w", err)
+		return "", errors.Trace(err)
 	}
 
 	return bf.String(), nil

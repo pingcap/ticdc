@@ -20,7 +20,6 @@ source $CUR/../_utils/test_prepare
 WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
-MAX_RETRIES=20
 
 REDO_DIR="/tmp/tidb_cdc_test/redo_apply_schema_routing/redo"
 SQL_RES_FILE="$OUT_DIR/$TEST_NAME/sql_res.$TEST_NAME.log"
@@ -247,6 +246,6 @@ function run() {
 }
 
 trap stop_tidb_cluster EXIT
-run $*
+run "$@"
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
