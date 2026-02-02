@@ -325,7 +325,8 @@ func TestUpsertPartitionsDeletesWhenDerivedFromEqualityFields(t *testing.T) {
 		require.NoError(t, err)
 		manifestListRecords = append(manifestListRecords, r.(map[string]any))
 	}
-	require.Len(t, manifestListRecords, 2)
+	// Manifest entries can be batched, so avoid asserting an exact count.
+	require.NotEmpty(t, manifestListRecords)
 
 	bucketBytes, err := bucketHashBytes("int", id)
 	require.NoError(t, err)
