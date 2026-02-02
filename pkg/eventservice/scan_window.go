@@ -25,16 +25,51 @@ import (
 )
 
 const (
-	defaultScanInterval          = 5 * time.Second
-	minScanInterval              = 1 * time.Second
-	maxScanInterval              = 30 * time.Minute
-	scanIntervalAdjustCooldown   = 30 * time.Second
-	scanTrendAdjustCooldown      = 5 * time.Second
-	memoryUsageWindowDuration    = 30 * time.Second
-	memoryUsageHighThreshold     = 0.7
+	// defaultScanInterval is the initial scan interval used when starting up
+	// or when the current interval is invalid.
+	defaultScanInterval = 5 * time.Second
+
+	// minScanInterval is the minimum allowed scan interval. Even under critical
+	// memory pressure, the interval will never go below this value.
+	minScanInterval = 1 * time.Second
+
+	// maxScanInterval is the maximum allowed scan interval. Even under very low
+	// memory pressure, the interval will never exceed this value.
+	maxScanInterval = 30 * time.Minute
+
+	// scanIntervalAdjustCooldown is the minimum time that must pass between
+	// scan interval increases. This prevents oscillation by enforcing a waiting
+	// period before allowing another increase. Decreases are not affected by
+	// this cooldown and are applied immediately.
+	scanIntervalAdjustCooldown = 30 * time.Second
+
+	// scanTrendAdjustCooldown is the minimum time between trend-based interval
+	// adjustments. This is shorter than the general cooldown because trend
+	// adjustments need to be more responsive to rising memory pressure.
+	scanTrendAdjustCooldown = 5 * time.Second
+
+	// memoryUsageWindowDuration is the duration of the sliding window for
+	// collecting memory usage samples. Samples older than this duration are
+	// pruned from the window.
+	memoryUsageWindowDuration = 30 * time.Second
+
+	// memoryUsageHighThreshold (70%) triggers a moderate reduction of the scan
+	// interval to 1/2 of its current value when memory usage exceeds this level.
+	memoryUsageHighThreshold = 0.7
+
+	// memoryUsageCriticalThreshold (90%) triggers an aggressive reduction of
+	// the scan interval to 1/4 of its current value when memory usage exceeds
+	// this level.
 	memoryUsageCriticalThreshold = 0.9
-	memoryUsageLowThreshold      = 0.2
-	memoryUsageVeryLowThreshold  = 0.1
+
+	// memoryUsageLowThreshold (20%) allows the scan interval to be increased
+	// by 25% when both max and average memory usage are below this level.
+	memoryUsageLowThreshold = 0.2
+
+	// memoryUsageVeryLowThreshold (10%) allows the scan interval to be increased
+	// by 50% when both max and average memory usage are below this level. This
+	// increase may exceed the normal sync point interval cap.
+	memoryUsageVeryLowThreshold = 0.1
 )
 
 type memoryUsageSample struct {
@@ -72,21 +107,6 @@ func (w *memoryUsageWindow) addSample(now time.Time, ratio float64) {
 
 	w.samples = append(w.samples, memoryUsageSample{ts: now, ratio: ratio})
 	w.pruneLocked(now)
-}
-
-func (w *memoryUsageWindow) average(now time.Time) float64 {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	w.pruneLocked(now)
-	if len(w.samples) == 0 {
-		return 0
-	}
-	var sum float64
-	for _, sample := range w.samples {
-		sum += sample.ratio
-	}
-	return sum / float64(len(w.samples))
 }
 
 func (w *memoryUsageWindow) stats(now time.Time) memoryUsageStats {
@@ -127,22 +147,6 @@ func (w *memoryUsageWindow) pruneLocked(now time.Time) {
 	if idx > 0 {
 		w.samples = w.samples[idx:]
 	}
-}
-
-func (w *memoryUsageWindow) span(now time.Time) time.Duration {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.pruneLocked(now)
-	if len(w.samples) == 0 {
-		return 0
-	}
-	return now.Sub(w.samples[0].ts)
-}
-
-func (w *memoryUsageWindow) count() int {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return len(w.samples)
 }
 
 func (c *changefeedStatus) updateMemoryUsage(now time.Time, used uint64, max uint64, available uint64) {
@@ -337,11 +341,6 @@ func (c *changefeedStatus) storeMinSentTs(value uint64) {
 	}
 	c.minSentTs.Store(value)
 	metrics.EventServiceScanWindowBaseTsGaugeVec.WithLabelValues(c.changefeedID.String()).Set(float64(value))
-	log.Info("scan window base updated",
-		zap.Stringer("changefeedID", c.changefeedID),
-		zap.Uint64("oldBaseTs", prev),
-		zap.Uint64("newBaseTs", value),
-	)
 }
 
 func (c *changefeedStatus) updateSyncPointConfig(info DispatcherInfo) {

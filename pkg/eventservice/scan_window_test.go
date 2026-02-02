@@ -17,8 +17,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
+	"go.uber.org/atomic"
 )
 
 func TestAdjustScanIntervalVeryLowBypassesSyncPointCap(t *testing.T) {
@@ -137,4 +140,111 @@ func TestAdjustScanIntervalDecreasesWhenUsageIncreasingAboveThirtyPercent(t *tes
 	status.updateMemoryUsage(now.Add(2*time.Second), 33, 100, 100)
 	status.updateMemoryUsage(now.Add(3*time.Second), 34, 100, 100)
 	require.Equal(t, int64(36*time.Second), status.scanInterval.Load())
+}
+
+func TestRefreshMinSentResolvedTsMinAndSkipRules(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"))
+
+	removed := &dispatcherStat{}
+	removed.seq.Store(1)
+	removed.sentResolvedTs.Store(150)
+	removed.isRemoved.Store(true)
+
+	uninitialized := &dispatcherStat{}
+	uninitialized.seq.Store(0)
+	uninitialized.sentResolvedTs.Store(10)
+
+	first := &dispatcherStat{}
+	first.seq.Store(1)
+	first.sentResolvedTs.Store(200)
+
+	second := &dispatcherStat{}
+	second.seq.Store(1)
+	second.sentResolvedTs.Store(50)
+
+	removedPtr := &atomic.Pointer[dispatcherStat]{}
+	removedPtr.Store(removed)
+	status.addDispatcher(common.NewDispatcherID(), removedPtr)
+
+	uninitializedPtr := &atomic.Pointer[dispatcherStat]{}
+	uninitializedPtr.Store(uninitialized)
+	status.addDispatcher(common.NewDispatcherID(), uninitializedPtr)
+
+	firstPtr := &atomic.Pointer[dispatcherStat]{}
+	firstPtr.Store(first)
+	status.addDispatcher(common.NewDispatcherID(), firstPtr)
+
+	secondPtr := &atomic.Pointer[dispatcherStat]{}
+	secondPtr.Store(second)
+	status.addDispatcher(common.NewDispatcherID(), secondPtr)
+
+	status.refreshMinSentResolvedTs()
+	require.Equal(t, uint64(50), status.minSentTs.Load())
+
+	second.isRemoved.Store(true)
+	status.refreshMinSentResolvedTs()
+	require.Equal(t, uint64(200), status.minSentTs.Load())
+
+	first.seq.Store(0)
+	status.refreshMinSentResolvedTs()
+	require.Equal(t, uint64(0), status.minSentTs.Load())
+}
+
+func TestGetScanMaxTsFallbackInterval(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"))
+
+	baseTime := time.Unix(1234, 0)
+	baseTs := oracle.GoTimeToTS(baseTime)
+	status.minSentTs.Store(baseTs)
+
+	status.scanInterval.Store(0)
+	require.Equal(t, oracle.GoTimeToTS(baseTime.Add(defaultScanInterval)), status.getScanMaxTs())
+
+	status.scanInterval.Store(int64(10 * time.Second))
+	require.Equal(t, oracle.GoTimeToTS(baseTime.Add(10*time.Second)), status.getScanMaxTs())
+
+	status.minSentTs.Store(0)
+	require.Equal(t, uint64(0), status.getScanMaxTs())
+}
+
+func TestUpdateSyncPointConfigUsesMinimumInterval(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"))
+
+	disabled := newMockDispatcherInfo(t, 0, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
+	disabled.enableSyncPoint = false
+	disabled.syncPointInterval = 2 * time.Minute
+	status.updateSyncPointConfig(disabled)
+	require.False(t, status.syncPointEnabled.Load())
+	require.Equal(t, int64(0), status.syncPointInterval.Load())
+
+	first := newMockDispatcherInfo(t, 0, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
+	first.enableSyncPoint = true
+	first.syncPointInterval = 2 * time.Minute
+	status.updateSyncPointConfig(first)
+	require.True(t, status.syncPointEnabled.Load())
+	require.Equal(t, int64(2*time.Minute), status.syncPointInterval.Load())
+
+	second := newMockDispatcherInfo(t, 0, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
+	second.enableSyncPoint = true
+	second.syncPointInterval = 1 * time.Minute
+	status.updateSyncPointConfig(second)
+	require.Equal(t, int64(1*time.Minute), status.syncPointInterval.Load())
+
+	third := newMockDispatcherInfo(t, 0, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
+	third.enableSyncPoint = true
+	third.syncPointInterval = 3 * time.Minute
+	status.updateSyncPointConfig(third)
+	require.Equal(t, int64(1*time.Minute), status.syncPointInterval.Load())
+
+	invalid := newMockDispatcherInfo(t, 0, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
+	invalid.enableSyncPoint = true
+	invalid.syncPointInterval = 0
+	status.updateSyncPointConfig(invalid)
+	require.Equal(t, int64(1*time.Minute), status.syncPointInterval.Load())
 }

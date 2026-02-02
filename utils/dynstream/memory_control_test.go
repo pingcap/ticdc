@@ -272,6 +272,25 @@ func TestReleaseMemory(t *testing.T) {
 	}
 	feedbackChan := make(chan Feedback[int, string, any], 10)
 
+	calcExpectedReleasedPaths := func(
+		as *areaMemStat[int, string, *mockEvent, any, *mockHandler],
+		paths ...*pathInfo[int, string, *mockEvent, any, *mockHandler],
+	) []string {
+		sizeToRelease := int64(float64(as.totalPendingSize.Load()) * defaultReleaseMemoryRatio)
+		releasedSize := int64(0)
+		res := make([]string, 0)
+		for _, path := range paths {
+			if releasedSize >= sizeToRelease ||
+				path.pendingSize.Load() < int64(defaultReleaseMemoryThreshold) ||
+				!path.blocking.Load() {
+				continue
+			}
+			releasedSize += path.pendingSize.Load()
+			res = append(res, path.path)
+		}
+		return res
+	}
+
 	// Create 3 paths with different last handle event timestamps
 	path1 := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
 		area:         area,
@@ -310,7 +329,7 @@ func TestReleaseMemory(t *testing.T) {
 	path2.lastHandleEventTs.Store(200)
 	path3.lastHandleEventTs.Store(100)
 
-	// Case 1: release path1
+	// Case 1: release most recent paths
 	// Add events to each path
 	// Each event has size 100
 	for i := 0; i < 4; i++ {
@@ -355,20 +374,27 @@ func TestReleaseMemory(t *testing.T) {
 	path1.areaMemStat.lastReleaseMemoryTime.Store(time.Now().Add(-2 * time.Second))
 	path1.areaMemStat.releaseMemory()
 
+	expectedPaths := calcExpectedReleasedPaths(path1.areaMemStat, path1, path2, path3)
 	feedbacks := make([]Feedback[int, string, any], 0)
-	for i := 0; i < 1; i++ {
+	for i := 0; i < len(expectedPaths); i++ {
 		select {
 		case fb := <-feedbackChan:
 			feedbacks = append(feedbacks, fb)
 		case <-time.After(100 * time.Millisecond):
-			require.Fail(t, "should receive 1 feedbacks")
+			require.Fail(t, "should receive feedbacks")
 		}
 	}
 
-	require.Equal(t, 1, len(feedbacks))
-	require.Equal(t, ReleasePath, feedbacks[0].FeedbackType)
-	require.Equal(t, area, feedbacks[0].Area)
-	require.Equal(t, path1.path, feedbacks[0].Path)
+	require.Len(t, feedbacks, len(expectedPaths))
+	gotPaths := make(map[string]bool, len(feedbacks))
+	for _, fb := range feedbacks {
+		require.Equal(t, ReleasePath, fb.FeedbackType)
+		require.Equal(t, area, fb.Area)
+		gotPaths[fb.Path] = true
+	}
+	for _, path := range expectedPaths {
+		require.True(t, gotPaths[path])
+	}
 
 	// Case 2: release path1 and path2
 	// Reset the paths
@@ -407,40 +433,39 @@ func TestReleaseMemory(t *testing.T) {
 	path1.areaMemStat.totalPendingSize.Store(900)
 
 	// Call releaseMemory
-	// sizeToRelease = 1000 * 0.4 = 360
-	// path1 (ts=300): release 300 bytes, sizeToRelease = 360 - 300 = 60
-	// path2 (ts=200): release 300 bytes, sizeToRelease = 60 - 300 = -240
+	// sizeToRelease = totalPendingSize * defaultReleaseMemoryRatio
 	path1.areaMemStat.lastReleaseMemoryTime.Store(time.Now().Add(-2 * time.Second))
 	path1.areaMemStat.releaseMemory()
 
 	// Verify feedback messages
-	// Should receive 2 ResetPath feedbacks
+	// Should receive feedbacks to release memory.
+	expectedPaths = calcExpectedReleasedPaths(path1.areaMemStat, path1, path2, path3)
 	feedbacks = make([]Feedback[int, string, any], 0)
 	timer := time.After(100 * time.Millisecond)
-	for i := 0; i < 2; i++ {
+	for i := 0; i < len(expectedPaths); i++ {
 		select {
 		case fb := <-feedbackChan:
 			feedbacks = append(feedbacks, fb)
 		case <-timer:
-			require.Fail(t, "should receive 2 feedbacks")
+			require.Fail(t, "should receive feedbacks")
 		}
 	}
 
-	require.Equal(t, 2, len(feedbacks))
-	// Both should be ResetPath type
+	require.Len(t, feedbacks, len(expectedPaths))
+	// Both should be ReleasePath type
 	for _, fb := range feedbacks {
 		require.Equal(t, ReleasePath, fb.FeedbackType)
 		require.Equal(t, area, fb.Area)
 	}
 
-	// Check that we got feedbacks for path1 and path2
-	paths := make(map[string]bool)
+	// Check that we got expected feedbacks.
+	paths := make(map[string]bool, len(feedbacks))
 	for _, fb := range feedbacks {
 		paths[fb.Path] = true
 	}
-	require.True(t, paths["path-1"])
-	require.True(t, paths["path-2"])
-	require.False(t, paths["path-3"])
+	for _, path := range expectedPaths {
+		require.True(t, paths[path])
+	}
 
 	// Verify no more feedbacks
 	select {

@@ -201,6 +201,41 @@ func TestScanRangeCappedByScanWindow(t *testing.T) {
 	require.Equal(t, oracle.GoTimeToTS(baseTime.Add(defaultScanInterval)), dataRange.CommitTsEnd)
 }
 
+func TestHandleCongestionControlV2AdjustsScanInterval(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	changefeedID := common.NewChangefeedID4Test("default", "test")
+	status := broker.getOrSetChangefeedStatus(changefeedID)
+
+	status.scanInterval.Store(int64(40 * time.Second))
+	status.lastAdjustTime.Store(time.Now())
+
+	control := event.NewCongestionControlWithVersion(event.CongestionControlVersion2)
+	// Simulate critical pressure by setting available to 0.
+	control.AddAvailableMemoryWithDispatchersAndUsage(changefeedID.ID(), 0, 10, 100, nil)
+	broker.handleCongestionControl(node.ID("event-collector-1"), control)
+
+	require.Equal(t, int64(10*time.Second), status.scanInterval.Load())
+}
+
+func TestHandleCongestionControlV1DoesNotAdjustScanInterval(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	changefeedID := common.NewChangefeedID4Test("default", "test")
+	status := broker.getOrSetChangefeedStatus(changefeedID)
+
+	status.scanInterval.Store(int64(40 * time.Second))
+	status.lastAdjustTime.Store(time.Now())
+
+	control := event.NewCongestionControl()
+	control.AddAvailableMemoryWithDispatchers(changefeedID.ID(), 0, nil)
+	broker.handleCongestionControl(node.ID("event-collector-1"), control)
+
+	require.Equal(t, int64(40*time.Second), status.scanInterval.Load())
+}
+
 func TestDoScanSkipWhenChangefeedStatusNotFound(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	broker.close()

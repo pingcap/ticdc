@@ -3,6 +3,7 @@ module workload
 go 1.25.5
 
 require (
+	github.com/BurntSushi/toml v1.5.0
 	github.com/go-sql-driver/mysql v1.8.1
 	github.com/google/uuid v1.6.0
 	github.com/pingcap/errors v0.11.5-0.20240318064555-6bd07397691f
