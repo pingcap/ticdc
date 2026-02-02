@@ -1062,7 +1062,7 @@ func (w *TableWriter) loadTableMetadataFromHint(ctx context.Context, metadataDir
 		return 0, nil, cerror.Trace(err)
 	}
 	if !exists {
-		return 0, nil, nil
+		return w.loadLatestTableMetadata(ctx, metadataDirRel)
 	}
 
 	hintBytes, err := w.storage.ReadFile(ctx, hintRel)
@@ -1091,6 +1091,44 @@ func (w *TableWriter) loadTableMetadataFromHint(ctx context.Context, metadataDir
 	}
 	m.SelfMetadataLocation = metadataLocation
 	return version, &m, nil
+}
+
+func (w *TableWriter) loadLatestTableMetadata(ctx context.Context, metadataDirRel string) (int, *tableMetadata, error) {
+	var (
+		maxVersion int
+		maxRel     string
+	)
+	err := w.storage.WalkDir(ctx, &storage.WalkOption{SubDir: metadataDirRel, ObjPrefix: "v"}, func(relPath string, _ int64) error {
+		if version, ok := metadataVersionFromFileName(path.Base(relPath)); ok {
+			if version > maxVersion {
+				maxVersion = version
+				maxRel = relPath
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, nil, cerror.Trace(err)
+	}
+	if maxVersion == 0 || maxRel == "" {
+		return 0, nil, nil
+	}
+
+	metadataBytes, err := w.storage.ReadFile(ctx, maxRel)
+	if err != nil {
+		return 0, nil, cerror.Trace(err)
+	}
+
+	var m tableMetadata
+	if err := json.Unmarshal(metadataBytes, &m); err != nil {
+		return 0, nil, cerror.WrapError(cerror.ErrSinkURIInvalid, err)
+	}
+	metadataLocation, err := joinLocation(w.cfg.WarehouseLocation, maxRel)
+	if err != nil {
+		return 0, nil, cerror.WrapError(cerror.ErrSinkURIInvalid, err)
+	}
+	m.SelfMetadataLocation = metadataLocation
+	return maxVersion, &m, nil
 }
 
 func (w *TableWriter) loadTableMetadataFromGlue(ctx context.Context, schemaName, tableName string) (int, *tableMetadata, error) {

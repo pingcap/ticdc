@@ -45,6 +45,9 @@ func (w *TableWriter) Upsert(
 	if len(equalityFieldIDs) == 0 {
 		return nil, cerror.ErrSinkURIInvalid.GenWithStackByArgs("equality field ids are empty")
 	}
+	if len(dataRows) == 0 && len(deleteRows) == 0 {
+		return nil, nil
+	}
 
 	now := time.Now().UTC()
 	commitUUID := uuid.NewString()

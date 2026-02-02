@@ -138,6 +138,7 @@ func (c *Config) Apply(_ context.Context, sinkURI *url.URL, sinkConfig *config.S
 	query := sinkURI.Query()
 	catalogSpecified := false
 	autoTuneSpecified := false
+	partitioningSpecified := false
 
 	if sinkConfig != nil && sinkConfig.IcebergConfig != nil {
 		if v := strings.TrimSpace(getOrEmpty(sinkConfig.IcebergConfig.Warehouse)); v != "" {
@@ -182,8 +183,9 @@ func (c *Config) Apply(_ context.Context, sinkURI *url.URL, sinkConfig *config.S
 			c.AutoTuneFileSize = *sinkConfig.IcebergConfig.AutoTuneFileSize
 			autoTuneSpecified = true
 		}
-		if v := strings.TrimSpace(getOrEmpty(sinkConfig.IcebergConfig.Partitioning)); v != "" {
-			c.Partitioning = v
+		if sinkConfig.IcebergConfig.Partitioning != nil {
+			c.Partitioning = strings.TrimSpace(*sinkConfig.IcebergConfig.Partitioning)
+			partitioningSpecified = true
 		}
 		if sinkConfig.IcebergConfig.EmitMetadataColumns != nil {
 			c.EmitMetadataColumns = *sinkConfig.IcebergConfig.EmitMetadataColumns
@@ -270,8 +272,9 @@ func (c *Config) Apply(_ context.Context, sinkURI *url.URL, sinkConfig *config.S
 		autoTuneSpecified = true
 	}
 
-	if v := strings.TrimSpace(query.Get("partitioning")); v != "" {
-		c.Partitioning = v
+	if _, ok := query["partitioning"]; ok {
+		c.Partitioning = strings.TrimSpace(query.Get("partitioning"))
+		partitioningSpecified = true
 	}
 
 	if emitMetaStr := strings.TrimSpace(query.Get("emit-metadata-columns")); emitMetaStr != "" {
@@ -353,7 +356,7 @@ func (c *Config) Apply(_ context.Context, sinkURI *url.URL, sinkConfig *config.S
 		return cerror.ErrSinkURIInvalid.GenWithStackByArgs("missing required parameter: catalog-uri")
 	}
 
-	if strings.TrimSpace(c.Partitioning) == "" && c.EmitMetadataColumns && c.Mode == ModeAppend {
+	if !partitioningSpecified && strings.TrimSpace(c.Partitioning) == "" && c.EmitMetadataColumns && c.Mode == ModeAppend {
 		c.Partitioning = defaultPartitioning
 	}
 	if !c.EmitMetadataColumns && partitioningUsesMetadataColumns(c.Partitioning) {
