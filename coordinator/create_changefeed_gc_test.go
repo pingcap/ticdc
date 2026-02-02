@@ -7,6 +7,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	mock_changefeed "github.com/pingcap/ticdc/coordinator/changefeed/mock"
+	"github.com/pingcap/ticdc/coordinator/gccleaner"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -50,11 +51,12 @@ func newTestCoordinatorWithGCManager(
 	}
 
 	co := &coordinator{
-		controller:                        controller,
-		backend:                           backend,
-		gcManager:                         gcManager,
-		pdClock:                           pdutil.NewClock4Test(),
-		pendingChangefeedServiceSafepoint: newPendingChangefeedServiceSafepoint(),
+		controller: controller,
+		backend:    backend,
+		gcManager:  gcManager,
+		pdClock:    pdutil.NewClock4Test(),
+
+		gcCleaner: gccleaner.New(nil, "test-gc-service"),
 	}
 	return co, changefeedDB
 }
@@ -84,11 +86,7 @@ func TestCreateChangefeedDoesNotUpdateGCSafepoint(t *testing.T) {
 	require.NoError(t, co.CreateChangefeed(context.Background(), info))
 	require.Equal(t, 1, changefeedDB.GetAbsentSize())
 	require.Equal(t, 0, changefeedDB.GetStoppedSize())
-	entry := co.pendingChangefeedServiceSafepoint.pending[cfID]
-	require.NotNil(t, entry)
-	require.Equal(t, uint32(1), entry.keyspaceID)
-	require.True(t, entry.needCreating)
-	require.False(t, entry.needResuming)
+	require.Equal(t, 1, co.gcCleaner.PendingLen())
 }
 
 func TestUpdateGCSafepointCallsGCManagerUpdate(t *testing.T) {

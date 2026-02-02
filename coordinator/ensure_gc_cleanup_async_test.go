@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/coordinator/changefeed"
+	"github.com/pingcap/ticdc/coordinator/gccleaner"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
@@ -95,27 +96,22 @@ func TestTryClearEnsureGCSafepointDoesNotBlockChangefeedChanges(t *testing.T) {
 		controller: &Controller{
 			changefeedDB: changefeed.NewChangefeedDB(1),
 		},
-		gcServiceID:                       "test-gc-service",
-		gcManager:                         noopGCManager{},
-		pdClient:                          pdClient,
-		pdClock:                           pdutil.NewClock4Test(),
-		changefeedChangeCh:                make(chan []*changefeedChange),
-		pendingChangefeedServiceSafepoint: newPendingChangefeedServiceSafepoint(),
-		lastTickTime:                      time.Now(),
+		gcServiceID:        "test-gc-service",
+		gcManager:          noopGCManager{},
+		pdClient:           pdClient,
+		pdClock:            pdutil.NewClock4Test(),
+		changefeedChangeCh: make(chan []*changefeedChange),
+		gcCleaner:          gccleaner.New(pdClient, "test-gc-service"),
+		lastTickTime:       time.Now(),
 	}
-	co.changefeedServiceSafepointCleaner = newChangefeedServiceSafepointCleaner(
-		pdClient,
-		co.gcServiceID,
-		&co.pendingChangefeedServiceSafepoint,
-	)
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
-	co.pendingChangefeedServiceSafepoint.addCreating(cfID, 1)
+	co.gcCleaner.Add(cfID, 1, gc.EnsureGCServiceCreating)
 
 	gcTickCh := make(chan time.Time, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 2)
-	go func() { errCh <- co.changefeedServiceSafepointCleaner.Run(ctx) }()
+	go func() { errCh <- co.gcCleaner.Run(ctx) }()
 	go func() { errCh <- co.runWithGCTicker(ctx, gcTickCh) }()
 	t.Cleanup(func() {
 		cancel()

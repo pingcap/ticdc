@@ -16,12 +16,12 @@ package coordinator
 import (
 	"context"
 	"math"
-	"sync"
 	"time"
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
+	"github.com/pingcap/ticdc/coordinator/gccleaner"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -42,119 +42,6 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
-
-type pendingChangefeedServiceSafepointEntry struct {
-	keyspaceID uint32
-
-	needCreating bool
-	needResuming bool
-
-	creatingAddedEpoch uint64
-	resumingAddedEpoch uint64
-}
-
-type pendingChangefeedServiceSafepointTask struct {
-	changefeedID common.ChangeFeedID
-	keyspaceID   uint32
-	tag          string
-}
-
-type pendingChangefeedServiceSafepoint struct {
-	mu sync.Mutex
-	// updateEpoch increases at the beginning of each coordinator GC tick.
-	updateEpoch uint64
-	// lastSucceededEpoch is updated after a successful call to updateGCSafepoint.
-	// Only entries added before this epoch are safe to undo.
-	lastSucceededEpoch uint64
-	// changefeedID -> entry
-	pending map[common.ChangeFeedID]*pendingChangefeedServiceSafepointEntry
-}
-
-func newPendingChangefeedServiceSafepoint() pendingChangefeedServiceSafepoint {
-	return pendingChangefeedServiceSafepoint{
-		pending: make(map[common.ChangeFeedID]*pendingChangefeedServiceSafepointEntry),
-	}
-}
-
-func (p *pendingChangefeedServiceSafepoint) beginGCTick() {
-	p.mu.Lock()
-	p.updateEpoch++
-	p.mu.Unlock()
-}
-
-func (p *pendingChangefeedServiceSafepoint) markUpdateSucceeded() {
-	p.mu.Lock()
-	p.lastSucceededEpoch = p.updateEpoch
-	p.mu.Unlock()
-}
-
-func (p *pendingChangefeedServiceSafepoint) addCreating(changefeedID common.ChangeFeedID, keyspaceID uint32) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if p.pending == nil {
-		p.pending = make(map[common.ChangeFeedID]*pendingChangefeedServiceSafepointEntry)
-	}
-
-	entry := p.pending[changefeedID]
-	if entry == nil {
-		entry = &pendingChangefeedServiceSafepointEntry{}
-		p.pending[changefeedID] = entry
-	}
-	entry.keyspaceID = keyspaceID
-	entry.needCreating = true
-	entry.creatingAddedEpoch = p.updateEpoch
-}
-
-func (p *pendingChangefeedServiceSafepoint) addResuming(changefeedID common.ChangeFeedID, keyspaceID uint32) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if p.pending == nil {
-		p.pending = make(map[common.ChangeFeedID]*pendingChangefeedServiceSafepointEntry)
-	}
-
-	entry := p.pending[changefeedID]
-	if entry == nil {
-		entry = &pendingChangefeedServiceSafepointEntry{}
-		p.pending[changefeedID] = entry
-	}
-	entry.keyspaceID = keyspaceID
-	entry.needResuming = true
-	entry.resumingAddedEpoch = p.updateEpoch
-}
-
-func (p *pendingChangefeedServiceSafepoint) takeReadyForUndo() []pendingChangefeedServiceSafepointTask {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	epoch := p.lastSucceededEpoch
-	tasks := make([]pendingChangefeedServiceSafepointTask, 0, len(p.pending))
-
-	for changefeedID, entry := range p.pending {
-		if entry.needCreating && entry.creatingAddedEpoch < epoch {
-			tasks = append(tasks, pendingChangefeedServiceSafepointTask{
-				changefeedID: changefeedID,
-				keyspaceID:   entry.keyspaceID,
-				tag:          gc.EnsureGCServiceCreating,
-			})
-			entry.needCreating = false
-		}
-		if entry.needResuming && entry.resumingAddedEpoch < epoch {
-			tasks = append(tasks, pendingChangefeedServiceSafepointTask{
-				changefeedID: changefeedID,
-				keyspaceID:   entry.keyspaceID,
-				tag:          gc.EnsureGCServiceResuming,
-			})
-			entry.needResuming = false
-		}
-		if !entry.needCreating && !entry.needResuming {
-			delete(p.pending, changefeedID)
-		}
-	}
-
-	return tasks
-}
 
 // Message Flow in Coordinator:
 // (from maintainer)
@@ -196,8 +83,7 @@ type coordinator struct {
 	pdClient  pd.Client
 	pdClock   pdutil.Clock
 
-	pendingChangefeedServiceSafepoint pendingChangefeedServiceSafepoint
-	changefeedServiceSafepointCleaner *changefeedServiceSafepointCleaner
+	gcCleaner *gccleaner.Cleaner
 
 	// eventCh is used to receive the event from message center, basically these messages
 	// are from maintainer.
@@ -222,24 +108,19 @@ func New(node *node.Info,
 ) server.Coordinator {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	c := &coordinator{
-		version:                           version,
-		nodeInfo:                          node,
-		gcServiceID:                       gcServiceID,
-		lastTickTime:                      time.Now(),
-		gcManager:                         gc.NewManager(gcServiceID, pdClient),
-		eventCh:                           chann.NewAutoDrainChann[*Event](),
-		pdClient:                          pdClient,
-		pdClock:                           appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
-		mc:                                mc,
-		changefeedChangeCh:                make(chan []*changefeedChange, 1024),
-		backend:                           backend,
-		pendingChangefeedServiceSafepoint: newPendingChangefeedServiceSafepoint(),
+		version:            version,
+		nodeInfo:           node,
+		gcServiceID:        gcServiceID,
+		lastTickTime:       time.Now(),
+		gcManager:          gc.NewManager(gcServiceID, pdClient),
+		eventCh:            chann.NewAutoDrainChann[*Event](),
+		pdClient:           pdClient,
+		pdClock:            appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		mc:                 mc,
+		changefeedChangeCh: make(chan []*changefeedChange, 1024),
+		backend:            backend,
+		gcCleaner:          gccleaner.New(pdClient, gcServiceID),
 	}
-	c.changefeedServiceSafepointCleaner = newChangefeedServiceSafepointCleaner(
-		c.pdClient,
-		c.gcServiceID,
-		&c.pendingChangefeedServiceSafepoint,
-	)
 	// handle messages from message center
 	mc.RegisterHandler(messaging.CoordinatorTopic, c.recvMessages)
 	c.controller = NewController(
@@ -299,7 +180,7 @@ func (c *coordinator) Run(ctx context.Context) error {
 		return c.runHandleEvent(ctx)
 	})
 	eg.Go(func() error {
-		return c.changefeedServiceSafepointCleaner.Run(ctx)
+		return c.gcCleaner.Run(ctx)
 	})
 
 	eg.Go(func() error {
@@ -333,11 +214,10 @@ func (c *coordinator) runWithGCTicker(ctx context.Context, tick <-chan time.Time
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-tick:
-			c.pendingChangefeedServiceSafepoint.beginGCTick()
+			c.gcCleaner.BeginGCTick()
 			err := c.updateGCSafepoint(ctx)
 			if err == nil {
-				c.pendingChangefeedServiceSafepoint.markUpdateSucceeded()
-				c.changefeedServiceSafepointCleaner.Trigger()
+				c.gcCleaner.OnUpdateGCSafepointSucceeded()
 			}
 			now := time.Now()
 			metrics.CoordinatorCounter.Add(float64(now.Sub(c.lastTickTime)) / float64(time.Second))
@@ -479,7 +359,7 @@ func (c *coordinator) CreateChangefeed(ctx context.Context, info *config.ChangeF
 		return err
 	}
 
-	c.pendingChangefeedServiceSafepoint.addCreating(info.ChangefeedID, info.KeyspaceID)
+	c.gcCleaner.Add(info.ChangefeedID, info.KeyspaceID, gc.EnsureGCServiceCreating)
 	return nil
 }
 
@@ -498,7 +378,7 @@ func (c *coordinator) ResumeChangefeed(ctx context.Context, id common.ChangeFeed
 	if overwriteCheckpointTs {
 		cf := c.controller.getChangefeed(id)
 		if cf != nil {
-			c.pendingChangefeedServiceSafepoint.addResuming(id, cf.GetKeyspaceID())
+			c.gcCleaner.Add(id, cf.GetKeyspaceID(), gc.EnsureGCServiceResuming)
 		}
 	}
 	return nil
