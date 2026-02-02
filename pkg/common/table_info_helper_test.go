@@ -591,13 +591,13 @@ func TestGetOrSetColumnSchema_DifferentHandleFlags(t *testing.T) {
 	indices := []*model.IndexInfo{
 		{
 			ID:      1,
-			Name:    ast.NewCIStr("PRIMARY"),
+			Name:    parser_model.NewCIStr("PRIMARY"),
 			Primary: true,
 			Unique:  true,
 			State:   model.StatePublic,
 			Columns: []*model.IndexColumn{
 				{
-					Name:   ast.NewCIStr("id"),
+					Name:   parser_model.NewCIStr("id"),
 					Offset: 0,
 				},
 			},
@@ -606,7 +606,7 @@ func TestGetOrSetColumnSchema_DifferentHandleFlags(t *testing.T) {
 
 	commonHandleTable := &model.TableInfo{
 		ID:             1,
-		Name:           ast.NewCIStr("t1"),
+		Name:           parser_model.NewCIStr("t1"),
 		PKIsHandle:     false,
 		IsCommonHandle: true,
 		Columns:        []*model.ColumnInfo{idCol},
@@ -615,7 +615,7 @@ func TestGetOrSetColumnSchema_DifferentHandleFlags(t *testing.T) {
 
 	nonCommonHandleTable := &model.TableInfo{
 		ID:             2,
-		Name:           ast.NewCIStr("t2"),
+		Name:           parser_model.NewCIStr("t2"),
 		PKIsHandle:     false,
 		IsCommonHandle: false,
 		Columns:        []*model.ColumnInfo{idCol},
@@ -642,19 +642,19 @@ func TestGetOrSetColumnSchema_DifferentIndexState(t *testing.T) {
 	buildTable := func(indexState model.SchemaState) *model.TableInfo {
 		return &model.TableInfo{
 			ID:         1,
-			Name:       ast.NewCIStr("t"),
+			Name:       parser_model.NewCIStr("t"),
 			PKIsHandle: true,
 			Columns:    []*model.ColumnInfo{idCol},
 			Indices: []*model.IndexInfo{
 				{
 					ID:      1,
-					Name:    ast.NewCIStr("PRIMARY"),
+					Name:    parser_model.NewCIStr("PRIMARY"),
 					Primary: true,
 					Unique:  true,
 					State:   indexState,
 					Columns: []*model.IndexColumn{
 						{
-							Name:   ast.NewCIStr("id"),
+							Name:   parser_model.NewCIStr("id"),
 							Offset: 0,
 						},
 					},
@@ -732,7 +732,7 @@ func TestGetOrSetColumnSchema_SameColumnsAndIndices_ChecksAdditionalColumnAttrs(
 	buildTable := func(idCol, otherCol *model.ColumnInfo) *model.TableInfo {
 		return &model.TableInfo{
 			ID:         1,
-			Name:       ast.NewCIStr("t"),
+			Name:       parser_model.NewCIStr("t"),
 			PKIsHandle: true,
 			Columns: []*model.ColumnInfo{
 				idCol,
@@ -741,13 +741,13 @@ func TestGetOrSetColumnSchema_SameColumnsAndIndices_ChecksAdditionalColumnAttrs(
 			Indices: []*model.IndexInfo{
 				{
 					ID:      1,
-					Name:    ast.NewCIStr("PRIMARY"),
+					Name:    parser_model.NewCIStr("PRIMARY"),
 					Primary: true,
 					Unique:  true,
 					State:   model.StatePublic,
 					Columns: []*model.IndexColumn{
 						{
-							Name:   ast.NewCIStr("id"),
+							Name:   parser_model.NewCIStr("id"),
 							Offset: 0,
 						},
 					},
