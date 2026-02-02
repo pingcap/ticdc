@@ -84,7 +84,7 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 	}
 
 	if shouldSwitchDB {
-		_, err = tx.ExecContext(ctx, "USE "+common.QuoteName(event.GetSchemaName())+";")
+		_, err = tx.ExecContext(ctx, "USE "+common.QuoteName(event.GetDDLSchemaName())+";")
 		if err != nil {
 			if rbErr := tx.Rollback(); rbErr != nil {
 				log.Error("Failed to rollback", zap.Error(err))

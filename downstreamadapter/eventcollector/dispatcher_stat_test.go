@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
@@ -45,6 +46,7 @@ type mockDispatcher struct {
 	checkPointTs uint64
 
 	skipSyncpointAtStartTs bool
+	router                 *sinkutil.Router
 }
 
 func newMockDispatcher(id common.DispatcherID, startTs uint64) *mockDispatcher {
@@ -129,6 +131,10 @@ func (m *mockDispatcher) GetIntegrityConfig() *eventpb.IntegrityConfig {
 
 func (m *mockDispatcher) IsOutputRawChangeEvent() bool {
 	return false
+}
+
+func (m *mockDispatcher) GetRouter() *sinkutil.Router {
+	return m.router
 }
 
 // mockEvent implements the Event interface for testing
@@ -1338,5 +1344,318 @@ func TestRegisterTo(t *testing.T) {
 		case <-time.After(1 * time.Second):
 			require.Fail(t, "timed out waiting for message")
 		}
+	})
+}
+
+func TestApplyRoutingToTableInfo(t *testing.T) {
+	t.Parallel()
+
+	localServerID := node.ID("local")
+	remoteServerID := node.ID("remote")
+
+	// Create a router that routes source_db.* -> target_db.*
+	router, err := sinkutil.NewRouter(true, []sinkutil.RoutingRuleConfig{
+		{Matcher: []string{"source_db.*"}, SchemaRule: "target_db", TableRule: sinkutil.TablePlaceholder},
+	})
+	require.NoError(t, err)
+
+	t.Run("DDL with TableInfo gets routing applied and stored", func(t *testing.T) {
+		// Capture the event passed to HandleEvents to verify routing was applied
+		var capturedEvent *commonEvent.DDLEvent
+		mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
+		mockDisp.router = router
+		mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) bool {
+			if len(events) > 0 {
+				capturedEvent = events[0].Event.(*commonEvent.DDLEvent)
+			}
+			return false
+		}
+
+		stat := &dispatcherStat{
+			target:         mockDisp,
+			eventCollector: newTestEventCollector(localServerID),
+		}
+		stat.connState.setEventServiceID(remoteServerID)
+		stat.epoch.Store(10)
+		stat.lastEventSeq.Store(1)
+		stat.lastEventCommitTs.Store(50)
+
+		// Create original TableInfo - should NOT be mutated
+		originalTableInfo := &common.TableInfo{
+			TableName: common.TableName{
+				Schema:  "source_db",
+				Table:   "users",
+				TableID: 123,
+			},
+		}
+
+		ddlEvent := &commonEvent.DDLEvent{
+			Version:    commonEvent.DDLEventVersion1,
+			FinishedTs: 100,
+			Epoch:      10,
+			Seq:        2,
+			TableInfo:  originalTableInfo,
+		}
+
+		events := []dispatcher.DispatcherEvent{
+			{From: &remoteServerID, Event: ddlEvent},
+		}
+
+		stat.handleDataEvents(events...)
+
+		// Verify the stored tableInfo has routing applied
+		storedTableInfo := stat.tableInfo.Load().(*common.TableInfo)
+		require.NotNil(t, storedTableInfo)
+		require.Equal(t, "target_db", storedTableInfo.TableName.TargetSchema)
+		require.Equal(t, "users", storedTableInfo.TableName.TargetTable)
+
+		// Verify original TableInfo was NOT mutated
+		require.Equal(t, "", originalTableInfo.TableName.TargetSchema)
+		require.Equal(t, "", originalTableInfo.TableName.TargetTable)
+
+		// Verify original ddlEvent was NOT mutated (due to CloneForRouting)
+		require.Equal(t, "", ddlEvent.TableInfo.TableName.TargetSchema)
+
+		// Verify the cloned event passed to HandleEvents has routing applied
+		require.NotNil(t, capturedEvent)
+		require.Equal(t, "target_db", capturedEvent.TableInfo.TableName.TargetSchema)
+	})
+
+	t.Run("DDL with MultipleTableInfos gets routing applied but only TableInfo stored", func(t *testing.T) {
+		// Capture the event passed to HandleEvents to verify routing was applied
+		var capturedEvent *commonEvent.DDLEvent
+		mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
+		mockDisp.router = router
+		mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) bool {
+			if len(events) > 0 {
+				capturedEvent = events[0].Event.(*commonEvent.DDLEvent)
+			}
+			return false
+		}
+
+		stat := &dispatcherStat{
+			target:         mockDisp,
+			eventCollector: newTestEventCollector(localServerID),
+		}
+		stat.connState.setEventServiceID(remoteServerID)
+		stat.epoch.Store(10)
+		stat.lastEventSeq.Store(1)
+		stat.lastEventCommitTs.Store(50)
+
+		// This dispatcher's table
+		primaryTableInfo := &common.TableInfo{
+			TableName: common.TableName{
+				Schema:  "source_db",
+				Table:   "orders",
+				TableID: 100,
+			},
+		}
+
+		// Other tables in a multi-table DDL (e.g., RENAME TABLE)
+		otherTableInfo1 := &common.TableInfo{
+			TableName: common.TableName{
+				Schema:  "source_db",
+				Table:   "old_name",
+				TableID: 200,
+			},
+		}
+		otherTableInfo2 := &common.TableInfo{
+			TableName: common.TableName{
+				Schema:  "source_db",
+				Table:   "new_name",
+				TableID: 201,
+			},
+		}
+
+		ddlEvent := &commonEvent.DDLEvent{
+			Version:            commonEvent.DDLEventVersion1,
+			FinishedTs:         100,
+			Epoch:              10,
+			Seq:                2,
+			TableInfo:          primaryTableInfo,
+			MultipleTableInfos: []*common.TableInfo{otherTableInfo1, otherTableInfo2},
+		}
+
+		events := []dispatcher.DispatcherEvent{
+			{From: &remoteServerID, Event: ddlEvent},
+		}
+
+		stat.handleDataEvents(events...)
+
+		// Verify only the primary TableInfo is stored
+		storedTableInfo := stat.tableInfo.Load().(*common.TableInfo)
+		require.NotNil(t, storedTableInfo)
+		require.Equal(t, "orders", storedTableInfo.TableName.Table)
+		require.Equal(t, "target_db", storedTableInfo.TableName.TargetSchema)
+
+		// Verify original ddlEvent was NOT mutated (due to CloneForRouting)
+		require.Equal(t, "", ddlEvent.MultipleTableInfos[0].TableName.TargetSchema)
+		require.Equal(t, "", ddlEvent.MultipleTableInfos[1].TableName.TargetSchema)
+
+		// Verify the cloned event passed to HandleEvents has routing applied
+		require.NotNil(t, capturedEvent)
+		require.Equal(t, "target_db", capturedEvent.MultipleTableInfos[0].TableName.TargetSchema)
+		require.Equal(t, "target_db", capturedEvent.MultipleTableInfos[1].TableName.TargetSchema)
+
+		// Verify originals were NOT mutated
+		require.Equal(t, "", otherTableInfo1.TableName.TargetSchema)
+		require.Equal(t, "", otherTableInfo2.TableName.TargetSchema)
+	})
+
+	t.Run("DDL without routing configured passes through unchanged", func(t *testing.T) {
+		mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
+		// No router configured
+		mockDisp.router = nil
+		mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) bool {
+			return false
+		}
+
+		stat := &dispatcherStat{
+			target:         mockDisp,
+			eventCollector: newTestEventCollector(localServerID),
+		}
+		stat.connState.setEventServiceID(remoteServerID)
+		stat.epoch.Store(10)
+		stat.lastEventSeq.Store(1)
+		stat.lastEventCommitTs.Store(50)
+
+		tableInfo := &common.TableInfo{
+			TableName: common.TableName{
+				Schema:  "source_db",
+				Table:   "users",
+				TableID: 123,
+			},
+		}
+
+		ddlEvent := &commonEvent.DDLEvent{
+			Version:    commonEvent.DDLEventVersion1,
+			FinishedTs: 100,
+			Epoch:      10,
+			Seq:        2,
+			TableInfo:  tableInfo,
+		}
+
+		events := []dispatcher.DispatcherEvent{
+			{From: &remoteServerID, Event: ddlEvent},
+		}
+
+		stat.handleDataEvents(events...)
+
+		// Verify tableInfo is stored (same object since no routing)
+		storedTableInfo := stat.tableInfo.Load().(*common.TableInfo)
+		require.NotNil(t, storedTableInfo)
+		// No routing applied, so TargetSchema/TargetTable should be empty
+		require.Equal(t, "", storedTableInfo.TableName.TargetSchema)
+		require.Equal(t, "", storedTableInfo.TableName.TargetTable)
+	})
+
+	t.Run("DDL with table-only routing (schema unchanged)", func(t *testing.T) {
+		// Create a router that only renames the table, keeping schema the same
+		tableOnlyRouter, err := sinkutil.NewRouter(true, []sinkutil.RoutingRuleConfig{
+			{Matcher: []string{"mydb.old_users"}, SchemaRule: "{schema}", TableRule: "new_users"},
+		})
+		require.NoError(t, err)
+
+		mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
+		mockDisp.router = tableOnlyRouter
+		mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) bool {
+			return false
+		}
+
+		stat := &dispatcherStat{
+			target:         mockDisp,
+			eventCollector: newTestEventCollector(localServerID),
+		}
+		stat.connState.setEventServiceID(remoteServerID)
+		stat.epoch.Store(10)
+		stat.lastEventSeq.Store(1)
+		stat.lastEventCommitTs.Store(50)
+
+		originalTableInfo := &common.TableInfo{
+			TableName: common.TableName{
+				Schema:  "mydb",
+				Table:   "old_users",
+				TableID: 123,
+			},
+		}
+
+		ddlEvent := &commonEvent.DDLEvent{
+			Version:    commonEvent.DDLEventVersion1,
+			FinishedTs: 100,
+			Epoch:      10,
+			Seq:        2,
+			TableInfo:  originalTableInfo,
+		}
+
+		events := []dispatcher.DispatcherEvent{
+			{From: &remoteServerID, Event: ddlEvent},
+		}
+
+		stat.handleDataEvents(events...)
+
+		// Verify schema is unchanged but table is renamed
+		storedTableInfo := stat.tableInfo.Load().(*common.TableInfo)
+		require.NotNil(t, storedTableInfo)
+		require.Equal(t, "mydb", storedTableInfo.TableName.TargetSchema)
+		require.Equal(t, "new_users", storedTableInfo.TableName.TargetTable)
+
+		// Verify original was NOT mutated
+		require.Equal(t, "", originalTableInfo.TableName.TargetSchema)
+		require.Equal(t, "", originalTableInfo.TableName.TargetTable)
+	})
+
+	t.Run("DDL with both schema and table routing", func(t *testing.T) {
+		// Create a router that renames both schema and table
+		bothRouter, err := sinkutil.NewRouter(true, []sinkutil.RoutingRuleConfig{
+			{Matcher: []string{"staging.*"}, SchemaRule: "prod", TableRule: "{schema}_{table}"},
+		})
+		require.NoError(t, err)
+
+		mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
+		mockDisp.router = bothRouter
+		mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) bool {
+			return false
+		}
+
+		stat := &dispatcherStat{
+			target:         mockDisp,
+			eventCollector: newTestEventCollector(localServerID),
+		}
+		stat.connState.setEventServiceID(remoteServerID)
+		stat.epoch.Store(10)
+		stat.lastEventSeq.Store(1)
+		stat.lastEventCommitTs.Store(50)
+
+		originalTableInfo := &common.TableInfo{
+			TableName: common.TableName{
+				Schema:  "staging",
+				Table:   "events",
+				TableID: 456,
+			},
+		}
+
+		ddlEvent := &commonEvent.DDLEvent{
+			Version:    commonEvent.DDLEventVersion1,
+			FinishedTs: 100,
+			Epoch:      10,
+			Seq:        2,
+			TableInfo:  originalTableInfo,
+		}
+
+		events := []dispatcher.DispatcherEvent{
+			{From: &remoteServerID, Event: ddlEvent},
+		}
+
+		stat.handleDataEvents(events...)
+
+		// Verify both schema and table are renamed
+		storedTableInfo := stat.tableInfo.Load().(*common.TableInfo)
+		require.NotNil(t, storedTableInfo)
+		require.Equal(t, "prod", storedTableInfo.TableName.TargetSchema)
+		require.Equal(t, "staging_events", storedTableInfo.TableName.TargetTable)
+
+		// Verify original was NOT mutated
+		require.Equal(t, "", originalTableInfo.TableName.TargetSchema)
+		require.Equal(t, "", originalTableInfo.TableName.TargetTable)
 	})
 }
