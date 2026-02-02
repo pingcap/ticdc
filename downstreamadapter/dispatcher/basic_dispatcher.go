@@ -797,15 +797,12 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 			ID: dispatcherID.ToPB(),
 			State: &heartbeatpb.State{
 				IsBlocked:   true,
-				BlockTs:     dispatcherStatus.GetAction().CommitTs,
-				IsSyncPoint: dispatcherStatus.GetAction().IsSyncPoint,
+				BlockTs:     action.CommitTs,
+				IsSyncPoint: action.IsSyncPoint,
 				Stage:       heartbeatpb.BlockStage_DONE,
 			},
 			Mode: d.GetMode(),
 		}
-	} else {
-		log.Warn("dispatcher receive nil action",
-			zap.Any("dispatcherID", dispatcherID), zap.Uint64("commitTs", ack.CommitTs))
 	}
 	return false
 }
