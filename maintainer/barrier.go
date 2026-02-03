@@ -49,6 +49,7 @@ type Barrier struct {
 	syncPointSkipEnabled       atomic.Bool
 	syncPointSkipCheckpointLag atomic.Int64 // nanoseconds
 	syncPointInterval          atomic.Int64 // nanoseconds
+	maxSkippedSyncPointTs      atomic.Uint64
 }
 
 // NewBarrier create a new barrier for the changefeed
@@ -71,41 +72,72 @@ func NewBarrier(spanController *span.Controller,
 }
 
 func (b *Barrier) SetSyncPointSkipState(enabled bool, checkpointLag time.Duration, syncPointInterval time.Duration) {
-	b.syncPointSkipEnabled.Store(enabled)
+	wasEnabled := b.syncPointSkipEnabled.Swap(enabled)
 	b.syncPointSkipCheckpointLag.Store(int64(checkpointLag))
 	b.syncPointInterval.Store(int64(syncPointInterval))
+
+	// When enabling skip, drop any pending syncpoint events in barrier state.
+	// Dispatchers will resend their WAITING states and receive Action_Skip directly.
+	if enabled && !wasEnabled {
+		var keys []eventKey
+		b.blockedEvents.Range(func(key eventKey, barrierEvent *BarrierEvent) bool {
+			if barrierEvent != nil && barrierEvent.isSyncPoint {
+				keys = append(keys, key)
+			}
+			return true
+		})
+		for _, key := range keys {
+			b.blockedEvents.Delete(key)
+		}
+	}
 }
 
-func (b *Barrier) maybeSkipSyncPointEvent(event *BarrierEvent) {
-	if event == nil || !event.isSyncPoint {
-		return
-	}
-	if event.selected.Load() || event.skipSyncPoint {
-		return
-	}
-	if !b.syncPointSkipEnabled.Load() {
-		return
-	}
+func (b *Barrier) isSkippedSyncPointCommitTs(commitTs uint64) bool {
+	return commitTs > 0 && commitTs <= b.maxSkippedSyncPointTs.Load()
+}
 
-	event.skipSyncPoint = true
-	event.selected.Store(true)
-	event.writerDispatcherAdvanced = true
-	// Ensure the next resend can deliver the skip actions immediately.
-	event.lastResendTime = time.Now().Add(-20 * time.Second)
+func (b *Barrier) recordSkippedSyncPoint(cfID common.ChangeFeedID, commitTs uint64) {
+	if commitTs == 0 {
+		return
+	}
+	for {
+		old := b.maxSkippedSyncPointTs.Load()
+		if commitTs <= old {
+			return
+		}
+		if b.maxSkippedSyncPointTs.CompareAndSwap(old, commitTs) {
+			break
+		}
+	}
 
 	checkpointLag := time.Duration(b.syncPointSkipCheckpointLag.Load())
 	syncPointInterval := time.Duration(b.syncPointInterval.Load())
 	threshold := 2 * syncPointInterval
-	metrics.MaintainerSkipSyncPointCount.WithLabelValues(event.cfID.Keyspace(), event.cfID.Name()).Inc()
+	metrics.MaintainerSkipSyncPointCount.WithLabelValues(cfID.Keyspace(), cfID.Name()).Inc()
 	log.Info("skip syncpoint",
-		zap.String("changefeed", event.cfID.Name()),
-		zap.String("keyspace", event.cfID.Keyspace()),
-		zap.Uint64("commitTs", event.commitTs),
+		zap.String("changefeed", cfID.Name()),
+		zap.String("keyspace", cfID.Keyspace()),
+		zap.Uint64("commitTs", commitTs),
 		zap.Duration("checkpointLag", checkpointLag),
 		zap.Duration("syncPointInterval", syncPointInterval),
 		zap.Duration("threshold", threshold),
 		zap.Int64("mode", b.mode),
 	)
+}
+
+func (b *Barrier) buildSkipSyncPointStatus(dispatcherID *heartbeatpb.DispatcherID, commitTs uint64) *heartbeatpb.DispatcherStatus {
+	return &heartbeatpb.DispatcherStatus{
+		InfluencedDispatchers: &heartbeatpb.InfluencedDispatchers{
+			InfluenceType: heartbeatpb.InfluenceType_Normal,
+			DispatcherIDs: []*heartbeatpb.DispatcherID{dispatcherID},
+		},
+		Action: &heartbeatpb.DispatcherAction{
+			Action:      heartbeatpb.Action_Skip,
+			CommitTs:    commitTs,
+			IsSyncPoint: true,
+		},
+		Ack: ackEvent(commitTs, true),
+	}
 }
 
 // HandleStatus handle the block status from dispatcher manager
@@ -119,10 +151,14 @@ func (b *Barrier) HandleStatus(from node.ID,
 	actions := map[node.ID][]*heartbeatpb.DispatcherStatus{}
 	var dispatcherStatus []*heartbeatpb.DispatcherStatus
 	for _, status := range request.BlockStatuses {
+		if status.State == nil {
+			continue
+		}
+
 		// only receive block status from the replicating dispatcher
 		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
+		task := b.spanController.GetTaskByID(dispatcherID)
 		if dispatcherID != b.spanController.GetDDLDispatcherID() {
-			task := b.spanController.GetTaskByID(dispatcherID)
 			if task == nil {
 				log.Info("Get block status from unexisted dispatcher, ignore it", zap.String("changefeed", request.ChangefeedID.GetName()), zap.String("dispatcher", dispatcherID.String()), zap.Uint64("commitTs", status.State.BlockTs))
 				continue
@@ -132,6 +168,46 @@ func (b *Barrier) HandleStatus(from node.ID,
 					continue
 				}
 			}
+		}
+
+		if status.State.IsSyncPoint &&
+			status.State.Stage == heartbeatpb.BlockStage_DONE &&
+			(b.syncPointSkipEnabled.Load() || b.isSkippedSyncPointCommitTs(status.State.BlockTs)) {
+			// Ignore DONE statuses for skipped syncpoints. They are not tracked in blockedEvents.
+			if task != nil {
+				task.UpdateStatus(&heartbeatpb.TableSpanStatus{
+					ID:              status.ID,
+					CheckpointTs:    status.State.BlockTs - 1,
+					ComponentStatus: heartbeatpb.ComponentState_Working,
+					Mode:            status.Mode,
+				})
+				task.UpdateBlockState(*status.State)
+			}
+			continue
+		}
+
+		shouldSkipSyncPoint := status.State.IsSyncPoint &&
+			status.State.IsBlocked &&
+			status.State.BlockTs > 0 &&
+			(status.State.Stage == heartbeatpb.BlockStage_NONE ||
+				status.State.Stage == heartbeatpb.BlockStage_WAITING ||
+				status.State.Stage == heartbeatpb.BlockStage_WRITING) &&
+			(b.syncPointSkipEnabled.Load() || b.isSkippedSyncPointCommitTs(status.State.BlockTs))
+		if shouldSkipSyncPoint {
+			// Track progress in span controller (same as handleOneStatus would do).
+			if task != nil {
+				task.UpdateStatus(&heartbeatpb.TableSpanStatus{
+					ID:              status.ID,
+					CheckpointTs:    status.State.BlockTs - 1,
+					ComponentStatus: heartbeatpb.ComponentState_Working,
+					Mode:            status.Mode,
+				})
+				task.UpdateBlockState(*status.State)
+			}
+
+			actions[from] = append(actions[from], b.buildSkipSyncPointStatus(status.ID, status.State.BlockTs))
+			b.recordSkippedSyncPoint(common.NewChangefeedIDFromPB(request.ChangefeedID), status.State.BlockTs)
+			continue
 		}
 
 		// deal with block status, and check whether need to return action.
@@ -262,7 +338,6 @@ func (b *Barrier) Resend() []*messaging.TargetMessage {
 	eventList := make([]*BarrierEvent, 0)
 	b.blockedEvents.Range(func(key eventKey, barrierEvent *BarrierEvent) bool {
 		// todo: we can limit the number of messages to send in one round here
-		b.maybeSkipSyncPointEvent(barrierEvent)
 		msgs = append(msgs, barrierEvent.resend(b.mode)...)
 
 		eventList = append(eventList, barrierEvent)
@@ -388,19 +463,6 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 			event.tableTriggerDispatcherRelated = true
 		}
 
-		// Skip syncpoint alignment when maintainer observes large checkpoint lag.
-		// It marks the syncpoint barrier as skipped and relies on the resend loop
-		// to broadcast Action_Skip to all dispatcher managers.
-		if blockState.IsSyncPoint {
-			b.maybeSkipSyncPointEvent(event)
-			if event.skipSyncPoint {
-				event.markDispatcherEventDone(dispatcherID)
-				// No need to return a per-dispatcher action here: resend will broadcast
-				// the skip action to all nodes.
-				return event, nil, "", true
-			}
-		}
-
 		if event.selected.Load() {
 			// the event already in the selected state, ignore the block event just sent ack
 			log.Debug("the block event already selected, ignore the block event",
@@ -428,17 +490,13 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 			blockState.BlockTables != nil &&
 			(blockState.BlockTables.InfluenceType != heartbeatpb.InfluenceType_Normal) {
 			if pending := b.pendingEvents.Len(); pending > 0 {
-				// When syncpoint skip is enabled, we will skip this syncpoint anyway and do
-				// not need a precise task snapshot to build the range checker.
-				if !blockState.IsSyncPoint || !b.syncPointSkipEnabled.Load() {
-					log.Debug("discard db/all block event from ddl dispatcher due to pending schedule events, wait next resend",
-						zap.String("changefeed", changefeedID.Name()),
-						zap.String("dispatcher", dispatcherID.String()),
-						zap.Uint64("commitTs", blockState.BlockTs),
-						zap.Bool("isSyncPoint", blockState.IsSyncPoint),
-						zap.Int("pendingScheduleEvents", pending))
-					return event, nil, "", false
-				}
+				log.Debug("discard db/all block event from ddl dispatcher due to pending schedule events, wait next resend",
+					zap.String("changefeed", changefeedID.Name()),
+					zap.String("dispatcher", dispatcherID.String()),
+					zap.Uint64("commitTs", blockState.BlockTs),
+					zap.Bool("isSyncPoint", blockState.IsSyncPoint),
+					zap.Int("pendingScheduleEvents", pending))
+				return event, nil, "", false
 			}
 		}
 

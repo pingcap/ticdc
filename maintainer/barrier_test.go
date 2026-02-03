@@ -865,6 +865,8 @@ func TestSyncPointSkip(t *testing.T) {
 	spanController.MarkSpanReplicating(selectedRep)
 
 	barrier := NewBarrier(spanController, operatorController, true, nil, common.DefaultMode)
+	barrier.SetSyncPointSkipState(true, 5*time.Minute, 2*time.Minute)
+
 	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
@@ -904,42 +906,46 @@ func TestSyncPointSkip(t *testing.T) {
 		},
 	})
 	require.NotNil(t, msgs)
-	require.NotEmpty(t, msgs)
-
-	barrier.SetSyncPointSkipState(true, 5*time.Minute, 2*time.Minute)
-	resendMsgs := barrier.Resend()
-	require.Len(t, resendMsgs, 2)
-	for _, msg := range resendMsgs {
-		resp := msg.Message[0].(*heartbeatpb.HeartBeatResponse)
-		require.Len(t, resp.DispatcherStatuses, 1)
-		require.Equal(t, heartbeatpb.Action_Skip, resp.DispatcherStatuses[0].Action.Action)
-		require.Equal(t, uint64(10), resp.DispatcherStatuses[0].Action.CommitTs)
-		require.True(t, resp.DispatcherStatuses[0].Action.IsSyncPoint)
+	require.Len(t, msgs, 1)
+	resp := msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
+	require.Len(t, resp.DispatcherStatuses, 3)
+	for _, st := range resp.DispatcherStatuses {
+		require.NotNil(t, st.Action)
+		require.Equal(t, heartbeatpb.Action_Skip, st.Action.Action)
+		require.Equal(t, uint64(10), st.Action.CommitTs)
+		require.True(t, st.Action.IsSyncPoint)
+		require.NotNil(t, st.Ack)
+		require.Equal(t, uint64(10), st.Ack.CommitTs)
+		require.True(t, st.Ack.IsSyncPoint)
 	}
+
+	msgs = barrier.HandleStatus("node2", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID: dispatcherIDs[2],
+				State: &heartbeatpb.State{
+					IsBlocked: true,
+					BlockTs:   10,
+					BlockTables: &heartbeatpb.InfluencedTables{
+						InfluenceType: heartbeatpb.InfluenceType_All,
+					},
+					IsSyncPoint: true,
+				},
+			},
+		},
+	})
+	require.Len(t, msgs, 1)
+	resp = msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
+	require.Len(t, resp.DispatcherStatuses, 1)
+	require.NotNil(t, resp.DispatcherStatuses[0].Action)
+	require.Equal(t, heartbeatpb.Action_Skip, resp.DispatcherStatuses[0].Action.Action)
 
 	_ = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
 			{
 				ID: spanController.GetDDLDispatcherID().ToPB(),
-				State: &heartbeatpb.State{
-					IsBlocked:   true,
-					BlockTs:     10,
-					Stage:       heartbeatpb.BlockStage_DONE,
-					IsSyncPoint: true,
-				},
-			},
-			{
-				ID: dispatcherIDs[0],
-				State: &heartbeatpb.State{
-					IsBlocked:   true,
-					BlockTs:     10,
-					Stage:       heartbeatpb.BlockStage_DONE,
-					IsSyncPoint: true,
-				},
-			},
-			{
-				ID: dispatcherIDs[1],
 				State: &heartbeatpb.State{
 					IsBlocked:   true,
 					BlockTs:     10,

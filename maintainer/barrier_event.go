@@ -52,7 +52,6 @@ type BarrierEvent struct {
 	newTables          []*heartbeatpb.Table
 	schemaIDChange     []*heartbeatpb.SchemaIDChange
 	isSyncPoint        bool
-	skipSyncPoint      bool
 	needSchedule       bool
 	// if the split table is enable for this changefeed, if not we can use tableID to check coverage
 	dynamicSplitEnabled bool
@@ -674,10 +673,6 @@ func (be *BarrierEvent) newWriterActionMessage(capture node.ID, mode int64) *mes
 }
 
 func (be *BarrierEvent) newPassActionMessage(capture node.ID, mode int64) *messaging.TargetMessage {
-	action := heartbeatpb.Action_Pass
-	if be.skipSyncPoint {
-		action = heartbeatpb.Action_Skip
-	}
 	influenced := &heartbeatpb.InfluencedDispatchers{
 		InfluenceType: be.blockedDispatchers.InfluenceType,
 		SchemaID:      be.blockedDispatchers.SchemaID,
@@ -693,7 +688,7 @@ func (be *BarrierEvent) newPassActionMessage(capture node.ID, mode int64) *messa
 			ChangefeedID: be.cfID.ToPB(),
 			DispatcherStatuses: []*heartbeatpb.DispatcherStatus{
 				{
-					Action:                be.action(action),
+					Action:                be.action(heartbeatpb.Action_Pass),
 					InfluencedDispatchers: influenced,
 				},
 			},
