@@ -198,7 +198,7 @@ func (c *coordinator) Run(ctx context.Context) error {
 // 3. handle the state changed event
 func (c *coordinator) run(ctx context.Context) error {
 	failpoint.Inject("InjectUpdateGCTickerInterval", func(val failpoint.Value) {
-		c.gcTickInterval = time.Duration(val.(int) * int(time.Millisecond))
+		c.gcTickInterval = time.Duration(val.(int) * int(time.Second))
 	})
 	failpoint.Inject("coordinator-run-with-error", func() error {
 		return errors.New("coordinator run with error")
