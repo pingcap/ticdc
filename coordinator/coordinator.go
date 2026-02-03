@@ -109,13 +109,14 @@ func New(node *node.Info,
 ) server.Coordinator {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	c := &coordinator{
-		version:            version,
-		nodeInfo:           node,
-		gcServiceID:        gcServiceID,
-		lastTickTime:       time.Now(),
-		gcManager:          gc.NewManager(gcServiceID, pdClient),
-		gcCleaner:          gccleaner.New(pdClient, gcServiceID),
-		gcTickInterval:     time.Minute,
+		version:        version,
+		nodeInfo:       node,
+		gcServiceID:    gcServiceID,
+		gcManager:      gc.NewManager(gcServiceID, pdClient),
+		gcCleaner:      gccleaner.New(pdClient, gcServiceID),
+		gcTickInterval: time.Minute,
+		lastTickTime:   time.Now(),
+
 		eventCh:            chann.NewAutoDrainChann[*Event](),
 		pdClient:           pdClient,
 		pdClock:            appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
