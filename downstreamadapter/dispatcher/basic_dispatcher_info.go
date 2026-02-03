@@ -230,7 +230,7 @@ func (d *BasicDispatcher) GetEventSizePerSecond() float32 {
 	return d.tableProgress.GetEventSizePerSecond()
 }
 
-func (d *BasicDispatcher) IsTableTriggerEventDispatcher() bool {
+func (d *BasicDispatcher) IsTableTriggerDispatcher() bool {
 	return d.tableSpan.Equal(common.KeyspaceDDLSpan(d.tableSpan.KeyspaceID))
 }
 

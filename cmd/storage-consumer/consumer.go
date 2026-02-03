@@ -134,7 +134,7 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 		SinkURI:    downstreamURIStr,
 		SinkConfig: replicaConfig.Sink,
 	}
-	sink, err := sink.New(stdCtx, cfg, commonType.NewChangeFeedIDWithName(defaultChangefeedName, commonType.DefaultKeyspaceNamme))
+	sink, err := sink.New(stdCtx, cfg, commonType.NewChangeFeedIDWithName(defaultChangefeedName, commonType.DefaultKeyspaceName))
 	if err != nil {
 		log.Error("failed to create sink", zap.Error(err))
 		return nil, err
@@ -265,7 +265,7 @@ func (c *consumer) appendRow2Group(dml *event.DMLEvent, enableTableAcrossNodes b
 	log.Warn("dml event commit ts fallback, ignore",
 		zap.Uint64("commitTs", dml.CommitTs),
 		zap.Any("highWatermark", group.HighWatermark),
-		zap.Any("row", dml),
+		zap.Stringer("row", dml),
 	)
 }
 

@@ -49,14 +49,14 @@ var (
 			Help:      "The number of remove path command",
 		}, []string{"module"})
 
-	DynamicStreamBatchSize = prometheus.NewHistogramVec(
+	DynamicStreamBatchCount = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "dynamic_stream",
-			Name:      "batch_size",
+			Name:      "batch_count",
 			Help:      "The number of events in each batch processed by dynamic stream",
 			Buckets:   prometheus.ExponentialBuckets(1, 2, 15), // 1 ~ 16384
-		}, []string{"module"})
+		}, []string{"module", "area"})
 	DynamicStreamBatchBytes = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
@@ -64,24 +64,27 @@ var (
 			Name:      "batch_bytes",
 			Help:      "The total bytes in each batch processed by dynamic stream",
 			Buckets:   prometheus.ExponentialBuckets(1024, 2, 18), // 1KB ~ 128MB
-		}, []string{"module"})
+		}, []string{"module", "area"})
 	DynamicStreamBatchDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
 			Subsystem: "dynamic_stream",
 			Name:      "batch_duration",
 			Help:      "The duration of batch each batch in dynamic stream",
-			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 19), // 40us to 10s
-		}, []string{"module"})
+			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 18), // 40us to 5s
+		}, []string{"module", "area"})
 )
 
 func initDynamicStreamMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(DynamicStreamMemoryUsage)
-	registry.MustRegister(DynamicStreamBatchSize)
+	registry.MustRegister(DynamicStreamBatchCount)
 	registry.MustRegister(DynamicStreamBatchBytes)
 	registry.MustRegister(DynamicStreamBatchDuration)
 	registry.MustRegister(DynamicStreamEventChanSize)
 	registry.MustRegister(DynamicStreamPendingQueueLen)
 	registry.MustRegister(DynamicStreamAddPathNum)
 	registry.MustRegister(DynamicStreamRemovePathNum)
+	registry.MustRegister(DynamicStreamBatchCount)
+	registry.MustRegister(DynamicStreamBatchBytes)
+	registry.MustRegister(DynamicStreamBatchDuration)
 }

@@ -251,6 +251,7 @@ func NewSubscriptionClient(
 	option.UseBuffer = true
 	option.EnableMemoryControl = true
 	ds := dynstream.NewParallelDynamicStream(
+		"log-puller",
 		&regionEventHandler{subClient: subClient},
 		option,
 	)

@@ -35,6 +35,19 @@ type LogLevelReq struct {
 	Level string `json:"log_level"`
 }
 
+// RedactModeReq redaction mode request
+// Use redact_info_log to match CLI flag naming convention
+// Accepts: "off", "on", "marker" (case-insensitive)
+type RedactModeReq struct {
+	Mode string `json:"redact_info_log"`
+}
+
+// RedactModeResp redaction mode response
+type RedactModeResp struct {
+	PreviousMode string `json:"previous_mode"`
+	CurrentMode  string `json:"current_mode"`
+}
+
 // ListResponse is the response for all List APIs
 type ListResponse[T any] struct {
 	Total int `json:"total"`
@@ -47,10 +60,11 @@ type Tso struct {
 	LogicTime int64 `json:"logic_time"`
 }
 
-// Tables contains IneligibleTables and EligibleTables
+// Tables contains IneligibleTables, EligibleTables and AllTables
 type Tables struct {
 	IneligibleTables []TableName `json:"ineligible_tables,omitempty"`
 	EligibleTables   []TableName `json:"eligible_tables,omitempty"`
+	AllTables        []TableName `json:"all_tables,omitempty"`
 }
 
 // TableName contains table information

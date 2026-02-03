@@ -22,7 +22,11 @@ import (
 	"go.uber.org/zap"
 )
 
+<<<<<<< HEAD
 func NewEventDynamicStream() dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
+=======
+func NewEventDynamicStream(isRedo bool) dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
+>>>>>>> master
 	option := dynstream.NewOption()
 	option.UseBuffer = false
 	// Enable memory control for dispatcher events dynamic stream.
@@ -34,7 +38,12 @@ func NewEventDynamicStream() dynstream.DynamicStream[common.GID, common.Dispatch
 	}
 
 	eventsHandler := &EventsHandler{}
-	stream := dynstream.NewParallelDynamicStream(eventsHandler, option)
+
+	module := "event-collector"
+	if isRedo {
+		module = "event-collector-redo"
+	}
+	stream := dynstream.NewParallelDynamicStream(module, eventsHandler, option)
 	stream.Start()
 	return stream
 }
@@ -150,6 +159,10 @@ func (h *EventsHandler) IsPaused(event dispatcher.DispatcherEvent) bool { return
 
 func (h *EventsHandler) GetArea(path common.DispatcherID, dest *dispatcherStat) common.GID {
 	return dest.target.GetChangefeedID().ID()
+}
+
+func (h *EventsHandler) GetMetricLabel(dest *dispatcherStat) string {
+	return dest.target.GetChangefeedID().String()
 }
 
 func (h *EventsHandler) GetTimestamp(event dispatcher.DispatcherEvent) dynstream.Timestamp {

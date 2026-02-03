@@ -124,7 +124,7 @@ func TestRegionCountSplitSpan(t *testing.T) {
 		},
 	}
 
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	for i, cs := range cases {
 		splitter := newRegionCountSplitter(
 			common.DefaultKeyspaceID,
@@ -219,7 +219,7 @@ func TestRegionCountEvenlySplitSpan(t *testing.T) {
 		},
 	}
 
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	spans := &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("t1"), EndKey: []byte("t2")}
 	for i, cs := range cases {
 		splitter := newRegionCountSplitter(
@@ -244,7 +244,7 @@ func TestSplitSpanRegionOutOfOrder(t *testing.T) {
 		RegionThreshold:    util.AddressOf(1),
 		RegionCountPerSpan: util.AddressOf(1),
 	}
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	splitter := newRegionCountSplitter(
 		common.DefaultKeyspaceID,
 		cfID,

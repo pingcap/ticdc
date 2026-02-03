@@ -43,7 +43,7 @@ func TestController_StopChangefeed(t *testing.T) {
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 
 	oc := NewOperatorController(self, changefeedDB, backend, 10)
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),
@@ -70,7 +70,7 @@ func TestController_AddOperator(t *testing.T) {
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	nodeManager.GetAliveNodes()[self.ID] = self
 	oc := NewOperatorController(self, changefeedDB, backend, 10)
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),
@@ -81,7 +81,7 @@ func TestController_AddOperator(t *testing.T) {
 
 	require.True(t, oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf, "n2")))
 	require.False(t, oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf, "n2")))
-	cf2ID := common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceNamme)
+	cf2ID := common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceName)
 	cf2 := changefeed.NewChangefeed(cf2ID, &config.ChangeFeedInfo{
 		ChangefeedID: cf2ID,
 		Config:       config.GetDefaultReplicaConfig(),
@@ -108,7 +108,7 @@ func TestController_StopChangefeedDuringAddOperator(t *testing.T) {
 	oc := NewOperatorController(self, changefeedDB, backend, 10)
 
 	// Create changefeed and add it to absent state (simulating a newly created changefeed)
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),
