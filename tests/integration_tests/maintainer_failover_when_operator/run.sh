@@ -105,6 +105,26 @@ function wait_for_table_scheduled() {
 	return 1
 }
 
+function wait_for_add_operator_inflight_in_logs() {
+	local work_dir=$1
+	local table_id=$2
+	local retry=$3
+
+	# We rely on debug logs (run_cdc_server default loglevel=debug) from dispatcher manager:
+	#   "store current working add operator" is emitted after the Create request is stored in
+	#   currentOperatorMap (i.e., the add operator is in-flight) and before dispatcher creation.
+	# This is the most direct, sink-independent confirmation that the corner case is covered.
+	local pattern="store current working add operator"
+	for ((i = 0; i < retry; i++)); do
+		if grep -Eqs "${pattern}.*TableID[^0-9]*${table_id}([^0-9]|$)" "$work_dir"/cdc*.log 2>/dev/null; then
+			return 0
+		fi
+		sleep 2
+	done
+	echo "add operator for table $table_id not observed in logs" >&2
+	return 1
+}
+
 function wait_for_maintainer_move() {
 	local api_addr=$1
 	local changefeed_id=$2
@@ -289,15 +309,22 @@ function run_impl() {
 	run_sql "CREATE TABLE maintainer_failover_when_operator.t5(id INT PRIMARY KEY, val VARCHAR(20));" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "INSERT INTO maintainer_failover_when_operator.t4 VALUES (1, 'a'), (2, 'b');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "INSERT INTO maintainer_failover_when_operator.t5 VALUES (1, 'a'), (2, 'b');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	check_table_exists "maintainer_failover_when_operator.t4" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
-	check_table_exists "maintainer_failover_when_operator.t5" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
-	for table in t4 t5; do
-		downstream_cnt=$(mysql -h${DOWN_TIDB_HOST} -P${DOWN_TIDB_PORT} -uroot -N -e "SELECT COUNT(*) FROM maintainer_failover_when_operator.${table};" | tail -n1)
-		if [ "$downstream_cnt" != "0" ]; then
-			echo "unexpected downstream row count for ${table} while create-dispatcher blocked: $downstream_cnt" >&2
-			exit 1
-		fi
-	done
+	table_id_4=$(get_table_id "maintainer_failover_when_operator" "t4")
+	table_id_5=$(get_table_id "maintainer_failover_when_operator" "t5")
+
+	# Sink-independent barrier before killing maintainer:
+	# Ensure the maintainer has observed the new tables and started scheduling them,
+	# so the corresponding Create requests are in-flight (and will be restored after failover).
+	#
+	# Note: For MQ sinks (kafka/pulsar/storage), downstream table existence may be gated by watermarks which can be
+	# blocked by in-flight Add operators (BlockTsForward). Therefore, do NOT check downstream table existence here.
+	query_dispatcher_count "$api_addr" "$changefeed_id" 6 60 ge "" "$mode"
+	scheduled_node_id_4=$(wait_for_table_scheduled "$api_addr" "$changefeed_id" "$table_id_4" "$mode")
+	scheduled_node_id_5=$(wait_for_table_scheduled "$api_addr" "$changefeed_id" "$table_id_5" "$mode")
+	echo "table $table_id_4 scheduled on node $scheduled_node_id_4"
+	echo "table $table_id_5 scheduled on node $scheduled_node_id_5"
+	wait_for_add_operator_inflight_in_logs "$work_dir" "$table_id_4" 60
+	wait_for_add_operator_inflight_in_logs "$work_dir" "$table_id_5" 60
 
 	# Split operator: issue split and keep it in-progress due to NotReadyToCloseDispatcher.
 	set +e
@@ -335,6 +362,8 @@ function run_impl() {
 	scheduled_node_id=$(wait_for_table_scheduled "$api_addr" "$changefeed_id" "$table_id_1" "$mode")
 	echo "table $table_id_1 scheduled on node $scheduled_node_id"
 
+	check_table_exists "maintainer_failover_when_operator.t4" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
+	check_table_exists "maintainer_failover_when_operator.t5" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 	check_table_not_exists "maintainer_failover_when_operator.t3" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 
 	run_sql "ALTER TABLE maintainer_failover_when_operator.t1 ADD COLUMN c2 INT DEFAULT 0;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
