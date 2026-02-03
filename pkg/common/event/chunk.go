@@ -71,7 +71,7 @@ func (m *mounter) rawKVToChunkV2(value []byte, tableInfo *common.TableInfo, chk 
 	}
 	decoder := newChunkDecoderV2(tableInfo, m.tz)
 	// cache it for later use
-	err := decoder.DecodeToChunk(value, handle, chk)
+	err := decoder.DecodeToChunk(value, 0, handle, chk)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}

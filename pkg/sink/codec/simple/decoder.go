@@ -29,8 +29,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tidb/br/pkg/storage"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -49,7 +49,7 @@ type Decoder struct {
 	marshaller marshaller
 
 	upstreamTiDB *sql.DB
-	storage      storage.ExternalStorage
+	storage      storeapi.Storage
 
 	value []byte
 	msg   *message
@@ -66,7 +66,7 @@ func NewDecoder(
 	ctx context.Context, config *common.Config, db *sql.DB,
 ) (common.Decoder, error) {
 	var (
-		externalStorage storage.ExternalStorage
+		externalStorage storeapi.Storage
 		err             error
 	)
 	if config.LargeMessageHandle.EnableClaimCheck() {

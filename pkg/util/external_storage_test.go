@@ -20,7 +20,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tidb/pkg/objstore/objectio"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/stretchr/testify/require"
 )
 
@@ -43,12 +44,12 @@ func (m *mockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 
 // mockExternalStorage is a mock implementation for testing timeouts via http client.
 type mockExternalStorage struct {
-	storage.ExternalStorage // Embed the interface to satisfy it easily
-	httpClient              *http.Client
+	storeapi.Storage // Embed the interface to satisfy it easily
+	httpClient       *http.Client
 }
 
 // Implement Open so tests can simulate readers that bind to the Open() context.
-func (m *mockExternalStorage) Open(ctx context.Context, path string, option *storage.ReaderOption) (storage.ExternalFileReader, error) {
+func (m *mockExternalStorage) Open(ctx context.Context, path string, option *storeapi.ReaderOption) (objectio.Reader, error) {
 	return &ctxBoundReader{ctx: ctx}, nil
 }
 
@@ -92,8 +93,8 @@ func TestExtStorageWithTimeoutWriteFileTimeout(t *testing.T) {
 
 	// Wrap the mock store with the timeout logic
 	timedStore := &extStorageWithTimeout{
-		ExternalStorage: mockStore,
-		timeout:         testTimeout,
+		Storage: mockStore,
+		timeout: testTimeout,
 	}
 
 	startTime := time.Now()
@@ -124,8 +125,8 @@ func TestExtStorageWithTimeoutWriteFileSuccess(t *testing.T) {
 	}
 
 	timedStore := &extStorageWithTimeout{
-		ExternalStorage: mockStore,
-		timeout:         testTimeout,
+		Storage: mockStore,
+		timeout: testTimeout,
 	}
 
 	// Use context.Background() as the base context
@@ -162,8 +163,8 @@ func (r *ctxBoundReader) GetFileSize() (int64, error) { return 1, nil }
 
 func TestExtStorageOpenDoesNotCancelReaderContext(t *testing.T) {
 	timedStore := &extStorageWithTimeout{
-		ExternalStorage: &mockExternalStorage{},
-		timeout:         100 * time.Millisecond,
+		Storage: &mockExternalStorage{},
+		timeout: 100 * time.Millisecond,
 	}
 
 	rd, err := timedStore.Open(context.Background(), "file", nil)
@@ -177,8 +178,8 @@ func TestExtStorageOpenDoesNotCancelReaderContext(t *testing.T) {
 
 func TestExtStorageOpenReaderRespectsCallerCancel(t *testing.T) {
 	timedStore := &extStorageWithTimeout{
-		ExternalStorage: &mockExternalStorage{},
-		timeout:         10 * time.Millisecond,
+		Storage: &mockExternalStorage{},
+		timeout: 10 * time.Millisecond,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
