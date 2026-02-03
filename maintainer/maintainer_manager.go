@@ -42,7 +42,7 @@ type Manager struct {
 	mc   messaging.MessageCenter
 	conf *config.SchedulerConfig
 
-	liveness *api.Liveness
+	liveness  *api.Liveness
 	nodeEpoch uint64
 
 	// changefeedID -> maintainer

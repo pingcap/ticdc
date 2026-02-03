@@ -23,4 +23,3 @@ type DestNodeSelector interface {
 	GetSchedulableDestNodes() map[node.ID]*node.Info
 	GetSchedulableDestNodeIDs() []node.ID
 }
-

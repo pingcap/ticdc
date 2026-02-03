@@ -161,6 +161,7 @@ const (
 //
 // The state machine is monotonic:
 //   - Alive -> Draining -> Stopping
+//
 // Downgrades and skipping intermediate states are rejected.
 func (l *Liveness) Store(v Liveness) bool {
 	for {

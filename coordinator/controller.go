@@ -78,8 +78,8 @@ type Controller struct {
 		sync.Mutex
 		changed bool
 	}
-	nodeManager       *watcher.NodeManager
-	nodeLivenessView  *NodeLivenessView
+	nodeManager      *watcher.NodeManager
+	nodeLivenessView *NodeLivenessView
 
 	taskScheduler    threadpool.ThreadPool
 	taskHandlerMutex sync.Mutex // protect taskHandlers

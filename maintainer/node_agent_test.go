@@ -83,4 +83,3 @@ func TestNodeAgentSetNodeLivenessTransitionSendsHeartbeat(t *testing.T) {
 
 	require.Equal(t, api.LivenessCaptureDraining, liveness.Load())
 }
-

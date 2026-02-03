@@ -48,10 +48,10 @@ type DrainController struct {
 
 	now func() time.Time
 
-	mc            messaging.MessageCenter
-	livenessView  *NodeLivenessView
-	changefeedDB  *changefeed.ChangefeedDB
-	operatorCtl   *operator.Controller
+	mc           messaging.MessageCenter
+	livenessView *NodeLivenessView
+	changefeedDB *changefeed.ChangefeedDB
+	operatorCtl  *operator.Controller
 
 	nodes map[node.ID]*drainNodeState
 }
@@ -236,4 +236,3 @@ func (d *DrainController) remaining(target node.ID) int {
 	}
 	return remaining
 }
-

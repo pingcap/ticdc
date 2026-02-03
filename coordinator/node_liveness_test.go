@@ -98,4 +98,3 @@ func TestDestNodeSelectorFiltersNonAliveDestinations(t *testing.T) {
 	require.NotContains(t, ids, node2.ID)
 	require.NotContains(t, ids, node3.ID)
 }
-

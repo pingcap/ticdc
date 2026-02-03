@@ -183,4 +183,3 @@ func (s *drainScheduler) getDrainingNodes() []node.ID {
 func (s *drainScheduler) Name() string {
 	return "drain-scheduler"
 }
-

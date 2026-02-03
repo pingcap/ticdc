@@ -16,8 +16,8 @@ package scheduler
 import (
 	"testing"
 
-	cooperator "github.com/pingcap/ticdc/coordinator/operator"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
+	cooperator "github.com/pingcap/ticdc/coordinator/operator"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -130,4 +130,3 @@ func TestDrainSchedulerSkipsChangefeedWithInFlightOperator(t *testing.T) {
 	require.NotNil(t, oc.GetOperator(cf2.ID))
 	require.Equal(t, 2, oc.OperatorSize())
 }
-

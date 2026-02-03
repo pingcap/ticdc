@@ -37,7 +37,7 @@ type fakeServer struct {
 }
 
 func (s *fakeServer) Run(context.Context) error { return nil }
-func (s *fakeServer) Close(context.Context)      {}
+func (s *fakeServer) Close(context.Context)     {}
 
 func (s *fakeServer) SelfInfo() (*node.Info, error) { return node.NewInfo("127.0.0.1:0", ""), nil }
 func (s *fakeServer) Liveness() api.Liveness        { return api.LivenessCaptureAlive }
@@ -49,7 +49,7 @@ func (s *fakeServer) GetCoordinatorInfo(context.Context) (*node.Info, error) {
 	return node.NewInfo("127.0.0.1:0", ""), nil
 }
 
-func (s *fakeServer) GetPdClient() pd.Client         { return nil }
+func (s *fakeServer) GetPdClient() pd.Client            { return nil }
 func (s *fakeServer) GetEtcdClient() etcd.CDCEtcdClient { return nil }
 
 func (s *fakeServer) GetMaintainerManager() *maintainer.Manager { return nil }
@@ -58,11 +58,12 @@ type fakeCoordinator struct {
 	remaining int
 }
 
-func (c *fakeCoordinator) Stop()                                    {}
-func (c *fakeCoordinator) Run(context.Context) error                { return nil }
+func (c *fakeCoordinator) Stop()                     {}
+func (c *fakeCoordinator) Run(context.Context) error { return nil }
 func (c *fakeCoordinator) ListChangefeeds(context.Context, string) ([]*config.ChangeFeedInfo, []*config.ChangeFeedStatus, error) {
 	return nil, nil, nil
 }
+
 func (c *fakeCoordinator) GetChangefeed(context.Context, common.ChangeFeedDisplayName) (*config.ChangeFeedInfo, *config.ChangeFeedStatus, error) {
 	return nil, nil, nil
 }
@@ -83,23 +84,36 @@ func (c *fakeCoordinator) DrainNode(node.ID) int { return c.remaining }
 
 type fakeCoordinatorWithoutDrain struct{}
 
-func (c *fakeCoordinatorWithoutDrain) Stop()                                    {}
-func (c *fakeCoordinatorWithoutDrain) Run(context.Context) error                { return nil }
+func (c *fakeCoordinatorWithoutDrain) Stop()                     {}
+func (c *fakeCoordinatorWithoutDrain) Run(context.Context) error { return nil }
 func (c *fakeCoordinatorWithoutDrain) ListChangefeeds(context.Context, string) ([]*config.ChangeFeedInfo, []*config.ChangeFeedStatus, error) {
 	return nil, nil, nil
 }
+
 func (c *fakeCoordinatorWithoutDrain) GetChangefeed(context.Context, common.ChangeFeedDisplayName) (*config.ChangeFeedInfo, *config.ChangeFeedStatus, error) {
 	return nil, nil, nil
 }
-func (c *fakeCoordinatorWithoutDrain) CreateChangefeed(context.Context, *config.ChangeFeedInfo) error { return nil }
+
+func (c *fakeCoordinatorWithoutDrain) CreateChangefeed(context.Context, *config.ChangeFeedInfo) error {
+	return nil
+}
+
 func (c *fakeCoordinatorWithoutDrain) RemoveChangefeed(context.Context, common.ChangeFeedID) (uint64, error) {
 	return 0, nil
 }
-func (c *fakeCoordinatorWithoutDrain) PauseChangefeed(context.Context, common.ChangeFeedID) error { return nil }
+
+func (c *fakeCoordinatorWithoutDrain) PauseChangefeed(context.Context, common.ChangeFeedID) error {
+	return nil
+}
+
 func (c *fakeCoordinatorWithoutDrain) ResumeChangefeed(context.Context, common.ChangeFeedID, uint64, bool) error {
 	return nil
 }
-func (c *fakeCoordinatorWithoutDrain) UpdateChangefeed(context.Context, *config.ChangeFeedInfo) error { return nil }
+
+func (c *fakeCoordinatorWithoutDrain) UpdateChangefeed(context.Context, *config.ChangeFeedInfo) error {
+	return nil
+}
+
 func (c *fakeCoordinatorWithoutDrain) RequestResolvedTsFromLogCoordinator(context.Context, common.ChangeFeedDisplayName) {
 }
 func (c *fakeCoordinatorWithoutDrain) Initialized() bool { return true }
@@ -144,4 +158,3 @@ func TestDrainCaptureUnsupportedCoordinator(t *testing.T) {
 		t.Fatalf("status = %d, want %d, body=%s", w.Code, http.StatusInternalServerError, w.Body.String())
 	}
 }
-

@@ -105,9 +105,9 @@ const (
 	TypeDispatcherSetChecksumUpdateRequest IOType = 40
 	TypeDispatcherSetChecksumAckResponse   IOType = 41
 
-	TypeNodeHeartbeatRequest     IOType = 42
-	TypeSetNodeLivenessRequest   IOType = 43
-	TypeSetNodeLivenessResponse  IOType = 44
+	TypeNodeHeartbeatRequest    IOType = 42
+	TypeSetNodeLivenessRequest  IOType = 43
+	TypeSetNodeLivenessResponse IOType = 44
 )
 
 func (t IOType) String() string {

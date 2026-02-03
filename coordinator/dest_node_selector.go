@@ -22,8 +22,8 @@ import (
 var _ coscheduler.DestNodeSelector = (*destNodeSelector)(nil)
 
 type destNodeSelector struct {
-	nodeManager   *watcher.NodeManager
-	livenessView  *NodeLivenessView
+	nodeManager  *watcher.NodeManager
+	livenessView *NodeLivenessView
 }
 
 func (s *destNodeSelector) GetSchedulableDestNodes() map[node.ID]*node.Info {
@@ -55,4 +55,3 @@ func (s *destNodeSelector) GetSchedulableDestNodeIDs() []node.ID {
 	}
 	return ids
 }
-
