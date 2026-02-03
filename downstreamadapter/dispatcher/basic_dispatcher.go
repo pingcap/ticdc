@@ -629,14 +629,19 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 				// 3. clear blockEventStatus(should be the old pending event, but clear the new one)
 				d.blockEventStatus.clear()
 			})
-			if action.Action == heartbeatpb.Action_Write {
+			switch action.Action {
+			case heartbeatpb.Action_Write:
 				actionCommitTs := action.CommitTs
 				actionIsSyncPoint := action.IsSyncPoint
 				d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
 					d.ExecuteBlockEventDDL(pendingEvent, actionCommitTs, actionIsSyncPoint)
 				})
 				return true
-			} else {
+			case heartbeatpb.Action_Pass, heartbeatpb.Action_Skip:
+				failpoint.Inject("BlockOrWaitBeforePass", nil)
+				d.PassBlockEventToSink(pendingEvent)
+				failpoint.Inject("BlockAfterPass", nil)
+			default:
 				failpoint.Inject("BlockOrWaitBeforePass", nil)
 				d.PassBlockEventToSink(pendingEvent)
 				failpoint.Inject("BlockAfterPass", nil)

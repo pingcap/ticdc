@@ -738,6 +738,43 @@ func (m *Maintainer) updateMetrics() {
 	m.resolvedTsLagGauge.Set(lag)
 }
 
+func (m *Maintainer) calculateSyncPointSkipState() (enabled bool, checkpointLag time.Duration, syncPointInterval time.Duration) {
+	if m.info == nil || m.info.Config == nil {
+		return false, 0, 0
+	}
+	if !util.GetOrZero(m.info.Config.EnableSyncPoint) {
+		return false, 0, util.GetOrZero(m.info.Config.SyncPointInterval)
+	}
+	syncPointInterval = util.GetOrZero(m.info.Config.SyncPointInterval)
+	if syncPointInterval <= 0 {
+		return false, 0, syncPointInterval
+	}
+
+	watermark := m.getWatermark()
+	pdPhysicalTime := oracle.GetPhysical(m.pdClock.CurrentTime())
+	phyCkpTs := oracle.ExtractPhysical(watermark.CheckpointTs)
+	lagMs := pdPhysicalTime - phyCkpTs
+	if lagMs < 0 {
+		lagMs = 0
+	}
+	checkpointLag = time.Duration(lagMs) * time.Millisecond
+	enabled = checkpointLag > 2*syncPointInterval
+	return enabled, checkpointLag, syncPointInterval
+}
+
+func (m *Maintainer) refreshBarrierSyncPointSkipState() {
+	if m.controller == nil {
+		return
+	}
+	enabled, checkpointLag, syncPointInterval := m.calculateSyncPointSkipState()
+	if m.controller.barrier != nil {
+		m.controller.barrier.SetSyncPointSkipState(enabled, checkpointLag, syncPointInterval)
+	}
+	if m.controller.redoBarrier != nil {
+		m.controller.redoBarrier.SetSyncPointSkipState(enabled, checkpointLag, syncPointInterval)
+	}
+}
+
 // send message to other components
 func (m *Maintainer) sendMessages(msgs []*messaging.TargetMessage) {
 	for _, msg := range msgs {
@@ -819,6 +856,8 @@ func (m *Maintainer) onBlockStateRequest(msg *messaging.TargetMessage) {
 		return
 	}
 	req := msg.Message[0].(*heartbeatpb.BlockStatusRequest)
+
+	m.refreshBarrierSyncPointSkipState()
 
 	var ackMsg []*messaging.TargetMessage
 	if common.IsDefaultMode(req.Mode) {
@@ -952,6 +991,7 @@ func (m *Maintainer) handleResendMessage() {
 		m.trySendMaintainerCloseRequestToAllNode()
 		return
 	}
+	m.refreshBarrierSyncPointSkipState()
 	// resend bootstrap message
 	m.sendMessages(m.bootstrapper.ResendBootstrapMessage())
 	m.sendPostBootstrapRequest()

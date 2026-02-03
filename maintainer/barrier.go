@@ -22,7 +22,9 @@ import (
 	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -43,6 +45,10 @@ type Barrier struct {
 	operatorController *operator.Controller
 	splitTableEnabled  bool
 	mode               int64
+
+	syncPointSkipEnabled       atomic.Bool
+	syncPointSkipCheckpointLag atomic.Int64 // nanoseconds
+	syncPointInterval          atomic.Int64 // nanoseconds
 }
 
 // NewBarrier create a new barrier for the changefeed
@@ -62,6 +68,44 @@ func NewBarrier(spanController *span.Controller,
 	}
 	barrier.handleBootstrapResponse(bootstrapRespMap)
 	return &barrier
+}
+
+func (b *Barrier) SetSyncPointSkipState(enabled bool, checkpointLag time.Duration, syncPointInterval time.Duration) {
+	b.syncPointSkipEnabled.Store(enabled)
+	b.syncPointSkipCheckpointLag.Store(int64(checkpointLag))
+	b.syncPointInterval.Store(int64(syncPointInterval))
+}
+
+func (b *Barrier) maybeSkipSyncPointEvent(event *BarrierEvent) {
+	if event == nil || !event.isSyncPoint {
+		return
+	}
+	if event.selected.Load() || event.skipSyncPoint {
+		return
+	}
+	if !b.syncPointSkipEnabled.Load() {
+		return
+	}
+
+	event.skipSyncPoint = true
+	event.selected.Store(true)
+	event.writerDispatcherAdvanced = true
+	// Ensure the next resend can deliver the skip actions immediately.
+	event.lastResendTime = time.Now().Add(-20 * time.Second)
+
+	checkpointLag := time.Duration(b.syncPointSkipCheckpointLag.Load())
+	syncPointInterval := time.Duration(b.syncPointInterval.Load())
+	threshold := 2 * syncPointInterval
+	metrics.MaintainerSkipSyncPointCount.WithLabelValues(event.cfID.Keyspace(), event.cfID.Name()).Inc()
+	log.Info("skip syncpoint",
+		zap.String("changefeed", event.cfID.Name()),
+		zap.String("keyspace", event.cfID.Keyspace()),
+		zap.Uint64("commitTs", event.commitTs),
+		zap.Duration("checkpointLag", checkpointLag),
+		zap.Duration("syncPointInterval", syncPointInterval),
+		zap.Duration("threshold", threshold),
+		zap.Int64("mode", b.mode),
+	)
 }
 
 // HandleStatus handle the block status from dispatcher manager
@@ -218,6 +262,7 @@ func (b *Barrier) Resend() []*messaging.TargetMessage {
 	eventList := make([]*BarrierEvent, 0)
 	b.blockedEvents.Range(func(key eventKey, barrierEvent *BarrierEvent) bool {
 		// todo: we can limit the number of messages to send in one round here
+		b.maybeSkipSyncPointEvent(barrierEvent)
 		msgs = append(msgs, barrierEvent.resend(b.mode)...)
 
 		eventList = append(eventList, barrierEvent)
@@ -342,6 +387,20 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 				zap.Uint64("commitTs", blockState.BlockTs))
 			event.tableTriggerDispatcherRelated = true
 		}
+
+		// Skip syncpoint alignment when maintainer observes large checkpoint lag.
+		// It marks the syncpoint barrier as skipped and relies on the resend loop
+		// to broadcast Action_Skip to all dispatcher managers.
+		if blockState.IsSyncPoint {
+			b.maybeSkipSyncPointEvent(event)
+			if event.skipSyncPoint {
+				event.markDispatcherEventDone(dispatcherID)
+				// No need to return a per-dispatcher action here: resend will broadcast
+				// the skip action to all nodes.
+				return event, nil, "", true
+			}
+		}
+
 		if event.selected.Load() {
 			// the event already in the selected state, ignore the block event just sent ack
 			log.Debug("the block event already selected, ignore the block event",
@@ -369,13 +428,17 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 			blockState.BlockTables != nil &&
 			(blockState.BlockTables.InfluenceType != heartbeatpb.InfluenceType_Normal) {
 			if pending := b.pendingEvents.Len(); pending > 0 {
-				log.Debug("discard db/all block event from ddl dispatcher due to pending schedule events, wait next resend",
-					zap.String("changefeed", changefeedID.Name()),
-					zap.String("dispatcher", dispatcherID.String()),
-					zap.Uint64("commitTs", blockState.BlockTs),
-					zap.Bool("isSyncPoint", blockState.IsSyncPoint),
-					zap.Int("pendingScheduleEvents", pending))
-				return event, nil, "", false
+				// When syncpoint skip is enabled, we will skip this syncpoint anyway and do
+				// not need a precise task snapshot to build the range checker.
+				if !blockState.IsSyncPoint || !b.syncPointSkipEnabled.Load() {
+					log.Debug("discard db/all block event from ddl dispatcher due to pending schedule events, wait next resend",
+						zap.String("changefeed", changefeedID.Name()),
+						zap.String("dispatcher", dispatcherID.String()),
+						zap.Uint64("commitTs", blockState.BlockTs),
+						zap.Bool("isSyncPoint", blockState.IsSyncPoint),
+						zap.Int("pendingScheduleEvents", pending))
+					return event, nil, "", false
+				}
 			}
 		}
 

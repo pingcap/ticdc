@@ -29,6 +29,7 @@ message Watermark {
 enum Action {
     Write = 0;
     Pass = 1;
+    Skip = 2;
 }
 
 message DispatcherAction {
