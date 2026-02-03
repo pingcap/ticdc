@@ -14,52 +14,43 @@
 package server
 
 import (
-	"encoding/json"
+	"strings"
 	"testing"
 
-	tiflowConfig "github.com/pingcap/tiflow/pkg/config"
 	"github.com/stretchr/testify/require"
 )
 
-func TestRunTiFlowServerPopulatesSecurityConfig(t *testing.T) {
-	// This test verifies that TLS credentials from CLI flags are properly
-	// transferred to serverConfig.Security before being passed to tiflow.
-	// See https://github.com/pingcap/ticdc/issues/3718
-
+func TestBuildTiFlowServerOptionsPropagatesTLSFlags(t *testing.T) {
+	// Scenario: TiCDC runs in old architecture mode and delegates to tiflow's
+	// server command, but reuses TiCDC's cobra.Command (flags are bound to TiCDC's
+	// options, not tiflow's). If we don't copy TLS flags to tiflowServer.Options,
+	// tiflow will see TLS flags as visited but with empty values, clear the
+	// security config, and fail when PD endpoints are https.
 	o := newOptions()
 	o.caPath = "/path/to/ca.crt"
 	o.certPath = "/path/to/server.crt"
 	o.keyPath = "/path/to/server.key"
 	o.allowedCertCN = "cn1,cn2"
+	o.pdEndpoints = []string{"https://127.0.0.1:2379"}
 
-	// Verify that before calling getCredential, serverConfig.Security is empty
-	require.Empty(t, o.serverConfig.Security.CAPath)
-	require.Empty(t, o.serverConfig.Security.CertPath)
-	require.Empty(t, o.serverConfig.Security.KeyPath)
-
-	// Simulate what runTiFlowServer does: populate Security from CLI flags
-	o.serverConfig.Security = o.getCredential()
-
-	// Verify Security is now populated
-	require.Equal(t, "/path/to/ca.crt", o.serverConfig.Security.CAPath)
-	require.Equal(t, "/path/to/server.crt", o.serverConfig.Security.CertPath)
-	require.Equal(t, "/path/to/server.key", o.serverConfig.Security.KeyPath)
-	require.Equal(t, []string{"cn1", "cn2"}, o.serverConfig.Security.CertAllowedCN)
-
-	// Verify that JSON marshaling preserves the Security config
-	cfgData, err := json.Marshal(o.serverConfig)
+	oldOptions, err := buildTiFlowServerOptions(o)
 	require.NoError(t, err)
 
-	var oldCfg tiflowConfig.ServerConfig
-	err = json.Unmarshal(cfgData, &oldCfg)
-	require.NoError(t, err)
+	// Ensure tiflow options carry TLS flags, so tiflow can rebuild credentials
+	// regardless of cobra flag binding.
+	require.Equal(t, "/path/to/ca.crt", oldOptions.CaPath)
+	require.Equal(t, "/path/to/server.crt", oldOptions.CertPath)
+	require.Equal(t, "/path/to/server.key", oldOptions.KeyPath)
+	require.Equal(t, "cn1,cn2", oldOptions.AllowedCertCN)
 
-	// This is the critical assertion: tiflow's ServerConfig.Security
-	// should have the TLS credentials after unmarshaling
-	require.Equal(t, "/path/to/ca.crt", oldCfg.Security.CAPath)
-	require.Equal(t, "/path/to/server.crt", oldCfg.Security.CertPath)
-	require.Equal(t, "/path/to/server.key", oldCfg.Security.KeyPath)
-	require.Equal(t, []string{"cn1", "cn2"}, oldCfg.Security.CertAllowedCN)
+	// Ensure the converted tiflow ServerConfig also contains the TLS credential,
+	// which is used for logging and downstream config consumers.
+	require.Equal(t, "/path/to/ca.crt", oldOptions.ServerConfig.Security.CAPath)
+	require.Equal(t, "/path/to/server.crt", oldOptions.ServerConfig.Security.CertPath)
+	require.Equal(t, "/path/to/server.key", oldOptions.ServerConfig.Security.KeyPath)
+	require.Equal(t, []string{"cn1", "cn2"}, oldOptions.ServerConfig.Security.CertAllowedCN)
+
+	require.Equal(t, strings.Join(o.pdEndpoints, ","), oldOptions.ServerPdAddr)
 }
 
 func TestGetCredential(t *testing.T) {
