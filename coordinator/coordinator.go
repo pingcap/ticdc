@@ -221,8 +221,8 @@ func (c *coordinator) run(ctx context.Context) error {
 					log.Warn("update gc safepoint failed and exceed the gc ttl")
 				}
 			}
-			c.lastTickTime = now
 			metrics.CoordinatorCounter.Add(float64(now.Sub(c.lastTickTime)) / float64(time.Second))
+			c.lastTickTime = now
 		case changes := <-c.changefeedChangeCh:
 			if err := c.saveCheckpointTs(ctx, changes); err != nil {
 				return errors.Trace(err)
