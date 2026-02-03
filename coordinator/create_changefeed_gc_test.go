@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -92,9 +93,16 @@ func TestCreateChangefeedDoesNotUpdateGCSafepoint(t *testing.T) {
 	}
 
 	backend.EXPECT().CreateChangefeed(gomock.Any(), gomock.Any()).Return(nil).Times(1)
-	gcManager.EXPECT().
-		TryUpdateServiceGCSafepoint(gomock.Any(), gomock.Any()).
-		Times(0)
+
+	if kerneltype.IsClassic() {
+		gcManager.EXPECT().
+			TryUpdateServiceGCSafepoint(gomock.Any(), gomock.Any()).
+			Times(0)
+	} else {
+		gcManager.EXPECT().
+			TryUpdateKeyspaceGCBarrier(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Times(0)
+	}
 
 	require.NoError(t, co.CreateChangefeed(context.Background(), info))
 	require.Equal(t, 1, changefeedDB.GetAbsentSize())
@@ -119,9 +127,15 @@ func TestUpdateGCSafepointCallsGCManagerUpdate(t *testing.T) {
 		KeyspaceID:   1,
 	}
 
-	gcManager.EXPECT().
-		TryUpdateServiceGCSafepoint(gomock.Any(), common.Ts(info.StartTs-1)).
-		Return(nil).Times(1)
+	if kerneltype.IsClassic() {
+		gcManager.EXPECT().
+			TryUpdateServiceGCSafepoint(gomock.Any(), common.Ts(info.StartTs-1)).
+			Return(nil).Times(1)
+	} else {
+		gcManager.EXPECT().
+			TryUpdateKeyspaceGCBarrier(gomock.Any(), gomock.Any(), gomock.Any(), common.Ts(info.StartTs-1)).
+			Return(nil).Times(1)
+	}
 
 	changefeedDB.AddAbsentChangefeed(changefeed.NewChangefeed(cfID, info, info.StartTs, true))
 

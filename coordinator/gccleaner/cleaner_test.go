@@ -106,6 +106,28 @@ func TestCleanerGating(t *testing.T) {
 	require.Equal(t, int32(1), client.callCount.Load())
 }
 
+func TestTryClearDoesNotUndoTaskAddedInSameTick(t *testing.T) {
+	client := &countingPdClient{}
+	cleaner := New(client, "test-gc-service")
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+
+	cleaner.BeginGCTick()
+	cleaner.Add(cfID, 1, gc.EnsureGCServiceCreating)
+	cleaner.OnUpdateGCSafepointSucceeded()
+
+	require.True(t, cleaner.tryClearEnsureGCSafepoint(context.Background()))
+	require.Equal(t, int32(0), client.callCount.Load())
+	require.Len(t, cleaner.pending, 1)
+	require.True(t, cleaner.pending[cfID].creating)
+
+	cleaner.BeginGCTick()
+	cleaner.OnUpdateGCSafepointSucceeded()
+	require.True(t, cleaner.tryClearEnsureGCSafepoint(context.Background()))
+	require.Equal(t, int32(1), client.callCount.Load())
+	require.Len(t, cleaner.pending, 0)
+}
+
 func TestTryClearRequeuesRemainingTasksOnError(t *testing.T) {
 	client := &errorPdClient{err: context.Canceled}
 	cleaner := New(client, "test-gc-service")

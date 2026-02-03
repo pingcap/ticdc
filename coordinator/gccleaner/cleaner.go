@@ -27,7 +27,7 @@ import (
 
 const (
 	maxTasksPerTick        = 4
-	clearSafepointTimeout  = 3 * time.Second
+	clearSafepointTimeout  = 10 * time.Second
 	maxCleanerBackoffDelay = 30 * time.Second
 )
 
