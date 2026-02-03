@@ -209,7 +209,7 @@ func (c *coordinator) run(ctx context.Context) error {
 		case <-gcTicker.C:
 			err := c.updateGCSafepoint(ctx)
 			if err != nil {
-				log.Warn("update service gc safepoint failed temporarily", zap.Error(err))
+				log.Warn("update gc safepoint failed", zap.Error(err))
 			}
 			now := time.Now()
 			metrics.CoordinatorCounter.Add(float64(now.Sub(c.lastTickTime)) / float64(time.Second))
