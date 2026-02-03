@@ -219,3 +219,11 @@ func (s *Sink) sendMessages(ctx context.Context) error {
 }
 
 func (s *Sink) AddCheckpointTs(_ uint64) {}
+
+func (s *Sink) BatchCount() int {
+	return 4096
+}
+
+func (s *Sink) BatchBytes() int {
+	return int(s.cfg.MaxLogSizeInBytes)
+}

@@ -246,7 +246,6 @@ func NewSubscriptionClient(
 
 	option := dynstream.NewOption()
 	// Note: it is max batch size of the kv sent from tikv(not committed rows)
-	option.BatchCount = 1024
 	// TODO: Set `UseBuffer` to true until we refactor the `regionEventHandler.Handle` method so that it doesn't call any method of the dynamic stream. Currently, if `UseBuffer` is set to false, there will be a deadlock:
 	// 	ds.handleLoop fetch events from `ch` -> regionEventHandler.Handle -> ds.RemovePath -> send event to `ch`
 	option.UseBuffer = true
@@ -353,7 +352,6 @@ func (s *subscriptionClient) Subscribe(
 ) {
 	if span.TableID == 0 {
 		log.Panic("subscription client subscribe with zero TableID")
-		return
 	}
 
 	rt := s.newSubscribedSpan(subID, span, startTs, consumeKVEvents, advanceResolvedTs, advanceInterval)
@@ -361,7 +359,10 @@ func (s *subscriptionClient) Subscribe(
 	s.totalSpans.spanMap[subID] = rt
 	s.totalSpans.Unlock()
 
-	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(1*1024*1024*1024, dynstream.MemoryControlForPuller, "logPuller") // 1GB
+	batchConfig := dynstream.NewBatchConfig(1024, 0)
+	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(
+		1024*1024*1024, dynstream.MemoryControlForPuller, "logPuller", batchConfig,
+	)
 	s.ds.AddPath(rt.subID, rt, areaSetting)
 
 	select {

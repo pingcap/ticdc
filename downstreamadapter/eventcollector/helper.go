@@ -22,9 +22,12 @@ import (
 	"go.uber.org/zap"
 )
 
+<<<<<<< HEAD
+func NewEventDynamicStream() dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
+=======
 func NewEventDynamicStream(isRedo bool) dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] {
+>>>>>>> master
 	option := dynstream.NewOption()
-	option.BatchCount = 4096
 	option.UseBuffer = false
 	// Enable memory control for dispatcher events dynamic stream.
 	option.EnableMemoryControl = true

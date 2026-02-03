@@ -14,10 +14,12 @@
 package dynstream
 
 import (
+	"fmt"
 	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/deque"
 )
 
@@ -27,7 +29,6 @@ type eventSignal[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct 
 }
 
 type eventQueue[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
-	option  Option
 	handler H
 	// Used to reduce the block allocation in the paths' pending queue.
 	eventBlockAlloc *deque.BlockAllocator[eventWrap[A, P, T, D, H]]
@@ -37,16 +38,13 @@ type eventQueue[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	totalPendingLength *atomic.Int64 // The total signal count in the queue.
 }
 
-func newEventQueue[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](option Option, handler H) eventQueue[A, P, T, D, H] {
-	eq := eventQueue[A, P, T, D, H]{
-		option:             option,
+func newEventQueue[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](handler H) eventQueue[A, P, T, D, H] {
+	return eventQueue[A, P, T, D, H]{
 		handler:            handler,
 		eventBlockAlloc:    deque.NewBlockAllocator[eventWrap[A, P, T, D, H]](32, 1024),
 		signalQueue:        deque.NewDeque(1024, deque.NewBlockAllocator[eventSignal[A, P, T, D, H]](1024, 32)),
 		totalPendingLength: &atomic.Int64{},
 	}
-
-	return eq
 }
 
 func (q *eventQueue[A, P, T, D, H]) initPath(path *pathInfo[A, P, T, D, H]) {
@@ -100,6 +98,9 @@ func (q *eventQueue[A, P, T, D, H]) wakePath(path *pathInfo[A, P, T, D, H]) {
 	}
 }
 
+<<<<<<< HEAD
+func (q *eventQueue[A, P, T, D, H]) popEvents() ([]T, *pathInfo[A, P, T, D, H]) {
+=======
 func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, D, H], int) {
 	// Append the event to the buffer
 	var totalBytes int
@@ -109,19 +110,24 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, 
 		path.popEvent()
 	}
 
+>>>>>>> master
 	for {
 		// We are going to update the signal directly, so we need the reference.
 		signal, ok := q.signalQueue.FrontRef()
 		if !ok {
+<<<<<<< HEAD
+			return nil, nil
+=======
 			return buf, nil, totalBytes
+>>>>>>> master
 		}
-
-		path := signal.pathInfo
-		pendingQueue := path.pendingQueue
 
 		if signal.eventCount == 0 {
 			log.Panic("signal event count is zero")
 		}
+
+		path := signal.pathInfo
+		pendingQueue := path.pendingQueue
 		if path.blocking.Load() || path.removed.Load() {
 			// The path is blocking or removed, we should ignore the signal completely.
 			// Since when it is waked, a signal event will be added to the queue.
@@ -129,8 +135,6 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, 
 			q.signalQueue.PopFront()
 			continue
 		}
-
-		batchSize := min(signal.eventCount, q.option.BatchCount)
 
 		firstEvent, ok := pendingQueue.FrontRef()
 		if !ok {
@@ -144,11 +148,14 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, 
 		firstGroup := firstEvent.eventType.DataGroup
 		firstProperty := firstEvent.eventType.Property
 
-		appendToBuf(firstEvent, path)
+		var count int
+		batcher := path.batcher
+		batcher.addEvent(firstEvent.event, firstEvent.eventSize)
+		path.popEvent()
+		count++
 
 		// Try to batch events with the same data group.
-		count := 1
-		for ; count < batchSize; count++ {
+		for count < signal.eventCount && !batcher.isFull() {
 			// Get the reference of the front event of the path.
 			// We don't use PopFront here because we need to keep the event in the path.
 			// Otherwise, the event may lost when the loop is break below.
@@ -160,7 +167,16 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, 
 				front.eventType.Property == NonBatchable {
 				break
 			}
-			appendToBuf(front, path)
+			// Make sure we don't exceed the hard bytes limit (best-effort).
+			// If a single event itself exceeds hardBytes, we still need to process it.
+			if batcher.config.hardBytes > 0 &&
+				batcher.nBytes > 0 &&
+				batcher.nBytes+front.eventSize > batcher.config.hardBytes {
+				break
+			}
+			batcher.addEvent(front.event, front.eventSize)
+			path.popEvent()
+			count++
 		}
 
 		signal.eventCount -= count
@@ -168,7 +184,16 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, 
 			q.signalQueue.PopFront()
 		}
 		q.totalPendingLength.Add(-int64(count))
+		events, nBytes, duration := batcher.flush()
 
+<<<<<<< HEAD
+		area := fmt.Sprint(path.area)
+		metrics.DynamicStreamBatchSize.WithLabelValues(area).Observe(float64(len(events)))
+		metrics.DynamicStreamBatchBytes.WithLabelValues(area).Observe(float64(nBytes))
+		metrics.DynamicStreamBatchDuration.WithLabelValues(area).Observe(float64(duration))
+		return events, path
+=======
 		return buf, path, totalBytes
+>>>>>>> master
 	}
 }

@@ -139,7 +139,7 @@ type Handler[A Area, P Path, T Event, D Dest] interface {
 
 	// OnDrop is called when an event is dropped. Could be caused by the memory control or cannot find the path.
 	// Do nothing by default implementation.
-	OnDrop(event T) interface{}
+	OnDrop(event T) any
 }
 
 type PathAndDest[P Path, D Dest] struct {
@@ -211,8 +211,6 @@ type Option struct {
 	ReportInterval    time.Duration // The interval of reporting the status of stream, the status is used by the scheduler.
 
 	StreamCount int // The count of streams. I.e. the count of goroutines to handle events. By default 0, means runtime.NumCPU().
-	BatchCount  int // The batch count of handling events. <= 1 means no batch. By default 1.
-	BatchBytes  int // The max bytes of the batch. <= 1 means no limit. By default 0.
 
 	EnableMemoryControl bool // Enable the memory control. By default false.
 
@@ -226,7 +224,6 @@ func NewOption() Option {
 		SchedulerInterval: DefaultSchedulerInterval,
 		ReportInterval:    DefaultReportInterval,
 		StreamCount:       0,
-		BatchCount:        1,
 		UseBuffer:         false,
 	}
 }
@@ -238,9 +235,6 @@ func (o *Option) fix() {
 	if o.StreamCount == 0 {
 		o.StreamCount = runtime.NumCPU()
 	}
-	if o.BatchCount <= 0 {
-		o.BatchCount = 1
-	}
 }
 
 type AreaSettings struct {
@@ -248,8 +242,29 @@ type AreaSettings struct {
 	maxPendingSize     uint64        // The max memory usage of the pending events of the area. Must be larger than 0. By default 1GB.
 	pathMaxPendingSize uint64        // The max memory usage of the pending events of the path. Must be larger than 0. By default 10% of the area max pending size.
 	feedbackInterval   time.Duration // The interval of the feedback. By default 1000ms.
+
 	// Remove it when we determine the v2 is working well.
-	algorithm int // The algorithm of the memory control.
+	// The algorithm of the memory control.
+	algorithm MemoryControlAlgorithm
+
+	// control how to control events
+	batchConfig batchConfig
+}
+
+func NewAreaSettingsWithMaxPendingSize(
+	quota uint64, method memoryControlType, component string,
+	batchConfig batchConfig,
+) AreaSettings {
+	// The path max pending size is at least 1MB.
+	pathMaxPendingSize := max(quota/10, 1*1024*1024)
+	return AreaSettings{
+		component:          component,
+		feedbackInterval:   DefaultFeedbackInterval,
+		maxPendingSize:     quota,
+		pathMaxPendingSize: pathMaxPendingSize,
+		method:             method,
+		batchConfig:        batchConfig,
+	}
 }
 
 func (s *AreaSettings) fix() {
@@ -259,19 +274,6 @@ func (s *AreaSettings) fix() {
 
 	if s.feedbackInterval == 0 {
 		s.feedbackInterval = DefaultFeedbackInterval
-	}
-}
-
-func NewAreaSettingsWithMaxPendingSize(size uint64, memoryControlAlgorithm int, component string) AreaSettings {
-	// The path max pending size is at least 1MB.
-	pathMaxPendingSize := max(size/10, 1*1024*1024)
-
-	return AreaSettings{
-		component:          component,
-		feedbackInterval:   DefaultFeedbackInterval,
-		maxPendingSize:     size,
-		pathMaxPendingSize: pathMaxPendingSize,
-		algorithm:          memoryControlAlgorithm,
 	}
 }
 

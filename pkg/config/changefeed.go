@@ -191,6 +191,10 @@ type ChangefeedConfig struct {
 	ForceReplicate bool          `json:"force_replicate" default:"false"`
 	Filter         *FilterConfig `toml:"filter" json:"filter"`
 	MemoryQuota    uint64        `toml:"memory-quota" json:"memory-quota"`
+	// EventCollectorBatchCount/Bytes are used by the event collector dynamic stream to achieve better batch performance.
+	// 0 means not set and the default sink-specific batch config will be used.
+	EventCollectorBatchCount int `json:"event_collector_batch_count"`
+	EventCollectorBatchBytes int `json:"event_collector_batch_bytes"`
 	// sync point related
 	// TODO: Is syncPointRetention|default can be removed?
 	EnableSyncPoint       bool          `json:"enable_sync_point" default:"false"`
@@ -262,24 +266,26 @@ type ChangeFeedInfo struct {
 
 func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 	return &ChangefeedConfig{
-		ChangefeedID:           info.ChangefeedID,
-		StartTS:                info.StartTs,
-		TargetTS:               info.TargetTs,
-		SinkURI:                info.SinkURI,
-		CaseSensitive:          util.GetOrZero(info.Config.CaseSensitive),
-		ForceReplicate:         util.GetOrZero(info.Config.ForceReplicate),
-		SinkConfig:             info.Config.Sink,
-		Filter:                 info.Config.Filter,
-		EnableSyncPoint:        util.GetOrZero(info.Config.EnableSyncPoint),
-		SyncPointInterval:      util.GetOrZero(info.Config.SyncPointInterval),
-		SyncPointRetention:     util.GetOrZero(info.Config.SyncPointRetention),
-		EnableSplittableCheck:  util.GetOrZero(info.Config.Scheduler.EnableSplittableCheck),
-		MemoryQuota:            util.GetOrZero(info.Config.MemoryQuota),
-		Epoch:                  info.Epoch,
-		BDRMode:                util.GetOrZero(info.Config.BDRMode),
-		TimeZone:               GetGlobalServerConfig().TZ,
-		Consistent:             info.Config.Consistent,
-		EnableTableAcrossNodes: util.GetOrZero(info.Config.Scheduler.EnableTableAcrossNodes),
+		ChangefeedID:             info.ChangefeedID,
+		StartTS:                  info.StartTs,
+		TargetTS:                 info.TargetTs,
+		SinkURI:                  info.SinkURI,
+		CaseSensitive:            util.GetOrZero(info.Config.CaseSensitive),
+		ForceReplicate:           util.GetOrZero(info.Config.ForceReplicate),
+		SinkConfig:               info.Config.Sink,
+		Filter:                   info.Config.Filter,
+		EnableSyncPoint:          util.GetOrZero(info.Config.EnableSyncPoint),
+		SyncPointInterval:        util.GetOrZero(info.Config.SyncPointInterval),
+		SyncPointRetention:       util.GetOrZero(info.Config.SyncPointRetention),
+		EnableSplittableCheck:    util.GetOrZero(info.Config.Scheduler.EnableSplittableCheck),
+		MemoryQuota:              util.GetOrZero(info.Config.MemoryQuota),
+		EventCollectorBatchCount: util.GetOrZero(info.Config.EventCollectorBatchCount),
+		EventCollectorBatchBytes: util.GetOrZero(info.Config.EventCollectorBatchBytes),
+		Epoch:                    info.Epoch,
+		BDRMode:                  util.GetOrZero(info.Config.BDRMode),
+		TimeZone:                 GetGlobalServerConfig().TZ,
+		Consistent:               info.Config.Consistent,
+		EnableTableAcrossNodes:   util.GetOrZero(info.Config.Scheduler.EnableTableAcrossNodes),
 		// other fields are not necessary for dispatcherManager
 	}
 }

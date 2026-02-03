@@ -53,9 +53,9 @@ type Sink struct {
 	conflictDetector *causality.ConflictDetector
 
 	// isNormal indicate whether the sink is in the normal state.
-	isNormal   *atomic.Bool
-	maxTxnRows int
-	bdrMode    bool
+	isNormal *atomic.Bool
+	cfg      *mysql.Config
+	bdrMode  bool
 }
 
 // Verify is used to verify the sink uri and config is valid
@@ -107,9 +107,9 @@ func NewMySQLSink(
 				BlockStrategy: causality.BlockStrategyWaitEmpty,
 			},
 			changefeedID),
-		isNormal:   atomic.NewBool(true),
-		maxTxnRows: cfg.MaxTxnRow,
-		bdrMode:    bdrMode,
+		isNormal: atomic.NewBool(true),
+		cfg:      cfg,
+		bdrMode:  bdrMode,
 	}
 	for i := 0; i < len(result.dmlWriter); i++ {
 		result.dmlWriter[i] = mysql.NewWriter(ctx, i, db, cfg, changefeedID, stat)
@@ -156,7 +156,7 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 	writer := s.dmlWriter[idx]
 
 	totalStart := time.Now()
-	buffer := make([]*commonEvent.DMLEvent, 0, s.maxTxnRows)
+	buffer := make([]*commonEvent.DMLEvent, 0, s.cfg.MaxTxnRow)
 	for {
 		select {
 		case <-ctx.Done():
@@ -189,7 +189,7 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 			workerEventRowCount.Observe(float64(rowCount))
 			for i := 1; i < len(txnEvents); i++ {
 				workerEventRowCount.Observe(float64(txnEvents[i].Len()))
-				if rowCount+txnEvents[i].Len() > int32(s.maxTxnRows) {
+				if rowCount+txnEvents[i].Len() > int32(s.cfg.MaxTxnRow) {
 					if err := flushEvent(beginIndex, i, rowCount); err != nil {
 						return errors.Trace(err)
 					}
@@ -341,4 +341,12 @@ func (s *Sink) Close(removeChangefeed bool) {
 			zap.Error(err))
 	}
 	s.statistics.Close()
+}
+
+func (s *Sink) BatchCount() int {
+	return s.cfg.MaxTxnRow * len(s.dmlWriter)
+}
+
+func (s *Sink) BatchBytes() int {
+	return int(s.cfg.MaxAllowedPacket)
 }
