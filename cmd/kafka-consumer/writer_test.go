@@ -17,11 +17,16 @@ import (
 	"context"
 	"testing"
 
+	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/config"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
 
@@ -89,7 +94,7 @@ func TestWriterWrite_executesIndependentCreateTableWithoutWatermark(t *testing.T
 		},
 	}
 
-	w.Write(ctx, codeccommon.MessageTypeDDL)
+	w.Write(ctx, codecCommon.MessageTypeDDL)
 
 	require.Equal(t, []string{"CREATE TABLE `test`.`t` (`id` INT PRIMARY KEY)"}, s.ddls)
 	require.Empty(t, w.ddlList)
@@ -135,12 +140,12 @@ func TestWriterWrite_preservesOrderWhenBlockedDDLNotReady(t *testing.T) {
 		},
 	}
 
-	w.Write(ctx, codeccommon.MessageTypeDDL)
+	w.Write(ctx, codecCommon.MessageTypeDDL)
 	require.Empty(t, s.ddls)
 	require.Len(t, w.ddlList, 2)
 
 	p.watermark = 200
-	w.Write(ctx, codeccommon.MessageTypeDDL)
+	w.Write(ctx, codecCommon.MessageTypeDDL)
 	require.Equal(t, []string{
 		"ALTER TABLE `test`.`t` ADD COLUMN `c2` INT",
 		"CREATE TABLE `test`.`t2` (`id` INT PRIMARY KEY)",
@@ -181,12 +186,12 @@ func TestWriterWrite_doesNotBypassWatermarkForCreateTableLike(t *testing.T) {
 		},
 	}
 
-	w.Write(ctx, codeccommon.MessageTypeDDL)
+	w.Write(ctx, codecCommon.MessageTypeDDL)
 	require.Empty(t, s.ddls)
 	require.Len(t, w.ddlList, 1)
 
 	p.watermark = 200
-	w.Write(ctx, codeccommon.MessageTypeDDL)
+	w.Write(ctx, codecCommon.MessageTypeDDL)
 	require.Equal(t, []string{"CREATE TABLE `test`.`t2` LIKE `test`.`t1`"}, s.ddls)
 	require.Empty(t, w.ddlList)
 }
@@ -263,7 +268,7 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 		},
 	}
 
-	w.Write(ctx, codeccommon.MessageTypeDDL)
+	w.Write(ctx, codecCommon.MessageTypeDDL)
 
 	require.Equal(t, []string{
 		"CREATE TABLE `common_1`.`add_and_drop_columns` (`id` INT(11) NOT NULL PRIMARY KEY)",
@@ -273,4 +278,59 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 	}, s.ddls)
 	require.Len(t, w.ddlList, 1)
 	require.Equal(t, "CREATE TABLE `common_1`.`a` (`a` BIGINT PRIMARY KEY,`b` INT)", w.ddlList[0].Query)
+}
+
+func TestAppendRow2Group_DoesNotDropCommitTsFallbackBeforeApplied(t *testing.T) {
+	// Scenario:
+	// 1) TiCDC writes DML messages to Kafka in commitTs order.
+	// 2) Under network partition / changefeed restart, TiCDC may replay older commitTs,
+	//    which will be appended to Kafka at a larger offset (commitTs appears to go backwards).
+	//
+	// The kafka-consumer must not drop these "fallback commitTs" events unless they have
+	// already been flushed to downstream (AppliedWatermark), otherwise the replay cannot
+	// heal the missing window.
+	replicaCfg := config.GetDefaultReplicaConfig()
+	eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, "test-topic", false, false)
+	require.NoError(t, err)
+
+	w := &writer{
+		progresses:             []*partitionProgress{{partition: 0, eventsGroup: make(map[int64]*util.EventsGroup)}},
+		eventRouter:            eventRouter,
+		protocol:               config.ProtocolCanalJSON,
+		partitionTableAccessor: codecCommon.NewPartitionTableAccessor(),
+	}
+
+	newDMLEvent := func(tableID int64, commitTs uint64) *commonEvent.DMLEvent {
+		return &commonEvent.DMLEvent{
+			PhysicalTableID: tableID,
+			CommitTs:        commitTs,
+			RowTypes:        []common.RowType{common.RowTypeUpdate},
+			Rows:            chunk.NewChunkWithCapacity(nil, 0),
+			TableInfo: &common.TableInfo{
+				TableName: common.TableName{Schema: "test", Table: "t"},
+			},
+		}
+	}
+
+	progress := w.progresses[0]
+
+	// Step 1: observe a larger commitTs first (e.g. produced before restart).
+	w.appendRow2Group(newDMLEvent(1, 200), progress, kafka.Offset(10))
+
+	// Step 2: observe a smaller commitTs later (e.g. replayed after restart).
+	w.appendRow2Group(newDMLEvent(1, 100), progress, kafka.Offset(11))
+
+	group := progress.eventsGroup[1]
+	require.NotNil(t, group)
+
+	// Expect: commitTs=100 is still kept and can be resolved.
+	resolved := group.Resolve(150)
+	require.Len(t, resolved, 1)
+	require.Equal(t, uint64(100), resolved[0].CommitTs)
+
+	// Step 3: once downstream has flushed beyond commitTs=100, the replay is safe to ignore.
+	group.AppliedWatermark = 200
+	w.appendRow2Group(newDMLEvent(1, 100), progress, kafka.Offset(12))
+	resolved = group.Resolve(150)
+	require.Empty(t, resolved)
 }

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/fatih/color"
+	perrors "github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -30,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/security"
+	pkgutil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/pingcap/ticdc/server"
 	ticonfig "github.com/pingcap/tidb/pkg/config"
@@ -100,6 +102,20 @@ func (o *options) run(cmd *cobra.Command) error {
 		os.Exit(1)
 	}
 	log.Info("init log", zap.String("file", loggerConfig.File), zap.String("level", loggerConfig.Level))
+
+	// Initialize log redaction mode from config
+	// Empty string defaults to OFF (no redaction)
+	redactConfigValue := o.serverConfig.Security.RedactInfoLog.String()
+	redactMode, err := pkgutil.ParseRedactMode(redactConfigValue)
+	if err != nil {
+		cmd.Printf("invalid redact-info-log configuration: %v\n", err)
+		os.Exit(1)
+	}
+	if redactMode == "" {
+		redactMode = perrors.RedactLogDisable // Default to OFF when not set
+	}
+	perrors.RedactLogEnabled.Store(redactMode)
+	log.Info("log redaction initialized", zap.String("config", redactConfigValue), zap.String("mode", redactMode))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -296,30 +312,48 @@ func isNewArchEnabled(o *options) bool {
 	return newarch
 }
 
-func runTiFlowServer(o *options, cmd *cobra.Command) error {
+func buildTiFlowServerOptions(o *options) (*tiflowServer.Options, error) {
 	// Populate security credentials from CLI flags before marshaling to JSON.
-	// In old architecture mode, complete() is not called, so we need to transfer
-	// TLS credentials (--ca, --cert, --key) to serverConfig.Security here.
-	// Without this, the Security struct is empty and tiflow uses HTTP instead of HTTPS.
+	//
+	// NOTE: When TiCDC runs in old architecture mode, it delegates to
+	// `github.com/pingcap/tiflow/pkg/cmd/server` but *reuses TiCDC's cobra.Command*.
+	// That means cobra flags are bound to TiCDC's `options` fields, not tiflow's.
+	//
+	// tiflow's `Options.complete()` treats TLS flags as "visited" and then reads
+	// the values from `tiflowServer.Options.CaPath/CertPath/KeyPath`. If we don't
+	// copy the TLS flag values into those fields, tiflow will see the TLS flags
+	// as set but with empty values, overwrite `ServerConfig.Security` with empty,
+	// and fail https PD endpoint validation.
 	o.serverConfig.Security = o.getCredential()
 
 	cfgData, err := json.Marshal(o.serverConfig)
 	if err != nil {
-		return errors.Trace(err)
+		return nil, errors.Trace(err)
 	}
 
 	var oldCfg tiflowConfig.ServerConfig
 	err = json.Unmarshal(cfgData, &oldCfg)
 	if err != nil {
-		return errors.Trace(err)
+		return nil, errors.Trace(err)
 	}
 
-	var oldOptions tiflowServer.Options
-	oldOptions.ServerConfig = &oldCfg
-	oldOptions.ServerPdAddr = strings.Join(o.pdEndpoints, ",")
-	oldOptions.ServerConfigFilePath = o.serverConfigFilePath
+	return &tiflowServer.Options{
+		ServerConfig:         &oldCfg,
+		ServerPdAddr:         strings.Join(o.pdEndpoints, ","),
+		ServerConfigFilePath: o.serverConfigFilePath,
+		CaPath:               o.caPath,
+		CertPath:             o.certPath,
+		KeyPath:              o.keyPath,
+		AllowedCertCN:        o.allowedCertCN,
+	}, nil
+}
 
-	return tiflowServer.Run(&oldOptions, cmd)
+func runTiFlowServer(o *options, cmd *cobra.Command) error {
+	oldOptions, err := buildTiFlowServerOptions(o)
+	if err != nil {
+		return err
+	}
+	return tiflowServer.Run(oldOptions, cmd)
 }
 
 // NewCmdServer creates the `server` command.
