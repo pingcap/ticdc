@@ -103,25 +103,23 @@ func TestTryClearEnsureGCSafepointDoesNotBlockChangefeedChanges(t *testing.T) {
 		changefeedChangeCh: make(chan []*changefeedChange),
 		gcCleaner:          gccleaner.New(pdClient, "test-gc-service"),
 		lastTickTime:       time.Now(),
+		gcTickInterval:     100 * time.Millisecond,
 	}
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	co.gcCleaner.Add(cfID, 1, gc.EnsureGCServiceCreating)
 
-	gcTickCh := make(chan time.Time, 1)
-	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 2)
+	ctx, cancel := context.WithCancel(context.Background())
+
 	go func() { errCh <- co.gcCleaner.Run(ctx) }()
-	go func() { errCh <- co.runWithGCTicker(ctx, gcTickCh) }()
+	go func() { errCh <- co.run(ctx) }()
 	t.Cleanup(func() {
 		cancel()
 		close(releaseUndo)
 		<-errCh
 		<-errCh
 	})
-
-	gcTickCh <- time.Now()
-
 	select {
 	case <-undoStarted:
 	case <-time.After(2 * time.Second):

@@ -78,12 +78,13 @@ type coordinator struct {
 	controller *Controller
 	backend    changefeed.Backend
 
-	mc        messaging.MessageCenter
-	gcManager gc.Manager
-	pdClient  pd.Client
-	pdClock   pdutil.Clock
+	mc             messaging.MessageCenter
+	gcManager      gc.Manager
+	gcTickInterval time.Duration
+	gcCleaner      *gccleaner.Cleaner
 
-	gcCleaner *gccleaner.Cleaner
+	pdClient pd.Client
+	pdClock  pdutil.Clock
 
 	// eventCh is used to receive the event from message center, basically these messages
 	// are from maintainer.
@@ -113,13 +114,14 @@ func New(node *node.Info,
 		gcServiceID:        gcServiceID,
 		lastTickTime:       time.Now(),
 		gcManager:          gc.NewManager(gcServiceID, pdClient),
+		gcCleaner:          gccleaner.New(pdClient, gcServiceID),
+		gcTickInterval:     time.Minute,
 		eventCh:            chann.NewAutoDrainChann[*Event](),
 		pdClient:           pdClient,
 		pdClock:            appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		mc:                 mc,
 		changefeedChangeCh: make(chan []*changefeedChange, 1024),
 		backend:            backend,
-		gcCleaner:          gccleaner.New(pdClient, gcServiceID),
 	}
 	// handle messages from message center
 	mc.RegisterHandler(messaging.CoordinatorTopic, c.recvMessages)
@@ -195,25 +197,22 @@ func (c *coordinator) Run(ctx context.Context) error {
 // 2. store the changefeed checkpointTs to meta store
 // 3. handle the state changed event
 func (c *coordinator) run(ctx context.Context) error {
-	updateGCTickerInterval := time.Minute
 	failpoint.Inject("InjectUpdateGCTickerInterval", func(val failpoint.Value) {
-		updateGCTickerInterval = time.Duration(val.(int) * int(time.Millisecond))
+		c.gcTickInterval = time.Duration(val.(int) * int(time.Millisecond))
 	})
 	failpoint.Inject("coordinator-run-with-error", func() error {
 		return errors.New("coordinator run with error")
 	})
 
-	gcTicker := time.NewTicker(updateGCTickerInterval)
+	gcTicker := time.NewTicker(c.gcTickInterval)
 	defer gcTicker.Stop()
-	return c.runWithGCTicker(ctx, gcTicker.C)
-}
-
-func (c *coordinator) runWithGCTicker(ctx context.Context, tick <-chan time.Time) error {
 	for {
 		select {
 		case <-ctx.Done():
 			return context.Cause(ctx)
-		case <-tick:
+		case <-gcTicker.C:
+			// BeginGCTick must happen before updateGCSafepoint so tasks added in this tick
+			// will not be undone by the same tick.
 			c.gcCleaner.BeginGCTick()
 			err := c.updateGCSafepoint(ctx)
 			if err == nil {

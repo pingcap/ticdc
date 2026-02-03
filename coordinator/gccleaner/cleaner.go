@@ -46,8 +46,9 @@ type pendingEntry struct {
 	resumingAtEpoch uint64
 }
 
-// Cleaner cleans up changefeed-level service GC safepoints set when creating or resuming changefeeds.
-// It is triggered after coordinator successfully updates the global GC safepoint.
+// Cleaner cleans up changefeed-level service GC safepoints/barriers set when creating or resuming changefeeds.
+// It is triggered after coordinator successfully updates the cluster-level GC state
+// (global GC safepoint on classic, or keyspace GC barrier on next-gen).
 type Cleaner struct {
 	pdClient pd.Client
 
@@ -223,9 +224,11 @@ func (c *Cleaner) requeue(tasks []task) {
 
 // tryClearEnsureGCSafepoint clears up to maxTasksPerTick ensure-GC safepoints.
 //
-// It returns true when the current "run" finishes successfully (or there is nothing to do),
-// and returns false when any task fails and is re-queued.
-// return true if all tasks done successfully.
+// It returns true when the current run finishes successfully (or there is nothing to do),
+// and returns false after the first failure (the remaining tasks are re-queued).
+//
+// We intentionally return bool instead of error because the caller only needs to decide
+// whether to apply backoff and retry, while the error details are logged here.
 func (c *Cleaner) tryClearEnsureGCSafepoint(ctx context.Context) bool {
 	tasks := c.takeReady(maxTasksPerTick)
 	for i, task := range tasks {
