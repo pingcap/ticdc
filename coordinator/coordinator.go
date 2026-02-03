@@ -77,10 +77,12 @@ type coordinator struct {
 	controller *Controller
 	backend    changefeed.Backend
 
-	mc        messaging.MessageCenter
-	gcManager gc.Manager
-	pdClient  pd.Client
-	pdClock   pdutil.Clock
+	mc            messaging.MessageCenter
+	gcManager     gc.Manager
+	lastSucceedAt time.Time
+
+	pdClient pd.Client
+	pdClock  pdutil.Clock
 
 	// eventCh is used to receive the event from message center, basically these messages
 	// are from maintainer.
@@ -104,12 +106,16 @@ func New(node *node.Info,
 	balanceCheckInterval time.Duration,
 ) server.Coordinator {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
+	now := time.Now()
 	c := &coordinator{
-		version:            version,
-		nodeInfo:           node,
-		gcServiceID:        gcServiceID,
-		lastTickTime:       time.Now(),
-		gcManager:          gc.NewManager(gcServiceID, pdClient),
+		version:  version,
+		nodeInfo: node,
+
+		gcServiceID:   gcServiceID,
+		gcManager:     gc.NewManager(gcServiceID, pdClient),
+		lastTickTime:  now,
+		lastSucceedAt: now,
+
 		eventCh:            chann.NewAutoDrainChann[*Event](),
 		pdClient:           pdClient,
 		pdClock:            appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
@@ -193,6 +199,8 @@ func (c *coordinator) run(ctx context.Context) error {
 		updateGCTickerInterval = time.Duration(val.(int) * int(time.Millisecond))
 	})
 
+	gcTTL := time.Second * time.Duration(config.GetGlobalServerConfig().GcTTL)
+
 	gcTicker := time.NewTicker(updateGCTickerInterval)
 	defer gcTicker.Stop()
 
@@ -204,13 +212,17 @@ func (c *coordinator) run(ctx context.Context) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-gcTicker.C:
-			if err := c.updateGCSafepoint(ctx); err != nil {
-				log.Warn("update gc safepoint failed",
-					zap.Error(err))
-			}
+			err := c.updateGCSafepoint(ctx)
 			now := time.Now()
-			metrics.CoordinatorCounter.Add(float64(now.Sub(c.lastTickTime)) / float64(time.Second))
+			if err == nil {
+				c.lastSucceedAt = now
+			} else {
+				if time.Since(c.lastSucceedAt) >= gcTTL {
+					log.Warn("update gc safepoint failed and exceed the gc ttl")
+				}
+			}
 			c.lastTickTime = now
+			metrics.CoordinatorCounter.Add(float64(now.Sub(c.lastTickTime)) / float64(time.Second))
 		case changes := <-c.changefeedChangeCh:
 			if err := c.saveCheckpointTs(ctx, changes); err != nil {
 				return errors.Trace(err)
