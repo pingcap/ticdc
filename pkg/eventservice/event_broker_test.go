@@ -68,7 +68,7 @@ func TestCheckNeedScan(t *testing.T) {
 
 	info := newMockDispatcherInfoForTest(t)
 	info.startTs = 100
-	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp := newDispatcherStat(info, 100, 1, 1, nil, changefeedStatus)
 	// Set the receivedResolvedTs and eventStoreCommitTs to 102 and 101.
 	// To simulate the eventStore has just notified the broker.
 	disp.receivedResolvedTs.Store(102)
@@ -227,7 +227,7 @@ func TestCURDDispatcher(t *testing.T) {
 	cfStatus, ok = broker.changefeedMap.Load(dispInfo.GetChangefeedID())
 	require.True(t, ok, "changefeedStatus should still exist after resetting")
 	require.False(t, cfStatus.(*changefeedStatus).isEmpty(), "changefeedStatus should not be empty after resetting")
-	require.Equal(t, disp.startTs, dispInfo.GetStartTs())
+	require.Equal(t, disp.checkpointTs.Load(), dispInfo.GetStartTs())
 
 	// Case 3: Remove a dispatcher.
 	broker.removeDispatcher(dispInfo)

@@ -754,13 +754,18 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 			ResolvedTs:   subStat.resolvedTs.Load(),
 		}
 		subStat.checkpointTs.Store(newCheckpointTs)
-		if log.GetLevel() <= zap.DebugLevel {
-			log.Debug("update checkpoint ts",
-				zap.Any("dispatcherID", dispatcherID),
-				zap.Uint64("subscriptionID", uint64(subStat.subID)),
-				zap.Uint64("newCheckpointTs", newCheckpointTs),
-				zap.Uint64("oldCheckpointTs", oldCheckpointTs))
-		}
+		log.Info("event store update checkpointTs",
+			zap.Any("dispatcherID", dispatcherID),
+			zap.Uint64("subscriptionID", uint64(subStat.subID)),
+			zap.Uint64("newCheckpointTs", newCheckpointTs),
+			zap.Uint64("oldCheckpointTs", oldCheckpointTs))
+		// if log.GetLevel() <= zap.DebugLevel {
+		// 	log.Debug("update checkpoint ts",
+		// 		zap.Any("dispatcherID", dispatcherID),
+		// 		zap.Uint64("subscriptionID", uint64(subStat.subID)),
+		// 		zap.Uint64("newCheckpointTs", newCheckpointTs),
+		// 		zap.Uint64("oldCheckpointTs", oldCheckpointTs))
+		// }
 	}
 	updateSubStatCheckpoint(dispatcherStat.subStat)
 	updateSubStatCheckpoint(dispatcherStat.pendingSubStat)
@@ -797,6 +802,8 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 			log.Panic("dataRange startTs is smaller than subscriptionStat checkpointTs, it should not happen",
 				zap.Stringer("dispatcherID", dispatcherID),
 				zap.Int64("tableID", dataRange.Span.GetTableID()),
+				zap.Uint64("subscriptionID", uint64(subStat.subID)),
+				zap.String("subSpan", common.FormatTableSpan(subStat.tableSpan)),
 				zap.Uint64("commitTsStart", dataRange.CommitTsStart),
 				zap.Uint64("commitTsEnd", dataRange.CommitTsEnd),
 				zap.Uint64("lastScannedTxnStartTs", dataRange.LastScannedTxnStartTs),

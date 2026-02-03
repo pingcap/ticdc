@@ -310,15 +310,15 @@ func (mc *metricsCollector) logSlowDispatchers(snapshot *metricsSnapshot) {
 			continue
 		}
 
-		if dispatcher.startTableInfo == nil {
+		if dispatcher.tableInfo == nil {
 			continue
 		}
 
 		log.Warn("slow dispatcher by checkpointTs",
 			zap.Stringer("changefeedID", dispatcher.changefeedStat.changefeedID),
 			zap.Stringer("dispatcherID", dispatcher.id),
-			zap.Stringer("tableName", dispatcher.startTableInfo.TableName),
-			zap.Int64("tableID", dispatcher.startTableInfo.TableName.TableID),
+			zap.Stringer("tableName", dispatcher.tableInfo.TableName),
+			zap.Int64("tableID", dispatcher.tableInfo.TableName.TableID),
 			zap.Uint64("checkpointTs", checkpointTs),
 			zap.Uint64("sentResolvedTs", dispatcher.sentResolvedTs.Load()),
 			zap.Uint64("receivedResolvedTs", dispatcher.receivedResolvedTs.Load()),
