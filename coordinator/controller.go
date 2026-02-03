@@ -67,6 +67,7 @@ type Controller struct {
 	changefeedDB       *changefeed.ChangefeedDB
 	backend            changefeed.Backend
 	eventCh            *chann.DrainableChann[*Event]
+	drainController    *DrainController
 
 	// initialized is true after all necessary resources ready,
 	// it's not affected by new node join the cluster.
@@ -124,8 +125,10 @@ func NewController(
 		nodeManager:  nodeManager,
 		livenessView: nodeLivenessView,
 	}
+	messageCenter := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 
 	oc := operator.NewOperatorController(selfNode, changefeedDB, backend, batchSize)
+	drainController := NewDrainController(messageCenter, nodeLivenessView, changefeedDB, oc)
 	c := &Controller{
 		version:     version,
 		selfNode:    selfNode,
@@ -146,10 +149,19 @@ func NewController(
 				destSelector,
 				balanceInterval,
 			),
+			scheduler.DrainScheduler: coscheduler.NewDrainScheduler(
+				selfNode.ID.String(),
+				batchSize,
+				oc,
+				changefeedDB,
+				nodeManager,
+				destSelector,
+				nodeLivenessView,
+			),
 		}),
 		eventCh:            eventCh,
 		operatorController: oc,
-		messageCenter:      appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
+		messageCenter:      messageCenter,
 		changefeedDB:       changefeedDB,
 		nodeManager:        nodeManager,
 		nodeLivenessView:   nodeLivenessView,
@@ -158,6 +170,7 @@ func NewController(
 		changefeedChangeCh: changefeedChangeCh,
 		pdClient:           pdClient,
 		pdClock:            appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		drainController:    drainController,
 	}
 	c.nodeChanged.changed = false
 
@@ -272,6 +285,8 @@ func (c *Controller) onPeriodTask() {
 	for _, req := range requests {
 		_ = c.messageCenter.SendCommand(req)
 	}
+
+	c.drainController.Tick()
 }
 
 func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage) {
@@ -288,9 +303,11 @@ func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage
 	case messaging.TypeNodeHeartbeatRequest:
 		req := msg.Message[0].(*heartbeatpb.NodeHeartbeat)
 		c.nodeLivenessView.UpdateFromHeartbeat(msg.From, req)
+		c.drainController.ObserveNodeHeartbeat(msg.From, req)
 	case messaging.TypeSetNodeLivenessResponse:
 		req := msg.Message[0].(*heartbeatpb.SetNodeLivenessResponse)
 		c.nodeLivenessView.UpdateFromSetLivenessResponse(msg.From, req)
+		c.drainController.ObserveSetNodeLivenessResponse(msg.From, req)
 	default:
 		log.Warn("unknown message type, ignore it",
 			zap.String("type", msg.Type.String()),
@@ -836,6 +853,11 @@ func (c *Controller) getChangefeed(id common.ChangeFeedID) *changefeed.Changefee
 // RemoveNode is called when a node is removed
 func (c *Controller) RemoveNode(id node.ID) {
 	c.operatorController.OnNodeRemoved(id)
+}
+
+// DrainNode requests the target node to enter drain mode and returns the current remaining work.
+func (c *Controller) DrainNode(target node.ID) int {
+	return c.drainController.DrainNode(target)
 }
 
 func (c *Controller) submitPeriodTask() {

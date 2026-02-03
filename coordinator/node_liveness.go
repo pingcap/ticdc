@@ -141,3 +141,21 @@ func (v *NodeLivenessView) IsDraining(nodeID node.ID) bool {
 	return v.derivedLiveness(nodeID) == derivedNodeLivenessDraining
 }
 
+func (v *NodeLivenessView) IsStopping(nodeID node.ID) bool {
+	return v.derivedLiveness(nodeID) == derivedNodeLivenessStopping
+}
+
+func (v *NodeLivenessView) IsUnknown(nodeID node.ID) bool {
+	return v.derivedLiveness(nodeID) == derivedNodeLivenessUnknown
+}
+
+func (v *NodeLivenessView) GetNodeEpoch(nodeID node.ID) (uint64, bool) {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+
+	entry, ok := v.nodes[nodeID]
+	if !ok || !entry.everSeenHeartbeat {
+		return 0, false
+	}
+	return entry.nodeEpoch, true
+}
