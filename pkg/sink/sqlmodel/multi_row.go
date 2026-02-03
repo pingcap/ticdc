@@ -268,7 +268,16 @@ func genUpdateSQLV2(changes ...*RowChange) (string, []any) {
 	}
 	buf.WriteString(")")
 
-	// Build args of the UPDATE SQL
+	// Build args of the UPDATE SQL.
+	//
+	// The generated SQL is roughly:
+	//   UPDATE t SET c1 = CASE WHEN <where1> THEN ? WHEN <where2> THEN ? END,
+	//                c2 = CASE WHEN <where1> THEN ? WHEN <where2> THEN ? END
+	//   WHERE (<pk cols>) IN ((...),(...)...)
+	//
+	// Since each `<whereX>` contains placeholders, args are grouped by column:
+	// for each assignable column and each row, append `[where values..., post value]`.
+	// At the end, append all WHERE values again for the trailing IN (...) predicate.
 	var assignValueColumnCount int
 	var skipColIdx []int
 	for i, col := range first.sourceTableInfo.GetColumns() {

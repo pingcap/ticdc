@@ -276,7 +276,7 @@ func (c *Config) Apply(
 	if err = getEnableDDLTs(query, &c.EnableDDLTs); err != nil {
 		return err
 	}
-	if err = getWHEREClause(query, &c.whereClause); err != nil {
+	if err = getWhereClause(query, &c.whereClause); err != nil {
 		return err
 	}
 
@@ -616,14 +616,7 @@ func getEnableDDLTs(value url.Values, enableDDLTs *bool) error {
 	return getBool(value, "enable-ddl-ts", enableDDLTs)
 }
 
-// getWHEREClause reads the sink URI query param `where-clause`.
-//
-// Valid values are currently:
-// - "v2" (default): prefer compact `(col1,col2) IN ((?,?),(?,?))` style predicates.
-// - "v1": fall back to `(... ) OR (... )` style predicates, which can handle NULL keys.
-//
-// Any non-empty value is accepted and stored; callers interpret the string.
-func getWHEREClause(value url.Values, whereClause *string) error {
+func getWhereClause(value url.Values, whereClause *string) error {
 	s := value.Get("where-clause")
 	if len(s) > 0 {
 		*whereClause = s
