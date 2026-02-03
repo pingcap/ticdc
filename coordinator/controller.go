@@ -77,7 +77,8 @@ type Controller struct {
 		sync.Mutex
 		changed bool
 	}
-	nodeManager *watcher.NodeManager
+	nodeManager       *watcher.NodeManager
+	nodeLivenessView  *NodeLivenessView
 
 	taskScheduler    threadpool.ThreadPool
 	taskHandlerMutex sync.Mutex // protect taskHandlers
@@ -117,6 +118,12 @@ func NewController(
 	pdClient pd.Client,
 ) *Controller {
 	changefeedDB := changefeed.NewChangefeedDB(version)
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeLivenessView := NewNodeLivenessView()
+	destSelector := &destNodeSelector{
+		nodeManager:  nodeManager,
+		livenessView: nodeLivenessView,
+	}
 
 	oc := operator.NewOperatorController(selfNode, changefeedDB, backend, batchSize)
 	c := &Controller{
@@ -129,12 +136,14 @@ func NewController(
 				batchSize,
 				oc,
 				changefeedDB,
+				destSelector,
 			),
 			scheduler.BalanceScheduler: coscheduler.NewBalanceScheduler(
 				selfNode.ID.String(),
 				batchSize,
 				oc,
 				changefeedDB,
+				destSelector,
 				balanceInterval,
 			),
 		}),
@@ -142,7 +151,8 @@ func NewController(
 		operatorController: oc,
 		messageCenter:      appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		changefeedDB:       changefeedDB,
-		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
+		nodeManager:        nodeManager,
+		nodeLivenessView:   nodeLivenessView,
 		taskScheduler:      threadpool.NewThreadPoolDefault(),
 		backend:            backend,
 		changefeedChangeCh: changefeedChangeCh,
@@ -275,6 +285,12 @@ func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage
 		}
 	case messaging.TypeLogCoordinatorResolvedTsResponse:
 		c.onLogCoordinatorReportResolvedTs(msg)
+	case messaging.TypeNodeHeartbeatRequest:
+		req := msg.Message[0].(*heartbeatpb.NodeHeartbeat)
+		c.nodeLivenessView.UpdateFromHeartbeat(msg.From, req)
+	case messaging.TypeSetNodeLivenessResponse:
+		req := msg.Message[0].(*heartbeatpb.SetNodeLivenessResponse)
+		c.nodeLivenessView.UpdateFromSetLivenessResponse(msg.From, req)
 	default:
 		log.Warn("unknown message type, ignore it",
 			zap.String("type", msg.Type.String()),
