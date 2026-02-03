@@ -38,19 +38,19 @@ mysql_groups=(
 	# G02
 	'new_ci_collation safe_mode savepoint fail_over_ddl_C unsplittable_tables'
 	# G03
-	'capture_suicide_while_balance_table kv_client_stream_reconnect fail_over_ddl_D'
+	'capture_suicide_while_balance_table kv_client_stream_reconnect fail_over_ddl_D ddl_default_current_timestamp'
 	# G04
 	'multi_capture ci_collation_compatibility resourcecontrol fail_over_ddl_E'
 	# G05
 	'vector simple partition_table fail_over_ddl_F conflict_key_generated_column'
 	# G06
-	'http_api http_api_tls fail_over_ddl_G synced_status'
+	'http_api http_api_tls fail_over_ddl_G synced_status same_upstream_downstream'
 	# G07
 	'http_api_tls_with_user_auth fail_over_ddl_H changefeed_update_config synced_status_with_redo'
 	# G08
 	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry fail_over_ddl_I'
 	# G09
-	'sequence cdc_server_tips ddl_sequence server_config_compatibility fail_over_ddl_J'
+	'sequence cdc_server_tips ddl_sequence server_config_compatibility log_redaction fail_over_ddl_J'
 	# G10
 	'overwrite_resume_with_syncpoint restart_changefeed changefeed_error bdr_mode fail_over_ddl_K split_table_check'
 	# G11
@@ -89,7 +89,7 @@ kafka_groups=(
 	# G08
 	'capture_session_done_during_task fail_over_ddl_I'
 	# G09
-	'cdc_server_tips ddl_sequence fail_over_ddl_J'
+	'cdc_server_tips ddl_sequence log_redaction fail_over_ddl_J'
 	# G10
 	'changefeed_error batch_add_table fail_over_ddl_K split_table_check'
 	# G11

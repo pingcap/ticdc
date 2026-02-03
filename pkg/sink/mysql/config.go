@@ -26,6 +26,7 @@ import (
 	dmysql "github.com/go-sql-driver/mysql"
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/pingcap/errors"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -336,6 +337,10 @@ func NewMysqlConfigAndDB(
 	// Adding an extra connection to the connection pool solves the connection exhaustion issue.
 	db.SetMaxIdleConns(cfg.WorkerCount + 1)
 	db.SetMaxOpenConns(cfg.WorkerCount + 1)
+	failpoint.Inject("MySQLSinkForceSingleConnection", func() {
+		db.SetMaxIdleConns(1)
+		db.SetMaxOpenConns(1)
+	})
 
 	// Inherit the default value of the prepared statement cache from the SinkURI Options
 	cachePrepStmts := cfg.CachePrepStmts

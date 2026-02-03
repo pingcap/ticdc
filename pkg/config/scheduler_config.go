@@ -27,6 +27,8 @@ import (
 const (
 	// MinWriteKeyThreshold is the minimum allowed value for WriteKeyThreshold
 	MinWriteKeyThreshold = 10485760 // 10MB
+
+	DefaultRegionRefreshInterval = 5 * time.Minute
 )
 
 // ChangefeedSchedulerConfig is per changefeed scheduler settings.
