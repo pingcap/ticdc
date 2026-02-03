@@ -45,6 +45,8 @@ func (w *Writer) createSyncTable() error {
 }
 
 func (w *Writer) SendSyncPointEvent(event *commonEvent.SyncPointEvent) error {
+	log.Info("fizz send syncpoint event", zap.Stringer("changefeedID", w.ChangefeedID), zap.Uint64("commitTs", event.GetCommitTs()))
+
 	tx, err := w.db.BeginTx(w.ctx, nil)
 	if err != nil {
 		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, "sync table: begin Tx fail;"))
