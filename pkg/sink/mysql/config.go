@@ -149,6 +149,10 @@ type Config struct {
 	// ServerInfo is the version info of the downstream
 	ServerInfo version.ServerInfo
 
+	// whereClause controls the WHERE clause strategy used by multi-row UPDATE/DELETE.
+	//
+	// It is configured via the sink URI query param `where-clause` and passed to
+	// sqlmodel.Gen{Delete,Update}SQL. See pkg/sink/sqlmodel for details.
 	whereClause string
 }
 
@@ -612,6 +616,13 @@ func getEnableDDLTs(value url.Values, enableDDLTs *bool) error {
 	return getBool(value, "enable-ddl-ts", enableDDLTs)
 }
 
+// getWHEREClause reads the sink URI query param `where-clause`.
+//
+// Valid values are currently:
+// - "v2" (default): prefer compact `(col1,col2) IN ((?,?),(?,?))` style predicates.
+// - "v1": fall back to `(... ) OR (... )` style predicates, which can handle NULL keys.
+//
+// Any non-empty value is accepted and stored; callers interpret the string.
 func getWHEREClause(value url.Values, whereClause *string) error {
 	s := value.Get("where-clause")
 	if len(s) > 0 {

@@ -18,10 +18,14 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
+// V1 multi-row DML generators expand WHERE predicates as `(cond1) OR (cond2) ...`.
+//
+// Compared with the v2 IN-based form, this form produces longer SQL, but it can
+// correctly match rows when any key column is NULL because RowChange.genWhere can
+// emit `IS NULL` predicates.
 func genDeleteSQLV1(changes ...*RowChange) (string, []interface{}) {
 	if len(changes) == 0 {
 		log.L().DPanic("row changes is empty")
@@ -42,6 +46,8 @@ func genDeleteSQLV1(changes ...*RowChange) (string, []interface{}) {
 		if i > 0 {
 			buf.WriteString(") OR (")
 		}
+		// Each RowChange generates its own WHERE predicate. Append args in the same order
+		// as the predicates are concatenated.
 		args := c.genWhere(&buf)
 		allArgs = append(allArgs, args...)
 	}
@@ -63,7 +69,9 @@ func genUpdateSQLV1(changes ...*RowChange) (string, []any) {
 	buf.WriteString(first.targetTable.QuoteString())
 	buf.WriteString(" SET ")
 
-	// Pre-generate essential sub statements used after WHEN, WHERE.
+	// Pre-generate essential sub statements used after WHEN and in the final WHERE.
+	// Each entry in whenCaseStmts is a full predicate like:
+	//   `pk1` = ? AND `pk2` IS ?
 	var (
 		whenCaseStmts = make([]string, len(changes))
 		whenCaseArgs  = make([][]interface{}, len(changes))
@@ -115,7 +123,16 @@ func genUpdateSQLV1(changes ...*RowChange) (string, []any) {
 	}
 	buf.WriteString(")")
 
-	// Build args of the UPDATE SQL
+	// Build args of the UPDATE SQL.
+	//
+	// The generated SQL is roughly:
+	//   UPDATE t SET c1 = CASE WHEN <where1> THEN ? WHEN <where2> THEN ? END,
+	//                c2 = CASE WHEN <where1> THEN ? WHEN <where2> THEN ? END
+	//   WHERE (<where1>) OR (<where2>)
+	//
+	// Since each `<whereX>` contains placeholders, args are grouped by column:
+	// for each assignable column and each row, append `[where values..., post value]`.
+	// At the end, append all WHERE values again for the trailing WHERE clause.
 	var assignValueColumnCount int
 	var skipColIdx []int
 	for i, col := range first.sourceTableInfo.GetColumns() {
@@ -140,7 +157,7 @@ func genUpdateSQLV1(changes ...*RowChange) (string, []any) {
 			log.Panic("len(whereValues) != len(whereColumns)",
 				zap.Int("len(whereValues)", len(whereValues)),
 				zap.Int("len(whereColumns)", len(whereColumns)),
-				zap.String("whereValues", util.RedactArgs(whereValues)),
+				zap.Any("whereValues", whereValues),
 				zap.Stringer("sourceTable", change.sourceTable))
 		}
 
