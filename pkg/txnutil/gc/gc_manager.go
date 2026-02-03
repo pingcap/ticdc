@@ -94,13 +94,6 @@ func (m *gcManager) TryUpdateServiceGCSafepoint(
 		log.Info("update gc safe point success, cdc is blocking gc", zap.Uint64("minServiceGCSafepoint", checkpointTs))
 	}
 
-	if checkpointTs < minServiceGCSafepoint {
-		log.Warn("update gc safe point failed, the checkpointTs is smaller than the minimum service gc safepoint",
-			zap.Uint64("minServiceGCSafepoint", minServiceGCSafepoint), zap.Uint64("checkpointTs", checkpointTs),
-			zap.String("serviceID", m.gcServiceID))
-		return errors.ErrSnapshotLostByGC.GenWithStackByArgs(checkpointTs, minServiceGCSafepoint)
-	}
-
 	// if the min checkpoint ts is equal to the current gc safe point, it
 	// means that the service gc safe point set by TiCDC is the min service
 	// gc safe point
@@ -108,6 +101,13 @@ func (m *gcManager) TryUpdateServiceGCSafepoint(
 	m.lastSafePointTs.Store(minServiceGCSafepoint)
 	minServiceGCSafePointGauge.Set(float64(oracle.ExtractPhysical(minServiceGCSafepoint)))
 	cdcGCSafePointGauge.Set(float64(oracle.ExtractPhysical(checkpointTs)))
+
+	if checkpointTs < minServiceGCSafepoint {
+		log.Warn("update gc safe point failed, the checkpointTs is smaller than the minimum service gc safepoint",
+			zap.Uint64("minServiceGCSafepoint", minServiceGCSafepoint), zap.Uint64("checkpointTs", checkpointTs),
+			zap.String("serviceID", m.gcServiceID))
+		return errors.ErrSnapshotLostByGC.GenWithStackByArgs(checkpointTs, minServiceGCSafepoint)
+	}
 	return nil
 }
 

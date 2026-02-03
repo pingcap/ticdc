@@ -208,7 +208,7 @@ func (c *coordinator) run(ctx context.Context) error {
 			return context.Cause(ctx)
 		case <-gcTicker.C:
 			err := c.updateGCSafepoint(ctx)
-			if err == nil {
+			if err != nil {
 				log.Warn("update service gc safepoint failed temporarily", zap.Error(err))
 			}
 			now := time.Now()
@@ -443,14 +443,17 @@ func (c *coordinator) updateGlobalGcSafepoint(ctx context.Context) error {
 func (c *coordinator) updateAllKeyspaceGcBarriers(ctx context.Context) error {
 	barrierMap := c.controller.calculateKeyspaceGCBarrier()
 
+	var retErr error
 	for meta, barrierTS := range barrierMap {
 		err := c.updateKeyspaceGcBarrier(ctx, meta, barrierTS)
 		if err != nil {
-			return errors.Trace(err)
+			log.Warn("update keyspace gc barrier failed",
+				zap.Uint32("keyspaceID", meta.ID), zap.String("keyspaceName", meta.Name),
+				zap.Uint64("barrierTS", barrierTS), zap.Error(err))
+			retErr = err
 		}
 	}
-
-	return nil
+	return retErr
 }
 
 func (c *coordinator) updateKeyspaceGcBarrier(ctx context.Context, meta common.KeyspaceMeta, barrierTS uint64) error {
