@@ -38,7 +38,15 @@ func TestTryUpdateKeyspaceGCBarrierDoesNotReturnSnapshotLost(t *testing.T) {
 	checkpointTs := common.Ts(100)
 	txnSafePoint := uint64(200)
 
-	gcStatesClient := &mockGCStatesClient{txnSafePoint: txnSafePoint}
+	pdCliForGCStates := &mockPdClientForServiceGCSafePoint{
+		serviceSafePoint: make(map[string]uint64),
+		gcBarriers:       make(map[string]uint64),
+		txnSafePoint:     txnSafePoint,
+	}
+	gcStatesClient := &mockGCStatesClient{
+		keyspaceID: keyspaceID,
+		parent:     pdCliForGCStates,
+	}
 	pdClient := &MockPDClient{
 		GetGCStatesClientFunc: func(id uint32) pdgc.GCStatesClient {
 			require.Equal(t, keyspaceID, id)
