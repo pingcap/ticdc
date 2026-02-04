@@ -190,6 +190,12 @@ func (c *Changefeed) NeedCheckpointTsMessage() bool {
 	switch c.sinkType {
 	case common.KafkaSinkType, common.PulsarSinkType, common.CloudStorageSinkType, common.BlackHoleSinkType:
 		return true
+	case common.MysqlSinkType:
+		info := c.GetInfo()
+		if info == nil || info.Config == nil || info.Config.EnableActiveActive == nil {
+			return false
+		}
+		return *info.Config.EnableActiveActive
 	}
 	return false
 }

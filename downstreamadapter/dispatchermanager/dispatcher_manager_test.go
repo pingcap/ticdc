@@ -53,6 +53,7 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 		"system",
 		false,
 		false,
+		false,
 		nil,
 		nil,
 		nil,
@@ -111,6 +112,7 @@ func createTestManager(t *testing.T) *DispatcherManager {
 		manager.changefeedID,
 		"system",
 		manager.config.BDRMode,
+		manager.config.EnableActiveActive,
 		false, // outputRawChangeEvent
 		nil,   // integrityConfig
 		nil,   // filterConfig
