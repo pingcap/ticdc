@@ -305,11 +305,7 @@ values(%d,
 }
 
 func (c *BankWorkload) BuildDDLSql(opts schema.DDLOption) string {
-	// Toggle an extra secondary index while DML is running.
-	if rand.Intn(2) == 0 {
-		return fmt.Sprintf("alter table bank%d add index idx_ddl_col4 (col4);", opts.TableIndex)
-	}
-	return fmt.Sprintf("alter table bank%d drop index idx_ddl_col4;", opts.TableIndex)
+	return ""
 }
 
 func (c *BankWorkload) BuildUpdateSql(opts schema.UpdateOption) string {

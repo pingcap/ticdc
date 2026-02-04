@@ -283,9 +283,9 @@ WHERE auto_id IN (
 func (c *BankWorkload) BuildDDLSql(opts schema.DDLOption) string {
 	tableName := getBankTableName(opts.TableIndex)
 	if rand.Intn(2) == 0 {
-		return fmt.Sprintf("alter table %s add index idx_ddl_col30 (col30);", tableName)
+		return fmt.Sprintf("alter table %s add column col_add int default null;", tableName)
 	}
-	return fmt.Sprintf("alter table %s drop index idx_ddl_col30;", tableName)
+	return fmt.Sprintf("alter table %s drop column col_add;", tableName)
 }
 
 func getBankTableName(n int) string {

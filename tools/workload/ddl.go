@@ -47,7 +47,7 @@ func (app *WorkloadApp) executeDDLWorkers(ddlConcurrency int, wg *sync.WaitGroup
 	}
 
 	wg.Add(ddlConcurrency)
-for i := 0; i < ddlConcurrency; i++ {
+	for i := 0; i < ddlConcurrency; i++ {
 		db := app.DBManager.GetDB()
 
 		go func(workerID int) {
@@ -77,7 +77,7 @@ for i := 0; i < ddlConcurrency; i++ {
 				if err != nil {
 					// Check if it's a connection-level error that requires reconnection
 					if app.isConnectionError(err) {
-log.Warn("connection error detected, reconnecting", zap.Error(err))
+						log.Warn("connection error detected, reconnecting", zap.Error(err))
 						conn.Close()
 						time.Sleep(time.Second * 2)
 
