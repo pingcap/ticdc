@@ -23,12 +23,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/errors"
-	plog "github.com/pingcap/log"
-	"go.uber.org/zap"
 	"workload/schema"
 	pbank "workload/schema/bank"
 	pbank2 "workload/schema/bank2"
+	pbank3 "workload/schema/bank3"
 	"workload/schema/bankupdate"
 	pcrawler "workload/schema/crawler"
 	pdc "workload/schema/dc"
@@ -36,6 +34,10 @@ import (
 	"workload/schema/shop"
 	psysbench "workload/schema/sysbench"
 	puuu "workload/schema/uuu"
+
+	"github.com/pingcap/errors"
+	plog "github.com/pingcap/log"
+	"go.uber.org/zap"
 )
 
 // WorkloadExecutor executes the workload and collects statistics
@@ -74,6 +76,7 @@ const (
 	uuu        = "uuu"
 	crawler    = "crawler"
 	bank2      = "bank2"
+	bank3      = "bank3"
 	bankUpdate = "bank_update"
 	dc         = "dc"
 )
@@ -130,6 +133,8 @@ func (app *WorkloadApp) createWorkload() schema.Workload {
 		workload = pcrawler.NewCrawlerWorkload()
 	case bank2:
 		workload = pbank2.NewBank2Workload()
+	case bank3:
+		workload = pbank3.NewBankWorkload()
 	case bankUpdate:
 		workload = bankupdate.NewBankUpdateWorkload(app.Config.TotalRowCount, app.Config.UpdateLargeColumnSize)
 	case dc:
@@ -404,7 +409,6 @@ func (app *WorkloadApp) executeWithValues(conn *sql.Conn, sqlStr string, n int, 
 func (app *WorkloadApp) StartMetricsReporting() {
 	go app.reportMetrics()
 }
-
 func getSQLPreview(sql string) string {
 	if len(sql) > 512 {
 		return sql[:512] + "..."

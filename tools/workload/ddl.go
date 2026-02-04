@@ -133,6 +133,9 @@ func (app *WorkloadApp) executeDDL(conn *sql.Conn, ddlSQL string, tableIndex int
 
 	res, err := conn.ExecContext(context.Background(), ddlSQL)
 	if err == nil {
+		log.Info("execute ddl success",
+			zap.Error(err),
+			zap.String("sql", getSQLPreview(ddlSQL)))
 		return res, nil
 	}
 
