@@ -431,13 +431,11 @@ type changefeedStatus struct {
 	scanInterval         atomic.Int64
 	lastRatio            atomic.Float64
 
-	lastAdjustTime         atomic.Time
-	lastTrendAdjustTime    atomic.Time
-	usageWindow            *memoryUsageWindow
-	syncPointEnabled       atomic.Bool
-	syncPointInterval      atomic.Int64
-	lastUsageLogTime       atomic.Time
-	lastUsageWindowLogTime atomic.Time
+	lastAdjustTime      atomic.Time
+	lastTrendAdjustTime atomic.Time
+	usageWindow         *memoryUsageWindow
+	syncPointEnabled    atomic.Bool
+	syncPointInterval   atomic.Int64
 }
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
@@ -448,8 +446,6 @@ func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
 	status.scanInterval.Store(int64(defaultScanInterval))
 	status.lastAdjustTime.Store(time.Now())
 	status.lastTrendAdjustTime.Store(time.Now())
-	status.lastUsageLogTime.Store(time.Now())
-	status.lastUsageWindowLogTime.Store(time.Now())
 
 	return status
 }

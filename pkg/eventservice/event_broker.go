@@ -93,8 +93,6 @@ type eventBroker struct {
 
 	scanRateLimiter  *rate.Limiter
 	scanLimitInBytes uint64
-
-	lastCongestionLogTime atomic.Int64
 }
 
 func newEventBroker(
