@@ -230,7 +230,7 @@ func TestGenerateBatchSQLInUnSafeMode(t *testing.T) {
 	sql, args := writer.generateBatchSQLInUnSafeMode([]*commonEvent.DMLEvent{dmlDeleteEvent, dmlInsertEvent})
 	require.Equal(t, 2, len(sql))
 	require.Equal(t, 2, len(args))
-	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id` = ?)", sql[0])
+	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?))", sql[0])
 	require.Equal(t, []interface{}{int64(1)}, args[0])
 	require.Equal(t, "INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?)", sql[1])
 	require.Equal(t, []interface{}{int64(1), "test"}, args[1])
@@ -241,7 +241,7 @@ func TestGenerateBatchSQLInUnSafeMode(t *testing.T) {
 	sql, args = writer.generateBatchSQLInUnSafeMode([]*commonEvent.DMLEvent{dmlDeleteEvent, dmlUpdateEvent})
 	require.Equal(t, 2, len(sql))
 	require.Equal(t, 2, len(args))
-	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id` = ?)", sql[0])
+	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?))", sql[0])
 	require.Equal(t, []interface{}{int64(2)}, args[0])
 	require.Equal(t, "UPDATE `test`.`t` SET `id` = ?, `name` = ? WHERE `id` = ? LIMIT 1", sql[1])
 
@@ -251,7 +251,7 @@ func TestGenerateBatchSQLInUnSafeMode(t *testing.T) {
 	sql, args = writer.generateBatchSQLInUnSafeMode([]*commonEvent.DMLEvent{dmlInsertEvent, dmlDeleteEvent})
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
-	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id` = ?)", sql[0])
+	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?))", sql[0])
 	require.Equal(t, []interface{}{int64(3)}, args[0])
 
 	// Insert A + Update A
@@ -270,7 +270,7 @@ func TestGenerateBatchSQLInUnSafeMode(t *testing.T) {
 	sql, args = writer.generateBatchSQLInUnSafeMode([]*commonEvent.DMLEvent{dmlUpdateEvent, dmlDeleteEvent})
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
-	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id` = ?)", sql[0])
+	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?))", sql[0])
 	require.Equal(t, []interface{}{int64(5)}, args[0])
 
 	// Update A + Update A
@@ -291,7 +291,7 @@ func TestGenerateBatchSQLInUnSafeMode(t *testing.T) {
 	sql, args = writer.generateBatchSQLInUnSafeMode([]*commonEvent.DMLEvent{dmlDeleteEvent, dmlInsertEvent, dmlDeleteEvent, dmlInsertEvent2})
 	require.Equal(t, 2, len(sql))
 	require.Equal(t, 2, len(args))
-	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id` = ?) OR (`id` = ?)", sql[0])
+	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?),(?))", sql[0])
 	require.Equal(t, []interface{}{int64(7), int64(7)}, args[0])
 	require.Equal(t, "INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?)", sql[1])
 	require.Equal(t, []interface{}{int64(7), "test2"}, args[1])
@@ -306,7 +306,7 @@ func TestGenerateBatchSQLInUnSafeMode(t *testing.T) {
 	sql, args = writer.generateBatchSQLInUnSafeMode([]*commonEvent.DMLEvent{dmlDeleteEvent, dmlInsertEvent, dmlUpdateEvent, dmlDeleteEvent2})
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
-	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id` = ?) OR (`id` = ?)", sql[0])
+	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?),(?))", sql[0])
 	require.Equal(t, []interface{}{int64(8), int64(8)}, args[0])
 
 	// Delete A + Insert A + Update A  + Update A + Delete A
@@ -321,7 +321,7 @@ func TestGenerateBatchSQLInUnSafeMode(t *testing.T) {
 	sql, args = writer.generateBatchSQLInUnSafeMode([]*commonEvent.DMLEvent{dmlDeleteEvent, dmlInsertEvent, dmlUpdateEvent, dmlUpdateEvent2, dmlDeleteEvent2})
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
-	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id` = ?) OR (`id` = ?)", sql[0])
+	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?),(?))", sql[0])
 	require.Equal(t, []interface{}{int64(9), int64(9)}, args[0])
 
 	// Insert A + Delete A + Insert A
@@ -332,7 +332,7 @@ func TestGenerateBatchSQLInUnSafeMode(t *testing.T) {
 	sql, args = writer.generateBatchSQLInUnSafeMode([]*commonEvent.DMLEvent{dmlInsertEvent, dmlDeleteEvent, dmlInsertEvent2})
 	require.Equal(t, 2, len(sql))
 	require.Equal(t, 2, len(args))
-	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id` = ?)", sql[0])
+	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?))", sql[0])
 	require.Equal(t, []interface{}{int64(10)}, args[0])
 	require.Equal(t, "INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?)", sql[1])
 	require.Equal(t, []interface{}{int64(10), "test2"}, args[1])
@@ -346,7 +346,7 @@ func TestGenerateBatchSQLInUnSafeMode(t *testing.T) {
 	sql, args = writer.generateBatchSQLInUnSafeMode([]*commonEvent.DMLEvent{dmlInsertEvent, dmlUpdateEvent, dmlDeleteEvent})
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
-	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id` = ?)", sql[0])
+	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?))", sql[0])
 	require.Equal(t, []interface{}{int64(11)}, args[0])
 
 	// Insert A + Update A + Update A
@@ -369,7 +369,7 @@ func TestGenerateBatchSQLInUnSafeMode(t *testing.T) {
 	sql, args = writer.generateBatchSQLInUnSafeMode([]*commonEvent.DMLEvent{dmlInsertEvent, dmlDeleteEvent, dmlUpdateEvent})
 	require.Equal(t, 3, len(sql))
 	require.Equal(t, 3, len(args))
-	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id` = ?)", sql[0])
+	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?))", sql[0])
 	require.Equal(t, []interface{}{int64(14)}, args[0])
 	require.Equal(t, "UPDATE `test`.`t` SET `id` = ?, `name` = ? WHERE `id` = ? LIMIT 1", sql[1])
 	require.Equal(t, []interface{}{int64(15), "test15", int64(15)}, args[1])
@@ -415,7 +415,7 @@ func TestGenerateBatchSQLInSafeMode(t *testing.T) {
 	sql, args = writer.generateBatchSQLInSafeMode([]*commonEvent.DMLEvent{dmlInsertEvent, dmlDeleteEvent})
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
-	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id` = ?)", sql[0])
+	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?))", sql[0])
 	require.Equal(t, []interface{}{int64(3)}, args[0])
 
 	// Insert A + Update A
@@ -434,7 +434,7 @@ func TestGenerateBatchSQLInSafeMode(t *testing.T) {
 	sql, args = writer.generateBatchSQLInSafeMode([]*commonEvent.DMLEvent{dmlUpdateEvent, dmlDeleteEvent})
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
-	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id` = ?)", sql[0])
+	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?))", sql[0])
 	require.Equal(t, []interface{}{int64(5)}, args[0])
 
 	// Update A + Update A
@@ -468,7 +468,7 @@ func TestGenerateBatchSQLInSafeMode(t *testing.T) {
 	sql, args = writer.generateBatchSQLInSafeMode([]*commonEvent.DMLEvent{dmlDeleteEvent, dmlInsertEvent, dmlUpdateEvent, dmlDeleteEvent2})
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
-	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id` = ?)", sql[0])
+	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?))", sql[0])
 	require.Equal(t, []interface{}{int64(8)}, args[0])
 
 	// Delete A + Insert A + Update A  + Update A + Delete A
@@ -483,7 +483,7 @@ func TestGenerateBatchSQLInSafeMode(t *testing.T) {
 	sql, args = writer.generateBatchSQLInSafeMode([]*commonEvent.DMLEvent{dmlDeleteEvent, dmlInsertEvent, dmlUpdateEvent, dmlUpdateEvent2, dmlDeleteEvent2})
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
-	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id` = ?)", sql[0])
+	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?))", sql[0])
 	require.Equal(t, []interface{}{int64(9)}, args[0])
 
 	// Insert A + Delete A + Insert A
@@ -506,7 +506,7 @@ func TestGenerateBatchSQLInSafeMode(t *testing.T) {
 	sql, args = writer.generateBatchSQLInSafeMode([]*commonEvent.DMLEvent{dmlInsertEvent, dmlUpdateEvent, dmlDeleteEvent})
 	require.Equal(t, 1, len(sql))
 	require.Equal(t, 1, len(args))
-	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id` = ?)", sql[0])
+	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?))", sql[0])
 	require.Equal(t, []interface{}{int64(11)}, args[0])
 
 	// Insert A + Update A + Update A
@@ -529,7 +529,7 @@ func TestGenerateBatchSQLInSafeMode(t *testing.T) {
 	sql, args = writer.generateBatchSQLInSafeMode([]*commonEvent.DMLEvent{dmlInsertEvent, dmlDeleteEvent, dmlUpdateEvent})
 	require.Equal(t, 2, len(sql))
 	require.Equal(t, 2, len(args))
-	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id` = ?)", sql[0])
+	require.Equal(t, "DELETE FROM `test`.`t` WHERE (`id`) IN ((?))", sql[0])
 	require.Equal(t, []interface{}{int64(14)}, args[0])
 	require.Equal(t, "REPLACE INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?)", sql[1])
 	// The order of args in unsafe mode is not deterministic due to map iteration
