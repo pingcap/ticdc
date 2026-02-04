@@ -144,10 +144,10 @@ func (t *TableDMLIdx) DiffNewTableDMLIdxMap(
 				if _, ok := resMap[newDMLPathKey]; !ok {
 					resMap[newDMLPathKey] = make(fileIndexRange)
 				}
-			}
-			resMap[newDMLPathKey][indexKey] = indexRange{
-				start: origEndVal + 1,
-				end:   newEndVal,
+				resMap[newDMLPathKey][indexKey] = indexRange{
+					start: origEndVal + 1,
+					end:   newEndVal,
+				}
 			}
 		}
 	}
@@ -262,6 +262,7 @@ func (c *S3Consumer) downloadSchemaFilesWithScanRange(
 		Version:     startSchemaKey.TableVersion,
 		VersionPath: startVersionKey,
 	})
+	newVersionPaths[startSchemaKey] = startVersionKey
 	if err := c.s3Storage.WalkDir(ctx, opt, func(filePath string, size int64) error {
 		if endVersionKey < filePath {
 			return ErrWalkDirEnd
@@ -482,8 +483,8 @@ func (c *S3Consumer) getNewFilesForSchemaPathKey(
 				return nil
 			}
 			updateTableDMLIdxMap(newTableDMLIdxMap, dmlkey, fileIdx)
+			maxFilePath = filePath
 		}
-		maxFilePath = filePath
 		return nil
 	}); err != nil {
 		return nil, errors.Trace(err)

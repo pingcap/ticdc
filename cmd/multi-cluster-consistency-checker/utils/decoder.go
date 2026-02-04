@@ -58,6 +58,7 @@ func defaultCanalJSONCodecConfig(protocol config.Protocol) *codecCommon.Config {
 	// Always enable tidb extension for canal-json protocol
 	// because we need to get the commit ts from the extension field.
 	codecConfig.EnableTiDBExtension = true
+	codecConfig.Terminator = config.CRLF
 	return codecConfig
 }
 
