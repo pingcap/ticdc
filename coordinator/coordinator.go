@@ -79,8 +79,9 @@ type coordinator struct {
 
 	mc        messaging.MessageCenter
 	gcManager gc.Manager
-	pdClient  pd.Client
-	pdClock   pdutil.Clock
+
+	pdClient pd.Client
+	pdClock  pdutil.Clock
 
 	// eventCh is used to receive the event from message center, basically these messages
 	// are from maintainer.
@@ -105,11 +106,13 @@ func New(node *node.Info,
 ) server.Coordinator {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	c := &coordinator{
-		version:            version,
-		nodeInfo:           node,
-		gcServiceID:        gcServiceID,
-		lastTickTime:       time.Now(),
-		gcManager:          gc.NewManager(gcServiceID, pdClient),
+		version:  version,
+		nodeInfo: node,
+
+		gcServiceID:  gcServiceID,
+		gcManager:    gc.NewManager(gcServiceID, pdClient),
+		lastTickTime: time.Now(),
+
 		eventCh:            chann.NewAutoDrainChann[*Event](),
 		pdClient:           pdClient,
 		pdClock:            appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
@@ -204,9 +207,9 @@ func (c *coordinator) run(ctx context.Context) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-gcTicker.C:
-			if err := c.updateGCSafepoint(ctx); err != nil {
-				log.Warn("update gc safepoint failed",
-					zap.Error(err))
+			err := c.updateGCSafepoint(ctx)
+			if err != nil {
+				log.Warn("update gc safepoint failed", zap.Error(err))
 			}
 			now := time.Now()
 			metrics.CoordinatorCounter.Add(float64(now.Sub(c.lastTickTime)) / float64(time.Second))
@@ -295,7 +298,7 @@ func (c *coordinator) handleStateChange(
 // checkStaleCheckpointTs checks if the checkpointTs is stale, if it is, it will send a state change event to the stateChangedCh
 func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, changefeed *changefeed.Changefeed, reportedCheckpointTs uint64) {
 	id := changefeed.ID
-	err := c.gcManager.CheckStaleCheckpointTs(ctx, changefeed.GetKeyspaceID(), id, reportedCheckpointTs)
+	err := c.gcManager.CheckStaleCheckpointTs(changefeed.GetKeyspaceID(), id, reportedCheckpointTs)
 	if err == nil {
 		return
 	}
@@ -433,26 +436,29 @@ func (c *coordinator) updateGlobalGcSafepoint(ctx context.Context) error {
 	// (checkpointTs - 1) from TiKV, so (checkpointTs - 1) should be an upper
 	// bound for the GC safepoint.
 	gcSafepointUpperBound := minCheckpointTs - 1
-	err := c.gcManager.TryUpdateGCSafePoint(ctx, gcSafepointUpperBound, false)
+	err := c.gcManager.TryUpdateServiceGCSafepoint(ctx, gcSafepointUpperBound)
 	return errors.Trace(err)
 }
 
 func (c *coordinator) updateAllKeyspaceGcBarriers(ctx context.Context) error {
 	barrierMap := c.controller.calculateKeyspaceGCBarrier()
 
+	var retErr error
 	for meta, barrierTS := range barrierMap {
 		err := c.updateKeyspaceGcBarrier(ctx, meta, barrierTS)
 		if err != nil {
-			return errors.Trace(err)
+			log.Warn("update keyspace gc barrier failed",
+				zap.Uint32("keyspaceID", meta.ID), zap.String("keyspaceName", meta.Name),
+				zap.Uint64("barrierTS", barrierTS), zap.Error(err))
+			retErr = err
 		}
 	}
-
-	return nil
+	return retErr
 }
 
 func (c *coordinator) updateKeyspaceGcBarrier(ctx context.Context, meta common.KeyspaceMeta, barrierTS uint64) error {
 	barrierTsUpperBound := barrierTS - 1
-	err := c.gcManager.TryUpdateKeyspaceGCBarrier(ctx, meta.ID, meta.Name, barrierTsUpperBound, false)
+	err := c.gcManager.TryUpdateKeyspaceGCBarrier(ctx, meta.ID, meta.Name, barrierTsUpperBound)
 	return errors.Trace(err)
 }
 

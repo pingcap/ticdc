@@ -50,12 +50,12 @@ require (
 	github.com/pingcap/check v0.0.0-20211026125417-57bd13f7b5f0
 	github.com/pingcap/errors v0.11.5-0.20250523034308-74f78ae071ee
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
-	github.com/pingcap/kvproto v0.0.0-20251104104744-291054671541
+	github.com/pingcap/kvproto v0.0.0-20251109100001-1907922fbd18
 	github.com/pingcap/log v1.1.1-0.20250917021125-19901e015dc9
 	github.com/pingcap/sysutil v1.0.1-0.20240311050922-ae81ee01f3a5
-	github.com/pingcap/tidb v1.1.0-beta.0.20251112140053-9e38acfdbfaf
+	github.com/pingcap/tidb v1.1.0-beta.0.20251121075944-8f2630e53d5d
 	github.com/pingcap/tidb-dashboard v0.0.0-20240326110213-9768844ff5d7
-	github.com/pingcap/tidb/pkg/parser v0.0.0-20251113060050-3acae2d60724
+	github.com/pingcap/tidb/pkg/parser v0.0.0-20251121075944-8f2630e53d5d
 	github.com/pingcap/tiflow v0.0.0-20260202075306-0ea757eae77a
 	github.com/prometheus/client_golang v1.22.0
 	github.com/r3labs/diff v1.1.0
@@ -67,7 +67,7 @@ require (
 	github.com/spf13/pflag v1.0.7
 	github.com/stretchr/testify v1.11.1
 	github.com/thanhpk/randstr v1.0.6
-	github.com/tikv/client-go/v2 v2.0.8-0.20251028065425-b7d4dfd8520e
+	github.com/tikv/client-go/v2 v2.0.8-0.20251112113123-1264c1278595
 	github.com/tikv/pd v1.1.0-beta.0.20240407022249-7179657d129b
 	github.com/tikv/pd/client v0.0.0-20250901035025-22b7ce6d4993
 	github.com/tinylib/msgp v1.5.0
@@ -84,7 +84,7 @@ require (
 	go.uber.org/goleak v1.3.0
 	go.uber.org/mock v0.5.2
 	go.uber.org/multierr v1.11.0
-	go.uber.org/zap v1.27.0
+	go.uber.org/zap v1.27.1
 	golang.org/x/net v0.43.0
 	golang.org/x/oauth2 v0.30.0
 	golang.org/x/sync v0.17.0
@@ -92,13 +92,23 @@ require (
 	golang.org/x/term v0.34.0
 	golang.org/x/text v0.29.0
 	golang.org/x/time v0.12.0
-	google.golang.org/grpc v1.65.0
+	google.golang.org/grpc v1.67.1
 	google.golang.org/protobuf v1.36.6
+)
+
+replace (
+	// Following modules are replaced to use grpc v1.65.0
+	// We can remove these replacements after upgrading grpc to > 1.65
+	cloud.google.com/go/kms => cloud.google.com/go/kms v1.15.8
+	cloud.google.com/go/pubsub => cloud.google.com/go/pubsub v1.37.0
+	cloud.google.com/go/storage => cloud.google.com/go/storage v1.39.1
+	google.golang.org/api => google.golang.org/api v0.170.0
+	google.golang.org/grpc => google.golang.org/grpc v1.65.0
 )
 
 require (
 	cloud.google.com/go v0.112.2 // indirect
-	cloud.google.com/go/compute/metadata v0.3.0 // indirect
+	cloud.google.com/go/compute/metadata v0.5.0 // indirect
 	cloud.google.com/go/iam v1.1.7 // indirect
 	cloud.google.com/go/kms v1.15.8 // indirect
 	filippo.io/edwards25519 v1.1.0 // indirect
