@@ -14,15 +14,9 @@
 package consumer
 
 import (
-	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/parser"
+	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/utils"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 )
-
-type versionKey struct {
-	version     uint64
-	versionPath string
-	dataPath    string
-}
 
 type (
 	fileIndexRange  map[cloudstorage.FileIndexKey]indexRange
@@ -51,15 +45,10 @@ func updateTableDMLIdxMap(
 
 type schemaParser struct {
 	path   string
-	parser *parser.TableParser
+	parser *utils.TableParser
 }
 
 type schemaKey struct {
 	schema string
 	table  string
-}
-
-type IncrementalData struct {
-	DataContentSlices map[cloudstorage.FileIndexKey][][]byte
-	Parser            *parser.TableParser
 }

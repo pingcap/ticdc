@@ -1,0 +1,244 @@
+// Copyright 2026 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestLoadConfig(t *testing.T) {
+	t.Parallel()
+
+	t.Run("valid config", func(t *testing.T) {
+		t.Parallel()
+		// Create a temporary config file
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.toml")
+		configContent := `
+[global]
+log-level = "info"
+data-dir = "/tmp/data"
+  [global.tables]
+  schema1 = ["table1", "table2"]
+
+[clusters]
+  [clusters.cluster1]
+  pd-addr = "127.0.0.1:2379"
+  s3-sink-uri = "s3://bucket/cluster1/"
+  s3-changefeed-id = "s3-cf-1"
+  [clusters.cluster1.downstream-cluster-changefeed-config]
+  cluster2 = { changefeed-id = "cf-1-to-2" }
+
+  [clusters.cluster2]
+  pd-addr = "127.0.0.1:2479"
+  s3-sink-uri = "s3://bucket/cluster2/"
+  s3-changefeed-id = "s3-cf-2"
+  [clusters.cluster2.downstream-cluster-changefeed-config]
+  cluster1 = { changefeed-id = "cf-2-to-1" }
+`
+		err := os.WriteFile(configPath, []byte(configContent), 0644)
+		require.NoError(t, err)
+
+		cfg, err := LoadConfig(configPath)
+		require.NoError(t, err)
+		require.NotNil(t, cfg)
+		require.Equal(t, "info", cfg.GlobalConfig.LogLevel)
+		require.Equal(t, "/tmp/data", cfg.GlobalConfig.DataDir)
+		require.Len(t, cfg.Clusters, 2)
+		require.Contains(t, cfg.Clusters, "cluster1")
+		require.Contains(t, cfg.Clusters, "cluster2")
+		require.Equal(t, "127.0.0.1:2379", cfg.Clusters["cluster1"].PDAddr)
+		require.Equal(t, "s3://bucket/cluster1/", cfg.Clusters["cluster1"].S3SinkURI)
+		require.Equal(t, "s3-cf-1", cfg.Clusters["cluster1"].S3ChangefeedID)
+		require.Len(t, cfg.Clusters["cluster1"].DownstreamClusterChangefeedConfig, 1)
+		require.Equal(t, "cf-1-to-2", cfg.Clusters["cluster1"].DownstreamClusterChangefeedConfig["cluster2"].ChangefeedID)
+	})
+
+	t.Run("file not exists", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := LoadConfig("/nonexistent/path/config.toml")
+		require.Error(t, err)
+		require.Nil(t, cfg)
+		require.Contains(t, err.Error(), "config file does not exist")
+	})
+
+	t.Run("invalid toml", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.toml")
+		configContent := `invalid toml content [`
+		err := os.WriteFile(configPath, []byte(configContent), 0644)
+		require.NoError(t, err)
+
+		cfg, err := LoadConfig(configPath)
+		require.Error(t, err)
+		require.Nil(t, cfg)
+		require.Contains(t, err.Error(), "failed to decode config file")
+	})
+
+	t.Run("no clusters", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.toml")
+		configContent := `
+[global]
+log-level = "info"
+report-dir = "/tmp/reports"
+`
+		err := os.WriteFile(configPath, []byte(configContent), 0644)
+		require.NoError(t, err)
+
+		cfg, err := LoadConfig(configPath)
+		require.Error(t, err)
+		require.Nil(t, cfg)
+		require.Contains(t, err.Error(), "at least one cluster must be configured")
+	})
+
+	t.Run("missing pd-addr", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.toml")
+		configContent := `
+[global]
+log-level = "info"
+report-dir = "/tmp/reports"
+
+[clusters]
+  [clusters.cluster1]
+  s3-sink-uri = "s3://bucket/cluster1/"
+  s3-changefeed-id = "s3-cf-1"
+`
+		err := os.WriteFile(configPath, []byte(configContent), 0644)
+		require.NoError(t, err)
+
+		cfg, err := LoadConfig(configPath)
+		require.Error(t, err)
+		require.Nil(t, cfg)
+		require.Contains(t, err.Error(), "pd-addr is required")
+	})
+
+	t.Run("missing s3-sink-uri", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.toml")
+		configContent := `
+[global]
+log-level = "info"
+report-dir = "/tmp/reports"
+
+[clusters]
+  [clusters.cluster1]
+  pd-addr = "127.0.0.1:2379"
+  s3-changefeed-id = "s3-cf-1"
+`
+		err := os.WriteFile(configPath, []byte(configContent), 0644)
+		require.NoError(t, err)
+
+		cfg, err := LoadConfig(configPath)
+		require.Error(t, err)
+		require.Nil(t, cfg)
+		require.Contains(t, err.Error(), "s3-sink-uri is required")
+	})
+
+	t.Run("missing s3-changefeed-id", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.toml")
+		configContent := `
+[global]
+log-level = "info"
+report-dir = "/tmp/reports"
+
+[clusters]
+  [clusters.cluster1]
+  pd-addr = "127.0.0.1:2379"
+  s3-sink-uri = "s3://bucket/cluster1/"
+`
+		err := os.WriteFile(configPath, []byte(configContent), 0644)
+		require.NoError(t, err)
+
+		cfg, err := LoadConfig(configPath)
+		require.Error(t, err)
+		require.Nil(t, cfg)
+		require.Contains(t, err.Error(), "s3-changefeed-id is required")
+	})
+
+	t.Run("incomplete downstream cluster changefeed config", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.toml")
+		configContent := `
+[global]
+log-level = "info"
+report-dir = "/tmp/reports"
+
+[clusters]
+  [clusters.cluster1]
+  pd-addr = "127.0.0.1:2379"
+  s3-sink-uri = "s3://bucket/cluster1/"
+  s3-changefeed-id = "s3-cf-1"
+  [clusters.cluster1.downstream-cluster-changefeed-config]
+  cluster2 = { changefeed-id = "cf-1-to-2" }
+
+  [clusters.cluster2]
+  pd-addr = "127.0.0.1:2479"
+  s3-sink-uri = "s3://bucket/cluster2/"
+  s3-changefeed-id = "s3-cf-2"
+`
+		err := os.WriteFile(configPath, []byte(configContent), 0644)
+		require.NoError(t, err)
+
+		cfg, err := LoadConfig(configPath)
+		require.Error(t, err)
+		require.Nil(t, cfg)
+		require.Contains(t, err.Error(), "downstream-cluster-changefeed-config is not entirely configured")
+	})
+
+	t.Run("missing changefeed-id in downstream config", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.toml")
+		configContent := `
+[global]
+log-level = "info"
+report-dir = "/tmp/reports"
+
+[clusters]
+  [clusters.cluster1]
+  pd-addr = "127.0.0.1:2379"
+  s3-sink-uri = "s3://bucket/cluster1/"
+  s3-changefeed-id = "s3-cf-1"
+  [clusters.cluster1.downstream-cluster-changefeed-config]
+  cluster2 = {}
+
+  [clusters.cluster2]
+  pd-addr = "127.0.0.1:2479"
+  s3-sink-uri = "s3://bucket/cluster2/"
+  s3-changefeed-id = "s3-cf-2"
+  [clusters.cluster2.downstream-cluster-changefeed-config]
+  cluster1 = { changefeed-id = "cf-2-to-1" }
+`
+		err := os.WriteFile(configPath, []byte(configContent), 0644)
+		require.NoError(t, err)
+
+		cfg, err := LoadConfig(configPath)
+		require.Error(t, err)
+		require.Nil(t, cfg)
+		require.Contains(t, err.Error(), "changefeed-id is required")
+	})
+}

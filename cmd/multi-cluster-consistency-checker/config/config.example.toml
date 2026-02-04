@@ -9,8 +9,8 @@ log-level = "info"
 # Report configuration
 report-dir = "/tmp/multi-cluster-consistency-checker-reports"
 
-# Tables configuration
-[global.tables]
+  # Tables configuration
+  [global.tables]
   schema1 = ["table1", "table2"]
   schema2 = ["table1", "table2"]
 

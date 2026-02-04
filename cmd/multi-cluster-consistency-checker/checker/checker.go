@@ -18,11 +18,11 @@ import (
 	"sort"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/advancer"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/config"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/recorder"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/utils"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"go.uber.org/zap"
 )
 
@@ -40,6 +40,25 @@ func newClusterViolationChecker(clusterID string) *clusterViolationChecker {
 	return &clusterViolationChecker{
 		clusterID:                            clusterID,
 		twoPreviousTimeWindowKeyVersionCache: make(map[utils.PkType]versionCacheEntry),
+	}
+}
+
+func (c *clusterViolationChecker) NewRecordFromCheckpoint(record *utils.Record, previous int) {
+	entry, exists := c.twoPreviousTimeWindowKeyVersionCache[record.Pk]
+	if !exists {
+		c.twoPreviousTimeWindowKeyVersionCache[record.Pk] = versionCacheEntry{
+			previous:   previous,
+			cdcVersion: record.CdcVersion,
+		}
+		return
+	}
+	entryCompareTs := entry.cdcVersion.GetCompareTs()
+	recordCompareTs := record.GetCompareTs()
+	if entryCompareTs < recordCompareTs {
+		c.twoPreviousTimeWindowKeyVersionCache[record.Pk] = versionCacheEntry{
+			previous:   previous,
+			cdcVersion: record.CdcVersion,
+		}
 	}
 }
 
@@ -163,7 +182,58 @@ func newClusterDataChecker(clusterID string) *clusterDataChecker {
 	}
 }
 
-func (cd *clusterDataChecker) PrepareNextTimeWindowData(timeWindow advancer.TimeWindow) error {
+func (cd *clusterDataChecker) InitializeFromCheckpoint(
+	ctx context.Context,
+	checkpointDataMap map[cloudstorage.DmlPathKey]utils.IncrementalData,
+	checkpoint *recorder.Checkpoint,
+) error {
+	if checkpoint == nil {
+		return nil
+	}
+	if checkpoint.CheckpointItems[2] == nil {
+		return nil
+	}
+	clusterInfo := checkpoint.CheckpointItems[2].ClusterInfo[cd.clusterID]
+	cd.rightBoundary = clusterInfo.TimeWindow.RightBoundary
+	cd.timeWindowDataCaches[2] = newTimeWindowDataCache(
+		clusterInfo.TimeWindow.LeftBoundary, clusterInfo.TimeWindow.RightBoundary, clusterInfo.TimeWindow.CheckpointTs)
+	if checkpoint.CheckpointItems[1] != nil {
+		clusterInfo = checkpoint.CheckpointItems[1].ClusterInfo[cd.clusterID]
+		cd.timeWindowDataCaches[1] = newTimeWindowDataCache(
+			clusterInfo.TimeWindow.LeftBoundary, clusterInfo.TimeWindow.RightBoundary, clusterInfo.TimeWindow.CheckpointTs)
+	}
+	for _, incrementalData := range checkpointDataMap {
+		for _, contents := range incrementalData.DataContentSlices {
+			for _, content := range contents {
+				records, err := incrementalData.Parser.DecodeFiles(ctx, content)
+				if err != nil {
+					return errors.Trace(err)
+				}
+				for _, record := range records {
+					cd.newRecordFromCheckpoint(record)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (cd *clusterDataChecker) newRecordFromCheckpoint(record *utils.Record) {
+	if record.CommitTs > cd.rightBoundary {
+		cd.overDataCaches = append(cd.overDataCaches, record)
+		return
+	}
+	if cd.timeWindowDataCaches[2].leftBoundary < record.CommitTs {
+		cd.timeWindowDataCaches[2].NewRecord(record)
+		cd.clusterViolationChecker.NewRecordFromCheckpoint(record, 1)
+
+	} else if cd.timeWindowDataCaches[1].leftBoundary < record.CommitTs {
+		cd.timeWindowDataCaches[1].NewRecord(record)
+		cd.clusterViolationChecker.NewRecordFromCheckpoint(record, 2)
+	}
+}
+
+func (cd *clusterDataChecker) PrepareNextTimeWindowData(timeWindow utils.TimeWindow) error {
 	if timeWindow.LeftBoundary != cd.rightBoundary {
 		return errors.Errorf("time window left boundary(%d) mismatch right boundary ts(%d)", timeWindow.LeftBoundary, cd.rightBoundary)
 	}
@@ -350,17 +420,34 @@ func (cd *clusterDataChecker) GetReport() *recorder.ClusterReport {
 
 type DataChecker struct {
 	round               uint64
+	checkableRound      uint64
 	clusterDataCheckers map[string]*clusterDataChecker
 }
 
-func NewDataChecker(clusterConfig map[string]config.ClusterConfig) *DataChecker {
+func NewDataChecker(ctx context.Context, clusterConfig map[string]config.ClusterConfig, checkpointDataMap map[string]map[cloudstorage.DmlPathKey]utils.IncrementalData, checkpoint *recorder.Checkpoint) *DataChecker {
 	clusterDataChecker := make(map[string]*clusterDataChecker)
 	for clusterID := range clusterConfig {
 		clusterDataChecker[clusterID] = newClusterDataChecker(clusterID)
 	}
-	return &DataChecker{
+	checker := &DataChecker{
 		round:               0,
+		checkableRound:      0,
 		clusterDataCheckers: clusterDataChecker,
+	}
+	checker.initializeFromCheckpoint(ctx, checkpointDataMap, checkpoint)
+	return checker
+}
+
+func (c *DataChecker) initializeFromCheckpoint(ctx context.Context, checkpointDataMap map[string]map[cloudstorage.DmlPathKey]utils.IncrementalData, checkpoint *recorder.Checkpoint) {
+	if checkpoint == nil {
+		return
+	}
+	if checkpoint.CheckpointItems[2] == nil {
+		return
+	}
+	c.round = checkpoint.CheckpointItems[2].Round + 1
+	for _, clusterDataChecker := range c.clusterDataCheckers {
+		clusterDataChecker.InitializeFromCheckpoint(ctx, checkpointDataMap[clusterDataChecker.clusterID], checkpoint)
 	}
 }
 
@@ -396,21 +483,25 @@ func (c *DataChecker) FindClusterUpstreamData(downstreamClusterID string, pk uti
 	return false
 }
 
-func (c *DataChecker) CheckInNextTimeWindow(ctx context.Context, newTimeWindowData map[string]advancer.TimeWindowData) (*recorder.Report, error) {
+func (c *DataChecker) CheckInNextTimeWindow(ctx context.Context, newTimeWindowData map[string]utils.TimeWindowData) (*recorder.Report, error) {
 	if err := c.decodeNewTimeWindowData(ctx, newTimeWindowData); err != nil {
 		log.Error("failed to decode new time window data", zap.Error(err))
 		return nil, errors.Annotate(err, "failed to decode new time window data")
 	}
 	report := recorder.NewReport(c.round)
-	for clusterID, clusterDataChecker := range c.clusterDataCheckers {
-		clusterDataChecker.Check(c)
-		report.AddClusterReport(clusterID, clusterDataChecker.GetReport())
+	if c.checkableRound >= 2 {
+		for clusterID, clusterDataChecker := range c.clusterDataCheckers {
+			clusterDataChecker.Check(c)
+			report.AddClusterReport(clusterID, clusterDataChecker.GetReport())
+		}
+	} else {
+		c.checkableRound += 1
 	}
 	c.round += 1
 	return report, nil
 }
 
-func (c *DataChecker) decodeNewTimeWindowData(ctx context.Context, newTimeWindowData map[string]advancer.TimeWindowData) error {
+func (c *DataChecker) decodeNewTimeWindowData(ctx context.Context, newTimeWindowData map[string]utils.TimeWindowData) error {
 	if len(newTimeWindowData) != len(c.clusterDataCheckers) {
 		return errors.Errorf("number of clusters mismatch, expected %d, got %d", len(c.clusterDataCheckers), len(newTimeWindowData))
 	}
@@ -423,7 +514,6 @@ func (c *DataChecker) decodeNewTimeWindowData(ctx context.Context, newTimeWindow
 			return errors.Trace(err)
 		}
 		for _, incrementalData := range timeWindowData.Data {
-			// Parse CSV data from all file slices
 			for _, contents := range incrementalData.DataContentSlices {
 				for _, content := range contents {
 					records, err := incrementalData.Parser.DecodeFiles(ctx, content)

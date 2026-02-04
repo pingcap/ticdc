@@ -20,8 +20,10 @@ import (
 	"strings"
 	"sync"
 
+	perrors "github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/parser"
+	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/recorder"
+	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/utils"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
@@ -30,26 +32,28 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+var ErrWalkDirEnd = perrors.Normalize("walk dir end", perrors.RFCCodeText("CDC:ErrWalkDirEnd"))
+
 type CurrentTableVersion struct {
 	mu                     sync.RWMutex
-	currentTableVersionMap map[schemaKey]versionKey
+	currentTableVersionMap map[schemaKey]utils.VersionKey
 }
 
 func NewCurrentTableVersion() *CurrentTableVersion {
 	return &CurrentTableVersion{
-		currentTableVersionMap: make(map[schemaKey]versionKey),
+		currentTableVersionMap: make(map[schemaKey]utils.VersionKey),
 	}
 }
 
 // GetCurrentTableVersion returns the current table version for a given schema and table
-func (cvt *CurrentTableVersion) GetCurrentTableVersion(schema, table string) versionKey {
+func (cvt *CurrentTableVersion) GetCurrentTableVersion(schema, table string) utils.VersionKey {
 	cvt.mu.RLock()
 	defer cvt.mu.RUnlock()
 	return cvt.currentTableVersionMap[schemaKey{schema: schema, table: table}]
 }
 
 // UpdateCurrentTableVersion updates the current table version for a given schema and table
-func (cvt *CurrentTableVersion) UpdateCurrentTableVersion(schema, table string, version versionKey) {
+func (cvt *CurrentTableVersion) UpdateCurrentTableVersion(schema, table string, version utils.VersionKey) {
 	cvt.mu.Lock()
 	defer cvt.mu.Unlock()
 	cvt.currentTableVersionMap[schemaKey{schema: schema, table: table}] = version
@@ -67,7 +71,7 @@ func NewSchemaParser() *SchemaParser {
 }
 
 // GetSchemaParser returns the schema parser for a given schema and table version
-func (sp *SchemaParser) GetSchemaParser(schema, table string, version uint64) (*parser.TableParser, error) {
+func (sp *SchemaParser) GetSchemaParser(schema, table string, version uint64) (*utils.TableParser, error) {
 	schemaPathKey := cloudstorage.SchemaPathKey{
 		Schema:       schema,
 		Table:        table,
@@ -83,7 +87,7 @@ func (sp *SchemaParser) GetSchemaParser(schema, table string, version uint64) (*
 }
 
 // SetSchemaParser sets the schema parser for a given schema and table version
-func (sp *SchemaParser) SetSchemaParser(schemaPathKey cloudstorage.SchemaPathKey, filePath string, parser *parser.TableParser) {
+func (sp *SchemaParser) SetSchemaParser(schemaPathKey cloudstorage.SchemaPathKey, filePath string, parser *utils.TableParser) {
 	sp.mu.Lock()
 	sp.schemaParserMap[schemaPathKey] = schemaParser{
 		path:   filePath,
@@ -179,6 +183,197 @@ func NewS3Consumer(
 	}
 }
 
+func (c *S3Consumer) InitializeFromCheckpoint(ctx context.Context, clusterID string, checkpoint *recorder.Checkpoint) (map[cloudstorage.DmlPathKey]utils.IncrementalData, error) {
+	if checkpoint == nil {
+		return nil, nil
+	}
+	if checkpoint.CheckpointItems[2] == nil {
+		return nil, nil
+	}
+	scanRanges, err := checkpoint.ToScanRange(clusterID)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	var mu sync.Mutex
+	// Combine DML data and schema data into result
+	result := make(map[cloudstorage.DmlPathKey]utils.IncrementalData)
+	eg, egCtx := errgroup.WithContext(ctx)
+	for schemaTableKey, scanRange := range scanRanges {
+		eg.Go(func() error {
+			scanVersions, err := c.downloadSchemaFilesWithScanRange(
+				egCtx, schemaTableKey.Schema, schemaTableKey.Table, scanRange.StartVersionKey, scanRange.EndVersionKey, scanRange.EndDataPath)
+			if err != nil {
+				return errors.Trace(err)
+			}
+			err = c.downloadDataFilesWithScanRange(
+				egCtx, schemaTableKey.Schema, schemaTableKey.Table, scanVersions, scanRange,
+				func(
+					dmlPathKey cloudstorage.DmlPathKey,
+					dmlSlices map[cloudstorage.FileIndexKey][][]byte,
+					parser *utils.TableParser,
+				) {
+					mu.Lock()
+					result[dmlPathKey] = utils.IncrementalData{
+						DataContentSlices: dmlSlices,
+						Parser:            parser,
+					}
+					mu.Unlock()
+				},
+			)
+			if err != nil {
+				return errors.Trace(err)
+			}
+			return nil
+		})
+	}
+	if err := eg.Wait(); err != nil {
+		return nil, errors.Trace(err)
+	}
+	return result, nil
+}
+
+func (c *S3Consumer) downloadSchemaFilesWithScanRange(
+	ctx context.Context,
+	schema, table string,
+	startVersionKey string,
+	endVersionKey string,
+	endDataPath string,
+) ([]utils.VersionKey, error) {
+	metaSubDir := fmt.Sprintf("%s/%s/meta/", schema, table)
+	opt := &storage.WalkOption{
+		SubDir:    metaSubDir,
+		ObjPrefix: "schema_",
+		// TODO: StartAfter: startVersionKey,
+	}
+
+	var startSchemaKey, endSchemaKey cloudstorage.SchemaPathKey
+	_, err := startSchemaKey.ParseSchemaFilePath(startVersionKey)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	_, err = endSchemaKey.ParseSchemaFilePath(endVersionKey)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	var scanVersions []utils.VersionKey
+	newVersionPaths := make(map[cloudstorage.SchemaPathKey]string)
+	scanVersions = append(scanVersions, utils.VersionKey{
+		Version:     startSchemaKey.TableVersion,
+		VersionPath: startVersionKey,
+	})
+	if err := c.s3Storage.WalkDir(ctx, opt, func(filePath string, size int64) error {
+		if endVersionKey < filePath {
+			return ErrWalkDirEnd
+		}
+		if !cloudstorage.IsSchemaFile(filePath) {
+			return nil
+		}
+		var schemaKey cloudstorage.SchemaPathKey
+		_, err := schemaKey.ParseSchemaFilePath(filePath)
+		if err != nil {
+			log.Error("failed to parse schema file path, skipping",
+				zap.String("path", filePath),
+				zap.Error(err))
+			return nil
+		}
+		if schemaKey.TableVersion > startSchemaKey.TableVersion {
+			if _, exists := newVersionPaths[schemaKey]; !exists {
+				scanVersions = append(scanVersions, utils.VersionKey{
+					Version:     schemaKey.TableVersion,
+					VersionPath: filePath,
+				})
+			}
+			newVersionPaths[schemaKey] = filePath
+		}
+		return nil
+	}); err != nil && !ErrWalkDirEnd.Is(err) {
+		return nil, errors.Trace(err)
+	}
+
+	if err := c.downloadSchemaFiles(ctx, newVersionPaths); err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	c.currentTableVersion.UpdateCurrentTableVersion(schema, table, utils.VersionKey{
+		Version:     endSchemaKey.TableVersion,
+		VersionPath: endVersionKey,
+		DataPath:    endDataPath,
+	})
+
+	return scanVersions, nil
+}
+
+func (c *S3Consumer) downloadDataFilesWithScanRange(
+	ctx context.Context,
+	schema, table string,
+	scanVersions []utils.VersionKey,
+	scanRange *recorder.ScanRange,
+	consumeFunc func(dmlPathKey cloudstorage.DmlPathKey, dmlSlices map[cloudstorage.FileIndexKey][][]byte, parser *utils.TableParser),
+) error {
+	eg, egCtx := errgroup.WithContext(ctx)
+	for _, version := range scanVersions {
+		eg.Go(func() error {
+			newFiles, err := c.getNewFilesForSchemaPathKeyWithEndPath(egCtx, schema, table, version.Version, scanRange.StartDataPath, scanRange.EndDataPath)
+			if err != nil {
+				return errors.Trace(err)
+			}
+			dmlData, err := c.downloadDMLFiles(egCtx, newFiles)
+			if err != nil {
+				return errors.Trace(err)
+			}
+			parser, err := c.schemaParser.GetSchemaParser(schema, table, version.Version)
+			if err != nil {
+				return errors.Trace(err)
+			}
+			for dmlPathKey, dmlSlices := range dmlData {
+				consumeFunc(dmlPathKey, dmlSlices, parser)
+			}
+			return nil
+		})
+	}
+	if err := eg.Wait(); err != nil {
+		return errors.Trace(err)
+	}
+	return nil
+}
+
+func (c *S3Consumer) getNewFilesForSchemaPathKeyWithEndPath(
+	ctx context.Context,
+	schema, table string,
+	version uint64,
+	startDataPath string,
+	endDataPath string,
+) (map[cloudstorage.DmlPathKey]fileIndexRange, error) {
+	schemaPrefix := path.Join(schema, table, fmt.Sprintf("%d", version))
+	opt := &storage.WalkOption{
+		SubDir: schemaPrefix,
+		// TODO: StartAfter: startDataPath,
+	}
+	newTableDMLIdxMap := make(map[cloudstorage.DmlPathKey]fileIndexKeyMap)
+	if err := c.s3Storage.WalkDir(ctx, opt, func(filePath string, size int64) error {
+		if endDataPath < filePath {
+			return ErrWalkDirEnd
+		}
+		// Try to parse DML file path if it matches the expected extension
+		if strings.HasSuffix(filePath, c.fileExtension) {
+			var dmlkey cloudstorage.DmlPathKey
+			fileIdx, err := dmlkey.ParseDMLFilePath(c.dateSeparator, filePath)
+			if err != nil {
+				log.Error("failed to parse dml file path, skipping",
+					zap.String("path", filePath),
+					zap.Error(err))
+				return nil
+			}
+			updateTableDMLIdxMap(newTableDMLIdxMap, dmlkey, fileIdx)
+		}
+		return nil
+	}); err != nil && !ErrWalkDirEnd.Is(err) {
+		return nil, errors.Trace(err)
+	}
+	return c.tableDMLIdx.DiffNewTableDMLIdxMap(newTableDMLIdxMap), nil
+}
+
 // downloadSchemaFiles downloads schema files concurrently for given schema path keys
 func (c *S3Consumer) downloadSchemaFiles(
 	ctx context.Context,
@@ -195,7 +390,7 @@ func (c *S3Consumer) downloadSchemaFiles(
 			}
 
 			// Use canal-json decoder for S3 sink with .json file extension
-			parser, err := parser.NewTableParserWithFormat(schemaPathKey.GetKey(), content, config.ProtocolCanalJSON)
+			parser, err := utils.NewTableParserWithFormat(schemaPathKey.GetKey(), content, config.ProtocolCanalJSON)
 			if err != nil {
 				return errors.Annotatef(err, "failed to create table parser: %s", schemaPathKey.GetKey())
 			}
@@ -213,7 +408,7 @@ func (c *S3Consumer) downloadSchemaFiles(
 func (c *S3Consumer) discoverAndDownloadNewTableVersions(
 	ctx context.Context,
 	schema, table string,
-) ([]versionKey, error) {
+) ([]utils.VersionKey, error) {
 	currentVersion := c.currentTableVersion.GetCurrentTableVersion(schema, table)
 	metaSubDir := fmt.Sprintf("%s/%s/meta/", schema, table)
 	opt := &storage.WalkOption{
@@ -222,7 +417,7 @@ func (c *S3Consumer) discoverAndDownloadNewTableVersions(
 		// TODO: StartAfter: currentVersion.versionPath,
 	}
 
-	var scanVersions []versionKey
+	var scanVersions []utils.VersionKey
 	newVersionPaths := make(map[cloudstorage.SchemaPathKey]string)
 	if err := c.s3Storage.WalkDir(ctx, opt, func(filePath string, size int64) error {
 		if !cloudstorage.IsSchemaFile(filePath) {
@@ -237,11 +432,11 @@ func (c *S3Consumer) discoverAndDownloadNewTableVersions(
 			return nil
 		}
 		version := schemaKey.TableVersion
-		if version > currentVersion.version {
+		if version > currentVersion.Version {
 			if _, exists := newVersionPaths[schemaKey]; !exists {
-				scanVersions = append(scanVersions, versionKey{
-					version:     version,
-					versionPath: filePath,
+				scanVersions = append(scanVersions, utils.VersionKey{
+					Version:     version,
+					VersionPath: filePath,
 				})
 			}
 			newVersionPaths[schemaKey] = filePath
@@ -256,7 +451,7 @@ func (c *S3Consumer) discoverAndDownloadNewTableVersions(
 		return nil, errors.Trace(err)
 	}
 
-	if currentVersion.version > 0 {
+	if currentVersion.Version > 0 {
 		scanVersions = append(scanVersions, currentVersion)
 	}
 	return scanVersions, nil
@@ -265,9 +460,9 @@ func (c *S3Consumer) discoverAndDownloadNewTableVersions(
 func (c *S3Consumer) getNewFilesForSchemaPathKey(
 	ctx context.Context,
 	schema, table string,
-	version *versionKey,
+	version *utils.VersionKey,
 ) (map[cloudstorage.DmlPathKey]fileIndexRange, error) {
-	schemaPrefix := path.Join(schema, table, fmt.Sprintf("%d", version.version))
+	schemaPrefix := path.Join(schema, table, fmt.Sprintf("%d", version.Version))
 	opt := &storage.WalkOption{
 		SubDir: schemaPrefix,
 		// TODO: StartAfter: version.dataPath,
@@ -294,7 +489,7 @@ func (c *S3Consumer) getNewFilesForSchemaPathKey(
 		return nil, errors.Trace(err)
 	}
 
-	version.dataPath = maxFilePath
+	version.DataPath = maxFilePath
 	return c.tableDMLIdx.DiffNewTableDMLIdxMap(newTableDMLIdxMap), nil
 }
 
@@ -396,17 +591,18 @@ func (c *S3Consumer) downloadDMLFiles(
 func (c *S3Consumer) downloadNewFilesWithVersions(
 	ctx context.Context,
 	schema, table string,
-	scanVersions []versionKey,
-	consumeFunc func(dmlPathKey cloudstorage.DmlPathKey, dmlSlices map[cloudstorage.FileIndexKey][][]byte, parser *parser.TableParser),
-) error {
-	var maxVersion *versionKey
+	scanVersions []utils.VersionKey,
+	consumeFunc func(dmlPathKey cloudstorage.DmlPathKey, dmlSlices map[cloudstorage.FileIndexKey][][]byte, parser *utils.TableParser),
+) (*utils.VersionKey, error) {
+	var maxVersion *utils.VersionKey
 	eg, egCtx := errgroup.WithContext(ctx)
 	for _, version := range scanVersions {
-		if maxVersion == nil || maxVersion.version < version.version {
-			maxVersion = &version
+		versionp := &version
+		if maxVersion == nil || maxVersion.Version < version.Version {
+			maxVersion = versionp
 		}
 		eg.Go(func() error {
-			newFiles, err := c.getNewFilesForSchemaPathKey(egCtx, schema, table, &version)
+			newFiles, err := c.getNewFilesForSchemaPathKey(egCtx, schema, table, versionp)
 			if err != nil {
 				return errors.Trace(err)
 			}
@@ -414,7 +610,7 @@ func (c *S3Consumer) downloadNewFilesWithVersions(
 			if err != nil {
 				return errors.Trace(err)
 			}
-			parser, err := c.schemaParser.GetSchemaParser(schema, table, version.version)
+			parser, err := c.schemaParser.GetSchemaParser(schema, table, versionp.Version)
 			if err != nil {
 				return errors.Trace(err)
 			}
@@ -425,18 +621,22 @@ func (c *S3Consumer) downloadNewFilesWithVersions(
 		})
 	}
 	if err := eg.Wait(); err != nil {
-		return errors.Trace(err)
+		return nil, errors.Trace(err)
 	}
 	if maxVersion != nil {
 		c.currentTableVersion.UpdateCurrentTableVersion(schema, table, *maxVersion)
 	}
-	return nil
+	return maxVersion, nil
 }
 
-func (c *S3Consumer) ConsumeNewFiles(ctx context.Context) (map[cloudstorage.DmlPathKey]IncrementalData, error) {
+func (c *S3Consumer) ConsumeNewFiles(
+	ctx context.Context,
+) (map[cloudstorage.DmlPathKey]utils.IncrementalData, map[utils.SchemaTableKey]utils.VersionKey, error) {
 	var mu sync.Mutex
 	// Combine DML data and schema data into result
-	result := make(map[cloudstorage.DmlPathKey]IncrementalData)
+	result := make(map[cloudstorage.DmlPathKey]utils.IncrementalData)
+	var versionMu sync.Mutex
+	maxVersionMap := make(map[utils.SchemaTableKey]utils.VersionKey)
 	eg, egCtx := errgroup.WithContext(ctx)
 	for schema, tables := range c.tables {
 		for _, table := range tables {
@@ -445,31 +645,36 @@ func (c *S3Consumer) ConsumeNewFiles(ctx context.Context) (map[cloudstorage.DmlP
 				if err != nil {
 					return errors.Trace(err)
 				}
-				if err := c.downloadNewFilesWithVersions(
+				maxVersion, err := c.downloadNewFilesWithVersions(
 					egCtx, schema, table, scanVersions,
 					func(
 						dmlPathKey cloudstorage.DmlPathKey,
 						dmlSlices map[cloudstorage.FileIndexKey][][]byte,
-						parser *parser.TableParser,
+						parser *utils.TableParser,
 					) {
 						mu.Lock()
-						result[dmlPathKey] = IncrementalData{
+						result[dmlPathKey] = utils.IncrementalData{
 							DataContentSlices: dmlSlices,
 							Parser:            parser,
 						}
 						mu.Unlock()
 					},
-				); err != nil {
+				)
+				if err != nil {
 					return errors.Trace(err)
 				}
-
+				if maxVersion != nil {
+					versionMu.Lock()
+					maxVersionMap[utils.SchemaTableKey{Schema: schema, Table: table}] = *maxVersion
+					versionMu.Unlock()
+				}
 				return nil
 			})
 		}
 	}
 
 	if err := eg.Wait(); err != nil {
-		return nil, errors.Trace(err)
+		return nil, nil, errors.Trace(err)
 	}
-	return result, nil
+	return result, maxVersionMap, nil
 }

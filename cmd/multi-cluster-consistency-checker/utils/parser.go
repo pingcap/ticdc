@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package parser
+package utils
 
 import (
 	"context"
@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/utils"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
@@ -125,11 +124,11 @@ func (pt *TableParser) parseTableInfo(tableKey string, content []byte) error {
 	return nil
 }
 
-func (pt *TableParser) parseRecord(row *chunk.Row, commitTs uint64) (*utils.Record, error) {
+func (pt *TableParser) parseRecord(row *chunk.Row, commitTs uint64) (*Record, error) {
 	originTs := uint64(0)
 	pkCount := 0
 	colInfos := pt.tableInfo.GetColInfosForRowChangedEvent()
-	columnValues := make([]utils.ColumnValue, 0, len(colInfos))
+	columnValues := make([]ColumnValue, 0, len(colInfos))
 	pkColumnValues := make([]types.Datum, len(pt.pkColumnOffsets))
 	for _, colInfo := range colInfos {
 		col, ok := pt.tableInfo.GetColumnInfo(colInfo.ID)
@@ -171,7 +170,7 @@ func (pt *TableParser) parseRecord(row *chunk.Row, commitTs uint64) (*utils.Reco
 			}
 		} else {
 			colValue := commonType.ExtractColVal(row, col, rowColOffset)
-			columnValues = append(columnValues, utils.ColumnValue{
+			columnValues = append(columnValues, ColumnValue{
 				ColumnID: colInfo.ID,
 				Value:    colValue,
 			})
@@ -189,18 +188,18 @@ func (pt *TableParser) parseRecord(row *chunk.Row, commitTs uint64) (*utils.Reco
 		return nil, errors.Annotate(err, "failed to encode primary key")
 	}
 	pk := hex.EncodeToString(pkEncoded)
-	return &utils.Record{
-		Pk:           utils.PkType(pk),
+	return &Record{
+		Pk:           PkType(pk),
 		ColumnValues: columnValues,
-		CdcVersion: utils.CdcVersion{
+		CdcVersion: CdcVersion{
 			CommitTs: commitTs,
 			OriginTs: originTs,
 		},
 	}, nil
 }
 
-func (pt *TableParser) DecodeFiles(ctx context.Context, content []byte) ([]*utils.Record, error) {
-	records := make([]*utils.Record, 0)
+func (pt *TableParser) DecodeFiles(ctx context.Context, content []byte) ([]*Record, error) {
+	records := make([]*Record, 0)
 
 	decoder, err := pt.decoderFactory.NewDecoder(ctx, pt.tableInfo, content)
 	if err != nil {

@@ -16,14 +16,17 @@ package recorder
 import (
 	"fmt"
 	"strings"
+
+	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/utils"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 type DataLossItem struct {
-	DownstreamClusterID string
-	PK                  string
-	OriginTS            uint64
-	CommitTS            uint64
-	Inconsistent        bool
+	DownstreamClusterID string `json:"downstream_cluster_id"`
+	PK                  string `json:"pk"`
+	OriginTS            uint64 `json:"origin_ts"`
+	CommitTS            uint64 `json:"commit_ts"`
+	Inconsistent        bool   `json:"inconsistent"`
 }
 
 func (item *DataLossItem) String() string {
@@ -35,9 +38,9 @@ func (item *DataLossItem) String() string {
 }
 
 type DataRedundantItem struct {
-	PK       string
-	OriginTS uint64
-	CommitTS uint64
+	PK       string `json:"pk"`
+	OriginTS uint64 `json:"origin_ts"`
+	CommitTS uint64 `json:"commit_ts"`
 }
 
 func (item *DataRedundantItem) String() string {
@@ -45,11 +48,11 @@ func (item *DataRedundantItem) String() string {
 }
 
 type LWWViolationItem struct {
-	PK               string
-	ExistingOriginTS uint64
-	ExistingCommitTS uint64
-	OriginTS         uint64
-	CommitTS         uint64
+	PK               string `json:"pk"`
+	ExistingOriginTS uint64 `json:"existing_origin_ts"`
+	ExistingCommitTS uint64 `json:"existing_commit_ts"`
+	OriginTS         uint64 `json:"origin_ts"`
+	CommitTS         uint64 `json:"commit_ts"`
 }
 
 func (item *LWWViolationItem) String() string {
@@ -59,13 +62,13 @@ func (item *LWWViolationItem) String() string {
 }
 
 type ClusterReport struct {
-	ClusterID string
+	ClusterID string `json:"cluster_id"`
 
-	DataLossItems      []DataLossItem
-	DataRedundantItems []DataRedundantItem
-	LWWViolationItems  []LWWViolationItem
+	DataLossItems      []DataLossItem      `json:"data_loss_items"`      // data loss items
+	DataRedundantItems []DataRedundantItem `json:"data_redundant_items"` // data redundant items
+	LWWViolationItems  []LWWViolationItem  `json:"lww_violation_items"`  // lww violation items
 
-	needFlush bool
+	needFlush bool `json:"-"`
 }
 
 func NewClusterReport(clusterID string) *ClusterReport {
@@ -114,9 +117,9 @@ func (r *ClusterReport) AddLWWViolationItem(
 }
 
 type Report struct {
-	Round          uint64
-	ClusterReports map[string]*ClusterReport
-	needFlush      bool
+	Round          uint64                    `json:"round"`
+	ClusterReports map[string]*ClusterReport `json:"cluster_reports"`
+	needFlush      bool                      `json:"-"`
 }
 
 func NewReport(round uint64) *Report {
@@ -165,4 +168,89 @@ func (r *Report) MarshalReport() string {
 
 func (r *Report) NeedFlush() bool {
 	return r.needFlush
+}
+
+type CheckpointClusterInfo struct {
+	TimeWindow utils.TimeWindow                          `json:"time_window"`
+	MaxVersion map[utils.SchemaTableKey]utils.VersionKey `json:"max_version"`
+}
+
+type CheckpointItem struct {
+	Round       uint64                           `json:"round"`
+	ClusterInfo map[string]CheckpointClusterInfo `json:"cluster_info"`
+}
+
+type Checkpoint struct {
+	CheckpointItems [3]*CheckpointItem `json:"checkpoint_items"`
+}
+
+func NewCheckpoint() *Checkpoint {
+	return &Checkpoint{
+		CheckpointItems: [3]*CheckpointItem{
+			nil,
+			nil,
+			nil,
+		},
+	}
+}
+
+func (c *Checkpoint) NewTimeWindowData(round uint64, timeWindowData map[string]utils.TimeWindowData) {
+	newCheckpointItem := CheckpointItem{
+		Round:       round,
+		ClusterInfo: make(map[string]CheckpointClusterInfo),
+	}
+	for downstreamClusterID, timeWindow := range timeWindowData {
+		newCheckpointItem.ClusterInfo[downstreamClusterID] = CheckpointClusterInfo{
+			TimeWindow: timeWindow.TimeWindow,
+			MaxVersion: timeWindow.MaxVersion,
+		}
+	}
+	c.CheckpointItems[0] = c.CheckpointItems[1]
+	c.CheckpointItems[1] = c.CheckpointItems[2]
+	c.CheckpointItems[2] = &newCheckpointItem
+}
+
+type ScanRange struct {
+	StartVersionKey string
+	EndVersionKey   string
+	StartDataPath   string
+	EndDataPath     string
+}
+
+func (c *Checkpoint) ToScanRange(clusterID string) (map[utils.SchemaTableKey]*ScanRange, error) {
+	result := make(map[utils.SchemaTableKey]*ScanRange)
+	if c.CheckpointItems[2] == nil {
+		return result, nil
+	}
+	for schemaTableKey, versionKey := range c.CheckpointItems[2].ClusterInfo[clusterID].MaxVersion {
+		result[schemaTableKey] = &ScanRange{
+			StartVersionKey: versionKey.VersionPath,
+			EndVersionKey:   versionKey.VersionPath,
+			StartDataPath:   versionKey.DataPath,
+			EndDataPath:     versionKey.DataPath,
+		}
+	}
+	if c.CheckpointItems[1] == nil {
+		return result, nil
+	}
+	for schemaTableKey, versionKey := range c.CheckpointItems[1].ClusterInfo[clusterID].MaxVersion {
+		scanRange, ok := result[schemaTableKey]
+		if !ok {
+			return nil, errors.Errorf("schema table key %s.%s not found in result", schemaTableKey.Schema, schemaTableKey.Table)
+		}
+		scanRange.StartVersionKey = versionKey.VersionPath
+		scanRange.StartDataPath = versionKey.DataPath
+	}
+	if c.CheckpointItems[0] == nil {
+		return result, nil
+	}
+	for schemaTableKey, versionKey := range c.CheckpointItems[0].ClusterInfo[clusterID].MaxVersion {
+		scanRange, ok := result[schemaTableKey]
+		if !ok {
+			return nil, errors.Errorf("schema table key %s.%s not found in result", schemaTableKey.Schema, schemaTableKey.Table)
+		}
+		scanRange.StartVersionKey = versionKey.VersionPath
+		scanRange.StartDataPath = versionKey.DataPath
+	}
+	return result, nil
 }

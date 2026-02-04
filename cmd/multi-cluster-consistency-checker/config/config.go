@@ -32,9 +32,9 @@ type Config struct {
 
 // GlobalConfig contains global configuration settings
 type GlobalConfig struct {
-	LogLevel  string              `toml:"log-level" json:"log-level"`
-	ReportDir string              `toml:"report-dir" json:"report-dir"`
-	Tables    map[string][]string `toml:"tables" json:"tables"`
+	LogLevel string              `toml:"log-level" json:"log-level"`
+	DataDir  string              `toml:"data-dir" json:"data-dir"`
+	Tables   map[string][]string `toml:"tables" json:"tables"`
 }
 
 type DownstreamClusterChangefeedConfig struct {

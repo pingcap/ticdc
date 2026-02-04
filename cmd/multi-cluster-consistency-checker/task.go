@@ -41,12 +41,15 @@ func runTask(ctx context.Context, cfg *config.Config) error {
 	// Ensure cleanup happens even if there's an error
 	defer cleanupClients(pdClients, etcdClients)
 
-	timeWindowAdvancer := advancer.NewTimeWindowAdvancer(checkpointWatchers, s3Watchers, pdClients)
-	recorder, err := recorder.NewRecorder(cfg.GlobalConfig.ReportDir)
+	recorder, err := recorder.NewRecorder(cfg.GlobalConfig.DataDir)
 	if err != nil {
 		return errors.Trace(err)
 	}
-	dataChecker := checker.NewDataChecker(cfg.Clusters)
+	timeWindowAdvancer, checkpointDataMap, err := advancer.NewTimeWindowAdvancer(ctx, checkpointWatchers, s3Watchers, pdClients, recorder.GetCheckpoint())
+	if err != nil {
+		return errors.Trace(err)
+	}
+	dataChecker := checker.NewDataChecker(ctx, cfg.Clusters, checkpointDataMap, recorder.GetCheckpoint())
 
 	log.Info("Starting consistency checker task")
 	for {
