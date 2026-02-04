@@ -48,7 +48,7 @@ func (app *WorkloadApp) executeDDLWorkers(ddlConcurrency int, wg *sync.WaitGroup
 	}
 
 	wg.Add(ddlConcurrency)
-	for i := range ddlConcurrency {
+for i := 0; i < ddlConcurrency; i++ {
 		db := app.DBManager.GetDB()
 
 		go func(workerID int) {
