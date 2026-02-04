@@ -78,7 +78,7 @@ for i := 0; i < ddlConcurrency; i++ {
 				if err != nil {
 					// Check if it's a connection-level error that requires reconnection
 					if app.isConnectionError(err) {
-						fmt.Println("connection error detected, reconnecting", zap.Error(err))
+log.Warn("connection error detected, reconnecting", zap.Error(err))
 						conn.Close()
 						time.Sleep(time.Second * 2)
 
