@@ -13,6 +13,8 @@
 
 package dynstream
 
+// Test per-area batch config is applied in eventQueue.popEvents.
+
 import (
 	"testing"
 
@@ -25,19 +27,19 @@ func TestEventQueuePopEventsUsesPerAreaBatchCount(t *testing.T) {
 		BatchCount: 10,
 		BatchBytes: 0,
 	}
-	defaultPolicy := newBatchPolicy(option.BatchCount, option.BatchBytes)
-	policyStore := newAreaBatchPolicyStore[int](defaultPolicy)
+	defaultConfig := newBatchConfig(option.BatchCount, option.BatchBytes)
+	configStore := newAreaBatchConfigStore[int](defaultConfig)
 
-	q := newEventQueue[int, string, *mockEvent, any, *mockHandler](option, handler, policyStore)
+	q := newEventQueue[int, string, *mockEvent, any, *mockHandler](option, handler, configStore)
 	pi1 := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test", "path1", nil)
 	pi2 := newPathInfo[int, string, *mockEvent, any, *mockHandler](2, "test", "path2", nil)
 	q.initPath(pi1)
 	q.initPath(pi2)
 
 	// Simulate AddPath effects for store: the area must exist before overrides apply.
-	policyStore.onAddPath(1)
-	policyStore.onAddPath(2)
-	policyStore.setAreaSettings(1, AreaSettings{}.WithBatchPolicy(1, 0))
+	configStore.onAddPath(1)
+	configStore.onAddPath(2)
+	configStore.setAreaBatchConfig(1, 1, 0)
 
 	appendEvent := func(pi *pathInfo[int, string, *mockEvent, any, *mockHandler], id int) {
 		q.appendEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{
@@ -53,7 +55,7 @@ func TestEventQueuePopEventsUsesPerAreaBatchCount(t *testing.T) {
 	appendEvent(pi2, 3)
 	appendEvent(pi2, 4)
 
-	b := newBatcher[*mockEvent](defaultPolicy, option.BatchCount)
+	b := newBatcher[*mockEvent](defaultConfig, option.BatchCount)
 
 	events, gotPath, _ := q.popEvents(&b)
 	require.Equal(t, pi1, gotPath)

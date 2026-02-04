@@ -32,7 +32,7 @@ type eventQueue[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	// Used to reduce the block allocation in the paths' pending queue.
 	eventBlockAlloc *deque.BlockAllocator[eventWrap[A, P, T, D, H]]
 
-	batchPolicyStore *areaBatchPolicyStore[A]
+	batchConfigStore *areaBatchConfigStore[A]
 
 	// Signal queue is used to decide which path's events should be popped.
 	signalQueue        *deque.Deque[eventSignal[A, P, T, D, H]]
@@ -42,16 +42,16 @@ type eventQueue[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 func newEventQueue[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	option Option,
 	handler H,
-	batchPolicyStore *areaBatchPolicyStore[A],
+	batchConfigStore *areaBatchConfigStore[A],
 ) eventQueue[A, P, T, D, H] {
-	if batchPolicyStore == nil {
-		batchPolicyStore = newAreaBatchPolicyStore[A](newBatchPolicy(option.BatchCount, option.BatchBytes))
+	if batchConfigStore == nil {
+		batchConfigStore = newAreaBatchConfigStore[A](newBatchConfig(option.BatchCount, option.BatchBytes))
 	}
 	eq := eventQueue[A, P, T, D, H]{
 		option:             option,
 		handler:            handler,
 		eventBlockAlloc:    deque.NewBlockAllocator[eventWrap[A, P, T, D, H]](32, 1024),
-		batchPolicyStore:   batchPolicyStore,
+		batchConfigStore:   batchConfigStore,
 		signalQueue:        deque.NewDeque(1024, deque.NewBlockAllocator[eventSignal[A, P, T, D, H]](1024, 32)),
 		totalPendingLength: &atomic.Int64{},
 	}
@@ -132,9 +132,9 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(b *batcher[T]) ([]T, *pathInfo[A, 
 			continue
 		}
 
-		policy := q.batchPolicyStore.getPolicy(path.area)
-		batchSize := min(signal.eventCount, policy.batchCount)
-		b.setLimit(policy, batchSize)
+		batchConfig := q.batchConfigStore.getBatchConfig(path.area)
+		batchSize := min(signal.eventCount, batchConfig.batchCount)
+		b.setLimit(batchConfig, batchSize)
 
 		appendToBuf := func(event *eventWrap[A, P, T, D, H], path *pathInfo[A, P, T, D, H]) {
 			b.addEvent(event.event, event.eventSize)

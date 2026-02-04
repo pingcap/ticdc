@@ -58,8 +58,8 @@ func TestAppendAndPopSingleEvent(t *testing.T) {
 	require.Equal(t, int64(1), eq.totalPendingLength.Load())
 
 	// pop the event
-	policy := newBatchPolicy(option.BatchCount, option.BatchBytes)
-	b := newBatcher[*mockEvent](policy, option.BatchCount)
+	batchConfig := newBatchConfig(option.BatchCount, option.BatchBytes)
+	b := newBatcher[*mockEvent](batchConfig, option.BatchCount)
 	events, popPath, _ := eq.popEvents(&b)
 
 	require.Equal(t, 1, len(events))
@@ -91,8 +91,8 @@ func TestBlockAndWakePath(t *testing.T) {
 	eq.blockPath(path)
 
 	// try to pop the event (should not pop)
-	policy := newBatchPolicy(option.BatchCount, option.BatchBytes)
-	b := newBatcher[*mockEvent](policy, option.BatchCount)
+	batchConfig := newBatchConfig(option.BatchCount, option.BatchBytes)
+	b := newBatcher[*mockEvent](batchConfig, option.BatchCount)
 	events, _, _ := eq.popEvents(&b)
 	require.Equal(t, 0, len(events))
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
@@ -131,8 +131,8 @@ func TestBatchEvents(t *testing.T) {
 	}
 
 	// verify the batch pop
-	policy := newBatchPolicy(option.BatchCount, option.BatchBytes)
-	b := newBatcher[*mockEvent](policy, option.BatchCount)
+	batchConfig := newBatchConfig(option.BatchCount, option.BatchBytes)
+	b := newBatcher[*mockEvent](batchConfig, option.BatchCount)
 	events, _, _ := eq.popEvents(&b)
 
 	// since BatchCount = 3, only the first 3 events should be popped
@@ -204,8 +204,8 @@ func TestBatchableAndNonBatchableEvents(t *testing.T) {
 	}
 
 	// case 1: pop the first non-batchable event
-	policy := newBatchPolicy(option.BatchCount, option.BatchBytes)
-	b := newBatcher[*mockEvent](policy, option.BatchCount)
+	batchConfig := newBatchConfig(option.BatchCount, option.BatchBytes)
+	b := newBatcher[*mockEvent](batchConfig, option.BatchCount)
 	events, _, _ := eq.popEvents(&b)
 	require.Equal(t, 1, len(events))
 	require.Equal(t, &mockEvent{value: 1}, events[0])
@@ -266,8 +266,8 @@ func TestRemovePath(t *testing.T) {
 	require.Equal(t, int64(1), eq.totalPendingLength.Load())
 
 	path.removed.Store(true)
-	policy := newBatchPolicy(option.BatchCount, option.BatchBytes)
-	b := newBatcher[*mockEvent](policy, option.BatchCount)
+	batchConfig := newBatchConfig(option.BatchCount, option.BatchBytes)
+	b := newBatcher[*mockEvent](batchConfig, option.BatchCount)
 	events, _, _ := eq.popEvents(&b)
 	require.Equal(t, 0, len(events))
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())

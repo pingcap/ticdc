@@ -13,38 +13,38 @@
 
 package dynstream
 
-type batchPolicy struct {
+type batchConfig struct {
 	batchCount int
 	batchBytes int
 }
 
-func newBatchPolicy(batchCount int, batchBytes int) batchPolicy {
+func newBatchConfig(batchCount int, batchBytes int) batchConfig {
 	if batchCount <= 0 {
 		batchCount = 1
 	}
-	return batchPolicy{
+	return batchConfig{
 		batchCount: batchCount,
 		batchBytes: batchBytes,
 	}
 }
 
 type batcher[T any] struct {
-	policy   batchPolicy
+	config   batchConfig
 	maxCount int
 
 	buf        []T
 	totalBytes int
 }
 
-func newBatcher[T any](policy batchPolicy, initialCap int) batcher[T] {
+func newBatcher[T any](config batchConfig, initialCap int) batcher[T] {
 	if initialCap < 0 {
 		initialCap = 0
 	}
-	return batcher[T]{policy: policy, buf: make([]T, 0, initialCap)}
+	return batcher[T]{config: config, buf: make([]T, 0, initialCap)}
 }
 
-func (b *batcher[T]) setLimit(policy batchPolicy, maxCount int) {
-	b.policy = policy
+func (b *batcher[T]) setLimit(config batchConfig, maxCount int) {
+	b.config = config
 	b.maxCount = maxCount
 	b.totalBytes = 0
 	b.buf = b.buf[:0]
@@ -59,7 +59,7 @@ func (b *batcher[T]) isFull() bool {
 	if b.maxCount > 0 && len(b.buf) >= b.maxCount {
 		return true
 	}
-	if b.policy.batchBytes > 0 && b.totalBytes >= b.policy.batchBytes {
+	if b.config.batchBytes > 0 && b.totalBytes >= b.config.batchBytes {
 		return true
 	}
 	return false
@@ -74,5 +74,5 @@ func (b *batcher[T]) reset() {
 	for i := range b.buf {
 		b.buf[i] = zeroT
 	}
-	b.setLimit(b.policy, 0)
+	b.setLimit(b.config, 0)
 }

@@ -30,8 +30,8 @@ func TestEventQueueBatchBytesFlushesAfterReachingLimit(t *testing.T) {
 	pi := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "path1", nil)
 	q.initPath(pi)
 
-	policy := newBatchPolicy(option.BatchCount, option.BatchBytes)
-	b := newBatcher[*mockEvent](policy, option.BatchCount)
+	batchConfig := newBatchConfig(option.BatchCount, option.BatchBytes)
+	b := newBatcher[*mockEvent](batchConfig, option.BatchCount)
 
 	appendEvent := func(id int, size int) {
 		q.appendEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{
@@ -62,8 +62,8 @@ func TestEventQueueBatchBytesAllowsFirstEventLargerThanLimit(t *testing.T) {
 	pi := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "path1", nil)
 	q.initPath(pi)
 
-	policy := newBatchPolicy(option.BatchCount, option.BatchBytes)
-	b := newBatcher[*mockEvent](policy, option.BatchCount)
+	batchConfig := newBatchConfig(option.BatchCount, option.BatchBytes)
+	b := newBatcher[*mockEvent](batchConfig, option.BatchCount)
 
 	appendEvent := func(id int, size int) {
 		q.appendEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{

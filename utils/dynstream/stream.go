@@ -65,13 +65,13 @@ func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	component string,
 	handler H,
 	option Option,
-	batchPolicyStore *areaBatchPolicyStore[A],
+	batchConfigStore *areaBatchConfigStore[A],
 ) *stream[A, P, T, D, H] {
 	s := &stream[A, P, T, D, H]{
 		module:     component,
 		id:         id,
 		handler:    handler,
-		eventQueue: newEventQueue(option, handler, batchPolicyStore),
+		eventQueue: newEventQueue(option, handler, batchConfigStore),
 		option:     option,
 		startTime:  time.Now(),
 	}
@@ -232,8 +232,8 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 	// Declared here to avoid repeated allocation.
 	var (
 		eventQueueEmpty = false
-		defaultPolicy = newBatchPolicy(s.option.BatchCount, s.option.BatchBytes)
-		b             = newBatcher[T](defaultPolicy, s.option.BatchCount)
+		defaultConfig = newBatchConfig(s.option.BatchCount, s.option.BatchBytes)
+		b             = newBatcher[T](defaultConfig, s.option.BatchCount)
 		path   *pathInfo[A, P, T, D, H]
 		nBytes int
 		events []T

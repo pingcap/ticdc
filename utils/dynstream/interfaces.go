@@ -193,6 +193,11 @@ type DynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] inter
 	// This method can be called at any time. But to avoid the memory leak, setting on a area without existing paths is a no-op.
 	SetAreaSettings(area A, settings AreaSettings)
 
+	// SetAreaBatchConfig sets the batching config for an area.
+	// The config is effective only when the area has existing paths in the dynamic stream.
+	// Passing batchCount and batchBytes equal to the default ones resets to default.
+	SetAreaBatchConfig(area A, batchCount int, batchBytes int)
+
 	GetMetrics() Metrics[A, P]
 }
 
@@ -250,17 +255,6 @@ type AreaSettings struct {
 	feedbackInterval   time.Duration // The interval of the feedback. By default 1000ms.
 	// Remove it when we determine the v2 is working well.
 	algorithm int // The algorithm of the memory control.
-
-	// Batching policy override (optional).
-	//
-	// Dynamic stream is shared by multiple modules. Most callers only update memory control settings
-	// via SetAreaSettings. To avoid accidental batching behavior changes, overrides are only applied
-	// when explicitly set via WithBatchPolicy.
-	//
-	// Under scheme Y: 0 means "not set". This means callers cannot explicitly override to 0; they
-	// either leave it unset (0) or set it to a positive value.
-	batchCount int
-	batchBytes int
 }
 
 func (s *AreaSettings) fix() {
@@ -286,10 +280,15 @@ func NewAreaSettingsWithMaxPendingSize(size uint64, memoryControlAlgorithm int, 
 	}
 }
 
-func (s AreaSettings) WithBatchPolicy(batchCount int, batchBytes int) AreaSettings {
-	s.batchCount = batchCount
-	s.batchBytes = batchBytes
-	return s
+// NewBatchConfig normalizes batching parameters and returns values that can be passed to SetAreaBatchConfig.
+func NewBatchConfig(batchCount int, batchBytes int) (int, int) {
+	if batchCount <= 0 {
+		batchCount = 1
+	}
+	if batchBytes < 0 {
+		batchBytes = 0
+	}
+	return batchCount, batchBytes
 }
 
 type FeedbackType int
