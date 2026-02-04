@@ -170,9 +170,25 @@ func (r *Report) NeedFlush() bool {
 	return r.needFlush
 }
 
+type SchemaTableVersionKey struct {
+	utils.SchemaTableKey
+	utils.VersionKey
+}
+
+func NewSchemaTableVersionKeyFromVersionKeyMap(versionKeyMap map[utils.SchemaTableKey]utils.VersionKey) []SchemaTableVersionKey {
+	result := make([]SchemaTableVersionKey, 0, len(versionKeyMap))
+	for schemaTableKey, versionKey := range versionKeyMap {
+		result = append(result, SchemaTableVersionKey{
+			SchemaTableKey: schemaTableKey,
+			VersionKey:     versionKey,
+		})
+	}
+	return result
+}
+
 type CheckpointClusterInfo struct {
-	TimeWindow utils.TimeWindow                          `json:"time_window"`
-	MaxVersion map[utils.SchemaTableKey]utils.VersionKey `json:"max_version"`
+	TimeWindow utils.TimeWindow        `json:"time_window"`
+	MaxVersion []SchemaTableVersionKey `json:"max_version"`
 }
 
 type CheckpointItem struct {
@@ -202,7 +218,7 @@ func (c *Checkpoint) NewTimeWindowData(round uint64, timeWindowData map[string]u
 	for downstreamClusterID, timeWindow := range timeWindowData {
 		newCheckpointItem.ClusterInfo[downstreamClusterID] = CheckpointClusterInfo{
 			TimeWindow: timeWindow.TimeWindow,
-			MaxVersion: timeWindow.MaxVersion,
+			MaxVersion: NewSchemaTableVersionKeyFromVersionKeyMap(timeWindow.MaxVersion),
 		}
 	}
 	c.CheckpointItems[0] = c.CheckpointItems[1]
@@ -222,8 +238,8 @@ func (c *Checkpoint) ToScanRange(clusterID string) (map[utils.SchemaTableKey]*Sc
 	if c.CheckpointItems[2] == nil {
 		return result, nil
 	}
-	for schemaTableKey, versionKey := range c.CheckpointItems[2].ClusterInfo[clusterID].MaxVersion {
-		result[schemaTableKey] = &ScanRange{
+	for _, versionKey := range c.CheckpointItems[2].ClusterInfo[clusterID].MaxVersion {
+		result[versionKey.SchemaTableKey] = &ScanRange{
 			StartVersionKey: versionKey.VersionPath,
 			EndVersionKey:   versionKey.VersionPath,
 			StartDataPath:   versionKey.DataPath,
@@ -233,10 +249,10 @@ func (c *Checkpoint) ToScanRange(clusterID string) (map[utils.SchemaTableKey]*Sc
 	if c.CheckpointItems[1] == nil {
 		return result, nil
 	}
-	for schemaTableKey, versionKey := range c.CheckpointItems[1].ClusterInfo[clusterID].MaxVersion {
-		scanRange, ok := result[schemaTableKey]
+	for _, versionKey := range c.CheckpointItems[1].ClusterInfo[clusterID].MaxVersion {
+		scanRange, ok := result[versionKey.SchemaTableKey]
 		if !ok {
-			return nil, errors.Errorf("schema table key %s.%s not found in result", schemaTableKey.Schema, schemaTableKey.Table)
+			return nil, errors.Errorf("schema table key %s.%s not found in result", versionKey.Schema, versionKey.Table)
 		}
 		scanRange.StartVersionKey = versionKey.VersionPath
 		scanRange.StartDataPath = versionKey.DataPath
@@ -244,10 +260,10 @@ func (c *Checkpoint) ToScanRange(clusterID string) (map[utils.SchemaTableKey]*Sc
 	if c.CheckpointItems[0] == nil {
 		return result, nil
 	}
-	for schemaTableKey, versionKey := range c.CheckpointItems[0].ClusterInfo[clusterID].MaxVersion {
-		scanRange, ok := result[schemaTableKey]
+	for _, versionKey := range c.CheckpointItems[0].ClusterInfo[clusterID].MaxVersion {
+		scanRange, ok := result[versionKey.SchemaTableKey]
 		if !ok {
-			return nil, errors.Errorf("schema table key %s.%s not found in result", schemaTableKey.Schema, schemaTableKey.Table)
+			return nil, errors.Errorf("schema table key %s.%s not found in result", versionKey.Schema, versionKey.Table)
 		}
 		scanRange.StartVersionKey = versionKey.VersionPath
 		scanRange.StartDataPath = versionKey.DataPath

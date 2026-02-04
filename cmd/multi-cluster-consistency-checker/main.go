@@ -103,7 +103,9 @@ func run(cmd *cobra.Command, args []string) {
 	// Start the task in a goroutine
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- runTask(ctx, cfg)
+		err := runTask(ctx, cfg)
+		log.Error("task error", zap.Error(err))
+		errChan <- err
 	}()
 
 	// Wait for either a signal or task completion
