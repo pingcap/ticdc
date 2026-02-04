@@ -1882,19 +1882,20 @@ func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter
 			log.Error("parse create table ddl failed",
 				zap.String("query", rawEvent.Query),
 				zap.Error(err))
-			return ddlEvent, false, err
-		}
-		if createStmt, ok := stmt.(*ast.CreateTableStmt); ok && createStmt.ReferTable != nil {
-			refTable := createStmt.ReferTable.Name.O
-			refSchema := createStmt.ReferTable.Schema.O
-			if refSchema == "" {
-				refSchema = rawEvent.SchemaName
-			}
-			ddlEvent.BlockedTableNames = []commonEvent.SchemaTableName{
-				{
-					SchemaName: refSchema,
-					TableName:  refTable,
-				},
+			// return ddlEvent, false, err
+		} else {
+			if createStmt, ok := stmt.(*ast.CreateTableStmt); ok && createStmt.ReferTable != nil {
+				refTable := createStmt.ReferTable.Name.O
+				refSchema := createStmt.ReferTable.Schema.O
+				if refSchema == "" {
+					refSchema = rawEvent.SchemaName
+				}
+				ddlEvent.BlockedTableNames = []commonEvent.SchemaTableName{
+					{
+						SchemaName: refSchema,
+						TableName:  refTable,
+					},
+				}
 			}
 		}
 	}
