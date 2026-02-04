@@ -546,7 +546,7 @@ func (s *sink) getAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
 			zap.Uint64("ts", ts))
 		return nil
 	}
-	return s.tableSchemaStore.GetAllTableNames(ts)
+	return s.tableSchemaStore.GetAllTableNames(ts, true)
 }
 
 func (s *sink) Close(_ bool) {

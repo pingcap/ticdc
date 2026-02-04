@@ -14,27 +14,10 @@
 package mysql
 
 import (
-	"context"
-	"database/sql"
-	"database/sql/driver"
-	"fmt"
 	"sort"
-	"strings"
-	"time"
 
-	dmysql "github.com/go-sql-driver/mysql"
-	"github.com/pingcap/errors"
-	"github.com/pingcap/failpoint"
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/retry"
-	"github.com/pingcap/ticdc/pkg/sink/sqlmodel"
-	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tidb/pkg/parser/mysql"
-	"github.com/pingcap/tidb/pkg/util/chunk"
-	"go.uber.org/zap"
 )
 
 func groupEventsByTable(events []*commonEvent.DMLEvent) map[int64][][]*commonEvent.DMLEvent {
@@ -80,7 +63,7 @@ func groupEventsByTable(events []*commonEvent.DMLEvent) map[int64][][]*commonEve
 // the process is as follows:
 //  1. we group the events by tableID, and hold the order for the events of the same table
 //  2. For each group,
-//     if the table does't have a handle key or have virtual column, we just generate the sqls for each event row.(TODO: support the case without pk but have uk)
+//     if the table does't have a handle key or have virtual column, we just generate the sqls for each event row.
 //     Otherwise,
 //     if there is only one rows of the whole group, we generate the sqls for the row.
 //     Otherwise, we batch all the event rows for the same dispatcherID to limited delete / update/ insert query(in order)
@@ -108,10 +91,14 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 	for _, sortedEventGroups := range eventsGroupSortedByUpdateTs {
 		for _, eventsInGroup := range sortedEventGroups {
 			tableInfo := eventsInGroup[0].TableInfo
-			if !w.shouldGenBatchSQL(tableInfo.HasPKOrNotNullUK, tableInfo.HasVirtualColumns(), eventsInGroup) {
-				queryList, argsList = w.generateNormalSQLs(eventsInGroup)
+			if w.cfg.EnableActiveActive {
+				queryList, argsList = w.genActiveActiveSQL(tableInfo, eventsInGroup)
 			} else {
-				queryList, argsList = w.generateBatchSQL(eventsInGroup)
+				if !w.shouldGenBatchSQL(tableInfo.HasPKOrNotNullUK, tableInfo.HasVirtualColumns(), eventsInGroup) {
+					queryList, argsList = w.generateNormalSQLs(eventsInGroup)
+				} else {
+					queryList, argsList = w.generateBatchSQL(eventsInGroup)
+				}
 			}
 			dmls.sqls = append(dmls.sqls, queryList...)
 			dmls.values = append(dmls.values, argsList...)
@@ -123,6 +110,13 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 	dmls.LogDebug(events, w.id)
 
 	return dmls, nil
+}
+
+func (w *Writer) genActiveActiveSQL(tableInfo *common.TableInfo, eventsInGroup []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
+	if !w.shouldGenBatchSQL(tableInfo.HasPKOrNotNullUK, tableInfo.HasVirtualColumns(), eventsInGroup) {
+		return w.generateActiveActiveNormalSQLs(eventsInGroup)
+	}
+	return w.generateActiveActiveBatchSQL(eventsInGroup)
 }
 
 // shouldGenBatchSQL determines whether batch SQL generation should be used based on table properties and events.
@@ -180,6 +174,7 @@ func allRowInSameSafeMode(safemode bool, events []*commonEvent.DMLEvent) bool {
 
 	return true
 }
+<<<<<<< HEAD
 
 // for generate batch sql for multi events, we first need to compare the rows with the same pk, to generate the final rows.
 // because for the batch sqls, we will first execute delete sqls, then update sqls, and finally insert sqls.
@@ -956,3 +951,5 @@ func (w *Writer) genUpdateSQL(rows ...*sqlmodel.RowChange) ([]string, [][]interf
 	}
 	return sqls, values
 }
+=======
+>>>>>>> 3a8aa16a1 (Support sync in active-active mode to TiDB and sync active-active tables in non-active-active mode to all downstream (#3299))

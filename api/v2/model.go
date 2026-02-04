@@ -206,6 +206,17 @@ type ReplicaConfig struct {
 	EnableSyncPoint       *bool   `json:"enable_sync_point,omitempty"`
 	EnableTableMonitor    *bool   `json:"enable_table_monitor,omitempty"`
 	BDRMode               *bool   `json:"bdr_mode,omitempty"`
+	// EnableActiveActive enables active-active replication mode on top of BDR.
+	// It requires BDRMode to be true and is only supported by TiDB and storage sinks.
+	EnableActiveActive *bool `json:"enable_active_active,omitempty"`
+	// ActiveActiveProgressInterval controls how often the MySQL/TiDB sink updates the
+	// active-active progress table in EnableActiveActive mode (for hard delete safety checks).
+	ActiveActiveProgressInterval *JSONDuration `json:"active_active_progress_interval,omitempty"`
+	// ActiveActiveSyncStatsInterval controls how often the MySQL/TiDB sink queries
+	// the TiDB session variable @@tidb_cdc_active_active_sync_stats for conflict statistics.
+	// Set it to 0 to disable metric collection.
+	// This option only takes effect when EnableActiveActive is true and the downstream is TiDB.
+	ActiveActiveSyncStatsInterval *JSONDuration `json:"active_active_sync_stats_interval,omitempty"`
 
 	SyncPointInterval  *JSONDuration `json:"sync_point_interval,omitempty"`
 	SyncPointRetention *JSONDuration `json:"sync_point_retention,omitempty"`
@@ -257,6 +268,15 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 	}
 	if c.BDRMode != nil {
 		res.BDRMode = c.BDRMode
+	}
+	if c.EnableActiveActive != nil {
+		res.EnableActiveActive = c.EnableActiveActive
+	}
+	if c.ActiveActiveProgressInterval != nil {
+		res.ActiveActiveProgressInterval = &c.ActiveActiveProgressInterval.duration
+	}
+	if c.ActiveActiveSyncStatsInterval != nil {
+		res.ActiveActiveSyncStatsInterval = &c.ActiveActiveSyncStatsInterval.duration
 	}
 
 	if c.Filter != nil {
@@ -641,6 +661,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 		EnableSyncPoint:       cloned.EnableSyncPoint,
 		EnableTableMonitor:    cloned.EnableTableMonitor,
 		BDRMode:               cloned.BDRMode,
+		EnableActiveActive:    cloned.EnableActiveActive,
 	}
 
 	if cloned.SyncPointInterval != nil {
@@ -649,6 +670,12 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 
 	if cloned.SyncPointRetention != nil {
 		res.SyncPointRetention = &JSONDuration{*cloned.SyncPointRetention}
+	}
+	if cloned.ActiveActiveProgressInterval != nil {
+		res.ActiveActiveProgressInterval = &JSONDuration{*cloned.ActiveActiveProgressInterval}
+	}
+	if cloned.ActiveActiveSyncStatsInterval != nil {
+		res.ActiveActiveSyncStatsInterval = &JSONDuration{*cloned.ActiveActiveSyncStatsInterval}
 	}
 
 	if cloned.Filter != nil {

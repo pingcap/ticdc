@@ -94,7 +94,7 @@ const (
 )
 
 const (
-	defaultMaxRetry       = 5
+	defaultMaxRetry       = 50
 	defaultRequestTimeout = 5 * time.Second
 )
 
