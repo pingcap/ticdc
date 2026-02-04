@@ -280,11 +280,8 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 		// corresponding progress rows by TiCDC. The cleanup is idempotent and must run before
 		// flushing the DDL event (and regardless of the BDR role).
 		if s.enableActiveActive {
-			err := s.progressTableWriter.RemoveTables(ddl)
-			if err != nil {
-				s.isNormal.Store(false)
-				return err
-			}
+			err = s.progressTableWriter.RemoveTables(ddl)
+			break
 		}
 		// a BDR mode cluster, TiCDC can receive DDLs from all roles of TiDB.
 		// However, CDC only executes the DDLs from the TiDB that has BDRRolePrimary role.
