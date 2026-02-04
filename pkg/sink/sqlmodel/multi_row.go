@@ -259,6 +259,7 @@ func genUpdateSQLV2(changes ...*RowChange) (string, []any) {
 			buf.WriteString(common.QuoteName(column) + ")")
 		}
 	}
+	buf.WriteString(" IN (")
 	// TODO: can't handle NULL by IS NULL, should use WHERE OR
 	holder := valuesHolder(len(whereColumns))
 	for i := range changes {
