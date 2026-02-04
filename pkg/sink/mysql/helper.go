@@ -54,13 +54,13 @@ LIMIT 1;
 // Ref: https://github.com/pingcap/tidb/issues/55725
 const checkRunningAddIndexSQLForOldVersion = `
 ADMIN SHOW DDL JOBS 1
-WHERE DB_NAME = "%s" 
+WHERE DB_NAME = "%s"
     AND TABLE_NAME = "%s"
     AND JOB_TYPE LIKE "add index%%"
     AND (STATE = "running" OR STATE = "queueing");
 `
 
-const checkRunningSQL = `SELECT * FROM information_schema.ddl_jobs 
+const checkRunningSQL = `SELECT * FROM information_schema.ddl_jobs
 	WHERE CREATE_TIME >= "%s" AND QUERY = "%s";`
 
 // CheckIfBDRModeIsSupported checks if the downstream supports set tidb_cdc_write_source variable
@@ -245,7 +245,11 @@ func generateDSNByConfig(
 		dsnCfg.Params["allow_auto_random_explicit_insert"] = autoRandom
 	}
 
-	txnMode, err := checkTiDBVariable(testDB, "tidb_txn_mode", cfg.TidbTxnMode)
+	tidbTxnMode := cfg.TidbTxnMode
+	if cfg.IsTiDB && cfg.EnableActiveActive && !cfg.tidbTxnModeSpecified {
+		tidbTxnMode = txnModePessimistic
+	}
+	txnMode, err := checkTiDBVariable(testDB, "tidb_txn_mode", tidbTxnMode)
 	if err != nil {
 		return "", err
 	}
@@ -339,6 +343,11 @@ func GenerateDSN(ctx context.Context, cfg *Config) (string, error) {
 	dsn.Params["sql_mode"] = strconv.Quote(dsn.Params["sql_mode"])
 
 	cfg.IsTiDB = CheckIsTiDB(ctx, testDB)
+	if cfg.EnableActiveActive && !cfg.IsTiDB {
+		return "", cerror.ErrMySQLInvalidConfig.GenWithStack(
+			"enable-active-active requires downstream TiDB")
+	}
+
 	cfg.setWorkerCountByDownstream()
 	log.Info("set worker count for mysql sink", zap.Int("workerCount", cfg.WorkerCount))
 
@@ -351,6 +360,11 @@ func GenerateDSN(ctx context.Context, cfg *Config) (string, error) {
 		}
 		if bdrModeSupported {
 			dsn.Params["tidb_cdc_write_source"] = "1"
+		}
+		if cfg.EnableActiveActive {
+			// LWW mode relies on TiDB preserving _tidb_softdelete_time column semantics,
+			// so disable the softdelete SQL translation on each new session.
+			dsn.Params["tidb_translate_softdelete_sql"] = "\"OFF\""
 		}
 	}
 
