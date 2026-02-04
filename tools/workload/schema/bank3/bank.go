@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"fmt"
 	"math/rand"
+	"sync/atomic"
 
 	"workload/schema"
 )
@@ -134,7 +135,9 @@ PARTITION BY RANGE COLUMNS(col4)
  PARTITION p_202703 VALUES LESS THAN ('2027-04-01')) 
 `
 
-type BankWorkload struct{}
+type BankWorkload struct {
+	ddlExecutedCount uint64
+}
 
 func NewBankWorkload() schema.Workload {
 	return &BankWorkload{}
@@ -282,7 +285,8 @@ WHERE auto_id IN (
 
 func (c *BankWorkload) BuildDDLSql(opts schema.DDLOption) string {
 	tableName := getBankTableName(opts.TableIndex)
-	if rand.Intn(2) == 0 {
+	count := atomic.AddUint64(&c.ddlExecutedCount, 1)
+	if count%2 == 0 {
 		return fmt.Sprintf("alter table %s add column col_add int default null;", tableName)
 	}
 	return fmt.Sprintf("alter table %s drop column col_add;", tableName)
