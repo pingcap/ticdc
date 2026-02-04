@@ -212,7 +212,7 @@ type Option struct {
 
 	StreamCount int // The count of streams. I.e. the count of goroutines to handle events. By default 0, means runtime.NumCPU().
 	BatchCount  int // The batch count of handling events. <= 1 means no batch. By default 1.
-	BatchBytes  int // The max bytes of the batch. <= 1 means no limit. By default 0.
+	BatchBytes  int // The max bytes of a batch. <= 0 disables bytes-based batching. By default 0.
 
 	EnableMemoryControl bool // Enable the memory control. By default false.
 

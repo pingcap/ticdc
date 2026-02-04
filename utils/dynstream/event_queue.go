@@ -109,6 +109,9 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, 
 		path.popEvent()
 	}
 
+	batchBytes := q.option.BatchBytes
+	bytesBatchingEnabled := batchBytes > 0
+
 	for {
 		// We are going to update the signal directly, so we need the reference.
 		signal, ok := q.signalQueue.FrontRef()
@@ -149,6 +152,9 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, 
 		// Try to batch events with the same data group.
 		count := 1
 		for ; count < batchSize; count++ {
+			if bytesBatchingEnabled && totalBytes >= batchBytes {
+				break
+			}
 			// Get the reference of the front event of the path.
 			// We don't use PopFront here because we need to keep the event in the path.
 			// Otherwise, the event may lost when the loop is break below.
@@ -158,6 +164,9 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, 
 				(firstGroup != front.eventType.DataGroup) ||
 				firstProperty == NonBatchable ||
 				front.eventType.Property == NonBatchable {
+				break
+			}
+			if bytesBatchingEnabled && totalBytes+front.eventSize > batchBytes {
 				break
 			}
 			appendToBuf(front, path)
