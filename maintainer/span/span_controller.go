@@ -251,6 +251,10 @@ func (c *Controller) GetAllTasks() []*replica.SpanReplication {
 	return tasks
 }
 
+func (c *Controller) GetChangefeedID() common.ChangeFeedID {
+	return c.changefeedID
+}
+
 // GetTaskSizeBySchemaID returns the size of the task by the schema id
 func (c *Controller) GetTaskSizeBySchemaID(schemaID int64) int {
 	c.mu.RLock()

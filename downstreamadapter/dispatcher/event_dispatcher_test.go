@@ -402,6 +402,70 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, uint64(7), checkpointTs)
 }
 
+func TestDispatcherIgnoreActionWithSameCommitTsDifferentType(t *testing.T) {
+	sink := sink.NewMockSink(common.MysqlSinkType)
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+	dispatcher := newDispatcherForTest(sink, tableSpan)
+
+	nodeID := node.NewID()
+
+	ddlEvent := &commonEvent.DDLEvent{
+		FinishedTs: 10,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{0, 1},
+		},
+	}
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, callback)
+	require.True(t, block)
+
+	// Pending DDL event should be in WAITING stage.
+	pending, stage := dispatcher.blockEventStatus.getEventAndStage()
+	require.NotNil(t, pending)
+	require.Equal(t, heartbeatpb.BlockStage_WAITING, stage)
+
+	// ACK the DDL so the resend task is cancelled.
+	dispatcher.HandleDispatcherStatus(&heartbeatpb.DispatcherStatus{
+		Ack: &heartbeatpb.ACK{
+			CommitTs:    ddlEvent.FinishedTs,
+			IsSyncPoint: false,
+		},
+	})
+	require.Equal(t, 0, dispatcher.resendTaskMap.Len())
+
+	// Drain any previously sent block status messages.
+drain:
+	for {
+		select {
+		case <-dispatcher.sharedInfo.blockStatusesChan:
+		default:
+			break drain
+		}
+	}
+
+	// Send an action for a syncpoint with the same commitTs. It should be ignored.
+	dispatcher.HandleDispatcherStatus(&heartbeatpb.DispatcherStatus{
+		Action: &heartbeatpb.DispatcherAction{
+			Action:      heartbeatpb.Action_Skip,
+			CommitTs:    ddlEvent.FinishedTs,
+			IsSyncPoint: true,
+		},
+	})
+
+	// Still waiting on the DDL.
+	pending, stage = dispatcher.blockEventStatus.getEventAndStage()
+	require.NotNil(t, pending)
+	require.Equal(t, heartbeatpb.BlockStage_WAITING, stage)
+
+	// Should not emit a DONE block status for the mismatched action.
+	select {
+	case msg := <-dispatcher.sharedInfo.blockStatusesChan:
+		require.FailNow(t, "unexpected block status emitted", "msg=%v", msg)
+	default:
+	}
+}
+
 // test uncompelete table span can correctly handle the ddl events
 func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 	count.Swap(0)

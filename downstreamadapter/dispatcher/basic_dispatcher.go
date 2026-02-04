@@ -655,6 +655,14 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 					zap.Stringer("dispatcher", d.id))
 				return false
 			}
+			if ok && action.CommitTs == ts {
+				log.Debug("action does not match pending event, ignore it",
+					zap.Uint64("pendingEventCommitTs", ts),
+					zap.Uint64("actionCommitTs", action.CommitTs),
+					zap.Bool("actionIsSyncPoint", action.IsSyncPoint),
+					zap.Stringer("dispatcher", d.id))
+				return false
+			}
 		}
 
 		// Step3: whether the outdate message or not, we need to return message show we have finished the event.

@@ -972,6 +972,111 @@ func TestSyncPointSkip(t *testing.T) {
 	require.Len(t, barrier.blockedEvents.m, 0)
 }
 
+func TestSyncPointSkipEnableUnblocksInflight(t *testing.T) {
+	testutil.SetUpTestServices()
+	nm := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nmap := nm.GetAliveNodes()
+	for key := range nmap {
+		delete(nmap, key)
+	}
+	nmap["node1"] = &node.Info{ID: "node1"}
+	nmap["node2"] = &node.Info{ID: "node2"}
+
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
+	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
+	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
+
+	var tableDispatcherIDs []*heartbeatpb.DispatcherID
+	absents := spanController.GetAbsentForTest(10000)
+	for _, stm := range absents {
+		tableDispatcherIDs = append(tableDispatcherIDs, stm.ID.ToPB())
+		spanController.BindSpanToNode("", "node1", stm)
+		spanController.MarkSpanReplicating(stm)
+	}
+
+	// Move one table dispatcher to another node, so skip actions should be sent to two nodes.
+	movedDispatcherID := common.NewDispatcherIDFromPB(tableDispatcherIDs[1])
+	movedRep := spanController.GetTaskByID(movedDispatcherID)
+	spanController.BindSpanToNode("node1", "node2", movedRep)
+	spanController.MarkSpanReplicating(movedRep)
+
+	barrier := NewBarrier(spanController, operatorController, true, nil, common.DefaultMode)
+
+	// Report a syncpoint barrier from one table dispatcher first (rangeChecker is not created yet).
+	_ = barrier.HandleStatus("node2", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID: tableDispatcherIDs[1],
+				State: &heartbeatpb.State{
+					IsBlocked: true,
+					BlockTs:   10,
+					BlockTables: &heartbeatpb.InfluencedTables{
+						InfluenceType: heartbeatpb.InfluenceType_All,
+					},
+					IsSyncPoint: true,
+					Stage:       heartbeatpb.BlockStage_WAITING,
+				},
+			},
+		},
+	})
+
+	// Report from ddl dispatcher, which creates the rangeChecker but still not fully covered.
+	_ = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID: spanController.GetDDLDispatcherID().ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked: true,
+					BlockTs:   10,
+					BlockTables: &heartbeatpb.InfluencedTables{
+						InfluenceType: heartbeatpb.InfluenceType_All,
+					},
+					IsSyncPoint: true,
+					Stage:       heartbeatpb.BlockStage_WAITING,
+				},
+			},
+		},
+	})
+
+	barrier.SetSyncPointSkipState(true, 5*time.Minute, 2*time.Minute)
+
+	resendMsgs := barrier.Resend()
+	require.Len(t, resendMsgs, 2)
+
+	expected := map[string]struct{}{
+		tableDispatcherIDs[1].String():                      {},
+		spanController.GetDDLDispatcherID().ToPB().String(): {},
+	}
+	for _, msg := range resendMsgs {
+		resp := msg.Message[0].(*heartbeatpb.HeartBeatResponse)
+		for _, st := range resp.DispatcherStatuses {
+			require.NotNil(t, st.Action)
+			require.Equal(t, heartbeatpb.Action_Skip, st.Action.Action)
+			require.Equal(t, uint64(10), st.Action.CommitTs)
+			require.True(t, st.Action.IsSyncPoint)
+			require.NotNil(t, st.Ack)
+			require.Equal(t, uint64(10), st.Ack.CommitTs)
+			require.True(t, st.Ack.IsSyncPoint)
+			require.Equal(t, heartbeatpb.InfluenceType_Normal, st.InfluencedDispatchers.InfluenceType)
+			require.Len(t, st.InfluencedDispatchers.DispatcherIDs, 1)
+			delete(expected, st.InfluencedDispatchers.DispatcherIDs[0].String())
+		}
+	}
+	require.Len(t, expected, 0)
+}
+
 func TestNonBlocked(t *testing.T) {
 	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()

@@ -72,24 +72,9 @@ func NewBarrier(spanController *span.Controller,
 }
 
 func (b *Barrier) SetSyncPointSkipState(enabled bool, checkpointLag time.Duration, syncPointInterval time.Duration) {
-	wasEnabled := b.syncPointSkipEnabled.Swap(enabled)
+	b.syncPointSkipEnabled.Store(enabled)
 	b.syncPointSkipCheckpointLag.Store(int64(checkpointLag))
 	b.syncPointInterval.Store(int64(syncPointInterval))
-
-	// When enabling skip, drop any pending syncpoint events in barrier state.
-	// Dispatchers will resend their WAITING states and receive Action_Skip directly.
-	if enabled && !wasEnabled {
-		var keys []eventKey
-		b.blockedEvents.Range(func(key eventKey, barrierEvent *BarrierEvent) bool {
-			if barrierEvent != nil && barrierEvent.isSyncPoint {
-				keys = append(keys, key)
-			}
-			return true
-		})
-		for _, key := range keys {
-			b.blockedEvents.Delete(key)
-		}
-	}
 }
 
 func (b *Barrier) isSkippedSyncPointCommitTs(commitTs uint64) bool {
@@ -138,6 +123,53 @@ func (b *Barrier) buildSkipSyncPointStatus(dispatcherID *heartbeatpb.DispatcherI
 		},
 		Ack: ackEvent(commitTs, true),
 	}
+}
+
+func (b *Barrier) resendSkipSyncPointActions() []*messaging.TargetMessage {
+	if !b.syncPointSkipEnabled.Load() && b.maxSkippedSyncPointTs.Load() == 0 {
+		return nil
+	}
+
+	cfID := b.spanController.GetChangefeedID()
+	var (
+		msgs      []*messaging.TargetMessage
+		statusMap = make(map[node.ID][]*heartbeatpb.DispatcherStatus)
+	)
+	for _, task := range b.spanController.GetAllTasks() {
+		if task == nil {
+			continue
+		}
+		state := task.GetBlockState()
+		if state == nil || !state.IsBlocked || !state.IsSyncPoint || state.BlockTs == 0 {
+			continue
+		}
+		if state.Stage != heartbeatpb.BlockStage_WAITING {
+			continue
+		}
+		if !b.syncPointSkipEnabled.Load() && !b.isSkippedSyncPointCommitTs(state.BlockTs) {
+			continue
+		}
+
+		nodeID := task.GetNodeID()
+		if nodeID == "" {
+			continue
+		}
+
+		statusMap[nodeID] = append(statusMap[nodeID], b.buildSkipSyncPointStatus(task.ID.ToPB(), state.BlockTs))
+		b.recordSkippedSyncPoint(cfID, state.BlockTs)
+	}
+
+	for nodeID, statuses := range statusMap {
+		msg := messaging.NewSingleTargetMessage(nodeID,
+			messaging.HeartbeatCollectorTopic,
+			&heartbeatpb.HeartBeatResponse{
+				ChangefeedID:       cfID.ToPB(),
+				DispatcherStatuses: statuses,
+				Mode:               b.mode,
+			})
+		msgs = append(msgs, msg)
+	}
+	return msgs
 }
 
 // HandleStatus handle the block status from dispatcher manager
@@ -335,14 +367,24 @@ func (b *Barrier) handleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 func (b *Barrier) Resend() []*messaging.TargetMessage {
 	var msgs []*messaging.TargetMessage
 
+	msgs = append(msgs, b.resendSkipSyncPointActions()...)
+
 	eventList := make([]*BarrierEvent, 0)
+	var skipKeys []eventKey
 	b.blockedEvents.Range(func(key eventKey, barrierEvent *BarrierEvent) bool {
 		// todo: we can limit the number of messages to send in one round here
+		if barrierEvent != nil && barrierEvent.isSyncPoint && (b.syncPointSkipEnabled.Load() || b.isSkippedSyncPointCommitTs(barrierEvent.commitTs)) {
+			skipKeys = append(skipKeys, key)
+			return true
+		}
 		msgs = append(msgs, barrierEvent.resend(b.mode)...)
 
 		eventList = append(eventList, barrierEvent)
 		return true
 	})
+	for _, key := range skipKeys {
+		b.blockedEvents.Delete(key)
+	}
 
 	for _, event := range eventList {
 		if event != nil {
