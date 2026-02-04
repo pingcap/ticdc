@@ -17,6 +17,7 @@ import (
 	"flag"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // WorkloadConfig saves all the configurations for the workload
@@ -39,6 +40,10 @@ type WorkloadConfig struct {
 	TotalRowCount       uint64
 	PercentageForUpdate float64
 	PercentageForDelete float64
+
+	// DDL related
+	DDLThread   int
+	DDLInterval time.Duration
 
 	// Action control
 	Action          string
@@ -81,6 +86,10 @@ func NewWorkloadConfig() *WorkloadConfig {
 		PercentageForUpdate: 0,
 		PercentageForDelete: 0,
 
+		// Default ddl config
+		DDLThread:   0,
+		DDLInterval: 5 * time.Second,
+
 		// Action control
 		Action:          "prepare",
 		SkipCreateTable: false,
@@ -114,8 +123,10 @@ func (c *WorkloadConfig) ParseFlags() error {
 	flag.Uint64Var(&c.TotalRowCount, "total-row-count", c.TotalRowCount, "the total row count of the workload, default is 1 billion")
 	flag.Float64Var(&c.PercentageForUpdate, "percentage-for-update", c.PercentageForUpdate, "percentage for update: [0, 1.0]")
 	flag.Float64Var(&c.PercentageForDelete, "percentage-for-delete", c.PercentageForDelete, "percentage for delete: [0, 1.0]")
+	flag.IntVar(&c.DDLThread, "ddl-thread", c.DDLThread, "concurrency for ddl workload")
+	flag.DurationVar(&c.DDLInterval, "ddl-interval", c.DDLInterval, "ddl execution interval, e.g. 1s, 500ms")
 	flag.BoolVar(&c.SkipCreateTable, "skip-create-table", c.SkipCreateTable, "do not create tables")
-	flag.StringVar(&c.Action, "action", c.Action, "action of the workload: [prepare, insert, update, delete, write, cleanup]")
+	flag.StringVar(&c.Action, "action", c.Action, "action of the workload: [prepare, insert, update, delete, write, ddl, cleanup]")
 	flag.StringVar(&c.WorkloadType, "workload-type", c.WorkloadType, "workload type: [bank, sysbench, large_row, shop_item, uuu, bank2, bank_update, crawler, dc]")
 	flag.StringVar(&c.DBHost, "database-host", c.DBHost, "database host")
 	flag.StringVar(&c.DBUser, "database-user", c.DBUser, "database user")
@@ -144,6 +155,13 @@ func (c *WorkloadConfig) ParseFlags() error {
 	if c.PercentageForUpdate+c.PercentageForDelete > 1.0 {
 		return fmt.Errorf("PercentageForUpdate (%.2f) + PercentageForDelete (%.2f) must be <= 1.0",
 			c.PercentageForUpdate, c.PercentageForDelete)
+	}
+
+	if c.DDLThread < 0 {
+		return fmt.Errorf("ddl-thread must be >= 0, got %d", c.DDLThread)
+	}
+	if c.DDLInterval < 0 {
+		return fmt.Errorf("ddl-interval must be >= 0, got %s", c.DDLInterval)
 	}
 
 	return nil

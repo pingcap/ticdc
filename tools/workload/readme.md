@@ -33,6 +33,9 @@ Insert test data using sysbench-compatible schema:
     -batch-size 64
 ```
 
+Notes:
+- This example runs **DML only**. DDL is disabled by default (or set `-ddl-thread=0` explicitly).
+
 ### 2. Large Row Update Workload
 
 Update existing data with large row operations:
@@ -55,6 +58,54 @@ Additional parameters for update:
 
 - large-ratio: Ratio of large rows in the dataset
 - percentage-for-update: Percentage of rows to update
+
+### 3. DML Only (Explicit)
+
+Run DML only (no DDL) while using `write` mode:
+
+```bash
+./workload -action write \
+    -database-host 127.0.0.1 \
+    -database-port 4000 \
+    -database-db-name db1 \
+    -table-count 1000 \
+    -workload-type sysbench \
+    -thread 32 \
+    -batch-size 64 \
+    -ddl-thread 0
+```
+
+### 4. DML + DDL Together
+
+Run DDL concurrently with DML (extra workers controlled by `-ddl-thread`):
+
+```bash
+./workload -action write \
+    -database-host 127.0.0.1 \
+    -database-port 4000 \
+    -database-db-name db1 \
+    -table-count 1000 \
+    -workload-type sysbench \
+    -thread 32 \
+    -batch-size 64 \
+    -ddl-thread 1 \
+    -ddl-interval 5s
+```
+
+### 5. DDL Only
+
+Run only DDL (useful for testing DDL concurrency/replication without DML):
+
+```bash
+./workload -action ddl \
+    -database-host 127.0.0.1 \
+    -database-port 4000 \
+    -database-db-name db1 \
+    -table-count 1000 \
+    -workload-type sysbench \
+    -ddl-thread 1 \
+    -ddl-interval 5s
+```
 
 ## Notes
 
