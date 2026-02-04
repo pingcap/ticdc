@@ -288,7 +288,7 @@ func (c *S3Consumer) downloadSchemaFilesWithScanRange(
 			newVersionPaths[schemaKey] = filePath
 		}
 		return nil
-	}); err != nil && !ErrWalkDirEnd.Is(err) {
+	}); err != nil && !errors.Is(err, ErrWalkDirEnd) {
 		return nil, errors.Trace(err)
 	}
 
@@ -369,7 +369,7 @@ func (c *S3Consumer) getNewFilesForSchemaPathKeyWithEndPath(
 			updateTableDMLIdxMap(newTableDMLIdxMap, dmlkey, fileIdx)
 		}
 		return nil
-	}); err != nil && !ErrWalkDirEnd.Is(err) {
+	}); err != nil && !errors.Is(err, ErrWalkDirEnd) {
 		return nil, errors.Trace(err)
 	}
 	return c.tableDMLIdx.DiffNewTableDMLIdxMap(newTableDMLIdxMap), nil
