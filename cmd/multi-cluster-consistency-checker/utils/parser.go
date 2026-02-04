@@ -69,10 +69,6 @@ type TableParser struct {
 	decoderFactory  decoderFactory
 }
 
-func NewTableParser(tableKey string, content []byte) (*TableParser, error) {
-	return NewTableParserWithFormat(tableKey, content, config.ProtocolCsv)
-}
-
 func NewTableParserWithFormat(tableKey string, content []byte, protocol config.Protocol) (*TableParser, error) {
 	tableParser := &TableParser{}
 	if err := tableParser.parseTableInfo(tableKey, content); err != nil {

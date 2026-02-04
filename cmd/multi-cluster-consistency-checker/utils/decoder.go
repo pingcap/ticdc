@@ -74,9 +74,7 @@ func NewCanalJSONDecoder() *canalJSONDecoder {
 }
 
 func (d *canalJSONDecoder) NewDecoder(ctx context.Context, tableInfo *commonType.TableInfo, content []byte) (codecCommon.Decoder, error) {
-	// For S3 sink with canal-json format, use NewTxnDecoder
-	// which is designed for batch decoding from storage
-	decoder := canal.NewTxnDecoder(d.codecConfig)
+	decoder := canal.NewTxnDecoderWithTableInfo(d.codecConfig, tableInfo)
 	decoder.AddKeyValue(nil, content)
 	return decoder, nil
 }

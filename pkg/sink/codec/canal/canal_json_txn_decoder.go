@@ -33,6 +33,19 @@ type txnDecoder struct {
 
 	config *common.Config
 	msg    canalJSONMessageInterface
+
+	cachedTableInfo *commonType.TableInfo
+}
+
+// NewTxnDecoderWithTableInfo return a new txn decoder with a cached table info.
+func NewTxnDecoderWithTableInfo(
+	codecConfig *common.Config,
+	tableInfo *commonType.TableInfo,
+) *txnDecoder {
+	return &txnDecoder{
+		config:          codecConfig,
+		cachedTableInfo: tableInfo,
+	}
 }
 
 // NewTxnDecoder return a new CanalJSONTxnEventDecoder.
@@ -108,7 +121,10 @@ func (d *txnDecoder) NextDMLEvent() *commonEvent.DMLEvent {
 func (d *txnDecoder) canalJSONMessage2RowChange() *commonEvent.DMLEvent {
 	msg := d.msg
 
-	tableInfo := newTableInfo(msg)
+	tableInfo := d.cachedTableInfo
+	if tableInfo == nil {
+		tableInfo = newTableInfo(msg)
+	}
 	result := new(commonEvent.DMLEvent)
 	result.Length++                    // todo: set this field correctly
 	result.StartTs = msg.getCommitTs() // todo: how to set this correctly?
