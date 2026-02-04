@@ -1,3 +1,16 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package dynstream
 
 import (
@@ -6,16 +19,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestEventQueueBatchBytesStopsBeforeExceedingLimit(t *testing.T) {
+func TestEventQueueBatchBytesFlushesAfterReachingLimit(t *testing.T) {
 	handler := &mockHandler{}
 	option := Option{
 		BatchCount: 10,
 		BatchBytes: 100,
 	}
 
-	q := newEventQueue[int, string, *mockEvent, any, *mockHandler](option, handler)
+	q := newEventQueue[int, string, *mockEvent, any, *mockHandler](option, handler, nil)
 	pi := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "path1", nil)
 	q.initPath(pi)
+
+	policy := newBatchPolicy(option.BatchCount, option.BatchBytes)
+	b := newBatcher[*mockEvent](policy, option.BatchCount)
 
 	appendEvent := func(id int, size int) {
 		q.appendEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{
@@ -29,17 +45,10 @@ func TestEventQueueBatchBytesStopsBeforeExceedingLimit(t *testing.T) {
 	appendEvent(1, 60)
 	appendEvent(2, 60)
 
-	buf := make([]*mockEvent, 0, option.BatchCount)
-	buf, gotPath, gotBytes := q.popEvents(buf)
+	events, gotPath, gotBytes := q.popEvents(&b)
 	require.Equal(t, pi, gotPath)
-	require.Len(t, buf, 1)
-	require.Equal(t, 60, gotBytes)
-
-	buf = buf[:0]
-	buf, gotPath, gotBytes = q.popEvents(buf)
-	require.Equal(t, pi, gotPath)
-	require.Len(t, buf, 1)
-	require.Equal(t, 60, gotBytes)
+	require.Len(t, events, 2)
+	require.Equal(t, 120, gotBytes)
 }
 
 func TestEventQueueBatchBytesAllowsFirstEventLargerThanLimit(t *testing.T) {
@@ -49,9 +58,12 @@ func TestEventQueueBatchBytesAllowsFirstEventLargerThanLimit(t *testing.T) {
 		BatchBytes: 50,
 	}
 
-	q := newEventQueue[int, string, *mockEvent, any, *mockHandler](option, handler)
+	q := newEventQueue[int, string, *mockEvent, any, *mockHandler](option, handler, nil)
 	pi := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "path1", nil)
 	q.initPath(pi)
+
+	policy := newBatchPolicy(option.BatchCount, option.BatchBytes)
+	b := newBatcher[*mockEvent](policy, option.BatchCount)
 
 	appendEvent := func(id int, size int) {
 		q.appendEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{
@@ -65,15 +77,14 @@ func TestEventQueueBatchBytesAllowsFirstEventLargerThanLimit(t *testing.T) {
 	appendEvent(1, 100)
 	appendEvent(2, 10)
 
-	buf := make([]*mockEvent, 0, option.BatchCount)
-	buf, gotPath, gotBytes := q.popEvents(buf)
+	events, gotPath, gotBytes := q.popEvents(&b)
 	require.Equal(t, pi, gotPath)
-	require.Len(t, buf, 1)
+	require.Len(t, events, 1)
 	require.Equal(t, 100, gotBytes)
 
-	buf = buf[:0]
-	buf, gotPath, gotBytes = q.popEvents(buf)
+	b.reset()
+	events, gotPath, gotBytes = q.popEvents(&b)
 	require.Equal(t, pi, gotPath)
-	require.Len(t, buf, 1)
+	require.Len(t, events, 1)
 	require.Equal(t, 10, gotBytes)
 }

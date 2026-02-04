@@ -212,7 +212,7 @@ type Option struct {
 
 	StreamCount int // The count of streams. I.e. the count of goroutines to handle events. By default 0, means runtime.NumCPU().
 	BatchCount  int // The batch count of handling events. <= 1 means no batch. By default 1.
-	BatchBytes  int // The max bytes of a batch. <= 0 disables bytes-based batching. By default 0.
+	BatchBytes  int // The target bytes of a batch (best effort). <= 0 disables bytes-based batching. By default 0.
 
 	EnableMemoryControl bool // Enable the memory control. By default false.
 
@@ -250,6 +250,17 @@ type AreaSettings struct {
 	feedbackInterval   time.Duration // The interval of the feedback. By default 1000ms.
 	// Remove it when we determine the v2 is working well.
 	algorithm int // The algorithm of the memory control.
+
+	// Batching policy override (optional).
+	//
+	// Dynamic stream is shared by multiple modules. Most callers only update memory control settings
+	// via SetAreaSettings. To avoid accidental batching behavior changes, overrides are only applied
+	// when explicitly set via WithBatchPolicy.
+	//
+	// Under scheme Y: 0 means "not set". This means callers cannot explicitly override to 0; they
+	// either leave it unset (0) or set it to a positive value.
+	batchCount int
+	batchBytes int
 }
 
 func (s *AreaSettings) fix() {
@@ -273,6 +284,12 @@ func NewAreaSettingsWithMaxPendingSize(size uint64, memoryControlAlgorithm int, 
 		pathMaxPendingSize: pathMaxPendingSize,
 		algorithm:          memoryControlAlgorithm,
 	}
+}
+
+func (s AreaSettings) WithBatchPolicy(batchCount int, batchBytes int) AreaSettings {
+	s.batchCount = batchCount
+	s.batchBytes = batchBytes
+	return s
 }
 
 type FeedbackType int
