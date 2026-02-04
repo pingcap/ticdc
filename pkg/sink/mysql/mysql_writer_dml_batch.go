@@ -482,7 +482,7 @@ func (w *Writer) batchSingleTxnDmls(
 	// handle delete
 	if len(deleteRows) > 0 {
 		for _, rows := range deleteRows {
-			sql, value := sqlmodel.GenDeleteSQL(rows...)
+			sql, value := sqlmodel.GenDeleteSQL(w.cfg.whereClause, rows...)
 			sqls = append(sqls, sql)
 			values = append(values, value)
 		}
@@ -613,7 +613,7 @@ func (w *Writer) genUpdateSQL(rows ...*sqlmodel.RowChange) ([]string, [][]interf
 	}
 	if size < w.cfg.MaxMultiUpdateRowSize*len(rows) {
 		// use multi update in one SQL
-		sql, value := sqlmodel.GenUpdateSQL(rows...)
+		sql, value := sqlmodel.GenUpdateSQL(w.cfg.whereClause, rows...)
 		return []string{sql}, [][]interface{}{value}
 	}
 	// each row has one independent update SQL.
