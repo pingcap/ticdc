@@ -23,11 +23,10 @@ import (
 	"sync"
 	"time"
 
-	"workload/schema"
-
 	"github.com/go-sql-driver/mysql"
 	"github.com/pingcap/log"
 	"go.uber.org/zap"
+	"workload/schema"
 )
 
 func (app *WorkloadApp) executeDDLWorkers(ddlConcurrency int, wg *sync.WaitGroup) {
