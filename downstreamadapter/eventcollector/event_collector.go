@@ -692,7 +692,6 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 
 	// build congestion control messages for each node
 	result := make(map[node.ID]*event.CongestionControl)
-	changefeedsInMessages := 0
 	for nodeID, changefeedDispatchers := range nodeDispatcherMemory {
 		congestionControl := event.NewCongestionControlWithVersion(event.CongestionControlVersion2)
 
@@ -711,7 +710,6 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 					changefeedMaxMemory[changefeedID],
 					dispatcherMemory,
 				)
-				changefeedsInMessages++
 			}
 		}
 
