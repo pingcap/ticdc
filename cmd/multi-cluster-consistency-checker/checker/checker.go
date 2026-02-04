@@ -446,6 +446,7 @@ func (c *DataChecker) initializeFromCheckpoint(ctx context.Context, checkpointDa
 		return
 	}
 	c.round = checkpoint.CheckpointItems[2].Round + 1
+	c.checkableRound = checkpoint.CheckpointItems[2].Round
 	for _, clusterDataChecker := range c.clusterDataCheckers {
 		clusterDataChecker.InitializeFromCheckpoint(ctx, checkpointDataMap[clusterDataChecker.clusterID], checkpoint)
 	}
