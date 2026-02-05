@@ -23,6 +23,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/config"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	pd "github.com/tikv/pd/client"
 	pdhttp "github.com/tikv/pd/client/http"
 )
@@ -34,31 +35,12 @@ const (
 
 const showPDConfigQuery = "SHOW CONFIG WHERE type='pd' AND (name='tso-unique-index' OR name='tso-max-index')"
 
-// newPDHTTPClientFn is a test hook.
-var newPDHTTPClientFn = newPDHTTPClient
-
-func newPDHTTPClient(upPD pd.Client) (pdhttp.Client, error) {
-	if upPD == nil {
-		return nil, cerrors.New("pd client is nil")
+var newPDHTTPClientFn = func(upPD pd.Client) (pdhttp.Client, error) {
+	sc := config.GetGlobalServerConfig()
+	if sc == nil {
+		return pdutil.NewPDHTTPClient(upPD, nil)
 	}
-
-	discovery := upPD.GetServiceDiscovery()
-	if discovery == nil {
-		return nil, cerrors.New("pd service discovery is nil")
-	}
-	opts := make([]pdhttp.ClientOption, 0, 1)
-	if sc := config.GetGlobalServerConfig(); sc != nil && sc.Security != nil {
-		tlsConf, err := sc.Security.ToTLSConfigWithVerify()
-		if err != nil {
-			return nil, cerrors.Trace(err)
-		}
-		if tlsConf != nil {
-			opts = append(opts, pdhttp.WithTLSConfig(tlsConf))
-		}
-	}
-
-	client := pdhttp.NewClientWithServiceDiscovery("cdc", discovery, opts...)
-	return client, nil
+	return pdutil.NewPDHTTPClient(upPD, sc.Security)
 }
 
 // ValidateActiveActiveTSOIndexes validates the upstream/downstream PD TSO index
