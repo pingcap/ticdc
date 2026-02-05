@@ -67,7 +67,7 @@ func (s *areaBatchConfigStore[A]) onRemovePath(area A) {
 	s.areaRefCount[area] = oldCount - 1
 }
 
-func (s *areaBatchConfigStore[A]) setAreaBatchConfig(area A, batchCount int, batchBytes int) {
+func (s *areaBatchConfigStore[A]) setAreaBatchConfig(area A, batchCount uint64, batchBytes uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

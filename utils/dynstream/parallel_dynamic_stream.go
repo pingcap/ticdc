@@ -254,7 +254,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) SetAreaSettings(area A, settings 
 	}
 }
 
-func (s *parallelDynamicStream[A, P, T, D, H]) SetAreaBatchConfig(area A, batchCount int, batchBytes int) {
+func (s *parallelDynamicStream[A, P, T, D, H]) SetAreaBatchConfig(area A, batchCount uint64, batchBytes uint64) {
 	s.batchConfigs.setAreaBatchConfig(area, batchCount, batchBytes)
 }
 

@@ -232,11 +232,11 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 	// Declared here to avoid repeated allocation.
 	var (
 		eventQueueEmpty = false
-		defaultConfig = newBatchConfig(s.option.BatchCount, s.option.BatchBytes)
-		b             = newBatcher[T](defaultConfig, s.option.BatchCount)
-		path   *pathInfo[A, P, T, D, H]
-		nBytes int
-		events []T
+		defaultConfig   = newBatchConfig(s.option.BatchCount, s.option.BatchBytes)
+		b               = newBatcher[T](defaultConfig, s.option.BatchCount)
+		path            *pathInfo[A, P, T, D, H]
+		nBytes          uint64
+		events          []T
 	)
 
 	// For testing. Don't handle events until this wait group is done.

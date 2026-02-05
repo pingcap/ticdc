@@ -110,7 +110,7 @@ func (q *eventQueue[A, P, T, D, H]) wakePath(path *pathInfo[A, P, T, D, H]) {
 	}
 }
 
-func (q *eventQueue[A, P, T, D, H]) popEvents(b *batcher[T]) ([]T, *pathInfo[A, P, T, D, H], int) {
+func (q *eventQueue[A, P, T, D, H]) popEvents(b *batcher[T]) ([]T, *pathInfo[A, P, T, D, H], uint64) {
 	for {
 		// We are going to update the signal directly, so we need the reference.
 		signal, ok := q.signalQueue.FrontRef()
@@ -133,11 +133,11 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(b *batcher[T]) ([]T, *pathInfo[A, 
 		}
 
 		batchConfig := q.batchConfigStore.getBatchConfig(path.area)
-		batchSize := min(signal.eventCount, batchConfig.batchCount)
+		batchSize := min(uint64(signal.eventCount), batchConfig.batchCount)
 		b.setLimit(batchConfig, batchSize)
 
 		appendToBuf := func(event *eventWrap[A, P, T, D, H], path *pathInfo[A, P, T, D, H]) {
-			b.addEvent(event.event, event.eventSize)
+			b.addEvent(event.event, uint64(event.eventSize))
 			path.popEvent()
 		}
 
