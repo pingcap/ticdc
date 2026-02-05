@@ -1276,6 +1276,7 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback, enco
 	metrics.EventStoreWriteRequestsCount.Inc()
 	prepareStart := time.Now()
 	batch := db.NewBatch()
+	defer batch.Close()
 	kvCount := 0
 	for _, event := range events {
 		kvCount += len(event.kvs)
