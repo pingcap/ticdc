@@ -127,6 +127,15 @@ func ValidateActiveActiveTSOIndexes(
 	return nil
 }
 
+// getDownstreamTSOIndexes reads the effective PD TSO index values from the
+// downstream TiDB cluster via SQL.
+//
+// These values are part of PD configuration, and TiDB exposes them through
+// `SHOW CONFIG`. The query returns one row per TiDB instance, so this function
+// requires all instances to report the same values.
+//
+// The function is fail-closed: any retrieval, parsing, missing key, or
+// cross-instance inconsistency is treated as an error.
 func getDownstreamTSOIndexes(
 	ctx context.Context,
 	changefeedCfg *config.ChangefeedConfig,
@@ -147,8 +156,8 @@ func getDownstreamTSOIndexes(
 		return 0, 0, cerrors.Trace(err)
 	}
 
-	// Reuse the downstream read timeout as a single bound for the overall validation.
-	// This keeps the validation latency consistent with sink connectivity expectations.
+	// Bound the downstream query by the sink read timeout to keep the validation
+	// latency aligned with downstream connectivity expectations.
 	queryCtx, cancel := context.WithTimeout(ctx, readTimeout)
 	defer cancel()
 
@@ -214,6 +223,14 @@ func getDownstreamTSOIndexes(
 	return unique, max, nil
 }
 
+// getUpstreamTSOIndexes reads the PD TSO index values from the upstream PD via
+// PD HTTP API.
+//
+// The PD HTTP client uses the same service discovery (and TLS configuration) as
+// the given gRPC PD client. It also probes leader and followers internally, so a
+// single GetConfig call is sufficient here.
+//
+// The caller controls the request deadline through ctx.
 func getUpstreamTSOIndexes(
 	ctx context.Context,
 	upPD pd.Client,
