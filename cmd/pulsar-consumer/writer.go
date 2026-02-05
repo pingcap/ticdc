@@ -156,13 +156,9 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 			if !ok {
 				continue
 			}
-			events := g.Resolve(commitTs)
-			resolvedCount := len(events)
-			if resolvedCount == 0 {
-				continue
-			}
-			resolvedEvents = append(resolvedEvents, events...)
-			total += resolvedCount
+			before := len(resolvedEvents)
+			resolvedEvents = g.ResolveInto(commitTs, resolvedEvents)
+			total += len(resolvedEvents) - before
 		}
 	}
 
@@ -269,13 +265,9 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 	resolvedEvents := make([]*commonEvent.DMLEvent, 0)
 	for _, p := range w.progresses {
 		for _, group := range p.eventsGroup {
-			events := group.Resolve(watermark)
-			resolvedCount := len(events)
-			if resolvedCount == 0 {
-				continue
-			}
-			resolvedEvents = append(resolvedEvents, events...)
-			total += resolvedCount
+			before := len(resolvedEvents)
+			resolvedEvents = group.ResolveInto(watermark, resolvedEvents)
+			total += len(resolvedEvents) - before
 		}
 	}
 	if total == 0 {
