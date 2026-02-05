@@ -39,18 +39,24 @@ const (
 	minChangeFeedErrorStuckDuration = time.Minute * 30
 	// DefaultTiDBSourceID is the default source ID of TiDB cluster.
 	DefaultTiDBSourceID = 1
+
+	defaultEventCollectorBatchCount uint64 = 4096
+	// todo: may change this to a reasonable value.
+	defaultEventCollectorBatchBytes uint64 = 0 // 0 means no limit
 )
 
 var defaultReplicaConfig = &ReplicaConfig{
-	MemoryQuota:        util.AddressOf(uint64(DefaultChangefeedMemoryQuota)),
-	CaseSensitive:      util.AddressOf(false),
-	CheckGCSafePoint:   util.AddressOf(true),
-	EnableSyncPoint:    util.AddressOf(false),
-	EnableTableMonitor: util.AddressOf(false),
-	SyncPointInterval:  util.AddressOf(10 * time.Minute),
-	SyncPointRetention: util.AddressOf(24 * time.Hour),
-	BDRMode:            util.AddressOf(false),
-	Filter:             NewDefaultFilterConfig(),
+	MemoryQuota:              util.AddressOf(uint64(DefaultChangefeedMemoryQuota)),
+	CaseSensitive:            util.AddressOf(false),
+	CheckGCSafePoint:         util.AddressOf(true),
+	EnableSyncPoint:          util.AddressOf(false),
+	EnableTableMonitor:       util.AddressOf(false),
+	SyncPointInterval:        util.AddressOf(10 * time.Minute),
+	SyncPointRetention:       util.AddressOf(24 * time.Hour),
+	EventCollectorBatchCount: util.AddressOf(defaultEventCollectorBatchCount),
+	EventCollectorBatchBytes: util.AddressOf(defaultEventCollectorBatchBytes),
+	BDRMode:                  util.AddressOf(false),
+	Filter:                   NewDefaultFilterConfig(),
 	Mounter: &MounterConfig{
 		WorkerNum: 16,
 	},
@@ -148,6 +154,10 @@ type replicaConfig struct {
 	// not used in the changefeed's lifecycle.
 	IgnoreIneligibleTable *bool `toml:"ignore-ineligible-table" json:"ignore-ineligible-table,omitempty"`
 
+	// EventCollectorBatchCount and EventCollectorBatchBytes configure dynstream batching in EventCollector.
+	EventCollectorBatchCount *uint64 `toml:"event-collector-batch-count" json:"event-collector-batch-count,omitempty"`
+	EventCollectorBatchBytes *uint64 `toml:"event-collector-batch-bytes" json:"event-collector-batch-bytes,omitempty"`
+
 	// BDR(Bidirectional Replication) is a feature that allows users to
 	// replicate data of same tables from TiDB-1 to TiDB-2 and vice versa.
 	// This feature is only available for TiDB.
@@ -159,11 +169,6 @@ type replicaConfig struct {
 	Filter             *FilterConfig  `toml:"filter" json:"filter,omitempty"`
 	Mounter            *MounterConfig `toml:"mounter" json:"mounter,omitempty"`
 	Sink               *SinkConfig    `toml:"sink" json:"sink,omitempty"`
-
-	// EventCollectorBatchCount and EventCollectorBatchBytes configure dynstream batching in EventCollector.
-	// 0 means not set and EventCollector will use dynstream defaults (batchCount=1, batchBytes=0).
-	EventCollectorBatchCount *int `toml:"event-collector-batch-count" json:"event-collector-batch-count,omitempty"`
-	EventCollectorBatchBytes *int `toml:"event-collector-batch-bytes" json:"event-collector-batch-bytes,omitempty"`
 
 	// Consistent is only available for DB downstream with redo feature enabled.
 	Consistent *ConsistentConfig `toml:"consistent" json:"consistent,omitempty"`

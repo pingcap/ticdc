@@ -18,10 +18,10 @@ func TestChangeFeedInfoToChangefeedConfig_EventCollectorBatchConfig(t *testing.T
 		SinkURI:      "blackhole://",
 		Epoch:        3,
 		Config: &ReplicaConfig{
-			Sink:      &SinkConfig{},
-			Scheduler: &ChangefeedSchedulerConfig{},
-			EventCollectorBatchCount: util.AddressOf(4096),
-			EventCollectorBatchBytes: util.AddressOf(64 * 1024 * 1024),
+			Sink:                     &SinkConfig{},
+			Scheduler:                &ChangefeedSchedulerConfig{},
+			EventCollectorBatchCount: util.AddressOf(uint64(4096)),
+			EventCollectorBatchBytes: util.AddressOf(uint64(64 * 1024 * 1024)),
 		},
 	}
 
@@ -30,6 +30,7 @@ func TestChangeFeedInfoToChangefeedConfig_EventCollectorBatchConfig(t *testing.T
 	require.Equal(t, 64*1024*1024, cfg.EventCollectorBatchBytes)
 }
 
+// todo: why this test, what's the purpose?
 func TestChangeFeedInfoToChangefeedConfig_EventCollectorBatchConfigDefaultZero(t *testing.T) {
 	t.Parallel()
 
