@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	pd "github.com/tikv/pd/client"
@@ -62,11 +63,7 @@ func ValidateActiveActiveTSOIndexes(
 
 	sinkURI, err := url.Parse(changefeedCfg.SinkURI)
 	if err != nil {
-		return cerrors.WrapError(
-			cerrors.ErrActiveActiveTSOIndexIncompatible,
-			err,
-			"failed to parse sink uri",
-		)
+		return errors.WrapError(errors.ErrSinkURIInvalid, err, changefeedCfg.SinkURI)
 	}
 	if !config.IsMySQLCompatibleScheme(config.GetScheme(sinkURI)) {
 		return nil
