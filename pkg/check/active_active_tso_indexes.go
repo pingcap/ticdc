@@ -256,14 +256,20 @@ func parsePDConfigInt64(cfg map[string]any, key string) (int64, error) {
 	case int:
 		return int64(x), nil
 	case float64:
+		// When a JSON number is decoded into an `any`, it becomes float64.
+		// float64 cannot precisely represent all int64 values (it is exact only
+		// for integers up to 2^53). For a strict conversion, reject values beyond
+		// that range to avoid precision loss and implementation-defined behavior
+		// on overflow.
+		const maxExactIntInFloat64 = float64(1 << 53)
 		if math.IsNaN(x) || math.IsInf(x, 0) {
 			return 0, cerrors.New("value is not a finite number")
 		}
 		if math.Trunc(x) != x {
 			return 0, cerrors.New("value is not an integer")
 		}
-		if x > float64(math.MaxInt64) || x < float64(math.MinInt64) {
-			return 0, cerrors.New("value overflows int64")
+		if x > maxExactIntInFloat64 || x < -maxExactIntInFloat64 {
+			return 0, cerrors.Errorf("value for %s exceeds exact integer range for float64", key)
 		}
 		return int64(x), nil
 	default:
