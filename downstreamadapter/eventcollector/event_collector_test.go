@@ -61,6 +61,14 @@ func (m *mockEventDispatcher) GetChangefeedID() common.ChangeFeedID {
 	return m.changefeedID
 }
 
+func (m *mockEventDispatcher) GetEventCollectorBatchCount() uint64 {
+	return 1
+}
+
+func (m *mockEventDispatcher) GetEventCollectorBatchBytes() uint64 {
+	return 0
+}
+
 func (m *mockEventDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
 	return m.tableSpan
 }

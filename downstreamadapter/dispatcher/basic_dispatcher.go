@@ -40,6 +40,8 @@ type DispatcherService interface {
 	GetStartTs() uint64
 	GetBDRMode() bool
 	GetChangefeedID() common.ChangeFeedID
+	GetEventCollectorBatchCount() uint64
+	GetEventCollectorBatchBytes() uint64
 	GetTableSpan() *heartbeatpb.TableSpan
 	GetTimezone() string
 	GetIntegrityConfig() *eventpb.IntegrityConfig
