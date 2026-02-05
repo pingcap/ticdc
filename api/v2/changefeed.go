@@ -176,12 +176,14 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
+	// do not shadow err after this point
+	pdClient := h.server.GetPdClient()
 	tmpInfo := &config.ChangeFeedInfo{
 		ChangefeedID: changefeedID,
 		SinkURI:      cfg.SinkURI,
 		Config:       replicaCfg,
 	}
-	err = check.ValidateActiveActiveTSOIndexes(ctx, h.server.GetPdClient(), tmpInfo.ToChangefeedConfig())
+	err = check.ValidateActiveActiveTSOIndexes(ctx, pdClient, tmpInfo.ToChangefeedConfig())
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -205,8 +207,6 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
-	// do not shadow err after this point
-	pdClient := h.server.GetPdClient()
 	defer func() {
 		if err == nil {
 			return

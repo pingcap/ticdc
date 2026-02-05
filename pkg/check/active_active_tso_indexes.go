@@ -15,18 +15,16 @@ package check
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"net/url"
 	"strconv"
 	"time"
 
-	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	pd "github.com/tikv/pd/client"
 	pdhttp "github.com/tikv/pd/client/http"
-	"github.com/tikv/pd/client/servicediscovery"
 )
 
 const (
@@ -36,43 +34,18 @@ const (
 
 const showPDConfigQuery = "SHOW CONFIG WHERE type='pd' AND (name='tso-unique-index' OR name='tso-max-index')"
 
-// pdClientForTSOIndexValidation is the minimal PD client surface needed by the
-// active-active TSO index validation.
-type pdClientForTSOIndexValidation interface {
-	GetAllMembers(ctx context.Context) (*pdpb.GetMembersResponse, error)
-	GetServiceDiscovery() servicediscovery.ServiceDiscovery
-}
+// newPDHTTPClientFn is a test hook.
+var newPDHTTPClientFn = newPDHTTPClient
 
-type pdConfigFetcher interface {
-	GetConfig(ctx context.Context, endpoint string) (map[string]any, error)
-	Close()
-}
-
-type pdHTTPConfigFetcher struct {
-	client pdhttp.Client
-}
-
-func (f *pdHTTPConfigFetcher) GetConfig(ctx context.Context, endpoint string) (map[string]any, error) {
-	return f.client.WithTargetURL(endpoint).GetConfig(ctx)
-}
-
-func (f *pdHTTPConfigFetcher) Close() {
-	if f.client != nil {
-		f.client.Close()
-	}
-}
-
-var (
-	newPDConfigFetcherFn = newPDHTTPConfigFetcher
-	collectPDEndpointsFn = collectPDEndpoints
-)
-
-func newPDHTTPConfigFetcher(upPD pdClientForTSOIndexValidation) (pdConfigFetcher, error) {
+func newPDHTTPClient(upPD pd.Client) (pdhttp.Client, error) {
 	if upPD == nil {
 		return nil, cerrors.New("pd client is nil")
 	}
 
 	discovery := upPD.GetServiceDiscovery()
+	if discovery == nil {
+		return nil, cerrors.New("pd service discovery is nil")
+	}
 	opts := make([]pdhttp.ClientOption, 0, 1)
 	if sc := config.GetGlobalServerConfig(); sc != nil && sc.Security != nil {
 		tlsConf, err := sc.Security.ToTLSConfigWithVerify()
@@ -85,22 +58,7 @@ func newPDHTTPConfigFetcher(upPD pdClientForTSOIndexValidation) (pdConfigFetcher
 	}
 
 	client := pdhttp.NewClientWithServiceDiscovery("cdc", discovery, opts...)
-	return &pdHTTPConfigFetcher{client: client}, nil
-}
-
-func collectPDEndpoints(ctx context.Context, upPD pdClientForTSOIndexValidation) ([]string, error) {
-	resp, err := upPD.GetAllMembers(ctx)
-	if err != nil {
-		return nil, cerrors.Trace(err)
-	}
-	endpoints := make([]string, 0, len(resp.Members))
-	for _, m := range resp.Members {
-		clientURLs := m.GetClientUrls()
-		if len(clientURLs) > 0 {
-			endpoints = append(endpoints, clientURLs[0])
-		}
-	}
-	return endpoints, nil
+	return client, nil
 }
 
 // ValidateActiveActiveTSOIndexes validates the upstream/downstream PD TSO index
@@ -110,7 +68,7 @@ func collectPDEndpoints(ctx context.Context, upPD pdClientForTSOIndexValidation)
 // treated as a validation failure.
 func ValidateActiveActiveTSOIndexes(
 	ctx context.Context,
-	upPD pdClientForTSOIndexValidation,
+	upPD pd.Client,
 	changefeedCfg *config.ChangefeedConfig,
 ) error {
 	if changefeedCfg == nil {
@@ -132,7 +90,7 @@ func ValidateActiveActiveTSOIndexes(
 		return nil
 	}
 
-	downUnique, downMax, readTimeout, err := getDownstreamTSOIndexes(ctx, changefeedCfg, sinkURI)
+	downUnique, downMax, err := getDownstreamTSOIndexes(ctx, changefeedCfg, sinkURI)
 	if err != nil {
 		return cerrors.WrapError(
 			cerrors.ErrActiveActiveTSOIndexIncompatible,
@@ -141,7 +99,7 @@ func ValidateActiveActiveTSOIndexes(
 		)
 	}
 
-	upUnique, upMax, err := getUpstreamTSOIndexes(ctx, upPD, readTimeout)
+	upUnique, upMax, err := getUpstreamTSOIndexes(ctx, upPD)
 	if err != nil {
 		return cerrors.WrapError(
 			cerrors.ErrActiveActiveTSOIndexIncompatible,
@@ -151,7 +109,16 @@ func ValidateActiveActiveTSOIndexes(
 		)
 	}
 
-	if upUnique == downUnique || upMax != downMax {
+	// In active-active mode, `tso-unique-index` must be different between upstream and
+	// downstream to avoid TSO collisions, while `tso-max-index` must match to guarantee
+	// the same logical index range.
+	if upUnique == downUnique {
+		return cerrors.ErrActiveActiveTSOIndexIncompatible.GenWithStackByArgs(
+			fmt.Sprintf("active active tso index mismatch, upstream and downstream share the same tso-unique-index=%d, upstream max=%d, downstream max=%d",
+				upUnique, upMax, downMax),
+		)
+	}
+	if upMax != downMax {
 		return cerrors.ErrActiveActiveTSOIndexIncompatible.GenWithStackByArgs(
 			fmt.Sprintf("active active tso index mismatch, upstream unique=%d, upstream max=%d, downstream unique=%d, downstream max=%d",
 				upUnique, upMax, downUnique, downMax),
@@ -164,28 +131,30 @@ func getDownstreamTSOIndexes(
 	ctx context.Context,
 	changefeedCfg *config.ChangefeedConfig,
 	sinkURI *url.URL,
-) (unique int64, max int64, readTimeout time.Duration, err error) {
+) (unique int64, max int64, err error) {
 	if changefeedCfg == nil {
-		return 0, 0, 0, cerrors.New("changefeed config is nil")
+		return 0, 0, cerrors.New("changefeed config is nil")
 	}
 
 	mysqlCfg, db, err := newMySQLConfigAndDBFn(ctx, changefeedCfg.ChangefeedID, sinkURI, changefeedCfg)
 	if err != nil {
-		return 0, 0, 0, cerrors.Trace(err)
+		return 0, 0, cerrors.Trace(err)
 	}
 	defer func() { _ = db.Close() }()
 
-	readTimeout, err = time.ParseDuration(mysqlCfg.ReadTimeout)
+	readTimeout, err := time.ParseDuration(mysqlCfg.ReadTimeout)
 	if err != nil {
-		return 0, 0, 0, cerrors.Trace(err)
+		return 0, 0, cerrors.Trace(err)
 	}
 
+	// Reuse the downstream read timeout as a single bound for the overall validation.
+	// This keeps the validation latency consistent with sink connectivity expectations.
 	queryCtx, cancel := context.WithTimeout(ctx, readTimeout)
 	defer cancel()
 
 	rows, err := db.QueryContext(queryCtx, showPDConfigQuery)
 	if err != nil {
-		return 0, 0, 0, cerrors.Trace(err)
+		return 0, 0, cerrors.Trace(err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -193,17 +162,20 @@ func getDownstreamTSOIndexes(
 		uniqueSet bool
 		maxSet    bool
 	)
+	// SHOW CONFIG returns one row per TiDB instance. Require all instances to
+	// report consistent values to avoid validating against a partially rolled-out
+	// or inconsistent configuration.
 	for rows.Next() {
 		// Columns: Type | Instance | Name | Value
 		var typ, instance, name, value string
 		if err := rows.Scan(&typ, &instance, &name, &value); err != nil {
-			return 0, 0, 0, cerrors.Trace(err)
+			return 0, 0, cerrors.Trace(err)
 		}
 		switch name {
 		case pdTSOUniqueIndexKey:
 			parsed, err := strconv.ParseInt(value, 10, 64)
 			if err != nil {
-				return 0, 0, 0, cerrors.Trace(err)
+				return 0, 0, cerrors.Trace(err)
 			}
 			if !uniqueSet {
 				unique = parsed
@@ -211,12 +183,12 @@ func getDownstreamTSOIndexes(
 				continue
 			}
 			if unique != parsed {
-				return 0, 0, 0, cerrors.New("downstream TiDB reports inconsistent tso-unique-index across instances")
+				return 0, 0, cerrors.New("downstream TiDB reports inconsistent tso-unique-index across instances")
 			}
 		case pdTSOMaxIndexKey:
 			parsed, err := strconv.ParseInt(value, 10, 64)
 			if err != nil {
-				return 0, 0, 0, cerrors.Trace(err)
+				return 0, 0, cerrors.Trace(err)
 			}
 			if !maxSet {
 				max = parsed
@@ -224,115 +196,81 @@ func getDownstreamTSOIndexes(
 				continue
 			}
 			if max != parsed {
-				return 0, 0, 0, cerrors.New("downstream TiDB reports inconsistent tso-max-index across instances")
+				return 0, 0, cerrors.New("downstream TiDB reports inconsistent tso-max-index across instances")
 			}
 		default:
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return 0, 0, 0, cerrors.Trace(err)
+		return 0, 0, cerrors.Trace(err)
 	}
 
 	if !uniqueSet {
-		return 0, 0, 0, cerrors.Errorf("downstream TiDB does not report %s", pdTSOUniqueIndexKey)
+		return 0, 0, cerrors.Errorf("downstream TiDB does not report %s", pdTSOUniqueIndexKey)
 	}
 	if !maxSet {
-		return 0, 0, 0, cerrors.Errorf("downstream TiDB does not report %s", pdTSOMaxIndexKey)
+		return 0, 0, cerrors.Errorf("downstream TiDB does not report %s", pdTSOMaxIndexKey)
 	}
-	return unique, max, readTimeout, nil
+	return unique, max, nil
 }
 
 func getUpstreamTSOIndexes(
 	ctx context.Context,
-	upPD pdClientForTSOIndexValidation,
-	readTimeout time.Duration,
+	upPD pd.Client,
 ) (unique int64, max int64, err error) {
 	if upPD == nil {
 		return 0, 0, cerrors.New("pd client is nil")
 	}
 
-	endpoints, err := collectPDEndpointsFn(ctx, upPD)
+	httpClient, err := newPDHTTPClientFn(upPD)
 	if err != nil {
 		return 0, 0, cerrors.Trace(err)
 	}
-	if len(endpoints) == 0 {
-		return 0, 0, cerrors.New("no pd endpoints available")
-	}
+	defer httpClient.Close()
 
-	fetcher, err := newPDConfigFetcherFn(upPD)
+	cfg, err := httpClient.GetConfig(ctx)
 	if err != nil {
 		return 0, 0, cerrors.Trace(err)
 	}
-	defer fetcher.Close()
 
-	var lastErr error
-	for _, endpoint := range endpoints {
-		attemptCtx, cancel := context.WithTimeout(ctx, readTimeout)
-		cfg, err := fetcher.GetConfig(attemptCtx, endpoint)
-		cancel()
-		if err != nil {
-			lastErr = err
-			continue
-		}
-
-		unique, err = parsePDConfigInt(cfg, pdTSOUniqueIndexKey)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		max, err = parsePDConfigInt(cfg, pdTSOMaxIndexKey)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		return unique, max, nil
+	unique, err = parsePDConfigInt64(cfg, pdTSOUniqueIndexKey)
+	if err != nil {
+		return 0, 0, cerrors.Trace(err)
 	}
-	if lastErr == nil {
-		lastErr = cerrors.New("failed to read pd config from all endpoints")
+	max, err = parsePDConfigInt64(cfg, pdTSOMaxIndexKey)
+	if err != nil {
+		return 0, 0, cerrors.Trace(err)
 	}
-	return 0, 0, cerrors.Trace(lastErr)
+	return unique, max, nil
 }
 
-func parsePDConfigInt(cfg map[string]any, key string) (int64, error) {
+func parsePDConfigInt64(cfg map[string]any, key string) (int64, error) {
 	v, ok := cfg[key]
 	if !ok {
 		return 0, cerrors.Errorf("pd config key not found: %s", key)
 	}
-	return toInt64(v)
-}
 
-func toInt64(v any) (int64, error) {
+	// PD stores `tso-unique-index` and `tso-max-index` as int64 values.
+	// The PD HTTP client unmarshals the JSON response into map[string]any,
+	// and encoding/json decodes JSON numbers as float64 in that case.
+	// Keep the conversion strict and fail-closed.
 	switch x := v.(type) {
-	case int:
-		return int64(x), nil
 	case int64:
 		return x, nil
-	case uint64:
-		if x > uint64(math.MaxInt64) {
-			return 0, cerrors.New("value overflows int64")
-		}
+	case int:
 		return int64(x), nil
 	case float64:
-		if math.IsNaN(x) || math.IsInf(x, 0) || math.Trunc(x) != x {
+		if math.IsNaN(x) || math.IsInf(x, 0) {
+			return 0, cerrors.New("value is not a finite number")
+		}
+		if math.Trunc(x) != x {
 			return 0, cerrors.New("value is not an integer")
 		}
 		if x > float64(math.MaxInt64) || x < float64(math.MinInt64) {
 			return 0, cerrors.New("value overflows int64")
 		}
 		return int64(x), nil
-	case json.Number:
-		n, err := x.Int64()
-		if err != nil {
-			return 0, cerrors.Trace(err)
-		}
-		return n, nil
-	case string:
-		n, err := strconv.ParseInt(x, 10, 64)
-		if err != nil {
-			return 0, cerrors.Trace(err)
-		}
-		return n, nil
 	default:
-		return 0, cerrors.Errorf("unsupported value type: %T", v)
+		return 0, cerrors.Errorf("unexpected value type for %s: %T", key, v)
 	}
 }

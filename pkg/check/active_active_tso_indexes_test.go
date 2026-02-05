@@ -22,37 +22,32 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/pingcap/kvproto/pkg/pdpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	mysqlsink "github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/stretchr/testify/require"
-	"github.com/tikv/pd/client/servicediscovery"
+	pd "github.com/tikv/pd/client"
+	pdhttp "github.com/tikv/pd/client/http"
 )
 
-type mockPDForTSOIndexValidation struct{}
-
-func (m *mockPDForTSOIndexValidation) GetAllMembers(ctx context.Context) (*pdpb.GetMembersResponse, error) {
-	return nil, nil
+type mockPDClientForTSOIndexValidation struct {
+	pd.Client
 }
 
-func (m *mockPDForTSOIndexValidation) GetServiceDiscovery() servicediscovery.ServiceDiscovery {
-	return nil
+type mockPDHTTPClient struct {
+	pdhttp.Client
+	getConfig func(ctx context.Context) (map[string]any, error)
 }
 
-type fakePDConfigFetcher struct {
-	getConfig func(ctx context.Context, endpoint string) (map[string]any, error)
+func (m *mockPDHTTPClient) GetConfig(ctx context.Context) (map[string]any, error) {
+	return m.getConfig(ctx)
 }
 
-func (f *fakePDConfigFetcher) GetConfig(ctx context.Context, endpoint string) (map[string]any, error) {
-	return f.getConfig(ctx, endpoint)
-}
-
-func (f *fakePDConfigFetcher) Close() {}
+func (m *mockPDHTTPClient) Close() {}
 
 func TestValidateActiveActiveTSOIndexes_SkipWhenDisabled(t *testing.T) {
-	err := ValidateActiveActiveTSOIndexes(context.Background(), &mockPDForTSOIndexValidation{}, &config.ChangefeedConfig{
+	err := ValidateActiveActiveTSOIndexes(context.Background(), nil, &config.ChangefeedConfig{
 		SinkURI:            "mysql://127.0.0.1:3306/",
 		EnableActiveActive: false,
 	})
@@ -60,7 +55,7 @@ func TestValidateActiveActiveTSOIndexes_SkipWhenDisabled(t *testing.T) {
 }
 
 func TestValidateActiveActiveTSOIndexes_SkipNonMySQLScheme(t *testing.T) {
-	err := ValidateActiveActiveTSOIndexes(context.Background(), &mockPDForTSOIndexValidation{}, &config.ChangefeedConfig{
+	err := ValidateActiveActiveTSOIndexes(context.Background(), nil, &config.ChangefeedConfig{
 		SinkURI:            "kafka://127.0.0.1:9092/topic",
 		EnableActiveActive: true,
 	})
@@ -76,14 +71,9 @@ func TestValidateActiveActiveTSOIndexes_DownstreamMissingKey(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"Type", "Instance", "Name", "Value"}).
 			AddRow("pd", "tidb-0", pdTSOUniqueIndexKey, "1"))
 
-	restore := setTestHooks(t, testHooks{
-		newMySQLConfigAndDB: func(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, cfg *config.ChangefeedConfig) (*mysqlsink.Config, *sql.DB, error) {
-			return &mysqlsink.Config{ReadTimeout: "1s"}, db, nil
-		},
-	})
-	defer restore()
+	setTestDeps(t, db, nil)
 
-	err = ValidateActiveActiveTSOIndexes(context.Background(), &mockPDForTSOIndexValidation{}, &config.ChangefeedConfig{
+	err = ValidateActiveActiveTSOIndexes(context.Background(), nil, &config.ChangefeedConfig{
 		ChangefeedID:       common.NewChangeFeedIDWithName("cf", common.DefaultKeyspaceName),
 		SinkURI:            "mysql://127.0.0.1:3306/",
 		EnableActiveActive: true,
@@ -107,14 +97,9 @@ func TestValidateActiveActiveTSOIndexes_DownstreamInconsistentAcrossInstances(t 
 			AddRow("pd", "tidb-0", pdTSOMaxIndexKey, "4").
 			AddRow("pd", "tidb-1", pdTSOMaxIndexKey, "4"))
 
-	restore := setTestHooks(t, testHooks{
-		newMySQLConfigAndDB: func(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, cfg *config.ChangefeedConfig) (*mysqlsink.Config, *sql.DB, error) {
-			return &mysqlsink.Config{ReadTimeout: "1s"}, db, nil
-		},
-	})
-	defer restore()
+	setTestDeps(t, db, nil)
 
-	err = ValidateActiveActiveTSOIndexes(context.Background(), &mockPDForTSOIndexValidation{}, &config.ChangefeedConfig{
+	err = ValidateActiveActiveTSOIndexes(context.Background(), nil, &config.ChangefeedConfig{
 		ChangefeedID:       common.NewChangeFeedIDWithName("cf", common.DefaultKeyspaceName),
 		SinkURI:            "mysql://127.0.0.1:3306/",
 		EnableActiveActive: true,
@@ -126,7 +111,7 @@ func TestValidateActiveActiveTSOIndexes_DownstreamInconsistentAcrossInstances(t 
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestValidateActiveActiveTSOIndexes_UpstreamProbeSecondSucceeds(t *testing.T) {
+func TestValidateActiveActiveTSOIndexes_UpstreamReadError(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
@@ -136,84 +121,23 @@ func TestValidateActiveActiveTSOIndexes_UpstreamProbeSecondSucceeds(t *testing.T
 			AddRow("pd", "tidb-0", pdTSOUniqueIndexKey, "1").
 			AddRow("pd", "tidb-0", pdTSOMaxIndexKey, "4"))
 
-	var calls []string
-	restore := setTestHooks(t, testHooks{
-		newMySQLConfigAndDB: func(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, cfg *config.ChangefeedConfig) (*mysqlsink.Config, *sql.DB, error) {
-			return &mysqlsink.Config{ReadTimeout: "1s"}, db, nil
-		},
-		collectPDEndpoints: func(ctx context.Context, upPD pdClientForTSOIndexValidation) ([]string, error) {
-			return []string{"http://pd1", "http://pd2"}, nil
-		},
-		newPDConfigFetcher: func(upPD pdClientForTSOIndexValidation) (pdConfigFetcher, error) {
-			return &fakePDConfigFetcher{
-				getConfig: func(ctx context.Context, endpoint string) (map[string]any, error) {
-					calls = append(calls, endpoint)
-					if endpoint == "http://pd1" {
-						return nil, errors.New("boom")
-					}
-					return map[string]any{
-						pdTSOUniqueIndexKey: float64(2),
-						pdTSOMaxIndexKey:    float64(4),
-					}, nil
-				},
-			}, nil
-		},
+	setTestDeps(t, db, func(ctx context.Context) (map[string]any, error) {
+		return nil, errors.New("boom")
 	})
-	defer restore()
 
-	err = ValidateActiveActiveTSOIndexes(context.Background(), &mockPDForTSOIndexValidation{}, &config.ChangefeedConfig{
-		ChangefeedID:       common.NewChangeFeedIDWithName("cf", common.DefaultKeyspaceName),
-		SinkURI:            "mysql://127.0.0.1:3306/",
-		EnableActiveActive: true,
-	})
-	require.NoError(t, err)
-	require.Equal(t, []string{"http://pd1", "http://pd2"}, calls)
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestValidateActiveActiveTSOIndexes_UpstreamAllEndpointsFail(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-
-	mock.ExpectQuery(regexp.QuoteMeta(showPDConfigQuery)).
-		WillReturnRows(sqlmock.NewRows([]string{"Type", "Instance", "Name", "Value"}).
-			AddRow("pd", "tidb-0", pdTSOUniqueIndexKey, "1").
-			AddRow("pd", "tidb-0", pdTSOMaxIndexKey, "4"))
-
-	var calls []string
-	restore := setTestHooks(t, testHooks{
-		newMySQLConfigAndDB: func(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, cfg *config.ChangefeedConfig) (*mysqlsink.Config, *sql.DB, error) {
-			return &mysqlsink.Config{ReadTimeout: "1s"}, db, nil
-		},
-		collectPDEndpoints: func(ctx context.Context, upPD pdClientForTSOIndexValidation) ([]string, error) {
-			return []string{"http://pd1", "http://pd2"}, nil
-		},
-		newPDConfigFetcher: func(upPD pdClientForTSOIndexValidation) (pdConfigFetcher, error) {
-			return &fakePDConfigFetcher{
-				getConfig: func(ctx context.Context, endpoint string) (map[string]any, error) {
-					calls = append(calls, endpoint)
-					return nil, errors.New("boom")
-				},
-			}, nil
-		},
-	})
-	defer restore()
-
-	err = ValidateActiveActiveTSOIndexes(context.Background(), &mockPDForTSOIndexValidation{}, &config.ChangefeedConfig{
+	err = ValidateActiveActiveTSOIndexes(context.Background(), &mockPDClientForTSOIndexValidation{}, &config.ChangefeedConfig{
 		ChangefeedID:       common.NewChangeFeedIDWithName("cf", common.DefaultKeyspaceName),
 		SinkURI:            "mysql://127.0.0.1:3306/",
 		EnableActiveActive: true,
 	})
 	require.Error(t, err)
-	require.Equal(t, []string{"http://pd1", "http://pd2"}, calls)
 	code, ok := cerrors.RFCCode(err)
 	require.True(t, ok)
 	require.Equal(t, cerrors.ErrActiveActiveTSOIndexIncompatible.RFCCode(), code)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestValidateActiveActiveTSOIndexes_UpstreamMissingKeyFallsBack(t *testing.T) {
+func TestValidateActiveActiveTSOIndexes_UpstreamMissingKey(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
@@ -223,37 +147,21 @@ func TestValidateActiveActiveTSOIndexes_UpstreamMissingKeyFallsBack(t *testing.T
 			AddRow("pd", "tidb-0", pdTSOUniqueIndexKey, "1").
 			AddRow("pd", "tidb-0", pdTSOMaxIndexKey, "4"))
 
-	restore := setTestHooks(t, testHooks{
-		newMySQLConfigAndDB: func(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, cfg *config.ChangefeedConfig) (*mysqlsink.Config, *sql.DB, error) {
-			return &mysqlsink.Config{ReadTimeout: "1s"}, db, nil
-		},
-		collectPDEndpoints: func(ctx context.Context, upPD pdClientForTSOIndexValidation) ([]string, error) {
-			return []string{"http://pd1", "http://pd2"}, nil
-		},
-		newPDConfigFetcher: func(upPD pdClientForTSOIndexValidation) (pdConfigFetcher, error) {
-			return &fakePDConfigFetcher{
-				getConfig: func(ctx context.Context, endpoint string) (map[string]any, error) {
-					if endpoint == "http://pd1" {
-						return map[string]any{
-							pdTSOUniqueIndexKey: float64(2),
-						}, nil
-					}
-					return map[string]any{
-						pdTSOUniqueIndexKey: float64(2),
-						pdTSOMaxIndexKey:    float64(4),
-					}, nil
-				},
-			}, nil
-		},
+	setTestDeps(t, db, func(ctx context.Context) (map[string]any, error) {
+		return map[string]any{
+			pdTSOUniqueIndexKey: float64(2),
+		}, nil
 	})
-	defer restore()
 
-	err = ValidateActiveActiveTSOIndexes(context.Background(), &mockPDForTSOIndexValidation{}, &config.ChangefeedConfig{
+	err = ValidateActiveActiveTSOIndexes(context.Background(), &mockPDClientForTSOIndexValidation{}, &config.ChangefeedConfig{
 		ChangefeedID:       common.NewChangeFeedIDWithName("cf", common.DefaultKeyspaceName),
 		SinkURI:            "mysql://127.0.0.1:3306/",
 		EnableActiveActive: true,
 	})
-	require.NoError(t, err)
+	require.Error(t, err)
+	code, ok := cerrors.RFCCode(err)
+	require.True(t, ok)
+	require.Equal(t, cerrors.ErrActiveActiveTSOIndexIncompatible.RFCCode(), code)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -267,27 +175,14 @@ func TestValidateActiveActiveTSOIndexes_Mismatch(t *testing.T) {
 			AddRow("pd", "tidb-0", pdTSOUniqueIndexKey, "1").
 			AddRow("pd", "tidb-0", pdTSOMaxIndexKey, "4"))
 
-	restore := setTestHooks(t, testHooks{
-		newMySQLConfigAndDB: func(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, cfg *config.ChangefeedConfig) (*mysqlsink.Config, *sql.DB, error) {
-			return &mysqlsink.Config{ReadTimeout: "1s"}, db, nil
-		},
-		collectPDEndpoints: func(ctx context.Context, upPD pdClientForTSOIndexValidation) ([]string, error) {
-			return []string{"http://pd1"}, nil
-		},
-		newPDConfigFetcher: func(upPD pdClientForTSOIndexValidation) (pdConfigFetcher, error) {
-			return &fakePDConfigFetcher{
-				getConfig: func(ctx context.Context, endpoint string) (map[string]any, error) {
-					return map[string]any{
-						pdTSOUniqueIndexKey: float64(1),
-						pdTSOMaxIndexKey:    float64(4),
-					}, nil
-				},
-			}, nil
-		},
+	setTestDeps(t, db, func(ctx context.Context) (map[string]any, error) {
+		return map[string]any{
+			pdTSOUniqueIndexKey: float64(1),
+			pdTSOMaxIndexKey:    float64(4),
+		}, nil
 	})
-	defer restore()
 
-	err = ValidateActiveActiveTSOIndexes(context.Background(), &mockPDForTSOIndexValidation{}, &config.ChangefeedConfig{
+	err = ValidateActiveActiveTSOIndexes(context.Background(), &mockPDClientForTSOIndexValidation{}, &config.ChangefeedConfig{
 		ChangefeedID:       common.NewChangeFeedIDWithName("cf", common.DefaultKeyspaceName),
 		SinkURI:            "mysql://127.0.0.1:3306/",
 		EnableActiveActive: true,
@@ -299,32 +194,92 @@ func TestValidateActiveActiveTSOIndexes_Mismatch(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-type testHooks struct {
-	newMySQLConfigAndDB func(context.Context, common.ChangeFeedID, *url.URL, *config.ChangefeedConfig) (*mysqlsink.Config, *sql.DB, error)
-	collectPDEndpoints  func(context.Context, pdClientForTSOIndexValidation) ([]string, error)
-	newPDConfigFetcher  func(pdClientForTSOIndexValidation) (pdConfigFetcher, error)
+func TestValidateActiveActiveTSOIndexes_MaxIndexMismatch(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	mock.ExpectQuery(regexp.QuoteMeta(showPDConfigQuery)).
+		WillReturnRows(sqlmock.NewRows([]string{"Type", "Instance", "Name", "Value"}).
+			AddRow("pd", "tidb-0", pdTSOUniqueIndexKey, "1").
+			AddRow("pd", "tidb-0", pdTSOMaxIndexKey, "4"))
+
+	setTestDeps(t, db, func(ctx context.Context) (map[string]any, error) {
+		return map[string]any{
+			pdTSOUniqueIndexKey: float64(2),
+			pdTSOMaxIndexKey:    float64(5),
+		}, nil
+	})
+
+	err = ValidateActiveActiveTSOIndexes(context.Background(), &mockPDClientForTSOIndexValidation{}, &config.ChangefeedConfig{
+		ChangefeedID:       common.NewChangeFeedIDWithName("cf", common.DefaultKeyspaceName),
+		SinkURI:            "mysql://127.0.0.1:3306/",
+		EnableActiveActive: true,
+	})
+	require.Error(t, err)
+	code, ok := cerrors.RFCCode(err)
+	require.True(t, ok)
+	require.Equal(t, cerrors.ErrActiveActiveTSOIndexIncompatible.RFCCode(), code)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func setTestHooks(t *testing.T, hooks testHooks) (restore func()) {
+func TestValidateActiveActiveTSOIndexes_Success(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	mock.ExpectQuery(regexp.QuoteMeta(showPDConfigQuery)).
+		WillReturnRows(sqlmock.NewRows([]string{"Type", "Instance", "Name", "Value"}).
+			AddRow("pd", "tidb-0", pdTSOUniqueIndexKey, "1").
+			AddRow("pd", "tidb-0", pdTSOMaxIndexKey, "4"))
+
+	setTestDeps(t, db, func(ctx context.Context) (map[string]any, error) {
+		return map[string]any{
+			pdTSOUniqueIndexKey: float64(2),
+			pdTSOMaxIndexKey:    float64(4),
+		}, nil
+	})
+
+	err = ValidateActiveActiveTSOIndexes(context.Background(), &mockPDClientForTSOIndexValidation{}, &config.ChangefeedConfig{
+		ChangefeedID:       common.NewChangeFeedIDWithName("cf", common.DefaultKeyspaceName),
+		SinkURI:            "mysql://127.0.0.1:3306/",
+		EnableActiveActive: true,
+	})
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func setTestDeps(
+	t *testing.T,
+	db *sql.DB,
+	getConfig func(ctx context.Context) (map[string]any, error),
+) {
 	t.Helper()
 
 	oldMySQLFn := newMySQLConfigAndDBFn
-	oldCollectEndpointsFn := collectPDEndpointsFn
-	oldNewFetcherFn := newPDConfigFetcherFn
+	oldNewHTTPClientFn := newPDHTTPClientFn
 
-	if hooks.newMySQLConfigAndDB != nil {
-		newMySQLConfigAndDBFn = hooks.newMySQLConfigAndDB
+	newMySQLConfigAndDBFn = func(
+		ctx context.Context,
+		changefeedID common.ChangeFeedID,
+		sinkURI *url.URL,
+		cfg *config.ChangefeedConfig,
+	) (*mysqlsink.Config, *sql.DB, error) {
+		return &mysqlsink.Config{ReadTimeout: "1s"}, db, nil
 	}
-	if hooks.collectPDEndpoints != nil {
-		collectPDEndpointsFn = hooks.collectPDEndpoints
-	}
-	if hooks.newPDConfigFetcher != nil {
-		newPDConfigFetcherFn = hooks.newPDConfigFetcher
+	newPDHTTPClientFn = func(upPD pd.Client) (pdhttp.Client, error) {
+		if getConfig == nil {
+			return &mockPDHTTPClient{
+				getConfig: func(ctx context.Context) (map[string]any, error) {
+					return nil, errors.New("unexpected GetConfig call")
+				},
+			}, nil
+		}
+		return &mockPDHTTPClient{getConfig: getConfig}, nil
 	}
 
-	return func() {
+	t.Cleanup(func() {
 		newMySQLConfigAndDBFn = oldMySQLFn
-		collectPDEndpointsFn = oldCollectEndpointsFn
-		newPDConfigFetcherFn = oldNewFetcherFn
-	}
+		newPDHTTPClientFn = oldNewHTTPClientFn
+	})
 }
