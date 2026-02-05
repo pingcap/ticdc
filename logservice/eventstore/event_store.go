@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"math"
 	"os"
 	"strconv"
 	"sync"
@@ -27,6 +26,7 @@ import (
 
 	"github.com/cockroachdb/pebble"
 	"github.com/klauspost/compress/zstd"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
@@ -1000,10 +1000,6 @@ func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 							zap.Int("dbIndex", subStat.dbIndex),
 							zap.Int64("tableID", subStat.tableSpan.TableID))
 						e.subClient.Unsubscribe(subID)
-						db := e.dbs[subStat.dbIndex]
-						if err := deleteDataRange(db, uint64(subID), subStat.tableSpan.TableID, 0, math.MaxUint64); err != nil {
-							log.Warn("fail to delete events", zap.Error(err))
-						}
 						delete(subStats, subID)
 						e.subscriptionChangeCh.In() <- SubscriptionChange{
 							ChangeType: SubscriptionChangeTypeRemove,
@@ -1029,9 +1025,42 @@ func (e *eventStore) runMetricsCollector(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-storeMetricsTicker.C:
+			failpoint.Inject("EventStoreDeleteDispatcher", func(val failpoint.Value) {
+				target, ok := val.(string)
+				if !ok || target == "" {
+					return
+				}
+				if e.unregisterDispatcherByString(target) {
+					log.Info("failpoint delete dispatcher from event store",
+						zap.String("failpoint", "EventStoreDeleteDispatcher"),
+						zap.String("dispatcherID", target))
+				}
+			})
 			e.collectAndReportStoreMetrics()
 		}
 	}
+}
+
+func (e *eventStore) unregisterDispatcherByString(target string) bool {
+	if target == "" {
+		return false
+	}
+	e.dispatcherMeta.RLock()
+	var foundID common.DispatcherID
+	found := false
+	for dispatcherID := range e.dispatcherMeta.dispatcherStats {
+		if dispatcherID.String() == target {
+			foundID = dispatcherID
+			found = true
+			break
+		}
+	}
+	e.dispatcherMeta.RUnlock()
+	if !found {
+		return false
+	}
+	e.UnregisterDispatcher(common.ChangeFeedID{}, foundID)
+	return true
 }
 
 // Copied and modified from https://github.com/cockroachdb/pebble/blob/53918335bb8c71a6420644e86d66f4f4a3ccf38f/metrics.go#L325
