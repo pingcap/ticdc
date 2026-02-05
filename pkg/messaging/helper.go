@@ -15,29 +15,40 @@ package messaging
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"sync"
 	"testing"
 
-	"github.com/phayes/freeport"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )
 
 func NewMessageCenterForTest(t *testing.T) (*messageCenter, string, func()) {
-	port := freeport.GetPort()
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	lis, err := net.Listen("tcp", addr)
-	require.NoError(t, err)
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		// Some sandboxed environments disallow binding to local TCP ports. Fall back
+		// to a local-only message center which is sufficient for most unit tests.
+		t.Logf("failed to listen on 127.0.0.1:0, falling back to local-only message center: %v", err)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		mcConfig := config.NewDefaultMessageCenterConfig("")
+		id := node.NewID()
+		mc := NewMessageCenter(ctx, id, mcConfig, nil)
+		mc.Run(ctx)
+		stop := func() {
+			cancel()
+			mc.Close()
+		}
+		return mc, "", stop
+	}
 
 	var opts []grpc.ServerOption
 	grpcServer := grpc.NewServer(opts...)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	addr := lis.Addr().String()
 	mcConfig := config.NewDefaultMessageCenterConfig(addr)
 	id := node.NewID()
 	mc := NewMessageCenter(ctx, id, mcConfig, nil)
@@ -56,6 +67,7 @@ func NewMessageCenterForTest(t *testing.T) (*messageCenter, string, func()) {
 		grpcServer.Stop()
 		cancel()
 		wg.Wait()
+		mc.Close()
 	}
 	return mc, string(addr), stop
 }

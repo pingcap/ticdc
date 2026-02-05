@@ -168,6 +168,36 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	m.mutex.Unlock()
 
 	var err error
+	if exists && req.ForceRecreate {
+		// Close the existing dispatcher manager and recreate it. This is used for
+		// capture-local recovery when the dispatcher manager meets a recoverable error.
+		manager.TryClose(false)
+
+		const maxWait = time.Minute
+		deadline := time.Now().Add(maxWait)
+		for time.Now().Before(deadline) {
+			if manager.TryClose(false) {
+				break
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		if !manager.TryClose(false) {
+			err := errors.ErrDispatcherFailed.GenWithStackByArgs("dispatcher manager close timeout")
+			log.Error("dispatcher manager close timeout",
+				zap.Any("changefeedID", cfId.Name()),
+				zap.Duration("maxWait", maxWait),
+				zap.Error(err))
+			return m.handleDispatcherError(from, req.ChangefeedID, err)
+		}
+
+		m.mutex.Lock()
+		delete(m.dispatcherManagers, cfId)
+		m.mutex.Unlock()
+		metrics.DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Dec()
+
+		exists = false
+		manager = nil
+	}
 	if !exists {
 		start := time.Now()
 		manager, err = dispatchermanager.

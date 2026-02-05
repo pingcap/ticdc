@@ -122,7 +122,8 @@ func (m *AddDispatcherOperator) OnTaskRemoved() {
 }
 
 func (m *AddDispatcherOperator) Start() {
-	m.spanController.BindSpanToNode("", m.dest, m.replicaSet)
+	origin := m.replicaSet.GetNodeID()
+	m.spanController.BindSpanToNode(origin, m.dest, m.replicaSet)
 }
 
 func (m *AddDispatcherOperator) PostFinish() {

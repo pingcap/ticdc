@@ -18,12 +18,14 @@ import (
 	"encoding/json"
 	"math"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	maintaineroperator "github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/pkg/bootstrap"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -50,6 +52,19 @@ const (
 	periodEventInterval = time.Millisecond * 100
 	periodRedoInterval  = time.Second * 1
 )
+
+const (
+	dispatcherManagerRecoveryMinRetryInterval = 10 * time.Second
+	dispatcherManagerRecoveryMaxRetryInterval = 2 * time.Minute
+)
+
+type dispatcherManagerRecoveryState struct {
+	firstSeen           time.Time
+	lastAttempt         time.Time
+	nextAttempt         time.Time
+	attemptedCheckpoint uint64
+	attempts            int
+}
 
 // Maintainer is response for handle changefeed replication tasks. Maintainer should:
 // 1. schedule tables to dispatcher manager
@@ -163,6 +178,10 @@ type Maintainer struct {
 	redoScheduledTaskGauge prometheus.Gauge
 	redoSpanCountGauge     prometheus.Gauge
 	redoTableCountGauge    prometheus.Gauge
+
+	dispatcherManagerRecovery struct {
+		states map[node.ID]*dispatcherManagerRecoveryState
+	}
 }
 
 // NewMaintainer create the maintainer for the changefeed
@@ -231,6 +250,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		redoSpanCountGauge:     metrics.SpanCountGauge.WithLabelValues(keyspaceName, name, "redo"),
 		redoTableCountGauge:    metrics.TableCountGauge.WithLabelValues(keyspaceName, name, "redo"),
 	}
+	m.dispatcherManagerRecovery.states = make(map[node.ID]*dispatcherManagerRecoveryState)
 	m.nodeChanged.changed = false
 	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
 
@@ -785,6 +805,15 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 			m.watermark.LastSyncedTs = req.Watermark.LastSyncedTs
 		}
 		m.watermark.mu.Unlock()
+
+		if recovery := m.dispatcherManagerRecovery.states[msg.From]; recovery != nil && req.Err == nil &&
+			req.Watermark.CheckpointTs > recovery.attemptedCheckpoint {
+			delete(m.dispatcherManagerRecovery.states, msg.From)
+			log.Info("dispatcher manager recovered from local restart",
+				zap.Stringer("changefeedID", m.changefeedID),
+				zap.Stringer("sourceNode", msg.From),
+				zap.Uint64("checkpointTs", req.Watermark.CheckpointTs))
+		}
 	}
 
 	if req.RedoWatermark != nil {
@@ -796,11 +825,13 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 		}
 	}
 	if req.Err != nil {
-		log.Error("dispatcher report an error",
-			zap.Stringer("changefeedID", m.changefeedID),
-			zap.Stringer("sourceNode", msg.From),
-			zap.String("error", req.Err.Message))
-		m.onError(msg.From, req.Err)
+		if !m.tryRecoverDispatcherManagerError(msg.From, req.Err) {
+			log.Error("dispatcher report an error",
+				zap.Stringer("changefeedID", m.changefeedID),
+				zap.Stringer("sourceNode", msg.From),
+				zap.String("error", req.Err.Message))
+			m.onError(msg.From, req.Err)
+		}
 	}
 
 	// ATOMIC CHECKPOINT UPDATE: Part 2 of race condition fix
@@ -808,6 +839,226 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 	// This ensures when operators complete, checkpointTsByCapture already contains the complete heartbeat
 	// Works with calCheckpointTs constraint ordering to prevent checkpoint advancing past new dispatcher startTs
 	m.controller.HandleStatus(msg.From, req.Statuses)
+}
+
+func (m *Maintainer) tryRecoverDispatcherManagerError(from node.ID, err *heartbeatpb.RunningError) bool {
+	if err == nil {
+		return false
+	}
+	if !m.initialized.Load() {
+		return false
+	}
+	if !isKafkaSink(m.info.SinkURI) {
+		return false
+	}
+	if !isRecoverableKafkaAsyncSendError(err) {
+		return false
+	}
+
+	now := time.Now()
+	state := m.dispatcherManagerRecovery.states[from]
+	if state == nil {
+		state = &dispatcherManagerRecoveryState{
+			firstSeen: now,
+		}
+		m.dispatcherManagerRecovery.states[from] = state
+	}
+
+	// If the changefeed stays unhealthy for too long, fall back to the coordinator-driven
+	// restart path to avoid silently stalling forever.
+	if maxDuration := util.GetOrZero(m.info.Config.ChangefeedErrorStuckDuration); maxDuration > 0 &&
+		now.Sub(state.firstSeen) > maxDuration {
+		delete(m.dispatcherManagerRecovery.states, from)
+		return false
+	}
+
+	if !state.nextAttempt.IsZero() && now.Before(state.nextAttempt) {
+		log.Warn("dispatcher manager recovery is in backoff, ignore error",
+			zap.Stringer("changefeedID", m.changefeedID),
+			zap.Stringer("sourceNode", from),
+			zap.Time("nextAttempt", state.nextAttempt),
+			zap.Int("attempts", state.attempts))
+		return true
+	}
+
+	state.attempts++
+	state.lastAttempt = now
+	state.nextAttempt = now.Add(nextDispatcherManagerRecoveryBackoff(state.attempts))
+	if watermark, ok := m.checkpointTsByCapture.Get(from); ok {
+		state.attemptedCheckpoint = watermark.CheckpointTs
+	}
+
+	log.Warn("try recover dispatcher manager from recoverable kafka error",
+		zap.Stringer("changefeedID", m.changefeedID),
+		zap.Stringer("sourceNode", from),
+		zap.Int("attempts", state.attempts),
+		zap.Time("nextAttempt", state.nextAttempt),
+		zap.String("error", err.Message))
+
+	// Allow the restarted dispatcher manager to re-register with a lower watermark seq.
+	m.checkpointTsByCapture.Delete(from)
+	m.redoTsByCapture.Delete(from)
+
+	if bootstrapErr := m.sendForceRecreateBootstrapRequest(from); bootstrapErr != nil {
+		delete(m.dispatcherManagerRecovery.states, from)
+		return false
+	}
+
+	// Recreate all dispatchers on the node to resume replication.
+	m.forceRecreateDispatchersOnNode(from)
+
+	// The table trigger dispatcher is colocated with the maintainer. When the local dispatcher
+	// manager is recreated, we must reinitialize its TableSchemaStore via post-bootstrap.
+	if from == m.selfNode.ID {
+		if initErr := m.prepareRecoveryPostBootstrapRequest(); initErr != nil {
+			delete(m.dispatcherManagerRecovery.states, from)
+			return false
+		}
+	}
+
+	return true
+}
+
+func isKafkaSink(sinkURIStr string) bool {
+	sinkURI, err := url.Parse(sinkURIStr)
+	if err != nil {
+		return false
+	}
+	scheme := config.GetScheme(sinkURI)
+	return scheme == config.KafkaScheme || scheme == config.KafkaSSLScheme
+}
+
+func isRecoverableKafkaAsyncSendError(err *heartbeatpb.RunningError) bool {
+	if err == nil {
+		return false
+	}
+	// Dispatcher manager reports changefeed-level codes, so match by message content.
+	// The message contains the original RFC error code and the Kafka broker error.
+	if !strings.Contains(err.Message, string(errors.ErrKafkaAsyncSendMessage.RFCCode())) {
+		return false
+	}
+	// `NOT_ENOUGH_REPLICAS_AFTER_APPEND`: Messages are written to the log, but to fewer in-sync replicas than required.
+	return strings.Contains(err.Message, "fewer in-sync replicas than required")
+}
+
+func nextDispatcherManagerRecoveryBackoff(attempt int) time.Duration {
+	if attempt <= 1 {
+		return dispatcherManagerRecoveryMinRetryInterval
+	}
+	backoff := dispatcherManagerRecoveryMinRetryInterval
+	// Cap the shift to avoid overflow and unreasonably long waits.
+	shift := attempt - 1
+	if shift > 8 {
+		shift = 8
+	}
+	backoff *= time.Duration(1 << shift)
+	if backoff > dispatcherManagerRecoveryMaxRetryInterval {
+		backoff = dispatcherManagerRecoveryMaxRetryInterval
+	}
+	return backoff
+}
+
+func (m *Maintainer) sendForceRecreateBootstrapRequest(targetNodeID node.ID) error {
+	cfgBytes, err := json.Marshal(m.info.ToChangefeedConfig())
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	startTs := m.getWatermark().CheckpointTs
+	var (
+		tableTriggerEventDispatcherID *heartbeatpb.DispatcherID
+		tableTriggerRedoDispatcherID  *heartbeatpb.DispatcherID
+	)
+	if targetNodeID == m.selfNode.ID {
+		tableTriggerEventDispatcherID = m.ddlSpan.GetID().ToPB()
+		startTs = m.ddlSpan.GetStatus().CheckpointTs
+		if m.enableRedo && m.redoDDLSpan != nil {
+			tableTriggerRedoDispatcherID = m.redoDDLSpan.GetID().ToPB()
+			startTs = min(startTs, m.redoDDLSpan.GetStatus().CheckpointTs)
+		}
+	}
+
+	msg := &heartbeatpb.MaintainerBootstrapRequest{
+		ChangefeedID:                  m.changefeedID.ToPB(),
+		Config:                        cfgBytes,
+		StartTs:                       startTs,
+		TableTriggerEventDispatcherId: tableTriggerEventDispatcherID,
+		TableTriggerRedoDispatcherId:  tableTriggerRedoDispatcherID,
+		IsNewChangefeed:               false,
+		KeyspaceId:                    m.info.KeyspaceID,
+		ForceRecreate:                 true,
+	}
+
+	target := messaging.NewSingleTargetMessage(targetNodeID, messaging.DispatcherManagerManagerTopic, msg)
+	m.sendMessages([]*messaging.TargetMessage{target})
+	return nil
+}
+
+func (m *Maintainer) forceRecreateDispatchersOnNode(targetNodeID node.ID) {
+	for _, spanReplication := range m.controller.spanController.GetTaskByNodeID(targetNodeID) {
+		op := maintaineroperator.NewAddDispatcherOperator(m.controller.spanController, spanReplication, targetNodeID)
+		m.controller.operatorController.ReplaceOperator(op)
+	}
+	if !m.enableRedo || m.controller.redoSpanController == nil || m.controller.redoOperatorController == nil {
+		return
+	}
+	for _, spanReplication := range m.controller.redoSpanController.GetTaskByNodeID(targetNodeID) {
+		op := maintaineroperator.NewAddDispatcherOperator(m.controller.redoSpanController, spanReplication, targetNodeID)
+		m.controller.redoOperatorController.ReplaceOperator(op)
+	}
+}
+
+func (m *Maintainer) prepareRecoveryPostBootstrapRequest() error {
+	isMySQLSinkCompatible, err := isMysqlCompatible(m.info.SinkURI)
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	startTs := m.ddlSpan.GetStatus().CheckpointTs
+	tables, err := m.controller.loadTables(startTs)
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	enableActiveActive := util.GetOrZero(m.info.Config.EnableActiveActive)
+	schemaInfos := make(map[int64]*heartbeatpb.SchemaInfo)
+	for _, table := range tables {
+		schemaID := table.SchemaID
+		info, ok := schemaInfos[schemaID]
+		if !ok {
+			info = getSchemaInfo(table, isMySQLSinkCompatible, enableActiveActive)
+			schemaInfos[schemaID] = info
+		}
+		info.Tables = append(info.Tables, getTableInfo(table, isMySQLSinkCompatible, enableActiveActive))
+	}
+
+	var redoSchemaInfos map[int64]*heartbeatpb.SchemaInfo
+	if m.enableRedo && m.redoDDLSpan != nil {
+		redoStartTs := m.redoDDLSpan.GetStatus().CheckpointTs
+		redoTables, err := m.controller.loadTables(redoStartTs)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		redoSchemaInfos = make(map[int64]*heartbeatpb.SchemaInfo)
+		for _, table := range redoTables {
+			schemaID := table.SchemaID
+			info, ok := redoSchemaInfos[schemaID]
+			if !ok {
+				info = getSchemaInfo(table, isMySQLSinkCompatible, enableActiveActive)
+				redoSchemaInfos[schemaID] = info
+			}
+			info.Tables = append(info.Tables, getTableInfo(table, isMySQLSinkCompatible, enableActiveActive))
+		}
+	}
+
+	m.postBootstrapMsg = &heartbeatpb.MaintainerPostBootstrapRequest{
+		ChangefeedID:                  m.changefeedID.ToPB(),
+		TableTriggerEventDispatcherId: m.ddlSpan.GetID().ToPB(),
+		Schemas:                       m.controller.prepareSchemaInfoResponse(schemaInfos),
+		RedoSchemas:                   m.controller.prepareSchemaInfoResponse(redoSchemaInfos),
+	}
+	m.sendPostBootstrapRequest()
+	return nil
 }
 
 func (m *Maintainer) onError(from node.ID, err *heartbeatpb.RunningError) {

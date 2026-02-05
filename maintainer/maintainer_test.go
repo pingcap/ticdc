@@ -26,6 +26,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/eventservice"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -47,6 +48,8 @@ type mockDispatcherManager struct {
 
 	bootstrapTables []*heartbeatpb.BootstrapTableSpan
 	dispatchersMap  map[heartbeatpb.DispatcherID]*heartbeatpb.TableSpanStatus
+
+	bootstrapReqCh chan *heartbeatpb.MaintainerBootstrapRequest
 }
 
 func MockDispatcherManager(mc messaging.MessageCenter, self node.ID) *mockDispatcherManager {
@@ -60,6 +63,7 @@ func MockDispatcherManager(mc messaging.MessageCenter, self node.ID) *mockDispat
 		dispatchers:    make([]*heartbeatpb.TableSpanStatus, 0, defaultDispatcherCapacity),
 		msgCh:          make(chan *messaging.TargetMessage, 1024),
 		dispatchersMap: make(map[heartbeatpb.DispatcherID]*heartbeatpb.TableSpanStatus, defaultDispatcherCapacity),
+		bootstrapReqCh: make(chan *heartbeatpb.MaintainerBootstrapRequest, 16),
 		self:           self,
 	}
 	mc.RegisterHandler(messaging.DispatcherManagerManagerTopic, m.recvMessages)
@@ -129,6 +133,15 @@ func (m *mockDispatcherManager) recvMessages(ctx context.Context, msg *messaging
 
 func (m *mockDispatcherManager) onBootstrapRequest(msg *messaging.TargetMessage) {
 	req := msg.Message[0].(*heartbeatpb.MaintainerBootstrapRequest)
+	select {
+	case m.bootstrapReqCh <- req:
+	default:
+	}
+
+	if req.ForceRecreate {
+		m.dispatchers = m.dispatchers[:0]
+		m.dispatchersMap = make(map[heartbeatpb.DispatcherID]*heartbeatpb.TableSpanStatus)
+	}
 	m.maintainerID = msg.From
 	response := &heartbeatpb.MaintainerBootstrapResponse{
 		ChangefeedID: req.ChangefeedID,
@@ -330,7 +343,9 @@ func TestMaintainerSchedule(t *testing.T) {
 	maintainer.pushEvent(&Event{changefeedID: cfID, eventType: EventInit})
 
 	require.Eventually(t, func() bool {
-		return maintainer.ddlSpan.IsWorking() && maintainer.postBootstrapMsg == nil
+		return maintainer.initialized.Load() &&
+			maintainer.controller.spanController.GetReplicatingSize() == len(tables) &&
+			maintainer.postBootstrapMsg == nil
 	}, 20*time.Second, 100*time.Millisecond)
 
 	require.Eventually(t, func() bool {
@@ -345,6 +360,120 @@ func TestMaintainerSchedule(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return maintainer.tryCloseChangefeed()
 	}, 20*time.Second, 100*time.Millisecond)
+
+	cancel()
+	wg.Wait()
+}
+
+func TestMaintainerSwallowRecoverableKafkaAsyncSendError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	tables := []commonEvent.Table{
+		{
+			SchemaID:        1,
+			TableID:         1,
+			SchemaTableName: &commonEvent.SchemaTableName{},
+		},
+	}
+
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	appcontext.SetService(appcontext.RegionCache, testutil.NewMockRegionCache())
+
+	schemaStore := eventservice.NewMockSchemaStore()
+	schemaStore.SetTables(tables)
+	appcontext.SetService(appcontext.SchemaStore, schemaStore)
+
+	n := node.NewInfo("", "")
+	mc := messaging.NewMessageCenter(ctx, n.ID, config.NewDefaultMessageCenterConfig(n.AdvertiseAddr), nil)
+	mc.Run(ctx)
+	defer mc.Close()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+
+	nodeManager := watcher.NewNodeManager(nil, nil)
+	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+	nodeManager.GetAliveNodes()[n.ID] = n
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	dispatcherManager := MockDispatcherManager(mc, n.ID)
+
+	wg := &sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_ = dispatcherManager.Run(ctx)
+	}()
+
+	taskScheduler := threadpool.NewThreadPoolDefault()
+	maintainer := NewMaintainer(cfID,
+		&config.SchedulerConfig{
+			CheckBalanceInterval: config.TomlDuration(time.Minute),
+			AddTableBatchSize:    10000,
+		},
+		&config.ChangeFeedInfo{
+			SinkURI: "kafka://127.0.0.1:9092/test",
+			Config:  config.GetDefaultReplicaConfig(),
+		}, n, taskScheduler, 10, true, common.DefaultKeyspaceID)
+	defer maintainer.Close()
+
+	mc.RegisterHandler(messaging.MaintainerManagerTopic,
+		func(ctx context.Context, msg *messaging.TargetMessage) error {
+			maintainer.eventCh.In() <- &Event{
+				changefeedID: cfID,
+				eventType:    EventMessage,
+				message:      msg,
+			}
+			return nil
+		})
+
+	maintainer.pushEvent(&Event{changefeedID: cfID, eventType: EventInit})
+
+	require.Eventually(t, func() bool {
+		return maintainer.initialized.Load() &&
+			maintainer.controller.spanController.GetReplicatingSize() == len(tables) &&
+			maintainer.postBootstrapMsg == nil
+	}, 20*time.Second, 100*time.Millisecond)
+
+	// Drain bootstrap requests sent during the initial bootstrap so we can observe the recovery one.
+	for {
+		select {
+		case <-dispatcherManager.bootstrapReqCh:
+		default:
+			goto drained
+		}
+	}
+drained:
+
+	// Inject a recoverable kafka async send error.
+	errorMsg := "[" + string(errors.ErrKafkaAsyncSendMessage.RFCCode()) + "]kafka async send message failed: " +
+		"ErrorInfo:kafka server: Messages are written to the log, but to fewer in-sync replicas than required"
+	errReq := &heartbeatpb.HeartBeatRequest{
+		ChangefeedID: cfID.ToPB(),
+		Err: &heartbeatpb.RunningError{
+			Time:    time.Now().String(),
+			Node:    n.AdvertiseAddr,
+			Code:    string(errors.ErrChangefeedRetryable.RFCCode()),
+			Message: errorMsg,
+		},
+	}
+	require.NoError(t, mc.SendCommand(messaging.NewSingleTargetMessage(n.ID, messaging.MaintainerManagerTopic, errReq)))
+
+	require.Eventually(t, func() bool {
+		for {
+			select {
+			case req := <-dispatcherManager.bootstrapReqCh:
+				if req.ForceRecreate {
+					return true
+				}
+			default:
+				return false
+			}
+		}
+	}, 20*time.Second, 100*time.Millisecond)
+
+	status := maintainer.GetMaintainerStatus()
+	require.Len(t, status.Err, 0)
 
 	cancel()
 	wg.Wait()

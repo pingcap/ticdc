@@ -37,6 +37,10 @@ type pendingMessageKey struct {
 // For MaintainerCloseRequest, we treat removed=true as stronger semantics than removed=false.
 // If a pending removed=false request exists, a later removed=true request with the same key
 // will replace it to avoid missing removal-related cleanup.
+//
+// For MaintainerBootstrapRequest, we treat force_recreate=true as stronger semantics than
+// force_recreate=false. This allows capture-local recovery requests to take precedence over
+// regular bootstrap retries.
 type pendingMessageQueue struct {
 	mu      sync.Mutex
 	pending map[pendingMessageKey]*messaging.TargetMessage
@@ -71,22 +75,33 @@ func (q *pendingMessageQueue) TryEnqueue(key pendingMessageKey, msg *messaging.T
 }
 
 func shouldReplacePendingMessage(key pendingMessageKey, oldMsg, newMsg *messaging.TargetMessage) bool {
-	if key.msgType != messaging.TypeMaintainerCloseRequest {
-		return false
-	}
 	if oldMsg == nil || newMsg == nil {
 		return false
 	}
 	if len(oldMsg.Message) == 0 || len(newMsg.Message) == 0 {
 		return false
 	}
-	oldReq, ok1 := oldMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
-	newReq, ok2 := newMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
-	if !ok1 || !ok2 {
+
+	switch key.msgType {
+	case messaging.TypeMaintainerCloseRequest:
+		oldReq, ok1 := oldMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
+		newReq, ok2 := newMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
+		if !ok1 || !ok2 {
+			return false
+		}
+		// Only upgrade semantics: allow removed=true to override removed=false.
+		return !oldReq.Removed && newReq.Removed
+	case messaging.TypeMaintainerBootstrapRequest:
+		oldReq, ok1 := oldMsg.Message[0].(*heartbeatpb.MaintainerBootstrapRequest)
+		newReq, ok2 := newMsg.Message[0].(*heartbeatpb.MaintainerBootstrapRequest)
+		if !ok1 || !ok2 {
+			return false
+		}
+		// Only upgrade semantics: allow force_recreate=true to override force_recreate=false.
+		return !oldReq.ForceRecreate && newReq.ForceRecreate
+	default:
 		return false
 	}
-	// Only upgrade semantics: allow removed=true to override removed=false.
-	return !oldReq.Removed && newReq.Removed
 }
 
 // Pop blocks until a key is available or the queue is closed.
