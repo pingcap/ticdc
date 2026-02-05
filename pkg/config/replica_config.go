@@ -159,6 +159,12 @@ type replicaConfig struct {
 	Filter             *FilterConfig  `toml:"filter" json:"filter,omitempty"`
 	Mounter            *MounterConfig `toml:"mounter" json:"mounter,omitempty"`
 	Sink               *SinkConfig    `toml:"sink" json:"sink,omitempty"`
+
+	// EventCollectorBatchCount and EventCollectorBatchBytes configure dynstream batching in EventCollector.
+	// 0 means not set and EventCollector will use dynstream defaults (batchCount=1, batchBytes=0).
+	EventCollectorBatchCount *int `toml:"event-collector-batch-count" json:"event-collector-batch-count,omitempty"`
+	EventCollectorBatchBytes *int `toml:"event-collector-batch-bytes" json:"event-collector-batch-bytes,omitempty"`
+
 	// Consistent is only available for DB downstream with redo feature enabled.
 	Consistent *ConsistentConfig `toml:"consistent" json:"consistent,omitempty"`
 	// Scheduler is the configuration for scheduler.
