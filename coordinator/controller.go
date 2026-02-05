@@ -374,45 +374,10 @@ func (c *Controller) handleBootstrapResponses(ctx context.Context, responses map
 		for _, status := range resp.Statuses {
 			changeFeedID := common.NewChangefeedIDFromPB(status.ChangefeedID)
 			if old, ok := runningCfs[changeFeedID]; ok {
-				keepOld := true
-				if old.status == nil {
-					keepOld = false
-				} else if status.CheckpointTs > old.status.CheckpointTs {
-					keepOld = false
-				} else if status.CheckpointTs == old.status.CheckpointTs {
-					// Prefer a fully bootstrapped maintainer if possible.
-					if status.BootstrapDone && !old.status.BootstrapDone {
-						keepOld = false
-					} else if status.BootstrapDone == old.status.BootstrapDone {
-						// Use a stable tie-breaker to keep bootstrap deterministic.
-						keepOld = old.nodeID.String() <= nodeID.String()
-					}
-				}
-
-				if keepOld {
-					log.Warn("duplicate maintainer detected during bootstrap, keeping local record",
-						zap.Stringer("changefeedID", changeFeedID),
-						zap.Stringer("keptNode", old.nodeID),
-						zap.Stringer("ignoredNode", nodeID),
-						zap.Uint64("keptCheckpointTs", old.status.GetCheckpointTs()),
-						zap.Uint64("ignoredCheckpointTs", status.GetCheckpointTs()),
-						zap.Bool("keptBootstrapDone", old.status.GetBootstrapDone()),
-						zap.Bool("ignoredBootstrapDone", status.GetBootstrapDone()))
-				} else {
-					log.Warn("duplicate maintainer detected during bootstrap, replacing local record",
-						zap.Stringer("changefeedID", changeFeedID),
-						zap.Stringer("oldNode", old.nodeID),
-						zap.Stringer("newNode", nodeID),
-						zap.Uint64("oldCheckpointTs", old.status.GetCheckpointTs()),
-						zap.Uint64("newCheckpointTs", status.GetCheckpointTs()),
-						zap.Bool("oldBootstrapDone", old.status.GetBootstrapDone()),
-						zap.Bool("newBootstrapDone", status.GetBootstrapDone()))
-					runningCfs[changeFeedID] = remoteMaintainer{
-						nodeID: nodeID,
-						status: status,
-					}
-				}
-				continue
+				log.Panic("maintainer runs on multiple node",
+					zap.Stringer("changefeedID", changeFeedID),
+					zap.Stringer("oldNode", old.nodeID),
+					zap.Stringer("newNode", nodeID))
 			}
 			runningCfs[changeFeedID] = remoteMaintainer{
 				nodeID: nodeID,
@@ -455,7 +420,7 @@ func (c *Controller) handleSingleMaintainerStatus(
 		return nil
 	}
 
-	if !c.validateMaintainerNode(cf, from, cfID, status) {
+	if !c.validateMaintainerNode(cf, from, cfID) {
 		return nil
 	}
 
@@ -490,22 +455,9 @@ func (c *Controller) validateMaintainerNode(
 	cf *changefeed.Changefeed,
 	from node.ID,
 	cfID common.ChangeFeedID,
-	status *heartbeatpb.MaintainerStatus,
 ) bool {
-	if cf == nil || status == nil {
-		return false
-	}
-
-	// A user-paused changefeed should not have an active maintainer. Treat any maintainer
-	// status as unexpected and try best to clean it up, instead of letting it mutate state.
-	if cf.GetInfo().State == config.StateStopped {
-		c.maybeCleanupUnexpectedMaintainer(cf, from, status)
-		return false
-	}
-
 	nodeID := cf.GetNodeID()
 	if nodeID == "" {
-		c.maybeCleanupUnexpectedMaintainer(cf, from, status)
 		return false
 	}
 
@@ -514,40 +466,9 @@ func (c *Controller) validateMaintainerNode(
 			zap.Stringer("changefeed", cfID),
 			zap.Stringer("localNode", nodeID),
 			zap.Stringer("remoteNode", from))
-		c.maybeCleanupUnexpectedMaintainer(cf, from, status)
 		return false
 	}
 	return true
-}
-
-func (c *Controller) maybeCleanupUnexpectedMaintainer(
-	cf *changefeed.Changefeed,
-	from node.ID,
-	status *heartbeatpb.MaintainerStatus,
-) {
-	if cf == nil || status == nil {
-		return
-	}
-	if status.State != heartbeatpb.ComponentState_Working {
-		return
-	}
-
-	// Avoid interfering with in-flight operators. Once the operator finishes, any stray
-	// maintainer heartbeat will trigger a cleanup attempt.
-	if c.operatorController == nil || c.operatorController.GetOperator(cf.ID) != nil {
-		return
-	}
-	if c.messageCenter == nil {
-		return
-	}
-
-	msg := changefeed.RemoveMaintainerMessage(cf.GetKeyspaceID(), cf.ID, from, true, false)
-	if err := c.messageCenter.SendCommand(msg); err != nil {
-		log.Warn("failed to cleanup unexpected maintainer",
-			zap.Stringer("changefeed", cf.ID),
-			zap.Stringer("node", from),
-			zap.Error(err))
-	}
 }
 
 func (c *Controller) updateChangefeedStatus(
