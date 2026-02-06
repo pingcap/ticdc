@@ -191,6 +191,11 @@ type ChangefeedConfig struct {
 	ForceReplicate bool          `json:"force_replicate" default:"false"`
 	Filter         *FilterConfig `toml:"filter" json:"filter"`
 	MemoryQuota    uint64        `toml:"memory-quota" json:"memory-quota"`
+
+	// EventCollectorBatchCount and EventCollectorBatchBytes configure dynstream batching in EventCollector.
+	EventCollectorBatchCount uint64 `toml:"event-collector-batch-count" json:"event-collector-batch-count,omitempty"`
+	EventCollectorBatchBytes uint64 `toml:"event-collector-batch-bytes" json:"event-collector-batch-bytes,omitempty"`
+
 	// sync point related
 	// TODO: Is syncPointRetention|default can be removed?
 	EnableSyncPoint       bool          `json:"enable_sync_point" default:"false"`
@@ -273,6 +278,8 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		ForceReplicate:                util.GetOrZero(info.Config.ForceReplicate),
 		SinkConfig:                    info.Config.Sink,
 		Filter:                        info.Config.Filter,
+		EventCollectorBatchCount:      util.GetOrZero(info.Config.EventCollectorBatchCount),
+		EventCollectorBatchBytes:      util.GetOrZero(info.Config.EventCollectorBatchBytes),
 		EnableSyncPoint:               util.GetOrZero(info.Config.EnableSyncPoint),
 		SyncPointInterval:             util.GetOrZero(info.Config.SyncPointInterval),
 		SyncPointRetention:            util.GetOrZero(info.Config.SyncPointRetention),

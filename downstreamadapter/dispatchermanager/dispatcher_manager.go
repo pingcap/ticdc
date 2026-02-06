@@ -230,6 +230,8 @@ func NewDispatcherManager(
 		outputRawChangeEvent = manager.config.SinkConfig.KafkaConfig.GetOutputRawChangeEvent()
 	}
 
+	eventCollectorBatchCount, eventCollectorBatchBytes := manager.getEventCollectorBatchCountAndBytes()
+
 	// Create shared info for all dispatchers
 	manager.sharedInfo = dispatcher.NewSharedInfo(
 		manager.changefeedID,
@@ -242,6 +244,8 @@ func NewDispatcherManager(
 		syncPointConfig,
 		manager.config.SinkConfig.TxnAtomicity,
 		manager.config.EnableSplittableCheck,
+		eventCollectorBatchCount,
+		eventCollectorBatchBytes,
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
 		make(chan error, 1),
@@ -305,6 +309,26 @@ func NewDispatcherManager(
 		zap.String("filterConfig", filterCfg.String()),
 	)
 	return manager, nil
+}
+
+func (e *DispatcherManager) getEventCollectorBatchCountAndBytes() (uint64, uint64) {
+	var (
+		batchCount uint64 = config.DefaultEventCollectorBatchCount
+		batchBytes uint64 = config.DefaultEventCollectorBatchBytes
+	)
+
+	if e.config == nil {
+		return batchCount, batchBytes
+	}
+
+	if count := e.config.EventCollectorBatchCount; count > 0 {
+		batchCount = count
+	}
+	if nBytes := e.config.EventCollectorBatchBytes; nBytes > 0 {
+		batchBytes = nBytes
+	}
+
+	return batchCount, batchBytes
 }
 
 func (e *DispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool) error {

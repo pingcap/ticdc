@@ -32,16 +32,26 @@ type eventQueue[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	// Used to reduce the block allocation in the paths' pending queue.
 	eventBlockAlloc *deque.BlockAllocator[eventWrap[A, P, T, D, H]]
 
+	batchConfigStore *areaBatchConfigStore[A]
+
 	// Signal queue is used to decide which path's events should be popped.
 	signalQueue        *deque.Deque[eventSignal[A, P, T, D, H]]
 	totalPendingLength *atomic.Int64 // The total signal count in the queue.
 }
 
-func newEventQueue[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](option Option, handler H) eventQueue[A, P, T, D, H] {
+func newEventQueue[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
+	option Option,
+	handler H,
+	batchConfigStore *areaBatchConfigStore[A],
+) eventQueue[A, P, T, D, H] {
+	if batchConfigStore == nil {
+		batchConfigStore = newAreaBatchConfigStore[A](newBatchConfig(option.BatchCount, option.BatchBytes))
+	}
 	eq := eventQueue[A, P, T, D, H]{
 		option:             option,
 		handler:            handler,
 		eventBlockAlloc:    deque.NewBlockAllocator[eventWrap[A, P, T, D, H]](32, 1024),
+		batchConfigStore:   batchConfigStore,
 		signalQueue:        deque.NewDeque(1024, deque.NewBlockAllocator[eventSignal[A, P, T, D, H]](1024, 32)),
 		totalPendingLength: &atomic.Int64{},
 	}
@@ -100,20 +110,12 @@ func (q *eventQueue[A, P, T, D, H]) wakePath(path *pathInfo[A, P, T, D, H]) {
 	}
 }
 
-func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, D, H], int) {
-	// Append the event to the buffer
-	var totalBytes int
-	appendToBuf := func(event *eventWrap[A, P, T, D, H], path *pathInfo[A, P, T, D, H]) {
-		buf = append(buf, event.event)
-		totalBytes += event.eventSize
-		path.popEvent()
-	}
-
+func (q *eventQueue[A, P, T, D, H]) popEvents(b *batcher[T]) ([]T, *pathInfo[A, P, T, D, H], uint64) {
 	for {
 		// We are going to update the signal directly, so we need the reference.
 		signal, ok := q.signalQueue.FrontRef()
 		if !ok {
-			return buf, nil, totalBytes
+			return nil, nil, 0
 		}
 
 		path := signal.pathInfo
@@ -130,7 +132,14 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, 
 			continue
 		}
 
-		batchSize := min(signal.eventCount, q.option.BatchCount)
+		batchConfig := q.batchConfigStore.getBatchConfig(path.area)
+		batchSize := min(uint64(signal.eventCount), batchConfig.batchCount)
+		b.setLimit(batchConfig, batchSize)
+
+		appendToBuf := func(event *eventWrap[A, P, T, D, H], path *pathInfo[A, P, T, D, H]) {
+			b.addEvent(event.event, uint64(event.eventSize))
+			path.popEvent()
+		}
 
 		firstEvent, ok := pendingQueue.FrontRef()
 		if !ok {
@@ -147,8 +156,7 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, 
 		appendToBuf(firstEvent, path)
 
 		// Try to batch events with the same data group.
-		count := 1
-		for ; count < batchSize; count++ {
+		for !b.isFull() {
 			// Get the reference of the front event of the path.
 			// We don't use PopFront here because we need to keep the event in the path.
 			// Otherwise, the event may lost when the loop is break below.
@@ -163,12 +171,14 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, 
 			appendToBuf(front, path)
 		}
 
+		batchedEvents, nBytes := b.flush()
+		count := len(batchedEvents)
 		signal.eventCount -= count
 		if signal.eventCount == 0 {
 			q.signalQueue.PopFront()
 		}
 		q.totalPendingLength.Add(-int64(count))
 
-		return buf, path, totalBytes
+		return batchedEvents, path, nBytes
 	}
 }

@@ -267,10 +267,14 @@ func (c *EventCollector) PrepareAddDispatcher(
 	cfStat.dispatcherCount.Add(1)
 
 	ds := c.getDynamicStream(target.GetMode())
+	batchCount := target.GetEventCollectorBatchCount()
+	batchBytes := target.GetEventCollectorBatchBytes()
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector")
 	err := ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
 		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
+	} else {
+		ds.SetAreaBatchConfig(changefeedID.ID(), batchCount, batchBytes)
 	}
 	stat.run()
 }
