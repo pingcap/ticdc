@@ -35,4 +35,7 @@ fi
 "$MOCKGEN" -source pkg/api/v2/api_client.go -destination pkg/api/v2/mock/api_client_mock.go -package mock
 "$MOCKGEN" -source pkg/sink/codec/simple/marshaller.go -destination pkg/sink/codec/simple/mock/marshaller.go
 "$MOCKGEN" -source pkg/keyspace/keyspace_manager.go -destination pkg/keyspace/keyspace_manager_mock.go -package keyspace
-"$MOCKGEN" -source pkg/txnutil/gc/gc_manager.go -destination pkg/txnutil/gc/gc_manager_mock.go -package gc
+mkdir -p pkg/txnutil/gc/mock
+"$MOCKGEN" -source pkg/txnutil/gc/gc_manager.go -destination pkg/txnutil/gc/mock/gc_manager_mock.go -package mock
+"$MOCKGEN" -source pkg/txnutil/gc/gc_client.go -destination pkg/txnutil/gc/mock/gc_client_mock.go -package mock
+"$MOCKGEN" -destination pkg/txnutil/gc/mock/gc_states_client_mock.go -package mock github.com/tikv/pd/client/clients/gc GCStatesClient

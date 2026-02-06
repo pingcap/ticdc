@@ -18,14 +18,15 @@ package gc
 
 import (
 	"context"
-	stderrors "errors"
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	gcmock "github.com/pingcap/ticdc/pkg/txnutil/gc/mock"
 	"github.com/stretchr/testify/require"
 	pdgc "github.com/tikv/pd/client/clients/gc"
 )
@@ -38,26 +39,25 @@ func TestTryUpdateKeyspaceGCBarrierDoesNotReturnSnapshotLost(t *testing.T) {
 	checkpointTs := common.Ts(100)
 	txnSafePoint := uint64(200)
 
-	pdCliForGCStates := &mockPdClientForServiceGCSafePoint{
-		serviceSafePoint: make(map[string]uint64),
-		gcBarriers:       make(map[string]uint64),
-		txnSafePoint:     txnSafePoint,
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	mockGCClient := gcmock.NewMockClient(ctrl)
+	mockStatesClient := gcmock.NewMockGCStatesClient(ctrl)
+	mockGCClient.EXPECT().GetGCStatesClient(keyspaceID).Return(mockStatesClient).Times(2)
+	mockStatesClient.EXPECT().
+		SetGCBarrier(gomock.Any(), "test-service", uint64(checkpointTs), time.Minute).
+		Return(nil, nil).
+		Times(1)
+	mockStatesClient.EXPECT().
+		GetGCState(gomock.Any()).
+		Return(pdgc.GCState{TxnSafePoint: txnSafePoint}, nil).
+		Times(1)
+	m := &gcManager{
+		gcServiceID: "test-service",
+		gcClient:    mockGCClient,
+		pdClock:     appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		gcTTL:       60,
 	}
-	gcStatesClient := &mockGCStatesClient{
-		keyspaceID: keyspaceID,
-		parent:     pdCliForGCStates,
-	}
-	pdClient := &MockPDClient{
-		GetGCStatesClientFunc: func(id uint32) pdgc.GCStatesClient {
-			require.Equal(t, keyspaceID, id)
-			return gcStatesClient
-		},
-		UpdateServiceGCSafePointFunc: func(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
-			return 0, stderrors.New("not used")
-		},
-	}
-
-	m := NewManager("test-service", pdClient)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
