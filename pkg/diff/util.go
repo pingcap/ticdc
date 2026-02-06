@@ -15,6 +15,7 @@ package diff
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/pingcap/log"
@@ -44,7 +45,7 @@ func ignoreColumns(tableInfo *model.TableInfo, columns []string) *model.TableInf
 		for j := 0; j < len(index.Columns); j++ {
 			col := index.Columns[j]
 			if _, ok := removeColMap[col.Name.O]; ok {
-				tableInfo.Indices = append(tableInfo.Indices[:i], tableInfo.Indices[i+1:]...)
+				tableInfo.Indices = slices.Delete(tableInfo.Indices, i, i+1)
 				i--
 				break
 			}
@@ -54,7 +55,7 @@ func ignoreColumns(tableInfo *model.TableInfo, columns []string) *model.TableInf
 	for j := 0; j < len(tableInfo.Columns); j++ {
 		col := tableInfo.Columns[j]
 		if _, ok := removeColMap[col.Name.O]; ok {
-			tableInfo.Columns = append(tableInfo.Columns[:j], tableInfo.Columns[j+1:]...)
+			tableInfo.Columns = slices.Delete(tableInfo.Columns, j, j+1)
 			j--
 		}
 	}

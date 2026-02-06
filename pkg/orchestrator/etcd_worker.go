@@ -16,6 +16,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 
@@ -421,7 +422,7 @@ func (worker *EtcdWorker) applyPatchGroups(ctx context.Context, patchGroups [][]
 		if err != nil {
 			return patchGroups, committedChanges, err
 		}
-		patchGroups = patchGroups[n:]
+		patchGroups = slices.Delete(patchGroups, 0, n)
 	}
 	return patchGroups, committedChanges, nil
 }
