@@ -24,6 +24,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -177,6 +178,21 @@ func VerifyPdEndpoint(pdEndpoint string, useTLS bool) error {
 	} else {
 		if u.Scheme == HTTPS {
 			return errors.New("PD endpoint scheme is https, please provide certificate")
+		}
+	}
+	return nil
+}
+
+func CheckKeyspaceFlag(cmd *cobra.Command) error {
+	if kerneltype.IsNextGen() {
+		if cmd.Flags().Lookup("keyspace") != nil {
+			k, err := cmd.Flags().GetString("keyspace")
+			if err != nil {
+				return errors.Errorf("Get Keyspace failed: %v\n", err)
+			}
+			if k == "" {
+				return errors.Errorf("Keyspace not specified\n")
+			}
 		}
 	}
 	return nil

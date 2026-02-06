@@ -14,7 +14,10 @@
 package cli
 
 import (
+	"os"
+
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
+	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/spf13/cobra"
 )
 
@@ -24,6 +27,12 @@ func newCmdChangefeed(f factory.Factory) *cobra.Command {
 		Use:   "changefeed",
 		Short: "Manage changefeed (changefeed is a replication task)",
 		Args:  cobra.NoArgs,
+	}
+	cmds.PersistentPreRun = func(cmd *cobra.Command, args []string) {
+		if err := util.CheckKeyspaceFlag(cmd); err != nil {
+			cmd.PrintErr(err)
+			os.Exit(1)
+		}
 	}
 
 	cmds.AddCommand(newCmdCreateChangefeed(f))
