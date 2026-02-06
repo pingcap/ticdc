@@ -60,3 +60,51 @@ func TestBlockEventExecutorDoesNotBlockOtherDispatchers(t *testing.T) {
 
 	close(unblockFirst)
 }
+
+// TestBlockEventExecutorSerializesPerDispatcherTasks verifies tasks submitted for the same dispatcher
+// are executed sequentially (no overlap), even when multiple workers are available.
+// This matters because concurrent execution for a single dispatcher can violate block-event ordering guarantees.
+func TestBlockEventExecutorSerializesPerDispatcherTasks(t *testing.T) {
+	executor := newBlockEventExecutor()
+	t.Cleanup(executor.Close)
+
+	d := &BasicDispatcher{id: common.DispatcherID{Low: 1, High: 0}}
+
+	firstStarted := make(chan struct{})
+	unblockFirst := make(chan struct{})
+	secondStarted := make(chan struct{})
+
+	executor.Submit(d, func() {
+		close(firstStarted)
+		<-unblockFirst
+	})
+	require.Eventually(t, func() bool {
+		select {
+		case <-firstStarted:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+
+	executor.Submit(d, func() {
+		close(secondStarted)
+	})
+
+	// The second task must not start before the first task finishes.
+	select {
+	case <-secondStarted:
+		require.FailNow(t, "unexpected parallel execution for the same dispatcher")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(unblockFirst)
+	require.Eventually(t, func() bool {
+		select {
+		case <-secondStarted:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+}
