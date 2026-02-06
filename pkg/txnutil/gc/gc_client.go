@@ -1,8 +1,3 @@
-import (
-	"context"
-	"time"
-)
-
 // Copyright 2026 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,13 +11,18 @@ import (
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+package gc
+
 import (
+	"context"
+
 	pd "github.com/tikv/pd/client"
+	pdgc "github.com/tikv/pd/client/clients/gc"
 )
 
-type gcClient interface {
+type Client interface {
 	UpdateServiceGCSafePoint(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error)
-	SetGCBarrier(ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration) (*pd.GCBarrierInfo, error)
-	DeleteGCBarrier(ctx context.Context, barrierID string) (*pd.GCBarrierInfo, error)
-	GetGCState(ctx context.Context) (pd.GCState, error)
+	GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient
 }
+
+var _ Client = (pd.Client)(nil)

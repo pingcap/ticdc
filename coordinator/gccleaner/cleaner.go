@@ -63,7 +63,7 @@ type pendingEntry struct {
 // It is triggered after coordinator successfully updates the cluster-level GC state
 // (global GC safepoint on classic, or keyspace GC barrier on next-gen).
 type Cleaner struct {
-	pdClient pd.Client
+	pdClient gc.Client
 
 	// gcServiceIDPrefix is the prefix used to build the service ID passed to PD.
 	gcServiceIDPrefix string

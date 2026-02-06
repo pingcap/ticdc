@@ -30,13 +30,10 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	mock_changefeed "github.com/pingcap/ticdc/coordinator/changefeed/mock"
-	"github.com/pingcap/ticdc/coordinator/operator"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/config/kerneltype"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/eventservice"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -44,12 +41,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/orchestrator"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	txngc "github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 	pd "github.com/tikv/pd/client"
 	pdgc "github.com/tikv/pd/client/clients/gc"
-	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
@@ -711,143 +706,10 @@ func TestConcurrentStopAndSendEvents(t *testing.T) {
 	require.True(t, co.closed.Load())
 }
 
-func TestCoordinatorCreateChangefeedSnapshotLostByGCNoNeedReportError(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	controller := &Controller{
-		initialized:        atomic.NewBool(true),
-		operatorController: &operator.Controller{},
-		changefeedDB:       changefeed.NewChangefeedDB(1),
-		nodeManager:        watcher.NewNodeManager(nil, nil),
-	}
-
-	backend := mock_changefeed.NewMockBackend(ctrl)
-	controller.backend = backend
-
-	gcManager := txngc.NewMockManager(ctrl)
-	co := &coordinator{
-		controller: controller,
-		gcManager:  gcManager,
-	}
-
-	startTs := uint64(100)
-	info := &config.ChangeFeedInfo{
-		ChangefeedID: common.NewChangeFeedIDWithName("cf", "ks"),
-		SinkURI:      "blackhole://",
-		StartTs:      startTs,
-		Config:       config.GetDefaultReplicaConfig(),
-		State:        config.StateNormal,
-		KeyspaceID:   1,
-	}
-
-	returnError := errors.New("gc service error")
-	createCall := backend.EXPECT().CreateChangefeed(gomock.Any(), gomock.Any()).Return(nil).Times(1)
-	var updateGCCall *gomock.Call
-	if kerneltype.IsNextGen() {
-		updateGCCall = gcManager.EXPECT().
-			TryUpdateKeyspaceGCBarrier(gomock.Any(), uint32(1), "ks", common.Ts(startTs), true).
-			Return(returnError).
-			Times(1)
-	} else {
-		updateGCCall = gcManager.EXPECT().
-			TryUpdateServiceGCSafePoint(gomock.Any(), common.Ts(startTs), true).
-			Return(returnError).
-			Times(1)
-	}
-	gomock.InOrder(createCall, updateGCCall)
-
-	// no need to report error, just make the changefeed can be created but in the SnapshotLostByGC error state.
-	err := co.CreateChangefeed(context.Background(), info)
-	require.NoError(t, err)
-}
-
-func TestUpdateGCSafepointSkipWhenControllerNotInitialized(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	gcManager := txngc.NewMockManager(ctrl)
-	gcManager.EXPECT().
-		TryUpdateServiceGCSafePoint(gomock.Any(), gomock.Any(), gomock.Any()).
-		Times(0)
-	gcManager.EXPECT().
-		TryUpdateKeyspaceGCBarrier(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
-		Times(0)
-
-	cfID := common.NewChangeFeedIDWithName("cf", "ks")
-	cfInfo := &config.ChangeFeedInfo{
-		ChangefeedID: cfID,
-		SinkURI:      "blackhole://",
-		StartTs:      100,
-		Config:       config.GetDefaultReplicaConfig(),
-		State:        config.StateNormal,
-		KeyspaceID:   1,
-	}
-
-	controller := &Controller{
-		initialized:  atomic.NewBool(false),
-		changefeedDB: changefeed.NewChangefeedDB(1),
-	}
-	controller.changefeedDB.AddAbsentChangefeed(changefeed.NewChangefeed(cfID, cfInfo, cfInfo.StartTs, false))
-
-	co := &coordinator{
-		controller: controller,
-		gcManager:  gcManager,
-		pdClock:    pdutil.NewClock4Test(),
-	}
-
-	err := co.updateGCSafepoint(context.Background(), true)
-	require.NoError(t, err)
-}
-
-func TestUpdateGCSafepointByChangefeedSkipWhenControllerNotInitialized(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	gcManager := txngc.NewMockManager(ctrl)
-	gcManager.EXPECT().
-		TryUpdateServiceGCSafePoint(gomock.Any(), gomock.Any(), gomock.Any()).
-		Times(0)
-	gcManager.EXPECT().
-		TryUpdateKeyspaceGCBarrier(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
-		Times(0)
-
-	cfID := common.NewChangeFeedIDWithName("cf", "ks")
-	cfInfo := &config.ChangeFeedInfo{
-		ChangefeedID: cfID,
-		SinkURI:      "blackhole://",
-		StartTs:      100,
-		Config:       config.GetDefaultReplicaConfig(),
-		State:        config.StateNormal,
-		KeyspaceID:   1,
-	}
-
-	controller := &Controller{
-		initialized:  atomic.NewBool(false),
-		changefeedDB: changefeed.NewChangefeedDB(1),
-		nodeManager:  watcher.NewNodeManager(nil, nil),
-	}
-	controller.changefeedDB.AddAbsentChangefeed(changefeed.NewChangefeed(cfID, cfInfo, cfInfo.StartTs, false))
-
-	co := &coordinator{
-		controller: controller,
-		gcManager:  gcManager,
-		pdClock:    pdutil.NewClock4Test(),
-	}
-
-	err := co.updateGCSafepointByChangefeed(context.Background(), cfID, true)
-	require.NoError(t, err)
-}
-
 type maintainNode struct {
 	cancel  context.CancelFunc
 	mc      messaging.MessageCenter
 	manager *mockMaintainerManager
-}
-
-func (d *maintainNode) stop() {
-	d.mc.Close()
-	d.cancel()
 }
 
 func startMaintainerNode(ctx context.Context,

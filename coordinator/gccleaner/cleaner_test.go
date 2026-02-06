@@ -15,100 +15,99 @@ package gccleaner
 
 import (
 	"context"
+	"math"
 	"strconv"
 	"sync/atomic"
 	"testing"
-	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
+	gcmock "github.com/pingcap/ticdc/pkg/txnutil/gc/mock"
 	"github.com/stretchr/testify/require"
 	pd "github.com/tikv/pd/client"
 	pdgc "github.com/tikv/pd/client/clients/gc"
 )
 
-type errorPdClient struct {
+type mockPDClientAdapter struct {
 	pd.Client
-	err error
+	gcClient *gcmock.MockClient
 }
 
-func (c *errorPdClient) UpdateServiceGCSafePoint(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
-	return 0, c.err
+func (c *mockPDClientAdapter) UpdateServiceGCSafePoint(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
+	return c.gcClient.UpdateServiceGCSafePoint(ctx, serviceID, ttl, safePoint)
 }
 
-func (c *errorPdClient) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient {
-	return &errorGCStatesClient{err: c.err}
+func (c *mockPDClientAdapter) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient {
+	return c.gcClient.GetGCStatesClient(keyspaceID)
 }
 
-type errorGCStatesClient struct {
-	err error
-}
+func expectUndoCalls(
+	mockGCClient *gcmock.MockClient,
+	ctrl *gomock.Controller,
+	keyspaceID uint32,
+	callCount *atomic.Int32,
+	times int,
+	retErr error,
+) {
+	if kerneltype.IsClassic() {
+		mockGCClient.EXPECT().
+			UpdateServiceGCSafePoint(gomock.Any(), gomock.Any(), int64(0), uint64(math.MaxUint64)).
+			DoAndReturn(func(_ context.Context, _ string, _ int64, safePoint uint64) (uint64, error) {
+				callCount.Add(1)
+				if retErr != nil {
+					return 0, retErr
+				}
+				return safePoint, nil
+			}).
+			Times(times)
+		return
+	}
 
-func (c *errorGCStatesClient) SetGCBarrier(ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration) (*pdgc.GCBarrierInfo, error) {
-	return pdgc.NewGCBarrierInfo(barrierID, barrierTS, ttl, time.Now()), c.err
-}
-
-func (c *errorGCStatesClient) DeleteGCBarrier(ctx context.Context, barrierID string) (*pdgc.GCBarrierInfo, error) {
-	return nil, c.err
-}
-
-func (c *errorGCStatesClient) GetGCState(ctx context.Context) (pdgc.GCState, error) {
-	return pdgc.GCState{}, c.err
-}
-
-type countingPdClient struct {
-	pd.Client
-	callCount atomic.Int32
-}
-
-func (c *countingPdClient) UpdateServiceGCSafePoint(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
-	c.callCount.Add(1)
-	return safePoint, nil
-}
-
-func (c *countingPdClient) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient {
-	return &countingGCStatesClient{parent: c}
-}
-
-type countingGCStatesClient struct {
-	parent *countingPdClient
-}
-
-func (c *countingGCStatesClient) SetGCBarrier(ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration) (*pdgc.GCBarrierInfo, error) {
-	return pdgc.NewGCBarrierInfo(barrierID, barrierTS, ttl, time.Now()), nil
-}
-
-func (c *countingGCStatesClient) DeleteGCBarrier(ctx context.Context, barrierID string) (*pdgc.GCBarrierInfo, error) {
-	c.parent.callCount.Add(1)
-	return nil, nil
-}
-
-func (c *countingGCStatesClient) GetGCState(ctx context.Context) (pdgc.GCState, error) {
-	return pdgc.GCState{}, nil
+	mockStatesClient := gcmock.NewMockGCStatesClient(ctrl)
+	mockGCClient.EXPECT().GetGCStatesClient(keyspaceID).Return(mockStatesClient).Times(times)
+	mockStatesClient.EXPECT().
+		DeleteGCBarrier(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, _ string) (*pdgc.GCBarrierInfo, error) {
+			callCount.Add(1)
+			return nil, retErr
+		}).
+		Times(times)
 }
 
 func TestCleanerGating(t *testing.T) {
-	client := &countingPdClient{}
-	cleaner := New(client, "test-gc-service")
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	var callCount atomic.Int32
+	mockGCClient := gcmock.NewMockClient(ctrl)
+	expectUndoCalls(mockGCClient, ctrl, 1, &callCount, 1, nil)
+	cleaner := New(&mockPDClientAdapter{gcClient: mockGCClient}, "test-gc-service")
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cleaner.Add(cfID, 1, gc.EnsureGCServiceCreating)
 
 	require.True(t, cleaner.tryClearEnsureGCSafepoint(context.Background()))
-	require.Equal(t, int32(0), client.callCount.Load())
+	require.Equal(t, int32(0), callCount.Load())
 
 	cleaner.BeginGCTick()
 	require.True(t, cleaner.tryClearEnsureGCSafepoint(context.Background()))
-	require.Equal(t, int32(0), client.callCount.Load())
+	require.Equal(t, int32(0), callCount.Load())
 
 	cleaner.OnUpdateGCSafepointSucceeded()
 	require.True(t, cleaner.tryClearEnsureGCSafepoint(context.Background()))
-	require.Equal(t, int32(1), client.callCount.Load())
+	require.Equal(t, int32(1), callCount.Load())
 }
 
 func TestTryClearDoesNotUndoTaskAddedInSameTick(t *testing.T) {
-	client := &countingPdClient{}
-	cleaner := New(client, "test-gc-service")
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	var callCount atomic.Int32
+	mockGCClient := gcmock.NewMockClient(ctrl)
+	expectUndoCalls(mockGCClient, ctrl, 1, &callCount, 1, nil)
+	cleaner := New(&mockPDClientAdapter{gcClient: mockGCClient}, "test-gc-service")
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
@@ -117,20 +116,25 @@ func TestTryClearDoesNotUndoTaskAddedInSameTick(t *testing.T) {
 	cleaner.OnUpdateGCSafepointSucceeded()
 
 	require.True(t, cleaner.tryClearEnsureGCSafepoint(context.Background()))
-	require.Equal(t, int32(0), client.callCount.Load())
+	require.Equal(t, int32(0), callCount.Load())
 	require.Len(t, cleaner.pending, 1)
 	require.True(t, cleaner.pending[cfID].creating)
 
 	cleaner.BeginGCTick()
 	cleaner.OnUpdateGCSafepointSucceeded()
 	require.True(t, cleaner.tryClearEnsureGCSafepoint(context.Background()))
-	require.Equal(t, int32(1), client.callCount.Load())
+	require.Equal(t, int32(1), callCount.Load())
 	require.Len(t, cleaner.pending, 0)
 }
 
 func TestTryClearRequeuesRemainingTasksOnError(t *testing.T) {
-	client := &errorPdClient{err: context.Canceled}
-	cleaner := New(client, "test-gc-service")
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	var callCount atomic.Int32
+	mockGCClient := gcmock.NewMockClient(ctrl)
+	expectUndoCalls(mockGCClient, ctrl, 1, &callCount, 1, context.Canceled)
+	cleaner := New(&mockPDClientAdapter{gcClient: mockGCClient}, "test-gc-service")
 
 	cfID1 := common.NewChangeFeedIDWithName("test1", common.DefaultKeyspaceName)
 	cfID2 := common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceName)
@@ -140,6 +144,7 @@ func TestTryClearRequeuesRemainingTasksOnError(t *testing.T) {
 	cleaner.OnUpdateGCSafepointSucceeded()
 
 	require.False(t, cleaner.tryClearEnsureGCSafepoint(context.Background()))
+	require.Equal(t, int32(1), callCount.Load())
 
 	entry1 := cleaner.pending[cfID1]
 	require.NotNil(t, entry1)
@@ -151,8 +156,13 @@ func TestTryClearRequeuesRemainingTasksOnError(t *testing.T) {
 }
 
 func TestTryClearOnlyProcessesLimitedTasksPerTick(t *testing.T) {
-	client := &countingPdClient{}
-	cleaner := New(client, "test-gc-service")
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	var callCount atomic.Int32
+	mockGCClient := gcmock.NewMockClient(ctrl)
+	expectUndoCalls(mockGCClient, ctrl, 1, &callCount, 4, nil)
+	cleaner := New(&mockPDClientAdapter{gcClient: mockGCClient}, "test-gc-service")
 
 	for i := 0; i < 5; i++ {
 		cfID := common.NewChangeFeedIDWithName("test"+strconv.Itoa(i), common.DefaultKeyspaceName)
@@ -162,7 +172,7 @@ func TestTryClearOnlyProcessesLimitedTasksPerTick(t *testing.T) {
 	cleaner.OnUpdateGCSafepointSucceeded()
 
 	require.True(t, cleaner.tryClearEnsureGCSafepoint(context.Background()))
-	require.Equal(t, int32(4), client.callCount.Load())
+	require.Equal(t, int32(4), callCount.Load())
 	require.Len(t, cleaner.pending, 1)
 	for _, entry := range cleaner.pending {
 		require.True(t, entry.creating)

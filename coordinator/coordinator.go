@@ -472,9 +472,7 @@ func (c *coordinator) updateKeyspaceGcBarrier(
 	return errors.Trace(err)
 }
 
-// updateGCSafepoint update the gc safepoint
-// On next gen, we should update the gc barrier for all keyspaces
-// Otherwise we should update the global gc safepoint
+// updateGCSafepoint update cluster level service safe point.
 func (c *coordinator) updateGCSafepoint(ctx context.Context) error {
 	// During bootstrap, `changefeedDB` can be empty or partially populated. Updating gc safepoint at this time may
 	// incorrectly advance the TiCDC service gc safepoint and cause snapshot loss for existing changefeeds.

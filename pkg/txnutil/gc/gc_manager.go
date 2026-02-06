@@ -56,7 +56,7 @@ type keyspaceGCBarrierInfo struct {
 // it guarantees that the data in the range [gcSafepoint, +inf) is not GCed.
 type gcManager struct {
 	gcServiceID string
-	pdClient    pd.Client
+	gcClient    Client
 	pdClock     pdutil.Clock
 	gcTTL       int64
 
@@ -73,7 +73,7 @@ type gcManager struct {
 func NewManager(gcServiceID string, pdClient pd.Client) Manager {
 	return &gcManager{
 		gcServiceID: gcServiceID,
-		pdClient:    pdClient,
+		gcClient:    pdClient,
 		pdClock:     appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		gcTTL:       config.GetGlobalServerConfig().GcTTL,
 	}
@@ -82,7 +82,7 @@ func NewManager(gcServiceID string, pdClient pd.Client) Manager {
 func (m *gcManager) TryUpdateServiceGCSafepoint(
 	ctx context.Context, checkpointTs common.Ts,
 ) error {
-	minServiceGCSafepoint, err := setServiceGCSafepoint(ctx, m.pdClient, m.gcServiceID, m.gcTTL, checkpointTs)
+	minServiceGCSafepoint, err := setServiceGCSafepoint(ctx, m.gcClient, m.gcServiceID, m.gcTTL, checkpointTs)
 	if err != nil {
 		log.Warn("update service gc safepoint failed", zap.Uint64("checkpointTs", checkpointTs),
 			zap.String("serviceID", m.gcServiceID), zap.Error(err))
@@ -173,7 +173,7 @@ func (m *gcManager) checkStaleCheckPointTsGlobal(changefeedID common.ChangeFeedI
 }
 
 func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID uint32, keyspaceName string, checkpointTs common.Ts) error {
-	setBarrierErr := setGCBarrier(ctx, m.pdClient, keyspaceID, m.gcServiceID, checkpointTs, m.gcTTL)
+	setBarrierErr := setGCBarrier(ctx, m.gcClient, keyspaceID, m.gcServiceID, checkpointTs, m.gcTTL)
 	if setBarrierErr != nil && !errors.IsGCBarrierTSBehindTxnSafePointError(setBarrierErr) {
 		log.Warn("update keyspace gc barrier failed",
 			zap.Uint32("keyspaceID", keyspaceID), zap.Uint64("checkpointTs", checkpointTs),
@@ -181,10 +181,11 @@ func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID u
 		return errors.WrapError(errors.ErrUpdateGCBarrierFailed, setBarrierErr)
 	}
 
-	minGCBarrier, err := UnifyGetServiceGCSafepoint(ctx, m.pdClient, keyspaceID)
+	gcState, err := getGCState(ctx, m.gcClient, keyspaceID)
 	if err != nil {
 		return err
 	}
+	minGCBarrier := gcState.TxnSafePoint
 
 	failpoint.Inject("InjectActualGCSafePoint", func(val failpoint.Value) {
 		minGCBarrier = uint64(val.(int))

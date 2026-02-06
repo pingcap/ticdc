@@ -15,86 +15,56 @@ package gc
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
+	perrors "github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	gcmock "github.com/pingcap/ticdc/pkg/txnutil/gc/mock"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
-	pd "github.com/tikv/pd/client"
 	pdgc "github.com/tikv/pd/client/clients/gc"
 )
 
-type mockGCStatesClientForNextGen struct {
-	setCalls int
-	setArgs  struct {
-		barrierID string
-		barrierTS uint64
-		ttl       time.Duration
-	}
-	setErr error
-}
-
-func (m *mockGCStatesClientForNextGen) SetGCBarrier(ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration) (*pdgc.GCBarrierInfo, error) {
-	m.setCalls++
-	m.setArgs.barrierID = barrierID
-	m.setArgs.barrierTS = barrierTS
-	m.setArgs.ttl = ttl
-	return nil, m.setErr
-}
-
-func (m *mockGCStatesClientForNextGen) DeleteGCBarrier(ctx context.Context, barrierID string) (*pdgc.GCBarrierInfo, error) {
-	return nil, nil
-}
-
-func (m *mockGCStatesClientForNextGen) GetGCState(ctx context.Context) (pdgc.GCState, error) {
-	return pdgc.GCState{}, nil
-}
-
-type mockPDClientWithGCStates struct {
-	pd.Client
-	gcStatesClient pdgc.GCStatesClient
-	gotKeyspaceID  uint32
-}
-
-func (m *mockPDClientWithGCStates) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient {
-	m.gotKeyspaceID = keyspaceID
-	return m.gcStatesClient
-}
-
 func TestEnsureChangefeedStartTsSafetyNextGenSetsGCBarrier(t *testing.T) {
-	mockGCClient := &mockGCStatesClientForNextGen{}
-	mockPDClient := &mockPDClientWithGCStates{gcStatesClient: mockGCClient}
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockGCClient := gcmock.NewMockClient(ctrl)
+	mockStatesClient := gcmock.NewMockGCStatesClient(ctrl)
+	mockGCClient.EXPECT().GetGCStatesClient(uint32(10)).Return(mockStatesClient).Times(1)
+	mockStatesClient.EXPECT().SetGCBarrier(gomock.Any(), "gc-service", uint64(123), time.Hour).Return(nil, nil).Times(1)
 
 	err := ensureChangefeedStartTsSafetyNextGen(
 		context.Background(),
-		mockPDClient,
+		mockGCClient,
 		10,
 		"gc-service",
 		3600,
 		123,
 	)
 	require.NoError(t, err)
-	require.Equal(t, uint32(10), mockPDClient.gotKeyspaceID)
-	require.Equal(t, 1, mockGCClient.setCalls)
-	require.Equal(t, "gc-service", mockGCClient.setArgs.barrierID)
-	require.Equal(t, uint64(123), mockGCClient.setArgs.barrierTS)
-	require.Equal(t, time.Hour, mockGCClient.setArgs.ttl)
 }
 
 func TestEnsureChangefeedStartTsSafetyNextGenErrorIsWrapped(t *testing.T) {
-	mockGCClient := &mockGCStatesClientForNextGen{
-		setErr: fmt.Errorf("ErrGCBarrierTSBehindTxnSafePoint: %w", context.Canceled),
-	}
-	mockPDClient := &mockPDClientWithGCStates{gcStatesClient: mockGCClient}
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockGCClient := gcmock.NewMockClient(ctrl)
+	mockStatesClient := gcmock.NewMockGCStatesClient(ctrl)
+
+	setErr := perrors.Annotate(context.Canceled, "ErrGCBarrierTSBehindTxnSafePoint")
+	mockGCClient.EXPECT().GetGCStatesClient(uint32(11)).Return(mockStatesClient).Times(2)
+	mockStatesClient.EXPECT().SetGCBarrier(gomock.Any(), "gc-service", uint64(124), time.Hour).Return(nil, setErr).Times(1)
+	mockStatesClient.EXPECT().GetGCState(gomock.Any()).Return(pdgc.GCState{}, nil).Times(1)
 
 	err := ensureChangefeedStartTsSafetyNextGen(
 		context.Background(),
-		mockPDClient,
+		mockGCClient,
 		11,
 		"gc-service",
 		3600,
@@ -108,50 +78,32 @@ func TestEnsureChangefeedStartTsSafetyNextGenErrorIsWrapped(t *testing.T) {
 }
 
 func TestGetServiceGCSafepointUsesDummyServiceIDAndReadOnlyArgs(t *testing.T) {
-	var (
-		callCount int
-		gotID     string
-		gotTTL    int64
-		gotTS     uint64
-	)
-	pdCli := &MockPDClient{
-		UpdateServiceGCSafePointFunc: func(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
-			callCount++
-			gotID, gotTTL, gotTS = serviceID, ttl, safePoint
-			return 123, nil
-		},
-	}
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
 
-	sp, err := getServiceGCSafepoint(context.Background(), pdCli)
+	mockGCClient := gcmock.NewMockClient(ctrl)
+	mockGCClient.EXPECT().
+		UpdateServiceGCSafePoint(gomock.Any(), "min-service-gc-safepoint-reader", int64(0), uint64(0)).
+		Return(uint64(123), nil).
+		Times(1)
+
+	sp, err := getServiceGCSafepoint(context.Background(), mockGCClient)
 	require.NoError(t, err)
 	require.Equal(t, uint64(123), sp)
-	require.Equal(t, 1, callCount)
-	require.Equal(t, "min-service-gc-safepoint-reader", gotID)
-	require.Equal(t, int64(0), gotTTL)
-	require.Equal(t, uint64(0), gotTS)
 }
 
 func TestRemoveServiceGCSafepointUsesTTL0AndMaxUint64(t *testing.T) {
-	var (
-		callCount int
-		gotID     string
-		gotTTL    int64
-		gotTS     uint64
-	)
-	pdCli := &MockPDClient{
-		UpdateServiceGCSafePointFunc: func(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
-			callCount++
-			gotID, gotTTL, gotTS = serviceID, ttl, safePoint
-			return 0, nil
-		},
-	}
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
 
-	err := removeServiceGCSafepoint(context.Background(), pdCli, "svc")
+	mockGCClient := gcmock.NewMockClient(ctrl)
+	mockGCClient.EXPECT().
+		UpdateServiceGCSafePoint(gomock.Any(), "svc", int64(0), uint64(math.MaxUint64)).
+		Return(uint64(0), nil).
+		Times(1)
+
+	err := removeServiceGCSafepoint(context.Background(), mockGCClient, "svc")
 	require.NoError(t, err)
-	require.Equal(t, 1, callCount)
-	require.Equal(t, "svc", gotID)
-	require.Equal(t, int64(0), gotTTL)
-	require.Equal(t, uint64(math.MaxUint64), gotTS)
 }
 
 func TestCheckStaleCheckpointTsSnapshotLostByGC(t *testing.T) {

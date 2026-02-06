@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
+	gcmock "github.com/pingcap/ticdc/pkg/txnutil/gc/mock"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
@@ -78,7 +79,7 @@ func newTestCoordinatorWithGCManager(
 func TestCreateChangefeedDoesNotUpdateGCSafepoint(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
-	gcManager := gc.NewMockManager(ctrl)
+	gcManager := gcmock.NewMockManager(ctrl)
 
 	co, changefeedDB := newTestCoordinatorWithGCManager(t, backend, gcManager)
 
@@ -113,7 +114,7 @@ func TestCreateChangefeedDoesNotUpdateGCSafepoint(t *testing.T) {
 func TestUpdateGCSafepointCallsGCManagerUpdate(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
-	gcManager := gc.NewMockManager(ctrl)
+	gcManager := gcmock.NewMockManager(ctrl)
 
 	co, changefeedDB := newTestCoordinatorWithGCManager(t, backend, gcManager)
 

@@ -20,12 +20,11 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
-	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 )
 
-func ensureChangefeedStartTsSafetyClassic(ctx context.Context, pdCli pd.Client, gcServiceID string, ttl int64, startTs uint64) error {
-	minServiceGcSafepoint, err := setServiceGCSafepoint(ctx, pdCli, gcServiceID, ttl, startTs)
+func ensureChangefeedStartTsSafetyClassic(ctx context.Context, gcCli Client, gcServiceID string, ttl int64, startTs uint64) error {
+	minServiceGcSafepoint, err := setServiceGCSafepoint(ctx, gcCli, gcServiceID, ttl, startTs)
 	if err != nil {
 		return err
 	}
@@ -44,22 +43,22 @@ func ensureChangefeedStartTsSafetyClassic(ctx context.Context, pdCli pd.Client, 
 	return nil
 }
 
-func getServiceGCSafepoint(ctx context.Context, pdCli pd.Client) (minServiceGCSafepoint uint64, err error) {
+func getServiceGCSafepoint(ctx context.Context, gcCli Client) (minServiceGCSafepoint uint64, err error) {
 	// NOTE: In classic mode, PD does not expose a dedicated "get service GC safepoint" API.
 	// Calling `UpdateServiceGCSafePoint` with safePoint=0 is used
 	// as a read-only operation to get the current minimum service GC safepoint.
 	// use a dummy service id for reading
-	return setServiceGCSafepoint(ctx, pdCli, "min-service-gc-safepoint-reader", 0, 0)
+	return setServiceGCSafepoint(ctx, gcCli, "min-service-gc-safepoint-reader", 0, 0)
 }
 
 // SetServiceGCSafepoint set a service safepoint to PD.
 func setServiceGCSafepoint(
-	ctx context.Context, pdCli pd.Client, serviceID string, TTL int64, safePoint uint64,
+	ctx context.Context, gcCli Client, serviceID string, TTL int64, safePoint uint64,
 ) (minServiceGCTs uint64, err error) {
 	err = retry.Do(ctx,
 		func() error {
 			var err1 error
-			minServiceGCTs, err1 = pdCli.UpdateServiceGCSafePoint(ctx, serviceID, TTL, safePoint)
+			minServiceGCTs, err1 = gcCli.UpdateServiceGCSafePoint(ctx, serviceID, TTL, safePoint)
 			if err1 != nil {
 				log.Warn("set gc safepoint failed, retry later", zap.Error(err1))
 			}
@@ -72,11 +71,11 @@ func setServiceGCSafepoint(
 }
 
 // removeServiceGCSafepoint removes a service safepoint from PD.
-func removeServiceGCSafepoint(ctx context.Context, pdCli pd.Client, serviceID string) error {
+func removeServiceGCSafepoint(ctx context.Context, gcCli Client, serviceID string) error {
 	err := retry.Do(ctx,
 		func() error {
 			// Set TTL to 0 second to delete the service safe point.
-			_, err := pdCli.UpdateServiceGCSafePoint(ctx, serviceID, 0, math.MaxUint64)
+			_, err := gcCli.UpdateServiceGCSafePoint(ctx, serviceID, 0, math.MaxUint64)
 			if err != nil {
 				log.Warn("remove gc safepoint failed, retry it", zap.Error(err))
 			}
