@@ -168,7 +168,6 @@ func (t *tempTxnInsertEventStorage) readFromFile() (*commonEvent.RedoDMLEvent, e
 	if n != size {
 		return nil, errors.New("read size not equal to expected size")
 	}
-	clear(t.eventSizes[:1])
 	t.eventSizes = t.eventSizes[1:]
 	redoLog, _, err := codec.UnmarshalRedoLog(data)
 	if err != nil {
