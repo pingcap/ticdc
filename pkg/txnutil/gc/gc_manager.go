@@ -44,7 +44,6 @@ type Manager interface {
 // keyspaceGCBarrierInfo is the gc info for a keyspace
 type keyspaceGCBarrierInfo struct {
 	lastSafePointTs uint64
-	isTiCDCBlockGC  bool
 }
 
 // gcManager responsible for maintain the TiCDC service-gc-safepoint on the PD
@@ -61,7 +60,6 @@ type gcManager struct {
 	gcTTL       int64
 
 	lastSafePointTs atomic.Uint64
-	isTiCDCBlockGC  atomic.Bool
 
 	// keyspaceGCBarrierInfoMap store gc info of each keyspace
 	// key => keyspaceID
@@ -80,11 +78,11 @@ func NewManager(gcServiceID string, pdClient pd.Client) Manager {
 }
 
 func (m *gcManager) TryUpdateServiceGCSafepoint(
-	ctx context.Context, checkpointTs common.Ts,
+	ctx context.Context, safepoint common.Ts,
 ) error {
-	minServiceGCSafepoint, err := setServiceGCSafepoint(ctx, m.gcClient, m.gcServiceID, m.gcTTL, checkpointTs)
+	minServiceGCSafepoint, err := setServiceGCSafepoint(ctx, m.gcClient, m.gcServiceID, m.gcTTL, safepoint)
 	if err != nil {
-		log.Warn("update service gc safepoint failed", zap.Uint64("checkpointTs", checkpointTs),
+		log.Warn("update service gc safepoint failed", zap.Uint64("safepoint", safepoint),
 			zap.String("serviceID", m.gcServiceID), zap.Error(err))
 		return err
 	}
@@ -94,26 +92,22 @@ func (m *gcManager) TryUpdateServiceGCSafepoint(
 
 	log.Info("update gc safe point",
 		zap.String("gcServiceID", m.gcServiceID),
-		zap.Uint64("checkpointTs", checkpointTs),
+		zap.Uint64("safepoint", safepoint),
 		zap.Uint64("minServiceGCSafepoint", minServiceGCSafepoint))
 
-	if minServiceGCSafepoint == checkpointTs {
-		log.Info("update gc safe point success, cdc is blocking gc", zap.Uint64("minServiceGCSafepoint", checkpointTs))
+	if minServiceGCSafepoint == safepoint {
+		log.Info("update gc safe point success, cdc is blocking gc", zap.Uint64("minServiceGCSafepoint", minServiceGCSafepoint))
 	}
 
-	if checkpointTs < minServiceGCSafepoint {
-		log.Warn("checkpointTs is smaller than the minimum service gc safepoint",
-			zap.Uint64("minServiceGCSafepoint", minServiceGCSafepoint), zap.Uint64("checkpointTs", checkpointTs),
+	if safepoint < minServiceGCSafepoint {
+		log.Warn("safepoint is smaller than the minimum service gc safepoint",
+			zap.Uint64("minServiceGCSafepoint", minServiceGCSafepoint), zap.Uint64("safepoint", safepoint),
 			zap.String("serviceID", m.gcServiceID))
 	}
 
-	// if the min checkpoint ts is equal to the current gc safe point, it
-	// means that the service gc safe point set by TiCDC is the min service
-	// gc safe point
-	m.isTiCDCBlockGC.Store(minServiceGCSafepoint == checkpointTs)
 	m.lastSafePointTs.Store(minServiceGCSafepoint)
 	minServiceGCSafePointGauge.Set(float64(oracle.ExtractPhysical(minServiceGCSafepoint)))
-	cdcGCSafePointGauge.Set(float64(oracle.ExtractPhysical(checkpointTs)))
+	cdcGCSafePointGauge.Set(float64(oracle.ExtractPhysical(safepoint)))
 	return nil
 }
 
@@ -172,11 +166,13 @@ func (m *gcManager) checkStaleCheckPointTsGlobal(changefeedID common.ChangeFeedI
 	return checkStaleCheckpointTs(changefeedID, checkpointTs, m.pdClock, m.lastSafePointTs.Load(), m.gcTTL)
 }
 
-func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID uint32, keyspaceName string, checkpointTs common.Ts) error {
-	setBarrierErr := setGCBarrier(ctx, m.gcClient, keyspaceID, m.gcServiceID, checkpointTs, m.gcTTL)
+func (m *gcManager) TryUpdateKeyspaceGCBarrier(
+	ctx context.Context, keyspaceID uint32, keyspaceName string, safepoint common.Ts,
+) error {
+	setBarrierErr := setGCBarrier(ctx, m.gcClient, keyspaceID, m.gcServiceID, safepoint, m.gcTTL)
 	if setBarrierErr != nil && !errors.IsGCBarrierTSBehindTxnSafePointError(setBarrierErr) {
 		log.Warn("update keyspace gc barrier failed",
-			zap.Uint32("keyspaceID", keyspaceID), zap.Uint64("checkpointTs", checkpointTs),
+			zap.Uint32("keyspaceID", keyspaceID), zap.Uint64("safepoint", safepoint),
 			zap.String("serviceID", m.gcServiceID), zap.Error(setBarrierErr))
 		return errors.WrapError(errors.ErrUpdateGCBarrierFailed, setBarrierErr)
 	}
@@ -192,9 +188,9 @@ func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID u
 	})
 
 	if setBarrierErr != nil {
-		log.Warn("update keyspace gc barrier failed, checkpointTs smaller than the minimum gc barrier",
+		log.Warn("update keyspace gc barrier failed, safepoint smaller than the minimum gc barrier",
 			zap.Uint32("keyspaceID", keyspaceID),
-			zap.Uint64("checkpointTs", checkpointTs),
+			zap.Uint64("safepoint", safepoint),
 			zap.Uint64("minGCBarrier", minGCBarrier),
 			zap.String("serviceID", m.gcServiceID),
 			zap.Error(setBarrierErr))
@@ -203,7 +199,6 @@ func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID u
 	// that the service gc barrier ts set by TiCDC is the min service gc barrier ts
 	newBarrierInfo := &keyspaceGCBarrierInfo{
 		lastSafePointTs: minGCBarrier,
-		isTiCDCBlockGC:  minGCBarrier == checkpointTs,
 	}
 	m.keyspaceGCBarrierInfoMap.Store(keyspaceID, newBarrierInfo)
 
@@ -211,6 +206,6 @@ func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID u
 	minGCBarrierMetric.Set(float64(oracle.ExtractPhysical(minGCBarrier)))
 
 	cdcGcBarrierMetric := cdcGCBarrierGauge.WithLabelValues(keyspaceName)
-	cdcGcBarrierMetric.Set(float64(oracle.ExtractPhysical(checkpointTs)))
+	cdcGcBarrierMetric.Set(float64(oracle.ExtractPhysical(safepoint)))
 	return nil
 }

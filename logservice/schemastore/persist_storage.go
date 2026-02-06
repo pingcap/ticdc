@@ -185,7 +185,7 @@ func (p *persistentStorage) initialize(ctx context.Context) error {
 				defaultSchemaStoreGcServiceID,
 				p.keyspaceID,
 				fakeChangefeedID,
-				defaultGcServiceTTL, gcSafePoint)
+				defaultGcServiceTTL, gcSafePoint+1)
 			if err == nil {
 				break
 			}

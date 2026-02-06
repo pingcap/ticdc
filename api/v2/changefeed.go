@@ -1092,6 +1092,9 @@ func verifyResumeChangefeedConfig(
 		changefeedID,
 		gcTTL, overrideCheckpointTs)
 	if err != nil {
+		if !errors.ErrStartTsBeforeGC.Equal(err) {
+			return errors.ErrPDEtcdAPIError.Wrap(err)
+		}
 		return err
 	}
 	return nil

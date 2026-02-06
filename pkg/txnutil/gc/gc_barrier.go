@@ -25,29 +25,33 @@ import (
 )
 
 func ensureChangefeedStartTsSafetyNextGen(ctx context.Context, gcCli Client, keyspaceID uint32, gcServiceID string, ttl int64, startTs uint64) error {
-	err := setGCBarrier(ctx, gcCli, keyspaceID, gcServiceID, startTs, ttl)
-	if err == nil {
+	setBarrierErr := setGCBarrier(ctx, gcCli, keyspaceID, gcServiceID, startTs, ttl)
+	if setBarrierErr == nil {
 		log.Info("ensure changefeed start ts safety",
 			zap.String("gcServiceID", gcServiceID),
 			zap.Uint64("startTs", startTs), zap.Int64("ttl", ttl))
 		return nil
 	}
 
-	if !errors.IsGCBarrierTSBehindTxnSafePointError(err) {
+	if !errors.IsGCBarrierTSBehindTxnSafePointError(setBarrierErr) {
 		log.Error("set gc barrier failed when try to ensure startTs safety",
 			zap.Uint64("startTs", startTs),
 			zap.Uint32("keyspaceID", keyspaceID),
 			zap.String("gcServiceID", gcServiceID),
-			zap.Error(err))
-		return err
+			zap.Error(setBarrierErr))
+		return setBarrierErr
 	}
 
-	state, _ := getGCState(ctx, gcCli, keyspaceID)
+	state, err := getGCState(ctx, gcCli, keyspaceID)
+	if err != nil {
+		log.Warn("get gc barrier failed after set start ts safety failed",
+			zap.Uint32("keyspaceID", keyspaceID), zap.Error(err))
+	}
 	log.Error("set gc barrier failed when try to ensure startTs safety, smaller than the current txn safe point",
 		zap.Uint64("startTs", startTs), zap.Uint64("txnSafePoint", state.TxnSafePoint),
 		zap.Uint32("keyspaceID", keyspaceID), zap.String("gcServiceID", gcServiceID),
-		zap.Error(err))
-	return errors.WrapError(errors.ErrStartTsBeforeGC, err, startTs, state.TxnSafePoint)
+		zap.Error(setBarrierErr))
+	return errors.WrapError(errors.ErrStartTsBeforeGC, setBarrierErr, startTs, state.TxnSafePoint)
 }
 
 // SetGCBarrier Set a GC Barrier of a keyspace
