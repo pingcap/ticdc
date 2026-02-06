@@ -1885,7 +1885,7 @@ func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter
 				zap.Error(err))
 
 			// ignore the syntax error caused by `ACTIVE ACTIVE or SOFTDELETE` Related syntax
-			if errors.Is(err, parser.ErrSyntax) && (strings.Contains(rawEvent.Query, "ACTIVE ACTIVE") || strings.Contains(rawEvent.Query, "SOFTDELETE")) {
+			if errors.Is(err, parser.ErrSyntax) && (strings.Contains(rawEvent.Query, "ACTIVE_ACTIVE") || strings.Contains(rawEvent.Query, "SOFTDELETE")) {
 				return ddlEvent, true, nil
 			} else {
 				return ddlEvent, false, err
