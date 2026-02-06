@@ -421,6 +421,7 @@ func (worker *EtcdWorker) applyPatchGroups(ctx context.Context, patchGroups [][]
 		if err != nil {
 			return patchGroups, committedChanges, err
 		}
+		clear(patchGroups[:n])
 		patchGroups = patchGroups[n:]
 	}
 	return patchGroups, committedChanges, nil
