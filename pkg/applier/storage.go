@@ -16,7 +16,6 @@ package applier
 import (
 	"fmt"
 	"os"
-	"slices"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -169,7 +168,8 @@ func (t *tempTxnInsertEventStorage) readFromFile() (*commonEvent.RedoDMLEvent, e
 	if n != size {
 		return nil, errors.New("read size not equal to expected size")
 	}
-	t.eventSizes = slices.Delete(t.eventSizes, 0, 1)
+	clear(t.eventSizes[:1])
+	t.eventSizes = t.eventSizes[1:]
 	redoLog, _, err := codec.UnmarshalRedoLog(data)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrUnmarshalFailed, err)
@@ -187,6 +187,7 @@ func (t *tempTxnInsertEventStorage) readNextEvent() (*commonEvent.RedoDMLEvent, 
 	}
 
 	event := t.events[0]
-	t.events = slices.Delete(t.events, 0, 1)
+	clear(t.events[:1])
+	t.events = t.events[1:]
 	return event, nil
 }
