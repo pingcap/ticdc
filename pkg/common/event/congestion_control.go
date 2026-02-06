@@ -29,6 +29,7 @@ type AvailableMemory struct {
 	Available           uint64                         // in bytes, used to report the Available memory
 	DispatcherCount     uint32                         // used to report the number of dispatchers
 	DispatcherAvailable map[common.DispatcherID]uint64 // in bytes, used to report the memory usage of each dispatcher
+	PopSizeLast1s       uint64                         // in bytes, used to report total pop size in the last second
 }
 
 func NewAvailableMemory(gid common.GID, available uint64) AvailableMemory {
@@ -49,6 +50,7 @@ func (m AvailableMemory) Marshal() []byte {
 		buf.Write(dispatcherID.Marshal())
 		binary.Write(buf, binary.BigEndian, available)
 	}
+	binary.Write(buf, binary.BigEndian, m.PopSizeLast1s)
 	return buf.Bytes()
 }
 
@@ -62,6 +64,9 @@ func (m *AvailableMemory) Unmarshal(buf *bytes.Buffer) {
 		dispatcherID.Unmarshal(buf.Next(dispatcherID.GetSize()))
 		m.DispatcherAvailable[dispatcherID] = binary.BigEndian.Uint64(buf.Next(8))
 	}
+	if buf.Len() >= 8 {
+		m.PopSizeLast1s = binary.BigEndian.Uint64(buf.Next(8))
+	}
 }
 
 func (m AvailableMemory) GetSize() int {
@@ -73,6 +78,7 @@ func (m AvailableMemory) GetSize() int {
 		// dispatcherID size + dispatcher available size
 		size += dispatcherID.GetSize() + 8
 	}
+	size += 8 // pop size last 1s
 	return size
 }
 
@@ -161,16 +167,22 @@ func (c *CongestionControl) decodeV1(data []byte) error {
 	return nil
 }
 
-func (c *CongestionControl) AddAvailableMemory(gid common.GID, available uint64) {
+func (c *CongestionControl) AddAvailableMemory(gid common.GID, available uint64, popSize ...uint64) {
 	c.changefeedCount++
 	c.availables = append(c.availables, NewAvailableMemory(gid, available))
+	if len(popSize) > 0 {
+		c.availables[len(c.availables)-1].PopSizeLast1s = popSize[0]
+	}
 }
 
-func (c *CongestionControl) AddAvailableMemoryWithDispatchers(gid common.GID, available uint64, dispatcherAvailable map[common.DispatcherID]uint64) {
+func (c *CongestionControl) AddAvailableMemoryWithDispatchers(gid common.GID, available uint64, dispatcherAvailable map[common.DispatcherID]uint64, popSize ...uint64) {
 	c.changefeedCount++
 	availMem := NewAvailableMemory(gid, available)
 	availMem.DispatcherAvailable = dispatcherAvailable
 	availMem.DispatcherCount = uint32(len(dispatcherAvailable))
+	if len(popSize) > 0 {
+		availMem.PopSizeLast1s = popSize[0]
+	}
 	c.availables = append(c.availables, availMem)
 }
 
