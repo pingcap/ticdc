@@ -110,6 +110,7 @@ func (e *blockEventExecutor) pop(dispatcherID common.DispatcherID) (blockEventTa
 		delete(e.tasks, dispatcherID)
 		return task, true
 	}
+	clear(q[:1])
 	e.tasks[dispatcherID] = q[1:]
 	return task, true
 }
