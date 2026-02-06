@@ -16,6 +16,7 @@ package scheduler
 import (
 	"math"
 	"math/rand"
+	"slices"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -123,7 +124,7 @@ func Balance[T replica.ReplicationID, R replica.Replication[T]](
 			// update the task size priority queue
 			target.Load++
 			victim.Load--
-			victim.Tasks = victim.Tasks[1:]
+			victim.Tasks = slices.Delete(victim.Tasks, 0, 1)
 			movedSize++
 			if movedSize >= batchSize || movedSize >= totalMoveSize {
 				break
