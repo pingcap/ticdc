@@ -26,22 +26,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	gcmock "github.com/pingcap/ticdc/pkg/txnutil/gc/mock"
 	"github.com/stretchr/testify/require"
-	pd "github.com/tikv/pd/client"
 	pdgc "github.com/tikv/pd/client/clients/gc"
 )
-
-type mockPDClientAdapter struct {
-	pd.Client
-	gcClient *gcmock.MockClient
-}
-
-func (c *mockPDClientAdapter) UpdateServiceGCSafePoint(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
-	return c.gcClient.UpdateServiceGCSafePoint(ctx, serviceID, ttl, safePoint)
-}
-
-func (c *mockPDClientAdapter) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient {
-	return c.gcClient.GetGCStatesClient(keyspaceID)
-}
 
 func expectUndoCalls(
 	mockGCClient *gcmock.MockClient,
@@ -83,7 +69,7 @@ func TestCleanerGating(t *testing.T) {
 	var callCount atomic.Int32
 	mockGCClient := gcmock.NewMockClient(ctrl)
 	expectUndoCalls(mockGCClient, ctrl, 1, &callCount, 1, nil)
-	cleaner := New(&mockPDClientAdapter{gcClient: mockGCClient}, "test-gc-service")
+	cleaner := New(mockGCClient, "test-gc-service")
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cleaner.Add(cfID, 1, gc.EnsureGCServiceCreating)
@@ -107,7 +93,7 @@ func TestTryClearDoesNotUndoTaskAddedInSameTick(t *testing.T) {
 	var callCount atomic.Int32
 	mockGCClient := gcmock.NewMockClient(ctrl)
 	expectUndoCalls(mockGCClient, ctrl, 1, &callCount, 1, nil)
-	cleaner := New(&mockPDClientAdapter{gcClient: mockGCClient}, "test-gc-service")
+	cleaner := New(mockGCClient, "test-gc-service")
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
@@ -134,7 +120,7 @@ func TestTryClearRequeuesRemainingTasksOnError(t *testing.T) {
 	var callCount atomic.Int32
 	mockGCClient := gcmock.NewMockClient(ctrl)
 	expectUndoCalls(mockGCClient, ctrl, 1, &callCount, 1, context.Canceled)
-	cleaner := New(&mockPDClientAdapter{gcClient: mockGCClient}, "test-gc-service")
+	cleaner := New(mockGCClient, "test-gc-service")
 
 	cfID1 := common.NewChangeFeedIDWithName("test1", common.DefaultKeyspaceName)
 	cfID2 := common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceName)
@@ -162,7 +148,7 @@ func TestTryClearOnlyProcessesLimitedTasksPerTick(t *testing.T) {
 	var callCount atomic.Int32
 	mockGCClient := gcmock.NewMockClient(ctrl)
 	expectUndoCalls(mockGCClient, ctrl, 1, &callCount, 4, nil)
-	cleaner := New(&mockPDClientAdapter{gcClient: mockGCClient}, "test-gc-service")
+	cleaner := New(mockGCClient, "test-gc-service")
 
 	for i := 0; i < 5; i++ {
 		cfID := common.NewChangeFeedIDWithName("test"+strconv.Itoa(i), common.DefaultKeyspaceName)

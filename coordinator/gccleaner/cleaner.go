@@ -21,7 +21,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
-	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 )
 
@@ -81,7 +80,7 @@ type Cleaner struct {
 }
 
 func New(
-	pdClient pd.Client,
+	pdClient gc.Client,
 	gcServiceIDPrefix string,
 ) *Cleaner {
 	return &Cleaner{
