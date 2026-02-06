@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"math"
 	"os"
 	"strconv"
 	"sync"
@@ -107,11 +106,15 @@ type EventIterator interface {
 }
 
 type dispatcherStat struct {
+	changefeedID common.ChangeFeedID
 	dispatcherID common.DispatcherID
 	// data span of this dispatcher
 	tableSpan *heartbeatpb.TableSpan
 
 	resolvedTs atomic.Uint64
+	// resolvedLagStartMs records the (PD) physical time when resolved-ts lag becomes and stays below the threshold.
+	// 0 means the dispatcher is currently not in "caught-up" state.
+	resolvedLagStartMs atomic.Int64
 	// the max ts of events which is not needed by this dispatcher
 	checkpointTs uint64
 	// the difference between `subStat`, `pendingSubStat` and `removingSubStat`:
@@ -238,6 +241,9 @@ const (
 	dataDir             = "event_store"
 	dbCount             = 4
 	writeWorkerNumPerDB = 2
+
+	dispatcherResolvedLagThreshold = 10 * time.Second
+	dispatcherResolvedLagSustain   = 5 * time.Minute
 )
 
 func New(
@@ -381,12 +387,6 @@ func (e *eventStore) Run(ctx context.Context) error {
 		return e.gcManager.run(ctx)
 	})
 
-	// Delay the remove of subscription which has no dispatchers depend on it to a separate goroutine.
-	// Because the subscription may be used by later dispatchers.(e.g. after dispatcher scheduling)
-	eg.Go(func() error {
-		return e.cleanObsoleteSubscriptions(ctx)
-	})
-
 	eg.Go(func() error {
 		return e.runMetricsCollector(ctx)
 	})
@@ -465,6 +465,7 @@ func (e *eventStore) RegisterDispatcher(
 	}()
 
 	stat := &dispatcherStat{
+		changefeedID: changefeedID,
 		dispatcherID: dispatcherID,
 		tableSpan:    dispatcherSpan,
 		checkpointTs: startTs,
@@ -1000,10 +1001,6 @@ func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
 							zap.Int("dbIndex", subStat.dbIndex),
 							zap.Int64("tableID", subStat.tableSpan.TableID))
 						e.subClient.Unsubscribe(subID)
-						db := e.dbs[subStat.dbIndex]
-						if err := deleteDataRange(db, uint64(subID), subStat.tableSpan.TableID, 0, math.MaxUint64); err != nil {
-							log.Warn("fail to delete events", zap.Error(err))
-						}
 						delete(subStats, subID)
 						e.subscriptionChangeCh.In() <- SubscriptionChange{
 							ChangeType: SubscriptionChangeTypeRemove,
@@ -1099,6 +1096,7 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 
 	pdCurrentTime := e.pdClock.CurrentTime()
 	pdPhysicalTime := oracle.GetPhysical(pdCurrentTime)
+	e.autoUnregisterDispatchersByResolvedLag(pdPhysicalTime)
 	globalMinResolvedTs := uint64(0)
 	uninitializedStatCount := 0
 	initializedStatCount := 0
@@ -1198,6 +1196,63 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 	globalMinResolvedPhysicalTime := oracle.ExtractPhysical(globalMinResolvedTs)
 	eventStoreResolvedTsLagInSec := float64(pdPhysicalTime-globalMinResolvedPhysicalTime) / 1e3
 	metrics.EventStoreResolvedTsLagGauge.Set(eventStoreResolvedTsLagInSec)
+}
+
+func (e *eventStore) autoUnregisterDispatchersByResolvedLag(pdPhysicalTime int64) {
+	thresholdMs := int64(dispatcherResolvedLagThreshold / time.Millisecond)
+	sustainMs := int64(dispatcherResolvedLagSustain / time.Millisecond)
+	if thresholdMs <= 0 || sustainMs <= 0 {
+		return
+	}
+
+	type unregisterItem struct {
+		changefeedID common.ChangeFeedID
+		dispatcherID common.DispatcherID
+		resolvedTs   uint64
+		lagMs        int64
+	}
+	toUnregister := make([]unregisterItem, 0)
+
+	e.dispatcherMeta.RLock()
+	for dispatcherID, stat := range e.dispatcherMeta.dispatcherStats {
+		resolvedTs := stat.resolvedTs.Load()
+		resolvedPhysicalTime := oracle.ExtractPhysical(resolvedTs)
+		lagMs := pdPhysicalTime - resolvedPhysicalTime
+		// For test-hacking: when the dispatcher stays "caught up" (lag < threshold)
+		// for long enough, unregister it while keeping the underlying subscription.
+		if lagMs >= thresholdMs {
+			if stat.resolvedLagStartMs.Load() != 0 {
+				stat.resolvedLagStartMs.Store(0)
+			}
+			continue
+		}
+
+		startMs := stat.resolvedLagStartMs.Load()
+		if startMs == 0 {
+			stat.resolvedLagStartMs.Store(pdPhysicalTime)
+			continue
+		}
+		if pdPhysicalTime-startMs >= sustainMs {
+			toUnregister = append(toUnregister, unregisterItem{
+				changefeedID: stat.changefeedID,
+				dispatcherID: dispatcherID,
+				resolvedTs:   resolvedTs,
+				lagMs:        lagMs,
+			})
+		}
+	}
+	e.dispatcherMeta.RUnlock()
+
+	for _, item := range toUnregister {
+		log.Warn("auto unregister dispatcher after staying caught up",
+			zap.Stringer("changefeedID", item.changefeedID),
+			zap.Stringer("dispatcherID", item.dispatcherID),
+			zap.Uint64("resolvedTs", item.resolvedTs),
+			zap.Duration("lag", time.Duration(item.lagMs)*time.Millisecond),
+			zap.Duration("threshold", dispatcherResolvedLagThreshold),
+			zap.Duration("sustain", dispatcherResolvedLagSustain))
+		e.UnregisterDispatcher(item.changefeedID, item.dispatcherID)
+	}
 }
 
 func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback, encoder *zstd.Encoder) error {
