@@ -33,6 +33,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/api"
+	"github.com/pingcap/ticdc/pkg/check"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -175,6 +176,19 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
+	// do not shadow err after this point
+	pdClient := h.server.GetPdClient()
+	tmpInfo := &config.ChangeFeedInfo{
+		ChangefeedID: changefeedID,
+		SinkURI:      cfg.SinkURI,
+		Config:       replicaCfg,
+	}
+	err = check.ValidateActiveActiveTSOIndexes(ctx, pdClient, tmpInfo.ToChangefeedConfig())
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
 	// Ensure the start ts is valid in the next 3600 seconds, aka 1 hour
 	const ensureTTL = 60 * 60
 	createGcServiceID := h.server.GetEtcdClient().GetEnsureGCServiceID(gc.EnsureGCServiceCreating)
@@ -193,8 +207,6 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
-	// do not shadow err after this point
-	pdClient := h.server.GetPdClient()
 	defer func() {
 		if err == nil {
 			return
@@ -272,6 +284,18 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 
 	// verify sinkURI
 	cfConfig := info.ToChangefeedConfig()
+	// Reject a changefeed if the downstream is the same TiDB logical cluster as the upstream.
+	isSame, err := check.IsSameUpstreamDownstream(ctx, pdClient, cfConfig)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	if isSame {
+		_ = c.Error(errors.ErrSameUpstreamDownstream.GenWithStack(
+			"TiCDC does not support creating a changefeed with the same TiDB cluster " +
+				"as both the source and the target for the changefeed."))
+		return
+	}
 	err = sink.Verify(ctx, cfConfig, changefeedID)
 	if err != nil {
 		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, cfg.SinkURI))
@@ -733,6 +757,25 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		return
 	}
 
+	// Reject a changefeed if the downstream is the same TiDB logical cluster as the upstream.
+	isSame, err := check.IsSameUpstreamDownstream(ctx, h.server.GetPdClient(), cfInfo.ToChangefeedConfig())
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	if isSame {
+		_ = c.Error(errors.ErrSameUpstreamDownstream.GenWithStack(
+			"TiCDC does not support resuming a changefeed with the same TiDB cluster " +
+				"as both the source and the target for the changefeed."))
+		return
+	}
+
+	err = check.ValidateActiveActiveTSOIndexes(ctx, h.server.GetPdClient(), cfInfo.ToChangefeedConfig())
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
 	// do not shadow err after this point
 	resumeGcServiceID := h.server.GetEtcdClient().GetEnsureGCServiceID(gc.EnsureGCServiceResuming)
 	if err = verifyResumeChangefeedConfig(
@@ -969,6 +1012,25 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 	}
 
 	// verify sink
+	// Reject a changefeed if the downstream is the same TiDB logical cluster as the upstream.
+	isSame, err := check.IsSameUpstreamDownstream(ctx, h.server.GetPdClient(), oldCfInfo.ToChangefeedConfig())
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	if isSame {
+		_ = c.Error(errors.ErrSameUpstreamDownstream.GenWithStack(
+			"TiCDC does not support updating a changefeed with the same TiDB cluster " +
+				"as both the source and the target for the changefeed."))
+		return
+	}
+
+	err = check.ValidateActiveActiveTSOIndexes(ctx, h.server.GetPdClient(), oldCfInfo.ToChangefeedConfig())
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
 	err = sink.Verify(ctx, oldCfInfo.ToChangefeedConfig(), oldCfInfo.ChangefeedID)
 	if err != nil {
 		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, oldCfInfo.SinkURI))

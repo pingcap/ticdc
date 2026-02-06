@@ -50,29 +50,29 @@ func (mr *MockManagerMockRecorder) CheckStaleCheckpointTs(keyspaceID, changefeed
 }
 
 // TryUpdateKeyspaceGCBarrier mocks base method.
-func (m *MockManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID uint32, keyspaceName string, checkpointTs common.Ts, forceUpdate bool) error {
+func (m *MockManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID uint32, keyspaceName string, checkpointTs common.Ts) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "TryUpdateKeyspaceGCBarrier", ctx, keyspaceID, keyspaceName, checkpointTs, forceUpdate)
+	ret := m.ctrl.Call(m, "TryUpdateKeyspaceGCBarrier", ctx, keyspaceID, keyspaceName, checkpointTs)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // TryUpdateKeyspaceGCBarrier indicates an expected call of TryUpdateKeyspaceGCBarrier.
-func (mr *MockManagerMockRecorder) TryUpdateKeyspaceGCBarrier(ctx, keyspaceID, keyspaceName, checkpointTs, forceUpdate interface{}) *gomock.Call {
+func (mr *MockManagerMockRecorder) TryUpdateKeyspaceGCBarrier(ctx, keyspaceID, keyspaceName, checkpointTs interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TryUpdateKeyspaceGCBarrier", reflect.TypeOf((*MockManager)(nil).TryUpdateKeyspaceGCBarrier), ctx, keyspaceID, keyspaceName, checkpointTs, forceUpdate)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TryUpdateKeyspaceGCBarrier", reflect.TypeOf((*MockManager)(nil).TryUpdateKeyspaceGCBarrier), ctx, keyspaceID, keyspaceName, checkpointTs)
 }
 
-// TryUpdateServiceGCSafePoint mocks base method.
-func (m *MockManager) TryUpdateServiceGCSafePoint(ctx context.Context, checkpointTs common.Ts, forceUpdate bool) error {
+// TryUpdateServiceGCSafepoint mocks base method.
+func (m *MockManager) TryUpdateServiceGCSafepoint(ctx context.Context, checkpointTs common.Ts) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "TryUpdateServiceGCSafePoint", ctx, checkpointTs, forceUpdate)
+	ret := m.ctrl.Call(m, "TryUpdateServiceGCSafepoint", ctx, checkpointTs)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// TryUpdateServiceGCSafePoint indicates an expected call of TryUpdateServiceGCSafePoint.
-func (mr *MockManagerMockRecorder) TryUpdateServiceGCSafePoint(ctx, checkpointTs, forceUpdate interface{}) *gomock.Call {
+// TryUpdateServiceGCSafepoint indicates an expected call of TryUpdateServiceGCSafepoint.
+func (mr *MockManagerMockRecorder) TryUpdateServiceGCSafepoint(ctx, checkpointTs interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TryUpdateServiceGCSafePoint", reflect.TypeOf((*MockManager)(nil).TryUpdateServiceGCSafePoint), ctx, checkpointTs, forceUpdate)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TryUpdateServiceGCSafepoint", reflect.TypeOf((*MockManager)(nil).TryUpdateServiceGCSafepoint), ctx, checkpointTs)
 }

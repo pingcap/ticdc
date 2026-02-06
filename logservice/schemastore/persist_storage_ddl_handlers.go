@@ -14,6 +14,7 @@
 package schemastore
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -1829,6 +1830,14 @@ func buildDDLEventForModifySchemaCharsetAndCollate(
 	return ddlEvent, true, err
 }
 
+func ignoreParseErrorForActiveActiveSyntax(err error, query string) bool {
+	// ignore the syntax error caused by `ACTIVE ACTIVE or SOFTDELETE` Related syntax
+	if errors.Is(err, parser.ErrSyntax) && (strings.Contains(strings.ToUpper(query), "ACTIVE_ACTIVE") || strings.Contains(strings.ToUpper(query), "SOFTDELETE")) {
+		return true
+	}
+	return false
+}
+
 func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	ddlEvent, ok, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
@@ -1882,8 +1891,14 @@ func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter
 			log.Error("parse create table ddl failed",
 				zap.String("query", rawEvent.Query),
 				zap.Error(err))
-			return ddlEvent, false, err
+
+			if ignoreParseErrorForActiveActiveSyntax(err, rawEvent.Query) {
+				return ddlEvent, true, nil
+			} else {
+				return ddlEvent, false, err
+			}
 		}
+
 		if createStmt, ok := stmt.(*ast.CreateTableStmt); ok && createStmt.ReferTable != nil {
 			refTable := createStmt.ReferTable.Name.O
 			refSchema := createStmt.ReferTable.Schema.O
@@ -1897,6 +1912,7 @@ func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter
 				},
 			}
 		}
+
 	}
 	return ddlEvent, true, err
 }

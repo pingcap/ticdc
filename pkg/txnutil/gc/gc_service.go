@@ -19,6 +19,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
+	"github.com/pingcap/ticdc/pkg/errors"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 )
@@ -88,7 +89,7 @@ func UnifyGetServiceGCSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID
 
 	gcState, err := getGCState(ctx, pdCli, keyspaceID)
 	if err != nil {
-		return 0, err
+		return 0, errors.WrapError(errors.ErrGetGCBarrierFailed, err)
 	}
 	return gcState.TxnSafePoint, nil
 }

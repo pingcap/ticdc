@@ -41,10 +41,11 @@ func newTestMysqlWriterForDDLTs(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock
 	cfg.IsTiDB = false // Default to non-TiDB
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	statistics := metrics.NewStatistics(changefeedID, "mysqlSink")
-	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics)
+	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics, nil)
+	t.Cleanup(writer.Close)
 
 	// Initialize table schema store
-	writer.tableSchemaStore = commonEvent.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{}, common.MysqlSinkType)
+	writer.tableSchemaStore = commonEvent.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{}, common.MysqlSinkType, false)
 
 	return writer, db, mock
 }
@@ -62,10 +63,11 @@ func newTestMysqlWriterForDDLTsTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sql
 	cfg.IsTiDB = true // TiDB downstream
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	statistics := metrics.NewStatistics(changefeedID, "mysqlSink")
-	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics)
+	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics, nil)
+	t.Cleanup(writer.Close)
 
 	// Initialize table schema store
-	writer.tableSchemaStore = commonEvent.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{}, common.MysqlSinkType)
+	writer.tableSchemaStore = commonEvent.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{}, common.MysqlSinkType, false)
 
 	return writer, db, mock
 }
