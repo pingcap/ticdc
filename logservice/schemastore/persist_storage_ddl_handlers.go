@@ -1830,6 +1830,14 @@ func buildDDLEventForModifySchemaCharsetAndCollate(
 	return ddlEvent, true, err
 }
 
+func ignoreParseErrorForActiveActiveSyntax(err error, query string) bool {
+	// ignore the syntax error caused by `ACTIVE ACTIVE or SOFTDELETE` Related syntax
+	if errors.Is(err, parser.ErrSyntax) && (strings.Contains(strings.ToUpper(query), "ACTIVE_ACTIVE") || strings.Contains(strings.ToUpper(query), "SOFTDELETE")) {
+		return true
+	}
+	return false
+}
+
 func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	ddlEvent, ok, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
@@ -1884,8 +1892,7 @@ func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter
 				zap.String("query", rawEvent.Query),
 				zap.Error(err))
 
-			// ignore the syntax error caused by `ACTIVE ACTIVE or SOFTDELETE` Related syntax
-			if errors.Is(err, parser.ErrSyntax) && (strings.Contains(rawEvent.Query, "ACTIVE_ACTIVE") || strings.Contains(rawEvent.Query, "SOFTDELETE")) {
+			if ignoreParseErrorForActiveActiveSyntax(err, rawEvent.Query) {
 				return ddlEvent, true, nil
 			} else {
 				return ddlEvent, false, err
