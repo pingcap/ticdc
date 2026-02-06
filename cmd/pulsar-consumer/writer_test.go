@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
@@ -55,6 +56,7 @@ func (s *recordingSink) SetTableSchemaStore(_ *commonEvent.TableSchemaStore) {
 func (s *recordingSink) Close(_ bool) {
 }
 func (s *recordingSink) Run(_ context.Context) error { return nil }
+func (s *recordingSink) GetRouter() *sinkutil.Router { return nil }
 
 func TestWriterWrite_executesIndependentCreateTableWithoutWatermark(t *testing.T) {
 	// Scenario: If upstream resolved-ts is held back (e.g. failpoints in integration tests), the consumer
