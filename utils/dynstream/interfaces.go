@@ -281,12 +281,9 @@ func NewAreaSettingsWithMaxPendingSize(size uint64, memoryControlAlgorithm int, 
 }
 
 // NewBatchConfig normalizes batching parameters and returns values that can be passed to SetAreaBatchConfig.
-func NewBatchConfig(batchCount int, batchBytes int) (int, int) {
-	if batchCount <= 0 {
+func NewBatchConfig(batchCount uint64, batchBytes uint64) (uint64, uint64) {
+	if batchCount == 0 {
 		batchCount = 1
-	}
-	if batchBytes < 0 {
-		batchBytes = 0
 	}
 	return batchCount, batchBytes
 }

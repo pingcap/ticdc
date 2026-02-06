@@ -48,7 +48,7 @@ func TestEventQueueBatchBytesFlushesAfterReachingLimit(t *testing.T) {
 	events, gotPath, gotBytes := q.popEvents(&b)
 	require.Equal(t, pi, gotPath)
 	require.Len(t, events, 2)
-	require.Equal(t, 120, gotBytes)
+	require.Equal(t, uint64(120), gotBytes)
 }
 
 func TestEventQueueBatchBytesAllowsFirstEventLargerThanLimit(t *testing.T) {
@@ -80,11 +80,11 @@ func TestEventQueueBatchBytesAllowsFirstEventLargerThanLimit(t *testing.T) {
 	events, gotPath, gotBytes := q.popEvents(&b)
 	require.Equal(t, pi, gotPath)
 	require.Len(t, events, 1)
-	require.Equal(t, 100, gotBytes)
+	require.Equal(t, uint64(100), gotBytes)
 
 	b.reset()
 	events, gotPath, gotBytes = q.popEvents(&b)
 	require.Equal(t, pi, gotPath)
 	require.Len(t, events, 1)
-	require.Equal(t, 10, gotBytes)
+	require.Equal(t, uint64(10), gotBytes)
 }

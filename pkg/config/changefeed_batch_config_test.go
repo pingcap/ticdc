@@ -26,8 +26,8 @@ func TestChangeFeedInfoToChangefeedConfig_EventCollectorBatchConfig(t *testing.T
 	}
 
 	cfg := info.ToChangefeedConfig()
-	require.Equal(t, 4096, cfg.EventCollectorBatchCount)
-	require.Equal(t, 64*1024*1024, cfg.EventCollectorBatchBytes)
+	require.Equal(t, uint64(4096), cfg.EventCollectorBatchCount)
+	require.Equal(t, uint64(64*1024*1024), cfg.EventCollectorBatchBytes)
 }
 
 // todo: why this test, what's the purpose?
@@ -47,6 +47,6 @@ func TestChangeFeedInfoToChangefeedConfig_EventCollectorBatchConfigDefaultZero(t
 	}
 
 	cfg := info.ToChangefeedConfig()
-	require.Equal(t, 0, cfg.EventCollectorBatchCount)
-	require.Equal(t, 0, cfg.EventCollectorBatchBytes)
+	require.Equal(t, uint64(0), cfg.EventCollectorBatchCount)
+	require.Equal(t, uint64(0), cfg.EventCollectorBatchBytes)
 }

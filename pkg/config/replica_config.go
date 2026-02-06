@@ -40,9 +40,12 @@ const (
 	// DefaultTiDBSourceID is the default source ID of TiDB cluster.
 	DefaultTiDBSourceID = 1
 
-	defaultEventCollectorBatchCount uint64 = 4096
-	// todo: may change this to a reasonable value.
-	defaultEventCollectorBatchBytes uint64 = 0 // 0 means no limit
+	// DefaultEventCollectorBatchCount is the default dynstream batching count used by EventCollector.
+	// Keep it consistent with the historical behavior for backward compatibility.
+	DefaultEventCollectorBatchCount uint64 = 4096
+	// DefaultEventCollectorBatchBytes is the default dynstream batching bytes used by EventCollector.
+	// 0 means bytes-based batching is disabled.
+	DefaultEventCollectorBatchBytes uint64 = 0
 )
 
 var defaultReplicaConfig = &ReplicaConfig{
@@ -53,8 +56,8 @@ var defaultReplicaConfig = &ReplicaConfig{
 	EnableTableMonitor:       util.AddressOf(false),
 	SyncPointInterval:        util.AddressOf(10 * time.Minute),
 	SyncPointRetention:       util.AddressOf(24 * time.Hour),
-	EventCollectorBatchCount: util.AddressOf(defaultEventCollectorBatchCount),
-	EventCollectorBatchBytes: util.AddressOf(defaultEventCollectorBatchBytes),
+	EventCollectorBatchCount: util.AddressOf(DefaultEventCollectorBatchCount),
+	EventCollectorBatchBytes: util.AddressOf(DefaultEventCollectorBatchBytes),
 	BDRMode:                  util.AddressOf(false),
 	Filter:                   NewDefaultFilterConfig(),
 	Mounter: &MounterConfig{

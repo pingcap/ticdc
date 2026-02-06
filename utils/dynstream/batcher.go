@@ -37,9 +37,6 @@ type batcher[T any] struct {
 }
 
 func newBatcher[T any](config batchConfig, initialCap uint64) batcher[T] {
-	if initialCap < 0 {
-		initialCap = 0
-	}
 	return batcher[T]{config: config, buf: make([]T, 0, initialCap)}
 }
 

@@ -78,9 +78,6 @@ func (s *areaBatchConfigStore[A]) setAreaBatchConfig(area A, batchCount uint64, 
 	}
 
 	newConfig := newBatchConfig(batchCount, batchBytes)
-	if newConfig.batchBytes < 0 {
-		newConfig.batchBytes = 0
-	}
 
 	if newConfig == s.defaultConfig {
 		s.removeOverrideLocked(area)
