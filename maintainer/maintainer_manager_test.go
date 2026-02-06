@@ -16,7 +16,9 @@ package maintainer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
+	"syscall"
 	"testing"
 	"time"
 
@@ -49,6 +51,9 @@ func newTestNodeWithListener(t *testing.T) (*node.Info, net.Listener) {
 	// Use a random loopback port to avoid collisions when tests from different
 	// packages run in parallel (the Go test runner parallelizes at the package level).
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil && (errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES)) {
+		t.Skipf("skipping: sandbox disallows listening on local TCP ports: %v", err)
+	}
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = lis.Close() })
 

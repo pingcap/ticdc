@@ -165,6 +165,39 @@ func (oc *Controller) AddOperator(op operator.Operator[common.DispatcherID, *hea
 	return true
 }
 
+// ReplaceOperator replaces the existing operator (if any) with the given one.
+// It is used for recovery workflows that need to "take over" a replica set.
+func (oc *Controller) ReplaceOperator(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) bool {
+	if op == nil {
+		return false
+	}
+
+	span := oc.spanController.GetTaskByID(op.ID())
+	if span == nil {
+		log.Warn("replace operator failed, span not found",
+			zap.String("role", oc.role),
+			zap.Stringer("changefeedID", oc.changefeedID),
+			zap.String("operator", op.String()))
+		return false
+	}
+
+	oc.mu.RLock()
+	old, ok := oc.operators[op.ID()]
+	oc.mu.RUnlock()
+	if ok {
+		log.Info("replace operator",
+			zap.String("role", oc.role),
+			zap.Stringer("changefeedID", oc.changefeedID),
+			zap.String("operator", op.String()),
+			zap.String("oldOperator", old.OP.String()))
+		old.OP.OnTaskRemoved()
+		oc.finalizeOperator(old, op.ID())
+	}
+
+	oc.pushOperator(op)
+	return true
+}
+
 func (oc *Controller) UpdateOperatorStatus(id common.DispatcherID, from node.ID, status *heartbeatpb.TableSpanStatus) {
 	oc.mu.RLock()
 	op, ok := oc.operators[id]

@@ -161,6 +161,40 @@ func TestPendingMessageQueue_CloseRequestUpgradeBetweenPopAndGet(t *testing.T) {
 	q.Done(key)
 }
 
+func TestPendingMessageQueue_BootstrapRequestForceRecreateOverridesPendingFalse(t *testing.T) {
+	t.Parallel()
+
+	q := newPendingMessageQueue()
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	key := pendingMessageKey{
+		changefeedID: cfID,
+		msgType:      messaging.TypeMaintainerBootstrapRequest,
+	}
+
+	msgFalse := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerBootstrapRequest{ChangefeedID: cfID.ToPB(), ForceRecreate: false},
+	)
+	msgTrue := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerBootstrapRequest{ChangefeedID: cfID.ToPB(), ForceRecreate: true},
+	)
+
+	require.True(t, q.TryEnqueue(key, msgFalse))
+	require.True(t, q.TryEnqueue(key, msgTrue))
+
+	poppedKey, ok := q.Pop()
+	require.True(t, ok)
+	require.Equal(t, key, poppedKey)
+	poppedMsg := q.Get(poppedKey)
+	require.NotNil(t, poppedMsg)
+	req := poppedMsg.Message[0].(*heartbeatpb.MaintainerBootstrapRequest)
+	require.True(t, req.ForceRecreate)
+	q.Done(key)
+}
+
 func TestGetPendingMessageKey_SupportedTypes(t *testing.T) {
 	t.Parallel()
 
