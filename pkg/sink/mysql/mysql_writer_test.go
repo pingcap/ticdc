@@ -51,7 +51,8 @@ func newTestMysqlWriter(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock) {
 	cfg.EnableDDLTs = defaultEnableDDLTs
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	statistics := metrics.NewStatistics(changefeedID, "mysqlSink")
-	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics)
+	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics, nil)
+	t.Cleanup(writer.Close)
 	// assign a no-op stmt cache to bypass actual DB operations in unit tests
 	cache, err := lru.New(prepStmtCacheSize)
 	require.NoError(t, err)
@@ -73,7 +74,8 @@ func newTestMysqlWriterForTiDB(t *testing.T) (*Writer, *sql.DB, sqlmock.Sqlmock)
 
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	statistics := metrics.NewStatistics(changefeedID, "mysqlSink")
-	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics)
+	writer := NewWriter(ctx, 0, db, cfg, changefeedID, statistics, nil)
+	t.Cleanup(writer.Close)
 
 	if kerneltype.IsNextGen() {
 		ticonfig.UpdateGlobal(func(conf *ticonfig.Config) {
@@ -121,6 +123,36 @@ func TestMysqlWriter_FlushDML(t *testing.T) {
 
 	err = mock.ExpectationsWereMet()
 	require.NoError(t, err)
+}
+
+func TestMysqlWriter_FlushNoopWhenActiveActiveRowsDropped(t *testing.T) {
+	writer, db, mock := newTestMysqlWriter(t)
+	defer db.Close()
+	writer.cfg.EnableActiveActive = true
+	writer.cfg.IsTiDB = true
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	createTableSQL := "create table t (id int primary key, name varchar(32), _tidb_origin_ts bigint unsigned null, _tidb_softdelete_time timestamp null);"
+	job := helper.DDL2Job(createTableSQL)
+	require.NotNil(t, job)
+
+	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'a', 10, NULL)")
+	dmlEvent.CommitTs = 2
+	dmlEvent.ReplicatingTs = 1
+	dmlEvent.DispatcherID = common.NewDispatcherID()
+
+	flushed := false
+	dmlEvent.AddPostFlushFunc(func() {
+		flushed = true
+	})
+
+	err := writer.Flush([]*commonEvent.DMLEvent{dmlEvent})
+	require.NoError(t, err)
+	require.True(t, flushed)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestMysqlWriter_FlushDML_DuplicateEntryRetry(t *testing.T) {
@@ -329,7 +361,7 @@ func TestMysqlWriter_FlushSyncPointEvent(t *testing.T) {
 	syncPointEvent := &commonEvent.SyncPointEvent{
 		CommitTs: 1,
 	}
-	tableSchemaStore := commonEvent.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{}, common.MysqlSinkType)
+	tableSchemaStore := commonEvent.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{}, common.MysqlSinkType, false)
 	writer.SetTableSchemaStore(tableSchemaStore)
 
 	// First sync point: Step 0: Create syncpoint table (only for first sync point)
