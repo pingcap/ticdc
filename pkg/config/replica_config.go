@@ -322,6 +322,11 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 	if util.GetOrZero(c.MemoryQuota) == uint64(0) {
 		c.FixMemoryQuota()
 	}
+
+	if c.EventCollectorBatchCount != nil && *c.EventCollectorBatchCount == 0 {
+		return cerror.ErrInvalidReplicaConfig.
+			FastGenByArgs("event-collector-batch-count must be larger than 0")
+	}
 	if c.Scheduler == nil {
 		c.FixScheduler(false)
 	} else {

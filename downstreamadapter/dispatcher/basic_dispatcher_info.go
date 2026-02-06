@@ -96,7 +96,7 @@ func NewSharedInfo(
 		timezone:                 timezone,
 		bdrMode:                  bdrMode,
 		enableActiveActive:       enableActiveActive,
-    outputRawChangeEvent:     outputRawChangeEvent,
+		outputRawChangeEvent:     outputRawChangeEvent,
 		integrityConfig:          integrityConfig,
 		filterConfig:             filterConfig,
 		syncPointConfig:          syncPointConfig,

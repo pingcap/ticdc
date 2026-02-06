@@ -673,7 +673,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 		BDRMode:                  cloned.BDRMode,
 		EventCollectorBatchCount: cloned.EventCollectorBatchCount,
 		EventCollectorBatchBytes: cloned.EventCollectorBatchBytes,
- 		EnableActiveActive:    cloned.EnableActiveActive,
+		EnableActiveActive:       cloned.EnableActiveActive,
 	}
 
 	if cloned.SyncPointInterval != nil {
