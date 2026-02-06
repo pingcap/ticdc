@@ -29,25 +29,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	gcmock "github.com/pingcap/ticdc/pkg/txnutil/gc/mock"
 	"github.com/stretchr/testify/require"
-	pd "github.com/tikv/pd/client"
 	pdgc "github.com/tikv/pd/client/clients/gc"
 	"go.uber.org/atomic"
 )
-
-type pdClientAdapter struct {
-	pd.Client
-	gcClient *gcmock.MockClient
-}
-
-func (c *pdClientAdapter) UpdateServiceGCSafePoint(
-	ctx context.Context, serviceID string, ttl int64, safePoint uint64,
-) (uint64, error) {
-	return c.gcClient.UpdateServiceGCSafePoint(ctx, serviceID, ttl, safePoint)
-}
-
-func (c *pdClientAdapter) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient {
-	return c.gcClient.GetGCStatesClient(keyspaceID)
-}
 
 func TestTryClearEnsureGCSafepointDoesNotBlockChangefeedChanges(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -92,7 +76,14 @@ func TestTryClearEnsureGCSafepointDoesNotBlockChangefeedChanges(t *testing.T) {
 			}).
 			Times(1)
 	}
-	pdClient := &pdClientAdapter{gcClient: mockGCClient}
+	pdClient := &gc.MockPDClient{
+		UpdateServiceGCSafePointFunc: func(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
+			return mockGCClient.UpdateServiceGCSafePoint(ctx, serviceID, ttl, safePoint)
+		},
+		GetGCStatesClientFunc: func(keyspaceID uint32) pdgc.GCStatesClient {
+			return mockGCClient.GetGCStatesClient(keyspaceID)
+		},
+	}
 
 	co := &coordinator{
 		controller: &Controller{

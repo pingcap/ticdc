@@ -27,22 +27,8 @@ import (
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	gcmock "github.com/pingcap/ticdc/pkg/txnutil/gc/mock"
 	"github.com/stretchr/testify/require"
-	pd "github.com/tikv/pd/client"
 	pdgc "github.com/tikv/pd/client/clients/gc"
 )
-
-type mockPDClientAdapter struct {
-	pd.Client
-	gcClient *gcmock.MockClient
-}
-
-func (m *mockPDClientAdapter) UpdateServiceGCSafePoint(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
-	return m.gcClient.UpdateServiceGCSafePoint(ctx, serviceID, ttl, safePoint)
-}
-
-func (m *mockPDClientAdapter) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient {
-	return m.gcClient.GetGCStatesClient(keyspaceID)
-}
 
 func TestEnsureChangefeedStartTsSafetySuccess(t *testing.T) {
 	ctrl := gomock.NewController(t)
@@ -57,7 +43,6 @@ func TestEnsureChangefeedStartTsSafetySuccess(t *testing.T) {
 	gcServiceID := "ticdc-creating-default_changefeed1"
 
 	mockGCClient := gcmock.NewMockClient(ctrl)
-	pdClient := &mockPDClientAdapter{gcClient: mockGCClient}
 
 	if kerneltype.IsClassic() {
 		mockGCClient.EXPECT().
@@ -75,7 +60,7 @@ func TestEnsureChangefeedStartTsSafetySuccess(t *testing.T) {
 
 	err := EnsureChangefeedStartTsSafety(
 		context.Background(),
-		pdClient,
+		mockGCClient,
 		"ticdc-creating-",
 		keyspaceID,
 		changefeedID,
@@ -98,7 +83,6 @@ func TestEnsureChangefeedStartTsSafetyBeforeGC(t *testing.T) {
 	gcServiceID := "ticdc-creating-default_changefeed1"
 
 	mockGCClient := gcmock.NewMockClient(ctrl)
-	pdClient := &mockPDClientAdapter{gcClient: mockGCClient}
 
 	if kerneltype.IsClassic() {
 		mockGCClient.EXPECT().
@@ -120,7 +104,7 @@ func TestEnsureChangefeedStartTsSafetyBeforeGC(t *testing.T) {
 
 	err := EnsureChangefeedStartTsSafety(
 		context.Background(),
-		pdClient,
+		mockGCClient,
 		"ticdc-creating-",
 		keyspaceID,
 		changefeedID,
@@ -146,7 +130,6 @@ func TestEnsureChangefeedStartTsSafetyReturnsReachMaxTry(t *testing.T) {
 	gcServiceID := "ticdc-creating-default_changefeed1"
 
 	mockGCClient := gcmock.NewMockClient(ctrl)
-	pdClient := &mockPDClientAdapter{gcClient: mockGCClient}
 
 	if kerneltype.IsClassic() {
 		mockGCClient.EXPECT().
@@ -164,7 +147,7 @@ func TestEnsureChangefeedStartTsSafetyReturnsReachMaxTry(t *testing.T) {
 
 	err := EnsureChangefeedStartTsSafety(
 		context.Background(),
-		pdClient,
+		mockGCClient,
 		"ticdc-creating-",
 		keyspaceID,
 		changefeedID,
@@ -184,7 +167,6 @@ func TestUndoEnsureChangefeedStartTsSafety(t *testing.T) {
 	gcServiceID := "ticdc-creating-default_changefeed1"
 
 	mockGCClient := gcmock.NewMockClient(ctrl)
-	pdClient := &mockPDClientAdapter{gcClient: mockGCClient}
 
 	if kerneltype.IsClassic() {
 		mockGCClient.EXPECT().
@@ -202,7 +184,7 @@ func TestUndoEnsureChangefeedStartTsSafety(t *testing.T) {
 
 	err := UndoEnsureChangefeedStartTsSafety(
 		context.Background(),
-		pdClient,
+		mockGCClient,
 		keyspaceID,
 		"ticdc-creating-",
 		changefeedID,
