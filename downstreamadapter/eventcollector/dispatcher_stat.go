@@ -416,13 +416,6 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 					zap.Stringer("dispatcher", d.getDispatcherID()))
 			}
-			log.Info("handleBatchDataEvents: loaded tableInfo for DML",
-				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-				zap.Stringer("dispatcher", d.getDispatcherID()),
-				zap.String("schema", tableInfo.TableName.Schema),
-				zap.String("table", tableInfo.TableName.Table),
-				zap.String("targetSchema", tableInfo.TableName.GetTargetSchema()),
-				zap.String("targetTable", tableInfo.TableName.GetTargetTable()))
 			// The cloudstorage sink replicate different file according the table version.
 			// If one table is just scheduled to a new processor, the tableInfoVersion should be
 			// greater than or equal to the startTs of dispatcher.
@@ -497,12 +490,27 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 		events[0].Event = ddl
 		d.tableInfoVersion.Store(ddl.FinishedTs)
 		if ddl.TableInfo != nil {
-			// Apply routing to get a TableInfo with TargetSchema/TargetTable set.
-			// This returns a cloned TableInfo to avoid mutating the shared original,
-			// which may be used by other changefeeds with different routing rules.
-			routedTableInfo := d.applyRoutingToTableInfo(ddl.TableInfo)
-			ddl.TableInfo = routedTableInfo
-			d.tableInfo.Store(routedTableInfo)
+			// Check if this DDL's TableInfo is for a different table.
+			// This can happen with CREATE TABLE LIKE, where the DDL is added to the
+			// reference table's history for blocking purposes, but the TableInfo is
+			// for the new table. In this case, we should NOT update the stored tableInfo.
+			dispatcherTableID := d.target.GetTableSpan().TableID
+			ddlTableID := ddl.TableInfo.TableName.TableID
+			if ddlTableID != dispatcherTableID {
+				log.Debug("DDL TableInfo is for a different table, skipping tableInfo update",
+					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+					zap.Stringer("dispatcher", d.getDispatcherID()),
+					zap.Int64("dispatcherTableID", dispatcherTableID),
+					zap.Int64("ddlTableID", ddlTableID),
+					zap.String("ddlTableName", ddl.TableInfo.TableName.Table))
+			} else {
+				// Apply routing to get a TableInfo with TargetSchema/TargetTable set.
+				// This returns a cloned TableInfo to avoid mutating the shared original,
+				// which may be used by other changefeeds with different routing rules.
+				routedTableInfo := d.applyRoutingToTableInfo(ddl.TableInfo)
+				ddl.TableInfo = routedTableInfo
+				d.tableInfo.Store(routedTableInfo)
+			}
 		}
 		// Also apply routing to MultipleTableInfos for multi-table DDLs (e.g., RENAME TABLE)
 		for i, tableInfo := range ddl.MultipleTableInfos {
@@ -663,13 +671,6 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 	if tableInfo != nil {
 		// Apply routing and store the (possibly cloned) TableInfo
 		routedTableInfo := d.applyRoutingToTableInfo(tableInfo)
-		log.Info("handleHandshakeEvent: storing routed tableInfo",
-			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-			zap.Stringer("dispatcher", d.getDispatcherID()),
-			zap.String("originalSchema", tableInfo.TableName.Schema),
-			zap.String("originalTable", tableInfo.TableName.Table),
-			zap.String("routedTargetSchema", routedTableInfo.TableName.GetTargetSchema()),
-			zap.String("routedTargetTable", routedTableInfo.TableName.GetTargetTable()))
 		d.tableInfo.Store(routedTableInfo)
 	}
 	d.lastEventSeq.Store(handshakeEvent.Seq)

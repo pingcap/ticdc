@@ -1381,11 +1381,12 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 		stat.lastEventCommitTs.Store(50)
 
 		// Create original TableInfo - should NOT be mutated
+		// Use TableID: 1 to match the mockDispatcher's TableSpan.TableID
 		originalTableInfo := &common.TableInfo{
 			TableName: common.TableName{
 				Schema:  "source_db",
 				Table:   "users",
-				TableID: 123,
+				TableID: 1,
 			},
 		}
 
@@ -1442,12 +1443,12 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 		stat.lastEventSeq.Store(1)
 		stat.lastEventCommitTs.Store(50)
 
-		// This dispatcher's table
+		// This dispatcher's table - use TableID: 1 to match mockDispatcher's TableSpan.TableID
 		primaryTableInfo := &common.TableInfo{
 			TableName: common.TableName{
 				Schema:  "source_db",
 				Table:   "orders",
-				TableID: 100,
+				TableID: 1,
 			},
 		}
 
@@ -1523,7 +1524,7 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 			TableName: common.TableName{
 				Schema:  "source_db",
 				Table:   "users",
-				TableID: 123,
+				TableID: 1,
 			},
 		}
 
@@ -1575,7 +1576,7 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 			TableName: common.TableName{
 				Schema:  "mydb",
 				Table:   "old_users",
-				TableID: 123,
+				TableID: 1,
 			},
 		}
 
@@ -1630,7 +1631,7 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 			TableName: common.TableName{
 				Schema:  "staging",
 				Table:   "events",
-				TableID: 456,
+				TableID: 1,
 			},
 		}
 
@@ -1657,5 +1658,79 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 		// Verify original was NOT mutated
 		require.Equal(t, "", originalTableInfo.TableName.TargetSchema)
 		require.Equal(t, "", originalTableInfo.TableName.TargetTable)
+	})
+
+	t.Run("CREATE TABLE LIKE DDL does not overwrite original table's tableInfo", func(t *testing.T) {
+		// This test verifies the fix for a bug where CREATE TABLE t_like LIKE t
+		// would cause the dispatcher for table 't' to incorrectly store t_like's
+		// tableInfo, leading to DMLs being written to the wrong table.
+		//
+		// The bug scenario:
+		// 1. CREATE TABLE t_like LIKE t adds the DDL to t's DDL history (for blocking)
+		// 2. When t's dispatcher processes this DDL, it would store t_like's TableInfo
+		// 3. Subsequent DMLs on t would use wrong tableInfo and go to t_like
+		//
+		// The fix: Check if DDL's tableInfo.TableID matches dispatcher's TableID
+		// before storing. If they don't match, skip the tableInfo update.
+
+		mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
+		mockDisp.router = router
+		mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) bool {
+			return false
+		}
+
+		stat := &dispatcherStat{
+			target:         mockDisp,
+			eventCollector: newTestEventCollector(localServerID),
+		}
+		stat.connState.setEventServiceID(remoteServerID)
+		stat.epoch.Store(10)
+		stat.lastEventSeq.Store(1)
+		stat.lastEventCommitTs.Store(50)
+
+		// Set up initial tableInfo for the original table 't' (tableID=1, which matches mockDispatcher)
+		originalTableInfo := &common.TableInfo{
+			TableName: common.TableName{
+				Schema:  "test",
+				Table:   "t",
+				TableID: 1, // This is the dispatcher's table
+			},
+		}
+		stat.tableInfo.Store(originalTableInfo)
+
+		// CREATE TABLE t_like LIKE t generates a DDL event where:
+		// - TableInfo is for the new table (t_like, tableID=999)
+		// - This DDL is added to t's DDL history for blocking purposes
+		newTableInfo := &common.TableInfo{
+			TableName: common.TableName{
+				Schema:  "test",
+				Table:   "t_like",
+				TableID: 999, // Different from dispatcher's tableID!
+			},
+		}
+
+		ddlEvent := &commonEvent.DDLEvent{
+			Version:    commonEvent.DDLEventVersion1,
+			FinishedTs: 100,
+			Epoch:      10,
+			Seq:        2,
+			TableInfo:  newTableInfo,
+		}
+
+		events := []dispatcher.DispatcherEvent{
+			{From: &remoteServerID, Event: ddlEvent},
+		}
+
+		stat.handleDataEvents(events...)
+
+		// Verify the stored tableInfo was NOT overwritten with t_like's tableInfo
+		storedTableInfo := stat.tableInfo.Load().(*common.TableInfo)
+		require.NotNil(t, storedTableInfo)
+		// Should still be the original table 't', not 't_like'
+		require.Equal(t, "t", storedTableInfo.TableName.Table)
+		require.Equal(t, int64(1), storedTableInfo.TableName.TableID)
+		// Should NOT be t_like
+		require.NotEqual(t, "t_like", storedTableInfo.TableName.Table)
+		require.NotEqual(t, int64(999), storedTableInfo.TableName.TableID)
 	})
 }
