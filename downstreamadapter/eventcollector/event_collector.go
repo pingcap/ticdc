@@ -113,6 +113,8 @@ type EventCollector struct {
 	dispatcherMap sync.Map // key: dispatcherID, value: dispatcherStat
 	changefeedMap sync.Map // key: changefeedID.GID, value: *changefeedStat
 
+	lastCongestionLogTime int64
+
 	mc messaging.MessageCenter
 
 	logCoordinatorClient *LogCoordinatorClient
@@ -600,6 +602,10 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 	// collect path-level available memory and total available memory for each changefeed
 	changefeedPathMemory := make(map[common.ChangeFeedID]map[common.DispatcherID]uint64)
 	changefeedTotalMemory := make(map[common.ChangeFeedID]uint64)
+	changefeedUsedMemory := make(map[common.ChangeFeedID]uint64)
+	changefeedMaxMemory := make(map[common.ChangeFeedID]uint64)
+	totalDispatchers := 0
+	dispatchersWithoutService := 0
 
 	// collect from main dynamic stream
 	for _, quota := range c.ds.GetMetrics().MemoryControl.AreaMemoryMetrics {
@@ -617,6 +623,8 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 		}
 		// store total available memory from AreaMemoryMetric
 		changefeedTotalMemory[cfID] = uint64(quota.AvailableMemory())
+		changefeedUsedMemory[cfID] = uint64(quota.MemoryUsage())
+		changefeedMaxMemory[cfID] = uint64(quota.MaxMemory())
 	}
 
 	// collect from redo dynamic stream and take minimum
@@ -643,6 +651,16 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 		} else {
 			changefeedTotalMemory[cfID] = uint64(quota.AvailableMemory())
 		}
+		if existing, exists := changefeedUsedMemory[cfID]; exists {
+			changefeedUsedMemory[cfID] = min(existing, uint64(quota.MemoryUsage()))
+		} else {
+			changefeedUsedMemory[cfID] = uint64(quota.MemoryUsage())
+		}
+		if existing, exists := changefeedMaxMemory[cfID]; exists {
+			changefeedMaxMemory[cfID] = min(existing, uint64(quota.MaxMemory()))
+		} else {
+			changefeedMaxMemory[cfID] = uint64(quota.MaxMemory())
+		}
 	}
 
 	if len(changefeedPathMemory) == 0 {
@@ -655,7 +673,9 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 	c.dispatcherMap.Range(func(k, v interface{}) bool {
 		stat := v.(*dispatcherStat)
 		eventServiceID := stat.connState.getEventServiceID()
+		totalDispatchers++
 		if eventServiceID == "" {
+			dispatchersWithoutService++
 			return true
 		}
 
@@ -678,8 +698,9 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 
 	// build congestion control messages for each node
 	result := make(map[node.ID]*event.CongestionControl)
+	changefeedsInMessages := 0
 	for nodeID, changefeedDispatchers := range nodeDispatcherMemory {
-		congestionControl := event.NewCongestionControl()
+		congestionControl := event.NewCongestionControlWithVersion(event.CongestionControlVersion2)
 
 		for changefeedID, dispatcherMemory := range changefeedDispatchers {
 			if len(dispatcherMemory) == 0 {
@@ -689,17 +710,33 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 			// get total available memory directly from AreaMemoryMetric
 			totalAvailable := uint64(changefeedTotalMemory[changefeedID])
 			if totalAvailable > 0 {
-				congestionControl.AddAvailableMemoryWithDispatchers(
+				congestionControl.AddAvailableMemoryWithDispatchersAndUsage(
 					changefeedID.ID(),
 					totalAvailable,
+					changefeedUsedMemory[changefeedID],
+					changefeedMaxMemory[changefeedID],
 					dispatcherMemory,
 				)
+				changefeedsInMessages++
 			}
 		}
 
 		if len(congestionControl.GetAvailables()) > 0 {
 			result[nodeID] = congestionControl
 		}
+	}
+
+	nowUnix := time.Now().Unix()
+	lastLog := atomic.LoadInt64(&c.lastCongestionLogTime)
+	if nowUnix-lastLog >= int64(time.Minute.Seconds()) &&
+		atomic.CompareAndSwapInt64(&c.lastCongestionLogTime, lastLog, nowUnix) {
+		log.Info("congestion control build summary",
+			zap.Int("dispatchers", totalDispatchers),
+			zap.Int("dispatchersWithoutService", dispatchersWithoutService),
+			zap.Int("changefeedsWithMetrics", len(changefeedPathMemory)),
+			zap.Int("changefeedsInMessages", changefeedsInMessages),
+			zap.Int("nodes", len(result)),
+		)
 	}
 
 	return result

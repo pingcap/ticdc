@@ -16,6 +16,14 @@ package metrics
 import "github.com/prometheus/client_golang/prometheus"
 
 var (
+	MaintainerSkipSyncPointCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "maintainer",
+			Name:      "skip_syncpoint_count",
+			Help:      "The number of skipped syncpoint events",
+		}, []string{getKeyspaceLabel(), "changefeed"})
+
 	MaintainerHandleEventDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
@@ -60,6 +68,7 @@ var (
 )
 
 func initMaintainerMetrics(registry *prometheus.Registry) {
+	registry.MustRegister(MaintainerSkipSyncPointCount)
 	registry.MustRegister(MaintainerHandleEventDuration)
 	registry.MustRegister(MaintainerEventChLenGauge)
 	registry.MustRegister(OperatorCount)

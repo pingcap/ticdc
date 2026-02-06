@@ -783,14 +783,19 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 				// 3. clear blockEventStatus(should be the old pending event, but clear the new one)
 				d.blockEventStatus.clear()
 			})
-			if action.Action == heartbeatpb.Action_Write {
+			switch action.Action {
+			case heartbeatpb.Action_Write:
 				actionCommitTs := action.CommitTs
 				actionIsSyncPoint := action.IsSyncPoint
 				d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
 					d.ExecuteBlockEventDDL(pendingEvent, actionCommitTs, actionIsSyncPoint)
 				})
 				return true
-			} else {
+			case heartbeatpb.Action_Pass, heartbeatpb.Action_Skip:
+				failpoint.Inject("BlockOrWaitBeforePass", nil)
+				d.PassBlockEventToSink(pendingEvent)
+				failpoint.Inject("BlockAfterPass", nil)
+			default:
 				failpoint.Inject("BlockOrWaitBeforePass", nil)
 				d.PassBlockEventToSink(pendingEvent)
 				failpoint.Inject("BlockAfterPass", nil)
@@ -801,6 +806,14 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 				log.Debug("pending event's commitTs is smaller than the action's commitTs, just ignore it",
 					zap.Uint64("pendingEventCommitTs", ts),
 					zap.Uint64("actionCommitTs", action.CommitTs),
+					zap.Stringer("dispatcher", d.id))
+				return false
+			}
+			if ok && action.CommitTs == ts {
+				log.Debug("action does not match pending event, ignore it",
+					zap.Uint64("pendingEventCommitTs", ts),
+					zap.Uint64("actionCommitTs", action.CommitTs),
+					zap.Bool("actionIsSyncPoint", action.IsSyncPoint),
 					zap.Stringer("dispatcher", d.id))
 				return false
 			}

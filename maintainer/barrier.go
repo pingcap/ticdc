@@ -22,7 +22,9 @@ import (
 	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -43,6 +45,11 @@ type Barrier struct {
 	operatorController *operator.Controller
 	splitTableEnabled  bool
 	mode               int64
+
+	syncPointSkipEnabled       atomic.Bool
+	syncPointSkipCheckpointLag atomic.Int64 // nanoseconds
+	syncPointInterval          atomic.Int64 // nanoseconds
+	maxSkippedSyncPointTs      atomic.Uint64
 }
 
 // NewBarrier create a new barrier for the changefeed
@@ -64,6 +71,107 @@ func NewBarrier(spanController *span.Controller,
 	return &barrier
 }
 
+func (b *Barrier) SetSyncPointSkipState(enabled bool, checkpointLag time.Duration, syncPointInterval time.Duration) {
+	b.syncPointSkipEnabled.Store(enabled)
+	b.syncPointSkipCheckpointLag.Store(int64(checkpointLag))
+	b.syncPointInterval.Store(int64(syncPointInterval))
+}
+
+func (b *Barrier) isSkippedSyncPointCommitTs(commitTs uint64) bool {
+	return commitTs > 0 && commitTs <= b.maxSkippedSyncPointTs.Load()
+}
+
+func (b *Barrier) recordSkippedSyncPoint(cfID common.ChangeFeedID, commitTs uint64) {
+	if commitTs == 0 {
+		return
+	}
+	for {
+		old := b.maxSkippedSyncPointTs.Load()
+		if commitTs <= old {
+			return
+		}
+		if b.maxSkippedSyncPointTs.CompareAndSwap(old, commitTs) {
+			break
+		}
+	}
+
+	checkpointLag := time.Duration(b.syncPointSkipCheckpointLag.Load())
+	syncPointInterval := time.Duration(b.syncPointInterval.Load())
+	threshold := 2 * syncPointInterval
+	metrics.MaintainerSkipSyncPointCount.WithLabelValues(cfID.Keyspace(), cfID.Name()).Inc()
+	log.Info("skip syncpoint",
+		zap.String("changefeed", cfID.Name()),
+		zap.String("keyspace", cfID.Keyspace()),
+		zap.Uint64("commitTs", commitTs),
+		zap.Duration("checkpointLag", checkpointLag),
+		zap.Duration("syncPointInterval", syncPointInterval),
+		zap.Duration("threshold", threshold),
+		zap.Int64("mode", b.mode),
+	)
+}
+
+func (b *Barrier) buildSkipSyncPointStatus(dispatcherID *heartbeatpb.DispatcherID, commitTs uint64) *heartbeatpb.DispatcherStatus {
+	return &heartbeatpb.DispatcherStatus{
+		InfluencedDispatchers: &heartbeatpb.InfluencedDispatchers{
+			InfluenceType: heartbeatpb.InfluenceType_Normal,
+			DispatcherIDs: []*heartbeatpb.DispatcherID{dispatcherID},
+		},
+		Action: &heartbeatpb.DispatcherAction{
+			Action:      heartbeatpb.Action_Skip,
+			CommitTs:    commitTs,
+			IsSyncPoint: true,
+		},
+		Ack: ackEvent(commitTs, true),
+	}
+}
+
+func (b *Barrier) resendSkipSyncPointActions() []*messaging.TargetMessage {
+	if !b.syncPointSkipEnabled.Load() && b.maxSkippedSyncPointTs.Load() == 0 {
+		return nil
+	}
+
+	cfID := b.spanController.GetChangefeedID()
+	var (
+		msgs      []*messaging.TargetMessage
+		statusMap = make(map[node.ID][]*heartbeatpb.DispatcherStatus)
+	)
+	for _, task := range b.spanController.GetAllTasks() {
+		if task == nil {
+			continue
+		}
+		state := task.GetBlockState()
+		if state == nil || !state.IsBlocked || !state.IsSyncPoint || state.BlockTs == 0 {
+			continue
+		}
+		if state.Stage != heartbeatpb.BlockStage_WAITING {
+			continue
+		}
+		if !b.syncPointSkipEnabled.Load() && !b.isSkippedSyncPointCommitTs(state.BlockTs) {
+			continue
+		}
+
+		nodeID := task.GetNodeID()
+		if nodeID == "" {
+			continue
+		}
+
+		statusMap[nodeID] = append(statusMap[nodeID], b.buildSkipSyncPointStatus(task.ID.ToPB(), state.BlockTs))
+		b.recordSkippedSyncPoint(cfID, state.BlockTs)
+	}
+
+	for nodeID, statuses := range statusMap {
+		msg := messaging.NewSingleTargetMessage(nodeID,
+			messaging.HeartbeatCollectorTopic,
+			&heartbeatpb.HeartBeatResponse{
+				ChangefeedID:       cfID.ToPB(),
+				DispatcherStatuses: statuses,
+				Mode:               b.mode,
+			})
+		msgs = append(msgs, msg)
+	}
+	return msgs
+}
+
 // HandleStatus handle the block status from dispatcher manager
 func (b *Barrier) HandleStatus(from node.ID,
 	request *heartbeatpb.BlockStatusRequest,
@@ -75,10 +183,14 @@ func (b *Barrier) HandleStatus(from node.ID,
 	actions := map[node.ID][]*heartbeatpb.DispatcherStatus{}
 	var dispatcherStatus []*heartbeatpb.DispatcherStatus
 	for _, status := range request.BlockStatuses {
+		if status.State == nil {
+			continue
+		}
+
 		// only receive block status from the replicating dispatcher
 		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
+		task := b.spanController.GetTaskByID(dispatcherID)
 		if dispatcherID != b.spanController.GetDDLDispatcherID() {
-			task := b.spanController.GetTaskByID(dispatcherID)
 			if task == nil {
 				log.Info("Get block status from unexisted dispatcher, ignore it", zap.String("changefeed", request.ChangefeedID.GetName()), zap.String("dispatcher", dispatcherID.String()), zap.Uint64("commitTs", status.State.BlockTs))
 				continue
@@ -88,6 +200,46 @@ func (b *Barrier) HandleStatus(from node.ID,
 					continue
 				}
 			}
+		}
+
+		if status.State.IsSyncPoint &&
+			status.State.Stage == heartbeatpb.BlockStage_DONE &&
+			(b.syncPointSkipEnabled.Load() || b.isSkippedSyncPointCommitTs(status.State.BlockTs)) {
+			// Ignore DONE statuses for skipped syncpoints. They are not tracked in blockedEvents.
+			if task != nil {
+				task.UpdateStatus(&heartbeatpb.TableSpanStatus{
+					ID:              status.ID,
+					CheckpointTs:    status.State.BlockTs - 1,
+					ComponentStatus: heartbeatpb.ComponentState_Working,
+					Mode:            status.Mode,
+				})
+				task.UpdateBlockState(*status.State)
+			}
+			continue
+		}
+
+		shouldSkipSyncPoint := status.State.IsSyncPoint &&
+			status.State.IsBlocked &&
+			status.State.BlockTs > 0 &&
+			(status.State.Stage == heartbeatpb.BlockStage_NONE ||
+				status.State.Stage == heartbeatpb.BlockStage_WAITING ||
+				status.State.Stage == heartbeatpb.BlockStage_WRITING) &&
+			(b.syncPointSkipEnabled.Load() || b.isSkippedSyncPointCommitTs(status.State.BlockTs))
+		if shouldSkipSyncPoint {
+			// Track progress in span controller (same as handleOneStatus would do).
+			if task != nil {
+				task.UpdateStatus(&heartbeatpb.TableSpanStatus{
+					ID:              status.ID,
+					CheckpointTs:    status.State.BlockTs - 1,
+					ComponentStatus: heartbeatpb.ComponentState_Working,
+					Mode:            status.Mode,
+				})
+				task.UpdateBlockState(*status.State)
+			}
+
+			actions[from] = append(actions[from], b.buildSkipSyncPointStatus(status.ID, status.State.BlockTs))
+			b.recordSkippedSyncPoint(common.NewChangefeedIDFromPB(request.ChangefeedID), status.State.BlockTs)
+			continue
 		}
 
 		// deal with block status, and check whether need to return action.
@@ -215,14 +367,24 @@ func (b *Barrier) handleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 func (b *Barrier) Resend() []*messaging.TargetMessage {
 	var msgs []*messaging.TargetMessage
 
+	msgs = append(msgs, b.resendSkipSyncPointActions()...)
+
 	eventList := make([]*BarrierEvent, 0)
+	var skipKeys []eventKey
 	b.blockedEvents.Range(func(key eventKey, barrierEvent *BarrierEvent) bool {
 		// todo: we can limit the number of messages to send in one round here
+		if barrierEvent != nil && barrierEvent.isSyncPoint && (b.syncPointSkipEnabled.Load() || b.isSkippedSyncPointCommitTs(barrierEvent.commitTs)) {
+			skipKeys = append(skipKeys, key)
+			return true
+		}
 		msgs = append(msgs, barrierEvent.resend(b.mode)...)
 
 		eventList = append(eventList, barrierEvent)
 		return true
 	})
+	for _, key := range skipKeys {
+		b.blockedEvents.Delete(key)
+	}
 
 	for _, event := range eventList {
 		if event != nil {
@@ -342,6 +504,7 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 				zap.Uint64("commitTs", blockState.BlockTs))
 			event.tableTriggerDispatcherRelated = true
 		}
+
 		if event.selected.Load() {
 			// the event already in the selected state, ignore the block event just sent ack
 			log.Debug("the block event already selected, ignore the block event",
