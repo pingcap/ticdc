@@ -84,13 +84,13 @@ func RewriteDDLQueryWithRouting(router *Router, ddl *commonEvent.DDLEvent, chang
 	p := parser.New()
 	stmt, err := p.ParseOneStmt(ddl.Query, "", "")
 	if err != nil {
-		return nil, errors.Errorf("failed to parse DDL query for routing: %v (query: %s)", err, ddl.Query)
+		return nil, errors.Annotatef(errors.Trace(err), "failed to parse DDL query for routing (query: %s)", ddl.Query)
 	}
 
 	// Fetch source tables from the DDL
 	sourceTables, err := FetchDDLTables(defaultSchema, stmt)
 	if err != nil {
-		return nil, errors.Errorf("failed to fetch tables from DDL for routing: %v (query: %s)", err, ddl.Query)
+		return nil, errors.Annotatef(errors.Trace(err), "failed to fetch tables from DDL for routing (query: %s)", ddl.Query)
 	}
 
 	if len(sourceTables) == 0 {
@@ -132,7 +132,7 @@ func RewriteDDLQueryWithRouting(router *Router, ddl *commonEvent.DDLEvent, chang
 	// Rewrite the DDL with target tables
 	newQuery, err := RenameDDLTable(stmt, targetTables)
 	if err != nil {
-		return nil, errors.Errorf("failed to rewrite DDL query with routing: %v (query: %s)", err, ddl.Query)
+		return nil, errors.Annotatef(errors.Trace(err), "failed to rewrite DDL query with routing (query: %s)", ddl.Query)
 	}
 
 	if newQuery != ddl.Query {

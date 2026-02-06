@@ -72,13 +72,6 @@ func (h *EventsHandler) Path(event dispatcher.DispatcherEvent) common.Dispatcher
 func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.DispatcherEvent) bool {
 	// add this log for debug some strange bug.
 	log.Debug("handle events", zap.Any("dispatcher", stat.target.GetId()), zap.Any("eventLen", len(events)))
-	// Debug routing: log all incoming events
-	if len(events) > 0 {
-		log.Info("EventsHandler.Handle: incoming events",
-			zap.Stringer("dispatcher", stat.target.GetId()),
-			zap.Int("eventLen", len(events)),
-			zap.String("firstEventType", commonEvent.TypeToString(events[0].GetType())))
-	}
 	if len(events) == 0 {
 		return false
 	}

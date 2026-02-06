@@ -258,7 +258,7 @@ var (
 		errors.RFCCodeText("CDC:ErrSinkInvalidConfig"),
 	)
 	ErrInvalidRoutingRule = errors.Normalize(
-		"invalid routing rule matcher %q: %s",
+		"invalid routing %s %q: %s",
 		errors.RFCCodeText("CDC:ErrInvalidRoutingRule"),
 	)
 	ErrInvalidSchemaRule = errors.Normalize(
