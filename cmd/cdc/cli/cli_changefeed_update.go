@@ -132,40 +132,38 @@ func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
 
 	changefeedConfig := o.getChangefeedConfig(cmd, newInfo)
 
-	tables, err := o.apiV2Client.Changefeeds().GetAllTables(ctx, &v2.VerifyTableConfig{
+	tables, err1 := o.apiV2Client.Changefeeds().GetAllTables(ctx, &v2.VerifyTableConfig{
 		ReplicaConfig: changefeedConfig.ReplicaConfig,
 		StartTs:       newInfo.CheckpointTs,
 	}, o.keyspace)
-	if err != nil {
-		return err
-	}
-
-	ignoreIneligibleTables := false
-	if len(tables.IneligibleTables) != 0 {
-		if putil.GetOrZero(newInfo.Config.ForceReplicate) {
-			cmd.Printf("[WARN] Force to replicate some ineligible tables, "+
-				"these tables do not have a primary key or a not-null unique key: %#v\n"+
-				"[WARN] This may cause data redundancy, "+
-				"please refer to the official documentation for details.\n",
-				tables.IneligibleTables)
-		} else {
-			cmd.Printf("[WARN] Some tables are not eligible to replicate, "+
-				"because they do not have a primary key or a not-null unique key: %#v\n",
-				tables.IneligibleTables)
-			if !o.commonChangefeedOptions.noConfirm {
-				ignoreIneligibleTables, err = confirmIgnoreIneligibleTables(cmd)
-				if err != nil {
-					return err
+	if err1 == nil {
+		ignoreIneligibleTables := false
+		if len(tables.IneligibleTables) != 0 {
+			if putil.GetOrZero(newInfo.Config.ForceReplicate) {
+				cmd.Printf("[WARN] Force to replicate some ineligible tables, "+
+					"these tables do not have a primary key or a not-null unique key: %#v\n"+
+					"[WARN] This may cause data redundancy, "+
+					"please refer to the official documentation for details.\n",
+					tables.IneligibleTables)
+			} else {
+				cmd.Printf("[WARN] Some tables are not eligible to replicate, "+
+					"because they do not have a primary key or a not-null unique key: %#v\n",
+					tables.IneligibleTables)
+				if !o.commonChangefeedOptions.noConfirm {
+					ignoreIneligibleTables, err = confirmIgnoreIneligibleTables(cmd)
+					if err != nil {
+						return err
+					}
 				}
 			}
 		}
-	}
 
-	if o.commonChangefeedOptions.noConfirm {
-		ignoreIneligibleTables = true
-	}
+		if o.commonChangefeedOptions.noConfirm {
+			ignoreIneligibleTables = true
+		}
 
-	changefeedConfig.ReplicaConfig.IgnoreIneligibleTable = putil.AddressOf(ignoreIneligibleTables)
+		changefeedConfig.ReplicaConfig.IgnoreIneligibleTable = putil.AddressOf(ignoreIneligibleTables)
+	}
 
 	info, err := o.apiV2Client.Changefeeds().Update(ctx, changefeedConfig, o.keyspace, o.changefeedID)
 	if err != nil {
@@ -177,7 +175,7 @@ func (o *updateChangefeedOptions) run(cmd *cobra.Command) error {
 	}
 
 	cmd.Printf("Update changefeed config successfully! "+
-		"\nID: %s\nInfo: %s\nIneligibleTablesCount: %d\nEligibleTablesCount: %d\nAllTablesCount: %d\n", info.ID, infoStr, len(tables.IneligibleTables), len(tables.EligibleTables), len(tables.AllTables))
+		"\nID: %s\nInfo: %s\nIneligibleTablesCount: %d\nEligibleTablesCount: %d\nAllTablesCount: %d\nWarning: %s\n", info.ID, infoStr, len(tables.IneligibleTables), len(tables.EligibleTables), len(tables.AllTables), err1)
 	if o.verbose {
 		cmd.Printf("EligibleTables: %s\n", formatTableNames(tables.EligibleTables))
 		cmd.Printf("IneligibleTables: %s\n", formatTableNames(tables.IneligibleTables))
