@@ -1130,6 +1130,7 @@ func (e *errCache) dispatch(ctx context.Context) error {
 			return
 		}
 		errInfo := e.cache[0]
+		clear(e.cache[:1])
 		e.cache = e.cache[1:]
 		e.Unlock()
 		select {
