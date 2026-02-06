@@ -1,0 +1,141 @@
+name: Iceberg Integration Test (Light)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches:
+      - master
+      - "release-[0-9].[0-9]*"
+    paths:
+      - downstreamadapter/sink/iceberg/**
+      - pkg/sink/iceberg/**
+      - cmd/iceberg-bootstrap/**
+      - cmd/iceberg-maintenance/**
+      - tests/integration_tests/iceberg_*/**
+      - tests/integration_tests/_utils/iceberg_spark_sql_scalar
+      - tests/integration_tests/_utils/start_tidb_cluster_impl
+      - tests/integration_tests/run_light_it_in_ci.sh
+      - Makefile
+      - .github/workflows/integration_test_iceberg.yaml
+
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  iceberg_light_it:
+    # Only run CI when PR is not draft (workflow_dispatch doesn't have pull_request payload).
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [G00, G01]
+    name: Iceberg Light IT ${{ matrix.group }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v5
+
+      - name: Setup Go environment
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Cache Tools
+        id: cache-tools
+        uses: actions/cache@v5
+        with:
+          path: tools/bin
+          key: ubuntu-latest-ticdc-tools-${{ hashFiles('tools/check/go.sum') }}
+
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            curl \
+            lsof \
+            mariadb-client \
+            psmisc \
+            unzip \
+            wget
+
+      - name: Install OCI download tools
+        run: |
+          set -euo pipefail
+          ORAS_VERSION="1.3.0"
+          YQ_VERSION="4.52.1"
+          curl -fsSL "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz" -o /tmp/oras.tar.gz
+          sudo tar -xzf /tmp/oras.tar.gz -C /usr/local/bin oras
+          sudo chmod +x /usr/local/bin/oras
+          curl -fsSL "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64" -o /tmp/yq
+          sudo mv /tmp/yq /usr/local/bin/yq
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Prepare integration test third-party binaries (OCI)
+        env:
+          OCI_ARTIFACT_HOST: us-docker.pkg.dev/pingcap-testing-account/hub
+          OCI_TAG_PD: v8.5.5
+          OCI_TAG_TIDB: v8.5.5
+          OCI_TAG_TIKV: v8.5.5
+          OCI_TAG_TIFLASH: v8.5.5
+          OCI_TAG_SYNC_DIFF_INSPECTOR: master
+          OCI_TAG_MINIO: RELEASE.2025-07-23T15-54-02Z
+          OCI_TAG_ETCD: v3.5.15
+          OCI_TAG_YCSB: v1.0.3
+          OCI_TAG_SCHEMA_REGISTRY: latest
+        run: |
+          set -euo pipefail
+          script="${RUNNER_TEMP}/download_pingcap_oci_artifact.sh"
+          curl -fsSL "https://raw.githubusercontent.com/PingCAP-QE/ci/main/scripts/artifacts/download_pingcap_oci_artifact.sh" -o "$script"
+          chmod +x "$script"
+          python - "$script" <<'PY'
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          text = path.read_text()
+          needle = 'mv -v "$tarball_file" "$file_path"'
+          replacement = 'if [[ "$tarball_file" != "$file_path" ]]; then mv -v "$tarball_file" "$file_path"; fi'
+          if needle not in text:
+              raise SystemExit("failed to patch download script: target not found")
+          path.write_text(text.replace(needle, replacement))
+          PY
+          mkdir -p bin
+          pushd bin
+          "$script" \
+            --pd="${OCI_TAG_PD}" \
+            --pd-ctl="${OCI_TAG_PD}" \
+            --tikv="${OCI_TAG_TIKV}" \
+            --tidb="${OCI_TAG_TIDB}" \
+            --tiflash="${OCI_TAG_TIFLASH}" \
+            --sync-diff-inspector="${OCI_TAG_SYNC_DIFF_INSPECTOR}" \
+            --minio="${OCI_TAG_MINIO}" \
+            --etcdctl="${OCI_TAG_ETCD}" \
+            --ycsb="${OCI_TAG_YCSB}" \
+            --schema-registry="${OCI_TAG_SCHEMA_REGISTRY}"
+          ls -d tiflash
+          mv tiflash tiflash-dir
+          mv tiflash-dir/* .
+          rm -rf tiflash-dir
+          popd
+          make check_third_party_binary
+
+      - name: Build TiCDC binaries for integration tests
+        run: |
+          make check_failpoint_ctl
+          make integration_test_build_fast
+
+      - name: Run iceberg integration tests
+        env:
+          # Iceberg tests don't require TiFlash; skipping reduces CI resource usage and flakiness.
+          SKIP_TIFLASH: "1"
+        run: |
+          tests/integration_tests/run_light_it_in_ci.sh iceberg "${{ matrix.group }}"
+
+      - name: Upload test logs
+        if: always()
+        uses: ./.github/actions/upload-test-logs
+        with:
+          log-name: iceberg-light-it-${{ matrix.group }}
