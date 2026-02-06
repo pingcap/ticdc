@@ -29,7 +29,7 @@ import (
 	pdgc "github.com/tikv/pd/client/clients/gc"
 )
 
-type mockGCStatesClient struct {
+type mockGCStatesClientForNextGen struct {
 	setCalls int
 	setArgs  struct {
 		barrierID string
@@ -39,7 +39,7 @@ type mockGCStatesClient struct {
 	setErr error
 }
 
-func (m *mockGCStatesClient) SetGCBarrier(ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration) (*pdgc.GCBarrierInfo, error) {
+func (m *mockGCStatesClientForNextGen) SetGCBarrier(ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration) (*pdgc.GCBarrierInfo, error) {
 	m.setCalls++
 	m.setArgs.barrierID = barrierID
 	m.setArgs.barrierTS = barrierTS
@@ -47,11 +47,11 @@ func (m *mockGCStatesClient) SetGCBarrier(ctx context.Context, barrierID string,
 	return nil, m.setErr
 }
 
-func (m *mockGCStatesClient) DeleteGCBarrier(ctx context.Context, barrierID string) (*pdgc.GCBarrierInfo, error) {
+func (m *mockGCStatesClientForNextGen) DeleteGCBarrier(ctx context.Context, barrierID string) (*pdgc.GCBarrierInfo, error) {
 	return nil, nil
 }
 
-func (m *mockGCStatesClient) GetGCState(ctx context.Context) (pdgc.GCState, error) {
+func (m *mockGCStatesClientForNextGen) GetGCState(ctx context.Context) (pdgc.GCState, error) {
 	return pdgc.GCState{}, nil
 }
 
@@ -67,7 +67,7 @@ func (m *mockPDClientWithGCStates) GetGCStatesClient(keyspaceID uint32) pdgc.GCS
 }
 
 func TestEnsureChangefeedStartTsSafetyNextGenSetsGCBarrier(t *testing.T) {
-	mockGCClient := &mockGCStatesClient{}
+	mockGCClient := &mockGCStatesClientForNextGen{}
 	mockPDClient := &mockPDClientWithGCStates{gcStatesClient: mockGCClient}
 
 	err := ensureChangefeedStartTsSafetyNextGen(
@@ -87,7 +87,7 @@ func TestEnsureChangefeedStartTsSafetyNextGenSetsGCBarrier(t *testing.T) {
 }
 
 func TestEnsureChangefeedStartTsSafetyNextGenErrorIsWrapped(t *testing.T) {
-	mockGCClient := &mockGCStatesClient{
+	mockGCClient := &mockGCStatesClientForNextGen{
 		setErr: fmt.Errorf("ErrGCBarrierTSBehindTxnSafePoint: %w", context.Canceled),
 	}
 	mockPDClient := &mockPDClientWithGCStates{gcStatesClient: mockGCClient}

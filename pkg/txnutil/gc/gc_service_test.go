@@ -50,7 +50,7 @@ func TestCheckSafetyOfStartTs(t *testing.T) {
 			common.NewChangeFeedIDWithName("changefeed1", "default"), TTL, 50)
 		require.Equal(t,
 			"[CDC:ErrStartTsBeforeGC]fail to create or maintain changefeed "+
-				"because start-ts 50 is earlier than or equal to GC safepoint at 60", err.Error())
+				"because start-ts 50 is earlier than the GC safepoint at 60", err.Error())
 		pdCli.UpdateServiceGCSafePoint(ctx, "service2", 10, 80) //nolint:errcheck
 		pdCli.UpdateServiceGCSafePoint(ctx, "service3", 10, 70) //nolint:errcheck
 		err = EnsureChangefeedStartTsSafety(ctx, pdCli,
@@ -93,8 +93,10 @@ func TestCheckSafetyOfStartTs(t *testing.T) {
 			0,
 			common.NewChangeFeedIDWithName("changefeed2", "default"), TTL, 65)
 		require.NotNil(t, err)
-		require.Equal(t, err.Error(),
-			"[CDC:ErrReachMaxTry]reach maximum try: 9, error: not pd leader: not pd leader")
+		require.Equal(t,
+			"[CDC:ErrUpdateServiceSafepointFailed]updating service safepoint failed: "+
+				"[CDC:ErrReachMaxTry]reach maximum try: 9, error: not pd leader: not pd leader",
+			err.Error())
 
 		pdCli.retryThreshold = 3
 		pdCli.retryCount = 0
@@ -102,9 +104,10 @@ func TestCheckSafetyOfStartTs(t *testing.T) {
 			"ticdc-creating-",
 			0,
 			common.NewChangeFeedIDWithName("changefeed1", "default"), TTL, 50)
-		require.Equal(t, err.Error(),
+		require.Equal(t,
 			"[CDC:ErrStartTsBeforeGC]fail to create or maintain changefeed "+
-				"because start-ts 50 is earlier than or equal to GC safepoint at 60")
+				"because start-ts 50 is earlier than the GC safepoint at 60",
+			err.Error())
 		return
 	}
 

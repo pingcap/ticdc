@@ -282,7 +282,7 @@ func (c *coordinator) handleStateChange(
 		c.controller.updateChangefeedEpoch(ctx, changefeedID)
 		c.controller.moveChangefeedToSchedulingQueue(changefeedID, false, false)
 	case config.StateFailed, config.StateFinished:
-		c.controller.operatorController.StopChangefeed(ctx, event.changefeedID, false)
+		c.controller.operatorController.StopChangefeed(ctx, changefeedID, false)
 	default:
 	}
 	return nil
@@ -427,7 +427,7 @@ func (c *coordinator) sendMessages(msgs []*messaging.TargetMessage) {
 	}
 }
 
-func (c *coordinator) updateGlobalGcSafepoint(ctx context.Context, force bool) error {
+func (c *coordinator) updateGlobalGcSafepoint(ctx context.Context) error {
 	minCheckpointTs := c.controller.calculateGlobalGCSafepoint()
 	// even though there is no changefeeds, still update the service-gc-safepoint
 	if minCheckpointTs == math.MaxUint64 {
@@ -449,9 +449,7 @@ func (c *coordinator) updateGlobalGcSafepoint(ctx context.Context, force bool) e
 	return errors.Trace(err)
 }
 
-func (c *coordinator) updateAllKeyspaceGcBarriers(
-	ctx context.Context, force bool,
-) error {
+func (c *coordinator) updateAllKeyspaceGcBarriers(ctx context.Context) error {
 	barrierMap := c.controller.calculateKeyspaceGCBarrier()
 
 	var retErr error
@@ -477,16 +475,16 @@ func (c *coordinator) updateKeyspaceGcBarrier(
 // updateGCSafepoint update the gc safepoint
 // On next gen, we should update the gc barrier for all keyspaces
 // Otherwise we should update the global gc safepoint
-func (c *coordinator) updateGCSafepoint(ctx context.Context, force bool) error {
+func (c *coordinator) updateGCSafepoint(ctx context.Context) error {
 	// During bootstrap, `changefeedDB` can be empty or partially populated. Updating gc safepoint at this time may
 	// incorrectly advance the TiCDC service gc safepoint and cause snapshot loss for existing changefeeds.
 	if !c.controller.initialized.Load() {
-		log.Warn("skip update gc safepoint because coordinator is not initialized yet", zap.Bool("force", force))
+		log.Warn("skip update gc safepoint because coordinator is not initialized yet")
 		return nil
 	}
 
 	if kerneltype.IsNextGen() {
-		return c.updateAllKeyspaceGcBarriers(ctx, force)
+		return c.updateAllKeyspaceGcBarriers(ctx)
 	}
-	return c.updateGlobalGcSafepoint(ctx, force)
+	return c.updateGlobalGcSafepoint(ctx)
 }
