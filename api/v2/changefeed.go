@@ -176,6 +176,19 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
+	// do not shadow err after this point
+	pdClient := h.server.GetPdClient()
+	tmpInfo := &config.ChangeFeedInfo{
+		ChangefeedID: changefeedID,
+		SinkURI:      cfg.SinkURI,
+		Config:       replicaCfg,
+	}
+	err = check.ValidateActiveActiveTSOIndexes(ctx, pdClient, tmpInfo.ToChangefeedConfig())
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
 	// Ensure the start ts is valid in the next 3600 seconds, aka 1 hour
 	const ensureTTL = 60 * 60
 	createGcServiceID := h.server.GetEtcdClient().GetEnsureGCServiceID(gc.EnsureGCServiceCreating)
@@ -194,8 +207,6 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
-	// do not shadow err after this point
-	pdClient := h.server.GetPdClient()
 	defer func() {
 		if err == nil {
 			return
@@ -759,6 +770,12 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		return
 	}
 
+	err = check.ValidateActiveActiveTSOIndexes(ctx, h.server.GetPdClient(), cfInfo.ToChangefeedConfig())
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
 	// do not shadow err after this point
 	resumeGcServiceID := h.server.GetEtcdClient().GetEnsureGCServiceID(gc.EnsureGCServiceResuming)
 	if err = verifyResumeChangefeedConfig(
@@ -1005,6 +1022,12 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		_ = c.Error(errors.ErrSameUpstreamDownstream.GenWithStack(
 			"TiCDC does not support updating a changefeed with the same TiDB cluster " +
 				"as both the source and the target for the changefeed."))
+		return
+	}
+
+	err = check.ValidateActiveActiveTSOIndexes(ctx, h.server.GetPdClient(), oldCfInfo.ToChangefeedConfig())
+	if err != nil {
+		_ = c.Error(err)
 		return
 	}
 
