@@ -14,6 +14,7 @@
 package schemastore
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -1882,21 +1883,29 @@ func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter
 			log.Error("parse create table ddl failed",
 				zap.String("query", rawEvent.Query),
 				zap.Error(err))
-		} else {
-			if createStmt, ok := stmt.(*ast.CreateTableStmt); ok && createStmt.ReferTable != nil {
-				refTable := createStmt.ReferTable.Name.O
-				refSchema := createStmt.ReferTable.Schema.O
-				if refSchema == "" {
-					refSchema = rawEvent.SchemaName
-				}
-				ddlEvent.BlockedTableNames = []commonEvent.SchemaTableName{
-					{
-						SchemaName: refSchema,
-						TableName:  refTable,
-					},
-				}
+
+			// ignore the syntax error caused by `ACTIVE ACTIVE or SOFTDELETE` Related syntax
+			if errors.Is(err, parser.ErrSyntax) && (strings.Contains(rawEvent.Query, "ACTIVE ACTIVE") || strings.Contains(rawEvent.Query, "SOFTDELETE")) {
+				return ddlEvent, true, nil
+			} else {
+				return ddlEvent, false, err
 			}
 		}
+
+		if createStmt, ok := stmt.(*ast.CreateTableStmt); ok && createStmt.ReferTable != nil {
+			refTable := createStmt.ReferTable.Name.O
+			refSchema := createStmt.ReferTable.Schema.O
+			if refSchema == "" {
+				refSchema = rawEvent.SchemaName
+			}
+			ddlEvent.BlockedTableNames = []commonEvent.SchemaTableName{
+				{
+					SchemaName: refSchema,
+					TableName:  refTable,
+				},
+			}
+		}
+
 	}
 	return ddlEvent, true, err
 }
