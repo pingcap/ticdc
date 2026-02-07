@@ -202,7 +202,7 @@ func buildFranzSaslMechanism(ctx context.Context, o *options) (sasl.Mechanism, e
 			return oauth.Auth{Token: token.AccessToken}, nil
 		}), nil
 	case security.GSSAPIMechanism:
-		return nil, errors.ErrKafkaInvalidConfig.GenWithStack("sasl gssapi is not supported by franz client")
+		return buildFranzGSSAPIMechanism(o.SASL.GSSAPI)
 	default:
 		return nil, errors.ErrKafkaInvalidConfig.GenWithStack("unsupported sasl mechanism %s", o.SASL.SASLMechanism)
 	}
