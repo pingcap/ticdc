@@ -39,8 +39,9 @@ func newFranzAdminClient(
 	ctx context.Context,
 	changefeedID common.ChangeFeedID,
 	o *options,
+	hook kgo.Hook,
 ) (ClusterAdminClient, error) {
-	baseOpts, err := buildFranzBaseOptions(ctx, o)
+	baseOpts, err := buildFranzBaseOptions(ctx, o, hook)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -278,4 +279,3 @@ func (a *franzAdminClient) Close() {
 		a.admin.Close()
 	}
 }
-

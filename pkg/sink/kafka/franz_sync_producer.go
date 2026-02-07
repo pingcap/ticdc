@@ -41,8 +41,9 @@ func newFranzSyncProducer(
 	ctx context.Context,
 	changefeedID commonType.ChangeFeedID,
 	o *options,
+	hook kgo.Hook,
 ) (SyncProducer, error) {
-	baseOpts, err := buildFranzBaseOptions(ctx, o)
+	baseOpts, err := buildFranzBaseOptions(ctx, o, hook)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}

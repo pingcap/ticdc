@@ -38,6 +38,7 @@ import (
 type franzFactory struct {
 	changefeedID common.ChangeFeedID
 	option       *options
+	metricsHook  *franzMetricsHook
 }
 
 // NewFranzFactory constructs a Factory with franz-go implementation.
@@ -46,7 +47,7 @@ func NewFranzFactory(
 	o *options,
 	changefeedID common.ChangeFeedID,
 ) (Factory, error) {
-	admin, err := newFranzAdminClient(ctx, changefeedID, o)
+	admin, err := newFranzAdminClient(ctx, changefeedID, o, nil)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -56,14 +57,17 @@ func NewFranzFactory(
 		return nil, errors.Trace(err)
 	}
 
+	metricsHook := newFranzMetricsHook()
+
 	return &franzFactory{
 		changefeedID: changefeedID,
 		option:       o,
+		metricsHook:  metricsHook,
 	}, nil
 }
 
 func (f *franzFactory) AdminClient(ctx context.Context) (ClusterAdminClient, error) {
-	admin, err := newFranzAdminClient(ctx, f.changefeedID, f.option)
+	admin, err := newFranzAdminClient(ctx, f.changefeedID, f.option, f.metricsHook)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
@@ -71,7 +75,7 @@ func (f *franzFactory) AdminClient(ctx context.Context) (ClusterAdminClient, err
 }
 
 func (f *franzFactory) SyncProducer(ctx context.Context) (SyncProducer, error) {
-	producer, err := newFranzSyncProducer(ctx, f.changefeedID, f.option)
+	producer, err := newFranzSyncProducer(ctx, f.changefeedID, f.option, f.metricsHook)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
@@ -79,7 +83,7 @@ func (f *franzFactory) SyncProducer(ctx context.Context) (SyncProducer, error) {
 }
 
 func (f *franzFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error) {
-	producer, err := newFranzAsyncProducer(ctx, f.changefeedID, f.option)
+	producer, err := newFranzAsyncProducer(ctx, f.changefeedID, f.option, f.metricsHook)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
@@ -87,7 +91,10 @@ func (f *franzFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error)
 }
 
 func (f *franzFactory) MetricsCollector(_ ClusterAdminClient) MetricsCollector {
-	return &noopMetricsCollector{}
+	return &franzMetricsCollector{
+		changefeedID: f.changefeedID,
+		hook:         f.metricsHook,
+	}
 }
 
 type noopMetricsCollector struct{}
@@ -97,6 +104,7 @@ func (m *noopMetricsCollector) Run(_ context.Context) {}
 func buildFranzBaseOptions(
 	ctx context.Context,
 	o *options,
+	hook kgo.Hook,
 ) ([]kgo.Opt, error) {
 	timeoutOverhead := o.ReadTimeout
 	if o.WriteTimeout > timeoutOverhead {
@@ -112,6 +120,9 @@ func buildFranzBaseOptions(
 		kgo.ClientID(o.ClientID),
 		kgo.DialTimeout(o.DialTimeout),
 		kgo.RequestTimeoutOverhead(timeoutOverhead),
+	}
+	if hook != nil {
+		opts = append(opts, kgo.WithHooks(hook))
 	}
 
 	if o.IsAssignedVersion {

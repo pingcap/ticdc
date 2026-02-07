@@ -41,8 +41,9 @@ func newFranzAsyncProducer(
 	ctx context.Context,
 	changefeedID commonType.ChangeFeedID,
 	o *options,
+	hook kgo.Hook,
 ) (AsyncProducer, error) {
-	baseOpts, err := buildFranzBaseOptions(ctx, o)
+	baseOpts, err := buildFranzBaseOptions(ctx, o, hook)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -163,4 +164,3 @@ func (p *franzAsyncProducer) AsyncRunCallback(ctx context.Context) error {
 		}
 	}
 }
-
