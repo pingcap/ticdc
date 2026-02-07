@@ -256,6 +256,134 @@ func (z *InfluencedTables) Msgsize() (s int) {
 }
 
 // DecodeMsg implements msgp.Decodable
+func (z *SchemaTableName) DecodeMsg(dc *msgp.Reader) (err error) {
+	var field []byte
+	_ = field
+	var zb0001 uint32
+	zb0001, err = dc.ReadMapHeader()
+	if err != nil {
+		err = msgp.WrapError(err)
+		return
+	}
+	for zb0001 > 0 {
+		zb0001--
+		field, err = dc.ReadMapKeyPtr()
+		if err != nil {
+			err = msgp.WrapError(err)
+			return
+		}
+		switch msgp.UnsafeString(field) {
+		case "schema-name":
+			z.SchemaName, err = dc.ReadString()
+			if err != nil {
+				err = msgp.WrapError(err, "SchemaName")
+				return
+			}
+		case "table-name":
+			z.TableName, err = dc.ReadString()
+			if err != nil {
+				err = msgp.WrapError(err, "TableName")
+				return
+			}
+		default:
+			err = dc.Skip()
+			if err != nil {
+				err = msgp.WrapError(err)
+				return
+			}
+		}
+	}
+	return
+}
+
+// EncodeMsg implements msgp.Encodable
+func (z SchemaTableName) EncodeMsg(en *msgp.Writer) (err error) {
+	// map header, size 2
+	// write "schema-name"
+	err = en.Append(0x82, 0xab, 0x73, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x2d, 0x6e, 0x61, 0x6d, 0x65)
+	if err != nil {
+		return
+	}
+	err = en.WriteString(z.SchemaName)
+	if err != nil {
+		err = msgp.WrapError(err, "SchemaName")
+		return
+	}
+	// write "table-name"
+	err = en.Append(0xaa, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x2d, 0x6e, 0x61, 0x6d, 0x65)
+	if err != nil {
+		return
+	}
+	err = en.WriteString(z.TableName)
+	if err != nil {
+		err = msgp.WrapError(err, "TableName")
+		return
+	}
+	return
+}
+
+// MarshalMsg implements msgp.Marshaler
+func (z SchemaTableName) MarshalMsg(b []byte) (o []byte, err error) {
+	o = msgp.Require(b, z.Msgsize())
+	// map header, size 2
+	// string "schema-name"
+	o = append(o, 0x82, 0xab, 0x73, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x2d, 0x6e, 0x61, 0x6d, 0x65)
+	o = msgp.AppendString(o, z.SchemaName)
+	// string "table-name"
+	o = append(o, 0xaa, 0x74, 0x61, 0x62, 0x6c, 0x65, 0x2d, 0x6e, 0x61, 0x6d, 0x65)
+	o = msgp.AppendString(o, z.TableName)
+	return
+}
+
+// UnmarshalMsg implements msgp.Unmarshaler
+func (z *SchemaTableName) UnmarshalMsg(bts []byte) (o []byte, err error) {
+	var field []byte
+	_ = field
+	var zb0001 uint32
+	zb0001, bts, err = msgp.ReadMapHeaderBytes(bts)
+	if err != nil {
+		err = msgp.WrapError(err)
+		return
+	}
+	for zb0001 > 0 {
+		zb0001--
+		field, bts, err = msgp.ReadMapKeyZC(bts)
+		if err != nil {
+			err = msgp.WrapError(err)
+			return
+		}
+		switch msgp.UnsafeString(field) {
+		case "schema-name":
+			z.SchemaName, bts, err = msgp.ReadStringBytes(bts)
+			if err != nil {
+				err = msgp.WrapError(err, "SchemaName")
+				return
+			}
+		case "table-name":
+			z.TableName, bts, err = msgp.ReadStringBytes(bts)
+			if err != nil {
+				err = msgp.WrapError(err, "TableName")
+				return
+			}
+		default:
+			bts, err = msgp.Skip(bts)
+			if err != nil {
+				err = msgp.WrapError(err)
+				return
+			}
+		}
+	}
+	o = bts
+	return
+}
+
+// Msgsize returns an upper bound estimate of the number of bytes occupied by the serialized message
+func (z SchemaTableName) Msgsize() (s int) {
+	s = 1 + 12 + msgp.StringPrefixSize + len(z.SchemaName) + 11 + msgp.StringPrefixSize + len(z.TableName)
+	return
+}
+
+// DecodeMsg implements msgp.Decodable
 func (z *Table) DecodeMsg(dc *msgp.Reader) (err error) {
 	var field []byte
 	_ = field

@@ -577,6 +577,99 @@ func TestGetOrSetColumnSchema_SharedSchema(t *testing.T) {
 	require.NotEqual(t, columnSchema1.Digest, columnSchema3.Digest, "Digest should be different for tables with different schema")
 }
 
+func TestGetOrSetColumnSchema_DifferentHandleFlags(t *testing.T) {
+	storage := &SharedColumnSchemaStorage{
+		m: make(map[Digest][]ColumnSchemaWithCount),
+	}
+
+	idCol := newColumnInfo(1, "id", mysql.TypeVarchar, mysql.PriKeyFlag|mysql.NotNullFlag)
+	idCol.Offset = 0
+	idCol.FieldType.SetFlen(255)
+	idCol.FieldType.SetCharset("utf8mb4")
+	idCol.FieldType.SetCollate("utf8mb4_bin")
+
+	indices := []*model.IndexInfo{
+		{
+			ID:      1,
+			Name:    ast.NewCIStr("PRIMARY"),
+			Primary: true,
+			Unique:  true,
+			State:   model.StatePublic,
+			Columns: []*model.IndexColumn{
+				{
+					Name:   ast.NewCIStr("id"),
+					Offset: 0,
+				},
+			},
+		},
+	}
+
+	commonHandleTable := &model.TableInfo{
+		ID:             1,
+		Name:           ast.NewCIStr("t1"),
+		PKIsHandle:     false,
+		IsCommonHandle: true,
+		Columns:        []*model.ColumnInfo{idCol},
+		Indices:        indices,
+	}
+
+	nonCommonHandleTable := &model.TableInfo{
+		ID:             2,
+		Name:           ast.NewCIStr("t2"),
+		PKIsHandle:     false,
+		IsCommonHandle: false,
+		Columns:        []*model.ColumnInfo{idCol},
+		Indices:        indices,
+	}
+
+	commonSchema := storage.GetOrSetColumnSchema(commonHandleTable)
+	nonCommonSchema := storage.GetOrSetColumnSchema(nonCommonHandleTable)
+
+	require.NotSame(t, commonSchema, nonCommonSchema, "Tables with different handle flags should not share columnSchema")
+	require.NotEqual(t, commonSchema.Digest, nonCommonSchema.Digest, "Digest should differ when handle flags differ")
+	require.True(t, commonSchema.IsCommonHandle)
+	require.False(t, nonCommonSchema.IsCommonHandle)
+}
+
+func TestGetOrSetColumnSchema_DifferentIndexState(t *testing.T) {
+	storage := &SharedColumnSchemaStorage{
+		m: make(map[Digest][]ColumnSchemaWithCount),
+	}
+
+	idCol := newColumnInfo(1, "id", mysql.TypeLong, mysql.PriKeyFlag|mysql.NotNullFlag)
+	idCol.Offset = 0
+
+	buildTable := func(indexState model.SchemaState) *model.TableInfo {
+		return &model.TableInfo{
+			ID:         1,
+			Name:       ast.NewCIStr("t"),
+			PKIsHandle: true,
+			Columns:    []*model.ColumnInfo{idCol},
+			Indices: []*model.IndexInfo{
+				{
+					ID:      1,
+					Name:    ast.NewCIStr("PRIMARY"),
+					Primary: true,
+					Unique:  true,
+					State:   indexState,
+					Columns: []*model.IndexColumn{
+						{
+							Name:   ast.NewCIStr("id"),
+							Offset: 0,
+						},
+					},
+				},
+			},
+		}
+	}
+
+	publicSchema := storage.GetOrSetColumnSchema(buildTable(model.StatePublic))
+	writeOnlySchema := storage.GetOrSetColumnSchema(buildTable(model.StateWriteOnly))
+
+	require.NotSame(t, publicSchema, writeOnlySchema, "Tables with different index state should not share columnSchema")
+	require.NotEqual(t, publicSchema.Digest, writeOnlySchema.Digest, "Digest should differ when index state differs")
+}
+
 func TestGetOrSetColumnSchema_SameColumnsAndIndices_ChecksAdditionalColumnAttrs(t *testing.T) {
 	tests := []struct {
 		name             string

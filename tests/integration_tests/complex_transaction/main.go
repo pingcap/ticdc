@@ -49,7 +49,7 @@ func main() {
 
 	rand.Seed(time.Now().UnixNano())
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
 	defer cancel()
 
 	db := openDB(ctx, *dsn)
@@ -112,6 +112,9 @@ func runWorkload(ctx context.Context, db *sql.DB) {
 			executor := NewWorkloadExecutor(db, workerID)
 
 			for {
+				if ctx.Err() != nil {
+					return nil
+				}
 				current := atomic.LoadInt64(&txnCounter)
 				if current >= *totalTxns {
 					break

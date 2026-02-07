@@ -123,8 +123,7 @@ func TestRedoSinkInProcessor(t *testing.T) {
 			FlushWorkerNum:        util.AddressOf(workerNumberForTest),
 			UseFileBackend:        util.AddressOf(useFileBackend),
 		}
-		startTs := uint64(100)
-		dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme), startTs, cfg)
+		dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
 		defer dmlMgr.Close(false)
 
 		var eg errgroup.Group
@@ -214,7 +213,7 @@ func TestRedoSinkError(t *testing.T) {
 		EncodingWorkerNum:     util.AddressOf(workerNumberForTest),
 		FlushWorkerNum:        util.AddressOf(workerNumberForTest),
 	}
-	logMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme), 0, cfg)
+	logMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
 	defer logMgr.Close(false)
 
 	var eg errgroup.Group
@@ -273,7 +272,7 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 		FlushWorkerNum:        util.AddressOf(redo.DefaultFlushWorkerNum),
 		UseFileBackend:        util.AddressOf(useFileBackend),
 	}
-	dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme), 0, cfg)
+	dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
 	defer dmlMgr.Close(false)
 
 	var eg errgroup.Group

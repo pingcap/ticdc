@@ -143,12 +143,13 @@ func (oc *Controller) RemoveTasksByTableIDs(tables ...int64) {
 // AddOperator adds an operator to the controller, if the operator already exists, return false.
 func (oc *Controller) AddOperator(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) bool {
 	oc.mu.RLock()
-	if _, ok := oc.operators[op.ID()]; ok {
+	if old, ok := oc.operators[op.ID()]; ok {
 		oc.mu.RUnlock()
 		log.Info("add operator failed, operator already exists",
 			zap.String("role", oc.role),
 			zap.Stringer("changefeedID", oc.changefeedID),
-			zap.String("operator", op.String()))
+			zap.String("operator", op.String()),
+			zap.String("oldOperator", old.OP.String()))
 		return false
 	}
 	oc.mu.RUnlock()
@@ -305,8 +306,8 @@ func (oc *Controller) finalizeOperator(
 	delete(oc.lastWarnTime, opID)
 	oc.mu.Unlock()
 
-	metrics.OperatorCount.WithLabelValues(common.DefaultKeyspaceNamme, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Dec()
-	metrics.OperatorDuration.WithLabelValues(common.DefaultKeyspaceNamme, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Observe(time.Since(item.CreatedAt).Seconds())
+	metrics.OperatorCount.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Dec()
+	metrics.OperatorDuration.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Observe(time.Since(item.CreatedAt).Seconds())
 	log.Info("operator finished",
 		zap.String("role", oc.role),
 		zap.Stringer("changefeedID", oc.changefeedID),
@@ -364,8 +365,8 @@ func (oc *Controller) pushOperator(op operator.Operator[common.DispatcherID, *he
 	heap.Push(&oc.runningQueue, withTime)
 	oc.mu.Unlock()
 
-	metrics.OperatorCount.WithLabelValues(common.DefaultKeyspaceNamme, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Inc()
-	metrics.TotalOperatorCount.WithLabelValues(common.DefaultKeyspaceNamme, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Inc()
+	metrics.OperatorCount.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Inc()
+	metrics.TotalOperatorCount.WithLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), op.Type(), common.StringMode(oc.mode)).Inc()
 }
 
 func (oc *Controller) checkAffectedNodes(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) {
@@ -481,9 +482,9 @@ func (oc *Controller) Close() {
 	opTypes := []string{"occupy", "merge", "add", "remove", "move", "split", "merge"}
 
 	for _, opType := range opTypes {
-		metrics.OperatorCount.DeleteLabelValues(common.DefaultKeyspaceNamme, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
-		metrics.TotalOperatorCount.DeleteLabelValues(common.DefaultKeyspaceNamme, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
-		metrics.OperatorDuration.DeleteLabelValues(common.DefaultKeyspaceNamme, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
+		metrics.OperatorCount.DeleteLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
+		metrics.TotalOperatorCount.DeleteLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
+		metrics.OperatorDuration.DeleteLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
 	}
 }
 

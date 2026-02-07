@@ -15,16 +15,13 @@ package open
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
-	"strconv"
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
-	"github.com/pingcap/tidb/pkg/parser/types"
-	tiTypes "github.com/pingcap/tidb/pkg/types"
 	"go.uber.org/zap"
 )
 
@@ -59,232 +56,16 @@ type column struct {
 	Value       any    `json:"v"`
 }
 
-// formatColumn formats a codec column.
-func formatColumn(c column, ft types.FieldType) column {
-	if c.Value == nil {
-		return c
-	}
-	var err error
-	switch c.Type {
-	case mysql.TypeString, mysql.TypeVarString, mysql.TypeVarchar:
-		var data []byte
-		switch v := c.Value.(type) {
-		case []uint8:
-			data = v
-		case string:
-			if isBinary(c.Flag) {
-				v, err = strconv.Unquote("\"" + v + "\"")
-				if err != nil {
-					log.Panic("invalid column value, please report a bug", zap.Any("value", data), zap.Error(err))
-				}
-			}
-			data = []byte(v)
-		default:
-			log.Panic("invalid column value, please report a bug", zap.Any("value", c.Value), zap.Any("type", v))
-		}
-		c.Value = data
-	case mysql.TypeTinyBlob, mysql.TypeMediumBlob,
-		mysql.TypeLongBlob, mysql.TypeBlob:
-		var data []byte
-		switch v := c.Value.(type) {
-		case []uint8:
-			data = v
-		case string:
-			data, err = base64.StdEncoding.DecodeString(v)
-		default:
-			log.Panic("invalid column value, please report a bug", zap.Any("value", c.Value), zap.Any("type", v))
-		}
-		if err != nil {
-			log.Panic("invalid column value, please report a bug", zap.Any("col", c), zap.Error(err))
-		}
-		c.Value = data
-	case mysql.TypeFloat, mysql.TypeDouble:
-		var data float64
-		switch v := c.Value.(type) {
-		case []uint8:
-			data, err = strconv.ParseFloat(string(v), 64)
-		case json.Number:
-			data, err = v.Float64()
-		default:
-			log.Panic("invalid column value, please report a bug", zap.Any("col", c), zap.Any("type", v))
-		}
-		if err != nil {
-			log.Panic("invalid column value, please report a bug", zap.Any("col", c), zap.Error(err))
-		}
-		c.Value = data
-		if c.Type == mysql.TypeFloat {
-			c.Value = float32(data)
-		}
-	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeLong, mysql.TypeLonglong, mysql.TypeInt24:
-		var data string
-		switch v := c.Value.(type) {
-		case json.Number:
-			data = string(v)
-		case []uint8:
-			data = string(v)
-		default:
-			log.Panic("invalid column value, please report a bug", zap.Any("col", c), zap.Any("type", v))
-		}
-		if isUnsigned(c.Flag) {
-			c.Value, err = strconv.ParseUint(data, 10, 64)
-		} else {
-			c.Value, err = strconv.ParseInt(data, 10, 64)
-		}
-		if err != nil {
-			log.Panic("invalid column value, please report a bug", zap.Any("col", c), zap.Error(err))
-		}
-	case mysql.TypeYear:
-		var value int64
-		switch v := c.Value.(type) {
-		case json.Number:
-			value, err = v.Int64()
-		case []uint8:
-			value, err = strconv.ParseInt(string(v), 10, 64)
-		default:
-			log.Panic("invalid column value for year", zap.Any("value", c.Value), zap.Any("type", v))
-		}
-		if err != nil {
-			log.Panic("invalid column value for year", zap.Any("value", c.Value), zap.Error(err))
-		}
-		c.Value = value
-	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeTimestamp:
-		var data string
-		switch v := c.Value.(type) {
-		case []uint8:
-			data = string(v)
-		case string:
-			data = v
-		default:
-			log.Panic("invalid column value for date / datetime / timestamp", zap.Any("value", c.Value), zap.Any("type", v))
-		}
-		c.Value, err = tiTypes.ParseTime(tiTypes.DefaultStmtNoWarningContext, data, ft.GetType(), ft.GetDecimal())
-		if err != nil {
-			log.Panic("invalid column value for date / datetime / timestamp", zap.Any("value", c.Value), zap.Error(err))
-		}
-	// todo: shall we also convert timezone for the mysql.TypeTimestamp ?
-	//if mysqlType == mysql.TypeTimestamp && decoder.loc != nil && !t.IsZero() {
-	//	err = t.ConvertTimeZone(time.UTC, decoder.loc)
-	//	if err != nil {
-	//		log.Panic("convert timestamp to local timezone failed", zap.Any("rawValue", rawValue), zap.Error(err))
-	//	}
-	//}
-	case mysql.TypeDuration:
-		var data string
-		switch v := c.Value.(type) {
-		case []uint8:
-			data = string(v)
-		case string:
-			data = v
-		default:
-			log.Panic("invalid column value for duration", zap.Any("value", c.Value), zap.Any("type", v))
-		}
-		c.Value, _, err = tiTypes.ParseDuration(tiTypes.DefaultStmtNoWarningContext, data, ft.GetDecimal())
-		if err != nil {
-			log.Panic("invalid column value for duration", zap.Any("value", c.Value), zap.Error(err))
-		}
-	case mysql.TypeBit:
-		var intVal uint64
-		switch v := c.Value.(type) {
-		case []uint8:
-			intVal = common.MustBinaryLiteralToInt(v)
-		case json.Number:
-			a, err := v.Int64()
-			if err != nil {
-				log.Panic("invalid column value for the bit type", zap.Any("value", c.Value), zap.Error(err))
-			}
-			intVal = uint64(a)
-		default:
-			log.Panic("invalid column value for the bit type", zap.Any("value", c.Value), zap.Any("type", v))
-		}
-		c.Value = tiTypes.NewBinaryLiteralFromUint(intVal, -1)
-	case mysql.TypeEnum:
-		var enumValue int64
-		switch v := c.Value.(type) {
-		case json.Number:
-			enumValue, err = v.Int64()
-		case []uint8:
-			enumValue, err = strconv.ParseInt(string(v), 10, 64)
-		default:
-			log.Panic("invalid column value for enum", zap.Any("value", c.Value), zap.Any("type", v))
-		}
-		if err != nil {
-			log.Panic("invalid column value for enum", zap.Any("value", c.Value), zap.Error(err))
-		}
-		// only enum's value accessed by the MySQL Sink, and lack the elements, so let's make a compromise.
-		c.Value = tiTypes.Enum{
-			Value: uint64(enumValue),
-		}
-	case mysql.TypeSet:
-		var setValue int64
-		switch v := c.Value.(type) {
-		case json.Number:
-			setValue, err = v.Int64()
-		case []uint8:
-			setValue, err = strconv.ParseInt(string(v), 10, 64)
-		default:
-			log.Panic("invalid column value for set", zap.Any("value", c.Value), zap.Any("type", v))
-		}
-		if err != nil {
-			log.Panic("invalid column value for set", zap.Any("value", c.Value), zap.Error(err))
-		}
-		// only set's value accessed by the MySQL Sink, and lack the elements, so let's make a compromise.
-		c.Value = tiTypes.Set{
-			Value: uint64(setValue),
-		}
-	case mysql.TypeJSON:
-		var data string
-		switch v := c.Value.(type) {
-		case []uint8:
-			data = string(v)
-		case string:
-			data = v
-		default:
-			log.Panic("invalid column value for JSON", zap.Any("value", c.Value), zap.Any("type", v))
-		}
-		c.Value, err = tiTypes.ParseBinaryJSONFromString(data)
-		if err != nil {
-			log.Panic("invalid column value for json", zap.Any("value", c.Value), zap.Error(err))
-		}
-	case mysql.TypeNewDecimal:
-		var data []byte
-		switch v := c.Value.(type) {
-		case []uint8:
-			data = v
-		case string:
-			data = []byte(v)
-		default:
-			log.Panic("invalid column value for decimal", zap.Any("value", c.Value), zap.Any("type", v))
-		}
-		dec := new(tiTypes.MyDecimal)
-		err = dec.FromString(data)
-		if err != nil {
-			log.Panic("invalid column value for decimal", zap.Any("value", c.Value), zap.Error(err))
-		}
-		c.Value = dec
-	case mysql.TypeTiDBVectorFloat32:
-		var data string
-		switch v := c.Value.(type) {
-		case []uint8:
-			data = string(v)
-		case string:
-			data = v
-		default:
-			log.Panic("invalid column value for vector float32", zap.Any("value", c.Value), zap.Any("type", v))
-		}
-		c.Value, err = tiTypes.ParseVectorFloat32(data)
-		if err != nil {
-			log.Panic("invalid column value for vector float32", zap.Any("value", c.Value), zap.Error(err))
-		}
-	default:
-		log.Panic("unknown data type found", zap.Any("type", c.Type), zap.Any("value", c.Value))
-	}
-	return c
-}
-
 type messageRow struct {
 	Update     map[string]column `json:"u,omitempty"`
 	PreColumns map[string]column `json:"p,omitempty"`
 	Delete     map[string]column `json:"d,omitempty"`
+}
+
+// only for test
+func (m *messageRow) encode() ([]byte, error) {
+	data, err := json.Marshal(m)
+	return data, errors.WrapError(errors.ErrMarshalFailed, err)
 }
 
 func (m *messageRow) decode(data []byte) {

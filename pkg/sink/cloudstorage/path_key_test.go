@@ -64,10 +64,11 @@ func TestDmlPathKey(t *testing.T) {
 
 	dispatcherID := common.NewDispatcherID()
 	testCases := []struct {
-		index          int
+		index          uint64
 		fileIndexWidth int
 		extension      string
 		path           string
+		indexPath      string
 		dmlkey         DmlPathKey
 	}{
 		{
@@ -75,6 +76,7 @@ func TestDmlPathKey(t *testing.T) {
 			fileIndexWidth: 20,
 			extension:      ".csv",
 			path:           fmt.Sprintf("schema1/table1/123456/2023-05-09/CDC_%s_00000000000000000010.csv", dispatcherID.String()),
+			indexPath:      fmt.Sprintf("schema1/table1/123456/2023-05-09/meta/CDC_%s.index", dispatcherID.String()),
 			dmlkey: DmlPathKey{
 				SchemaPathKey: SchemaPathKey{
 					Schema:       "schema1",
@@ -89,10 +91,18 @@ func TestDmlPathKey(t *testing.T) {
 
 	for _, tc := range testCases {
 		var dmlkey DmlPathKey
-		fileIndex, err := dmlkey.ParseDMLFilePath("day", tc.path)
+		id, err := dmlkey.ParseIndexFilePath("day", tc.indexPath)
 		require.NoError(t, err)
 		require.Equal(t, tc.dmlkey, dmlkey)
+		require.Equal(t, id, dispatcherID.String())
 
+		fileIndex := &FileIndex{
+			FileIndexKey: FileIndexKey{
+				DispatcherID:           id,
+				EnableTableAcrossNodes: id != "",
+			},
+			Idx: tc.index,
+		}
 		fileName := dmlkey.GenerateDMLFilePath(fileIndex, tc.extension, tc.fileIndexWidth)
 		require.Equal(t, tc.path, fileName)
 	}

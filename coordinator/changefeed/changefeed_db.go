@@ -261,6 +261,11 @@ func (db *ChangefeedDB) MoveToSchedulingQueue(
 		// It means the changefeed is resumed by cli or API.
 		if resetBackoff {
 			cf.backoff.resetErrRetry()
+			// Reset the checkpoint baseline used by backoff. Otherwise, a manual resume with overwriteCheckpointTs may
+			// immediately be treated as "stuck" based on the previous run's checkpoint.
+			cf.backoff.checkpointTs = cf.GetStatus().CheckpointTs
+			// Clear any in-progress restarting marker so the next run starts cleanly.
+			cf.backoff.StartFinished()
 		}
 		delete(db.stopped, id)
 		cf.isNew = overwriteCheckpointTs

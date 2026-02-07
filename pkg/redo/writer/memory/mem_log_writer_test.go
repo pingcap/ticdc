@@ -68,7 +68,7 @@ func testWriteEvents(t *testing.T, events []writer.RedoEvent) {
 	require.NoError(t, err)
 	lwcfg := &writer.LogWriterConfig{
 		CaptureID:          "test-capture",
-		ChangeFeedID:       common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceNamme),
+		ChangeFeedID:       common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName),
 		URI:                uri,
 		UseExternalStorage: true,
 		MaxLogSizeInBytes:  10 * redo.Megabyte,

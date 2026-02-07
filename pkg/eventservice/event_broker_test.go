@@ -171,6 +171,32 @@ func TestOnNotify(t *testing.T) {
 	log.Info("Pass case 6")
 }
 
+func TestDoScanSkipWhenChangefeedStatusNotFound(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+
+	disInfo := newMockDispatcherInfoForTest(t)
+	disInfo.epoch = 1
+	disInfo.startTs = 100
+	require.NoError(t, broker.addDispatcher(disInfo))
+
+	disp := broker.getDispatcher(disInfo.GetID()).Load()
+	require.NotNil(t, disp)
+	disp.setHandshaked()
+
+	broker.onNotify(disp, 102, 101)
+	require.True(t, disp.isTaskScanning.Load())
+	task := <-broker.taskChan[disp.scanWorkerIndex]
+
+	// Simulate a race where the changefeed status is deleted while a scan task is still running.
+	broker.changefeedMap.Delete(disInfo.GetChangefeedID())
+
+	require.NotPanics(t, func() {
+		broker.doScan(context.Background(), task)
+	})
+	require.False(t, disp.isTaskScanning.Load())
+}
+
 func TestCURDDispatcher(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	defer broker.close()

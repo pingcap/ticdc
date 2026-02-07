@@ -1,0 +1,66 @@
+name: PR Build and Unit Test
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches:
+      - master
+      - "release-[0-9].[0-9]*"
+    paths:
+      - '**'
+      - '!**/*.md'
+      - '!**/*.png'
+      - '!**/*.jpeg'
+      - '!**/*.jpg'
+      - '!**/*.gif'
+      - '!**/*.svg'
+      - '!**/*.pdf'
+      - '!**/*.yaml'
+      - '!**/*.json'
+      - '!**/*.toml'
+      - '!**/Dockerfile'
+      - '!**/OWNERS'
+      - '!**/OWNERS_ALIASES'
+      - '.github/workflows/**'
+
+# See: https://docs.github.com/en/actions/reference/workflow-syntax-for-github-actions#concurrency.
+concurrency:
+  group: ${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  build_and_test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        task:
+          - name: Check
+            command: make check
+          - name: Build Classic CDC
+            command: make cdc
+          - name: Build Next Gen CDC
+            command: NEXT_GEN=1 make cdc
+          - name: Classic Unit Tests
+            command: make unit_test_in_verify_ci
+          - name: Next Gen Unit Tests
+            command: make unit_test_in_verify_ci_next_gen
+    name: ${{ matrix.task.name }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v3
+
+      - name: Setup Go environment
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Cache Tools
+        id: cache-tools
+        uses: actions/cache@v3
+        with:
+          path: tools/bin
+          key: ubuntu-latest-ticdc-tools-${{ hashFiles('tools/check/go.sum') }}
+
+      - name: ${{ matrix.task.name }}
+        run: ${{ matrix.task.command }}

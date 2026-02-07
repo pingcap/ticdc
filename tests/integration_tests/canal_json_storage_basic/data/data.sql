@@ -87,3 +87,9 @@ VALUES (
 
 ALTER TABLE binary_columns ADD c_new INT;
 INSERT INTO binary_columns (c_new) VALUES (2);
+
+CREATE TABLE t_null (
+    `id` bigint unsigned not null primary key,
+    `col` varchar(64) collate utf8mb4_bin not null default ''
+);
+INSERT INTO t_null VALUES (1, 'test'), (2, 'null'), (3, 'test2'), (4, 'Null'), (5, 'NULL'), (6, ''), (7, 'nüll');

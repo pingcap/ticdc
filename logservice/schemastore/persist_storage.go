@@ -741,6 +741,7 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 	handler, ok := allDDLHandlers[job.Type]
 	if !ok {
 		log.Warn("unknown ddl type, ignore it", zap.Any("ddlType", job.Type), zap.String("query", job.Query))
+		p.mu.Unlock()
 		return nil
 	}
 

@@ -18,6 +18,7 @@ import (
 
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -76,7 +77,8 @@ type DDLEventInRedoLog struct {
 	StartTs           uint64            `msg:"start-ts"`
 	CommitTs          uint64            `msg:"commit-ts"`
 	Query             string            `msg:"query"`
-	BlockTables       *InfluencedTables `msg:"block-tables"`
+	BlockedTables     *InfluencedTables `msg:"blocked-tables"`
+	BlockedTableNames []SchemaTableName `msg:"blocked-table-names"`
 	NeedDroppedTables *InfluencedTables `msg:"need-dropped-tables"`
 	NeedAddedTables   []Table           `msg:"need_added_tables"`
 }
@@ -207,7 +209,8 @@ func (d *DDLEvent) ToRedoLog() *RedoLog {
 				StartTs:           d.GetStartTs(),
 				CommitTs:          d.GetCommitTs(),
 				Query:             d.Query,
-				BlockTables:       d.BlockedTables,
+				BlockedTables:     d.BlockedTables,
+				BlockedTableNames: d.BlockedTableNames,
 				NeedDroppedTables: d.NeedDroppedTables,
 				NeedAddedTables:   d.NeedAddedTables,
 			},
@@ -356,6 +359,12 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 }
 
 func (r *RedoDDLEvent) ToDDLEvent() *DDLEvent {
+	blockedTables := r.DDL.BlockedTables
+	blockedTableNames := r.DDL.BlockedTableNames
+	if blockedTables == nil {
+		blockedTables = &InfluencedTables{InfluenceType: InfluenceTypeNormal}
+		blockedTableNames = []SchemaTableName{{SchemaName: r.TableName.Schema, TableName: r.TableName.Table}}
+	}
 	return &DDLEvent{
 		TableInfo: &commonType.TableInfo{
 			TableName: r.TableName,
@@ -366,13 +375,15 @@ func (r *RedoDDLEvent) ToDDLEvent() *DDLEvent {
 		TableName:         r.TableName.Table,
 		FinishedTs:        r.DDL.CommitTs,
 		StartTs:           r.DDL.StartTs,
-		BlockedTables:     r.DDL.BlockTables,
+		BlockedTables:     blockedTables,
+		BlockedTableNames: blockedTableNames,
 		NeedDroppedTables: r.DDL.NeedDroppedTables,
+		NeedAddedTables:   r.DDL.NeedAddedTables,
 	}
 }
 
 func (r *RedoDDLEvent) SetTableSchemaStore(tableSchemaStore *TableSchemaStore) {
-	if r.DDL.BlockTables != nil && r.DDL.BlockTables.InfluenceType != InfluenceTypeNormal {
+	if r.DDL.BlockedTables != nil && r.DDL.BlockedTables.InfluenceType != InfluenceTypeNormal {
 		r.TableSchemaStore = tableSchemaStore
 	}
 }
@@ -481,13 +492,13 @@ func appendCol2Chunk(idx int, raw interface{}, ft tiTypes.FieldType, chk *chunk.
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeTimestamp:
 		val, err := tiTypes.ParseTime(tiTypes.DefaultStmtNoWarningContext, raw.(string), ft.GetType(), tiTypes.MaxFsp)
 		if err != nil {
-			log.Panic("invalid column value for data time", zap.Any("raw", raw), zap.Error(err))
+			log.Panic("invalid column value for data time", zap.String("raw", util.RedactAny(raw)), zap.Error(err))
 		}
 		chk.AppendTime(idx, val)
 	case mysql.TypeDuration:
 		val, _, err := tiTypes.ParseDuration(tiTypes.DefaultStmtNoWarningContext, raw.(string), tiTypes.MaxFsp)
 		if err != nil {
-			log.Panic("invalid column value for duration", zap.Any("raw", raw), zap.Error(err))
+			log.Panic("invalid column value for duration", zap.String("raw", util.RedactAny(raw)), zap.Error(err))
 		}
 		chk.AppendDuration(idx, val)
 	case mysql.TypeEnum:
@@ -501,16 +512,16 @@ func appendCol2Chunk(idx int, raw interface{}, ft tiTypes.FieldType, chk *chunk.
 	case mysql.TypeJSON:
 		result, err := tiTypes.ParseBinaryJSONFromString(raw.(string))
 		if err != nil {
-			log.Panic("invalid column value for json", zap.Any("raw", raw), zap.Error(err))
+			log.Panic("invalid column value for json", zap.String("raw", util.RedactAny(raw)), zap.Error(err))
 		}
 		chk.AppendJSON(idx, result)
 	case mysql.TypeTiDBVectorFloat32:
 		result, err := tiTypes.ParseVectorFloat32(raw.(string))
 		if err != nil {
-			log.Panic("cannot parse vector32 value from string", zap.Any("raw", raw), zap.Error(err))
+			log.Panic("cannot parse vector32 value from string", zap.String("raw", util.RedactAny(raw)), zap.Error(err))
 		}
 		chk.AppendVectorFloat32(idx, result)
 	default:
-		log.Panic("unknown column type", zap.Any("type", ft.GetType()), zap.Any("raw", raw))
+		log.Panic("unknown column type", zap.Any("type", ft.GetType()), zap.String("raw", util.RedactAny(raw)))
 	}
 }

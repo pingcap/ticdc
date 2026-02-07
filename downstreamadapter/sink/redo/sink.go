@@ -58,7 +58,6 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, cfg *config.C
 
 // New creates a new redo sink.
 func New(ctx context.Context, changefeedID common.ChangeFeedID,
-	startTs common.Ts,
 	cfg *config.ConsistentConfig,
 ) *Sink {
 	s := &Sink{
@@ -115,8 +114,9 @@ func (s *Sink) Run(ctx context.Context) error {
 func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	switch e := event.(type) {
 	case *commonEvent.DDLEvent:
-		err := s.statistics.RecordDDLExecution(func() error {
-			return s.ddlWriter.WriteEvents(s.ctx, e)
+		err := s.statistics.RecordDDLExecution(func() (string, error) {
+			ddlType := e.GetDDLType().String()
+			return ddlType, s.ddlWriter.WriteEvents(s.ctx, e)
 		})
 		if err != nil {
 			s.isNormal.Store(false)

@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/redo/reader"
+	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -265,7 +266,7 @@ func (ra *RedoApplier) applyDDL(
 				timodel.ActionAddCheckConstraint, timodel.ActionDropCheckConstraint, timodel.ActionAlterCheckConstraint,
 				timodel.ActionAlterTableAttributes, timodel.ActionAlterCacheTable, timodel.ActionAlterNoCacheTable,
 				timodel.ActionMultiSchemaChange, timodel.ActionAlterTTLInfo, timodel.ActionAlterTTLRemove:
-				tableDDLTs = ra.getTableDDLTs(ddl.DDL.BlockTables.TableIDs...)
+				tableDDLTs = ra.getTableDDLTs(ddl.DDL.BlockedTables.TableIDs...)
 			case timodel.ActionExchangeTablePartition, timodel.ActionReorganizePartition,
 				timodel.ActionAddTablePartition, timodel.ActionDropTablePartition, timodel.ActionTruncateTablePartition,
 				timodel.ActionAlterTablePartitionAttributes, timodel.ActionAlterTablePartitioning, timodel.ActionRemovePartitioning,
@@ -320,7 +321,7 @@ func (ra *RedoApplier) applyDDL(
 	}
 	log.Warn("apply DDL", zap.Any("ddl", ddl))
 	// Wait block tables to flush data before applying DDL.
-	tableIDs := ra.getBlockTableIDs(ddl.DDL.BlockTables)
+	tableIDs := ra.getBlockTableIDs(ddl.DDL.BlockedTables)
 	for tableID := range tableIDs {
 		if err := ra.waitTableFlush(ctx, tableID, ddl.DDL.CommitTs); err != nil {
 			return err
@@ -358,11 +359,11 @@ func (ra *RedoApplier) applyRow(
 		tableDDLTs = ra.getTableDDLTs(tableID)
 	}
 	if tableDDLTs.ts >= int64(row.Row.CommitTs) {
-		log.Warn("ignore the dml event since the commitTs is less than startTs", zap.Int64("ts", tableDDLTs.ts), zap.Any("row", row))
+		log.Warn("ignore the dml event since the commitTs is less than startTs", zap.Int64("ts", tableDDLTs.ts), zap.String("row", util.RedactAny(row)))
 		return nil
 	}
 	if tableDDLTs.skipDML && int64(row.Row.CommitTs)-1 == tableDDLTs.ts {
-		log.Warn("ignore the dml event since the ddl is not finished", zap.Int64("ts", tableDDLTs.ts), zap.Any("row", row))
+		log.Warn("ignore the dml event since the ddl is not finished", zap.Int64("ts", tableDDLTs.ts), zap.String("row", util.RedactAny(row)))
 		return nil
 	}
 

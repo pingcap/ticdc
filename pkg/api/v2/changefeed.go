@@ -36,6 +36,8 @@ type ChangefeedInterface interface {
 	Create(ctx context.Context, cfg *v2.ChangefeedConfig, keyspace string) (*v2.ChangeFeedInfo, error)
 	// VerifyTable verifies table for a changefeed
 	VerifyTable(ctx context.Context, cfg *v2.VerifyTableConfig, keyspace string) (*v2.Tables, error)
+	// GetAllTables returns eligible and ineligible tables for a changefeed
+	GetAllTables(ctx context.Context, cfg *v2.VerifyTableConfig, keyspace string) (*v2.Tables, error)
 	// Update updates a changefeed
 	Update(ctx context.Context, cfg *v2.ChangefeedConfig,
 		keyspace string, name string) (*v2.ChangeFeedInfo, error)
@@ -90,6 +92,20 @@ func (c *changefeeds) VerifyTable(ctx context.Context,
 ) (*v2.Tables, error) {
 	result := &v2.Tables{}
 	u := fmt.Sprintf("verify_table?%s=%s", api.APIOpVarKeyspace, keyspace)
+	err := c.client.Post().
+		WithURI(u).
+		WithBody(cfg).
+		Do(ctx).
+		Into(result)
+	return result, err
+}
+
+func (c *changefeeds) GetAllTables(ctx context.Context,
+	cfg *v2.VerifyTableConfig,
+	keyspace string,
+) (*v2.Tables, error) {
+	result := &v2.Tables{}
+	u := fmt.Sprintf("get_all_tables?%s=%s", api.APIOpVarKeyspace, keyspace)
 	err := c.client.Post().
 		WithURI(u).
 		WithBody(cfg).

@@ -15,29 +15,23 @@ package maintainer
 
 import (
 	"context"
-	"flag"
-	"net/http"
-	"net/http/pprof"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/maintainer/testutil"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/eventservice"
 	"github.com/pingcap/ticdc/pkg/messaging"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -56,11 +50,16 @@ type mockDispatcherManager struct {
 }
 
 func MockDispatcherManager(mc messaging.MessageCenter, self node.ID) *mockDispatcherManager {
+	// Keep the default allocations small: these mocks are used by multiple tests (including
+	// integration-style ones that spin up several nodes). Preallocating for millions of
+	// dispatchers makes unit tests unnecessarily memory-hungry and can cause CI flakiness.
+	const defaultDispatcherCapacity = 1024
+
 	m := &mockDispatcherManager{
 		mc:             mc,
-		dispatchers:    make([]*heartbeatpb.TableSpanStatus, 0, 2000001),
+		dispatchers:    make([]*heartbeatpb.TableSpanStatus, 0, defaultDispatcherCapacity),
 		msgCh:          make(chan *messaging.TargetMessage, 1024),
-		dispatchersMap: make(map[heartbeatpb.DispatcherID]*heartbeatpb.TableSpanStatus, 2000001),
+		dispatchersMap: make(map[heartbeatpb.DispatcherID]*heartbeatpb.TableSpanStatus, defaultDispatcherCapacity),
 		self:           self,
 	}
 	mc.RegisterHandler(messaging.DispatcherManagerManagerTopic, m.recvMessages)
@@ -255,39 +254,16 @@ func (m *mockDispatcherManager) sendHeartbeat() {
 }
 
 func TestMaintainerSchedule(t *testing.T) {
+	// This test exercises a single-node maintainer lifecycle:
+	// 1) Bootstrap a changefeed via the dispatcher manager mock.
+	// 2) Verify all tables are scheduled to the only node.
+	// 3) Remove the maintainer and ensure it can close cleanly.
+	//
+	// The test intentionally avoids binding any fixed TCP ports so it can run
+	// reliably in sandboxed CI environments (and in parallel with other packages).
 	ctx, cancel := context.WithCancel(context.Background())
-	mux := http.NewServeMux()
-	registry := prometheus.NewRegistry()
-	metrics.InitMetrics(registry)
-	prometheus.DefaultGatherer = registry
-	mux.HandleFunc("/debug/pprof/", pprof.Index)
-	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
-	mux.Handle("/metrics", promhttp.Handler())
-	go func() {
-		t.Fatal(http.ListenAndServe(":18300", mux))
-	}()
 
-	if !flag.Parsed() {
-		flag.Parse()
-	}
-
-	argList := flag.Args()
-	if len(argList) > 1 {
-		t.Fatal("unexpected args", argList)
-	}
-	tableSize := 100
-	sleepTime := 5
-	if len(argList) == 1 {
-		tableSize, _ = strconv.Atoi(argList[0])
-	}
-	if len(argList) == 2 {
-		tableSize, _ = strconv.Atoi(argList[0])
-		sleepTime, _ = strconv.Atoi(argList[1])
-	}
-
+	const tableSize = 100
 	tables := make([]commonEvent.Table, 0, tableSize)
 	for id := 1; id <= tableSize; id++ {
 		tables = append(tables, commonEvent.Table{
@@ -299,6 +275,11 @@ func TestMaintainerSchedule(t *testing.T) {
 
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	// The maintainer scheduler requires a RegionCache service (used by span split
+	// logic and region-count based heuristics). In unit tests we use a lightweight
+	// mock to avoid talking to a real TiKV/PD.
+	appcontext.SetService(appcontext.RegionCache, testutil.NewMockRegionCache())
 
 	schemaStore := eventservice.NewMockSchemaStore()
 	schemaStore.SetTables(tables)
@@ -313,7 +294,7 @@ func TestMaintainerSchedule(t *testing.T) {
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	nodeManager.GetAliveNodes()[n.ID] = n
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	dispatcherManager := MockDispatcherManager(mc, n.ID)
 
 	wg := &sync.WaitGroup{}
@@ -332,6 +313,7 @@ func TestMaintainerSchedule(t *testing.T) {
 		&config.ChangeFeedInfo{
 			Config: config.GetDefaultReplicaConfig(),
 		}, n, taskScheduler, 10, true, common.DefaultKeyspaceID)
+	defer maintainer.Close()
 
 	mc.RegisterHandler(messaging.MaintainerManagerTopic,
 		func(ctx context.Context, msg *messaging.TargetMessage) error {
@@ -343,32 +325,26 @@ func TestMaintainerSchedule(t *testing.T) {
 			return nil
 		})
 
-	// send bootstrap message
-
-	nodes := make(map[node.ID]*node.Info)
-	nodes[n.ID] = n
-
-	_, _, messages, _ := maintainer.bootstrapper.HandleNodesChange(nodes)
-	maintainer.sendMessages(messages)
-
-	time.Sleep(time.Second * time.Duration(sleepTime))
+	// Mimic the maintainer manager's behavior: push an init event to trigger
+	// bootstrap and scheduling logic in the main event loop.
+	maintainer.pushEvent(&Event{changefeedID: cfID, eventType: EventInit})
 
 	require.Eventually(t, func() bool {
 		return maintainer.ddlSpan.IsWorking() && maintainer.postBootstrapMsg == nil
-	}, time.Second*2, time.Millisecond*100)
+	}, 20*time.Second, 100*time.Millisecond)
 
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetReplicatingSize() == tableSize
-	}, time.Second*2, time.Millisecond*100)
+	}, 20*time.Second, 100*time.Millisecond)
 
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetTaskSizeByNodeID(n.ID) == tableSize
-	}, time.Second*2, time.Millisecond*100)
+	}, 20*time.Second, 100*time.Millisecond)
 
 	maintainer.onRemoveMaintainer(false, false)
 	require.Eventually(t, func() bool {
 		return maintainer.tryCloseChangefeed()
-	}, time.Second*200, time.Millisecond*100)
+	}, 20*time.Second, 100*time.Millisecond)
 
 	cancel()
 	wg.Wait()

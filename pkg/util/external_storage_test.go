@@ -193,3 +193,99 @@ func TestExtStorageOpenReaderRespectsCallerCancel(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded))
 }
+
+// blockingCtxWriter blocks in Write/Close until the passed ctx is done.
+// It is used to verify extStorageWithTimeout wraps streaming writer operations
+// with default deadlines when callers use context without deadline.
+type blockingCtxWriter struct{}
+
+func (*blockingCtxWriter) Write(ctx context.Context, _ []byte) (int, error) {
+	<-ctx.Done()
+	return 0, ctx.Err()
+}
+
+func (*blockingCtxWriter) Close(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// blockingCreateCtxWriter blocks in Write/Close until the ctx passed to Create() is done.
+// This simulates multipart backends (e.g., S3 uploader) where background work is bound to
+// the Create() context rather than the Write/Close context.
+type blockingCreateCtxWriter struct {
+	createCtx context.Context
+}
+
+func (w *blockingCreateCtxWriter) Write(_ context.Context, _ []byte) (int, error) {
+	<-w.createCtx.Done()
+	return 0, w.createCtx.Err()
+}
+
+func (w *blockingCreateCtxWriter) Close(_ context.Context) error {
+	<-w.createCtx.Done()
+	return w.createCtx.Err()
+}
+
+type mockCreateExternalStorage struct {
+	storage.ExternalStorage
+	writer storage.ExternalFileWriter
+}
+
+func (m *mockCreateExternalStorage) Create(ctx context.Context, _ string, _ *storage.WriterOption) (storage.ExternalFileWriter, error) {
+	if w, ok := m.writer.(*blockingCreateCtxWriter); ok {
+		w.createCtx = ctx
+	}
+	return m.writer, nil
+}
+
+func TestExtStorageCreateWriterWriteTimeout(t *testing.T) {
+	// Scenario: a streaming writer should not hang forever when the caller passes
+	// a context without deadline.
+	//
+	// Steps:
+	// 1) Use a writer that blocks until the Write() ctx is done.
+	// 2) Call extStorageWithTimeout.Create and then writer.Write with context.Background().
+	// 3) Verify the call fails within the default timeout.
+	testTimeout := 50 * time.Millisecond
+	timedStore := &extStorageWithTimeout{
+		ExternalStorage: &mockCreateExternalStorage{writer: &blockingCtxWriter{}},
+		timeout:         testTimeout,
+	}
+
+	w, err := timedStore.Create(context.Background(), "file", &storage.WriterOption{Concurrency: 1})
+	require.NoError(t, err)
+
+	start := time.Now()
+	_, err = w.Write(context.Background(), []byte("x"))
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	require.True(t, errors.Is(err, context.DeadlineExceeded), "got %v", err)
+	require.InDelta(t, testTimeout, elapsed, float64(testTimeout)*0.5)
+}
+
+func TestExtStorageCreateMultipartWriteCancelsCreateCtxOnTimeout(t *testing.T) {
+	// Scenario: multipart backends can bind background work to the Create() context.
+	// When Write() times out, TiCDC should cancel that Create() context so the call unblocks.
+	//
+	// Steps:
+	// 1) Use a writer that blocks until the Create() ctx is canceled.
+	// 2) Call extStorageWithTimeout.Create with Concurrency > 1.
+	// 3) Call Write() with a ctx without deadline and verify it returns in time.
+	testTimeout := 50 * time.Millisecond
+	timedStore := &extStorageWithTimeout{
+		ExternalStorage: &mockCreateExternalStorage{writer: &blockingCreateCtxWriter{}},
+		timeout:         testTimeout,
+	}
+
+	w, err := timedStore.Create(context.Background(), "file", &storage.WriterOption{Concurrency: 2})
+	require.NoError(t, err)
+
+	start := time.Now()
+	_, err = w.Write(context.Background(), []byte("x"))
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	require.True(t, errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded), "got %v", err)
+	require.InDelta(t, testTimeout, elapsed, float64(testTimeout)*0.5)
+}

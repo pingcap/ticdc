@@ -34,7 +34,7 @@ func TestGetChangefeedFiles(t *testing.T) {
 				"captureID_test-3_uuid2.log",
 				"captureID_test-1_uuid3.log",
 			},
-			changefeed: common.NewChangeFeedIDWithName("test-1", common.DefaultKeyspaceNamme),
+			changefeed: common.NewChangeFeedIDWithName("test-1", common.DefaultKeyspaceName),
 			want: []string{
 				"captureID_test-1_uuid3.log",
 			},

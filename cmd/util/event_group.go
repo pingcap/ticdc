@@ -27,8 +27,20 @@ type EventsGroup struct {
 	Partition int32
 	tableID   int64
 
-	events        []*commonEvent.DMLEvent
+	events []*commonEvent.DMLEvent
+	// HighWatermark is the maximum CommitTs ever observed in this group.
+	//
+	// It is a "seen" watermark, not a "flushed/applied" watermark. When the
+	// consumer reads faster than it flushes to downstream, HighWatermark can be
+	// larger than AppliedWatermark.
 	HighWatermark uint64
+	// AppliedWatermark is the maximum CommitTs that has been successfully flushed
+	// to the downstream for this group.
+	//
+	// It is used to distinguish "safe to ignore" replays (CommitTs <=
+	// AppliedWatermark) from "still needed" events that arrive late due to sink
+	// retries / restarts.
+	AppliedWatermark uint64
 }
 
 // NewEventsGroup will create new event group.
@@ -51,23 +63,35 @@ func (g *EventsGroup) Append(row *commonEvent.DMLEvent, force bool) {
 		lastDMLEvent = g.events[len(g.events)-1]
 	}
 
+	mergeDMLEvent := func(dst, src *commonEvent.DMLEvent) {
+		dst.Rows.Append(src.Rows, 0, src.Rows.NumRows())
+		dst.RowTypes = append(dst.RowTypes, src.RowTypes...)
+		dst.Length += src.Length
+		dst.PostTxnFlushed = append(dst.PostTxnFlushed, src.PostTxnFlushed...)
+	}
+
 	if lastDMLEvent == nil || lastDMLEvent.GetCommitTs() < row.GetCommitTs() {
 		g.events = append(g.events, row)
 		return
 	}
 
 	if lastDMLEvent.GetCommitTs() == row.GetCommitTs() {
-		lastDMLEvent.Rows.Append(row.Rows, 0, row.Rows.NumRows())
-		lastDMLEvent.RowTypes = append(lastDMLEvent.RowTypes, row.RowTypes...)
-		lastDMLEvent.Length += row.Length
-		lastDMLEvent.PostTxnFlushed = append(lastDMLEvent.PostTxnFlushed, row.PostTxnFlushed...)
+		mergeDMLEvent(lastDMLEvent, row)
 		return
 	}
 
 	if force {
+		// A smaller CommitTs can appear at a larger Kafka offset after a TiCDC
+		// restart/retry (at-least-once replay). In this case we need to insert the
+		// event by CommitTs order. If the CommitTs already exists, merge it so one
+		// upstream transaction isn't split into multiple downstream transactions.
 		i := sort.Search(len(g.events), func(i int) bool {
 			return g.events[i].CommitTs > row.CommitTs
 		})
+		if i > 0 && g.events[i-1].CommitTs == row.CommitTs {
+			mergeDMLEvent(g.events[i-1], row)
+			return
+		}
 		g.events = slices.Insert(g.events, i, row)
 		return
 	}
@@ -85,12 +109,39 @@ func (g *EventsGroup) Resolve(resolve uint64) []*commonEvent.DMLEvent {
 	result := g.events[:i]
 	g.events = g.events[i:]
 	if len(result) != 0 && len(g.events) != 0 {
-		log.Warn("not all events resolved",
+		log.Debug("not all events resolved",
 			zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
 			zap.Int("resolved", len(result)), zap.Int("remained", len(g.events)),
 			zap.Uint64("resolveTs", resolve), zap.Uint64("firstCommitTs", g.events[0].CommitTs))
 	}
 	return result
+}
+
+// ResolveInto appends all events with CommitTs <= resolve into dst and removes them from the group.
+//
+// Why this exists: Resolve() returns a slice that aliases the group's backing array. If the group
+// is kept alive, stale pointers in that backing array can retain resolved events and cause memory
+// growth in long-running consumers. ResolveInto copies pointers into dst first, then clears the
+// resolved prefix so Go GC can reclaim resolved events once downstream is done with them.
+func (g *EventsGroup) ResolveInto(resolve uint64, dst []*commonEvent.DMLEvent) []*commonEvent.DMLEvent {
+	i := sort.Search(len(g.events), func(i int) bool {
+		return g.events[i].CommitTs > resolve
+	})
+	if i == 0 {
+		return dst
+	}
+
+	// Copy pointers out first so we can safely clear the group's slice without affecting callers.
+	dst = append(dst, g.events[:i]...)
+	clear(g.events[:i])
+	g.events = g.events[i:]
+	if len(g.events) != 0 {
+		log.Debug("not all events resolved",
+			zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
+			zap.Int("resolved", i), zap.Int("remained", len(g.events)),
+			zap.Uint64("resolveTs", resolve), zap.Uint64("firstCommitTs", g.events[0].CommitTs))
+	}
+	return dst
 }
 
 // GetAllEvents will get all events.

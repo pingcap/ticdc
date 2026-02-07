@@ -134,7 +134,7 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 		SinkURI:    downstreamURIStr,
 		SinkConfig: replicaConfig.Sink,
 	}
-	sink, err := sink.New(stdCtx, cfg, commonType.NewChangeFeedIDWithName(defaultChangefeedName, commonType.DefaultKeyspaceNamme))
+	sink, err := sink.New(stdCtx, cfg, commonType.NewChangeFeedIDWithName(defaultChangefeedName, commonType.DefaultKeyspaceName))
 	if err != nil {
 		log.Error("failed to create sink", zap.Error(err))
 		return nil, err
@@ -214,7 +214,7 @@ func (c *consumer) getNewFiles(
 				// skip handling this file
 				return nil
 			}
-		} else if strings.HasSuffix(path, c.fileExtension) {
+		} else if strings.HasSuffix(path, ".index") {
 			err := c.parseDMLFilePath(ctx, path)
 			if err != nil {
 				log.Error("failed to parse dml file path", zap.Error(err))
@@ -265,7 +265,7 @@ func (c *consumer) appendRow2Group(dml *event.DMLEvent, enableTableAcrossNodes b
 	log.Warn("dml event commit ts fallback, ignore",
 		zap.Uint64("commitTs", dml.CommitTs),
 		zap.Any("highWatermark", group.HighWatermark),
-		zap.Any("row", dml),
+		zap.Stringer("row", dml),
 	)
 }
 
@@ -378,23 +378,39 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 	}
 }
 
-func (c *consumer) parseDMLFilePath(_ context.Context, path string) error {
+func (c *consumer) parseDMLFilePath(ctx context.Context, path string) error {
 	var dmlkey cloudstorage.DmlPathKey
-	fileIdx, err := dmlkey.ParseDMLFilePath(
+	dispatcherID, err := dmlkey.ParseIndexFilePath(
 		putil.GetOrZero(c.replicationCfg.Sink.DateSeparator),
 		path,
 	)
 	if err != nil {
 		return errors.Trace(err)
 	}
+	data, err := c.externalStorage.ReadFile(ctx, path)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	fileName := strings.TrimSuffix(string(data), "\n")
+	fileIdx, err := cloudstorage.FetchIndexFromFileName(fileName, c.fileExtension)
+	if err != nil {
+		return err
+	}
+	fileIndex := &cloudstorage.FileIndex{
+		FileIndexKey: cloudstorage.FileIndexKey{
+			DispatcherID:           dispatcherID,
+			EnableTableAcrossNodes: dispatcherID != "",
+		},
+		Idx: fileIdx,
+	}
 
 	m, ok := c.tableDMLIdxMap[dmlkey]
 	if !ok {
 		c.tableDMLIdxMap[dmlkey] = fileIndexKeyMap{
-			fileIdx.FileIndexKey: fileIdx.Idx,
+			fileIndex.FileIndexKey: fileIndex.Idx,
 		}
-	} else if fileIdx.Idx >= m[fileIdx.FileIndexKey] {
-		c.tableDMLIdxMap[dmlkey][fileIdx.FileIndexKey] = fileIdx.Idx
+	} else if fileIndex.Idx >= m[fileIndex.FileIndexKey] {
+		c.tableDMLIdxMap[dmlkey][fileIndex.FileIndexKey] = fileIndex.Idx
 	}
 	return nil
 }

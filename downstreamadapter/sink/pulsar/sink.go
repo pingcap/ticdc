@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -49,8 +50,8 @@ type sink struct {
 
 	tableSchemaStore *commonEvent.TableSchemaStore
 	checkpointTsChan chan uint64
-	eventChan        chan *commonEvent.DMLEvent
-	rowChan          chan *commonEvent.MQRowEvent
+	eventChan        *chann.UnlimitedChannel[*commonEvent.DMLEvent, any]
+	rowChan          *chann.UnlimitedChannel[*commonEvent.MQRowEvent, any]
 }
 
 func (s *sink) SinkType() commonType.SinkType {
@@ -94,8 +95,8 @@ func New(
 		ddlProducer:  ddlProducer,
 
 		checkpointTsChan: make(chan uint64, 16),
-		eventChan:        make(chan *commonEvent.DMLEvent, 32),
-		rowChan:          make(chan *commonEvent.MQRowEvent, 32),
+		eventChan:        chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
+		rowChan:          chann.NewUnlimitedChannelDefault[*commonEvent.MQRowEvent](),
 
 		protocol:      protocol,
 		partitionRule: helper.GetDDLDispatchRule(protocol),
@@ -124,7 +125,7 @@ func (s *sink) IsNormal() bool {
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	s.eventChan <- event
+	s.eventChan.Push(event)
 }
 
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
@@ -153,6 +154,15 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		if err != nil {
 			return err
 		}
+		if message == nil {
+			log.Info("Skip ddl event",
+				zap.Uint64("startTs", event.GetStartTs()),
+				zap.Uint64("commitTs", e.GetCommitTs()),
+				zap.String("query", e.Query),
+				zap.Stringer("changefeed", s.changefeedID))
+			continue
+		}
+		common.SetDDLMessageLogInfo(message, e)
 		topic := s.comp.eventRouter.GetTopicForDDL(e)
 		// Notice: We must call GetPartitionNum here,
 		// which will be responsible for automatically creating topics when they don't exist.
@@ -162,13 +172,14 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		if err != nil {
 			return err
 		}
+		ddlType := e.GetDDLType().String()
 		if s.partitionRule == helper.PartitionAll {
-			err = s.statistics.RecordDDLExecution(func() error {
-				return s.ddlProducer.syncBroadcastMessage(s.ctx, topic, message)
+			err = s.statistics.RecordDDLExecution(func() (string, error) {
+				return ddlType, s.ddlProducer.syncBroadcastMessage(s.ctx, topic, message, common.MessageTypeDDL)
 			})
 		} else {
-			err = s.statistics.RecordDDLExecution(func() error {
-				return s.ddlProducer.syncSendMessage(s.ctx, topic, message)
+			err = s.statistics.RecordDDLExecution(func() (string, error) {
+				return ddlType, s.ddlProducer.syncSendMessage(s.ctx, topic, message, common.MessageTypeDDL)
 			})
 		}
 		if err != nil {
@@ -228,6 +239,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 			if msg == nil {
 				continue
 			}
+			common.SetCheckpointMessageLogInfo(msg, ts)
 
 			tableNames := s.getAllTableNames(ts)
 			// NOTICE: When there are no tables to replicate,
@@ -239,7 +251,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 				if err != nil {
 					return errors.Trace(err)
 				}
-				err = s.ddlProducer.syncBroadcastMessage(ctx, topic, msg)
+				err = s.ddlProducer.syncBroadcastMessage(ctx, topic, msg, common.MessageTypeResolved)
 				if err != nil {
 					return errors.Trace(err)
 				}
@@ -250,7 +262,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 					if err != nil {
 						return errors.Trace(err)
 					}
-					err = s.ddlProducer.syncBroadcastMessage(ctx, topic, msg)
+					err = s.ddlProducer.syncBroadcastMessage(ctx, topic, msg, common.MessageTypeResolved)
 					if err != nil {
 						return errors.Trace(err)
 					}
@@ -261,6 +273,11 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 			checkpointTsMessageDuration.Observe(time.Since(start).Seconds())
 		}
 	}
+}
+
+func (s *sink) close() {
+	s.eventChan.Close()
+	s.rowChan.Close()
 }
 
 func (s *sink) sendDMLEvent(ctx context.Context) error {
@@ -278,6 +295,9 @@ func (s *sink) sendDMLEvent(ctx context.Context) error {
 		return s.nonBatchEncodeRun(ctx)
 	})
 	g.Go(func() error {
+		// UnlimitedChannel will block when there is no event, they cannot dirrectly find ctx.Done()
+		// Thus, we need to close the channel when the context is done
+		defer s.close()
 		return s.sendMessages(ctx)
 	})
 	g.Go(func() error {
@@ -291,7 +311,14 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
-		case event := <-s.eventChan:
+		default:
+			event, ok := s.eventChan.Get()
+			if !ok {
+				log.Info("pulsar sink event channel closed",
+					zap.String("keyspace", s.changefeedID.Keyspace()),
+					zap.String("changefeed", s.changefeedID.Name()))
+				return nil
+			}
 			schema := event.TableInfo.GetSchemaName()
 			table := event.TableInfo.GetTableName()
 			topic := s.comp.eventRouter.GetTopicForRowChange(schema, table)
@@ -347,7 +374,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 						Checksum:        row.Checksum,
 					},
 				}
-				s.rowChan <- mqEvent
+				s.rowChan.Push(mqEvent)
 			}
 		}
 	}
@@ -376,7 +403,7 @@ func (s *sink) batchEncodeRun(ctx context.Context) error {
 	msgsBuf := make([]*commonEvent.MQRowEvent, batchSize)
 	for {
 		start := time.Now()
-		msgCount, err := s.batch(ctx, msgsBuf, ticker)
+		msgs, err := s.batch(ctx, msgsBuf, ticker)
 		if err != nil {
 			log.Error("pulsar sink batch dml events failed",
 				zap.String("keyspace", s.changefeedID.Keyspace()),
@@ -384,14 +411,13 @@ func (s *sink) batchEncodeRun(ctx context.Context) error {
 				zap.Error(err))
 			return errors.Trace(err)
 		}
-		if msgCount == 0 {
+		if len(msgs) == 0 {
 			continue
 		}
 
-		metricBatchSize.Observe(float64(msgCount))
+		metricBatchSize.Observe(float64(len(msgs)))
 		metricBatchDuration.Observe(time.Since(start).Seconds())
 
-		msgs := msgsBuf[:msgCount]
 		// Group messages by its TopicPartitionKey before adding them to the encoder group.
 		groupedMsgs := s.group(msgs)
 		for key, msg := range groupedMsgs {
@@ -403,52 +429,22 @@ func (s *sink) batchEncodeRun(ctx context.Context) error {
 }
 
 // batch collects a batch of messages from w.msgChan into buffer.
-// It returns the number of messages collected.
 // Note: It will block until at least one message is received.
-func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, ticker *time.Ticker) (int, error) {
-	msgCount := 0
-	maxBatchSize := len(buffer)
+func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, ticker *time.Ticker) ([]*commonEvent.MQRowEvent, error) {
 	// We need to receive at least one message or be interrupted,
 	// otherwise it will lead to idling.
 	select {
 	case <-ctx.Done():
-		return msgCount, ctx.Err()
-	case msg, ok := <-s.rowChan:
+		return nil, ctx.Err()
+	default:
+		msgs, ok := s.rowChan.GetMultipleNoGroup(buffer)
 		if !ok {
 			log.Info("pulsar sink row event channel closed",
 				zap.String("keyspace", s.changefeedID.Keyspace()),
 				zap.String("changefeed", s.changefeedID.Name()))
-			return msgCount, nil
+			return nil, nil
 		}
-
-		buffer[msgCount] = msg
-		msgCount++
-	}
-
-	// Reset the ticker to start a new batching.
-	// We need to stop batching when the interval is reached.
-	ticker.Reset(batchInterval)
-	for {
-		select {
-		case <-ctx.Done():
-			return msgCount, ctx.Err()
-		case msg, ok := <-s.rowChan:
-			if !ok {
-				log.Info("pulsar sink row event channel closed",
-					zap.String("keyspace", s.changefeedID.Keyspace()),
-					zap.String("changefeed", s.changefeedID.Name()))
-				return msgCount, nil
-			}
-
-			buffer[msgCount] = msg
-			msgCount++
-
-			if msgCount >= maxBatchSize {
-				return msgCount, nil
-			}
-		case <-ticker.C:
-			return msgCount, nil
-		}
+		return msgs, nil
 	}
 }
 
@@ -470,7 +466,8 @@ func (s *sink) nonBatchEncodeRun(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
-		case event, ok := <-s.rowChan:
+		default:
+			event, ok := s.rowChan.Get()
 			if !ok {
 				log.Info("pulsar sink row event channel closed",
 					zap.String("keyspace", s.changefeedID.Keyspace()),
@@ -529,7 +526,7 @@ func (s *sink) getAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
 			zap.Uint64("ts", ts))
 		return nil
 	}
-	return s.tableSchemaStore.GetAllTableNames(ts)
+	return s.tableSchemaStore.GetAllTableNames(ts, true)
 }
 
 func (s *sink) Close(_ bool) {

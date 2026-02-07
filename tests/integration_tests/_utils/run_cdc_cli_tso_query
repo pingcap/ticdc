@@ -21,11 +21,30 @@ pd_host=${1}
 pd_port=${2}
 is_tls=${3:-false}
 
+max_retries=5
+retry_interval=1
+tso=""
+protocol="http"
 if [ "$is_tls" == "true" ]; then
-	tso=$(run_cdc_cli tso query --pd=https://${pd_host}:${pd_port} | grep -v "Command to ticdc")
-else
-	tso=$(run_cdc_cli tso query --pd=http://${pd_host}:${pd_port} | grep -v "Command to ticdc")
+	protocol="https"
 fi
+pd_addr="${protocol}://${pd_host}:${pd_port}"
+for ((i = 1; i <= max_retries; i++)); do
+	tso=$(run_cdc_cli tso query --pd="$pd_addr" | grep -v "Command to ticdc") || true
+
+	# Check if we got a valid TSO (starts with a number)
+	if [[ -n "$tso" && "$tso" =~ ^[0-9] ]]; then
+		break
+	fi
+
+	if [[ $i -lt $max_retries ]]; then
+		echo "TSO query attempt $i failed, retrying in ${retry_interval}s..." >&2
+		sleep "$retry_interval"
+	else
+		echo "TSO query failed after $max_retries attempts" >&2
+		exit 1
+	fi
+done
 
 # make sure get tso only
 # the tso got above is:

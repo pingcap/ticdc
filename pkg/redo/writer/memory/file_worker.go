@@ -436,7 +436,7 @@ func (f *fileWorkerGroup) getLogFileName(maxCommitTS common.Ts) string {
 		return f.op.GetLogFileName()
 	}
 	uid := f.uuidGenerator.NewString()
-	if common.DefaultKeyspaceNamme == f.cfg.ChangeFeedID.Keyspace() {
+	if common.DefaultKeyspaceName == f.cfg.ChangeFeedID.Keyspace() {
 		return fmt.Sprintf(redo.RedoLogFileFormatV1,
 			f.cfg.CaptureID, f.cfg.ChangeFeedID.Name(), f.logType,
 			maxCommitTS, uid, redo.LogEXT)

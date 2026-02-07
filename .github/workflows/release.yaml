@@ -11,16 +11,26 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.tag.outputs.version }}
+      is_release: ${{ steps.check.outputs.is_release }}
     steps:
       - name: Get the version
         id: tag
         run: echo "version=$(echo $GITHUB_REF | cut -d / -f 3)" >> $GITHUB_OUTPUT
+      - name: Check if release version
+        id: check
+        run: |
+          VERSION="${{ steps.tag.outputs.version }}"
+          if [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-release\.[0-9]+)?$ ]]; then
+            echo "is_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_release=false" >> $GITHUB_OUTPUT
+          fi
       - name: Echo tag
-        run: echo ${{ steps.tag.outputs.version }}
+        run: echo ${{ steps.tag.outputs.version }} is_release=${{ steps.check.outputs.is_release }}
   release:
     name: release
     needs: tag
-    if: '!contains(needs.tag.outputs.version, ''nextgen'')'
+    if: needs.tag.outputs.is_release == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

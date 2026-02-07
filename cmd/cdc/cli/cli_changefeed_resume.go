@@ -21,15 +21,16 @@ import (
 	v2 "github.com/pingcap/ticdc/api/v2"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
-	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
+	apiClient "github.com/pingcap/ticdc/pkg/api/v2"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/spf13/cobra"
 	"github.com/tikv/client-go/v2/oracle"
 )
 
 // resumeChangefeedOptions defines flags for the `cli changefeed resume` command.
 type resumeChangefeedOptions struct {
-	apiClient apiv2client.APIV2Interface
+	apiClient apiClient.APIV2Interface
 
 	changefeedID          string
 	keyspace              string
@@ -38,6 +39,7 @@ type resumeChangefeedOptions struct {
 	overwriteCheckpointTs string
 	currentTso            *v2.Tso
 	checkpointTs          uint64
+	verbose               bool
 
 	upstreamPDAddrs  string
 	upstreamCaPath   string
@@ -66,6 +68,7 @@ func (o *resumeChangefeedOptions) addFlags(cmd *cobra.Command) {
 		"Certificate path for TLS connection to upstream")
 	cmd.PersistentFlags().StringVar(&o.upstreamKeyPath, "upstream-key", "",
 		"Private key path for TLS connection to upstream")
+	cmd.PersistentFlags().BoolVarP(&o.verbose, "verbose", "v", false, "Print verbose information when updating a changefeed. Caution: This will list all tables to be replicated by the changefeed. If the number of tables is extremely large, it may flood your screen.")
 	// we don't support specify there flags below when cdc version <= 6.3.0
 	_ = cmd.PersistentFlags().MarkHidden("upstream-pd")
 	_ = cmd.PersistentFlags().MarkHidden("upstream-ca")
@@ -204,8 +207,45 @@ func (o *resumeChangefeedOptions) run(cmd *cobra.Command) error {
 	if err := o.confirmResumeChangefeedCheck(cmd); err != nil {
 		return err
 	}
+	tables := &v2.Tables{}
+	if o.checkpointTs != 0 {
+		cf, err := o.apiClient.Changefeeds().Get(ctx, o.keyspace, o.changefeedID)
+		if err != nil {
+			return err
+		}
+		tables, err = o.apiClient.Changefeeds().GetAllTables(ctx, &v2.VerifyTableConfig{
+			ReplicaConfig: cf.Config,
+			StartTs:       cf.CheckpointTs,
+		}, o.keyspace)
+		if err != nil {
+			return err
+		}
+		if len(tables.IneligibleTables) != 0 {
+			if putil.GetOrZero(cf.Config.ForceReplicate) {
+				cmd.Printf("[WARN] Force to replicate some ineligible tables, "+
+					"these tables do not have a primary key or a not-null unique key: %#v\n"+
+					"[WARN] This may cause data redundancy, "+
+					"please refer to the official documentation for details.\n",
+					tables.IneligibleTables)
+			} else {
+				cmd.Printf("[WARN] Some tables are not eligible to replicate, "+
+					"because they do not have a primary key or a not-null unique key: %#v\n",
+					tables.IneligibleTables)
+			}
+		}
+	}
 	err := o.apiClient.Changefeeds().Resume(ctx, cfg, o.keyspace, o.changefeedID)
-
+	if err != nil {
+		return err
+	}
+	// o.checkpointTs != 0
+	cmd.Printf("Resume changefeed successfully! "+
+		"\nID: %s\nOverwriteCheckpointTs: %t\nIneligibleTablesCount: %d\nEligibleTablesCount: %d\nAllTablesCount: %d\n", o.changefeedID, o.checkpointTs != 0, len(tables.IneligibleTables), len(tables.EligibleTables), len(tables.AllTables))
+	if o.verbose {
+		cmd.Printf("EligibleTables: %s\n", formatTableNames(tables.EligibleTables))
+		cmd.Printf("IneligibleTables: %s\n", formatTableNames(tables.IneligibleTables))
+		cmd.Printf("AllTables: %s\n", formatTableNames(tables.AllTables))
+	}
 	return err
 }
 
