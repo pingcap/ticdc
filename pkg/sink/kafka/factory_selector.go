@@ -28,12 +28,11 @@ func NewFactory(
 	changefeedID common.ChangeFeedID,
 ) (Factory, error) {
 	switch strings.ToLower(strings.TrimSpace(o.KafkaClient)) {
-	case "", "sarama":
-		return NewSaramaFactory(ctx, o, changefeedID)
-	case "franz":
+	case "", "franz":
 		return NewFranzFactory(ctx, o, changefeedID)
+	case "sarama":
+		return NewSaramaFactory(ctx, o, changefeedID)
 	default:
 		return nil, errors.ErrKafkaInvalidConfig.GenWithStack("unsupported kafka client %s", o.KafkaClient)
 	}
 }
-

@@ -186,7 +186,7 @@ func NewOptions() *options {
 		Version: "2.4.0",
 		// MaxMessageBytes will be used to initialize producer
 		MaxMessageBytes:    config.DefaultMaxMessageBytes,
-		KafkaClient:        "sarama",
+		KafkaClient:        "franz",
 		ReplicationFactor:  1,
 		Compression:        "none",
 		RequiredAcks:       WaitForAll,
