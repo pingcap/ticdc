@@ -34,11 +34,6 @@ type TopicDetail struct {
 	ReplicationFactor int16
 }
 
-// Broker represents a Kafka broker.
-type Broker struct {
-	ID int32
-}
-
 type AdminClient struct {
 	changefeed common.ChangeFeedID
 
@@ -53,12 +48,12 @@ func NewAdminClient(
 	o *Options,
 	hook kgo.Hook,
 ) (*AdminClient, error) {
-	baseOpts, err := buildFranzBaseOptions(ctx, o, hook)
+	opts, err := newOptions(ctx, o, hook)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
-	client, err := kgo.NewClient(baseOpts...)
+	client, err := kgo.NewClient(opts...)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -83,7 +78,7 @@ func (a *AdminClient) newRequestContext() (context.Context, context.CancelFunc) 
 	return context.WithTimeout(a.client.Context(), a.timeout)
 }
 
-func (a *AdminClient) GetAllBrokers() []Broker {
+func (a *AdminClient) GetAllBrokers() []int32 {
 	ctx, cancel := a.newRequestContext()
 	defer cancel()
 
@@ -95,15 +90,7 @@ func (a *AdminClient) GetAllBrokers() []Broker {
 			zap.Error(err))
 		return nil
 	}
-
-	result := make([]Broker, 0, len(meta.Brokers))
-	for _, broker := range meta.Brokers {
-		if broker.NodeID < 0 {
-			continue
-		}
-		result = append(result, Broker{ID: broker.NodeID})
-	}
-	return result
+	return meta.Brokers.NodeIDs()
 }
 
 func (a *AdminClient) GetBrokerConfig(configName string) (string, error) {
@@ -138,7 +125,7 @@ func (a *AdminClient) GetBrokerConfig(configName string) (string, error) {
 		}
 	}
 
-	log.Warn("Kafka config item not found",
+	log.Warn("Kafka broker config item not found",
 		zap.String("keyspace", a.changefeed.Keyspace()),
 		zap.String("changefeed", a.changefeed.Name()),
 		zap.String("configName", configName))
@@ -165,7 +152,7 @@ func (a *AdminClient) GetTopicConfig(topicName string, configName string) (strin
 
 	for _, entry := range resource.Configs {
 		if entry.Key == configName {
-			log.Info("Kafka config item found",
+			log.Info("Kafka topic config item found",
 				zap.String("keyspace", a.changefeed.Keyspace()),
 				zap.String("changefeed", a.changefeed.Name()),
 				zap.String("configName", configName),
@@ -204,25 +191,22 @@ func (a *AdminClient) GetTopicsMeta(
 		if !ok {
 			continue
 		}
-		if detail.Err != nil {
-			if errors.Is(detail.Err, kerr.UnknownTopicOrPartition) {
-				continue
+		if detail.Err == nil {
+			result[topic] = TopicDetail{
+				Name:          topic,
+				NumPartitions: int32(len(detail.Partitions)),
 			}
-			if !ignoreTopicError {
-				return nil, errors.Trace(detail.Err)
-			}
-			log.Warn("fetch topic meta failed",
-				zap.String("keyspace", a.changefeed.Keyspace()),
-				zap.String("changefeed", a.changefeed.Name()),
-				zap.String("topic", topic),
-				zap.Error(detail.Err))
 			continue
 		}
-
-		result[topic] = TopicDetail{
-			Name:          topic,
-			NumPartitions: int32(len(detail.Partitions)),
+		if errors.Is(detail.Err, kerr.UnknownTopicOrPartition) {
+			continue
 		}
+		if !ignoreTopicError {
+			return nil, errors.Trace(detail.Err)
+		}
+		log.Warn("fetch topic meta failed",
+			zap.String("keyspace", a.changefeed.Keyspace()), zap.String("changefeed", a.changefeed.Name()),
+			zap.String("topic", topic), zap.Error(detail.Err))
 	}
 	return result, nil
 }
@@ -275,13 +259,13 @@ func (a *AdminClient) CreateTopic(detail *TopicDetail, validateOnly bool) error 
 	if !ok {
 		return errors.ErrKafkaCreateTopic.GenWithStack("kafka topic create response is missing")
 	}
-	if resp.Err != nil {
-		if errors.Is(resp.Err, kerr.TopicAlreadyExists) {
-			return nil
-		}
-		return errors.Trace(resp.Err)
+	if resp.Err == nil {
+		return nil
 	}
-	return nil
+	if errors.Is(resp.Err, kerr.TopicAlreadyExists) {
+		return nil
+	}
+	return errors.Trace(resp.Err)
 }
 
 func (a *AdminClient) Heartbeat() {}

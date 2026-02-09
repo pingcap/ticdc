@@ -28,8 +28,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const franzAsyncRecordRetries = 3
-
 type AsyncProducer struct {
 	client       *kgo.Client
 	changefeedID commonType.ChangeFeedID
@@ -44,16 +42,12 @@ func NewAsyncProducer(
 	o *Options,
 	hook kgo.Hook,
 ) (*AsyncProducer, error) {
-	baseOpts, err := buildFranzBaseOptions(ctx, o, hook)
+	opts, err := newOptions(ctx, o, hook)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	producerOpts, err := buildFranzProducerOptions(o, franzAsyncRecordRetries)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
-	client, err := kgo.NewClient(append(baseOpts, producerOpts...)...)
+	opts = append(opts, newProducerOptions(o)...)
+	client, err := kgo.NewClient(opts...)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -93,17 +87,21 @@ func (p *AsyncProducer) AsyncSend(
 
 	select {
 	case <-ctx.Done():
-		return errors.Trace(ctx.Err())
+		return context.Cause(ctx)
 	default:
 	}
 
+	var (
+		keyspace   = p.changefeedID.Keyspace()
+		changefeed = p.changefeedID.Name()
+	)
+
 	failpoint.Inject("KafkaSinkAsyncSendError", func() {
 		log.Info("KafkaSinkAsyncSendError error injected",
-			zap.String("keyspace", p.changefeedID.Keyspace()),
-			zap.String("changefeed", p.changefeedID.Name()))
+			zap.String("keyspace", keyspace), zap.String("changefeed", changefeed))
 		errWithInfo := logutil.AnnotateEventError(
-			p.changefeedID.Keyspace(),
-			p.changefeedID.Name(),
+			keyspace,
+			changefeed,
 			message.LogInfo,
 			errors.New("kafka sink injected error"),
 		)
@@ -114,9 +112,6 @@ func (p *AsyncProducer) AsyncSend(
 		failpoint.Return(nil)
 	})
 
-	callback := message.Callback
-	logInfo := message.LogInfo
-
 	record := &kgo.Record{
 		Topic:     topic,
 		Partition: partition,
@@ -124,16 +119,18 @@ func (p *AsyncProducer) AsyncSend(
 		Value:     message.Value,
 	}
 
-	p.client.Produce(ctx, record, func(_ *kgo.Record, err error) {
+	callback := message.Callback
+	logInfo := message.LogInfo
+	promise := func(_ *kgo.Record, err error) {
 		if err != nil {
 			errWithInfo := logutil.AnnotateEventError(
-				p.changefeedID.Keyspace(),
-				p.changefeedID.Name(),
+				keyspace, changefeed,
 				logInfo,
 				err,
 			)
 			select {
 			case p.errCh <- errors.WrapError(errors.ErrKafkaAsyncSendMessage, errWithInfo):
+			// todo: remove this default after support dispatcher recover logic.
 			default:
 			}
 			return
@@ -141,8 +138,8 @@ func (p *AsyncProducer) AsyncSend(
 		if callback != nil {
 			callback()
 		}
-	})
-
+	}
+	p.client.Produce(ctx, record, promise)
 	return nil
 }
 
@@ -156,7 +153,7 @@ func (p *AsyncProducer) AsyncRunCallback(ctx context.Context) error {
 			log.Info("async producer exit since context is done",
 				zap.String("keyspace", p.changefeedID.Keyspace()),
 				zap.String("changefeed", p.changefeedID.Name()))
-			return errors.Trace(ctx.Err())
+			return context.Cause(ctx)
 		case err := <-p.errCh:
 			if err == nil {
 				return nil

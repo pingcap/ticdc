@@ -34,14 +34,6 @@ import (
 	"golang.org/x/oauth2/clientcredentials"
 )
 
-type RequiredAcks int16
-
-const (
-	NoResponse   RequiredAcks = 0
-	WaitForLocal RequiredAcks = 1
-	WaitForAll   RequiredAcks = -1
-)
-
 type Options struct {
 	BrokerEndpoints []string
 	ClientID        string
@@ -51,7 +43,6 @@ type Options struct {
 
 	MaxMessageBytes int
 	Compression     string
-	RequiredAcks    RequiredAcks
 
 	EnableTLS          bool
 	Credential         *security.Credential
@@ -63,7 +54,7 @@ type Options struct {
 	ReadTimeout  time.Duration
 }
 
-func buildFranzBaseOptions(
+func newOptions(
 	ctx context.Context,
 	o *Options,
 	hook kgo.Hook,
@@ -96,7 +87,7 @@ func buildFranzBaseOptions(
 	}
 
 	if o.EnableTLS {
-		tlsConfig, err := buildFranzTLSConfig(o)
+		tlsConfig, err := newTLSConfig(o)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
@@ -114,7 +105,7 @@ func buildFranzBaseOptions(
 	return opts, nil
 }
 
-func buildFranzTLSConfig(o *Options) (*tls.Config, error) {
+func newTLSConfig(o *Options) (*tls.Config, error) {
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		NextProtos: []string{"h2", "http/1.1"},
@@ -163,7 +154,7 @@ func buildFranzSaslMechanism(ctx context.Context, o *Options) (sasl.Mechanism, e
 		}
 		return auth.AsSha512Mechanism(), nil
 	case security.OAuthMechanism:
-		tokenSource, err := buildFranzOauthTokenSource(ctx, o)
+		tokenSource, err := newOauthTokenSource(ctx, o)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
@@ -175,13 +166,13 @@ func buildFranzSaslMechanism(ctx context.Context, o *Options) (sasl.Mechanism, e
 			return oauth.Auth{Token: token.AccessToken}, nil
 		}), nil
 	case security.GSSAPIMechanism:
-		return buildFranzGSSAPIMechanism(o.SASL.GSSAPI)
+		return buildGSSAPIMechanism(o.SASL.GSSAPI)
 	default:
-		return nil, errors.ErrKafkaInvalidConfig.GenWithStack("unsupported sasl mechanism %s", o.SASL.SASLMechanism)
 	}
+	return nil, errors.ErrKafkaInvalidConfig.GenWithStack("unsupported sasl mechanism %s", o.SASL.SASLMechanism)
 }
 
-func buildFranzOauthTokenSource(ctx context.Context, o *Options) (oauth2.TokenSource, error) {
+func newOauthTokenSource(ctx context.Context, o *Options) (oauth2.TokenSource, error) {
 	endpointParams := url.Values{}
 	if o.SASL.OAuth2.GrantType != "" {
 		endpointParams.Set("grant_type", o.SASL.OAuth2.GrantType)
@@ -205,28 +196,9 @@ func buildFranzOauthTokenSource(ctx context.Context, o *Options) (oauth2.TokenSo
 	return cfg.TokenSource(ctx), nil
 }
 
-func buildFranzProducerOptions(
+func newProducerOptions(
 	o *Options,
-	recordRetries int,
-) ([]kgo.Opt, error) {
-	var acks kgo.Acks
-	switch o.RequiredAcks {
-	case WaitForAll:
-		acks = kgo.AllISRAcks()
-	case WaitForLocal:
-		acks = kgo.LeaderAck()
-	case NoResponse:
-		acks = kgo.NoAck()
-	default:
-		acks = kgo.AllISRAcks()
-		log.Warn("unknown required acks, use all isr acks", zap.Int16("requiredAcks", int16(o.RequiredAcks)))
-	}
-
-	compressionOpt, err := buildFranzCompressionOption(o)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
+) []kgo.Opt {
 	produceTimeout := o.ReadTimeout
 	if produceTimeout < 100*time.Millisecond {
 		produceTimeout = 10 * time.Second
@@ -234,34 +206,35 @@ func buildFranzProducerOptions(
 
 	return []kgo.Opt{
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),
-		kgo.RequiredAcks(acks),
+		kgo.RequiredAcks(kgo.AllISRAcks()),
 		kgo.DisableIdempotentWrite(),
 		kgo.MaxProduceRequestsInflightPerBroker(1),
-		kgo.RecordRetries(recordRetries),
+		kgo.RecordRetries(5),
 		kgo.ProducerBatchMaxBytes(int32(o.MaxMessageBytes)),
 		kgo.ProduceRequestTimeout(produceTimeout),
 		kgo.ProducerLinger(0),
-		compressionOpt,
-	}, nil
+		newCompressionOption(o),
+	}
 }
 
-func buildFranzCompressionOption(o *Options) (kgo.Opt, error) {
+func newCompressionOption(o *Options) kgo.Opt {
 	compression := strings.ToLower(strings.TrimSpace(o.Compression))
+	var codec kgo.CompressionCodec
 	switch compression {
 	case "none":
-		return kgo.ProducerBatchCompression(kgo.NoCompression()), nil
+		codec = kgo.NoCompression()
 	case "gzip":
-		return kgo.ProducerBatchCompression(kgo.GzipCompression()), nil
+		codec = kgo.GzipCompression()
 	case "snappy":
-		return kgo.ProducerBatchCompression(kgo.SnappyCompression()), nil
+		codec = kgo.SnappyCompression()
 	case "lz4":
-		return kgo.ProducerBatchCompression(kgo.Lz4Compression()), nil
+		codec = kgo.Lz4Compression()
 	case "zstd":
-		return kgo.ProducerBatchCompression(kgo.ZstdCompression()), nil
+		codec = kgo.ZstdCompression()
 	case "":
-		return kgo.ProducerBatchCompression(kgo.NoCompression()), nil
+		codec = kgo.NoCompression()
 	default:
 		log.Warn("unsupported compression algorithm", zap.String("compression", o.Compression))
-		return kgo.ProducerBatchCompression(kgo.NoCompression()), nil
 	}
+	return kgo.ProducerBatchCompression(codec)
 }

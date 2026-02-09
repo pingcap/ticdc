@@ -14,7 +14,9 @@
 package kafka
 
 import (
+	"github.com/pingcap/ticdc/pkg/errors"
 	kafkafranz "github.com/pingcap/ticdc/pkg/sink/kafka/franz"
+	"github.com/twmb/franz-go/pkg/kadm"
 )
 
 // franzAdminClientAdapter adapts the franz-go admin client implementation to kafka.ClusterAdminClient.
@@ -67,9 +69,9 @@ func (a *franzAdminClientAdapter) GetTopicsPartitionsNum(topics []string) (map[s
 
 func (a *franzAdminClientAdapter) CreateTopic(detail *TopicDetail, validateOnly bool) error {
 	if detail == nil {
-		return a.inner.CreateTopic(nil, validateOnly)
+		return errors.ErrKafkaInvalidConfig.GenWithStack("topic detail must not be nil")
 	}
-	franzDetail := &kafkafranz.TopicDetail{
+	franzDetail := &kadm.TopicDetail{
 		Name:              detail.Name,
 		NumPartitions:     detail.NumPartitions,
 		ReplicationFactor: detail.ReplicationFactor,

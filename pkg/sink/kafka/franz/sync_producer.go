@@ -28,8 +28,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const franzSyncRecordRetries = 5
-
 type SyncProducer struct {
 	id commonType.ChangeFeedID
 
@@ -44,25 +42,21 @@ func NewSyncProducer(
 	o *Options,
 	hook kgo.Hook,
 ) (*SyncProducer, error) {
-	baseOpts, err := buildFranzBaseOptions(ctx, o, hook)
+	opts, err := newOptions(ctx, o, hook)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	producerOpts, err := buildFranzProducerOptions(o, franzSyncRecordRetries)
+	opts = append(opts, newProducerOptions(o)...)
+
+	client, err := kgo.NewClient(opts...)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
 
-	client, err := kgo.NewClient(append(baseOpts, producerOpts...)...)
-	if err != nil {
-		return nil, errors.Trace(err)
+	timeout := o.ReadTimeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
 	}
-
-	produceTimeout := o.ReadTimeout
-	if produceTimeout <= 0 {
-		produceTimeout = 10 * time.Second
-	}
-	timeout := time.Duration(franzSyncRecordRetries+1) * produceTimeout
 
 	return &SyncProducer{
 		id:      changefeedID,

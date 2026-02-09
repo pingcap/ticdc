@@ -43,7 +43,7 @@ const (
 	gssAPIFinished = 3
 )
 
-type franzKerberosClient interface {
+type kerborosClient interface {
 	Login() error
 	GetServiceTicket(spn string) (messages.Ticket, types.EncryptionKey, error)
 	Domain() string
@@ -51,19 +51,19 @@ type franzKerberosClient interface {
 	Destroy()
 }
 
-type franzGSSAPIMechanism struct {
+type gssapiMechanism struct {
 	config security.GSSAPI
 }
 
-func (m *franzGSSAPIMechanism) Name() string {
+func (m *gssapiMechanism) Name() string {
 	return "GSSAPI"
 }
 
-func (m *franzGSSAPIMechanism) Authenticate(
+func (m *gssapiMechanism) Authenticate(
 	_ context.Context,
 	host string,
 ) (sasl.Session, []byte, error) {
-	client, err := newFranzKerberosClient(m.config)
+	client, err := newKerborosClient(m.config)
 	if err != nil {
 		return nil, nil, errors.Trace(err)
 	}
@@ -80,7 +80,7 @@ func (m *franzGSSAPIMechanism) Authenticate(
 		return nil, nil, errors.Trace(err)
 	}
 
-	session := &franzGSSAPISession{
+	session := &gssapiSession{
 		client: client,
 		ticket: ticket,
 		encKey: encKey,
@@ -94,8 +94,8 @@ func (m *franzGSSAPIMechanism) Authenticate(
 	return session, firstMessage, nil
 }
 
-type franzGSSAPISession struct {
-	client franzKerberosClient
+type gssapiSession struct {
+	client kerborosClient
 	ticket messages.Ticket
 	encKey types.EncryptionKey
 	step   int
@@ -103,7 +103,7 @@ type franzGSSAPISession struct {
 	closeOnce sync.Once
 }
 
-func (s *franzGSSAPISession) Challenge(challenge []byte) (bool, []byte, error) {
+func (s *gssapiSession) Challenge(challenge []byte) (bool, []byte, error) {
 	switch s.step {
 	case gssAPIVerify:
 		msg, err := s.nextMessage(challenge)
@@ -124,7 +124,7 @@ func (s *franzGSSAPISession) Challenge(challenge []byte) (bool, []byte, error) {
 	}
 }
 
-func (s *franzGSSAPISession) close() {
+func (s *gssapiSession) close() {
 	s.closeOnce.Do(func() {
 		if s.client != nil {
 			s.client.Destroy()
@@ -132,10 +132,10 @@ func (s *franzGSSAPISession) close() {
 	})
 }
 
-func (s *franzGSSAPISession) nextMessage(challenge []byte) ([]byte, error) {
+func (s *gssapiSession) nextMessage(challenge []byte) ([]byte, error) {
 	switch s.step {
 	case gssAPIInitial:
-		token, err := createKrb5Token(s.client.Domain(), s.client.CName(), s.ticket, s.encKey)
+		token, err := newKrb5Token(s.client.Domain(), s.client.CName(), s.ticket, s.encKey)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
@@ -165,7 +165,7 @@ func (s *franzGSSAPISession) nextMessage(challenge []byte) ([]byte, error) {
 	}
 }
 
-func buildFranzGSSAPIMechanism(g security.GSSAPI) (sasl.Mechanism, error) {
+func buildGSSAPIMechanism(g security.GSSAPI) (sasl.Mechanism, error) {
 	if g.ServiceName == "" {
 		return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
 			"sasl-gssapi-service-name must not be empty when sasl mechanism is GSSAPI")
@@ -199,22 +199,22 @@ func buildFranzGSSAPIMechanism(g security.GSSAPI) (sasl.Mechanism, error) {
 			"unsupported sasl-gssapi-auth-type %d", g.AuthType)
 	}
 
-	return &franzGSSAPIMechanism{config: g}, nil
+	return &gssapiMechanism{config: g}, nil
 }
 
-type franzGoKrb5Client struct {
+type krb5Client struct {
 	krb5client.Client
 }
 
-func (c *franzGoKrb5Client) Domain() string {
+func (c *krb5Client) Domain() string {
 	return c.Credentials.Domain()
 }
 
-func (c *franzGoKrb5Client) CName() types.PrincipalName {
+func (c *krb5Client) CName() types.PrincipalName {
 	return c.Credentials.CName()
 }
 
-func newFranzKerberosClient(g security.GSSAPI) (franzKerberosClient, error) {
+func newKerborosClient(g security.GSSAPI) (kerborosClient, error) {
 	cfg, err := krb5config.Load(g.KerberosConfigPath)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -236,10 +236,10 @@ func newFranzKerberosClient(g security.GSSAPI) (franzKerberosClient, error) {
 		return nil, errors.ErrKafkaInvalidConfig.GenWithStack(
 			"unsupported sasl-gssapi-auth-type %d", g.AuthType)
 	}
-	return &franzGoKrb5Client{*client}, nil
+	return &krb5Client{*client}, nil
 }
 
-func createKrb5Token(
+func newKrb5Token(
 	domain string,
 	cname types.PrincipalName,
 	ticket messages.Ticket,

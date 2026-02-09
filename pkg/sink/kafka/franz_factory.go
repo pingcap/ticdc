@@ -18,13 +18,13 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
-	kafkafranz "github.com/pingcap/ticdc/pkg/sink/kafka/franz"
+	"github.com/pingcap/ticdc/pkg/sink/kafka/franz"
 )
 
 type franzFactory struct {
 	changefeedID common.ChangeFeedID
 	option       *options
-	metricsHook  *kafkafranz.MetricsHook
+	metricsHook  *franz.MetricsHook
 }
 
 // NewFranzFactory constructs a Factory with franz-go implementation.
@@ -36,7 +36,7 @@ func NewFranzFactory(
 	o *options,
 	changefeedID common.ChangeFeedID,
 ) (Factory, error) {
-	adminInner, err := kafkafranz.NewAdminClient(ctx, changefeedID, newFranzOptions(o), nil)
+	adminInner, err := franz.NewAdminClient(ctx, changefeedID, newFranzOptions(o), nil)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -50,12 +50,12 @@ func NewFranzFactory(
 	return &franzFactory{
 		changefeedID: changefeedID,
 		option:       o,
-		metricsHook:  kafkafranz.NewMetricsHook(),
+		metricsHook:  franz.NewMetricsHook(),
 	}, nil
 }
 
 func (f *franzFactory) AdminClient(ctx context.Context) (ClusterAdminClient, error) {
-	adminInner, err := kafkafranz.NewAdminClient(ctx, f.changefeedID, newFranzOptions(f.option), f.metricsHook)
+	adminInner, err := franz.NewAdminClient(ctx, f.changefeedID, newFranzOptions(f.option), f.metricsHook)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
@@ -63,7 +63,7 @@ func (f *franzFactory) AdminClient(ctx context.Context) (ClusterAdminClient, err
 }
 
 func (f *franzFactory) SyncProducer(ctx context.Context) (SyncProducer, error) {
-	producer, err := kafkafranz.NewSyncProducer(ctx, f.changefeedID, newFranzOptions(f.option), f.metricsHook)
+	producer, err := franz.NewSyncProducer(ctx, f.changefeedID, newFranzOptions(f.option), f.metricsHook)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
@@ -71,7 +71,7 @@ func (f *franzFactory) SyncProducer(ctx context.Context) (SyncProducer, error) {
 }
 
 func (f *franzFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error) {
-	producer, err := kafkafranz.NewAsyncProducer(ctx, f.changefeedID, newFranzOptions(f.option), f.metricsHook)
+	producer, err := franz.NewAsyncProducer(ctx, f.changefeedID, newFranzOptions(f.option), f.metricsHook)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
@@ -85,11 +85,11 @@ func (f *franzFactory) MetricsCollector(_ ClusterAdminClient) MetricsCollector {
 	}
 }
 
-func newFranzOptions(o *options) *kafkafranz.Options {
+func newFranzOptions(o *options) *franz.Options {
 	if o == nil {
-		return &kafkafranz.Options{}
+		return &franz.Options{}
 	}
-	return &kafkafranz.Options{
+	return &franz.Options{
 		BrokerEndpoints: o.BrokerEndpoints,
 		ClientID:        o.ClientID,
 
@@ -98,7 +98,6 @@ func newFranzOptions(o *options) *kafkafranz.Options {
 
 		MaxMessageBytes: o.MaxMessageBytes,
 		Compression:     o.Compression,
-		RequiredAcks:    kafkafranz.RequiredAcks(o.RequiredAcks),
 
 		EnableTLS:          o.EnableTLS,
 		Credential:         o.Credential,
