@@ -138,6 +138,7 @@ type FilePathGenerator struct {
 	config       *Config
 	pdClock      pdutil.Clock
 	storage      storage.ExternalStorage
+	fileIndex    map[VersionedTableName]uint64
 
 	hasher     *hash.PositionInertia
 	versionMap map[VersionedTableName]uint64
@@ -157,6 +158,7 @@ func NewFilePathGenerator(
 		extension:    extension,
 		storage:      storage,
 		pdClock:      pdClock,
+		fileIndex:    make(map[VersionedTableName]uint64),
 		hasher:       hash.NewPositionInertia(),
 		versionMap:   make(map[VersionedTableName]uint64),
 	}
@@ -312,11 +314,26 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 	ctx context.Context, tbl VersionedTableName, date string,
 ) (string, error) {
 	dir := f.generateDataDirPath(tbl, date)
-	name, err := f.generateDataFileName(ctx, tbl, date)
+	if _, ok := f.fileIndex[tbl]; !ok {
+		fileIdx, err := f.getFileIdxFromIndexFile(ctx, tbl, date)
+		if err != nil {
+			return "", err
+		}
+		f.fileIndex[tbl] = fileIdx
+	}
+
+	name := generateDataFileName(f.config.EnableTableAcrossNodes, tbl.DispatcherID.String(), f.fileIndex[tbl]+1, f.extension, f.config.FileIndexWidth)
+	dataFile := path.Join(dir, name)
+	exist, err := f.storage.FileExists(ctx, dataFile)
 	if err != nil {
 		return "", err
 	}
-	return path.Join(dir, name), nil
+	if !exist {
+		return dataFile, nil
+	} else {
+		delete(f.fileIndex, tbl)
+		return f.GenerateDataFilePath(ctx, tbl, date)
+	}
 }
 
 func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date string) string {
@@ -335,16 +352,6 @@ func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date str
 	}
 
 	return path.Join(elems...)
-}
-
-func (f *FilePathGenerator) generateDataFileName(
-	ctx context.Context, tbl VersionedTableName, date string,
-) (string, error) {
-	fileIdx, err := f.getFileIdxFromIndexFile(ctx, tbl, date)
-	if err != nil {
-		return "", err
-	}
-	return generateDataFileName(f.config.EnableTableAcrossNodes, tbl.DispatcherID.String(), fileIdx+1, f.extension, f.config.FileIndexWidth), nil
 }
 
 func (f *FilePathGenerator) getFileIdxFromIndexFile(
