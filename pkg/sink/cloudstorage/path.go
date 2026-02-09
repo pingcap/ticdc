@@ -330,10 +330,11 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 	}
 	if !exist {
 		return dataFile, nil
-	} else {
-		delete(f.fileIndex, tbl)
-		return f.GenerateDataFilePath(ctx, tbl, date)
 	}
+	// if the file already exists, which means the fileIndex is stale,
+	// we need to delete the file index in memory and re-generate the file path with the updated file index until we find a non-existing file path.
+	delete(f.fileIndex, tbl)
+	return f.GenerateDataFilePath(ctx, tbl, date)
 }
 
 func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date string) string {
