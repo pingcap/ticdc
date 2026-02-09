@@ -10,10 +10,12 @@ import (
 	"github.com/pingcap/ticdc/maintainer/testutil"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/node"
 	kafkapkg "github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/atomic"
 )
 
 func TestHandleRecoverableKafkaError_RestartDispatchers(t *testing.T) {
@@ -83,4 +85,101 @@ func TestHandleRecoverableKafkaError_RestartDispatchers(t *testing.T) {
 	scheduleMsg, ok := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
 	require.True(t, ok)
 	require.Equal(t, heartbeatpb.ScheduleAction_Remove, scheduleMsg.ScheduleAction)
+}
+
+func TestHandleRecoverableKafkaError_DowngradeToFatalWhenRestartTooFrequent(t *testing.T) {
+	testutil.SetUpTestServices()
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
+
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlDispatcherID := common.NewDispatcherID()
+	ddlSpan := replica.NewWorkingSpanReplication(
+		changefeedID,
+		ddlDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID),
+		&heartbeatpb.TableSpanStatus{
+			ID:              ddlDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		},
+		node.ID("node1"),
+		false,
+	)
+	refresher := replica.NewRegionCountRefresher(changefeedID, time.Minute)
+	controller := NewController(changefeedID, 1, nil, nil, ddlSpan, nil, 1, time.Minute, refresher, common.DefaultKeyspace, false)
+
+	dispatcherID := common.NewDispatcherID()
+	spanReplica := replica.NewSpanReplication(
+		changefeedID,
+		dispatcherID,
+		1,
+		testutil.GetTableSpanByID(1),
+		1,
+		common.DefaultMode,
+		false,
+	)
+	spanReplica.SetNodeID(node.ID("node1"))
+	controller.spanController.AddReplicatingSpan(spanReplica)
+
+	m := &Maintainer{
+		changefeedID:  changefeedID,
+		controller:    controller,
+		nodeManager:   nodeManager,
+		statusChanged: atomic.NewBool(false),
+	}
+	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
+
+	report := kafkapkg.ErrorReport{
+		KafkaErrCode:  20,
+		KafkaErrName:  "NOT_ENOUGH_REPLICAS_AFTER_APPEND",
+		Message:       "recoverable kafka error",
+		Topic:         "test-topic",
+		Partition:     1,
+		DispatcherIDs: []common.DispatcherID{dispatcherID},
+	}
+	payload, err := json.Marshal(&report)
+	require.NoError(t, err)
+
+	runningErr := &heartbeatpb.RunningError{
+		Code:    kafkapkg.KafkaTransientErrorCode,
+		Message: string(payload),
+	}
+	require.True(t, m.handleRecoverableKafkaError(node.ID("node1"), runningErr))
+	require.NotNil(t, controller.operatorController.GetOperator(dispatcherID))
+
+	finishMoveOperator(t, controller, dispatcherID, node.ID("node1"))
+	require.Nil(t, controller.operatorController.GetOperator(dispatcherID))
+
+	// A second error that happens too soon should downgrade to fatal error path.
+	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
+	require.True(t, m.handleRecoverableKafkaError(node.ID("node1"), runningErr))
+
+	fatal := m.runningErrors.m[node.ID("node1")]
+	require.NotNil(t, fatal)
+	require.Equal(t, string(cerrors.ErrKafkaAsyncSendMessage.RFCCode()), fatal.Code)
+	require.Nil(t, controller.operatorController.GetOperator(dispatcherID))
+}
+
+func finishMoveOperator(t *testing.T, controller *Controller, dispatcherID common.DispatcherID, nodeID node.ID) {
+	stoppedStatus := &heartbeatpb.TableSpanStatus{
+		ID:              dispatcherID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Stopped,
+		CheckpointTs:    1,
+	}
+	controller.operatorController.UpdateOperatorStatus(dispatcherID, nodeID, stoppedStatus)
+
+	workingStatus := &heartbeatpb.TableSpanStatus{
+		ID:              dispatcherID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Working,
+		CheckpointTs:    1,
+	}
+	controller.operatorController.UpdateOperatorStatus(dispatcherID, nodeID, workingStatus)
+
+	// Drain the finished operator from controller so subsequent restarts can be scheduled.
+	for i := 0; i < 4 && controller.operatorController.GetOperator(dispatcherID) != nil; i++ {
+		controller.operatorController.Execute()
+	}
+	require.Nil(t, controller.operatorController.GetOperator(dispatcherID))
 }

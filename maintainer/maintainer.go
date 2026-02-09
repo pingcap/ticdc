@@ -16,6 +16,7 @@ package maintainer
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/url"
 	"sync"
@@ -146,6 +147,12 @@ type Maintainer struct {
 	runningErrors struct {
 		sync.Mutex
 		m map[node.ID]*heartbeatpb.RunningError
+	}
+
+	// recoverableKafkaRestarts tracks dispatcher-level recovery attempts for transient Kafka errors.
+	recoverableKafkaRestarts struct {
+		sync.Mutex
+		dispatchers map[common.DispatcherID]*recoverableKafkaDispatcherRestartState
 	}
 
 	cancel context.CancelFunc
@@ -850,12 +857,40 @@ func (m *Maintainer) handleRecoverableKafkaError(from node.ID, err *heartbeatpb.
 	operatorController := m.controller.getOperatorController(common.DefaultMode)
 	spanController := m.controller.getSpanController(common.DefaultMode)
 
+	now := time.Now()
 	seen := make(map[common.DispatcherID]struct{}, len(report.DispatcherIDs))
 	for _, dispatcherID := range report.DispatcherIDs {
 		if _, ok := seen[dispatcherID]; ok {
 			continue
 		}
 		seen[dispatcherID] = struct{}{}
+
+		if existing := operatorController.GetOperator(dispatcherID); existing != nil {
+			continue
+		}
+
+		if downgrade, attempts, backoff := m.shouldDowngradeRecoverableKafkaDispatcherRestart(dispatcherID, now); downgrade {
+			log.Warn("recoverable kafka error restart dispatcher too frequent, downgrade to changefeed error path",
+				zap.Stringer("changefeedID", m.changefeedID),
+				zap.Stringer("sourceNode", from),
+				zap.Stringer("dispatcherID", dispatcherID),
+				zap.Int("restartAttempts", attempts),
+				zap.Duration("restartBackoff", backoff),
+				zap.Int16("kafkaErrCode", report.KafkaErrCode),
+				zap.String("kafkaErrName", report.KafkaErrName),
+				zap.String("topic", report.Topic),
+				zap.Int32("partition", report.Partition))
+
+			m.onError(from, &heartbeatpb.RunningError{
+				Time: time.Now().String(),
+				Code: string(errors.ErrKafkaAsyncSendMessage.RFCCode()),
+				Message: fmt.Sprintf(
+					"recoverable kafka error exceeded dispatcher restart budget, downgrade to changefeed error path, dispatcherID=%s, kafkaErrCode=%d, kafkaErrName=%s, topic=%s, partition=%d, message=%s",
+					dispatcherID.String(), report.KafkaErrCode, report.KafkaErrName, report.Topic, report.Partition, report.Message,
+				),
+			})
+			return true
+		}
 
 		replication := spanController.GetTaskByID(dispatcherID)
 		if replication == nil {
@@ -877,7 +912,9 @@ func (m *Maintainer) handleRecoverableKafkaError(from node.ID, err *heartbeatpb.
 			log.Info("restart dispatcher operator already exists, ignore",
 				zap.Stringer("changefeedID", m.changefeedID),
 				zap.Stringer("dispatcherID", dispatcherID))
+			continue
 		}
+		m.recordRecoverableKafkaDispatcherRestart(dispatcherID, now)
 	}
 	return true
 }
