@@ -329,6 +329,7 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 		return "", err
 	}
 	if !exist {
+		f.fileIndex[tbl] = f.fileIndex[tbl] + 1
 		return dataFile, nil
 	}
 	// if the file already exists, which means the fileIndex is stale,
