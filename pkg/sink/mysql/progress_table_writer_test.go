@@ -73,11 +73,16 @@ func TestProgressTableWriterFlushSingleBatch(t *testing.T) {
 	writer.SetTableSchemaStore(tableSchemaStore)
 
 	expectProgressTableInit(mock)
-	expectProgressInsert(mock, "ks/cf", "cluster-single", 42, tables)
+	tableNameMatcher := newConsumeStringSetArg("t1", "t2")
+	mock.ExpectExec("INSERT INTO `"+filter.TiCDCSystemSchema+"`.`"+progressTableName+"`").
+		WithArgs("ks/cf", "cluster-single", "db1", tableNameMatcher, uint64(42),
+			"ks/cf", "cluster-single", "db1", tableNameMatcher, uint64(42)).
+		WillReturnResult(sqlmock.NewResult(0, int64(len(tables))))
 
 	err = writer.Flush(42)
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
+	require.True(t, tableNameMatcher.empty())
 }
 
 func TestProgressTableWriterFlushMultiBatch(t *testing.T) {
@@ -96,12 +101,25 @@ func TestProgressTableWriterFlushMultiBatch(t *testing.T) {
 	writer.SetTableSchemaStore(newTestTableSchemaStore(allTables))
 
 	expectProgressTableInit(mock)
-	expectProgressInsert(mock, "ks/cf", "cluster-multi", 99, allTables[:2])
-	expectProgressInsert(mock, "ks/cf", "cluster-multi", 99, allTables[2:])
+	// TableSchemaStore returns table names from maps, so the order is not stable.
+	// The expectation should tolerate swaps but still ensure each table is flushed once.
+	tableNames := make([]string, 0, len(allTables))
+	for _, tbl := range allTables {
+		tableNames = append(tableNames, tbl.TableName)
+	}
+	tableNameMatcher := newConsumeStringSetArg(tableNames...)
+	mock.ExpectExec("INSERT INTO `"+filter.TiCDCSystemSchema+"`.`"+progressTableName+"`").
+		WithArgs("ks/cf", "cluster-multi", "db1", tableNameMatcher, uint64(99),
+			"ks/cf", "cluster-multi", "db1", tableNameMatcher, uint64(99)).
+		WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectExec("INSERT INTO `"+filter.TiCDCSystemSchema+"`.`"+progressTableName+"`").
+		WithArgs("ks/cf", "cluster-multi", "db1", tableNameMatcher, uint64(99)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	err = writer.Flush(99)
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
+	require.True(t, tableNameMatcher.empty())
 }
 
 func setTestClusterID(t *testing.T, id string) {
@@ -121,12 +139,38 @@ func expectProgressTableInit(mock sqlmock.Sqlmock) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 }
 
-func expectProgressInsert(mock sqlmock.Sqlmock, changefeed, cluster string, checkpoint uint64, tables []*event.SchemaTableName) {
-	args := make([]driver.Value, 0, len(tables)*5)
-	for _, tbl := range tables {
-		args = append(args, changefeed, cluster, tbl.SchemaName, tbl.TableName, checkpoint)
+type consumeStringSetArg struct {
+	remaining map[string]struct{}
+}
+
+func newConsumeStringSetArg(values ...string) *consumeStringSetArg {
+	remaining := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		remaining[value] = struct{}{}
 	}
-	mock.ExpectExec("INSERT INTO `" + filter.TiCDCSystemSchema + "`.`" + progressTableName + "`").
-		WithArgs(args...).
-		WillReturnResult(sqlmock.NewResult(0, int64(len(tables))))
+	return &consumeStringSetArg{
+		remaining: remaining,
+	}
+}
+
+func (a *consumeStringSetArg) Match(value driver.Value) bool {
+	var stringValue string
+	switch v := value.(type) {
+	case string:
+		stringValue = v
+	case []byte:
+		stringValue = string(v)
+	default:
+		return false
+	}
+
+	if _, ok := a.remaining[stringValue]; !ok {
+		return false
+	}
+	delete(a.remaining, stringValue)
+	return true
+}
+
+func (a *consumeStringSetArg) empty() bool {
+	return len(a.remaining) == 0
 }
