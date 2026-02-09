@@ -362,13 +362,27 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 			zap.Uint64("lastResolvedTs", lastResolvedTs))
 		return 0
 	}
-	state.updateResolvedTs(resolvedTs)
-	span.rangeLock.UpdateLockedRangeStateHeap(state.region.lockedRangeState)
 
-	now := time.Now().UnixMilli()
-	lastAdvance := span.lastAdvanceTime.Load()
-	if now-lastAdvance >= span.advanceInterval && span.lastAdvanceTime.CompareAndSwap(lastAdvance, now) {
-		ts := span.rangeLock.GetHeapMinTs()
+	state.updateResolvedTs(resolvedTs)
+
+	ts := uint64(0)
+	shouldAdvance := false
+	// advanceInterval defaults to 100ms; setting it to 0 means resolving the timestamp as soon as possible.
+	// Note: If a single span contains an extremely large number of regions (e.g., 500k), advanceInterval = 0 may cause performance issues.
+	if span.advanceInterval == 0 {
+		span.rangeLock.UpdateLockedRangeStateHeap(state.region.lockedRangeState)
+		ts = span.rangeLock.GetHeapMinTs()
+		shouldAdvance = true
+	} else {
+		now := time.Now().UnixMilli()
+		lastAdvance := span.lastAdvanceTime.Load()
+		if now-lastAdvance >= span.advanceInterval && span.lastAdvanceTime.CompareAndSwap(lastAdvance, now) {
+			ts = span.rangeLock.ResolvedTs()
+			shouldAdvance = true
+		}
+	}
+
+	if shouldAdvance {
 		if ts > 0 && span.initialized.CompareAndSwap(false, true) {
 			log.Info("subscription client is initialized",
 				zap.Uint64("subscriptionID", uint64(span.subID)),
@@ -400,5 +414,6 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 			return ts
 		}
 	}
+
 	return 0
 }

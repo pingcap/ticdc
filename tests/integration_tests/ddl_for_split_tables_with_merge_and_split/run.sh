@@ -54,6 +54,8 @@ function prepare() {
 main() {
 	prepare changefeed
 
+	sleep 20
+
 	# move the table to node 2
 	table_id=$(get_table_id "test" "table_1")
 	move_split_table_with_retry "127.0.0.1:8301" $table_id "test" 10 || true
@@ -99,6 +101,8 @@ main_with_consistent() {
 		return
 	fi
 	prepare consistent_changefeed
+
+	sleep 20
 
 	# move the table to node 2
 	table_id=$(get_table_id "test" "table_1")

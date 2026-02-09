@@ -266,7 +266,7 @@ func (ra *RedoApplier) applyDDL(
 				timodel.ActionAddCheckConstraint, timodel.ActionDropCheckConstraint, timodel.ActionAlterCheckConstraint,
 				timodel.ActionAlterTableAttributes, timodel.ActionAlterCacheTable, timodel.ActionAlterNoCacheTable,
 				timodel.ActionMultiSchemaChange, timodel.ActionAlterTTLInfo, timodel.ActionAlterTTLRemove:
-				tableDDLTs = ra.getTableDDLTs(ddl.DDL.BlockTables.TableIDs...)
+				tableDDLTs = ra.getTableDDLTs(ddl.DDL.BlockedTables.TableIDs...)
 			case timodel.ActionExchangeTablePartition, timodel.ActionReorganizePartition,
 				timodel.ActionAddTablePartition, timodel.ActionDropTablePartition, timodel.ActionTruncateTablePartition,
 				timodel.ActionAlterTablePartitionAttributes, timodel.ActionAlterTablePartitioning, timodel.ActionRemovePartitioning,
@@ -321,7 +321,7 @@ func (ra *RedoApplier) applyDDL(
 	}
 	log.Warn("apply DDL", zap.Any("ddl", ddl))
 	// Wait block tables to flush data before applying DDL.
-	tableIDs := ra.getBlockTableIDs(ddl.DDL.BlockTables)
+	tableIDs := ra.getBlockTableIDs(ddl.DDL.BlockedTables)
 	for tableID := range tableIDs {
 		if err := ra.waitTableFlush(ctx, tableID, ddl.DDL.CommitTs); err != nil {
 			return err

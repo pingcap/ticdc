@@ -402,11 +402,6 @@ func (t *DDLEvent) Len() int32 {
 	return 1
 }
 
-type SchemaTableName struct {
-	SchemaName string
-	TableName  string
-}
-
 type DB struct {
 	SchemaID   int64
 	SchemaName string
