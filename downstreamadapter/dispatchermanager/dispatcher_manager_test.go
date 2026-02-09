@@ -174,7 +174,7 @@ func TestCollectRecoverableKafkaErrorsEnqueueHeartbeat(t *testing.T) {
 	require.Equal(t, node.ID("maintainer"), req.TargetID)
 	require.NotNil(t, req.Request)
 	require.NotNil(t, req.Request.Err)
-	require.Equal(t, kafkapkg.RecoverableKafkaKErrorRunningErrorCode, req.Request.Err.Code)
+	require.Equal(t, kafkapkg.KafkaTransientErrorCode, req.Request.Err.Code)
 
 	var report kafkapkg.ErrorReport
 	require.NoError(t, json.Unmarshal([]byte(req.Request.Err.Message), &report))

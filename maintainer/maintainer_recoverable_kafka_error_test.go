@@ -69,7 +69,7 @@ func TestHandleRecoverableKafkaError_RestartDispatchers(t *testing.T) {
 	require.NoError(t, err)
 
 	runningErr := &heartbeatpb.RunningError{
-		Code:    kafkapkg.RecoverableKafkaKErrorRunningErrorCode,
+		Code:    kafkapkg.KafkaTransientErrorCode,
 		Message: string(payload),
 	}
 	require.True(t, m.handleRecoverableKafkaError(node.ID("node1"), runningErr))

@@ -36,7 +36,7 @@ type saramaAsyncProducer struct {
 	closed      *atomic.Bool
 	failpointCh chan *sarama.ProducerError
 
-	recoverableErrCh chan<- *ErrorEvent
+	transientErrorCh chan<- *ErrorEvent
 }
 
 type messageMetadata struct {
@@ -133,8 +133,8 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 			if err == nil {
 				return nil
 			}
-			if isProducerKErrorRecoverable(err) {
-				if p.reportRecoverableError(err) {
+			if isTransientKError(err) {
+				if p.reportTransientError(err) {
 					continue
 				}
 			}
@@ -144,11 +144,11 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 }
 
 func (p *saramaAsyncProducer) SetRecoverableErrorChan(ch chan<- *ErrorEvent) {
-	p.recoverableErrCh = ch
+	p.transientErrorCh = ch
 }
 
-func (p *saramaAsyncProducer) reportRecoverableError(err *sarama.ProducerError) bool {
-	if err == nil || p.recoverableErrCh == nil {
+func (p *saramaAsyncProducer) reportTransientError(err *sarama.ProducerError) bool {
+	if err == nil || p.transientErrorCh == nil {
 		return false
 	}
 	kerr, ok := err.Err.(sarama.KError)
@@ -173,11 +173,11 @@ func (p *saramaAsyncProducer) reportRecoverableError(err *sarama.ProducerError) 
 	}
 
 	select {
-	case p.recoverableErrCh <- event:
+	case p.transientErrorCh <- event:
 		return true
 	default:
-		return false
 	}
+	return false
 }
 
 func (p *saramaAsyncProducer) handleProducerError(err *sarama.ProducerError) error {

@@ -815,7 +815,7 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 }
 
 func (m *Maintainer) handleRecoverableKafkaError(from node.ID, err *heartbeatpb.RunningError) bool {
-	if err == nil || err.Code != kafkapkg.RecoverableKafkaKErrorRunningErrorCode {
+	if err == nil || err.Code != kafkapkg.KafkaTransientErrorCode {
 		return false
 	}
 

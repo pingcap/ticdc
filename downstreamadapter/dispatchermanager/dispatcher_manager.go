@@ -374,7 +374,7 @@ func (e *DispatcherManager) collectRecoverableKafkaErrors(ctx context.Context) {
 			message.Err = &heartbeatpb.RunningError{
 				Time:    time.Now().String(),
 				Node:    appcontext.GetID(),
-				Code:    kafkapkg.RecoverableKafkaKErrorRunningErrorCode,
+				Code:    kafkapkg.KafkaTransientErrorCode,
 				Message: string(payload),
 			}
 			e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})

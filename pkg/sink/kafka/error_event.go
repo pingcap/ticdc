@@ -8,7 +8,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 )
 
-const RecoverableKafkaKErrorRunningErrorCode = "CDC:ErrKafkaRecoverableKError"
+const KafkaTransientErrorCode = "CDC:KafkaTransientErrorCode"
 
 type ErrorEvent struct {
 	Time time.Time
@@ -32,7 +32,7 @@ type ErrorReport struct {
 	DispatcherIDs []commonPkg.DispatcherID
 }
 
-func isProducerKErrorRecoverable(err *sarama.ProducerError) bool {
+func isTransientKError(err *sarama.ProducerError) bool {
 	if err == nil {
 		return false
 	}
@@ -40,10 +40,6 @@ func isProducerKErrorRecoverable(err *sarama.ProducerError) bool {
 	if !ok {
 		return false
 	}
-	return isTransientKError(kerr)
-}
-
-func isTransientKError(kerr sarama.KError) bool {
 	switch kerr {
 	case sarama.ErrNotEnoughReplicasAfterAppend,
 		sarama.ErrNotEnoughReplicas,
@@ -53,6 +49,6 @@ func isTransientKError(kerr sarama.KError) bool {
 		sarama.ErrNetworkException:
 		return true
 	default:
-		return false
 	}
+	return false
 }
