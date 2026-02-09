@@ -118,11 +118,6 @@ func generateDataFileName(enableTableAcrossNodes bool, dispatcherID string, inde
 	return fmt.Sprintf("CDC"+indexFmt+"%s", index, extension)
 }
 
-type indexWithDate struct {
-	index              uint64
-	currDate, prevDate string
-}
-
 // VersionedTableName is used to wrap TableNameWithPhysicTableID with a version.
 type VersionedTableName struct {
 	// Because we need to generate different file paths for different
@@ -143,7 +138,6 @@ type FilePathGenerator struct {
 	config       *Config
 	pdClock      pdutil.Clock
 	storage      storage.ExternalStorage
-	fileIndex    map[VersionedTableName]*indexWithDate
 
 	hasher     *hash.PositionInertia
 	versionMap map[VersionedTableName]uint64
@@ -163,7 +157,6 @@ func NewFilePathGenerator(
 		extension:    extension,
 		storage:      storage,
 		pdClock:      pdClock,
-		fileIndex:    make(map[VersionedTableName]*indexWithDate),
 		hasher:       hash.NewPositionInertia(),
 		versionMap:   make(map[VersionedTableName]uint64),
 	}
@@ -347,27 +340,11 @@ func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date str
 func (f *FilePathGenerator) generateDataFileName(
 	ctx context.Context, tbl VersionedTableName, date string,
 ) (string, error) {
-	if idx, ok := f.fileIndex[tbl]; !ok {
-		fileIdx, err := f.getFileIdxFromIndexFile(ctx, tbl, date)
-		if err != nil {
-			return "", err
-		}
-		f.fileIndex[tbl] = &indexWithDate{
-			prevDate: date,
-			currDate: date,
-			index:    fileIdx,
-		}
-	} else {
-		idx.currDate = date
+	fileIdx, err := f.getFileIdxFromIndexFile(ctx, tbl, date)
+	if err != nil {
+		return "", err
 	}
-
-	// if date changed, reset the counter
-	if f.fileIndex[tbl].prevDate != f.fileIndex[tbl].currDate {
-		f.fileIndex[tbl].prevDate = f.fileIndex[tbl].currDate
-		f.fileIndex[tbl].index = 0
-	}
-	f.fileIndex[tbl].index++
-	return generateDataFileName(f.config.EnableTableAcrossNodes, tbl.DispatcherID.String(), f.fileIndex[tbl].index, f.extension, f.config.FileIndexWidth), nil
+	return generateDataFileName(f.config.EnableTableAcrossNodes, tbl.DispatcherID.String(), fileIdx+1, f.extension, f.config.FileIndexWidth), nil
 }
 
 func (f *FilePathGenerator) getFileIdxFromIndexFile(
