@@ -366,12 +366,13 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 	}
 
 	if util.GetOrZero(c.EnableActiveActive) {
-		if !util.GetOrZero(c.BDRMode) {
-			return cerror.ErrInvalidReplicaConfig.
-				FastGenByArgs("enable-active-active requires bdr-mode to be true")
-		}
 		scheme := GetScheme(sinkURI)
-		if !IsMySQLCompatibleScheme(scheme) && !IsStorageScheme(scheme) {
+		if IsMySQLCompatibleScheme(scheme) {
+			if !util.GetOrZero(c.BDRMode) {
+				return cerror.ErrInvalidReplicaConfig.
+					FastGenByArgs("enable-active-active with mysql-class downstream requires bdr-mode to be true")
+			}
+		} else if !IsStorageScheme(scheme) {
 			return cerror.ErrInvalidReplicaConfig.
 				FastGenByArgs("enable-active-active only supports tidb sink and storage sink")
 		}
