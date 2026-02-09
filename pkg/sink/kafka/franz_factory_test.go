@@ -14,73 +14,33 @@
 package kafka
 
 import (
-	"context"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/security"
+	kafkafranz "github.com/pingcap/ticdc/pkg/sink/kafka/franz"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
-	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-func TestBuildFranzSaslMechanismGSSAPIUserAuth(t *testing.T) {
+func TestFranzFactoryMetricsCollectorType(t *testing.T) {
 	t.Parallel()
 
-	o := NewOptions()
-	o.SASL = &security.SASL{
-		SASLMechanism: security.GSSAPIMechanism,
-		GSSAPI: security.GSSAPI{
-			AuthType:           security.UserAuth,
-			KerberosConfigPath: "/etc/krb5.conf",
-			ServiceName:        "kafka",
-			Username:           "alice",
-			Password:           "pwd",
-			Realm:              "EXAMPLE.COM",
-		},
+	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "franz-metrics-type")
+	f := &franzFactory{
+		changefeedID: changefeedID,
+		metricsHook:  kafkafranz.NewMetricsHook(),
 	}
-
-	mechanism, err := buildFranzSaslMechanism(context.Background(), o)
-	require.NoError(t, err)
-	require.Equal(t, "GSSAPI", mechanism.Name())
-}
-
-func TestBuildFranzSaslMechanismGSSAPIKeytabAuth(t *testing.T) {
-	t.Parallel()
-
-	o := NewOptions()
-	o.SASL = &security.SASL{
-		SASLMechanism: security.GSSAPIMechanism,
-		GSSAPI: security.GSSAPI{
-			AuthType:           security.KeyTabAuth,
-			KerberosConfigPath: "/etc/krb5.conf",
-			ServiceName:        "kafka",
-			Username:           "alice",
-			KeyTabPath:         "/tmp/a.keytab",
-			Realm:              "EXAMPLE.COM",
-		},
-	}
-
-	mechanism, err := buildFranzSaslMechanism(context.Background(), o)
-	require.NoError(t, err)
-	require.Equal(t, "GSSAPI", mechanism.Name())
-}
-
-func TestFranzFactoryMetricsCollectorIsNotNoop(t *testing.T) {
-	t.Parallel()
-
-	f := &franzFactory{}
 	collector := f.MetricsCollector(nil)
 
-	_, isNoop := collector.(*noopMetricsCollector)
-	require.False(t, isNoop)
+	_, ok := collector.(*franzMetricsCollector)
+	require.True(t, ok)
 }
 
 func TestFranzMetricsCollectorCollectMetrics(t *testing.T) {
 	t.Parallel()
 
-	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceNamme, "franz-metrics")
-	hook := newFranzMetricsHook()
+	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "franz-metrics")
+	hook := kafkafranz.NewMetricsHook()
 	collector := &franzMetricsCollector{
 		changefeedID: changefeedID,
 		hook:         hook,
@@ -89,13 +49,8 @@ func TestFranzMetricsCollectorCollectMetrics(t *testing.T) {
 		collector.cleanupMetrics()
 	})
 
-	meta := kgo.BrokerMetadata{NodeID: 1}
-	hook.OnBrokerWrite(meta, 0, 128, 0, 0, nil)
-	hook.OnProduceBatchWritten(meta, "topic", 0, kgo.ProduceBatchMetrics{
-		NumRecords:        8,
-		UncompressedBytes: 400,
-		CompressedBytes:   200,
-	})
+	hook.RecordBrokerWrite(1, 128, nil)
+	hook.RecordProduceBatchWritten(8, 400, 200)
 
 	collector.collectMetrics()
 

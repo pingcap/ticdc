@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package kafka
+package franz
 
 import (
 	"context"
@@ -22,6 +22,7 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/kafka/internal/logutil"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -29,7 +30,7 @@ import (
 
 const franzSyncRecordRetries = 5
 
-type franzSyncProducer struct {
+type SyncProducer struct {
 	id commonType.ChangeFeedID
 
 	client  *kgo.Client
@@ -37,12 +38,12 @@ type franzSyncProducer struct {
 	timeout time.Duration
 }
 
-func newFranzSyncProducer(
+func NewSyncProducer(
 	ctx context.Context,
 	changefeedID commonType.ChangeFeedID,
-	o *options,
+	o *Options,
 	hook kgo.Hook,
-) (SyncProducer, error) {
+) (*SyncProducer, error) {
 	baseOpts, err := buildFranzBaseOptions(ctx, o, hook)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -63,7 +64,7 @@ func newFranzSyncProducer(
 	}
 	timeout := time.Duration(franzSyncRecordRetries+1) * produceTimeout
 
-	return &franzSyncProducer{
+	return &SyncProducer{
 		id:      changefeedID,
 		client:  client,
 		closed:  atomic.NewBool(false),
@@ -71,11 +72,11 @@ func newFranzSyncProducer(
 	}, nil
 }
 
-func (p *franzSyncProducer) newRequestContext() (context.Context, context.CancelFunc) {
+func (p *SyncProducer) newRequestContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(p.client.Context(), p.timeout)
 }
 
-func (p *franzSyncProducer) SendMessage(topic string, partitionNum int32, message *common.Message) error {
+func (p *SyncProducer) SendMessage(topic string, partitionNum int32, message *common.Message) error {
 	if p.closed.Load() {
 		return errors.ErrKafkaProducerClosed.GenWithStackByArgs()
 	}
@@ -96,7 +97,7 @@ func (p *franzSyncProducer) SendMessage(topic string, partitionNum int32, messag
 	})
 
 	if err != nil {
-		err = AnnotateEventError(
+		err = logutil.AnnotateEventError(
 			p.id.Keyspace(),
 			p.id.Name(),
 			message.LogInfo,
@@ -106,7 +107,7 @@ func (p *franzSyncProducer) SendMessage(topic string, partitionNum int32, messag
 	return errors.WrapError(errors.ErrKafkaSendMessage, err)
 }
 
-func (p *franzSyncProducer) SendMessages(topic string, partitionNum int32, message *common.Message) error {
+func (p *SyncProducer) SendMessages(topic string, partitionNum int32, message *common.Message) error {
 	if p.closed.Load() {
 		return errors.ErrKafkaProducerClosed.GenWithStackByArgs()
 	}
@@ -131,7 +132,7 @@ func (p *franzSyncProducer) SendMessages(topic string, partitionNum int32, messa
 	})
 
 	if err != nil {
-		err = AnnotateEventError(
+		err = logutil.AnnotateEventError(
 			p.id.Keyspace(),
 			p.id.Name(),
 			message.LogInfo,
@@ -141,9 +142,9 @@ func (p *franzSyncProducer) SendMessages(topic string, partitionNum int32, messa
 	return errors.WrapError(errors.ErrKafkaSendMessage, err)
 }
 
-func (p *franzSyncProducer) Heartbeat() {}
+func (p *SyncProducer) Heartbeat() {}
 
-func (p *franzSyncProducer) Close() {
+func (p *SyncProducer) Close() {
 	if p.closed.Load() {
 		log.Warn("kafka DDL producer already closed",
 			zap.String("keyspace", p.id.Keyspace()),

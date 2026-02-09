@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package kafka
+package franz
 
 import (
 	"context"
@@ -22,6 +22,7 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/kafka/internal/logutil"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -29,7 +30,7 @@ import (
 
 const franzAsyncRecordRetries = 3
 
-type franzAsyncProducer struct {
+type AsyncProducer struct {
 	client       *kgo.Client
 	changefeedID commonType.ChangeFeedID
 
@@ -37,12 +38,12 @@ type franzAsyncProducer struct {
 	errCh  chan error
 }
 
-func newFranzAsyncProducer(
+func NewAsyncProducer(
 	ctx context.Context,
 	changefeedID commonType.ChangeFeedID,
-	o *options,
+	o *Options,
 	hook kgo.Hook,
-) (AsyncProducer, error) {
+) (*AsyncProducer, error) {
 	baseOpts, err := buildFranzBaseOptions(ctx, o, hook)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -57,7 +58,7 @@ func newFranzAsyncProducer(
 		return nil, errors.Trace(err)
 	}
 
-	return &franzAsyncProducer{
+	return &AsyncProducer{
 		client:       client,
 		changefeedID: changefeedID,
 		closed:       atomic.NewBool(false),
@@ -65,7 +66,7 @@ func newFranzAsyncProducer(
 	}, nil
 }
 
-func (p *franzAsyncProducer) Close() {
+func (p *AsyncProducer) Close() {
 	if !p.closed.CompareAndSwap(false, true) {
 		return
 	}
@@ -80,7 +81,7 @@ func (p *franzAsyncProducer) Close() {
 	}()
 }
 
-func (p *franzAsyncProducer) AsyncSend(
+func (p *AsyncProducer) AsyncSend(
 	ctx context.Context,
 	topic string,
 	partition int32,
@@ -100,7 +101,7 @@ func (p *franzAsyncProducer) AsyncSend(
 		log.Info("KafkaSinkAsyncSendError error injected",
 			zap.String("keyspace", p.changefeedID.Keyspace()),
 			zap.String("changefeed", p.changefeedID.Name()))
-		errWithInfo := AnnotateEventError(
+		errWithInfo := logutil.AnnotateEventError(
 			p.changefeedID.Keyspace(),
 			p.changefeedID.Name(),
 			message.LogInfo,
@@ -125,7 +126,7 @@ func (p *franzAsyncProducer) AsyncSend(
 
 	p.client.Produce(ctx, record, func(_ *kgo.Record, err error) {
 		if err != nil {
-			errWithInfo := AnnotateEventError(
+			errWithInfo := logutil.AnnotateEventError(
 				p.changefeedID.Keyspace(),
 				p.changefeedID.Name(),
 				logInfo,
@@ -145,9 +146,9 @@ func (p *franzAsyncProducer) AsyncSend(
 	return nil
 }
 
-func (p *franzAsyncProducer) Heartbeat() {}
+func (p *AsyncProducer) Heartbeat() {}
 
-func (p *franzAsyncProducer) AsyncRunCallback(ctx context.Context) error {
+func (p *AsyncProducer) AsyncRunCallback(ctx context.Context) error {
 	defer p.closed.Store(true)
 	for {
 		select {
