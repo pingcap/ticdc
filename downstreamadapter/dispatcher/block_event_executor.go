@@ -110,7 +110,7 @@ func (e *blockEventExecutor) pop(dispatcherID common.DispatcherID) (*blockEventT
 		delete(e.tasks, dispatcherID)
 		return task, true
 	}
-	clear(q[:1])
+	q[0] = nil
 	e.tasks[dispatcherID] = q[1:]
 	return task, true
 }
