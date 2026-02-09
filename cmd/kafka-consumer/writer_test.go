@@ -325,7 +325,7 @@ func TestAppendRow2Group_DoesNotDropCommitTsFallbackBeforeApplied(t *testing.T) 
 
 	resolvedEvents := make([]*commonEvent.DMLEvent, 0)
 	// Expect: commitTs=100 is still kept and can be resolved.
-	resolved := group.ResolveInto(150, resolvedEvents)
+	resolved := group.ResolveInto(150, nil)
 	require.Len(t, resolved, 1)
 	require.Equal(t, uint64(100), resolved[0].CommitTs)
 
