@@ -49,10 +49,11 @@ func TestEventsGroupAppendForceMergesExistingCommitTs(t *testing.T) {
 
 	require.Equal(t, uint64(200), group.HighWatermark)
 
-	resolved := group.Resolve(150)
-	require.Len(t, resolved, 1)
-	require.Equal(t, uint64(100), resolved[0].CommitTs)
-	require.Len(t, resolved[0].RowTypes, 2)
+	var dst []*commonEvent.DMLEvent
+	dst = group.ResolveInto(150, dst)
+	require.Len(t, dst, 1)
+	require.Equal(t, uint64(100), dst[0].CommitTs)
+	require.Len(t, dst[0].RowTypes, 2)
 }
 
 func TestEventsGroupResolveIntoAppendsAndClearsResolvedPrefix(t *testing.T) {
