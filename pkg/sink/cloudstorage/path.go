@@ -314,12 +314,14 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 	ctx context.Context, tbl VersionedTableName, date string,
 ) (string, error) {
 	dir := f.generateDataDirPath(tbl, date)
+	newIndexFile := false
 	if _, ok := f.fileIndex[tbl]; !ok {
 		fileIdx, err := f.getFileIdxFromIndexFile(ctx, tbl, date)
 		if err != nil {
 			return "", err
 		}
 		f.fileIndex[tbl] = fileIdx
+		newIndexFile = true
 	}
 
 	name := generateDataFileName(f.config.EnableTableAcrossNodes, tbl.DispatcherID.String(), f.fileIndex[tbl]+1, f.extension, f.config.FileIndexWidth)
@@ -331,6 +333,13 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 	if !exist {
 		f.fileIndex[tbl] = f.fileIndex[tbl] + 1
 		return dataFile, nil
+	}
+	if newIndexFile {
+		log.Warn("the data file exists and the index file is stale",
+			zap.String("keyspace", f.changefeedID.Keyspace()),
+			zap.Stringer("changefeedID", f.changefeedID.ID()),
+			zap.Any("versionedTableName", tbl),
+			zap.String("dataFile", dataFile))
 	}
 	// if the file already exists, which means the fileIndex is stale,
 	// we need to delete the file index in memory and re-generate the file path with the updated file index until we find a non-existing file path.
