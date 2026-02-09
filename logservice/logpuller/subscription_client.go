@@ -496,7 +496,7 @@ func (s *subscriptionClient) onTableDrained(rt *subscribedSpan) {
 }
 
 // Note: don't block the caller, otherwise there may be deadlock
-func (s *subscriptionClient) onRegionFail(errInfo regionErrorInfo) {
+func (s *subscriptionClient) onRegionFail(errInfo *regionErrorInfo) {
 	// unlock the range early to prevent blocking the range.
 	if errInfo.subscribedSpan.rangeLock.UnlockRange(
 		errInfo.span.StartKey, errInfo.span.EndKey,
@@ -796,7 +796,7 @@ func (s *subscriptionClient) handleErrors(ctx context.Context) error {
 	}
 }
 
-func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionErrorInfo) error {
+func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo *regionErrorInfo) error {
 	err := errors.Cause(errInfo.err)
 	log.Debug("cdc region error",
 		zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
@@ -1098,20 +1098,20 @@ func (r *subscribedSpan) resolveStaleLocks(targetTs uint64) {
 
 type errCache struct {
 	sync.Mutex
-	cache  []regionErrorInfo
-	errCh  chan regionErrorInfo
+	cache  []*regionErrorInfo
+	errCh  chan *regionErrorInfo
 	notify chan struct{}
 }
 
 func newErrCache() *errCache {
 	return &errCache{
-		cache:  make([]regionErrorInfo, 0, 1024),
-		errCh:  make(chan regionErrorInfo, 1024),
+		cache:  make([]*regionErrorInfo, 0, 1024),
+		errCh:  make(chan *regionErrorInfo, 1024),
 		notify: make(chan struct{}, 1024),
 	}
 }
 
-func (e *errCache) add(errInfo regionErrorInfo) {
+func (e *errCache) add(errInfo *regionErrorInfo) {
 	e.Lock()
 	defer e.Unlock()
 	e.cache = append(e.cache, errInfo)
