@@ -61,9 +61,17 @@ func annotateMismatchError(existing error, format string, args ...interface{}) e
 
 func buildMessageLogInfo(events []*commonEvent.RowEvent) *MessageLogInfo {
 	rows := make([]RowLogInfo, 0, len(events))
+	dispatcherIDs := make([]commonPkg.DispatcherID, 0, 1)
+	dispatcherIDSet := make(map[commonPkg.DispatcherID]struct{}, 1)
 	for _, event := range events {
 		if event == nil || event.TableInfo == nil {
 			continue
+		}
+		if event.DispatcherID != (commonPkg.DispatcherID{}) {
+			if _, ok := dispatcherIDSet[event.DispatcherID]; !ok {
+				dispatcherIDSet[event.DispatcherID] = struct{}{}
+				dispatcherIDs = append(dispatcherIDs, event.DispatcherID)
+			}
 		}
 		rowInfo := RowLogInfo{
 			Type:     rowEventType(event),
@@ -80,7 +88,10 @@ func buildMessageLogInfo(events []*commonEvent.RowEvent) *MessageLogInfo {
 	if len(rows) == 0 {
 		return nil
 	}
-	return &MessageLogInfo{Rows: rows}
+	return &MessageLogInfo{
+		DispatcherIDs: dispatcherIDs,
+		Rows:          rows,
+	}
 }
 
 func rowEventType(event *commonEvent.RowEvent) string {

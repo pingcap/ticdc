@@ -89,6 +89,7 @@ type TopicPartitionKey struct {
 }
 
 type RowEvent struct {
+	DispatcherID    common.DispatcherID
 	PhysicalTableID int64
 	TableInfo       *common.TableInfo
 	StartTs         uint64

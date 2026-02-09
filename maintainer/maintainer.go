@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/pkg/bootstrap"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -36,6 +37,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/redo"
 	pkgReplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
+	kafkapkg "github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
@@ -796,11 +798,13 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 		}
 	}
 	if req.Err != nil {
-		log.Error("dispatcher report an error",
-			zap.Stringer("changefeedID", m.changefeedID),
-			zap.Stringer("sourceNode", msg.From),
-			zap.String("error", req.Err.Message))
-		m.onError(msg.From, req.Err)
+		if !m.handleRecoverableKafkaError(msg.From, req.Err) {
+			log.Error("dispatcher report an error",
+				zap.Stringer("changefeedID", m.changefeedID),
+				zap.Stringer("sourceNode", msg.From),
+				zap.String("error", req.Err.Message))
+			m.onError(msg.From, req.Err)
+		}
 	}
 
 	// ATOMIC CHECKPOINT UPDATE: Part 2 of race condition fix
@@ -808,6 +812,74 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 	// This ensures when operators complete, checkpointTsByCapture already contains the complete heartbeat
 	// Works with calCheckpointTs constraint ordering to prevent checkpoint advancing past new dispatcher startTs
 	m.controller.HandleStatus(msg.From, req.Statuses)
+}
+
+func (m *Maintainer) handleRecoverableKafkaError(from node.ID, err *heartbeatpb.RunningError) bool {
+	if err == nil || err.Code != kafkapkg.RecoverableKafkaKErrorRunningErrorCode {
+		return false
+	}
+
+	var report kafkapkg.ErrorReport
+	if unmarshalErr := json.Unmarshal([]byte(err.Message), &report); unmarshalErr != nil {
+		log.Warn("unmarshal recoverable kafka error report failed",
+			zap.Stringer("changefeedID", m.changefeedID),
+			zap.Stringer("sourceNode", from),
+			zap.Error(unmarshalErr))
+		return false
+	}
+	if len(report.DispatcherIDs) == 0 {
+		log.Warn("recoverable kafka error report has no dispatcher IDs",
+			zap.Stringer("changefeedID", m.changefeedID),
+			zap.Stringer("sourceNode", from),
+			zap.Int16("kafkaErrCode", report.KafkaErrCode),
+			zap.String("kafkaErrName", report.KafkaErrName),
+			zap.String("topic", report.Topic),
+			zap.Int32("partition", report.Partition))
+		return false
+	}
+
+	log.Warn("recoverable kafka error received, restart dispatchers",
+		zap.Stringer("changefeedID", m.changefeedID),
+		zap.Stringer("sourceNode", from),
+		zap.Int("dispatcherCount", len(report.DispatcherIDs)),
+		zap.Int16("kafkaErrCode", report.KafkaErrCode),
+		zap.String("kafkaErrName", report.KafkaErrName),
+		zap.String("topic", report.Topic),
+		zap.Int32("partition", report.Partition))
+
+	operatorController := m.controller.getOperatorController(common.DefaultMode)
+	spanController := m.controller.getSpanController(common.DefaultMode)
+
+	seen := make(map[common.DispatcherID]struct{}, len(report.DispatcherIDs))
+	for _, dispatcherID := range report.DispatcherIDs {
+		if _, ok := seen[dispatcherID]; ok {
+			continue
+		}
+		seen[dispatcherID] = struct{}{}
+
+		replication := spanController.GetTaskByID(dispatcherID)
+		if replication == nil {
+			log.Warn("dispatcher not found, ignore recoverable kafka error",
+				zap.Stringer("changefeedID", m.changefeedID),
+				zap.Stringer("dispatcherID", dispatcherID))
+			continue
+		}
+		origin := replication.GetNodeID()
+		if origin == "" {
+			log.Warn("dispatcher has empty node ID, ignore recoverable kafka error",
+				zap.Stringer("changefeedID", m.changefeedID),
+				zap.Stringer("dispatcherID", dispatcherID))
+			continue
+		}
+
+		op := operator.NewRestartDispatcherOperator(spanController, replication, origin)
+		if ok := operatorController.AddOperator(op); !ok {
+			log.Info("restart dispatcher operator already exists, ignore",
+				zap.Stringer("changefeedID", m.changefeedID),
+				zap.Stringer("dispatcherID", dispatcherID))
+		}
+	}
+	return true
 }
 
 func (m *Maintainer) onError(from node.ID, err *heartbeatpb.RunningError) {

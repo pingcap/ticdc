@@ -14,6 +14,7 @@ package dispatchermanager
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"sync/atomic"
 	"testing"
@@ -31,6 +32,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	kafkapkg "github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/stretchr/testify/require"
@@ -129,6 +132,56 @@ func createTestManager(t *testing.T) *DispatcherManager {
 	ec := eventcollector.New(nodeID)
 	appcontext.SetService(appcontext.EventCollector, ec)
 	return manager
+}
+
+func TestCollectRecoverableKafkaErrorsEnqueueHeartbeat(t *testing.T) {
+	manager := &DispatcherManager{
+		changefeedID:          common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+		heartbeatRequestQueue: NewHeartbeatRequestQueue(),
+	}
+	manager.SetMaintainerID(node.ID("maintainer"))
+	manager.recoverableKafkaErrCh = make(chan *kafkapkg.ErrorEvent, 1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		manager.collectRecoverableKafkaErrors(ctx)
+		close(done)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	dispatcherID := common.NewDispatcherID()
+	manager.recoverableKafkaErrCh <- &kafkapkg.ErrorEvent{
+		Time:         time.Now(),
+		KafkaErrCode: 20,
+		KafkaErrName: "NOT_ENOUGH_REPLICAS_AFTER_APPEND",
+		Message:      "recoverable kafka error",
+		Topic:        "test-topic",
+		Partition:    1,
+		LogInfo: &codecCommon.MessageLogInfo{
+			DispatcherIDs: []common.DispatcherID{dispatcherID},
+		},
+	}
+
+	dequeueCtx, cancelDequeue := context.WithTimeout(context.Background(), time.Second)
+	req := manager.heartbeatRequestQueue.Dequeue(dequeueCtx)
+	cancelDequeue()
+
+	require.NotNil(t, req)
+	require.Equal(t, node.ID("maintainer"), req.TargetID)
+	require.NotNil(t, req.Request)
+	require.NotNil(t, req.Request.Err)
+	require.Equal(t, kafkapkg.RecoverableKafkaKErrorRunningErrorCode, req.Request.Err.Code)
+
+	var report kafkapkg.ErrorReport
+	require.NoError(t, json.Unmarshal([]byte(req.Request.Err.Message), &report))
+	require.Equal(t, int16(20), report.KafkaErrCode)
+	require.Equal(t, []common.DispatcherID{dispatcherID}, report.DispatcherIDs)
+	require.Equal(t, "test-topic", report.Topic)
+	require.Equal(t, int32(1), report.Partition)
 }
 
 func TestCollectComponentStatusWhenChangedWatermarkSeqNoFallback(t *testing.T) {

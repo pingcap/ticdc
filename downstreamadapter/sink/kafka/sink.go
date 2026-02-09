@@ -116,6 +116,18 @@ func New(
 	}, nil
 }
 
+type recoverableErrorChanSetter interface {
+	SetRecoverableErrorChan(ch chan<- *kafka.ErrorEvent)
+}
+
+func (s *sink) SetRecoverableErrorChan(ch chan<- *kafka.ErrorEvent) {
+	setter, ok := s.dmlProducer.(recoverableErrorChanSetter)
+	if !ok {
+		return
+	}
+	setter.SetRecoverableErrorChan(ch)
+}
+
 func (s *sink) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
@@ -254,6 +266,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 						TotalPartition: partitionNum,
 					},
 					RowEvent: commonEvent.RowEvent{
+						DispatcherID:    event.DispatcherID,
 						PhysicalTableID: event.PhysicalTableID,
 						TableInfo:       event.TableInfo,
 						StartTs:         event.StartTs,
@@ -480,7 +493,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
+			return context.Cause(ctx)
 		case <-ticker.C:
 			s.ddlProducer.Heartbeat()
 		case ts, ok := <-s.checkpointChan:

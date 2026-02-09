@@ -364,6 +364,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 						TotalPartition: partitionNum,
 					},
 					RowEvent: commonEvent.RowEvent{
+						DispatcherID:    event.DispatcherID,
 						PhysicalTableID: event.PhysicalTableID,
 						TableInfo:       event.TableInfo,
 						StartTs:         event.StartTs,

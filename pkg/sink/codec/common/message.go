@@ -16,6 +16,8 @@ package common
 import (
 	"encoding/binary"
 	"encoding/json"
+
+	commonPkg "github.com/pingcap/ticdc/pkg/common"
 )
 
 // MaxRecordOverhead is used to calculate message size by sarama kafka client.
@@ -54,9 +56,10 @@ type Message struct {
 
 // MessageLogInfo captures diagnostic context of a sink message.
 type MessageLogInfo struct {
-	Rows       []RowLogInfo
-	DDL        *DDLLogInfo
-	Checkpoint *CheckpointLogInfo
+	DispatcherIDs []commonPkg.DispatcherID
+	Rows          []RowLogInfo
+	DDL           *DDLLogInfo
+	Checkpoint    *CheckpointLogInfo
 }
 
 // RowLogInfo represents the information of a single row in a sink message.

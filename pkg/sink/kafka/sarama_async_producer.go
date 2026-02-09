@@ -35,6 +35,8 @@ type saramaAsyncProducer struct {
 
 	closed      *atomic.Bool
 	failpointCh chan *sarama.ProducerError
+
+	recoverableErrCh chan<- *ErrorEvent
 }
 
 type messageMetadata struct {
@@ -131,8 +133,50 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 			if err == nil {
 				return nil
 			}
+			if isProducerKErrorRecoverable(err) {
+				if p.reportRecoverableError(err) {
+					continue
+				}
+			}
 			return p.handleProducerError(err)
 		}
+	}
+}
+
+func (p *saramaAsyncProducer) SetRecoverableErrorChan(ch chan<- *ErrorEvent) {
+	p.recoverableErrCh = ch
+}
+
+func (p *saramaAsyncProducer) reportRecoverableError(err *sarama.ProducerError) bool {
+	if err == nil || p.recoverableErrCh == nil {
+		return false
+	}
+	kerr, ok := err.Err.(sarama.KError)
+	if !ok {
+		return false
+	}
+
+	var topic string
+	var partition int32
+	if err.Msg != nil {
+		topic = err.Msg.Topic
+		partition = err.Msg.Partition
+	}
+	event := &ErrorEvent{
+		Time:         time.Now(),
+		KafkaErrCode: int16(kerr),
+		KafkaErrName: kerr.Error(),
+		Message:      err.Err.Error(),
+		Topic:        topic,
+		Partition:    partition,
+		LogInfo:      extractLogInfo(err.Msg),
+	}
+
+	select {
+	case p.recoverableErrCh <- event:
+		return true
+	default:
+		return false
 	}
 }
 
