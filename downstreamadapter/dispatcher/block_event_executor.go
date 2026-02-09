@@ -38,7 +38,7 @@ type blockEventExecutor struct {
 	inUseDispatcher sync.Map // map[common.DispatcherID]struct{}
 
 	mu    sync.Mutex
-	tasks map[common.DispatcherID][]blockEventTask
+	tasks map[common.DispatcherID][]*blockEventTask
 
 	wg sync.WaitGroup
 }
@@ -46,7 +46,7 @@ type blockEventExecutor struct {
 func newBlockEventExecutor() *blockEventExecutor {
 	executor := &blockEventExecutor{
 		ready: chann.NewUnlimitedChannelDefault[common.DispatcherID](),
-		tasks: make(map[common.DispatcherID][]blockEventTask),
+		tasks: make(map[common.DispatcherID][]*blockEventTask),
 	}
 	for i := 0; i < blockEventWorkerCount; i++ {
 		executor.wg.Add(1)
@@ -91,18 +91,18 @@ func (e *blockEventExecutor) Submit(dispatcher *BasicDispatcher, f func()) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	e.tasks[dispatcherID] = append(e.tasks[dispatcherID], blockEventTask{f: f})
+	e.tasks[dispatcherID] = append(e.tasks[dispatcherID], &blockEventTask{f: f})
 	e.ready.Push(dispatcherID)
 }
 
-func (e *blockEventExecutor) pop(dispatcherID common.DispatcherID) (blockEventTask, bool) {
+func (e *blockEventExecutor) pop(dispatcherID common.DispatcherID) (*blockEventTask, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	q, ok := e.tasks[dispatcherID]
 	if !ok || len(q) == 0 {
 		delete(e.tasks, dispatcherID)
-		return blockEventTask{}, false
+		return &blockEventTask{}, false
 	}
 
 	task := q[0]
