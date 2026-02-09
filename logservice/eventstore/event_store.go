@@ -1489,7 +1489,7 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 				if targetIndex == -1 {
 					log.Panic("cannot find subscription state", zap.Uint64("subscriptionID", change.SubID))
 				}
-				tableState.Subscriptions = append(tableState.Subscriptions[:targetIndex], tableState.Subscriptions[targetIndex+1:]...)
+				tableState.Subscriptions = slices.Delete(tableState.Subscriptions, targetIndex, targetIndex+1)
 			case SubscriptionChangeTypeUpdate:
 				tableState, ok := state.TableStates[change.Span.TableID]
 				if !ok {
