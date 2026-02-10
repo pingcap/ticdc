@@ -113,7 +113,7 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 }
 
 func (w *Writer) genActiveActiveSQL(tableInfo *common.TableInfo, eventsInGroup []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
-	if !w.shouldGenBatchSQL(tableInfo.HasPKOrNotNullUK, tableInfo.HasVirtualColumns(), eventsInGroup) {
+	if !w.shouldGenBatchSQL(tableInfo, eventsInGroup) {
 		return w.generateActiveActiveNormalSQLs(eventsInGroup)
 	}
 	return w.generateActiveActiveBatchSQL(eventsInGroup)
