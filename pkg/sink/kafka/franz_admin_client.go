@@ -16,7 +16,6 @@ package kafka
 import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	kafkafranz "github.com/pingcap/ticdc/pkg/sink/kafka/franz"
-	"github.com/twmb/franz-go/pkg/kadm"
 )
 
 // franzAdminClientAdapter adapts the franz-go admin client implementation to kafka.ClusterAdminClient.
@@ -30,7 +29,7 @@ func (a *franzAdminClientAdapter) GetAllBrokers() []Broker {
 	brokers := a.inner.GetAllBrokers()
 	result := make([]Broker, 0, len(brokers))
 	for _, b := range brokers {
-		result = append(result, Broker{ID: b.ID})
+		result = append(result, Broker{ID: b})
 	}
 	return result
 }
@@ -71,7 +70,7 @@ func (a *franzAdminClientAdapter) CreateTopic(detail *TopicDetail, validateOnly 
 	if detail == nil {
 		return errors.ErrKafkaInvalidConfig.GenWithStack("topic detail must not be nil")
 	}
-	franzDetail := &kadm.TopicDetail{
+	franzDetail := &kafkafranz.TopicDetail{
 		Name:              detail.Name,
 		NumPartitions:     detail.NumPartitions,
 		ReplicationFactor: detail.ReplicationFactor,

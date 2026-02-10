@@ -14,142 +14,129 @@
 package franz
 
 import (
+	"context"
+	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
-	"github.com/rcrowley/go-metrics"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-type brokerMetrics struct {
-	outgoingByteRate metrics.Meter
-	requestRate      metrics.Meter
-	requestLatency   metrics.Histogram
-	responseRate     metrics.Meter
-	inFlight         int64
-}
-
-func newBrokerMetrics() *brokerMetrics {
-	return &brokerMetrics{
-		outgoingByteRate: metrics.NewMeter(),
-		requestRate:      metrics.NewMeter(),
-		requestLatency:   metrics.NewHistogram(metrics.NewExpDecaySample(1028, 0.015)),
-		responseRate:     metrics.NewMeter(),
-	}
-}
-
 type MetricsHook struct {
-	mu      sync.RWMutex
-	brokers map[int32]*brokerMetrics
+	promMu     sync.RWMutex
+	promBound  bool
+	keyspace   string
+	changefeed string
+	prom       PrometheusMetrics
+}
 
-	compressionRatio metrics.Histogram
-	recordsPerReq    metrics.Histogram
+type PrometheusMetrics struct {
+	RequestsInFlight  *prometheus.GaugeVec
+	OutgoingByteRate  *prometheus.GaugeVec
+	RequestRate       *prometheus.GaugeVec
+	RequestLatency    *prometheus.HistogramVec
+	ResponseRate      *prometheus.GaugeVec
+	CompressionRatio  *prometheus.HistogramVec
+	RecordsPerRequest *prometheus.HistogramVec
 }
 
 func NewMetricsHook() *MetricsHook {
-	return &MetricsHook{
-		brokers:          make(map[int32]*brokerMetrics),
-		compressionRatio: metrics.NewHistogram(metrics.NewExpDecaySample(1028, 0.015)),
-		recordsPerReq:    metrics.NewHistogram(metrics.NewExpDecaySample(1028, 0.015)),
+	return &MetricsHook{}
+}
+
+func (h *MetricsHook) BindPrometheusMetrics(
+	keyspace string,
+	changefeed string,
+	_ time.Duration,
+	metrics PrometheusMetrics,
+) {
+	h.promMu.Lock()
+	defer h.promMu.Unlock()
+
+	h.keyspace = keyspace
+	h.changefeed = changefeed
+	h.prom = metrics
+	h.promBound = true
+}
+
+func (h *MetricsHook) loadPrometheusMetrics() (string, string, PrometheusMetrics, bool) {
+	h.promMu.RLock()
+	defer h.promMu.RUnlock()
+
+	return h.keyspace, h.changefeed, h.prom, h.promBound
+}
+
+func (h *MetricsHook) Run(ctx context.Context) {
+	_, _, _, bound := h.loadPrometheusMetrics()
+
+	if !bound {
+		<-ctx.Done()
+		return
+	}
+
+	<-ctx.Done()
+	h.CleanupPrometheusMetrics()
+}
+
+func (h *MetricsHook) FlushPrometheusMetrics(interval time.Duration) {
+	_ = interval
+}
+
+func (h *MetricsHook) CleanupPrometheusMetrics() {
+	keyspace, changefeed, metrics, bound := h.loadPrometheusMetrics()
+
+	if !bound {
+		return
+	}
+
+	labels := prometheus.Labels{
+		"namespace":  keyspace,
+		"changefeed": changefeed,
+	}
+	if metrics.OutgoingByteRate != nil {
+		metrics.OutgoingByteRate.MetricVec.DeletePartialMatch(labels)
+	}
+	if metrics.RequestRate != nil {
+		metrics.RequestRate.MetricVec.DeletePartialMatch(labels)
+	}
+	if metrics.ResponseRate != nil {
+		metrics.ResponseRate.MetricVec.DeletePartialMatch(labels)
+	}
+	if metrics.RequestsInFlight != nil {
+		metrics.RequestsInFlight.MetricVec.DeletePartialMatch(labels)
+	}
+	if metrics.RequestLatency != nil {
+		metrics.RequestLatency.MetricVec.DeletePartialMatch(labels)
+	}
+	if metrics.CompressionRatio != nil {
+		metrics.CompressionRatio.MetricVec.DeletePartialMatch(labels)
+	}
+	if metrics.RecordsPerRequest != nil {
+		metrics.RecordsPerRequest.MetricVec.DeletePartialMatch(labels)
 	}
 }
 
 func (h *MetricsHook) RecordBrokerWrite(nodeID int32, bytesWritten int, err error) {
-	broker := h.getBroker(nodeID)
-	if broker == nil {
+	if nodeID < 0 {
 		return
 	}
 
-	if bytesWritten > 0 {
-		broker.outgoingByteRate.Mark(int64(bytesWritten))
+	keyspace, changefeed, metrics, bound := h.loadPrometheusMetrics()
+	if !bound {
+		return
 	}
-	broker.requestRate.Mark(1)
-	if err == nil {
-		atomic.AddInt64(&broker.inFlight, 1)
+	brokerID := strconv.Itoa(int(nodeID))
+
+	if metrics.OutgoingByteRate != nil && bytesWritten > 0 {
+		metrics.OutgoingByteRate.WithLabelValues(keyspace, changefeed, brokerID).Add(float64(bytesWritten))
 	}
-}
-
-func (h *MetricsHook) getBroker(nodeID int32) *brokerMetrics {
-	if nodeID < 0 {
-		return nil
+	if metrics.RequestRate != nil {
+		metrics.RequestRate.WithLabelValues(keyspace, changefeed, brokerID).Add(1)
 	}
-
-	h.mu.RLock()
-	broker := h.brokers[nodeID]
-	h.mu.RUnlock()
-	if broker != nil {
-		return broker
+	if err == nil && metrics.RequestsInFlight != nil {
+		metrics.RequestsInFlight.WithLabelValues(keyspace, changefeed, brokerID).Add(1)
 	}
-
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	broker = h.brokers[nodeID]
-	if broker != nil {
-		return broker
-	}
-	broker = newBrokerMetrics()
-	h.brokers[nodeID] = broker
-	return broker
-}
-
-type BrokerMetricsSnapshot struct {
-	OutgoingByteRate      float64
-	RequestRate           float64
-	RequestLatencyMeanMic float64
-	RequestLatencyP99Mic  float64
-	InFlight              int64
-	ResponseRate          float64
-}
-
-type MetricsSnapshot struct {
-	CompressionMean float64
-	CompressionP99  float64
-	RecordsMean     float64
-	RecordsP99      float64
-	Brokers         map[int32]BrokerMetricsSnapshot
-}
-
-func (h *MetricsHook) Snapshot() MetricsSnapshot {
-	h.mu.RLock()
-	brokers := make(map[int32]*brokerMetrics, len(h.brokers))
-	for id, broker := range h.brokers {
-		brokers[id] = broker
-	}
-	compression := h.compressionRatio.Snapshot()
-	records := h.recordsPerReq.Snapshot()
-	h.mu.RUnlock()
-
-	result := MetricsSnapshot{
-		CompressionMean: compression.Mean(),
-		CompressionP99:  compression.Percentile(0.99),
-		RecordsMean:     records.Mean(),
-		RecordsP99:      records.Percentile(0.99),
-		Brokers:         make(map[int32]BrokerMetricsSnapshot, len(brokers)),
-	}
-
-	for id, broker := range brokers {
-		latencySnapshot := broker.requestLatency.Snapshot()
-		result.Brokers[id] = BrokerMetricsSnapshot{
-			OutgoingByteRate:      broker.outgoingByteRate.Snapshot().Rate1(),
-			RequestRate:           broker.requestRate.Snapshot().Rate1(),
-			RequestLatencyMeanMic: latencySnapshot.Mean(),
-			RequestLatencyP99Mic:  latencySnapshot.Percentile(0.99),
-			InFlight:              atomic.LoadInt64(&broker.inFlight),
-			ResponseRate:          broker.responseRate.Snapshot().Rate1(),
-		}
-	}
-	return result
-}
-
-func (h *MetricsHook) snapshotBrokers() map[int32]*brokerMetrics {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	result := make(map[int32]*brokerMetrics, len(h.brokers))
-	for id, broker := range h.brokers {
-		result[id] = broker
-	}
-	return result
 }
 
 func (h *MetricsHook) OnBrokerWrite(
@@ -168,21 +155,25 @@ func (h *MetricsHook) OnBrokerE2E(
 	_ int16,
 	e2e kgo.BrokerE2E,
 ) {
-	broker := h.getBroker(meta.NodeID)
-	if broker == nil {
+	if meta.NodeID < 0 {
 		return
 	}
 
-	if e2e.WriteErr == nil {
-		if atomic.AddInt64(&broker.inFlight, -1) < 0 {
-			atomic.StoreInt64(&broker.inFlight, 0)
-		}
+	keyspace, changefeed, metrics, bound := h.loadPrometheusMetrics()
+	if !bound {
+		return
 	}
-	if e2e.BytesRead > 0 && e2e.ReadErr == nil {
-		broker.responseRate.Mark(1)
+	brokerID := strconv.Itoa(int(meta.NodeID))
+
+	if e2e.WriteErr == nil && metrics.RequestsInFlight != nil {
+		metrics.RequestsInFlight.WithLabelValues(keyspace, changefeed, brokerID).Add(-1)
 	}
-	if e2e.Err() == nil {
-		broker.requestLatency.Update(e2e.DurationE2E().Microseconds())
+	if e2e.BytesRead > 0 && e2e.ReadErr == nil && metrics.ResponseRate != nil {
+		metrics.ResponseRate.WithLabelValues(keyspace, changefeed, brokerID).Add(1)
+	}
+	if e2e.Err() == nil && metrics.RequestLatency != nil {
+		latencyMs := float64(e2e.DurationE2E().Microseconds()) / 1000
+		metrics.RequestLatency.WithLabelValues(keyspace, changefeed, brokerID).Observe(latencyMs)
 	}
 }
 
@@ -196,11 +187,17 @@ func (h *MetricsHook) OnProduceBatchWritten(
 }
 
 func (h *MetricsHook) RecordProduceBatchWritten(numRecords int, uncompressedBytes int, compressedBytes int) {
-	if numRecords > 0 {
-		h.recordsPerReq.Update(int64(numRecords))
+	keyspace, changefeed, metrics, bound := h.loadPrometheusMetrics()
+	if !bound {
+		return
 	}
-	if uncompressedBytes > 0 && compressedBytes > 0 {
-		ratio := int64(float64(uncompressedBytes) / float64(compressedBytes) * 100)
-		h.compressionRatio.Update(ratio)
+
+	if metrics.RecordsPerRequest != nil && numRecords > 0 {
+		records := float64(numRecords)
+		metrics.RecordsPerRequest.WithLabelValues(keyspace, changefeed).Observe(records)
+	}
+	if metrics.CompressionRatio != nil && uncompressedBytes > 0 && compressedBytes > 0 {
+		ratio := float64(uncompressedBytes) / float64(compressedBytes) * 100
+		metrics.CompressionRatio.WithLabelValues(keyspace, changefeed).Observe(ratio)
 	}
 }

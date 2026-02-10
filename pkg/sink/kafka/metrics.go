@@ -53,6 +53,13 @@ var (
 			Name:      "kafka_producer_request_latency",
 			Help:      "The request latency for all brokers.",
 		}, []string{"namespace", "changefeed", "broker", "type"})
+	franzRequestLatencyHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "kafka_producer_request_latency_histogram",
+			Help:      "Request latency histogram for franz producer in milliseconds.",
+		}, []string{"namespace", "changefeed", "broker"})
 	// Histogram update by `compression-ratio`.
 	compressionRatioGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -61,6 +68,13 @@ var (
 			Name:      "kafka_producer_compression_ratio",
 			Help:      "The compression ratio times 100 of record batches for all topics.",
 		}, []string{"namespace", "changefeed", "type"})
+	franzCompressionRatioHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "kafka_producer_compression_ratio_histogram",
+			Help:      "Compression ratio times 100 histogram for franz producer.",
+		}, []string{"namespace", "changefeed"})
 	// updated by `records-per-request`.
 	recordsPerRequestGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -69,6 +83,13 @@ var (
 			Name:      "kafka_producer_records_per_request",
 			Help:      "The number of records per request for all topics.",
 		}, []string{"namespace", "changefeed", "type"})
+	franzRecordsPerRequestHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "kafka_producer_records_per_request_histogram",
+			Help:      "Records per request histogram for franz producer.",
+		}, []string{"namespace", "changefeed"})
 
 	// Meter mark by 1 once a response received.
 	responseRateGauge = prometheus.NewGaugeVec(
@@ -87,6 +108,9 @@ func InitMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(OutgoingByteRateGauge)
 	registry.MustRegister(RequestRateGauge)
 	registry.MustRegister(RequestLatencyGauge)
+	registry.MustRegister(franzRequestLatencyHistogram)
+	registry.MustRegister(franzCompressionRatioHistogram)
+	registry.MustRegister(franzRecordsPerRequestHistogram)
 	registry.MustRegister(requestsInFlightGauge)
 	registry.MustRegister(responseRateGauge)
 

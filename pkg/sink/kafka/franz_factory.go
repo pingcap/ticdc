@@ -47,10 +47,26 @@ func NewFranzFactory(
 		return nil, errors.Trace(err)
 	}
 
+	metricsHook := franz.NewMetricsHook()
+	metricsHook.BindPrometheusMetrics(
+		changefeedID.Keyspace(),
+		changefeedID.Name(),
+		refreshMetricsInterval,
+		franz.PrometheusMetrics{
+			RequestsInFlight:  requestsInFlightGauge,
+			OutgoingByteRate:  OutgoingByteRateGauge,
+			RequestRate:       RequestRateGauge,
+			RequestLatency:    franzRequestLatencyHistogram,
+			ResponseRate:      responseRateGauge,
+			CompressionRatio:  franzCompressionRatioHistogram,
+			RecordsPerRequest: franzRecordsPerRequestHistogram,
+		},
+	)
+
 	return &franzFactory{
 		changefeedID: changefeedID,
 		option:       o,
-		metricsHook:  franz.NewMetricsHook(),
+		metricsHook:  metricsHook,
 	}, nil
 }
 
@@ -79,10 +95,7 @@ func (f *franzFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error)
 }
 
 func (f *franzFactory) MetricsCollector(_ ClusterAdminClient) MetricsCollector {
-	return &franzMetricsCollector{
-		changefeedID: f.changefeedID,
-		hook:         f.metricsHook,
-	}
+	return f.metricsHook
 }
 
 func newFranzOptions(o *options) *franz.Options {

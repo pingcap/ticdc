@@ -15,11 +15,15 @@ package kafka
 
 import (
 	"testing"
+	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
 	kafkafranz "github.com/pingcap/ticdc/pkg/sink/kafka/franz"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 func TestFranzFactoryMetricsCollectorType(t *testing.T) {
@@ -32,31 +36,64 @@ func TestFranzFactoryMetricsCollectorType(t *testing.T) {
 	}
 	collector := f.MetricsCollector(nil)
 
-	_, ok := collector.(*franzMetricsCollector)
+	_, ok := collector.(*kafkafranz.MetricsHook)
 	require.True(t, ok)
 }
 
-func TestFranzMetricsCollectorCollectMetrics(t *testing.T) {
+func TestFranzMetricsHookWritePrometheusMetricsDirectly(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "franz-metrics")
 	hook := kafkafranz.NewMetricsHook()
-	collector := &franzMetricsCollector{
-		changefeedID: changefeedID,
-		hook:         hook,
-	}
+	hook.BindPrometheusMetrics(
+		changefeedID.Keyspace(),
+		changefeedID.Name(),
+		refreshMetricsInterval,
+		kafkafranz.PrometheusMetrics{
+			RequestsInFlight:  requestsInFlightGauge,
+			OutgoingByteRate:  OutgoingByteRateGauge,
+			RequestRate:       RequestRateGauge,
+			RequestLatency:    franzRequestLatencyHistogram,
+			ResponseRate:      responseRateGauge,
+			CompressionRatio:  franzCompressionRatioHistogram,
+			RecordsPerRequest: franzRecordsPerRequestHistogram,
+		},
+	)
 	t.Cleanup(func() {
-		collector.cleanupMetrics()
+		hook.CleanupPrometheusMetrics()
 	})
 
 	hook.RecordBrokerWrite(1, 128, nil)
-	hook.RecordProduceBatchWritten(8, 400, 200)
-
-	collector.collectMetrics()
-
 	keyspace := changefeedID.Keyspace()
 	changefeed := changefeedID.Name()
 	require.Equal(t, float64(1), testutil.ToFloat64(requestsInFlightGauge.WithLabelValues(keyspace, changefeed, "1")))
-	require.Greater(t, testutil.ToFloat64(compressionRatioGauge.WithLabelValues(keyspace, changefeed, avg)), 0.0)
-	require.Greater(t, testutil.ToFloat64(recordsPerRequestGauge.WithLabelValues(keyspace, changefeed, avg)), 0.0)
+	require.Greater(t, testutil.ToFloat64(RequestRateGauge.WithLabelValues(keyspace, changefeed, "1")), 0.0)
+	require.Greater(t, testutil.ToFloat64(OutgoingByteRateGauge.WithLabelValues(keyspace, changefeed, "1")), 0.0)
+
+	hook.OnBrokerE2E(kgo.BrokerMetadata{NodeID: 1}, 0, kgo.BrokerE2E{
+		BytesRead:   128,
+		TimeToWrite: time.Millisecond,
+		ReadWait:    time.Millisecond,
+		TimeToRead:  time.Millisecond,
+	})
+	require.Equal(t, float64(0), testutil.ToFloat64(requestsInFlightGauge.WithLabelValues(keyspace, changefeed, "1")))
+	require.Greater(t, testutil.ToFloat64(responseRateGauge.WithLabelValues(keyspace, changefeed, "1")), 0.0)
+	require.Greater(t, histogramSampleCount(t, franzRequestLatencyHistogram.WithLabelValues(keyspace, changefeed, "1")), uint64(0))
+
+	hook.RecordProduceBatchWritten(8, 400, 200)
+	require.Greater(t, histogramSampleCount(t, franzCompressionRatioHistogram.WithLabelValues(keyspace, changefeed)), uint64(0))
+	require.Greater(t, histogramSampleCount(t, franzRecordsPerRequestHistogram.WithLabelValues(keyspace, changefeed)), uint64(0))
+}
+
+func histogramSampleCount(t *testing.T, observer prometheus.Observer) uint64 {
+	t.Helper()
+
+	histogram, ok := observer.(prometheus.Histogram)
+	require.True(t, ok)
+
+	metric := &dto.Metric{}
+	require.NoError(t, histogram.Write(metric))
+	require.NotNil(t, metric.Histogram)
+
+	return metric.Histogram.GetSampleCount()
 }
