@@ -44,7 +44,7 @@ mysql_groups=(
 	# G05
 	'vector simple partition_table fail_over_ddl_F conflict_key_generated_column'
 	# G06
-	'http_api http_api_tls http_api_tls_old_arch fail_over_ddl_G synced_status same_upstream_downstream'
+	'http_api http_api_compatibility http_api_tls http_api_tls_old_arch fail_over_ddl_G synced_status same_upstream_downstream'
 	# G07
 	'http_api_tls_with_user_auth fail_over_ddl_H changefeed_update_config synced_status_with_redo'
 	# G08
