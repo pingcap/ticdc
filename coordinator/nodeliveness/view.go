@@ -86,17 +86,27 @@ func (v *View) HandleSetNodeLivenessResponse(id node.ID, resp *heartbeatpb.SetNo
 // Note: Nodes that have never sent node liveness messages are treated as ALIVE for
 // compatibility during rollout.
 func (v *View) GetState(id node.ID, now time.Time) State {
+	var (
+		lastSeen time.Time
+		liveness heartbeatpb.NodeLiveness
+		everSeen bool
+	)
 	v.mu.RLock()
 	r := v.data[id]
+	if r != nil {
+		lastSeen = r.lastSeen
+		liveness = r.liveness
+		everSeen = r.everSeenHeartbeat
+	}
 	v.mu.RUnlock()
 
-	if r == nil || !r.everSeenHeartbeat {
+	if r == nil || !everSeen {
 		return StateAlive
 	}
-	if v.ttl > 0 && now.Sub(r.lastSeen) > v.ttl {
+	if v.ttl > 0 && now.Sub(lastSeen) > v.ttl {
 		return StateUnknown
 	}
-	switch r.liveness {
+	switch liveness {
 	case heartbeatpb.NodeLiveness_DRAINING:
 		return StateDraining
 	case heartbeatpb.NodeLiveness_STOPPING:

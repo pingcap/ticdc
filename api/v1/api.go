@@ -193,7 +193,10 @@ func (o *OpenAPIV1) rebalanceTables(c *gin.Context) {
 // drainCapture drains all tables from a capture.
 // Usage:
 // curl -X PUT http://127.0.0.1:8300/api/v1/captures/drain
-// TODO: Implement this API in the future, currently it is a no-op.
+//
+// It is kept for API v1 compatibility. In the new architecture, `capture_id` is
+// treated as a node ID, and the returned `current_table_count` represents the
+// remaining drain work rather than a literal table count.
 func (o *OpenAPIV1) drainCapture(c *gin.Context) {
 	var req drainCaptureRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
