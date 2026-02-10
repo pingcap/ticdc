@@ -37,7 +37,7 @@ type saramaAsyncProducer struct {
 	closed      *atomic.Bool
 	failpointCh chan *sarama.ProducerError
 
-	transientErrorCh chan<- *recoverable.ErrorEvent
+	recoverErrorCh chan<- *recoverable.ErrorEvent
 }
 
 type messageMetadata struct {
@@ -145,11 +145,11 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 }
 
 func (p *saramaAsyncProducer) SetRecoverableErrorChan(ch chan<- *recoverable.ErrorEvent) {
-	p.transientErrorCh = ch
+	p.recoverErrorCh = ch
 }
 
 func (p *saramaAsyncProducer) reportTransientError(err *sarama.ProducerError) bool {
-	if err == nil || p.transientErrorCh == nil {
+	if err == nil || p.recoverErrorCh == nil {
 		return false
 	}
 	logInfo := extractLogInfo(err.Msg)
@@ -175,7 +175,7 @@ func (p *saramaAsyncProducer) reportTransientError(err *sarama.ProducerError) bo
 	}
 
 	select {
-	case p.transientErrorCh <- event:
+	case p.recoverErrorCh <- event:
 		fields := []zap.Field{
 			zap.String("keyspace", p.changefeedID.Keyspace()),
 			zap.String("changefeed", p.changefeedID.Name()),

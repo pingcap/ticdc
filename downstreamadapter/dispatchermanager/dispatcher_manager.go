@@ -150,6 +150,7 @@ type DispatcherManager struct {
 	metricResolvedTs                       prometheus.Gauge
 	metricResolvedTsLag                    prometheus.Gauge
 	metricBlockStatusesChanLen             prometheus.Gauge
+	metricRecoverEventCount                prometheus.Counter
 
 	metricTableTriggerRedoDispatcherCount prometheus.Gauge
 	metricRedoEventDispatcherCount        prometheus.Gauge
@@ -204,6 +205,7 @@ func NewDispatcherManager(
 		metricResolvedTs:                       metrics.DispatcherManagerResolvedTsGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 		metricResolvedTsLag:                    metrics.DispatcherManagerResolvedTsLagGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 		metricBlockStatusesChanLen:             metrics.DispatcherManagerBlockStatusesChanLenGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		metricRecoverEventCount:                metrics.DispatcherManagerRecoverEventCount.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 
 		metricTableTriggerRedoDispatcherCount: metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher"),
 		metricRedoEventDispatcherCount:        metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher"),
@@ -338,6 +340,7 @@ func (e *DispatcherManager) collectRecoverableErrors(ctx context.Context) {
 			if event == nil {
 				continue
 			}
+			e.metricRecoverEventCount.Inc()
 
 			if len(event.DispatcherIDs) == 0 {
 				log.Warn("recoverable sink error has no dispatcher IDs, ignore it",
@@ -1035,6 +1038,7 @@ func (e *DispatcherManager) cleanMetrics() {
 	metrics.DispatcherManagerCheckpointTsLagGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
 	metrics.DispatcherManagerResolvedTsLagGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
 	metrics.DispatcherManagerBlockStatusesChanLenGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
+	metrics.DispatcherManagerRecoverEventCount.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
 
 	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
 	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")

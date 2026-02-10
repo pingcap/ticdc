@@ -102,7 +102,9 @@ type RecoverDispatcherRequestQueue struct {
 
 func NewRecoverDispatcherRequestQueue() *RecoverDispatcherRequestQueue {
 	return &RecoverDispatcherRequestQueue{
-		queue: make(chan *RecoverDispatcherRequestWithTargetID, 10000),
+		// Recover requests are expected to be sparse; keep a moderate buffer to
+		// absorb short bursts without reserving excessive memory.
+		queue: make(chan *RecoverDispatcherRequestWithTargetID, 1024),
 	}
 }
 
