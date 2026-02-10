@@ -400,6 +400,11 @@ func (c *coordinator) Initialized() bool {
 	return c.controller.initialized.Load()
 }
 
+// DrainNode requests the target node to be drained and returns the current remaining work.
+func (c *coordinator) DrainNode(target node.ID) int {
+	return c.controller.DrainNode(target)
+}
+
 func (c *coordinator) Stop() {
 	if c.closed.CompareAndSwap(false, true) {
 		c.mc.DeRegisterHandler(messaging.CoordinatorTopic)

@@ -145,20 +145,43 @@ func WriteData(w http.ResponseWriter, data interface{}) {
 	}
 }
 
-// Liveness can only be changed from alive to stopping, and no way back.
+// Liveness is a monotonic node lifecycle state.
 type Liveness int32
 
 const (
-	// LivenessCaptureAlive means the capture is alive, and ready to serve.
+	// LivenessCaptureAlive means the node is alive and ready to serve.
 	LivenessCaptureAlive Liveness = 0
-	// LivenessCaptureStopping means the capture is in the process of graceful shutdown.
-	LivenessCaptureStopping Liveness = 1
+	// LivenessCaptureDraining means the node is in the process of draining workloads.
+	LivenessCaptureDraining Liveness = 1
+	// LivenessCaptureStopping means the node is in the process of graceful shutdown.
+	LivenessCaptureStopping Liveness = 2
 )
 
-// Store the given liveness. Returns true if it success.
+// Store stores the given liveness if it is a monotonic upgrade.
+// It is idempotent: storing the current value returns true.
+//
+// The state machine is monotonic:
+//   - Alive -> Draining -> Stopping
+//
+// Downgrades and skipping intermediate states are rejected.
 func (l *Liveness) Store(v Liveness) bool {
-	return atomic.CompareAndSwapInt32(
-		(*int32)(l), int32(LivenessCaptureAlive), int32(v))
+	for {
+		current := l.Load()
+		if current == v {
+			return true
+		}
+		// Reject downgrades.
+		if v < current {
+			return false
+		}
+		// Only allow step-by-step upgrades.
+		if v != current+1 {
+			return false
+		}
+		if atomic.CompareAndSwapInt32((*int32)(l), int32(current), int32(v)) {
+			return true
+		}
+	}
 }
 
 // Load the liveness.
@@ -167,12 +190,14 @@ func (l *Liveness) Load() Liveness {
 }
 
 func (l *Liveness) String() string {
-	switch *l {
+	switch l.Load() {
 	case LivenessCaptureAlive:
 		return "Alive"
+	case LivenessCaptureDraining:
+		return "Draining"
 	case LivenessCaptureStopping:
 		return "Stopping"
 	default:
-		return "unknown"
+		return "Unknown"
 	}
 }
