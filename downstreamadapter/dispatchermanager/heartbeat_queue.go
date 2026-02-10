@@ -90,8 +90,9 @@ func (q *BlockStatusRequestQueue) Close() {
 }
 
 type RecoverDispatcherRequestWithTargetID struct {
-	TargetID node.ID
-	Request  *heartbeatpb.RecoverDispatcherRequest
+	TargetID      node.ID
+	Request       *heartbeatpb.RecoverDispatcherRequest
+	FallbackErrCh chan<- error
 }
 
 // RecoverDispatcherRequestQueue is a channel for dispatcher managers to send dispatcher recovery requests

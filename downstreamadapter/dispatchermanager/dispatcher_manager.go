@@ -232,7 +232,8 @@ func NewDispatcherManager(
 		return nil, errors.Trace(err)
 	}
 	if setter, ok := manager.sink.(recoverable.ErrorEventChanSetter); ok {
-		manager.recoverableErrCh = make(chan *recoverable.ErrorEvent, 1024)
+		// recoverableErrCh only needs to preserve a pending recover signal.
+		manager.recoverableErrCh = make(chan *recoverable.ErrorEvent, 1)
 		setter.SetRecoverableErrorChan(manager.recoverableErrCh)
 	}
 
@@ -361,7 +362,15 @@ func (e *DispatcherManager) collectRecoverableErrors(ctx context.Context) {
 				ChangefeedID:  e.changefeedID.ToPB(),
 				DispatcherIDs: dispatcherIDs,
 			}
-			e.recoverDispatcherRequestQueue.Enqueue(&RecoverDispatcherRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: req})
+			var fallbackErrCh chan<- error
+			if e.sharedInfo != nil {
+				fallbackErrCh = e.sharedInfo.GetErrCh()
+			}
+			e.recoverDispatcherRequestQueue.Enqueue(&RecoverDispatcherRequestWithTargetID{
+				TargetID:      e.GetMaintainerID(),
+				Request:       req,
+				FallbackErrCh: fallbackErrCh,
+			})
 		}
 	}
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -285,6 +286,15 @@ func (c *HeartBeatCollector) sendRecoverDispatcherMessages(ctx context.Context) 
 				))
 			if err != nil {
 				log.Error("failed to send recover dispatcher request message", zap.Error(err))
+				if reqWithTarget.FallbackErrCh != nil {
+					fallbackErr := cerror.WrapError(cerror.ErrChangefeedRetryable, err)
+					select {
+					case reqWithTarget.FallbackErrCh <- fallbackErr:
+					default:
+						log.Warn("fallback error channel is full when sending recover dispatcher request fails",
+							zap.Error(fallbackErr))
+					}
+				}
 			}
 		}
 	}
