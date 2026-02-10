@@ -48,7 +48,6 @@ func NewMetricsHook() *MetricsHook {
 func (h *MetricsHook) BindPrometheusMetrics(
 	keyspace string,
 	changefeed string,
-	_ time.Duration,
 	metrics PrometheusMetrics,
 ) {
 	h.promMu.Lock()
@@ -79,10 +78,6 @@ func (h *MetricsHook) Run(ctx context.Context) {
 	h.CleanupPrometheusMetrics()
 }
 
-func (h *MetricsHook) FlushPrometheusMetrics(interval time.Duration) {
-	_ = interval
-}
-
 func (h *MetricsHook) CleanupPrometheusMetrics() {
 	keyspace, changefeed, metrics, bound := h.loadPrometheusMetrics()
 
@@ -94,27 +89,13 @@ func (h *MetricsHook) CleanupPrometheusMetrics() {
 		"namespace":  keyspace,
 		"changefeed": changefeed,
 	}
-	if metrics.OutgoingByteRate != nil {
-		metrics.OutgoingByteRate.MetricVec.DeletePartialMatch(labels)
-	}
-	if metrics.RequestRate != nil {
-		metrics.RequestRate.MetricVec.DeletePartialMatch(labels)
-	}
-	if metrics.ResponseRate != nil {
-		metrics.ResponseRate.MetricVec.DeletePartialMatch(labels)
-	}
-	if metrics.RequestsInFlight != nil {
-		metrics.RequestsInFlight.MetricVec.DeletePartialMatch(labels)
-	}
-	if metrics.RequestLatency != nil {
-		metrics.RequestLatency.MetricVec.DeletePartialMatch(labels)
-	}
-	if metrics.CompressionRatio != nil {
-		metrics.CompressionRatio.MetricVec.DeletePartialMatch(labels)
-	}
-	if metrics.RecordsPerRequest != nil {
-		metrics.RecordsPerRequest.MetricVec.DeletePartialMatch(labels)
-	}
+	deleteGaugeVecPartialMatch(metrics.OutgoingByteRate, labels)
+	deleteGaugeVecPartialMatch(metrics.RequestRate, labels)
+	deleteGaugeVecPartialMatch(metrics.ResponseRate, labels)
+	deleteGaugeVecPartialMatch(metrics.RequestsInFlight, labels)
+	deleteHistogramVecPartialMatch(metrics.RequestLatency, labels)
+	deleteHistogramVecPartialMatch(metrics.CompressionRatio, labels)
+	deleteHistogramVecPartialMatch(metrics.RecordsPerRequest, labels)
 }
 
 func (h *MetricsHook) RecordBrokerWrite(nodeID int32, bytesWritten int, err error) {
@@ -122,20 +103,20 @@ func (h *MetricsHook) RecordBrokerWrite(nodeID int32, bytesWritten int, err erro
 		return
 	}
 
-	keyspace, changefeed, metrics, bound := h.loadPrometheusMetrics()
-	if !bound {
+	ctx, ok := h.loadMetricsContext()
+	if !ok {
 		return
 	}
 	brokerID := strconv.Itoa(int(nodeID))
 
-	if metrics.OutgoingByteRate != nil && bytesWritten > 0 {
-		metrics.OutgoingByteRate.WithLabelValues(keyspace, changefeed, brokerID).Add(float64(bytesWritten))
+	if ctx.metrics.OutgoingByteRate != nil && bytesWritten > 0 {
+		ctx.metrics.OutgoingByteRate.WithLabelValues(ctx.keyspace, ctx.changefeed, brokerID).Add(float64(bytesWritten))
 	}
-	if metrics.RequestRate != nil {
-		metrics.RequestRate.WithLabelValues(keyspace, changefeed, brokerID).Add(1)
+	if ctx.metrics.RequestRate != nil {
+		ctx.metrics.RequestRate.WithLabelValues(ctx.keyspace, ctx.changefeed, brokerID).Add(1)
 	}
-	if err == nil && metrics.RequestsInFlight != nil {
-		metrics.RequestsInFlight.WithLabelValues(keyspace, changefeed, brokerID).Add(1)
+	if err == nil && ctx.metrics.RequestsInFlight != nil {
+		ctx.metrics.RequestsInFlight.WithLabelValues(ctx.keyspace, ctx.changefeed, brokerID).Add(1)
 	}
 }
 
@@ -159,21 +140,21 @@ func (h *MetricsHook) OnBrokerE2E(
 		return
 	}
 
-	keyspace, changefeed, metrics, bound := h.loadPrometheusMetrics()
-	if !bound {
+	ctx, ok := h.loadMetricsContext()
+	if !ok {
 		return
 	}
 	brokerID := strconv.Itoa(int(meta.NodeID))
 
-	if e2e.WriteErr == nil && metrics.RequestsInFlight != nil {
-		metrics.RequestsInFlight.WithLabelValues(keyspace, changefeed, brokerID).Add(-1)
+	if e2e.WriteErr == nil && ctx.metrics.RequestsInFlight != nil {
+		ctx.metrics.RequestsInFlight.WithLabelValues(ctx.keyspace, ctx.changefeed, brokerID).Add(-1)
 	}
-	if e2e.BytesRead > 0 && e2e.ReadErr == nil && metrics.ResponseRate != nil {
-		metrics.ResponseRate.WithLabelValues(keyspace, changefeed, brokerID).Add(1)
+	if e2e.BytesRead > 0 && e2e.ReadErr == nil && ctx.metrics.ResponseRate != nil {
+		ctx.metrics.ResponseRate.WithLabelValues(ctx.keyspace, ctx.changefeed, brokerID).Add(1)
 	}
-	if e2e.Err() == nil && metrics.RequestLatency != nil {
+	if e2e.Err() == nil && ctx.metrics.RequestLatency != nil {
 		latencyMs := float64(e2e.DurationE2E().Microseconds()) / 1000
-		metrics.RequestLatency.WithLabelValues(keyspace, changefeed, brokerID).Observe(latencyMs)
+		ctx.metrics.RequestLatency.WithLabelValues(ctx.keyspace, ctx.changefeed, brokerID).Observe(latencyMs)
 	}
 }
 
@@ -187,17 +168,47 @@ func (h *MetricsHook) OnProduceBatchWritten(
 }
 
 func (h *MetricsHook) RecordProduceBatchWritten(numRecords int, uncompressedBytes int, compressedBytes int) {
-	keyspace, changefeed, metrics, bound := h.loadPrometheusMetrics()
-	if !bound {
+	ctx, ok := h.loadMetricsContext()
+	if !ok {
 		return
 	}
 
-	if metrics.RecordsPerRequest != nil && numRecords > 0 {
+	if ctx.metrics.RecordsPerRequest != nil && numRecords > 0 {
 		records := float64(numRecords)
-		metrics.RecordsPerRequest.WithLabelValues(keyspace, changefeed).Observe(records)
+		ctx.metrics.RecordsPerRequest.WithLabelValues(ctx.keyspace, ctx.changefeed).Observe(records)
 	}
-	if metrics.CompressionRatio != nil && uncompressedBytes > 0 && compressedBytes > 0 {
+	if ctx.metrics.CompressionRatio != nil && uncompressedBytes > 0 && compressedBytes > 0 {
 		ratio := float64(uncompressedBytes) / float64(compressedBytes) * 100
-		metrics.CompressionRatio.WithLabelValues(keyspace, changefeed).Observe(ratio)
+		ctx.metrics.CompressionRatio.WithLabelValues(ctx.keyspace, ctx.changefeed).Observe(ratio)
+	}
+}
+
+type metricsContext struct {
+	keyspace   string
+	changefeed string
+	metrics    PrometheusMetrics
+}
+
+func (h *MetricsHook) loadMetricsContext() (metricsContext, bool) {
+	keyspace, changefeed, metrics, bound := h.loadPrometheusMetrics()
+	if !bound {
+		return metricsContext{}, false
+	}
+	return metricsContext{
+		keyspace:   keyspace,
+		changefeed: changefeed,
+		metrics:    metrics,
+	}, true
+}
+
+func deleteGaugeVecPartialMatch(gaugeVec *prometheus.GaugeVec, labels prometheus.Labels) {
+	if gaugeVec != nil {
+		gaugeVec.MetricVec.DeletePartialMatch(labels)
+	}
+}
+
+func deleteHistogramVecPartialMatch(histogramVec *prometheus.HistogramVec, labels prometheus.Labels) {
+	if histogramVec != nil {
+		histogramVec.MetricVec.DeletePartialMatch(labels)
 	}
 }

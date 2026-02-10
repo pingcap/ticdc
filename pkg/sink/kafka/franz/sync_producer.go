@@ -42,6 +42,10 @@ func NewSyncProducer(
 	o *Options,
 	hook kgo.Hook,
 ) (*SyncProducer, error) {
+	if o == nil {
+		o = &Options{}
+	}
+
 	opts, err := newOptions(ctx, o, hook)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -53,10 +57,7 @@ func NewSyncProducer(
 		return nil, errors.Trace(err)
 	}
 
-	timeout := o.ReadTimeout
-	if timeout <= 0 {
-		timeout = 10 * time.Second
-	}
+	timeout := maxTimeoutWithDefault(o.ReadTimeout, 0)
 
 	return &SyncProducer{
 		id:      changefeedID,
@@ -78,27 +79,14 @@ func (p *SyncProducer) SendMessage(topic string, partitionNum int32, message *co
 	ctx, cancel := p.newRequestContext()
 	defer cancel()
 
-	record := &kgo.Record{
-		Topic:     topic,
-		Partition: partitionNum,
-		Key:       message.Key,
-		Value:     message.Value,
-	}
+	record := buildRecord(topic, partitionNum, message)
 	err := p.client.ProduceSync(ctx, record).FirstErr()
 
 	failpoint.Inject("KafkaSinkSyncSendMessageError", func() {
 		err = errors.New("kafka sink sync send message injected error")
 	})
 
-	if err != nil {
-		err = logutil.AnnotateEventError(
-			p.id.Keyspace(),
-			p.id.Name(),
-			message.LogInfo,
-			err,
-		)
-	}
-	return errors.WrapError(errors.ErrKafkaSendMessage, err)
+	return p.wrapSendError(message, err)
 }
 
 func (p *SyncProducer) SendMessages(topic string, partitionNum int32, message *common.Message) error {
@@ -108,12 +96,7 @@ func (p *SyncProducer) SendMessages(topic string, partitionNum int32, message *c
 
 	records := make([]*kgo.Record, 0, partitionNum)
 	for i := 0; i < int(partitionNum); i++ {
-		records = append(records, &kgo.Record{
-			Topic:     topic,
-			Partition: int32(i),
-			Key:       message.Key,
-			Value:     message.Value,
-		})
+		records = append(records, buildRecord(topic, int32(i), message))
 	}
 
 	ctx, cancel := p.newRequestContext()
@@ -125,6 +108,37 @@ func (p *SyncProducer) SendMessages(topic string, partitionNum int32, message *c
 		err = errors.New("kafka sink sync send messages injected error")
 	})
 
+	return p.wrapSendError(message, err)
+}
+
+func (p *SyncProducer) Heartbeat() {}
+
+func (p *SyncProducer) Close() {
+	if !p.closed.CompareAndSwap(false, true) {
+		log.Warn("kafka DDL producer already closed",
+			zap.String("keyspace", p.id.Keyspace()),
+			zap.String("changefeed", p.id.Name()))
+		return
+	}
+
+	start := time.Now()
+	p.client.Close()
+	log.Info("Kafka DDL producer closed",
+		zap.String("keyspace", p.id.Keyspace()),
+		zap.String("changefeed", p.id.Name()),
+		zap.Duration("duration", time.Since(start)))
+}
+
+func buildRecord(topic string, partition int32, message *common.Message) *kgo.Record {
+	return &kgo.Record{
+		Topic:     topic,
+		Partition: partition,
+		Key:       message.Key,
+		Value:     message.Value,
+	}
+}
+
+func (p *SyncProducer) wrapSendError(message *common.Message, err error) error {
 	if err != nil {
 		err = logutil.AnnotateEventError(
 			p.id.Keyspace(),
@@ -134,23 +148,4 @@ func (p *SyncProducer) SendMessages(topic string, partitionNum int32, message *c
 		)
 	}
 	return errors.WrapError(errors.ErrKafkaSendMessage, err)
-}
-
-func (p *SyncProducer) Heartbeat() {}
-
-func (p *SyncProducer) Close() {
-	if p.closed.Load() {
-		log.Warn("kafka DDL producer already closed",
-			zap.String("keyspace", p.id.Keyspace()),
-			zap.String("changefeed", p.id.Name()))
-		return
-	}
-
-	p.closed.Store(true)
-	start := time.Now()
-	p.client.Close()
-	log.Info("Kafka DDL producer closed",
-		zap.String("keyspace", p.id.Keyspace()),
-		zap.String("changefeed", p.id.Name()),
-		zap.Duration("duration", time.Since(start)))
 }

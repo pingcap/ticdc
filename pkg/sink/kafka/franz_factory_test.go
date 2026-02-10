@@ -48,7 +48,6 @@ func TestFranzMetricsHookWritePrometheusMetricsDirectly(t *testing.T) {
 	hook.BindPrometheusMetrics(
 		changefeedID.Keyspace(),
 		changefeedID.Name(),
-		refreshMetricsInterval,
 		kafkafranz.PrometheusMetrics{
 			RequestsInFlight:  requestsInFlightGauge,
 			OutgoingByteRate:  OutgoingByteRateGauge,

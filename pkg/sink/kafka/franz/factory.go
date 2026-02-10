@@ -54,18 +54,29 @@ type Options struct {
 	ReadTimeout  time.Duration
 }
 
+const defaultRequestTimeout = 10 * time.Second
+
+func maxTimeoutWithDefault(readTimeout, writeTimeout time.Duration) time.Duration {
+	timeout := readTimeout
+	if writeTimeout > timeout {
+		timeout = writeTimeout
+	}
+	if timeout <= 0 {
+		timeout = defaultRequestTimeout
+	}
+	return timeout
+}
+
 func newOptions(
 	ctx context.Context,
 	o *Options,
 	hook kgo.Hook,
 ) ([]kgo.Opt, error) {
-	timeoutOverhead := o.ReadTimeout
-	if o.WriteTimeout > timeoutOverhead {
-		timeoutOverhead = o.WriteTimeout
+	if o == nil {
+		o = &Options{}
 	}
-	if timeoutOverhead <= 0 {
-		timeoutOverhead = 10 * time.Second
-	}
+
+	timeoutOverhead := maxTimeoutWithDefault(o.ReadTimeout, o.WriteTimeout)
 
 	opts := []kgo.Opt{
 		kgo.WithContext(ctx),
@@ -199,9 +210,13 @@ func newOauthTokenSource(ctx context.Context, o *Options) (oauth2.TokenSource, e
 func newProducerOptions(
 	o *Options,
 ) []kgo.Opt {
+	if o == nil {
+		o = &Options{}
+	}
+
 	produceTimeout := o.ReadTimeout
 	if produceTimeout < 100*time.Millisecond {
-		produceTimeout = 10 * time.Second
+		produceTimeout = defaultRequestTimeout
 	}
 
 	return []kgo.Opt{
@@ -218,6 +233,10 @@ func newProducerOptions(
 }
 
 func newCompressionOption(o *Options) kgo.Opt {
+	if o == nil {
+		return kgo.ProducerBatchCompression(kgo.NoCompression())
+	}
+
 	compression := strings.ToLower(strings.TrimSpace(o.Compression))
 	var codec kgo.CompressionCodec
 	switch compression {

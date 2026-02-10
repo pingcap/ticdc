@@ -51,7 +51,6 @@ func NewFranzFactory(
 	metricsHook.BindPrometheusMetrics(
 		changefeedID.Keyspace(),
 		changefeedID.Name(),
-		refreshMetricsInterval,
 		franz.PrometheusMetrics{
 			RequestsInFlight:  requestsInFlightGauge,
 			OutgoingByteRate:  OutgoingByteRateGauge,

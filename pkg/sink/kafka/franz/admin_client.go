@@ -48,6 +48,10 @@ func NewAdminClient(
 	o *Options,
 	hook kgo.Hook,
 ) (*AdminClient, error) {
+	if o == nil {
+		o = &Options{}
+	}
+
 	opts, err := newOptions(ctx, o, hook)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -58,13 +62,7 @@ func NewAdminClient(
 		return nil, errors.Trace(err)
 	}
 
-	timeout := o.ReadTimeout
-	if o.WriteTimeout > timeout {
-		timeout = o.WriteTimeout
-	}
-	if timeout <= 0 {
-		timeout = 10 * time.Second
-	}
+	timeout := maxTimeoutWithDefault(o.ReadTimeout, o.WriteTimeout)
 
 	return &AdminClient{
 		changefeed: changefeedID,
@@ -102,7 +100,7 @@ func (a *AdminClient) GetBrokerConfig(configName string) (string, error) {
 		return "", errors.Trace(err)
 	}
 	if meta.Controller < 0 {
-		return "", errors.ErrKafkaInvalidConfig.GenWithStack("kafka controller is not available")
+		return "", errors.ErrKafkaControllerNotAvailable.GenWithStackByArgs()
 	}
 
 	configs, err := a.admin.DescribeBrokerConfigs(ctx, meta.Controller)
