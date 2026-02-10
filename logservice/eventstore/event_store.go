@@ -16,7 +16,6 @@ package eventstore
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"fmt"
 	"math"
 	"os"
@@ -187,6 +186,7 @@ type eventWithCallback struct {
 	kvs     []common.RawKVEntry
 	// kv with commitTs <= currentResolvedTs will be filtered out
 	currentResolvedTs uint64
+	enqueueTimeNano   int64
 	callback          func()
 }
 
@@ -320,6 +320,7 @@ func (p *writeTaskPool) run(ctx context.Context) {
 			}
 			defer encoder.Close()
 			buffer := make([]eventWithCallback, 0, 128)
+			queueDuration := metrics.EventStoreWriteQueueDurationHistogram
 
 			ioWriteDuration := metrics.EventStoreWriteWorkerIODuration.WithLabelValues(strconv.Itoa(p.dbIndex), strconv.Itoa(workerID))
 			totalDuration := metrics.EventStoreWriteWorkerTotalDuration.WithLabelValues(strconv.Itoa(p.dbIndex), strconv.Itoa(workerID))
@@ -333,16 +334,21 @@ func (p *writeTaskPool) run(ctx context.Context) {
 					if !ok {
 						return
 					}
+					if len(events) > 0 && events[0].enqueueTimeNano > 0 {
+						queueDuration.Observe(float64(time.Now().UnixNano()-events[0].enqueueTimeNano) / float64(time.Second))
+					}
 					start := time.Now()
 					if err = p.store.writeEvents(p.db, events, encoder); err != nil {
 						log.Panic("write events failed", zap.Error(err))
 					}
-					for idx := range events {
-						events[idx].callback()
-					}
 					ioWriteDuration.Observe(time.Since(start).Seconds())
 					totalDuration.Observe(time.Since(totalStart).Seconds())
 					totalStart = time.Now()
+
+					for idx := range events {
+						events[idx].callback()
+					}
+
 					buffer = buffer[:0]
 				}
 			}
@@ -584,6 +590,7 @@ func (e *eventStore) RegisterDispatcher(
 	e.dispatcherMeta.Unlock()
 
 	consumeKVEvents := func(kvs []common.RawKVEntry, finishCallback func()) bool {
+		now := time.Now()
 		maxCommitTs := uint64(0)
 		// Must find the max commit ts in the kvs, since the kvs is not sorted yet.
 		for _, kv := range kvs {
@@ -591,13 +598,14 @@ func (e *eventStore) RegisterDispatcher(
 				maxCommitTs = kv.CRTs
 			}
 		}
-		subStat.lastReceiveDMLTime.Store(time.Now().UnixMilli())
+		subStat.lastReceiveDMLTime.Store(now.UnixMilli())
 		util.CompareAndMonotonicIncrease(&subStat.maxEventCommitTs, maxCommitTs)
 		subStat.eventCh.Push(eventWithCallback{
 			subID:             subStat.subID,
 			tableID:           subStat.tableSpan.TableID,
 			kvs:               kvs,
 			currentResolvedTs: subStat.resolvedTs.Load(),
+			enqueueTimeNano:   now.UnixNano(),
 			callback:          finishCallback,
 		})
 		return true
@@ -1146,6 +1154,19 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 			memorySize += uint64(stats.BlockCache.Size)
 		}
 		metrics.EventStoreInMemoryDataSizeGauge.WithLabelValues(id).Set(float64(memorySize))
+
+		metrics.EventStorePebbleIteratorGauge.WithLabelValues(id).Set(float64(stats.TableIters))
+		metrics.EventStorePebbleCompactionDebtGauge.WithLabelValues(id).Set(float64(stats.Compact.EstimatedDebt))
+		metrics.EventStorePebbleCompactionInProgressGauge.WithLabelValues(id).Set(float64(stats.Compact.NumInProgress))
+		metrics.EventStorePebbleCompactionInProgressBytesGauge.WithLabelValues(id).Set(float64(stats.Compact.InProgressBytes))
+		metrics.EventStorePebbleFlushInProgressGauge.WithLabelValues(id).Set(float64(stats.Flush.NumInProgress))
+		metrics.EventStorePebbleReadAmpGauge.WithLabelValues(id).Set(float64(stats.ReadAmp()))
+
+		for level, metric := range stats.Levels {
+			metrics.EventStorePebbleLevelFilesGauge.WithLabelValues(id, strconv.Itoa(level)).Set(float64(metric.NumFiles))
+		}
+		metrics.EventStorePebbleBlockCacheAccess.WithLabelValues(id, "hit").Set(float64(stats.BlockCache.Hits))
+		metrics.EventStorePebbleBlockCacheAccess.WithLabelValues(id, "miss").Set(float64(stats.BlockCache.Misses))
 	}
 
 	pdCurrentTime := e.pdClock.CurrentTime()
@@ -1253,6 +1274,7 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 
 func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback, encoder *zstd.Encoder) error {
 	metrics.EventStoreWriteRequestsCount.Inc()
+	prepareStart := time.Now()
 	batch := db.NewBatch()
 	kvCount := 0
 	for _, event := range events {
@@ -1285,9 +1307,10 @@ func (e *eventStore) writeEvents(db *pebble.DB, events []eventWithCallback, enco
 	metrics.EventStoreWriteBatchEventsCountHist.Observe(float64(kvCount))
 	metrics.EventStoreWriteBatchSizeHist.Observe(float64(batch.Len()))
 	metrics.EventStoreWriteBytes.Add(float64(batch.Len()))
+	metrics.EventStoreWritePrepareDurationHistogram.Observe(time.Since(prepareStart).Seconds())
 	start := time.Now()
 	err := batch.Commit(pebble.NoSync)
-	metrics.EventStoreWriteDurationHistogram.Observe(float64(time.Since(start).Milliseconds()) / 1000)
+	metrics.EventStoreWriteDurationHistogram.Observe(time.Since(start).Seconds())
 	return err
 }
 
@@ -1345,7 +1368,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		}
 		log.Debug("event store iter skip kv not in table span",
 			zap.String("tableSpan", common.FormatTableSpan(iter.tableSpan)),
-			zap.String("key", hex.EncodeToString(rawKV.Key)),
+			zap.String("key", util.RedactKey(rawKV.Key)),
 			zap.Uint64("startTs", rawKV.StartTs),
 			zap.Uint64("commitTs", rawKV.CRTs),
 			zap.Bool("isInsert", rawKV.IsInsert()),

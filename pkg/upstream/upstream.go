@@ -55,7 +55,7 @@ const (
 	closed
 
 	maxIdleDuration = time.Minute * 30
-	defaultMaxRetry = 5
+	defaultMaxRetry = 50
 )
 
 // Upstream holds resources of a TiDB cluster, it can be shared by many changefeeds

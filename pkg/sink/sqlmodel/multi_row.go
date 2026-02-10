@@ -18,6 +18,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -197,7 +198,7 @@ func GenUpdateSQL(changes ...*RowChange) (string, []any) {
 			log.Panic("len(whereValues) != len(whereColumns)",
 				zap.Int("len(whereValues)", len(whereValues)),
 				zap.Int("len(whereColumns)", len(whereColumns)),
-				zap.Any("whereValues", whereValues),
+				zap.String("whereValues", util.RedactArgs(whereValues)),
 				zap.Stringer("sourceTable", change.sourceTable))
 		}
 

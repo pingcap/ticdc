@@ -75,3 +75,34 @@ func TestMoveMaintainerOperator_OnTaskRemoved(t *testing.T) {
 	// backend is nil, but op is canceled , no nil pointer error
 	op.PostFinish()
 }
+
+func TestMoveMaintainerOperator_CheckRequiresDestBootstrapDone(t *testing.T) {
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+	},
+		1, true)
+	changefeedDB.AddReplicatingMaintainer(cf, "n1")
+
+	op := NewMoveMaintainerOperator(changefeedDB, cf, "n1", "n2")
+
+	op.Check("n1", &heartbeatpb.MaintainerStatus{State: heartbeatpb.ComponentState_Stopped})
+	require.True(t, op.originNodeStopped)
+	require.False(t, op.finished)
+
+	op.Check("n2", &heartbeatpb.MaintainerStatus{
+		State:         heartbeatpb.ComponentState_Working,
+		BootstrapDone: false,
+	})
+	require.False(t, op.finished)
+
+	op.Check("n2", &heartbeatpb.MaintainerStatus{
+		State:         heartbeatpb.ComponentState_Working,
+		BootstrapDone: true,
+	})
+	require.True(t, op.finished)
+	require.Nil(t, op.Schedule())
+}

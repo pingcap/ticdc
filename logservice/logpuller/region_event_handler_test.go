@@ -14,6 +14,8 @@
 package logpuller
 
 import (
+	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -328,4 +330,47 @@ func TestHandleResolvedTs(t *testing.T) {
 	require.Equal(t, uint64(10), state1.getLastResolvedTs())
 	require.Equal(t, uint64(11), state2.getLastResolvedTs())
 	require.Equal(t, uint64(8), state3.getLastResolvedTs())
+}
+
+func TestHandleResolvedTsThrottled(t *testing.T) {
+	ctx := context.Background()
+	l := regionlock.NewRangeLock(1, []byte("a"), []byte("z"), math.MaxUint64)
+	res1 := l.LockRange(ctx, []byte("a"), []byte("m"), 1, 1)
+	require.Equal(t, regionlock.LockRangeStatusSuccess, res1.Status)
+	res2 := l.LockRange(ctx, []byte("m"), []byte("z"), 2, 1)
+	require.Equal(t, regionlock.LockRangeStatusSuccess, res2.Status)
+
+	res1.LockedRangeState.Initialized.Store(true)
+	res2.LockedRangeState.Initialized.Store(true)
+
+	// Make the heap order deterministic, then update ResolvedTs without updating the heap to simulate a stale heap.
+	res1.LockedRangeState.ResolvedTs.Store(1)
+	l.UpdateLockedRangeStateHeap(res1.LockedRangeState)
+	res2.LockedRangeState.ResolvedTs.Store(2)
+	l.UpdateLockedRangeStateHeap(res2.LockedRangeState)
+	require.Equal(t, uint64(1), l.GetHeapMinTs())
+
+	res1.LockedRangeState.ResolvedTs.Store(300)
+	res2.LockedRangeState.ResolvedTs.Store(200)
+	require.Equal(t, uint64(200), l.ResolvedTs())
+	require.Equal(t, uint64(300), l.GetHeapMinTs())
+
+	span := &subscribedSpan{
+		subID:           SubscriptionID(1),
+		rangeLock:       l,
+		advanceInterval: 100,
+	}
+	span.lastAdvanceTime.Store(0)
+	state := newRegionFeedState(
+		regionInfo{
+			verID:            tikv.NewRegionVerID(1, 1, 1),
+			subscribedSpan:   span,
+			lockedRangeState: res1.LockedRangeState,
+		},
+		1,
+		nil,
+	)
+	state.start()
+
+	require.Equal(t, uint64(200), handleResolvedTs(span, state, 300))
 }
