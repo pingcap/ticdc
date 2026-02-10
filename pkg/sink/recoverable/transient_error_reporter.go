@@ -17,13 +17,15 @@ type DispatcherEpoch struct {
 type TransientErrorReporter struct {
 	mu       sync.Mutex
 	outputCh chan<- *ErrorEvent
-	reported map[DispatcherEpoch]struct{}
+	// reported records the max reported epoch for each dispatcher.
+	// It provides both dedupe and bounded-state cleanup (old epochs are overwritten).
+	reported map[common.DispatcherID]uint64
 }
 
 func NewTransientErrorReporter(outputCh chan<- *ErrorEvent) *TransientErrorReporter {
 	return &TransientErrorReporter{
 		outputCh: outputCh,
-		reported: make(map[DispatcherEpoch]struct{}),
+		reported: make(map[common.DispatcherID]uint64),
 	}
 }
 
@@ -54,21 +56,31 @@ func (r *TransientErrorReporter) Report(
 	}
 
 	reportedNow := make([]common.DispatcherID, 0, len(dispatchers))
-	reportedKeys := make([]DispatcherEpoch, 0, len(dispatchers))
-	seenDispatchers := make(map[DispatcherEpoch]struct{}, len(dispatchers))
+	reportedEpochs := make(map[common.DispatcherID]uint64, len(dispatchers))
+	seenEpochs := make(map[common.DispatcherID]uint64, len(dispatchers))
+	seenOrder := make([]common.DispatcherID, 0, len(dispatchers))
+
 	for _, dispatcher := range dispatchers {
 		if dispatcher.DispatcherID == (common.DispatcherID{}) {
 			continue
 		}
-		if _, ok := seenDispatchers[dispatcher]; ok {
+		if epoch, ok := seenEpochs[dispatcher.DispatcherID]; ok {
+			if dispatcher.Epoch > epoch {
+				seenEpochs[dispatcher.DispatcherID] = dispatcher.Epoch
+			}
+		} else {
+			seenEpochs[dispatcher.DispatcherID] = dispatcher.Epoch
+			seenOrder = append(seenOrder, dispatcher.DispatcherID)
+		}
+	}
+
+	for _, dispatcherID := range seenOrder {
+		epoch := seenEpochs[dispatcherID]
+		if reportedEpoch, ok := r.reported[dispatcherID]; ok && epoch <= reportedEpoch {
 			continue
 		}
-		seenDispatchers[dispatcher] = struct{}{}
-		if _, ok := r.reported[dispatcher]; ok {
-			continue
-		}
-		reportedNow = append(reportedNow, dispatcher.DispatcherID)
-		reportedKeys = append(reportedKeys, dispatcher)
+		reportedNow = append(reportedNow, dispatcherID)
+		reportedEpochs[dispatcherID] = epoch
 	}
 
 	if len(reportedNow) == 0 {
@@ -82,8 +94,8 @@ func (r *TransientErrorReporter) Report(
 
 	select {
 	case r.outputCh <- event:
-		for _, key := range reportedKeys {
-			r.reported[key] = struct{}{}
+		for dispatcherID, epoch := range reportedEpochs {
+			r.reported[dispatcherID] = epoch
 		}
 		return reportedNow, true
 	default:

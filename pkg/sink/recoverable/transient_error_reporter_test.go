@@ -56,3 +56,57 @@ func TestTransientErrorReporter_ReportReturnsFalseWhenOutputUnavailable(t *testi
 	require.False(t, handled)
 	require.Empty(t, reported)
 }
+
+func TestTransientErrorReporter_IgnoreStaleEpochAfterNewerEpochReported(t *testing.T) {
+	ch := make(chan *ErrorEvent, 4)
+	reporter := NewTransientErrorReporter(ch)
+
+	dispatcherID := common.NewDispatcherID()
+
+	// Report newer epoch first.
+	reported, handled := reporter.Report(
+		time.Now(),
+		[]DispatcherEpoch{{DispatcherID: dispatcherID, Epoch: 3}},
+	)
+	require.True(t, handled)
+	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
+	<-ch
+
+	// Stale epoch should be ignored.
+	reported, handled = reporter.Report(
+		time.Now(),
+		[]DispatcherEpoch{{DispatcherID: dispatcherID, Epoch: 2}},
+	)
+	require.True(t, handled)
+	require.Empty(t, reported)
+	select {
+	case event := <-ch:
+		t.Fatalf("unexpected event for stale epoch: %+v", event)
+	default:
+	}
+}
+
+func TestTransientErrorReporter_UseMaxEpochPerDispatcherInSingleReport(t *testing.T) {
+	ch := make(chan *ErrorEvent, 1)
+	reporter := NewTransientErrorReporter(ch)
+
+	dispatcherID := common.NewDispatcherID()
+	reported, handled := reporter.Report(
+		time.Now(),
+		[]DispatcherEpoch{
+			{DispatcherID: dispatcherID, Epoch: 1},
+			{DispatcherID: dispatcherID, Epoch: 4},
+		},
+	)
+	require.True(t, handled)
+	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
+	<-ch
+
+	// Epoch=3 is stale because max epoch in previous report is 4.
+	reported, handled = reporter.Report(
+		time.Now(),
+		[]DispatcherEpoch{{DispatcherID: dispatcherID, Epoch: 3}},
+	)
+	require.True(t, handled)
+	require.Empty(t, reported)
+}

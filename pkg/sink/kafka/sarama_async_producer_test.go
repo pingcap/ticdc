@@ -242,3 +242,76 @@ func TestSaramaAsyncProducer_TransientKErrorReportsOncePerDispatcherEpoch(t *tes
 		require.Equal(t, context.Canceled, perrors.Cause(err))
 	}
 }
+
+func TestSaramaAsyncProducer_TransientKErrorSameEpochStillSuppressedAfterSuccess(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	fakeProducer := newFakeSaramaAsyncProducer()
+	recoverableCh := make(chan *recoverable.ErrorEvent, 2)
+
+	saramaProducer := &saramaAsyncProducer{
+		producer:     fakeProducer,
+		changefeedID: common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName),
+		closed:       atomic.NewBool(false),
+		failpointCh:  make(chan *sarama.ProducerError, 1),
+	}
+	saramaProducer.SetRecoverableErrorChan(recoverableCh)
+
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- saramaProducer.AsyncRunCallback(ctx)
+	}()
+
+	dispatcherID := common.NewDispatcherID()
+	recoverInfo := &codecCommon.MessageRecoverInfo{
+		Dispatchers: []recoverable.DispatcherEpoch{
+			{DispatcherID: dispatcherID, Epoch: 1},
+		},
+	}
+	makeErr := func() *sarama.ProducerError {
+		return &sarama.ProducerError{
+			Msg: &sarama.ProducerMessage{
+				Topic:     "test-topic",
+				Partition: 0,
+				Metadata: &messageMetadata{
+					recoverInfo: recoverInfo,
+				},
+			},
+			Err: sarama.KError(20), // NOT_ENOUGH_REPLICAS_AFTER_APPEND
+		}
+	}
+
+	// First error should be reported.
+	fakeProducer.errorsCh <- makeErr()
+	select {
+	case <-time.After(3 * time.Second):
+		t.Fatal("first recoverable event not reported in time")
+	case event := <-recoverableCh:
+		require.NotNil(t, event)
+		require.Equal(t, []common.DispatcherID{dispatcherID}, event.DispatcherIDs)
+	}
+
+	// Deliver a success callback with same epoch metadata.
+	fakeProducer.successesCh <- &sarama.ProducerMessage{
+		Metadata: &messageMetadata{
+			recoverInfo: recoverInfo,
+		},
+	}
+
+	// Same-epoch error should still be suppressed.
+	fakeProducer.errorsCh <- makeErr()
+	select {
+	case event := <-recoverableCh:
+		t.Fatalf("unexpected duplicate recoverable event in same epoch after success: %+v", event)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	cancel()
+	select {
+	case <-time.After(3 * time.Second):
+		t.Fatal("AsyncRunCallback did not exit after context canceled")
+	case err := <-doneCh:
+		require.Equal(t, context.Canceled, perrors.Cause(err))
+	}
+}
