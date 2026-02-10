@@ -221,3 +221,62 @@ func TestCheckpointTsMessageHandlerDeadlock(t *testing.T) {
 		}
 	})
 }
+
+func TestPreCheckForSchedulerHandler_RemoveAllowedWhenDispatcherMissing(t *testing.T) {
+	t.Parallel()
+
+	// Scenario:
+	// 1) Dispatcher manager receives a Remove request for a dispatcherID that does not exist locally yet.
+	//
+	// Expectation:
+	// preCheckForSchedulerHandler should allow the request to proceed so dispatcher manager can emit
+	// a terminal (Stopped) status back to the maintainer and help it converge.
+	dispatcherID := common.NewDispatcherID()
+	dm := &DispatcherManager{
+		changefeedID:  common.NewChangeFeedIDWithName("test-changefeed", "test-namespace"),
+		dispatcherMap: newDispatcherMap[*dispatcher.EventDispatcher](),
+	}
+
+	removeReq := NewSchedulerDispatcherRequest(&heartbeatpb.ScheduleDispatcherRequest{
+		ChangefeedID: &heartbeatpb.ChangefeedID{Keyspace: "test-namespace", Name: "test-changefeed"},
+		Config: &heartbeatpb.DispatcherConfig{
+			DispatcherID: dispatcherID.ToPB(),
+			Mode:         0,
+		},
+		ScheduleAction: heartbeatpb.ScheduleAction_Remove,
+		OperatorType:   heartbeatpb.OperatorType_O_Remove,
+	})
+
+	operatorKey, ok := preCheckForSchedulerHandler(removeReq, dm)
+	require.True(t, ok)
+	require.Equal(t, dispatcherID, operatorKey)
+}
+
+func TestPreCheckForSchedulerHandler_CreateSkippedWhenDispatcherExists(t *testing.T) {
+	t.Parallel()
+
+	// Scenario:
+	// 1) Dispatcher manager already has a dispatcher in its local dispatcherMap (e.g. duplicate Create after retry).
+	//
+	// Expectation:
+	// preCheckForSchedulerHandler should drop the Create request as an idempotent no-op.
+	dispatcherID := common.NewDispatcherID()
+	dm := &DispatcherManager{
+		changefeedID:  common.NewChangeFeedIDWithName("test-changefeed", "test-namespace"),
+		dispatcherMap: newDispatcherMap[*dispatcher.EventDispatcher](),
+	}
+	dm.dispatcherMap.Set(dispatcherID, &dispatcher.EventDispatcher{})
+
+	createReq := NewSchedulerDispatcherRequest(&heartbeatpb.ScheduleDispatcherRequest{
+		ChangefeedID: &heartbeatpb.ChangefeedID{Keyspace: "test-namespace", Name: "test-changefeed"},
+		Config: &heartbeatpb.DispatcherConfig{
+			DispatcherID: dispatcherID.ToPB(),
+			Mode:         0,
+		},
+		ScheduleAction: heartbeatpb.ScheduleAction_Create,
+		OperatorType:   heartbeatpb.OperatorType_O_Add,
+	})
+
+	_, ok := preCheckForSchedulerHandler(createReq, dm)
+	require.False(t, ok)
+}

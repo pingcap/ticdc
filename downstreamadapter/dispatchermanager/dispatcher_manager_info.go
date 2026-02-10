@@ -14,6 +14,8 @@
 package dispatchermanager
 
 import (
+	"sync"
+
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -89,4 +91,8 @@ func (e *DispatcherManager) GetAllDispatchers(schemaID int64) []common.Dispatche
 		dispatcherIDs = append(dispatcherIDs, e.GetTableTriggerEventDispatcher().GetId())
 	}
 	return dispatcherIDs
+}
+
+func (e *DispatcherManager) GetCurrentOperatorMap() *sync.Map {
+	return &e.currentOperatorMap
 }
