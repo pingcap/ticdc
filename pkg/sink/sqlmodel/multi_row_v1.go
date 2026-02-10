@@ -29,7 +29,7 @@ import (
 // emit `IS NULL` predicates.
 func genDeleteSQLV1(changes ...*RowChange) (string, []interface{}) {
 	if len(changes) == 0 {
-		log.L().DPanic("row changes is empty")
+		log.Panic("row changes is empty")
 		return "", nil
 	}
 
@@ -58,7 +58,7 @@ func genDeleteSQLV1(changes ...*RowChange) (string, []interface{}) {
 
 func genUpdateSQLV1(changes ...*RowChange) (string, []any) {
 	if len(changes) == 0 {
-		log.L().DPanic("row changes is empty")
+		log.Panic("row changes is empty")
 		return "", nil
 	}
 	var buf strings.Builder

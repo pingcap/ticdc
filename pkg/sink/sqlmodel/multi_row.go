@@ -66,7 +66,7 @@ func GenUpdateSQL(whereClause string, changes ...*RowChange) (string, []any) {
 // otherwise the behaviour is undefined.
 func GenInsertSQL(tp DMLType, changes ...*RowChange) (string, []interface{}) {
 	if len(changes) == 0 {
-		log.L().DPanic("row changes is empty")
+		log.Panic("row changes is empty")
 		return "", nil
 	}
 
@@ -147,7 +147,7 @@ func GenInsertSQL(tp DMLType, changes ...*RowChange) (string, []interface{}) {
 
 func genDeleteSQLV2(changes ...*RowChange) (string, []interface{}) {
 	if len(changes) == 0 {
-		log.L().DPanic("row changes is empty")
+		log.Panic("row changes is empty")
 		return "", nil
 	}
 
@@ -168,7 +168,6 @@ func genDeleteSQLV2(changes ...*RowChange) (string, []interface{}) {
 		}
 	}
 	buf.WriteString(" IN (")
-	// TODO: can't handle NULL by IS NULL, should use WHERE OR
 	args := make([]interface{}, 0, len(changes)*len(whereColumns))
 	holder := valuesHolder(len(whereColumns))
 	for i, change := range changes {
@@ -180,7 +179,7 @@ func genDeleteSQLV2(changes ...*RowChange) (string, []interface{}) {
 		// a simple check about different number of WHERE values, not trying to
 		// cover all cases
 		if len(whereValues) != len(whereColumns) {
-			log.L().DPanic("len(whereValues) != len(whereColumns)",
+			log.Panic("len(whereValues) != len(whereColumns)",
 				zap.Int("len(whereValues)", len(whereValues)),
 				zap.Int("len(whereColumns)", len(whereColumns)),
 				zap.String("whereValues", util.RedactArgs(whereValues)),
@@ -195,7 +194,7 @@ func genDeleteSQLV2(changes ...*RowChange) (string, []interface{}) {
 
 func genUpdateSQLV2(changes ...*RowChange) (string, []any) {
 	if len(changes) == 0 {
-		log.L().DPanic("row changes is empty")
+		log.Panic("row changes is empty")
 		return "", nil
 	}
 	var buf strings.Builder
@@ -260,7 +259,6 @@ func genUpdateSQLV2(changes ...*RowChange) (string, []any) {
 		}
 	}
 	buf.WriteString(" IN (")
-	// TODO: can't handle NULL by IS NULL, should use WHERE OR
 	holder := valuesHolder(len(whereColumns))
 	for i := range changes {
 		if i > 0 {
