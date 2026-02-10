@@ -94,6 +94,7 @@ type RowEvent struct {
 	TableInfo       *common.TableInfo
 	StartTs         uint64
 	CommitTs        uint64
+	Epoch           uint64
 	Event           RowChange
 	ColumnSelector  Selector
 	Callback        func()

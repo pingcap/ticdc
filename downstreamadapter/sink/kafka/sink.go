@@ -272,6 +272,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 						TableInfo:       event.TableInfo,
 						StartTs:         event.StartTs,
 						CommitTs:        event.CommitTs,
+						Epoch:           event.Epoch,
 						Event:           row,
 						Callback:        rowCallback,
 						ColumnSelector:  selector,

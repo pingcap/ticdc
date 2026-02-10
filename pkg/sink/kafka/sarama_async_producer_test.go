@@ -165,3 +165,79 @@ func TestSaramaAsyncProducer_NonTransientKErrorExits(t *testing.T) {
 		require.Equal(t, cerrors.ErrKafkaAsyncSendMessage.RFCCode(), code)
 	}
 }
+
+func TestSaramaAsyncProducer_TransientKErrorReportsOncePerDispatcherEpoch(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	fakeProducer := newFakeSaramaAsyncProducer()
+	recoverableCh := make(chan *recoverable.ErrorEvent, 4)
+
+	saramaProducer := &saramaAsyncProducer{
+		producer:     fakeProducer,
+		changefeedID: common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName),
+		closed:       atomic.NewBool(false),
+		failpointCh:  make(chan *sarama.ProducerError, 1),
+	}
+	saramaProducer.SetRecoverableErrorChan(recoverableCh)
+
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- saramaProducer.AsyncRunCallback(ctx)
+	}()
+
+	dispatcherID := common.NewDispatcherID()
+	makeErr := func(epoch uint64) *sarama.ProducerError {
+		return &sarama.ProducerError{
+			Msg: &sarama.ProducerMessage{
+				Topic:     "test-topic",
+				Partition: 0,
+				Metadata: &messageMetadata{
+					logInfo: &codecCommon.MessageLogInfo{
+						DispatcherIDs: []common.DispatcherID{dispatcherID},
+						DispatcherEpochs: map[common.DispatcherID]uint64{
+							dispatcherID: epoch,
+						},
+					},
+				},
+			},
+			Err: sarama.KError(20), // NOT_ENOUGH_REPLICAS_AFTER_APPEND
+		}
+	}
+
+	// First error in epoch=1 should be reported.
+	fakeProducer.errorsCh <- makeErr(1)
+	select {
+	case <-time.After(3 * time.Second):
+		t.Fatal("first recoverable event not reported in time")
+	case event := <-recoverableCh:
+		require.NotNil(t, event)
+		require.Equal(t, []common.DispatcherID{dispatcherID}, event.DispatcherIDs)
+	}
+
+	// Repeated error in same epoch should be suppressed.
+	fakeProducer.errorsCh <- makeErr(1)
+	select {
+	case event := <-recoverableCh:
+		t.Fatalf("unexpected duplicate recoverable event in same epoch: %+v", event)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// Error in a new epoch should be reported again.
+	fakeProducer.errorsCh <- makeErr(2)
+	select {
+	case <-time.After(3 * time.Second):
+		t.Fatal("recoverable event for new epoch not reported in time")
+	case event := <-recoverableCh:
+		require.NotNil(t, event)
+		require.Equal(t, []common.DispatcherID{dispatcherID}, event.DispatcherIDs)
+	}
+
+	cancel()
+	select {
+	case <-time.After(3 * time.Second):
+		t.Fatal("AsyncRunCallback did not exit after context canceled")
+	case err := <-doneCh:
+		require.Equal(t, context.Canceled, perrors.Cause(err))
+	}
+}

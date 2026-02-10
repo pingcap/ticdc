@@ -63,6 +63,7 @@ func buildMessageLogInfo(events []*commonEvent.RowEvent) *MessageLogInfo {
 	rows := make([]RowLogInfo, 0, len(events))
 	dispatcherIDs := make([]commonPkg.DispatcherID, 0, 1)
 	dispatcherIDSet := make(map[commonPkg.DispatcherID]struct{}, 1)
+	dispatcherEpochs := make(map[commonPkg.DispatcherID]uint64, 1)
 	for _, event := range events {
 		if event == nil || event.TableInfo == nil {
 			continue
@@ -71,6 +72,9 @@ func buildMessageLogInfo(events []*commonEvent.RowEvent) *MessageLogInfo {
 			if _, ok := dispatcherIDSet[event.DispatcherID]; !ok {
 				dispatcherIDSet[event.DispatcherID] = struct{}{}
 				dispatcherIDs = append(dispatcherIDs, event.DispatcherID)
+			}
+			if event.Epoch > 0 {
+				dispatcherEpochs[event.DispatcherID] = event.Epoch
 			}
 		}
 		rowInfo := RowLogInfo{
@@ -88,9 +92,13 @@ func buildMessageLogInfo(events []*commonEvent.RowEvent) *MessageLogInfo {
 	if len(rows) == 0 {
 		return nil
 	}
+	if len(dispatcherEpochs) == 0 {
+		dispatcherEpochs = nil
+	}
 	return &MessageLogInfo{
-		DispatcherIDs: dispatcherIDs,
-		Rows:          rows,
+		DispatcherIDs:    dispatcherIDs,
+		DispatcherEpochs: dispatcherEpochs,
+		Rows:             rows,
 	}
 }
 

@@ -56,10 +56,11 @@ type Message struct {
 
 // MessageLogInfo captures diagnostic context of a sink message.
 type MessageLogInfo struct {
-	DispatcherIDs []commonPkg.DispatcherID
-	Rows          []RowLogInfo
-	DDL           *DDLLogInfo
-	Checkpoint    *CheckpointLogInfo
+	DispatcherIDs    []commonPkg.DispatcherID
+	DispatcherEpochs map[commonPkg.DispatcherID]uint64
+	Rows             []RowLogInfo
+	DDL              *DDLLogInfo
+	Checkpoint       *CheckpointLogInfo
 }
 
 // RowLogInfo represents the information of a single row in a sink message.

@@ -37,7 +37,7 @@ type saramaAsyncProducer struct {
 	closed      *atomic.Bool
 	failpointCh chan *sarama.ProducerError
 
-	recoverErrorCh chan<- *recoverable.ErrorEvent
+	transientErrorReporter *recoverable.TransientErrorReporter
 }
 
 type messageMetadata struct {
@@ -117,8 +117,13 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 			if ack != nil {
 				switch meta := ack.Metadata.(type) {
 				case *messageMetadata:
-					if meta != nil && meta.callback != nil {
-						meta.callback()
+					if meta != nil {
+						if p.transientErrorReporter != nil && meta.logInfo != nil {
+							p.transientErrorReporter.Ack(meta.logInfo.DispatcherIDs, meta.logInfo.DispatcherEpochs)
+						}
+						if meta.callback != nil {
+							meta.callback()
+						}
 					}
 				default:
 					log.Error("unknown message metadata type in async producer",
@@ -145,20 +150,27 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 }
 
 func (p *saramaAsyncProducer) SetRecoverableErrorChan(ch chan<- *recoverable.ErrorEvent) {
-	p.recoverErrorCh = ch
+	if p.transientErrorReporter == nil {
+		p.transientErrorReporter = recoverable.NewTransientErrorReporter(ch)
+		return
+	}
+	p.transientErrorReporter.SetOutput(ch)
 }
 
 func (p *saramaAsyncProducer) reportTransientError(err *sarama.ProducerError) bool {
-	if err == nil || p.recoverErrorCh == nil {
+	if err == nil || p.transientErrorReporter == nil {
 		return false
 	}
 	logInfo := extractLogInfo(err.Msg)
-	var dispatcherIDs []commonType.DispatcherID
-	if logInfo != nil {
-		dispatcherIDs = logInfo.DispatcherIDs
-	}
-	if len(dispatcherIDs) == 0 {
+	if logInfo == nil || len(logInfo.DispatcherIDs) == 0 {
 		return false
+	}
+	reportDispatchers, handled := p.transientErrorReporter.Report(time.Now(), logInfo.DispatcherIDs, logInfo.DispatcherEpochs)
+	if !handled {
+		return false
+	}
+	if len(reportDispatchers) == 0 {
+		return true
 	}
 
 	var topic string
@@ -168,31 +180,20 @@ func (p *saramaAsyncProducer) reportTransientError(err *sarama.ProducerError) bo
 		partition = err.Msg.Partition
 	}
 	kerr, ok := err.Err.(sarama.KError)
-
-	event := &recoverable.ErrorEvent{
-		Time:          time.Now(),
-		DispatcherIDs: dispatcherIDs,
+	fields := []zap.Field{
+		zap.String("keyspace", p.changefeedID.Keyspace()),
+		zap.String("changefeed", p.changefeedID.Name()),
+		zap.Int("dispatcherCount", len(reportDispatchers)),
+		zap.String("topic", topic),
+		zap.Int32("partition", partition),
 	}
-
-	select {
-	case p.recoverErrorCh <- event:
-		fields := []zap.Field{
-			zap.String("keyspace", p.changefeedID.Keyspace()),
-			zap.String("changefeed", p.changefeedID.Name()),
-			zap.Int("dispatcherCount", len(dispatcherIDs)),
-			zap.String("topic", topic),
-			zap.Int32("partition", partition),
-		}
-		if ok {
-			fields = append(fields,
-				zap.Int16("kafkaErrCode", int16(kerr)),
-				zap.String("kafkaErrName", kerr.Error()))
-		}
-		log.Warn("recoverable kafka error received, request dispatcher recovery", fields...)
-		return true
-	default:
+	if ok {
+		fields = append(fields,
+			zap.Int16("kafkaErrCode", int16(kerr)),
+			zap.String("kafkaErrName", kerr.Error()))
 	}
-	return false
+	log.Warn("recoverable kafka error received, request dispatcher recovery", fields...)
+	return true
 }
 
 func (p *saramaAsyncProducer) handleProducerError(err *sarama.ProducerError) error {
