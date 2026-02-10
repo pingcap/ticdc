@@ -118,6 +118,11 @@ func generateDataFileName(enableTableAcrossNodes bool, dispatcherID string, inde
 	return fmt.Sprintf("CDC"+indexFmt+"%s", index, extension)
 }
 
+type indexWithDate struct {
+	index              uint64
+	currDate, prevDate string
+}
+
 // VersionedTableName is used to wrap TableNameWithPhysicTableID with a version.
 type VersionedTableName struct {
 	// Because we need to generate different file paths for different
@@ -138,7 +143,7 @@ type FilePathGenerator struct {
 	config       *Config
 	pdClock      pdutil.Clock
 	storage      storage.ExternalStorage
-	fileIndex    map[VersionedTableName]uint64
+	fileIndex    map[VersionedTableName]*indexWithDate
 
 	hasher     *hash.PositionInertia
 	versionMap map[VersionedTableName]uint64
@@ -158,7 +163,7 @@ func NewFilePathGenerator(
 		extension:    extension,
 		storage:      storage,
 		pdClock:      pdClock,
-		fileIndex:    make(map[VersionedTableName]uint64),
+		fileIndex:    make(map[VersionedTableName]*indexWithDate),
 		hasher:       hash.NewPositionInertia(),
 		versionMap:   make(map[VersionedTableName]uint64),
 	}
@@ -315,23 +320,33 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 ) (string, error) {
 	dir := f.generateDataDirPath(tbl, date)
 	newIndexFile := false
-	if _, ok := f.fileIndex[tbl]; !ok {
+	if idx, ok := f.fileIndex[tbl]; !ok {
 		fileIdx, err := f.getFileIdxFromIndexFile(ctx, tbl, date)
 		if err != nil {
 			return "", err
 		}
-		f.fileIndex[tbl] = fileIdx
+		f.fileIndex[tbl] = &indexWithDate{
+			prevDate: date,
+			currDate: date,
+			index:    fileIdx,
+		}
 		newIndexFile = true
+	} else {
+		idx.currDate = date
 	}
-
-	name := generateDataFileName(f.config.EnableTableAcrossNodes, tbl.DispatcherID.String(), f.fileIndex[tbl]+1, f.extension, f.config.FileIndexWidth)
+	// if date changed, reset the counter
+	if f.fileIndex[tbl].prevDate != f.fileIndex[tbl].currDate {
+		f.fileIndex[tbl].prevDate = f.fileIndex[tbl].currDate
+		f.fileIndex[tbl].index = 0
+	}
+	f.fileIndex[tbl].index++
+	name := generateDataFileName(f.config.EnableTableAcrossNodes, tbl.DispatcherID.String(), f.fileIndex[tbl].index, f.extension, f.config.FileIndexWidth)
 	dataFile := path.Join(dir, name)
 	exist, err := f.storage.FileExists(ctx, dataFile)
 	if err != nil {
 		return "", err
 	}
 	if !exist {
-		f.fileIndex[tbl] = f.fileIndex[tbl] + 1
 		return dataFile, nil
 	}
 	if newIndexFile {
