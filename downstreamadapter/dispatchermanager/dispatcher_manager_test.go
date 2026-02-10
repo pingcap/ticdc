@@ -14,7 +14,10 @@ package dispatchermanager
 
 import (
 	"context"
+	"go/parser"
+	"go/token"
 	"math"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -31,8 +34,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/sink/recoverable"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -129,6 +134,58 @@ func createTestManager(t *testing.T) *DispatcherManager {
 	ec := eventcollector.New(nodeID)
 	appcontext.SetService(appcontext.EventCollector, ec)
 	return manager
+}
+
+func TestCollectRecoverableErrorsEnqueueRecoverDispatcherRequest(t *testing.T) {
+	manager := &DispatcherManager{
+		changefeedID:                  common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+		recoverDispatcherRequestQueue: NewRecoverDispatcherRequestQueue(),
+		metricRecoverEventCount: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "test_dispatcher_manager_recover_event_count_total",
+			Help: "test only",
+		}),
+	}
+	manager.SetMaintainerID(node.ID("maintainer"))
+	manager.recoverableErrCh = make(chan *recoverable.ErrorEvent, 1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		manager.collectRecoverableErrors(ctx)
+		close(done)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	dispatcherID := common.NewDispatcherID()
+	manager.recoverableErrCh <- &recoverable.ErrorEvent{
+		Time:          time.Now(),
+		DispatcherIDs: []common.DispatcherID{dispatcherID},
+	}
+
+	dequeueCtx, cancelDequeue := context.WithTimeout(context.Background(), time.Second)
+	req := manager.recoverDispatcherRequestQueue.Dequeue(dequeueCtx)
+	cancelDequeue()
+
+	require.NotNil(t, req)
+	require.Equal(t, node.ID("maintainer"), req.TargetID)
+	require.NotNil(t, req.Request)
+	require.Equal(t, manager.changefeedID.ToPB(), req.Request.ChangefeedID)
+	require.Equal(t, []*heartbeatpb.DispatcherID{dispatcherID.ToPB()}, req.Request.DispatcherIDs)
+}
+
+func TestDispatcherManagerDoesNotImportKafkaSinkPackage(t *testing.T) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "dispatcher_manager.go", nil, parser.ImportsOnly)
+	require.NoError(t, err)
+
+	for _, imp := range f.Imports {
+		p, err := strconv.Unquote(imp.Path.Value)
+		require.NoError(t, err)
+		require.NotEqual(t, "github.com/pingcap/ticdc/pkg/sink/kafka", p)
+	}
 }
 
 func TestCollectComponentStatusWhenChangedWatermarkSeqNoFallback(t *testing.T) {

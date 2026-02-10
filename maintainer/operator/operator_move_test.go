@@ -122,6 +122,47 @@ func TestMoveOperator_DestNodeRemovedBeforeOriginStopped(t *testing.T) {
 	require.Equal(t, "", replicaSet.GetNodeID().String())
 }
 
+func TestMoveOperator_ForceRestartOnSameNode(t *testing.T) {
+	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
+
+	op := NewRestartDispatcherOperator(spanController, replicaSet, nodeA)
+	require.NotNil(t, op)
+
+	op.Start()
+	require.False(t, op.IsFinished())
+	require.Equal(t, moveStateRemoveOrigin, op.state)
+
+	msg := op.Schedule()
+	require.NotNil(t, msg)
+	require.Equal(t, messaging.TypeScheduleDispatcherRequest, msg.Type)
+	scheduleMsg, ok := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
+	require.True(t, ok)
+	require.Equal(t, heartbeatpb.ScheduleAction_Remove, scheduleMsg.ScheduleAction)
+
+	nonWorkingStatus := &heartbeatpb.TableSpanStatus{
+		ID:              replicaSet.ID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Stopped,
+		CheckpointTs:    1500,
+	}
+	op.Check(nodeA, nonWorkingStatus)
+	require.False(t, op.IsFinished())
+	require.Equal(t, moveStateAddDest, op.state)
+
+	msg = op.Schedule()
+	require.NotNil(t, msg)
+	scheduleMsg, ok = msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
+	require.True(t, ok)
+	require.Equal(t, heartbeatpb.ScheduleAction_Create, scheduleMsg.ScheduleAction)
+
+	workingStatus := &heartbeatpb.TableSpanStatus{
+		ID:              replicaSet.ID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Working,
+		CheckpointTs:    1500,
+	}
+	op.Check(nodeA, workingStatus)
+	require.True(t, op.IsFinished())
+}
+
 // TestMoveOperator_DestNodeRemovedAfterOriginStopped tests the scenario where:
 // 1. Dispatcher 'a' is on node A, maintainer is also on node A
 // 2. A move operation is initiated to move 'a' from node A to node B

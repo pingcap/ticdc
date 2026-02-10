@@ -16,6 +16,8 @@ package common
 import (
 	"encoding/binary"
 	"encoding/json"
+
+	"github.com/pingcap/ticdc/pkg/sink/recoverable"
 )
 
 // MaxRecordOverhead is used to calculate message size by sarama kafka client.
@@ -50,6 +52,8 @@ type Message struct {
 	PartitionKey *string
 	// LogInfo carries diagnostic information of the message.
 	LogInfo *MessageLogInfo
+	// RecoverInfo carries dispatcher context for transient error recovery.
+	RecoverInfo *MessageRecoverInfo
 }
 
 // MessageLogInfo captures diagnostic context of a sink message.
@@ -57,6 +61,11 @@ type MessageLogInfo struct {
 	Rows       []RowLogInfo
 	DDL        *DDLLogInfo
 	Checkpoint *CheckpointLogInfo
+}
+
+// MessageRecoverInfo captures dispatcher context for recoverable transient errors.
+type MessageRecoverInfo struct {
+	Dispatchers []recoverable.DispatcherEpoch
 }
 
 // RowLogInfo represents the information of a single row in a sink message.

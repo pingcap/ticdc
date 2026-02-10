@@ -33,7 +33,9 @@ func TestBuildMessageLogInfo(t *testing.T) {
 	row, ok := dml.GetNextRow()
 	require.True(t, ok)
 
+	dispatcherID := commonModel.NewDispatcherID()
 	rowEvent := &commonEvent.RowEvent{
+		DispatcherID:   dispatcherID,
 		TableInfo:      tableInfo,
 		StartTs:        dml.StartTs,
 		CommitTs:       dml.GetCommitTs(),
@@ -67,7 +69,9 @@ func TestAttachMessageLogInfo(t *testing.T) {
 	row, ok := dml.GetNextRow()
 	require.True(t, ok)
 
+	dispatcherID := commonModel.NewDispatcherID()
 	rowEvent := &commonEvent.RowEvent{
+		DispatcherID:   dispatcherID,
 		TableInfo:      tableInfo,
 		StartTs:        dml.StartTs,
 		CommitTs:       dml.GetCommitTs(),

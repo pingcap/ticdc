@@ -89,10 +89,12 @@ type TopicPartitionKey struct {
 }
 
 type RowEvent struct {
+	DispatcherID    common.DispatcherID
 	PhysicalTableID int64
 	TableInfo       *common.TableInfo
 	StartTs         uint64
 	CommitTs        uint64
+	Epoch           uint64
 	Event           RowChange
 	ColumnSelector  Selector
 	Callback        func()

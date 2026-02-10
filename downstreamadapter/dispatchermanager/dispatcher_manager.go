@@ -39,6 +39,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/sink/recoverable"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus"
@@ -99,6 +100,10 @@ type DispatcherManager struct {
 	// heartbeat collector will consume the heartbeat request from the queue and send the response to each dispatcher.
 	heartbeatRequestQueue *HeartbeatRequestQueue
 
+	// recoverDispatcherRequestQueue is used to store dispatcher recovery requests that should be
+	// forwarded to maintainer.
+	recoverDispatcherRequestQueue *RecoverDispatcherRequestQueue
+
 	// heartBeatTask is responsible for collecting the heartbeat info from all the dispatchers
 	// and report to the maintainer periodicity.
 	heartBeatTask *HeartBeatTask
@@ -109,6 +114,10 @@ type DispatcherManager struct {
 
 	// sink is used to send all the events to the downstream.
 	sink sink.Sink
+
+	// recoverableErrCh carries recoverable errors that should trigger dispatcher-level recovery.
+	recoverableErrCh chan *recoverable.ErrorEvent
+
 	// redo related
 	RedoEnable bool
 	redoSink   *redo.Sink
@@ -141,6 +150,7 @@ type DispatcherManager struct {
 	metricResolvedTs                       prometheus.Gauge
 	metricResolvedTsLag                    prometheus.Gauge
 	metricBlockStatusesChanLen             prometheus.Gauge
+	metricRecoverEventCount                prometheus.Counter
 
 	metricTableTriggerRedoDispatcherCount prometheus.Gauge
 	metricRedoEventDispatcherCount        prometheus.Gauge
@@ -195,6 +205,7 @@ func NewDispatcherManager(
 		metricResolvedTs:                       metrics.DispatcherManagerResolvedTsGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 		metricResolvedTsLag:                    metrics.DispatcherManagerResolvedTsLagGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 		metricBlockStatusesChanLen:             metrics.DispatcherManagerBlockStatusesChanLenGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		metricRecoverEventCount:                metrics.DispatcherManagerRecoverEventCount.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 
 		metricTableTriggerRedoDispatcherCount: metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher"),
 		metricRedoEventDispatcherCount:        metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher"),
@@ -220,6 +231,11 @@ func NewDispatcherManager(
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+	if setter, ok := manager.sink.(recoverable.ErrorEventChanSetter); ok {
+		// recoverableErrCh only needs to preserve a pending recover signal.
+		manager.recoverableErrCh = make(chan *recoverable.ErrorEvent, 1)
+		setter.SetRecoverableErrorChan(manager.recoverableErrCh)
+	}
 
 	// Determine outputRawChangeEvent based on sink type
 	var outputRawChangeEvent bool
@@ -244,6 +260,9 @@ func NewDispatcherManager(
 		manager.config.EnableSplittableCheck,
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
+		// errCh is single-slot by design: the first error is the one that matters.
+		// collectErrors() will keep resending that error to maintainer periodically,
+		// so later errors can be dropped without losing changefeed-level handling.
 		make(chan error, 1),
 	)
 
@@ -272,6 +291,15 @@ func NewDispatcherManager(
 		err := manager.sink.Run(ctx)
 		manager.handleError(ctx, err)
 	}()
+
+	// collect recoverable sink errors and report to maintainer for dispatcher-level recovery.
+	if manager.recoverableErrCh != nil {
+		manager.wg.Add(1)
+		go func() {
+			defer manager.wg.Done()
+			manager.collectRecoverableErrors(ctx)
+		}()
+	}
 
 	// collect errors from error channel
 	manager.wg.Add(1)
@@ -305,6 +333,52 @@ func NewDispatcherManager(
 		zap.String("filterConfig", filterCfg.String()),
 	)
 	return manager, nil
+}
+
+func (e *DispatcherManager) collectRecoverableErrors(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event := <-e.recoverableErrCh:
+			if event == nil {
+				continue
+			}
+			e.metricRecoverEventCount.Inc()
+
+			if len(event.DispatcherIDs) == 0 {
+				log.Warn("recoverable sink error has no dispatcher IDs, ignore it",
+					zap.Stringer("changefeedID", e.changefeedID))
+				continue
+			}
+			if e.recoverDispatcherRequestQueue == nil {
+				log.Warn("recover dispatcher request queue is not set, ignore recoverable sink error",
+					zap.Stringer("changefeedID", e.changefeedID))
+				continue
+			}
+
+			dispatcherIDs := make([]*heartbeatpb.DispatcherID, 0, len(event.DispatcherIDs))
+			for _, dispatcherID := range event.DispatcherIDs {
+				dispatcherIDs = append(dispatcherIDs, dispatcherID.ToPB())
+			}
+			req := &heartbeatpb.RecoverDispatcherRequest{
+				ChangefeedID:  e.changefeedID.ToPB(),
+				DispatcherIDs: dispatcherIDs,
+			}
+			var fallbackErrCh chan<- error
+			if e.sharedInfo != nil {
+				// FallbackErrCh is used when heartbeat collector cannot deliver
+				// recover request to maintainer. In that case we inject a
+				// changefeed-level retryable error into errCh.
+				fallbackErrCh = e.sharedInfo.GetErrCh()
+			}
+			e.recoverDispatcherRequestQueue.Enqueue(&RecoverDispatcherRequestWithTargetID{
+				TargetID:      e.GetMaintainerID(),
+				Request:       req,
+				FallbackErrCh: fallbackErrCh,
+			})
+		}
+	}
 }
 
 func (e *DispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool) error {
@@ -979,6 +1053,7 @@ func (e *DispatcherManager) cleanMetrics() {
 	metrics.DispatcherManagerCheckpointTsLagGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
 	metrics.DispatcherManagerResolvedTsLagGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
 	metrics.DispatcherManagerBlockStatusesChanLenGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
+	metrics.DispatcherManagerRecoverEventCount.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
 
 	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
 	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")

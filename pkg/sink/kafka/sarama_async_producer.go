@@ -24,6 +24,7 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/recoverable"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -35,11 +36,14 @@ type saramaAsyncProducer struct {
 
 	closed      *atomic.Bool
 	failpointCh chan *sarama.ProducerError
+
+	transientErrorReporter *recoverable.TransientErrorReporter
 }
 
 type messageMetadata struct {
-	callback func()
-	logInfo  *common.MessageLogInfo
+	callback    func()
+	logInfo     *common.MessageLogInfo
+	recoverInfo *common.MessageRecoverInfo
 }
 
 func (p *saramaAsyncProducer) Close() {
@@ -114,8 +118,10 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 			if ack != nil {
 				switch meta := ack.Metadata.(type) {
 				case *messageMetadata:
-					if meta != nil && meta.callback != nil {
-						meta.callback()
+					if meta != nil {
+						if meta.callback != nil {
+							meta.callback()
+						}
 					}
 				default:
 					log.Error("unknown message metadata type in async producer",
@@ -131,9 +137,61 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 			if err == nil {
 				return nil
 			}
+			if isTransientKError(err) {
+				if p.reportTransientError(err) {
+					continue
+				}
+			}
 			return p.handleProducerError(err)
 		}
 	}
+}
+
+func (p *saramaAsyncProducer) SetRecoverableErrorChan(ch chan<- *recoverable.ErrorEvent) {
+	if p.transientErrorReporter == nil {
+		p.transientErrorReporter = recoverable.NewTransientErrorReporter(ch)
+		return
+	}
+	p.transientErrorReporter.SetOutput(ch)
+}
+
+func (p *saramaAsyncProducer) reportTransientError(err *sarama.ProducerError) bool {
+	if err == nil || p.transientErrorReporter == nil {
+		return false
+	}
+	recoverInfo := extractRecoverInfo(err.Msg)
+	if recoverInfo == nil || len(recoverInfo.Dispatchers) == 0 {
+		return false
+	}
+	reportDispatchers, handled := p.transientErrorReporter.Report(time.Now(), recoverInfo.Dispatchers)
+	if !handled {
+		return false
+	}
+	if len(reportDispatchers) == 0 {
+		return true
+	}
+
+	var topic string
+	var partition int32
+	if err.Msg != nil {
+		topic = err.Msg.Topic
+		partition = err.Msg.Partition
+	}
+	kerr, ok := err.Err.(sarama.KError)
+	fields := []zap.Field{
+		zap.String("keyspace", p.changefeedID.Keyspace()),
+		zap.String("changefeed", p.changefeedID.Name()),
+		zap.Int("dispatcherCount", len(reportDispatchers)),
+		zap.String("topic", topic),
+		zap.Int32("partition", partition),
+	}
+	if ok {
+		fields = append(fields,
+			zap.Int16("kafkaErrCode", int16(kerr)),
+			zap.String("kafkaErrName", kerr.Error()))
+	}
+	log.Warn("recoverable kafka error received, request dispatcher recovery", fields...)
+	return true
 }
 
 func (p *saramaAsyncProducer) handleProducerError(err *sarama.ProducerError) error {
@@ -169,15 +227,17 @@ func (p *saramaAsyncProducer) AsyncSend(
 		p.failpointCh <- &sarama.ProducerError{
 			Err: errors.New("kafka sink injected error"),
 			Msg: &sarama.ProducerMessage{Metadata: &messageMetadata{
-				callback: message.Callback,
-				logInfo:  message.LogInfo,
+				callback:    message.Callback,
+				logInfo:     message.LogInfo,
+				recoverInfo: message.RecoverInfo,
 			}},
 		}
 		failpoint.Return(nil)
 	})
 	meta := &messageMetadata{
-		callback: message.Callback,
-		logInfo:  message.LogInfo,
+		callback:    message.Callback,
+		logInfo:     message.LogInfo,
+		recoverInfo: message.RecoverInfo,
 	}
 	msg := &sarama.ProducerMessage{
 		Topic:     topic,
@@ -203,4 +263,15 @@ func extractLogInfo(msg *sarama.ProducerMessage) *common.MessageLogInfo {
 		return nil
 	}
 	return meta.logInfo
+}
+
+func extractRecoverInfo(msg *sarama.ProducerMessage) *common.MessageRecoverInfo {
+	if msg == nil {
+		return nil
+	}
+	meta, ok := msg.Metadata.(*messageMetadata)
+	if !ok || meta == nil {
+		return nil
+	}
+	return meta.recoverInfo
 }

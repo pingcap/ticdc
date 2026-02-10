@@ -82,6 +82,10 @@ func (e *DispatcherManager) SetBlockStatusRequestQueue(blockStatusRequestQueue *
 	e.blockStatusRequestQueue = blockStatusRequestQueue
 }
 
+func (e *DispatcherManager) SetRecoverDispatcherRequestQueue(recoverDispatcherRequestQueue *RecoverDispatcherRequestQueue) {
+	e.recoverDispatcherRequestQueue = recoverDispatcherRequestQueue
+}
+
 // Get all dispatchers id of the specified schemaID. Including the tableTriggerEventDispatcherID if exists.
 func (e *DispatcherManager) GetAllDispatchers(schemaID int64) []common.DispatcherID {
 	dispatcherIDs := e.schemaIDToDispatchers.GetDispatcherIDs(schemaID)

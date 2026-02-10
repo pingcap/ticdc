@@ -80,7 +80,9 @@ func buildMessageLogInfo(events []*commonEvent.RowEvent) *MessageLogInfo {
 	if len(rows) == 0 {
 		return nil
 	}
-	return &MessageLogInfo{Rows: rows}
+	return &MessageLogInfo{
+		Rows: rows,
+	}
 }
 
 func rowEventType(event *commonEvent.RowEvent) string {

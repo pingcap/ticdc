@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
+	"github.com/pingcap/ticdc/pkg/sink/recoverable"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
@@ -114,6 +115,18 @@ func New(
 		isNormal: atomic.NewBool(true),
 		ctx:      ctx,
 	}, nil
+}
+
+type recoverableErrorChanSetter interface {
+	SetRecoverableErrorChan(ch chan<- *recoverable.ErrorEvent)
+}
+
+func (s *sink) SetRecoverableErrorChan(ch chan<- *recoverable.ErrorEvent) {
+	setter, ok := s.dmlProducer.(recoverableErrorChanSetter)
+	if !ok {
+		return
+	}
+	setter.SetRecoverableErrorChan(ch)
 }
 
 func (s *sink) Run(ctx context.Context) error {
@@ -254,10 +267,12 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 						TotalPartition: partitionNum,
 					},
 					RowEvent: commonEvent.RowEvent{
+						DispatcherID:    event.DispatcherID,
 						PhysicalTableID: event.PhysicalTableID,
 						TableInfo:       event.TableInfo,
 						StartTs:         event.StartTs,
 						CommitTs:        event.CommitTs,
+						Epoch:           event.Epoch,
 						Event:           row,
 						Callback:        rowCallback,
 						ColumnSelector:  selector,
@@ -480,7 +495,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
+			return context.Cause(ctx)
 		case <-ticker.C:
 			s.ddlProducer.Heartbeat()
 		case ts, ok := <-s.checkpointChan:

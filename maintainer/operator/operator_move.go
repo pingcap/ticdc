@@ -56,6 +56,7 @@ type MoveDispatcherOperator struct {
 	spanController *span.Controller
 	origin         node.ID
 	dest           node.ID
+	forceRestart   bool
 
 	// State transitions:
 	//   removeOrigin --(origin stopped)-> addDest --(dest working)-> doneSuccess
@@ -102,6 +103,17 @@ func NewMoveDispatcherOperator(spanController *span.Controller, replicaSet *repl
 		replicaSet:     replicaSet,
 		origin:         origin,
 		dest:           dest,
+		spanController: spanController,
+		sendThrottler:  newSendThrottler(),
+	}
+}
+
+func NewRestartDispatcherOperator(spanController *span.Controller, replicaSet *replica.SpanReplication, nodeID node.ID) *MoveDispatcherOperator {
+	return &MoveDispatcherOperator{
+		replicaSet:     replicaSet,
+		origin:         nodeID,
+		dest:           nodeID,
+		forceRestart:   true,
 		spanController: spanController,
 		sendThrottler:  newSendThrottler(),
 	}
@@ -241,7 +253,7 @@ func (m *MoveDispatcherOperator) Start() {
 	m.lck.Lock()
 	defer m.lck.Unlock()
 
-	if m.dest == m.origin && m.origin != "" {
+	if m.dest == m.origin && m.origin != "" && !m.forceRestart {
 		log.Info("origin and dest are the same, no need to move",
 			zap.String("origin", m.origin.String()),
 			zap.String("dest", m.dest.String()),

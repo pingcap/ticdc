@@ -65,7 +65,7 @@ type saramaMetricsCollector struct {
 
 func (m *saramaMetricsCollector) Run(ctx context.Context) {
 	// Initialize brokers.
-	m.updateBrokers(ctx)
+	m.updateBrokers()
 
 	refreshMetricsTicker := time.NewTicker(refreshMetricsInterval)
 	refreshClusterMetaTicker := time.NewTicker(refreshClusterMetaInterval)
@@ -86,12 +86,12 @@ func (m *saramaMetricsCollector) Run(ctx context.Context) {
 			m.collectBrokerMetrics()
 			m.collectProducerMetrics()
 		case <-refreshClusterMetaTicker.C:
-			m.updateBrokers(ctx)
+			m.updateBrokers()
 		}
 	}
 }
 
-func (m *saramaMetricsCollector) updateBrokers(ctx context.Context) {
+func (m *saramaMetricsCollector) updateBrokers() {
 	brokers := m.adminClient.GetAllBrokers()
 	for _, b := range brokers {
 		m.brokers[b.ID] = struct{}{}

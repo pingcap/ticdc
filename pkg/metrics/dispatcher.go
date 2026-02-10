@@ -89,6 +89,14 @@ var (
 			Help:      "length of dispatcher manager block statuses channel",
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
+	DispatcherManagerRecoverEventCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "dispatchermanager",
+			Name:      "recover_event_count",
+			Help:      "Total count of recoverable error events received by dispatcher manager",
+		}, []string{getKeyspaceLabel(), "changefeed"})
+
 	HandleDispatcherRequsetCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
@@ -153,6 +161,7 @@ func initDispatcherMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(DispatcherManagerCheckpointTsGauge)
 	registry.MustRegister(DispatcherManagerCheckpointTsLagGauge)
 	registry.MustRegister(DispatcherManagerBlockStatusesChanLenGauge)
+	registry.MustRegister(DispatcherManagerRecoverEventCount)
 	registry.MustRegister(HandleDispatcherRequsetCounter)
 	registry.MustRegister(DispatcherReceivedEventCount)
 	registry.MustRegister(EventCollectorRegisteredDispatcherCount)

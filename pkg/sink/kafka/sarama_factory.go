@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sink/recoverable"
 	"github.com/rcrowley/go-metrics"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -152,11 +153,12 @@ func (f *saramaFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error
 		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
 	return &saramaAsyncProducer{
-		client:       client,
-		producer:     p,
-		changefeedID: f.changefeedID,
-		closed:       atomic.NewBool(false),
-		failpointCh:  make(chan *sarama.ProducerError, 1),
+		client:                 client,
+		producer:               p,
+		changefeedID:           f.changefeedID,
+		closed:                 atomic.NewBool(false),
+		failpointCh:            make(chan *sarama.ProducerError, 1),
+		transientErrorReporter: recoverable.NewTransientErrorReporter(nil),
 	}, nil
 }
 
