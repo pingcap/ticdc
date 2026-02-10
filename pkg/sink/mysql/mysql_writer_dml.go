@@ -108,7 +108,7 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 	for _, sortedEventGroups := range eventsGroupSortedByUpdateTs {
 		for _, eventsInGroup := range sortedEventGroups {
 			tableInfo := eventsInGroup[0].TableInfo
-			if !w.shouldGenBatchSQL(tableInfo.HasPKOrNotNullUK, eventsInGroup) {
+			if !w.shouldGenBatchSQL(tableInfo, eventsInGroup) {
 				queryList, argsList = w.generateNormalSQLs(eventsInGroup)
 			} else {
 				queryList, argsList = w.generateBatchSQL(eventsInGroup)
@@ -131,14 +131,34 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 // 2. The table has a pk or not null unique key
 // 3. There's more than one row in the group
 // 4. All events have the same safe mode status
-func (w *Writer) shouldGenBatchSQL(hasPKOrNotNullUK bool, events []*commonEvent.DMLEvent) bool {
+func (w *Writer) shouldGenBatchSQL(tableInfo *common.TableInfo, events []*commonEvent.DMLEvent) bool {
 	if !w.cfg.BatchDMLEnable {
 		return false
 	}
 
-	if !hasPKOrNotNullUK {
+	if !tableInfo.HasPKOrNotNullUK {
 		return false
+	} else {
+		// if the table has pk or uk,
+		// but all the columns in the pk or uk are virtual generated columns,
+		// we also don't generate batch sql,
+		// because the virtual generated column can't be used to detect the row identity.
+		allVirtualGenerated := true
+		colIDs := tableInfo.GetOrderedHandleKeyColumnIDs()
+		for _, colID := range colIDs {
+			info, exist := tableInfo.GetColumnInfo(colID)
+			if !exist {
+				continue
+			}
+			if !info.IsVirtualGenerated() {
+				allVirtualGenerated = false
+			}
+		}
+		if allVirtualGenerated {
+			return false
+		}
 	}
+	// if tableInfo.HasVirtualColumns()
 	if len(events) == 1 && events[0].Len() == 1 {
 		return false
 	}

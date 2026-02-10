@@ -683,11 +683,7 @@ func (s *columnSchema) initIndexColumns() {
 			indexColOffset := make([]int64, 0, len(idx.Columns))
 			for _, idxCol := range idx.Columns {
 				colInfo := s.Columns[idxCol.Offset]
-				if IsColCDCVisible(colInfo) {
-					indexColOffset = append(indexColOffset, colInfo.ID)
-				} else {
-					hasNotNullUK = false
-				}
+				indexColOffset = append(indexColOffset, colInfo.ID)
 				if !mysql.HasNotNullFlag(colInfo.GetFlag()) {
 					hasNotNullUK = false
 				}
