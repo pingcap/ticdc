@@ -195,7 +195,7 @@ func TestRecoverDispatcherRequest_DowngradeToFatalWhenAttemptsExceeded(t *testin
 
 	fatal := m.runningErrors.m[node.ID("node1")]
 	require.NotNil(t, fatal)
-	require.Equal(t, string(cerrors.ErrKafkaAsyncSendMessage.RFCCode()), fatal.Code)
+	require.Equal(t, string(cerrors.ErrMaintainerRecoverableRestartExceededBudget.RFCCode()), fatal.Code)
 	require.Nil(t, controller.operatorController.GetOperator(dispatcherID))
 }
 

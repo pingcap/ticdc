@@ -877,7 +877,7 @@ func (m *Maintainer) onRecoverDispatcherRequest(from node.ID, req *heartbeatpb.R
 
 			m.onError(from, &heartbeatpb.RunningError{
 				Time: time.Now().String(),
-				Code: string(errors.ErrKafkaAsyncSendMessage.RFCCode()),
+				Code: string(errors.ErrMaintainerRecoverableRestartExceededBudget.RFCCode()),
 				Message: fmt.Sprintf(
 					"recover dispatcher request exceeded dispatcher restart budget, downgrade to changefeed error path, dispatcherID=%s, restartAttempts=%d, restartBackoff=%s",
 					dispatcherID.String(), attempts, backoff,
