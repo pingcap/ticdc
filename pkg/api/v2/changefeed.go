@@ -34,10 +34,10 @@ type ChangefeedsGetter interface {
 type ChangefeedInterface interface {
 	// Create creates a changefeed
 	Create(ctx context.Context, cfg *v2.ChangefeedConfig, keyspace string) (*v2.ChangeFeedInfo, error)
+	// GetAllTables returns eligible, ineligible and all tables for a changefeed
+	GetAllTables(ctx context.Context, cfg *v2.VerifyTableConfig, keyspace string) (*v2.Tables, error)
 	// VerifyTable verifies table for a changefeed
 	VerifyTable(ctx context.Context, cfg *v2.VerifyTableConfig, keyspace string) (*v2.Tables, error)
-	// GetAllTables returns eligible and ineligible tables for a changefeed
-	GetAllTables(ctx context.Context, cfg *v2.VerifyTableConfig, keyspace string) (*v2.Tables, error)
 	// Update updates a changefeed
 	Update(ctx context.Context, cfg *v2.ChangefeedConfig,
 		keyspace string, name string) (*v2.ChangeFeedInfo, error)
