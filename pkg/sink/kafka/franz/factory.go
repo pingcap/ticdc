@@ -43,6 +43,7 @@ type Options struct {
 
 	MaxMessageBytes int
 	Compression     string
+	RequiredAcks    int16
 
 	EnableTLS          bool
 	Credential         *security.Credential
@@ -221,7 +222,7 @@ func newProducerOptions(
 
 	return []kgo.Opt{
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),
-		kgo.RequiredAcks(kgo.AllISRAcks()),
+		kgo.RequiredAcks(newRequiredAcks(o)),
 		kgo.DisableIdempotentWrite(),
 		kgo.MaxProduceRequestsInflightPerBroker(1),
 		kgo.RecordRetries(5),
@@ -229,6 +230,24 @@ func newProducerOptions(
 		kgo.ProduceRequestTimeout(produceTimeout),
 		kgo.ProducerLinger(0),
 		newCompressionOption(o),
+	}
+}
+
+func newRequiredAcks(o *Options) kgo.Acks {
+	if o == nil {
+		return kgo.AllISRAcks()
+	}
+
+	switch o.RequiredAcks {
+	case -1:
+		return kgo.AllISRAcks()
+	case 1:
+		return kgo.LeaderAck()
+	case 0:
+		return kgo.NoAck()
+	default:
+		log.Warn("unsupported required acks", zap.Int16("requiredAcks", o.RequiredAcks))
+		return kgo.AllISRAcks()
 	}
 }
 

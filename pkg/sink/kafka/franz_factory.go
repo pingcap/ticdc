@@ -99,7 +99,9 @@ func (f *franzFactory) MetricsCollector(_ ClusterAdminClient) MetricsCollector {
 
 func newFranzOptions(o *options) *franz.Options {
 	if o == nil {
-		return &franz.Options{}
+		return &franz.Options{
+			RequiredAcks: int16(WaitForAll),
+		}
 	}
 	return &franz.Options{
 		BrokerEndpoints: o.BrokerEndpoints,
@@ -110,6 +112,7 @@ func newFranzOptions(o *options) *franz.Options {
 
 		MaxMessageBytes: o.MaxMessageBytes,
 		Compression:     o.Compression,
+		RequiredAcks:    int16(o.RequiredAcks),
 
 		EnableTLS:          o.EnableTLS,
 		Credential:         o.Credential,

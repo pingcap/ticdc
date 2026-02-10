@@ -19,6 +19,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/stretchr/testify/require"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 func TestBuildFranzCompressionOptionHasNoErrorReturn(t *testing.T) {
@@ -73,4 +74,29 @@ func TestNewSyncProducerNilOptionsDoesNotPanic(t *testing.T) {
 		}
 		require.Error(t, err)
 	})
+}
+
+func TestBuildFranzRequiredAcks(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name         string
+		requiredAcks int16
+		expected     kgo.Acks
+	}{
+		{name: "all", requiredAcks: -1, expected: kgo.AllISRAcks()},
+		{name: "leader", requiredAcks: 1, expected: kgo.LeaderAck()},
+		{name: "none", requiredAcks: 0, expected: kgo.NoAck()},
+		{name: "invalid fallback all", requiredAcks: 2, expected: kgo.AllISRAcks()},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tc.expected, newRequiredAcks(&Options{RequiredAcks: tc.requiredAcks}))
+		})
+	}
+
+	require.Equal(t, kgo.AllISRAcks(), newRequiredAcks(nil))
 }
