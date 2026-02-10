@@ -39,9 +39,9 @@ func runTask(ctx context.Context, cfg *config.Config) error {
 		return errors.Trace(err)
 	}
 	// Ensure cleanup happens even if there's an error
-	defer cleanupClients(pdClients, etcdClients)
+	defer cleanupClients(pdClients, etcdClients, checkpointWatchers, s3Watchers)
 
-	recorder, err := recorder.NewRecorder(cfg.GlobalConfig.DataDir)
+	recorder, err := recorder.NewRecorder(cfg.GlobalConfig.DataDir, cfg.Clusters)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -78,13 +78,13 @@ func runTask(ctx context.Context, cfg *config.Config) error {
 }
 
 func initClients(ctx context.Context, cfg *config.Config) (
-	map[string]map[string]*watcher.CheckpointWatcher,
+	map[string]map[string]watcher.Watcher,
 	map[string]*watcher.S3Watcher,
 	map[string]pd.Client,
 	map[string]*etcd.CDCEtcdClientImpl,
 	error,
 ) {
-	checkpointWatchers := make(map[string]map[string]*watcher.CheckpointWatcher)
+	checkpointWatchers := make(map[string]map[string]watcher.Watcher)
 	s3Watchers := make(map[string]*watcher.S3Watcher)
 	pdClients := make(map[string]pd.Client)
 	etcdClients := make(map[string]*etcd.CDCEtcdClientImpl)
@@ -93,14 +93,14 @@ func initClients(ctx context.Context, cfg *config.Config) (
 		pdClient, etcdClient, err := newPDClient(ctx, clusterConfig.PDAddr, &clusterConfig.SecurityConfig)
 		if err != nil {
 			// Clean up already created clients before returning error
-			cleanupClients(pdClients, etcdClients)
+			cleanupClients(pdClients, etcdClients, checkpointWatchers, s3Watchers)
 			return nil, nil, nil, nil, errors.Trace(err)
 		}
 		etcdClients[clusterID] = etcdClient
 
-		upstreamCheckpointWatchers := make(map[string]*watcher.CheckpointWatcher)
+		upstreamCheckpointWatchers := make(map[string]watcher.Watcher)
 		for downstreamClusterID, downstreamClusterChangefeedConfig := range clusterConfig.DownstreamClusterChangefeedConfig {
-			checkpointWatcher := watcher.NewCheckpointWatcher(clusterID, downstreamClusterID, downstreamClusterChangefeedConfig.ChangefeedID, etcdClient)
+			checkpointWatcher := watcher.NewCheckpointWatcher(ctx, clusterID, downstreamClusterID, downstreamClusterChangefeedConfig.ChangefeedID, etcdClient)
 			upstreamCheckpointWatchers[downstreamClusterID] = checkpointWatcher
 		}
 		checkpointWatchers[clusterID] = upstreamCheckpointWatchers
@@ -108,11 +108,11 @@ func initClients(ctx context.Context, cfg *config.Config) (
 		s3Storage, err := putil.GetExternalStorageWithDefaultTimeout(ctx, clusterConfig.S3SinkURI)
 		if err != nil {
 			// Clean up already created clients before returning error
-			cleanupClients(pdClients, etcdClients)
+			cleanupClients(pdClients, etcdClients, checkpointWatchers, s3Watchers)
 			return nil, nil, nil, nil, errors.Trace(err)
 		}
 		s3Watcher := watcher.NewS3Watcher(
-			watcher.NewCheckpointWatcher(clusterID, "s3", clusterConfig.S3ChangefeedID, etcdClient),
+			watcher.NewCheckpointWatcher(ctx, clusterID, "s3", clusterConfig.S3ChangefeedID, etcdClient),
 			s3Storage,
 			cfg.GlobalConfig.Tables,
 		)
@@ -153,8 +153,18 @@ func newPDClient(ctx context.Context, pdAddr string, securityConfig *security.Cr
 }
 
 // cleanupClients closes all PD and etcd clients gracefully
-func cleanupClients(pdClients map[string]pd.Client, etcdClients map[string]*etcd.CDCEtcdClientImpl) {
-	log.Info("Cleaning up clients", zap.Int("pdClients", len(pdClients)), zap.Int("etcdClients", len(etcdClients)))
+func cleanupClients(
+	pdClients map[string]pd.Client,
+	etcdClients map[string]*etcd.CDCEtcdClientImpl,
+	checkpointWatchers map[string]map[string]watcher.Watcher,
+	s3Watchers map[string]*watcher.S3Watcher,
+) {
+	log.Info("Cleaning up clients",
+		zap.Int("pdClients", len(pdClients)),
+		zap.Int("etcdClients", len(etcdClients)),
+		zap.Int("checkpointWatchers", len(checkpointWatchers)),
+		zap.Int("s3Watchers", len(s3Watchers)),
+	)
 
 	// Close PD clients
 	for clusterID, pdClient := range pdClients {
@@ -175,6 +185,18 @@ func cleanupClients(pdClients map[string]pd.Client, etcdClients map[string]*etcd
 				log.Debug("Etcd client closed", zap.String("clusterID", clusterID))
 			}
 		}
+	}
+
+	// Close checkpoint watchers
+	for _, clusterWatchers := range checkpointWatchers {
+		for _, watcher := range clusterWatchers {
+			watcher.Close()
+		}
+	}
+
+	// Close s3 watchers
+	for _, s3Watcher := range s3Watchers {
+		s3Watcher.Close()
 	}
 
 	log.Info("Client cleanup completed")

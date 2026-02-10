@@ -20,7 +20,8 @@ import (
 	"path/filepath"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/utils"
+	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/config"
+	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/types"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/zap"
 )
@@ -32,7 +33,7 @@ type Recorder struct {
 	checkpoint *Checkpoint
 }
 
-func NewRecorder(dataDir string) (*Recorder, error) {
+func NewRecorder(dataDir string, clusters map[string]config.ClusterConfig) (*Recorder, error) {
 	if err := os.MkdirAll(filepath.Join(dataDir, "report"), 0755); err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -45,7 +46,24 @@ func NewRecorder(dataDir string) (*Recorder, error) {
 
 		checkpoint: NewCheckpoint(),
 	}
-	return r, r.initializeCheckpoint()
+	if err := r.initializeCheckpoint(); err != nil {
+		return nil, errors.Trace(err)
+	}
+	for _, item := range r.checkpoint.CheckpointItems {
+		if item == nil {
+			continue
+		}
+		if len(item.ClusterInfo) != len(clusters) {
+			return nil, errors.Errorf("checkpoint item (round %d) cluster info length mismatch, expected %d, got %d", item.Round, len(clusters), len(item.ClusterInfo))
+		}
+		for clusterID := range clusters {
+			if _, ok := item.ClusterInfo[clusterID]; !ok {
+				return nil, errors.Errorf("checkpoint item (round %d) cluster info missing for cluster %s", item.Round, clusterID)
+			}
+		}
+	}
+
+	return r, nil
 }
 
 func (r *Recorder) GetCheckpoint() *Checkpoint {
@@ -67,10 +85,11 @@ func (r *Recorder) initializeCheckpoint() error {
 	if err := json.Unmarshal(data, r.checkpoint); err != nil {
 		return errors.Trace(err)
 	}
+
 	return nil
 }
 
-func (r *Recorder) RecordTimeWindow(timeWindowData map[string]utils.TimeWindowData, report *Report) error {
+func (r *Recorder) RecordTimeWindow(timeWindowData map[string]types.TimeWindowData, report *Report) error {
 	for clusterID, timeWindow := range timeWindowData {
 		log.Info("time window advanced",
 			zap.Uint64("round", report.Round),
@@ -107,7 +126,7 @@ func (r *Recorder) flushReport(report *Report) error {
 	return nil
 }
 
-func (r *Recorder) flushCheckpoint(round uint64, timeWindowData map[string]utils.TimeWindowData) error {
+func (r *Recorder) flushCheckpoint(round uint64, timeWindowData map[string]types.TimeWindowData) error {
 	r.checkpoint.NewTimeWindowData(round, timeWindowData)
 	filename := filepath.Join(r.checkpointDir, "checkpoint.json")
 	data, err := json.Marshal(r.checkpoint)

@@ -18,19 +18,19 @@ import (
 
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/consumer"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/recorder"
-	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/utils"
+	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/types"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/tidb/br/pkg/storage"
 )
 
 type S3Watcher struct {
-	checkpointWatcher *CheckpointWatcher
+	checkpointWatcher Watcher
 	consumer          *consumer.S3Consumer
 }
 
 func NewS3Watcher(
-	checkpointWatcher *CheckpointWatcher,
+	checkpointWatcher Watcher,
 	s3Storage storage.ExternalStorage,
 	tables map[string][]string,
 ) *S3Watcher {
@@ -41,7 +41,11 @@ func NewS3Watcher(
 	}
 }
 
-func (sw *S3Watcher) InitializeFromCheckpoint(ctx context.Context, clusterID string, checkpoint *recorder.Checkpoint) (map[cloudstorage.DmlPathKey]utils.IncrementalData, error) {
+func (sw *S3Watcher) Close() {
+	sw.checkpointWatcher.Close()
+}
+
+func (sw *S3Watcher) InitializeFromCheckpoint(ctx context.Context, clusterID string, checkpoint *recorder.Checkpoint) (map[cloudstorage.DmlPathKey]types.IncrementalData, error) {
 	return sw.consumer.InitializeFromCheckpoint(ctx, clusterID, checkpoint)
 }
 
@@ -56,7 +60,7 @@ func (sw *S3Watcher) AdvanceS3CheckpointTs(ctx context.Context, minCheckpointTs 
 
 func (sw *S3Watcher) ConsumeNewFiles(
 	ctx context.Context,
-) (map[cloudstorage.DmlPathKey]utils.IncrementalData, map[utils.SchemaTableKey]utils.VersionKey, error) {
+) (map[cloudstorage.DmlPathKey]types.IncrementalData, map[types.SchemaTableKey]types.VersionKey, error) {
 	// TODO: get the index updated from the s3
 	newData, maxVersionMap, err := sw.consumer.ConsumeNewFiles(ctx)
 	if err != nil {

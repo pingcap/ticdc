@@ -11,18 +11,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package utils
+package types
 
 import (
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 )
 
 type PkType string
-
-type ColumnValue struct {
-	ColumnID int64
-	Value    any
-}
 
 type CdcVersion struct {
 	CommitTs uint64
@@ -34,36 +29,6 @@ func (v *CdcVersion) GetCompareTs() uint64 {
 		return v.OriginTs
 	}
 	return v.CommitTs
-}
-
-type Record struct {
-	CdcVersion
-	Pk           PkType
-	ColumnValues []ColumnValue
-}
-
-func (r *Record) EqualDownstreamRecord(downstreamRecord *Record) bool {
-	if downstreamRecord == nil {
-		return false
-	}
-	if r.CommitTs != downstreamRecord.OriginTs {
-		return false
-	}
-	if r.Pk != downstreamRecord.Pk {
-		return false
-	}
-	if len(r.ColumnValues) != len(downstreamRecord.ColumnValues) {
-		return false
-	}
-	for i, columnValue := range r.ColumnValues {
-		if columnValue.ColumnID != downstreamRecord.ColumnValues[i].ColumnID {
-			return false
-		}
-		if columnValue.Value != downstreamRecord.ColumnValues[i].Value {
-			return false
-		}
-	}
-	return true
 }
 
 type SchemaTableKey struct {
@@ -105,5 +70,4 @@ type TimeWindowData struct {
 
 type IncrementalData struct {
 	DataContentSlices map[cloudstorage.FileIndexKey][][]byte
-	Parser            *TableParser
 }

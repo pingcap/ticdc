@@ -20,7 +20,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/recorder"
-	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/utils"
+	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/types"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/watcher"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
@@ -35,11 +35,11 @@ type TimeWindowAdvancer struct {
 	round uint64
 
 	// timeWindowTriplet is the triplet of adjacent time windows, mapping from cluster ID to the triplet
-	timeWindowTriplet map[string][3]utils.TimeWindow
+	timeWindowTriplet map[string][3]types.TimeWindow
 
 	// checkpointWatcher is the Active-Active checkpoint watcher for each cluster,
 	// mapping from cluster ID to the downstream cluster ID to the checkpoint watcher
-	checkpointWatcher map[string]map[string]*watcher.CheckpointWatcher
+	checkpointWatcher map[string]map[string]watcher.Watcher
 
 	// s3checkpointWatcher is the S3 checkpoint watcher for each cluster, mapping from cluster ID to the s3 checkpoint watcher
 	s3Watcher map[string]*watcher.S3Watcher
@@ -50,14 +50,14 @@ type TimeWindowAdvancer struct {
 
 func NewTimeWindowAdvancer(
 	ctx context.Context,
-	checkpointWatchers map[string]map[string]*watcher.CheckpointWatcher,
+	checkpointWatchers map[string]map[string]watcher.Watcher,
 	s3Watchers map[string]*watcher.S3Watcher,
 	pdClients map[string]pd.Client,
 	checkpoint *recorder.Checkpoint,
-) (*TimeWindowAdvancer, map[string]map[cloudstorage.DmlPathKey]utils.IncrementalData, error) {
-	timeWindowTriplet := make(map[string][3]utils.TimeWindow)
+) (*TimeWindowAdvancer, map[string]map[cloudstorage.DmlPathKey]types.IncrementalData, error) {
+	timeWindowTriplet := make(map[string][3]types.TimeWindow)
 	for clusterID := range pdClients {
-		timeWindowTriplet[clusterID] = [3]utils.TimeWindow{}
+		timeWindowTriplet[clusterID] = [3]types.TimeWindow{}
 	}
 	advancer := &TimeWindowAdvancer{
 		round:             0,
@@ -76,7 +76,7 @@ func NewTimeWindowAdvancer(
 func (t *TimeWindowAdvancer) initializeFromCheckpoint(
 	ctx context.Context,
 	checkpoint *recorder.Checkpoint,
-) (map[string]map[cloudstorage.DmlPathKey]utils.IncrementalData, error) {
+) (map[string]map[cloudstorage.DmlPathKey]types.IncrementalData, error) {
 	if checkpoint == nil {
 		return nil, nil
 	}
@@ -85,7 +85,7 @@ func (t *TimeWindowAdvancer) initializeFromCheckpoint(
 	}
 	t.round = checkpoint.CheckpointItems[2].Round + 1
 	for clusterID := range t.timeWindowTriplet {
-		newTimeWindows := [3]utils.TimeWindow{}
+		newTimeWindows := [3]types.TimeWindow{}
 		newTimeWindows[2] = checkpoint.CheckpointItems[2].ClusterInfo[clusterID].TimeWindow
 		if checkpoint.CheckpointItems[1] != nil {
 			newTimeWindows[1] = checkpoint.CheckpointItems[1].ClusterInfo[clusterID].TimeWindow
@@ -97,7 +97,7 @@ func (t *TimeWindowAdvancer) initializeFromCheckpoint(
 	}
 
 	var mu sync.Mutex
-	newDataMap := make(map[string]map[cloudstorage.DmlPathKey]utils.IncrementalData)
+	newDataMap := make(map[string]map[cloudstorage.DmlPathKey]types.IncrementalData)
 	eg, egCtx := errgroup.WithContext(ctx)
 	for clusterID, s3Watcher := range t.s3Watcher {
 		eg.Go(func() error {
@@ -136,7 +136,7 @@ func (t *TimeWindowAdvancer) initializeFromCheckpoint(
 // For any cluster, the time window should be updated to the new time window.
 func (t *TimeWindowAdvancer) AdvanceTimeWindow(
 	pctx context.Context,
-) (map[string]utils.TimeWindowData, error) {
+) (map[string]types.TimeWindowData, error) {
 	log.Debug("advance time window", zap.Uint64("round", t.round))
 	// mapping from upstream cluster ID to the downstream cluster ID to the min checkpoint timestamp
 	minCheckpointTsMap := make(map[string]map[string]uint64)
@@ -152,7 +152,7 @@ func (t *TimeWindowAdvancer) AdvanceTimeWindow(
 	}
 
 	var lock sync.Mutex
-	newTimeWindow := make(map[string]utils.TimeWindow)
+	newTimeWindow := make(map[string]types.TimeWindow)
 	maxPDTimestampAfterCheckpointTs := make(map[string]uint64)
 	// for cluster ID, the max checkpoint timestamp is maximum of checkpoint from cluster to other clusters and checkpoint from other clusters to cluster
 	maxCheckpointTs := make(map[string]uint64)
@@ -166,6 +166,7 @@ func (t *TimeWindowAdvancer) AdvanceTimeWindow(
 				if err != nil {
 					return errors.Trace(err)
 				}
+				// TODO: optimize this by getting pd ts in the end of all checkpoint ts advance
 				pdtsos, err := t.getPDTsFromOtherClusters(ctx, upstreamClusterID)
 				if err != nil {
 					return errors.Trace(err)
@@ -192,8 +193,8 @@ func (t *TimeWindowAdvancer) AdvanceTimeWindow(
 	}
 
 	// Update the time window for each cluster
-	newDataMap := make(map[string]map[cloudstorage.DmlPathKey]utils.IncrementalData)
-	maxVersionMap := make(map[string]map[utils.SchemaTableKey]utils.VersionKey)
+	newDataMap := make(map[string]map[cloudstorage.DmlPathKey]types.IncrementalData)
+	maxVersionMap := make(map[string]map[types.SchemaTableKey]types.VersionKey)
 	eg, ctx = errgroup.WithContext(pctx)
 	for clusterID, triplet := range t.timeWindowTriplet {
 		minTimeWindowRightBoundary := max(maxCheckpointTs[clusterID], maxPDTimestampAfterCheckpointTs[clusterID], triplet[2].NextMinLeftBoundary)
@@ -233,11 +234,11 @@ func (t *TimeWindowAdvancer) AdvanceTimeWindow(
 		return nil, errors.Annotate(err, "advance time window failed")
 	}
 	t.updateTimeWindow(newTimeWindow)
-	t.round += 1
+	t.round++
 	return newTimeWindowData(newTimeWindow, newDataMap, maxVersionMap), nil
 }
 
-func (t *TimeWindowAdvancer) updateTimeWindow(newTimeWindow map[string]utils.TimeWindow) {
+func (t *TimeWindowAdvancer) updateTimeWindow(newTimeWindow map[string]types.TimeWindow) {
 	for clusterID, timeWindow := range newTimeWindow {
 		triplet := t.timeWindowTriplet[clusterID]
 		triplet[0] = triplet[1]
@@ -286,13 +287,13 @@ func (t *TimeWindowAdvancer) getPDTsFromOtherClusters(pctx context.Context, clus
 }
 
 func newTimeWindowData(
-	newTimeWindow map[string]utils.TimeWindow,
-	newDataMap map[string]map[cloudstorage.DmlPathKey]utils.IncrementalData,
-	maxVersionMap map[string]map[utils.SchemaTableKey]utils.VersionKey,
-) map[string]utils.TimeWindowData {
-	timeWindowDatas := make(map[string]utils.TimeWindowData)
+	newTimeWindow map[string]types.TimeWindow,
+	newDataMap map[string]map[cloudstorage.DmlPathKey]types.IncrementalData,
+	maxVersionMap map[string]map[types.SchemaTableKey]types.VersionKey,
+) map[string]types.TimeWindowData {
+	timeWindowDatas := make(map[string]types.TimeWindowData)
 	for clusterID, timeWindow := range newTimeWindow {
-		timeWindowDatas[clusterID] = utils.TimeWindowData{
+		timeWindowDatas[clusterID] = types.TimeWindowData{
 			TimeWindow: timeWindow,
 			Data:       newDataMap[clusterID],
 			MaxVersion: maxVersionMap[clusterID],

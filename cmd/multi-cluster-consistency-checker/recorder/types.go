@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/utils"
+	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/types"
 	"github.com/pingcap/ticdc/pkg/errors"
 )
 
@@ -171,11 +171,11 @@ func (r *Report) NeedFlush() bool {
 }
 
 type SchemaTableVersionKey struct {
-	utils.SchemaTableKey
-	utils.VersionKey
+	types.SchemaTableKey
+	types.VersionKey
 }
 
-func NewSchemaTableVersionKeyFromVersionKeyMap(versionKeyMap map[utils.SchemaTableKey]utils.VersionKey) []SchemaTableVersionKey {
+func NewSchemaTableVersionKeyFromVersionKeyMap(versionKeyMap map[types.SchemaTableKey]types.VersionKey) []SchemaTableVersionKey {
 	result := make([]SchemaTableVersionKey, 0, len(versionKeyMap))
 	for schemaTableKey, versionKey := range versionKeyMap {
 		result = append(result, SchemaTableVersionKey{
@@ -187,7 +187,7 @@ func NewSchemaTableVersionKeyFromVersionKeyMap(versionKeyMap map[utils.SchemaTab
 }
 
 type CheckpointClusterInfo struct {
-	TimeWindow utils.TimeWindow        `json:"time_window"`
+	TimeWindow types.TimeWindow        `json:"time_window"`
 	MaxVersion []SchemaTableVersionKey `json:"max_version"`
 }
 
@@ -210,7 +210,7 @@ func NewCheckpoint() *Checkpoint {
 	}
 }
 
-func (c *Checkpoint) NewTimeWindowData(round uint64, timeWindowData map[string]utils.TimeWindowData) {
+func (c *Checkpoint) NewTimeWindowData(round uint64, timeWindowData map[string]types.TimeWindowData) {
 	newCheckpointItem := CheckpointItem{
 		Round:       round,
 		ClusterInfo: make(map[string]CheckpointClusterInfo),
@@ -233,8 +233,8 @@ type ScanRange struct {
 	EndDataPath     string
 }
 
-func (c *Checkpoint) ToScanRange(clusterID string) (map[utils.SchemaTableKey]*ScanRange, error) {
-	result := make(map[utils.SchemaTableKey]*ScanRange)
+func (c *Checkpoint) ToScanRange(clusterID string) (map[types.SchemaTableKey]*ScanRange, error) {
+	result := make(map[types.SchemaTableKey]*ScanRange)
 	if c.CheckpointItems[2] == nil {
 		return result, nil
 	}

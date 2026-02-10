@@ -104,7 +104,9 @@ func run(cmd *cobra.Command, args []string) {
 	errChan := make(chan error, 1)
 	go func() {
 		err := runTask(ctx, cfg)
-		log.Error("task error", zap.Error(err))
+		if err != nil {
+			log.Error("task error", zap.Error(err))
+		}
 		errChan <- err
 	}()
 
