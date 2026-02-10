@@ -409,7 +409,13 @@ func (d *BasicDispatcher) checkTableModeCompatibility(event commonEvent.Event) e
 		d.tableModeCompatibilityChecked = true
 	}()
 
-	return d.ensureTableModeCompatibility(event.(*commonEvent.DMLEvent).TableInfo)
+	switch ev := event.(type) {
+	case *commonEvent.DMLEvent:
+		return d.ensureTableModeCompatibility(ev.TableInfo)
+	default:
+		log.Error("unexpected event type for table mode compatibility check", zap.Int("event type", event.GetType()))
+	}
+	return nil
 }
 
 func (d *BasicDispatcher) ensureTableModeCompatibility(tableInfo *common.TableInfo) error {
