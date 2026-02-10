@@ -183,8 +183,8 @@ func TestRecoverDispatcherRequest_DowngradeToFatalWhenAttemptsExceeded(t *testin
 	m.initialized.Store(true)
 
 	now := time.Now()
-	for i := 0; i < recoverableKafkaDispatcherRestartMaxAttempts; i++ {
-		m.recordRecoverableKafkaDispatcherRestart(dispatcherID, now)
+	for i := 0; i < recoverableDispatcherRestartMaxAttempts; i++ {
+		m.recordRecoverableDispatcherRestart(dispatcherID, now)
 	}
 
 	req := &heartbeatpb.RecoverDispatcherRequest{

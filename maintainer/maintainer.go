@@ -148,10 +148,10 @@ type Maintainer struct {
 		m map[node.ID]*heartbeatpb.RunningError
 	}
 
-	// recoverableKafkaRestarts tracks dispatcher-level recovery attempts for transient Kafka errors.
-	recoverableKafkaRestarts struct {
+	// recoverableDispatcherRestarts tracks dispatcher-level recovery attempts for transient recoverable errors.
+	recoverableDispatcherRestarts struct {
 		sync.Mutex
-		dispatchers map[common.DispatcherID]*recoverableKafkaDispatcherRestartState
+		dispatchers map[common.DispatcherID]*recoverableDispatcherRestartState
 	}
 
 	cancel context.CancelFunc
@@ -857,17 +857,17 @@ func (m *Maintainer) onRecoverDispatcherRequest(from node.ID, req *heartbeatpb.R
 			continue
 		}
 
-		decision, attempts, backoff := m.getRecoverableKafkaDispatcherRestartDecision(dispatcherID, now)
+		decision, attempts, backoff := m.getRecoverableDispatcherRestartDecision(dispatcherID, now)
 		switch decision {
-		case recoverableKafkaDispatcherRestartDecisionSkip:
-			log.Info("skip restarting dispatcher for recoverable kafka error due to backoff",
+		case recoverableDispatcherRestartDecisionSkip:
+			log.Info("skip restarting dispatcher for recoverable sink error due to backoff",
 				zap.Stringer("changefeedID", m.changefeedID),
 				zap.Stringer("sourceNode", from),
 				zap.Stringer("dispatcherID", dispatcherID),
 				zap.Int("restartAttempts", attempts),
 				zap.Duration("restartBackoff", backoff))
 			continue
-		case recoverableKafkaDispatcherRestartDecisionDowngrade:
+		case recoverableDispatcherRestartDecisionDowngrade:
 			log.Warn("recover dispatcher request exceeded dispatcher restart budget, downgrade to changefeed error path",
 				zap.Stringer("changefeedID", m.changefeedID),
 				zap.Stringer("sourceNode", from),
@@ -909,7 +909,7 @@ func (m *Maintainer) onRecoverDispatcherRequest(from node.ID, req *heartbeatpb.R
 				zap.Stringer("dispatcherID", dispatcherID))
 			continue
 		}
-		m.recordRecoverableKafkaDispatcherRestart(dispatcherID, now)
+		m.recordRecoverableDispatcherRestart(dispatcherID, now)
 	}
 }
 
