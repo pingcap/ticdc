@@ -386,7 +386,7 @@ func whereSlice(row *chunk.Row, tableInfo *common.TableInfo) ([]string, []interf
 	// if no explicit row id, use all key-values in where condition
 	if len(colNames) == 0 {
 		for i, col := range tableInfo.GetColumns() {
-			if !col.IsVirtualGenerated() {
+			if col != nil && !col.IsVirtualGenerated() {
 				colNames = append(colNames, col.Name.O)
 				v := common.ExtractColVal(row, col, i)
 				args = append(args, v)
