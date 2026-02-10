@@ -760,33 +760,3 @@ func newMockEtcdClient(ownerID string) *mockEtcdClient {
 func (m *mockEtcdClient) GetOwnerID(ctx context.Context) (config.CaptureID, error) {
 	return config.CaptureID(m.ownerID), nil
 }
-
-func TestHandleStateChangeIgnoresPausedChangefeed(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	backend := mock_changefeed.NewMockBackend(ctrl)
-
-	changefeedDB := changefeed.NewChangefeedDB(1)
-	cfID := common.NewChangeFeedIDWithName("test-paused", common.DefaultKeyspaceName)
-	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
-		ChangefeedID: cfID,
-		Config:       config.GetDefaultReplicaConfig(),
-		State:        config.StateStopped,
-		SinkURI:      "mysql://127.0.0.1:3306",
-	}, 1, false)
-	changefeedDB.AddStoppedChangefeed(cf)
-
-	controller := &Controller{
-		changefeedDB: changefeedDB,
-	}
-	co := &coordinator{
-		controller: controller,
-		backend:    backend,
-	}
-
-	err := co.handleStateChange(context.Background(), &changefeedChange{
-		changefeedID: cfID,
-		state:        config.StateNormal,
-		changeType:   ChangeState,
-	})
-	require.NoError(t, err)
-}

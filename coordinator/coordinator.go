@@ -262,17 +262,6 @@ func (c *coordinator) handleStateChange(
 	if err != nil {
 		return errors.Trace(err)
 	}
-
-	// User-paused changefeeds must not be resumed or transitioned by asynchronous maintainer
-	// state reports. Otherwise, a stale "recovered to normal" event can overwrite the paused
-	// state and cause an unexpected auto-resume after a coordinator restart.
-	if cfInfo.State == config.StateStopped && event.state != config.StateStopped {
-		log.Info("ignore state change for paused changefeed",
-			zap.String("changefeed", event.changefeedID.String()),
-			zap.String("eventState", string(event.state)))
-		return nil
-	}
-
 	cfInfo.State = event.state
 	cfInfo.Error = event.err
 	progress := config.ProgressNone
