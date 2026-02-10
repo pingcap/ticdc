@@ -249,11 +249,15 @@ func TestGenerateDataFilePathResyncIndexFile(t *testing.T) {
 	dataFilePath, err := f1.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("test/table1/5/CDC_%s_000001.json", dispatcherID.String()), dataFilePath)
+	err = f1.storage.WriteFile(ctx, dataFilePath, []byte("test1"))
+	require.NoError(t, err)
 	err = f1.storage.WriteFile(ctx, indexFilePath, []byte(fmt.Sprintf("CDC_%s_000001.json\n", dispatcherID.String())))
 	require.NoError(t, err)
 
 	// 2) f2 continues from index file and generates CDC_..._000002, then updates index file.
 	dataFilePath, err = f2.GenerateDataFilePath(ctx, table, date)
+	require.NoError(t, err)
+	err = f2.storage.WriteFile(ctx, dataFilePath, []byte("test2"))
 	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("test/table1/5/CDC_%s_000002.json", dispatcherID.String()), dataFilePath)
 	err = f2.storage.WriteFile(ctx, indexFilePath, []byte(fmt.Sprintf("CDC_%s_000002.json\n", dispatcherID.String())))
