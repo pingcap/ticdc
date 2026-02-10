@@ -83,8 +83,11 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 			return errors.Trace(err)
 		}
 		// Before campaign check liveness
-		if e.svr.liveness.Load() == api.LivenessCaptureStopping {
-			log.Info("do not campaign coordinator, liveness is stopping", zap.String("nodeID", nodeID))
+		liveness := e.svr.liveness.Load()
+		if liveness != api.LivenessCaptureAlive {
+			log.Info("do not campaign coordinator, liveness is not alive",
+				zap.String("nodeID", nodeID),
+				zap.String("liveness", liveness.String()))
 			return nil
 		}
 		log.Info("start to campaign coordinator", zap.String("nodeID", nodeID))
@@ -110,9 +113,10 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 		}
 		// After campaign check liveness again.
 		// It is possible it becomes the coordinator right after receiving SIGTERM.
-		if e.svr.liveness.Load() == api.LivenessCaptureStopping {
+		liveness = e.svr.liveness.Load()
+		if liveness != api.LivenessCaptureAlive {
 			// If the server is stopping, resign actively.
-			log.Info("resign coordinator actively, liveness is stopping")
+			log.Info("resign coordinator actively, liveness is not alive", zap.String("liveness", liveness.String()))
 			if resignErr := e.resign(ctx); resignErr != nil {
 				log.Warn("resign coordinator actively failed", zap.String("nodeID", nodeID), zap.Error(resignErr))
 				return errors.Trace(err)
@@ -128,6 +132,29 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 		log.Info("campaign coordinator successfully",
 			zap.String("nodeID", nodeID), zap.Int64("coordinatorVersion", coordinatorVersion))
 
+		leaderCtx, cancelLeader := context.WithCancel(ctx)
+		leaderStopped := make(chan struct{})
+		go func() {
+			defer close(leaderStopped)
+			ticker := time.NewTicker(500 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-leaderCtx.Done():
+					return
+				case <-ticker.C:
+					if e.svr.liveness.Load() != api.LivenessCaptureStopping {
+						continue
+					}
+					log.Info("resign coordinator actively, liveness is stopping", zap.String("nodeID", nodeID))
+					resignCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					_ = e.resign(resignCtx)
+					cancel()
+					return
+				}
+			}
+		}()
+
 		co := coordinator.New(
 			e.svr.info,
 			e.svr.pdClient,
@@ -142,6 +169,8 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 		// When coordinator exits, we need to stop it.
 		e.svr.coordinator.Stop()
 		e.svr.setCoordinator(nil)
+		cancelLeader()
+		<-leaderStopped
 		log.Info("coordinator stop", zap.String("nodeID", nodeID),
 			zap.Int64("coordinatorVersion", coordinatorVersion), zap.Error(err))
 
@@ -203,8 +232,11 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 			return errors.Trace(err)
 		}
 		// Before campaign check liveness
-		if e.svr.liveness.Load() == api.LivenessCaptureStopping {
-			log.Info("do not campaign log coordinator, liveness is stopping", zap.String("nodeID", nodeID))
+		liveness := e.svr.liveness.Load()
+		if liveness != api.LivenessCaptureAlive {
+			log.Info("do not campaign log coordinator, liveness is not alive",
+				zap.String("nodeID", nodeID),
+				zap.String("liveness", liveness.String()))
 			return nil
 		}
 		// Campaign to be the log coordinator, it blocks until it been elected.
@@ -224,10 +256,11 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 		}
 		// After campaign check liveness again.
 		// It is possible it becomes the coordinator right after receiving SIGTERM.
-		if e.svr.liveness.Load() == api.LivenessCaptureStopping {
+		liveness = e.svr.liveness.Load()
+		if liveness != api.LivenessCaptureAlive {
 			// If the server is stopping, resign actively.
-			log.Info("resign log coordinator actively, liveness is stopping")
-			if resignErr := e.resign(ctx); resignErr != nil {
+			log.Info("resign log coordinator actively, liveness is not alive", zap.String("liveness", liveness.String()))
+			if resignErr := e.resignLogCoordinator(); resignErr != nil {
 				log.Warn("resign log coordinator actively failed",
 					zap.String("nodeID", nodeID), zap.Error(resignErr))
 				return errors.Trace(err)
@@ -238,8 +271,31 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 		// FIXME: get log coordinator version from etcd and add it to log
 		log.Info("campaign log coordinator successfully", zap.String("nodeID", nodeID))
 
+		leaderCtx, cancelLeader := context.WithCancel(ctx)
+		leaderStopped := make(chan struct{})
+		go func() {
+			defer close(leaderStopped)
+			ticker := time.NewTicker(500 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-leaderCtx.Done():
+					return
+				case <-ticker.C:
+					if e.svr.liveness.Load() != api.LivenessCaptureStopping {
+						continue
+					}
+					log.Info("resign log coordinator actively, liveness is stopping", zap.String("nodeID", nodeID))
+					_ = e.resignLogCoordinator()
+					return
+				}
+			}
+		}()
+
 		co := logcoordinator.New()
 		err = co.Run(ctx)
+		cancelLeader()
+		<-leaderStopped
 
 		if err != nil && !errors.Is(err, context.Canceled) {
 			if !errors.ErrNotOwner.Equal(err) {

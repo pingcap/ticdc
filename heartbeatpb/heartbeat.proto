@@ -126,6 +126,36 @@ message MaintainerHeartbeat {
     repeated MaintainerStatus statuses = 1;
 }
 
+// NodeLiveness is the node-level liveness state reported by a NodeAgent.
+//
+// It is used by the coordinator to:
+// - filter destination candidates for scheduling
+// - drive node drain progress
+// - avoid campaigning/residing leadership on nodes preparing to go offline
+enum NodeLiveness {
+    ALIVE = 0;
+    DRAINING = 1;
+    STOPPING = 2;
+}
+
+// NodeHeartbeat is a node-scoped heartbeat, independent of maintainer heartbeats.
+message NodeHeartbeat {
+    NodeLiveness liveness = 1;
+    uint64 node_epoch = 2;
+}
+
+// SetNodeLivenessRequest asks a node to upgrade its local liveness monotonically.
+message SetNodeLivenessRequest {
+    NodeLiveness target = 1;
+    uint64 node_epoch = 2;
+}
+
+// SetNodeLivenessResponse reports the liveness applied by the node and its current epoch.
+message SetNodeLivenessResponse {
+    NodeLiveness applied = 1;
+    uint64 node_epoch = 2;
+}
+
 message MaintainerStatus {
     ChangefeedID changefeedID = 1;
     string feed_state = 2;

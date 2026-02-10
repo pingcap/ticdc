@@ -30,7 +30,8 @@ import (
 // @Router	/api/v2/health [get]
 func (h *OpenAPIV2) ServerHealth(c *gin.Context) {
 	liveness := h.server.Liveness()
-	if liveness != api.LivenessCaptureAlive {
+	// Draining is a pre-offline state and should not be treated as unhealthy.
+	if liveness != api.LivenessCaptureAlive && liveness != api.LivenessCaptureDraining {
 		err := errors.ErrClusterIsUnhealthy.FastGenByArgs()
 		_ = c.Error(err)
 		return

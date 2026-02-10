@@ -20,6 +20,8 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
+	"github.com/pingcap/ticdc/coordinator/drain"
+	"github.com/pingcap/ticdc/coordinator/nodeliveness"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	coscheduler "github.com/pingcap/ticdc/coordinator/scheduler"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -86,6 +88,9 @@ type Controller struct {
 
 	changefeedChangeCh chan []*changefeedChange
 	apiLock            sync.RWMutex
+
+	livenessView    *nodeliveness.View
+	drainController *drain.Controller
 }
 
 type changefeedChange struct {
@@ -116,7 +121,9 @@ func NewController(
 	balanceInterval time.Duration,
 	pdClient pd.Client,
 ) *Controller {
+	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	changefeedDB := changefeed.NewChangefeedDB(version)
+	livenessView := nodeliveness.NewView(30 * time.Second)
 
 	oc := operator.NewOperatorController(selfNode, changefeedDB, backend, batchSize)
 	c := &Controller{
@@ -129,6 +136,7 @@ func NewController(
 				batchSize,
 				oc,
 				changefeedDB,
+				livenessView,
 			),
 			scheduler.BalanceScheduler: coscheduler.NewBalanceScheduler(
 				selfNode.ID.String(),
@@ -136,11 +144,19 @@ func NewController(
 				oc,
 				changefeedDB,
 				balanceInterval,
+				livenessView,
+			),
+			scheduler.DrainScheduler: coscheduler.NewDrainScheduler(
+				selfNode.ID.String(),
+				batchSize,
+				oc,
+				changefeedDB,
+				livenessView,
 			),
 		}),
 		eventCh:            eventCh,
 		operatorController: oc,
-		messageCenter:      appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
+		messageCenter:      mc,
 		changefeedDB:       changefeedDB,
 		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		taskScheduler:      threadpool.NewThreadPoolDefault(),
@@ -148,8 +164,10 @@ func NewController(
 		changefeedChangeCh: changefeedChangeCh,
 		pdClient:           pdClient,
 		pdClock:            appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		livenessView:       livenessView,
 	}
 	c.nodeChanged.changed = false
+	c.drainController = drain.NewController(mc, livenessView, changefeedDB, oc)
 
 	c.bootstrapper = bootstrap.NewBootstrapper[heartbeatpb.CoordinatorBootstrapResponse](
 		bootstrapperID,
@@ -273,6 +291,16 @@ func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage
 			req := msg.Message[0].(*heartbeatpb.MaintainerHeartbeat)
 			c.handleMaintainerStatus(msg.From, req.Statuses)
 		}
+	case messaging.TypeNodeHeartbeatRequest:
+		if c.livenessView != nil {
+			req := msg.Message[0].(*heartbeatpb.NodeHeartbeat)
+			c.livenessView.HandleNodeHeartbeat(msg.From, req, time.Now())
+		}
+	case messaging.TypeSetNodeLivenessResponse:
+		if c.livenessView != nil {
+			resp := msg.Message[0].(*heartbeatpb.SetNodeLivenessResponse)
+			c.livenessView.HandleSetNodeLivenessResponse(msg.From, resp, time.Now())
+		}
 	case messaging.TypeLogCoordinatorResolvedTsResponse:
 		c.onLogCoordinatorReportResolvedTs(msg)
 	default:
@@ -325,6 +353,17 @@ func (c *Controller) RequestResolvedTsFromLogCoordinator(ctx context.Context, ch
 			return
 		}
 	}
+}
+
+// DrainNode requests draining a node and returns the remaining drain work.
+//
+// It is exposed for API v1 compatibility and should be safe to call repeatedly.
+func (c *Controller) DrainNode(nodeID node.ID) int {
+	if c.drainController == nil {
+		return 1
+	}
+	c.drainController.RequestDrain(nodeID)
+	return c.drainController.Remaining(nodeID)
 }
 
 func (c *Controller) onNodeChanged(ctx context.Context) {
@@ -584,7 +623,8 @@ func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map
 	defer c.taskHandlerMutex.Unlock()
 	c.taskHandlers = append(c.taskHandlers, c.scheduler.Start(c.taskScheduler)...)
 	operatorControllerHandle := c.taskScheduler.Submit(c.operatorController, time.Now())
-	c.taskHandlers = append(c.taskHandlers, operatorControllerHandle)
+	drainControllerHandle := c.taskScheduler.Submit(c.drainController, time.Now())
+	c.taskHandlers = append(c.taskHandlers, operatorControllerHandle, drainControllerHandle)
 	c.initialized.Store(true)
 	log.Info("coordinator bootstrapped", zap.Any("nodeID", c.selfNode.ID))
 }

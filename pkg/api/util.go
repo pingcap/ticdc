@@ -145,20 +145,52 @@ func WriteData(w http.ResponseWriter, data interface{}) {
 	}
 }
 
-// Liveness can only be changed from alive to stopping, and no way back.
+// Liveness is a node-level liveness state used for graceful shutdown and drain.
+//
+// It can only be upgraded monotonically:
+// - ALIVE -> DRAINING -> STOPPING
+// - ALIVE -> STOPPING (signal-driven graceful shutdown)
 type Liveness int32
 
 const (
 	// LivenessCaptureAlive means the capture is alive, and ready to serve.
 	LivenessCaptureAlive Liveness = 0
+	// LivenessCaptureDraining means the capture is preparing to go offline.
+	// It should not be selected as a scheduling destination and should not campaign leadership.
+	LivenessCaptureDraining Liveness = 2
 	// LivenessCaptureStopping means the capture is in the process of graceful shutdown.
 	LivenessCaptureStopping Liveness = 1
 )
 
 // Store the given liveness. Returns true if it success.
 func (l *Liveness) Store(v Liveness) bool {
-	return atomic.CompareAndSwapInt32(
-		(*int32)(l), int32(LivenessCaptureAlive), int32(v))
+	for {
+		old := l.Load()
+		if old == v {
+			return false
+		}
+
+		switch old {
+		case LivenessCaptureAlive:
+			// Allow direct ALIVE->STOPPING for the SIGTERM path, and ALIVE->DRAINING for manual drain.
+			if v != LivenessCaptureDraining && v != LivenessCaptureStopping {
+				return false
+			}
+		case LivenessCaptureDraining:
+			if v != LivenessCaptureStopping {
+				return false
+			}
+		case LivenessCaptureStopping:
+			return false
+		default:
+			// Unknown old value, refuse to update.
+			return false
+		}
+
+		if atomic.CompareAndSwapInt32((*int32)(l), int32(old), int32(v)) {
+			return true
+		}
+	}
 }
 
 // Load the liveness.
@@ -170,6 +202,8 @@ func (l *Liveness) String() string {
 	switch *l {
 	case LivenessCaptureAlive:
 		return "Alive"
+	case LivenessCaptureDraining:
+		return "Draining"
 	case LivenessCaptureStopping:
 		return "Stopping"
 	default:

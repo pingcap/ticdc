@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/coordinator/changefeed"
+	"github.com/pingcap/ticdc/coordinator/nodeliveness"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -35,12 +36,14 @@ type basicScheduler struct {
 	operatorController *operator.Controller
 	changefeedDB       *changefeed.ChangefeedDB
 	nodeManager        *watcher.NodeManager
+	livenessView       *nodeliveness.View
 }
 
 func NewBasicScheduler(
 	id string, batchSize int,
 	oc *operator.Controller,
 	changefeedDB *changefeed.ChangefeedDB,
+	livenessView *nodeliveness.View,
 ) *basicScheduler {
 	return &basicScheduler{
 		id:                 id,
@@ -48,6 +51,7 @@ func NewBasicScheduler(
 		operatorController: oc,
 		changefeedDB:       changefeedDB,
 		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
+		livenessView:       livenessView,
 	}
 }
 
@@ -74,10 +78,14 @@ func (s *basicScheduler) doBasicSchedule(availableSize int) {
 	absentChangefeeds := s.changefeedDB.GetAbsentByGroup(id, availableSize)
 	nodeTaskSize := s.changefeedDB.GetTaskSizePerNodeByGroup(id)
 	// add the absent node to the node size map
+	now := time.Now()
 	nodeIDs := s.nodeManager.GetAliveNodeIDs()
+	if s.livenessView != nil {
+		nodeIDs = s.livenessView.FilterSchedulableDestNodeIDs(nodeIDs, now)
+	}
 	nodeSize := make(map[node.ID]int)
-	for _, id := range nodeIDs {
-		nodeSize[id] = nodeTaskSize[id]
+	for _, nodeID := range nodeIDs {
+		nodeSize[nodeID] = nodeTaskSize[nodeID]
 	}
 
 	pkgScheduler.BasicSchedule(availableSize, absentChangefeeds, nodeSize, func(cf *changefeed.Changefeed, nodeID node.ID) bool {

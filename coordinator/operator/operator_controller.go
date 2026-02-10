@@ -225,6 +225,31 @@ func (oc *Controller) HasOperator(dispName common.ChangeFeedDisplayName) bool {
 	return false
 }
 
+// HasOperatorByID returns true if there is an in-flight operator for the changefeed.
+func (oc *Controller) HasOperatorByID(id common.ChangeFeedID) bool {
+	oc.mu.RLock()
+	defer oc.mu.RUnlock()
+	_, ok := oc.operators[id]
+	return ok
+}
+
+// CountOperatorsInvolvingNode counts in-flight operators that have affected nodes containing target.
+func (oc *Controller) CountOperatorsInvolvingNode(target node.ID) int {
+	oc.mu.RLock()
+	defer oc.mu.RUnlock()
+
+	count := 0
+	for _, op := range oc.operators {
+		for _, n := range op.OP.AffectedNodes() {
+			if n == target {
+				count++
+				break
+			}
+		}
+	}
+	return count
+}
+
 // OperatorSize returns the number of operators in the controller.
 func (oc *Controller) OperatorSize() int {
 	oc.mu.RLock()

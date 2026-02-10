@@ -416,6 +416,14 @@ func (c *coordinator) RequestResolvedTsFromLogCoordinator(ctx context.Context, c
 	c.controller.RequestResolvedTsFromLogCoordinator(ctx, changefeedDisplayName)
 }
 
+// DrainNode requests draining a node and returns the remaining drain work.
+//
+// This is used by API v1 compatibility handler. It is intentionally not part of
+// pkg/server.Coordinator interface to avoid broad interface changes.
+func (c *coordinator) DrainNode(_ context.Context, nodeID string) (int, error) {
+	return c.controller.DrainNode(node.ID(nodeID)), nil
+}
+
 func (c *coordinator) sendMessages(msgs []*messaging.TargetMessage) {
 	for _, msg := range msgs {
 		err := c.mc.SendCommand(msg)

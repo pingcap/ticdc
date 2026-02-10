@@ -21,6 +21,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -36,8 +37,13 @@ import (
 // 2. Handle other commands from coordinator: like add or remove changefeed maintainer
 // 3. Manage maintainers lifetime
 type Manager struct {
-	mc   messaging.MessageCenter
-	conf *config.SchedulerConfig
+	mc       messaging.MessageCenter
+	conf     *config.SchedulerConfig
+	liveness *api.Liveness
+
+	nodeEpoch             uint64
+	lastNodeHeartbeatTime time.Time
+	nodeHeartbeatInterval time.Duration
 
 	// changefeedID -> maintainer
 	maintainers sync.Map
@@ -58,15 +64,20 @@ type Manager struct {
 func NewMaintainerManager(
 	nodeInfo *node.Info,
 	conf *config.SchedulerConfig,
+	liveness *api.Liveness,
 ) *Manager {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	m := &Manager{
 		mc:            mc,
 		conf:          conf,
+		liveness:      liveness,
 		maintainers:   sync.Map{},
 		nodeInfo:      nodeInfo,
 		msgCh:         make(chan *messaging.TargetMessage, 1024),
 		taskScheduler: threadpool.NewThreadPoolDefault(),
+
+		nodeEpoch:             getNodeEpoch(),
+		nodeHeartbeatInterval: 5 * time.Second,
 	}
 
 	mc.RegisterHandler(messaging.MaintainerManagerTopic, m.recvMessages)
@@ -84,7 +95,8 @@ func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage
 	// Coordinator related messages
 	case messaging.TypeAddMaintainerRequest,
 		messaging.TypeRemoveMaintainerRequest,
-		messaging.TypeCoordinatorBootstrapRequest:
+		messaging.TypeCoordinatorBootstrapRequest,
+		messaging.TypeSetNodeLivenessRequest:
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -135,6 +147,7 @@ func (m *Manager) Run(ctx context.Context) error {
 		case <-ticker.C:
 			// 1.  try to send heartbeat to coordinator
 			m.sendHeartbeat()
+			m.sendNodeHeartbeat(false)
 			// 2. cleanup removed maintainers
 			m.maintainers.Range(func(key, value interface{}) bool {
 				cf := value.(*Maintainer)
@@ -214,9 +227,19 @@ func (m *Manager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {
 	log.Info("new coordinator online, bootstrap response already sent",
 		zap.Stringer("coordinatorID", m.coordinatorID),
 		zap.Int64("version", m.coordinatorVersion))
+
+	// Report node-scoped liveness state eagerly after coordinator bootstrap.
+	m.sendNodeHeartbeat(true)
 }
 
 func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) *heartbeatpb.MaintainerStatus {
+	if m.liveness != nil && m.liveness.Load() == api.LivenessCaptureStopping {
+		log.Info("ignore add maintainer request, node is stopping",
+			zap.Stringer("changefeedID", common.NewChangefeedIDFromPB(req.Id)),
+			zap.Stringer("nodeID", m.nodeInfo.ID))
+		return nil
+	}
+
 	changefeedID := common.NewChangefeedIDFromPB(req.Id)
 	_, ok := m.maintainers.Load(changefeedID)
 	if ok {
@@ -330,8 +353,123 @@ func (m *Manager) handleMessage(msg *messaging.TargetMessage) {
 			}
 			m.sendMessages(response)
 		}
+	case messaging.TypeSetNodeLivenessRequest:
+		if m.isBootstrap() {
+			m.onSetNodeLivenessRequest(msg)
+		}
 	default:
 	}
+}
+
+func (m *Manager) onSetNodeLivenessRequest(msg *messaging.TargetMessage) {
+	req := msg.Message[0].(*heartbeatpb.SetNodeLivenessRequest)
+
+	if m.coordinatorID != msg.From {
+		log.Warn("ignore set node liveness request from non-coordinator",
+			zap.Stringer("from", msg.From),
+			zap.Stringer("coordinatorID", m.coordinatorID))
+		return
+	}
+
+	// Reject stale control messages from a previous process incarnation.
+	if req.NodeEpoch != m.nodeEpoch {
+		m.sendSetNodeLivenessResponse()
+		return
+	}
+
+	if m.liveness == nil {
+		m.sendSetNodeLivenessResponse()
+		return
+	}
+
+	before := m.liveness.Load()
+	switch req.Target {
+	case heartbeatpb.NodeLiveness_DRAINING:
+		_ = m.liveness.Store(api.LivenessCaptureDraining)
+	case heartbeatpb.NodeLiveness_STOPPING:
+		_ = m.liveness.Store(api.LivenessCaptureStopping)
+	default:
+		// ALIVE or unknown values are ignored.
+	}
+	after := m.liveness.Load()
+	if before != after {
+		log.Info("node liveness updated",
+			zap.Stringer("nodeID", m.nodeInfo.ID),
+			zap.Uint64("nodeEpoch", m.nodeEpoch),
+			zap.String("before", before.String()),
+			zap.String("after", after.String()))
+	}
+	m.sendSetNodeLivenessResponse()
+	m.sendNodeHeartbeat(true)
+}
+
+func (m *Manager) sendSetNodeLivenessResponse() {
+	applied := heartbeatpb.NodeLiveness_ALIVE
+	if m.liveness != nil {
+		applied = toNodeLivenessPB(m.liveness.Load())
+	}
+	resp := &heartbeatpb.SetNodeLivenessResponse{
+		Applied:   applied,
+		NodeEpoch: m.nodeEpoch,
+	}
+	target := m.newCoordinatorTopicMessage(resp)
+	if err := m.mc.SendCommand(target); err != nil {
+		log.Warn("send set node liveness response failed",
+			zap.Stringer("from", m.nodeInfo.ID),
+			zap.Stringer("target", target.To),
+			zap.Error(err))
+	}
+}
+
+func (m *Manager) sendNodeHeartbeat(force bool) {
+	if !m.isBootstrap() {
+		return
+	}
+	now := time.Now()
+	if !force && !m.lastNodeHeartbeatTime.IsZero() &&
+		now.Sub(m.lastNodeHeartbeatTime) < m.nodeHeartbeatInterval {
+		return
+	}
+
+	liveness := heartbeatpb.NodeLiveness_ALIVE
+	if m.liveness != nil {
+		liveness = toNodeLivenessPB(m.liveness.Load())
+	}
+	hb := &heartbeatpb.NodeHeartbeat{
+		Liveness:  liveness,
+		NodeEpoch: m.nodeEpoch,
+	}
+	target := m.newCoordinatorTopicMessage(hb)
+	if err := m.mc.SendCommand(target); err != nil {
+		log.Warn("send node heartbeat failed",
+			zap.Stringer("from", m.nodeInfo.ID),
+			zap.Stringer("target", target.To),
+			zap.Error(err))
+		return
+	}
+	m.lastNodeHeartbeatTime = now
+}
+
+func toNodeLivenessPB(l api.Liveness) heartbeatpb.NodeLiveness {
+	switch l {
+	case api.LivenessCaptureAlive:
+		return heartbeatpb.NodeLiveness_ALIVE
+	case api.LivenessCaptureDraining:
+		return heartbeatpb.NodeLiveness_DRAINING
+	case api.LivenessCaptureStopping:
+		return heartbeatpb.NodeLiveness_STOPPING
+	default:
+		return heartbeatpb.NodeLiveness_ALIVE
+	}
+}
+
+func getNodeEpoch() uint64 {
+	// Use UnixNano to ensure uniqueness across restarts.
+	epoch := uint64(time.Now().UnixNano())
+	if epoch == 0 {
+		epoch = 1
+	}
+	return epoch
 }
 
 func (m *Manager) dispatcherMaintainerMessage(

@@ -15,11 +15,12 @@ package v1
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	stdErrors "errors"
 	"io"
 	"net/http"
 	"strconv"
-	"sync/atomic"
 
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/log"
@@ -199,18 +200,31 @@ func (o *OpenAPIV1) drainCapture(c *gin.Context) {
 		_ = c.Error(errors.ErrAPIInvalidParam.Wrap(err))
 		return
 	}
-	drainCaptureCounter.Add(1)
-	if drainCaptureCounter.Load()%10 == 0 {
-		log.Info("api v1 drainCapture", zap.Any("captureID", req.CaptureID), zap.Int64("currentTableCount", drainCaptureCounter.Load()))
-		c.JSON(http.StatusAccepted, &drainCaptureResp{
-			CurrentTableCount: 10,
-		})
-	} else {
-		log.Info("api v1 drainCapture done", zap.Any("captureID", req.CaptureID), zap.Int64("currentTableCount", drainCaptureCounter.Load()))
-		c.JSON(http.StatusAccepted, &drainCaptureResp{
-			CurrentTableCount: 0,
-		})
+
+	coordinator, err := o.server.GetCoordinator()
+	if err != nil {
+		_ = c.Error(err)
+		return
 	}
+	drainable, ok := coordinator.(interface {
+		DrainNode(ctx context.Context, nodeID string) (int, error)
+	})
+	if !ok {
+		_ = c.Error(stdErrors.New("coordinator does not support node drain"))
+		return
+	}
+
+	remaining, err := drainable.DrainNode(c.Request.Context(), req.CaptureID)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	log.Info("api v1 drainCapture",
+		zap.String("captureID", req.CaptureID),
+		zap.Int("remaining", remaining))
+	c.JSON(http.StatusAccepted, &drainCaptureResp{
+		CurrentTableCount: remaining,
+	})
 }
 
 func getV2ChangefeedConfig(changefeedConfig changefeedConfig) *v2.ChangefeedConfig {
@@ -257,8 +271,6 @@ type moveTableReq struct {
 type drainCaptureRequest struct {
 	CaptureID string `json:"capture_id"`
 }
-
-var drainCaptureCounter atomic.Int64
 
 // drainCaptureResp is response for manual `DrainCapture`
 type drainCaptureResp struct {
