@@ -291,6 +291,9 @@ func (c *HeartBeatCollector) sendRecoverDispatcherMessages(ctx context.Context) 
 					select {
 					case reqWithTarget.FallbackErrCh <- fallbackErr:
 					default:
+						// FallbackErrCh is intentionally best-effort.
+						// If it is full, dispatcher manager should already have a
+						// pending error in errCh that will drive changefeed-level handling.
 						log.Warn("fallback error channel is full when sending recover dispatcher request fails",
 							zap.Error(fallbackErr))
 					}

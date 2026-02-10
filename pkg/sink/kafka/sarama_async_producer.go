@@ -119,9 +119,6 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 				switch meta := ack.Metadata.(type) {
 				case *messageMetadata:
 					if meta != nil {
-						if p.transientErrorReporter != nil && meta.recoverInfo != nil {
-							p.transientErrorReporter.Ack(meta.recoverInfo.Dispatchers)
-						}
 						if meta.callback != nil {
 							meta.callback()
 						}

@@ -854,33 +854,26 @@ func (m *Maintainer) onRecoverDispatcherRequest(from node.ID, req *heartbeatpb.R
 		seen[dispatcherID] = struct{}{}
 
 		if existing := operatorController.GetOperator(dispatcherID); existing != nil {
+			// Idempotency guard: if restart for this dispatcher is already in-flight,
+			// treat repeated requests as duplicate and ignore.
 			continue
 		}
 
-		decision, attempts, backoff := m.getRecoverableDispatcherRestartDecision(dispatcherID, now)
+		decision, attempts := m.getRecoverableDispatcherRestartDecision(dispatcherID, now)
 		switch decision {
-		case recoverableDispatcherRestartDecisionSkip:
-			log.Info("skip restarting dispatcher for recoverable sink error due to backoff",
-				zap.Stringer("changefeedID", m.changefeedID),
-				zap.Stringer("sourceNode", from),
-				zap.Stringer("dispatcherID", dispatcherID),
-				zap.Int("restartAttempts", attempts),
-				zap.Duration("restartBackoff", backoff))
-			continue
 		case recoverableDispatcherRestartDecisionDowngrade:
 			log.Warn("recover dispatcher request exceeded dispatcher restart budget, downgrade to changefeed error path",
 				zap.Stringer("changefeedID", m.changefeedID),
 				zap.Stringer("sourceNode", from),
 				zap.Stringer("dispatcherID", dispatcherID),
-				zap.Int("restartAttempts", attempts),
-				zap.Duration("restartBackoff", backoff))
+				zap.Int("restartAttempts", attempts))
 
 			m.onError(from, &heartbeatpb.RunningError{
 				Time: time.Now().String(),
 				Code: string(errors.ErrMaintainerRecoverableRestartExceededBudget.RFCCode()),
 				Message: fmt.Sprintf(
-					"recover dispatcher request exceeded dispatcher restart budget, downgrade to changefeed error path, dispatcherID=%s, restartAttempts=%d, restartBackoff=%s",
-					dispatcherID.String(), attempts, backoff,
+					"recover dispatcher request exceeded dispatcher restart budget, downgrade to changefeed error path, dispatcherID=%s, restartAttempts=%d",
+					dispatcherID.String(), attempts,
 				),
 			})
 			return

@@ -75,7 +75,7 @@ func TestRecoverDispatcherRequest_RestartDispatchers(t *testing.T) {
 	require.Equal(t, heartbeatpb.ScheduleAction_Remove, scheduleMsg.ScheduleAction)
 }
 
-func TestRecoverDispatcherRequest_SkipWhenWithinBackoff(t *testing.T) {
+func TestRecoverDispatcherRequest_RestartAgainAfterPreviousRestartFinished(t *testing.T) {
 	testutil.SetUpTestServices()
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
@@ -130,11 +130,11 @@ func TestRecoverDispatcherRequest_SkipWhenWithinBackoff(t *testing.T) {
 	finishMoveOperator(t, controller, dispatcherID, node.ID("node1"))
 	require.Nil(t, controller.operatorController.GetOperator(dispatcherID))
 
-	// A second request that happens too soon should be skipped.
+	// A second request after the previous restart finished should schedule a new restart.
 	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
 	m.onRecoverDispatcherRequest(node.ID("node1"), req)
 	require.Empty(t, m.runningErrors.m)
-	require.Nil(t, controller.operatorController.GetOperator(dispatcherID))
+	require.NotNil(t, controller.operatorController.GetOperator(dispatcherID))
 }
 
 func TestRecoverDispatcherRequest_DowngradeToFatalWhenAttemptsExceeded(t *testing.T) {

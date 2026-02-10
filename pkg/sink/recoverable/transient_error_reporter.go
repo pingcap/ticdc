@@ -90,25 +90,3 @@ func (r *TransientErrorReporter) Report(
 		return nil, false
 	}
 }
-
-// Ack clears reported state for the successful dispatcher epoch,
-// allowing future transient errors in the same epoch to be reported again.
-func (r *TransientErrorReporter) Ack(
-	dispatchers []DispatcherEpoch,
-) {
-	if len(dispatchers) == 0 {
-		return
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if len(r.reported) == 0 {
-		return
-	}
-	for _, dispatcher := range dispatchers {
-		if dispatcher.DispatcherID == (common.DispatcherID{}) {
-			continue
-		}
-		delete(r.reported, dispatcher)
-	}
-}

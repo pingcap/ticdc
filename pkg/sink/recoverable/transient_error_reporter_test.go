@@ -46,34 +46,6 @@ func TestTransientErrorReporter_ReportOncePerDispatcherEpoch(t *testing.T) {
 	}
 }
 
-func TestTransientErrorReporter_AckAllowsReportingSameEpochAgain(t *testing.T) {
-	ch := make(chan *ErrorEvent, 2)
-	reporter := NewTransientErrorReporter(ch)
-
-	dispatcherID := common.NewDispatcherID()
-	dispatchers := []DispatcherEpoch{{DispatcherID: dispatcherID, Epoch: 10}}
-
-	reported, handled := reporter.Report(time.Now(), dispatchers)
-	require.True(t, handled)
-	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
-	<-ch
-
-	reported, handled = reporter.Report(time.Now(), dispatchers)
-	require.True(t, handled)
-	require.Empty(t, reported)
-
-	reporter.Ack(dispatchers)
-	reported, handled = reporter.Report(time.Now(), dispatchers)
-	require.True(t, handled)
-	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
-	select {
-	case event := <-ch:
-		require.Equal(t, []common.DispatcherID{dispatcherID}, event.DispatcherIDs)
-	default:
-		t.Fatal("expected event after ack clears reported state")
-	}
-}
-
 func TestTransientErrorReporter_ReportReturnsFalseWhenOutputUnavailable(t *testing.T) {
 	reporter := NewTransientErrorReporter(nil)
 	dispatcherID := common.NewDispatcherID()

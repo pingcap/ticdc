@@ -260,6 +260,9 @@ func NewDispatcherManager(
 		manager.config.EnableSplittableCheck,
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
+		// errCh is single-slot by design: the first error is the one that matters.
+		// collectErrors() will keep resending that error to maintainer periodically,
+		// so later errors can be dropped without losing changefeed-level handling.
 		make(chan error, 1),
 	)
 
@@ -364,6 +367,9 @@ func (e *DispatcherManager) collectRecoverableErrors(ctx context.Context) {
 			}
 			var fallbackErrCh chan<- error
 			if e.sharedInfo != nil {
+				// FallbackErrCh is used when heartbeat collector cannot deliver
+				// recover request to maintainer. In that case we inject a
+				// changefeed-level retryable error into errCh.
 				fallbackErrCh = e.sharedInfo.GetErrCh()
 			}
 			e.recoverDispatcherRequestQueue.Enqueue(&RecoverDispatcherRequestWithTargetID{
