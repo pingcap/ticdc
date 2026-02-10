@@ -20,7 +20,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	tidbmodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
+	tidbmysql "github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,86 +33,144 @@ import (
 func TestShouldGenBatchSQL(t *testing.T) {
 	t.Parallel()
 
-	writer, _, _ := newTestMysqlWriter(t)
-	defer writer.db.Close()
+	buildTableInfo := func(tableName string, pkIsHandle bool) *common.TableInfo {
+		idFieldType := types.NewFieldType(tidbmysql.TypeLong)
+		nameFieldType := types.NewFieldType(tidbmysql.TypeVarchar)
+		if pkIsHandle {
+			idFieldType.AddFlag(tidbmysql.PriKeyFlag)
+			idFieldType.AddFlag(tidbmysql.NotNullFlag)
+		}
+		ti := &tidbmodel.TableInfo{
+			ID:         100,
+			Name:       ast.NewCIStr(tableName),
+			PKIsHandle: pkIsHandle,
+			Columns: []*tidbmodel.ColumnInfo{
+				{
+					ID:        1,
+					Name:      ast.NewCIStr("id"),
+					Offset:    0,
+					FieldType: *idFieldType,
+					State:     tidbmodel.StatePublic,
+				},
+				{
+					ID:        2,
+					Name:      ast.NewCIStr("name"),
+					Offset:    1,
+					FieldType: *nameFieldType,
+					State:     tidbmodel.StatePublic,
+				},
+			},
+		}
+		info := common.NewTableInfo4Decoder("test", ti)
+		require.NotNil(t, info)
+		return info
+	}
+
+	pkTableInfo := buildTableInfo("t_with_pk", true)
+	noPKTableInfo := buildTableInfo("t_no_pk", false)
 
 	tests := []struct {
-		name           string
-		hasPK          bool
-		hasVirtualCols bool
-		events         []*commonEvent.DMLEvent
-		config         *Config
-		safemode       bool
-		want           bool
+		name         string
+		tableInfo    *common.TableInfo
+		events       []*commonEvent.DMLEvent
+		adjustWriter func(w *Writer)
+		want         bool
 	}{
 		{
-			name:   "table without primary key should not use batch SQL",
-			hasPK:  false,
-			events: []*commonEvent.DMLEvent{newDMLEvent(t, 1, 1, 1), newDMLEvent(t, 1, 1, 1)},
-			config: &Config{SafeMode: false, BatchDMLEnable: true},
-			want:   false,
+			name:      "table without primary key should not use batch SQL",
+			tableInfo: noPKTableInfo,
+			events:    []*commonEvent.DMLEvent{newDMLEvent(t, 1, 1, 1), newDMLEvent(t, 1, 1, 1)},
+			adjustWriter: func(w *Writer) {
+				w.cfg.SafeMode = false
+				w.cfg.BatchDMLEnable = true
+			},
+			want: false,
 		},
 		{
-			name:  "single row event should not use batch SQL",
-			hasPK: true,
+			name:      "single row event should not use batch SQL",
+			tableInfo: pkTableInfo,
 			events: []*commonEvent.DMLEvent{
 				newDMLEvent(t, 1, 1, 1),
 			},
-			config: &Config{SafeMode: false, BatchDMLEnable: true},
-			want:   false,
+			adjustWriter: func(w *Writer) {
+				w.cfg.SafeMode = false
+				w.cfg.BatchDMLEnable = true
+			},
+			want: false,
 		},
 		{
-			name:  "all rows in same safe mode should use batch SQL",
-			hasPK: true,
+			name:      "all rows in same safe mode should use batch SQL",
+			tableInfo: pkTableInfo,
 			events: []*commonEvent.DMLEvent{
 				newDMLEvent(t, 1, 2, 2),
 				newDMLEvent(t, 2, 3, 2),
 			},
-			config: &Config{SafeMode: false, BatchDMLEnable: true},
-			want:   true,
+			adjustWriter: func(w *Writer) {
+				w.cfg.SafeMode = false
+				w.cfg.BatchDMLEnable = true
+			},
+			want: true,
 		},
 		{
-			name:  "multiple rows with primary key in different safe mode should not use batch SQL",
-			hasPK: true,
+			name:      "multiple rows with primary key in different safe mode should not use batch SQL",
+			tableInfo: pkTableInfo,
 			events: []*commonEvent.DMLEvent{
 				newDMLEvent(t, 2, 1, 2),
 				newDMLEvent(t, 1, 2, 2),
 			},
-			config: &Config{SafeMode: false, BatchDMLEnable: true},
-			want:   false,
+			adjustWriter: func(w *Writer) {
+				w.cfg.SafeMode = false
+				w.cfg.BatchDMLEnable = true
+			},
+			want: false,
 		},
 		{
-			name:  "multiple rows with primary key in unsafe mode should use batch SQL",
-			hasPK: true,
+			name:      "multiple rows with primary key in unsafe mode should use batch SQL",
+			tableInfo: pkTableInfo,
 			events: []*commonEvent.DMLEvent{
 				newDMLEvent(t, 2, 1, 2),
 				newDMLEvent(t, 3, 1, 2),
 			},
-			config: &Config{SafeMode: false, BatchDMLEnable: true},
-			want:   true,
-		},
-		{
-			name:  "global safe mode should use batch SQL",
-			hasPK: true,
-			events: []*commonEvent.DMLEvent{
-				newDMLEvent(t, 2, 1, 2),
+			adjustWriter: func(w *Writer) {
+				w.cfg.SafeMode = false
+				w.cfg.BatchDMLEnable = true
 			},
-			config: &Config{SafeMode: true, BatchDMLEnable: true},
-			want:   true,
+			want: true,
 		},
 		{
-			name:   "batch dml is disabled",
-			hasPK:  true,
-			events: []*commonEvent.DMLEvent{newDMLEvent(t, 1, 1, 1)},
-			config: &Config{SafeMode: false, BatchDMLEnable: false},
-			want:   false,
+			name:      "global safe mode should use batch SQL when multiple rows",
+			tableInfo: pkTableInfo,
+			events: []*commonEvent.DMLEvent{
+				newDMLEvent(t, 2, 1, 1),
+				newDMLEvent(t, 1, 2, 1),
+			},
+			adjustWriter: func(w *Writer) {
+				w.cfg.SafeMode = true
+				w.cfg.BatchDMLEnable = true
+			},
+			want: true,
+		},
+		{
+			name:      "batch dml is disabled",
+			tableInfo: pkTableInfo,
+			events:    []*commonEvent.DMLEvent{newDMLEvent(t, 2, 1, 1), newDMLEvent(t, 3, 1, 1)},
+			adjustWriter: func(w *Writer) {
+				w.cfg.SafeMode = false
+				w.cfg.BatchDMLEnable = false
+			},
+			want: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := writer.shouldGenBatchSQL(tt.hasPK, tt.events)
+			writer, db, _ := newTestMysqlWriter(t)
+			defer db.Close()
+			if tt.adjustWriter != nil {
+				tt.adjustWriter(writer)
+			}
+			got := writer.shouldGenBatchSQL(tt.tableInfo, tt.events)
 			require.Equal(t, tt.want, got)
 		})
 	}

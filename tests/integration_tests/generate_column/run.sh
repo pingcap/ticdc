@@ -36,10 +36,10 @@ function run() {
 	esac
 	run_sql_file $CUR/data/virtual.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	# sync_diff can't check non-exist table, so we check expected tables are created in downstream first
-	check_table_exists generate_column.t1 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_table_exists generate_column.v4 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	if [[ "$SINK_TYPE" != "storage" && "$SINK_TYPE" != "pulsar" ]]; then
 		run_sql_file $CUR/data/stored.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-		check_table_exists generate_column.t2 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+		check_table_exists generate_column.s4 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	fi
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 	cleanup_process $CDC_BINARY
