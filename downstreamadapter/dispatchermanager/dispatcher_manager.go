@@ -114,6 +114,7 @@ type DispatcherManager struct {
 	dispatcherMap *DispatcherMap[*dispatcher.EventDispatcher]
 	// redoDispatcherMap restore all the redo dispatchers in the DispatcherManager, including table trigger redo dispatcher
 	redoDispatcherMap *DispatcherMap[*dispatcher.RedoDispatcher]
+<<<<<<< HEAD
 	// currentOperatorMap stores one in-flight scheduling request per dispatcherID.
 	//
 	// The value carries sender and maintainer epoch so bootstrap recovery can
@@ -123,6 +124,18 @@ type DispatcherManager struct {
 	currentOperatorMap sync.Map // map[common.DispatcherID]SchedulerDispatcherRequest (in dispatcher manager, not heartbeatpb)
 	// mergeOperatorMap keeps in-flight merge requests so bootstrap can reconstruct merge operators after maintainer failover.
 	mergeOperatorMap sync.Map // map[mergedDispatcherID.String()]*heartbeatpb.MergeDispatcherRequest
+=======
+	// currentOperatorMap stores at most one in-flight scheduling request per dispatcherID (event and redo).
+	//
+	// It is used for:
+	//   - suppressing duplicate maintainer requests for the same dispatcher,
+	//   - reporting unfinished requests during bootstrap so a new maintainer can restore operators,
+	//   - cleaning up remove requests when a dispatcher is fully removed.
+	//
+	// Entries must be deleted on completion (create -> after creation; remove -> on cleanup), otherwise
+	// future maintainer requests for the same dispatcherID will be ignored.
+	currentOperatorMap sync.Map // map[common.DispatcherID]SchedulerDispatcherRequest (in dispatcher manager, not heartbeatpb)
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	// schemaIDToDispatchers is shared in the DispatcherManager,
 	// it store all the infos about schemaID->Dispatchers
 	// Dispatchers may change the schemaID when meets some special events, such as rename ddl
@@ -238,7 +251,10 @@ func NewDispatcherManager(
 		ctx:                   ctx,
 		dispatcherMap:         newDispatcherMap[*dispatcher.EventDispatcher](),
 		currentOperatorMap:    sync.Map{},
+<<<<<<< HEAD
 		mergeOperatorMap:      sync.Map{},
+=======
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 		changefeedID:          changefeedID,
 		keyspaceID:            keyspaceID,
 		pdClock:               pdClock,

@@ -66,6 +66,7 @@ func NewAddDispatcherOperator(
 	replicaSet *replica.SpanReplication,
 	dest node.ID,
 	operatorType heartbeatpb.OperatorType,
+<<<<<<< HEAD
 	maintainerEpoch uint64,
 ) *AddDispatcherOperator {
 	return &AddDispatcherOperator{
@@ -75,6 +76,15 @@ func NewAddDispatcherOperator(
 		operatorType:    operatorType,
 		maintainerEpoch: maintainerEpoch,
 		sendThrottler:   newSendThrottler(),
+=======
+) *AddDispatcherOperator {
+	return &AddDispatcherOperator{
+		replicaSet:     replicaSet,
+		dest:           dest,
+		spanController: spanController,
+		operatorType:   operatorType,
+		sendThrottler:  newSendThrottler(),
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	}
 }
 
@@ -110,7 +120,11 @@ func (m *AddDispatcherOperator) Schedule() *messaging.TargetMessage {
 	if !m.sendThrottler.shouldSend() {
 		return nil
 	}
+<<<<<<< HEAD
 	return m.replicaSet.NewAddDispatcherMessage(m.dest, m.operatorType, m.maintainerEpoch)
+=======
+	return m.replicaSet.NewAddDispatcherMessage(m.dest, m.operatorType)
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 }
 
 // OnNodeRemove is called when node offline, and the replicaset must already move to absent status and will be scheduled again

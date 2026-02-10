@@ -36,12 +36,19 @@ func TestNewRemoveDispatcherMessage(t *testing.T) {
 	t.Parallel()
 
 	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), common.NewDispatcherID(), 1, getTableSpanByID(4), 10, common.DefaultMode, false)
+<<<<<<< HEAD
 	msg := replicaSet.NewRemoveDispatcherMessage("node1", heartbeatpb.OperatorType_O_Remove, 7)
+=======
+	msg := replicaSet.NewRemoveDispatcherMessage("node1", heartbeatpb.OperatorType_O_Remove)
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	req := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
 	require.Equal(t, heartbeatpb.ScheduleAction_Remove, req.ScheduleAction)
 	require.Equal(t, replicaSet.ID.ToPB(), req.Config.DispatcherID)
 	require.Equal(t, replicaSet.Span, req.Config.Span)
+<<<<<<< HEAD
 	require.Equal(t, uint64(7), req.MaintainerEpoch)
+=======
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	require.Equal(t, "node1", msg.To.String())
 }
 
@@ -50,7 +57,11 @@ func TestSpanReplication_NewAddDispatcherMessage(t *testing.T) {
 
 	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), common.NewDispatcherID(), 1, getTableSpanByID(4), 10, common.DefaultMode, false)
 
+<<<<<<< HEAD
 	msg := replicaSet.NewAddDispatcherMessage("node1", heartbeatpb.OperatorType_O_Add, 7)
+=======
+	msg := replicaSet.NewAddDispatcherMessage("node1", heartbeatpb.OperatorType_O_Add)
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	require.Equal(t, "node1", msg.To.String())
 	req := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
 	require.Equal(t, heartbeatpb.ScheduleAction_Create, req.ScheduleAction)
@@ -84,7 +95,11 @@ func TestSpanReplication_NewAddDispatcherMessage_UseBlockTsForInFlightSyncPoint(
 		Stage:       heartbeatpb.BlockStage_WAITING,
 	})
 
+<<<<<<< HEAD
 	msg := replicaSet.NewAddDispatcherMessage("node1", heartbeatpb.OperatorType_O_Add, 7)
+=======
+	msg := replicaSet.NewAddDispatcherMessage("node1", heartbeatpb.OperatorType_O_Add)
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	req := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
 	require.Equal(t, uint64(10), req.Config.StartTs)
 	require.False(t, req.Config.SkipDMLAsStartTs)
@@ -119,7 +134,11 @@ func TestSpanReplication_NewAddDispatcherMessage_DontUseBlockTsAfterSyncPointDon
 		Stage:       heartbeatpb.BlockStage_DONE,
 	})
 
+<<<<<<< HEAD
 	msg := replicaSet.NewAddDispatcherMessage("node1", heartbeatpb.OperatorType_O_Add, 7)
+=======
+	msg := replicaSet.NewAddDispatcherMessage("node1", heartbeatpb.OperatorType_O_Add)
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	req := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
 	require.Equal(t, uint64(20), req.Config.StartTs)
 	require.False(t, req.Config.SkipDMLAsStartTs)
@@ -136,7 +155,11 @@ func TestSpanReplication_NewAddDispatcherMessage_UseBlockTsMinusOneForDDLInFligh
 		Stage:       heartbeatpb.BlockStage_WAITING,
 	})
 
+<<<<<<< HEAD
 	msg := replicaSet.NewAddDispatcherMessage("node1", heartbeatpb.OperatorType_O_Add, 7)
+=======
+	msg := replicaSet.NewAddDispatcherMessage("node1", heartbeatpb.OperatorType_O_Add)
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	req := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
 	require.Equal(t, uint64(9), req.Config.StartTs)
 	require.True(t, req.Config.SkipDMLAsStartTs)

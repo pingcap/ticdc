@@ -56,7 +56,11 @@ func TestAddOperator_DestNodeRemoved(t *testing.T) {
 
 	absentReplicaSet := newAddTestReplicaSet(spanController, changefeedID)
 
+<<<<<<< HEAD
 	op := NewAddDispatcherOperator(spanController, absentReplicaSet, nodeB, heartbeatpb.OperatorType_O_Add, 7)
+=======
+	op := NewAddDispatcherOperator(spanController, absentReplicaSet, nodeB, heartbeatpb.OperatorType_O_Add)
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	require.NotNil(t, op)
 
 	op.Start()
@@ -89,7 +93,11 @@ func TestAddOperator_DestReportsWorking(t *testing.T) {
 	spanController, changefeedID, _, _, nodeB := setupTestEnvironment(t)
 	absentReplicaSet := newAddTestReplicaSet(spanController, changefeedID)
 
+<<<<<<< HEAD
 	op := NewAddDispatcherOperator(spanController, absentReplicaSet, nodeB, heartbeatpb.OperatorType_O_Add, 7)
+=======
+	op := NewAddDispatcherOperator(spanController, absentReplicaSet, nodeB, heartbeatpb.OperatorType_O_Add)
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	require.NotNil(t, op)
 
 	op.Start()
@@ -121,7 +129,11 @@ func TestAddOperator_DestReportsRemoved(t *testing.T) {
 	spanController, changefeedID, _, _, nodeB := setupTestEnvironment(t)
 	absentReplicaSet := newAddTestReplicaSet(spanController, changefeedID)
 
+<<<<<<< HEAD
 	op := NewAddDispatcherOperator(spanController, absentReplicaSet, nodeB, heartbeatpb.OperatorType_O_Add, 7)
+=======
+	op := NewAddDispatcherOperator(spanController, absentReplicaSet, nodeB, heartbeatpb.OperatorType_O_Add)
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	require.NotNil(t, op)
 
 	op.Start()
@@ -151,7 +163,11 @@ func TestAddOperator_StoppedStatusIgnored(t *testing.T) {
 	spanController, changefeedID, _, _, nodeB := setupTestEnvironment(t)
 	absentReplicaSet := newAddTestReplicaSet(spanController, changefeedID)
 
+<<<<<<< HEAD
 	op := NewAddDispatcherOperator(spanController, absentReplicaSet, nodeB, heartbeatpb.OperatorType_O_Add, 7)
+=======
+	op := NewAddDispatcherOperator(spanController, absentReplicaSet, nodeB, heartbeatpb.OperatorType_O_Add)
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	require.NotNil(t, op)
 
 	op.Start()
@@ -178,7 +194,11 @@ func TestAddOperator_TaskRemovedDoesNotReintroduceSpan(t *testing.T) {
 	spanController, changefeedID, _, _, nodeB := setupTestEnvironment(t)
 	absentReplicaSet := newAddTestReplicaSet(spanController, changefeedID)
 
+<<<<<<< HEAD
 	op := NewAddDispatcherOperator(spanController, absentReplicaSet, nodeB, heartbeatpb.OperatorType_O_Add, 7)
+=======
+	op := NewAddDispatcherOperator(spanController, absentReplicaSet, nodeB, heartbeatpb.OperatorType_O_Add)
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	require.NotNil(t, op)
 
 	op.Start()

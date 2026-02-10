@@ -150,7 +150,11 @@ func (m *SplitDispatcherOperator) Schedule() *messaging.TargetMessage {
 	if !m.sendThrottler.shouldSend() {
 		return nil
 	}
+<<<<<<< HEAD
 	return m.replicaSet.NewRemoveDispatcherMessage(m.originNode, heartbeatpb.OperatorType_O_Split, m.maintainerEpoch)
+=======
+	return m.replicaSet.NewRemoveDispatcherMessage(m.originNode, heartbeatpb.OperatorType_O_Split)
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 }
 
 // OnTaskRemoved is called when the task is removed by ddl

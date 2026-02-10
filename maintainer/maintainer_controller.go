@@ -191,10 +191,13 @@ func (c *Controller) currentMaintainerEpoch() uint64 {
 
 // HandleStatus handles the status report from the node.
 func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableSpanStatus) {
+<<<<<<< HEAD
 	c.handleStatus(from, statusList, true)
 }
 
 func (c *Controller) handleStatus(from node.ID, statusList []*heartbeatpb.TableSpanStatus, allowSelfHealing bool) {
+=======
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	// HandleStatus reconciles runtime dispatcher reports with maintainer-side state.
 	//
 	// In the steady state, spanController (desired tasks), operatorController (in-flight scheduling),
@@ -206,10 +209,13 @@ func (c *Controller) handleStatus(from node.ID, statusList []*heartbeatpb.TableS
 	// The rules below make the system converge:
 	//   1) Orphan Working dispatcher without an operator => actively remove it to avoid leaks.
 	//   2) Non-working dispatcher without an operator => mark the span absent so scheduler can recreate it.
+<<<<<<< HEAD
 	//
 	// During maintainer removal we still need status bookkeeping so close/remove can observe terminal
 	// states, but we must disable the self-healing branches. Otherwise a late Stopped/Working heartbeat
 	// can recreate dispatchers for a changefeed that is already shutting down.
+=======
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	for _, status := range statusList {
 		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
 		operatorController := c.getOperatorController(status.Mode)
@@ -218,9 +224,12 @@ func (c *Controller) handleStatus(from node.ID, statusList []*heartbeatpb.TableS
 		operatorController.UpdateOperatorStatus(dispatcherID, from, status)
 		stm := spanController.GetTaskByID(dispatcherID)
 		if stm == nil {
+<<<<<<< HEAD
 			if !allowSelfHealing {
 				continue
 			}
+=======
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 			// If maintainer doesn't know this dispatcherID, most statuses are late/outdated and can be ignored.
 			// We only need to act when the runtime says the dispatcher is Working, because that implies there's
 			// still an active dispatcher consuming resources and potentially producing output.
@@ -236,6 +245,7 @@ func (c *Controller) handleStatus(from node.ID, statusList []*heartbeatpb.TableS
 					zap.Any("status", status),
 					zap.String("dispatcherID", dispatcherID.String()))
 				// If the span is not found but status is Working, we need to remove it from dispatcher.
+<<<<<<< HEAD
 				msg := replica.NewRemoveDispatcherMessage(
 					from,
 					c.changefeedID,
@@ -246,6 +256,9 @@ func (c *Controller) handleStatus(from node.ID, statusList []*heartbeatpb.TableS
 					c.currentMaintainerEpoch(),
 				)
 				_ = c.messageCenter.SendCommand(msg)
+=======
+				_ = c.messageCenter.SendCommand(replica.NewRemoveDispatcherMessage(from, c.changefeedID, status.ID, nil, status.Mode, heartbeatpb.OperatorType_O_Remove))
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 			}
 			continue
 		}
@@ -259,6 +272,40 @@ func (c *Controller) handleStatus(from node.ID, statusList []*heartbeatpb.TableS
 			continue
 		}
 		spanController.UpdateStatus(stm, status)
+
+		// Fallback: dispatcher becomes non-working without an operator.
+		//
+		// In normal scheduling flow, a dispatcher should transition to Stopped/Removed as part of a maintainer
+		// operator (Remove/Move/Split...). However, after maintainer failover we can lose operatorController state
+		// while dispatcher managers keep executing the already-issued requests.
+		//
+		// A real example is a "remove request in transit" during bootstrap:
+		// - Old maintainer sends a Remove (e.g. the remove-origin phase of Move), but the request hasn't reached
+		//   dispatcher manager yet.
+		// - New maintainer bootstraps from dispatcher manager snapshots and sees the dispatcher as Working, with
+		//   no in-flight operator reported in bootstrap response.
+		// - After bootstrap, the in-transit Remove arrives, the dispatcher is removed, and the new maintainer
+		//   observes a terminal status without a corresponding operator.
+		//
+		// In these cases we'd observe a non-working status but have no operator to drive the follow-up
+		// rescheduling, so we mark the span absent to let the scheduler recreate it.
+		//
+		// Safety against message reordering/resend:
+		// - We only reach here when stm != nil and stm.GetNodeID() == from (checked above). If the span was already
+		//   rebound to a different node, we skip it, so late statuses from the old node won't trigger rescheduling.
+		// - MarkSpanAbsent is idempotent and only affects the scheduler state, so even if we get duplicate terminal
+		//   statuses, the worst case is an extra no-op absent mark.
+		if status.ComponentStatus == heartbeatpb.ComponentState_Stopped ||
+			status.ComponentStatus == heartbeatpb.ComponentState_Removed {
+			if op := operatorController.GetOperator(dispatcherID); op == nil {
+				log.Warn("dispatcher becomes non-working without operator, mark span absent for rescheduling",
+					zap.String("changefeed", c.changefeedID.Name()),
+					zap.String("from", from.String()),
+					zap.String("dispatcherID", dispatcherID.String()),
+					zap.Any("status", status))
+				spanController.MarkSpanAbsent(stm)
+			}
+		}
 	}
 }
 

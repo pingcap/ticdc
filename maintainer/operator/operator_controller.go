@@ -194,12 +194,16 @@ func (oc *Controller) scheduleOperator(op operator.Operator[common.DispatcherID,
 func (oc *Controller) RemoveTasksBySchemaID(schemaID int64) {
 	tasks := oc.spanController.GetRemoveTasksBySchemaID(schemaID)
 	for _, task := range tasks {
+<<<<<<< HEAD
 		oc.removeReplicaSet(newRemoveDispatcherOperator(
 			oc.spanController,
 			task,
 			heartbeatpb.OperatorType_O_Remove,
 			oc.MaintainerEpoch(),
 		))
+=======
+		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.spanController, task, heartbeatpb.OperatorType_O_Remove))
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	}
 	oc.spanController.RemoveBySchemaID(schemaID)
 }
@@ -217,12 +221,16 @@ func (oc *Controller) RemoveTasksBySchemaID(schemaID int64) {
 func (oc *Controller) RemoveTasksByTableIDs(tables ...int64) {
 	tasks := oc.spanController.GetRemoveTasksByTableIDs(tables...)
 	for _, task := range tasks {
+<<<<<<< HEAD
 		oc.removeReplicaSet(newRemoveDispatcherOperator(
 			oc.spanController,
 			task,
 			heartbeatpb.OperatorType_O_Remove,
 			oc.MaintainerEpoch(),
 		))
+=======
+		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.spanController, task, heartbeatpb.OperatorType_O_Remove))
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	}
 	oc.spanController.RemoveByTableIDs(tables...)
 }
@@ -550,7 +558,11 @@ func (oc *Controller) checkAffectedNodes(op operator.Operator[common.DispatcherI
 }
 
 func (oc *Controller) NewMoveOperator(replicaSet *replica.SpanReplication, origin, dest node.ID) operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
+<<<<<<< HEAD
 	return NewMoveDispatcherOperator(oc.spanController, replicaSet, origin, dest, oc.MaintainerEpoch())
+=======
+	return NewMoveDispatcherOperator(oc.spanController, replicaSet, origin, dest)
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 }
 
 func checkMergeOperator(affectedReplicaSets []*replica.SpanReplication) bool {

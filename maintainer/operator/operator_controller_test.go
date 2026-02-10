@@ -311,7 +311,11 @@ func TestController_PostFinishCalledOnceOnReplace(t *testing.T) {
 	}()
 	<-op.isFinishedCalled
 
+<<<<<<< HEAD
 	oc.removeReplicaSet(newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove, 7))
+=======
+	oc.removeReplicaSet(newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove))
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	wg.Wait()
 
 	require.Equal(t, int32(1), op.postFinishCount.Load())
@@ -439,6 +443,7 @@ func TestController_AddMergeOperatorFailureCleansOccupyOperators(t *testing.T) {
 	require.Equal(t, 1, oc.OperatorSize())
 }
 
+<<<<<<< HEAD
 func TestControllerRestoredMergeOperatorSchedule(t *testing.T) {
 	// Scenario: bootstrap restores an in-flight merge after maintainer failover.
 	// Steps: restore the merge through the controller, schedule it, and verify the request
@@ -494,6 +499,8 @@ func TestMergeDispatcherOperatorScheduleMaintainerEpoch(t *testing.T) {
 	require.Equal(t, uint64(7), req.MaintainerEpoch)
 }
 
+=======
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 func TestController_RemoveReplicaSet_ReplacesRemoveOperatorOnTaskRemoved(t *testing.T) {
 	// Scenario: the barrier can enqueue the same remove task multiple times during failover/bootstrap.
 	// Steps:
@@ -513,15 +520,23 @@ func TestController_RemoveReplicaSet_ReplacesRemoveOperatorOnTaskRemoved(t *test
 		spanController,
 		replicaSet,
 		heartbeatpb.OperatorType_O_Move,
+<<<<<<< HEAD
 		7,
 		func() { postFinishCount.Add(1) },
 	)))
 
 	oc.removeReplicaSet(newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove, 7))
+=======
+		func() { postFinishCount.Add(1) },
+	)))
+
+	oc.removeReplicaSet(newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove))
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 
 	require.Equal(t, int32(0), postFinishCount.Load())
 	require.NotNil(t, oc.GetOperator(replicaSet.ID))
 }
+<<<<<<< HEAD
 
 func TestController_RemoveReplicaSetBlocksNormalAdmissionUntilReplacement(t *testing.T) {
 	messageCenter, _, _ := messaging.NewMessageCenterForTest(t)
@@ -847,3 +862,5 @@ func setupReplicaSetWithID(
 		Mode:            common.DefaultMode,
 	}, nodeID, false)
 }
+=======
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))

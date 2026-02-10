@@ -5,14 +5,22 @@ set -eu
 # This integration test verifies operator consistency across maintainer failover.
 #
 # What it validates:
+<<<<<<< HEAD
 # - Dispatcher managers persist "in-flight" scheduling requests (Create/Remove with an OperatorType)
 #   and merge requests.
+=======
+# - Dispatcher managers persist "in-flight" scheduling requests (Create/Remove with an OperatorType).
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 # - After the maintainer fails over, the new maintainer can restore these unfinished operators from
 #   bootstrap responses and keep table scheduling converging instead of leaking or duplicating dispatchers.
 #
 # Main steps (per subcase):
 # 1) Start a 3-capture CDC cluster and create a changefeed.
+<<<<<<< HEAD
 # 2) Trigger Move / Split / Remove / Create / Merge operators and keep them in-progress using failpoints.
+=======
+# 2) Trigger Move / Split / Remove / Create operators and keep them in-progress using failpoints.
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 # 3) Kill the current maintainer capture to force a maintainer move.
 # 4) Disable failpoints and verify tables eventually converge (scheduled on a live capture, dropped table
 #    stays dropped, and downstream data matches upstream via sync-diff).
@@ -26,6 +34,7 @@ ROOT_WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
+<<<<<<< HEAD
 CDC_ADDRS_OVERRIDE=${CDC_ADDRS_OVERRIDE:-"127.0.0.1:8300 127.0.0.1:8301 127.0.0.1:8302"}
 read -r -a CDC_ADDRS <<<"$CDC_ADDRS_OVERRIDE"
 if [ "${#CDC_ADDRS[@]}" -ne 3 ]; then
@@ -48,6 +57,9 @@ function run_cdc_cli() {
 }
 export -f cdc_cli_changefeed run_cdc_cli
 
+=======
+CDC_ADDRS=("127.0.0.1:8300" "127.0.0.1:8301" "127.0.0.1:8302")
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 FAILPOINT_NOT_READY_TO_CLOSE_DISPATCHER="github.com/pingcap/ticdc/downstreamadapter/dispatcher/NotReadyToCloseDispatcher"
 FAILPOINT_BLOCK_CREATE_DISPATCHER="github.com/pingcap/ticdc/downstreamadapter/dispatchermanager/BlockCreateDispatcher"
 
@@ -75,6 +87,7 @@ function get_table_replication_count() {
 		jq -r --argjson tid "$table_id" '[.items[].table_ids[] | select(. == $tid)] | length'
 }
 
+<<<<<<< HEAD
 function wait_for_table_replication_count() {
 	local api_addr=$1
 	local changefeed_id=$2
@@ -152,6 +165,8 @@ function wait_for_all_table_replications_on_addr() {
 	return 1
 }
 
+=======
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 function get_maintainer_addr() {
 	local api_addr=$1
 	local changefeed_id=$2
@@ -224,6 +239,7 @@ function wait_for_add_operator_inflight_in_logs() {
 	return 1
 }
 
+<<<<<<< HEAD
 function wait_for_restored_merge_operator_in_logs() {
 	local work_dir=$1
 	local retry=$2
@@ -238,6 +254,8 @@ function wait_for_restored_merge_operator_in_logs() {
 	return 1
 }
 
+=======
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 function wait_for_maintainer_move() {
 	local api_addr=$1
 	local changefeed_id=$2
@@ -336,6 +354,7 @@ function create_diff_config() {
 	local work_dir=$1
 	local target_config_path=$2
 
+<<<<<<< HEAD
 	# Keep sync-diff aligned with the TiDB endpoints selected for this run, so isolated local reruns do not
 	# accidentally compare against another default-port cluster on the machine.
 	sed \
@@ -343,6 +362,10 @@ function create_diff_config() {
 		-e "/\\[data-sources.mysql1\\]/,/^$/{s/host = \".*\"/host = \"$UP_TIDB_HOST\"/; s/port = [0-9][0-9]*/port = $UP_TIDB_PORT/;}" \
 		-e "/\\[data-sources.tidb0\\]/,/^$/{s/host = \".*\"/host = \"$DOWN_TIDB_HOST\"/; s/port = [0-9][0-9]*/port = $DOWN_TIDB_PORT/;}" \
 		"$CUR/conf/diff_config.toml" >"$target_config_path"
+=======
+	# update output-dir to point to current work directory to avoid collision between subcases.
+	sed "s|output-dir = \".*\"|output-dir = \"$work_dir/sync_diff/output\"|" "$CUR/conf/diff_config.toml" >"$target_config_path"
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 }
 
 function run_impl() {
@@ -357,11 +380,17 @@ function run_impl() {
 
 	# Disable balance scheduler to avoid unexpected auto split/move interfering with this test.
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true)'
+<<<<<<< HEAD
 	# Always pass the freshly started upstream PD explicitly so every capture joins the test cluster
 	# instead of silently falling back to the default 2379 endpoint during isolated local reruns.
 	run_cdc_server --workdir "$work_dir" --binary $CDC_BINARY --logsuffix 1 --addr "${CDC_ADDRS[0]}" --pd "$pd_addr"
 	run_cdc_server --workdir "$work_dir" --binary $CDC_BINARY --logsuffix 2 --addr "${CDC_ADDRS[1]}" --pd "$pd_addr"
 	run_cdc_server --workdir "$work_dir" --binary $CDC_BINARY --logsuffix 3 --addr "${CDC_ADDRS[2]}" --pd "$pd_addr"
+=======
+	run_cdc_server --workdir "$work_dir" --binary $CDC_BINARY --logsuffix 1 --addr "127.0.0.1:8300"
+	run_cdc_server --workdir "$work_dir" --binary $CDC_BINARY --logsuffix 2 --addr "127.0.0.1:8301"
+	run_cdc_server --workdir "$work_dir" --binary $CDC_BINARY --logsuffix 3 --addr "127.0.0.1:8302"
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	export GO_FAILPOINTS=''
 
 	TOPIC_NAME="ticdc-move-table-maintainer-failover-$RANDOM"
@@ -372,21 +401,32 @@ function run_impl() {
 		run_pulsar_cluster "$work_dir" normal
 		SINK_URI="pulsar://127.0.0.1:6650/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true"
 		;;
+<<<<<<< HEAD
 	*) SINK_URI="mysql://normal:123456@127.0.0.1:${DOWN_TIDB_PORT}/?max-txn-row=1" ;;
+=======
+	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/?max-txn-row=1" ;;
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	esac
 	changefeed_config="$work_dir/changefeed.toml"
 	create_changefeed_config "$mode" "$work_dir" "$changefeed_config"
 	changefeed_id=$(cdc_cli_changefeed create --sink-uri="$SINK_URI" --config="$changefeed_config" | grep '^ID:' | head -n1 | awk '{print $2}')
 	case $SINK_TYPE in
+<<<<<<< HEAD
 	kafka) run_kafka_consumer "$work_dir" $SINK_URI "$changefeed_config" ;;
 	storage) run_storage_consumer "$work_dir" $SINK_URI "$changefeed_config" "" ;;
 	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI --config "$changefeed_config" ;;
+=======
+	kafka) run_kafka_consumer "$work_dir" $SINK_URI ;;
+	storage) run_storage_consumer "$work_dir" $SINK_URI "" "" ;;
+	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI ;;
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	esac
 
 	run_sql "CREATE DATABASE maintainer_failover_when_operator;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE TABLE maintainer_failover_when_operator.t1(id INT PRIMARY KEY, val VARCHAR(20));" ${UP_TIDB_HOST} ${UP_TIDB_PORT} # move
 	run_sql "CREATE TABLE maintainer_failover_when_operator.t2(id INT PRIMARY KEY, val VARCHAR(20));" ${UP_TIDB_HOST} ${UP_TIDB_PORT} # split
 	run_sql "CREATE TABLE maintainer_failover_when_operator.t3(id INT PRIMARY KEY, val VARCHAR(20));" ${UP_TIDB_HOST} ${UP_TIDB_PORT} # remove
+<<<<<<< HEAD
 	run_sql "CREATE TABLE maintainer_failover_when_operator.t6(id INT PRIMARY KEY, val VARCHAR(20));" ${UP_TIDB_HOST} ${UP_TIDB_PORT} # merge
 	run_sql "split table maintainer_failover_when_operator.t2 between (1) and (100000) regions 20;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "split table maintainer_failover_when_operator.t6 between (1) and (100000) regions 20;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
@@ -394,15 +434,27 @@ function run_impl() {
 	run_sql "INSERT INTO maintainer_failover_when_operator.t2 VALUES (1, 'a'), (2, 'b');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "INSERT INTO maintainer_failover_when_operator.t3 VALUES (1, 'a'), (2, 'b');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "INSERT INTO maintainer_failover_when_operator.t6 VALUES (1, 'a'), (2, 'b');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+=======
+	run_sql "split table maintainer_failover_when_operator.t2 between (1) and (100000) regions 20;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "INSERT INTO maintainer_failover_when_operator.t1 VALUES (1, 'a'), (2, 'b');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "INSERT INTO maintainer_failover_when_operator.t2 VALUES (1, 'a'), (2, 'b');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "INSERT INTO maintainer_failover_when_operator.t3 VALUES (1, 'a'), (2, 'b');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 
 	check_table_exists "maintainer_failover_when_operator.t1" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 	check_table_exists "maintainer_failover_when_operator.t2" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 	check_table_exists "maintainer_failover_when_operator.t3" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
+<<<<<<< HEAD
 	check_table_exists "maintainer_failover_when_operator.t6" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 	table_id_1=$(get_table_id "maintainer_failover_when_operator" "t1")
 	table_id_2=$(get_table_id "maintainer_failover_when_operator" "t2")
 	table_id_3=$(get_table_id "maintainer_failover_when_operator" "t3")
 	table_id_6=$(get_table_id "maintainer_failover_when_operator" "t6")
+=======
+	table_id_1=$(get_table_id "maintainer_failover_when_operator" "t1")
+	table_id_2=$(get_table_id "maintainer_failover_when_operator" "t2")
+	table_id_3=$(get_table_id "maintainer_failover_when_operator" "t3")
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 
 	api_addr=${CDC_ADDRS[0]}
 	maintainer_addr=$(get_maintainer_addr "$api_addr" "$changefeed_id")
@@ -422,6 +474,7 @@ function run_impl() {
 	ensure_table_single_replication "$api_addr" "$changefeed_id" "$table_id_1" "$mode"
 	ensure_table_single_replication "$api_addr" "$changefeed_id" "$table_id_2" "$mode"
 	ensure_table_single_replication "$api_addr" "$changefeed_id" "$table_id_3" "$mode"
+<<<<<<< HEAD
 	ensure_table_single_replication "$api_addr" "$changefeed_id" "$table_id_6" "$mode"
 	ensure_table_on_addr "$api_addr" "$changefeed_id" "$table_id_1" "$origin_addr" "$mode"
 	ensure_table_on_addr "$api_addr" "$changefeed_id" "$table_id_2" "$origin_addr" "$mode"
@@ -444,6 +497,11 @@ function run_impl() {
 		echo "table $table_id_6 does not have enough replications for merge, count=$merge_replication_count_before" >&2
 		exit 1
 	fi
+=======
+	ensure_table_on_addr "$api_addr" "$changefeed_id" "$table_id_1" "$origin_addr" "$mode"
+	ensure_table_on_addr "$api_addr" "$changefeed_id" "$table_id_2" "$origin_addr" "$mode"
+	ensure_table_on_addr "$api_addr" "$changefeed_id" "$table_id_3" "$origin_addr" "$mode"
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 
 	enable_failpoint --addr "$origin_addr" --name "$FAILPOINT_NOT_READY_TO_CLOSE_DISPATCHER" --expr "return(true)"
 	enable_failpoint_on_all_addrs "$FAILPOINT_BLOCK_CREATE_DISPATCHER" "pause"
@@ -462,7 +520,11 @@ function run_impl() {
 	#
 	# Note: For MQ sinks (kafka/pulsar/storage), downstream table existence may be gated by watermarks which can be
 	# blocked by in-flight Add operators (BlockTsForward). Therefore, do NOT check downstream table existence here.
+<<<<<<< HEAD
 	query_dispatcher_count "$api_addr" "$changefeed_id" 6 60 ge "$mode"
+=======
+	query_dispatcher_count "$api_addr" "$changefeed_id" 6 60 ge "" "$mode"
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	scheduled_node_id_4=$(wait_for_table_scheduled "$api_addr" "$changefeed_id" "$table_id_4" "$mode")
 	scheduled_node_id_5=$(wait_for_table_scheduled "$api_addr" "$changefeed_id" "$table_id_5" "$mode")
 	echo "table $table_id_4 scheduled on node $scheduled_node_id_4"
@@ -481,6 +543,7 @@ function run_impl() {
 	# failpoint is enabled on origin, so the table should not move to target
 	wait_for_table_on_addr "$api_addr" "$changefeed_id" "$table_id_1" "$origin_addr" "$mode"
 
+<<<<<<< HEAD
 	# Merge operator: issue merge against the dedicated split table while source dispatcher close is blocked.
 	# Once the merged dispatcher appears, the maintainer can be killed safely because the merge request has
 	# already reached dispatcher manager state and must be restored from bootstrap on failover.
@@ -490,6 +553,8 @@ function run_impl() {
 	set -e
 	wait_for_table_replication_count "$api_addr" "$changefeed_id" "$table_id_6" "$((merge_replication_count_before + 1))" ge "$mode" 60
 
+=======
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	# Remove operator: drop one table while dispatcher close is blocked.
 	run_sql "DROP TABLE maintainer_failover_when_operator.t3;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
@@ -503,6 +568,7 @@ function run_impl() {
 	new_maintainer_addr=$(wait_for_maintainer_move "$api_addr" "$changefeed_id" "$maintainer_addr")
 	echo "maintainer moved to $new_maintainer_addr"
 
+<<<<<<< HEAD
 	# Let dispatcher managers answer bootstrap, but keep the merge unfinished
 	# until the new maintainer has restored its operator from that snapshot.
 	disable_failpoint_on_all_addrs_best_effort "$FAILPOINT_BLOCK_CREATE_DISPATCHER"
@@ -513,6 +579,13 @@ function run_impl() {
 	set +e
 	wait "$split_pid"
 	wait "$merge_pid"
+=======
+	disable_failpoint --addr "$origin_addr" --name "$FAILPOINT_NOT_READY_TO_CLOSE_DISPATCHER"
+	disable_failpoint_on_all_addrs_best_effort "$FAILPOINT_BLOCK_CREATE_DISPATCHER"
+
+	set +e
+	wait "$split_pid"
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	set -e
 
 	# After removing failpoints, the table should be scheduled eventually.
@@ -522,7 +595,10 @@ function run_impl() {
 
 	check_table_exists "maintainer_failover_when_operator.t4" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 	check_table_exists "maintainer_failover_when_operator.t5" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
+<<<<<<< HEAD
 	check_table_exists "maintainer_failover_when_operator.t6" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
+=======
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 	check_table_not_exists "maintainer_failover_when_operator.t3" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
 
 	run_sql "ALTER TABLE maintainer_failover_when_operator.t1 ADD COLUMN c2 INT DEFAULT 0;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
@@ -531,7 +607,10 @@ function run_impl() {
 	run_sql "INSERT INTO maintainer_failover_when_operator.t2 VALUES (3, 'c');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "INSERT INTO maintainer_failover_when_operator.t4 VALUES (3, 'c');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "INSERT INTO maintainer_failover_when_operator.t5 VALUES (3, 'c');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+<<<<<<< HEAD
 	run_sql "INSERT INTO maintainer_failover_when_operator.t6 VALUES (3, 'c');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+=======
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 
 	diff_config="$work_dir/diff_config.toml"
 	create_diff_config "$work_dir" "$diff_config"

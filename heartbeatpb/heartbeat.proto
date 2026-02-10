@@ -134,7 +134,10 @@ message ScheduleDispatcherRequest {
     DispatcherConfig config = 2;
     ScheduleAction scheduleAction = 3;
     OperatorType operatorType = 4;
+<<<<<<< HEAD
     uint64 maintainer_epoch = 5;
+=======
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 }
 
 message MergeDispatcherRequest {
@@ -318,9 +321,12 @@ message MaintainerBootstrapResponse {
     // It will be used when redo enable.
     uint64 redo_checkpoint_ts = 5;
     repeated ScheduleDispatcherRequest operators = 6;
+<<<<<<< HEAD
     uint64 maintainer_epoch = 7;
     // merge_operators contains in-flight merge dispatcher requests for bootstrap recovery.
     repeated MergeDispatcherRequest merge_operators = 8;
+=======
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 }
 
 message MaintainerPostBootstrapRequest {

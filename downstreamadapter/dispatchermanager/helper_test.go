@@ -161,7 +161,11 @@ func TestPreCheckForSchedulerHandler_RemoveAllowedWhenDispatcherMissing(t *testi
 		dispatcherMap: newDispatcherMap[*dispatcher.EventDispatcher](),
 	}
 
+<<<<<<< HEAD
 	removeReq := NewSchedulerDispatcherRequest("node1", &heartbeatpb.ScheduleDispatcherRequest{
+=======
+	removeReq := NewSchedulerDispatcherRequest(&heartbeatpb.ScheduleDispatcherRequest{
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 		ChangefeedID: &heartbeatpb.ChangefeedID{Keyspace: "test-namespace", Name: "test-changefeed"},
 		Config: &heartbeatpb.DispatcherConfig{
 			DispatcherID: dispatcherID.ToPB(),
@@ -191,7 +195,11 @@ func TestPreCheckForSchedulerHandler_CreateSkippedWhenDispatcherExists(t *testin
 	}
 	dm.dispatcherMap.Set(dispatcherID, &dispatcher.EventDispatcher{})
 
+<<<<<<< HEAD
 	createReq := NewSchedulerDispatcherRequest("node1", &heartbeatpb.ScheduleDispatcherRequest{
+=======
+	createReq := NewSchedulerDispatcherRequest(&heartbeatpb.ScheduleDispatcherRequest{
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 		ChangefeedID: &heartbeatpb.ChangefeedID{Keyspace: "test-namespace", Name: "test-changefeed"},
 		Config: &heartbeatpb.DispatcherConfig{
 			DispatcherID: dispatcherID.ToPB(),
@@ -204,6 +212,7 @@ func TestPreCheckForSchedulerHandler_CreateSkippedWhenDispatcherExists(t *testin
 	_, ok := preCheckForSchedulerHandler(createReq, dm)
 	require.False(t, ok)
 }
+<<<<<<< HEAD
 
 func TestPreCheckForSchedulerHandler_MaintainerEpochFence(t *testing.T) {
 	t.Parallel()
@@ -480,3 +489,5 @@ func TestDispatcherManagerIsRedoReadyRequiresPublication(t *testing.T) {
 
 	require.True(t, dm.IsRedoReady())
 }
+=======
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))

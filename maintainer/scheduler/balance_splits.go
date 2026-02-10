@@ -131,6 +131,7 @@ func (s *balanceSplitsScheduler) Execute() time.Time {
 			if checkResult.OpType == replica.OpSplit {
 				splitSpans := s.splitter.Split(context.Background(), checkResult.SplitSpan.Span, checkResult.SpanNum, checkResult.SpanType)
 				if len(splitSpans) > 1 {
+<<<<<<< HEAD
 					op := operator.NewSplitDispatcherOperator(
 						s.spanController,
 						checkResult.SplitSpan,
@@ -147,6 +148,11 @@ func (s *balanceSplitsScheduler) Execute() time.Time {
 							))
 						},
 					)
+=======
+					op := operator.NewSplitDispatcherOperator(s.spanController, checkResult.SplitSpan, splitSpans, checkResult.SplitTargetNodes, func(span *replica.SpanReplication, node node.ID) bool {
+						return s.operatorController.AddOperator(operator.NewAddDispatcherOperator(s.spanController, span, node, heartbeatpb.OperatorType_O_Split))
+					})
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 					ret := s.operatorController.AddOperator(op)
 					if ret {
 						availableSize--

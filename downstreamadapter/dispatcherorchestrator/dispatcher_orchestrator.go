@@ -213,7 +213,10 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 				zap.String("changefeedID", cfId.Name()), zap.Error(err))
 		}
 		start := time.Now()
+<<<<<<< HEAD
 		var initializingManager *dispatchermanager.DispatcherManager
+=======
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 		manager, err = dispatchermanager.NewDispatcherManager(
 			req.KeyspaceId,
 			cfId,
@@ -222,6 +225,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			req.TableTriggerRedoDispatcherId,
 			req.StartTs,
 			from,
+<<<<<<< HEAD
 			maintainerEpoch,
 			req.IsNewChangefeed,
 			func(manager *dispatchermanager.DispatcherManager) bool {
@@ -232,6 +236,10 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		if initializingManager != nil {
 			m.removeInitializingDispatcherManager(cfId, initializingManager)
 		}
+=======
+			req.IsNewChangefeed,
+		)
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 		// Fast return the error to maintainer.
 		if err != nil {
 			if dispatchermanager.IsWritePathClosedError(err) || m.fenced.Load() || m.closed.Load() {
@@ -794,7 +802,11 @@ func createBootstrapResponse(
 	}
 
 	retrieveDispatcherSpanForBootstrapResponse(manager, response)
+<<<<<<< HEAD
 	if manager.IsRedoReady() {
+=======
+	if manager.RedoEnable {
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 		// table trigger redo dispatcher startTs
 		if redoStartTs != 0 {
 			response.RedoCheckpointTs = redoStartTs
@@ -864,16 +876,31 @@ func retrieveRedoDispatcherSpanForBootstrapResponse(
 	manager *dispatchermanager.DispatcherManager,
 	response *heartbeatpb.MaintainerBootstrapResponse,
 ) {
+<<<<<<< HEAD
 	if !manager.IsRedoReady() {
 		return
 	}
 	appendBootstrapSpans(manager.GetRedoDispatcherMap(), response)
+=======
+	manager.GetRedoDispatcherMap().ForEach(func(id common.DispatcherID, d *dispatcher.RedoDispatcher) {
+		response.Spans = append(response.Spans, &heartbeatpb.BootstrapTableSpan{
+			ID:              id.ToPB(),
+			SchemaID:        d.GetSchemaID(),
+			Span:            d.GetTableSpan(),
+			ComponentStatus: d.GetComponentStatus(),
+			CheckpointTs:    d.GetCheckpointTs(),
+			BlockState:      d.GetBlockEventStatus(),
+			Mode:            d.GetMode(),
+		})
+	})
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 }
 
 func retrieveDispatcherSpanForBootstrapResponse(
 	manager *dispatchermanager.DispatcherManager,
 	response *heartbeatpb.MaintainerBootstrapResponse,
 ) {
+<<<<<<< HEAD
 	appendBootstrapSpans(manager.GetDispatcherMap(), response)
 }
 
@@ -882,6 +909,9 @@ func appendBootstrapSpans[T dispatcher.Dispatcher](
 	response *heartbeatpb.MaintainerBootstrapResponse,
 ) {
 	dispatcherMap.ForEach(func(id common.DispatcherID, d T) {
+=======
+	manager.GetDispatcherMap().ForEach(func(id common.DispatcherID, d *dispatcher.EventDispatcher) {
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 		response.Spans = append(response.Spans, &heartbeatpb.BootstrapTableSpan{
 			ID:              id.ToPB(),
 			SchemaID:        d.GetSchemaID(),
@@ -899,6 +929,7 @@ func retrieveOperatorsForBootstrapResponse(
 	manager *dispatchermanager.DispatcherManager,
 	response *heartbeatpb.MaintainerBootstrapResponse,
 ) {
+<<<<<<< HEAD
 	// The caller holds MaintainerFenceMu while building this response, so the
 	// owner snapshot cannot change during the operator-map iteration.
 	currentMaintainer := manager.GetMaintainerID()
@@ -991,4 +1022,42 @@ func isDispatcherInLiveMap(
 type reportedDispatcherKey struct {
 	id   common.DispatcherID
 	mode int64
+=======
+	manager.GetCurrentOperatorMap().Range(func(key, value any) bool {
+		req := value.(dispatchermanager.SchedulerDispatcherRequest)
+		dispatcherID := common.NewDispatcherIDFromPB(req.Config.DispatcherID)
+		if common.IsRedoMode(req.Config.Mode) {
+			if manager.RedoEnable && manager.GetRedoDispatcherMap() != nil {
+				_, ok := manager.GetRedoDispatcherMap().Get(dispatcherID)
+				// Log error if dispatcher not found and action is not create
+				// It's possible that the dispatcher is not found when the action is create
+				// because the dispatcher may be created after the operator is stored
+				if !ok && req.ScheduleAction != heartbeatpb.ScheduleAction_Create {
+					log.Error("Redo dispatcher not found, this should not happen",
+						zap.String("changefeed", changefeedID.String()),
+						zap.String("dispatcherID", req.Config.DispatcherID.String()),
+					)
+				}
+			}
+		} else {
+			_, ok := manager.GetDispatcherMap().Get(dispatcherID)
+			// Log error if dispatcher not found and action is not create
+			// It's possible that the dispatcher is not found when the action is create
+			// because the dispatcher may be created after the operator is stored
+			if !ok && req.ScheduleAction != heartbeatpb.ScheduleAction_Create {
+				log.Error("Dispatcher not found, this should not happen",
+					zap.String("changefeed", changefeedID.String()),
+					zap.String("dispatcherID", req.Config.DispatcherID.String()),
+				)
+			}
+		}
+		response.Operators = append(response.Operators, &heartbeatpb.ScheduleDispatcherRequest{
+			ChangefeedID:   req.ChangefeedID,
+			Config:         req.Config,
+			ScheduleAction: req.ScheduleAction,
+			OperatorType:   req.OperatorType,
+		})
+		return true
+	})
+>>>>>>> 660b34a70 (fix(*): move, add, remove, split operator inconsistent after maintainer move (#3691))
 }
