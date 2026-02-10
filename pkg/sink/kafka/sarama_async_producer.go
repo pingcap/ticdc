@@ -24,6 +24,7 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/recoverable"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -36,7 +37,7 @@ type saramaAsyncProducer struct {
 	closed      *atomic.Bool
 	failpointCh chan *sarama.ProducerError
 
-	transientErrorCh chan<- *ErrorEvent
+	transientErrorCh chan<- *recoverable.ErrorEvent
 }
 
 type messageMetadata struct {
@@ -143,7 +144,7 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 	}
 }
 
-func (p *saramaAsyncProducer) SetRecoverableErrorChan(ch chan<- *ErrorEvent) {
+func (p *saramaAsyncProducer) SetRecoverableErrorChan(ch chan<- *recoverable.ErrorEvent) {
 	p.transientErrorCh = ch
 }
 
@@ -151,8 +152,12 @@ func (p *saramaAsyncProducer) reportTransientError(err *sarama.ProducerError) bo
 	if err == nil || p.transientErrorCh == nil {
 		return false
 	}
-	kerr, ok := err.Err.(sarama.KError)
-	if !ok {
+	logInfo := extractLogInfo(err.Msg)
+	var dispatcherIDs []commonType.DispatcherID
+	if logInfo != nil {
+		dispatcherIDs = logInfo.DispatcherIDs
+	}
+	if len(dispatcherIDs) == 0 {
 		return false
 	}
 
@@ -162,18 +167,28 @@ func (p *saramaAsyncProducer) reportTransientError(err *sarama.ProducerError) bo
 		topic = err.Msg.Topic
 		partition = err.Msg.Partition
 	}
-	event := &ErrorEvent{
-		Time:         time.Now(),
-		KafkaErrCode: int16(kerr),
-		KafkaErrName: kerr.Error(),
-		Message:      err.Err.Error(),
-		Topic:        topic,
-		Partition:    partition,
-		LogInfo:      extractLogInfo(err.Msg),
+	kerr, ok := err.Err.(sarama.KError)
+
+	event := &recoverable.ErrorEvent{
+		Time:          time.Now(),
+		DispatcherIDs: dispatcherIDs,
 	}
 
 	select {
 	case p.transientErrorCh <- event:
+		fields := []zap.Field{
+			zap.String("keyspace", p.changefeedID.Keyspace()),
+			zap.String("changefeed", p.changefeedID.Name()),
+			zap.Int("dispatcherCount", len(dispatcherIDs)),
+			zap.String("topic", topic),
+			zap.Int32("partition", partition),
+		}
+		if ok {
+			fields = append(fields,
+				zap.Int16("kafkaErrCode", int16(kerr)),
+				zap.String("kafkaErrName", kerr.Error()))
+		}
+		log.Warn("recoverable kafka error received, request dispatcher recovery", fields...)
 		return true
 	default:
 	}

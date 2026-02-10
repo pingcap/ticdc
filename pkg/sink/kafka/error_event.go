@@ -1,36 +1,8 @@
 package kafka
 
 import (
-	"time"
-
 	"github.com/IBM/sarama"
-	commonPkg "github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 )
-
-const KafkaTransientErrorCode = "CDC:KafkaTransientErrorCode"
-
-type ErrorEvent struct {
-	Time time.Time
-
-	KafkaErrCode int16
-	KafkaErrName string
-	Message      string
-
-	Topic     string
-	Partition int32
-
-	LogInfo *common.MessageLogInfo
-}
-
-type ErrorReport struct {
-	KafkaErrCode  int16
-	KafkaErrName  string
-	Message       string
-	Topic         string
-	Partition     int32
-	DispatcherIDs []commonPkg.DispatcherID
-}
 
 func isTransientKError(err *sarama.ProducerError) bool {
 	if err == nil {

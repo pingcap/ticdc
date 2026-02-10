@@ -28,6 +28,14 @@ type recoverableKafkaDispatcherRestartState struct {
 	restartAttempts int
 }
 
+type recoverableKafkaDispatcherRestartDecision int
+
+const (
+	recoverableKafkaDispatcherRestartDecisionRestart recoverableKafkaDispatcherRestartDecision = iota
+	recoverableKafkaDispatcherRestartDecisionSkip
+	recoverableKafkaDispatcherRestartDecisionDowngrade
+)
+
 func (m *Maintainer) getRecoverableKafkaDispatcherRestartState(
 	dispatcherID common.DispatcherID,
 	now time.Time,
@@ -45,10 +53,10 @@ func (m *Maintainer) getRecoverableKafkaDispatcherRestartState(
 	return state
 }
 
-func (m *Maintainer) shouldDowngradeRecoverableKafkaDispatcherRestart(
+func (m *Maintainer) getRecoverableKafkaDispatcherRestartDecision(
 	dispatcherID common.DispatcherID,
 	now time.Time,
-) (bool, int, time.Duration) {
+) (recoverableKafkaDispatcherRestartDecision, int, time.Duration) {
 	m.recoverableKafkaRestarts.Lock()
 	defer m.recoverableKafkaRestarts.Unlock()
 
@@ -59,14 +67,14 @@ func (m *Maintainer) shouldDowngradeRecoverableKafkaDispatcherRestart(
 	state.lastSeen = now
 
 	if state.restartAttempts >= recoverableKafkaDispatcherRestartMaxAttempts {
-		return true, state.restartAttempts, recoverableKafkaDispatcherRestartBackoff(state.restartAttempts)
+		return recoverableKafkaDispatcherRestartDecisionDowngrade, state.restartAttempts, recoverableKafkaDispatcherRestartBackoff(state.restartAttempts)
 	}
 
 	backoff := recoverableKafkaDispatcherRestartBackoff(state.restartAttempts)
 	if state.restartAttempts > 0 && now.Sub(state.lastRestart) < backoff {
-		return true, state.restartAttempts, backoff
+		return recoverableKafkaDispatcherRestartDecisionSkip, state.restartAttempts, backoff
 	}
-	return false, state.restartAttempts, backoff
+	return recoverableKafkaDispatcherRestartDecisionRestart, state.restartAttempts, backoff
 }
 
 func (m *Maintainer) recordRecoverableKafkaDispatcherRestart(dispatcherID common.DispatcherID, now time.Time) {

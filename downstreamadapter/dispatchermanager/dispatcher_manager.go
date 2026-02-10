@@ -15,7 +15,6 @@ package dispatchermanager
 
 import (
 	"context"
-	"encoding/json"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -40,7 +39,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	kafkapkg "github.com/pingcap/ticdc/pkg/sink/kafka"
+	"github.com/pingcap/ticdc/pkg/sink/recoverable"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus"
@@ -101,6 +100,10 @@ type DispatcherManager struct {
 	// heartbeat collector will consume the heartbeat request from the queue and send the response to each dispatcher.
 	heartbeatRequestQueue *HeartbeatRequestQueue
 
+	// recoverDispatcherRequestQueue is used to store dispatcher recovery requests that should be
+	// forwarded to maintainer.
+	recoverDispatcherRequestQueue *RecoverDispatcherRequestQueue
+
 	// heartBeatTask is responsible for collecting the heartbeat info from all the dispatchers
 	// and report to the maintainer periodicity.
 	heartBeatTask *HeartBeatTask
@@ -111,8 +114,10 @@ type DispatcherManager struct {
 
 	// sink is used to send all the events to the downstream.
 	sink sink.Sink
-	// recoverableKafkaErrCh carries recoverable Kafka producer errors that should trigger dispatcher-level recovery.
-	recoverableKafkaErrCh chan *kafkapkg.ErrorEvent
+
+	// recoverableErrCh carries recoverable errors that should trigger dispatcher-level recovery.
+	recoverableErrCh chan *recoverable.ErrorEvent
+
 	// redo related
 	RedoEnable bool
 	redoSink   *redo.Sink
@@ -224,11 +229,9 @@ func NewDispatcherManager(
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	if setter, ok := manager.sink.(interface {
-		SetRecoverableErrorChan(ch chan<- *kafkapkg.ErrorEvent)
-	}); ok {
-		manager.recoverableKafkaErrCh = make(chan *kafkapkg.ErrorEvent, 1024)
-		setter.SetRecoverableErrorChan(manager.recoverableKafkaErrCh)
+	if setter, ok := manager.sink.(recoverable.ErrorEventChanSetter); ok {
+		manager.recoverableErrCh = make(chan *recoverable.ErrorEvent, 1024)
+		setter.SetRecoverableErrorChan(manager.recoverableErrCh)
 	}
 
 	// Determine outputRawChangeEvent based on sink type
@@ -283,12 +286,12 @@ func NewDispatcherManager(
 		manager.handleError(ctx, err)
 	}()
 
-	// collect recoverable kafka producer errors and report to maintainer for dispatcher-level recovery.
-	if manager.recoverableKafkaErrCh != nil {
+	// collect recoverable sink errors and report to maintainer for dispatcher-level recovery.
+	if manager.recoverableErrCh != nil {
 		manager.wg.Add(1)
 		go func() {
 			defer manager.wg.Done()
-			manager.collectRecoverableKafkaErrors(ctx)
+			manager.collectRecoverableErrors(ctx)
 		}()
 	}
 
@@ -326,58 +329,36 @@ func NewDispatcherManager(
 	return manager, nil
 }
 
-func (e *DispatcherManager) collectRecoverableKafkaErrors(ctx context.Context) {
+func (e *DispatcherManager) collectRecoverableErrors(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case event := <-e.recoverableKafkaErrCh:
+		case event := <-e.recoverableErrCh:
 			if event == nil {
 				continue
 			}
 
-			var dispatcherIDs []common.DispatcherID
-			if event.LogInfo != nil {
-				dispatcherIDs = event.LogInfo.DispatcherIDs
+			if len(event.DispatcherIDs) == 0 {
+				log.Warn("recoverable sink error has no dispatcher IDs, ignore it",
+					zap.Stringer("changefeedID", e.changefeedID))
+				continue
 			}
-			if len(dispatcherIDs) == 0 {
-				log.Warn("recoverable kafka error has no dispatcher IDs, fallback to changefeed error path",
-					zap.Stringer("changefeedID", e.changefeedID),
-					zap.Int16("kafkaErrCode", event.KafkaErrCode),
-					zap.String("kafkaErrName", event.KafkaErrName),
-					zap.String("message", event.Message),
-					zap.String("topic", event.Topic),
-					zap.Int32("partition", event.Partition))
-				e.handleError(ctx, errors.WrapError(errors.ErrKafkaAsyncSendMessage, errors.New(event.Message)))
+			if e.recoverDispatcherRequestQueue == nil {
+				log.Warn("recover dispatcher request queue is not set, ignore recoverable sink error",
+					zap.Stringer("changefeedID", e.changefeedID))
 				continue
 			}
 
-			report := kafkapkg.ErrorReport{
-				KafkaErrCode:  event.KafkaErrCode,
-				KafkaErrName:  event.KafkaErrName,
-				Message:       event.Message,
-				Topic:         event.Topic,
-				Partition:     event.Partition,
+			dispatcherIDs := make([]*heartbeatpb.DispatcherID, 0, len(event.DispatcherIDs))
+			for _, dispatcherID := range event.DispatcherIDs {
+				dispatcherIDs = append(dispatcherIDs, dispatcherID.ToPB())
+			}
+			req := &heartbeatpb.RecoverDispatcherRequest{
+				ChangefeedID:  e.changefeedID.ToPB(),
 				DispatcherIDs: dispatcherIDs,
 			}
-			payload, err := json.Marshal(&report)
-			if err != nil {
-				log.Warn("marshal recoverable kafka error report failed, fallback to changefeed error path",
-					zap.Stringer("changefeedID", e.changefeedID),
-					zap.Error(err))
-				e.handleError(ctx, errors.WrapError(errors.ErrKafkaAsyncSendMessage, errors.Trace(err)))
-				continue
-			}
-
-			var message heartbeatpb.HeartBeatRequest
-			message.ChangefeedID = e.changefeedID.ToPB()
-			message.Err = &heartbeatpb.RunningError{
-				Time:    time.Now().String(),
-				Node:    appcontext.GetID(),
-				Code:    kafkapkg.KafkaTransientErrorCode,
-				Message: string(payload),
-			}
-			e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
+			e.recoverDispatcherRequestQueue.Enqueue(&RecoverDispatcherRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: req})
 		}
 	}
 }

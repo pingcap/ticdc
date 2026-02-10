@@ -38,7 +38,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/redo"
 	pkgReplica "github.com/pingcap/ticdc/pkg/scheduler/replica"
-	kafkapkg "github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
@@ -473,6 +472,9 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 	switch msg.Type {
 	case messaging.TypeHeartBeatRequest:
 		m.onHeartbeatRequest(msg)
+	case messaging.TypeRecoverDispatcherRequest:
+		req := msg.Message[0].(*heartbeatpb.RecoverDispatcherRequest)
+		m.onRecoverDispatcherRequest(msg.From, req)
 	case messaging.TypeBlockStatusRequest:
 		m.onBlockStateRequest(msg)
 	case messaging.TypeMaintainerBootstrapResponse:
@@ -805,13 +807,11 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 		}
 	}
 	if req.Err != nil {
-		if !m.handleRecoverableKafkaError(msg.From, req.Err) {
-			log.Error("dispatcher report an error",
-				zap.Stringer("changefeedID", m.changefeedID),
-				zap.Stringer("sourceNode", msg.From),
-				zap.String("error", req.Err.Message))
-			m.onError(msg.From, req.Err)
-		}
+		log.Error("dispatcher report an error",
+			zap.Stringer("changefeedID", m.changefeedID),
+			zap.Stringer("sourceNode", msg.From),
+			zap.String("error", req.Err.Message))
+		m.onError(msg.From, req.Err)
 	}
 
 	// ATOMIC CHECKPOINT UPDATE: Part 2 of race condition fix
@@ -821,45 +821,33 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 	m.controller.HandleStatus(msg.From, req.Statuses)
 }
 
-func (m *Maintainer) handleRecoverableKafkaError(from node.ID, err *heartbeatpb.RunningError) bool {
-	if err == nil || err.Code != kafkapkg.KafkaTransientErrorCode {
-		return false
+func (m *Maintainer) onRecoverDispatcherRequest(from node.ID, req *heartbeatpb.RecoverDispatcherRequest) {
+	// ignore the request if the maintainer not bootstrapped
+	if !m.initialized.Load() {
+		return
+	}
+	if req == nil || len(req.DispatcherIDs) == 0 {
+		log.Warn("recover dispatcher request has no dispatcher IDs",
+			zap.Stringer("changefeedID", m.changefeedID),
+			zap.Stringer("sourceNode", from))
+		return
 	}
 
-	var report kafkapkg.ErrorReport
-	if unmarshalErr := json.Unmarshal([]byte(err.Message), &report); unmarshalErr != nil {
-		log.Warn("unmarshal recoverable kafka error report failed",
-			zap.Stringer("changefeedID", m.changefeedID),
-			zap.Stringer("sourceNode", from),
-			zap.Error(unmarshalErr))
-		return false
-	}
-	if len(report.DispatcherIDs) == 0 {
-		log.Warn("recoverable kafka error report has no dispatcher IDs",
-			zap.Stringer("changefeedID", m.changefeedID),
-			zap.Stringer("sourceNode", from),
-			zap.Int16("kafkaErrCode", report.KafkaErrCode),
-			zap.String("kafkaErrName", report.KafkaErrName),
-			zap.String("topic", report.Topic),
-			zap.Int32("partition", report.Partition))
-		return false
-	}
-
-	log.Warn("recoverable kafka error received, restart dispatchers",
+	log.Warn("recover dispatcher request received, restart dispatchers",
 		zap.Stringer("changefeedID", m.changefeedID),
 		zap.Stringer("sourceNode", from),
-		zap.Int("dispatcherCount", len(report.DispatcherIDs)),
-		zap.Int16("kafkaErrCode", report.KafkaErrCode),
-		zap.String("kafkaErrName", report.KafkaErrName),
-		zap.String("topic", report.Topic),
-		zap.Int32("partition", report.Partition))
+		zap.Int("dispatcherCount", len(req.DispatcherIDs)))
 
 	operatorController := m.controller.getOperatorController(common.DefaultMode)
 	spanController := m.controller.getSpanController(common.DefaultMode)
 
 	now := time.Now()
-	seen := make(map[common.DispatcherID]struct{}, len(report.DispatcherIDs))
-	for _, dispatcherID := range report.DispatcherIDs {
+	seen := make(map[common.DispatcherID]struct{}, len(req.DispatcherIDs))
+	for _, pbDispatcherID := range req.DispatcherIDs {
+		if pbDispatcherID == nil {
+			continue
+		}
+		dispatcherID := common.NewDispatcherIDFromPB(pbDispatcherID)
 		if _, ok := seen[dispatcherID]; ok {
 			continue
 		}
@@ -869,39 +857,46 @@ func (m *Maintainer) handleRecoverableKafkaError(from node.ID, err *heartbeatpb.
 			continue
 		}
 
-		if downgrade, attempts, backoff := m.shouldDowngradeRecoverableKafkaDispatcherRestart(dispatcherID, now); downgrade {
-			log.Warn("recoverable kafka error restart dispatcher too frequent, downgrade to changefeed error path",
+		decision, attempts, backoff := m.getRecoverableKafkaDispatcherRestartDecision(dispatcherID, now)
+		switch decision {
+		case recoverableKafkaDispatcherRestartDecisionSkip:
+			log.Info("skip restarting dispatcher for recoverable kafka error due to backoff",
 				zap.Stringer("changefeedID", m.changefeedID),
 				zap.Stringer("sourceNode", from),
 				zap.Stringer("dispatcherID", dispatcherID),
 				zap.Int("restartAttempts", attempts),
-				zap.Duration("restartBackoff", backoff),
-				zap.Int16("kafkaErrCode", report.KafkaErrCode),
-				zap.String("kafkaErrName", report.KafkaErrName),
-				zap.String("topic", report.Topic),
-				zap.Int32("partition", report.Partition))
+				zap.Duration("restartBackoff", backoff))
+			continue
+		case recoverableKafkaDispatcherRestartDecisionDowngrade:
+			log.Warn("recover dispatcher request exceeded dispatcher restart budget, downgrade to changefeed error path",
+				zap.Stringer("changefeedID", m.changefeedID),
+				zap.Stringer("sourceNode", from),
+				zap.Stringer("dispatcherID", dispatcherID),
+				zap.Int("restartAttempts", attempts),
+				zap.Duration("restartBackoff", backoff))
 
 			m.onError(from, &heartbeatpb.RunningError{
 				Time: time.Now().String(),
 				Code: string(errors.ErrKafkaAsyncSendMessage.RFCCode()),
 				Message: fmt.Sprintf(
-					"recoverable kafka error exceeded dispatcher restart budget, downgrade to changefeed error path, dispatcherID=%s, kafkaErrCode=%d, kafkaErrName=%s, topic=%s, partition=%d, message=%s",
-					dispatcherID.String(), report.KafkaErrCode, report.KafkaErrName, report.Topic, report.Partition, report.Message,
+					"recover dispatcher request exceeded dispatcher restart budget, downgrade to changefeed error path, dispatcherID=%s, restartAttempts=%d, restartBackoff=%s",
+					dispatcherID.String(), attempts, backoff,
 				),
 			})
-			return true
+			return
+		default:
 		}
 
 		replication := spanController.GetTaskByID(dispatcherID)
 		if replication == nil {
-			log.Warn("dispatcher not found, ignore recoverable kafka error",
+			log.Warn("dispatcher not found, ignore recover dispatcher request",
 				zap.Stringer("changefeedID", m.changefeedID),
 				zap.Stringer("dispatcherID", dispatcherID))
 			continue
 		}
 		origin := replication.GetNodeID()
 		if origin == "" {
-			log.Warn("dispatcher has empty node ID, ignore recoverable kafka error",
+			log.Warn("dispatcher has empty node ID, ignore recover dispatcher request",
 				zap.Stringer("changefeedID", m.changefeedID),
 				zap.Stringer("dispatcherID", dispatcherID))
 			continue
@@ -916,7 +911,6 @@ func (m *Maintainer) handleRecoverableKafkaError(from node.ID, err *heartbeatpb.
 		}
 		m.recordRecoverableKafkaDispatcherRestart(dispatcherID, now)
 	}
-	return true
 }
 
 func (m *Maintainer) onError(from node.ID, err *heartbeatpb.RunningError) {

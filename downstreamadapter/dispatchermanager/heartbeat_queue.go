@@ -88,3 +88,37 @@ func (q *BlockStatusRequestQueue) Dequeue(ctx context.Context) *BlockStatusReque
 func (q *BlockStatusRequestQueue) Close() {
 	close(q.queue)
 }
+
+type RecoverDispatcherRequestWithTargetID struct {
+	TargetID node.ID
+	Request  *heartbeatpb.RecoverDispatcherRequest
+}
+
+// RecoverDispatcherRequestQueue is a channel for dispatcher managers to send dispatcher recovery requests
+// to HeartBeatCollector.
+type RecoverDispatcherRequestQueue struct {
+	queue chan *RecoverDispatcherRequestWithTargetID
+}
+
+func NewRecoverDispatcherRequestQueue() *RecoverDispatcherRequestQueue {
+	return &RecoverDispatcherRequestQueue{
+		queue: make(chan *RecoverDispatcherRequestWithTargetID, 10000),
+	}
+}
+
+func (q *RecoverDispatcherRequestQueue) Enqueue(request *RecoverDispatcherRequestWithTargetID) {
+	q.queue <- request
+}
+
+func (q *RecoverDispatcherRequestQueue) Dequeue(ctx context.Context) *RecoverDispatcherRequestWithTargetID {
+	select {
+	case <-ctx.Done():
+		return nil
+	case request := <-q.queue:
+		return request
+	}
+}
+
+func (q *RecoverDispatcherRequestQueue) Close() {
+	close(q.queue)
+}

@@ -19,6 +19,13 @@ message HeartBeatRequest {
     RunningError err = 6;
 }
 
+// RecoverDispatcherRequest asks maintainer to restart specified dispatchers in-place.
+// It is used for localized recovery when downstream sink hits recoverable errors.
+message RecoverDispatcherRequest {
+    ChangefeedID changefeedID = 1;
+    repeated DispatcherID dispatcherIDs = 2;
+}
+
 message Watermark {
     uint64 checkpointTs = 1;  // min checkpointTs of all tables in the DispatcherManager
     uint64 resolvedTs = 2;    // min resolvedTs of all tables in the DispatcherManager

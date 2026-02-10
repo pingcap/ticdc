@@ -50,6 +50,7 @@ type HeartBeatCollector struct {
 
 	heartBeatReqQueue   *HeartbeatRequestQueue
 	blockStatusReqQueue *BlockStatusRequestQueue
+	recoverReqQueue     *RecoverDispatcherRequestQueue
 
 	dispatcherStatusDynamicStream             dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, dispatcher.Dispatcher, *dispatcher.DispatcherStatusHandler]
 	heartBeatResponseDynamicStream            dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *DispatcherManager, *HeartBeatResponseHandler]
@@ -71,6 +72,7 @@ func NewHeartBeatCollector(serverId node.ID) *HeartBeatCollector {
 		from:                                      serverId,
 		heartBeatReqQueue:                         NewHeartbeatRequestQueue(),
 		blockStatusReqQueue:                       NewBlockStatusRequestQueue(),
+		recoverReqQueue:                           NewRecoverDispatcherRequestQueue(),
 		dispatcherStatusDynamicStream:             dStatusDS,
 		heartBeatResponseDynamicStream:            newHeartBeatResponseDynamicStream(dStatusDS),
 		schedulerDispatcherRequestDynamicStream:   newSchedulerDispatcherRequestDynamicStream(),
@@ -91,7 +93,7 @@ func (c *HeartBeatCollector) Run(ctx context.Context) {
 
 	log.Info("heartbeat collector is running")
 
-	c.wg.Add(2)
+	c.wg.Add(3)
 	go func() {
 		defer c.wg.Done()
 		err := c.sendHeartBeatMessages(ctx)
@@ -107,6 +109,14 @@ func (c *HeartBeatCollector) Run(ctx context.Context) {
 			log.Error("failed to send block status messages", zap.Error(err))
 		}
 	}()
+
+	go func() {
+		defer c.wg.Done()
+		err := c.sendRecoverDispatcherMessages(ctx)
+		if err != nil {
+			log.Error("failed to send recover dispatcher messages", zap.Error(err))
+		}
+	}()
 }
 
 func (c *HeartBeatCollector) RegisterDispatcherManager(m *DispatcherManager) error {
@@ -116,6 +126,7 @@ func (c *HeartBeatCollector) RegisterDispatcherManager(m *DispatcherManager) err
 
 	m.SetHeartbeatRequestQueue(c.heartBeatReqQueue)
 	m.SetBlockStatusRequestQueue(c.blockStatusReqQueue)
+	m.SetRecoverDispatcherRequestQueue(c.recoverReqQueue)
 	err := c.heartBeatResponseDynamicStream.AddPath(m.changefeedID.Id, m)
 	if err != nil {
 		return errors.Trace(err)
@@ -250,6 +261,30 @@ func (c *HeartBeatCollector) sendBlockStatusMessages(ctx context.Context) error 
 				))
 			if err != nil {
 				log.Error("failed to send block status request message", zap.Error(err))
+			}
+		}
+	}
+}
+
+func (c *HeartBeatCollector) sendRecoverDispatcherMessages(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			log.Info("heartbeat collector is shutting down, exit sendRecoverDispatcherMessages")
+			return ctx.Err()
+		default:
+			reqWithTarget := c.recoverReqQueue.Dequeue(ctx)
+			if reqWithTarget == nil {
+				continue
+			}
+			err := c.mc.SendCommand(
+				messaging.NewSingleTargetMessage(
+					reqWithTarget.TargetID,
+					messaging.MaintainerManagerTopic,
+					reqWithTarget.Request,
+				))
+			if err != nil {
+				log.Error("failed to send recover dispatcher request message", zap.Error(err))
 			}
 		}
 	}

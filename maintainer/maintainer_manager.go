@@ -102,6 +102,9 @@ func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage
 	case messaging.TypeHeartBeatRequest:
 		req := msg.Message[0].(*heartbeatpb.HeartBeatRequest)
 		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
+	case messaging.TypeRecoverDispatcherRequest:
+		req := msg.Message[0].(*heartbeatpb.RecoverDispatcherRequest)
+		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 	case messaging.TypeBlockStatusRequest:
 		req := msg.Message[0].(*heartbeatpb.BlockStatusRequest)
 		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)

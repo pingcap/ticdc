@@ -10,6 +10,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/recoverable"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
@@ -32,33 +33,43 @@ func (p *fakeSaramaAsyncProducer) AsyncClose() {}
 func (p *fakeSaramaAsyncProducer) Close() error {
 	return nil
 }
+
 func (p *fakeSaramaAsyncProducer) Input() chan<- *sarama.ProducerMessage {
 	return p.inputCh
 }
+
 func (p *fakeSaramaAsyncProducer) Successes() <-chan *sarama.ProducerMessage {
 	return p.successesCh
 }
+
 func (p *fakeSaramaAsyncProducer) Errors() <-chan *sarama.ProducerError {
 	return p.errorsCh
 }
+
 func (p *fakeSaramaAsyncProducer) IsTransactional() bool {
 	return false
 }
+
 func (p *fakeSaramaAsyncProducer) TxnStatus() sarama.ProducerTxnStatusFlag {
 	return sarama.ProducerTxnStatusFlag(0)
 }
+
 func (p *fakeSaramaAsyncProducer) BeginTxn() error {
 	return nil
 }
+
 func (p *fakeSaramaAsyncProducer) CommitTxn() error {
 	return nil
 }
+
 func (p *fakeSaramaAsyncProducer) AbortTxn() error {
 	return nil
 }
+
 func (p *fakeSaramaAsyncProducer) AddOffsetsToTxn(_ map[string][]*sarama.PartitionOffsetMetadata, _ string) error {
 	return nil
 }
+
 func (p *fakeSaramaAsyncProducer) AddMessageToTxn(_ *sarama.ConsumerMessage, _ string, _ *string) error {
 	return nil
 }
@@ -68,7 +79,7 @@ func TestSaramaAsyncProducer_TransientKErrorDoesNotExitAndReports(t *testing.T) 
 	defer cancel()
 
 	fakeProducer := newFakeSaramaAsyncProducer()
-	recoverableCh := make(chan *ErrorEvent, 1)
+	recoverableCh := make(chan *recoverable.ErrorEvent, 1)
 
 	saramaProducer := &saramaAsyncProducer{
 		producer:     fakeProducer,
@@ -83,12 +94,15 @@ func TestSaramaAsyncProducer_TransientKErrorDoesNotExitAndReports(t *testing.T) 
 		doneCh <- saramaProducer.AsyncRunCallback(ctx)
 	}()
 
+	dispatcherID := common.NewDispatcherID()
 	fakeProducer.errorsCh <- &sarama.ProducerError{
 		Msg: &sarama.ProducerMessage{
 			Topic:     "test-topic",
 			Partition: 0,
 			Metadata: &messageMetadata{
-				logInfo: &codecCommon.MessageLogInfo{},
+				logInfo: &codecCommon.MessageLogInfo{
+					DispatcherIDs: []common.DispatcherID{dispatcherID},
+				},
 			},
 		},
 		Err: sarama.KError(20), // NOT_ENOUGH_REPLICAS_AFTER_APPEND
@@ -99,7 +113,7 @@ func TestSaramaAsyncProducer_TransientKErrorDoesNotExitAndReports(t *testing.T) 
 		t.Fatal("recoverable event not reported in time")
 	case event := <-recoverableCh:
 		require.NotNil(t, event)
-		require.Equal(t, int16(20), event.KafkaErrCode)
+		require.Equal(t, []common.DispatcherID{dispatcherID}, event.DispatcherIDs)
 	}
 
 	select {

@@ -1,7 +1,6 @@
 package maintainer
 
 import (
-	"encoding/json"
 	"testing"
 	"time"
 
@@ -12,13 +11,12 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/node"
-	kafkapkg "github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
 
-func TestHandleRecoverableKafkaError_RestartDispatchers(t *testing.T) {
+func TestRecoverDispatcherRequest_RestartDispatchers(t *testing.T) {
 	testutil.SetUpTestServices()
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
@@ -58,23 +56,13 @@ func TestHandleRecoverableKafkaError_RestartDispatchers(t *testing.T) {
 		changefeedID: changefeedID,
 		controller:   controller,
 	}
+	m.initialized.Store(true)
 
-	report := kafkapkg.ErrorReport{
-		KafkaErrCode:  20,
-		KafkaErrName:  "NOT_ENOUGH_REPLICAS_AFTER_APPEND",
-		Message:       "recoverable kafka error",
-		Topic:         "test-topic",
-		Partition:     1,
-		DispatcherIDs: []common.DispatcherID{dispatcherID},
+	req := &heartbeatpb.RecoverDispatcherRequest{
+		ChangefeedID:  changefeedID.ToPB(),
+		DispatcherIDs: []*heartbeatpb.DispatcherID{dispatcherID.ToPB()},
 	}
-	payload, err := json.Marshal(&report)
-	require.NoError(t, err)
-
-	runningErr := &heartbeatpb.RunningError{
-		Code:    kafkapkg.KafkaTransientErrorCode,
-		Message: string(payload),
-	}
-	require.True(t, m.handleRecoverableKafkaError(node.ID("node1"), runningErr))
+	m.onRecoverDispatcherRequest(node.ID("node1"), req)
 
 	op := controller.operatorController.GetOperator(dispatcherID)
 	require.NotNil(t, op)
@@ -87,7 +75,7 @@ func TestHandleRecoverableKafkaError_RestartDispatchers(t *testing.T) {
 	require.Equal(t, heartbeatpb.ScheduleAction_Remove, scheduleMsg.ScheduleAction)
 }
 
-func TestHandleRecoverableKafkaError_DowngradeToFatalWhenRestartTooFrequent(t *testing.T) {
+func TestRecoverDispatcherRequest_SkipWhenWithinBackoff(t *testing.T) {
 	testutil.SetUpTestServices()
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
@@ -130,31 +118,80 @@ func TestHandleRecoverableKafkaError_DowngradeToFatalWhenRestartTooFrequent(t *t
 		statusChanged: atomic.NewBool(false),
 	}
 	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
+	m.initialized.Store(true)
 
-	report := kafkapkg.ErrorReport{
-		KafkaErrCode:  20,
-		KafkaErrName:  "NOT_ENOUGH_REPLICAS_AFTER_APPEND",
-		Message:       "recoverable kafka error",
-		Topic:         "test-topic",
-		Partition:     1,
-		DispatcherIDs: []common.DispatcherID{dispatcherID},
+	req := &heartbeatpb.RecoverDispatcherRequest{
+		ChangefeedID:  changefeedID.ToPB(),
+		DispatcherIDs: []*heartbeatpb.DispatcherID{dispatcherID.ToPB()},
 	}
-	payload, err := json.Marshal(&report)
-	require.NoError(t, err)
-
-	runningErr := &heartbeatpb.RunningError{
-		Code:    kafkapkg.KafkaTransientErrorCode,
-		Message: string(payload),
-	}
-	require.True(t, m.handleRecoverableKafkaError(node.ID("node1"), runningErr))
+	m.onRecoverDispatcherRequest(node.ID("node1"), req)
 	require.NotNil(t, controller.operatorController.GetOperator(dispatcherID))
 
 	finishMoveOperator(t, controller, dispatcherID, node.ID("node1"))
 	require.Nil(t, controller.operatorController.GetOperator(dispatcherID))
 
-	// A second error that happens too soon should downgrade to fatal error path.
+	// A second request that happens too soon should be skipped.
 	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
-	require.True(t, m.handleRecoverableKafkaError(node.ID("node1"), runningErr))
+	m.onRecoverDispatcherRequest(node.ID("node1"), req)
+	require.Empty(t, m.runningErrors.m)
+	require.Nil(t, controller.operatorController.GetOperator(dispatcherID))
+}
+
+func TestRecoverDispatcherRequest_DowngradeToFatalWhenAttemptsExceeded(t *testing.T) {
+	testutil.SetUpTestServices()
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
+
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlDispatcherID := common.NewDispatcherID()
+	ddlSpan := replica.NewWorkingSpanReplication(
+		changefeedID,
+		ddlDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID),
+		&heartbeatpb.TableSpanStatus{
+			ID:              ddlDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		},
+		node.ID("node1"),
+		false,
+	)
+	refresher := replica.NewRegionCountRefresher(changefeedID, time.Minute)
+	controller := NewController(changefeedID, 1, nil, nil, ddlSpan, nil, 1, time.Minute, refresher, common.DefaultKeyspace, false)
+
+	dispatcherID := common.NewDispatcherID()
+	spanReplica := replica.NewSpanReplication(
+		changefeedID,
+		dispatcherID,
+		1,
+		testutil.GetTableSpanByID(1),
+		1,
+		common.DefaultMode,
+		false,
+	)
+	spanReplica.SetNodeID(node.ID("node1"))
+	controller.spanController.AddReplicatingSpan(spanReplica)
+
+	m := &Maintainer{
+		changefeedID:  changefeedID,
+		controller:    controller,
+		nodeManager:   nodeManager,
+		statusChanged: atomic.NewBool(false),
+	}
+	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
+	m.initialized.Store(true)
+
+	now := time.Now()
+	for i := 0; i < recoverableKafkaDispatcherRestartMaxAttempts; i++ {
+		m.recordRecoverableKafkaDispatcherRestart(dispatcherID, now)
+	}
+
+	req := &heartbeatpb.RecoverDispatcherRequest{
+		ChangefeedID:  changefeedID.ToPB(),
+		DispatcherIDs: []*heartbeatpb.DispatcherID{dispatcherID.ToPB()},
+	}
+	m.onRecoverDispatcherRequest(node.ID("node1"), req)
 
 	fatal := m.runningErrors.m[node.ID("node1")]
 	require.NotNil(t, fatal)

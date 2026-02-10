@@ -14,8 +14,10 @@ package dispatchermanager
 
 import (
 	"context"
-	"encoding/json"
+	"go/parser"
+	"go/token"
 	"math"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -32,8 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	kafkapkg "github.com/pingcap/ticdc/pkg/sink/kafka"
+	"github.com/pingcap/ticdc/pkg/sink/recoverable"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/stretchr/testify/require"
@@ -134,18 +135,18 @@ func createTestManager(t *testing.T) *DispatcherManager {
 	return manager
 }
 
-func TestCollectRecoverableKafkaErrorsEnqueueHeartbeat(t *testing.T) {
+func TestCollectRecoverableErrorsEnqueueRecoverDispatcherRequest(t *testing.T) {
 	manager := &DispatcherManager{
-		changefeedID:          common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
-		heartbeatRequestQueue: NewHeartbeatRequestQueue(),
+		changefeedID:                  common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+		recoverDispatcherRequestQueue: NewRecoverDispatcherRequestQueue(),
 	}
 	manager.SetMaintainerID(node.ID("maintainer"))
-	manager.recoverableKafkaErrCh = make(chan *kafkapkg.ErrorEvent, 1)
+	manager.recoverableErrCh = make(chan *recoverable.ErrorEvent, 1)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		manager.collectRecoverableKafkaErrors(ctx)
+		manager.collectRecoverableErrors(ctx)
 		close(done)
 	}()
 	defer func() {
@@ -154,34 +155,32 @@ func TestCollectRecoverableKafkaErrorsEnqueueHeartbeat(t *testing.T) {
 	}()
 
 	dispatcherID := common.NewDispatcherID()
-	manager.recoverableKafkaErrCh <- &kafkapkg.ErrorEvent{
-		Time:         time.Now(),
-		KafkaErrCode: 20,
-		KafkaErrName: "NOT_ENOUGH_REPLICAS_AFTER_APPEND",
-		Message:      "recoverable kafka error",
-		Topic:        "test-topic",
-		Partition:    1,
-		LogInfo: &codecCommon.MessageLogInfo{
-			DispatcherIDs: []common.DispatcherID{dispatcherID},
-		},
+	manager.recoverableErrCh <- &recoverable.ErrorEvent{
+		Time:          time.Now(),
+		DispatcherIDs: []common.DispatcherID{dispatcherID},
 	}
 
 	dequeueCtx, cancelDequeue := context.WithTimeout(context.Background(), time.Second)
-	req := manager.heartbeatRequestQueue.Dequeue(dequeueCtx)
+	req := manager.recoverDispatcherRequestQueue.Dequeue(dequeueCtx)
 	cancelDequeue()
 
 	require.NotNil(t, req)
 	require.Equal(t, node.ID("maintainer"), req.TargetID)
 	require.NotNil(t, req.Request)
-	require.NotNil(t, req.Request.Err)
-	require.Equal(t, kafkapkg.KafkaTransientErrorCode, req.Request.Err.Code)
+	require.Equal(t, manager.changefeedID.ToPB(), req.Request.ChangefeedID)
+	require.Equal(t, []*heartbeatpb.DispatcherID{dispatcherID.ToPB()}, req.Request.DispatcherIDs)
+}
 
-	var report kafkapkg.ErrorReport
-	require.NoError(t, json.Unmarshal([]byte(req.Request.Err.Message), &report))
-	require.Equal(t, int16(20), report.KafkaErrCode)
-	require.Equal(t, []common.DispatcherID{dispatcherID}, report.DispatcherIDs)
-	require.Equal(t, "test-topic", report.Topic)
-	require.Equal(t, int32(1), report.Partition)
+func TestDispatcherManagerDoesNotImportKafkaSinkPackage(t *testing.T) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "dispatcher_manager.go", nil, parser.ImportsOnly)
+	require.NoError(t, err)
+
+	for _, imp := range f.Imports {
+		p, err := strconv.Unquote(imp.Path.Value)
+		require.NoError(t, err)
+		require.NotEqual(t, "github.com/pingcap/ticdc/pkg/sink/kafka", p)
+	}
 }
 
 func TestCollectComponentStatusWhenChangedWatermarkSeqNoFallback(t *testing.T) {

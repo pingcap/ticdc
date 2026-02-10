@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
+	"github.com/pingcap/ticdc/pkg/sink/recoverable"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
@@ -117,10 +118,10 @@ func New(
 }
 
 type recoverableErrorChanSetter interface {
-	SetRecoverableErrorChan(ch chan<- *kafka.ErrorEvent)
+	SetRecoverableErrorChan(ch chan<- *recoverable.ErrorEvent)
 }
 
-func (s *sink) SetRecoverableErrorChan(ch chan<- *kafka.ErrorEvent) {
+func (s *sink) SetRecoverableErrorChan(ch chan<- *recoverable.ErrorEvent) {
 	setter, ok := s.dmlProducer.(recoverableErrorChanSetter)
 	if !ok {
 		return
