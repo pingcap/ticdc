@@ -15,37 +15,19 @@ package franz
 
 import (
 	"context"
-	"os"
-	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/stretchr/testify/require"
 )
 
-func TestGetBrokerConfigControllerNotAvailableUsesDedicatedError(t *testing.T) {
-	t.Parallel()
-
-	_, currentFile, _, ok := runtime.Caller(0)
-	require.True(t, ok)
-	dir := filepath.Dir(currentFile)
-
-	source, err := os.ReadFile(filepath.Join(dir, "admin_client.go"))
-	require.NoError(t, err)
-	require.NotContains(t, string(source), `ErrKafkaInvalidConfig.GenWithStack("kafka controller is not available")`)
-	require.Contains(t, string(source), "ErrKafkaControllerNotAvailable")
-}
-
-func TestNewAdminClientNilOptionsDoesNotPanic(t *testing.T) {
+func TestNewAdminClientNilOptionsReturnsError(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "franz-admin-nil-options")
-	require.NotPanics(t, func() {
-		client, err := NewAdminClient(context.Background(), changefeedID, nil, nil)
-		if client != nil {
-			client.Close()
-		}
-		require.Error(t, err)
-	})
+	client, err := NewAdminClient(context.Background(), changefeedID, nil, nil)
+	if client != nil {
+		client.Close()
+	}
+	require.Error(t, err)
 }

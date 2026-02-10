@@ -23,8 +23,6 @@ func TestFranzAdminClientAdapterCreateTopicNilDetailReturnsError(t *testing.T) {
 	t.Parallel()
 
 	adapter := &franzAdminClientAdapter{inner: nil}
-	require.NotPanics(t, func() {
-		err := adapter.CreateTopic(nil, false)
-		require.Error(t, err)
-	})
+	err := adapter.CreateTopic(nil, false)
+	require.Error(t, err)
 }

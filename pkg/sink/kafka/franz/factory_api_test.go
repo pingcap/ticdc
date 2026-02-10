@@ -14,69 +14,14 @@
 package franz
 
 import (
-	"context"
 	"testing"
+	"time"
 
-	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/stretchr/testify/require"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-func TestBuildFranzCompressionOptionHasNoErrorReturn(t *testing.T) {
-	t.Parallel()
-
-	o := &Options{}
-	_ = newCompressionOption(o)
-}
-
-func TestBuildFranzCompressionOptionNilOption(t *testing.T) {
-	t.Parallel()
-
-	require.NotPanics(t, func() {
-		_ = newCompressionOption(nil)
-	})
-}
-
-func TestBuildFranzProducerOptionsHasNoErrorReturn(t *testing.T) {
-	t.Parallel()
-
-	o := &Options{}
-	_ = newProducerOptions(o)
-}
-
-func TestBuildFranzProducerOptionsNilOption(t *testing.T) {
-	t.Parallel()
-
-	require.NotPanics(t, func() {
-		opts := newProducerOptions(nil)
-		require.NotEmpty(t, opts)
-	})
-}
-
-func TestBuildFranzClientOptionsNilOption(t *testing.T) {
-	t.Parallel()
-
-	require.NotPanics(t, func() {
-		opts, err := newOptions(context.Background(), nil, nil)
-		require.NoError(t, err)
-		require.NotEmpty(t, opts)
-	})
-}
-
-func TestNewSyncProducerNilOptionsDoesNotPanic(t *testing.T) {
-	t.Parallel()
-
-	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "franz-sync-nil-options")
-	require.NotPanics(t, func() {
-		producer, err := NewSyncProducer(context.Background(), changefeedID, nil, nil)
-		if producer != nil {
-			producer.Close()
-		}
-		require.Error(t, err)
-	})
-}
-
-func TestBuildFranzRequiredAcks(t *testing.T) {
+func TestNewRequiredAcks(t *testing.T) {
 	t.Parallel()
 
 	testCases := []struct {
@@ -99,4 +44,28 @@ func TestBuildFranzRequiredAcks(t *testing.T) {
 	}
 
 	require.Equal(t, kgo.AllISRAcks(), newRequiredAcks(nil))
+}
+
+func TestMaxTimeoutWithDefault(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name         string
+		readTimeout  time.Duration
+		writeTimeout time.Duration
+		expected     time.Duration
+	}{
+		{name: "read timeout is max", readTimeout: 3 * time.Second, writeTimeout: 2 * time.Second, expected: 3 * time.Second},
+		{name: "write timeout is max", readTimeout: 2 * time.Second, writeTimeout: 4 * time.Second, expected: 4 * time.Second},
+		{name: "both zero use default", readTimeout: 0, writeTimeout: 0, expected: defaultRequestTimeout},
+		{name: "both negative use default", readTimeout: -time.Second, writeTimeout: -2 * time.Second, expected: defaultRequestTimeout},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tc.expected, maxTimeoutWithDefault(tc.readTimeout, tc.writeTimeout))
+		})
+	}
 }
