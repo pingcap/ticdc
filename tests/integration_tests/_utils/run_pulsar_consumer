@@ -16,16 +16,18 @@ downstream_uri="mysql://root@127.0.0.1:3306/?safe-mode=true&batch-dml-enable=fal
 # When upstream enables table-across-nodes (multiple dispatchers/captures producing to the same topic),
 # the consumer can see out-of-order DML commitTs. The consumer needs scheduler.enable-table-across-nodes=true
 # to accept and reorder these fallback events instead of dropping them.
-has_config=false
+add_default_config=true
 for arg in "$@"; do
-	if [[ "$arg" == "--config" || "$arg" == --config=* ]]; then
-		has_config=true
+	case "$arg" in
+	--config | --config=*)
+		add_default_config=false
 		break
-	fi
+		;;
+	esac
 done
 
 consumer_config_args=()
-if [[ "$has_config" == "false" ]]; then
+if $add_default_config; then
 	consumer_replica_config="$workdir/pulsar_consumer_replica_config.toml"
 	cat >"$consumer_replica_config" <<-'EOF'
 		[scheduler]
