@@ -547,7 +547,8 @@ func forwardBarrierEvent(replication *replica.SpanReplication, event *BarrierEve
 		if blockState.BlockTs > event.commitTs {
 			return true
 		} else if blockState.BlockTs == event.commitTs {
-			// if replication is syncpoint, but event is not syncpoint, we can forward the event
+			// If the replication is already blocked by a syncpoint at the same ts, it must have
+			// processed the DDL barrier at that ts already (barrier events are ordered by (commitTs, isSyncPoint)).
 			if blockState.IsSyncPoint && !event.isSyncPoint {
 				return true
 			}
