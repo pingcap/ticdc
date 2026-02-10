@@ -91,6 +91,10 @@ func (d DispatcherID) Less(t any) bool {
 	return d.Low < cf.Low || d.Low == cf.Low && d.High < cf.High
 }
 
+func (d DispatcherID) IsZero() bool {
+	return d.Low == 0 && d.High == 0
+}
+
 type SchemaID int64
 
 type GID struct {

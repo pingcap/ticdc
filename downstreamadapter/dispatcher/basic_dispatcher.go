@@ -141,9 +141,9 @@ type BasicDispatcher struct {
 	//    to avoid duplicate writes while ensuring the DDL is replayed.
 	// Note: When is_syncpoint=true AND finished=0 (DDL finished but syncpoint not finished),
 	// skipDMLAsStartTs is false because the DDL is already completed and DML should be processed normally.
-	// 2. maintainer ask dispatcher to make a move operator, while the dispatcher just dealing with a ddl event.
-	//    and the block state for ddl event is still waiting.
-	//    In this case, we also return startTs = ddlTs-1 to replay the DDL but skip the dmls.
+	// 2. maintainer asks dispatcher manager to move/recreate a dispatcher while this dispatcher is still
+	//    in the WAITING stage of a DDL barrier.
+	//    In this case, we also return startTs = ddlTs-1 to replay the DDL but skip the DMLs at ddlTs.
 	skipDMLAsStartTs bool
 	// The ts from pdClock when the dispatcher is created.
 	// when downstream is mysql-class, for dml event we need to compare the commitTs with this ts
@@ -667,6 +667,11 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 	return false
 }
 
+// ExecuteBlockEventDDL writes the block event to the sink and then reports DONE to the maintainer.
+//
+// It is invoked via the block-event executor to avoid blocking the dynamic stream goroutine on downstream IO
+// (DDL execution / syncpoint flush). Keeping the write-report-wake sequence in a dedicated method also makes it
+// easier for tests and failpoints to control interleavings around block events.
 func (d *BasicDispatcher) ExecuteBlockEventDDL(pendingEvent commonEvent.BlockEvent, actionCommitTs uint64, actionIsSyncPoint bool) {
 	failpoint.Inject("BlockOrWaitBeforeWrite", nil)
 	err := d.AddBlockEventToSink(pendingEvent)
@@ -859,8 +864,9 @@ func (d *BasicDispatcher) cancelResendTask(identifier BlockEventIdentifier) {
 func (d *BasicDispatcher) tryDealWithHeldBlockEvent() {
 	// If there is a held DB/All block event, report it as soon as all resend tasks are ACKed.
 	// For schedule-related non-blocking DDLs, the maintainer only ACKs after scheduling is done.
-	// For schedule-related blocking DDLs, the maintainer will only begin deal with after no pending scheduling tasks.
-	// Thus, we ensure DB/All block events can genereate correct range checkers.
+	// For schedule-related blocking DDLs, the maintainer will only begin dealing with them after there are
+	// no pending scheduling tasks.
+	// Thus, we ensure DB/All block events can generate correct range checkers.
 	if d.pendingACKCount.Load() == 0 {
 		if holding := d.popHoldingBlockEvent(); holding != nil {
 			d.reportBlockedEventToMaintainer(holding)
@@ -931,6 +937,11 @@ func (d *BasicDispatcher) reportBlockedEventToMaintainer(event commonEvent.Block
 	d.sharedInfo.blockStatusesChan <- message
 }
 
+// GetBlockEventStatus returns the current in-flight *blocking* barrier state for bootstrap.
+//
+// We only report statuses for events that actually block the event stream (multi-table DDLs, split-span DDLs,
+// and syncpoints). Non-blocking DDLs that only add/drop tables are reported separately and can be recovered by
+// the maintainer from the table trigger dispatcher's startTs, so they don't need to be restored here.
 func (d *BasicDispatcher) GetBlockEventStatus() *heartbeatpb.State {
 	pendingEvent, blockStage := d.blockEventStatus.getEventAndStage()
 
@@ -966,6 +977,9 @@ func (d *BasicDispatcher) Remove() {
 // TryClose will return the watermark of current dispatcher, and return true when the dispatcher finished sending events to sink.
 // DispatcherManager will clean the dispatcher info after Remove() is called.
 func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
+	failpoint.Inject("NotReadyToCloseDispatcher", func() {
+		failpoint.Return(w, false)
+	})
 	// If sink is normal(not meet error), we need to wait all the events in sink to flushed downstream successfully
 	// If sink is not normal, we can close the dispatcher immediately.
 	if !d.sink.IsNormal() || (d.tableProgress.Empty() && !d.duringHandleEvents.Load()) {
