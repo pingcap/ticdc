@@ -41,8 +41,9 @@ type saramaAsyncProducer struct {
 }
 
 type messageMetadata struct {
-	callback func()
-	logInfo  *common.MessageLogInfo
+	callback    func()
+	logInfo     *common.MessageLogInfo
+	recoverInfo *common.MessageRecoverInfo
 }
 
 func (p *saramaAsyncProducer) Close() {
@@ -118,8 +119,8 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 				switch meta := ack.Metadata.(type) {
 				case *messageMetadata:
 					if meta != nil {
-						if p.transientErrorReporter != nil && meta.logInfo != nil {
-							p.transientErrorReporter.Ack(meta.logInfo.DispatcherIDs, meta.logInfo.DispatcherEpochs)
+						if p.transientErrorReporter != nil && meta.recoverInfo != nil {
+							p.transientErrorReporter.Ack(meta.recoverInfo.Dispatchers)
 						}
 						if meta.callback != nil {
 							meta.callback()
@@ -161,11 +162,11 @@ func (p *saramaAsyncProducer) reportTransientError(err *sarama.ProducerError) bo
 	if err == nil || p.transientErrorReporter == nil {
 		return false
 	}
-	logInfo := extractLogInfo(err.Msg)
-	if logInfo == nil || len(logInfo.DispatcherIDs) == 0 {
+	recoverInfo := extractRecoverInfo(err.Msg)
+	if recoverInfo == nil || len(recoverInfo.Dispatchers) == 0 {
 		return false
 	}
-	reportDispatchers, handled := p.transientErrorReporter.Report(time.Now(), logInfo.DispatcherIDs, logInfo.DispatcherEpochs)
+	reportDispatchers, handled := p.transientErrorReporter.Report(time.Now(), recoverInfo.Dispatchers)
 	if !handled {
 		return false
 	}
@@ -229,15 +230,17 @@ func (p *saramaAsyncProducer) AsyncSend(
 		p.failpointCh <- &sarama.ProducerError{
 			Err: errors.New("kafka sink injected error"),
 			Msg: &sarama.ProducerMessage{Metadata: &messageMetadata{
-				callback: message.Callback,
-				logInfo:  message.LogInfo,
+				callback:    message.Callback,
+				logInfo:     message.LogInfo,
+				recoverInfo: message.RecoverInfo,
 			}},
 		}
 		failpoint.Return(nil)
 	})
 	meta := &messageMetadata{
-		callback: message.Callback,
-		logInfo:  message.LogInfo,
+		callback:    message.Callback,
+		logInfo:     message.LogInfo,
+		recoverInfo: message.RecoverInfo,
 	}
 	msg := &sarama.ProducerMessage{
 		Topic:     topic,
@@ -263,4 +266,15 @@ func extractLogInfo(msg *sarama.ProducerMessage) *common.MessageLogInfo {
 		return nil
 	}
 	return meta.logInfo
+}
+
+func extractRecoverInfo(msg *sarama.ProducerMessage) *common.MessageRecoverInfo {
+	if msg == nil {
+		return nil
+	}
+	meta, ok := msg.Metadata.(*messageMetadata)
+	if !ok || meta == nil {
+		return nil
+	}
+	return meta.recoverInfo
 }

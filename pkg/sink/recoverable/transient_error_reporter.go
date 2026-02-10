@@ -7,9 +7,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 )
 
-type reportedDispatcherEpoch struct {
-	dispatcherID common.DispatcherID
-	epoch        uint64
+type DispatcherEpoch struct {
+	DispatcherID common.DispatcherID
+	Epoch        uint64
 }
 
 // TransientErrorReporter deduplicates transient error reports by dispatcher and epoch,
@@ -17,13 +17,13 @@ type reportedDispatcherEpoch struct {
 type TransientErrorReporter struct {
 	mu       sync.Mutex
 	outputCh chan<- *ErrorEvent
-	reported map[reportedDispatcherEpoch]struct{}
+	reported map[DispatcherEpoch]struct{}
 }
 
 func NewTransientErrorReporter(outputCh chan<- *ErrorEvent) *TransientErrorReporter {
 	return &TransientErrorReporter{
 		outputCh: outputCh,
-		reported: make(map[reportedDispatcherEpoch]struct{}),
+		reported: make(map[DispatcherEpoch]struct{}),
 	}
 }
 
@@ -40,10 +40,9 @@ func (r *TransientErrorReporter) SetOutput(outputCh chan<- *ErrorEvent) {
 // - handled=false when this reporter cannot handle it (e.g. output channel unavailable/full).
 func (r *TransientErrorReporter) Report(
 	now time.Time,
-	dispatcherIDs []common.DispatcherID,
-	dispatcherEpochs map[common.DispatcherID]uint64,
+	dispatchers []DispatcherEpoch,
 ) ([]common.DispatcherID, bool) {
-	if len(dispatcherIDs) == 0 {
+	if len(dispatchers) == 0 {
 		return nil, false
 	}
 
@@ -54,21 +53,22 @@ func (r *TransientErrorReporter) Report(
 		return nil, false
 	}
 
-	reportedNow := make([]common.DispatcherID, 0, len(dispatcherIDs))
-	seenIDs := make(map[common.DispatcherID]struct{}, len(dispatcherIDs))
-	for _, dispatcherID := range dispatcherIDs {
-		if _, ok := seenIDs[dispatcherID]; ok {
+	reportedNow := make([]common.DispatcherID, 0, len(dispatchers))
+	reportedKeys := make([]DispatcherEpoch, 0, len(dispatchers))
+	seenDispatchers := make(map[DispatcherEpoch]struct{}, len(dispatchers))
+	for _, dispatcher := range dispatchers {
+		if dispatcher.DispatcherID == (common.DispatcherID{}) {
 			continue
 		}
-		seenIDs[dispatcherID] = struct{}{}
-		key := reportedDispatcherEpoch{
-			dispatcherID: dispatcherID,
-			epoch:        getDispatcherEpoch(dispatcherEpochs, dispatcherID),
-		}
-		if _, ok := r.reported[key]; ok {
+		if _, ok := seenDispatchers[dispatcher]; ok {
 			continue
 		}
-		reportedNow = append(reportedNow, dispatcherID)
+		seenDispatchers[dispatcher] = struct{}{}
+		if _, ok := r.reported[dispatcher]; ok {
+			continue
+		}
+		reportedNow = append(reportedNow, dispatcher.DispatcherID)
+		reportedKeys = append(reportedKeys, dispatcher)
 	}
 
 	if len(reportedNow) == 0 {
@@ -82,11 +82,7 @@ func (r *TransientErrorReporter) Report(
 
 	select {
 	case r.outputCh <- event:
-		for _, dispatcherID := range reportedNow {
-			key := reportedDispatcherEpoch{
-				dispatcherID: dispatcherID,
-				epoch:        getDispatcherEpoch(dispatcherEpochs, dispatcherID),
-			}
+		for _, key := range reportedKeys {
 			r.reported[key] = struct{}{}
 		}
 		return reportedNow, true
@@ -98,10 +94,9 @@ func (r *TransientErrorReporter) Report(
 // Ack clears reported state for the successful dispatcher epoch,
 // allowing future transient errors in the same epoch to be reported again.
 func (r *TransientErrorReporter) Ack(
-	dispatcherIDs []common.DispatcherID,
-	dispatcherEpochs map[common.DispatcherID]uint64,
+	dispatchers []DispatcherEpoch,
 ) {
-	if len(dispatcherIDs) == 0 {
+	if len(dispatchers) == 0 {
 		return
 	}
 	r.mu.Lock()
@@ -110,18 +105,10 @@ func (r *TransientErrorReporter) Ack(
 	if len(r.reported) == 0 {
 		return
 	}
-	for _, dispatcherID := range dispatcherIDs {
-		key := reportedDispatcherEpoch{
-			dispatcherID: dispatcherID,
-			epoch:        getDispatcherEpoch(dispatcherEpochs, dispatcherID),
+	for _, dispatcher := range dispatchers {
+		if dispatcher.DispatcherID == (common.DispatcherID{}) {
+			continue
 		}
-		delete(r.reported, key)
+		delete(r.reported, dispatcher)
 	}
-}
-
-func getDispatcherEpoch(dispatcherEpochs map[common.DispatcherID]uint64, dispatcherID common.DispatcherID) uint64 {
-	if len(dispatcherEpochs) == 0 {
-		return 0
-	}
-	return dispatcherEpochs[dispatcherID]
 }

@@ -13,20 +13,19 @@ func TestTransientErrorReporter_ReportOncePerDispatcherEpoch(t *testing.T) {
 	reporter := NewTransientErrorReporter(ch)
 
 	dispatcherID := common.NewDispatcherID()
-	dispatcherIDs := []common.DispatcherID{dispatcherID}
-	epochs := map[common.DispatcherID]uint64{dispatcherID: 1}
+	dispatchers := []DispatcherEpoch{{DispatcherID: dispatcherID, Epoch: 1}}
 
-	reported, handled := reporter.Report(time.Now(), dispatcherIDs, epochs)
+	reported, handled := reporter.Report(time.Now(), dispatchers)
 	require.True(t, handled)
-	require.Equal(t, dispatcherIDs, reported)
+	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
 	select {
 	case event := <-ch:
-		require.Equal(t, dispatcherIDs, event.DispatcherIDs)
+		require.Equal(t, []common.DispatcherID{dispatcherID}, event.DispatcherIDs)
 	default:
 		t.Fatal("expected recoverable event to be sent")
 	}
 
-	reported, handled = reporter.Report(time.Now(), dispatcherIDs, epochs)
+	reported, handled = reporter.Report(time.Now(), dispatchers)
 	require.True(t, handled)
 	require.Empty(t, reported)
 	select {
@@ -35,13 +34,13 @@ func TestTransientErrorReporter_ReportOncePerDispatcherEpoch(t *testing.T) {
 	default:
 	}
 
-	epochs[dispatcherID] = 2
-	reported, handled = reporter.Report(time.Now(), dispatcherIDs, epochs)
+	dispatchers[0].Epoch = 2
+	reported, handled = reporter.Report(time.Now(), dispatchers)
 	require.True(t, handled)
-	require.Equal(t, dispatcherIDs, reported)
+	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
 	select {
 	case event := <-ch:
-		require.Equal(t, dispatcherIDs, event.DispatcherIDs)
+		require.Equal(t, []common.DispatcherID{dispatcherID}, event.DispatcherIDs)
 	default:
 		t.Fatal("expected recoverable event for new epoch")
 	}
@@ -52,25 +51,24 @@ func TestTransientErrorReporter_AckAllowsReportingSameEpochAgain(t *testing.T) {
 	reporter := NewTransientErrorReporter(ch)
 
 	dispatcherID := common.NewDispatcherID()
-	dispatcherIDs := []common.DispatcherID{dispatcherID}
-	epochs := map[common.DispatcherID]uint64{dispatcherID: 10}
+	dispatchers := []DispatcherEpoch{{DispatcherID: dispatcherID, Epoch: 10}}
 
-	reported, handled := reporter.Report(time.Now(), dispatcherIDs, epochs)
+	reported, handled := reporter.Report(time.Now(), dispatchers)
 	require.True(t, handled)
-	require.Equal(t, dispatcherIDs, reported)
+	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
 	<-ch
 
-	reported, handled = reporter.Report(time.Now(), dispatcherIDs, epochs)
+	reported, handled = reporter.Report(time.Now(), dispatchers)
 	require.True(t, handled)
 	require.Empty(t, reported)
 
-	reporter.Ack(dispatcherIDs, epochs)
-	reported, handled = reporter.Report(time.Now(), dispatcherIDs, epochs)
+	reporter.Ack(dispatchers)
+	reported, handled = reporter.Report(time.Now(), dispatchers)
 	require.True(t, handled)
-	require.Equal(t, dispatcherIDs, reported)
+	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
 	select {
 	case event := <-ch:
-		require.Equal(t, dispatcherIDs, event.DispatcherIDs)
+		require.Equal(t, []common.DispatcherID{dispatcherID}, event.DispatcherIDs)
 	default:
 		t.Fatal("expected event after ack clears reported state")
 	}
@@ -81,8 +79,7 @@ func TestTransientErrorReporter_ReportReturnsFalseWhenOutputUnavailable(t *testi
 	dispatcherID := common.NewDispatcherID()
 	reported, handled := reporter.Report(
 		time.Now(),
-		[]common.DispatcherID{dispatcherID},
-		map[common.DispatcherID]uint64{dispatcherID: 1},
+		[]DispatcherEpoch{{DispatcherID: dispatcherID, Epoch: 1}},
 	)
 	require.False(t, handled)
 	require.Empty(t, reported)

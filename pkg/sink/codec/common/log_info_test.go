@@ -45,8 +45,6 @@ func TestBuildMessageLogInfo(t *testing.T) {
 
 	info := buildMessageLogInfo([]*commonEvent.RowEvent{rowEvent})
 	require.NotNil(t, info)
-	require.Len(t, info.DispatcherIDs, 1)
-	require.Equal(t, dispatcherID, info.DispatcherIDs[0])
 	require.Len(t, info.Rows, 1)
 	rowInfo := info.Rows[0]
 	require.Equal(t, "insert", rowInfo.Type)
@@ -87,8 +85,6 @@ func TestAttachMessageLogInfo(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NotNil(t, message.LogInfo)
-	require.Len(t, message.LogInfo.DispatcherIDs, 1)
-	require.Equal(t, dispatcherID, message.LogInfo.DispatcherIDs[0])
 	require.Len(t, message.LogInfo.Rows, 1)
 	require.Equal(t, "insert", message.LogInfo.Rows[0].Type)
 	require.Equal(t, dml.StartTs, message.LogInfo.Rows[0].StartTs)

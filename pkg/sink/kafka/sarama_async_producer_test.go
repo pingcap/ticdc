@@ -100,8 +100,10 @@ func TestSaramaAsyncProducer_TransientKErrorDoesNotExitAndReports(t *testing.T) 
 			Topic:     "test-topic",
 			Partition: 0,
 			Metadata: &messageMetadata{
-				logInfo: &codecCommon.MessageLogInfo{
-					DispatcherIDs: []common.DispatcherID{dispatcherID},
+				recoverInfo: &codecCommon.MessageRecoverInfo{
+					Dispatchers: []recoverable.DispatcherEpoch{
+						{DispatcherID: dispatcherID, Epoch: 1},
+					},
 				},
 			},
 		},
@@ -193,10 +195,9 @@ func TestSaramaAsyncProducer_TransientKErrorReportsOncePerDispatcherEpoch(t *tes
 				Topic:     "test-topic",
 				Partition: 0,
 				Metadata: &messageMetadata{
-					logInfo: &codecCommon.MessageLogInfo{
-						DispatcherIDs: []common.DispatcherID{dispatcherID},
-						DispatcherEpochs: map[common.DispatcherID]uint64{
-							dispatcherID: epoch,
+					recoverInfo: &codecCommon.MessageRecoverInfo{
+						Dispatchers: []recoverable.DispatcherEpoch{
+							{DispatcherID: dispatcherID, Epoch: epoch},
 						},
 					},
 				},
