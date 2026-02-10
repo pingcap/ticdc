@@ -28,9 +28,9 @@ consumer_config_args=()
 if [[ "$has_config" == "false" ]]; then
 	consumer_replica_config="$workdir/pulsar_consumer_replica_config.toml"
 	cat >"$consumer_replica_config" <<-'EOF'
-[scheduler]
-enable-table-across-nodes=true
-EOF
+		[scheduler]
+		enable-table-across-nodes=true
+	EOF
 	consumer_config_args=(--config "$consumer_replica_config")
 fi
 
