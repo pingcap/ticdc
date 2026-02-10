@@ -50,6 +50,7 @@ func (h *incHandler) Handle(dest D, events ...*inc) (await bool) {
 
 func (h *incHandler) GetSize(event *inc) int            { return 0 }
 func (h *incHandler) GetArea(path string, dest D) int   { return 0 }
+func (h *incHandler) GetMetricLabel(dest D) string      { return "test" }
 func (h *incHandler) GetTimestamp(event *inc) Timestamp { return 0 }
 func (h *incHandler) GetType(event *inc) EventType      { return DefaultEventType }
 func (h *incHandler) IsPaused(event *inc) bool          { return false }
@@ -58,8 +59,8 @@ func (h *incHandler) OnDrop(event *inc) interface{}     { return nil }
 func runStream(eventCount int, times int) {
 	handler := &incHandler{}
 
-	pi := newPathInfo[int, string, *inc, D, *incHandler](0, "p1", D{})
-	stream := newStream[int, string, *inc, D](1 /*id*/, handler, NewOption())
+	pi := newPathInfo[int, string, *inc, D, *incHandler](0, "test", "p1", D{})
+	stream := newStream[int, string, *inc, D](1 /*id*/, "test", handler, NewOption())
 	stream.start()
 
 	total := &atomic.Int64{}
@@ -417,7 +418,7 @@ func runReceiverBenchmark(eventCount int, withContext bool) {
 	}()
 
 	// Send events
-	pi := newPathInfo[int, string, *inc, D, *incHandler](0, "p1", D{})
+	pi := newPathInfo[int, string, *inc, D, *incHandler](0, "test", "p1", D{})
 	for i := 0; i < eventCount; i++ {
 		event := eventWrap[int, string, *inc, D, *incHandler]{
 			event:    &inc{times: 1, n: &atomic.Int64{}, done: &sync.WaitGroup{}},

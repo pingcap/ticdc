@@ -132,6 +132,8 @@ EOF
 	kill $dml_pid || true
 	wait $dml_pid || true
 
+	sleep 15
+
 	table_id=$(get_table_id "$DB_NAME" "$TABLE_NAME")
 	move_table_with_retry "127.0.0.1:8301" $table_id "$CHANGEFEED_ID" 10
 

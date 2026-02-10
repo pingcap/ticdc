@@ -123,6 +123,7 @@ func Balance[T replica.ReplicationID, R replica.Replication[T]](
 			// update the task size priority queue
 			target.Load++
 			victim.Load--
+			clear(victim.Tasks[:1])
 			victim.Tasks = victim.Tasks[1:]
 			movedSize++
 			if movedSize >= batchSize || movedSize >= totalMoveSize {

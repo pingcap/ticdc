@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	ptypes "github.com/pingcap/tidb/pkg/parser/types"
@@ -87,20 +88,17 @@ func ExtractFlenDecimal(mysqlType string, tp byte) (int, int) {
 	start := strings.Index(mysqlType, "(")
 	end := strings.Index(mysqlType, ")")
 	if start == -1 || end == -1 {
-		if strings.HasPrefix("mysqlType", "bit") {
-			return 8, 0
-		}
 		return mysql.GetDefaultFieldLengthAndDecimal(tp)
 	}
 
 	data := strings.Split(mysqlType[start+1:end], ",")
 	flen, err := strconv.ParseInt(data[0], 10, 64)
 	if err != nil {
-		log.Panic("parse flen failed", zap.String("flen", data[0]), zap.Error(err))
+		log.Panic("parse flen failed", zap.String("flen", data[0]), zap.String("mysqlType", mysqlType), zap.Error(err))
 	}
 
 	if len(data) != 2 {
-		return int(flen), types.UnspecifiedLength
+		return int(flen), types.MaxFsp
 	}
 
 	decimal, err := strconv.ParseInt(data[1], 10, 64)
@@ -129,7 +127,7 @@ func ExtractDecimal(mysqlType string) int {
 	start := strings.Index(mysqlType, "(")
 	end := strings.Index(mysqlType, ")")
 	if start == -1 || end == -1 {
-		return 0
+		return types.MaxFsp
 	}
 	decimal := mysqlType[start+1 : end]
 	result, err := strconv.ParseInt(decimal, 10, 64)
@@ -303,7 +301,7 @@ func queryRowChecksumAux(
 	err = conn.QueryRowContext(ctx, query).Scan(&result)
 	if err != nil {
 		log.Panic("scan row failed",
-			zap.String("query", query),
+			zap.String("query", util.RedactValue(query)),
 			zap.String("schema", schema), zap.String("table", table),
 			zap.Uint64("commitTs", commitTs), zap.Error(err))
 	}
@@ -354,7 +352,7 @@ func MustSnapshotQuery(
 	rows, err := conn.QueryContext(ctx, query)
 	if err != nil {
 		log.Panic("query row failed",
-			zap.String("query", query),
+			zap.String("query", util.RedactValue(query)),
 			zap.String("schema", schema), zap.String("table", table),
 			zap.Uint64("commitTs", commitTs), zap.Error(err))
 	}
@@ -363,7 +361,7 @@ func MustSnapshotQuery(
 	holder, err := newColumnHolder(rows)
 	if err != nil {
 		log.Panic("obtain the columns holder failed",
-			zap.String("query", query),
+			zap.String("query", util.RedactValue(query)),
 			zap.String("schema", schema), zap.String("table", table),
 			zap.Uint64("commitTs", commitTs), zap.Error(err))
 	}
@@ -371,7 +369,7 @@ func MustSnapshotQuery(
 		err = rows.Scan(holder.ValuePointers...)
 		if err != nil {
 			log.Panic("scan row failed",
-				zap.String("query", query),
+				zap.String("query", util.RedactValue(query)),
 				zap.String("schema", schema), zap.String("table", table),
 				zap.Uint64("commitTs", commitTs), zap.Error(err))
 		}

@@ -65,6 +65,14 @@ var (
 			Name:      "dml_event_count",
 			Help:      "Total count of DML events.",
 		}, []string{getKeyspaceLabel(), "changefeed"})
+
+	ActiveActiveConflictSkipRowsCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "active_active_conflict_skip_rows_total",
+			Help:      "Total number of rows skipped due to last-write-wins conflict resolution in TiDB active-active replication.",
+		}, []string{getKeyspaceLabel(), "changefeed"})
 	// ExecutionErrorCounter is the counter of execution errors.
 	ExecutionErrorCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -223,6 +231,7 @@ func initSinkMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(TotalWriteBytesCounter)
 	registry.MustRegister(EventSizeHistogram)
 	registry.MustRegister(ExecDMLEventCounter)
+	registry.MustRegister(ActiveActiveConflictSkipRowsCounter)
 	registry.MustRegister(ExecutionErrorCounter)
 
 	// txn sink metrics
@@ -243,4 +252,7 @@ func initSinkMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(WorkerBatchDuration)
 	registry.MustRegister(CheckpointTsMessageDuration)
 	registry.MustRegister(CheckpointTsMessageCount)
+
+	// pulsar sink metrics
+	initPulsarMetrics(registry)
 }

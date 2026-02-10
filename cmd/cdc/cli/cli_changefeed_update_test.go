@@ -120,6 +120,8 @@ func TestChangefeedUpdateCli(t *testing.T) {
 				Sink: &v2.SinkConfig{},
 			},
 		}, nil)
+	f.changefeeds.EXPECT().GetAllTables(gomock.Any(), gomock.Any(), "ks").
+		Return(&v2.Tables{}, nil)
 	f.changefeeds.EXPECT().Update(gomock.Any(), gomock.Any(), "ks", "abc").
 		Return(&v2.ChangeFeedInfo{}, nil)
 	dir := t.TempDir()
