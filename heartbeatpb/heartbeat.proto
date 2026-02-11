@@ -126,6 +126,27 @@ message MaintainerHeartbeat {
     repeated MaintainerStatus statuses = 1;
 }
 
+enum NodeLiveness {
+    ALIVE = 0;
+    DRAINING = 1;
+    STOPPING = 2;
+}
+
+message NodeHeartbeat {
+    NodeLiveness liveness = 1;
+    uint64 node_epoch = 2;
+}
+
+message SetNodeLivenessRequest {
+    NodeLiveness target = 1;
+    uint64 node_epoch = 2;
+}
+
+message SetNodeLivenessResponse {
+    NodeLiveness applied = 1;
+    uint64 node_epoch = 2;
+}
+
 message MaintainerStatus {
     ChangefeedID changefeedID = 1;
     string feed_state = 2;

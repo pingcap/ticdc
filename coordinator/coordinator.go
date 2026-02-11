@@ -416,6 +416,28 @@ func (c *coordinator) RequestResolvedTsFromLogCoordinator(ctx context.Context, c
 	c.controller.RequestResolvedTsFromLogCoordinator(ctx, changefeedDisplayName)
 }
 
+func (c *coordinator) DrainNode(_ context.Context, targetNodeID string) (int, error) {
+	target := node.ID(targetNodeID)
+	if target.IsEmpty() {
+		return 0, errors.ErrAPIInvalidParam.GenWithStackByArgs("empty capture_id")
+	}
+	if c.nodeInfo != nil && c.nodeInfo.ID == target {
+		return 0, errors.ErrSchedulerRequestFailed.GenWithStackByArgs("can not drain coordinator node")
+	}
+
+	c.controller.RequestDrain(target)
+	summary := c.controller.DrainSummary(target)
+	log.Info("drain node requested",
+		zap.Stringer("targetNode", target),
+		zap.Int("remaining", summary.remaining),
+		zap.Int("maintainersOnTarget", summary.maintainersOnTarget),
+		zap.Int("inflightOperatorCount", summary.inflightOperatorCount),
+		zap.Bool("drainingObserved", summary.drainingObserved),
+		zap.Bool("stoppingObserved", summary.stoppingObserved),
+		zap.String("nodeLiveness", summary.nodeLiveness.String()))
+	return summary.remaining, nil
+}
+
 func (c *coordinator) sendMessages(msgs []*messaging.TargetMessage) {
 	for _, msg := range msgs {
 		err := c.mc.SendCommand(msg)

@@ -64,6 +64,7 @@ type Controller struct {
 	pdClock            pdutil.Clock
 	scheduler          *scheduler.Controller
 	operatorController *operator.Controller
+	drainController    *drainController
 	changefeedDB       *changefeed.ChangefeedDB
 	backend            changefeed.Backend
 	eventCh            *chann.DrainableChann[*Event]
@@ -119,16 +120,29 @@ func NewController(
 	changefeedDB := changefeed.NewChangefeedDB(version)
 
 	oc := operator.NewOperatorController(selfNode, changefeedDB, backend, batchSize)
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeLivenessView := newNodeLivenessView(nodeHeartbeatTTL)
+	messageCenter := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
+	drainCtl := newDrainController(selfNode.ID, nodeLivenessView, nodeManager, messageCenter, oc, changefeedDB)
 	c := &Controller{
 		version:     version,
 		selfNode:    selfNode,
 		initialized: atomic.NewBool(false),
 		scheduler: scheduler.NewController(map[string]scheduler.Scheduler{
+			scheduler.DrainScheduler: coscheduler.NewDrainScheduler(
+				batchSize,
+				oc,
+				changefeedDB,
+				newControllerDrainView(drainCtl),
+			),
 			scheduler.BasicScheduler: coscheduler.NewBasicScheduler(
 				selfNode.ID.String(),
 				batchSize,
 				oc,
 				changefeedDB,
+				func() []node.ID {
+					return drainCtl.getSchedulableDestNodeIDs(nodeManager.GetAliveNodes(), time.Now())
+				},
 			),
 			scheduler.BalanceScheduler: coscheduler.NewBalanceScheduler(
 				selfNode.ID.String(),
@@ -136,13 +150,17 @@ func NewController(
 				oc,
 				changefeedDB,
 				balanceInterval,
+				func() map[node.ID]*node.Info {
+					return drainCtl.getSchedulableDestNodes(nodeManager.GetAliveNodes(), time.Now())
+				},
 			),
 		}),
 		eventCh:            eventCh,
 		operatorController: oc,
-		messageCenter:      appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
+		drainController:    drainCtl,
+		messageCenter:      messageCenter,
 		changefeedDB:       changefeedDB,
-		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
+		nodeManager:        nodeManager,
 		taskScheduler:      threadpool.NewThreadPoolDefault(),
 		backend:            backend,
 		changefeedChangeCh: changefeedChangeCh,
@@ -254,6 +272,7 @@ func (c *Controller) checkOnNodeChanged(ctx context.Context) {
 		c.onNodeChanged(ctx)
 		c.nodeChanged.changed = false
 	}
+	c.handleDrainOnPeriodTask()
 }
 
 func (c *Controller) onPeriodTask() {
@@ -261,6 +280,20 @@ func (c *Controller) onPeriodTask() {
 	requests := c.bootstrapper.ResendBootstrapMessage()
 	for _, req := range requests {
 		_ = c.messageCenter.SendCommand(req)
+	}
+}
+
+func (c *Controller) handleDrainOnPeriodTask() {
+	now := time.Now()
+	drainNodes := c.drainController.listDrainNodes()
+	for _, targetNode := range drainNodes {
+		if c.drainController.shouldSendDrainRequest(targetNode, now) {
+			c.drainController.sendSetNodeLivenessRequest(targetNode, heartbeatpb.NodeLiveness_DRAINING)
+		}
+		if c.drainController.canPromoteToStopping(targetNode, now) &&
+			c.drainController.shouldSendStopRequest(targetNode, now) {
+			c.drainController.sendSetNodeLivenessRequest(targetNode, heartbeatpb.NodeLiveness_STOPPING)
+		}
 	}
 }
 
@@ -272,6 +305,16 @@ func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage
 		if c.bootstrapper.AllNodesReady() {
 			req := msg.Message[0].(*heartbeatpb.MaintainerHeartbeat)
 			c.handleMaintainerStatus(msg.From, req.Statuses)
+		}
+	case messaging.TypeNodeHeartbeatRequest:
+		if c.bootstrapper.AllNodesReady() {
+			req := msg.Message[0].(*heartbeatpb.NodeHeartbeat)
+			c.drainController.handleNodeHeartbeat(msg.From, req, time.Now())
+		}
+	case messaging.TypeSetNodeLivenessResponse:
+		if c.bootstrapper.AllNodesReady() {
+			resp := msg.Message[0].(*heartbeatpb.SetNodeLivenessResponse)
+			c.drainController.handleSetNodeLivenessResponse(msg.From, resp)
 		}
 	case messaging.TypeLogCoordinatorResolvedTsResponse:
 		c.onLogCoordinatorReportResolvedTs(msg)
@@ -869,6 +912,14 @@ func (c *Controller) calculateGlobalGCSafepoint() uint64 {
 
 func (c *Controller) calculateKeyspaceGCBarrier() map[common.KeyspaceMeta]uint64 {
 	return c.changefeedDB.CalculateKeyspaceGCBarrier()
+}
+
+func (c *Controller) RequestDrain(targetNode node.ID) {
+	c.drainController.requestDrain(targetNode)
+}
+
+func (c *Controller) DrainSummary(targetNode node.ID) drainSummary {
+	return c.drainController.summarizeDrain(targetNode, time.Now())
 }
 
 func shouldRunChangefeed(state config.FeedState) bool {

@@ -18,11 +18,9 @@ import (
 
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	"github.com/pingcap/ticdc/coordinator/operator"
-	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/node"
 	pkgScheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
-	"github.com/pingcap/ticdc/server/watcher"
 )
 
 // basicScheduler generates operators for the spans, and push them to the operator controller
@@ -32,22 +30,23 @@ type basicScheduler struct {
 	id        string
 	batchSize int
 
-	operatorController *operator.Controller
-	changefeedDB       *changefeed.ChangefeedDB
-	nodeManager        *watcher.NodeManager
+	operatorController    *operator.Controller
+	changefeedDB          *changefeed.ChangefeedDB
+	getSchedulableNodeIDs func() []node.ID
 }
 
 func NewBasicScheduler(
 	id string, batchSize int,
 	oc *operator.Controller,
 	changefeedDB *changefeed.ChangefeedDB,
+	getSchedulableNodeIDs func() []node.ID,
 ) *basicScheduler {
 	return &basicScheduler{
-		id:                 id,
-		batchSize:          batchSize,
-		operatorController: oc,
-		changefeedDB:       changefeedDB,
-		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
+		id:                    id,
+		batchSize:             batchSize,
+		operatorController:    oc,
+		changefeedDB:          changefeedDB,
+		getSchedulableNodeIDs: getSchedulableNodeIDs,
 	}
 }
 
@@ -74,7 +73,10 @@ func (s *basicScheduler) doBasicSchedule(availableSize int) {
 	absentChangefeeds := s.changefeedDB.GetAbsentByGroup(id, availableSize)
 	nodeTaskSize := s.changefeedDB.GetTaskSizePerNodeByGroup(id)
 	// add the absent node to the node size map
-	nodeIDs := s.nodeManager.GetAliveNodeIDs()
+	nodeIDs := s.getSchedulableNodeIDs()
+	if len(nodeIDs) == 0 {
+		return
+	}
 	nodeSize := make(map[node.ID]int)
 	for _, id := range nodeIDs {
 		nodeSize[id] = nodeTaskSize[id]

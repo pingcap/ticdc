@@ -19,7 +19,6 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-	"sync/atomic"
 
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/log"
@@ -189,28 +188,41 @@ func (o *OpenAPIV1) rebalanceTables(c *gin.Context) {
 	c.Status(http.StatusAccepted)
 }
 
-// drainCapture drains all tables from a capture.
+// drainCapture triggers node drain for the given capture ID.
 // Usage:
 // curl -X PUT http://127.0.0.1:8300/api/v1/captures/drain
-// TODO: Implement this API in the future, currently it is a no-op.
+// The response field name keeps API compatibility with old architecture and
+// represents remaining drain work instead of a literal table count.
 func (o *OpenAPIV1) drainCapture(c *gin.Context) {
 	var req drainCaptureRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.Wrap(err))
 		return
 	}
-	drainCaptureCounter.Add(1)
-	if drainCaptureCounter.Load()%10 == 0 {
-		log.Info("api v1 drainCapture", zap.Any("captureID", req.CaptureID), zap.Int64("currentTableCount", drainCaptureCounter.Load()))
-		c.JSON(http.StatusAccepted, &drainCaptureResp{
-			CurrentTableCount: 10,
-		})
-	} else {
-		log.Info("api v1 drainCapture done", zap.Any("captureID", req.CaptureID), zap.Int64("currentTableCount", drainCaptureCounter.Load()))
-		c.JSON(http.StatusAccepted, &drainCaptureResp{
-			CurrentTableCount: 0,
-		})
+	if req.CaptureID == "" {
+		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStackByArgs("capture_id is required"))
+		return
 	}
+
+	co, err := o.server.GetCoordinator()
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	if co == nil || !co.Initialized() {
+		_ = c.Error(errors.New("coordinator is not fully initialized, wait a moment"))
+		return
+	}
+
+	remaining, err := co.DrainNode(c.Request.Context(), req.CaptureID)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	log.Info("api v1 drainCapture",
+		zap.String("captureID", req.CaptureID),
+		zap.Int("currentTableCount", remaining))
+	c.JSON(http.StatusAccepted, &drainCaptureResp{CurrentTableCount: remaining})
 }
 
 func getV2ChangefeedConfig(changefeedConfig changefeedConfig) *v2.ChangefeedConfig {
@@ -257,8 +269,6 @@ type moveTableReq struct {
 type drainCaptureRequest struct {
 	CaptureID string `json:"capture_id"`
 }
-
-var drainCaptureCounter atomic.Int64
 
 // drainCaptureResp is response for manual `DrainCapture`
 type drainCaptureResp struct {

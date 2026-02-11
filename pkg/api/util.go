@@ -145,20 +145,36 @@ func WriteData(w http.ResponseWriter, data interface{}) {
 	}
 }
 
-// Liveness can only be changed from alive to stopping, and no way back.
+// Liveness can only move forward in a monotonic order, and no way back.
 type Liveness int32
 
 const (
 	// LivenessCaptureAlive means the capture is alive, and ready to serve.
 	LivenessCaptureAlive Liveness = 0
+	// LivenessCaptureDraining means the capture is draining and should not receive new workload.
+	LivenessCaptureDraining Liveness = 1
 	// LivenessCaptureStopping means the capture is in the process of graceful shutdown.
-	LivenessCaptureStopping Liveness = 1
+	LivenessCaptureStopping Liveness = 2
 )
 
 // Store the given liveness. Returns true if it success.
 func (l *Liveness) Store(v Liveness) bool {
-	return atomic.CompareAndSwapInt32(
-		(*int32)(l), int32(LivenessCaptureAlive), int32(v))
+	if v < LivenessCaptureAlive || v > LivenessCaptureStopping {
+		return false
+	}
+
+	for {
+		old := Liveness(atomic.LoadInt32((*int32)(l)))
+		if v < old {
+			return false
+		}
+		if v == old {
+			return true
+		}
+		if atomic.CompareAndSwapInt32((*int32)(l), int32(old), int32(v)) {
+			return true
+		}
+	}
 }
 
 // Load the liveness.
@@ -170,6 +186,8 @@ func (l *Liveness) String() string {
 	switch *l {
 	case LivenessCaptureAlive:
 		return "Alive"
+	case LivenessCaptureDraining:
+		return "Draining"
 	case LivenessCaptureStopping:
 		return "Stopping"
 	default:

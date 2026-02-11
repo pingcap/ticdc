@@ -21,6 +21,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -46,6 +47,13 @@ type Manager struct {
 	coordinatorVersion int64
 
 	nodeInfo *node.Info
+	// serverLiveness is shared with the server so election and local maintainer admission
+	// observe a single monotonic liveness state.
+	serverLiveness *api.Liveness
+	nodeEpoch      uint64
+
+	nodeHeartbeatInterval time.Duration
+	lastNodeHeartbeatTime time.Time
 
 	// msgCh is used to cache messages from coordinator
 	msgCh chan *messaging.TargetMessage
@@ -59,14 +67,32 @@ func NewMaintainerManager(
 	nodeInfo *node.Info,
 	conf *config.SchedulerConfig,
 ) *Manager {
+	return NewMaintainerManagerWithLiveness(nodeInfo, conf, nil)
+}
+
+// NewMaintainerManagerWithLiveness creates a changefeed maintainer manager and binds
+// node-level liveness to the provided server liveness pointer.
+//
+// If serverLiveness is nil, a local liveness instance is created for tests.
+func NewMaintainerManagerWithLiveness(
+	nodeInfo *node.Info,
+	conf *config.SchedulerConfig,
+	serverLiveness *api.Liveness,
+) *Manager {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
+	if serverLiveness == nil {
+		serverLiveness = new(api.Liveness)
+	}
 	m := &Manager{
-		mc:            mc,
-		conf:          conf,
-		maintainers:   sync.Map{},
-		nodeInfo:      nodeInfo,
-		msgCh:         make(chan *messaging.TargetMessage, 1024),
-		taskScheduler: threadpool.NewThreadPoolDefault(),
+		mc:                    mc,
+		conf:                  conf,
+		maintainers:           sync.Map{},
+		nodeInfo:              nodeInfo,
+		serverLiveness:        serverLiveness,
+		nodeEpoch:             uint64(time.Now().UnixNano()),
+		nodeHeartbeatInterval: 5 * time.Second,
+		msgCh:                 make(chan *messaging.TargetMessage, 1024),
+		taskScheduler:         threadpool.NewThreadPoolDefault(),
 	}
 
 	mc.RegisterHandler(messaging.MaintainerManagerTopic, m.recvMessages)
@@ -84,7 +110,8 @@ func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage
 	// Coordinator related messages
 	case messaging.TypeAddMaintainerRequest,
 		messaging.TypeRemoveMaintainerRequest,
-		messaging.TypeCoordinatorBootstrapRequest:
+		messaging.TypeCoordinatorBootstrapRequest,
+		messaging.TypeSetNodeLivenessRequest:
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -160,7 +187,7 @@ func (m *Manager) newCoordinatorTopicMessage(msg messaging.IOTypeT) *messaging.T
 	)
 }
 
-func (m *Manager) sendMessages(msg *heartbeatpb.MaintainerHeartbeat) {
+func (m *Manager) sendMessages(msg messaging.IOTypeT) {
 	target := m.newCoordinatorTopicMessage(msg)
 	err := m.mc.SendCommand(target)
 	if err != nil {
@@ -210,6 +237,7 @@ func (m *Manager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {
 			zap.Int64("coordinatorVersion", m.coordinatorVersion),
 			zap.Error(err))
 	}
+	m.sendNodeHeartbeat(true)
 
 	log.Info("new coordinator online, bootstrap response already sent",
 		zap.Stringer("coordinatorID", m.coordinatorID),
@@ -217,6 +245,12 @@ func (m *Manager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {
 }
 
 func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) *heartbeatpb.MaintainerStatus {
+	if m.serverLiveness.Load() == api.LivenessCaptureStopping {
+		log.Warn("reject add maintainer request because node is stopping",
+			zap.Stringer("changefeedID", common.NewChangefeedIDFromPB(req.Id)))
+		return nil
+	}
+
 	changefeedID := common.NewChangefeedIDFromPB(req.Id)
 	_, ok := m.maintainers.Load(changefeedID)
 	if ok {
@@ -272,6 +306,54 @@ func (m *Manager) onRemoveMaintainerRequest(msg *messaging.TargetMessage) *heart
 	return nil
 }
 
+func (m *Manager) onSetNodeLivenessRequest(msg *messaging.TargetMessage) {
+	if m.coordinatorID != msg.From {
+		log.Warn("ignore set node liveness request from unexpected sender",
+			zap.Stringer("coordinatorID", m.coordinatorID),
+			zap.Stringer("from", msg.From))
+		return
+	}
+
+	req := msg.Message[0].(*heartbeatpb.SetNodeLivenessRequest)
+	applied := m.serverLiveness.Load()
+	transitioned := false
+	if req.NodeEpoch != m.nodeEpoch {
+		log.Warn("reject set node liveness request due to stale node epoch",
+			zap.Uint64("requestNodeEpoch", req.NodeEpoch),
+			zap.Uint64("nodeEpoch", m.nodeEpoch))
+	} else {
+		target, ok := heartbeatNodeLivenessToServer(req.Target)
+		if !ok {
+			log.Warn("ignore set node liveness request with invalid target",
+				zap.Int32("target", int32(req.Target)))
+		} else {
+			before := m.serverLiveness.Load()
+			if m.serverLiveness.Store(target) {
+				after := m.serverLiveness.Load()
+				transitioned = before != after
+				if transitioned {
+					beforeStr := (&before).String()
+					afterStr := (&after).String()
+					log.Info("node liveness updated",
+						zap.String("from", beforeStr),
+						zap.String("to", afterStr),
+						zap.Uint64("nodeEpoch", m.nodeEpoch))
+				}
+			}
+			applied = m.serverLiveness.Load()
+		}
+	}
+
+	response := &heartbeatpb.SetNodeLivenessResponse{
+		Applied:   serverLivenessToHeartbeat(applied),
+		NodeEpoch: m.nodeEpoch,
+	}
+	m.sendMessages(response)
+	if transitioned {
+		m.sendNodeHeartbeat(true)
+	}
+}
+
 func (m *Manager) onDispatchMaintainerRequest(
 	msg *messaging.TargetMessage,
 ) *heartbeatpb.MaintainerStatus {
@@ -295,6 +377,8 @@ func (m *Manager) onDispatchMaintainerRequest(
 }
 
 func (m *Manager) sendHeartbeat() {
+	m.sendNodeHeartbeat(false)
+
 	if m.isBootstrap() {
 		response := &heartbeatpb.MaintainerHeartbeat{}
 		m.maintainers.Range(func(key, value interface{}) bool {
@@ -330,7 +414,54 @@ func (m *Manager) handleMessage(msg *messaging.TargetMessage) {
 			}
 			m.sendMessages(response)
 		}
+	case messaging.TypeSetNodeLivenessRequest:
+		if m.isBootstrap() {
+			m.onSetNodeLivenessRequest(msg)
+		}
 	default:
+	}
+}
+
+func (m *Manager) sendNodeHeartbeat(force bool) {
+	if !m.isBootstrap() {
+		return
+	}
+
+	now := time.Now()
+	if !force && now.Sub(m.lastNodeHeartbeatTime) < m.nodeHeartbeatInterval {
+		return
+	}
+
+	m.sendMessages(&heartbeatpb.NodeHeartbeat{
+		Liveness:  serverLivenessToHeartbeat(m.serverLiveness.Load()),
+		NodeEpoch: m.nodeEpoch,
+	})
+	m.lastNodeHeartbeatTime = now
+}
+
+func serverLivenessToHeartbeat(liveness api.Liveness) heartbeatpb.NodeLiveness {
+	switch liveness {
+	case api.LivenessCaptureAlive:
+		return heartbeatpb.NodeLiveness_ALIVE
+	case api.LivenessCaptureDraining:
+		return heartbeatpb.NodeLiveness_DRAINING
+	case api.LivenessCaptureStopping:
+		return heartbeatpb.NodeLiveness_STOPPING
+	default:
+		return heartbeatpb.NodeLiveness_ALIVE
+	}
+}
+
+func heartbeatNodeLivenessToServer(liveness heartbeatpb.NodeLiveness) (api.Liveness, bool) {
+	switch liveness {
+	case heartbeatpb.NodeLiveness_ALIVE:
+		return api.LivenessCaptureAlive, true
+	case heartbeatpb.NodeLiveness_DRAINING:
+		return api.LivenessCaptureDraining, true
+	case heartbeatpb.NodeLiveness_STOPPING:
+		return api.LivenessCaptureStopping, true
+	default:
+		return api.LivenessCaptureAlive, false
 	}
 }
 

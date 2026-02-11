@@ -19,10 +19,8 @@ import (
 
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	"github.com/pingcap/ticdc/coordinator/operator"
-	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/node"
 	pkgScheduler "github.com/pingcap/ticdc/pkg/scheduler"
-	"github.com/pingcap/ticdc/server/watcher"
 )
 
 // balanceScheduler is used to check the balance status of all spans among all nodes
@@ -30,9 +28,9 @@ type balanceScheduler struct {
 	id        string
 	batchSize int
 
-	operatorController *operator.Controller
-	changefeedDB       *changefeed.ChangefeedDB
-	nodeManager        *watcher.NodeManager
+	operatorController  *operator.Controller
+	changefeedDB        *changefeed.ChangefeedDB
+	getSchedulableNodes func() map[node.ID]*node.Info
 
 	random               *rand.Rand
 	lastRebalanceTime    time.Time
@@ -51,6 +49,7 @@ func NewBalanceScheduler(
 	oc *operator.Controller,
 	changefeedDB *changefeed.ChangefeedDB,
 	balanceInterval time.Duration,
+	getSchedulableNodes func() map[node.ID]*node.Info,
 ) *balanceScheduler {
 	return &balanceScheduler{
 		id:                   id,
@@ -58,7 +57,7 @@ func NewBalanceScheduler(
 		random:               rand.New(rand.NewSource(time.Now().UnixNano())),
 		operatorController:   oc,
 		changefeedDB:         changefeedDB,
-		nodeManager:          appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
+		getSchedulableNodes:  getSchedulableNodes,
 		checkBalanceInterval: balanceInterval,
 		lastRebalanceTime:    time.Now(),
 	}
@@ -74,15 +73,19 @@ func (s *balanceScheduler) Execute() time.Time {
 		// not in stable schedule state, skip balance
 		return now.Add(s.checkBalanceInterval)
 	}
+	schedulableNodes := s.getSchedulableNodes()
+	if len(schedulableNodes) <= 1 {
+		return now.Add(s.checkBalanceInterval)
+	}
 
 	// check the balance status
-	moveSize := pkgScheduler.CheckBalanceStatus(s.changefeedDB.GetTaskSizePerNode(), s.nodeManager.GetAliveNodes())
+	moveSize := pkgScheduler.CheckBalanceStatus(s.changefeedDB.GetTaskSizePerNode(), schedulableNodes)
 	if moveSize <= 0 {
 		// fast check the balance status, no need to do the balance,skip
 		return now.Add(s.checkBalanceInterval)
 	}
 	// balance changefeeds among the active nodes
-	movedSize := pkgScheduler.Balance(s.batchSize, s.random, s.nodeManager.GetAliveNodes(), s.changefeedDB.GetReplicating(),
+	movedSize := pkgScheduler.Balance(s.batchSize, s.random, schedulableNodes, s.changefeedDB.GetReplicating(),
 		func(cf *changefeed.Changefeed, nodeID node.ID) bool {
 			return s.operatorController.AddOperator(operator.NewMoveMaintainerOperator(s.changefeedDB, cf, cf.GetNodeID(), nodeID))
 		})

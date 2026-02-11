@@ -301,3 +301,20 @@ func (oc *Controller) NewAddMaintainerOperator(cf *changefeed.Changefeed, dest n
 func (oc *Controller) NewMoveMaintainerOperator(cf *changefeed.Changefeed, origin, dest node.ID) operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus] {
 	return NewMoveMaintainerOperator(oc.changefeedDB, cf, origin, dest)
 }
+
+// CountOperatorsByNode counts in-flight operators that affect the specified node.
+func (oc *Controller) CountOperatorsByNode(target node.ID) int {
+	oc.mu.RLock()
+	defer oc.mu.RUnlock()
+
+	count := 0
+	for _, op := range oc.operators {
+		for _, affected := range op.OP.AffectedNodes() {
+			if affected == target {
+				count++
+				break
+			}
+		}
+	}
+	return count
+}

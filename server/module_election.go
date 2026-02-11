@@ -15,6 +15,7 @@ package server
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/pingcap/failpoint"
@@ -38,8 +39,10 @@ type elector struct {
 	// election used for coordinator
 	election *concurrency.Election
 	// election used for log coordinator
-	logElection *concurrency.Election
-	svr         *server
+	logElection   *concurrency.Election
+	svr           *server
+	coordinatorMu sync.Mutex
+	logMu         sync.Mutex
 }
 
 func NewElector(server *server) common.SubModule {
@@ -58,6 +61,7 @@ func (e *elector) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error { return e.campaignCoordinator(ctx) })
 	g.Go(func() error { return e.campaignLogCoordinator(ctx) })
+	g.Go(func() error { return e.watchLivenessAndResign(ctx) })
 	return g.Wait()
 }
 
@@ -66,9 +70,14 @@ func (e *elector) Name() string {
 }
 
 func (e *elector) campaignCoordinator(ctx context.Context) error {
+	e.coordinatorMu.Lock()
+	defer e.coordinatorMu.Unlock()
+
 	// Limit the frequency of elections to avoid putting too much pressure on the etcd server
 	rl := rate.NewLimiter(rate.Every(time.Second), 1 /* burst */)
 	nodeID := string(e.svr.info.ID)
+	forbiddenLiveness := api.LivenessCaptureDraining
+	stopLiveness := api.LivenessCaptureStopping
 	for {
 		select {
 		case <-ctx.Done():
@@ -83,8 +92,12 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 			return errors.Trace(err)
 		}
 		// Before campaign check liveness
-		if e.svr.liveness.Load() == api.LivenessCaptureStopping {
-			log.Info("do not campaign coordinator, liveness is stopping", zap.String("nodeID", nodeID))
+		if e.svr.liveness.Load() >= forbiddenLiveness {
+			liveness := e.svr.liveness.Load()
+			livenessStr := (&liveness).String()
+			log.Info("do not campaign coordinator, liveness is not alive",
+				zap.String("nodeID", nodeID),
+				zap.String("liveness", livenessStr))
 			return nil
 		}
 		log.Info("start to campaign coordinator", zap.String("nodeID", nodeID))
@@ -110,9 +123,12 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 		}
 		// After campaign check liveness again.
 		// It is possible it becomes the coordinator right after receiving SIGTERM.
-		if e.svr.liveness.Load() == api.LivenessCaptureStopping {
+		if e.svr.liveness.Load() >= forbiddenLiveness {
+			liveness := e.svr.liveness.Load()
+			livenessStr := (&liveness).String()
 			// If the server is stopping, resign actively.
-			log.Info("resign coordinator actively, liveness is stopping")
+			log.Info("resign coordinator actively, liveness is not alive",
+				zap.String("liveness", livenessStr))
 			if resignErr := e.resign(ctx); resignErr != nil {
 				log.Warn("resign coordinator actively failed", zap.String("nodeID", nodeID), zap.Error(resignErr))
 				return errors.Trace(err)
@@ -182,13 +198,26 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 		log.Info("coordinator exited normally",
 			zap.String("nodeID", nodeID), zap.Int64("coordinatorVersion", coordinatorVersion),
 			zap.Error(err))
+
+		if e.svr.liveness.Load() >= stopLiveness {
+			liveness := e.svr.liveness.Load()
+			livenessStr := (&liveness).String()
+			log.Info("stop coordinator campaign loop after server enters stopping",
+				zap.String("nodeID", nodeID),
+				zap.String("liveness", livenessStr))
+			return nil
+		}
 	}
 }
 
 func (e *elector) campaignLogCoordinator(ctx context.Context) error {
+	e.logMu.Lock()
+	defer e.logMu.Unlock()
+
 	// Limit the frequency of elections to avoid putting too much pressure on the etcd server
 	rl := rate.NewLimiter(rate.Every(time.Second), 1 /* burst */)
 	nodeID := string(e.svr.info.ID)
+	forbiddenLiveness := api.LivenessCaptureDraining
 	for {
 		select {
 		case <-ctx.Done():
@@ -203,8 +232,12 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 			return errors.Trace(err)
 		}
 		// Before campaign check liveness
-		if e.svr.liveness.Load() == api.LivenessCaptureStopping {
-			log.Info("do not campaign log coordinator, liveness is stopping", zap.String("nodeID", nodeID))
+		if e.svr.liveness.Load() >= forbiddenLiveness {
+			liveness := e.svr.liveness.Load()
+			livenessStr := (&liveness).String()
+			log.Info("do not campaign log coordinator, liveness is not alive",
+				zap.String("nodeID", nodeID),
+				zap.String("liveness", livenessStr))
 			return nil
 		}
 		// Campaign to be the log coordinator, it blocks until it been elected.
@@ -224,10 +257,13 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 		}
 		// After campaign check liveness again.
 		// It is possible it becomes the coordinator right after receiving SIGTERM.
-		if e.svr.liveness.Load() == api.LivenessCaptureStopping {
+		if e.svr.liveness.Load() >= forbiddenLiveness {
+			liveness := e.svr.liveness.Load()
+			livenessStr := (&liveness).String()
 			// If the server is stopping, resign actively.
-			log.Info("resign log coordinator actively, liveness is stopping")
-			if resignErr := e.resign(ctx); resignErr != nil {
+			log.Info("resign log coordinator actively, liveness is not alive",
+				zap.String("liveness", livenessStr))
+			if resignErr := e.resignLogCoordinator(); resignErr != nil {
 				log.Warn("resign log coordinator actively failed",
 					zap.String("nodeID", nodeID), zap.Error(resignErr))
 				return errors.Trace(err)
@@ -258,6 +294,38 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 
 func (e *elector) Close(_ context.Context) error {
 	return nil
+}
+
+func (e *elector) watchLivenessAndResign(ctx context.Context) error {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	nodeID := string(e.svr.info.ID)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			if e.svr.liveness.Load() < api.LivenessCaptureStopping {
+				continue
+			}
+
+			if !e.svr.IsCoordinator() {
+				continue
+			}
+
+			resignCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if err := e.resign(resignCtx); err != nil {
+				liveness := e.svr.liveness.Load()
+				livenessStr := (&liveness).String()
+				log.Warn("resign coordinator on stopping liveness failed",
+					zap.String("nodeID", nodeID),
+					zap.String("liveness", livenessStr),
+					zap.Error(err))
+			}
+			cancel()
+		}
+	}
 }
 
 // resign lets the coordinator start a new election.

@@ -104,6 +104,9 @@ const (
 	TypeRedoResolvedTsForwardMessage       IOType = 39
 	TypeDispatcherSetChecksumUpdateRequest IOType = 40
 	TypeDispatcherSetChecksumAckResponse   IOType = 41
+	TypeNodeHeartbeatRequest               IOType = 42
+	TypeSetNodeLivenessRequest             IOType = 43
+	TypeSetNodeLivenessResponse            IOType = 44
 )
 
 func (t IOType) String() string {
@@ -182,6 +185,12 @@ func (t IOType) String() string {
 		return "DispatcherSetChecksumUpdateRequest"
 	case TypeDispatcherSetChecksumAckResponse:
 		return "DispatcherSetChecksumAckResponse"
+	case TypeNodeHeartbeatRequest:
+		return "NodeHeartbeatRequest"
+	case TypeSetNodeLivenessRequest:
+		return "SetNodeLivenessRequest"
+	case TypeSetNodeLivenessResponse:
+		return "SetNodeLivenessResponse"
 	case TypeDispatcherHeartbeatResponse:
 		return "DispatcherHeartbeatResponse"
 	case TypeCongestionControl:
@@ -379,6 +388,12 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 		m = &heartbeatpb.DispatcherSetChecksumUpdateRequest{}
 	case TypeDispatcherSetChecksumAckResponse:
 		m = &heartbeatpb.DispatcherSetChecksumAckResponse{}
+	case TypeNodeHeartbeatRequest:
+		m = &heartbeatpb.NodeHeartbeat{}
+	case TypeSetNodeLivenessRequest:
+		m = &heartbeatpb.SetNodeLivenessRequest{}
+	case TypeSetNodeLivenessResponse:
+		m = &heartbeatpb.SetNodeLivenessResponse{}
 	case TypeCongestionControl:
 		m = &commonEvent.CongestionControl{}
 	case TypeMergeDispatcherRequest:
@@ -491,6 +506,12 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		ioType = TypeDispatcherSetChecksumUpdateRequest
 	case *heartbeatpb.DispatcherSetChecksumAckResponse:
 		ioType = TypeDispatcherSetChecksumAckResponse
+	case *heartbeatpb.NodeHeartbeat:
+		ioType = TypeNodeHeartbeatRequest
+	case *heartbeatpb.SetNodeLivenessRequest:
+		ioType = TypeSetNodeLivenessRequest
+	case *heartbeatpb.SetNodeLivenessResponse:
+		ioType = TypeSetNodeLivenessResponse
 	case *commonEvent.CongestionControl:
 		ioType = TypeCongestionControl
 	case *heartbeatpb.MergeDispatcherRequest:

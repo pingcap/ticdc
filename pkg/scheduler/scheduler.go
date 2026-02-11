@@ -23,6 +23,7 @@ const DefaultCheckInterval = time.Second * 120
 
 const (
 	BasicScheduler            = "basic-scheduler"
+	DrainScheduler            = "drain-scheduler"
 	BalanceScheduler          = "balance-scheduler"
 	BalanceSplitScheduler     = "balance-split-scheduler"
 	RedoBasicScheduler        = "redo-basic-scheduler"
