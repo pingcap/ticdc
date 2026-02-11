@@ -17,18 +17,20 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/IBM/sarama/mocks"
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
+	mock_kafka "github.com/pingcap/ticdc/pkg/sink/kafka/mock"
+	"github.com/pingcap/ticdc/pkg/sink/recoverable"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
@@ -104,30 +106,35 @@ func newKafkaSinkForTest(ctx context.Context) (*sink, error) {
 	return newKafkaSinkForTestWithProducers(ctx, nil, nil)
 }
 
-// mockSyncProducer is used to count the calls to Heartbeat.
-type mockSyncProducer struct {
-	kafka.MockSaramaSyncProducer
-	heartbeatCount int
-	mu             sync.Mutex
+// heartbeatSyncProducer wraps MockSyncProducer and records Heartbeat invocations.
+type heartbeatSyncProducer struct {
+	*mock_kafka.MockSyncProducer
+	heartbeatCount atomic.Int64
 }
 
-func (m *mockSyncProducer) Heartbeat() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.heartbeatCount++
+func newHeartbeatSyncProducer(ctrl *gomock.Controller) *heartbeatSyncProducer {
+	producer := &heartbeatSyncProducer{
+		MockSyncProducer: mock_kafka.NewMockSyncProducer(ctrl),
+	}
+	producer.EXPECT().Heartbeat().Do(func() {
+		producer.heartbeatCount.Inc()
+	}).AnyTimes()
+	producer.EXPECT().SendMessage(gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes().Return(nil)
+	producer.EXPECT().SendMessages(gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes().Return(nil)
+	producer.EXPECT().Close().AnyTimes()
+	return producer
 }
 
-func (m *mockSyncProducer) GetHeartbeatCount() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.heartbeatCount
+func (m *heartbeatSyncProducer) GetHeartbeatCount() int64 {
+	return m.heartbeatCount.Load()
 }
 
 func TestDDLProducerHeartbeat(t *testing.T) {
 	t.Parallel()
 
+	ctrl := gomock.NewController(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	producer := &mockSyncProducer{}
+	producer := newHeartbeatSyncProducer(ctrl)
 	heartbeatInterval := 5 * time.Second
 	_, err := newKafkaSinkForTestWithProducers(ctx, nil, producer)
 	require.NoError(t, err)
@@ -147,31 +154,38 @@ func TestDDLProducerHeartbeat(t *testing.T) {
 	require.Equal(t, countBeforeClose, producer.GetHeartbeatCount(), "Heartbeat should stop after manager is closed")
 }
 
-// mockSyncProducer is used to count the calls to Heartbeat.
-type mockAsyncProducer struct {
-	kafka.MockSaramaAsyncProducer
-	heartbeatCount int
-	mu             sync.Mutex
+// heartbeatAsyncProducer wraps MockAsyncProducer and records Heartbeat invocations.
+type heartbeatAsyncProducer struct {
+	*mock_kafka.MockAsyncProducer
+	heartbeatCount atomic.Int64
 }
 
-func (m *mockAsyncProducer) Heartbeat() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.heartbeatCount++
+func newHeartbeatAsyncProducer(ctrl *gomock.Controller) *heartbeatAsyncProducer {
+	producer := &heartbeatAsyncProducer{
+		MockAsyncProducer: mock_kafka.NewMockAsyncProducer(ctrl),
+	}
+	producer.EXPECT().Heartbeat().Do(func() {
+		producer.heartbeatCount.Inc()
+	}).AnyTimes()
+	producer.EXPECT().AsyncRunCallback(gomock.Any()).DoAndReturn(func(ctx context.Context) error {
+		<-ctx.Done()
+		return context.Cause(ctx)
+	}).AnyTimes()
+	producer.EXPECT().AsyncSend(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes().Return(nil)
+	producer.EXPECT().Close().AnyTimes()
+	return producer
 }
 
-func (m *mockAsyncProducer) GetHeartbeatCount() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.heartbeatCount
+func (m *heartbeatAsyncProducer) GetHeartbeatCount() int64 {
+	return m.heartbeatCount.Load()
 }
 
 func TestDMLProducerHeartbeat(t *testing.T) {
 	t.Parallel()
 
+	ctrl := gomock.NewController(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	producer := &mockAsyncProducer{}
-	producer.AsyncProducer = mocks.NewAsyncProducer(t, nil)
+	producer := newHeartbeatAsyncProducer(ctrl)
 	heartbeatInterval := 5 * time.Second
 	_, err := newKafkaSinkForTestWithProducers(ctx, producer, nil)
 	require.NoError(t, err)
@@ -192,6 +206,7 @@ func TestDMLProducerHeartbeat(t *testing.T) {
 }
 
 func TestKafkaSinkBasicFunctionality(t *testing.T) {
+	ctrl := gomock.NewController(t)
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
@@ -242,16 +257,34 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	dmlEvent.CommitTs = 2
 
 	ctx, cancel := context.WithCancel(context.Background())
-	kafkaSink, err := newKafkaSinkForTest(ctx)
+	asyncProducer := mock_kafka.NewMockAsyncProducer(ctrl)
+	syncProducer := mock_kafka.NewMockSyncProducer(ctrl)
+	asyncProducer.EXPECT().AsyncRunCallback(gomock.Any()).DoAndReturn(func(ctx context.Context) error {
+		<-ctx.Done()
+		return context.Cause(ctx)
+	}).Times(1)
+	asyncProducer.EXPECT().AsyncSend(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, _ string, _ int32, message *codeccommon.Message) error {
+			if message.Callback != nil {
+				message.Callback()
+			}
+			return nil
+		},
+	).Times(2)
+	asyncProducer.EXPECT().Heartbeat().AnyTimes()
+	asyncProducer.EXPECT().Close().AnyTimes()
+	syncProducer.EXPECT().SendMessage(gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes().Return(nil)
+	syncProducer.EXPECT().SendMessages(gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes().Return(nil)
+	syncProducer.EXPECT().Heartbeat().AnyTimes()
+	syncProducer.EXPECT().Close().AnyTimes()
+
+	kafkaSink, err := newKafkaSinkForTestWithProducers(ctx, asyncProducer, syncProducer)
 	require.NoError(t, err)
 	defer cancel()
 
-	kafkaSink.ddlProducer.(*kafka.MockSaramaSyncProducer).SyncProducer.ExpectSendMessageAndSucceed()
 	err = kafkaSink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)
 
-	kafkaSink.dmlProducer.(*kafka.MockSaramaAsyncProducer).AsyncProducer.ExpectInputAndSucceed()
-	kafkaSink.dmlProducer.(*kafka.MockSaramaAsyncProducer).AsyncProducer.ExpectInputAndSucceed()
 	kafkaSink.AddDMLEvent(dmlEvent)
 
 	ddlEvent2.PostFlush()
@@ -265,4 +298,37 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	kafkaSink.Close(false)
 	cancel()
 	kafkaSink.AddCheckpointTs(12345)
+}
+
+type recoverableAwareAsyncProducer struct {
+	*mock_kafka.MockAsyncProducer
+	recoverableErrCh chan<- *recoverable.ErrorEvent
+}
+
+func (p *recoverableAwareAsyncProducer) SetRecoverableErrorChan(ch chan<- *recoverable.ErrorEvent) {
+	p.recoverableErrCh = ch
+}
+
+func TestSetRecoverableErrorChan(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	asyncProducer := &recoverableAwareAsyncProducer{
+		MockAsyncProducer: mock_kafka.NewMockAsyncProducer(ctrl),
+	}
+	s := &sink{
+		dmlProducer: asyncProducer,
+	}
+
+	recoverableCh := make(chan *recoverable.ErrorEvent, 1)
+	s.SetRecoverableErrorChan(recoverableCh)
+	require.Equal(t, (chan<- *recoverable.ErrorEvent)(recoverableCh), asyncProducer.recoverableErrCh)
+}
+
+func TestSetRecoverableErrorChanIgnoreUnsupportedProducer(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	s := &sink{
+		dmlProducer: mock_kafka.NewMockAsyncProducer(ctrl),
+	}
+
+	recoverableCh := make(chan *recoverable.ErrorEvent, 1)
+	s.SetRecoverableErrorChan(recoverableCh)
 }
