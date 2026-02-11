@@ -47,3 +47,17 @@ ALTER TABLE t1 ADD COLUMN site_code VARCHAR(64) NOT NULL DEFAULT '500';
 INSERT INTO t1 VALUES (12, 13, '500');
 ALTER TABLE t1 MODIFY COLUMN site_code VARCHAR(64) NOT NULL DEFAULT '';
 ALTER TABLE t1 ADD PRIMARY KEY (a, site_code);
+
+-- The following pair keeps columns and index definition identical except
+-- IndexColumn.Length on site_code in the primary key.
+DROP DATABASE IF EXISTS test_600;
+CREATE DATABASE test_600;
+USE test_600;
+CREATE TABLE t1 (a INT, b INT, site_code VARCHAR(64) NOT NULL DEFAULT '', PRIMARY KEY (a, site_code));
+INSERT INTO t1 VALUES (1, 2, '600'), (2, 3, '600'), (12, 13, '600');
+
+DROP DATABASE IF EXISTS test_700;
+CREATE DATABASE test_700;
+USE test_700;
+CREATE TABLE t1 (a INT, b INT, site_code VARCHAR(64) NOT NULL DEFAULT '', PRIMARY KEY (a, site_code(10)));
+INSERT INTO t1 VALUES (1, 2, '700'), (2, 3, '700'), (12, 13, '700');
