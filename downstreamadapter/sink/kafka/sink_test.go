@@ -102,10 +102,6 @@ func newKafkaSinkForTestWithProducers(ctx context.Context,
 	return s, nil
 }
 
-func newKafkaSinkForTest(ctx context.Context) (*sink, error) {
-	return newKafkaSinkForTestWithProducers(ctx, nil, nil)
-}
-
 // heartbeatSyncProducer wraps MockSyncProducer and records Heartbeat invocations.
 type heartbeatSyncProducer struct {
 	*mock_kafka.MockSyncProducer
