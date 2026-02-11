@@ -27,15 +27,3 @@ INSERT INTO t1 (a, b) VALUES (20, 21);
 UPDATE t1 SET b = b + 10 WHERE a = 1 AND site_code = '500';
 DELETE FROM t1 WHERE a = 2 AND site_code = '500';
 UPDATE t1 SET b = b + 1 WHERE a = 12 AND site_code = '500';
-
-USE test_600;
-INSERT INTO t1 (a, b) VALUES (20, 21);
-UPDATE t1 SET b = b + 10 WHERE a = 1 AND site_code = '600';
-DELETE FROM t1 WHERE a = 2 AND site_code = '600';
-UPDATE t1 SET b = b + 1 WHERE a = 12 AND site_code = '600';
-
-USE test_700;
-INSERT INTO t1 (a, b) VALUES (20, 21);
-UPDATE t1 SET b = b + 10 WHERE a = 1 AND site_code = '700';
-DELETE FROM t1 WHERE a = 2 AND site_code = '700';
-UPDATE t1 SET b = b + 1 WHERE a = 12 AND site_code = '700';
