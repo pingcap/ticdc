@@ -28,3 +28,10 @@ update s4 set c = 10 where a = 'a';
 update s4 set a = 'bb' where b = 'b_2';
 delete from s4 where b = 'c_3';
 delete from s4 where a = 'bb';
+
+create table s5 (a int not null, c int not null, b int as (a * 100 + c) stored not null, unique index idx1(a, b));
+insert into s5 (a, c) values (1, 1), (1, 2), (2, 1);
+update s5 set c = 9 where b = 102;
+update s5 set a = 3 where a = 2 and c = 1;
+delete from s5 where b = 101;
+delete from s5 where a = 3;

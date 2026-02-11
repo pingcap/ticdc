@@ -29,3 +29,16 @@ update v4 set c = 9 where b = 102;
 update v4 set a = 3 where a = 2 and c = 2;
 delete from v4 where b = 101;
 delete from v4 where a = 3;
+
+create table v5 (id int primary key, a int not null, c int not null, b int as (a + c) virtual not null);
+insert into v5 (id, a, c) values (1, 1, 1), (2, 1, 2), (3, 2, 2);
+update v5 set a = 10 where b = 2;
+update v5 set c = 20 where id = 2;
+delete from v5 where b = 4;
+
+create table v6 (a int not null, c int not null, b int as (a * 100 + c) virtual not null, unique index idx1(a, b));
+insert into v6 (a, c) values (1, 1), (1, 2), (2, 1);
+update v6 set c = 9 where b = 102;
+update v6 set a = 3 where a = 2 and c = 1;
+delete from v6 where b = 101;
+delete from v6 where a = 3;

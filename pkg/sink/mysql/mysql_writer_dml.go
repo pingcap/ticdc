@@ -123,8 +123,9 @@ func (w *Writer) genActiveActiveSQL(tableInfo *common.TableInfo, eventsInGroup [
 // Batch SQL generation is used when:
 // 1. BatchDMLEnable = true, and rows > 1
 // 2. The table has a pk or not null unique key
-// 3. There's more than one row in the group
-// 4. All events have the same safe mode status
+// 3. The handle key contains no virtual generated columns
+// 4. There's more than one row in the group
+// 5. All events have the same safe mode status
 func (w *Writer) shouldGenBatchSQL(tableInfo *common.TableInfo, events []*commonEvent.DMLEvent) bool {
 	if !w.cfg.BatchDMLEnable {
 		return false

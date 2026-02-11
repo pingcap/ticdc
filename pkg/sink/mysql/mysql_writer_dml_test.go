@@ -69,6 +69,69 @@ func TestShouldGenBatchSQL(t *testing.T) {
 	pkTableInfo := buildTableInfo("t_with_pk", true)
 	noPKTableInfo := buildTableInfo("t_no_pk", false)
 
+	buildTableInfoWithVirtualGeneratedHandleKey := func(tableName string) *common.TableInfo {
+		aFieldType := types.NewFieldType(tidbmysql.TypeLong)
+		aFieldType.AddFlag(tidbmysql.NotNullFlag)
+		bFieldType := types.NewFieldType(tidbmysql.TypeLong)
+		bFieldType.AddFlag(tidbmysql.NotNullFlag)
+		cFieldType := types.NewFieldType(tidbmysql.TypeLong)
+		cFieldType.AddFlag(tidbmysql.NotNullFlag)
+
+		ti := &tidbmodel.TableInfo{
+			ID:   101,
+			Name: ast.NewCIStr(tableName),
+			Columns: []*tidbmodel.ColumnInfo{
+				{
+					ID:        1,
+					Name:      ast.NewCIStr("a"),
+					Offset:    0,
+					FieldType: *aFieldType,
+					State:     tidbmodel.StatePublic,
+				},
+				{
+					ID:                  2,
+					Name:                ast.NewCIStr("b"),
+					Offset:              1,
+					FieldType:           *bFieldType,
+					State:               tidbmodel.StatePublic,
+					GeneratedExprString: "a + c",
+					GeneratedStored:     false,
+				},
+				{
+					ID:        3,
+					Name:      ast.NewCIStr("c"),
+					Offset:    2,
+					FieldType: *cFieldType,
+					State:     tidbmodel.StatePublic,
+				},
+			},
+			Indices: []*tidbmodel.IndexInfo{
+				{
+					ID:     1,
+					Name:   ast.NewCIStr("idx1"),
+					Unique: true,
+					State:  tidbmodel.StatePublic,
+					Columns: []*tidbmodel.IndexColumn{
+						{
+							Name:   ast.NewCIStr("a"),
+							Offset: 0,
+							Length: types.UnspecifiedLength,
+						},
+						{
+							Name:   ast.NewCIStr("b"),
+							Offset: 1,
+							Length: types.UnspecifiedLength,
+						},
+					},
+				},
+			},
+		}
+		info := common.NewTableInfo4Decoder("test", ti)
+		require.NotNil(t, info)
+		return info
+	}
+	virtualHandleKeyTableInfo := buildTableInfoWithVirtualGeneratedHandleKey("t_virtual_uk")
+
 	tests := []struct {
 		name         string
 		tableInfo    *common.TableInfo
@@ -157,6 +220,16 @@ func TestShouldGenBatchSQL(t *testing.T) {
 			adjustWriter: func(w *Writer) {
 				w.cfg.SafeMode = false
 				w.cfg.BatchDMLEnable = false
+			},
+			want: false,
+		},
+		{
+			name:      "handle key contains virtual generated column should not use batch SQL",
+			tableInfo: virtualHandleKeyTableInfo,
+			events:    []*commonEvent.DMLEvent{newDMLEvent(t, 2, 1, 1), newDMLEvent(t, 3, 1, 1)},
+			adjustWriter: func(w *Writer) {
+				w.cfg.SafeMode = false
+				w.cfg.BatchDMLEnable = true
 			},
 			want: false,
 		},
