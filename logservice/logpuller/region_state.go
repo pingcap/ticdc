@@ -53,6 +53,12 @@ func (s *regionInfo) isStopped() bool {
 	return s.lockedRangeState == nil
 }
 
+func (s *regionInfo) isStopTableTask() bool {
+	// Stop-table task is a special regionInfo used to deregister a subscription from
+	// all TiKV stores. It has no locked range state and carries no region verID.
+	return s.lockedRangeState == nil && s.verID.GetID() == 0
+}
+
 func newRegionInfo(
 	verID tikv.RegionVerID,
 	span heartbeatpb.TableSpan,

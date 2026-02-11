@@ -112,6 +112,9 @@ type subscribedSpan struct {
 
 	// The target span
 	span heartbeatpb.TableSpan
+	// Whether to filter out the value written by cdc itself.
+	// It should be `true` in BDR mode.
+	filterLoop bool
 	// The range lock of the span,
 	// it is used to prevent duplicate requests to the same region range,
 	// and it also used to calculate this table's resolvedTs.
@@ -357,6 +360,7 @@ func (s *subscriptionClient) Subscribe(
 	}
 
 	rt := s.newSubscribedSpan(subID, span, startTs, consumeKVEvents, advanceResolvedTs, advanceInterval)
+	rt.filterLoop = bdrMode
 	s.totalSpans.Lock()
 	s.totalSpans.spanMap[subID] = rt
 	s.totalSpans.Unlock()
@@ -473,7 +477,7 @@ func (s *subscriptionClient) setTableStopped(rt *subscribedSpan) {
 	// Then send a special singleRegionInfo to regionRouter to deregister the table
 	// from all TiKV instances.
 	if rt.stopped.CompareAndSwap(false, true) {
-		s.regionTaskQueue.Push(NewRegionPriorityTask(TaskHighPrior, regionInfo{subscribedSpan: rt}, s.pdClock.CurrentTS()))
+		s.regionTaskQueue.Push(NewRegionPriorityTask(TaskHighPrior, regionInfo{subscribedSpan: rt, filterLoop: rt.filterLoop}, s.pdClock.CurrentTS()))
 		if rt.rangeLock.Stop() {
 			s.onTableDrained(rt)
 		}
