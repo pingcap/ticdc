@@ -37,13 +37,13 @@ type saramaAsyncProducer struct {
 	closed      *atomic.Bool
 	failpointCh chan *sarama.ProducerError
 
-	transientErrorReporter *recoverable.TransientErrorReporter
+	reporter *recoverable.Reporter
 }
 
 type messageMetadata struct {
 	callback    func()
 	logInfo     *common.MessageLogInfo
-	recoverInfo *common.MessageRecoverInfo
+	recoverInfo *recoverable.RecoverInfo
 }
 
 func (p *saramaAsyncProducer) Close() {
@@ -148,22 +148,21 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 }
 
 func (p *saramaAsyncProducer) SetRecoverableErrorChan(ch chan<- *recoverable.ErrorEvent) {
-	if p.transientErrorReporter == nil {
-		p.transientErrorReporter = recoverable.NewTransientErrorReporter(ch)
+	if ch == nil || p.reporter != nil {
 		return
 	}
-	p.transientErrorReporter.SetOutput(ch)
+	p.reporter = recoverable.NewReporter(ch)
 }
 
 func (p *saramaAsyncProducer) reportTransientError(err *sarama.ProducerError) bool {
-	if err == nil || p.transientErrorReporter == nil {
+	if err == nil || p.reporter == nil {
 		return false
 	}
 	recoverInfo := extractRecoverInfo(err.Msg)
 	if recoverInfo == nil || len(recoverInfo.Dispatchers) == 0 {
 		return false
 	}
-	reportDispatchers, handled := p.transientErrorReporter.Report(time.Now(), recoverInfo.Dispatchers)
+	reportDispatchers, handled := p.reporter.Report(recoverInfo.Dispatchers)
 	if !handled {
 		return false
 	}
@@ -265,7 +264,7 @@ func extractLogInfo(msg *sarama.ProducerMessage) *common.MessageLogInfo {
 	return meta.logInfo
 }
 
-func extractRecoverInfo(msg *sarama.ProducerMessage) *common.MessageRecoverInfo {
+func extractRecoverInfo(msg *sarama.ProducerMessage) *recoverable.RecoverInfo {
 	if msg == nil {
 		return nil
 	}

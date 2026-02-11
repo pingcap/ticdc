@@ -860,8 +860,7 @@ func (m *Maintainer) onRecoverDispatcherRequest(from node.ID, req *heartbeatpb.R
 		}
 
 		decision, attempts := m.getRecoverableDispatcherRestartDecision(dispatcherID, now)
-		switch decision {
-		case recoverableDispatcherRestartDecisionDowngrade:
+		if decision == recoverableDispatcherRestartDecisionDowngrade {
 			log.Warn("recover dispatcher request exceeded dispatcher restart budget, downgrade to changefeed error path",
 				zap.Stringer("changefeedID", m.changefeedID),
 				zap.Stringer("sourceNode", from),
@@ -877,7 +876,6 @@ func (m *Maintainer) onRecoverDispatcherRequest(from node.ID, req *heartbeatpb.R
 				),
 			})
 			return
-		default:
 		}
 
 		replication := spanController.GetTaskByID(dispatcherID)

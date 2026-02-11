@@ -2,7 +2,6 @@ package recoverable
 
 import (
 	"testing"
-	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/stretchr/testify/require"
@@ -10,12 +9,12 @@ import (
 
 func TestTransientErrorReporter_ReportOncePerDispatcherEpoch(t *testing.T) {
 	ch := make(chan *ErrorEvent, 2)
-	reporter := NewTransientErrorReporter(ch)
+	reporter := NewReporter(ch)
 
 	dispatcherID := common.NewDispatcherID()
 	dispatchers := []DispatcherEpoch{{DispatcherID: dispatcherID, Epoch: 1}}
 
-	reported, handled := reporter.Report(time.Now(), dispatchers)
+	reported, handled := reporter.Report(dispatchers)
 	require.True(t, handled)
 	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
 	select {
@@ -25,7 +24,7 @@ func TestTransientErrorReporter_ReportOncePerDispatcherEpoch(t *testing.T) {
 		t.Fatal("expected recoverable event to be sent")
 	}
 
-	reported, handled = reporter.Report(time.Now(), dispatchers)
+	reported, handled = reporter.Report(dispatchers)
 	require.True(t, handled)
 	require.Empty(t, reported)
 	select {
@@ -35,7 +34,7 @@ func TestTransientErrorReporter_ReportOncePerDispatcherEpoch(t *testing.T) {
 	}
 
 	dispatchers[0].Epoch = 2
-	reported, handled = reporter.Report(time.Now(), dispatchers)
+	reported, handled = reporter.Report(dispatchers)
 	require.True(t, handled)
 	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
 	select {
@@ -47,10 +46,9 @@ func TestTransientErrorReporter_ReportOncePerDispatcherEpoch(t *testing.T) {
 }
 
 func TestTransientErrorReporter_ReportReturnsFalseWhenOutputUnavailable(t *testing.T) {
-	reporter := NewTransientErrorReporter(nil)
+	reporter := NewReporter(nil)
 	dispatcherID := common.NewDispatcherID()
 	reported, handled := reporter.Report(
-		time.Now(),
 		[]DispatcherEpoch{{DispatcherID: dispatcherID, Epoch: 1}},
 	)
 	require.False(t, handled)
@@ -59,13 +57,12 @@ func TestTransientErrorReporter_ReportReturnsFalseWhenOutputUnavailable(t *testi
 
 func TestTransientErrorReporter_IgnoreStaleEpochAfterNewerEpochReported(t *testing.T) {
 	ch := make(chan *ErrorEvent, 4)
-	reporter := NewTransientErrorReporter(ch)
+	reporter := NewReporter(ch)
 
 	dispatcherID := common.NewDispatcherID()
 
 	// Report newer epoch first.
 	reported, handled := reporter.Report(
-		time.Now(),
 		[]DispatcherEpoch{{DispatcherID: dispatcherID, Epoch: 3}},
 	)
 	require.True(t, handled)
@@ -74,7 +71,6 @@ func TestTransientErrorReporter_IgnoreStaleEpochAfterNewerEpochReported(t *testi
 
 	// Stale epoch should be ignored.
 	reported, handled = reporter.Report(
-		time.Now(),
 		[]DispatcherEpoch{{DispatcherID: dispatcherID, Epoch: 2}},
 	)
 	require.True(t, handled)
@@ -84,29 +80,4 @@ func TestTransientErrorReporter_IgnoreStaleEpochAfterNewerEpochReported(t *testi
 		t.Fatalf("unexpected event for stale epoch: %+v", event)
 	default:
 	}
-}
-
-func TestTransientErrorReporter_UseMaxEpochPerDispatcherInSingleReport(t *testing.T) {
-	ch := make(chan *ErrorEvent, 1)
-	reporter := NewTransientErrorReporter(ch)
-
-	dispatcherID := common.NewDispatcherID()
-	reported, handled := reporter.Report(
-		time.Now(),
-		[]DispatcherEpoch{
-			{DispatcherID: dispatcherID, Epoch: 1},
-			{DispatcherID: dispatcherID, Epoch: 4},
-		},
-	)
-	require.True(t, handled)
-	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
-	<-ch
-
-	// Epoch=3 is stale because max epoch in previous report is 4.
-	reported, handled = reporter.Report(
-		time.Now(),
-		[]DispatcherEpoch{{DispatcherID: dispatcherID, Epoch: 3}},
-	)
-	require.True(t, handled)
-	require.Empty(t, reported)
 }
