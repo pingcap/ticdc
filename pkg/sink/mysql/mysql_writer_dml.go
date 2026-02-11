@@ -133,23 +133,18 @@ func (w *Writer) shouldGenBatchSQL(tableInfo *common.TableInfo, events []*common
 
 	if !tableInfo.HasPKOrNotNullUK {
 		return false
-	} else {
-		// if the table has pk or uk,
-		// but all the columns in the pk or uk are virtual generated columns,
-		// we also don't generate batch sql,
-		// because the virtual generated column can't be used to detect the row identity.
-		allVirtualGenerated := true
-		colIDs := tableInfo.GetOrderedHandleKeyColumnIDs()
-		for _, colID := range colIDs {
-			info, exist := tableInfo.GetColumnInfo(colID)
-			if !exist {
-				continue
-			}
-			if !info.IsVirtualGenerated() {
-				allVirtualGenerated = false
-			}
+	}
+	// if the table has pk or uk, but the handle key contains virtual generated columns,
+	// we can't batch the events by pk or uk,
+	// because the value of the virtual generated column is calculated by other column,
+	// and we can't guarantee the value of the virtual generated column is the same for the same pk or uk.
+	colIDs := tableInfo.GetOrderedHandleKeyColumnIDs()
+	for _, colID := range colIDs {
+		info, exist := tableInfo.GetColumnInfo(colID)
+		if !exist {
+			continue
 		}
-		if allVirtualGenerated {
+		if info.IsVirtualGenerated() {
 			return false
 		}
 	}

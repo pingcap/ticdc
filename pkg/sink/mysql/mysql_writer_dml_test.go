@@ -117,6 +117,11 @@ func TestShouldGenBatchSQL(t *testing.T) {
 							Offset: 1,
 							Length: types.UnspecifiedLength,
 						},
+						{
+							Name:   ast.NewCIStr("c"),
+							Offset: 2,
+							Length: types.UnspecifiedLength,
+						},
 					},
 				},
 			},
