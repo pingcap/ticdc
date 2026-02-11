@@ -1,0 +1,165 @@
+package scheduler
+
+import (
+	"math"
+	"slices"
+	"time"
+
+	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/coordinator/changefeed"
+	"github.com/pingcap/ticdc/coordinator/nodeliveness"
+	"github.com/pingcap/ticdc/coordinator/operator"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/server/watcher"
+	"go.uber.org/zap"
+)
+
+// drainScheduler generates move operators to move maintainers out of draining nodes.
+// It skips changefeeds that already have in-flight operators.
+type drainScheduler struct {
+	id        string
+	batchSize int
+
+	operatorController *operator.Controller
+	changefeedDB       *changefeed.ChangefeedDB
+	nodeManager        *watcher.NodeManager
+	livenessView       *nodeliveness.View
+
+	rrCursor int
+}
+
+func NewDrainScheduler(
+	id string,
+	batchSize int,
+	oc *operator.Controller,
+	changefeedDB *changefeed.ChangefeedDB,
+	livenessView *nodeliveness.View,
+) *drainScheduler {
+	return &drainScheduler{
+		id:                 id,
+		batchSize:          batchSize,
+		operatorController: oc,
+		changefeedDB:       changefeedDB,
+		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
+		livenessView:       livenessView,
+	}
+}
+
+func (s *drainScheduler) Execute() time.Time {
+	availableSize := s.batchSize - s.operatorController.OperatorSize()
+	if availableSize <= 0 {
+		return time.Now().Add(time.Millisecond * 200)
+	}
+
+	if s.livenessView == nil {
+		return time.Now().Add(time.Second)
+	}
+
+	now := time.Now()
+	drainingNodes := s.livenessView.GetDrainingOrStoppingNodes(now)
+	if len(drainingNodes) == 0 {
+		return now.Add(time.Second)
+	}
+	slices.Sort(drainingNodes)
+
+	destCandidates := s.nodeManager.GetAliveNodeIDs()
+	dst := destCandidates[:0]
+	for _, id := range destCandidates {
+		if s.livenessView.IsSchedulableDest(id, now) {
+			dst = append(dst, id)
+		}
+	}
+	destCandidates = dst
+
+	if len(destCandidates) == 0 {
+		log.Info("no alive destination node for drain",
+			zap.String("schedulerID", s.id),
+			zap.Int("drainingNodeCount", len(drainingNodes)))
+		return now.Add(time.Second)
+	}
+
+	nodeTaskSize := s.changefeedDB.GetTaskSizePerNode()
+	scheduled := 0
+
+	if s.rrCursor >= len(drainingNodes) {
+		s.rrCursor = 0
+	}
+
+	for scheduled < availableSize {
+		progress := false
+		for i := 0; i < len(drainingNodes) && scheduled < availableSize; i++ {
+			origin := drainingNodes[(s.rrCursor+i)%len(drainingNodes)]
+			if s.scheduleOneFromNode(origin, destCandidates, nodeTaskSize) {
+				scheduled++
+				progress = true
+			}
+		}
+		s.rrCursor = (s.rrCursor + 1) % len(drainingNodes)
+		if !progress {
+			break
+		}
+	}
+
+	if scheduled > 0 {
+		log.Info("drain scheduler created move operators",
+			zap.String("schedulerID", s.id),
+			zap.Int("scheduled", scheduled),
+			zap.Int("drainingNodeCount", len(drainingNodes)))
+	}
+
+	return now.Add(time.Millisecond * 200)
+}
+
+func (s *drainScheduler) scheduleOneFromNode(
+	origin node.ID,
+	destCandidates []node.ID,
+	nodeTaskSize map[node.ID]int,
+) bool {
+	maintainers := s.changefeedDB.GetByNodeID(origin)
+	if len(maintainers) == 0 {
+		return false
+	}
+
+	for _, cf := range maintainers {
+		if s.operatorController.HasOperator(cf.ID.DisplayName) {
+			continue
+		}
+		dest, ok := chooseLeastLoadedDest(origin, destCandidates, nodeTaskSize)
+		if !ok {
+			return false
+		}
+		if s.operatorController.AddOperator(operator.NewMoveMaintainerOperator(s.changefeedDB, cf, origin, dest)) {
+			nodeTaskSize[dest]++
+			return true
+		}
+	}
+	return false
+}
+
+func chooseLeastLoadedDest(
+	origin node.ID,
+	destCandidates []node.ID,
+	nodeTaskSize map[node.ID]int,
+) (node.ID, bool) {
+	minSize := math.MaxInt
+	var chosen node.ID
+	for _, id := range destCandidates {
+		if id == origin {
+			continue
+		}
+		size := nodeTaskSize[id]
+		if size < minSize {
+			minSize = size
+			chosen = id
+		}
+	}
+	if chosen.IsEmpty() {
+		return "", false
+	}
+	return chosen, true
+}
+
+func (s *drainScheduler) Name() string {
+	return "drain-scheduler"
+}

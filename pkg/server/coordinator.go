@@ -18,6 +18,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/node"
 )
 
 // Coordinator is the master of the ticdc cluster,
@@ -47,6 +48,9 @@ type Coordinator interface {
 	// RequestResolvedTsFromLogCoordinator requests the log coordinator to report the resolved ts of the changefeed,
 	// and coordinator will update the changefeed status after receiving the resolved ts from log coordinator.
 	RequestResolvedTsFromLogCoordinator(ctx context.Context, changefeedDisplayName common.ChangeFeedDisplayName)
+
+	// DrainNode requests draining on the target node and returns remaining work for drain completion.
+	DrainNode(ctx context.Context, target node.ID) (int, error)
 
 	Initialized() bool
 }

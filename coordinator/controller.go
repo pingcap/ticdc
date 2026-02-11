@@ -20,6 +20,8 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
+	"github.com/pingcap/ticdc/coordinator/drain"
+	"github.com/pingcap/ticdc/coordinator/nodeliveness"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	coscheduler "github.com/pingcap/ticdc/coordinator/scheduler"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -86,6 +88,9 @@ type Controller struct {
 
 	changefeedChangeCh chan []*changefeedChange
 	apiLock            sync.RWMutex
+
+	nodeLivenessView *nodeliveness.View
+	drainController  *drain.Controller
 }
 
 type changefeedChange struct {
@@ -119,6 +124,7 @@ func NewController(
 	changefeedDB := changefeed.NewChangefeedDB(version)
 
 	oc := operator.NewOperatorController(selfNode, changefeedDB, backend, batchSize)
+	nodeLivenessView := nodeliveness.NewView(30 * time.Second)
 	c := &Controller{
 		version:     version,
 		selfNode:    selfNode,
@@ -129,6 +135,14 @@ func NewController(
 				batchSize,
 				oc,
 				changefeedDB,
+				nodeLivenessView,
+			),
+			scheduler.DrainScheduler: coscheduler.NewDrainScheduler(
+				selfNode.ID.String(),
+				batchSize,
+				oc,
+				changefeedDB,
+				nodeLivenessView,
 			),
 			scheduler.BalanceScheduler: coscheduler.NewBalanceScheduler(
 				selfNode.ID.String(),
@@ -136,6 +150,7 @@ func NewController(
 				oc,
 				changefeedDB,
 				balanceInterval,
+				nodeLivenessView,
 			),
 		}),
 		eventCh:            eventCh,
@@ -148,7 +163,9 @@ func NewController(
 		changefeedChangeCh: changefeedChangeCh,
 		pdClient:           pdClient,
 		pdClock:            appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		nodeLivenessView:   nodeLivenessView,
 	}
+	c.drainController = drain.NewController(c.messageCenter, nodeLivenessView, time.Second)
 	c.nodeChanged.changed = false
 
 	c.bootstrapper = bootstrap.NewBootstrapper[heartbeatpb.CoordinatorBootstrapResponse](
@@ -262,6 +279,11 @@ func (c *Controller) onPeriodTask() {
 	for _, req := range requests {
 		_ = c.messageCenter.SendCommand(req)
 	}
+
+	now := time.Now()
+	c.drainController.Tick(now, func(id node.ID) bool {
+		return len(c.changefeedDB.GetByNodeID(id)) == 0 && c.operatorController.CountOperatorsInvolvingNode(id) == 0
+	})
 }
 
 func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage) {
@@ -273,6 +295,14 @@ func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage
 			req := msg.Message[0].(*heartbeatpb.MaintainerHeartbeat)
 			c.handleMaintainerStatus(msg.From, req.Statuses)
 		}
+	case messaging.TypeNodeHeartbeatRequest:
+		req := msg.Message[0].(*heartbeatpb.NodeHeartbeat)
+		c.nodeLivenessView.ObserveHeartbeat(msg.From, req, time.Now())
+		c.drainController.ObserveHeartbeat(msg.From, req)
+	case messaging.TypeSetNodeLivenessResponse:
+		req := msg.Message[0].(*heartbeatpb.SetNodeLivenessResponse)
+		c.nodeLivenessView.ObserveSetNodeLivenessResponse(msg.From, req, time.Now())
+		c.drainController.ObserveSetNodeLivenessResponse(msg.From, req)
 	case messaging.TypeLogCoordinatorResolvedTsResponse:
 		c.onLogCoordinatorReportResolvedTs(msg)
 	default:
@@ -810,6 +840,46 @@ func (c *Controller) GetChangefeed(
 	status := &config.ChangeFeedStatus{CheckpointTs: cf.GetStatus().CheckpointTs, LastSyncedTs: cf.GetStatus().LastSyncedTs, LogCoordinatorResolvedTs: cf.GetLogCoordinatorResolvedTs()}
 	status.SetMaintainerAddr(maintainerAddr)
 	return cf.GetInfo(), status, nil
+}
+
+// DrainNode starts or continues draining the target node and returns remaining work.
+// It is used by the v1 drain API for compatibility.
+//
+// The returned remaining is guaranteed to be non-zero until drain completion can be proven.
+func (c *Controller) DrainNode(_ context.Context, target node.ID) (int, error) {
+	if c.nodeManager.GetNodeInfo(target) == nil {
+		return 0, errors.ErrCaptureNotExist.GenWithStackByArgs(target)
+	}
+
+	now := time.Now()
+	c.drainController.RequestDrain(target, now)
+
+	maintainersOnTarget := len(c.changefeedDB.GetByNodeID(target))
+	inflightOpsInvolvingTarget := c.operatorController.CountOperatorsInvolvingNode(target)
+	remaining := maintainersOnTarget
+	if remaining < inflightOpsInvolvingTarget {
+		remaining = inflightOpsInvolvingTarget
+	}
+
+	_, drainingObserved, stoppingObserved := c.drainController.GetStatus(target)
+	nodeState := c.nodeLivenessView.GetState(target, now)
+
+	// v1 drain API must not return 0 until drain completion is proven.
+	if nodeState == nodeliveness.StateUnknown || !drainingObserved {
+		if remaining == 0 {
+			remaining = 1
+		}
+		return remaining, nil
+	}
+
+	// Return 0 only after STOPPING is observed and all work is done.
+	if stoppingObserved && maintainersOnTarget == 0 && inflightOpsInvolvingTarget == 0 {
+		return 0, nil
+	}
+	if remaining == 0 {
+		remaining = 1
+	}
+	return remaining, nil
 }
 
 // getChangefeed returns the changefeed by id, return nil if not found

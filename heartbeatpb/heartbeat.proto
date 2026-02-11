@@ -136,6 +136,32 @@ message MaintainerStatus {
     uint64 lastSyncedTs = 7;  // last synced ts of all tables in the changefeed, used in /:changefeed_id/synced API
 }
 
+// NodeLiveness is a node-scoped lifecycle state reported by the node itself.
+// It is monotonic and only allows: ALIVE -> DRAINING -> STOPPING.
+enum NodeLiveness {
+    ALIVE = 0;
+    DRAINING = 1;
+    STOPPING = 2;
+}
+
+// NodeHeartbeat is sent periodically from a node to the coordinator.
+message NodeHeartbeat {
+    NodeLiveness liveness = 1;
+    uint64 node_epoch = 2;
+}
+
+// SetNodeLivenessRequest asks a node to transition its local liveness.
+message SetNodeLivenessRequest {
+    NodeLiveness target = 1;
+    uint64 node_epoch = 2;
+}
+
+// SetNodeLivenessResponse reports the liveness state applied by the node.
+message SetNodeLivenessResponse {
+    NodeLiveness applied = 1;
+    uint64 node_epoch = 2;
+}
+
 message CoordinatorBootstrapRequest {
     int64 version = 1;
 }

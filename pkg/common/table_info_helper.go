@@ -125,6 +125,9 @@ func hashTableInfo(tableInfo *model.TableInfo) Digest {
 		for _, col := range idx.Columns {
 			binary.BigEndian.PutUint64(buf, uint64(col.Offset))
 			sha256Hasher.Write(buf)
+			// Index column length affects prefix indexes, which impacts handle decoding.
+			binary.BigEndian.PutUint64(buf, uint64(col.Length))
+			sha256Hasher.Write(buf)
 		}
 		// unique
 		binary.BigEndian.PutUint64(buf, uint64(boolToInt(idx.Unique)))
@@ -252,6 +255,9 @@ func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indice
 		}
 		for j, col := range idx.Columns {
 			if col.Offset != indices[i].Columns[j].Offset {
+				return false
+			}
+			if col.Length != indices[i].Columns[j].Length {
 				return false
 			}
 		}
