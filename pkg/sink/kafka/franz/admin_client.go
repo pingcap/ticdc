@@ -77,21 +77,30 @@ func (a *AdminClient) newRequestContext() (context.Context, context.CancelFunc) 
 }
 
 func (a *AdminClient) GetAllBrokers() []int32 {
+	startTime := time.Now()
 	ctx, cancel := a.newRequestContext()
 	defer cancel()
 
 	meta, err := a.admin.BrokerMetadata(ctx)
 	if err != nil {
+		observeAdminCall(a.changefeed.Keyspace(), a.changefeed.Name(), adminMethodGetAllBrokers, err, time.Since(startTime))
 		log.Warn("Kafka admin client fetch broker metadata failed",
 			zap.String("keyspace", a.changefeed.Keyspace()),
 			zap.String("changefeed", a.changefeed.Name()),
 			zap.Error(err))
 		return nil
 	}
+
+	observeAdminCall(a.changefeed.Keyspace(), a.changefeed.Name(), adminMethodGetAllBrokers, nil, time.Since(startTime))
 	return meta.Brokers.NodeIDs()
 }
 
-func (a *AdminClient) GetBrokerConfig(configName string) (string, error) {
+func (a *AdminClient) GetBrokerConfig(configName string) (value string, err error) {
+	startTime := time.Now()
+	defer func() {
+		observeAdminCall(a.changefeed.Keyspace(), a.changefeed.Name(), adminMethodGetBrokerConfig, err, time.Since(startTime))
+	}()
+
 	ctx, cancel := a.newRequestContext()
 	defer cancel()
 
@@ -131,7 +140,12 @@ func (a *AdminClient) GetBrokerConfig(configName string) (string, error) {
 		"cannot find the `%s` from the broker's configuration", configName)
 }
 
-func (a *AdminClient) GetTopicConfig(topicName string, configName string) (string, error) {
+func (a *AdminClient) GetTopicConfig(topicName string, configName string) (value string, err error) {
+	startTime := time.Now()
+	defer func() {
+		observeAdminCall(a.changefeed.Keyspace(), a.changefeed.Name(), adminMethodGetTopicConfig, err, time.Since(startTime))
+	}()
+
 	ctx, cancel := a.newRequestContext()
 	defer cancel()
 
@@ -170,7 +184,12 @@ func (a *AdminClient) GetTopicConfig(topicName string, configName string) (strin
 func (a *AdminClient) GetTopicsMeta(
 	topics []string,
 	ignoreTopicError bool,
-) (map[string]TopicDetail, error) {
+) (result map[string]TopicDetail, err error) {
+	startTime := time.Now()
+	defer func() {
+		observeAdminCall(a.changefeed.Keyspace(), a.changefeed.Name(), adminMethodGetTopicsMeta, err, time.Since(startTime))
+	}()
+
 	if len(topics) == 0 {
 		return make(map[string]TopicDetail), nil
 	}
@@ -183,7 +202,7 @@ func (a *AdminClient) GetTopicsMeta(
 		return nil, errors.Trace(err)
 	}
 
-	result := make(map[string]TopicDetail, len(topics))
+	result = make(map[string]TopicDetail, len(topics))
 	for _, topic := range topics {
 		detail, ok := meta.Topics[topic]
 		if !ok {
@@ -209,7 +228,12 @@ func (a *AdminClient) GetTopicsMeta(
 	return result, nil
 }
 
-func (a *AdminClient) GetTopicsPartitionsNum(topics []string) (map[string]int32, error) {
+func (a *AdminClient) GetTopicsPartitionsNum(topics []string) (result map[string]int32, err error) {
+	startTime := time.Now()
+	defer func() {
+		observeAdminCall(a.changefeed.Keyspace(), a.changefeed.Name(), adminMethodGetTopicsPartitions, err, time.Since(startTime))
+	}()
+
 	if len(topics) == 0 {
 		return make(map[string]int32), nil
 	}
@@ -222,7 +246,7 @@ func (a *AdminClient) GetTopicsPartitionsNum(topics []string) (map[string]int32,
 		return nil, errors.Trace(err)
 	}
 
-	result := make(map[string]int32, len(topics))
+	result = make(map[string]int32, len(topics))
 	for _, topic := range topics {
 		detail, ok := meta.Topics[topic]
 		if !ok {
@@ -236,14 +260,16 @@ func (a *AdminClient) GetTopicsPartitionsNum(topics []string) (map[string]int32,
 	return result, nil
 }
 
-func (a *AdminClient) CreateTopic(detail *TopicDetail, validateOnly bool) error {
+func (a *AdminClient) CreateTopic(detail *TopicDetail, validateOnly bool) (err error) {
+	startTime := time.Now()
+	defer func() {
+		observeAdminCall(a.changefeed.Keyspace(), a.changefeed.Name(), adminMethodCreateTopic, err, time.Since(startTime))
+	}()
+
 	ctx, cancel := a.newRequestContext()
 	defer cancel()
 
-	var (
-		responses kadm.CreateTopicResponses
-		err       error
-	)
+	var responses kadm.CreateTopicResponses
 	if validateOnly {
 		responses, err = a.admin.ValidateCreateTopics(ctx, detail.NumPartitions, detail.ReplicationFactor, nil, detail.Name)
 	} else {

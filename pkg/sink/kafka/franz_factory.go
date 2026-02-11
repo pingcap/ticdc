@@ -21,10 +21,52 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/kafka/franz"
 )
 
+const (
+	clientTypeAsyncProducer = "async_producer"
+	clientTypeSyncProducer  = "sync_producer"
+	clientTypeAdminClient   = "admin_client"
+)
+
 type franzFactory struct {
 	changefeedID common.ChangeFeedID
 	option       *options
-	metricsHook  *franz.MetricsHook
+
+	asyncMetricsHook *franz.MetricsHook
+	syncMetricsHook  *franz.MetricsHook
+	adminMetricsHook *franz.MetricsHook
+}
+
+type franzMetricsCollector struct {
+	changefeedID common.ChangeFeedID
+	hooks        []*franz.MetricsHook
+}
+
+func (c *franzMetricsCollector) Run(ctx context.Context) {
+	<-ctx.Done()
+	for _, hook := range c.hooks {
+		if hook != nil {
+			hook.CleanupPrometheusMetrics()
+		}
+	}
+	franz.CleanupAdminMetrics(c.changefeedID.Keyspace(), c.changefeedID.Name())
+}
+
+func newFranzMetricsHook(changefeedID common.ChangeFeedID, clientType string) *franz.MetricsHook {
+	hook := franz.NewMetricsHook(clientType)
+	hook.BindPrometheusMetrics(
+		changefeedID.Keyspace(),
+		changefeedID.Name(),
+		franz.PrometheusMetrics{
+			RequestsInFlight:  franzRequestsInFlightByClientGauge,
+			OutgoingByteRate:  franzOutgoingByteTotalByClientGauge,
+			RequestRate:       franzRequestTotalByClientGauge,
+			RequestLatency:    franzRequestLatencyHistogram,
+			ResponseRate:      franzResponseTotalByClientGauge,
+			CompressionRatio:  franzCompressionRatioHistogram,
+			RecordsPerRequest: franzRecordsPerRequestHistogram,
+		},
+	)
+	return hook
 }
 
 // NewFranzFactory constructs a Factory with franz-go implementation.
@@ -47,30 +89,17 @@ func NewFranzFactory(
 		return nil, errors.Trace(err)
 	}
 
-	metricsHook := franz.NewMetricsHook()
-	metricsHook.BindPrometheusMetrics(
-		changefeedID.Keyspace(),
-		changefeedID.Name(),
-		franz.PrometheusMetrics{
-			RequestsInFlight:  requestsInFlightGauge,
-			OutgoingByteRate:  OutgoingByteRateGauge,
-			RequestRate:       RequestRateGauge,
-			RequestLatency:    franzRequestLatencyHistogram,
-			ResponseRate:      responseRateGauge,
-			CompressionRatio:  franzCompressionRatioHistogram,
-			RecordsPerRequest: franzRecordsPerRequestHistogram,
-		},
-	)
-
 	return &franzFactory{
-		changefeedID: changefeedID,
-		option:       o,
-		metricsHook:  metricsHook,
+		changefeedID:     changefeedID,
+		option:           o,
+		asyncMetricsHook: newFranzMetricsHook(changefeedID, clientTypeAsyncProducer),
+		syncMetricsHook:  newFranzMetricsHook(changefeedID, clientTypeSyncProducer),
+		adminMetricsHook: newFranzMetricsHook(changefeedID, clientTypeAdminClient),
 	}, nil
 }
 
 func (f *franzFactory) AdminClient(ctx context.Context) (ClusterAdminClient, error) {
-	adminInner, err := franz.NewAdminClient(ctx, f.changefeedID, newFranzOptions(f.option), f.metricsHook)
+	adminInner, err := franz.NewAdminClient(ctx, f.changefeedID, newFranzOptions(f.option), f.adminMetricsHook)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
@@ -78,7 +107,7 @@ func (f *franzFactory) AdminClient(ctx context.Context) (ClusterAdminClient, err
 }
 
 func (f *franzFactory) SyncProducer(ctx context.Context) (SyncProducer, error) {
-	producer, err := franz.NewSyncProducer(ctx, f.changefeedID, newFranzOptions(f.option), f.metricsHook)
+	producer, err := franz.NewSyncProducer(ctx, f.changefeedID, newFranzOptions(f.option), f.syncMetricsHook)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
@@ -86,7 +115,7 @@ func (f *franzFactory) SyncProducer(ctx context.Context) (SyncProducer, error) {
 }
 
 func (f *franzFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error) {
-	producer, err := franz.NewAsyncProducer(ctx, f.changefeedID, newFranzOptions(f.option), f.metricsHook)
+	producer, err := franz.NewAsyncProducer(ctx, f.changefeedID, newFranzOptions(f.option), f.asyncMetricsHook)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
 	}
@@ -94,7 +123,11 @@ func (f *franzFactory) AsyncProducer(ctx context.Context) (AsyncProducer, error)
 }
 
 func (f *franzFactory) MetricsCollector(_ ClusterAdminClient) MetricsCollector {
-	return f.metricsHook
+	return &franzMetricsCollector{changefeedID: f.changefeedID, hooks: []*franz.MetricsHook{
+		f.asyncMetricsHook,
+		f.syncMetricsHook,
+		f.adminMetricsHook,
+	}}
 }
 
 func newFranzOptions(o *options) *franz.Options {

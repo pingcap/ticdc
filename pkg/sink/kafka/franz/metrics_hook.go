@@ -28,6 +28,7 @@ type MetricsHook struct {
 	promBound  bool
 	keyspace   string
 	changefeed string
+	clientType string
 	prom       PrometheusMetrics
 }
 
@@ -41,8 +42,8 @@ type PrometheusMetrics struct {
 	RecordsPerRequest *prometheus.HistogramVec
 }
 
-func NewMetricsHook() *MetricsHook {
-	return &MetricsHook{}
+func NewMetricsHook(clientType string) *MetricsHook {
+	return &MetricsHook{clientType: clientType}
 }
 
 func (h *MetricsHook) BindPrometheusMetrics(
@@ -88,6 +89,7 @@ func (h *MetricsHook) CleanupPrometheusMetrics() {
 	labels := prometheus.Labels{
 		"namespace":  keyspace,
 		"changefeed": changefeed,
+		"client":     h.clientType,
 	}
 	deleteGaugeVecPartialMatch(metrics.OutgoingByteRate, labels)
 	deleteGaugeVecPartialMatch(metrics.RequestRate, labels)
@@ -110,13 +112,13 @@ func (h *MetricsHook) RecordBrokerWrite(nodeID int32, bytesWritten int, err erro
 	brokerID := strconv.Itoa(int(nodeID))
 
 	if ctx.metrics.OutgoingByteRate != nil && bytesWritten > 0 {
-		ctx.metrics.OutgoingByteRate.WithLabelValues(ctx.keyspace, ctx.changefeed, brokerID).Add(float64(bytesWritten))
+		ctx.metrics.OutgoingByteRate.WithLabelValues(ctx.keyspace, ctx.changefeed, ctx.clientType, brokerID).Add(float64(bytesWritten))
 	}
 	if ctx.metrics.RequestRate != nil {
-		ctx.metrics.RequestRate.WithLabelValues(ctx.keyspace, ctx.changefeed, brokerID).Add(1)
+		ctx.metrics.RequestRate.WithLabelValues(ctx.keyspace, ctx.changefeed, ctx.clientType, brokerID).Add(1)
 	}
 	if err == nil && ctx.metrics.RequestsInFlight != nil {
-		ctx.metrics.RequestsInFlight.WithLabelValues(ctx.keyspace, ctx.changefeed, brokerID).Add(1)
+		ctx.metrics.RequestsInFlight.WithLabelValues(ctx.keyspace, ctx.changefeed, ctx.clientType, brokerID).Add(1)
 	}
 }
 
@@ -147,14 +149,14 @@ func (h *MetricsHook) OnBrokerE2E(
 	brokerID := strconv.Itoa(int(meta.NodeID))
 
 	if e2e.WriteErr == nil && ctx.metrics.RequestsInFlight != nil {
-		ctx.metrics.RequestsInFlight.WithLabelValues(ctx.keyspace, ctx.changefeed, brokerID).Add(-1)
+		ctx.metrics.RequestsInFlight.WithLabelValues(ctx.keyspace, ctx.changefeed, ctx.clientType, brokerID).Add(-1)
 	}
 	if e2e.BytesRead > 0 && e2e.ReadErr == nil && ctx.metrics.ResponseRate != nil {
-		ctx.metrics.ResponseRate.WithLabelValues(ctx.keyspace, ctx.changefeed, brokerID).Add(1)
+		ctx.metrics.ResponseRate.WithLabelValues(ctx.keyspace, ctx.changefeed, ctx.clientType, brokerID).Add(1)
 	}
 	if e2e.Err() == nil && ctx.metrics.RequestLatency != nil {
 		latencyMs := float64(e2e.DurationE2E().Microseconds()) / 1000
-		ctx.metrics.RequestLatency.WithLabelValues(ctx.keyspace, ctx.changefeed, brokerID).Observe(latencyMs)
+		ctx.metrics.RequestLatency.WithLabelValues(ctx.keyspace, ctx.changefeed, ctx.clientType, brokerID).Observe(latencyMs)
 	}
 }
 
@@ -175,17 +177,18 @@ func (h *MetricsHook) RecordProduceBatchWritten(numRecords int, uncompressedByte
 
 	if ctx.metrics.RecordsPerRequest != nil && numRecords > 0 {
 		records := float64(numRecords)
-		ctx.metrics.RecordsPerRequest.WithLabelValues(ctx.keyspace, ctx.changefeed).Observe(records)
+		ctx.metrics.RecordsPerRequest.WithLabelValues(ctx.keyspace, ctx.changefeed, ctx.clientType).Observe(records)
 	}
 	if ctx.metrics.CompressionRatio != nil && uncompressedBytes > 0 && compressedBytes > 0 {
 		ratio := float64(uncompressedBytes) / float64(compressedBytes) * 100
-		ctx.metrics.CompressionRatio.WithLabelValues(ctx.keyspace, ctx.changefeed).Observe(ratio)
+		ctx.metrics.CompressionRatio.WithLabelValues(ctx.keyspace, ctx.changefeed, ctx.clientType).Observe(ratio)
 	}
 }
 
 type metricsContext struct {
 	keyspace   string
 	changefeed string
+	clientType string
 	metrics    PrometheusMetrics
 }
 
@@ -197,6 +200,7 @@ func (h *MetricsHook) loadMetricsContext() (metricsContext, bool) {
 	return metricsContext{
 		keyspace:   keyspace,
 		changefeed: changefeed,
+		clientType: h.clientType,
 		metrics:    metrics,
 	}, true
 }
