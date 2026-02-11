@@ -27,7 +27,7 @@ func TestBuildMessageRecoverInfo(t *testing.T) {
 	}, info.Dispatchers)
 }
 
-func TestBuildMessageRecoverInfo_UseMaxEpochForSameDispatcher(t *testing.T) {
+func TestBuildMessageRecoverInfoUseMaxEpochForSameDispatcher(t *testing.T) {
 	dispatcherID := commonPkg.NewDispatcherID()
 	events := []*commonEvent.RowEvent{
 		{DispatcherID: dispatcherID, Epoch: 11},

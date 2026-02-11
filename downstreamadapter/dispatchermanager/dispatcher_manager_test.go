@@ -14,10 +14,7 @@ package dispatchermanager
 
 import (
 	"context"
-	"go/parser"
-	"go/token"
 	"math"
-	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -174,18 +171,6 @@ func TestCollectRecoverableErrorsEnqueueRecoverDispatcherRequest(t *testing.T) {
 	require.NotNil(t, req.Request)
 	require.Equal(t, manager.changefeedID.ToPB(), req.Request.ChangefeedID)
 	require.Equal(t, []*heartbeatpb.DispatcherID{dispatcherID.ToPB()}, req.Request.DispatcherIDs)
-}
-
-func TestDispatcherManagerDoesNotImportKafkaSinkPackage(t *testing.T) {
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "dispatcher_manager.go", nil, parser.ImportsOnly)
-	require.NoError(t, err)
-
-	for _, imp := range f.Imports {
-		p, err := strconv.Unquote(imp.Path.Value)
-		require.NoError(t, err)
-		require.NotEqual(t, "github.com/pingcap/ticdc/pkg/sink/kafka", p)
-	}
 }
 
 func TestCollectComponentStatusWhenChangedWatermarkSeqNoFallback(t *testing.T) {

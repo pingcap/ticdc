@@ -122,7 +122,7 @@ func TestMoveOperator_DestNodeRemovedBeforeOriginStopped(t *testing.T) {
 	require.Equal(t, "", replicaSet.GetNodeID().String())
 }
 
-func TestMoveOperator_ForceRestartOnSameNode(t *testing.T) {
+func TestMoveOperatorForceRestartOnSameNode(t *testing.T) {
 	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
 
 	op := NewRestartDispatcherOperator(spanController, replicaSet, nodeA)

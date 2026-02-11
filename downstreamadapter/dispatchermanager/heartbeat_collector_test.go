@@ -38,7 +38,7 @@ func (m *failingCommandMessageCenter) OnNodeChanges(_ map[node.ID]*node.Info) {}
 
 func (m *failingCommandMessageCenter) Close() {}
 
-func TestSendRecoverDispatcherMessages_SendFailureFallsBackToErrorChannel(t *testing.T) {
+func TestSendRecoverDispatcherMessagesSendFailureFallsBackToErrorChannel(t *testing.T) {
 	recoverQueue := NewRecoverDispatcherRequestQueue()
 	fallbackErrCh := make(chan error, 1)
 	sendErr := perrors.New("send command failed")

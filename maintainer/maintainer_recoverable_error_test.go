@@ -1,3 +1,16 @@
+// Copyright 2026 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package maintainer
 
 import (
@@ -16,10 +29,13 @@ import (
 	"go.uber.org/atomic"
 )
 
-func TestRecoverDispatcherRequest_RestartDispatchers(t *testing.T) {
+func newRecoverDispatcherTestMaintainer(t *testing.T) (*Maintainer, *Controller, common.DispatcherID, node.ID) {
+	t.Helper()
+
 	testutil.SetUpTestServices()
+	nodeID := node.ID("node1")
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
-	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
+	nodeManager.GetAliveNodes()[nodeID] = &node.Info{ID: nodeID}
 
 	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlDispatcherID := common.NewDispatcherID()
@@ -33,7 +49,7 @@ func TestRecoverDispatcherRequest_RestartDispatchers(t *testing.T) {
 			ComponentStatus: heartbeatpb.ComponentState_Working,
 			CheckpointTs:    1,
 		},
-		node.ID("node1"),
+		nodeID,
 		false,
 	)
 	refresher := replica.NewRegionCountRefresher(changefeedID, time.Minute)
@@ -49,151 +65,71 @@ func TestRecoverDispatcherRequest_RestartDispatchers(t *testing.T) {
 		common.DefaultMode,
 		false,
 	)
-	spanReplica.SetNodeID(node.ID("node1"))
+	spanReplica.SetNodeID(nodeID)
 	controller.spanController.AddReplicatingSpan(spanReplica)
 
 	m := &Maintainer{
-		changefeedID: changefeedID,
-		controller:   controller,
+		changefeedID:  changefeedID,
+		controller:    controller,
+		nodeManager:   nodeManager,
+		statusChanged: atomic.NewBool(false),
 	}
+	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
 	m.initialized.Store(true)
+	return m, controller, dispatcherID, nodeID
+}
 
-	req := &heartbeatpb.RecoverDispatcherRequest{
+func newRecoverDispatcherRequest(changefeedID common.ChangeFeedID, dispatcherID common.DispatcherID) *heartbeatpb.RecoverDispatcherRequest {
+	return &heartbeatpb.RecoverDispatcherRequest{
 		ChangefeedID:  changefeedID.ToPB(),
 		DispatcherIDs: []*heartbeatpb.DispatcherID{dispatcherID.ToPB()},
 	}
-	m.onRecoverDispatcherRequest(node.ID("node1"), req)
+}
+
+func TestRecoverDispatcherRequestRestartDispatchers(t *testing.T) {
+	m, controller, dispatcherID, nodeID := newRecoverDispatcherTestMaintainer(t)
+	req := newRecoverDispatcherRequest(m.changefeedID, dispatcherID)
+	m.onRecoverDispatcherRequest(nodeID, req)
 
 	op := controller.operatorController.GetOperator(dispatcherID)
 	require.NotNil(t, op)
 
 	msg := op.Schedule()
 	require.NotNil(t, msg)
-	require.Equal(t, node.ID("node1").String(), msg.To.String())
+	require.Equal(t, nodeID.String(), msg.To.String())
 	scheduleMsg, ok := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
 	require.True(t, ok)
 	require.Equal(t, heartbeatpb.ScheduleAction_Remove, scheduleMsg.ScheduleAction)
 }
 
-func TestRecoverDispatcherRequest_RestartAgainAfterPreviousRestartFinished(t *testing.T) {
-	testutil.SetUpTestServices()
-	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
-	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
-
-	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
-	ddlDispatcherID := common.NewDispatcherID()
-	ddlSpan := replica.NewWorkingSpanReplication(
-		changefeedID,
-		ddlDispatcherID,
-		common.DDLSpanSchemaID,
-		common.KeyspaceDDLSpan(common.DefaultKeyspaceID),
-		&heartbeatpb.TableSpanStatus{
-			ID:              ddlDispatcherID.ToPB(),
-			ComponentStatus: heartbeatpb.ComponentState_Working,
-			CheckpointTs:    1,
-		},
-		node.ID("node1"),
-		false,
-	)
-	refresher := replica.NewRegionCountRefresher(changefeedID, time.Minute)
-	controller := NewController(changefeedID, 1, nil, nil, ddlSpan, nil, 1, time.Minute, refresher, common.DefaultKeyspace, false)
-
-	dispatcherID := common.NewDispatcherID()
-	spanReplica := replica.NewSpanReplication(
-		changefeedID,
-		dispatcherID,
-		1,
-		testutil.GetTableSpanByID(1),
-		1,
-		common.DefaultMode,
-		false,
-	)
-	spanReplica.SetNodeID(node.ID("node1"))
-	controller.spanController.AddReplicatingSpan(spanReplica)
-
-	m := &Maintainer{
-		changefeedID:  changefeedID,
-		controller:    controller,
-		nodeManager:   nodeManager,
-		statusChanged: atomic.NewBool(false),
-	}
-	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
-	m.initialized.Store(true)
-
-	req := &heartbeatpb.RecoverDispatcherRequest{
-		ChangefeedID:  changefeedID.ToPB(),
-		DispatcherIDs: []*heartbeatpb.DispatcherID{dispatcherID.ToPB()},
-	}
-	m.onRecoverDispatcherRequest(node.ID("node1"), req)
+func TestRecoverDispatcherRequestRestartAgainAfterPreviousRestartFinished(t *testing.T) {
+	m, controller, dispatcherID, nodeID := newRecoverDispatcherTestMaintainer(t)
+	req := newRecoverDispatcherRequest(m.changefeedID, dispatcherID)
+	m.onRecoverDispatcherRequest(nodeID, req)
 	require.NotNil(t, controller.operatorController.GetOperator(dispatcherID))
 
-	finishMoveOperator(t, controller, dispatcherID, node.ID("node1"))
+	finishMoveOperator(t, controller, dispatcherID, nodeID)
 	require.Nil(t, controller.operatorController.GetOperator(dispatcherID))
 
 	// A second request after the previous restart finished should schedule a new restart.
 	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
-	m.onRecoverDispatcherRequest(node.ID("node1"), req)
+	m.onRecoverDispatcherRequest(nodeID, req)
 	require.Empty(t, m.runningErrors.m)
 	require.NotNil(t, controller.operatorController.GetOperator(dispatcherID))
 }
 
-func TestRecoverDispatcherRequest_DowngradeToFatalWhenAttemptsExceeded(t *testing.T) {
-	testutil.SetUpTestServices()
-	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
-	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
-
-	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
-	ddlDispatcherID := common.NewDispatcherID()
-	ddlSpan := replica.NewWorkingSpanReplication(
-		changefeedID,
-		ddlDispatcherID,
-		common.DDLSpanSchemaID,
-		common.KeyspaceDDLSpan(common.DefaultKeyspaceID),
-		&heartbeatpb.TableSpanStatus{
-			ID:              ddlDispatcherID.ToPB(),
-			ComponentStatus: heartbeatpb.ComponentState_Working,
-			CheckpointTs:    1,
-		},
-		node.ID("node1"),
-		false,
-	)
-	refresher := replica.NewRegionCountRefresher(changefeedID, time.Minute)
-	controller := NewController(changefeedID, 1, nil, nil, ddlSpan, nil, 1, time.Minute, refresher, common.DefaultKeyspace, false)
-
-	dispatcherID := common.NewDispatcherID()
-	spanReplica := replica.NewSpanReplication(
-		changefeedID,
-		dispatcherID,
-		1,
-		testutil.GetTableSpanByID(1),
-		1,
-		common.DefaultMode,
-		false,
-	)
-	spanReplica.SetNodeID(node.ID("node1"))
-	controller.spanController.AddReplicatingSpan(spanReplica)
-
-	m := &Maintainer{
-		changefeedID:  changefeedID,
-		controller:    controller,
-		nodeManager:   nodeManager,
-		statusChanged: atomic.NewBool(false),
-	}
-	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
-	m.initialized.Store(true)
+func TestRecoverDispatcherRequestDowngradeToFatalWhenAttemptsExceeded(t *testing.T) {
+	m, controller, dispatcherID, nodeID := newRecoverDispatcherTestMaintainer(t)
 
 	now := time.Now()
 	for i := 0; i < recoverableDispatcherRestartMaxAttempts; i++ {
 		m.recordRecoverableDispatcherRestart(dispatcherID, now)
 	}
 
-	req := &heartbeatpb.RecoverDispatcherRequest{
-		ChangefeedID:  changefeedID.ToPB(),
-		DispatcherIDs: []*heartbeatpb.DispatcherID{dispatcherID.ToPB()},
-	}
-	m.onRecoverDispatcherRequest(node.ID("node1"), req)
+	req := newRecoverDispatcherRequest(m.changefeedID, dispatcherID)
+	m.onRecoverDispatcherRequest(nodeID, req)
 
-	fatal := m.runningErrors.m[node.ID("node1")]
+	fatal := m.runningErrors.m[nodeID]
 	require.NotNil(t, fatal)
 	require.Equal(t, string(cerrors.ErrMaintainerRecoverableRestartExceededBudget.RFCCode()), fatal.Code)
 	require.Nil(t, controller.operatorController.GetOperator(dispatcherID))
