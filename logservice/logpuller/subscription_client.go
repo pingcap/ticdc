@@ -967,6 +967,7 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 				zap.Uint64("regionID", regionID),
 				zap.Uint64("targetTs", targetTs),
 				zap.Time("lastRun", lastRun),
+				zap.Any("state", state),
 				zap.Error(err))
 		}
 		resolveLastRun[regionID] = time.Now()
