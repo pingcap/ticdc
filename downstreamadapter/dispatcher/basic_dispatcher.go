@@ -217,10 +217,9 @@ type BasicDispatcher struct {
 
 	BootstrapState bootstrapState
 
-	// tableModeCompatibilityChecked indicates whether we have already validated that
-	// the table schema is compatible with the current replication mode configuration.
-	// The first DML/DDL must trigger this validation. After that, only DDL events need
-	// to keep checking because they may change the table schema.
+	// tableModeCompatibilityChecked indicates whether we have already validated the newest
+	// table schema is compatible with the current replication mode configuration.
+	// Only when the initial case or a ddl event is received, we will reset tableModeCompatibilityChecked to check the compatibility.
 	tableModeCompatibilityChecked bool
 }
 
@@ -402,20 +401,19 @@ func (d *BasicDispatcher) ensureActiveActiveTableInfo(tableInfo *common.TableInf
 	return nil
 }
 
-// checkTableModeCompatibility validates that the table schema matches the current replication mode configuration.
-//
+// checkTableModeCompatibility validates that the newest table schema matches the current replication mode configuration.
 // It prevents misconfigurations where a special table (active-active / soft-delete) is replicated with
-// incompatible settings. It also marks tableModeCompatibilityChecked so DML events can skip repeated
-// checks, while DDL events continue to validate because they may change the table schema.
+// incompatible settings.
 func (d *BasicDispatcher) checkTableModeCompatibility(event commonEvent.Event) error {
 	defer func() {
 		d.tableModeCompatibilityChecked = true
 	}()
+
 	switch ev := event.(type) {
 	case *commonEvent.DMLEvent:
 		return d.ensureTableModeCompatibility(ev.TableInfo)
-	case *commonEvent.DDLEvent:
-		return d.ensureTableModeCompatibility(ev.TableInfo)
+	default:
+		log.Error("unexpected event type for table mode compatibility check", zap.Int("eventType", event.GetType()))
 	}
 	return nil
 }
@@ -638,10 +636,10 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				log.Panic("ddl event should only be singly handled",
 					zap.Stringer("dispatcherID", d.id))
 			}
-			if err := d.checkTableModeCompatibility(event); err != nil {
-				d.HandleError(err)
-				return block
-			}
+			// reset the tableModeCompatibilityChecked when receive a ddl event,
+			// because ddl event may change the table schema,
+			// which may cause the table not compatible with current replication mode anymore.
+			d.tableModeCompatibilityChecked = false
 
 			failpoint.Inject("BlockOrWaitBeforeDealWithDDL", nil)
 			block = true
