@@ -17,7 +17,6 @@ import (
 	"bytes"
 	"fmt"
 	"math/rand"
-	"sync/atomic"
 
 	"workload/schema"
 )
@@ -136,7 +135,6 @@ PARTITION BY RANGE COLUMNS(col4)
 `
 
 type BankWorkload struct {
-	ddlExecutedCount uint64
 }
 
 func NewBankWorkload() schema.Workload {
@@ -285,11 +283,7 @@ WHERE auto_id IN (
 
 func (c *BankWorkload) BuildDDLSql(opts schema.DDLOption) string {
 	tableName := getBankTableName(opts.TableIndex)
-	count := atomic.AddUint64(&c.ddlExecutedCount, 1)
-	if count%2 == 0 {
-		return fmt.Sprintf("alter table %s add column col_add int default null;", tableName)
-	}
-	return fmt.Sprintf("alter table %s drop column col_add;", tableName)
+	return fmt.Sprintf("truncate table %s;", tableName)
 }
 
 func getBankTableName(n int) string {
