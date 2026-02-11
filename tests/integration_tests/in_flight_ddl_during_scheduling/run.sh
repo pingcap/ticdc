@@ -110,6 +110,8 @@ EOF
 	echo "ddl_ts: $ddl_ts"
 	expected_start_ts=$((ddl_ts - 1))
 
+	sleep 15
+
 	move_table_with_retry "127.0.0.1:8301" $table_1_id "$CHANGEFEED_ID" 10
 
 	# The moved dispatcher must start from (ddl_ts - 1) and enable skipDMLAsStartTs.
@@ -155,6 +157,8 @@ EOF
 
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforeWrite=pause;github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforePass=pause'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "2" --addr "127.0.0.1:8302"
+
+	sleep 15
 	move_split_table_with_retry "127.0.0.1:8302" $table_1_id "$CHANGEFEED_ID" 10
 
 	merge_log=$WORK_DIR/cdc2.log
