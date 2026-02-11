@@ -51,8 +51,7 @@ func TestAttachMessageRecoverInfo(t *testing.T) {
 	message := NewMsg(nil, nil)
 	message.SetRowsCount(1)
 
-	err := AttachMessageRecoverInfo([]*Message{message}, events)
-	require.NoError(t, err)
+	AttachMessageRecoverInfo([]*Message{message}, events)
 	require.NotNil(t, message.RecoverInfo)
 	require.Equal(t, []recoverable.DispatcherEpoch{
 		{DispatcherID: dispatcherID, Epoch: 100},

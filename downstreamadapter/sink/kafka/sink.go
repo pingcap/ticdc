@@ -117,12 +117,8 @@ func New(
 	}, nil
 }
 
-type recoverableErrorChanSetter interface {
-	SetRecoverableErrorChan(ch chan<- *recoverable.ErrorEvent)
-}
-
 func (s *sink) SetRecoverableErrorChan(ch chan<- *recoverable.ErrorEvent) {
-	setter, ok := s.dmlProducer.(recoverableErrorChanSetter)
+	setter, ok := s.dmlProducer.(recoverable.ErrorEventChanSetter)
 	if !ok {
 		return
 	}
@@ -495,7 +491,7 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return context.Cause(ctx)
+			return errors.Trace(ctx.Err())
 		case <-ticker.C:
 			s.ddlProducer.Heartbeat()
 		case ts, ok := <-s.checkpointChan:
