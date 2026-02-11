@@ -113,11 +113,6 @@ func TestShouldGenBatchSQL(t *testing.T) {
 					State:  tidbmodel.StatePublic,
 					Columns: []*tidbmodel.IndexColumn{
 						{
-							Name:   ast.NewCIStr("a"),
-							Offset: 0,
-							Length: types.UnspecifiedLength,
-						},
-						{
 							Name:   ast.NewCIStr("b"),
 							Offset: 1,
 							Length: types.UnspecifiedLength,
