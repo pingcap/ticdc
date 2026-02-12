@@ -84,6 +84,7 @@ func (w *Writer) generateNormalSQL(event *commonEvent.DMLEvent) ([]string, [][]i
 	for {
 		row, ok := event.GetNextRow()
 		if !ok {
+			event.Rewind()
 			break
 		}
 		var (
@@ -378,8 +379,8 @@ func (w *Writer) generateBatchSQLInUnSafeMode(events []*commonEvent.DMLEvent) ([
 	tableInfo := events[0].TableInfo
 	finalRowLists, _, err := w.buildRowChangesForUnSafeBatch(events, tableInfo)
 	if err != nil {
-		sql, values, _ := w.generateBatchSQLsPerEvent(events)
-		log.Info("normal sql should be", zap.Any("sql", sql), zap.String("values", util.RedactAny(values)), zap.Int("writerID", w.id))
+		sql, values, rowTypes := w.generateBatchSQLsPerEvent(events)
+		log.Info("normal sql should be", zap.Any("sql", sql), zap.String("values", util.RedactAny(values)), zap.Any("rowTypes", rowTypes), zap.Int("writerID", w.id))
 		log.Panic("invalid rows when generating batch SQL in unsafe mode",
 			zap.Error(err), zap.Any("events", events), zap.Int("writerID", w.id))
 	}
