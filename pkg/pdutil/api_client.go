@@ -124,7 +124,7 @@ func NewPDAPIClient(pdClient pd.Client, conf *security.Credential) (PDAPIClient,
 		return nil, errors.Trace(err)
 	}
 
-	pdHttpClient, err := newPdHttpClient(pdClient, conf)
+	pdHttpClient, err := NewPDHTTPClient(pdClient, conf)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -136,7 +136,11 @@ func NewPDAPIClient(pdClient pd.Client, conf *security.Credential) (PDAPIClient,
 	}, nil
 }
 
-func newPdHttpClient(pdClient pd.Client, conf *security.Credential) (pdhttp.Client, error) {
+// NewPDHTTPClient creates a PD HTTP client using the service discovery from the
+// given gRPC PD client and the optional TLS configuration.
+//
+// The returned client must be closed by the caller.
+func NewPDHTTPClient(pdClient pd.Client, conf *security.Credential) (pdhttp.Client, error) {
 	discovery := pdClient.GetServiceDiscovery()
 	pdhttpOpts := make([]pdhttp.ClientOption, 0)
 

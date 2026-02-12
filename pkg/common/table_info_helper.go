@@ -18,6 +18,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 
@@ -377,7 +378,7 @@ func (s *SharedColumnSchemaStorage) tryReleaseColumnSchema(columnSchema *columnS
 			if s.m[columnSchema.Digest][idx].count == 0 {
 				// release the columnSchema object
 				SharedColumnSchemaCountGauge.Dec()
-				s.m[columnSchema.Digest] = append(s.m[columnSchema.Digest][:idx], s.m[columnSchema.Digest][idx+1:]...)
+				s.m[columnSchema.Digest] = slices.Delete(s.m[columnSchema.Digest], idx, idx+1)
 				if len(s.m[columnSchema.Digest]) == 0 {
 					delete(s.m, columnSchema.Digest)
 				}

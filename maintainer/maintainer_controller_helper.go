@@ -36,48 +36,82 @@ import (
 // only for test
 // moveTable is used for inner api(which just for make test cases convience) to force move a table to a target node.
 // moveTable only works for the complete table, not for the table splited.
-func (c *Controller) moveTable(tableId int64, targetNode node.ID, mode int64) error {
+func (c *Controller) moveTable(tableID int64, targetNode node.ID, mode int64, wait bool) error {
 	if common.IsRedoMode(mode) && !c.enableRedo {
 		return nil
 	}
 	spanController := c.getSpanController(mode)
 	operatorController := c.getOperatorController(mode)
 
-	if err := c.checkParams(tableId, targetNode, mode); err != nil {
+	if err := c.checkParams(tableID, targetNode, mode); err != nil {
 		return err
 	}
 
-	replications := spanController.GetTasksByTableID(tableId)
-	if len(replications) != 1 {
-		return errors.ErrTableIsNotFounded.GenWithStackByArgs("unexpected number of replications found for table in this node; tableID is %s, replication count is %s", tableId, len(replications))
-	}
+	maxTry := 30
+	for {
+		replications := spanController.GetTasksByTableID(tableID)
+		if len(replications) != 1 {
+			return errors.ErrTableIsNotFounded.GenWithStackByArgs("unexpected number of replications found for table in this node; tableID is %s, replication count is %s", tableID, len(replications))
+		}
 
-	replication := replications[0]
+		replication := replications[0]
 
-	if replication.GetNodeID() == targetNode {
-		log.Info("table is already on the target node", zap.Int64("tableID", tableId), zap.String("targetNode", targetNode.String()))
+		if replication.GetNodeID() == targetNode {
+			log.Info("table is already on the target node", zap.Int64("tableID", tableID), zap.String("targetNode", targetNode.String()))
+			return nil
+		}
+
+		op := operatorController.NewMoveOperator(replication, replication.GetNodeID(), targetNode)
+		ret := operatorController.AddOperator(op)
+		if !ret {
+			// moveTable is a test helper and can be called while another operator is already running
+			// for the same table (e.g. bootstrap add / DDL-triggered scheduling). Reuse or wait for the
+			// existing operator to avoid creating conflicting operators in tests.
+			existing := operatorController.GetOperator(op.ID())
+			if existing == nil {
+				return errors.ErrOperatorIsNil.GenWithStackByArgs("add operator failed")
+			}
+			switch existing.Type() {
+			case "move":
+				op = existing
+			case "add":
+				if !wait {
+					return errors.ErrOperatorIsNil.GenWithStackByArgs("table is being added, retry later")
+				}
+				count := 0
+				for !existing.IsFinished() && count < maxTry {
+					time.Sleep(2 * time.Second)
+					count += 1
+					log.Info("wait for existing operator finished before moving table",
+						zap.Int("count", count),
+						zap.String("operatorType", existing.Type()))
+				}
+				if !existing.IsFinished() {
+					return errors.ErrTimeout.GenWithStackByArgs("existing operator is timeout")
+				}
+				continue
+			default:
+				return errors.ErrOperatorIsNil.GenWithStackByArgs("unexpected existing operator type: %s", existing.Type())
+			}
+		}
+
+		if !wait {
+			return nil
+		}
+
+		// check the op is finished or not
+		count := 0
+		for !op.IsFinished() && count < maxTry {
+			time.Sleep(2 * time.Second)
+			count += 1
+			log.Info("wait for move table operator finished", zap.Int("count", count))
+		}
+
+		if !op.IsFinished() {
+			return errors.ErrTimeout.GenWithStackByArgs("move table operator is timeout")
+		}
 		return nil
 	}
-	op := operatorController.NewMoveOperator(replication, replication.GetNodeID(), targetNode)
-	ret := operatorController.AddOperator(op)
-	if !ret {
-		return errors.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create move operator")
-	}
-
-	// check the op is finished or not
-	count := 0
-	maxTry := 30
-	for !op.IsFinished() && count < maxTry {
-		time.Sleep(1 * time.Second)
-		count += 1
-		log.Info("wait for move table operator finished", zap.Int("count", count))
-	}
-
-	if !op.IsFinished() {
-		return errors.ErrTimeout.GenWithStackByArgs("move table operator is timeout")
-	}
-
-	return nil
 }
 
 // only for test
@@ -210,6 +244,18 @@ func (c *Controller) mergeTable(tableID int64, mode int64) error {
 	}
 	spanController := c.getSpanController(mode)
 	operatorController := c.getOperatorController(mode)
+	maxTry := 30
+
+	waitUntilNoOperator := func(id common.DispatcherID, timeout time.Duration) error {
+		deadline := time.Now().Add(timeout)
+		for operatorController.GetOperator(id) != nil && time.Now().Before(deadline) {
+			time.Sleep(200 * time.Millisecond)
+		}
+		if operatorController.GetOperator(id) != nil {
+			return errors.ErrTimeout.GenWithStackByArgs("existing operator is timeout")
+		}
+		return nil
+	}
 
 	if !spanController.IsTableExists(tableID) {
 		// the table is not exist in this node
@@ -251,13 +297,32 @@ func (c *Controller) mergeTable(tableID int64, mode int64) error {
 		idx = 0
 		// try to move the second span to the first span's node
 		moveOp := operatorController.NewMoveOperator(replications[1], replications[1].GetNodeID(), replications[0].GetNodeID())
-		ret := operatorController.AddOperator(moveOp)
-		if !ret {
-			return errors.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create move operator")
+		for {
+			ret := operatorController.AddOperator(moveOp)
+			if ret {
+				break
+			}
+			existing := operatorController.GetOperator(moveOp.ID())
+			if existing == nil {
+				return errors.ErrOperatorIsNil.GenWithStackByArgs("add operator failed")
+			}
+			// If there is already a move operator, reuse it.
+			if existing.Type() == "move" {
+				moveOp = existing
+				break
+			}
+			// Other operator types (add/split/merge/occupy/...) can temporarily block move.
+			// Wait for it to be removed then retry creating a move operator.
+			log.Info("wait for existing operator finished before moving table in merge table",
+				zap.String("existingOperatorType", existing.Type()),
+				zap.String("existingOperator", existing.String()))
+			if err := waitUntilNoOperator(moveOp.ID(), 60*time.Second); err != nil {
+				return err
+			}
+			moveOp = operatorController.NewMoveOperator(replications[1], replications[1].GetNodeID(), replications[0].GetNodeID())
 		}
 
 		count := 0
-		maxTry := 30
 		flag := false
 		for count < maxTry {
 			if moveOp.IsFinished() {
@@ -274,13 +339,35 @@ func (c *Controller) mergeTable(tableID int64, mode int64) error {
 		}
 	}
 
-	operator := operatorController.AddMergeOperator(replications[idx : idx+2])
+	var operator pkgoperator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]
+	for attempt := 0; attempt < maxTry; attempt++ {
+		operator = operatorController.AddMergeOperator(replications[idx : idx+2])
+		if operator != nil {
+			break
+		}
+
+		// Retry when any existing operator blocks occupy/merge operators creation.
+		// Wait until both involved spans are operator-free.
+		if operatorController.GetOperator(replications[idx].ID) != nil ||
+			operatorController.GetOperator(replications[idx+1].ID) != nil {
+			if err := waitUntilNoOperator(replications[idx].ID, 60*time.Second); err != nil {
+				return err
+			}
+			if err := waitUntilNoOperator(replications[idx+1].ID, 60*time.Second); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// No operators are blocking, but we still can't create a merge operator. Give it some time
+		// for state convergence, then try again.
+		time.Sleep(200 * time.Millisecond)
+	}
 	if operator == nil {
 		return errors.ErrOperatorIsNil.GenWithStackByArgs("unexpected error in create merge operator")
 	}
 
 	count := 0
-	maxTry := 30
 	for count < maxTry {
 		if operator.IsFinished() {
 			return nil
