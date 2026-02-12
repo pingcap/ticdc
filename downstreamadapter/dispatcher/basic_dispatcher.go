@@ -29,6 +29,8 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	tidbTypes "github.com/pingcap/tidb/pkg/types"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -78,6 +80,7 @@ type Dispatcher interface {
 	GetEventSizePerSecond() float32
 	IsTableTriggerDispatcher() bool
 	DealWithBlockEvent(event commonEvent.BlockEvent)
+	EnableActiveActive() bool
 	TryClose() (w heartbeatpb.Watermark, ok bool)
 	Remove()
 }
@@ -141,9 +144,9 @@ type BasicDispatcher struct {
 	//    to avoid duplicate writes while ensuring the DDL is replayed.
 	// Note: When is_syncpoint=true AND finished=0 (DDL finished but syncpoint not finished),
 	// skipDMLAsStartTs is false because the DDL is already completed and DML should be processed normally.
-	// 2. maintainer ask dispatcher to make a move operator, while the dispatcher just dealing with a ddl event.
-	//    and the block state for ddl event is still waiting.
-	//    In this case, we also return startTs = ddlTs-1 to replay the DDL but skip the dmls.
+	// 2. maintainer asks dispatcher manager to move/recreate a dispatcher while this dispatcher is still
+	//    in the WAITING stage of a DDL barrier.
+	//    In this case, we also return startTs = ddlTs-1 to replay the DDL but skip the DMLs at ddlTs.
 	skipDMLAsStartTs bool
 	// The ts from pdClock when the dispatcher is created.
 	// when downstream is mysql-class, for dml event we need to compare the commitTs with this ts
@@ -213,6 +216,11 @@ type BasicDispatcher struct {
 	mode int64
 
 	BootstrapState bootstrapState
+
+	// tableModeCompatibilityChecked indicates whether we have already validated the newest
+	// table schema is compatible with the current replication mode configuration.
+	// Only when the initial case or a ddl event is received, we will reset tableModeCompatibilityChecked to check the compatibility.
+	tableModeCompatibilityChecked bool
 }
 
 func NewBasicDispatcher(
@@ -254,6 +262,45 @@ func NewBasicDispatcher(
 	return dispatcher
 }
 
+// AddDMLEventsToSink filters events for special tables and only returns true when
+// at least one event remains to be written to the downstream sink.
+func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) bool {
+	// Normal DML dispatch: most tables just pass through this function unchanged.
+	// Active-active or soft-delete tables are processed by FilterDMLEvent before
+	// being handed over to the sink (delete rows dropped; soft-delete transitions may
+	// be rewritten into deletes when enable-active-active is disabled).
+	filteredEvents := make([]*commonEvent.DMLEvent, 0, len(events))
+	for _, event := range events {
+		// FilterDMLEvent returns the original event for normal tables and only
+		// allocates a new event when the table needs active-active or soft-delete
+		// processing. Skip is true when every row in the event is dropped, or when
+		// the event contains unexpected schema issues that have been reported via
+		// HandleError.
+		filtered, skip := commonEvent.FilterDMLEvent(event, d.sharedInfo.enableActiveActive, d.HandleError)
+		if skip || filtered == nil {
+			continue
+		}
+		filteredEvents = append(filteredEvents, filtered)
+	}
+	if len(filteredEvents) == 0 {
+		log.Debug("all events filtered")
+		// Nothing left to flush. Caller will treat this batch as non-blocking.
+		return false
+	}
+
+	// for one batch events, we need to add all them in table progress first, then add them to sink
+	// because we need to ensure the wakeCallback only will be called when
+	// all these events are flushed to downstream successfully
+	for _, event := range filteredEvents {
+		d.tableProgress.Add(event)
+	}
+	for _, event := range filteredEvents {
+		d.sink.AddDMLEvent(event)
+		failpoint.Inject("BlockAddDMLEvents", nil)
+	}
+	return true
+}
+
 // InitializeTableSchemaStore initializes the tableSchemaStore for the table trigger event dispatcher.
 // It returns true if the tableSchemaStore is initialized successfully, otherwise returns fals
 func (d *BasicDispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo) (ok bool, err error) {
@@ -271,22 +318,9 @@ func (d *BasicDispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.S
 		return false, nil
 	}
 
-	d.tableSchemaStore = commonEvent.NewTableSchemaStore(schemaInfo, d.sink.SinkType())
+	d.tableSchemaStore = commonEvent.NewTableSchemaStore(schemaInfo, d.sink.SinkType(), d.EnableActiveActive())
 	d.sink.SetTableSchemaStore(d.tableSchemaStore)
 	return true, nil
-}
-
-func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) {
-	// for one batch events, we need to add all them in table progress first, then add them to sink
-	// because we need to ensure the wakeCallback only will be called when
-	// all these events are flushed to downstream successfully
-	for _, event := range events {
-		d.tableProgress.Add(event)
-	}
-	for _, event := range events {
-		d.sink.AddDMLEvent(event)
-		failpoint.Inject("BlockAddDMLEvents", nil)
-	}
 }
 
 func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {
@@ -309,6 +343,107 @@ func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) erro
 func (d *BasicDispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) {
 	d.tableProgress.Pass(event)
 	event.PostFlush()
+}
+
+// ensureActiveActiveTableInfo validates the table schema requirements for active-active mode.
+//
+// When enable-active-active is enabled, TiCDC relies on `_tidb_origin_ts` and
+// `_tidb_softdelete_time` to implement last-write-wins replication and to prevent
+// replication loops. Delete rows for active-active tables are filtered out by
+// FilterDMLEvent, and hard deletes are expected to keep `_tidb_softdelete_time`
+// as NULL for observability and safety checks.
+func (d *BasicDispatcher) ensureActiveActiveTableInfo(tableInfo *common.TableInfo) error {
+	if !d.sharedInfo.enableActiveActive {
+		return nil
+	}
+	if tableInfo == nil {
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			fmt.Sprintf("table info is nil for dispatcher %s in active-active mode", d.id.String()))
+	}
+	if !tableInfo.IsActiveActiveTable() {
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			fmt.Sprintf("table %s.%s(id=%d) in dispatcher %s is not active-active but enable-active-active is true",
+				tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String()))
+	}
+
+	if _, ok := tableInfo.GetColumnInfoByName(commonEvent.OriginTsColumn); !ok {
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			fmt.Sprintf("table %s.%s(id=%d) in dispatcher %s missing required column %s for enable-active-active",
+				tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String(), commonEvent.OriginTsColumn))
+	}
+
+	if _, ok := tableInfo.GetColumnOffsetByName(commonEvent.SoftDeleteTimeColumn); !ok {
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			fmt.Sprintf("table %s.%s(id=%d) in dispatcher %s missing required column offset %s for enable-active-active",
+				tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String(), commonEvent.SoftDeleteTimeColumn))
+	}
+
+	softDeleteCol, ok := tableInfo.GetColumnInfoByName(commonEvent.SoftDeleteTimeColumn)
+	if !ok {
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			fmt.Sprintf("table %s.%s(id=%d) in dispatcher %s missing required column %s for enable-active-active",
+				tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String(), commonEvent.SoftDeleteTimeColumn))
+	}
+	notNull := mysql.HasNotNullFlag(softDeleteCol.GetFlag())
+	if softDeleteCol.GetType() != mysql.TypeTimestamp || softDeleteCol.FieldType.GetDecimal() != tidbTypes.MaxFsp || notNull {
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(fmt.Sprintf(
+			"table %s.%s(id=%d) in dispatcher %s invalid column %s, expect TIMESTAMP(6) NULL, got type %d fsp %d notNull %t",
+			tableInfo.GetSchemaName(),
+			tableInfo.GetTableName(),
+			tableInfo.TableName.TableID,
+			d.id.String(),
+			commonEvent.SoftDeleteTimeColumn,
+			softDeleteCol.GetType(),
+			softDeleteCol.FieldType.GetDecimal(),
+			notNull,
+		))
+	}
+	return nil
+}
+
+// checkTableModeCompatibility validates that the newest table schema matches the current replication mode configuration.
+// It prevents misconfigurations where a special table (active-active / soft-delete) is replicated with
+// incompatible settings.
+func (d *BasicDispatcher) checkTableModeCompatibility(event commonEvent.Event) error {
+	defer func() {
+		d.tableModeCompatibilityChecked = true
+	}()
+
+	switch ev := event.(type) {
+	case *commonEvent.DMLEvent:
+		return d.ensureTableModeCompatibility(ev.TableInfo)
+	default:
+		log.Error("unexpected event type for table mode compatibility check", zap.Int("eventType", event.GetType()))
+	}
+	return nil
+}
+
+func (d *BasicDispatcher) ensureTableModeCompatibility(tableInfo *common.TableInfo) error {
+	if tableInfo == nil {
+		return nil
+	}
+
+	if d.sharedInfo.enableActiveActive {
+		return d.ensureActiveActiveTableInfo(tableInfo)
+	}
+
+	// If downstream is non-tidb mysql class, and enableActiveActive is false,
+	// then the table must not be active-active or soft delete.
+	if d.sink.SinkType() != common.MysqlSinkType {
+		return nil
+	}
+
+	if tableInfo.IsActiveActiveTable() {
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			fmt.Sprintf("table %s.%s(id=%d) in dispatcher %s is active-active but enable-active-active is false",
+				tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String()))
+	}
+	if tableInfo.IsSoftDeleteTable() {
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			fmt.Sprintf("table %s.%s(id=%d) in dispatcher %s is soft delete but enable-active-active is false",
+				tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String()))
+	}
+	return nil
 }
 
 func (d *BasicDispatcher) isFirstEvent(event commonEvent.Event) bool {
@@ -384,6 +519,8 @@ func (d *BasicDispatcher) updateDispatcherStatusToWorking() {
 	}
 }
 
+// HandleError will report the error to the error channel in sharedInfo
+// to report the error to maintainer, leading to the reconstruction of the dispatcher manager.
 func (d *BasicDispatcher) HandleError(err error) {
 	select {
 	case d.sharedInfo.errCh <- err:
@@ -460,6 +597,12 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 		case commonEvent.TypeResolvedEvent:
 			latestResolvedTs = event.(commonEvent.ResolvedEvent).ResolvedTs
 		case commonEvent.TypeDMLEvent:
+			if !d.tableModeCompatibilityChecked {
+				if err := d.checkTableModeCompatibility(event); err != nil {
+					d.HandleError(err)
+					return block
+				}
+			}
 			dml := event.(*commonEvent.DMLEvent)
 			if dml.Len() == 0 {
 				continue
@@ -493,6 +636,11 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				log.Panic("ddl event should only be singly handled",
 					zap.Stringer("dispatcherID", d.id))
 			}
+			// reset the tableModeCompatibilityChecked when receive a ddl event,
+			// because ddl event may change the table schema,
+			// which may cause the table not compatible with current replication mode anymore.
+			d.tableModeCompatibilityChecked = false
+
 			failpoint.Inject("BlockOrWaitBeforeDealWithDDL", nil)
 			block = true
 			ddl := event.(*commonEvent.DDLEvent)
@@ -565,7 +713,11 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	// the checkpointTs may be incorrect set as the new resolvedTs,
 	// due to the tableProgress is empty before dml events add into sink.
 	if len(dmlEvents) > 0 {
-		d.AddDMLEventsToSink(dmlEvents)
+		hasDMLToFlush := d.AddDMLEventsToSink(dmlEvents)
+		if !hasDMLToFlush {
+			// All DML events were filtered out, so they no longer block dispatcher progress.
+			block = false
+		}
 	}
 	if latestResolvedTs > 0 {
 		atomic.StoreUint64(&d.resolvedTs, latestResolvedTs)
@@ -667,6 +819,11 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 	return false
 }
 
+// ExecuteBlockEventDDL writes the block event to the sink and then reports DONE to the maintainer.
+//
+// It is invoked via the block-event executor to avoid blocking the dynamic stream goroutine on downstream IO
+// (DDL execution / syncpoint flush). Keeping the write-report-wake sequence in a dedicated method also makes it
+// easier for tests and failpoints to control interleavings around block events.
 func (d *BasicDispatcher) ExecuteBlockEventDDL(pendingEvent commonEvent.BlockEvent, actionCommitTs uint64, actionIsSyncPoint bool) {
 	failpoint.Inject("BlockOrWaitBeforeWrite", nil)
 	err := d.AddBlockEventToSink(pendingEvent)
@@ -859,8 +1016,9 @@ func (d *BasicDispatcher) cancelResendTask(identifier BlockEventIdentifier) {
 func (d *BasicDispatcher) tryDealWithHeldBlockEvent() {
 	// If there is a held DB/All block event, report it as soon as all resend tasks are ACKed.
 	// For schedule-related non-blocking DDLs, the maintainer only ACKs after scheduling is done.
-	// For schedule-related blocking DDLs, the maintainer will only begin deal with after no pending scheduling tasks.
-	// Thus, we ensure DB/All block events can genereate correct range checkers.
+	// For schedule-related blocking DDLs, the maintainer will only begin dealing with them after there are
+	// no pending scheduling tasks.
+	// Thus, we ensure DB/All block events can generate correct range checkers.
 	if d.pendingACKCount.Load() == 0 {
 		if holding := d.popHoldingBlockEvent(); holding != nil {
 			d.reportBlockedEventToMaintainer(holding)
@@ -931,6 +1089,11 @@ func (d *BasicDispatcher) reportBlockedEventToMaintainer(event commonEvent.Block
 	d.sharedInfo.blockStatusesChan <- message
 }
 
+// GetBlockEventStatus returns the current in-flight *blocking* barrier state for bootstrap.
+//
+// We only report statuses for events that actually block the event stream (multi-table DDLs, split-span DDLs,
+// and syncpoints). Non-blocking DDLs that only add/drop tables are reported separately and can be recovered by
+// the maintainer from the table trigger dispatcher's startTs, so they don't need to be restored here.
 func (d *BasicDispatcher) GetBlockEventStatus() *heartbeatpb.State {
 	pendingEvent, blockStage := d.blockEventStatus.getEventAndStage()
 
@@ -966,6 +1129,9 @@ func (d *BasicDispatcher) Remove() {
 // TryClose will return the watermark of current dispatcher, and return true when the dispatcher finished sending events to sink.
 // DispatcherManager will clean the dispatcher info after Remove() is called.
 func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
+	failpoint.Inject("NotReadyToCloseDispatcher", func() {
+		failpoint.Return(w, false)
+	})
 	// If sink is normal(not meet error), we need to wait all the events in sink to flushed downstream successfully
 	// If sink is not normal, we can close the dispatcher immediately.
 	if !d.sink.IsNormal() || (d.tableProgress.Empty() && !d.duringHandleEvents.Load()) {

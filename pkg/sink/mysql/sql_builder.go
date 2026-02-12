@@ -21,7 +21,9 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/util/chunk"
+	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
@@ -79,25 +81,8 @@ func (d *preparedDMLs) LogDebug(events []*commonEvent.DMLEvent, writerID int) {
 			args = d.values[i]
 		}
 
-		// Format the arguments as a string
-		argsStr := "("
-		for j, arg := range args {
-			if j > 0 {
-				argsStr += ", "
-			}
-			if arg == nil {
-				argsStr += "NULL"
-			} else if str, ok := arg.(string); ok {
-				argsStr += fmt.Sprintf(`"%s"`, str)
-			} else {
-				argsStr += fmt.Sprintf("%v", arg)
-			}
-		}
-		argsStr += ")"
-
-		// Add formatted SQL and args to log content
 		logBuilder.WriteString(fmt.Sprintf("[%03d] Query: %s,", i+1, sql))
-		logBuilder.WriteString(fmt.Sprintf("      Args: %s,", argsStr))
+		logBuilder.WriteString(fmt.Sprintf("      Args: %s,", util.RedactArgs(args)))
 	}
 
 	// Build timestamp information
@@ -117,7 +102,10 @@ func (d *preparedDMLs) LogDebug(events []*commonEvent.DMLEvent, writerID int) {
 }
 
 func (d *preparedDMLs) String() string {
-	return fmt.Sprintf("sqls: %v, values: %v, rowCount: %d, approximateSize: %d, startTs: %v", d.fmtSqls(), d.values, d.rowCount, d.approximateSize, d.tsPairs)
+	// SQL templates contain table/column names (schema info, not sensitive user data)
+	// Only values need redaction - they contain actual user data
+	return fmt.Sprintf("sqls: %v, values: %v, rowCount: %d, approximateSize: %d, startTs: %v",
+		d.fmtSqls(), util.RedactAny(d.values), d.rowCount, d.approximateSize, d.tsPairs)
 }
 
 func (d *preparedDMLs) fmtSqls() string {
@@ -254,6 +242,122 @@ func buildUpdate(tableInfo *common.TableInfo, row commonEvent.RowChange) (string
 	builder.WriteString(" LIMIT 1")
 	sql := builder.String()
 	return sql, args
+}
+
+// buildActiveActiveUpsertSQL builds the last-write-wins UPSERT used by active-active tables.
+// SQL rules:
+//  1. INSERT only contains visible business columns plus _tidb_origin_ts/_tidb_softdelete_time.
+//     _tidb_commit_ts is omitted because downstream TiDB fills it automatically.
+//  2. The VALUES for _tidb_origin_ts reuse each row's upstream _tidb_commit_ts so the origin column
+//     describes when the row was committed at the upstream cluster.
+//  3. ON DUPLICATE KEY UPDATE applies the LWW condition inline for every updated column:
+//     IFNULL(_tidb_origin_ts, _tidb_commit_ts) <= VALUES(_tidb_origin_ts).
+//     Avoid user variables (for example, @ticdc_lww_cond) because their evaluation order is not
+//     guaranteed and can cause cross-row/cross-column contamination in multi-row UPSERT statements.
+func buildActiveActiveUpsertSQL(
+	tableInfo *common.TableInfo,
+	rows []*commonEvent.RowChange,
+	commitTs []uint64,
+) (string, []interface{}) {
+	if tableInfo == nil || len(rows) == 0 {
+		return "", nil
+	}
+	if len(commitTs) != len(rows) {
+		log.Panic("mismatched commitTs and rows length",
+			zap.Int("rows", len(rows)), zap.Int("commitTs", len(commitTs)))
+	}
+
+	columns := tableInfo.GetColumns()
+	insertColumns := make([]string, 0, len(columns))
+	for _, col := range columns {
+		if col == nil || col.IsGenerated() {
+			continue
+		}
+		if col.Name.O == commonEvent.CommitTsColumn {
+			// _tidb_commit_ts is kept downstream-only; do not emit it in INSERT columns.
+			continue
+		}
+		insertColumns = append(insertColumns, col.Name.O)
+	}
+	if len(insertColumns) == 0 {
+		return "", nil
+	}
+
+	valueOffsets := make([]int, len(insertColumns))
+	useCommitTs := make([]bool, len(insertColumns))
+	for i := range valueOffsets {
+		valueOffsets[i] = -1
+	}
+	for i, colName := range insertColumns {
+		if colName == commonEvent.OriginTsColumn {
+			// VALUES(_tidb_origin_ts) should reuse upstream commitTs to record origin.
+			useCommitTs[i] = true
+			continue
+		}
+		offset, ok := tableInfo.GetColumnOffsetByName(colName)
+		if !ok {
+			log.Panic("column not found when building active active SQL",
+				zap.String("column", colName), zap.Stringer("table", tableInfo.TableName))
+		}
+		valueOffsets[i] = offset
+	}
+
+	originQuoted := common.QuoteName(commonEvent.OriginTsColumn)
+	commitQuoted := common.QuoteName(commonEvent.CommitTsColumn)
+
+	var builder strings.Builder
+	builder.WriteString("INSERT INTO ")
+	builder.WriteString(tableInfo.TableName.QuoteString())
+	builder.WriteString(" (")
+	for i, colName := range insertColumns {
+		if i > 0 {
+			builder.WriteString(",")
+		}
+		builder.WriteString(common.QuoteName(colName))
+	}
+	builder.WriteString(") VALUES ")
+
+	args := make([]interface{}, 0, len(rows)*len(insertColumns))
+	for rowIdx, row := range rows {
+		if rowIdx > 0 {
+			builder.WriteString(",")
+		}
+		builder.WriteString("(")
+		for i := range insertColumns {
+			if i > 0 {
+				builder.WriteString(",")
+			}
+			builder.WriteString("?")
+		}
+		builder.WriteString(")")
+		for i := range insertColumns {
+			if useCommitTs[i] {
+				args = append(args, commitTs[rowIdx])
+				continue
+			}
+			offset := valueOffsets[i]
+			if offset < 0 || offset >= len(columns) {
+				log.Panic("invalid column offset when building active active SQL",
+					zap.Int("offset", offset), zap.Int("columnCount", len(columns)))
+			}
+			col := columns[offset]
+			v := common.ExtractColVal(&row.Row, col, offset)
+			args = append(args, v)
+		}
+	}
+
+	builder.WriteString(" ON DUPLICATE KEY UPDATE ")
+
+	cond := fmt.Sprintf("IFNULL(%s, %s) <= VALUES(%s)", originQuoted, commitQuoted, originQuoted)
+	for i, colName := range insertColumns {
+		quoted := common.QuoteName(colName)
+		if i > 0 {
+			builder.WriteString(",")
+		}
+		builder.WriteString(fmt.Sprintf("%s = IF((%s), VALUES(%s), %s)", quoted, cond, quoted, quoted))
+	}
+
+	return builder.String(), args
 }
 
 func getArgs(row *chunk.Row, tableInfo *common.TableInfo) []interface{} {

@@ -117,7 +117,7 @@ func (oc *Controller) Execute() time.Time {
 func (oc *Controller) RemoveTasksBySchemaID(schemaID int64) {
 	tasks := oc.spanController.GetRemoveTasksBySchemaID(schemaID)
 	for _, task := range tasks {
-		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.spanController, task))
+		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.spanController, task, heartbeatpb.OperatorType_O_Remove))
 	}
 	oc.spanController.RemoveBySchemaID(schemaID)
 }
@@ -135,7 +135,7 @@ func (oc *Controller) RemoveTasksBySchemaID(schemaID int64) {
 func (oc *Controller) RemoveTasksByTableIDs(tables ...int64) {
 	tasks := oc.spanController.GetRemoveTasksByTableIDs(tables...)
 	for _, task := range tasks {
-		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.spanController, task))
+		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.spanController, task, heartbeatpb.OperatorType_O_Remove))
 	}
 	oc.spanController.RemoveByTableIDs(tables...)
 }
@@ -143,12 +143,13 @@ func (oc *Controller) RemoveTasksByTableIDs(tables ...int64) {
 // AddOperator adds an operator to the controller, if the operator already exists, return false.
 func (oc *Controller) AddOperator(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) bool {
 	oc.mu.RLock()
-	if _, ok := oc.operators[op.ID()]; ok {
+	if old, ok := oc.operators[op.ID()]; ok {
 		oc.mu.RUnlock()
 		log.Info("add operator failed, operator already exists",
 			zap.String("role", oc.role),
 			zap.Stringer("changefeedID", oc.changefeedID),
-			zap.String("operator", op.String()))
+			zap.String("operator", op.String()),
+			zap.String("oldOperator", old.OP.String()))
 		return false
 	}
 	oc.mu.RUnlock()
@@ -378,12 +379,7 @@ func (oc *Controller) checkAffectedNodes(op operator.Operator[common.DispatcherI
 }
 
 func (oc *Controller) NewMoveOperator(replicaSet *replica.SpanReplication, origin, dest node.ID) operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
-	return &MoveDispatcherOperator{
-		replicaSet:     replicaSet,
-		origin:         origin,
-		dest:           dest,
-		spanController: oc.spanController,
-	}
+	return NewMoveDispatcherOperator(oc.spanController, replicaSet, origin, dest)
 }
 
 func checkMergeOperator(affectedReplicaSets []*replica.SpanReplication) bool {

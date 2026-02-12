@@ -80,7 +80,7 @@ func groupEventsByTable(events []*commonEvent.DMLEvent) map[int64][][]*commonEve
 // the process is as follows:
 //  1. we group the events by tableID, and hold the order for the events of the same table
 //  2. For each group,
-//     if the table does't have a handle key or have virtual column, we just generate the sqls for each event row.(TODO: support the case without pk but have uk)
+//     if the table does't have a handle key or have virtual column, we just generate the sqls for each event row.
 //     Otherwise,
 //     if there is only one rows of the whole group, we generate the sqls for the row.
 //     Otherwise, we batch all the event rows for the same dispatcherID to limited delete / update/ insert query(in order)
@@ -109,10 +109,14 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 	for _, sortedEventGroups := range eventsGroupSortedByUpdateTs {
 		for _, eventsInGroup := range sortedEventGroups {
 			tableInfo := eventsInGroup[0].TableInfo
-			if !w.shouldGenBatchSQL(tableInfo.HasPKOrNotNullUK, tableInfo.HasVirtualColumns(), eventsInGroup) {
-				queryList, argsList, rowTypesList = w.generateNormalSQLs(eventsInGroup)
+			if w.cfg.EnableActiveActive {
+				queryList, argsList = w.genActiveActiveSQL(tableInfo, eventsInGroup)
 			} else {
-				queryList, argsList, rowTypesList = w.generateBatchSQL(eventsInGroup)
+				if !w.shouldGenBatchSQL(tableInfo.HasPKOrNotNullUK, tableInfo.HasVirtualColumns(), eventsInGroup) {
+					queryList, argsList, rowTypesList = w.generateNormalSQLs(eventsInGroup)
+				} else {
+					queryList, argsList, rowTypesList = w.generateBatchSQL(eventsInGroup)
+				}
 			}
 			dmls.sqls = append(dmls.sqls, queryList...)
 			dmls.values = append(dmls.values, argsList...)
@@ -125,6 +129,13 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 	dmls.LogDebug(events, w.id)
 
 	return dmls, nil
+}
+
+func (w *Writer) genActiveActiveSQL(tableInfo *common.TableInfo, eventsInGroup []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
+	if !w.shouldGenBatchSQL(tableInfo.HasPKOrNotNullUK, tableInfo.HasVirtualColumns(), eventsInGroup) {
+		return w.generateActiveActiveNormalSQLs(eventsInGroup)
+	}
+	return w.generateActiveActiveBatchSQL(eventsInGroup)
 }
 
 // shouldGenBatchSQL determines whether batch SQL generation should be used based on table properties and events.

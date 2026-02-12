@@ -19,7 +19,6 @@ import (
 
 	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
 )
 
 // pulsarTopicManager is a manager for pulsar topics.
@@ -37,11 +36,6 @@ func GetPulsarTopicManagerAndTryCreateTopic(
 	client pulsar.Client,
 ) (TopicManager, error) {
 	topicManager := newPulsarTopicManager(cfg, client)
-
-	if _, err := topicManager.CreateTopicAndWaitUntilVisible(ctx, topic); err != nil {
-		return nil, cerror.WrapError(cerror.ErrKafkaCreateTopic, err)
-	}
-
 	return topicManager, nil
 }
 
@@ -70,9 +64,4 @@ func (m *pulsarTopicManager) CreateTopicAndWaitUntilVisible(ctx context.Context,
 
 // Close
 func (m *pulsarTopicManager) Close() {
-}
-
-// str2Pointer returns the pointer of the string.
-func str2Pointer(str string) *string {
-	return &str
 }
