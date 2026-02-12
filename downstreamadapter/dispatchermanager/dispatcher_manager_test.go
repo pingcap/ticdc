@@ -34,7 +34,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/recoverable"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -137,10 +136,6 @@ func TestCollectRecoverableErrorsEnqueueRecoverDispatcherRequest(t *testing.T) {
 	manager := &DispatcherManager{
 		changefeedID:                  common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
 		recoverDispatcherRequestQueue: make(chan *RecoverDispatcherRequestWithTargetID, 1),
-		metricRecoverEventCount: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "test_dispatcher_manager_recover_event_count_total",
-			Help: "test only",
-		}),
 	}
 	manager.SetMaintainerID(node.ID("maintainer"))
 	manager.recoverEventCh = make(chan *recoverable.RecoverEvent, recoverEventChSize)

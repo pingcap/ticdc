@@ -19,7 +19,9 @@ var _ MessageCenter = &mockMessageCenter{}
 
 // mockMessageCenter is a mock implementation of the MessageCenter interface
 type mockMessageCenter struct {
-	messageCh chan *TargetMessage
+	messageCh    chan *TargetMessage
+	sendEventErr error
+	sendCmdErr   error
 }
 
 func NewMockMessageCenter() *mockMessageCenter {
@@ -36,11 +38,17 @@ func (m *mockMessageCenter) OnNodeChanges(nodeInfos map[node.ID]*node.Info) {
 }
 
 func (m *mockMessageCenter) SendEvent(event *TargetMessage) error {
+	if m.sendEventErr != nil {
+		return m.sendEventErr
+	}
 	m.messageCh <- event
 	return nil
 }
 
 func (m *mockMessageCenter) SendCommand(command *TargetMessage) error {
+	if m.sendCmdErr != nil {
+		return m.sendCmdErr
+	}
 	m.messageCh <- command
 	return nil
 }
@@ -62,4 +70,12 @@ func (m *mockMessageCenter) Close() {
 
 func (m *mockMessageCenter) IsReadyToSend(id node.ID) bool {
 	return true
+}
+
+func (m *mockMessageCenter) SetSendEventError(err error) {
+	m.sendEventErr = err
+}
+
+func (m *mockMessageCenter) SetSendCommandError(err error) {
+	m.sendCmdErr = err
 }

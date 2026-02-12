@@ -102,8 +102,7 @@ type DispatcherManager struct {
 	// heartbeat collector will consume the heartbeat request from the queue and send the response to each dispatcher.
 	heartbeatRequestQueue *HeartbeatRequestQueue
 
-	// recoverDispatcherRequestQueue is used to store dispatcher recovery requests that should be
-	// forwarded to maintainer.
+	// recoverDispatcherRequestQueue is used to store dispatcher recovery requests that should be forwarded to maintainer.
 	// this is a instance level queue, shared by all dispatcher managers.
 	recoverDispatcherRequestQueue chan *RecoverDispatcherRequestWithTargetID
 
@@ -121,7 +120,6 @@ type DispatcherManager struct {
 
 	// sink is used to send all the events to the downstream.
 	sink sink.Sink
-
 	// redo related
 	RedoEnable bool
 	redoSink   *redo.Sink
@@ -236,8 +234,6 @@ func NewDispatcherManager(
 		return nil, errors.Trace(err)
 	}
 	if recover, ok := manager.sink.(recoverable.Recoverable); ok {
-		// keep a small burst buffer for recover events to reduce drop probability
-		// when transient errors happen in a short window.
 		manager.recoverEventCh = make(chan *recoverable.RecoverEvent, recoverEventChSize)
 		recover.SetRecoverEventCh(manager.recoverEventCh)
 	}
@@ -724,7 +720,9 @@ func (e *DispatcherManager) collectRecoverableEvents(ctx context.Context) {
 			if event == nil {
 				continue
 			}
-			e.metricRecoverEventCount.Inc()
+			if e.metricRecoverEventCount != nil {
+				e.metricRecoverEventCount.Inc()
+			}
 
 			if len(event.DispatcherIDs) == 0 {
 				log.Warn("recoverable sink error has no dispatcher IDs, ignore it",

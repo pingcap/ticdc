@@ -44,6 +44,7 @@
 ## Testing Guidelines
 
 - Unit tests: `*_test.go`, favor deterministic tests; use `testify/require`.
+- Do not add unit tests for monitoring metrics.
 - Failpoints: `make unit_test` enables/disables automatically. If you enable manually, disable before committing to avoid a dirty tree.
 
 ## Commit & Pull Request Guidelines

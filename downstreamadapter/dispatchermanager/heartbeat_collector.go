@@ -18,13 +18,12 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -116,7 +115,7 @@ func (c *HeartBeatCollector) Run(ctx context.Context) {
 		defer c.wg.Done()
 		err := c.sendRecoverDispatcherMessages(ctx)
 		if err != nil {
-			log.Error("failed to send recover dispatcher messages", zap.Error(err))
+			log.Error("send recover dispatcher messages exit", zap.Error(err))
 		}
 	}()
 }
@@ -282,7 +281,7 @@ func (c *HeartBeatCollector) sendRecoverDispatcherMessages(ctx context.Context) 
 			if request == nil {
 				// nil has no business meaning here. Keep this guard to avoid panic
 				// if a malformed sender pushes a nil request.
-				log.Warn("recover dispatcher request is nil, this should no happen")
+				log.Warn("recover dispatcher request is nil, this should not happen")
 				continue
 			}
 			err := c.mc.SendCommand(
@@ -296,11 +295,10 @@ func (c *HeartBeatCollector) sendRecoverDispatcherMessages(ctx context.Context) 
 			}
 			log.Error("failed to send recover dispatcher request message", zap.Error(err))
 
-			// recover request is edge-triggered, so
-			// losing one can leave a dispatcher stuck without another trigger.
+			// recover request is edge-triggered, so losing one can leave a dispatcher stuck without another trigger.
 			// fallback escalates this delivery failure to changefeed-level retry path.
 			if request.FallbackErrCh != nil {
-				fallback := cerror.WrapError(cerror.ErrChangefeedRetryable, err)
+				fallback := errors.WrapError(errors.ErrChangefeedRetryable, err)
 				select {
 				case request.FallbackErrCh <- fallback:
 				default:

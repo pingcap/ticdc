@@ -5,46 +5,23 @@ import (
 	"testing"
 	"time"
 
-	perrors "github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/stretchr/testify/require"
 )
 
-type failingCommandMessageCenter struct {
-	sendCommandErr error
-}
-
-func (m *failingCommandMessageCenter) SendEvent(_ *messaging.TargetMessage) error {
-	return nil
-}
-
-func (m *failingCommandMessageCenter) SendCommand(_ *messaging.TargetMessage) error {
-	return m.sendCommandErr
-}
-
-func (m *failingCommandMessageCenter) IsReadyToSend(_ node.ID) bool {
-	return true
-}
-
-func (m *failingCommandMessageCenter) RegisterHandler(_ string, _ messaging.MessageHandler) {}
-
-func (m *failingCommandMessageCenter) DeRegisterHandler(_ string) {}
-
-func (m *failingCommandMessageCenter) OnNodeChanges(_ map[node.ID]*node.Info) {}
-
-func (m *failingCommandMessageCenter) Close() {}
-
 func TestSendRecoverDispatcherMessagesSendFailureFallsBackToErrorChannel(t *testing.T) {
 	recoverQueue := make(chan *RecoverDispatcherRequestWithTargetID, 1)
 	fallbackErrCh := make(chan error, 1)
-	sendErr := perrors.New("send command failed")
+	sendErr := errors.New("send command failed")
+	mc := messaging.NewMockMessageCenter()
+	mc.SetSendCommandError(sendErr)
 	c := &HeartBeatCollector{
 		recoverRequestCh: recoverQueue,
-		mc:              &failingCommandMessageCenter{sendCommandErr: sendErr},
+		mc:               mc,
 	}
 
 	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
@@ -65,9 +42,9 @@ func TestSendRecoverDispatcherMessagesSendFailureFallsBackToErrorChannel(t *test
 
 	select {
 	case err := <-fallbackErrCh:
-		code, ok := cerror.RFCCode(err)
+		code, ok := errors.RFCCode(err)
 		require.True(t, ok)
-		require.Equal(t, cerror.ErrChangefeedRetryable.RFCCode(), code)
+		require.Equal(t, errors.ErrChangefeedRetryable.RFCCode(), code)
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected fallback error to be sent")
 	}
@@ -75,7 +52,7 @@ func TestSendRecoverDispatcherMessagesSendFailureFallsBackToErrorChannel(t *test
 	cancel()
 	select {
 	case err := <-done:
-		require.Equal(t, context.Canceled, perrors.Cause(err))
+		require.Equal(t, context.Canceled, errors.Cause(err))
 	case <-time.After(2 * time.Second):
 		t.Fatal("sendRecoverDispatcherMessages did not exit after context canceled")
 	}

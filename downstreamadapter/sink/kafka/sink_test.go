@@ -27,7 +27,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	mock_kafka "github.com/pingcap/ticdc/pkg/sink/kafka/mock"
 	"github.com/pingcap/ticdc/pkg/sink/recoverable"
@@ -260,7 +260,7 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 		return context.Cause(ctx)
 	}).Times(1)
 	asyncProducer.EXPECT().AsyncSend(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
-		func(_ context.Context, _ string, _ int32, message *codeccommon.Message) error {
+		func(_ context.Context, _ string, _ int32, message *codecCommon.Message) error {
 			if message.Callback != nil {
 				message.Callback()
 			}
