@@ -47,6 +47,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const recoverEventChSize = 32
+
 /*
 DispatcherManager manages dispatchers for a changefeed instance with responsibilities including:
 
@@ -103,7 +105,7 @@ type DispatcherManager struct {
 	// recoverDispatcherRequestQueue is used to store dispatcher recovery requests that should be
 	// forwarded to maintainer.
 	// this is a instance level queue, shared by all dispatcher managers.
-	recoverDispatcherRequestQueue *RecoverDispatcherRequestQueue
+	recoverDispatcherRequestQueue chan *RecoverDispatcherRequestWithTargetID
 
 	// recoverEventCh carries recoverable event that should trigger dispatcher-level recovery.
 	// this is a changefeed-level channel, forward event to the queue.
@@ -234,8 +236,9 @@ func NewDispatcherManager(
 		return nil, errors.Trace(err)
 	}
 	if recover, ok := manager.sink.(recoverable.Recoverable); ok {
-		// recoverableErrCh only needs to preserve a pending recover signal.
-		manager.recoverEventCh = make(chan *recoverable.RecoverEvent, 1)
+		// keep a small burst buffer for recover events to reduce drop probability
+		// when transient errors happen in a short window.
+		manager.recoverEventCh = make(chan *recoverable.RecoverEvent, recoverEventChSize)
 		recover.SetRecoverEventCh(manager.recoverEventCh)
 	}
 
@@ -298,7 +301,7 @@ func NewDispatcherManager(
 		manager.wg.Add(1)
 		go func() {
 			defer manager.wg.Done()
-			manager.collectRecovarbleEvents(ctx)
+			manager.collectRecoverableEvents(ctx)
 		}()
 	}
 
@@ -712,7 +715,7 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 }
 
 // collect recover event and report to maintainer for dispatcher-level recovery.
-func (e *DispatcherManager) collectRecovarbleEvents(ctx context.Context) {
+func (e *DispatcherManager) collectRecoverableEvents(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -752,11 +755,11 @@ func (e *DispatcherManager) collectRecovarbleEvents(ctx context.Context) {
 				// changefeed-level retryable error into errCh.
 				fallbackErrCh = e.sharedInfo.GetErrCh()
 			}
-			e.recoverDispatcherRequestQueue.Enqueue(&RecoverDispatcherRequestWithTargetID{
+			e.recoverDispatcherRequestQueue <- &RecoverDispatcherRequestWithTargetID{
 				TargetID:      e.GetMaintainerID(),
 				Request:       req,
 				FallbackErrCh: fallbackErrCh,
-			})
+			}
 		}
 	}
 }

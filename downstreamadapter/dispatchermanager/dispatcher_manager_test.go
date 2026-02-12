@@ -136,19 +136,19 @@ func createTestManager(t *testing.T) *DispatcherManager {
 func TestCollectRecoverableErrorsEnqueueRecoverDispatcherRequest(t *testing.T) {
 	manager := &DispatcherManager{
 		changefeedID:                  common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
-		recoverDispatcherRequestQueue: NewRecoverDispatcherRequestQueue(),
+		recoverDispatcherRequestQueue: make(chan *RecoverDispatcherRequestWithTargetID, 1),
 		metricRecoverEventCount: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "test_dispatcher_manager_recover_event_count_total",
 			Help: "test only",
 		}),
 	}
 	manager.SetMaintainerID(node.ID("maintainer"))
-	manager.recoverEventCh = make(chan *recoverable.RecoverEvent, 1)
+	manager.recoverEventCh = make(chan *recoverable.RecoverEvent, recoverEventChSize)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		manager.collectRecovarbleEvents(ctx)
+		manager.collectRecoverableEvents(ctx)
 		close(done)
 	}()
 	defer func() {
@@ -162,9 +162,12 @@ func TestCollectRecoverableErrorsEnqueueRecoverDispatcherRequest(t *testing.T) {
 		DispatcherIDs: []common.DispatcherID{dispatcherID},
 	}
 
-	dequeueCtx, cancelDequeue := context.WithTimeout(context.Background(), time.Second)
-	req := manager.recoverDispatcherRequestQueue.Dequeue(dequeueCtx)
-	cancelDequeue()
+	var req *RecoverDispatcherRequestWithTargetID
+	select {
+	case req = <-manager.recoverDispatcherRequestQueue:
+	case <-time.After(time.Second):
+		t.Fatal("recover dispatcher request not received")
+	}
 
 	require.NotNil(t, req)
 	require.Equal(t, node.ID("maintainer"), req.TargetID)

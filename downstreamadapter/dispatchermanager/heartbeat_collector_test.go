@@ -39,23 +39,23 @@ func (m *failingCommandMessageCenter) OnNodeChanges(_ map[node.ID]*node.Info) {}
 func (m *failingCommandMessageCenter) Close() {}
 
 func TestSendRecoverDispatcherMessagesSendFailureFallsBackToErrorChannel(t *testing.T) {
-	recoverQueue := NewRecoverDispatcherRequestQueue()
+	recoverQueue := make(chan *RecoverDispatcherRequestWithTargetID, 1)
 	fallbackErrCh := make(chan error, 1)
 	sendErr := perrors.New("send command failed")
 	c := &HeartBeatCollector{
-		recoverReqQueue: recoverQueue,
+		recoverRequestCh: recoverQueue,
 		mc:              &failingCommandMessageCenter{sendCommandErr: sendErr},
 	}
 
 	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
-	recoverQueue.Enqueue(&RecoverDispatcherRequestWithTargetID{
+	recoverQueue <- &RecoverDispatcherRequestWithTargetID{
 		TargetID: node.ID("maintainer"),
 		Request: &heartbeatpb.RecoverDispatcherRequest{
 			ChangefeedID:  changefeedID.ToPB(),
 			DispatcherIDs: []*heartbeatpb.DispatcherID{common.NewDispatcherID().ToPB()},
 		},
 		FallbackErrCh: fallbackErrCh,
-	})
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

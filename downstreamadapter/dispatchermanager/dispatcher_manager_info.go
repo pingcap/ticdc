@@ -82,7 +82,7 @@ func (e *DispatcherManager) SetBlockStatusRequestQueue(blockStatusRequestQueue *
 	e.blockStatusRequestQueue = blockStatusRequestQueue
 }
 
-func (e *DispatcherManager) SetRecoverDispatcherRequestQueue(recoverDispatcherRequestQueue *RecoverDispatcherRequestQueue) {
+func (e *DispatcherManager) SetRecoverDispatcherRequestQueue(recoverDispatcherRequestQueue chan *RecoverDispatcherRequestWithTargetID) {
 	e.recoverDispatcherRequestQueue = recoverDispatcherRequestQueue
 }
 

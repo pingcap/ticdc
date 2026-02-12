@@ -16,7 +16,6 @@ package maintainer
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"math"
 	"net/url"
 	"sync"
@@ -25,7 +24,6 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/pkg/bootstrap"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -148,11 +146,8 @@ type Maintainer struct {
 		m map[node.ID]*heartbeatpb.RunningError
 	}
 
-	// recoverableDispatcherRestarts tracks dispatcher-level recovery attempts for transient recoverable errors.
-	recoverableDispatcherRestarts struct {
-		sync.Mutex
-		dispatchers map[common.DispatcherID]*recoverableState
-	}
+	// recoverDispatcherHandler handles dispatcher recover requests.
+	recoverDispatcherHandler *recoverDispatcherHandler
 
 	cancel context.CancelFunc
 
@@ -241,6 +236,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	}
 	m.nodeChanged.changed = false
 	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
+	m.recoverDispatcherHandler = newRecoverDispatcherHandler(m)
 
 	m.watermark.Watermark = &heartbeatpb.Watermark{
 		CheckpointTs: checkpointTs,
@@ -532,6 +528,10 @@ func (m *Maintainer) onCheckpointTsPersisted(msg *heartbeatpb.CheckpointTsMessag
 	})
 }
 
+func (m *Maintainer) onRecoverDispatcherRequest(from node.ID, req *heartbeatpb.RecoverDispatcherRequest) {
+	m.recoverDispatcherHandler.handle(from, req)
+}
+
 func (m *Maintainer) onRedoPersisted(req *heartbeatpb.RedoResolvedTsProgressMessage) {
 	if m.redoResolvedTs < req.ResolvedTs {
 		m.redoResolvedTs = req.ResolvedTs
@@ -819,88 +819,6 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 	// This ensures when operators complete, checkpointTsByCapture already contains the complete heartbeat
 	// Works with calCheckpointTs constraint ordering to prevent checkpoint advancing past new dispatcher startTs
 	m.controller.HandleStatus(msg.From, req.Statuses)
-}
-
-func (m *Maintainer) onRecoverDispatcherRequest(from node.ID, req *heartbeatpb.RecoverDispatcherRequest) {
-	// ignore the request if the maintainer not bootstrapped
-	if !m.initialized.Load() {
-		return
-	}
-	if req == nil || len(req.DispatcherIDs) == 0 {
-		log.Warn("recover dispatcher request has no dispatcher IDs",
-			zap.Stringer("changefeedID", m.changefeedID),
-			zap.Stringer("sourceNode", from))
-		return
-	}
-
-	log.Warn("recover dispatcher request received, restart dispatchers",
-		zap.Stringer("changefeedID", m.changefeedID),
-		zap.Stringer("sourceNode", from),
-		zap.Int("dispatcherCount", len(req.DispatcherIDs)))
-
-	operatorController := m.controller.getOperatorController(common.DefaultMode)
-	spanController := m.controller.getSpanController(common.DefaultMode)
-
-	seen := make(map[common.DispatcherID]struct{}, len(req.DispatcherIDs))
-	for _, pbDispatcherID := range req.DispatcherIDs {
-		if pbDispatcherID == nil {
-			continue
-		}
-		dispatcherID := common.NewDispatcherIDFromPB(pbDispatcherID)
-		if _, ok := seen[dispatcherID]; ok {
-			continue
-		}
-		seen[dispatcherID] = struct{}{}
-
-		if existing := operatorController.GetOperator(dispatcherID); existing != nil {
-			// Idempotency guard: if restart for this dispatcher is already in-flight,
-			// treat repeated requests as duplicate and ignore.
-			continue
-		}
-
-		decision, attempts := m.getRecoverableDispatcherRestartDecision(dispatcherID)
-		if decision == recoverableDispatcherRestartDecisionDowngrade {
-			log.Warn("recover dispatcher request exceeded dispatcher restart budget, downgrade to changefeed error path",
-				zap.Stringer("changefeedID", m.changefeedID),
-				zap.Stringer("sourceNode", from),
-				zap.Stringer("dispatcherID", dispatcherID),
-				zap.Int("restartAttempts", attempts))
-
-			m.onError(from, &heartbeatpb.RunningError{
-				Time: time.Now().String(),
-				Code: string(errors.ErrMaintainerRecoverableRestartExceededBudget.RFCCode()),
-				Message: fmt.Sprintf(
-					"recover dispatcher request exceeded dispatcher restart budget, downgrade to changefeed error path, dispatcherID=%s, restartAttempts=%d",
-					dispatcherID.String(), attempts,
-				),
-			})
-			return
-		}
-
-		replication := spanController.GetTaskByID(dispatcherID)
-		if replication == nil {
-			log.Warn("dispatcher not found, ignore recover dispatcher request",
-				zap.Stringer("changefeedID", m.changefeedID),
-				zap.Stringer("dispatcherID", dispatcherID))
-			continue
-		}
-		origin := replication.GetNodeID()
-		if origin == "" {
-			log.Warn("dispatcher has empty node ID, ignore recover dispatcher request",
-				zap.Stringer("changefeedID", m.changefeedID),
-				zap.Stringer("dispatcherID", dispatcherID))
-			continue
-		}
-
-		op := operator.NewRestartDispatcherOperator(spanController, replication, origin)
-		if ok := operatorController.AddOperator(op); !ok {
-			log.Info("restart dispatcher operator already exists, ignore",
-				zap.Stringer("changefeedID", m.changefeedID),
-				zap.Stringer("dispatcherID", dispatcherID))
-			continue
-		}
-		m.recordRecoverableDispatcherRestart(dispatcherID)
-	}
 }
 
 func (m *Maintainer) onError(from node.ID, err *heartbeatpb.RunningError) {

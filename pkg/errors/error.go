@@ -794,9 +794,9 @@ var (
 		"maintainer is not found",
 		errors.RFCCodeText("CDC:ErrMaintainerNotFounded"),
 	)
-	ErrMaintainerRecoverableRestartExceededBudget = errors.Normalize(
-		"maintainer recoverable restart exceeded budget",
-		errors.RFCCodeText("CDC:ErrMaintainerRecoverableRestartExceededBudget"),
+	ErrMaintainerRecoverableRestartExceededAttempts = errors.Normalize(
+		"maintainer recoverable restart exceeded attempts",
+		errors.RFCCodeText("CDC:ErrMaintainerRecoverableRestartExceededAttempts"),
 	)
 	ErrTimeout = errors.Normalize(
 		"timeout",

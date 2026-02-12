@@ -56,7 +56,13 @@ type MoveDispatcherOperator struct {
 	spanController *span.Controller
 	origin         node.ID
 	dest           node.ID
-	forceRestart   bool
+	// force controls whether a same-node move (origin == dest) should still execute
+	// the full remove->add flow.
+	//
+	// false: same-node move is treated as no-op in Start().
+	// true: Start() bypasses the no-op shortcut and enters remove-origin state.
+	//       This is used by restart operator to recreate dispatcher on the same node.
+	force bool
 
 	// State transitions:
 	//   removeOrigin --(origin stopped)-> addDest --(dest working)-> doneSuccess
@@ -113,7 +119,9 @@ func NewRestartDispatcherOperator(spanController *span.Controller, replicaSet *r
 		replicaSet:     replicaSet,
 		origin:         nodeID,
 		dest:           nodeID,
-		forceRestart:   true,
+		// Restart is an in-place recreate, not a no-op move.
+		// force=true makes Start() run remove->add even when origin == dest.
+		force:          true,
 		spanController: spanController,
 		sendThrottler:  newSendThrottler(),
 	}
@@ -253,7 +261,9 @@ func (m *MoveDispatcherOperator) Start() {
 	m.lck.Lock()
 	defer m.lck.Unlock()
 
-	if m.dest == m.origin && m.origin != "" && !m.forceRestart {
+	if m.dest == m.origin && m.origin != "" && !m.force {
+		// Normal move with same origin/dest is a no-op.
+		// force=true (restart path) skips this branch and executes remove->add.
 		log.Info("origin and dest are the same, no need to move",
 			zap.String("origin", m.origin.String()),
 			zap.String("dest", m.dest.String()),

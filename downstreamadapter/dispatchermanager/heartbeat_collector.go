@@ -51,7 +51,8 @@ type HeartBeatCollector struct {
 
 	heartBeatReqQueue   *HeartbeatRequestQueue
 	blockStatusReqQueue *BlockStatusRequestQueue
-	recoverReqQueue     *RecoverDispatcherRequestQueue
+
+	recoverRequestCh chan *RecoverDispatcherRequestWithTargetID
 
 	dispatcherStatusDynamicStream             dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, dispatcher.Dispatcher, *dispatcher.DispatcherStatusHandler]
 	heartBeatResponseDynamicStream            dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *DispatcherManager, *HeartBeatResponseHandler]
@@ -73,7 +74,7 @@ func NewHeartBeatCollector(serverId node.ID) *HeartBeatCollector {
 		from:                                      serverId,
 		heartBeatReqQueue:                         NewHeartbeatRequestQueue(),
 		blockStatusReqQueue:                       NewBlockStatusRequestQueue(),
-		recoverReqQueue:                           NewRecoverDispatcherRequestQueue(),
+		recoverRequestCh:                          make(chan *RecoverDispatcherRequestWithTargetID, 1024),
 		dispatcherStatusDynamicStream:             dStatusDS,
 		heartBeatResponseDynamicStream:            newHeartBeatResponseDynamicStream(dStatusDS),
 		schedulerDispatcherRequestDynamicStream:   newSchedulerDispatcherRequestDynamicStream(),
@@ -127,7 +128,7 @@ func (c *HeartBeatCollector) RegisterDispatcherManager(m *DispatcherManager) err
 
 	m.SetHeartbeatRequestQueue(c.heartBeatReqQueue)
 	m.SetBlockStatusRequestQueue(c.blockStatusReqQueue)
-	m.SetRecoverDispatcherRequestQueue(c.recoverReqQueue)
+	m.SetRecoverDispatcherRequestQueue(c.recoverRequestCh)
 	err := c.heartBeatResponseDynamicStream.AddPath(m.changefeedID.Id, m)
 	if err != nil {
 		return errors.Trace(err)
@@ -273,12 +274,17 @@ func (c *HeartBeatCollector) sendRecoverDispatcherMessages(ctx context.Context) 
 		case <-ctx.Done():
 			log.Info("heartbeat collector is shutting down, exit send recover dispatcher message")
 			return context.Cause(ctx)
-		default:
-			request := c.recoverReqQueue.Dequeue(ctx)
+		case request, ok := <-c.recoverRequestCh:
+			if !ok {
+				log.Info("recover dispatcher request channel is closed, exit send recover dispatcher message")
+				return nil
+			}
 			if request == nil {
+				// nil has no business meaning here. Keep this guard to avoid panic
+				// if a malformed sender pushes a nil request.
+				log.Warn("recover dispatcher request is nil, this should no happen")
 				continue
 			}
-			// todo: can we set the target id into the request, instead of new a wrapper.
 			err := c.mc.SendCommand(
 				messaging.NewSingleTargetMessage(
 					request.TargetID,
@@ -289,7 +295,10 @@ func (c *HeartBeatCollector) sendRecoverDispatcherMessages(ctx context.Context) 
 				continue
 			}
 			log.Error("failed to send recover dispatcher request message", zap.Error(err))
-			// todo: shall we really set fallback, will the local target channel get full ?
+
+			// recover request is edge-triggered, so
+			// losing one can leave a dispatcher stuck without another trigger.
+			// fallback escalates this delivery failure to changefeed-level retry path.
 			if request.FallbackErrCh != nil {
 				fallback := cerror.WrapError(cerror.ErrChangefeedRetryable, err)
 				select {

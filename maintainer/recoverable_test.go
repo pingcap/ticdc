@@ -75,6 +75,7 @@ func newRecoverDispatcherTestMaintainer(t *testing.T) (*Maintainer, *Controller,
 		statusChanged: atomic.NewBool(false),
 	}
 	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
+	m.recoverDispatcherHandler = newRecoverDispatcherHandler(m)
 	m.initialized.Store(true)
 	return m, controller, dispatcherID, nodeID
 }
@@ -122,7 +123,9 @@ func TestRecoverDispatcherRequestDowngradeToFatalWhenAttemptsExceeded(t *testing
 	m, controller, dispatcherID, nodeID := newRecoverDispatcherTestMaintainer(t)
 
 	for i := 0; i < recoverableMaxAttempts; i++ {
-		m.recordRecoverableDispatcherRestart(dispatcherID)
+		state := m.recoverDispatcherHandler.getRestartState(dispatcherID)
+		state.attempts++
+		m.recoverDispatcherHandler.tracked[dispatcherID] = state
 	}
 
 	req := newRecoverDispatcherRequest(m.changefeedID, dispatcherID)
@@ -130,7 +133,7 @@ func TestRecoverDispatcherRequestDowngradeToFatalWhenAttemptsExceeded(t *testing
 
 	fatal := m.runningErrors.m[nodeID]
 	require.NotNil(t, fatal)
-	require.Equal(t, string(cerrors.ErrMaintainerRecoverableRestartExceededBudget.RFCCode()), fatal.Code)
+	require.Equal(t, string(cerrors.ErrMaintainerRecoverableRestartExceededAttempts.RFCCode()), fatal.Code)
 	require.Nil(t, controller.operatorController.GetOperator(dispatcherID))
 }
 
