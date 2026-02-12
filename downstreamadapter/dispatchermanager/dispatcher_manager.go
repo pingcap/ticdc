@@ -739,12 +739,10 @@ func (e *DispatcherManager) collectRecoverableEvents(ctx context.Context) {
 			for _, dispatcherID := range event.DispatcherIDs {
 				dispatcherIDs = append(dispatcherIDs, dispatcherID.ToPB())
 			}
-			// todo: shall we make the targetID as a field of the RecoverDispatcherRequest ?
 			req := &heartbeatpb.RecoverDispatcherRequest{
 				ChangefeedID:  e.changefeedID.ToPB(),
 				DispatcherIDs: dispatcherIDs,
 			}
-			// todo: shall we really pass the err channel here ?
 			// does other queue sender do the similar thing ?
 			var fallbackErrCh chan<- error
 			if e.sharedInfo != nil {
@@ -753,10 +751,15 @@ func (e *DispatcherManager) collectRecoverableEvents(ctx context.Context) {
 				// changefeed-level retryable error into errCh.
 				fallbackErrCh = e.sharedInfo.GetErrCh()
 			}
-			e.recoverDispatcherRequestQueue <- &RecoverDispatcherRequestWithTargetID{
+			request := &RecoverDispatcherRequestWithTargetID{
 				TargetID:      e.GetMaintainerID(),
 				Request:       req,
 				FallbackErrCh: fallbackErrCh,
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case e.recoverDispatcherRequestQueue <- request:
 			}
 		}
 	}

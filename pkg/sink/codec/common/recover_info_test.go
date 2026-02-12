@@ -3,15 +3,15 @@ package common
 import (
 	"testing"
 
-	commonPkg "github.com/pingcap/ticdc/pkg/common"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/recoverable"
 	"github.com/stretchr/testify/require"
 )
 
 func TestBuildMessageRecoverInfo(t *testing.T) {
-	dispatcherID1 := commonPkg.NewDispatcherID()
-	dispatcherID2 := commonPkg.NewDispatcherID()
+	dispatcherID1 := commonType.NewDispatcherID()
+	dispatcherID2 := commonType.NewDispatcherID()
 
 	events := []*commonEvent.RowEvent{
 		{DispatcherID: dispatcherID1, Epoch: 11},
@@ -29,7 +29,7 @@ func TestBuildMessageRecoverInfo(t *testing.T) {
 }
 
 func TestBuildMessageRecoverInfoUseMaxEpochForSameDispatcher(t *testing.T) {
-	dispatcherID := commonPkg.NewDispatcherID()
+	dispatcherID := commonType.NewDispatcherID()
 	events := []*commonEvent.RowEvent{
 		{DispatcherID: dispatcherID, Epoch: 11},
 		{DispatcherID: dispatcherID, Epoch: 13},
@@ -44,7 +44,7 @@ func TestBuildMessageRecoverInfoUseMaxEpochForSameDispatcher(t *testing.T) {
 }
 
 func TestAttachMessageRecoverInfo(t *testing.T) {
-	dispatcherID := commonPkg.NewDispatcherID()
+	dispatcherID := commonType.NewDispatcherID()
 	events := []*commonEvent.RowEvent{
 		{DispatcherID: dispatcherID, Epoch: 100},
 	}
@@ -60,9 +60,9 @@ func TestAttachMessageRecoverInfo(t *testing.T) {
 }
 
 func TestAttachMessageRecoverInfoSplitByRowsCount(t *testing.T) {
-	dispatcherID1 := commonPkg.NewDispatcherID()
-	dispatcherID2 := commonPkg.NewDispatcherID()
-	dispatcherID3 := commonPkg.NewDispatcherID()
+	dispatcherID1 := commonType.NewDispatcherID()
+	dispatcherID2 := commonType.NewDispatcherID()
+	dispatcherID3 := commonType.NewDispatcherID()
 	events := []*commonEvent.RowEvent{
 		{DispatcherID: dispatcherID1, Epoch: 11},
 		{DispatcherID: dispatcherID2, Epoch: 12},
@@ -85,7 +85,7 @@ func TestAttachMessageRecoverInfoSplitByRowsCount(t *testing.T) {
 }
 
 func TestAttachMessageRecoverInfoClampRowsToRemainingEvents(t *testing.T) {
-	dispatcherID := commonPkg.NewDispatcherID()
+	dispatcherID := commonType.NewDispatcherID()
 	events := []*commonEvent.RowEvent{
 		{DispatcherID: dispatcherID, Epoch: 9},
 	}
@@ -101,7 +101,7 @@ func TestAttachMessageRecoverInfoClampRowsToRemainingEvents(t *testing.T) {
 }
 
 func TestAttachMessageRecoverInfoClearRecoverInfoWhenRowsCountIsZero(t *testing.T) {
-	dispatcherID := commonPkg.NewDispatcherID()
+	dispatcherID := commonType.NewDispatcherID()
 	events := []*commonEvent.RowEvent{
 		{DispatcherID: dispatcherID, Epoch: 9},
 	}

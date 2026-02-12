@@ -19,6 +19,18 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 )
 
+// RecoverEvent is a structured recover event notification emitted by a sink.
+// DispatcherManager forwards it to maintainer to trigger localized recovery.
+type RecoverEvent struct {
+	Time          time.Time
+	DispatcherIDs []common.DispatcherID
+}
+
+// Recoverable is an optional interface implemented by sinks that can report recoverable request.
+type Recoverable interface {
+	SetRecoverEventCh(ch chan<- *RecoverEvent)
+}
+
 type DispatcherEpoch struct {
 	// DispatcherID identifies the dispatcher that produced the recoverable error.
 	DispatcherID common.DispatcherID

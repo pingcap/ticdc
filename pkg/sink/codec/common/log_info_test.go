@@ -16,7 +16,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
-	commonModel "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/stretchr/testify/require"
 )
@@ -33,7 +33,7 @@ func TestBuildMessageLogInfo(t *testing.T) {
 	row, ok := dml.GetNextRow()
 	require.True(t, ok)
 
-	dispatcherID := commonModel.NewDispatcherID()
+	dispatcherID := common.NewDispatcherID()
 	rowEvent := &commonEvent.RowEvent{
 		DispatcherID:   dispatcherID,
 		TableInfo:      tableInfo,
@@ -69,7 +69,7 @@ func TestAttachMessageLogInfo(t *testing.T) {
 	row, ok := dml.GetNextRow()
 	require.True(t, ok)
 
-	dispatcherID := commonModel.NewDispatcherID()
+	dispatcherID := common.NewDispatcherID()
 	rowEvent := &commonEvent.RowEvent{
 		DispatcherID:   dispatcherID,
 		TableInfo:      tableInfo,
@@ -126,7 +126,7 @@ func TestSetCheckpointMessageLogInfo(t *testing.T) {
 func makeTestRowEvents(
 	t *testing.T,
 	helper *commonEvent.EventTestHelper,
-	tableInfo *commonModel.TableInfo,
+	tableInfo *common.TableInfo,
 	sql string,
 ) []*commonEvent.RowEvent {
 	dml := helper.DML2Event("test", "t", sql)

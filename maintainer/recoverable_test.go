@@ -22,7 +22,7 @@ import (
 	"github.com/pingcap/ticdc/maintainer/testutil"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
@@ -133,7 +133,7 @@ func TestRecoverDispatcherRequestDowngradeToFatalWhenAttemptsExceeded(t *testing
 
 	fatal := m.runningErrors.m[nodeID]
 	require.NotNil(t, fatal)
-	require.Equal(t, string(cerrors.ErrMaintainerRecoverableRestartExceededAttempts.RFCCode()), fatal.Code)
+	require.Equal(t, string(errors.ErrMaintainerRecoverableRestartExceededAttempts.RFCCode()), fatal.Code)
 	require.Nil(t, controller.operatorController.GetOperator(dispatcherID))
 }
 
