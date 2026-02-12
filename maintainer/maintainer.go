@@ -151,7 +151,7 @@ type Maintainer struct {
 	// recoverableDispatcherRestarts tracks dispatcher-level recovery attempts for transient recoverable errors.
 	recoverableDispatcherRestarts struct {
 		sync.Mutex
-		dispatchers map[common.DispatcherID]*recoverableDispatcherRestartState
+		dispatchers map[common.DispatcherID]*recoverableState
 	}
 
 	cancel context.CancelFunc
@@ -841,7 +841,6 @@ func (m *Maintainer) onRecoverDispatcherRequest(from node.ID, req *heartbeatpb.R
 	operatorController := m.controller.getOperatorController(common.DefaultMode)
 	spanController := m.controller.getSpanController(common.DefaultMode)
 
-	now := time.Now()
 	seen := make(map[common.DispatcherID]struct{}, len(req.DispatcherIDs))
 	for _, pbDispatcherID := range req.DispatcherIDs {
 		if pbDispatcherID == nil {
@@ -859,7 +858,7 @@ func (m *Maintainer) onRecoverDispatcherRequest(from node.ID, req *heartbeatpb.R
 			continue
 		}
 
-		decision, attempts := m.getRecoverableDispatcherRestartDecision(dispatcherID, now)
+		decision, attempts := m.getRecoverableDispatcherRestartDecision(dispatcherID)
 		if decision == recoverableDispatcherRestartDecisionDowngrade {
 			log.Warn("recover dispatcher request exceeded dispatcher restart budget, downgrade to changefeed error path",
 				zap.Stringer("changefeedID", m.changefeedID),
@@ -900,7 +899,7 @@ func (m *Maintainer) onRecoverDispatcherRequest(from node.ID, req *heartbeatpb.R
 				zap.Stringer("dispatcherID", dispatcherID))
 			continue
 		}
-		m.recordRecoverableDispatcherRestart(dispatcherID, now)
+		m.recordRecoverableDispatcherRestart(dispatcherID)
 	}
 }
 

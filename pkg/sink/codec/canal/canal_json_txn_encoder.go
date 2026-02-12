@@ -60,12 +60,8 @@ func (j *JSONTxnEventEncoder) AppendTxnEvent(event *commonEvent.DMLEvent) error 
 			event.Rewind()
 			break
 		}
-		value, err := newJSONMessageForDML(&commonEvent.RowEvent{
-			TableInfo:      event.TableInfo,
-			CommitTs:       event.CommitTs,
-			Event:          row,
-			ColumnSelector: j.columnSelector,
-		}, j.config, false, "")
+		rowEvent := event.NewRowEvent(row, j.columnSelector, nil)
+		value, err := newJSONMessageForDML(&rowEvent, j.config, false, "")
 		if err != nil {
 			return err
 		}

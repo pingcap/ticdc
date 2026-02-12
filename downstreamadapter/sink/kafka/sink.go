@@ -117,12 +117,12 @@ func New(
 	}, nil
 }
 
-func (s *sink) SetRecoverableErrorChan(ch chan<- *recoverable.ErrorEvent) {
-	setter, ok := s.dmlProducer.(recoverable.ErrorEventChanSetter)
+func (s *sink) SetRecoverableErrorChan(ch chan<- *recoverable.RecoverEvent) {
+	setter, ok := s.dmlProducer.(recoverable.Recoverable)
 	if !ok {
 		return
 	}
-	setter.SetRecoverableErrorChan(ch)
+	setter.SetRecoverEventCh(ch)
 }
 
 func (s *sink) Run(ctx context.Context) error {
@@ -262,18 +262,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 						PartitionKey:   key,
 						TotalPartition: partitionNum,
 					},
-					RowEvent: commonEvent.RowEvent{
-						DispatcherID:    event.DispatcherID,
-						PhysicalTableID: event.PhysicalTableID,
-						TableInfo:       event.TableInfo,
-						StartTs:         event.StartTs,
-						CommitTs:        event.CommitTs,
-						Epoch:           event.Epoch,
-						Event:           row,
-						Callback:        rowCallback,
-						ColumnSelector:  selector,
-						Checksum:        row.Checksum,
-					},
+					RowEvent: event.NewRowEvent(row, selector, rowCallback),
 				}
 				s.rowChan.Push(mqEvent)
 			}

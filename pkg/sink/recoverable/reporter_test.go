@@ -21,7 +21,7 @@ import (
 )
 
 func TestReportOncePerDispatcherEpoch(t *testing.T) {
-	ch := make(chan *ErrorEvent, 2)
+	ch := make(chan *RecoverEvent, 2)
 	reporter := NewReporter(ch)
 
 	dispatcherID := common.NewDispatcherID()
@@ -66,10 +66,19 @@ func TestReportReturnsFalseWhenOutputUnavailable(t *testing.T) {
 	)
 	require.False(t, handled)
 	require.Empty(t, reported)
+
+	fullCh := make(chan *RecoverEvent, 1)
+	fullCh <- &RecoverEvent{}
+	reporter = NewReporter(fullCh)
+	reported, handled = reporter.Report(
+		[]DispatcherEpoch{{DispatcherID: dispatcherID, Epoch: 2}},
+	)
+	require.False(t, handled)
+	require.Empty(t, reported)
 }
 
 func TestIgnoreStaleEpochAfterNewerEpochReported(t *testing.T) {
-	ch := make(chan *ErrorEvent, 4)
+	ch := make(chan *RecoverEvent, 4)
 	reporter := NewReporter(ch)
 
 	dispatcherID := common.NewDispatcherID()

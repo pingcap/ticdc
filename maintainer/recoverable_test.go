@@ -121,9 +121,8 @@ func TestRecoverDispatcherRequestRestartAgainAfterPreviousRestartFinished(t *tes
 func TestRecoverDispatcherRequestDowngradeToFatalWhenAttemptsExceeded(t *testing.T) {
 	m, controller, dispatcherID, nodeID := newRecoverDispatcherTestMaintainer(t)
 
-	now := time.Now()
-	for i := 0; i < recoverableDispatcherRestartMaxAttempts; i++ {
-		m.recordRecoverableDispatcherRestart(dispatcherID, now)
+	for i := 0; i < recoverableMaxAttempts; i++ {
+		m.recordRecoverableDispatcherRestart(dispatcherID)
 	}
 
 	req := newRecoverDispatcherRequest(m.changefeedID, dispatcherID)

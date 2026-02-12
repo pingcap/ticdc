@@ -143,12 +143,12 @@ func TestCollectRecoverableErrorsEnqueueRecoverDispatcherRequest(t *testing.T) {
 		}),
 	}
 	manager.SetMaintainerID(node.ID("maintainer"))
-	manager.recoverableErrCh = make(chan *recoverable.ErrorEvent, 1)
+	manager.recoverEventCh = make(chan *recoverable.RecoverEvent, 1)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		manager.collectRecoverableErrors(ctx)
+		manager.collectRecovarbleEvents(ctx)
 		close(done)
 	}()
 	defer func() {
@@ -157,7 +157,7 @@ func TestCollectRecoverableErrorsEnqueueRecoverDispatcherRequest(t *testing.T) {
 	}()
 
 	dispatcherID := common.NewDispatcherID()
-	manager.recoverableErrCh <- &recoverable.ErrorEvent{
+	manager.recoverEventCh <- &recoverable.RecoverEvent{
 		Time:          time.Now(),
 		DispatcherIDs: []common.DispatcherID{dispatcherID},
 	}

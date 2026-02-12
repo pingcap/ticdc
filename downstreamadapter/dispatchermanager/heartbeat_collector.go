@@ -271,32 +271,35 @@ func (c *HeartBeatCollector) sendRecoverDispatcherMessages(ctx context.Context) 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info("heartbeat collector is shutting down, exit sendRecoverDispatcherMessages")
-			return ctx.Err()
+			log.Info("heartbeat collector is shutting down, exit send recover dispatcher message")
+			return context.Cause(ctx)
 		default:
-			reqWithTarget := c.recoverReqQueue.Dequeue(ctx)
-			if reqWithTarget == nil {
+			request := c.recoverReqQueue.Dequeue(ctx)
+			if request == nil {
 				continue
 			}
+			// todo: can we set the target id into the request, instead of new a wrapper.
 			err := c.mc.SendCommand(
 				messaging.NewSingleTargetMessage(
-					reqWithTarget.TargetID,
+					request.TargetID,
 					messaging.MaintainerManagerTopic,
-					reqWithTarget.Request,
+					request.Request,
 				))
-			if err != nil {
-				log.Error("failed to send recover dispatcher request message", zap.Error(err))
-				if reqWithTarget.FallbackErrCh != nil {
-					fallbackErr := cerror.WrapError(cerror.ErrChangefeedRetryable, err)
-					select {
-					case reqWithTarget.FallbackErrCh <- fallbackErr:
-					default:
-						// FallbackErrCh is intentionally best-effort.
-						// If it is full, dispatcher manager should already have a
-						// pending error in errCh that will drive changefeed-level handling.
-						log.Warn("fallback error channel is full when sending recover dispatcher request fails",
-							zap.Error(fallbackErr))
-					}
+			if err == nil {
+				continue
+			}
+			log.Error("failed to send recover dispatcher request message", zap.Error(err))
+			// todo: shall we really set fallback, will the local target channel get full ?
+			if request.FallbackErrCh != nil {
+				fallback := cerror.WrapError(cerror.ErrChangefeedRetryable, err)
+				select {
+				case request.FallbackErrCh <- fallback:
+				default:
+					// FallbackErrCh is intentionally best-effort.
+					// If it is full, dispatcher manager should already have a
+					// pending error in errCh that will drive changefeed-level handling.
+					log.Warn("fallback error channel is full when sending recover dispatcher request fails",
+						zap.Error(fallback))
 				}
 			}
 		}

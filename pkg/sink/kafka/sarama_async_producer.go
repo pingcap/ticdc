@@ -147,7 +147,7 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 	}
 }
 
-func (p *saramaAsyncProducer) SetRecoverableErrorChan(ch chan<- *recoverable.ErrorEvent) {
+func (p *saramaAsyncProducer) SetRecoverableErrorChan(ch chan<- *recoverable.RecoverEvent) {
 	if ch == nil || p.reporter != nil {
 		return
 	}

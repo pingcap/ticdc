@@ -31,12 +31,12 @@ type DispatcherEpoch struct {
 // and sends recoverable error events through a non-blocking channel.
 type Reporter struct {
 	// outputCh receives recoverable error events for maintainer handling.
-	outputCh chan<- *ErrorEvent
+	outputCh chan<- *RecoverEvent
 	// reported keeps the max epoch that has been successfully enqueued per dispatcher.
 	reported map[common.DispatcherID]uint64
 }
 
-func NewReporter(outputCh chan<- *ErrorEvent) *Reporter {
+func NewReporter(outputCh chan<- *RecoverEvent) *Reporter {
 	return &Reporter{
 		outputCh: outputCh,
 		reported: make(map[common.DispatcherID]uint64),
@@ -85,7 +85,7 @@ func (r *Reporter) Report(
 		dispatcherIDs = append(dispatcherIDs, dispatcher.DispatcherID)
 	}
 
-	event := &ErrorEvent{
+	event := &RecoverEvent{
 		Time:          time.Now(),
 		DispatcherIDs: dispatcherIDs,
 	}

@@ -219,6 +219,37 @@ func TestBatchDMLEventAppendWithDifferentTableInfo(t *testing.T) {
 	require.Contains(t, err.Error(), "batchDMLTableInfoVersion")
 }
 
+func TestDMLEventNewRowEvent(t *testing.T) {
+	dispatcherID := common.NewDispatcherID()
+	tableInfo := &common.TableInfo{}
+	dmlEvent := NewDMLEvent(dispatcherID, 101, 102, 103, tableInfo)
+	dmlEvent.Epoch = 104
+
+	checksum := &integrity.Checksum{}
+	row := RowChange{
+		RowType:  common.RowTypeInsert,
+		Checksum: checksum,
+	}
+	called := false
+	callback := func() {
+		called = true
+	}
+
+	rowEvent := dmlEvent.NewRowEvent(row, nil, callback)
+	require.Equal(t, dispatcherID, rowEvent.DispatcherID)
+	require.Equal(t, int64(101), rowEvent.PhysicalTableID)
+	require.Equal(t, uint64(102), rowEvent.StartTs)
+	require.Equal(t, uint64(103), rowEvent.CommitTs)
+	require.Equal(t, uint64(104), rowEvent.Epoch)
+	require.Equal(t, tableInfo, rowEvent.TableInfo)
+	require.Equal(t, row, rowEvent.Event)
+	require.Equal(t, checksum, rowEvent.Checksum)
+	require.Nil(t, rowEvent.ColumnSelector)
+	require.NotNil(t, rowEvent.Callback)
+	rowEvent.Callback()
+	require.True(t, called)
+}
+
 func TestDMLEventHeaderValidation(t *testing.T) {
 	helper := NewEventTestHelper(t)
 	defer helper.Close()

@@ -655,6 +655,24 @@ func (t *DMLEvent) AddPostFlushFunc(f func()) {
 	t.PostTxnFlushed = append(t.PostTxnFlushed, f)
 }
 
+// NewRowEvent builds a RowEvent from current DMLEvent and one decoded row.
+// It guarantees dispatcher-level metadata (such as DispatcherID and Epoch)
+// are copied from DMLEvent consistently.
+func (t *DMLEvent) NewRowEvent(row RowChange, columnSelector Selector, callback func()) RowEvent {
+	return RowEvent{
+		DispatcherID:    t.DispatcherID,
+		PhysicalTableID: t.PhysicalTableID,
+		TableInfo:       t.TableInfo,
+		StartTs:         t.StartTs,
+		CommitTs:        t.CommitTs,
+		Epoch:           t.Epoch,
+		Event:           row,
+		ColumnSelector:  columnSelector,
+		Callback:        callback,
+		Checksum:        row.Checksum,
+	}
+}
+
 // Rewind reset the offset to 0, So that the next GetNextRow will return the first row
 func (t *DMLEvent) Rewind() {
 	t.offset = 0

@@ -102,7 +102,12 @@ type DispatcherManager struct {
 
 	// recoverDispatcherRequestQueue is used to store dispatcher recovery requests that should be
 	// forwarded to maintainer.
+	// this is a instance level queue, shared by all dispatcher managers.
 	recoverDispatcherRequestQueue *RecoverDispatcherRequestQueue
+
+	// recoverEventCh carries recoverable event that should trigger dispatcher-level recovery.
+	// this is a changefeed-level channel, forward event to the queue.
+	recoverEventCh chan *recoverable.RecoverEvent
 
 	// heartBeatTask is responsible for collecting the heartbeat info from all the dispatchers
 	// and report to the maintainer periodicity.
@@ -114,9 +119,6 @@ type DispatcherManager struct {
 
 	// sink is used to send all the events to the downstream.
 	sink sink.Sink
-
-	// recoverableErrCh carries recoverable errors that should trigger dispatcher-level recovery.
-	recoverableErrCh chan *recoverable.ErrorEvent
 
 	// redo related
 	RedoEnable bool
@@ -231,10 +233,10 @@ func NewDispatcherManager(
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	if setter, ok := manager.sink.(recoverable.ErrorEventChanSetter); ok {
+	if recover, ok := manager.sink.(recoverable.Recoverable); ok {
 		// recoverableErrCh only needs to preserve a pending recover signal.
-		manager.recoverableErrCh = make(chan *recoverable.ErrorEvent, 1)
-		setter.SetRecoverableErrorChan(manager.recoverableErrCh)
+		manager.recoverEventCh = make(chan *recoverable.RecoverEvent, 1)
+		recover.SetRecoverEventCh(manager.recoverEventCh)
 	}
 
 	// Determine outputRawChangeEvent based on sink type
@@ -292,12 +294,11 @@ func NewDispatcherManager(
 		manager.handleError(ctx, err)
 	}()
 
-	// collect recoverable sink errors and report to maintainer for dispatcher-level recovery.
-	if manager.recoverableErrCh != nil {
+	if manager.recoverEventCh != nil {
 		manager.wg.Add(1)
 		go func() {
 			defer manager.wg.Done()
-			manager.collectRecoverableErrors(ctx)
+			manager.collectRecovarbleEvents(ctx)
 		}()
 	}
 
@@ -333,52 +334,6 @@ func NewDispatcherManager(
 		zap.String("filterConfig", filterCfg.String()),
 	)
 	return manager, nil
-}
-
-func (e *DispatcherManager) collectRecoverableErrors(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case event := <-e.recoverableErrCh:
-			if event == nil {
-				continue
-			}
-			e.metricRecoverEventCount.Inc()
-
-			if len(event.DispatcherIDs) == 0 {
-				log.Warn("recoverable sink error has no dispatcher IDs, ignore it",
-					zap.Stringer("changefeedID", e.changefeedID))
-				continue
-			}
-			if e.recoverDispatcherRequestQueue == nil {
-				log.Warn("recover dispatcher request queue is not set, ignore recoverable sink error",
-					zap.Stringer("changefeedID", e.changefeedID))
-				continue
-			}
-
-			dispatcherIDs := make([]*heartbeatpb.DispatcherID, 0, len(event.DispatcherIDs))
-			for _, dispatcherID := range event.DispatcherIDs {
-				dispatcherIDs = append(dispatcherIDs, dispatcherID.ToPB())
-			}
-			req := &heartbeatpb.RecoverDispatcherRequest{
-				ChangefeedID:  e.changefeedID.ToPB(),
-				DispatcherIDs: dispatcherIDs,
-			}
-			var fallbackErrCh chan<- error
-			if e.sharedInfo != nil {
-				// FallbackErrCh is used when heartbeat collector cannot deliver
-				// recover request to maintainer. In that case we inject a
-				// changefeed-level retryable error into errCh.
-				fallbackErrCh = e.sharedInfo.GetErrCh()
-			}
-			e.recoverDispatcherRequestQueue.Enqueue(&RecoverDispatcherRequestWithTargetID{
-				TargetID:      e.GetMaintainerID(),
-				Request:       req,
-				FallbackErrCh: fallbackErrCh,
-			})
-		}
-	}
 }
 
 func (e *DispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool) error {
@@ -752,6 +707,56 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 			message.Watermark = newWatermark
 			message.RedoWatermark = newRedoWatermark
 			e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
+		}
+	}
+}
+
+// collect recover event and report to maintainer for dispatcher-level recovery.
+func (e *DispatcherManager) collectRecovarbleEvents(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event := <-e.recoverEventCh:
+			if event == nil {
+				continue
+			}
+			e.metricRecoverEventCount.Inc()
+
+			if len(event.DispatcherIDs) == 0 {
+				log.Warn("recoverable sink error has no dispatcher IDs, ignore it",
+					zap.Stringer("changefeedID", e.changefeedID))
+				continue
+			}
+			if e.recoverDispatcherRequestQueue == nil {
+				log.Warn("recover dispatcher request queue is not set, ignore recoverable sink error",
+					zap.Stringer("changefeedID", e.changefeedID))
+				continue
+			}
+
+			dispatcherIDs := make([]*heartbeatpb.DispatcherID, 0, len(event.DispatcherIDs))
+			for _, dispatcherID := range event.DispatcherIDs {
+				dispatcherIDs = append(dispatcherIDs, dispatcherID.ToPB())
+			}
+			// todo: shall we make the targetID as a field of the RecoverDispatcherRequest ?
+			req := &heartbeatpb.RecoverDispatcherRequest{
+				ChangefeedID:  e.changefeedID.ToPB(),
+				DispatcherIDs: dispatcherIDs,
+			}
+			// todo: shall we really pass the err channel here ?
+			// does other queue sender do the similar thing ?
+			var fallbackErrCh chan<- error
+			if e.sharedInfo != nil {
+				// FallbackErrCh is used when heartbeat collector cannot deliver
+				// recover request to maintainer. In that case we inject a
+				// changefeed-level retryable error into errCh.
+				fallbackErrCh = e.sharedInfo.GetErrCh()
+			}
+			e.recoverDispatcherRequestQueue.Enqueue(&RecoverDispatcherRequestWithTargetID{
+				TargetID:      e.GetMaintainerID(),
+				Request:       req,
+				FallbackErrCh: fallbackErrCh,
+			})
 		}
 	}
 }
