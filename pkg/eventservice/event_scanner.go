@@ -773,7 +773,7 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 	}
 	updateMetricEventServiceSendDMLTypeCount(p.mode, rawType, shouldSplit)
 
-	if p.outputRawChangeEvent && !shouldSplit {
+	if p.outputRawChangeEvent || !shouldSplit {
 		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)
 	}
 
