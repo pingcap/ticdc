@@ -763,11 +763,7 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)
 	}
 
-	var (
-		shouldSplit bool
-		err         error
-	)
-	shouldSplit, err = event.IsUKChanged(rawEvent, p.currentTxn.CurrentDMLEvent.TableInfo)
+	shouldSplit, err := event.IsUKChanged(rawEvent, p.currentTxn.CurrentDMLEvent.TableInfo)
 	if err != nil {
 		return err
 	}
