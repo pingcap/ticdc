@@ -38,14 +38,14 @@ data-dir = "/tmp/data"
 
 [clusters]
   [clusters.cluster1]
-  pd-addr = "127.0.0.1:2379"
+  pd-addrs = ["127.0.0.1:2379"]
   s3-sink-uri = "s3://bucket/cluster1/"
   s3-changefeed-id = "s3-cf-1"
   [clusters.cluster1.downstream-cluster-changefeed-config]
   cluster2 = { changefeed-id = "cf-1-to-2" }
 
   [clusters.cluster2]
-  pd-addr = "127.0.0.1:2479"
+  pd-addrs = ["127.0.0.1:2479"]
   s3-sink-uri = "s3://bucket/cluster2/"
   s3-changefeed-id = "s3-cf-2"
   [clusters.cluster2.downstream-cluster-changefeed-config]
@@ -62,7 +62,7 @@ data-dir = "/tmp/data"
 		require.Len(t, cfg.Clusters, 2)
 		require.Contains(t, cfg.Clusters, "cluster1")
 		require.Contains(t, cfg.Clusters, "cluster2")
-		require.Equal(t, "127.0.0.1:2379", cfg.Clusters["cluster1"].PDAddr)
+		require.Equal(t, []string{"127.0.0.1:2379"}, cfg.Clusters["cluster1"].PDAddrs)
 		require.Equal(t, "s3://bucket/cluster1/", cfg.Clusters["cluster1"].S3SinkURI)
 		require.Equal(t, "s3-cf-1", cfg.Clusters["cluster1"].S3ChangefeedID)
 		require.Len(t, cfg.Clusters["cluster1"].DownstreamClusterChangefeedConfig, 1)
@@ -109,7 +109,7 @@ report-dir = "/tmp/reports"
 		require.Contains(t, err.Error(), "at least one cluster must be configured")
 	})
 
-	t.Run("missing pd-addr", func(t *testing.T) {
+	t.Run("missing pd-addrs", func(t *testing.T) {
 		t.Parallel()
 		tmpDir := t.TempDir()
 		configPath := filepath.Join(tmpDir, "config.toml")
@@ -129,7 +129,7 @@ report-dir = "/tmp/reports"
 		cfg, err := LoadConfig(configPath)
 		require.Error(t, err)
 		require.Nil(t, cfg)
-		require.Contains(t, err.Error(), "pd-addr is required")
+		require.Contains(t, err.Error(), "pd-addrs is required")
 	})
 
 	t.Run("missing s3-sink-uri", func(t *testing.T) {
@@ -143,7 +143,7 @@ report-dir = "/tmp/reports"
 
 [clusters]
   [clusters.cluster1]
-  pd-addr = "127.0.0.1:2379"
+  pd-addrs = ["127.0.0.1:2379"]
   s3-changefeed-id = "s3-cf-1"
 `
 		err := os.WriteFile(configPath, []byte(configContent), 0644)
@@ -166,7 +166,7 @@ report-dir = "/tmp/reports"
 
 [clusters]
   [clusters.cluster1]
-  pd-addr = "127.0.0.1:2379"
+  pd-addrs = ["127.0.0.1:2379"]
   s3-sink-uri = "s3://bucket/cluster1/"
 `
 		err := os.WriteFile(configPath, []byte(configContent), 0644)
@@ -189,14 +189,14 @@ report-dir = "/tmp/reports"
 
 [clusters]
   [clusters.cluster1]
-  pd-addr = "127.0.0.1:2379"
+  pd-addrs = ["127.0.0.1:2379"]
   s3-sink-uri = "s3://bucket/cluster1/"
   s3-changefeed-id = "s3-cf-1"
   [clusters.cluster1.downstream-cluster-changefeed-config]
   cluster2 = { changefeed-id = "cf-1-to-2" }
 
   [clusters.cluster2]
-  pd-addr = "127.0.0.1:2479"
+  pd-addrs = ["127.0.0.1:2479"]
   s3-sink-uri = "s3://bucket/cluster2/"
   s3-changefeed-id = "s3-cf-2"
 `
@@ -220,14 +220,14 @@ report-dir = "/tmp/reports"
 
 [clusters]
   [clusters.cluster1]
-  pd-addr = "127.0.0.1:2379"
+  pd-addrs = ["127.0.0.1:2379"]
   s3-sink-uri = "s3://bucket/cluster1/"
   s3-changefeed-id = "s3-cf-1"
   [clusters.cluster1.downstream-cluster-changefeed-config]
   cluster2 = {}
 
   [clusters.cluster2]
-  pd-addr = "127.0.0.1:2479"
+  pd-addrs = ["127.0.0.1:2479"]
   s3-sink-uri = "s3://bucket/cluster2/"
   s3-changefeed-id = "s3-cf-2"
   [clusters.cluster2.downstream-cluster-changefeed-config]

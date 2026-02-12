@@ -14,6 +14,9 @@
 package types
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 )
 
@@ -60,6 +63,15 @@ type TimeWindow struct {
 	PDTimestampAfterTimeWindow map[string]uint64 `json:"pd_timestamp_after_time_window"`
 	// NextMinLeftBoundary is the minimum left boundary of the next time window for the cluster
 	NextMinLeftBoundary uint64 `json:"next_min_left_boundary"`
+}
+
+func (t *TimeWindow) String() string {
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "time window boundary: (%d, %d]\n", t.LeftBoundary, t.RightBoundary)
+	for downstreamClusterID, checkpointTs := range t.CheckpointTs {
+		fmt.Fprintf(&builder, "checkpoint ts [to cluster %s]: %d\n", downstreamClusterID, checkpointTs)
+	}
+	return builder.String()
 }
 
 type TimeWindowData struct {

@@ -34,20 +34,25 @@ type versionCacheEntry struct {
 
 type clusterViolationChecker struct {
 	clusterID                            string
-	twoPreviousTimeWindowKeyVersionCache map[types.PkType]versionCacheEntry
+	twoPreviousTimeWindowKeyVersionCache map[string]map[types.PkType]versionCacheEntry
 }
 
 func newClusterViolationChecker(clusterID string) *clusterViolationChecker {
 	return &clusterViolationChecker{
 		clusterID:                            clusterID,
-		twoPreviousTimeWindowKeyVersionCache: make(map[types.PkType]versionCacheEntry),
+		twoPreviousTimeWindowKeyVersionCache: make(map[string]map[types.PkType]versionCacheEntry),
 	}
 }
 
-func (c *clusterViolationChecker) NewRecordFromCheckpoint(record *decoder.Record, previous int) {
-	entry, exists := c.twoPreviousTimeWindowKeyVersionCache[record.Pk]
+func (c *clusterViolationChecker) NewRecordFromCheckpoint(schemaKey string, record *decoder.Record, previous int) {
+	tableSchemaKeyVersionCache, exists := c.twoPreviousTimeWindowKeyVersionCache[schemaKey]
 	if !exists {
-		c.twoPreviousTimeWindowKeyVersionCache[record.Pk] = versionCacheEntry{
+		tableSchemaKeyVersionCache = make(map[types.PkType]versionCacheEntry)
+		c.twoPreviousTimeWindowKeyVersionCache[schemaKey] = tableSchemaKeyVersionCache
+	}
+	entry, exists := tableSchemaKeyVersionCache[record.Pk]
+	if !exists {
+		tableSchemaKeyVersionCache[record.Pk] = versionCacheEntry{
 			previous:   previous,
 			cdcVersion: record.CdcVersion,
 		}
@@ -56,17 +61,22 @@ func (c *clusterViolationChecker) NewRecordFromCheckpoint(record *decoder.Record
 	entryCompareTs := entry.cdcVersion.GetCompareTs()
 	recordCompareTs := record.GetCompareTs()
 	if entryCompareTs < recordCompareTs {
-		c.twoPreviousTimeWindowKeyVersionCache[record.Pk] = versionCacheEntry{
+		tableSchemaKeyVersionCache[record.Pk] = versionCacheEntry{
 			previous:   previous,
 			cdcVersion: record.CdcVersion,
 		}
 	}
 }
 
-func (c *clusterViolationChecker) Check(r *decoder.Record, report *recorder.ClusterReport) {
-	entry, exists := c.twoPreviousTimeWindowKeyVersionCache[r.Pk]
+func (c *clusterViolationChecker) Check(schemaKey string, r *decoder.Record, report *recorder.ClusterReport) {
+	tableSchemaKeyVersionCache, exists := c.twoPreviousTimeWindowKeyVersionCache[schemaKey]
 	if !exists {
-		c.twoPreviousTimeWindowKeyVersionCache[r.Pk] = versionCacheEntry{
+		tableSchemaKeyVersionCache = make(map[types.PkType]versionCacheEntry)
+		c.twoPreviousTimeWindowKeyVersionCache[schemaKey] = tableSchemaKeyVersionCache
+	}
+	entry, exists := tableSchemaKeyVersionCache[r.Pk]
+	if !exists {
+		tableSchemaKeyVersionCache[r.Pk] = versionCacheEntry{
 			previous:   0,
 			cdcVersion: r.CdcVersion,
 		}
@@ -84,35 +94,70 @@ func (c *clusterViolationChecker) Check(r *decoder.Record, report *recorder.Clus
 			zap.String("clusterID", c.clusterID),
 			zap.Any("entry", entry),
 			zap.Any("record", r))
-		report.AddLWWViolationItem(string(r.Pk), entry.cdcVersion.OriginTs, entry.cdcVersion.CommitTs, r.OriginTs, r.CommitTs)
+		report.AddLWWViolationItem(schemaKey, string(r.Pk), entry.cdcVersion.OriginTs, entry.cdcVersion.CommitTs, r.OriginTs, r.CommitTs)
 		return
 	}
-	c.twoPreviousTimeWindowKeyVersionCache[r.Pk] = versionCacheEntry{
+	tableSchemaKeyVersionCache[r.Pk] = versionCacheEntry{
 		previous:   0,
 		cdcVersion: r.CdcVersion,
 	}
 }
 
 func (c *clusterViolationChecker) UpdateCache() {
-	newTwoPreviousTimeWindowKeyVersionCache := make(map[types.PkType]versionCacheEntry)
-	for primaryKey, entry := range c.twoPreviousTimeWindowKeyVersionCache {
-		if entry.previous >= 2 {
-			continue
+	newTwoPreviousTimeWindowKeyVersionCache := make(map[string]map[types.PkType]versionCacheEntry)
+	for schemaKey, tableSchemaKeyVersionCache := range c.twoPreviousTimeWindowKeyVersionCache {
+		newTableSchemaKeyVersionCache := make(map[types.PkType]versionCacheEntry)
+		for primaryKey, entry := range tableSchemaKeyVersionCache {
+			if entry.previous >= 2 {
+				continue
+			}
+			newTableSchemaKeyVersionCache[primaryKey] = versionCacheEntry{
+				previous:   entry.previous + 1,
+				cdcVersion: entry.cdcVersion,
+			}
 		}
-		newTwoPreviousTimeWindowKeyVersionCache[primaryKey] = versionCacheEntry{
-			previous:   entry.previous + 1,
-			cdcVersion: entry.cdcVersion,
+		if len(newTableSchemaKeyVersionCache) > 0 {
+			newTwoPreviousTimeWindowKeyVersionCache[schemaKey] = newTableSchemaKeyVersionCache
 		}
 	}
 	c.twoPreviousTimeWindowKeyVersionCache = newTwoPreviousTimeWindowKeyVersionCache
 }
 
-type timeWindowDataCache struct {
+type tableDataCache struct {
 	// upstreamDataCache is a map of primary key to a map of commit ts to a record
 	upstreamDataCache map[types.PkType]map[uint64]*decoder.Record
 
 	// downstreamDataCache is a map of primary key to a map of origin ts to a record
 	downstreamDataCache map[types.PkType]map[uint64]*decoder.Record
+}
+
+func newTableDataCache() *tableDataCache {
+	return &tableDataCache{
+		upstreamDataCache:   make(map[types.PkType]map[uint64]*decoder.Record),
+		downstreamDataCache: make(map[types.PkType]map[uint64]*decoder.Record),
+	}
+}
+
+func (tdc *tableDataCache) newUpstreamRecord(record *decoder.Record) {
+	recordsMap, exists := tdc.upstreamDataCache[record.Pk]
+	if !exists {
+		recordsMap = make(map[uint64]*decoder.Record)
+		tdc.upstreamDataCache[record.Pk] = recordsMap
+	}
+	recordsMap[record.CommitTs] = record
+}
+
+func (tdc *tableDataCache) newDownstreamRecord(record *decoder.Record) {
+	recordsMap, exists := tdc.downstreamDataCache[record.Pk]
+	if !exists {
+		recordsMap = make(map[uint64]*decoder.Record)
+		tdc.downstreamDataCache[record.Pk] = recordsMap
+	}
+	recordsMap[record.OriginTs] = record
+}
+
+type timeWindowDataCache struct {
+	tableDataCaches map[string]*tableDataCache
 
 	leftBoundary  uint64
 	rightBoundary uint64
@@ -121,52 +166,40 @@ type timeWindowDataCache struct {
 
 func newTimeWindowDataCache(leftBoundary, rightBoundary uint64, checkpointTs map[string]uint64) timeWindowDataCache {
 	return timeWindowDataCache{
-		upstreamDataCache:   make(map[types.PkType]map[uint64]*decoder.Record),
-		downstreamDataCache: make(map[types.PkType]map[uint64]*decoder.Record),
-		leftBoundary:        leftBoundary,
-		rightBoundary:       rightBoundary,
-		checkpointTs:        checkpointTs,
+		tableDataCaches: make(map[string]*tableDataCache),
+		leftBoundary:    leftBoundary,
+		rightBoundary:   rightBoundary,
+		checkpointTs:    checkpointTs,
 	}
 }
 
-func (twdc *timeWindowDataCache) newUpstreamRecord(record *decoder.Record) {
-	recordsMap, exists := twdc.upstreamDataCache[record.Pk]
-	if !exists {
-		recordsMap = make(map[uint64]*decoder.Record)
-		twdc.upstreamDataCache[record.Pk] = recordsMap
-	}
-	recordsMap[record.CommitTs] = record
-}
-
-func (twdc *timeWindowDataCache) newDownstreamRecord(record *decoder.Record) {
-	recordsMap, exists := twdc.downstreamDataCache[record.Pk]
-	if !exists {
-		recordsMap = make(map[uint64]*decoder.Record)
-		twdc.downstreamDataCache[record.Pk] = recordsMap
-	}
-	recordsMap[record.OriginTs] = record
-}
-
-func (twdc *timeWindowDataCache) NewRecord(record *decoder.Record) {
+func (twdc *timeWindowDataCache) NewRecord(schemaKey string, record *decoder.Record) {
 	if record.CommitTs <= twdc.leftBoundary {
 		// record is before the left boundary, just skip it
 		return
 	}
+	tableDataCache, exists := twdc.tableDataCaches[schemaKey]
+	if !exists {
+		tableDataCache = newTableDataCache()
+		twdc.tableDataCaches[schemaKey] = tableDataCache
+	}
 	if record.OriginTs == 0 {
-		twdc.newUpstreamRecord(record)
+		tableDataCache.newUpstreamRecord(record)
 	} else {
-		twdc.newDownstreamRecord(record)
+		tableDataCache.newDownstreamRecord(record)
 	}
 }
 
 type clusterDataChecker struct {
 	clusterID string
 
+	thisRoundTimeWindow types.TimeWindow
+
 	timeWindowDataCaches [3]timeWindowDataCache
 
 	rightBoundary uint64
 
-	overDataCaches []*decoder.Record
+	overDataCaches map[string][]*decoder.Record
 
 	clusterViolationChecker *clusterViolationChecker
 
@@ -178,7 +211,7 @@ func newClusterDataChecker(clusterID string) *clusterDataChecker {
 		clusterID:               clusterID,
 		timeWindowDataCaches:    [3]timeWindowDataCache{},
 		rightBoundary:           0,
-		overDataCaches:          make([]*decoder.Record, 0),
+		overDataCaches:          make(map[string][]*decoder.Record),
 		clusterViolationChecker: newClusterViolationChecker(clusterID),
 	}
 }
@@ -203,7 +236,8 @@ func (cd *clusterDataChecker) InitializeFromCheckpoint(
 		cd.timeWindowDataCaches[1] = newTimeWindowDataCache(
 			clusterInfo.TimeWindow.LeftBoundary, clusterInfo.TimeWindow.RightBoundary, clusterInfo.TimeWindow.CheckpointTs)
 	}
-	for _, incrementalData := range checkpointDataMap {
+	for schemaPathKey, incrementalData := range checkpointDataMap {
+		schemaKey := schemaPathKey.GetKey()
 		for _, contents := range incrementalData.DataContentSlices {
 			for _, content := range contents {
 				records, err := decoder.Decode(content)
@@ -211,7 +245,7 @@ func (cd *clusterDataChecker) InitializeFromCheckpoint(
 					return errors.Trace(err)
 				}
 				for _, record := range records {
-					cd.newRecordFromCheckpoint(record)
+					cd.newRecordFromCheckpoint(schemaKey, record)
 				}
 			}
 		}
@@ -219,18 +253,18 @@ func (cd *clusterDataChecker) InitializeFromCheckpoint(
 	return nil
 }
 
-func (cd *clusterDataChecker) newRecordFromCheckpoint(record *decoder.Record) {
+func (cd *clusterDataChecker) newRecordFromCheckpoint(schemaKey string, record *decoder.Record) {
 	if record.CommitTs > cd.rightBoundary {
-		cd.overDataCaches = append(cd.overDataCaches, record)
+		cd.overDataCaches[schemaKey] = append(cd.overDataCaches[schemaKey], record)
 		return
 	}
 	if cd.timeWindowDataCaches[2].leftBoundary < record.CommitTs {
-		cd.timeWindowDataCaches[2].NewRecord(record)
-		cd.clusterViolationChecker.NewRecordFromCheckpoint(record, 1)
+		cd.timeWindowDataCaches[2].NewRecord(schemaKey, record)
+		cd.clusterViolationChecker.NewRecordFromCheckpoint(schemaKey, record, 1)
 
 	} else if cd.timeWindowDataCaches[1].leftBoundary < record.CommitTs {
-		cd.timeWindowDataCaches[1].NewRecord(record)
-		cd.clusterViolationChecker.NewRecordFromCheckpoint(record, 2)
+		cd.timeWindowDataCaches[1].NewRecord(schemaKey, record)
+		cd.clusterViolationChecker.NewRecordFromCheckpoint(schemaKey, record, 2)
 	}
 }
 
@@ -242,29 +276,37 @@ func (cd *clusterDataChecker) PrepareNextTimeWindowData(timeWindow types.TimeWin
 	cd.timeWindowDataCaches[1] = cd.timeWindowDataCaches[2]
 	newTimeWindowDataCache := newTimeWindowDataCache(timeWindow.LeftBoundary, timeWindow.RightBoundary, timeWindow.CheckpointTs)
 	cd.rightBoundary = timeWindow.RightBoundary
-	newOverDataCache := make([]*decoder.Record, 0, len(cd.overDataCaches))
-	for _, overRecord := range cd.overDataCaches {
-		if overRecord.CommitTs > timeWindow.RightBoundary {
-			newOverDataCache = append(newOverDataCache, overRecord)
-		} else {
-			newTimeWindowDataCache.NewRecord(overRecord)
+	newOverDataCache := make(map[string][]*decoder.Record)
+	for schemaKey, overRecords := range cd.overDataCaches {
+		newTableOverDataCache := make([]*decoder.Record, 0, len(overRecords))
+		for _, overRecord := range overRecords {
+			if overRecord.CommitTs > timeWindow.RightBoundary {
+				newTableOverDataCache = append(newTableOverDataCache, overRecord)
+			} else {
+				newTimeWindowDataCache.NewRecord(schemaKey, overRecord)
+			}
 		}
+		newOverDataCache[schemaKey] = newTableOverDataCache
 	}
 	cd.timeWindowDataCaches[2] = newTimeWindowDataCache
 	cd.overDataCaches = newOverDataCache
 	return nil
 }
 
-func (cd *clusterDataChecker) NewRecord(record *decoder.Record) {
+func (cd *clusterDataChecker) NewRecord(schemaKey string, record *decoder.Record) {
 	if record.CommitTs > cd.rightBoundary {
-		cd.overDataCaches = append(cd.overDataCaches, record)
+		cd.overDataCaches[schemaKey] = append(cd.overDataCaches[schemaKey], record)
 		return
 	}
-	cd.timeWindowDataCaches[2].NewRecord(record)
+	cd.timeWindowDataCaches[2].NewRecord(schemaKey, record)
 }
 
-func (cd *clusterDataChecker) findClusterDownstreamDataInTimeWindow(timeWindowIdx int, pk types.PkType, originTs uint64) (*decoder.Record, bool) {
-	records, exists := cd.timeWindowDataCaches[timeWindowIdx].downstreamDataCache[pk]
+func (cd *clusterDataChecker) findClusterDownstreamDataInTimeWindow(timeWindowIdx int, schemaKey string, pk types.PkType, originTs uint64) (*decoder.Record, bool) {
+	tableDataCache, exists := cd.timeWindowDataCaches[timeWindowIdx].tableDataCaches[schemaKey]
+	if !exists {
+		return nil, false
+	}
+	records, exists := tableDataCache.downstreamDataCache[pk]
 	if !exists {
 		return nil, false
 	}
@@ -279,8 +321,12 @@ func (cd *clusterDataChecker) findClusterDownstreamDataInTimeWindow(timeWindowId
 	return nil, false
 }
 
-func (cd *clusterDataChecker) findClusterUpstreamDataInTimeWindow(timeWindowIdx int, pk types.PkType, commitTs uint64) bool {
-	records, exists := cd.timeWindowDataCaches[timeWindowIdx].upstreamDataCache[pk]
+func (cd *clusterDataChecker) findClusterUpstreamDataInTimeWindow(timeWindowIdx int, schemaKey string, pk types.PkType, commitTs uint64) bool {
+	tableDataCache, exists := cd.timeWindowDataCaches[timeWindowIdx].tableDataCaches[schemaKey]
+	if !exists {
+		return false
+	}
+	records, exists := tableDataCache.upstreamDataCache[pk]
 	if !exists {
 		return false
 	}
@@ -293,58 +339,62 @@ func (cd *clusterDataChecker) findClusterUpstreamDataInTimeWindow(timeWindowIdx 
 // in the downstream data cache [1] or [2] or another new record is present in the downstream data
 // cache [1] or [2].
 func (cd *clusterDataChecker) dataLossDetection(checker *DataChecker) {
-	for _, upstreamDataCache := range cd.timeWindowDataCaches[1].upstreamDataCache {
-		for _, record := range upstreamDataCache {
-			for downstreamClusterID, checkpointTs := range cd.timeWindowDataCaches[1].checkpointTs {
-				if record.CommitTs <= checkpointTs {
-					continue
-				}
-				downstreamRecord, skipped := checker.FindClusterDownstreamData(downstreamClusterID, record.Pk, record.CommitTs)
-				if skipped {
-					continue
-				}
-				if downstreamRecord == nil {
-					// data loss detected
-					log.Error("data loss detected",
-						zap.String("upstreamClusterID", cd.clusterID),
-						zap.String("downstreamClusterID", downstreamClusterID),
-						zap.Any("record", record))
-					cd.report.AddDataLossItem(downstreamClusterID, string(record.Pk), record.OriginTs, record.CommitTs, false)
-				} else if !record.EqualDownstreamRecord(downstreamRecord) {
-					// data inconsistent detected
-					log.Error("data inconsistent detected",
-						zap.String("upstreamClusterID", cd.clusterID),
-						zap.String("downstreamClusterID", downstreamClusterID),
-						zap.Any("record", record))
-					cd.report.AddDataLossItem(downstreamClusterID, string(record.Pk), record.OriginTs, record.CommitTs, true)
+	for schemaKey, tableDataCache := range cd.timeWindowDataCaches[1].tableDataCaches {
+		for _, upstreamDataCache := range tableDataCache.upstreamDataCache {
+			for _, record := range upstreamDataCache {
+				for downstreamClusterID, checkpointTs := range cd.timeWindowDataCaches[1].checkpointTs {
+					if record.CommitTs <= checkpointTs {
+						continue
+					}
+					downstreamRecord, skipped := checker.FindClusterDownstreamData(downstreamClusterID, schemaKey, record.Pk, record.CommitTs)
+					if skipped {
+						continue
+					}
+					if downstreamRecord == nil {
+						// data loss detected
+						log.Error("data loss detected",
+							zap.String("upstreamClusterID", cd.clusterID),
+							zap.String("downstreamClusterID", downstreamClusterID),
+							zap.Any("record", record))
+						cd.report.AddDataLossItem(downstreamClusterID, schemaKey, string(record.Pk), record.OriginTs, record.CommitTs, false)
+					} else if !record.EqualDownstreamRecord(downstreamRecord) {
+						// data inconsistent detected
+						log.Error("data inconsistent detected",
+							zap.String("upstreamClusterID", cd.clusterID),
+							zap.String("downstreamClusterID", downstreamClusterID),
+							zap.Any("record", record))
+						cd.report.AddDataLossItem(downstreamClusterID, schemaKey, string(record.Pk), record.OriginTs, record.CommitTs, true)
+					}
 				}
 			}
 		}
 	}
-	for _, upstreamDataCache := range cd.timeWindowDataCaches[2].upstreamDataCache {
-		for _, record := range upstreamDataCache {
-			for downstreamClusterID, checkpointTs := range cd.timeWindowDataCaches[2].checkpointTs {
-				if record.CommitTs > checkpointTs {
-					continue
-				}
-				downstreamRecord, skipped := checker.FindClusterDownstreamData(downstreamClusterID, record.Pk, record.CommitTs)
-				if skipped {
-					continue
-				}
-				if downstreamRecord == nil {
-					// data loss detected
-					log.Error("data loss detected",
-						zap.String("upstreamClusterID", cd.clusterID),
-						zap.String("downstreamClusterID", downstreamClusterID),
-						zap.Any("record", record))
-					cd.report.AddDataLossItem(downstreamClusterID, string(record.Pk), record.OriginTs, record.CommitTs, false)
-				} else if !record.EqualDownstreamRecord(downstreamRecord) {
-					// data inconsistent detected
-					log.Error("data inconsistent detected",
-						zap.String("upstreamClusterID", cd.clusterID),
-						zap.String("downstreamClusterID", downstreamClusterID),
-						zap.Any("record", record))
-					cd.report.AddDataLossItem(downstreamClusterID, string(record.Pk), record.OriginTs, record.CommitTs, true)
+	for schemaKey, tableDataCache := range cd.timeWindowDataCaches[2].tableDataCaches {
+		for _, upstreamDataCache := range tableDataCache.upstreamDataCache {
+			for _, record := range upstreamDataCache {
+				for downstreamClusterID, checkpointTs := range cd.timeWindowDataCaches[2].checkpointTs {
+					if record.CommitTs > checkpointTs {
+						continue
+					}
+					downstreamRecord, skipped := checker.FindClusterDownstreamData(downstreamClusterID, schemaKey, record.Pk, record.CommitTs)
+					if skipped {
+						continue
+					}
+					if downstreamRecord == nil {
+						// data loss detected
+						log.Error("data loss detected",
+							zap.String("upstreamClusterID", cd.clusterID),
+							zap.String("downstreamClusterID", downstreamClusterID),
+							zap.Any("record", record))
+						cd.report.AddDataLossItem(downstreamClusterID, schemaKey, string(record.Pk), record.OriginTs, record.CommitTs, false)
+					} else if !record.EqualDownstreamRecord(downstreamRecord) {
+						// data inconsistent detected
+						log.Error("data inconsistent detected",
+							zap.String("upstreamClusterID", cd.clusterID),
+							zap.String("downstreamClusterID", downstreamClusterID),
+							zap.Any("record", record))
+						cd.report.AddDataLossItem(downstreamClusterID, schemaKey, string(record.Pk), record.OriginTs, record.CommitTs, true)
+					}
 				}
 			}
 		}
@@ -354,15 +404,17 @@ func (cd *clusterDataChecker) dataLossDetection(checker *DataChecker) {
 // dataRedundantDetection iterates through the downstream data cache [2]. The record must be present
 // in the upstream data cache [1] [2] or [3].
 func (cd *clusterDataChecker) dataRedundantDetection(checker *DataChecker) {
-	for _, downstreamDataCache := range cd.timeWindowDataCaches[2].downstreamDataCache {
-		for _, record := range downstreamDataCache {
-			// For downstream records, OriginTs is the upstream commit ts
-			if !checker.FindClusterUpstreamData(cd.clusterID, record.Pk, record.OriginTs) {
-				// data redundant detected
-				log.Error("data redundant detected",
-					zap.String("downstreamClusterID", cd.clusterID),
-					zap.Any("record", record))
-				cd.report.AddDataRedundantItem(string(record.Pk), record.OriginTs, record.CommitTs)
+	for schemaKey, tableDataCache := range cd.timeWindowDataCaches[2].tableDataCaches {
+		for _, downstreamDataCache := range tableDataCache.downstreamDataCache {
+			for _, record := range downstreamDataCache {
+				// For downstream records, OriginTs is the upstream commit ts
+				if !checker.FindClusterUpstreamData(cd.clusterID, schemaKey, record.Pk, record.OriginTs) {
+					// data redundant detected
+					log.Error("data redundant detected",
+						zap.String("downstreamClusterID", cd.clusterID),
+						zap.Any("record", record))
+					cd.report.AddDataRedundantItem(schemaKey, string(record.Pk), record.OriginTs, record.CommitTs)
+				}
 			}
 		}
 	}
@@ -370,35 +422,38 @@ func (cd *clusterDataChecker) dataRedundantDetection(checker *DataChecker) {
 
 // lwwViolationDetection check the orderliness of the records
 func (cd *clusterDataChecker) lwwViolationDetection() {
-	for pk, upstreamRecords := range cd.timeWindowDataCaches[2].upstreamDataCache {
-		downstreamRecords := cd.timeWindowDataCaches[2].downstreamDataCache[pk]
-		pkRecords := make([]*decoder.Record, 0, len(upstreamRecords)+len(downstreamRecords))
-		for _, upstreamRecord := range upstreamRecords {
-			pkRecords = append(pkRecords, upstreamRecord)
+	for schemaKey, tableDataCache := range cd.timeWindowDataCaches[2].tableDataCaches {
+		for pk, upstreamRecords := range tableDataCache.upstreamDataCache {
+			downstreamRecords := tableDataCache.downstreamDataCache[pk]
+			pkRecords := make([]*decoder.Record, 0, len(upstreamRecords)+len(downstreamRecords))
+			for _, upstreamRecord := range upstreamRecords {
+				pkRecords = append(pkRecords, upstreamRecord)
+			}
+			for _, downstreamRecord := range downstreamRecords {
+				pkRecords = append(pkRecords, downstreamRecord)
+			}
+			sort.Slice(pkRecords, func(i, j int) bool {
+				return pkRecords[i].CommitTs < pkRecords[j].CommitTs
+			})
+			for _, record := range pkRecords {
+				cd.clusterViolationChecker.Check(schemaKey, record, cd.report)
+			}
 		}
-		for _, downstreamRecord := range downstreamRecords {
-			pkRecords = append(pkRecords, downstreamRecord)
-		}
-		sort.Slice(pkRecords, func(i, j int) bool {
-			return pkRecords[i].CommitTs < pkRecords[j].CommitTs
-		})
-		for _, record := range pkRecords {
-			cd.clusterViolationChecker.Check(record, cd.report)
-		}
-	}
-	for pk, downstreamRecords := range cd.timeWindowDataCaches[2].downstreamDataCache {
-		if _, exists := cd.timeWindowDataCaches[2].upstreamDataCache[pk]; exists {
-			continue
-		}
-		pkRecords := make([]*decoder.Record, 0, len(downstreamRecords))
-		for _, downstreamRecord := range downstreamRecords {
-			pkRecords = append(pkRecords, downstreamRecord)
-		}
-		sort.Slice(pkRecords, func(i, j int) bool {
-			return pkRecords[i].CommitTs < pkRecords[j].CommitTs
-		})
-		for _, record := range pkRecords {
-			cd.clusterViolationChecker.Check(record, cd.report)
+
+		for pk, downstreamRecords := range tableDataCache.downstreamDataCache {
+			if _, exists := tableDataCache.upstreamDataCache[pk]; exists {
+				continue
+			}
+			pkRecords := make([]*decoder.Record, 0, len(downstreamRecords))
+			for _, downstreamRecord := range downstreamRecords {
+				pkRecords = append(pkRecords, downstreamRecord)
+			}
+			sort.Slice(pkRecords, func(i, j int) bool {
+				return pkRecords[i].CommitTs < pkRecords[j].CommitTs
+			})
+			for _, record := range pkRecords {
+				cd.clusterViolationChecker.Check(schemaKey, record, cd.report)
+			}
 		}
 	}
 
@@ -406,7 +461,7 @@ func (cd *clusterDataChecker) lwwViolationDetection() {
 }
 
 func (cd *clusterDataChecker) Check(checker *DataChecker) {
-	cd.report = recorder.NewClusterReport(cd.clusterID)
+	cd.report = recorder.NewClusterReport(cd.clusterID, cd.thisRoundTimeWindow)
 	// CHECK 1 - Data Loss Detection
 	cd.dataLossDetection(checker)
 	// CHECK 2 - Data Redundant Detection
@@ -455,38 +510,38 @@ func (c *DataChecker) initializeFromCheckpoint(ctx context.Context, checkpointDa
 
 // FindClusterDownstreamData checks whether the record is present in the downstream data
 // cache [1] or [2] or another new record is present in the downstream data cache [1] or [2].
-func (c *DataChecker) FindClusterDownstreamData(clusterID string, pk types.PkType, originTs uint64) (*decoder.Record, bool) {
+func (c *DataChecker) FindClusterDownstreamData(clusterID string, schemaKey string, pk types.PkType, originTs uint64) (*decoder.Record, bool) {
 	clusterDataChecker, exists := c.clusterDataCheckers[clusterID]
 	if !exists {
 		return nil, false
 	}
-	record, skipped := clusterDataChecker.findClusterDownstreamDataInTimeWindow(1, pk, originTs)
+	record, skipped := clusterDataChecker.findClusterDownstreamDataInTimeWindow(1, schemaKey, pk, originTs)
 	if skipped || record != nil {
 		return record, skipped
 	}
-	return clusterDataChecker.findClusterDownstreamDataInTimeWindow(2, pk, originTs)
+	return clusterDataChecker.findClusterDownstreamDataInTimeWindow(2, schemaKey, pk, originTs)
 }
 
-func (c *DataChecker) FindClusterUpstreamData(downstreamClusterID string, pk types.PkType, commitTs uint64) bool {
+func (c *DataChecker) FindClusterUpstreamData(downstreamClusterID string, schemaKey string, pk types.PkType, commitTs uint64) bool {
 	for _, clusterDataChecker := range c.clusterDataCheckers {
 		if clusterDataChecker.clusterID == downstreamClusterID {
 			continue
 		}
-		if clusterDataChecker.findClusterUpstreamDataInTimeWindow(0, pk, commitTs) {
+		if clusterDataChecker.findClusterUpstreamDataInTimeWindow(0, schemaKey, pk, commitTs) {
 			return true
 		}
-		if clusterDataChecker.findClusterUpstreamDataInTimeWindow(1, pk, commitTs) {
+		if clusterDataChecker.findClusterUpstreamDataInTimeWindow(1, schemaKey, pk, commitTs) {
 			return true
 		}
-		if clusterDataChecker.findClusterUpstreamDataInTimeWindow(2, pk, commitTs) {
+		if clusterDataChecker.findClusterUpstreamDataInTimeWindow(2, schemaKey, pk, commitTs) {
 			return true
 		}
 	}
 	return false
 }
 
-func (c *DataChecker) CheckInNextTimeWindow(ctx context.Context, newTimeWindowData map[string]types.TimeWindowData) (*recorder.Report, error) {
-	if err := c.decodeNewTimeWindowData(ctx, newTimeWindowData); err != nil {
+func (c *DataChecker) CheckInNextTimeWindow(newTimeWindowData map[string]types.TimeWindowData) (*recorder.Report, error) {
+	if err := c.decodeNewTimeWindowData(newTimeWindowData); err != nil {
 		log.Error("failed to decode new time window data", zap.Error(err))
 		return nil, errors.Annotate(err, "failed to decode new time window data")
 	}
@@ -503,7 +558,7 @@ func (c *DataChecker) CheckInNextTimeWindow(ctx context.Context, newTimeWindowDa
 	return report, nil
 }
 
-func (c *DataChecker) decodeNewTimeWindowData(ctx context.Context, newTimeWindowData map[string]types.TimeWindowData) error {
+func (c *DataChecker) decodeNewTimeWindowData(newTimeWindowData map[string]types.TimeWindowData) error {
 	if len(newTimeWindowData) != len(c.clusterDataCheckers) {
 		return errors.Errorf("number of clusters mismatch, expected %d, got %d", len(c.clusterDataCheckers), len(newTimeWindowData))
 	}
@@ -512,10 +567,12 @@ func (c *DataChecker) decodeNewTimeWindowData(ctx context.Context, newTimeWindow
 		if !exists {
 			return errors.Errorf("cluster %s not found", clusterID)
 		}
+		clusterDataChecker.thisRoundTimeWindow = timeWindowData.TimeWindow
 		if err := clusterDataChecker.PrepareNextTimeWindowData(timeWindowData.TimeWindow); err != nil {
 			return errors.Trace(err)
 		}
-		for _, incrementalData := range timeWindowData.Data {
+		for schemaPathKey, incrementalData := range timeWindowData.Data {
+			schemaKey := schemaPathKey.GetKey()
 			for _, contents := range incrementalData.DataContentSlices {
 				for _, content := range contents {
 					records, err := decoder.Decode(content)
@@ -523,7 +580,7 @@ func (c *DataChecker) decodeNewTimeWindowData(ctx context.Context, newTimeWindow
 						return errors.Trace(err)
 					}
 					for _, record := range records {
-						clusterDataChecker.NewRecord(record)
+						clusterDataChecker.NewRecord(schemaKey, record)
 					}
 				}
 			}

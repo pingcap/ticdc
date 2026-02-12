@@ -34,12 +34,12 @@ func TestNewDataChecker(t *testing.T) {
 		t.Parallel()
 		clusterConfig := map[string]config.ClusterConfig{
 			"cluster1": {
-				PDAddr:         "127.0.0.1:2379",
+				PDAddrs:        []string{"127.0.0.1:2379"},
 				S3SinkURI:      "s3://bucket/cluster1/",
 				S3ChangefeedID: "s3-cf-1",
 			},
 			"cluster2": {
-				PDAddr:         "127.0.0.1:2479",
+				PDAddrs:        []string{"127.0.0.1:2479"},
 				S3SinkURI:      "s3://bucket/cluster2/",
 				S3ChangefeedID: "s3-cf-2",
 			},
@@ -84,10 +84,12 @@ func TestNewClusterViolationChecker(t *testing.T) {
 func TestClusterViolationChecker_Check(t *testing.T) {
 	t.Parallel()
 
+	const schemaKey = "test_schema"
+
 	t.Run("check new record", func(t *testing.T) {
 		t.Parallel()
 		checker := newClusterViolationChecker("cluster1")
-		report := recorder.NewClusterReport("cluster1")
+		report := recorder.NewClusterReport("cluster1", types.TimeWindow{})
 
 		record := &decoder.Record{
 			Pk: "pk1",
@@ -97,15 +99,16 @@ func TestClusterViolationChecker_Check(t *testing.T) {
 			},
 		}
 
-		checker.Check(record, report)
-		require.Len(t, report.LWWViolationItems, 0)
-		require.Contains(t, checker.twoPreviousTimeWindowKeyVersionCache, record.Pk)
+		checker.Check(schemaKey, record, report)
+		require.Empty(t, report.TableFailureItems)
+		require.Contains(t, checker.twoPreviousTimeWindowKeyVersionCache, schemaKey)
+		require.Contains(t, checker.twoPreviousTimeWindowKeyVersionCache[schemaKey], record.Pk)
 	})
 
 	t.Run("check duplicate old version", func(t *testing.T) {
 		t.Parallel()
 		checker := newClusterViolationChecker("cluster1")
-		report := recorder.NewClusterReport("cluster1")
+		report := recorder.NewClusterReport("cluster1", types.TimeWindow{})
 
 		record1 := &decoder.Record{
 			Pk: "pk1",
@@ -122,15 +125,15 @@ func TestClusterViolationChecker_Check(t *testing.T) {
 			},
 		}
 
-		checker.Check(record1, report)
-		checker.Check(record2, report)
-		require.Len(t, report.LWWViolationItems, 0) // Should skip duplicate old version
+		checker.Check(schemaKey, record1, report)
+		checker.Check(schemaKey, record2, report)
+		require.Empty(t, report.TableFailureItems) // Should skip duplicate old version
 	})
 
 	t.Run("check lww violation", func(t *testing.T) {
 		t.Parallel()
 		checker := newClusterViolationChecker("cluster1")
-		report := recorder.NewClusterReport("cluster1")
+		report := recorder.NewClusterReport("cluster1", types.TimeWindow{})
 
 		record1 := &decoder.Record{
 			Pk: "pk1",
@@ -147,24 +150,29 @@ func TestClusterViolationChecker_Check(t *testing.T) {
 			},
 		}
 
-		checker.Check(record1, report)
-		checker.Check(record2, report)
-		require.Len(t, report.LWWViolationItems, 1)
-		require.Equal(t, "pk1", report.LWWViolationItems[0].PK)
-		require.Equal(t, uint64(0), report.LWWViolationItems[0].ExistingOriginTS)
-		require.Equal(t, uint64(100), report.LWWViolationItems[0].ExistingCommitTS)
-		require.Equal(t, uint64(50), report.LWWViolationItems[0].OriginTS)
-		require.Equal(t, uint64(150), report.LWWViolationItems[0].CommitTS)
+		checker.Check(schemaKey, record1, report)
+		checker.Check(schemaKey, record2, report)
+		require.Len(t, report.TableFailureItems, 1)
+		require.Contains(t, report.TableFailureItems, schemaKey)
+		tableItems := report.TableFailureItems[schemaKey]
+		require.Len(t, tableItems.LWWViolationItems, 1)
+		require.Equal(t, "pk1", tableItems.LWWViolationItems[0].PK)
+		require.Equal(t, uint64(0), tableItems.LWWViolationItems[0].ExistingOriginTS)
+		require.Equal(t, uint64(100), tableItems.LWWViolationItems[0].ExistingCommitTS)
+		require.Equal(t, uint64(50), tableItems.LWWViolationItems[0].OriginTS)
+		require.Equal(t, uint64(150), tableItems.LWWViolationItems[0].CommitTS)
 	})
 }
 
 func TestClusterViolationChecker_UpdateCache(t *testing.T) {
 	t.Parallel()
 
+	const schemaKey = "test_schema"
+
 	t.Run("update cache", func(t *testing.T) {
 		t.Parallel()
 		checker := newClusterViolationChecker("cluster1")
-		report := recorder.NewClusterReport("cluster1")
+		report := recorder.NewClusterReport("cluster1", types.TimeWindow{})
 
 		record := &decoder.Record{
 			Pk: "pk1",
@@ -174,22 +182,22 @@ func TestClusterViolationChecker_UpdateCache(t *testing.T) {
 			},
 		}
 
-		checker.Check(record, report)
-		require.Contains(t, checker.twoPreviousTimeWindowKeyVersionCache, record.Pk)
-		entry := checker.twoPreviousTimeWindowKeyVersionCache[record.Pk]
+		checker.Check(schemaKey, record, report)
+		require.Contains(t, checker.twoPreviousTimeWindowKeyVersionCache, schemaKey)
+		entry := checker.twoPreviousTimeWindowKeyVersionCache[schemaKey][record.Pk]
 		require.Equal(t, 0, entry.previous)
 
 		checker.UpdateCache()
-		entry = checker.twoPreviousTimeWindowKeyVersionCache[record.Pk]
+		entry = checker.twoPreviousTimeWindowKeyVersionCache[schemaKey][record.Pk]
 		require.Equal(t, 1, entry.previous)
 
 		checker.UpdateCache()
-		entry = checker.twoPreviousTimeWindowKeyVersionCache[record.Pk]
+		entry = checker.twoPreviousTimeWindowKeyVersionCache[schemaKey][record.Pk]
 		require.Equal(t, 2, entry.previous)
 
 		checker.UpdateCache()
 		// Entry should be removed after 2 updates
-		_, exists := checker.twoPreviousTimeWindowKeyVersionCache[record.Pk]
+		_, exists := checker.twoPreviousTimeWindowKeyVersionCache[schemaKey]
 		require.False(t, exists)
 	})
 }
@@ -209,13 +217,14 @@ func TestNewTimeWindowDataCache(t *testing.T) {
 		require.Equal(t, leftBoundary, cache.leftBoundary)
 		require.Equal(t, rightBoundary, cache.rightBoundary)
 		require.Equal(t, checkpointTs, cache.checkpointTs)
-		require.NotNil(t, cache.upstreamDataCache)
-		require.NotNil(t, cache.downstreamDataCache)
+		require.NotNil(t, cache.tableDataCaches)
 	})
 }
 
 func TestTimeWindowDataCache_NewRecord(t *testing.T) {
 	t.Parallel()
+
+	const schemaKey = "test_schema"
 
 	t.Run("add upstream record", func(t *testing.T) {
 		t.Parallel()
@@ -228,9 +237,10 @@ func TestTimeWindowDataCache_NewRecord(t *testing.T) {
 			},
 		}
 
-		cache.NewRecord(record)
-		require.Contains(t, cache.upstreamDataCache, record.Pk)
-		require.Contains(t, cache.upstreamDataCache[record.Pk], record.CommitTs)
+		cache.NewRecord(schemaKey, record)
+		require.Contains(t, cache.tableDataCaches, schemaKey)
+		require.Contains(t, cache.tableDataCaches[schemaKey].upstreamDataCache, record.Pk)
+		require.Contains(t, cache.tableDataCaches[schemaKey].upstreamDataCache[record.Pk], record.CommitTs)
 	})
 
 	t.Run("add downstream record", func(t *testing.T) {
@@ -244,9 +254,10 @@ func TestTimeWindowDataCache_NewRecord(t *testing.T) {
 			},
 		}
 
-		cache.NewRecord(record)
-		require.Contains(t, cache.downstreamDataCache, record.Pk)
-		require.Contains(t, cache.downstreamDataCache[record.Pk], record.OriginTs)
+		cache.NewRecord(schemaKey, record)
+		require.Contains(t, cache.tableDataCaches, schemaKey)
+		require.Contains(t, cache.tableDataCaches[schemaKey].downstreamDataCache, record.Pk)
+		require.Contains(t, cache.tableDataCaches[schemaKey].downstreamDataCache[record.Pk], record.OriginTs)
 	})
 
 	t.Run("skip record before left boundary", func(t *testing.T) {
@@ -260,9 +271,8 @@ func TestTimeWindowDataCache_NewRecord(t *testing.T) {
 			},
 		}
 
-		cache.NewRecord(record)
-		require.NotContains(t, cache.upstreamDataCache, record.Pk)
-		require.NotContains(t, cache.downstreamDataCache, record.Pk)
+		cache.NewRecord(schemaKey, record)
+		require.NotContains(t, cache.tableDataCaches, schemaKey)
 	})
 }
 
@@ -345,6 +355,10 @@ func makeTWData(left, right uint64, checkpointTs map[string]uint64, content []by
 	}
 }
 
+// defaultSchemaKey is the schema key produced by DmlPathKey{}.GetKey()
+// which is QuoteSchema("", "") = "“.“"
+var defaultSchemaKey = (&cloudstorage.DmlPathKey{}).GetKey()
+
 // TestDataChecker_FourRoundsCheck simulates 4 rounds with increasing data and verifies check results.
 // Setup: 2 clusters (c1 upstream, c2 downstream from c1).
 // Rounds 0-2: accumulate data, check not yet active (checkableRound < 3).
@@ -396,7 +410,7 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 
 		rounds := [4]map[string]types.TimeWindowData{base[0], base[1], round2, round3}
 		for i, roundData := range rounds {
-			report, err := checker.CheckInNextTimeWindow(ctx, roundData)
+			report, err := checker.CheckInNextTimeWindow(roundData)
 			require.NoError(t, err, "round %d", i)
 			require.Equal(t, uint64(i), report.Round)
 			if i < 3 {
@@ -406,9 +420,7 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 				require.Len(t, report.ClusterReports, 2)
 				require.False(t, report.NeedFlush(), "round 3 should not need flush (all consistent)")
 				for clusterID, cr := range report.ClusterReports {
-					require.Empty(t, cr.DataLossItems, "cluster %s should have no data loss", clusterID)
-					require.Empty(t, cr.DataRedundantItems, "cluster %s should have no data redundant", clusterID)
-					require.Empty(t, cr.LWWViolationItems, "cluster %s should have no LWW violation", clusterID)
+					require.Empty(t, cr.TableFailureItems, "cluster %s should have no table failure items", clusterID)
 				}
 			}
 		}
@@ -435,7 +447,7 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 		rounds := [4]map[string]types.TimeWindowData{base[0], base[1], round2, round3}
 		var lastReport *recorder.Report
 		for i, roundData := range rounds {
-			report, err := checker.CheckInNextTimeWindow(ctx, roundData)
+			report, err := checker.CheckInNextTimeWindow(roundData)
 			require.NoError(t, err, "round %d", i)
 			lastReport = report
 		}
@@ -444,15 +456,16 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 		// c1 should detect data loss: pk=3 (commitTs=250) missing in c2's downstream
 		c1Report := lastReport.ClusterReports["c1"]
 		require.NotNil(t, c1Report)
-		require.Len(t, c1Report.DataLossItems, 1)
-		require.Equal(t, "c2", c1Report.DataLossItems[0].DownstreamClusterID)
-		require.Equal(t, uint64(0), c1Report.DataLossItems[0].OriginTS)
-		require.Equal(t, uint64(250), c1Report.DataLossItems[0].CommitTS)
-		require.False(t, c1Report.DataLossItems[0].Inconsistent)
+		require.Contains(t, c1Report.TableFailureItems, defaultSchemaKey)
+		tableItems := c1Report.TableFailureItems[defaultSchemaKey]
+		require.Len(t, tableItems.DataLossItems, 1)
+		require.Equal(t, "c2", tableItems.DataLossItems[0].DownstreamClusterID)
+		require.Equal(t, uint64(0), tableItems.DataLossItems[0].OriginTS)
+		require.Equal(t, uint64(250), tableItems.DataLossItems[0].CommitTS)
+		require.False(t, tableItems.DataLossItems[0].Inconsistent)
 		// c2 should have no issues
 		c2Report := lastReport.ClusterReports["c2"]
-		require.Empty(t, c2Report.DataLossItems)
-		require.Empty(t, c2Report.DataRedundantItems)
+		require.Empty(t, c2Report.TableFailureItems)
 	})
 
 	t.Run("data inconsistent detected", func(t *testing.T) {
@@ -477,17 +490,19 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 		rounds := [4]map[string]types.TimeWindowData{base[0], base[1], round2, round3}
 		var lastReport *recorder.Report
 		for i, roundData := range rounds {
-			report, err := checker.CheckInNextTimeWindow(ctx, roundData)
+			report, err := checker.CheckInNextTimeWindow(roundData)
 			require.NoError(t, err, "round %d", i)
 			lastReport = report
 		}
 
 		require.True(t, lastReport.NeedFlush())
 		c1Report := lastReport.ClusterReports["c1"]
-		require.Len(t, c1Report.DataLossItems, 1)
-		require.Equal(t, "c2", c1Report.DataLossItems[0].DownstreamClusterID)
-		require.Equal(t, uint64(250), c1Report.DataLossItems[0].CommitTS)
-		require.True(t, c1Report.DataLossItems[0].Inconsistent) // data inconsistent, not pure data loss
+		require.Contains(t, c1Report.TableFailureItems, defaultSchemaKey)
+		tableItems := c1Report.TableFailureItems[defaultSchemaKey]
+		require.Len(t, tableItems.DataLossItems, 1)
+		require.Equal(t, "c2", tableItems.DataLossItems[0].DownstreamClusterID)
+		require.Equal(t, uint64(250), tableItems.DataLossItems[0].CommitTS)
+		require.True(t, tableItems.DataLossItems[0].Inconsistent) // data inconsistent, not pure data loss
 	})
 
 	t.Run("data redundant detected", func(t *testing.T) {
@@ -516,7 +531,7 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 		rounds := [4]map[string]types.TimeWindowData{base[0], base[1], round2, round3}
 		var lastReport *recorder.Report
 		for i, roundData := range rounds {
-			report, err := checker.CheckInNextTimeWindow(ctx, roundData)
+			report, err := checker.CheckInNextTimeWindow(roundData)
 			require.NoError(t, err, "round %d", i)
 			lastReport = report
 		}
@@ -524,12 +539,14 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 		require.True(t, lastReport.NeedFlush())
 		// c1 should have no data loss
 		c1Report := lastReport.ClusterReports["c1"]
-		require.Empty(t, c1Report.DataLossItems)
+		require.Empty(t, c1Report.TableFailureItems)
 		// c2 should detect data redundant: pk=99 has no matching upstream in c1
 		c2Report := lastReport.ClusterReports["c2"]
-		require.Len(t, c2Report.DataRedundantItems, 1)
-		require.Equal(t, uint64(330), c2Report.DataRedundantItems[0].OriginTS)
-		require.Equal(t, uint64(340), c2Report.DataRedundantItems[0].CommitTS)
+		require.Contains(t, c2Report.TableFailureItems, defaultSchemaKey)
+		tableItems := c2Report.TableFailureItems[defaultSchemaKey]
+		require.Len(t, tableItems.DataRedundantItems, 1)
+		require.Equal(t, uint64(330), tableItems.DataRedundantItems[0].OriginTS)
+		require.Equal(t, uint64(340), tableItems.DataRedundantItems[0].CommitTS)
 	})
 
 	t.Run("lww violation detected", func(t *testing.T) {
@@ -563,21 +580,25 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 		rounds := [4]map[string]types.TimeWindowData{base[0], base[1], round2, round3}
 		var lastReport *recorder.Report
 		for i, roundData := range rounds {
-			report, err := checker.CheckInNextTimeWindow(ctx, roundData)
+			report, err := checker.CheckInNextTimeWindow(roundData)
 			require.NoError(t, err, "round %d", i)
 			lastReport = report
 		}
 
 		require.True(t, lastReport.NeedFlush())
 		c1Report := lastReport.ClusterReports["c1"]
-		require.Len(t, c1Report.LWWViolationItems, 1)
-		require.Equal(t, uint64(0), c1Report.LWWViolationItems[0].ExistingOriginTS)
-		require.Equal(t, uint64(350), c1Report.LWWViolationItems[0].ExistingCommitTS)
-		require.Equal(t, uint64(310), c1Report.LWWViolationItems[0].OriginTS)
-		require.Equal(t, uint64(370), c1Report.LWWViolationItems[0].CommitTS)
+		require.Contains(t, c1Report.TableFailureItems, defaultSchemaKey)
+		c1TableItems := c1Report.TableFailureItems[defaultSchemaKey]
+		require.Len(t, c1TableItems.LWWViolationItems, 1)
+		require.Equal(t, uint64(0), c1TableItems.LWWViolationItems[0].ExistingOriginTS)
+		require.Equal(t, uint64(350), c1TableItems.LWWViolationItems[0].ExistingCommitTS)
+		require.Equal(t, uint64(310), c1TableItems.LWWViolationItems[0].OriginTS)
+		require.Equal(t, uint64(370), c1TableItems.LWWViolationItems[0].CommitTS)
 		// c2 should have no LWW violation (its records are ordered correctly:
 		// upstream commitTs=310 compareTs=310, downstream commitTs=360 compareTs=350, 310 < 350)
 		c2Report := lastReport.ClusterReports["c2"]
-		require.Empty(t, c2Report.LWWViolationItems)
+		if c2TableItems, ok := c2Report.TableFailureItems[defaultSchemaKey]; ok {
+			require.Empty(t, c2TableItems.LWWViolationItems)
+		}
 	})
 }

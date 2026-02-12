@@ -71,62 +71,71 @@ func TestLWWViolationItem_String(t *testing.T) {
 	require.Equal(t, "pk: pk-y, existing origin ts: 1, existing commit ts: 2, origin ts: 3, commit ts: 4", s)
 }
 
+const testSchemaKey = "test_table"
+
 func TestClusterReport(t *testing.T) {
 	t.Parallel()
 
 	t.Run("new cluster report is empty and does not need flush", func(t *testing.T) {
 		t.Parallel()
-		cr := NewClusterReport("c1")
+		cr := NewClusterReport("c1", types.TimeWindow{})
 		require.Equal(t, "c1", cr.ClusterID)
-		require.Empty(t, cr.DataLossItems)
-		require.Empty(t, cr.DataRedundantItems)
-		require.Empty(t, cr.LWWViolationItems)
+		require.Empty(t, cr.TableFailureItems)
 		require.False(t, cr.needFlush)
 	})
 
 	t.Run("add data loss item sets needFlush", func(t *testing.T) {
 		t.Parallel()
-		cr := NewClusterReport("c1")
-		cr.AddDataLossItem("downstream-1", "pk-1", 100, 200, false)
-		require.Len(t, cr.DataLossItems, 1)
+		cr := NewClusterReport("c1", types.TimeWindow{})
+		cr.AddDataLossItem("downstream-1", testSchemaKey, "pk-1", 100, 200, false)
+		require.Len(t, cr.TableFailureItems, 1)
+		require.Contains(t, cr.TableFailureItems, testSchemaKey)
+		tableItems := cr.TableFailureItems[testSchemaKey]
+		require.Len(t, tableItems.DataLossItems, 1)
 		require.True(t, cr.needFlush)
-		require.Equal(t, "downstream-1", cr.DataLossItems[0].DownstreamClusterID)
-		require.Equal(t, "pk-1", cr.DataLossItems[0].PK)
-		require.Equal(t, uint64(100), cr.DataLossItems[0].OriginTS)
-		require.Equal(t, uint64(200), cr.DataLossItems[0].CommitTS)
-		require.False(t, cr.DataLossItems[0].Inconsistent)
+		require.Equal(t, "downstream-1", tableItems.DataLossItems[0].DownstreamClusterID)
+		require.Equal(t, "pk-1", tableItems.DataLossItems[0].PK)
+		require.Equal(t, uint64(100), tableItems.DataLossItems[0].OriginTS)
+		require.Equal(t, uint64(200), tableItems.DataLossItems[0].CommitTS)
+		require.False(t, tableItems.DataLossItems[0].Inconsistent)
 	})
 
 	t.Run("add data redundant item sets needFlush", func(t *testing.T) {
 		t.Parallel()
-		cr := NewClusterReport("c1")
-		cr.AddDataRedundantItem("pk-2", 300, 400)
-		require.Len(t, cr.DataRedundantItems, 1)
+		cr := NewClusterReport("c1", types.TimeWindow{})
+		cr.AddDataRedundantItem(testSchemaKey, "pk-2", 300, 400)
+		require.Len(t, cr.TableFailureItems, 1)
+		tableItems := cr.TableFailureItems[testSchemaKey]
+		require.Len(t, tableItems.DataRedundantItems, 1)
 		require.True(t, cr.needFlush)
 	})
 
 	t.Run("add lww violation item sets needFlush", func(t *testing.T) {
 		t.Parallel()
-		cr := NewClusterReport("c1")
-		cr.AddLWWViolationItem("pk-3", 1, 2, 3, 4)
-		require.Len(t, cr.LWWViolationItems, 1)
+		cr := NewClusterReport("c1", types.TimeWindow{})
+		cr.AddLWWViolationItem(testSchemaKey, "pk-3", 1, 2, 3, 4)
+		require.Len(t, cr.TableFailureItems, 1)
+		tableItems := cr.TableFailureItems[testSchemaKey]
+		require.Len(t, tableItems.LWWViolationItems, 1)
 		require.True(t, cr.needFlush)
-		require.Equal(t, uint64(1), cr.LWWViolationItems[0].ExistingOriginTS)
-		require.Equal(t, uint64(2), cr.LWWViolationItems[0].ExistingCommitTS)
-		require.Equal(t, uint64(3), cr.LWWViolationItems[0].OriginTS)
-		require.Equal(t, uint64(4), cr.LWWViolationItems[0].CommitTS)
+		require.Equal(t, uint64(1), tableItems.LWWViolationItems[0].ExistingOriginTS)
+		require.Equal(t, uint64(2), tableItems.LWWViolationItems[0].ExistingCommitTS)
+		require.Equal(t, uint64(3), tableItems.LWWViolationItems[0].OriginTS)
+		require.Equal(t, uint64(4), tableItems.LWWViolationItems[0].CommitTS)
 	})
 
 	t.Run("add multiple items", func(t *testing.T) {
 		t.Parallel()
-		cr := NewClusterReport("c1")
-		cr.AddDataLossItem("d1", "pk-1", 1, 2, false)
-		cr.AddDataLossItem("d2", "pk-2", 3, 4, true)
-		cr.AddDataRedundantItem("pk-3", 5, 6)
-		cr.AddLWWViolationItem("pk-4", 7, 8, 9, 10)
-		require.Len(t, cr.DataLossItems, 2)
-		require.Len(t, cr.DataRedundantItems, 1)
-		require.Len(t, cr.LWWViolationItems, 1)
+		cr := NewClusterReport("c1", types.TimeWindow{})
+		cr.AddDataLossItem("d1", testSchemaKey, "pk-1", 1, 2, false)
+		cr.AddDataLossItem("d2", testSchemaKey, "pk-2", 3, 4, true)
+		cr.AddDataRedundantItem(testSchemaKey, "pk-3", 5, 6)
+		cr.AddLWWViolationItem(testSchemaKey, "pk-4", 7, 8, 9, 10)
+		require.Len(t, cr.TableFailureItems, 1)
+		tableItems := cr.TableFailureItems[testSchemaKey]
+		require.Len(t, tableItems.DataLossItems, 2)
+		require.Len(t, tableItems.DataRedundantItems, 1)
+		require.Len(t, tableItems.LWWViolationItems, 1)
 	})
 }
 
@@ -144,7 +153,7 @@ func TestReport(t *testing.T) {
 	t.Run("add empty cluster report does not set needFlush", func(t *testing.T) {
 		t.Parallel()
 		r := NewReport(1)
-		cr := NewClusterReport("c1")
+		cr := NewClusterReport("c1", types.TimeWindow{})
 		r.AddClusterReport("c1", cr)
 		require.Len(t, r.ClusterReports, 1)
 		require.False(t, r.NeedFlush())
@@ -153,8 +162,8 @@ func TestReport(t *testing.T) {
 	t.Run("add non-empty cluster report sets needFlush", func(t *testing.T) {
 		t.Parallel()
 		r := NewReport(1)
-		cr := NewClusterReport("c1")
-		cr.AddDataLossItem("d1", "pk-1", 1, 2, false)
+		cr := NewClusterReport("c1", types.TimeWindow{})
+		cr.AddDataLossItem("d1", testSchemaKey, "pk-1", 1, 2, false)
 		r.AddClusterReport("c1", cr)
 		require.True(t, r.NeedFlush())
 	})
@@ -162,9 +171,9 @@ func TestReport(t *testing.T) {
 	t.Run("needFlush propagates from any cluster report", func(t *testing.T) {
 		t.Parallel()
 		r := NewReport(1)
-		cr1 := NewClusterReport("c1")
-		cr2 := NewClusterReport("c2")
-		cr2.AddDataRedundantItem("pk-1", 1, 2)
+		cr1 := NewClusterReport("c1", types.TimeWindow{})
+		cr2 := NewClusterReport("c2", types.TimeWindow{})
+		cr2.AddDataRedundantItem(testSchemaKey, "pk-1", 1, 2)
 		r.AddClusterReport("c1", cr1)
 		r.AddClusterReport("c2", cr2)
 		require.True(t, r.NeedFlush())
@@ -173,6 +182,9 @@ func TestReport(t *testing.T) {
 
 func TestReport_MarshalReport(t *testing.T) {
 	t.Parallel()
+
+	tw := types.TimeWindow{LeftBoundary: 0, RightBoundary: 0}
+	twStr := tw.String()
 
 	t.Run("empty report", func(t *testing.T) {
 		t.Parallel()
@@ -184,12 +196,14 @@ func TestReport_MarshalReport(t *testing.T) {
 	t.Run("report with data loss items", func(t *testing.T) {
 		t.Parallel()
 		r := NewReport(1)
-		cr := NewClusterReport("c1")
-		cr.AddDataLossItem("d1", "pk-1", 100, 200, false)
+		cr := NewClusterReport("c1", tw)
+		cr.AddDataLossItem("d1", testSchemaKey, "pk-1", 100, 200, false)
 		r.AddClusterReport("c1", cr)
 		s := r.MarshalReport()
 		require.Equal(t, "round: 1\n\n"+
 			"[cluster: c1]\n"+
+			"time window: "+twStr+"\n"+
+			"  - [table name: "+testSchemaKey+"]\n"+
 			"  - [data loss items: 1]\n"+
 			"    - [downstream cluster: d1, pk: pk-1, origin ts: 100, commit ts: 200, type: data loss]\n\n",
 			s)
@@ -198,12 +212,14 @@ func TestReport_MarshalReport(t *testing.T) {
 	t.Run("report with data redundant items", func(t *testing.T) {
 		t.Parallel()
 		r := NewReport(2)
-		cr := NewClusterReport("c2")
-		cr.AddDataRedundantItem("pk-r", 10, 20)
+		cr := NewClusterReport("c2", tw)
+		cr.AddDataRedundantItem(testSchemaKey, "pk-r", 10, 20)
 		r.AddClusterReport("c2", cr)
 		s := r.MarshalReport()
 		require.Equal(t, "round: 2\n\n"+
 			"[cluster: c2]\n"+
+			"time window: "+twStr+"\n"+
+			"  - [table name: "+testSchemaKey+"]\n"+
 			"  - [data redundant items: 1]\n"+
 			"    - [pk: pk-r, origin ts: 10, commit ts: 20]\n\n",
 			s)
@@ -212,12 +228,14 @@ func TestReport_MarshalReport(t *testing.T) {
 	t.Run("report with lww violation items", func(t *testing.T) {
 		t.Parallel()
 		r := NewReport(3)
-		cr := NewClusterReport("c3")
-		cr.AddLWWViolationItem("pk-v", 1, 2, 3, 4)
+		cr := NewClusterReport("c3", tw)
+		cr.AddLWWViolationItem(testSchemaKey, "pk-v", 1, 2, 3, 4)
 		r.AddClusterReport("c3", cr)
 		s := r.MarshalReport()
 		require.Equal(t, "round: 3\n\n"+
 			"[cluster: c3]\n"+
+			"time window: "+twStr+"\n"+
+			"  - [table name: "+testSchemaKey+"]\n"+
 			"  - [lww violation items: 1]\n"+
 			"    - [pk: pk-v, existing origin ts: 1, existing commit ts: 2, origin ts: 3, commit ts: 4]\n\n",
 			s)
@@ -226,14 +244,16 @@ func TestReport_MarshalReport(t *testing.T) {
 	t.Run("skips cluster reports that do not need flush", func(t *testing.T) {
 		t.Parallel()
 		r := NewReport(1)
-		crEmpty := NewClusterReport("empty-cluster")
-		crFull := NewClusterReport("full-cluster")
-		crFull.AddDataLossItem("d1", "pk-1", 1, 2, false)
+		crEmpty := NewClusterReport("empty-cluster", tw)
+		crFull := NewClusterReport("full-cluster", tw)
+		crFull.AddDataLossItem("d1", testSchemaKey, "pk-1", 1, 2, false)
 		r.AddClusterReport("empty-cluster", crEmpty)
 		r.AddClusterReport("full-cluster", crFull)
 		s := r.MarshalReport()
 		require.Equal(t, "round: 1\n\n"+
 			"[cluster: full-cluster]\n"+
+			"time window: "+twStr+"\n"+
+			"  - [table name: "+testSchemaKey+"]\n"+
 			"  - [data loss items: 1]\n"+
 			"    - [downstream cluster: d1, pk: pk-1, origin ts: 1, commit ts: 2, type: data loss]\n\n",
 			s)
@@ -242,14 +262,16 @@ func TestReport_MarshalReport(t *testing.T) {
 	t.Run("report with mixed items", func(t *testing.T) {
 		t.Parallel()
 		r := NewReport(10)
-		cr := NewClusterReport("c1")
-		cr.AddDataLossItem("d1", "pk-1", 1, 2, true)
-		cr.AddDataRedundantItem("pk-2", 3, 4)
-		cr.AddLWWViolationItem("pk-3", 5, 6, 7, 8)
+		cr := NewClusterReport("c1", tw)
+		cr.AddDataLossItem("d1", testSchemaKey, "pk-1", 1, 2, true)
+		cr.AddDataRedundantItem(testSchemaKey, "pk-2", 3, 4)
+		cr.AddLWWViolationItem(testSchemaKey, "pk-3", 5, 6, 7, 8)
 		r.AddClusterReport("c1", cr)
 		s := r.MarshalReport()
 		require.Equal(t, "round: 10\n\n"+
 			"[cluster: c1]\n"+
+			"time window: "+twStr+"\n"+
+			"  - [table name: "+testSchemaKey+"]\n"+
 			"  - [data loss items: 1]\n"+
 			"    - [downstream cluster: d1, pk: pk-1, origin ts: 1, commit ts: 2, type: data inconsistent]\n"+
 			"  - [data redundant items: 1]\n"+

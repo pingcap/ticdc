@@ -85,13 +85,6 @@ func run(cmd *cobra.Command, args []string) {
 	}
 	log.Info("Logger initialized", zap.String("level", logLevel))
 
-	fmt.Printf("Loaded configuration with %d cluster(s)\n", len(cfg.Clusters))
-	for name, cluster := range cfg.Clusters {
-		fmt.Printf("  Cluster: %s\n", name)
-		fmt.Printf("    PD Address: %s\n", cluster.PDAddr)
-		fmt.Printf("    S3 Sink URI: %s\n", cluster.S3SinkURI)
-	}
-
 	// Create a context that can be cancelled by signals
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -66,7 +66,7 @@ func runTask(ctx context.Context, cfg *config.Config) error {
 			return errors.Trace(err)
 		}
 
-		report, err := dataChecker.CheckInNextTimeWindow(ctx, newTimeWindowData)
+		report, err := dataChecker.CheckInNextTimeWindow(newTimeWindowData)
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -90,7 +90,7 @@ func initClients(ctx context.Context, cfg *config.Config) (
 	etcdClients := make(map[string]*etcd.CDCEtcdClientImpl)
 
 	for clusterID, clusterConfig := range cfg.Clusters {
-		pdClient, etcdClient, err := newPDClient(ctx, clusterConfig.PDAddr, &clusterConfig.SecurityConfig)
+		pdClient, etcdClient, err := newPDClient(ctx, clusterConfig.PDAddrs, &clusterConfig.SecurityConfig)
 		if err != nil {
 			// Clean up already created clients before returning error
 			cleanupClients(pdClients, etcdClients, checkpointWatchers, s3Watchers)
@@ -123,16 +123,16 @@ func initClients(ctx context.Context, cfg *config.Config) (
 	return checkpointWatchers, s3Watchers, pdClients, etcdClients, nil
 }
 
-func newPDClient(ctx context.Context, pdAddr string, securityConfig *security.Credential) (pd.Client, *etcd.CDCEtcdClientImpl, error) {
+func newPDClient(ctx context.Context, pdAddrs []string, securityConfig *security.Credential) (pd.Client, *etcd.CDCEtcdClientImpl, error) {
 	pdClient, err := pd.NewClientWithContext(
-		ctx, "consistency-checker", []string{pdAddr}, securityConfig.PDSecurityOption(),
+		ctx, "consistency-checker", pdAddrs, securityConfig.PDSecurityOption(),
 		pdopt.WithCustomTimeoutOption(10*time.Second),
 	)
 	if err != nil {
 		return nil, nil, errors.Trace(err)
 	}
 
-	etcdCli, err := etcd.CreateRawEtcdClient(securityConfig, grpc.EmptyDialOption{}, pdAddr)
+	etcdCli, err := etcd.CreateRawEtcdClient(securityConfig, grpc.EmptyDialOption{}, pdAddrs...)
 	if err != nil {
 		// Clean up PD client if etcd client creation fails
 		if pdClient != nil {

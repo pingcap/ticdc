@@ -228,8 +228,8 @@ func TestRecorder_RecordTimeWindow(t *testing.T) {
 			"c1": {TimeWindow: types.TimeWindow{LeftBoundary: 1, RightBoundary: 10}},
 		}
 		report := NewReport(5)
-		cr := NewClusterReport("c1")
-		cr.AddDataLossItem("d1", "pk-1", 100, 200, false)
+		cr := NewClusterReport("c1", types.TimeWindow{LeftBoundary: 1, RightBoundary: 10})
+		cr.AddDataLossItem("d1", "test_table", "pk-1", 100, 200, false)
 		report.AddClusterReport("c1", cr)
 		require.True(t, report.NeedFlush())
 

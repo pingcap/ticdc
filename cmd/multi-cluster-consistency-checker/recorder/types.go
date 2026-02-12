@@ -61,28 +61,46 @@ func (item *LWWViolationItem) String() string {
 		item.PK, item.ExistingOriginTS, item.ExistingCommitTS, item.OriginTS, item.CommitTS)
 }
 
-type ClusterReport struct {
-	ClusterID string `json:"cluster_id"`
-
+type TableFailureItems struct {
 	DataLossItems      []DataLossItem      `json:"data_loss_items"`      // data loss items
 	DataRedundantItems []DataRedundantItem `json:"data_redundant_items"` // data redundant items
 	LWWViolationItems  []LWWViolationItem  `json:"lww_violation_items"`  // lww violation items
+}
+
+func NewTableFailureItems() *TableFailureItems {
+	return &TableFailureItems{
+		DataLossItems:      make([]DataLossItem, 0),
+		DataRedundantItems: make([]DataRedundantItem, 0),
+		LWWViolationItems:  make([]LWWViolationItem, 0),
+	}
+}
+
+type ClusterReport struct {
+	ClusterID string `json:"cluster_id"`
+
+	TimeWindow types.TimeWindow `json:"time_window"`
+
+	TableFailureItems map[string]*TableFailureItems `json:"table_failure_items"` // table failure items
 
 	needFlush bool `json:"-"`
 }
 
-func NewClusterReport(clusterID string) *ClusterReport {
+func NewClusterReport(clusterID string, timeWindow types.TimeWindow) *ClusterReport {
 	return &ClusterReport{
-		ClusterID:          clusterID,
-		DataLossItems:      make([]DataLossItem, 0),
-		DataRedundantItems: make([]DataRedundantItem, 0),
-		LWWViolationItems:  make([]LWWViolationItem, 0),
-		needFlush:          false,
+		ClusterID:         clusterID,
+		TimeWindow:        timeWindow,
+		TableFailureItems: make(map[string]*TableFailureItems),
+		needFlush:         false,
 	}
 }
 
-func (r *ClusterReport) AddDataLossItem(downstreamClusterID, pk string, originTS, commitTS uint64, inconsistent bool) {
-	r.DataLossItems = append(r.DataLossItems, DataLossItem{
+func (r *ClusterReport) AddDataLossItem(downstreamClusterID, schemaKey, pk string, originTS, commitTS uint64, inconsistent bool) {
+	tableFailureItems, exists := r.TableFailureItems[schemaKey]
+	if !exists {
+		tableFailureItems = NewTableFailureItems()
+		r.TableFailureItems[schemaKey] = tableFailureItems
+	}
+	tableFailureItems.DataLossItems = append(tableFailureItems.DataLossItems, DataLossItem{
 		DownstreamClusterID: downstreamClusterID,
 		PK:                  pk,
 		OriginTS:            originTS,
@@ -92,8 +110,13 @@ func (r *ClusterReport) AddDataLossItem(downstreamClusterID, pk string, originTS
 	r.needFlush = true
 }
 
-func (r *ClusterReport) AddDataRedundantItem(pk string, originTS, commitTS uint64) {
-	r.DataRedundantItems = append(r.DataRedundantItems, DataRedundantItem{
+func (r *ClusterReport) AddDataRedundantItem(schemaKey, pk string, originTS, commitTS uint64) {
+	tableFailureItems, exists := r.TableFailureItems[schemaKey]
+	if !exists {
+		tableFailureItems = NewTableFailureItems()
+		r.TableFailureItems[schemaKey] = tableFailureItems
+	}
+	tableFailureItems.DataRedundantItems = append(tableFailureItems.DataRedundantItems, DataRedundantItem{
 		PK:       pk,
 		OriginTS: originTS,
 		CommitTS: commitTS,
@@ -102,11 +125,17 @@ func (r *ClusterReport) AddDataRedundantItem(pk string, originTS, commitTS uint6
 }
 
 func (r *ClusterReport) AddLWWViolationItem(
+	schemaKey string,
 	pk string,
 	existingOriginTS, existingCommitTS uint64,
 	originTS, commitTS uint64,
 ) {
-	r.LWWViolationItems = append(r.LWWViolationItems, LWWViolationItem{
+	tableFailureItems, exists := r.TableFailureItems[schemaKey]
+	if !exists {
+		tableFailureItems = NewTableFailureItems()
+		r.TableFailureItems[schemaKey] = tableFailureItems
+	}
+	tableFailureItems.LWWViolationItems = append(tableFailureItems.LWWViolationItems, LWWViolationItem{
 		PK:               pk,
 		ExistingOriginTS: existingOriginTS,
 		ExistingCommitTS: existingCommitTS,
@@ -143,22 +172,26 @@ func (r *Report) MarshalReport() string {
 			continue
 		}
 		fmt.Fprintf(&reportMsg, "\n[cluster: %s]\n", clusterID)
-		if len(clusterReport.DataLossItems) > 0 {
-			fmt.Fprintf(&reportMsg, "  - [data loss items: %d]\n", len(clusterReport.DataLossItems))
-			for _, dataLossItem := range clusterReport.DataLossItems {
-				fmt.Fprintf(&reportMsg, "    - [%s]\n", dataLossItem.String())
+		fmt.Fprintf(&reportMsg, "time window: %s\n", clusterReport.TimeWindow.String())
+		for schemaKey, tableFailureItems := range clusterReport.TableFailureItems {
+			fmt.Fprintf(&reportMsg, "  - [table name: %s]\n", schemaKey)
+			if len(tableFailureItems.DataLossItems) > 0 {
+				fmt.Fprintf(&reportMsg, "  - [data loss items: %d]\n", len(tableFailureItems.DataLossItems))
+				for _, dataLossItem := range tableFailureItems.DataLossItems {
+					fmt.Fprintf(&reportMsg, "    - [%s]\n", dataLossItem.String())
+				}
 			}
-		}
-		if len(clusterReport.DataRedundantItems) > 0 {
-			fmt.Fprintf(&reportMsg, "  - [data redundant items: %d]\n", len(clusterReport.DataRedundantItems))
-			for _, dataRedundantItem := range clusterReport.DataRedundantItems {
-				fmt.Fprintf(&reportMsg, "    - [%s]\n", dataRedundantItem.String())
+			if len(tableFailureItems.DataRedundantItems) > 0 {
+				fmt.Fprintf(&reportMsg, "  - [data redundant items: %d]\n", len(tableFailureItems.DataRedundantItems))
+				for _, dataRedundantItem := range tableFailureItems.DataRedundantItems {
+					fmt.Fprintf(&reportMsg, "    - [%s]\n", dataRedundantItem.String())
+				}
 			}
-		}
-		if len(clusterReport.LWWViolationItems) > 0 {
-			fmt.Fprintf(&reportMsg, "  - [lww violation items: %d]\n", len(clusterReport.LWWViolationItems))
-			for _, lwwViolationItem := range clusterReport.LWWViolationItems {
-				fmt.Fprintf(&reportMsg, "    - [%s]\n", lwwViolationItem.String())
+			if len(tableFailureItems.LWWViolationItems) > 0 {
+				fmt.Fprintf(&reportMsg, "  - [lww violation items: %d]\n", len(tableFailureItems.LWWViolationItems))
+				for _, lwwViolationItem := range tableFailureItems.LWWViolationItems {
+					fmt.Fprintf(&reportMsg, "    - [%s]\n", lwwViolationItem.String())
+				}
 			}
 		}
 	}

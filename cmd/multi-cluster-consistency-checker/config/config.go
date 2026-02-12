@@ -44,8 +44,8 @@ type DownstreamClusterChangefeedConfig struct {
 
 // ClusterConfig represents configuration for a single cluster
 type ClusterConfig struct {
-	// PDAddr is the address of the PD (Placement Driver) server
-	PDAddr string `toml:"pd-addr" json:"pd-addr"`
+	// PDAddrs is the addresses of the PD (Placement Driver) servers
+	PDAddrs []string `toml:"pd-addrs" json:"pd-addrs"`
 
 	// S3SinkURI is the S3 sink URI for this cluster
 	S3SinkURI string `toml:"s3-sink-uri" json:"s3-sink-uri"`
@@ -84,8 +84,8 @@ func LoadConfig(path string) (*Config, error) {
 
 	// Validate cluster configurations
 	for name, cluster := range cfg.Clusters {
-		if cluster.PDAddr == "" {
-			return nil, fmt.Errorf("cluster '%s': pd-addr is required", name)
+		if len(cluster.PDAddrs) == 0 {
+			return nil, fmt.Errorf("cluster '%s': pd-addrs is required", name)
 		}
 		if cluster.S3SinkURI == "" {
 			return nil, fmt.Errorf("cluster '%s': s3-sink-uri is required", name)
