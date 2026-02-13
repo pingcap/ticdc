@@ -19,6 +19,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/sink/util"
 	"go.uber.org/zap"
 )
 
@@ -40,6 +41,11 @@ func (s *sink) IsNormal() bool {
 
 func (s *sink) SinkType() common.SinkType {
 	return common.BlackHoleSinkType
+}
+
+// GetRouter returns nil as Blackhole sink does not support routing.
+func (s *sink) GetRouter() *util.Router {
+	return nil
 }
 
 func (s *sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {

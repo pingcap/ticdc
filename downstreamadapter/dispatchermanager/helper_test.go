@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
@@ -95,6 +96,10 @@ func (m *mockKafkaSink) Run(ctx context.Context) error {
 			_ = ts
 		}
 	}
+}
+
+func (m *mockKafkaSink) GetRouter() *sinkutil.Router {
+	return nil
 }
 
 // simulateCloseSink simulates closing the sink (e.g., when path is removed)
