@@ -688,6 +688,11 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 			message.Statuses = statusMessage
 			message.Watermark = newWatermark
 			message.RedoWatermark = newRedoWatermark
+			log.Info("collect component status when changed",
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Int("statusCount", len(statusMessage)),
+				zap.Uint64("watermarkCheckpointTs", newWatermark.CheckpointTs),
+				zap.Uint64("watermarkResolvedTs", newWatermark.ResolvedTs))
 			e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
 		}
 	}
@@ -764,6 +769,12 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 			toCleanMap = append(toCleanMap, cleanMap)
 		}
 		if watermark != nil {
+			log.Info("update watermark from dispatcher",
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Stringer("dispatcherID", id),
+				zap.Uint64("checkpointTs", watermark.CheckpointTs),
+				zap.Uint64("resolvedTs", watermark.ResolvedTs),
+			)
 			message.Watermark.Update(*watermark)
 		}
 
@@ -811,6 +822,14 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 
 		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).SendDispatcherHeartbeat(eventServiceDispatcherHeartbeat)
 	}
+
+	log.Info("aggregated dispatcher heartbeats",
+		zap.Stringer("changefeedID", e.changefeedID),
+		zap.Int("dispatcherCount", dispatcherCount),
+		zap.Bool("needCompleteStatus", needCompleteStatus),
+		zap.Uint64("checkpointTs", message.Watermark.CheckpointTs),
+		zap.Uint64("resolvedTs", message.Watermark.ResolvedTs),
+	)
 
 	e.metricCheckpointTs.Set(float64(message.Watermark.CheckpointTs))
 	e.metricResolvedTs.Set(float64(message.Watermark.ResolvedTs))
