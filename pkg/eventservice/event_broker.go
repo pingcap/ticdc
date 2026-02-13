@@ -444,6 +444,7 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 
 	if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
 		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
+		c.sendResolvedTs(task, task.sentResolvedTs.Load())
 		return false, common.DataRange{}
 	}
 
