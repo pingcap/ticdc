@@ -38,4 +38,8 @@ const (
 	HeartbeatCollectorTopic = "heartbeat-collector"
 	// DispatcherManagerTopic is the topic of the dispatcher manager.
 	DispatcherManagerManagerTopic = "dispatcher-manager-manager"
+	// SchemaStoreTopic is the topic of schema store.
+	SchemaStoreTopic = "schema-store"
+	// SchemaStoreClientTopic is the topic of schema store response messages.
+	SchemaStoreClientTopic = "schema-store-client"
 )
