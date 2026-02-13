@@ -22,25 +22,31 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	gcmock "github.com/pingcap/ticdc/pkg/txnutil/gc/mock"
 	"github.com/stretchr/testify/require"
 )
 
 func TestTryUpdateServiceGCSafepointReturnsErrorOnUpdateFailure(t *testing.T) {
 	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
 
-	updateCalls := 0
-	pdClient := &MockPDClient{
-		UpdateServiceGCSafePointFunc: func(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
-			updateCalls++
-			return 0, stderrors.New("pd is unstable")
-		},
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	mockGCClient := gcmock.NewMockClient(ctrl)
+	mockGCClient.EXPECT().
+		UpdateServiceGCSafePoint(gomock.Any(), "test-service", int64(60), uint64(100)).
+		Return(uint64(0), stderrors.New("pd is unstable")).
+		Times(1)
+	m := &gcManager{
+		gcServiceID: "test-service",
+		gcClient:    mockGCClient,
+		pdClock:     appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		gcTTL:       60,
 	}
-
-	m := NewManager("test-service", pdClient)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -50,38 +56,52 @@ func TestTryUpdateServiceGCSafepointReturnsErrorOnUpdateFailure(t *testing.T) {
 	errCode, ok := cerrors.RFCCode(err)
 	require.True(t, ok)
 	require.Equal(t, cerrors.ErrUpdateServiceSafepointFailed.RFCCode(), errCode)
-	require.Equal(t, 1, updateCalls)
 }
 
 func TestTryUpdateServiceGCSafepointAlwaysExecutesUpdate(t *testing.T) {
 	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
 
-	updateCalls := 0
-	pdClient := &MockPDClient{
-		UpdateServiceGCSafePointFunc: func(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
-			updateCalls++
-			return safePoint, nil
-		},
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	mockGCClient := gcmock.NewMockClient(ctrl)
+	gomock.InOrder(
+		mockGCClient.EXPECT().
+			UpdateServiceGCSafePoint(gomock.Any(), "test-service", int64(60), uint64(100)).
+			Return(uint64(100), nil),
+		mockGCClient.EXPECT().
+			UpdateServiceGCSafePoint(gomock.Any(), "test-service", int64(60), uint64(101)).
+			Return(uint64(101), nil),
+	)
+	m := &gcManager{
+		gcServiceID: "test-service",
+		gcClient:    mockGCClient,
+		pdClock:     appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		gcTTL:       60,
 	}
-	m := NewManager("test-service", pdClient)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
 	require.NoError(t, m.TryUpdateServiceGCSafepoint(ctx, common.Ts(100)))
 	require.NoError(t, m.TryUpdateServiceGCSafepoint(ctx, common.Ts(101)))
-	require.Equal(t, 2, updateCalls)
 }
 
 func TestTryUpdateServiceGCSafepointDoesNotReturnSnapshotLost(t *testing.T) {
 	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
 
-	pdClient := &MockPDClient{
-		UpdateServiceGCSafePointFunc: func(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
-			return safePoint + 100, nil
-		},
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	mockGCClient := gcmock.NewMockClient(ctrl)
+	mockGCClient.EXPECT().
+		UpdateServiceGCSafePoint(gomock.Any(), "test-service", int64(60), uint64(100)).
+		Return(uint64(200), nil).
+		Times(1)
+	m := &gcManager{
+		gcServiceID: "test-service",
+		gcClient:    mockGCClient,
+		pdClock:     appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		gcTTL:       60,
 	}
-	m := NewManager("test-service", pdClient)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -95,4 +115,16 @@ func TestTryUpdateServiceGCSafepointDoesNotReturnSnapshotLost(t *testing.T) {
 	errCode, ok := cerrors.RFCCode(err)
 	require.True(t, ok)
 	require.Equal(t, cerrors.ErrSnapshotLostByGC.RFCCode(), errCode)
+}
+
+func TestManagerUsePDClientAsGCClient(t *testing.T) {
+	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+
+	pdClient := &MockPDClient{
+		UpdateServiceGCSafePointFunc: func(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
+			return safePoint, nil
+		},
+	}
+	m := NewManager("test-service", pdClient).(*gcManager)
+	require.Same(t, pdClient, m.gcClient)
 }

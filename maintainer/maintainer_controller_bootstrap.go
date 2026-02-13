@@ -94,7 +94,7 @@ func (c *Controller) FinishBootstrap(
 	tables, err := c.loadTables(startTs)
 	if err != nil {
 		log.Error("load table from scheme store failed",
-			zap.String("changefeed", c.changefeedID.Name()),
+			zap.String("changefeed", c.changefeedID.Name()), zap.Uint64("startTs", startTs),
 			zap.Error(err))
 		return nil, errors.Trace(err)
 	}
@@ -107,8 +107,8 @@ func (c *Controller) FinishBootstrap(
 	if c.enableRedo {
 		redoTables, err = c.loadTables(redoStartTs)
 		if err != nil {
-			log.Error("load table from scheme store failed",
-				zap.String("changefeed", c.changefeedID.Name()),
+			log.Error("redo load table from scheme store failed",
+				zap.String("changefeed", c.changefeedID.Name()), zap.Uint64("redoStartTs", redoStartTs),
 				zap.Error(err))
 			return nil, errors.Trace(err)
 		}
