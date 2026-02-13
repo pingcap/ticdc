@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	perrors "github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
@@ -37,6 +38,26 @@ import (
 )
 
 var mockSink = sink.NewMockSink(common.BlackHoleSinkType)
+
+type errorSink struct {
+	err error
+}
+
+func (s *errorSink) SinkType() common.SinkType { return common.KafkaSinkType }
+
+func (s *errorSink) IsNormal() bool { return false }
+
+func (s *errorSink) AddDMLEvent(*event.DMLEvent) {}
+
+func (s *errorSink) WriteBlockEvent(event.BlockEvent) error { return s.err }
+
+func (s *errorSink) AddCheckpointTs(uint64) {}
+
+func (s *errorSink) SetTableSchemaStore(*event.TableSchemaStore) {}
+
+func (s *errorSink) Close(bool) {}
+
+func (s *errorSink) Run(context.Context) error { return s.err }
 
 // createTestDispatcher creates a test dispatcher with given parameters
 func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.DispatcherID, tableID int64, startKey, endKey []byte) *dispatcher.EventDispatcher {
@@ -129,6 +150,27 @@ func createTestManager(t *testing.T) *DispatcherManager {
 	ec := eventcollector.New(nodeID)
 	appcontext.SetService(appcontext.EventCollector, ec)
 	return manager
+}
+
+func TestDispatcherManagerCloseOnSinkError(t *testing.T) {
+	// Scenario: the sink exits with a non-canceled error (e.g., Kafka topic missing / auth failures).
+	// Steps:
+	// 1) Run the sink with exit handling enabled.
+	// 2) Expect the dispatcher manager to close itself to prevent unbounded buffering into the sink.
+	manager := createTestManager(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	manager.ctx = ctx
+	manager.cancel = cancel
+	manager.sink = &errorSink{err: perrors.New("sink error")}
+
+	hbCollector := NewHeartBeatCollector(node.NewID())
+	appcontext.SetService(appcontext.HeartbeatCollector, hbCollector)
+	require.NoError(t, hbCollector.RegisterDispatcherManager(manager))
+
+	go manager.runSinkWithExitHandling(ctx)
+
+	require.Eventually(t, func() bool { return manager.closed.Load() }, 2*time.Second, 10*time.Millisecond)
 }
 
 func TestCollectComponentStatusWhenChangedWatermarkSeqNoFallback(t *testing.T) {
