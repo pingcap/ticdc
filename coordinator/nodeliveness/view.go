@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//	http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -74,28 +74,38 @@ func (v *View) ObserveHeartbeat(nodeID node.ID, hb *heartbeatpb.NodeHeartbeat, n
 	if hb == nil {
 		return
 	}
-
-	v.mu.Lock()
-	v.nodes[nodeID] = record{
-		lastSeen:  now,
-		nodeEpoch: hb.NodeEpoch,
-		liveness:  hb.Liveness,
-	}
-	v.mu.Unlock()
+	v.observe(nodeID, hb.NodeEpoch, hb.Liveness, now)
 }
 
 func (v *View) ObserveSetNodeLivenessResponse(nodeID node.ID, resp *heartbeatpb.SetNodeLivenessResponse, now time.Time) {
 	if resp == nil {
 		return
 	}
+	v.observe(nodeID, resp.NodeEpoch, resp.Applied, now)
+}
 
+func (v *View) observe(nodeID node.ID, nodeEpoch uint64, liveness heartbeatpb.NodeLiveness, now time.Time) {
 	v.mu.Lock()
+	defer v.mu.Unlock()
+
+	if prev, ok := v.nodes[nodeID]; ok {
+		// Drop stale observations to avoid transient liveness rollback under
+		// message reordering:
+		// 1) lower node epoch is always stale;
+		// 2) within the same epoch, liveness is monotonic.
+		if nodeEpoch < prev.nodeEpoch {
+			return
+		}
+		if nodeEpoch == prev.nodeEpoch && liveness < prev.liveness {
+			return
+		}
+	}
+
 	v.nodes[nodeID] = record{
 		lastSeen:  now,
-		nodeEpoch: resp.NodeEpoch,
-		liveness:  resp.Applied,
+		nodeEpoch: nodeEpoch,
+		liveness:  liveness,
 	}
-	v.mu.Unlock()
 }
 
 func (v *View) GetNodeEpoch(nodeID node.ID) (uint64, bool) {
@@ -138,7 +148,9 @@ func (v *View) IsSchedulableDest(nodeID node.ID) bool {
 	return v.GetState(nodeID) == StateAlive
 }
 
-func (v *View) GetDrainingOrStoppingNodes(now time.Time) []node.ID {
+func (v *View) GetDrainingOrStoppingNodes() []node.ID {
+	now := time.Now()
+
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 

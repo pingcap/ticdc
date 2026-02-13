@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//	http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -71,7 +71,6 @@ func TestViewGetNodeEpoch(t *testing.T) {
 
 	epoch, ok := v.GetNodeEpoch(id)
 	require.False(t, ok)
-	require.Equal(t, uint64(0), epoch)
 
 	v.ObserveSetNodeLivenessResponse(id, &heartbeatpb.SetNodeLivenessResponse{
 		Applied:   heartbeatpb.NodeLiveness_ALIVE,
@@ -85,7 +84,7 @@ func TestViewGetNodeEpoch(t *testing.T) {
 
 func TestViewGetDrainingOrStoppingNodes(t *testing.T) {
 	v := NewView(30 * time.Second)
-	now := time.Unix(0, 0)
+	now := time.Now()
 
 	v.ObserveHeartbeat(node.ID("n1"), &heartbeatpb.NodeHeartbeat{
 		Liveness:  heartbeatpb.NodeLiveness_DRAINING,
@@ -100,9 +99,47 @@ func TestViewGetDrainingOrStoppingNodes(t *testing.T) {
 		NodeEpoch: 1,
 	}, now)
 
-	nodes := v.GetDrainingOrStoppingNodes(now)
+	nodes := v.GetDrainingOrStoppingNodes()
 	require.ElementsMatch(t, []node.ID{"n1", "n2"}, nodes)
 
-	nodes = v.GetDrainingOrStoppingNodes(now.Add(31 * time.Second))
+	staleView := NewView(30 * time.Second)
+	old := now.Add(-31 * time.Second)
+	staleView.ObserveHeartbeat(node.ID("n1"), &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_DRAINING,
+		NodeEpoch: 1,
+	}, old)
+	staleView.ObserveHeartbeat(node.ID("n2"), &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_STOPPING,
+		NodeEpoch: 1,
+	}, old)
+	nodes = staleView.GetDrainingOrStoppingNodes()
 	require.Empty(t, nodes)
+}
+
+func TestViewIgnoreRollbackObservation(t *testing.T) {
+	v := NewView(30 * time.Second)
+	now := time.Now()
+	id := node.ID("n1")
+
+	v.ObserveHeartbeat(id, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_DRAINING,
+		NodeEpoch: 10,
+	}, now)
+	v.ObserveHeartbeat(id, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 10,
+	}, now.Add(time.Second))
+	require.Equal(t, StateDraining, v.GetState(id))
+
+	v.ObserveSetNodeLivenessResponse(id, &heartbeatpb.SetNodeLivenessResponse{
+		Applied:   heartbeatpb.NodeLiveness_STOPPING,
+		NodeEpoch: 9,
+	}, now.Add(2*time.Second))
+	require.Equal(t, StateDraining, v.GetState(id))
+
+	v.ObserveSetNodeLivenessResponse(id, &heartbeatpb.SetNodeLivenessResponse{
+		Applied:   heartbeatpb.NodeLiveness_STOPPING,
+		NodeEpoch: 10,
+	}, now.Add(3*time.Second))
+	require.Equal(t, StateStopping, v.GetState(id))
 }

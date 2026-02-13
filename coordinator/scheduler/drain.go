@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//	http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -73,7 +73,7 @@ func (s *drainScheduler) Execute() time.Time {
 	}
 
 	now := time.Now()
-	drainingNodes := s.livenessView.GetDrainingOrStoppingNodes(now)
+	drainingNodes := s.livenessView.GetDrainingOrStoppingNodes()
 	if len(drainingNodes) == 0 {
 		return now.Add(time.Second)
 	}
@@ -119,7 +119,6 @@ func (s *drainScheduler) Execute() time.Time {
 
 	if scheduled > 0 {
 		log.Info("drain scheduler created move operators",
-			zap.String("schedulerID", s.id),
 			zap.Int("scheduled", scheduled),
 			zap.Int("drainingNodeCount", len(drainingNodes)))
 	}

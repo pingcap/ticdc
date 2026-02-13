@@ -199,6 +199,6 @@ func (l *Liveness) String() string {
 	case LivenessCaptureStopping:
 		return "Stopping"
 	default:
-		return "unknown"
+		return "Unknown"
 	}
 }

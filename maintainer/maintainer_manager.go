@@ -276,7 +276,12 @@ func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) 
 		return nil
 	}
 
-	if m.liveness.Load() == api.LivenessCaptureStopping {
+	// Intentionally allow AddMaintainer while the node is draining.
+	// During liveness propagation and scheduler view convergence, in-flight operators can still
+	// issue add requests to this node; rejecting them here may break drain convergence.
+	// Only STOPPING performs a hard reject for new maintainer creation.
+	currentLiveness := m.liveness.Load()
+	if currentLiveness == api.LivenessCaptureStopping {
 		log.Info("reject add maintainer request because node is stopping",
 			zap.Stringer("nodeID", m.nodeInfo.ID),
 			zap.Stringer("changefeedID", changefeedID))
