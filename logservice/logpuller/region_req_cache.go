@@ -87,6 +87,18 @@ func newRequestCache(maxPendingCount int) *requestCache {
 	return res
 }
 
+// markDropped marks a region request as finished without being tracked in sentRequests.
+// It is used when a request is popped from pendingQueue but won't be sent (for example, for a stop task),
+// or when sending fails before markSent is called.
+func (c *requestCache) markDropped() {
+	c.decPendingCount()
+	// Notify waiting add operations that there's space available.
+	select {
+	case c.spaceAvailable <- struct{}{}:
+	default: // If channel is full, skip notification
+	}
+}
+
 // add adds a new region request to the cache
 // It blocks if pendingCount >= maxPendingCount until there's space or ctx is cancelled
 func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) (bool, error) {
@@ -255,9 +267,15 @@ func (c *requestCache) clearStaleRequest() {
 		}
 	}
 
-	if reqCount == 0 && c.pendingCount.Load() != 0 {
-		log.Info("region worker pending request count is not equal to actual region request count, correct it", zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("actualReqCount", reqCount))
-		c.pendingCount.Store(0)
+	actualReqCount := int64(reqCount) + int64(len(c.pendingQueue))
+	pendingCount := c.pendingCount.Load()
+	// One request can be "in flight" (popped from pendingQueue but not yet marked sent),
+	// so we tolerate a small mismatch to avoid false corrections.
+	if pendingCount < actualReqCount || pendingCount-actualReqCount > 1 {
+		log.Info("region worker pending request count is not equal to actual region request count, correct it",
+			zap.Int("pendingCount", int(pendingCount)),
+			zap.Int64("actualReqCount", actualReqCount))
+		c.pendingCount.Store(actualReqCount)
 	}
 
 	c.lastCheckStaleRequestTime.Store(time.Now())
