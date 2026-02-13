@@ -288,12 +288,12 @@ func (e *elector) resignLogCoordinator() error {
 	resignCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	if resignErr := e.logElection.Resign(resignCtx); resignErr != nil {
 		if errors.Is(errors.Cause(resignErr), context.DeadlineExceeded) {
-			log.Info("log coordinator resign timeout",
+			log.Info("log coordinator resign failed",
 				zap.String("nodeID", nodeID), zap.Error(resignErr))
 			cancel()
 			return errors.Trace(resignErr)
 		}
-		log.Warn("log coordinator resign failed",
+		log.Warn("log coordinator resign timeout",
 			zap.String("nodeID", nodeID), zap.Error(resignErr))
 	}
 	cancel()
