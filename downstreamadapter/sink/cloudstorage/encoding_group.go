@@ -17,7 +17,6 @@ import (
 	"context"
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/utils/chann"
@@ -79,7 +78,7 @@ func (eg *encodingGroup) runEncoder(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
+			return context.Cause(ctx)
 		default:
 			frag, ok := eg.inputCh.Get()
 			if !ok || eg.closed.Load() {
@@ -93,7 +92,7 @@ func (eg *encodingGroup) runEncoder(ctx context.Context) error {
 
 			select {
 			case <-ctx.Done():
-				return errors.Trace(ctx.Err())
+				return context.Cause(ctx)
 			case eg.outputCh <- frag:
 			}
 		}
