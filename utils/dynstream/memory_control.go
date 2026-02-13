@@ -296,13 +296,35 @@ type memControl[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	// Since this struct is global level, different streams may access it concurrently.
 	mutex sync.Mutex
 
-	areaStatMap map[A]*areaMemStat[A, P, T, D, H]
+	areaStatMap     map[A]*areaMemStat[A, P, T, D, H]
+	areaSettingsMap map[A]AreaSettings
 }
 
 func newMemControl[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]]() *memControl[A, P, T, D, H] {
 	return &memControl[A, P, T, D, H]{
-		areaStatMap: make(map[A]*areaMemStat[A, P, T, D, H]),
+		areaStatMap:     make(map[A]*areaMemStat[A, P, T, D, H]),
+		areaSettingsMap: make(map[A]AreaSettings),
 	}
+}
+
+func (m *memControl[A, P, T, D, H]) addArea(area A, settings AreaSettings) {
+	settings.fix()
+
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	m.areaSettingsMap[area] = settings
+	if as, ok := m.areaStatMap[area]; ok {
+		as.settings.Store(&settings)
+	}
+}
+
+func (m *memControl[A, P, T, D, H]) removeArea(area A) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	delete(m.areaSettingsMap, area)
+	// The area stat is still managed by paths' lifecycle.
 }
 
 func (m *memControl[A, P, T, D, H]) setAreaSettings(area A, settings AreaSettings) {
@@ -315,21 +337,29 @@ func (m *memControl[A, P, T, D, H]) setAreaSettings(area A, settings AreaSetting
 	}
 }
 
-func (m *memControl[A, P, T, D, H]) addPathToArea(path *pathInfo[A, P, T, D, H], settings AreaSettings, feedbackChan chan<- Feedback[A, P, D]) {
+func (m *memControl[A, P, T, D, H]) addPathToArea(path *pathInfo[A, P, T, D, H], feedbackChan chan<- Feedback[A, P, D]) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	area, ok := m.areaStatMap[path.area]
+	areaStat, ok := m.areaStatMap[path.area]
 	if !ok {
-		area = newAreaMemStat(path.area, m, settings, feedbackChan)
-		m.areaStatMap[path.area] = area
+		settings, ok := m.areaSettingsMap[path.area]
+		if !ok {
+			settings = AreaSettings{}
+		}
+		settings.fix()
+
+		areaStat = newAreaMemStat(path.area, m, settings, feedbackChan)
+		m.areaStatMap[path.area] = areaStat
+	} else if settings, ok := m.areaSettingsMap[path.area]; ok {
+		// Ensure the stat uses the latest settings from AddArea.
+		settings.fix()
+		areaStat.settings.Store(&settings)
 	}
 
-	path.areaMemStat = area
-	area.pathMap.Store(path.path, path)
-	area.pathCount.Add(1)
-	// Update the settings
-	area.settings.Store(&settings)
+	path.areaMemStat = areaStat
+	areaStat.pathMap.Store(path.path, path)
+	areaStat.pathCount.Add(1)
 }
 
 // This method is called after the path is removed.
