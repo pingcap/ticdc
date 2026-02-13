@@ -85,8 +85,9 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 
 	// Step 2: prepare the dmls for each group
 	var (
-		queryList []string
-		argsList  [][]interface{}
+		queryList    []string
+		argsList     [][]interface{}
+		rowTypesList []common.RowType
 	)
 	for _, sortedEventGroups := range eventsGroupSortedByUpdateTs {
 		for _, eventsInGroup := range sortedEventGroups {
@@ -95,13 +96,14 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 				queryList, argsList = w.genActiveActiveSQL(tableInfo, eventsInGroup)
 			} else {
 				if !w.shouldGenBatchSQL(tableInfo.HasPKOrNotNullUK, tableInfo.HasVirtualColumns(), eventsInGroup) {
-					queryList, argsList = w.generateNormalSQLs(eventsInGroup)
+					queryList, argsList, rowTypesList = w.generateNormalSQLs(eventsInGroup)
 				} else {
-					queryList, argsList = w.generateBatchSQL(eventsInGroup)
+					queryList, argsList, rowTypesList = w.generateBatchSQL(eventsInGroup)
 				}
 			}
 			dmls.sqls = append(dmls.sqls, queryList...)
 			dmls.values = append(dmls.values, argsList...)
+			dmls.rowTypes = append(dmls.rowTypes, rowTypesList...)
 		}
 	}
 	// Pre-check log level to avoid dmls.String() being called unnecessarily
