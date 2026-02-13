@@ -14,7 +14,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build CGO_LDFLAGS="-lsasl2" make k
 FROM alpine:3.15
 
 # `libsasl` is required at runtime because the vendored `librdkafka` archive is linked with `-lsasl2`.
-RUN apk update && apk add tzdata curl libsasl
+RUN apk add --no-cache tzdata curl libsasl
 
 ENV TZ=Asia/Shanghai
 
