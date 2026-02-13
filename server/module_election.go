@@ -141,26 +141,7 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 			time.Minute,
 		)
 		e.svr.setCoordinator(co)
-		leaderCtx, leaderCancel := context.WithCancel(ctx)
-		go func() {
-			ticker := time.NewTicker(200 * time.Millisecond)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-leaderCtx.Done():
-					return
-				case <-ticker.C:
-					if e.svr.liveness.Load() == api.LivenessCaptureStopping {
-						log.Info("node is stopping, cancel coordinator to trigger resign",
-							zap.String("nodeID", nodeID))
-						leaderCancel()
-						return
-					}
-				}
-			}
-		}()
-		err = co.Run(leaderCtx)
-		leaderCancel()
+		err = co.Run(ctx)
 		// When coordinator exits, we need to stop it.
 		e.svr.coordinator.Stop()
 		e.svr.setCoordinator(nil)
@@ -263,29 +244,8 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 		// FIXME: get log coordinator version from etcd and add it to log
 		log.Info("campaign log coordinator successfully", zap.String("nodeID", nodeID))
 
-		leaderCtx, leaderCancel := context.WithCancel(ctx)
-		go func() {
-			ticker := time.NewTicker(200 * time.Millisecond)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-leaderCtx.Done():
-					return
-				case <-ticker.C:
-					if e.svr.liveness.Load() == api.LivenessCaptureStopping {
-						log.Info("node is stopping, resign log coordinator actively",
-							zap.String("nodeID", nodeID))
-						_ = e.resignLogCoordinator()
-						leaderCancel()
-						return
-					}
-				}
-			}
-		}()
-
 		co := logcoordinator.New()
-		err = co.Run(leaderCtx)
-		leaderCancel()
+		err = co.Run(ctx)
 
 		if err != nil && !errors.Is(err, context.Canceled) {
 			if !errors.ErrNotOwner.Equal(err) {

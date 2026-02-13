@@ -165,7 +165,7 @@ func NewController(
 		pdClock:            appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		nodeLivenessView:   nodeLivenessView,
 	}
-	c.drainController = drain.NewController(c.messageCenter, nodeLivenessView, time.Second)
+	c.drainController = drain.NewController(c.messageCenter, nodeLivenessView)
 	c.nodeChanged.changed = false
 
 	c.bootstrapper = bootstrap.NewBootstrapper[heartbeatpb.CoordinatorBootstrapResponse](
@@ -280,8 +280,7 @@ func (c *Controller) onPeriodTask() {
 		_ = c.messageCenter.SendCommand(req)
 	}
 
-	now := time.Now()
-	c.drainController.Tick(now, func(id node.ID) bool {
+	c.drainController.AdvanceLiveness(func(id node.ID) bool {
 		return len(c.changefeedDB.GetByNodeID(id)) == 0 && c.operatorController.CountOperatorsInvolvingNode(id) == 0
 	})
 }
@@ -851,35 +850,57 @@ func (c *Controller) DrainNode(_ context.Context, target node.ID) (int, error) {
 		return 0, errors.ErrCaptureNotExist.GenWithStackByArgs(target)
 	}
 
-	now := time.Now()
-	c.drainController.RequestDrain(target, now)
+	c.drainController.RequestDrain(target)
 
 	maintainersOnTarget := len(c.changefeedDB.GetByNodeID(target))
 	inflightOpsInvolvingTarget := c.operatorController.CountOperatorsInvolvingNode(target)
-	remaining := maintainersOnTarget
-	if remaining < inflightOpsInvolvingTarget {
-		remaining = inflightOpsInvolvingTarget
-	}
+	remaining := drainRemainingEstimate(maintainersOnTarget, inflightOpsInvolvingTarget)
 
 	_, drainingObserved, stoppingObserved := c.drainController.GetStatus(target)
-	nodeState := c.nodeLivenessView.GetState(target, now)
+	nodeState := c.nodeLivenessView.GetState(target)
 
-	// v1 drain API must not return 0 until drain completion is proven.
-	if nodeState == nodeliveness.StateUnknown || !drainingObserved {
-		if remaining == 0 {
-			remaining = 1
-		}
-		return remaining, nil
-	}
-
-	// Return 0 only after STOPPING is observed and all work is done.
-	if stoppingObserved && maintainersOnTarget == 0 && inflightOpsInvolvingTarget == 0 {
+	// drain API must not return 0 until drain completion is proven.
+	if isDrainCompletionProven(
+		nodeState,
+		drainingObserved,
+		stoppingObserved,
+		maintainersOnTarget,
+		inflightOpsInvolvingTarget,
+	) {
 		return 0, nil
 	}
-	if remaining == 0 {
-		remaining = 1
+	return ensureDrainRemainingNonZero(remaining), nil
+}
+
+// isDrainCompletionProven checks whether drain completion can be safely concluded.
+// Returning true is intentionally strict because v1 drain API must avoid premature zero remaining.
+func isDrainCompletionProven(
+	nodeState nodeliveness.State,
+	drainingObserved bool,
+	stoppingObserved bool,
+	maintainersOnTarget int,
+	inflightOpsInvolvingTarget int,
+) bool {
+	if nodeState == nodeliveness.StateUnknown || !drainingObserved {
+		return false
 	}
-	return remaining, nil
+	return stoppingObserved && maintainersOnTarget == 0 && inflightOpsInvolvingTarget == 0
+}
+
+// drainRemainingEstimate uses the larger workload dimension to avoid obvious double counting.
+func drainRemainingEstimate(maintainersOnTarget int, inflightOpsInvolvingTarget int) int {
+	if maintainersOnTarget < inflightOpsInvolvingTarget {
+		return inflightOpsInvolvingTarget
+	}
+	return maintainersOnTarget
+}
+
+// ensureDrainRemainingNonZero keeps v1 compatibility before completion is proven.
+func ensureDrainRemainingNonZero(remaining int) int {
+	if remaining == 0 {
+		return 1
+	}
+	return remaining
 }
 
 // getChangefeed returns the changefeed by id, return nil if not found

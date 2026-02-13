@@ -12,22 +12,27 @@ import (
 func TestViewUnknownAfterTTL(t *testing.T) {
 	v := NewView(30 * time.Second)
 	id := node.ID("n1")
-	now := time.Unix(0, 0)
 
 	// Never observed nodes should never become unknown.
-	require.Equal(t, StateAlive, v.GetState(id, now.Add(10*time.Minute)))
+	require.Equal(t, StateAlive, v.GetState(id))
+
+	now := time.Now()
+	v.ObserveHeartbeat(id, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 1,
+	}, now.Add(-5*time.Second))
+	require.Equal(t, StateAlive, v.GetState(id))
 
 	v.ObserveHeartbeat(id, &heartbeatpb.NodeHeartbeat{
 		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
 		NodeEpoch: 1,
-	}, now)
-	require.Equal(t, StateAlive, v.GetState(id, now.Add(29*time.Second)))
-	require.Equal(t, StateUnknown, v.GetState(id, now.Add(31*time.Second)))
+	}, now.Add(-35*time.Second))
+	require.Equal(t, StateUnknown, v.GetState(id))
 }
 
 func TestViewDestinationEligibility(t *testing.T) {
 	v := NewView(30 * time.Second)
-	now := time.Unix(0, 0)
+	now := time.Now()
 
 	alive := node.ID("alive")
 	draining := node.ID("draining")
@@ -42,9 +47,9 @@ func TestViewDestinationEligibility(t *testing.T) {
 		NodeEpoch: 1,
 	}, now)
 
-	require.True(t, v.IsSchedulableDest(alive, now))
-	require.False(t, v.IsSchedulableDest(draining, now))
-	require.False(t, v.IsSchedulableDest(stopping, now))
+	require.True(t, v.IsSchedulableDest(alive))
+	require.False(t, v.IsSchedulableDest(draining))
+	require.False(t, v.IsSchedulableDest(stopping))
 }
 
 func TestViewGetNodeEpoch(t *testing.T) {

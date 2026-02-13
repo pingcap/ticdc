@@ -161,6 +161,8 @@ func New(conf *config.ServerConfig, pdEndpoints []string) (tiserver.Server, erro
 		pdEndpoints: pdEndpoints,
 		tcpServer:   tcpServer,
 		security:    conf.Security,
+		// Initialize liveness explicitly to make the default node state obvious.
+		liveness:    api.LivenessCaptureAlive,
 		preServices: make([]common.Closeable, 0),
 	}
 	return s, nil

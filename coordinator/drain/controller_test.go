@@ -14,7 +14,7 @@ import (
 func TestDrainControllerResendAndPromoteToStopping(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
 	view := nodeliveness.NewView(30 * time.Second)
-	c := NewController(mc, view, time.Second)
+	c := NewController(mc, view)
 
 	target := node.ID("n1")
 	now := time.Now()
@@ -23,7 +23,7 @@ func TestDrainControllerResendAndPromoteToStopping(t *testing.T) {
 		NodeEpoch: 42,
 	}, now)
 
-	c.RequestDrain(target, now)
+	c.RequestDrain(target)
 	msg := <-mc.GetMessageChannel()
 	require.Equal(t, messaging.TypeSetNodeLivenessRequest, msg.Type)
 	require.Equal(t, messaging.MaintainerManagerTopic, msg.Topic)
@@ -33,14 +33,18 @@ func TestDrainControllerResendAndPromoteToStopping(t *testing.T) {
 	require.Equal(t, uint64(42), req.NodeEpoch)
 
 	// Before draining observed, it should retry after the resend interval.
-	c.Tick(now.Add(500*time.Millisecond), nil)
+	c.AdvanceLiveness(nil)
 	select {
 	case <-mc.GetMessageChannel():
 		require.FailNow(t, "unexpected command before resend interval")
 	default:
 	}
 
-	c.Tick(now.Add(time.Second+10*time.Millisecond), nil)
+	// Rewind the last send time to cross resendInterval without sleep.
+	c.mu.Lock()
+	c.ensureNodeStateLocked(target).lastDrainCmdSentAt = time.Now().Add(-resendInterval - 10*time.Millisecond)
+	c.mu.Unlock()
+	c.AdvanceLiveness(nil)
 	msg = <-mc.GetMessageChannel()
 	req = msg.Message[0].(*heartbeatpb.SetNodeLivenessRequest)
 	require.Equal(t, heartbeatpb.NodeLiveness_DRAINING, req.Target)
@@ -51,7 +55,7 @@ func TestDrainControllerResendAndPromoteToStopping(t *testing.T) {
 	})
 
 	// Once readyToStop, it should send STOPPING.
-	c.Tick(now.Add(2*time.Second), func(node.ID) bool { return true })
+	c.AdvanceLiveness(func(node.ID) bool { return true })
 	msg = <-mc.GetMessageChannel()
 	req = msg.Message[0].(*heartbeatpb.SetNodeLivenessRequest)
 	require.Equal(t, heartbeatpb.NodeLiveness_STOPPING, req.Target)

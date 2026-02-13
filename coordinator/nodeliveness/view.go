@@ -34,6 +34,7 @@ func (s State) String() string {
 	}
 }
 
+// record stores the latest liveness observation of a node.
 type record struct {
 	lastSeen  time.Time
 	nodeEpoch uint64
@@ -95,11 +96,12 @@ func (v *View) GetNodeEpoch(nodeID node.ID) (uint64, bool) {
 	return r.nodeEpoch, true
 }
 
-func (v *View) GetState(nodeID node.ID, now time.Time) State {
+func (v *View) GetState(nodeID node.ID) State {
 	v.mu.RLock()
 	r, ok := v.nodes[nodeID]
 	v.mu.RUnlock()
 
+	now := time.Now()
 	if !ok {
 		// Never observed: keep compatibility during rollout.
 		return StateAlive
@@ -120,8 +122,8 @@ func (v *View) GetState(nodeID node.ID, now time.Time) State {
 }
 
 // IsSchedulableDest returns true only when the node is eligible as a scheduling destination.
-func (v *View) IsSchedulableDest(nodeID node.ID, now time.Time) bool {
-	return v.GetState(nodeID, now) == StateAlive
+func (v *View) IsSchedulableDest(nodeID node.ID) bool {
+	return v.GetState(nodeID) == StateAlive
 }
 
 func (v *View) GetDrainingOrStoppingNodes(now time.Time) []node.ID {

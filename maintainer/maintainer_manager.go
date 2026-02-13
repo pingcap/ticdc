@@ -62,25 +62,21 @@ type Manager struct {
 }
 
 // NewMaintainerManager create a changefeed maintainer manager instance
-// and register message handler to message center
+// and register message handler to message center.
+//
+// liveness must not be nil because it is shared with the server-wide node
+// liveness state for scheduling and election decisions.
 func NewMaintainerManager(
 	nodeInfo *node.Info,
 	conf *config.SchedulerConfig,
 	liveness *api.Liveness,
 ) *Manager {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
-	if liveness == nil {
-		liveness = new(api.Liveness)
-	}
-	nodeEpoch := uint64(time.Now().UnixNano())
-	if nodeEpoch == 0 {
-		nodeEpoch = 1
-	}
 	m := &Manager{
 		mc:            mc,
 		conf:          conf,
 		liveness:      liveness,
-		nodeEpoch:     nodeEpoch,
+		nodeEpoch:     newNodeEpoch(),
 		maintainers:   sync.Map{},
 		nodeInfo:      nodeInfo,
 		msgCh:         make(chan *messaging.TargetMessage, 1024),
@@ -94,6 +90,16 @@ func NewMaintainerManager(
 			return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 		})
 	return m
+}
+
+// newNodeEpoch creates a non-zero epoch for this process lifetime.
+// Zero is reserved as "unknown epoch" in coordinator requests before any observation.
+func newNodeEpoch() uint64 {
+	nodeEpoch := uint64(time.Now().UnixNano())
+	if nodeEpoch == 0 {
+		return 1
+	}
+	return nodeEpoch
 }
 
 // recvMessages is the message handler for maintainer manager

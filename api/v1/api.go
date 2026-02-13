@@ -192,11 +192,22 @@ func (o *OpenAPIV1) rebalanceTables(c *gin.Context) {
 // drainCapture drains all tables from a capture.
 // Usage:
 // curl -X PUT http://127.0.0.1:8300/api/v1/captures/drain
-// TODO: Implement this API in the future, currently it is a no-op.
 func (o *OpenAPIV1) drainCapture(c *gin.Context) {
 	var req drainCaptureRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.Wrap(err))
+		return
+	}
+
+	target := node.ID(req.CaptureID)
+	self, err := o.server.SelfInfo()
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+	// For compatibility with old arch TiCDC, draining the current owner is not allowed.
+	if target == self.ID {
+		_ = c.Error(errors.ErrSchedulerRequestFailed.GenWithStackByArgs("cannot drain the owner"))
 		return
 	}
 
@@ -206,7 +217,6 @@ func (o *OpenAPIV1) drainCapture(c *gin.Context) {
 		return
 	}
 
-	target := node.ID(req.CaptureID)
 	remaining, err := co.DrainNode(c.Request.Context(), target)
 	if err != nil {
 		_ = c.Error(err)

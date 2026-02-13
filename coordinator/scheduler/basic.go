@@ -80,10 +80,9 @@ func (s *basicScheduler) doBasicSchedule(availableSize int) {
 	// add the absent node to the node size map
 	nodeIDs := s.nodeManager.GetAliveNodeIDs()
 	if s.livenessView != nil {
-		now := time.Now()
 		dst := nodeIDs[:0]
 		for _, nodeID := range nodeIDs {
-			if s.livenessView.IsSchedulableDest(nodeID, now) {
+			if s.livenessView.IsSchedulableDest(nodeID) {
 				dst = append(dst, nodeID)
 			}
 		}

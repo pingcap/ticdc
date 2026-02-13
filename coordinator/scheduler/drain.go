@@ -26,9 +26,11 @@ type drainScheduler struct {
 	nodeManager        *watcher.NodeManager
 	livenessView       *nodeliveness.View
 
+	// rrCursor rotates the starting draining node to avoid starving nodes later in the list.
 	rrCursor int
 }
 
+// NewDrainScheduler creates a scheduler that migrates maintainers away from draining nodes.
 func NewDrainScheduler(
 	id string,
 	batchSize int,
@@ -46,6 +48,8 @@ func NewDrainScheduler(
 	}
 }
 
+// Execute schedules move operators from draining nodes to schedulable destination nodes.
+// It limits scheduling by available operator slots and returns the next run time.
 func (s *drainScheduler) Execute() time.Time {
 	availableSize := s.batchSize - s.operatorController.OperatorSize()
 	if availableSize <= 0 {
@@ -66,7 +70,7 @@ func (s *drainScheduler) Execute() time.Time {
 	destCandidates := s.nodeManager.GetAliveNodeIDs()
 	dst := destCandidates[:0]
 	for _, id := range destCandidates {
-		if s.livenessView.IsSchedulableDest(id, now) {
+		if s.livenessView.IsSchedulableDest(id) {
 			dst = append(dst, id)
 		}
 	}
@@ -111,6 +115,8 @@ func (s *drainScheduler) Execute() time.Time {
 	return now.Add(time.Millisecond * 200)
 }
 
+// scheduleOneFromNode tries to schedule one maintainer move from origin.
+// It skips changefeeds that already have in-flight operators.
 func (s *drainScheduler) scheduleOneFromNode(
 	origin node.ID,
 	destCandidates []node.ID,
@@ -137,6 +143,7 @@ func (s *drainScheduler) scheduleOneFromNode(
 	return false
 }
 
+// chooseLeastLoadedDest selects the destination with the smallest task count, excluding origin.
 func chooseLeastLoadedDest(
 	origin node.ID,
 	destCandidates []node.ID,
@@ -160,6 +167,7 @@ func chooseLeastLoadedDest(
 	return chosen, true
 }
 
+// Name returns the scheduler name used by scheduler controller and logs.
 func (s *drainScheduler) Name() string {
 	return "drain-scheduler"
 }

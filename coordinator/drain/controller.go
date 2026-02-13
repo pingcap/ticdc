@@ -12,13 +12,20 @@ import (
 	"go.uber.org/zap"
 )
 
+const resendInterval = time.Second
+
 type nodeState struct {
-	drainRequested   bool
+	// drainRequested indicates this node has entered the drain workflow.
+	drainRequested bool
+	// drainingObserved indicates the node has reported DRAINING.
 	drainingObserved bool
+	// stoppingObserved indicates the node has reported STOPPING.
 	stoppingObserved bool
 
+	// lastDrainCmdSentAt is the last send time of a DRAINING command for resend throttling.
 	lastDrainCmdSentAt time.Time
-	lastStopCmdSentAt  time.Time
+	// lastStopCmdSentAt is the last send time of a STOPPING command for resend throttling.
+	lastStopCmdSentAt time.Time
 }
 
 // Controller manages node drain progression by sending SetNodeLiveness commands and tracking observations.
@@ -29,26 +36,26 @@ type nodeState struct {
 type Controller struct {
 	mu sync.Mutex
 
-	mc             messaging.MessageCenter
-	livenessView   *nodeliveness.View
-	resendInterval time.Duration
+	mc           messaging.MessageCenter
+	livenessView *nodeliveness.View
 
 	nodes map[node.ID]*nodeState
 }
 
+// NewController creates a drain controller with in-memory state only.
 func NewController(
 	mc messaging.MessageCenter,
 	livenessView *nodeliveness.View,
-	resendInterval time.Duration,
 ) *Controller {
 	return &Controller{
-		mc:             mc,
-		livenessView:   livenessView,
-		resendInterval: resendInterval,
-		nodes:          make(map[node.ID]*nodeState),
+		mc:           mc,
+		livenessView: livenessView,
+		nodes:        make(map[node.ID]*nodeState),
 	}
 }
 
+// ensureNodeStateLocked returns existing node state or creates one.
+// Caller must hold c.mu.
 func (c *Controller) ensureNodeStateLocked(nodeID node.ID) *nodeState {
 	st, ok := c.nodes[nodeID]
 	if !ok {
@@ -58,40 +65,45 @@ func (c *Controller) ensureNodeStateLocked(nodeID node.ID) *nodeState {
 	return st
 }
 
-func (c *Controller) RequestDrain(nodeID node.ID, now time.Time) {
+// RequestDrain marks a node as drain requested and tries to send DRAINING immediately.
+func (c *Controller) RequestDrain(nodeID node.ID) {
 	c.mu.Lock()
 	st := c.ensureNodeStateLocked(nodeID)
 	st.drainRequested = true
 	c.mu.Unlock()
 
-	c.maybeSendDrainCommand(nodeID, now)
+	c.trySendDrainCommand(nodeID)
 }
 
+// ObserveHeartbeat updates drain progression from node heartbeat liveness.
 func (c *Controller) ObserveHeartbeat(nodeID node.ID, hb *heartbeatpb.NodeHeartbeat) {
 	if hb == nil {
 		return
 	}
-	c.mu.Lock()
-	st := c.ensureNodeStateLocked(nodeID)
-	switch hb.Liveness {
-	case heartbeatpb.NodeLiveness_DRAINING:
-		st.drainRequested = true
-		st.drainingObserved = true
-	case heartbeatpb.NodeLiveness_STOPPING:
-		st.drainRequested = true
-		st.drainingObserved = true
-		st.stoppingObserved = true
-	}
-	c.mu.Unlock()
+
+	c.observeLiveness(nodeID, hb.Liveness)
 }
 
+// ObserveSetNodeLivenessResponse updates drain progression from explicit liveness responses.
 func (c *Controller) ObserveSetNodeLivenessResponse(nodeID node.ID, resp *heartbeatpb.SetNodeLivenessResponse) {
 	if resp == nil {
 		return
 	}
+
+	c.observeLiveness(nodeID, resp.Applied)
+}
+
+// observeLiveness applies an observed node-reported liveness to the drain state.
+func (c *Controller) observeLiveness(nodeID node.ID, liveness heartbeatpb.NodeLiveness) {
 	c.mu.Lock()
 	st := c.ensureNodeStateLocked(nodeID)
-	switch resp.Applied {
+	applyObservedLiveness(st, liveness)
+	c.mu.Unlock()
+}
+
+// applyObservedLiveness applies monotonic progression from observed node liveness.
+func applyObservedLiveness(st *nodeState, liveness heartbeatpb.NodeLiveness) {
+	switch liveness {
 	case heartbeatpb.NodeLiveness_DRAINING:
 		st.drainRequested = true
 		st.drainingObserved = true
@@ -100,9 +112,9 @@ func (c *Controller) ObserveSetNodeLivenessResponse(nodeID node.ID, resp *heartb
 		st.drainingObserved = true
 		st.stoppingObserved = true
 	}
-	c.mu.Unlock()
 }
 
+// GetStatus returns the current drain workflow state for a node.
 func (c *Controller) GetStatus(nodeID node.ID) (drainRequested, drainingObserved, stoppingObserved bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -114,18 +126,11 @@ func (c *Controller) GetStatus(nodeID node.ID) (drainRequested, drainingObserved
 	return st.drainRequested, st.drainingObserved, st.stoppingObserved
 }
 
-// Tick drives liveness commands:
+// AdvanceLiveness advances liveness commands:
 // - Request DRAINING until observed
 // - Once readyToStop and DRAINING observed, request STOPPING until observed
-func (c *Controller) Tick(now time.Time, readyToStop func(node.ID) bool) {
-	c.mu.Lock()
-	nodeIDs := make([]node.ID, 0, len(c.nodes))
-	for id, st := range c.nodes {
-		if st.drainRequested {
-			nodeIDs = append(nodeIDs, id)
-		}
-	}
-	c.mu.Unlock()
+func (c *Controller) AdvanceLiveness(readyToStop func(node.ID) bool) {
+	nodeIDs := c.listDrainRequestedNodeIDs()
 
 	for _, nodeID := range nodeIDs {
 		drainRequested, drainingObserved, stoppingObserved := c.GetStatus(nodeID)
@@ -134,50 +139,75 @@ func (c *Controller) Tick(now time.Time, readyToStop func(node.ID) bool) {
 		}
 
 		if !drainingObserved {
-			c.maybeSendDrainCommand(nodeID, now)
+			c.trySendDrainCommand(nodeID)
 			continue
 		}
 
 		if !stoppingObserved && readyToStop != nil && readyToStop(nodeID) {
-			c.maybeSendStopCommand(nodeID, now)
+			c.trySendStopCommand(nodeID)
 		}
 	}
 }
 
-func (c *Controller) maybeSendDrainCommand(nodeID node.ID, now time.Time) {
+// listDrainRequestedNodeIDs snapshots nodes that are already in drain workflow.
+func (c *Controller) listDrainRequestedNodeIDs() []node.ID {
 	c.mu.Lock()
-	st := c.ensureNodeStateLocked(nodeID)
-	if st.drainingObserved {
-		c.mu.Unlock()
-		return
-	}
-	if !st.lastDrainCmdSentAt.IsZero() && now.Sub(st.lastDrainCmdSentAt) < c.resendInterval {
-		c.mu.Unlock()
-		return
-	}
-	st.lastDrainCmdSentAt = now
-	c.mu.Unlock()
+	defer c.mu.Unlock()
 
+	nodeIDs := make([]node.ID, 0, len(c.nodes))
+	for id, st := range c.nodes {
+		if st.drainRequested {
+			nodeIDs = append(nodeIDs, id)
+		}
+	}
+	return nodeIDs
+}
+
+// trySendDrainCommand sends DRAINING when it is not yet observed and resend is not throttled.
+func (c *Controller) trySendDrainCommand(nodeID node.ID) {
+	if !c.checkAndMarkCommandSend(nodeID, heartbeatpb.NodeLiveness_DRAINING) {
+		return
+	}
 	c.sendSetNodeLiveness(nodeID, heartbeatpb.NodeLiveness_DRAINING)
 }
 
-func (c *Controller) maybeSendStopCommand(nodeID node.ID, now time.Time) {
-	c.mu.Lock()
-	st := c.ensureNodeStateLocked(nodeID)
-	if st.stoppingObserved {
-		c.mu.Unlock()
+// trySendStopCommand sends STOPPING when it is not yet observed and resend is not throttled.
+func (c *Controller) trySendStopCommand(nodeID node.ID) {
+	if !c.checkAndMarkCommandSend(nodeID, heartbeatpb.NodeLiveness_STOPPING) {
 		return
 	}
-	if !st.lastStopCmdSentAt.IsZero() && now.Sub(st.lastStopCmdSentAt) < c.resendInterval {
-		c.mu.Unlock()
-		return
-	}
-	st.lastStopCmdSentAt = now
-	c.mu.Unlock()
-
 	c.sendSetNodeLiveness(nodeID, heartbeatpb.NodeLiveness_STOPPING)
 }
 
+// checkAndMarkCommandSend checks observed/throttle conditions and records command send time.
+func (c *Controller) checkAndMarkCommandSend(nodeID node.ID, target heartbeatpb.NodeLiveness) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	st := c.ensureNodeStateLocked(nodeID)
+	switch target {
+	case heartbeatpb.NodeLiveness_DRAINING:
+		if st.drainingObserved || isResendThrottled(st.lastDrainCmdSentAt) {
+			return false
+		}
+		st.lastDrainCmdSentAt = time.Now()
+	case heartbeatpb.NodeLiveness_STOPPING:
+		if st.stoppingObserved || isResendThrottled(st.lastStopCmdSentAt) {
+			return false
+		}
+		st.lastStopCmdSentAt = time.Now()
+	default:
+		return false
+	}
+	return true
+}
+
+// isResendThrottled returns whether a resend should be skipped in the current interval.
+func isResendThrottled(lastSentAt time.Time) bool {
+	return !lastSentAt.IsZero() && time.Since(lastSentAt) < resendInterval
+}
+
+// sendSetNodeLiveness sends a liveness command to the target maintainer manager.
 func (c *Controller) sendSetNodeLiveness(nodeID node.ID, target heartbeatpb.NodeLiveness) {
 	var epoch uint64
 	if c.livenessView != nil {

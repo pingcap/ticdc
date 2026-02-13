@@ -145,11 +145,18 @@ message MaintainerStatus {
     uint64 lastSyncedTs = 7;  // last synced ts of all tables in the changefeed, used in /:changefeed_id/synced API
 }
 
-// NodeLiveness is a node-scoped lifecycle state reported by the node itself.
+// NodeLiveness is node-reported liveness.
+// Coordinator uses it for destination filtering and safe rolling-restart handoff
+// without persisting a separate intent in etcd.
 // It is monotonic and only allows: ALIVE -> DRAINING -> STOPPING.
 enum NodeLiveness {
+    // ALIVE accepts new destination placement, maintainer creation, and leader campaign/service.
     ALIVE = 0;
+    // DRAINING is excluded from destination selection and is being drained.
+    // In-flight operations may still complete, but no new leader campaign is allowed.
     DRAINING = 1;
+    // STOPPING keeps destination exclusion and enforces shutdown safety.
+    // It rejects new maintainer creation, allows cleanup/remove, and must resign if leader.
     STOPPING = 2;
 }
 

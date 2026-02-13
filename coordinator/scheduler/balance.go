@@ -84,7 +84,7 @@ func (s *balanceScheduler) Execute() time.Time {
 	if s.livenessView != nil {
 		filtered := make(map[node.ID]*node.Info, len(activeNodes))
 		for id, info := range activeNodes {
-			if s.livenessView.IsSchedulableDest(id, now) {
+			if s.livenessView.IsSchedulableDest(id) {
 				filtered[id] = info
 			}
 		}

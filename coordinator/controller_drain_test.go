@@ -27,7 +27,7 @@ func newDrainTestController(t *testing.T) (*Controller, *nodeliveness.View, *dra
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 
 	view := nodeliveness.NewView(30 * time.Second)
-	drainController := drain.NewController(mc, view, time.Second)
+	drainController := drain.NewController(mc, view)
 
 	db := changefeed.NewChangefeedDB(1)
 	selfNode := &node.Info{ID: node.ID("coordinator")}
