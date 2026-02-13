@@ -227,10 +227,10 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 		if e.svr.liveness.Load() == api.LivenessCaptureStopping {
 			// If the server is stopping, resign actively.
 			log.Info("resign log coordinator actively, liveness is stopping")
-			if resignErr := e.resign(ctx); resignErr != nil {
+			if resignErr := e.resignLogCoordinator(); resignErr != nil {
 				log.Warn("resign log coordinator actively failed",
 					zap.String("nodeID", nodeID), zap.Error(resignErr))
-				return errors.Trace(err)
+				return nil
 			}
 			return nil
 		}
@@ -280,16 +280,16 @@ func (e *elector) resignLogCoordinator() error {
 	nodeID := string(e.svr.info.ID)
 	// use a new context to prevent the context from being cancelled.
 	resignCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	if resignErr := e.logElection.Resign(resignCtx); resignErr != nil {
 		if errors.Is(errors.Cause(resignErr), context.DeadlineExceeded) {
-			log.Info("log coordinator resign failed",
+			log.Warn("log coordinator resign timeout",
 				zap.String("nodeID", nodeID), zap.Error(resignErr))
-			cancel()
-			return errors.Trace(resignErr)
+			return nil
 		}
-		log.Warn("log coordinator resign timeout",
+		log.Info("log coordinator resign failed",
 			zap.String("nodeID", nodeID), zap.Error(resignErr))
+		return errors.Trace(resignErr)
 	}
-	cancel()
 	return nil
 }
