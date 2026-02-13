@@ -73,7 +73,7 @@ function run() {
 	# run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 	# # make sure all tables are equal in upstream and downstream
 	# check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
-	# cleanup_process $CDC_BINARY
+	cleanup_process $CDC_BINARY
 }
 
 trap 'stop_test $WORK_DIR' EXIT
