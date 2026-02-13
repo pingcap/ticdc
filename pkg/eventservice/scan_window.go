@@ -70,6 +70,16 @@ const (
 	// by 50% when both max and average memory usage are below this level. This
 	// increase may exceed the normal sync point interval cap.
 	memoryUsageVeryLowThreshold = 0.1
+
+	// scanWindowStaleDispatcherHeartbeatThreshold is the duration after which a
+	// dispatcher is treated as stale for scan window base ts calculation if it
+	// hasn't sent heartbeat updates. This prevents stale dispatchers (for example,
+	// after frequent table truncate) from blocking scan window advancement for the
+	// whole changefeed.
+	//
+	// Note: This is intentionally much smaller than heartbeatTimeout, which is
+	// used for actual dispatcher removal.
+	scanWindowStaleDispatcherHeartbeatThreshold = 1 * time.Minute
 )
 
 type memoryUsageSample struct {
@@ -301,21 +311,43 @@ func (c *changefeedStatus) maxScanInterval() time.Duration {
 }
 
 func (c *changefeedStatus) refreshMinSentResolvedTs() {
+	now := time.Now()
 	minSentResolvedTs := ^uint64(0)
+	minSentResolvedTsWithStale := ^uint64(0)
+	hasEligible := false
+	hasNonStale := false
 	c.dispatchers.Range(func(_ any, value any) bool {
 		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
 		if dispatcher == nil || dispatcher.isRemoved.Load() || dispatcher.seq.Load() == 0 {
 			return true
 		}
+
+		hasEligible = true
 		sentResolvedTs := dispatcher.sentResolvedTs.Load()
+		if sentResolvedTs < minSentResolvedTsWithStale {
+			minSentResolvedTsWithStale = sentResolvedTs
+		}
+
+		lastHeartbeatTime := dispatcher.lastReceivedHeartbeatTime.Load()
+		if lastHeartbeatTime > 0 &&
+			now.Sub(time.Unix(lastHeartbeatTime, 0)) > scanWindowStaleDispatcherHeartbeatThreshold {
+			log.Info("dispatcher is stale, skip it's sent resolved ts", zap.Stringer("changefeedID", c.changefeedID), zap.Stringer("dispatcherID", dispatcher.id))
+			return true
+		}
+
+		hasNonStale = true
 		if sentResolvedTs < minSentResolvedTs {
 			minSentResolvedTs = sentResolvedTs
 		}
 		return true
 	})
 
-	if minSentResolvedTs == ^uint64(0) {
+	if !hasEligible {
 		c.storeMinSentTs(0)
+		return
+	}
+	if !hasNonStale {
+		c.storeMinSentTs(minSentResolvedTsWithStale)
 		return
 	}
 	c.storeMinSentTs(minSentResolvedTs)

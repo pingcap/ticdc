@@ -147,6 +147,11 @@ func TestRefreshMinSentResolvedTsMinAndSkipRules(t *testing.T) {
 
 	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"))
 
+	stale := &dispatcherStat{}
+	stale.seq.Store(1)
+	stale.sentResolvedTs.Store(10)
+	stale.lastReceivedHeartbeatTime.Store(time.Now().Add(-scanWindowStaleDispatcherHeartbeatThreshold - time.Second).Unix())
+
 	removed := &dispatcherStat{}
 	removed.seq.Store(1)
 	removed.sentResolvedTs.Store(150)
@@ -163,6 +168,10 @@ func TestRefreshMinSentResolvedTsMinAndSkipRules(t *testing.T) {
 	second := &dispatcherStat{}
 	second.seq.Store(1)
 	second.sentResolvedTs.Store(50)
+
+	stalePtr := &atomic.Pointer[dispatcherStat]{}
+	stalePtr.Store(stale)
+	status.addDispatcher(common.NewDispatcherID(), stalePtr)
 
 	removedPtr := &atomic.Pointer[dispatcherStat]{}
 	removedPtr.Store(removed)
@@ -187,9 +196,28 @@ func TestRefreshMinSentResolvedTsMinAndSkipRules(t *testing.T) {
 	status.refreshMinSentResolvedTs()
 	require.Equal(t, uint64(200), status.minSentTs.Load())
 
+	stale.isRemoved.Store(true)
 	first.seq.Store(0)
 	status.refreshMinSentResolvedTs()
 	require.Equal(t, uint64(0), status.minSentTs.Load())
+}
+
+func TestRefreshMinSentResolvedTsStaleFallback(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"))
+
+	stale := &dispatcherStat{}
+	stale.seq.Store(1)
+	stale.sentResolvedTs.Store(123)
+	stale.lastReceivedHeartbeatTime.Store(time.Now().Add(-scanWindowStaleDispatcherHeartbeatThreshold - time.Second).Unix())
+
+	stalePtr := &atomic.Pointer[dispatcherStat]{}
+	stalePtr.Store(stale)
+	status.addDispatcher(common.NewDispatcherID(), stalePtr)
+
+	status.refreshMinSentResolvedTs()
+	require.Equal(t, uint64(123), status.minSentTs.Load())
 }
 
 func TestGetScanMaxTsFallbackInterval(t *testing.T) {
