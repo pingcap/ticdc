@@ -125,6 +125,71 @@ func TestRequestCacheAdd_ContextCancellation(t *testing.T) {
 	require.Equal(t, context.Canceled, err)
 }
 
+func TestRequestCacheAdd_StopTableTaskMustSucceed(t *testing.T) {
+	cache := newRequestCache(1)
+	ctx := context.Background()
+
+	// Fill the cache to make the channel full.
+	region1 := createTestRegionInfo(1, 1)
+	ok, err := cache.add(ctx, region1, false)
+	require.True(t, ok)
+	require.NoError(t, err)
+
+	stopTask := regionInfo{subscribedSpan: region1.subscribedSpan}
+
+	ctx2, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	done := make(chan struct{})
+	var addOK bool
+	var addErr error
+	go func() {
+		addOK, addErr = cache.add(ctx2, stopTask, true)
+		close(done)
+	}()
+
+	// The stop-table task should block (not fail fast) while the channel is full.
+	select {
+	case <-done:
+		t.Fatal("stop-table task should not fail fast when the channel is full")
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	// Make space and ensure it can be added.
+	_, err = cache.pop(ctx)
+	require.NoError(t, err)
+
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("stop-table task should be added after space becomes available")
+	}
+	require.True(t, addOK)
+	require.NoError(t, addErr)
+
+	req, err := cache.pop(ctx)
+	require.NoError(t, err)
+	require.True(t, req.regionInfo.isStopTableTask())
+}
+
+func TestRequestCacheFinishPoppedNotSent(t *testing.T) {
+	cache := newRequestCache(10)
+	ctx := context.Background()
+
+	region := createTestRegionInfo(1, 1)
+	ok, err := cache.add(ctx, region, false)
+	require.True(t, ok)
+	require.NoError(t, err)
+	require.Equal(t, 1, cache.getPendingCount())
+
+	_, err = cache.pop(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, cache.getPendingCount())
+
+	cache.finishPoppedNotSent()
+	require.Equal(t, 0, cache.getPendingCount())
+}
+
 func TestRequestCacheAdd_RetryLimitExceeded(t *testing.T) {
 	cache := newRequestCache(1)
 	ctx := context.Background()

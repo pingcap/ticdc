@@ -88,12 +88,14 @@ func newRequestCache(maxPendingCount int) *requestCache {
 }
 
 // add adds a new region request to the cache
-// It blocks if pendingCount >= maxPendingCount until there's space or ctx is cancelled
+// It returns (false, nil) when it fails to add within a short retry window so that the caller
+// can reschedule the request (used by non-stop region requests).
 func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) (bool, error) {
 	start := time.Now()
 	ticker := time.NewTicker(addReqRetryInterval)
 	defer ticker.Stop()
-	addReqRetryLimit := addReqRetryLimit
+	retryRemaining := addReqRetryLimit
+	mustSucceed := force && region.isStopTableTask()
 
 	for {
 		current := c.pendingCount.Load()
@@ -111,8 +113,11 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) (
 			case <-c.spaceAvailable:
 				continue
 			case <-ticker.C:
-				addReqRetryLimit--
-				if addReqRetryLimit <= 0 {
+				if mustSucceed {
+					continue
+				}
+				retryRemaining--
+				if retryRemaining <= 0 {
 					return false, nil
 				}
 				continue
@@ -122,8 +127,11 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) (
 		// Wait for space to become available
 		select {
 		case <-ticker.C:
-			addReqRetryLimit--
-			if addReqRetryLimit <= 0 {
+			if mustSucceed {
+				continue
+			}
+			retryRemaining--
+			if retryRemaining <= 0 {
 				return false, nil
 			}
 			continue
@@ -132,6 +140,16 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) (
 		case <-ctx.Done():
 			return false, ctx.Err()
 		}
+	}
+}
+
+// finishPoppedNotSent marks a popped request as finished when it won't be tracked by sentRequests.
+// It decrements pendingCount and notifies waiters.
+func (c *requestCache) finishPoppedNotSent() {
+	c.decPendingCount()
+	select {
+	case c.spaceAvailable <- struct{}{}:
+	default:
 	}
 }
 
