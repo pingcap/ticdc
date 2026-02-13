@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/config"
@@ -27,22 +28,46 @@ import (
 )
 
 type Recorder struct {
-	reportDir     string
-	checkpointDir string
+	reportDir      string
+	checkpointDir  string
+	maxReportFiles int
+
+	// reportFiles caches the sorted list of report file names in reportDir.
+	// Updated in-memory after flush and cleanup to avoid repeated os.ReadDir calls.
+	reportFiles []string
 
 	checkpoint *Checkpoint
 }
 
-func NewRecorder(dataDir string, clusters map[string]config.ClusterConfig) (*Recorder, error) {
+func NewRecorder(dataDir string, clusters map[string]config.ClusterConfig, maxReportFiles int) (*Recorder, error) {
 	if err := os.MkdirAll(filepath.Join(dataDir, "report"), 0755); err != nil {
 		return nil, errors.Trace(err)
 	}
 	if err := os.MkdirAll(filepath.Join(dataDir, "checkpoint"), 0755); err != nil {
 		return nil, errors.Trace(err)
 	}
+	if maxReportFiles <= 0 {
+		maxReportFiles = config.DefaultMaxReportFiles
+	}
+
+	// Read existing report files once at startup
+	entries, err := os.ReadDir(filepath.Join(dataDir, "report"))
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	reportFiles := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			reportFiles = append(reportFiles, entry.Name())
+		}
+	}
+	sort.Strings(reportFiles)
+
 	r := &Recorder{
-		reportDir:     filepath.Join(dataDir, "report"),
-		checkpointDir: filepath.Join(dataDir, "checkpoint"),
+		reportDir:      filepath.Join(dataDir, "report"),
+		checkpointDir:  filepath.Join(dataDir, "checkpoint"),
+		maxReportFiles: maxReportFiles,
+		reportFiles:    reportFiles,
 
 		checkpoint: NewCheckpoint(),
 	}
@@ -71,21 +96,41 @@ func (r *Recorder) GetCheckpoint() *Checkpoint {
 }
 
 func (r *Recorder) initializeCheckpoint() error {
-	_, err := os.Stat(filepath.Join(r.checkpointDir, "checkpoint.json"))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
+	checkpointFile := filepath.Join(r.checkpointDir, "checkpoint.json")
+	bakFile := filepath.Join(r.checkpointDir, "checkpoint.json.bak")
+
+	// If checkpoint.json exists, use it directly.
+	if _, err := os.Stat(checkpointFile); err == nil {
+		data, err := os.ReadFile(checkpointFile)
+		if err != nil {
+			return errors.Trace(err)
 		}
-		return errors.Trace(err)
-	}
-	data, err := os.ReadFile(filepath.Join(r.checkpointDir, "checkpoint.json"))
-	if err != nil {
-		return errors.Trace(err)
-	}
-	if err := json.Unmarshal(data, r.checkpoint); err != nil {
-		return errors.Trace(err)
+		if err := json.Unmarshal(data, r.checkpoint); err != nil {
+			return errors.Trace(err)
+		}
+		return nil
 	}
 
+	// checkpoint.json is missing — try recovering from the backup.
+	// This can happen when the process crashed after rename but before the
+	// new temp file was renamed into place.
+	if _, err := os.Stat(bakFile); err == nil {
+		log.Warn("checkpoint.json not found, recovering from checkpoint.json.bak")
+		data, err := os.ReadFile(bakFile)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		if err := json.Unmarshal(data, r.checkpoint); err != nil {
+			return errors.Trace(err)
+		}
+		// Restore the backup as the primary file
+		if err := os.Rename(bakFile, checkpointFile); err != nil {
+			return errors.Trace(err)
+		}
+		return nil
+	}
+
+	// Neither file exists — fresh start.
 	return nil
 }
 
@@ -102,6 +147,7 @@ func (r *Recorder) RecordTimeWindow(timeWindowData map[string]types.TimeWindowDa
 		if err := r.flushReport(report); err != nil {
 			return errors.Trace(err)
 		}
+		r.cleanupOldReports()
 	}
 	if err := r.flushCheckpoint(report.Round, timeWindowData); err != nil {
 		return errors.Trace(err)
@@ -110,12 +156,15 @@ func (r *Recorder) RecordTimeWindow(timeWindowData map[string]types.TimeWindowDa
 }
 
 func (r *Recorder) flushReport(report *Report) error {
-	filename := filepath.Join(r.reportDir, fmt.Sprintf("report-%d.report", report.Round))
+	reportName := fmt.Sprintf("report-%d.report", report.Round)
+	filename := filepath.Join(r.reportDir, reportName)
 	data := report.MarshalReport()
 	if err := os.WriteFile(filename, []byte(data), 0600); err != nil {
 		return errors.Trace(err)
 	}
-	filename = filepath.Join(r.reportDir, fmt.Sprintf("report-%d.json", report.Round))
+
+	jsonName := fmt.Sprintf("report-%d.json", report.Round)
+	filename = filepath.Join(r.reportDir, jsonName)
 	dataBytes, err := json.Marshal(report)
 	if err != nil {
 		return errors.Trace(err)
@@ -123,18 +172,62 @@ func (r *Recorder) flushReport(report *Report) error {
 	if err := os.WriteFile(filename, dataBytes, 0600); err != nil {
 		return errors.Trace(err)
 	}
+
+	// Append new file names to the cache (they are always the latest, so append at end)
+	r.reportFiles = append(r.reportFiles, reportName, jsonName)
 	return nil
+}
+
+// cleanupOldReports removes the oldest report files from the in-memory cache
+// when the total number exceeds maxReportFiles * 2 (each round produces .report + .json).
+func (r *Recorder) cleanupOldReports() {
+	if len(r.reportFiles) <= r.maxReportFiles*2 {
+		return
+	}
+
+	toDelete := len(r.reportFiles) - r.maxReportFiles*2
+	for i := 0; i < toDelete; i++ {
+		path := filepath.Join(r.reportDir, r.reportFiles[i])
+		if err := os.Remove(path); err != nil {
+			log.Warn("failed to remove old report file",
+				zap.String("path", path),
+				zap.Error(err))
+		} else {
+			log.Info("removed old report file", zap.String("path", path))
+		}
+	}
+	r.reportFiles = r.reportFiles[toDelete:]
 }
 
 func (r *Recorder) flushCheckpoint(round uint64, timeWindowData map[string]types.TimeWindowData) error {
 	r.checkpoint.NewTimeWindowData(round, timeWindowData)
-	filename := filepath.Join(r.checkpointDir, "checkpoint.json")
+
+	checkpointFile := filepath.Join(r.checkpointDir, "checkpoint.json")
+	bakFile := filepath.Join(r.checkpointDir, "checkpoint.json.bak")
+	tempFile := filepath.Join(r.checkpointDir, "checkpoint_temp.json")
+
 	data, err := json.Marshal(r.checkpoint)
 	if err != nil {
 		return errors.Trace(err)
 	}
-	if err := os.WriteFile(filename, data, 0600); err != nil {
+
+	// 1. Write the new content to a temp file first.
+	if err := os.WriteFile(tempFile, data, 0600); err != nil {
 		return errors.Trace(err)
 	}
+
+	// 2. Rename the existing checkpoint to .bak (ignore error if it doesn't exist yet).
+	if err := os.Rename(checkpointFile, bakFile); err != nil && !os.IsNotExist(err) {
+		return errors.Trace(err)
+	}
+
+	// 3. Rename the temp file to be the new checkpoint.
+	if err := os.Rename(tempFile, checkpointFile); err != nil {
+		return errors.Trace(err)
+	}
+
+	// 4. Remove the backup — no longer needed.
+	_ = os.Remove(bakFile)
+
 	return nil
 }

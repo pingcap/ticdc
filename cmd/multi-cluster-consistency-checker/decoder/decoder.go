@@ -84,25 +84,25 @@ type Record struct {
 	ColumnValues map[string]any
 }
 
-func (r *Record) EqualDownstreamRecord(downstreamRecord *Record) bool {
-	if downstreamRecord == nil {
+func (r *Record) EqualReplicatedRecord(replicatedRecord *Record) bool {
+	if replicatedRecord == nil {
 		return false
 	}
-	if r.CommitTs != downstreamRecord.OriginTs {
+	if r.CommitTs != replicatedRecord.OriginTs {
 		return false
 	}
-	if r.Pk != downstreamRecord.Pk {
+	if r.Pk != replicatedRecord.Pk {
 		return false
 	}
-	if len(r.ColumnValues) != len(downstreamRecord.ColumnValues) {
+	if len(r.ColumnValues) != len(replicatedRecord.ColumnValues) {
 		return false
 	}
 	for columnName, columnValue := range r.ColumnValues {
-		downstreamColumnValue, ok := downstreamRecord.ColumnValues[columnName]
+		replicatedColumnValue, ok := replicatedRecord.ColumnValues[columnName]
 		if !ok {
 			return false
 		}
-		if columnValue != downstreamColumnValue {
+		if columnValue != replicatedColumnValue {
 			return false
 		}
 	}

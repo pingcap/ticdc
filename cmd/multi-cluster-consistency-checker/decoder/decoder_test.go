@@ -78,16 +78,16 @@ func TestCanalJSONDecoder2(t *testing.T) {
 	}
 }
 
-func TestRecord_EqualDownstreamRecord(t *testing.T) {
+func TestRecord_EqualReplicatedRecord(t *testing.T) {
 	tests := []struct {
 		name          string
-		upstream      *decoder.Record
-		downstream    *decoder.Record
+		local         *decoder.Record
+		replicated    *decoder.Record
 		expectedEqual bool
 	}{
 		{
 			name: "equal records",
-			upstream: &decoder.Record{
+			local: &decoder.Record{
 				CdcVersion: types.CdcVersion{CommitTs: 100, OriginTs: 0},
 				Pk:         "pk1",
 				ColumnValues: map[string]any{
@@ -95,7 +95,7 @@ func TestRecord_EqualDownstreamRecord(t *testing.T) {
 					"col2": 42,
 				},
 			},
-			downstream: &decoder.Record{
+			replicated: &decoder.Record{
 				CdcVersion: types.CdcVersion{CommitTs: 101, OriginTs: 100},
 				Pk:         "pk1",
 				ColumnValues: map[string]any{
@@ -106,21 +106,21 @@ func TestRecord_EqualDownstreamRecord(t *testing.T) {
 			expectedEqual: true,
 		},
 		{
-			name: "downstream is nil",
-			upstream: &decoder.Record{
+			name: "replicated is nil",
+			local: &decoder.Record{
 				CdcVersion: types.CdcVersion{CommitTs: 100, OriginTs: 0},
 				Pk:         "pk1",
 			},
-			downstream:    nil,
+			replicated:    nil,
 			expectedEqual: false,
 		},
 		{
 			name: "different CommitTs and OriginTs",
-			upstream: &decoder.Record{
+			local: &decoder.Record{
 				CdcVersion: types.CdcVersion{CommitTs: 100, OriginTs: 0},
 				Pk:         "pk1",
 			},
-			downstream: &decoder.Record{
+			replicated: &decoder.Record{
 				CdcVersion: types.CdcVersion{CommitTs: 101, OriginTs: 200},
 				Pk:         "pk1",
 			},
@@ -128,11 +128,11 @@ func TestRecord_EqualDownstreamRecord(t *testing.T) {
 		},
 		{
 			name: "different primary keys",
-			upstream: &decoder.Record{
+			local: &decoder.Record{
 				CdcVersion: types.CdcVersion{CommitTs: 100, OriginTs: 0},
 				Pk:         "pk1",
 			},
-			downstream: &decoder.Record{
+			replicated: &decoder.Record{
 				CdcVersion: types.CdcVersion{CommitTs: 101, OriginTs: 100},
 				Pk:         "pk2",
 			},
@@ -140,14 +140,14 @@ func TestRecord_EqualDownstreamRecord(t *testing.T) {
 		},
 		{
 			name: "different column count",
-			upstream: &decoder.Record{
+			local: &decoder.Record{
 				CdcVersion: types.CdcVersion{CommitTs: 100, OriginTs: 0},
 				Pk:         "pk1",
 				ColumnValues: map[string]any{
 					"col1": "value1",
 				},
 			},
-			downstream: &decoder.Record{
+			replicated: &decoder.Record{
 				CdcVersion: types.CdcVersion{CommitTs: 101, OriginTs: 100},
 				Pk:         "pk1",
 				ColumnValues: map[string]any{
@@ -159,14 +159,14 @@ func TestRecord_EqualDownstreamRecord(t *testing.T) {
 		},
 		{
 			name: "different column names",
-			upstream: &decoder.Record{
+			local: &decoder.Record{
 				CdcVersion: types.CdcVersion{CommitTs: 100, OriginTs: 0},
 				Pk:         "pk1",
 				ColumnValues: map[string]any{
 					"col1": "value1",
 				},
 			},
-			downstream: &decoder.Record{
+			replicated: &decoder.Record{
 				CdcVersion: types.CdcVersion{CommitTs: 101, OriginTs: 100},
 				Pk:         "pk1",
 				ColumnValues: map[string]any{
@@ -177,14 +177,14 @@ func TestRecord_EqualDownstreamRecord(t *testing.T) {
 		},
 		{
 			name: "different column values",
-			upstream: &decoder.Record{
+			local: &decoder.Record{
 				CdcVersion: types.CdcVersion{CommitTs: 100, OriginTs: 0},
 				Pk:         "pk1",
 				ColumnValues: map[string]any{
 					"col1": "value1",
 				},
 			},
-			downstream: &decoder.Record{
+			replicated: &decoder.Record{
 				CdcVersion: types.CdcVersion{CommitTs: 101, OriginTs: 100},
 				Pk:         "pk1",
 				ColumnValues: map[string]any{
@@ -195,12 +195,12 @@ func TestRecord_EqualDownstreamRecord(t *testing.T) {
 		},
 		{
 			name: "empty column values",
-			upstream: &decoder.Record{
+			local: &decoder.Record{
 				CdcVersion:   types.CdcVersion{CommitTs: 100, OriginTs: 0},
 				Pk:           "pk1",
 				ColumnValues: map[string]any{},
 			},
-			downstream: &decoder.Record{
+			replicated: &decoder.Record{
 				CdcVersion:   types.CdcVersion{CommitTs: 101, OriginTs: 100},
 				Pk:           "pk1",
 				ColumnValues: map[string]any{},
@@ -209,12 +209,12 @@ func TestRecord_EqualDownstreamRecord(t *testing.T) {
 		},
 		{
 			name: "nil column values",
-			upstream: &decoder.Record{
+			local: &decoder.Record{
 				CdcVersion:   types.CdcVersion{CommitTs: 100, OriginTs: 0},
 				Pk:           "pk1",
 				ColumnValues: nil,
 			},
-			downstream: &decoder.Record{
+			replicated: &decoder.Record{
 				CdcVersion:   types.CdcVersion{CommitTs: 101, OriginTs: 100},
 				Pk:           "pk1",
 				ColumnValues: nil,
@@ -225,7 +225,7 @@ func TestRecord_EqualDownstreamRecord(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := tt.upstream.EqualDownstreamRecord(tt.downstream)
+			result := tt.local.EqualReplicatedRecord(tt.replicated)
 			require.Equal(t, tt.expectedEqual, result)
 		})
 	}

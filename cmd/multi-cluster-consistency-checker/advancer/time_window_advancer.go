@@ -38,7 +38,7 @@ type TimeWindowAdvancer struct {
 	timeWindowTriplet map[string][3]types.TimeWindow
 
 	// checkpointWatcher is the Active-Active checkpoint watcher for each cluster,
-	// mapping from cluster ID to the downstream cluster ID to the checkpoint watcher
+	// mapping from local cluster ID to replicated cluster ID to the checkpoint watcher
 	checkpointWatcher map[string]map[string]watcher.Watcher
 
 	// s3checkpointWatcher is the S3 checkpoint watcher for each cluster, mapping from cluster ID to the s3 checkpoint watcher
@@ -118,18 +118,17 @@ func (t *TimeWindowAdvancer) initializeFromCheckpoint(
 }
 
 // AdvanceTimeWindow advances the time window for each cluster. Here is the steps:
-// 1. Advance the checkpoint ts for each upstream-downstream cluster changefeed.
+// 1. Advance the checkpoint ts for each local-to-replicated changefeed.
 //
-// For any upstream-downstream cluster changefeed, the checkpoint ts should be advanced to
-// the maximum of pd timestamp after previouds time window of downstream advanced and
-// the right boundary of previouds time window of every clusters.
+// For any local-to-replicated changefeed, the checkpoint ts should be advanced to
+// the maximum of pd timestamp after previous time window of the replicated cluster
+// advanced and the right boundary of previous time window of every clusters.
 //
 // 2. Advance the right boundary for each cluster.
 //
 // For any cluster, the right boundary should be advanced to the maximum of pd timestamp of
-// the cluster after the checkpoint ts of its upstream cluster advanced and the previous
-// timewindow's checkpoint ts of changefeed where the cluster is the upstream cluster or
-// the downstream cluster.
+// the cluster after the checkpoint ts of its local cluster advanced and the previous
+// timewindow's checkpoint ts of changefeed where the cluster is the local or the replicated.
 //
 // 3. Update the time window for each cluster.
 //
@@ -138,15 +137,15 @@ func (t *TimeWindowAdvancer) AdvanceTimeWindow(
 	pctx context.Context,
 ) (map[string]types.TimeWindowData, error) {
 	log.Debug("advance time window", zap.Uint64("round", t.round))
-	// mapping from upstream cluster ID to the downstream cluster ID to the min checkpoint timestamp
+	// mapping from local cluster ID to replicated cluster ID to the min checkpoint timestamp
 	minCheckpointTsMap := make(map[string]map[string]uint64)
 	maxTimeWindowRightBoundary := uint64(0)
-	for downstreamClusterID, triplet := range t.timeWindowTriplet {
-		for upstreamClusterID, pdTimestampAfterTimeWindow := range triplet[2].PDTimestampAfterTimeWindow {
-			if _, ok := minCheckpointTsMap[upstreamClusterID]; !ok {
-				minCheckpointTsMap[upstreamClusterID] = make(map[string]uint64)
+	for replicatedClusterID, triplet := range t.timeWindowTriplet {
+		for localClusterID, pdTimestampAfterTimeWindow := range triplet[2].PDTimestampAfterTimeWindow {
+			if _, ok := minCheckpointTsMap[localClusterID]; !ok {
+				minCheckpointTsMap[localClusterID] = make(map[string]uint64)
 			}
-			minCheckpointTsMap[upstreamClusterID][downstreamClusterID] = max(minCheckpointTsMap[upstreamClusterID][downstreamClusterID], pdTimestampAfterTimeWindow)
+			minCheckpointTsMap[localClusterID][replicatedClusterID] = max(minCheckpointTsMap[localClusterID][replicatedClusterID], pdTimestampAfterTimeWindow)
 		}
 		maxTimeWindowRightBoundary = max(maxTimeWindowRightBoundary, triplet[2].RightBoundary)
 	}
@@ -158,31 +157,31 @@ func (t *TimeWindowAdvancer) AdvanceTimeWindow(
 	maxCheckpointTs := make(map[string]uint64)
 	// Advance the checkpoint ts for each cluster
 	eg, ctx := errgroup.WithContext(pctx)
-	for upstreamClusterID, downstreamCheckpointWatcherMap := range t.checkpointWatcher {
-		for downstreamClusterID, checkpointWatcher := range downstreamCheckpointWatcherMap {
-			mincheckpointTs := max(minCheckpointTsMap[upstreamClusterID][downstreamClusterID], maxTimeWindowRightBoundary)
+	for localClusterID, replicatedCheckpointWatcherMap := range t.checkpointWatcher {
+		for replicatedClusterID, checkpointWatcher := range replicatedCheckpointWatcherMap {
+			minCheckpointTs := max(minCheckpointTsMap[localClusterID][replicatedClusterID], maxTimeWindowRightBoundary)
 			eg.Go(func() error {
-				checkpointTs, err := checkpointWatcher.AdvanceCheckpointTs(ctx, mincheckpointTs)
+				checkpointTs, err := checkpointWatcher.AdvanceCheckpointTs(ctx, minCheckpointTs)
 				if err != nil {
 					return errors.Trace(err)
 				}
 				// TODO: optimize this by getting pd ts in the end of all checkpoint ts advance
-				pdtsos, err := t.getPDTsFromOtherClusters(ctx, upstreamClusterID)
+				pdtsos, err := t.getPDTsFromOtherClusters(ctx, localClusterID)
 				if err != nil {
 					return errors.Trace(err)
 				}
 				lock.Lock()
-				timeWindow := newTimeWindow[upstreamClusterID]
+				timeWindow := newTimeWindow[localClusterID]
 				if timeWindow.CheckpointTs == nil {
 					timeWindow.CheckpointTs = make(map[string]uint64)
 				}
-				timeWindow.CheckpointTs[downstreamClusterID] = checkpointTs
-				newTimeWindow[upstreamClusterID] = timeWindow
+				timeWindow.CheckpointTs[replicatedClusterID] = checkpointTs
+				newTimeWindow[localClusterID] = timeWindow
 				for otherClusterID, pdtso := range pdtsos {
 					maxPDTimestampAfterCheckpointTs[otherClusterID] = max(maxPDTimestampAfterCheckpointTs[otherClusterID], pdtso)
 				}
-				maxCheckpointTs[upstreamClusterID] = max(maxCheckpointTs[upstreamClusterID], checkpointTs)
-				maxCheckpointTs[downstreamClusterID] = max(maxCheckpointTs[downstreamClusterID], checkpointTs)
+				maxCheckpointTs[localClusterID] = max(maxCheckpointTs[localClusterID], checkpointTs)
+				maxCheckpointTs[replicatedClusterID] = max(maxCheckpointTs[replicatedClusterID], checkpointTs)
 				lock.Unlock()
 				return nil
 			})

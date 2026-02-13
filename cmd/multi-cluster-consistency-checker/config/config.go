@@ -30,14 +30,17 @@ type Config struct {
 	Clusters map[string]ClusterConfig `toml:"clusters" json:"clusters"`
 }
 
+const DefaultMaxReportFiles = 1000
+
 // GlobalConfig contains global configuration settings
 type GlobalConfig struct {
-	LogLevel string              `toml:"log-level" json:"log-level"`
-	DataDir  string              `toml:"data-dir" json:"data-dir"`
-	Tables   map[string][]string `toml:"tables" json:"tables"`
+	LogLevel       string              `toml:"log-level" json:"log-level"`
+	DataDir        string              `toml:"data-dir" json:"data-dir"`
+	MaxReportFiles int                 `toml:"max-report-files" json:"max-report-files"`
+	Tables         map[string][]string `toml:"tables" json:"tables"`
 }
 
-type DownstreamClusterChangefeedConfig struct {
+type PeerClusterChangefeedConfig struct {
 	// ChangefeedID is the changefeed ID for the changefeed
 	ChangefeedID string `toml:"changefeed-id" json:"changefeed-id"`
 }
@@ -56,9 +59,9 @@ type ClusterConfig struct {
 	// SecurityConfig is the security configuration for the cluster
 	SecurityConfig security.Credential `toml:"security-config" json:"security-config"`
 
-	// DownstreamClusterChangefeedConfig is the configuration for the changefeed of the downstream cluster
-	// mapping from downstream cluster ID to the changefeed configuration
-	DownstreamClusterChangefeedConfig map[string]DownstreamClusterChangefeedConfig `toml:"downstream-cluster-changefeed-config" json:"downstream-cluster-changefeed-config"`
+	// PeerClusterChangefeedConfig is the configuration for the changefeed of the peer cluster
+	// mapping from peer cluster ID to the changefeed configuration
+	PeerClusterChangefeedConfig map[string]PeerClusterChangefeedConfig `toml:"peer-cluster-changefeed-config" json:"peer-cluster-changefeed-config"`
 }
 
 // loadConfig loads the configuration from a TOML file
@@ -77,6 +80,26 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to decode config file: %w", err)
 	}
 
+	// Apply defaults
+	if cfg.GlobalConfig.MaxReportFiles <= 0 {
+		cfg.GlobalConfig.MaxReportFiles = DefaultMaxReportFiles
+	}
+
+	// Validate DataDir
+	if cfg.GlobalConfig.DataDir == "" {
+		return nil, fmt.Errorf("global: data-dir is required")
+	}
+
+	// Validate Tables
+	if len(cfg.GlobalConfig.Tables) == 0 {
+		return nil, fmt.Errorf("global: at least one schema must be configured in tables")
+	}
+	for schema, tables := range cfg.GlobalConfig.Tables {
+		if len(tables) == 0 {
+			return nil, fmt.Errorf("global: tables[%s]: at least one table must be configured", schema)
+		}
+	}
+
 	// Validate that at least one cluster is configured
 	if len(cfg.Clusters) == 0 {
 		return nil, fmt.Errorf("at least one cluster must be configured")
@@ -93,12 +116,12 @@ func LoadConfig(path string) (*Config, error) {
 		if cluster.S3ChangefeedID == "" {
 			return nil, fmt.Errorf("cluster '%s': s3-changefeed-id is required", name)
 		}
-		if len(cluster.DownstreamClusterChangefeedConfig) != len(cfg.Clusters)-1 {
-			return nil, fmt.Errorf("cluster '%s': downstream-cluster-changefeed-config is not entirely configured", name)
+		if len(cluster.PeerClusterChangefeedConfig) != len(cfg.Clusters)-1 {
+			return nil, fmt.Errorf("cluster '%s': peer-cluster-changefeed-config is not entirely configured", name)
 		}
-		for downstreamClusterID, downstreamClusterChangefeedConfig := range cluster.DownstreamClusterChangefeedConfig {
-			if downstreamClusterChangefeedConfig.ChangefeedID == "" {
-				return nil, fmt.Errorf("cluster '%s': downstream-cluster-changefeed-config[%s]: changefeed-id is required", name, downstreamClusterID)
+		for peerClusterID, peerClusterChangefeedConfig := range cluster.PeerClusterChangefeedConfig {
+			if peerClusterChangefeedConfig.ChangefeedID == "" {
+				return nil, fmt.Errorf("cluster '%s': peer-cluster-changefeed-config[%s]: changefeed-id is required", name, peerClusterID)
 			}
 		}
 	}

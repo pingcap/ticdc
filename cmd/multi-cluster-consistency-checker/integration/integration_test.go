@@ -109,11 +109,11 @@ func maxRightBoundary(twData map[string]types.TimeWindowData) uint64 {
 
 // The test architecture simulates a 2-cluster active-active setup:
 //
-//	c1 (upstream) ──CDC──> c2 (downstream)
-//	c2 (upstream) ──CDC──> c1 (downstream)
+//	c1 (locally-written records) ──CDC──> c2 (replicated records)
+//	c2 (locally-written records) ──CDC──> c1 (replicated records)
 //
-// Each cluster writes upstream data (originTs=0) and receives downstream
-// replicated data from the other cluster (originTs>0).
+// Each cluster writes locally-written records (originTs=0) and receives replicated
+// records from the other cluster (originTs>0).
 //
 // The checker needs 3 warm-up rounds before it starts checking (checkableRound >= 3).
 // Data written in round 0 is tracked by the S3 consumer but not downloaded
@@ -124,7 +124,7 @@ func maxRightBoundary(twData map[string]types.TimeWindowData) uint64 {
 // within the current time window (leftBoundary, rightBoundary].
 //
 // TestIntegration_AllConsistent verifies that no errors are reported
-// when all upstream data has matching downstream records.
+// when all locally-written records have matching replicated records.
 func TestIntegration_AllConsistent(t *testing.T) {
 	t.Parallel()
 	env := setupEnv(t)
@@ -134,9 +134,9 @@ func TestIntegration_AllConsistent(t *testing.T) {
 
 	for round := 0; round < 6; round++ {
 		cts := prevMaxRB + 1
-		// c1: upstream write (originTs=0)
+		// c1: locally-written records write (originTs=0)
 		c1 := MakeContent(MakeCanalJSON(round+1, cts, 0, fmt.Sprintf("v%d", round)))
-		// c2: downstream replicated from c1 (originTs = c1's commitTs)
+		// c2: replicated records replicated from c1 (originTs = c1's commitTs)
 		c2 := MakeContent(MakeCanalJSON(round+1, cts+1, cts, fmt.Sprintf("v%d", round)))
 
 		result := env.executeRound(t, c1, c2)
@@ -160,18 +160,18 @@ func TestIntegration_AllConsistent(t *testing.T) {
 	}
 }
 
-// TestIntegration_AllConsistent_CrossRoundDownstream verifies that the checker
-// treats data as consistent when an upstream record's commitTs exceeds the
-// round's checkpointTs, and the matching downstream only appears in the next
+// TestIntegration_AllConsistent_CrossRoundReplicatedRecords verifies that the checker
+// treats data as consistent when a locally-written record's commitTs exceeds the
+// round's checkpointTs, and the matching replicated records only appears in the next
 // round.
 //
-// This occurs when upstream commits happen late in the time window, after
+// This occurs when locally-written records commitTs happen late in the time window, after
 // the checkpoint has already been determined. For TW[2], records with
 // commitTs > checkpointTs are deferred (skipped). In the next round they
 // become TW[1], where the check condition is commitTs > checkpointTs (checked),
-// and the downstream is searched in TW[1] + TW[2] — finding the match in
+// and the replicated records are searched in TW[1] + TW[2] — finding the match in
 // the current round's TW[2].
-func TestIntegration_AllConsistent_CrossRoundDownstream(t *testing.T) {
+func TestIntegration_AllConsistent_CrossRoundReplicatedRecords(t *testing.T) {
 	t.Parallel()
 	env := setupEnv(t)
 	defer env.mc.Close()
@@ -185,7 +185,7 @@ func TestIntegration_AllConsistent_CrossRoundDownstream(t *testing.T) {
 	// Using ComposeTS(250, 0) = 65536000 lands safely between them.
 	crossRoundOffset := uint64(250 << 18) // ComposeTS(250, 0) = 65536000
 
-	var lateUpstreamCommitTs uint64
+	var lateLocallyWrittenRecordsCommitTs uint64
 
 	for round := 0; round < 7; round++ {
 		cts := prevMaxRB + 1
@@ -194,27 +194,27 @@ func TestIntegration_AllConsistent_CrossRoundDownstream(t *testing.T) {
 
 		switch round {
 		case 4:
-			// Round N: c1 upstream has two records:
+			// Round N: c1 local has two records:
 			//   pk=round+1  normal commitTs (checked in this round's TW[2])
 			//   pk=100      large commitTs > checkpointTs
 			//                (deferred in TW[2], checked via TW[1] next round)
-			// c2 downstream only matches pk=round+1.
-			lateUpstreamCommitTs = prevMaxRB + crossRoundOffset
+			// c2 replicated only matches pk=round+1.
+			lateLocallyWrittenRecordsCommitTs = prevMaxRB + crossRoundOffset
 			c1 = MakeContent(
 				MakeCanalJSON(round+1, cts, 0, fmt.Sprintf("v%d", round)),
-				MakeCanalJSON(100, lateUpstreamCommitTs, 0, "late"),
+				MakeCanalJSON(100, lateLocallyWrittenRecordsCommitTs, 0, "late"),
 			)
 			c2 = MakeContent(MakeCanalJSON(round+1, cts+1, cts, fmt.Sprintf("v%d", round)))
 
 		case 5:
-			// Round N+1: c2 now includes the downstream for pk=100.
+			// Round N+1: c2 now includes the replicated record for pk=100.
 			// The checker evaluates TW[1] (= round 4), finds pk=100 with
 			// commitTs > checkpointTs, and searches c2's TW[1] + TW[2].
-			// pk=100's matching downstream is in c2's TW[2] (this round).
+			// pk=100's matching replicated record is in c2's TW[2] (this round).
 			c1 = MakeContent(MakeCanalJSON(round+1, cts, 0, fmt.Sprintf("v%d", round)))
 			c2 = MakeContent(
 				MakeCanalJSON(round+1, cts+1, cts, fmt.Sprintf("v%d", round)),
-				MakeCanalJSON(100, cts+2, lateUpstreamCommitTs, "late"),
+				MakeCanalJSON(100, cts+2, lateLocallyWrittenRecordsCommitTs, "late"),
 			)
 
 		default:
@@ -236,12 +236,12 @@ func TestIntegration_AllConsistent_CrossRoundDownstream(t *testing.T) {
 			// Verify the late commitTs falls between checkpointTs and rightBoundary.
 			c1TW := result.twData["c1"].TimeWindow
 			cpTs := c1TW.CheckpointTs["c2"]
-			require.Greater(t, lateUpstreamCommitTs, cpTs,
-				"lateUpstreamCommitTs must be > checkpointTs for cross-round detection")
-			require.LessOrEqual(t, lateUpstreamCommitTs, c1TW.RightBoundary,
-				"lateUpstreamCommitTs must be <= rightBoundary to stay in this time window")
+			require.Greater(t, lateLocallyWrittenRecordsCommitTs, cpTs,
+				"lateLocallyWrittenRecordsCommitTs must be > checkpointTs for cross-round detection")
+			require.LessOrEqual(t, lateLocallyWrittenRecordsCommitTs, c1TW.RightBoundary,
+				"lateLocallyWrittenRecordsCommitTs must be <= rightBoundary to stay in this time window")
 			t.Logf("Round 4 verification: lateCommitTs=%d, checkpointTs=%d, rightBoundary=%d",
-				lateUpstreamCommitTs, cpTs, c1TW.RightBoundary)
+				lateLocallyWrittenRecordsCommitTs, cpTs, c1TW.RightBoundary)
 		}
 
 		if round >= 3 {
@@ -256,34 +256,34 @@ func TestIntegration_AllConsistent_CrossRoundDownstream(t *testing.T) {
 	}
 }
 
-// TestIntegration_AllConsistent_LWWSkippedDownstream verifies that no errors
-// are reported when a downstream record is "LWW-skipped" during data-loss
+// TestIntegration_AllConsistent_LWWSkippedReplicatedRecords verifies that no errors
+// are reported when a replicated record is "LWW-skipped" during data-loss
 // detection, combined with cross-time-window matching.
 //
-// pk=100: single-cluster overwrite (c1 writes old+new, c2 only has newer downstream)
+// pk=100: single-cluster overwrite (c1 writes old+new, c2 only has newer replicated records)
 //
-//	Round N:   c1 upstream pk=100 × 2 (commitTs=A, B; both > checkpointTs)
-//	           c2 has NO downstream for pk=100
-//	Round N+1: c2 downstream pk=100 (originTs=B, matches newer upstream only)
-//	  → old upstream LWW-skipped (c2 downstream compareTs=B >= A)
+//	Round N:   c1 locally-written records pk=100 × 2 (commitTs=A, B; both > checkpointTs)
+//	           c2 has NO replicated records for pk=100
+//	Round N+1: c2 replicated records pk=100 (originTs=B, matches newer locally-written records only)
+//	  → old locally-written records LWW-skipped (c2 replicated records compareTs=B >= A)
 //
 // pk=200: bidirectional write (c1 and c2 both write the same pk)
 //
-//	Round N:   c1 upstream pk=200 (commitTs=A, deferred)
-//	Round N+1: c1 upstream pk=200 (commitTs=E, newer), c1 downstream pk=200 (originTs=D, from c2)
-//	           c2 upstream pk=200 (commitTs=D, D < E),  c2 downstream pk=200 (originTs=E, from c1)
+//	Round N:   c1 locally-written records pk=200 (commitTs=A, deferred)
+//	Round N+1: c1 locally-written records pk=200 (commitTs=E, newer), c1 replicated records pk=200 (originTs=D, from c2)
+//	           c2 replicated records pk=200 (commitTs=D, D < E),  c2 replicated records pk=200 (originTs=E, from c1)
 //
-//	Key constraint: c1 upstream commitTs (E) > c2 upstream commitTs (D).
-//	This ensures that on c2, the downstream (compareTs=E) > upstream (compareTs=D),
+//	Key constraint: c1 local commitTs (E) > c2 local commitTs (D).
+//	This ensures that on c2, the replicated (compareTs=E) > local (compareTs=D),
 //	so the LWW violation checker sees monotonically increasing compareTs.
 //
 //	c1 data loss for old pk=200 (commitTs=A):
-//	  → c2 downstream has originTs=E, compareTs=E >= A → LWW-skipped ✓
+//	  → c2 replicated has originTs=E, compareTs=E >= A → LWW-skipped ✓
 //	c1 data loss for new pk=200 (commitTs=E):
-//	  → c2 downstream has originTs=E → exact match ✓
-//	c2 data loss for c2 upstream pk=200 (commitTs=D):
-//	  → c1 downstream has originTs=D → exact match ✓
-func TestIntegration_AllConsistent_LWWSkippedDownstream(t *testing.T) {
+//	  → c2 replicated has originTs=E → exact match ✓
+//	c2 data loss for c2 local pk=200 (commitTs=D):
+//	  → c1 replicated has originTs=D → exact match ✓
+func TestIntegration_AllConsistent_LWWSkippedReplicatedRecords(t *testing.T) {
 	t.Parallel()
 	env := setupEnv(t)
 	defer env.mc.Close()
@@ -305,8 +305,8 @@ func TestIntegration_AllConsistent_LWWSkippedDownstream(t *testing.T) {
 
 		switch round {
 		case 4:
-			// Round N: c1 upstream writes pk=100 twice + pk=200 once, all > checkpointTs.
-			// c2 has NO downstream for pk=100 or pk=200; they arrive next round.
+			// Round N: c1 local writes pk=100 twice + pk=200 once, all > checkpointTs.
+			// c2 has NO replicated record for pk=100 or pk=200; they arrive next round.
 			oldCommitTs = prevMaxRB + crossRoundOffset
 			newCommitTs = oldCommitTs + 5
 			c1 = MakeContent(
@@ -320,24 +320,24 @@ func TestIntegration_AllConsistent_LWWSkippedDownstream(t *testing.T) {
 			)
 
 		case 5:
-			// Round N+1: downstream data arrives for both pk=100 and pk=200.
+			// Round N+1: replicated data arrives for both pk=100 and pk=200.
 			//
-			// pk=200 bidirectional: c1 upstream at cts+5 (> c2 upstream at cts+2)
+			// pk=200 bidirectional: c1 local at cts+5 (> c2 local at cts+2)
 			// ensures c2's LWW check sees increasing compareTs.
-			//   c1: downstream(commitTs=cts+4, originTs=cts+2) then upstream(commitTs=cts+5)
+			//   c1: replicated(commitTs=cts+4, originTs=cts+2) then local(commitTs=cts+5)
 			//     → compareTs order: cts+2 < cts+5 ✓
-			//   c2: upstream(commitTs=cts+2) then downstream(commitTs=cts+6, originTs=cts+5)
+			//   c2: local(commitTs=cts+2) then replicated(commitTs=cts+6, originTs=cts+5)
 			//     → compareTs order: cts+2 < cts+5 ✓
 			c1 = MakeContent(
 				MakeCanalJSON(round+1, cts, 0, fmt.Sprintf("v%d", round)),
-				MakeCanalJSON(200, cts+4, cts+2, "pk200_c2"), // c1 downstream pk=200 from c2
-				MakeCanalJSON(200, cts+5, 0, "pk200_c1"),     // c1 upstream pk=200 (newer)
+				MakeCanalJSON(200, cts+4, cts+2, "pk200_c2"), // c1 replicated pk=200 from c2
+				MakeCanalJSON(200, cts+5, 0, "pk200_c1"),     // c1 local pk=200 (newer)
 			)
 			c2 = MakeContent(
 				MakeCanalJSON(round+1, cts+1, cts, fmt.Sprintf("v%d", round)),
 				MakeCanalJSON(100, cts+2, newCommitTs, "new_write"),
-				MakeCanalJSON(200, cts+2, 0, "pk200_c2"),     // c2 upstream pk=200
-				MakeCanalJSON(200, cts+6, cts+5, "pk200_c1"), // c2 downstream pk=200 from c1
+				MakeCanalJSON(200, cts+2, 0, "pk200_c2"),     // c2 local pk=200
+				MakeCanalJSON(200, cts+6, cts+5, "pk200_c1"), // c2 replicated pk=200 from c1
 			)
 
 		default:
@@ -365,7 +365,7 @@ func TestIntegration_AllConsistent_LWWSkippedDownstream(t *testing.T) {
 		if round >= 3 {
 			require.Len(t, result.report.ClusterReports, 2, "round %d", round)
 			require.False(t, result.report.NeedFlush(),
-				"round %d: cross-round LWW-skipped downstream should not cause errors", round)
+				"round %d: cross-round LWW-skipped replicated should not cause errors", round)
 			for clusterID, cr := range result.report.ClusterReports {
 				require.Empty(t, cr.TableFailureItems,
 					"round %d, cluster %s: should have no failures", round, clusterID)
@@ -375,7 +375,7 @@ func TestIntegration_AllConsistent_LWWSkippedDownstream(t *testing.T) {
 }
 
 // TestIntegration_DataLoss verifies that the checker detects data loss
-// when an upstream record has no matching downstream in the other cluster.
+// when a locally-written record has no matching replicated record in the other cluster.
 func TestIntegration_DataLoss(t *testing.T) {
 	t.Parallel()
 	env := setupEnv(t)
@@ -387,16 +387,16 @@ func TestIntegration_DataLoss(t *testing.T) {
 	for round := 0; round < 6; round++ {
 		cts := prevMaxRB + 1
 
-		// c1 always produces upstream data
+		// c1 always produces local data
 		c1 := MakeContent(MakeCanalJSON(round+1, cts, 0, fmt.Sprintf("v%d", round)))
 
 		var c2 []byte
 		if round == 4 {
-			// Round 4: c2 has NO matching downstream → data loss expected
+			// Round 4: c2 has NO matching replicated record → data loss expected
 			// (round 4's data is checked in the same round since checkableRound >= 3)
 			c2 = nil
 		} else {
-			// Normal: c2 has matching downstream
+			// Normal: c2 has matching replicated record
 			c2 = MakeContent(MakeCanalJSON(round+1, cts+1, cts, fmt.Sprintf("v%d", round)))
 		}
 
@@ -414,8 +414,7 @@ func TestIntegration_DataLoss(t *testing.T) {
 						dataLossDetected = true
 						// Verify the data loss item
 						for _, item := range items.DataLossItems {
-							require.Equal(t, "c2", item.DownstreamClusterID)
-							require.False(t, item.Inconsistent, "should be pure data loss, not inconsistency")
+							require.Equal(t, "c2", item.PeerClusterID)
 						}
 					}
 				}
@@ -427,8 +426,8 @@ func TestIntegration_DataLoss(t *testing.T) {
 }
 
 // TestIntegration_DataInconsistent verifies that the checker detects data
-// inconsistency when a downstream record has different column values
-// from the upstream record.
+// inconsistency when a replicated record has different column values
+// from the locally-written record.
 func TestIntegration_DataInconsistent(t *testing.T) {
 	t.Parallel()
 	env := setupEnv(t)
@@ -444,7 +443,7 @@ func TestIntegration_DataInconsistent(t *testing.T) {
 
 		var c2 []byte
 		if round == 4 {
-			// Round 4: c2 has downstream with WRONG column value
+			// Round 4: c2 has replicated record with WRONG column value
 			c2 = MakeContent(MakeCanalJSON(round+1, cts+1, cts, "WRONG_VALUE"))
 		} else {
 			c2 = MakeContent(MakeCanalJSON(round+1, cts+1, cts, fmt.Sprintf("v%d", round)))
@@ -459,12 +458,10 @@ func TestIntegration_DataInconsistent(t *testing.T) {
 			c1Report := result.report.ClusterReports["c1"]
 			if c1Report != nil {
 				if items, ok := c1Report.TableFailureItems[schemaKey]; ok {
-					for _, item := range items.DataLossItems {
-						if item.Inconsistent {
-							t.Logf("Round %d: detected data inconsistency: %+v", round, item)
-							inconsistentDetected = true
-							require.Equal(t, "c2", item.DownstreamClusterID)
-						}
+					for _, item := range items.DataInconsistentItems {
+						t.Logf("Round %d: detected data inconsistency: %+v", round, item)
+						inconsistentDetected = true
+						require.Equal(t, "c2", item.PeerClusterID)
 					}
 				}
 			}
@@ -475,7 +472,7 @@ func TestIntegration_DataInconsistent(t *testing.T) {
 }
 
 // TestIntegration_DataRedundant verifies that the checker detects redundant
-// downstream data that has no matching upstream record.
+// replicated data that has no matching locally-written record.
 func TestIntegration_DataRedundant(t *testing.T) {
 	t.Parallel()
 	env := setupEnv(t)
@@ -491,9 +488,9 @@ func TestIntegration_DataRedundant(t *testing.T) {
 		c2 := MakeContent(MakeCanalJSON(round+1, cts+1, cts, fmt.Sprintf("v%d", round)))
 
 		if round == 4 {
-			// Round 4: c2 has an EXTRA downstream record (pk=999) with a fake
-			// originTs that doesn't match any upstream commitTs in c1.
-			fakeOriginTs := cts - 5 // Doesn't match any c1 upstream commitTs
+			// Round 4: c2 has an EXTRA replicated record (pk=999) with a fake
+			// originTs that doesn't match any c1 local commitTs.
+			fakeOriginTs := cts - 5 // Doesn't match any c1 local commitTs
 			c2 = MakeContent(
 				MakeCanalJSON(round+1, cts+1, cts, fmt.Sprintf("v%d", round)),
 				MakeCanalJSON(999, cts+2, fakeOriginTs, "extra"),
@@ -546,7 +543,7 @@ func TestIntegration_LWWViolation(t *testing.T) {
 				MakeCanalJSON(5, cts, 0, "original"),
 				MakeCanalJSON(5, cts+2, cts-10, "replicated"),
 			)
-			// c2: provide matching downstream to avoid data loss noise
+			// c2: provide matching replicated record to avoid data loss noise
 			c2 = MakeContent(
 				MakeCanalJSON(5, cts+1, cts, "original"),
 			)
@@ -587,9 +584,9 @@ func TestIntegration_LWWViolation(t *testing.T) {
 //
 // Timeline:
 //
-//	Round N:   c1 upstream pk=50 (originTs=0, compareTs=A)  → cached
+//	Round N:   c1 local pk=50 (originTs=0, compareTs=A)  → cached
 //	Round N+1: no pk=50 data                                → cache ages (prev 1→2)
-//	Round N+2: c1 downstream pk=50 (originTs=B<A)           → violation detected
+//	Round N+2: c1 replicated pk=50 (originTs=B<A)           → violation detected
 func TestIntegration_LWWViolation_AcrossRounds(t *testing.T) {
 	t.Parallel()
 	env := setupEnv(t)
@@ -606,7 +603,7 @@ func TestIntegration_LWWViolation_AcrossRounds(t *testing.T) {
 
 		switch round {
 		case 4:
-			// Round N: c1 upstream pk=50. The violation checker caches:
+			// Round N: c1 local pk=50. The violation checker caches:
 			//   pk=50 → {previous: 0, commitTs: cts, originTs: 0, compareTs: cts}
 			firstRecordCommitTs = cts
 			c1 = MakeContent(MakeCanalJSON(50, cts, 0, "first"))
@@ -619,7 +616,7 @@ func TestIntegration_LWWViolation_AcrossRounds(t *testing.T) {
 			c2 = MakeContent(MakeCanalJSON(round+1, cts+1, cts, fmt.Sprintf("v%d", round)))
 
 		case 6:
-			// Round N+2: c1 has a downstream record for pk=50 whose originTs
+			// Round N+2: c1 has a replicated record for pk=50 whose originTs
 			// is less than the cached compareTs from round N.
 			//   existing:  compareTs = firstRecordCommitTs
 			//   new:       compareTs = firstRecordCommitTs - 10
@@ -653,7 +650,7 @@ func TestIntegration_LWWViolation_AcrossRounds(t *testing.T) {
 						// Verify the violation details
 						item := items.LWWViolationItems[0]
 						require.Equal(t, uint64(0), item.ExistingOriginTS,
-							"existing record should be upstream (originTs=0)")
+							"existing record should be local (originTs=0)")
 						require.Equal(t, firstRecordCommitTs, item.ExistingCommitTS,
 							"existing record should be from round N")
 					}
@@ -684,11 +681,11 @@ func TestIntegration_MultipleErrorTypes(t *testing.T) {
 
 		switch round {
 		case 4:
-			// Data loss: c1 upstream pk=5, c2 has NO downstream
+			// Data loss: c1 local pk=5, c2 has NO replicated record
 			c1 = MakeContent(MakeCanalJSON(5, cts, 0, "lost"))
 			c2 = nil
 		case 5:
-			// Data redundant: c2 has extra downstream pk=888
+			// Data redundant: c2 has extra replicated pk=888
 			c1 = MakeContent(MakeCanalJSON(6, cts, 0, "normal"))
 			fakeOriginTs := cts - 3
 			c2 = MakeContent(

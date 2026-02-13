@@ -15,6 +15,7 @@ package advancer
 
 import (
 	"context"
+	"maps"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -161,9 +162,9 @@ func TestTimeWindowAdvancer_AdvanceMultipleRounds(t *testing.T) {
 			// 3. CheckpointTs should be populated and strictly increasing across rounds
 			require.NotEmpty(t, tw.CheckpointTs,
 				"round %d, cluster %s: CheckpointTs should be populated", round, clusterID)
-			for downstream, cpTs := range tw.CheckpointTs {
-				require.Greater(t, cpTs, prevCheckpointTs[clusterID][downstream],
-					"round %d, %s->%s: checkpoint should be strictly increasing", round, clusterID, downstream)
+			for replicatedCluster, cpTs := range tw.CheckpointTs {
+				require.Greater(t, cpTs, prevCheckpointTs[clusterID][replicatedCluster],
+					"round %d, %s->%s: checkpoint should be strictly increasing", round, clusterID, replicatedCluster)
 			}
 
 			// 4. PDTimestampAfterTimeWindow should be populated
@@ -178,10 +179,10 @@ func TestTimeWindowAdvancer_AdvanceMultipleRounds(t *testing.T) {
 			// 6. PD TSO values in PDTimestampAfterTimeWindow > all CheckpointTs values
 			//    (PD TSOs are obtained after checkpoint advance)
 			for otherCluster, pdTs := range tw.PDTimestampAfterTimeWindow {
-				for downstream, cpTs := range tw.CheckpointTs {
+				for replicatedCluster, cpTs := range tw.CheckpointTs {
 					require.Greater(t, pdTs, cpTs,
 						"round %d, cluster %s: PD TSO (from %s) should be > checkpoint (%s->%s)",
-						round, clusterID, otherCluster, clusterID, downstream)
+						round, clusterID, otherCluster, clusterID, replicatedCluster)
 				}
 			}
 
@@ -197,9 +198,7 @@ func TestTimeWindowAdvancer_AdvanceMultipleRounds(t *testing.T) {
 			if twData.TimeWindow.RightBoundary > maxRB {
 				maxRB = twData.TimeWindow.RightBoundary
 			}
-			for downstream, cpTs := range twData.TimeWindow.CheckpointTs {
-				prevCheckpointTs[clusterID][downstream] = cpTs
-			}
+			maps.Copy(prevCheckpointTs[clusterID], twData.TimeWindow.CheckpointTs)
 		}
 		prevRightBoundary = maxRB
 	}

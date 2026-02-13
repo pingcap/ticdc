@@ -16,7 +16,6 @@ package consumer
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"path"
 	"slices"
 	"strings"
@@ -28,18 +27,6 @@ import (
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/stretchr/testify/require"
 )
-
-// helper to build a DML file path for tests (day separator, no partition, no dispatcherID).
-// Format: {schema}/{table}/{version}/{date}/CDC{idx:020d}.json
-func buildDMLFilePath(schema, table string, version uint64, date string, idx uint64) string {
-	return fmt.Sprintf("%s/%s/%d/%s/CDC%020d.json", schema, table, version, date, idx)
-}
-
-// helper to build a schema file path for tests.
-// Format: {schema}/{table}/meta/schema_{version}_{checksum}.json
-func buildSchemaFilePath(schema, table string, version uint64, checksum uint32) string {
-	return fmt.Sprintf("%s/%s/meta/schema_%d_%010d.json", schema, table, version, checksum)
-}
 
 func TestUpdateTableDMLIdxMap(t *testing.T) {
 	t.Parallel()

@@ -226,7 +226,7 @@ func TestTimeWindowDataCache_NewRecord(t *testing.T) {
 
 	const schemaKey = "test_schema"
 
-	t.Run("add upstream record", func(t *testing.T) {
+	t.Run("add local record", func(t *testing.T) {
 		t.Parallel()
 		cache := newTimeWindowDataCache(100, 200, map[string]uint64{})
 		record := &decoder.Record{
@@ -239,11 +239,11 @@ func TestTimeWindowDataCache_NewRecord(t *testing.T) {
 
 		cache.NewRecord(schemaKey, record)
 		require.Contains(t, cache.tableDataCaches, schemaKey)
-		require.Contains(t, cache.tableDataCaches[schemaKey].upstreamDataCache, record.Pk)
-		require.Contains(t, cache.tableDataCaches[schemaKey].upstreamDataCache[record.Pk], record.CommitTs)
+		require.Contains(t, cache.tableDataCaches[schemaKey].localDataCache, record.Pk)
+		require.Contains(t, cache.tableDataCaches[schemaKey].localDataCache[record.Pk], record.CommitTs)
 	})
 
-	t.Run("add downstream record", func(t *testing.T) {
+	t.Run("add replicated record", func(t *testing.T) {
 		t.Parallel()
 		cache := newTimeWindowDataCache(100, 200, map[string]uint64{})
 		record := &decoder.Record{
@@ -256,8 +256,8 @@ func TestTimeWindowDataCache_NewRecord(t *testing.T) {
 
 		cache.NewRecord(schemaKey, record)
 		require.Contains(t, cache.tableDataCaches, schemaKey)
-		require.Contains(t, cache.tableDataCaches[schemaKey].downstreamDataCache, record.Pk)
-		require.Contains(t, cache.tableDataCaches[schemaKey].downstreamDataCache[record.Pk], record.OriginTs)
+		require.Contains(t, cache.tableDataCaches[schemaKey].replicatedDataCache, record.Pk)
+		require.Contains(t, cache.tableDataCaches[schemaKey].replicatedDataCache[record.Pk], record.OriginTs)
 	})
 
 	t.Run("skip record before left boundary", func(t *testing.T) {
@@ -314,7 +314,7 @@ func TestClusterDataChecker_PrepareNextTimeWindowData(t *testing.T) {
 
 // makeCanalJSON builds a canal-JSON formatted record for testing.
 // pkID is the primary key value, commitTs is the TiDB commit timestamp,
-// originTs is the origin timestamp (0 for upstream records, non-zero for downstream),
+// originTs is the origin timestamp (0 for locally-written records, non-zero for replicated records),
 // val is a varchar column value.
 func makeCanalJSON(pkID int, commitTs uint64, originTs uint64, val string) string {
 	originTsVal := "null"
@@ -360,7 +360,7 @@ func makeTWData(left, right uint64, checkpointTs map[string]uint64, content []by
 var defaultSchemaKey = (&cloudstorage.DmlPathKey{}).GetKey()
 
 // TestDataChecker_FourRoundsCheck simulates 4 rounds with increasing data and verifies check results.
-// Setup: 2 clusters (c1 upstream, c2 downstream from c1).
+// Setup: 2 clusters (c1 locally-written, c2 replicated from c1).
 // Rounds 0-2: accumulate data, check not yet active (checkableRound < 3).
 // Round 3: first real check runs, detecting violations.
 func TestDataChecker_FourRoundsCheck(t *testing.T) {
@@ -370,7 +370,7 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 	clusterCfg := map[string]config.ClusterConfig{"c1": {}, "c2": {}}
 
 	// makeBaseRounds creates shared rounds 0 and 1 data for all subtests.
-	// c1 produces upstream data, c2 receives matching downstream from c1.
+	// c1 produces locally-written data, c2 receives matching replicated data from c1.
 	makeBaseRounds := func() [2]map[string]types.TimeWindowData {
 		return [2]map[string]types.TimeWindowData{
 			// Round 0: [0, 100]
@@ -431,7 +431,7 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 		checker := NewDataChecker(ctx, clusterCfg, nil, nil)
 		base := makeBaseRounds()
 
-		// Round 2: c1 has upstream pk=3 but c2 has NO matching downstream
+		// Round 2: c1 has locally-written pk=3 but c2 has NO matching replicated data
 		round2 := map[string]types.TimeWindowData{
 			"c1": makeTWData(200, 300, map[string]uint64{"c2": 240},
 				makeContent(makeCanalJSON(3, 250, 0, "c"))),
@@ -453,16 +453,15 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 		}
 
 		require.True(t, lastReport.NeedFlush())
-		// c1 should detect data loss: pk=3 (commitTs=250) missing in c2's downstream
+		// c1 should detect data loss: pk=3 (commitTs=250) missing in c2's replicated data
 		c1Report := lastReport.ClusterReports["c1"]
 		require.NotNil(t, c1Report)
 		require.Contains(t, c1Report.TableFailureItems, defaultSchemaKey)
 		tableItems := c1Report.TableFailureItems[defaultSchemaKey]
 		require.Len(t, tableItems.DataLossItems, 1)
-		require.Equal(t, "c2", tableItems.DataLossItems[0].DownstreamClusterID)
+		require.Equal(t, "c2", tableItems.DataLossItems[0].PeerClusterID)
 		require.Equal(t, uint64(0), tableItems.DataLossItems[0].OriginTS)
 		require.Equal(t, uint64(250), tableItems.DataLossItems[0].CommitTS)
-		require.False(t, tableItems.DataLossItems[0].Inconsistent)
 		// c2 should have no issues
 		c2Report := lastReport.ClusterReports["c2"]
 		require.Empty(t, c2Report.TableFailureItems)
@@ -473,7 +472,7 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 		checker := NewDataChecker(ctx, clusterCfg, nil, nil)
 		base := makeBaseRounds()
 
-		// Round 2: c2 has downstream for pk=3 but with wrong column value
+		// Round 2: c2 has replicated data for pk=3 but with wrong column value
 		round2 := map[string]types.TimeWindowData{
 			"c1": makeTWData(200, 300, map[string]uint64{"c2": 240},
 				makeContent(makeCanalJSON(3, 250, 0, "c"))),
@@ -499,10 +498,14 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 		c1Report := lastReport.ClusterReports["c1"]
 		require.Contains(t, c1Report.TableFailureItems, defaultSchemaKey)
 		tableItems := c1Report.TableFailureItems[defaultSchemaKey]
-		require.Len(t, tableItems.DataLossItems, 1)
-		require.Equal(t, "c2", tableItems.DataLossItems[0].DownstreamClusterID)
-		require.Equal(t, uint64(250), tableItems.DataLossItems[0].CommitTS)
-		require.True(t, tableItems.DataLossItems[0].Inconsistent) // data inconsistent, not pure data loss
+		require.Empty(t, tableItems.DataLossItems)
+		require.Len(t, tableItems.DataInconsistentItems, 1)
+		require.Equal(t, "c2", tableItems.DataInconsistentItems[0].PeerClusterID)
+		require.Equal(t, uint64(250), tableItems.DataInconsistentItems[0].CommitTS)
+		require.Len(t, tableItems.DataInconsistentItems[0].InconsistentColumns, 1)
+		require.Equal(t, "val", tableItems.DataInconsistentItems[0].InconsistentColumns[0].Column)
+		require.Equal(t, "c", tableItems.DataInconsistentItems[0].InconsistentColumns[0].Local)
+		require.Equal(t, "WRONG", tableItems.DataInconsistentItems[0].InconsistentColumns[0].Replicated)
 	})
 
 	t.Run("data redundant detected", func(t *testing.T) {
@@ -516,8 +519,8 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 			"c2": makeTWData(200, 300, nil,
 				makeContent(makeCanalJSON(3, 260, 250, "c"))),
 		}
-		// Round 3: c2 has an extra downstream pk=99 (originTs=330) that doesn't match
-		// any upstream record in c1
+		// Round 3: c2 has an extra replicated pk=99 (originTs=330) that doesn't match
+		// any locally-written record in c1
 		round3 := map[string]types.TimeWindowData{
 			"c1": makeTWData(300, 400, map[string]uint64{"c2": 380},
 				makeContent(makeCanalJSON(4, 350, 0, "d"))),
@@ -540,7 +543,7 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 		// c1 should have no data loss
 		c1Report := lastReport.ClusterReports["c1"]
 		require.Empty(t, c1Report.TableFailureItems)
-		// c2 should detect data redundant: pk=99 has no matching upstream in c1
+		// c2 should detect data redundant: pk=99 has no matching locally-written record in c1
 		c2Report := lastReport.ClusterReports["c2"]
 		require.Contains(t, c2Report.TableFailureItems, defaultSchemaKey)
 		tableItems := c2Report.TableFailureItems[defaultSchemaKey]
@@ -560,8 +563,8 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 			"c2": makeTWData(200, 300, nil,
 				makeContent(makeCanalJSON(3, 260, 250, "c"))),
 		}
-		// Round 3: c1 has upstream pk=5 (commitTs=350, compareTs=350) and
-		// downstream pk=5 from c2 (commitTs=370, originTs=310, compareTs=310).
+		// Round 3: c1 has locally-written pk=5 (commitTs=350, compareTs=350) and
+		// replicated pk=5 from c2 (commitTs=370, originTs=310, compareTs=310).
 		// Since 350 >= 310 with commitTs 350 < 370, this is an LWW violation.
 		// c2 also has matching records to avoid data loss/redundant noise.
 		round3 := map[string]types.TimeWindowData{
@@ -595,7 +598,7 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 		require.Equal(t, uint64(310), c1TableItems.LWWViolationItems[0].OriginTS)
 		require.Equal(t, uint64(370), c1TableItems.LWWViolationItems[0].CommitTS)
 		// c2 should have no LWW violation (its records are ordered correctly:
-		// upstream commitTs=310 compareTs=310, downstream commitTs=360 compareTs=350, 310 < 350)
+		// locally-written commitTs=310 compareTs=310, replicated commitTs=360 compareTs=350, 310 < 350)
 		c2Report := lastReport.ClusterReports["c2"]
 		if c2TableItems, ok := c2Report.TableFailureItems[defaultSchemaKey]; ok {
 			require.Empty(t, c2TableItems.LWWViolationItems)

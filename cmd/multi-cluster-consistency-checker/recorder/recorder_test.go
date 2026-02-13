@@ -31,7 +31,7 @@ func TestNewRecorder(t *testing.T) {
 	t.Run("creates directories", func(t *testing.T) {
 		t.Parallel()
 		dataDir := t.TempDir()
-		r, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}})
+		r, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}}, 0)
 		require.NoError(t, err)
 		require.NotNil(t, r)
 
@@ -48,7 +48,7 @@ func TestNewRecorder(t *testing.T) {
 	t.Run("checkpoint is initialized empty", func(t *testing.T) {
 		t.Parallel()
 		dataDir := t.TempDir()
-		r, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}})
+		r, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}}, 0)
 		require.NoError(t, err)
 
 		cp := r.GetCheckpoint()
@@ -63,7 +63,7 @@ func TestNewRecorder(t *testing.T) {
 		dataDir := t.TempDir()
 
 		// First recorder: write a checkpoint
-		r1, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}})
+		r1, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}}, 0)
 		require.NoError(t, err)
 
 		twData := map[string]types.TimeWindowData{
@@ -79,7 +79,7 @@ func TestNewRecorder(t *testing.T) {
 		require.NoError(t, err)
 
 		// Second recorder: should load the checkpoint
-		r2, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}})
+		r2, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}}, 0)
 		require.NoError(t, err)
 
 		cp := r2.GetCheckpoint()
@@ -95,7 +95,7 @@ func TestNewRecorder(t *testing.T) {
 		dataDir := t.TempDir()
 
 		// Write a checkpoint with 2 clusters
-		r1, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}, "c2": {}})
+		r1, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}, "c2": {}}, 0)
 		require.NoError(t, err)
 		twData := map[string]types.TimeWindowData{
 			"c1": {TimeWindow: types.TimeWindow{LeftBoundary: 0, RightBoundary: 10}},
@@ -105,7 +105,7 @@ func TestNewRecorder(t *testing.T) {
 		require.NoError(t, err)
 
 		// Try to load with only 1 cluster — should fail
-		_, err = NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}})
+		_, err = NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}}, 0)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "cluster info length mismatch")
 	})
@@ -115,7 +115,7 @@ func TestNewRecorder(t *testing.T) {
 		dataDir := t.TempDir()
 
 		// Write a checkpoint with clusters c1 and c2
-		r1, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}, "c2": {}})
+		r1, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}, "c2": {}}, 0)
 		require.NoError(t, err)
 		twData := map[string]types.TimeWindowData{
 			"c1": {TimeWindow: types.TimeWindow{LeftBoundary: 0, RightBoundary: 10}},
@@ -125,7 +125,7 @@ func TestNewRecorder(t *testing.T) {
 		require.NoError(t, err)
 
 		// Try to load with c1 and c3 (same count, different ID) — should fail
-		_, err = NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}, "c3": {}})
+		_, err = NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}, "c3": {}}, 0)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "cluster info missing for cluster c3")
 	})
@@ -137,7 +137,7 @@ func TestNewRecorder(t *testing.T) {
 		clusters := map[string]config.ClusterConfig{"c1": {}, "c2": {}}
 
 		// Write checkpoint across 3 rounds so all 3 slots are filled
-		r1, err := NewRecorder(dataDir, clusters)
+		r1, err := NewRecorder(dataDir, clusters, 0)
 		require.NoError(t, err)
 		for i := range 3 {
 			twData := map[string]types.TimeWindowData{
@@ -149,7 +149,7 @@ func TestNewRecorder(t *testing.T) {
 		}
 
 		// Reload with the same clusters — should succeed
-		r2, err := NewRecorder(dataDir, clusters)
+		r2, err := NewRecorder(dataDir, clusters, 0)
 		require.NoError(t, err)
 		cp := r2.GetCheckpoint()
 		require.NotNil(t, cp.CheckpointItems[0])
@@ -162,7 +162,7 @@ func TestNewRecorder(t *testing.T) {
 		dataDir := t.TempDir()
 
 		// Write only 1 round — items[0] and items[1] stay nil
-		r1, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}})
+		r1, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}}, 0)
 		require.NoError(t, err)
 		twData := map[string]types.TimeWindowData{
 			"c1": {TimeWindow: types.TimeWindow{LeftBoundary: 0, RightBoundary: 10}},
@@ -172,7 +172,7 @@ func TestNewRecorder(t *testing.T) {
 
 		// Reload — should succeed even with a different cluster count since
 		// only the non-nil item[2] is validated
-		_, err = NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}})
+		_, err = NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}}, 0)
 		require.NoError(t, err)
 	})
 
@@ -181,7 +181,7 @@ func TestNewRecorder(t *testing.T) {
 		dataDir := t.TempDir()
 
 		// Fresh start with any cluster config — should always succeed
-		r, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}, "c2": {}, "c3": {}})
+		r, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}, "c2": {}, "c3": {}}, 0)
 		require.NoError(t, err)
 		require.NotNil(t, r)
 
@@ -198,7 +198,7 @@ func TestRecorder_RecordTimeWindow(t *testing.T) {
 	t.Run("without report flush writes only checkpoint", func(t *testing.T) {
 		t.Parallel()
 		dataDir := t.TempDir()
-		r, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}})
+		r, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}}, 0)
 		require.NoError(t, err)
 
 		twData := map[string]types.TimeWindowData{
@@ -221,7 +221,7 @@ func TestRecorder_RecordTimeWindow(t *testing.T) {
 	t.Run("with report flush writes both checkpoint and report", func(t *testing.T) {
 		t.Parallel()
 		dataDir := t.TempDir()
-		r, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}})
+		r, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}}, 0)
 		require.NoError(t, err)
 
 		twData := map[string]types.TimeWindowData{
@@ -229,7 +229,7 @@ func TestRecorder_RecordTimeWindow(t *testing.T) {
 		}
 		report := NewReport(5)
 		cr := NewClusterReport("c1", types.TimeWindow{LeftBoundary: 1, RightBoundary: 10})
-		cr.AddDataLossItem("d1", "test_table", "pk-1", 100, 200, false)
+		cr.AddDataLossItem("d1", "test_table", "pk-1", 100, 200)
 		report.AddClusterReport("c1", cr)
 		require.True(t, report.NeedFlush())
 
@@ -264,7 +264,7 @@ func TestRecorder_RecordTimeWindow(t *testing.T) {
 	t.Run("multiple rounds advance checkpoint", func(t *testing.T) {
 		t.Parallel()
 		dataDir := t.TempDir()
-		r, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}})
+		r, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}}, 0)
 		require.NoError(t, err)
 
 		for i := uint64(0); i < 4; i++ {
@@ -302,7 +302,7 @@ func TestRecorder_CheckpointPersistence(t *testing.T) {
 		stk := types.SchemaTableKey{Schema: "db", Table: "tbl"}
 
 		// Simulate 3 rounds
-		r1, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}})
+		r1, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}}, 0)
 		require.NoError(t, err)
 		for i := uint64(0); i < 3; i++ {
 			twData := map[string]types.TimeWindowData{
@@ -319,7 +319,7 @@ func TestRecorder_CheckpointPersistence(t *testing.T) {
 		}
 
 		// Restart: new recorder from same dir
-		r2, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}})
+		r2, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}}, 0)
 		require.NoError(t, err)
 
 		cp := r2.GetCheckpoint()
@@ -338,10 +338,79 @@ func TestRecorder_CheckpointPersistence(t *testing.T) {
 		require.Equal(t, "dp2", sr.EndDataPath)
 	})
 
+	t.Run("old report files are cleaned up when exceeding max", func(t *testing.T) {
+		t.Parallel()
+		dataDir := t.TempDir()
+		maxReportFiles := 3
+		r, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}}, maxReportFiles)
+		require.NoError(t, err)
+
+		// Write 5 reports (each creates 2 files: .report and .json)
+		for i := uint64(0); i < 5; i++ {
+			twData := map[string]types.TimeWindowData{
+				"c1": {TimeWindow: types.TimeWindow{LeftBoundary: i * 10, RightBoundary: (i + 1) * 10}},
+			}
+			report := NewReport(i)
+			cr := NewClusterReport("c1", types.TimeWindow{LeftBoundary: i * 10, RightBoundary: (i + 1) * 10})
+			cr.AddDataLossItem("d1", "test_table", "pk-1", i, i+1)
+			report.AddClusterReport("c1", cr)
+			require.True(t, report.NeedFlush())
+
+			err = r.RecordTimeWindow(twData, report)
+			require.NoError(t, err)
+		}
+
+		// Should have at most maxReportFiles * 2 = 6 files (rounds 2, 3, 4)
+		entries, err := os.ReadDir(filepath.Join(dataDir, "report"))
+		require.NoError(t, err)
+		require.Equal(t, maxReportFiles*2, len(entries))
+
+		// Oldest files (round 0 and 1) should be deleted
+		_, err = os.Stat(filepath.Join(dataDir, "report", "report-0.report"))
+		require.True(t, os.IsNotExist(err))
+		_, err = os.Stat(filepath.Join(dataDir, "report", "report-1.report"))
+		require.True(t, os.IsNotExist(err))
+
+		// Newest files should still exist
+		_, err = os.Stat(filepath.Join(dataDir, "report", "report-2.report"))
+		require.NoError(t, err)
+		_, err = os.Stat(filepath.Join(dataDir, "report", "report-3.report"))
+		require.NoError(t, err)
+		_, err = os.Stat(filepath.Join(dataDir, "report", "report-4.report"))
+		require.NoError(t, err)
+	})
+
+	t.Run("no cleanup when under max report files", func(t *testing.T) {
+		t.Parallel()
+		dataDir := t.TempDir()
+		maxReportFiles := 10
+		r, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}}, maxReportFiles)
+		require.NoError(t, err)
+
+		// Write 3 reports
+		for i := uint64(0); i < 3; i++ {
+			twData := map[string]types.TimeWindowData{
+				"c1": {TimeWindow: types.TimeWindow{LeftBoundary: i * 10, RightBoundary: (i + 1) * 10}},
+			}
+			report := NewReport(i)
+			cr := NewClusterReport("c1", types.TimeWindow{LeftBoundary: i * 10, RightBoundary: (i + 1) * 10})
+			cr.AddDataLossItem("d1", "test_table", "pk-1", i, i+1)
+			report.AddClusterReport("c1", cr)
+
+			err = r.RecordTimeWindow(twData, report)
+			require.NoError(t, err)
+		}
+
+		// All 6 files should exist (3 rounds * 2 files each)
+		entries, err := os.ReadDir(filepath.Join(dataDir, "report"))
+		require.NoError(t, err)
+		require.Equal(t, 6, len(entries))
+	})
+
 	t.Run("checkpoint json is valid", func(t *testing.T) {
 		t.Parallel()
 		dataDir := t.TempDir()
-		r, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}})
+		r, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}}, 0)
 		require.NoError(t, err)
 
 		twData := map[string]types.TimeWindowData{

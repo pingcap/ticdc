@@ -48,8 +48,8 @@ type waitCheckpointTask struct {
 }
 
 type CheckpointWatcher struct {
-	upstreamClusterID   string
-	downstreamClusterID string
+	localClusterID      string
+	replicatedClusterID string
 	changefeedID        common.ChangeFeedID
 	etcdClient          etcd.CDCEtcdClient
 
@@ -65,13 +65,13 @@ type CheckpointWatcher struct {
 
 func NewCheckpointWatcher(
 	ctx context.Context,
-	upstreamClusterID, downstreamClusterID, changefeedID string,
+	localClusterID, replicatedClusterID, changefeedID string,
 	etcdClient etcd.CDCEtcdClient,
 ) *CheckpointWatcher {
 	cctx, cancel := context.WithCancel(ctx)
 	watcher := &CheckpointWatcher{
-		upstreamClusterID:   upstreamClusterID,
-		downstreamClusterID: downstreamClusterID,
+		localClusterID:      localClusterID,
+		replicatedClusterID: replicatedClusterID,
 		changefeedID:        common.NewChangeFeedIDWithName(changefeedID, "default"),
 		etcdClient:          etcdClient,
 
@@ -219,10 +219,10 @@ func (cw *CheckpointWatcher) watchOnce() error {
 	statusKey := etcd.GetEtcdKeyJob(cw.etcdClient.GetClusterID(), cw.changefeedID.DisplayName)
 
 	log.Debug("Starting to watch checkpoint",
-		zap.String("changefeedID", cw.changefeedID.String()),
+		zap.String("changefeed ID", cw.changefeedID.String()),
 		zap.String("statusKey", statusKey),
-		zap.String("upstreamClusterID", cw.upstreamClusterID),
-		zap.String("downstreamClusterID", cw.downstreamClusterID),
+		zap.String("local cluster ID", cw.localClusterID),
+		zap.String("replicated cluster ID", cw.replicatedClusterID),
 		zap.Uint64("checkpoint", status.CheckpointTs),
 		zap.Int64("startRev", modRev+1))
 

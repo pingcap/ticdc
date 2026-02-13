@@ -29,6 +29,7 @@ import (
 
 var (
 	cfgPath string
+	dryRun  bool
 )
 
 const (
@@ -39,6 +40,7 @@ const (
 
 const (
 	FlagConfig = "config"
+	FlagDryRun = "dry-run"
 )
 
 func main() {
@@ -51,6 +53,7 @@ func main() {
 
 	rootCmd.Flags().StringVarP(&cfgPath, FlagConfig, "c", "", "configuration file path (required)")
 	rootCmd.MarkFlagRequired(FlagConfig)
+	rootCmd.Flags().BoolVar(&dryRun, FlagDryRun, false, "validate config and connectivity without running the checker")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -96,7 +99,7 @@ func run(cmd *cobra.Command, args []string) {
 	// Start the task in a goroutine
 	errChan := make(chan error, 1)
 	go func() {
-		err := runTask(ctx, cfg)
+		err := runTask(ctx, cfg, dryRun)
 		if err != nil {
 			log.Error("task error", zap.Error(err))
 		}

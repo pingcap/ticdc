@@ -55,11 +55,11 @@ type VersionKey struct {
 type TimeWindow struct {
 	LeftBoundary  uint64 `json:"left_boundary"`
 	RightBoundary uint64 `json:"right_boundary"`
-	// CheckpointTs is the checkpoint timestamp for each changefeed from upstream cluster,
-	// mapping from downstream cluster ID to the checkpoint timestamp
+	// CheckpointTs is the checkpoint timestamp for each local-to-replicated changefeed,
+	// mapping from replicated cluster ID to the checkpoint timestamp
 	CheckpointTs map[string]uint64 `json:"checkpoint_ts"`
-	// PDTimestampAfterTimeWindow is the max PD timestamp after the time window for each downstream cluster,
-	// mapping from upstream cluster ID to the max PD timestamp
+	// PDTimestampAfterTimeWindow is the max PD timestamp after the time window for each replicated cluster,
+	// mapping from local cluster ID to the max PD timestamp
 	PDTimestampAfterTimeWindow map[string]uint64 `json:"pd_timestamp_after_time_window"`
 	// NextMinLeftBoundary is the minimum left boundary of the next time window for the cluster
 	NextMinLeftBoundary uint64 `json:"next_min_left_boundary"`
@@ -68,8 +68,8 @@ type TimeWindow struct {
 func (t *TimeWindow) String() string {
 	var builder strings.Builder
 	fmt.Fprintf(&builder, "time window boundary: (%d, %d]\n", t.LeftBoundary, t.RightBoundary)
-	for downstreamClusterID, checkpointTs := range t.CheckpointTs {
-		fmt.Fprintf(&builder, "checkpoint ts [to cluster %s]: %d\n", downstreamClusterID, checkpointTs)
+	for replicatedClusterID, checkpointTs := range t.CheckpointTs {
+		fmt.Fprintf(&builder, "checkpoint ts [replicated cluster: %s]: %d\n", replicatedClusterID, checkpointTs)
 	}
 	return builder.String()
 }

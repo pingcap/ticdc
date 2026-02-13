@@ -23,31 +23,66 @@ import (
 
 func TestDataLossItem_String(t *testing.T) {
 	t.Parallel()
+	item := &DataLossItem{
+		PeerClusterID: "cluster-2",
+		PK:            "pk-1",
+		OriginTS:      100,
+		CommitTS:      200,
+	}
+	s := item.String()
+	require.Equal(t, "peer cluster: cluster-2, pk: pk-1, origin ts: 100, commit ts: 200, type: data loss", s)
+}
 
-	t.Run("data loss", func(t *testing.T) {
+func TestDataInconsistentItem_String(t *testing.T) {
+	t.Parallel()
+
+	t.Run("without inconsistent columns", func(t *testing.T) {
 		t.Parallel()
-		item := &DataLossItem{
-			DownstreamClusterID: "cluster-2",
-			PK:                  "pk-1",
-			OriginTS:            100,
-			CommitTS:            200,
-			Inconsistent:        false,
+		item := &DataInconsistentItem{
+			PeerClusterID: "cluster-3",
+			PK:            "pk-2",
+			OriginTS:      300,
+			CommitTS:      400,
 		}
 		s := item.String()
-		require.Equal(t, "downstream cluster: cluster-2, pk: pk-1, origin ts: 100, commit ts: 200, type: data loss", s)
+		require.Equal(t, "peer cluster: cluster-3, pk: pk-2, origin ts: 300, commit ts: 400, type: data inconsistent", s)
 	})
 
-	t.Run("data inconsistent", func(t *testing.T) {
+	t.Run("with inconsistent columns", func(t *testing.T) {
 		t.Parallel()
-		item := &DataLossItem{
-			DownstreamClusterID: "cluster-3",
-			PK:                  "pk-2",
-			OriginTS:            300,
-			CommitTS:            400,
-			Inconsistent:        true,
+		item := &DataInconsistentItem{
+			PeerClusterID: "cluster-3",
+			PK:            "pk-2",
+			OriginTS:      300,
+			CommitTS:      400,
+			InconsistentColumns: []InconsistentColumn{
+				{Column: "col1", Local: "val_a", Replicated: "val_b"},
+				{Column: "col2", Local: 100, Replicated: 200},
+			},
 		}
 		s := item.String()
-		require.Equal(t, "downstream cluster: cluster-3, pk: pk-2, origin ts: 300, commit ts: 400, type: data inconsistent", s)
+		require.Equal(t,
+			"peer cluster: cluster-3, pk: pk-2, origin ts: 300, commit ts: 400, type: data inconsistent, "+
+				"inconsistent columns: [column: col1, local: val_a, replicated: val_b; column: col2, local: 100, replicated: 200]",
+			s)
+	})
+
+	t.Run("with missing column in replicated", func(t *testing.T) {
+		t.Parallel()
+		item := &DataInconsistentItem{
+			PeerClusterID: "cluster-3",
+			PK:            "pk-2",
+			OriginTS:      300,
+			CommitTS:      400,
+			InconsistentColumns: []InconsistentColumn{
+				{Column: "col1", Local: "val_a", Replicated: nil},
+			},
+		}
+		s := item.String()
+		require.Equal(t,
+			"peer cluster: cluster-3, pk: pk-2, origin ts: 300, commit ts: 400, type: data inconsistent, "+
+				"inconsistent columns: [column: col1, local: val_a, replicated: <nil>]",
+			s)
 	})
 }
 
@@ -87,17 +122,38 @@ func TestClusterReport(t *testing.T) {
 	t.Run("add data loss item sets needFlush", func(t *testing.T) {
 		t.Parallel()
 		cr := NewClusterReport("c1", types.TimeWindow{})
-		cr.AddDataLossItem("downstream-1", testSchemaKey, "pk-1", 100, 200, false)
+		cr.AddDataLossItem("peer-cluster-1", testSchemaKey, "pk-1", 100, 200)
 		require.Len(t, cr.TableFailureItems, 1)
 		require.Contains(t, cr.TableFailureItems, testSchemaKey)
 		tableItems := cr.TableFailureItems[testSchemaKey]
 		require.Len(t, tableItems.DataLossItems, 1)
 		require.True(t, cr.needFlush)
-		require.Equal(t, "downstream-1", tableItems.DataLossItems[0].DownstreamClusterID)
+		require.Equal(t, "peer-cluster-1", tableItems.DataLossItems[0].PeerClusterID)
 		require.Equal(t, "pk-1", tableItems.DataLossItems[0].PK)
 		require.Equal(t, uint64(100), tableItems.DataLossItems[0].OriginTS)
 		require.Equal(t, uint64(200), tableItems.DataLossItems[0].CommitTS)
-		require.False(t, tableItems.DataLossItems[0].Inconsistent)
+	})
+
+	t.Run("add data inconsistent item sets needFlush", func(t *testing.T) {
+		t.Parallel()
+		cr := NewClusterReport("c1", types.TimeWindow{})
+		cols := []InconsistentColumn{
+			{Column: "val", Local: "a", Replicated: "b"},
+		}
+		cr.AddDataInconsistentItem("peer-cluster-2", testSchemaKey, "pk-2", 300, 400, cols)
+		require.Len(t, cr.TableFailureItems, 1)
+		require.Contains(t, cr.TableFailureItems, testSchemaKey)
+		tableItems := cr.TableFailureItems[testSchemaKey]
+		require.Len(t, tableItems.DataInconsistentItems, 1)
+		require.True(t, cr.needFlush)
+		require.Equal(t, "peer-cluster-2", tableItems.DataInconsistentItems[0].PeerClusterID)
+		require.Equal(t, "pk-2", tableItems.DataInconsistentItems[0].PK)
+		require.Equal(t, uint64(300), tableItems.DataInconsistentItems[0].OriginTS)
+		require.Equal(t, uint64(400), tableItems.DataInconsistentItems[0].CommitTS)
+		require.Len(t, tableItems.DataInconsistentItems[0].InconsistentColumns, 1)
+		require.Equal(t, "val", tableItems.DataInconsistentItems[0].InconsistentColumns[0].Column)
+		require.Equal(t, "a", tableItems.DataInconsistentItems[0].InconsistentColumns[0].Local)
+		require.Equal(t, "b", tableItems.DataInconsistentItems[0].InconsistentColumns[0].Replicated)
 	})
 
 	t.Run("add data redundant item sets needFlush", func(t *testing.T) {
@@ -127,13 +183,14 @@ func TestClusterReport(t *testing.T) {
 	t.Run("add multiple items", func(t *testing.T) {
 		t.Parallel()
 		cr := NewClusterReport("c1", types.TimeWindow{})
-		cr.AddDataLossItem("d1", testSchemaKey, "pk-1", 1, 2, false)
-		cr.AddDataLossItem("d2", testSchemaKey, "pk-2", 3, 4, true)
+		cr.AddDataLossItem("d1", testSchemaKey, "pk-1", 1, 2)
+		cr.AddDataInconsistentItem("d2", testSchemaKey, "pk-2", 3, 4, nil)
 		cr.AddDataRedundantItem(testSchemaKey, "pk-3", 5, 6)
 		cr.AddLWWViolationItem(testSchemaKey, "pk-4", 7, 8, 9, 10)
 		require.Len(t, cr.TableFailureItems, 1)
 		tableItems := cr.TableFailureItems[testSchemaKey]
-		require.Len(t, tableItems.DataLossItems, 2)
+		require.Len(t, tableItems.DataLossItems, 1)
+		require.Len(t, tableItems.DataInconsistentItems, 1)
 		require.Len(t, tableItems.DataRedundantItems, 1)
 		require.Len(t, tableItems.LWWViolationItems, 1)
 	})
@@ -163,7 +220,7 @@ func TestReport(t *testing.T) {
 		t.Parallel()
 		r := NewReport(1)
 		cr := NewClusterReport("c1", types.TimeWindow{})
-		cr.AddDataLossItem("d1", testSchemaKey, "pk-1", 1, 2, false)
+		cr.AddDataLossItem("d1", testSchemaKey, "pk-1", 1, 2)
 		r.AddClusterReport("c1", cr)
 		require.True(t, r.NeedFlush())
 	})
@@ -197,7 +254,7 @@ func TestReport_MarshalReport(t *testing.T) {
 		t.Parallel()
 		r := NewReport(1)
 		cr := NewClusterReport("c1", tw)
-		cr.AddDataLossItem("d1", testSchemaKey, "pk-1", 100, 200, false)
+		cr.AddDataLossItem("d1", testSchemaKey, "pk-1", 100, 200)
 		r.AddClusterReport("c1", cr)
 		s := r.MarshalReport()
 		require.Equal(t, "round: 1\n\n"+
@@ -205,7 +262,7 @@ func TestReport_MarshalReport(t *testing.T) {
 			"time window: "+twStr+"\n"+
 			"  - [table name: "+testSchemaKey+"]\n"+
 			"  - [data loss items: 1]\n"+
-			"    - [downstream cluster: d1, pk: pk-1, origin ts: 100, commit ts: 200, type: data loss]\n\n",
+			"    - [peer cluster: d1, pk: pk-1, origin ts: 100, commit ts: 200, type: data loss]\n\n",
 			s)
 	})
 
@@ -246,7 +303,7 @@ func TestReport_MarshalReport(t *testing.T) {
 		r := NewReport(1)
 		crEmpty := NewClusterReport("empty-cluster", tw)
 		crFull := NewClusterReport("full-cluster", tw)
-		crFull.AddDataLossItem("d1", testSchemaKey, "pk-1", 1, 2, false)
+		crFull.AddDataLossItem("d1", testSchemaKey, "pk-1", 1, 2)
 		r.AddClusterReport("empty-cluster", crEmpty)
 		r.AddClusterReport("full-cluster", crFull)
 		s := r.MarshalReport()
@@ -255,7 +312,7 @@ func TestReport_MarshalReport(t *testing.T) {
 			"time window: "+twStr+"\n"+
 			"  - [table name: "+testSchemaKey+"]\n"+
 			"  - [data loss items: 1]\n"+
-			"    - [downstream cluster: d1, pk: pk-1, origin ts: 1, commit ts: 2, type: data loss]\n\n",
+			"    - [peer cluster: d1, pk: pk-1, origin ts: 1, commit ts: 2, type: data loss]\n\n",
 			s)
 	})
 
@@ -263,7 +320,10 @@ func TestReport_MarshalReport(t *testing.T) {
 		t.Parallel()
 		r := NewReport(10)
 		cr := NewClusterReport("c1", tw)
-		cr.AddDataLossItem("d1", testSchemaKey, "pk-1", 1, 2, true)
+		cr.AddDataLossItem("d0", testSchemaKey, "pk-0", 0, 1)
+		cr.AddDataInconsistentItem("d1", testSchemaKey, "pk-1", 1, 2, []InconsistentColumn{
+			{Column: "val", Local: "x", Replicated: "y"},
+		})
 		cr.AddDataRedundantItem(testSchemaKey, "pk-2", 3, 4)
 		cr.AddLWWViolationItem(testSchemaKey, "pk-3", 5, 6, 7, 8)
 		r.AddClusterReport("c1", cr)
@@ -273,7 +333,9 @@ func TestReport_MarshalReport(t *testing.T) {
 			"time window: "+twStr+"\n"+
 			"  - [table name: "+testSchemaKey+"]\n"+
 			"  - [data loss items: 1]\n"+
-			"    - [downstream cluster: d1, pk: pk-1, origin ts: 1, commit ts: 2, type: data inconsistent]\n"+
+			"    - [peer cluster: d0, pk: pk-0, origin ts: 0, commit ts: 1, type: data loss]\n"+
+			"  - [data inconsistent items: 1]\n"+
+			"    - [peer cluster: d1, pk: pk-1, origin ts: 1, commit ts: 2, type: data inconsistent, inconsistent columns: [column: val, local: x, replicated: y]]\n"+
 			"  - [data redundant items: 1]\n"+
 			"    - [pk: pk-2, origin ts: 3, commit ts: 4]\n"+
 			"  - [lww violation items: 1]\n"+

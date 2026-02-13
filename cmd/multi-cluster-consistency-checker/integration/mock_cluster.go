@@ -108,7 +108,7 @@ func NewMockMultiCluster(
 		mc.S3Storages[id] = storage.NewMemStorage()
 		mc.pdClients[id] = &mockPDClient{base: pdBase, step: pdStep}
 
-		// Checkpoint watchers: one per downstream cluster
+		// Checkpoint watchers: one per replicated cluster
 		watchers := make(map[string]watcher.Watcher)
 		for _, other := range clusterIDs {
 			if other != id {
@@ -183,7 +183,7 @@ func (mc *MockMultiCluster) Close() {
 // Parameters:
 //   - pkID: primary key value (int column "id")
 //   - commitTs: TiDB commit timestamp
-//   - originTs: origin timestamp (0 for upstream, non-zero for downstream)
+//   - originTs: origin timestamp (0 for locally-written records, non-zero for replicated records)
 //   - val: value for the "val" varchar column
 func MakeCanalJSON(pkID int, commitTs uint64, originTs uint64, val string) string {
 	originTsVal := "null"

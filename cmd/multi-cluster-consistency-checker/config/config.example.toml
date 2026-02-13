@@ -22,7 +22,7 @@ data-dir = "/tmp/multi-cluster-consistency-checker-data"
   s3-sink-uri = "s3://bucket-name/cluster1/"
   s3-changefeed-id = "s3-changefeed-id-1"
   # security-config = { ca-path = "ca.crt", cert-path = "cert.crt", key-path = "key.crt" }
-  [clusters.cluster1.downstream-cluster-changefeed-config]
+  [clusters.cluster1.peer-cluster-changefeed-config]
   cluster2 = { changefeed-id = "active-active-changefeed-id-from-cluster1-to-cluster2" }
 
   # Second cluster configuration
@@ -31,7 +31,7 @@ data-dir = "/tmp/multi-cluster-consistency-checker-data"
   s3-sink-uri = "s3://bucket-name/cluster2/"
   s3-changefeed-id = "s3-changefeed-id-2"
   # security-config = { ca-path = "ca.crt", cert-path = "cert.crt", key-path = "key.crt" }
-  [clusters.cluster2.downstream-cluster-changefeed-config]
+  [clusters.cluster2.peer-cluster-changefeed-config]
   cluster1 = { changefeed-id = "active-active-changefeed-id-from-cluster2-to-cluster1" }
 
   # Third cluster configuration (optional)
@@ -41,6 +41,6 @@ data-dir = "/tmp/multi-cluster-consistency-checker-data"
   # s3-sink-uri = "s3://bucket-name/cluster3/"
   # s3-changefeed-id = "s3-changefeed-id-3"
   # security-config = { ca-path = "ca.crt", cert-path = "cert.crt", key-path = "key.crt" }
-  # [clusters.cluster3.downstream-cluster-changefeed-config]
+  # [clusters.cluster3.peer-cluster-changefeed-config]
   # cluster1 = { changefeed-id = "active-active-changefeed-id-from-cluster3-to-cluster1" }
   # cluster2 = { changefeed-id = "active-active-changefeed-id-from-cluster3-to-cluster2" }

@@ -15,6 +15,8 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/pingcap/log"
@@ -23,17 +25,19 @@ import (
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/config"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/recorder"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/watcher"
+	"github.com/pingcap/ticdc/pkg/common"
+	cdcconfig "github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/security"
-	putil "github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/util"
 	pd "github.com/tikv/pd/client"
 	pdopt "github.com/tikv/pd/client/opt"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
 
-func runTask(ctx context.Context, cfg *config.Config) error {
+func runTask(ctx context.Context, cfg *config.Config, dryRun bool) error {
 	checkpointWatchers, s3Watchers, pdClients, etcdClients, err := initClients(ctx, cfg)
 	if err != nil {
 		return errors.Trace(err)
@@ -41,7 +45,12 @@ func runTask(ctx context.Context, cfg *config.Config) error {
 	// Ensure cleanup happens even if there's an error
 	defer cleanupClients(pdClients, etcdClients, checkpointWatchers, s3Watchers)
 
-	recorder, err := recorder.NewRecorder(cfg.GlobalConfig.DataDir, cfg.Clusters)
+	if dryRun {
+		log.Info("Dry-run mode: config validation and connectivity check passed, exiting")
+		return nil
+	}
+
+	recorder, err := recorder.NewRecorder(cfg.GlobalConfig.DataDir, cfg.Clusters, cfg.GlobalConfig.MaxReportFiles)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -98,14 +107,20 @@ func initClients(ctx context.Context, cfg *config.Config) (
 		}
 		etcdClients[clusterID] = etcdClient
 
-		upstreamCheckpointWatchers := make(map[string]watcher.Watcher)
-		for downstreamClusterID, downstreamClusterChangefeedConfig := range clusterConfig.DownstreamClusterChangefeedConfig {
-			checkpointWatcher := watcher.NewCheckpointWatcher(ctx, clusterID, downstreamClusterID, downstreamClusterChangefeedConfig.ChangefeedID, etcdClient)
-			upstreamCheckpointWatchers[downstreamClusterID] = checkpointWatcher
+		clusterCheckpointWatchers := make(map[string]watcher.Watcher)
+		for peerClusterID, peerClusterChangefeedConfig := range clusterConfig.PeerClusterChangefeedConfig {
+			checkpointWatcher := watcher.NewCheckpointWatcher(ctx, clusterID, peerClusterID, peerClusterChangefeedConfig.ChangefeedID, etcdClient)
+			clusterCheckpointWatchers[peerClusterID] = checkpointWatcher
 		}
-		checkpointWatchers[clusterID] = upstreamCheckpointWatchers
+		checkpointWatchers[clusterID] = clusterCheckpointWatchers
 
-		s3Storage, err := putil.GetExternalStorageWithDefaultTimeout(ctx, clusterConfig.S3SinkURI)
+		// Validate s3 changefeed sink config from etcd
+		if err := validateS3ChangefeedSinkConfig(ctx, etcdClient, clusterID, clusterConfig.S3ChangefeedID); err != nil {
+			cleanupClients(pdClients, etcdClients, checkpointWatchers, s3Watchers)
+			return nil, nil, nil, nil, errors.Trace(err)
+		}
+
+		s3Storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, clusterConfig.S3SinkURI)
 		if err != nil {
 			// Clean up already created clients before returning error
 			cleanupClients(pdClients, etcdClients, checkpointWatchers, s3Watchers)
@@ -121,6 +136,69 @@ func initClients(ctx context.Context, cfg *config.Config) (
 	}
 
 	return checkpointWatchers, s3Watchers, pdClients, etcdClients, nil
+}
+
+// validateS3ChangefeedSinkConfig fetches the changefeed info from etcd and validates that:
+// 1. The protocol must be canal-json
+// 2. The date separator must be "day"
+// 3. The file index width must be DefaultFileIndexWidth
+func validateS3ChangefeedSinkConfig(ctx context.Context, etcdClient *etcd.CDCEtcdClientImpl, clusterID string, s3ChangefeedID string) error {
+	displayName := common.NewChangeFeedDisplayName(s3ChangefeedID, "default")
+	cfInfo, err := etcdClient.GetChangeFeedInfo(ctx, displayName)
+	if err != nil {
+		return errors.Annotate(err, fmt.Sprintf("failed to get changefeed info for s3 changefeed %s in cluster %s", s3ChangefeedID, clusterID))
+	}
+
+	if cfInfo.Config == nil || cfInfo.Config.Sink == nil {
+		return fmt.Errorf("cluster %s: s3 changefeed %s has no sink configuration", clusterID, s3ChangefeedID)
+	}
+
+	sinkConfig := cfInfo.Config.Sink
+
+	// 1. Validate protocol must be canal-json
+	protocolStr := strings.ToLower(util.GetOrZero(sinkConfig.Protocol))
+	if protocolStr == "" {
+		return fmt.Errorf("cluster %s: s3 changefeed %s has no protocol configured in sink config", clusterID, s3ChangefeedID)
+	}
+	protocol, err := cdcconfig.ParseSinkProtocolFromString(protocolStr)
+	if err != nil {
+		return errors.Annotate(err, fmt.Sprintf("cluster %s: s3 changefeed %s has invalid protocol", clusterID, s3ChangefeedID))
+	}
+	if protocol != cdcconfig.ProtocolCanalJSON {
+		return fmt.Errorf("cluster %s: s3 changefeed %s protocol is %q, but only %q is supported",
+			clusterID, s3ChangefeedID, protocolStr, cdcconfig.ProtocolCanalJSON.String())
+	}
+
+	// 2. Validate date separator must be "day"
+	dateSeparatorStr := util.GetOrZero(sinkConfig.DateSeparator)
+	if dateSeparatorStr == "" {
+		dateSeparatorStr = cdcconfig.DateSeparatorNone.String()
+	}
+	var dateSep cdcconfig.DateSeparator
+	if err := dateSep.FromString(dateSeparatorStr); err != nil {
+		return errors.Annotate(err, fmt.Sprintf("cluster %s: s3 changefeed %s has invalid date-separator %q", clusterID, s3ChangefeedID, dateSeparatorStr))
+	}
+	if dateSep != cdcconfig.DateSeparatorDay {
+		return fmt.Errorf("cluster %s: s3 changefeed %s date-separator is %q, but only %q is supported",
+			clusterID, s3ChangefeedID, dateSep.String(), cdcconfig.DateSeparatorDay.String())
+	}
+
+	// 3. Validate file index width must be DefaultFileIndexWidth
+	fileIndexWidth := util.GetOrZero(sinkConfig.FileIndexWidth)
+	if fileIndexWidth != cdcconfig.DefaultFileIndexWidth {
+		return fmt.Errorf("cluster %s: s3 changefeed %s file-index-width is %d, but only %d is supported",
+			clusterID, s3ChangefeedID, fileIndexWidth, cdcconfig.DefaultFileIndexWidth)
+	}
+
+	log.Info("Validated s3 changefeed sink config from etcd",
+		zap.String("clusterID", clusterID),
+		zap.String("s3ChangefeedID", s3ChangefeedID),
+		zap.String("protocol", protocolStr),
+		zap.String("dateSeparator", dateSep.String()),
+		zap.Int("fileIndexWidth", fileIndexWidth),
+	)
+
+	return nil
 }
 
 func newPDClient(ctx context.Context, pdAddrs []string, securityConfig *security.Credential) (pd.Client, *etcd.CDCEtcdClientImpl, error) {

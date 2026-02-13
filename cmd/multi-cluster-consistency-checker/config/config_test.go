@@ -41,14 +41,14 @@ data-dir = "/tmp/data"
   pd-addrs = ["127.0.0.1:2379"]
   s3-sink-uri = "s3://bucket/cluster1/"
   s3-changefeed-id = "s3-cf-1"
-  [clusters.cluster1.downstream-cluster-changefeed-config]
+  [clusters.cluster1.peer-cluster-changefeed-config]
   cluster2 = { changefeed-id = "cf-1-to-2" }
 
   [clusters.cluster2]
   pd-addrs = ["127.0.0.1:2479"]
   s3-sink-uri = "s3://bucket/cluster2/"
   s3-changefeed-id = "s3-cf-2"
-  [clusters.cluster2.downstream-cluster-changefeed-config]
+  [clusters.cluster2.peer-cluster-changefeed-config]
   cluster1 = { changefeed-id = "cf-2-to-1" }
 `
 		err := os.WriteFile(configPath, []byte(configContent), 0644)
@@ -65,8 +65,45 @@ data-dir = "/tmp/data"
 		require.Equal(t, []string{"127.0.0.1:2379"}, cfg.Clusters["cluster1"].PDAddrs)
 		require.Equal(t, "s3://bucket/cluster1/", cfg.Clusters["cluster1"].S3SinkURI)
 		require.Equal(t, "s3-cf-1", cfg.Clusters["cluster1"].S3ChangefeedID)
-		require.Len(t, cfg.Clusters["cluster1"].DownstreamClusterChangefeedConfig, 1)
-		require.Equal(t, "cf-1-to-2", cfg.Clusters["cluster1"].DownstreamClusterChangefeedConfig["cluster2"].ChangefeedID)
+		require.Len(t, cfg.Clusters["cluster1"].PeerClusterChangefeedConfig, 1)
+		require.Equal(t, "cf-1-to-2", cfg.Clusters["cluster1"].PeerClusterChangefeedConfig["cluster2"].ChangefeedID)
+		// max-report-files not set, should default to DefaultMaxReportFiles
+		require.Equal(t, DefaultMaxReportFiles, cfg.GlobalConfig.MaxReportFiles)
+	})
+
+	t.Run("custom max-report-files", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.toml")
+		configContent := `
+[global]
+log-level = "info"
+data-dir = "/tmp/data"
+max-report-files = 50
+  [global.tables]
+  schema1 = ["table1"]
+
+[clusters]
+  [clusters.cluster1]
+  pd-addrs = ["127.0.0.1:2379"]
+  s3-sink-uri = "s3://bucket/cluster1/"
+  s3-changefeed-id = "s3-cf-1"
+  [clusters.cluster1.peer-cluster-changefeed-config]
+  cluster2 = { changefeed-id = "cf-1-to-2" }
+
+  [clusters.cluster2]
+  pd-addrs = ["127.0.0.1:2479"]
+  s3-sink-uri = "s3://bucket/cluster2/"
+  s3-changefeed-id = "s3-cf-2"
+  [clusters.cluster2.peer-cluster-changefeed-config]
+  cluster1 = { changefeed-id = "cf-2-to-1" }
+`
+		err := os.WriteFile(configPath, []byte(configContent), 0644)
+		require.NoError(t, err)
+
+		cfg, err := LoadConfig(configPath)
+		require.NoError(t, err)
+		require.Equal(t, 50, cfg.GlobalConfig.MaxReportFiles)
 	})
 
 	t.Run("file not exists", func(t *testing.T) {
@@ -91,6 +128,106 @@ data-dir = "/tmp/data"
 		require.Contains(t, err.Error(), "failed to decode config file")
 	})
 
+	t.Run("missing data-dir", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.toml")
+		configContent := `
+[global]
+log-level = "info"
+
+[clusters]
+  [clusters.cluster1]
+  pd-addrs = ["127.0.0.1:2379"]
+  s3-sink-uri = "s3://bucket/cluster1/"
+  s3-changefeed-id = "s3-cf-1"
+  [clusters.cluster1.peer-cluster-changefeed-config]
+  cluster2 = { changefeed-id = "cf-1-to-2" }
+
+  [clusters.cluster2]
+  pd-addrs = ["127.0.0.1:2479"]
+  s3-sink-uri = "s3://bucket/cluster2/"
+  s3-changefeed-id = "s3-cf-2"
+  [clusters.cluster2.peer-cluster-changefeed-config]
+  cluster1 = { changefeed-id = "cf-2-to-1" }
+`
+		err := os.WriteFile(configPath, []byte(configContent), 0644)
+		require.NoError(t, err)
+
+		cfg, err := LoadConfig(configPath)
+		require.Error(t, err)
+		require.Nil(t, cfg)
+		require.Contains(t, err.Error(), "data-dir is required")
+	})
+
+	t.Run("missing tables", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.toml")
+		configContent := `
+[global]
+log-level = "info"
+data-dir = "/tmp/data"
+
+[clusters]
+  [clusters.cluster1]
+  pd-addrs = ["127.0.0.1:2379"]
+  s3-sink-uri = "s3://bucket/cluster1/"
+  s3-changefeed-id = "s3-cf-1"
+  [clusters.cluster1.peer-cluster-changefeed-config]
+  cluster2 = { changefeed-id = "cf-1-to-2" }
+
+  [clusters.cluster2]
+  pd-addrs = ["127.0.0.1:2479"]
+  s3-sink-uri = "s3://bucket/cluster2/"
+  s3-changefeed-id = "s3-cf-2"
+  [clusters.cluster2.peer-cluster-changefeed-config]
+  cluster1 = { changefeed-id = "cf-2-to-1" }
+`
+		err := os.WriteFile(configPath, []byte(configContent), 0644)
+		require.NoError(t, err)
+
+		cfg, err := LoadConfig(configPath)
+		require.Error(t, err)
+		require.Nil(t, cfg)
+		require.Contains(t, err.Error(), "at least one schema must be configured in tables")
+	})
+
+	t.Run("empty table list in schema", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.toml")
+		configContent := `
+[global]
+log-level = "info"
+data-dir = "/tmp/data"
+  [global.tables]
+  schema1 = []
+
+[clusters]
+  [clusters.cluster1]
+  pd-addrs = ["127.0.0.1:2379"]
+  s3-sink-uri = "s3://bucket/cluster1/"
+  s3-changefeed-id = "s3-cf-1"
+  [clusters.cluster1.peer-cluster-changefeed-config]
+  cluster2 = { changefeed-id = "cf-1-to-2" }
+
+  [clusters.cluster2]
+  pd-addrs = ["127.0.0.1:2479"]
+  s3-sink-uri = "s3://bucket/cluster2/"
+  s3-changefeed-id = "s3-cf-2"
+  [clusters.cluster2.peer-cluster-changefeed-config]
+  cluster1 = { changefeed-id = "cf-2-to-1" }
+`
+		err := os.WriteFile(configPath, []byte(configContent), 0644)
+		require.NoError(t, err)
+
+		cfg, err := LoadConfig(configPath)
+		require.Error(t, err)
+		require.Nil(t, cfg)
+		require.Contains(t, err.Error(), "at least one table must be configured")
+	})
+
 	t.Run("no clusters", func(t *testing.T) {
 		t.Parallel()
 		tmpDir := t.TempDir()
@@ -98,7 +235,9 @@ data-dir = "/tmp/data"
 		configContent := `
 [global]
 log-level = "info"
-report-dir = "/tmp/reports"
+data-dir = "/tmp/data"
+  [global.tables]
+  schema1 = ["table1"]
 `
 		err := os.WriteFile(configPath, []byte(configContent), 0644)
 		require.NoError(t, err)
@@ -116,7 +255,9 @@ report-dir = "/tmp/reports"
 		configContent := `
 [global]
 log-level = "info"
-report-dir = "/tmp/reports"
+data-dir = "/tmp/data"
+  [global.tables]
+  schema1 = ["table1"]
 
 [clusters]
   [clusters.cluster1]
@@ -139,7 +280,9 @@ report-dir = "/tmp/reports"
 		configContent := `
 [global]
 log-level = "info"
-report-dir = "/tmp/reports"
+data-dir = "/tmp/data"
+  [global.tables]
+  schema1 = ["table1"]
 
 [clusters]
   [clusters.cluster1]
@@ -162,7 +305,9 @@ report-dir = "/tmp/reports"
 		configContent := `
 [global]
 log-level = "info"
-report-dir = "/tmp/reports"
+data-dir = "/tmp/data"
+  [global.tables]
+  schema1 = ["table1"]
 
 [clusters]
   [clusters.cluster1]
@@ -178,21 +323,23 @@ report-dir = "/tmp/reports"
 		require.Contains(t, err.Error(), "s3-changefeed-id is required")
 	})
 
-	t.Run("incomplete downstream cluster changefeed config", func(t *testing.T) {
+	t.Run("incomplete replicated cluster changefeed config", func(t *testing.T) {
 		t.Parallel()
 		tmpDir := t.TempDir()
 		configPath := filepath.Join(tmpDir, "config.toml")
 		configContent := `
 [global]
 log-level = "info"
-report-dir = "/tmp/reports"
+data-dir = "/tmp/data"
+  [global.tables]
+  schema1 = ["table1"]
 
 [clusters]
   [clusters.cluster1]
   pd-addrs = ["127.0.0.1:2379"]
   s3-sink-uri = "s3://bucket/cluster1/"
   s3-changefeed-id = "s3-cf-1"
-  [clusters.cluster1.downstream-cluster-changefeed-config]
+  [clusters.cluster1.peer-cluster-changefeed-config]
   cluster2 = { changefeed-id = "cf-1-to-2" }
 
   [clusters.cluster2]
@@ -206,31 +353,33 @@ report-dir = "/tmp/reports"
 		cfg, err := LoadConfig(configPath)
 		require.Error(t, err)
 		require.Nil(t, cfg)
-		require.Contains(t, err.Error(), "downstream-cluster-changefeed-config is not entirely configured")
+		require.Contains(t, err.Error(), "peer-cluster-changefeed-config is not entirely configured")
 	})
 
-	t.Run("missing changefeed-id in downstream config", func(t *testing.T) {
+	t.Run("missing changefeed-id in peer cluster config", func(t *testing.T) {
 		t.Parallel()
 		tmpDir := t.TempDir()
 		configPath := filepath.Join(tmpDir, "config.toml")
 		configContent := `
 [global]
 log-level = "info"
-report-dir = "/tmp/reports"
+data-dir = "/tmp/data"
+  [global.tables]
+  schema1 = ["table1"]
 
 [clusters]
   [clusters.cluster1]
   pd-addrs = ["127.0.0.1:2379"]
   s3-sink-uri = "s3://bucket/cluster1/"
   s3-changefeed-id = "s3-cf-1"
-  [clusters.cluster1.downstream-cluster-changefeed-config]
+  [clusters.cluster1.peer-cluster-changefeed-config]
   cluster2 = {}
 
   [clusters.cluster2]
   pd-addrs = ["127.0.0.1:2479"]
   s3-sink-uri = "s3://bucket/cluster2/"
   s3-changefeed-id = "s3-cf-2"
-  [clusters.cluster2.downstream-cluster-changefeed-config]
+  [clusters.cluster2.peer-cluster-changefeed-config]
   cluster1 = { changefeed-id = "cf-2-to-1" }
 `
 		err := os.WriteFile(configPath, []byte(configContent), 0644)

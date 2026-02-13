@@ -54,7 +54,7 @@ func TestCheckpointWatcher_AdvanceCheckpointTs_AlreadyExceeds(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	watcher := NewCheckpointWatcher(ctx, "upstream-1", "downstream-1", "test-cf", mockEtcdClient)
+	watcher := NewCheckpointWatcher(ctx, "local-1", "replicated-1", "test-cf", mockEtcdClient)
 	defer watcher.Close()
 
 	// Wait for watcher to initialize
@@ -92,7 +92,7 @@ func TestCheckpointWatcher_AdvanceCheckpointTs_WaitForUpdate(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	watcher := NewCheckpointWatcher(ctx, "upstream-1", "downstream-1", "test-cf", mockEtcdClient)
+	watcher := NewCheckpointWatcher(ctx, "local-1", "replicated-1", "test-cf", mockEtcdClient)
 	defer watcher.Close()
 
 	// Wait for watcher to initialize
@@ -159,7 +159,7 @@ func TestCheckpointWatcher_AdvanceCheckpointTs_ContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	watcher := NewCheckpointWatcher(ctx, "upstream-1", "downstream-1", "test-cf", mockEtcdClient)
+	watcher := NewCheckpointWatcher(ctx, "local-1", "replicated-1", "test-cf", mockEtcdClient)
 	defer watcher.Close()
 
 	// Wait for watcher to initialize
@@ -214,7 +214,7 @@ func TestCheckpointWatcher_Close(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	watcher := NewCheckpointWatcher(ctx, "upstream-1", "downstream-1", "test-cf", mockEtcdClient)
+	watcher := NewCheckpointWatcher(ctx, "local-1", "replicated-1", "test-cf", mockEtcdClient)
 
 	// Wait for watcher to initialize
 	time.Sleep(50 * time.Millisecond)
@@ -279,7 +279,7 @@ func TestCheckpointWatcher_MultiplePendingTasks(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	watcher := NewCheckpointWatcher(ctx, "upstream-1", "downstream-1", "test-cf", mockEtcdClient)
+	watcher := NewCheckpointWatcher(ctx, "local-1", "replicated-1", "test-cf", mockEtcdClient)
 	defer watcher.Close()
 
 	// Wait for watcher to initialize
@@ -388,7 +388,7 @@ func TestCheckpointWatcher_InitialCheckpointNotifiesPendingTasks(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	watcher := NewCheckpointWatcher(ctx, "upstream-1", "downstream-1", "test-cf", mockEtcdClient)
+	watcher := NewCheckpointWatcher(ctx, "local-1", "replicated-1", "test-cf", mockEtcdClient)
 	defer watcher.Close()
 
 	// Wait for watcher to initialize and get the initial checkpoint
@@ -434,7 +434,7 @@ func TestCheckpointWatcher_WatchErrorRetry(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	watcher := NewCheckpointWatcher(ctx, "upstream-1", "downstream-1", "test-cf", mockEtcdClient)
+	watcher := NewCheckpointWatcher(ctx, "local-1", "replicated-1", "test-cf", mockEtcdClient)
 	defer watcher.Close()
 
 	// Wait for watcher to initialize
@@ -482,7 +482,7 @@ func TestCheckpointWatcher_GetStatusRetry(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	watcher := NewCheckpointWatcher(ctx, "upstream-1", "downstream-1", "test-cf", mockEtcdClient)
+	watcher := NewCheckpointWatcher(ctx, "local-1", "replicated-1", "test-cf", mockEtcdClient)
 	defer watcher.Close()
 
 	// Wait for retry to happen (backoff + processing time)
@@ -518,7 +518,7 @@ func TestCheckpointWatcher_KeyDeleted(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	watcher := NewCheckpointWatcher(ctx, "upstream-1", "downstream-1", "test-cf", mockEtcdClient)
+	watcher := NewCheckpointWatcher(ctx, "local-1", "replicated-1", "test-cf", mockEtcdClient)
 	defer watcher.Close()
 
 	// Wait for watcher to initialize

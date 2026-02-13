@@ -22,19 +22,49 @@ import (
 )
 
 type DataLossItem struct {
-	DownstreamClusterID string `json:"downstream_cluster_id"`
-	PK                  string `json:"pk"`
-	OriginTS            uint64 `json:"origin_ts"`
-	CommitTS            uint64 `json:"commit_ts"`
-	Inconsistent        bool   `json:"inconsistent"`
+	PeerClusterID string `json:"peer_cluster_id"`
+	PK            string `json:"pk"`
+	OriginTS      uint64 `json:"origin_ts"`
+	CommitTS      uint64 `json:"commit_ts"`
 }
 
 func (item *DataLossItem) String() string {
-	errType := "data loss"
-	if item.Inconsistent {
-		errType = "data inconsistent"
+	return fmt.Sprintf("peer cluster: %s, pk: %s, origin ts: %d, commit ts: %d, type: data loss", item.PeerClusterID, item.PK, item.OriginTS, item.CommitTS)
+}
+
+type InconsistentColumn struct {
+	Column     string `json:"column"`
+	Local      any    `json:"local"`
+	Replicated any    `json:"replicated"`
+}
+
+func (c *InconsistentColumn) String() string {
+	return fmt.Sprintf("column: %s, local: %v, replicated: %v", c.Column, c.Local, c.Replicated)
+}
+
+type DataInconsistentItem struct {
+	PeerClusterID       string               `json:"peer_cluster_id"`
+	PK                  string               `json:"pk"`
+	OriginTS            uint64               `json:"origin_ts"`
+	CommitTS            uint64               `json:"commit_ts"`
+	InconsistentColumns []InconsistentColumn `json:"inconsistent_columns,omitempty"`
+}
+
+func (item *DataInconsistentItem) String() string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "peer cluster: %s, pk: %s, origin ts: %d, commit ts: %d, type: data inconsistent",
+		item.PeerClusterID, item.PK, item.OriginTS, item.CommitTS)
+	if len(item.InconsistentColumns) > 0 {
+		sb.WriteString(", inconsistent columns: [")
+		for i, col := range item.InconsistentColumns {
+			if i > 0 {
+				sb.WriteString("; ")
+			}
+			sb.WriteString(col.String())
+		}
+		sb.WriteString("]")
 	}
-	return fmt.Sprintf("downstream cluster: %s, pk: %s, origin ts: %d, commit ts: %d, type: %s", item.DownstreamClusterID, item.PK, item.OriginTS, item.CommitTS, errType)
+	return sb.String()
 }
 
 type DataRedundantItem struct {
@@ -62,16 +92,18 @@ func (item *LWWViolationItem) String() string {
 }
 
 type TableFailureItems struct {
-	DataLossItems      []DataLossItem      `json:"data_loss_items"`      // data loss items
-	DataRedundantItems []DataRedundantItem `json:"data_redundant_items"` // data redundant items
-	LWWViolationItems  []LWWViolationItem  `json:"lww_violation_items"`  // lww violation items
+	DataLossItems         []DataLossItem         `json:"data_loss_items"`         // data loss items
+	DataInconsistentItems []DataInconsistentItem `json:"data_inconsistent_items"` // data inconsistent items
+	DataRedundantItems    []DataRedundantItem    `json:"data_redundant_items"`    // data redundant items
+	LWWViolationItems     []LWWViolationItem     `json:"lww_violation_items"`     // lww violation items
 }
 
 func NewTableFailureItems() *TableFailureItems {
 	return &TableFailureItems{
-		DataLossItems:      make([]DataLossItem, 0),
-		DataRedundantItems: make([]DataRedundantItem, 0),
-		LWWViolationItems:  make([]LWWViolationItem, 0),
+		DataLossItems:         make([]DataLossItem, 0),
+		DataInconsistentItems: make([]DataInconsistentItem, 0),
+		DataRedundantItems:    make([]DataRedundantItem, 0),
+		LWWViolationItems:     make([]LWWViolationItem, 0),
 	}
 }
 
@@ -94,18 +126,33 @@ func NewClusterReport(clusterID string, timeWindow types.TimeWindow) *ClusterRep
 	}
 }
 
-func (r *ClusterReport) AddDataLossItem(downstreamClusterID, schemaKey, pk string, originTS, commitTS uint64, inconsistent bool) {
+func (r *ClusterReport) AddDataLossItem(peerClusterID, schemaKey, pk string, originTS, commitTS uint64) {
 	tableFailureItems, exists := r.TableFailureItems[schemaKey]
 	if !exists {
 		tableFailureItems = NewTableFailureItems()
 		r.TableFailureItems[schemaKey] = tableFailureItems
 	}
 	tableFailureItems.DataLossItems = append(tableFailureItems.DataLossItems, DataLossItem{
-		DownstreamClusterID: downstreamClusterID,
+		PeerClusterID: peerClusterID,
+		PK:            pk,
+		OriginTS:      originTS,
+		CommitTS:      commitTS,
+	})
+	r.needFlush = true
+}
+
+func (r *ClusterReport) AddDataInconsistentItem(peerClusterID, schemaKey, pk string, originTS, commitTS uint64, inconsistentColumns []InconsistentColumn) {
+	tableFailureItems, exists := r.TableFailureItems[schemaKey]
+	if !exists {
+		tableFailureItems = NewTableFailureItems()
+		r.TableFailureItems[schemaKey] = tableFailureItems
+	}
+	tableFailureItems.DataInconsistentItems = append(tableFailureItems.DataInconsistentItems, DataInconsistentItem{
+		PeerClusterID:       peerClusterID,
 		PK:                  pk,
 		OriginTS:            originTS,
 		CommitTS:            commitTS,
-		Inconsistent:        inconsistent,
+		InconsistentColumns: inconsistentColumns,
 	})
 	r.needFlush = true
 }
@@ -181,6 +228,12 @@ func (r *Report) MarshalReport() string {
 					fmt.Fprintf(&reportMsg, "    - [%s]\n", dataLossItem.String())
 				}
 			}
+			if len(tableFailureItems.DataInconsistentItems) > 0 {
+				fmt.Fprintf(&reportMsg, "  - [data inconsistent items: %d]\n", len(tableFailureItems.DataInconsistentItems))
+				for _, dataInconsistentItem := range tableFailureItems.DataInconsistentItems {
+					fmt.Fprintf(&reportMsg, "    - [%s]\n", dataInconsistentItem.String())
+				}
+			}
 			if len(tableFailureItems.DataRedundantItems) > 0 {
 				fmt.Fprintf(&reportMsg, "  - [data redundant items: %d]\n", len(tableFailureItems.DataRedundantItems))
 				for _, dataRedundantItem := range tableFailureItems.DataRedundantItems {
@@ -248,8 +301,8 @@ func (c *Checkpoint) NewTimeWindowData(round uint64, timeWindowData map[string]t
 		Round:       round,
 		ClusterInfo: make(map[string]CheckpointClusterInfo),
 	}
-	for downstreamClusterID, timeWindow := range timeWindowData {
-		newCheckpointItem.ClusterInfo[downstreamClusterID] = CheckpointClusterInfo{
+	for clusterID, timeWindow := range timeWindowData {
+		newCheckpointItem.ClusterInfo[clusterID] = CheckpointClusterInfo{
 			TimeWindow: timeWindow.TimeWindow,
 			MaxVersion: NewSchemaTableVersionKeyFromVersionKeyMap(timeWindow.MaxVersion),
 		}
