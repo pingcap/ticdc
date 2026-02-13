@@ -235,8 +235,14 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 			return nil
 		}
 
-		// FIXME: get log coordinator version from etcd and add it to log
-		log.Info("campaign log coordinator successfully", zap.String("nodeID", nodeID))
+		logCoordinatorVersion, err := e.svr.EtcdClient.GetLogCoordinatorRevision(ctx, config.CaptureID(nodeID))
+		if err != nil {
+			return errors.Trace(err)
+		}
+
+		log.Info("campaign log coordinator successfully",
+			zap.String("nodeID", nodeID),
+			zap.Int64("logCoordinatorVersion", logCoordinatorVersion))
 
 		co := logcoordinator.New()
 		err = co.Run(ctx)
@@ -247,12 +253,16 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 					return errors.Trace(resignErr)
 				}
 			}
-			log.Warn("log coordinator exited with error", zap.String("nodeID", nodeID), zap.Error(err))
+			log.Warn("log coordinator exited with error",
+				zap.String("nodeID", nodeID), zap.Int64("logCoordinatorVersion", logCoordinatorVersion),
+				zap.Error(err))
 			return errors.Trace(err)
 		}
 
 		// If coordinator exits normally, continue the campaign loop and try to election coordinator again
-		log.Info("log coordinator exited normally", zap.String("nodeID", nodeID), zap.Error(err))
+		log.Info("log coordinator exited normally",
+			zap.String("nodeID", nodeID), zap.Int64("logCoordinatorVersion", logCoordinatorVersion),
+			zap.Error(err))
 	}
 }
 
