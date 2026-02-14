@@ -278,6 +278,46 @@ func TestDMLEventHeaderValidation(t *testing.T) {
 	require.Contains(t, err.Error(), "incomplete data")
 }
 
+func TestDMLEventPostEnqueueFuncs(t *testing.T) {
+	event := NewDMLEvent(common.NewDispatcherID(), 1, 1, 2, nil)
+
+	called := make([]int, 0, 2)
+	event.AddPostEnqueueFunc(func() {
+		called = append(called, 1)
+	})
+	event.AddPostEnqueueFunc(func() {
+		called = append(called, 2)
+	})
+
+	event.PostEnqueue()
+	require.Equal(t, []int{1, 2}, called)
+
+	event.ClearPostEnqueueFunc()
+	called = called[:0]
+	event.PostEnqueue()
+	require.Empty(t, called)
+}
+
+func TestDMLEventPostFlushTriggersPostEnqueueOnce(t *testing.T) {
+	event := NewDMLEvent(common.NewDispatcherID(), 1, 1, 2, nil)
+
+	enqueueCalled := 0
+	flushCalled := 0
+	event.AddPostEnqueueFunc(func() {
+		enqueueCalled++
+	})
+	event.AddPostFlushFunc(func() {
+		flushCalled++
+	})
+
+	event.PostFlush()
+	require.Equal(t, 1, enqueueCalled)
+	require.Equal(t, 1, flushCalled)
+
+	event.PostEnqueue()
+	require.Equal(t, 1, enqueueCalled)
+}
+
 func TestBatchDMLEventHeaderValidation(t *testing.T) {
 	helper := NewEventTestHelper(t)
 	defer helper.Close()

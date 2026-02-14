@@ -148,6 +148,10 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	return nil
 }
 
+func (s *sink) PassBlockEvent(_ commonEvent.BlockEvent) error {
+	return nil
+}
+
 func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 	for _, e := range event.GetEvents() {
 		message, err := s.comp.encoder.EncodeDDLEvent(e)

@@ -33,6 +33,8 @@ func TestConfigApply(t *testing.T) {
 	expected.DateSeparator = config.DateSeparatorDay.String()
 	expected.EnablePartitionSeparator = true
 	expected.FlushConcurrency = 1
+	expected.SpoolDiskQuota = 10 * 1024 * 1024 * 1024
+	expected.EnableTableAcrossNodes = true
 	uri := "s3://bucket/prefix?worker-count=32&flush-interval=10s&file-size=16777216&protocol=csv"
 	sinkURI, err := url.Parse(uri)
 	require.Nil(t, err)
@@ -164,4 +166,28 @@ func TestMergeConfig(t *testing.T) {
 	require.Equal(t, 64, c.WorkerCount)
 	require.Equal(t, 33554432, c.FileSize)
 	require.Equal(t, "2m2s", c.FlushInterval.String())
+}
+
+func TestSpoolDiskQuotaConfig(t *testing.T) {
+	uri := "s3://bucket/prefix?spool-disk-quota=2147483648"
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	replicaConfig.Sink.CloudStorageConfig = &config.CloudStorageConfig{
+		SpoolDiskQuota: aws.Int64(3221225472),
+	}
+
+	cfg := NewConfig()
+	err = cfg.Apply(context.Background(), sinkURI, replicaConfig.Sink, true)
+	require.NoError(t, err)
+	require.Equal(t, int64(2147483648), cfg.SpoolDiskQuota)
+
+	uri = "s3://bucket/prefix"
+	sinkURI, err = url.Parse(uri)
+	require.NoError(t, err)
+	cfg = NewConfig()
+	err = cfg.Apply(context.Background(), sinkURI, replicaConfig.Sink, true)
+	require.NoError(t, err)
+	require.Equal(t, int64(3221225472), cfg.SpoolDiskQuota)
 }

@@ -69,6 +69,10 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	return nil
 }
 
+func (s *sink) PassBlockEvent(_ commonEvent.BlockEvent) error {
+	return nil
+}
+
 func (s *sink) AddCheckpointTs(ts uint64) {
 	log.Debug("BlackHoleSink: Checkpoint Ts Event", zap.Uint64("ts", ts))
 }

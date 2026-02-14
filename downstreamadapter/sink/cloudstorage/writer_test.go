@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"path"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -61,7 +62,7 @@ func testWriter(ctx context.Context, t *testing.T, dir string) *writer {
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 	d := newWriter(1, changefeedID, storage,
-		cfg, ".json", chann.NewAutoDrainChann[eventFragment](), statistics)
+		cfg, ".json", chann.NewAutoDrainChann[eventFragment](), statistics, nil)
 	return d
 }
 
@@ -128,5 +129,76 @@ func TestWriterRun(t *testing.T) {
 	fragCh.CloseAndDrain()
 	cancel()
 	d.close()
+	wg.Wait()
+}
+
+func TestWriterDrainMarker(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	parentDir := t.TempDir()
+	d := testWriter(ctx, t, parentDir)
+	fragCh := d.inputCh
+
+	tidbTableInfo := &timodel.TableInfo{
+		ID:   100,
+		Name: ast.NewCIStr("table1"),
+		Columns: []*timodel.ColumnInfo{
+			{ID: 1, Name: ast.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
+		},
+	}
+	tableInfo := commonType.WrapTableInfo("test", tidbTableInfo)
+	dispatcherID := commonType.NewDispatcherID()
+
+	var callbackCnt atomic.Int64
+	msg := common.NewMsg(nil, []byte(`{"id":1}`))
+	msg.SetRowsCount(1)
+	msg.Callback = func() {
+		callbackCnt.Add(1)
+	}
+
+	fragCh.In() <- eventFragment{
+		seqNumber: 1,
+		versionedTable: cloudstorage.VersionedTableName{
+			TableNameWithPhysicTableID: commonType.TableName{
+				Schema:  "test",
+				Table:   "table1",
+				TableID: 100,
+			},
+			TableInfoVersion: 99,
+			DispatcherID:     dispatcherID,
+		},
+		dispatcherID: dispatcherID,
+		event: &commonEvent.DMLEvent{
+			PhysicalTableID: 100,
+			TableInfo:       tableInfo,
+		},
+		encodedMsgs: []*common.Message{msg},
+	}
+
+	doneCh := make(chan error, 1)
+	fragCh.In() <- newDrainMarkerFragment(2, dispatcherID, 100, doneCh)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_ = d.Run(ctx)
+	}()
+
+	select {
+	case err := <-doneCh:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("wait drain marker timeout")
+	}
+	require.Eventually(t, func() bool {
+		return callbackCnt.Load() == 1
+	}, 5*time.Second, 100*time.Millisecond)
+
+	fragCh.CloseAndDrain()
+	d.close()
+	cancel()
 	wg.Wait()
 }

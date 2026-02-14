@@ -63,6 +63,34 @@ var (
 			Name:      "cloud_storage_worker_busy_ratio",
 			Help:      "Busy ratio for cloud storage sink dml worker.",
 		}, []string{"namespace", "changefeed", "id"})
+
+	CloudStorageSpoolMemoryBytesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "cloud_storage_spool_memory_bytes",
+		Help:      "Current memory bytes used by cloud storage spool",
+	}, []string{"namespace", "changefeed"})
+
+	CloudStorageSpoolDiskBytesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "cloud_storage_spool_disk_bytes",
+		Help:      "Current disk bytes used by cloud storage spool",
+	}, []string{"namespace", "changefeed"})
+
+	CloudStorageSpoolTotalBytesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "cloud_storage_spool_total_bytes",
+		Help:      "Current total bytes used by cloud storage spool",
+	}, []string{"namespace", "changefeed"})
+
+	CloudStorageWakeSuppressedCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "cloud_storage_wake_suppressed_total",
+		Help:      "Total number of suppressed wake callbacks in cloud storage sink",
+	}, []string{"namespace", "changefeed"})
 )
 
 // InitCloudStorageMetrics registers all metrics in this file.
@@ -72,4 +100,8 @@ func InitCloudStorageMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(CloudStorageWriteDurationHistogram)
 	registry.MustRegister(CloudStorageFlushDurationHistogram)
 	registry.MustRegister(CloudStorageWorkerBusyRatio)
+	registry.MustRegister(CloudStorageSpoolMemoryBytesGauge)
+	registry.MustRegister(CloudStorageSpoolDiskBytesGauge)
+	registry.MustRegister(CloudStorageSpoolTotalBytesGauge)
+	registry.MustRegister(CloudStorageWakeSuppressedCounter)
 }

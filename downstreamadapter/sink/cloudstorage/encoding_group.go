@@ -67,7 +67,9 @@ func (eg *encodingGroup) Run(ctx context.Context) error {
 			return eg.runEncoder(ctx)
 		})
 	}
-	return g.Wait()
+	err := g.Wait()
+	close(eg.outputCh)
+	return err
 }
 
 func (eg *encodingGroup) runEncoder(ctx context.Context) error {
@@ -75,7 +77,6 @@ func (eg *encodingGroup) runEncoder(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer eg.closed.Store(true)
 	for {
 		select {
 		case <-ctx.Done():
@@ -84,6 +85,14 @@ func (eg *encodingGroup) runEncoder(ctx context.Context) error {
 			frag, ok := eg.inputCh.Get()
 			if !ok || eg.closed.Load() {
 				return nil
+			}
+			if frag.isDrainMarker() {
+				select {
+				case <-ctx.Done():
+					return errors.Trace(ctx.Err())
+				case eg.outputCh <- frag:
+				}
+				continue
 			}
 			err = encoder.AppendTxnEvent(frag.event)
 			if err != nil {

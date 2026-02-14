@@ -126,6 +126,10 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	return nil
 }
 
+func (s *Sink) PassBlockEvent(_ commonEvent.BlockEvent) error {
+	return nil
+}
+
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	_ = s.statistics.RecordBatchExecution(func() (int, int64, error) {
 		toRowCallback := func(postTxnFlushed []func(), totalCount uint64) func() {

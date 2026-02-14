@@ -120,13 +120,17 @@ func New(
 		return nil, err
 	}
 	statistics := metrics.NewStatistics(changefeedID, "cloudstorage")
+	dmlWriters, err := newDMLWriters(ctx, changefeedID, storage, cfg, encoderConfig, ext, statistics)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
 	return &sink{
 		changefeedID:             changefeedID,
 		sinkURI:                  sinkURI,
 		cfg:                      cfg,
 		cleanupJobs:              cleanupJobs,
 		storage:                  storage,
-		dmlWriters:               newDMLWriters(changefeedID, storage, cfg, encoderConfig, ext, statistics),
+		dmlWriters:               dmlWriters,
 		checkpointChan:           make(chan uint64, 16),
 		lastSendCheckpointTsTime: time.Now(),
 		outputRawChangeEvent:     sinkConfig.CloudStorageConfig.GetOutputRawChangeEvent(),
@@ -168,6 +172,13 @@ func (s *sink) IsNormal() bool {
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.dmlWriters.AddDMLEvent(event)
+}
+
+func (s *sink) PassBlockEvent(event commonEvent.BlockEvent) error {
+	if event == nil {
+		return nil
+	}
+	return s.dmlWriters.PassBlockEvent(event)
 }
 
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {

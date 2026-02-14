@@ -479,13 +479,8 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 
 			block = true
 			dml.ReplicatingTs = d.creationPDTs
-			dml.AddPostFlushFunc(func() {
-				// Considering dml event in sink may be written to downstream not in order,
-				// thus, we use tableProgress.Empty() to ensure these events are flushed to downstream completely
-				// and wake dynamic stream to handle the next events.
-				if d.tableProgress.Empty() {
-					dmlWakeOnce.Do(wakeCallback)
-				}
+			dml.AddPostEnqueueFunc(func() {
+				dmlWakeOnce.Do(wakeCallback)
 			})
 			dmlEvents = append(dmlEvents, dml)
 		case commonEvent.TypeDDLEvent:
@@ -736,7 +731,15 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 				// we track it as a pending schedule-related event until the maintainer ACKs it.
 				d.pendingACKCount.Add(1)
 			}
-			err := d.AddBlockEventToSink(event)
+			err := d.sink.PassBlockEvent(event)
+			if err != nil {
+				if needsScheduleACKTracking {
+					d.pendingACKCount.Add(-1)
+				}
+				d.HandleError(err)
+				return
+			}
+			err = d.AddBlockEventToSink(event)
 			if err != nil {
 				if needsScheduleACKTracking {
 					d.pendingACKCount.Add(-1)
@@ -804,8 +807,14 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 			d.holdBlockEvent(event)
 			return
 		}
-
-		d.reportBlockedEventToMaintainer(event)
+		d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
+			err := d.sink.PassBlockEvent(event)
+			if err != nil {
+				d.HandleError(err)
+				return
+			}
+			d.reportBlockedEventToMaintainer(event)
+		})
 	}
 
 	// dealing with events which update schema ids

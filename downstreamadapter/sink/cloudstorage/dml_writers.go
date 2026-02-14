@@ -17,8 +17,10 @@ import (
 	"context"
 	"sync/atomic"
 
+	spoolpkg "github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -29,6 +31,7 @@ import (
 
 // dmlWriters denotes a worker responsible for writing messages to cloud storage.
 type dmlWriters struct {
+	ctx          context.Context
 	changefeedID commonType.ChangeFeedID
 	statistics   *metrics.Statistics
 
@@ -43,19 +46,26 @@ type dmlWriters struct {
 	defragmenter *defragmenter
 
 	writers []*writer
+	spool   *spoolpkg.Manager
 
 	// last sequence number
 	lastSeqNum uint64
 }
 
 func newDMLWriters(
+	ctx context.Context,
 	changefeedID commonType.ChangeFeedID,
 	storage storage.ExternalStorage,
 	config *cloudstorage.Config,
 	encoderConfig *common.Config,
 	extension string,
 	statistics *metrics.Statistics,
-) *dmlWriters {
+) (*dmlWriters, error) {
+	spoolManager, err := spoolpkg.New(changefeedID, config.SpoolDiskQuota, nil)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
 	messageCh := chann.NewUnlimitedChannelDefault[eventFragment]()
 	encodedOutCh := make(chan eventFragment, defaultChannelSize)
 	encoderGroup := newEncodingGroup(changefeedID, encoderConfig, defaultEncodingConcurrency, messageCh, encodedOutCh)
@@ -65,22 +75,30 @@ func newDMLWriters(
 	for i := 0; i < config.WorkerCount; i++ {
 		inputCh := chann.NewAutoDrainChann[eventFragment]()
 		writerInputChs[i] = inputCh
-		writers[i] = newWriter(i, changefeedID, storage, config, extension, inputCh, statistics)
+		writers[i] = newWriter(i, changefeedID, storage, config, extension, inputCh, statistics, spoolManager)
 	}
 
 	return &dmlWriters{
+		ctx:          ctx,
 		changefeedID: changefeedID,
 		statistics:   statistics,
 		msgCh:        messageCh,
 
 		encodeGroup:  encoderGroup,
-		defragmenter: newDefragmenter(encodedOutCh, writerInputChs),
+		defragmenter: newDefragmenter(encodedOutCh, writerInputChs, spoolManager),
 		writers:      writers,
-	}
+		spool:        spoolManager,
+	}, nil
 }
 
 func (d *dmlWriters) Run(ctx context.Context) error {
 	eg, ctx := errgroup.WithContext(ctx)
+
+	eg.Go(func() error {
+		<-ctx.Done()
+		d.msgCh.Close()
+		return nil
+	})
 
 	eg.Go(func() error {
 		return d.encodeGroup.Run(ctx)
@@ -90,12 +108,10 @@ func (d *dmlWriters) Run(ctx context.Context) error {
 		return d.defragmenter.Run(ctx)
 	})
 
-	for i := 0; i < len(d.writers); i++ {
+	for i := range d.writers {
+		writer := d.writers[i]
 		eg.Go(func() error {
-			// UnlimitedChannel will block when there is no event, they cannot dirrectly find ctx.Done()
-			// Thus, we need to close the channel when the context is done
-			defer d.encodeGroup.inputCh.Close()
-			return d.writers[i].Run(ctx)
+			return writer.Run(ctx)
 		})
 	}
 	return eg.Wait()
@@ -120,10 +136,26 @@ func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
 	})
 }
 
+func (d *dmlWriters) PassBlockEvent(event commonEvent.BlockEvent) error {
+	doneCh := make(chan error, 1)
+	seq := atomic.AddUint64(&d.lastSeqNum, 1)
+	d.msgCh.Push(newDrainMarkerFragment(seq, event.GetDispatcherID(), event.GetCommitTs(), doneCh))
+
+	select {
+	case err := <-doneCh:
+		return err
+	case <-d.ctx.Done():
+		return errors.Trace(d.ctx.Err())
+	}
+}
+
 func (d *dmlWriters) close() {
 	d.msgCh.Close()
 	d.encodeGroup.close()
 	for _, w := range d.writers {
 		w.close()
+	}
+	if d.spool != nil {
+		d.spool.Close()
 	}
 }
