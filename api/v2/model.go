@@ -224,6 +224,8 @@ type ReplicaConfig struct {
 	Filter                       *FilterConfig              `json:"filter,omitempty"`
 	Mounter                      *MounterConfig             `json:"mounter,omitempty"`
 	Sink                         *SinkConfig                `json:"sink,omitempty"`
+	EventCollectorBatchCount     *uint64                    `json:"event_collector_batch_count,omitempty"`
+	EventCollectorBatchBytes     *uint64                    `json:"event_collector_batch_bytes,omitempty"`
 	Consistent                   *ConsistentConfig          `json:"consistent,omitempty"`
 	Scheduler                    *ChangefeedSchedulerConfig `json:"scheduler,omitempty"`
 	Integrity                    *IntegrityConfig           `json:"integrity,omitempty"`
@@ -290,6 +292,14 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 			EventFilters:     efs,
 		}
 	}
+
+	if c.EventCollectorBatchCount != nil {
+		res.EventCollectorBatchCount = c.EventCollectorBatchCount
+	}
+	if c.EventCollectorBatchBytes != nil {
+		res.EventCollectorBatchBytes = c.EventCollectorBatchBytes
+	}
+
 	if c.Consistent != nil {
 		if res.Consistent == nil {
 			res.Consistent = &config.ConsistentConfig{}
@@ -653,15 +663,17 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 	cloned := c.Clone()
 
 	res := &ReplicaConfig{
-		MemoryQuota:           cloned.MemoryQuota,
-		CaseSensitive:         cloned.CaseSensitive,
-		ForceReplicate:        cloned.ForceReplicate,
-		IgnoreIneligibleTable: cloned.IgnoreIneligibleTable,
-		CheckGCSafePoint:      cloned.CheckGCSafePoint,
-		EnableSyncPoint:       cloned.EnableSyncPoint,
-		EnableTableMonitor:    cloned.EnableTableMonitor,
-		BDRMode:               cloned.BDRMode,
-		EnableActiveActive:    cloned.EnableActiveActive,
+		MemoryQuota:              cloned.MemoryQuota,
+		CaseSensitive:            cloned.CaseSensitive,
+		ForceReplicate:           cloned.ForceReplicate,
+		IgnoreIneligibleTable:    cloned.IgnoreIneligibleTable,
+		CheckGCSafePoint:         cloned.CheckGCSafePoint,
+		EnableSyncPoint:          cloned.EnableSyncPoint,
+		EnableTableMonitor:       cloned.EnableTableMonitor,
+		BDRMode:                  cloned.BDRMode,
+		EventCollectorBatchCount: cloned.EventCollectorBatchCount,
+		EventCollectorBatchBytes: cloned.EventCollectorBatchBytes,
+		EnableActiveActive:       cloned.EnableActiveActive,
 	}
 
 	if cloned.SyncPointInterval != nil {

@@ -193,6 +193,11 @@ type DynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] inter
 	// This method can be called at any time. But to avoid the memory leak, setting on a area without existing paths is a no-op.
 	SetAreaSettings(area A, settings AreaSettings)
 
+	// SetAreaBatchConfig sets the batching config for an area.
+	// The config is effective only when the area has existing paths in the dynamic stream.
+	// Passing batchCount and batchBytes equal to the default ones resets to default.
+	SetAreaBatchConfig(area A, batchCount uint64, batchBytes uint64)
+
 	GetMetrics() Metrics[A, P]
 }
 
@@ -210,9 +215,9 @@ type Option struct {
 	SchedulerInterval time.Duration // The interval of the scheduler. The scheduler is used to balance the paths between streams.
 	ReportInterval    time.Duration // The interval of reporting the status of stream, the status is used by the scheduler.
 
-	StreamCount int // The count of streams. I.e. the count of goroutines to handle events. By default 0, means runtime.NumCPU().
-	BatchCount  int // The batch count of handling events. <= 1 means no batch. By default 1.
-	BatchBytes  int // The max bytes of the batch. <= 1 means no limit. By default 0.
+	StreamCount int    // The count of streams. I.e. the count of goroutines to handle events. By default 0, means runtime.NumCPU().
+	BatchCount  uint64 // The batch count of handling events. <= 1 means no batch. By default 1.
+	BatchBytes  uint64 // The target bytes of a batch (best effort). <= 0 disables bytes-based batching. By default 0.
 
 	EnableMemoryControl bool // Enable the memory control. By default false.
 
@@ -273,6 +278,14 @@ func NewAreaSettingsWithMaxPendingSize(size uint64, memoryControlAlgorithm int, 
 		pathMaxPendingSize: pathMaxPendingSize,
 		algorithm:          memoryControlAlgorithm,
 	}
+}
+
+// NewBatchConfig normalizes batching parameters and returns values that can be passed to SetAreaBatchConfig.
+func NewBatchConfig(batchCount uint64, batchBytes uint64) (uint64, uint64) {
+	if batchCount == 0 {
+		batchCount = 1
+	}
+	return batchCount, batchBytes
 }
 
 type FeedbackType int

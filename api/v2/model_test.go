@@ -25,14 +25,16 @@ func TestReplicaConfigConversion(t *testing.T) {
 
 	// Test case 1: All fields are set
 	apiCfg := &ReplicaConfig{
-		MemoryQuota:           util.AddressOf(uint64(1024)),
-		CaseSensitive:         util.AddressOf(true),
-		ForceReplicate:        util.AddressOf(true),
-		IgnoreIneligibleTable: util.AddressOf(true),
-		CheckGCSafePoint:      util.AddressOf(true),
-		EnableSyncPoint:       util.AddressOf(true),
-		EnableTableMonitor:    util.AddressOf(true),
-		BDRMode:               util.AddressOf(true),
+		MemoryQuota:              util.AddressOf(uint64(1024)),
+		CaseSensitive:            util.AddressOf(true),
+		ForceReplicate:           util.AddressOf(true),
+		IgnoreIneligibleTable:    util.AddressOf(true),
+		CheckGCSafePoint:         util.AddressOf(true),
+		EnableSyncPoint:          util.AddressOf(true),
+		EnableTableMonitor:       util.AddressOf(true),
+		BDRMode:                  util.AddressOf(true),
+		EventCollectorBatchCount: util.AddressOf(uint64(4096)),
+		EventCollectorBatchBytes: util.AddressOf(uint64(64 * 1024 * 1024)),
 		Mounter: &MounterConfig{
 			WorkerNum: util.AddressOf(16),
 		},
@@ -61,6 +63,8 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, util.GetOrZero(internalCfg.EnableSyncPoint))
 	require.True(t, util.GetOrZero(internalCfg.EnableTableMonitor))
 	require.True(t, util.GetOrZero(internalCfg.BDRMode))
+	require.Equal(t, uint64(4096), util.GetOrZero(internalCfg.EventCollectorBatchCount))
+	require.Equal(t, uint64(64*1024*1024), util.GetOrZero(internalCfg.EventCollectorBatchBytes))
 	require.Equal(t, internalCfg.Mounter.WorkerNum, *apiCfg.Mounter.WorkerNum)
 	require.True(t, util.GetOrZero(internalCfg.Scheduler.EnableTableAcrossNodes))
 	require.Equal(t, 1000, util.GetOrZero(internalCfg.Scheduler.RegionThreshold))
@@ -89,4 +93,6 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, *apiCfgBack.Scheduler.EnableTableAcrossNodes)
 	require.Equal(t, "correctness", *apiCfgBack.Integrity.IntegrityCheckLevel)
 	require.Equal(t, "eventual", *apiCfgBack.Consistent.Level)
+	require.Equal(t, uint64(4096), *apiCfgBack.EventCollectorBatchCount)
+	require.Equal(t, uint64(64*1024*1024), *apiCfgBack.EventCollectorBatchBytes)
 }

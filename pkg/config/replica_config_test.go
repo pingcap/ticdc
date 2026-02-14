@@ -193,3 +193,16 @@ func TestReplicaConfig_EnableSplittableCheck_DefaultValue(t *testing.T) {
 	require.NotNil(t, config.Scheduler)
 	require.False(t, util.GetOrZero(config.Scheduler.EnableSplittableCheck))
 }
+
+func TestReplicaConfigValidateAndAdjustRejectsEventCollectorBatchCountZero(t *testing.T) {
+	config := &ReplicaConfig{
+		EventCollectorBatchCount: util.AddressOf(uint64(0)),
+	}
+
+	sinkURI, err := url.Parse("blackhole://")
+	require.NoError(t, err)
+
+	err = config.ValidateAndAdjust(sinkURI)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "event-collector-batch-count")
+}
