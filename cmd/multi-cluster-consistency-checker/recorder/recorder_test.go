@@ -22,6 +22,7 @@ import (
 
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/config"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/types"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -436,5 +437,125 @@ func TestRecorder_CheckpointPersistence(t *testing.T) {
 		require.NotNil(t, cp.CheckpointItems[2])
 		require.Equal(t, uint64(100), cp.CheckpointItems[2].ClusterInfo["c1"].TimeWindow.LeftBoundary)
 		require.Equal(t, uint64(200), cp.CheckpointItems[2].ClusterInfo["c1"].TimeWindow.RightBoundary)
+	})
+}
+
+func TestErrCheckpointCorruption(t *testing.T) {
+	t.Parallel()
+
+	t.Run("corrupted checkpoint file returns ErrCheckpointCorruption", func(t *testing.T) {
+		t.Parallel()
+		dataDir := t.TempDir()
+
+		// Create report and checkpoint directories
+		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "report"), 0755))
+		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "checkpoint"), 0755))
+
+		// Write invalid JSON to checkpoint.json
+		err := os.WriteFile(filepath.Join(dataDir, "checkpoint", "checkpoint.json"), []byte("{bad json"), 0600)
+		require.NoError(t, err)
+
+		_, err = NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}}, 0)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, ErrCheckpointCorruption))
+	})
+
+	t.Run("cluster count mismatch returns ErrCheckpointCorruption", func(t *testing.T) {
+		t.Parallel()
+		dataDir := t.TempDir()
+
+		// Write a valid checkpoint with 2 clusters
+		r1, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}, "c2": {}}, 0)
+		require.NoError(t, err)
+		twData := map[string]types.TimeWindowData{
+			"c1": {TimeWindow: types.TimeWindow{LeftBoundary: 0, RightBoundary: 10}},
+			"c2": {TimeWindow: types.TimeWindow{LeftBoundary: 0, RightBoundary: 10}},
+		}
+		err = r1.RecordTimeWindow(twData, NewReport(0))
+		require.NoError(t, err)
+
+		// Reload with 1 cluster — should be ErrCheckpointCorruption
+		_, err = NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}}, 0)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, ErrCheckpointCorruption))
+	})
+
+	t.Run("missing cluster ID returns ErrCheckpointCorruption", func(t *testing.T) {
+		t.Parallel()
+		dataDir := t.TempDir()
+
+		// Write a valid checkpoint with clusters c1 and c2
+		r1, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}, "c2": {}}, 0)
+		require.NoError(t, err)
+		twData := map[string]types.TimeWindowData{
+			"c1": {TimeWindow: types.TimeWindow{LeftBoundary: 0, RightBoundary: 10}},
+			"c2": {TimeWindow: types.TimeWindow{LeftBoundary: 0, RightBoundary: 10}},
+		}
+		err = r1.RecordTimeWindow(twData, NewReport(0))
+		require.NoError(t, err)
+
+		// Reload with c1 and c3 — should be ErrCheckpointCorruption
+		_, err = NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}, "c3": {}}, 0)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, ErrCheckpointCorruption))
+	})
+
+	t.Run("fresh start does not return ErrCheckpointCorruption", func(t *testing.T) {
+		t.Parallel()
+		dataDir := t.TempDir()
+
+		_, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}}, 0)
+		require.NoError(t, err)
+	})
+
+	t.Run("unreadable checkpoint file does not return ErrCheckpointCorruption", func(t *testing.T) {
+		t.Parallel()
+		dataDir := t.TempDir()
+
+		// Create directories
+		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "report"), 0755))
+		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "checkpoint"), 0755))
+
+		// Create checkpoint.json as a directory so ReadFile fails with a non-corruption I/O error
+		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "checkpoint", "checkpoint.json"), 0755))
+
+		_, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}}, 0)
+		require.Error(t, err)
+		require.False(t, errors.Is(err, ErrCheckpointCorruption),
+			"I/O errors should NOT be classified as ErrCheckpointCorruption, got: %v", err)
+	})
+
+	t.Run("unreadable backup checkpoint does not return ErrCheckpointCorruption", func(t *testing.T) {
+		t.Parallel()
+		dataDir := t.TempDir()
+
+		// Create directories
+		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "report"), 0755))
+		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "checkpoint"), 0755))
+
+		// Make checkpoint.json.bak a directory so ReadFile fails with an I/O error
+		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "checkpoint", "checkpoint.json.bak"), 0755))
+
+		_, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}}, 0)
+		require.Error(t, err)
+		require.False(t, errors.Is(err, ErrCheckpointCorruption),
+			"I/O errors should NOT be classified as ErrCheckpointCorruption, got: %v", err)
+	})
+
+	t.Run("corrupted backup checkpoint returns ErrCheckpointCorruption", func(t *testing.T) {
+		t.Parallel()
+		dataDir := t.TempDir()
+
+		// Create directories
+		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "report"), 0755))
+		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "checkpoint"), 0755))
+
+		// Write invalid JSON to checkpoint.json.bak (simulate crash recovery with corrupted backup)
+		err := os.WriteFile(filepath.Join(dataDir, "checkpoint", "checkpoint.json.bak"), []byte("not valid json"), 0600)
+		require.NoError(t, err)
+
+		_, err = NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}}, 0)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, ErrCheckpointCorruption))
 	})
 }

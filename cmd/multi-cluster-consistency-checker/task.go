@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -40,7 +41,8 @@ import (
 func runTask(ctx context.Context, cfg *config.Config, dryRun bool) error {
 	checkpointWatchers, s3Watchers, pdClients, etcdClients, err := initClients(ctx, cfg)
 	if err != nil {
-		return errors.Trace(err)
+		// Client initialisation is typically a transient (network) failure.
+		return &ExitError{Code: ExitCodeTransient, Err: errors.Trace(err)}
 	}
 	// Ensure cleanup happens even if there's an error
 	defer cleanupClients(pdClients, etcdClients, checkpointWatchers, s3Watchers)
@@ -50,15 +52,19 @@ func runTask(ctx context.Context, cfg *config.Config, dryRun bool) error {
 		return nil
 	}
 
-	recorder, err := recorder.NewRecorder(cfg.GlobalConfig.DataDir, cfg.Clusters, cfg.GlobalConfig.MaxReportFiles)
+	rec, err := recorder.NewRecorder(cfg.GlobalConfig.DataDir, cfg.Clusters, cfg.GlobalConfig.MaxReportFiles)
 	if err != nil {
-		return errors.Trace(err)
+		if errors.Is(err, recorder.ErrCheckpointCorruption) {
+			return &ExitError{Code: ExitCodeCheckpointCorruption, Err: err}
+		}
+		// Other recorder init errors (e.g. mkdir, readdir) are transient.
+		return &ExitError{Code: ExitCodeTransient, Err: errors.Trace(err)}
 	}
-	timeWindowAdvancer, checkpointDataMap, err := advancer.NewTimeWindowAdvancer(ctx, checkpointWatchers, s3Watchers, pdClients, recorder.GetCheckpoint())
+	timeWindowAdvancer, checkpointDataMap, err := advancer.NewTimeWindowAdvancer(ctx, checkpointWatchers, s3Watchers, pdClients, rec.GetCheckpoint())
 	if err != nil {
-		return errors.Trace(err)
+		return &ExitError{Code: ExitCodeTransient, Err: errors.Trace(err)}
 	}
-	dataChecker := checker.NewDataChecker(ctx, cfg.Clusters, checkpointDataMap, recorder.GetCheckpoint())
+	dataChecker := checker.NewDataChecker(ctx, cfg.Clusters, checkpointDataMap, rec.GetCheckpoint())
 
 	log.Info("Starting consistency checker task")
 	for {
@@ -72,16 +78,16 @@ func runTask(ctx context.Context, cfg *config.Config, dryRun bool) error {
 
 		newTimeWindowData, err := timeWindowAdvancer.AdvanceTimeWindow(ctx)
 		if err != nil {
-			return errors.Trace(err)
+			return &ExitError{Code: ExitCodeTransient, Err: errors.Trace(err)}
 		}
 
 		report, err := dataChecker.CheckInNextTimeWindow(newTimeWindowData)
 		if err != nil {
-			return errors.Trace(err)
+			return &ExitError{Code: ExitCodeTransient, Err: errors.Trace(err)}
 		}
 
-		if err := recorder.RecordTimeWindow(newTimeWindowData, report); err != nil {
-			return errors.Trace(err)
+		if err := rec.RecordTimeWindow(newTimeWindowData, report); err != nil {
+			return &ExitError{Code: ExitCodeTransient, Err: errors.Trace(err)}
 		}
 	}
 }
@@ -115,7 +121,7 @@ func initClients(ctx context.Context, cfg *config.Config) (
 		checkpointWatchers[clusterID] = clusterCheckpointWatchers
 
 		// Validate s3 changefeed sink config from etcd
-		if err := validateS3ChangefeedSinkConfig(ctx, etcdClient, clusterID, clusterConfig.S3ChangefeedID); err != nil {
+		if err := validateS3ChangefeedSinkConfig(ctx, etcdClient, clusterID, clusterConfig.S3ChangefeedID, clusterConfig.S3SinkURI); err != nil {
 			cleanupClients(pdClients, etcdClients, checkpointWatchers, s3Watchers)
 			return nil, nil, nil, nil, errors.Trace(err)
 		}
@@ -139,14 +145,21 @@ func initClients(ctx context.Context, cfg *config.Config) (
 }
 
 // validateS3ChangefeedSinkConfig fetches the changefeed info from etcd and validates that:
-// 1. The protocol must be canal-json
-// 2. The date separator must be "day"
-// 3. The file index width must be DefaultFileIndexWidth
-func validateS3ChangefeedSinkConfig(ctx context.Context, etcdClient *etcd.CDCEtcdClientImpl, clusterID string, s3ChangefeedID string) error {
+// 1. The changefeed SinkURI bucket/prefix matches the configured s3SinkURI
+// 2. The protocol must be canal-json
+// 3. The date separator must be "day"
+// 4. The file index width must be DefaultFileIndexWidth
+func validateS3ChangefeedSinkConfig(ctx context.Context, etcdClient *etcd.CDCEtcdClientImpl, clusterID string, s3ChangefeedID string, s3SinkURI string) error {
 	displayName := common.NewChangeFeedDisplayName(s3ChangefeedID, "default")
 	cfInfo, err := etcdClient.GetChangeFeedInfo(ctx, displayName)
 	if err != nil {
 		return errors.Annotate(err, fmt.Sprintf("failed to get changefeed info for s3 changefeed %s in cluster %s", s3ChangefeedID, clusterID))
+	}
+
+	// 1. Validate that the changefeed's SinkURI bucket/prefix matches the configured s3SinkURI.
+	// This prevents the checker from reading data that was written by a different changefeed.
+	if err := validateS3BucketPrefix(cfInfo.SinkURI, s3SinkURI, clusterID, s3ChangefeedID); err != nil {
+		return err
 	}
 
 	if cfInfo.Config == nil || cfInfo.Config.Sink == nil {
@@ -155,7 +168,7 @@ func validateS3ChangefeedSinkConfig(ctx context.Context, etcdClient *etcd.CDCEtc
 
 	sinkConfig := cfInfo.Config.Sink
 
-	// 1. Validate protocol must be canal-json
+	// 2. Validate protocol must be canal-json
 	protocolStr := strings.ToLower(util.GetOrZero(sinkConfig.Protocol))
 	if protocolStr == "" {
 		return fmt.Errorf("cluster %s: s3 changefeed %s has no protocol configured in sink config", clusterID, s3ChangefeedID)
@@ -169,7 +182,7 @@ func validateS3ChangefeedSinkConfig(ctx context.Context, etcdClient *etcd.CDCEtc
 			clusterID, s3ChangefeedID, protocolStr, cdcconfig.ProtocolCanalJSON.String())
 	}
 
-	// 2. Validate date separator must be "day"
+	// 3. Validate date separator must be "day"
 	dateSeparatorStr := util.GetOrZero(sinkConfig.DateSeparator)
 	if dateSeparatorStr == "" {
 		dateSeparatorStr = cdcconfig.DateSeparatorNone.String()
@@ -183,7 +196,7 @@ func validateS3ChangefeedSinkConfig(ctx context.Context, etcdClient *etcd.CDCEtc
 			clusterID, s3ChangefeedID, dateSep.String(), cdcconfig.DateSeparatorDay.String())
 	}
 
-	// 3. Validate file index width must be DefaultFileIndexWidth
+	// 4. Validate file index width must be DefaultFileIndexWidth
 	fileIndexWidth := util.GetOrZero(sinkConfig.FileIndexWidth)
 	if fileIndexWidth != cdcconfig.DefaultFileIndexWidth {
 		return fmt.Errorf("cluster %s: s3 changefeed %s file-index-width is %d, but only %d is supported",
@@ -198,6 +211,42 @@ func validateS3ChangefeedSinkConfig(ctx context.Context, etcdClient *etcd.CDCEtc
 		zap.Int("fileIndexWidth", fileIndexWidth),
 	)
 
+	return nil
+}
+
+// validateS3BucketPrefix checks that the changefeed's SinkURI and the
+// configured s3-sink-uri point to the same S3 bucket and prefix.
+// This is a critical sanity check — a mismatch means the checker would
+// read data from a different location than where the changefeed writes.
+func validateS3BucketPrefix(changefeedSinkURI, configS3SinkURI, clusterID, s3ChangefeedID string) error {
+	cfURL, err := url.Parse(changefeedSinkURI)
+	if err != nil {
+		return fmt.Errorf("cluster %s: s3 changefeed %s has invalid sink URI %q: %v",
+			clusterID, s3ChangefeedID, changefeedSinkURI, err)
+	}
+	cfgURL, err := url.Parse(configS3SinkURI)
+	if err != nil {
+		return fmt.Errorf("cluster %s: configured s3-sink-uri %q is invalid: %v",
+			clusterID, configS3SinkURI, err)
+	}
+
+	// Compare scheme (s3, gcs, …), bucket (Host) and prefix (Path).
+	// Path is normalized by trimming trailing slashes so that
+	// "s3://bucket/prefix" and "s3://bucket/prefix/" are considered equal.
+	cfScheme := strings.ToLower(cfURL.Scheme)
+	cfgScheme := strings.ToLower(cfgURL.Scheme)
+	cfBucket := cfURL.Host
+	cfgBucket := cfgURL.Host
+	cfPrefix := strings.TrimRight(cfURL.Path, "/")
+	cfgPrefix := strings.TrimRight(cfgURL.Path, "/")
+
+	if cfScheme != cfgScheme || cfBucket != cfgBucket || cfPrefix != cfgPrefix {
+		return fmt.Errorf("cluster %s: s3 changefeed %s sink URI bucket/prefix mismatch: "+
+			"changefeed has %s://%s%s but config has %s://%s%s",
+			clusterID, s3ChangefeedID,
+			cfScheme, cfBucket, cfURL.Path,
+			cfgScheme, cfgBucket, cfgURL.Path)
+	}
 	return nil
 }
 

@@ -22,6 +22,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -32,11 +33,42 @@ var (
 	dryRun  bool
 )
 
+// Exit codes for multi-cluster-consistency-checker.
+//
+//	0 – clean shutdown (normal exit or graceful signal handling)
+//	1 – transient error, safe to restart (network, I/O, temporary failures)
+//	2 – invalid configuration (missing required flags / fields)
+//	3 – configuration decode failure (malformed config file)
+//	4 – checkpoint corruption, requires manual intervention
+//	5 – unrecoverable internal error
 const (
-	ExitCodeExecuteFailed      = 1
-	ExitCodeInvalidConfig      = 2
-	ExitCodeDecodeConfigFailed = 3
+	ExitCodeTransient            = 1
+	ExitCodeInvalidConfig        = 2
+	ExitCodeDecodeConfigFailed   = 3
+	ExitCodeCheckpointCorruption = 4
+	ExitCodeUnrecoverable        = 5
 )
+
+// ExitError wraps an error with a process exit code so that callers higher in
+// the stack can translate domain errors into the correct exit status.
+type ExitError struct {
+	Code int
+	Err  error
+}
+
+func (e *ExitError) Error() string { return e.Err.Error() }
+func (e *ExitError) Unwrap() error { return e.Err }
+
+// exitCodeFromError extracts the exit code from an error.
+// If the error is an *ExitError the embedded code is returned;
+// otherwise the fallback code is returned.
+func exitCodeFromError(err error, fallback int) int {
+	var ee *ExitError
+	if errors.As(err, &ee) {
+		return ee.Code
+	}
+	return fallback
+}
 
 const (
 	FlagConfig = "config"
@@ -57,7 +89,7 @@ func main() {
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(ExitCodeExecuteFailed)
+		os.Exit(ExitCodeUnrecoverable)
 	}
 }
 
@@ -84,7 +116,7 @@ func run(cmd *cobra.Command, args []string) {
 	err = logger.InitLogger(loggerConfig)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to init logger: %v\n", err)
-		os.Exit(ExitCodeExecuteFailed)
+		os.Exit(ExitCodeUnrecoverable)
 	}
 	log.Info("Logger initialized", zap.String("level", logLevel))
 
@@ -112,15 +144,17 @@ func run(cmd *cobra.Command, args []string) {
 		fmt.Fprintf(os.Stdout, "\nReceived signal: %v, shutting down gracefully...\n", sig)
 		cancel()
 		// Wait for the task to finish
-		if err := <-errChan; err != nil && err != context.Canceled {
-			fmt.Fprintf(os.Stderr, "task error: %v\n", err)
-			os.Exit(ExitCodeExecuteFailed)
+		if err := <-errChan; err != nil && !errors.Is(err, context.Canceled) {
+			fmt.Fprintf(os.Stderr, "task error during shutdown: %v\n", err)
+			code := exitCodeFromError(err, ExitCodeTransient)
+			os.Exit(code)
 		}
 		fmt.Fprintf(os.Stdout, "Shutdown complete\n")
 	case err := <-errChan:
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to run task: %v\n", err)
-			os.Exit(ExitCodeExecuteFailed)
+			code := exitCodeFromError(err, ExitCodeTransient)
+			os.Exit(code)
 		}
 	}
 }

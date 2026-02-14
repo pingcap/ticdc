@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -81,6 +82,7 @@ func defaultCanalJSONCodecConfig() *codecCommon.Config {
 type Record struct {
 	types.CdcVersion
 	Pk           types.PkType
+	PkStr        string
 	ColumnValues map[string]any
 }
 
@@ -193,9 +195,11 @@ func (d *columnValueDecoder) decodeNext() (*Record, error) {
 		return nil, errors.New("invalid message")
 	}
 
+	var pkStrBuilder strings.Builder
+	pkStrBuilder.WriteString("[")
 	pkValues := make([]tiTypes.Datum, 0, len(d.msg.PkNames))
 	slices.Sort(d.msg.PkNames)
-	for _, pkName := range d.msg.PkNames {
+	for i, pkName := range d.msg.PkNames {
 		mysqlType, ok := d.msg.MySQLType[pkName]
 		if !ok {
 			log.Error("mysql type not found", zap.String("pkName", pkName), zap.Any("msg", d.msg))
@@ -206,6 +210,10 @@ func (d *columnValueDecoder) decodeNext() (*Record, error) {
 			log.Error("column value not found", zap.String("pkName", pkName), zap.Any("msg", d.msg))
 			return nil, errors.Errorf("column value of column %s not found", pkName)
 		}
+		if i > 0 {
+			pkStrBuilder.WriteString(", ")
+		}
+		fmt.Fprintf(&pkStrBuilder, "%s: %v", pkName, columnValue)
 		ft := newPKColumnFieldTypeFromMysqlType(mysqlType)
 		datum := valueToDatum(columnValue, ft)
 		if datum.IsNull() {
@@ -215,6 +223,7 @@ func (d *columnValueDecoder) decodeNext() (*Record, error) {
 		pkValues = append(pkValues, *datum)
 		delete(d.msg.Data[0], pkName)
 	}
+	pkStrBuilder.WriteString("]")
 	pkEncoded, err := codec.EncodeKey(time.UTC, nil, pkValues...)
 	if err != nil {
 		return nil, errors.Annotate(err, "failed to encode primary key")
@@ -238,6 +247,7 @@ func (d *columnValueDecoder) decodeNext() (*Record, error) {
 	d.msg = nil
 	return &Record{
 		Pk:           types.PkType(pk),
+		PkStr:        pkStrBuilder.String(),
 		ColumnValues: columnValues,
 		CdcVersion: types.CdcVersion{
 			CommitTs: commitTs,

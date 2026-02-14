@@ -33,14 +33,14 @@ const DataContent1 string = "" +
 	`{"id":0,"database":"test_active","table":"message","pkNames":["id"],"isDdl":false,"type":"UPDATE","es":1770303522494,"ts":1770303523900,"sql":"","sqlType":{"id":4,"first_name":12,"last_name":12,"_tidb_origin_ts":-5,"_tidb_softdelete_time":93},"mysqlType":{"id":"int","first_name":"varchar","last_name":"varchar","_tidb_origin_ts":"bigint","_tidb_softdelete_time":"timestamp"},"old":[{"id":"8","first_name":"h","last_name":"H","_tidb_origin_ts":null,"_tidb_softdelete_time":null}],"data":[{"id":"8","first_name":"h","last_name":"H","_tidb_origin_ts":"464074446196178963","_tidb_softdelete_time":"2026-02-05 22:58:40.992217"}],"_tidb":{"commitTs":464074446600667164}}`
 
 var ExpectedRecords1 = []decoder.Record{
-	{CdcVersion: types.CdcVersion{CommitTs: 464043256649875456, OriginTs: 0}, Pk: "038000000000000014", ColumnValues: map[string]any{"first_name": "t", "last_name": "TT", "_tidb_softdelete_time": nil}},
-	{CdcVersion: types.CdcVersion{CommitTs: 464043256649875456, OriginTs: 0}, Pk: "038000000000000015", ColumnValues: map[string]any{"first_name": "u", "last_name": "UU", "_tidb_softdelete_time": nil}},
-	{CdcVersion: types.CdcVersion{CommitTs: 464073967049113629, OriginTs: 464073966942421014}, Pk: "038000000000000005", ColumnValues: map[string]any{"first_name": "e", "last_name": "E", "_tidb_softdelete_time": nil}},
-	{CdcVersion: types.CdcVersion{CommitTs: 464073967049113629, OriginTs: 464073966942421014}, Pk: "038000000000000006", ColumnValues: map[string]any{"first_name": "f", "last_name": "F", "_tidb_softdelete_time": nil}},
-	{CdcVersion: types.CdcVersion{CommitTs: 464074440664678441, OriginTs: 464074440387592202}, Pk: "038000000000000007", ColumnValues: map[string]any{"first_name": "g", "last_name": "G", "_tidb_softdelete_time": nil}},
-	{CdcVersion: types.CdcVersion{CommitTs: 464074446196178963, OriginTs: 0}, Pk: "038000000000000007", ColumnValues: map[string]any{"first_name": "g", "last_name": "G", "_tidb_softdelete_time": "2026-02-05 22:58:40.992217"}},
-	{CdcVersion: types.CdcVersion{CommitTs: 464074440387592202, OriginTs: 0}, Pk: "038000000000000008", ColumnValues: map[string]any{"first_name": "h", "last_name": "H", "_tidb_softdelete_time": nil}},
-	{CdcVersion: types.CdcVersion{CommitTs: 464074446600667164, OriginTs: 464074446196178963}, Pk: "038000000000000008", ColumnValues: map[string]any{"first_name": "h", "last_name": "H", "_tidb_softdelete_time": "2026-02-05 22:58:40.992217"}},
+	{CdcVersion: types.CdcVersion{CommitTs: 464043256649875456, OriginTs: 0}, Pk: "038000000000000014", PkStr: "[id: 20]", ColumnValues: map[string]any{"first_name": "t", "last_name": "TT", "_tidb_softdelete_time": nil}},
+	{CdcVersion: types.CdcVersion{CommitTs: 464043256649875456, OriginTs: 0}, Pk: "038000000000000015", PkStr: "[id: 21]", ColumnValues: map[string]any{"first_name": "u", "last_name": "UU", "_tidb_softdelete_time": nil}},
+	{CdcVersion: types.CdcVersion{CommitTs: 464073967049113629, OriginTs: 464073966942421014}, Pk: "038000000000000005", PkStr: "[id: 5]", ColumnValues: map[string]any{"first_name": "e", "last_name": "E", "_tidb_softdelete_time": nil}},
+	{CdcVersion: types.CdcVersion{CommitTs: 464073967049113629, OriginTs: 464073966942421014}, Pk: "038000000000000006", PkStr: "[id: 6]", ColumnValues: map[string]any{"first_name": "f", "last_name": "F", "_tidb_softdelete_time": nil}},
+	{CdcVersion: types.CdcVersion{CommitTs: 464074440664678441, OriginTs: 464074440387592202}, Pk: "038000000000000007", PkStr: "[id: 7]", ColumnValues: map[string]any{"first_name": "g", "last_name": "G", "_tidb_softdelete_time": nil}},
+	{CdcVersion: types.CdcVersion{CommitTs: 464074446196178963, OriginTs: 0}, Pk: "038000000000000007", PkStr: "[id: 7]", ColumnValues: map[string]any{"first_name": "g", "last_name": "G", "_tidb_softdelete_time": "2026-02-05 22:58:40.992217"}},
+	{CdcVersion: types.CdcVersion{CommitTs: 464074440387592202, OriginTs: 0}, Pk: "038000000000000008", PkStr: "[id: 8]", ColumnValues: map[string]any{"first_name": "h", "last_name": "H", "_tidb_softdelete_time": nil}},
+	{CdcVersion: types.CdcVersion{CommitTs: 464074446600667164, OriginTs: 464074446196178963}, Pk: "038000000000000008", PkStr: "[id: 8]", ColumnValues: map[string]any{"first_name": "h", "last_name": "H", "_tidb_softdelete_time": "2026-02-05 22:58:40.992217"}},
 }
 
 func TestCanalJSONDecoder1(t *testing.T) {
@@ -50,6 +50,7 @@ func TestCanalJSONDecoder1(t *testing.T) {
 	for i, actualRecord := range records {
 		expectedRecord := ExpectedRecords1[i]
 		require.Equal(t, actualRecord.Pk, expectedRecord.Pk)
+		require.Equal(t, actualRecord.PkStr, expectedRecord.PkStr)
 		require.Equal(t, actualRecord.ColumnValues, expectedRecord.ColumnValues)
 		require.Equal(t, actualRecord.CdcVersion.CommitTs, expectedRecord.CdcVersion.CommitTs)
 		require.Equal(t, actualRecord.CdcVersion.OriginTs, expectedRecord.CdcVersion.OriginTs)
@@ -61,8 +62,8 @@ const DataContent2 string = "" +
 	`{"id":0,"database":"test_active","table":"message2","pkNames":["id","first_name"],"isDdl":false,"type":"INSERT","es":1770344427851,"ts":1770344429772,"sql":"","sqlType":{"id":4,"first_name":12,"last_name":12,"_tidb_origin_ts":-5,"_tidb_softdelete_time":93},"mysqlType":{"id":"int","first_name":"varchar","last_name":"varchar","_tidb_origin_ts":"bigint","_tidb_softdelete_time":"timestamp"},"old":null,"data":[{"id":"101","first_name":"b","last_name":"B","_tidb_origin_ts":null,"_tidb_softdelete_time":null}],"_tidb":{"commitTs":464085169694572575}}` + "\r\n"
 
 var ExpectedRecords2 = []decoder.Record{
-	{CdcVersion: types.CdcVersion{CommitTs: 464085165736198159, OriginTs: 464085165262503958}, Pk: "016100000000000000f8038000000000000064", ColumnValues: map[string]any{"last_name": "A", "_tidb_softdelete_time": nil}},
-	{CdcVersion: types.CdcVersion{CommitTs: 464085169694572575, OriginTs: 0}, Pk: "016200000000000000f8038000000000000065", ColumnValues: map[string]any{"last_name": "B", "_tidb_softdelete_time": nil}},
+	{CdcVersion: types.CdcVersion{CommitTs: 464085165736198159, OriginTs: 464085165262503958}, Pk: "016100000000000000f8038000000000000064", PkStr: "[first_name: a, id: 100]", ColumnValues: map[string]any{"last_name": "A", "_tidb_softdelete_time": nil}},
+	{CdcVersion: types.CdcVersion{CommitTs: 464085169694572575, OriginTs: 0}, Pk: "016200000000000000f8038000000000000065", PkStr: "[first_name: b, id: 101]", ColumnValues: map[string]any{"last_name": "B", "_tidb_softdelete_time": nil}},
 }
 
 func TestCanalJSONDecoder2(t *testing.T) {
@@ -72,6 +73,7 @@ func TestCanalJSONDecoder2(t *testing.T) {
 	for i, actualRecord := range records {
 		expectedRecord := ExpectedRecords2[i]
 		require.Equal(t, actualRecord.Pk, expectedRecord.Pk)
+		require.Equal(t, actualRecord.PkStr, expectedRecord.PkStr)
 		require.Equal(t, actualRecord.ColumnValues, expectedRecord.ColumnValues)
 		require.Equal(t, actualRecord.CdcVersion.CommitTs, expectedRecord.CdcVersion.CommitTs)
 		require.Equal(t, actualRecord.CdcVersion.OriginTs, expectedRecord.CdcVersion.OriginTs)

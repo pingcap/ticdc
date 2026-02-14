@@ -361,8 +361,10 @@ var defaultSchemaKey = (&cloudstorage.DmlPathKey{}).GetKey()
 
 // TestDataChecker_FourRoundsCheck simulates 4 rounds with increasing data and verifies check results.
 // Setup: 2 clusters (c1 locally-written, c2 replicated from c1).
-// Rounds 0-2: accumulate data, check not yet active (checkableRound < 3).
-// Round 3: first real check runs, detecting violations.
+// - Round 0: LWW cache is seeded (data is empty by convention).
+// - Round 1+: LWW violation detection is active.
+// - Round 2+: data loss / inconsistent detection is active.
+// - Round 3+: data redundant detection is also active (needs [0],[1],[2] all populated).
 func TestDataChecker_FourRoundsCheck(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -413,15 +415,11 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 			report, err := checker.CheckInNextTimeWindow(roundData)
 			require.NoError(t, err, "round %d", i)
 			require.Equal(t, uint64(i), report.Round)
-			if i < 3 {
-				require.Empty(t, report.ClusterReports, "round %d should have no cluster reports", i)
-				require.False(t, report.NeedFlush(), "round %d should not need flush", i)
-			} else {
-				require.Len(t, report.ClusterReports, 2)
-				require.False(t, report.NeedFlush(), "round 3 should not need flush (all consistent)")
-				for clusterID, cr := range report.ClusterReports {
-					require.Empty(t, cr.TableFailureItems, "cluster %s should have no table failure items", clusterID)
-				}
+			// Every round now produces cluster reports (LWW always runs).
+			require.Len(t, report.ClusterReports, 2, "round %d should have 2 cluster reports", i)
+			require.False(t, report.NeedFlush(), "round %d should not need flush (all consistent)", i)
+			for clusterID, cr := range report.ClusterReports {
+				require.Empty(t, cr.TableFailureItems, "round %d cluster %s should have no table failure items", i, clusterID)
 			}
 		}
 	})
@@ -603,5 +601,170 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 		if c2TableItems, ok := c2Report.TableFailureItems[defaultSchemaKey]; ok {
 			require.Empty(t, c2TableItems.LWWViolationItems)
 		}
+	})
+
+	// lww violation detected at round 1: LWW is active from round 1,
+	// so a violation introduced in round 1 data should surface immediately.
+	t.Run("lww violation detected at round 1", func(t *testing.T) {
+		t.Parallel()
+		checker := NewDataChecker(ctx, clusterCfg, nil, nil)
+
+		// Round 0: [0, 100] — c1 writes pk=1 (commitTs=50, compareTs=50)
+		round0 := map[string]types.TimeWindowData{
+			"c1": makeTWData(0, 100, nil,
+				makeContent(makeCanalJSON(1, 50, 0, "a"))),
+			"c2": makeTWData(0, 100, nil, nil),
+		}
+		// Round 1: [100, 200] — c1 writes pk=1 again:
+		//   locally-written  pk=1 (commitTs=150, originTs=0,  compareTs=150)
+		//   replicated       pk=1 (commitTs=180, originTs=120, compareTs=120)
+		// The LWW cache already has pk=1 compareTs=50 from round 0.
+		// Record order: commitTs=150 (compareTs=150 > cached 50 → update cache),
+		//               commitTs=180 (compareTs=120 < cached 150 → VIOLATION)
+		round1 := map[string]types.TimeWindowData{
+			"c1": makeTWData(100, 200, nil,
+				makeContent(
+					makeCanalJSON(1, 150, 0, "b"),
+					makeCanalJSON(1, 180, 120, "b"),
+				)),
+			"c2": makeTWData(100, 200, nil, nil),
+		}
+
+		report0, err := checker.CheckInNextTimeWindow(round0)
+		require.NoError(t, err)
+		require.False(t, report0.NeedFlush(), "round 0 should not need flush")
+
+		report1, err := checker.CheckInNextTimeWindow(round1)
+		require.NoError(t, err)
+
+		// LWW violation should be detected at round 1
+		require.True(t, report1.NeedFlush(), "round 1 should detect LWW violation")
+		c1Report := report1.ClusterReports["c1"]
+		require.Contains(t, c1Report.TableFailureItems, defaultSchemaKey)
+		c1TableItems := c1Report.TableFailureItems[defaultSchemaKey]
+		require.Len(t, c1TableItems.LWWViolationItems, 1)
+		require.Equal(t, uint64(0), c1TableItems.LWWViolationItems[0].ExistingOriginTS)
+		require.Equal(t, uint64(150), c1TableItems.LWWViolationItems[0].ExistingCommitTS)
+		require.Equal(t, uint64(120), c1TableItems.LWWViolationItems[0].OriginTS)
+		require.Equal(t, uint64(180), c1TableItems.LWWViolationItems[0].CommitTS)
+	})
+
+	// data loss detected at round 2: Data loss detection is active from round 2.
+	// A record in round 1 whose commitTs > checkpointTs will enter [1] at round 2,
+	// and if the replicated counterpart is missing, data loss is detected at round 2.
+	t.Run("data loss detected at round 2", func(t *testing.T) {
+		t.Parallel()
+		checker := NewDataChecker(ctx, clusterCfg, nil, nil)
+
+		round0 := map[string]types.TimeWindowData{
+			"c1": makeTWData(0, 100, nil, nil),
+			"c2": makeTWData(0, 100, nil, nil),
+		}
+		// Round 1: c1 writes pk=1 (commitTs=150), checkpointTs["c2"]=140
+		// Since 150 > 140, this record needs replication checking.
+		round1 := map[string]types.TimeWindowData{
+			"c1": makeTWData(100, 200, map[string]uint64{"c2": 140},
+				makeContent(makeCanalJSON(1, 150, 0, "a"))),
+			"c2": makeTWData(100, 200, nil, nil), // c2 has NO replicated data
+		}
+		// Round 2: round 1 data is now in [1], data loss detection enabled.
+		round2 := map[string]types.TimeWindowData{
+			"c1": makeTWData(200, 300, map[string]uint64{"c2": 280},
+				makeContent(makeCanalJSON(2, 250, 0, "b"))),
+			"c2": makeTWData(200, 300, nil,
+				makeContent(makeCanalJSON(2, 260, 250, "b"))),
+		}
+
+		report0, err := checker.CheckInNextTimeWindow(round0)
+		require.NoError(t, err)
+		require.False(t, report0.NeedFlush())
+
+		report1, err := checker.CheckInNextTimeWindow(round1)
+		require.NoError(t, err)
+		require.False(t, report1.NeedFlush(), "round 1 should not detect data loss yet")
+
+		report2, err := checker.CheckInNextTimeWindow(round2)
+		require.NoError(t, err)
+		require.True(t, report2.NeedFlush(), "round 2 should detect data loss")
+		c1Report := report2.ClusterReports["c1"]
+		require.Contains(t, c1Report.TableFailureItems, defaultSchemaKey)
+		tableItems := c1Report.TableFailureItems[defaultSchemaKey]
+		require.Len(t, tableItems.DataLossItems, 1)
+		require.Equal(t, "c2", tableItems.DataLossItems[0].PeerClusterID)
+		require.Equal(t, uint64(150), tableItems.DataLossItems[0].CommitTS)
+	})
+
+	// data redundant detected at round 3 (not round 2):
+	// dataRedundantDetection checks timeWindowDataCaches[2] (latest round).
+	// At round 2 [0]=round 0 (empty) so FindSourceLocalData may miss data in
+	// that window → enableDataRedundant is false to avoid false positives.
+	// At round 3 [0]=round 1, [1]=round 2, [2]=round 3 are all populated
+	// with real data, so enableDataRedundant=true and an orphan in [2] is caught.
+	//
+	// This test puts the SAME orphan pk=99 in both round 2 and round 3:
+	//   - Round 2: orphan in [2] but enableDataRedundant=false → NOT flagged.
+	//   - Round 3: orphan in [2] and enableDataRedundant=true  → flagged.
+	t.Run("data redundant detected at round 3 not round 2", func(t *testing.T) {
+		t.Parallel()
+		checker := NewDataChecker(ctx, clusterCfg, nil, nil)
+
+		round0 := map[string]types.TimeWindowData{
+			"c1": makeTWData(0, 100, nil, nil),
+			"c2": makeTWData(0, 100, nil, nil),
+		}
+		// Round 1: normal consistent data.
+		round1 := map[string]types.TimeWindowData{
+			"c1": makeTWData(100, 200, map[string]uint64{"c2": 180},
+				makeContent(makeCanalJSON(1, 150, 0, "a"))),
+			"c2": makeTWData(100, 200, nil,
+				makeContent(makeCanalJSON(1, 160, 150, "a"))),
+		}
+		// Round 2: c2 has orphan replicated pk=99 (originTs=230) in [2].
+		// enableDataRedundant=false at round 2, so it must NOT be flagged.
+		round2 := map[string]types.TimeWindowData{
+			"c1": makeTWData(200, 300, map[string]uint64{"c2": 280},
+				makeContent(makeCanalJSON(2, 250, 0, "b"))),
+			"c2": makeTWData(200, 300, nil,
+				makeContent(
+					makeCanalJSON(2, 260, 250, "b"),
+					makeCanalJSON(99, 240, 230, "x"), // orphan replicated
+				)),
+		}
+		// Round 3: c2 has another orphan replicated pk=99 (originTs=330) in [2].
+		// enableDataRedundant=true at round 3, so it IS caught.
+		round3 := map[string]types.TimeWindowData{
+			"c1": makeTWData(300, 400, map[string]uint64{"c2": 380},
+				makeContent(makeCanalJSON(3, 350, 0, "c"))),
+			"c2": makeTWData(300, 400, nil,
+				makeContent(
+					makeCanalJSON(3, 360, 350, "c"),
+					makeCanalJSON(99, 340, 330, "y"), // orphan replicated
+				)),
+		}
+
+		report0, err := checker.CheckInNextTimeWindow(round0)
+		require.NoError(t, err)
+		require.False(t, report0.NeedFlush(), "round 0 should not need flush")
+
+		report1, err := checker.CheckInNextTimeWindow(round1)
+		require.NoError(t, err)
+		require.False(t, report1.NeedFlush(), "round 1 should not need flush")
+
+		report2, err := checker.CheckInNextTimeWindow(round2)
+		require.NoError(t, err)
+		// Round 2: redundant detection is NOT enabled; the orphan pk=99 should NOT be flagged.
+		require.False(t, report2.NeedFlush(), "round 2 should not flag data redundant yet")
+
+		report3, err := checker.CheckInNextTimeWindow(round3)
+		require.NoError(t, err)
+		// Round 3: redundant detection is enabled; the orphan pk=99 in [2] (round 3)
+		// is now caught.
+		require.True(t, report3.NeedFlush(), "round 3 should detect data redundant")
+		c2Report := report3.ClusterReports["c2"]
+		require.Contains(t, c2Report.TableFailureItems, defaultSchemaKey)
+		c2TableItems := c2Report.TableFailureItems[defaultSchemaKey]
+		require.Len(t, c2TableItems.DataRedundantItems, 1)
+		require.Equal(t, uint64(330), c2TableItems.DataRedundantItems[0].OriginTS)
+		require.Equal(t, uint64(340), c2TableItems.DataRedundantItems[0].CommitTS)
 	})
 }

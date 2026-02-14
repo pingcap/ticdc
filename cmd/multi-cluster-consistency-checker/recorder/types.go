@@ -29,7 +29,7 @@ type DataLossItem struct {
 }
 
 func (item *DataLossItem) String() string {
-	return fmt.Sprintf("peer cluster: %s, pk: %s, origin ts: %d, commit ts: %d, type: data loss", item.PeerClusterID, item.PK, item.OriginTS, item.CommitTS)
+	return fmt.Sprintf("peer cluster: %s, pk: %s, origin ts: %d, commit ts: %d", item.PeerClusterID, item.PK, item.OriginTS, item.CommitTS)
 }
 
 type InconsistentColumn struct {
@@ -52,7 +52,7 @@ type DataInconsistentItem struct {
 
 func (item *DataInconsistentItem) String() string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "peer cluster: %s, pk: %s, origin ts: %d, commit ts: %d, type: data inconsistent",
+	fmt.Fprintf(&sb, "peer cluster: %s, pk: %s, origin ts: %d, commit ts: %d",
 		item.PeerClusterID, item.PK, item.OriginTS, item.CommitTS)
 	if len(item.InconsistentColumns) > 0 {
 		sb.WriteString(", inconsistent columns: [")

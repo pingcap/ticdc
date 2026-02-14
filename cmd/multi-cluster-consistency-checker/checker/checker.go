@@ -395,7 +395,7 @@ func (cd *clusterDataChecker) dataLossDetection(checker *DataChecker) {
 							zap.String("local cluster ID", cd.clusterID),
 							zap.String("replicated cluster ID", replicatedClusterID),
 							zap.String("schemaKey", schemaKey),
-							zap.String("pk", string(record.Pk)),
+							zap.String("pk", record.PkStr),
 							zap.Uint64("commitTs", record.CommitTs))
 						cd.lwwSkippedRecordsCount++
 						continue
@@ -406,14 +406,14 @@ func (cd *clusterDataChecker) dataLossDetection(checker *DataChecker) {
 							zap.String("local cluster ID", cd.clusterID),
 							zap.String("replicated cluster ID", replicatedClusterID),
 							zap.Any("record", record))
-						cd.report.AddDataLossItem(replicatedClusterID, schemaKey, string(record.Pk), record.OriginTs, record.CommitTs)
+						cd.report.AddDataLossItem(replicatedClusterID, schemaKey, record.PkStr, record.OriginTs, record.CommitTs)
 					} else if !record.EqualReplicatedRecord(replicatedRecord) {
 						// data inconsistent detected
 						log.Error("data inconsistent detected",
 							zap.String("local cluster ID", cd.clusterID),
 							zap.String("replicated cluster ID", replicatedClusterID),
 							zap.Any("record", record))
-						cd.report.AddDataInconsistentItem(replicatedClusterID, schemaKey, string(record.Pk), record.OriginTs, record.CommitTs, diffColumns(record, replicatedRecord))
+						cd.report.AddDataInconsistentItem(replicatedClusterID, schemaKey, record.PkStr, record.OriginTs, record.CommitTs, diffColumns(record, replicatedRecord))
 					}
 				}
 			}
@@ -433,7 +433,7 @@ func (cd *clusterDataChecker) dataLossDetection(checker *DataChecker) {
 							zap.String("local cluster ID", cd.clusterID),
 							zap.String("replicated cluster ID", replicatedClusterID),
 							zap.String("schemaKey", schemaKey),
-							zap.String("pk", string(record.Pk)),
+							zap.String("pk", record.PkStr),
 							zap.Uint64("commitTs", record.CommitTs))
 						cd.lwwSkippedRecordsCount++
 						continue
@@ -444,14 +444,14 @@ func (cd *clusterDataChecker) dataLossDetection(checker *DataChecker) {
 							zap.String("local cluster ID", cd.clusterID),
 							zap.String("replicated cluster ID", replicatedClusterID),
 							zap.Any("record", record))
-						cd.report.AddDataLossItem(replicatedClusterID, schemaKey, string(record.Pk), record.OriginTs, record.CommitTs)
+						cd.report.AddDataLossItem(replicatedClusterID, schemaKey, record.PkStr, record.OriginTs, record.CommitTs)
 					} else if !record.EqualReplicatedRecord(replicatedRecord) {
 						// data inconsistent detected
 						log.Error("data inconsistent detected",
 							zap.String("local cluster ID", cd.clusterID),
 							zap.String("replicated cluster ID", replicatedClusterID),
 							zap.Any("record", record))
-						cd.report.AddDataInconsistentItem(replicatedClusterID, schemaKey, string(record.Pk), record.OriginTs, record.CommitTs, diffColumns(record, replicatedRecord))
+						cd.report.AddDataInconsistentItem(replicatedClusterID, schemaKey, record.PkStr, record.OriginTs, record.CommitTs, diffColumns(record, replicatedRecord))
 					}
 				}
 			}
@@ -472,7 +472,7 @@ func (cd *clusterDataChecker) dataRedundantDetection(checker *DataChecker) {
 					log.Error("data redundant detected",
 						zap.String("replicated cluster ID", cd.clusterID),
 						zap.Any("record", record))
-					cd.report.AddDataRedundantItem(schemaKey, string(record.Pk), record.OriginTs, record.CommitTs)
+					cd.report.AddDataRedundantItem(schemaKey, record.PkStr, record.OriginTs, record.CommitTs)
 				}
 			}
 		}
@@ -521,13 +521,22 @@ func (cd *clusterDataChecker) lwwViolationDetection() {
 	cd.clusterViolationChecker.UpdateCache()
 }
 
-func (cd *clusterDataChecker) Check(checker *DataChecker) {
+func (cd *clusterDataChecker) Check(checker *DataChecker, enableDataLoss, enableDataRedundant bool) {
 	cd.report = recorder.NewClusterReport(cd.clusterID, cd.thisRoundTimeWindow)
-	// CHECK 1 - Data Loss Detection
-	cd.dataLossDetection(checker)
-	// CHECK 2 - Data Redundant Detection
-	cd.dataRedundantDetection(checker)
+	if enableDataLoss {
+		// CHECK 1 - Data Loss / Inconsistency Detection (round 2+)
+		// Needs [1] and [2] populated.
+		cd.dataLossDetection(checker)
+	}
+	if enableDataRedundant {
+		// CHECK 2 - Data Redundant Detection (round 3+)
+		// Needs [0], [1] and [2] all populated with real data;
+		// at round 2 [0] is still round 0 (empty), which would cause false positives.
+		cd.dataRedundantDetection(checker)
+	}
 	// CHECK 3 - LWW Violation Detection
+	// Always runs to keep the version cache up-to-date; meaningful results
+	// start from round 1 once the cache has been seeded.
 	cd.lwwViolationDetection()
 }
 
@@ -607,17 +616,28 @@ func (c *DataChecker) CheckInNextTimeWindow(newTimeWindowData map[string]types.T
 		return nil, errors.Annotate(err, "failed to decode new time window data")
 	}
 	report := recorder.NewReport(c.round)
-	if c.checkableRound >= 3 {
-		for clusterID, clusterDataChecker := range c.clusterDataCheckers {
-			clusterDataChecker.Check(c)
-			log.Info("checked records count",
-				zap.String("clusterID", clusterID),
-				zap.Int("checked records count", clusterDataChecker.checkedRecordsCount),
-				zap.Int("new time window records count", clusterDataChecker.newTimeWindowRecordsCount),
-				zap.Int("lww skipped records count", clusterDataChecker.lwwSkippedRecordsCount))
-			report.AddClusterReport(clusterID, clusterDataChecker.GetReport())
-		}
-	} else {
+
+	// Round 0:  seed the LWW cache (round 0 data is empty by convention).
+	// Round 1+: LWW violation detection produces meaningful results.
+	// Round 2+: data loss / inconsistency detection (needs [1] and [2]).
+	// Round 3+: data redundant detection (needs [0], [1] and [2] with real data).
+	enableDataLoss := c.checkableRound >= 2
+	enableDataRedundant := c.checkableRound >= 3
+
+	for clusterID, clusterDataChecker := range c.clusterDataCheckers {
+		clusterDataChecker.Check(c, enableDataLoss, enableDataRedundant)
+		log.Info("checked records count",
+			zap.String("clusterID", clusterID),
+			zap.Uint64("round", c.round),
+			zap.Bool("enableDataLoss", enableDataLoss),
+			zap.Bool("enableDataRedundant", enableDataRedundant),
+			zap.Int("checked records count", clusterDataChecker.checkedRecordsCount),
+			zap.Int("new time window records count", clusterDataChecker.newTimeWindowRecordsCount),
+			zap.Int("lww skipped records count", clusterDataChecker.lwwSkippedRecordsCount))
+		report.AddClusterReport(clusterID, clusterDataChecker.GetReport())
+	}
+
+	if c.checkableRound < 3 {
 		c.checkableRound++
 	}
 	c.round++

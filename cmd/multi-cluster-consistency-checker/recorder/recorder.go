@@ -27,6 +27,10 @@ import (
 	"go.uber.org/zap"
 )
 
+// ErrCheckpointCorruption is a sentinel error indicating that the persisted
+// checkpoint data is corrupted and requires manual intervention to fix.
+var ErrCheckpointCorruption = errors.New("checkpoint corruption")
+
 type Recorder struct {
 	reportDir      string
 	checkpointDir  string
@@ -79,11 +83,11 @@ func NewRecorder(dataDir string, clusters map[string]config.ClusterConfig, maxRe
 			continue
 		}
 		if len(item.ClusterInfo) != len(clusters) {
-			return nil, errors.Errorf("checkpoint item (round %d) cluster info length mismatch, expected %d, got %d", item.Round, len(clusters), len(item.ClusterInfo))
+			return nil, errors.Annotatef(ErrCheckpointCorruption, "checkpoint item (round %d) cluster info length mismatch, expected %d, got %d", item.Round, len(clusters), len(item.ClusterInfo))
 		}
 		for clusterID := range clusters {
 			if _, ok := item.ClusterInfo[clusterID]; !ok {
-				return nil, errors.Errorf("checkpoint item (round %d) cluster info missing for cluster %s", item.Round, clusterID)
+				return nil, errors.Annotatef(ErrCheckpointCorruption, "checkpoint item (round %d) cluster info missing for cluster %s", item.Round, clusterID)
 			}
 		}
 	}
@@ -103,10 +107,10 @@ func (r *Recorder) initializeCheckpoint() error {
 	if _, err := os.Stat(checkpointFile); err == nil {
 		data, err := os.ReadFile(checkpointFile)
 		if err != nil {
-			return errors.Trace(err)
+			return errors.Trace(err) // transient I/O error
 		}
 		if err := json.Unmarshal(data, r.checkpoint); err != nil {
-			return errors.Trace(err)
+			return errors.Annotatef(ErrCheckpointCorruption, "failed to unmarshal checkpoint.json: %v", err)
 		}
 		return nil
 	}
@@ -118,14 +122,14 @@ func (r *Recorder) initializeCheckpoint() error {
 		log.Warn("checkpoint.json not found, recovering from checkpoint.json.bak")
 		data, err := os.ReadFile(bakFile)
 		if err != nil {
-			return errors.Trace(err)
+			return errors.Trace(err) // transient I/O error
 		}
 		if err := json.Unmarshal(data, r.checkpoint); err != nil {
-			return errors.Trace(err)
+			return errors.Annotatef(ErrCheckpointCorruption, "failed to unmarshal checkpoint.json.bak: %v", err)
 		}
 		// Restore the backup as the primary file
 		if err := os.Rename(bakFile, checkpointFile); err != nil {
-			return errors.Trace(err)
+			return errors.Trace(err) // transient I/O error
 		}
 		return nil
 	}

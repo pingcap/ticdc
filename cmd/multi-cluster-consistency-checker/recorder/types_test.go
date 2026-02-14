@@ -30,7 +30,7 @@ func TestDataLossItem_String(t *testing.T) {
 		CommitTS:      200,
 	}
 	s := item.String()
-	require.Equal(t, "peer cluster: cluster-2, pk: pk-1, origin ts: 100, commit ts: 200, type: data loss", s)
+	require.Equal(t, "peer cluster: cluster-2, pk: pk-1, origin ts: 100, commit ts: 200", s)
 }
 
 func TestDataInconsistentItem_String(t *testing.T) {
@@ -45,7 +45,7 @@ func TestDataInconsistentItem_String(t *testing.T) {
 			CommitTS:      400,
 		}
 		s := item.String()
-		require.Equal(t, "peer cluster: cluster-3, pk: pk-2, origin ts: 300, commit ts: 400, type: data inconsistent", s)
+		require.Equal(t, "peer cluster: cluster-3, pk: pk-2, origin ts: 300, commit ts: 400", s)
 	})
 
 	t.Run("with inconsistent columns", func(t *testing.T) {
@@ -62,7 +62,7 @@ func TestDataInconsistentItem_String(t *testing.T) {
 		}
 		s := item.String()
 		require.Equal(t,
-			"peer cluster: cluster-3, pk: pk-2, origin ts: 300, commit ts: 400, type: data inconsistent, "+
+			"peer cluster: cluster-3, pk: pk-2, origin ts: 300, commit ts: 400, "+
 				"inconsistent columns: [column: col1, local: val_a, replicated: val_b; column: col2, local: 100, replicated: 200]",
 			s)
 	})
@@ -80,7 +80,7 @@ func TestDataInconsistentItem_String(t *testing.T) {
 		}
 		s := item.String()
 		require.Equal(t,
-			"peer cluster: cluster-3, pk: pk-2, origin ts: 300, commit ts: 400, type: data inconsistent, "+
+			"peer cluster: cluster-3, pk: pk-2, origin ts: 300, commit ts: 400, "+
 				"inconsistent columns: [column: col1, local: val_a, replicated: <nil>]",
 			s)
 	})
@@ -262,7 +262,7 @@ func TestReport_MarshalReport(t *testing.T) {
 			"time window: "+twStr+"\n"+
 			"  - [table name: "+testSchemaKey+"]\n"+
 			"  - [data loss items: 1]\n"+
-			"    - [peer cluster: d1, pk: pk-1, origin ts: 100, commit ts: 200, type: data loss]\n\n",
+			"    - [peer cluster: d1, pk: pk-1, origin ts: 100, commit ts: 200]\n\n",
 			s)
 	})
 
@@ -312,7 +312,7 @@ func TestReport_MarshalReport(t *testing.T) {
 			"time window: "+twStr+"\n"+
 			"  - [table name: "+testSchemaKey+"]\n"+
 			"  - [data loss items: 1]\n"+
-			"    - [peer cluster: d1, pk: pk-1, origin ts: 1, commit ts: 2, type: data loss]\n\n",
+			"    - [peer cluster: d1, pk: pk-1, origin ts: 1, commit ts: 2]\n\n",
 			s)
 	})
 
@@ -333,9 +333,9 @@ func TestReport_MarshalReport(t *testing.T) {
 			"time window: "+twStr+"\n"+
 			"  - [table name: "+testSchemaKey+"]\n"+
 			"  - [data loss items: 1]\n"+
-			"    - [peer cluster: d0, pk: pk-0, origin ts: 0, commit ts: 1, type: data loss]\n"+
+			"    - [peer cluster: d0, pk: pk-0, origin ts: 0, commit ts: 1]\n"+
 			"  - [data inconsistent items: 1]\n"+
-			"    - [peer cluster: d1, pk: pk-1, origin ts: 1, commit ts: 2, type: data inconsistent, inconsistent columns: [column: val, local: x, replicated: y]]\n"+
+			"    - [peer cluster: d1, pk: pk-1, origin ts: 1, commit ts: 2, inconsistent columns: [column: val, local: x, replicated: y]]\n"+
 			"  - [data redundant items: 1]\n"+
 			"    - [pk: pk-2, origin ts: 3, commit ts: 4]\n"+
 			"  - [lww violation items: 1]\n"+
