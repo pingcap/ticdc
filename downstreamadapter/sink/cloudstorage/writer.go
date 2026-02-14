@@ -23,7 +23,7 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-	spoolpkg "github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -43,7 +43,7 @@ type writer struct {
 	changeFeedID commonType.ChangeFeedID
 	storage      storage.ExternalStorage
 	config       *cloudstorage.Config
-	spool        *spoolpkg.Manager
+	spool        *spool.Manager
 
 	toBeFlushedCh chan writerTask
 	inputCh       *chann.DrainableChann[*task]
@@ -83,7 +83,7 @@ func newWriter(
 	config *cloudstorage.Config,
 	extension string,
 	statistics *pmetrics.Statistics,
-	spoolManager *spoolpkg.Manager,
+	spoolManager *spool.Manager,
 ) *writer {
 	return &writer{
 		shardID:       id,
@@ -280,7 +280,7 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 	buf := bytes.NewBuffer(make([]byte, 0, task.size))
 	rowsCnt := 0
 	bytesCnt := int64(0)
-	entriesToRelease := make([]*spoolpkg.Entry, 0, len(task.entries))
+	entriesToRelease := make([]*spool.Entry, 0, len(task.entries))
 	defer func() {
 		for _, entry := range entriesToRelease {
 			if d.spool != nil {
@@ -491,7 +491,7 @@ type singleTableTask struct {
 	size      uint64
 	tableInfo *commonType.TableInfo
 	msgs      []*common.Message
-	entries   []*spoolpkg.Entry
+	entries   []*spool.Entry
 }
 
 func newBatchedTask() batchedTask {

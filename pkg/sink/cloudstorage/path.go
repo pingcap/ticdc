@@ -518,17 +518,37 @@ func FetchIndexFromFileName(fileName string, extension string) (uint64, error) {
 			fmt.Errorf("'%s' is a invalid file name", fileName))
 	}
 
-	// CDC[_{dispatcherID}_]{num}.fileExtension
-	pathRE, err := regexp.Compile(`CDC(?:_(\w+)_)?(\d+).\w+`)
-	if err != nil {
-		return 0, err
+	fileName = strings.TrimSuffix(fileName, extension)
+	indexPart := strings.TrimPrefix(fileName, "CDC")
+
+	if strings.HasPrefix(indexPart, "_") {
+		trimmed := strings.TrimPrefix(indexPart, "_")
+		separatorIdx := strings.LastIndex(trimmed, "_")
+		if separatorIdx <= 0 || separatorIdx >= len(trimmed)-1 {
+			return 0, errors.WrapError(errors.ErrStorageSinkInvalidFileName,
+				fmt.Errorf("'%s' is a invalid file name", fileName))
+		}
+		indexPart = trimmed[separatorIdx+1:]
 	}
 
-	matches := pathRE.FindStringSubmatch(fileName)
-	if len(matches) != 3 {
-		return 0, fmt.Errorf("cannot match dml path pattern for %s", fileName)
+	if len(indexPart) < config.MinFileIndexWidth || !isNumberString(indexPart) {
+		return 0, errors.WrapError(errors.ErrStorageSinkInvalidFileName,
+			fmt.Errorf("'%s' is a invalid file name", fileName))
 	}
-	return strconv.ParseUint(matches[2], 10, 64)
+
+	return strconv.ParseUint(indexPart, 10, 64)
+}
+
+func isNumberString(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, ch := range value {
+		if ch < '0' || ch > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 var dateSeparatorDayRegexp *regexp.Regexp

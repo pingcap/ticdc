@@ -170,14 +170,22 @@ func TestFetchIndexFromFileName(t *testing.T) {
 	testCases := []struct {
 		fileName string
 		wantErr  string
+		index    uint64
 	}{
 		{
 			fileName: "CDC000011.json",
 			wantErr:  "",
+			index:    11,
 		},
 		{
 			fileName: "CDC1000000.json",
 			wantErr:  "",
+			index:    1000000,
+		},
+		{
+			fileName: "CDC_dispatcher-1_000007.json",
+			wantErr:  "",
+			index:    7,
 		},
 		{
 			fileName: "CDC1.json",
@@ -195,14 +203,19 @@ func TestFetchIndexFromFileName(t *testing.T) {
 			fileName: "CDChello.json",
 			wantErr:  "filename in storage sink is invalid",
 		},
+		{
+			fileName: "CDC_dispatcher_1.json",
+			wantErr:  "filename in storage sink is invalid",
+		},
 	}
 
 	for _, tc := range testCases {
-		_, err := FetchIndexFromFileName(tc.fileName, f.extension)
+		index, err := FetchIndexFromFileName(tc.fileName, f.extension)
 		if len(tc.wantErr) != 0 {
 			require.Contains(t, err.Error(), tc.wantErr)
 		} else {
 			require.NoError(t, err)
+			require.Equal(t, tc.index, index)
 		}
 	}
 }

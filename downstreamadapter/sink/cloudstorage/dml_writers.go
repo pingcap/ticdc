@@ -17,7 +17,7 @@ import (
 	"context"
 	"time"
 
-	spoolpkg "github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
 	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -44,7 +44,7 @@ type dmlWriters struct {
 	encodeGroup *encodingGroup
 
 	writers []*writer
-	spool   *spoolpkg.Manager
+	spool   *spool.Manager
 }
 
 func newDMLWriters(
@@ -56,7 +56,7 @@ func newDMLWriters(
 	extension string,
 	statistics *metrics.Statistics,
 ) (*dmlWriters, error) {
-	spoolManager, err := spoolpkg.New(changefeedID, config.SpoolDiskQuota, nil)
+	spoolManager, err := spool.New(changefeedID, config.SpoolDiskQuota, nil)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}

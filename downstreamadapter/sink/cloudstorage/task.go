@@ -14,7 +14,7 @@
 package cloudstorage
 
 import (
-	spoolpkg "github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	pkgcloudstorage "github.com/pingcap/ticdc/pkg/sink/cloudstorage"
@@ -35,7 +35,7 @@ type task struct {
 	dispatcherID   commonType.DispatcherID
 
 	encodedMsgs []*common.Message
-	spoolEntry  *spoolpkg.Entry
+	spoolEntry  *spool.Entry
 	marker      *drainMarker
 }
 
