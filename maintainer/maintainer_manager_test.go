@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/testutil"
+	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -99,7 +100,8 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 		AddTableBatchSize:    1000,
 		CheckBalanceInterval: 0,
 	}
-	manager := NewMaintainerManager(selfNode, schedulerConf)
+	var liveness api.Liveness
+	manager := NewMaintainerManager(selfNode, schedulerConf, &liveness)
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})
@@ -330,7 +332,8 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	mc.RegisterHandler(messaging.CoordinatorTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
 		return nil
 	})
-	manager := NewMaintainerManager(selfNode, config.GetGlobalServerConfig().Debug.Scheduler)
+	var liveness api.Liveness
+	manager := NewMaintainerManager(selfNode, config.GetGlobalServerConfig().Debug.Scheduler, &liveness)
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})
@@ -477,7 +480,8 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 		return nil
 	})
 	schedulerConf := &config.SchedulerConfig{AddTableBatchSize: 1000}
-	manager := NewMaintainerManager(selfNode, schedulerConf)
+	var liveness api.Liveness
+	manager := NewMaintainerManager(selfNode, schedulerConf, &liveness)
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})

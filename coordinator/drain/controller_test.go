@@ -1,0 +1,74 @@
+// Copyright 2026 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//	http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+package drain
+
+import (
+	"testing"
+	"time"
+
+	"github.com/pingcap/ticdc/coordinator/nodeliveness"
+	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/stretchr/testify/require"
+)
+
+func TestDrainControllerResendAndPromoteToStopping(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	view := nodeliveness.NewView(30 * time.Second)
+	c := NewController(mc, view)
+
+	target := node.ID("n1")
+	now := time.Now()
+	view.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 42,
+	}, now)
+
+	c.RequestDrain(target)
+	msg := <-mc.GetMessageChannel()
+	require.Equal(t, messaging.TypeSetNodeLivenessRequest, msg.Type)
+	require.Equal(t, messaging.MaintainerManagerTopic, msg.Topic)
+	require.Equal(t, target, msg.To)
+	req := msg.Message[0].(*heartbeatpb.SetNodeLivenessRequest)
+	require.Equal(t, heartbeatpb.NodeLiveness_DRAINING, req.Target)
+	require.Equal(t, uint64(42), req.NodeEpoch)
+
+	// Before draining observed, it should retry after the resend interval.
+	c.AdvanceLiveness(nil)
+	select {
+	case <-mc.GetMessageChannel():
+		require.FailNow(t, "unexpected command before resend interval")
+	default:
+	}
+
+	// Rewind the last send time to cross resendInterval without sleep.
+	c.mu.Lock()
+	c.ensureNodeStateLocked(target).lastDrainCmdSentAt = time.Now().Add(-resendInterval - 10*time.Millisecond)
+	c.mu.Unlock()
+	c.AdvanceLiveness(nil)
+	msg = <-mc.GetMessageChannel()
+	req = msg.Message[0].(*heartbeatpb.SetNodeLivenessRequest)
+	require.Equal(t, heartbeatpb.NodeLiveness_DRAINING, req.Target)
+
+	c.ObserveSetNodeLivenessResponse(target, &heartbeatpb.SetNodeLivenessResponse{
+		Applied:   heartbeatpb.NodeLiveness_DRAINING,
+		NodeEpoch: 42,
+	})
+
+	// Once readyToStop, it should send STOPPING.
+	c.AdvanceLiveness(func(node.ID) bool { return true })
+	msg = <-mc.GetMessageChannel()
+	req = msg.Message[0].(*heartbeatpb.SetNodeLivenessRequest)
+	require.Equal(t, heartbeatpb.NodeLiveness_STOPPING, req.Target)
+}
