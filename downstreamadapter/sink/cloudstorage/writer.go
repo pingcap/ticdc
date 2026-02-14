@@ -213,6 +213,31 @@ func (d *writer) ignoreTableTask(task *singleTableTask) {
 	}
 }
 
+// mutateMessageValueForFailpoint replaces the last CSV field of every row in
+// msg.Value with a sentinel value so that the multi-cluster-consistency-checker
+// sees the original row as "lost" and the mutated row as "redundant".
+// This function is only called from within a failpoint.Inject block.
+func mutateMessageValueForFailpoint(msg *common.Message) {
+	if len(msg.Value) == 0 {
+		return
+	}
+	copied := make([]byte, len(msg.Value))
+	copy(copied, msg.Value)
+	lines := bytes.Split(copied, []byte("\n"))
+	for i, line := range lines {
+		if len(line) == 0 {
+			continue
+		}
+		// Replace the last comma-separated field with a sentinel value
+		// to corrupt a non-PK column.
+		lastComma := bytes.LastIndexByte(line, ',')
+		if lastComma >= 0 && lastComma < len(line)-1 {
+			lines[i] = append(line[:lastComma+1], []byte("\"MUTATED_BY_FAILPOINT\"")...)
+		}
+	}
+	msg.Value = bytes.Join(lines, []byte("\n"))
+}
+
 func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath string, task *singleTableTask) error {
 	var callbacks []func()
 	buf := bytes.NewBuffer(make([]byte, 0, task.size))
@@ -220,6 +245,30 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 	bytesCnt := int64(0)
 	// There is always only one message here in task.msgs
 	for _, msg := range task.msgs {
+		// Failpoint: drop this message to simulate data loss.
+		// Usage: failpoint.Enable(".../cloudStorageSinkDropMessage", "return")
+		//        failpoint.Enable(".../cloudStorageSinkDropMessage", "50%return")
+		failpoint.Inject("cloudStorageSinkDropMessage", func() {
+			log.Warn("cloudStorageSinkDropMessage: dropping message to simulate data loss",
+				zap.Int("workerID", d.id),
+				zap.String("keyspace", d.changeFeedID.Keyspace()),
+				zap.Stringer("changefeed", d.changeFeedID.ID()),
+				zap.String("dataFilePath", dataFilePath))
+			callbacks = append(callbacks, msg.Callback)
+			failpoint.Continue()
+		})
+
+		// Failpoint: mutate non-PK column data in the message.
+		// Usage: failpoint.Enable(".../cloudStorageSinkMutateValue", "return")
+		failpoint.Inject("cloudStorageSinkMutateValue", func() {
+			log.Warn("cloudStorageSinkMutateValue: mutating message value to simulate data inconsistency",
+				zap.Int("workerID", d.id),
+				zap.String("keyspace", d.changeFeedID.Keyspace()),
+				zap.Stringer("changefeed", d.changeFeedID.ID()),
+				zap.String("dataFilePath", dataFilePath))
+			mutateMessageValueForFailpoint(msg)
+		})
+
 		if msg.Key != nil && rowsCnt == 0 {
 			buf.Write(msg.Key)
 			bytesCnt += int64(len(msg.Key))
