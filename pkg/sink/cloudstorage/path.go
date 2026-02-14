@@ -30,7 +30,6 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/hash"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
@@ -53,6 +52,9 @@ const (
 	// The table schema is stored in the following path:
 	// <schema>/<table>/meta/schema_{tableVersion}_{checksum}.json
 	tableSchemaPrefix = "%s/%s/meta/"
+
+	defaultPathStateTTL             = 24 * time.Hour
+	defaultPathStateCleanupInterval = 10 * time.Minute
 )
 
 var schemaRE = regexp.MustCompile(`meta/schema_\d+_\d{10}\.json$`)
@@ -123,6 +125,18 @@ type indexWithDate struct {
 	currDate, prevDate string
 }
 
+type tablePathStateKey struct {
+	table        commonType.TableName
+	dispatcherID commonType.DispatcherID
+}
+
+type tablePathState struct {
+	schemaVersion uint64
+	fileIndex     indexWithDate
+	indexReady    bool
+	lastAccess    time.Time
+}
+
 // VersionedTableName is used to wrap TableNameWithPhysicTableID with a version.
 type VersionedTableName struct {
 	// Because we need to generate different file paths for different
@@ -143,11 +157,17 @@ type FilePathGenerator struct {
 	config       *Config
 	pdClock      pdutil.Clock
 	storage      storage.ExternalStorage
-	fileIndex    map[VersionedTableName]*indexWithDate
+	pathState    map[tablePathStateKey]*tablePathState
 
-	hasher     *hash.PositionInertia
-	versionMap map[VersionedTableName]uint64
+	stateTTL             time.Duration
+	stateCleanupInterval time.Duration
+	lastStateCleanupTime time.Time
 }
+
+// Path state principles:
+//  1. State is keyed by (table, dispatcher), so different dispatchers do not share file index.
+//  2. schemaVersion change resets file index state to avoid mixing different schema versions.
+//  3. state cleanup is lazy and interval-based to keep hot path overhead low.
 
 // NewFilePathGenerator creates a FilePathGenerator.
 func NewFilePathGenerator(
@@ -163,9 +183,10 @@ func NewFilePathGenerator(
 		extension:    extension,
 		storage:      storage,
 		pdClock:      pdClock,
-		fileIndex:    make(map[VersionedTableName]*indexWithDate),
-		hasher:       hash.NewPositionInertia(),
-		versionMap:   make(map[VersionedTableName]uint64),
+		pathState:    make(map[tablePathStateKey]*tablePathState),
+
+		stateTTL:             defaultPathStateTTL,
+		stateCleanupInterval: defaultPathStateCleanupInterval,
 	}
 }
 
@@ -177,7 +198,10 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	table VersionedTableName,
 	tableInfo *commonType.TableInfo,
 ) (bool, error) {
-	if _, ok := f.versionMap[table]; ok {
+	now := f.currentTime()
+	f.cleanupExpiredPathState(now)
+	state := f.ensurePathState(table, now)
+	if state.schemaVersion == table.TableInfoVersion {
 		return false, nil
 	}
 
@@ -196,14 +220,14 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	// Case 1: point check if the schema file exists.
 	tblSchemaFile, err := def.GenerateSchemaFilePath()
 	if err != nil {
-		return false, err
+		return false, errors.Trace(err)
 	}
 	exist, err := f.storage.FileExists(ctx, tblSchemaFile)
 	if err != nil {
-		return false, err
+		return false, errors.Trace(err)
 	}
 	if exist {
-		f.versionMap[table] = table.TableInfoVersion
+		f.updateSchemaVersion(state, table.TableInfoVersion, now)
 		return false, nil
 	}
 
@@ -241,7 +265,7 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 		return nil
 	})
 	if err != nil {
-		return false, err
+		return false, errors.Trace(err)
 	}
 	if hasNewerSchemaVersion {
 		return true, nil
@@ -257,7 +281,7 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 			zap.Uint32("checksum", checksum))
 		// record the last version of the table schema file.
 		// we don't need to write schema file to external storage again.
-		f.versionMap[table] = lastVersion
+		f.updateSchemaVersion(state, lastVersion, now)
 		return false, nil
 	}
 
@@ -273,10 +297,13 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	}
 	encodedDetail, err := def.MarshalWithQuery()
 	if err != nil {
-		return false, err
+		return false, errors.Trace(err)
 	}
-	f.versionMap[table] = table.TableInfoVersion
-	return false, f.storage.WriteFile(ctx, tblSchemaFile, encodedDetail)
+	if err := f.storage.WriteFile(ctx, tblSchemaFile, encodedDetail); err != nil {
+		return false, errors.Trace(err)
+	}
+	f.updateSchemaVersion(state, table.TableInfoVersion, now)
+	return false, nil
 }
 
 // SetClock is used for unit test
@@ -328,10 +355,17 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 
 func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date string) string {
 	var elems []string
+	now := f.currentTime()
+	state := f.ensurePathState(tbl, now)
+	version := state.schemaVersion
+	if version == 0 {
+		version = tbl.TableInfoVersion
+		f.updateSchemaVersion(state, version, now)
+	}
 
 	elems = append(elems, tbl.TableNameWithPhysicTableID.Schema)
 	elems = append(elems, tbl.TableNameWithPhysicTableID.Table)
-	elems = append(elems, fmt.Sprintf("%d", f.versionMap[tbl]))
+	elems = append(elems, fmt.Sprintf("%d", version))
 
 	if f.config.EnablePartitionSeparator && tbl.TableNameWithPhysicTableID.IsPartition {
 		elems = append(elems, fmt.Sprintf("%d", tbl.TableNameWithPhysicTableID.TableID))
@@ -347,27 +381,33 @@ func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date str
 func (f *FilePathGenerator) generateDataFileName(
 	ctx context.Context, tbl VersionedTableName, date string,
 ) (string, error) {
-	if idx, ok := f.fileIndex[tbl]; !ok {
+	now := f.currentTime()
+	f.cleanupExpiredPathState(now)
+	state := f.ensurePathState(tbl, now)
+	if !state.indexReady {
 		fileIdx, err := f.getFileIdxFromIndexFile(ctx, tbl, date)
 		if err != nil {
 			return "", err
 		}
-		f.fileIndex[tbl] = &indexWithDate{
+		state.fileIndex = indexWithDate{
 			prevDate: date,
 			currDate: date,
 			index:    fileIdx,
 		}
+		state.indexReady = true
 	} else {
-		idx.currDate = date
+		state.fileIndex.currDate = date
 	}
 
 	// if date changed, reset the counter
-	if f.fileIndex[tbl].prevDate != f.fileIndex[tbl].currDate {
-		f.fileIndex[tbl].prevDate = f.fileIndex[tbl].currDate
-		f.fileIndex[tbl].index = 0
+	if state.fileIndex.prevDate != state.fileIndex.currDate {
+		state.fileIndex.prevDate = state.fileIndex.currDate
+		state.fileIndex.index = 0
 	}
-	f.fileIndex[tbl].index++
-	return generateDataFileName(f.config.EnableTableAcrossNodes, tbl.DispatcherID.String(), f.fileIndex[tbl].index, f.extension, f.config.FileIndexWidth), nil
+	// Invariant: file index increases monotonically within the same (table, dispatcher, date) state.
+	state.fileIndex.index++
+	state.lastAccess = now
+	return generateDataFileName(f.config.EnableTableAcrossNodes, tbl.DispatcherID.String(), state.fileIndex.index, f.extension, f.config.FileIndexWidth), nil
 }
 
 func (f *FilePathGenerator) getFileIdxFromIndexFile(
@@ -376,7 +416,7 @@ func (f *FilePathGenerator) getFileIdxFromIndexFile(
 	indexFile := f.GenerateIndexFilePath(tbl, date)
 	exist, err := f.storage.FileExists(ctx, indexFile)
 	if err != nil {
-		return 0, err
+		return 0, errors.Trace(err)
 	}
 	if !exist {
 		return 0, nil
@@ -384,10 +424,90 @@ func (f *FilePathGenerator) getFileIdxFromIndexFile(
 
 	data, err := f.storage.ReadFile(ctx, indexFile)
 	if err != nil {
-		return 0, err
+		return 0, errors.Trace(err)
 	}
 	fileName := strings.TrimSuffix(string(data), "\n")
 	return FetchIndexFromFileName(fileName, f.extension)
+}
+
+func (f *FilePathGenerator) setPathStateCleanupConfig(ttl, interval time.Duration) {
+	if ttl > 0 {
+		f.stateTTL = ttl
+	}
+	if interval > 0 {
+		f.stateCleanupInterval = interval
+	}
+}
+
+func (f *FilePathGenerator) pathStateCount() int {
+	return len(f.pathState)
+}
+
+func (f *FilePathGenerator) currentSchemaVersion(tbl VersionedTableName) uint64 {
+	state := f.pathState[f.pathStateKey(tbl)]
+	if state == nil {
+		return 0
+	}
+	return state.schemaVersion
+}
+
+func (f *FilePathGenerator) setCurrentSchemaVersion(tbl VersionedTableName, version uint64) {
+	now := f.currentTime()
+	state := f.ensurePathState(tbl, now)
+	f.updateSchemaVersion(state, version, now)
+}
+
+func (f *FilePathGenerator) currentTime() time.Time {
+	if f.pdClock == nil {
+		return time.Now()
+	}
+	return f.pdClock.CurrentTime()
+}
+
+func (f *FilePathGenerator) pathStateKey(tbl VersionedTableName) tablePathStateKey {
+	return tablePathStateKey{
+		table:        tbl.TableNameWithPhysicTableID,
+		dispatcherID: tbl.DispatcherID,
+	}
+}
+
+func (f *FilePathGenerator) ensurePathState(tbl VersionedTableName, now time.Time) *tablePathState {
+	key := f.pathStateKey(tbl)
+	state := f.pathState[key]
+	if state == nil {
+		state = &tablePathState{}
+		f.pathState[key] = state
+	}
+	state.lastAccess = now
+	return state
+}
+
+func (f *FilePathGenerator) updateSchemaVersion(state *tablePathState, version uint64, now time.Time) {
+	if state.schemaVersion != version {
+		state.schemaVersion = version
+		state.fileIndex = indexWithDate{}
+		state.indexReady = false
+	}
+	state.lastAccess = now
+}
+
+func (f *FilePathGenerator) cleanupExpiredPathState(now time.Time) {
+	if f.stateTTL <= 0 || f.stateCleanupInterval <= 0 {
+		return
+	}
+	if !f.lastStateCleanupTime.IsZero() && now.Sub(f.lastStateCleanupTime) < f.stateCleanupInterval {
+		return
+	}
+	f.lastStateCleanupTime = now
+	for key, state := range f.pathState {
+		if state == nil {
+			delete(f.pathState, key)
+			continue
+		}
+		if now.Sub(state.lastAccess) >= f.stateTTL {
+			delete(f.pathState, key)
+		}
+	}
 }
 
 func FetchIndexFromFileName(fileName string, extension string) (uint64, error) {

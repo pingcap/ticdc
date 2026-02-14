@@ -38,11 +38,9 @@ import (
 )
 
 // It will send the events to cloud storage systems.
-// Messages are encoded in the specific protocol and then sent to the defragmenter.
-// The data flow is as follows: **data** -> encodingWorkers -> defragmenter -> dmlWorkers -> external storage
-// The defragmenter will defragment the out-of-order encoded messages and sends encoded
-// messages to individual dmlWorkers.
-// The dmlWorkers will write the encoded messages to external storage in parallel between different tables.
+// Messages are encoded in the specific protocol and routed by dispatcher to shard pipelines.
+// The data flow is as follows: **data** -> encoding pipeline -> dispatcher routers -> writer shards -> external storage.
+// The writer shards write encoded messages to external storage in parallel between different tables.
 type sink struct {
 	changefeedID common.ChangeFeedID
 	cfg          *cloudstorage.Config

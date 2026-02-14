@@ -33,7 +33,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/ticdc/utils/chann"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -55,14 +54,14 @@ func testWriter(ctx context.Context, t *testing.T, dir string) *writer {
 	cfg.FileIndexWidth = 6
 	require.Nil(t, err)
 
-	changefeedID := commonType.NewChangefeedID4Test("test", "dml-worker-test")
-	statistics := metrics.NewStatistics(changefeedID, "dml-worker-test")
+	changefeedID := commonType.NewChangefeedID4Test("test", t.Name())
+	statistics := metrics.NewStatistics(changefeedID, t.Name())
 	pdlock := pdutil.NewMonotonicClock(pclock.New())
 	appcontext.SetService(appcontext.DefaultPDClock, pdlock)
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 	d := newWriter(1, changefeedID, storage,
-		cfg, ".json", chann.NewAutoDrainChann[eventFragment](), statistics, nil)
+		cfg, ".json", statistics, nil)
 	return d
 }
 
@@ -72,7 +71,6 @@ func TestWriterRun(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	parentDir := t.TempDir()
 	d := testWriter(ctx, t, parentDir)
-	fragCh := d.inputCh
 	table1Dir := path.Join(parentDir, "test/table1/99")
 
 	tidbTableInfo := &timodel.TableInfo{
@@ -87,31 +85,29 @@ func TestWriterRun(t *testing.T) {
 
 	dispatcherID := commonType.NewDispatcherID()
 	for i := 0; i < 5; i++ {
-		frag := eventFragment{
-			seqNumber: uint64(i),
-			versionedTable: cloudstorage.VersionedTableName{
-				TableNameWithPhysicTableID: commonType.TableName{
-					Schema:  "test",
-					Table:   "table1",
-					TableID: 100,
-				},
-				TableInfoVersion: 99,
-				DispatcherID:     dispatcherID,
+		tableName := cloudstorage.VersionedTableName{
+			TableNameWithPhysicTableID: commonType.TableName{
+				Schema:  "test",
+				Table:   "table1",
+				TableID: 100,
 			},
-			event: &commonEvent.DMLEvent{
-				PhysicalTableID: 100,
-				TableInfo:       tableInfo,
-				Rows:            chunk.MutRowFromValues(100, "hello world").ToRow().Chunk(),
-			},
-			encodedMsgs: []*common.Message{
-				{
-					Value: []byte(fmt.Sprintf(`{"id":%d,"database":"test","table":"table1","pkNames":[],"isDdl":false,`+
-						`"type":"INSERT","es":0,"ts":1663572946034,"sql":"","sqlType":{"c1":12,"c2":12},`+
-						`"data":[{"c1":"100","c2":"hello world"}],"old":null}`, i)),
-				},
+			TableInfoVersion: 99,
+			DispatcherID:     dispatcherID,
+		}
+		dmlEvent := &commonEvent.DMLEvent{
+			PhysicalTableID: 100,
+			TableInfo:       tableInfo,
+			Rows:            chunk.MutRowFromValues(100, "hello world").ToRow().Chunk(),
+		}
+		tableTask := newDMLTask(tableName, dmlEvent)
+		tableTask.encodedMsgs = []*common.Message{
+			{
+				Value: []byte(fmt.Sprintf(`{"id":%d,"database":"test","table":"table1","pkNames":[],"isDdl":false,`+
+					`"type":"INSERT","es":0,"ts":1663572946034,"sql":"","sqlType":{"c1":12,"c2":12},`+
+					`"data":[{"c1":"100","c2":"hello world"}],"old":null}`, i)),
 			},
 		}
-		fragCh.In() <- frag
+		require.NoError(t, d.enqueueTask(ctx, tableTask))
 	}
 
 	var wg sync.WaitGroup
@@ -126,7 +122,7 @@ func TestWriterRun(t *testing.T) {
 	fileNames := getTableFiles(t, table1Dir)
 	require.Len(t, fileNames, 2)
 	require.ElementsMatch(t, []string{fmt.Sprintf("CDC_%s_000001.json", dispatcherID.String()), fmt.Sprintf("CDC_%s.index", dispatcherID.String())}, fileNames)
-	fragCh.CloseAndDrain()
+	d.closeInput()
 	cancel()
 	d.close()
 	wg.Wait()
@@ -139,7 +135,6 @@ func TestWriterDrainMarker(t *testing.T) {
 	defer cancel()
 	parentDir := t.TempDir()
 	d := testWriter(ctx, t, parentDir)
-	fragCh := d.inputCh
 
 	tidbTableInfo := &timodel.TableInfo{
 		ID:   100,
@@ -158,9 +153,8 @@ func TestWriterDrainMarker(t *testing.T) {
 		callbackCnt.Add(1)
 	}
 
-	fragCh.In() <- eventFragment{
-		seqNumber: 1,
-		versionedTable: cloudstorage.VersionedTableName{
+	tableTask := newDMLTask(
+		cloudstorage.VersionedTableName{
 			TableNameWithPhysicTableID: commonType.TableName{
 				Schema:  "test",
 				Table:   "table1",
@@ -169,16 +163,16 @@ func TestWriterDrainMarker(t *testing.T) {
 			TableInfoVersion: 99,
 			DispatcherID:     dispatcherID,
 		},
-		dispatcherID: dispatcherID,
-		event: &commonEvent.DMLEvent{
+		&commonEvent.DMLEvent{
 			PhysicalTableID: 100,
 			TableInfo:       tableInfo,
 		},
-		encodedMsgs: []*common.Message{msg},
-	}
+	)
+	tableTask.encodedMsgs = []*common.Message{msg}
+	require.NoError(t, d.enqueueTask(ctx, tableTask))
 
 	doneCh := make(chan error, 1)
-	fragCh.In() <- newDrainMarkerFragment(2, dispatcherID, 100, doneCh)
+	require.NoError(t, d.enqueueTask(ctx, newDrainTask(dispatcherID, 100, doneCh)))
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -197,7 +191,7 @@ func TestWriterDrainMarker(t *testing.T) {
 		return callbackCnt.Load() == 1
 	}, 5*time.Second, 100*time.Millisecond)
 
-	fragCh.CloseAndDrain()
+	d.closeInput()
 	d.close()
 	cancel()
 	wg.Wait()
