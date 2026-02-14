@@ -56,6 +56,10 @@ type WorkloadStats struct {
 	QueryCount      atomic.Uint64
 	ErrorCount      atomic.Uint64
 	CreatedTableNum atomic.Int32
+	DDLExecuted     atomic.Uint64
+	DDLSucceeded    atomic.Uint64
+	DDLSkipped      atomic.Uint64
+	DDLFailed       atomic.Uint64
 }
 
 // WorkloadApp is the main structure of the application
@@ -161,12 +165,12 @@ func (app *WorkloadApp) executeWorkload(wg *sync.WaitGroup) error {
 		zap.Int("dbCount", len(app.DBManager.GetDBs())),
 		zap.Int("tableCount", app.Config.TableCount))
 
-	if !app.Config.SkipCreateTable && app.Config.Action == "prepare" {
-		app.handlePrepareAction(insertConcurrency, wg)
-		return nil
+	if app.Config.Action == "ddl" || app.Config.OnlyDDL {
+		return app.handleDDLExecution(wg)
 	}
 
-	if app.Config.OnlyDDL {
+	if !app.Config.SkipCreateTable && app.Config.Action == "prepare" {
+		app.handlePrepareAction(insertConcurrency, wg)
 		return nil
 	}
 
