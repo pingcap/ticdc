@@ -1,18 +1,21 @@
 # Cloud Storage Sink GA - Task Breakdown（任务拆分）
 
+> 文档定位（已整合）
+> - 类型：任务清单与执行进度（唯一打勾清单）
+> - 总览文档：`storage-sink.md`
+> - 说明：任务状态仅在本文维护；`storage-sink.md` 负责总体架构与语义说明。
+
 > **范围与口径**
 >
-> - 本文用于把 `2026-02-04-cloudstorage-sink-ga-*.md` 的需求/设计/实施拆成可执行的工程任务（建议按 PR/里程碑推进）。
+> - 本文用于把 `storage-sink.md` 的方案落成可执行工程任务（建议按 PR/里程碑推进）。
 > - **只覆盖 cloud storage sink + 最小 dispatcher glue**。不改其他 sink 语义。
 > - 本文不包含任何与本 GA 无关的方案关键词（例如其他历史方案的术语），避免造成阅读者误解。
 
 ## Source of truth（唯一基准）
 
-- 需求：`docs/plans/2026-02-04-cloudstorage-sink-ga-requirements.md`
-- 设计：`docs/plans/2026-02-04-cloudstorage-sink-ga-design.md`
-- 实施：`docs/plans/2026-02-04-cloudstorage-sink-ga-implementation.md`
-- spool 详解：`docs/plans/2026-02-04-cloudstorage-sink-ga-spool.md`
-- DDL 全行为梳理（拆表开/关）：`docs/plans/2026-02-04-cloudstorage-sink-ga-ddl-behavior.md`
+- 总体方案与约束：`storage-sink.md`
+- 任务清单与完成状态：本文
+- 评审与风险清单：`docs/plans/2026-02-14-cloudstorage-sink-spool-review-recommendations.md`
 
 ## 核心不变量（写在任务拆分最前，避免实现偏航）
 

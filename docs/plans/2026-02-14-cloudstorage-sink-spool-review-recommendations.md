@@ -1,5 +1,10 @@
 # Cloud Storage Sink Spool Review 建议（按优先级）
 
+> 文档定位（已整合）
+> - 类型：代码评审清单（优先级/风险/测试建议）
+> - 总览文档：`storage-sink.md`
+> - 说明：本文件只维护 review 视角，不重复维护实现方案与任务状态。
+
 ## 目标与范围
 
 - 目标：给出一份可执行、可验收的 review 清单，覆盖 cloud storage sink 的 spool + task pipeline + DDL drain + 观测性改造。
