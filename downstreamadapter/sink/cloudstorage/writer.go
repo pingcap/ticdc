@@ -16,6 +16,7 @@ package cloudstorage
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"path"
 	"strconv"
 	"sync/atomic"
@@ -213,29 +214,88 @@ func (d *writer) ignoreTableTask(task *singleTableTask) {
 	}
 }
 
-// mutateMessageValueForFailpoint replaces the last CSV field of every row in
-// msg.Value with a sentinel value so that the multi-cluster-consistency-checker
+// mutateMessageValueForFailpoint rewrites a non-primary-key column value in
+// canal-json encoded messages so that the multi-cluster-consistency-checker
 // sees the original row as "lost" and the mutated row as "redundant".
+//
+// canal-json messages in msg.Value are separated by CRLF ("\r\n"). For every
+// message we:
+//  1. Parse the JSON to extract "pkNames" and "data".
+//  2. Pick the first non-PK column in data[0] and replace its value with
+//     "MUTATED_BY_FAILPOINT".
+//  3. Re-marshal the whole message.
+//
 // This function is only called from within a failpoint.Inject block.
 func mutateMessageValueForFailpoint(msg *common.Message) {
 	if len(msg.Value) == 0 {
 		return
 	}
-	copied := make([]byte, len(msg.Value))
-	copy(copied, msg.Value)
-	lines := bytes.Split(copied, []byte("\n"))
-	for i, line := range lines {
-		if len(line) == 0 {
+	terminator := []byte("\r\n")
+	parts := bytes.Split(msg.Value, terminator)
+	for i, part := range parts {
+		if len(part) == 0 {
 			continue
 		}
-		// Replace the last comma-separated field with a sentinel value
-		// to corrupt a non-PK column.
-		lastComma := bytes.LastIndexByte(line, ',')
-		if lastComma >= 0 && lastComma < len(line)-1 {
-			lines[i] = append(line[:lastComma+1], []byte("\"MUTATED_BY_FAILPOINT\"")...)
+
+		// Decode the full message preserving all fields.
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(part, &m); err != nil {
+			continue
 		}
+
+		// Extract pkNames so we can skip PK columns.
+		var pkNames []string
+		if raw, ok := m["pkNames"]; ok {
+			_ = json.Unmarshal(raw, &pkNames)
+		}
+		pkSet := make(map[string]struct{}, len(pkNames))
+		for _, pk := range pkNames {
+			pkSet[pk] = struct{}{}
+		}
+
+		// Extract the "data" array.
+		rawData, ok := m["data"]
+		if !ok {
+			continue
+		}
+		var data []map[string]interface{}
+		if err := json.Unmarshal(rawData, &data); err != nil || len(data) == 0 {
+			continue
+		}
+
+		// Find the first non-PK column and mutate it.
+		mutated := false
+		for _, row := range data {
+			for col := range row {
+				if _, isPK := pkSet[col]; isPK {
+					continue
+				}
+				row[col] = "MUTATED_BY_FAILPOINT"
+				mutated = true
+				break
+			}
+			if mutated {
+				break
+			}
+		}
+		if !mutated {
+			continue
+		}
+
+		// Write the mutated data back.
+		newData, err := json.Marshal(data)
+		if err != nil {
+			continue
+		}
+		m["data"] = json.RawMessage(newData)
+
+		newPart, err := json.Marshal(m)
+		if err != nil {
+			continue
+		}
+		parts[i] = newPart
 	}
-	msg.Value = bytes.Join(lines, []byte("\n"))
+	msg.Value = bytes.Join(parts, terminator)
 }
 
 func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath string, task *singleTableTask) error {
