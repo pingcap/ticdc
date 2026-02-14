@@ -16,6 +16,7 @@ package cloudstorage
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"path"
 	"strconv"
 	"sync/atomic"
@@ -213,6 +214,90 @@ func (d *writer) ignoreTableTask(task *singleTableTask) {
 	}
 }
 
+// mutateMessageValueForFailpoint rewrites a non-primary-key column value in
+// canal-json encoded messages so that the multi-cluster-consistency-checker
+// sees the original row as "lost" and the mutated row as "redundant".
+//
+// canal-json messages in msg.Value are separated by CRLF ("\r\n"). For every
+// message we:
+//  1. Parse the JSON to extract "pkNames" and "data".
+//  2. Pick the first non-PK column in data[0] and replace its value with
+//     "MUTATED_BY_FAILPOINT".
+//  3. Re-marshal the whole message.
+//
+// This function is only called from within a failpoint.Inject block.
+func mutateMessageValueForFailpoint(msg *common.Message) {
+	if len(msg.Value) == 0 {
+		return
+	}
+	terminator := []byte("\r\n")
+	parts := bytes.Split(msg.Value, terminator)
+	for i, part := range parts {
+		if len(part) == 0 {
+			continue
+		}
+
+		// Decode the full message preserving all fields.
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(part, &m); err != nil {
+			continue
+		}
+
+		// Extract pkNames so we can skip PK columns.
+		var pkNames []string
+		if raw, ok := m["pkNames"]; ok {
+			_ = json.Unmarshal(raw, &pkNames)
+		}
+		pkSet := make(map[string]struct{}, len(pkNames))
+		for _, pk := range pkNames {
+			pkSet[pk] = struct{}{}
+		}
+
+		// Extract the "data" array.
+		rawData, ok := m["data"]
+		if !ok {
+			continue
+		}
+		var data []map[string]interface{}
+		if err := json.Unmarshal(rawData, &data); err != nil || len(data) == 0 {
+			continue
+		}
+
+		// Find the first non-PK column and mutate it.
+		mutated := false
+		for _, row := range data {
+			for col := range row {
+				if _, isPK := pkSet[col]; isPK {
+					continue
+				}
+				row[col] = "MUTATED_BY_FAILPOINT"
+				mutated = true
+				break
+			}
+			if mutated {
+				break
+			}
+		}
+		if !mutated {
+			continue
+		}
+
+		// Write the mutated data back.
+		newData, err := json.Marshal(data)
+		if err != nil {
+			continue
+		}
+		m["data"] = json.RawMessage(newData)
+
+		newPart, err := json.Marshal(m)
+		if err != nil {
+			continue
+		}
+		parts[i] = newPart
+	}
+	msg.Value = bytes.Join(parts, terminator)
+}
+
 func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath string, task *singleTableTask) error {
 	var callbacks []func()
 	buf := bytes.NewBuffer(make([]byte, 0, task.size))
@@ -220,6 +305,30 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 	bytesCnt := int64(0)
 	// There is always only one message here in task.msgs
 	for _, msg := range task.msgs {
+		// Failpoint: drop this message to simulate data loss.
+		// Usage: failpoint.Enable(".../cloudStorageSinkDropMessage", "return")
+		//        failpoint.Enable(".../cloudStorageSinkDropMessage", "50%return")
+		failpoint.Inject("cloudStorageSinkDropMessage", func() {
+			log.Warn("cloudStorageSinkDropMessage: dropping message to simulate data loss",
+				zap.Int("workerID", d.id),
+				zap.String("keyspace", d.changeFeedID.Keyspace()),
+				zap.Stringer("changefeed", d.changeFeedID.ID()),
+				zap.String("dataFilePath", dataFilePath))
+			callbacks = append(callbacks, msg.Callback)
+			failpoint.Continue()
+		})
+
+		// Failpoint: mutate non-PK column data in the message.
+		// Usage: failpoint.Enable(".../cloudStorageSinkMutateValue", "return")
+		failpoint.Inject("cloudStorageSinkMutateValue", func() {
+			log.Warn("cloudStorageSinkMutateValue: mutating message value to simulate data inconsistency",
+				zap.Int("workerID", d.id),
+				zap.String("keyspace", d.changeFeedID.Keyspace()),
+				zap.Stringer("changefeed", d.changeFeedID.ID()),
+				zap.String("dataFilePath", dataFilePath))
+			mutateMessageValueForFailpoint(msg)
+		})
+
 		if msg.Key != nil && rowsCnt == 0 {
 			buf.Write(msg.Key)
 			bytesCnt += int64(len(msg.Key))

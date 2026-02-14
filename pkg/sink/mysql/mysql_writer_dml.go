@@ -16,8 +16,11 @@ package mysql
 import (
 	"sort"
 
+	"github.com/pingcap/failpoint"
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"go.uber.org/zap"
 )
 
 func groupEventsByTable(events []*commonEvent.DMLEvent) map[int64][][]*commonEvent.DMLEvent {
@@ -113,6 +116,21 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 }
 
 func (w *Writer) genActiveActiveSQL(tableInfo *common.TableInfo, eventsInGroup []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
+	// Failpoint: bypass the LWW UPSERT and fall back to normal SQL (REPLACE INTO
+	// or plain INSERT). This makes the downstream TiDB write the row without the
+	// LWW condition, creating a genuine LWW violation that naturally flows through
+	// the pipeline to S3.
+	// Usage: failpoint.Enable(".../mysqlSinkBypassLWW", "return")
+	//        failpoint.Enable(".../mysqlSinkBypassLWW", "50%return")
+	failpoint.Inject("mysqlSinkBypassLWW", func() {
+		log.Warn("mysqlSinkBypassLWW: bypassing LWW SQL, using normal SQL path to create LWW violation",
+			zap.Int("writerID", w.id))
+		if !w.shouldGenBatchSQL(tableInfo.HasPKOrNotNullUK, tableInfo.HasVirtualColumns(), eventsInGroup) {
+			failpoint.Return(w.generateNormalSQLs(eventsInGroup))
+		}
+		failpoint.Return(w.generateBatchSQL(eventsInGroup))
+	})
+
 	if !w.shouldGenBatchSQL(tableInfo.HasPKOrNotNullUK, tableInfo.HasVirtualColumns(), eventsInGroup) {
 		return w.generateActiveActiveNormalSQLs(eventsInGroup)
 	}
