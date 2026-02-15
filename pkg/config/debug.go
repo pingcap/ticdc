@@ -36,6 +36,9 @@ type DebugConfig struct {
 	SchemaStore *SchemaStoreConfig `toml:"schema-store" json:"schema_store"`
 
 	EventService *EventServiceConfig `toml:"event-service" json:"event_service"`
+
+	// Encryption is the configuration for CMEK encryption at rest
+	Encryption *EncryptionConfig `toml:"encryption" json:"encryption"`
 }
 
 // ValidateAndAdjust validates and adjusts the debug configuration
@@ -51,6 +54,9 @@ func (c *DebugConfig) ValidateAndAdjust() error {
 	}
 	if c.EventStore == nil {
 		c.EventStore = NewDefaultEventStoreConfig()
+	}
+	if c.Encryption == nil {
+		c.Encryption = NewDefaultEncryptionConfig()
 	}
 
 	return nil
@@ -137,5 +143,69 @@ func NewDefaultEventServiceConfig() *EventServiceConfig {
 		DMLEventMaxRows:          256,
 		DMLEventMaxBytes:         1024 * 1024 * 1, // 1MB
 		EnableRemoteEventService: true,
+	}
+}
+
+// EncryptionConfig represents config for CMEK encryption at rest
+type EncryptionConfig struct {
+	// EnableEncryption enables encryption for data at rest
+	EnableEncryption bool `toml:"enable-encryption" json:"enable_encryption"`
+
+	// MetaRefreshInterval is the interval for refreshing encryption metadata (default: 1 hour)
+	MetaRefreshInterval TomlDuration `toml:"meta-refresh-interval" json:"meta_refresh_interval"`
+
+	// MetaCacheTTL is the TTL for caching encryption metadata (default: 1 hour)
+	MetaCacheTTL TomlDuration `toml:"meta-cache-ttl" json:"meta_cache_ttl"`
+
+	// AllowDegradeOnError allows graceful degradation to unencrypted mode on encryption errors
+	AllowDegradeOnError bool `toml:"allow-degrade-on-error" json:"allow_degrade_on_error"`
+
+	// KMS contains optional KMS client overrides. If unset, TiCDC will use the
+	// default credential chain of the corresponding cloud provider.
+	KMS *KMSConfig `toml:"kms" json:"kms"`
+}
+
+// KMSConfig contains KMS configuration for different cloud providers.
+type KMSConfig struct {
+	AWS *AWSKMSConfig `toml:"aws" json:"aws"`
+	GCP *GCPKMSConfig `toml:"gcp" json:"gcp"`
+}
+
+type AWSKMSConfig struct {
+	// Region overrides the region from TiKV encryption metadata.
+	Region string `toml:"region" json:"region"`
+	// Endpoint overrides the endpoint from TiKV encryption metadata.
+	Endpoint string `toml:"endpoint" json:"endpoint"`
+
+	// Profile configures the AWS shared config profile to use.
+	Profile string `toml:"profile" json:"profile"`
+
+	// Static credentials. If AccessKey is set, SecretAccessKey must also be set.
+	AccessKey       string `toml:"access-key" json:"access_key"`
+	SecretAccessKey string `toml:"secret-access-key" json:"secret_access_key"`
+	SessionToken    string `toml:"session-token" json:"session_token"`
+}
+
+type GCPKMSConfig struct {
+	// Endpoint overrides the endpoint from TiKV encryption metadata.
+	Endpoint string `toml:"endpoint" json:"endpoint"`
+
+	// CredentialsFile specifies a service account JSON file path.
+	CredentialsFile string `toml:"credentials-file" json:"credentials_file"`
+	// CredentialsJSON specifies a service account JSON content.
+	CredentialsJSON string `toml:"credentials-json" json:"credentials_json"`
+}
+
+// NewDefaultEncryptionConfig returns the default encryption configuration
+func NewDefaultEncryptionConfig() *EncryptionConfig {
+	return &EncryptionConfig{
+		EnableEncryption:    false,
+		MetaRefreshInterval: TomlDuration(1 * time.Hour),
+		MetaCacheTTL:        TomlDuration(1 * time.Hour),
+		AllowDegradeOnError: true,
+		KMS: &KMSConfig{
+			AWS: &AWSKMSConfig{},
+			GCP: &GCPKMSConfig{},
+		},
 	}
 }
