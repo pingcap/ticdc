@@ -17,6 +17,7 @@ import (
 	"flag"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // WorkloadConfig saves all the configurations for the workload
@@ -53,6 +54,14 @@ type WorkloadConfig struct {
 	UpdateLargeColumnSize int
 	// For sysbench workload
 	RangeNum int
+
+	// For fast slow table workload
+	FastTableCount    int
+	SlowTableCount    int
+	SlowDDLInterval   time.Duration
+	SlowDDLStartDelay time.Duration
+	SlowDDLMaxColumns int
+	SlowDDLOptions    string
 
 	// Log related
 	LogFile  string
@@ -97,6 +106,14 @@ func NewWorkloadConfig() *WorkloadConfig {
 		// For sysbench workload
 		RangeNum: 5,
 
+		// For fast slow table workload
+		FastTableCount:    0,
+		SlowTableCount:    0,
+		SlowDDLInterval:   30 * time.Second,
+		SlowDDLStartDelay: 0,
+		SlowDDLMaxColumns: 128,
+		SlowDDLOptions:    "",
+
 		// Log related
 		LogFile:  "workload.log",
 		LogLevel: "info",
@@ -116,7 +133,7 @@ func (c *WorkloadConfig) ParseFlags() error {
 	flag.Float64Var(&c.PercentageForDelete, "percentage-for-delete", c.PercentageForDelete, "percentage for delete: [0, 1.0]")
 	flag.BoolVar(&c.SkipCreateTable, "skip-create-table", c.SkipCreateTable, "do not create tables")
 	flag.StringVar(&c.Action, "action", c.Action, "action of the workload: [prepare, insert, update, delete, write, cleanup]")
-	flag.StringVar(&c.WorkloadType, "workload-type", c.WorkloadType, "workload type: [bank, sysbench, large_row, shop_item, uuu, bank2, bank_update, crawler, dc]")
+	flag.StringVar(&c.WorkloadType, "workload-type", c.WorkloadType, "workload type: [bank, sysbench, large_row, shop_item, uuu, bank2, bank_update, crawler, dc, fast_slow]")
 	flag.StringVar(&c.DBHost, "database-host", c.DBHost, "database host")
 	flag.StringVar(&c.DBUser, "database-user", c.DBUser, "database user")
 	flag.StringVar(&c.DBPassword, "database-password", c.DBPassword, "database password")
@@ -133,6 +150,14 @@ func (c *WorkloadConfig) ParseFlags() error {
 	// For sysbench workload
 	flag.IntVar(&c.RangeNum, "range-num", c.RangeNum, "the number of ranges for sysbench workload")
 
+	// For fast slow table workload
+	flag.IntVar(&c.FastTableCount, "fast-table-count", c.FastTableCount, "fast table count for fast_slow workload")
+	flag.IntVar(&c.SlowTableCount, "slow-table-count", c.SlowTableCount, "slow table count for fast_slow workload")
+	flag.DurationVar(&c.SlowDDLInterval, "slow-ddl-interval", c.SlowDDLInterval, "interval between slow table DDLs, e.g. 5s, 1m")
+	flag.DurationVar(&c.SlowDDLStartDelay, "slow-ddl-start-delay", c.SlowDDLStartDelay, "delay before starting slow table DDLs, e.g. 30s")
+	flag.IntVar(&c.SlowDDLMaxColumns, "slow-ddl-max-columns", c.SlowDDLMaxColumns, "max extra columns to add per slow table (<=0 means no limit)")
+	flag.StringVar(&c.SlowDDLOptions, "slow-ddl-options", c.SlowDDLOptions, "extra clauses appended to ALTER TABLE, e.g. 'ALGORITHM=COPY LOCK=EXCLUSIVE'")
+
 	flag.Parse()
 
 	// Validate command line arguments
@@ -144,6 +169,28 @@ func (c *WorkloadConfig) ParseFlags() error {
 	if c.PercentageForUpdate+c.PercentageForDelete > 1.0 {
 		return fmt.Errorf("PercentageForUpdate (%.2f) + PercentageForDelete (%.2f) must be <= 1.0",
 			c.PercentageForUpdate, c.PercentageForDelete)
+	}
+
+	if c.WorkloadType == fastSlow {
+		if c.FastTableCount == 0 && c.SlowTableCount == 0 {
+			// Keep backward compatibility: use -table-count as total, all as fast tables by default.
+			c.FastTableCount = c.TableCount
+		}
+
+		if c.FastTableCount < 0 || c.SlowTableCount < 0 {
+			return fmt.Errorf("fast-table-count (%d) and slow-table-count (%d) must be >= 0",
+				c.FastTableCount, c.SlowTableCount)
+		}
+
+		c.TableCount = c.FastTableCount + c.SlowTableCount
+		if c.TableCount <= 0 {
+			return fmt.Errorf("fast-table-count (%d) + slow-table-count (%d) must be > 0",
+				c.FastTableCount, c.SlowTableCount)
+		}
+
+		if c.SlowTableCount > 0 && c.SlowDDLInterval <= 0 {
+			return fmt.Errorf("slow-ddl-interval (%s) must be > 0 when slow-table-count > 0", c.SlowDDLInterval)
+		}
 	}
 
 	return nil
