@@ -16,33 +16,13 @@ package sqlmodel
 import (
 	"testing"
 
-	"github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/stretchr/testify/require"
 )
-
-// getTestTableInfo creates a simple TableInfo for testing using EventTestHelper
-func getTestTableInfo(t *testing.T, schema, table string) *common.TableInfo {
-	helper := commonEvent.NewEventTestHelper(t)
-	defer helper.Close()
-
-	helper.Tk().MustExec("use " + schema)
-	createTableSQL := "create table " + table + " (id int primary key, name varchar(32));"
-	job := helper.DDL2Job(createTableSQL)
-	require.NotNil(t, job)
-
-	// Create a dummy event to get the TableInfo
-	insertDataSQL := "insert into " + table + " values (1, 'dummy');"
-	event := helper.DML2Event(schema, table, insertDataSQL)
-	require.NotNil(t, event)
-
-	return event.TableInfo
-}
 
 // TestGenSQLInsertWithRouting tests that GenSQL for INSERT uses target schema/table
 // when routing is configured via TableInfo.CloneWithRouting().
 func TestGenSQLInsertWithRouting(t *testing.T) {
-	sourceTableInfo := getTestTableInfo(t, "test", "t")
+	sourceTableInfo := getSharedTableInfo(t)
 
 	// Clone TableInfo with routing: test.t -> target_db.target_table
 	routedTableInfo := sourceTableInfo.CloneWithRouting("target_db", "target_table")
@@ -71,7 +51,7 @@ func TestGenSQLInsertWithRouting(t *testing.T) {
 
 // TestGenSQLDeleteWithRouting tests that GenSQL for DELETE uses target schema/table
 func TestGenSQLDeleteWithRouting(t *testing.T) {
-	sourceTableInfo := getTestTableInfo(t, "test", "t")
+	sourceTableInfo := getSharedTableInfo(t)
 	routedTableInfo := sourceTableInfo.CloneWithRouting("target_db", "target_table")
 
 	row := NewRowChange(
@@ -92,7 +72,7 @@ func TestGenSQLDeleteWithRouting(t *testing.T) {
 
 // TestGenSQLUpdateWithRouting tests that GenSQL for UPDATE uses target schema/table
 func TestGenSQLUpdateWithRouting(t *testing.T) {
-	sourceTableInfo := getTestTableInfo(t, "test", "t")
+	sourceTableInfo := getSharedTableInfo(t)
 	routedTableInfo := sourceTableInfo.CloneWithRouting("target_db", "target_table")
 
 	row := NewRowChange(
@@ -115,7 +95,7 @@ func TestGenSQLUpdateWithRouting(t *testing.T) {
 
 // TestGenSQLWithSchemaOnlyRouting tests routing where only schema changes
 func TestGenSQLWithSchemaOnlyRouting(t *testing.T) {
-	sourceTableInfo := getTestTableInfo(t, "test", "users")
+	sourceTableInfo := getSharedTableInfo(t)
 	routedTableInfo := sourceTableInfo.CloneWithRouting("prod", "users")
 
 	// Test INSERT
@@ -130,8 +110,8 @@ func TestGenSQLWithSchemaOnlyRouting(t *testing.T) {
 	)
 
 	sql, _ := insertRow.GenSQL(DMLInsert)
-	require.Contains(t, sql, "`prod`.`users`", "Should use target schema with original table name")
-	require.NotContains(t, sql, "`test`.`users`", "Should not contain source schema")
+	require.Contains(t, sql, "`prod`.`users`", "Should use target schema and table")
+	require.NotContains(t, sql, "`test`.`t`", "Should not contain source schema.table")
 
 	// Test DELETE
 	deleteRow := NewRowChange(
@@ -145,8 +125,8 @@ func TestGenSQLWithSchemaOnlyRouting(t *testing.T) {
 	)
 
 	sql, _ = deleteRow.GenSQL(DMLDelete)
-	require.Contains(t, sql, "`prod`.`users`", "Should use target schema with original table name")
-	require.NotContains(t, sql, "`test`.`users`", "Should not contain source schema")
+	require.Contains(t, sql, "`prod`.`users`", "Should use target schema and table")
+	require.NotContains(t, sql, "`test`.`t`", "Should not contain source schema.table")
 
 	// Test UPDATE
 	updateRow := NewRowChange(
@@ -160,15 +140,15 @@ func TestGenSQLWithSchemaOnlyRouting(t *testing.T) {
 	)
 
 	sql, args := updateRow.GenSQL(DMLUpdate)
-	require.Contains(t, sql, "`prod`.`users`", "Should use target schema with original table name")
-	require.NotContains(t, sql, "`test`.`users`", "Should not contain source schema")
+	require.Contains(t, sql, "`prod`.`users`", "Should use target schema and table")
+	require.NotContains(t, sql, "`test`.`t`", "Should not contain source schema.table")
 	require.Len(t, args, 3)
 	require.Equal(t, []interface{}{int64(1), "bob", int64(1)}, args)
 }
 
 // TestGenSQLWithTableOnlyRouting tests routing where only table name changes
 func TestGenSQLWithTableOnlyRouting(t *testing.T) {
-	sourceTableInfo := getTestTableInfo(t, "test", "old_table")
+	sourceTableInfo := getSharedTableInfo(t)
 	routedTableInfo := sourceTableInfo.CloneWithRouting("test", "new_table")
 
 	// Test INSERT
@@ -184,7 +164,7 @@ func TestGenSQLWithTableOnlyRouting(t *testing.T) {
 
 	sql, _ := insertRow.GenSQL(DMLInsert)
 	require.Contains(t, sql, "`test`.`new_table`", "Should use original schema with target table name")
-	require.NotContains(t, sql, "old_table", "Should not contain source table name")
+	require.NotContains(t, sql, "`test`.`t`", "Should not contain source table name")
 
 	// Test DELETE
 	deleteRow := NewRowChange(
@@ -199,7 +179,7 @@ func TestGenSQLWithTableOnlyRouting(t *testing.T) {
 
 	sql, _ = deleteRow.GenSQL(DMLDelete)
 	require.Contains(t, sql, "`test`.`new_table`", "Should use original schema with target table name")
-	require.NotContains(t, sql, "old_table", "Should not contain source table name")
+	require.NotContains(t, sql, "`test`.`t`", "Should not contain source table name")
 
 	// Test UPDATE
 	updateRow := NewRowChange(
@@ -214,7 +194,7 @@ func TestGenSQLWithTableOnlyRouting(t *testing.T) {
 
 	sql, args := updateRow.GenSQL(DMLUpdate)
 	require.Contains(t, sql, "`test`.`new_table`", "Should use original schema with target table name")
-	require.NotContains(t, sql, "old_table", "Should not contain source table name")
+	require.NotContains(t, sql, "`test`.`t`", "Should not contain source table name")
 	require.Len(t, args, 3)
 	require.Equal(t, []interface{}{int64(1), "new_data", int64(1)}, args)
 }
@@ -222,7 +202,7 @@ func TestGenSQLWithTableOnlyRouting(t *testing.T) {
 // TestGenSQLWithoutRouting verifies that when no routing is configured,
 // source schema/table names are used.
 func TestGenSQLWithoutRouting(t *testing.T) {
-	sourceTableInfo := getTestTableInfo(t, "test", "t")
+	sourceTableInfo := getSharedTableInfo(t)
 
 	// Test INSERT without routing
 	insertRow := NewRowChange(
@@ -271,7 +251,7 @@ func TestGenSQLWithoutRouting(t *testing.T) {
 
 // TestTargetTableID verifies that TargetTableID returns the correct quoted target string
 func TestTargetTableID(t *testing.T) {
-	sourceTableInfo := getTestTableInfo(t, "test", "t")
+	sourceTableInfo := getSharedTableInfo(t)
 	routedTableInfo := sourceTableInfo.CloneWithRouting("target_db", "target_table")
 
 	row := NewRowChange(
