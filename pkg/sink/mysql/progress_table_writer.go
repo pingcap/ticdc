@@ -17,6 +17,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -99,6 +100,12 @@ func (w *ProgressTableWriter) Flush(checkpoint uint64) error {
 	if len(tableNames) == 0 {
 		return nil
 	}
+	sort.Slice(tableNames, func(i, j int) bool {
+		if tableNames[i].SchemaName != tableNames[j].SchemaName {
+			return tableNames[i].SchemaName < tableNames[j].SchemaName
+		}
+		return tableNames[i].TableName < tableNames[j].TableName
+	})
 
 	if err := w.initProgressTable(w.ctx); err != nil {
 		return err

@@ -19,6 +19,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/sink/util"
 )
 
 type mockSink struct {
@@ -57,6 +58,10 @@ func (s *mockSink) SinkType() common.SinkType {
 
 func (s *mockSink) IsNormal() bool {
 	return s.isNormal
+}
+
+func (s *mockSink) GetRouter() *util.Router {
+	return nil
 }
 
 func (s *mockSink) SetIsNormal(isNormal bool) {
