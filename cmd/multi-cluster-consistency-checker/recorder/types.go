@@ -15,6 +15,7 @@ package recorder
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/types"
@@ -22,14 +23,16 @@ import (
 )
 
 type DataLossItem struct {
-	PeerClusterID string `json:"peer_cluster_id"`
-	PK            string `json:"pk"`
-	OriginTS      uint64 `json:"origin_ts"`
-	CommitTS      uint64 `json:"commit_ts"`
+	PeerClusterID string         `json:"peer_cluster_id"`
+	PK            map[string]any `json:"pk"`
+	OriginTS      uint64         `json:"origin_ts"`
+	CommitTS      uint64         `json:"commit_ts"`
+
+	PKStr string `json:"-"`
 }
 
 func (item *DataLossItem) String() string {
-	return fmt.Sprintf("peer cluster: %s, pk: %s, origin ts: %d, commit ts: %d", item.PeerClusterID, item.PK, item.OriginTS, item.CommitTS)
+	return fmt.Sprintf("peer cluster: %s, pk: %s, origin ts: %d, commit ts: %d", item.PeerClusterID, item.PKStr, item.OriginTS, item.CommitTS)
 }
 
 type InconsistentColumn struct {
@@ -44,16 +47,18 @@ func (c *InconsistentColumn) String() string {
 
 type DataInconsistentItem struct {
 	PeerClusterID       string               `json:"peer_cluster_id"`
-	PK                  string               `json:"pk"`
+	PK                  map[string]any       `json:"pk"`
 	OriginTS            uint64               `json:"origin_ts"`
 	CommitTS            uint64               `json:"commit_ts"`
 	InconsistentColumns []InconsistentColumn `json:"inconsistent_columns,omitempty"`
+
+	PKStr string `json:"-"`
 }
 
 func (item *DataInconsistentItem) String() string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "peer cluster: %s, pk: %s, origin ts: %d, commit ts: %d",
-		item.PeerClusterID, item.PK, item.OriginTS, item.CommitTS)
+		item.PeerClusterID, item.PKStr, item.OriginTS, item.CommitTS)
 	if len(item.InconsistentColumns) > 0 {
 		sb.WriteString(", inconsistent columns: [")
 		for i, col := range item.InconsistentColumns {
@@ -68,27 +73,31 @@ func (item *DataInconsistentItem) String() string {
 }
 
 type DataRedundantItem struct {
-	PK       string `json:"pk"`
-	OriginTS uint64 `json:"origin_ts"`
-	CommitTS uint64 `json:"commit_ts"`
+	PK       map[string]any `json:"pk"`
+	OriginTS uint64         `json:"origin_ts"`
+	CommitTS uint64         `json:"commit_ts"`
+
+	PKStr string `json:"-"`
 }
 
 func (item *DataRedundantItem) String() string {
-	return fmt.Sprintf("pk: %s, origin ts: %d, commit ts: %d", item.PK, item.OriginTS, item.CommitTS)
+	return fmt.Sprintf("pk: %s, origin ts: %d, commit ts: %d", item.PKStr, item.OriginTS, item.CommitTS)
 }
 
 type LWWViolationItem struct {
-	PK               string `json:"pk"`
-	ExistingOriginTS uint64 `json:"existing_origin_ts"`
-	ExistingCommitTS uint64 `json:"existing_commit_ts"`
-	OriginTS         uint64 `json:"origin_ts"`
-	CommitTS         uint64 `json:"commit_ts"`
+	PK               map[string]any `json:"pk"`
+	ExistingOriginTS uint64         `json:"existing_origin_ts"`
+	ExistingCommitTS uint64         `json:"existing_commit_ts"`
+	OriginTS         uint64         `json:"origin_ts"`
+	CommitTS         uint64         `json:"commit_ts"`
+
+	PKStr string `json:"-"`
 }
 
 func (item *LWWViolationItem) String() string {
 	return fmt.Sprintf(
 		"pk: %s, existing origin ts: %d, existing commit ts: %d, origin ts: %d, commit ts: %d",
-		item.PK, item.ExistingOriginTS, item.ExistingCommitTS, item.OriginTS, item.CommitTS)
+		item.PKStr, item.ExistingOriginTS, item.ExistingCommitTS, item.OriginTS, item.CommitTS)
 }
 
 type TableFailureItems struct {
@@ -126,7 +135,12 @@ func NewClusterReport(clusterID string, timeWindow types.TimeWindow) *ClusterRep
 	}
 }
 
-func (r *ClusterReport) AddDataLossItem(peerClusterID, schemaKey, pk string, originTS, commitTS uint64) {
+func (r *ClusterReport) AddDataLossItem(
+	peerClusterID, schemaKey string,
+	pk map[string]any,
+	pkStr string,
+	originTS, commitTS uint64,
+) {
 	tableFailureItems, exists := r.TableFailureItems[schemaKey]
 	if !exists {
 		tableFailureItems = NewTableFailureItems()
@@ -137,11 +151,19 @@ func (r *ClusterReport) AddDataLossItem(peerClusterID, schemaKey, pk string, ori
 		PK:            pk,
 		OriginTS:      originTS,
 		CommitTS:      commitTS,
+
+		PKStr: pkStr,
 	})
 	r.needFlush = true
 }
 
-func (r *ClusterReport) AddDataInconsistentItem(peerClusterID, schemaKey, pk string, originTS, commitTS uint64, inconsistentColumns []InconsistentColumn) {
+func (r *ClusterReport) AddDataInconsistentItem(
+	peerClusterID, schemaKey string,
+	pk map[string]any,
+	pkStr string,
+	originTS, commitTS uint64,
+	inconsistentColumns []InconsistentColumn,
+) {
 	tableFailureItems, exists := r.TableFailureItems[schemaKey]
 	if !exists {
 		tableFailureItems = NewTableFailureItems()
@@ -153,11 +175,18 @@ func (r *ClusterReport) AddDataInconsistentItem(peerClusterID, schemaKey, pk str
 		OriginTS:            originTS,
 		CommitTS:            commitTS,
 		InconsistentColumns: inconsistentColumns,
+
+		PKStr: pkStr,
 	})
 	r.needFlush = true
 }
 
-func (r *ClusterReport) AddDataRedundantItem(schemaKey, pk string, originTS, commitTS uint64) {
+func (r *ClusterReport) AddDataRedundantItem(
+	schemaKey string,
+	pk map[string]any,
+	pkStr string,
+	originTS, commitTS uint64,
+) {
 	tableFailureItems, exists := r.TableFailureItems[schemaKey]
 	if !exists {
 		tableFailureItems = NewTableFailureItems()
@@ -167,13 +196,16 @@ func (r *ClusterReport) AddDataRedundantItem(schemaKey, pk string, originTS, com
 		PK:       pk,
 		OriginTS: originTS,
 		CommitTS: commitTS,
+
+		PKStr: pkStr,
 	})
 	r.needFlush = true
 }
 
 func (r *ClusterReport) AddLWWViolationItem(
 	schemaKey string,
-	pk string,
+	pk map[string]any,
+	pkStr string,
 	existingOriginTS, existingCommitTS uint64,
 	originTS, commitTS uint64,
 ) {
@@ -188,6 +220,8 @@ func (r *ClusterReport) AddLWWViolationItem(
 		ExistingCommitTS: existingCommitTS,
 		OriginTS:         originTS,
 		CommitTS:         commitTS,
+
+		PKStr: pkStr,
 	})
 	r.needFlush = true
 }
@@ -214,13 +248,31 @@ func (r *Report) AddClusterReport(clusterID string, clusterReport *ClusterReport
 func (r *Report) MarshalReport() string {
 	var reportMsg strings.Builder
 	fmt.Fprintf(&reportMsg, "round: %d\n", r.Round)
-	for clusterID, clusterReport := range r.ClusterReports {
+
+	// Sort cluster IDs for deterministic output
+	clusterIDs := make([]string, 0, len(r.ClusterReports))
+	for clusterID := range r.ClusterReports {
+		clusterIDs = append(clusterIDs, clusterID)
+	}
+	sort.Strings(clusterIDs)
+
+	for _, clusterID := range clusterIDs {
+		clusterReport := r.ClusterReports[clusterID]
 		if !clusterReport.needFlush {
 			continue
 		}
 		fmt.Fprintf(&reportMsg, "\n[cluster: %s]\n", clusterID)
 		fmt.Fprintf(&reportMsg, "time window: %s\n", clusterReport.TimeWindow.String())
-		for schemaKey, tableFailureItems := range clusterReport.TableFailureItems {
+
+		// Sort schema keys for deterministic output
+		schemaKeys := make([]string, 0, len(clusterReport.TableFailureItems))
+		for schemaKey := range clusterReport.TableFailureItems {
+			schemaKeys = append(schemaKeys, schemaKey)
+		}
+		sort.Strings(schemaKeys)
+
+		for _, schemaKey := range schemaKeys {
+			tableFailureItems := clusterReport.TableFailureItems[schemaKey]
 			fmt.Fprintf(&reportMsg, "  - [table name: %s]\n", schemaKey)
 			if len(tableFailureItems.DataLossItems) > 0 {
 				fmt.Fprintf(&reportMsg, "  - [data loss items: %d]\n", len(tableFailureItems.DataLossItems))

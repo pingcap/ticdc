@@ -440,32 +440,32 @@ func (c *S3Consumer) getNewFilesForSchemaPathKeyWithEndPath(
 
 // downloadSchemaFiles downloads schema files concurrently for given schema path keys
 func (c *S3Consumer) downloadSchemaFiles(
-	ctx context.Context,
+	_ context.Context,
 	newVersionPaths map[cloudstorage.SchemaPathKey]string,
 ) error {
-	eg, _ := errgroup.WithContext(ctx)
+	// eg, ectx := errgroup.WithContext(ctx)
 
 	log.Debug("starting concurrent schema file download", zap.Int("totalSchemas", len(newVersionPaths)))
 	for schemaPathKey, filePath := range newVersionPaths {
-		eg.Go(func() error {
-			// content, err := c.s3Storage.ReadFile(egCtx, filePath)
-			// if err != nil {
-			// 	return errors.Annotatef(err, "failed to read schema file: %s", filePath)
-			// }
-			//
-			// Use canal-json decoder for S3 sink with .json file extension
-			// parser, err := types.NewTableParserWithFormat(schemaPathKey.GetKey(), content, config.ProtocolCanalJSON)
-			// if err != nil {
-			// 	return errors.Annotatef(err, "failed to create table parser: %s", schemaPathKey.GetKey())
-			// }
-
-			c.schemaParser.SetSchemaParser(schemaPathKey, filePath, nil)
-			return nil
-		})
+		// eg.Go(func() error {
+		// content, err := c.s3Storage.ReadFile(egCtx, filePath)
+		// if err != nil {
+		// 	return errors.Annotatef(err, "failed to read schema file: %s", filePath)
+		// }
+		//
+		// Use canal-json decoder for S3 sink with .json file extension
+		// parser, err := types.NewTableParserWithFormat(schemaPathKey.GetKey(), content, config.ProtocolCanalJSON)
+		// if err != nil {
+		// 	return errors.Annotatef(err, "failed to create table parser: %s", schemaPathKey.GetKey())
+		// }
+		//
+		c.schemaParser.SetSchemaParser(schemaPathKey, filePath, nil)
+		// return nil
+		// })
 	}
-	if err := eg.Wait(); err != nil {
-		return errors.Trace(err)
-	}
+	//if err := eg.Wait(); err != nil {
+	//	return errors.Trace(err)
+	//}
 	return nil
 }
 

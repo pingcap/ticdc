@@ -15,7 +15,6 @@ package watcher
 
 import (
 	"context"
-	"strings"
 	"sync"
 	"time"
 
@@ -27,6 +26,11 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 )
+
+// errChangefeedKeyDeleted is a sentinel error indicating that the changefeed
+// status key has been deleted from etcd. This is a non-recoverable error
+// that should not be retried.
+var errChangefeedKeyDeleted = errors.New("changefeed status key is deleted")
 
 const (
 	// retryBackoffBase is the initial backoff duration for retries
@@ -169,7 +173,7 @@ func (cw *CheckpointWatcher) run() {
 		}
 
 		// Check if this is a non-recoverable error
-		if isNonRecoverableError(err) {
+		if errors.Is(err, errChangefeedKeyDeleted) {
 			cw.mu.Lock()
 			cw.watchErr = err
 			cw.mu.Unlock()
@@ -248,8 +252,7 @@ func (cw *CheckpointWatcher) watchOnce() error {
 
 			for _, event := range watchResp.Events {
 				if event.Type == clientv3.EventTypeDelete {
-					// Key deletion is a non-recoverable error
-					return errors.Errorf("[changefeedID: %s] changefeed status key is deleted", cw.changefeedID.String())
+					return errors.Annotatef(errChangefeedKeyDeleted, "[changefeedID: %s]", cw.changefeedID.String())
 				}
 
 				// Parse the updated status
@@ -276,16 +279,6 @@ func (cw *CheckpointWatcher) watchOnce() error {
 			}
 		}
 	}
-}
-
-// isNonRecoverableError checks if the error is non-recoverable and should not be retried
-func isNonRecoverableError(err error) bool {
-	errMsg := err.Error()
-	// Key deletion is non-recoverable
-	if strings.Contains(errMsg, "deleted") {
-		return true
-	}
-	return false
 }
 
 // notifyPendingTasksLocked notifies pending tasks whose minCheckpointTs has been exceeded

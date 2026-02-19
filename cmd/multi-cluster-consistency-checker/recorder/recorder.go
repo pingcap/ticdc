@@ -161,25 +161,54 @@ func (r *Recorder) RecordTimeWindow(timeWindowData map[string]types.TimeWindowDa
 
 func (r *Recorder) flushReport(report *Report) error {
 	reportName := fmt.Sprintf("report-%d.report", report.Round)
-	filename := filepath.Join(r.reportDir, reportName)
-	data := report.MarshalReport()
-	if err := os.WriteFile(filename, []byte(data), 0600); err != nil {
+	if err := atomicWriteFile(filepath.Join(r.reportDir, reportName), []byte(report.MarshalReport())); err != nil {
 		return errors.Trace(err)
 	}
 
 	jsonName := fmt.Sprintf("report-%d.json", report.Round)
-	filename = filepath.Join(r.reportDir, jsonName)
 	dataBytes, err := json.Marshal(report)
 	if err != nil {
 		return errors.Trace(err)
 	}
-	if err := os.WriteFile(filename, dataBytes, 0600); err != nil {
+	if err := atomicWriteFile(filepath.Join(r.reportDir, jsonName), dataBytes); err != nil {
 		return errors.Trace(err)
 	}
 
 	// Append new file names to the cache (they are always the latest, so append at end)
 	r.reportFiles = append(r.reportFiles, reportName, jsonName)
 	return nil
+}
+
+// atomicWriteFile writes data to a temporary file, fsyncs it to ensure
+// durability, and then atomically renames it to the target path.
+// This prevents partial / corrupt files on crash.
+func atomicWriteFile(targetPath string, data []byte) error {
+	tempPath := targetPath + ".tmp"
+	if err := syncWriteFile(tempPath, data); err != nil {
+		return errors.Trace(err)
+	}
+	if err := os.Rename(tempPath, targetPath); err != nil {
+		return errors.Trace(err)
+	}
+	return nil
+}
+
+// syncWriteFile writes data to a file and fsyncs it before returning,
+// guaranteeing that the content is durable on disk.
+func syncWriteFile(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return errors.Trace(err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return errors.Trace(err)
+	}
+	return errors.Trace(f.Close())
 }
 
 // cleanupOldReports removes the oldest report files from the in-memory cache
@@ -215,8 +244,8 @@ func (r *Recorder) flushCheckpoint(round uint64, timeWindowData map[string]types
 		return errors.Trace(err)
 	}
 
-	// 1. Write the new content to a temp file first.
-	if err := os.WriteFile(tempFile, data, 0600); err != nil {
+	// 1. Write the new content to a temp file first and fsync it.
+	if err := syncWriteFile(tempFile, data); err != nil {
 		return errors.Trace(err)
 	}
 

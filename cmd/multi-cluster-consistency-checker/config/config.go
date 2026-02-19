@@ -120,6 +120,12 @@ func LoadConfig(path string) (*Config, error) {
 			return nil, fmt.Errorf("cluster '%s': peer-cluster-changefeed-config is not entirely configured", name)
 		}
 		for peerClusterID, peerClusterChangefeedConfig := range cluster.PeerClusterChangefeedConfig {
+			if peerClusterID == name {
+				return nil, fmt.Errorf("cluster '%s': peer-cluster-changefeed-config references itself", name)
+			}
+			if _, ok := cfg.Clusters[peerClusterID]; !ok {
+				return nil, fmt.Errorf("cluster '%s': peer-cluster-changefeed-config references unknown cluster '%s'", name, peerClusterID)
+			}
 			if peerClusterChangefeedConfig.ChangefeedID == "" {
 				return nil, fmt.Errorf("cluster '%s': peer-cluster-changefeed-config[%s]: changefeed-id is required", name, peerClusterID)
 			}

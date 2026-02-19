@@ -92,7 +92,8 @@ func TestClusterViolationChecker_Check(t *testing.T) {
 		report := recorder.NewClusterReport("cluster1", types.TimeWindow{})
 
 		record := &decoder.Record{
-			Pk: "pk1",
+			Pk:    "pk1",
+			PkMap: map[string]any{"id": "1"},
 			CdcVersion: types.CdcVersion{
 				CommitTs: 100,
 				OriginTs: 0,
@@ -111,14 +112,16 @@ func TestClusterViolationChecker_Check(t *testing.T) {
 		report := recorder.NewClusterReport("cluster1", types.TimeWindow{})
 
 		record1 := &decoder.Record{
-			Pk: "pk1",
+			Pk:    "pk1",
+			PkMap: map[string]any{"id": "1"},
 			CdcVersion: types.CdcVersion{
 				CommitTs: 100,
 				OriginTs: 0,
 			},
 		}
 		record2 := &decoder.Record{
-			Pk: "pk1",
+			Pk:    "pk1",
+			PkMap: map[string]any{"id": "1"},
 			CdcVersion: types.CdcVersion{
 				CommitTs: 50,
 				OriginTs: 0,
@@ -136,14 +139,16 @@ func TestClusterViolationChecker_Check(t *testing.T) {
 		report := recorder.NewClusterReport("cluster1", types.TimeWindow{})
 
 		record1 := &decoder.Record{
-			Pk: "pk1",
+			Pk:    "pk1",
+			PkMap: map[string]any{"id": "1"},
 			CdcVersion: types.CdcVersion{
 				CommitTs: 100,
 				OriginTs: 0,
 			},
 		}
 		record2 := &decoder.Record{
-			Pk: "pk1",
+			Pk:    "pk1",
+			PkMap: map[string]any{"id": "1"},
 			CdcVersion: types.CdcVersion{
 				CommitTs: 150,
 				OriginTs: 50, // OriginTs is less than record1's CommitTs, causing violation
@@ -156,7 +161,7 @@ func TestClusterViolationChecker_Check(t *testing.T) {
 		require.Contains(t, report.TableFailureItems, schemaKey)
 		tableItems := report.TableFailureItems[schemaKey]
 		require.Len(t, tableItems.LWWViolationItems, 1)
-		require.Equal(t, "pk1", tableItems.LWWViolationItems[0].PK)
+		require.Equal(t, map[string]any{"id": "1"}, tableItems.LWWViolationItems[0].PK)
 		require.Equal(t, uint64(0), tableItems.LWWViolationItems[0].ExistingOriginTS)
 		require.Equal(t, uint64(100), tableItems.LWWViolationItems[0].ExistingCommitTS)
 		require.Equal(t, uint64(50), tableItems.LWWViolationItems[0].OriginTS)
@@ -175,7 +180,8 @@ func TestClusterViolationChecker_UpdateCache(t *testing.T) {
 		report := recorder.NewClusterReport("cluster1", types.TimeWindow{})
 
 		record := &decoder.Record{
-			Pk: "pk1",
+			Pk:    "pk1",
+			PkMap: map[string]any{"id": "1"},
 			CdcVersion: types.CdcVersion{
 				CommitTs: 100,
 				OriginTs: 0,
@@ -230,7 +236,8 @@ func TestTimeWindowDataCache_NewRecord(t *testing.T) {
 		t.Parallel()
 		cache := newTimeWindowDataCache(100, 200, map[string]uint64{})
 		record := &decoder.Record{
-			Pk: "pk1",
+			Pk:    "pk1",
+			PkMap: map[string]any{"id": "1"},
 			CdcVersion: types.CdcVersion{
 				CommitTs: 150,
 				OriginTs: 0,
@@ -247,7 +254,8 @@ func TestTimeWindowDataCache_NewRecord(t *testing.T) {
 		t.Parallel()
 		cache := newTimeWindowDataCache(100, 200, map[string]uint64{})
 		record := &decoder.Record{
-			Pk: "pk1",
+			Pk:    "pk1",
+			PkMap: map[string]any{"id": "1"},
 			CdcVersion: types.CdcVersion{
 				CommitTs: 150,
 				OriginTs: 100,
@@ -264,7 +272,8 @@ func TestTimeWindowDataCache_NewRecord(t *testing.T) {
 		t.Parallel()
 		cache := newTimeWindowDataCache(100, 200, map[string]uint64{})
 		record := &decoder.Record{
-			Pk: "pk1",
+			Pk:    "pk1",
+			PkMap: map[string]any{"id": "1"},
 			CdcVersion: types.CdcVersion{
 				CommitTs: 50,
 				OriginTs: 0,

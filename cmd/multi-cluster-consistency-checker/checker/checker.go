@@ -93,8 +93,8 @@ func (c *clusterViolationChecker) Check(schemaKey string, r *decoder.Record, rep
 		log.Error("LWW violation detected",
 			zap.String("clusterID", c.clusterID),
 			zap.Any("entry", entry),
-			zap.Any("record", r))
-		report.AddLWWViolationItem(schemaKey, string(r.Pk), entry.cdcVersion.OriginTs, entry.cdcVersion.CommitTs, r.OriginTs, r.CommitTs)
+			zap.String("pk", r.PkStr))
+		report.AddLWWViolationItem(schemaKey, r.PkMap, r.PkStr, entry.cdcVersion.OriginTs, entry.cdcVersion.CommitTs, r.OriginTs, r.CommitTs)
 		return
 	}
 	tableSchemaKeyVersionCache[r.Pk] = versionCacheEntry{
@@ -353,7 +353,7 @@ func diffColumns(local, replicated *decoder.Record) []recorder.InconsistentColum
 				Local:      localVal,
 				Replicated: nil,
 			})
-		} else if localVal != replicatedVal {
+		} else if localVal != replicatedVal { // safe: ColumnValues only holds comparable types (see decoder.go)
 			result = append(result, recorder.InconsistentColumn{
 				Column:     colName,
 				Local:      localVal,
@@ -381,11 +381,29 @@ func diffColumns(local, replicated *decoder.Record) []recorder.InconsistentColum
 // in the replicated data cache [1] or [2] or another new record is present in the replicated data
 // cache [1] or [2].
 func (cd *clusterDataChecker) dataLossDetection(checker *DataChecker) {
-	for schemaKey, tableDataCache := range cd.timeWindowDataCaches[1].tableDataCaches {
+	// Time window [1]: skip records whose commitTs <= checkpoint (already checked in previous round)
+	cd.checkLocalRecordsForDataLoss(1, func(commitTs, checkpointTs uint64) bool {
+		return commitTs <= checkpointTs
+	}, checker)
+	// Time window [2]: skip records whose commitTs > checkpoint (will be checked in next round)
+	cd.checkLocalRecordsForDataLoss(2, func(commitTs, checkpointTs uint64) bool {
+		return commitTs > checkpointTs
+	}, checker)
+}
+
+// checkLocalRecordsForDataLoss iterates through the local-written data cache at timeWindowIdx
+// and checks each record against the replicated data cache. Records for which shouldSkip returns
+// true are skipped. This helper unifies the logic for time windows [1] and [2].
+func (cd *clusterDataChecker) checkLocalRecordsForDataLoss(
+	timeWindowIdx int,
+	shouldSkip func(commitTs, checkpointTs uint64) bool,
+	checker *DataChecker,
+) {
+	for schemaKey, tableDataCache := range cd.timeWindowDataCaches[timeWindowIdx].tableDataCaches {
 		for _, localDataCache := range tableDataCache.localDataCache {
 			for _, record := range localDataCache {
-				for replicatedClusterID, checkpointTs := range cd.timeWindowDataCaches[1].checkpointTs {
-					if record.CommitTs <= checkpointTs {
+				for replicatedClusterID, checkpointTs := range cd.timeWindowDataCaches[timeWindowIdx].checkpointTs {
+					if shouldSkip(record.CommitTs, checkpointTs) {
 						continue
 					}
 					cd.checkedRecordsCount++
@@ -406,52 +424,14 @@ func (cd *clusterDataChecker) dataLossDetection(checker *DataChecker) {
 							zap.String("local cluster ID", cd.clusterID),
 							zap.String("replicated cluster ID", replicatedClusterID),
 							zap.Any("record", record))
-						cd.report.AddDataLossItem(replicatedClusterID, schemaKey, record.PkStr, record.OriginTs, record.CommitTs)
+						cd.report.AddDataLossItem(replicatedClusterID, schemaKey, record.PkMap, record.PkStr, record.OriginTs, record.CommitTs)
 					} else if !record.EqualReplicatedRecord(replicatedRecord) {
 						// data inconsistent detected
 						log.Error("data inconsistent detected",
 							zap.String("local cluster ID", cd.clusterID),
 							zap.String("replicated cluster ID", replicatedClusterID),
 							zap.Any("record", record))
-						cd.report.AddDataInconsistentItem(replicatedClusterID, schemaKey, record.PkStr, record.OriginTs, record.CommitTs, diffColumns(record, replicatedRecord))
-					}
-				}
-			}
-		}
-	}
-	for schemaKey, tableDataCache := range cd.timeWindowDataCaches[2].tableDataCaches {
-		for _, localDataCache := range tableDataCache.localDataCache {
-			for _, record := range localDataCache {
-				for replicatedClusterID, checkpointTs := range cd.timeWindowDataCaches[2].checkpointTs {
-					if record.CommitTs > checkpointTs {
-						continue
-					}
-					cd.checkedRecordsCount++
-					replicatedRecord, skipped := checker.FindClusterReplicatedData(replicatedClusterID, schemaKey, record.Pk, record.CommitTs)
-					if skipped {
-						log.Debug("replicated record skipped by LWW",
-							zap.String("local cluster ID", cd.clusterID),
-							zap.String("replicated cluster ID", replicatedClusterID),
-							zap.String("schemaKey", schemaKey),
-							zap.String("pk", record.PkStr),
-							zap.Uint64("commitTs", record.CommitTs))
-						cd.lwwSkippedRecordsCount++
-						continue
-					}
-					if replicatedRecord == nil {
-						// data loss detected
-						log.Error("data loss detected",
-							zap.String("local cluster ID", cd.clusterID),
-							zap.String("replicated cluster ID", replicatedClusterID),
-							zap.Any("record", record))
-						cd.report.AddDataLossItem(replicatedClusterID, schemaKey, record.PkStr, record.OriginTs, record.CommitTs)
-					} else if !record.EqualReplicatedRecord(replicatedRecord) {
-						// data inconsistent detected
-						log.Error("data inconsistent detected",
-							zap.String("local cluster ID", cd.clusterID),
-							zap.String("replicated cluster ID", replicatedClusterID),
-							zap.Any("record", record))
-						cd.report.AddDataInconsistentItem(replicatedClusterID, schemaKey, record.PkStr, record.OriginTs, record.CommitTs, diffColumns(record, replicatedRecord))
+						cd.report.AddDataInconsistentItem(replicatedClusterID, schemaKey, record.PkMap, record.PkStr, record.OriginTs, record.CommitTs, diffColumns(record, replicatedRecord))
 					}
 				}
 			}
@@ -472,7 +452,7 @@ func (cd *clusterDataChecker) dataRedundantDetection(checker *DataChecker) {
 					log.Error("data redundant detected",
 						zap.String("replicated cluster ID", cd.clusterID),
 						zap.Any("record", record))
-					cd.report.AddDataRedundantItem(schemaKey, record.PkStr, record.OriginTs, record.CommitTs)
+					cd.report.AddDataRedundantItem(schemaKey, record.PkMap, record.PkStr, record.OriginTs, record.CommitTs)
 				}
 			}
 		}

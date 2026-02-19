@@ -15,11 +15,14 @@ package types
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 )
 
+// PkType is a distinct type for encoded primary key strings, making it clear
+// at the type level that the value has been serialized / encoded.
 type PkType string
 
 type CdcVersion struct {
@@ -68,8 +71,16 @@ type TimeWindow struct {
 func (t *TimeWindow) String() string {
 	var builder strings.Builder
 	fmt.Fprintf(&builder, "time window boundary: (%d, %d]\n", t.LeftBoundary, t.RightBoundary)
-	for replicatedClusterID, checkpointTs := range t.CheckpointTs {
-		fmt.Fprintf(&builder, "checkpoint ts [replicated cluster: %s]: %d\n", replicatedClusterID, checkpointTs)
+
+	// Sort cluster IDs for deterministic output
+	clusterIDs := make([]string, 0, len(t.CheckpointTs))
+	for id := range t.CheckpointTs {
+		clusterIDs = append(clusterIDs, id)
+	}
+	sort.Strings(clusterIDs)
+
+	for _, replicatedClusterID := range clusterIDs {
+		fmt.Fprintf(&builder, "checkpoint ts [replicated cluster: %s]: %d\n", replicatedClusterID, t.CheckpointTs[replicatedClusterID])
 	}
 	return builder.String()
 }

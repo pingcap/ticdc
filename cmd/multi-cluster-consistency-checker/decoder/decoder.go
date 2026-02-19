@@ -29,7 +29,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	ptypes "github.com/pingcap/tidb/pkg/parser/types"
 	tiTypes "github.com/pingcap/tidb/pkg/types"
@@ -70,8 +69,8 @@ type canalValueDecoderJSONMessageWithTiDBExtension struct {
 	TiDBCommitTsExtension *TiDBCommitTsExtension `json:"_tidb"`
 }
 
-func defaultCanalJSONCodecConfig() *codecCommon.Config {
-	codecConfig := codecCommon.NewConfig(config.ProtocolCanalJSON)
+func defaultCanalJSONCodecConfig() *common.Config {
+	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 	// Always enable tidb extension for canal-json protocol
 	// because we need to get the commit ts from the extension field.
 	codecConfig.EnableTiDBExtension = true
@@ -83,6 +82,7 @@ type Record struct {
 	types.CdcVersion
 	Pk           types.PkType
 	PkStr        string
+	PkMap        map[string]any
 	ColumnValues map[string]any
 }
 
@@ -104,6 +104,10 @@ func (r *Record) EqualReplicatedRecord(replicatedRecord *Record) bool {
 		if !ok {
 			return false
 		}
+		// NOTE: This comparison is safe because ColumnValues only holds comparable
+		// types (nil, string, int64, float64, etc.) as produced by the canal-json
+		// decoder. If a non-comparable type (e.g. []byte or map) were ever stored,
+		// the != operator would panic at runtime.
 		if columnValue != replicatedColumnValue {
 			return false
 		}
@@ -181,9 +185,9 @@ func (d *columnValueDecoder) tryNext() (common.MessageType, bool) {
 	}
 
 	if err := json.Unmarshal(encodedData, msg); err != nil {
-		log.Panic("canal-json decoder unmarshal data failed",
+		log.Error("canal-json decoder unmarshal data failed",
 			zap.Error(err), zap.ByteString("data", encodedData))
-		return common.MessageTypeUnknown, false
+		return common.MessageTypeUnknown, true
 	}
 	d.msg = msg
 	return d.msg.messageType(), true
@@ -198,6 +202,7 @@ func (d *columnValueDecoder) decodeNext() (*Record, error) {
 	var pkStrBuilder strings.Builder
 	pkStrBuilder.WriteString("[")
 	pkValues := make([]tiTypes.Datum, 0, len(d.msg.PkNames))
+	pkMap := make(map[string]any, len(d.msg.PkNames))
 	slices.Sort(d.msg.PkNames)
 	for i, pkName := range d.msg.PkNames {
 		mysqlType, ok := d.msg.MySQLType[pkName]
@@ -214,6 +219,7 @@ func (d *columnValueDecoder) decodeNext() (*Record, error) {
 			pkStrBuilder.WriteString(", ")
 		}
 		fmt.Fprintf(&pkStrBuilder, "%s: %v", pkName, columnValue)
+		pkMap[pkName] = columnValue
 		ft := newPKColumnFieldTypeFromMysqlType(mysqlType)
 		datum := valueToDatum(columnValue, ft)
 		if datum.IsNull() {
@@ -248,6 +254,7 @@ func (d *columnValueDecoder) decodeNext() (*Record, error) {
 	return &Record{
 		Pk:           types.PkType(pk),
 		PkStr:        pkStrBuilder.String(),
+		PkMap:        pkMap,
 		ColumnValues: columnValues,
 		CdcVersion: types.CdcVersion{
 			CommitTs: commitTs,
