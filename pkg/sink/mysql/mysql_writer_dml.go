@@ -17,10 +17,10 @@ import (
 	"sort"
 
 	"github.com/pingcap/failpoint"
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"go.uber.org/zap"
+	"github.com/pingcap/ticdc/pkg/sink/failpointrecord"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
 )
 
 func groupEventsByTable(events []*commonEvent.DMLEvent) map[int64][][]*commonEvent.DMLEvent {
@@ -123,8 +123,8 @@ func (w *Writer) genActiveActiveSQL(tableInfo *common.TableInfo, eventsInGroup [
 	// Usage: failpoint.Enable(".../mysqlSinkBypassLWW", "return")
 	//        failpoint.Enable(".../mysqlSinkBypassLWW", "50%return")
 	failpoint.Inject("mysqlSinkBypassLWW", func() {
-		log.Warn("mysqlSinkBypassLWW: bypassing LWW SQL, using normal SQL path to create LWW violation",
-			zap.Int("writerID", w.id))
+		rowRecords := dmlEventsToRowRecords(tableInfo, eventsInGroup)
+		failpointrecord.Write("mysqlSinkBypassLWW", rowRecords)
 		if !w.shouldGenBatchSQL(tableInfo.HasPKOrNotNullUK, tableInfo.HasVirtualColumns(), eventsInGroup) {
 			failpoint.Return(w.generateNormalSQLs(eventsInGroup))
 		}
@@ -157,6 +157,53 @@ func (w *Writer) shouldGenBatchSQL(hasPKOrNotNullUK bool, hasVirtualCols bool, e
 	}
 
 	return allRowInSameSafeMode(w.cfg.SafeMode, events)
+}
+
+// pkColInfo holds the index and name of a primary key column.
+type pkColInfo struct {
+	index int
+	name  string
+}
+
+// findPKColumns returns the PK column indexes and names from a TableInfo.
+func findPKColumns(tableInfo *common.TableInfo) []pkColInfo {
+	var cols []pkColInfo
+	for i, col := range tableInfo.GetColumns() {
+		if col != nil && mysql.HasPriKeyFlag(col.GetFlag()) {
+			cols = append(cols, pkColInfo{index: i, name: col.Name.O})
+		}
+	}
+	return cols
+}
+
+// dmlEventsToRowRecords converts DMLEvents to failpointrecord.RowRecords for
+// writing to the failpoint record file.
+func dmlEventsToRowRecords(tableInfo *common.TableInfo, events []*commonEvent.DMLEvent) []failpointrecord.RowRecord {
+	pkCols := findPKColumns(tableInfo)
+	var records []failpointrecord.RowRecord
+	for _, event := range events {
+		event.Rewind()
+		for {
+			rowChange, ok := event.GetNextRow()
+			if !ok {
+				break
+			}
+			r := &rowChange.Row
+			if rowChange.RowType == common.RowTypeDelete {
+				r = &rowChange.PreRow
+			}
+			pks := make(map[string]any, len(pkCols))
+			for _, pk := range pkCols {
+				pks[pk.name] = common.ExtractColVal(r, tableInfo.GetColumns()[pk.index], pk.index)
+			}
+			records = append(records, failpointrecord.RowRecord{
+				CommitTs:    event.CommitTs,
+				PrimaryKeys: pks,
+			})
+		}
+		event.Rewind()
+	}
+	return records
 }
 
 // allRowInSameSafeMode determines whether all DMLEvents in a batch have the same safe mode status.
