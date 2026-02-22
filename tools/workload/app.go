@@ -32,6 +32,7 @@ import (
 	"workload/schema/bankupdate"
 	pcrawler "workload/schema/crawler"
 	pdc "workload/schema/dc"
+	pforwardindex "workload/schema/forwardindex"
 	"workload/schema/largerow"
 	"workload/schema/shop"
 	psysbench "workload/schema/sysbench"
@@ -67,15 +68,16 @@ type WorkloadApp struct {
 }
 
 const (
-	bank       = "bank"
-	sysbench   = "sysbench"
-	largeRow   = "large_row"
-	shopItem   = "shop_item"
-	uuu        = "uuu"
-	crawler    = "crawler"
-	bank2      = "bank2"
-	bankUpdate = "bank_update"
-	dc         = "dc"
+	bank                = "bank"
+	sysbench            = "sysbench"
+	largeRow            = "large_row"
+	shopItem            = "shop_item"
+	uuu                 = "uuu"
+	crawler             = "crawler"
+	bank2               = "bank2"
+	bankUpdate          = "bank_update"
+	dc                  = "dc"
+	stagingForwardIndex = "staging_forward_index"
 )
 
 // stmtCacheKey is used as the key for statement cache
@@ -134,6 +136,8 @@ func (app *WorkloadApp) createWorkload() schema.Workload {
 		workload = bankupdate.NewBankUpdateWorkload(app.Config.TotalRowCount, app.Config.UpdateLargeColumnSize)
 	case dc:
 		workload = pdc.NewDCWorkload()
+	case stagingForwardIndex:
+		workload = pforwardindex.NewStagingForwardIndexWorkload(app.Config.RowSize, app.Config.TotalRowCount)
 	default:
 		plog.Panic("unsupported workload type", zap.String("workload", app.Config.WorkloadType))
 	}
@@ -314,6 +318,9 @@ func (app *WorkloadApp) doInsert(conn *sql.Conn) error {
 			_, err = app.executeWithValues(conn, insertSql, j, values)
 		case bank2:
 			insertSql, values := app.Workload.(*pbank2.Bank2Workload).BuildInsertSqlWithValues(j, app.Config.BatchSize)
+			_, err = app.executeWithValues(conn, insertSql, j, values)
+		case stagingForwardIndex:
+			insertSql, values := app.Workload.(*pforwardindex.StagingForwardIndexWorkload).BuildInsertSqlWithValues(j, app.Config.BatchSize)
 			_, err = app.executeWithValues(conn, insertSql, j, values)
 		default:
 			insertSql := app.Workload.BuildInsertSql(j, app.Config.BatchSize)

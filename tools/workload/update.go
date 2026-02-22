@@ -26,6 +26,7 @@ import (
 	"go.uber.org/zap"
 	"workload/schema"
 	pbank2 "workload/schema/bank2"
+	pforwardindex "workload/schema/forwardindex"
 	psysbench "workload/schema/sysbench"
 )
 
@@ -162,6 +163,8 @@ func (app *WorkloadApp) executeUpdate(conn *sql.Conn, task updateTask) (sql.Resu
 	switch app.Config.WorkloadType {
 	case bank2:
 		return app.executeBank2Update(conn, task)
+	case stagingForwardIndex:
+		return app.executeStagingForwardIndexUpdate(conn, task)
 	case sysbench:
 		return app.executeSysbenchUpdate(conn, task)
 	default:
@@ -173,6 +176,11 @@ func (app *WorkloadApp) executeUpdate(conn *sql.Conn, task updateTask) (sql.Resu
 func (app *WorkloadApp) executeBank2Update(conn *sql.Conn, task updateTask) (sql.Result, error) {
 	task.UpdateOption.Batch = 1
 	updateSQL, values := app.Workload.(*pbank2.Bank2Workload).BuildUpdateSqlWithValues(task.UpdateOption)
+	return app.executeWithValues(conn, updateSQL, task.UpdateOption.TableIndex, values)
+}
+
+func (app *WorkloadApp) executeStagingForwardIndexUpdate(conn *sql.Conn, task updateTask) (sql.Result, error) {
+	updateSQL, values := app.Workload.(*pforwardindex.StagingForwardIndexWorkload).BuildUpdateSqlWithValues(task.UpdateOption)
 	return app.executeWithValues(conn, updateSQL, task.UpdateOption.TableIndex, values)
 }
 
