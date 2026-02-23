@@ -18,8 +18,23 @@ import (
 
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/decoder"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/types"
+	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
+	ptypes "github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/stretchr/testify/require"
 )
+
+// buildColumnFieldTypes converts a TableDefinition into a map of column name → FieldType,
+// mimicking what SchemaDefinitions.SetSchemaDefinition does.
+func buildColumnFieldTypes(t *testing.T, td *cloudstorage.TableDefinition) map[string]*ptypes.FieldType {
+	t.Helper()
+	result := make(map[string]*ptypes.FieldType, len(td.Columns))
+	for i, col := range td.Columns {
+		colInfo, err := col.ToTiColumnInfo(int64(i))
+		require.NoError(t, err)
+		result[col.Name] = &colInfo.FieldType
+	}
+	return result
+}
 
 // DataContent uses CRLF (\r\n) as line terminator to match the codec config
 const DataContent1 string = "" +
@@ -43,8 +58,24 @@ var ExpectedRecords1 = []decoder.Record{
 	{CdcVersion: types.CdcVersion{CommitTs: 464074446600667164, OriginTs: 464074446196178963}, Pk: "038000000000000008", PkStr: "[id: 8]", ColumnValues: map[string]any{"first_name": "h", "last_name": "H", "_tidb_softdelete_time": "2026-02-05 22:58:40.992217"}},
 }
 
+// tableDefinition1 describes the "message" table: id(INT PK), first_name(VARCHAR), last_name(VARCHAR),
+// _tidb_origin_ts(BIGINT), _tidb_softdelete_time(TIMESTAMP)
+var tableDefinition1 = &cloudstorage.TableDefinition{
+	Table:   "message",
+	Schema:  "test_active",
+	Version: 1,
+	Columns: []cloudstorage.TableCol{
+		{Name: "id", Tp: "INT", IsPK: "true", Precision: "11"},
+		{Name: "first_name", Tp: "VARCHAR", Precision: "255"},
+		{Name: "last_name", Tp: "VARCHAR", Precision: "255"},
+		{Name: "_tidb_origin_ts", Tp: "BIGINT", Precision: "20"},
+		{Name: "_tidb_softdelete_time", Tp: "TIMESTAMP"},
+	},
+	TotalColumns: 5,
+}
+
 func TestCanalJSONDecoder1(t *testing.T) {
-	records, err := decoder.Decode([]byte(DataContent1))
+	records, err := decoder.Decode([]byte(DataContent1), buildColumnFieldTypes(t, tableDefinition1))
 	require.NoError(t, err)
 	require.Len(t, records, 8)
 	for i, actualRecord := range records {
@@ -66,8 +97,24 @@ var ExpectedRecords2 = []decoder.Record{
 	{CdcVersion: types.CdcVersion{CommitTs: 464085169694572575, OriginTs: 0}, Pk: "016200000000000000f8038000000000000065", PkStr: "[first_name: b, id: 101]", ColumnValues: map[string]any{"last_name": "B", "_tidb_softdelete_time": nil}},
 }
 
+// tableDefinition2 describes the "message2" table: id(INT PK), first_name(VARCHAR PK), last_name(VARCHAR),
+// _tidb_origin_ts(BIGINT), _tidb_softdelete_time(TIMESTAMP)
+var tableDefinition2 = &cloudstorage.TableDefinition{
+	Table:   "message2",
+	Schema:  "test_active",
+	Version: 1,
+	Columns: []cloudstorage.TableCol{
+		{Name: "id", Tp: "INT", IsPK: "true", Precision: "11"},
+		{Name: "first_name", Tp: "VARCHAR", IsPK: "true", Precision: "255"},
+		{Name: "last_name", Tp: "VARCHAR", Precision: "255"},
+		{Name: "_tidb_origin_ts", Tp: "BIGINT", Precision: "20"},
+		{Name: "_tidb_softdelete_time", Tp: "TIMESTAMP"},
+	},
+	TotalColumns: 5,
+}
+
 func TestCanalJSONDecoder2(t *testing.T) {
-	records, err := decoder.Decode([]byte(DataContent2))
+	records, err := decoder.Decode([]byte(DataContent2), buildColumnFieldTypes(t, tableDefinition2))
 	require.NoError(t, err)
 	require.Len(t, records, 2)
 	for i, actualRecord := range records {
@@ -78,6 +125,34 @@ func TestCanalJSONDecoder2(t *testing.T) {
 		require.Equal(t, actualRecord.CdcVersion.CommitTs, expectedRecord.CdcVersion.CommitTs)
 		require.Equal(t, actualRecord.CdcVersion.OriginTs, expectedRecord.CdcVersion.OriginTs)
 	}
+}
+
+// TestCanalJSONDecoderWithInvalidMessage verifies that when a malformed message appears in
+// the data stream, it is skipped gracefully and subsequent valid messages are still decoded.
+// This covers the fix where d.msg is cleared to nil on unmarshal failure to prevent stale
+// message data from leaking into decodeNext.
+func TestCanalJSONDecoderWithInvalidMessage(t *testing.T) {
+	// First line is invalid JSON, second line is a valid message.
+	dataWithInvalidLine := `{invalid json}` + "\r\n" +
+		`{"id":0,"database":"test_active","table":"message2","pkNames":["id","first_name"],"isDdl":false,"type":"INSERT","es":1770344412751,"ts":1770344413749,"sql":"","sqlType":{"id":4,"first_name":12,"last_name":12,"_tidb_origin_ts":-5,"_tidb_softdelete_time":93},"mysqlType":{"id":"int","first_name":"varchar","last_name":"varchar","_tidb_origin_ts":"bigint","_tidb_softdelete_time":"timestamp"},"old":null,"data":[{"id":"100","first_name":"a","last_name":"A","_tidb_origin_ts":"464085165262503958","_tidb_softdelete_time":null}],"_tidb":{"commitTs":464085165736198159}}` + "\r\n"
+
+	records, err := decoder.Decode([]byte(dataWithInvalidLine), buildColumnFieldTypes(t, tableDefinition2))
+	require.NoError(t, err)
+	// The invalid line should be skipped, only the valid record should be returned.
+	require.Len(t, records, 1)
+	require.Equal(t, ExpectedRecords2[0].Pk, records[0].Pk)
+	require.Equal(t, ExpectedRecords2[0].PkStr, records[0].PkStr)
+	require.Equal(t, ExpectedRecords2[0].CdcVersion.CommitTs, records[0].CdcVersion.CommitTs)
+	require.Equal(t, ExpectedRecords2[0].CdcVersion.OriginTs, records[0].CdcVersion.OriginTs)
+}
+
+// TestCanalJSONDecoderAllInvalidMessages verifies that when all messages are malformed,
+// the decoder returns an empty result without errors.
+func TestCanalJSONDecoderAllInvalidMessages(t *testing.T) {
+	allInvalid := `{broken}` + "\r\n" + `{also broken}` + "\r\n"
+	records, err := decoder.Decode([]byte(allInvalid), nil)
+	require.NoError(t, err)
+	require.Empty(t, records)
 }
 
 func TestRecord_EqualReplicatedRecord(t *testing.T) {

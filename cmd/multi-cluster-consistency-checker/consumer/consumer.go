@@ -15,6 +15,7 @@ package consumer
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path"
 	"strings"
@@ -28,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/tidb/br/pkg/storage"
+	ptypes "github.com/pingcap/tidb/pkg/parser/types"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -57,17 +59,15 @@ func updateTableDMLIdxMap(
 	}
 }
 
-type schemaParser struct {
-	path   string
-	parser *TableParser
+type schemaDefinition struct {
+	path             string
+	columnFieldTypes map[string]*ptypes.FieldType
 }
 
 type schemaKey struct {
 	schema string
 	table  string
 }
-
-type TableParser struct{}
 
 var ErrWalkDirEnd = perrors.Normalize("walk dir end", perrors.RFCCodeText("CDC:ErrWalkDirEnd"))
 
@@ -96,49 +96,61 @@ func (cvt *CurrentTableVersion) UpdateCurrentTableVersion(schema, table string, 
 	cvt.currentTableVersionMap[schemaKey{schema: schema, table: table}] = version
 }
 
-type SchemaParsers struct {
-	mu              sync.RWMutex
-	schemaParserMap map[cloudstorage.SchemaPathKey]schemaParser
+type SchemaDefinitions struct {
+	mu                  sync.RWMutex
+	schemaDefinitionMap map[cloudstorage.SchemaPathKey]schemaDefinition
 }
 
-func NewSchemaParser() *SchemaParsers {
-	return &SchemaParsers{
-		schemaParserMap: make(map[cloudstorage.SchemaPathKey]schemaParser),
+func NewSchemaDefinitions() *SchemaDefinitions {
+	return &SchemaDefinitions{
+		schemaDefinitionMap: make(map[cloudstorage.SchemaPathKey]schemaDefinition),
 	}
 }
 
-// GetSchemaParser returns the schema parser for a given schema and table version
-func (sp *SchemaParsers) GetSchemaParser(schema, table string, version uint64) (*TableParser, error) {
+// GetColumnFieldTypes returns the pre-parsed column field types for a given schema and table version
+func (sp *SchemaDefinitions) GetColumnFieldTypes(schema, table string, version uint64) (map[string]*ptypes.FieldType, error) {
 	schemaPathKey := cloudstorage.SchemaPathKey{
 		Schema:       schema,
 		Table:        table,
 		TableVersion: version,
 	}
 	sp.mu.RLock()
-	schemaParser, ok := sp.schemaParserMap[schemaPathKey]
+	schemaDefinition, ok := sp.schemaDefinitionMap[schemaPathKey]
 	sp.mu.RUnlock()
 	if !ok {
-		return nil, errors.Errorf("schema parser not found for schema: %s, table: %s, version: %d", schema, table, version)
+		return nil, errors.Errorf("schema definition not found for schema: %s, table: %s, version: %d", schema, table, version)
 	}
-	return schemaParser.parser, nil
+	return schemaDefinition.columnFieldTypes, nil
 }
 
-// SetSchemaParser sets the schema parser for a given schema and table version
-func (sp *SchemaParsers) SetSchemaParser(schemaPathKey cloudstorage.SchemaPathKey, filePath string, parser *TableParser) {
+// SetSchemaDefinition sets the schema definition for a given schema and table version.
+// It pre-parses the column field types from the table definition for later use by the decoder.
+func (sp *SchemaDefinitions) SetSchemaDefinition(schemaPathKey cloudstorage.SchemaPathKey, filePath string, tableDefinition *cloudstorage.TableDefinition) error {
+	columnFieldTypes := make(map[string]*ptypes.FieldType)
+	if tableDefinition != nil {
+		for i, col := range tableDefinition.Columns {
+			colInfo, err := col.ToTiColumnInfo(int64(i))
+			if err != nil {
+				return errors.Annotatef(err, "failed to convert column %s to FieldType", col.Name)
+			}
+			columnFieldTypes[col.Name] = &colInfo.FieldType
+		}
+	}
 	sp.mu.Lock()
-	sp.schemaParserMap[schemaPathKey] = schemaParser{
-		path:   filePath,
-		parser: parser,
+	sp.schemaDefinitionMap[schemaPathKey] = schemaDefinition{
+		path:             filePath,
+		columnFieldTypes: columnFieldTypes,
 	}
 	sp.mu.Unlock()
+	return nil
 }
 
-// RemoveSchemaParserWithCondition removes the schema parser for a given condition
-func (sp *SchemaParsers) RemoveSchemaParserWithCondition(condition func(schemaPathKey cloudstorage.SchemaPathKey) bool) {
+// RemoveSchemaDefinitionWithCondition removes the schema definition for a given condition
+func (sp *SchemaDefinitions) RemoveSchemaDefinitionWithCondition(condition func(schemaPathKey cloudstorage.SchemaPathKey) bool) {
 	sp.mu.Lock()
-	for schemaPathkey := range sp.schemaParserMap {
+	for schemaPathkey := range sp.schemaDefinitionMap {
 		if condition(schemaPathkey) {
-			delete(sp.schemaParserMap, schemaPathkey)
+			delete(sp.schemaDefinitionMap, schemaPathkey)
 		}
 	}
 	sp.mu.Unlock()
@@ -217,7 +229,7 @@ type S3Consumer struct {
 
 	currentTableVersion *CurrentTableVersion
 	tableDMLIdx         *TableDMLIdx
-	schemaParser        *SchemaParsers
+	schemaDefinitions   *SchemaDefinitions
 }
 
 func NewS3Consumer(
@@ -235,7 +247,7 @@ func NewS3Consumer(
 
 		currentTableVersion: NewCurrentTableVersion(),
 		tableDMLIdx:         NewTableDMLIdx(),
-		schemaParser:        NewSchemaParser(),
+		schemaDefinitions:   NewSchemaDefinitions(),
 	}
 }
 
@@ -269,12 +281,12 @@ func (c *S3Consumer) InitializeFromCheckpoint(
 				func(
 					dmlPathKey cloudstorage.DmlPathKey,
 					dmlSlices map[cloudstorage.FileIndexKey][][]byte,
-					parser *TableParser,
+					columnFieldTypes map[string]*ptypes.FieldType,
 				) {
 					mu.Lock()
 					result[dmlPathKey] = types.IncrementalData{
 						DataContentSlices: dmlSlices,
-						// Parser:            parser,
+						ColumnFieldTypes:  columnFieldTypes,
 					}
 					mu.Unlock()
 				},
@@ -364,12 +376,18 @@ func (c *S3Consumer) downloadSchemaFilesWithScanRange(
 	return scanVersions, nil
 }
 
+// downloadDataFilesWithScanRange downloads data files for a given scan range.
+// consumeFunc is called from multiple goroutines concurrently and must be goroutine-safe.
 func (c *S3Consumer) downloadDataFilesWithScanRange(
 	ctx context.Context,
 	schema, table string,
 	scanVersions []types.VersionKey,
 	scanRange *recorder.ScanRange,
-	consumeFunc func(dmlPathKey cloudstorage.DmlPathKey, dmlSlices map[cloudstorage.FileIndexKey][][]byte, parser *TableParser),
+	consumeFunc func(
+		dmlPathKey cloudstorage.DmlPathKey,
+		dmlSlices map[cloudstorage.FileIndexKey][][]byte,
+		columnFieldTypes map[string]*ptypes.FieldType,
+	),
 ) error {
 	eg, egCtx := errgroup.WithContext(ctx)
 	for _, version := range scanVersions {
@@ -382,12 +400,12 @@ func (c *S3Consumer) downloadDataFilesWithScanRange(
 			if err != nil {
 				return errors.Trace(err)
 			}
-			parser, err := c.schemaParser.GetSchemaParser(schema, table, version.Version)
+			columnFieldTypes, err := c.schemaDefinitions.GetColumnFieldTypes(schema, table, version.Version)
 			if err != nil {
 				return errors.Trace(err)
 			}
 			for dmlPathKey, dmlSlices := range dmlData {
-				consumeFunc(dmlPathKey, dmlSlices, parser)
+				consumeFunc(dmlPathKey, dmlSlices, columnFieldTypes)
 			}
 			return nil
 		})
@@ -440,32 +458,32 @@ func (c *S3Consumer) getNewFilesForSchemaPathKeyWithEndPath(
 
 // downloadSchemaFiles downloads schema files concurrently for given schema path keys
 func (c *S3Consumer) downloadSchemaFiles(
-	_ context.Context,
+	ctx context.Context,
 	newVersionPaths map[cloudstorage.SchemaPathKey]string,
 ) error {
-	// eg, ectx := errgroup.WithContext(ctx)
+	eg, egCtx := errgroup.WithContext(ctx)
 
 	log.Debug("starting concurrent schema file download", zap.Int("totalSchemas", len(newVersionPaths)))
 	for schemaPathKey, filePath := range newVersionPaths {
-		// eg.Go(func() error {
-		// content, err := c.s3Storage.ReadFile(egCtx, filePath)
-		// if err != nil {
-		// 	return errors.Annotatef(err, "failed to read schema file: %s", filePath)
-		// }
-		//
-		// Use canal-json decoder for S3 sink with .json file extension
-		// parser, err := types.NewTableParserWithFormat(schemaPathKey.GetKey(), content, config.ProtocolCanalJSON)
-		// if err != nil {
-		// 	return errors.Annotatef(err, "failed to create table parser: %s", schemaPathKey.GetKey())
-		// }
-		//
-		c.schemaParser.SetSchemaParser(schemaPathKey, filePath, nil)
-		// return nil
-		// })
+		eg.Go(func() error {
+			content, err := c.s3Storage.ReadFile(egCtx, filePath)
+			if err != nil {
+				return errors.Annotatef(err, "failed to read schema file: %s", filePath)
+			}
+
+			tableDefinition := &cloudstorage.TableDefinition{}
+			if err := json.Unmarshal(content, tableDefinition); err != nil {
+				return errors.Annotatef(err, "failed to unmarshal schema file: %s", filePath)
+			}
+			if err := c.schemaDefinitions.SetSchemaDefinition(schemaPathKey, filePath, tableDefinition); err != nil {
+				return errors.Trace(err)
+			}
+			return nil
+		})
 	}
-	//if err := eg.Wait(); err != nil {
-	//	return errors.Trace(err)
-	//}
+	if err := eg.Wait(); err != nil {
+		return errors.Trace(err)
+	}
 	return nil
 }
 
@@ -652,11 +670,17 @@ func (c *S3Consumer) downloadDMLFiles(
 	return result, nil
 }
 
+// downloadNewFilesWithVersions downloads new files for given schema versions.
+// consumeFunc is called from multiple goroutines concurrently and must be goroutine-safe.
 func (c *S3Consumer) downloadNewFilesWithVersions(
 	ctx context.Context,
 	schema, table string,
 	scanVersions []types.VersionKey,
-	consumeFunc func(dmlPathKey cloudstorage.DmlPathKey, dmlSlices map[cloudstorage.FileIndexKey][][]byte, parser *TableParser),
+	consumeFunc func(
+		dmlPathKey cloudstorage.DmlPathKey,
+		dmlSlices map[cloudstorage.FileIndexKey][][]byte,
+		columnFieldTypes map[string]*ptypes.FieldType,
+	),
 ) (*types.VersionKey, error) {
 	var maxVersion *types.VersionKey
 	eg, egCtx := errgroup.WithContext(ctx)
@@ -674,12 +698,12 @@ func (c *S3Consumer) downloadNewFilesWithVersions(
 			if err != nil {
 				return errors.Trace(err)
 			}
-			parser, err := c.schemaParser.GetSchemaParser(schema, table, versionp.Version)
+			columnFieldTypes, err := c.schemaDefinitions.GetColumnFieldTypes(schema, table, versionp.Version)
 			if err != nil {
 				return errors.Trace(err)
 			}
 			for dmlPathKey, dmlSlices := range dmlData {
-				consumeFunc(dmlPathKey, dmlSlices, parser)
+				consumeFunc(dmlPathKey, dmlSlices, columnFieldTypes)
 			}
 			return nil
 		})
@@ -714,12 +738,12 @@ func (c *S3Consumer) ConsumeNewFiles(
 					func(
 						dmlPathKey cloudstorage.DmlPathKey,
 						dmlSlices map[cloudstorage.FileIndexKey][][]byte,
-						parser *TableParser,
+						columnFieldTypes map[string]*ptypes.FieldType,
 					) {
 						mu.Lock()
 						result[dmlPathKey] = types.IncrementalData{
 							DataContentSlices: dmlSlices,
-							// Parser:            parser,
+							ColumnFieldTypes:  columnFieldTypes,
 						}
 						mu.Unlock()
 					},

@@ -244,7 +244,7 @@ func (cd *clusterDataChecker) InitializeFromCheckpoint(
 		schemaKey := schemaPathKey.GetKey()
 		for _, contents := range incrementalData.DataContentSlices {
 			for _, content := range contents {
-				records, err := decoder.Decode(content)
+				records, err := decoder.Decode(content, incrementalData.ColumnFieldTypes)
 				if err != nil {
 					return errors.Trace(err)
 				}
@@ -424,14 +424,14 @@ func (cd *clusterDataChecker) checkLocalRecordsForDataLoss(
 							zap.String("local cluster ID", cd.clusterID),
 							zap.String("replicated cluster ID", replicatedClusterID),
 							zap.Any("record", record))
-						cd.report.AddDataLossItem(replicatedClusterID, schemaKey, record.PkMap, record.PkStr, record.OriginTs, record.CommitTs)
+						cd.report.AddDataLossItem(replicatedClusterID, schemaKey, record.PkMap, record.PkStr, record.CommitTs)
 					} else if !record.EqualReplicatedRecord(replicatedRecord) {
 						// data inconsistent detected
 						log.Error("data inconsistent detected",
 							zap.String("local cluster ID", cd.clusterID),
 							zap.String("replicated cluster ID", replicatedClusterID),
 							zap.Any("record", record))
-						cd.report.AddDataInconsistentItem(replicatedClusterID, schemaKey, record.PkMap, record.PkStr, record.OriginTs, record.CommitTs, diffColumns(record, replicatedRecord))
+						cd.report.AddDataInconsistentItem(replicatedClusterID, schemaKey, record.PkMap, record.PkStr, replicatedRecord.OriginTs, record.CommitTs, replicatedRecord.CommitTs, diffColumns(record, replicatedRecord))
 					}
 				}
 			}
@@ -641,7 +641,7 @@ func (c *DataChecker) decodeNewTimeWindowData(newTimeWindowData map[string]types
 			schemaKey := schemaPathKey.GetKey()
 			for _, contents := range incrementalData.DataContentSlices {
 				for _, content := range contents {
-					records, err := decoder.Decode(content)
+					records, err := decoder.Decode(content, incrementalData.ColumnFieldTypes)
 					if err != nil {
 						return errors.Trace(err)
 					}

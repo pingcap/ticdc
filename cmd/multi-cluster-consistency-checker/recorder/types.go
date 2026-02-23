@@ -25,14 +25,13 @@ import (
 type DataLossItem struct {
 	PeerClusterID string         `json:"peer_cluster_id"`
 	PK            map[string]any `json:"pk"`
-	OriginTS      uint64         `json:"origin_ts"`
 	CommitTS      uint64         `json:"commit_ts"`
 
 	PKStr string `json:"-"`
 }
 
 func (item *DataLossItem) String() string {
-	return fmt.Sprintf("peer cluster: %s, pk: %s, origin ts: %d, commit ts: %d", item.PeerClusterID, item.PKStr, item.OriginTS, item.CommitTS)
+	return fmt.Sprintf("peer cluster: %s, pk: %s, commit ts: %d", item.PeerClusterID, item.PKStr, item.CommitTS)
 }
 
 type InconsistentColumn struct {
@@ -49,7 +48,8 @@ type DataInconsistentItem struct {
 	PeerClusterID       string               `json:"peer_cluster_id"`
 	PK                  map[string]any       `json:"pk"`
 	OriginTS            uint64               `json:"origin_ts"`
-	CommitTS            uint64               `json:"commit_ts"`
+	LocalCommitTS       uint64               `json:"local_commit_ts"`
+	ReplicatedCommitTS  uint64               `json:"replicated_commit_ts"`
 	InconsistentColumns []InconsistentColumn `json:"inconsistent_columns,omitempty"`
 
 	PKStr string `json:"-"`
@@ -57,8 +57,8 @@ type DataInconsistentItem struct {
 
 func (item *DataInconsistentItem) String() string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "peer cluster: %s, pk: %s, origin ts: %d, commit ts: %d",
-		item.PeerClusterID, item.PKStr, item.OriginTS, item.CommitTS)
+	fmt.Fprintf(&sb, "peer cluster: %s, pk: %s, origin ts: %d, local commit ts: %d, replicated commit ts: %d",
+		item.PeerClusterID, item.PKStr, item.OriginTS, item.LocalCommitTS, item.ReplicatedCommitTS)
 	if len(item.InconsistentColumns) > 0 {
 		sb.WriteString(", inconsistent columns: [")
 		for i, col := range item.InconsistentColumns {
@@ -139,7 +139,7 @@ func (r *ClusterReport) AddDataLossItem(
 	peerClusterID, schemaKey string,
 	pk map[string]any,
 	pkStr string,
-	originTS, commitTS uint64,
+	commitTS uint64,
 ) {
 	tableFailureItems, exists := r.TableFailureItems[schemaKey]
 	if !exists {
@@ -149,7 +149,6 @@ func (r *ClusterReport) AddDataLossItem(
 	tableFailureItems.DataLossItems = append(tableFailureItems.DataLossItems, DataLossItem{
 		PeerClusterID: peerClusterID,
 		PK:            pk,
-		OriginTS:      originTS,
 		CommitTS:      commitTS,
 
 		PKStr: pkStr,
@@ -161,7 +160,7 @@ func (r *ClusterReport) AddDataInconsistentItem(
 	peerClusterID, schemaKey string,
 	pk map[string]any,
 	pkStr string,
-	originTS, commitTS uint64,
+	originTS, localCommitTS, replicatedCommitTS uint64,
 	inconsistentColumns []InconsistentColumn,
 ) {
 	tableFailureItems, exists := r.TableFailureItems[schemaKey]
@@ -173,7 +172,8 @@ func (r *ClusterReport) AddDataInconsistentItem(
 		PeerClusterID:       peerClusterID,
 		PK:                  pk,
 		OriginTS:            originTS,
-		CommitTS:            commitTS,
+		LocalCommitTS:       localCommitTS,
+		ReplicatedCommitTS:  replicatedCommitTS,
 		InconsistentColumns: inconsistentColumns,
 
 		PKStr: pkStr,

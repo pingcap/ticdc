@@ -467,7 +467,6 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 		tableItems := c1Report.TableFailureItems[defaultSchemaKey]
 		require.Len(t, tableItems.DataLossItems, 1)
 		require.Equal(t, "c2", tableItems.DataLossItems[0].PeerClusterID)
-		require.Equal(t, uint64(0), tableItems.DataLossItems[0].OriginTS)
 		require.Equal(t, uint64(250), tableItems.DataLossItems[0].CommitTS)
 		// c2 should have no issues
 		c2Report := lastReport.ClusterReports["c2"]
@@ -508,7 +507,9 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 		require.Empty(t, tableItems.DataLossItems)
 		require.Len(t, tableItems.DataInconsistentItems, 1)
 		require.Equal(t, "c2", tableItems.DataInconsistentItems[0].PeerClusterID)
-		require.Equal(t, uint64(250), tableItems.DataInconsistentItems[0].CommitTS)
+		require.Equal(t, uint64(250), tableItems.DataInconsistentItems[0].OriginTS)
+		require.Equal(t, uint64(250), tableItems.DataInconsistentItems[0].LocalCommitTS)
+		require.Equal(t, uint64(260), tableItems.DataInconsistentItems[0].ReplicatedCommitTS)
 		require.Len(t, tableItems.DataInconsistentItems[0].InconsistentColumns, 1)
 		require.Equal(t, "val", tableItems.DataInconsistentItems[0].InconsistentColumns[0].Column)
 		require.Equal(t, "c", tableItems.DataInconsistentItems[0].InconsistentColumns[0].Local)

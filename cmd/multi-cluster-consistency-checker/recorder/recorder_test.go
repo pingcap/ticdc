@@ -230,7 +230,7 @@ func TestRecorder_RecordTimeWindow(t *testing.T) {
 		}
 		report := NewReport(5)
 		cr := NewClusterReport("c1", types.TimeWindow{LeftBoundary: 1, RightBoundary: 10})
-		cr.AddDataLossItem("d1", "test_table", map[string]any{"id": "1"}, `[id: 1]`, 100, 200)
+		cr.AddDataLossItem("d1", "test_table", map[string]any{"id": "1"}, `[id: 1]`, 200)
 		report.AddClusterReport("c1", cr)
 		require.True(t, report.NeedFlush())
 
@@ -353,7 +353,7 @@ func TestRecorder_CheckpointPersistence(t *testing.T) {
 			}
 			report := NewReport(i)
 			cr := NewClusterReport("c1", types.TimeWindow{LeftBoundary: i * 10, RightBoundary: (i + 1) * 10})
-			cr.AddDataLossItem("d1", "test_table", map[string]any{"id": "1"}, `[id: 1]`, i, i+1)
+			cr.AddDataLossItem("d1", "test_table", map[string]any{"id": "1"}, `[id: 1]`, i+1)
 			report.AddClusterReport("c1", cr)
 			require.True(t, report.NeedFlush())
 
@@ -395,7 +395,7 @@ func TestRecorder_CheckpointPersistence(t *testing.T) {
 			}
 			report := NewReport(i)
 			cr := NewClusterReport("c1", types.TimeWindow{LeftBoundary: i * 10, RightBoundary: (i + 1) * 10})
-			cr.AddDataLossItem("d1", "test_table", map[string]any{"id": "1"}, `[id: 1]`, i, i+1)
+			cr.AddDataLossItem("d1", "test_table", map[string]any{"id": "1"}, `[id: 1]`, i+1)
 			report.AddClusterReport("c1", cr)
 
 			err = r.RecordTimeWindow(twData, report)

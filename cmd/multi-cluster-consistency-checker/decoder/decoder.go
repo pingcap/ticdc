@@ -119,7 +119,8 @@ type columnValueDecoder struct {
 	data   []byte
 	config *common.Config
 
-	msg *canalValueDecoderJSONMessageWithTiDBExtension
+	msg              *canalValueDecoderJSONMessageWithTiDBExtension
+	columnFieldTypes map[string]*ptypes.FieldType
 }
 
 func newColumnValueDecoder(data []byte) (*columnValueDecoder, error) {
@@ -138,11 +139,13 @@ func newColumnValueDecoder(data []byte) (*columnValueDecoder, error) {
 	}, nil
 }
 
-func Decode(data []byte) ([]*Record, error) {
+func Decode(data []byte, columnFieldTypes map[string]*ptypes.FieldType) ([]*Record, error) {
 	decoder, err := newColumnValueDecoder(data)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+
+	decoder.columnFieldTypes = columnFieldTypes
 
 	records := make([]*Record, 0)
 	for {
@@ -187,6 +190,7 @@ func (d *columnValueDecoder) tryNext() (common.MessageType, bool) {
 	if err := json.Unmarshal(encodedData, msg); err != nil {
 		log.Error("canal-json decoder unmarshal data failed",
 			zap.Error(err), zap.ByteString("data", encodedData))
+		d.msg = nil
 		return common.MessageTypeUnknown, true
 	}
 	d.msg = msg
@@ -205,11 +209,6 @@ func (d *columnValueDecoder) decodeNext() (*Record, error) {
 	pkMap := make(map[string]any, len(d.msg.PkNames))
 	slices.Sort(d.msg.PkNames)
 	for i, pkName := range d.msg.PkNames {
-		mysqlType, ok := d.msg.MySQLType[pkName]
-		if !ok {
-			log.Error("mysql type not found", zap.String("pkName", pkName), zap.Any("msg", d.msg))
-			return nil, errors.Errorf("mysql type of column %s not found", pkName)
-		}
 		columnValue, ok := d.msg.Data[0][pkName]
 		if !ok {
 			log.Error("column value not found", zap.String("pkName", pkName), zap.Any("msg", d.msg))
@@ -220,7 +219,11 @@ func (d *columnValueDecoder) decodeNext() (*Record, error) {
 		}
 		fmt.Fprintf(&pkStrBuilder, "%s: %v", pkName, columnValue)
 		pkMap[pkName] = columnValue
-		ft := newPKColumnFieldTypeFromMysqlType(mysqlType)
+		ft := d.getColumnFieldType(pkName)
+		if ft == nil {
+			log.Error("field type not found", zap.String("pkName", pkName), zap.Any("msg", d.msg))
+			return nil, errors.Errorf("field type of column %s not found", pkName)
+		}
 		datum := valueToDatum(columnValue, ft)
 		if datum.IsNull() {
 			log.Error("column value is null", zap.String("pkName", pkName), zap.Any("msg", d.msg))
@@ -261,6 +264,23 @@ func (d *columnValueDecoder) decodeNext() (*Record, error) {
 			OriginTs: originTs,
 		},
 	}, nil
+}
+
+// getColumnFieldType returns the FieldType for a column.
+// It first looks up from the tableDefinition-based columnFieldTypes map,
+// then falls back to parsing the MySQLType string from the canal-json message.
+func (d *columnValueDecoder) getColumnFieldType(columnName string) *ptypes.FieldType {
+	if d.columnFieldTypes != nil {
+		if ft, ok := d.columnFieldTypes[columnName]; ok {
+			return ft
+		}
+	}
+	// Fallback: parse from MySQLType in the canal-json message
+	mysqlType, ok := d.msg.MySQLType[columnName]
+	if !ok {
+		return nil
+	}
+	return newPKColumnFieldTypeFromMysqlType(mysqlType)
 }
 
 func newPKColumnFieldTypeFromMysqlType(mysqlType string) *ptypes.FieldType {

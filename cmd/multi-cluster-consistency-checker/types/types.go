@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
+	ptypes "github.com/pingcap/tidb/pkg/parser/types"
 )
 
 // PkType is a distinct type for encoded primary key strings, making it clear
@@ -93,4 +94,5 @@ type TimeWindowData struct {
 
 type IncrementalData struct {
 	DataContentSlices map[cloudstorage.FileIndexKey][][]byte
+	ColumnFieldTypes  map[string]*ptypes.FieldType
 }

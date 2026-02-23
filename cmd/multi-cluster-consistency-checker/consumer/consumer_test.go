@@ -25,6 +25,8 @@ import (
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/types"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	ptypes "github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -123,64 +125,139 @@ func TestCurrentTableVersion(t *testing.T) {
 	})
 }
 
-func TestSchemaParser(t *testing.T) {
+func TestSchemaDefinitions(t *testing.T) {
 	t.Parallel()
 
 	t.Run("get returns error for missing key", func(t *testing.T) {
 		t.Parallel()
-		sp := NewSchemaParser()
-		_, err := sp.GetSchemaParser("db", "tbl", 1)
+		sp := NewSchemaDefinitions()
+		_, err := sp.GetColumnFieldTypes("db", "tbl", 1)
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "schema parser not found")
+		require.Contains(t, err.Error(), "schema definition not found")
 	})
 
-	t.Run("set and get", func(t *testing.T) {
+	t.Run("set and get empty table definition", func(t *testing.T) {
 		t.Parallel()
-		sp := NewSchemaParser()
+		sp := NewSchemaDefinitions()
 		key := cloudstorage.SchemaPathKey{Schema: "db", Table: "tbl", TableVersion: 1}
-		parser := &TableParser{}
-		sp.SetSchemaParser(key, "/path/to/schema.json", parser)
-
-		got, err := sp.GetSchemaParser("db", "tbl", 1)
+		td := &cloudstorage.TableDefinition{}
+		err := sp.SetSchemaDefinition(key, "/path/to/schema.json", td)
 		require.NoError(t, err)
-		require.Equal(t, parser, got)
+
+		got, err := sp.GetColumnFieldTypes("db", "tbl", 1)
+		require.NoError(t, err)
+		require.Equal(t, map[string]*ptypes.FieldType{}, got)
+	})
+
+	t.Run("set and get with columns parses field types correctly", func(t *testing.T) {
+		t.Parallel()
+		sp := NewSchemaDefinitions()
+		key := cloudstorage.SchemaPathKey{Schema: "db", Table: "tbl", TableVersion: 1}
+		td := &cloudstorage.TableDefinition{
+			Table:  "tbl",
+			Schema: "db",
+			Columns: []cloudstorage.TableCol{
+				{Name: "id", Tp: "INT", IsPK: "true", Precision: "11"},
+				{Name: "name", Tp: "VARCHAR", Precision: "255"},
+				{Name: "score", Tp: "DECIMAL", Precision: "10", Scale: "2"},
+				{Name: "duration", Tp: "TIME", Scale: "3"},
+				{Name: "created_at", Tp: "TIMESTAMP", Scale: "6"},
+				{Name: "big_id", Tp: "BIGINT UNSIGNED", Precision: "20"},
+			},
+			TotalColumns: 6,
+		}
+		err := sp.SetSchemaDefinition(key, "/path/to/schema.json", td)
+		require.NoError(t, err)
+
+		got, err := sp.GetColumnFieldTypes("db", "tbl", 1)
+		require.NoError(t, err)
+		require.Len(t, got, 6)
+
+		// INT PK
+		require.Equal(t, mysql.TypeLong, got["id"].GetType())
+		require.True(t, mysql.HasPriKeyFlag(got["id"].GetFlag()))
+		require.Equal(t, 11, got["id"].GetFlen())
+
+		// VARCHAR(255)
+		require.Equal(t, mysql.TypeVarchar, got["name"].GetType())
+		require.Equal(t, 255, got["name"].GetFlen())
+
+		// DECIMAL(10,2)
+		require.Equal(t, mysql.TypeNewDecimal, got["score"].GetType())
+		require.Equal(t, 10, got["score"].GetFlen())
+		require.Equal(t, 2, got["score"].GetDecimal())
+
+		// TIME(3) — decimal stores FSP
+		require.Equal(t, mysql.TypeDuration, got["duration"].GetType())
+		require.Equal(t, 3, got["duration"].GetDecimal())
+
+		// TIMESTAMP(6) — decimal stores FSP
+		require.Equal(t, mysql.TypeTimestamp, got["created_at"].GetType())
+		require.Equal(t, 6, got["created_at"].GetDecimal())
+
+		// BIGINT UNSIGNED
+		require.Equal(t, mysql.TypeLonglong, got["big_id"].GetType())
+		require.True(t, mysql.HasUnsignedFlag(got["big_id"].GetFlag()))
+		require.Equal(t, 20, got["big_id"].GetFlen())
+	})
+
+	t.Run("set returns error for invalid column definition", func(t *testing.T) {
+		t.Parallel()
+		sp := NewSchemaDefinitions()
+		key := cloudstorage.SchemaPathKey{Schema: "db", Table: "tbl", TableVersion: 1}
+		td := &cloudstorage.TableDefinition{
+			Table:  "tbl",
+			Schema: "db",
+			Columns: []cloudstorage.TableCol{
+				{Name: "id", Tp: "INT", Precision: "not_a_number"},
+			},
+			TotalColumns: 1,
+		}
+		err := sp.SetSchemaDefinition(key, "/path/to/schema.json", td)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "failed to convert column id to FieldType")
+
+		// Verify the definition was NOT stored
+		_, err = sp.GetColumnFieldTypes("db", "tbl", 1)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "schema definition not found")
 	})
 
 	t.Run("remove with condition", func(t *testing.T) {
 		t.Parallel()
-		sp := NewSchemaParser()
+		sp := NewSchemaDefinitions()
 		key1 := cloudstorage.SchemaPathKey{Schema: "db", Table: "tbl1", TableVersion: 1}
 		key2 := cloudstorage.SchemaPathKey{Schema: "db", Table: "tbl2", TableVersion: 2}
-		sp.SetSchemaParser(key1, "/path1", nil)
-		sp.SetSchemaParser(key2, "/path2", nil)
+		require.NoError(t, sp.SetSchemaDefinition(key1, "/path1", nil))
+		require.NoError(t, sp.SetSchemaDefinition(key2, "/path2", nil))
 
 		// Remove only entries for tbl1
-		sp.RemoveSchemaParserWithCondition(func(k cloudstorage.SchemaPathKey) bool {
+		sp.RemoveSchemaDefinitionWithCondition(func(k cloudstorage.SchemaPathKey) bool {
 			return k.Table == "tbl1"
 		})
 
-		_, err := sp.GetSchemaParser("db", "tbl1", 1)
+		_, err := sp.GetColumnFieldTypes("db", "tbl1", 1)
 		require.Error(t, err)
 
-		_, err = sp.GetSchemaParser("db", "tbl2", 2)
+		_, err = sp.GetColumnFieldTypes("db", "tbl2", 2)
 		require.NoError(t, err)
 	})
 
 	t.Run("remove with condition matching all", func(t *testing.T) {
 		t.Parallel()
-		sp := NewSchemaParser()
+		sp := NewSchemaDefinitions()
 		key1 := cloudstorage.SchemaPathKey{Schema: "db", Table: "tbl1", TableVersion: 1}
 		key2 := cloudstorage.SchemaPathKey{Schema: "db", Table: "tbl2", TableVersion: 2}
-		sp.SetSchemaParser(key1, "/path1", nil)
-		sp.SetSchemaParser(key2, "/path2", nil)
+		require.NoError(t, sp.SetSchemaDefinition(key1, "/path1", nil))
+		require.NoError(t, sp.SetSchemaDefinition(key2, "/path2", nil))
 
-		sp.RemoveSchemaParserWithCondition(func(k cloudstorage.SchemaPathKey) bool {
+		sp.RemoveSchemaDefinitionWithCondition(func(k cloudstorage.SchemaPathKey) bool {
 			return true
 		})
 
-		_, err := sp.GetSchemaParser("db", "tbl1", 1)
+		_, err := sp.GetColumnFieldTypes("db", "tbl1", 1)
 		require.Error(t, err)
-		_, err = sp.GetSchemaParser("db", "tbl2", 2)
+		_, err = sp.GetColumnFieldTypes("db", "tbl2", 2)
 		require.Error(t, err)
 	})
 }
@@ -344,7 +421,7 @@ func TestS3Consumer(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	round1Files := []mockFile{
-		{name: "test/t1/meta/schema_1_0000000001.json", content: []byte{}},
+		{name: "test/t1/meta/schema_1_0000000001.json", content: []byte("{}")},
 		{name: "test/t1/1/2026-01-01/CDC00000000000000000001.json", content: []byte("1_2026-01-01_1.json")},
 	}
 	round1TimeWindowData := types.TimeWindowData{
@@ -365,7 +442,7 @@ func TestS3Consumer(t *testing.T) {
 		}, maxVersionMap[types.SchemaTableKey{Schema: "test", Table: "t1"}])
 	}
 	round2Files := []mockFile{
-		{name: "test/t1/meta/schema_1_0000000001.json", content: []byte{}},
+		{name: "test/t1/meta/schema_1_0000000001.json", content: []byte("{}")},
 		{name: "test/t1/1/2026-01-01/CDC00000000000000000001.json", content: []byte("1_2026-01-01_1.json")},
 		{name: "test/t1/1/2026-01-01/CDC00000000000000000002.json", content: []byte("1_2026-01-01_2.json")},
 		{name: "test/t1/1/2026-01-02/CDC00000000000000000001.json", content: []byte("1_2026-01-02_1.json")},
@@ -387,6 +464,7 @@ func TestS3Consumer(t *testing.T) {
 			DataContentSlices: map[cloudstorage.FileIndexKey][][]byte{
 				{DispatcherID: "", EnableTableAcrossNodes: false}: {[]byte("1_2026-01-01_2.json")},
 			},
+			ColumnFieldTypes: map[string]*ptypes.FieldType{},
 		}, newData[cloudstorage.DmlPathKey{
 			SchemaPathKey: cloudstorage.SchemaPathKey{Schema: "test", Table: "t1", TableVersion: 1},
 			PartitionNum:  0,
@@ -396,6 +474,7 @@ func TestS3Consumer(t *testing.T) {
 			DataContentSlices: map[cloudstorage.FileIndexKey][][]byte{
 				{DispatcherID: "", EnableTableAcrossNodes: false}: {[]byte("1_2026-01-02_1.json")},
 			},
+			ColumnFieldTypes: map[string]*ptypes.FieldType{},
 		}, newData[cloudstorage.DmlPathKey{
 			SchemaPathKey: cloudstorage.SchemaPathKey{Schema: "test", Table: "t1", TableVersion: 1},
 			PartitionNum:  0,
@@ -409,8 +488,8 @@ func TestS3Consumer(t *testing.T) {
 		}, maxVersionMap[types.SchemaTableKey{Schema: "test", Table: "t1"}])
 	}
 	round3Files := []mockFile{
-		{name: "test/t1/meta/schema_1_0000000001.json", content: []byte{}},
-		{name: "test/t1/meta/schema_2_0000000001.json", content: []byte{}},
+		{name: "test/t1/meta/schema_1_0000000001.json", content: []byte("{}")},
+		{name: "test/t1/meta/schema_2_0000000001.json", content: []byte("{}")},
 		{name: "test/t1/1/2026-01-01/CDC00000000000000000001.json", content: []byte("1_2026-01-01_1.json")},
 		{name: "test/t1/1/2026-01-01/CDC00000000000000000002.json", content: []byte("1_2026-01-01_2.json")},
 		{name: "test/t1/1/2026-01-02/CDC00000000000000000001.json", content: []byte("1_2026-01-02_1.json")},
@@ -436,6 +515,7 @@ func TestS3Consumer(t *testing.T) {
 			DataContentSlices: map[cloudstorage.FileIndexKey][][]byte{
 				{DispatcherID: "", EnableTableAcrossNodes: false}: {[]byte("1_2026-01-02_2.json")},
 			},
+			ColumnFieldTypes: map[string]*ptypes.FieldType{},
 		}, newData[cloudstorage.DmlPathKey{
 			SchemaPathKey: cloudstorage.SchemaPathKey{Schema: "test", Table: "t1", TableVersion: 1},
 			PartitionNum:  0,
@@ -445,6 +525,7 @@ func TestS3Consumer(t *testing.T) {
 			DataContentSlices: map[cloudstorage.FileIndexKey][][]byte{
 				{DispatcherID: "", EnableTableAcrossNodes: false}: {[]byte("2_2026-01-02_1.json")},
 			},
+			ColumnFieldTypes: map[string]*ptypes.FieldType{},
 		}, newData[cloudstorage.DmlPathKey{
 			SchemaPathKey: cloudstorage.SchemaPathKey{Schema: "test", Table: "t1", TableVersion: 2},
 			PartitionNum:  0,
@@ -475,6 +556,7 @@ func TestS3Consumer(t *testing.T) {
 			DataContentSlices: map[cloudstorage.FileIndexKey][][]byte{
 				{DispatcherID: "", EnableTableAcrossNodes: false}: {[]byte("1_2026-01-01_2.json")},
 			},
+			ColumnFieldTypes: map[string]*ptypes.FieldType{},
 		}, data[cloudstorage.DmlPathKey{
 			SchemaPathKey: cloudstorage.SchemaPathKey{Schema: "test", Table: "t1", TableVersion: 1},
 			PartitionNum:  0,
@@ -496,6 +578,7 @@ func TestS3Consumer(t *testing.T) {
 			DataContentSlices: map[cloudstorage.FileIndexKey][][]byte{
 				{DispatcherID: "", EnableTableAcrossNodes: false}: {[]byte("2_2026-01-02_1.json")},
 			},
+			ColumnFieldTypes: map[string]*ptypes.FieldType{},
 		}, data[cloudstorage.DmlPathKey{
 			SchemaPathKey: cloudstorage.SchemaPathKey{Schema: "test", Table: "t1", TableVersion: 2},
 			PartitionNum:  0,
