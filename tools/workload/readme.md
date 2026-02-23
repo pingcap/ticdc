@@ -97,3 +97,4 @@ Generate writes for `bis_entity_metadata` and `bis_batch_metadata` (two tables p
 
 - Ensure the database is properly configured and has the necessary permissions.
 - Adjust the thread and batch-size parameters based on your needs.
+- Use `-batch-in-txn` to wrap each batch in a single explicit transaction (BEGIN/COMMIT).
