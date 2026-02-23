@@ -58,7 +58,7 @@ const (
 	resolveLockTickInterval time.Duration = 2 * time.Second
 	resolveLockFence        time.Duration = 4 * time.Second
 
-	resolveLastRunMaxSize = 1024
+	resolveLastRunGCThreshold = 1024
 )
 
 var (
@@ -936,11 +936,11 @@ func (s *subscriptionClient) runResolveLockChecker(ctx context.Context) error {
 }
 
 func gcResolveLastRunMap(resolveLastRun map[uint64]time.Time, now time.Time) map[uint64]time.Time {
-	if len(resolveLastRun) <= resolveLastRunMaxSize {
+	if len(resolveLastRun) <= resolveLastRunGCThreshold {
 		return resolveLastRun
 	}
 
-	copied := make(map[uint64]time.Time, resolveLastRunMaxSize)
+	copied := make(map[uint64]time.Time, len(resolveLastRun))
 	for regionID, lastRun := range resolveLastRun {
 		if now.Sub(lastRun) < resolveLockMinInterval {
 			copied[regionID] = lastRun
