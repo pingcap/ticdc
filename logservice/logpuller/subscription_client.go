@@ -57,6 +57,9 @@ const (
 	resolveLockMinInterval  time.Duration = 10 * time.Second
 	resolveLockTickInterval time.Duration = 2 * time.Second
 	resolveLockFence        time.Duration = 4 * time.Second
+
+	// resolveLastRunGCThreshold is the size threshold to GC resolveLastRun and drop stale entries.
+	resolveLastRunGCThreshold = 1024
 )
 
 var (
@@ -934,9 +937,6 @@ func (s *subscriptionClient) runResolveLockChecker(ctx context.Context) error {
 }
 
 func gcResolveLastRunMap(resolveLastRun map[uint64]time.Time, now time.Time) map[uint64]time.Time {
-	// resolveLastRunGCThreshold is the size threshold to GC resolveLastRun and drop stale entries.
-	const resolveLastRunGCThreshold = 1024
-
 	if len(resolveLastRun) <= resolveLastRunGCThreshold {
 		return resolveLastRun
 	}

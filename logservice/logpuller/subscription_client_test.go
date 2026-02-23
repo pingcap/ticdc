@@ -311,9 +311,9 @@ func TestErrCacheDispatchWithFullChannelAndCanceledContext(t *testing.T) {
 
 func TestGCResolveLastRunMap(t *testing.T) {
 	now := time.Now()
-	resolveLastRun := make(map[uint64]time.Time, resolveLastRunMaxSize+1)
+	resolveLastRun := make(map[uint64]time.Time, resolveLastRunGCThreshold+1)
 	const keep = 10
-	for i := 0; i < resolveLastRunMaxSize+1; i++ {
+	for i := 0; i < resolveLastRunGCThreshold+1; i++ {
 		lastRunTime := now.Add(-2 * resolveLockMinInterval)
 		if i < keep {
 			lastRunTime = now.Add(-resolveLockMinInterval / 2)
