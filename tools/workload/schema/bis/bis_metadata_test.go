@@ -1,0 +1,211 @@
+package bis
+
+import (
+	"math/rand"
+	"strings"
+	"sync"
+	"testing"
+
+	"workload/schema"
+)
+
+func TestBISMetadataWorkloadRowSizingAndClamping(t *testing.T) {
+	w := NewBISMetadataWorkload(10240, 4, 0, 1000).(*BISMetadataWorkload)
+
+	if w.entityMediaSize != maxEntityMediaMetadataSize {
+		t.Fatalf("entityMediaSize mismatch: got %d, want %d", w.entityMediaSize, maxEntityMediaMetadataSize)
+	}
+	if w.batchAuxSize != 1280 {
+		t.Fatalf("batchAuxSize mismatch: got %d, want %d", w.batchAuxSize, 1280)
+	}
+	if w.batchCjSize != 1280 {
+		t.Fatalf("batchCjSize mismatch: got %d, want %d", w.batchCjSize, 1280)
+	}
+	if w.batchMetaSize != 7680 {
+		t.Fatalf("batchMetaSize mismatch: got %d, want %d", w.batchMetaSize, 7680)
+	}
+	if w.perTableUpdateKeySpace != 250 {
+		t.Fatalf("perTableUpdateKeySpace mismatch: got %d, want %d", w.perTableUpdateKeySpace, 250)
+	}
+
+	w2 := NewBISMetadataWorkload(maxBatchMetadataSize+100000, 1, 0, 0).(*BISMetadataWorkload)
+	if w2.batchMetaSize != maxBatchMetadataSize {
+		t.Fatalf("batchMetaSize should be clamped: got %d, want %d", w2.batchMetaSize, maxBatchMetadataSize)
+	}
+	if w2.entityMediaSize != maxEntityMediaMetadataSize {
+		t.Fatalf("entityMediaSize should be clamped: got %d, want %d", w2.entityMediaSize, maxEntityMediaMetadataSize)
+	}
+}
+
+func TestBISMetadataWorkloadBuildCreateTableStatement(t *testing.T) {
+	w := NewBISMetadataWorkload(1024, 2, 0, 100).(*BISMetadataWorkload)
+
+	sql0 := w.BuildCreateTableStatement(0)
+	if !strings.Contains(sql0, "CREATE TABLE IF NOT EXISTS `bis_entity_metadata`") {
+		t.Fatalf("unexpected entity table ddl: %s", sql0)
+	}
+	if !strings.Contains(sql0, "CREATE TABLE IF NOT EXISTS `bis_batch_metadata`") {
+		t.Fatalf("unexpected batch table ddl: %s", sql0)
+	}
+
+	sql1 := w.BuildCreateTableStatement(1)
+	if !strings.Contains(sql1, "CREATE TABLE IF NOT EXISTS `bis_entity_metadata_1`") {
+		t.Fatalf("unexpected entity table ddl for shard: %s", sql1)
+	}
+	if !strings.Contains(sql1, "CREATE TABLE IF NOT EXISTS `bis_batch_metadata_1`") {
+		t.Fatalf("unexpected batch table ddl for shard: %s", sql1)
+	}
+}
+
+func TestBISMetadataWorkloadBuildInsertSqlWithValues(t *testing.T) {
+	w := NewBISMetadataWorkload(4096, 1, 0, 100).(*BISMetadataWorkload)
+	w.randPool = sync.Pool{New: func() any { return rand.New(rand.NewSource(1)) }}
+
+	var (
+		foundEntity bool
+		foundBatch  bool
+	)
+
+	for i := 0; i < 128 && (!foundEntity || !foundBatch); i++ {
+		sql, values := w.BuildInsertSqlWithValues(0, 3)
+
+		switch {
+		case strings.Contains(sql, "INSERT INTO `bis_entity_metadata`"):
+			foundEntity = true
+			colCount := 10
+			if strings.Contains(sql, "migrated_from_hyperloop_at") {
+				colCount = 11
+			}
+			if len(values) != 3*colCount {
+				t.Fatalf("entity insert values len mismatch: got %d, want %d", len(values), 3*colCount)
+			}
+			media, ok := values[colCount-1].(string)
+			if !ok {
+				t.Fatalf("entity media_metadata type mismatch: %T", values[colCount-1])
+			}
+			if len(media) != w.entityMediaSize {
+				t.Fatalf("entity media_metadata len mismatch: got %d, want %d", len(media), w.entityMediaSize)
+			}
+		case strings.Contains(sql, "INSERT INTO `bis_batch_metadata`"):
+			foundBatch = true
+			colCount := 9
+			if strings.Contains(sql, "aux_data") {
+				colCount = 12
+			}
+			if len(values) != 3*colCount {
+				t.Fatalf("batch insert values len mismatch: got %d, want %d", len(values), 3*colCount)
+			}
+			var meta any
+			if colCount == 9 {
+				meta = values[6]
+			} else {
+				meta = values[6]
+				aux, ok := values[8].(string)
+				if !ok {
+					t.Fatalf("batch aux_data type mismatch: %T", values[8])
+				}
+				if len(aux) != w.batchAuxSize {
+					t.Fatalf("batch aux_data len mismatch: got %d, want %d", len(aux), w.batchAuxSize)
+				}
+			}
+
+			metaBytes, ok := meta.([]byte)
+			if !ok {
+				t.Fatalf("batch metadata type mismatch: %T", meta)
+			}
+			if len(metaBytes) != w.batchMetaSize {
+				t.Fatalf("batch metadata len mismatch: got %d, want %d", len(metaBytes), w.batchMetaSize)
+			}
+		default:
+			t.Fatalf("unexpected insert sql: %s", sql)
+		}
+	}
+
+	if !foundEntity {
+		t.Fatalf("expected at least one entity insert")
+	}
+	if !foundBatch {
+		t.Fatalf("expected at least one batch insert")
+	}
+}
+
+func TestBISMetadataWorkloadBuildUpdateSqlWithValues(t *testing.T) {
+	w := NewBISMetadataWorkload(1024, 1, 0, 100).(*BISMetadataWorkload)
+	w.randPool = sync.Pool{New: func() any { return rand.New(rand.NewSource(2)) }}
+
+	// Seed some rows so updates have a chance to match.
+	_, _ = w.BuildInsertSqlWithValues(0, 8)
+	_, _ = w.BuildInsertSqlWithValues(0, 8)
+
+	var (
+		foundEntity bool
+		foundBatch  bool
+	)
+
+	for i := 0; i < 256 && (!foundEntity || !foundBatch); i++ {
+		sql, values := w.BuildUpdateSqlWithValues(schema.UpdateOption{TableIndex: 0, Batch: 4})
+
+		switch {
+		case strings.Contains(sql, "UPDATE `bis_entity_metadata`"):
+			foundEntity = true
+			switch {
+			case strings.Contains(sql, "WHERE (`pin_id` = ?)"):
+				if len(values) != 4 {
+					t.Fatalf("entity update by pin_id values len mismatch: got %d, want %d", len(values), 4)
+				}
+			case strings.Contains(sql, "WHERE (`entity_id` = ?)"):
+				if len(values) != 8 {
+					t.Fatalf("entity update by composite values len mismatch: got %d, want %d", len(values), 8)
+				}
+			case strings.Contains(sql, "SET `id` = ?"):
+				if len(values) != 4 {
+					t.Fatalf("entity update by id values len mismatch: got %d, want %d", len(values), 4)
+				}
+			default:
+				t.Fatalf("unexpected entity update sql: %s", sql)
+			}
+		case strings.Contains(sql, "UPDATE `bis_batch_metadata`"):
+			foundBatch = true
+			switch {
+			case strings.Contains(sql, "SET `updated_at` = ?, `status` = ?"):
+				if len(values) != 3 {
+					t.Fatalf("batch status update values len mismatch: got %d, want %d", len(values), 3)
+				}
+			case strings.Contains(sql, "SET `metadata` = ?, `updated_at` = ?, `status` = ?"):
+				if len(values) != 4 {
+					t.Fatalf("batch metadata update values len mismatch: got %d, want %d", len(values), 4)
+				}
+			case strings.Contains(sql, "SET `metadata` = ?, `updated_at` = ?, `user_id` = ?"):
+				if len(values) != 6 {
+					t.Fatalf("batch metadata and keys update values len mismatch: got %d, want %d", len(values), 6)
+				}
+			case strings.Contains(sql, "SET `bmd_end_timestamp` = ?, `metadata` = ?"):
+				if len(values) != 8 {
+					t.Fatalf("batch timestamp update values len mismatch: got %d, want %d", len(values), 8)
+				}
+			default:
+				t.Fatalf("unexpected batch update sql: %s", sql)
+			}
+
+			// Validate metadata payload when present.
+			for _, v := range values {
+				b, ok := v.([]byte)
+				if !ok {
+					continue
+				}
+				if len(b) != w.batchMetaSize {
+					t.Fatalf("batch metadata len mismatch: got %d, want %d", len(b), w.batchMetaSize)
+				}
+			}
+		default:
+			t.Fatalf("unexpected update sql: %s", sql)
+		}
+	}
+
+	if !foundEntity {
+		t.Fatalf("expected at least one entity update")
+	}
+	if !foundBatch {
+		t.Fatalf("expected at least one batch update")
+	}
+}

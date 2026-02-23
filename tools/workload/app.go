@@ -30,6 +30,7 @@ import (
 	pbank "workload/schema/bank"
 	pbank2 "workload/schema/bank2"
 	"workload/schema/bankupdate"
+	pbis "workload/schema/bis"
 	pcrawler "workload/schema/crawler"
 	pdc "workload/schema/dc"
 	pforwardindex "workload/schema/forwardindex"
@@ -78,6 +79,7 @@ const (
 	bankUpdate          = "bank_update"
 	dc                  = "dc"
 	stagingForwardIndex = "staging_forward_index"
+	bisMetadata         = "bis_metadata"
 )
 
 // stmtCacheKey is used as the key for statement cache
@@ -138,6 +140,8 @@ func (app *WorkloadApp) createWorkload() schema.Workload {
 		workload = pdc.NewDCWorkload()
 	case stagingForwardIndex:
 		workload = pforwardindex.NewStagingForwardIndexWorkload(app.Config.RowSize, app.Config.TotalRowCount)
+	case bisMetadata:
+		workload = pbis.NewBISMetadataWorkload(app.Config.RowSize, app.Config.TableCount, app.Config.TableStartIndex, app.Config.TotalRowCount)
 	default:
 		plog.Panic("unsupported workload type", zap.String("workload", app.Config.WorkloadType))
 	}
@@ -321,6 +325,9 @@ func (app *WorkloadApp) doInsert(conn *sql.Conn) error {
 			_, err = app.executeWithValues(conn, insertSql, j, values)
 		case stagingForwardIndex:
 			insertSql, values := app.Workload.(*pforwardindex.StagingForwardIndexWorkload).BuildInsertSqlWithValues(j, app.Config.BatchSize)
+			_, err = app.executeWithValues(conn, insertSql, j, values)
+		case bisMetadata:
+			insertSql, values := app.Workload.(*pbis.BISMetadataWorkload).BuildInsertSqlWithValues(j, app.Config.BatchSize)
 			_, err = app.executeWithValues(conn, insertSql, j, values)
 		default:
 			insertSql := app.Workload.BuildInsertSql(j, app.Config.BatchSize)

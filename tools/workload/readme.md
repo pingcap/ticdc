@@ -74,6 +74,25 @@ Generate large-row upserts based on a `staging_forward_index`-style schema (BLOB
     -percentage-for-update 0.5
 ```
 
+### 4. BIS Metadata Workload
+
+Generate writes for `bis_entity_metadata` and `bis_batch_metadata` (two tables per shard). Use `-row-size` to control payload width and `-table-count` to control shard count.
+
+```bash
+./workload -action write \
+    -database-host 127.0.0.1 \
+    -database-port 4000 \
+    -database-db-name bulk_ingestion \
+    -total-row-count 1000000 \
+    -table-count 16 \
+    -workload-type bis_metadata \
+    -row-size $((16 * 1024)) \
+    -thread 32 \
+    -batch-size 32 \
+    -percentage-for-update 0.5 \
+    -percentage-for-delete 0.05
+```
+
 ## Notes
 
 - Ensure the database is properly configured and has the necessary permissions.
