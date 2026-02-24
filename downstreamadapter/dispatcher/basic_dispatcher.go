@@ -545,7 +545,8 @@ func (d *BasicDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // When we handle events, we don't have any previous events still in sink.
 //
 // wakeCallback is used to wake the dynamic stream to handle the next batch events.
-// It will be called when all the events are flushed to downstream successfully.
+// It is triggered after DML events are enqueued to sink pipeline, while checkpoint
+// still advances only after PostFlush callbacks are completed.
 func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
 	if d.GetRemovingStatus() {
 		log.Warn("dispatcher is removing", zap.Any("id", d.id))
@@ -622,13 +623,8 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 
 			block = true
 			dml.ReplicatingTs = d.creationPDTs
-			dml.AddPostFlushFunc(func() {
-				// Considering dml event in sink may be written to downstream not in order,
-				// thus, we use tableProgress.Empty() to ensure these events are flushed to downstream completely
-				// and wake dynamic stream to handle the next events.
-				if d.tableProgress.Empty() {
-					dmlWakeOnce.Do(wakeCallback)
-				}
+			dml.AddPostEnqueueFunc(func() {
+				dmlWakeOnce.Do(wakeCallback)
 			})
 			dmlEvents = append(dmlEvents, dml)
 		case commonEvent.TypeDDLEvent:

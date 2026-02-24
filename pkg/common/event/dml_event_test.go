@@ -15,6 +15,7 @@ package event
 
 import (
 	"encoding/binary"
+	"sync/atomic"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -341,4 +342,42 @@ func TestBatchDMLEventHeaderValidation(t *testing.T) {
 	err = reverseEvent.Unmarshal(incompleteData)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "incomplete data")
+}
+
+func TestDMLEventPostEnqueueFuncs(t *testing.T) {
+	t.Parallel()
+
+	event := &DMLEvent{}
+	var called int64
+	event.AddPostEnqueueFunc(func() {
+		atomic.AddInt64(&called, 1)
+	})
+	event.AddPostEnqueueFunc(func() {
+		atomic.AddInt64(&called, 1)
+	})
+
+	event.PostEnqueue()
+	event.PostEnqueue()
+
+	require.Equal(t, int64(2), atomic.LoadInt64(&called))
+}
+
+func TestDMLEventPostFlushTriggersPostEnqueueOnce(t *testing.T) {
+	t.Parallel()
+
+	event := &DMLEvent{}
+	var enqueueCalled int64
+	var flushCalled int64
+	event.AddPostEnqueueFunc(func() {
+		atomic.AddInt64(&enqueueCalled, 1)
+	})
+	event.AddPostFlushFunc(func() {
+		atomic.AddInt64(&flushCalled, 1)
+	})
+
+	event.PostFlush()
+	event.PostFlush()
+
+	require.Equal(t, int64(1), atomic.LoadInt64(&enqueueCalled))
+	require.Equal(t, int64(2), atomic.LoadInt64(&flushCalled))
 }

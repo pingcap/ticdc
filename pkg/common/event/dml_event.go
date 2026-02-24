@@ -392,9 +392,14 @@ type DMLEvent struct {
 
 	// The following fields are set and used by dispatcher.
 	ReplicatingTs uint64 `json:"replicating_ts"`
+	// PostTxnEnqueued is the functions to be executed after the transaction is
+	// enqueued into sink internal pipeline.
+	PostTxnEnqueued []func() `json:"-"`
 	// PostTxnFlushed is the functions to be executed after the transaction is flushed.
 	// It is set and used by dispatcher.
 	PostTxnFlushed []func() `json:"-"`
+	// postEnqueueCalled ensures PostTxnEnqueued callbacks are triggered at most once.
+	postEnqueueCalled bool `json:"-"`
 
 	// eventSize is the size of the event in bytes. It is set when it's unmarshaled.
 	eventSize int64 `json:"-"`
@@ -631,7 +636,18 @@ func (t *DMLEvent) GetStartTs() common.Ts {
 }
 
 func (t *DMLEvent) PostFlush() {
+	t.PostEnqueue()
 	for _, f := range t.PostTxnFlushed {
+		f()
+	}
+}
+
+func (t *DMLEvent) PostEnqueue() {
+	if t.postEnqueueCalled {
+		return
+	}
+	t.postEnqueueCalled = true
+	for _, f := range t.PostTxnEnqueued {
 		f()
 	}
 }
@@ -654,6 +670,14 @@ func (t *DMLEvent) ClearPostFlushFunc() {
 
 func (t *DMLEvent) AddPostFlushFunc(f func()) {
 	t.PostTxnFlushed = append(t.PostTxnFlushed, f)
+}
+
+func (t *DMLEvent) ClearPostEnqueueFunc() {
+	t.PostTxnEnqueued = t.PostTxnEnqueued[:0]
+}
+
+func (t *DMLEvent) AddPostEnqueueFunc(f func()) {
+	t.PostTxnEnqueued = append(t.PostTxnEnqueued, f)
 }
 
 // Rewind reset the offset to 0, So that the next GetNextRow will return the first row
