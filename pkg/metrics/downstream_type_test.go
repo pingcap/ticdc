@@ -27,8 +27,8 @@ func TestDownstreamTypeFromSinkURI(t *testing.T) {
 		sinkURI       string
 		expectedLabel string
 	}{
-		{sinkURI: "mysql://127.0.0.1:3306/", expectedLabel: "mysql"},
-		{sinkURI: "mysql+ssl://127.0.0.1:3306/", expectedLabel: "mysql"},
+		{sinkURI: "mysql://127.0.0.1:3306/", expectedLabel: "mysql/tidb"},
+		{sinkURI: "mysql+ssl://127.0.0.1:3306/", expectedLabel: "mysql/tidb"},
 		{sinkURI: "tidb://127.0.0.1:4000/", expectedLabel: "tidb"},
 		{sinkURI: "tidb+ssl://127.0.0.1:4000/", expectedLabel: "tidb"},
 		{sinkURI: "kafka://127.0.0.1:9092/topic", expectedLabel: "kafka"},

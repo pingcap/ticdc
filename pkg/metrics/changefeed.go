@@ -102,6 +102,21 @@ var (
 			Name:      "changefeed_downstream_info",
 			Help:      "Downstream type information of changefeeds exposed as labels.",
 		}, []string{getKeyspaceLabel(), "changefeed", "downstream_type"})
+
+	// ChangefeedDownstreamIsTiDBGauge indicates whether the downstream of a
+	// MySQL-compatible sink is confirmed to be TiDB (1 means yes).
+	//
+	// This metric is only set when the sink can positively identify TiDB (for
+	// example by executing `SELECT tidb_version()`), and is intentionally absent
+	// for MySQL or unknown downstreams. Dashboards can use it to override the
+	// generic "mysql/tidb" label value with "tidb" for running changefeeds.
+	ChangefeedDownstreamIsTiDBGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "changefeed_downstream_is_tidb",
+			Help:      "Whether the downstream of a changefeed is confirmed to be TiDB (1 means yes).",
+		}, []string{getKeyspaceLabel(), "changefeed"})
 )
 
 func initChangefeedMetrics(registry *prometheus.Registry) {
@@ -115,4 +130,5 @@ func initChangefeedMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(ChangefeedCheckpointTsLagGauge)
 	registry.MustRegister(ChangefeedCheckpointTsGauge)
 	registry.MustRegister(ChangefeedDownstreamInfoGauge)
+	registry.MustRegister(ChangefeedDownstreamIsTiDBGauge)
 }

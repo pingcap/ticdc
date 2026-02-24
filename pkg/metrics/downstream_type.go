@@ -39,7 +39,10 @@ func DownstreamTypeFromSinkURI(sinkURI string) string {
 func downstreamTypeFromScheme(scheme string) string {
 	switch scheme {
 	case config.MySQLScheme, config.MySQLSSLScheme:
-		return config.MySQLScheme
+		// MySQL-compatible downstreams may be either MySQL or TiDB. We only
+		// expose a confirmed "tidb" label when the sink reports it is TiDB.
+		// Otherwise, use a combined label to avoid misleading users.
+		return "mysql/tidb"
 	case config.TiDBScheme, config.TiDBSSLScheme:
 		return config.TiDBScheme
 	case config.KafkaScheme, config.KafkaSSLScheme:

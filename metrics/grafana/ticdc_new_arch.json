@@ -4594,7 +4594,7 @@
         },
         {
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Downstream type (sink-uri scheme) of each changefeed.",
+          "description": "Downstream type of each changefeed. For MySQL-compatible sinks, it shows \"mysql/tidb\" unless the downstream is confirmed to be TiDB.",
           "fieldConfig": {
             "defaults": {
               "custom": {
@@ -4632,7 +4632,7 @@
           "pluginVersion": "7.5.17",
           "targets": [
             {
-              "expr": "max by (namespace, changefeed, downstream_type) (ticdc_owner_changefeed_downstream_info{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", changefeed=~\"$changefeed\"})",
+              "expr": "label_replace(max by (namespace, changefeed) (ticdc_sink_changefeed_downstream_is_tidb{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", changefeed=~\"$changefeed\"}), \"downstream_type\", \"tidb\", \"__name__\", \".*\") or (max by (namespace, changefeed, downstream_type) (ticdc_owner_changefeed_downstream_info{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", changefeed=~\"$changefeed\"}) unless on (namespace, changefeed) max by (namespace, changefeed) (ticdc_sink_changefeed_downstream_is_tidb{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", changefeed=~\"$changefeed\"}))",
               "format": "time_series",
               "instant": true,
               "refId": "A"
