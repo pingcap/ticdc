@@ -902,7 +902,7 @@ func TestWriteToEventStoreZstdCompressionDisabled(t *testing.T) {
 	defer store.Close(context.Background())
 
 	key := []byte("large-key")
-value := bytes.Repeat([]byte("a"), store.compressionThreshold+1)
+	value := bytes.Repeat([]byte("a"), store.compressionThreshold+1)
 	entry := common.RawKVEntry{
 		OpType:  common.OpTypePut,
 		StartTs: 200,
