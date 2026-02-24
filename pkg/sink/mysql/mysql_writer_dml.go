@@ -95,7 +95,7 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 			if w.cfg.EnableActiveActive {
 				queryList, argsList = w.genActiveActiveSQL(tableInfo, eventsInGroup)
 			} else {
-				if !w.shouldGenBatchSQL(tableInfo.HasPKOrNotNullUK, tableInfo.HasVirtualColumns(), eventsInGroup) {
+				if !w.shouldGenBatchSQL(tableInfo, eventsInGroup) {
 					queryList, argsList, rowTypesList = w.generateNormalSQLs(eventsInGroup)
 				} else {
 					queryList, argsList, rowTypesList = w.generateBatchSQL(eventsInGroup)
@@ -115,7 +115,7 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 }
 
 func (w *Writer) genActiveActiveSQL(tableInfo *common.TableInfo, eventsInGroup []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
-	if !w.shouldGenBatchSQL(tableInfo.HasPKOrNotNullUK, tableInfo.HasVirtualColumns(), eventsInGroup) {
+	if !w.shouldGenBatchSQL(tableInfo, eventsInGroup) {
 		return w.generateActiveActiveNormalSQLs(eventsInGroup)
 	}
 	return w.generateActiveActiveBatchSQL(eventsInGroup)
@@ -125,17 +125,32 @@ func (w *Writer) genActiveActiveSQL(tableInfo *common.TableInfo, eventsInGroup [
 // Batch SQL generation is used when:
 // 1. BatchDMLEnable = true, and rows > 1
 // 2. The table has a pk or not null unique key
-// 3. The table doesn't have virtual columns
+// 3. The handle key contains no virtual generated columns
 // 4. There's more than one row in the group
 // 5. All events have the same safe mode status
-func (w *Writer) shouldGenBatchSQL(hasPKOrNotNullUK bool, hasVirtualCols bool, events []*commonEvent.DMLEvent) bool {
+func (w *Writer) shouldGenBatchSQL(tableInfo *common.TableInfo, events []*commonEvent.DMLEvent) bool {
 	if !w.cfg.BatchDMLEnable {
 		return false
 	}
 
-	if !hasPKOrNotNullUK || hasVirtualCols {
+	if !tableInfo.HasPKOrNotNullUK {
 		return false
 	}
+	// if the table has pk or uk, but the handle key contains virtual generated columns,
+	// we can't batch the events by pk or uk,
+	// because the value of the virtual generated column is calculated by other column,
+	// and we can't guarantee the value of the virtual generated column is the same for the same pk or uk.
+	colIDs := tableInfo.GetOrderedHandleKeyColumnIDs()
+	for _, colID := range colIDs {
+		info, exist := tableInfo.GetColumnInfo(colID)
+		if !exist {
+			continue
+		}
+		if info.IsVirtualGenerated() {
+			return false
+		}
+	}
+	// if tableInfo.HasVirtualColumns()
 	if len(events) == 1 && events[0].Len() == 1 {
 		return false
 	}
