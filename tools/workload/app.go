@@ -141,7 +141,7 @@ func (app *WorkloadApp) createWorkload() schema.Workload {
 	case stagingForwardIndex:
 		workload = pforwardindex.NewStagingForwardIndexWorkload(app.Config.RowSize, app.Config.TotalRowCount)
 	case bisMetadata:
-		workload = pbis.NewBISMetadataWorkload(app.Config.RowSize, app.Config.TableCount, app.Config.TableStartIndex, app.Config.TotalRowCount)
+		workload = pbis.NewBISMetadataWorkload(app.Config.RowSize, app.Config.TableCount, app.Config.TableStartIndex, app.Config.TotalRowCount, app.Config.BISMetadataPayloadMode)
 	default:
 		plog.Panic("unsupported workload type", zap.String("workload", app.Config.WorkloadType))
 	}

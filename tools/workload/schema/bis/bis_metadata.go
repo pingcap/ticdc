@@ -106,6 +106,8 @@ type BISMetadataWorkload struct {
 	batchCjSize     int
 	batchMetaSize   int
 
+	payloadMode bisMetadataPayloadMode
+
 	entityMediaInsert string
 	entityMediaUpdate string
 	batchAuxData      string
@@ -126,7 +128,29 @@ type BISMetadataWorkload struct {
 	randPool sync.Pool
 }
 
-func NewBISMetadataWorkload(rowSize int, tableCount int, tableStartIndex int, totalRowCount uint64) schema.Workload {
+type bisMetadataPayloadMode uint8
+
+const (
+	bisMetadataPayloadModeConst bisMetadataPayloadMode = iota
+	bisMetadataPayloadModeZstd
+	bisMetadataPayloadModeRandom
+)
+
+func parseBISMetadataPayloadMode(mode string) bisMetadataPayloadMode {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", "const", "constant":
+		return bisMetadataPayloadModeConst
+	case "zstd", "zstd-heavy", "zstd_slow", "json":
+		return bisMetadataPayloadModeZstd
+	case "random", "rand", "incompressible":
+		return bisMetadataPayloadModeRandom
+	default:
+		plog.Warn("unsupported bis metadata payload mode, use const", zap.String("payloadMode", mode))
+		return bisMetadataPayloadModeConst
+	}
+}
+
+func NewBISMetadataWorkload(rowSize int, tableCount int, tableStartIndex int, totalRowCount uint64, payloadMode string) schema.Workload {
 	if rowSize < 0 {
 		rowSize = 0
 	}
@@ -159,21 +183,27 @@ func NewBISMetadataWorkload(rowSize int, tableCount int, tableStartIndex int, to
 		perTableUpdateKeySpace = maxUint64(1, totalRowCount/uint64(tableCount))
 	}
 
+	mode := parseBISMetadataPayloadMode(payloadMode)
+
 	w := &BISMetadataWorkload{
 		entityMediaSize:        entityMediaSize,
 		batchAuxSize:           auxSize,
 		batchCjSize:            cjSize,
 		batchMetaSize:          metaSize,
-		entityMediaInsert:      strings.Repeat("a", entityMediaSize),
-		entityMediaUpdate:      strings.Repeat("b", entityMediaSize),
-		batchAuxData:           strings.Repeat("c", auxSize),
-		batchCjData:            strings.Repeat("d", cjSize),
-		batchMetaInsert:        newConstBytes(metaSize, 'e'),
-		batchMetaUpdate:        newConstBytes(metaSize, 'f'),
+		payloadMode:            mode,
 		tableStartIndex:        tableStartIndex,
 		entitySeq:              make([]atomic.Uint64, tableCount),
 		batchSeq:               make([]atomic.Uint64, tableCount),
 		perTableUpdateKeySpace: perTableUpdateKeySpace,
+	}
+
+	if mode == bisMetadataPayloadModeConst {
+		w.entityMediaInsert = strings.Repeat("a", entityMediaSize)
+		w.entityMediaUpdate = strings.Repeat("b", entityMediaSize)
+		w.batchAuxData = strings.Repeat("c", auxSize)
+		w.batchCjData = strings.Repeat("d", cjSize)
+		w.batchMetaInsert = newConstBytes(metaSize, 'e')
+		w.batchMetaUpdate = newConstBytes(metaSize, 'f')
 	}
 
 	w.seed.Store(time.Now().UnixNano())
@@ -191,10 +221,158 @@ func NewBISMetadataWorkload(rowSize int, tableCount int, tableStartIndex int, to
 		zap.Int("batchAuxDataSize", w.batchAuxSize),
 		zap.Int("batchCallbackJobMetadataSize", w.batchCjSize),
 		zap.Int("batchMetadataSize", w.batchMetaSize),
+		zap.String("payloadMode", payloadMode),
 		zap.Uint64("perTableUpdateKeySpace", w.perTableUpdateKeySpace),
 		zap.Int("tableStartIndex", w.tableStartIndex),
 		zap.Int("tableSlots", len(w.entitySeq)))
 	return w
+}
+
+var (
+	bisAlphaNum = []byte("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+	bisDigits   = []byte("0123456789")
+
+	bisZstdChunkPrefix = []byte(`{"key":"`)
+	bisZstdChunkMid1   = []byte(`","val":"`)
+	bisZstdChunkMid2   = []byte(`","ts":"`)
+	bisZstdChunkMid3   = []byte(`","extra":"`)
+	bisZstdChunkSuffix = []byte("\"}\n")
+)
+
+const (
+	bisZstdKeyLen   = 16
+	bisZstdValLen   = 48
+	bisZstdTsLen    = 10
+	bisZstdExtraLen = 64
+)
+
+func fillRandomFromAlphabet(dst []byte, r *rand.Rand, alphabet []byte) {
+	if len(dst) == 0 {
+		return
+	}
+	if r == nil {
+		for i := range dst {
+			dst[i] = alphabet[rand.Intn(len(alphabet))]
+		}
+		return
+	}
+	_, _ = r.Read(dst)
+	for i, b := range dst {
+		dst[i] = alphabet[int(b)%len(alphabet)]
+	}
+}
+
+func fillZstdHeavyPayload(dst []byte, r *rand.Rand) {
+	minChunkLen := len(bisZstdChunkPrefix) + bisZstdKeyLen +
+		len(bisZstdChunkMid1) + bisZstdValLen +
+		len(bisZstdChunkMid2) + bisZstdTsLen +
+		len(bisZstdChunkMid3) + bisZstdExtraLen +
+		len(bisZstdChunkSuffix)
+	if len(dst) < minChunkLen {
+		fillRandomFromAlphabet(dst, r, bisAlphaNum)
+		return
+	}
+
+	pos := 0
+	for pos < len(dst) {
+		if len(dst)-pos < minChunkLen {
+			fillRandomFromAlphabet(dst[pos:], r, bisAlphaNum)
+			return
+		}
+
+		pos += copy(dst[pos:], bisZstdChunkPrefix)
+		fillRandomFromAlphabet(dst[pos:pos+bisZstdKeyLen], r, bisAlphaNum)
+		pos += bisZstdKeyLen
+
+		pos += copy(dst[pos:], bisZstdChunkMid1)
+		fillRandomFromAlphabet(dst[pos:pos+bisZstdValLen], r, bisAlphaNum)
+		pos += bisZstdValLen
+
+		pos += copy(dst[pos:], bisZstdChunkMid2)
+		fillRandomFromAlphabet(dst[pos:pos+bisZstdTsLen], r, bisDigits)
+		pos += bisZstdTsLen
+
+		pos += copy(dst[pos:], bisZstdChunkMid3)
+		fillRandomFromAlphabet(dst[pos:pos+bisZstdExtraLen], r, bisAlphaNum)
+		pos += bisZstdExtraLen
+
+		pos += copy(dst[pos:], bisZstdChunkSuffix)
+	}
+}
+
+func (w *BISMetadataWorkload) entityMediaInsertPayload(r *rand.Rand) string {
+	switch w.payloadMode {
+	case bisMetadataPayloadModeZstd:
+		buf := make([]byte, w.entityMediaSize)
+		fillZstdHeavyPayload(buf, r)
+		return string(buf)
+	case bisMetadataPayloadModeRandom:
+		buf := make([]byte, w.entityMediaSize)
+		fillRandomFromAlphabet(buf, r, bisAlphaNum)
+		return string(buf)
+	default:
+		return w.entityMediaInsert
+	}
+}
+
+func (w *BISMetadataWorkload) batchAuxPayload(r *rand.Rand) string {
+	switch w.payloadMode {
+	case bisMetadataPayloadModeZstd:
+		buf := make([]byte, w.batchAuxSize)
+		fillZstdHeavyPayload(buf, r)
+		return string(buf)
+	case bisMetadataPayloadModeRandom:
+		buf := make([]byte, w.batchAuxSize)
+		fillRandomFromAlphabet(buf, r, bisAlphaNum)
+		return string(buf)
+	default:
+		return w.batchAuxData
+	}
+}
+
+func (w *BISMetadataWorkload) batchCjPayload(r *rand.Rand) string {
+	switch w.payloadMode {
+	case bisMetadataPayloadModeZstd:
+		buf := make([]byte, w.batchCjSize)
+		fillZstdHeavyPayload(buf, r)
+		return string(buf)
+	case bisMetadataPayloadModeRandom:
+		buf := make([]byte, w.batchCjSize)
+		fillRandomFromAlphabet(buf, r, bisAlphaNum)
+		return string(buf)
+	default:
+		return w.batchCjData
+	}
+}
+
+func (w *BISMetadataWorkload) batchMetaInsertPayload(r *rand.Rand) []byte {
+	switch w.payloadMode {
+	case bisMetadataPayloadModeZstd:
+		buf := make([]byte, w.batchMetaSize)
+		fillZstdHeavyPayload(buf, r)
+		return buf
+	case bisMetadataPayloadModeRandom:
+		buf := make([]byte, w.batchMetaSize)
+		_, _ = r.Read(buf)
+		return buf
+	default:
+		return w.batchMetaInsert
+	}
+}
+
+func (w *BISMetadataWorkload) batchMetaUpdatePayload(r *rand.Rand) []byte {
+	switch w.payloadMode {
+	case bisMetadataPayloadModeZstd:
+		buf := make([]byte, w.batchMetaSize)
+		fillZstdHeavyPayload(buf, r)
+		return buf
+	case bisMetadataPayloadModeRandom:
+		buf := make([]byte, w.batchMetaSize)
+		_, _ = r.Read(buf)
+		return buf
+	default:
+		return w.batchMetaUpdate
+	}
 }
 
 func (w *BISMetadataWorkload) getRand() *rand.Rand {
@@ -320,11 +498,11 @@ func (w *BISMetadataWorkload) buildEntityInsertWithValues(tableIndex int, batchS
 		if includeMigrated {
 			placeholders = append(placeholders, "(?,?,?,?,?,?,?,?,?,?,?)")
 			values = append(values,
-				now, now, id, userID, entitySetID, entityID, boardID, contentHash, pinID, w.entityMediaInsert, now)
+				now, now, id, userID, entitySetID, entityID, boardID, contentHash, pinID, w.entityMediaInsertPayload(r), now)
 		} else {
 			placeholders = append(placeholders, "(?,?,?,?,?,?,?,?,?,?)")
 			values = append(values,
-				now, now, id, userID, entitySetID, entityID, boardID, contentHash, pinID, w.entityMediaInsert)
+				now, now, id, userID, entitySetID, entityID, boardID, contentHash, pinID, w.entityMediaInsertPayload(r))
 		}
 	}
 
@@ -367,12 +545,12 @@ func (w *BISMetadataWorkload) buildBatchInsertWithValues(tableIndex int, batchSi
 		if includeAux {
 			placeholders = append(placeholders, "(?,?,?,?,?,?,?,?,?,?,?,?)")
 			values = append(values,
-				now, now, id, userID, entitySetID, status, w.batchMetaInsert, clientID,
-				w.batchAuxData, w.batchCjData, fmt.Sprintf("pipe_%d", seq%100), fmt.Sprintf("client_%d", seq%100))
+				now, now, id, userID, entitySetID, status, w.batchMetaInsertPayload(r), clientID,
+				w.batchAuxPayload(r), w.batchCjPayload(r), fmt.Sprintf("pipe_%d", seq%100), fmt.Sprintf("client_%d", seq%100))
 		} else {
 			placeholders = append(placeholders, "(?,?,?,?,?,?,?,?,?)")
 			values = append(values,
-				now, now, id, userID, entitySetID, status, w.batchMetaInsert, clientID, w.batchCjData)
+				now, now, id, userID, entitySetID, status, w.batchMetaInsertPayload(r), clientID, w.batchCjPayload(r))
 		}
 	}
 
@@ -440,19 +618,19 @@ func (w *BISMetadataWorkload) buildBatchUpdateWithValues(tableIndex int, r *rand
 		return sql, []interface{}{now, status, id}
 	case p < batchUpdateStatusOnlyWeight+batchUpdateMetadataWeight:
 		sql := fmt.Sprintf("UPDATE %s SET `metadata` = ?, `updated_at` = ?, `status` = ? WHERE (`id` = ?)", tableName)
-		return sql, []interface{}{w.batchMetaUpdate, now, status, id}
+		return sql, []interface{}{w.batchMetaUpdatePayload(r), now, status, id}
 	case p < batchUpdateStatusOnlyWeight+batchUpdateMetadataWeight+batchUpdateMetadataAndKeysWeight:
 		userID := w.userID(tableIndex, uint64(now.UnixNano()))
 		entitySetID := w.entitySetID(uint64(now.UnixNano()))
 		sql := fmt.Sprintf("UPDATE %s SET `metadata` = ?, `updated_at` = ?, `user_id` = ?, `entity_set_id` = ?, `status` = ? WHERE (`id` = ?)", tableName)
-		return sql, []interface{}{w.batchMetaUpdate, now, userID, entitySetID, status, id}
+		return sql, []interface{}{w.batchMetaUpdatePayload(r), now, userID, entitySetID, status, id}
 	default:
 		userID := w.userID(tableIndex, uint64(now.UnixNano()))
 		entitySetID := w.entitySetID(uint64(now.UnixNano()))
 		start := now.Add(-time.Minute)
 		end := now
 		sql := fmt.Sprintf("UPDATE %s SET `bmd_end_timestamp` = ?, `metadata` = ?, `updated_at` = ?, `user_id` = ?, `bmd_start_timestamp` = ?, `entity_set_id` = ?, `status` = ? WHERE (`id` = ?)", tableName)
-		return sql, []interface{}{end, w.batchMetaUpdate, now, userID, start, entitySetID, status, id}
+		return sql, []interface{}{end, w.batchMetaUpdatePayload(r), now, userID, start, entitySetID, status, id}
 	}
 }
 

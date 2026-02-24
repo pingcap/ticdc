@@ -55,6 +55,8 @@ type WorkloadConfig struct {
 	UpdateLargeColumnSize int
 	// For sysbench workload
 	RangeNum int
+	// Only for bis_metadata workload
+	BISMetadataPayloadMode string
 
 	// Log related
 	LogFile  string
@@ -100,6 +102,9 @@ func NewWorkloadConfig() *WorkloadConfig {
 		// For sysbench workload
 		RangeNum: 5,
 
+		// For bis_metadata workload
+		BISMetadataPayloadMode: "const",
+
 		// Log related
 		LogFile:  "workload.log",
 		LogLevel: "info",
@@ -136,6 +141,8 @@ func (c *WorkloadConfig) ParseFlags() error {
 	flag.IntVar(&c.UpdateLargeColumnSize, "update-large-column-size", c.UpdateLargeColumnSize, "the size of the large column to update")
 	// For sysbench workload
 	flag.IntVar(&c.RangeNum, "range-num", c.RangeNum, "the number of ranges for sysbench workload")
+	// For bis_metadata workload
+	flag.StringVar(&c.BISMetadataPayloadMode, "bis-metadata-payload-mode", c.BISMetadataPayloadMode, "payload mode for bis_metadata: [const, zstd, random]")
 
 	flag.Parse()
 

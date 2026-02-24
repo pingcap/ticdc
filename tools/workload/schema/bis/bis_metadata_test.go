@@ -1,6 +1,7 @@
 package bis
 
 import (
+	"bytes"
 	"math/rand"
 	"strings"
 	"sync"
@@ -10,7 +11,7 @@ import (
 )
 
 func TestBISMetadataWorkloadRowSizingAndClamping(t *testing.T) {
-	w := NewBISMetadataWorkload(10240, 4, 0, 1000).(*BISMetadataWorkload)
+	w := NewBISMetadataWorkload(10240, 4, 0, 1000, "const").(*BISMetadataWorkload)
 
 	if w.entityMediaSize != maxEntityMediaMetadataSize {
 		t.Fatalf("entityMediaSize mismatch: got %d, want %d", w.entityMediaSize, maxEntityMediaMetadataSize)
@@ -28,7 +29,7 @@ func TestBISMetadataWorkloadRowSizingAndClamping(t *testing.T) {
 		t.Fatalf("perTableUpdateKeySpace mismatch: got %d, want %d", w.perTableUpdateKeySpace, 250)
 	}
 
-	w2 := NewBISMetadataWorkload(maxBatchMetadataSize+100000, 1, 0, 0).(*BISMetadataWorkload)
+	w2 := NewBISMetadataWorkload(maxBatchMetadataSize+100000, 1, 0, 0, "const").(*BISMetadataWorkload)
 	if w2.batchMetaSize != maxBatchMetadataSize {
 		t.Fatalf("batchMetaSize should be clamped: got %d, want %d", w2.batchMetaSize, maxBatchMetadataSize)
 	}
@@ -38,7 +39,7 @@ func TestBISMetadataWorkloadRowSizingAndClamping(t *testing.T) {
 }
 
 func TestBISMetadataWorkloadBuildCreateTableStatement(t *testing.T) {
-	w := NewBISMetadataWorkload(1024, 2, 0, 100).(*BISMetadataWorkload)
+	w := NewBISMetadataWorkload(1024, 2, 0, 100, "const").(*BISMetadataWorkload)
 
 	sql0 := w.BuildCreateTableStatement(0)
 	if !strings.Contains(sql0, "CREATE TABLE IF NOT EXISTS `bis_entity_metadata`") {
@@ -58,7 +59,7 @@ func TestBISMetadataWorkloadBuildCreateTableStatement(t *testing.T) {
 }
 
 func TestBISMetadataWorkloadBuildInsertSqlWithValues(t *testing.T) {
-	w := NewBISMetadataWorkload(4096, 1, 0, 100).(*BISMetadataWorkload)
+	w := NewBISMetadataWorkload(4096, 1, 0, 100, "const").(*BISMetadataWorkload)
 	w.randPool = sync.Pool{New: func() any { return rand.New(rand.NewSource(1)) }}
 
 	var (
@@ -130,7 +131,7 @@ func TestBISMetadataWorkloadBuildInsertSqlWithValues(t *testing.T) {
 }
 
 func TestBISMetadataWorkloadBuildUpdateSqlWithValues(t *testing.T) {
-	w := NewBISMetadataWorkload(1024, 1, 0, 100).(*BISMetadataWorkload)
+	w := NewBISMetadataWorkload(1024, 1, 0, 100, "const").(*BISMetadataWorkload)
 	w.randPool = sync.Pool{New: func() any { return rand.New(rand.NewSource(2)) }}
 
 	// Seed some rows so updates have a chance to match.
@@ -207,5 +208,34 @@ func TestBISMetadataWorkloadBuildUpdateSqlWithValues(t *testing.T) {
 	}
 	if !foundBatch {
 		t.Fatalf("expected at least one batch update")
+	}
+}
+
+func TestBISMetadataWorkloadZstdPayloadMode(t *testing.T) {
+	w := NewBISMetadataWorkload(2048, 1, 0, 100, "zstd").(*BISMetadataWorkload)
+	r := rand.New(rand.NewSource(3))
+
+	_, entityValues := w.buildEntityInsertWithValues(0, 1, r)
+	media, ok := entityValues[9].(string)
+	if !ok {
+		t.Fatalf("entity media_metadata type mismatch: %T", entityValues[9])
+	}
+	if len(media) != w.entityMediaSize {
+		t.Fatalf("entity media_metadata len mismatch: got %d, want %d", len(media), w.entityMediaSize)
+	}
+	if !strings.Contains(media, `{"key":"`) {
+		t.Fatalf("expected zstd payload signature in entity media_metadata")
+	}
+
+	_, batchValues := w.buildBatchInsertWithValues(0, 1, r)
+	metaBytes, ok := batchValues[6].([]byte)
+	if !ok {
+		t.Fatalf("batch metadata type mismatch: %T", batchValues[6])
+	}
+	if len(metaBytes) != w.batchMetaSize {
+		t.Fatalf("batch metadata len mismatch: got %d, want %d", len(metaBytes), w.batchMetaSize)
+	}
+	if !bytes.Contains(metaBytes, []byte(`{"key":"`)) {
+		t.Fatalf("expected zstd payload signature in batch metadata")
 	}
 }
