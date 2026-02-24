@@ -43,17 +43,17 @@ func TestReportTransientErrorByChannelState(t *testing.T) {
 	}
 
 	t.Run("handled true when output channel available", func(t *testing.T) {
-		eventCh := make(chan *recoverable.RecoverEvent, 1)
+		reporter := recoverable.NewReporter(1)
 		p := &saramaAsyncProducer{
 			changefeedID: commonType.NewChangeFeedIDWithName("test", commonType.DefaultKeyspaceName),
-			reporter:     recoverable.NewReporter(eventCh),
+			reporter:     reporter,
 		}
 
 		handled := p.reportTransientError(baseErr)
 		require.True(t, handled)
 
 		select {
-		case event := <-eventCh:
+		case event := <-reporter.OutputCh():
 			require.Equal(t, []commonType.DispatcherID{dispatcherID}, event.DispatcherIDs)
 		default:
 			t.Fatal("expected recoverable event to be sent")
@@ -61,15 +61,21 @@ func TestReportTransientErrorByChannelState(t *testing.T) {
 	})
 
 	t.Run("handled false when output channel is full", func(t *testing.T) {
-		eventCh := make(chan *recoverable.RecoverEvent, 1)
-		eventCh <- &recoverable.RecoverEvent{}
+		reporter := recoverable.NewReporter(1)
+		_, reported := reporter.Report([]recoverable.DispatcherEpoch{
+			{
+				DispatcherID: commonType.NewDispatcherID(),
+				Epoch:        1,
+			},
+		})
+		require.True(t, reported)
 		p := &saramaAsyncProducer{
 			changefeedID: commonType.NewChangeFeedIDWithName("test", commonType.DefaultKeyspaceName),
-			reporter:     recoverable.NewReporter(eventCh),
+			reporter:     reporter,
 		}
 
 		handled := p.reportTransientError(baseErr)
 		require.False(t, handled)
-		require.Len(t, eventCh, 1)
+		require.Equal(t, 1, len(reporter.OutputCh()))
 	})
 }

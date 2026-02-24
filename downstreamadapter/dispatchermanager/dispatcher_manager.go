@@ -47,8 +47,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const recoverEventChSize = 32
-
 /*
 DispatcherManager manages dispatchers for a changefeed instance with responsibilities including:
 
@@ -106,9 +104,11 @@ type DispatcherManager struct {
 	// this is a instance level queue, shared by all dispatcher managers.
 	recoverDispatcherRequestQueue chan *RecoverDispatcherRequestWithTargetID
 
-	// recoverEventCh carries recoverable event that should trigger dispatcher-level recovery.
-	// this is a changefeed-level channel, forward event to the queue.
-	recoverEventCh chan *recoverable.RecoverEvent
+	// reporter is used to report recoverable request.
+	reporter *recoverable.Reporter
+	// recoverTracker tracks dispatchers that have sent recover requests and are waiting
+	// for the new dispatcher instance to become working.
+	recoverTracker *recoverTracker
 
 	// heartBeatTask is responsible for collecting the heartbeat info from all the dispatchers
 	// and report to the maintainer periodicity.
@@ -233,9 +233,10 @@ func NewDispatcherManager(
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	if recover, ok := manager.sink.(recoverable.Recoverable); ok {
-		manager.recoverEventCh = make(chan *recoverable.RecoverEvent, recoverEventChSize)
-		recover.SetRecoverEventCh(manager.recoverEventCh)
+	if recoverSink, ok := manager.sink.(recoverable.Recoverable); ok {
+		manager.reporter = recoverable.NewReporter(recoverEventChSize)
+		manager.recoverTracker = newRecoverTracker(changefeedID)
+		recoverSink.SetRecoverReporter(manager.reporter)
 	}
 
 	// Determine outputRawChangeEvent based on sink type
@@ -293,7 +294,7 @@ func NewDispatcherManager(
 		manager.handleError(ctx, err)
 	}()
 
-	if manager.recoverEventCh != nil {
+	if manager.reporter != nil {
 		manager.wg.Add(1)
 		go func() {
 			defer manager.wg.Done()
@@ -650,6 +651,7 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 		case <-ctx.Done():
 			return
 		case tableSpanStatus := <-e.sharedInfo.GetStatusesChan():
+			e.onDispatcherStatusForRecover(tableSpanStatus.TableSpanStatus)
 			statusMessage = append(statusMessage, tableSpanStatus.TableSpanStatus)
 			if common.IsDefaultMode(tableSpanStatus.Mode) {
 				// Note: tableSpanStatus.Seq is the seq assigned when that dispatcher was created.
@@ -680,6 +682,7 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 			for {
 				select {
 				case tableSpanStatus := <-e.sharedInfo.GetStatusesChan():
+					e.onDispatcherStatusForRecover(tableSpanStatus.TableSpanStatus)
 					statusMessage = append(statusMessage, tableSpanStatus.TableSpanStatus)
 					if common.IsDefaultMode(tableSpanStatus.Mode) {
 						if newWatermark.Seq < tableSpanStatus.Seq {
@@ -712,11 +715,24 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 
 // collect recover event and report to maintainer for dispatcher-level recovery.
 func (e *DispatcherManager) collectRecoverableEvents(ctx context.Context) {
+	if e.reporter == nil {
+		return
+	}
+	if e.recoverTracker == nil {
+		return
+	}
+
+	ticker := time.NewTicker(recoverLifecycleCheckInterval)
+	defer ticker.Stop()
+
+	eventCh := e.reporter.OutputCh()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case event := <-e.recoverEventCh:
+		case <-ticker.C:
+			e.reportRecoverPendingTimeout(ctx)
+		case event := <-eventCh:
 			if event == nil {
 				continue
 			}
@@ -735,8 +751,17 @@ func (e *DispatcherManager) collectRecoverableEvents(ctx context.Context) {
 				continue
 			}
 
-			dispatcherIDs := make([]*heartbeatpb.DispatcherID, 0, len(event.DispatcherIDs))
-			for _, dispatcherID := range event.DispatcherIDs {
+			localDispatcherIDs := e.filterLocalRecoverDispatcherIDs(event.DispatcherIDs)
+			if len(localDispatcherIDs) == 0 {
+				continue
+			}
+			dispatcherIDsToRecover := e.recoverTracker.filterNonPending(localDispatcherIDs)
+			if len(dispatcherIDsToRecover) == 0 {
+				continue
+			}
+
+			dispatcherIDs := make([]*heartbeatpb.DispatcherID, 0, len(dispatcherIDsToRecover))
+			for _, dispatcherID := range dispatcherIDsToRecover {
 				dispatcherIDs = append(dispatcherIDs, dispatcherID.ToPB())
 			}
 			req := &heartbeatpb.RecoverDispatcherRequest{
@@ -760,9 +785,109 @@ func (e *DispatcherManager) collectRecoverableEvents(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case e.recoverDispatcherRequestQueue <- request:
+				e.recoverTracker.add(dispatcherIDsToRecover)
 			}
 		}
 	}
+}
+
+func (e *DispatcherManager) filterLocalRecoverDispatcherIDs(dispatcherIDs []common.DispatcherID) []common.DispatcherID {
+	if len(dispatcherIDs) == 0 {
+		return nil
+	}
+
+	local := make([]common.DispatcherID, 0, len(dispatcherIDs))
+	seen := make(map[common.DispatcherID]struct{}, len(dispatcherIDs))
+	for _, dispatcherID := range dispatcherIDs {
+		if _, ok := seen[dispatcherID]; ok {
+			continue
+		}
+		seen[dispatcherID] = struct{}{}
+
+		if e.isLocalRecoverDispatcher(dispatcherID) {
+			local = append(local, dispatcherID)
+			continue
+		}
+
+		e.clearRecoverState(dispatcherID)
+		log.Info("ignore recover dispatcher request for non-local dispatcher",
+			zap.Stringer("changefeedID", e.changefeedID),
+			zap.Stringer("dispatcherID", dispatcherID))
+	}
+	return local
+}
+
+func (e *DispatcherManager) isLocalRecoverDispatcher(dispatcherID common.DispatcherID) bool {
+	if _, ok := e.dispatcherMap.Get(dispatcherID); ok {
+		return true
+	}
+	if e.redoDispatcherMap == nil {
+		return false
+	}
+	if _, ok := e.redoDispatcherMap.Get(dispatcherID); ok {
+		return true
+	}
+	return false
+}
+
+func (e *DispatcherManager) clearRecoverState(dispatcherID common.DispatcherID) {
+	if e.recoverTracker != nil {
+		e.recoverTracker.remove(dispatcherID)
+	}
+	if e.reporter != nil {
+		e.reporter.Clear(dispatcherID)
+	}
+}
+
+func (e *DispatcherManager) onDispatcherStatusForRecover(status *heartbeatpb.TableSpanStatus) {
+	if status == nil {
+		return
+	}
+	if status.ComponentStatus != heartbeatpb.ComponentState_Working {
+		return
+	}
+	if status.ID == nil {
+		return
+	}
+	if e.reporter == nil {
+		return
+	}
+	if e.recoverTracker == nil {
+		return
+	}
+
+	dispatcherID := common.NewDispatcherIDFromPB(status.ID)
+	acked := e.recoverTracker.remove(dispatcherID)
+	if !acked {
+		return
+	}
+	e.reporter.Clear(dispatcherID)
+	log.Info("clear recover reporter state after dispatcher is working",
+		zap.Stringer("changefeedID", e.changefeedID),
+		zap.Stringer("dispatcherID", dispatcherID))
+}
+
+func (e *DispatcherManager) reportRecoverPendingTimeout(ctx context.Context) {
+	if e.recoverTracker == nil {
+		return
+	}
+
+	timedOut := e.recoverTracker.takeExpired()
+	if len(timedOut) == 0 {
+		return
+	}
+	firstDispatcherID := timedOut[0]
+	log.Warn("recover dispatcher request timeout before dispatcher is working, trigger changefeed fallback",
+		zap.Stringer("changefeedID", e.changefeedID),
+		zap.Int("dispatcherCount", len(timedOut)),
+		zap.Stringer("firstDispatcherID", firstDispatcherID))
+
+	if e.sharedInfo == nil {
+		return
+	}
+
+	timeoutErr := errors.ErrTimeout.GenWithStackByArgs("recover dispatcher request timeout", firstDispatcherID.String())
+	e.handleError(ctx, errors.WrapError(errors.ErrChangefeedRetryable, timeoutErr))
 }
 
 // aggregateDispatcherHeartbeats aggregates heartbeat information from all dispatchers and generates a HeartBeatRequest.
@@ -1038,6 +1163,7 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 
 // cleanEventDispatcher is called when the event dispatcher is removed successfully.
 func (e *DispatcherManager) cleanEventDispatcher(id common.DispatcherID, schemaID int64) {
+	e.clearRecoverState(id)
 	e.dispatcherMap.Delete(id)
 	e.schemaIDToDispatchers.Delete(schemaID, id)
 	tableTriggerEventDispatcher := e.GetTableTriggerEventDispatcher()
@@ -1063,10 +1189,13 @@ func (e *DispatcherManager) cleanMetrics() {
 	metrics.DispatcherManagerResolvedTsLagGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
 	metrics.DispatcherManagerBlockStatusesChanLenGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
 	metrics.DispatcherManagerRecoverEventCount.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
-
 	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
 	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
 	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
+
+	if e.recoverTracker != nil {
+		e.recoverTracker.close()
+	}
 }
 
 // ==== remove and clean related functions END ====

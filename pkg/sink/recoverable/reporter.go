@@ -14,73 +14,90 @@
 package recoverable
 
 import (
+	"sync"
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
 )
 
-// RecoverEvent is a structured recover event notification emitted by a sink.
-// DispatcherManager forwards it to maintainer to trigger localized recovery.
+// RecoverEvent is a structured recover notification emitted by a sink.
 type RecoverEvent struct {
 	Time          time.Time
 	DispatcherIDs []common.DispatcherID
 }
 
-// Recoverable is an optional interface implemented by sinks that can report recoverable request.
+// Recoverable is implemented by sinks that can report recoverable errors.
 type Recoverable interface {
-	SetRecoverEventCh(ch chan<- *RecoverEvent)
+	SetRecoverReporter(reporter *Reporter)
 }
 
 type DispatcherEpoch struct {
 	// DispatcherID identifies the dispatcher that produced the recoverable error.
 	DispatcherID common.DispatcherID
-	// Epoch is bumped when maintainer restarts the dispatcher.
-	// Same dispatcher should be reported at most once per epoch.
+	// Epoch identifies the dispatcher instance/version observed by the sink.
+	// The same dispatcher should be reported at most once per epoch.
 	Epoch uint64
 }
 
 // Reporter deduplicates reported errors by dispatcher and epoch,
 // and sends recoverable error events through a non-blocking channel.
 type Reporter struct {
-	// outputCh receives recoverable error events for maintainer handling.
-	outputCh chan<- *RecoverEvent
+	// outputCh receives recoverable events.
+	outputCh chan *RecoverEvent
+
+	mu sync.Mutex
 	// reported keeps the max epoch that has been successfully enqueued per dispatcher.
 	reported map[common.DispatcherID]uint64
 }
 
-func NewReporter(outputCh chan<- *RecoverEvent) *Reporter {
+func NewReporter(size int) *Reporter {
+	if size < 0 {
+		size = 0
+	}
 	return &Reporter{
-		outputCh: outputCh,
+		outputCh: make(chan *RecoverEvent, size),
 		reported: make(map[common.DispatcherID]uint64),
 	}
 }
 
-// Report reports recoverable error once per dispatcher epoch.
-// Input assumption:
-// - dispatchers are pre-normalized: one item per DispatcherID with the max epoch.
-//
-// This assumption is guaranteed on the current path:
-// BuildRecoverInfo deduplicates dispatcher epochs, and
-// callers pass that normalized dispatcher list into Report.
-// Report is expected to be called serially on the current path.
+func (r *Reporter) OutputCh() <-chan *RecoverEvent {
+	return r.outputCh
+}
+
+// Report reports recoverable errors once per dispatcher epoch.
+// It accepts non-normalized input and deduplicates dispatcher IDs per call by
+// keeping the max epoch for each dispatcher.
 // It returns:
 // - reported dispatcher IDs in this call.
 // - handled=true when the error is consumed by dedupe or successfully enqueued.
-// - handled=false when this reporter cannot handle it (e.g. output channel unavailable/full).
+// - handled=false when this reporter cannot enqueue in non-blocking mode (e.g. channel full).
 func (r *Reporter) Report(
 	dispatchers []DispatcherEpoch,
 ) ([]common.DispatcherID, bool) {
-	if r.outputCh == nil {
-		return nil, false
-	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
 	if len(dispatchers) == 0 {
 		return nil, false
 	}
 
-	// candidates collects dispatchers that still need a recover event after dedupe.
-	candidates := make([]DispatcherEpoch, 0, len(dispatchers))
+	normalized := make([]DispatcherEpoch, 0, len(dispatchers))
+	indexByDispatcher := make(map[common.DispatcherID]int, len(dispatchers))
 	for _, dispatcher := range dispatchers {
+		dispatcherID := dispatcher.DispatcherID
+		if idx, ok := indexByDispatcher[dispatcherID]; ok {
+			if dispatcher.Epoch > normalized[idx].Epoch {
+				normalized[idx].Epoch = dispatcher.Epoch
+			}
+			continue
+		}
+		indexByDispatcher[dispatcherID] = len(normalized)
+		normalized = append(normalized, dispatcher)
+	}
+
+	// candidates collects dispatchers that still need a recover event after dedupe.
+	candidates := make([]DispatcherEpoch, 0, len(normalized))
+	for _, dispatcher := range normalized {
 		dispatcherID := dispatcher.DispatcherID
 		if reportedEpoch, ok := r.reported[dispatcherID]; ok && dispatcher.Epoch <= reportedEpoch {
 			continue
@@ -111,4 +128,12 @@ func (r *Reporter) Report(
 	default:
 	}
 	return nil, false
+}
+
+// Clear removes dedupe state for one dispatcher.
+// The next report for this dispatcher is treated as a new lifecycle.
+func (r *Reporter) Clear(dispatcherID common.DispatcherID) {
+	r.mu.Lock()
+	delete(r.reported, dispatcherID)
+	r.mu.Unlock()
 }

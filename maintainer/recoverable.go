@@ -60,8 +60,8 @@ type recoverDispatcherHandler struct {
 func newRecoverDispatcherHandler(m *Maintainer) *recoverDispatcherHandler {
 	return &recoverDispatcherHandler{
 		maintainer: m,
-		// at the moment, it only support kafka sink, so it's must default mode.
-		// if redo sink supported in the future, make sure add the redo mode here.
+		// Recover dispatcher requests are handled on the default replication mode path.
+		// If other modes support this flow in the future, extend here.
 		operatorController: m.controller.getOperatorController(common.DefaultMode),
 		spanController:     m.controller.getSpanController(common.DefaultMode),
 		tracked:            make(map[common.DispatcherID]recoverableState),
@@ -74,14 +74,24 @@ func (h *recoverDispatcherHandler) handle(source node.ID, req *heartbeatpb.Recov
 	}
 
 	seen := make(map[common.DispatcherID]struct{}, len(req.DispatcherIDs))
-	for _, pbDispatcherID := range req.DispatcherIDs {
-		if h.handleDispatcherID(source, seen, pbDispatcherID) {
+	for _, pb := range req.DispatcherIDs {
+		if pb == nil {
+			continue
+		}
+		dispatcherID := common.NewDispatcherIDFromPB(pb)
+		if _, ok := seen[dispatcherID]; ok {
+			continue
+		}
+		seen[dispatcherID] = struct{}{}
+		if h.tryRecoverDispatcher(source, dispatcherID) {
 			continue
 		}
 		return
 	}
 }
 
+// validateRequest returns true when request validation passes and caller should continue
+// processing dispatcher IDs. It returns false when the request should be ignored.
 func (h *recoverDispatcherHandler) validateRequest(source node.ID, req *heartbeatpb.RecoverDispatcherRequest) bool {
 	// Ignore the request before maintainer bootstrap completes.
 	if !h.maintainer.initialized.Load() {
@@ -101,23 +111,9 @@ func (h *recoverDispatcherHandler) validateRequest(source node.ID, req *heartbea
 	return true
 }
 
-func (h *recoverDispatcherHandler) handleDispatcherID(
-	source node.ID,
-	seen map[common.DispatcherID]struct{},
-	pbDispatcherID *heartbeatpb.DispatcherID,
-) bool {
-	if pbDispatcherID == nil {
-		return true
-	}
-
-	dispatcherID := common.NewDispatcherIDFromPB(pbDispatcherID)
-	if _, ok := seen[dispatcherID]; ok {
-		return true
-	}
-	seen[dispatcherID] = struct{}{}
-	return h.tryRecoverDispatcher(source, dispatcherID)
-}
-
+// tryRecoverDispatcher returns true when this dispatcher is handled and caller can keep
+// processing the remaining dispatcher IDs in the same batch. It returns false when
+// recovery is downgraded to changefeed-level error path and caller should stop this batch.
 func (h *recoverDispatcherHandler) tryRecoverDispatcher(source node.ID, dispatcherID common.DispatcherID) bool {
 	if existing := h.operatorController.GetOperator(dispatcherID); existing != nil {
 		// Idempotency guard: if restart for this dispatcher is already in-flight,
@@ -127,7 +123,20 @@ func (h *recoverDispatcherHandler) tryRecoverDispatcher(source node.ID, dispatch
 
 	decision, state := h.makeDecision(dispatcherID)
 	if decision == recoverableRestartDecisionDowngrade {
-		h.reportRecoverDispatcherDowngrade(source, dispatcherID, state.attempts)
+		log.Warn("recover dispatcher request exceeded dispatcher restart budget, downgrade to changefeed error path",
+			zap.Stringer("changefeedID", h.maintainer.changefeedID),
+			zap.Stringer("dispatcherID", dispatcherID),
+			zap.Stringer("sourceNode", source),
+			zap.Int("restartAttempts", state.attempts))
+
+		h.maintainer.onError(source, &heartbeatpb.RunningError{
+			Time: time.Now().String(),
+			Code: string(errors.ErrMaintainerRecoverableRestartExceededAttempts.RFCCode()),
+			Message: fmt.Sprintf(
+				"recover dispatcher request exceeded dispatcher restart budget, downgrade to changefeed error path, dispatcherID=%s, restartAttempts=%d",
+				dispatcherID.String(), state.attempts,
+			),
+		})
 		return false
 	}
 
@@ -157,27 +166,6 @@ func (h *recoverDispatcherHandler) tryRecoverDispatcher(source node.ID, dispatch
 	state.attempts++
 	h.tracked[dispatcherID] = state
 	return true
-}
-
-func (h *recoverDispatcherHandler) reportRecoverDispatcherDowngrade(
-	source node.ID,
-	dispatcherID common.DispatcherID,
-	attempts int,
-) {
-	log.Warn("recover dispatcher request exceeded dispatcher restart budget, downgrade to changefeed error path",
-		zap.Stringer("changefeedID", h.maintainer.changefeedID),
-		zap.Stringer("dispatcherID", dispatcherID),
-		zap.Stringer("sourceNode", source),
-		zap.Int("restartAttempts", attempts))
-
-	h.maintainer.onError(source, &heartbeatpb.RunningError{
-		Time: time.Now().String(),
-		Code: string(errors.ErrMaintainerRecoverableRestartExceededAttempts.RFCCode()),
-		Message: fmt.Sprintf(
-			"recover dispatcher request exceeded dispatcher restart budget, downgrade to changefeed error path, dispatcherID=%s, restartAttempts=%d",
-			dispatcherID.String(), attempts,
-		),
-	})
 }
 
 func (h *recoverDispatcherHandler) getRestartState(

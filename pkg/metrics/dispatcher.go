@@ -97,6 +97,22 @@ var (
 			Help:      "Total count of recoverable error events received by dispatcher manager",
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
+	DispatcherManagerRecoverPendingGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "dispatchermanager",
+			Name:      "recover_pending_dispatcher_count",
+			Help:      "Current count of dispatchers waiting for recover request completion",
+		}, []string{getKeyspaceLabel(), "changefeed"})
+
+	DispatcherManagerRecoverPendingTimeoutCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "dispatchermanager",
+			Name:      "recover_pending_timeout_count",
+			Help:      "Total count of dispatchers that hit recover pending timeout",
+		}, []string{getKeyspaceLabel(), "changefeed"})
+
 	HandleDispatcherRequsetCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
@@ -162,6 +178,8 @@ func initDispatcherMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(DispatcherManagerCheckpointTsLagGauge)
 	registry.MustRegister(DispatcherManagerBlockStatusesChanLenGauge)
 	registry.MustRegister(DispatcherManagerRecoverEventCount)
+	registry.MustRegister(DispatcherManagerRecoverPendingGauge)
+	registry.MustRegister(DispatcherManagerRecoverPendingTimeoutCount)
 	registry.MustRegister(HandleDispatcherRequsetCounter)
 	registry.MustRegister(DispatcherReceivedEventCount)
 	registry.MustRegister(EventCollectorRegisteredDispatcherCount)

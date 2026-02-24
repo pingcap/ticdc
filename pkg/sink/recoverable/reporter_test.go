@@ -21,11 +21,15 @@ import (
 )
 
 func TestReportOncePerDispatcherEpoch(t *testing.T) {
-	ch := make(chan *RecoverEvent, 2)
-	reporter := NewReporter(ch)
+	reporter := NewReporter(2)
+	ch := reporter.OutputCh()
 
 	dispatcherID := common.NewDispatcherID()
-	dispatchers := []DispatcherEpoch{{DispatcherID: dispatcherID, Epoch: 1}}
+	dispatchers := []DispatcherEpoch{
+		{DispatcherID: dispatcherID, Epoch: 1},
+		{DispatcherID: dispatcherID, Epoch: 2},
+		{DispatcherID: dispatcherID, Epoch: 1},
+	}
 
 	reported, handled := reporter.Report(dispatchers)
 	require.True(t, handled)
@@ -37,7 +41,7 @@ func TestReportOncePerDispatcherEpoch(t *testing.T) {
 		t.Fatal("expected recoverable event to be sent")
 	}
 
-	reported, handled = reporter.Report(dispatchers)
+	reported, handled = reporter.Report([]DispatcherEpoch{{DispatcherID: dispatcherID, Epoch: 1}})
 	require.True(t, handled)
 	require.Empty(t, reported)
 	select {
@@ -46,8 +50,7 @@ func TestReportOncePerDispatcherEpoch(t *testing.T) {
 	default:
 	}
 
-	dispatchers[0].Epoch = 2
-	reported, handled = reporter.Report(dispatchers)
+	reported, handled = reporter.Report([]DispatcherEpoch{{DispatcherID: dispatcherID, Epoch: 3}})
 	require.True(t, handled)
 	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
 	select {
@@ -58,8 +61,34 @@ func TestReportOncePerDispatcherEpoch(t *testing.T) {
 	}
 }
 
+func TestReportKeepMaxEpochPerDispatcherInSingleCall(t *testing.T) {
+	reporter := NewReporter(1)
+	ch := reporter.OutputCh()
+
+	dispatcherID1 := common.NewDispatcherID()
+	dispatcherID2 := common.NewDispatcherID()
+
+	reported, handled := reporter.Report([]DispatcherEpoch{
+		{DispatcherID: dispatcherID1, Epoch: 2},
+		{DispatcherID: dispatcherID2, Epoch: 7},
+		{DispatcherID: dispatcherID1, Epoch: 5},
+		{DispatcherID: dispatcherID2, Epoch: 3},
+	})
+	require.True(t, handled)
+	require.Equal(t, []common.DispatcherID{dispatcherID1, dispatcherID2}, reported)
+	<-ch
+
+	// Both dispatchers should be deduplicated by the max epoch observed above.
+	reported, handled = reporter.Report([]DispatcherEpoch{
+		{DispatcherID: dispatcherID1, Epoch: 5},
+		{DispatcherID: dispatcherID2, Epoch: 7},
+	})
+	require.True(t, handled)
+	require.Empty(t, reported)
+}
+
 func TestReportReturnsFalseWhenOutputUnavailable(t *testing.T) {
-	reporter := NewReporter(nil)
+	reporter := NewReporter(0)
 	dispatcherID := common.NewDispatcherID()
 	reported, handled := reporter.Report(
 		[]DispatcherEpoch{{DispatcherID: dispatcherID, Epoch: 1}},
@@ -67,9 +96,8 @@ func TestReportReturnsFalseWhenOutputUnavailable(t *testing.T) {
 	require.False(t, handled)
 	require.Empty(t, reported)
 
-	fullCh := make(chan *RecoverEvent, 1)
-	fullCh <- &RecoverEvent{}
-	reporter = NewReporter(fullCh)
+	reporter = NewReporter(1)
+	reporter.outputCh <- &RecoverEvent{}
 	reported, handled = reporter.Report(
 		[]DispatcherEpoch{{DispatcherID: dispatcherID, Epoch: 2}},
 	)
@@ -78,8 +106,8 @@ func TestReportReturnsFalseWhenOutputUnavailable(t *testing.T) {
 }
 
 func TestIgnoreStaleEpochAfterNewerEpochReported(t *testing.T) {
-	ch := make(chan *RecoverEvent, 4)
-	reporter := NewReporter(ch)
+	reporter := NewReporter(4)
+	ch := reporter.OutputCh()
 
 	dispatcherID := common.NewDispatcherID()
 
@@ -101,5 +129,32 @@ func TestIgnoreStaleEpochAfterNewerEpochReported(t *testing.T) {
 	case event := <-ch:
 		t.Fatalf("unexpected event for stale epoch: %+v", event)
 	default:
+	}
+}
+
+func TestClearDispatcherState(t *testing.T) {
+	reporter := NewReporter(2)
+	ch := reporter.OutputCh()
+	dispatcherID := common.NewDispatcherID()
+
+	reported, handled := reporter.Report(
+		[]DispatcherEpoch{{DispatcherID: dispatcherID, Epoch: 5}},
+	)
+	require.True(t, handled)
+	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
+	<-ch
+
+	reporter.Clear(dispatcherID)
+
+	reported, handled = reporter.Report(
+		[]DispatcherEpoch{{DispatcherID: dispatcherID, Epoch: 1}},
+	)
+	require.True(t, handled)
+	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
+	select {
+	case event := <-ch:
+		require.Equal(t, []common.DispatcherID{dispatcherID}, event.DispatcherIDs)
+	default:
+		t.Fatal("expected recoverable event after clear")
 	}
 }

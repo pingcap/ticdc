@@ -298,14 +298,14 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 
 type recoverableAwareAsyncProducer struct {
 	*mock_kafka.MockAsyncProducer
-	recoverableErrCh chan<- *recoverable.RecoverEvent
+	recoverReporter *recoverable.Reporter
 }
 
-func (p *recoverableAwareAsyncProducer) SetRecoverableErrorChan(ch chan<- *recoverable.RecoverEvent) {
-	p.recoverableErrCh = ch
+func (p *recoverableAwareAsyncProducer) SetRecoverReporter(reporter *recoverable.Reporter) {
+	p.recoverReporter = reporter
 }
 
-func TestSetRecoverableErrorChan(t *testing.T) {
+func TestSetRecoverReporter(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	asyncProducer := &recoverableAwareAsyncProducer{
 		MockAsyncProducer: mock_kafka.NewMockAsyncProducer(ctrl),
@@ -314,7 +314,7 @@ func TestSetRecoverableErrorChan(t *testing.T) {
 		dmlProducer: asyncProducer,
 	}
 
-	recoverableCh := make(chan *recoverable.RecoverEvent, 1)
-	s.SetRecoverableErrorChan(recoverableCh)
-	require.Equal(t, (chan<- *recoverable.RecoverEvent)(recoverableCh), asyncProducer.recoverableErrCh)
+	reporter := recoverable.NewReporter(1)
+	s.SetRecoverReporter(reporter)
+	require.Equal(t, reporter, asyncProducer.recoverReporter)
 }

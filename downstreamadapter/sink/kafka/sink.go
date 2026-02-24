@@ -117,12 +117,12 @@ func New(
 	}, nil
 }
 
-func (s *sink) SetRecoverableErrorChan(ch chan<- *recoverable.RecoverEvent) {
+func (s *sink) SetRecoverReporter(reporter *recoverable.Reporter) {
 	setter, ok := s.dmlProducer.(recoverable.Recoverable)
 	if !ok {
 		return
 	}
-	setter.SetRecoverEventCh(ch)
+	setter.SetRecoverReporter(reporter)
 }
 
 func (s *sink) Run(ctx context.Context) error {

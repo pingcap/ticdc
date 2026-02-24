@@ -27,6 +27,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -136,9 +137,11 @@ func TestCollectRecoverableErrorsEnqueueRecoverDispatcherRequest(t *testing.T) {
 	manager := &DispatcherManager{
 		changefeedID:                  common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
 		recoverDispatcherRequestQueue: make(chan *RecoverDispatcherRequestWithTargetID, 1),
+		dispatcherMap:                 newDispatcherMap[*dispatcher.EventDispatcher](),
+		reporter:                      recoverable.NewReporter(recoverEventChSize),
+		recoverTracker:                newRecoverTracker(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)),
 	}
 	manager.SetMaintainerID(node.ID("maintainer"))
-	manager.recoverEventCh = make(chan *recoverable.RecoverEvent, recoverEventChSize)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -152,10 +155,12 @@ func TestCollectRecoverableErrorsEnqueueRecoverDispatcherRequest(t *testing.T) {
 	}()
 
 	dispatcherID := common.NewDispatcherID()
-	manager.recoverEventCh <- &recoverable.RecoverEvent{
-		Time:          time.Now(),
-		DispatcherIDs: []common.DispatcherID{dispatcherID},
-	}
+	manager.dispatcherMap.Set(dispatcherID, nil)
+	reported, handled := manager.reporter.Report([]recoverable.DispatcherEpoch{
+		{DispatcherID: dispatcherID, Epoch: 1},
+	})
+	require.True(t, handled)
+	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
 
 	var req *RecoverDispatcherRequestWithTargetID
 	select {
@@ -169,6 +174,126 @@ func TestCollectRecoverableErrorsEnqueueRecoverDispatcherRequest(t *testing.T) {
 	require.NotNil(t, req.Request)
 	require.Equal(t, manager.changefeedID.ToPB(), req.Request.ChangefeedID)
 	require.Equal(t, []*heartbeatpb.DispatcherID{dispatcherID.ToPB()}, req.Request.DispatcherIDs)
+}
+
+func TestCollectRecoverableEventsSkipPendingDispatcher(t *testing.T) {
+	manager := &DispatcherManager{
+		changefeedID:                  common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+		recoverDispatcherRequestQueue: make(chan *RecoverDispatcherRequestWithTargetID, 4),
+		dispatcherMap:                 newDispatcherMap[*dispatcher.EventDispatcher](),
+		reporter:                      recoverable.NewReporter(recoverEventChSize),
+		recoverTracker:                newRecoverTracker(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)),
+	}
+	manager.SetMaintainerID(node.ID("maintainer"))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		manager.collectRecoverableEvents(ctx)
+		close(done)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	dispatcherID := common.NewDispatcherID()
+	manager.dispatcherMap.Set(dispatcherID, nil)
+	reported, handled := manager.reporter.Report([]recoverable.DispatcherEpoch{
+		{DispatcherID: dispatcherID, Epoch: 1},
+	})
+	require.True(t, handled)
+	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
+
+	select {
+	case <-manager.recoverDispatcherRequestQueue:
+	case <-time.After(time.Second):
+		t.Fatal("first recover dispatcher request not received")
+	}
+
+	reported, handled = manager.reporter.Report([]recoverable.DispatcherEpoch{
+		{DispatcherID: dispatcherID, Epoch: 2},
+	})
+	require.True(t, handled)
+	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
+
+	select {
+	case <-manager.recoverDispatcherRequestQueue:
+		t.Fatal("unexpected duplicate recover dispatcher request for pending dispatcher")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func TestWorkingStatusClearsRecoverReporterState(t *testing.T) {
+	manager := &DispatcherManager{
+		changefeedID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+	}
+	manager.reporter = recoverable.NewReporter(2)
+	manager.recoverTracker = newRecoverTracker(manager.changefeedID)
+
+	dispatcherID := common.NewDispatcherID()
+	reported, handled := manager.reporter.Report([]recoverable.DispatcherEpoch{
+		{DispatcherID: dispatcherID, Epoch: 5},
+	})
+	require.True(t, handled)
+	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
+	<-manager.reporter.OutputCh()
+
+	manager.recoverTracker.add([]common.DispatcherID{dispatcherID})
+	manager.onDispatcherStatusForRecover(&heartbeatpb.TableSpanStatus{
+		ID:              dispatcherID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Working,
+	})
+
+	reported, handled = manager.reporter.Report([]recoverable.DispatcherEpoch{
+		{DispatcherID: dispatcherID, Epoch: 1},
+	})
+	require.True(t, handled)
+	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
+}
+
+func TestRecoverPendingTimeoutFallback(t *testing.T) {
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	defaultAtomicity := config.DefaultAtomicityLevel()
+	manager := &DispatcherManager{
+		changefeedID: changefeedID,
+		sharedInfo: dispatcher.NewSharedInfo(
+			changefeedID,
+			"system",
+			false,
+			false,
+			false,
+			nil,
+			nil,
+			nil,
+			&defaultAtomicity,
+			false,
+			make(chan dispatcher.TableSpanStatusWithSeq, 1),
+			make(chan *heartbeatpb.TableSpanBlockStatus, 1),
+			make(chan error, 1),
+		),
+	}
+	manager.reporter = recoverable.NewReporter(1)
+	manager.recoverTracker = newRecoverTracker(manager.changefeedID)
+	dispatcherID := common.NewDispatcherID()
+	manager.recoverTracker.addAt(
+		[]common.DispatcherID{dispatcherID},
+		time.Now().Add(-recoverLifecyclePendingTimeout-time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager.reportRecoverPendingTimeout(ctx)
+
+	select {
+	case err := <-manager.sharedInfo.GetErrCh():
+		require.Equal(t, errors.ErrChangefeedRetryable.RFCCode(), errors.ErrorCode(err))
+	case <-time.After(time.Second):
+		t.Fatal("expected recover pending timeout fallback error")
+	}
+
+	timedOut := manager.recoverTracker.takeExpired()
+	require.Empty(t, timedOut)
 }
 
 func TestCollectComponentStatusWhenChangedWatermarkSeqNoFallback(t *testing.T) {

@@ -147,11 +147,11 @@ func (p *saramaAsyncProducer) AsyncRunCallback(
 	}
 }
 
-func (p *saramaAsyncProducer) SetRecoverableErrorChan(ch chan<- *recoverable.RecoverEvent) {
-	if ch == nil || p.reporter != nil {
+func (p *saramaAsyncProducer) SetRecoverReporter(reporter *recoverable.Reporter) {
+	if reporter == nil || p.reporter != nil {
 		return
 	}
-	p.reporter = recoverable.NewReporter(ch)
+	p.reporter = reporter
 }
 
 func (p *saramaAsyncProducer) reportTransientError(err *sarama.ProducerError) bool {

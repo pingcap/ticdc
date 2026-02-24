@@ -224,6 +224,7 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 }
 
 func (e *DispatcherManager) cleanRedoDispatcher(id common.DispatcherID, schemaID int64) {
+	e.clearRecoverState(id)
 	e.redoDispatcherMap.Delete(id)
 	e.redoSchemaIDToDispatchers.Delete(schemaID, id)
 	tableTriggerRedoDispatcher := e.GetTableTriggerRedoDispatcher()

@@ -24,11 +24,12 @@ func TestBuildMessageRecoverInfo(t *testing.T) {
 	require.NotNil(t, info)
 	require.Equal(t, []recoverable.DispatcherEpoch{
 		{DispatcherID: dispatcherID1, Epoch: 11},
+		{DispatcherID: dispatcherID1, Epoch: 11},
 		{DispatcherID: dispatcherID2, Epoch: 22},
 	}, info.Dispatchers)
 }
 
-func TestBuildMessageRecoverInfoUseMaxEpochForSameDispatcher(t *testing.T) {
+func TestBuildMessageRecoverInfoKeepRawDispatcherEpochEntries(t *testing.T) {
 	dispatcherID := commonType.NewDispatcherID()
 	events := []*commonEvent.RowEvent{
 		{DispatcherID: dispatcherID, Epoch: 11},
@@ -39,7 +40,9 @@ func TestBuildMessageRecoverInfoUseMaxEpochForSameDispatcher(t *testing.T) {
 	info := recoverable.BuildRecoverInfo(events)
 	require.NotNil(t, info)
 	require.Equal(t, []recoverable.DispatcherEpoch{
+		{DispatcherID: dispatcherID, Epoch: 11},
 		{DispatcherID: dispatcherID, Epoch: 13},
+		{DispatcherID: dispatcherID, Epoch: 12},
 	}, info.Dispatchers)
 }
 
