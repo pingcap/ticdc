@@ -626,6 +626,7 @@ func (c *S3Consumer) downloadDMLFiles(
 
 	fileContents := make(chan fileContent, len(tasks))
 	eg, egCtx := errgroup.WithContext(ctx)
+	eg.SetLimit(128)
 	for _, task := range tasks {
 		eg.Go(func() error {
 			filePath := task.dmlPathKey.GenerateDMLFilePath(

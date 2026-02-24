@@ -113,6 +113,8 @@ func (r *Recorder) initializeCheckpoint() error {
 			return errors.Annotatef(ErrCheckpointCorruption, "failed to unmarshal checkpoint.json: %v", err)
 		}
 		return nil
+	} else if !os.IsNotExist(err) {
+		return errors.Annotatef(ErrCheckpointCorruption, "failed to stat checkpoint.json: %v", err)
 	}
 
 	// checkpoint.json is missing — try recovering from the backup.
@@ -132,6 +134,8 @@ func (r *Recorder) initializeCheckpoint() error {
 			return errors.Trace(err) // transient I/O error
 		}
 		return nil
+	} else if !os.IsNotExist(err) {
+		return errors.Annotatef(ErrCheckpointCorruption, "failed to stat checkpoint.json.bak: %v", err)
 	}
 
 	// Neither file exists — fresh start.

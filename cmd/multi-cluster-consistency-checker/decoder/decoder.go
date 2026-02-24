@@ -188,7 +188,7 @@ func (d *columnValueDecoder) tryNext() (common.MessageType, bool) {
 	}
 
 	if err := json.Unmarshal(encodedData, msg); err != nil {
-		log.Error("canal-json decoder unmarshal data failed",
+		log.Error("canal json decoder unmarshal data failed",
 			zap.Error(err), zap.ByteString("data", encodedData))
 		d.msg = nil
 		return common.MessageTypeUnknown, true
