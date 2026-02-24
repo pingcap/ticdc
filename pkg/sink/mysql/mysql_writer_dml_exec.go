@@ -144,12 +144,15 @@ func (w *Writer) sequenceExecute(
 			}
 		}
 
-		var execError error
+		var (
+			res       sql.Result
+			execError error
+		)
 		if prepStmt == nil {
-			_, execError = tx.ExecContext(ctx, query, args...)
+			res, execError = tx.ExecContext(ctx, query, args...)
 		} else {
 			//nolint:sqlclosecheck
-			_, execError = tx.Stmt(prepStmt).ExecContext(ctx, args...)
+			res, execError = tx.Stmt(prepStmt).ExecContext(ctx, args...)
 		}
 
 		if execError != nil {
@@ -161,6 +164,12 @@ func (w *Writer) sequenceExecute(
 			}
 			cancelFunc()
 			return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(execError, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", query, util.RedactArgs(args))))
+		}
+		rowsAffected, err := res.RowsAffected()
+		if err != nil {
+			log.Warn("get rows affected rows failed", zap.Error(err))
+		} else {
+			w.statistics.RecordRowsAffected(rowsAffected, dmls.rowTypes[i])
 		}
 		cancelFunc()
 	}
@@ -187,7 +196,7 @@ func (w *Writer) multiStmtExecute(
 	// conn.ExecContext only use one RTT, while db.Begin + tx.ExecContext + db.Commit need three RTTs.
 	// When an error happens before COMMIT, the server session can be left with an open transaction.
 	// Best-effort rollback is required to ensure the connection can be safely reused by the pool.
-	_, err := conn.ExecContext(ctx, multiStmtSQLWithTxn, multiStmtArgs...)
+	res, err := conn.ExecContext(ctx, multiStmtSQLWithTxn, multiStmtArgs...)
 	if err != nil {
 		rbCtx, rbCancel := context.WithTimeout(w.ctx, writeTimeout)
 		_, rbErr := conn.ExecContext(rbCtx, "ROLLBACK")
@@ -198,6 +207,11 @@ func (w *Writer) multiStmtExecute(
 				zap.Error(rbErr))
 		}
 		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", multiStmtSQLWithTxn, util.RedactArgs(multiStmtArgs))))
+	}
+	if rowsAffected, err := res.RowsAffected(); err != nil {
+		log.Warn("get rows affected rows failed", zap.Error(err))
+	} else {
+		w.statistics.RecordTotalRowsAffected(rowsAffected, int64(len(multiStmtArgs)))
 	}
 	return nil
 }
