@@ -73,9 +73,9 @@ const (
 	defaultCharacterSet   = "utf8mb4"
 
 	// BackoffBaseDelay indicates the base delay time for retrying.
-	BackoffBaseDelay = 500 * time.Millisecond
+	BackoffBaseDelay = 100 * time.Millisecond
 	// BackoffMaxDelay indicates the max delay time for retrying.
-	BackoffMaxDelay = 60 * time.Second
+	BackoffMaxDelay = 5 * time.Second
 
 	defaultBatchDMLEnable  = true
 	defaultMultiStmtEnable = true
