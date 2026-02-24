@@ -215,7 +215,7 @@ func writeColumnFieldValue(
 		value := row.GetTime(idx)
 		writer.WriteStringField("v", value.String())
 	case mysql.TypeDuration:
-		value := row.GetDuration(idx, 0)
+		value := row.GetDuration(idx, col.GetDecimal())
 		writer.WriteStringField("v", value.String())
 	case mysql.TypeJSON:
 		value := row.GetJSON(idx)
@@ -368,8 +368,8 @@ func writeColumnFieldValueIfUpdated(
 			writeFunc(func() { writer.WriteStringField("v", preRowValue.String()) })
 		}
 	case mysql.TypeDuration:
-		rowValue := row.GetDuration(idx, 0)
-		preRowValue := preRow.GetDuration(idx, 0)
+		rowValue := row.GetDuration(idx, col.GetDecimal())
+		preRowValue := preRow.GetDuration(idx, col.GetDecimal())
 		if rowValue != preRowValue {
 			writeFunc(func() { writer.WriteStringField("v", preRowValue.String()) })
 		}
