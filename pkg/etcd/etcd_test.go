@@ -20,6 +20,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/common"
+	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/api/v3/etcdserverpb"
 	"go.etcd.io/etcd/api/v3/mvccpb"
@@ -269,4 +270,71 @@ func TestCDCEtcdClientImpl_GetChangefeedInfoAndStatus(t *testing.T) {
 			require.EqualValues(t, tt.wantInfoMap, gotInfoMap)
 		})
 	}
+}
+
+func TestCDCEtcdClientImpl_GetLogCoordinatorRevision(t *testing.T) {
+	ctx := context.Background()
+	clusterID := "cluster-id"
+	captureID := "capture-1"
+
+	t.Run("get leader failed", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		client := NewMockClient(ctrl)
+		client.EXPECT().
+			Get(gomock.Eq(ctx), gomock.Eq(LogCoordinatorKey(clusterID)), gomock.Any()).
+			Return(nil, errors.New("etcd failed")).
+			Times(1)
+
+		etcdClient := &CDCEtcdClientImpl{Client: client, ClusterID: clusterID}
+		_, err := etcdClient.GetLogCoordinatorRevision(ctx, captureID)
+		require.ErrorContains(t, err, "etcd failed")
+	})
+
+	t.Run("leader not found", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		client := NewMockClient(ctrl)
+		client.EXPECT().
+			Get(gomock.Eq(ctx), gomock.Eq(LogCoordinatorKey(clusterID)), gomock.Any()).
+			Return(&clientv3.GetResponse{Kvs: nil}, nil).
+			Times(1)
+
+		etcdClient := &CDCEtcdClientImpl{Client: client, ClusterID: clusterID}
+		_, err := etcdClient.GetLogCoordinatorRevision(ctx, captureID)
+		require.True(t, cerrors.ErrOwnerNotFound.Equal(err))
+	})
+
+	t.Run("not the log coordinator", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		client := NewMockClient(ctrl)
+		client.EXPECT().
+			Get(gomock.Eq(ctx), gomock.Eq(LogCoordinatorKey(clusterID)), gomock.Any()).
+			Return(&clientv3.GetResponse{
+				Kvs: []*mvccpb.KeyValue{
+					{Value: []byte("other-capture"), ModRevision: 99},
+				},
+			}, nil).
+			Times(1)
+
+		etcdClient := &CDCEtcdClientImpl{Client: client, ClusterID: clusterID}
+		_, err := etcdClient.GetLogCoordinatorRevision(ctx, captureID)
+		require.True(t, cerrors.ErrNotOwner.Equal(err))
+	})
+
+	t.Run("success", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		client := NewMockClient(ctrl)
+		client.EXPECT().
+			Get(gomock.Eq(ctx), gomock.Eq(LogCoordinatorKey(clusterID)), gomock.Any()).
+			Return(&clientv3.GetResponse{
+				Kvs: []*mvccpb.KeyValue{
+					{Value: []byte(captureID), ModRevision: 123},
+				},
+			}, nil).
+			Times(1)
+
+		etcdClient := &CDCEtcdClientImpl{Client: client, ClusterID: clusterID}
+		rev, err := etcdClient.GetLogCoordinatorRevision(ctx, captureID)
+		require.NoError(t, err)
+		require.Equal(t, int64(123), rev)
+	})
 }
