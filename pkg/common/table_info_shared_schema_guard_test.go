@@ -272,15 +272,16 @@ func extractStructFieldsFromZip(zipPath string, pkgRelativePath string, typeName
 		}
 
 		name := filepath.ToSlash(file.Name)
-		slashPos := strings.IndexByte(name, '/')
-		if slashPos < 0 || slashPos+1 >= len(name) {
+		// Module zip entries are prefixed with "<module>@<version>/", where
+		// "<module>" may itself contain multiple path segments.
+		// Locate the target package by suffix pattern instead of assuming the
+		// first path segment is the whole module root.
+		targetPrefix := "/" + targetDir
+		pkgPos := strings.Index(name, targetPrefix)
+		if pkgPos < 0 {
 			continue
 		}
-		rel := name[slashPos+1:]
-		if !strings.HasPrefix(rel, targetDir) {
-			continue
-		}
-		rest := strings.TrimPrefix(rel, targetDir)
+		rest := name[pkgPos+len(targetPrefix):]
 		if strings.Contains(rest, "/") {
 			continue
 		}
