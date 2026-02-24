@@ -4591,6 +4591,78 @@
             "align": false,
             "alignLevel": null
           }
+        },
+        {
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Downstream type (sink-uri scheme) of each changefeed.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": null,
+                "filterable": true
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 26
+          },
+          "id": 60029,
+          "options": {
+            "showHeader": true,
+            "sortBy": []
+          },
+          "pluginVersion": "7.5.17",
+          "targets": [
+            {
+              "expr": "max by (keyspace_name, changefeed, downstream_type) (ticdc_owner_changefeed_downstream_info{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"})",
+              "format": "time_series",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "title": "Changefeed Downstream Type",
+          "transformations": [
+            {
+              "id": "labelsToFields",
+              "options": {}
+            },
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Metric": true,
+                  "Time": true,
+                  "Value": true,
+                  "__name__": true
+                },
+                "indexByName": {
+                  "changefeed": 1,
+                  "downstream_type": 2,
+                  "keyspace_name": 0
+                },
+                "renameByName": {}
+              }
+            }
+          ],
+          "type": "table"
         }
       ],
       "title": "Changefeed",

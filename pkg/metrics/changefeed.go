@@ -89,6 +89,19 @@ var (
 			Name:      "checkpoint_ts",
 			Help:      "checkpoint ts of changefeeds",
 		}, []string{getKeyspaceLabel(), "changefeed"})
+
+	// ChangefeedDownstreamInfoGauge is a metric with a constant '1' value,
+	// labeled by the downstream type of each changefeed.
+	//
+	// It is used by dashboards to show a changefeed -> downstream type mapping
+	// without leaking sensitive information in sink-uri.
+	ChangefeedDownstreamInfoGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "owner",
+			Name:      "changefeed_downstream_info",
+			Help:      "Downstream type information of changefeeds exposed as labels.",
+		}, []string{getKeyspaceLabel(), "changefeed", "downstream_type"})
 )
 
 func initChangefeedMetrics(registry *prometheus.Registry) {
@@ -101,4 +114,5 @@ func initChangefeedMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(ChangefeedStatusGauge)
 	registry.MustRegister(ChangefeedCheckpointTsLagGauge)
 	registry.MustRegister(ChangefeedCheckpointTsGauge)
+	registry.MustRegister(ChangefeedDownstreamInfoGauge)
 }
