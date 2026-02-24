@@ -16,10 +16,10 @@ package eventstore
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"fmt"
 	"math"
 	"os"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -58,6 +58,8 @@ var (
 	metricEventStoreNextReadDurationHistogram  = metrics.EventStoreReadDurationHistogram.WithLabelValues("next")
 	metricEventStoreCloseReadDurationHistogram = metrics.EventStoreReadDurationHistogram.WithLabelValues("close")
 )
+
+const subscriptionIdleTTL = time.Minute
 
 type ResolvedTsNotifier func(watermark uint64, latestCommitTs uint64)
 
@@ -151,8 +153,9 @@ type subscriptionStat struct {
 	// data span of the subscription, it can support dispatchers with smaller span
 	tableSpan   *heartbeatpb.TableSpan
 	subscribers atomic.Pointer[subscribersWithIdleTime]
-	// markedDeleteTime is the time when the subscription is marked for deletion.
-	markedDeleteTime atomic.Int64
+	// remainingLifetimeMs is the remaining time before the subscription can be deleted after it becomes idle.
+	// 0 means it can be deleted immediately once idle.
+	remainingLifetimeMs atomic.Int64
 	// the index of the db which stores the data of the subscription
 	// used to clean obselete data of the subscription
 	dbIndex int
@@ -184,6 +187,7 @@ type eventWithCallback struct {
 	kvs     []common.RawKVEntry
 	// kv with commitTs <= currentResolvedTs will be filtered out
 	currentResolvedTs uint64
+	enqueueTimeNano   int64
 	callback          func()
 }
 
@@ -319,6 +323,7 @@ func (p *writeTaskPool) run(ctx context.Context) {
 			}
 			defer encoder.Close()
 			buffer := make([]eventWithCallback, 0, 128)
+			queueDuration := metrics.EventStoreWriteQueueDurationHistogram
 
 			ioWriteDuration := metrics.EventStoreWriteWorkerIODuration.WithLabelValues(strconv.Itoa(p.dbIndex), strconv.Itoa(workerID))
 			totalDuration := metrics.EventStoreWriteWorkerTotalDuration.WithLabelValues(strconv.Itoa(p.dbIndex), strconv.Itoa(workerID))
@@ -332,16 +337,21 @@ func (p *writeTaskPool) run(ctx context.Context) {
 					if !ok {
 						return
 					}
+					if len(events) > 0 && events[0].enqueueTimeNano > 0 {
+						queueDuration.Observe(float64(time.Now().UnixNano()-events[0].enqueueTimeNano) / float64(time.Second))
+					}
 					start := time.Now()
 					if err = p.store.writeEvents(p.db, events, encoder, &compressionBuf); err != nil {
 						log.Panic("write events failed", zap.Error(err))
 					}
-					for idx := range events {
-						events[idx].callback()
-					}
 					ioWriteDuration.Observe(time.Since(start).Seconds())
 					totalDuration.Observe(time.Since(totalStart).Seconds())
 					totalStart = time.Now()
+
+					for idx := range events {
+						events[idx].callback()
+					}
+
 					buffer = buffer[:0]
 				}
 			}
@@ -583,6 +593,7 @@ func (e *eventStore) RegisterDispatcher(
 	e.dispatcherMeta.Unlock()
 
 	consumeKVEvents := func(kvs []common.RawKVEntry, finishCallback func()) bool {
+		now := time.Now()
 		maxCommitTs := uint64(0)
 		// Must find the max commit ts in the kvs, since the kvs is not sorted yet.
 		for _, kv := range kvs {
@@ -590,13 +601,14 @@ func (e *eventStore) RegisterDispatcher(
 				maxCommitTs = kv.CRTs
 			}
 		}
-		subStat.lastReceiveDMLTime.Store(time.Now().UnixMilli())
+		subStat.lastReceiveDMLTime.Store(now.UnixMilli())
 		util.CompareAndMonotonicIncrease(&subStat.maxEventCommitTs, maxCommitTs)
 		subStat.eventCh.Push(eventWithCallback{
 			subID:             subStat.subID,
 			tableID:           subStat.tableSpan.TableID,
 			kvs:               kvs,
 			currentResolvedTs: subStat.resolvedTs.Load(),
+			enqueueTimeNano:   now.UnixNano(),
 			callback:          finishCallback,
 		})
 		return true
@@ -653,9 +665,10 @@ func (e *eventStore) UnregisterDispatcher(changefeedID common.ChangeFeedID, disp
 	}
 	e.dispatcherMeta.Lock()
 	if stat, ok := e.dispatcherMeta.dispatcherStats[dispatcherID]; ok {
-		e.detachFromSubStat(dispatcherID, stat.subStat)
-		e.detachFromSubStat(dispatcherID, stat.pendingSubStat)
-		e.detachFromSubStat(dispatcherID, stat.removingSubStat)
+		subStats := []*subscriptionStat{stat.subStat, stat.pendingSubStat, stat.removingSubStat}
+		for _, subStat := range subStats {
+			e.detachFromSubStat(dispatcherID, subStat)
+		}
 		delete(e.dispatcherMeta.dispatcherStats, dispatcherID)
 	}
 	e.dispatcherMeta.Unlock()
@@ -921,6 +934,11 @@ func (e *eventStore) detachFromSubStat(dispatcherID common.DispatcherID, subStat
 	idleTime := int64(0)
 	if len(newMap) == 0 {
 		idleTime = time.Now().UnixMilli()
+		ttlMs := int64(0)
+		if config.GetGlobalServerConfig().Debug.EventStore.EnableDataSharing {
+			ttlMs = int64(subscriptionIdleTTL / time.Millisecond)
+		}
+		subStat.remainingLifetimeMs.Store(ttlMs)
 	}
 	newData := &subscribersWithIdleTime{subscribers: newMap, idleTime: idleTime}
 	// It is safe to call Store without checking oldData here,
@@ -981,46 +999,88 @@ func (e *eventStore) addSubscriberToSubStat(subStat *subscriptionStat, dispatche
 	// It is safe to call Store without checking oldData here,
 	// as all modifications to subStat are guarded by the dispatcherMeta lock.
 	subStat.subscribers.Store(newData)
+	subStat.remainingLifetimeMs.Store(0)
 }
 
 func (e *eventStore) cleanObsoleteSubscriptions(ctx context.Context) error {
-	ticker := time.NewTicker(1 * time.Minute)
-	ttlInMsForMarkDeletion := int64(60 * 1000) // 1min
+	ticker := time.NewTicker(10 * time.Second)
+	lastTick := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			now := time.Now().UnixMilli()
-			e.dispatcherMeta.Lock()
-			for tableID, subStats := range e.dispatcherMeta.tableStats {
-				for subID, subStat := range subStats {
-					subData := subStat.subscribers.Load()
-					if subData != nil && len(subData.subscribers) == 0 && subData.idleTime > 0 && now-subData.idleTime > ttlInMsForMarkDeletion {
-						log.Info("clean obsolete subscription",
-							zap.Uint64("subscriptionID", uint64(subID)),
-							zap.Int("dbIndex", subStat.dbIndex),
-							zap.Int64("tableID", subStat.tableSpan.TableID))
-						e.subClient.Unsubscribe(subID)
-						db := e.dbs[subStat.dbIndex]
-						if err := deleteDataRange(db, uint64(subID), subStat.tableSpan.TableID, 0, math.MaxUint64); err != nil {
-							log.Warn("fail to delete events", zap.Error(err))
-						}
-						delete(subStats, subID)
-						e.subscriptionChangeCh.In() <- SubscriptionChange{
-							ChangeType: SubscriptionChangeTypeRemove,
-							SubID:      uint64(subStat.subID),
-							Span:       subStat.tableSpan,
-						}
-						metrics.EventStoreSubscriptionGauge.Dec()
-						if len(subStats) == 0 {
-							delete(e.dispatcherMeta.tableStats, tableID)
-						}
-					}
-				}
-			}
-			e.dispatcherMeta.Unlock()
+			nowTick := time.Now()
+			deltaMs := int64(nowTick.Sub(lastTick) / time.Millisecond)
+			lastTick = nowTick
+			e.cleanObsoleteSubscriptionsOnce(deltaMs)
 		}
+	}
+}
+
+func (e *eventStore) cleanObsoleteSubscriptionsOnce(deltaMs int64) {
+	type obsoleteSubscription struct {
+		subID   logpuller.SubscriptionID
+		tableID int64
+		dbIndex int
+		span    *heartbeatpb.TableSpan
+		idleAt  time.Time
+	}
+
+	obsoleteSubs := make([]obsoleteSubscription, 0)
+
+	e.dispatcherMeta.Lock()
+	for tableID, subStats := range e.dispatcherMeta.tableStats {
+		for subID, subStat := range subStats {
+			subData := subStat.subscribers.Load()
+			if subData == nil || len(subData.subscribers) != 0 || subData.idleTime <= 0 {
+				continue
+			}
+
+			remainingMs := subStat.remainingLifetimeMs.Load()
+			if remainingMs > 0 {
+				remainingMs -= deltaMs
+				if remainingMs < 0 {
+					remainingMs = 0
+				}
+				subStat.remainingLifetimeMs.Store(remainingMs)
+			}
+			if remainingMs != 0 {
+				continue
+			}
+
+			obsoleteSubs = append(obsoleteSubs, obsoleteSubscription{
+				subID:   subID,
+				tableID: tableID,
+				dbIndex: subStat.dbIndex,
+				span:    subStat.tableSpan,
+				idleAt:  time.UnixMilli(subData.idleTime).In(time.Local),
+			})
+			delete(subStats, subID)
+		}
+		if len(subStats) == 0 {
+			delete(e.dispatcherMeta.tableStats, tableID)
+		}
+	}
+	e.dispatcherMeta.Unlock()
+
+	for _, sub := range obsoleteSubs {
+		log.Info("clean obsolete subscription",
+			zap.Uint64("subscriptionID", uint64(sub.subID)),
+			zap.Int("dbIndex", sub.dbIndex),
+			zap.Int64("tableID", sub.tableID),
+			zap.Time("idleAt", sub.idleAt))
+		e.subClient.Unsubscribe(sub.subID)
+		db := e.dbs[sub.dbIndex]
+		if err := deleteDataRange(db, uint64(sub.subID), sub.tableID, 0, math.MaxUint64); err != nil {
+			log.Warn("fail to delete events", zap.Error(err))
+		}
+		e.subscriptionChangeCh.In() <- SubscriptionChange{
+			ChangeType: SubscriptionChangeTypeRemove,
+			SubID:      uint64(sub.subID),
+			Span:       sub.span,
+		}
+		metrics.EventStoreSubscriptionGauge.Dec()
 	}
 }
 
@@ -1050,7 +1110,9 @@ func diskSpaceUsage(m *pebble.Metrics) uint64 {
 	}
 	usageBytes += m.Table.ObsoleteSize
 	usageBytes += m.Table.ZombieSize
-	usageBytes += uint64(m.Compact.InProgressBytes)
+	if m.Compact.InProgressBytes > 0 {
+		usageBytes += uint64(m.Compact.InProgressBytes)
+	}
 	return usageBytes
 }
 
@@ -1097,6 +1159,19 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 			memorySize += uint64(stats.BlockCache.Size)
 		}
 		metrics.EventStoreInMemoryDataSizeGauge.WithLabelValues(id).Set(float64(memorySize))
+
+		metrics.EventStorePebbleIteratorGauge.WithLabelValues(id).Set(float64(stats.TableIters))
+		metrics.EventStorePebbleCompactionDebtGauge.WithLabelValues(id).Set(float64(stats.Compact.EstimatedDebt))
+		metrics.EventStorePebbleCompactionInProgressGauge.WithLabelValues(id).Set(float64(stats.Compact.NumInProgress))
+		metrics.EventStorePebbleCompactionInProgressBytesGauge.WithLabelValues(id).Set(float64(stats.Compact.InProgressBytes))
+		metrics.EventStorePebbleFlushInProgressGauge.WithLabelValues(id).Set(float64(stats.Flush.NumInProgress))
+		metrics.EventStorePebbleReadAmpGauge.WithLabelValues(id).Set(float64(stats.ReadAmp()))
+
+		for level, metric := range stats.Levels {
+			metrics.EventStorePebbleLevelFilesGauge.WithLabelValues(id, strconv.Itoa(level)).Set(float64(metric.NumFiles))
+		}
+		metrics.EventStorePebbleBlockCacheAccess.WithLabelValues(id, "hit").Set(float64(stats.BlockCache.Hits))
+		metrics.EventStorePebbleBlockCacheAccess.WithLabelValues(id, "miss").Set(float64(stats.BlockCache.Misses))
 	}
 
 	pdCurrentTime := e.pdClock.CurrentTime()
@@ -1209,6 +1284,7 @@ func (e *eventStore) writeEvents(
 	compressionBuf *[]byte,
 ) error {
 	metrics.EventStoreWriteRequestsCount.Inc()
+	prepareStart := time.Now()
 	batch := db.NewBatch()
 	kvCount := 0
 	var totalValueBytesBefore int64
@@ -1268,9 +1344,10 @@ func (e *eventStore) writeEvents(
 	if totalValueBytesAfter > 0 {
 		metrics.EventStoreCompressionRatioHistogram.Observe(float64(totalValueBytesBefore) / float64(totalValueBytesAfter))
 	}
+	metrics.EventStoreWritePrepareDurationHistogram.Observe(time.Since(prepareStart).Seconds())
 	start := time.Now()
 	err := batch.Commit(pebble.NoSync)
-	metrics.EventStoreWriteDurationHistogram.Observe(float64(time.Since(start).Milliseconds()) / 1000)
+	metrics.EventStoreWriteDurationHistogram.Observe(time.Since(start).Seconds())
 	return err
 }
 
@@ -1334,7 +1411,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		}
 		log.Debug("event store iter skip kv not in table span",
 			zap.String("tableSpan", common.FormatTableSpan(iter.tableSpan)),
-			zap.String("key", hex.EncodeToString(rawKV.Key)),
+			zap.String("key", util.RedactKey(rawKV.Key)),
 			zap.Uint64("startTs", rawKV.StartTs),
 			zap.Uint64("commitTs", rawKV.CRTs),
 			zap.Bool("isInsert", rawKV.IsInsert()),
@@ -1455,7 +1532,7 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 				if targetIndex == -1 {
 					log.Panic("cannot find subscription state", zap.Uint64("subscriptionID", change.SubID))
 				}
-				tableState.Subscriptions = append(tableState.Subscriptions[:targetIndex], tableState.Subscriptions[targetIndex+1:]...)
+				tableState.Subscriptions = slices.Delete(tableState.Subscriptions, targetIndex, targetIndex+1)
 			case SubscriptionChangeTypeUpdate:
 				tableState, ok := state.TableStates[change.Span.TableID]
 				if !ok {

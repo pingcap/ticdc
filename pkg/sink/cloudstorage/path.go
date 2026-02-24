@@ -319,11 +319,47 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 	ctx context.Context, tbl VersionedTableName, date string,
 ) (string, error) {
 	dir := f.generateDataDirPath(tbl, date)
-	name, err := f.generateDataFileName(ctx, tbl, date)
+	newIndexFile := false
+	if idx, ok := f.fileIndex[tbl]; !ok {
+		fileIdx, err := f.getFileIdxFromIndexFile(ctx, tbl, date)
+		if err != nil {
+			return "", err
+		}
+		f.fileIndex[tbl] = &indexWithDate{
+			prevDate: date,
+			currDate: date,
+			index:    fileIdx,
+		}
+		newIndexFile = true
+	} else {
+		idx.currDate = date
+	}
+	// if date changed, reset the counter
+	if f.fileIndex[tbl].prevDate != f.fileIndex[tbl].currDate {
+		f.fileIndex[tbl].prevDate = f.fileIndex[tbl].currDate
+		f.fileIndex[tbl].index = 0
+	}
+	f.fileIndex[tbl].index++
+	name := generateDataFileName(f.config.EnableTableAcrossNodes, tbl.DispatcherID.String(), f.fileIndex[tbl].index, f.extension, f.config.FileIndexWidth)
+	dataFile := path.Join(dir, name)
+	exist, err := f.storage.FileExists(ctx, dataFile)
 	if err != nil {
 		return "", err
 	}
-	return path.Join(dir, name), nil
+	if !exist {
+		return dataFile, nil
+	}
+	if newIndexFile {
+		log.Warn("the data file exists and the index file is stale",
+			zap.String("keyspace", f.changefeedID.Keyspace()),
+			zap.Stringer("changefeedID", f.changefeedID.ID()),
+			zap.Any("versionedTableName", tbl),
+			zap.String("dataFile", dataFile))
+	}
+	// if the file already exists, which means the fileIndex is stale,
+	// we need to delete the file index in memory and re-generate the file path with the updated file index until we find a non-existing file path.
+	delete(f.fileIndex, tbl)
+	return f.GenerateDataFilePath(ctx, tbl, date)
 }
 
 func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date string) string {
@@ -342,32 +378,6 @@ func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date str
 	}
 
 	return path.Join(elems...)
-}
-
-func (f *FilePathGenerator) generateDataFileName(
-	ctx context.Context, tbl VersionedTableName, date string,
-) (string, error) {
-	if idx, ok := f.fileIndex[tbl]; !ok {
-		fileIdx, err := f.getFileIdxFromIndexFile(ctx, tbl, date)
-		if err != nil {
-			return "", err
-		}
-		f.fileIndex[tbl] = &indexWithDate{
-			prevDate: date,
-			currDate: date,
-			index:    fileIdx,
-		}
-	} else {
-		idx.currDate = date
-	}
-
-	// if date changed, reset the counter
-	if f.fileIndex[tbl].prevDate != f.fileIndex[tbl].currDate {
-		f.fileIndex[tbl].prevDate = f.fileIndex[tbl].currDate
-		f.fileIndex[tbl].index = 0
-	}
-	f.fileIndex[tbl].index++
-	return generateDataFileName(f.config.EnableTableAcrossNodes, tbl.DispatcherID.String(), f.fileIndex[tbl].index, f.extension, f.config.FileIndexWidth), nil
 }
 
 func (f *FilePathGenerator) getFileIdxFromIndexFile(

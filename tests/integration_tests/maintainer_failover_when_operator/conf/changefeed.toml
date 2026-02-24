@@ -1,0 +1,8 @@
+[scheduler]
+enable-table-across-nodes = true
+# Keep small tables (like t1/t3 in this case) unsplittable to make sure
+# move-table API works deterministically, while still allowing t2 (20 regions)
+# to be split by operator.
+region-threshold = 10
+region-count-per-span = 10
+enable-splittable-check = true

@@ -33,6 +33,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -87,6 +88,16 @@ type DispatcherManager struct {
 	dispatcherMap *DispatcherMap[*dispatcher.EventDispatcher]
 	// redoDispatcherMap restore all the redo dispatchers in the DispatcherManager, including table trigger redo dispatcher
 	redoDispatcherMap *DispatcherMap[*dispatcher.RedoDispatcher]
+	// currentOperatorMap stores at most one in-flight scheduling request per dispatcherID (event and redo).
+	//
+	// It is used for:
+	//   - suppressing duplicate maintainer requests for the same dispatcher,
+	//   - reporting unfinished requests during bootstrap so a new maintainer can restore operators,
+	//   - cleaning up remove requests when a dispatcher is fully removed.
+	//
+	// Entries must be deleted on completion (create -> after creation; remove -> on cleanup), otherwise
+	// future maintainer requests for the same dispatcherID will be ignored.
+	currentOperatorMap sync.Map // map[common.DispatcherID]SchedulerDispatcherRequest (in dispatcher manager, not heartbeatpb)
 	// schemaIDToDispatchers is shared in the DispatcherManager,
 	// it store all the infos about schemaID->Dispatchers
 	// Dispatchers may change the schemaID when meets some special events, such as rename ddl
@@ -176,6 +187,7 @@ func NewDispatcherManager(
 	manager := &DispatcherManager{
 		ctx:                   ctx,
 		dispatcherMap:         newDispatcherMap[*dispatcher.EventDispatcher](),
+		currentOperatorMap:    sync.Map{},
 		changefeedID:          changefeedID,
 		keyspaceID:            keyspaceID,
 		pdClock:               pdClock,
@@ -234,6 +246,7 @@ func NewDispatcherManager(
 		manager.changefeedID,
 		manager.config.TimeZone,
 		manager.config.BDRMode,
+		manager.config.EnableActiveActive,
 		outputRawChangeEvent,
 		integrityCfg,
 		filterCfg,
@@ -349,8 +362,11 @@ func (e *DispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*h
 	// table trigger event dispatcher can register to event collector to receive events after finish the initial table schema store from the maintainer.
 	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.GetTableTriggerEventDispatcher(), e.sinkQuota)
 
-	// when sink is not mysql-class, table trigger event dispatcher need to receive the checkpointTs message from maintainer.
-	if e.sink.SinkType() != common.MysqlSinkType {
+	// The table trigger event dispatcher needs changefeed-level checkpoint updates only
+	// when downstream components must maintain table names (for non-MySQL sinks), or
+	// when MySQL/TiDB sink runs in enable-active-active mode to update the progress table.
+	needCheckpointUpdates := commonEvent.NeedTableNameStoreAndCheckpointTs(e.sink.SinkType() == common.MysqlSinkType, e.sharedInfo.EnableActiveActive())
+	if needCheckpointUpdates {
 		appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RegisterCheckpointTsMessageDs(e)
 	}
 	return nil
@@ -952,6 +968,11 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 func (e *DispatcherManager) cleanEventDispatcher(id common.DispatcherID, schemaID int64) {
 	e.dispatcherMap.Delete(id)
 	e.schemaIDToDispatchers.Delete(schemaID, id)
+	e.currentOperatorMap.Delete(id)
+	log.Debug("delete current working remove operator",
+		zap.String("changefeedID", e.changefeedID.String()),
+		zap.String("dispatcherID", id.String()),
+	)
 	tableTriggerEventDispatcher := e.GetTableTriggerEventDispatcher()
 	if tableTriggerEventDispatcher != nil && tableTriggerEventDispatcher.GetId() == id {
 		e.SetTableTriggerEventDispatcher(nil)

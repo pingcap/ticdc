@@ -308,3 +308,23 @@ func TestErrCacheDispatchWithFullChannelAndCanceledContext(t *testing.T) {
 		t.Fatal("dispatch method is stuck and didn't return after context cancellation")
 	}
 }
+
+func TestGCResolveLastRunMap(t *testing.T) {
+	now := time.Now()
+	resolveLastRun := make(map[uint64]time.Time, resolveLastRunGCThreshold+1)
+	const keep = 10
+	for i := 0; i < resolveLastRunGCThreshold+1; i++ {
+		lastRunTime := now.Add(-2 * resolveLockMinInterval)
+		if i < keep {
+			lastRunTime = now.Add(-resolveLockMinInterval / 2)
+		}
+		resolveLastRun[uint64(i)] = lastRunTime
+	}
+
+	resolveLastRun = gcResolveLastRunMap(resolveLastRun, now)
+	require.Len(t, resolveLastRun, keep)
+	for i := 0; i < keep; i++ {
+		_, ok := resolveLastRun[uint64(i)]
+		require.True(t, ok)
+	}
+}

@@ -491,6 +491,14 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 }
 
 func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
+	if !m.initialized.Load() && !cascade && !changefeedRemoved {
+		// A non-cascade remove can arrive before bootstrap finishes in move/restart scenarios.
+		// If we mark the maintainer as removing here, later bootstrap responses may be dropped,
+		// leaving the maintainer permanently not bootstrapped and the coordinator stuck retrying.
+		log.Info("ignore non-cascade remove request before bootstrap",
+			zap.Stringer("changefeedID", m.changefeedID))
+		return
+	}
 	m.removing.Store(true)
 	m.cascadeRemoving.Store(cascade)
 	m.changefeedRemoved.Store(changefeedRemoved)

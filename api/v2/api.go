@@ -38,6 +38,7 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 
 	v2.GET("status", api.ServerStatus)
 	v2.POST("log", api.SetLogLevel)
+	v2.POST("log/redact", api.SetRedactMode)
 	// For compatibility with the old API.
 	// TiDB Operator relies on this API to determine whether the TiCDC node is healthy.
 	router.GET("/status", api.ServerStatus)

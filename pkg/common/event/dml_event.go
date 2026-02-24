@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
@@ -73,8 +74,44 @@ func NewBatchDMLEvent() *BatchDMLEvent {
 }
 
 func (b *BatchDMLEvent) String() string {
-	return fmt.Sprintf("BatchDMLEvent{Version: %d, DMLEvents: %v, Rows: %v, RawRows: %v, Table: %v, Len: %d}",
-		b.Version, b.DMLEvents, b.Rows, b.RawRows, b.TableInfo.TableName.String(), b.Len())
+	var rowsStr string
+	if b.Rows != nil && b.TableInfo != nil {
+		defer func() {
+			if r := recover(); r != nil {
+				rowsStr = "<error>"
+			}
+		}()
+
+		var sb strings.Builder
+		sb.WriteString("[")
+		numRows := b.Rows.NumRows()
+		fields := b.TableInfo.GetFieldSlice()
+		for i := 0; i < numRows; i++ {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			row := b.Rows.GetRow(i)
+			if str := safeRowToString(row, fields); str != "" {
+				sb.WriteString(str)
+			} else {
+				sb.WriteString("<error>")
+			}
+		}
+		sb.WriteString("]")
+		rowsStr = sb.String()
+	} else {
+		rowsStr = "<nil>"
+	}
+
+	var rawRowsStr string
+	if b.RawRows != nil {
+		rawRowsStr = util.RedactBytes(b.RawRows)
+	} else {
+		rawRowsStr = "<nil>"
+	}
+
+	return fmt.Sprintf("BatchDMLEvent{Version: %d, DMLEvents: %v, Rows: %s, RawRows: %s, Table: %v, Len: %d}",
+		b.Version, b.DMLEvents, rowsStr, rawRowsStr, b.TableInfo.TableName.String(), b.Len())
 }
 
 // PopHeadDMLEvents pops the first `count` DMLEvents from the BatchDMLEvent and returns a new BatchDMLEvent.
@@ -94,6 +131,7 @@ func (b *BatchDMLEvent) PopHeadDMLEvents(count int) *BatchDMLEvent {
 	for i := 0; i < count; i++ {
 		newBatch.DMLEvents = append(newBatch.DMLEvents, b.DMLEvents[i])
 	}
+	clear(b.DMLEvents[:count])
 	b.DMLEvents = b.DMLEvents[count:]
 	return newBatch
 }
@@ -457,7 +495,8 @@ func (t *DMLEvent) String() string {
 		t.Version, t.DispatcherID.String(), t.Seq, t.PhysicalTableID, t.StartTs, t.CommitTs, t.TableInfo.TableName.String(), t.Checksum, t.Length, t.GetSize(), rowsStringBuilder.String())
 }
 
-// safeRowToString safely converts a row to string, recovering from any panics
+// safeRowToString safely converts a row to string, recovering from any panics.
+// The row values are redacted according to the current log redaction mode.
 func safeRowToString(row chunk.Row, fields []*types.FieldType) string {
 	defer func() {
 		if r := recover(); r != nil {
@@ -470,7 +509,8 @@ func safeRowToString(row chunk.Row, fields []*types.FieldType) string {
 		return ""
 	}
 
-	return row.ToString(fields)
+	// Apply log redaction to the row string representation
+	return util.RedactValue(row.ToString(fields))
 }
 
 // SetRows sets the Rows chunk for this DMLEvent
