@@ -236,13 +236,19 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 			if resignErr := e.resignLogCoordinator(); resignErr != nil {
 				log.Warn("resign log coordinator actively failed",
 					zap.String("nodeID", nodeID), zap.Error(resignErr))
-				return errors.Trace(err)
+				return nil
 			}
 			return nil
 		}
 
-		// FIXME: get log coordinator version from etcd and add it to log
-		log.Info("campaign log coordinator successfully", zap.String("nodeID", nodeID))
+		logCoordinatorVersion, err := e.svr.EtcdClient.GetLogCoordinatorRevision(ctx, config.CaptureID(nodeID))
+		if err != nil {
+			return errors.Trace(err)
+		}
+
+		log.Info("campaign log coordinator successfully",
+			zap.String("nodeID", nodeID),
+			zap.Int64("logCoordinatorVersion", logCoordinatorVersion))
 
 		co := logcoordinator.New()
 		err = co.Run(ctx)
@@ -253,12 +259,16 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 					return errors.Trace(resignErr)
 				}
 			}
-			log.Warn("log coordinator exited with error", zap.String("nodeID", nodeID), zap.Error(err))
+			log.Warn("log coordinator exited with error",
+				zap.String("nodeID", nodeID), zap.Int64("logCoordinatorVersion", logCoordinatorVersion),
+				zap.Error(err))
 			return errors.Trace(err)
 		}
 
 		// If coordinator exits normally, continue the campaign loop and try to election coordinator again
-		log.Info("log coordinator exited normally", zap.String("nodeID", nodeID), zap.Error(err))
+		log.Info("log coordinator exited normally",
+			zap.String("nodeID", nodeID), zap.Int64("logCoordinatorVersion", logCoordinatorVersion),
+			zap.Error(err))
 	}
 }
 
@@ -286,16 +296,16 @@ func (e *elector) resignLogCoordinator() error {
 	nodeID := string(e.svr.info.ID)
 	// use a new context to prevent the context from being cancelled.
 	resignCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	if resignErr := e.logElection.Resign(resignCtx); resignErr != nil {
 		if errors.Is(errors.Cause(resignErr), context.DeadlineExceeded) {
-			log.Info("log coordinator resign failed",
+			log.Warn("log coordinator resign timeout",
 				zap.String("nodeID", nodeID), zap.Error(resignErr))
-			cancel()
-			return errors.Trace(resignErr)
+			return nil
 		}
-		log.Warn("log coordinator resign timeout",
+		log.Info("log coordinator resign failed",
 			zap.String("nodeID", nodeID), zap.Error(resignErr))
+		return errors.Trace(resignErr)
 	}
-	cancel()
 	return nil
 }

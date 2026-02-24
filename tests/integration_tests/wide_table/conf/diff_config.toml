@@ -7,13 +7,13 @@ export-fix-sql = true
 check-struct-only = false
 
 [task]
-    output-dir = "/tmp/tidb_cdc_test/correctness_for_shared_column_schema/sync_diff/output"
+    output-dir = "/tmp/tidb_cdc_test/wide_table/sync_diff/output"
 
     source-instances = ["mysql1"]
 
     target-instance = "tidb0"
 
-    target-check-tables = ["test_*00.t1"]
+    target-check-tables = ["wide_table.?*"]
 
 [data-sources]
 [data-sources.mysql1]
