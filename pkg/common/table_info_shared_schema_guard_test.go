@@ -22,16 +22,14 @@ import (
 	"go/parser"
 	"go/token"
 	"io"
-	"io/fs"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
-	"github.com/pingcap/log"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 )
 
 type moduleInfo struct {
@@ -52,6 +50,16 @@ type structGuardCase struct {
 	pkgRelativePath string
 	typeName        string
 	expectedFields  []string
+}
+
+type packageKey struct {
+	modulePath      string
+	pkgRelativePath string
+}
+
+type goSourceFile struct {
+	name string
+	src  []byte
 }
 
 // TestLatestTiDBTableInfoSharedSchemaGuard verifies the upstream struct fields
@@ -115,7 +123,9 @@ func TestLatestTiDBTableInfoSharedSchemaGuard(t *testing.T) {
 		},
 	}
 
+	requiredTypesByPackage := buildRequiredTypesByPackage(cases)
 	moduleCache := make(map[string]*moduleInfo)
+	packageCache := make(map[packageKey]map[string][]string)
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
@@ -125,12 +135,37 @@ func TestLatestTiDBTableInfoSharedSchemaGuard(t *testing.T) {
 				moduleCache[tc.modulePath] = mod
 			}
 
-			actualFields, err := extractStructFieldsFromModule(mod, tc.pkgRelativePath, tc.typeName)
-			require.NoError(
+			pkgKey := packageKey{
+				modulePath:      tc.modulePath,
+				pkgRelativePath: tc.pkgRelativePath,
+			}
+			fieldsByType, ok := packageCache[pkgKey]
+			if !ok {
+				var err error
+				fieldsByType, err = extractStructFieldsFromModule(
+					mod,
+					tc.pkgRelativePath,
+					requiredTypesByPackage[pkgKey],
+				)
+				require.NoError(
+					t,
+					err,
+					"extract struct fields failed for package=%s in module=%s version=%s types=%v",
+					tc.pkgRelativePath,
+					mod.Path,
+					mod.Version,
+					requiredTypesByPackage[pkgKey],
+				)
+				packageCache[pkgKey] = fieldsByType
+			}
+
+			actualFields, ok := fieldsByType[tc.typeName]
+			require.True(
 				t,
-				err,
-				"extract struct fields failed for %s in module=%s version=%s",
+				ok,
+				"type %s not found in package=%s module=%s@%s",
 				tc.typeName,
+				tc.pkgRelativePath,
 				mod.Path,
 				mod.Version,
 			)
@@ -140,63 +175,50 @@ func TestLatestTiDBTableInfoSharedSchemaGuard(t *testing.T) {
 	}
 }
 
+func buildRequiredTypesByPackage(cases []structGuardCase) map[packageKey][]string {
+	requiredTypeSetByPackage := make(map[packageKey]map[string]struct{})
+	for _, tc := range cases {
+		key := packageKey{
+			modulePath:      tc.modulePath,
+			pkgRelativePath: tc.pkgRelativePath,
+		}
+		typeSet, ok := requiredTypeSetByPackage[key]
+		if !ok {
+			typeSet = make(map[string]struct{})
+			requiredTypeSetByPackage[key] = typeSet
+		}
+		typeSet[tc.typeName] = struct{}{}
+	}
+
+	requiredTypesByPackage := make(map[packageKey][]string, len(requiredTypeSetByPackage))
+	for key, typeSet := range requiredTypeSetByPackage {
+		typeNames := make([]string, 0, len(typeSet))
+		for typeName := range typeSet {
+			typeNames = append(typeNames, typeName)
+		}
+		slices.Sort(typeNames)
+		requiredTypesByPackage[key] = typeNames
+	}
+	return requiredTypesByPackage
+}
+
 // queryModuleInfo resolves a module at @master and returns location/version
 // information for source-level contract checks.
 func queryModuleInfo(t *testing.T, modulePath string) *moduleInfo {
 	t.Helper()
 
-	cmd := exec.Command("go", "list", "-m", "-json", modulePath+"@master")
-	output, err := cmd.CombinedOutput()
-	require.NoError(t, err, "query module %s failed: %s", modulePath, string(output))
-
-	mod, err := decodeModuleInfo(output)
-	require.NoError(t, err, "unmarshal module metadata for %s failed", modulePath)
-
-	// go list may omit Dir when the queried version is not yet downloaded.
-	// In that case, explicitly download the resolved version to get a stable
-	// source directory for AST parsing.
-	if mod.Dir == "" {
-		query := modulePath + "@master"
-		if mod.Version != "" {
-			query = modulePath + "@" + mod.Version
-		}
-		downloadCmd := exec.Command("go", "mod", "download", "-json", query)
-		downloadOutput, downloadErr := downloadCmd.CombinedOutput()
-		downloaded, err := decodeModuleInfo(downloadOutput)
-		require.NoError(t, err, "unmarshal downloaded module metadata for %s failed", query)
-		if downloadErr != nil && downloaded.Dir == "" && downloaded.Zip == "" {
-			require.NoError(
-				t,
-				downloadErr,
-				"download module %s failed: %s",
-				query,
-				string(downloadOutput),
-			)
-		}
-
-		if mod.Path == "" {
-			mod.Path = downloaded.Path
-		}
-		if mod.Version == "" {
-			mod.Version = downloaded.Version
-		}
-		if mod.Origin.Hash == "" {
-			mod.Origin.Hash = downloaded.Origin.Hash
-		}
-		mod.Dir = downloaded.Dir
-		mod.Zip = downloaded.Zip
+	cmd := exec.Command("go", "mod", "download", "-json", modulePath+"@master")
+	output, cmdErr := cmd.CombinedOutput()
+	mod, decodeErr := decodeModuleInfo(output)
+	require.NoError(t, decodeErr, "unmarshal module metadata for %s failed", modulePath)
+	if cmdErr != nil && mod.Dir == "" && mod.Zip == "" {
+		require.NoError(t, cmdErr, "download module %s failed: %s", modulePath, string(output))
+	}
+	if mod.Path == "" {
+		mod.Path = modulePath
 	}
 
 	require.True(t, mod.Dir != "" || mod.Zip != "", "module source should not be empty for %s", modulePath)
-	log.Info(
-		"shared schema guard resolved module version",
-		zap.String("module", mod.Path),
-		zap.String("version", mod.Version),
-		zap.String("hash", mod.Origin.Hash),
-		zap.String("dir", mod.Dir),
-		zap.String("zip", mod.Zip),
-		zap.String("moduleError", mod.Error),
-	)
 	return &mod
 }
 
@@ -215,15 +237,27 @@ func decodeModuleInfo(output []byte) (moduleInfo, error) {
 	return mod, nil
 }
 
-// extractStructFieldsFromModule reads struct fields from module source. It
-// prefers local module dir, and falls back to module zip when dir is unavailable.
-func extractStructFieldsFromModule(mod *moduleInfo, pkgRelativePath string, typeName string) ([]string, error) {
+// extractStructFieldsFromModule reads required struct fields from module source.
+// It prefers local module dir, and falls back to module zip when dir is unavailable.
+func extractStructFieldsFromModule(mod *moduleInfo, pkgRelativePath string, typeNames []string) (map[string][]string, error) {
+	if len(typeNames) == 0 {
+		return map[string][]string{}, nil
+	}
+
+	sourceFiles, err := collectPackageGoSourceFiles(mod, pkgRelativePath)
+	if err != nil {
+		return nil, err
+	}
+	return extractStructFieldsFromSourceFiles(sourceFiles, typeNames)
+}
+
+func collectPackageGoSourceFiles(mod *moduleInfo, pkgRelativePath string) ([]goSourceFile, error) {
 	if mod.Dir != "" {
 		pkgDir := filepath.Join(mod.Dir, filepath.FromSlash(pkgRelativePath))
-		return extractStructFields(pkgDir, typeName)
+		return collectPackageGoSourceFilesFromDir(pkgDir)
 	}
 	if mod.Zip != "" {
-		return extractStructFieldsFromZip(mod.Zip, pkgRelativePath, typeName)
+		return collectPackageGoSourceFilesFromZip(mod.Zip, pkgRelativePath)
 	}
 	return nil, fmt.Errorf("no source available for module=%s version=%s", mod.Path, mod.Version)
 }
@@ -253,17 +287,43 @@ func assertStructContract(t *testing.T, tc structGuardCase, mod *moduleInfo, act
 	)
 }
 
-// extractStructFieldsFromZip parses source files directly from module zip cache.
-func extractStructFieldsFromZip(zipPath string, pkgRelativePath string, typeName string) ([]string, error) {
+func collectPackageGoSourceFilesFromDir(packageDir string) ([]goSourceFile, error) {
+	entries, err := os.ReadDir(packageDir)
+	if err != nil {
+		return nil, err
+	}
+
+	sourceFiles := make([]goSourceFile, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		fileName := entry.Name()
+		if !strings.HasSuffix(fileName, ".go") || strings.HasSuffix(fileName, "_test.go") {
+			continue
+		}
+
+		src, err := os.ReadFile(filepath.Join(packageDir, fileName))
+		if err != nil {
+			return nil, err
+		}
+		sourceFiles = append(sourceFiles, goSourceFile{
+			name: fileName,
+			src:  src,
+		})
+	}
+	return sourceFiles, nil
+}
+
+func collectPackageGoSourceFilesFromZip(zipPath string, pkgRelativePath string) ([]goSourceFile, error) {
 	reader, err := zip.OpenReader(zipPath)
 	if err != nil {
 		return nil, err
 	}
 	defer reader.Close()
 
-	fileSet := token.NewFileSet()
-	fieldSet := make(map[string]struct{})
-	found := false
+	sourceFiles := make([]goSourceFile, 0, len(reader.File))
 	targetDir := filepath.ToSlash(pkgRelativePath) + "/"
 
 	for _, file := range reader.File {
@@ -302,65 +362,69 @@ func extractStructFieldsFromZip(zipPath string, pkgRelativePath string, typeName
 			return nil, closeErr
 		}
 
-		fileNode, err := parser.ParseFile(fileSet, rest, src, parser.SkipObjectResolution)
+		sourceFiles = append(sourceFiles, goSourceFile{
+			name: rest,
+			src:  src,
+		})
+	}
+	return sourceFiles, nil
+}
+
+func extractStructFieldsFromSourceFiles(sourceFiles []goSourceFile, typeNames []string) (map[string][]string, error) {
+	targetTypeSet := make(map[string]struct{}, len(typeNames))
+	for _, typeName := range typeNames {
+		targetTypeSet[typeName] = struct{}{}
+	}
+
+	fileSet := token.NewFileSet()
+	foundTypeSet := make(map[string]struct{}, len(typeNames))
+	nonStructTypeSet := make(map[string]struct{}, len(typeNames))
+	fieldSetByType := make(map[string]map[string]struct{}, len(typeNames))
+
+	for _, sourceFile := range sourceFiles {
+		fileNode, err := parser.ParseFile(fileSet, sourceFile.name, sourceFile.src, parser.SkipObjectResolution)
 		if err != nil {
 			return nil, err
 		}
-		if err := collectStructFieldsFromFile(fileNode, typeName, fieldSet, &found); err != nil {
+		if err := collectStructFieldsFromFile(
+			fileNode,
+			targetTypeSet,
+			foundTypeSet,
+			nonStructTypeSet,
+			fieldSetByType,
+		); err != nil {
 			return nil, err
 		}
 	}
 
-	if !found {
-		return nil, fmt.Errorf("type %s not found in zip package %s", typeName, pkgRelativePath)
-	}
-
-	fields := make([]string, 0, len(fieldSet))
-	for field := range fieldSet {
-		fields = append(fields, field)
-	}
-	slices.Sort(fields)
-	return fields, nil
-}
-
-// extractStructFields parses non-test source files and returns the field list of
-// a target struct type in sorted order.
-func extractStructFields(packageDir string, typeName string) ([]string, error) {
-	fileSet := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fileSet, packageDir, func(_ fs.FileInfo) bool {
-		return true
-	}, parser.SkipObjectResolution)
-	if err != nil {
-		return nil, err
-	}
-
-	fieldSet := make(map[string]struct{})
-	found := false
-	for _, pkg := range pkgs {
-		for fileName, fileNode := range pkg.Files {
-			if strings.HasSuffix(fileName, "_test.go") {
-				continue
-			}
-			if err := collectStructFieldsFromFile(fileNode, typeName, fieldSet, &found); err != nil {
-				return nil, err
-			}
+	fieldsByType := make(map[string][]string, len(typeNames))
+	for _, typeName := range typeNames {
+		if _, ok := nonStructTypeSet[typeName]; ok {
+			return nil, fmt.Errorf("type %s is not a struct", typeName)
 		}
-	}
 
-	if !found {
-		return nil, fmt.Errorf("type %s not found in %s", typeName, packageDir)
+		fieldSet, ok := fieldSetByType[typeName]
+		if !ok {
+			return nil, fmt.Errorf("type %s not found in package source files", typeName)
+		}
+		fields := make([]string, 0, len(fieldSet))
+		for field := range fieldSet {
+			fields = append(fields, field)
+		}
+		slices.Sort(fields)
+		fieldsByType[typeName] = fields
 	}
-
-	fields := make([]string, 0, len(fieldSet))
-	for field := range fieldSet {
-		fields = append(fields, field)
-	}
-	slices.Sort(fields)
-	return fields, nil
+	return fieldsByType, nil
 }
 
-// collectStructFieldsFromFile collects fields from a target struct in one AST file.
-func collectStructFieldsFromFile(fileNode *ast.File, typeName string, fieldSet map[string]struct{}, found *bool) error {
+// collectStructFieldsFromFile collects fields from required structs in one AST file.
+func collectStructFieldsFromFile(
+	fileNode *ast.File,
+	targetTypeSet map[string]struct{},
+	foundTypeSet map[string]struct{},
+	nonStructTypeSet map[string]struct{},
+	fieldSetByType map[string]map[string]struct{},
+) error {
 	for _, decl := range fileNode.Decls {
 		genDecl, ok := decl.(*ast.GenDecl)
 		if !ok || genDecl.Tok != token.TYPE {
@@ -368,17 +432,26 @@ func collectStructFieldsFromFile(fileNode *ast.File, typeName string, fieldSet m
 		}
 		for _, spec := range genDecl.Specs {
 			typeSpec, ok := spec.(*ast.TypeSpec)
-			if !ok || typeSpec.Name.Name != typeName {
+			if !ok {
 				continue
 			}
-			structType, ok := typeSpec.Type.(*ast.StructType)
-			if !ok {
-				return fmt.Errorf("type %s is not a struct", typeName)
+
+			typeName := typeSpec.Name.Name
+			if _, ok := targetTypeSet[typeName]; !ok {
+				continue
 			}
-			if *found {
+			if _, found := foundTypeSet[typeName]; found {
 				return fmt.Errorf("type %s found multiple times", typeName)
 			}
-			*found = true
+			foundTypeSet[typeName] = struct{}{}
+
+			structType, ok := typeSpec.Type.(*ast.StructType)
+			if !ok {
+				nonStructTypeSet[typeName] = struct{}{}
+				continue
+			}
+
+			fieldSet := make(map[string]struct{}, len(structType.Fields.List))
 			for _, field := range structType.Fields.List {
 				if len(field.Names) == 0 {
 					name, ok := embeddedFieldName(field.Type)
@@ -392,6 +465,7 @@ func collectStructFieldsFromFile(fileNode *ast.File, typeName string, fieldSet m
 					fieldSet[name.Name] = struct{}{}
 				}
 			}
+			fieldSetByType[typeName] = fieldSet
 		}
 	}
 	return nil
