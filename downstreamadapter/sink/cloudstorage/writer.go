@@ -31,7 +31,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/failpointrecord"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/prometheus/client_golang/prometheus"
@@ -305,34 +304,6 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 	bytesCnt := int64(0)
 	// There is always only one message here in task.msgs
 	for _, msg := range task.msgs {
-		// Failpoint: drop this message to simulate data loss.
-		// Usage: failpoint.Enable(".../cloudStorageSinkDropMessage", "return")
-		//        failpoint.Enable(".../cloudStorageSinkDropMessage", "50%return")
-		failpoint.Inject("cloudStorageSinkDropMessage", func() {
-			log.Warn("cloudStorageSinkDropMessage: dropping message to simulate data loss",
-				zap.Int("workerID", d.id),
-				zap.String("keyspace", d.changeFeedID.Keyspace()),
-				zap.Stringer("changefeed", d.changeFeedID.ID()),
-				zap.String("dataFilePath", dataFilePath),
-				zap.Any("logInfo", msg.LogInfo))
-			failpointrecord.Write("cloudStorageSinkDropMessage", logInfoToRowRecords(msg.LogInfo))
-			callbacks = append(callbacks, msg.Callback)
-			failpoint.Continue()
-		})
-
-		// Failpoint: mutate non-PK column data in the message.
-		// Usage: failpoint.Enable(".../cloudStorageSinkMutateValue", "return")
-		failpoint.Inject("cloudStorageSinkMutateValue", func() {
-			log.Warn("cloudStorageSinkMutateValue: mutating message value to simulate data inconsistency",
-				zap.Int("workerID", d.id),
-				zap.String("keyspace", d.changeFeedID.Keyspace()),
-				zap.Stringer("changefeed", d.changeFeedID.ID()),
-				zap.String("dataFilePath", dataFilePath),
-				zap.Any("logInfo", msg.LogInfo))
-			failpointrecord.Write("cloudStorageSinkMutateValue", logInfoToRowRecords(msg.LogInfo))
-			mutateMessageValueForFailpoint(msg)
-		})
-
 		if msg.Key != nil && rowsCnt == 0 {
 			buf.Write(msg.Key)
 			bytesCnt += int64(len(msg.Key))
@@ -460,26 +431,6 @@ func (d *writer) close() {
 	if !atomic.CompareAndSwapUint64(&d.isClosed, 0, 1) {
 		return
 	}
-}
-
-// logInfoToRowRecords converts a MessageLogInfo to failpointrecord.RowRecords
-// for writing to the failpoint record file.
-func logInfoToRowRecords(info *common.MessageLogInfo) []failpointrecord.RowRecord {
-	if info == nil || len(info.Rows) == 0 {
-		return nil
-	}
-	records := make([]failpointrecord.RowRecord, 0, len(info.Rows))
-	for _, row := range info.Rows {
-		pks := make(map[string]any, len(row.PrimaryKeys))
-		for _, pk := range row.PrimaryKeys {
-			pks[pk.Name] = pk.Value
-		}
-		records = append(records, failpointrecord.RowRecord{
-			CommitTs:    row.CommitTs,
-			PrimaryKeys: pks,
-		})
-	}
-	return records
 }
 
 // batchedTask contains a set of singleTableTask.

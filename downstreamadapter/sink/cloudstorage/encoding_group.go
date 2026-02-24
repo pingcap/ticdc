@@ -16,12 +16,17 @@ package cloudstorage
 import (
 	"context"
 
+	"github.com/pingcap/failpoint"
+	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/failpointrecord"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
+	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -90,6 +95,15 @@ func (eg *encodingGroup) runEncoder(ctx context.Context) error {
 				return err
 			}
 			frag.encodedMsgs = encoder.Build()
+			// Global switch for cloudstorage sink message failpoints.
+			// Usage:
+			//   failpoint.Enable(".../cloudStorageSinkMessageFailpointSwitch", "return(false)") // disable
+			//   failpoint.Enable(".../cloudStorageSinkMessageFailpointSwitch", "return(true)")  // enable
+			failpoint.Inject("cloudStorageSinkMessageFailpointSwitch", func(val failpoint.Value) {
+				if enabled, ok := val.(bool); ok && enabled {
+					eg.applyFailpointsOnEncodedMessages(frag)
+				}
+			})
 
 			select {
 			case <-ctx.Done():
@@ -102,4 +116,86 @@ func (eg *encodingGroup) runEncoder(ctx context.Context) error {
 
 func (eg *encodingGroup) close() {
 	eg.closed.Store(true)
+}
+
+func (eg *encodingGroup) applyFailpointsOnEncodedMessages(frag eventFragment) {
+	rowRecordsByMsg := splitRowRecordsByMessages(frag.encodedMsgs, dmlEventToRowRecords(frag.event))
+	for idx, msg := range frag.encodedMsgs {
+		var rowRecords []failpointrecord.RowRecord
+		if idx < len(rowRecordsByMsg) {
+			rowRecords = rowRecordsByMsg[idx]
+		}
+		failpoint.Inject("cloudStorageSinkDropMessage", func() {
+			log.Warn("cloudStorageSinkDropMessage: dropping message to simulate data loss",
+				zap.String("keyspace", eg.changeFeedID.Keyspace()),
+				zap.Stringer("changefeed", eg.changeFeedID.ID()),
+				zap.Any("rows", rowRecords))
+			failpointrecord.Write("cloudStorageSinkDropMessage", rowRecords)
+			// Keep callback flow unchanged while dropping data payload.
+			msg.Key = nil
+			msg.Value = nil
+			msg.SetRowsCount(0)
+		})
+		failpoint.Inject("cloudStorageSinkMutateValue", func() {
+			log.Warn("cloudStorageSinkMutateValue: mutating message value to simulate data inconsistency",
+				zap.String("keyspace", eg.changeFeedID.Keyspace()),
+				zap.Stringer("changefeed", eg.changeFeedID.ID()),
+				zap.Any("rows", rowRecords))
+			failpointrecord.Write("cloudStorageSinkMutateValue", rowRecords)
+			mutateMessageValueForFailpoint(msg)
+		})
+	}
+}
+
+func splitRowRecordsByMessages(messages []*common.Message, rows []failpointrecord.RowRecord) [][]failpointrecord.RowRecord {
+	if len(messages) == 0 {
+		return nil
+	}
+	ret := make([][]failpointrecord.RowRecord, 0, len(messages))
+	rowIdx := 0
+	for _, msg := range messages {
+		rowsNeeded := msg.GetRowsCount()
+		if rowsNeeded <= 0 || rowIdx >= len(rows) {
+			ret = append(ret, nil)
+			continue
+		}
+		end := rowIdx + rowsNeeded
+		if end > len(rows) {
+			end = len(rows)
+		}
+		ret = append(ret, rows[rowIdx:end])
+		rowIdx = end
+	}
+	return ret
+}
+
+func dmlEventToRowRecords(event *commonEvent.DMLEvent) []failpointrecord.RowRecord {
+	if event == nil || event.TableInfo == nil {
+		return nil
+	}
+	indexes, columns := (&commonEvent.RowEvent{TableInfo: event.TableInfo}).PrimaryKeyColumn()
+	rowRecords := make([]failpointrecord.RowRecord, 0, event.Len())
+	for {
+		row, ok := event.GetNextRow()
+		if !ok {
+			event.Rewind()
+			break
+		}
+		pks := make(map[string]any, len(columns))
+		for i, col := range columns {
+			if col == nil {
+				continue
+			}
+			rowData := row.Row
+			if row.RowType == commonType.RowTypeDelete {
+				rowData = row.PreRow
+			}
+			pks[col.Name.String()] = commonType.ExtractColVal(&rowData, col, indexes[i])
+		}
+		rowRecords = append(rowRecords, failpointrecord.RowRecord{
+			CommitTs:    event.CommitTs,
+			PrimaryKeys: pks,
+		})
+	}
+	return rowRecords
 }
