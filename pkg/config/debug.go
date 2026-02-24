@@ -85,14 +85,18 @@ func NewDefaultPullerConfig() *PullerConfig {
 type EventStoreConfig struct {
 	CompressionThreshold int `toml:"compression-threshold" json:"compression_threshold"`
 
+	// EnableZstdCompression controls whether to enable zstd compression for large values.
+	EnableZstdCompression bool `toml:"enable-zstd-compression" json:"enable_zstd_compression"`
+
 	EnableDataSharing bool `toml:"enable-data-sharing" json:"enable_data_sharing"`
 }
 
 // NewDefaultEventStoreConfig returns the default event store configuration.
 func NewDefaultEventStoreConfig() *EventStoreConfig {
 	return &EventStoreConfig{
-		CompressionThreshold: 16384, // 16KB
-		EnableDataSharing:    false,
+		CompressionThreshold:  16384, // 16KB
+		EnableZstdCompression: true,
+		EnableDataSharing:     false,
 	}
 }
 

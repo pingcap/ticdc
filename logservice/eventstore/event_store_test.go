@@ -115,6 +115,17 @@ func setDataSharingForTest(t *testing.T, enable bool) func() {
 	}
 }
 
+func setZstdCompressionForTest(t *testing.T, enable bool) func() {
+	t.Helper()
+	originalCfg := config.GetGlobalServerConfig().Clone()
+	updatedCfg := originalCfg.Clone()
+	updatedCfg.Debug.EventStore.EnableZstdCompression = enable
+	config.StoreGlobalServerConfig(updatedCfg)
+	return func() {
+		config.StoreGlobalServerConfig(originalCfg)
+	}
+}
+
 func TestEventStoreInteractionWithSubClient(t *testing.T) {
 	restoreCfg := setDataSharingForTest(t, true)
 	defer restoreCfg()
@@ -879,6 +890,57 @@ func TestWriteToEventStore(t *testing.T) {
 	}
 	require.True(t, foundSmall, "small value entry not found")
 	require.True(t, foundLarge, "large value entry not found")
+}
+
+func TestWriteToEventStoreZstdCompressionDisabled(t *testing.T) {
+	restoreCfg := setZstdCompressionForTest(t, false)
+	defer restoreCfg()
+
+	dir := t.TempDir()
+	_, storeInt := newEventStoreForTest(dir)
+	store := storeInt.(*eventStore)
+	defer store.Close(context.Background())
+
+	key := []byte("large-key")
+	value := bytes.Repeat([]byte("large-value"), store.compressionThreshold/10)
+	entry := common.RawKVEntry{
+		OpType:  common.OpTypePut,
+		StartTs: 200,
+		CRTs:    210,
+		Key:     key,
+		Value:   value,
+	}
+	events := []eventWithCallback{{
+		subID:    1,
+		tableID:  1,
+		kvs:      []common.RawKVEntry{entry},
+		callback: func() {},
+	}}
+
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	defer encoder.Close()
+
+	var compressionBuf []byte
+	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf)
+	require.NoError(t, err)
+
+	iter, err := store.dbs[0].NewIter(&pebble.IterOptions{})
+	require.NoError(t, err)
+	defer iter.Close()
+
+	count := 0
+	for iter.First(); iter.Valid(); iter.Next() {
+		_, compressionType := DecodeKeyMetas(iter.Key())
+		require.Equal(t, CompressionNone, compressionType)
+
+		readEntry := &common.RawKVEntry{}
+		err = readEntry.Decode(iter.Value())
+		require.NoError(t, err)
+		require.Equal(t, value, readEntry.Value)
+		count++
+	}
+	require.Equal(t, 1, count)
 }
 
 func TestEventStoreCompressionAndIterDecodeBufferReuse(t *testing.T) {
