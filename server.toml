@@ -1,10 +1,1 @@
 newarch = true
-
-[debug.event-store]
-# Enable zstd compression for large values stored in event store.
-# Default: true
-enable-zstd-compression = true
-
-# Compress values larger than this size (bytes).
-# Default: 16384 (16KB)
-# compression-threshold = 16384
