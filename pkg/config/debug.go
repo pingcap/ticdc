@@ -49,9 +49,6 @@ func (c *DebugConfig) ValidateAndAdjust() error {
 	if err := c.Scheduler.ValidateAndAdjust(); err != nil {
 		return errors.Trace(err)
 	}
-	if c.EventStore == nil {
-		c.EventStore = NewDefaultEventStoreConfig()
-	}
 
 	return nil
 }
