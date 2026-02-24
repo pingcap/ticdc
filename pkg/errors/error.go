@@ -821,6 +821,37 @@ var (
 		"unimplemented IOType: %d",
 		errors.RFCCodeText("CDC:ErrUnimplementedIOType"),
 	)
+
+	// encryption related errors
+	ErrEncryptionMetaNotFound = errors.Normalize(
+		"encryption meta not found",
+		errors.RFCCodeText("CDC:ErrEncryptionMetaNotFound"),
+	)
+
+	ErrUnsupportedEncryptionAlgorithm = errors.Normalize(
+		"unsupported encryption algorithm: %s",
+		errors.RFCCodeText("CDC:ErrUnsupportedEncryptionAlgorithm"),
+	)
+
+	ErrEncryptionFailed = errors.Normalize(
+		"encryption failed: %s",
+		errors.RFCCodeText("CDC:ErrEncryptionFailed"),
+	)
+
+	ErrDecryptionFailed = errors.Normalize(
+		"decryption failed: %s",
+		errors.RFCCodeText("CDC:ErrDecryptionFailed"),
+	)
+
+	ErrInvalidDataKeyID = errors.Normalize(
+		"invalid data key ID: %s",
+		errors.RFCCodeText("CDC:ErrInvalidDataKeyID"),
+	)
+
+	ErrDataKeyNotFound = errors.Normalize(
+		"data key not found: %s",
+		errors.RFCCodeText("CDC:ErrDataKeyNotFound"),
+	)
 )
 
 // ErrorType defines the type of application errors

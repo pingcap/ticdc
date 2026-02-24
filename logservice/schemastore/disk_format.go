@@ -15,6 +15,7 @@ package schemastore
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"math"
@@ -25,6 +26,8 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/encryption"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -163,6 +166,11 @@ func writeUpperBoundMeta(db *pebble.DB, upperBound UpperBoundMeta) {
 }
 
 func loadDatabasesInKVSnap(snap *pebble.Snapshot, gcTs uint64) (map[int64]*BasicDatabaseInfo, error) {
+	return loadDatabasesInKVSnapWithEncryption(snap, gcTs, nil, 0)
+}
+
+// loadDatabasesInKVSnapWithEncryption decrypts and loads databases from snapshot if encryption is enabled
+func loadDatabasesInKVSnapWithEncryption(snap *pebble.Snapshot, gcTs uint64, encMgr encryption.EncryptionManager, keyspaceID uint32) (map[int64]*BasicDatabaseInfo, error) {
 	databaseMap := make(map[int64]*BasicDatabaseInfo)
 
 	startKey, err := schemaInfoKey(gcTs, 0)
@@ -182,8 +190,19 @@ func loadDatabasesInKVSnap(snap *pebble.Snapshot, gcTs uint64) (map[int64]*Basic
 	}
 	defer snapIter.Close()
 	for snapIter.First(); snapIter.Valid(); snapIter.Next() {
+		value := snapIter.Value()
+
+		// Decrypt if encryption is enabled
+		if encMgr != nil {
+			decryptedValue, err := encMgr.DecryptData(context.Background(), keyspaceID, value)
+			if err != nil {
+				log.Fatal("decrypt db info failed", zap.Error(err))
+			}
+			value = decryptedValue
+		}
+
 		var dbInfo model.DBInfo
-		if err := json.Unmarshal(snapIter.Value(), &dbInfo); err != nil {
+		if err := json.Unmarshal(value, &dbInfo); err != nil {
 			log.Fatal("unmarshal db info failed", zap.Error(err))
 		}
 
@@ -472,6 +491,11 @@ func unmarshalPersistedDDLEvent(value []byte) PersistedDDLEvent {
 }
 
 func readPersistedDDLEvent(snap *pebble.Snapshot, version uint64) PersistedDDLEvent {
+	return readPersistedDDLEventWithEncryption(snap, version, nil, 0)
+}
+
+// readPersistedDDLEventWithEncryption reads and decrypts DDL event if encryption is enabled
+func readPersistedDDLEventWithEncryption(snap *pebble.Snapshot, version uint64, encMgr encryption.EncryptionManager, keyspaceID uint32) PersistedDDLEvent {
 	ddlKey, err := ddlJobKey(version)
 	if err != nil {
 		log.Fatal("generate ddl job key failed", zap.Error(err))
@@ -483,10 +507,28 @@ func readPersistedDDLEvent(snap *pebble.Snapshot, version uint64) PersistedDDLEv
 			zap.Error(err))
 	}
 	defer closer.Close()
+
+	// Decrypt if encryption is enabled
+	if encMgr != nil {
+		decryptedValue, err := encMgr.DecryptData(context.Background(), keyspaceID, ddlValue)
+		if err != nil {
+			log.Fatal("decrypt ddl event failed",
+				zap.Uint64("version", version),
+				zap.Uint32("keyspaceID", keyspaceID),
+				zap.Error(err))
+		}
+		ddlValue = decryptedValue
+	}
+
 	return unmarshalPersistedDDLEvent(ddlValue)
 }
 
 func writePersistedDDLEvent(db *pebble.DB, ddlEvent *PersistedDDLEvent) error {
+	return writePersistedDDLEventWithEncryption(db, ddlEvent, nil, 0)
+}
+
+// writePersistedDDLEventWithEncryption encrypts and writes DDL event if encryption is enabled
+func writePersistedDDLEventWithEncryption(db *pebble.DB, ddlEvent *PersistedDDLEvent, encMgr encryption.EncryptionManager, keyspaceID uint32) error {
 	batch := db.NewBatch()
 	ddlKey, err := ddlJobKey(ddlEvent.FinishedTs)
 	if err != nil {
@@ -515,6 +557,16 @@ func writePersistedDDLEvent(db *pebble.DB, ddlEvent *PersistedDDLEvent) error {
 	if err != nil {
 		return err
 	}
+
+	// Encrypt if encryption is enabled
+	if encMgr != nil {
+		encryptedValue, err := encMgr.EncryptData(context.Background(), keyspaceID, ddlValue)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		ddlValue = encryptedValue
+	}
+
 	batch.Set(ddlKey, ddlValue, pebble.NoSync)
 	return batch.Commit(pebble.NoSync)
 }
@@ -526,6 +578,11 @@ func isTableRawKey(key []byte) bool {
 }
 
 func addSchemaInfoToBatch(batch *pebble.Batch, ts uint64, info *model.DBInfo) {
+	addSchemaInfoToBatchWithEncryption(batch, ts, info, nil, 0)
+}
+
+// addSchemaInfoToBatchWithEncryption encrypts and adds schema info to batch if encryption is enabled
+func addSchemaInfoToBatchWithEncryption(batch *pebble.Batch, ts uint64, info *model.DBInfo, encMgr encryption.EncryptionManager, keyspaceID uint32) {
 	schemaKey, err := schemaInfoKey(ts, info.ID)
 	if err != nil {
 		log.Fatal("generate schema key failed", zap.Error(err))
@@ -534,6 +591,16 @@ func addSchemaInfoToBatch(batch *pebble.Batch, ts uint64, info *model.DBInfo) {
 	if err != nil {
 		log.Fatal("marshal schema info failed", zap.Error(err))
 	}
+
+	// Encrypt if encryption is enabled
+	if encMgr != nil {
+		encryptedValue, err := encMgr.EncryptData(context.Background(), keyspaceID, schemaValue)
+		if err != nil {
+			log.Fatal("encrypt schema info failed", zap.Error(err))
+		}
+		schemaValue = encryptedValue
+	}
+
 	batch.Set(schemaKey, schemaValue, pebble.NoSync)
 }
 
@@ -542,6 +609,18 @@ func addTableInfoToBatch(
 	ts uint64,
 	dbInfo *model.DBInfo,
 	tableInfoValue []byte,
+) (int64, string, []int64) {
+	return addTableInfoToBatchWithEncryption(batch, ts, dbInfo, tableInfoValue, nil, 0)
+}
+
+// addTableInfoToBatchWithEncryption encrypts and adds table info to batch if encryption is enabled
+func addTableInfoToBatchWithEncryption(
+	batch *pebble.Batch,
+	ts uint64,
+	dbInfo *model.DBInfo,
+	tableInfoValue []byte,
+	encMgr encryption.EncryptionManager,
+	keyspaceID uint32,
 ) (int64, string, []int64) {
 	tableInfo := model.TableInfo{}
 	if err := json.Unmarshal(tableInfoValue, &tableInfo); err != nil {
@@ -561,6 +640,16 @@ func addTableInfoToBatch(
 	if err != nil {
 		log.Fatal("marshal table info entry failed", zap.Error(err))
 	}
+
+	// Encrypt if encryption is enabled
+	if encMgr != nil {
+		encryptedValue, err := encMgr.EncryptData(context.Background(), keyspaceID, tableInfoEntryValue)
+		if err != nil {
+			log.Fatal("encrypt table info entry failed", zap.Error(err))
+		}
+		tableInfoEntryValue = encryptedValue
+	}
+
 	batch.Set(tableKey, tableInfoEntryValue, pebble.NoSync)
 
 	// write partition info to batch if the table is a partition table
