@@ -14,12 +14,14 @@
 package common
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"io/fs"
 	"os/exec"
 	"path/filepath"
@@ -36,6 +38,8 @@ type moduleInfo struct {
 	Path    string `json:"Path"`
 	Version string `json:"Version"`
 	Dir     string `json:"Dir"`
+	Zip     string `json:"Zip"`
+	Error   string `json:"Error"`
 	Origin  struct {
 		Hash string `json:"Hash"`
 	} `json:"Origin"`
@@ -121,9 +125,15 @@ func TestLatestTiDBTableInfoSharedSchemaGuard(t *testing.T) {
 				moduleCache[tc.modulePath] = mod
 			}
 
-			pkgDir := filepath.Join(mod.Dir, filepath.FromSlash(tc.pkgRelativePath))
-			actualFields, err := extractStructFields(pkgDir, tc.typeName)
-			require.NoError(t, err, "extract struct fields failed for %s in %s", tc.typeName, pkgDir)
+			actualFields, err := extractStructFieldsFromModule(mod, tc.pkgRelativePath, tc.typeName)
+			require.NoError(
+				t,
+				err,
+				"extract struct fields failed for %s in module=%s version=%s",
+				tc.typeName,
+				mod.Path,
+				mod.Version,
+			)
 
 			assertStructContract(t, tc, mod, actualFields)
 		})
@@ -152,16 +162,17 @@ func queryModuleInfo(t *testing.T, modulePath string) *moduleInfo {
 		}
 		downloadCmd := exec.Command("go", "mod", "download", "-json", query)
 		downloadOutput, downloadErr := downloadCmd.CombinedOutput()
-		require.NoError(
-			t,
-			downloadErr,
-			"download module %s failed: %s",
-			query,
-			string(downloadOutput),
-		)
-
 		downloaded, err := decodeModuleInfo(downloadOutput)
 		require.NoError(t, err, "unmarshal downloaded module metadata for %s failed", query)
+		if downloadErr != nil && downloaded.Dir == "" && downloaded.Zip == "" {
+			require.NoError(
+				t,
+				downloadErr,
+				"download module %s failed: %s",
+				query,
+				string(downloadOutput),
+			)
+		}
 
 		if mod.Path == "" {
 			mod.Path = downloaded.Path
@@ -173,15 +184,18 @@ func queryModuleInfo(t *testing.T, modulePath string) *moduleInfo {
 			mod.Origin.Hash = downloaded.Origin.Hash
 		}
 		mod.Dir = downloaded.Dir
+		mod.Zip = downloaded.Zip
 	}
 
-	require.NotEmpty(t, mod.Dir, "module dir should not be empty for %s", modulePath)
+	require.True(t, mod.Dir != "" || mod.Zip != "", "module source should not be empty for %s", modulePath)
 	log.Info(
 		"shared schema guard resolved module version",
 		zap.String("module", mod.Path),
 		zap.String("version", mod.Version),
 		zap.String("hash", mod.Origin.Hash),
 		zap.String("dir", mod.Dir),
+		zap.String("zip", mod.Zip),
+		zap.String("moduleError", mod.Error),
 	)
 	return &mod
 }
@@ -199,6 +213,19 @@ func decodeModuleInfo(output []byte) (moduleInfo, error) {
 		return moduleInfo{}, err
 	}
 	return mod, nil
+}
+
+// extractStructFieldsFromModule reads struct fields from module source. It
+// prefers local module dir, and falls back to module zip when dir is unavailable.
+func extractStructFieldsFromModule(mod *moduleInfo, pkgRelativePath string, typeName string) ([]string, error) {
+	if mod.Dir != "" {
+		pkgDir := filepath.Join(mod.Dir, filepath.FromSlash(pkgRelativePath))
+		return extractStructFields(pkgDir, typeName)
+	}
+	if mod.Zip != "" {
+		return extractStructFieldsFromZip(mod.Zip, pkgRelativePath, typeName)
+	}
+	return nil, fmt.Errorf("no source available for module=%s version=%s", mod.Path, mod.Version)
 }
 
 // assertStructContract compares expected fields with the latest upstream fields
@@ -226,6 +253,75 @@ func assertStructContract(t *testing.T, tc structGuardCase, mod *moduleInfo, act
 	)
 }
 
+// extractStructFieldsFromZip parses source files directly from module zip cache.
+func extractStructFieldsFromZip(zipPath string, pkgRelativePath string, typeName string) ([]string, error) {
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+
+	fileSet := token.NewFileSet()
+	fieldSet := make(map[string]struct{})
+	found := false
+	targetDir := filepath.ToSlash(pkgRelativePath) + "/"
+
+	for _, file := range reader.File {
+		if file.FileInfo().IsDir() {
+			continue
+		}
+
+		name := filepath.ToSlash(file.Name)
+		slashPos := strings.IndexByte(name, '/')
+		if slashPos < 0 || slashPos+1 >= len(name) {
+			continue
+		}
+		rel := name[slashPos+1:]
+		if !strings.HasPrefix(rel, targetDir) {
+			continue
+		}
+		rest := strings.TrimPrefix(rel, targetDir)
+		if strings.Contains(rest, "/") {
+			continue
+		}
+		if !strings.HasSuffix(rest, ".go") || strings.HasSuffix(rest, "_test.go") {
+			continue
+		}
+
+		rc, err := file.Open()
+		if err != nil {
+			return nil, err
+		}
+		src, readErr := io.ReadAll(rc)
+		closeErr := rc.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+		if closeErr != nil {
+			return nil, closeErr
+		}
+
+		fileNode, err := parser.ParseFile(fileSet, rest, src, parser.SkipObjectResolution)
+		if err != nil {
+			return nil, err
+		}
+		if err := collectStructFieldsFromFile(fileNode, typeName, fieldSet, &found); err != nil {
+			return nil, err
+		}
+	}
+
+	if !found {
+		return nil, fmt.Errorf("type %s not found in zip package %s", typeName, pkgRelativePath)
+	}
+
+	fields := make([]string, 0, len(fieldSet))
+	for field := range fieldSet {
+		fields = append(fields, field)
+	}
+	slices.Sort(fields)
+	return fields, nil
+}
+
 // extractStructFields parses non-test source files and returns the field list of
 // a target struct type in sorted order.
 func extractStructFields(packageDir string, typeName string) ([]string, error) {
@@ -244,38 +340,8 @@ func extractStructFields(packageDir string, typeName string) ([]string, error) {
 			if strings.HasSuffix(fileName, "_test.go") {
 				continue
 			}
-			for _, decl := range fileNode.Decls {
-				genDecl, ok := decl.(*ast.GenDecl)
-				if !ok || genDecl.Tok != token.TYPE {
-					continue
-				}
-				for _, spec := range genDecl.Specs {
-					typeSpec, ok := spec.(*ast.TypeSpec)
-					if !ok || typeSpec.Name.Name != typeName {
-						continue
-					}
-					structType, ok := typeSpec.Type.(*ast.StructType)
-					if !ok {
-						return nil, fmt.Errorf("type %s in %s is not a struct", typeName, packageDir)
-					}
-					if found {
-						return nil, fmt.Errorf("type %s found multiple times in %s", typeName, packageDir)
-					}
-					found = true
-					for _, field := range structType.Fields.List {
-						if len(field.Names) == 0 {
-							name, ok := embeddedFieldName(field.Type)
-							if !ok {
-								return nil, fmt.Errorf("unsupported embedded field expression in %s", typeName)
-							}
-							fieldSet[name] = struct{}{}
-							continue
-						}
-						for _, name := range field.Names {
-							fieldSet[name.Name] = struct{}{}
-						}
-					}
-				}
+			if err := collectStructFieldsFromFile(fileNode, typeName, fieldSet, &found); err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -290,6 +356,44 @@ func extractStructFields(packageDir string, typeName string) ([]string, error) {
 	}
 	slices.Sort(fields)
 	return fields, nil
+}
+
+// collectStructFieldsFromFile collects fields from a target struct in one AST file.
+func collectStructFieldsFromFile(fileNode *ast.File, typeName string, fieldSet map[string]struct{}, found *bool) error {
+	for _, decl := range fileNode.Decls {
+		genDecl, ok := decl.(*ast.GenDecl)
+		if !ok || genDecl.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range genDecl.Specs {
+			typeSpec, ok := spec.(*ast.TypeSpec)
+			if !ok || typeSpec.Name.Name != typeName {
+				continue
+			}
+			structType, ok := typeSpec.Type.(*ast.StructType)
+			if !ok {
+				return fmt.Errorf("type %s is not a struct", typeName)
+			}
+			if *found {
+				return fmt.Errorf("type %s found multiple times", typeName)
+			}
+			*found = true
+			for _, field := range structType.Fields.List {
+				if len(field.Names) == 0 {
+					name, ok := embeddedFieldName(field.Type)
+					if !ok {
+						return fmt.Errorf("unsupported embedded field expression in %s", typeName)
+					}
+					fieldSet[name] = struct{}{}
+					continue
+				}
+				for _, name := range field.Names {
+					fieldSet[name.Name] = struct{}{}
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // embeddedFieldName extracts the synthetic field name for anonymous embedded
