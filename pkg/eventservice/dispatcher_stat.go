@@ -429,7 +429,6 @@ type changefeedStatus struct {
 	availableMemoryQuota sync.Map // nodeID -> atomic.Uint64 (memory quota in bytes)
 	minSentTs            atomic.Uint64
 	scanInterval         atomic.Int64
-	lastRatio            atomic.Float64
 
 	lastAdjustTime      atomic.Time
 	lastTrendAdjustTime atomic.Time

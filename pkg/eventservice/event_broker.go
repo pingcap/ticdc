@@ -1256,8 +1256,6 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 	usage := make(map[common.GID]usageInfo, len(availables))
 	dispatcherAvailable := make(map[common.DispatcherID]uint64, len(availables))
 	hasUsage := m.GetVersion() >= event.CongestionControlVersion2
-	usageCount := 0
-	zeroMaxCount := 0
 	for _, item := range availables {
 		holder[item.Gid] = item.Available
 		if hasUsage && item.Max > 0 {
@@ -1265,9 +1263,6 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 				used: item.Used,
 				max:  item.Max,
 			}
-			usageCount++
-		} else if hasUsage {
-			zeroMaxCount++
 		}
 		for dispatcherID, available := range item.DispatcherAvailable {
 			dispatcherAvailable[dispatcherID] = available

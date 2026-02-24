@@ -199,11 +199,11 @@ func (c *changefeedStatus) updateMemoryUsage(now time.Time, used uint64, max uin
 //     the interval before hitting critical thresholds.
 //
 // Thresholds and actions:
-//   - Critical (>80%): Reduce interval to 1/4 (aggressive)
-//   - High (>60%): Reduce interval to 1/2
+//   - Critical (>90%): Reduce interval to 1/4 (aggressive)
+//   - High (>70%): Reduce interval to 1/2
 //   - Trend damping (>30% AND rising): Reduce interval by 10%
-//   - Low (<40% max AND avg): Increase interval by 25%
-//   - Very low (<20% max AND avg): Increase interval by 50%, may exceed normal cap
+//   - Low (<30% max AND avg): Increase interval by 25%
+//   - Very low (<10% max AND avg): Increase interval by 50%, may exceed normal cap
 func (c *changefeedStatus) adjustScanInterval(now time.Time, usage memoryUsageStats) {
 	current := time.Duration(c.scanInterval.Load())
 	if current <= 0 {
