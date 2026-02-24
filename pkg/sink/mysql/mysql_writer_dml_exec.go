@@ -165,8 +165,7 @@ func (w *Writer) sequenceExecute(
 			cancelFunc()
 			return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(execError, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", query, util.RedactArgs(args))))
 		}
-		rowsAffected, err := res.RowsAffected()
-		if err != nil {
+		if rowsAffected, err := res.RowsAffected(); err != nil {
 			log.Warn("get rows affected rows failed", zap.Error(err))
 		} else {
 			w.statistics.RecordRowsAffected(rowsAffected, dmls.rowTypes[i])
