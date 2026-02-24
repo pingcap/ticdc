@@ -26,6 +26,9 @@ const (
 	// recoverEventChSize is set to 1024 to absorb short recover-event bursts and
 	// keep non-blocking reporting from dropping events under transient pressure.
 	recoverEventChSize = 1024
+	// recoverLifecycleResendInterval controls how frequently DM re-sends pending
+	// recover requests. It reduces maintainer-switch silent-loss windows.
+	recoverLifecycleResendInterval = 5 * time.Second
 	// recoverLifecycleCheckInterval is 1 minute to keep timeout scanning cheap,
 	// while still detecting stuck recover requests in bounded time.
 	recoverLifecycleCheckInterval = time.Minute
@@ -35,21 +38,26 @@ const (
 )
 
 // recoverTracker tracks dispatchers with recover requests that are waiting for
-// a new working status to confirm lifecycle transition.
+// recover lifecycle completion (remove old instance, then recreate new instance).
 type recoverTracker struct {
 	mu sync.Mutex
 	// pending stores dispatchers that are waiting for recover completion.
-	// Value is the timestamp when dispatcher entered pending state.
-	pending map[common.DispatcherID]time.Time
+	// Value records pending lifecycle state for this dispatcher.
+	pending map[common.DispatcherID]recoverPendingState
 
 	changefeedID   common.ChangeFeedID
 	pendingGauge   prometheus.Gauge
 	timeoutCounter prometheus.Counter
 }
 
+type recoverPendingState struct {
+	firstSeen time.Time
+	removed   bool
+}
+
 func newRecoverTracker(changefeedID common.ChangeFeedID) *recoverTracker {
 	tracker := &recoverTracker{
-		pending:        make(map[common.DispatcherID]time.Time),
+		pending:        make(map[common.DispatcherID]recoverPendingState),
 		changefeedID:   changefeedID,
 		pendingGauge:   metrics.DispatcherManagerRecoverPendingGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 		timeoutCounter: metrics.DispatcherManagerRecoverPendingTimeoutCount.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
@@ -72,7 +80,13 @@ func (t *recoverTracker) addAt(dispatcherIDs []common.DispatcherID, at time.Time
 
 	t.mu.Lock()
 	for _, dispatcherID := range dispatcherIDs {
-		t.pending[dispatcherID] = at
+		if _, ok := t.pending[dispatcherID]; ok {
+			continue
+		}
+		t.pending[dispatcherID] = recoverPendingState{
+			firstSeen: at,
+			removed:   false,
+		}
 	}
 	if t.pendingGauge != nil {
 		t.pendingGauge.Set(float64(len(t.pending)))
@@ -100,6 +114,62 @@ func (t *recoverTracker) filterNonPending(dispatcherIDs []common.DispatcherID) [
 	return nonPending
 }
 
+// contains checks whether a dispatcher is currently pending recover.
+func (t *recoverTracker) contains(dispatcherID common.DispatcherID) bool {
+	t.mu.Lock()
+	_, ok := t.pending[dispatcherID]
+	t.mu.Unlock()
+	return ok
+}
+
+// markRemoved marks a pending dispatcher as removed.
+// It returns true when dispatcher is pending and mark succeeds.
+func (t *recoverTracker) markRemoved(dispatcherID common.DispatcherID) bool {
+	t.mu.Lock()
+	state, ok := t.pending[dispatcherID]
+	if !ok {
+		t.mu.Unlock()
+		return false
+	}
+	state.removed = true
+	t.pending[dispatcherID] = state
+	t.mu.Unlock()
+	return true
+}
+
+// ack clears pending state when dispatcher has been recreated after removal.
+// It returns true only for dispatchers in removed stage.
+func (t *recoverTracker) ack(dispatcherID common.DispatcherID) bool {
+	t.mu.Lock()
+	state, ok := t.pending[dispatcherID]
+	if !ok || !state.removed {
+		t.mu.Unlock()
+		return false
+	}
+	delete(t.pending, dispatcherID)
+	if t.pendingGauge != nil {
+		t.pendingGauge.Set(float64(len(t.pending)))
+	}
+	t.mu.Unlock()
+	return true
+}
+
+// pendingDispatcherIDs returns a snapshot of pending dispatcher IDs.
+func (t *recoverTracker) pendingDispatcherIDs() []common.DispatcherID {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if len(t.pending) == 0 {
+		return nil
+	}
+
+	dispatcherIDs := make([]common.DispatcherID, 0, len(t.pending))
+	for dispatcherID := range t.pending {
+		dispatcherIDs = append(dispatcherIDs, dispatcherID)
+	}
+	return dispatcherIDs
+}
+
 // remove clears pending state for a dispatcher.
 // It returns true when dispatcher was pending before this call
 func (t *recoverTracker) remove(dispatcherID common.DispatcherID) bool {
@@ -111,6 +181,28 @@ func (t *recoverTracker) remove(dispatcherID common.DispatcherID) bool {
 	}
 	t.mu.Unlock()
 	return existed
+}
+
+// removeIfRemoved clears pending state only when this dispatcher has entered
+// removed stage. Caller can use it to resolve superseded recover requests where
+// the dispatcher is no longer local after removal.
+func (t *recoverTracker) removeIfRemoved(dispatcherID common.DispatcherID) bool {
+	t.mu.Lock()
+	state, ok := t.pending[dispatcherID]
+	if !ok {
+		t.mu.Unlock()
+		return false
+	}
+	if !state.removed {
+		t.mu.Unlock()
+		return false
+	}
+	delete(t.pending, dispatcherID)
+	if t.pendingGauge != nil {
+		t.pendingGauge.Set(float64(len(t.pending)))
+	}
+	t.mu.Unlock()
+	return true
 }
 
 // takeExpired removes and returns pending dispatchers that exceed the default
@@ -126,8 +218,8 @@ func (t *recoverTracker) takeExpired() []common.DispatcherID {
 	}
 
 	expired := make([]common.DispatcherID, 0)
-	for dispatcherID, firstSeen := range t.pending {
-		if now.Sub(firstSeen) < recoverLifecyclePendingTimeout {
+	for dispatcherID, state := range t.pending {
+		if now.Sub(state.firstSeen) < recoverLifecyclePendingTimeout {
 			continue
 		}
 		expired = append(expired, dispatcherID)

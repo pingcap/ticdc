@@ -224,6 +224,121 @@ func TestCollectRecoverableEventsSkipPendingDispatcher(t *testing.T) {
 	}
 }
 
+func TestResendPendingRecoverDispatcherRequest(t *testing.T) {
+	manager := &DispatcherManager{
+		changefeedID:                  common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+		recoverDispatcherRequestQueue: make(chan *RecoverDispatcherRequestWithTargetID, 1),
+		dispatcherMap:                 newDispatcherMap[*dispatcher.EventDispatcher](),
+		reporter:                      recoverable.NewReporter(recoverEventChSize),
+		recoverTracker:                newRecoverTracker(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)),
+	}
+
+	dispatcherID := common.NewDispatcherID()
+	manager.dispatcherMap.Set(dispatcherID, nil)
+	manager.recoverTracker.add([]common.DispatcherID{dispatcherID})
+
+	manager.SetMaintainerID(node.ID("maintainer-new"))
+	manager.resendPendingRecoverRequests(context.Background())
+
+	select {
+	case req := <-manager.recoverDispatcherRequestQueue:
+		require.Equal(t, node.ID("maintainer-new"), req.TargetID)
+		require.NotNil(t, req.Request)
+		require.Equal(t, []*heartbeatpb.DispatcherID{dispatcherID.ToPB()}, req.Request.DispatcherIDs)
+	case <-time.After(time.Second):
+		t.Fatal("resend recover dispatcher request not received")
+	}
+}
+
+func TestResendPendingRecoverDispatcherRequestSkipNonLocal(t *testing.T) {
+	manager := &DispatcherManager{
+		changefeedID:                  common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+		recoverDispatcherRequestQueue: make(chan *RecoverDispatcherRequestWithTargetID, 1),
+		dispatcherMap:                 newDispatcherMap[*dispatcher.EventDispatcher](),
+		reporter:                      recoverable.NewReporter(recoverEventChSize),
+		recoverTracker:                newRecoverTracker(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)),
+	}
+	manager.SetMaintainerID(node.ID("maintainer"))
+
+	dispatcherID := common.NewDispatcherID()
+	manager.recoverTracker.add([]common.DispatcherID{dispatcherID})
+
+	manager.resendPendingRecoverRequests(context.Background())
+
+	select {
+	case <-manager.recoverDispatcherRequestQueue:
+		t.Fatal("unexpected recover dispatcher request for non-local dispatcher")
+	default:
+	}
+	require.Equal(t, []common.DispatcherID{dispatcherID}, manager.recoverTracker.pendingDispatcherIDs())
+}
+
+func TestResendPendingRecoverDispatcherRequestClearSupersededNonLocal(t *testing.T) {
+	manager := &DispatcherManager{
+		changefeedID:                  common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+		recoverDispatcherRequestQueue: make(chan *RecoverDispatcherRequestWithTargetID, 1),
+		dispatcherMap:                 newDispatcherMap[*dispatcher.EventDispatcher](),
+		reporter:                      recoverable.NewReporter(recoverEventChSize),
+		recoverTracker:                newRecoverTracker(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)),
+	}
+	manager.SetMaintainerID(node.ID("maintainer"))
+
+	dispatcherID := common.NewDispatcherID()
+	manager.recoverTracker.add([]common.DispatcherID{dispatcherID})
+	manager.onDispatcherRemovedForRecover(dispatcherID)
+
+	reported, handled := manager.reporter.Report([]recoverable.DispatcherEpoch{
+		{DispatcherID: dispatcherID, Epoch: 5},
+	})
+	require.True(t, handled)
+	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
+	<-manager.reporter.OutputCh()
+
+	manager.resendPendingRecoverRequests(context.Background())
+
+	select {
+	case <-manager.recoverDispatcherRequestQueue:
+		t.Fatal("unexpected recover dispatcher request for superseded non-local dispatcher")
+	default:
+	}
+	require.Empty(t, manager.recoverTracker.pendingDispatcherIDs())
+
+	reported, handled = manager.reporter.Report([]recoverable.DispatcherEpoch{
+		{DispatcherID: dispatcherID, Epoch: 1},
+	})
+	require.True(t, handled)
+	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
+}
+
+func TestRecoverPendingClearsAfterDispatcherRecreated(t *testing.T) {
+	manager := &DispatcherManager{
+		changefeedID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+	}
+	manager.reporter = recoverable.NewReporter(2)
+	manager.recoverTracker = newRecoverTracker(manager.changefeedID)
+
+	dispatcherID := common.NewDispatcherID()
+	reported, handled := manager.reporter.Report([]recoverable.DispatcherEpoch{
+		{DispatcherID: dispatcherID, Epoch: 5},
+	})
+	require.True(t, handled)
+	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
+	<-manager.reporter.OutputCh()
+
+	manager.recoverTracker.add([]common.DispatcherID{dispatcherID})
+	manager.onDispatcherRemovedForRecover(dispatcherID)
+	require.Equal(t, []common.DispatcherID{dispatcherID}, manager.recoverTracker.pendingDispatcherIDs())
+
+	manager.onDispatcherRecreatedForRecover(dispatcherID)
+	require.Empty(t, manager.recoverTracker.pendingDispatcherIDs())
+
+	reported, handled = manager.reporter.Report([]recoverable.DispatcherEpoch{
+		{DispatcherID: dispatcherID, Epoch: 1},
+	})
+	require.True(t, handled)
+	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
+}
+
 func TestWorkingStatusClearsRecoverReporterState(t *testing.T) {
 	manager := &DispatcherManager{
 		changefeedID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
@@ -605,6 +720,56 @@ func TestDoMerge(t *testing.T) {
 	require.False(t, exists)
 	_, exists = manager.dispatcherMap.Get(dispatcher2.GetId())
 	require.False(t, exists)
+}
+
+func TestDoMergeForceCloseWhenRecoverPending(t *testing.T) {
+	manager := createTestManager(t)
+	manager.recoverTracker = newRecoverTracker(manager.changefeedID)
+
+	dispatcher1 := createTestDispatcher(t, manager,
+		common.NewDispatcherID(),
+		1,
+		[]byte("a"),
+		[]byte("m"),
+	)
+	dispatcher2 := createTestDispatcher(t, manager,
+		common.NewDispatcherID(),
+		1,
+		[]byte("m"),
+		[]byte("z"),
+	)
+
+	dmlEvent := event.NewDMLEvent(dispatcher1.GetId(), 1, 1, 2, nil)
+	dmlEvent.Length = 1
+	require.True(t, dispatcher1.AddDMLEventsToSink([]*event.DMLEvent{dmlEvent}))
+	_, ok := dispatcher1.TryClose(false)
+	require.False(t, ok)
+
+	manager.dispatcherMap.Set(dispatcher1.GetId(), dispatcher1)
+	manager.dispatcherMap.Set(dispatcher2.GetId(), dispatcher2)
+	manager.recoverTracker.add([]common.DispatcherID{dispatcher1.GetId()})
+
+	mergedID := common.NewDispatcherID()
+	task := manager.mergeEventDispatcher([]common.DispatcherID{
+		dispatcher1.GetId(),
+		dispatcher2.GetId(),
+	}, mergedID)
+
+	done := make(chan struct{})
+	go func() {
+		doMerge(task, task.manager.dispatcherMap)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("doMerge should finish with force close when dispatcher is recover pending")
+	}
+
+	mergedDispatcherAfter, exists := manager.dispatcherMap.Get(mergedID)
+	require.True(t, exists)
+	require.Equal(t, heartbeatpb.ComponentState_Initializing, mergedDispatcherAfter.GetComponentStatus())
 }
 
 func TestDoMergeWithThreeDispatchers(t *testing.T) {

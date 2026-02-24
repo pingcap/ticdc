@@ -28,7 +28,12 @@ import (
 	"go.uber.org/zap"
 )
 
-func getDispatcherStatus(id common.DispatcherID, dispatcherItem dispatcher.Dispatcher, needCompleteStatus bool) (*heartbeatpb.TableSpanStatus, *cleanMap, *heartbeatpb.Watermark) {
+func getDispatcherStatus(
+	id common.DispatcherID,
+	dispatcherItem dispatcher.Dispatcher,
+	needCompleteStatus bool,
+	forceClose bool,
+) (*heartbeatpb.TableSpanStatus, *cleanMap, *heartbeatpb.Watermark) {
 	heartBeatInfo := &dispatcher.HeartBeatInfo{}
 	// the merged dispatcher in preparing state, don't need to join the calculation of the heartbeat
 	// the dispatcher still not know the startTs of it, and the dispatchers to be merged are still in the calculation of the checkpointTs
@@ -40,7 +45,7 @@ func getDispatcherStatus(id common.DispatcherID, dispatcherItem dispatcher.Dispa
 	// If it's closed successfully, we could clean it up.
 	// TODO: we need to consider how to deal with the checkpointTs of the removed dispatcher if the message will be discarded.
 	if heartBeatInfo.IsRemoving {
-		watermark, ok := dispatcherItem.TryClose()
+		watermark, ok := dispatcherItem.TryClose(forceClose)
 		if ok {
 			// If the dispatcher is removed successfully, we need to add the tableSpan into message whether needCompleteStatus is true or not.
 			return &heartbeatpb.TableSpanStatus{
@@ -315,7 +320,7 @@ func closeAllDispatchers[T dispatcher.Dispatcher](changefeedID common.ChangeFeed
 				)
 			}
 		}
-		dispatcherItem.TryClose()
+		dispatcherItem.TryClose(false)
 		dispatcherItem.Remove()
 	})
 }

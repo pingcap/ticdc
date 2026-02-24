@@ -103,6 +103,31 @@ func TestRecoverDispatcherRequestRestartDispatchers(t *testing.T) {
 	require.Equal(t, heartbeatpb.ScheduleAction_Remove, scheduleMsg.ScheduleAction)
 }
 
+func TestRecoverDispatcherRequestSkipWhenAnyOperatorExists(t *testing.T) {
+	m, controller, dispatcherID, nodeID := newRecoverDispatcherTestMaintainer(t)
+	req := newRecoverDispatcherRequest(m.changefeedID, dispatcherID)
+
+	destNodeID := node.ID("node2")
+	m.nodeManager.GetAliveNodes()[destNodeID] = &node.Info{ID: destNodeID}
+	replication := controller.spanController.GetTaskByID(dispatcherID)
+	require.NotNil(t, replication)
+	op := controller.operatorController.NewMoveOperator(replication, nodeID, destNodeID)
+	require.True(t, controller.operatorController.AddOperator(op))
+
+	existing := controller.operatorController.GetOperator(dispatcherID)
+	require.NotNil(t, existing)
+	require.Equal(t, "move", existing.Type())
+
+	m.onRecoverDispatcherRequest(nodeID, req)
+
+	current := controller.operatorController.GetOperator(dispatcherID)
+	require.NotNil(t, current)
+	require.Equal(t, existing, current)
+	require.Empty(t, m.runningErrors.m)
+	_, tracked := m.recoverDispatcherHandler.tracked[dispatcherID]
+	require.False(t, tracked)
+}
+
 func TestRecoverDispatcherRequestRestartAgainAfterPreviousRestartFinished(t *testing.T) {
 	m, controller, dispatcherID, nodeID := newRecoverDispatcherTestMaintainer(t)
 	req := newRecoverDispatcherRequest(m.changefeedID, dispatcherID)

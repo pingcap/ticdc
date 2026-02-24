@@ -498,6 +498,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 
 		seq := e.dispatcherMap.Set(id, d)
 		d.SetSeq(seq)
+		e.onDispatcherRecreatedForRecover(id)
 
 		if d.IsTableTriggerDispatcher() {
 			e.metricTableTriggerEventDispatcherCount.Inc()
@@ -722,15 +723,21 @@ func (e *DispatcherManager) collectRecoverableEvents(ctx context.Context) {
 		return
 	}
 
-	ticker := time.NewTicker(recoverLifecycleCheckInterval)
-	defer ticker.Stop()
+	resendTicker := time.NewTicker(recoverLifecycleResendInterval)
+	timeoutTicker := time.NewTicker(recoverLifecycleCheckInterval)
+	defer func() {
+		resendTicker.Stop()
+		timeoutTicker.Stop()
+	}()
 
 	eventCh := e.reporter.OutputCh()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-resendTicker.C:
+			e.resendPendingRecoverRequests(ctx)
+		case <-timeoutTicker.C:
 			e.reportRecoverPendingTimeout(ctx)
 		case event := <-eventCh:
 			if event == nil {
@@ -745,53 +752,83 @@ func (e *DispatcherManager) collectRecoverableEvents(ctx context.Context) {
 					zap.Stringer("changefeedID", e.changefeedID))
 				continue
 			}
-			if e.recoverDispatcherRequestQueue == nil {
-				log.Warn("recover dispatcher request queue is not set, ignore recoverable sink error",
-					zap.Stringer("changefeedID", e.changefeedID))
-				continue
-			}
 
-			localDispatcherIDs := e.filterLocalRecoverDispatcherIDs(event.DispatcherIDs)
+			localDispatcherIDs := e.filterLocalRecoverDispatcherIDs(event.DispatcherIDs, true)
 			if len(localDispatcherIDs) == 0 {
 				continue
 			}
 			dispatcherIDsToRecover := e.recoverTracker.filterNonPending(localDispatcherIDs)
-			if len(dispatcherIDsToRecover) == 0 {
-				continue
-			}
-
-			dispatcherIDs := make([]*heartbeatpb.DispatcherID, 0, len(dispatcherIDsToRecover))
-			for _, dispatcherID := range dispatcherIDsToRecover {
-				dispatcherIDs = append(dispatcherIDs, dispatcherID.ToPB())
-			}
-			req := &heartbeatpb.RecoverDispatcherRequest{
-				ChangefeedID:  e.changefeedID.ToPB(),
-				DispatcherIDs: dispatcherIDs,
-			}
-			// does other queue sender do the similar thing ?
-			var fallbackErrCh chan<- error
-			if e.sharedInfo != nil {
-				// FallbackErrCh is used when heartbeat collector cannot deliver
-				// recover request to maintainer. In that case we inject a
-				// changefeed-level retryable error into errCh.
-				fallbackErrCh = e.sharedInfo.GetErrCh()
-			}
-			request := &RecoverDispatcherRequestWithTargetID{
-				TargetID:      e.GetMaintainerID(),
-				Request:       req,
-				FallbackErrCh: fallbackErrCh,
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case e.recoverDispatcherRequestQueue <- request:
+			if e.enqueueRecoverDispatcherRequest(ctx, dispatcherIDsToRecover) {
 				e.recoverTracker.add(dispatcherIDsToRecover)
 			}
 		}
 	}
 }
 
-func (e *DispatcherManager) filterLocalRecoverDispatcherIDs(dispatcherIDs []common.DispatcherID) []common.DispatcherID {
+func (e *DispatcherManager) resendPendingRecoverRequests(ctx context.Context) {
+	if e.recoverTracker == nil {
+		return
+	}
+
+	pendingDispatcherIDs := e.recoverTracker.pendingDispatcherIDs()
+	if len(pendingDispatcherIDs) == 0 {
+		return
+	}
+	localDispatcherIDs := e.filterLocalRecoverDispatcherIDs(pendingDispatcherIDs, false)
+	if len(localDispatcherIDs) == 0 {
+		return
+	}
+	e.enqueueRecoverDispatcherRequest(ctx, localDispatcherIDs)
+}
+
+func (e *DispatcherManager) enqueueRecoverDispatcherRequest(
+	ctx context.Context,
+	dispatcherIDs []common.DispatcherID,
+) bool {
+	if len(dispatcherIDs) == 0 {
+		return false
+	}
+	if e.recoverDispatcherRequestQueue == nil {
+		log.Warn("recover dispatcher request queue is not set, ignore recover request",
+			zap.Stringer("changefeedID", e.changefeedID),
+			zap.Int("dispatcherCount", len(dispatcherIDs)))
+		return false
+	}
+
+	pbDispatcherIDs := make([]*heartbeatpb.DispatcherID, 0, len(dispatcherIDs))
+	for _, dispatcherID := range dispatcherIDs {
+		pbDispatcherIDs = append(pbDispatcherIDs, dispatcherID.ToPB())
+	}
+	req := &heartbeatpb.RecoverDispatcherRequest{
+		ChangefeedID:  e.changefeedID.ToPB(),
+		DispatcherIDs: pbDispatcherIDs,
+	}
+
+	var fallbackErrCh chan<- error
+	if e.sharedInfo != nil {
+		// FallbackErrCh is used when heartbeat collector cannot deliver
+		// recover request to maintainer. In that case we inject a
+		// changefeed-level retryable error into errCh.
+		fallbackErrCh = e.sharedInfo.GetErrCh()
+	}
+	request := &RecoverDispatcherRequestWithTargetID{
+		TargetID:      e.GetMaintainerID(),
+		Request:       req,
+		FallbackErrCh: fallbackErrCh,
+	}
+
+	select {
+	case <-ctx.Done():
+		return false
+	case e.recoverDispatcherRequestQueue <- request:
+		return true
+	}
+}
+
+func (e *DispatcherManager) filterLocalRecoverDispatcherIDs(
+	dispatcherIDs []common.DispatcherID,
+	clearNonLocal bool,
+) []common.DispatcherID {
 	if len(dispatcherIDs) == 0 {
 		return nil
 	}
@@ -806,6 +843,15 @@ func (e *DispatcherManager) filterLocalRecoverDispatcherIDs(dispatcherIDs []comm
 
 		if e.isLocalRecoverDispatcher(dispatcherID) {
 			local = append(local, dispatcherID)
+			continue
+		}
+
+		if !clearNonLocal {
+			if e.clearSupersededRecoverState(dispatcherID) {
+				log.Info("clear superseded recover state for non local dispatcher",
+					zap.Stringer("changefeedID", e.changefeedID),
+					zap.Stringer("dispatcherID", dispatcherID))
+			}
 			continue
 		}
 
@@ -837,6 +883,46 @@ func (e *DispatcherManager) clearRecoverState(dispatcherID common.DispatcherID) 
 	if e.reporter != nil {
 		e.reporter.Clear(dispatcherID)
 	}
+}
+
+func (e *DispatcherManager) clearSupersededRecoverState(dispatcherID common.DispatcherID) bool {
+	if e.recoverTracker == nil {
+		return false
+	}
+	if !e.recoverTracker.removeIfRemoved(dispatcherID) {
+		return false
+	}
+	if e.reporter != nil {
+		e.reporter.Clear(dispatcherID)
+	}
+	return true
+}
+
+func (e *DispatcherManager) onDispatcherRemovedForRecover(dispatcherID common.DispatcherID) {
+	if e.recoverTracker != nil && e.recoverTracker.markRemoved(dispatcherID) {
+		return
+	}
+	e.clearRecoverState(dispatcherID)
+}
+
+func (e *DispatcherManager) onDispatcherRecreatedForRecover(dispatcherID common.DispatcherID) {
+	if e.recoverTracker == nil || e.reporter == nil {
+		return
+	}
+	if !e.recoverTracker.ack(dispatcherID) {
+		return
+	}
+	e.reporter.Clear(dispatcherID)
+	log.Info("clear recover reporter state after dispatcher recreated",
+		zap.Stringer("changefeedID", e.changefeedID),
+		zap.Stringer("dispatcherID", dispatcherID))
+}
+
+func (e *DispatcherManager) shouldForceTryCloseOnRemove(dispatcherID common.DispatcherID) bool {
+	if e.recoverTracker == nil {
+		return false
+	}
+	return e.recoverTracker.contains(dispatcherID)
 }
 
 func (e *DispatcherManager) onDispatcherStatusForRecover(status *heartbeatpb.TableSpanStatus) {
@@ -928,7 +1014,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	if e.RedoEnable {
 		redoSeq := e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.RedoDispatcher) {
 			dispatcherCount++
-			status, cleanMap, watermark := getDispatcherStatus(id, dispatcherItem, needCompleteStatus)
+			status, cleanMap, watermark := getDispatcherStatus(id, dispatcherItem, needCompleteStatus, e.shouldForceTryCloseOnRemove(id))
 			if status != nil {
 				message.Statuses = append(message.Statuses, status)
 			}
@@ -953,7 +1039,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 
 	seq := e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.EventDispatcher) {
 		dispatcherCount++
-		status, cleanMap, watermark := getDispatcherStatus(id, dispatcherItem, needCompleteStatus)
+		status, cleanMap, watermark := getDispatcherStatus(id, dispatcherItem, needCompleteStatus, e.shouldForceTryCloseOnRemove(id))
 		if status != nil {
 			message.Statuses = append(message.Statuses, status)
 		}
@@ -1163,7 +1249,7 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 
 // cleanEventDispatcher is called when the event dispatcher is removed successfully.
 func (e *DispatcherManager) cleanEventDispatcher(id common.DispatcherID, schemaID int64) {
-	e.clearRecoverState(id)
+	e.onDispatcherRemovedForRecover(id)
 	e.dispatcherMap.Delete(id)
 	e.schemaIDToDispatchers.Delete(schemaID, id)
 	tableTriggerEventDispatcher := e.GetTableTriggerEventDispatcher()

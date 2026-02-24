@@ -81,7 +81,7 @@ type Dispatcher interface {
 	IsTableTriggerDispatcher() bool
 	DealWithBlockEvent(event commonEvent.BlockEvent)
 	EnableActiveActive() bool
-	TryClose() (w heartbeatpb.Watermark, ok bool)
+	TryClose(force bool) (w heartbeatpb.Watermark, ok bool)
 	Remove()
 }
 
@@ -1119,7 +1119,25 @@ func (d *BasicDispatcher) Remove() {
 // TryClose should be called before Remove(), because the dispatcher may still wait the dispatcher status from maintainer.
 // TryClose will return the watermark of current dispatcher, and return true when the dispatcher finished sending events to sink.
 // DispatcherManager will clean the dispatcher info after Remove() is called.
-func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
+func (d *BasicDispatcher) TryClose(force bool) (w heartbeatpb.Watermark, ok bool) {
+	if force {
+		w.CheckpointTs = d.GetCheckpointTs()
+		w.ResolvedTs = d.GetResolvedTs()
+
+		if d.IsTableTriggerDispatcher() && d.tableSchemaStore != nil {
+			d.tableSchemaStore.Clear()
+		}
+		log.Warn("dispatcher force close is enabled and ready for cleanup",
+			zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
+			zap.Stringer("dispatcher", d.id),
+			zap.Int64("mode", d.mode),
+			zap.String("table", common.FormatTableSpan(d.tableSpan)),
+			zap.Bool("sinkIsNormal", d.sink.IsNormal()),
+			zap.Bool("tableProgressEmpty", d.tableProgress.Empty()),
+			zap.Int("tableProgressLen", d.tableProgress.Len()))
+		return w, true
+	}
+
 	// If sink is normal(not meet error), we need to wait all the events in sink to flushed downstream successfully
 	// If sink is not normal, we can close the dispatcher immediately.
 	if !d.sink.IsNormal() || (d.tableProgress.Empty() && !d.duringHandleEvents.Load()) {

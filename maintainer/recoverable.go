@@ -95,9 +95,13 @@ func (h *recoverDispatcherHandler) handle(source node.ID, req *heartbeatpb.Recov
 func (h *recoverDispatcherHandler) validateRequest(source node.ID, req *heartbeatpb.RecoverDispatcherRequest) bool {
 	// Ignore the request before maintainer bootstrap completes.
 	if !h.maintainer.initialized.Load() {
+		log.Warn("ignore recover dispatcher request before maintainer initialized",
+			zap.Stringer("changefeedID", h.maintainer.changefeedID),
+			zap.Stringer("sourceNode", source),
+			zap.Int("dispatcherCount", len(req.DispatcherIDs)))
 		return false
 	}
-	if req == nil || len(req.DispatcherIDs) == 0 {
+	if len(req.DispatcherIDs) == 0 {
 		log.Warn("recover dispatcher request has no dispatcher IDs",
 			zap.Stringer("changefeedID", h.maintainer.changefeedID),
 			zap.Stringer("sourceNode", source))
@@ -116,8 +120,13 @@ func (h *recoverDispatcherHandler) validateRequest(source node.ID, req *heartbea
 // recovery is downgraded to changefeed-level error path and caller should stop this batch.
 func (h *recoverDispatcherHandler) tryRecoverDispatcher(source node.ID, dispatcherID common.DispatcherID) bool {
 	if existing := h.operatorController.GetOperator(dispatcherID); existing != nil {
-		// Idempotency guard: if restart for this dispatcher is already in-flight,
-		// treat repeated requests as duplicate and ignore.
+		// If any operator for this dispatcher is already in-flight, this recover
+		// request is superseded and should be ignored to avoid operator conflicts.
+		log.Info("ignore recover dispatcher request because operator already exists",
+			zap.Stringer("changefeedID", h.maintainer.changefeedID),
+			zap.Stringer("dispatcherID", dispatcherID),
+			zap.Stringer("sourceNode", source),
+			zap.String("operatorType", existing.Type()))
 		return true
 	}
 

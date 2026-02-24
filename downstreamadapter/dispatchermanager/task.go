@@ -242,7 +242,8 @@ func doMerge[T dispatcher.Dispatcher](t *MergeCheckTask, dispatcherMap *Dispatch
 				appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(dispatcher)
 			}
 
-			watermark, ok := dispatcher.TryClose()
+			forceClose := t.manager.shouldForceTryCloseOnRemove(id)
+			watermark, ok := dispatcher.TryClose(forceClose)
 			if ok {
 				if watermark.CheckpointTs < minCheckpointTs {
 					minCheckpointTs = watermark.CheckpointTs
@@ -485,7 +486,8 @@ func (t *RemoveDispatcherTask) Execute() time.Time {
 	}
 
 	// Try to close the dispatcher
-	_, ok := t.dispatcherItem.TryClose()
+	forceClose := t.manager.shouldForceTryCloseOnRemove(t.dispatcherItem.GetId())
+	_, ok := t.dispatcherItem.TryClose(forceClose)
 
 	if ok {
 		// Successfully closed, execute Remove

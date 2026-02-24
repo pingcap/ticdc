@@ -107,6 +107,36 @@ func callback() {
 	count.Add(1)
 }
 
+func TestDispatcherTryCloseForceWhenRecoverPending(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	ddlJob := helper.DDL2Job("create table t(id int primary key, v int)")
+	require.NotNil(t, ddlJob)
+
+	dmlEvent := helper.DML2Event("test", "t", "insert into t values(1, 1)")
+	require.NotNil(t, dmlEvent)
+	dmlEvent.CommitTs = 2
+	dmlEvent.Length = 1
+
+	mockSink := sink.NewMockSink(common.MysqlSinkType)
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+	dispatcher := newDispatcherForTest(mockSink, tableSpan)
+	nodeID := node.NewID()
+
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dmlEvent)}, callback)
+	require.True(t, block)
+	require.False(t, dispatcher.tableProgress.Empty())
+
+	_, ok := dispatcher.TryClose(false)
+	require.False(t, ok)
+
+	_, ok = dispatcher.TryClose(true)
+	require.True(t, ok)
+}
+
 // test different events can be correctly handled by the dispatcher
 func TestDispatcherHandleEvents(t *testing.T) {
 	count.Swap(0)
@@ -671,13 +701,13 @@ func TestDispatcherClose(t *testing.T) {
 		nodeID := node.NewID()
 		dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dmlEvent)}, callback)
 
-		_, ok := dispatcher.TryClose()
+		_, ok := dispatcher.TryClose(false)
 		require.Equal(t, false, ok)
 
 		// flush
 		sink.FlushDMLs()
 
-		watermark, ok := dispatcher.TryClose()
+		watermark, ok := dispatcher.TryClose(false)
 		require.Equal(t, true, ok)
 		require.Equal(t, uint64(1), watermark.CheckpointTs)
 		require.Equal(t, uint64(0), watermark.ResolvedTs)
@@ -694,12 +724,12 @@ func TestDispatcherClose(t *testing.T) {
 		nodeID := node.NewID()
 		dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dmlEvent)}, callback)
 
-		_, ok := dispatcher.TryClose()
+		_, ok := dispatcher.TryClose(false)
 		require.Equal(t, false, ok)
 
 		sink.SetIsNormal(false)
 
-		watermark, ok := dispatcher.TryClose()
+		watermark, ok := dispatcher.TryClose(false)
 		require.Equal(t, true, ok)
 		require.Equal(t, uint64(1), watermark.CheckpointTs)
 		require.Equal(t, uint64(0), watermark.ResolvedTs)

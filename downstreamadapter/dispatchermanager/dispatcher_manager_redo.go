@@ -162,6 +162,7 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 
 		redoSeq := e.redoDispatcherMap.Set(rd.GetId(), rd)
 		rd.SetSeq(redoSeq)
+		e.onDispatcherRecreatedForRecover(id)
 
 		if rd.IsTableTriggerDispatcher() {
 			e.metricTableTriggerRedoDispatcherCount.Inc()
@@ -224,7 +225,7 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 }
 
 func (e *DispatcherManager) cleanRedoDispatcher(id common.DispatcherID, schemaID int64) {
-	e.clearRecoverState(id)
+	e.onDispatcherRemovedForRecover(id)
 	e.redoDispatcherMap.Delete(id)
 	e.redoSchemaIDToDispatchers.Delete(schemaID, id)
 	tableTriggerRedoDispatcher := e.GetTableTriggerRedoDispatcher()
