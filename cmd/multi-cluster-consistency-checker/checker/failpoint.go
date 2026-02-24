@@ -55,7 +55,7 @@ func ensureFile() {
 			return
 		}
 		var err error
-		file, err = os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		file, err = os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 		if err != nil {
 			log.Warn("failed to open failpoint record file, recording disabled",
 				zap.String("path", path), zap.Error(err))
