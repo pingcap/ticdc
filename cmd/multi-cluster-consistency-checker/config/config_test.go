@@ -51,7 +51,7 @@ data-dir = "/tmp/data"
   [clusters.cluster2.peer-cluster-changefeed-config]
   cluster1 = { changefeed-id = "cf-2-to-1" }
 `
-		err := os.WriteFile(configPath, []byte(configContent), 0644)
+		err := os.WriteFile(configPath, []byte(configContent), 0o644)
 		require.NoError(t, err)
 
 		cfg, err := LoadConfig(configPath)
@@ -98,7 +98,7 @@ max-report-files = 50
   [clusters.cluster2.peer-cluster-changefeed-config]
   cluster1 = { changefeed-id = "cf-2-to-1" }
 `
-		err := os.WriteFile(configPath, []byte(configContent), 0644)
+		err := os.WriteFile(configPath, []byte(configContent), 0o644)
 		require.NoError(t, err)
 
 		cfg, err := LoadConfig(configPath)
@@ -119,7 +119,7 @@ max-report-files = 50
 		tmpDir := t.TempDir()
 		configPath := filepath.Join(tmpDir, "config.toml")
 		configContent := `invalid toml content [`
-		err := os.WriteFile(configPath, []byte(configContent), 0644)
+		err := os.WriteFile(configPath, []byte(configContent), 0o644)
 		require.NoError(t, err)
 
 		cfg, err := LoadConfig(configPath)
@@ -151,7 +151,7 @@ log-level = "info"
   [clusters.cluster2.peer-cluster-changefeed-config]
   cluster1 = { changefeed-id = "cf-2-to-1" }
 `
-		err := os.WriteFile(configPath, []byte(configContent), 0644)
+		err := os.WriteFile(configPath, []byte(configContent), 0o644)
 		require.NoError(t, err)
 
 		cfg, err := LoadConfig(configPath)
@@ -184,7 +184,7 @@ data-dir = "/tmp/data"
   [clusters.cluster2.peer-cluster-changefeed-config]
   cluster1 = { changefeed-id = "cf-2-to-1" }
 `
-		err := os.WriteFile(configPath, []byte(configContent), 0644)
+		err := os.WriteFile(configPath, []byte(configContent), 0o644)
 		require.NoError(t, err)
 
 		cfg, err := LoadConfig(configPath)
@@ -219,7 +219,7 @@ data-dir = "/tmp/data"
   [clusters.cluster2.peer-cluster-changefeed-config]
   cluster1 = { changefeed-id = "cf-2-to-1" }
 `
-		err := os.WriteFile(configPath, []byte(configContent), 0644)
+		err := os.WriteFile(configPath, []byte(configContent), 0o644)
 		require.NoError(t, err)
 
 		cfg, err := LoadConfig(configPath)
@@ -239,7 +239,7 @@ data-dir = "/tmp/data"
   [global.tables]
   schema1 = ["table1"]
 `
-		err := os.WriteFile(configPath, []byte(configContent), 0644)
+		err := os.WriteFile(configPath, []byte(configContent), 0o644)
 		require.NoError(t, err)
 
 		cfg, err := LoadConfig(configPath)
@@ -264,7 +264,7 @@ data-dir = "/tmp/data"
   s3-sink-uri = "s3://bucket/cluster1/"
   s3-changefeed-id = "s3-cf-1"
 `
-		err := os.WriteFile(configPath, []byte(configContent), 0644)
+		err := os.WriteFile(configPath, []byte(configContent), 0o644)
 		require.NoError(t, err)
 
 		cfg, err := LoadConfig(configPath)
@@ -289,7 +289,7 @@ data-dir = "/tmp/data"
   pd-addrs = ["127.0.0.1:2379"]
   s3-changefeed-id = "s3-cf-1"
 `
-		err := os.WriteFile(configPath, []byte(configContent), 0644)
+		err := os.WriteFile(configPath, []byte(configContent), 0o644)
 		require.NoError(t, err)
 
 		cfg, err := LoadConfig(configPath)
@@ -314,7 +314,7 @@ data-dir = "/tmp/data"
   pd-addrs = ["127.0.0.1:2379"]
   s3-sink-uri = "s3://bucket/cluster1/"
 `
-		err := os.WriteFile(configPath, []byte(configContent), 0644)
+		err := os.WriteFile(configPath, []byte(configContent), 0o644)
 		require.NoError(t, err)
 
 		cfg, err := LoadConfig(configPath)
@@ -347,7 +347,7 @@ data-dir = "/tmp/data"
   s3-sink-uri = "s3://bucket/cluster2/"
   s3-changefeed-id = "s3-cf-2"
 `
-		err := os.WriteFile(configPath, []byte(configContent), 0644)
+		err := os.WriteFile(configPath, []byte(configContent), 0o644)
 		require.NoError(t, err)
 
 		cfg, err := LoadConfig(configPath)
@@ -382,7 +382,7 @@ data-dir = "/tmp/data"
   [clusters.cluster2.peer-cluster-changefeed-config]
   cluster1 = { changefeed-id = "cf-2-to-1" }
 `
-		err := os.WriteFile(configPath, []byte(configContent), 0644)
+		err := os.WriteFile(configPath, []byte(configContent), 0o644)
 		require.NoError(t, err)
 
 		cfg, err := LoadConfig(configPath)

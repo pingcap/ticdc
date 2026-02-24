@@ -67,6 +67,15 @@ type CheckpointWatcher struct {
 	closed           bool
 }
 
+// failPendingTasksLocked wakes all pending tasks after a terminal watcher failure.
+// Must be called with mu locked.
+func (cw *CheckpointWatcher) failPendingTasksLocked() {
+	for _, task := range cw.pendingTasks {
+		close(task.respCh)
+	}
+	cw.pendingTasks = nil
+}
+
 func NewCheckpointWatcher(
 	ctx context.Context,
 	localClusterID, replicatedClusterID, changefeedID string,
@@ -135,7 +144,17 @@ func (cw *CheckpointWatcher) AdvanceCheckpointTs(ctx context.Context, minCheckpo
 		return 0, errors.Annotate(cw.ctx.Err(), "watcher context canceled")
 	case checkpoint, ok := <-task.respCh:
 		if !ok {
-			return 0, errors.Errorf("checkpoint watcher is closed")
+			cw.mu.Lock()
+			err := cw.watchErr
+			closed := cw.closed
+			cw.mu.Unlock()
+			if err != nil {
+				return 0, err
+			}
+			if closed {
+				return 0, errors.Errorf("checkpoint watcher is closed")
+			}
+			return 0, errors.Errorf("checkpoint watcher failed")
 		}
 		return checkpoint, nil
 	}
@@ -176,6 +195,7 @@ func (cw *CheckpointWatcher) run() {
 		if errors.Is(err, errChangefeedKeyDeleted) {
 			cw.mu.Lock()
 			cw.watchErr = err
+			cw.failPendingTasksLocked()
 			cw.mu.Unlock()
 			return
 		}
@@ -223,10 +243,10 @@ func (cw *CheckpointWatcher) watchOnce() error {
 	statusKey := etcd.GetEtcdKeyJob(cw.etcdClient.GetClusterID(), cw.changefeedID.DisplayName)
 
 	log.Debug("Starting to watch checkpoint",
-		zap.String("changefeed ID", cw.changefeedID.String()),
+		zap.String("changefeedID", cw.changefeedID.String()),
 		zap.String("statusKey", statusKey),
-		zap.String("local cluster ID", cw.localClusterID),
-		zap.String("replicated cluster ID", cw.replicatedClusterID),
+		zap.String("localClusterID", cw.localClusterID),
+		zap.String("replicatedClusterID", cw.replicatedClusterID),
 		zap.Uint64("checkpoint", status.CheckpointTs),
 		zap.Int64("startRev", modRev+1))
 

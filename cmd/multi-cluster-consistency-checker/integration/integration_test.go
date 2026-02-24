@@ -65,7 +65,8 @@ func setupEnv(t *testing.T) *testEnv {
 	require.NoError(t, err)
 
 	clusterCfg := map[string]config.ClusterConfig{"c1": {}, "c2": {}}
-	dc := checker.NewDataChecker(ctx, clusterCfg, nil, nil)
+	dc, err := checker.NewDataChecker(ctx, clusterCfg, nil, nil)
+	require.NoError(t, err)
 
 	return &testEnv{ctx: ctx, mc: mc, advancer: twa, checker: dc}
 }

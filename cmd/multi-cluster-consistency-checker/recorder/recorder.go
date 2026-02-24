@@ -44,10 +44,10 @@ type Recorder struct {
 }
 
 func NewRecorder(dataDir string, clusters map[string]config.ClusterConfig, maxReportFiles int) (*Recorder, error) {
-	if err := os.MkdirAll(filepath.Join(dataDir, "report"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dataDir, "report"), 0o755); err != nil {
 		return nil, errors.Trace(err)
 	}
-	if err := os.MkdirAll(filepath.Join(dataDir, "checkpoint"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dataDir, "checkpoint"), 0o755); err != nil {
 		return nil, errors.Trace(err)
 	}
 	if maxReportFiles <= 0 {
@@ -143,9 +143,9 @@ func (r *Recorder) RecordTimeWindow(timeWindowData map[string]types.TimeWindowDa
 		log.Info("time window advanced",
 			zap.Uint64("round", report.Round),
 			zap.String("clusterID", clusterID),
-			zap.Uint64("window left boundary", timeWindow.LeftBoundary),
-			zap.Uint64("window right boundary", timeWindow.RightBoundary),
-			zap.Any("checkpoint ts", timeWindow.CheckpointTs))
+			zap.Uint64("windowLeftBoundary", timeWindow.LeftBoundary),
+			zap.Uint64("windowRightBoundary", timeWindow.RightBoundary),
+			zap.Any("checkpointTs", timeWindow.CheckpointTs))
 	}
 	if report.NeedFlush() {
 		if err := r.flushReport(report); err != nil {
@@ -196,7 +196,7 @@ func atomicWriteFile(targetPath string, data []byte) error {
 // syncWriteFile writes data to a file and fsyncs it before returning,
 // guaranteeing that the content is durable on disk.
 func syncWriteFile(path string, data []byte) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return errors.Trace(err)
 	}

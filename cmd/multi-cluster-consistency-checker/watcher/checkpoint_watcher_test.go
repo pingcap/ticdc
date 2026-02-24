@@ -541,3 +541,61 @@ func TestCheckpointWatcher_KeyDeleted(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "deleted")
 }
+
+func TestCheckpointWatcher_KeyDeleted_UnblocksPendingTasks(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockEtcdClient := etcd.NewMockCDCEtcdClient(ctrl)
+	mockClient := etcd.NewMockClient(ctrl)
+
+	initialCheckpoint := uint64(1000)
+
+	mockEtcdClient.EXPECT().GetChangeFeedStatus(gomock.Any(), gomock.Any()).Return(
+		&config.ChangeFeedStatus{CheckpointTs: initialCheckpoint},
+		int64(100),
+		nil,
+	)
+	mockEtcdClient.EXPECT().GetClusterID().Return("test-cluster").AnyTimes()
+	mockEtcdClient.EXPECT().GetEtcdClient().Return(mockClient).AnyTimes()
+
+	watchCh := make(chan clientv3.WatchResponse, 1)
+	mockClient.EXPECT().Watch(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(watchCh)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	watcher := NewCheckpointWatcher(ctx, "local-1", "replicated-1", "test-cf", mockEtcdClient)
+	defer watcher.Close()
+
+	time.Sleep(50 * time.Millisecond)
+
+	var (
+		checkpoint uint64
+		advanceErr error
+	)
+	done := make(chan struct{})
+	go func() {
+		checkpoint, advanceErr = watcher.AdvanceCheckpointTs(context.Background(), uint64(2000))
+		close(done)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	watchCh <- clientv3.WatchResponse{
+		Events: []*clientv3.Event{
+			{
+				Type: clientv3.EventTypeDelete,
+			},
+		},
+	}
+
+	select {
+	case <-done:
+		require.Zero(t, checkpoint)
+		require.Error(t, advanceErr)
+		require.Contains(t, advanceErr.Error(), "deleted")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for pending task to be unblocked")
+	}
+}

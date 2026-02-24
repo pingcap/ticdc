@@ -448,11 +448,11 @@ func TestErrCheckpointCorruption(t *testing.T) {
 		dataDir := t.TempDir()
 
 		// Create report and checkpoint directories
-		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "report"), 0755))
-		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "checkpoint"), 0755))
+		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "report"), 0o755))
+		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "checkpoint"), 0o755))
 
 		// Write invalid JSON to checkpoint.json
-		err := os.WriteFile(filepath.Join(dataDir, "checkpoint", "checkpoint.json"), []byte("{bad json"), 0600)
+		err := os.WriteFile(filepath.Join(dataDir, "checkpoint", "checkpoint.json"), []byte("{bad json"), 0o600)
 		require.NoError(t, err)
 
 		_, err = NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}}, 0)
@@ -513,11 +513,11 @@ func TestErrCheckpointCorruption(t *testing.T) {
 		dataDir := t.TempDir()
 
 		// Create directories
-		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "report"), 0755))
-		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "checkpoint"), 0755))
+		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "report"), 0o755))
+		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "checkpoint"), 0o755))
 
 		// Create checkpoint.json as a directory so ReadFile fails with a non-corruption I/O error
-		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "checkpoint", "checkpoint.json"), 0755))
+		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "checkpoint", "checkpoint.json"), 0o755))
 
 		_, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}}, 0)
 		require.Error(t, err)
@@ -530,11 +530,11 @@ func TestErrCheckpointCorruption(t *testing.T) {
 		dataDir := t.TempDir()
 
 		// Create directories
-		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "report"), 0755))
-		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "checkpoint"), 0755))
+		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "report"), 0o755))
+		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "checkpoint"), 0o755))
 
 		// Make checkpoint.json.bak a directory so ReadFile fails with an I/O error
-		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "checkpoint", "checkpoint.json.bak"), 0755))
+		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "checkpoint", "checkpoint.json.bak"), 0o755))
 
 		_, err := NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}}, 0)
 		require.Error(t, err)
@@ -547,11 +547,11 @@ func TestErrCheckpointCorruption(t *testing.T) {
 		dataDir := t.TempDir()
 
 		// Create directories
-		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "report"), 0755))
-		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "checkpoint"), 0755))
+		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "report"), 0o755))
+		require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "checkpoint"), 0o755))
 
 		// Write invalid JSON to checkpoint.json.bak (simulate crash recovery with corrupted backup)
-		err := os.WriteFile(filepath.Join(dataDir, "checkpoint", "checkpoint.json.bak"), []byte("not valid json"), 0600)
+		err := os.WriteFile(filepath.Join(dataDir, "checkpoint", "checkpoint.json.bak"), []byte("not valid json"), 0o600)
 		require.NoError(t, err)
 
 		_, err = NewRecorder(dataDir, map[string]config.ClusterConfig{"c1": {}}, 0)

@@ -64,7 +64,10 @@ func runTask(ctx context.Context, cfg *config.Config, dryRun bool) error {
 	if err != nil {
 		return &ExitError{Code: ExitCodeTransient, Err: errors.Trace(err)}
 	}
-	dataChecker := checker.NewDataChecker(ctx, cfg.Clusters, checkpointDataMap, rec.GetCheckpoint())
+	dataChecker, err := checker.NewDataChecker(ctx, cfg.Clusters, checkpointDataMap, rec.GetCheckpoint())
+	if err != nil {
+		return &ExitError{Code: ExitCodeTransient, Err: errors.Trace(err)}
+	}
 
 	log.Info("Starting consistency checker task")
 	for {

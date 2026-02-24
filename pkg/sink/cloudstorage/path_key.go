@@ -162,3 +162,72 @@ func (d *DmlPathKey) ParseIndexFilePath(dateSeparator, path string) (string, err
 
 	return matches[6], nil
 }
+
+// ParseDMLFilePath parses the dml file path and returns the max file index.
+// DML file path pattern is as follows:
+// {schema}/{table}/{table-version-separator}/{partition-separator}/{date-separator}/, where
+// partition-separator and date-separator could be empty.
+// DML file name pattern is as follows: CDC_{dispatcherID}_{num}.extension or CDC{num}.extension
+func (d *DmlPathKey) ParseDMLFilePath(dateSeparator, path string) (*FileIndex, error) {
+	var partitionNum int64
+
+	str := `(\w+)\/(\w+)\/(\d+)\/(\d+)?\/*`
+	switch dateSeparator {
+	case config.DateSeparatorNone.String():
+		str += `(\d{4})*`
+	case config.DateSeparatorYear.String():
+		str += `(\d{4})\/`
+	case config.DateSeparatorMonth.String():
+		str += `(\d{4}-\d{2})\/`
+	case config.DateSeparatorDay.String():
+		str += `(\d{4}-\d{2}-\d{2})\/`
+	}
+	matchesLen := 8
+	matchesFileIdx := 7
+	// CDC[_{dispatcherID}_]{num}.extension
+	str += `CDC(?:_(\w+)_)?(\d+).\w+`
+	pathRE, err := regexp.Compile(str)
+	if err != nil {
+		return nil, err
+	}
+
+	matches := pathRE.FindStringSubmatch(path)
+	if len(matches) != matchesLen {
+		return nil, fmt.Errorf("cannot match dml path pattern for %s", path)
+	}
+
+	version, err := strconv.ParseUint(matches[3], 10, 64)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(matches[4]) > 0 {
+		partitionNum, err = strconv.ParseInt(matches[4], 10, 64)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	fileIdx, err := strconv.ParseUint(strings.TrimLeft(matches[matchesFileIdx], "0"), 10, 64)
+	if err != nil {
+		return nil, err
+	}
+
+	*d = DmlPathKey{
+		SchemaPathKey: SchemaPathKey{
+			Schema:       matches[1],
+			Table:        matches[2],
+			TableVersion: version,
+		},
+		PartitionNum: partitionNum,
+		Date:         matches[5],
+	}
+
+	return &FileIndex{
+		FileIndexKey: FileIndexKey{
+			DispatcherID:           matches[6],
+			EnableTableAcrossNodes: matches[6] != "",
+		},
+		Idx: fileIdx,
+	}, nil
+}

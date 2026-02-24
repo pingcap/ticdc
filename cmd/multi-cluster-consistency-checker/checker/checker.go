@@ -17,6 +17,7 @@ import (
 	"context"
 	"sort"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/config"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/decoder"
@@ -409,9 +410,17 @@ func (cd *clusterDataChecker) checkLocalRecordsForDataLoss(
 					cd.checkedRecordsCount++
 					replicatedRecord, skipped := checker.FindClusterReplicatedData(replicatedClusterID, schemaKey, record.Pk, record.CommitTs)
 					if skipped {
+						failpoint.Inject("multiClusterConsistencyCheckerLWWViolation", func() {
+							Write("multiClusterConsistencyCheckerLWWViolation", []RowRecord{
+								{
+									CommitTs:    record.CommitTs,
+									PrimaryKeys: record.PkMap,
+								},
+							})
+						})
 						log.Debug("replicated record skipped by LWW",
-							zap.String("local cluster ID", cd.clusterID),
-							zap.String("replicated cluster ID", replicatedClusterID),
+							zap.String("localClusterID", cd.clusterID),
+							zap.String("replicatedClusterID", replicatedClusterID),
 							zap.String("schemaKey", schemaKey),
 							zap.String("pk", record.PkStr),
 							zap.Uint64("commitTs", record.CommitTs))
@@ -421,15 +430,15 @@ func (cd *clusterDataChecker) checkLocalRecordsForDataLoss(
 					if replicatedRecord == nil {
 						// data loss detected
 						log.Error("data loss detected",
-							zap.String("local cluster ID", cd.clusterID),
-							zap.String("replicated cluster ID", replicatedClusterID),
+							zap.String("localClusterID", cd.clusterID),
+							zap.String("replicatedClusterID", replicatedClusterID),
 							zap.Any("record", record))
 						cd.report.AddDataLossItem(replicatedClusterID, schemaKey, record.PkMap, record.PkStr, record.CommitTs)
 					} else if !record.EqualReplicatedRecord(replicatedRecord) {
 						// data inconsistent detected
 						log.Error("data inconsistent detected",
-							zap.String("local cluster ID", cd.clusterID),
-							zap.String("replicated cluster ID", replicatedClusterID),
+							zap.String("localClusterID", cd.clusterID),
+							zap.String("replicatedClusterID", replicatedClusterID),
 							zap.Any("record", record))
 						cd.report.AddDataInconsistentItem(replicatedClusterID, schemaKey, record.PkMap, record.PkStr, replicatedRecord.OriginTs, record.CommitTs, replicatedRecord.CommitTs, diffColumns(record, replicatedRecord))
 					}
@@ -450,7 +459,7 @@ func (cd *clusterDataChecker) dataRedundantDetection(checker *DataChecker) {
 				if !checker.FindSourceLocalData(cd.clusterID, schemaKey, record.Pk, record.OriginTs) {
 					// data redundant detected
 					log.Error("data redundant detected",
-						zap.String("replicated cluster ID", cd.clusterID),
+						zap.String("replicatedClusterID", cd.clusterID),
 						zap.Any("record", record))
 					cd.report.AddDataRedundantItem(schemaKey, record.PkMap, record.PkStr, record.OriginTs, record.CommitTs)
 				}
@@ -530,7 +539,7 @@ type DataChecker struct {
 	clusterDataCheckers map[string]*clusterDataChecker
 }
 
-func NewDataChecker(ctx context.Context, clusterConfig map[string]config.ClusterConfig, checkpointDataMap map[string]map[cloudstorage.DmlPathKey]types.IncrementalData, checkpoint *recorder.Checkpoint) *DataChecker {
+func NewDataChecker(ctx context.Context, clusterConfig map[string]config.ClusterConfig, checkpointDataMap map[string]map[cloudstorage.DmlPathKey]types.IncrementalData, checkpoint *recorder.Checkpoint) (*DataChecker, error) {
 	clusterDataChecker := make(map[string]*clusterDataChecker)
 	for clusterID := range clusterConfig {
 		clusterDataChecker[clusterID] = newClusterDataChecker(clusterID)
@@ -540,22 +549,27 @@ func NewDataChecker(ctx context.Context, clusterConfig map[string]config.Cluster
 		checkableRound:      0,
 		clusterDataCheckers: clusterDataChecker,
 	}
-	checker.initializeFromCheckpoint(ctx, checkpointDataMap, checkpoint)
-	return checker
+	if err := checker.initializeFromCheckpoint(ctx, checkpointDataMap, checkpoint); err != nil {
+		return nil, errors.Trace(err)
+	}
+	return checker, nil
 }
 
-func (c *DataChecker) initializeFromCheckpoint(ctx context.Context, checkpointDataMap map[string]map[cloudstorage.DmlPathKey]types.IncrementalData, checkpoint *recorder.Checkpoint) {
+func (c *DataChecker) initializeFromCheckpoint(ctx context.Context, checkpointDataMap map[string]map[cloudstorage.DmlPathKey]types.IncrementalData, checkpoint *recorder.Checkpoint) error {
 	if checkpoint == nil {
-		return
+		return nil
 	}
 	if checkpoint.CheckpointItems[2] == nil {
-		return
+		return nil
 	}
 	c.round = checkpoint.CheckpointItems[2].Round + 1
 	c.checkableRound = checkpoint.CheckpointItems[2].Round + 1
 	for _, clusterDataChecker := range c.clusterDataCheckers {
-		clusterDataChecker.InitializeFromCheckpoint(ctx, checkpointDataMap[clusterDataChecker.clusterID], checkpoint)
+		if err := clusterDataChecker.InitializeFromCheckpoint(ctx, checkpointDataMap[clusterDataChecker.clusterID], checkpoint); err != nil {
+			return errors.Trace(err)
+		}
 	}
+	return nil
 }
 
 // FindClusterReplicatedData checks whether the record is present in the replicated data
@@ -611,9 +625,9 @@ func (c *DataChecker) CheckInNextTimeWindow(newTimeWindowData map[string]types.T
 			zap.Uint64("round", c.round),
 			zap.Bool("enableDataLoss", enableDataLoss),
 			zap.Bool("enableDataRedundant", enableDataRedundant),
-			zap.Int("checked records count", clusterDataChecker.checkedRecordsCount),
-			zap.Int("new time window records count", clusterDataChecker.newTimeWindowRecordsCount),
-			zap.Int("lww skipped records count", clusterDataChecker.lwwSkippedRecordsCount))
+			zap.Int("checkedRecordsCount", clusterDataChecker.checkedRecordsCount),
+			zap.Int("newTimeWindowRecordsCount", clusterDataChecker.newTimeWindowRecordsCount),
+			zap.Int("lwwSkippedRecordsCount", clusterDataChecker.lwwSkippedRecordsCount))
 		report.AddClusterReport(clusterID, clusterDataChecker.GetReport())
 	}
 

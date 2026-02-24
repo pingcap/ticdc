@@ -45,13 +45,45 @@ func TestNewDataChecker(t *testing.T) {
 			},
 		}
 
-		checker := NewDataChecker(context.Background(), clusterConfig, nil, nil)
+		checker, initErr := NewDataChecker(context.Background(), clusterConfig, nil, nil)
+		require.NoError(t, initErr)
 		require.NotNil(t, checker)
 		require.Equal(t, uint64(0), checker.round)
 		require.Len(t, checker.clusterDataCheckers, 2)
 		require.Contains(t, checker.clusterDataCheckers, "cluster1")
 		require.Contains(t, checker.clusterDataCheckers, "cluster2")
 	})
+}
+
+func TestNewDataCheckerInitializeFromCheckpointError(t *testing.T) {
+	t.Parallel()
+
+	clusterConfig := map[string]config.ClusterConfig{
+		"c1": {},
+	}
+	checkpoint := recorder.NewCheckpoint()
+	checkpoint.NewTimeWindowData(0, map[string]types.TimeWindowData{
+		"c1": {
+			TimeWindow: types.TimeWindow{
+				LeftBoundary:  0,
+				RightBoundary: 100,
+			},
+		},
+	})
+	invalidContent := []byte(`{"pkNames":["id"],"isDdl":false,"type":"INSERT","mysqlType":{"id":"int"},"data":[{"val":"x"}],"_tidb":{"commitTs":1}}`)
+	checkpointDataMap := map[string]map[cloudstorage.DmlPathKey]types.IncrementalData{
+		"c1": {
+			{}: {
+				DataContentSlices: map[cloudstorage.FileIndexKey][][]byte{
+					{}: {invalidContent},
+				},
+			},
+		},
+	}
+
+	_, err := NewDataChecker(context.Background(), clusterConfig, checkpointDataMap, checkpoint)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "column value of column id not found")
 }
 
 func TestNewClusterDataChecker(t *testing.T) {
@@ -403,7 +435,8 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 
 	t.Run("all consistent", func(t *testing.T) {
 		t.Parallel()
-		checker := NewDataChecker(ctx, clusterCfg, nil, nil)
+		checker, initErr := NewDataChecker(ctx, clusterCfg, nil, nil)
+		require.NoError(t, initErr)
 		base := makeBaseRounds()
 
 		round2 := map[string]types.TimeWindowData{
@@ -435,7 +468,8 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 
 	t.Run("data loss detected", func(t *testing.T) {
 		t.Parallel()
-		checker := NewDataChecker(ctx, clusterCfg, nil, nil)
+		checker, initErr := NewDataChecker(ctx, clusterCfg, nil, nil)
+		require.NoError(t, initErr)
 		base := makeBaseRounds()
 
 		// Round 2: c1 has locally-written pk=3 but c2 has NO matching replicated data
@@ -475,7 +509,8 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 
 	t.Run("data inconsistent detected", func(t *testing.T) {
 		t.Parallel()
-		checker := NewDataChecker(ctx, clusterCfg, nil, nil)
+		checker, initErr := NewDataChecker(ctx, clusterCfg, nil, nil)
+		require.NoError(t, initErr)
 		base := makeBaseRounds()
 
 		// Round 2: c2 has replicated data for pk=3 but with wrong column value
@@ -518,7 +553,8 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 
 	t.Run("data redundant detected", func(t *testing.T) {
 		t.Parallel()
-		checker := NewDataChecker(ctx, clusterCfg, nil, nil)
+		checker, initErr := NewDataChecker(ctx, clusterCfg, nil, nil)
+		require.NoError(t, initErr)
 		base := makeBaseRounds()
 
 		round2 := map[string]types.TimeWindowData{
@@ -562,7 +598,8 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 
 	t.Run("lww violation detected", func(t *testing.T) {
 		t.Parallel()
-		checker := NewDataChecker(ctx, clusterCfg, nil, nil)
+		checker, initErr := NewDataChecker(ctx, clusterCfg, nil, nil)
+		require.NoError(t, initErr)
 		base := makeBaseRounds()
 
 		round2 := map[string]types.TimeWindowData{
@@ -617,7 +654,8 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 	// so a violation introduced in round 1 data should surface immediately.
 	t.Run("lww violation detected at round 1", func(t *testing.T) {
 		t.Parallel()
-		checker := NewDataChecker(ctx, clusterCfg, nil, nil)
+		checker, initErr := NewDataChecker(ctx, clusterCfg, nil, nil)
+		require.NoError(t, initErr)
 
 		// Round 0: [0, 100] — c1 writes pk=1 (commitTs=50, compareTs=50)
 		round0 := map[string]types.TimeWindowData{
@@ -664,7 +702,8 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 	// and if the replicated counterpart is missing, data loss is detected at round 2.
 	t.Run("data loss detected at round 2", func(t *testing.T) {
 		t.Parallel()
-		checker := NewDataChecker(ctx, clusterCfg, nil, nil)
+		checker, initErr := NewDataChecker(ctx, clusterCfg, nil, nil)
+		require.NoError(t, initErr)
 
 		round0 := map[string]types.TimeWindowData{
 			"c1": makeTWData(0, 100, nil, nil),
@@ -716,7 +755,8 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 	//   - Round 3: orphan in [2] and enableDataRedundant=true  → flagged.
 	t.Run("data redundant detected at round 3 not round 2", func(t *testing.T) {
 		t.Parallel()
-		checker := NewDataChecker(ctx, clusterCfg, nil, nil)
+		checker, initErr := NewDataChecker(ctx, clusterCfg, nil, nil)
+		require.NoError(t, initErr)
 
 		round0 := map[string]types.TimeWindowData{
 			"c1": makeTWData(0, 100, nil, nil),
