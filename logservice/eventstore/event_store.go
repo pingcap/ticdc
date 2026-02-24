@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -1107,7 +1108,9 @@ func diskSpaceUsage(m *pebble.Metrics) uint64 {
 	}
 	usageBytes += m.Table.ObsoleteSize
 	usageBytes += m.Table.ZombieSize
-	usageBytes += uint64(m.Compact.InProgressBytes)
+	if m.Compact.InProgressBytes > 0 {
+		usageBytes += uint64(m.Compact.InProgressBytes)
+	}
 	return usageBytes
 }
 
@@ -1489,7 +1492,7 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 				if targetIndex == -1 {
 					log.Panic("cannot find subscription state", zap.Uint64("subscriptionID", change.SubID))
 				}
-				tableState.Subscriptions = append(tableState.Subscriptions[:targetIndex], tableState.Subscriptions[targetIndex+1:]...)
+				tableState.Subscriptions = slices.Delete(tableState.Subscriptions, targetIndex, targetIndex+1)
 			case SubscriptionChangeTypeUpdate:
 				tableState, ok := state.TableStates[change.Span.TableID]
 				if !ok {

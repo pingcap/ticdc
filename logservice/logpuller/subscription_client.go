@@ -57,6 +57,9 @@ const (
 	resolveLockMinInterval  time.Duration = 10 * time.Second
 	resolveLockTickInterval time.Duration = 2 * time.Second
 	resolveLockFence        time.Duration = 4 * time.Second
+
+	// resolveLastRunGCThreshold is the size threshold to GC resolveLastRun and drop stale entries.
+	resolveLastRunGCThreshold = 1024
 )
 
 var (
@@ -933,21 +936,22 @@ func (s *subscriptionClient) runResolveLockChecker(ctx context.Context) error {
 	}
 }
 
-func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
-	resolveLastRun := make(map[uint64]time.Time)
+func gcResolveLastRunMap(resolveLastRun map[uint64]time.Time, now time.Time) map[uint64]time.Time {
+	if len(resolveLastRun) <= resolveLastRunGCThreshold {
+		return resolveLastRun
+	}
 
-	gcResolveLastRun := func() {
-		if len(resolveLastRun) > 1024 {
-			copied := make(map[uint64]time.Time)
-			now := time.Now()
-			for regionID, lastRun := range resolveLastRun {
-				if now.Sub(lastRun) < resolveLockMinInterval {
-					resolveLastRun[regionID] = lastRun
-				}
-			}
-			resolveLastRun = copied
+	copied := make(map[uint64]time.Time, len(resolveLastRun))
+	for regionID, lastRun := range resolveLastRun {
+		if now.Sub(lastRun) < resolveLockMinInterval {
+			copied[regionID] = lastRun
 		}
 	}
+	return copied
+}
+
+func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
+	resolveLastRun := make(map[uint64]time.Time)
 
 	doResolve := func(keyspaceID uint32, regionID uint64, state *regionlock.LockedRangeState, targetTs uint64) {
 		if state.ResolvedTs.Load() > targetTs || !state.Initialized.Load() {
@@ -980,7 +984,7 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-gcTicker.C:
-			gcResolveLastRun()
+			resolveLastRun = gcResolveLastRunMap(resolveLastRun, time.Now())
 		case task := <-s.resolveLockTaskCh:
 			doResolve(task.keyspaceID, task.regionID, task.state, task.targetTs)
 		}
