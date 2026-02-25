@@ -35,6 +35,7 @@ import (
 func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 	if w.cfg.DryRun {
 		log.Info("Dry run DDL", zap.String("sql", event.GetDDLQuery()))
+		time.Sleep(w.cfg.DryRunDelay)
 		return nil
 	}
 

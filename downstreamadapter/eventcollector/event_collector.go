@@ -642,21 +642,9 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 			}
 		}
 		// take minimum total available memory between main and redo streams
-		if existing, exists := changefeedTotalMemory[cfID]; exists {
-			changefeedTotalMemory[cfID] = min(existing, uint64(quota.AvailableMemory()))
-		} else {
-			changefeedTotalMemory[cfID] = uint64(quota.AvailableMemory())
-		}
-		if existing, exists := changefeedUsedMemory[cfID]; exists {
-			changefeedUsedMemory[cfID] = min(existing, uint64(quota.MemoryUsage()))
-		} else {
-			changefeedUsedMemory[cfID] = uint64(quota.MemoryUsage())
-		}
-		if existing, exists := changefeedMaxMemory[cfID]; exists {
-			changefeedMaxMemory[cfID] = min(existing, uint64(quota.MaxMemory()))
-		} else {
-			changefeedMaxMemory[cfID] = uint64(quota.MaxMemory())
-		}
+		updateMinUint64MapValue(changefeedTotalMemory, cfID, uint64(quota.AvailableMemory()))
+		updateMinUint64MapValue(changefeedUsedMemory, cfID, uint64(quota.MemoryUsage()))
+		updateMinUint64MapValue(changefeedMaxMemory, cfID, uint64(quota.MaxMemory()))
 	}
 
 	if len(changefeedPathMemory) == 0 {
@@ -718,6 +706,14 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 		}
 	}
 	return result
+}
+
+func updateMinUint64MapValue(m map[common.ChangeFeedID]uint64, key common.ChangeFeedID, value uint64) {
+	if existing, exists := m[key]; exists {
+		m[key] = min(existing, value)
+	} else {
+		m[key] = value
+	}
 }
 
 func (c *EventCollector) updateMetrics(ctx context.Context) error {
