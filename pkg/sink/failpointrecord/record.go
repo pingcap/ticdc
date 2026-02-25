@@ -27,6 +27,7 @@ package failpointrecord
 import (
 	"encoding/json"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -40,7 +41,71 @@ const envKey = "TICDC_FAILPOINT_RECORD_FILE"
 // RowRecord captures the essential identity of a single affected row.
 type RowRecord struct {
 	CommitTs    uint64         `json:"commitTs"`
+	OriginTs    uint64         `json:"originTs"`
 	PrimaryKeys map[string]any `json:"primaryKeys"`
+}
+
+// NormalizeOriginTs converts `_tidb_origin_ts` values from row payloads into uint64.
+// It returns 0 for nil/invalid values.
+func NormalizeOriginTs(v any) uint64 {
+	switch value := v.(type) {
+	case nil:
+		return 0
+	case uint64:
+		return value
+	case uint:
+		return uint64(value)
+	case uint32:
+		return uint64(value)
+	case uint16:
+		return uint64(value)
+	case uint8:
+		return uint64(value)
+	case int64:
+		if value < 0 {
+			return 0
+		}
+		return uint64(value)
+	case int:
+		if value < 0 {
+			return 0
+		}
+		return uint64(value)
+	case int32:
+		if value < 0 {
+			return 0
+		}
+		return uint64(value)
+	case int16:
+		if value < 0 {
+			return 0
+		}
+		return uint64(value)
+	case int8:
+		if value < 0 {
+			return 0
+		}
+		return uint64(value)
+	case float64:
+		if value < 0 {
+			return 0
+		}
+		return uint64(value)
+	case json.Number:
+		i, err := value.Int64()
+		if err != nil || i < 0 {
+			return 0
+		}
+		return uint64(i)
+	case string:
+		parsed, err := strconv.ParseUint(value, 10, 64)
+		if err != nil {
+			return 0
+		}
+		return parsed
+	default:
+		return 0
+	}
 }
 
 // Record is one line written to the JSONL file.

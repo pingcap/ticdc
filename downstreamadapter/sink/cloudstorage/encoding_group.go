@@ -180,6 +180,8 @@ func dmlEventToRowRecords(event *commonEvent.DMLEvent) []failpointrecord.RowReco
 		return nil
 	}
 	indexes, columns := (&commonEvent.RowEvent{TableInfo: event.TableInfo}).PrimaryKeyColumn()
+	originTsCol, hasOriginTsCol := event.TableInfo.GetColumnInfoByName(commonEvent.OriginTsColumn)
+	originTsOffset, hasOriginTsOffset := event.TableInfo.GetColumnOffsetByName(commonEvent.OriginTsColumn)
 	rowRecords := make([]failpointrecord.RowRecord, 0, event.Len())
 	for {
 		row, ok := event.GetNextRow()
@@ -187,19 +189,27 @@ func dmlEventToRowRecords(event *commonEvent.DMLEvent) []failpointrecord.RowReco
 			event.Rewind()
 			break
 		}
+		rowData := row.Row
+		if row.RowType == commonType.RowTypeDelete {
+			rowData = row.PreRow
+		}
+
 		pks := make(map[string]any, len(columns))
 		for i, col := range columns {
 			if col == nil {
 				continue
 			}
-			rowData := row.Row
-			if row.RowType == commonType.RowTypeDelete {
-				rowData = row.PreRow
-			}
 			pks[col.Name.String()] = commonType.ExtractColVal(&rowData, col, indexes[i])
+		}
+		originTs := uint64(0)
+		if hasOriginTsCol && hasOriginTsOffset {
+			originTs = failpointrecord.NormalizeOriginTs(
+				commonType.ExtractColVal(&rowData, originTsCol, originTsOffset),
+			)
 		}
 		rowRecords = append(rowRecords, failpointrecord.RowRecord{
 			CommitTs:    event.CommitTs,
+			OriginTs:    originTs,
 			PrimaryKeys: pks,
 		})
 	}

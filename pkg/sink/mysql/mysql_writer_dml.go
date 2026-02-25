@@ -195,6 +195,8 @@ func findPKColumns(tableInfo *common.TableInfo) []pkColInfo {
 // writing to the failpoint record file.
 func dmlEventsToRowRecords(tableInfo *common.TableInfo, events []*commonEvent.DMLEvent) []failpointrecord.RowRecord {
 	pkCols := findPKColumns(tableInfo)
+	originTsCol, hasOriginTsCol := tableInfo.GetColumnInfoByName(commonEvent.OriginTsColumn)
+	originTsOffset, hasOriginTsOffset := tableInfo.GetColumnOffsetByName(commonEvent.OriginTsColumn)
 	var records []failpointrecord.RowRecord
 	for _, event := range events {
 		event.Rewind()
@@ -211,8 +213,15 @@ func dmlEventsToRowRecords(tableInfo *common.TableInfo, events []*commonEvent.DM
 			for _, pk := range pkCols {
 				pks[pk.name] = common.ExtractColVal(r, tableInfo.GetColumns()[pk.index], pk.index)
 			}
+			originTs := uint64(0)
+			if hasOriginTsCol && hasOriginTsOffset {
+				originTs = failpointrecord.NormalizeOriginTs(
+					common.ExtractColVal(r, originTsCol, originTsOffset),
+				)
+			}
 			records = append(records, failpointrecord.RowRecord{
 				CommitTs:    event.CommitTs,
+				OriginTs:    originTs,
 				PrimaryKeys: pks,
 			})
 		}
