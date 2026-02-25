@@ -196,6 +196,13 @@ type subscriptionClient struct {
 
 	stores sync.Map
 
+	stopTasks struct {
+		sync.Mutex
+		// enqueuedWorkers tracks which workers have already enqueued the stop request for a subscription.
+		// It is used to avoid redundant deregister RPC caused by retrying the stop task.
+		enqueuedWorkers map[SubscriptionID]map[uint64]struct{}
+	}
+
 	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
 	// the following three fields are used to manage feedback from ds and notify other goroutines
 	mu     sync.Mutex
@@ -635,13 +642,25 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 }
 
 func (s *subscriptionClient) enqueueRegionToAllStores(ctx context.Context, region regionInfo) (bool, error) {
+	subID := region.subscribedSpan.subID
 	enqueued := true
 	var firstErr error
 	s.stores.Range(func(_ any, value any) bool {
 		rs := value.(*requestedStore)
 		rs.requestWorkers.RLock()
-		defer rs.requestWorkers.RUnlock()
-		for _, worker := range rs.requestWorkers.s {
+		workers := rs.requestWorkers.s
+		rs.requestWorkers.RUnlock()
+		for _, worker := range workers {
+			s.stopTasks.Lock()
+			workersEnqueued, ok := s.stopTasks.enqueuedWorkers[subID]
+			if ok {
+				_, ok = workersEnqueued[worker.workerID]
+			}
+			s.stopTasks.Unlock()
+			if ok {
+				continue
+			}
+
 			ok, err := worker.add(ctx, region, true)
 			if err != nil {
 				firstErr = err
@@ -650,10 +669,31 @@ func (s *subscriptionClient) enqueueRegionToAllStores(ctx context.Context, regio
 			}
 			if !ok {
 				enqueued = false
+				// It is likely the store is busy, no need to try other workers in this store now.
+				break
 			}
+
+			s.stopTasks.Lock()
+			if s.stopTasks.enqueuedWorkers == nil {
+				s.stopTasks.enqueuedWorkers = make(map[SubscriptionID]map[uint64]struct{})
+			}
+			workersEnqueued = s.stopTasks.enqueuedWorkers[subID]
+			if workersEnqueued == nil {
+				workersEnqueued = make(map[uint64]struct{})
+				s.stopTasks.enqueuedWorkers[subID] = workersEnqueued
+			}
+			workersEnqueued[worker.workerID] = struct{}{}
+			s.stopTasks.Unlock()
 		}
 		return true
 	})
+	if enqueued {
+		s.stopTasks.Lock()
+		if s.stopTasks.enqueuedWorkers != nil {
+			delete(s.stopTasks.enqueuedWorkers, subID)
+		}
+		s.stopTasks.Unlock()
+	}
 	return enqueued, firstErr
 }
 

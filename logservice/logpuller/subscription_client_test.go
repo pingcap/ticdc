@@ -216,6 +216,50 @@ func TestEnqueueRegionToAllStoresRetryWhenCacheFull(t *testing.T) {
 	require.Equal(t, 1, len(worker.requestCache.pendingQueue))
 }
 
+func TestEnqueueRegionToAllStoresNoRedundantStopRequests(t *testing.T) {
+	ctx := context.Background()
+	client := &subscriptionClient{}
+
+	worker1 := &regionRequestWorker{
+		workerID:     1,
+		requestCache: newRequestCache(1),
+	}
+	worker2 := &regionRequestWorker{
+		workerID:     2,
+		requestCache: newRequestCache(1),
+	}
+	store := &requestedStore{storeAddr: "store-1"}
+	store.requestWorkers.s = []*regionRequestWorker{worker1, worker2}
+	client.stores.Store(store.storeAddr, store)
+
+	// Fill worker2's queue so the first enqueue fails on worker2.
+	dummyRegion := regionInfo{
+		subscribedSpan:   &subscribedSpan{subID: SubscriptionID(2)},
+		lockedRangeState: &regionlock.LockedRangeState{},
+	}
+	ok, err := worker2.add(ctx, dummyRegion, true)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	stopRegion := regionInfo{
+		subscribedSpan: &subscribedSpan{subID: SubscriptionID(1)},
+	}
+	enqueued, err := client.enqueueRegionToAllStores(ctx, stopRegion)
+	require.NoError(t, err)
+	require.False(t, enqueued)
+	require.Equal(t, 1, len(worker1.requestCache.pendingQueue))
+
+	// Make worker2 available, but keep worker1's stop request in queue.
+	<-worker2.requestCache.pendingQueue
+	worker2.requestCache.markDone()
+
+	enqueued, err = client.enqueueRegionToAllStores(ctx, stopRegion)
+	require.NoError(t, err)
+	require.True(t, enqueued)
+	require.Equal(t, 1, len(worker1.requestCache.pendingQueue))
+	require.Equal(t, 1, len(worker2.requestCache.pendingQueue))
+}
+
 func TestSubscriptionWithFailedTiKV(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	mockPDClock := pdutil.NewClock4Test()
