@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	pmetrics "github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -331,11 +332,21 @@ func mutateMessageValueForFailpoint(
 
 func selectColumnToMutate(row map[string]any, pkSet map[string]struct{}) (string, bool) {
 	columns := make([]string, 0, len(row))
+	originTsNilColumns := make([]string, 0, 1)
 	for col := range row {
 		if _, isPK := pkSet[col]; isPK {
 			continue
 		}
+		// If _tidb_origin_ts is nil, prefer mutating another non-PK column.
+		// This avoids selecting a value that cannot be incremented.
+		if col == commonEvent.OriginTsColumn && row[col] == nil {
+			originTsNilColumns = append(originTsNilColumns, col)
+			continue
+		}
 		columns = append(columns, col)
+	}
+	if len(columns) == 0 {
+		columns = originTsNilColumns
 	}
 	if len(columns) == 0 {
 		return "", false

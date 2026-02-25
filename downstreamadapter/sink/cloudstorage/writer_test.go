@@ -167,3 +167,22 @@ func TestMutateMessageValueForFailpointRecordClassification(t *testing.T) {
 	require.True(t, bytes.Contains(msg.Value, []byte(`"_tidb_origin_ts":"101"`)))
 	require.True(t, bytes.Contains(msg.Value, []byte(`"c2":null`)))
 }
+
+func TestSelectColumnToMutateSkipNilOriginTsWhenPossible(t *testing.T) {
+	t.Parallel()
+
+	row := map[string]any{
+		"id":                       "1",
+		commonEvent.OriginTsColumn: nil,
+		"c2":                       "v1",
+	}
+	pkSet := map[string]struct{}{
+		"id": {},
+	}
+
+	for i := 0; i < 20; i++ {
+		col, ok := selectColumnToMutate(row, pkSet)
+		require.True(t, ok)
+		require.Equal(t, "c2", col)
+	}
+}
