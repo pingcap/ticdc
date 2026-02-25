@@ -140,7 +140,7 @@ func TestMutateMessageValueForFailpointRecordClassification(t *testing.T) {
 		Value: []byte(
 			`{"pkNames":["id"],"data":[{"id":"1","c2":"v1"}]}` +
 				"\r\n" +
-				`{"pkNames":["id"],"data":[{"id":"2","tidb_origin_ts":"100"}]}`,
+				`{"pkNames":["id"],"data":[{"id":"2","_tidb_origin_ts":"100"}]}`,
 		),
 	}
 	rowRecords := []failpointrecord.RowRecord{
@@ -164,6 +164,6 @@ func TestMutateMessageValueForFailpointRecordClassification(t *testing.T) {
 	require.Equal(t, uint64(102), originTsMutatedRows[0].CommitTs)
 	require.Equal(t, "2", originTsMutatedRows[0].PrimaryKeys["id"])
 
-	require.True(t, bytes.Contains(msg.Value, []byte(`"tidb_origin_ts":null`)))
+	require.True(t, bytes.Contains(msg.Value, []byte(`"_tidb_origin_ts":"101"`)))
 	require.True(t, bytes.Contains(msg.Value, []byte(`"c2":null`)))
 }

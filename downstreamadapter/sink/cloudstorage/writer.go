@@ -228,7 +228,7 @@ func (d *writer) ignoreTableTask(task *singleTableTask) {
 //  3. Re-marshal the whole message.
 //
 // This function is only called from within a failpoint.Inject block.
-// It returns mutated row records grouped by whether `tidb_origin_ts` is mutated.
+// It returns mutated row records grouped by whether `_tidb_origin_ts` is mutated.
 func mutateMessageValueForFailpoint(
 	msg *common.Message,
 	rowRecords []failpointrecord.RowRecord,
@@ -281,7 +281,15 @@ func mutateMessageValueForFailpoint(
 			if !ok {
 				continue
 			}
-			row[col] = nil
+			if col == "_tidb_origin_ts" {
+				nextValue, ok := incrementOriginTSValue(row[col])
+				if !ok {
+					continue
+				}
+				row[col] = nextValue
+			} else {
+				row[col] = nil
+			}
 			mutated = true
 			mutatedRowOffset = rowIdx
 			mutatedColumn = col
@@ -309,7 +317,7 @@ func mutateMessageValueForFailpoint(
 		}
 		parts[i] = newPart
 
-		if mutatedColumn == "tidb_origin_ts" {
+		if mutatedColumn == "_tidb_origin_ts" {
 			originTsMutatedOffsets = append(originTsMutatedOffsets, rowOffset+mutatedRowOffset)
 		} else {
 			mutatedOffsets = append(mutatedOffsets, rowOffset+mutatedRowOffset)
@@ -355,6 +363,47 @@ func extractMutatedRowRecordsByOffset(
 		ret = append(ret, rowRecords[offset])
 	}
 	return ret
+}
+
+func incrementOriginTSValue(v any) (any, bool) {
+	switch value := v.(type) {
+	case string:
+		originTS, err := strconv.ParseUint(value, 10, 64)
+		if err != nil {
+			return nil, false
+		}
+		return strconv.FormatUint(originTS+1, 10), true
+	case float64:
+		return value + 1, true
+	case json.Number:
+		originTS, err := value.Int64()
+		if err != nil {
+			return nil, false
+		}
+		return json.Number(strconv.FormatInt(originTS+1, 10)), true
+	case int:
+		return value + 1, true
+	case int8:
+		return value + 1, true
+	case int16:
+		return value + 1, true
+	case int32:
+		return value + 1, true
+	case int64:
+		return value + 1, true
+	case uint:
+		return value + 1, true
+	case uint8:
+		return value + 1, true
+	case uint16:
+		return value + 1, true
+	case uint32:
+		return value + 1, true
+	case uint64:
+		return value + 1, true
+	default:
+		return nil, false
+	}
 }
 
 func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath string, task *singleTableTask) error {
