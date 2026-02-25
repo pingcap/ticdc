@@ -186,3 +186,22 @@ func TestSelectColumnToMutateSkipNilOriginTsWhenPossible(t *testing.T) {
 		require.Equal(t, "c2", col)
 	}
 }
+
+func TestSelectColumnToMutatePreferNonNilOriginTs(t *testing.T) {
+	t.Parallel()
+
+	row := map[string]any{
+		"id":                       "1",
+		commonEvent.OriginTsColumn: "100",
+		"c2":                       "v1",
+	}
+	pkSet := map[string]struct{}{
+		"id": {},
+	}
+
+	for i := 0; i < 20; i++ {
+		col, ok := selectColumnToMutate(row, pkSet)
+		require.True(t, ok)
+		require.Equal(t, commonEvent.OriginTsColumn, col)
+	}
+}

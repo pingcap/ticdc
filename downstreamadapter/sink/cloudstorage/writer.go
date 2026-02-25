@@ -282,7 +282,7 @@ func mutateMessageValueForFailpoint(
 			if !ok {
 				continue
 			}
-			if col == "_tidb_origin_ts" {
+			if col == commonEvent.OriginTsColumn {
 				nextValue, ok := incrementOriginTSValue(row[col])
 				if !ok {
 					continue
@@ -318,7 +318,7 @@ func mutateMessageValueForFailpoint(
 		}
 		parts[i] = newPart
 
-		if mutatedColumn == "_tidb_origin_ts" {
+		if mutatedColumn == commonEvent.OriginTsColumn {
 			originTsMutatedOffsets = append(originTsMutatedOffsets, rowOffset+mutatedRowOffset)
 		} else {
 			mutatedOffsets = append(mutatedOffsets, rowOffset+mutatedRowOffset)
@@ -331,22 +331,23 @@ func mutateMessageValueForFailpoint(
 }
 
 func selectColumnToMutate(row map[string]any, pkSet map[string]struct{}) (string, bool) {
+	// Prefer mutating _tidb_origin_ts when it exists and is non-NULL.
+	// Otherwise, mutate other non-PK columns.
+	if _, isPK := pkSet[commonEvent.OriginTsColumn]; !isPK {
+		if originTs, ok := row[commonEvent.OriginTsColumn]; ok && originTs != nil {
+			return commonEvent.OriginTsColumn, true
+		}
+	}
+
 	columns := make([]string, 0, len(row))
-	originTsNilColumns := make([]string, 0, 1)
 	for col := range row {
 		if _, isPK := pkSet[col]; isPK {
 			continue
 		}
-		// If _tidb_origin_ts is nil, prefer mutating another non-PK column.
-		// This avoids selecting a value that cannot be incremented.
-		if col == commonEvent.OriginTsColumn && row[col] == nil {
-			originTsNilColumns = append(originTsNilColumns, col)
+		if col == commonEvent.OriginTsColumn {
 			continue
 		}
 		columns = append(columns, col)
-	}
-	if len(columns) == 0 {
-		columns = originTsNilColumns
 	}
 	if len(columns) == 0 {
 		return "", false
