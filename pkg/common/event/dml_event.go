@@ -17,6 +17,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/failpoint"
@@ -392,14 +393,18 @@ type DMLEvent struct {
 
 	// The following fields are set and used by dispatcher.
 	ReplicatingTs uint64 `json:"replicating_ts"`
-	// PostTxnEnqueued is the functions to be executed after the transaction is
-	// enqueued into sink internal pipeline.
+	// PostTxnEnqueued contains callbacks executed when the txn is accepted by
+	// sink's internal pipeline (enqueue stage).
+	//
+	// Note: enqueue means "handed over to sink workers", not "durably written
+	// to downstream".
 	PostTxnEnqueued []func() `json:"-"`
-	// PostTxnFlushed is the functions to be executed after the transaction is flushed.
-	// It is set and used by dispatcher.
+	// PostTxnFlushed contains callbacks executed when the txn is fully flushed to
+	// downstream (flush stage), which is stronger than enqueue and is used by
+	// checkpoint related logic.
 	PostTxnFlushed []func() `json:"-"`
 	// postEnqueueCalled ensures PostTxnEnqueued callbacks are triggered at most once.
-	postEnqueueCalled bool `json:"-"`
+	postEnqueueCalled uint32 `json:"-"`
 
 	// eventSize is the size of the event in bytes. It is set when it's unmarshaled.
 	eventSize int64 `json:"-"`
@@ -635,6 +640,11 @@ func (t *DMLEvent) GetStartTs() common.Ts {
 	return t.StartTs
 }
 
+// PostFlush marks the transaction as flushed to downstream.
+//
+// It always calls PostEnqueue first to preserve callback order:
+// enqueue callbacks run before flush callbacks, even for sinks that only invoke
+// PostFlush and do not have an explicit enqueue hook.
 func (t *DMLEvent) PostFlush() {
 	t.PostEnqueue()
 	for _, f := range t.PostTxnFlushed {
@@ -642,11 +652,14 @@ func (t *DMLEvent) PostFlush() {
 	}
 }
 
+// PostEnqueue marks the transaction as enqueued into sink internal pipeline.
+//
+// This stage does not mean data is already written to downstream. The method is
+// idempotent and guarantees enqueue callbacks run at most once.
 func (t *DMLEvent) PostEnqueue() {
-	if t.postEnqueueCalled {
+	if !atomic.CompareAndSwapUint32(&t.postEnqueueCalled, 0, 1) {
 		return
 	}
-	t.postEnqueueCalled = true
 	for _, f := range t.PostTxnEnqueued {
 		f()
 	}
@@ -660,22 +673,32 @@ func (t *DMLEvent) GetEpoch() uint64 {
 	return t.Epoch
 }
 
+// PushFrontFlushFunc prepends a flush callback so it runs before existing ones.
 func (t *DMLEvent) PushFrontFlushFunc(f func()) {
 	t.PostTxnFlushed = append([]func(){f}, t.PostTxnFlushed...)
 }
 
+// ClearPostFlushFunc removes all registered flush callbacks.
 func (t *DMLEvent) ClearPostFlushFunc() {
 	t.PostTxnFlushed = t.PostTxnFlushed[:0]
 }
 
+// AddPostFlushFunc registers a callback that runs at flush stage.
+//
+// Use this when the callback depends on downstream persistence semantics.
 func (t *DMLEvent) AddPostFlushFunc(f func()) {
 	t.PostTxnFlushed = append(t.PostTxnFlushed, f)
 }
 
+// ClearPostEnqueueFunc removes all registered enqueue callbacks.
 func (t *DMLEvent) ClearPostEnqueueFunc() {
 	t.PostTxnEnqueued = t.PostTxnEnqueued[:0]
 }
 
+// AddPostEnqueueFunc registers a callback that runs at enqueue stage.
+//
+// Use this when only sink acceptance is required. For sinks with no explicit
+// enqueue signal, this callback is triggered via PostFlush.
 func (t *DMLEvent) AddPostEnqueueFunc(f func()) {
 	t.PostTxnEnqueued = append(t.PostTxnEnqueued, f)
 }

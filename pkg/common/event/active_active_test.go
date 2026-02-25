@@ -14,6 +14,7 @@
 package event
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -314,6 +315,36 @@ func TestFilterDMLEventSoftDeleteTableMissingColumnReportsError(t *testing.T) {
 	require.Nil(t, filtered)
 	require.Error(t, handledErr)
 	require.Contains(t, handledErr.Error(), SoftDeleteTimeColumn)
+}
+
+func TestFilterDMLEventKeepsPostEnqueueCallbacksOnFilteredEvent(t *testing.T) {
+	ti := newTestTableInfo(t, true, true)
+	ts := newTimestampValue(time.Date(2025, time.March, 10, 0, 0, 0, 0, time.UTC))
+	event := newDMLEventForTest(t, ti,
+		[]commonpkg.RowType{commonpkg.RowTypeUpdate},
+		[][]interface{}{
+			{int64(1), nil},
+			{int64(1), ts},
+		})
+
+	var enqueueCalled int64
+	var flushCalled int64
+	event.AddPostEnqueueFunc(func() {
+		atomic.AddInt64(&enqueueCalled, 1)
+	})
+	event.AddPostFlushFunc(func() {
+		atomic.AddInt64(&flushCalled, 1)
+	})
+
+	filtered, skip := FilterDMLEvent(event, false, nil)
+	require.False(t, skip)
+	require.NotNil(t, filtered)
+	require.NotEqual(t, event, filtered)
+
+	filtered.PostEnqueue()
+	filtered.PostFlush()
+	require.Equal(t, int64(1), atomic.LoadInt64(&enqueueCalled))
+	require.Equal(t, int64(1), atomic.LoadInt64(&flushCalled))
 }
 
 func newTestTableInfo(t *testing.T, activeActive, softDelete bool) *commonpkg.TableInfo {

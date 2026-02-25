@@ -14,6 +14,8 @@
 package event
 
 import (
+	"sync/atomic"
+
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -443,7 +445,10 @@ func newFilteredDMLEvent(
 	newEvent.Seq = source.Seq
 	newEvent.Epoch = source.Epoch
 	newEvent.ReplicatingTs = source.ReplicatingTs
+	newEvent.PostTxnEnqueued = source.PostTxnEnqueued
 	newEvent.PostTxnFlushed = source.PostTxnFlushed
+	newEvent.postEnqueueCalled = atomic.LoadUint32(&source.postEnqueueCalled)
+	source.PostTxnEnqueued = nil
 	source.PostTxnFlushed = nil
 
 	newEvent.SetRows(rows)

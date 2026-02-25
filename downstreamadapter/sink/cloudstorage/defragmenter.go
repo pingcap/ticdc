@@ -122,6 +122,7 @@ func (d *defragmenter) dispatchFragToDMLWorker(frag eventFragment) {
 	d.hasher.Write([]byte(tableName.Schema), []byte(tableName.Table))
 	workerID := d.hasher.Sum32() % uint32(len(d.outputChs))
 	d.outputChs[workerID].In() <- frag
+	frag.event.PostEnqueue()
 	d.lastDispatchedSeq = frag.seqNumber
 }
 

@@ -15,6 +15,7 @@ package event
 
 import (
 	"encoding/binary"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -380,4 +381,31 @@ func TestDMLEventPostFlushTriggersPostEnqueueOnce(t *testing.T) {
 
 	require.Equal(t, int64(1), atomic.LoadInt64(&enqueueCalled))
 	require.Equal(t, int64(2), atomic.LoadInt64(&flushCalled))
+}
+
+func TestDMLEventPostEnqueueConcurrentWithPostFlush(t *testing.T) {
+	t.Parallel()
+
+	event := &DMLEvent{}
+	var enqueueCalled int64
+	event.AddPostEnqueueFunc(func() {
+		atomic.AddInt64(&enqueueCalled, 1)
+	})
+
+	var wg sync.WaitGroup
+	const loops = 256
+	for i := 0; i < loops; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			event.PostEnqueue()
+		}()
+		go func() {
+			defer wg.Done()
+			event.PostFlush()
+		}()
+	}
+	wg.Wait()
+
+	require.Equal(t, int64(1), atomic.LoadInt64(&enqueueCalled))
 }

@@ -116,7 +116,6 @@ func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
 	_ = d.statistics.RecordBatchExecution(func() (int, int64, error) {
 		// emit a TxnCallbackableEvent encoupled with a sequence number starting from one.
 		d.msgCh.Push(newEventFragment(seq, tbl, event))
-		event.PostEnqueue()
 		return int(event.Len()), event.GetSize(), nil
 	})
 }
