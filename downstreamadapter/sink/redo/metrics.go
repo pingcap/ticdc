@@ -73,9 +73,9 @@ func (m *redoSinkMetrics) close() {
 	keyspace := m.changefeedID.Keyspace()
 	changefeed := m.changefeedID.Name()
 
-for _, logType := range []string{redo.RedoRowLogFileType, redo.RedoDDLLogFileType} {
-	metrics.RedoWriteLogDurationHistogram.DeleteLabelValues(keyspace, changefeed, logType)
-	metrics.RedoTotalRowsCountGauge.DeleteLabelValues(keyspace, changefeed, logType)
-	metrics.RedoWorkerBusyRatio.DeleteLabelValues(keyspace, changefeed, logType)
-}
+	for _, logType := range []string{redo.RedoRowLogFileType, redo.RedoDDLLogFileType} {
+		metrics.RedoWriteLogDurationHistogram.DeleteLabelValues(keyspace, changefeed, logType)
+		metrics.RedoTotalRowsCountGauge.DeleteLabelValues(keyspace, changefeed, logType)
+		metrics.RedoWorkerBusyRatio.DeleteLabelValues(keyspace, changefeed, logType)
+	}
 }
