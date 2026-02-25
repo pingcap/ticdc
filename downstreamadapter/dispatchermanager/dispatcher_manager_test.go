@@ -142,6 +142,7 @@ func TestCollectRecoverableErrorsEnqueueRecoverDispatcherRequest(t *testing.T) {
 		recoverTracker:                newRecoverTracker(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)),
 	}
 	manager.SetMaintainerID(node.ID("maintainer"))
+	manager.meta.maintainerEpoch = 9
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -173,7 +174,10 @@ func TestCollectRecoverableErrorsEnqueueRecoverDispatcherRequest(t *testing.T) {
 	require.Equal(t, node.ID("maintainer"), req.TargetID)
 	require.NotNil(t, req.Request)
 	require.Equal(t, manager.changefeedID.ToPB(), req.Request.ChangefeedID)
-	require.Equal(t, []*heartbeatpb.DispatcherID{dispatcherID.ToPB()}, req.Request.DispatcherIDs)
+	require.Equal(t, 1, len(req.Request.Identities))
+	require.Equal(t, dispatcherID.ToPB(), req.Request.Identities[0].DispatcherID)
+	require.Equal(t, uint64(1), req.Request.Identities[0].DispatcherEpoch)
+	require.Equal(t, uint64(9), req.Request.Identities[0].MaintainerEpoch)
 }
 
 func TestCollectRecoverableEventsSkipPendingDispatcher(t *testing.T) {
@@ -235,7 +239,7 @@ func TestResendPendingRecoverDispatcherRequest(t *testing.T) {
 
 	dispatcherID := common.NewDispatcherID()
 	manager.dispatcherMap.Set(dispatcherID, nil)
-	manager.recoverTracker.add([]common.DispatcherID{dispatcherID})
+	manager.recoverTracker.add([]recoverDispatcherIdentity{newRecoverDispatcherIdentity(dispatcherID, 7, 11)})
 
 	manager.SetMaintainerID(node.ID("maintainer-new"))
 	manager.resendPendingRecoverRequests(context.Background())
@@ -244,7 +248,10 @@ func TestResendPendingRecoverDispatcherRequest(t *testing.T) {
 	case req := <-manager.recoverDispatcherRequestQueue:
 		require.Equal(t, node.ID("maintainer-new"), req.TargetID)
 		require.NotNil(t, req.Request)
-		require.Equal(t, []*heartbeatpb.DispatcherID{dispatcherID.ToPB()}, req.Request.DispatcherIDs)
+		require.Equal(t, 1, len(req.Request.Identities))
+		require.Equal(t, dispatcherID.ToPB(), req.Request.Identities[0].DispatcherID)
+		require.Equal(t, uint64(7), req.Request.Identities[0].DispatcherEpoch)
+		require.Equal(t, uint64(11), req.Request.Identities[0].MaintainerEpoch)
 	case <-time.After(time.Second):
 		t.Fatal("resend recover dispatcher request not received")
 	}
@@ -261,7 +268,7 @@ func TestResendPendingRecoverDispatcherRequestSkipNonLocal(t *testing.T) {
 	manager.SetMaintainerID(node.ID("maintainer"))
 
 	dispatcherID := common.NewDispatcherID()
-	manager.recoverTracker.add([]common.DispatcherID{dispatcherID})
+	manager.recoverTracker.add([]recoverDispatcherIdentity{newRecoverDispatcherIdentity(dispatcherID, 1, 0)})
 
 	manager.resendPendingRecoverRequests(context.Background())
 
@@ -284,7 +291,7 @@ func TestResendPendingRecoverDispatcherRequestClearSupersededNonLocal(t *testing
 	manager.SetMaintainerID(node.ID("maintainer"))
 
 	dispatcherID := common.NewDispatcherID()
-	manager.recoverTracker.add([]common.DispatcherID{dispatcherID})
+	manager.recoverTracker.add([]recoverDispatcherIdentity{newRecoverDispatcherIdentity(dispatcherID, 1, 0)})
 	manager.onDispatcherRemovedForRecover(dispatcherID)
 
 	reported, handled := manager.reporter.Report([]recoverable.DispatcherEpoch{
@@ -299,6 +306,43 @@ func TestResendPendingRecoverDispatcherRequestClearSupersededNonLocal(t *testing
 	select {
 	case <-manager.recoverDispatcherRequestQueue:
 		t.Fatal("unexpected recover dispatcher request for superseded non-local dispatcher")
+	default:
+	}
+	require.Empty(t, manager.recoverTracker.pendingDispatcherIDs())
+
+	reported, handled = manager.reporter.Report([]recoverable.DispatcherEpoch{
+		{DispatcherID: dispatcherID, Epoch: 1},
+	})
+	require.True(t, handled)
+	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
+}
+
+func TestResendPendingRecoverDispatcherRequestClearRemovedNonLocalImmediately(t *testing.T) {
+	manager := &DispatcherManager{
+		changefeedID:                  common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+		recoverDispatcherRequestQueue: make(chan *RecoverDispatcherRequestWithTargetID, 1),
+		dispatcherMap:                 newDispatcherMap[*dispatcher.EventDispatcher](),
+		reporter:                      recoverable.NewReporter(recoverEventChSize),
+		recoverTracker:                newRecoverTracker(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)),
+	}
+	manager.SetMaintainerID(node.ID("maintainer"))
+
+	dispatcherID := common.NewDispatcherID()
+	manager.recoverTracker.add([]recoverDispatcherIdentity{newRecoverDispatcherIdentity(dispatcherID, 1, 0)})
+	manager.onDispatcherRemovedForRecover(dispatcherID)
+
+	reported, handled := manager.reporter.Report([]recoverable.DispatcherEpoch{
+		{DispatcherID: dispatcherID, Epoch: 5},
+	})
+	require.True(t, handled)
+	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
+	<-manager.reporter.OutputCh()
+
+	manager.resendPendingRecoverRequests(context.Background())
+
+	select {
+	case <-manager.recoverDispatcherRequestQueue:
+		t.Fatal("unexpected recover dispatcher request for removed non-local dispatcher")
 	default:
 	}
 	require.Empty(t, manager.recoverTracker.pendingDispatcherIDs())
@@ -325,7 +369,7 @@ func TestRecoverPendingClearsAfterDispatcherRecreated(t *testing.T) {
 	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
 	<-manager.reporter.OutputCh()
 
-	manager.recoverTracker.add([]common.DispatcherID{dispatcherID})
+	manager.recoverTracker.add([]recoverDispatcherIdentity{newRecoverDispatcherIdentity(dispatcherID, 5, 0)})
 	manager.onDispatcherRemovedForRecover(dispatcherID)
 	require.Equal(t, []common.DispatcherID{dispatcherID}, manager.recoverTracker.pendingDispatcherIDs())
 
@@ -354,7 +398,7 @@ func TestWorkingStatusClearsRecoverReporterState(t *testing.T) {
 	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
 	<-manager.reporter.OutputCh()
 
-	manager.recoverTracker.add([]common.DispatcherID{dispatcherID})
+	manager.recoverTracker.add([]recoverDispatcherIdentity{newRecoverDispatcherIdentity(dispatcherID, 5, 0)})
 	manager.onDispatcherStatusForRecover(&heartbeatpb.TableSpanStatus{
 		ID:              dispatcherID.ToPB(),
 		ComponentStatus: heartbeatpb.ComponentState_Working,
@@ -365,6 +409,72 @@ func TestWorkingStatusClearsRecoverReporterState(t *testing.T) {
 	})
 	require.True(t, handled)
 	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
+}
+
+func TestRecoverDispatcherResponseClearSupersededState(t *testing.T) {
+	manager := &DispatcherManager{
+		changefeedID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+	}
+	manager.reporter = recoverable.NewReporter(2)
+	manager.recoverTracker = newRecoverTracker(manager.changefeedID)
+
+	dispatcherID := common.NewDispatcherID()
+	reported, handled := manager.reporter.Report([]recoverable.DispatcherEpoch{
+		{DispatcherID: dispatcherID, Epoch: 5},
+	})
+	require.True(t, handled)
+	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
+	<-manager.reporter.OutputCh()
+
+	requestID := newRecoverDispatcherIdentity(dispatcherID, 5, 9)
+	manager.recoverTracker.add([]recoverDispatcherIdentity{requestID})
+	manager.onRecoverDispatcherResponse(&heartbeatpb.RecoverDispatcherResponse{
+		ChangefeedID: manager.changefeedID.ToPB(),
+		Entries: []*heartbeatpb.RecoverDispatcherResponseEntry{
+			{
+				Identity: &heartbeatpb.RecoverDispatcherIdentity{
+					DispatcherID:    dispatcherID.ToPB(),
+					DispatcherEpoch: 5,
+					MaintainerEpoch: 9,
+				},
+				State: heartbeatpb.RecoverDispatcherResponseState_SUPERSEDED,
+			},
+		},
+	})
+	require.Empty(t, manager.recoverTracker.pendingDispatcherIDs())
+
+	reported, handled = manager.reporter.Report([]recoverable.DispatcherEpoch{
+		{DispatcherID: dispatcherID, Epoch: 1},
+	})
+	require.True(t, handled)
+	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
+}
+
+func TestRecoverDispatcherResponseIgnoreMismatchedRequestID(t *testing.T) {
+	manager := &DispatcherManager{
+		changefeedID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+	}
+	manager.reporter = recoverable.NewReporter(1)
+	manager.recoverTracker = newRecoverTracker(manager.changefeedID)
+
+	dispatcherID := common.NewDispatcherID()
+	manager.recoverTracker.add([]recoverDispatcherIdentity{newRecoverDispatcherIdentity(dispatcherID, 5, 9)})
+
+	manager.onRecoverDispatcherResponse(&heartbeatpb.RecoverDispatcherResponse{
+		ChangefeedID: manager.changefeedID.ToPB(),
+		Entries: []*heartbeatpb.RecoverDispatcherResponseEntry{
+			{
+				Identity: &heartbeatpb.RecoverDispatcherIdentity{
+					DispatcherID:    dispatcherID.ToPB(),
+					DispatcherEpoch: 4,
+					MaintainerEpoch: 9,
+				},
+				State: heartbeatpb.RecoverDispatcherResponseState_SUPERSEDED,
+			},
+		},
+	})
+
+	require.Equal(t, []common.DispatcherID{dispatcherID}, manager.recoverTracker.pendingDispatcherIDs())
 }
 
 func TestRecoverPendingTimeoutFallback(t *testing.T) {
@@ -392,7 +502,7 @@ func TestRecoverPendingTimeoutFallback(t *testing.T) {
 	manager.recoverTracker = newRecoverTracker(manager.changefeedID)
 	dispatcherID := common.NewDispatcherID()
 	manager.recoverTracker.addAt(
-		[]common.DispatcherID{dispatcherID},
+		[]recoverDispatcherIdentity{newRecoverDispatcherIdentity(dispatcherID, 1, 0)},
 		time.Now().Add(-recoverLifecyclePendingTimeout-time.Second),
 	)
 
@@ -747,7 +857,7 @@ func TestDoMergeForceCloseWhenRecoverPending(t *testing.T) {
 
 	manager.dispatcherMap.Set(dispatcher1.GetId(), dispatcher1)
 	manager.dispatcherMap.Set(dispatcher2.GetId(), dispatcher2)
-	manager.recoverTracker.add([]common.DispatcherID{dispatcher1.GetId()})
+	manager.recoverTracker.add([]recoverDispatcherIdentity{newRecoverDispatcherIdentity(dispatcher1.GetId(), 1, 0)})
 
 	mergedID := common.NewDispatcherID()
 	task := manager.mergeEventDispatcher([]common.DispatcherID{

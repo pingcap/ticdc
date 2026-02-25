@@ -22,8 +22,8 @@ import (
 
 // RecoverEvent is a structured recover notification emitted by a sink.
 type RecoverEvent struct {
-	Time          time.Time
-	DispatcherIDs []common.DispatcherID
+	Time        time.Time
+	Dispatchers []DispatcherEpoch
 }
 
 // Recoverable is implemented by sinks that can report recoverable errors.
@@ -115,8 +115,8 @@ func (r *Reporter) Report(
 	}
 
 	event := &RecoverEvent{
-		Time:          time.Now(),
-		DispatcherIDs: dispatcherIDs,
+		Time:        time.Now(),
+		Dispatchers: append([]DispatcherEpoch(nil), candidates...),
 	}
 
 	select {

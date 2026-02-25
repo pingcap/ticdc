@@ -529,7 +529,17 @@ func (m *Maintainer) onCheckpointTsPersisted(msg *heartbeatpb.CheckpointTsMessag
 }
 
 func (m *Maintainer) onRecoverDispatcherRequest(from node.ID, req *heartbeatpb.RecoverDispatcherRequest) {
-	m.recoverDispatcherHandler.handle(from, req)
+	entries := m.recoverDispatcherHandler.handle(from, req)
+	if len(entries) == 0 {
+		return
+	}
+	response := &heartbeatpb.RecoverDispatcherResponse{
+		ChangefeedID: req.ChangefeedID,
+		Entries:      entries,
+	}
+	m.sendMessages([]*messaging.TargetMessage{
+		messaging.NewSingleTargetMessage(from, messaging.HeartbeatCollectorTopic, response),
+	})
 }
 
 func (m *Maintainer) onRedoPersisted(req *heartbeatpb.RedoResolvedTsProgressMessage) {

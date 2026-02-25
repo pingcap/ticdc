@@ -19,6 +19,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/sink/recoverable"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -37,6 +38,30 @@ const (
 	recoverLifecyclePendingTimeout = 10 * time.Minute
 )
 
+type recoverDispatcherIdentity struct {
+	id              common.DispatcherID
+	epoch           uint64
+	maintainerEpoch uint64
+}
+
+func newRecoverDispatcherIdentity(
+	id common.DispatcherID,
+	epoch uint64,
+	maintainerEpoch uint64,
+) recoverDispatcherIdentity {
+	return recoverDispatcherIdentity{
+		id:              id,
+		epoch:           epoch,
+		maintainerEpoch: maintainerEpoch,
+	}
+}
+
+func (r recoverDispatcherIdentity) equal(other recoverDispatcherIdentity) bool {
+	return r.id == other.id &&
+		r.epoch == other.epoch &&
+		r.maintainerEpoch == other.maintainerEpoch
+}
+
 // recoverTracker tracks dispatchers with recover requests that are waiting for
 // recover lifecycle completion (remove old instance, then recreate new instance).
 type recoverTracker struct {
@@ -51,6 +76,7 @@ type recoverTracker struct {
 }
 
 type recoverPendingState struct {
+	identity  recoverDispatcherIdentity
 	firstSeen time.Time
 	removed   bool
 }
@@ -67,23 +93,25 @@ func newRecoverTracker(changefeedID common.ChangeFeedID) *recoverTracker {
 
 // add marks dispatchers as pending recover from now.
 // Use this in production path right after recover request is enqueued.
-func (t *recoverTracker) add(dispatcherIDs []common.DispatcherID) {
-	t.addAt(dispatcherIDs, time.Now())
+func (t *recoverTracker) add(identities []recoverDispatcherIdentity) {
+	t.addAt(identities, time.Now())
 }
 
 // addAt marks dispatchers as pending recover at a specified timestamp.
 // It exists for deterministic timeout tests.
-func (t *recoverTracker) addAt(dispatcherIDs []common.DispatcherID, at time.Time) {
-	if len(dispatcherIDs) == 0 {
+func (t *recoverTracker) addAt(identities []recoverDispatcherIdentity, at time.Time) {
+	if len(identities) == 0 {
 		return
 	}
 
 	t.mu.Lock()
-	for _, dispatcherID := range dispatcherIDs {
+	for _, identity := range identities {
+		dispatcherID := identity.id
 		if _, ok := t.pending[dispatcherID]; ok {
 			continue
 		}
 		t.pending[dispatcherID] = recoverPendingState{
+			identity:  identity,
 			firstSeen: at,
 			removed:   false,
 		}
@@ -96,20 +124,21 @@ func (t *recoverTracker) addAt(dispatcherIDs []common.DispatcherID, at time.Time
 
 // filterNonPending returns dispatcher IDs that are not currently in pending state.
 // Caller can use it as a pre-send gate to avoid duplicate recover requests.
-func (t *recoverTracker) filterNonPending(dispatcherIDs []common.DispatcherID) []common.DispatcherID {
-	if len(dispatcherIDs) == 0 {
+func (t *recoverTracker) filterNonPending(dispatchers []recoverable.DispatcherEpoch) []recoverable.DispatcherEpoch {
+	if len(dispatchers) == 0 {
 		return nil
 	}
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	nonPending := make([]common.DispatcherID, 0, len(dispatcherIDs))
-	for _, dispatcherID := range dispatcherIDs {
+	nonPending := make([]recoverable.DispatcherEpoch, 0, len(dispatchers))
+	for _, dispatcher := range dispatchers {
+		dispatcherID := dispatcher.DispatcherID
 		if _, ok := t.pending[dispatcherID]; ok {
 			continue
 		}
-		nonPending = append(nonPending, dispatcherID)
+		nonPending = append(nonPending, dispatcher)
 	}
 	return nonPending
 }
@@ -131,7 +160,9 @@ func (t *recoverTracker) markRemoved(dispatcherID common.DispatcherID) bool {
 		t.mu.Unlock()
 		return false
 	}
-	state.removed = true
+	if !state.removed {
+		state.removed = true
+	}
 	t.pending[dispatcherID] = state
 	t.mu.Unlock()
 	return true
@@ -170,6 +201,22 @@ func (t *recoverTracker) pendingDispatcherIDs() []common.DispatcherID {
 	return dispatcherIDs
 }
 
+// pendingIdentities returns a snapshot of pending recover identities.
+func (t *recoverTracker) pendingIdentities() []recoverDispatcherIdentity {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if len(t.pending) == 0 {
+		return nil
+	}
+
+	identities := make([]recoverDispatcherIdentity, 0, len(t.pending))
+	for _, state := range t.pending {
+		identities = append(identities, state.identity)
+	}
+	return identities
+}
+
 // remove clears pending state for a dispatcher.
 // It returns true when dispatcher was pending before this call
 func (t *recoverTracker) remove(dispatcherID common.DispatcherID) bool {
@@ -183,9 +230,39 @@ func (t *recoverTracker) remove(dispatcherID common.DispatcherID) bool {
 	return existed
 }
 
+// hasIdentity checks whether this recover identity is still pending.
+func (t *recoverTracker) hasIdentity(identity recoverDispatcherIdentity) bool {
+	t.mu.Lock()
+	state, ok := t.pending[identity.id]
+	t.mu.Unlock()
+	if !ok {
+		return false
+	}
+	return state.identity.equal(identity)
+}
+
+// removeByIdentity clears pending state only when recover identity matches.
+func (t *recoverTracker) removeByIdentity(identity recoverDispatcherIdentity) bool {
+	t.mu.Lock()
+	state, existed := t.pending[identity.id]
+	if !existed {
+		t.mu.Unlock()
+		return false
+	}
+	if !state.identity.equal(identity) {
+		t.mu.Unlock()
+		return false
+	}
+	delete(t.pending, identity.id)
+	if t.pendingGauge != nil {
+		t.pendingGauge.Set(float64(len(t.pending)))
+	}
+	t.mu.Unlock()
+	return true
+}
+
 // removeIfRemoved clears pending state only when this dispatcher has entered
-// removed stage. Caller can use it to resolve superseded recover requests where
-// the dispatcher is no longer local after removal.
+// removed stage.
 func (t *recoverTracker) removeIfRemoved(dispatcherID common.DispatcherID) bool {
 	t.mu.Lock()
 	state, ok := t.pending[dispatcherID]

@@ -747,19 +747,20 @@ func (e *DispatcherManager) collectRecoverableEvents(ctx context.Context) {
 				e.metricRecoverEventCount.Inc()
 			}
 
-			if len(event.DispatcherIDs) == 0 {
-				log.Warn("recoverable sink error has no dispatcher IDs, ignore it",
+			if len(event.Dispatchers) == 0 {
+				log.Warn("recoverable sink error has no dispatcher info, ignore it",
 					zap.Stringer("changefeedID", e.changefeedID))
 				continue
 			}
 
-			localDispatcherIDs := e.filterLocalRecoverDispatcherIDs(event.DispatcherIDs, true)
-			if len(localDispatcherIDs) == 0 {
+			localDispatchers := e.filterLocalRecoverDispatchers(event.Dispatchers, true)
+			if len(localDispatchers) == 0 {
 				continue
 			}
-			dispatcherIDsToRecover := e.recoverTracker.filterNonPending(localDispatcherIDs)
-			if e.enqueueRecoverDispatcherRequest(ctx, dispatcherIDsToRecover) {
-				e.recoverTracker.add(dispatcherIDsToRecover)
+			dispatchersToRecover := e.recoverTracker.filterNonPending(localDispatchers)
+			identities := e.newRecoverIdentities(dispatchersToRecover)
+			if e.enqueueRecoverDispatcherRequest(ctx, identities) {
+				e.recoverTracker.add(identities)
 			}
 		}
 	}
@@ -770,38 +771,42 @@ func (e *DispatcherManager) resendPendingRecoverRequests(ctx context.Context) {
 		return
 	}
 
-	pendingDispatcherIDs := e.recoverTracker.pendingDispatcherIDs()
-	if len(pendingDispatcherIDs) == 0 {
+	pendingIdentities := e.recoverTracker.pendingIdentities()
+	if len(pendingIdentities) == 0 {
 		return
 	}
-	localDispatcherIDs := e.filterLocalRecoverDispatcherIDs(pendingDispatcherIDs, false)
-	if len(localDispatcherIDs) == 0 {
+	localIdentities := e.filterLocalRecoverIdentities(pendingIdentities, false)
+	if len(localIdentities) == 0 {
 		return
 	}
-	e.enqueueRecoverDispatcherRequest(ctx, localDispatcherIDs)
+	e.enqueueRecoverDispatcherRequest(ctx, localIdentities)
 }
 
 func (e *DispatcherManager) enqueueRecoverDispatcherRequest(
 	ctx context.Context,
-	dispatcherIDs []common.DispatcherID,
+	identities []recoverDispatcherIdentity,
 ) bool {
-	if len(dispatcherIDs) == 0 {
+	if len(identities) == 0 {
 		return false
 	}
 	if e.recoverDispatcherRequestQueue == nil {
 		log.Warn("recover dispatcher request queue is not set, ignore recover request",
 			zap.Stringer("changefeedID", e.changefeedID),
-			zap.Int("dispatcherCount", len(dispatcherIDs)))
+			zap.Int("dispatcherCount", len(identities)))
 		return false
 	}
 
-	pbDispatcherIDs := make([]*heartbeatpb.DispatcherID, 0, len(dispatcherIDs))
-	for _, dispatcherID := range dispatcherIDs {
-		pbDispatcherIDs = append(pbDispatcherIDs, dispatcherID.ToPB())
+	pbIdentities := make([]*heartbeatpb.RecoverDispatcherIdentity, 0, len(identities))
+	for _, identity := range identities {
+		pbIdentities = append(pbIdentities, &heartbeatpb.RecoverDispatcherIdentity{
+			DispatcherID:    identity.id.ToPB(),
+			DispatcherEpoch: identity.epoch,
+			MaintainerEpoch: identity.maintainerEpoch,
+		})
 	}
 	req := &heartbeatpb.RecoverDispatcherRequest{
-		ChangefeedID:  e.changefeedID.ToPB(),
-		DispatcherIDs: pbDispatcherIDs,
+		ChangefeedID: e.changefeedID.ToPB(),
+		Identities:   pbIdentities,
 	}
 
 	var fallbackErrCh chan<- error
@@ -825,24 +830,84 @@ func (e *DispatcherManager) enqueueRecoverDispatcherRequest(
 	}
 }
 
-func (e *DispatcherManager) filterLocalRecoverDispatcherIDs(
-	dispatcherIDs []common.DispatcherID,
+func (e *DispatcherManager) newRecoverIdentities(dispatchers []recoverable.DispatcherEpoch) []recoverDispatcherIdentity {
+	if len(dispatchers) == 0 {
+		return nil
+	}
+	maintainerEpoch := e.GetMaintainerEpoch()
+	identities := make([]recoverDispatcherIdentity, 0, len(dispatchers))
+	for _, dispatcher := range dispatchers {
+		identities = append(identities, newRecoverDispatcherIdentity(
+			dispatcher.DispatcherID,
+			dispatcher.Epoch,
+			maintainerEpoch,
+		))
+	}
+	return identities
+}
+
+func (e *DispatcherManager) filterLocalRecoverDispatchers(
+	dispatchers []recoverable.DispatcherEpoch,
 	clearNonLocal bool,
-) []common.DispatcherID {
-	if len(dispatcherIDs) == 0 {
+) []recoverable.DispatcherEpoch {
+	if len(dispatchers) == 0 {
 		return nil
 	}
 
-	local := make([]common.DispatcherID, 0, len(dispatcherIDs))
-	seen := make(map[common.DispatcherID]struct{}, len(dispatcherIDs))
-	for _, dispatcherID := range dispatcherIDs {
+	local := make([]recoverable.DispatcherEpoch, 0, len(dispatchers))
+	indexByDispatcher := make(map[common.DispatcherID]int, len(dispatchers))
+	for _, dispatcher := range dispatchers {
+		dispatcherID := dispatcher.DispatcherID
+		idx, seen := indexByDispatcher[dispatcherID]
+		if seen {
+			if dispatcher.Epoch > local[idx].Epoch {
+				local[idx].Epoch = dispatcher.Epoch
+			}
+			continue
+		}
+		indexByDispatcher[dispatcherID] = len(local)
+
+		if e.isLocalRecoverDispatcher(dispatcherID) {
+			local = append(local, dispatcher)
+			continue
+		}
+
+		if !clearNonLocal {
+			if e.clearSupersededRecoverState(dispatcherID) {
+				log.Info("clear superseded recover state for non local dispatcher",
+					zap.Stringer("changefeedID", e.changefeedID),
+					zap.Stringer("dispatcherID", dispatcherID))
+			}
+			continue
+		}
+
+		e.clearRecoverState(dispatcherID)
+		log.Info("ignore recover dispatcher request for non-local dispatcher",
+			zap.Stringer("changefeedID", e.changefeedID),
+			zap.Stringer("dispatcherID", dispatcherID))
+	}
+	return local
+}
+
+func (e *DispatcherManager) filterLocalRecoverIdentities(
+	identities []recoverDispatcherIdentity,
+	clearNonLocal bool,
+) []recoverDispatcherIdentity {
+	if len(identities) == 0 {
+		return nil
+	}
+
+	local := make([]recoverDispatcherIdentity, 0, len(identities))
+	seen := make(map[common.DispatcherID]struct{}, len(identities))
+	for _, identity := range identities {
+		dispatcherID := identity.id
 		if _, ok := seen[dispatcherID]; ok {
 			continue
 		}
 		seen[dispatcherID] = struct{}{}
 
 		if e.isLocalRecoverDispatcher(dispatcherID) {
-			local = append(local, dispatcherID)
+			local = append(local, identity)
 			continue
 		}
 
@@ -889,6 +954,7 @@ func (e *DispatcherManager) clearSupersededRecoverState(dispatcherID common.Disp
 	if e.recoverTracker == nil {
 		return false
 	}
+	// Clear superseded state only after local remove has happened.
 	if !e.recoverTracker.removeIfRemoved(dispatcherID) {
 		return false
 	}
@@ -951,6 +1017,61 @@ func (e *DispatcherManager) onDispatcherStatusForRecover(status *heartbeatpb.Tab
 	log.Info("clear recover reporter state after dispatcher is working",
 		zap.Stringer("changefeedID", e.changefeedID),
 		zap.Stringer("dispatcherID", dispatcherID))
+}
+
+func (e *DispatcherManager) onRecoverDispatcherResponse(response *heartbeatpb.RecoverDispatcherResponse) {
+	if response == nil {
+		return
+	}
+	if e.recoverTracker == nil {
+		return
+	}
+	if e.reporter == nil {
+		return
+	}
+
+	for _, entry := range response.Entries {
+		if entry == nil {
+			continue
+		}
+		if entry.Identity == nil || entry.Identity.DispatcherID == nil {
+			continue
+		}
+		identity := newRecoverDispatcherIdentity(
+			common.NewDispatcherIDFromPB(entry.Identity.DispatcherID),
+			entry.Identity.DispatcherEpoch,
+			entry.Identity.MaintainerEpoch,
+		)
+		if !e.recoverTracker.hasIdentity(identity) {
+			continue
+		}
+
+		if entry.State == heartbeatpb.RecoverDispatcherResponseState_ACCEPTED ||
+			entry.State == heartbeatpb.RecoverDispatcherResponseState_RUNNING {
+			continue
+		}
+
+		if entry.State == heartbeatpb.RecoverDispatcherResponseState_SUPERSEDED ||
+			entry.State == heartbeatpb.RecoverDispatcherResponseState_FAILED {
+			removed := e.recoverTracker.removeByIdentity(identity)
+			if !removed {
+				continue
+			}
+			e.reporter.Clear(identity.id)
+			log.Info("clear recover state by maintainer response",
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Stringer("dispatcherID", identity.id),
+				zap.Uint64("dispatcherEpoch", identity.epoch),
+				zap.Uint64("maintainerEpoch", identity.maintainerEpoch),
+				zap.String("state", entry.State.String()))
+			continue
+		}
+
+		log.Warn("ignore recover dispatcher response with unknown state",
+			zap.Stringer("changefeedID", e.changefeedID),
+			zap.Stringer("dispatcherID", identity.id),
+			zap.String("state", entry.State.String()))
+	}
 }
 
 func (e *DispatcherManager) reportRecoverPendingTimeout(ctx context.Context) {

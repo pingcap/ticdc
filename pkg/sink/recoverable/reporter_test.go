@@ -36,7 +36,7 @@ func TestReportOncePerDispatcherEpoch(t *testing.T) {
 	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
 	select {
 	case event := <-ch:
-		require.Equal(t, []common.DispatcherID{dispatcherID}, event.DispatcherIDs)
+		require.Equal(t, []DispatcherEpoch{{DispatcherID: dispatcherID, Epoch: 2}}, event.Dispatchers)
 	default:
 		t.Fatal("expected recoverable event to be sent")
 	}
@@ -55,7 +55,7 @@ func TestReportOncePerDispatcherEpoch(t *testing.T) {
 	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
 	select {
 	case event := <-ch:
-		require.Equal(t, []common.DispatcherID{dispatcherID}, event.DispatcherIDs)
+		require.Equal(t, []DispatcherEpoch{{DispatcherID: dispatcherID, Epoch: 3}}, event.Dispatchers)
 	default:
 		t.Fatal("expected recoverable event for new epoch")
 	}
@@ -153,7 +153,7 @@ func TestClearDispatcherState(t *testing.T) {
 	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
 	select {
 	case event := <-ch:
-		require.Equal(t, []common.DispatcherID{dispatcherID}, event.DispatcherIDs)
+		require.Equal(t, []DispatcherEpoch{{DispatcherID: dispatcherID, Epoch: 1}}, event.Dispatchers)
 	default:
 		t.Fatal("expected recoverable event after clear")
 	}

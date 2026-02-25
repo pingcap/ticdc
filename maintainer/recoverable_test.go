@@ -22,7 +22,9 @@ import (
 	"github.com/pingcap/ticdc/maintainer/testutil"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
@@ -73,6 +75,8 @@ func newRecoverDispatcherTestMaintainer(t *testing.T) (*Maintainer, *Controller,
 		controller:    controller,
 		nodeManager:   nodeManager,
 		statusChanged: atomic.NewBool(false),
+		mc:            appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
+		info:          &config.ChangeFeedInfo{Epoch: 1},
 	}
 	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
 	m.recoverDispatcherHandler = newRecoverDispatcherHandler(m)
@@ -82,8 +86,14 @@ func newRecoverDispatcherTestMaintainer(t *testing.T) (*Maintainer, *Controller,
 
 func newRecoverDispatcherRequest(changefeedID common.ChangeFeedID, dispatcherID common.DispatcherID) *heartbeatpb.RecoverDispatcherRequest {
 	return &heartbeatpb.RecoverDispatcherRequest{
-		ChangefeedID:  changefeedID.ToPB(),
-		DispatcherIDs: []*heartbeatpb.DispatcherID{dispatcherID.ToPB()},
+		ChangefeedID: changefeedID.ToPB(),
+		Identities: []*heartbeatpb.RecoverDispatcherIdentity{
+			{
+				DispatcherID:    dispatcherID.ToPB(),
+				DispatcherEpoch: 1,
+				MaintainerEpoch: 1,
+			},
+		},
 	}
 }
 

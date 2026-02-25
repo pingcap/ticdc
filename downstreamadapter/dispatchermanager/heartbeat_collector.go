@@ -17,6 +17,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
@@ -27,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"go.uber.org/zap"
 )
@@ -52,6 +54,8 @@ type HeartBeatCollector struct {
 	blockStatusReqQueue *BlockStatusRequestQueue
 
 	recoverRequestCh chan *RecoverDispatcherRequestWithTargetID
+	// recoverResponseHandlers routes recover responses to the right changefeed handler.
+	recoverResponseHandlers sync.Map // map[common.GID]func(*heartbeatpb.RecoverDispatcherResponse)
 
 	dispatcherStatusDynamicStream             dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherStatusWithID, dispatcher.Dispatcher, *dispatcher.DispatcherStatusHandler]
 	heartBeatResponseDynamicStream            dynstream.DynamicStream[int, common.GID, HeartBeatResponse, *DispatcherManager, *HeartBeatResponseHandler]
@@ -128,6 +132,9 @@ func (c *HeartBeatCollector) RegisterDispatcherManager(m *DispatcherManager) err
 	m.SetHeartbeatRequestQueue(c.heartBeatReqQueue)
 	m.SetBlockStatusRequestQueue(c.blockStatusReqQueue)
 	m.SetRecoverDispatcherRequestQueue(c.recoverRequestCh)
+	c.recoverResponseHandlers.Store(m.changefeedID.Id, func(response *heartbeatpb.RecoverDispatcherResponse) {
+		m.onRecoverDispatcherResponse(response)
+	})
 	err := c.heartBeatResponseDynamicStream.AddPath(m.changefeedID.Id, m)
 	if err != nil {
 		return errors.Trace(err)
@@ -169,6 +176,7 @@ func (c *HeartBeatCollector) RemoveDispatcherManager(id common.ChangeFeedID) err
 	if c.isClosed.Load() {
 		return nil
 	}
+	c.recoverResponseHandlers.Delete(id.Id)
 
 	err := c.heartBeatResponseDynamicStream.RemovePath(id.Id)
 	if err != nil {
@@ -284,19 +292,20 @@ func (c *HeartBeatCollector) sendRecoverDispatcherMessages(ctx context.Context) 
 				log.Warn("recover dispatcher request is nil, this should not happen")
 				continue
 			}
-			err := c.mc.SendCommand(
-				messaging.NewSingleTargetMessage(
-					request.TargetID,
-					messaging.MaintainerManagerTopic,
-					request.Request,
-				))
+			err := c.sendRecoverDispatcherRequestWithRetry(ctx, request)
 			if err == nil {
 				continue
+			}
+			if cause := context.Cause(ctx); cause != nil {
+				// Treat context cancellation as normal collector shutdown, not
+				// a recover-request delivery failure, so we do not trigger fallback.
+				return cause
 			}
 			log.Error("failed to send recover dispatcher request message", zap.Error(err))
 
 			// recover request is edge-triggered, so losing one can leave a dispatcher stuck without another trigger.
-			// fallback escalates this delivery failure to changefeed-level retry path.
+			// Retry first to tolerate maintainer-switch transients, then escalate
+			// this delivery failure to changefeed-level retry path.
 			if request.FallbackErrCh != nil {
 				fallback := errors.WrapError(errors.ErrChangefeedRetryable, err)
 				select {
@@ -311,6 +320,24 @@ func (c *HeartBeatCollector) sendRecoverDispatcherMessages(ctx context.Context) 
 			}
 		}
 	}
+}
+
+func (c *HeartBeatCollector) sendRecoverDispatcherRequestWithRetry(
+	ctx context.Context,
+	request *RecoverDispatcherRequestWithTargetID,
+) error {
+	msg := messaging.NewSingleTargetMessage(
+		request.TargetID,
+		messaging.MaintainerManagerTopic,
+		request.Request,
+	)
+
+	return retry.Do(ctx, func() error {
+		return c.mc.SendCommand(msg)
+	}, retry.WithBackoffBaseDelay(200),
+		retry.WithBackoffMaxDelay(1000),
+		retry.WithTotalRetryDuration(10*time.Second),
+	)
 }
 
 func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.TargetMessage) error {
@@ -348,6 +375,16 @@ func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.Targ
 		c.mergeDispatcherRequestDynamicStream.Push(
 			common.NewChangefeedGIDFromPB(mergeDispatcherRequest.ChangefeedID),
 			NewMergeDispatcherRequest(mergeDispatcherRequest))
+	case messaging.TypeRecoverDispatcherResponse:
+		recoverDispatcherResponse := msg.Message[0].(*heartbeatpb.RecoverDispatcherResponse)
+		changefeedID := common.NewChangefeedGIDFromPB(recoverDispatcherResponse.ChangefeedID)
+		handler, ok := c.recoverResponseHandlers.Load(changefeedID)
+		if !ok {
+			log.Warn("recover response handler not found, ignore recover dispatcher response",
+				zap.Stringer("changefeedID", common.NewChangefeedIDFromPB(recoverDispatcherResponse.ChangefeedID)))
+			break
+		}
+		handler.(func(*heartbeatpb.RecoverDispatcherResponse))(recoverDispatcherResponse)
 	default:
 		log.Warn("unknown message type, ignore it",
 			zap.String("type", msg.Type.String()),

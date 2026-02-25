@@ -54,7 +54,7 @@ func TestReportTransientErrorByChannelState(t *testing.T) {
 
 		select {
 		case event := <-reporter.OutputCh():
-			require.Equal(t, []commonType.DispatcherID{dispatcherID}, event.DispatcherIDs)
+			require.Equal(t, []recoverable.DispatcherEpoch{{DispatcherID: dispatcherID, Epoch: 1}}, event.Dispatchers)
 		default:
 			t.Fatal("expected recoverable event to be sent")
 		}

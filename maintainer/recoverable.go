@@ -68,26 +68,40 @@ func newRecoverDispatcherHandler(m *Maintainer) *recoverDispatcherHandler {
 	}
 }
 
-func (h *recoverDispatcherHandler) handle(source node.ID, req *heartbeatpb.RecoverDispatcherRequest) {
+func (h *recoverDispatcherHandler) handle(source node.ID, req *heartbeatpb.RecoverDispatcherRequest) []*heartbeatpb.RecoverDispatcherResponseEntry {
 	if !h.validateRequest(source, req) {
-		return
+		return nil
 	}
 
-	seen := make(map[common.DispatcherID]struct{}, len(req.DispatcherIDs))
-	for _, pb := range req.DispatcherIDs {
-		if pb == nil {
+	entries := make([]*heartbeatpb.RecoverDispatcherResponseEntry, 0, len(req.Identities))
+	seen := make(map[common.DispatcherID]struct{}, len(req.Identities))
+	for _, identity := range req.Identities {
+		if identity == nil {
 			continue
 		}
-		dispatcherID := common.NewDispatcherIDFromPB(pb)
+		if identity.DispatcherID == nil {
+			continue
+		}
+		dispatcherID := common.NewDispatcherIDFromPB(identity.DispatcherID)
 		if _, ok := seen[dispatcherID]; ok {
 			continue
 		}
 		seen[dispatcherID] = struct{}{}
-		if h.tryRecoverDispatcher(source, dispatcherID) {
+		state, keepProcessing := h.tryRecoverDispatcher(source, identity, dispatcherID)
+		entries = append(entries, &heartbeatpb.RecoverDispatcherResponseEntry{
+			Identity: &heartbeatpb.RecoverDispatcherIdentity{
+				DispatcherID:    identity.DispatcherID,
+				DispatcherEpoch: identity.DispatcherEpoch,
+				MaintainerEpoch: identity.MaintainerEpoch,
+			},
+			State: state,
+		})
+		if keepProcessing {
 			continue
 		}
-		return
+		return entries
 	}
+	return entries
 }
 
 // validateRequest returns true when request validation passes and caller should continue
@@ -98,11 +112,11 @@ func (h *recoverDispatcherHandler) validateRequest(source node.ID, req *heartbea
 		log.Warn("ignore recover dispatcher request before maintainer initialized",
 			zap.Stringer("changefeedID", h.maintainer.changefeedID),
 			zap.Stringer("sourceNode", source),
-			zap.Int("dispatcherCount", len(req.DispatcherIDs)))
+			zap.Int("dispatcherCount", len(req.Identities)))
 		return false
 	}
-	if len(req.DispatcherIDs) == 0 {
-		log.Warn("recover dispatcher request has no dispatcher IDs",
+	if len(req.Identities) == 0 {
+		log.Warn("recover dispatcher request has no dispatchers",
 			zap.Stringer("changefeedID", h.maintainer.changefeedID),
 			zap.Stringer("sourceNode", source))
 		return false
@@ -111,14 +125,26 @@ func (h *recoverDispatcherHandler) validateRequest(source node.ID, req *heartbea
 	log.Warn("recover dispatcher request received, restart dispatchers",
 		zap.Stringer("changefeedID", h.maintainer.changefeedID),
 		zap.Stringer("sourceNode", source),
-		zap.Int("dispatcherCount", len(req.DispatcherIDs)))
+		zap.Int("dispatcherCount", len(req.Identities)))
 	return true
 }
 
-// tryRecoverDispatcher returns true when this dispatcher is handled and caller can keep
-// processing the remaining dispatcher IDs in the same batch. It returns false when
-// recovery is downgraded to changefeed-level error path and caller should stop this batch.
-func (h *recoverDispatcherHandler) tryRecoverDispatcher(source node.ID, dispatcherID common.DispatcherID) bool {
+// tryRecoverDispatcher returns response state for this dispatcher and whether caller can keep
+// processing remaining dispatchers in the same batch.
+func (h *recoverDispatcherHandler) tryRecoverDispatcher(
+	source node.ID,
+	identity *heartbeatpb.RecoverDispatcherIdentity,
+	dispatcherID common.DispatcherID,
+) (heartbeatpb.RecoverDispatcherResponseState, bool) {
+	if identity.MaintainerEpoch != h.currentMaintainerEpoch() {
+		log.Info("ignore recover dispatcher request with stale maintainer epoch",
+			zap.Stringer("changefeedID", h.maintainer.changefeedID),
+			zap.Stringer("dispatcherID", dispatcherID),
+			zap.Uint64("requestMaintainerEpoch", identity.MaintainerEpoch),
+			zap.Uint64("currentMaintainerEpoch", h.currentMaintainerEpoch()))
+		return heartbeatpb.RecoverDispatcherResponseState_SUPERSEDED, true
+	}
+
 	if existing := h.operatorController.GetOperator(dispatcherID); existing != nil {
 		// If any operator for this dispatcher is already in-flight, this recover
 		// request is superseded and should be ignored to avoid operator conflicts.
@@ -127,7 +153,7 @@ func (h *recoverDispatcherHandler) tryRecoverDispatcher(source node.ID, dispatch
 			zap.Stringer("dispatcherID", dispatcherID),
 			zap.Stringer("sourceNode", source),
 			zap.String("operatorType", existing.Type()))
-		return true
+		return heartbeatpb.RecoverDispatcherResponseState_SUPERSEDED, true
 	}
 
 	decision, state := h.makeDecision(dispatcherID)
@@ -146,7 +172,7 @@ func (h *recoverDispatcherHandler) tryRecoverDispatcher(source node.ID, dispatch
 				dispatcherID.String(), state.attempts,
 			),
 		})
-		return false
+		return heartbeatpb.RecoverDispatcherResponseState_FAILED, false
 	}
 
 	replication := h.spanController.GetTaskByID(dispatcherID)
@@ -154,7 +180,7 @@ func (h *recoverDispatcherHandler) tryRecoverDispatcher(source node.ID, dispatch
 		log.Warn("dispatcher not found, ignore recover dispatcher request",
 			zap.Stringer("changefeedID", h.maintainer.changefeedID),
 			zap.Stringer("dispatcherID", dispatcherID))
-		return true
+		return heartbeatpb.RecoverDispatcherResponseState_SUPERSEDED, true
 	}
 
 	origin := replication.GetNodeID()
@@ -162,7 +188,7 @@ func (h *recoverDispatcherHandler) tryRecoverDispatcher(source node.ID, dispatch
 		log.Warn("dispatcher has empty node ID, ignore recover dispatcher request",
 			zap.Stringer("changefeedID", h.maintainer.changefeedID),
 			zap.Stringer("dispatcherID", dispatcherID))
-		return true
+		return heartbeatpb.RecoverDispatcherResponseState_SUPERSEDED, true
 	}
 
 	op := operator.NewRestartDispatcherOperator(h.spanController, replication, origin)
@@ -170,11 +196,11 @@ func (h *recoverDispatcherHandler) tryRecoverDispatcher(source node.ID, dispatch
 		log.Info("restart dispatcher operator already exists, ignore",
 			zap.Stringer("changefeedID", h.maintainer.changefeedID),
 			zap.Stringer("dispatcherID", dispatcherID))
-		return true
+		return heartbeatpb.RecoverDispatcherResponseState_RUNNING, true
 	}
 	state.attempts++
 	h.tracked[dispatcherID] = state
-	return true
+	return heartbeatpb.RecoverDispatcherResponseState_ACCEPTED, true
 }
 
 func (h *recoverDispatcherHandler) getRestartState(
@@ -202,4 +228,11 @@ func (h *recoverDispatcherHandler) makeDecision(dispatcherID common.DispatcherID
 	// For maintainer, once a request arrives for a new epoch, we should execute it.
 	// Same-epoch duplicates are handled by the in-flight operator existence check.
 	return recoverableRestartDecisionRestart, state
+}
+
+func (h *recoverDispatcherHandler) currentMaintainerEpoch() uint64 {
+	if h.maintainer.info == nil {
+		return 0
+	}
+	return h.maintainer.info.Epoch
 }

@@ -19,11 +19,40 @@ message HeartBeatRequest {
     RunningError err = 6;
 }
 
+// RecoverDispatcherIdentity identifies one recover request identity.
+message RecoverDispatcherIdentity {
+    DispatcherID dispatcherID = 1;
+    uint64 dispatcherEpoch = 2;
+    uint64 maintainerEpoch = 3;
+}
+
 // RecoverDispatcherRequest asks maintainer to restart specified dispatchers in-place.
 // It is used for localized recovery when downstream sink hits recoverable errors.
 message RecoverDispatcherRequest {
     ChangefeedID changefeedID = 1;
-    repeated DispatcherID dispatcherIDs = 2;
+    repeated RecoverDispatcherIdentity identities = 2;
+}
+
+enum RecoverDispatcherResponseState {
+    UNSPECIFIED = 0;
+    // ACCEPTED means maintainer accepted the request and created a restart operator.
+    ACCEPTED = 1;
+    // RUNNING means a restart operator is already in-flight for this request.
+    RUNNING = 2;
+    // SUPERSEDED means this request is no longer needed (for example replaced by another operator).
+    SUPERSEDED = 3;
+    // FAILED means maintainer cannot continue dispatcher-level recovery and downgraded to changefeed-level handling.
+    FAILED = 4;
+}
+
+message RecoverDispatcherResponseEntry {
+    RecoverDispatcherIdentity identity = 1;
+    RecoverDispatcherResponseState state = 2;
+}
+
+message RecoverDispatcherResponse {
+    ChangefeedID changefeedID = 1;
+    repeated RecoverDispatcherResponseEntry entries = 2;
 }
 
 message Watermark {
