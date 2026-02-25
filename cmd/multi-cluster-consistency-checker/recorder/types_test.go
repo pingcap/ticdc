@@ -270,7 +270,7 @@ func TestReport_MarshalReport(t *testing.T) {
 			"time window: "+twStr+"\n"+
 			"  - [table name: "+testSchemaKey+"]\n"+
 			"  - [data loss items: 1]\n"+
-			`    - [peer cluster: d1, pk: [id: 1], commit ts: 200]`+"\n\n",
+			`    - [peer cluster: d1, pk: [id: 1], local commit ts: 200]`+"\n\n",
 			s)
 	})
 
@@ -320,7 +320,7 @@ func TestReport_MarshalReport(t *testing.T) {
 			"time window: "+twStr+"\n"+
 			"  - [table name: "+testSchemaKey+"]\n"+
 			"  - [data loss items: 1]\n"+
-			`    - [peer cluster: d1, pk: [id: 1], commit ts: 2]`+"\n\n",
+			`    - [peer cluster: d1, pk: [id: 1], local commit ts: 2]`+"\n\n",
 			s)
 	})
 
@@ -341,7 +341,7 @@ func TestReport_MarshalReport(t *testing.T) {
 			"time window: "+twStr+"\n"+
 			"  - [table name: "+testSchemaKey+"]\n"+
 			"  - [data loss items: 1]\n"+
-			`    - [peer cluster: d0, pk: [id: 0], commit ts: 1]`+"\n"+
+			`    - [peer cluster: d0, pk: [id: 0], local commit ts: 1]`+"\n"+
 			"  - [data inconsistent items: 1]\n"+
 			`    - [peer cluster: d1, pk: [id: 1], local commit ts: 2, replicated commit ts: 3, inconsistent columns: [column: val, local: x, replicated: y]]`+"\n"+
 			"  - [data redundant items: 1]\n"+
