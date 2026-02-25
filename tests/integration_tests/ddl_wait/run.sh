@@ -62,17 +62,16 @@ function run() {
 
 	# indexes should be the same when CDC retries happened
 	# ref: https://github.com/pingcap/tiflow/issues/12128
-	# FIXME: use named index to avoid duplicate index
-	# run_sql "update test.t set col = 55 where id = 5;"
-	# run_sql "alter table test.t add index (col);"
-	# run_sql "update test.t set col = 66 where id = 6;"
-	# run_sql "alter table test.t add index (col);"
-	# run_sql "update test.t set col = 77 where id = 7;"
-	# sleep 10
-	# cleanup_process $CDC_BINARY
-	# run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
-	# # make sure all tables are equal in upstream and downstream
-	# check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
+	run_sql "update test.t set col = 55 where id = 5;"
+	run_sql "alter table test.t add index (col);"
+	run_sql "update test.t set col = 66 where id = 6;"
+	run_sql "alter table test.t add index (col);"
+	run_sql "update test.t set col = 77 where id = 7;"
+	sleep 10
+	cleanup_process $CDC_BINARY
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+	# make sure all tables are equal in upstream and downstream
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
 	cleanup_process $CDC_BINARY
 }
 

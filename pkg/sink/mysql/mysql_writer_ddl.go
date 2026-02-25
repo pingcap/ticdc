@@ -56,6 +56,21 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 	ctx := w.ctx
 	shouldSwitchDB := needSwitchDB(event)
 
+	if event.GetDDLType() == timodel.ActionAddIndex {
+		newQuery, changed, err := restoreAnonymousIndexToNamedIndex(event.Query, event.TableInfo)
+		if err != nil {
+			log.Warn("failed to restore anonymous index name",
+				zap.String("changefeed", w.ChangefeedID.String()),
+				zap.String("query", event.Query),
+				zap.Error(err))
+		} else if changed {
+			log.Info("restore anonymous index to named index",
+				zap.String("changefeed", w.ChangefeedID.String()),
+				zap.String("query", event.Query),
+				zap.String("newQuery", newQuery))
+			event.Query = newQuery
+		}
+	}
 	// Convert vector type to string type for unsupport database
 	if w.cfg.HasVectorType {
 		if newQuery := formatQuery(event.Query); newQuery != event.Query {
