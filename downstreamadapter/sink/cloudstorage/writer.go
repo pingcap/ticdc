@@ -16,7 +16,9 @@ package cloudstorage
 import (
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/json"
+	"math/big"
 	"path"
 	"strconv"
 	"sync/atomic"
@@ -31,6 +33,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/failpointrecord"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/prometheus/client_golang/prometheus"
@@ -225,12 +228,19 @@ func (d *writer) ignoreTableTask(task *singleTableTask) {
 //  3. Re-marshal the whole message.
 //
 // This function is only called from within a failpoint.Inject block.
-func mutateMessageValueForFailpoint(msg *common.Message) {
+// It returns mutated row records grouped by whether `tidb_origin_ts` is mutated.
+func mutateMessageValueForFailpoint(
+	msg *common.Message,
+	rowRecords []failpointrecord.RowRecord,
+) ([]failpointrecord.RowRecord, []failpointrecord.RowRecord) {
 	if len(msg.Value) == 0 {
-		return
+		return nil, nil
 	}
 	terminator := []byte("\r\n")
 	parts := bytes.Split(msg.Value, terminator)
+	mutatedOffsets := make([]int, 0)
+	originTsMutatedOffsets := make([]int, 0)
+	rowOffset := 0
 	for i, part := range parts {
 		if len(part) == 0 {
 			continue
@@ -257,44 +267,94 @@ func mutateMessageValueForFailpoint(msg *common.Message) {
 		if !ok {
 			continue
 		}
-		var data []map[string]interface{}
+		var data []map[string]any
 		if err := json.Unmarshal(rawData, &data); err != nil || len(data) == 0 {
 			continue
 		}
 
-		// Find the first non-PK column and mutate it to nil.
+		// Find the first row that has a non-PK column and mutate it to nil.
 		mutated := false
-		for _, row := range data {
-			for col := range row {
-				if _, isPK := pkSet[col]; isPK {
-					continue
-				}
-				row[col] = nil
-				mutated = true
-				break
+		mutatedRowOffset := 0
+		mutatedColumn := ""
+		for rowIdx, row := range data {
+			col, ok := selectColumnToMutate(row, pkSet)
+			if !ok {
+				continue
 			}
+			row[col] = nil
+			mutated = true
+			mutatedRowOffset = rowIdx
+			mutatedColumn = col
 			if mutated {
 				break
 			}
 		}
 		if !mutated {
+			rowOffset += len(data)
 			continue
 		}
 
 		// Write the mutated data back.
 		newData, err := json.Marshal(data)
 		if err != nil {
+			rowOffset += len(data)
 			continue
 		}
 		m["data"] = json.RawMessage(newData)
 
 		newPart, err := json.Marshal(m)
 		if err != nil {
+			rowOffset += len(data)
 			continue
 		}
 		parts[i] = newPart
+
+		if mutatedColumn == "tidb_origin_ts" {
+			originTsMutatedOffsets = append(originTsMutatedOffsets, rowOffset+mutatedRowOffset)
+		} else {
+			mutatedOffsets = append(mutatedOffsets, rowOffset+mutatedRowOffset)
+		}
+		rowOffset += len(data)
 	}
 	msg.Value = bytes.Join(parts, terminator)
+	return extractMutatedRowRecordsByOffset(rowRecords, mutatedOffsets),
+		extractMutatedRowRecordsByOffset(rowRecords, originTsMutatedOffsets)
+}
+
+func selectColumnToMutate(row map[string]any, pkSet map[string]struct{}) (string, bool) {
+	columns := make([]string, 0, len(row))
+	for col := range row {
+		if _, isPK := pkSet[col]; isPK {
+			continue
+		}
+		columns = append(columns, col)
+	}
+	if len(columns) == 0 {
+		return "", false
+	}
+	idx, err := cryptorand.Int(cryptorand.Reader, big.NewInt(int64(len(columns))))
+	if err != nil {
+		// Best-effort fallback in failpoint path.
+		return columns[0], true
+	}
+	return columns[idx.Int64()], true
+}
+
+func extractMutatedRowRecordsByOffset(
+	rowRecords []failpointrecord.RowRecord,
+	offsets []int,
+) []failpointrecord.RowRecord {
+	if len(offsets) == 0 || len(rowRecords) == 0 {
+		return nil
+	}
+	ret := make([]failpointrecord.RowRecord, 0, len(offsets))
+	for _, offset := range offsets {
+		if offset < 0 || offset >= len(rowRecords) {
+			continue
+		}
+		ret = append(ret, rowRecords[offset])
+	}
+	return ret
 }
 
 func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath string, task *singleTableTask) error {

@@ -14,6 +14,7 @@
 package cloudstorage
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/url"
@@ -31,6 +32,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/failpointrecord"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
@@ -129,4 +131,39 @@ func TestWriterRun(t *testing.T) {
 	cancel()
 	d.close()
 	wg.Wait()
+}
+
+func TestMutateMessageValueForFailpointRecordClassification(t *testing.T) {
+	t.Parallel()
+
+	msg := &common.Message{
+		Value: []byte(
+			`{"pkNames":["id"],"data":[{"id":"1","c2":"v1"}]}` +
+				"\r\n" +
+				`{"pkNames":["id"],"data":[{"id":"2","tidb_origin_ts":"100"}]}`,
+		),
+	}
+	rowRecords := []failpointrecord.RowRecord{
+		{
+			CommitTs:    101,
+			PrimaryKeys: map[string]any{"id": "1"},
+		},
+		{
+			CommitTs:    102,
+			PrimaryKeys: map[string]any{"id": "2"},
+		},
+	}
+
+	mutatedRows, originTsMutatedRows := mutateMessageValueForFailpoint(msg, rowRecords)
+
+	require.Len(t, mutatedRows, 1)
+	require.Equal(t, uint64(101), mutatedRows[0].CommitTs)
+	require.Equal(t, "1", mutatedRows[0].PrimaryKeys["id"])
+
+	require.Len(t, originTsMutatedRows, 1)
+	require.Equal(t, uint64(102), originTsMutatedRows[0].CommitTs)
+	require.Equal(t, "2", originTsMutatedRows[0].PrimaryKeys["id"])
+
+	require.True(t, bytes.Contains(msg.Value, []byte(`"tidb_origin_ts":null`)))
+	require.True(t, bytes.Contains(msg.Value, []byte(`"c2":null`)))
 }

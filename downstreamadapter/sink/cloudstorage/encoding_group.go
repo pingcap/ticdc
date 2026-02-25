@@ -135,14 +135,20 @@ func (eg *encodingGroup) applyFailpointsOnEncodedMessages(frag eventFragment) {
 			msg.Key = nil
 			msg.Value = nil
 			msg.SetRowsCount(0)
+			failpoint.Continue()
 		})
 		failpoint.Inject("cloudStorageSinkMutateValue", func() {
 			log.Warn("cloudStorageSinkMutateValue: mutating message value to simulate data inconsistency",
 				zap.String("keyspace", eg.changeFeedID.Keyspace()),
 				zap.Stringer("changefeed", eg.changeFeedID.ID()),
 				zap.Any("rows", rowRecords))
-			failpointrecord.Write("cloudStorageSinkMutateValue", rowRecords)
-			mutateMessageValueForFailpoint(msg)
+			mutatedRows, originTsMutatedRows := mutateMessageValueForFailpoint(msg, rowRecords)
+			if len(mutatedRows) > 0 {
+				failpointrecord.Write("cloudStorageSinkMutateValue", mutatedRows)
+			}
+			if len(originTsMutatedRows) > 0 {
+				failpointrecord.Write("cloudStorageSinkMutateValueTidbOriginTs", originTsMutatedRows)
+			}
 		})
 	}
 }
