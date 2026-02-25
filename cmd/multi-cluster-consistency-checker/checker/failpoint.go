@@ -30,6 +30,7 @@ const envKey = "TICDC_MULTI_CLUSTER_CONSISTENCY_CHECKER_FAILPOINT_RECORD_FILE"
 // RowRecord captures the essential identity of a single affected row.
 type RowRecord struct {
 	CommitTs    uint64         `json:"commitTs"`
+	OriginTs    uint64         `json:"originTs"`
 	PrimaryKeys map[string]any `json:"primaryKeys"`
 }
 

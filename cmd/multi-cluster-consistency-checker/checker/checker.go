@@ -314,16 +314,24 @@ func (cd *clusterDataChecker) findClusterReplicatedDataInTimeWindow(timeWindowId
 	if !exists {
 		return nil, false
 	}
-	records, exists := tableDataCache.replicatedDataCache[pk]
-	if !exists {
-		return nil, false
+	if records, exists := tableDataCache.replicatedDataCache[pk]; exists {
+		if record, exists := records[originTs]; exists {
+			return record, false
+		}
+		for _, record := range records {
+			if record.GetCompareTs() >= originTs {
+				return nil, true
+			}
+		}
 	}
-	if record, exists := records[originTs]; exists {
-		return record, false
-	}
-	for _, record := range records {
-		if record.GetCompareTs() >= originTs {
-			return nil, true
+	// If no replicated record is found, a newer/equal local record with the
+	// same PK in the peer cluster also indicates this origin write can be
+	// considered overwritten by LWW semantics instead of hard data loss.
+	if records, exists := tableDataCache.localDataCache[pk]; exists {
+		for _, record := range records {
+			if record.GetCompareTs() >= originTs {
+				return nil, true
+			}
 		}
 	}
 	return nil, false
@@ -440,7 +448,7 @@ func (cd *clusterDataChecker) checkLocalRecordsForDataLoss(
 							zap.String("localClusterID", cd.clusterID),
 							zap.String("replicatedClusterID", replicatedClusterID),
 							zap.Any("record", record))
-						cd.report.AddDataInconsistentItem(replicatedClusterID, schemaKey, record.PkMap, record.PkStr, replicatedRecord.OriginTs, record.CommitTs, replicatedRecord.CommitTs, diffColumns(record, replicatedRecord))
+						cd.report.AddDataInconsistentItem(replicatedClusterID, schemaKey, record.PkMap, record.PkStr, record.CommitTs, replicatedRecord.CommitTs, diffColumns(record, replicatedRecord))
 					}
 				}
 			}

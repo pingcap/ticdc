@@ -501,10 +501,47 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 		tableItems := c1Report.TableFailureItems[defaultSchemaKey]
 		require.Len(t, tableItems.DataLossItems, 1)
 		require.Equal(t, "c2", tableItems.DataLossItems[0].PeerClusterID)
-		require.Equal(t, uint64(250), tableItems.DataLossItems[0].CommitTS)
+		require.Equal(t, uint64(250), tableItems.DataLossItems[0].LocalCommitTS)
 		// c2 should have no issues
 		c2Report := lastReport.ClusterReports["c2"]
 		require.Empty(t, c2Report.TableFailureItems)
+	})
+
+	t.Run("no data loss when peer local newer version exists for same pk", func(t *testing.T) {
+		t.Parallel()
+		checker, initErr := NewDataChecker(ctx, clusterCfg, nil, nil)
+		require.NoError(t, initErr)
+		base := makeBaseRounds()
+
+		// Round 2: c1 and c2 both write the same PK locally.
+		// c2 does not contain a replicated row with originTs=250, but has a newer
+		// local row (commitTs=270) for the same PK. This should be treated as LWW
+		// overwrite/skip instead of data loss.
+		round2 := map[string]types.TimeWindowData{
+			"c1": makeTWData(200, 300, map[string]uint64{"c2": 240},
+				makeContent(makeCanalJSON(3, 250, 0, "c1-local"))),
+			"c2": makeTWData(200, 300, nil,
+				makeContent(makeCanalJSON(3, 270, 0, "c2-local"))),
+		}
+		round3 := map[string]types.TimeWindowData{
+			"c1": makeTWData(300, 400, map[string]uint64{"c2": 380},
+				makeContent(makeCanalJSON(4, 350, 0, "d"))),
+			"c2": makeTWData(300, 400, nil,
+				makeContent(makeCanalJSON(4, 360, 350, "d"))),
+		}
+
+		rounds := [4]map[string]types.TimeWindowData{base[0], base[1], round2, round3}
+		var lastReport *recorder.Report
+		for i, roundData := range rounds {
+			report, err := checker.CheckInNextTimeWindow(roundData)
+			require.NoError(t, err, "round %d", i)
+			lastReport = report
+		}
+
+		c1Report := lastReport.ClusterReports["c1"]
+		if tableItems, ok := c1Report.TableFailureItems[defaultSchemaKey]; ok {
+			require.Empty(t, tableItems.DataLossItems)
+		}
 	})
 
 	t.Run("data inconsistent detected", func(t *testing.T) {
@@ -542,7 +579,6 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 		require.Empty(t, tableItems.DataLossItems)
 		require.Len(t, tableItems.DataInconsistentItems, 1)
 		require.Equal(t, "c2", tableItems.DataInconsistentItems[0].PeerClusterID)
-		require.Equal(t, uint64(250), tableItems.DataInconsistentItems[0].OriginTS)
 		require.Equal(t, uint64(250), tableItems.DataInconsistentItems[0].LocalCommitTS)
 		require.Equal(t, uint64(260), tableItems.DataInconsistentItems[0].ReplicatedCommitTS)
 		require.Len(t, tableItems.DataInconsistentItems[0].InconsistentColumns, 1)
@@ -593,7 +629,7 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 		tableItems := c2Report.TableFailureItems[defaultSchemaKey]
 		require.Len(t, tableItems.DataRedundantItems, 1)
 		require.Equal(t, uint64(330), tableItems.DataRedundantItems[0].OriginTS)
-		require.Equal(t, uint64(340), tableItems.DataRedundantItems[0].CommitTS)
+		require.Equal(t, uint64(340), tableItems.DataRedundantItems[0].ReplicatedCommitTS)
 	})
 
 	t.Run("lww violation detected", func(t *testing.T) {
@@ -740,7 +776,7 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 		tableItems := c1Report.TableFailureItems[defaultSchemaKey]
 		require.Len(t, tableItems.DataLossItems, 1)
 		require.Equal(t, "c2", tableItems.DataLossItems[0].PeerClusterID)
-		require.Equal(t, uint64(150), tableItems.DataLossItems[0].CommitTS)
+		require.Equal(t, uint64(150), tableItems.DataLossItems[0].LocalCommitTS)
 	})
 
 	// data redundant detected at round 3 (not round 2):
@@ -815,6 +851,6 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 		c2TableItems := c2Report.TableFailureItems[defaultSchemaKey]
 		require.Len(t, c2TableItems.DataRedundantItems, 1)
 		require.Equal(t, uint64(330), c2TableItems.DataRedundantItems[0].OriginTS)
-		require.Equal(t, uint64(340), c2TableItems.DataRedundantItems[0].CommitTS)
+		require.Equal(t, uint64(340), c2TableItems.DataRedundantItems[0].ReplicatedCommitTS)
 	})
 }
