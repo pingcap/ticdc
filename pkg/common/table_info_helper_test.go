@@ -670,6 +670,53 @@ func TestGetOrSetColumnSchema_DifferentIndexState(t *testing.T) {
 	require.NotEqual(t, publicSchema.Digest, writeOnlySchema.Digest, "Digest should differ when index state differs")
 }
 
+func TestGetOrSetColumnSchema_DifferentIndexColumnLength(t *testing.T) {
+	storage := &SharedColumnSchemaStorage{
+		m: make(map[Digest][]ColumnSchemaWithCount),
+	}
+
+	idCol := newColumnInfo(1, "id", mysql.TypeVarchar, mysql.PriKeyFlag|mysql.NotNullFlag)
+	idCol.Offset = 0
+	idCol.FieldType.SetFlen(255)
+	idCol.FieldType.SetCharset("utf8mb4")
+	idCol.FieldType.SetCollate("utf8mb4_bin")
+
+	buildTable := func(indexLength int) *model.TableInfo {
+		return &model.TableInfo{
+			ID:             1,
+			Name:           ast.NewCIStr("t"),
+			PKIsHandle:     false,
+			IsCommonHandle: true,
+			Columns:        []*model.ColumnInfo{idCol},
+			Indices: []*model.IndexInfo{
+				{
+					ID:      1,
+					Name:    ast.NewCIStr("PRIMARY"),
+					Primary: true,
+					Unique:  true,
+					State:   model.StatePublic,
+					Columns: []*model.IndexColumn{
+						{
+							Name:   ast.NewCIStr("id"),
+							Offset: 0,
+							Length: indexLength,
+						},
+					},
+				},
+			},
+		}
+	}
+
+	// Prefix length affects PrimaryPrefixColumnIDs and handle decode path.
+	fullLengthSchema := storage.GetOrSetColumnSchema(buildTable(types.UnspecifiedLength))
+	prefixLengthSchema := storage.GetOrSetColumnSchema(buildTable(10))
+
+	require.NotSame(t, fullLengthSchema, prefixLengthSchema,
+		"Tables with different index column length should not share columnSchema")
+	require.NotEqual(t, fullLengthSchema.Digest, prefixLengthSchema.Digest,
+		"Digest should differ when index column length differs")
+}
+
 func TestGetOrSetColumnSchema_SameColumnsAndIndices_ChecksAdditionalColumnAttrs(t *testing.T) {
 	tests := []struct {
 		name             string
