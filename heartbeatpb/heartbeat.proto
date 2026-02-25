@@ -96,6 +96,14 @@ enum ScheduleAction {
     Remove = 1;
 }
 
+enum OperatorType {
+    O_Add = 0;
+    O_Remove = 1;
+    O_Move = 2;
+    O_Split = 3;
+    O_Merge = 4;
+}
+
 message DispatcherConfig {
     TableSpan span = 1;
     uint64 startTs = 2;
@@ -113,6 +121,7 @@ message ScheduleDispatcherRequest {
     ChangefeedID changefeedID = 1;
     DispatcherConfig config = 2;
     ScheduleAction scheduleAction = 3;
+    OperatorType operatorType = 4;
 }
 
 message MergeDispatcherRequest {
@@ -185,6 +194,7 @@ message MaintainerBootstrapResponse {
     // redo_checkpoint_ts is similar to checkpoint_ts, for nodes with a table trigger redo dispatcher.
     // It will be used when redo enable.
     uint64 redo_checkpoint_ts = 5;
+    repeated ScheduleDispatcherRequest operators = 6;
 }
 
 message MaintainerPostBootstrapRequest {

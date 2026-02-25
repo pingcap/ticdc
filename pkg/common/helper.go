@@ -38,7 +38,7 @@ func ExtractColVal(row *chunk.Row, col *model.ColumnInfo, idx int) interface{} {
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeNewDate, mysql.TypeTimestamp:
 		return row.GetTime(idx).String()
 	case mysql.TypeDuration:
-		return row.GetDuration(idx, 0).String()
+		return row.GetDuration(idx, col.GetDecimal()).String()
 	case mysql.TypeJSON:
 		return row.GetJSON(idx).String()
 	case mysql.TypeNewDecimal:
