@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
@@ -116,6 +117,10 @@ func (m *mockEventDispatcher) IsOutputRawChangeEvent() bool {
 	return false
 }
 
+func (m *mockEventDispatcher) GetRouter() *sinkutil.Router {
+	return nil
+}
+
 func newMessage(id node.ID, msg messaging.IOTypeT) *messaging.TargetMessage {
 	targetMessage := messaging.NewSingleTargetMessage(id, messaging.EventCollectorTopic, msg)
 	targetMessage.From = id
@@ -163,6 +168,12 @@ func TestProcessMessage(t *testing.T) {
 		dml.Seq = seq.Add(1)
 		dml.Epoch = 1
 		dml.CommitTs = ddl.FinishedTs + uint64(i)
+		// TableInfoVersion is set during event processing to ddl.FinishedTs
+		// (from tableInfoVersion = max(d.tableInfoVersion.Load(), d.target.GetStartTs())
+		// where d.tableInfoVersion is set when processing the DDL event).
+		// Since BatchDMLEvent is cloned during processing to avoid race conditions,
+		// the processed events are different objects, so we set this here on the expected events.
+		dml.TableInfoVersion = ddl.FinishedTs
 		events[dml.Seq] = dml
 	}
 

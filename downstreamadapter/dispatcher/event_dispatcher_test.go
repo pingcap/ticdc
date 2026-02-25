@@ -81,6 +81,7 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Eve
 		}, // syncPointConfig
 		&defaultAtomicity,
 		false, // enableSplittableCheck
+		nil,   // router
 		make(chan TableSpanStatusWithSeq, 128),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
 		make(chan error, 1),
@@ -820,6 +821,7 @@ func TestDispatcherSplittableCheck(t *testing.T) {
 		},
 		&defaultAtomicity,
 		true, // enableSplittableCheck = true
+		nil,  // router
 		make(chan TableSpanStatusWithSeq, 128),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
 		make(chan error, 1),
@@ -930,6 +932,7 @@ func TestDispatcher_SkipDMLAsStartTs_FilterCorrectly(t *testing.T) {
 		},
 		&defaultAtomicity,
 		false,
+		nil, // router
 		make(chan TableSpanStatusWithSeq, 128),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
 		make(chan error, 1),
@@ -1010,6 +1013,7 @@ func TestDispatcher_SkipDMLAsStartTs_Disabled(t *testing.T) {
 		},
 		&defaultAtomicity,
 		false,
+		nil, // router
 		make(chan TableSpanStatusWithSeq, 128),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
 		make(chan error, 1),

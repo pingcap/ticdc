@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
+	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -67,6 +68,10 @@ type Sink struct {
 	// variable @@tidb_cdc_active_active_sync_stats and is shared by all DML writers.
 	// It is nil when disabled or unsupported by downstream.
 	activeActiveSyncStatsCollector *mysql.ActiveActiveSyncStatsCollector
+
+	// router is used to route source schema/table names to target schema/table names.
+	// May be nil if no routing rules are configured.
+	router *util.Router
 }
 
 // Verify is used to verify the sink uri and config is valid
@@ -90,12 +95,13 @@ func New(
 	changefeedID common.ChangeFeedID,
 	config *config.ChangefeedConfig,
 	sinkURI *url.URL,
+	router *util.Router,
 ) (*Sink, error) {
 	cfg, db, err := mysql.NewMysqlConfigAndDB(ctx, changefeedID, sinkURI, config)
 	if err != nil {
 		return nil, err
 	}
-	return NewMySQLSink(ctx, changefeedID, cfg, db, config.BDRMode, config.EnableActiveActive, config.ActiveActiveProgressInterval), nil
+	return NewMySQLSink(ctx, changefeedID, cfg, db, config.BDRMode, config.EnableActiveActive, config.ActiveActiveProgressInterval, router), nil
 }
 
 func NewMySQLSink(
@@ -106,6 +112,7 @@ func NewMySQLSink(
 	bdrMode bool,
 	enableActiveActive bool,
 	progressInterval time.Duration,
+	router *util.Router,
 ) *Sink {
 	stat := metrics.NewStatistics(changefeedID, "TxnSink")
 
@@ -143,6 +150,7 @@ func NewMySQLSink(
 		bdrMode:                        bdrMode,
 		enableActiveActive:             enableActiveActive,
 		activeActiveSyncStatsCollector: activeActiveSyncStatsCollector,
+		router:                         router,
 	}
 	for i := 0; i < len(result.dmlWriter); i++ {
 		result.dmlWriter[i] = mysql.NewWriter(ctx, i, db, cfg, changefeedID, stat, activeActiveSyncStatsCollector)
@@ -258,6 +266,11 @@ func (s *Sink) SinkType() common.SinkType {
 	return common.MysqlSinkType
 }
 
+// GetRouter returns the router for schema/table name routing.
+func (s *Sink) GetRouter() *util.Router {
+	return s.router
+}
+
 func (s *Sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
 	s.ddlWriter.SetTableSchemaStore(tableSchemaStore)
 	if s.progressTableWriter != nil {
@@ -290,6 +303,12 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 		if s.bdrMode && ddl.BDRMode != string(ast.BDRRolePrimary) {
 			break
 		}
+		// Rewrite DDL query if routing is configured
+		if s.router != nil {
+			if err = s.rewriteDDLQueryWithRouting(ddl); err != nil {
+				return errors.Trace(err)
+			}
+		}
 		err = s.ddlWriter.FlushDDLEvent(ddl)
 	case commonEvent.TypeSyncPointEvent:
 		err = s.ddlWriter.FlushSyncPointEvent(event.(*commonEvent.SyncPointEvent))
@@ -305,6 +324,57 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	}
 	event.PostFlush()
 	return nil
+}
+
+// rewriteDDLQueryWithRouting rewrites the DDL query by applying routing rules
+// to transform source table names to target table names.
+// Returns an error if DDL rewriting fails, as silent fallback could lead to data going to wrong tables.
+//
+// IMPORTANT: This function mutates ddl.Query and ddl.BlockedTableNames in place. It is safe because:
+// 1. This is only called once per DDL event at the start of WriteBlockEvent
+// 2. Internal retries in FlushDDLEvent/execDDLWithMaxRetries reuse the already-rewritten query
+// 3. If WriteBlockEvent fails, the dispatcher reports an error and does not retry with the same event
+// If the retry behavior changes in the future, consider adding an idempotency check (e.g., a flag
+// on DDLEvent to track whether routing has been applied).
+func (s *Sink) rewriteDDLQueryWithRouting(ddl *commonEvent.DDLEvent) error {
+	result, err := util.RewriteDDLQueryWithRouting(s.router, ddl, s.changefeedID.String())
+	if err != nil {
+		return errors.Trace(err)
+	}
+
+	// Set TargetSchemaName whenever routing rules match, even if query string didn't change.
+	// This ensures the USE statement switches to the correct target schema.
+	if result.RoutingApplied {
+		ddl.TargetSchemaName = result.TargetSchemaName
+	}
+
+	// Only update the query if it actually changed
+	if result.QueryChanged {
+		ddl.Query = result.NewQuery
+	}
+
+	// Route BlockedTableNames so that waitAsyncDDLDone queries the correct downstream tables.
+	// This is necessary because async DDL waiting (e.g., for ADD INDEX) queries the downstream
+	// by table name, and when routing is active, the downstream tables have target names.
+	s.routeBlockedTableNames(ddl)
+
+	return nil
+}
+
+// routeBlockedTableNames applies routing rules to BlockedTableNames so that
+// downstream queries (like async DDL status checks) use the correct target table names.
+func (s *Sink) routeBlockedTableNames(ddl *commonEvent.DDLEvent) {
+	if s.router == nil || len(ddl.BlockedTableNames) == 0 {
+		return
+	}
+
+	for i := range ddl.BlockedTableNames {
+		srcSchema := ddl.BlockedTableNames[i].SchemaName
+		srcTable := ddl.BlockedTableNames[i].TableName
+		targetSchema, targetTable := s.router.Route(srcSchema, srcTable)
+		ddl.BlockedTableNames[i].SchemaName = targetSchema
+		ddl.BlockedTableNames[i].TableName = targetTable
+	}
 }
 
 // AddCheckpointTs is invoked by dispatcher manager whenever Maintainer broadcasts a

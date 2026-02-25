@@ -261,6 +261,18 @@ var (
 		"sink config invalid",
 		errors.RFCCodeText("CDC:ErrSinkInvalidConfig"),
 	)
+	ErrInvalidRoutingRule = errors.Normalize(
+		"invalid routing %s %q: %s",
+		errors.RFCCodeText("CDC:ErrInvalidRoutingRule"),
+	)
+	ErrInvalidSchemaRule = errors.Normalize(
+		"invalid schema rule %q: %s",
+		errors.RFCCodeText("CDC:ErrInvalidSchemaRule"),
+	)
+	ErrInvalidTableRule = errors.Normalize(
+		"invalid table rule %q: %s",
+		errors.RFCCodeText("CDC:ErrInvalidTableRule"),
+	)
 	ErrMessageTooLarge = errors.Normalize(
 		"message is too large. table:%s, length:%d, maxMessageBytes:%d",
 		errors.RFCCodeText("CDC:ErrMessageTooLarge"),
