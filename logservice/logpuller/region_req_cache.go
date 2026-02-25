@@ -303,12 +303,17 @@ func (c *requestCache) incPendingCount() {
 }
 
 func (c *requestCache) decPendingCount() {
-	// Ensure pendingCount doesn't go below 0
-	current := c.pendingCount.Load()
-	newCount := current - int64(1)
+	newCount := c.pendingCount.Dec()
 	if newCount < 0 {
 		c.pendingCount.Store(0)
-		return
 	}
-	c.pendingCount.Dec()
+}
+
+func (c *requestCache) markDone() {
+	c.decPendingCount()
+	// Notify waiting add operations that there's space available.
+	select {
+	case c.spaceAvailable <- struct{}{}:
+	default: // If channel is full, skip notification
+	}
 }

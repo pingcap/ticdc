@@ -84,17 +84,17 @@ func newRegionRequestWorker(
 				zap.String("addr", store.storeAddr))
 		}
 		for {
-			region, err := worker.requestCache.pop(ctx)
+			req, err := worker.requestCache.pop(ctx)
 			if err != nil {
 				return err
 			}
-			if !region.regionInfo.isStopped() {
-				worker.preFetchForConnecting = new(regionInfo)
-				*worker.preFetchForConnecting = region.regionInfo
-				return nil
-			} else {
+			if req.regionInfo.isStopped() {
+				worker.requestCache.markDone()
 				continue
 			}
+			worker.preFetchForConnecting = new(regionInfo)
+			*worker.preFetchForConnecting = req.regionInfo
+			return nil
 		}
 	}
 
@@ -375,8 +375,10 @@ func (s *regionRequestWorker) processRegionSendTask(
 				FilterLoop: region.filterLoop,
 			}
 			if err := doSend(req); err != nil {
+				s.requestCache.markDone()
 				return err
 			}
+			s.requestCache.markDone()
 			for _, state := range s.takeRegionStates(subID) {
 				state.markStopped(&requestCancelledErr{})
 				regionEvent := regionEvent{
@@ -389,12 +391,14 @@ func (s *regionRequestWorker) processRegionSendTask(
 			// It can be skipped directly because there must be no pending states from
 			// the stopped subscribedTable, or the special singleRegionInfo for stopping
 			// the table will be handled later.
-			s.client.onRegionFail(newRegionErrorInfo(region, &sendRequestToStoreErr{}))
+			s.client.onRegionFail(newRegionErrorInfo(region, &requestCancelledErr{}))
+			s.requestCache.markDone()
 		} else {
 			state := newRegionFeedState(region, uint64(subID), s)
 			state.start()
 			s.addRegionState(subID, region.verID.GetID(), state)
 			if err := doSend(s.createRegionRequest(region)); err != nil {
+				s.requestCache.markDone()
 				return err
 			}
 			s.requestCache.markSent(regionReq)

@@ -181,6 +181,41 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 	require.True(t, region.filterLoop)
 }
 
+func TestEnqueueRegionToAllStoresRetryWhenCacheFull(t *testing.T) {
+	ctx := context.Background()
+	client := &subscriptionClient{}
+
+	worker := &regionRequestWorker{
+		requestCache: newRequestCache(1),
+	}
+	store := &requestedStore{storeAddr: "store-1"}
+	store.requestWorkers.s = []*regionRequestWorker{worker}
+	client.stores.Store(store.storeAddr, store)
+
+	dummyRegion := regionInfo{
+		subscribedSpan:   &subscribedSpan{subID: SubscriptionID(2)},
+		lockedRangeState: &regionlock.LockedRangeState{},
+	}
+	ok, err := worker.add(ctx, dummyRegion, true)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	stopRegion := regionInfo{
+		subscribedSpan: &subscribedSpan{subID: SubscriptionID(1)},
+	}
+	enqueued, err := client.enqueueRegionToAllStores(ctx, stopRegion)
+	require.NoError(t, err)
+	require.False(t, enqueued)
+
+	<-worker.requestCache.pendingQueue
+	worker.requestCache.markDone()
+
+	enqueued, err = client.enqueueRegionToAllStores(ctx, stopRegion)
+	require.NoError(t, err)
+	require.True(t, enqueued)
+	require.Equal(t, 1, len(worker.requestCache.pendingQueue))
+}
+
 func TestSubscriptionWithFailedTiKV(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	mockPDClock := pdutil.NewClock4Test()
