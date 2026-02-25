@@ -16497,7 +16497,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The number of affected rows within a sliding window ($__rate_interval). Uses increase() and is not normalized to per second.",
+          "description": "The number of affected rows",
           "fieldConfig": {
             "defaults": {
               "links": []
@@ -16546,7 +16546,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(round(increase(ticdc_sink_dml_event_affected_row_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[$__rate_interval]))) by (namespace, changefeed, type, row_type)",
+              "expr": "sum(increase(ticdc_sink_dml_event_affected_row_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace, changefeed, type, row_type)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -16558,7 +16558,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Row Affected Count (per step)",
+          "title": "Row Affected Count / m",
           "tooltip": {
             "shared": true,
             "sort": 2,
