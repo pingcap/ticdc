@@ -1249,20 +1249,13 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 	}
 
 	holder := make(map[common.GID]uint64, len(availables))
-	type usageInfo struct {
-		used uint64
-		max  uint64
-	}
-	usage := make(map[common.GID]usageInfo, len(availables))
+	usage := make(map[common.GID]float64, len(availables))
 	dispatcherAvailable := make(map[common.DispatcherID]uint64, len(availables))
 	hasUsage := m.GetVersion() >= event.CongestionControlVersion2
 	for _, item := range availables {
 		holder[item.Gid] = item.Available
-		if hasUsage && item.Max > 0 {
-			usage[item.Gid] = usageInfo{
-				used: item.Used,
-				max:  item.Max,
-			}
+		if hasUsage {
+			usage[item.Gid] = item.UsageRatio
 		}
 		for dispatcherID, available := range item.DispatcherAvailable {
 			dispatcherAvailable[dispatcherID] = available
@@ -1279,8 +1272,8 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 			metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(availableInMsg))
 		}
 		if hasUsage {
-			if info, okUsage := usage[changefeedID.ID()]; okUsage && ok {
-				changefeed.updateMemoryUsage(now, info.used, info.max, availableInMsg)
+			if ratio, okUsage := usage[changefeedID.ID()]; okUsage && ok {
+				changefeed.updateMemoryUsage(now, ratio)
 			}
 		}
 		return true

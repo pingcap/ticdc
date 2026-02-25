@@ -39,7 +39,7 @@ func TestAdjustScanIntervalVeryLowBypassesSyncPointCap(t *testing.T) {
 
 	// Maintain a very low pressure for a full window to allow bypassing the sync point cap.
 	for i := 0; i <= int(memoryUsageWindowDuration/time.Second); i++ {
-		status.updateMemoryUsage(now.Add(time.Duration(i)*time.Second), 0, 100, 100)
+		status.updateMemoryUsage(now.Add(time.Duration(i)*time.Second), 0)
 	}
 	require.Equal(t, int64(90*time.Second), status.scanInterval.Load())
 }
@@ -57,7 +57,7 @@ func TestAdjustScanIntervalLowRespectsSyncPointCap(t *testing.T) {
 	status.scanInterval.Store(int64(40 * time.Second))
 
 	for i := 0; i <= int(memoryUsageWindowDuration/time.Second); i++ {
-		status.updateMemoryUsage(now.Add(time.Duration(i)*time.Second), 15, 100, 100)
+		status.updateMemoryUsage(now.Add(time.Duration(i)*time.Second), 0.15)
 	}
 	require.Equal(t, int64(50*time.Second), status.scanInterval.Load())
 }
@@ -70,11 +70,11 @@ func TestAdjustScanIntervalDecreaseIgnoresCooldown(t *testing.T) {
 	status.lastAdjustTime.Store(now)
 
 	status.scanInterval.Store(int64(40 * time.Second))
-	status.updateMemoryUsage(now.Add(memoryUsageWindowDuration), 80, 100, 100)
+	status.updateMemoryUsage(now.Add(memoryUsageWindowDuration), 0.8)
 	require.Equal(t, int64(20*time.Second), status.scanInterval.Load())
 }
 
-func TestAdjustScanIntervalUsesAvailableAsPressureSignal(t *testing.T) {
+func TestAdjustScanIntervalCriticalPressure(t *testing.T) {
 	t.Parallel()
 
 	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"))
@@ -83,8 +83,7 @@ func TestAdjustScanIntervalUsesAvailableAsPressureSignal(t *testing.T) {
 
 	status.scanInterval.Store(int64(40 * time.Second))
 
-	// used/max suggests low pressure, but available indicates full.
-	status.updateMemoryUsage(now.Add(memoryUsageWindowDuration), 10, 100, 0)
+	status.updateMemoryUsage(now.Add(memoryUsageWindowDuration), 1)
 	require.Equal(t, int64(10*time.Second), status.scanInterval.Load())
 }
 
@@ -104,7 +103,7 @@ func TestAdjustScanIntervalIncreaseWithJitteredSamples(t *testing.T) {
 	// slightly less than memoryUsageWindowDuration.
 	step := 1100 * time.Millisecond
 	for i := 0; i < 28; i++ {
-		status.updateMemoryUsage(start.Add(time.Duration(i)*step), 15, 100, 100)
+		status.updateMemoryUsage(start.Add(time.Duration(i)*step), 0.15)
 	}
 	require.Equal(t, int64(50*time.Second), status.scanInterval.Load())
 }
@@ -118,10 +117,10 @@ func TestAdjustScanIntervalDecreasesWhenUsageIncreasing(t *testing.T) {
 
 	status.scanInterval.Store(int64(40 * time.Second))
 
-	status.updateMemoryUsage(now, 10, 100, 100)
-	status.updateMemoryUsage(now.Add(1*time.Second), 11, 100, 100)
-	status.updateMemoryUsage(now.Add(2*time.Second), 12, 100, 100)
-	status.updateMemoryUsage(now.Add(3*time.Second), 13, 100, 100)
+	status.updateMemoryUsage(now, 0.10)
+	status.updateMemoryUsage(now.Add(1*time.Second), 0.11)
+	status.updateMemoryUsage(now.Add(2*time.Second), 0.12)
+	status.updateMemoryUsage(now.Add(3*time.Second), 0.13)
 	require.Equal(t, int64(40*time.Second), status.scanInterval.Load())
 }
 
@@ -135,10 +134,10 @@ func TestAdjustScanIntervalDecreasesWhenUsageIncreasingAboveThirtyPercent(t *tes
 
 	status.scanInterval.Store(int64(40 * time.Second))
 
-	status.updateMemoryUsage(now, 31, 100, 100)
-	status.updateMemoryUsage(now.Add(1*time.Second), 32, 100, 100)
-	status.updateMemoryUsage(now.Add(2*time.Second), 33, 100, 100)
-	status.updateMemoryUsage(now.Add(3*time.Second), 34, 100, 100)
+	status.updateMemoryUsage(now, 0.31)
+	status.updateMemoryUsage(now.Add(1*time.Second), 0.32)
+	status.updateMemoryUsage(now.Add(2*time.Second), 0.33)
+	status.updateMemoryUsage(now.Add(3*time.Second), 0.34)
 	require.Equal(t, int64(36*time.Second), status.scanInterval.Load())
 }
 

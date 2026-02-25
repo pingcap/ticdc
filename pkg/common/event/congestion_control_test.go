@@ -178,7 +178,7 @@ func TestCongestionControlV2(t *testing.T) {
 		common.NewDispatcherID(): 100,
 		common.NewDispatcherID(): 200,
 	}
-	control.AddAvailableMemoryWithDispatchersAndUsage(gid, 3000, 1200, 4000, dispatcherAvailable)
+	control.AddAvailableMemoryWithDispatchersAndUsage(gid, 3000, 0.3, dispatcherAvailable)
 
 	data, err := control.Marshal()
 	require.NoError(t, err)
@@ -193,8 +193,7 @@ func TestCongestionControlV2(t *testing.T) {
 	require.Equal(t, control.clusterID, decoded.clusterID)
 	require.Len(t, decoded.availables, 1)
 	require.Equal(t, uint64(3000), decoded.availables[0].Available)
-	require.Equal(t, uint64(1200), decoded.availables[0].Used)
-	require.Equal(t, uint64(4000), decoded.availables[0].Max)
+	require.InDelta(t, 0.3, decoded.availables[0].UsageRatio, 1e-9)
 	require.Len(t, decoded.availables[0].DispatcherAvailable, 2)
 }
 

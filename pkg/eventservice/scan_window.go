@@ -159,32 +159,19 @@ func (w *memoryUsageWindow) pruneLocked(now time.Time) {
 	}
 }
 
-func (c *changefeedStatus) updateMemoryUsage(now time.Time, used uint64, max uint64, available uint64) {
-	if max == 0 || c.usageWindow == nil {
+func (c *changefeedStatus) updateMemoryUsage(now time.Time, usageRatio float64) {
+	if c.usageWindow == nil {
 		return
 	}
 
-	pressure := float64(used) / float64(max)
-	if pressure < 0 {
-		pressure = 0
+	if usageRatio != usageRatio || usageRatio < 0 {
+		usageRatio = 0
 	}
-	if pressure > 1 {
-		pressure = 1
-	}
-
-	availableRatio := float64(available) / float64(max)
-	if availableRatio < 0 {
-		availableRatio = 0
-	}
-	if availableRatio > 1 {
-		availableRatio = 1
-	}
-	pressureFromAvailable := 1 - availableRatio
-	if pressureFromAvailable > pressure {
-		pressure = pressureFromAvailable
+	if usageRatio > 1 {
+		usageRatio = 1
 	}
 
-	c.usageWindow.addSample(now, pressure)
+	c.usageWindow.addSample(now, usageRatio)
 	stats := c.usageWindow.stats(now)
 	c.adjustScanInterval(now, stats)
 }

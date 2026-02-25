@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"math"
 
 	"github.com/pingcap/ticdc/pkg/common"
 )
@@ -30,8 +31,7 @@ type AvailableMemory struct {
 	Version             byte                           // 1 byte, it should be the same as CongestionControlVersion
 	Gid                 common.GID                     // GID is the internal representation of ChangeFeedID
 	Available           uint64                         // in bytes, used to report the available memory
-	Used                uint64                         // in bytes, used to report the used memory
-	Max                 uint64                         // in bytes, used to report the max memory
+	UsageRatio          float64                        // [0,1], used to report memory usage ratio of the changefeed
 	DispatcherCount     uint32                         // used to report the number of dispatchers
 	DispatcherAvailable map[common.DispatcherID]uint64 // in bytes, used to report the memory usage of each dispatcher
 }
@@ -73,8 +73,7 @@ func (m AvailableMemory) marshalV2() []byte {
 	buf := bytes.NewBuffer(make([]byte, 0))
 	buf.Write(m.Gid.Marshal())
 	_ = binary.Write(buf, binary.BigEndian, m.Available)
-	_ = binary.Write(buf, binary.BigEndian, m.Used)
-	_ = binary.Write(buf, binary.BigEndian, m.Max)
+	_ = binary.Write(buf, binary.BigEndian, math.Float64bits(m.UsageRatio))
 	_ = binary.Write(buf, binary.BigEndian, m.DispatcherCount)
 	for dispatcherID, available := range m.DispatcherAvailable {
 		buf.Write(dispatcherID.Marshal())
@@ -98,8 +97,7 @@ func (m *AvailableMemory) unmarshalV1(buf *bytes.Buffer) {
 func (m *AvailableMemory) unmarshalV2(buf *bytes.Buffer) {
 	m.Gid.Unmarshal(buf.Next(m.Gid.GetSize()))
 	m.Available = binary.BigEndian.Uint64(buf.Next(8))
-	m.Used = binary.BigEndian.Uint64(buf.Next(8))
-	m.Max = binary.BigEndian.Uint64(buf.Next(8))
+	m.UsageRatio = math.Float64frombits(binary.BigEndian.Uint64(buf.Next(8)))
 	m.DispatcherCount = binary.BigEndian.Uint32(buf.Next(4))
 	m.DispatcherAvailable = make(map[common.DispatcherID]uint64)
 	for range m.DispatcherCount {
@@ -122,8 +120,8 @@ func (m AvailableMemory) sizeV1() int {
 }
 
 func (m AvailableMemory) sizeV2() int {
-	// changefeedID size + changefeed available size + used size + max size
-	size := m.Gid.GetSize() + 8 + 8 + 8
+	// changefeedID size + changefeed available size + usage ratio size
+	size := m.Gid.GetSize() + 8 + 8
 	size += 4 // dispatcher count
 	for range m.DispatcherCount {
 		dispatcherID := &common.DispatcherID{}
@@ -277,15 +275,13 @@ func (c *CongestionControl) AddAvailableMemoryWithDispatchers(gid common.GID, av
 func (c *CongestionControl) AddAvailableMemoryWithDispatchersAndUsage(
 	gid common.GID,
 	available uint64,
-	used uint64,
-	max uint64,
+	usageRatio float64,
 	dispatcherAvailable map[common.DispatcherID]uint64,
 ) {
 	c.changefeedCount++
 	availMem := NewAvailableMemory(gid, available)
 	availMem.Version = CongestionControlVersion2
-	availMem.Used = used
-	availMem.Max = max
+	availMem.UsageRatio = usageRatio
 	availMem.DispatcherAvailable = dispatcherAvailable
 	availMem.DispatcherCount = uint32(len(dispatcherAvailable))
 	c.availables = append(c.availables, availMem)

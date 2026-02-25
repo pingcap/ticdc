@@ -600,8 +600,7 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 	// collect path-level available memory and total available memory for each changefeed
 	changefeedPathMemory := make(map[common.ChangeFeedID]map[common.DispatcherID]uint64)
 	changefeedTotalMemory := make(map[common.ChangeFeedID]uint64)
-	changefeedUsedMemory := make(map[common.ChangeFeedID]uint64)
-	changefeedMaxMemory := make(map[common.ChangeFeedID]uint64)
+	changefeedUsageRatio := make(map[common.ChangeFeedID]float64)
 
 	// collect from main dynamic stream
 	for _, quota := range c.ds.GetMetrics().MemoryControl.AreaMemoryMetrics {
@@ -619,8 +618,7 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 		}
 		// store total available memory from AreaMemoryMetric
 		changefeedTotalMemory[cfID] = uint64(quota.AvailableMemory())
-		changefeedUsedMemory[cfID] = uint64(quota.MemoryUsage())
-		changefeedMaxMemory[cfID] = uint64(quota.MaxMemory())
+		changefeedUsageRatio[cfID] = calcUsageRatio(quota.MemoryUsage(), quota.MaxMemory())
 	}
 
 	// collect from redo dynamic stream and take minimum
@@ -643,8 +641,8 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 		}
 		// take minimum total available memory between main and redo streams
 		updateMinUint64MapValue(changefeedTotalMemory, cfID, uint64(quota.AvailableMemory()))
-		updateMinUint64MapValue(changefeedUsedMemory, cfID, uint64(quota.MemoryUsage()))
-		updateMinUint64MapValue(changefeedMaxMemory, cfID, uint64(quota.MaxMemory()))
+		// take maximum usage ratio between main and redo streams
+		changefeedUsageRatio[cfID] = max(changefeedUsageRatio[cfID], calcUsageRatio(quota.MemoryUsage(), quota.MaxMemory()))
 	}
 
 	if len(changefeedPathMemory) == 0 {
@@ -689,16 +687,16 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 			}
 
 			// get total available memory directly from AreaMemoryMetric
-			totalAvailable := uint64(changefeedTotalMemory[changefeedID])
-			if totalAvailable > 0 {
-				congestionControl.AddAvailableMemoryWithDispatchersAndUsage(
-					changefeedID.ID(),
-					totalAvailable,
-					changefeedUsedMemory[changefeedID],
-					changefeedMaxMemory[changefeedID],
-					dispatcherMemory,
-				)
+			totalAvailable, ok := changefeedTotalMemory[changefeedID]
+			if !ok {
+				continue
 			}
+			congestionControl.AddAvailableMemoryWithDispatchersAndUsage(
+				changefeedID.ID(),
+				totalAvailable,
+				changefeedUsageRatio[changefeedID],
+				dispatcherMemory,
+			)
 		}
 
 		if len(congestionControl.GetAvailables()) > 0 {
@@ -714,6 +712,28 @@ func updateMinUint64MapValue(m map[common.ChangeFeedID]uint64, key common.Change
 	} else {
 		m[key] = value
 	}
+}
+
+func updateMaxUint64MapValue(m map[common.ChangeFeedID]uint64, key common.ChangeFeedID, value uint64) {
+	if existing, exists := m[key]; exists {
+		m[key] = max(existing, value)
+	} else {
+		m[key] = value
+	}
+}
+
+func calcUsageRatio(usedMemory int64, maxMemory int64) float64 {
+	if maxMemory <= 0 {
+		return 0
+	}
+	ratio := float64(usedMemory) / float64(maxMemory)
+	if ratio < 0 {
+		return 0
+	}
+	if ratio > 1 {
+		return 1
+	}
+	return ratio
 }
 
 func (c *EventCollector) updateMetrics(ctx context.Context) error {

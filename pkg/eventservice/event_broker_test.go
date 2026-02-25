@@ -212,8 +212,7 @@ func TestHandleCongestionControlV2AdjustsScanInterval(t *testing.T) {
 	status.lastAdjustTime.Store(time.Now())
 
 	control := event.NewCongestionControlWithVersion(event.CongestionControlVersion2)
-	// Simulate critical pressure by setting available to 0.
-	control.AddAvailableMemoryWithDispatchersAndUsage(changefeedID.ID(), 0, 10, 100, nil)
+	control.AddAvailableMemoryWithDispatchersAndUsage(changefeedID.ID(), 0, 1, nil)
 	broker.handleCongestionControl(node.ID("event-collector-1"), control)
 
 	require.Equal(t, int64(10*time.Second), status.scanInterval.Load())
