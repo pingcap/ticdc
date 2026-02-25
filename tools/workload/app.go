@@ -30,10 +30,9 @@ import (
 	pbank "workload/schema/bank"
 	pbank2 "workload/schema/bank2"
 	"workload/schema/bankupdate"
-	pbis "workload/schema/bis"
 	pcrawler "workload/schema/crawler"
 	pdc "workload/schema/dc"
-	pforwardindex "workload/schema/forwardindex"
+	pjsonzstd "workload/schema/jsonzstd"
 	"workload/schema/largerow"
 	"workload/schema/shop"
 	psysbench "workload/schema/sysbench"
@@ -69,17 +68,16 @@ type WorkloadApp struct {
 }
 
 const (
-	bank                = "bank"
-	sysbench            = "sysbench"
-	largeRow            = "large_row"
-	shopItem            = "shop_item"
-	uuu                 = "uuu"
-	crawler             = "crawler"
-	bank2               = "bank2"
-	bankUpdate          = "bank_update"
-	dc                  = "dc"
-	stagingForwardIndex = "staging_forward_index"
-	bisMetadata         = "bis_metadata"
+	bank       = "bank"
+	sysbench   = "sysbench"
+	largeRow   = "large_row"
+	shopItem   = "shop_item"
+	uuu        = "uuu"
+	crawler    = "crawler"
+	bank2      = "bank2"
+	bankUpdate = "bank_update"
+	dc         = "dc"
+	jsonZstd   = "json_zstd"
 )
 
 // stmtCacheKey is used as the key for statement cache
@@ -138,10 +136,8 @@ func (app *WorkloadApp) createWorkload() schema.Workload {
 		workload = bankupdate.NewBankUpdateWorkload(app.Config.TotalRowCount, app.Config.UpdateLargeColumnSize)
 	case dc:
 		workload = pdc.NewDCWorkload()
-	case stagingForwardIndex:
-		workload = pforwardindex.NewStagingForwardIndexWorkload(app.Config.RowSize, app.Config.TotalRowCount)
-	case bisMetadata:
-		workload = pbis.NewBISMetadataWorkload(app.Config.RowSize, app.Config.TableCount, app.Config.TableStartIndex, app.Config.TotalRowCount, app.Config.BISMetadataPayloadMode)
+	case jsonZstd:
+		workload = pjsonzstd.NewJSONZstdWorkload(app.Config.RowSize, app.Config.TableCount, app.Config.TableStartIndex, app.Config.TotalRowCount, app.Config.JSONPayloadMode)
 	default:
 		plog.Panic("unsupported workload type", zap.String("workload", app.Config.WorkloadType))
 	}
@@ -331,11 +327,8 @@ func (app *WorkloadApp) doInsertOnce(conn *sql.Conn) (uint64, error) {
 	case bank2:
 		insertSQL, values := app.Workload.(*pbank2.Bank2Workload).BuildInsertSqlWithValues(tableIndex, app.Config.BatchSize)
 		res, err = app.executeWithValues(conn, insertSQL, tableIndex, values)
-	case stagingForwardIndex:
-		insertSQL, values := app.Workload.(*pforwardindex.StagingForwardIndexWorkload).BuildInsertSqlWithValues(tableIndex, app.Config.BatchSize)
-		res, err = app.executeWithValues(conn, insertSQL, tableIndex, values)
-	case bisMetadata:
-		insertSQL, values := app.Workload.(*pbis.BISMetadataWorkload).BuildInsertSqlWithValues(tableIndex, app.Config.BatchSize)
+	case jsonZstd:
+		insertSQL, values := app.Workload.(*pjsonzstd.JSONZstdWorkload).BuildInsertSqlWithValues(tableIndex, app.Config.BatchSize)
 		res, err = app.executeWithValues(conn, insertSQL, tableIndex, values)
 	default:
 		insertSQL := app.Workload.BuildInsertSql(tableIndex, app.Config.BatchSize)

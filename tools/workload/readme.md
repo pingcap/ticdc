@@ -56,36 +56,18 @@ Additional parameters for update:
 - large-ratio: Ratio of large rows in the dataset
 - percentage-for-update: Percentage of rows to update
 
-### 3. Staging Forward Index Upsert Workload
+### 3. JSON Zstd Workload
 
-Generate large-row upserts based on a `staging_forward_index`-style schema (BLOB/MEDIUMBLOB) and `INSERT ... ON DUPLICATE KEY UPDATE`.
-
-```bash
-./workload -action write \
-    -database-host 127.0.0.1 \
-    -database-port 4000 \
-    -database-db-name ads_indexing \
-    -total-row-count 1000000 \
-    -table-count 1 \
-    -workload-type staging_forward_index \
-    -row-size $((512 * 1024)) \
-    -thread 16 \
-    -batch-size 8 \
-    -percentage-for-update 0.5
-```
-
-### 4. BIS Metadata Workload
-
-Generate writes for `bis_entity_metadata` and `bis_batch_metadata` (two tables per shard). Use `-row-size` to control payload width and `-table-count` to control shard count.
+Generate writes for `json_zstd_entity_metadata` and `json_zstd_batch_metadata` (two tables per shard). Use `-row-size` to control payload width and `-table-count` to control shard count.
 
 ```bash
 ./workload -action write \
     -database-host 127.0.0.1 \
     -database-port 4000 \
-    -database-db-name bulk_ingestion \
+    -database-db-name json_payload \
     -total-row-count 1000000 \
     -table-count 16 \
-    -workload-type bis_metadata \
+    -workload-type json_zstd \
     -row-size $((16 * 1024)) \
     -thread 32 \
     -batch-size 32 \
@@ -98,4 +80,4 @@ Generate writes for `bis_entity_metadata` and `bis_batch_metadata` (two tables p
 - Ensure the database is properly configured and has the necessary permissions.
 - Adjust the thread and batch-size parameters based on your needs.
 - Use `-batch-in-txn` to wrap each batch in a single explicit transaction (BEGIN/COMMIT).
-- For `bis_metadata`, use `-bis-metadata-payload-mode zstd` to generate more compression expensive (zstd) payloads, or `-bis-metadata-payload-mode random` for incompressible payloads.
+- For `json_zstd`, use `-json-payload-mode zstd` to generate a zstd friendly JSON-like payload, or `-json-payload-mode random` for incompressible payloads.
