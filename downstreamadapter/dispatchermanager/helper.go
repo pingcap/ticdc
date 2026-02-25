@@ -251,6 +251,7 @@ func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *Dispatcher
 
 func isRedoDispatcherManagerReady(dispatcherManager *DispatcherManager) bool {
 	return dispatcherManager.RedoEnable &&
+		dispatcherManager.redoSink != nil &&
 		dispatcherManager.redoDispatcherMap != nil &&
 		dispatcherManager.redoSchemaIDToDispatchers != nil
 }
