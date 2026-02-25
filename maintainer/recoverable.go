@@ -146,9 +146,15 @@ func (h *recoverDispatcherHandler) tryRecoverDispatcher(
 	}
 
 	if existing := h.operatorController.GetOperator(dispatcherID); existing != nil {
-		// If any operator for this dispatcher is already in-flight, this recover
-		// request is superseded and should be ignored to avoid operator conflicts.
-		log.Info("ignore recover dispatcher request because operator already exists",
+		if existing.Type() == operator.RestartDispatcherOperatorType {
+			log.Info("restart dispatcher operator is already in flight, keep recover request pending",
+				zap.Stringer("changefeedID", h.maintainer.changefeedID),
+				zap.Stringer("dispatcherID", dispatcherID),
+				zap.Stringer("sourceNode", source))
+			return heartbeatpb.RecoverDispatcherResponseState_RUNNING, true
+		}
+		// If a non-restart operator is already in-flight, this recover request is superseded.
+		log.Info("ignore recover dispatcher request because non restart operator already exists",
 			zap.Stringer("changefeedID", h.maintainer.changefeedID),
 			zap.Stringer("dispatcherID", dispatcherID),
 			zap.Stringer("sourceNode", source),
@@ -193,10 +199,17 @@ func (h *recoverDispatcherHandler) tryRecoverDispatcher(
 
 	op := operator.NewRestartDispatcherOperator(h.spanController, replication, origin)
 	if ok := h.operatorController.AddOperator(op); !ok {
-		log.Info("restart dispatcher operator already exists, ignore",
+		existing := h.operatorController.GetOperator(dispatcherID)
+		if existing != nil && existing.Type() == operator.RestartDispatcherOperatorType {
+			log.Info("restart dispatcher operator already exists, keep recover request pending",
+				zap.Stringer("changefeedID", h.maintainer.changefeedID),
+				zap.Stringer("dispatcherID", dispatcherID))
+			return heartbeatpb.RecoverDispatcherResponseState_RUNNING, true
+		}
+		log.Info("recover dispatcher request superseded because operator already exists when adding restart operator",
 			zap.Stringer("changefeedID", h.maintainer.changefeedID),
 			zap.Stringer("dispatcherID", dispatcherID))
-		return heartbeatpb.RecoverDispatcherResponseState_RUNNING, true
+		return heartbeatpb.RecoverDispatcherResponseState_SUPERSEDED, true
 	}
 	state.attempts++
 	h.tracked[dispatcherID] = state

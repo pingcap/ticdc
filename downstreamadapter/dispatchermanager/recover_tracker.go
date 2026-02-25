@@ -76,9 +76,10 @@ type recoverTracker struct {
 }
 
 type recoverPendingState struct {
-	identity  recoverDispatcherIdentity
-	firstSeen time.Time
-	removed   bool
+	identity        recoverDispatcherIdentity
+	firstSeen       time.Time
+	removed         bool
+	responseHandled bool
 }
 
 func newRecoverTracker(changefeedID common.ChangeFeedID) *recoverTracker {
@@ -111,9 +112,10 @@ func (t *recoverTracker) addAt(identities []recoverDispatcherIdentity, at time.T
 			continue
 		}
 		t.pending[dispatcherID] = recoverPendingState{
-			identity:  identity,
-			firstSeen: at,
-			removed:   false,
+			identity:        identity,
+			firstSeen:       at,
+			removed:         false,
+			responseHandled: false,
 		}
 	}
 	if t.pendingGauge != nil {
@@ -217,6 +219,35 @@ func (t *recoverTracker) pendingIdentities() []recoverDispatcherIdentity {
 	return identities
 }
 
+// filterResendableIdentities filters out identities that have already received
+// a maintainer response and therefore no longer need resend.
+func (t *recoverTracker) filterResendableIdentities(
+	identities []recoverDispatcherIdentity,
+) []recoverDispatcherIdentity {
+	if len(identities) == 0 {
+		return nil
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	resend := make([]recoverDispatcherIdentity, 0, len(identities))
+	for _, identity := range identities {
+		state, ok := t.pending[identity.id]
+		if !ok {
+			continue
+		}
+		if !state.identity.equal(identity) {
+			continue
+		}
+		if state.responseHandled {
+			continue
+		}
+		resend = append(resend, identity)
+	}
+	return resend
+}
+
 // remove clears pending state for a dispatcher.
 // It returns true when dispatcher was pending before this call
 func (t *recoverTracker) remove(dispatcherID common.DispatcherID) bool {
@@ -239,6 +270,28 @@ func (t *recoverTracker) hasIdentity(identity recoverDispatcherIdentity) bool {
 		return false
 	}
 	return state.identity.equal(identity)
+}
+
+// markResponseHandled marks the pending identity as already handled by
+// maintainer response. A handled identity remains pending for lifecycle
+// cleanup (remove/recreate/working), but it should not be resent.
+func (t *recoverTracker) markResponseHandled(identity recoverDispatcherIdentity) bool {
+	t.mu.Lock()
+	state, ok := t.pending[identity.id]
+	if !ok {
+		t.mu.Unlock()
+		return false
+	}
+	if !state.identity.equal(identity) {
+		t.mu.Unlock()
+		return false
+	}
+	if !state.responseHandled {
+		state.responseHandled = true
+		t.pending[identity.id] = state
+	}
+	t.mu.Unlock()
+	return true
 }
 
 // removeByIdentity clears pending state only when recover identity matches.

@@ -411,7 +411,102 @@ func TestWorkingStatusClearsRecoverReporterState(t *testing.T) {
 	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
 }
 
-func TestRecoverDispatcherResponseClearSupersededState(t *testing.T) {
+func TestRecoverDispatcherResponseKeepSupersededState(t *testing.T) {
+	manager := &DispatcherManager{
+		changefeedID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+	}
+	manager.reporter = recoverable.NewReporter(2)
+	manager.recoverTracker = newRecoverTracker(manager.changefeedID)
+	manager.recoverDispatcherRequestQueue = make(chan *RecoverDispatcherRequestWithTargetID, 1)
+	manager.dispatcherMap = newDispatcherMap[*dispatcher.EventDispatcher]()
+
+	dispatcherID := common.NewDispatcherID()
+	manager.dispatcherMap.Set(dispatcherID, nil)
+	reported, handled := manager.reporter.Report([]recoverable.DispatcherEpoch{
+		{DispatcherID: dispatcherID, Epoch: 5},
+	})
+	require.True(t, handled)
+	require.Equal(t, []common.DispatcherID{dispatcherID}, reported)
+	<-manager.reporter.OutputCh()
+
+	requestID := newRecoverDispatcherIdentity(dispatcherID, 5, 9)
+	manager.recoverTracker.add([]recoverDispatcherIdentity{requestID})
+	manager.onRecoverDispatcherResponse(&heartbeatpb.RecoverDispatcherResponse{
+		ChangefeedID: manager.changefeedID.ToPB(),
+		Entries: []*heartbeatpb.RecoverDispatcherResponseEntry{
+			{
+				Identity: &heartbeatpb.RecoverDispatcherIdentity{
+					DispatcherID:    dispatcherID.ToPB(),
+					DispatcherEpoch: 5,
+					MaintainerEpoch: 9,
+				},
+				State: heartbeatpb.RecoverDispatcherResponseState_SUPERSEDED,
+			},
+		},
+	})
+	require.Equal(t, []common.DispatcherID{dispatcherID}, manager.recoverTracker.pendingDispatcherIDs())
+
+	reported, handled = manager.reporter.Report([]recoverable.DispatcherEpoch{
+		{DispatcherID: dispatcherID, Epoch: 1},
+	})
+	require.True(t, handled)
+	require.Empty(t, reported)
+
+	manager.resendPendingRecoverRequests(context.Background())
+	select {
+	case <-manager.recoverDispatcherRequestQueue:
+		t.Fatal("unexpected recover dispatcher resend after superseded response")
+	default:
+	}
+}
+
+func TestRecoverDispatcherResponseStopResendAfterHandledState(t *testing.T) {
+	testCases := []heartbeatpb.RecoverDispatcherResponseState{
+		heartbeatpb.RecoverDispatcherResponseState_ACCEPTED,
+		heartbeatpb.RecoverDispatcherResponseState_RUNNING,
+		heartbeatpb.RecoverDispatcherResponseState_SUPERSEDED,
+	}
+
+	for _, state := range testCases {
+		t.Run(state.String(), func(t *testing.T) {
+			manager := &DispatcherManager{
+				changefeedID:                  common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+				recoverDispatcherRequestQueue: make(chan *RecoverDispatcherRequestWithTargetID, 1),
+				dispatcherMap:                 newDispatcherMap[*dispatcher.EventDispatcher](),
+			}
+			manager.reporter = recoverable.NewReporter(2)
+			manager.recoverTracker = newRecoverTracker(manager.changefeedID)
+
+			dispatcherID := common.NewDispatcherID()
+			manager.dispatcherMap.Set(dispatcherID, nil)
+			identity := newRecoverDispatcherIdentity(dispatcherID, 5, 9)
+			manager.recoverTracker.add([]recoverDispatcherIdentity{identity})
+			manager.onRecoverDispatcherResponse(&heartbeatpb.RecoverDispatcherResponse{
+				ChangefeedID: manager.changefeedID.ToPB(),
+				Entries: []*heartbeatpb.RecoverDispatcherResponseEntry{
+					{
+						Identity: &heartbeatpb.RecoverDispatcherIdentity{
+							DispatcherID:    dispatcherID.ToPB(),
+							DispatcherEpoch: 5,
+							MaintainerEpoch: 9,
+						},
+						State: state,
+					},
+				},
+			})
+			require.Equal(t, []common.DispatcherID{dispatcherID}, manager.recoverTracker.pendingDispatcherIDs())
+
+			manager.resendPendingRecoverRequests(context.Background())
+			select {
+			case <-manager.recoverDispatcherRequestQueue:
+				t.Fatalf("unexpected recover dispatcher resend after %s response", state.String())
+			default:
+			}
+		})
+	}
+}
+
+func TestRecoverDispatcherResponseClearFailedState(t *testing.T) {
 	manager := &DispatcherManager{
 		changefeedID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
 	}
@@ -437,7 +532,7 @@ func TestRecoverDispatcherResponseClearSupersededState(t *testing.T) {
 					DispatcherEpoch: 5,
 					MaintainerEpoch: 9,
 				},
-				State: heartbeatpb.RecoverDispatcherResponseState_SUPERSEDED,
+				State: heartbeatpb.RecoverDispatcherResponseState_FAILED,
 			},
 		},
 	})

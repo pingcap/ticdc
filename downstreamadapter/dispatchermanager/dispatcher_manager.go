@@ -753,7 +753,7 @@ func (e *DispatcherManager) collectRecoverableEvents(ctx context.Context) {
 				continue
 			}
 
-			localDispatchers := e.filterLocalRecoverDispatchers(event.Dispatchers, true)
+			localDispatchers := e.reconcileRecoverDispatchers(event.Dispatchers, recoverReconcileSourceEvent)
 			if len(localDispatchers) == 0 {
 				continue
 			}
@@ -775,11 +775,15 @@ func (e *DispatcherManager) resendPendingRecoverRequests(ctx context.Context) {
 	if len(pendingIdentities) == 0 {
 		return
 	}
-	localIdentities := e.filterLocalRecoverIdentities(pendingIdentities, false)
+	localIdentities := e.reconcileRecoverIdentities(pendingIdentities, recoverReconcileSourceResend)
 	if len(localIdentities) == 0 {
 		return
 	}
-	e.enqueueRecoverDispatcherRequest(ctx, localIdentities)
+	resendIdentities := e.recoverTracker.filterResendableIdentities(localIdentities)
+	if len(resendIdentities) == 0 {
+		return
+	}
+	e.enqueueRecoverDispatcherRequest(ctx, resendIdentities)
 }
 
 func (e *DispatcherManager) enqueueRecoverDispatcherRequest(
@@ -846,52 +850,51 @@ func (e *DispatcherManager) newRecoverIdentities(dispatchers []recoverable.Dispa
 	return identities
 }
 
-func (e *DispatcherManager) filterLocalRecoverDispatchers(
+type recoverReconcileSource int
+
+const (
+	recoverReconcileSourceEvent recoverReconcileSource = iota
+	recoverReconcileSourceResend
+)
+
+func (e *DispatcherManager) reconcileRecoverDispatchers(
 	dispatchers []recoverable.DispatcherEpoch,
-	clearNonLocal bool,
+	source recoverReconcileSource,
 ) []recoverable.DispatcherEpoch {
 	if len(dispatchers) == 0 {
 		return nil
 	}
 
 	local := make([]recoverable.DispatcherEpoch, 0, len(dispatchers))
-	indexByDispatcher := make(map[common.DispatcherID]int, len(dispatchers))
+	indexByLocalDispatcher := make(map[common.DispatcherID]int, len(dispatchers))
+	handledNonLocal := make(map[common.DispatcherID]struct{}, len(dispatchers))
 	for _, dispatcher := range dispatchers {
 		dispatcherID := dispatcher.DispatcherID
-		idx, seen := indexByDispatcher[dispatcherID]
-		if seen {
-			if dispatcher.Epoch > local[idx].Epoch {
-				local[idx].Epoch = dispatcher.Epoch
-			}
-			continue
-		}
-		indexByDispatcher[dispatcherID] = len(local)
-
 		if e.isLocalRecoverDispatcher(dispatcherID) {
+			idx, seen := indexByLocalDispatcher[dispatcherID]
+			if seen {
+				if dispatcher.Epoch > local[idx].Epoch {
+					local[idx].Epoch = dispatcher.Epoch
+				}
+				continue
+			}
+			indexByLocalDispatcher[dispatcherID] = len(local)
 			local = append(local, dispatcher)
 			continue
 		}
 
-		if !clearNonLocal {
-			if e.clearSupersededRecoverState(dispatcherID) {
-				log.Info("clear superseded recover state for non local dispatcher",
-					zap.Stringer("changefeedID", e.changefeedID),
-					zap.Stringer("dispatcherID", dispatcherID))
-			}
+		if _, seen := handledNonLocal[dispatcherID]; seen {
 			continue
 		}
-
-		e.clearRecoverState(dispatcherID)
-		log.Info("ignore recover dispatcher request for non-local dispatcher",
-			zap.Stringer("changefeedID", e.changefeedID),
-			zap.Stringer("dispatcherID", dispatcherID))
+		handledNonLocal[dispatcherID] = struct{}{}
+		e.reconcileNonLocalRecoverDispatcher(dispatcherID, source)
 	}
 	return local
 }
 
-func (e *DispatcherManager) filterLocalRecoverIdentities(
+func (e *DispatcherManager) reconcileRecoverIdentities(
 	identities []recoverDispatcherIdentity,
-	clearNonLocal bool,
+	source recoverReconcileSource,
 ) []recoverDispatcherIdentity {
 	if len(identities) == 0 {
 		return nil
@@ -910,22 +913,32 @@ func (e *DispatcherManager) filterLocalRecoverIdentities(
 			local = append(local, identity)
 			continue
 		}
+		e.reconcileNonLocalRecoverDispatcher(dispatcherID, source)
+	}
+	return local
+}
 
-		if !clearNonLocal {
-			if e.clearSupersededRecoverState(dispatcherID) {
-				log.Info("clear superseded recover state for non local dispatcher",
-					zap.Stringer("changefeedID", e.changefeedID),
-					zap.Stringer("dispatcherID", dispatcherID))
-			}
-			continue
-		}
-
+func (e *DispatcherManager) reconcileNonLocalRecoverDispatcher(
+	dispatcherID common.DispatcherID,
+	source recoverReconcileSource,
+) {
+	if source == recoverReconcileSourceEvent {
 		e.clearRecoverState(dispatcherID)
 		log.Info("ignore recover dispatcher request for non-local dispatcher",
 			zap.Stringer("changefeedID", e.changefeedID),
 			zap.Stringer("dispatcherID", dispatcherID))
+		return
 	}
-	return local
+
+	if e.clearSupersededRecoverState(dispatcherID) {
+		log.Info("clear superseded recover state for non-local dispatcher",
+			zap.Stringer("changefeedID", e.changefeedID),
+			zap.Stringer("dispatcherID", dispatcherID))
+		return
+	}
+	log.Info("skip resend recover request for non-local dispatcher because it is still pending local remove",
+		zap.Stringer("changefeedID", e.changefeedID),
+		zap.Stringer("dispatcherID", dispatcherID))
 }
 
 func (e *DispatcherManager) isLocalRecoverDispatcher(dispatcherID common.DispatcherID) bool {
@@ -1042,17 +1055,13 @@ func (e *DispatcherManager) onRecoverDispatcherResponse(response *heartbeatpb.Re
 			entry.Identity.DispatcherEpoch,
 			entry.Identity.MaintainerEpoch,
 		)
-		if !e.recoverTracker.hasIdentity(identity) {
+		switch entry.State {
+		case heartbeatpb.RecoverDispatcherResponseState_ACCEPTED,
+			heartbeatpb.RecoverDispatcherResponseState_RUNNING,
+			heartbeatpb.RecoverDispatcherResponseState_SUPERSEDED:
+			e.recoverTracker.markResponseHandled(identity)
 			continue
-		}
-
-		if entry.State == heartbeatpb.RecoverDispatcherResponseState_ACCEPTED ||
-			entry.State == heartbeatpb.RecoverDispatcherResponseState_RUNNING {
-			continue
-		}
-
-		if entry.State == heartbeatpb.RecoverDispatcherResponseState_SUPERSEDED ||
-			entry.State == heartbeatpb.RecoverDispatcherResponseState_FAILED {
+		case heartbeatpb.RecoverDispatcherResponseState_FAILED:
 			removed := e.recoverTracker.removeByIdentity(identity)
 			if !removed {
 				continue
@@ -1064,13 +1073,15 @@ func (e *DispatcherManager) onRecoverDispatcherResponse(response *heartbeatpb.Re
 				zap.Uint64("dispatcherEpoch", identity.epoch),
 				zap.Uint64("maintainerEpoch", identity.maintainerEpoch),
 				zap.String("state", entry.State.String()))
-			continue
+		default:
+			if !e.recoverTracker.hasIdentity(identity) {
+				continue
+			}
+			log.Warn("ignore recover dispatcher response with unknown state",
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Stringer("dispatcherID", identity.id),
+				zap.String("state", entry.State.String()))
 		}
-
-		log.Warn("ignore recover dispatcher response with unknown state",
-			zap.Stringer("changefeedID", e.changefeedID),
-			zap.Stringer("dispatcherID", identity.id),
-			zap.String("state", entry.State.String()))
 	}
 }
 

@@ -128,6 +128,10 @@ func TestRecoverDispatcherRequestSkipWhenAnyOperatorExists(t *testing.T) {
 	require.NotNil(t, existing)
 	require.Equal(t, "move", existing.Type())
 
+	entries := m.recoverDispatcherHandler.handle(nodeID, req)
+	require.Len(t, entries, 1)
+	require.Equal(t, heartbeatpb.RecoverDispatcherResponseState_SUPERSEDED, entries[0].State)
+
 	m.onRecoverDispatcherRequest(nodeID, req)
 
 	current := controller.operatorController.GetOperator(dispatcherID)
@@ -136,6 +140,23 @@ func TestRecoverDispatcherRequestSkipWhenAnyOperatorExists(t *testing.T) {
 	require.Empty(t, m.runningErrors.m)
 	_, tracked := m.recoverDispatcherHandler.tracked[dispatcherID]
 	require.False(t, tracked)
+}
+
+func TestRecoverDispatcherRequestRunningWhenRestartOperatorExists(t *testing.T) {
+	m, controller, dispatcherID, nodeID := newRecoverDispatcherTestMaintainer(t)
+	req := newRecoverDispatcherRequest(m.changefeedID, dispatcherID)
+
+	first := m.recoverDispatcherHandler.handle(nodeID, req)
+	require.Len(t, first, 1)
+	require.Equal(t, heartbeatpb.RecoverDispatcherResponseState_ACCEPTED, first[0].State)
+	require.NotNil(t, controller.operatorController.GetOperator(dispatcherID))
+	require.Equal(t, 1, m.recoverDispatcherHandler.tracked[dispatcherID].attempts)
+
+	second := m.recoverDispatcherHandler.handle(nodeID, req)
+	require.Len(t, second, 1)
+	require.Equal(t, heartbeatpb.RecoverDispatcherResponseState_RUNNING, second[0].State)
+	require.NotNil(t, controller.operatorController.GetOperator(dispatcherID))
+	require.Equal(t, 1, m.recoverDispatcherHandler.tracked[dispatcherID].attempts)
 }
 
 func TestRecoverDispatcherRequestRestartAgainAfterPreviousRestartFinished(t *testing.T) {

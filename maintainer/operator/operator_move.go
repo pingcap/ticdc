@@ -50,6 +50,11 @@ const (
 	moveStateDoneNoPostFinish
 )
 
+const (
+	MoveDispatcherOperatorType    = "move"
+	RestartDispatcherOperatorType = "restart"
+)
+
 // MoveDispatcherOperator is an operator to move a table span to the destination dispatcher
 type MoveDispatcherOperator struct {
 	replicaSet     *replica.SpanReplication
@@ -287,7 +292,10 @@ func (m *MoveDispatcherOperator) String() string {
 }
 
 func (m *MoveDispatcherOperator) Type() string {
-	return "move"
+	if m.force {
+		return RestartDispatcherOperatorType
+	}
+	return MoveDispatcherOperatorType
 }
 
 func (m *MoveDispatcherOperator) BlockTsForward() bool {

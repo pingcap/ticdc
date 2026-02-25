@@ -479,7 +479,15 @@ func (oc *Controller) GetAllOperators() []operator.Operator[common.DispatcherID,
 }
 
 func (oc *Controller) Close() {
-	opTypes := []string{"occupy", "merge", "add", "remove", "move", "split", "merge"}
+	opTypes := []string{
+		"occupy",
+		"merge",
+		"add",
+		"remove",
+		MoveDispatcherOperatorType,
+		RestartDispatcherOperatorType,
+		"split",
+	}
 
 	for _, opType := range opTypes {
 		metrics.OperatorCount.DeleteLabelValues(common.DefaultKeyspaceName, oc.changefeedID.Name(), opType, common.StringMode(oc.mode))
