@@ -205,3 +205,39 @@ func TestSelectColumnToMutatePreferNonNilOriginTs(t *testing.T) {
 		require.Equal(t, commonEvent.OriginTsColumn, col)
 	}
 }
+
+func TestSelectColumnToMutateSkipNilNonPKColumns(t *testing.T) {
+	t.Parallel()
+
+	row := map[string]any{
+		"id": "1",
+		"c1": nil,
+		"c2": "v2",
+	}
+	pkSet := map[string]struct{}{
+		"id": {},
+	}
+
+	for i := 0; i < 20; i++ {
+		col, ok := selectColumnToMutate(row, pkSet)
+		require.True(t, ok)
+		require.Equal(t, "c2", col)
+	}
+}
+
+func TestSelectColumnToMutateNoCandidateWhenAllNonPKColumnsNil(t *testing.T) {
+	t.Parallel()
+
+	row := map[string]any{
+		"id":                       "1",
+		commonEvent.OriginTsColumn: nil,
+		"c1":                       nil,
+	}
+	pkSet := map[string]struct{}{
+		"id": {},
+	}
+
+	col, ok := selectColumnToMutate(row, pkSet)
+	require.False(t, ok)
+	require.Empty(t, col)
+}

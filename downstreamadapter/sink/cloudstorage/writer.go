@@ -347,6 +347,10 @@ func selectColumnToMutate(row map[string]any, pkSet map[string]struct{}) (string
 		if col == commonEvent.OriginTsColumn {
 			continue
 		}
+		// Keep the failpoint mutation meaningful: skip columns that are already NULL.
+		if row[col] == nil {
+			continue
+		}
 		columns = append(columns, col)
 	}
 	if len(columns) == 0 {
