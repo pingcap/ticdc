@@ -258,9 +258,9 @@ function run_impl() {
 	create_changefeed_config "$mode" "$work_dir" "$changefeed_config"
 	changefeed_id=$(cdc_cli_changefeed create --sink-uri="$SINK_URI" --config="$changefeed_config" | grep '^ID:' | head -n1 | awk '{print $2}')
 	case $SINK_TYPE in
-	kafka) run_kafka_consumer "$work_dir" $SINK_URI ;;
-	storage) run_storage_consumer "$work_dir" $SINK_URI "" "" ;;
-	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI ;;
+	kafka) run_kafka_consumer "$work_dir" $SINK_URI "$changefeed_config" ;;
+	storage) run_storage_consumer "$work_dir" $SINK_URI "$changefeed_config" "" ;;
+	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI --config "$changefeed_config" ;;
 	esac
 
 	run_sql "CREATE DATABASE maintainer_failover_when_operator;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}

@@ -39,9 +39,9 @@ EOF
 	fi
 	cdc_cli_changefeed create --sink-uri="$SINK_URI" --config $WORK_DIR/pulsar_test.toml
 	case $SINK_TYPE in
-	kafka) run_kafka_consumer $WORK_DIR $SINK_URI ;;
-	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
-	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI --oauth2-private-key ${WORK_DIR}/credential.json --oauth2-issuer-url "http://localhost:9096" -- oauth2-client-id "1234" ;;
+	kafka) run_kafka_consumer $WORK_DIR $SINK_URI $WORK_DIR/pulsar_test.toml ;;
+	storage) run_storage_consumer $WORK_DIR $SINK_URI $WORK_DIR/pulsar_test.toml "" ;;
+	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI --config $WORK_DIR/pulsar_test.toml --oauth2-private-key ${WORK_DIR}/credential.json --oauth2-issuer-url "http://localhost:9096" -- oauth2-client-id "1234" ;;
 	esac
 }
 
