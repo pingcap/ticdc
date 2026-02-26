@@ -16,12 +16,15 @@ package cloudstorage
 import (
 	"context"
 
+	"github.com/pingcap/log"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/hash"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/utils/chann"
+	"go.uber.org/zap"
 )
 
 // eventFragment is used to attach a sequence number to TxnCallbackableEvent.
@@ -39,7 +42,17 @@ type eventFragment struct {
 	encodedMsgs []*common.Message
 }
 
-func newEventFragment(seq uint64, version cloudstorage.VersionedTableName, event *commonEvent.DMLEvent) eventFragment {
+func newEventFragment(seq uint64, event *commonEvent.DMLEvent) eventFragment {
+	version := cloudstorage.VersionedTableName{
+		TableNameWithPhysicTableID: commonType.TableName{
+			Schema:      event.TableInfo.GetSchemaName(),
+			Table:       event.TableInfo.GetTableName(),
+			TableID:     event.PhysicalTableID,
+			IsPartition: event.TableInfo.IsPartitionTable(),
+		},
+		TableInfoVersion: event.TableInfoVersion,
+		DispatcherID:     event.GetDispatcherID(),
+	}
 	return eventFragment{
 		seqNumber:      seq,
 		versionedTable: version,
@@ -51,10 +64,12 @@ func newEventFragment(seq uint64, version cloudstorage.VersionedTableName, event
 // out of order.
 type defragmenter struct {
 	lastDispatchedSeq uint64
-	future            map[uint64]eventFragment
-	inputCh           <-chan eventFragment
-	outputChs         []*chann.DrainableChann[eventFragment]
-	hasher            *hash.PositionInertia
+
+	// future record out-of-order events
+	future    map[uint64]eventFragment
+	inputCh   <-chan eventFragment
+	outputChs []*chann.DrainableChann[eventFragment]
+	hasher    *hash.PositionInertia
 }
 
 func newDefragmenter(
@@ -75,7 +90,7 @@ func (d *defragmenter) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			d.future = nil
-			return errors.Trace(ctx.Err())
+			return context.Cause(ctx)
 		case frag, ok := <-d.inputCh:
 			if !ok {
 				return nil
@@ -87,7 +102,9 @@ func (d *defragmenter) Run(ctx context.Context) error {
 			} else if frag.seqNumber > next {
 				d.future[frag.seqNumber] = frag
 			} else {
-				return nil
+				log.Error("fragment out of order, this should not happen.",
+					zap.Uint64("expected", next), zap.Uint64("seq", frag.seqNumber))
+				return errors.ErrStorageSinkSendFailed.FastGen("out of order fragment, expect %d, but got %d", next, frag.seqNumber)
 			}
 		}
 	}
@@ -107,12 +124,12 @@ func (d *defragmenter) writeMsgsConsecutive(
 		default:
 		}
 		next := d.lastDispatchedSeq + 1
-		if frag, ok := d.future[next]; ok {
-			delete(d.future, next)
-			d.dispatchFragToDMLWorker(frag)
-		} else {
+		frag, ok := d.future[next]
+		if !ok {
 			return
 		}
+		delete(d.future, next)
+		d.dispatchFragToDMLWorker(frag)
 	}
 }
 

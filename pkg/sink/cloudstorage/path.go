@@ -156,13 +156,12 @@ func NewFilePathGenerator(
 	storage storage.ExternalStorage,
 	extension string,
 ) *FilePathGenerator {
-	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 	return &FilePathGenerator{
 		changefeedID: changefeedID,
 		config:       config,
 		extension:    extension,
 		storage:      storage,
-		pdClock:      pdClock,
+		pdClock:      appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		fileIndex:    make(map[VersionedTableName]*indexWithDate),
 		hasher:       hash.NewPositionInertia(),
 		versionMap:   make(map[VersionedTableName]uint64),
@@ -196,11 +195,11 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	// Case 1: point check if the schema file exists.
 	tblSchemaFile, err := def.GenerateSchemaFilePath()
 	if err != nil {
-		return false, err
+		return false, errors.WrapError(errors.ErrStorageSinkSendFailed, err)
 	}
 	exist, err := f.storage.FileExists(ctx, tblSchemaFile)
 	if err != nil {
-		return false, err
+		return false, errors.WrapError(errors.ErrStorageSinkSendFailed, err)
 	}
 	if exist {
 		f.versionMap[table] = table.TableInfoVersion
@@ -241,7 +240,7 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 		return nil
 	})
 	if err != nil {
-		return false, err
+		return false, errors.WrapError(errors.ErrStorageSinkSendFailed, err)
 	}
 	if hasNewerSchemaVersion {
 		return true, nil
@@ -273,10 +272,13 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	}
 	encodedDetail, err := def.MarshalWithQuery()
 	if err != nil {
-		return false, err
+		return false, errors.WrapError(errors.ErrStorageSinkSendFailed, err)
 	}
 	f.versionMap[table] = table.TableInfoVersion
-	return false, f.storage.WriteFile(ctx, tblSchemaFile, encodedDetail)
+	if err = f.storage.WriteFile(ctx, tblSchemaFile, encodedDetail); err != nil {
+		return false, errors.WrapError(errors.ErrStorageSinkSendFailed, err)
+	}
+	return false, nil
 }
 
 // SetClock is used for unit test

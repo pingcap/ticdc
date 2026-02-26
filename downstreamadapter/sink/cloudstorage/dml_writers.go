@@ -90,34 +90,18 @@ func (d *dmlWriters) Run(ctx context.Context) error {
 		return d.defragmenter.Run(ctx)
 	})
 
-	for i := 0; i < len(d.writers); i++ {
+	for _, w := range d.writers {
 		eg.Go(func() error {
-			// UnlimitedChannel will block when there is no event, they cannot dirrectly find ctx.Done()
-			// Thus, we need to close the channel when the context is done
-			defer d.encodeGroup.inputCh.Close()
-			return d.writers[i].Run(ctx)
+			return w.Run(ctx)
 		})
 	}
 	return eg.Wait()
 }
 
 func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
-	tbl := cloudstorage.VersionedTableName{
-		TableNameWithPhysicTableID: commonType.TableName{
-			Schema:      event.TableInfo.GetSchemaName(),
-			Table:       event.TableInfo.GetTableName(),
-			TableID:     event.PhysicalTableID,
-			IsPartition: event.TableInfo.IsPartitionTable(),
-		},
-		TableInfoVersion: event.TableInfoVersion,
-		DispatcherID:     event.GetDispatcherID(),
-	}
 	seq := atomic.AddUint64(&d.lastSeqNum, 1)
-	_ = d.statistics.RecordBatchExecution(func() (int, int64, error) {
-		// emit a TxnCallbackableEvent encoupled with a sequence number starting from one.
-		d.msgCh.Push(newEventFragment(seq, tbl, event))
-		return int(event.Len()), event.GetSize(), nil
-	})
+	// emit a TxnCallbackableEvent encoupled with a sequence number starting from one.
+	d.msgCh.Push(newEventFragment(seq, event))
 }
 
 func (d *dmlWriters) close() {

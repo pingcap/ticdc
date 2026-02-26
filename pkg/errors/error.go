@@ -297,6 +297,10 @@ var (
 		"filename in storage sink is invalid",
 		errors.RFCCodeText("CDC:ErrStorageSinkInvalidFileName"),
 	)
+	ErrStorageSinkSendFailed = errors.Normalize(
+		"storage sink send events failed",
+		errors.RFCCodeText("CDC:ErrStorageSinkSendFailed"),
+	)
 
 	// utilities related errors
 	ErrToTLSConfigFailed = errors.Normalize(
