@@ -15,6 +15,7 @@ package main
 
 import (
 	"context"
+	"strings"
 
 	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/apache/pulsar-client-go/pulsar/auth"
@@ -35,9 +36,9 @@ type consumer struct {
 func newConsumer(ctx context.Context, option *option) *consumer {
 	var pulsarURL string
 	if len(option.ca) != 0 {
-		pulsarURL = "pulsar+ssl" + "://" + option.address[0]
+		pulsarURL = "pulsar+ssl" + "://" + strings.Join(option.address, ",")
 	} else {
-		pulsarURL = "pulsar" + "://" + option.address[0]
+		pulsarURL = "pulsar" + "://" + strings.Join(option.address, ",")
 	}
 	topicName := option.topic
 	subscriptionName := "pulsar-test-subscription"
