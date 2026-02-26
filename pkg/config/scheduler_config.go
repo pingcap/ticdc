@@ -125,6 +125,7 @@ func (c *ChangefeedSchedulerConfig) ValidateAndAdjust(sinkURI *url.URL) error {
 	if util.GetOrZero(c.RegionCountPerSpan) <= 0 {
 		return errors.New("region-count-per-span must be larger than 0")
 	}
+
 	// Keep the initial split granularity bounded by the table split threshold.
 	regionThreshold := util.GetOrZero(c.RegionThreshold)
 	regionCountPerSpan := util.GetOrZero(c.RegionCountPerSpan)
