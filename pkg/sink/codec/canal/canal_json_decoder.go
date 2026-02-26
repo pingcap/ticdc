@@ -208,18 +208,22 @@ func buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string
 		mysqlType := strings.ToLower(t.DatabaseTypeName())
 
 		var value string
-		rawValue := fmt.Sprintf("%v", holder.Values[i])
-		if common.IsBinaryMySQLType(mysqlType) {
-			rawValue, err := bytesDecoder.Bytes([]byte(rawValue))
-			if err != nil {
-				log.Panic("decode binary value failed", zap.String("value", util.RedactAny(rawValue)), zap.Error(err))
+		switch rawValue := holder.Values[i].(type) {
+		case []uint8:
+			if common.IsBinaryMySQLType(mysqlType) {
+				rawValue, err := bytesDecoder.Bytes(rawValue)
+				if err != nil {
+					log.Panic("decode binary value failed", zap.String("value", util.RedactAny(rawValue)), zap.Error(err))
+				}
+				value = string(rawValue)
+			} else if strings.Contains(mysqlType, "bit") || strings.Contains(mysqlType, "set") {
+				bitValue := common.MustBinaryLiteralToInt(rawValue)
+				value = strconv.FormatUint(bitValue, 10)
+			} else {
+				value = string(rawValue)
 			}
-			value = string(rawValue)
-		} else if strings.Contains(mysqlType, "bit") || strings.Contains(mysqlType, "set") {
-			bitValue := common.MustBinaryLiteralToInt([]byte(rawValue))
-			value = strconv.FormatUint(bitValue, 10)
-		} else {
-			value = rawValue
+		default:
+			value = fmt.Sprintf("%v", rawValue)
 		}
 		mysqlTypeMap[name] = mysqlType
 		data[name] = value
