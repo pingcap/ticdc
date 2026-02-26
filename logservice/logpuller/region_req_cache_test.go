@@ -279,3 +279,35 @@ func TestRequestCacheAdd_WithStoppedRegion(t *testing.T) {
 	// The stopped region should be cleaned up
 	require.Equal(t, 0, cache.getPendingCount())
 }
+
+func TestRequestCacheMarkSent_DuplicateReleaseSlot(t *testing.T) {
+	cache := newRequestCache(10)
+	ctx := context.Background()
+
+	region := createTestRegionInfo(1, 1)
+
+	ok, err := cache.add(ctx, region, false)
+	require.True(t, ok)
+	require.NoError(t, err)
+
+	// Add a duplicate request for the same region. It should not leak pendingCount even if
+	// markSent overwrites the existing entry.
+	ok, err = cache.add(ctx, region, false)
+	require.True(t, ok)
+	require.NoError(t, err)
+	require.Equal(t, 2, cache.getPendingCount())
+
+	req1, err := cache.pop(ctx)
+	require.NoError(t, err)
+	cache.markSent(req1)
+	require.Equal(t, 2, cache.getPendingCount())
+
+	req2, err := cache.pop(ctx)
+	require.NoError(t, err)
+	cache.markSent(req2)
+	require.Equal(t, 1, cache.getPendingCount())
+
+	// Finish the remaining tracked request.
+	require.True(t, cache.resolve(region.subscribedSpan.subID, region.verID.GetID()))
+	require.Equal(t, 0, cache.getPendingCount())
+}
