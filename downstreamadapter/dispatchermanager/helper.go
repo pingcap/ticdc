@@ -249,6 +249,13 @@ func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *Dispatcher
 	return false
 }
 
+func isRedoDispatcherManagerReady(dispatcherManager *DispatcherManager) bool {
+	return dispatcherManager.RedoEnable &&
+		dispatcherManager.redoSink != nil &&
+		dispatcherManager.redoDispatcherMap != nil &&
+		dispatcherManager.redoSchemaIDToDispatchers != nil
+}
+
 // preCheckForSchedulerHandler validates a scheduling request and decides whether it should be applied.
 //
 // It returns the stable key used in currentOperatorMap (dispatcherID), and a boolean indicating whether the
@@ -277,7 +284,7 @@ func preCheckForSchedulerHandler(req SchedulerDispatcherRequest, dispatcherManag
 	}
 
 	isRedo := common.IsRedoMode(req.Config.Mode)
-	if isRedo && (!dispatcherManager.RedoEnable || dispatcherManager.redoDispatcherMap == nil) {
+	if isRedo && !isRedoDispatcherManagerReady(dispatcherManager) {
 		return common.DispatcherID{}, false
 	}
 	if _, operatorExists := dispatcherManager.currentOperatorMap.Load(operatorKey); operatorExists {

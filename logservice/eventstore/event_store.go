@@ -236,6 +236,8 @@ type eventStore struct {
 
 	// compressionThreshold is the size in bytes above which a value will be compressed.
 	compressionThreshold int
+	// enableZstdCompression controls whether to enable zstd compression for large values.
+	enableZstdCompression bool
 }
 
 const (
@@ -276,7 +278,8 @@ func New(
 				return decoder
 			},
 		},
-		compressionThreshold: config.GetGlobalServerConfig().Debug.EventStore.CompressionThreshold,
+		compressionThreshold:  config.GetGlobalServerConfig().Debug.EventStore.CompressionThreshold,
+		enableZstdCompression: config.GetGlobalServerConfig().Debug.EventStore.EnableZstdCompression,
 	}
 	store.gcManager = newGCManager(store.dbs, deleteDataRange, compactDataRange)
 
@@ -1110,9 +1113,7 @@ func diskSpaceUsage(m *pebble.Metrics) uint64 {
 	}
 	usageBytes += m.Table.ObsoleteSize
 	usageBytes += m.Table.ZombieSize
-	if m.Compact.InProgressBytes > 0 {
-		usageBytes += uint64(m.Compact.InProgressBytes)
-	}
+	usageBytes += uint64(m.Compact.InProgressBytes)
 	return usageBytes
 }
 
@@ -1310,7 +1311,7 @@ func (e *eventStore) writeEvents(
 			valueBytesBefore := int64(len(rawValue))
 			valueBytesAfter := valueBytesBefore
 			value := rawValue
-			if len(rawValue) > e.compressionThreshold {
+			if e.enableZstdCompression && len(rawValue) > e.compressionThreshold {
 				maxEncodedSize := encoder.MaxEncodedSize(len(rawValue))
 				if cap(dstBuf) < maxEncodedSize {
 					dstBuf = make([]byte, 0, maxEncodedSize)
