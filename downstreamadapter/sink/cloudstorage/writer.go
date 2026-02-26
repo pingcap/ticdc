@@ -16,9 +16,6 @@ package cloudstorage
 import (
 	"bytes"
 	"context"
-	cryptorand "crypto/rand"
-	"encoding/json"
-	"math/big"
 	"path"
 	"strconv"
 	"sync/atomic"
@@ -28,13 +25,11 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	pmetrics "github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/failpointrecord"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/prometheus/client_golang/prometheus"
@@ -215,210 +210,6 @@ func (d *writer) ignoreTableTask(task *singleTableTask) {
 		if msg.Callback != nil {
 			msg.Callback()
 		}
-	}
-}
-
-// mutateMessageValueForFailpoint rewrites a non-primary-key column value in
-// canal-json encoded messages so that the multi-cluster-consistency-checker
-// sees the original row as "lost" and the mutated row as "redundant".
-//
-// canal-json messages in msg.Value are separated by CRLF ("\r\n"). For every
-// message we:
-//  1. Parse the JSON to extract "pkNames" and "data".
-//  2. Pick the first non-PK column in data[0] and replace its value with nil.
-//  3. Re-marshal the whole message.
-//
-// This function is only called from within a failpoint.Inject block.
-// It returns mutated row records grouped by whether `_tidb_origin_ts` is mutated.
-func mutateMessageValueForFailpoint(
-	msg *common.Message,
-	rowRecords []failpointrecord.RowRecord,
-) ([]failpointrecord.RowRecord, []failpointrecord.RowRecord) {
-	if len(msg.Value) == 0 {
-		return nil, nil
-	}
-	terminator := []byte("\r\n")
-	parts := bytes.Split(msg.Value, terminator)
-	mutatedOffsets := make([]int, 0)
-	originTsMutatedOffsets := make([]int, 0)
-	rowOffset := 0
-	for i, part := range parts {
-		if len(part) == 0 {
-			continue
-		}
-
-		// Decode the full message preserving all fields.
-		var m map[string]json.RawMessage
-		if err := json.Unmarshal(part, &m); err != nil {
-			continue
-		}
-
-		// Extract pkNames so we can skip PK columns.
-		var pkNames []string
-		if raw, ok := m["pkNames"]; ok {
-			_ = json.Unmarshal(raw, &pkNames)
-		}
-		pkSet := make(map[string]struct{}, len(pkNames))
-		for _, pk := range pkNames {
-			pkSet[pk] = struct{}{}
-		}
-
-		// Extract the "data" array.
-		rawData, ok := m["data"]
-		if !ok {
-			continue
-		}
-		var data []map[string]any
-		if err := json.Unmarshal(rawData, &data); err != nil || len(data) == 0 {
-			continue
-		}
-
-		// Find the first row that has a non-PK column and mutate it to nil.
-		mutated := false
-		mutatedRowOffset := 0
-		mutatedColumn := ""
-		for rowIdx, row := range data {
-			col, ok := selectColumnToMutate(row, pkSet)
-			if !ok {
-				continue
-			}
-			if col == commonEvent.OriginTsColumn {
-				nextValue, ok := incrementOriginTSValue(row[col])
-				if !ok {
-					continue
-				}
-				row[col] = nextValue
-			} else {
-				row[col] = nil
-			}
-			mutated = true
-			mutatedRowOffset = rowIdx
-			mutatedColumn = col
-			if mutated {
-				break
-			}
-		}
-		if !mutated {
-			rowOffset += len(data)
-			continue
-		}
-
-		// Write the mutated data back.
-		newData, err := json.Marshal(data)
-		if err != nil {
-			rowOffset += len(data)
-			continue
-		}
-		m["data"] = json.RawMessage(newData)
-
-		newPart, err := json.Marshal(m)
-		if err != nil {
-			rowOffset += len(data)
-			continue
-		}
-		parts[i] = newPart
-
-		if mutatedColumn == commonEvent.OriginTsColumn {
-			originTsMutatedOffsets = append(originTsMutatedOffsets, rowOffset+mutatedRowOffset)
-		} else {
-			mutatedOffsets = append(mutatedOffsets, rowOffset+mutatedRowOffset)
-		}
-		rowOffset += len(data)
-	}
-	msg.Value = bytes.Join(parts, terminator)
-	return extractMutatedRowRecordsByOffset(rowRecords, mutatedOffsets),
-		extractMutatedRowRecordsByOffset(rowRecords, originTsMutatedOffsets)
-}
-
-func selectColumnToMutate(row map[string]any, pkSet map[string]struct{}) (string, bool) {
-	// Prefer mutating _tidb_origin_ts when it exists and is non-NULL.
-	// Otherwise, mutate other non-PK columns.
-	if _, isPK := pkSet[commonEvent.OriginTsColumn]; !isPK {
-		if originTs, ok := row[commonEvent.OriginTsColumn]; ok && originTs != nil {
-			return commonEvent.OriginTsColumn, true
-		}
-	}
-
-	columns := make([]string, 0, len(row))
-	for col := range row {
-		if _, isPK := pkSet[col]; isPK {
-			continue
-		}
-		if col == commonEvent.OriginTsColumn {
-			continue
-		}
-		// Keep the failpoint mutation meaningful: skip columns that are already NULL.
-		if row[col] == nil {
-			continue
-		}
-		columns = append(columns, col)
-	}
-	if len(columns) == 0 {
-		return "", false
-	}
-	idx, err := cryptorand.Int(cryptorand.Reader, big.NewInt(int64(len(columns))))
-	if err != nil {
-		// Best-effort fallback in failpoint path.
-		return columns[0], true
-	}
-	return columns[idx.Int64()], true
-}
-
-func extractMutatedRowRecordsByOffset(
-	rowRecords []failpointrecord.RowRecord,
-	offsets []int,
-) []failpointrecord.RowRecord {
-	if len(offsets) == 0 || len(rowRecords) == 0 {
-		return nil
-	}
-	ret := make([]failpointrecord.RowRecord, 0, len(offsets))
-	for _, offset := range offsets {
-		if offset < 0 || offset >= len(rowRecords) {
-			continue
-		}
-		ret = append(ret, rowRecords[offset])
-	}
-	return ret
-}
-
-func incrementOriginTSValue(v any) (any, bool) {
-	switch value := v.(type) {
-	case string:
-		originTS, err := strconv.ParseUint(value, 10, 64)
-		if err != nil {
-			return nil, false
-		}
-		return strconv.FormatUint(originTS+1, 10), true
-	case float64:
-		return value + 1, true
-	case json.Number:
-		originTS, err := value.Int64()
-		if err != nil {
-			return nil, false
-		}
-		return json.Number(strconv.FormatInt(originTS+1, 10)), true
-	case int:
-		return value + 1, true
-	case int8:
-		return value + 1, true
-	case int16:
-		return value + 1, true
-	case int32:
-		return value + 1, true
-	case int64:
-		return value + 1, true
-	case uint:
-		return value + 1, true
-	case uint8:
-		return value + 1, true
-	case uint16:
-		return value + 1, true
-	case uint32:
-		return value + 1, true
-	case uint64:
-		return value + 1, true
-	default:
-		return nil, false
 	}
 }
 

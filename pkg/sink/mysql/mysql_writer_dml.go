@@ -16,11 +16,8 @@ package mysql
 import (
 	"sort"
 
-	"github.com/pingcap/failpoint"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/sink/failpointrecord"
-	"github.com/pingcap/tidb/pkg/parser/mysql"
 )
 
 func groupEventsByTable(events []*commonEvent.DMLEvent) map[int64][][]*commonEvent.DMLEvent {
@@ -116,21 +113,6 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 }
 
 func (w *Writer) genActiveActiveSQL(tableInfo *common.TableInfo, eventsInGroup []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
-	// Failpoint: bypass the LWW UPSERT and fall back to normal SQL (REPLACE INTO
-	// or plain INSERT). This makes the downstream TiDB write the row without the
-	// LWW condition, creating a genuine LWW violation that naturally flows through
-	// the pipeline to S3.
-	// Usage: failpoint.Enable(".../mysqlSinkBypassLWW", "return")
-	//        failpoint.Enable(".../mysqlSinkBypassLWW", "50%return")
-	failpoint.Inject("mysqlSinkBypassLWW", func() {
-		rowRecords := dmlEventsToRowRecords(tableInfo, eventsInGroup)
-		failpointrecord.Write("mysqlSinkBypassLWW", rowRecords)
-		if !w.shouldGenBatchSQL(tableInfo, eventsInGroup) {
-			failpoint.Return(w.generateNormalSQLs(eventsInGroup))
-		}
-		failpoint.Return(w.generateBatchSQL(eventsInGroup))
-	})
-
 	if !w.shouldGenBatchSQL(tableInfo, eventsInGroup) {
 		return w.generateActiveActiveNormalSQLs(eventsInGroup)
 	}
@@ -172,62 +154,6 @@ func (w *Writer) shouldGenBatchSQL(tableInfo *common.TableInfo, events []*common
 	}
 
 	return allRowInSameSafeMode(w.cfg.SafeMode, events)
-}
-
-// pkColInfo holds the index and name of a primary key column.
-type pkColInfo struct {
-	index int
-	name  string
-}
-
-// findPKColumns returns the PK column indexes and names from a TableInfo.
-func findPKColumns(tableInfo *common.TableInfo) []pkColInfo {
-	var cols []pkColInfo
-	for i, col := range tableInfo.GetColumns() {
-		if col != nil && mysql.HasPriKeyFlag(col.GetFlag()) {
-			cols = append(cols, pkColInfo{index: i, name: col.Name.O})
-		}
-	}
-	return cols
-}
-
-// dmlEventsToRowRecords converts DMLEvents to failpointrecord.RowRecords for
-// writing to the failpoint record file.
-func dmlEventsToRowRecords(tableInfo *common.TableInfo, events []*commonEvent.DMLEvent) []failpointrecord.RowRecord {
-	pkCols := findPKColumns(tableInfo)
-	originTsCol, hasOriginTsCol := tableInfo.GetColumnInfoByName(commonEvent.OriginTsColumn)
-	originTsOffset, hasOriginTsOffset := tableInfo.GetColumnOffsetByName(commonEvent.OriginTsColumn)
-	var records []failpointrecord.RowRecord
-	for _, event := range events {
-		event.Rewind()
-		for {
-			rowChange, ok := event.GetNextRow()
-			if !ok {
-				break
-			}
-			r := &rowChange.Row
-			if rowChange.RowType == common.RowTypeDelete {
-				r = &rowChange.PreRow
-			}
-			pks := make(map[string]any, len(pkCols))
-			for _, pk := range pkCols {
-				pks[pk.name] = common.ExtractColVal(r, tableInfo.GetColumns()[pk.index], pk.index)
-			}
-			originTs := uint64(0)
-			if hasOriginTsCol && hasOriginTsOffset {
-				originTs = failpointrecord.NormalizeOriginTs(
-					common.ExtractColVal(r, originTsCol, originTsOffset),
-				)
-			}
-			records = append(records, failpointrecord.RowRecord{
-				CommitTs:    event.CommitTs,
-				OriginTs:    originTs,
-				PrimaryKeys: pks,
-			})
-		}
-		event.Rewind()
-	}
-	return records
 }
 
 // allRowInSameSafeMode determines whether all DMLEvents in a batch have the same safe mode status.
