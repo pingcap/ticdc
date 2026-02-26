@@ -14,13 +14,13 @@
 package helper
 
 import (
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	"go.uber.org/atomic"
 )
 
 // NewTxnPostFlushRowCallback returns a row-level callback that triggers txn-level
 // PostFlush exactly once when the callback has been invoked totalCount times.
-func NewTxnPostFlushRowCallback(event *commonEvent.DMLEvent, totalCount uint64) func() {
+func NewTxnPostFlushRowCallback(event *event.DMLEvent, totalCount uint64) func() {
 	var calledCount atomic.Uint64
 	return func() {
 		if calledCount.Inc() == totalCount {

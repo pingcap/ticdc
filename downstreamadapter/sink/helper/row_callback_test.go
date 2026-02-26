@@ -16,13 +16,13 @@ package helper
 import (
 	"testing"
 
-	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/stretchr/testify/require"
 )
 
 func TestTxnPostFlushRowCallback(t *testing.T) {
-	event := commonEvent.NewDMLEvent(commonType.NewDispatcherID(), 1, 1, 1, nil)
+	event := commonEvent.NewDMLEvent(common.NewDispatcherID(), 1, 1, 1, nil)
 
 	flushCount := 0
 	event.AddPostFlushFunc(func() {
