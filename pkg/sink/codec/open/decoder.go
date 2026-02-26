@@ -19,6 +19,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -603,8 +604,8 @@ func formatColumn(c column, ft types.FieldType) column {
 		switch v := c.Value.(type) {
 		case json.Number:
 			data = string(v)
-		case []uint8:
-			data = string(v)
+		case int64, uint64:
+			data = fmt.Sprintf("%v", v)
 		default:
 			log.Panic("invalid column value, please report a bug", zap.String("col", util.RedactAny(c)), zap.Any("type", v))
 		}
