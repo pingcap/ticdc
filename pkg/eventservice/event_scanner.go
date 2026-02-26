@@ -140,7 +140,7 @@ func (s *eventScanner) scan(
 
 	// Execute event scanning and merging
 	merger := newEventMerger(events)
-	interrupted, err := s.scanAndMergeEvents(sess, merger, iter, s.mode)
+	interrupted, err := s.scanAndMergeEvents(sess, merger, iter)
 	return sess.eventBytes, sess.events, interrupted, err
 }
 
@@ -187,11 +187,10 @@ func (s *eventScanner) scanAndMergeEvents(
 	session *session,
 	merger *eventMerger,
 	iter eventstore.EventIterator,
-	mode int64,
 ) (bool, error) {
 	tableID := session.dataRange.Span.TableID
 	dispatcher := session.dispatcherStat
-	processor := newDMLProcessor(s.mounter, s.schemaGetter, dispatcher.filter, dispatcher.info.IsOutputRawChangeEvent(), mode)
+	processor := newDMLProcessor(s.mounter, s.schemaGetter, dispatcher.filter, dispatcher.info.IsOutputRawChangeEvent(), s.mode)
 
 	for {
 		shouldStop, err := s.checkScanConditions(session)
