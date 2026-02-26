@@ -16,6 +16,7 @@ package cloudstorage
 import (
 	"context"
 
+	"github.com/pingcap/failpoint"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
@@ -90,6 +91,15 @@ func (eg *encodingGroup) runEncoder(ctx context.Context) error {
 				return err
 			}
 			frag.encodedMsgs = encoder.Build()
+			// Global switch for cloudstorage sink message failpoints.
+			// Usage:
+			//   failpoint.Enable(".../cloudStorageSinkMessageFailpointSwitch", "return(false)") // disable
+			//   failpoint.Enable(".../cloudStorageSinkMessageFailpointSwitch", "return(true)")  // enable
+			failpoint.Inject("cloudStorageSinkMessageFailpointSwitch", func(val failpoint.Value) {
+				if enabled, ok := val.(bool); ok && enabled {
+					applyFailpointsOnEncodedMessages(frag)
+				}
+			})
 
 			select {
 			case <-ctx.Done():
