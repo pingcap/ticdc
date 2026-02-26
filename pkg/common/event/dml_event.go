@@ -17,7 +17,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/failpoint"
@@ -29,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -404,7 +404,7 @@ type DMLEvent struct {
 	// checkpoint related logic.
 	PostTxnFlushed []func() `json:"-"`
 	// postEnqueueCalled ensures PostTxnEnqueued callbacks are triggered at most once.
-	postEnqueueCalled uint32 `json:"-"`
+	postEnqueueCalled atomic.Bool `json:"-"`
 
 	// eventSize is the size of the event in bytes. It is set when it's unmarshaled.
 	eventSize int64 `json:"-"`
@@ -656,7 +656,7 @@ func (t *DMLEvent) PostFlush() {
 // This stage does not mean data is already written to downstream. The method is
 // idempotent and guarantees enqueue callbacks run at most once.
 func (t *DMLEvent) PostEnqueue() {
-	if !atomic.CompareAndSwapUint32(&t.postEnqueueCalled, 0, 1) {
+	if !t.postEnqueueCalled.CAS(false, true) {
 		return
 	}
 	for _, f := range t.PostTxnEnqueued {

@@ -14,7 +14,6 @@
 package event
 
 import (
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +25,7 @@ import (
 	tidbTypes "github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/atomic"
 )
 
 func TestFilterDMLEventNormalTablePassthrough(t *testing.T) {
@@ -327,13 +327,13 @@ func TestFilterDMLEventKeepsPostEnqueueCallbacksOnFilteredEvent(t *testing.T) {
 			{int64(1), ts},
 		})
 
-	var enqueueCalled int64
-	var flushCalled int64
+	var enqueueCalled atomic.Int64
+	var flushCalled atomic.Int64
 	event.AddPostEnqueueFunc(func() {
-		atomic.AddInt64(&enqueueCalled, 1)
+		enqueueCalled.Inc()
 	})
 	event.AddPostFlushFunc(func() {
-		atomic.AddInt64(&flushCalled, 1)
+		flushCalled.Inc()
 	})
 
 	filtered, skip := FilterDMLEvent(event, false, nil)
@@ -343,8 +343,8 @@ func TestFilterDMLEventKeepsPostEnqueueCallbacksOnFilteredEvent(t *testing.T) {
 
 	filtered.PostEnqueue()
 	filtered.PostFlush()
-	require.Equal(t, int64(1), atomic.LoadInt64(&enqueueCalled))
-	require.Equal(t, int64(1), atomic.LoadInt64(&flushCalled))
+	require.Equal(t, int64(1), enqueueCalled.Load())
+	require.Equal(t, int64(1), flushCalled.Load())
 }
 
 func newTestTableInfo(t *testing.T, activeActive, softDelete bool) *commonpkg.TableInfo {

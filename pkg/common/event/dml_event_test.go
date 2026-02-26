@@ -16,7 +16,6 @@ package event
 import (
 	"encoding/binary"
 	"sync"
-	"sync/atomic"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -25,6 +24,7 @@ import (
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/atomic"
 )
 
 func TestDMLEventBasicEncodeAndDecode(t *testing.T) {
@@ -349,38 +349,38 @@ func TestDMLEventPostEnqueueFuncs(t *testing.T) {
 	t.Parallel()
 
 	event := &DMLEvent{}
-	var called int64
+	var called atomic.Int64
 	event.AddPostEnqueueFunc(func() {
-		atomic.AddInt64(&called, 1)
+		called.Inc()
 	})
 	event.AddPostEnqueueFunc(func() {
-		atomic.AddInt64(&called, 1)
+		called.Inc()
 	})
 
 	event.PostEnqueue()
 	event.PostEnqueue()
 
-	require.Equal(t, int64(2), atomic.LoadInt64(&called))
+	require.Equal(t, int64(2), called.Load())
 }
 
 func TestDMLEventPostFlushTriggersPostEnqueueOnce(t *testing.T) {
 	t.Parallel()
 
 	event := &DMLEvent{}
-	var enqueueCalled int64
-	var flushCalled int64
+	var enqueueCalled atomic.Int64
+	var flushCalled atomic.Int64
 	event.AddPostEnqueueFunc(func() {
-		atomic.AddInt64(&enqueueCalled, 1)
+		enqueueCalled.Inc()
 	})
 	event.AddPostFlushFunc(func() {
-		atomic.AddInt64(&flushCalled, 1)
+		flushCalled.Inc()
 	})
 
 	event.PostFlush()
 	event.PostFlush()
 
-	require.Equal(t, int64(1), atomic.LoadInt64(&enqueueCalled))
-	require.Equal(t, int64(2), atomic.LoadInt64(&flushCalled))
+	require.Equal(t, int64(1), enqueueCalled.Load())
+	require.Equal(t, int64(2), flushCalled.Load())
 }
 
 func TestDMLEventPostFlushRunsFlushBeforePostEnqueueFallback(t *testing.T) {
@@ -405,9 +405,9 @@ func TestDMLEventPostEnqueueConcurrentWithPostFlush(t *testing.T) {
 	t.Parallel()
 
 	event := &DMLEvent{}
-	var enqueueCalled int64
+	var enqueueCalled atomic.Int64
 	event.AddPostEnqueueFunc(func() {
-		atomic.AddInt64(&enqueueCalled, 1)
+		enqueueCalled.Inc()
 	})
 
 	var wg sync.WaitGroup
@@ -425,5 +425,5 @@ func TestDMLEventPostEnqueueConcurrentWithPostFlush(t *testing.T) {
 	}
 	wg.Wait()
 
-	require.Equal(t, int64(1), atomic.LoadInt64(&enqueueCalled))
+	require.Equal(t, int64(1), enqueueCalled.Load())
 }

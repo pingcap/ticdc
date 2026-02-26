@@ -741,9 +741,9 @@ func TestBatchDMLEventsPartialFlush(t *testing.T) {
 	dispatcher := newDispatcherForTest(mockSink, tableSpan)
 
 	// Create a callback that records when it's called
-	var callbackCalled bool
+	var callbackCalled atomic.Bool
 	wakeCallback := func() {
-		callbackCalled = true
+		callbackCalled.Store(true)
 	}
 
 	nodeID := node.NewID()
@@ -755,25 +755,42 @@ func TestBatchDMLEventsPartialFlush(t *testing.T) {
 		NewDispatcherEvent(&nodeID, dmlEvent3),
 	}
 
-	failpoint.Enable("github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockAddDMLEvents", `pause`)
-
-	go func() {
-		block := dispatcher.HandleEvents(dispatcherEvents, wakeCallback)
-		require.Equal(t, true, block)
+	require.NoError(t, failpoint.Enable("github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockAddDMLEvents", `pause`))
+	failpointEnabled := true
+	defer func() {
+		if failpointEnabled {
+			require.NoError(t, failpoint.Disable("github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockAddDMLEvents"))
+		}
 	}()
 
-	time.Sleep(1 * time.Second)
-	require.Equal(t, 1, len(mockSink.GetDMLs()))
-	mockSink.FlushDMLs()
-	require.False(t, callbackCalled)
+	resultCh := make(chan bool, 1)
+	go func() {
+		block := dispatcher.HandleEvents(dispatcherEvents, wakeCallback)
+		resultCh <- block
+	}()
 
-	failpoint.Disable("github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockAddDMLEvents")
-
-	time.Sleep(1 * time.Second)
-	require.Equal(t, 2, len(mockSink.GetDMLs()))
+	require.Eventually(t, func() bool {
+		return len(mockSink.GetDMLs()) == 1
+	}, 5*time.Second, 10*time.Millisecond)
 	mockSink.FlushDMLs()
+	require.False(t, callbackCalled.Load())
+
+	require.NoError(t, failpoint.Disable("github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockAddDMLEvents"))
+	failpointEnabled = false
+
+	require.Eventually(t, func() bool {
+		return len(mockSink.GetDMLs()) == 2
+	}, 5*time.Second, 10*time.Millisecond)
+	mockSink.FlushDMLs()
+	require.Eventually(t, func() bool {
+		return callbackCalled.Load()
+	}, 5*time.Second, 10*time.Millisecond)
 	// Now the callback should be called after all events are flushed
-	require.True(t, callbackCalled)
+	require.True(t, callbackCalled.Load())
+	require.Eventually(t, func() bool {
+		return len(mockSink.GetDMLs()) == 0
+	}, 5*time.Second, 10*time.Millisecond)
+	require.True(t, <-resultCh)
 
 	// Verify that all events were actually flushed
 	require.Equal(t, 0, len(mockSink.GetDMLs()))

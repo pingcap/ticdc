@@ -15,7 +15,6 @@ package cloudstorage
 
 import (
 	"context"
-	"sync/atomic"
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -24,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tidb/br/pkg/storage"
+	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -45,7 +45,7 @@ type dmlWriters struct {
 	writers []*writer
 
 	// last sequence number
-	lastSeqNum uint64
+	lastSeqNum atomic.Uint64
 }
 
 func newDMLWriters(
@@ -112,7 +112,7 @@ func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
 		TableInfoVersion: event.TableInfoVersion,
 		DispatcherID:     event.GetDispatcherID(),
 	}
-	seq := atomic.AddUint64(&d.lastSeqNum, 1)
+	seq := d.lastSeqNum.Inc()
 	// emit a TxnCallbackableEvent encoupled with a sequence number starting from one.
 	d.msgCh.Push(newEventFragment(seq, tbl, event))
 }
