@@ -519,6 +519,19 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 				OutputOldValue: c.Sink.OpenProtocolConfig.OutputOldValue,
 			}
 		}
+		var outboxConfig *config.OutboxConfig
+		if c.Sink.OutboxConfig != nil {
+			headerColumns := make(map[string]string, len(c.Sink.OutboxConfig.HeaderColumns))
+			for header, column := range c.Sink.OutboxConfig.HeaderColumns {
+				headerColumns[header] = column
+			}
+			outboxConfig = &config.OutboxConfig{
+				IDColumn:      c.Sink.OutboxConfig.IDColumn,
+				KeyColumn:     c.Sink.OutboxConfig.KeyColumn,
+				ValueColumn:   c.Sink.OutboxConfig.ValueColumn,
+				HeaderColumns: headerColumns,
+			}
+		}
 
 		res.Sink = &config.SinkConfig{
 			DispatchRules:                    dispatchRules,
@@ -541,6 +554,7 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 			SafeMode:                         c.Sink.SafeMode,
 			OpenProtocol:                     openProtocolConfig,
 			Debezium:                         debeziumConfig,
+			Outbox:                           outboxConfig,
 		}
 
 		if c.Sink.TxnAtomicity != nil {
@@ -875,6 +889,19 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 				OutputOldValue: cloned.Sink.OpenProtocol.OutputOldValue,
 			}
 		}
+		var outboxConfig *OutboxConfig
+		if cloned.Sink.Outbox != nil {
+			headerColumns := make(map[string]string, len(cloned.Sink.Outbox.HeaderColumns))
+			for header, column := range cloned.Sink.Outbox.HeaderColumns {
+				headerColumns[header] = column
+			}
+			outboxConfig = &OutboxConfig{
+				IDColumn:      cloned.Sink.Outbox.IDColumn,
+				KeyColumn:     cloned.Sink.Outbox.KeyColumn,
+				ValueColumn:   cloned.Sink.Outbox.ValueColumn,
+				HeaderColumns: headerColumns,
+			}
+		}
 		res.Sink = &SinkConfig{
 			Protocol:                         cloned.Sink.Protocol,
 			SchemaRegistry:                   cloned.Sink.SchemaRegistry,
@@ -896,6 +923,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 			SafeMode:                         cloned.Sink.SafeMode,
 			DebeziumConfig:                   debeziumConfig,
 			OpenProtocolConfig:               openProtocolConfig,
+			OutboxConfig:                     outboxConfig,
 		}
 
 		if cloned.Sink.TxnAtomicity != nil {
@@ -1156,6 +1184,7 @@ type SinkConfig struct {
 	DebeziumDisableSchema            *bool               `json:"debezium_disable_schema,omitempty"`
 	DebeziumConfig                   *DebeziumConfig     `json:"debezium,omitempty"`
 	OpenProtocolConfig               *OpenProtocolConfig `json:"open,omitempty"`
+	OutboxConfig                     *OutboxConfig       `json:"outbox,omitempty"`
 }
 
 // CSVConfig denotes the csv config
@@ -1527,6 +1556,15 @@ type OpenProtocolConfig struct {
 // DebeziumConfig represents the configurations for debezium protocol encoding
 type DebeziumConfig struct {
 	OutputOldValue bool `json:"output_old_value"`
+}
+
+// OutboxConfig represents configurations for outbox-json protocol encoding.
+type OutboxConfig struct {
+	IDColumn    string `json:"id_column"`
+	KeyColumn   string `json:"key_column"`
+	ValueColumn string `json:"value_column"`
+	// HeaderColumns maps output header key to source column name.
+	HeaderColumns map[string]string `json:"header_columns,omitempty"`
 }
 
 type DispatcherCount struct {
