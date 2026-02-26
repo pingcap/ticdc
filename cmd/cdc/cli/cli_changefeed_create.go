@@ -151,15 +151,13 @@ func (o *createChangefeedOptions) completeReplicaCfg() error {
 		}
 	}
 
-	uri, err := url.Parse(o.commonChangefeedOptions.sinkURI)
-	if err != nil {
+	if _, err := url.Parse(o.commonChangefeedOptions.sinkURI); err != nil {
 		return err
 	}
-
-	err = cfg.ValidateAndAdjust(uri)
-	if err != nil {
-		return err
-	}
+	// NOTE: Do not call cfg.ValidateAndAdjust here.
+	// It may try to initialize redo external storage (for example, S3) and perform a connectivity
+	// check locally, which breaks environments where only TiCDC server nodes can access S3.
+	// The server will validate and adjust the replica config during changefeed initialization.
 
 	if o.commonChangefeedOptions.schemaRegistry != "" {
 		cfg.Sink.SchemaRegistry = putil.AddressOf(o.commonChangefeedOptions.schemaRegistry)
