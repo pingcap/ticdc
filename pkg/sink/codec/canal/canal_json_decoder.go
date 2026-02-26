@@ -219,7 +219,7 @@ func buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string
 			bitValue := common.MustBinaryLiteralToInt([]byte(rawValue))
 			value = strconv.FormatUint(bitValue, 10)
 		} else {
-			value = string(rawValue)
+			value = rawValue
 		}
 		mysqlTypeMap[name] = mysqlType
 		data[name] = value
