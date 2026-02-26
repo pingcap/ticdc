@@ -1472,7 +1472,7 @@ func TestScanAndMergeEventsSingleUKUpdate(t *testing.T) {
 	merger := newEventMerger([]event.Event{})
 
 	// Execute scanAndMergeEvents
-	isInterrupted, err := scanner.scanAndMergeEvents(sess, merger, mockIter, common.DefaultMode)
+	isInterrupted, err := scanner.scanAndMergeEvents(sess, merger, mockIter)
 	events := sess.events
 
 	// Verify results
