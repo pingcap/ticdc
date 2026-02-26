@@ -23,7 +23,7 @@ func TestBatchEventsBySize(t *testing.T) {
 	handler := mockHandler{}
 	eq := newEventQueue(&handler)
 
-	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", nil, newBatcher[*mockEvent](NewBatchConfig(10, 12)))
+	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, newBatcher[*mockEvent](NewBatchConfig(10, 12)))
 	eq.initPath(path)
 
 	for i := 1; i <= 4; i++ {
@@ -38,14 +38,14 @@ func TestBatchEventsBySize(t *testing.T) {
 		})
 	}
 
-	events, _ := eq.popEvents()
+	events, _, _ := eq.popEvents()
 	require.Len(t, events, 3)
 	require.Equal(t, 1, events[0].value)
 	require.Equal(t, 2, events[1].value)
 	require.Equal(t, 3, events[2].value)
 	require.Equal(t, int64(1), eq.totalPendingLength.Load())
 
-	events, _ = eq.popEvents()
+	events, _, _ = eq.popEvents()
 	require.Len(t, events, 1)
 	require.Equal(t, 4, events[0].value)
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
@@ -55,7 +55,7 @@ func TestBatchEventsBySize_NotExceedHardBytes(t *testing.T) {
 	handler := mockHandler{}
 	eq := newEventQueue(&handler)
 
-	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", nil, newBatcher[*mockEvent](NewBatchConfig(10, 12)))
+	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, newBatcher[*mockEvent](NewBatchConfig(10, 12)))
 	eq.initPath(path)
 
 	for i := 1; i <= 3; i++ {
@@ -70,11 +70,11 @@ func TestBatchEventsBySize_NotExceedHardBytes(t *testing.T) {
 		})
 	}
 
-	events, _ := eq.popEvents()
+	events, _, _ := eq.popEvents()
 	require.Len(t, events, 2)
 	require.Equal(t, int64(1), eq.totalPendingLength.Load())
 
-	events, _ = eq.popEvents()
+	events, _, _ = eq.popEvents()
 	require.Len(t, events, 1)
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
 }

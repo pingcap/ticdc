@@ -45,6 +45,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const defaultEventCollectorBatchCount = 4096
+
 /*
 DispatcherManager manages dispatchers for a changefeed instance with responsibilities including:
 
@@ -309,7 +311,7 @@ func NewDispatcherManager(
 }
 
 func (e *DispatcherManager) getEventCollectorBatchCountAndBytes() (int, int) {
-	batchCount := e.sink.BatchCount()
+	batchCount := defaultEventCollectorBatchCount
 	batchBytes := e.sink.BatchBytes()
 
 	if count := e.config.EventCollectorBatchCount; count > 0 {

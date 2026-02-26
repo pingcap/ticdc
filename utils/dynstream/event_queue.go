@@ -14,12 +14,10 @@
 package dynstream
 
 import (
-	"fmt"
 	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/deque"
 )
 
@@ -98,28 +96,12 @@ func (q *eventQueue[A, P, T, D, H]) wakePath(path *pathInfo[A, P, T, D, H]) {
 	}
 }
 
-<<<<<<< HEAD
-func (q *eventQueue[A, P, T, D, H]) popEvents() ([]T, *pathInfo[A, P, T, D, H]) {
-=======
-func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, D, H], int) {
-	// Append the event to the buffer
-	var totalBytes int
-	appendToBuf := func(event *eventWrap[A, P, T, D, H], path *pathInfo[A, P, T, D, H]) {
-		buf = append(buf, event.event)
-		totalBytes += event.eventSize
-		path.popEvent()
-	}
-
->>>>>>> master
+func (q *eventQueue[A, P, T, D, H]) popEvents() ([]T, *pathInfo[A, P, T, D, H], int) {
 	for {
 		// We are going to update the signal directly, so we need the reference.
 		signal, ok := q.signalQueue.FrontRef()
 		if !ok {
-<<<<<<< HEAD
-			return nil, nil
-=======
-			return buf, nil, totalBytes
->>>>>>> master
+			return nil, nil, 0
 		}
 
 		if signal.eventCount == 0 {
@@ -184,16 +166,7 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, 
 			q.signalQueue.PopFront()
 		}
 		q.totalPendingLength.Add(-int64(count))
-		events, nBytes, duration := batcher.flush()
-
-<<<<<<< HEAD
-		area := fmt.Sprint(path.area)
-		metrics.DynamicStreamBatchSize.WithLabelValues(area).Observe(float64(len(events)))
-		metrics.DynamicStreamBatchBytes.WithLabelValues(area).Observe(float64(nBytes))
-		metrics.DynamicStreamBatchDuration.WithLabelValues(area).Observe(float64(duration))
-		return events, path
-=======
-		return buf, path, totalBytes
->>>>>>> master
+		events, nBytes, _ := batcher.flush()
+		return events, path, nBytes
 	}
 }

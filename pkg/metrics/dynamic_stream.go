@@ -84,7 +84,4 @@ func initDynamicStreamMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(DynamicStreamPendingQueueLen)
 	registry.MustRegister(DynamicStreamAddPathNum)
 	registry.MustRegister(DynamicStreamRemovePathNum)
-	registry.MustRegister(DynamicStreamBatchCount)
-	registry.MustRegister(DynamicStreamBatchBytes)
-	registry.MustRegister(DynamicStreamBatchDuration)
 }

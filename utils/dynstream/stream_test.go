@@ -128,11 +128,7 @@ func TestStreamBasic(t *testing.T) {
 
 	stream.start()
 	defer stream.close()
-<<<<<<< HEAD
-	pi := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test/path", nil, newDefaultBatcher[*mockEvent]())
-=======
-	pi := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test", "test/path", nil)
->>>>>>> master
+	pi := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test", "test/path", nil, newDefaultBatcher[*mockEvent]())
 	stream.addPath(pi)
 	// Test basic event handling
 	inc := &atomic.Int64{}
@@ -171,11 +167,7 @@ func TestStreamBasicWithBuffer(t *testing.T) {
 
 	stream.start()
 	defer stream.close()
-<<<<<<< HEAD
-	pi := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test/path", nil, newDefaultBatcher[*mockEvent]())
-=======
-	pi := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test", "test/path", nil)
->>>>>>> master
+	pi := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test", "test/path", nil, newDefaultBatcher[*mockEvent]())
 	stream.addPath(pi)
 	// Test basic event handling
 	inc := &atomic.Int64{}
@@ -209,11 +201,7 @@ func TestStreamBasicWithBuffer(t *testing.T) {
 
 func TestPathInfo(t *testing.T) {
 	// case 1: new path info
-<<<<<<< HEAD
-	pi := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test/path", nil, newDefaultBatcher[*mockEvent]())
-=======
-	pi := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test", "test/path", nil)
->>>>>>> master
+	pi := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test", "test/path", nil, newDefaultBatcher[*mockEvent]())
 	require.Equal(t, 1, pi.area)
 	require.Equal(t, "test/path", pi.path)
 	require.Equal(t, int64(0), pi.pendingSize.Load())

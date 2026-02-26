@@ -245,7 +245,7 @@ type AreaSettings struct {
 
 	// Remove it when we determine the v2 is working well.
 	// The algorithm of the memory control.
-	algorithm MemoryControlAlgorithm
+	method memoryControlType
 
 	// control how to control events
 	batchConfig batchConfig

@@ -55,7 +55,7 @@ func (m *mockKafkaSink) BatchCount() int {
 }
 
 func (s *mockKafkaSink) BatchBytes() int {
-	return 1024 * 1024 * 1024
+	return 0
 }
 
 func (m *mockKafkaSink) IsNormal() bool {

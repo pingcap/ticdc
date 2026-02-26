@@ -51,7 +51,7 @@ type SharedInfo struct {
 	// will break the splittability of this table.
 	enableSplittableCheck bool
 
-	// 0 means not set and the default sink-specific capacity will be used.
+	// 0 means not set and DispatcherManager default capacity will be used.
 	eventCollectorBatchCount int
 	// 0 means not set and the default sink-specific capacity will be used.
 	eventCollectorBatchBytes int

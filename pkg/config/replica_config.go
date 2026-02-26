@@ -139,7 +139,7 @@ type ReplicaConfig replicaConfig
 type replicaConfig struct {
 	MemoryQuota *uint64 `toml:"memory-quota" json:"memory-quota,omitempty"`
 	// EventCollectorBatchCount/Bytes are used by the event collector dynamic stream to achieve better batch performance.
-	// When set, they override sink-specific batching behavior.
+	// When set, they override defaults (BatchCount=4096, BatchBytes=sink-specific).
 	EventCollectorBatchCount *int  `toml:"event-collector-batch-count" json:"event-collector-batch-count,omitempty"`
 	EventCollectorBatchBytes *int  `toml:"event-collector-batch-bytes" json:"event-collector-batch-bytes,omitempty"`
 	CaseSensitive            *bool `toml:"case-sensitive" json:"case-sensitive,omitempty"`

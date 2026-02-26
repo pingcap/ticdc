@@ -230,16 +230,9 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 	// Declared here to avoid repeated allocation.
 	var (
 		eventQueueEmpty = false
-		eventBuf        = make([]T, 0, s.option.BatchCount)
-		zeroT           T
-		cleanUpEventBuf = func() {
-			for i := range eventBuf {
-				eventBuf[i] = zeroT
-			}
-			eventBuf = eventBuf[:0]
-		}
-		path   *pathInfo[A, P, T, D, H]
-		nBytes int
+		eventBuf        []T
+		path            *pathInfo[A, P, T, D, H]
+		nBytes          int
 	)
 
 	// For testing. Don't handle events until this wait group is done.
@@ -286,7 +279,7 @@ Loop:
 				eventQueueEmpty = false
 			default:
 				start := time.Now()
-				eventBuf, path, nBytes = s.eventQueue.popEvents(eventBuf)
+				eventBuf, path, nBytes = s.eventQueue.popEvents()
 				if len(eventBuf) == 0 {
 					eventQueueEmpty = true
 					continue Loop

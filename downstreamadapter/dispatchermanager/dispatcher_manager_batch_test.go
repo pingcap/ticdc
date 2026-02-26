@@ -26,7 +26,6 @@ func TestDispatcherManager_GetEventCollectorBatchCountAndBytes(t *testing.T) {
 	defer cancel()
 
 	s := newMockKafkaSink(ctx, cancel)
-	baseCount, baseBytes := s.BatchCount(), s.BatchBytes()
 
 	cases := []struct {
 		name      string
@@ -35,10 +34,10 @@ func TestDispatcherManager_GetEventCollectorBatchCountAndBytes(t *testing.T) {
 		wantBytes int
 	}{
 		{
-			name:      "defaults-from-sink",
+			name:      "defaults-from-manager-and-sink",
 			cfg:       &config.ChangefeedConfig{},
-			wantCount: baseCount,
-			wantBytes: baseBytes,
+			wantCount: defaultEventCollectorBatchCount,
+			wantBytes: 0,
 		},
 		{
 			name: "override-count-only",
@@ -46,14 +45,14 @@ func TestDispatcherManager_GetEventCollectorBatchCountAndBytes(t *testing.T) {
 				EventCollectorBatchCount: 123,
 			},
 			wantCount: 123,
-			wantBytes: baseBytes,
+			wantBytes: 0,
 		},
 		{
 			name: "override-bytes-only",
 			cfg: &config.ChangefeedConfig{
 				EventCollectorBatchBytes: 456,
 			},
-			wantCount: baseCount,
+			wantCount: defaultEventCollectorBatchCount,
 			wantBytes: 456,
 		},
 		{
