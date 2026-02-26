@@ -175,3 +175,13 @@ VALUES (1),
 UPDATE `column_is_null`
 SET t = NULL
 WHERE id = 1;
+
+CREATE TABLE time_is_pk
+(
+    id time(3) NOT NULL,
+    t  datetime DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id)
+);
+
+INSERT INTO `time_is_pk`(id) VALUES ('517:51:04.777'),('-733:00:00.0011');
+DELETE FROM `time_is_pk` WHERE id = '517:51:04.777';
