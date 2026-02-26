@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -207,15 +208,15 @@ func buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string
 		mysqlType := strings.ToLower(t.DatabaseTypeName())
 
 		var value string
-		rawValue := holder.Values[i].([]uint8)
+		rawValue := fmt.Sprintf("%v", holder.Values[i])
 		if common.IsBinaryMySQLType(mysqlType) {
-			rawValue, err := bytesDecoder.Bytes(rawValue)
+			rawValue, err := bytesDecoder.Bytes([]byte(rawValue))
 			if err != nil {
 				log.Panic("decode binary value failed", zap.String("value", util.RedactAny(rawValue)), zap.Error(err))
 			}
 			value = string(rawValue)
 		} else if strings.Contains(mysqlType, "bit") || strings.Contains(mysqlType, "set") {
-			bitValue := common.MustBinaryLiteralToInt(rawValue)
+			bitValue := common.MustBinaryLiteralToInt([]byte(rawValue))
 			value = strconv.FormatUint(bitValue, 10)
 		} else {
 			value = string(rawValue)
