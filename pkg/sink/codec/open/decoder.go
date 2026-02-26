@@ -589,6 +589,8 @@ func formatColumn(c column, ft types.FieldType) column {
 			data, err = strconv.ParseFloat(string(v), 64)
 		case json.Number:
 			data, err = v.Float64()
+		case float64:
+			data = v
 		default:
 			log.Panic("invalid column value, please report a bug", zap.String("col", util.RedactAny(c)), zap.Any("type", v))
 		}
@@ -603,6 +605,8 @@ func formatColumn(c column, ft types.FieldType) column {
 		var data string
 		switch v := c.Value.(type) {
 		case json.Number:
+			data = string(v)
+		case []uint8:
 			data = string(v)
 		case int64, uint64:
 			data = fmt.Sprintf("%v", v)
