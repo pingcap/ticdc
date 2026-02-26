@@ -78,3 +78,31 @@ func TestBatchEventsBySize_NotExceedHardBytes(t *testing.T) {
 	require.Len(t, events, 1)
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
 }
+
+func TestBatchEventsBySize_HardCountGuardsTinyEvents(t *testing.T) {
+	handler := mockHandler{}
+	eq := newEventQueue(&handler)
+
+	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, newBatcher[*mockEvent](NewBatchConfig(3, 100)))
+	eq.initPath(path)
+
+	for i := 1; i <= 7; i++ {
+		eq.appendEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{
+			pathInfo:  path,
+			event:     &mockEvent{value: i},
+			eventSize: 10,
+			eventType: EventType{
+				DataGroup: 1,
+				Property:  BatchableData,
+			},
+		})
+	}
+
+	events, _, _ := eq.popEvents()
+	require.Len(t, events, 6)
+	require.Equal(t, int64(1), eq.totalPendingLength.Load())
+
+	events, _, _ = eq.popEvents()
+	require.Len(t, events, 1)
+	require.Equal(t, int64(0), eq.totalPendingLength.Load())
+}
