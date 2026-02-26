@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/csv"
 	"github.com/pingcap/ticdc/pkg/sink/codec/debezium"
 	"github.com/pingcap/ticdc/pkg/sink/codec/open"
+	"github.com/pingcap/ticdc/pkg/sink/codec/outbox"
 	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
 	"go.uber.org/zap"
 )
@@ -43,6 +44,8 @@ func NewEventEncoder(ctx context.Context, cfg *common.Config) (common.EventEncod
 		return debezium.NewBatchEncoder(cfg, config.GetGlobalServerConfig().ClusterID), nil
 	case config.ProtocolSimple:
 		return simple.NewEncoder(ctx, cfg)
+	case config.ProtocolOutboxJSON:
+		return outbox.NewEncoder(ctx, cfg)
 	default:
 		return nil, errors.ErrSinkUnknownProtocol.GenWithStackByArgs(cfg.Protocol)
 	}

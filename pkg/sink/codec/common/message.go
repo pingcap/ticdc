@@ -43,6 +43,7 @@ const (
 type Message struct {
 	Key       []byte
 	Value     []byte
+	Headers   []MessageHeader
 	rowsCount int    // rows in one Message
 	Callback  func() // Callback function will be called when the message is sent to the sink.
 
@@ -50,6 +51,12 @@ type Message struct {
 	PartitionKey *string
 	// LogInfo carries diagnostic information of the message.
 	LogInfo *MessageLogInfo
+}
+
+// MessageHeader represents an MQ message header.
+type MessageHeader struct {
+	Key   string
+	Value []byte
 }
 
 // MessageLogInfo captures diagnostic context of a sink message.
@@ -88,10 +95,12 @@ type CheckpointLogInfo struct {
 }
 
 // Length returns the expected size of the Kafka message
-// We didn't append any `Headers` when send the message, so ignore the calculations related to it.
-// If `ProducerMessage` Headers fields used, this method should also adjust.
 func (m *Message) Length() int {
-	return len(m.Key) + len(m.Value) + MaxRecordOverhead
+	length := len(m.Key) + len(m.Value) + MaxRecordOverhead
+	for _, header := range m.Headers {
+		length += len(header.Key) + len(header.Value)
+	}
+	return length
 }
 
 // GetRowsCount returns the number of rows batched in one Message
@@ -133,6 +142,7 @@ func NewMsg(
 	ret := &Message{
 		Key:       nil,
 		Value:     nil,
+		Headers:   nil,
 		rowsCount: 0,
 	}
 

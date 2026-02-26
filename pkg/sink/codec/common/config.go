@@ -16,6 +16,7 @@ package common
 import (
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin/binding"
@@ -86,6 +87,13 @@ type Config struct {
 
 	// for the simple protocol, can be "json" and "avro", default to "json"
 	EncodingFormat EncodingFormatType
+
+	// Outbox JSON protocol fields.
+	OutboxIDColumn    string
+	OutboxKeyColumn   string
+	OutboxValueColumn string
+	// OutboxHeaderColumns maps output header key to source column name.
+	OutboxHeaderColumns map[string]string
 
 	// Currently only Debezium protocol is aware of the time zone
 	TimeZone *time.Location
@@ -262,6 +270,15 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 		if sinkConfig.Debezium != nil {
 			c.DebeziumOutputOldValue = sinkConfig.Debezium.OutputOldValue
 		}
+		if sinkConfig.Outbox != nil {
+			c.OutboxIDColumn = sinkConfig.Outbox.IDColumn
+			c.OutboxKeyColumn = sinkConfig.Outbox.KeyColumn
+			c.OutboxValueColumn = sinkConfig.Outbox.ValueColumn
+			c.OutboxHeaderColumns = make(map[string]string, len(sinkConfig.Outbox.HeaderColumns))
+			for header, column := range sinkConfig.Outbox.HeaderColumns {
+				c.OutboxHeaderColumns[header] = column
+			}
+		}
 	}
 	if urlParameter.OnlyOutputUpdatedColumns != nil {
 		c.OnlyOutputUpdatedColumns = *urlParameter.OnlyOutputUpdatedColumns
@@ -420,6 +437,26 @@ func (c *Config) Validate() error {
 		return errors.ErrCodecInvalidConfig.Wrap(
 			errors.Errorf("invalid max-batch-size %d", c.MaxBatchSize),
 		)
+	}
+
+	if c.Protocol == config.ProtocolOutboxJSON {
+		if strings.TrimSpace(c.OutboxIDColumn) == "" {
+			return errors.ErrCodecInvalidConfig.GenWithStack("outbox.id-column is required")
+		}
+		if strings.TrimSpace(c.OutboxKeyColumn) == "" {
+			return errors.ErrCodecInvalidConfig.GenWithStack("outbox.key-column is required")
+		}
+		if strings.TrimSpace(c.OutboxValueColumn) == "" {
+			return errors.ErrCodecInvalidConfig.GenWithStack("outbox.value-column is required")
+		}
+		for header, column := range c.OutboxHeaderColumns {
+			if strings.TrimSpace(header) == "" {
+				return errors.ErrCodecInvalidConfig.GenWithStack("outbox.header-columns must not contain empty header name")
+			}
+			if strings.TrimSpace(column) == "" {
+				return errors.ErrCodecInvalidConfig.GenWithStack("outbox.header-columns must not contain empty column value")
+			}
+		}
 	}
 
 	if c.LargeMessageHandle != nil {

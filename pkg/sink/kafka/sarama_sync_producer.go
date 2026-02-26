@@ -43,6 +43,7 @@ func (p *saramaSyncProducer) SendMessage(topic string, partitionNum int32, messa
 		Key:       sarama.ByteEncoder(message.Key),
 		Value:     sarama.ByteEncoder(message.Value),
 		Partition: partitionNum,
+		Headers:   toSaramaHeaders(message.Headers),
 	}
 	_, _, err := p.producer.SendMessage(msg)
 
@@ -72,6 +73,7 @@ func (p *saramaSyncProducer) SendMessages(topic string, partitionNum int32, mess
 			Key:       sarama.ByteEncoder(message.Key),
 			Value:     sarama.ByteEncoder(message.Value),
 			Partition: int32(i),
+			Headers:   toSaramaHeaders(message.Headers),
 		}
 	}
 	err := p.producer.SendMessages(msgs)
