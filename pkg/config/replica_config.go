@@ -41,19 +41,29 @@ const (
 	defaultActiveActiveSyncStatsInterval = time.Minute
 	// DefaultTiDBSourceID is the default source ID of TiDB cluster.
 	DefaultTiDBSourceID = 1
+
+	// DefaultEventCollectorBatchCount is the default dynstream batching count used by EventCollector.
+	// Keep it consistent with the historical behavior for backward compatibility.
+	DefaultEventCollectorBatchCount uint64 = 4096
+	// DefaultEventCollectorBatchBytes is the default dynstream batching bytes used by EventCollector.
+	// 0 means bytes-based batching is disabled.
+	DefaultEventCollectorBatchBytes uint64 = 0
 )
 
 var defaultReplicaConfig = &ReplicaConfig{
-	MemoryQuota:        util.AddressOf(uint64(DefaultChangefeedMemoryQuota)),
-	CaseSensitive:      util.AddressOf(false),
-	CheckGCSafePoint:   util.AddressOf(true),
-	EnableSyncPoint:    util.AddressOf(false),
-	EnableTableMonitor: util.AddressOf(false),
-	SyncPointInterval:  util.AddressOf(10 * time.Minute),
-	SyncPointRetention: util.AddressOf(24 * time.Hour),
-	BDRMode:            util.AddressOf(false),
-	Filter:             NewDefaultFilterConfig(),
-	EnableActiveActive: util.AddressOf(false),
+	MemoryQuota:              util.AddressOf(uint64(DefaultChangefeedMemoryQuota)),
+	CaseSensitive:            util.AddressOf(false),
+	CheckGCSafePoint:         util.AddressOf(true),
+	EnableSyncPoint:          util.AddressOf(false),
+	EnableTableMonitor:       util.AddressOf(false),
+	SyncPointInterval:        util.AddressOf(10 * time.Minute),
+	SyncPointRetention:       util.AddressOf(24 * time.Hour),
+	EventCollectorBatchCount: util.AddressOf(DefaultEventCollectorBatchCount),
+	EventCollectorBatchBytes: util.AddressOf(DefaultEventCollectorBatchBytes),
+	BDRMode:                  util.AddressOf(false),
+	Filter:                   NewDefaultFilterConfig(),
+	EnableActiveActive:       util.AddressOf(false),
+
 	Mounter: &MounterConfig{
 		WorkerNum: 16,
 	},
@@ -153,6 +163,10 @@ type replicaConfig struct {
 	// not used in the changefeed's lifecycle.
 	IgnoreIneligibleTable *bool `toml:"ignore-ineligible-table" json:"ignore-ineligible-table,omitempty"`
 
+	// EventCollectorBatchCount and EventCollectorBatchBytes configure dynstream batching in EventCollector.
+	EventCollectorBatchCount *uint64 `toml:"event-collector-batch-count" json:"event-collector-batch-count,omitempty"`
+	EventCollectorBatchBytes *uint64 `toml:"event-collector-batch-bytes" json:"event-collector-batch-bytes,omitempty"`
+
 	// BDR(Bidirectional Replication) is a feature that allows users to
 	// replicate data of same tables from TiDB-1 to TiDB-2 and vice versa.
 	// This feature is only available for TiDB.
@@ -164,6 +178,7 @@ type replicaConfig struct {
 	Filter             *FilterConfig  `toml:"filter" json:"filter,omitempty"`
 	Mounter            *MounterConfig `toml:"mounter" json:"mounter,omitempty"`
 	Sink               *SinkConfig    `toml:"sink" json:"sink,omitempty"`
+
 	// Consistent is only available for DB downstream with redo feature enabled.
 	Consistent *ConsistentConfig `toml:"consistent" json:"consistent,omitempty"`
 	// Scheduler is the configuration for scheduler.
@@ -306,6 +321,11 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 	}
 	if util.GetOrZero(c.MemoryQuota) == uint64(0) {
 		c.FixMemoryQuota()
+	}
+
+	if c.EventCollectorBatchCount != nil && *c.EventCollectorBatchCount == 0 {
+		return cerror.ErrInvalidReplicaConfig.
+			FastGenByArgs("event-collector-batch-count must be larger than 0")
 	}
 	if c.Scheduler == nil {
 		c.FixScheduler(false)

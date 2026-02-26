@@ -65,12 +65,13 @@ func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	component string,
 	handler H,
 	option Option,
+	batchConfigStore *areaBatchConfigStore[A],
 ) *stream[A, P, T, D, H] {
 	s := &stream[A, P, T, D, H]{
 		module:     component,
 		id:         id,
 		handler:    handler,
-		eventQueue: newEventQueue(option, handler),
+		eventQueue: newEventQueue(option, handler, batchConfigStore),
 		option:     option,
 		startTime:  time.Now(),
 	}
@@ -231,16 +232,11 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 	// Declared here to avoid repeated allocation.
 	var (
 		eventQueueEmpty = false
-		eventBuf        = make([]T, 0, s.option.BatchCount)
-		zeroT           T
-		cleanUpEventBuf = func() {
-			for i := range eventBuf {
-				eventBuf[i] = zeroT
-			}
-			eventBuf = eventBuf[:0]
-		}
-		path   *pathInfo[A, P, T, D, H]
-		nBytes int
+		defaultConfig   = newBatchConfig(s.option.BatchCount, s.option.BatchBytes)
+		b               = newBatcher[T](defaultConfig, s.option.BatchCount)
+		path            *pathInfo[A, P, T, D, H]
+		nBytes          uint64
+		events          []T
 	)
 
 	// For testing. Don't handle events until this wait group is done.
@@ -284,29 +280,29 @@ Loop:
 				eventQueueEmpty = false
 			default:
 				start := time.Now()
-				eventBuf, path, nBytes = s.eventQueue.popEvents(eventBuf)
-				if len(eventBuf) == 0 {
+				events, path, nBytes = s.eventQueue.popEvents(&b)
+				if len(events) == 0 {
 					eventQueueEmpty = true
 					continue Loop
 				}
 				if path.removed.Load() {
-					cleanUpEventBuf()
+					b.reset()
 					continue Loop
 				}
 
-				path.lastHandleEventTs.Store(uint64(s.handler.GetTimestamp(eventBuf[0])))
+				path.lastHandleEventTs.Store(uint64(s.handler.GetTimestamp(events[0])))
 
-				path.blocking.Store(s.handler.Handle(path.dest, eventBuf...))
+				path.blocking.Store(s.handler.Handle(path.dest, events...))
 
 				metrics.DynamicStreamBatchDuration.WithLabelValues(s.module, path.metricLabel).Observe(float64(time.Since(start).Seconds()))
-				metrics.DynamicStreamBatchCount.WithLabelValues(s.module, path.metricLabel).Observe(float64(len(eventBuf)))
+				metrics.DynamicStreamBatchCount.WithLabelValues(s.module, path.metricLabel).Observe(float64(len(events)))
 				metrics.DynamicStreamBatchBytes.WithLabelValues(s.module, path.metricLabel).Observe(float64(nBytes))
 
 				if path.blocking.Load() {
 					s.eventQueue.blockPath(path)
 				}
 
-				cleanUpEventBuf()
+				b.reset()
 			}
 		}
 	}

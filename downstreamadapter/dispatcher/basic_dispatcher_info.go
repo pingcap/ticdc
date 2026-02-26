@@ -52,6 +52,10 @@ type SharedInfo struct {
 	// will break the splittability of this table.
 	enableSplittableCheck bool
 
+	// eventCollectorBatchCount and eventCollectorBatchBytes configure dynstream batching in EventCollector.
+	eventCollectorBatchCount uint64
+	eventCollectorBatchBytes uint64
+
 	// Shared resources
 	// statusesChan is used to store the status of dispatchers when status changed
 	// and push to heartbeatRequestQueue
@@ -81,24 +85,28 @@ func NewSharedInfo(
 	syncPointConfig *syncpoint.SyncPointConfig,
 	txnAtomicity *config.AtomicityLevel,
 	enableSplittableCheck bool,
+	eventCollectorBatchCount uint64,
+	eventCollectorBatchBytes uint64,
 	statusesChan chan TableSpanStatusWithSeq,
 	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus,
 	errCh chan error,
 ) *SharedInfo {
 	sharedInfo := &SharedInfo{
-		changefeedID:          changefeedID,
-		timezone:              timezone,
-		bdrMode:               bdrMode,
-		enableActiveActive:    enableActiveActive,
-		outputRawChangeEvent:  outputRawChangeEvent,
-		integrityConfig:       integrityConfig,
-		filterConfig:          filterConfig,
-		syncPointConfig:       syncPointConfig,
-		enableSplittableCheck: enableSplittableCheck,
-		statusesChan:          statusesChan,
-		blockStatusesChan:     blockStatusesChan,
-		blockExecutor:         newBlockEventExecutor(),
-		errCh:                 errCh,
+		changefeedID:             changefeedID,
+		timezone:                 timezone,
+		bdrMode:                  bdrMode,
+		enableActiveActive:       enableActiveActive,
+		outputRawChangeEvent:     outputRawChangeEvent,
+		integrityConfig:          integrityConfig,
+		filterConfig:             filterConfig,
+		syncPointConfig:          syncPointConfig,
+		enableSplittableCheck:    enableSplittableCheck,
+		eventCollectorBatchCount: eventCollectorBatchCount,
+		eventCollectorBatchBytes: eventCollectorBatchBytes,
+		statusesChan:             statusesChan,
+		blockStatusesChan:        blockStatusesChan,
+		blockExecutor:            newBlockEventExecutor(),
+		errCh:                    errCh,
 	}
 
 	if txnAtomicity != nil {
@@ -123,6 +131,14 @@ func (d *BasicDispatcher) GetMode() int64 {
 
 func (d *BasicDispatcher) GetChangefeedID() common.ChangeFeedID {
 	return d.sharedInfo.changefeedID
+}
+
+func (d *BasicDispatcher) GetEventCollectorBatchCount() uint64 {
+	return d.sharedInfo.eventCollectorBatchCount
+}
+
+func (d *BasicDispatcher) GetEventCollectorBatchBytes() uint64 {
+	return d.sharedInfo.eventCollectorBatchBytes
 }
 
 func (d *BasicDispatcher) GetComponentStatus() heartbeatpb.ComponentState {
