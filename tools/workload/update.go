@@ -18,7 +18,6 @@ import (
 	"database/sql"
 	"fmt"
 	"math/rand"
-	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +25,7 @@ import (
 	"go.uber.org/zap"
 	"workload/schema"
 	pbank2 "workload/schema/bank2"
+	pjsonzstd "workload/schema/jsonzstd"
 	psysbench "workload/schema/sysbench"
 )
 
@@ -81,7 +81,9 @@ func (app *WorkloadApp) executeUpdateWorkers(updateConcurrency int, wg *sync.Wai
 			plog.Info("start update worker", zap.Int("worker", workerID))
 
 			for {
-				err = app.doUpdate(conn, updateTaskCh)
+				flushedRows, err := app.runTransaction(conn, func() (uint64, error) {
+					return app.doUpdateOnce(conn, updateTaskCh)
+				})
 				if err != nil {
 					// Check if it's a connection-level error that requires reconnection
 					if app.isConnectionError(err) {
@@ -100,8 +102,14 @@ func (app *WorkloadApp) executeUpdateWorkers(updateConcurrency int, wg *sync.Wai
 						}
 					}
 
+					app.Stats.ErrorCount.Add(1)
 					plog.Info("update worker failed, retrying", zap.Int("worker", workerID), zap.Error(err))
 					time.Sleep(time.Second * 2)
+					continue
+				}
+
+				if flushedRows != 0 {
+					app.Stats.FlushedRowCount.Add(flushedRows)
 				}
 			}
 		}(i)
@@ -123,70 +131,71 @@ func (app *WorkloadApp) genUpdateTask(output chan updateTask) {
 	}
 }
 
-// doUpdate performs update operations on the database
-func (app *WorkloadApp) doUpdate(conn *sql.Conn, input chan updateTask) error {
-	for task := range input {
-		if err := app.processUpdateTask(conn, task); err != nil {
-			// Return only if connection is closed, other errors are handled within processUpdateTask
-			if strings.Contains(err.Error(), "connection is already closed") {
-				return err
-			}
-		}
-	}
-	return nil
+func (app *WorkloadApp) doUpdateOnce(conn *sql.Conn, input chan updateTask) (uint64, error) {
+	task := <-input
+	return app.processUpdateTask(conn, &task)
 }
 
 // processUpdateTask handles a single update task
-func (app *WorkloadApp) processUpdateTask(conn *sql.Conn, task updateTask) error {
+func (app *WorkloadApp) processUpdateTask(conn *sql.Conn, task *updateTask) (uint64, error) {
 	// Execute update and get result
 	res, err := app.executeUpdate(conn, task)
 	if err != nil {
-		return app.handleUpdateError(err, task)
+		app.handleUpdateError(err, task)
+		return 0, err
 	}
 
 	// Process update result
-	if err := app.processUpdateResult(res, task); err != nil {
-		return err
-	}
+	affectedRows := app.processUpdateResult(res, task)
 
 	// Execute callback if exists
 	if task.callback != nil {
 		task.callback()
 	}
 
-	return nil
+	return affectedRows, nil
 }
 
 // executeUpdate performs the actual update operation based on workload type
-func (app *WorkloadApp) executeUpdate(conn *sql.Conn, task updateTask) (sql.Result, error) {
+func (app *WorkloadApp) executeUpdate(conn *sql.Conn, task *updateTask) (sql.Result, error) {
 	switch app.Config.WorkloadType {
 	case bank2:
 		return app.executeBank2Update(conn, task)
 	case sysbench:
 		return app.executeSysbenchUpdate(conn, task)
+	case jsonZstd:
+		return app.executeJSONZstdUpdate(conn, task)
 	default:
 		return app.executeRegularUpdate(conn, task)
 	}
 }
 
 // executeBank2Update handles updates specific to bank2 workload
-func (app *WorkloadApp) executeBank2Update(conn *sql.Conn, task updateTask) (sql.Result, error) {
+func (app *WorkloadApp) executeBank2Update(conn *sql.Conn, task *updateTask) (sql.Result, error) {
 	task.UpdateOption.Batch = 1
 	updateSQL, values := app.Workload.(*pbank2.Bank2Workload).BuildUpdateSqlWithValues(task.UpdateOption)
+	task.generatedSQL = updateSQL
+	return app.executeWithValues(conn, updateSQL, task.UpdateOption.TableIndex, values)
+}
+
+func (app *WorkloadApp) executeJSONZstdUpdate(conn *sql.Conn, task *updateTask) (sql.Result, error) {
+	updateSQL, values := app.Workload.(*pjsonzstd.JSONZstdWorkload).BuildUpdateSqlWithValues(task.UpdateOption)
+	task.generatedSQL = updateSQL
 	return app.executeWithValues(conn, updateSQL, task.UpdateOption.TableIndex, values)
 }
 
 // executeSysbenchUpdate handles updates specific to sysbench workload
-func (app *WorkloadApp) executeSysbenchUpdate(conn *sql.Conn, task updateTask) (sql.Result, error) {
+func (app *WorkloadApp) executeSysbenchUpdate(conn *sql.Conn, task *updateTask) (sql.Result, error) {
 	updateSQL := app.Workload.(*psysbench.SysbenchWorkload).BuildUpdateSqlWithConn(conn, task.UpdateOption)
 	if updateSQL == "" {
 		return nil, nil
 	}
+	task.generatedSQL = updateSQL
 	return app.execute(conn, updateSQL, task.TableIndex)
 }
 
 // executeRegularUpdate handles updates for non-bank2 workloads
-func (app *WorkloadApp) executeRegularUpdate(conn *sql.Conn, task updateTask) (sql.Result, error) {
+func (app *WorkloadApp) executeRegularUpdate(conn *sql.Conn, task *updateTask) (sql.Result, error) {
 	updateSQL := app.Workload.BuildUpdateSql(task.UpdateOption)
 	if updateSQL == "" {
 		return nil, nil
@@ -196,19 +205,17 @@ func (app *WorkloadApp) executeRegularUpdate(conn *sql.Conn, task updateTask) (s
 }
 
 // handleUpdateError processes update operation errors
-func (app *WorkloadApp) handleUpdateError(err error, task updateTask) error {
-	app.Stats.ErrorCount.Add(1)
+func (app *WorkloadApp) handleUpdateError(err error, task *updateTask) {
 	// Truncate long SQL for logging
 	plog.Info("update error",
 		zap.Error(err),
 		zap.String("sql", getSQLPreview(task.generatedSQL)))
-	return err
 }
 
 // processUpdateResult handles the result of update operation
-func (app *WorkloadApp) processUpdateResult(res sql.Result, task updateTask) error {
+func (app *WorkloadApp) processUpdateResult(res sql.Result, task *updateTask) uint64 {
 	if res == nil {
-		return nil
+		return 0
 	}
 
 	cnt, err := res.RowsAffected()
@@ -219,9 +226,8 @@ func (app *WorkloadApp) processUpdateResult(res sql.Result, task updateTask) err
 			zap.Int("rowCount", task.Batch),
 			zap.String("sql", getSQLPreview(task.generatedSQL)))
 		app.Stats.ErrorCount.Add(1)
+		return 0
 	}
-
-	app.Stats.FlushedRowCount.Add(uint64(cnt))
 
 	if task.IsSpecialUpdate {
 		plog.Info("update full table succeed",
@@ -229,5 +235,5 @@ func (app *WorkloadApp) processUpdateResult(res sql.Result, task updateTask) err
 			zap.Int64("affectedRows", cnt))
 	}
 
-	return nil
+	return uint64(cnt)
 }

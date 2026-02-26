@@ -53,6 +53,7 @@ You can also adjust the `-percentage-for-update` to control the percentage of wo
 
 - `-update-large-column-size`: Controls the size of the large column (default: 1024 bytes)
 - `-batch-size`: Number of rows to update in each statement (default: 10)
+- `-batch-in-txn`: Wrap each batch in a single explicit transaction (default: false)
 - `-percentage-for-update`: Portion of threads dedicated to updates (1.0 = all threads)
 - `-total-row-count`: Total number of rows in the table
 - `-thread`: Number of concurrent worker threads
