@@ -20,8 +20,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -777,7 +779,7 @@ func TestBatchDMLEventsPartialFlush(t *testing.T) {
 	require.Equal(t, 0, len(mockSink.GetDMLs()))
 }
 
-func TestDMLWakeCallbackBySinkType(t *testing.T) {
+func TestDMLWakeCallbackNonStorageOnlyAfterTableProgressEmpty(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
@@ -790,60 +792,110 @@ func TestDMLWakeCallbackBySinkType(t *testing.T) {
 			"test",
 			"t",
 			fmt.Sprintf("insert into t values(%d, %d)", commitTs, commitTs),
-			fmt.Sprintf("insert into t values(%d, %d)", commitTs+1000, commitTs+1000),
 		)
 		require.NotNil(t, event)
 		event.CommitTs = commitTs
 		return event
 	}
 
-	testCases := []struct {
-		name          string
-		sinkType      common.SinkType
-		commitTs      uint64
-		wakeOnEnqueue bool
-	}{
-		{
-			name:          "mysql wake after flush",
-			sinkType:      common.MysqlSinkType,
-			commitTs:      20,
-			wakeOnEnqueue: false,
-		},
-		{
-			name:          "cloudstorage wake on enqueue",
-			sinkType:      common.CloudStorageSinkType,
-			commitTs:      21,
-			wakeOnEnqueue: true,
-		},
+	ctrl := gomock.NewController(t)
+	mockSink := mock.NewMockSink(ctrl)
+	mockSink.EXPECT().SinkType().Return(common.MysqlSinkType).AnyTimes()
+	capturedDMLs := make([]*commonEvent.DMLEvent, 0, 3)
+	mockSink.EXPECT().AddDMLEvent(gomock.Any()).Do(func(event *commonEvent.DMLEvent) {
+		capturedDMLs = append(capturedDMLs, event)
+	}).Times(3)
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+	dispatcher := newDispatcherForTest(mockSink, tableSpan)
+
+	dmlEvent1 := buildDMLEvent(100)
+	dmlEvent2 := buildDMLEvent(101)
+	dmlEvent3 := buildDMLEvent(102)
+	nodeID := node.NewID()
+	dispatcherEvents := []DispatcherEvent{
+		NewDispatcherEvent(&nodeID, dmlEvent1),
+		NewDispatcherEvent(&nodeID, dmlEvent2),
+		NewDispatcherEvent(&nodeID, dmlEvent3),
 	}
 
-	for _, tc := range testCases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			mockSink := sink.NewMockSink(tc.sinkType)
-			tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
-			require.NoError(t, err)
-			dispatcher := newDispatcherForTest(mockSink, tableSpan)
+	var callbackCalled atomic.Bool
+	block := dispatcher.HandleEvents(dispatcherEvents, func() {
+		callbackCalled.Store(true)
+	})
+	require.True(t, block)
+	require.False(t, callbackCalled.Load())
 
-			dmlEvent := buildDMLEvent(tc.commitTs)
-			nodeID := node.NewID()
-			var callbackCalled atomic.Bool
-			block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dmlEvent)}, func() {
-				callbackCalled.Store(true)
-			})
-			require.True(t, block)
-			require.Equal(t, tc.wakeOnEnqueue, callbackCalled.Load())
-			require.Len(t, mockSink.GetDMLs(), 1)
+	require.Len(t, capturedDMLs, 3)
 
-			if tc.wakeOnEnqueue {
-				return
-			}
+	capturedDMLs[0].PostFlush()
+	require.False(t, callbackCalled.Load())
 
-			mockSink.FlushDMLs()
-			require.True(t, callbackCalled.Load())
-			require.Len(t, mockSink.GetDMLs(), 0)
-		})
+	capturedDMLs[1].PostFlush()
+	require.False(t, callbackCalled.Load())
+
+	capturedDMLs[2].PostFlush()
+	require.True(t, callbackCalled.Load())
+	require.True(t, dispatcher.tableProgress.Empty())
+}
+
+func TestDMLWakeCallbackStorageAfterBatchEnqueue(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	ddlJob := helper.DDL2Job("create table t(id int primary key, v int)")
+	require.NotNil(t, ddlJob)
+
+	buildDMLEvent := func(commitTs uint64) *commonEvent.DMLEvent {
+		event := helper.DML2Event(
+			"test",
+			"t",
+			fmt.Sprintf("insert into t values(%d, %d)", commitTs, commitTs),
+		)
+		require.NotNil(t, event)
+		event.CommitTs = commitTs
+		return event
 	}
+
+	ctrl := gomock.NewController(t)
+	mockSink := mock.NewMockSink(ctrl)
+	mockSink.EXPECT().SinkType().Return(common.CloudStorageSinkType).AnyTimes()
+	capturedDMLs := make([]*commonEvent.DMLEvent, 0, 3)
+	mockSink.EXPECT().AddDMLEvent(gomock.Any()).Do(func(event *commonEvent.DMLEvent) {
+		capturedDMLs = append(capturedDMLs, event)
+	}).Times(3)
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+	dispatcher := newDispatcherForTest(mockSink, tableSpan)
+
+	dmlEvent1 := buildDMLEvent(110)
+	dmlEvent2 := buildDMLEvent(111)
+	dmlEvent3 := buildDMLEvent(112)
+	nodeID := node.NewID()
+	dispatcherEvents := []DispatcherEvent{
+		NewDispatcherEvent(&nodeID, dmlEvent1),
+		NewDispatcherEvent(&nodeID, dmlEvent2),
+		NewDispatcherEvent(&nodeID, dmlEvent3),
+	}
+
+	var callbackCalled atomic.Bool
+	block := dispatcher.HandleEvents(dispatcherEvents, func() {
+		callbackCalled.Store(true)
+	})
+	require.True(t, block)
+	require.False(t, callbackCalled.Load())
+
+	require.Len(t, capturedDMLs, 3)
+
+	capturedDMLs[0].PostEnqueue()
+	require.False(t, callbackCalled.Load())
+
+	capturedDMLs[1].PostEnqueue()
+	require.False(t, callbackCalled.Load())
+
+	capturedDMLs[2].PostEnqueue()
+	require.True(t, callbackCalled.Load())
 }
 
 // TestDispatcherSplittableCheck tests that a split table dispatcher with enableSplittableCheck=true

@@ -262,9 +262,10 @@ func NewBasicDispatcher(
 	return dispatcher
 }
 
-// AddDMLEventsToSink filters events for special tables and only returns true when
-// at least one event remains to be written to the downstream sink.
-func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) bool {
+// AddDMLEventsToSink filters events for special tables, registers batch wake
+// callbacks, and returns true when at least one event remains to be written to
+// the downstream sink.
+func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent, wakeCallback func()) bool {
 	// Normal DML dispatch: most tables just pass through this function unchanged.
 	// Active-active or soft-delete tables are processed by FilterDMLEvent before
 	// being handed over to the sink (delete rows dropped; soft-delete transitions may
@@ -288,9 +289,29 @@ func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) boo
 		return false
 	}
 
+	if d.sink.SinkType() == common.CloudStorageSinkType {
+		var remaining atomic.Int64
+		remaining.Store(int64(len(filteredEvents)))
+		for _, event := range filteredEvents {
+			event.AddPostEnqueueFunc(func() {
+				if remaining.Add(-1) == 0 {
+					wakeCallback()
+				}
+			})
+		}
+	} else {
+		wakeOnce := &sync.Once{}
+		for _, event := range filteredEvents {
+			event.AddPostFlushFunc(func() {
+				if d.tableProgress.Empty() {
+					wakeOnce.Do(wakeCallback)
+				}
+			})
+		}
+	}
+
 	// for one batch events, we need to add all them in table progress first, then add them to sink
-	// because we need to ensure the wakeCallback only will be called when
-	// all these events are flushed to downstream successfully
+	// to avoid checkpoint jumping while events are being enqueued/flushed.
 	for _, event := range filteredEvents {
 		d.tableProgress.Add(event)
 	}
@@ -545,10 +566,8 @@ func (d *BasicDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // When we handle events, we don't have any previous events still in sink.
 //
 // wakeCallback is used to wake the dynamic stream to handle the next batch events.
-// It is registered on enqueue stage, and sink implementations are responsible for
-// deciding when enqueue is considered complete (some sinks trigger enqueue via
-// PostFlush after downstream flush completes).
-// Checkpoint still advances only after PostFlush callbacks are completed.
+// For non-storage sinks, we wake only after flush and tableProgress becomes empty.
+// For cloud storage sink, we wake after all events in this batch are enqueued.
 func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
 	if d.GetRemovingStatus() {
 		log.Warn("dispatcher is removing", zap.Any("id", d.id))
@@ -560,7 +579,6 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 
 	// Only return false when all events are resolvedTs Event.
 	block := false
-	dmlWakeOnce := &sync.Once{}
 	dmlEvents := make([]*commonEvent.DMLEvent, 0, len(dispatcherEvents))
 	latestResolvedTs := uint64(0)
 	// Dispatcher is ready, handle the events
@@ -625,9 +643,6 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 
 			block = true
 			dml.ReplicatingTs = d.creationPDTs
-			dml.AddPostEnqueueFunc(func() {
-				dmlWakeOnce.Do(wakeCallback)
-			})
 			dmlEvents = append(dmlEvents, dml)
 		case commonEvent.TypeDDLEvent:
 			if len(dispatcherEvents) != 1 {
@@ -711,7 +726,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	// the checkpointTs may be incorrect set as the new resolvedTs,
 	// due to the tableProgress is empty before dml events add into sink.
 	if len(dmlEvents) > 0 {
-		hasDMLToFlush := d.AddDMLEventsToSink(dmlEvents)
+		hasDMLToFlush := d.AddDMLEventsToSink(dmlEvents, wakeCallback)
 		if !hasDMLToFlush {
 			// All DML events were filtered out, so they no longer block dispatcher progress.
 			block = false

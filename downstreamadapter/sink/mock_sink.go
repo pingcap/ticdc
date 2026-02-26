@@ -32,10 +32,6 @@ func (s *mockSink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.dmls = append(s.dmls, event)
-	// CloudStorage sink wakes dispatcher on enqueue stage.
-	if s.sinkType == common.CloudStorageSinkType {
-		event.PostEnqueue()
-	}
 }
 
 func (s *mockSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
