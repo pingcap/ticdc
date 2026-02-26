@@ -14,6 +14,7 @@
 package dispatcher
 
 import (
+	"fmt"
 	"math"
 	"sync/atomic"
 	"testing"
@@ -774,6 +775,75 @@ func TestBatchDMLEventsPartialFlush(t *testing.T) {
 
 	// Verify that all events were actually flushed
 	require.Equal(t, 0, len(mockSink.GetDMLs()))
+}
+
+func TestDMLWakeCallbackBySinkType(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	ddlJob := helper.DDL2Job("create table t(id int primary key, v int)")
+	require.NotNil(t, ddlJob)
+
+	buildDMLEvent := func(commitTs uint64) *commonEvent.DMLEvent {
+		event := helper.DML2Event(
+			"test",
+			"t",
+			fmt.Sprintf("insert into t values(%d, %d)", commitTs, commitTs),
+			fmt.Sprintf("insert into t values(%d, %d)", commitTs+1000, commitTs+1000),
+		)
+		require.NotNil(t, event)
+		event.CommitTs = commitTs
+		return event
+	}
+
+	testCases := []struct {
+		name          string
+		sinkType      common.SinkType
+		commitTs      uint64
+		wakeOnEnqueue bool
+	}{
+		{
+			name:          "mysql wake after flush",
+			sinkType:      common.MysqlSinkType,
+			commitTs:      20,
+			wakeOnEnqueue: false,
+		},
+		{
+			name:          "cloudstorage wake on enqueue",
+			sinkType:      common.CloudStorageSinkType,
+			commitTs:      21,
+			wakeOnEnqueue: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			mockSink := sink.NewMockSink(tc.sinkType)
+			tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+			require.NoError(t, err)
+			dispatcher := newDispatcherForTest(mockSink, tableSpan)
+
+			dmlEvent := buildDMLEvent(tc.commitTs)
+			nodeID := node.NewID()
+			var callbackCalled atomic.Bool
+			block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dmlEvent)}, func() {
+				callbackCalled.Store(true)
+			})
+			require.True(t, block)
+			require.Equal(t, tc.wakeOnEnqueue, callbackCalled.Load())
+			require.Len(t, mockSink.GetDMLs(), 1)
+
+			if tc.wakeOnEnqueue {
+				return
+			}
+
+			mockSink.FlushDMLs()
+			require.True(t, callbackCalled.Load())
+			require.Len(t, mockSink.GetDMLs(), 0)
+		})
+	}
 }
 
 // TestDispatcherSplittableCheck tests that a split table dispatcher with enableSplittableCheck=true

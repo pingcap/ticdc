@@ -545,8 +545,10 @@ func (d *BasicDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // When we handle events, we don't have any previous events still in sink.
 //
 // wakeCallback is used to wake the dynamic stream to handle the next batch events.
-// It is triggered after DML events are enqueued to sink pipeline, while checkpoint
-// still advances only after PostFlush callbacks are completed.
+// It is registered on enqueue stage, and sink implementations are responsible for
+// deciding when enqueue is considered complete (some sinks trigger enqueue via
+// PostFlush after downstream flush completes).
+// Checkpoint still advances only after PostFlush callbacks are completed.
 func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
 	if d.GetRemovingStatus() {
 		log.Warn("dispatcher is removing", zap.Any("id", d.id))
