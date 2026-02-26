@@ -23,7 +23,6 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/redo/writer/factory"
@@ -45,9 +44,10 @@ type Sink struct {
 	logBuffer *chann.UnlimitedChannel[writer.RedoEvent, any]
 
 	// isNormal indicate whether the sink is in the normal state.
-	isNormal   *atomic.Bool
-	isClosed   *atomic.Bool
-	statistics *metrics.Statistics
+	isNormal *atomic.Bool
+	isClosed *atomic.Bool
+
+	metric *redoSinkMetrics
 }
 
 func Verify(ctx context.Context, changefeedID common.ChangeFeedID, cfg *config.ConsistentConfig) error {
@@ -69,10 +69,9 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 			ChangeFeedID:      changefeedID,
 			MaxLogSizeInBytes: util.GetOrZero(cfg.MaxLogSize) * redo.Megabyte,
 		},
-		logBuffer:  chann.NewUnlimitedChannelDefault[writer.RedoEvent](),
-		isNormal:   atomic.NewBool(true),
-		isClosed:   atomic.NewBool(false),
-		statistics: metrics.NewStatistics(changefeedID, "redo"),
+		logBuffer: chann.NewUnlimitedChannelDefault[writer.RedoEvent](),
+		isNormal:  atomic.NewBool(true),
+		isClosed:  atomic.NewBool(false),
 	}
 	start := time.Now()
 	ddlWriter, err := factory.NewRedoLogWriter(s.ctx, s.cfg, redo.RedoDDLLogFileType)
@@ -95,6 +94,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 	}
 	s.ddlWriter = ddlWriter
 	s.dmlWriter = dmlWriter
+	s.metric = newRedoSinkMetrics(changefeedID)
 	return s
 }
 
@@ -115,40 +115,38 @@ func (s *Sink) Run(ctx context.Context) error {
 func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	switch e := event.(type) {
 	case *commonEvent.DDLEvent:
-		err := s.statistics.RecordDDLExecution(func() (string, error) {
-			ddlType := e.GetDDLType().String()
-			return ddlType, s.ddlWriter.WriteEvents(s.ctx, e)
-		})
+		start := time.Now()
+		err := s.ddlWriter.WriteEvents(s.ctx, e)
 		if err != nil {
 			s.isNormal.Store(false)
 			return errors.Trace(err)
+		}
+		if s.metric != nil {
+			s.metric.observeDDLWrite(time.Since(start))
 		}
 	}
 	return nil
 }
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	_ = s.statistics.RecordBatchExecution(func() (int, int64, error) {
-		rowsCount := uint64(event.Len())
-		rowCallback := helper.NewTxnPostFlushRowCallback(event, rowsCount)
+	rowsCount := uint64(event.Len())
+	rowCallback := helper.NewTxnPostFlushRowCallback(event, rowsCount)
 
-		for {
-			row, ok := event.GetNextRow()
-			if !ok {
-				event.Rewind()
-				break
-			}
-			s.logBuffer.Push(&commonEvent.RedoRowEvent{
-				StartTs:         event.StartTs,
-				CommitTs:        event.CommitTs,
-				Event:           row,
-				PhysicalTableID: event.PhysicalTableID,
-				TableInfo:       event.TableInfo,
-				Callback:        rowCallback,
-			})
+	for {
+		row, ok := event.GetNextRow()
+		if !ok {
+			event.Rewind()
+			break
 		}
-		return int(event.Len()), event.GetSize(), nil
-	})
+		s.logBuffer.Push(&commonEvent.RedoRowEvent{
+			StartTs:         event.StartTs,
+			CommitTs:        event.CommitTs,
+			Event:           row,
+			PhysicalTableID: event.PhysicalTableID,
+			TableInfo:       event.TableInfo,
+			Callback:        rowCallback,
+		})
+	}
 }
 
 func (s *Sink) IsNormal() bool {
@@ -184,8 +182,8 @@ func (s *Sink) Close(_ bool) {
 				zap.Error(err))
 		}
 	}
-	if s.statistics != nil {
-		s.statistics.Close()
+	if s.metric != nil {
+		s.metric.close()
 	}
 	log.Info("redo sink closed",
 		zap.String("keyspace", s.cfg.ChangeFeedID.Keyspace()),
@@ -194,16 +192,19 @@ func (s *Sink) Close(_ bool) {
 
 func (s *Sink) sendMessages(ctx context.Context) error {
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-			if e, ok := s.logBuffer.Get(); ok {
-				err := s.dmlWriter.WriteEvents(ctx, e)
-				if err != nil {
-					return err
-				}
-			}
+		e, ok := s.logBuffer.Get()
+		if !ok {
+			return nil
+		}
+
+		start := time.Now()
+		err := s.dmlWriter.WriteEvents(ctx, e)
+		if err != nil {
+			return err
+		}
+
+		if s.metric != nil {
+			s.metric.observeRowWrite(1, time.Since(start))
 		}
 	}
 }

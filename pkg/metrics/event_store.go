@@ -42,6 +42,14 @@ var (
 			Name:      "compressed_rows_count",
 			Help:      "The total number of rows compressed by event store.",
 		})
+
+	EventStoreCompressionRatioHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_store",
+		Name:      "compression_ratio",
+		Help:      "The compression ratio (uncompressed_bytes / compressed_bytes) for values written by event store.",
+		Buckets:   []float64{0.25, 0.5, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 2, 3, 4, 6, 8, 10, 15, 20},
+	})
 	// EventStoreOutputEventCount is the metric that counts events output by the sorter.
 	EventStoreOutputEventCount = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "ticdc",
@@ -322,6 +330,7 @@ var (
 func initEventStoreMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventStoreSubscriptionGauge)
 	registry.MustRegister(EventStoreCompressedRowsCount)
+	registry.MustRegister(EventStoreCompressionRatioHistogram)
 	registry.MustRegister(EventStoreReceivedEventCount)
 	registry.MustRegister(EventStoreOutputEventCount)
 	registry.MustRegister(EventStoreWriteDurationHistogram)

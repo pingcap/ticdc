@@ -31,7 +31,9 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -107,6 +109,17 @@ func setDataSharingForTest(t *testing.T, enable bool) func() {
 	originalCfg := config.GetGlobalServerConfig().Clone()
 	updatedCfg := originalCfg.Clone()
 	updatedCfg.Debug.EventStore.EnableDataSharing = enable
+	config.StoreGlobalServerConfig(updatedCfg)
+	return func() {
+		config.StoreGlobalServerConfig(originalCfg)
+	}
+}
+
+func setZstdCompressionForTest(t *testing.T, enable bool) func() {
+	t.Helper()
+	originalCfg := config.GetGlobalServerConfig().Clone()
+	updatedCfg := originalCfg.Clone()
+	updatedCfg.Debug.EventStore.EnableZstdCompression = enable
 	config.StoreGlobalServerConfig(updatedCfg)
 	return func() {
 		config.StoreGlobalServerConfig(originalCfg)
@@ -827,7 +840,8 @@ func TestWriteToEventStore(t *testing.T) {
 	require.NoError(t, err)
 	defer encoder.Close()
 
-	err = store.writeEvents(store.dbs[0], events, encoder)
+	var compressionBuf []byte
+	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf)
 	require.NoError(t, err)
 
 	// Read events back and verify.
@@ -878,6 +892,141 @@ func TestWriteToEventStore(t *testing.T) {
 	require.True(t, foundLarge, "large value entry not found")
 }
 
+func TestWriteToEventStoreZstdCompressionDisabled(t *testing.T) {
+	restoreCfg := setZstdCompressionForTest(t, false)
+	defer restoreCfg()
+
+	dir := t.TempDir()
+	_, storeInt := newEventStoreForTest(dir)
+	store := storeInt.(*eventStore)
+	defer store.Close(context.Background())
+
+	key := []byte("large-key")
+	value := bytes.Repeat([]byte("a"), store.compressionThreshold+1)
+	entry := common.RawKVEntry{
+		OpType:  common.OpTypePut,
+		StartTs: 200,
+		CRTs:    210,
+		Key:     key,
+		Value:   value,
+	}
+	events := []eventWithCallback{{
+		subID:    1,
+		tableID:  1,
+		kvs:      []common.RawKVEntry{entry},
+		callback: func() {},
+	}}
+
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	defer encoder.Close()
+
+	var compressionBuf []byte
+	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf)
+	require.NoError(t, err)
+
+	iter, err := store.dbs[0].NewIter(&pebble.IterOptions{})
+	require.NoError(t, err)
+	defer iter.Close()
+
+	count := 0
+	for iter.First(); iter.Valid(); iter.Next() {
+		_, compressionType := DecodeKeyMetas(iter.Key())
+		require.Equal(t, CompressionNone, compressionType)
+
+		readEntry := &common.RawKVEntry{}
+		err = readEntry.Decode(iter.Value())
+		require.NoError(t, err)
+		require.Equal(t, value, readEntry.Value)
+		count++
+	}
+	require.Equal(t, 1, count)
+}
+
+func TestEventStoreCompressionAndIterDecodeBufferReuse(t *testing.T) {
+	dir := t.TempDir()
+	_, storeInt := newEventStoreForTest(dir)
+	store := storeInt.(*eventStore)
+	defer store.Close(context.Background())
+
+	const kvCount = 7
+	kvs := make([]common.RawKVEntry, 0, kvCount)
+	expectedValues := make(map[string][]byte, kvCount)
+	for i := 0; i < kvCount; i++ {
+		key := fmt.Sprintf("compression-key-%d", i)
+		value := bytes.Repeat([]byte{byte('a' + i)}, store.compressionThreshold+16)
+		entry := common.RawKVEntry{
+			OpType:  common.OpTypePut,
+			StartTs: 100 + uint64(i),
+			CRTs:    200 + uint64(i),
+			Key:     []byte(key),
+			Value:   value,
+		}
+		kvs = append(kvs, entry)
+		expectedValues[key] = append([]byte(nil), value...)
+	}
+	events := []eventWithCallback{{
+		subID:    1,
+		tableID:  1,
+		kvs:      kvs,
+		callback: func() {},
+	}}
+
+	beforeMetric := testutil.ToFloat64(metrics.EventStoreCompressedRowsCount)
+
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	defer encoder.Close()
+	var compressionBuf []byte
+	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf)
+	require.NoError(t, err)
+	afterMetric := testutil.ToFloat64(metrics.EventStoreCompressedRowsCount)
+	require.InDelta(t, float64(len(expectedValues)), afterMetric-beforeMetric, 1e-9)
+
+	innerIter, err := store.dbs[0].NewIter(&pebble.IterOptions{})
+	require.NoError(t, err)
+	decoder := store.decoderPool.Get().(*zstd.Decoder)
+	iter := &eventStoreIter{
+		tableSpan: &heartbeatpb.TableSpan{
+			TableID:  1,
+			StartKey: []byte{},
+			EndKey:   []byte{0xFF},
+		},
+		needCheckSpan: false,
+		innerIter:     innerIter,
+		decoder:       decoder,
+		decoderPool:   store.decoderPool,
+	}
+	require.True(t, iter.innerIter.First())
+
+	type readRecord struct {
+		entry    *common.RawKVEntry
+		expected []byte
+	}
+	records := make(map[string]readRecord)
+	for {
+		raw, ok := iter.Next()
+		if !ok {
+			break
+		}
+		for key, rec := range records {
+			require.Equal(t, rec.expected, rec.entry.Value, "value mutated for %s", key)
+		}
+		keyStr := string(raw.Key)
+		expectedVal, ok := expectedValues[keyStr]
+		require.True(t, ok, "unexpected key %s", keyStr)
+		require.Equal(t, expectedVal, raw.Value)
+		records[keyStr] = readRecord{
+			entry:    raw,
+			expected: append([]byte(nil), raw.Value...),
+		}
+	}
+	require.Len(t, records, len(expectedValues))
+	rowCount, err := iter.Close()
+	require.NoError(t, err)
+	require.Equal(t, int64(len(expectedValues)), rowCount)
+}
+
 func TestEventStoreGetIteratorConcurrently(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -921,7 +1070,8 @@ func TestEventStoreGetIteratorConcurrently(t *testing.T) {
 	encoder, err := zstd.NewWriter(nil)
 	require.NoError(t, err)
 	defer encoder.Close()
-	err = store.(*eventStore).writeEvents(store.(*eventStore).dbs[0], events, encoder)
+	var compressionBuf []byte
+	err = store.(*eventStore).writeEvents(store.(*eventStore).dbs[0], events, encoder, &compressionBuf)
 	require.NoError(t, err)
 
 	// 3. Advance resolved ts for the subscription.
