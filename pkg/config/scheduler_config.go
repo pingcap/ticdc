@@ -125,6 +125,16 @@ func (c *ChangefeedSchedulerConfig) ValidateAndAdjust(sinkURI *url.URL) error {
 	if util.GetOrZero(c.RegionCountPerSpan) <= 0 {
 		return errors.New("region-count-per-span must be larger than 0")
 	}
+
+	// Keep the initial split granularity bounded by the table split threshold.
+	regionThreshold := util.GetOrZero(c.RegionThreshold)
+	regionCountPerSpan := util.GetOrZero(c.RegionCountPerSpan)
+	if regionThreshold > 0 && regionCountPerSpan > regionThreshold {
+		log.Warn("`region-count-per-span` is larger than `region-threshold`, adjusting",
+			zap.Int("configuredRegionCountPerSpan", regionCountPerSpan),
+			zap.Int("regionThreshold", regionThreshold))
+		c.RegionCountPerSpan = util.AddressOf(regionThreshold)
+	}
 	if c.RegionCountRefreshInterval == nil || *c.RegionCountRefreshInterval <= 0 {
 		return errors.New("region-count-refresh-interval must be larger than 0")
 	}
