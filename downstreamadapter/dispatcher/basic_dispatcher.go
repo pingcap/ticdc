@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"math/rand"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/failpoint"
@@ -31,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	tidbTypes "github.com/pingcap/tidb/pkg/types"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -168,7 +168,7 @@ type BasicDispatcher struct {
 	sink sink.Sink
 
 	// the max resolvedTs received by the dispatcher
-	resolvedTs uint64
+	resolvedTs atomic.Uint64
 
 	// blockEventStatus is used to store the current pending ddl/sync point event and its block status.
 	blockEventStatus BlockEventStatus
@@ -246,7 +246,6 @@ func NewBasicDispatcher(
 		sharedInfo:             sharedInfo,
 		sink:                   sink,
 		componentStatus:        newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
-		resolvedTs:             startTs,
 		isRemoving:             atomic.Bool{},
 		duringHandleEvents:     atomic.Bool{},
 		blockEventStatus:       BlockEventStatus{blockPendingEvent: nil},
@@ -258,6 +257,7 @@ func NewBasicDispatcher(
 		mode:                   mode,
 		BootstrapState:         BootstrapFinished,
 	}
+	dispatcher.resolvedTs.Store(startTs)
 
 	return dispatcher
 }
@@ -293,7 +293,7 @@ func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent, wak
 	remaining.Store(int64(len(filteredEvents)))
 	for _, event := range filteredEvents {
 		event.AddPostEnqueueFunc(func() {
-			if remaining.Add(-1) == 0 {
+			if remaining.Dec() == 0 {
 				wakeCallback()
 			}
 		})
@@ -483,7 +483,7 @@ func (d *BasicDispatcher) GetHeartBeatInfo(h *HeartBeatInfo) {
 }
 
 func (d *BasicDispatcher) GetResolvedTs() uint64 {
-	return atomic.LoadUint64(&d.resolvedTs)
+	return d.resolvedTs.Load()
 }
 
 func (d *BasicDispatcher) GetLastSyncedTs() uint64 {
@@ -722,7 +722,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 		}
 	}
 	if latestResolvedTs > 0 {
-		atomic.StoreUint64(&d.resolvedTs, latestResolvedTs)
+		d.resolvedTs.Store(latestResolvedTs)
 	}
 	return block
 }
