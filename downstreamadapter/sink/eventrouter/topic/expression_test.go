@@ -15,6 +15,7 @@ package topic
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -272,6 +273,52 @@ func TestInvalidExpression(t *testing.T) {
 	require.ErrorIs(t, err, errors.ErrKafkaInvalidTopicExpression)
 	require.ErrorContains(t, err, "Avro")
 	require.ErrorContains(t, err, invalidExpr)
+}
+
+func TestColumnPlaceholderSubstituteWithValues(t *testing.T) {
+	t.Parallel()
+
+	topicExpr := Expression("events_{column:EventType}_{table}")
+	require.NoError(t, topicExpr.validate())
+	require.True(t, topicExpr.UsesColumnPlaceholders())
+	require.Equal(t, []string{"EventType"}, topicExpr.ReferencedColumns())
+
+	topicName, err := topicExpr.SubstituteWithValues("shop", "outbox", map[string]string{
+		"eventtype": "proxy.transaction-balance-change",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "events_proxy.transaction-balance-change_outbox", topicName)
+
+	_, err = topicExpr.SubstituteWithValues("shop", "outbox", map[string]string{})
+	require.ErrorContains(t, err, "column value for topic dispatch is not found")
+}
+
+func TestColumnPlaceholderValidateForAvro(t *testing.T) {
+	t.Parallel()
+
+	topicExpr := Expression("events_{schema}_{table}_{column:type}")
+	err := topicExpr.validateForAvro()
+	require.ErrorIs(t, err, errors.ErrKafkaInvalidTopicExpression)
+	require.ErrorContains(t, err, "does not support {column:<name>} placeholder")
+}
+
+func TestColumnPlaceholderTopicLengthConstraints(t *testing.T) {
+	t.Parallel()
+
+	topicExpr := Expression("{column:topic}")
+	value := strings.Repeat("x", kafkaTopicNameMaxLength+10)
+	topicName, err := topicExpr.SubstituteWithValues("s", "t", map[string]string{"topic": value})
+	require.NoError(t, err)
+	require.Len(t, topicName, kafkaTopicNameMaxLength)
+}
+
+func TestSubstitutePanicsForColumnPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	topicExpr := Expression("events_{column:event_type}")
+	require.Panics(t, func() {
+		_ = topicExpr.Substitute("shop", "outbox")
+	})
 }
 
 // cmd: go test -run='^$' -bench '^(BenchmarkSubstitute)$' github.com/pingcap/ticdc/cdc/sink/dispatcher/topic

@@ -21,121 +21,191 @@ import (
 )
 
 var (
-	// hardCodeTopicNameRe is used to match a topic name which is hard code in the config
+	// hardCodeTopicNameRe is used to match a topic name which is hard coded in the config.
 	hardCodeTopicNameRe = regexp.MustCompile(`^([A-Za-z0-9\._\-]+)$`)
-
-	// topicNameRE is used to match a valid topic expression
-	topicNameRE = regexp.MustCompile(
-		`^[A-Za-z0-9\._\-]*(\{schema\})?([A-Za-z0-9\._\-]*\{table\})?[A-Za-z0-9\._\-]*$`,
-	)
-	// kafkaForbidRE is used to reject the characters which are forbidden in kafka topic name
+	// kafkaForbidRE is used to reject the characters which are forbidden in kafka topic name.
 	kafkaForbidRE = regexp.MustCompile(`[^a-zA-Z0-9\._\-]`)
-	// schemaRE is used to match substring '{schema}' in topic expression
-	schemaRE = regexp.MustCompile(`\{schema\}`)
-	// tableRE is used to match substring '{table}' in topic expression
-	tableRE = regexp.MustCompile(`\{table\}`)
-	// avro has different topic name pattern requirements, '{schema}' and '{table}' placeholders
-	// are necessary
-	avroTopicNameRE = regexp.MustCompile(
-		`^[A-Za-z0-9\._\-]*\{schema\}[A-Za-z0-9\._\-]*\{table\}[A-Za-z0-9\._\-]*$`,
-	)
-	// pulsarTopicNameRE is used to match pulsar topic
-	pulsarTopicNameRE = regexp.MustCompile(
-		`(^((persistent|non-persistent)://)[A-Za-z0-9{}._\-]*/[A-Za-z0-9{}._\-]*/[A-Za-z0-9{}._\-]*$)|` +
-			`(^[A-Za-z0-9._-]*\{schema}[A-Za-z0-9._-]*\{table}[A-Za-z0-9._-]*)$`,
-	)
-	// pulsarTopicNameREFull is used to match pulsar full topic name
-	pulsarTopicNameREFull = regexp.MustCompile(
-		`(?:persistent|non-persistent)://.*`,
-	)
+	// genericTopicNameRe validates non-pulsar topic names after placeholder substitution.
+	genericTopicNameRe = regexp.MustCompile(`^[A-Za-z0-9\._\-]*$`)
+	// pulsarFullTopicNameRe validates full pulsar topic names after placeholder substitution.
+	pulsarFullTopicNameRe = regexp.MustCompile(`^(persistent|non-persistent)://[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$`)
 
 	// The max length of kafka topic name is 249.
 	// See https://github.com/apache/kafka/blob/trunk/clients/src/main/java/org/apache/kafka/common/internals/Topic.java#L35
 	kafkaTopicNameMaxLength = 249
 )
 
+type exprTokenType int
+
+const (
+	tokenLiteral exprTokenType = iota
+	tokenSchema
+	tokenTable
+	tokenColumn
+)
+
+type exprToken struct {
+	typ   exprTokenType
+	value string
+}
+
 // Expression represent a kafka topic expression.
-// The expression should be in form of: [prefix]{schema}[middle][{table}][suffix]
-// prefix/suffix/middle are optional and should match the regex of [A-Za-z0-9\._\-]*
-// {table} can also be optional.
+// The expression can contain literals and placeholders:
+// {schema}, {table}, {column:<column-name>}.
 type Expression string
 
 // Validate checks whether a kafka topic name is valid or not.
-// return true if the expression is hard coded.
 func (e Expression) validate() error {
-	// validate the topic expression
-	if ok := topicNameRE.MatchString(string(e)); ok {
-		return nil
+	tokens, err := parseExpressionTokens(string(e))
+	if err != nil {
+		return errors.ErrKafkaInvalidTopicExpression.GenWithStackByArgs(e)
 	}
-
-	return errors.ErrKafkaInvalidTopicExpression.GenWithStackByArgs(e)
+	for _, token := range tokens {
+		if token.typ != tokenLiteral {
+			continue
+		}
+		if !genericTopicNameRe.MatchString(token.value) {
+			return errors.ErrKafkaInvalidTopicExpression.GenWithStackByArgs(e)
+		}
+	}
+	return nil
 }
 
-// ValidateForAvro checks whether topic pattern is {schema}_{table}, the only allowed
+// ValidateForAvro checks whether topic pattern contains both {schema} and {table}.
 func (e Expression) validateForAvro() error {
-	if ok := avroTopicNameRE.MatchString(string(e)); !ok {
+	tokens, err := parseExpressionTokens(string(e))
+	if err != nil {
 		return errors.ErrKafkaInvalidTopicExpression.GenWithStackByArgs(e,
 			"topic rule for Avro must contain {schema} and {table}",
 		)
 	}
 
+	hasSchema, hasTable := false, false
+	for _, token := range tokens {
+		switch token.typ {
+		case tokenLiteral:
+			if !genericTopicNameRe.MatchString(token.value) {
+				return errors.ErrKafkaInvalidTopicExpression.GenWithStackByArgs(e,
+					"topic rule for Avro must contain {schema} and {table}",
+				)
+			}
+		case tokenSchema:
+			hasSchema = true
+		case tokenTable:
+			hasTable = true
+		case tokenColumn:
+			return errors.ErrKafkaInvalidTopicExpression.GenWithStackByArgs(e,
+				"topic rule for Avro does not support {column:<name>} placeholder",
+			)
+		}
+	}
+	if !hasSchema || !hasTable {
+		return errors.ErrKafkaInvalidTopicExpression.GenWithStackByArgs(e,
+			"topic rule for Avro must contain {schema} and {table}",
+		)
+	}
 	return nil
 }
 
 // PulsarValidate checks whether a pulsar topic name is valid or not.
 func (e Expression) validateForPulsar() error {
-	// validate the topic expression
-	topicName := string(e)
-
-	if len(topicName) == 0 {
-		return errors.ErrPulsarInvalidTopicExpression.GenWithStackByArgs(
-			"topic name is empty")
+	tokens, err := parseExpressionTokens(string(e))
+	if err != nil {
+		return errors.ErrPulsarInvalidTopicExpression.GenWithStackByArgs("invalid topic expression")
 	}
-
-	// if not full name, must be simple name
-	if !pulsarTopicNameREFull.MatchString(topicName) {
-		if strings.Contains(topicName, "/") {
-			return errors.ErrPulsarInvalidTopicExpression.GenWithStackByArgs(
-				"it should be in the format of a <topic> and topic name must contain '{schema}'" +
-					"and simple topic name must not contain '/'")
+	columnValues := make(map[string]string)
+	for _, token := range tokens {
+		if token.typ != tokenColumn {
+			continue
 		}
-	} else if !pulsarTopicNameRE.MatchString(topicName) {
-		return errors.ErrPulsarInvalidTopicExpression.GenWithStackByArgs(
-			"it should be in the format of <tenant>/<namespace>/<topic> or <topic> " +
-				"and topic name must contain '{schema}'")
+		columnValues[token.value] = "v"
+		columnValues[strings.ToLower(token.value)] = "v"
+	}
+	substituted := substituteTokens(tokens, "schema", "table", columnValues)
+	if len(substituted) == 0 {
+		return errors.ErrPulsarInvalidTopicExpression.GenWithStackByArgs("topic name is empty")
 	}
 
+	if strings.HasPrefix(substituted, "persistent://") || strings.HasPrefix(substituted, "non-persistent://") {
+		if !pulsarFullTopicNameRe.MatchString(substituted) {
+			return errors.ErrPulsarInvalidTopicExpression.GenWithStackByArgs(
+				"it should be in the format of <tenant>/<namespace>/<topic> or <topic>")
+		}
+		return nil
+	}
+
+	if strings.Contains(substituted, "/") {
+		return errors.ErrPulsarInvalidTopicExpression.GenWithStackByArgs(
+			"simple topic name must not contain '/'")
+	}
+	if !genericTopicNameRe.MatchString(substituted) {
+		return errors.ErrPulsarInvalidTopicExpression.GenWithStackByArgs(
+			"topic contains invalid characters")
+	}
 	return nil
 }
 
-// Substitute converts schema/table name in a topic expression to kafka topic name.
-// When doing conversion, the special characters other than [A-Za-z0-9\._\-] in schema/table
-// will be substituted for underscore '_'.
+// Substitute converts schema/table name in a topic expression to topic name.
+// It does not support expressions with {column:<name>} placeholder.
 func (e Expression) Substitute(schema, table string) string {
-	// some of the special characters will be replaced with '_'
-	replacedSchema := kafkaForbidRE.ReplaceAllString(schema, "_")
-	replacedTable := kafkaForbidRE.ReplaceAllString(table, "_")
-
-	topicExpr := string(e)
-	// doing the real conversion things
-	topicName := schemaRE.ReplaceAllString(topicExpr, replacedSchema)
-	topicName = tableRE.ReplaceAllString(topicName, replacedTable)
-
-	// topicName will be truncated if it exceed the limit.
-	// And topicName '.' and '..' are also invalid, replace them with '_'.
-	//    See https://github.com/apache/kafka/blob/trunk/clients/src/main/java/org/apache/kafka/common/internals/Topic.java#L46
-	if len(topicName) > kafkaTopicNameMaxLength {
-		return topicName[:kafkaTopicNameMaxLength]
-	} else if topicName == "." {
-		return "_"
-	} else if topicName == ".." {
-		return "__"
-	} else {
-		return topicName
+	tokens, err := parseExpressionTokens(string(e))
+	if err != nil {
+		return ""
 	}
+	for _, token := range tokens {
+		if token.typ == tokenColumn {
+			panic("topic expression with column placeholders requires row context")
+		}
+	}
+	return applyTopicNameConstraints(substituteTokens(tokens, schema, table, nil))
 }
 
-// IsHardCode checks whether a topic name is hard code or not.
+// SubstituteWithValues converts schema/table/column placeholder into a topic name.
+func (e Expression) SubstituteWithValues(
+	schema, table string, columnValues map[string]string,
+) (string, error) {
+	tokens, err := parseExpressionTokens(string(e))
+	if err != nil {
+		return "", errors.ErrKafkaInvalidTopicExpression.GenWithStackByArgs(e)
+	}
+	return substituteTokensWithMap(tokens, schema, table, columnValues)
+}
+
+func (e Expression) UsesColumnPlaceholders() bool {
+	tokens, err := parseExpressionTokens(string(e))
+	if err != nil {
+		return false
+	}
+	for _, token := range tokens {
+		if token.typ == tokenColumn {
+			return true
+		}
+	}
+	return false
+}
+
+func (e Expression) ReferencedColumns() []string {
+	tokens, err := parseExpressionTokens(string(e))
+	if err != nil {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	columns := make([]string, 0)
+	for _, token := range tokens {
+		if token.typ != tokenColumn {
+			continue
+		}
+		lowerName := strings.ToLower(token.value)
+		if _, ok := seen[lowerName]; ok {
+			continue
+		}
+		seen[lowerName] = struct{}{}
+		columns = append(columns, token.value)
+	}
+	return columns
+}
+
+// IsHardCode checks whether a topic name is hard coded or not.
 func isHardCode(topicName string) bool {
 	return hardCodeTopicNameRe.MatchString(topicName)
 }
@@ -148,4 +218,120 @@ func validateTopicExpression(expr Expression, isPulsar, isAvro bool) error {
 		return expr.validateForAvro()
 	}
 	return expr.validate()
+}
+
+func parseExpressionTokens(expression string) ([]exprToken, error) {
+	if len(expression) == 0 {
+		return nil, errors.ErrKafkaInvalidTopicExpression.GenWithStackByArgs(expression)
+	}
+	tokens := make([]exprToken, 0, 8)
+	for i := 0; i < len(expression); {
+		open := strings.IndexByte(expression[i:], '{')
+		if open < 0 {
+			tokens = append(tokens, exprToken{typ: tokenLiteral, value: expression[i:]})
+			break
+		}
+		open += i
+		if open > i {
+			tokens = append(tokens, exprToken{typ: tokenLiteral, value: expression[i:open]})
+		}
+		close := strings.IndexByte(expression[open+1:], '}')
+		if close < 0 {
+			return nil, errors.ErrKafkaInvalidTopicExpression.GenWithStackByArgs(expression)
+		}
+		close += open + 1
+		placeholder := expression[open+1 : close]
+		switch {
+		case placeholder == "schema":
+			tokens = append(tokens, exprToken{typ: tokenSchema})
+		case placeholder == "table":
+			tokens = append(tokens, exprToken{typ: tokenTable})
+		case strings.HasPrefix(placeholder, "column:"):
+			columnName := strings.TrimSpace(strings.TrimPrefix(placeholder, "column:"))
+			if columnName == "" {
+				return nil, errors.ErrKafkaInvalidTopicExpression.GenWithStackByArgs(expression)
+			}
+			tokens = append(tokens, exprToken{typ: tokenColumn, value: columnName})
+		default:
+			return nil, errors.ErrKafkaInvalidTopicExpression.GenWithStackByArgs(expression)
+		}
+		i = close + 1
+	}
+	return tokens, nil
+}
+
+func substituteTokensWithMap(
+	tokens []exprToken, schema, table string, columnValues map[string]string,
+) (string, error) {
+	topicName := substituteTokens(tokens, schema, table, columnValues)
+	var err error
+	if strings.Contains(topicName, "\x00") {
+		err = errors.ErrDispatcherFailed.GenWithStack("invalid null character in topic name")
+	}
+	if err != nil {
+		return "", err
+	}
+	for _, token := range tokens {
+		if token.typ != tokenColumn {
+			continue
+		}
+		if columnValues == nil {
+			return "", errors.ErrDispatcherFailed.GenWithStack(
+				"column placeholder requires row context, column: %s", token.value)
+		}
+		if _, ok := findColumnValue(columnValues, token.value); !ok {
+			return "", errors.ErrDispatcherFailed.GenWithStack(
+				"column value for topic dispatch is not found, column: %s", token.value)
+		}
+	}
+	return applyTopicNameConstraints(topicName), nil
+}
+
+func substituteTokens(tokens []exprToken, schema, table string, columnValues map[string]string) string {
+	var b strings.Builder
+	for _, token := range tokens {
+		switch token.typ {
+		case tokenLiteral:
+			b.WriteString(token.value)
+		case tokenSchema:
+			b.WriteString(sanitizeTopicValue(schema))
+		case tokenTable:
+			b.WriteString(sanitizeTopicValue(table))
+		case tokenColumn:
+			columnValue, _ := findColumnValue(columnValues, token.value)
+			b.WriteString(sanitizeTopicValue(columnValue))
+		}
+	}
+	return b.String()
+}
+
+func findColumnValue(columnValues map[string]string, columnName string) (string, bool) {
+	if columnValues == nil {
+		return "", false
+	}
+	if v, ok := columnValues[columnName]; ok {
+		return v, true
+	}
+	if v, ok := columnValues[strings.ToLower(columnName)]; ok {
+		return v, true
+	}
+	return "", false
+}
+
+func sanitizeTopicValue(value string) string {
+	return kafkaForbidRE.ReplaceAllString(value, "_")
+}
+
+func applyTopicNameConstraints(topicName string) string {
+	if len(topicName) > kafkaTopicNameMaxLength {
+		return topicName[:kafkaTopicNameMaxLength]
+	}
+	switch topicName {
+	case ".":
+		return "_"
+	case "..":
+		return "__"
+	default:
+		return topicName
+	}
 }
