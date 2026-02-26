@@ -22,6 +22,9 @@ const (
 
 type Generator interface {
 	Substitute(schema, table string) string
+	SubstituteWithValues(schema, table string, columnValues map[string]string) (string, error)
+	UsesColumnPlaceholders() bool
+	ReferencedColumns() []string
 	TopicGeneratorType() TopicGeneratorType
 }
 
@@ -39,6 +42,20 @@ func newStaticTopic(defaultTopic string) *StaticTopicGenerator {
 // Substitute converts schema/table name in a topic expression to kafka topic name.
 func (s *StaticTopicGenerator) Substitute(schema, table string) string {
 	return s.topic
+}
+
+func (s *StaticTopicGenerator) SubstituteWithValues(
+	schema, table string, columnValues map[string]string,
+) (string, error) {
+	return s.topic, nil
+}
+
+func (s *StaticTopicGenerator) UsesColumnPlaceholders() bool {
+	return false
+}
+
+func (s *StaticTopicGenerator) ReferencedColumns() []string {
+	return nil
 }
 
 func (s *StaticTopicGenerator) TopicGeneratorType() TopicGeneratorType {
@@ -61,6 +78,20 @@ func newDynamicTopicGenerator(topicExpr Expression) *DynamicTopicGenerator {
 // Substitute converts schema/table name in a topic expression to kafka topic name.
 func (d *DynamicTopicGenerator) Substitute(schema, table string) string {
 	return d.expression.Substitute(schema, table)
+}
+
+func (d *DynamicTopicGenerator) SubstituteWithValues(
+	schema, table string, columnValues map[string]string,
+) (string, error) {
+	return d.expression.SubstituteWithValues(schema, table, columnValues)
+}
+
+func (d *DynamicTopicGenerator) UsesColumnPlaceholders() bool {
+	return d.expression.UsesColumnPlaceholders()
+}
+
+func (d *DynamicTopicGenerator) ReferencedColumns() []string {
+	return d.expression.ReferencedColumns()
 }
 
 func (d *DynamicTopicGenerator) TopicGeneratorType() TopicGeneratorType {
