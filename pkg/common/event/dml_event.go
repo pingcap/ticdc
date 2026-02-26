@@ -642,14 +642,13 @@ func (t *DMLEvent) GetStartTs() common.Ts {
 
 // PostFlush marks the transaction as flushed to downstream.
 //
-// It always calls PostEnqueue first to preserve callback order:
-// enqueue callbacks run before flush callbacks, even for sinks that only invoke
-// PostFlush and do not have an explicit enqueue hook.
+// It runs flush callbacks first, then triggers PostEnqueue. For sinks with an
+// explicit enqueue hook, PostEnqueue may already have been called before flush.
 func (t *DMLEvent) PostFlush() {
-	t.PostEnqueue()
 	for _, f := range t.PostTxnFlushed {
 		f()
 	}
+	t.PostEnqueue()
 }
 
 // PostEnqueue marks the transaction as enqueued into sink internal pipeline.
@@ -698,7 +697,7 @@ func (t *DMLEvent) ClearPostEnqueueFunc() {
 // AddPostEnqueueFunc registers a callback that runs at enqueue stage.
 //
 // Use this when only sink acceptance is required. For sinks with no explicit
-// enqueue signal, this callback is triggered via PostFlush.
+// enqueue signal, this callback is triggered after flush callbacks in PostFlush.
 func (t *DMLEvent) AddPostEnqueueFunc(f func()) {
 	t.PostTxnEnqueued = append(t.PostTxnEnqueued, f)
 }

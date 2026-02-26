@@ -289,25 +289,14 @@ func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent, wak
 		return false
 	}
 
-	if d.sink.SinkType() == common.CloudStorageSinkType {
-		var remaining atomic.Int64
-		remaining.Store(int64(len(filteredEvents)))
-		for _, event := range filteredEvents {
-			event.AddPostEnqueueFunc(func() {
-				if remaining.Add(-1) == 0 {
-					wakeCallback()
-				}
-			})
-		}
-	} else {
-		wakeOnce := &sync.Once{}
-		for _, event := range filteredEvents {
-			event.AddPostFlushFunc(func() {
-				if d.tableProgress.Empty() {
-					wakeOnce.Do(wakeCallback)
-				}
-			})
-		}
+	var remaining atomic.Int64
+	remaining.Store(int64(len(filteredEvents)))
+	for _, event := range filteredEvents {
+		event.AddPostEnqueueFunc(func() {
+			if remaining.Add(-1) == 0 {
+				wakeCallback()
+			}
+		})
 	}
 
 	// for one batch events, we need to add all them in table progress first, then add them to sink

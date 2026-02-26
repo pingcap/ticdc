@@ -383,6 +383,24 @@ func TestDMLEventPostFlushTriggersPostEnqueueOnce(t *testing.T) {
 	require.Equal(t, int64(2), atomic.LoadInt64(&flushCalled))
 }
 
+func TestDMLEventPostFlushRunsFlushBeforePostEnqueueFallback(t *testing.T) {
+	t.Parallel()
+
+	event := &DMLEvent{}
+	order := make([]string, 0, 3)
+	event.AddPostFlushFunc(func() {
+		order = append(order, "flush")
+	})
+	event.AddPostEnqueueFunc(func() {
+		order = append(order, "enqueue")
+	})
+
+	event.PostFlush()
+	event.PostFlush()
+
+	require.Equal(t, []string{"flush", "enqueue", "flush"}, order)
+}
+
 func TestDMLEventPostEnqueueConcurrentWithPostFlush(t *testing.T) {
 	t.Parallel()
 
