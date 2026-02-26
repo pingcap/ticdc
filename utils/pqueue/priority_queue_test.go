@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package logpuller
+package pqueue
 
 import (
 	"context"
@@ -20,51 +20,27 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/stretchr/testify/require"
-	"github.com/tikv/client-go/v2/oracle"
-	"github.com/tikv/client-go/v2/tikv"
 )
 
 // mockPriorityTask is a simple mock implementation of PriorityTask for testing
 type mockPriorityTask struct {
 	priority    int
 	heapIndex   int
-	regionInfo  regionInfo
 	description string
 }
 
 func newMockPriorityTask(priority int, description string) *mockPriorityTask {
-	// Create a minimal regionInfo for testing
-	verID := tikv.NewRegionVerID(1, 1, 1)
-	span := heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("z")}
-
-	// Create a subscribedSpan with atomic resolvedTs
-	subscribedSpan := &subscribedSpan{
-		resolvedTs: atomic.Uint64{},
-	}
-	subscribedSpan.resolvedTs.Store(oracle.GoTimeToTS(time.Now()))
-
-	regionInfo := regionInfo{
-		verID:          verID,
-		span:           span,
-		subscribedSpan: subscribedSpan,
-	}
 
 	return &mockPriorityTask{
 		priority:    priority,
 		heapIndex:   0,
-		regionInfo:  regionInfo,
 		description: description,
 	}
 }
 
 func (m *mockPriorityTask) Priority() int {
 	return m.priority
-}
-
-func (m *mockPriorityTask) GetRegionInfo() regionInfo {
-	return m.regionInfo
 }
 
 func (m *mockPriorityTask) SetHeapIndex(index int) {
@@ -108,6 +84,50 @@ func TestPriorityQueue_Push(t *testing.T) {
 	case <-time.After(time.Millisecond * 100):
 		t.Fatal("Expected signal but none received")
 	}
+}
+
+func TestPriorityQueue_TryPushWithEviction(t *testing.T) {
+	pq := NewBoundedPriorityQueue(2)
+
+	task1 := newMockPriorityTask(10, "task1")
+	added, evicted := pq.TryPush(task1)
+	require.True(t, added)
+	require.Nil(t, evicted)
+
+	task2 := newMockPriorityTask(20, "task2")
+	added, evicted = pq.TryPush(task2)
+	require.True(t, added)
+	require.Nil(t, evicted)
+
+	// Queue is full now. Pushing a better priority task should evict the worst one.
+	task3 := newMockPriorityTask(5, "task3")
+	added, evicted = pq.TryPush(task3)
+	require.True(t, added)
+	require.NotNil(t, evicted)
+	require.Equal(t, "task2", evicted.(*mockPriorityTask).description)
+	require.Equal(t, 2, pq.Len())
+
+	// Pushing a worse task should be rejected.
+	task4 := newMockPriorityTask(30, "task4")
+	added, evicted = pq.TryPush(task4)
+	require.False(t, added)
+	require.Nil(t, evicted)
+	require.Equal(t, 2, pq.Len())
+
+	// Updating an existing task should succeed without eviction.
+	task1.priority = 1
+	added, evicted = pq.TryPush(task1)
+	require.True(t, added)
+	require.Nil(t, evicted)
+
+	// The queue should still contain the best two tasks: task1 and task3.
+	ctx := context.Background()
+	top, err := pq.Pop(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "task1", top.(*mockPriorityTask).description)
+	top, err = pq.Pop(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "task3", top.(*mockPriorityTask).description)
 }
 
 func TestPriorityQueue_Peek(t *testing.T) {
@@ -429,65 +449,5 @@ func TestPriorityQueue_EmptyQueueOperations(t *testing.T) {
 
 	task2, err := pq.Pop(ctx)
 	require.Nil(t, task2)
-	require.Error(t, err)
-}
-
-func TestPriorityQueue_RealPriorityTaskIntegration(t *testing.T) {
-	pq := NewPriorityQueue()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	currentTs := oracle.GoTimeToTS(time.Now())
-
-	// Create real priority tasks with different types
-	verID := tikv.NewRegionVerID(1, 1, 1)
-	span := heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("z")}
-
-	subscribedSpan := &subscribedSpan{
-		resolvedTs: atomic.Uint64{},
-	}
-	subscribedSpan.resolvedTs.Store(oracle.GoTimeToTS(time.Now().Add(-time.Second)))
-
-	regionInfo := regionInfo{
-		verID:          verID,
-		span:           span,
-		subscribedSpan: subscribedSpan,
-	}
-
-	// Create tasks with different priorities
-	errorTask := NewRegionPriorityTask(TaskHighPrior, regionInfo, currentTs+1)
-	highTask := NewRegionPriorityTask(TaskHighPrior, regionInfo, currentTs)
-	lowTask := NewRegionPriorityTask(TaskLowPrior, regionInfo, currentTs)
-
-	// Add tasks in non-priority order
-	pq.Push(lowTask)
-	pq.Push(errorTask)
-	pq.Push(highTask)
-
-	require.Equal(t, 3, pq.Len())
-
-	// Pop tasks and verify they come out in priority order
-	// TaskRegionError should have highest priority (lowest value)
-	first, err := pq.Pop(ctx)
-	require.NoError(t, err)
-	require.NotNil(t, first)
-	require.Equal(t, TaskHighPrior, first.(*regionPriorityTask).taskType)
-
-	second, err := pq.Pop(ctx)
-	require.NoError(t, err)
-	require.NotNil(t, second)
-	require.Equal(t, TaskHighPrior, second.(*regionPriorityTask).taskType)
-
-	third, err := pq.Pop(ctx)
-	require.NoError(t, err)
-	require.NotNil(t, third)
-	require.Equal(t, TaskLowPrior, third.(*regionPriorityTask).taskType)
-
-	require.Equal(t, 0, pq.Len())
-
-	pq.Close()
-	cancel()
-	task, err := pq.Pop(ctx)
-	require.Nil(t, task)
 	require.Error(t, err)
 }

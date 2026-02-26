@@ -15,6 +15,7 @@ package eventservice
 
 import (
 	"context"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -300,7 +301,25 @@ func (c *eventBroker) runScanWorker(ctx context.Context, taskChan chan scanTask)
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case task := <-taskChan:
-			c.doScan(ctx, task)
+
+			priorityTask, err := task.changefeedStat.priorityQueue.Pop(ctx)
+			if err != nil {
+				if ctx.Err() != nil {
+					return context.Cause(ctx)
+				}
+				log.Warn("failed to pop task from priority queue", zap.Stringer("changefeedID", task.changefeedStat.changefeedID), zap.Stringer("dispatcherID", task.id), zap.Error(err))
+				task.isTaskScanning.Store(false)
+				continue
+			}
+
+			dispatcherTask, ok := priorityTask.(*dispatcherStat)
+			if !ok {
+				log.Warn("unexpected task type from priority queue", zap.Any("task", priorityTask))
+				task.isTaskScanning.Store(false)
+				continue
+			}
+
+			c.doScan(ctx, dispatcherTask)
 		}
 	}
 }
@@ -577,7 +596,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	// At this time, a dispatcher with very little traffic comes in. It cannot apply for the rate limit, resulting in it being starved and unable to be scheduled for a long time.
 	// Therefore, we need to consider the priority of each task in the future and allocate rate limits based on priority.
 	// My current idea is to divide rate limits into 3 different levels, and decide which rate limit to use according to lastScanBytes.
-	if !c.scanRateLimiter.AllowN(time.Now(), int(task.lastScanBytes.Load())) {
+	if !task.changefeedStat.scanLimit.AllowN(time.Now(), int(task.lastScanBytes.Load())) {
 		log.Debug("scan rate limit exceeded",
 			zap.Stringer("dispatcher", task.id),
 			zap.Int64("lastScanBytes", task.lastScanBytes.Load()),
@@ -834,6 +853,7 @@ func (c *eventBroker) reportDispatcherStatToStore(ctx context.Context, tickInter
 	isInactiveDispatcher := func(d *dispatcherStat) bool {
 		return d.isHandshaked() && time.Since(time.Unix(d.lastReceivedHeartbeatTime.Load(), 0)) > heartbeatTimeout
 	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -896,16 +916,34 @@ func (c *eventBroker) pushTask(d *dispatcherStat, force bool) {
 		return
 	}
 
-	if force {
-		c.taskChan[d.scanWorkerIndex] <- d
-	} else {
-		timer := time.NewTimer(time.Millisecond * 10)
-		select {
-		case c.taskChan[d.scanWorkerIndex] <- d:
-		case <-timer.C:
-			d.isTaskScanning.Store(false)
+	added, evicted := d.changefeedStat.priorityQueue.TryPush(d)
+	if !added {
+		if force {
+			log.Warn("priority queue reject forced scan task", zap.Stringer("dispatcherID", d.id))
+		} else {
+			log.Info("fizz skip enqueue scan task because priority queue is full and task has lower priority",
+				zap.Stringer("dispatcherID", d.id))
+		}
+		d.isTaskScanning.Store(false)
+		return
+	}
+
+	if evicted != nil {
+		if evictedDispatcher, ok := evicted.(*dispatcherStat); ok && evictedDispatcher != d {
+			evictedDispatcher.isTaskScanning.Store(false)
 		}
 	}
+
+	if !force {
+		select {
+		case c.taskChan[d.scanWorkerIndex] <- d:
+		default:
+		}
+		return
+	}
+
+	c.taskChan[d.scanWorkerIndex] <- d
+
 }
 
 func (c *eventBroker) getDispatcher(id common.DispatcherID) *atomic.Pointer[dispatcherStat] {
@@ -1188,9 +1226,11 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 	}
 
 	holder := make(map[common.GID]uint64, len(availables))
+	popHolder := make(map[common.GID]uint64, len(availables))
 	dispatcherAvailable := make(map[common.DispatcherID]uint64, len(availables))
 	for _, item := range availables {
 		holder[item.Gid] = item.Available
+		popHolder[item.Gid] = item.PopSizeLast1s
 		for dispatcherID, available := range item.DispatcherAvailable {
 			dispatcherAvailable[dispatcherID] = available
 		}
@@ -1203,6 +1243,14 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 		if ok {
 			changefeed.availableMemoryQuota.Store(from, atomic.NewUint64(available))
 			metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(available))
+		}
+		popSize, popOK := popHolder[changefeedID.ID()]
+		if popOK {
+			limit := math.Max(float64(popSize)*1.5, float64(minScanLimitRate))
+			changefeed.scanLimit.SetLimit(rate.Limit(limit))
+			changefeed.scanLimit.SetBurst(int(limit))
+
+			metrics.EventServiceScanLimitRateVec.WithLabelValues(changefeedID.String()).Set(float64(limit))
 		}
 		return true
 	})

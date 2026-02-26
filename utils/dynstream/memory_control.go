@@ -61,6 +61,8 @@ type areaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct 
 	lastAppendEventTime   atomic.Value
 	lastSizeDecreaseTime  atomic.Value
 	lastReleaseMemoryTime atomic.Value
+
+	popSizeWindow *slidingCounter
 }
 
 func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
@@ -77,6 +79,7 @@ func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 		lastSendFeedbackTime: atomic.Value{},
 		lastSizeDecreaseTime: atomic.Value{},
 		algorithm:            NewMemoryControlAlgorithm(settings.algorithm),
+		popSizeWindow:        newSlidingCounter(time.Second),
 	}
 
 	res.lastAppendEventTime.Store(time.Now())
@@ -290,6 +293,20 @@ func (as *areaMemStat[A, P, T, D, H]) decPendingSize(path *pathInfo[A, P, T, D, 
 	as.updateAreaPauseState(path)
 }
 
+func (as *areaMemStat[A, P, T, D, H]) recordPopSize(size int) {
+	if size <= 0 || as.popSizeWindow == nil {
+		return
+	}
+	as.popSizeWindow.Add(int64(size))
+}
+
+func (as *areaMemStat[A, P, T, D, H]) PopSizeLast1s() int64 {
+	if as.popSizeWindow == nil {
+		return 0
+	}
+	return as.popSizeWindow.Value()
+}
+
 // A memControl is used to control the memory usage of the dynamic stream.
 // It is a global level struct, not stream level.
 type memControl[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
@@ -358,6 +375,7 @@ func (m *memControl[A, P, T, D, H]) getMetrics() MemoryMetric[A, P] {
 			UsedMemoryValue:     area.totalPendingSize.Load(),
 			MaxMemoryValue:      int64(area.settings.Load().maxPendingSize),
 			PathMaxMemoryValue:  int64(area.settings.Load().pathMaxPendingSize),
+			PopSizeLast1s:       area.PopSizeLast1s(),
 		}
 		area.pathMap.Range(func(k, v interface{}) bool {
 			usedMemory := v.(*pathInfo[A, P, T, D, H]).pendingSize.Load()
@@ -370,6 +388,68 @@ func (m *memControl[A, P, T, D, H]) getMetrics() MemoryMetric[A, P] {
 	return metrics
 }
 
+type slidingCounter struct {
+	mu      sync.Mutex
+	window  time.Duration
+	total   int64
+	entries []slidingCounterEntry
+}
+
+type slidingCounterEntry struct {
+	ts    time.Time
+	value int64
+}
+
+func newSlidingCounter(window time.Duration) *slidingCounter {
+	return &slidingCounter{
+		window:  window,
+		entries: make([]slidingCounterEntry, 0, 32),
+	}
+}
+
+func (sc *slidingCounter) Add(value int64) {
+	if value <= 0 {
+		return
+	}
+	now := time.Now()
+
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+
+	sc.entries = append(sc.entries, slidingCounterEntry{ts: now, value: value})
+	sc.total += value
+	sc.purge(now)
+}
+
+func (sc *slidingCounter) Value() int64 {
+	now := time.Now()
+
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+
+	sc.purge(now)
+	return sc.total
+}
+
+func (sc *slidingCounter) purge(now time.Time) {
+	if sc.window <= 0 {
+		return
+	}
+	cutoff := now.Add(-sc.window)
+	idx := 0
+	for idx < len(sc.entries) && !sc.entries[idx].ts.After(cutoff) {
+		sc.total -= sc.entries[idx].value
+		idx++
+	}
+	if idx > 0 {
+		sc.entries = sc.entries[idx:]
+		if len(sc.entries) == 0 && sc.total != 0 {
+			// Safety reset in case of numerical drift.
+			sc.total = 0
+		}
+	}
+}
+
 type MemoryMetric[A Area, P Path] struct {
 	AreaMemoryMetrics []AreaMemoryMetric[A, P]
 }
@@ -380,6 +460,8 @@ type AreaMemoryMetric[A Area, P Path] struct {
 	UsedMemoryValue     int64
 	MaxMemoryValue      int64
 	PathMaxMemoryValue  int64
+
+	PopSizeLast1s int64
 }
 
 func (a *AreaMemoryMetric[A, P]) MemoryUsageRatio() float64 {
@@ -404,4 +486,8 @@ func (a *AreaMemoryMetric[A, P]) Area() A {
 
 func (a *AreaMemoryMetric[A, P]) PathMetrics() map[P]int64 {
 	return a.PathAvailableMemory
+}
+
+func (a *AreaMemoryMetric[A, P]) PopSizeRate() int64 {
+	return a.PopSizeLast1s
 }

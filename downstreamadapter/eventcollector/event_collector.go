@@ -600,6 +600,7 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 	// collect path-level available memory and total available memory for each changefeed
 	changefeedPathMemory := make(map[common.ChangeFeedID]map[common.DispatcherID]uint64)
 	changefeedTotalMemory := make(map[common.ChangeFeedID]uint64)
+	changefeedPopSize := make(map[common.ChangeFeedID]uint64)
 
 	// collect from main dynamic stream
 	for _, quota := range c.ds.GetMetrics().MemoryControl.AreaMemoryMetrics {
@@ -617,6 +618,13 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 		}
 		// store total available memory from AreaMemoryMetric
 		changefeedTotalMemory[cfID] = uint64(quota.AvailableMemory())
+
+		// store pop size within last 1s
+		if pop := quota.PopSizeRate(); pop > 0 {
+			changefeedPopSize[cfID] = uint64(pop)
+		} else {
+			changefeedPopSize[cfID] = 0
+		}
 	}
 
 	// collect from redo dynamic stream and take minimum
@@ -642,6 +650,24 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 			changefeedTotalMemory[cfID] = min(existing, uint64(quota.AvailableMemory()))
 		} else {
 			changefeedTotalMemory[cfID] = uint64(quota.AvailableMemory())
+		}
+
+		// take minimum pop size rate between main and redo streams (when both are present)
+		pop := quota.PopSizeRate()
+		popValue := uint64(0)
+		if pop > 0 {
+			popValue = uint64(pop)
+		}
+		if existing, exists := changefeedPopSize[cfID]; exists {
+			if existing == 0 {
+				changefeedPopSize[cfID] = popValue
+			} else if popValue == 0 {
+				changefeedPopSize[cfID] = existing
+			} else {
+				changefeedPopSize[cfID] = min(existing, popValue)
+			}
+		} else {
+			changefeedPopSize[cfID] = popValue
 		}
 	}
 
@@ -688,13 +714,16 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 
 			// get total available memory directly from AreaMemoryMetric
 			totalAvailable := uint64(changefeedTotalMemory[changefeedID])
-			if totalAvailable > 0 {
-				congestionControl.AddAvailableMemoryWithDispatchers(
-					changefeedID.ID(),
-					totalAvailable,
-					dispatcherMemory,
-				)
+			if totalAvailable == 0 {
+				continue
 			}
+			popRate := changefeedPopSize[changefeedID]
+			congestionControl.AddAvailableMemoryWithDispatchers(
+				changefeedID.ID(),
+				totalAvailable,
+				dispatcherMemory,
+				popRate,
+			)
 		}
 
 		if len(congestionControl.GetAvailables()) > 0 {
