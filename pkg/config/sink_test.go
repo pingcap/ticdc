@@ -450,6 +450,10 @@ func TestShouldSendBootstrapMsg(t *testing.T) {
 	count := int32(0)
 	sinkConfig.SendBootstrapInMsgCount = &count
 	require.False(t, sinkConfig.ShouldSendBootstrapMsg())
+
+	outboxProtocol := "outbox-json"
+	sinkConfig.Protocol = &outboxProtocol
+	require.False(t, sinkConfig.ShouldSendBootstrapMsg())
 }
 
 func TestShouldSendAllBootstrapAtStart(t *testing.T) {
@@ -462,4 +466,94 @@ func TestShouldSendAllBootstrapAtStart(t *testing.T) {
 	should := true
 	sinkConfig.SendAllBootstrapAtStart = &should
 	require.True(t, sinkConfig.ShouldSendAllBootstrapAtStart())
+}
+
+func TestValidateAndAdjustOutboxProtocol(t *testing.T) {
+	t.Parallel()
+
+	validOutbox := &OutboxConfig{
+		IDColumn:      "id",
+		KeyColumn:     "aggregate_id",
+		ValueColumn:   "payload",
+		HeaderColumns: map[string]string{"type": "type"},
+	}
+
+	testCases := []struct {
+		name      string
+		sinkURI   string
+		sinkCfg   *SinkConfig
+		expectErr string
+	}{
+		{
+			name:    "valid kafka outbox",
+			sinkURI: "kafka://127.0.0.1:9092/test?protocol=outbox-json",
+			sinkCfg: &SinkConfig{
+				Outbox: validOutbox,
+			},
+		},
+		{
+			name:      "missing outbox config",
+			sinkURI:   "kafka://127.0.0.1:9092/test?protocol=outbox-json",
+			sinkCfg:   &SinkConfig{},
+			expectErr: "outbox config is required",
+		},
+		{
+			name:    "duplicate header source column",
+			sinkURI: "kafka://127.0.0.1:9092/test?protocol=outbox-json",
+			sinkCfg: &SinkConfig{
+				Outbox: &OutboxConfig{
+					IDColumn:      "id",
+					KeyColumn:     "key",
+					ValueColumn:   "value",
+					HeaderColumns: map[string]string{"event-id": "id"},
+				},
+			},
+			expectErr: "duplicate column",
+		},
+		{
+			name:    "reserved id header key",
+			sinkURI: "kafka://127.0.0.1:9092/test?protocol=outbox-json",
+			sinkCfg: &SinkConfig{
+				Outbox: &OutboxConfig{
+					IDColumn:      "id",
+					KeyColumn:     "key",
+					ValueColumn:   "value",
+					HeaderColumns: map[string]string{"Id": "type"},
+				},
+			},
+			expectErr: "reserved",
+		},
+		{
+			name:    "outbox incompatible with non kafka scheme",
+			sinkURI: "pulsar://127.0.0.1:6650/test?protocol=outbox-json",
+			sinkCfg: &SinkConfig{
+				Outbox: validOutbox,
+			},
+			expectErr: "incompatible with pulsar scheme",
+		},
+		{
+			name:    "table atomicity still rejected",
+			sinkURI: "kafka://127.0.0.1:9092/test?protocol=outbox-json&transaction-atomicity=table",
+			sinkCfg: &SinkConfig{
+				Outbox: validOutbox,
+			},
+			expectErr: "atomicity is not supported by kafka scheme",
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			uri, err := url.Parse(tc.sinkURI)
+			require.NoError(t, err)
+			err = tc.sinkCfg.validateAndAdjust(uri)
+			if tc.expectErr == "" {
+				require.NoError(t, err)
+				require.Equal(t, "outbox-json", util.GetOrZero(tc.sinkCfg.Protocol))
+			} else {
+				require.ErrorContains(t, err, tc.expectErr)
+			}
+		})
+	}
 }
