@@ -130,7 +130,7 @@ func (c *ChangefeedSchedulerConfig) ValidateAndAdjust(sinkURI *url.URL) error {
 	regionThreshold := util.GetOrZero(c.RegionThreshold)
 	regionCountPerSpan := util.GetOrZero(c.RegionCountPerSpan)
 	if regionThreshold > 0 && regionCountPerSpan > regionThreshold {
-		log.Warn("RegionCountPerSpan is larger than RegionThreshold, adjusting to RegionThreshold",
+log.Warn("`region-count-per-span` is larger than `region-threshold`, adjusting",
 			zap.Int("configuredRegionCountPerSpan", regionCountPerSpan),
 			zap.Int("regionThreshold", regionThreshold))
 		c.RegionCountPerSpan = util.AddressOf(regionThreshold)
