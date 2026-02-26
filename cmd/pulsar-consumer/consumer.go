@@ -15,6 +15,7 @@ package main
 
 import (
 	"context"
+	"strings"
 
 	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/apache/pulsar-client-go/pulsar/auth"
