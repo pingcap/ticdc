@@ -157,6 +157,7 @@ func (v *RawKVEntry) Encode() []byte {
 }
 
 // Decode deserializes a byte slice into a RawKVEntry
+// Note: the `data` slice may be changed after calling this function, so do not keep reference to it.
 func (v *RawKVEntry) Decode(data []byte) error {
 	if len(data) < 36 { // Minimum size for fixed-length fields
 		return fmt.Errorf("insufficient data length")
