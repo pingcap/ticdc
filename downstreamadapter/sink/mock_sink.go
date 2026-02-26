@@ -22,10 +22,11 @@ import (
 )
 
 type mockSink struct {
-	mu       sync.Mutex
-	dmls     []*commonEvent.DMLEvent
-	isNormal bool
-	sinkType common.SinkType
+	mu          sync.Mutex
+	dmls        []*commonEvent.DMLEvent
+	blockEvents []commonEvent.BlockEvent
+	isNormal    bool
+	sinkType    common.SinkType
 }
 
 func (s *mockSink) AddDMLEvent(event *commonEvent.DMLEvent) {
@@ -35,6 +36,9 @@ func (s *mockSink) AddDMLEvent(event *commonEvent.DMLEvent) {
 }
 
 func (s *mockSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
+	s.mu.Lock()
+	s.blockEvents = append(s.blockEvents, event)
+	s.mu.Unlock()
 	event.PostFlush()
 	return nil
 }
@@ -78,10 +82,17 @@ func (s *mockSink) GetDMLs() []*commonEvent.DMLEvent {
 	return s.dmls
 }
 
+func (s *mockSink) GetBlockEvents() []commonEvent.BlockEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]commonEvent.BlockEvent(nil), s.blockEvents...)
+}
+
 func NewMockSink(sinkType common.SinkType) *mockSink {
 	return &mockSink{
-		dmls:     make([]*commonEvent.DMLEvent, 0),
-		isNormal: true,
-		sinkType: sinkType,
+		dmls:        make([]*commonEvent.DMLEvent, 0),
+		blockEvents: make([]commonEvent.BlockEvent, 0),
+		isNormal:    true,
+		sinkType:    sinkType,
 	}
 }

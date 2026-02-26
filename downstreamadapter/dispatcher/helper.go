@@ -14,6 +14,7 @@
 package dispatcher
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,7 +22,10 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -421,6 +425,166 @@ func storeBootstrapState(addr *bootstrapState, state bootstrapState) {
 
 func loadBootstrapState(addr *bootstrapState) bootstrapState {
 	return bootstrapState(atomic.LoadInt32((*int32)(addr)))
+}
+
+const schemaStoreBootstrapTimeout = 10 * time.Minute
+
+type schemaStoreClient struct {
+	mc messaging.MessageCenter
+
+	nextRequestID atomic.Uint64
+
+	pendingMu sync.Mutex
+	pending   map[uint64]chan *messaging.SchemaStoreTableInfosResponse
+}
+
+var (
+	schemaStoreClientMu sync.Mutex
+	// schemaStoreClientInstance is a server-level singleton. It's created lazily,
+	// because EmitBootstrap is the only caller and MessageCenter is wired by server bootstrap.
+	schemaStoreClientInstance atomic.Pointer[schemaStoreClient]
+)
+
+func getSchemaStoreClient() *schemaStoreClient {
+	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
+
+	if c := schemaStoreClientInstance.Load(); c != nil && c.mc == mc {
+		return c
+	}
+
+	schemaStoreClientMu.Lock()
+	defer schemaStoreClientMu.Unlock()
+
+	// Allow tests to swap message center by rebuilding the client when mc changed.
+	if c := schemaStoreClientInstance.Load(); c != nil && c.mc == mc {
+		return c
+	}
+
+	c := &schemaStoreClient{
+		mc:      mc,
+		pending: make(map[uint64]chan *messaging.SchemaStoreTableInfosResponse),
+	}
+	c.mc.RegisterHandler(messaging.SchemaStoreClientTopic, c.handleMessage)
+	schemaStoreClientInstance.Store(c)
+	return c
+}
+
+func (c *schemaStoreClient) handleMessage(_ context.Context, msg *messaging.TargetMessage) error {
+	for _, m := range msg.Message {
+		resp, ok := m.(*messaging.SchemaStoreTableInfosResponse)
+		if !ok {
+			log.Warn("invalid schema store response message, ignore it",
+				zap.String("type", msg.Type.String()),
+				zap.Any("message", m))
+			continue
+		}
+
+		c.pendingMu.Lock()
+		ch, ok := c.pending[resp.RequestID]
+		c.pendingMu.Unlock()
+		if !ok {
+			log.Debug("schema store response received but request already removed",
+				zap.Uint64("requestID", resp.RequestID),
+				zap.Int64("tableID", resp.TableID),
+				zap.Bool("done", resp.Done))
+			continue
+		}
+
+		select {
+		case ch <- resp:
+		default:
+			log.Warn("schema store response channel is full, drop response",
+				zap.Uint64("requestID", resp.RequestID),
+				zap.Int64("tableID", resp.TableID),
+				zap.Bool("done", resp.Done))
+		}
+	}
+	return nil
+}
+
+func (c *schemaStoreClient) getTableInfos(
+	keyspaceMeta common.KeyspaceMeta,
+	tableIDs []int64,
+	ts uint64,
+) ([]*common.TableInfo, error) {
+	reqID := c.nextRequestID.Add(1)
+
+	bufferSize := len(tableIDs) + 1
+	if bufferSize < 8 {
+		bufferSize = 8
+	}
+	if bufferSize > 4096 {
+		bufferSize = 4096
+	}
+
+	respCh := make(chan *messaging.SchemaStoreTableInfosResponse, bufferSize)
+	c.pendingMu.Lock()
+	c.pending[reqID] = respCh
+	c.pendingMu.Unlock()
+
+	cleanup := func() {
+		c.pendingMu.Lock()
+		delete(c.pending, reqID)
+		c.pendingMu.Unlock()
+	}
+	defer cleanup()
+
+	target := node.ID(appcontext.GetID())
+	if target.IsEmpty() {
+		return nil, errors.New("server id is empty")
+	}
+	err := c.mc.SendCommand(messaging.NewSingleTargetMessage(target, messaging.SchemaStoreTopic, &messaging.SchemaStoreTableInfosRequest{
+		RequestID:    reqID,
+		KeyspaceID:   keyspaceMeta.ID,
+		KeyspaceName: keyspaceMeta.Name,
+		TableIDs:     tableIDs,
+		Ts:           ts,
+	}))
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), schemaStoreBootstrapTimeout)
+	defer cancel()
+
+	tableInfosByID := make(map[int64]*common.TableInfo, len(tableIDs))
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, errors.Trace(ctx.Err())
+		case resp := <-respCh:
+			if resp == nil {
+				continue
+			}
+			if resp.Done {
+				if resp.Error != "" {
+					return nil, errors.New(resp.Error)
+				}
+				result := make([]*common.TableInfo, 0, len(tableIDs))
+				for _, tableID := range tableIDs {
+					if tableInfo, ok := tableInfosByID[tableID]; ok {
+						result = append(result, tableInfo)
+					}
+				}
+				return result, nil
+			}
+
+			if resp.Error != "" {
+				log.Warn("get table info from schema store failed, ignore it",
+					zap.Any("keyspace", keyspaceMeta),
+					zap.Int64("tableID", resp.TableID),
+					zap.Uint64("ts", ts),
+					zap.String("error", resp.Error))
+				continue
+			}
+
+			tableInfo, err := common.UnmarshalJSONToTableInfo(resp.TableInfo)
+			if err != nil {
+				return nil, errors.Trace(err)
+			}
+			tableInfosByID[resp.TableID] = tableInfo
+		}
+	}
 }
 
 // addToDynamicStream add self to dynamic stream

@@ -104,6 +104,8 @@ const (
 	TypeRedoResolvedTsForwardMessage       IOType = 39
 	TypeDispatcherSetChecksumUpdateRequest IOType = 40
 	TypeDispatcherSetChecksumAckResponse   IOType = 41
+	TypeSchemaStoreTableInfosRequest       IOType = 42
+	TypeSchemaStoreTableInfosResponse      IOType = 43
 )
 
 func (t IOType) String() string {
@@ -190,6 +192,10 @@ func (t IOType) String() string {
 		return "MergeDispatcherRequest"
 	case TypeLogCoordinatorChangefeedStates:
 		return "TypeLogCoordinatorChangefeedStates"
+	case TypeSchemaStoreTableInfosRequest:
+		return "TypeSchemaStoreTableInfosRequest"
+	case TypeSchemaStoreTableInfosResponse:
+		return "TypeSchemaStoreTableInfosResponse"
 	default:
 	}
 	return "Unknown"
@@ -389,6 +395,10 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 		m = &heartbeatpb.LogCoordinatorResolvedTsRequest{}
 	case TypeLogCoordinatorResolvedTsResponse:
 		m = &heartbeatpb.LogCoordinatorResolvedTsResponse{}
+	case TypeSchemaStoreTableInfosRequest:
+		m = &SchemaStoreTableInfosRequest{}
+	case TypeSchemaStoreTableInfosResponse:
+		m = &SchemaStoreTableInfosResponse{}
 	default:
 		log.Debug("Unimplemented IOType, ignore the message", zap.Stringer("Type", ioType))
 		return nil, errors.ErrUnimplementedIOType.GenWithStackByArgs(int(ioType))
@@ -501,6 +511,10 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		ioType = TypeLogCoordinatorResolvedTsRequest
 	case *heartbeatpb.LogCoordinatorResolvedTsResponse:
 		ioType = TypeLogCoordinatorResolvedTsResponse
+	case *SchemaStoreTableInfosRequest:
+		ioType = TypeSchemaStoreTableInfosRequest
+	case *SchemaStoreTableInfosResponse:
+		ioType = TypeSchemaStoreTableInfosResponse
 	default:
 		panic("unknown io type")
 	}

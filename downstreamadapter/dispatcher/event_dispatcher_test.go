@@ -14,6 +14,7 @@
 package dispatcher
 
 import (
+	"context"
 	"math"
 	"sync/atomic"
 	"testing"
@@ -24,9 +25,12 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/stretchr/testify/require"
 )
@@ -704,6 +708,120 @@ func TestDispatcherClose(t *testing.T) {
 		require.Equal(t, uint64(1), watermark.CheckpointTs)
 		require.Equal(t, uint64(0), watermark.ResolvedTs)
 	}
+}
+
+func TestEmitBootstrapFetchesTableInfosByMessage(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	serverID := node.NewID()
+	mc := messaging.NewMessageCenter(ctx, serverID, config.NewDefaultMessageCenterConfig("127.0.0.1:0"), nil)
+	mc.Run(ctx)
+	t.Cleanup(mc.Close)
+
+	appcontext.SetID(serverID.String())
+	appcontext.SetService(appcontext.MessageCenter, mc)
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job1 := helper.DDL2Job("create table t1(id int primary key, v int)")
+	job2 := helper.DDL2Job("create table t2(id int primary key, v int)")
+
+	tableInfo1 := helper.GetTableInfo(job1)
+	tableInfo2 := helper.GetTableInfo(job2)
+
+	tableInfoByID := map[int64]*common.TableInfo{
+		tableInfo1.TableName.TableID: tableInfo1,
+		tableInfo2.TableName.TableID: tableInfo2,
+	}
+
+	handlerErrCh := make(chan error, 1)
+	mc.RegisterHandler(messaging.SchemaStoreTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
+		for _, m := range msg.Message {
+			req, ok := m.(*messaging.SchemaStoreTableInfosRequest)
+			if !ok {
+				select {
+				case handlerErrCh <- errors.New("invalid schema store request message"):
+				default:
+				}
+				continue
+			}
+
+			for _, tableID := range req.TableIDs {
+				tableInfo, ok := tableInfoByID[tableID]
+				if !ok {
+					_ = mc.SendCommand(messaging.NewSingleTargetMessage(msg.From, messaging.SchemaStoreClientTopic, &messaging.SchemaStoreTableInfosResponse{
+						RequestID: req.RequestID,
+						TableID:   tableID,
+						Error:     "table not found",
+					}))
+					continue
+				}
+				data, err := tableInfo.Marshal()
+				if err != nil {
+					select {
+					case handlerErrCh <- err:
+					default:
+					}
+					continue
+				}
+				_ = mc.SendCommand(messaging.NewSingleTargetMessage(msg.From, messaging.SchemaStoreClientTopic, &messaging.SchemaStoreTableInfosResponse{
+					RequestID: req.RequestID,
+					TableID:   tableID,
+					TableInfo: data,
+				}))
+			}
+
+			_ = mc.SendCommand(messaging.NewSingleTargetMessage(msg.From, messaging.SchemaStoreClientTopic, &messaging.SchemaStoreTableInfosResponse{
+				RequestID: req.RequestID,
+				Done:      true,
+			}))
+		}
+		return nil
+	})
+
+	ddlTableSpan := common.KeyspaceDDLSpan(getTestingKeyspaceID())
+	mockSink := sink.NewMockSink(common.KafkaSinkType)
+	dispatcher := newDispatcherForTest(mockSink, ddlTableSpan)
+
+	ok, err := dispatcher.InitializeTableSchemaStore([]*heartbeatpb.SchemaInfo{
+		{
+			SchemaID:   1,
+			SchemaName: "test",
+			Tables: []*heartbeatpb.TableInfo{
+				{TableID: tableInfo1.TableName.TableID, TableName: "t1"},
+				{TableID: tableInfo2.TableName.TableID, TableName: "t2"},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	dispatcher.BootstrapState = BootstrapNotStarted
+	require.True(t, dispatcher.EmitBootstrap())
+	require.Equal(t, BootstrapFinished, loadBootstrapState(&dispatcher.BootstrapState))
+
+	select {
+	case handlerErr := <-handlerErrCh:
+		require.NoError(t, handlerErr)
+	default:
+	}
+
+	events := mockSink.GetBlockEvents()
+	require.Len(t, events, 2)
+
+	gotTableIDs := make(map[int64]bool)
+	for _, e := range events {
+		ddl, ok := e.(*commonEvent.DDLEvent)
+		require.True(t, ok)
+		require.True(t, ddl.IsBootstrap)
+		require.NotNil(t, ddl.TableInfo)
+		gotTableIDs[ddl.TableInfo.TableName.TableID] = true
+	}
+	require.True(t, gotTableIDs[tableInfo1.TableName.TableID])
+	require.True(t, gotTableIDs[tableInfo2.TableName.TableID])
 }
 
 // TestBatchDMLEventsPartialFlush tests that wakeCallback is called correctly
