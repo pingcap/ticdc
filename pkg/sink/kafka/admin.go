@@ -27,8 +27,24 @@ import (
 type saramaAdminClient struct {
 	changefeed common.ChangeFeedID
 
-	client sarama.Client
-	admin  sarama.ClusterAdmin
+	// client is the underlying sarama client created for this admin wrapper.
+	// It must be closed to stop background goroutines (e.g. metadata updater) and release memory.
+	client saramaClient
+	admin  saramaClusterAdmin
+}
+
+type saramaClient interface {
+	Brokers() []*sarama.Broker
+	Partitions(topic string) ([]int32, error)
+	Close() error
+}
+
+type saramaClusterAdmin interface {
+	DescribeCluster() (brokers []*sarama.Broker, controllerID int32, err error)
+	DescribeConfig(resource sarama.ConfigResource) ([]sarama.ConfigEntry, error)
+	DescribeTopics(topics []string) (metadata []*sarama.TopicMetadata, err error)
+	CreateTopic(topic string, detail *sarama.TopicDetail, validateOnly bool) error
+	Close() error
 }
 
 func (a *saramaAdminClient) GetAllBrokers() []Broker {
@@ -172,10 +188,22 @@ func (a *saramaAdminClient) Heartbeat() {
 }
 
 func (a *saramaAdminClient) Close() {
-	if err := a.admin.Close(); err != nil {
-		log.Warn("close admin client meet error",
-			zap.String("keyspace", a.changefeed.Keyspace()),
-			zap.String("changefeed", a.changefeed.Name()),
-			zap.Error(err))
+	// Close admin first (may send RPCs), then close the underlying client to stop
+	// sarama background goroutines and release related caches/metrics.
+	if a.admin != nil {
+		if err := a.admin.Close(); err != nil {
+			log.Warn("close admin client meet error",
+				zap.String("keyspace", a.changefeed.Keyspace()),
+				zap.String("changefeed", a.changefeed.Name()),
+				zap.Error(err))
+		}
+	}
+	if a.client != nil {
+		if err := a.client.Close(); err != nil {
+			log.Warn("close kafka client meet error",
+				zap.String("keyspace", a.changefeed.Keyspace()),
+				zap.String("changefeed", a.changefeed.Name()),
+				zap.Error(err))
+		}
 	}
 }

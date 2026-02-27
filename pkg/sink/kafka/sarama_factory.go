@@ -88,6 +88,9 @@ func newAdminClient(changefeedID common.ChangeFeedID, endpoints []string, config
 			zap.Any("duration", duration), zap.Stringer("changefeedID", changefeedID))
 	}
 	if err != nil {
+		// `sarama.NewClusterAdminFromClient` does not take ownership of the client,
+		// so we need to close it on failures to avoid leaking background goroutines.
+		_ = client.Close()
 		return nil, errors.Trace(err)
 	}
 	return &saramaAdminClient{
