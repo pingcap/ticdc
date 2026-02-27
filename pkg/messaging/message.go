@@ -104,6 +104,11 @@ const (
 	TypeRedoResolvedTsForwardMessage       IOType = 39
 	TypeDispatcherSetChecksumUpdateRequest IOType = 40
 	TypeDispatcherSetChecksumAckResponse   IOType = 41
+
+	// Node drain related
+	TypeNodeHeartbeatRequest    IOType = 42
+	TypeSetNodeLivenessRequest  IOType = 43
+	TypeSetNodeLivenessResponse IOType = 44
 )
 
 func (t IOType) String() string {
@@ -190,6 +195,12 @@ func (t IOType) String() string {
 		return "MergeDispatcherRequest"
 	case TypeLogCoordinatorChangefeedStates:
 		return "TypeLogCoordinatorChangefeedStates"
+	case TypeNodeHeartbeatRequest:
+		return "NodeHeartbeatRequest"
+	case TypeSetNodeLivenessRequest:
+		return "SetNodeLivenessRequest"
+	case TypeSetNodeLivenessResponse:
+		return "SetNodeLivenessResponse"
 	default:
 	}
 	return "Unknown"
@@ -389,6 +400,12 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 		m = &heartbeatpb.LogCoordinatorResolvedTsRequest{}
 	case TypeLogCoordinatorResolvedTsResponse:
 		m = &heartbeatpb.LogCoordinatorResolvedTsResponse{}
+	case TypeNodeHeartbeatRequest:
+		m = &heartbeatpb.NodeHeartbeat{}
+	case TypeSetNodeLivenessRequest:
+		m = &heartbeatpb.SetNodeLivenessRequest{}
+	case TypeSetNodeLivenessResponse:
+		m = &heartbeatpb.SetNodeLivenessResponse{}
 	default:
 		log.Debug("Unimplemented IOType, ignore the message", zap.Stringer("Type", ioType))
 		return nil, errors.ErrUnimplementedIOType.GenWithStackByArgs(int(ioType))
@@ -501,6 +518,12 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		ioType = TypeLogCoordinatorResolvedTsRequest
 	case *heartbeatpb.LogCoordinatorResolvedTsResponse:
 		ioType = TypeLogCoordinatorResolvedTsResponse
+	case *heartbeatpb.NodeHeartbeat:
+		ioType = TypeNodeHeartbeatRequest
+	case *heartbeatpb.SetNodeLivenessRequest:
+		ioType = TypeSetNodeLivenessRequest
+	case *heartbeatpb.SetNodeLivenessResponse:
+		ioType = TypeSetNodeLivenessResponse
 	default:
 		panic("unknown io type")
 	}

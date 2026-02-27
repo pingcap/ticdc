@@ -20,6 +20,8 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
+	"github.com/pingcap/ticdc/coordinator/drain"
+	"github.com/pingcap/ticdc/coordinator/nodeliveness"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	coscheduler "github.com/pingcap/ticdc/coordinator/scheduler"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -48,7 +50,16 @@ const (
 	nodeChangeHandlerID           = "coordinator-controller"
 	createChangefeedMaxRetry      = 10
 	createChangefeedRetryInterval = 5 * time.Second
+
+	drainGateSmallLagThresholdMs     = int64((2 * time.Minute) / time.Millisecond)
+	drainGateLargeLagThresholdMs     = int64((30 * time.Minute) / time.Millisecond)
+	drainGateMidLagRequiredAdvanceMs = int64(time.Minute / time.Millisecond)
 )
+
+type drainCheckpointGateState struct {
+	baselineCheckpointTs map[common.ChangeFeedID]uint64
+	gateCreatePhysicalTs int64
+}
 
 // Controller schedules and balance changefeeds, there are 3 main components:
 //  1. scheduler: generate operators for handling different scheduling tasks.
@@ -86,6 +97,14 @@ type Controller struct {
 
 	changefeedChangeCh chan []*changefeedChange
 	apiLock            sync.RWMutex
+
+	nodeLivenessView *nodeliveness.View
+	drainController  *drain.Controller
+
+	// drainCheckpointGate keeps a per-target frozen baseline of running changefeed checkpoints.
+	// A target can return remaining=0 only after every baseline changefeed checkpoint has advanced.
+	drainCheckpointGateMu sync.Mutex
+	drainCheckpointGate   map[node.ID]*drainCheckpointGateState
 }
 
 type changefeedChange struct {
@@ -119,6 +138,7 @@ func NewController(
 	changefeedDB := changefeed.NewChangefeedDB(version)
 
 	oc := operator.NewOperatorController(selfNode, changefeedDB, backend, batchSize)
+	nodeLivenessView := nodeliveness.NewView(30 * time.Second)
 	c := &Controller{
 		version:     version,
 		selfNode:    selfNode,
@@ -129,6 +149,14 @@ func NewController(
 				batchSize,
 				oc,
 				changefeedDB,
+				nodeLivenessView,
+			),
+			scheduler.DrainScheduler: coscheduler.NewDrainScheduler(
+				selfNode.ID.String(),
+				batchSize,
+				oc,
+				changefeedDB,
+				nodeLivenessView,
 			),
 			scheduler.BalanceScheduler: coscheduler.NewBalanceScheduler(
 				selfNode.ID.String(),
@@ -136,19 +164,23 @@ func NewController(
 				oc,
 				changefeedDB,
 				balanceInterval,
+				nodeLivenessView,
 			),
 		}),
-		eventCh:            eventCh,
-		operatorController: oc,
-		messageCenter:      appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
-		changefeedDB:       changefeedDB,
-		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
-		taskScheduler:      threadpool.NewThreadPoolDefault(),
-		backend:            backend,
-		changefeedChangeCh: changefeedChangeCh,
-		pdClient:           pdClient,
-		pdClock:            appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		eventCh:             eventCh,
+		operatorController:  oc,
+		messageCenter:       appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
+		changefeedDB:        changefeedDB,
+		nodeManager:         appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
+		taskScheduler:       threadpool.NewThreadPoolDefault(),
+		backend:             backend,
+		changefeedChangeCh:  changefeedChangeCh,
+		pdClient:            pdClient,
+		pdClock:             appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		nodeLivenessView:    nodeLivenessView,
+		drainCheckpointGate: make(map[node.ID]*drainCheckpointGateState),
 	}
+	c.drainController = drain.NewController(c.messageCenter, nodeLivenessView)
 	c.nodeChanged.changed = false
 
 	c.bootstrapper = bootstrap.NewBootstrapper[heartbeatpb.CoordinatorBootstrapResponse](
@@ -262,6 +294,10 @@ func (c *Controller) onPeriodTask() {
 	for _, req := range requests {
 		_ = c.messageCenter.SendCommand(req)
 	}
+
+	c.drainController.AdvanceLiveness(func(id node.ID) bool {
+		return len(c.changefeedDB.GetByNodeID(id)) == 0 && c.operatorController.CountOperatorsInvolvingNode(id) == 0
+	})
 }
 
 func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage) {
@@ -273,6 +309,14 @@ func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage
 			req := msg.Message[0].(*heartbeatpb.MaintainerHeartbeat)
 			c.handleMaintainerStatus(msg.From, req.Statuses)
 		}
+	case messaging.TypeNodeHeartbeatRequest:
+		req := msg.Message[0].(*heartbeatpb.NodeHeartbeat)
+		c.nodeLivenessView.ObserveHeartbeat(msg.From, req, time.Now())
+		c.drainController.ObserveHeartbeat(msg.From, req)
+	case messaging.TypeSetNodeLivenessResponse:
+		req := msg.Message[0].(*heartbeatpb.SetNodeLivenessResponse)
+		c.nodeLivenessView.ObserveSetNodeLivenessResponse(msg.From, req, time.Now())
+		c.drainController.ObserveSetNodeLivenessResponse(msg.From, req)
 	case messaging.TypeLogCoordinatorResolvedTsResponse:
 		c.onLogCoordinatorReportResolvedTs(msg)
 	default:
@@ -810,6 +854,178 @@ func (c *Controller) GetChangefeed(
 	status := &config.ChangeFeedStatus{CheckpointTs: cf.GetStatus().CheckpointTs, LastSyncedTs: cf.GetStatus().LastSyncedTs, LogCoordinatorResolvedTs: cf.GetLogCoordinatorResolvedTs()}
 	status.SetMaintainerAddr(maintainerAddr)
 	return cf.GetInfo(), status, nil
+}
+
+// DrainNode starts or continues draining the target node and returns remaining work.
+// It is used by the v1 drain API for compatibility.
+//
+// The returned remaining is guaranteed to be non-zero until drain completion can be proven.
+func (c *Controller) DrainNode(_ context.Context, target node.ID) (int, error) {
+	if c.nodeManager.GetNodeInfo(target) == nil {
+		return 0, errors.ErrCaptureNotExist.GenWithStackByArgs(target)
+	}
+
+	c.drainController.RequestDrain(target)
+
+	maintainersOnTarget := len(c.changefeedDB.GetByNodeID(target))
+	inflightOpsInvolvingTarget := c.operatorController.CountOperatorsInvolvingNode(target)
+	remaining := drainRemainingEstimate(maintainersOnTarget, inflightOpsInvolvingTarget)
+
+	_, drainingObserved, stoppingObserved := c.drainController.GetStatus(target)
+	nodeState := c.nodeLivenessView.GetState(target)
+
+	// drain API must not return 0 until drain completion is proven.
+	if isDrainCompletionProven(
+		nodeState,
+		drainingObserved,
+		stoppingObserved,
+		maintainersOnTarget,
+		inflightOpsInvolvingTarget,
+	) {
+		if c.tryPassDrainCheckpointGate(target) {
+			return 0, nil
+		}
+		return 1, nil
+	}
+	c.clearDrainCheckpointGate(target)
+	return ensureDrainRemainingNonZero(remaining), nil
+}
+
+// tryPassDrainCheckpointGate returns true only when all frozen running changefeeds
+// for the target have advanced checkpointTs beyond the first completion baseline.
+func (c *Controller) tryPassDrainCheckpointGate(target node.ID) bool {
+	c.drainCheckpointGateMu.Lock()
+	defer c.drainCheckpointGateMu.Unlock()
+
+	if c.drainCheckpointGate == nil {
+		c.drainCheckpointGate = make(map[node.ID]*drainCheckpointGateState)
+	}
+
+	state, ok := c.drainCheckpointGate[target]
+	if !ok {
+		baseline := c.snapshotRunningCheckpointTs()
+		// No running changefeed means nothing is left to prove for checkpoint progress.
+		if len(baseline) == 0 {
+			return true
+		}
+		c.drainCheckpointGate[target] = &drainCheckpointGateState{
+			baselineCheckpointTs: baseline,
+			gateCreatePhysicalTs: c.currentDrainGatePhysicalTs(),
+		}
+		return false
+	}
+
+	for id, baseTs := range state.baselineCheckpointTs {
+		cf := c.changefeedDB.GetByID(id)
+		if cf == nil {
+			// Removed changefeed should not block this drain checkpoint gate.
+			delete(state.baselineCheckpointTs, id)
+			continue
+		}
+		info := cf.GetInfo()
+		if info == nil || !shouldRunChangefeed(info.State) {
+			// Non-running changefeed should not block this drain checkpoint gate.
+			delete(state.baselineCheckpointTs, id)
+			continue
+		}
+		if !isDrainCheckpointGateSatisfied(cf.GetStatus().CheckpointTs, baseTs, state.gateCreatePhysicalTs) {
+			return false
+		}
+	}
+
+	delete(c.drainCheckpointGate, target)
+	return true
+}
+
+func isDrainCheckpointGateSatisfied(currentTs uint64, baselineTs uint64, gateCreatePhysicalTs int64) bool {
+	// All paths require forward checkpoint progress from the frozen baseline.
+	if currentTs <= baselineTs {
+		return false
+	}
+
+	baselinePhysicalTs := oracle.ExtractPhysical(baselineTs)
+	currentPhysicalTs := oracle.ExtractPhysical(currentTs)
+	baselineLagMs := gateCreatePhysicalTs - baselinePhysicalTs
+	if baselineLagMs < 0 {
+		baselineLagMs = 0
+	}
+
+	switch {
+	case baselineLagMs <= drainGateSmallLagThresholdMs:
+		// Low-lag baseline must both catch up to gate creation time and advance
+		// at least one minute from the baseline checkpoint.
+		return currentPhysicalTs >= gateCreatePhysicalTs &&
+			currentPhysicalTs >= baselinePhysicalTs+drainGateMidLagRequiredAdvanceMs
+	case baselineLagMs >= drainGateLargeLagThresholdMs:
+		// High-lag baseline should not be blocked by additional lag requirements.
+		return true
+	default:
+		// Mid-lag baseline must move forward by one minute from the baseline checkpoint.
+		return currentPhysicalTs >= baselinePhysicalTs+drainGateMidLagRequiredAdvanceMs
+	}
+}
+
+func (c *Controller) currentDrainGatePhysicalTs() int64 {
+	if c.pdClock != nil {
+		return oracle.GetPhysical(c.pdClock.CurrentTime())
+	}
+	return time.Now().UnixMilli()
+}
+
+func (c *Controller) clearDrainCheckpointGate(target node.ID) {
+	c.drainCheckpointGateMu.Lock()
+	defer c.drainCheckpointGateMu.Unlock()
+	delete(c.drainCheckpointGate, target)
+}
+
+func (c *Controller) snapshotRunningCheckpointTs() map[common.ChangeFeedID]uint64 {
+	cfs := c.changefeedDB.GetAllChangefeeds()
+	if len(cfs) == 0 {
+		return nil
+	}
+	snapshot := make(map[common.ChangeFeedID]uint64, len(cfs))
+	for _, cf := range cfs {
+		if cf == nil {
+			continue
+		}
+		info := cf.GetInfo()
+		if info == nil || !shouldRunChangefeed(info.State) {
+			continue
+		}
+		snapshot[cf.ID] = cf.GetStatus().CheckpointTs
+	}
+	return snapshot
+}
+
+// isDrainCompletionProven checks whether drain completion can be safely concluded.
+// Returning true is intentionally strict because v1 drain API must avoid premature zero remaining.
+func isDrainCompletionProven(
+	nodeState nodeliveness.State,
+	drainingObserved bool,
+	stoppingObserved bool,
+	maintainersOnTarget int,
+	inflightOpsInvolvingTarget int,
+) bool {
+	if nodeState == nodeliveness.StateUnknown || !drainingObserved {
+		return false
+	}
+	return stoppingObserved && maintainersOnTarget == 0 && inflightOpsInvolvingTarget == 0
+}
+
+// drainRemainingEstimate uses the larger workload dimension to avoid obvious double counting.
+func drainRemainingEstimate(maintainersOnTarget int, inflightOpsInvolvingTarget int) int {
+	if maintainersOnTarget < inflightOpsInvolvingTarget {
+		return inflightOpsInvolvingTarget
+	}
+	return maintainersOnTarget
+}
+
+// ensureDrainRemainingNonZero keeps v1 compatibility before completion is proven.
+func ensureDrainRemainingNonZero(remaining int) int {
+	if remaining == 0 {
+		return 1
+	}
+	return remaining
 }
 
 // getChangefeed returns the changefeed by id, return nil if not found

@@ -19,7 +19,6 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-	"sync/atomic"
 
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/log"
@@ -27,6 +26,7 @@ import (
 	v2 "github.com/pingcap/ticdc/api/v2"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/server"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
@@ -192,25 +192,41 @@ func (o *OpenAPIV1) rebalanceTables(c *gin.Context) {
 // drainCapture drains all tables from a capture.
 // Usage:
 // curl -X PUT http://127.0.0.1:8300/api/v1/captures/drain
-// TODO: Implement this API in the future, currently it is a no-op.
 func (o *OpenAPIV1) drainCapture(c *gin.Context) {
 	var req drainCaptureRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		_ = c.Error(errors.ErrAPIInvalidParam.Wrap(err))
 		return
 	}
-	drainCaptureCounter.Add(1)
-	if drainCaptureCounter.Load()%10 == 0 {
-		log.Info("api v1 drainCapture", zap.Any("captureID", req.CaptureID), zap.Int64("currentTableCount", drainCaptureCounter.Load()))
-		c.JSON(http.StatusAccepted, &drainCaptureResp{
-			CurrentTableCount: 10,
-		})
-	} else {
-		log.Info("api v1 drainCapture done", zap.Any("captureID", req.CaptureID), zap.Int64("currentTableCount", drainCaptureCounter.Load()))
-		c.JSON(http.StatusAccepted, &drainCaptureResp{
-			CurrentTableCount: 0,
-		})
+
+	target := node.ID(req.CaptureID)
+	self, err := o.server.SelfInfo()
+	if err != nil {
+		_ = c.Error(err)
+		return
 	}
+	// For compatibility with old arch TiCDC, draining the current owner is not allowed.
+	if target == self.ID {
+		_ = c.Error(errors.ErrSchedulerRequestFailed.GenWithStackByArgs("cannot drain the owner"))
+		return
+	}
+
+	co, err := o.server.GetCoordinator()
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
+	remaining, err := co.DrainNode(c.Request.Context(), target)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
+	log.Info("api v1 drain capture",
+		zap.String("captureID", req.CaptureID),
+		zap.Int("remaining", remaining))
+	c.JSON(http.StatusAccepted, &drainCaptureResp{CurrentTableCount: remaining})
 }
 
 func getV2ChangefeedConfig(changefeedConfig changefeedConfig) *v2.ChangefeedConfig {
@@ -257,8 +273,6 @@ type moveTableReq struct {
 type drainCaptureRequest struct {
 	CaptureID string `json:"capture_id"`
 }
-
-var drainCaptureCounter atomic.Int64
 
 // drainCaptureResp is response for manual `DrainCapture`
 type drainCaptureResp struct {

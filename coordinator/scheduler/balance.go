@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/coordinator/changefeed"
+	"github.com/pingcap/ticdc/coordinator/nodeliveness"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -33,6 +34,7 @@ type balanceScheduler struct {
 	operatorController *operator.Controller
 	changefeedDB       *changefeed.ChangefeedDB
 	nodeManager        *watcher.NodeManager
+	livenessView       *nodeliveness.View
 
 	random               *rand.Rand
 	lastRebalanceTime    time.Time
@@ -51,6 +53,7 @@ func NewBalanceScheduler(
 	oc *operator.Controller,
 	changefeedDB *changefeed.ChangefeedDB,
 	balanceInterval time.Duration,
+	livenessView *nodeliveness.View,
 ) *balanceScheduler {
 	return &balanceScheduler{
 		id:                   id,
@@ -61,6 +64,7 @@ func NewBalanceScheduler(
 		nodeManager:          appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		checkBalanceInterval: balanceInterval,
 		lastRebalanceTime:    time.Now(),
+		livenessView:         livenessView,
 	}
 }
 
@@ -76,13 +80,23 @@ func (s *balanceScheduler) Execute() time.Time {
 	}
 
 	// check the balance status
-	moveSize := pkgScheduler.CheckBalanceStatus(s.changefeedDB.GetTaskSizePerNode(), s.nodeManager.GetAliveNodes())
+	activeNodes := s.nodeManager.GetAliveNodes()
+	if s.livenessView != nil {
+		filtered := make(map[node.ID]*node.Info, len(activeNodes))
+		for id, info := range activeNodes {
+			if s.livenessView.IsSchedulableDest(id) {
+				filtered[id] = info
+			}
+		}
+		activeNodes = filtered
+	}
+	moveSize := pkgScheduler.CheckBalanceStatus(s.changefeedDB.GetTaskSizePerNode(), activeNodes)
 	if moveSize <= 0 {
 		// fast check the balance status, no need to do the balance,skip
 		return now.Add(s.checkBalanceInterval)
 	}
 	// balance changefeeds among the active nodes
-	movedSize := pkgScheduler.Balance(s.batchSize, s.random, s.nodeManager.GetAliveNodes(), s.changefeedDB.GetReplicating(),
+	movedSize := pkgScheduler.Balance(s.batchSize, s.random, activeNodes, s.changefeedDB.GetReplicating(),
 		func(cf *changefeed.Changefeed, nodeID node.ID) bool {
 			return s.operatorController.AddOperator(operator.NewMoveMaintainerOperator(s.changefeedDB, cf, cf.GetNodeID(), nodeID))
 		})

@@ -83,8 +83,11 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 			return errors.Trace(err)
 		}
 		// Before campaign check liveness
-		if e.svr.liveness.Load() == api.LivenessCaptureStopping {
-			log.Info("do not campaign coordinator, liveness is stopping", zap.String("nodeID", nodeID))
+		liveness := e.svr.liveness.Load()
+		if liveness != api.LivenessCaptureAlive {
+			log.Info("do not campaign coordinator because node is not alive",
+				zap.String("nodeID", nodeID),
+				zap.String("liveness", liveness.String()))
 			return nil
 		}
 		log.Info("start to campaign coordinator", zap.String("nodeID", nodeID))
@@ -203,8 +206,11 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 			return errors.Trace(err)
 		}
 		// Before campaign check liveness
-		if e.svr.liveness.Load() == api.LivenessCaptureStopping {
-			log.Info("do not campaign log coordinator, liveness is stopping", zap.String("nodeID", nodeID))
+		liveness := e.svr.liveness.Load()
+		if liveness != api.LivenessCaptureAlive {
+			log.Info("do not campaign log coordinator because node is not alive",
+				zap.String("nodeID", nodeID),
+				zap.String("liveness", liveness.String()))
 			return nil
 		}
 		// Campaign to be the log coordinator, it blocks until it been elected.
