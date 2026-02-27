@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
 	"github.com/stretchr/testify/require"
 )
@@ -71,6 +72,34 @@ func MysqlSinkForTestWithMaxTxnRows(maxTxnRows int) (*Sink, sqlmock.Sqlmock) {
 	sink.maxTxnRows = maxTxnRows
 	go sink.Run(ctx)
 	return sink, mock
+}
+
+// TestMysqlSinkWriteBlockEventSkipsNonPrimaryBDRRole verifies that in BDR mode TiCDC skips executing
+// non-primary-role DDLs and still calls PostFlush to unblock upstream.
+// This matters because executing DDLs from non-primary roles can break downstream correctness, while skipping
+// without PostFlush can deadlock the pipeline.
+func TestMysqlSinkWriteBlockEventSkipsNonPrimaryBDRRole(t *testing.T) {
+	_, sink, mock := getMysqlSink()
+	sink.bdrMode = true
+
+	var postFlushCount atomic.Int64
+	ddlEvent := &commonEvent.DDLEvent{
+		FinishedTs: 1,
+		BDRMode:    string(ast.BDRRoleSecondary),
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{0},
+		},
+		PostTxnFlushed: []func(){
+			func() { postFlushCount.Add(1) },
+		},
+	}
+
+	err := sink.WriteBlockEvent(ddlEvent)
+	require.NoError(t, err)
+	require.True(t, sink.IsNormal())
+	require.Equal(t, int64(1), postFlushCount.Load())
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 // Test callback and tableProgress works as expected after AddDMLEvent
