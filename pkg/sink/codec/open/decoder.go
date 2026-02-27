@@ -238,20 +238,22 @@ func buildColumns(
 		var flag uint64
 		// todo: we can extract more detailed type information here.
 		dataType := strings.ToLower(columnType.DatabaseTypeName())
+		// Snapshot query returns enum/set as their string representations, while open protocol uses
+		// integer/bitset values for these types. Downgrade enum/set to varchar to keep the
+		// assembled handle-key-only events decodable.
+		if strings.HasPrefix(dataType, "enum") || strings.HasPrefix(dataType, "set") {
+			dataType = "varchar"
+		}
 		if common.IsUnsignedMySQLType(dataType) {
 			flag |= unsignedFlag
 		}
 		if nullable, _ := columnType.Nullable(); nullable {
 			flag |= nullableFlag
 		}
-		var value interface{}
-		if holder.Values[i].Valid {
-			value = holder.Values[i].String
-		}
 		columns[name] = column{
 			Type:  common.ExtractBasicMySQLType(dataType),
 			Flag:  flag,
-			Value: value,
+			Value: holder.Values[i],
 		}
 	}
 	return columns

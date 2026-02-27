@@ -526,15 +526,20 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 }
 
 func parseValue(
-	rawValue sql.NullString, ft *types.FieldType, location string,
+	value interface{}, ft *types.FieldType, location string,
 ) interface{} {
-	if !rawValue.Valid {
+	if value == nil {
 		return nil
 	}
-	val := rawValue.String
+	var val string
+	switch v := value.(type) {
+	case []byte:
+		val = string(v)
+	default:
+		val = fmt.Sprintf("%v", value)
+	}
 	var (
-		value interface{}
-		err   error
+		err error
 	)
 	switch ft.GetType() {
 	case mysql.TypeBit:
@@ -551,10 +556,18 @@ func parseValue(
 	case mysql.TypeEnum:
 		var enum types.Enum
 		enum, err = types.ParseEnumName(ft.GetElems(), val, ft.GetCollate())
+		if err != nil {
+			log.Panic("parse enum name failed",
+				zap.Any("elems", ft.GetElems()), zap.Any("name", value), zap.Error(err))
+		}
 		return strconv.FormatUint(enum.Value, 10)
 	case mysql.TypeSet:
 		var set types.Set
 		set, err = types.ParseSetName(ft.GetElems(), val, ft.GetCollate())
+		if err != nil {
+			log.Panic("parse set name failed",
+				zap.Any("elems", ft.GetElems()), zap.Any("name", value), zap.Error(err))
+		}
 		return strconv.FormatUint(set.Value, 10)
 	default:
 	}

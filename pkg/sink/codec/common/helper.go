@@ -139,7 +139,7 @@ func ExtractDecimal(mysqlType string) int {
 
 // ColumnsHolder read columns from sql.Rows
 type ColumnsHolder struct {
-	Values        []sql.NullString
+	Values        []interface{}
 	ValuePointers []interface{}
 	Types         []*sql.ColumnType
 }
@@ -150,7 +150,7 @@ func newColumnHolder(rows *sql.Rows) (*ColumnsHolder, error) {
 		return nil, errors.Trace(err)
 	}
 
-	values := make([]sql.NullString, len(columnTypes))
+	values := make([]interface{}, len(columnTypes))
 	valuePointers := make([]interface{}, len(columnTypes))
 	for i := range values {
 		valuePointers[i] = &values[i]
