@@ -244,10 +244,14 @@ func buildColumns(
 		if nullable, _ := columnType.Nullable(); nullable {
 			flag |= nullableFlag
 		}
+		var value interface{}
+		if holder.Values[i].Valid {
+			value = holder.Values[i].String
+		}
 		columns[name] = column{
 			Type:  common.ExtractBasicMySQLType(dataType),
 			Flag:  flag,
-			Value: holder.Values[i],
+			Value: value,
 		}
 	}
 	return columns

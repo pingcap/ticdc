@@ -526,81 +526,46 @@ func (d *Decoder) buildDDLEvent(msg *message) *commonEvent.DDLEvent {
 }
 
 func parseValue(
-	value interface{}, ft *types.FieldType, location string,
+	rawValue sql.NullString, ft *types.FieldType, location string,
 ) interface{} {
-	if value == nil {
+	if !rawValue.Valid {
 		return nil
 	}
-	var err error
+	val := rawValue.String
+	var (
+		value interface{}
+		err   error
+	)
 	switch ft.GetType() {
 	case mysql.TypeBit:
-		switch v := value.(type) {
-		case []uint8:
-			value = common.MustBinaryLiteralToInt(v)
-		default:
-		}
+		v := common.MustBinaryLiteralToInt([]byte(val))
+		return strconv.FormatUint(v, 10)
 	case mysql.TypeTimestamp:
-		var ts string
-		switch v := value.(type) {
-		case string:
-			ts = v
-		// the timestamp value maybe []uint8 if it's queried from upstream TiDB.
-		case []uint8:
-			ts = string(v)
-		}
 		return map[string]interface{}{
 			"location": location,
-			"value":    ts,
+			"value":    val,
 		}
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeDuration,
 		mysql.TypeTiDBVectorFloat32, mysql.TypeJSON:
-		return string(value.([]uint8))
+		return val
 	case mysql.TypeEnum:
-		switch v := value.(type) {
-		case []uint8:
-			data := string(v)
-			var enum types.Enum
-			enum, err = types.ParseEnumName(ft.GetElems(), data, ft.GetCollate())
-			value = enum.Value
-		}
+		var enum types.Enum
+		enum, err = types.ParseEnumName(ft.GetElems(), val, ft.GetCollate())
+		return strconv.FormatUint(enum.Value, 10)
 	case mysql.TypeSet:
-		switch v := value.(type) {
-		case []uint8:
-			data := string(v)
-			var set types.Set
-			set, err = types.ParseSetName(ft.GetElems(), data, ft.GetCollate())
-			value = set.Value
-		}
+		var set types.Set
+		set, err = types.ParseSetName(ft.GetElems(), val, ft.GetCollate())
+		return strconv.FormatUint(set.Value, 10)
 	default:
 	}
 	if err != nil {
 		log.Panic("parse enum / set name failed",
 			zap.Any("elems", ft.GetElems()), zap.Any("name", value), zap.Error(err))
 	}
-	var result string
-	switch v := value.(type) {
-	case int64:
-		result = strconv.FormatInt(v, 10)
-	case uint64:
-		result = strconv.FormatUint(v, 10)
-	case float32:
-		result = strconv.FormatFloat(float64(v), 'f', -1, 32)
-	case float64:
-		result = strconv.FormatFloat(v, 'f', -1, 64)
-	case string:
-		result = v
-	case []byte:
-		if mysql.HasBinaryFlag(ft.GetFlag()) {
-			result = base64.StdEncoding.EncodeToString(v)
-		} else {
-			result = string(v)
-		}
-	case types.VectorFloat32:
-		result = v.String()
-	default:
-		result = fmt.Sprintf("%v", v)
+	if mysql.HasBinaryFlag(ft.GetFlag()) {
+		val = base64.StdEncoding.EncodeToString([]byte(val))
 	}
-	return result
+	return val
 }
 
 func buildDMLEvent(msg *message, tableInfo *commonType.TableInfo, enableRowChecksum bool, db *sql.DB) *commonEvent.DMLEvent {
