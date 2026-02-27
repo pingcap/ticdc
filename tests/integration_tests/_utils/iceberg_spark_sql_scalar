@@ -1,0 +1,142 @@
+#!/bin/bash
+
+set -euo pipefail
+
+warehouse=
+sql=
+catalog=${ICEBERG_SPARK_CATALOG:-iceberg_test}
+
+while [[ ${1-} ]]; do
+	case "${1}" in
+	--warehouse)
+		warehouse=${2}
+		shift
+		;;
+	--sql)
+		sql=${2}
+		shift
+		;;
+	--catalog)
+		catalog=${2}
+		shift
+		;;
+	*)
+		echo "Unknown parameter: ${1}" >&2
+		exit 1
+		;;
+	esac
+
+	if ! shift; then
+		echo 'Missing parameter argument.' >&2
+		exit 1
+	fi
+done
+
+if [[ -z "$warehouse" || -z "$sql" ]]; then
+	echo "Usage: iceberg_spark_sql_scalar --warehouse <uri> --sql <sql> [--catalog <name>]" >&2
+	echo "Required env vars: ICEBERG_SPARK_PACKAGES or ICEBERG_SPARK_JARS" >&2
+	echo "Optional env vars: SPARK_HOME, ICEBERG_SPARK_CATALOG" >&2
+	exit 1
+fi
+
+sparkWorkDir=${ICEBERG_SPARK_WORKDIR:-${TMPDIR:-/tmp}/ticdc_iceberg_spark_sql}
+ivyDir=${ICEBERG_SPARK_IVY_DIR:-${sparkWorkDir}/ivy}
+mkdir -p "$ivyDir" "$sparkWorkDir"
+
+sparkSQLBin=
+if command -v spark-sql >/dev/null 2>&1; then
+	sparkSQLBin="spark-sql"
+elif [[ -n "${SPARK_HOME:-}" && -x "${SPARK_HOME}/bin/spark-sql" ]]; then
+	sparkSQLBin="${SPARK_HOME}/bin/spark-sql"
+else
+	echo "spark-sql not found; set SPARK_HOME or put spark-sql in PATH" >&2
+	exit 1
+fi
+
+sparkArgs=()
+if [[ -n "${ICEBERG_SPARK_PACKAGES:-}" ]]; then
+	sparkArgs+=(--packages "${ICEBERG_SPARK_PACKAGES}")
+elif [[ -n "${ICEBERG_SPARK_JARS:-}" ]]; then
+	sparkArgs+=(--jars "${ICEBERG_SPARK_JARS}")
+else
+	echo "ICEBERG_SPARK_PACKAGES or ICEBERG_SPARK_JARS must be set to enable Spark readback." >&2
+	exit 1
+fi
+
+output=$(
+	cd "$sparkWorkDir"
+	"$sparkSQLBin" \
+		--master "local[2]" \
+		"${sparkArgs[@]}" \
+		--conf "spark.ui.enabled=false" \
+		--conf "spark.jars.ivy=${ivyDir}" \
+		--conf "spark.sql.session.timeZone=UTC" \
+		--conf "spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions" \
+		--conf "spark.sql.catalog.${catalog}=org.apache.iceberg.spark.SparkCatalog" \
+		--conf "spark.sql.catalog.${catalog}.type=hadoop" \
+		--conf "spark.sql.catalog.${catalog}.warehouse=${warehouse}" \
+		-e "$sql" 2>&1
+) || {
+	echo "$output" >&2
+	exit 1
+}
+
+normalizedOutput=$(echo "$output" | tr -d '\r')
+
+# Spark SQL output format differs between Spark versions and settings.
+# Try to parse a single-cell ASCII table first; if not present, fall back
+# to parsing the last non-log scalar line.
+value=$(
+	echo "$normalizedOutput" | awk -F'|' '
+		/^\|/ {
+			cell=$2
+			gsub(/^[ \t]+|[ \t]+$/, "", cell)
+			if (cell == "") {
+				next
+			}
+			row++
+			# row 1 is the header; row 2 is the first data row.
+			if (row == 2) {
+				print cell
+				exit
+			}
+		}
+	'
+)
+
+if [[ -z "$value" ]]; then
+	value=$(
+		echo "$normalizedOutput" | awk '
+			BEGIN { val="" }
+			{
+				line=$0
+				gsub(/^[ \t]+|[ \t]+$/, "", line)
+				if (line == "") next
+				# Skip typical Spark/Ivy log lines.
+				if (line ~ /^[0-9]{2}\/[0-9]{2}\/[0-9]{2} /) next
+				if (line ~ /^WARNING:/) next
+				if (line ~ /^Using /) next
+				if (line ~ /^Setting default log level/) next
+				if (line ~ /^To adjust logging level/) next
+				if (line ~ /^::/) next
+				if (line ~ /^Ivy /) next
+				if (line ~ /^downloading /) next
+				if (line ~ /^Spark /) next
+				if (line ~ /^Time taken:/) next
+
+				# Prefer scalar-like lines without whitespace.
+				if (line ~ /[ \t]/) next
+				val=line
+			}
+			END { print val }
+		'
+	)
+fi
+
+if [[ -z "$value" ]]; then
+	echo "failed to parse scalar value from spark-sql output" >&2
+	echo "$normalizedOutput" >&2
+	exit 1
+fi
+
+echo "$value"

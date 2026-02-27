@@ -176,6 +176,7 @@ type SinkConfig struct {
 	PulsarConfig       *PulsarConfig       `toml:"pulsar-config" json:"pulsar-config,omitempty"`
 	MySQLConfig        *MySQLConfig        `toml:"mysql-config" json:"mysql-config,omitempty"`
 	CloudStorageConfig *CloudStorageConfig `toml:"cloud-storage-config" json:"cloud-storage-config,omitempty"`
+	IcebergConfig      *IcebergConfig      `toml:"iceberg-config" json:"iceberg-config,omitempty"`
 
 	// AdvanceTimeoutInSec is a duration in second. If a table sink progress hasn't been
 	// advanced for this given duration, the sink will be canceled and re-established.
@@ -701,6 +702,67 @@ type CloudStorageConfig struct {
 
 	// OutputRawChangeEvent controls whether to split the update pk/uk events.
 	OutputRawChangeEvent *bool `toml:"output-raw-change-event" json:"output-raw-change-event,omitempty"`
+}
+
+// IcebergConfig represents an Iceberg sink configuration.
+// Note: this is currently in early stage and may change in future versions.
+type IcebergConfig struct {
+	// Warehouse is the base location for Iceberg tables, e.g. s3://bucket/warehouse or file:///path.
+	Warehouse *string `toml:"warehouse" json:"warehouse,omitempty"`
+	// Namespace is the Iceberg namespace root. The TiDB schema and table names will be appended under this namespace.
+	Namespace *string `toml:"namespace" json:"namespace,omitempty"`
+
+	// Catalog is the catalog type. Supported values: "hadoop" (local/dev), "glue" (AWS), "rest" (reserved).
+	Catalog *string `toml:"catalog" json:"catalog,omitempty"`
+	// CatalogURI is the catalog endpoint, only meaningful when catalog is "rest".
+	CatalogURI *string `toml:"catalog-uri" json:"catalog-uri,omitempty"`
+
+	// Region is the AWS region for Iceberg catalogs that depend on AWS APIs, e.g. "glue".
+	Region *string `toml:"region" json:"region,omitempty"`
+	// Database is the Glue database name override when catalog is "glue".
+	// If empty, TiCDC will derive database names from namespace and TiDB schema name.
+	Database *string `toml:"database" json:"database,omitempty"`
+
+	// Mode is the replication mode, supported values: "append" (default), "upsert".
+	Mode *string `toml:"mode" json:"mode,omitempty"`
+
+	CommitInterval *string `toml:"commit-interval" json:"commit-interval,omitempty"`
+	// TargetFileSize is the target size (bytes) for a single data file.
+	TargetFileSize *int64 `toml:"target-file-size" json:"target-file-size,omitempty"`
+	// AutoTuneFileSize controls whether TiCDC adjusts file splitting based on observed file sizes.
+	AutoTuneFileSize *bool `toml:"auto-tune-file-size" json:"auto-tune-file-size,omitempty"`
+
+	// Partitioning is the Iceberg partition spec expression, for example:
+	// - "days(_tidb_commit_time)"
+	// - "" (unpartitioned)
+	Partitioning *string `toml:"partitioning" json:"partitioning,omitempty"`
+
+	// SchemaMode controls how TiCDC handles schema evolution for Iceberg tables.
+	// Supported values: "strict" (default) and "evolve" (allows safe type widening).
+	SchemaMode *string `toml:"schema-mode" json:"schema-mode,omitempty"`
+
+	// MaxBufferedRows is the maximum number of buffered rows in the iceberg sink before it fails fast.
+	// 0 means unlimited.
+	MaxBufferedRows *int64 `toml:"max-buffered-rows" json:"max-buffered-rows,omitempty"`
+	// MaxBufferedBytes is the maximum estimated buffered bytes in the iceberg sink before it fails fast.
+	// 0 means unlimited.
+	MaxBufferedBytes *int64 `toml:"max-buffered-bytes" json:"max-buffered-bytes,omitempty"`
+	// MaxBufferedRowsPerTable is the maximum number of buffered rows per table before it fails fast.
+	// 0 means unlimited.
+	MaxBufferedRowsPerTable *int64 `toml:"max-buffered-rows-per-table" json:"max-buffered-rows-per-table,omitempty"`
+	// MaxBufferedBytesPerTable is the maximum estimated buffered bytes per table before it fails fast.
+	// 0 means unlimited.
+	MaxBufferedBytesPerTable *int64 `toml:"max-buffered-bytes-per-table" json:"max-buffered-bytes-per-table,omitempty"`
+
+	EmitMetadataColumns *bool `toml:"emit-metadata-columns" json:"emit-metadata-columns,omitempty"`
+
+	EnableCheckpointTable *bool `toml:"enable-checkpoint-table" json:"enable-checkpoint-table,omitempty"`
+
+	EnableGlobalCheckpointTable *bool `toml:"enable-global-checkpoint-table" json:"enable-global-checkpoint-table,omitempty"`
+
+	// AllowTakeover controls whether this changefeed is allowed to write to an Iceberg table that
+	// was previously owned by another changefeed.
+	AllowTakeover *bool `toml:"allow-takeover" json:"allow-takeover,omitempty"`
 }
 
 // GetOutputRawChangeEvent returns the value of OutputRawChangeEvent

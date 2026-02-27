@@ -487,6 +487,10 @@ func (info *ChangeFeedInfo) RmUnusedFields() {
 		info.rmStorageOnlyFields()
 	}
 
+	if !IsIcebergScheme(uri.Scheme) {
+		info.Config.Sink.IcebergConfig = nil
+	}
+
 	if !IsMySQLCompatibleScheme(uri.Scheme) {
 		info.rmDBOnlyFields()
 	} else {
