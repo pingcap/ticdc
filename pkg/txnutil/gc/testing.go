@@ -19,14 +19,8 @@ import (
 
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/tikv/client-go/v2/oracle"
-<<<<<<< HEAD
 	pdclient "github.com/tikv/pd/client"
 	pdopt "github.com/tikv/pd/client"
-=======
-	pd "github.com/tikv/pd/client"
-	pdgc "github.com/tikv/pd/client/clients/gc"
-	pdopt "github.com/tikv/pd/client/opt"
->>>>>>> 6a0ae936a (coordinator: make the gc manager always report error if meet (#4119))
 )
 
 // MockPDClient mocks pd.Client to facilitate unit testing.

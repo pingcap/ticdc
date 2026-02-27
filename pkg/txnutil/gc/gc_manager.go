@@ -15,7 +15,6 @@ package gc
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/pingcap/failpoint"
@@ -33,25 +32,9 @@ import (
 
 // Manager is an interface for gc manager
 type Manager interface {
-<<<<<<< HEAD
-	// TryUpdateGCSafePoint tries to update TiCDC service GC safepoint.
-	// Manager may skip update when it thinks it is too frequent.
-	// Set `forceUpdate` to force Manager update.
-	TryUpdateGCSafePoint(ctx context.Context, checkpointTs common.Ts, forceUpdate bool) error
-	CheckStaleCheckpointTs(ctx context.Context, changefeedID common.ChangeFeedID, checkpointTs common.Ts) error
-=======
 	// TryUpdateServiceGCSafepoint tries to update TiCDC service GC safepoint.
 	TryUpdateServiceGCSafepoint(ctx context.Context, checkpointTs common.Ts) error
 	CheckStaleCheckpointTs(keyspaceID uint32, changefeedID common.ChangeFeedID, checkpointTs common.Ts) error
-	// TryUpdateKeyspaceGCBarrier tries to update gc barrier of a keyspace
-	TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID uint32, keyspaceName string, checkpointTs common.Ts) error
-}
-
-// keyspaceGCBarrierInfo is the gc info for a keyspace
-type keyspaceGCBarrierInfo struct {
-	lastSafePointTs uint64
-	isTiCDCBlockGC  bool
->>>>>>> 6a0ae936a (coordinator: make the gc manager always report error if meet (#4119))
 }
 
 type gcManager struct {
@@ -60,25 +43,8 @@ type gcManager struct {
 	pdClock     pdutil.Clock
 	gcTTL       int64
 
-<<<<<<< HEAD
-	lastUpdatedTime   *atomic.Time
-	lastSucceededTime *atomic.Time
-	lastSafePointTs   atomic.Uint64
-	isTiCDCBlockGC    atomic.Bool
-
-	// keyspaceLastUpdatedTimeMap store last updated time of each keyspace
-	// key => keyspaceID
-	// value => time.Time
-	keyspaceLastUpdatedTimeMap sync.Map
-=======
 	lastSafePointTs atomic.Uint64
 	isTiCDCBlockGC  atomic.Bool
-
-	// keyspaceGCBarrierInfoMap store gc info of each keyspace
-	// key => keyspaceID
-	// value => keyspaceGcInfo
-	keyspaceGCBarrierInfoMap sync.Map
->>>>>>> 6a0ae936a (coordinator: make the gc manager always report error if meet (#4119))
 }
 
 // NewManager creates a new Manager.
@@ -130,18 +96,9 @@ func (m *gcManager) TryUpdateServiceGCSafepoint(
 }
 
 func (m *gcManager) CheckStaleCheckpointTs(
-<<<<<<< HEAD
-	ctx context.Context, changefeedID common.ChangeFeedID, checkpointTs common.Ts,
-) error {
-	return m.checkStaleCheckPointTsGlobal(changefeedID, checkpointTs)
-=======
 	keyspaceID uint32, changefeedID common.ChangeFeedID, checkpointTs common.Ts,
 ) error {
-	if kerneltype.IsClassic() {
-		return m.checkStaleCheckPointTsGlobal(changefeedID, checkpointTs)
-	}
-	return m.checkStaleCheckpointTsKeyspace(keyspaceID, changefeedID, checkpointTs)
->>>>>>> 6a0ae936a (coordinator: make the gc manager always report error if meet (#4119))
+	return checkStaleCheckpointTs(changefeedID, checkpointTs, m.pdClock, m.isTiCDCBlockGC.Load(), m.lastSafePointTs.Load(), m.gcTTL)
 }
 
 func checkStaleCheckpointTs(
@@ -177,68 +134,3 @@ func checkStaleCheckpointTs(
 	}
 	return nil
 }
-
-<<<<<<< HEAD
-func (m *gcManager) checkStaleCheckPointTsGlobal(changefeedID common.ChangeFeedID, checkpointTs common.Ts) error {
-	return checkStaleCheckpointTs(changefeedID, checkpointTs, m.pdClock, m.isTiCDCBlockGC.Load(), m.lastSafePointTs.Load(), m.gcTTL)
-}
-=======
-func (m *gcManager) checkStaleCheckpointTsKeyspace(keyspaceID uint32, changefeedID common.ChangeFeedID, checkpointTs common.Ts) error {
-	barrierInfo := new(keyspaceGCBarrierInfo)
-	o, ok := m.keyspaceGCBarrierInfoMap.Load(keyspaceID)
-	if ok {
-		barrierInfo = o.(*keyspaceGCBarrierInfo)
-	}
-
-	return checkStaleCheckpointTs(changefeedID, checkpointTs, m.pdClock, barrierInfo.isTiCDCBlockGC, barrierInfo.lastSafePointTs, m.gcTTL)
-}
-
-func (m *gcManager) checkStaleCheckPointTsGlobal(changefeedID common.ChangeFeedID, checkpointTs common.Ts) error {
-	return checkStaleCheckpointTs(changefeedID, checkpointTs, m.pdClock, m.isTiCDCBlockGC.Load(), m.lastSafePointTs.Load(), m.gcTTL)
-}
-
-func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID uint32, keyspaceName string, checkpointTs common.Ts) error {
-	gcCli := m.pdClient.GetGCStatesClient(keyspaceID)
-	ttl := time.Duration(m.gcTTL) * time.Second
-	_, setBarrierErr := SetGCBarrier(ctx, gcCli, m.gcServiceID, checkpointTs, ttl)
-	if setBarrierErr != nil && !errors.IsGCBarrierTSBehindTxnSafePointError(setBarrierErr) {
-		log.Warn("update keyspace gc barrier failed",
-			zap.Uint32("keyspaceID", keyspaceID), zap.Uint64("checkpointTs", checkpointTs),
-			zap.String("serviceID", m.gcServiceID), zap.Error(setBarrierErr))
-		return errors.WrapError(errors.ErrUpdateGCBarrierFailed, setBarrierErr)
-	}
-
-	minGCBarrier, err := UnifyGetServiceGCSafepoint(ctx, m.pdClient, keyspaceID, m.gcServiceID)
-	if err != nil {
-		return err
-	}
-
-	failpoint.Inject("InjectActualGCSafePoint", func(val failpoint.Value) {
-		minGCBarrier = uint64(val.(int))
-	})
-
-	if setBarrierErr != nil {
-		log.Warn("update keyspace gc barrier failed, checkpointTs smaller than the minimum gc barrier",
-			zap.Uint32("keyspaceID", keyspaceID),
-			zap.Uint64("checkpointTs", checkpointTs),
-			zap.Uint64("minGCBarrier", minGCBarrier),
-			zap.String("serviceID", m.gcServiceID),
-			zap.Error(setBarrierErr))
-	}
-	// if the min checkpoint ts is equal to the current gc barrier ts, it means
-	// that the service gc barrier ts set by TiCDC is the min service gc barrier ts
-	newBarrierInfo := &keyspaceGCBarrierInfo{
-		lastSafePointTs: minGCBarrier,
-		isTiCDCBlockGC:  minGCBarrier == checkpointTs,
-	}
-	m.keyspaceGCBarrierInfoMap.Store(keyspaceID, newBarrierInfo)
-
-	minGCBarrierMetric := minGCBarrierGauge.WithLabelValues(keyspaceName)
-	minGCBarrierMetric.Set(float64(oracle.ExtractPhysical(minGCBarrier)))
-
-	cdcGcBarrierMetric := cdcGCBarrierGauge.WithLabelValues(keyspaceName)
-	cdcGcBarrierMetric.Set(float64(oracle.ExtractPhysical(checkpointTs)))
-
-	return nil
-}
->>>>>>> 6a0ae936a (coordinator: make the gc manager always report error if meet (#4119))

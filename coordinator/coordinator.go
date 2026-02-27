@@ -297,11 +297,7 @@ func (c *coordinator) handleStateChange(
 // checkStaleCheckpointTs checks if the checkpointTs is stale, if it is, it will send a state change event to the stateChangedCh
 func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, changefeed *changefeed.Changefeed, reportedCheckpointTs uint64) {
 	id := changefeed.ID
-<<<<<<< HEAD
-	err := c.gcManager.CheckStaleCheckpointTs(ctx, id, reportedCheckpointTs)
-=======
 	err := c.gcManager.CheckStaleCheckpointTs(changefeed.GetKeyspaceID(), id, reportedCheckpointTs)
->>>>>>> 6a0ae936a (coordinator: make the gc manager always report error if meet (#4119))
 	if err == nil {
 		return
 	}
@@ -443,8 +439,6 @@ func (c *coordinator) updateGlobalGcSafepoint(ctx context.Context) error {
 	return errors.Trace(err)
 }
 
-<<<<<<< HEAD
-=======
 func (c *coordinator) updateAllKeyspaceGcBarriers(ctx context.Context) error {
 	barrierMap := c.controller.calculateKeyspaceGCBarrier()
 
@@ -467,7 +461,6 @@ func (c *coordinator) updateKeyspaceGcBarrier(ctx context.Context, meta common.K
 	return errors.Trace(err)
 }
 
->>>>>>> 6a0ae936a (coordinator: make the gc manager always report error if meet (#4119))
 // updateGCSafepointByChangefeed update the gc safepoint by changefeed
 // On next gen, we should update the gc barrier for the specific keyspace
 // Otherwise we should update the global gc safepoint
