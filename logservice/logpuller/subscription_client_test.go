@@ -289,13 +289,13 @@ func TestSubscriptionWithFailedTiKV(t *testing.T) {
 func TestErrCacheDispatchWithFullChannelAndCanceledContext(t *testing.T) {
 	// Create errCache with a small errCh to easily fill it up
 	errCache := &errCache{
-		cache:  make([]regionErrorInfo, 0, 10),
-		errCh:  make(chan regionErrorInfo, 2), // Small buffer to easily fill
+		cache:  make([]*regionErrorInfo, 0, 10),
+		errCh:  make(chan *regionErrorInfo, 2), // Small buffer to easily fill
 		notify: make(chan struct{}, 10),
 	}
 
 	// Create a mock regionErrorInfo
-	mockErrInfo := regionErrorInfo{
+	mockErrInfo := &regionErrorInfo{
 		regionInfo: regionInfo{
 			verID: tikv.NewRegionVerID(1, 1, 1),
 			span:  heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("b")},
