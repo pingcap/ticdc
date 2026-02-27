@@ -34,7 +34,7 @@ import (
 type Manager interface {
 	// TryUpdateServiceGCSafepoint tries to update TiCDC service GC safepoint.
 	TryUpdateServiceGCSafepoint(ctx context.Context, checkpointTs common.Ts) error
-	CheckStaleCheckpointTs(keyspaceID uint32, changefeedID common.ChangeFeedID, checkpointTs common.Ts) error
+	CheckStaleCheckpointTs(changefeedID common.ChangeFeedID, checkpointTs common.Ts) error
 }
 
 type gcManager struct {
@@ -96,8 +96,12 @@ func (m *gcManager) TryUpdateServiceGCSafepoint(
 }
 
 func (m *gcManager) CheckStaleCheckpointTs(
-	keyspaceID uint32, changefeedID common.ChangeFeedID, checkpointTs common.Ts,
+	changefeedID common.ChangeFeedID, checkpointTs common.Ts,
 ) error {
+	return m.checkStaleCheckPointTsGlobal(changefeedID, checkpointTs)
+}
+
+func (m *gcManager) checkStaleCheckPointTsGlobal(changefeedID common.ChangeFeedID, checkpointTs common.Ts) error {
 	return checkStaleCheckpointTs(changefeedID, checkpointTs, m.pdClock, m.isTiCDCBlockGC.Load(), m.lastSafePointTs.Load(), m.gcTTL)
 }
 

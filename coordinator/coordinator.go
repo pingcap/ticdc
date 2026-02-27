@@ -297,7 +297,7 @@ func (c *coordinator) handleStateChange(
 // checkStaleCheckpointTs checks if the checkpointTs is stale, if it is, it will send a state change event to the stateChangedCh
 func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, changefeed *changefeed.Changefeed, reportedCheckpointTs uint64) {
 	id := changefeed.ID
-	err := c.gcManager.CheckStaleCheckpointTs(changefeed.GetKeyspaceID(), id, reportedCheckpointTs)
+	err := c.gcManager.CheckStaleCheckpointTs(id, reportedCheckpointTs)
 	if err == nil {
 		return
 	}
@@ -436,28 +436,6 @@ func (c *coordinator) updateGlobalGcSafepoint(ctx context.Context) error {
 	// bound for the GC safepoint.
 	gcSafepointUpperBound := minCheckpointTs - 1
 	err := c.gcManager.TryUpdateServiceGCSafepoint(ctx, gcSafepointUpperBound)
-	return errors.Trace(err)
-}
-
-func (c *coordinator) updateAllKeyspaceGcBarriers(ctx context.Context) error {
-	barrierMap := c.controller.calculateKeyspaceGCBarrier()
-
-	var retErr error
-	for meta, barrierTS := range barrierMap {
-		err := c.updateKeyspaceGcBarrier(ctx, meta, barrierTS)
-		if err != nil {
-			log.Warn("update keyspace gc barrier failed",
-				zap.Uint32("keyspaceID", meta.ID), zap.String("keyspaceName", meta.Name),
-				zap.Uint64("barrierTS", barrierTS), zap.Error(err))
-			retErr = err
-		}
-	}
-	return retErr
-}
-
-func (c *coordinator) updateKeyspaceGcBarrier(ctx context.Context, meta common.KeyspaceMeta, barrierTS uint64) error {
-	barrierTsUpperBound := barrierTS - 1
-	err := c.gcManager.TryUpdateKeyspaceGCBarrier(ctx, meta.ID, meta.Name, barrierTsUpperBound)
 	return errors.Trace(err)
 }
 

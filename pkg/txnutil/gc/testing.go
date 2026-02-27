@@ -30,7 +30,6 @@ type MockPDClient struct {
 	GetAllStoresFunc func(ctx context.Context, opts ...pdopt.GetStoreOption) ([]*metapb.Store, error)
 
 	UpdateServiceGCSafePointFunc func(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error)
-	GetGCStatesClientFunc        func(keyspaceID uint32) pdgc.GCStatesClient
 }
 
 // UpdateServiceGCSafePoint implements pd.Client.UpdateServiceGCSafePoint.
@@ -70,15 +69,4 @@ func (m *MockPDClient) LoadGlobalConfig(
 			Value: "1",
 		},
 	}, 0, nil
-}
-
-// GetGCStatesClient implements pd.Client.GetGCStatesClient.
-func (m *MockPDClient) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient {
-	if m.GetGCStatesClientFunc != nil {
-		return m.GetGCStatesClientFunc(keyspaceID)
-	}
-	if m.Client != nil {
-		return m.Client.GetGCStatesClient(keyspaceID)
-	}
-	return nil
 }
