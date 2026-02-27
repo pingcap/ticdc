@@ -100,14 +100,10 @@ func TestChunkToString(t *testing.T) {
 	conditions, args := chunk.toString("")
 	require.Equal(t, "((`a` > ?) OR (`a` = ? AND `b` > ?) OR (`a` = ? AND `b` = ? AND `c` > ?)) AND ((`a` < ?) OR (`a` = ? AND `b` < ?) OR (`a` = ? AND `b` = ? AND `c` <= ?))", conditions)
 	expectArgs := []string{"1", "1", "3", "1", "3", "5", "2", "2", "4", "2", "4", "6"}
-	for i, arg := range args {
-		require.Equal(t, expectArgs[i], arg)
-	}
+	require.Equal(t, expectArgs, args)
 
 	conditions, args = chunk.toString("latin1")
 	require.Equal(t, "((`a` COLLATE 'latin1' > ?) OR (`a` = ? AND `b` COLLATE 'latin1' > ?) OR (`a` = ? AND `b` = ? AND `c` COLLATE 'latin1' > ?)) AND ((`a` COLLATE 'latin1' < ?) OR (`a` = ? AND `b` COLLATE 'latin1' < ?) OR (`a` = ? AND `b` = ? AND `c` COLLATE 'latin1' <= ?))", conditions)
 	expectArgs = []string{"1", "1", "3", "1", "3", "5", "2", "2", "4", "2", "4", "6"}
-	for i, arg := range args {
-		require.Equal(t, expectArgs[i], arg)
-	}
+	require.Equal(t, expectArgs, args)
 }
