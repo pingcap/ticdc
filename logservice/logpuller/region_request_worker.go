@@ -93,6 +93,7 @@ func newRegionRequestWorker(
 				*worker.preFetchForConnecting = region.regionInfo
 				return nil
 			} else {
+				worker.requestCache.markDropped()
 				continue
 			}
 		}
@@ -375,8 +376,10 @@ func (s *regionRequestWorker) processRegionSendTask(
 				FilterLoop: region.filterLoop,
 			}
 			if err := doSend(req); err != nil {
+				s.requestCache.markDropped()
 				return err
 			}
+			s.requestCache.markDropped()
 			for _, state := range s.takeRegionStates(subID) {
 				state.markStopped(&requestCancelledErr{})
 				regionEvent := regionEvent{
@@ -390,11 +393,13 @@ func (s *regionRequestWorker) processRegionSendTask(
 			// the stopped subscribedTable, or the special singleRegionInfo for stopping
 			// the table will be handled later.
 			s.client.onRegionFail(newRegionErrorInfo(region, &sendRequestToStoreErr{}))
+			s.requestCache.markDropped()
 		} else {
 			state := newRegionFeedState(region, uint64(subID), s)
 			state.start()
 			s.addRegionState(subID, region.verID.GetID(), state)
 			if err := doSend(s.createRegionRequest(region)); err != nil {
+				s.requestCache.markDropped()
 				return err
 			}
 			s.requestCache.markSent(regionReq)
@@ -485,6 +490,7 @@ func (s *regionRequestWorker) clearPendingRegions() []regionInfo {
 		region := *s.preFetchForConnecting
 		s.preFetchForConnecting = nil
 		regions = append(regions, region)
+		s.requestCache.markDropped()
 	}
 
 	// Clear all regions from cache
