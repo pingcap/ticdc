@@ -112,7 +112,8 @@ endif
 GOBUILD  := $(GOEXPERIMENT) CGO_ENABLED=$(CGO) $(GO) build $(BUILD_FLAG) -trimpath $(GOVENDORFLAG)
 CONSUMER_GOBUILD  := $(GOEXPERIMENT) CGO_ENABLED=1 $(GO) build $(CONSUMER_BUILD_FLAG) -trimpath $(GOVENDORFLAG)
 
-PACKAGE_LIST := go list ./... | grep -vE 'vendor|proto|ticdc/tests|integration|testing_utils|pb|pbmock|ticdc/bin'
+PACKAGE_EXCLUDE := vendor|proto|ticdc/tests|integration|testing_utils|pb|pbmock|ticdc/bin
+PACKAGE_LIST := go list ./... | grep -vE '$(PACKAGE_EXCLUDE)'
 PACKAGES := $$($(PACKAGE_LIST))
 
 FILES := $$(find . -name '*.go' -type f | grep -vE 'vendor|_gen|proto|pb\.go|pb\.gw\.go|_mock.go')
@@ -247,8 +248,16 @@ unit_test: check_failpoint_ctl generate-protobuf
 	mkdir -p "$(TEST_DIR)"
 	$(FAILPOINT_ENABLE)
 	@export log_level=error;\
-	$(GOTEST) -cover -covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" $(PACKAGES) \
-	|| { $(FAILPOINT_DISABLE); exit 1; }
+	test_pkgs=$$($(GO) list -tags="$(TEST_FLAG)" -f '{{if or .TestGoFiles .XTestGoFiles}} {{.ImportPath}} {{end}}' ./... | tr -s ' ' '\n' | grep -vE '$(PACKAGE_EXCLUDE)'); \
+	no_test_pkgs=$$($(GO) list -tags="$(TEST_FLAG)" -f '{{if not (or .TestGoFiles .XTestGoFiles)}} {{.ImportPath}} {{end}}' ./... | tr -s ' ' '\n' | grep -vE '$(PACKAGE_EXCLUDE)'); \
+	if [ -n "$$test_pkgs" ]; then \
+		$(GOTEST) -cover -covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" $$test_pkgs \
+		|| { $(FAILPOINT_DISABLE); exit 1; }; \
+	fi; \
+	if [ -n "$$no_test_pkgs" ]; then \
+		$(GOTEST) $$no_test_pkgs \
+		|| { $(FAILPOINT_DISABLE); exit 1; }; \
+	fi
 	$(FAILPOINT_DISABLE)
 
 unit_test_in_verify_ci: check_failpoint_ctl tools/bin/gotestsum tools/bin/gocov tools/bin/gocov-xml
@@ -256,10 +265,19 @@ unit_test_in_verify_ci: check_failpoint_ctl tools/bin/gotestsum tools/bin/gocov 
 	$(FAILPOINT_ENABLE)
 	@echo "Running unit tests..."
 	@export log_level=error;\
-	CGO_ENABLED=1 tools/bin/gotestsum --junitfile cdc-junit-report.xml -- -v -timeout 300s -p $(P) --race --tags=intest \
-	-parallel=16 \
-	-covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" $(PACKAGES) \
-	|| { $(FAILPOINT_DISABLE); exit 1; }
+	test_pkgs=$$($(GO) list -tags="intest" -f '{{if or .TestGoFiles .XTestGoFiles}} {{.ImportPath}} {{end}}' ./... | tr -s ' ' '\n' | grep -vE '$(PACKAGE_EXCLUDE)'); \
+	no_test_pkgs=$$($(GO) list -tags="intest" -f '{{if not (or .TestGoFiles .XTestGoFiles)}} {{.ImportPath}} {{end}}' ./... | tr -s ' ' '\n' | grep -vE '$(PACKAGE_EXCLUDE)'); \
+	if [ -n "$$test_pkgs" ]; then \
+		CGO_ENABLED=1 tools/bin/gotestsum --junitfile cdc-junit-report.xml -- -v -timeout 300s -p $(P) --race --tags=intest \
+		-parallel=16 \
+		-covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" $$test_pkgs \
+		|| { $(FAILPOINT_DISABLE); exit 1; }; \
+	fi; \
+	if [ -n "$$no_test_pkgs" ]; then \
+		CGO_ENABLED=1 $(GO) test -v -timeout 300s -p $(P) --race --tags=intest \
+		-parallel=16 $$no_test_pkgs \
+		|| { $(FAILPOINT_DISABLE); exit 1; }; \
+	fi
 	tools/bin/gocov convert "$(TEST_DIR)/cov.unit.out" | tools/bin/gocov-xml > cdc-coverage.xml
 	$(FAILPOINT_DISABLE)
 
@@ -268,10 +286,19 @@ unit_test_in_verify_ci_next_gen: check_failpoint_ctl tools/bin/gotestsum tools/b
 	$(FAILPOINT_ENABLE)
 	@echo "Running unit tests..."
 	@export log_level=error;\
-	CGO_ENABLED=1 tools/bin/gotestsum --junitfile cdc-junit-report.xml -- -v -timeout 300s -p $(P) --race --tags=intest,nextgen \
-	-parallel=16 \
-	-covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" $(PACKAGES) \
-	|| { $(FAILPOINT_DISABLE); exit 1; }
+	test_pkgs=$$($(GO) list -tags="intest,nextgen" -f '{{if or .TestGoFiles .XTestGoFiles}} {{.ImportPath}} {{end}}' ./... | tr -s ' ' '\n' | grep -vE '$(PACKAGE_EXCLUDE)'); \
+	no_test_pkgs=$$($(GO) list -tags="intest,nextgen" -f '{{if not (or .TestGoFiles .XTestGoFiles)}} {{.ImportPath}} {{end}}' ./... | tr -s ' ' '\n' | grep -vE '$(PACKAGE_EXCLUDE)'); \
+	if [ -n "$$test_pkgs" ]; then \
+		CGO_ENABLED=1 tools/bin/gotestsum --junitfile cdc-junit-report.xml -- -v -timeout 300s -p $(P) --race --tags=intest,nextgen \
+		-parallel=16 \
+		-covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" $$test_pkgs \
+		|| { $(FAILPOINT_DISABLE); exit 1; }; \
+	fi; \
+	if [ -n "$$no_test_pkgs" ]; then \
+		CGO_ENABLED=1 $(GO) test -v -timeout 300s -p $(P) --race --tags=intest,nextgen \
+		-parallel=16 $$no_test_pkgs \
+		|| { $(FAILPOINT_DISABLE); exit 1; }; \
+	fi
 	tools/bin/gocov convert "$(TEST_DIR)/cov.unit.out" | tools/bin/gocov-xml > cdc-coverage.xml
 	$(FAILPOINT_DISABLE)
 
