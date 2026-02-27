@@ -112,6 +112,10 @@ func (s *Sink) Run(ctx context.Context) error {
 	return err
 }
 
+func (s *Sink) PassBlockEvent(_ commonEvent.BlockEvent) error {
+	return nil
+}
+
 func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	switch e := event.(type) {
 	case *commonEvent.DDLEvent:

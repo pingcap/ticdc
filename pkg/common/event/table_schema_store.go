@@ -51,8 +51,6 @@ type tableSchemaStoreRequirements struct {
 //   - Redo pipeline: attached to redo DDL logs for InfluenceTypeDB/All expansion, and consumed
 //     by redo applier to expand dropped tables for cleanup/skip decisions.
 //     See pkg/common/event/redo.go and pkg/applier/redo.go.
-//   - Cloud storage sink: used to expand DB/All DDL affected table IDs and map to dispatcher routes
-//     for per-dispatcher drain before executing schema DDL file writes.
 //   - Kafka/Pulsar (simple protocol, send-all-bootstrap-at-start): used by the table trigger dispatcher
 //     to list all current tables and emit bootstrap schema messages at changefeed start.
 //     See downstreamadapter/dispatcher/event_dispatcher.go.
@@ -94,11 +92,11 @@ func newTableSchemaStoreRequirements(
 			needTableNames: true,
 		}
 	case commonType.CloudStorageSinkType:
-		// Cloud storage sink uses table IDs to expand DB/All DDL affected tables,
-		// then maps them to active dispatcher routes for per-dispatcher drain.
+		// Cloud storage sink drains by dispatcher route in PassBlockEvent and does not
+		// require table-id expansion from TableSchemaStore.
 		return tableSchemaStoreRequirements{
-			needTableIDs:   true,
-			updateTableIDs: true,
+			needTableIDs:   false,
+			updateTableIDs: false,
 			needTableNames: false,
 		}
 	case commonType.BlackHoleSinkType:

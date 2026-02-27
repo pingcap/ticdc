@@ -895,7 +895,15 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 				// we track it as a pending schedule-related event until the maintainer ACKs it.
 				d.pendingACKCount.Add(1)
 			}
-			err := d.AddBlockEventToSink(event)
+			err := d.sink.PassBlockEvent(event)
+			if err != nil {
+				if needsScheduleACKTracking {
+					d.pendingACKCount.Add(-1)
+				}
+				d.HandleError(err)
+				return
+			}
+			err = d.AddBlockEventToSink(event)
 			if err != nil {
 				if needsScheduleACKTracking {
 					d.pendingACKCount.Add(-1)
@@ -963,8 +971,14 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 			d.holdBlockEvent(event)
 			return
 		}
-
-		d.reportBlockedEventToMaintainer(event)
+		d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
+			err := d.sink.PassBlockEvent(event)
+			if err != nil {
+				d.HandleError(err)
+				return
+			}
+			d.reportBlockedEventToMaintainer(event)
+		})
 	}
 
 	// dealing with events which update schema ids

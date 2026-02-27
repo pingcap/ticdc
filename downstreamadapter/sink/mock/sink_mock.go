@@ -86,6 +86,20 @@ func (mr *MockSinkMockRecorder) IsNormal() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsNormal", reflect.TypeOf((*MockSink)(nil).IsNormal))
 }
 
+// PassBlockEvent mocks base method.
+func (m *MockSink) PassBlockEvent(event event.BlockEvent) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PassBlockEvent", event)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// PassBlockEvent indicates an expected call of PassBlockEvent.
+func (mr *MockSinkMockRecorder) PassBlockEvent(event interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PassBlockEvent", reflect.TypeOf((*MockSink)(nil).PassBlockEvent), event)
+}
+
 // Run mocks base method.
 func (m *MockSink) Run(ctx context.Context) error {
 	m.ctrl.T.Helper()

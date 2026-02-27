@@ -170,14 +170,18 @@ func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.dmlWriters.AddDMLEvent(event)
 }
 
+func (s *sink) PassBlockEvent(event commonEvent.BlockEvent) error {
+	if event == nil {
+		return nil
+	}
+	return s.dmlWriters.PassBlockEvent(event)
+}
+
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	var err error
 	switch e := event.(type) {
 	case *commonEvent.DDLEvent:
-		err = s.dmlWriters.DrainBlockEvent(e, s.tableSchemaStore)
-		if err == nil && !e.NotSync {
-			err = s.writeDDLEvent(e)
-		}
+		err = s.writeDDLEvent(e)
 	default:
 		log.Error("cloudstorage sink doesn't support this type of block event",
 			zap.String("namespace", s.changefeedID.Keyspace()),

@@ -128,6 +128,10 @@ func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.eventChan.Push(event)
 }
 
+func (s *sink) PassBlockEvent(_ commonEvent.BlockEvent) error {
+	return nil
+}
+
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	var err error
 	switch v := event.(type) {

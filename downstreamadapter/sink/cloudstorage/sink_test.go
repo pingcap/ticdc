@@ -207,7 +207,7 @@ func TestWriteDDLEvent(t *testing.T) {
 	}`, string(tableSchema))
 }
 
-func TestWriteDDLEventDrainsAffectedDispatchersFirst(t *testing.T) {
+func TestPassBlockEventDrainsBeforeWriteDDLEvent(t *testing.T) {
 	parentDir := t.TempDir()
 	uri := fmt.Sprintf("file:///%s?protocol=csv&flush-interval=3600s", parentDir)
 	sinkURI, err := url.Parse(uri)
@@ -262,9 +262,12 @@ func TestWriteDDLEventDrainsAffectedDispatchersFirst(t *testing.T) {
 		},
 	}
 
-	err = cloudStorageSink.WriteBlockEvent(ddlEvent)
+	err = cloudStorageSink.PassBlockEvent(ddlEvent)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), dmlFlushed.Load())
+
+	err = cloudStorageSink.WriteBlockEvent(ddlEvent)
+	require.NoError(t, err)
 }
 
 func TestWriteCheckpointEvent(t *testing.T) {
