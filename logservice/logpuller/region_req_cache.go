@@ -233,6 +233,7 @@ func (c *requestCache) clearStaleRequest() {
 	}
 	c.sentRequests.Lock()
 	defer c.sentRequests.Unlock()
+	reqCount := 0
 	for subID, regionReqs := range c.sentRequests.regionReqs {
 		for regionID, regionReq := range regionReqs {
 			if regionReq.regionInfo.isStopped() ||
@@ -250,10 +251,27 @@ func (c *requestCache) clearStaleRequest() {
 					zap.Bool("isStale", regionReq.isStale()),
 					zap.Time("createTime", regionReq.createTime))
 				delete(regionReqs, regionID)
+			} else {
+				reqCount++
 			}
 		}
 		if len(regionReqs) == 0 {
 			delete(c.sentRequests.regionReqs, subID)
+		}
+	}
+
+	// If there are no in-cache region requests but pendingCount isn't 0, it means pendingCount is stale.
+	// Reset it to avoid blocking add() forever.
+	if reqCount == 0 && len(c.pendingQueue) == 0 && c.pendingCount.Load() != 0 {
+		log.Info("region worker pending request count is not equal to actual region request count, correct it",
+			zap.Int("pendingCount", int(c.pendingCount.Load())),
+			zap.Int("actualReqCount", reqCount),
+			zap.Int("pendingQueueLen", len(c.pendingQueue)))
+		c.pendingCount.Store(0)
+		// Notify waiting add operations that there's space available.
+		select {
+		case c.spaceAvailable <- struct{}{}:
+		default:
 		}
 	}
 
