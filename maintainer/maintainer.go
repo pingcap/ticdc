@@ -16,6 +16,7 @@ package maintainer
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/url"
 	"sync"
@@ -78,6 +79,8 @@ type Maintainer struct {
 		mu sync.RWMutex
 		*heartbeatpb.Watermark
 	}
+
+	latestWatermark *heartbeatpb.Watermark
 
 	checkpointTsByCapture *WatermarkCaptureMap
 
@@ -235,6 +238,10 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
 
 	m.watermark.Watermark = &heartbeatpb.Watermark{
+		CheckpointTs: checkpointTs,
+		ResolvedTs:   checkpointTs,
+	}
+	m.latestWatermark = &heartbeatpb.Watermark{
 		CheckpointTs: checkpointTs,
 		ResolvedTs:   checkpointTs,
 	}
@@ -709,6 +716,11 @@ func (m *Maintainer) calculateNewCheckpointTs() (*heartbeatpb.Watermark, bool) {
 				zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs))
 			continue
 		}
+		log.Info("capture heartbeat for checkpointTs",
+			zap.Stringer("changefeedID", m.changefeedID),
+			zap.Any("node", id),
+			zap.Uint64("checkpointTs", watermark.CheckpointTs),
+			zap.Uint64("resolvedTs", watermark.ResolvedTs))
 		// Apply heartbeat constraint - can only make checkpointTs smaller (safer)
 		newWatermark.UpdateMin(watermark)
 	}
@@ -727,6 +739,17 @@ func (m *Maintainer) calculateNewCheckpointTs() (*heartbeatpb.Watermark, bool) {
 		zap.Uint64("minCheckpointTsForScheduler", minCheckpointTsForScheduler),
 		zap.Uint64("minCheckpointTsForBarrier", minCheckpointTsForBarrier),
 	)
+
+	if newWatermark.CheckpointTs < m.latestWatermark.CheckpointTs {
+		log.Info("checkpointTs backward", zap.Uint64("newCheckpointTs", newWatermark.CheckpointTs), zap.Uint64("oldCheckpointTs", m.latestWatermark.CheckpointTs))
+		newWatermark.CheckpointTs = m.latestWatermark.CheckpointTs
+	}
+	if newWatermark.ResolvedTs < m.latestWatermark.ResolvedTs {
+		log.Info("resolvedTs backward", zap.Uint64("newResolvedTs", newWatermark.ResolvedTs), zap.Uint64("oldResolvedTs", m.latestWatermark.ResolvedTs))
+		newWatermark.ResolvedTs = m.latestWatermark.ResolvedTs
+	}
+
+	m.latestWatermark = newWatermark
 
 	return newWatermark, true
 }
@@ -1180,9 +1203,15 @@ func (m *Maintainer) setWatermark(newWatermark heartbeatpb.Watermark) {
 	m.watermark.mu.Lock()
 	defer m.watermark.mu.Unlock()
 	if newWatermark.CheckpointTs != math.MaxUint64 {
-		m.watermark.CheckpointTs = newWatermark.CheckpointTs
+		old := m.watermark.CheckpointTs
+		if newWatermark.CheckpointTs < old {
+			log.Panic(fmt.Sprintf("checkpoint regressed: old=%d new=%d", old, newWatermark.CheckpointTs))
+		}
+		if newWatermark.CheckpointTs > old {
+			m.watermark.CheckpointTs = newWatermark.CheckpointTs
+		}
 	}
-	if newWatermark.ResolvedTs != math.MaxUint64 {
+	if newWatermark.ResolvedTs != math.MaxUint64 && newWatermark.ResolvedTs > m.watermark.ResolvedTs {
 		m.watermark.ResolvedTs = newWatermark.ResolvedTs
 	}
 }
