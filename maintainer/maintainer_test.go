@@ -330,7 +330,8 @@ func TestMaintainerSchedule(t *testing.T) {
 	maintainer.pushEvent(&Event{changefeedID: cfID, eventType: EventInit})
 
 	require.Eventually(t, func() bool {
-		return maintainer.ddlSpan.IsWorking() && maintainer.postBootstrapMsg == nil
+		// Avoid reading non-atomic internal fields from the test goroutine.
+		return maintainer.ddlSpan.IsWorking() && maintainer.initialized.Load()
 	}, 20*time.Second, 100*time.Millisecond)
 
 	require.Eventually(t, func() bool {
