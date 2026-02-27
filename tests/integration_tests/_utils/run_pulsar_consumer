@@ -31,7 +31,7 @@ if $add_default_config; then
 	consumer_replica_config="$workdir/pulsar_consumer_replica_config.toml"
 	cat >"$consumer_replica_config" <<-'EOF'
 		[scheduler]
-		enable-table-across-nodes=true
+		enable-table-across-nodes = false
 	EOF
 	consumer_config_args=(--config "$consumer_replica_config")
 fi
