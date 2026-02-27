@@ -289,7 +289,7 @@ func (f *FilePathGenerator) SetClock(pdClock pdutil.Clock) {
 func (f *FilePathGenerator) GenerateDateStr() string {
 	var dateStr string
 
-	currTime := f.pdClock.CurrentTime()
+	currTime := f.pdClock.CurrentPhysicalTS().UTC()
 	// Note: `dateStr` is formatted using local TZ.
 	switch f.config.DateSeparator {
 	case config.DateSeparatorYear.String():
