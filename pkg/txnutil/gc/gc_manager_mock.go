@@ -36,31 +36,17 @@ func (m *MockManager) EXPECT() *MockManagerMockRecorder {
 }
 
 // CheckStaleCheckpointTs mocks base method.
-func (m *MockManager) CheckStaleCheckpointTs(keyspaceID uint32, changefeedID common.ChangeFeedID, checkpointTs common.Ts) error {
+func (m *MockManager) CheckStaleCheckpointTs(changefeedID common.ChangeFeedID, checkpointTs common.Ts) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CheckStaleCheckpointTs", keyspaceID, changefeedID, checkpointTs)
+	ret := m.ctrl.Call(m, "CheckStaleCheckpointTs", changefeedID, checkpointTs)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // CheckStaleCheckpointTs indicates an expected call of CheckStaleCheckpointTs.
-func (mr *MockManagerMockRecorder) CheckStaleCheckpointTs(keyspaceID, changefeedID, checkpointTs interface{}) *gomock.Call {
+func (mr *MockManagerMockRecorder) CheckStaleCheckpointTs(changefeedID, checkpointTs interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CheckStaleCheckpointTs", reflect.TypeOf((*MockManager)(nil).CheckStaleCheckpointTs), keyspaceID, changefeedID, checkpointTs)
-}
-
-// TryUpdateKeyspaceGCBarrier mocks base method.
-func (m *MockManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID uint32, keyspaceName string, checkpointTs common.Ts) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "TryUpdateKeyspaceGCBarrier", ctx, keyspaceID, keyspaceName, checkpointTs)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// TryUpdateKeyspaceGCBarrier indicates an expected call of TryUpdateKeyspaceGCBarrier.
-func (mr *MockManagerMockRecorder) TryUpdateKeyspaceGCBarrier(ctx, keyspaceID, keyspaceName, checkpointTs interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TryUpdateKeyspaceGCBarrier", reflect.TypeOf((*MockManager)(nil).TryUpdateKeyspaceGCBarrier), ctx, keyspaceID, keyspaceName, checkpointTs)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CheckStaleCheckpointTs", reflect.TypeOf((*MockManager)(nil).CheckStaleCheckpointTs), changefeedID, checkpointTs)
 }
 
 // TryUpdateServiceGCSafepoint mocks base method.
