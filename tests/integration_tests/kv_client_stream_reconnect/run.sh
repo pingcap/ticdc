@@ -66,7 +66,7 @@ EOF
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" $WORK_DIR/pulsar_test.toml ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI $WORK_DIR/pulsar_test.toml "" ;;
-	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI --config $WORK_DIR/pulsar_test.toml --oauth2-private-key ${WORK_DIR}/credential.json --oauth2-issuer-url "http://localhost:9096" -- oauth2-client-id "1234" ;;
+	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI --config $WORK_DIR/pulsar_test.toml --oauth2-private-key ${WORK_DIR}/credential.json --oauth2-issuer-url "http://localhost:9096" --oauth2-client-id "1234" ;;
 	esac
 
 	run_sql "CREATE DATABASE kv_client_stream_reconnect;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
