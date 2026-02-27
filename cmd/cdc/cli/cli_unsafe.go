@@ -14,8 +14,11 @@
 package cli
 
 import (
+	"os"
+
 	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
+	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/spf13/cobra"
 )
 
@@ -57,6 +60,12 @@ func newCmdUnsafe(f factory.Factory) *cobra.Command {
 	command := &cobra.Command{
 		Use:    "unsafe",
 		Hidden: true,
+	}
+	command.PersistentPreRun = func(cmd *cobra.Command, args []string) {
+		if err := util.CheckKeyspaceFlag(cmd); err != nil {
+			cmd.PrintErr(err)
+			os.Exit(1)
+		}
 	}
 
 	commonOptions.addFlags(command)
