@@ -112,8 +112,6 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) (
 				cost := time.Since(start)
 				metrics.SubscriptionClientAddRegionRequestDuration.Observe(cost.Seconds())
 				return true, nil
-			case <-c.spaceAvailable:
-				continue
 			case <-ticker.C:
 				addReqRetryLimit--
 				if addReqRetryLimit <= 0 {
@@ -164,7 +162,14 @@ func (c *requestCache) markSent(req regionReq) {
 		c.sentRequests.regionReqs[req.regionInfo.subscribedSpan.subID] = m
 	}
 
-	if _, exists := m[req.regionInfo.verID.GetID()]; exists {
+	if oldReq, exists := m[req.regionInfo.verID.GetID()]; exists {
+		log.Warn("region request overwritten",
+			zap.Uint64("subID", uint64(req.regionInfo.subscribedSpan.subID)),
+			zap.Uint64("regionID", req.regionInfo.verID.GetID()),
+			zap.Float64("oldAgeSec", time.Since(oldReq.createTime).Seconds()),
+			zap.Float64("newAgeSec", time.Since(req.createTime).Seconds()),
+			zap.Int("pendingCount", int(c.pendingCount.Load())),
+			zap.Int("pendingQueueLen", len(c.pendingQueue)))
 		c.markDone()
 	}
 	m[req.regionInfo.verID.GetID()] = req
@@ -235,7 +240,7 @@ func (c *requestCache) clearStaleRequest() {
 				regionReq.regionInfo.lockedRangeState.Initialized.Load() ||
 				regionReq.isStale() {
 				c.markDone()
-				log.Info("region worker delete stale region request",
+				log.Warn("region worker delete stale region request",
 					zap.Uint64("subID", uint64(subID)),
 					zap.Uint64("regionID", regionID),
 					zap.Int("pendingCount", int(c.pendingCount.Load())),
