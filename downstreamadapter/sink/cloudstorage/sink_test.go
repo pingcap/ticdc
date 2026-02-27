@@ -207,6 +207,66 @@ func TestWriteDDLEvent(t *testing.T) {
 	}`, string(tableSchema))
 }
 
+func TestWriteDDLEventDrainsAffectedDispatchersFirst(t *testing.T) {
+	parentDir := t.TempDir()
+	uri := fmt.Sprintf("file:///%s?protocol=csv&flush-interval=3600s", parentDir)
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	err = replicaConfig.ValidateAndAdjust(sinkURI)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
+	require.NoError(t, err)
+
+	go cloudStorageSink.Run(ctx)
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job("create table t_drain_before_ddl (id int primary key, v int)")
+	require.NotNil(t, job)
+	helper.ApplyJob(job)
+
+	dispatcherID := common.NewDispatcherID()
+	dmlEvent := helper.DML2Event(job.SchemaName, job.TableName, "insert into t_drain_before_ddl values (1, 1)")
+	dmlEvent.TableInfoVersion = job.BinlogInfo.FinishedTS
+	dmlEvent.DispatcherID = dispatcherID
+
+	var dmlFlushed atomic.Int64
+	dmlEvent.AddPostFlushFunc(func() {
+		dmlFlushed.Add(1)
+	})
+
+	cloudStorageSink.AddDMLEvent(dmlEvent)
+
+	ddlEvent := &commonEvent.DDLEvent{
+		Query:        "alter table t_drain_before_ddl add column c2 int",
+		Type:         byte(timodel.ActionAddColumn),
+		SchemaName:   job.SchemaName,
+		TableName:    job.TableName,
+		FinishedTs:   dmlEvent.CommitTs + 10,
+		TableInfo:    helper.GetTableInfo(job),
+		DispatcherID: dispatcherID,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{dmlEvent.PhysicalTableID},
+		},
+	}
+
+	err = cloudStorageSink.WriteBlockEvent(ddlEvent)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), dmlFlushed.Load())
+}
+
 func TestWriteCheckpointEvent(t *testing.T) {
 	parentDir := t.TempDir()
 	uri := fmt.Sprintf("file:///%s?protocol=csv", parentDir)

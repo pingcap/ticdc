@@ -253,3 +253,35 @@ func TestTableSchemaStoreNonMysqlTableIDsBootstrapOnly(t *testing.T) {
 
 	require.ElementsMatch(t, []int64{10, 20}, store.GetAllNormalTableIds())
 }
+
+func TestTableSchemaStoreWhenCloudStorageSink(t *testing.T) {
+	schemaInfos := []*heartbeatpb.SchemaInfo{
+		{
+			SchemaID: 1,
+			Tables: []*heartbeatpb.TableInfo{
+				{TableID: 10},
+				{TableID: 20},
+			},
+		},
+	}
+
+	store := NewTableSchemaStore(schemaInfos, common.CloudStorageSinkType, false)
+	require.ElementsMatch(t, []int64{10, 20}, store.GetAllNormalTableIds())
+
+	store.AddEvent(&DDLEvent{
+		FinishedTs: 100,
+		NeedAddedTables: []Table{
+			{SchemaID: 1, TableID: 30},
+		},
+	})
+	require.ElementsMatch(t, []int64{10, 20, 30}, store.GetAllNormalTableIds())
+
+	store.AddEvent(&DDLEvent{
+		FinishedTs: 101,
+		NeedDroppedTables: &InfluencedTables{
+			InfluenceType: InfluenceTypeNormal,
+			TableIDs:      []int64{20},
+		},
+	})
+	require.ElementsMatch(t, []int64{10, 30}, store.GetAllNormalTableIds())
+}

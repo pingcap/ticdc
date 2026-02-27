@@ -45,7 +45,7 @@ type writer struct {
 	storage      storage.ExternalStorage
 	config       *cloudstorage.Config
 	// toBeFlushedCh contains a set of batchedTask waiting to be flushed to cloud storage.
-	toBeFlushedCh          chan batchedTask
+	toBeFlushedCh          chan writerTask
 	inputCh                *chann.DrainableChann[eventFragment]
 	isClosed               uint64
 	statistics             *pmetrics.Statistics
@@ -55,6 +55,11 @@ type writer struct {
 	metricWriteDuration    prometheus.Observer
 	metricFlushDuration    prometheus.Observer
 	metricsWorkerBusyRatio prometheus.Counter
+}
+
+type writerTask struct {
+	batch  batchedTask
+	marker *drainMarker
 }
 
 func newWriter(
@@ -72,7 +77,7 @@ func newWriter(
 		storage:           storage,
 		config:            config,
 		inputCh:           inputCh,
-		toBeFlushedCh:     make(chan batchedTask, 64),
+		toBeFlushedCh:     make(chan writerTask, 64),
 		statistics:        statistics,
 		filePathGenerator: cloudstorage.NewFilePathGenerator(changefeedID, config, storage, extension),
 		metricWriteBytes: metrics.CloudStorageWriteBytesGauge.
@@ -123,9 +128,17 @@ func (d *writer) flushMessages(ctx context.Context) error {
 		case <-overseerTicker.C:
 			d.metricsWorkerBusyRatio.Add(flushTimeSlice.Seconds())
 			flushTimeSlice = 0
-		case batchedTask := <-d.toBeFlushedCh:
+		case task := <-d.toBeFlushedCh:
 			if atomic.LoadUint64(&d.isClosed) == 1 {
 				return nil
+			}
+			if task.marker != nil {
+				task.marker.done(nil)
+				continue
+			}
+			batchedTask := task.batch
+			if len(batchedTask.batch) == 0 {
+				continue
 			}
 			start := time.Now()
 			for table, task := range batchedTask.batch {
@@ -314,7 +327,7 @@ func (d *writer) genAndDispatchTask(ctx context.Context,
 			select {
 			case <-ctx.Done():
 				return errors.Trace(ctx.Err())
-			case d.toBeFlushedCh <- batchedTask:
+			case d.toBeFlushedCh <- writerTask{batch: batchedTask}:
 				log.Debug("flush task is emitted successfully when flush interval exceeds",
 					zap.Int("tablesLength", len(batchedTask.batch)))
 				batchedTask = newBatchedTask()
@@ -322,7 +335,31 @@ func (d *writer) genAndDispatchTask(ctx context.Context,
 			}
 		case frag, ok := <-ch.Out():
 			if !ok || atomic.LoadUint64(&d.isClosed) == 1 {
-				return nil
+				if len(batchedTask.batch) == 0 {
+					return nil
+				}
+				select {
+				case <-ctx.Done():
+					return errors.Trace(ctx.Err())
+				case d.toBeFlushedCh <- writerTask{batch: batchedTask}:
+					return nil
+				}
+			}
+			if frag.isDrain() {
+				if len(batchedTask.batch) > 0 {
+					select {
+					case <-ctx.Done():
+						return errors.Trace(ctx.Err())
+					case d.toBeFlushedCh <- writerTask{batch: batchedTask}:
+						batchedTask = newBatchedTask()
+					}
+				}
+				select {
+				case <-ctx.Done():
+					return errors.Trace(ctx.Err())
+				case d.toBeFlushedCh <- writerTask{marker: frag.marker}:
+				}
+				continue
 			}
 			batchedTask.handleSingleTableEvent(frag)
 			// if the file size exceeds the upper limit, emit the flush task containing the table
@@ -333,7 +370,7 @@ func (d *writer) genAndDispatchTask(ctx context.Context,
 				select {
 				case <-ctx.Done():
 					return errors.Trace(ctx.Err())
-				case d.toBeFlushedCh <- task:
+				case d.toBeFlushedCh <- writerTask{batch: task}:
 					log.Debug("flush task is emitted successfully when file size exceeds",
 						zap.Any("table", table),
 						zap.Int("eventsLenth", len(task.batch[table].msgs)))

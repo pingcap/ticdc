@@ -126,7 +126,7 @@ func New(
 		cfg:                      cfg,
 		cleanupJobs:              cleanupJobs,
 		storage:                  storage,
-		dmlWriters:               newDMLWriters(changefeedID, storage, cfg, encoderConfig, ext, statistics),
+		dmlWriters:               newDMLWriters(ctx, changefeedID, storage, cfg, encoderConfig, ext, statistics),
 		checkpointChan:           make(chan uint64, 16),
 		lastSendCheckpointTsTime: time.Now(),
 		outputRawChangeEvent:     sinkConfig.CloudStorageConfig.GetOutputRawChangeEvent(),
@@ -174,7 +174,10 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	var err error
 	switch e := event.(type) {
 	case *commonEvent.DDLEvent:
-		err = s.writeDDLEvent(e)
+		err = s.dmlWriters.DrainBlockEvent(e, s.tableSchemaStore)
+		if err == nil && !e.NotSync {
+			err = s.writeDDLEvent(e)
+		}
 	default:
 		log.Error("cloudstorage sink doesn't support this type of block event",
 			zap.String("namespace", s.changefeedID.Keyspace()),
