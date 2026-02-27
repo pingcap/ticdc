@@ -175,10 +175,19 @@ type DynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] inter
 	// Return nil if Option.EnableMemoryControl is false.
 	Feedback() <-chan Feedback[A, P, D]
 
+	// AddArea registers an area with the given settings.
+	// The settings will be applied to the area when it has paths, and can be updated by calling AddArea again.
+	// Call RemoveArea when the area is no longer used to avoid settings leak.
+	AddArea(area A, settings AreaSettings)
+
+	// RemoveArea unregisters an area that was previously added by AddArea.
+	// It only removes the registered settings, and does not remove existing paths.
+	RemoveArea(area A)
+
 	// AddPath add the path to the dynamic stream to receive the events.
 	// An event of a path not already added will be dropped.
 	// Return ErrorTypeDuplicate if the path already exists.
-	AddPath(path P, dest D, area ...AreaSettings) error
+	AddPath(path P, dest D) error
 
 	// RemovePath removes the path from the dynamic stream.
 	// After this call return, future events with the path will be dropped, including events which are already in the stream.

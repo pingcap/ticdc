@@ -75,7 +75,7 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 		advanceResolvedTs: advanceResolvedTs,
 		advanceInterval:   0,
 	}
-	ds.AddPath(subID, subSpan, dynstream.AreaSettings{})
+	ds.AddPath(subID, subSpan)
 
 	worker := &regionRequestWorker{
 		requestCache: &requestCache{},
@@ -235,7 +235,7 @@ func TestHandleResolvedTs(t *testing.T) {
 			advanceResolvedTs: advanceResolvedTs,
 			advanceInterval:   0,
 		}
-		ds.AddPath(subID1, subSpan, dynstream.AreaSettings{})
+		ds.AddPath(subID1, subSpan)
 		state1.region.subscribedSpan = subSpan
 		state1.region.lockedRangeState = &regionlock.LockedRangeState{}
 		state1.setInitialized()
@@ -259,7 +259,7 @@ func TestHandleResolvedTs(t *testing.T) {
 			advanceResolvedTs: advanceResolvedTs,
 			advanceInterval:   0,
 		}
-		ds.AddPath(subID2, subSpan, dynstream.AreaSettings{})
+		ds.AddPath(subID2, subSpan)
 		state2.region.subscribedSpan = subSpan
 		state2.region.lockedRangeState = &regionlock.LockedRangeState{}
 		state2.setInitialized()
@@ -283,7 +283,7 @@ func TestHandleResolvedTs(t *testing.T) {
 			advanceResolvedTs: advanceResolvedTs,
 			advanceInterval:   0,
 		}
-		ds.AddPath(subID3, subSpan, dynstream.AreaSettings{})
+		ds.AddPath(subID3, subSpan)
 		state3.region.subscribedSpan = subSpan
 		state3.region.lockedRangeState = &regionlock.LockedRangeState{}
 		state3.updateResolvedTs(8)

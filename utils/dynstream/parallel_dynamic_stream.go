@@ -194,7 +194,19 @@ func (s *parallelDynamicStream[A, P, T, D, H]) Feedback() <-chan Feedback[A, P, 
 	return s.feedbackChan
 }
 
-func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...AreaSettings) error {
+func (s *parallelDynamicStream[A, P, T, D, H]) AddArea(area A, settings AreaSettings) {
+	if s.memControl != nil {
+		s.memControl.addArea(area, settings)
+	}
+}
+
+func (s *parallelDynamicStream[A, P, T, D, H]) RemoveArea(area A) {
+	if s.memControl != nil {
+		s.memControl.removeArea(area)
+	}
+}
+
+func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D) error {
 	s.pathMap.Lock()
 	_, ok := s.pathMap.m[path]
 	if ok {
@@ -213,7 +225,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...Are
 	s._statAddPathCount.Add(1)
 	s.pathMap.Unlock()
 
-	s.setMemControl(pi, as...)
+	s.setMemControl(pi)
 
 	if pi.stream.closed.Load() {
 		return nil
@@ -267,13 +279,8 @@ func (s *parallelDynamicStream[A, P, T, D, H]) GetMetrics() Metrics[A, P] {
 
 func (s *parallelDynamicStream[A, P, T, D, H]) setMemControl(
 	pi *pathInfo[A, P, T, D, H],
-	as ...AreaSettings,
 ) {
 	if s.memControl != nil {
-		setting := AreaSettings{}
-		if len(as) > 0 {
-			setting = as[0]
-		}
-		s.memControl.addPathToArea(pi, setting, s.feedbackChan)
+		s.memControl.addPathToArea(pi, s.feedbackChan)
 	}
 }

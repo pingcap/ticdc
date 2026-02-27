@@ -47,7 +47,8 @@ func TestMemControlAddRemovePath(t *testing.T) {
 	feedbackChan := make(chan Feedback[int, string, any], 10)
 
 	// Test adding path
-	mc.addPathToArea(path, settings, feedbackChan)
+	mc.addArea(path.area, settings)
+	mc.addPathToArea(path, feedbackChan)
 	require.NotNil(t, path.areaMemStat)
 	require.Equal(t, int64(1), path.areaMemStat.pathCount.Load())
 
@@ -65,7 +66,8 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 		algorithm:        MemoryControlForPuller,
 	}
 	feedbackChan := make(chan Feedback[int, string, any], 10)
-	mc.addPathToArea(path1, settings, feedbackChan)
+	mc.addArea(path1.area, settings)
+	mc.addPathToArea(path1, feedbackChan)
 
 	handler := &mockHandler{}
 	option := NewOption()
@@ -173,7 +175,8 @@ func TestSetAreaSettings(t *testing.T) {
 		algorithm:        MemoryControlForPuller,
 	}
 	feedbackChan := make(chan Feedback[int, string, any], 10)
-	mc.addPathToArea(path, initialSettings, feedbackChan)
+	mc.addArea(path.area, initialSettings)
+	mc.addPathToArea(path, feedbackChan)
 	require.Equal(t, initialSettings, *path.areaMemStat.settings.Load())
 
 	// Case 2: Set the new settings.
@@ -202,10 +205,11 @@ func TestGetMetrics(t *testing.T) {
 	metrics := mc.getMetrics()
 	require.Equal(t, 0, len(metrics.AreaMemoryMetrics))
 
-	mc.addPathToArea(path, AreaSettings{
+	mc.addArea(path.area, AreaSettings{
 		maxPendingSize:   100,
 		feedbackInterval: time.Second,
-	}, nil)
+	})
+	mc.addPathToArea(path, nil)
 	metrics = mc.getMetrics()
 	require.Equal(t, 1, len(metrics.AreaMemoryMetrics))
 	require.Equal(t, int64(0), metrics.AreaMemoryMetrics[0].UsedMemoryValue)
@@ -225,7 +229,8 @@ func TestUpdateAreaPauseState(t *testing.T) {
 	}
 
 	feedbackChan := make(chan Feedback[int, string, any], 10)
-	mc.addPathToArea(path, settings, feedbackChan)
+	mc.addArea(path.area, settings)
+	mc.addPathToArea(path, feedbackChan)
 	areaMemStat := path.areaMemStat
 
 	areaMemStat.totalPendingSize.Store(int64(10))
@@ -298,9 +303,10 @@ func TestReleaseMemory(t *testing.T) {
 	path3.blocking.Store(true)
 
 	// Add paths to area
-	mc.addPathToArea(path1, settings, feedbackChan)
-	mc.addPathToArea(path2, settings, feedbackChan)
-	mc.addPathToArea(path3, settings, feedbackChan)
+	mc.addArea(area, settings)
+	mc.addPathToArea(path1, feedbackChan)
+	mc.addPathToArea(path2, feedbackChan)
+	mc.addPathToArea(path3, feedbackChan)
 
 	// Set different last handle event timestamps
 	// path1: most recent (largest ts), should be released first
