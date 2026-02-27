@@ -29,6 +29,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws/retry"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/smithy-go"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/objstore"
@@ -387,6 +388,14 @@ func IsNotExistInExtStorage(err error) bool {
 
 	if aerr, ok := errors.Cause(err).(awserr.Error); ok { // nolint:errorlint
 		switch aerr.Code() {
+		case s3.ErrCodeNoSuchBucket, s3.ErrCodeNoSuchKey, "NotFound":
+			return true
+		}
+	}
+
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
 		case s3.ErrCodeNoSuchBucket, s3.ErrCodeNoSuchKey, "NotFound":
 			return true
 		}

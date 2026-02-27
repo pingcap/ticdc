@@ -39,10 +39,10 @@ const (
 // RawKVEntry represents a kv change or a resolved ts event
 // TODO: use a different struct
 type RawKVEntry struct {
-	OpType  OpType `msg:"op_type"`  // offset 0 bytes
+	OpType OpType `msg:"op_type"` // offset 0 bytes
+	// Commit or resolved TS
 	CRTs    uint64 `msg:"crts"`     // offset 4 bytes
 	StartTs uint64 `msg:"start_ts"` // offset 12 bytes
-	// Commit or resolved TS
 	// Additional debug info
 	RegionID uint64 `msg:"region_id"` // offset 20 bytes
 

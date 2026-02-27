@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/smithy-go"
 	"github.com/pingcap/tidb/pkg/objstore/objectio"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/stretchr/testify/require"
@@ -289,4 +290,21 @@ func TestExtStorageCreateMultipartWriteCancelsCreateCtxOnTimeout(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded), "got %v", err)
 	require.InDelta(t, testTimeout, elapsed, float64(testTimeout)*0.5)
+}
+
+func TestIsNotExistInExtStorageAWSV2(t *testing.T) {
+	notExistCodes := []string{"NoSuchBucket", "NoSuchKey", "NotFound"}
+	for _, code := range notExistCodes {
+		err := &smithy.GenericAPIError{
+			Code:    code,
+			Message: "not found",
+		}
+		require.True(t, IsNotExistInExtStorage(err))
+	}
+
+	err := &smithy.GenericAPIError{
+		Code:    "AccessDenied",
+		Message: "access denied",
+	}
+	require.False(t, IsNotExistInExtStorage(err))
 }
