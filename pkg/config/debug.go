@@ -75,7 +75,7 @@ func NewDefaultPullerConfig() *PullerConfig {
 		EnableResolvedTsStuckDetection: false,
 		ResolvedTsStuckInterval:        TomlDuration(5 * time.Minute),
 		LogRegionDetails:               false,
-		PendingRegionRequestQueueSize:  32, // This value is chosen to reduce the impact of new changefeeds on existing ones.
+		PendingRegionRequestQueueSize:  256, // This value is chosen to reduce the impact of new changefeeds on existing ones.
 	}
 }
 
