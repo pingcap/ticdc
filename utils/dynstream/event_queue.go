@@ -138,6 +138,7 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(b *batcher[T]) ([]T, *pathInfo[A, 
 		count++
 
 		// Try to batch events with the same data group.
+		// We check isFull before append, so batch-by-bytes can exceed the limit by at most one event.
 		for count < signal.eventCount && !b.isFull() {
 			// Get the reference of the front event of the path.
 			// We don't use PopFront here because we need to keep the event in the path.
@@ -148,13 +149,6 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(b *batcher[T]) ([]T, *pathInfo[A, 
 				(firstGroup != front.eventType.DataGroup) ||
 				firstProperty == NonBatchable ||
 				front.eventType.Property == NonBatchable {
-				break
-			}
-			// Make sure we don't exceed the hard bytes limit (best-effort).
-			// If a single event itself exceeds hardBytes, we still need to process it.
-			if b.config.hardBytes > 0 &&
-				b.nBytes > 0 &&
-				b.nBytes+front.eventSize > b.config.hardBytes {
 				break
 			}
 			b.addEvent(front.event, front.eventSize)

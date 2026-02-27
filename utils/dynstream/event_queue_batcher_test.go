@@ -19,7 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBatcherSetLimitResetState(t *testing.T) {
+func TestBatcherSetLimit(t *testing.T) {
 	b := newBatcher[*mockEvent](NewBatchConfig(4, 0))
 	b.addEvent(&mockEvent{value: 1}, 16)
 	require.Equal(t, 1, len(b.buf))
@@ -32,7 +32,7 @@ func TestBatcherSetLimitResetState(t *testing.T) {
 	require.Equal(t, 64, b.config.hardBytes)
 }
 
-func TestBatchEventsBySize(t *testing.T) {
+func TestBatchByBytes(t *testing.T) {
 	handler := mockHandler{}
 	eq := newEventQueue(&handler)
 	b := newDefaultBatcher[*mockEvent]()
@@ -63,17 +63,11 @@ func TestBatchEventsBySize(t *testing.T) {
 	require.Len(t, events, 1)
 	require.Equal(t, 4, events[0].value)
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
-}
 
-func TestBatchEventsBySize_NotExceedHardBytes(t *testing.T) {
-	handler := mockHandler{}
-	eq := newEventQueue(&handler)
-	b := newDefaultBatcher[*mockEvent]()
-
-	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, NewBatchConfig(10, 12))
+	eq = newEventQueue(&handler)
+	path = newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, NewBatchConfig(10, 12))
 	eq.initPath(path)
-
-	for i := 1; i <= 3; i++ {
+	for i := 1; i <= 4; i++ {
 		eq.appendEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{
 			pathInfo:  path,
 			event:     &mockEvent{value: i},
@@ -84,9 +78,8 @@ func TestBatchEventsBySize_NotExceedHardBytes(t *testing.T) {
 			},
 		})
 	}
-
-	events, _, _ := eq.popEvents(b)
-	require.Len(t, events, 2)
+	events, _, _ = eq.popEvents(b)
+	require.Len(t, events, 3)
 	require.Equal(t, int64(1), eq.totalPendingLength.Load())
 
 	events, _, _ = eq.popEvents(b)
@@ -94,7 +87,7 @@ func TestBatchEventsBySize_NotExceedHardBytes(t *testing.T) {
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
 }
 
-func TestBatchEventsBySize_HardCountGuardsTinyEvents(t *testing.T) {
+func TestBatchByHardCount(t *testing.T) {
 	handler := mockHandler{}
 	eq := newEventQueue(&handler)
 	b := newDefaultBatcher[*mockEvent]()
@@ -123,7 +116,7 @@ func TestBatchEventsBySize_HardCountGuardsTinyEvents(t *testing.T) {
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
 }
 
-func TestBatchEventsBySize_FirstEventExceedsHardBytes(t *testing.T) {
+func TestBatchByBytesLargeFirstEvent(t *testing.T) {
 	handler := mockHandler{}
 	eq := newEventQueue(&handler)
 	b := newDefaultBatcher[*mockEvent]()

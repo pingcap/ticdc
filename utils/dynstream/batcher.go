@@ -30,8 +30,10 @@ func newDefaultBatchConfig() batchConfig {
 	return NewBatchConfig(1, 0)
 }
 
-// if the hardBytes is 0, the softCount become the hard limit, cannot be exceeded
-// else the softCount can be exceed, but the hardBytes cannot be exceeded.
+// If hardBytes is 0, softCount is the hard limit.
+// If hardBytes is enabled, softCount is a soft target:
+// hardBytes is checked before appending the next event, so the current batch can
+// exceed hardBytes by at most one event.
 func NewBatchConfig(count, nBytes int) batchConfig {
 	return batchConfig{
 		softCount: count,
@@ -52,13 +54,9 @@ func newDefaultBatcher[T Event]() *batcher[T] {
 }
 
 func newBatcher[T Event](cfg batchConfig) *batcher[T] {
-	if cfg.softCount <= 0 {
-		cfg.softCount = 1
-	}
-	return &batcher[T]{
-		config: cfg,
-		buf:    make([]T, 0, cfg.softCount),
-	}
+	b := &batcher[T]{}
+	b.setLimit(cfg)
+	return b
 }
 
 func (b *batcher[T]) setLimit(cfg batchConfig) {
@@ -101,7 +99,8 @@ func (b *batcher[T]) isFull() bool {
 		return true
 	}
 
-	// hardBytes is the hard limit when enabled.
+	// hardBytes is checked before appending the next event.
+	// So with tiny events we can exceed hardBytes by at most one event.
 	return b.nBytes >= b.config.hardBytes
 }
 
