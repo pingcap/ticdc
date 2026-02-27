@@ -32,15 +32,15 @@ mysql_groups=(
 	# G00
 	'api_v2 generate_column many_pk_or_uk multi_source'
 	# G01
-	'ddl_for_split_tables_with_random_move_table'
+	'ddl_for_split_tables_with_random_move_table syncpoint_check_ts random_drop_message'
 	# G02
-	'ddl_for_split_tables_with_failover'
+	'ddl_for_split_tables_with_failover in_flight_syncpoint_during_scheduling '
 	# G03
 	'cdc move_table in_flight_ddl_during_scheduling checkpoint_race_ddl_crash'
 	# G04
 	'complex_transaction'
 	# G05
-	'ddl_for_split_tables_with_merge_and_split syncpoint in_flight_syncpoint_during_scheduling syncpoint_check_ts random_drop_message'
+	'ddl_for_split_tables_with_merge_and_split syncpoint'
 	# G06
 	'ddl_for_split_tables_with_random_merge_and_split'
 	# G07
