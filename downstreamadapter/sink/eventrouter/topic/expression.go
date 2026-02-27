@@ -17,7 +17,9 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"go.uber.org/zap"
 )
 
 var (
@@ -154,7 +156,10 @@ func (e Expression) Substitute(schema, table string) string {
 	}
 	for _, token := range tokens {
 		if token.typ == tokenColumn {
-			panic("topic expression with column placeholders requires row context")
+			log.Panic("topic expression with column placeholder requires row context",
+				zap.String("expression", string(e)),
+				zap.String("schema", schema),
+				zap.String("table", table))
 		}
 	}
 	return applyTopicNameConstraints(substituteTokens(tokens, schema, table, nil))

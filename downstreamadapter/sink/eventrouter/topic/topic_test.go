@@ -102,3 +102,20 @@ func TestDynamicTopicDispatcherForTable(t *testing.T) {
 		require.Equal(t, tc.expectedTopic, p.Substitute(tc.schema, tc.table))
 	}
 }
+
+func TestDynamicTopicDispatcherSubstitutePanicsWithoutRowContext(t *testing.T) {
+	t.Parallel()
+
+	p := newDynamicTopicGenerator(Expression("events_{column:event_type}"))
+	require.Panics(t, func() {
+		_ = p.Substitute("test", "t")
+	})
+}
+
+func TestDynamicTopicDispatcherConstructorPanicsForInvalidExpression(t *testing.T) {
+	t.Parallel()
+
+	require.Panics(t, func() {
+		_ = newDynamicTopicGenerator(Expression("events_{column:}"))
+	})
+}
