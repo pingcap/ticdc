@@ -48,6 +48,7 @@ type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 
 	// The queue to store the pending events of this stream.
 	eventQueue eventQueue[A, P, T, D, H]
+	batcher    *batcher[T]
 
 	option Option
 
@@ -71,6 +72,7 @@ func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 		id:         id,
 		handler:    handler,
 		eventQueue: newEventQueue(handler),
+		batcher:    newDefaultBatcher[T](),
 		option:     option,
 		startTime:  time.Now(),
 	}
@@ -279,7 +281,7 @@ Loop:
 				eventQueueEmpty = false
 			default:
 				start := time.Now()
-				eventBuf, path, nBytes = s.eventQueue.popEvents()
+				eventBuf, path, nBytes = s.eventQueue.popEvents(s.batcher)
 				if len(eventBuf) == 0 {
 					eventQueueEmpty = true
 					continue Loop
@@ -335,7 +337,7 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	// Fields used by the memory control.
 	areaMemStat *areaMemStat[A, P, T, D, H]
 
-	batcher *batcher[T]
+	batchConfig batchConfig
 
 	pendingSize atomic.Int64 // The total size(bytes) of pending events in the pendingQueue of the path.
 
@@ -343,14 +345,14 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 }
 
 func newPathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
-	area A, metricLabel string, path P, dest D, batcher *batcher[T],
+	area A, metricLabel string, path P, dest D, batchConfig batchConfig,
 ) *pathInfo[A, P, T, D, H] {
 	pi := &pathInfo[A, P, T, D, H]{
 		area:         area,
 		metricLabel:  metricLabel,
 		path:         path,
 		dest:         dest,
-		batcher:      batcher,
+		batchConfig:  batchConfig,
 		pendingQueue: deque.NewDeque[eventWrap[A, P, T, D, H]](BlockLenInPendingQueue),
 	}
 	return pi

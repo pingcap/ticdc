@@ -33,8 +33,9 @@ func TestNewEventQueue(t *testing.T) {
 func TestAppendAndPopSingleEvent(t *testing.T) {
 	handler := mockHandler{}
 	eq := newEventQueue(&handler)
+	b := newDefaultBatcher[*mockEvent]()
 
-	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, newDefaultBatcher[*mockEvent]())
+	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, newDefaultBatchConfig())
 	eq.initPath(path)
 
 	event := eventWrap[int, string, *mockEvent, any, *mockHandler]{
@@ -49,7 +50,7 @@ func TestAppendAndPopSingleEvent(t *testing.T) {
 
 	require.Equal(t, int64(1), eq.totalPendingLength.Load())
 
-	events, popPath, _ := eq.popEvents()
+	events, popPath, _ := eq.popEvents(b)
 	require.Equal(t, 1, len(events))
 	require.Equal(t, mockEvent{value: 1}, *events[0])
 	require.Equal(t, path, popPath)
@@ -59,8 +60,9 @@ func TestAppendAndPopSingleEvent(t *testing.T) {
 func TestBlockAndWakePath(t *testing.T) {
 	handler := mockHandler{}
 	eq := newEventQueue(&handler)
+	b := newDefaultBatcher[*mockEvent]()
 
-	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, newDefaultBatcher[*mockEvent]())
+	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, newDefaultBatchConfig())
 	eq.initPath(path)
 
 	event := eventWrap[int, string, *mockEvent, any, *mockHandler]{
@@ -75,14 +77,14 @@ func TestBlockAndWakePath(t *testing.T) {
 
 	eq.blockPath(path)
 
-	events, _, _ := eq.popEvents()
+	events, _, _ := eq.popEvents(b)
 	require.Equal(t, 0, len(events))
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
 
 	eq.wakePath(path)
 	require.Equal(t, int64(1), eq.totalPendingLength.Load())
 
-	events, popPath, _ := eq.popEvents()
+	events, popPath, _ := eq.popEvents(b)
 	require.Equal(t, 1, len(events))
 	require.Equal(t, &mockEvent{value: 1}, events[0])
 	require.Equal(t, path, popPath)
@@ -92,8 +94,9 @@ func TestBlockAndWakePath(t *testing.T) {
 func TestBatchEvents(t *testing.T) {
 	handler := mockHandler{}
 	eq := newEventQueue(&handler)
+	b := newDefaultBatcher[*mockEvent]()
 
-	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, newBatcher[*mockEvent](NewBatchConfig(3, 0)))
+	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, NewBatchConfig(3, 0))
 	eq.initPath(path)
 
 	for i := 1; i <= 5; i++ {
@@ -108,7 +111,7 @@ func TestBatchEvents(t *testing.T) {
 		eq.appendEvent(event)
 	}
 
-	events, _, _ := eq.popEvents()
+	events, _, _ := eq.popEvents(b)
 	require.Equal(t, 3, len(events))
 	require.Equal(t, &mockEvent{value: 1}, events[0])
 	require.Equal(t, &mockEvent{value: 2}, events[1])
@@ -119,8 +122,9 @@ func TestBatchEvents(t *testing.T) {
 func TestBatchableAndNonBatchableEvents(t *testing.T) {
 	handler := mockHandler{}
 	eq := newEventQueue(&handler)
+	b := newDefaultBatcher[*mockEvent]()
 
-	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, newBatcher[*mockEvent](NewBatchConfig(3, 0)))
+	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, NewBatchConfig(3, 0))
 	eq.initPath(path)
 
 	event1 := eventWrap[int, string, *mockEvent, any, *mockHandler]{
@@ -169,35 +173,35 @@ func TestBatchableAndNonBatchableEvents(t *testing.T) {
 		eq.appendEvent(e)
 	}
 
-	events, _, _ := eq.popEvents()
+	events, _, _ := eq.popEvents(b)
 	require.Equal(t, 1, len(events))
 	require.Equal(t, &mockEvent{value: 1}, events[0])
 	require.Equal(t, int64(9), eq.totalPendingLength.Load())
 
-	events, _, _ = eq.popEvents()
+	events, _, _ = eq.popEvents(b)
 	require.Equal(t, 2, len(events))
 	require.Equal(t, &mockEvent{value: 1}, events[0])
 	require.Equal(t, &mockEvent{value: 2}, events[1])
 	require.Equal(t, int64(7), eq.totalPendingLength.Load())
 
-	events, _, _ = eq.popEvents()
+	events, _, _ = eq.popEvents(b)
 	require.Equal(t, 1, len(events))
 	require.Equal(t, &mockEvent{value: 1}, events[0])
 	require.Equal(t, int64(6), eq.totalPendingLength.Load())
 
-	events, _, _ = eq.popEvents()
+	events, _, _ = eq.popEvents(b)
 	require.Equal(t, 1, len(events))
 	require.Equal(t, &mockEvent{value: 2}, events[0])
 	require.Equal(t, int64(5), eq.totalPendingLength.Load())
 
-	events, _, _ = eq.popEvents()
+	events, _, _ = eq.popEvents(b)
 	require.Equal(t, 3, len(events))
 	require.Equal(t, &mockEvent{value: 1}, events[0])
 	require.Equal(t, &mockEvent{value: 2}, events[1])
 	require.Equal(t, &mockEvent{value: 3}, events[2])
 	require.Equal(t, int64(2), eq.totalPendingLength.Load())
 
-	events, _, _ = eq.popEvents()
+	events, _, _ = eq.popEvents(b)
 	require.Equal(t, 2, len(events))
 	require.Equal(t, &mockEvent{value: 4}, events[0])
 	require.Equal(t, &mockEvent{value: 5}, events[1])
@@ -207,8 +211,9 @@ func TestBatchableAndNonBatchableEvents(t *testing.T) {
 func TestRemovePath(t *testing.T) {
 	handler := mockHandler{}
 	eq := newEventQueue(&handler)
+	b := newDefaultBatcher[*mockEvent]()
 
-	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, newDefaultBatcher[*mockEvent]())
+	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, newDefaultBatchConfig())
 	eq.initPath(path)
 
 	e := eventWrap[int, string, *mockEvent, any, *mockHandler]{
@@ -223,7 +228,7 @@ func TestRemovePath(t *testing.T) {
 	require.Equal(t, int64(1), eq.totalPendingLength.Load())
 
 	path.removed.Store(true)
-	events, _, _ := eq.popEvents()
+	events, _, _ := eq.popEvents(b)
 	require.Equal(t, 0, len(events))
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
 }

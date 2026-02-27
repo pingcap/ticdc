@@ -61,6 +61,19 @@ func newBatcher[T Event](cfg batchConfig) *batcher[T] {
 	}
 }
 
+func (b *batcher[T]) setLimit(cfg batchConfig) {
+	if cfg.softCount <= 0 {
+		cfg.softCount = 1
+	}
+	b.config = cfg
+	if cap(b.buf) < cfg.softCount {
+		b.buf = make([]T, 0, cfg.softCount)
+	} else {
+		b.buf = b.buf[:0]
+	}
+	b.nBytes = 0
+}
+
 func (b *batcher[T]) addEvent(event T, size int) {
 	if len(b.buf) == 0 {
 		b.start = time.Now()

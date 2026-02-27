@@ -59,7 +59,7 @@ func (h *incHandler) OnDrop(event *inc) interface{}     { return nil }
 func runStream(eventCount int, times int) {
 	handler := &incHandler{}
 
-	pi := newPathInfo[int, string, *inc, D, *incHandler](0, "test", "p1", D{}, newDefaultBatcher[*inc]())
+	pi := newPathInfo[int, string, *inc, D, *incHandler](0, "test", "p1", D{}, newDefaultBatchConfig())
 	stream := newStream[int, string, *inc, D](1 /*id*/, "test", handler, NewOption())
 	stream.start()
 
@@ -418,7 +418,7 @@ func runReceiverBenchmark(eventCount int, withContext bool) {
 	}()
 
 	// Send events
-	pi := newPathInfo[int, string, *inc, D, *incHandler](0, "test", "p1", D{}, newDefaultBatcher[*inc]())
+	pi := newPathInfo[int, string, *inc, D, *incHandler](0, "test", "p1", D{}, newDefaultBatchConfig())
 	for i := 0; i < eventCount; i++ {
 		event := eventWrap[int, string, *inc, D, *incHandler]{
 			event:    &inc{times: 1, n: &atomic.Int64{}, done: &sync.WaitGroup{}},

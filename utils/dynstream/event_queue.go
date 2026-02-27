@@ -96,7 +96,7 @@ func (q *eventQueue[A, P, T, D, H]) wakePath(path *pathInfo[A, P, T, D, H]) {
 	}
 }
 
-func (q *eventQueue[A, P, T, D, H]) popEvents() ([]T, *pathInfo[A, P, T, D, H], int) {
+func (q *eventQueue[A, P, T, D, H]) popEvents(b *batcher[T]) ([]T, *pathInfo[A, P, T, D, H], int) {
 	for {
 		// We are going to update the signal directly, so we need the reference.
 		signal, ok := q.signalQueue.FrontRef()
@@ -130,14 +130,15 @@ func (q *eventQueue[A, P, T, D, H]) popEvents() ([]T, *pathInfo[A, P, T, D, H], 
 		firstGroup := firstEvent.eventType.DataGroup
 		firstProperty := firstEvent.eventType.Property
 
+		b.setLimit(path.batchConfig)
+
 		var count int
-		batcher := path.batcher
-		batcher.addEvent(firstEvent.event, firstEvent.eventSize)
+		b.addEvent(firstEvent.event, firstEvent.eventSize)
 		path.popEvent()
 		count++
 
 		// Try to batch events with the same data group.
-		for count < signal.eventCount && !batcher.isFull() {
+		for count < signal.eventCount && !b.isFull() {
 			// Get the reference of the front event of the path.
 			// We don't use PopFront here because we need to keep the event in the path.
 			// Otherwise, the event may lost when the loop is break below.
@@ -151,12 +152,12 @@ func (q *eventQueue[A, P, T, D, H]) popEvents() ([]T, *pathInfo[A, P, T, D, H], 
 			}
 			// Make sure we don't exceed the hard bytes limit (best-effort).
 			// If a single event itself exceeds hardBytes, we still need to process it.
-			if batcher.config.hardBytes > 0 &&
-				batcher.nBytes > 0 &&
-				batcher.nBytes+front.eventSize > batcher.config.hardBytes {
+			if b.config.hardBytes > 0 &&
+				b.nBytes > 0 &&
+				b.nBytes+front.eventSize > b.config.hardBytes {
 				break
 			}
-			batcher.addEvent(front.event, front.eventSize)
+			b.addEvent(front.event, front.eventSize)
 			path.popEvent()
 			count++
 		}
@@ -166,7 +167,7 @@ func (q *eventQueue[A, P, T, D, H]) popEvents() ([]T, *pathInfo[A, P, T, D, H], 
 			q.signalQueue.PopFront()
 		}
 		q.totalPendingLength.Add(-int64(count))
-		events, nBytes, _ := batcher.flush()
+		events, nBytes, _ := b.flush()
 		return events, path, nBytes
 	}
 }

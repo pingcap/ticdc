@@ -19,11 +19,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestBatcherSetLimitResetState(t *testing.T) {
+	b := newBatcher[*mockEvent](NewBatchConfig(4, 0))
+	b.addEvent(&mockEvent{value: 1}, 16)
+	require.Equal(t, 1, len(b.buf))
+	require.Equal(t, 16, b.nBytes)
+
+	b.setLimit(NewBatchConfig(8, 64))
+	require.Equal(t, 0, len(b.buf))
+	require.Equal(t, 0, b.nBytes)
+	require.Equal(t, 8, b.config.softCount)
+	require.Equal(t, 64, b.config.hardBytes)
+}
+
 func TestBatchEventsBySize(t *testing.T) {
 	handler := mockHandler{}
 	eq := newEventQueue(&handler)
+	b := newDefaultBatcher[*mockEvent]()
 
-	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, newBatcher[*mockEvent](NewBatchConfig(10, 12)))
+	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, NewBatchConfig(10, 12))
 	eq.initPath(path)
 
 	for i := 1; i <= 4; i++ {
@@ -38,14 +52,14 @@ func TestBatchEventsBySize(t *testing.T) {
 		})
 	}
 
-	events, _, _ := eq.popEvents()
+	events, _, _ := eq.popEvents(b)
 	require.Len(t, events, 3)
 	require.Equal(t, 1, events[0].value)
 	require.Equal(t, 2, events[1].value)
 	require.Equal(t, 3, events[2].value)
 	require.Equal(t, int64(1), eq.totalPendingLength.Load())
 
-	events, _, _ = eq.popEvents()
+	events, _, _ = eq.popEvents(b)
 	require.Len(t, events, 1)
 	require.Equal(t, 4, events[0].value)
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
@@ -54,8 +68,9 @@ func TestBatchEventsBySize(t *testing.T) {
 func TestBatchEventsBySize_NotExceedHardBytes(t *testing.T) {
 	handler := mockHandler{}
 	eq := newEventQueue(&handler)
+	b := newDefaultBatcher[*mockEvent]()
 
-	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, newBatcher[*mockEvent](NewBatchConfig(10, 12)))
+	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, NewBatchConfig(10, 12))
 	eq.initPath(path)
 
 	for i := 1; i <= 3; i++ {
@@ -70,11 +85,11 @@ func TestBatchEventsBySize_NotExceedHardBytes(t *testing.T) {
 		})
 	}
 
-	events, _, _ := eq.popEvents()
+	events, _, _ := eq.popEvents(b)
 	require.Len(t, events, 2)
 	require.Equal(t, int64(1), eq.totalPendingLength.Load())
 
-	events, _, _ = eq.popEvents()
+	events, _, _ = eq.popEvents(b)
 	require.Len(t, events, 1)
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
 }
@@ -82,8 +97,9 @@ func TestBatchEventsBySize_NotExceedHardBytes(t *testing.T) {
 func TestBatchEventsBySize_HardCountGuardsTinyEvents(t *testing.T) {
 	handler := mockHandler{}
 	eq := newEventQueue(&handler)
+	b := newDefaultBatcher[*mockEvent]()
 
-	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, newBatcher[*mockEvent](NewBatchConfig(3, 100)))
+	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, NewBatchConfig(3, 100))
 	eq.initPath(path)
 
 	for i := 1; i <= 7; i++ {
@@ -98,11 +114,49 @@ func TestBatchEventsBySize_HardCountGuardsTinyEvents(t *testing.T) {
 		})
 	}
 
-	events, _, _ := eq.popEvents()
+	events, _, _ := eq.popEvents(b)
 	require.Len(t, events, 6)
 	require.Equal(t, int64(1), eq.totalPendingLength.Load())
 
-	events, _, _ = eq.popEvents()
+	events, _, _ = eq.popEvents(b)
 	require.Len(t, events, 1)
+	require.Equal(t, int64(0), eq.totalPendingLength.Load())
+}
+
+func TestBatchEventsBySize_FirstEventExceedsHardBytes(t *testing.T) {
+	handler := mockHandler{}
+	eq := newEventQueue(&handler)
+	b := newDefaultBatcher[*mockEvent]()
+
+	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, NewBatchConfig(10, 50))
+	eq.initPath(path)
+
+	eq.appendEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{
+		pathInfo:  path,
+		event:     &mockEvent{value: 1},
+		eventSize: 100,
+		eventType: EventType{
+			DataGroup: 1,
+			Property:  BatchableData,
+		},
+	})
+	eq.appendEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{
+		pathInfo:  path,
+		event:     &mockEvent{value: 2},
+		eventSize: 10,
+		eventType: EventType{
+			DataGroup: 1,
+			Property:  BatchableData,
+		},
+	})
+
+	events, _, _ := eq.popEvents(b)
+	require.Len(t, events, 1)
+	require.Equal(t, 1, events[0].value)
+	require.Equal(t, int64(1), eq.totalPendingLength.Load())
+
+	events, _, _ = eq.popEvents(b)
+	require.Len(t, events, 1)
+	require.Equal(t, 2, events[0].value)
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
 }
