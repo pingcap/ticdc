@@ -32,6 +32,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
+	"github.com/pingcap/ticdc/pkg/sink/sqlmodel"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/version"
 	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
@@ -157,6 +158,12 @@ type Config struct {
 
 	// ServerInfo is the version info of the downstream
 	ServerInfo version.ServerInfo
+
+	// whereClause controls the WHERE clause strategy used by multi-row UPDATE/DELETE.
+	//
+	// It is configured via the sink URI query param `where-clause` and passed to
+	// sqlmodel.Gen{Delete,Update}SQL. See pkg/sink/sqlmodel for details.
+	whereClause string
 }
 
 // New returns the default mysql backend config.
@@ -168,7 +175,6 @@ func New() *Config {
 		MaxMultiUpdateRowCount:        defaultMaxMultiUpdateRowCount,
 		MaxMultiUpdateRowSize:         defaultMaxMultiUpdateRowSize,
 		TidbTxnMode:                   defaultTiDBTxnMode,
-		tidbTxnModeSpecified:          false,
 		ReadTimeout:                   defaultReadTimeout,
 		WriteTimeout:                  defaultWriteTimeout,
 		DialTimeout:                   defaultDialTimeout,
@@ -182,6 +188,7 @@ func New() *Config {
 		EnableDDLTs:                   defaultEnableDDLTs,
 		SlowQuery:                     slowQuery,
 		ActiveActiveSyncStatsInterval: time.Minute,
+		whereClause:                   sqlmodel.DefaultWhereClause,
 	}
 }
 
@@ -281,6 +288,9 @@ func (c *Config) Apply(
 		return err
 	}
 	if err = getEnableDDLTs(query, &c.EnableDDLTs); err != nil {
+		return err
+	}
+	if err = getWhereClause(query, &c.whereClause); err != nil {
 		return err
 	}
 
@@ -628,6 +638,14 @@ func getCachePrepStmts(values url.Values, cachePrepStmts *bool) error {
 
 func getEnableDDLTs(value url.Values, enableDDLTs *bool) error {
 	return getBool(value, "enable-ddl-ts", enableDDLTs)
+}
+
+func getWhereClause(value url.Values, whereClause *string) error {
+	s := value.Get("where-clause")
+	if len(s) > 0 {
+		*whereClause = s
+	}
+	return nil
 }
 
 func getBool(values url.Values, key string, target *bool) error {
