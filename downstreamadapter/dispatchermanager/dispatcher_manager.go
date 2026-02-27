@@ -757,6 +757,12 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	seq := e.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.EventDispatcher) {
 		dispatcherCount++
 		status, cleanMap, watermark := getDispatcherStatus(id, dispatcherItem, needCompleteStatus)
+		log.Info("collected dispatcher status",
+			zap.Stringer("changefeedID", e.changefeedID),
+			zap.Stringer("dispatcherID", id),
+			zap.Any("status", status),
+			zap.Any("watermark", watermark),
+		)
 		if status != nil {
 			message.Statuses = append(message.Statuses, status)
 		}
@@ -779,6 +785,12 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 
 	message.Watermark.Seq = seq
 	e.latestWatermark.Set(message.Watermark)
+	log.Info("aggregated dispatcher heartbeats",
+		zap.Stringer("changefeedID", e.changefeedID),
+		zap.Int("dispatcherCount", dispatcherCount),
+		zap.Any("watermark", message.Watermark),
+		zap.Any("redoWatermark", message.RedoWatermark),
+	)
 
 	// if the event dispatcher manager is closing, we don't to remove the stopped dispatchers.
 	if !e.closing.Load() {
