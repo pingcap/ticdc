@@ -73,7 +73,7 @@ func TestTryUpdateServiceGCSafepointAlwaysExecutesUpdate(t *testing.T) {
 	require.Equal(t, 2, updateCalls)
 }
 
-func TestTryUpdateServiceGCSafepointDoesNotReturnSnapshotLost(t *testing.T) {
+func TestTryUpdateServiceGCSafepointDoesNotReturnSnapshotLostByGC(t *testing.T) {
 	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
 
 	pdClient := &MockPDClient{
