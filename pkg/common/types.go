@@ -16,6 +16,7 @@ package common
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"regexp"
 	"strconv"
 
@@ -162,6 +163,45 @@ func NewGIDWithValue(Low uint64, High uint64) GID {
 type ChangeFeedDisplayName struct {
 	Name     string `json:"name"`
 	Keyspace string `json:"keyspace"`
+}
+
+// changeFeedDisplayNameJSON is a compatibility shim for ChangeFeedDisplayName JSON encoding.
+//
+// Why: some historical TiCDC versions persisted the user-facing dimension as "namespace".
+// Newer TiCDC versions renamed it to "keyspace". Mixed-version upgrades/rollbacks must
+// not make changefeeds "disappear" (e.g., keyspace becomes empty and gets filtered out)
+// or become un-recreatable due to occupied meta keys. To keep metadata compatible across
+// versions, we accept both field names on unmarshal and emit both on marshal.
+type changeFeedDisplayNameJSON struct {
+	Name      string `json:"name"`
+	Keyspace  string `json:"keyspace,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
+}
+
+// MarshalJSON emits both "keyspace" (newer) and "namespace" (legacy) so that either
+// field name can be used to read the metadata without an explicit migration step.
+func (r ChangeFeedDisplayName) MarshalJSON() ([]byte, error) {
+	return json.Marshal(changeFeedDisplayNameJSON{
+		Name:      r.Name,
+		Keyspace:  r.Keyspace,
+		Namespace: r.Keyspace,
+	})
+}
+
+// UnmarshalJSON accepts both "keyspace" (newer) and "namespace" (legacy).
+// If both are present, "keyspace" takes precedence.
+func (r *ChangeFeedDisplayName) UnmarshalJSON(data []byte) error {
+	var decoded changeFeedDisplayNameJSON
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	r.Name = decoded.Name
+	if decoded.Keyspace != "" {
+		r.Keyspace = decoded.Keyspace
+		return nil
+	}
+	r.Keyspace = decoded.Namespace
+	return nil
 }
 
 func NewChangeFeedDisplayName(name string, keyspace string) ChangeFeedDisplayName {
