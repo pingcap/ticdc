@@ -90,7 +90,7 @@ func TestTryUpdateServiceGCSafepointDoesNotReturnSnapshotLost(t *testing.T) {
 	require.NoError(t, m.TryUpdateServiceGCSafepoint(ctx, checkpointTs))
 
 	cfID := common.NewChangeFeedIDWithName("test-changefeed", "test")
-	err := m.CheckStaleCheckpointTs(0, cfID, checkpointTs)
+	err := m.CheckStaleCheckpointTs(cfID, checkpointTs)
 	require.Error(t, err)
 	errCode, ok := cerrors.RFCCode(err)
 	require.True(t, ok)
