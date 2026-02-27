@@ -74,6 +74,7 @@ func (c *blockingPdClient) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesCli
 }
 
 type blockingGCStatesClient struct {
+	pdgc.GCStatesClient
 	parent *blockingPdClient
 }
 

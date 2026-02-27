@@ -75,6 +75,7 @@ func (m *mockPdClient) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient 
 }
 
 type mockGCStatesClient struct {
+	pdgc.GCStatesClient
 	keyspaceID uint32
 
 	mu       sync.Mutex

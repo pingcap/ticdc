@@ -65,13 +65,13 @@ func newChunkDecoderV2(tableInfo *common.TableInfo, tz *time.Location) *rowcodec
 }
 
 // rawKVToChunkV2 is used to decode the new format of row data.
-func (m *mounter) rawKVToChunkV2(value []byte, tableInfo *common.TableInfo, chk *chunk.Chunk, handle kv.Handle) (*rowcodec.ChunkDecoder, error) {
+func (m *mounter) rawKVToChunkV2(value []byte, commitTS uint64, tableInfo *common.TableInfo, chk *chunk.Chunk, handle kv.Handle) (*rowcodec.ChunkDecoder, error) {
 	if len(value) == 0 {
 		return nil, nil
 	}
 	decoder := newChunkDecoderV2(tableInfo, m.tz)
 	// cache it for later use
-	err := decoder.DecodeToChunk(value, handle, chk)
+	err := decoder.DecodeToChunk(value, commitTS, handle, chk)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}

@@ -29,8 +29,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	putil "github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/robfig/cron"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -49,7 +49,7 @@ type sink struct {
 	sinkURI      *url.URL
 	// todo: this field is not take effects yet, should be fixed.
 	outputRawChangeEvent bool
-	storage              storage.ExternalStorage
+	storage              storeapi.Storage
 
 	dmlWriters *dmlWriters
 

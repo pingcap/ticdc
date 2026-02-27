@@ -23,7 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/utils/chann"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -50,7 +50,7 @@ type dmlWriters struct {
 
 func newDMLWriters(
 	changefeedID commonType.ChangeFeedID,
-	storage storage.ExternalStorage,
+	storage storeapi.Storage,
 	config *cloudstorage.Config,
 	encoderConfig *common.Config,
 	extension string,

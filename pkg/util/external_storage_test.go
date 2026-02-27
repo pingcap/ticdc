@@ -20,7 +20,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/aws/smithy-go"
+	"github.com/pingcap/tidb/pkg/objstore/objectio"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/stretchr/testify/require"
 )
 
@@ -43,12 +45,12 @@ func (m *mockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 
 // mockExternalStorage is a mock implementation for testing timeouts via http client.
 type mockExternalStorage struct {
-	storage.ExternalStorage // Embed the interface to satisfy it easily
-	httpClient              *http.Client
+	storeapi.Storage // Embed the interface to satisfy it easily
+	httpClient       *http.Client
 }
 
 // Implement Open so tests can simulate readers that bind to the Open() context.
-func (m *mockExternalStorage) Open(ctx context.Context, path string, option *storage.ReaderOption) (storage.ExternalFileReader, error) {
+func (m *mockExternalStorage) Open(ctx context.Context, path string, option *storeapi.ReaderOption) (objectio.Reader, error) {
 	return &ctxBoundReader{ctx: ctx}, nil
 }
 
@@ -92,8 +94,8 @@ func TestExtStorageWithTimeoutWriteFileTimeout(t *testing.T) {
 
 	// Wrap the mock store with the timeout logic
 	timedStore := &extStorageWithTimeout{
-		ExternalStorage: mockStore,
-		timeout:         testTimeout,
+		Storage: mockStore,
+		timeout: testTimeout,
 	}
 
 	startTime := time.Now()
@@ -124,8 +126,8 @@ func TestExtStorageWithTimeoutWriteFileSuccess(t *testing.T) {
 	}
 
 	timedStore := &extStorageWithTimeout{
-		ExternalStorage: mockStore,
-		timeout:         testTimeout,
+		Storage: mockStore,
+		timeout: testTimeout,
 	}
 
 	// Use context.Background() as the base context
@@ -162,8 +164,8 @@ func (r *ctxBoundReader) GetFileSize() (int64, error) { return 1, nil }
 
 func TestExtStorageOpenDoesNotCancelReaderContext(t *testing.T) {
 	timedStore := &extStorageWithTimeout{
-		ExternalStorage: &mockExternalStorage{},
-		timeout:         100 * time.Millisecond,
+		Storage: &mockExternalStorage{},
+		timeout: 100 * time.Millisecond,
 	}
 
 	rd, err := timedStore.Open(context.Background(), "file", nil)
@@ -177,8 +179,8 @@ func TestExtStorageOpenDoesNotCancelReaderContext(t *testing.T) {
 
 func TestExtStorageOpenReaderRespectsCallerCancel(t *testing.T) {
 	timedStore := &extStorageWithTimeout{
-		ExternalStorage: &mockExternalStorage{},
-		timeout:         10 * time.Millisecond,
+		Storage: &mockExternalStorage{},
+		timeout: 10 * time.Millisecond,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -227,11 +229,11 @@ func (w *blockingCreateCtxWriter) Close(_ context.Context) error {
 }
 
 type mockCreateExternalStorage struct {
-	storage.ExternalStorage
-	writer storage.ExternalFileWriter
+	storeapi.Storage
+	writer objectio.Writer
 }
 
-func (m *mockCreateExternalStorage) Create(ctx context.Context, _ string, _ *storage.WriterOption) (storage.ExternalFileWriter, error) {
+func (m *mockCreateExternalStorage) Create(ctx context.Context, _ string, _ *storeapi.WriterOption) (objectio.Writer, error) {
 	if w, ok := m.writer.(*blockingCreateCtxWriter); ok {
 		w.createCtx = ctx
 	}
@@ -248,11 +250,11 @@ func TestExtStorageCreateWriterWriteTimeout(t *testing.T) {
 	// 3) Verify the call fails within the default timeout.
 	testTimeout := 50 * time.Millisecond
 	timedStore := &extStorageWithTimeout{
-		ExternalStorage: &mockCreateExternalStorage{writer: &blockingCtxWriter{}},
-		timeout:         testTimeout,
+		Storage: &mockCreateExternalStorage{writer: &blockingCtxWriter{}},
+		timeout: testTimeout,
 	}
 
-	w, err := timedStore.Create(context.Background(), "file", &storage.WriterOption{Concurrency: 1})
+	w, err := timedStore.Create(context.Background(), "file", &storeapi.WriterOption{Concurrency: 1})
 	require.NoError(t, err)
 
 	start := time.Now()
@@ -274,11 +276,11 @@ func TestExtStorageCreateMultipartWriteCancelsCreateCtxOnTimeout(t *testing.T) {
 	// 3) Call Write() with a ctx without deadline and verify it returns in time.
 	testTimeout := 50 * time.Millisecond
 	timedStore := &extStorageWithTimeout{
-		ExternalStorage: &mockCreateExternalStorage{writer: &blockingCreateCtxWriter{}},
-		timeout:         testTimeout,
+		Storage: &mockCreateExternalStorage{writer: &blockingCreateCtxWriter{}},
+		timeout: testTimeout,
 	}
 
-	w, err := timedStore.Create(context.Background(), "file", &storage.WriterOption{Concurrency: 2})
+	w, err := timedStore.Create(context.Background(), "file", &storeapi.WriterOption{Concurrency: 2})
 	require.NoError(t, err)
 
 	start := time.Now()
@@ -288,4 +290,21 @@ func TestExtStorageCreateMultipartWriteCancelsCreateCtxOnTimeout(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded), "got %v", err)
 	require.InDelta(t, testTimeout, elapsed, float64(testTimeout)*0.5)
+}
+
+func TestIsNotExistInExtStorageAWSV2(t *testing.T) {
+	notExistCodes := []string{"NoSuchBucket", "NoSuchKey", "NotFound"}
+	for _, code := range notExistCodes {
+		err := &smithy.GenericAPIError{
+			Code:    code,
+			Message: "not found",
+		}
+		require.True(t, IsNotExistInExtStorage(err))
+	}
+
+	err := &smithy.GenericAPIError{
+		Code:    "AccessDenied",
+		Message: "access denied",
+	}
+	require.False(t, IsNotExistInExtStorage(err))
 }

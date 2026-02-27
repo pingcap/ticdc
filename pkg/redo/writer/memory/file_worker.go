@@ -34,7 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -93,7 +93,7 @@ type fileWorkerGroup struct {
 	op            *writer.LogWriterOptions
 	workerNum     int
 	inputCh       chan writer.RedoEvent
-	extStorage    storage.ExternalStorage
+	extStorage    storeapi.Storage
 	uuidGenerator uuid.Generator
 
 	pool    sync.Pool
@@ -110,7 +110,7 @@ type fileWorkerGroup struct {
 func newFileWorkerGroup(
 	cfg *writer.LogWriterConfig, workerNum int,
 	logType string,
-	extStorage storage.ExternalStorage,
+	extStorage storeapi.Storage,
 	opts ...writer.Option,
 ) *fileWorkerGroup {
 	if workerNum <= 0 {
@@ -204,7 +204,7 @@ func (f *fileWorkerGroup) bgFlushFileCache(egCtx context.Context) error {
 }
 
 func (f *fileWorkerGroup) multiPartUpload(ctx context.Context, file *fileCache) error {
-	multipartWrite, err := f.extStorage.Create(ctx, file.filename, &storage.WriterOption{
+	multipartWrite, err := f.extStorage.Create(ctx, file.filename, &storeapi.WriterOption{
 		Concurrency: util.GetOrZero(f.cfg.FlushConcurrency),
 	})
 	if err != nil {
