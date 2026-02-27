@@ -298,10 +298,27 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 			zap.Any("regionIDs", resolvedTsEvent.Regions))
 		return
 	}
-	resolvedStates := make([]*regionFeedState, 0, len(resolvedTsEvent.Regions))
+	// Avoid allocating a huge states slice when resolvedTsEvent.Regions is large.
+	// Push resolved-ts events in batches to reduce peak memory usage and improve GC behavior.
+	const resolvedTsStateBatchSize = 1024
+	resolvedStates := make([]*regionFeedState, 0, resolvedTsStateBatchSize)
+	flush := func() {
+		if len(resolvedStates) == 0 {
+			return
+		}
+		states := resolvedStates
+		s.client.pushRegionEventToDS(subscriptionID, regionEvent{
+			resolvedTs: resolvedTsEvent.Ts,
+			states:     states,
+		})
+		resolvedStates = make([]*regionFeedState, 0, resolvedTsStateBatchSize)
+	}
 	for _, regionID := range resolvedTsEvent.Regions {
 		if state := s.getRegionState(subscriptionID, regionID); state != nil {
 			resolvedStates = append(resolvedStates, state)
+			if len(resolvedStates) >= resolvedTsStateBatchSize {
+				flush()
+			}
 			continue
 		}
 		log.Warn("region request worker receives a resolved ts event for an untracked region",
@@ -310,13 +327,7 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 			zap.Uint64("regionID", regionID),
 			zap.Uint64("resolvedTs", resolvedTsEvent.Ts))
 	}
-	if len(resolvedStates) == 0 {
-		return
-	}
-	s.client.pushRegionEventToDS(subscriptionID, regionEvent{
-		resolvedTs: resolvedTsEvent.Ts,
-		states:     resolvedStates,
-	})
+	flush()
 }
 
 // processRegionSendTask receives region requests from the channel and sends them to the remote store.
