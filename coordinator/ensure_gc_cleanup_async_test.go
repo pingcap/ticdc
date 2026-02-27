@@ -15,102 +15,83 @@ package coordinator
 
 import (
 	"context"
+	"math"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	"github.com/pingcap/ticdc/coordinator/gccleaner"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
+	gcmock "github.com/pingcap/ticdc/pkg/txnutil/gc/mock"
 	"github.com/stretchr/testify/require"
-	pd "github.com/tikv/pd/client"
 	pdgc "github.com/tikv/pd/client/clients/gc"
+	"go.uber.org/atomic"
 )
 
-type noopGCManager struct{}
-
-var _ gc.Manager = noopGCManager{}
-
-func (noopGCManager) TryUpdateServiceGCSafepoint(ctx context.Context, checkpointTs common.Ts) error {
-	return nil
-}
-
-func (noopGCManager) CheckStaleCheckpointTs(keyspaceID uint32, changefeedID common.ChangeFeedID, checkpointTs common.Ts) error {
-	return nil
-}
-
-func (noopGCManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID uint32, keyspaceName string, checkpointTs common.Ts) error {
-	return nil
-}
-
-type blockingPdClient struct {
-	pd.Client
-
-	startedOnce sync.Once
-	undoStarted chan struct{}
-	releaseUndo chan struct{}
-}
-
-func (c *blockingPdClient) markStarted() {
-	c.startedOnce.Do(func() { close(c.undoStarted) })
-}
-
-func (c *blockingPdClient) UpdateServiceGCSafePoint(
-	ctx context.Context, serviceID string, ttl int64, safePoint uint64,
-) (uint64, error) {
-	c.markStarted()
-	select {
-	case <-c.releaseUndo:
-		return safePoint, nil
-	case <-ctx.Done():
-		return 0, ctx.Err()
-	}
-}
-
-func (c *blockingPdClient) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient {
-	return &blockingGCStatesClient{parent: c}
-}
-
-type blockingGCStatesClient struct {
-	parent *blockingPdClient
-}
-
-func (c *blockingGCStatesClient) SetGCBarrier(
-	ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration,
-) (*pdgc.GCBarrierInfo, error) {
-	return pdgc.NewGCBarrierInfo(barrierID, barrierTS, ttl, time.Now()), nil
-}
-
-func (c *blockingGCStatesClient) DeleteGCBarrier(ctx context.Context, barrierID string) (*pdgc.GCBarrierInfo, error) {
-	c.parent.markStarted()
-	select {
-	case <-c.parent.releaseUndo:
-		return nil, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-}
-
-func (c *blockingGCStatesClient) GetGCState(ctx context.Context) (pdgc.GCState, error) {
-	return pdgc.GCState{}, nil
-}
-
 func TestTryClearEnsureGCSafepointDoesNotBlockChangefeedChanges(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
 	undoStarted := make(chan struct{})
 	releaseUndo := make(chan struct{})
-	pdClient := &blockingPdClient{
-		undoStarted: undoStarted,
-		releaseUndo: releaseUndo,
+	var startedOnce sync.Once
+
+	mockGCManager := gcmock.NewMockManager(ctrl)
+	mockGCManager.EXPECT().TryUpdateServiceGCSafepoint(gomock.Any(), gomock.Any()).Times(0)
+	mockGCManager.EXPECT().TryUpdateKeyspaceGCBarrier(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+
+	expectedServiceID := "test-gc-service" + gc.EnsureGCServiceCreating + common.DefaultKeyspaceName + "_test"
+	mockGCClient := gcmock.NewMockClient(ctrl)
+	if kerneltype.IsClassic() {
+		mockGCClient.EXPECT().
+			UpdateServiceGCSafePoint(gomock.Any(), expectedServiceID, int64(0), uint64(math.MaxUint64)).
+			DoAndReturn(func(ctx context.Context, _ string, _ int64, safePoint uint64) (uint64, error) {
+				startedOnce.Do(func() { close(undoStarted) })
+				select {
+				case <-releaseUndo:
+					return safePoint, nil
+				case <-ctx.Done():
+					return 0, ctx.Err()
+				}
+			}).
+			Times(1)
+	} else {
+		mockStatesClient := gcmock.NewMockGCStatesClient(ctrl)
+		mockGCClient.EXPECT().GetGCStatesClient(uint32(1)).Return(mockStatesClient).Times(1)
+		mockStatesClient.EXPECT().
+			DeleteGCBarrier(gomock.Any(), expectedServiceID).
+			DoAndReturn(func(ctx context.Context, _ string) (*pdgc.GCBarrierInfo, error) {
+				startedOnce.Do(func() { close(undoStarted) })
+				select {
+				case <-releaseUndo:
+					return nil, nil
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			}).
+			Times(1)
+	}
+	pdClient := &gc.MockPDClient{
+		UpdateServiceGCSafePointFunc: func(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
+			return mockGCClient.UpdateServiceGCSafePoint(ctx, serviceID, ttl, safePoint)
+		},
+		GetGCStatesClientFunc: func(keyspaceID uint32) pdgc.GCStatesClient {
+			return mockGCClient.GetGCStatesClient(keyspaceID)
+		},
 	}
 
 	co := &coordinator{
 		controller: &Controller{
 			changefeedDB: changefeed.NewChangefeedDB(1),
+			initialized:  atomic.NewBool(false),
 		},
 		gcServiceID:        "test-gc-service",
-		gcManager:          noopGCManager{},
+		gcManager:          mockGCManager,
 		pdClient:           pdClient,
 		pdClock:            pdutil.NewClock4Test(),
 		changefeedChangeCh: make(chan []*changefeedChange),

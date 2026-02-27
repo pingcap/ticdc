@@ -1097,7 +1097,6 @@ func verifyResumeChangefeedConfig(
 		}
 		return err
 	}
-
 	return nil
 }
 

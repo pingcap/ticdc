@@ -398,11 +398,10 @@ func (m *migrator) migrateGcServiceSafePoint(ctx context.Context,
 		}
 	}
 	if cdcGcSafePoint != nil {
-		_, err := gc.SetServiceGCSafepoint(ctx, pdClient, newGcServiceID, ttl, cdcGcSafePoint.SafePoint)
+		err := gc.SetServiceGCSafepoint(ctx, pdClient, common.DefaultKeyspaceID, newGcServiceID, ttl, cdcGcSafePoint.SafePoint)
 		if err != nil {
-			log.Error("set gc service safepoint failed",
-				zap.Error(err))
-			return errors.Trace(err)
+			log.Error("set gc service safepoint failed", zap.Error(err))
+			return err
 		}
 		err = gc.UnifyDeleteGcSafepoint(ctx, pdClient, 0, oldGcServiceID)
 		if err != nil {

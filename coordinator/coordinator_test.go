@@ -41,87 +41,80 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/orchestrator"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/txnutil/gc"
+	gcmock "github.com/pingcap/ticdc/pkg/txnutil/gc/mock"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
-	pd "github.com/tikv/pd/client"
 	pdgc "github.com/tikv/pd/client/clients/gc"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
 
-type mockPdClient struct {
-	pd.Client
-	mu       sync.Mutex
-	gcClient map[uint32]*mockGCStatesClient
-}
+func newMockPDClientWithGCMocks(ctrl *gomock.Controller) *gc.MockPDClient {
+	var mu sync.Mutex
+	gcStatesClients := make(map[uint32]*gcmock.MockGCStatesClient)
+	barriers := make(map[uint32]map[string]*pdgc.GCBarrierInfo)
 
-func (m *mockPdClient) UpdateServiceGCSafePoint(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
-	return safePoint, nil
-}
-
-func (m *mockPdClient) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.gcClient == nil {
-		m.gcClient = make(map[uint32]*mockGCStatesClient)
+	client := &gc.MockPDClient{
+		UpdateServiceGCSafePointFunc: func(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
+			return safePoint, nil
+		},
 	}
-	if cli, ok := m.gcClient[keyspaceID]; ok {
+	client.GetGCStatesClientFunc = func(keyspaceID uint32) pdgc.GCStatesClient {
+		mu.Lock()
+		defer mu.Unlock()
+
+		if cli, ok := gcStatesClients[keyspaceID]; ok {
+			return cli
+		}
+
+		cli := gcmock.NewMockGCStatesClient(ctrl)
+		barriers[keyspaceID] = make(map[string]*pdgc.GCBarrierInfo)
+
+		cli.EXPECT().
+			SetGCBarrier(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, barrierID string, barrierTS uint64, ttl time.Duration) (*pdgc.GCBarrierInfo, error) {
+				mu.Lock()
+				defer mu.Unlock()
+				info := pdgc.NewGCBarrierInfo(barrierID, barrierTS, ttl, time.Now())
+				barriers[keyspaceID][barrierID] = info
+				return info, nil
+			}).
+			AnyTimes()
+		cli.EXPECT().
+			DeleteGCBarrier(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, barrierID string) (*pdgc.GCBarrierInfo, error) {
+				mu.Lock()
+				defer mu.Unlock()
+				info, ok := barriers[keyspaceID][barrierID]
+				if ok {
+					delete(barriers[keyspaceID], barrierID)
+				}
+				return info, nil
+			}).
+			AnyTimes()
+		cli.EXPECT().
+			GetGCState(gomock.Any()).
+			DoAndReturn(func(_ context.Context) (pdgc.GCState, error) {
+				mu.Lock()
+				defer mu.Unlock()
+				gcBarriers := make([]*pdgc.GCBarrierInfo, 0, len(barriers[keyspaceID]))
+				for _, barrierInfo := range barriers[keyspaceID] {
+					gcBarriers = append(gcBarriers, barrierInfo)
+				}
+				return pdgc.GCState{
+					KeyspaceID:   keyspaceID,
+					TxnSafePoint: 0,
+					GCSafePoint:  0,
+					GCBarriers:   gcBarriers,
+				}, nil
+			}).
+			AnyTimes()
+
+		gcStatesClients[keyspaceID] = cli
 		return cli
 	}
-	cli := newMockGCStatesClient(keyspaceID)
-	m.gcClient[keyspaceID] = cli
-	return cli
-}
-
-type mockGCStatesClient struct {
-	keyspaceID uint32
-
-	mu       sync.Mutex
-	barriers map[string]*pdgc.GCBarrierInfo
-}
-
-func newMockGCStatesClient(keyspaceID uint32) *mockGCStatesClient {
-	return &mockGCStatesClient{
-		keyspaceID: keyspaceID,
-		barriers:   make(map[string]*pdgc.GCBarrierInfo),
-	}
-}
-
-func (c *mockGCStatesClient) SetGCBarrier(ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration) (*pdgc.GCBarrierInfo, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	info := pdgc.NewGCBarrierInfo(barrierID, barrierTS, ttl, time.Now())
-	c.barriers[barrierID] = info
-	return info, nil
-}
-
-func (c *mockGCStatesClient) DeleteGCBarrier(ctx context.Context, barrierID string) (*pdgc.GCBarrierInfo, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	info, ok := c.barriers[barrierID]
-	if ok {
-		delete(c.barriers, barrierID)
-	}
-	return info, nil
-}
-
-func (c *mockGCStatesClient) GetGCState(ctx context.Context) (pdgc.GCState, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	barriers := make([]*pdgc.GCBarrierInfo, 0, len(c.barriers))
-	for _, info := range c.barriers {
-		barriers = append(barriers, info)
-	}
-	return pdgc.GCState{
-		KeyspaceID:   c.keyspaceID,
-		TxnSafePoint: 0,
-		GCSafePoint:  0,
-		GCBarriers:   barriers,
-	}, nil
+	return client
 }
 
 type mockMaintainerManager struct {
@@ -355,7 +348,7 @@ func TestCoordinatorScheduling(t *testing.T) {
 		}
 	}
 
-	cr := New(info, &mockPdClient{}, backend, "default", 100, 10000, time.Minute)
+	cr := New(info, newMockPDClientWithGCMocks(ctrl), backend, "default", 100, 10000, time.Minute)
 	co := cr.(*coordinator)
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -413,7 +406,7 @@ func TestScaleNode(t *testing.T) {
 	backend.EXPECT().GetAllChangefeeds(gomock.Any()).Return(cfs, nil).AnyTimes()
 	backend.EXPECT().UpdateChangefeed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
-	cr := New(info, &mockPdClient{}, backend, serviceID, 100, 10000, time.Millisecond*1)
+	cr := New(info, newMockPDClientWithGCMocks(ctrl), backend, serviceID, 100, 10000, time.Millisecond*1)
 
 	// run coordinator
 	go func() { cr.Run(ctx) }()
@@ -564,7 +557,7 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 	}, nil).AnyTimes()
 	backend.EXPECT().DeleteChangefeed(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	backend.EXPECT().SetChangefeedProgress(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	cr := New(info, &mockPdClient{}, backend, serviceID, 100, 10000, time.Millisecond*10)
+	cr := New(info, newMockPDClientWithGCMocks(ctrl), backend, serviceID, 100, 10000, time.Millisecond*10)
 
 	// run coordinator
 	go func() { cr.Run(ctx) }()
@@ -605,7 +598,7 @@ func TestConcurrentStopAndSendEvents(t *testing.T) {
 	backend.EXPECT().GetAllChangefeeds(gomock.Any()).Return(map[common.ChangeFeedID]*changefeed.ChangefeedMetaWrapper{}, nil).AnyTimes()
 
 	// Create coordinator
-	cr := New(info, &mockPdClient{}, backend, "test-gc-service", 100, 10000, time.Millisecond*10)
+	cr := New(info, newMockPDClientWithGCMocks(ctrl), backend, "test-gc-service", 100, 10000, time.Millisecond*10)
 	co := cr.(*coordinator)
 
 	// Number of goroutines for each operation
@@ -710,11 +703,6 @@ type maintainNode struct {
 	cancel  context.CancelFunc
 	mc      messaging.MessageCenter
 	manager *mockMaintainerManager
-}
-
-func (d *maintainNode) stop() {
-	d.mc.Close()
-	d.cancel()
 }
 
 func startMaintainerNode(ctx context.Context,

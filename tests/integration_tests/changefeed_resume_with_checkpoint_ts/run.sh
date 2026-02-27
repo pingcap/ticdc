@@ -114,14 +114,15 @@ function resume_changefeed_in_failed_state() {
 		exit 1
 	fi
 
+	# TODO tenfyzhong 2025-10-10 19:15:57 compitable with next gen
+	# under the next-gen mode, the gc_safepoint is always 0, so cannot pass.
 	if [ "$NEXT_GEN" != 1 ]; then
-		# TODO tenfyzhong 2025-10-10 19:15:57 compitable with next gen
-		# the gc_safepoint is always 0
 		gc_safepoint=$(pd-ctl -u=$pd_addr service-gc-safepoint | grep -oE "\"safe_point\": [0-9]+" | grep -oE "[0-9]+" | sort | head -n1)
-		result=$(cdc_cli_changefeed resume --changefeed-id=$changefeed_id --pd=$pd_addr --overwrite-checkpoint-ts=$gc_safepoint --no-confirm=true 2>&1 || true)
+		new_start_ts=$((gc_safepoint - 1))
+		result=$(cdc_cli_changefeed resume --changefeed-id=$changefeed_id --pd=$pd_addr --overwrite-checkpoint-ts=$new_start_ts --no-confirm=true 2>&1 || true)
 		if [[ $result != *"ErrStartTsBeforeGC"* ]]; then
 			echo "changefeeed resume result is expected to contain 'ErrStartTsBeforeGC', \
-			    but actually got $resulservice-gc-safepointt"
+			    but actually got $result"
 			exit 1
 		fi
 	fi

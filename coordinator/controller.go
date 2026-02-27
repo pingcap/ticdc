@@ -89,20 +89,18 @@ type Controller struct {
 }
 
 type changefeedChange struct {
-	changefeedID common.ChangeFeedID
-	changefeed   *changefeed.Changefeed
-	state        config.FeedState
-	changeType   ChangeType
-	err          *config.RunningError
+	changefeed *changefeed.Changefeed
+	state      config.FeedState
+	changeType ChangeType
+	err        *config.RunningError
 }
 
 func newChangefeedChange(changefeed *changefeed.Changefeed, state config.FeedState, changeType ChangeType, err *config.RunningError) *changefeedChange {
 	return &changefeedChange{
-		changefeedID: changefeed.ID,
-		changefeed:   changefeed,
-		state:        state,
-		changeType:   changeType,
-		err:          err,
+		changefeed: changefeed,
+		state:      state,
+		changeType: changeType,
+		err:        err,
 	}
 }
 
@@ -409,27 +407,25 @@ func (c *Controller) handleMaintainerStatus(from node.ID, statusList []*heartbea
 func (c *Controller) handleSingleMaintainerStatus(
 	from node.ID,
 	status *heartbeatpb.MaintainerStatus,
-	cfID common.ChangeFeedID,
+	changefeedID common.ChangeFeedID,
 ) *changefeedChange {
 	// Update the operator status first
-	c.operatorController.UpdateOperatorStatus(cfID, from, status)
+	c.operatorController.UpdateOperatorStatus(changefeedID, from, status)
 
-	cf := c.getChangefeed(cfID)
+	cf := c.getChangefeed(changefeedID)
 	if cf == nil {
-		c.handleNonExistentChangefeed(cfID, from, status)
+		c.handleNonExistentChangefeed(changefeedID, from, status)
 		return nil
 	}
 
-	if !c.validateMaintainerNode(cf, from, cfID) {
+	if !c.validateMaintainerNode(cf, from) {
 		return nil
 	}
-
-	change := c.updateChangefeedStatus(cf, cfID, status)
-	return change
+	return c.updateChangefeedStatus(cf, status)
 }
 
 func (c *Controller) handleNonExistentChangefeed(
-	cfID common.ChangeFeedID,
+	changefeedID common.ChangeFeedID,
 	from node.ID,
 	status *heartbeatpb.MaintainerStatus,
 ) {
@@ -438,32 +434,28 @@ func (c *Controller) handleNonExistentChangefeed(
 		return
 	}
 
-	if op := c.operatorController.GetOperator(cfID); op == nil {
+	if op := c.operatorController.GetOperator(changefeedID); op == nil {
 		log.Warn("no changefeed found and no operator for it, removing from maintainer",
-			zap.Stringer("changefeed", cfID),
+			zap.Stringer("changefeed", changefeedID),
 			zap.Stringer("sourceNode", from),
 			zap.String("status", common.FormatMaintainerStatus(status)))
 
-		keyspaceID := c.getChangefeed(cfID).GetKeyspaceID()
+		keyspaceID := c.getChangefeed(changefeedID).GetKeyspaceID()
 
 		// Remove working changefeed from maintainer if it's not in changefeedDB
-		_ = c.messageCenter.SendCommand(changefeed.RemoveMaintainerMessage(keyspaceID, cfID, from, true, true))
+		_ = c.messageCenter.SendCommand(changefeed.RemoveMaintainerMessage(keyspaceID, changefeedID, from, true, true))
 	}
 }
 
-func (c *Controller) validateMaintainerNode(
-	cf *changefeed.Changefeed,
-	from node.ID,
-	cfID common.ChangeFeedID,
-) bool {
-	nodeID := cf.GetNodeID()
+func (c *Controller) validateMaintainerNode(changefeed *changefeed.Changefeed, from node.ID) bool {
+	nodeID := changefeed.GetNodeID()
 	if nodeID == "" {
 		return false
 	}
 
 	if nodeID != from {
 		log.Warn("remote changefeed maintainer nodeID mismatch with local record",
-			zap.Stringer("changefeed", cfID),
+			zap.Stringer("changefeed", changefeed.ID),
 			zap.Stringer("localNode", nodeID),
 			zap.Stringer("remoteNode", from))
 		return false
@@ -472,11 +464,10 @@ func (c *Controller) validateMaintainerNode(
 }
 
 func (c *Controller) updateChangefeedStatus(
-	cf *changefeed.Changefeed,
-	cfID common.ChangeFeedID,
+	changefeed *changefeed.Changefeed,
 	status *heartbeatpb.MaintainerStatus,
 ) *changefeedChange {
-	changed, state, err := cf.UpdateStatus(status)
+	changed, state, err := changefeed.UpdateStatus(status)
 	var runningErr *config.RunningError
 	if err != nil {
 		runningErr = &config.RunningError{
@@ -490,13 +481,11 @@ func (c *Controller) updateChangefeedStatus(
 	changeType := ChangeTs
 	if changed {
 		changeType = ChangeStateAndTs
-		log.Info("changefeed status changed",
-			zap.Stringer("changefeed", cfID),
-			zap.String("state", string(state)),
-			zap.Stringer("error", err))
+		log.Info("changefeed status changed", zap.Stringer("changefeed", changefeed.ID),
+			zap.String("state", string(state)), zap.Stringer("error", err))
 	}
 
-	change := newChangefeedChange(cf, state, changeType, runningErr)
+	change := newChangefeedChange(changefeed, state, changeType, runningErr)
 	return change
 }
 
@@ -630,9 +619,10 @@ func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFe
 	info.Epoch = pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
 	err := c.backend.CreateChangefeed(ctx, info)
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
-	c.changefeedDB.AddAbsentChangefeed(changefeed.NewChangefeed(info.ChangefeedID, info, info.StartTs, true))
+	instance := changefeed.NewChangefeed(info.ChangefeedID, info, info.StartTs, true)
+	c.changefeedDB.AddAbsentChangefeed(instance)
 	return nil
 }
 

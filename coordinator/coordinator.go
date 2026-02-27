@@ -253,9 +253,10 @@ func (c *coordinator) handleStateChange(
 	ctx context.Context,
 	event *changefeedChange,
 ) error {
-	cf := c.controller.getChangefeed(event.changefeedID)
+	changefeedID := event.changefeed.ID
+	cf := c.controller.getChangefeed(changefeedID)
 	if cf == nil {
-		log.Warn("changefeed not found", zap.String("changefeed", event.changefeedID.String()))
+		log.Warn("changefeed not found", zap.String("changefeed", changefeedID.String()))
 		return nil
 	}
 	cfInfo, err := cf.GetInfo().Clone()
@@ -277,11 +278,11 @@ func (c *coordinator) handleStateChange(
 
 	switch event.state {
 	case config.StateWarning:
-		c.controller.operatorController.StopChangefeed(ctx, event.changefeedID, false)
-		c.controller.updateChangefeedEpoch(ctx, event.changefeedID)
-		c.controller.moveChangefeedToSchedulingQueue(event.changefeedID, false, false)
+		c.controller.operatorController.StopChangefeed(ctx, changefeedID, false)
+		c.controller.updateChangefeedEpoch(ctx, changefeedID)
+		c.controller.moveChangefeedToSchedulingQueue(changefeedID, false, false)
 	case config.StateFailed, config.StateFinished:
-		c.controller.operatorController.StopChangefeed(ctx, event.changefeedID, false)
+		c.controller.operatorController.StopChangefeed(ctx, changefeedID, false)
 	default:
 	}
 	return nil
@@ -295,9 +296,6 @@ func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, changefeed *ch
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
 	errCode, _ := errors.RFCCode(err)
 	state := config.StateWarning
 	if errors.IsChangefeedGCFastFailErrorCode(errCode) {
@@ -308,6 +306,9 @@ func (c *coordinator) checkStaleCheckpointTs(ctx context.Context, changefeed *ch
 		Code:    string(errCode),
 		Message: err.Error(),
 	})
+
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 
 	select {
 	case <-ctx.Done():
@@ -428,7 +429,7 @@ func (c *coordinator) sendMessages(msgs []*messaging.TargetMessage) {
 
 func (c *coordinator) updateGlobalGcSafepoint(ctx context.Context) error {
 	minCheckpointTs := c.controller.calculateGlobalGCSafepoint()
-	// check if the upstream has a changefeed, if not we should update the gc safepoint
+	// even though there is no changefeeds, still update the service-gc-safepoint
 	if minCheckpointTs == math.MaxUint64 {
 		ts := c.pdClock.CurrentTime()
 		minCheckpointTs = oracle.GoTimeToTS(ts)
@@ -436,6 +437,13 @@ func (c *coordinator) updateGlobalGcSafepoint(ctx context.Context) error {
 	// When the changefeed starts up, CDC will do a snapshot read at
 	// (checkpointTs - 1) from TiKV, so (checkpointTs - 1) should be an upper
 	// bound for the GC safepoint.
+
+	// checkpoint means all data (-inf, checkpointTs] already flushed to the downstream.
+	// When the changefeed starts up, the start-ts = checkpointTs, and TiKV return data [checkpointTs + 1, +inf)
+	// TiDB guarantees that the snapshot at the gcSafepoint is reserved.
+	// theoretically, we can set the gcSafepoint = checkpointTs + 1,
+	// due to historical reason, still set it to the checkpoint - 1.
+	// even though the data is already flushed.
 	gcSafepointUpperBound := minCheckpointTs - 1
 	err := c.gcManager.TryUpdateServiceGCSafepoint(ctx, gcSafepointUpperBound)
 	return errors.Trace(err)
@@ -464,10 +472,15 @@ func (c *coordinator) updateKeyspaceGcBarrier(
 	return errors.Trace(err)
 }
 
-// updateGCSafepoint update the gc safepoint
-// On next gen, we should update the gc barrier for all keyspaces
-// Otherwise we should update the global gc safepoint
+// updateGCSafepoint update cluster level service safe point.
 func (c *coordinator) updateGCSafepoint(ctx context.Context) error {
+	// During bootstrap, `changefeedDB` can be empty or partially populated. Updating gc safepoint at this time may
+	// incorrectly advance the TiCDC service gc safepoint and cause snapshot loss for existing changefeeds.
+	if !c.controller.initialized.Load() {
+		log.Warn("skip update gc safepoint because coordinator is not initialized yet")
+		return nil
+	}
+
 	if kerneltype.IsNextGen() {
 		return c.updateAllKeyspaceGcBarriers(ctx)
 	}
