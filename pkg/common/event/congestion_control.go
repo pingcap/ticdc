@@ -82,29 +82,75 @@ func (m AvailableMemory) marshalV2() []byte {
 	return buf.Bytes()
 }
 
-func (m *AvailableMemory) unmarshalV1(buf *bytes.Buffer) {
-	m.Gid.Unmarshal(buf.Next(m.Gid.GetSize()))
+func (m *AvailableMemory) unmarshalV1(buf *bytes.Buffer) error {
+	gidSize := m.Gid.GetSize()
+	if buf.Len() < gidSize {
+		return fmt.Errorf("invalid AvailableMemory payload: insufficient bytes for gid, need %d, got %d", gidSize, buf.Len())
+	}
+	m.Gid.Unmarshal(buf.Next(gidSize))
+
+	if buf.Len() < 8 {
+		return fmt.Errorf("invalid AvailableMemory payload: insufficient bytes for available, need %d, got %d", 8, buf.Len())
+	}
 	m.Available = binary.BigEndian.Uint64(buf.Next(8))
+
+	if buf.Len() < 4 {
+		return fmt.Errorf("invalid AvailableMemory payload: insufficient bytes for dispatcher count, need %d, got %d", 4, buf.Len())
+	}
 	m.DispatcherCount = binary.BigEndian.Uint32(buf.Next(4))
 	m.DispatcherAvailable = make(map[common.DispatcherID]uint64)
 	for range m.DispatcherCount {
 		dispatcherID := common.DispatcherID{}
-		dispatcherID.Unmarshal(buf.Next(dispatcherID.GetSize()))
+		dispatcherIDSize := dispatcherID.GetSize()
+		if buf.Len() < dispatcherIDSize {
+			return fmt.Errorf("invalid AvailableMemory payload: insufficient bytes for dispatcher id, need %d, got %d", dispatcherIDSize, buf.Len())
+		}
+		dispatcherID.Unmarshal(buf.Next(dispatcherIDSize))
+
+		if buf.Len() < 8 {
+			return fmt.Errorf("invalid AvailableMemory payload: insufficient bytes for dispatcher available, need %d, got %d", 8, buf.Len())
+		}
 		m.DispatcherAvailable[dispatcherID] = binary.BigEndian.Uint64(buf.Next(8))
 	}
+	return nil
 }
 
-func (m *AvailableMemory) unmarshalV2(buf *bytes.Buffer) {
-	m.Gid.Unmarshal(buf.Next(m.Gid.GetSize()))
+func (m *AvailableMemory) unmarshalV2(buf *bytes.Buffer) error {
+	gidSize := m.Gid.GetSize()
+	if buf.Len() < gidSize {
+		return fmt.Errorf("invalid AvailableMemory payload: insufficient bytes for gid, need %d, got %d", gidSize, buf.Len())
+	}
+	m.Gid.Unmarshal(buf.Next(gidSize))
+
+	if buf.Len() < 8 {
+		return fmt.Errorf("invalid AvailableMemory payload: insufficient bytes for available, need %d, got %d", 8, buf.Len())
+	}
 	m.Available = binary.BigEndian.Uint64(buf.Next(8))
+
+	if buf.Len() < 8 {
+		return fmt.Errorf("invalid AvailableMemory payload: insufficient bytes for usage ratio, need %d, got %d", 8, buf.Len())
+	}
 	m.UsageRatio = math.Float64frombits(binary.BigEndian.Uint64(buf.Next(8)))
+
+	if buf.Len() < 4 {
+		return fmt.Errorf("invalid AvailableMemory payload: insufficient bytes for dispatcher count, need %d, got %d", 4, buf.Len())
+	}
 	m.DispatcherCount = binary.BigEndian.Uint32(buf.Next(4))
 	m.DispatcherAvailable = make(map[common.DispatcherID]uint64)
 	for range m.DispatcherCount {
 		dispatcherID := common.DispatcherID{}
-		dispatcherID.Unmarshal(buf.Next(dispatcherID.GetSize()))
+		dispatcherIDSize := dispatcherID.GetSize()
+		if buf.Len() < dispatcherIDSize {
+			return fmt.Errorf("invalid AvailableMemory payload: insufficient bytes for dispatcher id, need %d, got %d", dispatcherIDSize, buf.Len())
+		}
+		dispatcherID.Unmarshal(buf.Next(dispatcherIDSize))
+
+		if buf.Len() < 8 {
+			return fmt.Errorf("invalid AvailableMemory payload: insufficient bytes for dispatcher available, need %d, got %d", 8, buf.Len())
+		}
 		m.DispatcherAvailable[dispatcherID] = binary.BigEndian.Uint64(buf.Next(8))
 	}
+	return nil
 }
 
 func (m AvailableMemory) sizeV1() int {
@@ -240,7 +286,9 @@ func (c *CongestionControl) decodeV1(data []byte) error {
 	c.availables = make([]AvailableMemory, 0, c.changefeedCount)
 	for i := uint32(0); i < c.changefeedCount; i++ {
 		var item AvailableMemory
-		item.unmarshalV1(buf)
+		if err := item.unmarshalV1(buf); err != nil {
+			return err
+		}
 		c.availables = append(c.availables, item)
 	}
 	return nil
@@ -253,7 +301,9 @@ func (c *CongestionControl) decodeV2(data []byte) error {
 	c.availables = make([]AvailableMemory, 0, c.changefeedCount)
 	for i := uint32(0); i < c.changefeedCount; i++ {
 		var item AvailableMemory
-		item.unmarshalV2(buf)
+		if err := item.unmarshalV2(buf); err != nil {
+			return err
+		}
 		c.availables = append(c.availables, item)
 	}
 	return nil
@@ -297,4 +347,8 @@ func (c *CongestionControl) GetClusterID() uint64 {
 
 func (c *CongestionControl) GetVersion() int {
 	return c.version
+}
+
+func (c *CongestionControl) HasUsageRatio() bool {
+	return c.version >= CongestionControlVersion2
 }

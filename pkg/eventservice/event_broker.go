@@ -50,7 +50,8 @@ const (
 
 	maxReadyEventIntervalSeconds = 10
 	// defaultSendResolvedTsInterval use to control whether to send a resolvedTs event to the dispatcher when its scan is skipped.
-	defaultSendResolvedTsInterval = time.Second * 2
+	defaultSendResolvedTsInterval           = time.Second * 2
+	defaultRefreshMinSentResolvedTsInterval = time.Second * 1
 )
 
 // eventBroker get event from the eventStore, and send the event to the dispatchers.
@@ -259,7 +260,7 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 }
 
 func (c *eventBroker) refreshMinSentResolvedTs(ctx context.Context) error {
-	ticker := time.NewTicker(time.Second * 1)
+	ticker := time.NewTicker(defaultRefreshMinSentResolvedTsInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -1183,6 +1184,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		oldStat.isRemoved.Store(true)
 	}
 
+	// This means the dispatcher was reset by memory controller so we need to reset the scan interval.
 	if newStat.epoch > 1 {
 		now := time.Now()
 		newStat.changefeedStat.scanInterval.Store(int64(defaultScanInterval))
@@ -1251,10 +1253,9 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 	holder := make(map[common.GID]uint64, len(availables))
 	usage := make(map[common.GID]float64, len(availables))
 	dispatcherAvailable := make(map[common.DispatcherID]uint64, len(availables))
-	hasUsage := m.GetVersion() >= event.CongestionControlVersion2
 	for _, item := range availables {
 		holder[item.Gid] = item.Available
-		if hasUsage {
+		if m.HasUsageRatio() {
 			usage[item.Gid] = item.UsageRatio
 		}
 		for dispatcherID, available := range item.DispatcherAvailable {
@@ -1271,7 +1272,7 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 			changefeed.availableMemoryQuota.Store(from, atomic.NewUint64(availableInMsg))
 			metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(availableInMsg))
 		}
-		if hasUsage {
+		if m.HasUsageRatio() {
 			if ratio, okUsage := usage[changefeedID.ID()]; okUsage && ok {
 				changefeed.updateMemoryUsage(now, ratio)
 			}

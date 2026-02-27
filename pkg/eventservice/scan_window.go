@@ -1,4 +1,4 @@
-// Copyright 2025 PingCAP, Inc.
+// Copyright 2026 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -176,6 +176,17 @@ func (c *changefeedStatus) updateMemoryUsage(now time.Time, usageRatio float64) 
 	c.adjustScanInterval(now, stats)
 }
 
+// Constants for trend detection and increase eligibility.
+const (
+	minTrendSamples           = 4    // Minimum samples needed to detect a valid trend
+	increasingTrendEpsilon    = 0.02 // Minimum delta to consider as "increasing"
+	increasingTrendStartRatio = 0.3  // Threshold (30%) above which trend damping kicks in
+
+	minIncreaseSamples         = 10 // Minimum samples needed before allowing increase
+	minIncreaseSpanNumerator   = 4  // Observation span must be at least 4/5 of window
+	minIncreaseSpanDenominator = 5
+)
+
 // adjustScanInterval dynamically adjusts the scan interval based on memory pressure.
 //
 // Algorithm overview:
@@ -200,18 +211,6 @@ func (c *changefeedStatus) adjustScanInterval(now time.Time, usage memoryUsageSt
 	if maxInterval < minScanInterval {
 		maxInterval = minScanInterval
 	}
-
-	// Constants for trend detection and increase eligibility.
-	const (
-		minTrendSamples           = 4    // Minimum samples needed to detect a valid trend
-		increasingTrendEpsilon    = 0.02 // Minimum delta to consider as "increasing"
-		increasingTrendStartRatio = 0.3  // Threshold (30%) above which trend damping kicks in
-
-		minIncreaseSamples         = 10 // Minimum samples needed before allowing increase
-		minIncreaseSpanNumerator   = 4  // Observation span must be at least 4/5 of window
-		minIncreaseSpanDenominator = 5
-	)
-
 	// Trend detection: check if memory usage is rising over the observation window.
 	// This enables proactive intervention before hitting high thresholds.
 	trendDelta := usage.last - usage.first
@@ -236,22 +235,22 @@ func (c *changefeedStatus) adjustScanInterval(now time.Time, usage memoryUsageSt
 	switch {
 	case usage.last > memoryUsageCriticalThreshold || usage.max > memoryUsageCriticalThreshold:
 		// Critical pressure: aggressive reduction to 1/4
-		newInterval = maxDuration(current/4, minScanInterval)
+		newInterval = max(current/4, minScanInterval)
 	case usage.last > memoryUsageHighThreshold || usage.max > memoryUsageHighThreshold:
 		// High pressure: reduce to 1/2
-		newInterval = maxDuration(current/2, minScanInterval)
+		newInterval = max(current/2, minScanInterval)
 	case shouldDampOnTrend:
 		// Trend damping: pressure is moderate (>30%) but rising. Reduce by 10% to
 		// preemptively slow down before downstream gets overwhelmed.
-		newInterval = maxDuration(scaleDuration(current, 9, 10), minScanInterval)
+		newInterval = max(scaleDuration(current, 9, 10), minScanInterval)
 		adjustedOnTrend = true
 	case allowedToIncrease && usage.max < memoryUsageVeryLowThreshold && usage.avg < memoryUsageVeryLowThreshold:
 		// Very low pressure (<20%): increase by 50%, allowed to exceed sync point cap.
 		maxInterval = maxScanInterval
-		newInterval = minDuration(scaleDuration(current, 3, 2), maxInterval)
+		newInterval = min(scaleDuration(current, 3, 2), maxInterval)
 	case allowedToIncrease && usage.max < memoryUsageLowThreshold && usage.avg < memoryUsageLowThreshold:
 		// Low pressure (<40%): increase by 25%, capped by sync point interval.
-		newInterval = minDuration(scaleDuration(current, 5, 4), maxInterval)
+		newInterval = min(scaleDuration(current, 5, 4), maxInterval)
 	}
 
 	// Anti-oscillation guard: decreases are always applied immediately,
@@ -380,20 +379,6 @@ func (c *changefeedStatus) updateSyncPointConfig(info DispatcherInfo) {
 			return
 		}
 	}
-}
-
-func minDuration(a time.Duration, b time.Duration) time.Duration {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func maxDuration(a time.Duration, b time.Duration) time.Duration {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 func scaleDuration(d time.Duration, numerator int64, denominator int64) time.Duration {
