@@ -30,8 +30,8 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tidb/br/pkg/storage"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
@@ -48,7 +48,7 @@ type decoder struct {
 
 	nextKey *messageKey
 
-	storage storage.ExternalStorage
+	storage storeapi.Storage
 
 	config *common.Config
 
@@ -62,7 +62,7 @@ func NewDecoder(
 	ctx context.Context, idx int, config *common.Config, db *sql.DB,
 ) (common.Decoder, error) {
 	var (
-		externalStorage storage.ExternalStorage
+		externalStorage storeapi.Storage
 		err             error
 	)
 	if config.LargeMessageHandle.EnableClaimCheck() {

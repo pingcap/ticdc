@@ -194,6 +194,7 @@ func (m *mockPdClientForServiceGCSafePoint) GetGCStatesClient(keyspaceID uint32)
 }
 
 type mockGCStatesClient struct {
+	pdgc.GCStatesClient
 	keyspaceID uint32
 	parent     *mockPdClientForServiceGCSafePoint
 }

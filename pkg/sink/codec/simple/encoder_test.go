@@ -32,7 +32,7 @@ import (
 	mock_simple "github.com/pingcap/ticdc/pkg/sink/codec/simple/mock"
 	"github.com/pingcap/ticdc/pkg/util"
 	ticonfig "github.com/pingcap/tidb/pkg/config"
-	"github.com/pingcap/tidb/pkg/disttask/framework/handle"
+	"github.com/pingcap/tidb/pkg/dxf/framework/handle"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/stretchr/testify/require"

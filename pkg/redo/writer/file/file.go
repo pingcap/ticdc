@@ -34,7 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/uber-go/atomic"
 	pioutil "go.etcd.io/etcd/pkg/v3/ioutil"
@@ -71,7 +71,7 @@ type Writer struct {
 	ongoingFilePath string
 	bw              *pioutil.PageWriter
 	uint64buf       []byte
-	storage         storage.ExternalStorage
+	storage         storeapi.Storage
 	sync.RWMutex
 	uuidGenerator uuid.Generator
 	allocator     *fsutil.FileAllocator
@@ -91,7 +91,7 @@ func NewFileWriter(
 		return nil, errors.WrapError(errors.ErrRedoConfigInvalid, err)
 	}
 
-	var extStorage storage.ExternalStorage
+	var extStorage storeapi.Storage
 	if cfg.UseExternalStorage {
 		var err error
 		extStorage, err = redo.InitExternalStorage(ctx, *cfg.URI)
