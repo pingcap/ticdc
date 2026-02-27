@@ -111,6 +111,13 @@ func TestCompleteOptions(t *testing.T) {
 	require.True(t, cerror.ErrKafkaInvalidClientID.Equal(err))
 }
 
+func TestNewOptionsDefaultKafkaClient(t *testing.T) {
+	t.Parallel()
+
+	options := NewOptions()
+	require.Equal(t, "franz", options.KafkaClient)
+}
+
 func TestSetPartitionNum(t *testing.T) {
 	options := NewOptions()
 	err := options.setPartitionNum(2)

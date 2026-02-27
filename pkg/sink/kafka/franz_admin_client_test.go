@@ -1,4 +1,4 @@
-// Copyright 2023 PingCAP, Inc.
+// Copyright 2026 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,13 +16,13 @@ package kafka
 import (
 	"testing"
 
-	"github.com/pingcap/ticdc/pkg/leakutil"
-	"go.uber.org/goleak"
+	"github.com/stretchr/testify/require"
 )
 
-func TestMain(m *testing.M) {
-	leakutil.SetUpLeakTest(
-		m,
-		goleak.IgnoreAnyFunction("github.com/godbus/dbus.(*Conn).inWorker"),
-	)
+func TestFranzAdminClientAdapterCreateTopicNilDetailReturnsError(t *testing.T) {
+	t.Parallel()
+
+	adapter := &franzAdminClientAdapter{inner: nil}
+	err := adapter.CreateTopic(nil, false)
+	require.Error(t, err)
 }

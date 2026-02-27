@@ -172,6 +172,10 @@ var (
 		"kafka config item not found",
 		errors.RFCCodeText("CDC:ErrKafkaConfigNotFound"),
 	)
+	ErrKafkaControllerNotAvailable = errors.Normalize(
+		"kafka controller is not available",
+		errors.RFCCodeText("CDC:ErrKafkaControllerNotAvailable"),
+	)
 	ErrPulsarInvalidTopicExpression = errors.Normalize(
 		"invalid topic expression",
 		errors.RFCCodeText("CDC:ErrPulsarTopicExprInvalid"),

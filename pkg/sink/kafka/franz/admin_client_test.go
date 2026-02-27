@@ -1,4 +1,4 @@
-// Copyright 2023 PingCAP, Inc.
+// Copyright 2026 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,18 +11,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package kafka
+package franz
 
 import (
+	"context"
 	"testing"
 
-	"github.com/pingcap/ticdc/pkg/leakutil"
-	"go.uber.org/goleak"
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/stretchr/testify/require"
 )
 
-func TestMain(m *testing.M) {
-	leakutil.SetUpLeakTest(
-		m,
-		goleak.IgnoreAnyFunction("github.com/godbus/dbus.(*Conn).inWorker"),
-	)
+func TestNewAdminClientNilOptionsReturnsError(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "franz-admin-nil-options")
+	client, err := NewAdminClient(context.Background(), changefeedID, nil, nil)
+	if client != nil {
+		client.Close()
+	}
+	require.Error(t, err)
 }
