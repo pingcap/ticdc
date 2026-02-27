@@ -737,21 +737,13 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 				zap.Uint64("newCheckpointTs", newCheckpointTs),
 				zap.Uint64("oldCheckpointTs", oldCheckpointTs))
 		}
-		// If there is no dml event after old checkpoint ts, then there is no data to be deleted.
-		// So we can skip adding gc item.
-		lastReceiveDMLTime := subStat.lastReceiveDMLTime.Load()
-		if lastReceiveDMLTime > 0 {
-			oldCheckpointPhysicalTime := oracle.GetTimeFromTS(oldCheckpointTs)
-			if lastReceiveDMLTime >= oldCheckpointPhysicalTime.UnixMilli() {
-				e.gcManager.addGCItem(
-					subStat.dbIndex,
-					uint64(subStat.subID),
-					subStat.tableSpan.TableID,
-					oldCheckpointTs,
-					newCheckpointTs,
-				)
-			}
-		}
+		e.gcManager.addGCItem(
+			subStat.dbIndex,
+			uint64(subStat.subID),
+			subStat.tableSpan.TableID,
+			oldCheckpointTs,
+			newCheckpointTs,
+		)
 		e.subscriptionChangeCh.In() <- SubscriptionChange{
 			ChangeType:   SubscriptionChangeTypeUpdate,
 			SubID:        uint64(subStat.subID),
