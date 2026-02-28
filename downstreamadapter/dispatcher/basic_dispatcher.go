@@ -675,7 +675,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 					d.tableSchemaStore.AddEvent(ddl)
 				}
 				wakeCallback()
-                cost := time.Since(now)
+				cost := time.Since(now)
 				d.sharedInfo.metricHandleDDLHis.Observe(cost.Seconds())
 				log.Debug("dispatcher handle ddl event finish",
 					zap.Duration("cost", cost), zap.Any("ddl", ddl))
