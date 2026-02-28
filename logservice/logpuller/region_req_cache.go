@@ -314,9 +314,22 @@ func (c *requestCache) getPendingCount() int {
 }
 
 func (c *requestCache) markDone() {
-	newCount := c.pendingCount.Dec()
-	if newCount < 0 {
-		c.pendingCount.Store(0)
+	// Decrement pendingCount by 1, but never let it go below 0.
+	// Do it with CAS to avoid clobbering concurrent Inc() calls.
+	for {
+		old := c.pendingCount.Load()
+		if old <= 0 {
+			if old == 0 {
+				break
+			}
+			if c.pendingCount.CompareAndSwap(old, 0) {
+				break
+			}
+			continue
+		}
+		if c.pendingCount.CompareAndSwap(old, old-1) {
+			break
+		}
 	}
 	// Notify waiting add operations that there's space available.
 	select {
