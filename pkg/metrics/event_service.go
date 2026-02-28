@@ -169,6 +169,13 @@ var (
 			Name:      "reset_dispatcher_count",
 			Help:      "The number of event dispatcher reset operations performed",
 		})
+
+	EventServiceSendDMLTypeCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_service",
+		Name:      "send_dml_type_count",
+		Help:      "The number of different dml events type sent by the event service,  it is potentially inaccurat if some dml events are filter",
+	}, []string{"mode", "dml_type"})
 )
 
 // initEventServiceMetrics registers all metrics in this file.
@@ -193,4 +200,5 @@ func initEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceInterruptScanCount)
 	registry.MustRegister(EventServiceGetDDLEventDuration)
 	registry.MustRegister(EventServiceResetDispatcherCount)
+	registry.MustRegister(EventServiceSendDMLTypeCount)
 }

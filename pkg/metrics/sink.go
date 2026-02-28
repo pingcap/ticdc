@@ -66,6 +66,14 @@ var (
 			Help:      "Total count of DML events.",
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
+	ExecDMLEventRowsAffectedCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "dml_event_affected_row_count",
+			Help:      "Total count of affected rows.",
+		}, []string{getKeyspaceLabel(), "changefeed", "count_type", "row_type"})
+
 	ActiveActiveConflictSkipRowsCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
@@ -231,6 +239,7 @@ func initSinkMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(TotalWriteBytesCounter)
 	registry.MustRegister(EventSizeHistogram)
 	registry.MustRegister(ExecDMLEventCounter)
+	registry.MustRegister(ExecDMLEventRowsAffectedCounter)
 	registry.MustRegister(ActiveActiveConflictSkipRowsCounter)
 	registry.MustRegister(ExecutionErrorCounter)
 

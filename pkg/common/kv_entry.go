@@ -75,6 +75,23 @@ func (v *RawKVEntry) IsInsert() bool {
 	return v.OpType == OpTypePut && len(v.OldValue) == 0
 }
 
+// GetType returns the type of the RawKVEntry as a string.
+func (v *RawKVEntry) GetType() string {
+	switch v.OpType {
+	case OpTypePut:
+		if len(v.OldValue) == 0 {
+			return "insert"
+		} else if len(v.OldValue) > 0 && len(v.Value) > 0 {
+			return "update"
+		}
+	case OpTypeDelete:
+		return "delete"
+	case OpTypeResolved:
+		return "resolved"
+	}
+	return "unknown"
+}
+
 func (v *RawKVEntry) SplitUpdate() (deleteRow, insertRow *RawKVEntry, err error) {
 	if !v.IsUpdate() {
 		return nil, nil, nil

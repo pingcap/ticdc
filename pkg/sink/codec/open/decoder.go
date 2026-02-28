@@ -19,6 +19,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -237,6 +238,12 @@ func buildColumns(
 		var flag uint64
 		// todo: we can extract more detailed type information here.
 		dataType := strings.ToLower(columnType.DatabaseTypeName())
+		// Snapshot query returns enum/set as their string representations, while open protocol uses
+		// integer/bitset values for these types. Downgrade enum/set to varchar to keep the
+		// assembled handle-key-only events decodable.
+		if strings.HasPrefix(dataType, "enum") || strings.HasPrefix(dataType, "set") {
+			dataType = "varchar"
+		}
 		if common.IsUnsignedMySQLType(dataType) {
 			flag |= unsignedFlag
 		}
@@ -588,6 +595,10 @@ func formatColumn(c column, ft types.FieldType) column {
 			data, err = strconv.ParseFloat(string(v), 64)
 		case json.Number:
 			data, err = v.Float64()
+		case float64:
+			data = v
+		case float32:
+			data = float64(v)
 		default:
 			log.Panic("invalid column value, please report a bug", zap.String("col", util.RedactAny(c)), zap.Any("type", v))
 		}
@@ -605,6 +616,8 @@ func formatColumn(c column, ft types.FieldType) column {
 			data = string(v)
 		case []uint8:
 			data = string(v)
+		case int64, uint64:
+			data = fmt.Sprintf("%v", v)
 		default:
 			log.Panic("invalid column value, please report a bug", zap.String("col", util.RedactAny(c)), zap.Any("type", v))
 		}
