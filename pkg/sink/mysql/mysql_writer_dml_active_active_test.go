@@ -45,7 +45,7 @@ func TestBuildActiveActiveUpsertSQLMultiRows(t *testing.T) {
 		int64(2), "bob", event.CommitTs, nil,
 	}
 	require.Equal(t, expectedArgs, args)
-	require.Equal(t, []common.RowType{common.RowTypeInsert}, rowTypes)
+	require.Equal(t, common.RowTypeInsert, rowTypes)
 }
 
 func TestActiveActiveNormalSQLs(t *testing.T) {
