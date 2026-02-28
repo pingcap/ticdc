@@ -44,9 +44,8 @@ import (
 )
 
 type tableKey struct {
-	schema     string
-	table      string
-	hasEnumSet bool
+	schema string
+	table  string
 }
 
 type bufferedJSONDecoder struct {
@@ -380,8 +379,8 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 
 	result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
 	// if receive a table level DDL, just remove the table info to trigger create a new one.
-	delete(d.tableInfoCache, tableKey{schema: result.SchemaName, table: result.TableName, hasEnumSet: true})
-	delete(d.tableInfoCache, tableKey{schema: result.SchemaName, table: result.TableName, hasEnumSet: false})
+	delete(d.tableInfoCache, tableKey{schema: result.SchemaName, table: result.TableName})
+	delete(d.tableInfoCache, tableKey{schema: result.SchemaName, table: result.TableName})
 	return result
 }
 
@@ -538,9 +537,8 @@ func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.Tabl
 	tableName := *msg.getTable()
 
 	cacheKey := tableKey{
-		schema:     schemaName,
-		table:      tableName,
-		hasEnumSet: hasEnumOrSetMySQLType(msg.getMySQLType()),
+		schema: schemaName,
+		table:  tableName,
 	}
 	tableInfo, ok := d.tableInfoCache[cacheKey]
 	if !ok {
@@ -557,16 +555,6 @@ func (d *decoder) queryTableInfo(msg canalJSONMessageInterface) *commonType.Tabl
 		d.tableInfoCache[cacheKey] = tableInfo
 	}
 	return tableInfo
-}
-
-func hasEnumOrSetMySQLType(mysqlTypes map[string]string) bool {
-	for _, mysqlType := range mysqlTypes {
-		mysqlType = strings.ToLower(mysqlType)
-		if strings.HasPrefix(mysqlType, "enum") || strings.HasPrefix(mysqlType, "set") {
-			return true
-		}
-	}
-	return false
 }
 
 func newTiColumns(msg canalJSONMessageInterface) []*timodel.ColumnInfo {
