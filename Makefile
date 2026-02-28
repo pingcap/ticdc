@@ -174,6 +174,9 @@ filter_helper:
 config-converter:
 	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/cdc_config_converter ./cmd/config-converter/main.go
 
+multi-cluster-consistency-checker:
+	$(GOBUILD) -ldflags '$(LDFLAGS)' -o bin/multi-cluster-consistency-checker ./cmd/multi-cluster-consistency-checker
+
 fmt: tools/bin/gofumports tools/bin/shfmt tools/bin/gci
 	@echo "run gci (format imports)"
 	tools/bin/gci write $(FILES) 2>&1 | $(FAIL_ON_STDOUT)
