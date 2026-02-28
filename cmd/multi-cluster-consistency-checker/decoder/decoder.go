@@ -224,7 +224,14 @@ func (d *columnValueDecoder) decodeNext() (*Record, error) {
 			log.Error("field type not found", zap.String("pkName", pkName), zap.Any("msg", d.msg))
 			return nil, errors.Errorf("field type of column %s not found", pkName)
 		}
-		datum := valueToDatum(columnValue, ft)
+		datum, err := safeValueToDatum(columnValue, ft)
+		if err != nil {
+			log.Error("failed to convert primary key column value",
+				zap.String("pkName", pkName),
+				zap.Any("columnValue", columnValue),
+				zap.Error(err))
+			return nil, errors.Annotatef(err, "failed to convert primary key column %s", pkName)
+		}
 		if datum.IsNull() {
 			log.Error("column value is null", zap.String("pkName", pkName), zap.Any("msg", d.msg))
 			return nil, errors.Errorf("column value of column %s is null", pkName)
@@ -264,6 +271,16 @@ func (d *columnValueDecoder) decodeNext() (*Record, error) {
 			OriginTs: originTs,
 		},
 	}, nil
+}
+
+func safeValueToDatum(value any, ft *ptypes.FieldType) (datum *tiTypes.Datum, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = errors.Errorf("value to datum conversion panic: %v", r)
+			datum = nil
+		}
+	}()
+	return valueToDatum(value, ft), nil
 }
 
 // getColumnFieldType returns the FieldType for a column.

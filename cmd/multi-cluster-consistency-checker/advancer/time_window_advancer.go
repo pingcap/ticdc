@@ -86,12 +86,24 @@ func (t *TimeWindowAdvancer) initializeFromCheckpoint(
 	t.round = checkpoint.CheckpointItems[2].Round + 1
 	for clusterID := range t.timeWindowTriplet {
 		newTimeWindows := [3]types.TimeWindow{}
-		newTimeWindows[2] = checkpoint.CheckpointItems[2].ClusterInfo[clusterID].TimeWindow
+		clusterInfo, exists := checkpoint.CheckpointItems[2].ClusterInfo[clusterID]
+		if !exists {
+			return nil, errors.Errorf("cluster %s not found in checkpoint item[2]", clusterID)
+		}
+		newTimeWindows[2] = clusterInfo.TimeWindow
 		if checkpoint.CheckpointItems[1] != nil {
-			newTimeWindows[1] = checkpoint.CheckpointItems[1].ClusterInfo[clusterID].TimeWindow
+			clusterInfo, exists = checkpoint.CheckpointItems[1].ClusterInfo[clusterID]
+			if !exists {
+				return nil, errors.Errorf("cluster %s not found in checkpoint item[1]", clusterID)
+			}
+			newTimeWindows[1] = clusterInfo.TimeWindow
 		}
 		if checkpoint.CheckpointItems[0] != nil {
-			newTimeWindows[0] = checkpoint.CheckpointItems[0].ClusterInfo[clusterID].TimeWindow
+			clusterInfo, exists = checkpoint.CheckpointItems[0].ClusterInfo[clusterID]
+			if !exists {
+				return nil, errors.Errorf("cluster %s not found in checkpoint item[0]", clusterID)
+			}
+			newTimeWindows[0] = clusterInfo.TimeWindow
 		}
 		t.timeWindowTriplet[clusterID] = newTimeWindows
 	}

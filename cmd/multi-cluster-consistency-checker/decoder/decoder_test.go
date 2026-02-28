@@ -155,6 +155,23 @@ func TestCanalJSONDecoderAllInvalidMessages(t *testing.T) {
 	require.Empty(t, records)
 }
 
+func TestCanalJSONDecoderInvalidPrimaryKeyValueNoPanic(t *testing.T) {
+	// id is intentionally encoded as a JSON number (not string), which would
+	// trigger a panic inside valueToDatum without recover protection.
+	invalidPKType := `{"id":0,"database":"test_active","table":"message","pkNames":["id"],"isDdl":false,"type":"INSERT","es":1,"ts":1,"sql":"","sqlType":{"id":4},"mysqlType":{"id":"int"},"old":null,"data":[{"id":20}],"_tidb":{"commitTs":100}}` + "\r\n"
+
+	var (
+		records []*decoder.Record
+		err     error
+	)
+	require.NotPanics(t, func() {
+		records, err = decoder.Decode([]byte(invalidPKType), buildColumnFieldTypes(t, tableDefinition1))
+	})
+	require.Error(t, err)
+	require.Empty(t, records)
+	require.Contains(t, err.Error(), "failed to convert primary key column id")
+}
+
 func TestRecord_EqualReplicatedRecord(t *testing.T) {
 	tests := []struct {
 		name          string

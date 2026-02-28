@@ -100,9 +100,10 @@ func LoadConfig(path string) (*Config, error) {
 		}
 	}
 
-	// Validate that at least one cluster is configured
-	if len(cfg.Clusters) == 0 {
-		return nil, fmt.Errorf("at least one cluster must be configured")
+	// Validate that at least two clusters are configured.
+	// Single-cluster mode cannot provide cross-cluster consistency checks.
+	if len(cfg.Clusters) < 2 {
+		return nil, fmt.Errorf("at least two clusters must be configured")
 	}
 
 	// Validate cluster configurations

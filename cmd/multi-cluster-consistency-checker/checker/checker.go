@@ -124,37 +124,55 @@ func (c *clusterViolationChecker) UpdateCache() {
 	c.twoPreviousTimeWindowKeyVersionCache = newTwoPreviousTimeWindowKeyVersionCache
 }
 
+type RecordsMapWithMaxCompareTs struct {
+	records      map[uint64]*decoder.Record
+	maxCompareTs uint64
+}
+
 type tableDataCache struct {
 	// localDataCache is a map of primary key to a map of commit ts to a record
-	localDataCache map[types.PkType]map[uint64]*decoder.Record
+	localDataCache map[types.PkType]*RecordsMapWithMaxCompareTs
 
 	// replicatedDataCache is a map of primary key to a map of origin ts to a record
-	replicatedDataCache map[types.PkType]map[uint64]*decoder.Record
+	replicatedDataCache map[types.PkType]*RecordsMapWithMaxCompareTs
 }
 
 func newTableDataCache() *tableDataCache {
 	return &tableDataCache{
-		localDataCache:      make(map[types.PkType]map[uint64]*decoder.Record),
-		replicatedDataCache: make(map[types.PkType]map[uint64]*decoder.Record),
+		localDataCache:      make(map[types.PkType]*RecordsMapWithMaxCompareTs),
+		replicatedDataCache: make(map[types.PkType]*RecordsMapWithMaxCompareTs),
 	}
 }
 
 func (tdc *tableDataCache) newLocalRecord(record *decoder.Record) {
 	recordsMap, exists := tdc.localDataCache[record.Pk]
 	if !exists {
-		recordsMap = make(map[uint64]*decoder.Record)
+		recordsMap = &RecordsMapWithMaxCompareTs{
+			records:      make(map[uint64]*decoder.Record),
+			maxCompareTs: 0,
+		}
 		tdc.localDataCache[record.Pk] = recordsMap
 	}
-	recordsMap[record.CommitTs] = record
+	recordsMap.records[record.CommitTs] = record
+	if record.CommitTs > recordsMap.maxCompareTs {
+		recordsMap.maxCompareTs = record.CommitTs
+	}
 }
 
 func (tdc *tableDataCache) newReplicatedRecord(record *decoder.Record) {
 	recordsMap, exists := tdc.replicatedDataCache[record.Pk]
 	if !exists {
-		recordsMap = make(map[uint64]*decoder.Record)
+		recordsMap = &RecordsMapWithMaxCompareTs{
+			records:      make(map[uint64]*decoder.Record),
+			maxCompareTs: 0,
+		}
 		tdc.replicatedDataCache[record.Pk] = recordsMap
 	}
-	recordsMap[record.OriginTs] = record
+	recordsMap.records[record.OriginTs] = record
+	compareTs := record.GetCompareTs()
+	if compareTs > recordsMap.maxCompareTs {
+		recordsMap.maxCompareTs = compareTs
+	}
 }
 
 type timeWindowDataCache struct {
@@ -193,6 +211,8 @@ func (twdc *timeWindowDataCache) NewRecord(schemaKey string, record *decoder.Rec
 
 type clusterDataChecker struct {
 	clusterID string
+	// true if more than 2 clusters are involved in the check
+	multiCluster bool
 
 	thisRoundTimeWindow types.TimeWindow
 
@@ -211,9 +231,10 @@ type clusterDataChecker struct {
 	newTimeWindowRecordsCount int
 }
 
-func newClusterDataChecker(clusterID string) *clusterDataChecker {
+func newClusterDataChecker(clusterID string, multiCluster bool) *clusterDataChecker {
 	return &clusterDataChecker{
 		clusterID:               clusterID,
+		multiCluster:            multiCluster,
 		timeWindowDataCaches:    [3]timeWindowDataCache{},
 		rightBoundary:           0,
 		overDataCaches:          make(map[string][]*decoder.Record),
@@ -232,12 +253,18 @@ func (cd *clusterDataChecker) InitializeFromCheckpoint(
 	if checkpoint.CheckpointItems[2] == nil {
 		return nil
 	}
-	clusterInfo := checkpoint.CheckpointItems[2].ClusterInfo[cd.clusterID]
+	clusterInfo, exists := checkpoint.CheckpointItems[2].ClusterInfo[cd.clusterID]
+	if !exists {
+		return errors.Errorf("cluster %s not found in checkpoint item[2]", cd.clusterID)
+	}
 	cd.rightBoundary = clusterInfo.TimeWindow.RightBoundary
 	cd.timeWindowDataCaches[2] = newTimeWindowDataCache(
 		clusterInfo.TimeWindow.LeftBoundary, clusterInfo.TimeWindow.RightBoundary, clusterInfo.TimeWindow.CheckpointTs)
 	if checkpoint.CheckpointItems[1] != nil {
-		clusterInfo = checkpoint.CheckpointItems[1].ClusterInfo[cd.clusterID]
+		clusterInfo, exists = checkpoint.CheckpointItems[1].ClusterInfo[cd.clusterID]
+		if !exists {
+			return errors.Errorf("cluster %s not found in checkpoint item[1]", cd.clusterID)
+		}
 		cd.timeWindowDataCaches[1] = newTimeWindowDataCache(
 			clusterInfo.TimeWindow.LeftBoundary, clusterInfo.TimeWindow.RightBoundary, clusterInfo.TimeWindow.CheckpointTs)
 	}
@@ -314,24 +341,20 @@ func (cd *clusterDataChecker) findClusterReplicatedDataInTimeWindow(timeWindowId
 	if !exists {
 		return nil, false
 	}
-	if records, exists := tableDataCache.replicatedDataCache[pk]; exists {
-		if record, exists := records[originTs]; exists {
+	if recordsMap, exists := tableDataCache.replicatedDataCache[pk]; exists {
+		if record, exists := recordsMap.records[originTs]; exists {
 			return record, false
 		}
-		for _, record := range records {
-			if record.GetCompareTs() >= originTs {
-				return nil, true
-			}
+		if recordsMap.maxCompareTs > originTs {
+			return nil, true
 		}
 	}
 	// If no replicated record is found, a newer/equal local record with the
 	// same PK in the peer cluster also indicates this origin write can be
 	// considered overwritten by LWW semantics instead of hard data loss.
-	if records, exists := tableDataCache.localDataCache[pk]; exists {
-		for _, record := range records {
-			if record.GetCompareTs() >= originTs {
-				return nil, true
-			}
+	if recordsMap, exists := tableDataCache.localDataCache[pk]; exists {
+		if recordsMap.maxCompareTs > originTs {
+			return nil, true
 		}
 	}
 	return nil, false
@@ -342,11 +365,11 @@ func (cd *clusterDataChecker) findClusterLocalDataInTimeWindow(timeWindowIdx int
 	if !exists {
 		return false
 	}
-	records, exists := tableDataCache.localDataCache[pk]
+	recordsMap, exists := tableDataCache.localDataCache[pk]
 	if !exists {
 		return false
 	}
-	_, exists = records[commitTs]
+	_, exists = recordsMap.records[commitTs]
 	return exists
 }
 
@@ -410,13 +433,13 @@ func (cd *clusterDataChecker) checkLocalRecordsForDataLoss(
 ) {
 	for schemaKey, tableDataCache := range cd.timeWindowDataCaches[timeWindowIdx].tableDataCaches {
 		for _, localDataCache := range tableDataCache.localDataCache {
-			for _, record := range localDataCache {
+			for _, record := range localDataCache.records {
 				for replicatedClusterID, checkpointTs := range cd.timeWindowDataCaches[timeWindowIdx].checkpointTs {
 					if shouldSkip(record.CommitTs, checkpointTs) {
 						continue
 					}
 					cd.checkedRecordsCount++
-					replicatedRecord, skipped := checker.FindClusterReplicatedData(replicatedClusterID, schemaKey, record.Pk, record.CommitTs)
+					replicatedRecord, skipped := checker.FindClusterReplicatedData(replicatedClusterID, schemaKey, record.Pk, record.CommitTs, cd.multiCluster)
 					if skipped {
 						failpoint.Inject("multiClusterConsistencyCheckerLWWViolation", func() {
 							Write("multiClusterConsistencyCheckerLWWViolation", []RowRecord{
@@ -461,7 +484,7 @@ func (cd *clusterDataChecker) checkLocalRecordsForDataLoss(
 func (cd *clusterDataChecker) dataRedundantDetection(checker *DataChecker) {
 	for schemaKey, tableDataCache := range cd.timeWindowDataCaches[2].tableDataCaches {
 		for _, replicatedDataCache := range tableDataCache.replicatedDataCache {
-			for _, record := range replicatedDataCache {
+			for _, record := range replicatedDataCache.records {
 				cd.checkedRecordsCount++
 				// For replicated records, OriginTs is the local commit ts
 				if !checker.FindSourceLocalData(cd.clusterID, schemaKey, record.Pk, record.OriginTs) {
@@ -481,12 +504,18 @@ func (cd *clusterDataChecker) lwwViolationDetection() {
 	for schemaKey, tableDataCache := range cd.timeWindowDataCaches[2].tableDataCaches {
 		for pk, localRecords := range tableDataCache.localDataCache {
 			replicatedRecords := tableDataCache.replicatedDataCache[pk]
-			pkRecords := make([]*decoder.Record, 0, len(localRecords)+len(replicatedRecords))
-			for _, localRecord := range localRecords {
+			replicatedCount := 0
+			if replicatedRecords != nil {
+				replicatedCount = len(replicatedRecords.records)
+			}
+			pkRecords := make([]*decoder.Record, 0, len(localRecords.records)+replicatedCount)
+			for _, localRecord := range localRecords.records {
 				pkRecords = append(pkRecords, localRecord)
 			}
-			for _, replicatedRecord := range replicatedRecords {
-				pkRecords = append(pkRecords, replicatedRecord)
+			if replicatedRecords != nil {
+				for _, replicatedRecord := range replicatedRecords.records {
+					pkRecords = append(pkRecords, replicatedRecord)
+				}
 			}
 			sort.Slice(pkRecords, func(i, j int) bool {
 				return pkRecords[i].CommitTs < pkRecords[j].CommitTs
@@ -501,8 +530,8 @@ func (cd *clusterDataChecker) lwwViolationDetection() {
 			if _, exists := tableDataCache.localDataCache[pk]; exists {
 				continue
 			}
-			pkRecords := make([]*decoder.Record, 0, len(replicatedRecords))
-			for _, replicatedRecord := range replicatedRecords {
+			pkRecords := make([]*decoder.Record, 0, len(replicatedRecords.records))
+			for _, replicatedRecord := range replicatedRecords.records {
 				pkRecords = append(pkRecords, replicatedRecord)
 			}
 			sort.Slice(pkRecords, func(i, j int) bool {
@@ -550,7 +579,7 @@ type DataChecker struct {
 func NewDataChecker(ctx context.Context, clusterConfig map[string]config.ClusterConfig, checkpointDataMap map[string]map[cloudstorage.DmlPathKey]types.IncrementalData, checkpoint *recorder.Checkpoint) (*DataChecker, error) {
 	clusterDataChecker := make(map[string]*clusterDataChecker)
 	for clusterID := range clusterConfig {
-		clusterDataChecker[clusterID] = newClusterDataChecker(clusterID)
+		clusterDataChecker[clusterID] = newClusterDataChecker(clusterID, len(clusterConfig) > 2)
 	}
 	checker := &DataChecker{
 		round:               0,
@@ -582,10 +611,16 @@ func (c *DataChecker) initializeFromCheckpoint(ctx context.Context, checkpointDa
 
 // FindClusterReplicatedData checks whether the record is present in the replicated data
 // cache [1] or [2] or another new record is present in the replicated data cache [1] or [2].
-func (c *DataChecker) FindClusterReplicatedData(clusterID string, schemaKey string, pk types.PkType, originTs uint64) (*decoder.Record, bool) {
+func (c *DataChecker) FindClusterReplicatedData(clusterID string, schemaKey string, pk types.PkType, originTs uint64, multiCluster bool) (*decoder.Record, bool) {
 	clusterDataChecker, exists := c.clusterDataCheckers[clusterID]
 	if !exists {
 		return nil, false
+	}
+	if multiCluster {
+		record, skipped := clusterDataChecker.findClusterReplicatedDataInTimeWindow(0, schemaKey, pk, originTs)
+		if skipped || record != nil {
+			return record, skipped
+		}
 	}
 	record, skipped := clusterDataChecker.findClusterReplicatedDataInTimeWindow(1, schemaKey, pk, originTs)
 	if skipped || record != nil {
@@ -623,7 +658,7 @@ func (c *DataChecker) CheckInNextTimeWindow(newTimeWindowData map[string]types.T
 	// Round 1+: LWW violation detection produces meaningful results.
 	// Round 2+: data loss / inconsistency detection (needs [1] and [2]).
 	// Round 3+: data redundant detection (needs [0], [1] and [2] with real data).
-	enableDataLoss := c.checkableRound >= 2
+	enableDataLoss := c.checkableRound >= 3 || (len(c.clusterDataCheckers) > 2 && c.checkableRound >= 2)
 	enableDataRedundant := c.checkableRound >= 3
 
 	for clusterID, clusterDataChecker := range c.clusterDataCheckers {
@@ -654,6 +689,14 @@ func (c *DataChecker) decodeNewTimeWindowData(newTimeWindowData map[string]types
 		clusterDataChecker, exists := c.clusterDataCheckers[clusterID]
 		if !exists {
 			return errors.Errorf("cluster %s not found", clusterID)
+		}
+		for replicatedClusterID := range timeWindowData.TimeWindow.CheckpointTs {
+			if replicatedClusterID == clusterID {
+				return errors.Errorf("cluster %s has invalid checkpoint ts target to itself", clusterID)
+			}
+			if _, ok := c.clusterDataCheckers[replicatedClusterID]; !ok {
+				return errors.Errorf("cluster %s has checkpoint ts target %s not found", clusterID, replicatedClusterID)
+			}
 		}
 		clusterDataChecker.thisRoundTimeWindow = timeWindowData.TimeWindow
 		if err := clusterDataChecker.PrepareNextTimeWindowData(timeWindowData.TimeWindow); err != nil {

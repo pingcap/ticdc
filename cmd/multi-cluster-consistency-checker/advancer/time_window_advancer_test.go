@@ -20,6 +20,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/recorder"
+	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/types"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/watcher"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/stretchr/testify/require"
@@ -89,6 +91,36 @@ func TestNewTimeWindowAdvancer(t *testing.T) {
 	require.Len(t, advancer.timeWindowTriplet, 2)
 	require.Contains(t, advancer.timeWindowTriplet, "cluster1")
 	require.Contains(t, advancer.timeWindowTriplet, "cluster2")
+}
+
+func TestNewTimeWindowAdvancerInitializeFromCheckpointMissingClusterInfo(t *testing.T) {
+	t.Parallel()
+	checkpointWatchers := map[string]map[string]watcher.Watcher{
+		"cluster1": {},
+		"cluster2": {},
+	}
+	s3Watchers := map[string]*watcher.S3Watcher{
+		"cluster1": watcher.NewS3Watcher(&mockAdvancerWatcher{delta: 1}, storage.NewMemStorage(), nil),
+		"cluster2": watcher.NewS3Watcher(&mockAdvancerWatcher{delta: 1}, storage.NewMemStorage(), nil),
+	}
+	pdClients := map[string]pd.Client{
+		"cluster1": &mockPDClient{},
+		"cluster2": &mockPDClient{},
+	}
+
+	checkpoint := recorder.NewCheckpoint()
+	checkpoint.NewTimeWindowData(0, map[string]types.TimeWindowData{
+		"cluster1": {
+			TimeWindow: types.TimeWindow{
+				LeftBoundary:  0,
+				RightBoundary: 100,
+			},
+		},
+	})
+
+	_, _, err := NewTimeWindowAdvancer(context.Background(), checkpointWatchers, s3Watchers, pdClients, checkpoint)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cluster cluster2 not found in checkpoint item[2]")
 }
 
 // TestTimeWindowAdvancer_AdvanceMultipleRounds simulates 4 rounds of AdvanceTimeWindow

@@ -86,12 +86,72 @@ func TestNewDataCheckerInitializeFromCheckpointError(t *testing.T) {
 	require.Contains(t, err.Error(), "column value of column id not found")
 }
 
+func TestNewDataCheckerInitializeFromCheckpointMissingClusterInfo(t *testing.T) {
+	t.Parallel()
+
+	t.Run("cluster missing in checkpoint item[2]", func(t *testing.T) {
+		t.Parallel()
+		clusterConfig := map[string]config.ClusterConfig{
+			"c1": {},
+			"c2": {},
+		}
+		checkpoint := recorder.NewCheckpoint()
+		checkpoint.NewTimeWindowData(0, map[string]types.TimeWindowData{
+			"c1": {
+				TimeWindow: types.TimeWindow{
+					LeftBoundary:  0,
+					RightBoundary: 100,
+				},
+			},
+		})
+
+		_, err := NewDataChecker(context.Background(), clusterConfig, nil, checkpoint)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "cluster c2 not found in checkpoint item[2]")
+	})
+
+	t.Run("cluster missing in checkpoint item[1]", func(t *testing.T) {
+		t.Parallel()
+		clusterConfig := map[string]config.ClusterConfig{
+			"c1": {},
+			"c2": {},
+		}
+		checkpoint := recorder.NewCheckpoint()
+		checkpoint.NewTimeWindowData(0, map[string]types.TimeWindowData{
+			"c1": {
+				TimeWindow: types.TimeWindow{
+					LeftBoundary:  0,
+					RightBoundary: 100,
+				},
+			},
+		})
+		checkpoint.NewTimeWindowData(1, map[string]types.TimeWindowData{
+			"c1": {
+				TimeWindow: types.TimeWindow{
+					LeftBoundary:  100,
+					RightBoundary: 200,
+				},
+			},
+			"c2": {
+				TimeWindow: types.TimeWindow{
+					LeftBoundary:  100,
+					RightBoundary: 200,
+				},
+			},
+		})
+
+		_, err := NewDataChecker(context.Background(), clusterConfig, nil, checkpoint)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "cluster c2 not found in checkpoint item[1]")
+	})
+}
+
 func TestNewClusterDataChecker(t *testing.T) {
 	t.Parallel()
 
 	t.Run("create cluster data checker", func(t *testing.T) {
 		t.Parallel()
-		checker := newClusterDataChecker("cluster1")
+		checker := newClusterDataChecker("cluster1", false)
 		require.NotNil(t, checker)
 		require.Equal(t, "cluster1", checker.clusterID)
 		require.Equal(t, uint64(0), checker.rightBoundary)
@@ -279,7 +339,7 @@ func TestTimeWindowDataCache_NewRecord(t *testing.T) {
 		cache.NewRecord(schemaKey, record)
 		require.Contains(t, cache.tableDataCaches, schemaKey)
 		require.Contains(t, cache.tableDataCaches[schemaKey].localDataCache, record.Pk)
-		require.Contains(t, cache.tableDataCaches[schemaKey].localDataCache[record.Pk], record.CommitTs)
+		require.Contains(t, cache.tableDataCaches[schemaKey].localDataCache[record.Pk].records, record.CommitTs)
 	})
 
 	t.Run("add replicated record", func(t *testing.T) {
@@ -297,7 +357,7 @@ func TestTimeWindowDataCache_NewRecord(t *testing.T) {
 		cache.NewRecord(schemaKey, record)
 		require.Contains(t, cache.tableDataCaches, schemaKey)
 		require.Contains(t, cache.tableDataCaches[schemaKey].replicatedDataCache, record.Pk)
-		require.Contains(t, cache.tableDataCaches[schemaKey].replicatedDataCache[record.Pk], record.OriginTs)
+		require.Contains(t, cache.tableDataCaches[schemaKey].replicatedDataCache[record.Pk].records, record.OriginTs)
 	})
 
 	t.Run("skip record before left boundary", func(t *testing.T) {
@@ -322,7 +382,7 @@ func TestClusterDataChecker_PrepareNextTimeWindowData(t *testing.T) {
 
 	t.Run("prepare next time window data", func(t *testing.T) {
 		t.Parallel()
-		checker := newClusterDataChecker("cluster1")
+		checker := newClusterDataChecker("cluster1", false)
 		checker.rightBoundary = 100
 
 		timeWindow := types.TimeWindow{
@@ -338,7 +398,7 @@ func TestClusterDataChecker_PrepareNextTimeWindowData(t *testing.T) {
 
 	t.Run("mismatch left boundary", func(t *testing.T) {
 		t.Parallel()
-		checker := newClusterDataChecker("cluster1")
+		checker := newClusterDataChecker("cluster1", false)
 		checker.rightBoundary = 100
 
 		timeWindow := types.TimeWindow{
@@ -733,10 +793,11 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 		require.Equal(t, uint64(180), c1TableItems.LWWViolationItems[0].CommitTS)
 	})
 
-	// data loss detected at round 2: Data loss detection is active from round 2.
-	// A record in round 1 whose commitTs > checkpointTs will enter [1] at round 2,
-	// and if the replicated counterpart is missing, data loss is detected at round 2.
-	t.Run("data loss detected at round 2", func(t *testing.T) {
+	// data loss detected at round 3 for 2-cluster mode:
+	// enableDataLoss is active from round 3 when only 2 clusters are involved.
+	// A record in round 2 whose commitTs > checkpointTs enters [1] at round 3,
+	// and if the replicated counterpart is missing, data loss is detected at round 3.
+	t.Run("data loss detected at round 3", func(t *testing.T) {
 		t.Parallel()
 		checker, initErr := NewDataChecker(ctx, clusterCfg, nil, nil)
 		require.NoError(t, initErr)
@@ -745,19 +806,27 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 			"c1": makeTWData(0, 100, nil, nil),
 			"c2": makeTWData(0, 100, nil, nil),
 		}
-		// Round 1: c1 writes pk=1 (commitTs=150), checkpointTs["c2"]=140
-		// Since 150 > 140, this record needs replication checking.
+		// Round 1: consistent data.
 		round1 := map[string]types.TimeWindowData{
-			"c1": makeTWData(100, 200, map[string]uint64{"c2": 140},
+			"c1": makeTWData(100, 200, map[string]uint64{"c2": 180},
 				makeContent(makeCanalJSON(1, 150, 0, "a"))),
-			"c2": makeTWData(100, 200, nil, nil), // c2 has NO replicated data
+			"c2": makeTWData(100, 200, nil,
+				makeContent(makeCanalJSON(1, 160, 150, "a"))),
 		}
-		// Round 2: round 1 data is now in [1], data loss detection enabled.
+		// Round 2: c1 writes pk=2 (commitTs=250), checkpointTs["c2"]=240.
+		// Since 250 > 240, this record requires replication checking.
+		// c2 has no matching replicated data in this round.
 		round2 := map[string]types.TimeWindowData{
-			"c1": makeTWData(200, 300, map[string]uint64{"c2": 280},
+			"c1": makeTWData(200, 300, map[string]uint64{"c2": 240},
 				makeContent(makeCanalJSON(2, 250, 0, "b"))),
-			"c2": makeTWData(200, 300, nil,
-				makeContent(makeCanalJSON(2, 260, 250, "b"))),
+			"c2": makeTWData(200, 300, nil, nil),
+		}
+		// Round 3: data loss detection is enabled in 2-cluster mode.
+		round3 := map[string]types.TimeWindowData{
+			"c1": makeTWData(300, 400, map[string]uint64{"c2": 380},
+				makeContent(makeCanalJSON(3, 350, 0, "c"))),
+			"c2": makeTWData(300, 400, nil,
+				makeContent(makeCanalJSON(3, 360, 350, "c"))),
 		}
 
 		report0, err := checker.CheckInNextTimeWindow(round0)
@@ -770,13 +839,17 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 
 		report2, err := checker.CheckInNextTimeWindow(round2)
 		require.NoError(t, err)
-		require.True(t, report2.NeedFlush(), "round 2 should detect data loss")
-		c1Report := report2.ClusterReports["c1"]
+		require.False(t, report2.NeedFlush(), "round 2 should not detect data loss yet")
+
+		report3, err := checker.CheckInNextTimeWindow(round3)
+		require.NoError(t, err)
+		require.True(t, report3.NeedFlush(), "round 3 should detect data loss")
+		c1Report := report3.ClusterReports["c1"]
 		require.Contains(t, c1Report.TableFailureItems, defaultSchemaKey)
 		tableItems := c1Report.TableFailureItems[defaultSchemaKey]
 		require.Len(t, tableItems.DataLossItems, 1)
 		require.Equal(t, "c2", tableItems.DataLossItems[0].PeerClusterID)
-		require.Equal(t, uint64(150), tableItems.DataLossItems[0].LocalCommitTS)
+		require.Equal(t, uint64(250), tableItems.DataLossItems[0].LocalCommitTS)
 	})
 
 	// data redundant detected at round 3 (not round 2):
@@ -852,5 +925,40 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 		require.Len(t, c2TableItems.DataRedundantItems, 1)
 		require.Equal(t, uint64(330), c2TableItems.DataRedundantItems[0].OriginTS)
 		require.Equal(t, uint64(340), c2TableItems.DataRedundantItems[0].ReplicatedCommitTS)
+	})
+}
+
+func TestDataChecker_CheckInNextTimeWindowInvalidCheckpointTarget(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	clusterCfg := map[string]config.ClusterConfig{"c1": {}, "c2": {}}
+
+	t.Run("unknown target cluster", func(t *testing.T) {
+		t.Parallel()
+		checker, initErr := NewDataChecker(ctx, clusterCfg, nil, nil)
+		require.NoError(t, initErr)
+
+		round0 := map[string]types.TimeWindowData{
+			"c1": makeTWData(0, 100, map[string]uint64{"c3": 80}, nil),
+			"c2": makeTWData(0, 100, nil, nil),
+		}
+		_, err := checker.CheckInNextTimeWindow(round0)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "cluster c1 has checkpoint ts target c3 not found")
+	})
+
+	t.Run("self target cluster", func(t *testing.T) {
+		t.Parallel()
+		checker, initErr := NewDataChecker(ctx, clusterCfg, nil, nil)
+		require.NoError(t, initErr)
+
+		round0 := map[string]types.TimeWindowData{
+			"c1": makeTWData(0, 100, map[string]uint64{"c1": 80}, nil),
+			"c2": makeTWData(0, 100, nil, nil),
+		}
+		_, err := checker.CheckInNextTimeWindow(round0)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "cluster c1 has invalid checkpoint ts target to itself")
 	})
 }
