@@ -18,7 +18,18 @@ import (
 )
 
 var (
-	// ExecDDLHistogram records the exexution time of a DDL.
+	// HandleDDLHistogram records the handling time of a DDL,
+	// which includes the time of executing the DDL and waiting for the DDL to be resolved.
+	HandleDDLHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "ddl",
+			Name:      "handle_duration",
+			Help:      "Bucketed histogram of handling time (s) of a ddl.",
+			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 18),
+		}, []string{getKeyspaceLabel(), "changefeed"})
+
+	// ExecDDLHistogram records the execution time of a DDL.
 	ExecDDLHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
@@ -57,6 +68,7 @@ var (
 )
 
 func initDDLMetrics(registry *prometheus.Registry) {
+	registry.MustRegister(HandleDDLHistogram)
 	registry.MustRegister(ExecDDLHistogram)
 	registry.MustRegister(ExecDDLRunningGauge)
 	registry.MustRegister(ExecDDLBlockingGauge)

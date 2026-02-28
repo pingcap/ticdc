@@ -669,11 +669,16 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				zap.Int64("table", ddl.GetTableID()),
 				zap.Uint64("commitTs", event.GetCommitTs()),
 				zap.Uint64("seq", event.GetSeq()))
+			now := time.Now()
 			ddl.AddPostFlushFunc(func() {
 				if d.tableSchemaStore != nil {
 					d.tableSchemaStore.AddEvent(ddl)
 				}
 				wakeCallback()
+				d.sharedInfo.metricHandleDDLHis.Observe(time.Since(now).Seconds())
+				log.Debug("dispatcher handle ddl event finish",
+					zap.Duration("cost", time.Since(now)),
+					zap.Any("ddl", ddl))
 			})
 			d.DealWithBlockEvent(ddl)
 		case commonEvent.TypeSyncPointEvent:
