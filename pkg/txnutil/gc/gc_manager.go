@@ -15,7 +15,6 @@ package gc
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/pingcap/failpoint"
@@ -31,16 +30,11 @@ import (
 	"go.uber.org/zap"
 )
 
-// gcSafepointUpdateInterval is the minimum interval that CDC can update gc safepoint
-var gcSafepointUpdateInterval = 1 * time.Minute
-
 // Manager is an interface for gc manager
 type Manager interface {
-	// TryUpdateGCSafePoint tries to update TiCDC service GC safepoint.
-	// Manager may skip update when it thinks it is too frequent.
-	// Set `forceUpdate` to force Manager update.
-	TryUpdateGCSafePoint(ctx context.Context, checkpointTs common.Ts, forceUpdate bool) error
-	CheckStaleCheckpointTs(ctx context.Context, changefeedID common.ChangeFeedID, checkpointTs common.Ts) error
+	// TryUpdateServiceGCSafepoint tries to update TiCDC service GC safepoint.
+	TryUpdateServiceGCSafepoint(ctx context.Context, checkpointTs common.Ts) error
+	CheckStaleCheckpointTs(changefeedID common.ChangeFeedID, checkpointTs common.Ts) error
 }
 
 type gcManager struct {
@@ -49,82 +43,66 @@ type gcManager struct {
 	pdClock     pdutil.Clock
 	gcTTL       int64
 
-	lastUpdatedTime   *atomic.Time
-	lastSucceededTime *atomic.Time
-	lastSafePointTs   atomic.Uint64
-	isTiCDCBlockGC    atomic.Bool
-
-	// keyspaceLastUpdatedTimeMap store last updated time of each keyspace
-	// key => keyspaceID
-	// value => time.Time
-	keyspaceLastUpdatedTimeMap sync.Map
+	lastSafePointTs atomic.Uint64
+	isTiCDCBlockGC  atomic.Bool
 }
 
 // NewManager creates a new Manager.
 func NewManager(gcServiceID string, pdClient pd.Client) Manager {
-	serverConfig := config.GetGlobalServerConfig()
-	failpoint.Inject("InjectGcSafepointUpdateInterval", func(val failpoint.Value) {
-		gcSafepointUpdateInterval = time.Duration(val.(int) * int(time.Millisecond))
-	})
 	return &gcManager{
-		gcServiceID:       gcServiceID,
-		pdClient:          pdClient,
-		pdClock:           appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
-		lastUpdatedTime:   atomic.NewTime(time.Now()),
-		lastSucceededTime: atomic.NewTime(time.Now()),
-		gcTTL:             serverConfig.GcTTL,
+		gcServiceID: gcServiceID,
+		pdClient:    pdClient,
+		pdClock:     appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		gcTTL:       config.GetGlobalServerConfig().GcTTL,
 	}
 }
 
-func (m *gcManager) TryUpdateGCSafePoint(
-	ctx context.Context, checkpointTs common.Ts, forceUpdate bool,
+func (m *gcManager) TryUpdateServiceGCSafepoint(
+	ctx context.Context, checkpointTs common.Ts,
 ) error {
-	if time.Since(m.lastUpdatedTime.Load()) < gcSafepointUpdateInterval && !forceUpdate {
-		return nil
-	}
-	m.lastUpdatedTime.Store(time.Now())
-
-	actual, err := SetServiceGCSafepoint(ctx, m.pdClient, m.gcServiceID, m.gcTTL, checkpointTs)
+	minServiceGCSafepoint, err := SetServiceGCSafepoint(ctx, m.pdClient, m.gcServiceID, m.gcTTL, checkpointTs)
 	if err != nil {
-		log.Warn("updateGCSafePoint failed",
-			zap.Uint64("safePointTs", checkpointTs),
-			zap.Error(err))
-		if time.Since(m.lastSucceededTime.Load()) >= time.Second*time.Duration(m.gcTTL) {
-			return errors.ErrUpdateServiceSafepointFailed.Wrap(err)
-		}
-		return nil
+		log.Warn("update service gc safepoint failed", zap.Uint64("checkpointTs", checkpointTs),
+			zap.String("serviceID", m.gcServiceID), zap.Error(err))
+		return errors.WrapError(errors.ErrUpdateServiceSafepointFailed, err)
 	}
 	failpoint.Inject("InjectActualGCSafePoint", func(val failpoint.Value) {
-		actual = uint64(val.(int))
+		minServiceGCSafepoint = uint64(val.(int))
 	})
 
 	log.Debug("update gc safe point",
 		zap.String("gcServiceID", m.gcServiceID),
 		zap.Uint64("checkpointTs", checkpointTs),
-		zap.Uint64("actual", actual))
+		zap.Uint64("minServiceGCSafepoint", minServiceGCSafepoint))
 
-	if actual == checkpointTs {
-		log.Info("update gc safe point success", zap.Uint64("gcSafePointTs", checkpointTs))
+	if minServiceGCSafepoint == checkpointTs {
+		log.Info("update gc safe point success, cdc is blocking gc", zap.Uint64("minServiceGCSafepoint", checkpointTs))
 	}
-	if actual > checkpointTs {
-		log.Warn("update gc safe point failed, the gc safe point is larger than checkpointTs",
-			zap.Uint64("actual", actual), zap.Uint64("checkpointTs", checkpointTs))
+
+	if checkpointTs < minServiceGCSafepoint {
+		log.Warn("checkpointTs is smaller than the minimum service gc safepoint",
+			zap.Uint64("minServiceGCSafepoint", minServiceGCSafepoint), zap.Uint64("checkpointTs", checkpointTs),
+			zap.String("serviceID", m.gcServiceID))
 	}
+
 	// if the min checkpoint ts is equal to the current gc safe point, it
 	// means that the service gc safe point set by TiCDC is the min service
 	// gc safe point
-	m.isTiCDCBlockGC.Store(actual == checkpointTs)
-	m.lastSafePointTs.Store(actual)
-	m.lastSucceededTime.Store(time.Now())
-	minServiceGCSafePointGauge.Set(float64(oracle.ExtractPhysical(actual)))
+	m.isTiCDCBlockGC.Store(minServiceGCSafepoint == checkpointTs)
+	m.lastSafePointTs.Store(minServiceGCSafepoint)
+	minServiceGCSafePointGauge.Set(float64(oracle.ExtractPhysical(minServiceGCSafepoint)))
 	cdcGCSafePointGauge.Set(float64(oracle.ExtractPhysical(checkpointTs)))
 	return nil
 }
 
 func (m *gcManager) CheckStaleCheckpointTs(
-	ctx context.Context, changefeedID common.ChangeFeedID, checkpointTs common.Ts,
+	changefeedID common.ChangeFeedID, checkpointTs common.Ts,
 ) error {
 	return m.checkStaleCheckPointTsGlobal(changefeedID, checkpointTs)
+}
+
+func (m *gcManager) checkStaleCheckPointTsGlobal(changefeedID common.ChangeFeedID, checkpointTs common.Ts) error {
+	return checkStaleCheckpointTs(changefeedID, checkpointTs, m.pdClock, m.isTiCDCBlockGC.Load(), m.lastSafePointTs.Load(), m.gcTTL)
 }
 
 func checkStaleCheckpointTs(
@@ -159,8 +137,4 @@ func checkStaleCheckpointTs(
 		}
 	}
 	return nil
-}
-
-func (m *gcManager) checkStaleCheckPointTsGlobal(changefeedID common.ChangeFeedID, checkpointTs common.Ts) error {
-	return checkStaleCheckpointTs(changefeedID, checkpointTs, m.pdClock, m.isTiCDCBlockGC.Load(), m.lastSafePointTs.Load(), m.gcTTL)
 }
