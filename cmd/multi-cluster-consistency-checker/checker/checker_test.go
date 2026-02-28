@@ -657,18 +657,18 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 			"c1": makeTWData(200, 300, map[string]uint64{"c2": 240},
 				makeContent(makeCanalJSON(3, 250, 0, "c"))),
 			"c2": makeTWData(200, 300, nil,
-				makeContent(makeCanalJSON(3, 260, 250, "c"))),
+				makeContent(
+					makeCanalJSON(3, 260, 250, "c"),
+					makeCanalJSON(99, 240, 230, "x"),
+				)),
 		}
-		// Round 3: c2 has an extra replicated pk=99 (originTs=330) that doesn't match
-		// any locally-written record in c1
+		// Round 3: keep normal data so data redundant detection at round 3
+		// checks round2 ([1]) and catches the orphan from round2.
 		round3 := map[string]types.TimeWindowData{
 			"c1": makeTWData(300, 400, map[string]uint64{"c2": 380},
 				makeContent(makeCanalJSON(4, 350, 0, "d"))),
 			"c2": makeTWData(300, 400, nil,
-				makeContent(
-					makeCanalJSON(4, 360, 350, "d"),
-					makeCanalJSON(99, 340, 330, "x"),
-				)),
+				makeContent(makeCanalJSON(4, 360, 350, "d"))),
 		}
 
 		rounds := [4]map[string]types.TimeWindowData{base[0], base[1], round2, round3}
@@ -688,8 +688,8 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 		require.Contains(t, c2Report.TableFailureItems, defaultSchemaKey)
 		tableItems := c2Report.TableFailureItems[defaultSchemaKey]
 		require.Len(t, tableItems.DataRedundantItems, 1)
-		require.Equal(t, uint64(330), tableItems.DataRedundantItems[0].OriginTS)
-		require.Equal(t, uint64(340), tableItems.DataRedundantItems[0].ReplicatedCommitTS)
+		require.Equal(t, uint64(230), tableItems.DataRedundantItems[0].OriginTS)
+		require.Equal(t, uint64(240), tableItems.DataRedundantItems[0].ReplicatedCommitTS)
 	})
 
 	t.Run("lww violation detected", func(t *testing.T) {
@@ -853,15 +853,15 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 	})
 
 	// data redundant detected at round 3 (not round 2):
-	// dataRedundantDetection checks timeWindowDataCaches[2] (latest round).
+	// dataRedundantDetection checks timeWindowDataCaches[1].
 	// At round 2 [0]=round 0 (empty) so FindSourceLocalData may miss data in
 	// that window → enableDataRedundant is false to avoid false positives.
 	// At round 3 [0]=round 1, [1]=round 2, [2]=round 3 are all populated
-	// with real data, so enableDataRedundant=true and an orphan in [2] is caught.
+	// with real data, so enableDataRedundant=true and an orphan in [1] is caught.
 	//
-	// This test puts the SAME orphan pk=99 in both round 2 and round 3:
+	// This test puts an orphan pk=99 in round 2 only:
 	//   - Round 2: orphan in [2] but enableDataRedundant=false → NOT flagged.
-	//   - Round 3: orphan in [2] and enableDataRedundant=true  → flagged.
+	//   - Round 3: orphan moved to [1] and enableDataRedundant=true → flagged.
 	t.Run("data redundant detected at round 3 not round 2", func(t *testing.T) {
 		t.Parallel()
 		checker, initErr := NewDataChecker(ctx, clusterCfg, nil, nil)
@@ -889,16 +889,13 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 					makeCanalJSON(99, 240, 230, "x"), // orphan replicated
 				)),
 		}
-		// Round 3: c2 has another orphan replicated pk=99 (originTs=330) in [2].
-		// enableDataRedundant=true at round 3, so it IS caught.
+		// Round 3: no new orphan in [2]; enableDataRedundant=true at round 3 should
+		// catch the orphan that is now in [1] (from round 2).
 		round3 := map[string]types.TimeWindowData{
 			"c1": makeTWData(300, 400, map[string]uint64{"c2": 380},
 				makeContent(makeCanalJSON(3, 350, 0, "c"))),
 			"c2": makeTWData(300, 400, nil,
-				makeContent(
-					makeCanalJSON(3, 360, 350, "c"),
-					makeCanalJSON(99, 340, 330, "y"), // orphan replicated
-				)),
+				makeContent(makeCanalJSON(3, 360, 350, "c"))),
 		}
 
 		report0, err := checker.CheckInNextTimeWindow(round0)
@@ -916,15 +913,15 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 
 		report3, err := checker.CheckInNextTimeWindow(round3)
 		require.NoError(t, err)
-		// Round 3: redundant detection is enabled; the orphan pk=99 in [2] (round 3)
+		// Round 3: redundant detection is enabled; the orphan pk=99 in [1] (round 2)
 		// is now caught.
 		require.True(t, report3.NeedFlush(), "round 3 should detect data redundant")
 		c2Report := report3.ClusterReports["c2"]
 		require.Contains(t, c2Report.TableFailureItems, defaultSchemaKey)
 		c2TableItems := c2Report.TableFailureItems[defaultSchemaKey]
 		require.Len(t, c2TableItems.DataRedundantItems, 1)
-		require.Equal(t, uint64(330), c2TableItems.DataRedundantItems[0].OriginTS)
-		require.Equal(t, uint64(340), c2TableItems.DataRedundantItems[0].ReplicatedCommitTS)
+		require.Equal(t, uint64(230), c2TableItems.DataRedundantItems[0].OriginTS)
+		require.Equal(t, uint64(240), c2TableItems.DataRedundantItems[0].ReplicatedCommitTS)
 	})
 }
 

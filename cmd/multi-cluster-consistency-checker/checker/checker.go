@@ -479,10 +479,10 @@ func (cd *clusterDataChecker) checkLocalRecordsForDataLoss(
 	}
 }
 
-// dataRedundantDetection iterates through the replicated data cache [2]. The record must be present
-// in the local data cache [1] [2] or [3].
+// dataRedundantDetection iterates through the replicated data cache [1]. The record must be present
+// in the source local data cache across recent windows.
 func (cd *clusterDataChecker) dataRedundantDetection(checker *DataChecker) {
-	for schemaKey, tableDataCache := range cd.timeWindowDataCaches[2].tableDataCaches {
+	for schemaKey, tableDataCache := range cd.timeWindowDataCaches[1].tableDataCaches {
 		for _, replicatedDataCache := range tableDataCache.replicatedDataCache {
 			for _, record := range replicatedDataCache.records {
 				cd.checkedRecordsCount++
