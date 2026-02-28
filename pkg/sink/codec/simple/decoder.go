@@ -538,9 +538,7 @@ func parseValue(
 	default:
 		val = fmt.Sprintf("%v", value)
 	}
-	var (
-		err error
-	)
+	var err error
 	switch ft.GetType() {
 	case mysql.TypeBit:
 		v := common.MustBinaryLiteralToInt([]byte(val))
