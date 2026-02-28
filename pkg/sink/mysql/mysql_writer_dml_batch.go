@@ -505,10 +505,10 @@ func (w *Writer) batchSingleTxnDmls(
 	if len(updateRows) > 0 {
 		if w.cfg.IsTiDB {
 			for _, rows := range updateRows {
-				s, v := w.genUpdateSQL(rows...)
+				s, v, rowType := w.genUpdateSQL(rows...)
 				sqls = append(sqls, s...)
 				values = append(values, v...)
-				rowTypes = append(rowTypes, common.RowTypeUpdate)
+				rowTypes = append(rowTypes, rowType...)
 			}
 			// The behavior of update statement differs between TiDB and MySQL.
 			// So we don't use batch update statement when downstream is MySQL.
@@ -621,7 +621,7 @@ func (w *Writer) groupRowsByType(
 }
 
 // genUpdateSQL creates batched UPDATE statements when the payload size permits.
-func (w *Writer) genUpdateSQL(rows ...*sqlmodel.RowChange) ([]string, [][]interface{}) {
+func (w *Writer) genUpdateSQL(rows ...*sqlmodel.RowChange) ([]string, [][]interface{}, []common.RowType) {
 	size := 0
 	for _, r := range rows {
 		size += int(r.GetApproximateDataSize())
@@ -629,15 +629,17 @@ func (w *Writer) genUpdateSQL(rows ...*sqlmodel.RowChange) ([]string, [][]interf
 	if size < w.cfg.MaxMultiUpdateRowSize*len(rows) {
 		// use multi update in one SQL
 		sql, value := sqlmodel.GenUpdateSQL(rows...)
-		return []string{sql}, [][]interface{}{value}
+		return []string{sql}, [][]interface{}{value}, []common.RowType{common.RowTypeUpdate}
 	}
 	// each row has one independent update SQL.
 	sqls := make([]string, 0, len(rows))
 	values := make([][]interface{}, 0, len(rows))
+	rowTypes := make([]common.RowType, 0, len(rows))
 	for _, row := range rows {
 		sql, value := row.GenSQL(sqlmodel.DMLUpdate)
 		sqls = append(sqls, sql)
 		values = append(values, value)
+		rowTypes = append(rowTypes, common.RowTypeUpdate)
 	}
-	return sqls, values
+	return sqls, values, rowTypes
 }

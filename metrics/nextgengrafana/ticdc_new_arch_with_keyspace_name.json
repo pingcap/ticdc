@@ -5505,11 +5505,11 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(increase(ticdc_sink_dml_event_affected_row_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name, changefeed, type, row_type)",
+              "expr": "sum(increase(ticdc_sink_dml_event_affected_row_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name, changefeed, count_type, row_type)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{type}}-{{row_type}}",
+              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{count_type}}-{{row_type}}",
               "refId": "A"
             }
           ],

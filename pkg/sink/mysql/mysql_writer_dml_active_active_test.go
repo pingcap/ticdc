@@ -15,6 +15,7 @@ package mysql
 import (
 	"testing"
 
+	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/stretchr/testify/require"
 )
@@ -35,7 +36,7 @@ func TestBuildActiveActiveUpsertSQLMultiRows(t *testing.T) {
 		"insert into t values (2, 'bob', 11, NULL)",
 	)
 	rows, commitTs := writer.collectActiveActiveRows(event)
-	sql, args := buildActiveActiveUpsertSQL(event.TableInfo, rows, commitTs)
+	sql, args, rowTypes := buildActiveActiveUpsertSQL(event.TableInfo, rows, commitTs)
 	require.Equal(t,
 		"INSERT INTO `test`.`t` (`id`,`name`,`_tidb_origin_ts`,`_tidb_softdelete_time`) VALUES (?,?,?,?),(?,?,?,?) ON DUPLICATE KEY UPDATE `id` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`id`), `id`),`name` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`name`), `name`),`_tidb_origin_ts` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`_tidb_origin_ts`), `_tidb_origin_ts`),`_tidb_softdelete_time` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`_tidb_softdelete_time`), `_tidb_softdelete_time`)",
 		sql)
@@ -44,6 +45,7 @@ func TestBuildActiveActiveUpsertSQLMultiRows(t *testing.T) {
 		int64(2), "bob", event.CommitTs, nil,
 	}
 	require.Equal(t, expectedArgs, args)
+	require.Equal(t, []common.RowType{common.RowTypeInsert}, rowTypes)
 }
 
 func TestActiveActiveNormalSQLs(t *testing.T) {
@@ -65,9 +67,10 @@ func TestActiveActiveNormalSQLs(t *testing.T) {
 		"insert into t values (3, 'c', 12, NULL)",
 	)
 
-	sqls, args := writer.generateActiveActiveNormalSQLs([]*commonEvent.DMLEvent{event})
+	sqls, args, rowTypes := writer.generateActiveActiveNormalSQLs([]*commonEvent.DMLEvent{event})
 	require.Len(t, sqls, 3)
 	require.Len(t, args, 3)
+	require.Len(t, rowTypes, 3)
 	expectedSQL := "INSERT INTO `test`.`t` (`id`,`name`,`_tidb_origin_ts`,`_tidb_softdelete_time`) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE `id` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`id`), `id`),`name` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`name`), `name`),`_tidb_origin_ts` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`_tidb_origin_ts`), `_tidb_origin_ts`),`_tidb_softdelete_time` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`_tidb_softdelete_time`), `_tidb_softdelete_time`)"
 	require.Equal(t, expectedSQL, sqls[0])
 	require.Equal(t, expectedSQL, sqls[1])
@@ -95,9 +98,10 @@ func TestActiveActivePerEventBatch(t *testing.T) {
 		"insert into t values (2, 'b', 11, NULL)",
 	)
 
-	sqls, args := writer.generateActiveActiveBatchSQLForPerEvent([]*commonEvent.DMLEvent{event})
+	sqls, args, rowTypes := writer.generateActiveActiveBatchSQLForPerEvent([]*commonEvent.DMLEvent{event})
 	require.Len(t, sqls, 1)
 	require.Len(t, args, 1)
+	require.Len(t, rowTypes, 1)
 	expectedSQL := "INSERT INTO `test`.`t` (`id`,`name`,`_tidb_origin_ts`,`_tidb_softdelete_time`) VALUES (?,?,?,?),(?,?,?,?) ON DUPLICATE KEY UPDATE `id` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`id`), `id`),`name` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`name`), `name`),`_tidb_origin_ts` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`_tidb_origin_ts`), `_tidb_origin_ts`),`_tidb_softdelete_time` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`_tidb_softdelete_time`), `_tidb_softdelete_time`)"
 	require.Equal(t, expectedSQL, sqls[0])
 	require.Equal(t, []interface{}{
@@ -126,9 +130,10 @@ func TestActiveActiveCrossEventBatch(t *testing.T) {
 		"insert into t values (2, 'b', 11, NULL)",
 	)
 
-	sqls, args := writer.generateActiveActiveBatchSQL([]*commonEvent.DMLEvent{eventA, eventB})
+	sqls, args, rowTypes := writer.generateActiveActiveBatchSQL([]*commonEvent.DMLEvent{eventA, eventB})
 	require.Len(t, sqls, 1)
 	require.Len(t, args, 1)
+	require.Len(t, rowTypes, 1)
 	expectedSQL := "INSERT INTO `test`.`t` (`id`,`name`,`_tidb_origin_ts`,`_tidb_softdelete_time`) VALUES (?,?,?,?),(?,?,?,?) ON DUPLICATE KEY UPDATE `id` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`id`), `id`),`name` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`name`), `name`),`_tidb_origin_ts` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`_tidb_origin_ts`), `_tidb_origin_ts`),`_tidb_softdelete_time` = IF((IFNULL(`_tidb_origin_ts`, `_tidb_commit_ts`) <= VALUES(`_tidb_origin_ts`)), VALUES(`_tidb_softdelete_time`), `_tidb_softdelete_time`)"
 	require.Equal(t, expectedSQL, sqls[0])
 	require.Equal(t, []interface{}{
@@ -154,7 +159,7 @@ func TestActiveActiveDropRowsWithNonNullOriginTsForTiDBDownstream(t *testing.T) 
 	event := helper.DML2Event("test", "t",
 		"insert into t values (1, 'a', 10, NULL)",
 	)
-	sqls, args := writer.generateActiveActiveNormalSQLs([]*commonEvent.DMLEvent{event})
+	sqls, args, rowTypes := writer.generateActiveActiveNormalSQLs([]*commonEvent.DMLEvent{event})
 	require.Len(t, sqls, 0)
 	require.Len(t, args, 0)
 
@@ -162,9 +167,10 @@ func TestActiveActiveDropRowsWithNonNullOriginTsForTiDBDownstream(t *testing.T) 
 		"insert into t values (2, 'b', 11, NULL)",
 		"insert into t values (3, 'c', 12, NULL)",
 	)
-	sqls, args = writer.generateActiveActiveBatchSQLForPerEvent([]*commonEvent.DMLEvent{event})
+	sqls, args, rowTypes = writer.generateActiveActiveBatchSQLForPerEvent([]*commonEvent.DMLEvent{event})
 	require.Len(t, sqls, 0)
 	require.Len(t, args, 0)
+	require.Len(t, rowTypes, 0)
 
 	eventA := helper.DML2Event("test", "t",
 		"insert into t values (4, 'd', 13, NULL)",
@@ -172,9 +178,10 @@ func TestActiveActiveDropRowsWithNonNullOriginTsForTiDBDownstream(t *testing.T) 
 	eventB := helper.DML2Event("test", "t",
 		"insert into t values (5, 'e', 14, NULL)",
 	)
-	sqls, args = writer.generateActiveActiveBatchSQL([]*commonEvent.DMLEvent{eventA, eventB})
+	sqls, args, rowTypes = writer.generateActiveActiveBatchSQL([]*commonEvent.DMLEvent{eventA, eventB})
 	require.Len(t, sqls, 0)
 	require.Len(t, args, 0)
+	require.Len(t, rowTypes, 0)
 }
 
 func TestActiveActiveKeepRowsWithNullOriginTsForTiDBDownstream(t *testing.T) {
@@ -195,8 +202,9 @@ func TestActiveActiveKeepRowsWithNullOriginTsForTiDBDownstream(t *testing.T) {
 		"insert into t values (1, 'a', NULL, NULL)",
 	)
 
-	sqls, args := writer.generateActiveActiveNormalSQLs([]*commonEvent.DMLEvent{event})
+	sqls, args, rowTypes := writer.generateActiveActiveNormalSQLs([]*commonEvent.DMLEvent{event})
 	require.Len(t, sqls, 1)
 	require.Len(t, args, 1)
+	require.Len(t, rowTypes, 1)
 	require.Equal(t, []interface{}{int64(1), "a", event.CommitTs, nil}, args[0])
 }

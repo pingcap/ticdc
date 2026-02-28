@@ -72,7 +72,7 @@ var (
 			Subsystem: "sink",
 			Name:      "dml_event_affected_row_count",
 			Help:      "Total count of affected rows.",
-		}, []string{getKeyspaceLabel(), "changefeed", "type", "row_type"})
+		}, []string{getKeyspaceLabel(), "changefeed", "count_type", "row_type"})
 
 	ActiveActiveConflictSkipRowsCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{

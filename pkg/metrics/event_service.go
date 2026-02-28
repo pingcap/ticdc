@@ -174,7 +174,7 @@ var (
 		Namespace: "ticdc",
 		Subsystem: "event_service",
 		Name:      "send_dml_type_count",
-		Help:      "The number of different dml events type sent by the event service",
+		Help:      "The number of different dml events type sent by the event service,  it is potentially inaccurat if some dml events are filter",
 	}, []string{"mode", "dml_type"})
 )
 

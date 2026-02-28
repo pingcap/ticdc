@@ -93,7 +93,7 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 		for _, eventsInGroup := range sortedEventGroups {
 			tableInfo := eventsInGroup[0].TableInfo
 			if w.cfg.EnableActiveActive {
-				queryList, argsList = w.genActiveActiveSQL(tableInfo, eventsInGroup)
+				queryList, argsList, rowTypesList = w.genActiveActiveSQL(tableInfo, eventsInGroup)
 			} else {
 				if !w.shouldGenBatchSQL(tableInfo, eventsInGroup) {
 					queryList, argsList, rowTypesList = w.generateNormalSQLs(eventsInGroup)
@@ -114,7 +114,7 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 	return dmls, nil
 }
 
-func (w *Writer) genActiveActiveSQL(tableInfo *common.TableInfo, eventsInGroup []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
+func (w *Writer) genActiveActiveSQL(tableInfo *common.TableInfo, eventsInGroup []*commonEvent.DMLEvent) ([]string, [][]interface{}, []common.RowType) {
 	if !w.shouldGenBatchSQL(tableInfo, eventsInGroup) {
 		return w.generateActiveActiveNormalSQLs(eventsInGroup)
 	}

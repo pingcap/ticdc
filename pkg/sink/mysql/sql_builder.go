@@ -147,6 +147,7 @@ func (d *preparedDMLs) reset() {
 	d.tsPairs = d.tsPairs[:0]
 	d.rowCount = 0
 	d.approximateSize = 0
+	d.rowTypes = d.rowTypes[:0]
 }
 
 // prepareReplace builds a parametric REPLACE statement as following
@@ -258,9 +259,9 @@ func buildActiveActiveUpsertSQL(
 	tableInfo *common.TableInfo,
 	rows []*commonEvent.RowChange,
 	commitTs []uint64,
-) (string, []interface{}) {
+) (string, []interface{}, common.RowType) {
 	if tableInfo == nil || len(rows) == 0 {
-		return "", nil
+		return "", nil, common.RowTypeUnknown
 	}
 	if len(commitTs) != len(rows) {
 		log.Panic("mismatched commitTs and rows length",
@@ -280,7 +281,7 @@ func buildActiveActiveUpsertSQL(
 		insertColumns = append(insertColumns, col.Name.O)
 	}
 	if len(insertColumns) == 0 {
-		return "", nil
+		return "", nil, common.RowTypeUnknown
 	}
 
 	valueOffsets := make([]int, len(insertColumns))
@@ -357,7 +358,7 @@ func buildActiveActiveUpsertSQL(
 		builder.WriteString(fmt.Sprintf("%s = IF((%s), VALUES(%s), %s)", quoted, cond, quoted, quoted))
 	}
 
-	return builder.String(), args
+	return builder.String(), args, common.RowTypeInsert
 }
 
 func getArgs(row *chunk.Row, tableInfo *common.TableInfo) []interface{} {

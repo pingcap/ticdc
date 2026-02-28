@@ -34,8 +34,8 @@ import (
 
 // execDMLWithMaxRetries executes prepared DMLs with retry/backoff handling.
 func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
-	if len(dmls.sqls) != len(dmls.values) {
-		return cerror.ErrUnexpected.FastGenByArgs(fmt.Sprintf("unexpected number of sqls and values, sqls is %s, values is %s", dmls.sqls, util.RedactAny(dmls.values)))
+	if len(dmls.sqls) != len(dmls.values) || len(dmls.sqls) != len(dmls.rowTypes) {
+		return cerror.ErrUnexpected.FastGenByArgs(fmt.Sprintf("unexpected number of sqls and values or rowTypes, sqls is %s, values is %s, row types is %s", dmls.sqls, util.RedactAny(dmls.values), dmls.rowTypes))
 	}
 
 	// approximateSize is multiplied by 2 because in extreme circustumas, every
