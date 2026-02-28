@@ -17,6 +17,7 @@ import (
 	"flag"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // WorkloadConfig saves all the configurations for the workload
@@ -44,6 +45,9 @@ type WorkloadConfig struct {
 	Action          string
 	SkipCreateTable bool
 	OnlyDDL         bool
+	DDLConfigPath   string
+	DDLWorker       int
+	DDLTimeout      time.Duration
 
 	// Special workload config
 	RowSize       int
@@ -85,6 +89,9 @@ func NewWorkloadConfig() *WorkloadConfig {
 		Action:          "prepare",
 		SkipCreateTable: false,
 		OnlyDDL:         false,
+		DDLConfigPath:   "",
+		DDLWorker:       1,
+		DDLTimeout:      2 * time.Minute,
 
 		// For large row workload
 		RowSize:       10240,
@@ -115,7 +122,7 @@ func (c *WorkloadConfig) ParseFlags() error {
 	flag.Float64Var(&c.PercentageForUpdate, "percentage-for-update", c.PercentageForUpdate, "percentage for update: [0, 1.0]")
 	flag.Float64Var(&c.PercentageForDelete, "percentage-for-delete", c.PercentageForDelete, "percentage for delete: [0, 1.0]")
 	flag.BoolVar(&c.SkipCreateTable, "skip-create-table", c.SkipCreateTable, "do not create tables")
-	flag.StringVar(&c.Action, "action", c.Action, "action of the workload: [prepare, insert, update, delete, write, cleanup]")
+	flag.StringVar(&c.Action, "action", c.Action, "action of the workload: [prepare, insert, update, delete, write, ddl, cleanup]")
 	flag.StringVar(&c.WorkloadType, "workload-type", c.WorkloadType, "workload type: [bank, sysbench, large_row, shop_item, uuu, bank2, bank_update, crawler, dc]")
 	flag.StringVar(&c.DBHost, "database-host", c.DBHost, "database host")
 	flag.StringVar(&c.DBUser, "database-user", c.DBUser, "database user")
@@ -123,6 +130,9 @@ func (c *WorkloadConfig) ParseFlags() error {
 	flag.StringVar(&c.DBName, "database-db-name", c.DBName, "database db name")
 	flag.IntVar(&c.DBPort, "database-port", c.DBPort, "database port")
 	flag.BoolVar(&c.OnlyDDL, "only-ddl", c.OnlyDDL, "only generate ddl")
+	flag.StringVar(&c.DDLConfigPath, "ddl-config", c.DDLConfigPath, "ddl config file path, must be .toml")
+	flag.IntVar(&c.DDLWorker, "ddl-worker", c.DDLWorker, "ddl worker concurrency")
+	flag.DurationVar(&c.DDLTimeout, "ddl-timeout", c.DDLTimeout, "timeout for each ddl statement")
 	flag.StringVar(&c.LogFile, "log-file", c.LogFile, "log file path")
 	flag.StringVar(&c.LogLevel, "log-level", c.LogLevel, "log file path")
 	// For large row workload
@@ -144,6 +154,18 @@ func (c *WorkloadConfig) ParseFlags() error {
 	if c.PercentageForUpdate+c.PercentageForDelete > 1.0 {
 		return fmt.Errorf("PercentageForUpdate (%.2f) + PercentageForDelete (%.2f) must be <= 1.0",
 			c.PercentageForUpdate, c.PercentageForDelete)
+	}
+
+	if c.Action == "ddl" || c.OnlyDDL {
+		if c.DDLConfigPath == "" {
+			return fmt.Errorf("ddl requires -ddl-config")
+		}
+		if c.DDLWorker <= 0 {
+			return fmt.Errorf("ddl-worker must be > 0")
+		}
+		if c.DDLTimeout <= 0 {
+			return fmt.Errorf("ddl-timeout must be > 0")
+		}
 	}
 
 	return nil
