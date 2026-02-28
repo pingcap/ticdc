@@ -1184,14 +1184,6 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		oldStat.isRemoved.Store(true)
 	}
 
-	// This means the dispatcher was reset by memory controller so we need to reset the scan interval.
-	// if newStat.epoch > 1 {
-	// 	now := time.Now()
-	// 	newStat.changefeedStat.scanInterval.Store(int64(defaultScanInterval))
-	// 	metrics.EventServiceScanWindowIntervalGaugeVec.WithLabelValues(changefeedID.String()).Set(defaultScanInterval.Seconds())
-	// 	newStat.changefeedStat.lastAdjustTime.Store(now)
-	// }
-
 	log.Info("reset dispatcher",
 		zap.Stringer("changefeedID", newStat.changefeedStat.changefeedID),
 		zap.Stringer("dispatcherID", newStat.id), zap.Int64("tableID", newStat.info.GetTableSpan().GetTableID()),
@@ -1252,12 +1244,14 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 
 	holder := make(map[common.GID]uint64, len(availables))
 	usage := make(map[common.GID]float64, len(availables))
+	memoryRelease := make(map[common.GID]uint32, len(availables))
 	dispatcherAvailable := make(map[common.DispatcherID]uint64, len(availables))
 	for _, item := range availables {
 		holder[item.Gid] = item.Available
 		if m.HasUsageRatio() {
 			usage[item.Gid] = item.UsageRatio
 		}
+		memoryRelease[item.Gid] = item.MemoryReleaseCount
 		for dispatcherID, available := range item.DispatcherAvailable {
 			dispatcherAvailable[dispatcherID] = available
 		}
@@ -1274,7 +1268,7 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 		}
 		if m.HasUsageRatio() {
 			if ratio, okUsage := usage[changefeedID.ID()]; okUsage && ok {
-				changefeed.updateMemoryUsage(now, ratio)
+				changefeed.updateMemoryUsage(now, ratio, memoryRelease[changefeedID.ID()])
 			}
 		}
 		return true

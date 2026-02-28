@@ -34,6 +34,7 @@ type AvailableMemory struct {
 	UsageRatio          float64                        // [0,1], used to report memory usage ratio of the changefeed
 	DispatcherCount     uint32                         // used to report the number of dispatchers
 	DispatcherAvailable map[common.DispatcherID]uint64 // in bytes, used to report the memory usage of each dispatcher
+	MemoryReleaseCount  uint32                         // used to report the number of memory release events
 }
 
 func NewAvailableMemory(gid common.GID, available uint64) AvailableMemory {
@@ -208,6 +209,18 @@ func (c *CongestionControl) GetSize() int {
 			size += mem.sizeV1()
 		}
 	}
+	if c.version == CongestionControlVersion2 {
+		gidSize := (&common.GID{}).GetSize()
+		releaseEntryCount := 0
+		for _, mem := range c.availables {
+			if mem.MemoryReleaseCount > 0 {
+				releaseEntryCount++
+			}
+		}
+		if releaseEntryCount > 0 {
+			size += 4 + releaseEntryCount*(gidSize+4)
+		}
+	}
 	return size
 }
 
@@ -254,6 +267,23 @@ func (c *CongestionControl) encodeV2() ([]byte, error) {
 	for _, item := range c.availables {
 		data := item.marshalV2()
 		buf.Write(data)
+	}
+
+	releaseEntryCount := uint32(0)
+	for _, item := range c.availables {
+		if item.MemoryReleaseCount > 0 {
+			releaseEntryCount++
+		}
+	}
+	if releaseEntryCount > 0 {
+		_ = binary.Write(buf, binary.BigEndian, releaseEntryCount)
+		for _, item := range c.availables {
+			if item.MemoryReleaseCount == 0 {
+				continue
+			}
+			buf.Write(item.Gid.Marshal())
+			_ = binary.Write(buf, binary.BigEndian, item.MemoryReleaseCount)
+		}
 	}
 	return buf.Bytes(), nil
 }
@@ -306,6 +336,39 @@ func (c *CongestionControl) decodeV2(data []byte) error {
 		}
 		c.availables = append(c.availables, item)
 	}
+
+	if buf.Len() == 0 {
+		return nil
+	}
+
+	if buf.Len() < 4 {
+		return fmt.Errorf("invalid CongestionControl payload: insufficient bytes for memory release section count, need %d, got %d", 4, buf.Len())
+	}
+
+	releaseEntryCount := binary.BigEndian.Uint32(buf.Next(4))
+	if releaseEntryCount == 0 {
+		if buf.Len() != 0 {
+			return fmt.Errorf("invalid CongestionControl payload: unexpected bytes after empty memory release section, got %d", buf.Len())
+		}
+		return nil
+	}
+
+	gidSize := (&common.GID{}).GetSize()
+	expectedBytes := int(releaseEntryCount) * (gidSize + 4)
+	if buf.Len() != expectedBytes {
+		return fmt.Errorf("invalid CongestionControl payload: inconsistent memory release section length, expected %d, got %d", expectedBytes, buf.Len())
+	}
+
+	releaseByGid := make(map[common.GID]uint32, releaseEntryCount)
+	for i := uint32(0); i < releaseEntryCount; i++ {
+		gid := common.GID{}
+		gid.Unmarshal(buf.Next(gidSize))
+		releaseByGid[gid] = binary.BigEndian.Uint32(buf.Next(4))
+	}
+
+	for i := range c.availables {
+		c.availables[i].MemoryReleaseCount = releaseByGid[c.availables[i].Gid]
+	}
 	return nil
 }
 
@@ -334,6 +397,23 @@ func (c *CongestionControl) AddAvailableMemoryWithDispatchersAndUsage(
 	availMem.UsageRatio = usageRatio
 	availMem.DispatcherAvailable = dispatcherAvailable
 	availMem.DispatcherCount = uint32(len(dispatcherAvailable))
+	c.availables = append(c.availables, availMem)
+}
+
+func (c *CongestionControl) AddAvailableMemoryWithDispatchersAndUsageAndReleaseCount(
+	gid common.GID,
+	available uint64,
+	usageRatio float64,
+	dispatcherAvailable map[common.DispatcherID]uint64,
+	memoryReleaseCount uint32,
+) {
+	c.changefeedCount++
+	availMem := NewAvailableMemory(gid, available)
+	availMem.Version = CongestionControlVersion2
+	availMem.UsageRatio = usageRatio
+	availMem.DispatcherAvailable = dispatcherAvailable
+	availMem.DispatcherCount = uint32(len(dispatcherAvailable))
+	availMem.MemoryReleaseCount = memoryReleaseCount
 	c.availables = append(c.availables, availMem)
 }
 

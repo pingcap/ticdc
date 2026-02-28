@@ -119,6 +119,12 @@ func (w *memoryUsageWindow) addSample(now time.Time, ratio float64) {
 	w.pruneLocked(now)
 }
 
+func (w *memoryUsageWindow) reset() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.samples = nil
+}
+
 func (w *memoryUsageWindow) stats(now time.Time) memoryUsageStats {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -159,7 +165,7 @@ func (w *memoryUsageWindow) pruneLocked(now time.Time) {
 	}
 }
 
-func (c *changefeedStatus) updateMemoryUsage(now time.Time, usageRatio float64) {
+func (c *changefeedStatus) updateMemoryUsage(now time.Time, usageRatio float64, memoryReleaseCount uint32) {
 	if c.usageWindow == nil {
 		return
 	}
@@ -171,9 +177,32 @@ func (c *changefeedStatus) updateMemoryUsage(now time.Time, usageRatio float64) 
 		usageRatio = 1
 	}
 
+	if memoryReleaseCount > 0 {
+		c.resetScanIntervalToDefault(now)
+		c.usageWindow.reset()
+		c.usageWindow.addSample(now, usageRatio)
+		return
+	}
+
 	c.usageWindow.addSample(now, usageRatio)
 	stats := c.usageWindow.stats(now)
 	c.adjustScanInterval(now, stats)
+}
+
+func (c *changefeedStatus) resetScanIntervalToDefault(now time.Time) {
+	current := time.Duration(c.scanInterval.Load())
+	if current != defaultScanInterval {
+		c.scanInterval.Store(int64(defaultScanInterval))
+		metrics.EventServiceScanWindowIntervalGaugeVec.WithLabelValues(c.changefeedID.String()).Set(defaultScanInterval.Seconds())
+
+		log.Info("scan interval reset to default",
+			zap.Stringer("changefeedID", c.changefeedID),
+			zap.Duration("oldInterval", current),
+			zap.Duration("newInterval", defaultScanInterval))
+	}
+
+	c.lastAdjustTime.Store(now)
+	c.lastTrendAdjustTime.Store(now)
 }
 
 // Constants for trend detection and increase eligibility.

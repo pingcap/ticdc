@@ -83,6 +83,7 @@ type changefeedStat struct {
 	metricMemoryUsageMaxRedo  prometheus.Gauge
 	metricMemoryUsageUsedRedo prometheus.Gauge
 	dispatcherCount           atomic.Int32
+	memoryReleaseCount        atomic.Uint32
 }
 
 func newChangefeedStat(changefeedID common.ChangeFeedID) *changefeedStat {
@@ -421,11 +422,17 @@ func (c *EventCollector) processDSFeedback(ctx context.Context) error {
 			return context.Cause(ctx)
 		case feedback := <-c.ds.Feedback():
 			if feedback.FeedbackType == dynstream.ReleasePath {
+				if v, ok := c.changefeedMap.Load(feedback.Area); ok {
+					v.(*changefeedStat).memoryReleaseCount.Add(1)
+				}
 				log.Info("release dispatcher memory in DS", zap.Any("dispatcherID", feedback.Path))
 				c.ds.Release(feedback.Path)
 			}
 		case feedback := <-c.redoDs.Feedback():
 			if feedback.FeedbackType == dynstream.ReleasePath {
+				if v, ok := c.changefeedMap.Load(feedback.Area); ok {
+					v.(*changefeedStat).memoryReleaseCount.Add(1)
+				}
 				log.Info("release dispatcher memory in redo DS", zap.Any("dispatcherID", feedback.Path))
 				c.redoDs.Release(feedback.Path)
 			}
@@ -597,6 +604,20 @@ func (c *EventCollector) controlCongestion(ctx context.Context) error {
 }
 
 func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.CongestionControl {
+	changefeedMemoryReleaseCount := make(map[common.ChangeFeedID]uint32)
+	getAndResetMemoryReleaseCount := func(changefeedID common.ChangeFeedID) uint32 {
+		if count, ok := changefeedMemoryReleaseCount[changefeedID]; ok {
+			return count
+		}
+		v, ok := c.changefeedMap.Load(changefeedID.ID())
+		if !ok {
+			return 0
+		}
+		count := v.(*changefeedStat).memoryReleaseCount.Swap(0)
+		changefeedMemoryReleaseCount[changefeedID] = count
+		return count
+	}
+
 	// collect path-level available memory and total available memory for each changefeed
 	changefeedPathMemory := make(map[common.ChangeFeedID]map[common.DispatcherID]uint64)
 	changefeedTotalMemory := make(map[common.ChangeFeedID]uint64)
@@ -691,11 +712,12 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 			if !ok {
 				continue
 			}
-			congestionControl.AddAvailableMemoryWithDispatchersAndUsage(
+			congestionControl.AddAvailableMemoryWithDispatchersAndUsageAndReleaseCount(
 				changefeedID.ID(),
 				totalAvailable,
 				changefeedUsageRatio[changefeedID],
 				dispatcherMemory,
+				getAndResetMemoryReleaseCount(changefeedID),
 			)
 		}
 
