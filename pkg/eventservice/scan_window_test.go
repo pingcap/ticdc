@@ -28,7 +28,6 @@ func TestAdjustScanIntervalVeryLowBypassesSyncPointCap(t *testing.T) {
 	t.Parallel()
 
 	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"))
-	status.syncPointEnabled.Store(true)
 	status.syncPointInterval.Store(int64(1 * time.Minute))
 
 	now := time.Now()
@@ -48,7 +47,6 @@ func TestAdjustScanIntervalLowRespectsSyncPointCap(t *testing.T) {
 	t.Parallel()
 
 	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"))
-	status.syncPointEnabled.Store(true)
 	status.syncPointInterval.Store(int64(1 * time.Minute))
 
 	now := time.Now()
@@ -91,7 +89,6 @@ func TestAdjustScanIntervalIncreaseWithJitteredSamples(t *testing.T) {
 	t.Parallel()
 
 	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"))
-	status.syncPointEnabled.Store(true)
 	status.syncPointInterval.Store(int64(1 * time.Minute))
 
 	start := time.Now()
@@ -247,14 +244,12 @@ func TestUpdateSyncPointConfigUsesMinimumInterval(t *testing.T) {
 	disabled.enableSyncPoint = false
 	disabled.syncPointInterval = 2 * time.Minute
 	status.updateSyncPointConfig(disabled)
-	require.False(t, status.syncPointEnabled.Load())
 	require.Equal(t, int64(0), status.syncPointInterval.Load())
 
 	first := newMockDispatcherInfo(t, 0, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
 	first.enableSyncPoint = true
 	first.syncPointInterval = 2 * time.Minute
 	status.updateSyncPointConfig(first)
-	require.True(t, status.syncPointEnabled.Load())
 	require.Equal(t, int64(2*time.Minute), status.syncPointInterval.Load())
 
 	second := newMockDispatcherInfo(t, 0, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)

@@ -433,7 +433,6 @@ type changefeedStatus struct {
 	lastAdjustTime      atomic.Time
 	lastTrendAdjustTime atomic.Time
 	usageWindow         *memoryUsageWindow
-	syncPointEnabled    atomic.Bool
 	syncPointInterval   atomic.Int64
 }
 
@@ -464,4 +463,8 @@ func (c *changefeedStatus) isEmpty() bool {
 		return false // stop iteration
 	})
 	return empty
+}
+
+func (c *changefeedStatus) isSyncpointEnabled() bool {
+	return c.syncPointInterval.Load() > 0
 }

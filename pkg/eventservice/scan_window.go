@@ -266,6 +266,7 @@ func (c *changefeedStatus) adjustScanInterval(now time.Time, usage memoryUsageSt
 		if adjustedOnTrend {
 			c.lastTrendAdjustTime.Store(now)
 		}
+
 		log.Info("scan interval adjusted",
 			zap.Stringer("changefeedID", c.changefeedID),
 			zap.Duration("oldInterval", current),
@@ -277,15 +278,16 @@ func (c *changefeedStatus) adjustScanInterval(now time.Time, usage memoryUsageSt
 			zap.Float64("lastUsage", usage.last),
 			zap.Float64("trendDelta", trendDelta),
 			zap.Int("usageSamples", usage.cnt),
-			zap.Bool("syncPointEnabled", c.syncPointEnabled.Load()),
-		)
+			zap.Bool("syncPointEnabled", c.isSyncpointEnabled()),
+			zap.Int64("syncPointInterval", c.syncPointInterval.Load()))
 	}
 }
 
 func (c *changefeedStatus) maxScanInterval() time.Duration {
-	if !c.syncPointEnabled.Load() {
+	if !c.isSyncpointEnabled() {
 		return maxScanInterval
 	}
+
 	interval := time.Duration(c.syncPointInterval.Load())
 	if interval <= 0 {
 		return maxScanInterval
@@ -365,7 +367,6 @@ func (c *changefeedStatus) updateSyncPointConfig(info DispatcherInfo) {
 	if !info.SyncPointEnabled() {
 		return
 	}
-	c.syncPointEnabled.Store(true)
 	interval := info.GetSyncPointInterval()
 	if interval <= 0 {
 		return
