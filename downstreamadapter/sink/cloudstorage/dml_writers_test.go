@@ -52,6 +52,47 @@ func getTableFiles(t *testing.T, tableDir string) []string {
 	return fileNames
 }
 
+func TestAddDMLEventDoesNotCallPostEnqueueBeforePipelineRun(t *testing.T) {
+	uri := fmt.Sprintf("file:///%s?protocol=csv", t.TempDir())
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	err = replicaConfig.ValidateAndAdjust(sinkURI)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
+	require.NoError(t, err)
+
+	tableInfo := &common.TableInfo{
+		TableName: common.TableName{
+			Schema:  "test",
+			Table:   "t_enqueue",
+			TableID: 100,
+		},
+	}
+	event := commonEvent.NewDMLEvent(common.NewDispatcherID(), tableInfo.TableName.TableID, 1, 1, tableInfo)
+	event.TableInfoVersion = 1
+	event.Length = 1
+	event.ApproximateSize = 1
+
+	var enqueueCalled int64
+	event.AddPostEnqueueFunc(func() {
+		atomic.AddInt64(&enqueueCalled, 1)
+	})
+
+	// Without starting sink.Run, the event should only be accepted by AddDMLEvent
+	// and should not be considered enqueued into downstream write pipeline yet.
+	cloudStorageSink.AddDMLEvent(event)
+	require.Equal(t, int64(0), atomic.LoadInt64(&enqueueCalled))
+}
+
 func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 	parentDir := t.TempDir()
 

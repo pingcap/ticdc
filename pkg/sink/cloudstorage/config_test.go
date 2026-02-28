@@ -41,7 +41,7 @@ func TestConfigApply(t *testing.T) {
 	err = replicaConfig.ValidateAndAdjust(sinkURI)
 	require.NoError(t, err)
 	cfg := NewConfig()
-	err = cfg.Apply(context.TODO(), sinkURI, replicaConfig.Sink, true)
+	err = cfg.Apply(context.TODO(), sinkURI, replicaConfig.Sink, false)
 	require.Nil(t, err)
 	require.Equal(t, expected, cfg)
 }

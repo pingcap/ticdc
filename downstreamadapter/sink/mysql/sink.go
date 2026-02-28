@@ -270,6 +270,10 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.conflictDetector.Add(event)
 }
 
+func (s *Sink) PassBlockEvent(_ commonEvent.BlockEvent) error {
+	return nil
+}
+
 func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	var err error
 	switch event.GetType() {

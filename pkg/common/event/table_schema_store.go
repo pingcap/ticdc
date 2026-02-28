@@ -91,8 +91,15 @@ func newTableSchemaStoreRequirements(
 			updateTableIDs: false,
 			needTableNames: true,
 		}
-	case commonType.CloudStorageSinkType, commonType.BlackHoleSinkType:
-		// These sinks currently do not consume TableSchemaStore metadata.
+	case commonType.CloudStorageSinkType:
+		// Cloud storage sink drains by dispatcher route in PassBlockEvent and does not
+		// require table-id expansion from TableSchemaStore.
+		return tableSchemaStoreRequirements{
+			needTableIDs:   false,
+			updateTableIDs: false,
+			needTableNames: false,
+		}
+	case commonType.BlackHoleSinkType:
 		return tableSchemaStoreRequirements{
 			needTableIDs:   false,
 			updateTableIDs: false,

@@ -16,18 +16,42 @@ package cloudstorage
 import (
 	"context"
 
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/hash"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/utils/chann"
 )
 
+type eventFragmentKind uint8
+
+const (
+	eventFragmentKindDML eventFragmentKind = iota
+	eventFragmentKindDrain
+)
+
+type drainMarker struct {
+	dispatcherID commonType.DispatcherID
+	commitTs     uint64
+	doneCh       chan error
+}
+
+func (m *drainMarker) done(err error) {
+	select {
+	case m.doneCh <- err:
+	default:
+	}
+}
+
 // eventFragment is used to attach a sequence number to TxnCallbackableEvent.
 type eventFragment struct {
+	kind eventFragmentKind
+
 	event          *commonEvent.DMLEvent
 	versionedTable cloudstorage.VersionedTableName
+	dispatcherID   commonType.DispatcherID
+	marker         *drainMarker
 
 	// The sequence number is mainly useful for TxnCallbackableEvent defragmentation.
 	// e.g. TxnCallbackableEvent 1~5 are dispatched to a group of encoding workers, but the
@@ -39,12 +63,41 @@ type eventFragment struct {
 	encodedMsgs []*common.Message
 }
 
-func newEventFragment(seq uint64, version cloudstorage.VersionedTableName, event *commonEvent.DMLEvent) eventFragment {
+func newEventFragment(
+	seq uint64,
+	version cloudstorage.VersionedTableName,
+	dispatcherID commonType.DispatcherID,
+	event *commonEvent.DMLEvent,
+) eventFragment {
 	return eventFragment{
+		kind:           eventFragmentKindDML,
 		seqNumber:      seq,
 		versionedTable: version,
+		dispatcherID:   dispatcherID,
 		event:          event,
 	}
+}
+
+func newDrainEventFragment(
+	seq uint64,
+	dispatcherID commonType.DispatcherID,
+	commitTs uint64,
+	doneCh chan error,
+) eventFragment {
+	return eventFragment{
+		kind:         eventFragmentKindDrain,
+		seqNumber:    seq,
+		dispatcherID: dispatcherID,
+		marker: &drainMarker{
+			dispatcherID: dispatcherID,
+			commitTs:     commitTs,
+			doneCh:       doneCh,
+		},
+	}
+}
+
+func (e eventFragment) isDrain() bool {
+	return e.kind == eventFragmentKindDrain
 }
 
 // defragmenter is used to handle event fragments which can be registered
@@ -54,7 +107,6 @@ type defragmenter struct {
 	future            map[uint64]eventFragment
 	inputCh           <-chan eventFragment
 	outputChs         []*chann.DrainableChann[eventFragment]
-	hasher            *hash.PositionInertia
 }
 
 func newDefragmenter(
@@ -65,7 +117,6 @@ func newDefragmenter(
 		future:    make(map[uint64]eventFragment),
 		inputCh:   inputCh,
 		outputChs: outputChs,
-		hasher:    hash.NewPositionInertia(),
 	}
 }
 
@@ -117,11 +168,11 @@ func (d *defragmenter) writeMsgsConsecutive(
 }
 
 func (d *defragmenter) dispatchFragToDMLWorker(frag eventFragment) {
-	tableName := frag.versionedTable.TableNameWithPhysicTableID
-	d.hasher.Reset()
-	d.hasher.Write([]byte(tableName.Schema), []byte(tableName.Table))
-	workerID := d.hasher.Sum32() % uint32(len(d.outputChs))
+	workerID := commonType.GID(frag.dispatcherID).Hash(uint64(len(d.outputChs)))
 	d.outputChs[workerID].In() <- frag
+	if !frag.isDrain() {
+		frag.event.PostEnqueue()
+	}
 	d.lastDispatchedSeq = frag.seqNumber
 }
 

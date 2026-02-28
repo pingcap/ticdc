@@ -14,13 +14,16 @@
 package dispatcher
 
 import (
+	"fmt"
 	"math"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -738,9 +741,9 @@ func TestBatchDMLEventsPartialFlush(t *testing.T) {
 	dispatcher := newDispatcherForTest(mockSink, tableSpan)
 
 	// Create a callback that records when it's called
-	var callbackCalled bool
+	var callbackCalled atomic.Bool
 	wakeCallback := func() {
-		callbackCalled = true
+		callbackCalled.Store(true)
 	}
 
 	nodeID := node.NewID()
@@ -752,28 +755,164 @@ func TestBatchDMLEventsPartialFlush(t *testing.T) {
 		NewDispatcherEvent(&nodeID, dmlEvent3),
 	}
 
-	failpoint.Enable("github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockAddDMLEvents", `pause`)
-
-	go func() {
-		block := dispatcher.HandleEvents(dispatcherEvents, wakeCallback)
-		require.Equal(t, true, block)
+	require.NoError(t, failpoint.Enable("github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockAddDMLEvents", `pause`))
+	failpointEnabled := true
+	defer func() {
+		if failpointEnabled {
+			require.NoError(t, failpoint.Disable("github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockAddDMLEvents"))
+		}
 	}()
 
-	time.Sleep(1 * time.Second)
-	require.Equal(t, 1, len(mockSink.GetDMLs()))
-	mockSink.FlushDMLs()
-	require.False(t, callbackCalled)
+	resultCh := make(chan bool, 1)
+	go func() {
+		block := dispatcher.HandleEvents(dispatcherEvents, wakeCallback)
+		resultCh <- block
+	}()
 
-	failpoint.Disable("github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockAddDMLEvents")
-
-	time.Sleep(1 * time.Second)
-	require.Equal(t, 2, len(mockSink.GetDMLs()))
+	require.Eventually(t, func() bool {
+		return len(mockSink.GetDMLs()) == 1
+	}, 5*time.Second, 10*time.Millisecond)
 	mockSink.FlushDMLs()
+	require.False(t, callbackCalled.Load())
+
+	require.NoError(t, failpoint.Disable("github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockAddDMLEvents"))
+	failpointEnabled = false
+
+	require.Eventually(t, func() bool {
+		return len(mockSink.GetDMLs()) == 2
+	}, 5*time.Second, 10*time.Millisecond)
+	mockSink.FlushDMLs()
+	require.Eventually(t, func() bool {
+		return callbackCalled.Load()
+	}, 5*time.Second, 10*time.Millisecond)
 	// Now the callback should be called after all events are flushed
-	require.True(t, callbackCalled)
+	require.True(t, callbackCalled.Load())
+	require.Eventually(t, func() bool {
+		return len(mockSink.GetDMLs()) == 0
+	}, 5*time.Second, 10*time.Millisecond)
+	require.True(t, <-resultCh)
 
 	// Verify that all events were actually flushed
 	require.Equal(t, 0, len(mockSink.GetDMLs()))
+}
+
+func TestDMLWakeCallbackNonStorageOnlyAfterTableProgressEmpty(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	ddlJob := helper.DDL2Job("create table t(id int primary key, v int)")
+	require.NotNil(t, ddlJob)
+
+	buildDMLEvent := func(commitTs uint64) *commonEvent.DMLEvent {
+		event := helper.DML2Event(
+			"test",
+			"t",
+			fmt.Sprintf("insert into t values(%d, %d)", commitTs, commitTs),
+		)
+		require.NotNil(t, event)
+		event.CommitTs = commitTs
+		return event
+	}
+
+	ctrl := gomock.NewController(t)
+	mockSink := mock.NewMockSink(ctrl)
+	mockSink.EXPECT().SinkType().Return(common.MysqlSinkType).AnyTimes()
+	capturedDMLs := make([]*commonEvent.DMLEvent, 0, 3)
+	mockSink.EXPECT().AddDMLEvent(gomock.Any()).Do(func(event *commonEvent.DMLEvent) {
+		capturedDMLs = append(capturedDMLs, event)
+	}).Times(3)
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+	dispatcher := newDispatcherForTest(mockSink, tableSpan)
+
+	dmlEvent1 := buildDMLEvent(100)
+	dmlEvent2 := buildDMLEvent(101)
+	dmlEvent3 := buildDMLEvent(102)
+	nodeID := node.NewID()
+	dispatcherEvents := []DispatcherEvent{
+		NewDispatcherEvent(&nodeID, dmlEvent1),
+		NewDispatcherEvent(&nodeID, dmlEvent2),
+		NewDispatcherEvent(&nodeID, dmlEvent3),
+	}
+
+	var callbackCalled atomic.Bool
+	block := dispatcher.HandleEvents(dispatcherEvents, func() {
+		callbackCalled.Store(true)
+	})
+	require.True(t, block)
+	require.False(t, callbackCalled.Load())
+
+	require.Len(t, capturedDMLs, 3)
+
+	capturedDMLs[0].PostFlush()
+	require.False(t, callbackCalled.Load())
+
+	capturedDMLs[1].PostFlush()
+	require.False(t, callbackCalled.Load())
+
+	capturedDMLs[2].PostFlush()
+	require.True(t, callbackCalled.Load())
+	require.True(t, dispatcher.tableProgress.Empty())
+}
+
+func TestDMLWakeCallbackStorageAfterBatchEnqueue(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	ddlJob := helper.DDL2Job("create table t(id int primary key, v int)")
+	require.NotNil(t, ddlJob)
+
+	buildDMLEvent := func(commitTs uint64) *commonEvent.DMLEvent {
+		event := helper.DML2Event(
+			"test",
+			"t",
+			fmt.Sprintf("insert into t values(%d, %d)", commitTs, commitTs),
+		)
+		require.NotNil(t, event)
+		event.CommitTs = commitTs
+		return event
+	}
+
+	ctrl := gomock.NewController(t)
+	mockSink := mock.NewMockSink(ctrl)
+	mockSink.EXPECT().SinkType().Return(common.CloudStorageSinkType).AnyTimes()
+	capturedDMLs := make([]*commonEvent.DMLEvent, 0, 3)
+	mockSink.EXPECT().AddDMLEvent(gomock.Any()).Do(func(event *commonEvent.DMLEvent) {
+		capturedDMLs = append(capturedDMLs, event)
+	}).Times(3)
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+	dispatcher := newDispatcherForTest(mockSink, tableSpan)
+
+	dmlEvent1 := buildDMLEvent(110)
+	dmlEvent2 := buildDMLEvent(111)
+	dmlEvent3 := buildDMLEvent(112)
+	nodeID := node.NewID()
+	dispatcherEvents := []DispatcherEvent{
+		NewDispatcherEvent(&nodeID, dmlEvent1),
+		NewDispatcherEvent(&nodeID, dmlEvent2),
+		NewDispatcherEvent(&nodeID, dmlEvent3),
+	}
+
+	var callbackCalled atomic.Bool
+	block := dispatcher.HandleEvents(dispatcherEvents, func() {
+		callbackCalled.Store(true)
+	})
+	require.True(t, block)
+	require.False(t, callbackCalled.Load())
+
+	require.Len(t, capturedDMLs, 3)
+
+	capturedDMLs[0].PostEnqueue()
+	require.False(t, callbackCalled.Load())
+
+	capturedDMLs[1].PostEnqueue()
+	require.False(t, callbackCalled.Load())
+
+	capturedDMLs[2].PostEnqueue()
+	require.True(t, callbackCalled.Load())
 }
 
 // TestDispatcherSplittableCheck tests that a split table dispatcher with enableSplittableCheck=true

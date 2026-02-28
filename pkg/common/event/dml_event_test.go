@@ -15,6 +15,7 @@ package event
 
 import (
 	"encoding/binary"
+	"sync"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -23,6 +24,7 @@ import (
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/atomic"
 )
 
 func TestDMLEventBasicEncodeAndDecode(t *testing.T) {
@@ -341,4 +343,87 @@ func TestBatchDMLEventHeaderValidation(t *testing.T) {
 	err = reverseEvent.Unmarshal(incompleteData)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "incomplete data")
+}
+
+func TestDMLEventPostEnqueueFuncs(t *testing.T) {
+	t.Parallel()
+
+	event := &DMLEvent{}
+	var called atomic.Int64
+	event.AddPostEnqueueFunc(func() {
+		called.Inc()
+	})
+	event.AddPostEnqueueFunc(func() {
+		called.Inc()
+	})
+
+	event.PostEnqueue()
+	event.PostEnqueue()
+
+	require.Equal(t, int64(2), called.Load())
+}
+
+func TestDMLEventPostFlushTriggersPostEnqueueOnce(t *testing.T) {
+	t.Parallel()
+
+	event := &DMLEvent{}
+	var enqueueCalled atomic.Int64
+	var flushCalled atomic.Int64
+	event.AddPostEnqueueFunc(func() {
+		enqueueCalled.Inc()
+	})
+	event.AddPostFlushFunc(func() {
+		flushCalled.Inc()
+	})
+
+	event.PostFlush()
+	event.PostFlush()
+
+	require.Equal(t, int64(1), enqueueCalled.Load())
+	require.Equal(t, int64(2), flushCalled.Load())
+}
+
+func TestDMLEventPostFlushRunsFlushBeforePostEnqueueFallback(t *testing.T) {
+	t.Parallel()
+
+	event := &DMLEvent{}
+	order := make([]string, 0, 3)
+	event.AddPostFlushFunc(func() {
+		order = append(order, "flush")
+	})
+	event.AddPostEnqueueFunc(func() {
+		order = append(order, "enqueue")
+	})
+
+	event.PostFlush()
+	event.PostFlush()
+
+	require.Equal(t, []string{"flush", "enqueue", "flush"}, order)
+}
+
+func TestDMLEventPostEnqueueConcurrentWithPostFlush(t *testing.T) {
+	t.Parallel()
+
+	event := &DMLEvent{}
+	var enqueueCalled atomic.Int64
+	event.AddPostEnqueueFunc(func() {
+		enqueueCalled.Inc()
+	})
+
+	var wg sync.WaitGroup
+	const loops = 256
+	for i := 0; i < loops; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			event.PostEnqueue()
+		}()
+		go func() {
+			defer wg.Done()
+			event.PostFlush()
+		}()
+	}
+	wg.Wait()
+
+	require.Equal(t, int64(1), enqueueCalled.Load())
 }

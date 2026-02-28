@@ -443,7 +443,10 @@ func newFilteredDMLEvent(
 	newEvent.Seq = source.Seq
 	newEvent.Epoch = source.Epoch
 	newEvent.ReplicatingTs = source.ReplicatingTs
+	newEvent.PostTxnEnqueued = source.PostTxnEnqueued
 	newEvent.PostTxnFlushed = source.PostTxnFlushed
+	newEvent.postEnqueueCalled.Store(source.postEnqueueCalled.Load())
+	source.PostTxnEnqueued = nil
 	source.PostTxnFlushed = nil
 
 	newEvent.SetRows(rows)

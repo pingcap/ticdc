@@ -25,6 +25,7 @@ import (
 	tidbTypes "github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/atomic"
 )
 
 func TestFilterDMLEventNormalTablePassthrough(t *testing.T) {
@@ -314,6 +315,36 @@ func TestFilterDMLEventSoftDeleteTableMissingColumnReportsError(t *testing.T) {
 	require.Nil(t, filtered)
 	require.Error(t, handledErr)
 	require.Contains(t, handledErr.Error(), SoftDeleteTimeColumn)
+}
+
+func TestFilterDMLEventKeepsPostEnqueueCallbacksOnFilteredEvent(t *testing.T) {
+	ti := newTestTableInfo(t, true, true)
+	ts := newTimestampValue(time.Date(2025, time.March, 10, 0, 0, 0, 0, time.UTC))
+	event := newDMLEventForTest(t, ti,
+		[]commonpkg.RowType{commonpkg.RowTypeUpdate},
+		[][]interface{}{
+			{int64(1), nil},
+			{int64(1), ts},
+		})
+
+	var enqueueCalled atomic.Int64
+	var flushCalled atomic.Int64
+	event.AddPostEnqueueFunc(func() {
+		enqueueCalled.Inc()
+	})
+	event.AddPostFlushFunc(func() {
+		flushCalled.Inc()
+	})
+
+	filtered, skip := FilterDMLEvent(event, false, nil)
+	require.False(t, skip)
+	require.NotNil(t, filtered)
+	require.NotEqual(t, event, filtered)
+
+	filtered.PostEnqueue()
+	filtered.PostFlush()
+	require.Equal(t, int64(1), enqueueCalled.Load())
+	require.Equal(t, int64(1), flushCalled.Load())
 }
 
 func newTestTableInfo(t *testing.T, activeActive, softDelete bool) *commonpkg.TableInfo {
