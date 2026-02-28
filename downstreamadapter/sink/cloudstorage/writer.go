@@ -346,6 +346,8 @@ func (d *writer) genAndDispatchTask(ctx context.Context,
 				}
 			}
 			if frag.isDrain() {
+				// Drain marker must be placed behind pending batchedTask so the caller
+				// observes completion only after all prior DML flush tasks are handled.
 				if len(batchedTask.batch) > 0 {
 					select {
 					case <-ctx.Done():

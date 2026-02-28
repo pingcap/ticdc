@@ -648,6 +648,8 @@ func (t *DMLEvent) PostFlush() {
 	for _, f := range t.PostTxnFlushed {
 		f()
 	}
+	// Keep this fallback to preserve flush-then-wake semantics for sinks without
+	// an explicit enqueue stage; CAS in PostEnqueue guarantees double-calls are no-op.
 	t.PostEnqueue()
 }
 

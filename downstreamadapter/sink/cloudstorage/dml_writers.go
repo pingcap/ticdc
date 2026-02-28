@@ -140,6 +140,9 @@ func (d *dmlWriters) PassBlockEvent(event commonEvent.BlockEvent) error {
 
 	doneCh := make(chan error, 1)
 	seq := d.lastSeqNum.Inc()
+	// Drain marker shares the same global sequence as DML fragments.
+	// Defragmenter and writer will place it after all prior fragments, so once
+	// doneCh returns, previous DML of this dispatcher are already enqueued/drained.
 	d.msgCh.Push(newDrainEventFragment(seq, event.GetDispatcherID(), event.GetCommitTs(), doneCh))
 
 	select {

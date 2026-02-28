@@ -339,7 +339,9 @@ func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) erro
 	if event.GetType() == commonEvent.TypeDDLEvent {
 		ddl := event.(*commonEvent.DDLEvent)
 		// If NotSync is true, it means the DDL should not be sent to downstream.
-		// So we just call PassBlockEventToSink to update the table progress and call the postFlush func.
+		// So we just call PassBlockEventToSink to finish local bookkeeping:
+		// mark it passed in tableProgress and trigger flush callbacks to unblock
+		// dispatcher progress, without sending this DDL to sink.
 		if ddl.NotSync {
 			log.Info("ignore DDL by NotSync", zap.Stringer("dispatcher", d.id), zap.Any("ddl", ddl))
 			d.PassBlockEventToSink(event)
@@ -350,6 +352,12 @@ func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) erro
 	return d.sink.WriteBlockEvent(event)
 }
 
+// PassBlockEventToSink is used when block event handling result is "pass"
+// (for example maintainer action=Pass or DDL NotSync).
+//
+// It intentionally does not call sink.WriteBlockEvent. Instead, it updates
+// local progress as if the event had been handled, then fires PostFlush
+// callbacks so wake/checkpoint logic can continue with consistent ordering.
 func (d *BasicDispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) {
 	d.tableProgress.Pass(event)
 	event.PostFlush()
@@ -895,6 +903,9 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 				// we track it as a pending schedule-related event until the maintainer ACKs it.
 				d.pendingACKCount.Add(1)
 			}
+			// Pre-block barrier for ordering:
+			// storage sink may wait until prior DML of this dispatcher are accepted
+			// by sink pipeline; non-storage sinks usually no-op here.
 			err := d.sink.PassBlockEvent(event)
 			if err != nil {
 				if needsScheduleACKTracking {
@@ -972,6 +983,8 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 			return
 		}
 		d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
+			// Same pre-block barrier in the blocking path; this keeps block-event
+			// visibility ordered with prior DML for sinks that require draining.
 			err := d.sink.PassBlockEvent(event)
 			if err != nil {
 				d.HandleError(err)
