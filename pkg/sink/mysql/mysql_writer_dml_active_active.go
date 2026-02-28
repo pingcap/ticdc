@@ -89,9 +89,12 @@ func (w *Writer) generateActiveActiveBatchSQLForPerEvent(events []*commonEvent.D
 func (w *Writer) generateActiveActiveSQLForSingleEvent(event *commonEvent.DMLEvent) ([]string, [][]interface{}, []common.RowType) {
 	rows, commitTs := w.collectActiveActiveRows(event)
 	if len(rows) == 0 {
-		return nil, nil, []common.RowType{common.RowTypeUnknown}
+		return nil, nil, nil
 	}
 	sql, args, rowType := buildActiveActiveUpsertSQL(event.TableInfo, rows, commitTs)
+	if sql == "" {
+		return nil, nil, nil
+	}
 	return []string{sql}, [][]interface{}{args}, []common.RowType{rowType}
 }
 

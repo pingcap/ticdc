@@ -315,8 +315,6 @@ const (
 	RowTypeInsert
 	// RowTypeUpdate represents a update row.
 	RowTypeUpdate
-	// RowTypeUnknown represents an unknown row type, which should not be used in normal scenarios.
-	RowTypeUnknown
 )
 
 func (r RowType) String() string {
@@ -327,8 +325,6 @@ func (r RowType) String() string {
 		return "insert"
 	case RowTypeUpdate:
 		return "update"
-	case RowTypeUnknown:
-		return "unknown"
 	default:
 	}
 	log.Panic("RowType: invalid row type", zap.Uint8("rowType", uint8(r)))

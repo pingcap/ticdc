@@ -261,7 +261,7 @@ func buildActiveActiveUpsertSQL(
 	commitTs []uint64,
 ) (string, []interface{}, common.RowType) {
 	if tableInfo == nil || len(rows) == 0 {
-		return "", nil, common.RowTypeUnknown
+		return "", nil, common.RowTypeInsert
 	}
 	if len(commitTs) != len(rows) {
 		log.Panic("mismatched commitTs and rows length",
@@ -281,7 +281,7 @@ func buildActiveActiveUpsertSQL(
 		insertColumns = append(insertColumns, col.Name.O)
 	}
 	if len(insertColumns) == 0 {
-		return "", nil, common.RowTypeUnknown
+		return "", nil, common.RowTypeInsert
 	}
 
 	valueOffsets := make([]int, len(insertColumns))
