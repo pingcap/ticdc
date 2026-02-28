@@ -597,6 +597,8 @@ func formatColumn(c column, ft types.FieldType) column {
 			data, err = v.Float64()
 		case float64:
 			data = v
+		case float32:
+			data = float64(v)
 		default:
 			log.Panic("invalid column value, please report a bug", zap.String("col", util.RedactAny(c)), zap.Any("type", v))
 		}
