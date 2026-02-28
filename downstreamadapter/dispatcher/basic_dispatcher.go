@@ -675,10 +675,10 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 					d.tableSchemaStore.AddEvent(ddl)
 				}
 				wakeCallback()
-				d.sharedInfo.metricHandleDDLHis.Observe(time.Since(now).Seconds())
+                cost := time.Since(now)
+				d.sharedInfo.metricHandleDDLHis.Observe(cost.Seconds())
 				log.Debug("dispatcher handle ddl event finish",
-					zap.Duration("cost", time.Since(now)),
-					zap.Any("ddl", ddl))
+					zap.Duration("cost", cost), zap.Any("ddl", ddl))
 			})
 			d.DealWithBlockEvent(ddl)
 		case commonEvent.TypeSyncPointEvent:
