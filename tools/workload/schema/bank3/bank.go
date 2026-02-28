@@ -21,7 +21,7 @@ import (
 	"workload/schema"
 )
 
-const createBankTable = `
+const createBankTableBase = `
 create table if not exists bank_%d (
   col1 varchar(3) DEFAULT NULL,
   col2 varchar(2) DEFAULT NULL,
@@ -62,7 +62,9 @@ create table if not exists bank_%d (
   PRIMARY KEY (auto_id,col3,col4) /*T![clustered_index] NONCLUSTERED */,
   KEY idx6 (col3)
 ) DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
-PARTITION BY RANGE COLUMNS(col4)
+`
+
+const createBankTablePartition = `PARTITION BY RANGE COLUMNS(col4)
 (PARTITION p_202107 VALUES LESS THAN ('2021-08-01'),
  PARTITION p_202108 VALUES LESS THAN ('2021-09-01'),
  PARTITION p_202109 VALUES LESS THAN ('2021-10-01'),
@@ -135,14 +137,19 @@ PARTITION BY RANGE COLUMNS(col4)
 `
 
 type BankWorkload struct {
+	isPartitioned bool
 }
 
-func NewBankWorkload() schema.Workload {
-	return &BankWorkload{}
+func NewBankWorkload(isPartitioned bool) schema.Workload {
+	return &BankWorkload{isPartitioned: isPartitioned}
 }
 
 func (c *BankWorkload) BuildCreateTableStatement(n int) string {
-	return fmt.Sprintf(createBankTable, n)
+	createSQL := fmt.Sprintf(createBankTableBase, n)
+	if c.isPartitioned {
+		return createSQL + createBankTablePartition + ";"
+	}
+	return createSQL + ";"
 }
 
 func (c *BankWorkload) BuildInsertSql(tableN int, batchSize int) string {
@@ -161,8 +168,13 @@ func (c *BankWorkload) BuildInsertSql(tableN int, batchSize int) string {
 		if i > 0 {
 			buf.WriteString(",")
 		}
+
 		n := rand.Int63()
+		col1Value := "A01"
+		col2Value := "B2"
+		col3Value := fmt.Sprintf("acct-%d", n)
 		col4Value := randomBankDatetime()
+
 		col5Value := fmt.Sprintf("%02d", rand.Intn(100))
 		col6Value := fmt.Sprintf("desc-%d", n%1000000)
 		col7Value := fmt.Sprintf("%02d", rand.Intn(100))
@@ -172,18 +184,29 @@ func (c *BankWorkload) BuildInsertSql(tableN int, batchSize int) string {
 		col11Value := rand.Intn(10000)
 		col12Value := fmt.Sprintf("note-%d", n%1000000)
 		col13Value := rand.Intn(100)
+		col14Value := "acct"
 		col15Value := fmt.Sprintf("i%013d", n%10000000000000)
 		col16Value := fmt.Sprintf("type-%d", n%100000)
 		col17Value := fmt.Sprintf("memo-%d", n)
+		col18Value := fmt.Sprintf("%d", rand.Intn(2))
+		col19Value := fmt.Sprintf("%d", rand.Intn(2))
+		col20Value := fmt.Sprintf("%d", rand.Intn(2))
 		col21Value := fmt.Sprintf("customer-%d", n%1000000)
+		col22Value := "A001"
 		col23Value := n % 1000000000000000
+		col24Value := "B0001"
 		col25Value := fmt.Sprintf("ref-%d", n%1000000000000000000)
+		col26Value := "E1"
+		col27Value := randomBankDatetime()
 		col28Value := rand.Intn(1000)
 		col29Value := rand.Intn(1000)
 		col30Value := rand.Intn(1000)
+
 		buf.WriteString(fmt.Sprintf(
-			"('A01','B2','acct-%d','%s','%s','%s','%s','%s','%s',%d,%d,'%s',%d,'acct','%s','%s','%s','1','0','1','%s','A001',%d,'B0001','%s','E1','%s',%d,%d,%d)",
-			n,
+			"('%s','%s','%s','%s','%s','%s','%s','%s','%s',%d,%d,'%s',%d,'%s','%s','%s','%s','%s','%s','%s','%s','%s',%d,'%s','%s','%s','%s',%d,%d,%d)",
+			col1Value,
+			col2Value,
+			col3Value,
 			col4Value,
 			col5Value,
 			col6Value,
@@ -194,13 +217,20 @@ func (c *BankWorkload) BuildInsertSql(tableN int, batchSize int) string {
 			col11Value,
 			col12Value,
 			col13Value,
+			col14Value,
 			col15Value,
 			col16Value,
 			col17Value,
+			col18Value,
+			col19Value,
+			col20Value,
 			col21Value,
+			col22Value,
 			col23Value,
+			col24Value,
 			col25Value,
-			col4Value,
+			col26Value,
+			col27Value,
 			col28Value,
 			col29Value,
 			col30Value,

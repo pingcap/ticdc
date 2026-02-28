@@ -134,7 +134,7 @@ func (app *WorkloadApp) createWorkload() schema.Workload {
 	case bank2:
 		workload = pbank2.NewBank2Workload()
 	case bank3:
-		workload = pbank3.NewBankWorkload()
+		workload = pbank3.NewBankWorkload(app.Config.Partitioned)
 	case bankUpdate:
 		workload = bankupdate.NewBankUpdateWorkload(app.Config.TotalRowCount, app.Config.UpdateLargeColumnSize)
 	case dc:
@@ -167,12 +167,8 @@ func (app *WorkloadApp) executeWorkload(wg *sync.WaitGroup) error {
 		zap.Int("dbCount", len(app.DBManager.GetDBs())),
 		zap.Int("tableCount", app.Config.TableCount))
 
-	if !app.Config.SkipCreateTable && app.Config.Action == "prepare" {
-		app.handlePrepareAction(insertConcurrency, wg)
-		return nil
-	}
-
-	if app.Config.OnlyDDL {
+	if app.Config.Action == "prepare" {
+		app.handlePrepareAction(insertConcurrency, ddlConcurrency, wg)
 		return nil
 	}
 
@@ -181,20 +177,29 @@ func (app *WorkloadApp) executeWorkload(wg *sync.WaitGroup) error {
 }
 
 // handlePrepareAction handles the prepare action
-func (app *WorkloadApp) handlePrepareAction(insertConcurrency int, mainWg *sync.WaitGroup) {
-	plog.Info("start to create tables", zap.Int("tableCount", app.Config.TableCount))
-	wg := &sync.WaitGroup{}
-	for _, db := range app.DBManager.GetDBs() {
-		wg.Add(1)
-		go func(db *DBWrapper) {
-			defer wg.Done()
-			app.initTables(db.DB)
-		}(db)
+func (app *WorkloadApp) handlePrepareAction(insertConcurrency int, ddlConcurrency int, mainWg *sync.WaitGroup) {
+	if !app.Config.SkipCreateTable {
+		plog.Info("start to create tables", zap.Int("tableCount", app.Config.TableCount))
+		wg := &sync.WaitGroup{}
+		for _, db := range app.DBManager.GetDBs() {
+			wg.Add(1)
+			go func(db *DBWrapper) {
+				defer wg.Done()
+				app.initTables(db.DB)
+			}(db)
+		}
+		wg.Wait()
+		plog.Info("all dbs create tables finished")
+	} else {
+		plog.Info("skip creating tables", zap.Int("tableCount", app.Config.TableCount))
 	}
-	wg.Wait()
-	plog.Info("All dbs create tables finished")
+
+	if !app.Config.OnlyDML {
+		app.executeDDLWorkers(ddlConcurrency, mainWg)
+	}
+
 	if app.Config.TotalRowCount != 0 {
-		app.executeInsertWorkers(insertConcurrency, wg)
+		app.executeInsertWorkers(insertConcurrency, mainWg)
 	}
 }
 
@@ -213,8 +218,8 @@ func (app *WorkloadApp) handleWorkloadExecution(insertConcurrency, updateConcurr
 		zap.String("action", app.Config.Action),
 	)
 
-	if app.Config.Action == "write" || app.Config.Action == "insert" || app.Config.Action == "update" ||
-		app.Config.Action == "delete" || app.Config.Action == "ddl" {
+	if !app.Config.OnlyDML && (app.Config.Action == "write" || app.Config.Action == "insert" || app.Config.Action == "update" ||
+		app.Config.Action == "delete" || app.Config.Action == "ddl") {
 		app.executeDDLWorkers(ddlConcurrency, wg)
 	}
 

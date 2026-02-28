@@ -49,6 +49,7 @@ type WorkloadConfig struct {
 	Action          string
 	SkipCreateTable bool
 	OnlyDDL         bool
+	OnlyDML         bool
 
 	// Special workload config
 	RowSize       int
@@ -58,6 +59,9 @@ type WorkloadConfig struct {
 	UpdateLargeColumnSize int
 	// For sysbench workload
 	RangeNum int
+
+	// Partition related
+	Partitioned bool
 
 	// Log related
 	LogFile  string
@@ -94,6 +98,7 @@ func NewWorkloadConfig() *WorkloadConfig {
 		Action:          "prepare",
 		SkipCreateTable: false,
 		OnlyDDL:         false,
+		OnlyDML:         false,
 
 		// For large row workload
 		RowSize:       10240,
@@ -105,6 +110,9 @@ func NewWorkloadConfig() *WorkloadConfig {
 
 		// For sysbench workload
 		RangeNum: 5,
+
+		// Partition related
+		Partitioned: true,
 
 		// Log related
 		LogFile:  "workload.log",
@@ -133,7 +141,8 @@ func (c *WorkloadConfig) ParseFlags() error {
 	flag.StringVar(&c.DBPassword, "database-password", c.DBPassword, "database password")
 	flag.StringVar(&c.DBName, "database-db-name", c.DBName, "database db name")
 	flag.IntVar(&c.DBPort, "database-port", c.DBPort, "database port")
-	flag.BoolVar(&c.OnlyDDL, "only-ddl", c.OnlyDDL, "only generate ddl")
+	flag.BoolVar(&c.OnlyDDL, "only-ddl", c.OnlyDDL, "run only ddl (skip dml workers)")
+	flag.BoolVar(&c.OnlyDML, "only-dml", c.OnlyDML, "run only dml (skip ddl workers)")
 	flag.StringVar(&c.LogFile, "log-file", c.LogFile, "log file path")
 	flag.StringVar(&c.LogLevel, "log-level", c.LogLevel, "log file path")
 	// For large row workload
@@ -143,6 +152,8 @@ func (c *WorkloadConfig) ParseFlags() error {
 	flag.IntVar(&c.UpdateLargeColumnSize, "update-large-column-size", c.UpdateLargeColumnSize, "the size of the large column to update")
 	// For sysbench workload
 	flag.IntVar(&c.RangeNum, "range-num", c.RangeNum, "the number of ranges for sysbench workload")
+	// Partition related
+	flag.BoolVar(&c.Partitioned, "partitioned", c.Partitioned, "whether to create tables as partitioned tables when the workload supports it")
 
 	flag.Parse()
 
@@ -162,6 +173,26 @@ func (c *WorkloadConfig) ParseFlags() error {
 	}
 	if c.DDLInterval < 0 {
 		return fmt.Errorf("ddl-interval must be >= 0, got %s", c.DDLInterval)
+	}
+
+	if c.OnlyDDL && c.OnlyDML {
+		return fmt.Errorf("only-ddl and only-dml cannot both be true")
+	}
+	if c.OnlyDML && c.Action == "ddl" {
+		return fmt.Errorf("only-dml cannot be used with -action=ddl")
+	}
+
+	// Convenience mode:
+	// - only-ddl: force action=ddl and ensure at least 1 ddl worker.
+	// - only-dml: force ddl-thread=0 to disable ddl workers.
+	if c.OnlyDDL {
+		c.Action = "ddl"
+		if c.DDLThread == 0 {
+			c.DDLThread = 1
+		}
+	}
+	if c.OnlyDML {
+		c.DDLThread = 0
 	}
 
 	return nil

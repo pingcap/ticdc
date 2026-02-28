@@ -12,7 +12,7 @@ This tool helps generate and manipulate test data for database performance testi
 
 ```bash
 cd tools/workload
-make 
+make
 ```
 
 ## Common Usage Scenarios
@@ -47,7 +47,7 @@ Update existing data with large row operations:
     -database-db-name large \
     -total-row-count 100000000 \
     -table-count 1 \
-    -large-ratio 0.1 \ 
+    -large-ratio 0.1 \
     -workload-type large_row \
     -thread 16 \
     -batch-size 64 \
@@ -72,8 +72,10 @@ Run DML only (no DDL) while using `write` mode:
     -workload-type sysbench \
     -thread 32 \
     -batch-size 64 \
-    -ddl-thread 0
+    -only-dml
 ```
+
+(Equivalent: `-ddl-thread 0`.)
 
 ### 4. DML + DDL Together
 
@@ -97,7 +99,7 @@ Run DDL concurrently with DML (extra workers controlled by `-ddl-thread`):
 Run only DDL (useful for testing DDL concurrency/replication without DML):
 
 ```bash
-./workload -action ddl \
+./workload -only-ddl \
     -database-host 127.0.0.1 \
     -database-port 4000 \
     -database-db-name db1 \
@@ -107,7 +109,30 @@ Run only DDL (useful for testing DDL concurrency/replication without DML):
     -ddl-interval 5s
 ```
 
+(Equivalent: `-action ddl`.)
+
+### 6. Insert + Update + DDL Together (No Delete)
+
+Run insert and update concurrently, and execute DDL in parallel:
+
+```bash
+./workload -action write \
+    -database-host 127.0.0.1 \
+    -database-port 4000 \
+    -database-db-name db1 \
+    -table-count 1000 \
+    -workload-type sysbench \
+    -thread 32 \
+    -batch-size 64 \
+    -percentage-for-update 0.5 \
+    -percentage-for-delete 0 \
+    -ddl-thread 1 \
+    -ddl-interval 5s
+```
+
 ## Notes
 
 - Ensure the database is properly configured and has the necessary permissions.
 - Adjust the thread and batch-size parameters based on your needs.
+- For workloads that support partitioned tables (e.g. bank3), set `-partitioned=false` to create non-partitioned tables.
+- `-bank3-partitioned` is deprecated; use `-partitioned`.
