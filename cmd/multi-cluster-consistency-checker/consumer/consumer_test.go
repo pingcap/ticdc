@@ -483,7 +483,7 @@ func TestDownloadDMLFilesGlobalConcurrencyLimit(t *testing.T) {
 	s3Storage := NewTrackingMockS3Storage(files, 40*time.Millisecond)
 	s3Consumer := NewS3Consumer(s3Storage, map[string][]string{"test": {"t1"}})
 	s3Consumer.skipDownloadData = false
-	s3Consumer.downloadLimiter = make(chan struct{}, 2)
+	s3Consumer.readLimiter = make(chan struct{}, 2)
 
 	newFiles1 := map[cloudstorage.DmlPathKey]fileIndexRange{
 		dmlPathKey1: {indexKey: {start: 1, end: 3}},

@@ -44,7 +44,9 @@ type indexRange struct {
 	end   uint64
 }
 
-const defaultGlobalDownloadConcurrencyLimit = 128
+const defaultGlobalReadConcurrencyLimit = 128
+const defaultGlobalWalkConcurrencyLimit = 64
+const defaultTableWorkerConcurrencyLimit = 256
 
 func updateTableDMLIdxMap(
 	tableDMLIdxMap map[cloudstorage.DmlPathKey]fileIndexKeyMap,
@@ -225,9 +227,12 @@ type S3Consumer struct {
 	dateSeparator  string
 	fileIndexWidth int
 	tables         map[string][]string
-	// downloadLimiter limits the total number of concurrent file downloads
-	// across all downloadDMLFiles calls on this consumer.
-	downloadLimiter chan struct{}
+	// readLimiter limits the total number of concurrent ReadFile calls.
+	readLimiter chan struct{}
+	// walkLimiter limits the total number of concurrent WalkDir calls.
+	walkLimiter chan struct{}
+	// tableWorkerConcurrencyLimit limits table-level goroutines in top-level flows.
+	tableWorkerConcurrencyLimit int
 
 	// skip the first round data download
 	skipDownloadData bool
@@ -247,10 +252,15 @@ func NewS3Consumer(
 		dateSeparator:  config.DateSeparatorDay.String(),
 		fileIndexWidth: config.DefaultFileIndexWidth,
 		tables:         tables,
-		downloadLimiter: make(
+		readLimiter: make(
 			chan struct{},
-			defaultGlobalDownloadConcurrencyLimit,
+			defaultGlobalReadConcurrencyLimit,
 		),
+		walkLimiter: make(
+			chan struct{},
+			defaultGlobalWalkConcurrencyLimit,
+		),
+		tableWorkerConcurrencyLimit: defaultTableWorkerConcurrencyLimit,
 
 		skipDownloadData: true,
 
@@ -260,23 +270,42 @@ func NewS3Consumer(
 	}
 }
 
-func (c *S3Consumer) acquireDownloadSlot(ctx context.Context) error {
-	if c.downloadLimiter == nil {
+func (c *S3Consumer) acquireReadSlot(ctx context.Context) error {
+	if c.readLimiter == nil {
 		return nil
 	}
 	select {
-	case c.downloadLimiter <- struct{}{}:
+	case c.readLimiter <- struct{}{}:
 		return nil
 	case <-ctx.Done():
 		return errors.Trace(ctx.Err())
 	}
 }
 
-func (c *S3Consumer) releaseDownloadSlot() {
-	if c.downloadLimiter == nil {
+func (c *S3Consumer) releaseReadSlot() {
+	if c.readLimiter == nil {
 		return
 	}
-	<-c.downloadLimiter
+	<-c.readLimiter
+}
+
+func (c *S3Consumer) acquireWalkSlot(ctx context.Context) error {
+	if c.walkLimiter == nil {
+		return nil
+	}
+	select {
+	case c.walkLimiter <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return errors.Trace(ctx.Err())
+	}
+}
+
+func (c *S3Consumer) releaseWalkSlot() {
+	if c.walkLimiter == nil {
+		return
+	}
+	<-c.walkLimiter
 }
 
 func (c *S3Consumer) InitializeFromCheckpoint(
@@ -297,6 +326,7 @@ func (c *S3Consumer) InitializeFromCheckpoint(
 	// Combine DML data and schema data into result
 	result := make(map[cloudstorage.DmlPathKey]types.IncrementalData)
 	eg, egCtx := errgroup.WithContext(ctx)
+	eg.SetLimit(c.tableWorkerConcurrencyLimit)
 	for schemaTableKey, scanRange := range scanRanges {
 		eg.Go(func() error {
 			scanVersions, err := c.downloadSchemaFilesWithScanRange(
@@ -362,32 +392,38 @@ func (c *S3Consumer) downloadSchemaFilesWithScanRange(
 		VersionPath: startVersionKey,
 	})
 	newVersionPaths[startSchemaKey] = startVersionKey
-	if err := c.s3Storage.WalkDir(ctx, opt, func(filePath string, size int64) error {
-		if endVersionKey < filePath {
-			return ErrWalkDirEnd
+	if err := func() error {
+		if err := c.acquireWalkSlot(ctx); err != nil {
+			return errors.Trace(err)
 		}
-		if !cloudstorage.IsSchemaFile(filePath) {
-			return nil
-		}
-		var schemaKey cloudstorage.SchemaPathKey
-		_, err := schemaKey.ParseSchemaFilePath(filePath)
-		if err != nil {
-			log.Error("failed to parse schema file path, skipping",
-				zap.String("path", filePath),
-				zap.Error(err))
-			return nil
-		}
-		if schemaKey.TableVersion > startSchemaKey.TableVersion {
-			if _, exists := newVersionPaths[schemaKey]; !exists {
-				scanVersions = append(scanVersions, types.VersionKey{
-					Version:     schemaKey.TableVersion,
-					VersionPath: filePath,
-				})
+		defer c.releaseWalkSlot()
+		return c.s3Storage.WalkDir(ctx, opt, func(filePath string, size int64) error {
+			if endVersionKey < filePath {
+				return ErrWalkDirEnd
 			}
-			newVersionPaths[schemaKey] = filePath
-		}
-		return nil
-	}); err != nil && !errors.Is(err, ErrWalkDirEnd) {
+			if !cloudstorage.IsSchemaFile(filePath) {
+				return nil
+			}
+			var schemaKey cloudstorage.SchemaPathKey
+			_, err := schemaKey.ParseSchemaFilePath(filePath)
+			if err != nil {
+				log.Error("failed to parse schema file path, skipping",
+					zap.String("path", filePath),
+					zap.Error(err))
+				return nil
+			}
+			if schemaKey.TableVersion > startSchemaKey.TableVersion {
+				if _, exists := newVersionPaths[schemaKey]; !exists {
+					scanVersions = append(scanVersions, types.VersionKey{
+						Version:     schemaKey.TableVersion,
+						VersionPath: filePath,
+					})
+				}
+				newVersionPaths[schemaKey] = filePath
+			}
+			return nil
+		})
+	}(); err != nil && !errors.Is(err, ErrWalkDirEnd) {
 		return nil, errors.Trace(err)
 	}
 
@@ -457,28 +493,34 @@ func (c *S3Consumer) getNewFilesForSchemaPathKeyWithEndPath(
 		// TODO: StartAfter: startDataPath,
 	}
 	newTableDMLIdxMap := make(map[cloudstorage.DmlPathKey]fileIndexKeyMap)
-	if err := c.s3Storage.WalkDir(ctx, opt, func(filePath string, size int64) error {
-		if endDataPath < filePath {
-			return ErrWalkDirEnd
+	if err := func() error {
+		if err := c.acquireWalkSlot(ctx); err != nil {
+			return errors.Trace(err)
 		}
-		// Try to parse DML file path if it matches the expected extension
-		if strings.HasSuffix(filePath, c.fileExtension) {
-			var dmlkey cloudstorage.DmlPathKey
-			fileIdx, err := dmlkey.ParseDMLFilePath(c.dateSeparator, filePath)
-			if err != nil {
-				log.Error("failed to parse dml file path, skipping",
-					zap.String("path", filePath),
-					zap.Error(err))
-				return nil
+		defer c.releaseWalkSlot()
+		return c.s3Storage.WalkDir(ctx, opt, func(filePath string, size int64) error {
+			if endDataPath < filePath {
+				return ErrWalkDirEnd
 			}
-			if filePath == startDataPath {
-				c.tableDMLIdx.UpdateDMLIdxMapByStartPath(dmlkey, fileIdx)
-			} else {
-				updateTableDMLIdxMap(newTableDMLIdxMap, dmlkey, fileIdx)
+			// Try to parse DML file path if it matches the expected extension
+			if strings.HasSuffix(filePath, c.fileExtension) {
+				var dmlkey cloudstorage.DmlPathKey
+				fileIdx, err := dmlkey.ParseDMLFilePath(c.dateSeparator, filePath)
+				if err != nil {
+					log.Error("failed to parse dml file path, skipping",
+						zap.String("path", filePath),
+						zap.Error(err))
+					return nil
+				}
+				if filePath == startDataPath {
+					c.tableDMLIdx.UpdateDMLIdxMapByStartPath(dmlkey, fileIdx)
+				} else {
+					updateTableDMLIdxMap(newTableDMLIdxMap, dmlkey, fileIdx)
+				}
 			}
-		}
-		return nil
-	}); err != nil && !errors.Is(err, ErrWalkDirEnd) {
+			return nil
+		})
+	}(); err != nil && !errors.Is(err, ErrWalkDirEnd) {
 		return nil, errors.Trace(err)
 	}
 	return c.tableDMLIdx.DiffNewTableDMLIdxMap(newTableDMLIdxMap), nil
@@ -494,22 +536,39 @@ func (c *S3Consumer) downloadSchemaFiles(
 	log.Debug("starting concurrent schema file download", zap.Int("totalSchemas", len(newVersionPaths)))
 	for schemaPathKey, filePath := range newVersionPaths {
 		eg.Go(func() error {
-			content, err := c.s3Storage.ReadFile(egCtx, filePath)
-			if err != nil {
-				return errors.Annotatef(err, "failed to read schema file: %s", filePath)
-			}
-
-			tableDefinition := &cloudstorage.TableDefinition{}
-			if err := json.Unmarshal(content, tableDefinition); err != nil {
-				return errors.Annotatef(err, "failed to unmarshal schema file: %s", filePath)
-			}
-			if err := c.schemaDefinitions.SetSchemaDefinition(schemaPathKey, filePath, tableDefinition); err != nil {
+			if err := c.readAndParseSchemaFile(egCtx, schemaPathKey, filePath); err != nil {
 				return errors.Trace(err)
 			}
 			return nil
 		})
 	}
 	if err := eg.Wait(); err != nil {
+		return errors.Trace(err)
+	}
+	return nil
+}
+
+// readAndParseSchemaFile reads a schema file with global read concurrency control.
+func (c *S3Consumer) readAndParseSchemaFile(
+	ctx context.Context,
+	schemaPathKey cloudstorage.SchemaPathKey,
+	filePath string,
+) error {
+	if err := c.acquireReadSlot(ctx); err != nil {
+		return errors.Trace(err)
+	}
+	defer c.releaseReadSlot()
+
+	content, err := c.s3Storage.ReadFile(ctx, filePath)
+	if err != nil {
+		return errors.Annotatef(err, "failed to read schema file: %s", filePath)
+	}
+
+	tableDefinition := &cloudstorage.TableDefinition{}
+	if err := json.Unmarshal(content, tableDefinition); err != nil {
+		return errors.Annotatef(err, "failed to unmarshal schema file: %s", filePath)
+	}
+	if err := c.schemaDefinitions.SetSchemaDefinition(schemaPathKey, filePath, tableDefinition); err != nil {
 		return errors.Trace(err)
 	}
 	return nil
@@ -529,30 +588,36 @@ func (c *S3Consumer) discoverAndDownloadNewTableVersions(
 
 	var scanVersions []types.VersionKey
 	newVersionPaths := make(map[cloudstorage.SchemaPathKey]string)
-	if err := c.s3Storage.WalkDir(ctx, opt, func(filePath string, size int64) error {
-		if !cloudstorage.IsSchemaFile(filePath) {
-			return nil
+	if err := func() error {
+		if err := c.acquireWalkSlot(ctx); err != nil {
+			return errors.Trace(err)
 		}
-		var schemaKey cloudstorage.SchemaPathKey
-		_, err := schemaKey.ParseSchemaFilePath(filePath)
-		if err != nil {
-			log.Error("failed to parse schema file path, skipping",
-				zap.String("path", filePath),
-				zap.Error(err))
-			return nil
-		}
-		version := schemaKey.TableVersion
-		if version > currentVersion.Version {
-			if _, exists := newVersionPaths[schemaKey]; !exists {
-				scanVersions = append(scanVersions, types.VersionKey{
-					Version:     version,
-					VersionPath: filePath,
-				})
+		defer c.releaseWalkSlot()
+		return c.s3Storage.WalkDir(ctx, opt, func(filePath string, size int64) error {
+			if !cloudstorage.IsSchemaFile(filePath) {
+				return nil
 			}
-			newVersionPaths[schemaKey] = filePath
-		}
-		return nil
-	}); err != nil {
+			var schemaKey cloudstorage.SchemaPathKey
+			_, err := schemaKey.ParseSchemaFilePath(filePath)
+			if err != nil {
+				log.Error("failed to parse schema file path, skipping",
+					zap.String("path", filePath),
+					zap.Error(err))
+				return nil
+			}
+			version := schemaKey.TableVersion
+			if version > currentVersion.Version {
+				if _, exists := newVersionPaths[schemaKey]; !exists {
+					scanVersions = append(scanVersions, types.VersionKey{
+						Version:     version,
+						VersionPath: filePath,
+					})
+				}
+				newVersionPaths[schemaKey] = filePath
+			}
+			return nil
+		})
+	}(); err != nil {
 		return nil, errors.Trace(err)
 	}
 
@@ -580,22 +645,28 @@ func (c *S3Consumer) getNewFilesForSchemaPathKey(
 
 	newTableDMLIdxMap := make(map[cloudstorage.DmlPathKey]fileIndexKeyMap)
 	maxFilePath := ""
-	if err := c.s3Storage.WalkDir(ctx, opt, func(filePath string, size int64) error {
-		// Try to parse DML file path if it matches the expected extension
-		if strings.HasSuffix(filePath, c.fileExtension) {
-			var dmlkey cloudstorage.DmlPathKey
-			fileIdx, err := dmlkey.ParseDMLFilePath(c.dateSeparator, filePath)
-			if err != nil {
-				log.Error("failed to parse dml file path, skipping",
-					zap.String("path", filePath),
-					zap.Error(err))
-				return nil
-			}
-			updateTableDMLIdxMap(newTableDMLIdxMap, dmlkey, fileIdx)
-			maxFilePath = filePath
+	if err := func() error {
+		if err := c.acquireWalkSlot(ctx); err != nil {
+			return errors.Trace(err)
 		}
-		return nil
-	}); err != nil {
+		defer c.releaseWalkSlot()
+		return c.s3Storage.WalkDir(ctx, opt, func(filePath string, size int64) error {
+			// Try to parse DML file path if it matches the expected extension
+			if strings.HasSuffix(filePath, c.fileExtension) {
+				var dmlkey cloudstorage.DmlPathKey
+				fileIdx, err := dmlkey.ParseDMLFilePath(c.dateSeparator, filePath)
+				if err != nil {
+					log.Error("failed to parse dml file path, skipping",
+						zap.String("path", filePath),
+						zap.Error(err))
+					return nil
+				}
+				updateTableDMLIdxMap(newTableDMLIdxMap, dmlkey, fileIdx)
+				maxFilePath = filePath
+			}
+			return nil
+		})
+	}(); err != nil {
 		return nil, errors.Trace(err)
 	}
 
@@ -656,10 +727,10 @@ func (c *S3Consumer) downloadDMLFiles(
 	eg, egCtx := errgroup.WithContext(ctx)
 	for _, task := range tasks {
 		eg.Go(func() error {
-			if err := c.acquireDownloadSlot(egCtx); err != nil {
+			if err := c.acquireReadSlot(egCtx); err != nil {
 				return errors.Trace(err)
 			}
-			defer c.releaseDownloadSlot()
+			defer c.releaseReadSlot()
 
 			filePath := task.dmlPathKey.GenerateDMLFilePath(
 				&task.fileIndex,
@@ -759,6 +830,7 @@ func (c *S3Consumer) ConsumeNewFiles(
 	var versionMu sync.Mutex
 	maxVersionMap := make(map[types.SchemaTableKey]types.VersionKey)
 	eg, egCtx := errgroup.WithContext(ctx)
+	eg.SetLimit(c.tableWorkerConcurrencyLimit)
 	for schema, tables := range c.tables {
 		for _, table := range tables {
 			eg.Go(func() error {
