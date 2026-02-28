@@ -1185,12 +1185,12 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	}
 
 	// This means the dispatcher was reset by memory controller so we need to reset the scan interval.
-	if newStat.epoch > 1 {
-		now := time.Now()
-		newStat.changefeedStat.scanInterval.Store(int64(defaultScanInterval))
-		metrics.EventServiceScanWindowIntervalGaugeVec.WithLabelValues(changefeedID.String()).Set(defaultScanInterval.Seconds())
-		newStat.changefeedStat.lastAdjustTime.Store(now)
-	}
+	// if newStat.epoch > 1 {
+	// 	now := time.Now()
+	// 	newStat.changefeedStat.scanInterval.Store(int64(defaultScanInterval))
+	// 	metrics.EventServiceScanWindowIntervalGaugeVec.WithLabelValues(changefeedID.String()).Set(defaultScanInterval.Seconds())
+	// 	newStat.changefeedStat.lastAdjustTime.Store(now)
+	// }
 
 	log.Info("reset dispatcher",
 		zap.Stringer("changefeedID", newStat.changefeedStat.changefeedID),
