@@ -144,10 +144,10 @@ var dmlsPool = sync.Pool{
 func (d *preparedDMLs) reset() {
 	d.sqls = d.sqls[:0]
 	d.values = d.values[:0]
+	d.rowTypes = d.rowTypes[:0]
 	d.tsPairs = d.tsPairs[:0]
 	d.rowCount = 0
 	d.approximateSize = 0
-	d.rowTypes = d.rowTypes[:0]
 }
 
 // prepareReplace builds a parametric REPLACE statement as following

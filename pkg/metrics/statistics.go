@@ -124,13 +124,13 @@ func (b *Statistics) RecordRowsAffected(rowsAffected int64, rowType common.RowTy
 	b.RecordTotalRowsAffected(rowsAffected, 1)
 }
 
-func (b *Statistics) getRowsAffected(count_type, row_type string) prometheus.Counter {
-	key := fmt.Sprintf("%s-%s", count_type, row_type)
+func (b *Statistics) getRowsAffected(countType, rowType string) prometheus.Counter {
+	key := fmt.Sprintf("%s-%s", countType, rowType)
 	counter, loaded := b.rowsAffectedMap.Load(key)
 	if !loaded {
 		keyspace := b.changefeedID.Keyspace()
 		changefeedID := b.changefeedID.Name()
-		counter := ExecDMLEventRowsAffectedCounter.WithLabelValues(keyspace, changefeedID, count_type, row_type)
+		counter := ExecDMLEventRowsAffectedCounter.WithLabelValues(keyspace, changefeedID, countType, rowType)
 		b.rowsAffectedMap.Store(key, counter)
 		return counter
 	}
