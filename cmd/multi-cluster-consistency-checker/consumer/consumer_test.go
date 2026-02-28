@@ -19,7 +19,10 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/recorder"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/types"
@@ -386,14 +389,48 @@ type mockS3Storage struct {
 	sortedFiles []mockFile
 }
 
+type trackingMockS3Storage struct {
+	*mockS3Storage
+	currentConcurrent int64
+	maxConcurrent     int64
+	delay             time.Duration
+}
+
 func NewMockS3Storage(sortedFiles []mockFile) *mockS3Storage {
 	s3Storage := &mockS3Storage{}
 	s3Storage.UpdateFiles(sortedFiles)
 	return s3Storage
 }
 
+func NewTrackingMockS3Storage(sortedFiles []mockFile, delay time.Duration) *trackingMockS3Storage {
+	return &trackingMockS3Storage{
+		mockS3Storage: NewMockS3Storage(sortedFiles),
+		delay:         delay,
+	}
+}
+
 func (m *mockS3Storage) ReadFile(ctx context.Context, name string) ([]byte, error) {
 	return m.sortedFiles[m.fileOffset[name]].content, nil
+}
+
+func (m *trackingMockS3Storage) ReadFile(ctx context.Context, name string) ([]byte, error) {
+	current := atomic.AddInt64(&m.currentConcurrent, 1)
+	for {
+		max := atomic.LoadInt64(&m.maxConcurrent)
+		if current <= max || atomic.CompareAndSwapInt64(&m.maxConcurrent, max, current) {
+			break
+		}
+	}
+	defer atomic.AddInt64(&m.currentConcurrent, -1)
+
+	timer := time.NewTimer(m.delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-timer.C:
+	}
+	return m.mockS3Storage.ReadFile(ctx, name)
 }
 
 func (m *mockS3Storage) WalkDir(ctx context.Context, opt *storage.WalkOption, fn func(path string, size int64) error) error {
@@ -415,6 +452,67 @@ func (m *mockS3Storage) UpdateFiles(sortedFiles []mockFile) {
 	}
 	m.fileOffset = fileOffset
 	m.sortedFiles = sortedFiles
+}
+
+func (m *trackingMockS3Storage) MaxConcurrent() int64 {
+	return atomic.LoadInt64(&m.maxConcurrent)
+}
+
+func TestDownloadDMLFilesGlobalConcurrencyLimit(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	indexKey := cloudstorage.FileIndexKey{DispatcherID: "", EnableTableAcrossNodes: false}
+	dmlPathKey1 := cloudstorage.DmlPathKey{
+		SchemaPathKey: cloudstorage.SchemaPathKey{Schema: "test", Table: "t1", TableVersion: 1},
+		Date:          "2026-01-01",
+	}
+	dmlPathKey2 := cloudstorage.DmlPathKey{
+		SchemaPathKey: cloudstorage.SchemaPathKey{Schema: "test", Table: "t1", TableVersion: 1},
+		Date:          "2026-01-02",
+	}
+
+	files := []mockFile{
+		{name: "test/t1/1/2026-01-01/CDC00000000000000000001.json", content: []byte("f1")},
+		{name: "test/t1/1/2026-01-01/CDC00000000000000000002.json", content: []byte("f2")},
+		{name: "test/t1/1/2026-01-01/CDC00000000000000000003.json", content: []byte("f3")},
+		{name: "test/t1/1/2026-01-02/CDC00000000000000000001.json", content: []byte("f4")},
+		{name: "test/t1/1/2026-01-02/CDC00000000000000000002.json", content: []byte("f5")},
+		{name: "test/t1/1/2026-01-02/CDC00000000000000000003.json", content: []byte("f6")},
+	}
+	s3Storage := NewTrackingMockS3Storage(files, 40*time.Millisecond)
+	s3Consumer := NewS3Consumer(s3Storage, map[string][]string{"test": {"t1"}})
+	s3Consumer.skipDownloadData = false
+	s3Consumer.downloadLimiter = make(chan struct{}, 2)
+
+	newFiles1 := map[cloudstorage.DmlPathKey]fileIndexRange{
+		dmlPathKey1: {indexKey: {start: 1, end: 3}},
+	}
+	newFiles2 := map[cloudstorage.DmlPathKey]fileIndexRange{
+		dmlPathKey2: {indexKey: {start: 1, end: 3}},
+	}
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, err := s3Consumer.downloadDMLFiles(ctx, newFiles1)
+		errCh <- err
+	}()
+	go func() {
+		defer wg.Done()
+		_, err := s3Consumer.downloadDMLFiles(ctx, newFiles2)
+		errCh <- err
+	}()
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		require.NoError(t, err)
+	}
+
+	require.Greater(t, s3Storage.MaxConcurrent(), int64(1))
+	require.LessOrEqual(t, s3Storage.MaxConcurrent(), int64(2))
 }
 
 func TestS3Consumer(t *testing.T) {

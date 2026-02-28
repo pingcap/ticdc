@@ -44,6 +44,8 @@ type indexRange struct {
 	end   uint64
 }
 
+const defaultGlobalDownloadConcurrencyLimit = 128
+
 func updateTableDMLIdxMap(
 	tableDMLIdxMap map[cloudstorage.DmlPathKey]fileIndexKeyMap,
 	dmlkey cloudstorage.DmlPathKey,
@@ -223,6 +225,9 @@ type S3Consumer struct {
 	dateSeparator  string
 	fileIndexWidth int
 	tables         map[string][]string
+	// downloadLimiter limits the total number of concurrent file downloads
+	// across all downloadDMLFiles calls on this consumer.
+	downloadLimiter chan struct{}
 
 	// skip the first round data download
 	skipDownloadData bool
@@ -242,6 +247,10 @@ func NewS3Consumer(
 		dateSeparator:  config.DateSeparatorDay.String(),
 		fileIndexWidth: config.DefaultFileIndexWidth,
 		tables:         tables,
+		downloadLimiter: make(
+			chan struct{},
+			defaultGlobalDownloadConcurrencyLimit,
+		),
 
 		skipDownloadData: true,
 
@@ -249,6 +258,25 @@ func NewS3Consumer(
 		tableDMLIdx:         NewTableDMLIdx(),
 		schemaDefinitions:   NewSchemaDefinitions(),
 	}
+}
+
+func (c *S3Consumer) acquireDownloadSlot(ctx context.Context) error {
+	if c.downloadLimiter == nil {
+		return nil
+	}
+	select {
+	case c.downloadLimiter <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return errors.Trace(ctx.Err())
+	}
+}
+
+func (c *S3Consumer) releaseDownloadSlot() {
+	if c.downloadLimiter == nil {
+		return
+	}
+	<-c.downloadLimiter
 }
 
 func (c *S3Consumer) InitializeFromCheckpoint(
@@ -626,9 +654,13 @@ func (c *S3Consumer) downloadDMLFiles(
 
 	fileContents := make(chan fileContent, len(tasks))
 	eg, egCtx := errgroup.WithContext(ctx)
-	eg.SetLimit(128)
 	for _, task := range tasks {
 		eg.Go(func() error {
+			if err := c.acquireDownloadSlot(egCtx); err != nil {
+				return errors.Trace(err)
+			}
+			defer c.releaseDownloadSlot()
+
 			filePath := task.dmlPathKey.GenerateDMLFilePath(
 				&task.fileIndex,
 				c.fileExtension,
