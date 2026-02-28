@@ -20,10 +20,8 @@ import (
 
 	commonpkg "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	pkgconfig "github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
 )
 
 const outboxIDHeaderKey = "Id"
@@ -32,7 +30,6 @@ const outboxIDHeaderKey = "Id"
 type Encoder struct {
 	config         *codecCommon.Config
 	headerBindings []headerBinding
-	fallback       codecCommon.EventEncoder
 	messages       []*codecCommon.Message
 }
 
@@ -41,19 +38,7 @@ type headerBinding struct {
 	column string
 }
 
-func NewEncoder(ctx context.Context, config *codecCommon.Config) (codecCommon.EventEncoder, error) {
-	fallbackConfig := *config
-	if fallbackConfig.EncodingFormat == "" {
-		fallbackConfig.EncodingFormat = codecCommon.EncodingFormatJSON
-	}
-	if fallbackConfig.LargeMessageHandle == nil {
-		fallbackConfig.LargeMessageHandle = pkgconfig.NewDefaultLargeMessageHandleConfig()
-	}
-	fallback, err := simple.NewEncoder(ctx, &fallbackConfig)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
+func NewEncoder(_ context.Context, config *codecCommon.Config) (codecCommon.EventEncoder, error) {
 	headerBindings := make([]headerBinding, 0, len(config.OutboxHeaderColumns))
 	headerNames := make([]string, 0, len(config.OutboxHeaderColumns))
 	for header := range config.OutboxHeaderColumns {
@@ -70,7 +55,6 @@ func NewEncoder(ctx context.Context, config *codecCommon.Config) (codecCommon.Ev
 	return &Encoder{
 		config:         config,
 		headerBindings: headerBindings,
-		fallback:       fallback,
 		messages:       make([]*codecCommon.Message, 0, 1),
 	}, nil
 }
@@ -133,17 +117,19 @@ func (e *Encoder) Build() []*codecCommon.Message {
 	return ret
 }
 
-func (e *Encoder) EncodeCheckpointEvent(ts uint64) (*codecCommon.Message, error) {
-	return e.fallback.EncodeCheckpointEvent(ts)
+// EncodeCheckpointEvent returns nil: outbox-json topics carry only INSERT
+// payloads, so watermark messages are not emitted.
+func (e *Encoder) EncodeCheckpointEvent(_ uint64) (*codecCommon.Message, error) {
+	return nil, nil
 }
 
-func (e *Encoder) EncodeDDLEvent(event *commonEvent.DDLEvent) (*codecCommon.Message, error) {
-	return e.fallback.EncodeDDLEvent(event)
+// EncodeDDLEvent returns nil: outbox-json topics carry only INSERT payloads,
+// so DDL events are not emitted.
+func (e *Encoder) EncodeDDLEvent(_ *commonEvent.DDLEvent) (*codecCommon.Message, error) {
+	return nil, nil
 }
 
-func (e *Encoder) Clean() {
-	e.fallback.Clean()
-}
+func (e *Encoder) Clean() {}
 
 func getRequiredColumnValue(event *commonEvent.RowEvent, columnName string) ([]byte, error) {
 	colOffset, ok := event.TableInfo.GetColumnOffsetByName(columnName)

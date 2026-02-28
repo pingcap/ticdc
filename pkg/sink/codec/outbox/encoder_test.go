@@ -121,13 +121,13 @@ func TestEncodeCheckpointAndDDL(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	// outbox-json topics carry only INSERT payloads; checkpoint and DDL events
+	// are intentionally suppressed (nil return signals the sink to skip them).
 	checkpointMsg, err := encoder.EncodeCheckpointEvent(12345)
 	require.NoError(t, err)
-	require.NotNil(t, checkpointMsg)
-	require.NotEmpty(t, checkpointMsg.Value)
+	require.Nil(t, checkpointMsg)
 
 	ddlMsg, err := encoder.EncodeDDLEvent(ddl)
 	require.NoError(t, err)
-	require.NotNil(t, ddlMsg)
-	require.NotEmpty(t, ddlMsg.Value)
+	require.Nil(t, ddlMsg)
 }
