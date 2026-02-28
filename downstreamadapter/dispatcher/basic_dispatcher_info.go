@@ -70,7 +70,7 @@ type SharedInfo struct {
 	// such as error of flush ddl events
 	errCh chan error
 
-	// metricExecDDLHis records each DDL handling time duration,
+	// metricHandleDDLHis records each DDL handling time duration,
 	// which includes the time of executing the DDL and waiting for the DDL to be resolved.
 	metricHandleDDLHis prometheus.Observer
 }
