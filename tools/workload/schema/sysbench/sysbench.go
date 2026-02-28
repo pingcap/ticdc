@@ -99,6 +99,16 @@ func GetAddIndexStatement(n int) string {
 	return fmt.Sprintf("alter table sbtest%d add index k2(k);", n)
 }
 
+func (c *SysbenchWorkload) BuildDDLSql(opts schema.DDLOption) string {
+	// Toggle a secondary index while DML is running.
+	// Some DDL statements may fail if the index already exists / does not exist,
+	// those are handled by the DDL executor.
+	if rand.Intn(2) == 0 {
+		return fmt.Sprintf("alter table sbtest%d add index k2(k);", opts.TableIndex)
+	}
+	return fmt.Sprintf("alter table sbtest%d drop index k2;", opts.TableIndex)
+}
+
 func (c *SysbenchWorkload) BuildUpdateSql(opts schema.UpdateOption) string {
 	panic("unimplemented")
 }

@@ -17,6 +17,7 @@ import (
 	"flag"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // WorkloadConfig saves all the configurations for the workload
@@ -40,10 +41,15 @@ type WorkloadConfig struct {
 	PercentageForUpdate float64
 	PercentageForDelete float64
 
+	// DDL related
+	DDLThread   int
+	DDLInterval time.Duration
+
 	// Action control
 	Action          string
 	SkipCreateTable bool
 	OnlyDDL         bool
+	OnlyDML         bool
 
 	// Special workload config
 	RowSize       int
@@ -53,6 +59,9 @@ type WorkloadConfig struct {
 	UpdateLargeColumnSize int
 	// For sysbench workload
 	RangeNum int
+
+	// Partition related
+	Partitioned bool
 
 	// Log related
 	LogFile  string
@@ -81,10 +90,15 @@ func NewWorkloadConfig() *WorkloadConfig {
 		PercentageForUpdate: 0,
 		PercentageForDelete: 0,
 
+		// Default ddl config
+		DDLThread:   0,
+		DDLInterval: 5 * time.Second,
+
 		// Action control
 		Action:          "prepare",
 		SkipCreateTable: false,
 		OnlyDDL:         false,
+		OnlyDML:         false,
 
 		// For large row workload
 		RowSize:       10240,
@@ -96,6 +110,9 @@ func NewWorkloadConfig() *WorkloadConfig {
 
 		// For sysbench workload
 		RangeNum: 5,
+
+		// Partition related
+		Partitioned: true,
 
 		// Log related
 		LogFile:  "workload.log",
@@ -114,15 +131,18 @@ func (c *WorkloadConfig) ParseFlags() error {
 	flag.Uint64Var(&c.TotalRowCount, "total-row-count", c.TotalRowCount, "the total row count of the workload, default is 1 billion")
 	flag.Float64Var(&c.PercentageForUpdate, "percentage-for-update", c.PercentageForUpdate, "percentage for update: [0, 1.0]")
 	flag.Float64Var(&c.PercentageForDelete, "percentage-for-delete", c.PercentageForDelete, "percentage for delete: [0, 1.0]")
+	flag.IntVar(&c.DDLThread, "ddl-thread", c.DDLThread, "concurrency for ddl workload")
+	flag.DurationVar(&c.DDLInterval, "ddl-interval", c.DDLInterval, "ddl execution interval, e.g. 1s, 500ms")
 	flag.BoolVar(&c.SkipCreateTable, "skip-create-table", c.SkipCreateTable, "do not create tables")
-	flag.StringVar(&c.Action, "action", c.Action, "action of the workload: [prepare, insert, update, delete, write, cleanup]")
-	flag.StringVar(&c.WorkloadType, "workload-type", c.WorkloadType, "workload type: [bank, sysbench, large_row, shop_item, uuu, bank2, bank_update, crawler, dc]")
+	flag.StringVar(&c.Action, "action", c.Action, "action of the workload: [prepare, insert, update, delete, write, ddl, cleanup]")
+	flag.StringVar(&c.WorkloadType, "workload-type", c.WorkloadType, "workload type: [bank, sysbench, large_row, shop_item, uuu, bank2, bank3, bank_update, crawler, dc]")
 	flag.StringVar(&c.DBHost, "database-host", c.DBHost, "database host")
 	flag.StringVar(&c.DBUser, "database-user", c.DBUser, "database user")
 	flag.StringVar(&c.DBPassword, "database-password", c.DBPassword, "database password")
 	flag.StringVar(&c.DBName, "database-db-name", c.DBName, "database db name")
 	flag.IntVar(&c.DBPort, "database-port", c.DBPort, "database port")
-	flag.BoolVar(&c.OnlyDDL, "only-ddl", c.OnlyDDL, "only generate ddl")
+	flag.BoolVar(&c.OnlyDDL, "only-ddl", c.OnlyDDL, "run only ddl (skip dml workers)")
+	flag.BoolVar(&c.OnlyDML, "only-dml", c.OnlyDML, "run only dml (skip ddl workers)")
 	flag.StringVar(&c.LogFile, "log-file", c.LogFile, "log file path")
 	flag.StringVar(&c.LogLevel, "log-level", c.LogLevel, "log file path")
 	// For large row workload
@@ -132,6 +152,8 @@ func (c *WorkloadConfig) ParseFlags() error {
 	flag.IntVar(&c.UpdateLargeColumnSize, "update-large-column-size", c.UpdateLargeColumnSize, "the size of the large column to update")
 	// For sysbench workload
 	flag.IntVar(&c.RangeNum, "range-num", c.RangeNum, "the number of ranges for sysbench workload")
+	// Partition related
+	flag.BoolVar(&c.Partitioned, "partitioned", c.Partitioned, "whether to create tables as partitioned tables when the workload supports it")
 
 	flag.Parse()
 
@@ -144,6 +166,33 @@ func (c *WorkloadConfig) ParseFlags() error {
 	if c.PercentageForUpdate+c.PercentageForDelete > 1.0 {
 		return fmt.Errorf("PercentageForUpdate (%.2f) + PercentageForDelete (%.2f) must be <= 1.0",
 			c.PercentageForUpdate, c.PercentageForDelete)
+	}
+
+	if c.DDLThread < 0 {
+		return fmt.Errorf("ddl-thread must be >= 0, got %d", c.DDLThread)
+	}
+	if c.DDLInterval < 0 {
+		return fmt.Errorf("ddl-interval must be >= 0, got %s", c.DDLInterval)
+	}
+
+	if c.OnlyDDL && c.OnlyDML {
+		return fmt.Errorf("only-ddl and only-dml cannot both be true")
+	}
+	if c.OnlyDML && c.Action == "ddl" {
+		return fmt.Errorf("only-dml cannot be used with -action=ddl")
+	}
+
+	// Convenience mode:
+	// - only-ddl: force action=ddl and ensure at least 1 ddl worker.
+	// - only-dml: force ddl-thread=0 to disable ddl workers.
+	if c.OnlyDDL {
+		c.Action = "ddl"
+		if c.DDLThread == 0 {
+			c.DDLThread = 1
+		}
+	}
+	if c.OnlyDML {
+		c.DDLThread = 0
 	}
 
 	return nil
