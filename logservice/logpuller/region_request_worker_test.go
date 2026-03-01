@@ -14,6 +14,7 @@
 package logpuller
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -37,4 +38,29 @@ func TestRegionStatesOperation(t *testing.T) {
 	require.NotNil(t, worker.takeRegionState(1, 2))
 	require.Nil(t, worker.getRegionState(1, 2))
 	require.Equal(t, 0, len(worker.requestedRegions.subscriptions))
+}
+
+func TestClearPendingRegionsReleaseSlotForPreFetchedRegion(t *testing.T) {
+	worker := &regionRequestWorker{
+		requestCache: newRequestCache(10),
+	}
+
+	ctx := context.Background()
+	region := createTestRegionInfo(1, 1)
+
+	ok, err := worker.requestCache.add(ctx, region, false)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	req, err := worker.requestCache.pop(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, worker.requestCache.getPendingCount())
+
+	worker.preFetchForConnecting = new(regionInfo)
+	*worker.preFetchForConnecting = req.regionInfo
+
+	regions := worker.clearPendingRegions()
+	require.Len(t, regions, 1)
+	require.Nil(t, worker.preFetchForConnecting)
+	require.Equal(t, 0, worker.requestCache.getPendingCount())
 }

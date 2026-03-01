@@ -590,15 +590,15 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 
 		region := regionTask.GetRegionInfo()
 		if region.isStopped() {
-			s.stores.Range(func(key, value any) bool {
-				rs := value.(*requestedStore)
-				rs.requestWorkers.RLock()
-				for _, worker := range rs.requestWorkers.s {
-					worker.add(ctx, region, true)
-				}
-				rs.requestWorkers.RUnlock()
-				return true
-			})
+			enqueued, err := s.enqueueRegionToAllStores(ctx, region)
+			if err != nil {
+				return err
+			}
+			if !enqueued {
+				log.Debug("enqueue stop request failed, retry later",
+					zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)))
+				s.regionTaskQueue.Push(regionTask)
+			}
 			continue
 		}
 
@@ -632,6 +632,32 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 			zap.Uint64("regionID", region.verID.GetID()),
 			zap.String("addr", store.storeAddr))
 	}
+}
+
+func (s *subscriptionClient) enqueueRegionToAllStores(ctx context.Context, region regionInfo) (bool, error) {
+	enqueued := true
+	var firstErr error
+	s.stores.Range(func(_ any, value any) bool {
+		rs := value.(*requestedStore)
+		rs.requestWorkers.RLock()
+		workers := rs.requestWorkers.s
+		rs.requestWorkers.RUnlock()
+		for _, worker := range workers {
+			ok, err := worker.add(ctx, region, true)
+			if err != nil {
+				firstErr = err
+				enqueued = false
+				return false
+			}
+			if !ok {
+				enqueued = false
+				// It is likely the store is busy, no need to try other workers in this store now.
+				break
+			}
+		}
+		return true
+	})
+	return enqueued, firstErr
 }
 
 func (s *subscriptionClient) attachRPCContextForRegion(ctx context.Context, region regionInfo) (regionInfo, bool) {

@@ -84,17 +84,17 @@ func newRegionRequestWorker(
 				zap.String("addr", store.storeAddr))
 		}
 		for {
-			region, err := worker.requestCache.pop(ctx)
+			req, err := worker.requestCache.pop(ctx)
 			if err != nil {
 				return err
 			}
-			if !region.regionInfo.isStopped() {
-				worker.preFetchForConnecting = new(regionInfo)
-				*worker.preFetchForConnecting = region.regionInfo
-				return nil
-			} else {
+			if req.regionInfo.isStopped() {
+				worker.requestCache.markDone()
 				continue
 			}
+			worker.preFetchForConnecting = new(regionInfo)
+			*worker.preFetchForConnecting = req.regionInfo
+			return nil
 		}
 	}
 
@@ -298,10 +298,27 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 			zap.Any("regionIDs", resolvedTsEvent.Regions))
 		return
 	}
-	resolvedStates := make([]*regionFeedState, 0, len(resolvedTsEvent.Regions))
+	// Avoid allocating a huge states slice when resolvedTsEvent.Regions is large.
+	// Push resolved-ts events in batches to reduce peak memory usage and improve GC behavior.
+	const resolvedTsStateBatchSize = 1024
+	resolvedStates := make([]*regionFeedState, 0, resolvedTsStateBatchSize)
+	flush := func() {
+		if len(resolvedStates) == 0 {
+			return
+		}
+		states := resolvedStates
+		s.client.pushRegionEventToDS(subscriptionID, regionEvent{
+			resolvedTs: resolvedTsEvent.Ts,
+			states:     states,
+		})
+		resolvedStates = make([]*regionFeedState, 0, resolvedTsStateBatchSize)
+	}
 	for _, regionID := range resolvedTsEvent.Regions {
 		if state := s.getRegionState(subscriptionID, regionID); state != nil {
 			resolvedStates = append(resolvedStates, state)
+			if len(resolvedStates) >= resolvedTsStateBatchSize {
+				flush()
+			}
 			continue
 		}
 		log.Warn("region request worker receives a resolved ts event for an untracked region",
@@ -310,13 +327,7 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 			zap.Uint64("regionID", regionID),
 			zap.Uint64("resolvedTs", resolvedTsEvent.Ts))
 	}
-	if len(resolvedStates) == 0 {
-		return
-	}
-	s.client.pushRegionEventToDS(subscriptionID, regionEvent{
-		resolvedTs: resolvedTsEvent.Ts,
-		states:     resolvedStates,
-	})
+	flush()
 }
 
 // processRegionSendTask receives region requests from the channel and sends them to the remote store.
@@ -374,6 +385,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 				},
 				FilterLoop: region.filterLoop,
 			}
+			s.requestCache.markDone()
 			if err := doSend(req); err != nil {
 				return err
 			}
@@ -384,17 +396,18 @@ func (s *regionRequestWorker) processRegionSendTask(
 				}
 				s.client.pushRegionEventToDS(subID, regionEvent)
 			}
-
 		} else if region.subscribedSpan.stopped.Load() {
 			// It can be skipped directly because there must be no pending states from
 			// the stopped subscribedTable, or the special singleRegionInfo for stopping
 			// the table will be handled later.
-			s.client.onRegionFail(newRegionErrorInfo(region, &sendRequestToStoreErr{}))
+			s.client.onRegionFail(newRegionErrorInfo(region, &requestCancelledErr{}))
+			s.requestCache.markDone()
 		} else {
 			state := newRegionFeedState(region, uint64(subID), s)
 			state.start()
 			s.addRegionState(subID, region.verID.GetID(), state)
 			if err := doSend(s.createRegionRequest(region)); err != nil {
+				s.requestCache.markDone()
 				return err
 			}
 			s.requestCache.markSent(regionReq)
@@ -485,6 +498,9 @@ func (s *regionRequestWorker) clearPendingRegions() []regionInfo {
 		region := *s.preFetchForConnecting
 		s.preFetchForConnecting = nil
 		regions = append(regions, region)
+		// The pre-fetched region was popped from pendingQueue but hasn't been marked as sent or done yet.
+		// Release its pendingCount slot to avoid leaking flow control credits on worker failures.
+		s.requestCache.markDone()
 	}
 
 	// Clear all regions from cache

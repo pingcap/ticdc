@@ -60,7 +60,11 @@ type requestCache struct {
 		regionReqs map[SubscriptionID]map[uint64]regionReq
 	}
 
-	// counter for sent but not initialized requests
+	// pendingCount is a flow control slot counter.
+	// A slot is acquired when a request is successfully enqueued into pendingQueue (see add),
+	// and is released when the request is finished/removed (resolve/markStopped/markDone/clear).
+	// pop and markSent don't change it. If markSent overwrites an existing request for the same region,
+	// it will release a slot for the replaced request to avoid leaking pendingCount.
 	pendingCount atomic.Int64
 	// maximum number of pending requests allowed
 	maxPendingCount int64
@@ -104,12 +108,10 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) (
 			case <-ctx.Done():
 				return false, ctx.Err()
 			case c.pendingQueue <- req:
-				c.incPendingCount()
+				c.pendingCount.Inc()
 				cost := time.Since(start)
 				metrics.SubscriptionClientAddRegionRequestDuration.Observe(cost.Seconds())
 				return true, nil
-			case <-c.spaceAvailable:
-				continue
 			case <-ticker.C:
 				addReqRetryLimit--
 				if addReqRetryLimit <= 0 {
@@ -135,7 +137,9 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) (
 	}
 }
 
-// pop gets the next pending request, returns nil if queue is empty
+// pop gets the next pending request.
+// Note: it doesn't change pendingCount. The slot acquired in add() should be released later
+// (e.g. resolve/markStopped/markDone).
 func (c *requestCache) pop(ctx context.Context) (regionReq, error) {
 	select {
 	case req := <-c.pendingQueue:
@@ -145,7 +149,8 @@ func (c *requestCache) pop(ctx context.Context) (regionReq, error) {
 	}
 }
 
-// markSent marks a request as sent and adds it to sent requests
+// markSent marks a request as sent and adds it to sent requests.
+// It doesn't change pendingCount: the slot is released when the request is finished/removed.
 func (c *requestCache) markSent(req regionReq) {
 	c.sentRequests.Lock()
 	defer c.sentRequests.Unlock()
@@ -157,10 +162,20 @@ func (c *requestCache) markSent(req regionReq) {
 		c.sentRequests.regionReqs[req.regionInfo.subscribedSpan.subID] = m
 	}
 
+	if oldReq, exists := m[req.regionInfo.verID.GetID()]; exists {
+		log.Warn("region request overwritten",
+			zap.Uint64("subID", uint64(req.regionInfo.subscribedSpan.subID)),
+			zap.Uint64("regionID", req.regionInfo.verID.GetID()),
+			zap.Float64("oldAgeSec", time.Since(oldReq.createTime).Seconds()),
+			zap.Float64("newAgeSec", time.Since(req.createTime).Seconds()),
+			zap.Int("pendingCount", int(c.pendingCount.Load())),
+			zap.Int("pendingQueueLen", len(c.pendingQueue)))
+		c.markDone()
+	}
 	m[req.regionInfo.verID.GetID()] = req
 }
 
-// markStopped removes a sent request without changing pending count (for stopped regions)
+// markStopped removes a sent request and releases a slot.
 func (c *requestCache) markStopped(subID SubscriptionID, regionID uint64) {
 	c.sentRequests.Lock()
 	defer c.sentRequests.Unlock()
@@ -176,12 +191,7 @@ func (c *requestCache) markStopped(subID SubscriptionID, regionID uint64) {
 	}
 
 	delete(regionReqs, regionID)
-	c.decPendingCount()
-	// Notify waiting add operations that there's space available
-	select {
-	case c.spaceAvailable <- struct{}{}:
-	default: // If channel is full, skip notification
-	}
+	c.markDone()
 }
 
 // resolve marks a region as initialized and removes it from sent requests
@@ -201,18 +211,13 @@ func (c *requestCache) resolve(subscriptionID SubscriptionID, regionID uint64) b
 	// Check if the subscription ID matches
 	if req.regionInfo.subscribedSpan.subID == subscriptionID {
 		delete(regionReqs, regionID)
-		c.decPendingCount()
+		c.markDone()
 		cost := time.Since(req.createTime).Seconds()
 		if cost > 0 && cost < abnormalRequestDurationInSec {
 			log.Debug("cdc resolve region request", zap.Uint64("subID", uint64(subscriptionID)), zap.Uint64("regionID", regionID), zap.Float64("cost", cost), zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("pendingQueueLen", len(c.pendingQueue)))
 			metrics.RegionRequestFinishScanDuration.Observe(cost)
 		} else {
 			log.Info("region request duration abnormal, skip metric", zap.Float64("cost", cost), zap.Uint64("regionID", regionID))
-		}
-		// Notify waiting add operations that there's space available
-		select {
-		case c.spaceAvailable <- struct{}{}:
-		default: // If channel is full, skip notification
 		}
 		return true
 	}
@@ -235,8 +240,8 @@ func (c *requestCache) clearStaleRequest() {
 				regionReq.regionInfo.subscribedSpan.stopped.Load() ||
 				regionReq.regionInfo.lockedRangeState.Initialized.Load() ||
 				regionReq.isStale() {
-				c.decPendingCount()
-				log.Info("region worker delete stale region request",
+				c.markDone()
+				log.Warn("region worker delete stale region request",
 					zap.Uint64("subID", uint64(subID)),
 					zap.Uint64("regionID", regionID),
 					zap.Int("pendingCount", int(c.pendingCount.Load())),
@@ -247,7 +252,7 @@ func (c *requestCache) clearStaleRequest() {
 					zap.Time("createTime", regionReq.createTime))
 				delete(regionReqs, regionID)
 			} else {
-				reqCount += 1
+				reqCount++
 			}
 		}
 		if len(regionReqs) == 0 {
@@ -255,9 +260,19 @@ func (c *requestCache) clearStaleRequest() {
 		}
 	}
 
-	if reqCount == 0 && c.pendingCount.Load() != 0 {
-		log.Info("region worker pending request count is not equal to actual region request count, correct it", zap.Int("pendingCount", int(c.pendingCount.Load())), zap.Int("actualReqCount", reqCount))
+	// If there are no in-cache region requests but pendingCount isn't 0, it means pendingCount is stale.
+	// Reset it to avoid blocking add() forever.
+	if reqCount == 0 && len(c.pendingQueue) == 0 && c.pendingCount.Load() != 0 {
+		log.Info("region worker pending request count is not equal to actual region request count, correct it",
+			zap.Int("pendingCount", int(c.pendingCount.Load())),
+			zap.Int("actualReqCount", reqCount),
+			zap.Int("pendingQueueLen", len(c.pendingQueue)))
 		c.pendingCount.Store(0)
+		// Notify waiting add operations that there's space available.
+		select {
+		case c.spaceAvailable <- struct{}{}:
+		default:
+		}
 	}
 
 	c.lastCheckStaleRequestTime.Store(time.Now())
@@ -273,7 +288,7 @@ LOOP:
 		select {
 		case req := <-c.pendingQueue:
 			regions = append(regions, req.regionInfo)
-			c.decPendingCount()
+			c.markDone()
 		default:
 			break LOOP
 		}
@@ -286,7 +301,7 @@ LOOP:
 		for regionID := range regionReqs {
 			regions = append(regions, regionReqs[regionID].regionInfo)
 			delete(regionReqs, regionID)
-			c.decPendingCount()
+			c.markDone()
 		}
 		delete(c.sentRequests.regionReqs, subID)
 	}
@@ -298,17 +313,27 @@ func (c *requestCache) getPendingCount() int {
 	return int(c.pendingCount.Load())
 }
 
-func (c *requestCache) incPendingCount() {
-	c.pendingCount.Inc()
-}
-
-func (c *requestCache) decPendingCount() {
-	// Ensure pendingCount doesn't go below 0
-	current := c.pendingCount.Load()
-	newCount := current - int64(1)
-	if newCount < 0 {
-		c.pendingCount.Store(0)
-		return
+func (c *requestCache) markDone() {
+	// Decrement pendingCount by 1, but never let it go below 0.
+	// Do it with CAS to avoid clobbering concurrent Inc() calls.
+	for {
+		old := c.pendingCount.Load()
+		if old <= 0 {
+			if old == 0 {
+				break
+			}
+			if c.pendingCount.CompareAndSwap(old, 0) {
+				break
+			}
+			continue
+		}
+		if c.pendingCount.CompareAndSwap(old, old-1) {
+			break
+		}
 	}
-	c.pendingCount.Dec()
+	// Notify waiting add operations that there's space available.
+	select {
+	case c.spaceAvailable <- struct{}{}:
+	default: // If channel is full, skip notification
+	}
 }
