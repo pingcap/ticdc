@@ -498,6 +498,9 @@ func (s *regionRequestWorker) clearPendingRegions() []regionInfo {
 		region := *s.preFetchForConnecting
 		s.preFetchForConnecting = nil
 		regions = append(regions, region)
+		// The pre-fetched region was popped from pendingQueue but hasn't been marked as sent or done yet.
+		// Release its pendingCount slot to avoid leaking flow control credits on worker failures.
+		s.requestCache.markDone()
 	}
 
 	// Clear all regions from cache
