@@ -1,0 +1,14 @@
+newarch = true
+
+[debug.encryption]
+enable-encryption = true
+allow-degrade-on-error = false
+meta-refresh-interval = "1s"
+meta-cache-ttl = "1s"
+
+[debug.encryption.kms]
+[debug.encryption.kms.aws]
+region = "eu-west-2"
+endpoint = "http://127.0.0.1:18080"
+access-key = "test"
+secret-access-key = "test"
