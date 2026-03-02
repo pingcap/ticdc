@@ -124,7 +124,8 @@ func expectProgressTableInit(mock sqlmock.Sqlmock) {
 func expectProgressInsert(mock sqlmock.Sqlmock, changefeed, cluster string, checkpoint uint64, tables []*event.SchemaTableName) {
 	args := make([]driver.Value, 0, len(tables)*5)
 	for _, tbl := range tables {
-		args = append(args, changefeed, cluster, tbl.SchemaName, tbl.TableName, checkpoint)
+		// the tables order is not guaranteed, so we only check the other field in the args.
+		args = append(args, changefeed, cluster, tbl.SchemaName, sqlmock.AnyArg(), checkpoint)
 	}
 	mock.ExpectExec("INSERT INTO `" + filter.TiCDCSystemSchema + "`.`" + progressTableName + "`").
 		WithArgs(args...).

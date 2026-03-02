@@ -54,6 +54,21 @@ func (mr *MockOwnerCaptureInfoClientMockRecorder) GetCaptures(arg0 interface{}) 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetCaptures", reflect.TypeOf((*MockOwnerCaptureInfoClient)(nil).GetCaptures), arg0)
 }
 
+// GetLogCoordinatorRevision mocks base method.
+func (m *MockOwnerCaptureInfoClient) GetLogCoordinatorRevision(arg0 context.Context, arg1 config.CaptureID) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetLogCoordinatorRevision", arg0, arg1)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetLogCoordinatorRevision indicates an expected call of GetLogCoordinatorRevision.
+func (mr *MockOwnerCaptureInfoClientMockRecorder) GetLogCoordinatorRevision(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLogCoordinatorRevision", reflect.TypeOf((*MockOwnerCaptureInfoClient)(nil).GetLogCoordinatorRevision), arg0, arg1)
+}
+
 // GetOwnerID mocks base method.
 func (m *MockOwnerCaptureInfoClient) GetOwnerID(arg0 context.Context) (config.CaptureID, error) {
 	m.ctrl.T.Helper()
@@ -268,6 +283,21 @@ func (m *MockCDCEtcdClient) GetGCServiceID() string {
 func (mr *MockCDCEtcdClientMockRecorder) GetGCServiceID() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetGCServiceID", reflect.TypeOf((*MockCDCEtcdClient)(nil).GetGCServiceID))
+}
+
+// GetLogCoordinatorRevision mocks base method.
+func (m *MockCDCEtcdClient) GetLogCoordinatorRevision(arg0 context.Context, arg1 config.CaptureID) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetLogCoordinatorRevision", arg0, arg1)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetLogCoordinatorRevision indicates an expected call of GetLogCoordinatorRevision.
+func (mr *MockCDCEtcdClientMockRecorder) GetLogCoordinatorRevision(arg0, arg1 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetLogCoordinatorRevision", reflect.TypeOf((*MockCDCEtcdClient)(nil).GetLogCoordinatorRevision), arg0, arg1)
 }
 
 // GetOwnerID mocks base method.

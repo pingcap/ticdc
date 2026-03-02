@@ -44,6 +44,18 @@ type AddDispatcherOperator struct {
 	//   - The task is removed (for example, due to DDL).
 	removed        atomic.Bool
 	spanController *span.Controller
+	// operatorType is copied into ScheduleDispatcherRequest.OperatorType when we send add requests to
+	// dispatcher managers.
+	//
+	// Why we need it:
+	// Dispatcher managers persist unfinished scheduling requests in their bootstrap responses, so a new
+	// maintainer can restore in-flight operators after failover. operatorType tells the maintainer which
+	// high-level operator this "create dispatcher" request belongs to (Add vs Split, etc.), even though the
+	// dispatcher manager itself only executes Create/Remove.
+	//
+	// Note: Not every maintainer operator needs this field. Operators that use dedicated message types
+	// (for example merge) don't go through ScheduleDispatcherRequest and therefore don't need operatorType here.
+	operatorType heartbeatpb.OperatorType
 
 	sendThrottler sendThrottler
 }
@@ -52,11 +64,13 @@ func NewAddDispatcherOperator(
 	spanController *span.Controller,
 	replicaSet *replica.SpanReplication,
 	dest node.ID,
+	operatorType heartbeatpb.OperatorType,
 ) *AddDispatcherOperator {
 	return &AddDispatcherOperator{
 		replicaSet:     replicaSet,
 		dest:           dest,
 		spanController: spanController,
+		operatorType:   operatorType,
 		sendThrottler:  newSendThrottler(),
 	}
 }
@@ -93,7 +107,7 @@ func (m *AddDispatcherOperator) Schedule() *messaging.TargetMessage {
 	if !m.sendThrottler.shouldSend() {
 		return nil
 	}
-	return m.replicaSet.NewAddDispatcherMessage(m.dest)
+	return m.replicaSet.NewAddDispatcherMessage(m.dest, m.operatorType)
 }
 
 // OnNodeRemove is called when node offline, and the replicaset must already move to absent status and will be scheduled again
@@ -122,6 +136,11 @@ func (m *AddDispatcherOperator) OnTaskRemoved() {
 }
 
 func (m *AddDispatcherOperator) Start() {
+	// Start can race with task cleanup (OnTaskRemoved / PostFinish) during DDL / failover.
+	// Avoid rebinding the span after the operator is already marked removed/finished.
+	if m.removed.Load() || m.finished.Load() {
+		return
+	}
 	m.spanController.BindSpanToNode("", m.dest, m.replicaSet)
 }
 

@@ -144,9 +144,9 @@ type BasicDispatcher struct {
 	//    to avoid duplicate writes while ensuring the DDL is replayed.
 	// Note: When is_syncpoint=true AND finished=0 (DDL finished but syncpoint not finished),
 	// skipDMLAsStartTs is false because the DDL is already completed and DML should be processed normally.
-	// 2. maintainer ask dispatcher to make a move operator, while the dispatcher just dealing with a ddl event.
-	//    and the block state for ddl event is still waiting.
-	//    In this case, we also return startTs = ddlTs-1 to replay the DDL but skip the dmls.
+	// 2. maintainer asks dispatcher manager to move/recreate a dispatcher while this dispatcher is still
+	//    in the WAITING stage of a DDL barrier.
+	//    In this case, we also return startTs = ddlTs-1 to replay the DDL but skip the DMLs at ddlTs.
 	skipDMLAsStartTs bool
 	// The ts from pdClock when the dispatcher is created.
 	// when downstream is mysql-class, for dml event we need to compare the commitTs with this ts
@@ -217,10 +217,9 @@ type BasicDispatcher struct {
 
 	BootstrapState bootstrapState
 
-	// tableModeCompatibilityChecked indicates whether we have already validated that
-	// the table schema is compatible with the current replication mode configuration.
-	// The first DML/DDL must trigger this validation. After that, only DDL events need
-	// to keep checking because they may change the table schema.
+	// tableModeCompatibilityChecked indicates whether we have already validated the newest
+	// table schema is compatible with the current replication mode configuration.
+	// Only when the initial case or a ddl event is received, we will reset tableModeCompatibilityChecked to check the compatibility.
 	tableModeCompatibilityChecked bool
 }
 
@@ -402,20 +401,19 @@ func (d *BasicDispatcher) ensureActiveActiveTableInfo(tableInfo *common.TableInf
 	return nil
 }
 
-// checkTableModeCompatibility validates that the table schema matches the current replication mode configuration.
-//
+// checkTableModeCompatibility validates that the newest table schema matches the current replication mode configuration.
 // It prevents misconfigurations where a special table (active-active / soft-delete) is replicated with
-// incompatible settings. It also marks tableModeCompatibilityChecked so DML events can skip repeated
-// checks, while DDL events continue to validate because they may change the table schema.
+// incompatible settings.
 func (d *BasicDispatcher) checkTableModeCompatibility(event commonEvent.Event) error {
 	defer func() {
 		d.tableModeCompatibilityChecked = true
 	}()
+
 	switch ev := event.(type) {
 	case *commonEvent.DMLEvent:
 		return d.ensureTableModeCompatibility(ev.TableInfo)
-	case *commonEvent.DDLEvent:
-		return d.ensureTableModeCompatibility(ev.TableInfo)
+	default:
+		log.Error("unexpected event type for table mode compatibility check", zap.Int("eventType", event.GetType()))
 	}
 	return nil
 }
@@ -638,10 +636,10 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				log.Panic("ddl event should only be singly handled",
 					zap.Stringer("dispatcherID", d.id))
 			}
-			if err := d.checkTableModeCompatibility(event); err != nil {
-				d.HandleError(err)
-				return block
-			}
+			// reset the tableModeCompatibilityChecked when receive a ddl event,
+			// because ddl event may change the table schema,
+			// which may cause the table not compatible with current replication mode anymore.
+			d.tableModeCompatibilityChecked = false
 
 			failpoint.Inject("BlockOrWaitBeforeDealWithDDL", nil)
 			block = true
@@ -821,6 +819,11 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 	return false
 }
 
+// ExecuteBlockEventDDL writes the block event to the sink and then reports DONE to the maintainer.
+//
+// It is invoked via the block-event executor to avoid blocking the dynamic stream goroutine on downstream IO
+// (DDL execution / syncpoint flush). Keeping the write-report-wake sequence in a dedicated method also makes it
+// easier for tests and failpoints to control interleavings around block events.
 func (d *BasicDispatcher) ExecuteBlockEventDDL(pendingEvent commonEvent.BlockEvent, actionCommitTs uint64, actionIsSyncPoint bool) {
 	failpoint.Inject("BlockOrWaitBeforeWrite", nil)
 	err := d.AddBlockEventToSink(pendingEvent)
@@ -1013,8 +1016,9 @@ func (d *BasicDispatcher) cancelResendTask(identifier BlockEventIdentifier) {
 func (d *BasicDispatcher) tryDealWithHeldBlockEvent() {
 	// If there is a held DB/All block event, report it as soon as all resend tasks are ACKed.
 	// For schedule-related non-blocking DDLs, the maintainer only ACKs after scheduling is done.
-	// For schedule-related blocking DDLs, the maintainer will only begin deal with after no pending scheduling tasks.
-	// Thus, we ensure DB/All block events can genereate correct range checkers.
+	// For schedule-related blocking DDLs, the maintainer will only begin dealing with them after there are
+	// no pending scheduling tasks.
+	// Thus, we ensure DB/All block events can generate correct range checkers.
 	if d.pendingACKCount.Load() == 0 {
 		if holding := d.popHoldingBlockEvent(); holding != nil {
 			d.reportBlockedEventToMaintainer(holding)
@@ -1085,6 +1089,11 @@ func (d *BasicDispatcher) reportBlockedEventToMaintainer(event commonEvent.Block
 	d.sharedInfo.blockStatusesChan <- message
 }
 
+// GetBlockEventStatus returns the current in-flight *blocking* barrier state for bootstrap.
+//
+// We only report statuses for events that actually block the event stream (multi-table DDLs, split-span DDLs,
+// and syncpoints). Non-blocking DDLs that only add/drop tables are reported separately and can be recovered by
+// the maintainer from the table trigger dispatcher's startTs, so they don't need to be restored here.
 func (d *BasicDispatcher) GetBlockEventStatus() *heartbeatpb.State {
 	pendingEvent, blockStage := d.blockEventStatus.getEventAndStage()
 
@@ -1120,6 +1129,9 @@ func (d *BasicDispatcher) Remove() {
 // TryClose will return the watermark of current dispatcher, and return true when the dispatcher finished sending events to sink.
 // DispatcherManager will clean the dispatcher info after Remove() is called.
 func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
+	failpoint.Inject("NotReadyToCloseDispatcher", func() {
+		failpoint.Return(w, false)
+	})
 	// If sink is normal(not meet error), we need to wait all the events in sink to flushed downstream successfully
 	// If sink is not normal, we can close the dispatcher immediately.
 	if !d.sink.IsNormal() || (d.tableProgress.Empty() && !d.duringHandleEvents.Load()) {

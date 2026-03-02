@@ -101,10 +101,14 @@ func TestDDLEventsAlwaysValidateActiveActive(t *testing.T) {
 	dispatcher := newTestBasicDispatcher(t, common.MysqlSinkType, false)
 	dispatcher.tableModeCompatibilityChecked = true
 
-	tableInfo := &common.TableInfo{
-		TableName:       common.TableName{Schema: "test", Table: "ddl", TableID: 45},
-		SoftDeleteTable: true,
-	}
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+	createTableSQL := "create table t (id int primary key, name varchar(32));"
+	event := helper.DDL2Event(createTableSQL)
+	tableInfo := event.TableInfo
+	tableInfo.SoftDeleteTable = true
+
 	ddl := &commonEvent.DDLEvent{
 		DispatcherID: dispatcher.id,
 		TableInfo:    tableInfo,
@@ -112,6 +116,9 @@ func TestDDLEventsAlwaysValidateActiveActive(t *testing.T) {
 	}
 	dispatcher.handleEvents([]DispatcherEvent{{Event: ddl}}, func() {})
 
+	require.Equal(t, false, dispatcher.tableModeCompatibilityChecked, "DDL events should reset tableModeCompatibilityChecked")
+	dml := commonEvent.NewDMLEvent(dispatcher.id, tableInfo.TableName.TableID, dispatcher.startTs+3, dispatcher.startTs+4, tableInfo)
+	dispatcher.handleEvents([]DispatcherEvent{{Event: dml}}, func() {})
 	select {
 	case err := <-dispatcher.sharedInfo.errCh:
 		require.Contains(t, err.Error(), "soft delete")

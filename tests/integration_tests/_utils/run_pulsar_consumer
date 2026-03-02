@@ -12,7 +12,31 @@ cd $workdir
 # we need to set `batch-dml-enable` to false to avoid data inconsistency.
 downstream_uri="mysql://root@127.0.0.1:3306/?safe-mode=true&batch-dml-enable=false&enable-ddl-ts=false"
 
+# By default, pulsar does not guarantee global ordering across multiple producers.
+# When upstream enables table-across-nodes (multiple dispatchers/captures producing to the same topic),
+# the consumer can see out-of-order DML commitTs. The consumer needs scheduler.enable-table-across-nodes=true
+# to accept and reorder these fallback events instead of dropping them.
+add_default_config=true
+for arg in "$@"; do
+	case "$arg" in
+	--config | --config=*)
+		add_default_config=false
+		break
+		;;
+	esac
+done
+
+consumer_config_args=()
+if $add_default_config; then
+	consumer_replica_config="$workdir/pulsar_consumer_replica_config.toml"
+	cat >"$consumer_replica_config" <<-'EOF'
+		[scheduler]
+		enable-table-across-nodes=true
+	EOF
+	consumer_config_args=(--config "$consumer_replica_config")
+fi
+
 # output debug log to allow us to check the consumer's behavior when it encounters errors
-cdc_pulsar_consumer --log-file $workdir/cdc_pulsar_consumer$log_suffix.log --log-level debug --downstream-uri ${downstream_uri} "$@" >>$workdir/cdc_pulsar_consumer_stdout$log_suffix.log 2>&1 &
+cdc_pulsar_consumer --log-file $workdir/cdc_pulsar_consumer$log_suffix.log --log-level debug --downstream-uri ${downstream_uri} "${consumer_config_args[@]}" "$@" >>$workdir/cdc_pulsar_consumer_stdout$log_suffix.log 2>&1 &
 
 cd $pwd
