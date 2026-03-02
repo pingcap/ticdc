@@ -72,20 +72,6 @@ func (mr *MockSinkMockRecorder) Close(removeChangefeed interface{}) *gomock.Call
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockSink)(nil).Close), removeChangefeed)
 }
 
-// IsNormal mocks base method.
-func (m *MockSink) IsNormal() bool {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "IsNormal")
-	ret0, _ := ret[0].(bool)
-	return ret0
-}
-
-// IsNormal indicates an expected call of IsNormal.
-func (mr *MockSinkMockRecorder) IsNormal() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsNormal", reflect.TypeOf((*MockSink)(nil).IsNormal))
-}
-
 // FlushDMLBeforeBlock mocks base method.
 func (m *MockSink) FlushDMLBeforeBlock(event event.BlockEvent) error {
 	m.ctrl.T.Helper()
@@ -98,6 +84,20 @@ func (m *MockSink) FlushDMLBeforeBlock(event event.BlockEvent) error {
 func (mr *MockSinkMockRecorder) FlushDMLBeforeBlock(event interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FlushDMLBeforeBlock", reflect.TypeOf((*MockSink)(nil).FlushDMLBeforeBlock), event)
+}
+
+// IsNormal mocks base method.
+func (m *MockSink) IsNormal() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsNormal")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// IsNormal indicates an expected call of IsNormal.
+func (mr *MockSinkMockRecorder) IsNormal() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsNormal", reflect.TypeOf((*MockSink)(nil).IsNormal))
 }
 
 // Run mocks base method.
