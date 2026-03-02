@@ -562,16 +562,16 @@ func (d *BasicDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	return false
 }
 
-// handleEvents can batch handle events about resolvedTs Event and DML Event.
-// While for DDLEvent and SyncPointEvent, they should be handled separately,
-// because they are block events.
-// We ensure we only will receive one event when it's ddl event or sync point event
-// by setting them with different event types in DispatcherEventsHandler.GetType
-// When we handle events, we don't have any previous events still in sink.
+// handleEvents handles one batch on a dispatcher path.
+// DML and resolved-ts events may be batched together; DDL/syncpoint events are
+// always single-event batches because they are block events.
 //
-// wakeCallback is used to wake the dynamic stream to handle the next batch events.
-// For non-storage sinks, we wake only after flush and tableProgress becomes empty.
-// For cloud storage sink, we wake after all events in this batch are enqueued.
+// wakeCallback is used to wake the dynamic stream to process the next batch.
+// For DML batches, we wake when all accepted events in this batch reach
+// PostEnqueue. Sinks with an explicit enqueue stage (for example cloud storage)
+// call PostEnqueue before flush. Sinks without an explicit enqueue stage rely on
+// the PostFlush fallback (PostFlush -> PostEnqueue), so wake preserves the
+// historical flush-then-wake behavior.
 func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
 	if d.GetRemovingStatus() {
 		log.Warn("dispatcher is removing", zap.Any("id", d.id))
