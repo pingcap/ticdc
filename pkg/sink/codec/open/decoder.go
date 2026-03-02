@@ -634,8 +634,10 @@ func formatColumn(c column, ft types.FieldType) column {
 		switch v := c.Value.(type) {
 		case json.Number:
 			value, err = v.Int64()
-		case []uint8:
-			value, err = strconv.ParseInt(string(v), 10, 64)
+		case int64:
+			value = v
+		case uint64:
+			value = int64(v)
 		default:
 			log.Panic("invalid column value for year", zap.String("value", util.RedactAny(c.Value)), zap.Any("type", v))
 		}
