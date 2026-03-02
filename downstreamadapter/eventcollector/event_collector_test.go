@@ -15,6 +15,7 @@ package eventcollector
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -29,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,6 +41,9 @@ type mockEventDispatcher struct {
 	tableSpan    *heartbeatpb.TableSpan
 	handle       func(commonEvent.Event)
 	changefeedID common.ChangeFeedID
+
+	batchCount uint64
+	batchBytes uint64
 }
 
 func (m *mockEventDispatcher) GetId() common.DispatcherID {
@@ -59,6 +64,17 @@ func (m *mockEventDispatcher) GetBDRMode() bool {
 
 func (m *mockEventDispatcher) GetChangefeedID() common.ChangeFeedID {
 	return m.changefeedID
+}
+
+func (m *mockEventDispatcher) GetEventCollectorBatchCount() uint64 {
+	if m.batchCount == 0 {
+		return 1
+	}
+	return m.batchCount
+}
+
+func (m *mockEventDispatcher) GetEventCollectorBatchBytes() uint64 {
+	return m.batchBytes
 }
 
 func (m *mockEventDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
@@ -116,10 +132,149 @@ func (m *mockEventDispatcher) IsOutputRawChangeEvent() bool {
 	return false
 }
 
+type mockDynamicStream struct {
+	addPathCalls []struct {
+		path         common.DispatcherID
+		dest         *dispatcherStat
+		areaSettings []dynstream.AreaSettings
+	}
+	removePathCalls   []common.DispatcherID
+	setAreaBatchCalls []struct {
+		area       common.GID
+		batchCount uint64
+		batchBytes uint64
+	}
+
+	addPathErr error
+}
+
+func (m *mockDynamicStream) Start() {}
+
+func (m *mockDynamicStream) Close() {}
+
+func (m *mockDynamicStream) Push(path common.DispatcherID, event dispatcher.DispatcherEvent) {}
+
+func (m *mockDynamicStream) Wake(path common.DispatcherID) {}
+
+func (m *mockDynamicStream) Feedback() <-chan dynstream.Feedback[common.GID, common.DispatcherID, *dispatcherStat] {
+	return nil
+}
+
+func (m *mockDynamicStream) AddPath(path common.DispatcherID, dest *dispatcherStat, area ...dynstream.AreaSettings) error {
+	m.addPathCalls = append(m.addPathCalls, struct {
+		path         common.DispatcherID
+		dest         *dispatcherStat
+		areaSettings []dynstream.AreaSettings
+	}{
+		path:         path,
+		dest:         dest,
+		areaSettings: area,
+	})
+	return m.addPathErr
+}
+
+func (m *mockDynamicStream) RemovePath(path common.DispatcherID) error {
+	m.removePathCalls = append(m.removePathCalls, path)
+	return nil
+}
+
+func (m *mockDynamicStream) Release(path common.DispatcherID) {}
+
+func (m *mockDynamicStream) SetAreaSettings(area common.GID, settings dynstream.AreaSettings) {}
+
+func (m *mockDynamicStream) SetAreaBatchConfig(area common.GID, batchCount uint64, batchBytes uint64) {
+	m.setAreaBatchCalls = append(m.setAreaBatchCalls, struct {
+		area       common.GID
+		batchCount uint64
+		batchBytes uint64
+	}{
+		area:       area,
+		batchCount: batchCount,
+		batchBytes: batchBytes,
+	})
+}
+
+func (m *mockDynamicStream) GetMetrics() dynstream.Metrics[common.GID, common.DispatcherID] {
+	return dynstream.Metrics[common.GID, common.DispatcherID]{}
+}
+
 func newMessage(id node.ID, msg messaging.IOTypeT) *messaging.TargetMessage {
 	targetMessage := messaging.NewSingleTargetMessage(id, messaging.EventCollectorTopic, msg)
 	targetMessage.From = id
 	return targetMessage
+}
+
+func TestPrepareAddDispatcherAppliesAreaBatchConfig(t *testing.T) {
+	ctx := context.Background()
+	nodeInfo := node.NewInfo("127.0.0.1:18300", "")
+
+	mc := messaging.NewMessageCenter(ctx, nodeInfo.ID, config.NewDefaultMessageCenterConfig(nodeInfo.AdvertiseAddr), nil)
+	mc.Run(ctx)
+	defer mc.Close()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+
+	c := New(nodeInfo.ID)
+	c.ds.Close()
+	c.redoDs.Close()
+
+	ds := &mockDynamicStream{}
+	c.ds = ds
+	c.redoDs = ds
+
+	changefeedID := common.NewChangeFeedIDWithName("cf", common.DefaultKeyspaceName)
+	dispatcherID := common.NewDispatcherID()
+	d := &mockEventDispatcher{
+		id:           dispatcherID,
+		tableSpan:    &heartbeatpb.TableSpan{TableID: 1},
+		changefeedID: changefeedID,
+		handle:       func(commonEvent.Event) {},
+		batchCount:   123,
+		batchBytes:   456,
+	}
+
+	c.PrepareAddDispatcher(d, 1024, nil)
+	t.Cleanup(func() { c.RemoveDispatcher(d) })
+
+	require.Len(t, ds.addPathCalls, 1)
+	require.Len(t, ds.setAreaBatchCalls, 1)
+	require.Equal(t, changefeedID.ID(), ds.setAreaBatchCalls[0].area)
+	require.Equal(t, uint64(123), ds.setAreaBatchCalls[0].batchCount)
+	require.Equal(t, uint64(456), ds.setAreaBatchCalls[0].batchBytes)
+}
+
+func TestPrepareAddDispatcherSkipsAreaBatchConfigWhenAddPathFails(t *testing.T) {
+	ctx := context.Background()
+	nodeInfo := node.NewInfo("127.0.0.1:18300", "")
+
+	mc := messaging.NewMessageCenter(ctx, nodeInfo.ID, config.NewDefaultMessageCenterConfig(nodeInfo.AdvertiseAddr), nil)
+	mc.Run(ctx)
+	defer mc.Close()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+
+	c := New(nodeInfo.ID)
+	c.ds.Close()
+	c.redoDs.Close()
+
+	ds := &mockDynamicStream{addPathErr: errors.New("add path failed")}
+	c.ds = ds
+	c.redoDs = ds
+
+	changefeedID := common.NewChangeFeedIDWithName("cf", common.DefaultKeyspaceName)
+	dispatcherID := common.NewDispatcherID()
+	d := &mockEventDispatcher{
+		id:           dispatcherID,
+		tableSpan:    &heartbeatpb.TableSpan{TableID: 1},
+		changefeedID: changefeedID,
+		handle:       func(commonEvent.Event) {},
+		batchCount:   123,
+		batchBytes:   456,
+	}
+
+	c.PrepareAddDispatcher(d, 1024, nil)
+	t.Cleanup(func() { c.RemoveDispatcher(d) })
+
+	require.Len(t, ds.addPathCalls, 1)
+	require.Empty(t, ds.setAreaBatchCalls)
 }
 
 func TestProcessMessage(t *testing.T) {
