@@ -245,14 +245,14 @@ type AreaSettings struct {
 
 	// Remove it when we determine the v2 is working well.
 	// The algorithm of the memory control.
-	method memoryControlType
+	algorithm int
 
 	// control how to control events
 	batchConfig batchConfig
 }
 
 func NewAreaSettingsWithMaxPendingSize(
-	quota uint64, method memoryControlType, component string,
+	quota uint64, algorithm int, component string,
 	batchConfig batchConfig,
 ) AreaSettings {
 	// The path max pending size is at least 1MB.
@@ -262,7 +262,7 @@ func NewAreaSettingsWithMaxPendingSize(
 		feedbackInterval:   DefaultFeedbackInterval,
 		maxPendingSize:     quota,
 		pathMaxPendingSize: pathMaxPendingSize,
-		method:             method,
+		algorithm:          algorithm,
 		batchConfig:        batchConfig,
 	}
 }

@@ -42,7 +42,7 @@ func TestMemControlAddRemovePath(t *testing.T) {
 	settings := AreaSettings{
 		maxPendingSize:   1000,
 		feedbackInterval: time.Second,
-		method:        MemoryControlForPuller,
+		algorithm:        MemoryControlForPuller,
 	}
 	feedbackChan := make(chan Feedback[int, string, any], 10)
 
@@ -62,7 +62,7 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 	settings := AreaSettings{
 		maxPendingSize:   15,
 		feedbackInterval: time.Millisecond * 10,
-		method:        MemoryControlForPuller,
+		algorithm:        MemoryControlForPuller,
 	}
 	feedbackChan := make(chan Feedback[int, string, any], 10)
 	mc.addPathToArea(path1, settings, feedbackChan)
@@ -136,7 +136,7 @@ func TestAreaMemStatAppendEvent(t *testing.T) {
 	newSettings := AreaSettings{
 		maxPendingSize:   1000,
 		feedbackInterval: time.Millisecond * 10,
-		method:        MemoryControlForPuller,
+		algorithm:        MemoryControlForPuller,
 	}
 	mc.setAreaSettings(path1.area, newSettings)
 	require.Equal(t, uint64(1000), path1.areaMemStat.settings.Load().maxPendingSize)
@@ -170,7 +170,7 @@ func TestSetAreaSettings(t *testing.T) {
 	initialSettings := AreaSettings{
 		maxPendingSize:   1000,
 		feedbackInterval: time.Second,
-		method:        MemoryControlForPuller,
+		algorithm:        MemoryControlForPuller,
 	}
 	feedbackChan := make(chan Feedback[int, string, any], 10)
 	mc.addPathToArea(path, initialSettings, feedbackChan)
@@ -180,7 +180,7 @@ func TestSetAreaSettings(t *testing.T) {
 	newSettings := AreaSettings{
 		maxPendingSize:   2000,
 		feedbackInterval: 2 * time.Second,
-		method:        MemoryControlForPuller,
+		algorithm:        MemoryControlForPuller,
 	}
 	mc.setAreaSettings(path.area, newSettings)
 	require.Equal(t, newSettings, *path.areaMemStat.settings.Load())
@@ -189,7 +189,7 @@ func TestSetAreaSettings(t *testing.T) {
 	invalidSettings := AreaSettings{
 		maxPendingSize:   0,
 		feedbackInterval: 0,
-		method:        MemoryControlForEventCollector,
+		algorithm:        MemoryControlForEventCollector,
 	}
 	mc.setAreaSettings(path.area, invalidSettings)
 	require.NotEqual(t, invalidSettings, *path.areaMemStat.settings.Load())
@@ -268,7 +268,7 @@ func TestReleaseMemory(t *testing.T) {
 	settings := AreaSettings{
 		maxPendingSize:   1000,
 		feedbackInterval: time.Second,
-		method:        MemoryControlForEventCollector,
+		algorithm:        MemoryControlForEventCollector,
 	}
 	feedbackChan := make(chan Feedback[int, string, any], 10)
 

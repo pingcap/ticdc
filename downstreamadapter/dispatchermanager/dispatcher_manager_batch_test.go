@@ -17,6 +17,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
+	"github.com/pingcap/ticdc/eventpb"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -26,6 +29,7 @@ import (
 type mockBatchConfigSink struct {
 	sinkType   common.SinkType
 	batchCount int
+	batchBytes int
 }
 
 func (s *mockBatchConfigSink) SinkType() common.SinkType { return s.sinkType }
@@ -45,7 +49,7 @@ func (s *mockBatchConfigSink) BatchCount() int {
 	return 4096
 }
 func (s *mockBatchConfigSink) BatchBytes() int {
-	return 0
+	return s.batchBytes
 }
 
 func TestDispatcherManager_GetEventCollectorBatchCountAndBytes(t *testing.T) {
@@ -140,4 +144,54 @@ func TestDispatcherManager_GetEventCollectorBatchCountAndBytes(t *testing.T) {
 			require.Equal(t, tc.wantBytes, gotBytes)
 		})
 	}
+}
+func TestDispatcherManager_BatchBytesFallbackThroughDispatcher(t *testing.T) {
+	sink := &mockBatchConfigSink{
+		sinkType:   common.MysqlSinkType,
+		batchCount: 2048,
+		batchBytes: 8192,
+	}
+	manager := &DispatcherManager{
+		sink:   sink,
+		config: &config.ChangefeedConfig{},
+	}
+
+	batchCount, batchBytes := manager.getEventCollectorBatchCountAndBytes()
+	require.Equal(t, 2048, batchCount)
+	require.Equal(t, 0, batchBytes)
+
+	sharedInfo := dispatcher.NewSharedInfo(
+		common.NewChangefeedID(common.DefaultKeyspaceName),
+		"system",
+		false,
+		false,
+		false,
+		nil,
+		&eventpb.FilterConfig{},
+		nil,
+		nil,
+		false,
+		batchCount,
+		batchBytes,
+		make(chan dispatcher.TableSpanStatusWithSeq, 1),
+		make(chan *heartbeatpb.TableSpanBlockStatus, 1),
+		make(chan error, 1),
+	)
+	d := dispatcher.NewBasicDispatcher(
+		common.NewDispatcherID(),
+		&heartbeatpb.TableSpan{TableID: 1},
+		1,
+		1,
+		dispatcher.NewSchemaIDToDispatchers(),
+		false,
+		false,
+		0,
+		common.DefaultMode,
+		sink,
+		sharedInfo,
+	)
+
+	gotCount, gotBytes := d.GetEventCollectorBatchConfig()
+	require.Equal(t, 2048, gotCount)
+	require.Equal(t, 8192, gotBytes)
 }
