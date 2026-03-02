@@ -45,10 +45,15 @@ func initRedoComponet(
 	if manager.config.Consistent == nil || !pkgRedo.IsConsistentEnabled(util.GetOrZero(manager.config.Consistent.Level)) {
 		return nil
 	}
-	manager.RedoEnable = true
 	manager.redoDispatcherMap = newDispatcherMap[*dispatcher.RedoDispatcher]()
 	manager.redoSink = redo.New(ctx, changefeedID, manager.config.Consistent)
+	if manager.redoSink == nil {
+		return errors.WrapError(errors.ErrStorageInitialize, errors.New("redo sink initialization returned nil"))
+	}
 	manager.redoSchemaIDToDispatchers = dispatcher.NewSchemaIDToDispatchers()
+	// Publish redo availability only after all redo components are initialized,
+	// so scheduler precheck won't observe a partially initialized manager.
+	manager.RedoEnable = true
 
 	totalQuota := manager.sinkQuota
 	consistentMemoryUsage := manager.config.Consistent.MemoryUsage
@@ -226,6 +231,11 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 func (e *DispatcherManager) cleanRedoDispatcher(id common.DispatcherID, schemaID int64) {
 	e.redoDispatcherMap.Delete(id)
 	e.redoSchemaIDToDispatchers.Delete(schemaID, id)
+	e.currentOperatorMap.Delete(id)
+	log.Debug("delete current working remove operator for redo dispatcher",
+		zap.String("changefeedID", e.changefeedID.String()),
+		zap.String("dispatcherID", id.String()),
+	)
 	tableTriggerRedoDispatcher := e.GetTableTriggerRedoDispatcher()
 	if tableTriggerRedoDispatcher != nil && tableTriggerRedoDispatcher.GetId() == id {
 		e.SetTableTriggerRedoDispatcher(nil)

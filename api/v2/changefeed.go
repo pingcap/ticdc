@@ -176,6 +176,19 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
+	// do not shadow err after this point
+	pdClient := h.server.GetPdClient()
+	tmpInfo := &config.ChangeFeedInfo{
+		ChangefeedID: changefeedID,
+		SinkURI:      cfg.SinkURI,
+		Config:       replicaCfg,
+	}
+	err = check.ValidateActiveActiveTSOIndexes(ctx, pdClient, tmpInfo.ToChangefeedConfig())
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
 	// Ensure the start ts is valid in the next 3600 seconds, aka 1 hour
 	const ensureTTL = 60 * 60
 	createGcServiceID := h.server.GetEtcdClient().GetEnsureGCServiceID(gc.EnsureGCServiceCreating)
@@ -194,8 +207,6 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		return
 	}
 
-	// do not shadow err after this point
-	pdClient := h.server.GetPdClient()
 	defer func() {
 		if err == nil {
 			return
@@ -759,6 +770,12 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		return
 	}
 
+	err = check.ValidateActiveActiveTSOIndexes(ctx, h.server.GetPdClient(), cfInfo.ToChangefeedConfig())
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
 	// do not shadow err after this point
 	resumeGcServiceID := h.server.GetEtcdClient().GetEnsureGCServiceID(gc.EnsureGCServiceResuming)
 	if err = verifyResumeChangefeedConfig(
@@ -1008,6 +1025,12 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		return
 	}
 
+	err = check.ValidateActiveActiveTSOIndexes(ctx, h.server.GetPdClient(), oldCfInfo.ToChangefeedConfig())
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
+
 	err = sink.Verify(ctx, oldCfInfo.ToChangefeedConfig(), oldCfInfo.ChangefeedID)
 	if err != nil {
 		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, oldCfInfo.SinkURI))
@@ -1144,7 +1167,16 @@ func (h *OpenAPIV2) MoveTable(c *gin.Context) {
 
 	targetNodeID := c.Query("targetNodeID")
 	mode, _ := strconv.ParseInt(c.Query("mode"), 10, 64)
-	err = maintainer.MoveTable(int64(tableId), node.ID(targetNodeID), mode)
+	wait := true
+	if waitStr := c.Query("wait"); waitStr != "" {
+		wait, err = strconv.ParseBool(waitStr)
+		if err != nil {
+			log.Error("failed to parse wait", zap.Error(err), zap.String("wait", waitStr))
+			_ = c.Error(err)
+			return
+		}
+	}
+	err = maintainer.MoveTable(int64(tableId), node.ID(targetNodeID), mode, wait)
 	if err != nil {
 		log.Error("failed to move table", zap.Error(err), zap.Int64("tableID", tableId), zap.String("targetNodeID", targetNodeID))
 		_ = c.Error(err)

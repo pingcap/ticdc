@@ -72,6 +72,7 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Eve
 		"system",
 		false,
 		false,
+		false,
 		nil,
 		nil,
 		&syncpoint.SyncPointConfig{
@@ -606,7 +607,7 @@ func TestTableTriggerEventDispatcherInKafka(t *testing.T) {
 	require.Nil(t, blockPendingEvent)
 	require.Equal(t, int32(1), count.Load())
 
-	tableNames := tableTriggerEventDispatcher.tableSchemaStore.GetAllTableNames(2)
+	tableNames := tableTriggerEventDispatcher.tableSchemaStore.GetAllTableNames(2, true)
 	require.Equal(t, int(0), len(tableNames))
 
 	// ddl influences tableSchemaStore
@@ -641,9 +642,9 @@ func TestTableTriggerEventDispatcherInKafka(t *testing.T) {
 	require.Nil(t, blockPendingEvent)
 	require.Equal(t, int32(2), count.Load())
 
-	tableNames = tableTriggerEventDispatcher.tableSchemaStore.GetAllTableNames(3)
+	tableNames = tableTriggerEventDispatcher.tableSchemaStore.GetAllTableNames(3, true)
 	require.Equal(t, int(0), len(tableNames))
-	tableNames = tableTriggerEventDispatcher.tableSchemaStore.GetAllTableNames(4)
+	tableNames = tableTriggerEventDispatcher.tableSchemaStore.GetAllTableNames(4, true)
 	require.Equal(t, int(1), len(tableNames))
 	require.Equal(t, commonEvent.SchemaTableName{SchemaName: "test", TableName: "t1"}, *tableNames[0])
 }
@@ -812,6 +813,7 @@ func TestDispatcherSplittableCheck(t *testing.T) {
 		"system",
 		false,
 		false,
+		false,
 		nil,
 		nil,
 		&syncpoint.SyncPointConfig{
@@ -923,6 +925,7 @@ func TestDispatcher_SkipDMLAsStartTs_FilterCorrectly(t *testing.T) {
 		"system",
 		false,
 		false,
+		false,
 		nil,
 		nil,
 		&syncpoint.SyncPointConfig{
@@ -1002,6 +1005,7 @@ func TestDispatcher_SkipDMLAsStartTs_Disabled(t *testing.T) {
 	sharedInfo := NewSharedInfo(
 		common.NewChangefeedID(common.DefaultKeyspaceName),
 		"system",
+		false,
 		false,
 		false,
 		nil,
