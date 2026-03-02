@@ -298,20 +298,23 @@ func TestEventCollectorBatchingByCount(t *testing.T) {
 
 	const totalDML = 10
 	const batchCount = 3
-	batchSizes := make(chan int, 128)
+	batchRecords := make(chan batchRecord, 128)
 	done := make(chan struct{})
 
-	var seen atomic.Int64
+	var seenDML atomic.Int64
 	d := &mockEventDispatcher{
 		id:                       did,
 		tableSpan:                &heartbeatpb.TableSpan{TableID: 1},
 		changefeedID:             common.NewChangefeedID(common.DefaultKeyspaceName),
 		eventCollectorBatchCount: batchCount,
 		eventCollectorBatchBytes: 0,
-		batchSizes:               batchSizes,
+		batchRecords:             batchRecords,
 	}
 	d.handle = func(e commonEvent.Event) {
-		if seen.Add(1) == totalDML {
+		if e.GetType() != commonEvent.TypeDMLEvent {
+			return
+		}
+		if seenDML.Add(1) == totalDML {
 			close(done)
 		}
 	}
@@ -348,27 +351,30 @@ func TestEventCollectorBatchingByCount(t *testing.T) {
 		require.Fail(t, "timeout")
 	}
 
-	sum := 0
+	sumDML := 0
 	maxBatch := 0
 	hasBatch := false
-	for sum < totalDML {
+	for sumDML < totalDML {
 		select {
-		case n := <-batchSizes:
-			sum += n
-			if n > maxBatch {
-				maxBatch = n
+		case r := <-batchRecords:
+			if r.eventType != commonEvent.TypeDMLEvent {
+				continue
 			}
-			if n > 1 {
+			sumDML += r.size
+			if r.size > maxBatch {
+				maxBatch = r.size
+			}
+			if r.size > 1 {
 				hasBatch = true
 			}
 		case <-ctx1.Done():
-			require.Fail(t, "timeout collecting batch sizes")
+			require.Fail(t, "timeout collecting dml batch sizes")
 		}
 	}
 
 	require.True(t, hasBatch)
 	require.LessOrEqual(t, maxBatch, batchCount)
-	require.Equal(t, totalDML, sum)
+	require.Equal(t, totalDML, sumDML)
 }
 
 func TestEventCollectorBatchingByBytes(t *testing.T) {

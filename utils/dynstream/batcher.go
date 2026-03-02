@@ -104,11 +104,12 @@ func (b *batcher[T]) isFull() bool {
 	return b.nBytes >= b.config.hardBytes
 }
 
+// flush returned events must be processed before adding more events to the batcher.
 func (b *batcher[T]) flush() ([]T, int, time.Duration) {
 	if len(b.buf) == 0 {
 		return nil, 0, 0
 	}
-	// note: the returned events is shared the underline slice with the batcher
+	// note: the returned events share the underlying slice with the batcher
 	events := b.buf
 	b.buf = b.buf[:0]
 	nBytes := b.nBytes
