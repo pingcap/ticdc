@@ -70,6 +70,15 @@ type Controller struct {
 
 	keyspaceMeta common.KeyspaceMeta
 	enableRedo   bool
+
+	selfNodeIDMu sync.RWMutex
+	selfNodeID   node.ID
+
+	dispatcherDrainTarget struct {
+		sync.RWMutex
+		target node.ID
+		epoch  uint64
+	}
 }
 
 func NewController(changefeedID common.ChangeFeedID,
@@ -113,15 +122,10 @@ func NewController(changefeedID common.ChangeFeedID,
 	// Create operator controller using spanController
 	oc := operator.NewOperatorController(changefeedID, spanController, batchSize, common.DefaultMode)
 
-	sc := NewScheduleController(
-		changefeedID, batchSize, oc, redoOC, spanController, redoSpanController, balanceInterval, splitter, schedulerCfg,
-	)
-
-	return &Controller{
+	controller := &Controller{
 		startTs:                checkpointTs,
 		changefeedID:           changefeedID,
 		bootstrapped:           false,
-		schedulerController:    sc,
 		operatorController:     oc,
 		redoOperatorController: redoOC,
 		spanController:         spanController,
@@ -136,6 +140,20 @@ func NewController(changefeedID common.ChangeFeedID,
 		keyspaceMeta:           keyspaceMeta,
 		enableRedo:             enableRedo,
 	}
+	controller.schedulerController = NewScheduleController(
+		changefeedID,
+		batchSize,
+		oc,
+		redoOC,
+		spanController,
+		redoSpanController,
+		balanceInterval,
+		splitter,
+		schedulerCfg,
+		controller.getDispatcherDrainTarget,
+		controller.getSelfNodeID,
+	)
+	return controller
 }
 
 // HandleStatus handle the status report from the node
@@ -260,4 +278,32 @@ func (c *Controller) GetMinRedoCheckpointTs(minCheckpointTs uint64) uint64 {
 	minCheckpointTsForOperator := c.redoOperatorController.GetMinCheckpointTs(minCheckpointTs)
 	minCheckpointTsForSpan := c.redoSpanController.GetMinCheckpointTsForNonReplicatingSpans(minCheckpointTs)
 	return min(minCheckpointTsForOperator, minCheckpointTsForSpan)
+}
+
+func (c *Controller) SetSelfNodeID(selfNodeID node.ID) {
+	c.selfNodeIDMu.Lock()
+	defer c.selfNodeIDMu.Unlock()
+	c.selfNodeID = selfNodeID
+}
+
+func (c *Controller) getSelfNodeID() node.ID {
+	c.selfNodeIDMu.RLock()
+	defer c.selfNodeIDMu.RUnlock()
+	return c.selfNodeID
+}
+
+func (c *Controller) SetDispatcherDrainTarget(target node.ID, epoch uint64) {
+	c.dispatcherDrainTarget.Lock()
+	defer c.dispatcherDrainTarget.Unlock()
+	if epoch < c.dispatcherDrainTarget.epoch {
+		return
+	}
+	c.dispatcherDrainTarget.target = target
+	c.dispatcherDrainTarget.epoch = epoch
+}
+
+func (c *Controller) getDispatcherDrainTarget() (node.ID, uint64) {
+	c.dispatcherDrainTarget.RLock()
+	defer c.dispatcherDrainTarget.RUnlock()
+	return c.dispatcherDrainTarget.target, c.dispatcherDrainTarget.epoch
 }

@@ -46,7 +46,11 @@ type balanceScheduler struct {
 	// `Schedule`.
 	// It speeds up rebalance.
 	forceBalance bool
+
+	drainBalanceBlockedUntil time.Time
 }
+
+const drainBalanceCooldown = 120 * time.Second
 
 func NewBalanceScheduler(
 	id string, batchSize int,
@@ -69,10 +73,20 @@ func NewBalanceScheduler(
 }
 
 func (s *balanceScheduler) Execute() time.Time {
+	now := time.Now()
+	if s.livenessView != nil && len(s.livenessView.GetDrainingOrStoppingNodes()) > 0 {
+		// Pause regular balance scheduling while any node is draining/stopping.
+		s.drainBalanceBlockedUntil = now.Add(drainBalanceCooldown)
+		return now.Add(s.checkBalanceInterval)
+	}
+	if now.Before(s.drainBalanceBlockedUntil) {
+		// Keep a cooldown window after all draining/stopping nodes are gone
+		// to avoid immediate rebalance churn.
+		return now.Add(s.checkBalanceInterval)
+	}
 	if !s.forceBalance && time.Since(s.lastRebalanceTime) < s.checkBalanceInterval {
 		return s.lastRebalanceTime.Add(s.checkBalanceInterval)
 	}
-	now := time.Now()
 
 	if s.operatorController.OperatorSize() > 0 || s.changefeedDB.GetAbsentSize() > 0 {
 		// not in stable schedule state, skip balance

@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
+	"go.uber.org/atomic"
 )
 
 func newDrainTestController(t *testing.T) (*Controller, *nodeliveness.View, *drain.Controller, node.ID) {
@@ -59,8 +60,24 @@ func newDrainTestController(t *testing.T) (*Controller, *nodeliveness.View, *dra
 		nodeLivenessView:    view,
 		drainController:     drainController,
 		drainCheckpointGate: make(map[node.ID]*drainCheckpointGateState),
+		messageCenter:       mc,
+		initialized:         atomic.NewBool(true),
 	}
 	return c, view, drainController, target
+}
+
+func TestDrainNodeReturnsNonZeroBeforeCoordinatorBootstrap(t *testing.T) {
+	c, _, _, target := newDrainTestController(t)
+	c.initialized.Store(false)
+
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	drainTarget, epoch, ok := c.getDispatcherDrainTarget()
+	require.False(t, ok)
+	require.Equal(t, node.ID(""), drainTarget)
+	require.Equal(t, uint64(0), epoch)
 }
 
 func TestDrainNodeRemainingNeverZeroBeforeObserved(t *testing.T) {
@@ -125,6 +142,8 @@ func TestDrainNodeCheckpointGateRequiresRunningChangefeedProgress(t *testing.T) 
 	setDrainGatePhysicalTs(c, gatePhysicalTs)
 	baselineTs := oracle.ComposeTS(gatePhysicalTs-int64((40*time.Minute)/time.Millisecond), 0)
 	cf := addRunningChangefeed(c, "cf1", node.ID("other"), baselineTs)
+	setDrainTargetForTest(c, target, 1)
+	setChangefeedDrainStatus(cf, target, 1, 0)
 	setTargetStoppingObserved(view, drainController, target)
 
 	remaining, err := c.DrainNode(context.Background(), target)
@@ -140,6 +159,8 @@ func TestDrainNodeCheckpointGateRequiresRunningChangefeedProgress(t *testing.T) 
 func TestDrainNodeCheckpointGateUsesFrozenBaseline(t *testing.T) {
 	c, view, drainController, target := newDrainTestController(t)
 	cf := addRunningChangefeed(c, "cf1", node.ID("other"), 100)
+	setDrainTargetForTest(c, target, 1)
+	setChangefeedDrainStatus(cf, target, 1, 0)
 	setTargetStoppingObserved(view, drainController, target)
 
 	remaining, err := c.DrainNode(context.Background(), target)
@@ -147,7 +168,8 @@ func TestDrainNodeCheckpointGateUsesFrozenBaseline(t *testing.T) {
 	require.Equal(t, 1, remaining)
 
 	// Newly created running changefeeds after baseline snapshot must not block this drain gate.
-	_ = addRunningChangefeed(c, "cf2", node.ID("other"), 100)
+	cf2 := addRunningChangefeed(c, "cf2", node.ID("other"), 100)
+	setChangefeedDrainStatus(cf2, target, 1, 0)
 
 	setChangefeedCheckpointTs(cf, 101)
 	remaining, err = c.DrainNode(context.Background(), target)
@@ -158,6 +180,8 @@ func TestDrainNodeCheckpointGateUsesFrozenBaseline(t *testing.T) {
 func TestDrainNodeCheckpointGateIgnoresNonRunningChangefeed(t *testing.T) {
 	c, view, drainController, target := newDrainTestController(t)
 	cf := addRunningChangefeed(c, "cf1", node.ID("other"), 100)
+	setDrainTargetForTest(c, target, 1)
+	setChangefeedDrainStatus(cf, target, 1, 0)
 	setTargetStoppingObserved(view, drainController, target)
 
 	remaining, err := c.DrainNode(context.Background(), target)
@@ -181,6 +205,8 @@ func TestDrainNodeCheckpointGateLowLagMustCatchGateCreateTime(t *testing.T) {
 	baselinePhysicalTs := gatePhysicalTs - int64((30*time.Second)/time.Millisecond)
 	baselineTs := oracle.ComposeTS(baselinePhysicalTs, 0)
 	cf := addRunningChangefeed(c, "cf-low-lag", node.ID("other"), baselineTs)
+	setDrainTargetForTest(c, target, 1)
+	setChangefeedDrainStatus(cf, target, 1, 0)
 	setTargetStoppingObserved(view, drainController, target)
 
 	remaining, err := c.DrainNode(context.Background(), target)
@@ -209,6 +235,8 @@ func TestDrainNodeCheckpointGateMidLagRequiresOneMinuteAdvance(t *testing.T) {
 	baselinePhysicalTs := gatePhysicalTs - int64((10*time.Minute)/time.Millisecond)
 	baselineTs := oracle.ComposeTS(baselinePhysicalTs, 0)
 	cf := addRunningChangefeed(c, "cf-mid-lag", node.ID("other"), baselineTs)
+	setDrainTargetForTest(c, target, 1)
+	setChangefeedDrainStatus(cf, target, 1, 0)
 	setTargetStoppingObserved(view, drainController, target)
 
 	remaining, err := c.DrainNode(context.Background(), target)
@@ -224,6 +252,43 @@ func TestDrainNodeCheckpointGateMidLagRequiresOneMinuteAdvance(t *testing.T) {
 	remaining, err = c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
 	require.Equal(t, 0, remaining)
+}
+
+func TestDrainNodeDispatcherCountBlocksCompletion(t *testing.T) {
+	c, view, drainController, target := newDrainTestController(t)
+	cf := addRunningChangefeed(c, "cf1", node.ID("other"), 100)
+	setDrainTargetForTest(c, target, 1)
+	setChangefeedDrainStatus(cf, target, 1, 2)
+	setTargetStoppingObserved(view, drainController, target)
+
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 2, remaining)
+
+	setChangefeedDrainStatus(cf, target, 1, 0)
+	setChangefeedCheckpointTs(cf, 101)
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	setChangefeedCheckpointTs(cf, 102)
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 0, remaining)
+}
+
+func TestDrainNodeRejectConcurrentDifferentDrainTarget(t *testing.T) {
+	c, _, _, target := newDrainTestController(t)
+	other := node.ID("other")
+	c.nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
+
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	_, err = c.DrainNode(context.Background(), other)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "drain already in progress")
 }
 
 func setTargetStoppingObserved(
@@ -254,9 +319,29 @@ func addRunningChangefeed(c *Controller, name string, nodeID node.ID, checkpoint
 }
 
 func setChangefeedCheckpointTs(cf *changefeed.Changefeed, checkpointTs uint64) {
+	status := cf.GetStatus()
 	_, _, _ = cf.ForceUpdateStatus(&heartbeatpb.MaintainerStatus{
-		ChangefeedID: cf.ID.ToPB(),
-		CheckpointTs: checkpointTs,
+		ChangefeedID:               cf.ID.ToPB(),
+		CheckpointTs:               checkpointTs,
+		DrainTargetNodeId:          status.DrainTargetNodeId,
+		DrainTargetEpoch:           status.DrainTargetEpoch,
+		DrainTargetDispatcherCount: status.DrainTargetDispatcherCount,
+	})
+}
+
+func setChangefeedDrainStatus(
+	cf *changefeed.Changefeed,
+	target node.ID,
+	epoch uint64,
+	dispatcherCount uint32,
+) {
+	status := cf.GetStatus()
+	_, _, _ = cf.ForceUpdateStatus(&heartbeatpb.MaintainerStatus{
+		ChangefeedID:               cf.ID.ToPB(),
+		CheckpointTs:               status.CheckpointTs,
+		DrainTargetNodeId:          target.String(),
+		DrainTargetEpoch:           epoch,
+		DrainTargetDispatcherCount: dispatcherCount,
 	})
 }
 
@@ -264,4 +349,14 @@ func setDrainGatePhysicalTs(c *Controller, physicalTs int64) {
 	clock := &pdutil.Clock4Test{}
 	clock.SetTS(oracle.ComposeTS(physicalTs, 0))
 	c.pdClock = clock
+}
+
+func setDrainTargetForTest(c *Controller, target node.ID, epoch uint64) {
+	c.dispatcherDrainTargetMu.Lock()
+	defer c.dispatcherDrainTargetMu.Unlock()
+	c.dispatcherDrainTarget = &dispatcherDrainTargetState{
+		target: target,
+		epoch:  epoch,
+	}
+	c.dispatcherDrainEpoch = epoch
 }

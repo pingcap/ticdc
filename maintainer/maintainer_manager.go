@@ -45,6 +45,12 @@ type Manager struct {
 	liveness  *api.Liveness
 	nodeEpoch uint64
 
+	dispatcherDrainTarget struct {
+		sync.RWMutex
+		target node.ID
+		epoch  uint64
+	}
+
 	// changefeedID -> maintainer
 	maintainers sync.Map
 
@@ -109,7 +115,8 @@ func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage
 	case messaging.TypeAddMaintainerRequest,
 		messaging.TypeRemoveMaintainerRequest,
 		messaging.TypeCoordinatorBootstrapRequest,
-		messaging.TypeSetNodeLivenessRequest:
+		messaging.TypeSetNodeLivenessRequest,
+		messaging.TypeSetDispatcherDrainTargetRequest:
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -301,6 +308,8 @@ func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) 
 	}
 
 	maintainer := NewMaintainer(changefeedID, m.conf, info, m.nodeInfo, m.taskScheduler, req.CheckpointTs, req.IsNewChangefeed, req.KeyspaceId)
+	target, epoch := m.getDispatcherDrainTarget()
+	maintainer.SetDispatcherDrainTarget(target, epoch)
 	m.maintainers.Store(changefeedID, maintainer)
 	maintainer.pushEvent(&Event{changefeedID: changefeedID, eventType: EventInit})
 	return nil
@@ -397,6 +406,8 @@ func (m *Manager) handleMessage(msg *messaging.TargetMessage) {
 		}
 	case messaging.TypeSetNodeLivenessRequest:
 		m.onSetNodeLivenessRequest(msg)
+	case messaging.TypeSetDispatcherDrainTargetRequest:
+		m.onSetDispatcherDrainTargetRequest(msg)
 	default:
 	}
 }
@@ -434,6 +445,60 @@ func (m *Manager) onSetNodeLivenessRequest(msg *messaging.TargetMessage) {
 	}
 
 	m.sendSetNodeLivenessResponse(current)
+}
+
+func (m *Manager) onSetDispatcherDrainTargetRequest(msg *messaging.TargetMessage) {
+	if m.coordinatorID != msg.From {
+		log.Warn("ignore set dispatcher drain target request from non coordinator",
+			zap.Stringer("from", msg.From),
+			zap.Stringer("coordinatorID", m.coordinatorID))
+		return
+	}
+
+	req := msg.Message[0].(*heartbeatpb.SetDispatcherDrainTargetRequest)
+	target := node.ID(req.TargetNodeId)
+	if !m.tryUpdateDispatcherDrainTarget(target, req.TargetEpoch) {
+		return
+	}
+
+	log.Info("dispatcher drain target updated",
+		zap.Stringer("targetNodeID", target),
+		zap.Uint64("targetEpoch", req.TargetEpoch))
+	m.maintainers.Range(func(_, value interface{}) bool {
+		value.(*Maintainer).SetDispatcherDrainTarget(target, req.TargetEpoch)
+		return true
+	})
+}
+
+func (m *Manager) getDispatcherDrainTarget() (node.ID, uint64) {
+	m.dispatcherDrainTarget.RLock()
+	defer m.dispatcherDrainTarget.RUnlock()
+	return m.dispatcherDrainTarget.target, m.dispatcherDrainTarget.epoch
+}
+
+func (m *Manager) tryUpdateDispatcherDrainTarget(target node.ID, epoch uint64) bool {
+	m.dispatcherDrainTarget.Lock()
+	defer m.dispatcherDrainTarget.Unlock()
+
+	if epoch < m.dispatcherDrainTarget.epoch {
+		return false
+	}
+	if epoch == m.dispatcherDrainTarget.epoch {
+		// When epoch is unchanged, only allow clear-once transition:
+		// non-empty target -> empty target.
+		// Reject all other transitions to avoid stale message reactivation.
+		if target == m.dispatcherDrainTarget.target {
+			return false
+		}
+		if target.IsEmpty() && !m.dispatcherDrainTarget.target.IsEmpty() {
+			m.dispatcherDrainTarget.target = target
+			return true
+		}
+		return false
+	}
+	m.dispatcherDrainTarget.target = target
+	m.dispatcherDrainTarget.epoch = epoch
+	return true
 }
 
 func (m *Manager) sendSetNodeLivenessResponse(applied api.Liveness) {

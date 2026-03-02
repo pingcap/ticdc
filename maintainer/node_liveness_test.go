@@ -76,3 +76,79 @@ func TestSetNodeLivenessApplyTransition(t *testing.T) {
 		[]messaging.IOType{first.Type, second.Type})
 	require.Equal(t, api.LivenessCaptureDraining, liveness.Load())
 }
+
+func TestSetDispatcherDrainTargetApplyAndClear(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+
+	var liveness api.Liveness
+	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &liveness)
+	m.coordinatorID = node.ID("coordinator")
+
+	msg := messaging.NewSingleTargetMessage(
+		m.nodeInfo.ID,
+		messaging.MaintainerManagerTopic,
+		&heartbeatpb.SetDispatcherDrainTargetRequest{
+			TargetNodeId: "n2",
+			TargetEpoch:  1,
+		},
+	)
+	msg.From = m.coordinatorID
+	m.onSetDispatcherDrainTargetRequest(msg)
+	target, epoch := m.getDispatcherDrainTarget()
+	require.Equal(t, node.ID("n2"), target)
+	require.Equal(t, uint64(1), epoch)
+
+	msg = messaging.NewSingleTargetMessage(
+		m.nodeInfo.ID,
+		messaging.MaintainerManagerTopic,
+		&heartbeatpb.SetDispatcherDrainTargetRequest{
+			TargetNodeId: "",
+			TargetEpoch:  1,
+		},
+	)
+	msg.From = m.coordinatorID
+	m.onSetDispatcherDrainTargetRequest(msg)
+	target, epoch = m.getDispatcherDrainTarget()
+	require.Equal(t, node.ID(""), target)
+	require.Equal(t, uint64(1), epoch)
+}
+
+func TestSetDispatcherDrainTargetRejectStaleUpdate(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+
+	var liveness api.Liveness
+	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &liveness)
+	m.coordinatorID = node.ID("coordinator")
+
+	apply := func(target string, epoch uint64) {
+		msg := messaging.NewSingleTargetMessage(
+			m.nodeInfo.ID,
+			messaging.MaintainerManagerTopic,
+			&heartbeatpb.SetDispatcherDrainTargetRequest{
+				TargetNodeId: target,
+				TargetEpoch:  epoch,
+			},
+		)
+		msg.From = m.coordinatorID
+		m.onSetDispatcherDrainTargetRequest(msg)
+	}
+
+	apply("n2", 1)
+	apply("", 1)
+	apply("n2", 1) // stale reactivation at the same epoch should be ignored.
+	target, epoch := m.getDispatcherDrainTarget()
+	require.Equal(t, node.ID(""), target)
+	require.Equal(t, uint64(1), epoch)
+
+	apply("n3", 0) // stale lower epoch.
+	target, epoch = m.getDispatcherDrainTarget()
+	require.Equal(t, node.ID(""), target)
+	require.Equal(t, uint64(1), epoch)
+
+	apply("n4", 2) // new epoch should be accepted.
+	target, epoch = m.getDispatcherDrainTarget()
+	require.Equal(t, node.ID("n4"), target)
+	require.Equal(t, uint64(2), epoch)
+}

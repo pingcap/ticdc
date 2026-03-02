@@ -27,6 +27,7 @@ const (
 	BalanceSplitScheduler     = "balance-split-scheduler"
 	DrainScheduler            = "drain-scheduler"
 	RedoBasicScheduler        = "redo-basic-scheduler"
+	RedoDrainScheduler        = "redo-drain-scheduler"
 	RedoBalanceScheduler      = "redo-balance-scheduler"
 	RedoBalanceSplitScheduler = "redo-balance-split-scheduler"
 )
@@ -65,9 +66,16 @@ func (sm *Controller) Start(taskPool threadpool.ThreadPool) (handles []*threadpo
 	if ok {
 		handles = append(handles, taskPool.Submit(drainScheduler, time.Now()))
 	}
+	redoDrainScheduler, ok := sm.schedulers[RedoDrainScheduler]
+	if ok {
+		handles = append(handles, taskPool.Submit(redoDrainScheduler, time.Now()))
+	}
 	checkerSchedulers := []Scheduler{}
 	for _, scheduler := range sm.schedulers {
-		if scheduler.Name() != BasicScheduler && scheduler.Name() != RedoBasicScheduler && scheduler.Name() != DrainScheduler {
+		if scheduler.Name() != BasicScheduler &&
+			scheduler.Name() != RedoBasicScheduler &&
+			scheduler.Name() != DrainScheduler &&
+			scheduler.Name() != RedoDrainScheduler {
 			checkerSchedulers = append(checkerSchedulers, scheduler)
 		}
 	}

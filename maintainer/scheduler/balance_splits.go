@@ -46,6 +46,10 @@ type balanceSplitsScheduler struct {
 
 	splitter *split.Splitter
 	mode     int64
+
+	getDrainTarget drainTargetGetter
+
+	drainBalanceBlockedUntil time.Time
 }
 
 func NewBalanceSplitsScheduler(
@@ -55,6 +59,7 @@ func NewBalanceSplitsScheduler(
 	oc *operator.Controller,
 	sc *span.Controller,
 	mode int64,
+	getDrainTarget drainTargetGetter,
 ) *balanceSplitsScheduler {
 	return &balanceSplitsScheduler{
 		changefeedID:       changefeedID,
@@ -64,6 +69,7 @@ func NewBalanceSplitsScheduler(
 		spanController:     sc,
 		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		mode:               mode,
+		getDrainTarget:     getDrainTarget,
 	}
 }
 
@@ -75,6 +81,12 @@ func (s *balanceSplitsScheduler) Name() string {
 }
 
 func (s *balanceSplitsScheduler) Execute() time.Time {
+	now := time.Now()
+	if shouldPauseBalanceForDrain(s.getDrainTarget, now, &s.drainBalanceBlockedUntil) {
+		// Pause split-table balancing while dispatcher drain is active
+		// and keep a cooldown window after drain completion to avoid churn.
+		return time.Now().Add(time.Second * 15)
+	}
 	if s.operatorController.OperatorSize() > 0 || s.spanController.GetAbsentSize() > 0 {
 		// not in stable schedule state, skip balance split
 		return time.Now().Add(time.Second * 15)
