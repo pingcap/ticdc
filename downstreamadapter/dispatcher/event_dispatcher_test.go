@@ -387,10 +387,13 @@ func TestDispatcherHandleEvents(t *testing.T) {
 		},
 	}
 	dispatcher.HandleDispatcherStatus(dispatcherStatus)
-	checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
-	require.Equal(t, true, isEmpty)
-	require.Equal(t, uint64(5), checkpointTs)
-	require.Equal(t, int32(6), count.Load())
+	require.Eventually(t, func() bool {
+		checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
+		if !isEmpty || checkpointTs != uint64(5) {
+			return false
+		}
+		return count.Load() == int32(6)
+	}, 5*time.Second, 10*time.Millisecond)
 
 	// ===== resolved event =====
 	checkpointTs = dispatcher.GetCheckpointTs()

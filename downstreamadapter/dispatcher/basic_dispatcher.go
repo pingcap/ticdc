@@ -334,6 +334,13 @@ func (d *BasicDispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.S
 }
 
 func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {
+	// Keep block-event write order with prior DML. For storage sink this may wait
+	// until prior DML are enqueued/flushed to the sink pipeline; for non-storage
+	// sinks it is usually a no-op.
+	if err := d.sink.FlushDMLBeforeBlock(event); err != nil {
+		return err
+	}
+
 	// For ddl event, we need to check whether it should be sent to downstream.
 	// It may be marked as not sync by filter when building the event.
 	if event.GetType() == commonEvent.TypeDDLEvent {
@@ -742,9 +749,10 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // 1. If the action is a write, we need to add the ddl event to the sink for writing to downstream.
 // 2. If the action is a pass, we just need to pass the event
 //
-// For Action_Write, writing the block event may involve IO (e.g. executing DDL). To avoid blocking the
-// dispatcher status dynamic stream handler, we execute the write asynchronously and return await=true.
-// The status path will be waked up after the write finishes.
+// For block actions (write/pass), execution may involve downstream IO because we flush prior DML first.
+// To avoid blocking the dispatcher status dynamic stream handler, we execute the action asynchronously
+// and return await=true.
+// The status path will be waked up after the action finishes.
 func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.DispatcherStatus) (await bool) {
 	log.Debug("dispatcher handle dispatcher status",
 		zap.Any("dispatcherStatus", dispatcherStatus),
@@ -791,17 +799,18 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 				// 3. clear blockEventStatus(should be the old pending event, but clear the new one)
 				d.blockEventStatus.clear()
 			})
+			actionCommitTs := action.CommitTs
+			actionIsSyncPoint := action.IsSyncPoint
 			if action.Action == heartbeatpb.Action_Write {
-				actionCommitTs := action.CommitTs
-				actionIsSyncPoint := action.IsSyncPoint
 				d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
 					d.ExecuteBlockEventDDL(pendingEvent, actionCommitTs, actionIsSyncPoint)
 				})
 				return true
 			} else {
-				failpoint.Inject("BlockOrWaitBeforePass", nil)
-				d.PassBlockEventToSink(pendingEvent)
-				failpoint.Inject("BlockAfterPass", nil)
+				d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
+					d.PassBlockEvent(pendingEvent, actionCommitTs, actionIsSyncPoint)
+				})
+				return true
 			}
 		} else {
 			ts, ok := d.blockEventStatus.getEventCommitTs()
@@ -842,7 +851,26 @@ func (d *BasicDispatcher) ExecuteBlockEventDDL(pendingEvent commonEvent.BlockEve
 		return
 	}
 	failpoint.Inject("BlockOrWaitReportAfterWrite", nil)
+	d.reportBlockedEventDone(actionCommitTs, actionIsSyncPoint)
+}
 
+// PassBlockEvent executes maintainer Action_Pass:
+// flush prior DML for ordering, then locally mark the block event as passed.
+func (d *BasicDispatcher) PassBlockEvent(pendingEvent commonEvent.BlockEvent, actionCommitTs uint64, actionIsSyncPoint bool) {
+	failpoint.Inject("BlockOrWaitBeforePass", nil)
+	err := d.sink.FlushDMLBeforeBlock(pendingEvent)
+	if err != nil {
+		d.HandleError(err)
+		return
+	}
+	d.PassBlockEventToSink(pendingEvent)
+	failpoint.Inject("BlockAfterPass", nil)
+	d.reportBlockedEventDone(actionCommitTs, actionIsSyncPoint)
+}
+
+// reportBlockedEventDone sends DONE status and wakes dispatcher-status stream path
+// so the next status for this dispatcher can be handled.
+func (d *BasicDispatcher) reportBlockedEventDone(actionCommitTs uint64, actionIsSyncPoint bool) {
 	d.sharedInfo.blockStatusesChan <- &heartbeatpb.TableSpanBlockStatus{
 		ID: d.id.ToPB(),
 		State: &heartbeatpb.State{
@@ -903,18 +931,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 				// we track it as a pending schedule-related event until the maintainer ACKs it.
 				d.pendingACKCount.Add(1)
 			}
-			// Pre-block barrier for ordering:
-			// storage sink may wait until prior DML of this dispatcher are accepted
-			// by sink pipeline; non-storage sinks usually no-op here.
-			err := d.sink.FlushDMLBeforeBlock(event)
-			if err != nil {
-				if needsScheduleACKTracking {
-					d.pendingACKCount.Add(-1)
-				}
-				d.HandleError(err)
-				return
-			}
-			err = d.AddBlockEventToSink(event)
+			err := d.AddBlockEventToSink(event)
 			if err != nil {
 				if needsScheduleACKTracking {
 					d.pendingACKCount.Add(-1)
@@ -982,16 +999,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 			d.holdBlockEvent(event)
 			return
 		}
-		d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
-			// Same pre-block barrier in the blocking path; this keeps block-event
-			// visibility ordered with prior DML for sinks that require draining.
-			err := d.sink.FlushDMLBeforeBlock(event)
-			if err != nil {
-				d.HandleError(err)
-				return
-			}
-			d.reportBlockedEventToMaintainer(event)
-		})
+		d.reportBlockedEventToMaintainer(event)
 	}
 
 	// dealing with events which update schema ids
