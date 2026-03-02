@@ -65,7 +65,7 @@ func TestCheckNeedScan(t *testing.T) {
 	broker.close()
 
 	disInfo := newMockDispatcherInfoForTest(t)
-	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
+	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID(), disInfo.GetSyncPointInterval())
 
 	info := newMockDispatcherInfoForTest(t)
 	info.startTs = 100
@@ -155,7 +155,7 @@ func TestOnNotify(t *testing.T) {
 	}
 
 	// Case 4: Do scan, it will update the sentResolvedTs.
-	status := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
+	status := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID(), disInfo.GetSyncPointInterval())
 	status.availableMemoryQuota.Store(node.ID(task.info.GetServerID()), atomic.NewUint64(broker.scanLimitInBytes))
 
 	broker.doScan(context.TODO(), task)
@@ -179,8 +179,7 @@ func TestScanRangeCappedByScanWindow(t *testing.T) {
 
 	info := newMockDispatcherInfoForTest(t)
 	info.epoch = 1
-	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID())
-	changefeedStatus.SetSyncPointConfig(info)
+	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
 
 	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
 	disp.seq.Store(1)
@@ -206,7 +205,7 @@ func TestHandleCongestionControlV2AdjustsScanInterval(t *testing.T) {
 	defer broker.close()
 
 	changefeedID := common.NewChangefeedID4Test("default", "test")
-	status := broker.getOrSetChangefeedStatus(changefeedID)
+	status := broker.getOrSetChangefeedStatus(changefeedID, time.Second*10)
 
 	status.scanInterval.Store(int64(40 * time.Second))
 	status.lastAdjustTime.Store(time.Now())
@@ -223,7 +222,7 @@ func TestHandleCongestionControlV2ResetsScanIntervalOnMemoryRelease(t *testing.T
 	defer broker.close()
 
 	changefeedID := common.NewChangefeedID4Test("default", "test")
-	status := broker.getOrSetChangefeedStatus(changefeedID)
+	status := broker.getOrSetChangefeedStatus(changefeedID, time.Second*10)
 
 	status.scanInterval.Store(int64(40 * time.Second))
 
@@ -239,7 +238,7 @@ func TestHandleCongestionControlV1DoesNotAdjustScanInterval(t *testing.T) {
 	defer broker.close()
 
 	changefeedID := common.NewChangefeedID4Test("default", "test")
-	status := broker.getOrSetChangefeedStatus(changefeedID)
+	status := broker.getOrSetChangefeedStatus(changefeedID, time.Second*10)
 
 	status.scanInterval.Store(int64(40 * time.Second))
 	status.lastAdjustTime.Store(time.Now())
@@ -532,7 +531,7 @@ func TestSendHandshakeIfNeedConcurrency(t *testing.T) {
 
 	// Create a mock dispatcher info
 	dispInfo := newMockDispatcherInfoForTest(t)
-	changefeedStatus := broker.getOrSetChangefeedStatus(dispInfo.GetChangefeedID())
+	changefeedStatus := broker.getOrSetChangefeedStatus(dispInfo.GetChangefeedID(), dispInfo.GetSyncPointInterval())
 
 	// Test 1: Sequential calls should only send one handshake
 	t.Run("Sequential calls", func(t *testing.T) {

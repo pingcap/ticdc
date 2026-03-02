@@ -17,7 +17,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
@@ -27,8 +26,7 @@ import (
 func TestAdjustScanIntervalVeryLowBypassesSyncPointCap(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"))
-	status.syncPointInterval.Store(int64(1 * time.Minute))
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
 
 	now := time.Now()
 	status.lastAdjustTime.Store(now.Add(-scanIntervalAdjustCooldown - time.Second))
@@ -46,8 +44,7 @@ func TestAdjustScanIntervalVeryLowBypassesSyncPointCap(t *testing.T) {
 func TestAdjustScanIntervalLowRespectsSyncPointCap(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"))
-	status.syncPointInterval.Store(int64(1 * time.Minute))
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
 
 	now := time.Now()
 	status.lastAdjustTime.Store(now.Add(-scanIntervalAdjustCooldown - time.Second))
@@ -63,7 +60,7 @@ func TestAdjustScanIntervalLowRespectsSyncPointCap(t *testing.T) {
 func TestAdjustScanIntervalDecreaseIgnoresCooldown(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"))
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
 	now := time.Now()
 	status.lastAdjustTime.Store(now)
 
@@ -75,7 +72,7 @@ func TestAdjustScanIntervalDecreaseIgnoresCooldown(t *testing.T) {
 func TestAdjustScanIntervalCriticalPressure(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"))
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
 	now := time.Now()
 	status.lastAdjustTime.Store(now)
 
@@ -88,7 +85,7 @@ func TestAdjustScanIntervalCriticalPressure(t *testing.T) {
 func TestUpdateMemoryUsageResetsScanIntervalOnMemoryRelease(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"))
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
 	now := time.Now()
 	status.scanInterval.Store(int64(40 * time.Second))
 
@@ -99,8 +96,7 @@ func TestUpdateMemoryUsageResetsScanIntervalOnMemoryRelease(t *testing.T) {
 func TestAdjustScanIntervalIncreaseWithJitteredSamples(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"))
-	status.syncPointInterval.Store(int64(1 * time.Minute))
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
 
 	start := time.Now()
 	status.lastAdjustTime.Store(start.Add(-scanIntervalAdjustCooldown - time.Second))
@@ -119,7 +115,7 @@ func TestAdjustScanIntervalIncreaseWithJitteredSamples(t *testing.T) {
 func TestAdjustScanIntervalDecreasesWhenUsageIncreasing(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"))
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
 	now := time.Now()
 	status.lastAdjustTime.Store(now)
 
@@ -135,7 +131,7 @@ func TestAdjustScanIntervalDecreasesWhenUsageIncreasing(t *testing.T) {
 func TestAdjustScanIntervalDecreasesWhenUsageIncreasingAboveThirtyPercent(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"))
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
 	now := time.Now()
 	status.lastAdjustTime.Store(now)
 	status.lastTrendAdjustTime.Store(now.Add(-scanTrendAdjustCooldown - time.Second))
@@ -152,7 +148,7 @@ func TestAdjustScanIntervalDecreasesWhenUsageIncreasingAboveThirtyPercent(t *tes
 func TestRefreshMinSentResolvedTsMinAndSkipRules(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"))
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
 
 	stale := &dispatcherStat{}
 	stale.seq.Store(1)
@@ -212,7 +208,7 @@ func TestRefreshMinSentResolvedTsMinAndSkipRules(t *testing.T) {
 func TestRefreshMinSentResolvedTsStaleFallback(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"))
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
 
 	stale := &dispatcherStat{}
 	stale.seq.Store(1)
@@ -230,7 +226,7 @@ func TestRefreshMinSentResolvedTsStaleFallback(t *testing.T) {
 func TestGetScanMaxTsFallbackInterval(t *testing.T) {
 	t.Parallel()
 
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"))
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
 
 	baseTime := time.Unix(1234, 0)
 	baseTs := oracle.GoTimeToTS(baseTime)
@@ -244,40 +240,4 @@ func TestGetScanMaxTsFallbackInterval(t *testing.T) {
 
 	status.minSentTs.Store(0)
 	require.Equal(t, uint64(0), status.getScanMaxTs())
-}
-
-func TestUpdateSyncPointConfigUsesMinimumInterval(t *testing.T) {
-	t.Parallel()
-
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"))
-
-	disabled := newMockDispatcherInfo(t, 0, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
-	disabled.enableSyncPoint = false
-	disabled.syncPointInterval = 2 * time.Minute
-	status.SetSyncPointConfig(disabled)
-	require.Equal(t, int64(0), status.syncPointInterval.Load())
-
-	first := newMockDispatcherInfo(t, 0, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
-	first.enableSyncPoint = true
-	first.syncPointInterval = 2 * time.Minute
-	status.SetSyncPointConfig(first)
-	require.Equal(t, int64(2*time.Minute), status.syncPointInterval.Load())
-
-	second := newMockDispatcherInfo(t, 0, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
-	second.enableSyncPoint = true
-	second.syncPointInterval = 1 * time.Minute
-	status.SetSyncPointConfig(second)
-	require.Equal(t, int64(1*time.Minute), status.syncPointInterval.Load())
-
-	third := newMockDispatcherInfo(t, 0, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
-	third.enableSyncPoint = true
-	third.syncPointInterval = 3 * time.Minute
-	status.SetSyncPointConfig(third)
-	require.Equal(t, int64(1*time.Minute), status.syncPointInterval.Load())
-
-	invalid := newMockDispatcherInfo(t, 0, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
-	invalid.enableSyncPoint = true
-	invalid.syncPointInterval = 0
-	status.SetSyncPointConfig(invalid)
-	require.Equal(t, int64(1*time.Minute), status.syncPointInterval.Load())
 }

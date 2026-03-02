@@ -433,13 +433,14 @@ type changefeedStatus struct {
 	lastAdjustTime      atomic.Time
 	lastTrendAdjustTime atomic.Time
 	usageWindow         *memoryUsageWindow
-	syncPointInterval   atomic.Int64
+	syncPointInterval   time.Duration
 }
 
-func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
+func newChangefeedStatus(changefeedID common.ChangeFeedID, syncPointInterval time.Duration) *changefeedStatus {
 	status := &changefeedStatus{
-		changefeedID: changefeedID,
-		usageWindow:  newMemoryUsageWindow(memoryUsageWindowDuration),
+		changefeedID:      changefeedID,
+		usageWindow:       newMemoryUsageWindow(memoryUsageWindowDuration),
+		syncPointInterval: syncPointInterval,
 	}
 	status.scanInterval.Store(int64(defaultScanInterval))
 	status.lastAdjustTime.Store(time.Now())
@@ -466,5 +467,5 @@ func (c *changefeedStatus) isEmpty() bool {
 }
 
 func (c *changefeedStatus) isSyncpointEnabled() bool {
-	return c.syncPointInterval.Load() > 0
+	return c.syncPointInterval > 0
 }

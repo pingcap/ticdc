@@ -965,8 +965,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	span := info.GetTableSpan()
 	changefeedID := info.GetChangefeedID()
 
-	status := c.getOrSetChangefeedStatus(changefeedID)
-	status.SetSyncPointConfig(info)
+	status := c.getOrSetChangefeedStatus(changefeedID, info.GetSyncPointInterval())
 	dispatcher := newDispatcherStat(info, uint64(len(c.taskChan)), uint64(len(c.messageCh)), nil, status)
 	dispatcherPtr := &atomic.Pointer[dispatcherStat]{}
 	dispatcherPtr.Store(dispatcher)
@@ -1156,8 +1155,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			return err
 		}
 	}
-	status := c.getOrSetChangefeedStatus(changefeedID)
-	status.SetSyncPointConfig(dispatcherInfo)
+	status := c.getOrSetChangefeedStatus(changefeedID, dispatcherInfo.GetSyncPointInterval())
 
 	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.taskChan)), uint64(len(c.messageCh)), tableInfo, status)
 	newStat.copyStatistics(oldStat)
@@ -1197,10 +1195,10 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	return nil
 }
 
-func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
+func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID, syncPointInterval time.Duration) *changefeedStatus {
 	stat, ok := c.changefeedMap.Load(changefeedID)
 	if !ok {
-		stat = newChangefeedStatus(changefeedID)
+		stat = newChangefeedStatus(changefeedID, syncPointInterval)
 		log.Info("new changefeed status", zap.Stringer("changefeedID", changefeedID))
 		c.changefeedMap.Store(changefeedID, stat)
 		metrics.EventServiceScanWindowBaseTsGaugeVec.WithLabelValues(changefeedID.String()).Set(0)

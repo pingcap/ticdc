@@ -308,7 +308,7 @@ func (c *changefeedStatus) adjustScanInterval(now time.Time, usage memoryUsageSt
 			zap.Float64("trendDelta", trendDelta),
 			zap.Int("usageSamples", usage.cnt),
 			zap.Bool("syncPointEnabled", c.isSyncpointEnabled()),
-			zap.Int64("syncPointInterval", c.syncPointInterval.Load()))
+			zap.Duration("syncPointInterval", c.syncPointInterval))
 	}
 }
 
@@ -317,10 +317,11 @@ func (c *changefeedStatus) maxScanInterval() time.Duration {
 		return maxScanInterval
 	}
 
-	interval := time.Duration(c.syncPointInterval.Load())
+	interval := c.syncPointInterval
 	if interval <= 0 {
 		return maxScanInterval
 	}
+
 	if interval < maxScanInterval {
 		return interval
 	}
@@ -390,13 +391,6 @@ func (c *changefeedStatus) storeMinSentTs(value uint64) {
 	}
 	c.minSentTs.Store(value)
 	metrics.EventServiceScanWindowBaseTsGaugeVec.WithLabelValues(c.changefeedID.String()).Set(float64(value))
-}
-
-func (c *changefeedStatus) SetSyncPointConfig(info DispatcherInfo) {
-	if !info.SyncPointEnabled() {
-		return
-	}
-	c.syncPointInterval.Store(int64(info.GetSyncPointInterval()))
 }
 
 func scaleDuration(d time.Duration, numerator int64, denominator int64) time.Duration {
