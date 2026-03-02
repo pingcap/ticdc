@@ -180,7 +180,7 @@ func TestScanRangeCappedByScanWindow(t *testing.T) {
 	info := newMockDispatcherInfoForTest(t)
 	info.epoch = 1
 	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID())
-	changefeedStatus.updateSyncPointConfig(info)
+	changefeedStatus.SetSyncPointConfig(info)
 
 	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
 	disp.seq.Store(1)

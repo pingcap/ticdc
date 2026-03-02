@@ -254,30 +254,30 @@ func TestUpdateSyncPointConfigUsesMinimumInterval(t *testing.T) {
 	disabled := newMockDispatcherInfo(t, 0, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
 	disabled.enableSyncPoint = false
 	disabled.syncPointInterval = 2 * time.Minute
-	status.updateSyncPointConfig(disabled)
+	status.SetSyncPointConfig(disabled)
 	require.Equal(t, int64(0), status.syncPointInterval.Load())
 
 	first := newMockDispatcherInfo(t, 0, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
 	first.enableSyncPoint = true
 	first.syncPointInterval = 2 * time.Minute
-	status.updateSyncPointConfig(first)
+	status.SetSyncPointConfig(first)
 	require.Equal(t, int64(2*time.Minute), status.syncPointInterval.Load())
 
 	second := newMockDispatcherInfo(t, 0, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
 	second.enableSyncPoint = true
 	second.syncPointInterval = 1 * time.Minute
-	status.updateSyncPointConfig(second)
+	status.SetSyncPointConfig(second)
 	require.Equal(t, int64(1*time.Minute), status.syncPointInterval.Load())
 
 	third := newMockDispatcherInfo(t, 0, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
 	third.enableSyncPoint = true
 	third.syncPointInterval = 3 * time.Minute
-	status.updateSyncPointConfig(third)
+	status.SetSyncPointConfig(third)
 	require.Equal(t, int64(1*time.Minute), status.syncPointInterval.Load())
 
 	invalid := newMockDispatcherInfo(t, 0, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
 	invalid.enableSyncPoint = true
 	invalid.syncPointInterval = 0
-	status.updateSyncPointConfig(invalid)
+	status.SetSyncPointConfig(invalid)
 	require.Equal(t, int64(1*time.Minute), status.syncPointInterval.Load())
 }

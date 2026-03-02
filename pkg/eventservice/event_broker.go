@@ -966,7 +966,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	changefeedID := info.GetChangefeedID()
 
 	status := c.getOrSetChangefeedStatus(changefeedID)
-	status.updateSyncPointConfig(info)
+	status.SetSyncPointConfig(info)
 	dispatcher := newDispatcherStat(info, uint64(len(c.taskChan)), uint64(len(c.messageCh)), nil, status)
 	dispatcherPtr := &atomic.Pointer[dispatcherStat]{}
 	dispatcherPtr.Store(dispatcher)
@@ -1157,7 +1157,8 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		}
 	}
 	status := c.getOrSetChangefeedStatus(changefeedID)
-	status.updateSyncPointConfig(dispatcherInfo)
+	status.SetSyncPointConfig(dispatcherInfo)
+
 	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.taskChan)), uint64(len(c.messageCh)), tableInfo, status)
 	newStat.copyStatistics(oldStat)
 

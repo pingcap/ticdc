@@ -392,23 +392,11 @@ func (c *changefeedStatus) storeMinSentTs(value uint64) {
 	metrics.EventServiceScanWindowBaseTsGaugeVec.WithLabelValues(c.changefeedID.String()).Set(float64(value))
 }
 
-func (c *changefeedStatus) updateSyncPointConfig(info DispatcherInfo) {
+func (c *changefeedStatus) SetSyncPointConfig(info DispatcherInfo) {
 	if !info.SyncPointEnabled() {
 		return
 	}
-	interval := info.GetSyncPointInterval()
-	if interval <= 0 {
-		return
-	}
-	for {
-		current := time.Duration(c.syncPointInterval.Load())
-		if current != 0 && interval >= current {
-			return
-		}
-		if c.syncPointInterval.CompareAndSwap(int64(current), int64(interval)) {
-			return
-		}
-	}
+	c.syncPointInterval.Store(int64(info.GetSyncPointInterval()))
 }
 
 func scaleDuration(d time.Duration, numerator int64, denominator int64) time.Duration {
