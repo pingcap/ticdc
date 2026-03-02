@@ -412,6 +412,10 @@ func (s *Sink) Close(removeChangefeed bool) {
 	s.statistics.Close()
 }
 
+func (s *Sink) BatchCount() int {
+	return s.cfg.MaxTxnRow * len(s.dmlWriter)
+}
+
 func (s *Sink) BatchBytes() int {
 	return int(s.cfg.MaxAllowedPacket)
 }

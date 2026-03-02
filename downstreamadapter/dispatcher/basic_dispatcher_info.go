@@ -136,6 +136,9 @@ func (d *BasicDispatcher) GetChangefeedID() common.ChangeFeedID {
 
 func (d *BasicDispatcher) GetEventCollectorBatchConfig() (batchCount int, batchBytes int) {
 	batchCount = d.sharedInfo.eventCollectorBatchCount
+	if batchCount == 0 && d.sink != nil {
+		batchCount = d.sink.BatchCount()
+	}
 	batchBytes = d.sharedInfo.eventCollectorBatchBytes
 	if batchBytes != 0 || d.sink == nil {
 		return batchCount, batchBytes

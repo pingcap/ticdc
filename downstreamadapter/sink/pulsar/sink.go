@@ -536,6 +536,10 @@ func (s *sink) Close(_ bool) {
 	s.statistics.Close()
 }
 
+func (s *sink) BatchCount() int {
+	return 4096
+}
+
 func (s *sink) BatchBytes() int {
 	return 0
 }

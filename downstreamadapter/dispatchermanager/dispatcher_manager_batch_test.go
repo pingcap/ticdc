@@ -24,7 +24,8 @@ import (
 )
 
 type mockBatchConfigSink struct {
-	sinkType common.SinkType
+	sinkType   common.SinkType
+	batchCount int
 }
 
 func (s *mockBatchConfigSink) SinkType() common.SinkType { return s.sinkType }
@@ -37,23 +38,40 @@ func (s *mockBatchConfigSink) SetTableSchemaStore(_ *commonEvent.TableSchemaStor
 }
 func (s *mockBatchConfigSink) Close(_ bool)                {}
 func (s *mockBatchConfigSink) Run(_ context.Context) error { return nil }
+func (s *mockBatchConfigSink) BatchCount() int {
+	if s.batchCount > 0 {
+		return s.batchCount
+	}
+	return 4096
+}
 func (s *mockBatchConfigSink) BatchBytes() int {
 	return 0
 }
 
 func TestDispatcherManager_GetEventCollectorBatchCountAndBytes(t *testing.T) {
 	cases := []struct {
-		name      string
-		sinkType  common.SinkType
-		cfg       *config.ChangefeedConfig
-		wantCount int
-		wantBytes int
+		name           string
+		sinkType       common.SinkType
+		sinkBatchCount int
+		cfg            *config.ChangefeedConfig
+		wantCount      int
+		wantBytes      int
 	}{
 		{
 			name:      "defaults-for-kafka",
 			sinkType:  common.KafkaSinkType,
 			cfg:       &config.ChangefeedConfig{},
 			wantCount: defaultEventCollectorBatchCount,
+			wantBytes: 0,
+		},
+		{
+			name:           "default-count-from-sink",
+			sinkType:       common.MysqlSinkType,
+			sinkBatchCount: 2048,
+			cfg: &config.ChangefeedConfig{
+				SinkConfig: &config.SinkConfig{},
+			},
+			wantCount: 2048,
 			wantBytes: 0,
 		},
 		{
@@ -112,7 +130,8 @@ func TestDispatcherManager_GetEventCollectorBatchCountAndBytes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			m := &DispatcherManager{
 				sink: &mockBatchConfigSink{
-					sinkType: tc.sinkType,
+					sinkType:   tc.sinkType,
+					batchCount: tc.sinkBatchCount,
 				},
 				config: tc.cfg,
 			}

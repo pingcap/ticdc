@@ -324,7 +324,10 @@ func NewDispatcherManager(
 }
 
 func (e *DispatcherManager) getEventCollectorBatchCountAndBytes() (int, int) {
-	batchCount := defaultEventCollectorBatchCount
+	batchCount := e.sink.BatchCount()
+	if batchCount <= 0 {
+		batchCount = defaultEventCollectorBatchCount
+	}
 	batchBytes := 0
 
 	if count := e.config.EventCollectorBatchCount; count > 0 {

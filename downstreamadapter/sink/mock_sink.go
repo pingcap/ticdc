@@ -51,6 +51,10 @@ func (s *mockSink) Run(context.Context) error {
 	return nil
 }
 
+func (s *mockSink) BatchCount() int {
+	return 4096
+}
+
 func (s *mockSink) BatchBytes() int {
 	return 0
 }
