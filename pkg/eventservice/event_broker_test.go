@@ -200,6 +200,38 @@ func TestScanRangeCappedByScanWindow(t *testing.T) {
 	require.Equal(t, oracle.GoTimeToTS(baseTime.Add(defaultScanInterval)), dataRange.CommitTsEnd)
 }
 
+func TestGetScanTaskDataRangeEmptyAfterCappingDoesNotResetScanRange(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	// Close the broker, so we can catch all message in the test.
+	broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp.seq.Store(1)
+
+	baseTime := time.Now()
+	baseTs := oracle.GoTimeToTS(baseTime)
+	commitStart := oracle.GoTimeToTS(baseTime.Add(20 * time.Second))
+	lastStartTs := commitStart - 1
+
+	disp.sentResolvedTs.Store(baseTs)
+	disp.receivedResolvedTs.Store(oracle.GoTimeToTS(baseTime.Add(40 * time.Second)))
+	disp.eventStoreCommitTs.Store(commitStart)
+	disp.lastScannedCommitTs.Store(commitStart)
+	disp.lastScannedStartTs.Store(lastStartTs)
+
+	changefeedStatus.minSentTs.Store(baseTs)
+	changefeedStatus.scanInterval.Store(int64(defaultScanInterval))
+
+	needScan, _ := broker.getScanTaskDataRange(disp)
+	require.False(t, needScan)
+	require.Equal(t, commitStart, disp.lastScannedCommitTs.Load())
+	require.Equal(t, lastStartTs, disp.lastScannedStartTs.Load())
+}
+
 func TestHandleCongestionControlV2AdjustsScanInterval(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	defer broker.close()

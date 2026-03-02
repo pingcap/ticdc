@@ -445,7 +445,10 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 
 	if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
 		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
-		c.sendResolvedTs(task, task.sentResolvedTs.Load())
+		// Scan range can become empty after applying capping (for example, scan window).
+		// Send a signal resolved-ts event (rate limited) to keep downstream responsive,
+		// but do not advance the watermark here.
+		c.sendSignalResolvedTs(task)
 		return false, common.DataRange{}
 	}
 
