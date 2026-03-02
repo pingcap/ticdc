@@ -318,17 +318,16 @@ func (c *requestCache) markDone() {
 	// Do it with CAS to avoid clobbering concurrent Inc() calls.
 	for {
 		old := c.pendingCount.Load()
-		if old <= 0 {
-			if old == 0 {
-				break
-			}
+		if old == 0 {
+			break
+		} else if old < 0 {
 			if c.pendingCount.CompareAndSwap(old, 0) {
 				break
 			}
-			continue
-		}
-		if c.pendingCount.CompareAndSwap(old, old-1) {
-			break
+		} else {
+			if c.pendingCount.CompareAndSwap(old, old-1) {
+				break
+			}
 		}
 	}
 	// Notify waiting add operations that there's space available.
