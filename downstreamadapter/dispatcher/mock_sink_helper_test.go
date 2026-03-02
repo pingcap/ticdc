@@ -20,7 +20,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
-	sinkmock "github.com/pingcap/ticdc/downstreamadapter/sink/mock"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 )
@@ -28,7 +28,7 @@ import (
 // dispatcherTestSink wraps gomock sink and keeps the few stateful helpers that
 // old tests used (captured DML events and normal/abnormal switch).
 type dispatcherTestSink struct {
-	sink *sinkmock.MockSink
+	sink *mock.MockSink
 
 	mu       sync.Mutex
 	dmls     []*commonEvent.DMLEvent
@@ -40,7 +40,7 @@ func newDispatcherTestSink(t *testing.T, sinkType common.SinkType) *dispatcherTe
 
 	ctrl := gomock.NewController(t)
 	testSink := &dispatcherTestSink{
-		sink: sinkmock.NewMockSink(ctrl),
+		sink: mock.NewMockSink(ctrl),
 		dmls: make([]*commonEvent.DMLEvent, 0),
 	}
 	testSink.isNormal.Store(true)

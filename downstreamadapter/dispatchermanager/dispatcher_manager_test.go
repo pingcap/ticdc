@@ -23,7 +23,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
-	sinkmock "github.com/pingcap/ticdc/downstreamadapter/sink/mock"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -42,7 +42,7 @@ func newDispatcherManagerTestSink(t *testing.T, sinkType common.SinkType) sink.S
 	t.Helper()
 
 	ctrl := gomock.NewController(t)
-	mockSink := sinkmock.NewMockSink(ctrl)
+	mockSink := mock.NewMockSink(ctrl)
 	mockSink.EXPECT().SinkType().Return(sinkType).AnyTimes()
 	mockSink.EXPECT().IsNormal().Return(true).AnyTimes()
 	mockSink.EXPECT().AddDMLEvent(gomock.Any()).AnyTimes()
