@@ -134,12 +134,13 @@ func (d *BasicDispatcher) GetChangefeedID() common.ChangeFeedID {
 	return d.sharedInfo.changefeedID
 }
 
-func (d *BasicDispatcher) GetEventCollectorBatchCount() int {
-	return d.sharedInfo.eventCollectorBatchCount
-}
-
-func (d *BasicDispatcher) GetEventCollectorBatchBytes() int {
-	return d.sharedInfo.eventCollectorBatchBytes
+func (d *BasicDispatcher) GetEventCollectorBatchConfig() (batchCount int, batchBytes int) {
+	batchCount = d.sharedInfo.eventCollectorBatchCount
+	batchBytes = d.sharedInfo.eventCollectorBatchBytes
+	if batchBytes != 0 || d.sink == nil {
+		return batchCount, batchBytes
+	}
+	return batchCount, d.sink.BatchBytes()
 }
 
 func (d *BasicDispatcher) GetComponentStatus() heartbeatpb.ComponentState {

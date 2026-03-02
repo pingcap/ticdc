@@ -39,8 +39,6 @@ type Sink interface {
 	SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore)
 	Close(removeChangefeed bool)
 	Run(ctx context.Context) error
-
-	BatchCount() int
 	BatchBytes() int
 }
 

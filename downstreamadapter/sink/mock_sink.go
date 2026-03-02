@@ -28,14 +28,6 @@ type mockSink struct {
 	sinkType common.SinkType
 }
 
-func (s *mockSink) BatchCount() int {
-	return 4096
-}
-
-func (s *mockSink) BatchBytes() int {
-	return 1024 * 1024 * 1024
-}
-
 func (s *mockSink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -57,6 +49,10 @@ func (s *mockSink) Close(bool) {}
 
 func (s *mockSink) Run(context.Context) error {
 	return nil
+}
+
+func (s *mockSink) BatchBytes() int {
+	return 0
 }
 
 func (s *mockSink) SinkType() common.SinkType {

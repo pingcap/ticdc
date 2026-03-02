@@ -268,8 +268,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 
 	ds := c.getDynamicStream(target.GetMode())
 
-	batchCounts := target.GetEventCollectorBatchCount()
-	batchBytes := target.GetEventCollectorBatchBytes()
+	batchCounts, batchBytes := target.GetEventCollectorBatchConfig()
 	batchConfig := dynstream.NewBatchConfig(batchCounts, batchBytes)
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(
 		memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector",
