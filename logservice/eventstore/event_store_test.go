@@ -251,7 +251,8 @@ func TestEventStoreUsesKeyspaceIDForEncryption(t *testing.T) {
 			callback:          func() {},
 		},
 	}
-	err = es.writeEvents(es.dbs[subStat.dbIndex], events, encoder)
+	var compressionBuf []byte
+	err = es.writeEvents(es.dbs[subStat.dbIndex], events, encoder, &compressionBuf)
 	require.NoError(t, err)
 	require.Equal(t, uint32(42), spy.encryptKeyspaceID)
 

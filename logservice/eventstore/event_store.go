@@ -242,6 +242,8 @@ type eventStore struct {
 	compressionThreshold int
 	// enableZstdCompression controls whether to enable zstd compression for large values.
 	enableZstdCompression bool
+	// encryptionManager for encrypting/decrypting data (optional).
+	encryptionManager encryption.EncryptionManager
 }
 
 const (
@@ -287,6 +289,7 @@ func New(
 		},
 		compressionThreshold:  config.GetGlobalServerConfig().Debug.EventStore.CompressionThreshold,
 		enableZstdCompression: config.GetGlobalServerConfig().Debug.EventStore.EnableZstdCompression,
+		encryptionManager:     encMgr,
 	}
 	store.gcManager = newGCManager(store.dbs, deleteDataRange, compactDataRange)
 
@@ -1394,6 +1397,9 @@ type eventStoreIter struct {
 	decoder     *zstd.Decoder
 	decoderPool *sync.Pool
 	decodeBuf   []byte
+	// encryptionManager for decrypting data (optional, can be nil).
+	encryptionManager encryption.EncryptionManager
+	keyspaceID        uint32
 }
 
 func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
