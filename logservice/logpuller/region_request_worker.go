@@ -123,13 +123,13 @@ func newRegionRequestWorker(
 				}
 				regionErr = &sendRequestToStoreErr{}
 			}
-			for subID, m := range worker.clearRegionStates() {
+			for _, m := range worker.clearRegionStates() {
 				for _, state := range m {
 					state.markStopped(regionErr)
 					regionEvent := regionEvent{
 						states: []*regionFeedState{state},
 					}
-					worker.client.pushRegionEventToDS(subID, regionEvent)
+					worker.client.dispatchRegionEvent(regionEvent)
 				}
 			}
 			// The store may fail forever, so we need try to re-schedule all pending regions.
@@ -267,7 +267,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 			default:
 				log.Panic("unknown event type", zap.Any("event", event))
 			}
-			s.client.pushRegionEventToDS(SubscriptionID(event.RequestId), regionEvent)
+			s.client.dispatchRegionEvent(regionEvent)
 		} else {
 			switch event.Event.(type) {
 			case *cdcpb.Event_Error:
@@ -313,7 +313,7 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 	if len(resolvedStates) == 0 {
 		return
 	}
-	s.client.pushRegionEventToDS(subscriptionID, regionEvent{
+	s.client.dispatchRegionEvent(regionEvent{
 		resolvedTs: resolvedTsEvent.Ts,
 		states:     resolvedStates,
 	})
@@ -382,7 +382,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 				regionEvent := regionEvent{
 					states: []*regionFeedState{state},
 				}
-				s.client.pushRegionEventToDS(subID, regionEvent)
+				s.client.dispatchRegionEvent(regionEvent)
 			}
 
 		} else if region.subscribedSpan.stopped.Load() {

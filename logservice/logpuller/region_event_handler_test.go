@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/tikv"
 )
@@ -46,10 +45,11 @@ import (
 // TiKV:   [Scan Start] [Send Prewrite2] [Send Commit] [Send Prewrite1] [Send Init]
 // TiCDC:                    [Recv Prewrite2]  [Recv Commit] [Recv Prewrite1] [Recv Init]
 func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
-	// initialize
-	option := dynstream.NewOption()
-	ds := dynstream.NewParallelDynamicStream("test", &regionEventHandler{}, option)
-	ds.Start()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	pipeline := newSpanPipelineManager(ctx, 1, 1024, 1024*1024*1024)
+	processor := newRegionEventProcessor(ctx, nil, pipeline, 1, 1024)
 
 	span := heartbeatpb.TableSpan{
 		TableID:  100,
@@ -75,7 +75,7 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 		advanceResolvedTs: advanceResolvedTs,
 		advanceInterval:   0,
 	}
-	ds.AddPath(subID, subSpan, dynstream.AreaSettings{})
+	pipeline.Register(subSpan)
 
 	worker := &regionRequestWorker{
 		requestCache: &requestCache{},
@@ -109,7 +109,7 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 			states:  []*regionFeedState{state},
 			entries: events,
 		}
-		ds.Push(subID, regionEvent)
+		processor.dispatch(regionEvent)
 	}
 
 	// Receive commit.
@@ -129,7 +129,7 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 			states:  []*regionFeedState{state},
 			entries: events,
 		}
-		ds.Push(subID, regionEvent)
+		processor.dispatch(regionEvent)
 	}
 
 	// Must not output event.
@@ -159,7 +159,7 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 			states:  []*regionFeedState{state},
 			entries: events,
 		}
-		ds.Push(subID, regionEvent)
+		processor.dispatch(regionEvent)
 	}
 
 	// Must not output event.
@@ -186,7 +186,7 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 			states:  []*regionFeedState{state},
 			entries: events,
 		}
-		ds.Push(subID, regionEvent)
+		processor.dispatch(regionEvent)
 	}
 
 	// Must output event.
@@ -204,11 +204,6 @@ func TestHandleEventEntryEventOutOfOrder(t *testing.T) {
 }
 
 func TestHandleResolvedTs(t *testing.T) {
-	// initialize
-	option := dynstream.NewOption()
-	ds := dynstream.NewParallelDynamicStream("test", &regionEventHandler{}, option)
-	ds.Start()
-
 	consumeKVEvents := func(events []common.RawKVEntry, _ func()) bool { return false } // not used
 	tsCh := make(chan uint64, 100)
 	advanceResolvedTs := func(ts uint64) {
@@ -235,7 +230,6 @@ func TestHandleResolvedTs(t *testing.T) {
 			advanceResolvedTs: advanceResolvedTs,
 			advanceInterval:   0,
 		}
-		ds.AddPath(subID1, subSpan, dynstream.AreaSettings{})
 		state1.region.subscribedSpan = subSpan
 		state1.region.lockedRangeState = &regionlock.LockedRangeState{}
 		state1.setInitialized()
@@ -259,7 +253,6 @@ func TestHandleResolvedTs(t *testing.T) {
 			advanceResolvedTs: advanceResolvedTs,
 			advanceInterval:   0,
 		}
-		ds.AddPath(subID2, subSpan, dynstream.AreaSettings{})
 		state2.region.subscribedSpan = subSpan
 		state2.region.lockedRangeState = &regionlock.LockedRangeState{}
 		state2.setInitialized()
@@ -283,32 +276,19 @@ func TestHandleResolvedTs(t *testing.T) {
 			advanceResolvedTs: advanceResolvedTs,
 			advanceInterval:   0,
 		}
-		ds.AddPath(subID3, subSpan, dynstream.AreaSettings{})
 		state3.region.subscribedSpan = subSpan
 		state3.region.lockedRangeState = &regionlock.LockedRangeState{}
 		state3.updateResolvedTs(8)
 	}
 
-	{
-		regionEvent := regionEvent{
-			resolvedTs: 10,
-			states:     []*regionFeedState{state1},
-		}
-		ds.Push(subID1, regionEvent)
+	if ts := handleResolvedTs(state1.region.subscribedSpan, state1, 10); ts != 0 {
+		advanceResolvedTs(ts)
 	}
-	{
-		regionEvent := regionEvent{
-			resolvedTs: 10,
-			states:     []*regionFeedState{state2},
-		}
-		ds.Push(subID2, regionEvent)
+	if ts := handleResolvedTs(state2.region.subscribedSpan, state2, 10); ts != 0 {
+		advanceResolvedTs(ts)
 	}
-	{
-		regionEvent := regionEvent{
-			resolvedTs: 10,
-			states:     []*regionFeedState{state3},
-		}
-		ds.Push(subID3, regionEvent)
+	if ts := handleResolvedTs(state3.region.subscribedSpan, state3, 10); ts != 0 {
+		advanceResolvedTs(ts)
 	}
 
 	// should only get one ts event

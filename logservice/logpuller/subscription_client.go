@@ -34,7 +34,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/prometheus/client_golang/prometheus"
 	kvclientv2 "github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
@@ -73,9 +72,6 @@ var (
 	metricStoreSendRequestErr         = metrics.EventFeedErrorCounter.WithLabelValues("SendRequestToStore")
 	metricKvIsBusyCounter             = metrics.EventFeedErrorCounter.WithLabelValues("KvIsBusy")
 	metricKvCongestedCounter          = metrics.EventFeedErrorCounter.WithLabelValues("KvCongested")
-
-	metricSubscriptionClientDSChannelSize     = metrics.DynamicStreamEventChanSize.WithLabelValues("event-store")
-	metricSubscriptionClientDSPendingQueueLen = metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-store")
 )
 
 // To generate an ID for a new subscription.
@@ -196,11 +192,8 @@ type subscriptionClient struct {
 
 	stores sync.Map
 
-	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
-	// the following three fields are used to manage feedback from ds and notify other goroutines
-	mu     sync.Mutex
-	cond   *sync.Cond
-	paused atomic.Bool
+	pipeline             *spanPipelineManager
+	regionEventProcessor *regionEventProcessor
 
 	// the credential to connect tikv
 	credential *security.Credential
@@ -250,21 +243,8 @@ func NewSubscriptionClient(
 	subClient.ctx, subClient.cancel = context.WithCancel(context.Background())
 	subClient.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
 
-	option := dynstream.NewOption()
-	// Note: it is max batch size of the kv sent from tikv(not committed rows)
-	option.BatchCount = 1024
-	// TODO: Set `UseBuffer` to true until we refactor the `regionEventHandler.Handle` method so that it doesn't call any method of the dynamic stream. Currently, if `UseBuffer` is set to false, there will be a deadlock:
-	// 	ds.handleLoop fetch events from `ch` -> regionEventHandler.Handle -> ds.RemovePath -> send event to `ch`
-	option.UseBuffer = true
-	option.EnableMemoryControl = true
-	ds := dynstream.NewParallelDynamicStream(
-		"log-puller",
-		&regionEventHandler{subClient: subClient},
-		option,
-	)
-	ds.Start()
-	subClient.ds = ds
-	subClient.cond = sync.NewCond(&subClient.mu)
+	subClient.pipeline = newSpanPipelineManager(subClient.ctx, 0, 0, 0)
+	subClient.regionEventProcessor = newRegionEventProcessor(subClient.ctx, subClient, subClient.pipeline, 0, 0)
 
 	subClient.initMetrics()
 	return subClient
@@ -295,27 +275,6 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 			resolvedTsLag := s.GetResolvedTsLag()
 			if resolvedTsLag > 0 {
 				metrics.LogPullerResolvedTsLag.Set(resolvedTsLag)
-			}
-			dsMetrics := s.ds.GetMetrics()
-			metricSubscriptionClientDSChannelSize.Set(float64(dsMetrics.EventChanSize))
-			metricSubscriptionClientDSPendingQueueLen.Set(float64(dsMetrics.PendingQueueLen))
-			if len(dsMetrics.MemoryControl.AreaMemoryMetrics) > 1 {
-				log.Panic("subscription client should have only one area")
-			}
-			if len(dsMetrics.MemoryControl.AreaMemoryMetrics) > 0 {
-				areaMetric := dsMetrics.MemoryControl.AreaMemoryMetrics[0]
-				metrics.DynamicStreamMemoryUsage.WithLabelValues(
-					"log-puller",
-					"max",
-					"default",
-					"default",
-				).Set(float64(areaMetric.MaxMemory()))
-				metrics.DynamicStreamMemoryUsage.WithLabelValues(
-					"log-puller",
-					"used",
-					"default",
-					"default",
-				).Set(float64(areaMetric.MemoryUsage()))
 			}
 
 			pendingRegionReqCount := 0
@@ -366,9 +325,7 @@ func (s *subscriptionClient) Subscribe(
 	s.totalSpans.Lock()
 	s.totalSpans.spanMap[subID] = rt
 	s.totalSpans.Unlock()
-
-	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(1*1024*1024*1024, dynstream.MemoryControlForPuller, "logPuller") // 1GB
-	s.ds.AddPath(rt.subID, rt, areaSetting)
+	s.pipeline.Register(rt)
 
 	select {
 	case <-s.ctx.Done():
@@ -398,44 +355,8 @@ func (s *subscriptionClient) Unsubscribe(subID SubscriptionID) {
 		zap.Bool("exists", rt != nil))
 }
 
-func (s *subscriptionClient) wakeSubscription(subID SubscriptionID) {
-	s.ds.Wake(subID)
-}
-
-func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
-	// fast path
-	if !s.paused.Load() {
-		s.ds.Push(subID, event)
-		return
-	}
-	// slow path: wait until paused is false
-	s.mu.Lock()
-	for s.paused.Load() {
-		s.cond.Wait()
-	}
-	s.mu.Unlock()
-	s.ds.Push(subID, event)
-}
-
-func (s *subscriptionClient) handleDSFeedBack(ctx context.Context) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case feedback := <-s.ds.Feedback():
-			switch feedback.FeedbackType {
-			case dynstream.PauseArea:
-				s.paused.Store(true)
-				log.Info("subscription client pause push region event")
-			case dynstream.ResumeArea:
-				s.paused.Store(false)
-				s.cond.Broadcast()
-				log.Info("subscription client resume push region event")
-			case dynstream.ReleasePath, dynstream.ResumePath:
-				// Ignore it, because it is no need to pause and resume a path in puller.
-			}
-		}
-	}
+func (s *subscriptionClient) dispatchRegionEvent(event regionEvent) {
+	s.regionEventProcessor.dispatch(event)
 }
 
 func (s *subscriptionClient) Run(ctx context.Context) error {
@@ -449,7 +370,6 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error { return s.updateMetrics(ctx) })
-	g.Go(func() error { return s.handleDSFeedBack(ctx) })
 	g.Go(func() error { return s.handleRangeTasks(ctx) })
 	g.Go(func() error { return s.handleRegions(ctx, g) })
 	g.Go(func() error { return s.handleErrors(ctx) })
@@ -466,7 +386,6 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 // Close closes the client. Must be called after `Run` returns.
 func (s *subscriptionClient) Close(ctx context.Context) error {
 	s.cancel()
-	s.ds.Close()
 	s.regionTaskQueue.Close()
 	return nil
 }
@@ -490,12 +409,7 @@ func (s *subscriptionClient) onTableDrained(rt *subscribedSpan) {
 	log.Info("subscription client stop span is finished",
 		zap.Uint64("subscriptionID", uint64(rt.subID)))
 
-	err := s.ds.RemovePath(rt.subID)
-	if err != nil {
-		log.Warn("subscription client remove path failed",
-			zap.Uint64("subscriptionID", uint64(rt.subID)),
-			zap.Error(err))
-	}
+	s.pipeline.Unregister(rt.subID)
 	s.totalSpans.Lock()
 	defer s.totalSpans.Unlock()
 	delete(s.totalSpans.spanMap, rt.subID)
