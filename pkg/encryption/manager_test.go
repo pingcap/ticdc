@@ -90,3 +90,59 @@ func TestEncryptionMetaManagerDecryptDataKeyUsesZeroIV(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, dataKeyPlaintext, gotKey)
 }
+
+func TestEncryptionMetaManagerDecryptDataKeySupportsIVPrefixedCiphertext(t *testing.T) {
+	t.Parallel()
+
+	masterKeyPlaintext := make([]byte, 32)
+	for i := range masterKeyPlaintext {
+		masterKeyPlaintext[i] = byte(i + 1)
+	}
+
+	// TiKV may store data key payload as: [method(1)][key(16/24/32)].
+	// method byte is not guaranteed to be within a small enum range.
+	method := byte(0xF5)
+	dataKeyPlaintext := make([]byte, 16)
+	for i := range dataKeyPlaintext {
+		dataKeyPlaintext[i] = byte(0xB0 + i)
+	}
+	payload := append([]byte{method}, dataKeyPlaintext...)
+
+	block, err := aes.NewCipher(masterKeyPlaintext)
+	require.NoError(t, err)
+	iv := []byte("1234567890abcdef")
+	stream := cipher.NewCTR(block, iv)
+	payloadCiphertext := make([]byte, len(payload))
+	stream.XORKeyStream(payloadCiphertext, payload)
+
+	// New format: [iv(16)][ciphertext(payload)].
+	dataKeyCiphertext := append(append([]byte{}, iv...), payloadCiphertext...)
+
+	dataKeyID := uint32(0x4b3131) // "K11"
+
+	meta := &EncryptionMeta{
+		KeyspaceId: 1,
+		Current: &EncryptionEpoch{
+			FileId:    1,
+			DataKeyId: dataKeyID,
+			CreatedAt: 0,
+		},
+		MasterKey: &MasterKey{
+			Vendor:     "aws-kms",
+			CmekId:     "cmek-1",
+			Region:     "us-west-1",
+			Ciphertext: []byte{1, 2, 3},
+		},
+		DataKeys: map[uint32]*DataKey{
+			dataKeyID: {Ciphertext: dataKeyCiphertext},
+		},
+	}
+
+	tikvClient := &staticTiKVEncryptionClient{meta: meta}
+	kmsClient := &staticKMSClient{plaintext: masterKeyPlaintext}
+	mgr := NewEncryptionMetaManager(tikvClient, kmsClient)
+
+	gotKey, err := mgr.GetDataKey(context.Background(), 1, "K11")
+	require.NoError(t, err)
+	require.Equal(t, dataKeyPlaintext, gotKey)
+}

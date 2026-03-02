@@ -272,6 +272,17 @@ func (m *encryptionMetaManager) getMeta(ctx context.Context, keyspaceID uint32) 
 		if time.Since(cached.timestamp) < m.ttl {
 			meta := cached.meta
 			m.metaMu.RUnlock()
+			if meta == nil {
+				log.Debug("using cached empty encryption meta",
+					zap.Uint32("keyspaceID", keyspaceID))
+			} else {
+				log.Debug("using cached encryption meta",
+					zap.Uint32("keyspaceID", keyspaceID),
+					zap.Uint32("metaKeyspaceID", meta.KeyspaceId),
+					zap.Uint32("currentDataKeyID", meta.Current.DataKeyId),
+					zap.Uint8("version", byte(meta.Current.DataKeyId&0xFF)),
+					zap.Int("dataKeyCount", len(meta.DataKeys)))
+			}
 			return meta, nil
 		}
 	}
@@ -282,7 +293,7 @@ func (m *encryptionMetaManager) getMeta(ctx context.Context, keyspaceID uint32) 
 	if err != nil {
 		// If we get ErrEncryptionMetaNotFound, cache nil to avoid repeated lookups
 		if cerrors.ErrEncryptionMetaNotFound.Equal(err) {
-			log.Debug("encryption meta not found",
+			log.Info("encryption meta not found for keyspace",
 				zap.Uint32("keyspaceID", keyspaceID))
 			m.metaMu.Lock()
 			m.metaCache[keyspaceID] = &cachedMeta{
@@ -305,6 +316,22 @@ func (m *encryptionMetaManager) getMeta(ctx context.Context, keyspaceID uint32) 
 		timestamp: time.Now(),
 	}
 	m.metaMu.Unlock()
+
+	if meta == nil {
+		log.Info("encryption meta loaded as empty",
+			zap.Uint32("keyspaceID", keyspaceID))
+		return nil, nil
+	}
+
+	log.Info("encryption meta loaded",
+		zap.Uint32("keyspaceID", keyspaceID),
+		zap.Uint32("metaKeyspaceID", meta.KeyspaceId),
+		zap.Uint32("currentDataKeyID", meta.Current.DataKeyId),
+		zap.Uint8("version", byte(meta.Current.DataKeyId&0xFF)),
+		zap.Int("dataKeyCount", len(meta.DataKeys)),
+		zap.Int("historyCount", len(meta.History)),
+		zap.String("kmsVendor", safeKMSVendor(meta.MasterKey)),
+		zap.String("cmekID", safeCMEKID(meta.MasterKey)))
 
 	return meta, nil
 }
@@ -341,7 +368,7 @@ func (m *encryptionMetaManager) decryptDataKey(ctx context.Context, masterKey *M
 		return nil, cerrors.ErrDecodeFailed.GenWithStackByArgs("master key plaintext must be 32 bytes")
 	}
 
-	// Decrypt data key using master key (AES-256-CTR)
+	// Decrypt data key using master key (AES-CTR).
 	block, err := aes.NewCipher(masterKeyPlaintext)
 	if err != nil {
 		log.Warn("failed to initialize AES cipher for data key decryption",
@@ -349,19 +376,86 @@ func (m *encryptionMetaManager) decryptDataKey(ctx context.Context, masterKey *M
 		return nil, cerrors.ErrDecodeFailed.Wrap(err)
 	}
 
-	if len(dataKeyCiphertext) != 32 {
-		log.Warn("invalid data key ciphertext length",
-			zap.Int("length", len(dataKeyCiphertext)))
-		return nil, cerrors.ErrDecodeFailed.GenWithStackByArgs("data key ciphertext must be 32 bytes")
+	// New format: [iv(16)][ciphertext(payload)].
+	if len(dataKeyCiphertext) > aes.BlockSize {
+		key, method, hasMethod, err := decryptDataKeyPayload(
+			block, dataKeyCiphertext[:aes.BlockSize], dataKeyCiphertext[aes.BlockSize:], true,
+		)
+		if err == nil {
+			fields := []zap.Field{
+				zap.String("format", "iv_prefixed"),
+				zap.Int("ciphertextLen", len(dataKeyCiphertext)),
+				zap.Int("keyLen", len(key)),
+			}
+			if hasMethod {
+				fields = append(fields, zap.Uint8("method", method))
+			}
+			log.Debug("decoded data key ciphertext", fields...)
+			return key, nil
+		}
+		log.Debug("failed to decode iv prefixed data key ciphertext, fallback to legacy format",
+			zap.Int("ciphertextLen", len(dataKeyCiphertext)),
+			zap.Error(err))
 	}
 
-	// The ciphertext is encrypted using AES-256-CTR with a zero IV.
-	iv := make([]byte, aes.BlockSize)
-	stream := cipher.NewCTR(block, iv)
-	plaintext := make([]byte, len(dataKeyCiphertext))
-	stream.XORKeyStream(plaintext, dataKeyCiphertext)
+	// Legacy format: ciphertext only, decrypted with zero IV.
+	key, method, hasMethod, err := decryptDataKeyPayload(
+		block, make([]byte, aes.BlockSize), dataKeyCiphertext, false,
+	)
+	if err != nil {
+		log.Warn("invalid data key ciphertext",
+			zap.Int("length", len(dataKeyCiphertext)),
+			zap.Error(err))
+		return nil, cerrors.ErrDecodeFailed.Wrap(err)
+	}
+	fields := []zap.Field{
+		zap.String("format", "legacy_zero_iv"),
+		zap.Int("ciphertextLen", len(dataKeyCiphertext)),
+		zap.Int("keyLen", len(key)),
+	}
+	if hasMethod {
+		fields = append(fields, zap.Uint8("method", method))
+	}
+	log.Debug("decoded data key ciphertext", fields...)
+	return key, nil
+}
 
-	return plaintext, nil
+func decryptDataKeyPayload(block cipher.Block, iv []byte, ciphertext []byte, requireMethodPrefix bool) ([]byte, byte, bool, error) {
+	if len(iv) != aes.BlockSize {
+		return nil, 0, false, cerrors.ErrDecodeFailed.GenWithStackByArgs("iv must be 16 bytes")
+	}
+	stream := cipher.NewCTR(block, iv)
+	plaintext := make([]byte, len(ciphertext))
+	stream.XORKeyStream(plaintext, ciphertext)
+
+	key, method, hasMethod, err := parsePlaintextDataKey(plaintext, requireMethodPrefix)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	return key, method, hasMethod, nil
+}
+
+func parsePlaintextDataKey(plaintext []byte, requireMethodPrefix bool) ([]byte, byte, bool, error) {
+	if requireMethodPrefix {
+		switch len(plaintext) {
+		case 17, 25, 33:
+			method := plaintext[0]
+			key := make([]byte, len(plaintext)-1)
+			copy(key, plaintext[1:])
+			return key, method, true, nil
+		default:
+			return nil, 0, false, cerrors.ErrDecodeFailed.GenWithStackByArgs("invalid data key plaintext length")
+		}
+	}
+
+	switch len(plaintext) {
+	case 16, 24, 32:
+		key := make([]byte, len(plaintext))
+		copy(key, plaintext)
+		return key, 0, false, nil
+	default:
+		return nil, 0, false, cerrors.ErrDecodeFailed.GenWithStackByArgs("invalid data key plaintext length")
+	}
 }
 
 func safeKMSVendor(masterKey *MasterKey) string {

@@ -301,7 +301,9 @@ func (p *persistentStorage) initializeFromDisk() {
 		p.upperBound.FinishedDDLTs,
 		p.databaseMap,
 		p.tableMap,
-		p.partitionMap); err != nil {
+		p.partitionMap,
+		p.encryptionManager,
+		p.keyspaceID); err != nil {
 		log.Fatal("fail to initialize from disk")
 	}
 }
@@ -342,7 +344,7 @@ func (p *persistentStorage) getAllPhysicalTables(snapTs uint64, tableFilter filt
 		log.Debug("getAllPhysicalTables finish",
 			zap.Any("duration(s)", time.Since(start).Seconds()))
 	}()
-	return loadAllPhysicalTablesAtTs(storageSnap, gcTs, snapTs, tableFilter)
+	return loadAllPhysicalTablesAtTs(storageSnap, gcTs, snapTs, tableFilter, p.encryptionManager, p.keyspaceID)
 }
 
 // only return when table info is initialized
@@ -572,7 +574,7 @@ func (p *persistentStorage) buildVersionedTableInfoStore(store *versionedTableIn
 	}
 
 	for _, version := range allDDLFinishedTs {
-		ddlEvent := readPersistedDDLEvent(storageSnap, version)
+		ddlEvent := readPersistedDDLEventWithEncryption(storageSnap, version, p.encryptionManager, p.keyspaceID)
 		store.applyDDLFromPersistStorage(&ddlEvent)
 	}
 	store.setTableInfoInitialized()

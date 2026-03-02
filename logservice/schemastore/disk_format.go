@@ -342,6 +342,8 @@ func loadAndApplyDDLHistory(
 	databaseMap map[int64]*BasicDatabaseInfo,
 	tableMap map[int64]*BasicTableInfo,
 	partitionMap map[int64]BasicPartitionInfo,
+	encMgr encryption.EncryptionManager,
+	keyspaceID uint32,
 ) (map[int64][]uint64, []uint64, error) {
 	tablesDDLHistory := make(map[int64][]uint64)
 	tableTriggerDDLHistory := make([]uint64, 0)
@@ -364,7 +366,18 @@ func loadAndApplyDDLHistory(
 	}
 	defer snapIter.Close()
 	for snapIter.First(); snapIter.Valid(); snapIter.Next() {
-		ddlEvent := unmarshalPersistedDDLEvent(snapIter.Value())
+		ddlValue := snapIter.Value()
+		if encMgr != nil {
+			decryptedValue, err := encMgr.DecryptData(context.Background(), keyspaceID, ddlValue)
+			if err != nil {
+				log.Fatal("decrypt ddl job failed when loading ddl history",
+					zap.Uint32("keyspaceID", keyspaceID),
+					zap.Binary("ddlKey", append([]byte(nil), snapIter.Key()...)),
+					zap.Error(err))
+			}
+			ddlValue = decryptedValue
+		}
+		ddlEvent := unmarshalPersistedDDLEvent(ddlValue)
 		// Note: no need to skip ddl here
 		// 1. for create table and create tables, we always store the ddl with smaller commit ts, so the ddl won't conflict with the tables in the gc snapshot.
 		// 2. for other ddls to be ignored, they are already filtered before write to disk.
@@ -823,6 +836,8 @@ func loadAllPhysicalTablesAtTs(
 	gcTs uint64,
 	snapVersion uint64,
 	tableFilter filter.Filter,
+	encMgr encryption.EncryptionManager,
+	keyspaceID uint32,
 ) ([]commonEvent.Table, error) {
 	// TODO: respect tableFilter(filter table in kv snap is easy, filter ddl jobs need more attention)
 	databaseMap, err := loadDatabasesInKVSnap(storageSnap, gcTs)
@@ -857,7 +872,18 @@ func loadAllPhysicalTablesAtTs(
 	}
 	defer snapIter.Close()
 	for snapIter.First(); snapIter.Valid(); snapIter.Next() {
-		ddlEvent := unmarshalPersistedDDLEvent(snapIter.Value())
+		ddlValue := snapIter.Value()
+		if encMgr != nil {
+			decryptedValue, err := encMgr.DecryptData(context.Background(), keyspaceID, ddlValue)
+			if err != nil {
+				log.Fatal("decrypt ddl job failed when loading all physical tables",
+					zap.Uint32("keyspaceID", keyspaceID),
+					zap.Binary("ddlKey", append([]byte(nil), snapIter.Key()...)),
+					zap.Error(err))
+			}
+			ddlValue = decryptedValue
+		}
+		ddlEvent := unmarshalPersistedDDLEvent(ddlValue)
 		handler, ok := allDDLHandlers[model.ActionType(ddlEvent.Type)]
 		if !ok {
 			log.Panic("unknown ddl type", zap.Any("ddlType", ddlEvent.Type), zap.String("query", ddlEvent.Query))

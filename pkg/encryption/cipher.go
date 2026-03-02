@@ -33,23 +33,32 @@ type Cipher interface {
 	IVSize() int
 }
 
-// AES256CTRCipher implements AES-256-CTR encryption
+// AES256CTRCipher implements AES-CTR encryption for AES key sizes.
 type AES256CTRCipher struct{}
 
-// NewAES256CTRCipher creates a new AES-256-CTR cipher
+// NewAES256CTRCipher creates a new AES-CTR cipher.
 func NewAES256CTRCipher() *AES256CTRCipher {
 	return &AES256CTRCipher{}
 }
 
-// IVSize returns the IV size for AES-256-CTR (16 bytes)
+// IVSize returns the IV size for AES-CTR (16 bytes)
 func (c *AES256CTRCipher) IVSize() int {
 	return aes.BlockSize
 }
 
-// Encrypt encrypts data using AES-256-CTR
+func isValidAESKeySize(key []byte) bool {
+	switch len(key) {
+	case 16, 24, 32:
+		return true
+	default:
+		return false
+	}
+}
+
+// Encrypt encrypts data using AES-CTR.
 func (c *AES256CTRCipher) Encrypt(data, key, iv []byte) ([]byte, error) {
-	if len(key) != 32 {
-		return nil, cerrors.ErrEncryptionFailed.GenWithStackByArgs("key must be 32 bytes for AES-256")
+	if !isValidAESKeySize(key) {
+		return nil, cerrors.ErrEncryptionFailed.GenWithStackByArgs("key must be 16, 24, or 32 bytes for AES-CTR")
 	}
 	if len(iv) != c.IVSize() {
 		return nil, cerrors.ErrEncryptionFailed.GenWithStackByArgs("IV must be 16 bytes")
@@ -67,10 +76,10 @@ func (c *AES256CTRCipher) Encrypt(data, key, iv []byte) ([]byte, error) {
 	return ciphertext, nil
 }
 
-// Decrypt decrypts data using AES-256-CTR
+// Decrypt decrypts data using AES-CTR.
 func (c *AES256CTRCipher) Decrypt(data, key, iv []byte) ([]byte, error) {
-	if len(key) != 32 {
-		return nil, cerrors.ErrDecryptionFailed.GenWithStackByArgs("key must be 32 bytes for AES-256")
+	if !isValidAESKeySize(key) {
+		return nil, cerrors.ErrDecryptionFailed.GenWithStackByArgs("key must be 16, 24, or 32 bytes for AES-CTR")
 	}
 	if len(iv) != c.IVSize() {
 		return nil, cerrors.ErrDecryptionFailed.GenWithStackByArgs("IV must be 16 bytes")

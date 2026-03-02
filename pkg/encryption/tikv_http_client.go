@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	oldproto "github.com/gogo/protobuf/proto"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
@@ -98,6 +99,7 @@ func (c *tikvEncryptionHTTPClient) GetKeyspaceEncryptionMeta(ctx context.Context
 
 func (c *tikvEncryptionHTTPClient) getEncryptionMetaFromStore(ctx context.Context, storeID uint64, statusAddr string, keyspaceID uint32) (*EncryptionMeta, error) {
 	storeURL := c.buildStatusURL(statusAddr, keyspaceID)
+	contentType := ""
 
 	reqCtx, cancel := context.WithTimeout(ctx, c.httpTimeout)
 	defer cancel()
@@ -124,6 +126,7 @@ func (c *tikvEncryptionHTTPClient) getEncryptionMetaFromStore(ctx context.Contex
 			zap.Error(err))
 		return nil, errors.Trace(err)
 	}
+	contentType = resp.Header.Get("Content-Type")
 
 	if resp.StatusCode == http.StatusNotFound {
 		log.Debug("encryption meta not found on TiKV store",
@@ -145,17 +148,33 @@ func (c *tikvEncryptionHTTPClient) getEncryptionMetaFromStore(ctx context.Contex
 		return nil, errors.Errorf("[%d] %s", resp.StatusCode, body)
 	}
 
-	var metaResp encryptionMetaResponse
-	if err := json.Unmarshal(body, &metaResp); err != nil {
-		log.Warn("failed to decode encryption meta response",
+	metaResp := &encryptionMetaResponse{}
+	responseFormat := "json"
+	if jsonErr := json.Unmarshal(body, metaResp); jsonErr != nil {
+		log.Debug("failed to decode encryption meta response as json, fallback to protobuf",
 			zap.Uint64("storeID", storeID),
 			zap.String("statusAddr", statusAddr),
 			zap.Uint32("keyspaceID", keyspaceID),
 			zap.String("url", storeURL),
+			zap.String("contentType", contentType),
 			zap.Int("bodySize", len(body)),
-			zap.String("body", truncateBytesForLog(body, 256)),
-			zap.Error(err))
-		return nil, errors.Trace(err)
+			zap.Error(jsonErr))
+
+		metaResp, err = decodeEncryptionMetaResponseFromProtobuf(body)
+		if err != nil {
+			decodeErr := errors.Annotatef(err, "json decode failed: %v", jsonErr)
+			log.Warn("failed to decode encryption meta response",
+				zap.Uint64("storeID", storeID),
+				zap.String("statusAddr", statusAddr),
+				zap.Uint32("keyspaceID", keyspaceID),
+				zap.String("url", storeURL),
+				zap.String("contentType", contentType),
+				zap.Int("bodySize", len(body)),
+				zap.String("body", truncateBytesForLog(body, 256)),
+				zap.Error(decodeErr))
+			return nil, errors.Trace(decodeErr)
+		}
+		responseFormat = "protobuf"
 	}
 
 	meta, err := metaResp.toEncryptionMeta()
@@ -168,6 +187,36 @@ func (c *tikvEncryptionHTTPClient) getEncryptionMetaFromStore(ctx context.Contex
 			zap.Error(err))
 		return nil, err
 	}
+
+	if meta.KeyspaceId != 0 && meta.KeyspaceId != keyspaceID {
+		log.Warn("encryption meta keyspace ID mismatch",
+			zap.Uint64("storeID", storeID),
+			zap.String("statusAddr", statusAddr),
+			zap.Uint32("requestedKeyspaceID", keyspaceID),
+			zap.Uint32("metaKeyspaceID", meta.KeyspaceId),
+			zap.String("url", storeURL))
+	}
+
+	masterKeyCiphertextLen := 0
+	if meta.MasterKey != nil {
+		masterKeyCiphertextLen = len(meta.MasterKey.Ciphertext)
+	}
+
+	log.Info("fetched valid encryption meta from TiKV store",
+		zap.Uint64("storeID", storeID),
+		zap.String("statusAddr", statusAddr),
+		zap.String("responseFormat", responseFormat),
+		zap.String("contentType", contentType),
+		zap.Uint32("requestedKeyspaceID", keyspaceID),
+		zap.Uint32("metaKeyspaceID", meta.KeyspaceId),
+		zap.Uint32("currentDataKeyID", meta.Current.DataKeyId),
+		zap.Uint8("version", byte(meta.Current.DataKeyId&0xFF)),
+		zap.Int("dataKeyCount", len(meta.DataKeys)),
+		zap.Int("historyCount", len(meta.History)),
+		zap.String("kmsVendor", safeKMSVendor(meta.MasterKey)),
+		zap.String("cmekID", safeCMEKID(meta.MasterKey)),
+		zap.Int("masterKeyCiphertextLen", masterKeyCiphertextLen))
+
 	return meta, nil
 }
 
@@ -204,13 +253,119 @@ type dataKeyResponse struct {
 	Ciphertext ByteArray `json:"ciphertext"`
 }
 
+type keyspaceEncryptionMetaPB struct {
+	KeyspaceId uint32                        `protobuf:"varint,1,opt,name=keyspace_id,json=keyspaceId,proto3"`
+	Current    *keyspaceEncryptionEpochPB    `protobuf:"bytes,2,opt,name=current,proto3"`
+	MasterKey  *keyspaceMasterKeyPB          `protobuf:"bytes,3,opt,name=master_key,json=masterKey,proto3"`
+	DataKeys   map[uint32]*keyspaceDataKeyPB `protobuf:"bytes,4,rep,name=data_keys,json=dataKeys,proto3" protobuf_key:"varint,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+	History    []*keyspaceEncryptionEpochPB  `protobuf:"bytes,5,rep,name=history,proto3"`
+}
+
+func (m *keyspaceEncryptionMetaPB) Reset()         { *m = keyspaceEncryptionMetaPB{} }
+func (m *keyspaceEncryptionMetaPB) String() string { return "" }
+func (*keyspaceEncryptionMetaPB) ProtoMessage()    {}
+
+type keyspaceEncryptionEpochPB struct {
+	FileId    uint64 `protobuf:"varint,1,opt,name=file_id,json=fileId,proto3"`
+	DataKeyId uint32 `protobuf:"varint,2,opt,name=data_key_id,json=dataKeyId,proto3"`
+	CreatedAt uint64 `protobuf:"varint,3,opt,name=created_at,json=createdAt,proto3"`
+}
+
+func (m *keyspaceEncryptionEpochPB) Reset()         { *m = keyspaceEncryptionEpochPB{} }
+func (m *keyspaceEncryptionEpochPB) String() string { return "" }
+func (*keyspaceEncryptionEpochPB) ProtoMessage()    {}
+
+type keyspaceMasterKeyPB struct {
+	Vendor     string `protobuf:"bytes,1,opt,name=vendor,proto3"`
+	CmekId     string `protobuf:"bytes,2,opt,name=cmek_id,json=cmekId,proto3"`
+	Region     string `protobuf:"bytes,3,opt,name=region,proto3"`
+	Endpoint   string `protobuf:"bytes,4,opt,name=endpoint,proto3"`
+	Ciphertext []byte `protobuf:"bytes,5,opt,name=ciphertext,proto3"`
+}
+
+func (m *keyspaceMasterKeyPB) Reset()         { *m = keyspaceMasterKeyPB{} }
+func (m *keyspaceMasterKeyPB) String() string { return "" }
+func (*keyspaceMasterKeyPB) ProtoMessage()    {}
+
+type keyspaceDataKeyPB struct {
+	Ciphertext []byte `protobuf:"bytes,1,opt,name=ciphertext,proto3"`
+}
+
+func (m *keyspaceDataKeyPB) Reset()         { *m = keyspaceDataKeyPB{} }
+func (m *keyspaceDataKeyPB) String() string { return "" }
+func (*keyspaceDataKeyPB) ProtoMessage()    {}
+
+func decodeEncryptionMetaResponseFromProtobuf(body []byte) (*encryptionMetaResponse, error) {
+	metaPB := &keyspaceEncryptionMetaPB{}
+	if err := oldproto.Unmarshal(body, metaPB); err != nil {
+		return nil, errors.Trace(err)
+	}
+	if metaPB.Current == nil && metaPB.MasterKey == nil && len(metaPB.DataKeys) == 0 && len(metaPB.History) == 0 && metaPB.KeyspaceId == 0 {
+		return nil, errors.New("protobuf payload does not contain encryption meta fields")
+	}
+	return metaPB.toEncryptionMetaResponse(), nil
+}
+
+func (m *keyspaceEncryptionMetaPB) toEncryptionMetaResponse() *encryptionMetaResponse {
+	resp := &encryptionMetaResponse{
+		KeyspaceId: m.KeyspaceId,
+		DataKeys:   make(map[uint32]dataKeyResponse, len(m.DataKeys)),
+		History:    make([]encryptionEpochResponse, 0, len(m.History)),
+	}
+
+	if m.Current != nil {
+		resp.Current = encryptionEpochResponse{
+			FileId:    m.Current.FileId,
+			DataKeyId: m.Current.DataKeyId,
+			CreatedAt: m.Current.CreatedAt,
+		}
+	}
+
+	if m.MasterKey != nil {
+		resp.MasterKey = masterKeyResponse{
+			Vendor:     m.MasterKey.Vendor,
+			CmekId:     m.MasterKey.CmekId,
+			Region:     m.MasterKey.Region,
+			Endpoint:   m.MasterKey.Endpoint,
+			Ciphertext: ByteArray(m.MasterKey.Ciphertext),
+		}
+	}
+
+	for id, dataKey := range m.DataKeys {
+		if dataKey == nil {
+			continue
+		}
+		resp.DataKeys[id] = dataKeyResponse{
+			Ciphertext: ByteArray(dataKey.Ciphertext),
+		}
+	}
+
+	for _, epoch := range m.History {
+		if epoch == nil {
+			continue
+		}
+		resp.History = append(resp.History, encryptionEpochResponse{
+			FileId:    epoch.FileId,
+			DataKeyId: epoch.DataKeyId,
+			CreatedAt: epoch.CreatedAt,
+		})
+	}
+
+	return resp
+}
+
 func (r *encryptionMetaResponse) toEncryptionMeta() (*EncryptionMeta, error) {
 	if r.Current.DataKeyId == 0 {
+		log.Warn("invalid encryption meta from TiKV: current data key ID is empty",
+			zap.Uint32("metaKeyspaceID", r.KeyspaceId))
 		return nil, cerrors.ErrEncryptionMetaNotFound
 	}
 
 	version := byte(r.Current.DataKeyId & 0xFF)
 	if version == VersionUnencrypted {
+		log.Warn("invalid encryption meta from TiKV: version must be non-zero",
+			zap.Uint32("metaKeyspaceID", r.KeyspaceId),
+			zap.Uint32("currentDataKeyID", r.Current.DataKeyId))
 		return nil, cerrors.ErrEncryptionFailed.GenWithStackByArgs("version must be non-zero")
 	}
 
@@ -220,6 +375,10 @@ func (r *encryptionMetaResponse) toEncryptionMeta() (*EncryptionMeta, error) {
 	}
 
 	if _, ok := dataKeys[r.Current.DataKeyId]; !ok {
+		log.Warn("invalid encryption meta from TiKV: current data key missing",
+			zap.Uint32("metaKeyspaceID", r.KeyspaceId),
+			zap.Uint32("currentDataKeyID", r.Current.DataKeyId),
+			zap.Int("dataKeyCount", len(dataKeys)))
 		return nil, cerrors.ErrDataKeyNotFound.GenWithStackByArgs("current data key not found")
 	}
 
