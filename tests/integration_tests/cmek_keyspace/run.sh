@@ -117,7 +117,7 @@ function create_encrypted_keyspace() {
 		"http://${pd_host}:${pd_port}/pd/api/v2/keyspaces" >/dev/null
 
 	while [ "$i" -lt 60 ]; do
-		keyspace_meta=$(curl -sS "http://${pd_host}:${pd_port}/pd/api/v2/keyspaces" | \
+		keyspace_meta=$(curl -sS "http://${pd_host}:${pd_port}/pd/api/v2/keyspaces" |
 			jq -c --arg name "${keyspace_name}" '.keyspaces[]? | select(.name == $name)' || true)
 		if [ -n "${keyspace_meta}" ]; then
 			state=$(echo "${keyspace_meta}" | jq -r '.state // empty')
@@ -141,7 +141,7 @@ function write_tidb_keyspace_config() {
 	local keyspace_name=$2
 	local socket_name=$3
 
-cat >"${config_path}" <<EOF
+	cat >"${config_path}" <<EOF
 keyspace-name = "${keyspace_name}"
 enable-telemetry = false
 socket = "${socket_name}"
