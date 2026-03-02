@@ -38,7 +38,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/codec"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/redo/writer/file"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -180,12 +180,12 @@ func getSortedFileName(name string) string {
 }
 
 func selectDownLoadFile(
-	ctx context.Context, extStorage storage.ExternalStorage,
+	ctx context.Context, extStorage storeapi.Storage,
 	fixedType string, startTs uint64,
 ) ([]string, error) {
 	files := []string{}
 	// add changefeed filter and endTs filter
-	err := extStorage.WalkDir(ctx, &storage.WalkOption{},
+	err := extStorage.WalkDir(ctx, &storeapi.WalkOption{},
 		func(path string, size int64) error {
 			fileName := filepath.Base(path)
 			ret, err := shouldOpen(startTs, fileName, fixedType)
@@ -239,7 +239,7 @@ func readAllFromBuffer(buf []byte) (logHeap, error) {
 // to local storage.
 func sortAndWriteFile(
 	egCtx context.Context,
-	extStorage storage.ExternalStorage,
+	extStorage storeapi.Storage,
 	fileName string, cfg *readerConfig,
 ) error {
 	sortedName := getSortedFileName(fileName)

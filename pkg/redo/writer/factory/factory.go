@@ -24,14 +24,14 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/writer/file"
 	"github.com/pingcap/ticdc/pkg/redo/writer/memory"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tidb/pkg/objstore"
 )
 
 // NewRedoLogWriter creates a new RedoLogWriter.
 func NewRedoLogWriter(
 	ctx context.Context, lwCfg *writer.LogWriterConfig, fileType string,
 ) (writer.RedoLogWriter, error) {
-	uri, err := storage.ParseRawURL(util.GetOrZero(lwCfg.Storage))
+	uri, err := objstore.ParseRawURL(util.GetOrZero(lwCfg.Storage))
 	if err != nil {
 		return nil, err
 	}

@@ -31,7 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/utils/chann"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -42,7 +42,7 @@ type writer struct {
 	// worker id
 	id           int
 	changeFeedID commonType.ChangeFeedID
-	storage      storage.ExternalStorage
+	storage      storeapi.Storage
 	config       *cloudstorage.Config
 	// toBeFlushedCh contains a set of batchedTask waiting to be flushed to cloud storage.
 	toBeFlushedCh          chan batchedTask
@@ -60,7 +60,7 @@ type writer struct {
 func newWriter(
 	id int,
 	changefeedID commonType.ChangeFeedID,
-	storage storage.ExternalStorage,
+	storage storeapi.Storage,
 	config *cloudstorage.Config,
 	extension string,
 	inputCh *chann.DrainableChann[eventFragment],
@@ -236,7 +236,7 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 			return rowsCnt, bytesCnt, d.storage.WriteFile(ctx, dataFilePath, buf.Bytes())
 		}
 
-		writer, inErr := d.storage.Create(ctx, dataFilePath, &storage.WriterOption{
+		writer, inErr := d.storage.Create(ctx, dataFilePath, &storeapi.WriterOption{
 			Concurrency: d.config.FlushConcurrency,
 		})
 		if inErr != nil {

@@ -41,6 +41,7 @@ func (c *errorPdClient) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient
 }
 
 type errorGCStatesClient struct {
+	pdgc.GCStatesClient
 	err error
 }
 
@@ -71,6 +72,7 @@ func (c *countingPdClient) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesCli
 }
 
 type countingGCStatesClient struct {
+	pdgc.GCStatesClient
 	parent *countingPdClient
 }
 
