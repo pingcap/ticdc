@@ -365,6 +365,8 @@ func MustSnapshotQuery(
 			zap.String("schema", schema), zap.String("table", table),
 			zap.Uint64("commitTs", commitTs), zap.Error(err))
 	}
+	// go-mysql-driver 1.8 converts integer/float values into int64/double even in text protocol.
+	// This doesn't increase allocation compared to []byte and conversion cost is negilible.
 	for rows.Next() {
 		err = rows.Scan(holder.ValuePointers...)
 		if err != nil {
