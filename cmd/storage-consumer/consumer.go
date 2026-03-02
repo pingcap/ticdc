@@ -457,8 +457,8 @@ func (c *consumer) parseSchemaFilePath(ctx context.Context, path string) error {
 	// Update tableDefMap.
 	c.tableDefMap[key][tableDef.TableVersion] = &tableDef
 
-	// Fake a dml key for schema.json file, which is useful for putting DDL
-	// in front of the DML files when sorting.
+	// Fake a dml key for schema.json file, which is useful for ordering schema
+	// files together with DML files when sorting.
 	// e.g, for the partitioned table:
 	//
 	// test/test1/439972354120482843/schema.json					(partitionNum = -1)
@@ -470,8 +470,7 @@ func (c *consumer) parseSchemaFilePath(ctx context.Context, path string) error {
 	// test/test2/439972354120482843/2023-03-09/CDC000001.csv	(partitionNum = 0)
 	// test/test2/439972354120482843/2023-03-09/CDC000002.csv	(partitionNum = 0)
 	//
-	// the DDL event recorded in schema.json should be executed first, then the DML events
-	// in csv files can be executed.
+	// For the same table version(commitTs), DML should be consumed before DDL.
 	dmlkey := cloudstorage.DmlPathKey{
 		SchemaPathKey: schemaKey,
 		PartitionNum:  fakePartitionNumForSchemaFile,
@@ -512,25 +511,12 @@ func (c *consumer) handleNewFiles(
 		return nil
 	}
 	sort.Slice(keys, func(i, j int) bool {
-		if keys[i].TableVersion != keys[j].TableVersion {
-			return keys[i].TableVersion < keys[j].TableVersion
-		}
-		if keys[i].PartitionNum != keys[j].PartitionNum {
-			return keys[i].PartitionNum < keys[j].PartitionNum
-		}
-		if keys[i].Date != keys[j].Date {
-			return keys[i].Date < keys[j].Date
-		}
-		if keys[i].Schema != keys[j].Schema {
-			return keys[i].Schema < keys[j].Schema
-		}
-		return keys[i].Table < keys[j].Table
+		return dmlPathKeyLess(keys[i], keys[j])
 	})
 
 	for _, key := range keys {
 		tableDef := c.mustGetTableDef(key.SchemaPathKey)
-		// if the key is a fake dml path key which is mainly used for
-		// sorting schema.json file before the dml files, then execute the ddl query.
+		// if the key is a fake dml path key, execute the ddl query in schema.json.
 		if key.PartitionNum == fakePartitionNumForSchemaFile &&
 			len(key.Date) == 0 && len(tableDef.Query) > 0 {
 			ddlEvent, err := tableDef.ToDDLEvent()
@@ -562,6 +548,31 @@ func (c *consumer) handleNewFiles(
 	}
 
 	return nil
+}
+
+func dmlPathKeyLess(lhs, rhs cloudstorage.DmlPathKey) bool {
+	if lhs.TableVersion != rhs.TableVersion {
+		return lhs.TableVersion < rhs.TableVersion
+	}
+
+	// For the same table version(commitTs), execute schema(DDL) after all DML files.
+	if lhs.PartitionNum != rhs.PartitionNum {
+		if lhs.PartitionNum == fakePartitionNumForSchemaFile {
+			return false
+		}
+		if rhs.PartitionNum == fakePartitionNumForSchemaFile {
+			return true
+		}
+		return lhs.PartitionNum < rhs.PartitionNum
+	}
+
+	if lhs.Date != rhs.Date {
+		return lhs.Date < rhs.Date
+	}
+	if lhs.Schema != rhs.Schema {
+		return lhs.Schema < rhs.Schema
+	}
+	return lhs.Table < rhs.Table
 }
 
 func (c *consumer) handle(ctx context.Context) error {
