@@ -170,11 +170,11 @@ func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.dmlWriters.AddDMLEvent(event)
 }
 
-func (s *sink) PassBlockEvent(event commonEvent.BlockEvent) error {
+func (s *sink) FlushDMLBeforeBlock(event commonEvent.BlockEvent) error {
 	if event == nil {
 		return nil
 	}
-	return s.dmlWriters.PassBlockEvent(event)
+	return s.dmlWriters.FlushDMLBeforeBlock(event)
 }
 
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {

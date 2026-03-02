@@ -53,7 +53,7 @@ func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.eventCh <- event
 }
 
-func (s *sink) PassBlockEvent(_ commonEvent.BlockEvent) error {
+func (s *sink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
 	return nil
 }
 

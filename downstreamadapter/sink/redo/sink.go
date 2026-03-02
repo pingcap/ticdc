@@ -112,7 +112,7 @@ func (s *Sink) Run(ctx context.Context) error {
 	return err
 }
 
-func (s *Sink) PassBlockEvent(_ commonEvent.BlockEvent) error {
+func (s *Sink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
 	return nil
 }
 

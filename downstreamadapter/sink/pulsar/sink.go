@@ -128,7 +128,7 @@ func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.eventChan.Push(event)
 }
 
-func (s *sink) PassBlockEvent(_ commonEvent.BlockEvent) error {
+func (s *sink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
 	return nil
 }
 

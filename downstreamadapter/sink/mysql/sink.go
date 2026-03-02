@@ -270,7 +270,7 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.conflictDetector.Add(event)
 }
 
-func (s *Sink) PassBlockEvent(_ commonEvent.BlockEvent) error {
+func (s *Sink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
 	return nil
 }
 

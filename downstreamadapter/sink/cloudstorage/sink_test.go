@@ -262,7 +262,7 @@ func TestPassBlockEventDrainsBeforeWriteDDLEvent(t *testing.T) {
 		},
 	}
 
-	err = cloudStorageSink.PassBlockEvent(ddlEvent)
+	err = cloudStorageSink.FlushDMLBeforeBlock(ddlEvent)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), dmlFlushed.Load())
 

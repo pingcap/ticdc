@@ -127,7 +127,7 @@ func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
 	d.msgCh.Push(newEventFragment(seq, tbl, event.GetDispatcherID(), event))
 }
 
-func (d *dmlWriters) PassBlockEvent(event commonEvent.BlockEvent) error {
+func (d *dmlWriters) FlushDMLBeforeBlock(event commonEvent.BlockEvent) error {
 	if event == nil {
 		return nil
 	}

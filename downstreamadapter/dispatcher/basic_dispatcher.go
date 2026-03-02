@@ -906,7 +906,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 			// Pre-block barrier for ordering:
 			// storage sink may wait until prior DML of this dispatcher are accepted
 			// by sink pipeline; non-storage sinks usually no-op here.
-			err := d.sink.PassBlockEvent(event)
+			err := d.sink.FlushDMLBeforeBlock(event)
 			if err != nil {
 				if needsScheduleACKTracking {
 					d.pendingACKCount.Add(-1)
@@ -985,7 +985,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 		d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
 			// Same pre-block barrier in the blocking path; this keeps block-event
 			// visibility ordered with prior DML for sinks that require draining.
-			err := d.sink.PassBlockEvent(event)
+			err := d.sink.FlushDMLBeforeBlock(event)
 			if err != nil {
 				d.HandleError(err)
 				return
