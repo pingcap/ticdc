@@ -414,6 +414,8 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 				col.SetCharset("utf8mb4")
 				col.SetCollate("utf8mb4_bin")
 			}
+		case mysql.TypeDuration:
+			col.SetDecimal(tiTypes.MaxFsp)
 		case mysql.TypeEnum, mysql.TypeSet:
 			col.SetCharset("utf8mb4")
 			col.SetCollate("utf8mb4_bin")
