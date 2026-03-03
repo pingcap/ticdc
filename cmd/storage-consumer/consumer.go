@@ -66,6 +66,9 @@ type consumer struct {
 	// tableDMLIdxMap maintains a map of <dmlPathKey, fileIndexKeyMap>
 	tableDMLIdxMap map[cloudstorage.DmlPathKey]fileIndexKeyMap
 	eventsGroup    map[int64]*util.EventsGroup
+	// tableDDLWatermark maintains a map of <`schema`.`table`, max executed DDL table version>.
+	// DML files with smaller table versions are considered stale replays and should be ignored.
+	tableDDLWatermark map[string]uint64
 	// tableDefMap maintains a map of <`schema`.`table`, tableDef slice sorted by TableVersion>
 	tableDefMap      map[string]map[uint64]*cloudstorage.TableDefinition
 	tableIDGenerator *fakeTableIDGenerator
@@ -141,15 +144,16 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 	}
 
 	return &consumer{
-		replicationCfg:  replicaConfig,
-		codecCfg:        codecConfig,
-		externalStorage: storage,
-		fileExtension:   extension,
-		sink:            sink,
-		errCh:           errCh,
-		tableDMLIdxMap:  make(map[cloudstorage.DmlPathKey]fileIndexKeyMap),
-		eventsGroup:     make(map[int64]*util.EventsGroup),
-		tableDefMap:     make(map[string]map[uint64]*cloudstorage.TableDefinition),
+		replicationCfg:    replicaConfig,
+		codecCfg:          codecConfig,
+		externalStorage:   storage,
+		fileExtension:     extension,
+		sink:              sink,
+		errCh:             errCh,
+		tableDMLIdxMap:    make(map[cloudstorage.DmlPathKey]fileIndexKeyMap),
+		eventsGroup:       make(map[int64]*util.EventsGroup),
+		tableDDLWatermark: make(map[string]uint64),
+		tableDefMap:       make(map[string]map[uint64]*cloudstorage.TableDefinition),
 		tableIDGenerator: &fakeTableIDGenerator{
 			tableIDs: make(map[string]int64),
 		},
@@ -246,29 +250,17 @@ func (c *consumer) appendRow2Group(dml *event.DMLEvent, enableTableAcrossNodes b
 		group = util.NewEventsGroup(0, tableID)
 		c.eventsGroup[tableID] = group
 	}
-	// For at-least-once replay, CommitTs can go backwards. We can only safely
-	// ignore events that are already flushed to downstream.
-	if commitTs <= group.AppliedWatermark {
-		log.Warn("DML event replayed after applied, ignore it",
-			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
-			zap.Uint64("appliedWatermark", group.AppliedWatermark),
-			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
-			zap.Stringer("eventType", dml.RowTypes[0]))
-		return
-	}
 	if commitTs >= group.HighWatermark {
 		group.Append(dml, false)
 		log.Info("DML event append to the group",
 			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
-			zap.Uint64("appliedWatermark", group.AppliedWatermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 			zap.Stringer("eventType", dml.RowTypes[0]))
 		return
 	}
 	if enableTableAcrossNodes {
-		log.Warn("DML event commit ts fallback, append with forceInsert",
+		log.Warn("DML events fallback, but enableTableAcrossNodes is true, still append it",
 			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
-			zap.Uint64("appliedWatermark", group.AppliedWatermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 			zap.Stringer("eventType", dml.RowTypes[0]))
 		group.Append(dml, true)
@@ -276,8 +268,7 @@ func (c *consumer) appendRow2Group(dml *event.DMLEvent, enableTableAcrossNodes b
 	}
 	log.Warn("dml event commit ts fallback, ignore",
 		zap.Uint64("commitTs", dml.CommitTs),
-		zap.Uint64("highWatermark", group.HighWatermark),
-		zap.Uint64("appliedWatermark", group.AppliedWatermark),
+		zap.Any("highWatermark", group.HighWatermark),
 		zap.Stringer("row", dml),
 	)
 }
@@ -362,12 +353,8 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 		return nil
 	}
 	var flushed atomic.Int64
-	maxCommitTs := uint64(0)
 	done := make(chan struct{})
 	for _, e := range events {
-		if e.GetCommitTs() > maxCommitTs {
-			maxCommitTs = e.GetCommitTs()
-		}
 		e.AddPostFlushFunc(func() {
 			if flushed.Inc() == int64(total) {
 				close(done)
@@ -386,11 +373,7 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 			return context.Cause(ctx)
 		case <-done:
 			log.Info("flush DML events done",
-				zap.Int("total", total), zap.Duration("duration", time.Since(start)),
-				zap.Uint64("appliedWatermark", group.AppliedWatermark))
-			if maxCommitTs > group.AppliedWatermark {
-				group.AppliedWatermark = maxCommitTs
-			}
+				zap.Int("total", total), zap.Duration("duration", time.Since(start)))
 			return nil
 		case <-ticker.C:
 			log.Warn("DML events cannot be flushed in time",
@@ -550,10 +533,20 @@ func (c *consumer) handleNewFiles(
 
 	for _, key := range keys {
 		tableDef := c.mustGetTableDef(key.SchemaPathKey)
+		tableKey := key.GetKey()
+		ddlWatermark := c.tableDDLWatermark[tableKey]
+
 		// if the key is a fake dml path key which is mainly used for
 		// sorting schema.json file before the dml files, then execute the ddl query.
-		if key.PartitionNum == fakePartitionNumForSchemaFile &&
-			len(key.Date) == 0 && len(tableDef.Query) > 0 {
+		if key.PartitionNum == fakePartitionNumForSchemaFile && len(key.Date) == 0 && len(tableDef.Query) > 0 {
+			if key.TableVersion <= ddlWatermark {
+				log.Warn("DDL event replayed with stale table version, ignore it",
+					zap.String("schema", key.Schema), zap.String("table", key.Table),
+					zap.Uint64("tableVersion", key.TableVersion), zap.Uint64("ddlWatermark", ddlWatermark),
+					zap.String("query", tableDef.Query))
+				continue
+			}
+
 			ddlEvent, err := tableDef.ToDDLEvent()
 			if err != nil {
 				return err
@@ -561,8 +554,22 @@ func (c *consumer) handleNewFiles(
 			if err := c.sink.WriteBlockEvent(ddlEvent); err != nil {
 				return errors.Trace(err)
 			}
+			c.tableDDLWatermark[tableKey] = key.TableVersion
 			// TODO: need to cleanup tableDefMap in the future.
-			log.Info("execute ddl event successfully", zap.String("query", tableDef.Query))
+			log.Info("execute ddl event successfully",
+				zap.String("query", tableDef.Query),
+				zap.String("schema", key.Schema), zap.String("table", key.Table),
+				zap.Uint64("ddlWatermark", c.tableDDLWatermark[tableKey]))
+			continue
+		}
+
+		// The table schema has already moved to a newer DDL version on downstream.
+		// DML files produced with an older table version should be ignored.
+		if key.TableVersion < ddlWatermark {
+			log.Warn("DML files replayed with stale table version, ignore them",
+				zap.String("schema", key.Schema), zap.String("table", key.Table),
+				zap.Uint64("tableVersion", key.TableVersion), zap.Uint64("ddlWatermark", ddlWatermark),
+				zap.Int64("partition", key.PartitionNum), zap.String("date", key.Date))
 			continue
 		}
 
