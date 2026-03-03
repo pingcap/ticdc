@@ -334,13 +334,6 @@ func (d *BasicDispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.S
 }
 
 func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {
-	// Keep block-event write order with prior DML. For storage sink this may wait
-	// until prior DML are enqueued/flushed to the sink pipeline; for non-storage
-	// sinks it is usually a no-op.
-	if err := d.sink.FlushDMLBeforeBlock(event); err != nil {
-		return err
-	}
-
 	// For ddl event, we need to check whether it should be sent to downstream.
 	// It may be marked as not sync by filter when building the event.
 	if event.GetType() == commonEvent.TypeDDLEvent {
@@ -351,10 +344,16 @@ func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) erro
 		// dispatcher progress, without sending this DDL to sink.
 		if ddl.NotSync {
 			log.Info("ignore DDL by NotSync", zap.Stringer("dispatcher", d.id), zap.Any("ddl", ddl))
-			d.PassBlockEventToSink(event)
-			return nil
+			return d.PassBlockEventToSink(event)
 		}
 	}
+	// Keep block-event write order with prior DML. For storage sink this may wait
+	// until prior DML are enqueued/flushed to the sink pipeline; for non-storage
+	// sinks it is usually a no-op.
+	if err := d.sink.FlushDMLBeforeBlock(event); err != nil {
+		return err
+	}
+
 	d.tableProgress.Add(event)
 	return d.sink.WriteBlockEvent(event)
 }
@@ -365,9 +364,13 @@ func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) erro
 // It intentionally does not call sink.WriteBlockEvent. Instead, it updates
 // local progress as if the event had been handled, then fires PostFlush
 // callbacks so wake/checkpoint logic can continue with consistent ordering.
-func (d *BasicDispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) {
+func (d *BasicDispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) error {
+	if err := d.sink.FlushDMLBeforeBlock(event); err != nil {
+		return err
+	}
 	d.tableProgress.Pass(event)
 	event.PostFlush()
+	return nil
 }
 
 // ensureActiveActiveTableInfo validates the table schema requirements for active-active mode.
@@ -562,16 +565,22 @@ func (d *BasicDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	return false
 }
 
-// handleEvents handles one batch on a dispatcher path.
-// DML and resolved-ts events may be batched together; DDL/syncpoint events are
-// always single-event batches because they are block events.
+// handleEvents processes one batch for one dispatcher.
+// A batch may mix DML and resolved-ts events; block events are expected
+// to be handled one by one.
 //
-// wakeCallback is used to wake the dynamic stream to process the next batch.
-// For DML batches, we wake when all accepted events in this batch reach
-// PostEnqueue. Sinks with an explicit enqueue stage (for example cloud storage)
-// call PostEnqueue before flush. Sinks without an explicit enqueue stage rely on
-// the PostFlush fallback (PostFlush -> PostEnqueue), so wake preserves the
-// historical flush-then-wake behavior.
+// Ordering rules:
+//   - Stale events are ignored.
+//   - DML are staged before resolved-ts is advanced.
+//
+// wakeCallback:
+//   - DML batch: fired after all accepted DML reach enqueue stage.
+//   - Block event: fired after block-event flush completion.
+//   - Storage sinks have an explicit enqueue stage before flush; non-storage
+//     sinks rely on flush completion to drive enqueue callbacks.
+//
+// Return true when this batch may still block progress (contains DML or block event);
+// Return false when it is non-blocking (for example resolved-only, or all DML in this batch were filtered).
 func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
 	if d.GetRemovingStatus() {
 		log.Warn("dispatcher is removing", zap.Any("id", d.id))
@@ -855,15 +864,14 @@ func (d *BasicDispatcher) ExecuteBlockEventDDL(pendingEvent commonEvent.BlockEve
 }
 
 // PassBlockEvent executes maintainer Action_Pass:
-// flush prior DML for ordering, then locally mark the block event as passed.
+// It relies on PassBlockEventToSink to preserve ordering and mark the event passed.
 func (d *BasicDispatcher) PassBlockEvent(pendingEvent commonEvent.BlockEvent, actionCommitTs uint64, actionIsSyncPoint bool) {
 	failpoint.Inject("BlockOrWaitBeforePass", nil)
-	err := d.sink.FlushDMLBeforeBlock(pendingEvent)
+	err := d.PassBlockEventToSink(pendingEvent)
 	if err != nil {
 		d.HandleError(err)
 		return
 	}
-	d.PassBlockEventToSink(pendingEvent)
 	failpoint.Inject("BlockAfterPass", nil)
 	d.reportBlockedEventDone(actionCommitTs, actionIsSyncPoint)
 }
