@@ -43,7 +43,11 @@ func TestNewDispatcherStat(t *testing.T) {
 	info.syncPointInterval = syncPointInterval
 
 	workerCount := uint64(1)
+<<<<<<< HEAD
 	status := newChangefeedStatusForTest(t, info)
+=======
+	status := newChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+>>>>>>> 2e6aabd14 (*:improve memory control (#4030))
 	stat := newDispatcherStat(info, workerCount, workerCount, nil, status)
 
 	require.Equal(t, info.GetID(), stat.id)
@@ -64,7 +68,11 @@ func TestDispatcherStatResolvedTs(t *testing.T) {
 	t.Parallel()
 
 	info := newMockDispatcherInfo(t, 100, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
+<<<<<<< HEAD
 	status := newChangefeedStatusForTest(t, info)
+=======
+	status := newChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+>>>>>>> 2e6aabd14 (*:improve memory control (#4030))
 	stat := newDispatcherStat(info, 1, 1, nil, status)
 
 	// Test normal update
@@ -81,7 +89,11 @@ func TestDispatcherStatGetDataRange(t *testing.T) {
 	t.Parallel()
 
 	info := newMockDispatcherInfo(t, 100, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
+<<<<<<< HEAD
 	status := newChangefeedStatusForTest(t, info)
+=======
+	status := newChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+>>>>>>> 2e6aabd14 (*:improve memory control (#4030))
 	stat := newDispatcherStat(info, 1, 1, nil, status)
 	stat.setHandshaked()
 
@@ -121,7 +133,11 @@ func TestDispatcherStatGetDataRange(t *testing.T) {
 func TestDispatcherStatUpdateWatermark(t *testing.T) {
 	startTs := uint64(100)
 	info := newMockDispatcherInfo(t, startTs, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
+<<<<<<< HEAD
 	status := newChangefeedStatusForTest(t, info)
+=======
+	status := newChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+>>>>>>> 2e6aabd14 (*:improve memory control (#4030))
 	stat := newDispatcherStat(info, 1, 1, nil, status)
 
 	// Case 1: no new events, only watermark change
