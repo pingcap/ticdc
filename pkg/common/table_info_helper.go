@@ -126,6 +126,10 @@ func hashTableInfo(tableInfo *model.TableInfo) Digest {
 		for _, col := range idx.Columns {
 			binary.BigEndian.PutUint64(buf, uint64(col.Offset))
 			sha256Hasher.Write(buf)
+			// Prefix length changes handle decode behavior for clustered primary key.
+			// Include the length to prevent sharing schema across incompatible tables.
+			binary.BigEndian.PutUint64(buf, uint64(col.Length))
+			sha256Hasher.Write(buf)
 		}
 		// unique
 		binary.BigEndian.PutUint64(buf, uint64(boolToInt(idx.Unique)))
@@ -253,6 +257,11 @@ func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indice
 		}
 		for j, col := range idx.Columns {
 			if col.Offset != indices[i].Columns[j].Offset {
+				return false
+			}
+			// Prefix length affects whether a primary key column is partially indexed.
+			// This directly impacts handle decoding and must be part of schema equality.
+			if col.Length != indices[i].Columns[j].Length {
 				return false
 			}
 		}
@@ -684,11 +693,7 @@ func (s *columnSchema) initIndexColumns() {
 			indexColOffset := make([]int64, 0, len(idx.Columns))
 			for _, idxCol := range idx.Columns {
 				colInfo := s.Columns[idxCol.Offset]
-				if IsColCDCVisible(colInfo) {
-					indexColOffset = append(indexColOffset, colInfo.ID)
-				} else {
-					hasNotNullUK = false
-				}
+				indexColOffset = append(indexColOffset, colInfo.ID)
 				if !mysql.HasNotNullFlag(colInfo.GetFlag()) {
 					hasNotNullUK = false
 				}

@@ -48,7 +48,7 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	}
 	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
 	advanceResolvedTs := func(ts uint64) {}
-	span := client.newSubscribedSpan(SubscriptionID(1), rawSpan, 100, consumeKVEvents, advanceResolvedTs, 0)
+	span := client.newSubscribedSpan(SubscriptionID(1), rawSpan, 100, consumeKVEvents, advanceResolvedTs, 0, false)
 	client.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
 	client.totalSpans.spanMap[SubscriptionID(1)] = span
 	client.pdClock = pdutil.NewClock4Test()
@@ -117,7 +117,7 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 	}
 	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
 	advanceResolvedTs := func(ts uint64) {}
-	span := client.newSubscribedSpan(SubscriptionID(1), rawSpan, 100, consumeKVEvents, advanceResolvedTs, 0)
+	span := client.newSubscribedSpan(SubscriptionID(1), rawSpan, 100, consumeKVEvents, advanceResolvedTs, 0, false)
 
 	res := span.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
 	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
@@ -147,6 +147,73 @@ func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 
 	<-client.resolveLockTaskCh
 	close(client.resolveLockTaskCh)
+}
+
+func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
+	client := &subscriptionClient{
+		resolveLockTaskCh: make(chan resolveLockTask, 1),
+		regionTaskQueue:   NewPriorityQueue(),
+	}
+	client.ctx, client.cancel = context.WithCancel(context.Background())
+	defer client.cancel()
+	client.pdClock = pdutil.NewClock4Test()
+
+	rawSpan := heartbeatpb.TableSpan{
+		TableID:  1,
+		StartKey: []byte{'a'},
+		EndKey:   []byte{'z'},
+	}
+	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
+	advanceResolvedTs := func(ts uint64) {}
+	span := client.newSubscribedSpan(SubscriptionID(1), rawSpan, 100, consumeKVEvents, advanceResolvedTs, 0, true)
+
+	res := span.rangeLock.LockRange(context.Background(), rawSpan.StartKey, rawSpan.EndKey, 1, 1)
+	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
+
+	client.setTableStopped(span)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	task, err := client.regionTaskQueue.Pop(ctx)
+	require.NoError(t, err)
+	region := task.GetRegionInfo()
+	require.True(t, region.isStopped())
+	require.True(t, region.filterLoop)
+}
+
+func TestEnqueueRegionToAllStoresRetryWhenCacheFull(t *testing.T) {
+	ctx := context.Background()
+	client := &subscriptionClient{}
+
+	worker := &regionRequestWorker{
+		requestCache: newRequestCache(1),
+	}
+	store := &requestedStore{storeAddr: "store-1"}
+	store.requestWorkers.s = []*regionRequestWorker{worker}
+	client.stores.Store(store.storeAddr, store)
+
+	dummyRegion := regionInfo{
+		subscribedSpan:   &subscribedSpan{subID: SubscriptionID(2)},
+		lockedRangeState: &regionlock.LockedRangeState{},
+	}
+	ok, err := worker.add(ctx, dummyRegion, true)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	stopRegion := regionInfo{
+		subscribedSpan: &subscribedSpan{subID: SubscriptionID(1)},
+	}
+	enqueued, err := client.enqueueRegionToAllStores(ctx, stopRegion)
+	require.NoError(t, err)
+	require.False(t, enqueued)
+
+	<-worker.requestCache.pendingQueue
+	worker.requestCache.markDone()
+
+	enqueued, err = client.enqueueRegionToAllStores(ctx, stopRegion)
+	require.NoError(t, err)
+	require.True(t, enqueued)
+	require.Equal(t, 1, len(worker.requestCache.pendingQueue))
 }
 
 func TestSubscriptionWithFailedTiKV(t *testing.T) {
@@ -306,5 +373,25 @@ func TestErrCacheDispatchWithFullChannelAndCanceledContext(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		// If we timeout here, it means dispatch is stuck
 		t.Fatal("dispatch method is stuck and didn't return after context cancellation")
+	}
+}
+
+func TestGCResolveLastRunMap(t *testing.T) {
+	now := time.Now()
+	resolveLastRun := make(map[uint64]time.Time, resolveLastRunGCThreshold+1)
+	const keep = 10
+	for i := 0; i < resolveLastRunGCThreshold+1; i++ {
+		lastRunTime := now.Add(-2 * resolveLockMinInterval)
+		if i < keep {
+			lastRunTime = now.Add(-resolveLockMinInterval / 2)
+		}
+		resolveLastRun[uint64(i)] = lastRunTime
+	}
+
+	resolveLastRun = gcResolveLastRunMap(resolveLastRun, now)
+	require.Len(t, resolveLastRun, keep)
+	for i := 0; i < keep; i++ {
+		_, ok := resolveLastRun[uint64(i)]
+		require.True(t, ok)
 	}
 }

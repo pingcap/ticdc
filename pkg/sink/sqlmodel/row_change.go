@@ -230,8 +230,12 @@ func (r *RowChange) whereColumnsAndValues() ([]string, []interface{}) {
 	}
 
 	columnNames := make([]string, 0, len(columns))
-	for _, column := range columns {
-		columnNames = append(columnNames, column.Name.O)
+	columnValues := make([]any, 0, len(columns))
+	for i, column := range columns {
+		if !column.IsVirtualGenerated() {
+			columnNames = append(columnNames, column.Name.O)
+			columnValues = append(columnValues, values[i])
+		}
 	}
 
 	failpoint.Inject("DownstreamTrackerWhereCheck", func() {
@@ -243,8 +247,11 @@ func (r *RowChange) whereColumnsAndValues() ([]string, []interface{}) {
 				zap.String("Columns", fmt.Sprintf("%v", columnNames)))
 		}
 	})
-
-	return columnNames, values
+	if len(columnNames) != len(columnValues) {
+		log.Panic("columnNames are not equal columnValues", zap.Int("len(columnNames)", len(columnNames)), zap.Int("len(values)", len(columnValues)),
+			zap.Any("columnNames", columnNames), zap.Any("columnValues", columnValues), zap.Any("table", r.targetTable))
+	}
+	return columnNames, columnValues
 }
 
 // genWhere generates WHERE clause for UPDATE and DELETE to identify the row.
