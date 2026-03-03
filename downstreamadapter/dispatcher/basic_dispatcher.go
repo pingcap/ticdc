@@ -566,21 +566,15 @@ func (d *BasicDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 }
 
 // handleEvents processes one batch for one dispatcher.
-// A batch may mix DML and resolved-ts events; block events are expected
-// to be handled one by one.
+// the next batch of events can only be handled after the current batch is enqueued or flushed.
+// A batch may mix DML and resolved-ts events; Block events are expected to be handled one by one.
+//   - Block events, such as DDL / Syncpoint, is sent to the sink synchronously,
+//     the dispatcher is blocked until the block event is flushed.
+//   - DML events is sent to the sink asynchronously.
+//   - Storage sink, the dispatcher wake up after all DML events is guaranteed enqueued.
+//   - Non-storage sink, the dispatche wake up after all DML events is guaranteed flushed.
 //
-// Ordering rules:
-//   - Stale events are ignored.
-//   - DML are staged before resolved-ts is advanced.
-//
-// wakeCallback:
-//   - DML batch: fired after all accepted DML reach enqueue stage.
-//   - Block event: fired after block-event flush completion.
-//   - Storage sinks have an explicit enqueue stage before flush; non-storage
-//     sinks rely on flush completion to drive enqueue callbacks.
-//
-// Return true when this batch may still block progress (contains DML or block event);
-// Return false when it is non-blocking (for example resolved-only, or all DML in this batch were filtered).
+// Return true if should block the dispatcher.
 func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
 	if d.GetRemovingStatus() {
 		log.Warn("dispatcher is removing", zap.Any("id", d.id))
