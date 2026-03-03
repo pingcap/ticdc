@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/coordinator/changefeed"
-	"github.com/pingcap/ticdc/coordinator/nodeliveness"
+	"github.com/pingcap/ticdc/coordinator/drain"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -33,6 +33,7 @@ import (
 
 func TestBalanceSchedulerCreatesMoveOperators(t *testing.T) {
 	setupCoordinatorSchedulerTestServices()
+	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 
 	nodeA := node.ID("node-a")
@@ -40,14 +41,14 @@ func TestBalanceSchedulerCreatesMoveOperators(t *testing.T) {
 	nodeManager.GetAliveNodes()[nodeA] = &node.Info{ID: nodeA}
 	nodeManager.GetAliveNodes()[nodeB] = &node.Info{ID: nodeB}
 
-	view := nodeliveness.NewView(30 * time.Second)
+	drainController := drain.NewControllerWithTTL(mc, 30*time.Second)
 	db := changefeed.NewChangefeedDB(1)
 	addReplicatingMaintainer(t, db, "cf-a-1", nodeA)
 	addReplicatingMaintainer(t, db, "cf-a-2", nodeA)
 
 	selfNode := &node.Info{ID: node.ID("coordinator")}
 	oc := operator.NewOperatorController(selfNode, db, nil, 10)
-	s := NewBalanceScheduler("test", 10, oc, db, 0, view)
+	s := NewBalanceScheduler("test", 10, oc, db, 0, drainController)
 	_ = s.Execute()
 
 	require.Equal(t, 1, oc.OperatorSize())
@@ -55,6 +56,7 @@ func TestBalanceSchedulerCreatesMoveOperators(t *testing.T) {
 
 func TestBalanceSchedulerSkipsWhenDrainActive(t *testing.T) {
 	setupCoordinatorSchedulerTestServices()
+	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 
 	drainingNode := node.ID("draining")
@@ -64,12 +66,11 @@ func TestBalanceSchedulerSkipsWhenDrainActive(t *testing.T) {
 	nodeManager.GetAliveNodes()[nodeA] = &node.Info{ID: nodeA}
 	nodeManager.GetAliveNodes()[nodeB] = &node.Info{ID: nodeB}
 
-	now := time.Now()
-	view := nodeliveness.NewView(30 * time.Second)
-	view.ObserveHeartbeat(drainingNode, &heartbeatpb.NodeHeartbeat{
+	drainController := drain.NewControllerWithTTL(mc, 30*time.Second)
+	drainController.ObserveHeartbeat(drainingNode, &heartbeatpb.NodeHeartbeat{
 		Liveness:  heartbeatpb.NodeLiveness_DRAINING,
 		NodeEpoch: 1,
-	}, now)
+	})
 
 	db := changefeed.NewChangefeedDB(1)
 	addReplicatingMaintainer(t, db, "cf-drain", drainingNode)
@@ -80,7 +81,7 @@ func TestBalanceSchedulerSkipsWhenDrainActive(t *testing.T) {
 
 	selfNode := &node.Info{ID: node.ID("coordinator")}
 	oc := operator.NewOperatorController(selfNode, db, nil, 10)
-	s := NewBalanceScheduler("test", 10, oc, db, 0, view)
+	s := NewBalanceScheduler("test", 10, oc, db, 0, drainController)
 	_ = s.Execute()
 
 	require.Equal(t, 0, oc.OperatorSize())
@@ -88,6 +89,7 @@ func TestBalanceSchedulerSkipsWhenDrainActive(t *testing.T) {
 
 func TestBalanceSchedulerSkipsUntilAllDrainCompleteAndCooldownExpires(t *testing.T) {
 	setupCoordinatorSchedulerTestServices()
+	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 
 	drainingA := node.ID("draining-a")
@@ -99,16 +101,15 @@ func TestBalanceSchedulerSkipsUntilAllDrainCompleteAndCooldownExpires(t *testing
 	nodeManager.GetAliveNodes()[nodeA] = &node.Info{ID: nodeA}
 	nodeManager.GetAliveNodes()[nodeB] = &node.Info{ID: nodeB}
 
-	now := time.Now()
-	view := nodeliveness.NewView(30 * time.Second)
-	view.ObserveHeartbeat(drainingA, &heartbeatpb.NodeHeartbeat{
+	drainController := drain.NewControllerWithTTL(mc, 30*time.Second)
+	drainController.ObserveHeartbeat(drainingA, &heartbeatpb.NodeHeartbeat{
 		Liveness:  heartbeatpb.NodeLiveness_DRAINING,
 		NodeEpoch: 1,
-	}, now)
-	view.ObserveHeartbeat(drainingB, &heartbeatpb.NodeHeartbeat{
+	})
+	drainController.ObserveHeartbeat(drainingB, &heartbeatpb.NodeHeartbeat{
 		Liveness:  heartbeatpb.NodeLiveness_DRAINING,
 		NodeEpoch: 1,
-	}, now)
+	})
 
 	db := changefeed.NewChangefeedDB(1)
 	addReplicatingMaintainer(t, db, "cf-a-1", nodeA)
@@ -118,7 +119,7 @@ func TestBalanceSchedulerSkipsUntilAllDrainCompleteAndCooldownExpires(t *testing
 
 	selfNode := &node.Info{ID: node.ID("coordinator")}
 	oc := operator.NewOperatorController(selfNode, db, nil, 10)
-	s := NewBalanceScheduler("test", 10, oc, db, 0, view)
+	s := NewBalanceScheduler("test", 10, oc, db, 0, drainController)
 	s.drainBalanceBlockedUntil = time.Time{}
 
 	// Any draining node should block balance.
@@ -126,18 +127,18 @@ func TestBalanceSchedulerSkipsUntilAllDrainCompleteAndCooldownExpires(t *testing
 	require.Equal(t, 0, oc.OperatorSize())
 
 	// One node remains draining, balance is still blocked.
-	view.ObserveHeartbeat(drainingA, &heartbeatpb.NodeHeartbeat{
+	drainController.ObserveHeartbeat(drainingA, &heartbeatpb.NodeHeartbeat{
 		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
 		NodeEpoch: 2,
-	}, now.Add(10*time.Millisecond))
+	})
 	_ = s.Execute()
 	require.Equal(t, 0, oc.OperatorSize())
 
 	// After all nodes leave draining, cooldown still blocks balance.
-	view.ObserveHeartbeat(drainingB, &heartbeatpb.NodeHeartbeat{
+	drainController.ObserveHeartbeat(drainingB, &heartbeatpb.NodeHeartbeat{
 		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
 		NodeEpoch: 2,
-	}, now.Add(20*time.Millisecond))
+	})
 	s.drainBalanceBlockedUntil = time.Now().Add(100 * time.Millisecond)
 	_ = s.Execute()
 	require.Equal(t, 0, oc.OperatorSize())

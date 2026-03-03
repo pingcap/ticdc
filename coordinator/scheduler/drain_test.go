@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/coordinator/changefeed"
-	"github.com/pingcap/ticdc/coordinator/nodeliveness"
+	"github.com/pingcap/ticdc/coordinator/drain"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -57,12 +57,11 @@ func TestDrainSchedulerCreatesMoveOperators(t *testing.T) {
 	nodeManager.GetAliveNodes()[origin] = &node.Info{ID: origin}
 	nodeManager.GetAliveNodes()[dest] = &node.Info{ID: dest}
 
-	now := time.Now()
-	view := nodeliveness.NewView(30 * time.Second)
-	view.ObserveHeartbeat(origin, &heartbeatpb.NodeHeartbeat{
+	drainController := drain.NewControllerWithTTL(mc, 30*time.Second)
+	drainController.ObserveHeartbeat(origin, &heartbeatpb.NodeHeartbeat{
 		Liveness:  heartbeatpb.NodeLiveness_DRAINING,
 		NodeEpoch: 1,
-	}, now)
+	})
 
 	db := changefeed.NewChangefeedDB(1)
 	cfID := common.NewChangeFeedIDWithName("cf1", common.DefaultKeyspaceName)
@@ -78,7 +77,7 @@ func TestDrainSchedulerCreatesMoveOperators(t *testing.T) {
 	selfNode := &node.Info{ID: node.ID("coordinator")}
 	oc := operator.NewOperatorController(selfNode, db, nil, 10)
 
-	s := NewDrainScheduler("test", 10, oc, db, view)
+	s := NewDrainScheduler("test", 10, oc, db, drainController)
 	_ = s.Execute()
 
 	require.Equal(t, 1, oc.OperatorSize())
@@ -99,12 +98,11 @@ func TestDrainSchedulerSkipsChangefeedWithInflightOperator(t *testing.T) {
 	nodeManager.GetAliveNodes()[origin] = &node.Info{ID: origin}
 	nodeManager.GetAliveNodes()[dest] = &node.Info{ID: dest}
 
-	now := time.Now()
-	view := nodeliveness.NewView(30 * time.Second)
-	view.ObserveHeartbeat(origin, &heartbeatpb.NodeHeartbeat{
+	drainController := drain.NewControllerWithTTL(mc, 30*time.Second)
+	drainController.ObserveHeartbeat(origin, &heartbeatpb.NodeHeartbeat{
 		Liveness:  heartbeatpb.NodeLiveness_DRAINING,
 		NodeEpoch: 1,
-	}, now)
+	})
 
 	db := changefeed.NewChangefeedDB(1)
 	cfID1 := common.NewChangeFeedIDWithName("cf1", common.DefaultKeyspaceName)
@@ -132,7 +130,7 @@ func TestDrainSchedulerSkipsChangefeedWithInflightOperator(t *testing.T) {
 	require.True(t, oc.AddOperator(operator.NewMoveMaintainerOperator(db, cf1, origin, dest)))
 	require.Equal(t, 1, oc.OperatorSize())
 
-	s := NewDrainScheduler("test", 2, oc, db, view)
+	s := NewDrainScheduler("test", 2, oc, db, drainController)
 	_ = s.Execute()
 
 	require.Equal(t, 2, oc.OperatorSize())
