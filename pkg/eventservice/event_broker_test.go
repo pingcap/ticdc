@@ -32,6 +32,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -199,6 +200,116 @@ func TestAddDispatcherUnregisterOnSchemaStoreError(t *testing.T) {
 	_, ok := es.spansMap.Load(info.GetTableSpan())
 	require.False(t, ok)
 	require.Equal(t, uint64(1), es.unregisterCount.Load())
+}
+
+func TestScanRangeCappedByScanWindow(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	// Close the broker, so we can catch all message in the test.
+	broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
+
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp.seq.Store(1)
+
+	dispPtr := &atomic.Pointer[dispatcherStat]{}
+	dispPtr.Store(disp)
+	changefeedStatus.addDispatcher(disp.id, dispPtr)
+
+	baseTime := time.Now()
+	baseTs := oracle.GoTimeToTS(baseTime)
+	disp.sentResolvedTs.Store(baseTs)
+	disp.receivedResolvedTs.Store(oracle.GoTimeToTS(baseTime.Add(20 * time.Second)))
+	disp.eventStoreCommitTs.Store(oracle.GoTimeToTS(baseTime.Add(15 * time.Second)))
+	changefeedStatus.refreshMinSentResolvedTs()
+
+	needScan, dataRange := broker.getScanTaskDataRange(disp)
+	require.True(t, needScan)
+	require.Equal(t, oracle.GoTimeToTS(baseTime.Add(defaultScanInterval)), dataRange.CommitTsEnd)
+}
+
+func TestGetScanTaskDataRangeEmptyAfterCappingDoesNotResetScanRange(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	// Close the broker, so we can catch all message in the test.
+	broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
+
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp.seq.Store(1)
+
+	baseTime := time.Now()
+	baseTs := oracle.GoTimeToTS(baseTime)
+	commitStart := oracle.GoTimeToTS(baseTime.Add(20 * time.Second))
+	lastStartTs := commitStart - 1
+
+	disp.sentResolvedTs.Store(baseTs)
+	disp.receivedResolvedTs.Store(oracle.GoTimeToTS(baseTime.Add(40 * time.Second)))
+	disp.eventStoreCommitTs.Store(commitStart)
+	disp.lastScannedCommitTs.Store(commitStart)
+	disp.lastScannedStartTs.Store(lastStartTs)
+
+	changefeedStatus.minSentTs.Store(baseTs)
+	changefeedStatus.scanInterval.Store(int64(defaultScanInterval))
+
+	needScan, _ := broker.getScanTaskDataRange(disp)
+	require.False(t, needScan)
+	require.Equal(t, commitStart, disp.lastScannedCommitTs.Load())
+	require.Equal(t, lastStartTs, disp.lastScannedStartTs.Load())
+}
+
+func TestHandleCongestionControlV2AdjustsScanInterval(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	changefeedID := common.NewChangefeedID4Test("default", "test")
+	status := addChangefeedStatusToBrokerForTest(t, broker, changefeedID, time.Second*10)
+
+	status.scanInterval.Store(int64(40 * time.Second))
+	status.lastAdjustTime.Store(time.Now())
+
+	control := event.NewCongestionControlWithVersion(event.CongestionControlVersion2)
+	control.AddAvailableMemoryWithDispatchersAndUsage(changefeedID.ID(), 0, 1, nil)
+	broker.handleCongestionControl(node.ID("event-collector-1"), control)
+
+	require.Equal(t, int64(10*time.Second), status.scanInterval.Load())
+}
+
+func TestHandleCongestionControlV2ResetsScanIntervalOnMemoryRelease(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	changefeedID := common.NewChangefeedID4Test("default", "test")
+	status := addChangefeedStatusToBrokerForTest(t, broker, changefeedID, time.Second*10)
+
+	status.scanInterval.Store(int64(40 * time.Second))
+
+	control := event.NewCongestionControlWithVersion(event.CongestionControlVersion2)
+	control.AddAvailableMemoryWithDispatchersAndUsageAndReleaseCount(changefeedID.ID(), 0, 0.5, nil, 1)
+	broker.handleCongestionControl(node.ID("event-collector-1"), control)
+
+	require.Equal(t, int64(defaultScanInterval), status.scanInterval.Load())
+}
+
+func TestHandleCongestionControlV1DoesNotAdjustScanInterval(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	changefeedID := common.NewChangefeedID4Test("default", "test")
+	status := addChangefeedStatusToBrokerForTest(t, broker, changefeedID, time.Second*10)
+
+	status.scanInterval.Store(int64(40 * time.Second))
+	status.lastAdjustTime.Store(time.Now())
+
+	control := event.NewCongestionControl()
+	control.AddAvailableMemoryWithDispatchers(changefeedID.ID(), 0, nil)
+	broker.handleCongestionControl(node.ID("event-collector-1"), control)
+
+	require.Equal(t, int64(40*time.Second), status.scanInterval.Load())
 }
 
 func TestDoScanSkipWhenChangefeedStatusNotFound(t *testing.T) {

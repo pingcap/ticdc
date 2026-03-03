@@ -60,7 +60,7 @@ func (m *mockMounter) DecodeToChunk(rawKV *common.RawKVEntry, tableInfo *common.
 
 func TestEventScannerReturnsIteratorErrors(t *testing.T) {
 	disInfo := newMockDispatcherInfoForTest(t)
-	changefeedStatus := newChangefeedStatus(disInfo.GetChangefeedID())
+	changefeedStatus := newChangefeedStatusForTest(t, disInfo)
 	disp := newDispatcherStat(disInfo, 1, 1, nil, changefeedStatus)
 	makeDispatcherReady(disp)
 
