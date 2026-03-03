@@ -33,6 +33,30 @@ import (
 
 // BarrierEvent is a barrier event that reported by dispatchers, note is a block multiple dispatchers
 // all of these dispatchers should report the same event
+type barrierEventPhase int
+
+const (
+	// barrierEventPhasePass means non writer dispatchers are still waiting for pass done.
+	barrierEventPhasePass barrierEventPhase = iota
+	// barrierEventPhaseWrite means non writer dispatchers are done and writer should write.
+	barrierEventPhaseWrite
+	// barrierEventPhasePostWrite means writer is done and the event waits for final convergence.
+	barrierEventPhasePostWrite
+)
+
+func (p barrierEventPhase) String() string {
+	switch p {
+	case barrierEventPhasePass:
+		return "pass"
+	case barrierEventPhaseWrite:
+		return "write"
+	case barrierEventPhasePostWrite:
+		return "postWrite"
+	default:
+		return "unknown"
+	}
+}
+
 type BarrierEvent struct {
 	cfID               common.ChangeFeedID
 	commitTs           uint64
@@ -44,8 +68,7 @@ type BarrierEvent struct {
 	// table trigger dispatcher reported the block event, we should use it as the writer
 	tableTriggerDispatcherRelated bool
 	writerDispatcher              common.DispatcherID
-	writerDispatcherAdvanced      bool
-	nonWriterDispatchersAdvanced  bool
+	phase                         barrierEventPhase
 
 	blockedDispatchers *heartbeatpb.InfluencedTables
 	dropDispatchers    *heartbeatpb.InfluencedTables
@@ -87,6 +110,7 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		selected:           atomic.Bool{},
 		hasNewTable:        len(status.NeedAddedTables) > 0,
+		phase:              barrierEventPhasePass,
 
 		blockedDispatchers: status.BlockTables,
 		dropDispatchers:    status.NeedDroppedTables,
@@ -205,7 +229,7 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 
 	be.selected.Store(true)
 	be.writerDispatcher = dispatcher
-	be.nonWriterDispatchersAdvanced = false
+	be.phase = barrierEventPhasePass
 	be.lastResendTime = time.Now()
 	// Mark writer as done for pass phase so allDispatcherReported reflects non writer progress.
 	be.markDispatcherEventDone(be.writerDispatcher)
@@ -474,7 +498,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 				if replication.GetStatus().CheckpointTs >= be.commitTs {
 					// one related table has forward checkpointTs, means the block event can be advanced
 					be.selected.Store(true)
-					be.writerDispatcherAdvanced = true
+					be.phase = barrierEventPhasePostWrite
 					log.Info("one related dispatcher has forward checkpointTs, means the block event can be advanced",
 						zap.String("changefeed", be.cfID.Name()),
 						zap.Uint64("commitTs", be.commitTs),
@@ -493,7 +517,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 			if replication.GetStatus().CheckpointTs >= be.commitTs {
 				// one related table has forward checkpointTs, means the block event can be advanced
 				be.selected.Store(true)
-				be.writerDispatcherAdvanced = true
+				be.phase = barrierEventPhasePostWrite
 				log.Info("one related dispatcher has forward checkpointTs, means the block event can be advanced",
 					zap.String("changefeed", be.cfID.Name()),
 					zap.Uint64("commitTs", be.commitTs),
@@ -510,7 +534,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 			if replication.GetStatus().CheckpointTs >= be.commitTs {
 				// one related table has forward checkpointTs, means the block event can be advanced
 				be.selected.Store(true)
-				be.writerDispatcherAdvanced = true
+				be.phase = barrierEventPhasePostWrite
 				log.Info("one related dispatcher has forward checkpointTs, means the block event can be advanced",
 					zap.String("changefeed", be.cfID.Name()),
 					zap.Uint64("commitTs", be.commitTs),
@@ -536,7 +560,7 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 					zap.Uint64("commitTs", be.commitTs),
 					zap.Bool("isSyncPoint", be.isSyncPoint),
 					zap.Bool("selected", be.selected.Load()),
-					zap.Bool("writerDispatcherAdvanced", be.writerDispatcherAdvanced),
+					zap.String("phase", be.phase.String()),
 					zap.String("coverage", be.rangeChecker.Detail()),
 					zap.Any("blocker", be.blockedDispatchers),
 					zap.Any("resend", msgs),
@@ -547,7 +571,7 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 					zap.Uint64("commitTs", be.commitTs),
 					zap.Bool("isSyncPoint", be.isSyncPoint),
 					zap.Bool("selected", be.selected.Load()),
-					zap.Bool("writerDispatcherAdvanced", be.writerDispatcherAdvanced),
+					zap.String("phase", be.phase.String()),
 					zap.Any("blocker", be.blockedDispatchers),
 					zap.Any("resend", msgs),
 				)
@@ -564,7 +588,7 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 				zap.Uint64("commitTs", be.commitTs),
 				zap.Bool("isSyncPoint", be.isSyncPoint),
 				zap.Bool("selected", be.selected.Load()),
-				zap.Bool("writerDispatcherAdvanced", be.writerDispatcherAdvanced),
+				zap.String("phase", be.phase.String()),
 				zap.Any("blocker", be.blockedDispatchers))
 		}
 		be.checkBlockedDispatchers()
@@ -574,15 +598,15 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 	// Two-phase block handling:
 	// 1) pass all non-writer dispatchers;
 	// 2) after non-writers done, write by writer dispatcher.
-	if be.writerDispatcherAdvanced {
+	if be.phase == barrierEventPhasePostWrite {
 		if !be.allDispatcherReported() {
 			return be.sendPassAction(mode)
 		}
 		return nil
 	}
-	if !be.nonWriterDispatchersAdvanced {
+	if be.phase == barrierEventPhasePass {
 		if be.allDispatcherReported() {
-			be.nonWriterDispatchersAdvanced = true
+			be.phase = barrierEventPhaseWrite
 		} else {
 			return be.sendPassAction(mode)
 		}

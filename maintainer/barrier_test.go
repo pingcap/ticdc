@@ -93,7 +93,7 @@ func TestOneBlockEvent(t *testing.T) {
 	require.Equal(t, uint64(10), event.commitTs)
 	require.True(t, event.writerDispatcher == spanController.GetDDLDispatcherID())
 	require.True(t, event.selected.Load())
-	require.False(t, event.writerDispatcherAdvanced)
+	require.Equal(t, barrierEventPhasePass, event.phase)
 	require.Len(t, resp.DispatcherStatuses, 1)
 	require.Equal(t, resp.DispatcherStatuses[0].Ack.CommitTs, uint64(10))
 
@@ -915,7 +915,7 @@ func TestUpdateCheckpointTs(t *testing.T) {
 	require.Equal(t, uint64(10), event.commitTs)
 	require.True(t, event.writerDispatcher == spanController.GetDDLDispatcherID())
 	require.True(t, event.selected.Load())
-	require.False(t, event.writerDispatcherAdvanced)
+	require.Equal(t, barrierEventPhasePass, event.phase)
 	require.Len(t, resp.DispatcherStatuses, 1)
 	require.Equal(t, resp.DispatcherStatuses[0].Ack.CommitTs, uint64(10))
 	// the checkpoint ts is updated
@@ -982,7 +982,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 	event := barrier.blockedEvents.m[getEventKey(6, false)]
 	require.NotNil(t, event)
 	require.False(t, event.selected.Load())
-	require.False(t, event.writerDispatcherAdvanced)
+	require.Equal(t, barrierEventPhasePass, event.phase)
 	require.True(t, event.allDispatcherReported())
 
 	// one waiting dispatcher, and one writing
@@ -1020,7 +1020,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 	event = barrier.blockedEvents.m[getEventKey(6, false)]
 	require.NotNil(t, event)
 	require.True(t, event.selected.Load())
-	require.False(t, event.writerDispatcherAdvanced)
+	require.Equal(t, barrierEventPhaseWrite, event.phase)
 
 	// two done dispatchers
 	barrier = NewBarrier(spanController, operatorController, false, map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
@@ -1057,7 +1057,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 	event = barrier.blockedEvents.m[getEventKey(6, false)]
 	require.NotNil(t, event)
 	require.True(t, event.selected.Load())
-	require.True(t, event.writerDispatcherAdvanced)
+	require.Equal(t, barrierEventPhasePostWrite, event.phase)
 
 	// nil, none stage
 	barrier = NewBarrier(spanController, operatorController, false, map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{

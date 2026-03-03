@@ -178,12 +178,11 @@ func (b *Barrier) handleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 				// it's the maintainer's responsibility to resend the write action
 				event.selected.Store(true)
 				event.writerDispatcher = common.NewDispatcherIDFromPB(span.ID)
-				event.nonWriterDispatchersAdvanced = true
+				event.phase = barrierEventPhaseWrite
 			case heartbeatpb.BlockStage_DONE:
 				// it's the maintainer's responsibility to resend the pass action
 				event.selected.Store(true)
-				event.writerDispatcherAdvanced = true
-				event.nonWriterDispatchersAdvanced = true
+				event.phase = barrierEventPhasePostWrite
 			}
 			event.markDispatcherEventDone(common.NewDispatcherIDFromPB(span.ID))
 		}
@@ -305,7 +304,7 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 	// the writer already synced ddl to downstream
 	if event.writerDispatcher == dispatcherID {
 		if event.needSchedule {
-			// we need do schedule when writerDispatcherAdvanced
+			// we need do schedule when the writer dispatcher reports done
 			// Otherwise, if we do schedule when just selected = true, then ask dispatcher execute ddl
 			// when meeting truncate table,
 			// there is possible that dml for the new table will arrive before truncate ddl executed.
@@ -317,7 +316,7 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 			}
 		} else {
 			// the pass action will be sent periodically in resend logic if not acked
-			event.writerDispatcherAdvanced = true
+			event.phase = barrierEventPhasePostWrite
 			event.lastResendTime = time.Now().Add(-20 * time.Second)
 		}
 	}
@@ -406,7 +405,7 @@ func (b *Barrier) getOrInsertNewEvent(changefeedID common.ChangeFeedID, dispatch
 // check whether the event is get all the done message from dispatchers
 // if so, remove the event from blockedTs, not need to resend message anymore
 func (b *Barrier) checkEventFinish(be *BarrierEvent) {
-	if !be.writerDispatcherAdvanced {
+	if be.phase != barrierEventPhasePostWrite {
 		return
 	}
 	if !be.allDispatcherReported() {
@@ -450,7 +449,7 @@ func (b *Barrier) tryScheduleEvent(event *BarrierEvent) bool {
 		return false
 	}
 	event.scheduleBlockEvent()
-	event.writerDispatcherAdvanced = true
+	event.phase = barrierEventPhasePostWrite
 	event.lastResendTime = time.Now().Add(-20 * time.Second)
 	return true
 }

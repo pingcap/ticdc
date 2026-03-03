@@ -126,7 +126,7 @@ func TestResendAction(t *testing.T) {
 
 	// writer not advanced yet, resend pass action first.
 	event.selected.Store(true)
-	event.writerDispatcherAdvanced = false
+	event.phase = barrierEventPhasePass
 	event.writerDispatcher = dispatcherIDs[0]
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
@@ -136,7 +136,7 @@ func TestResendAction(t *testing.T) {
 	require.Equal(t, resp.DispatcherStatuses[0].Action.CommitTs, uint64(10))
 
 	event.lastResendTime = time.Time{}
-	event.nonWriterDispatchersAdvanced = true
+	event.phase = barrierEventPhaseWrite
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
 	resp = msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
@@ -152,7 +152,7 @@ func TestResendAction(t *testing.T) {
 		},
 	}, false)
 	event.selected.Store(true)
-	event.writerDispatcherAdvanced = true
+	event.phase = barrierEventPhasePostWrite
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
 	resp = msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
@@ -170,7 +170,7 @@ func TestResendAction(t *testing.T) {
 		},
 	}, false)
 	event.selected.Store(true)
-	event.writerDispatcherAdvanced = true
+	event.phase = barrierEventPhasePostWrite
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
 	resp = msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
@@ -189,7 +189,7 @@ func TestResendAction(t *testing.T) {
 		},
 	}, false)
 	event.selected.Store(true)
-	event.writerDispatcherAdvanced = true
+	event.phase = barrierEventPhasePostWrite
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
 	resp = msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
