@@ -155,8 +155,8 @@ func (o *createChangefeedOptions) completeReplicaCfg() error {
 	if err != nil {
 		return err
 	}
-	err = cfg.ValidateAndAdjustWithOptions(uri, config.ReplicaConfigValidateAndAdjustOptions{
-		EnableConsistentStorageIOCheck: false,
+	err = cfg.ValidateAndAdjustWithOptions(uri, config.ValidateOptions{
+		EnableRedoIOCheck: false,
 	})
 	if err != nil {
 		return err

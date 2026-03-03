@@ -265,24 +265,24 @@ func (c *replicaConfig) fillFromV1(v1 *outdated.ReplicaConfigV1) {
 	}
 }
 
-// ReplicaConfigValidateAndAdjustOptions provides optional controls for
+// ValidateOptions provides optional controls for
 // (*ReplicaConfig).ValidateAndAdjustWithOptions.
-type ReplicaConfigValidateAndAdjustOptions struct {
-	EnableConsistentStorageIOCheck bool
+type ValidateOptions struct {
+	EnableRedoIOCheck bool
 }
 
 // ValidateAndAdjust verifies and adjusts the replica configuration.
 func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sink uri
 	return c.ValidateAndAdjustWithOptions(
 		sinkURI,
-		ReplicaConfigValidateAndAdjustOptions{EnableConsistentStorageIOCheck: true},
+		ValidateOptions{EnableRedoIOCheck: true},
 	)
 }
 
 // ValidateAndAdjustWithOptions verifies and adjusts the replica configuration
 // with extra controls.
 func (c *ReplicaConfig) ValidateAndAdjustWithOptions(
-	sinkURI *url.URL, opts ReplicaConfigValidateAndAdjustOptions,
+	sinkURI *url.URL, opts ValidateOptions,
 ) error {
 	if c.Sink != nil {
 		err := c.Sink.validateAndAdjust(sinkURI)
@@ -292,7 +292,7 @@ func (c *ReplicaConfig) ValidateAndAdjustWithOptions(
 	}
 
 	if c.Consistent != nil {
-		err := c.Consistent.validateAndAdjust(opts.EnableConsistentStorageIOCheck)
+		err := c.Consistent.validateAndAdjust(opts.EnableRedoIOCheck)
 		if err != nil {
 			return err
 		}
