@@ -113,9 +113,8 @@ func TestBalanceSchedulerSkipsDuringDrainCooldown(t *testing.T) {
 	_ = s.Execute()
 	require.Equal(t, 0, oc.OperatorSize())
 
-	// Shorten cooldown in test and verify scheduling resumes after it expires.
-	s.drainBalanceBlockedUntil = time.Now().Add(100 * time.Millisecond)
-	time.Sleep(120 * time.Millisecond)
+	// Expire cooldown in test and verify scheduling resumes.
+	s.drainBalanceBlockedUntil = time.Now().Add(-time.Millisecond)
 	_ = s.Execute()
 	require.Greater(t, oc.OperatorSize(), 0)
 }

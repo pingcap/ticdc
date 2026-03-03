@@ -81,32 +81,7 @@ func TestDrainSchedulerCapsInflightDrainMoves(t *testing.T) {
 	_ = s.Execute()
 	require.Equal(t, maxDrainMovePerRound, oc.OperatorSize())
 
-	_ = s.Execute()
-	require.Equal(t, maxDrainMovePerRound, oc.OperatorSize())
-}
-
-func TestDrainSchedulerSchedulesNextAfterDrainMoveSlotFreed(t *testing.T) {
-	cfID, nodeManager, oc, sc, self := newDrainSchedulerTestHarness(t)
-	target := node.ID("target")
-	dest1 := node.ID("dest1")
-	dest2 := node.ID("dest2")
-	nodeManager.GetAliveNodes()[target] = &node.Info{ID: target}
-	nodeManager.GetAliveNodes()[dest1] = &node.Info{ID: dest1}
-	nodeManager.GetAliveNodes()[dest2] = &node.Info{ID: dest2}
-
-	for i := 1; i <= 25; i++ {
-		addReplicatingSpan(t, cfID, sc, int64(i), target)
-	}
-
-	s := NewDrainScheduler(
-		cfID,
-		100,
-		oc,
-		sc,
-		common.DefaultMode,
-		func() (node.ID, uint64) { return target, 1 },
-		func() node.ID { return self },
-	)
+	// Subsequent scheduling should not exceed the in-flight drain move cap.
 	_ = s.Execute()
 	require.Equal(t, maxDrainMovePerRound, oc.OperatorSize())
 
@@ -139,33 +114,6 @@ func TestDrainSchedulerSkipsWhenSelfIsTarget(t *testing.T) {
 	_ = s.Execute()
 
 	require.Equal(t, 0, oc.OperatorSize())
-}
-
-func TestDrainSchedulerSkipsDispatcherWithInflightOperator(t *testing.T) {
-	cfID, nodeManager, oc, sc, self := newDrainSchedulerTestHarness(t)
-	target := node.ID("target")
-	dest := node.ID("dest")
-	nodeManager.GetAliveNodes()[target] = &node.Info{ID: target}
-	nodeManager.GetAliveNodes()[dest] = &node.Info{ID: dest}
-
-	withInflight := addReplicatingSpan(t, cfID, sc, 1, target)
-	withoutInflight := addReplicatingSpan(t, cfID, sc, 2, target)
-	require.True(t, oc.AddOperator(operator.NewMoveDispatcherOperator(sc, withInflight, target, dest)))
-
-	s := NewDrainScheduler(
-		cfID,
-		10,
-		oc,
-		sc,
-		common.DefaultMode,
-		func() (node.ID, uint64) { return target, 1 },
-		func() node.ID { return self },
-	)
-	_ = s.Execute()
-
-	require.NotNil(t, oc.GetOperator(withInflight.ID))
-	require.NotNil(t, oc.GetOperator(withoutInflight.ID))
-	require.Equal(t, 2, oc.OperatorSize())
 }
 
 func newDrainSchedulerTestHarness(

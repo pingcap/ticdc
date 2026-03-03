@@ -29,22 +29,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestChooseLeastLoadedDest(t *testing.T) {
-	origin := node.ID("n1")
-	candidates := []node.ID{"n1", "n2", "n3"}
-	sizes := map[node.ID]int{
-		"n1": 0,
-		"n2": 5,
-		"n3": 1,
-	}
-	dest, ok := chooseLeastLoadedDest(origin, candidates, sizes)
-	require.True(t, ok)
-	require.Equal(t, node.ID("n3"), dest)
-
-	dest, ok = chooseLeastLoadedDest(origin, []node.ID{"n1"}, sizes)
-	require.False(t, ok)
-}
-
 func TestDrainSchedulerCreatesMoveOperators(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
 	appcontext.SetService(appcontext.MessageCenter, mc)
@@ -53,9 +37,11 @@ func TestDrainSchedulerCreatesMoveOperators(t *testing.T) {
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 
 	origin := node.ID("origin")
-	dest := node.ID("dest")
+	destHot := node.ID("dest-hot")
+	destCold := node.ID("dest-cold")
 	nodeManager.GetAliveNodes()[origin] = &node.Info{ID: origin}
-	nodeManager.GetAliveNodes()[dest] = &node.Info{ID: dest}
+	nodeManager.GetAliveNodes()[destHot] = &node.Info{ID: destHot}
+	nodeManager.GetAliveNodes()[destCold] = &node.Info{ID: destCold}
 
 	drainController := drain.NewControllerWithTTL(mc, 30*time.Second)
 	drainController.ObserveHeartbeat(origin, &heartbeatpb.NodeHeartbeat{
@@ -74,6 +60,19 @@ func TestDrainSchedulerCreatesMoveOperators(t *testing.T) {
 	cf := changefeed.NewChangefeed(cfID, info, 1, false)
 	db.AddReplicatingMaintainer(cf, origin)
 
+	// Create load on one destination to ensure the scheduler deterministically chooses the least loaded node.
+	loadInfo := &config.ChangeFeedInfo{
+		SinkURI: "blackhole://load",
+		Config:  config.GetDefaultReplicaConfig(),
+		State:   config.StateNormal,
+	}
+	loadInfo1 := *loadInfo
+	loadInfo1.ChangefeedID = common.NewChangeFeedIDWithName("cf-load-1", common.DefaultKeyspaceName)
+	db.AddReplicatingMaintainer(changefeed.NewChangefeed(loadInfo1.ChangefeedID, &loadInfo1, 1, false), destHot)
+	loadInfo2 := *loadInfo
+	loadInfo2.ChangefeedID = common.NewChangeFeedIDWithName("cf-load-2", common.DefaultKeyspaceName)
+	db.AddReplicatingMaintainer(changefeed.NewChangefeed(loadInfo2.ChangefeedID, &loadInfo2, 1, false), destHot)
+
 	selfNode := &node.Info{ID: node.ID("coordinator")}
 	oc := operator.NewOperatorController(selfNode, db, nil, 10)
 
@@ -83,7 +82,7 @@ func TestDrainSchedulerCreatesMoveOperators(t *testing.T) {
 	require.Equal(t, 1, oc.OperatorSize())
 	op := oc.GetOperator(cfID)
 	require.NotNil(t, op)
-	require.ElementsMatch(t, []node.ID{origin, dest}, op.AffectedNodes())
+	require.ElementsMatch(t, []node.ID{origin, destCold}, op.AffectedNodes())
 }
 
 func TestDrainSchedulerSkipsChangefeedWithInflightOperator(t *testing.T) {

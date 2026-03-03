@@ -143,7 +143,7 @@ func TestBalanceSchedulerSkipsUntilAllDrainCompleteAndCooldownExpires(t *testing
 	_ = s.Execute()
 	require.Equal(t, 0, oc.OperatorSize())
 
-	time.Sleep(120 * time.Millisecond)
+	s.drainBalanceBlockedUntil = time.Now().Add(-time.Millisecond)
 	_ = s.Execute()
 	require.Greater(t, oc.OperatorSize(), 0)
 }
