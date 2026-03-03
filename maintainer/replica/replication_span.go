@@ -193,6 +193,8 @@ func (r *SpanReplication) UpdateBlockState(newState heartbeatpb.State) {
 	r.blockState.Store(&newState)
 }
 
+// GetBlockState returns the current block state (DDL / syncpoint barrier) tracked for this span.
+// It can be nil if the span is not participating in any in-flight barrier.
 func (r *SpanReplication) GetBlockState() *heartbeatpb.State {
 	return r.blockState.Load()
 }
@@ -232,7 +234,13 @@ func (r *SpanReplication) GetGroupID() replica.GroupID {
 	return r.groupID
 }
 
-func (r *SpanReplication) NewAddDispatcherMessage(server node.ID) *messaging.TargetMessage {
+// NewAddDispatcherMessage creates a ScheduleDispatcherRequest(Create) for this span.
+//
+// The StartTs in the request is usually the span checkpoint. However, when a dispatcher is being
+// moved/recreated during an in-flight barrier (DDL or syncpoint), starting from the raw checkpoint can
+// violate barrier semantics (e.g. replaying events that have already been acknowledged by the barrier),
+// so we adjust StartTs and (for DDL) optionally skip DML at StartTs+1.
+func (r *SpanReplication) NewAddDispatcherMessage(server node.ID, operatorType heartbeatpb.OperatorType) *messaging.TargetMessage {
 	startTs := r.status.Load().CheckpointTs
 	skipDMLAsStartTs := false
 	if state := r.blockState.Load(); state != nil && state.IsBlocked &&
@@ -273,22 +281,31 @@ func (r *SpanReplication) NewAddDispatcherMessage(server node.ID) *messaging.Tar
 				Mode:             r.GetMode(),
 			},
 			ScheduleAction: heartbeatpb.ScheduleAction_Create,
+			OperatorType:   operatorType,
 		})
 }
 
-func (r *SpanReplication) NewRemoveDispatcherMessage(server node.ID) *messaging.TargetMessage {
-	return NewRemoveDispatcherMessage(server, r.ChangefeedID, r.ID.ToPB(), r.GetMode())
+// NewRemoveDispatcherMessage creates a ScheduleDispatcherRequest(Remove) for this span.
+// Span and OperatorType are included so a new maintainer can reconstruct intent during bootstrap/failover,
+// even if the dispatcher has already disappeared from the node span snapshot.
+func (r *SpanReplication) NewRemoveDispatcherMessage(server node.ID, operatorType heartbeatpb.OperatorType) *messaging.TargetMessage {
+	return NewRemoveDispatcherMessage(server, r.ChangefeedID, r.ID.ToPB(), r.Span, r.GetMode(), operatorType)
 }
 
-func NewRemoveDispatcherMessage(server node.ID, cfID common.ChangeFeedID, dispatcherID *heartbeatpb.DispatcherID, mode int64) *messaging.TargetMessage {
+// NewRemoveDispatcherMessage creates a ScheduleDispatcherRequest(Remove) for a dispatcherID.
+// The span is optional for the dispatcher manager, but is useful for maintainer bootstrap to correlate
+// in-flight remove requests with table spans when the dispatcher no longer exists.
+func NewRemoveDispatcherMessage(server node.ID, cfID common.ChangeFeedID, dispatcherID *heartbeatpb.DispatcherID, span *heartbeatpb.TableSpan, mode int64, operatorType heartbeatpb.OperatorType) *messaging.TargetMessage {
 	return messaging.NewSingleTargetMessage(server,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.ScheduleDispatcherRequest{
 			ChangefeedID: cfID.ToPB(),
 			Config: &heartbeatpb.DispatcherConfig{
 				DispatcherID: dispatcherID,
+				Span:         span,
 				Mode:         mode,
 			},
 			ScheduleAction: heartbeatpb.ScheduleAction_Remove,
+			OperatorType:   operatorType,
 		})
 }

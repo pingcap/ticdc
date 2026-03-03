@@ -131,6 +131,7 @@ func (b *BatchDMLEvent) PopHeadDMLEvents(count int) *BatchDMLEvent {
 	for i := 0; i < count; i++ {
 		newBatch.DMLEvents = append(newBatch.DMLEvents, b.DMLEvents[i])
 	}
+	clear(b.DMLEvents[:count])
 	b.DMLEvents = b.DMLEvents[count:]
 	return newBatch
 }

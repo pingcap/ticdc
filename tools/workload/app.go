@@ -58,6 +58,10 @@ type WorkloadStats struct {
 	QueryCount      atomic.Uint64
 	ErrorCount      atomic.Uint64
 	CreatedTableNum atomic.Int32
+	DDLExecuted     atomic.Uint64
+	DDLSucceeded    atomic.Uint64
+	DDLSkipped      atomic.Uint64
+	DDLFailed       atomic.Uint64
 }
 
 // WorkloadApp is the main structure of the application
@@ -161,23 +165,39 @@ func (app *WorkloadApp) executeWorkload(wg *sync.WaitGroup) error {
 	deleteConcurrency := int(float64(app.Config.Thread) * app.Config.PercentageForDelete)
 	updateConcurrency := int(float64(app.Config.Thread) * app.Config.PercentageForUpdate)
 	insertConcurrency := app.Config.Thread - deleteConcurrency - updateConcurrency
-	ddlConcurrency := app.Config.DDLThread
 
 	plog.Info("database info",
 		zap.Int("dbCount", len(app.DBManager.GetDBs())),
 		zap.Int("tableCount", app.Config.TableCount))
 
-	if app.Config.Action == "prepare" {
-		app.handlePrepareAction(insertConcurrency, ddlConcurrency, wg)
-		return nil
+	if app.Config.Action == "ddl" || app.Config.OnlyDDL {
+		return app.handleDDLExecution(wg)
 	}
 
-	app.handleWorkloadExecution(insertConcurrency, updateConcurrency, deleteConcurrency, ddlConcurrency, wg)
+	if app.Config.Action == "prepare" {
+		return app.handlePrepareAction(insertConcurrency, wg)
+	}
+
+	if err := app.startDDLRunnerIfEnabled(wg); err != nil {
+		return err
+	}
+
+	app.handleWorkloadExecution(insertConcurrency, updateConcurrency, deleteConcurrency, wg)
 	return nil
 }
 
+func (app *WorkloadApp) startDDLRunnerIfEnabled(wg *sync.WaitGroup) error {
+	if app.Config.OnlyDML {
+		return nil
+	}
+	if strings.TrimSpace(app.Config.DDLConfigPath) == "" {
+		return nil
+	}
+	return app.handleDDLExecution(wg)
+}
+
 // handlePrepareAction handles the prepare action
-func (app *WorkloadApp) handlePrepareAction(insertConcurrency int, ddlConcurrency int, mainWg *sync.WaitGroup) {
+func (app *WorkloadApp) handlePrepareAction(insertConcurrency int, mainWg *sync.WaitGroup) error {
 	if !app.Config.SkipCreateTable {
 		plog.Info("start to create tables", zap.Int("tableCount", app.Config.TableCount))
 		wg := &sync.WaitGroup{}
@@ -194,17 +214,18 @@ func (app *WorkloadApp) handlePrepareAction(insertConcurrency int, ddlConcurrenc
 		plog.Info("skip creating tables", zap.Int("tableCount", app.Config.TableCount))
 	}
 
-	if !app.Config.OnlyDML {
-		app.executeDDLWorkers(ddlConcurrency, mainWg)
+	if err := app.startDDLRunnerIfEnabled(mainWg); err != nil {
+		return err
 	}
 
 	if app.Config.TotalRowCount != 0 {
 		app.executeInsertWorkers(insertConcurrency, mainWg)
 	}
+	return nil
 }
 
 // handleWorkloadExecution handles the workload execution
-func (app *WorkloadApp) handleWorkloadExecution(insertConcurrency, updateConcurrency, deleteConcurrency, ddlConcurrency int, wg *sync.WaitGroup) {
+func (app *WorkloadApp) handleWorkloadExecution(insertConcurrency, updateConcurrency, deleteConcurrency int, wg *sync.WaitGroup) {
 	plog.Info("start running workload",
 		zap.String("workloadType", app.Config.WorkloadType),
 		zap.Float64("largeRatio", app.Config.LargeRowRatio),
@@ -212,16 +233,12 @@ func (app *WorkloadApp) handleWorkloadExecution(insertConcurrency, updateConcurr
 		zap.Int("insertConcurrency", insertConcurrency),
 		zap.Int("updateConcurrency", updateConcurrency),
 		zap.Int("deleteConcurrency", deleteConcurrency),
-		zap.Int("ddlConcurrency", ddlConcurrency),
-		zap.Duration("ddlInterval", app.Config.DDLInterval),
+		zap.String("ddlConfig", strings.TrimSpace(app.Config.DDLConfigPath)),
+		zap.Int("ddlWorker", app.Config.DDLWorker),
+		zap.String("ddlTimeout", app.Config.DDLTimeout.String()),
 		zap.Int("batchSize", app.Config.BatchSize),
 		zap.String("action", app.Config.Action),
 	)
-
-	if !app.Config.OnlyDML && (app.Config.Action == "write" || app.Config.Action == "insert" || app.Config.Action == "update" ||
-		app.Config.Action == "delete" || app.Config.Action == "ddl") {
-		app.executeDDLWorkers(ddlConcurrency, wg)
-	}
 
 	if app.Config.Action == "write" || app.Config.Action == "insert" {
 		app.executeInsertWorkers(insertConcurrency, wg)

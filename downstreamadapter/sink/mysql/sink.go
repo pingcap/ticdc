@@ -46,6 +46,10 @@ type Sink struct {
 
 	dmlWriter []*mysql.Writer
 	ddlWriter *mysql.Writer
+	// progressTableWriter writes progress rows to the downstream progress table for
+	// active-active replication (hard delete safety checks). It is nil when
+	// enableActiveActive is false.
+	progressTableWriter *mysql.ProgressTableWriter
 
 	db         *sql.DB
 	statistics *metrics.Statistics
@@ -56,6 +60,13 @@ type Sink struct {
 	isNormal   *atomic.Bool
 	maxTxnRows int
 	bdrMode    bool
+	// enableActiveActive enables active-active replication behaviors in the MySQL-class sink.
+	enableActiveActive bool
+
+	// activeActiveSyncStatsCollector collects conflict statistics from TiDB session
+	// variable @@tidb_cdc_active_active_sync_stats and is shared by all DML writers.
+	// It is nil when disabled or unsupported by downstream.
+	activeActiveSyncStatsCollector *mysql.ActiveActiveSyncStatsCollector
 }
 
 // Verify is used to verify the sink uri and config is valid
@@ -84,7 +95,7 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-	return NewMySQLSink(ctx, changefeedID, cfg, db, config.BDRMode), nil
+	return NewMySQLSink(ctx, changefeedID, cfg, db, config.BDRMode, config.EnableActiveActive, config.ActiveActiveProgressInterval), nil
 }
 
 func NewMySQLSink(
@@ -93,8 +104,28 @@ func NewMySQLSink(
 	cfg *mysql.Config,
 	db *sql.DB,
 	bdrMode bool,
+	enableActiveActive bool,
+	progressInterval time.Duration,
 ) *Sink {
 	stat := metrics.NewStatistics(changefeedID, "TxnSink")
+
+	var activeActiveSyncStatsCollector *mysql.ActiveActiveSyncStatsCollector
+	if enableActiveActive && cfg.IsTiDB && cfg.ActiveActiveSyncStatsInterval > 0 {
+		supported, err := mysql.CheckActiveActiveSyncStatsSupported(ctx, db)
+		if err != nil {
+			log.Info("failed to check tidb_cdc_active_active_sync_stats support, disable metric collection",
+				zap.String("keyspace", changefeedID.Keyspace()),
+				zap.Stringer("changefeed", changefeedID),
+				zap.Error(err))
+		} else if supported {
+			activeActiveSyncStatsCollector = mysql.NewActiveActiveSyncStatsCollector(changefeedID)
+		} else {
+			log.Info("downstream does not support tidb_cdc_active_active_sync_stats, disable metric collection",
+				zap.String("keyspace", changefeedID.Keyspace()),
+				zap.Stringer("changefeed", changefeedID))
+		}
+	}
+
 	result := &Sink{
 		changefeedID: changefeedID,
 		db:           db,
@@ -107,14 +138,19 @@ func NewMySQLSink(
 				BlockStrategy: causality.BlockStrategyWaitEmpty,
 			},
 			changefeedID),
-		isNormal:   atomic.NewBool(true),
-		maxTxnRows: cfg.MaxTxnRow,
-		bdrMode:    bdrMode,
+		isNormal:                       atomic.NewBool(true),
+		maxTxnRows:                     cfg.MaxTxnRow,
+		bdrMode:                        bdrMode,
+		enableActiveActive:             enableActiveActive,
+		activeActiveSyncStatsCollector: activeActiveSyncStatsCollector,
 	}
 	for i := 0; i < len(result.dmlWriter); i++ {
-		result.dmlWriter[i] = mysql.NewWriter(ctx, i, db, cfg, changefeedID, stat)
+		result.dmlWriter[i] = mysql.NewWriter(ctx, i, db, cfg, changefeedID, stat, activeActiveSyncStatsCollector)
 	}
-	result.ddlWriter = mysql.NewWriter(ctx, len(result.dmlWriter), db, cfg, changefeedID, stat)
+	result.ddlWriter = mysql.NewWriter(ctx, len(result.dmlWriter), db, cfg, changefeedID, stat, nil)
+	if enableActiveActive {
+		result.progressTableWriter = mysql.NewProgressTableWriter(ctx, db, changefeedID, cfg.MaxTxnRow, progressInterval)
+	}
 	return result
 }
 
@@ -224,6 +260,10 @@ func (s *Sink) SinkType() common.SinkType {
 
 func (s *Sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
 	s.ddlWriter.SetTableSchemaStore(tableSchemaStore)
+	if s.progressTableWriter != nil {
+		// ProgressTableWriter needs table name snapshots to build progress rows.
+		s.progressTableWriter.SetTableSchemaStore(tableSchemaStore)
+	}
 }
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
@@ -235,6 +275,16 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	switch event.GetType() {
 	case commonEvent.TypeDDLEvent:
 		ddl := event.(*commonEvent.DDLEvent)
+		// In enable-active-active mode, TiCDC maintains a downstream progress table for
+		// hard delete safety checks. DDLs that drop/rename tables must also clean up the
+		// corresponding progress rows by TiCDC. The cleanup is idempotent and must run before
+		// flushing the DDL event (and regardless of the BDR role).
+		if s.enableActiveActive {
+			err = s.progressTableWriter.RemoveTables(ddl)
+			if err != nil {
+				break
+			}
+		}
 		// a BDR mode cluster, TiCDC can receive DDLs from all roles of TiDB.
 		// However, CDC only executes the DDLs from the TiDB that has BDRRolePrimary role.
 		if s.bdrMode && ddl.BDRMode != string(ast.BDRRolePrimary) {
@@ -257,7 +307,22 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	return nil
 }
 
-func (s *Sink) AddCheckpointTs(_ uint64) {}
+// AddCheckpointTs is invoked by dispatcher manager whenever Maintainer broadcasts a
+// new changefeed-level checkpoint. It updates the active-active progress table on a
+// best-effort basis. ProgressTableWriter throttles updates internally to avoid
+// hammering downstream on every tick.
+func (s *Sink) AddCheckpointTs(ts uint64) {
+	if !s.enableActiveActive || s.progressTableWriter == nil {
+		return
+	}
+
+	if err := s.progressTableWriter.Flush(ts); err != nil {
+		log.Warn("failed to update active active progress table",
+			zap.String("changefeed", s.changefeedID.DisplayName.String()),
+			zap.Error(err))
+		return
+	}
+}
 
 // GetTableRecoveryInfo queries DDL crash recovery information for the given tables.
 //
@@ -339,6 +404,9 @@ func (s *Sink) Close(removeChangefeed bool) {
 		log.Warn("close mysql sink db meet error",
 			zap.Any("changefeed", s.changefeedID.String()),
 			zap.Error(err))
+	}
+	if s.activeActiveSyncStatsCollector != nil {
+		s.activeActiveSyncStatsCollector.Close()
 	}
 	s.statistics.Close()
 }

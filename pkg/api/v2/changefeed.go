@@ -34,10 +34,10 @@ type ChangefeedsGetter interface {
 type ChangefeedInterface interface {
 	// Create creates a changefeed
 	Create(ctx context.Context, cfg *v2.ChangefeedConfig, keyspace string) (*v2.ChangeFeedInfo, error)
+	// GetAllTables returns eligible, ineligible and all tables for a changefeed
+	GetAllTables(ctx context.Context, cfg *v2.VerifyTableConfig, keyspace string) (*v2.Tables, error)
 	// VerifyTable verifies table for a changefeed
 	VerifyTable(ctx context.Context, cfg *v2.VerifyTableConfig, keyspace string) (*v2.Tables, error)
-	// GetAllTables returns eligible and ineligible tables for a changefeed
-	GetAllTables(ctx context.Context, cfg *v2.VerifyTableConfig, keyspace string) (*v2.Tables, error)
 	// Update updates a changefeed
 	Update(ctx context.Context, cfg *v2.ChangefeedConfig,
 		keyspace string, name string) (*v2.ChangeFeedInfo, error)
@@ -52,7 +52,7 @@ type ChangefeedInterface interface {
 	// List lists all changefeeds
 	List(ctx context.Context, keyspace string, state string) ([]v2.ChangefeedCommonInfo, error)
 	// Move Table to target node, it just for make test case now. **Not for public use.**
-	MoveTable(ctx context.Context, keyspace string, name string, tableID int64, targetNode string, mode int64) error
+	MoveTable(ctx context.Context, keyspace string, name string, tableID int64, targetNode string, mode int64, wait bool) error
 	// Move dispatchers in a split Table to target node, it just for make test case now. **Not for public use.**
 	MoveSplitTable(ctx context.Context, keyspace string, name string, tableID int64, targetNode string, mode int64) error
 	// split table based on region count, it just for make test case now. **Not for public use.**
@@ -191,7 +191,7 @@ func (c *changefeeds) List(ctx context.Context,
 
 // MoveTable to target node, it just for make test case now. **Not for public use.**
 func (c *changefeeds) MoveTable(ctx context.Context,
-	keyspace string, name string, tableID int64, targetNode string, mode int64,
+	keyspace string, name string, tableID int64, targetNode string, mode int64, wait bool,
 ) error {
 	url := fmt.Sprintf("changefeeds/%s/move_table?%s=%s", name, api.APIOpVarKeyspace, keyspace)
 	err := c.client.Post().
@@ -199,6 +199,7 @@ func (c *changefeeds) MoveTable(ctx context.Context,
 		WithParam("tableID", strconv.FormatInt(tableID, 10)).
 		WithParam("targetNodeID", targetNode).
 		WithParam("mode", strconv.FormatInt(mode, 10)).
+		WithParam("wait", strconv.FormatBool(wait)).
 		Do(ctx).Error()
 	return err
 }
