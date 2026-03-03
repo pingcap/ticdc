@@ -318,7 +318,7 @@ func (w *Writer) encode(ctx context.Context) error {
 				return err
 			}
 			num++
-			if num > redo.DefaultFlushBatchSize {
+			if num >= redo.DefaultFlushBatchSize {
 				err := flush()
 				if err != nil {
 					return errors.Trace(err)
