@@ -468,6 +468,59 @@ func TestShouldSendAllBootstrapAtStart(t *testing.T) {
 	require.True(t, sinkConfig.ShouldSendAllBootstrapAtStart())
 }
 
+func TestOutboxRequiredColumns(t *testing.T) {
+	t.Parallel()
+
+	outboxProtocol := "outbox-json"
+	openProtocol := "open-protocol"
+
+	t.Run("non outbox protocol returns nil", func(t *testing.T) {
+		t.Parallel()
+
+		sinkConfig := &SinkConfig{
+			Protocol: &openProtocol,
+			Outbox: &OutboxConfig{
+				IDColumn:    "id",
+				KeyColumn:   "aggregate_id",
+				ValueColumn: "payload",
+			},
+		}
+		require.Nil(t, sinkConfig.OutboxRequiredColumns())
+	})
+
+	t.Run("missing outbox config returns nil", func(t *testing.T) {
+		t.Parallel()
+
+		sinkConfig := &SinkConfig{Protocol: &outboxProtocol}
+		require.Nil(t, sinkConfig.OutboxRequiredColumns())
+	})
+
+	t.Run("outbox protocol returns required and header columns", func(t *testing.T) {
+		t.Parallel()
+
+		sinkConfig := &SinkConfig{
+			Protocol: &outboxProtocol,
+			Outbox: &OutboxConfig{
+				IDColumn:    "id",
+				KeyColumn:   "aggregate_id",
+				ValueColumn: "payload",
+				HeaderColumns: map[string]string{
+					"traceparent": "trace_parent",
+					"tracestate":  "trace_state",
+				},
+			},
+		}
+
+		require.Equal(t, []string{
+			"id",
+			"aggregate_id",
+			"payload",
+			"trace_parent",
+			"trace_state",
+		}, sinkConfig.OutboxRequiredColumns())
+	})
+}
+
 func TestValidateAndAdjustOutboxProtocol(t *testing.T) {
 	t.Parallel()
 

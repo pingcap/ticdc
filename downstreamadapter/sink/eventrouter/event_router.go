@@ -77,23 +77,10 @@ func NewEventRouter(
 		})
 	}
 
-	var outboxRequiredColumns []string
-	protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(sinkConfig.Protocol))
-	if protocol == config.ProtocolOutboxJSON && sinkConfig.Outbox != nil {
-		outboxRequiredColumns = []string{
-			sinkConfig.Outbox.IDColumn,
-			sinkConfig.Outbox.KeyColumn,
-			sinkConfig.Outbox.ValueColumn,
-		}
-		for _, column := range sinkConfig.Outbox.HeaderColumns {
-			outboxRequiredColumns = append(outboxRequiredColumns, column)
-		}
-	}
-
 	return &EventRouter{
 		defaultTopic:          defaultTopic,
 		rules:                 rules,
-		outboxRequiredColumns: outboxRequiredColumns,
+		outboxRequiredColumns: sinkConfig.OutboxRequiredColumns(),
 	}, nil
 }
 
