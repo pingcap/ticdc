@@ -1067,6 +1067,8 @@ type OutboxConfig struct {
 	HeaderColumns map[string]string `toml:"header-columns" json:"header-columns,omitempty"`
 }
 
+// validate checks that the outbox-json configuration is complete and does not
+// reuse required columns or header names in conflicting ways.
 func (o *OutboxConfig) validate() error {
 	if o == nil {
 		return cerror.ErrSinkInvalidConfig.GenWithStack("outbox config is required for outbox-json protocol")

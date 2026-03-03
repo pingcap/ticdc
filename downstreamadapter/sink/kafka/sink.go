@@ -569,6 +569,8 @@ func (s *sink) getAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
 	return s.tableSchemaStore.GetAllTableNames(ts, true)
 }
 
+// addDiscoveredRowTopic records a topic that has been used by a publishable
+// row event.
 func (s *sink) addDiscoveredRowTopic(topic string) {
 	if topic == "" {
 		return
@@ -578,6 +580,8 @@ func (s *sink) addDiscoveredRowTopic(topic string) {
 	s.discoveredRowTopicsMu.Unlock()
 }
 
+// snapshotDiscoveredRowTopics returns a point-in-time copy of the runtime
+// discovered row topics.
 func (s *sink) snapshotDiscoveredRowTopics() []string {
 	s.discoveredRowTopicsMu.Lock()
 	defer s.discoveredRowTopicsMu.Unlock()
@@ -589,6 +593,8 @@ func (s *sink) snapshotDiscoveredRowTopics() []string {
 	return topics
 }
 
+// getCheckpointTopics returns the deduplicated set of topics that should
+// receive checkpoint messages.
 func (s *sink) getCheckpointTopics(ts uint64) []string {
 	topicsMap := make(map[string]struct{})
 	topicsMap[s.comp.eventRouter.GetDefaultTopic()] = struct{}{}

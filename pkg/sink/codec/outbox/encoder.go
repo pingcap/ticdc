@@ -38,6 +38,8 @@ type headerBinding struct {
 	column string
 }
 
+// NewEncoder creates an outbox-json encoder that emits one message per insert
+// row.
 func NewEncoder(_ context.Context, config *codecCommon.Config) (codecCommon.EventEncoder, error) {
 	headerBindings := make([]headerBinding, 0, len(config.OutboxHeaderColumns))
 	headerNames := make([]string, 0, len(config.OutboxHeaderColumns))
@@ -59,6 +61,7 @@ func NewEncoder(_ context.Context, config *codecCommon.Config) (codecCommon.Even
 	}, nil
 }
 
+// AppendRowChangedEvent encodes a single insert row into one outbox message.
 func (e *Encoder) AppendRowChangedEvent(
 	_ context.Context, _ string, event *commonEvent.RowEvent,
 ) error {
@@ -108,6 +111,7 @@ func (e *Encoder) AppendRowChangedEvent(
 	return nil
 }
 
+// Build returns the buffered outbox messages and clears the encoder buffer.
 func (e *Encoder) Build() []*codecCommon.Message {
 	if len(e.messages) == 0 {
 		return nil
@@ -129,8 +133,11 @@ func (e *Encoder) EncodeDDLEvent(_ *commonEvent.DDLEvent) (*codecCommon.Message,
 	return nil, nil
 }
 
+// Clean resets the encoder's buffered messages.
 func (e *Encoder) Clean() {}
 
+// getRequiredColumnValue returns the encoded value for a required outbox column
+// and rejects missing, null, or empty values.
 func getRequiredColumnValue(event *commonEvent.RowEvent, columnName string) ([]byte, error) {
 	colOffset, ok := event.TableInfo.GetColumnOffsetByName(columnName)
 	if !ok {
@@ -155,6 +162,8 @@ func getRequiredColumnValue(event *commonEvent.RowEvent, columnName string) ([]b
 	return encoded, nil
 }
 
+// normalizeColumnValue converts a column value into the byte form used by the
+// outbox key, value, and headers.
 func normalizeColumnValue(value interface{}) []byte {
 	switch v := value.(type) {
 	case []byte:
