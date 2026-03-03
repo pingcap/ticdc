@@ -73,6 +73,10 @@ type ConsistentMemoryUsage struct {
 
 // ValidateAndAdjust validates the consistency config and adjusts it if necessary.
 func (c *ConsistentConfig) ValidateAndAdjust() error {
+	return c.validateAndAdjust(true)
+}
+
+func (c *ConsistentConfig) validateAndAdjust(enableIOCheck bool) error {
 	if !redo.IsConsistentEnabled(util.GetOrZero(c.Level)) {
 		return nil
 	}
@@ -116,7 +120,7 @@ func (c *ConsistentConfig) ValidateAndAdjust() error {
 		return cerror.ErrInvalidReplicaConfig.GenWithStackByArgs(
 			fmt.Sprintf("invalid storage uri: %s", util.GetOrZero(c.Storage)))
 	}
-	return redo.ValidateStorage(uri)
+	return redo.ValidateStorageWithOptions(uri, redo.StorageValidationOptions{EnableIOCheck: enableIOCheck})
 }
 
 // MaskSensitiveData masks sensitive data in ConsistentConfig
