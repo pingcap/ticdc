@@ -30,9 +30,16 @@ const (
 	// DefaultWhereClause is the default strategy for generating WHERE predicates in multi-row DML.
 	//
 	// "v2" uses the compact `(col1,col2) IN ((?,?),(?,?))` form for better performance. It is
-	// not able to match rows when any key column is NULL (see TODOs in v2 generators).
+	// not able to match rows when any key column is NULL.
+	//
+	// v2 also assumes all changes in the same batch have identical WHERE columns
+	// and order. This holds for common primary key or not null unique key cases.
+	// If rows pick different candidate unique indexes at runtime, callers should
+	// split batches or choose v1.
 	// "v1" uses the `(... ) OR (... )` form, which can handle NULL keys at the cost of longer SQL.
-	DefaultWhereClause = "v2"
+	whereClauseV1      = "v1"
+	whereClauseV2      = "v2"
+	DefaultWhereClause = whereClauseV2
 )
 
 // GenDeleteSQL generates the DELETE SQL and its arguments.
@@ -42,10 +49,18 @@ const (
 func GenDeleteSQL(whereClause string, changes ...*RowChange) (string, []interface{}) {
 	// Keep empty as default to make the strategy stable even if callers don't
 	// explicitly set whereClause (for example, older configs/tests).
-	if whereClause == "" || whereClause == DefaultWhereClause {
+	//
+	// Unknown non empty values currently fall back to v1 with a warning for
+	// compatibility with older permissive parsing behavior.
+	switch whereClause {
+	case whereClauseV2:
 		return genDeleteSQLV2(changes...)
+	case whereClauseV1:
+		return genDeleteSQLV1(changes...)
+	default:
+		log.Warn("invalid whereClause, will use v1 strategy", zap.String("whereClause", whereClause))
+		return genDeleteSQLV1(changes...)
 	}
-	return genDeleteSQLV1(changes...)
 }
 
 // GenUpdateSQL generates the UPDATE SQL and its arguments.
@@ -55,10 +70,18 @@ func GenDeleteSQL(whereClause string, changes ...*RowChange) (string, []interfac
 func GenUpdateSQL(whereClause string, changes ...*RowChange) (string, []any) {
 	// Keep empty as default to make the strategy stable even if callers don't
 	// explicitly set whereClause (for example, older configs/tests).
-	if whereClause == "" || whereClause == DefaultWhereClause {
+	//
+	// Any non empty value other than DefaultWhereClause is treated as v1.
+	// The config parser keeps this compatibility behavior.
+	switch whereClause {
+	case whereClauseV2:
 		return genUpdateSQLV2(changes...)
+	case whereClauseV1:
+		return genUpdateSQLV1(changes...)
+	default:
+		log.Warn("invalid whereClause, will use v1 strategy", zap.String("whereClause", whereClause))
+		return genUpdateSQLV1(changes...)
 	}
-	return genUpdateSQLV1(changes...)
 }
 
 // GenInsertSQL generates the INSERT SQL and its arguments.
@@ -159,6 +182,10 @@ func genDeleteSQLV2(changes ...*RowChange) (string, []interface{}) {
 	buf.WriteString(first.targetTable.QuoteString())
 	buf.WriteString(" WHERE (")
 
+	// v2 uses the first row to define the tuple shape of the trailing IN list.
+	// This requires all rows in the batch to resolve to the same WHERE columns.
+	// If some rows resolve to different unique indexes, the length check below
+	// can panic, or values may be mapped to unintended columns.
 	whereColumns, _ := first.whereColumnsAndValues()
 	for i, column := range whereColumns {
 		if i != len(whereColumns)-1 {
@@ -175,6 +202,9 @@ func genDeleteSQLV2(changes ...*RowChange) (string, []interface{}) {
 			buf.WriteString(",")
 		}
 		buf.WriteString(holder)
+		// whereValues may contain nil. SQL tuple IN does not match NULL values
+		// the same way as per column `IS ?` predicates do, so v2 should be used
+		// only when WHERE keys are guaranteed non null.
 		_, whereValues := change.whereColumnsAndValues()
 		// a simple check about different number of WHERE values, not trying to
 		// cover all cases
@@ -211,6 +241,8 @@ func genUpdateSQLV2(changes ...*RowChange) (string, []any) {
 		whenCaseStmts = make([]string, len(changes))
 		whenCaseArgs  = make([][]interface{}, len(changes))
 	)
+	// v2 uses the first row to define the tuple shape of the trailing IN list.
+	// This requires all rows in the batch to resolve to the same WHERE columns.
 	whereColumns, _ := first.whereColumnsAndValues()
 
 	var whereBuf strings.Builder
