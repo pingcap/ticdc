@@ -246,17 +246,29 @@ func (c *consumer) appendRow2Group(dml *event.DMLEvent, enableTableAcrossNodes b
 		group = util.NewEventsGroup(0, tableID)
 		c.eventsGroup[tableID] = group
 	}
+	// For at-least-once replay, CommitTs can go backwards. We can only safely
+	// ignore events that are already flushed to downstream.
+	if commitTs <= group.AppliedWatermark {
+		log.Warn("DML event replayed after applied, ignore it",
+			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
+			zap.Uint64("appliedWatermark", group.AppliedWatermark),
+			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
+			zap.Stringer("eventType", dml.RowTypes[0]))
+		return
+	}
 	if commitTs >= group.HighWatermark {
 		group.Append(dml, false)
 		log.Info("DML event append to the group",
 			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
+			zap.Uint64("appliedWatermark", group.AppliedWatermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 			zap.Stringer("eventType", dml.RowTypes[0]))
 		return
 	}
 	if enableTableAcrossNodes {
-		log.Warn("DML events fallback, but enableTableAcrossNodes is true, still append it",
+		log.Warn("DML event commit ts fallback, append with forceInsert",
 			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
+			zap.Uint64("appliedWatermark", group.AppliedWatermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 			zap.Stringer("eventType", dml.RowTypes[0]))
 		group.Append(dml, true)
@@ -264,7 +276,8 @@ func (c *consumer) appendRow2Group(dml *event.DMLEvent, enableTableAcrossNodes b
 	}
 	log.Warn("dml event commit ts fallback, ignore",
 		zap.Uint64("commitTs", dml.CommitTs),
-		zap.Any("highWatermark", group.HighWatermark),
+		zap.Uint64("highWatermark", group.HighWatermark),
+		zap.Uint64("appliedWatermark", group.AppliedWatermark),
 		zap.Stringer("row", dml),
 	)
 }
@@ -349,8 +362,12 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 		return nil
 	}
 	var flushed atomic.Int64
+	maxCommitTs := uint64(0)
 	done := make(chan struct{})
 	for _, e := range events {
+		if e.GetCommitTs() > maxCommitTs {
+			maxCommitTs = e.GetCommitTs()
+		}
 		e.AddPostFlushFunc(func() {
 			if flushed.Inc() == int64(total) {
 				close(done)
@@ -369,7 +386,11 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 			return context.Cause(ctx)
 		case <-done:
 			log.Info("flush DML events done",
-				zap.Int("total", total), zap.Duration("duration", time.Since(start)))
+				zap.Int("total", total), zap.Duration("duration", time.Since(start)),
+				zap.Uint64("appliedWatermark", group.AppliedWatermark))
+			if maxCommitTs > group.AppliedWatermark {
+				group.AppliedWatermark = maxCommitTs
+			}
 			return nil
 		case <-ticker.C:
 			log.Warn("DML events cannot be flushed in time",
@@ -457,8 +478,8 @@ func (c *consumer) parseSchemaFilePath(ctx context.Context, path string) error {
 	// Update tableDefMap.
 	c.tableDefMap[key][tableDef.TableVersion] = &tableDef
 
-	// Fake a dml key for schema.json file, which is useful for ordering schema
-	// files together with DML files when sorting.
+	// Fake a dml key for schema.json file, which is useful for putting DDL
+	// in front of the DML files when sorting.
 	// e.g, for the partitioned table:
 	//
 	// test/test1/439972354120482843/schema.json					(partitionNum = -1)
@@ -470,7 +491,8 @@ func (c *consumer) parseSchemaFilePath(ctx context.Context, path string) error {
 	// test/test2/439972354120482843/2023-03-09/CDC000001.csv	(partitionNum = 0)
 	// test/test2/439972354120482843/2023-03-09/CDC000002.csv	(partitionNum = 0)
 	//
-	// For the same table version(commitTs), DML should be consumed before DDL.
+	// the DDL event recorded in schema.json should be executed first, then the DML events
+	// in csv files can be executed.
 	dmlkey := cloudstorage.DmlPathKey{
 		SchemaPathKey: schemaKey,
 		PartitionNum:  fakePartitionNumForSchemaFile,
@@ -511,12 +533,25 @@ func (c *consumer) handleNewFiles(
 		return nil
 	}
 	sort.Slice(keys, func(i, j int) bool {
-		return dmlPathKeyLess(keys[i], keys[j])
+		if keys[i].TableVersion != keys[j].TableVersion {
+			return keys[i].TableVersion < keys[j].TableVersion
+		}
+		if keys[i].PartitionNum != keys[j].PartitionNum {
+			return keys[i].PartitionNum < keys[j].PartitionNum
+		}
+		if keys[i].Date != keys[j].Date {
+			return keys[i].Date < keys[j].Date
+		}
+		if keys[i].Schema != keys[j].Schema {
+			return keys[i].Schema < keys[j].Schema
+		}
+		return keys[i].Table < keys[j].Table
 	})
 
 	for _, key := range keys {
 		tableDef := c.mustGetTableDef(key.SchemaPathKey)
-		// if the key is a fake dml path key, execute the ddl query in schema.json.
+		// if the key is a fake dml path key which is mainly used for
+		// sorting schema.json file before the dml files, then execute the ddl query.
 		if key.PartitionNum == fakePartitionNumForSchemaFile &&
 			len(key.Date) == 0 && len(tableDef.Query) > 0 {
 			ddlEvent, err := tableDef.ToDDLEvent()
@@ -548,31 +583,6 @@ func (c *consumer) handleNewFiles(
 	}
 
 	return nil
-}
-
-func dmlPathKeyLess(lhs, rhs cloudstorage.DmlPathKey) bool {
-	if lhs.TableVersion != rhs.TableVersion {
-		return lhs.TableVersion < rhs.TableVersion
-	}
-
-	// For the same table version(commitTs), execute schema(DDL) after all DML files.
-	if lhs.PartitionNum != rhs.PartitionNum {
-		if lhs.PartitionNum == fakePartitionNumForSchemaFile {
-			return false
-		}
-		if rhs.PartitionNum == fakePartitionNumForSchemaFile {
-			return true
-		}
-		return lhs.PartitionNum < rhs.PartitionNum
-	}
-
-	if lhs.Date != rhs.Date {
-		return lhs.Date < rhs.Date
-	}
-	if lhs.Schema != rhs.Schema {
-		return lhs.Schema < rhs.Schema
-	}
-	return lhs.Table < rhs.Table
 }
 
 func (c *consumer) handle(ctx context.Context) error {
