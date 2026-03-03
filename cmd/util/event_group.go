@@ -96,7 +96,7 @@ func (g *EventsGroup) Append(row *commonEvent.DMLEvent, force bool) {
 			// We skip the replayed event and wait for it to be replayed again after the table info is updated.
 			// It should be occourred when the DML event is replayed after the table schema is updated,
 			// and the replayed event has an older table info version than the previous one in the group.
-			if compareTableInfoVersion(previous, row) {
+			if !compareTableInfoVersion(previous, row) {
 				log.Warn("skip replayed DML event due to incompatible table info version, the event may be replayed again after the table info is updated",
 					zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
 					zap.Uint64("commitTs", row.CommitTs),
@@ -116,9 +116,6 @@ func (g *EventsGroup) Append(row *commonEvent.DMLEvent, force bool) {
 }
 
 func compareTableInfoVersion(previous, now *commonEvent.DMLEvent) bool {
-	if previous.TableInfo == nil || now.TableInfo == nil {
-		return previous.TableInfo == nil && now.TableInfo == nil
-	}
 	previousTs := previous.TableInfo.GetUpdateTS()
 	nowTs := now.TableInfo.GetUpdateTS()
 	if previousTs > nowTs {
