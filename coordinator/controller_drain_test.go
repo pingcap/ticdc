@@ -162,6 +162,39 @@ func TestDrainNodePendingStatusConvergenceBlocksCompletion(t *testing.T) {
 	require.Equal(t, 0, remaining)
 }
 
+func TestDrainNodeCheckpointBaselineKeepsAcrossNonCandidate(t *testing.T) {
+	c, drainController, target := newDrainTestController(t)
+	cf := addRunningChangefeed(c, "cf1", node.ID("other"), 100)
+
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	_, epoch, ok := c.getDispatcherDrainTarget()
+	require.True(t, ok)
+	setChangefeedDrainStatus(cf, target, epoch, 0)
+	setTargetStoppingObserved(drainController, target)
+
+	// First completion candidate freezes baseline and returns non-zero.
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	// Checkpoint already advanced beyond frozen baseline.
+	setChangefeedCheckpointTs(cf, 101)
+
+	// A temporary non-candidate should not wipe the frozen checkpoint baseline.
+	setChangefeedDrainStatus(cf, target, epoch, 2)
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 2, remaining)
+
+	setChangefeedDrainStatus(cf, target, epoch, 0)
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 0, remaining)
+}
+
 func TestDrainNodeRejectConcurrentDifferentDrainTarget(t *testing.T) {
 	c, _, target := newDrainTestController(t)
 	other := node.ID("other")
