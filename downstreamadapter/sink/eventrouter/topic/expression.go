@@ -176,6 +176,8 @@ func (e Expression) SubstituteWithValues(
 	return substituteTokensWithMap(tokens, schema, table, columnValues)
 }
 
+// UsesColumnPlaceholders reports whether the expression references any
+// {column:<name>} placeholders.
 func (e Expression) UsesColumnPlaceholders() bool {
 	tokens, err := parseExpressionTokens(string(e))
 	if err != nil {
@@ -189,6 +191,8 @@ func (e Expression) UsesColumnPlaceholders() bool {
 	return false
 }
 
+// ReferencedColumns returns the unique column names referenced by
+// {column:<name>} placeholders in declaration order.
 func (e Expression) ReferencedColumns() []string {
 	tokens, err := parseExpressionTokens(string(e))
 	if err != nil {
@@ -225,6 +229,8 @@ func validateTopicExpression(expr Expression, isPulsar, isAvro bool) error {
 	return expr.validate()
 }
 
+// parseExpressionTokens parses a topic expression into literal and placeholder
+// tokens.
 func parseExpressionTokens(expression string) ([]exprToken, error) {
 	if len(expression) == 0 {
 		return nil, errors.ErrKafkaInvalidTopicExpression.GenWithStackByArgs(expression)
@@ -265,6 +271,8 @@ func parseExpressionTokens(expression string) ([]exprToken, error) {
 	return tokens, nil
 }
 
+// substituteTokensWithMap resolves a tokenized topic expression and validates
+// that any required column placeholders were provided.
 func substituteTokensWithMap(
 	tokens []exprToken, schema, table string, columnValues map[string]string,
 ) (string, error) {
@@ -292,6 +300,8 @@ func substituteTokensWithMap(
 	return applyTopicNameConstraints(topicName), nil
 }
 
+// substituteTokens resolves a tokenized topic expression without performing
+// post-substitution validation.
 func substituteTokens(tokens []exprToken, schema, table string, columnValues map[string]string) string {
 	var b strings.Builder
 	for _, token := range tokens {
@@ -310,6 +320,8 @@ func substituteTokens(tokens []exprToken, schema, table string, columnValues map
 	return b.String()
 }
 
+// findColumnValue looks up a column placeholder value using both original and
+// lower-cased column names.
 func findColumnValue(columnValues map[string]string, columnName string) (string, bool) {
 	if columnValues == nil {
 		return "", false
@@ -323,10 +335,14 @@ func findColumnValue(columnValues map[string]string, columnName string) (string,
 	return "", false
 }
 
+// sanitizeTopicValue replaces characters that are not allowed in Kafka topic
+// names.
 func sanitizeTopicValue(value string) string {
 	return kafkaForbidRE.ReplaceAllString(value, "_")
 }
 
+// applyTopicNameConstraints applies Kafka-specific length and reserved-name
+// adjustments to a resolved topic.
 func applyTopicNameConstraints(topicName string) string {
 	if len(topicName) > kafkaTopicNameMaxLength {
 		return topicName[:kafkaTopicNameMaxLength]

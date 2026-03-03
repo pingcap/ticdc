@@ -195,6 +195,7 @@ func (p *saramaAsyncProducer) AsyncSend(
 	return nil
 }
 
+// toSaramaHeaders converts common message headers into Sarama record headers.
 func toSaramaHeaders(headers []common.MessageHeader) []sarama.RecordHeader {
 	if len(headers) == 0 {
 		return nil

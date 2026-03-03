@@ -97,7 +97,8 @@ func NewEventRouter(
 	}, nil
 }
 
-// GetTopicForRowChange returns the target topic for row changes.
+// GetTopicForRowChange returns the target topic for a row change after applying
+// any row-aware topic placeholders.
 func (s *EventRouter) GetTopicForRowChange(row *commonEvent.RowEvent) (string, error) {
 	schema := row.TableInfo.GetSchemaName()
 	table := row.TableInfo.GetTableName()
@@ -245,6 +246,8 @@ func (s *EventRouter) VerifyTables(infos []*common.TableInfo) error {
 	return nil
 }
 
+// extractColumnValuesForTopic collects the row values needed to resolve column
+// placeholders in a topic expression.
 func (s *EventRouter) extractColumnValuesForTopic(
 	row *commonEvent.RowEvent, columns []string,
 ) (map[string]string, error) {
