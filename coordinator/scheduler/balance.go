@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/coordinator/changefeed"
-	"github.com/pingcap/ticdc/coordinator/nodeliveness"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -34,7 +33,7 @@ type balanceScheduler struct {
 	operatorController *operator.Controller
 	changefeedDB       *changefeed.ChangefeedDB
 	nodeManager        *watcher.NodeManager
-	livenessView       *nodeliveness.View
+	liveness           livenessReader
 
 	random               *rand.Rand
 	lastRebalanceTime    time.Time
@@ -57,7 +56,7 @@ func NewBalanceScheduler(
 	oc *operator.Controller,
 	changefeedDB *changefeed.ChangefeedDB,
 	balanceInterval time.Duration,
-	livenessView *nodeliveness.View,
+	liveness livenessReader,
 ) *balanceScheduler {
 	return &balanceScheduler{
 		id:                   id,
@@ -68,13 +67,13 @@ func NewBalanceScheduler(
 		nodeManager:          appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		checkBalanceInterval: balanceInterval,
 		lastRebalanceTime:    time.Now(),
-		livenessView:         livenessView,
+		liveness:             liveness,
 	}
 }
 
 func (s *balanceScheduler) Execute() time.Time {
 	now := time.Now()
-	if s.livenessView != nil && len(s.livenessView.GetDrainingOrStoppingNodes()) > 0 {
+	if hasDrainingOrStoppingNode(s.liveness) {
 		// Pause regular balance scheduling while any node is draining/stopping.
 		s.drainBalanceBlockedUntil = now.Add(drainBalanceCooldown)
 		return now.Add(s.checkBalanceInterval)
@@ -95,15 +94,7 @@ func (s *balanceScheduler) Execute() time.Time {
 
 	// check the balance status
 	activeNodes := s.nodeManager.GetAliveNodes()
-	if s.livenessView != nil {
-		filtered := make(map[node.ID]*node.Info, len(activeNodes))
-		for id, info := range activeNodes {
-			if s.livenessView.IsSchedulableDest(id) {
-				filtered[id] = info
-			}
-		}
-		activeNodes = filtered
-	}
+	activeNodes = filterSchedulableAliveNodes(activeNodes, s.liveness)
 	moveSize := pkgScheduler.CheckBalanceStatus(s.changefeedDB.GetTaskSizePerNode(), activeNodes)
 	if moveSize <= 0 {
 		// fast check the balance status, no need to do the balance,skip

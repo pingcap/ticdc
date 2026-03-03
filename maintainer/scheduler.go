@@ -64,7 +64,6 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			balanceInterval,
 			common.DefaultMode,
 			drainTargetGetter,
-			selfNodeGetter,
 		),
 	}
 	if splitter != nil {
@@ -106,7 +105,6 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			balanceInterval,
 			common.RedoMode,
 			drainTargetGetter,
-			selfNodeGetter,
 		)
 		if splitter != nil {
 			schedulers[pkgscheduler.RedoBalanceSplitScheduler] = scheduler.NewBalanceSplitsScheduler(

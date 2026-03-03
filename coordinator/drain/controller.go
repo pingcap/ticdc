@@ -17,14 +17,27 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/coordinator/nodeliveness"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"go.uber.org/zap"
 )
 
-const resendInterval = time.Second
+const (
+	resendInterval     = time.Second
+	defaultLivenessTTL = 30 * time.Second
+)
+
+// State is the coordinator-derived node liveness state.
+// It extends node-reported liveness with Unknown based on heartbeat TTL.
+type State int32
+
+const (
+	StateAlive State = iota
+	StateDraining
+	StateStopping
+	StateUnknown
+)
 
 type nodeState struct {
 	// drainRequested indicates this node has entered the drain workflow.
@@ -38,6 +51,11 @@ type nodeState struct {
 	lastDrainCmdSentAt time.Time
 	// lastStopCmdSentAt is the last send time of a STOPPING command for resend throttling.
 	lastStopCmdSentAt time.Time
+
+	observedSet bool
+	lastSeen    time.Time
+	nodeEpoch   uint64
+	liveness    heartbeatpb.NodeLiveness
 }
 
 // Controller manages node drain progression by sending SetNodeLiveness commands and tracking observations.
@@ -48,21 +66,23 @@ type nodeState struct {
 type Controller struct {
 	mu sync.Mutex
 
-	mc           messaging.MessageCenter
-	livenessView *nodeliveness.View
+	mc  messaging.MessageCenter
+	ttl time.Duration
 
 	nodes map[node.ID]*nodeState
 }
 
 // NewController creates a drain controller with in-memory state only.
-func NewController(
-	mc messaging.MessageCenter,
-	livenessView *nodeliveness.View,
-) *Controller {
+func NewController(mc messaging.MessageCenter) *Controller {
+	return NewControllerWithTTL(mc, defaultLivenessTTL)
+}
+
+// NewControllerWithTTL creates a drain controller with customized liveness TTL.
+func NewControllerWithTTL(mc messaging.MessageCenter, ttl time.Duration) *Controller {
 	return &Controller{
-		mc:           mc,
-		livenessView: livenessView,
-		nodes:        make(map[node.ID]*nodeState),
+		mc:    mc,
+		ttl:   ttl,
+		nodes: make(map[node.ID]*nodeState),
 	}
 }
 
@@ -93,7 +113,7 @@ func (c *Controller) ObserveHeartbeat(nodeID node.ID, hb *heartbeatpb.NodeHeartb
 		return
 	}
 
-	c.observeLiveness(nodeID, hb.Liveness)
+	c.observeLiveness(nodeID, hb.NodeEpoch, hb.Liveness)
 }
 
 // ObserveSetNodeLivenessResponse updates drain progression from explicit liveness responses.
@@ -102,15 +122,31 @@ func (c *Controller) ObserveSetNodeLivenessResponse(nodeID node.ID, resp *heartb
 		return
 	}
 
-	c.observeLiveness(nodeID, resp.Applied)
+	c.observeLiveness(nodeID, resp.NodeEpoch, resp.Applied)
 }
 
 // observeLiveness applies an observed node-reported liveness to the drain state.
-func (c *Controller) observeLiveness(nodeID node.ID, liveness heartbeatpb.NodeLiveness) {
+func (c *Controller) observeLiveness(nodeID node.ID, nodeEpoch uint64, liveness heartbeatpb.NodeLiveness) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	st := c.ensureNodeStateLocked(nodeID)
+
+	if st.observedSet {
+		// Drop stale observations to avoid transient rollback under reordering.
+		if nodeEpoch < st.nodeEpoch {
+			return
+		}
+		if nodeEpoch == st.nodeEpoch && liveness < st.liveness {
+			return
+		}
+	}
+
+	st.observedSet = true
+	st.lastSeen = time.Now()
+	st.nodeEpoch = nodeEpoch
+	st.liveness = liveness
+
 	applyObservedLiveness(st, liveness)
-	c.mu.Unlock()
 }
 
 // applyObservedLiveness applies monotonic progression from observed node liveness.
@@ -136,6 +172,75 @@ func (c *Controller) GetStatus(nodeID node.ID) (drainRequested, drainingObserved
 		return false, false, false
 	}
 	return st.drainRequested, st.drainingObserved, st.stoppingObserved
+}
+
+// GetState returns coordinator-derived liveness state.
+func (c *Controller) GetState(nodeID node.ID) State {
+	c.mu.Lock()
+	st, ok := c.nodes[nodeID]
+	if !ok || !st.observedSet {
+		c.mu.Unlock()
+		// Never observed: keep compatibility during rollout.
+		return StateAlive
+	}
+	lastSeen := st.lastSeen
+	liveness := st.liveness
+	c.mu.Unlock()
+
+	if time.Since(lastSeen) > c.ttl {
+		return StateUnknown
+	}
+	switch liveness {
+	case heartbeatpb.NodeLiveness_ALIVE:
+		return StateAlive
+	case heartbeatpb.NodeLiveness_DRAINING:
+		return StateDraining
+	case heartbeatpb.NodeLiveness_STOPPING:
+		return StateStopping
+	default:
+		return StateAlive
+	}
+}
+
+// GetNodeEpoch returns the last observed epoch for node liveness commands.
+func (c *Controller) GetNodeEpoch(nodeID node.ID) (uint64, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	st, ok := c.nodes[nodeID]
+	if !ok || !st.observedSet {
+		return 0, false
+	}
+	return st.nodeEpoch, true
+}
+
+// IsSchedulableDest returns true only when the node is eligible as a scheduling destination.
+func (c *Controller) IsSchedulableDest(nodeID node.ID) bool {
+	return c.GetState(nodeID) == StateAlive
+}
+
+// GetDrainingOrStoppingNodes returns non-stale nodes observed as draining or stopping.
+func (c *Controller) GetDrainingOrStoppingNodes() []node.ID {
+	now := time.Now()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if len(c.nodes) == 0 {
+		return nil
+	}
+
+	res := make([]node.ID, 0, len(c.nodes))
+	for id, st := range c.nodes {
+		if !st.observedSet || now.Sub(st.lastSeen) > c.ttl {
+			continue
+		}
+		if st.liveness == heartbeatpb.NodeLiveness_DRAINING ||
+			st.liveness == heartbeatpb.NodeLiveness_STOPPING {
+			res = append(res, id)
+		}
+	}
+	return res
 }
 
 // AdvanceLiveness advances liveness commands:
@@ -222,10 +327,8 @@ func isResendThrottled(lastSentAt time.Time) bool {
 // sendSetNodeLiveness sends a liveness command to the target maintainer manager.
 func (c *Controller) sendSetNodeLiveness(nodeID node.ID, target heartbeatpb.NodeLiveness) {
 	var epoch uint64
-	if c.livenessView != nil {
-		if e, ok := c.livenessView.GetNodeEpoch(nodeID); ok {
-			epoch = e
-		}
+	if e, ok := c.GetNodeEpoch(nodeID); ok {
+		epoch = e
 	}
 
 	msg := messaging.NewSingleTargetMessage(nodeID, messaging.MaintainerManagerTopic, &heartbeatpb.SetNodeLivenessRequest{

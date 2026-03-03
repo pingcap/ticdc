@@ -129,17 +129,7 @@ func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int)
 	// for the split table spans, each time each node can at most have s.schedulingTaskCountPerNode scheduling tasks.
 	// for the normal spans, we don't have the upper limit.
 	size := 0
-	nodeIDs := s.nodeManager.GetAliveNodeIDs()
-	if target, _, ok := snapshotDrainTarget(s.getDrainTarget); ok {
-		filtered := nodeIDs[:0]
-		for _, id := range nodeIDs {
-			if id == target {
-				continue
-			}
-			filtered = append(filtered, id)
-		}
-		nodeIDs = filtered
-	}
+	nodeIDs := filterNodeIDsByDrainTarget(s.nodeManager.GetAliveNodeIDs(), s.getDrainTarget)
 	if len(nodeIDs) == 0 {
 		return 0
 	}

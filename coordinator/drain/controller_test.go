@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/ticdc/coordinator/nodeliveness"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -25,15 +24,13 @@ import (
 
 func TestDrainControllerResendAndPromoteToStopping(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
-	view := nodeliveness.NewView(30 * time.Second)
-	c := NewController(mc, view)
+	c := NewControllerWithTTL(mc, 30*time.Second)
 
 	target := node.ID("n1")
-	now := time.Now()
-	view.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+	c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
 		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
 		NodeEpoch: 42,
-	}, now)
+	})
 
 	c.RequestDrain(target)
 	msg := <-mc.GetMessageChannel()

@@ -19,7 +19,6 @@ import (
 
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	"github.com/pingcap/ticdc/coordinator/drain"
-	"github.com/pingcap/ticdc/coordinator/nodeliveness"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -27,14 +26,12 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
-	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 )
 
-func newDrainTestController(t *testing.T) (*Controller, *nodeliveness.View, *drain.Controller, node.ID) {
+func newDrainTestController(t *testing.T) (*Controller, *drain.Controller, node.ID) {
 	t.Helper()
 
 	mc := messaging.NewMockMessageCenter()
@@ -43,9 +40,7 @@ func newDrainTestController(t *testing.T) (*Controller, *nodeliveness.View, *dra
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 
-	view := nodeliveness.NewView(30 * time.Second)
-	drainController := drain.NewController(mc, view)
-
+	drainController := drain.NewControllerWithTTL(mc, 30*time.Second)
 	db := changefeed.NewChangefeedDB(1)
 	selfNode := &node.Info{ID: node.ID("coordinator")}
 	oc := operator.NewOperatorController(selfNode, db, nil, 10)
@@ -54,20 +49,20 @@ func newDrainTestController(t *testing.T) (*Controller, *nodeliveness.View, *dra
 	nodeManager.GetAliveNodes()[target] = &node.Info{ID: target}
 
 	c := &Controller{
-		nodeManager:         nodeManager,
-		changefeedDB:        db,
-		operatorController:  oc,
-		nodeLivenessView:    view,
-		drainController:     drainController,
-		drainCheckpointGate: make(map[node.ID]*drainCheckpointGateState),
-		messageCenter:       mc,
-		initialized:         atomic.NewBool(true),
+		nodeManager:            nodeManager,
+		changefeedDB:           db,
+		operatorController:     oc,
+		drainController:        drainController,
+		drainCheckpointGate:    make(map[node.ID]*drainCheckpointGateState),
+		drainStatusConvergence: make(map[node.ID]*drainStatusConvergenceState),
+		messageCenter:          mc,
+		initialized:            atomic.NewBool(true),
 	}
-	return c, view, drainController, target
+	return c, drainController, target
 }
 
 func TestDrainNodeReturnsNonZeroBeforeCoordinatorBootstrap(t *testing.T) {
-	c, _, _, target := newDrainTestController(t)
+	c, _, target := newDrainTestController(t)
 	c.initialized.Store(false)
 
 	remaining, err := c.DrainNode(context.Background(), target)
@@ -80,193 +75,85 @@ func TestDrainNodeReturnsNonZeroBeforeCoordinatorBootstrap(t *testing.T) {
 	require.Equal(t, uint64(0), epoch)
 }
 
-func TestDrainNodeRemainingNeverZeroBeforeObserved(t *testing.T) {
-	c, _, _, target := newDrainTestController(t)
+func TestDrainNodeReturnsNonZeroBeforeStoppingObserved(t *testing.T) {
+	c, _, target := newDrainTestController(t)
 
 	remaining, err := c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
 	require.Equal(t, 1, remaining)
 }
 
-func TestDrainNodeRemainingNeverZeroWithoutStoppingObserved(t *testing.T) {
-	c, view, drainController, target := newDrainTestController(t)
-
-	now := time.Now()
-	hb := &heartbeatpb.NodeHeartbeat{
-		Liveness:  heartbeatpb.NodeLiveness_DRAINING,
-		NodeEpoch: 1,
-	}
-	view.ObserveHeartbeat(target, hb, now)
-	drainController.ObserveHeartbeat(target, hb)
-
-	remaining, err := c.DrainNode(context.Background(), target)
-	require.NoError(t, err)
-	require.Equal(t, 1, remaining)
-}
-
-func TestDrainNodeReturnsZeroOnlyAfterStoppingObserved(t *testing.T) {
-	c, view, drainController, target := newDrainTestController(t)
-
-	now := time.Now()
-	resp := &heartbeatpb.SetNodeLivenessResponse{
-		Applied:   heartbeatpb.NodeLiveness_STOPPING,
-		NodeEpoch: 1,
-	}
-	view.ObserveSetNodeLivenessResponse(target, resp, now)
-	drainController.ObserveSetNodeLivenessResponse(target, resp)
-
-	remaining, err := c.DrainNode(context.Background(), target)
-	require.NoError(t, err)
-	require.Equal(t, 0, remaining)
-}
-
-func TestDrainNodeUnknownNeverReturnsZero(t *testing.T) {
-	c, view, drainController, target := newDrainTestController(t)
-
-	old := time.Now().Add(-31 * time.Second)
-	hb := &heartbeatpb.NodeHeartbeat{
-		Liveness:  heartbeatpb.NodeLiveness_STOPPING,
-		NodeEpoch: 1,
-	}
-	view.ObserveHeartbeat(target, hb, old)
-	drainController.ObserveHeartbeat(target, hb)
-
-	remaining, err := c.DrainNode(context.Background(), target)
-	require.NoError(t, err)
-	require.Equal(t, 1, remaining)
-}
-
-func TestDrainNodeCheckpointGateRequiresRunningChangefeedProgress(t *testing.T) {
-	c, view, drainController, target := newDrainTestController(t)
-	gatePhysicalTs := time.Now().UnixMilli()
-	setDrainGatePhysicalTs(c, gatePhysicalTs)
-	baselineTs := oracle.ComposeTS(gatePhysicalTs-int64((40*time.Minute)/time.Millisecond), 0)
-	cf := addRunningChangefeed(c, "cf1", node.ID("other"), baselineTs)
-	setDrainTargetForTest(c, target, 1)
-	setChangefeedDrainStatus(cf, target, 1, 0)
-	setTargetStoppingObserved(view, drainController, target)
+func TestDrainNodeRequiresCheckpointAdvanceAfterCompletionObserved(t *testing.T) {
+	c, drainController, target := newDrainTestController(t)
+	cf := addRunningChangefeed(c, "cf1", node.ID("other"), 100)
 
 	remaining, err := c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
 	require.Equal(t, 1, remaining)
 
-	setChangefeedCheckpointTs(cf, baselineTs+1)
+	_, epoch, ok := c.getDispatcherDrainTarget()
+	require.True(t, ok)
+	setChangefeedDrainStatus(cf, target, epoch, 0)
+	setTargetStoppingObserved(drainController, target)
+
 	remaining, err = c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
-	require.Equal(t, 0, remaining)
-}
-
-func TestDrainNodeCheckpointGateUsesFrozenBaseline(t *testing.T) {
-	c, view, drainController, target := newDrainTestController(t)
-	cf := addRunningChangefeed(c, "cf1", node.ID("other"), 100)
-	setDrainTargetForTest(c, target, 1)
-	setChangefeedDrainStatus(cf, target, 1, 0)
-	setTargetStoppingObserved(view, drainController, target)
-
-	remaining, err := c.DrainNode(context.Background(), target)
-	require.NoError(t, err)
 	require.Equal(t, 1, remaining)
-
-	// Newly created running changefeeds after baseline snapshot must not block this drain gate.
-	cf2 := addRunningChangefeed(c, "cf2", node.ID("other"), 100)
-	setChangefeedDrainStatus(cf2, target, 1, 0)
 
 	setChangefeedCheckpointTs(cf, 101)
-	remaining, err = c.DrainNode(context.Background(), target)
-	require.NoError(t, err)
-	require.Equal(t, 0, remaining)
-}
-
-func TestDrainNodeCheckpointGateIgnoresNonRunningChangefeed(t *testing.T) {
-	c, view, drainController, target := newDrainTestController(t)
-	cf := addRunningChangefeed(c, "cf1", node.ID("other"), 100)
-	setDrainTargetForTest(c, target, 1)
-	setChangefeedDrainStatus(cf, target, 1, 0)
-	setTargetStoppingObserved(view, drainController, target)
-
-	remaining, err := c.DrainNode(context.Background(), target)
-	require.NoError(t, err)
-	require.Equal(t, 1, remaining)
-
-	info, cloneErr := cf.GetInfo().Clone()
-	require.NoError(t, cloneErr)
-	info.State = config.StateStopped
-	cf.SetInfo(info)
-
-	remaining, err = c.DrainNode(context.Background(), target)
-	require.NoError(t, err)
-	require.Equal(t, 0, remaining)
-}
-
-func TestDrainNodeCheckpointGateLowLagMustCatchGateCreateTime(t *testing.T) {
-	c, view, drainController, target := newDrainTestController(t)
-	gatePhysicalTs := time.Now().UnixMilli()
-	setDrainGatePhysicalTs(c, gatePhysicalTs)
-	baselinePhysicalTs := gatePhysicalTs - int64((30*time.Second)/time.Millisecond)
-	baselineTs := oracle.ComposeTS(baselinePhysicalTs, 0)
-	cf := addRunningChangefeed(c, "cf-low-lag", node.ID("other"), baselineTs)
-	setDrainTargetForTest(c, target, 1)
-	setChangefeedDrainStatus(cf, target, 1, 0)
-	setTargetStoppingObserved(view, drainController, target)
-
-	remaining, err := c.DrainNode(context.Background(), target)
-	require.NoError(t, err)
-	require.Equal(t, 1, remaining)
-
-	// Low-lag bucket must satisfy both:
-	// 1) catch up to gate create time; and
-	// 2) advance one minute from baseline.
-	// Reaching gate create time alone is still insufficient here.
-	setChangefeedCheckpointTs(cf, oracle.ComposeTS(gatePhysicalTs, 0))
-	remaining, err = c.DrainNode(context.Background(), target)
-	require.NoError(t, err)
-	require.Equal(t, 1, remaining)
-
-	setChangefeedCheckpointTs(cf, oracle.ComposeTS(baselinePhysicalTs+int64((time.Minute)/time.Millisecond), 0))
-	remaining, err = c.DrainNode(context.Background(), target)
-	require.NoError(t, err)
-	require.Equal(t, 0, remaining)
-}
-
-func TestDrainNodeCheckpointGateMidLagRequiresOneMinuteAdvance(t *testing.T) {
-	c, view, drainController, target := newDrainTestController(t)
-	gatePhysicalTs := time.Now().UnixMilli()
-	setDrainGatePhysicalTs(c, gatePhysicalTs)
-	baselinePhysicalTs := gatePhysicalTs - int64((10*time.Minute)/time.Millisecond)
-	baselineTs := oracle.ComposeTS(baselinePhysicalTs, 0)
-	cf := addRunningChangefeed(c, "cf-mid-lag", node.ID("other"), baselineTs)
-	setDrainTargetForTest(c, target, 1)
-	setChangefeedDrainStatus(cf, target, 1, 0)
-	setTargetStoppingObserved(view, drainController, target)
-
-	remaining, err := c.DrainNode(context.Background(), target)
-	require.NoError(t, err)
-	require.Equal(t, 1, remaining)
-
-	setChangefeedCheckpointTs(cf, oracle.ComposeTS(baselinePhysicalTs+int64((30*time.Second)/time.Millisecond), 0))
-	remaining, err = c.DrainNode(context.Background(), target)
-	require.NoError(t, err)
-	require.Equal(t, 1, remaining)
-
-	setChangefeedCheckpointTs(cf, oracle.ComposeTS(baselinePhysicalTs+int64((time.Minute)/time.Millisecond), 0))
 	remaining, err = c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
 	require.Equal(t, 0, remaining)
 }
 
 func TestDrainNodeDispatcherCountBlocksCompletion(t *testing.T) {
-	c, view, drainController, target := newDrainTestController(t)
+	c, drainController, target := newDrainTestController(t)
 	cf := addRunningChangefeed(c, "cf1", node.ID("other"), 100)
-	setDrainTargetForTest(c, target, 1)
-	setChangefeedDrainStatus(cf, target, 1, 2)
-	setTargetStoppingObserved(view, drainController, target)
 
 	remaining, err := c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	_, epoch, ok := c.getDispatcherDrainTarget()
+	require.True(t, ok)
+	setChangefeedDrainStatus(cf, target, epoch, 2)
+	setTargetStoppingObserved(drainController, target)
+
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
 	require.Equal(t, 2, remaining)
 
-	setChangefeedDrainStatus(cf, target, 1, 0)
+	setChangefeedDrainStatus(cf, target, epoch, 0)
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
 	setChangefeedCheckpointTs(cf, 101)
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 0, remaining)
+}
+
+func TestDrainNodePendingStatusConvergenceBlocksCompletion(t *testing.T) {
+	c, drainController, target := newDrainTestController(t)
+	cf := addRunningChangefeed(c, "cf1", node.ID("other"), 100)
+
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	_, epoch, ok := c.getDispatcherDrainTarget()
+	require.True(t, ok)
+	setTargetStoppingObserved(drainController, target)
+
+	// Checkpoint progress alone must not complete drain before target epoch convergence.
+	setChangefeedCheckpointTs(cf, 101)
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	// After convergence, checkpoint gate still requires one forward step from its baseline.
+	setChangefeedDrainStatus(cf, target, epoch, 0)
 	remaining, err = c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
 	require.Equal(t, 1, remaining)
@@ -278,7 +165,7 @@ func TestDrainNodeDispatcherCountBlocksCompletion(t *testing.T) {
 }
 
 func TestDrainNodeRejectConcurrentDifferentDrainTarget(t *testing.T) {
-	c, _, _, target := newDrainTestController(t)
+	c, _, target := newDrainTestController(t)
 	other := node.ID("other")
 	c.nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
 
@@ -291,17 +178,28 @@ func TestDrainNodeRejectConcurrentDifferentDrainTarget(t *testing.T) {
 	require.Contains(t, err.Error(), "drain already in progress")
 }
 
+func TestRemoveNodeClearsActiveDrainTarget(t *testing.T) {
+	c, _, target := newDrainTestController(t)
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	_, _, ok := c.getDispatcherDrainTarget()
+	require.True(t, ok)
+
+	c.RemoveNode(target)
+	_, _, ok = c.getDispatcherDrainTarget()
+	require.False(t, ok)
+}
+
 func setTargetStoppingObserved(
-	view *nodeliveness.View,
 	drainController *drain.Controller,
 	target node.ID,
 ) {
-	now := time.Now()
 	resp := &heartbeatpb.SetNodeLivenessResponse{
 		Applied:   heartbeatpb.NodeLiveness_STOPPING,
 		NodeEpoch: 1,
 	}
-	view.ObserveSetNodeLivenessResponse(target, resp, now)
 	drainController.ObserveSetNodeLivenessResponse(target, resp)
 }
 
@@ -343,20 +241,4 @@ func setChangefeedDrainStatus(
 		DrainTargetEpoch:           epoch,
 		DrainTargetDispatcherCount: dispatcherCount,
 	})
-}
-
-func setDrainGatePhysicalTs(c *Controller, physicalTs int64) {
-	clock := &pdutil.Clock4Test{}
-	clock.SetTS(oracle.ComposeTS(physicalTs, 0))
-	c.pdClock = clock
-}
-
-func setDrainTargetForTest(c *Controller, target node.ID, epoch uint64) {
-	c.dispatcherDrainTargetMu.Lock()
-	defer c.dispatcherDrainTargetMu.Unlock()
-	c.dispatcherDrainTarget = &dispatcherDrainTargetState{
-		target: target,
-		epoch:  epoch,
-	}
-	c.dispatcherDrainEpoch = epoch
 }

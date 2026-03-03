@@ -19,7 +19,6 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
-	"github.com/pingcap/ticdc/coordinator/nodeliveness"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -36,7 +35,7 @@ type drainScheduler struct {
 	operatorController *operator.Controller
 	changefeedDB       *changefeed.ChangefeedDB
 	nodeManager        *watcher.NodeManager
-	livenessView       *nodeliveness.View
+	liveness           livenessReader
 
 	// rrCursor rotates the starting draining node to avoid starving nodes later in the list.
 	rrCursor int
@@ -48,7 +47,7 @@ func NewDrainScheduler(
 	batchSize int,
 	oc *operator.Controller,
 	changefeedDB *changefeed.ChangefeedDB,
-	livenessView *nodeliveness.View,
+	liveness livenessReader,
 ) *drainScheduler {
 	return &drainScheduler{
 		id:                 id,
@@ -56,7 +55,7 @@ func NewDrainScheduler(
 		operatorController: oc,
 		changefeedDB:       changefeedDB,
 		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
-		livenessView:       livenessView,
+		liveness:           liveness,
 	}
 }
 
@@ -68,25 +67,18 @@ func (s *drainScheduler) Execute() time.Time {
 		return time.Now().Add(time.Millisecond * 200)
 	}
 
-	if s.livenessView == nil {
+	if s.liveness == nil {
 		return time.Now().Add(time.Second)
 	}
 
 	now := time.Now()
-	drainingNodes := s.livenessView.GetDrainingOrStoppingNodes()
+	drainingNodes := s.liveness.GetDrainingOrStoppingNodes()
 	if len(drainingNodes) == 0 {
 		return now.Add(time.Second)
 	}
 	slices.Sort(drainingNodes)
 
-	destCandidates := s.nodeManager.GetAliveNodeIDs()
-	dst := destCandidates[:0]
-	for _, id := range destCandidates {
-		if s.livenessView.IsSchedulableDest(id) {
-			dst = append(dst, id)
-		}
-	}
-	destCandidates = dst
+	destCandidates := filterSchedulableNodeIDs(s.nodeManager.GetAliveNodeIDs(), s.liveness)
 
 	if len(destCandidates) == 0 {
 		log.Info("no alive destination node for drain",

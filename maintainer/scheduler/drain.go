@@ -89,15 +89,10 @@ func (s *drainScheduler) Execute() time.Time {
 		availableSize = drainSlots
 	}
 
-	destCandidates := s.nodeManager.GetAliveNodeIDs()
-	filteredDest := destCandidates[:0]
-	for _, id := range destCandidates {
-		if id == target {
-			continue
-		}
-		filteredDest = append(filteredDest, id)
-	}
-	destCandidates = filteredDest
+	destCandidates := filterNodeIDsByDrainTarget(
+		s.nodeManager.GetAliveNodeIDs(),
+		func() (node.ID, uint64) { return target, targetEpoch },
+	)
 	if len(destCandidates) == 0 {
 		return time.Now().Add(time.Second)
 	}

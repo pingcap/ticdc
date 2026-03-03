@@ -44,7 +44,6 @@ func TestBalanceSchedulerSkipsWhenDrainActive(t *testing.T) {
 		0,
 		common.DefaultMode,
 		func() (node.ID, uint64) { return target, 1 },
-		func() node.ID { return self },
 	)
 	_ = s.Execute()
 
@@ -73,7 +72,6 @@ func TestBalanceSchedulerCapsMoveOperatorsPerRound(t *testing.T) {
 		0,
 		common.DefaultMode,
 		func() (node.ID, uint64) { return "", 0 },
-		func() node.ID { return self },
 	)
 	_ = s.Execute()
 
@@ -103,7 +101,6 @@ func TestBalanceSchedulerSkipsDuringDrainCooldown(t *testing.T) {
 		0,
 		common.DefaultMode,
 		func() (node.ID, uint64) { return drainTarget, 1 },
-		func() node.ID { return self },
 	)
 	s.drainBalanceBlockedUntil = time.Time{}
 

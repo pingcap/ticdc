@@ -41,3 +41,36 @@ func shouldPauseBalanceForDrain(getTarget drainTargetGetter, now time.Time, bloc
 	}
 	return now.Before(*blockedUntil)
 }
+
+func filterNodeIDsByDrainTarget(nodeIDs []node.ID, getTarget drainTargetGetter) []node.ID {
+	target, _, active := snapshotDrainTarget(getTarget)
+	if !active {
+		return nodeIDs
+	}
+	filtered := nodeIDs[:0]
+	for _, id := range nodeIDs {
+		if id == target {
+			continue
+		}
+		filtered = append(filtered, id)
+	}
+	return filtered
+}
+
+func filterAliveNodesByDrainTarget(
+	nodes map[node.ID]*node.Info,
+	getTarget drainTargetGetter,
+) map[node.ID]*node.Info {
+	target, _, active := snapshotDrainTarget(getTarget)
+	if !active {
+		return nodes
+	}
+	filtered := make(map[node.ID]*node.Info, len(nodes))
+	for id, info := range nodes {
+		if id == target {
+			continue
+		}
+		filtered[id] = info
+	}
+	return filtered
+}

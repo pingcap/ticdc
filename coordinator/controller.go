@@ -21,7 +21,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	"github.com/pingcap/ticdc/coordinator/drain"
-	"github.com/pingcap/ticdc/coordinator/nodeliveness"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	coscheduler "github.com/pingcap/ticdc/coordinator/scheduler"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -46,19 +45,19 @@ import (
 )
 
 const (
-	bootstrapperID                = "coordinator"
-	nodeChangeHandlerID           = "coordinator-controller"
-	createChangefeedMaxRetry      = 10
-	createChangefeedRetryInterval = 5 * time.Second
-
-	drainGateSmallLagThresholdMs     = int64((2 * time.Minute) / time.Millisecond)
-	drainGateLargeLagThresholdMs     = int64((30 * time.Minute) / time.Millisecond)
-	drainGateMidLagRequiredAdvanceMs = int64(time.Minute / time.Millisecond)
+	bootstrapperID                   = "coordinator"
+	nodeChangeHandlerID              = "coordinator-controller"
+	createChangefeedMaxRetry         = 10
+	createChangefeedRetryInterval    = 5 * time.Second
+	dispatcherDrainTargetResendIntvl = 5 * time.Second
 )
 
 type drainCheckpointGateState struct {
 	baselineCheckpointTs map[common.ChangeFeedID]uint64
-	gateCreatePhysicalTs int64
+}
+
+type drainStatusConvergenceState struct {
+	pendingStatus map[common.ChangeFeedID]struct{}
 }
 
 type dispatcherDrainTargetState struct {
@@ -113,17 +112,23 @@ type Controller struct {
 	changefeedChangeCh chan []*changefeedChange
 	apiLock            sync.RWMutex
 
-	nodeLivenessView *nodeliveness.View
-	drainController  *drain.Controller
+	drainController *drain.Controller
 
 	// drainCheckpointGate keeps a per-target frozen baseline of running changefeed checkpoints.
 	// A target can return remaining=0 only after every baseline changefeed checkpoint has advanced.
 	drainCheckpointGateMu sync.Mutex
 	drainCheckpointGate   map[node.ID]*drainCheckpointGateState
 
+	// drainStatusConvergence keeps a per-target frozen baseline for status convergence.
+	// A baseline changefeed must report the active target epoch once before drain can complete.
+	drainStatusConvergenceMu sync.Mutex
+	drainStatusConvergence   map[node.ID]*drainStatusConvergenceState
+
 	dispatcherDrainTargetMu sync.Mutex
 	dispatcherDrainTarget   *dispatcherDrainTargetState
 	dispatcherDrainEpoch    uint64
+	dispatcherDrainDirty    bool
+	dispatcherDrainLastSent time.Time
 }
 
 type changefeedChange struct {
@@ -157,7 +162,8 @@ func NewController(
 	changefeedDB := changefeed.NewChangefeedDB(version)
 
 	oc := operator.NewOperatorController(selfNode, changefeedDB, backend, batchSize)
-	nodeLivenessView := nodeliveness.NewView(30 * time.Second)
+	messageCenter := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
+	drainController := drain.NewController(messageCenter)
 	c := &Controller{
 		version:     version,
 		selfNode:    selfNode,
@@ -168,14 +174,14 @@ func NewController(
 				batchSize,
 				oc,
 				changefeedDB,
-				nodeLivenessView,
+				drainController,
 			),
 			scheduler.DrainScheduler: coscheduler.NewDrainScheduler(
 				selfNode.ID.String(),
 				batchSize,
 				oc,
 				changefeedDB,
-				nodeLivenessView,
+				drainController,
 			),
 			scheduler.BalanceScheduler: coscheduler.NewBalanceScheduler(
 				selfNode.ID.String(),
@@ -183,24 +189,26 @@ func NewController(
 				oc,
 				changefeedDB,
 				balanceInterval,
-				nodeLivenessView,
+				drainController,
 			),
 		}),
-		eventCh:              eventCh,
-		operatorController:   oc,
-		messageCenter:        appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
-		changefeedDB:         changefeedDB,
-		nodeManager:          appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
-		taskScheduler:        threadpool.NewThreadPoolDefault(),
-		backend:              backend,
-		changefeedChangeCh:   changefeedChangeCh,
-		pdClient:             pdClient,
-		pdClock:              appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
-		nodeLivenessView:     nodeLivenessView,
-		drainCheckpointGate:  make(map[node.ID]*drainCheckpointGateState),
-		dispatcherDrainEpoch: newDispatcherDrainEpochSeed(),
+		eventCh:                 eventCh,
+		operatorController:      oc,
+		messageCenter:           messageCenter,
+		changefeedDB:            changefeedDB,
+		nodeManager:             appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
+		taskScheduler:           threadpool.NewThreadPoolDefault(),
+		backend:                 backend,
+		changefeedChangeCh:      changefeedChangeCh,
+		pdClient:                pdClient,
+		pdClock:                 appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		drainController:         drainController,
+		drainCheckpointGate:     make(map[node.ID]*drainCheckpointGateState),
+		drainStatusConvergence:  make(map[node.ID]*drainStatusConvergenceState),
+		dispatcherDrainEpoch:    newDispatcherDrainEpochSeed(),
+		dispatcherDrainDirty:    false,
+		dispatcherDrainLastSent: time.Time{},
 	}
-	c.drainController = drain.NewController(c.messageCenter, nodeLivenessView)
 	c.nodeChanged.changed = false
 
 	c.bootstrapper = bootstrap.NewBootstrapper[heartbeatpb.CoordinatorBootstrapResponse](
@@ -318,9 +326,7 @@ func (c *Controller) onPeriodTask() {
 	c.drainController.AdvanceLiveness(func(id node.ID) bool {
 		return len(c.changefeedDB.GetByNodeID(id)) == 0 && c.operatorController.CountOperatorsInvolvingNode(id) == 0
 	})
-	if target, epoch, ok := c.getDispatcherDrainTarget(); ok {
-		c.broadcastDispatcherDrainTarget(target, epoch)
-	}
+	c.maybeBroadcastDispatcherDrainTarget(false)
 }
 
 func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage) {
@@ -334,11 +340,9 @@ func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage
 		}
 	case messaging.TypeNodeHeartbeatRequest:
 		req := msg.Message[0].(*heartbeatpb.NodeHeartbeat)
-		c.nodeLivenessView.ObserveHeartbeat(msg.From, req, time.Now())
 		c.drainController.ObserveHeartbeat(msg.From, req)
 	case messaging.TypeSetNodeLivenessResponse:
 		req := msg.Message[0].(*heartbeatpb.SetNodeLivenessResponse)
-		c.nodeLivenessView.ObserveSetNodeLivenessResponse(msg.From, req, time.Now())
 		c.drainController.ObserveSetNodeLivenessResponse(msg.From, req)
 	case messaging.TypeLogCoordinatorResolvedTsResponse:
 		c.onLogCoordinatorReportResolvedTs(msg)
@@ -412,6 +416,7 @@ func (c *Controller) onNodeChanged(ctx context.Context) {
 				zap.Any("targetNode", req.To), zap.Error(err))
 		}
 	}
+	c.maybeBroadcastDispatcherDrainTarget(true)
 	c.handleBootstrapResponses(ctx, responses)
 }
 
@@ -898,22 +903,25 @@ func (c *Controller) DrainNode(_ context.Context, target node.ID) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	c.broadcastDispatcherDrainTarget(target, targetEpoch)
+	c.maybeBroadcastDispatcherDrainTarget(true)
 
 	c.drainController.RequestDrain(target)
 
 	maintainersOnTarget := len(c.changefeedDB.GetByNodeID(target))
 	inflightOpsInvolvingTarget := c.operatorController.CountOperatorsInvolvingNode(target)
-	dispatcherCountOnTarget, pendingDispatcherStatus := c.aggregateDrainTargetDispatcherCount(target, targetEpoch)
+	dispatcherCountOnTarget := c.aggregateDrainTargetDispatcherCount(target, targetEpoch)
+	pendingStatusCount := c.collectDrainPendingStatus(target, targetEpoch)
 	remaining := drainRemainingEstimate(
 		maintainersOnTarget,
 		inflightOpsInvolvingTarget,
 		dispatcherCountOnTarget,
-		pendingDispatcherStatus,
 	)
+	if pendingStatusCount > remaining {
+		remaining = pendingStatusCount
+	}
 
 	_, drainingObserved, stoppingObserved := c.drainController.GetStatus(target)
-	nodeState := c.nodeLivenessView.GetState(target)
+	nodeState := c.drainController.GetState(target)
 
 	// drain API must not return 0 until drain completion is proven.
 	if isDrainCompletionProven(
@@ -923,28 +931,105 @@ func (c *Controller) DrainNode(_ context.Context, target node.ID) (int, error) {
 		maintainersOnTarget,
 		inflightOpsInvolvingTarget,
 		dispatcherCountOnTarget,
-		pendingDispatcherStatus,
+		pendingStatusCount,
 	) {
-		if c.tryPassDrainCheckpointGate(target) {
+		if c.tryPassDrainCheckpointGate(target, targetEpoch) {
 			c.clearDispatcherDrainTarget(target, targetEpoch)
 			return 0, nil
 		}
 		return 1, nil
 	}
-	if dispatcherCountOnTarget > 0 || pendingDispatcherStatus > 0 {
+	if dispatcherCountOnTarget > 0 {
 		log.Info("drain completion blocked by dispatcher count",
 			zap.Stringer("targetNodeID", target),
 			zap.Uint64("targetEpoch", targetEpoch),
-			zap.Int("remainingDispatchers", dispatcherCountOnTarget),
-			zap.Int("pendingStatusCount", pendingDispatcherStatus))
+			zap.Int("remainingDispatchers", dispatcherCountOnTarget))
+	}
+	if pendingStatusCount > 0 {
+		log.Info("drain completion blocked by pending status convergence",
+			zap.Stringer("targetNodeID", target),
+			zap.Uint64("targetEpoch", targetEpoch),
+			zap.Int("pendingStatusCount", pendingStatusCount))
 	}
 	c.clearDrainCheckpointGate(target)
 	return ensureDrainRemainingNonZero(remaining), nil
 }
 
+// collectDrainPendingStatus tracks a frozen baseline of running changefeeds and
+// returns how many of them have not reported the active drain target epoch yet.
+func (c *Controller) collectDrainPendingStatus(target node.ID, epoch uint64) int {
+	if target.IsEmpty() || epoch == 0 {
+		return 0
+	}
+
+	c.drainStatusConvergenceMu.Lock()
+	defer c.drainStatusConvergenceMu.Unlock()
+
+	if c.drainStatusConvergence == nil {
+		c.drainStatusConvergence = make(map[node.ID]*drainStatusConvergenceState)
+	}
+
+	state, ok := c.drainStatusConvergence[target]
+	if !ok {
+		state = &drainStatusConvergenceState{
+			pendingStatus: c.snapshotDrainStatusBaseline(target, epoch),
+		}
+		c.drainStatusConvergence[target] = state
+	}
+
+	if len(state.pendingStatus) == 0 {
+		return 0
+	}
+
+	for id := range state.pendingStatus {
+		cf := c.changefeedDB.GetByID(id)
+		if !isDrainStatusConvergenceRelevant(cf) {
+			// Removed or non-running changefeeds should not block drain status convergence.
+			delete(state.pendingStatus, id)
+			continue
+		}
+		status := cf.GetStatus()
+		if status != nil && status.DrainTargetNodeId == target.String() && status.DrainTargetEpoch == epoch {
+			delete(state.pendingStatus, id)
+		}
+	}
+
+	return len(state.pendingStatus)
+}
+
+func (c *Controller) snapshotDrainStatusBaseline(target node.ID, epoch uint64) map[common.ChangeFeedID]struct{} {
+	cfs := c.changefeedDB.GetReplicating()
+	if len(cfs) == 0 {
+		return nil
+	}
+
+	targetID := target.String()
+	snapshot := make(map[common.ChangeFeedID]struct{}, len(cfs))
+	for _, cf := range cfs {
+		if !isDrainStatusConvergenceRelevant(cf) {
+			continue
+		}
+		status := cf.GetStatus()
+		if status != nil && status.DrainTargetNodeId == targetID && status.DrainTargetEpoch == epoch {
+			// Changefeeds that already acknowledged this drain epoch do not need further tracking.
+			continue
+		}
+		snapshot[cf.ID] = struct{}{}
+	}
+	return snapshot
+}
+
+func isDrainStatusConvergenceRelevant(cf *changefeed.Changefeed) bool {
+	if cf == nil {
+		return false
+	}
+	info := cf.GetInfo()
+	return info != nil && shouldRunChangefeed(info.State)
+}
+
 // tryPassDrainCheckpointGate returns true only when all frozen running changefeeds
 // for the target have advanced checkpointTs beyond the first completion baseline.
-func (c *Controller) tryPassDrainCheckpointGate(target node.ID) bool {
+func (c *Controller) tryPassDrainCheckpointGate(target node.ID, epoch uint64) bool {
 	c.drainCheckpointGateMu.Lock()
 	defer c.drainCheckpointGateMu.Unlock()
 
@@ -954,14 +1039,13 @@ func (c *Controller) tryPassDrainCheckpointGate(target node.ID) bool {
 
 	state, ok := c.drainCheckpointGate[target]
 	if !ok {
-		baseline := c.snapshotRunningCheckpointTs()
-		// No running changefeed means nothing is left to prove for checkpoint progress.
+		baseline := c.snapshotDrainCheckpointBaseline(target, epoch)
+		// No relevant running changefeed means nothing is left to prove for checkpoint progress.
 		if len(baseline) == 0 {
 			return true
 		}
 		c.drainCheckpointGate[target] = &drainCheckpointGateState{
 			baselineCheckpointTs: baseline,
-			gateCreatePhysicalTs: c.currentDrainGatePhysicalTs(),
 		}
 		return false
 	}
@@ -973,13 +1057,13 @@ func (c *Controller) tryPassDrainCheckpointGate(target node.ID) bool {
 			delete(state.baselineCheckpointTs, id)
 			continue
 		}
-		info := cf.GetInfo()
-		if info == nil || !shouldRunChangefeed(info.State) {
-			// Non-running changefeed should not block this drain checkpoint gate.
+		if !isDrainCheckpointGateRelevant(cf, target, epoch) {
+			// Non-relevant changefeed should not block this drain checkpoint gate.
 			delete(state.baselineCheckpointTs, id)
 			continue
 		}
-		if !isDrainCheckpointGateSatisfied(cf.GetStatus().CheckpointTs, baseTs, state.gateCreatePhysicalTs) {
+		// Drain completion requires forward checkpoint progress from the frozen baseline.
+		if cf.GetStatus().CheckpointTs <= baseTs {
 			return false
 		}
 	}
@@ -988,45 +1072,49 @@ func (c *Controller) tryPassDrainCheckpointGate(target node.ID) bool {
 	return true
 }
 
-func isDrainCheckpointGateSatisfied(currentTs uint64, baselineTs uint64, gateCreatePhysicalTs int64) bool {
-	// All paths require forward checkpoint progress from the frozen baseline.
-	if currentTs <= baselineTs {
-		return false
+func (c *Controller) snapshotDrainCheckpointBaseline(target node.ID, epoch uint64) map[common.ChangeFeedID]uint64 {
+	cfs := c.changefeedDB.GetReplicating()
+	if len(cfs) == 0 {
+		return nil
 	}
-
-	baselinePhysicalTs := oracle.ExtractPhysical(baselineTs)
-	currentPhysicalTs := oracle.ExtractPhysical(currentTs)
-	baselineLagMs := gateCreatePhysicalTs - baselinePhysicalTs
-	if baselineLagMs < 0 {
-		baselineLagMs = 0
+	snapshot := make(map[common.ChangeFeedID]uint64, len(cfs))
+	for _, cf := range cfs {
+		if cf == nil {
+			continue
+		}
+		if !isDrainCheckpointGateRelevant(cf, target, epoch) {
+			continue
+		}
+		snapshot[cf.ID] = cf.GetStatus().CheckpointTs
 	}
-
-	switch {
-	case baselineLagMs <= drainGateSmallLagThresholdMs:
-		// Low-lag baseline must both catch up to gate creation time and advance
-		// at least one minute from the baseline checkpoint.
-		return currentPhysicalTs >= gateCreatePhysicalTs &&
-			currentPhysicalTs >= baselinePhysicalTs+drainGateMidLagRequiredAdvanceMs
-	case baselineLagMs >= drainGateLargeLagThresholdMs:
-		// High-lag baseline should not be blocked by additional lag requirements.
-		return true
-	default:
-		// Mid-lag baseline must move forward by one minute from the baseline checkpoint.
-		return currentPhysicalTs >= baselinePhysicalTs+drainGateMidLagRequiredAdvanceMs
-	}
+	return snapshot
 }
 
-func (c *Controller) currentDrainGatePhysicalTs() int64 {
-	if c.pdClock != nil {
-		return oracle.GetPhysical(c.pdClock.CurrentTime())
+func isDrainCheckpointGateRelevant(cf *changefeed.Changefeed, target node.ID, epoch uint64) bool {
+	if cf == nil {
+		return false
 	}
-	return time.Now().UnixMilli()
+	info := cf.GetInfo()
+	if info == nil || !shouldRunChangefeed(info.State) {
+		return false
+	}
+	status := cf.GetStatus()
+	if status == nil {
+		return false
+	}
+	return status.DrainTargetNodeId == target.String() && status.DrainTargetEpoch == epoch
 }
 
 func (c *Controller) clearDrainCheckpointGate(target node.ID) {
 	c.drainCheckpointGateMu.Lock()
 	defer c.drainCheckpointGateMu.Unlock()
 	delete(c.drainCheckpointGate, target)
+}
+
+func (c *Controller) clearDrainStatusConvergence(target node.ID) {
+	c.drainStatusConvergenceMu.Lock()
+	defer c.drainStatusConvergenceMu.Unlock()
+	delete(c.drainStatusConvergence, target)
 }
 
 func (c *Controller) ensureDispatcherDrainTarget(target node.ID) (uint64, error) {
@@ -1049,6 +1137,7 @@ func (c *Controller) ensureDispatcherDrainTarget(target node.ID) (uint64, error)
 		target: target,
 		epoch:  c.dispatcherDrainEpoch,
 	}
+	c.dispatcherDrainDirty = true
 	log.Info("dispatcher drain target activated",
 		zap.Stringer("targetNodeID", target),
 		zap.Uint64("targetEpoch", c.dispatcherDrainEpoch))
@@ -1073,12 +1162,44 @@ func (c *Controller) clearDispatcherDrainTarget(target node.ID, epoch uint64) {
 		return
 	}
 	c.dispatcherDrainTarget = nil
+	c.dispatcherDrainDirty = false
 	c.dispatcherDrainTargetMu.Unlock()
+	c.clearDrainCheckpointGate(target)
+	c.clearDrainStatusConvergence(target)
 
 	log.Info("dispatcher drain target cleared",
 		zap.Stringer("targetNodeID", target),
 		zap.Uint64("targetEpoch", epoch))
 	c.broadcastDispatcherDrainTarget("", epoch)
+}
+
+func (c *Controller) maybeBroadcastDispatcherDrainTarget(force bool) {
+	c.dispatcherDrainTargetMu.Lock()
+	if c.dispatcherDrainTarget == nil {
+		c.dispatcherDrainTargetMu.Unlock()
+		return
+	}
+	target := c.dispatcherDrainTarget.target
+	epoch := c.dispatcherDrainTarget.epoch
+	needSend := force ||
+		c.dispatcherDrainDirty ||
+		time.Since(c.dispatcherDrainLastSent) >= dispatcherDrainTargetResendIntvl
+	if !needSend {
+		c.dispatcherDrainTargetMu.Unlock()
+		return
+	}
+	c.dispatcherDrainTargetMu.Unlock()
+
+	c.broadcastDispatcherDrainTarget(target, epoch)
+
+	c.dispatcherDrainTargetMu.Lock()
+	if c.dispatcherDrainTarget != nil &&
+		c.dispatcherDrainTarget.target == target &&
+		c.dispatcherDrainTarget.epoch == epoch {
+		c.dispatcherDrainDirty = false
+		c.dispatcherDrainLastSent = time.Now()
+	}
+	c.dispatcherDrainTargetMu.Unlock()
 }
 
 func (c *Controller) broadcastDispatcherDrainTarget(target node.ID, epoch uint64) {
@@ -1102,71 +1223,49 @@ func (c *Controller) broadcastDispatcherDrainTarget(target node.ID, epoch uint64
 	}
 }
 
-func (c *Controller) aggregateDrainTargetDispatcherCount(target node.ID, epoch uint64) (int, int) {
+func (c *Controller) aggregateDrainTargetDispatcherCount(target node.ID, epoch uint64) int {
 	if target.IsEmpty() || epoch == 0 {
-		return 0, 0
+		return 0
 	}
 
 	targetID := target.String()
 	dispatcherCount := 0
-	pendingStatusCount := 0
-	cfs := c.changefeedDB.GetAllChangefeeds()
+	cfs := c.changefeedDB.GetReplicating()
 	for _, cf := range cfs {
 		if cf == nil {
 			continue
 		}
-		info := cf.GetInfo()
-		if info == nil || !shouldRunChangefeed(info.State) {
+		status := cf.GetStatus()
+		if status == nil {
 			continue
 		}
-		status := cf.GetStatus()
-		if status == nil || status.DrainTargetNodeId != targetID || status.DrainTargetEpoch != epoch {
-			pendingStatusCount++
+		if status.DrainTargetNodeId != targetID || status.DrainTargetEpoch != epoch {
 			continue
 		}
 		dispatcherCount += int(status.DrainTargetDispatcherCount)
 	}
-	return dispatcherCount, pendingStatusCount
-}
-
-func (c *Controller) snapshotRunningCheckpointTs() map[common.ChangeFeedID]uint64 {
-	cfs := c.changefeedDB.GetAllChangefeeds()
-	if len(cfs) == 0 {
-		return nil
-	}
-	snapshot := make(map[common.ChangeFeedID]uint64, len(cfs))
-	for _, cf := range cfs {
-		if cf == nil {
-			continue
-		}
-		info := cf.GetInfo()
-		if info == nil || !shouldRunChangefeed(info.State) {
-			continue
-		}
-		snapshot[cf.ID] = cf.GetStatus().CheckpointTs
-	}
-	return snapshot
+	return dispatcherCount
 }
 
 // isDrainCompletionProven checks whether drain completion can be safely concluded.
 // Returning true is intentionally strict because v1 drain API must avoid premature zero remaining.
 func isDrainCompletionProven(
-	nodeState nodeliveness.State,
+	nodeState drain.State,
 	drainingObserved bool,
 	stoppingObserved bool,
 	maintainersOnTarget int,
 	inflightOpsInvolvingTarget int,
 	dispatcherCountOnTarget int,
-	pendingDispatcherStatus int,
+	pendingStatusCount int,
 ) bool {
-	if nodeState == nodeliveness.StateUnknown || !drainingObserved {
+	if nodeState == drain.StateUnknown || !drainingObserved {
 		return false
 	}
 	return stoppingObserved &&
 		maintainersOnTarget == 0 &&
 		inflightOpsInvolvingTarget == 0 &&
 		dispatcherCountOnTarget == 0 &&
-		pendingDispatcherStatus == 0
+		pendingStatusCount == 0
 }
 
 // drainRemainingEstimate uses the larger workload dimension to avoid obvious double counting.
@@ -1174,7 +1273,6 @@ func drainRemainingEstimate(
 	maintainersOnTarget int,
 	inflightOpsInvolvingTarget int,
 	dispatcherCountOnTarget int,
-	pendingDispatcherStatus int,
 ) int {
 	remaining := maintainersOnTarget
 	if inflightOpsInvolvingTarget > remaining {
@@ -1182,9 +1280,6 @@ func drainRemainingEstimate(
 	}
 	if dispatcherCountOnTarget > remaining {
 		remaining = dispatcherCountOnTarget
-	}
-	if pendingDispatcherStatus > remaining {
-		remaining = pendingDispatcherStatus
 	}
 	return remaining
 }
@@ -1205,6 +1300,12 @@ func (c *Controller) getChangefeed(id common.ChangeFeedID) *changefeed.Changefee
 // RemoveNode is called when a node is removed
 func (c *Controller) RemoveNode(id node.ID) {
 	c.operatorController.OnNodeRemoved(id)
+	c.clearDrainCheckpointGate(id)
+	c.clearDrainStatusConvergence(id)
+	target, epoch, ok := c.getDispatcherDrainTarget()
+	if ok && target == id {
+		c.clearDispatcherDrainTarget(id, epoch)
+	}
 }
 
 func (c *Controller) submitPeriodTask() {

@@ -51,7 +51,6 @@ type balanceScheduler struct {
 	mode   int64
 
 	getDrainTarget drainTargetGetter
-	getSelfNodeID  func() node.ID
 
 	drainBalanceBlockedUntil time.Time
 }
@@ -65,7 +64,6 @@ func NewBalanceScheduler(
 	_ time.Duration,
 	mode int64,
 	getDrainTarget drainTargetGetter,
-	getSelfNodeID func() node.ID,
 ) *balanceScheduler {
 	return &balanceScheduler{
 		changefeedID:       changefeedID,
@@ -77,7 +75,6 @@ func NewBalanceScheduler(
 		splitter:           splitter,
 		mode:               mode,
 		getDrainTarget:     getDrainTarget,
-		getSelfNodeID:      getSelfNodeID,
 	}
 }
 
@@ -129,16 +126,7 @@ func (s *balanceScheduler) Name() string {
 
 func (s *balanceScheduler) schedulerDefaultGroup(maxSize int) int {
 	nodes := s.nodeManager.GetAliveNodes()
-	if target, _, ok := snapshotDrainTarget(s.getDrainTarget); ok {
-		filtered := make(map[node.ID]*node.Info, len(nodes))
-		for id, info := range nodes {
-			if id == target {
-				continue
-			}
-			filtered[id] = info
-		}
-		nodes = filtered
-	}
+	nodes = filterAliveNodesByDrainTarget(nodes, s.getDrainTarget)
 	if len(nodes) == 0 {
 		return 0
 	}
