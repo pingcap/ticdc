@@ -14,39 +14,28 @@
 package dispatcher
 
 import (
-	"context"
 	"testing"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/stretchr/testify/require"
 )
 
 type testBatchSink struct {
-	sinkType   common.SinkType
-	isNormal   bool
+	sink.Sink
 	batchCount int
 	batchBytes int
 }
 
-func (s *testBatchSink) SinkType() common.SinkType { return s.sinkType }
-
-func (s *testBatchSink) IsNormal() bool { return s.isNormal }
-
-func (s *testBatchSink) AddDMLEvent(_ *commonEvent.DMLEvent) {}
-
-func (s *testBatchSink) WriteBlockEvent(_ commonEvent.BlockEvent) error { return nil }
-
-func (s *testBatchSink) AddCheckpointTs(_ uint64) {}
-
-func (s *testBatchSink) SetTableSchemaStore(_ *commonEvent.TableSchemaStore) {}
-
-func (s *testBatchSink) Close(_ bool) {}
-
-func (s *testBatchSink) Run(_ context.Context) error { return nil }
+func newTestBatchSink(sinkType common.SinkType, batchCount int, batchBytes int) *testBatchSink {
+	return &testBatchSink{
+		Sink:       sink.NewMockSink(sinkType),
+		batchCount: batchCount,
+		batchBytes: batchBytes,
+	}
+}
 
 func (s *testBatchSink) BatchCount() int {
 	if s.batchCount > 0 {
@@ -97,12 +86,7 @@ func newTestBasicDispatcherForBatchConfig(
 func TestBasicDispatcherBatchConfig(t *testing.T) {
 	t.Run("returns values from shared info", func(t *testing.T) {
 		d := newTestBasicDispatcherForBatchConfig(
-			&testBatchSink{
-				sinkType:   common.CloudStorageSinkType,
-				isNormal:   true,
-				batchCount: 2048,
-				batchBytes: 4096,
-			},
+			newTestBatchSink(common.CloudStorageSinkType, 2048, 4096),
 			123,
 			777,
 		)
@@ -113,12 +97,7 @@ func TestBasicDispatcherBatchConfig(t *testing.T) {
 
 	t.Run("zero values stay zero without sink fallback", func(t *testing.T) {
 		d := newTestBasicDispatcherForBatchConfig(
-			&testBatchSink{
-				sinkType:   common.MysqlSinkType,
-				isNormal:   true,
-				batchCount: 2048,
-				batchBytes: 2048,
-			},
+			newTestBatchSink(common.MysqlSinkType, 2048, 2048),
 			0,
 			0,
 		)
@@ -129,11 +108,7 @@ func TestBasicDispatcherBatchConfig(t *testing.T) {
 
 	t.Run("redo mode uses the same shared config", func(t *testing.T) {
 		d := newTestBasicDispatcherForBatchConfig(
-			&testBatchSink{
-				sinkType:   common.RedoSinkType,
-				isNormal:   true,
-				batchBytes: 8192,
-			},
+			newTestBatchSink(common.RedoSinkType, 0, 8192),
 			4096,
 			8192,
 		)
