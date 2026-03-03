@@ -45,6 +45,7 @@ type BarrierEvent struct {
 	tableTriggerDispatcherRelated bool
 	writerDispatcher              common.DispatcherID
 	writerDispatcherAdvanced      bool
+	nonWriterDispatchersAdvanced  bool
 
 	blockedDispatchers *heartbeatpb.InfluencedTables
 	dropDispatchers    *heartbeatpb.InfluencedTables
@@ -204,20 +205,16 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 
 	be.selected.Store(true)
 	be.writerDispatcher = dispatcher
+	be.nonWriterDispatchersAdvanced = false
 	be.lastResendTime = time.Now()
+	// Mark writer as done for pass phase so allDispatcherReported reflects non writer progress.
+	be.markDispatcherEventDone(be.writerDispatcher)
 	log.Info("all dispatcher reported heartbeat, schedule it, and select one to write",
 		zap.String("changefeed", be.cfID.Name()),
 		zap.String("dispatcher", be.writerDispatcher.String()),
 		zap.Uint64("commitTs", be.commitTs),
 		zap.String("barrierType", be.blockedDispatchers.InfluenceType.String()))
-	stm := be.spanController.GetTaskByID(be.writerDispatcher)
-	return &heartbeatpb.DispatcherStatus{
-		InfluencedDispatchers: &heartbeatpb.InfluencedDispatchers{
-			InfluenceType: heartbeatpb.InfluenceType_Normal,
-			DispatcherIDs: []*heartbeatpb.DispatcherID{be.writerDispatcher.ToPB()},
-		},
-		Action: be.action(heartbeatpb.Action_Write),
-	}, stm.GetNodeID()
+	return nil, ""
 }
 
 func (be *BarrierEvent) scheduleBlockEvent() {
@@ -574,51 +571,56 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 		return nil
 	}
 	be.lastResendTime = time.Now()
-	// we select a dispatcher as the writer, still waiting for that dispatcher advance its checkpoint ts
-	if !be.writerDispatcherAdvanced {
-		// resend write action
-		stm := be.spanController.GetTaskByID(be.writerDispatcher)
-		if stm == nil || stm.GetNodeID() == "" {
-			log.Warn("writer dispatcher not found",
+	// Two-phase block handling:
+	// 1) pass all non-writer dispatchers;
+	// 2) after non-writers done, write by writer dispatcher.
+	if be.writerDispatcherAdvanced {
+		if !be.allDispatcherReported() {
+			return be.sendPassAction(mode)
+		}
+		return nil
+	}
+	if !be.nonWriterDispatchersAdvanced {
+		if be.allDispatcherReported() {
+			be.nonWriterDispatchersAdvanced = true
+		} else {
+			return be.sendPassAction(mode)
+		}
+	}
+	// resend write action
+	stm := be.spanController.GetTaskByID(be.writerDispatcher)
+	if stm == nil || stm.GetNodeID() == "" {
+		log.Warn("writer dispatcher not found",
+			zap.String("changefeed", be.cfID.Name()),
+			zap.String("dispatcher", be.writerDispatcher.String()),
+			zap.Uint64("commitTs", be.commitTs),
+			zap.Bool("isSyncPoint", be.isSyncPoint))
+		// choose a new one as the writer
+		// it only can happen then the split and merge happens to a table, and the writeDispatcher is not the table trigger event dispatcher
+		// So the block event influence type is must normal, we just need to select one dispatcher in the block dispatchers
+		if be.blockedDispatchers.InfluenceType != heartbeatpb.InfluenceType_Normal || len(be.blockedDispatchers.TableIDs) == 0 {
+			log.Panic("influence type should be normal when writer dispatcher not found",
 				zap.String("changefeed", be.cfID.Name()),
+				zap.Any("event", be),
 				zap.String("dispatcher", be.writerDispatcher.String()),
 				zap.Uint64("commitTs", be.commitTs),
 				zap.Bool("isSyncPoint", be.isSyncPoint))
-
-			// choose a new one as the writer
-			// it only can happen then the split and merge happens to a table, and the writeDispatcher is not the table trigger event dispatcher
-			// So the block event influence type is must normal, we just need to select one dispatcher in the block dispatchers
-			if be.blockedDispatchers.InfluenceType != heartbeatpb.InfluenceType_Normal || len(be.blockedDispatchers.TableIDs) == 0 {
-				log.Panic("influence type should be normal when writer dispatcher not found",
-					zap.String("changefeed", be.cfID.Name()),
-					zap.Any("event", be),
-					zap.String("dispatcher", be.writerDispatcher.String()),
-					zap.Uint64("commitTs", be.commitTs),
-					zap.Bool("isSyncPoint", be.isSyncPoint))
-			}
-
-			tableID := be.blockedDispatchers.TableIDs[0]
-			replications := be.spanController.GetTasksByTableID(tableID)
-
-			if len(replications) == 0 {
-				log.Panic("replications for this block event should not be empty",
-					zap.String("changefeed", be.cfID.Name()),
-					zap.Int64("tableID", tableID),
-					zap.Any("event", be),
-					zap.String("dispatcher", be.writerDispatcher.String()),
-					zap.Uint64("commitTs", be.commitTs),
-					zap.Bool("isSyncPoint", be.isSyncPoint))
-			}
-
-			be.writerDispatcher = replications[0].ID
-			return nil
 		}
-
-		msgs = []*messaging.TargetMessage{be.newWriterActionMessage(stm.GetNodeID(), mode)}
-	} else {
-		// the writer dispatcher is advanced, resend pass action
-		return be.sendPassAction(mode)
+		tableID := be.blockedDispatchers.TableIDs[0]
+		replications := be.spanController.GetTasksByTableID(tableID)
+		if len(replications) == 0 {
+			log.Panic("replications for this block event should not be empty",
+				zap.String("changefeed", be.cfID.Name()),
+				zap.Int64("tableID", tableID),
+				zap.Any("event", be),
+				zap.String("dispatcher", be.writerDispatcher.String()),
+				zap.Uint64("commitTs", be.commitTs),
+				zap.Bool("isSyncPoint", be.isSyncPoint))
+		}
+		be.writerDispatcher = replications[0].ID
+		return nil
 	}
+	msgs = []*messaging.TargetMessage{be.newWriterActionMessage(stm.GetNodeID(), mode)}
 	return msgs
 }
 

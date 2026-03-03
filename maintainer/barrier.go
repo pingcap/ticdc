@@ -178,10 +178,12 @@ func (b *Barrier) handleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 				// it's the maintainer's responsibility to resend the write action
 				event.selected.Store(true)
 				event.writerDispatcher = common.NewDispatcherIDFromPB(span.ID)
+				event.nonWriterDispatchersAdvanced = true
 			case heartbeatpb.BlockStage_DONE:
 				// it's the maintainer's responsibility to resend the pass action
 				event.selected.Store(true)
 				event.writerDispatcherAdvanced = true
+				event.nonWriterDispatchersAdvanced = true
 			}
 			event.markDispatcherEventDone(common.NewDispatcherIDFromPB(span.ID))
 		}
@@ -356,7 +358,7 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 		// the block event, and check whether we need to send write action
 		event.markDispatcherEventDone(dispatcherID)
 		status, targetID := event.checkEventAction(dispatcherID)
-		if status != nil && event.needSchedule {
+		if event.selected.Load() && event.needSchedule {
 			// scheduling is only required for ddl that changes tables, enqueue the event
 			b.pendingEvents.add(event)
 		}
@@ -404,6 +406,9 @@ func (b *Barrier) getOrInsertNewEvent(changefeedID common.ChangeFeedID, dispatch
 // check whether the event is get all the done message from dispatchers
 // if so, remove the event from blockedTs, not need to resend message anymore
 func (b *Barrier) checkEventFinish(be *BarrierEvent) {
+	if !be.writerDispatcherAdvanced {
+		return
+	}
 	if !be.allDispatcherReported() {
 		return
 	}
