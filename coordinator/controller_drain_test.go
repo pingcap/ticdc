@@ -49,14 +49,12 @@ func newDrainTestController(t *testing.T) (*Controller, *drain.Controller, node.
 	nodeManager.GetAliveNodes()[target] = &node.Info{ID: target}
 
 	c := &Controller{
-		nodeManager:            nodeManager,
-		changefeedDB:           db,
-		operatorController:     oc,
-		drainController:        drainController,
-		drainCheckpointGate:    make(map[node.ID]*drainCheckpointGateState),
-		drainStatusConvergence: make(map[node.ID]*drainStatusConvergenceState),
-		messageCenter:          mc,
-		initialized:            atomic.NewBool(true),
+		nodeManager:        nodeManager,
+		changefeedDB:       db,
+		operatorController: oc,
+		drainController:    drainController,
+		messageCenter:      mc,
+		initialized:        atomic.NewBool(true),
 	}
 	return c, drainController, target
 }
