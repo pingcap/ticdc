@@ -16,6 +16,7 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -248,6 +249,35 @@ func (s *SinkConfig) ShouldSendAllBootstrapAtStart() bool {
 	should := s.ShouldSendBootstrapMsg() && util.GetOrZero(s.SendAllBootstrapAtStart)
 	log.Info("should send all bootstrap at start", zap.Bool("should", should))
 	return should
+}
+
+// OutboxRequiredColumns returns the columns that must remain available when the
+// sink is configured for outbox-json.
+func (s *SinkConfig) OutboxRequiredColumns() []string {
+	if s == nil || s.Outbox == nil {
+		return nil
+	}
+
+	protocol, _ := ParseSinkProtocolFromString(util.GetOrZero(s.Protocol))
+	if protocol != ProtocolOutboxJSON {
+		return nil
+	}
+
+	outboxRequiredColumns := []string{
+		s.Outbox.IDColumn,
+		s.Outbox.KeyColumn,
+		s.Outbox.ValueColumn,
+	}
+	if len(s.Outbox.HeaderColumns) == 0 {
+		return outboxRequiredColumns
+	}
+
+	headerColumns := make([]string, 0, len(s.Outbox.HeaderColumns))
+	for _, column := range s.Outbox.HeaderColumns {
+		headerColumns = append(headerColumns, column)
+	}
+	sort.Strings(headerColumns)
+	return append(outboxRequiredColumns, headerColumns...)
 }
 
 // CSVConfig defines a series of configuration items for csv codec.
