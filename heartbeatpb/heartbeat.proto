@@ -135,6 +135,13 @@ message MaintainerHeartbeat {
     repeated MaintainerStatus statuses = 1;
 }
 
+// DrainProgress is maintainer-observed progress for dispatcher drain on one target.
+message DrainProgress {
+    string target_node_id = 1;
+    uint64 target_epoch = 2;
+    uint32 target_dispatcher_count = 3;
+}
+
 message MaintainerStatus {
     ChangefeedID changefeedID = 1;
     string feed_state = 2;
@@ -143,13 +150,9 @@ message MaintainerStatus {
     repeated RunningError err = 5;
     bool bootstrap_done = 6;
     uint64 lastSyncedTs = 7;  // last synced ts of all tables in the changefeed, used in /:changefeed_id/synced API
-    // drain_target_node_id is the active dispatcher drain target observed by this maintainer.
-    // Empty means no active dispatcher drain target.
-    string drain_target_node_id = 8;
-    // drain_target_epoch is the coordinator-assigned target epoch used to reject stale drain targets.
-    uint64 drain_target_epoch = 9;
-    // drain_target_dispatcher_count is the number of dispatchers still bound to drain_target_node_id.
-    uint32 drain_target_dispatcher_count = 10;
+    // drain_progress reports the active dispatcher drain target observed by this maintainer.
+    // Nil means no active dispatcher drain target.
+    DrainProgress drain_progress = 8;
 }
 
 // NodeLiveness is node-reported liveness.

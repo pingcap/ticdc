@@ -393,9 +393,11 @@ func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 		if dispatcherCount > math.MaxUint32 {
 			dispatcherCount = math.MaxUint32
 		}
-		status.DrainTargetNodeId = drainTarget.String()
-		status.DrainTargetEpoch = drainEpoch
-		status.DrainTargetDispatcherCount = uint32(dispatcherCount)
+		status.DrainProgress = &heartbeatpb.DrainProgress{
+			TargetNodeId:          drainTarget.String(),
+			TargetEpoch:           drainEpoch,
+			TargetDispatcherCount: uint32(dispatcherCount),
+		}
 	}
 	return status
 }

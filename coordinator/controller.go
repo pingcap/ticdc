@@ -978,14 +978,20 @@ func (c *Controller) collectDrainPendingStatus(target node.ID, epoch uint64) int
 			continue
 		}
 		status := cf.GetStatus()
-		if status != nil && status.DrainTargetNodeId == target.String() && status.DrainTargetEpoch == epoch {
-			delete(session.pendingStatus, id)
+		if status != nil {
+			progress := status.GetDrainProgress()
+			if progress != nil && progress.GetTargetNodeId() == target.String() && progress.GetTargetEpoch() == epoch {
+				delete(session.pendingStatus, id)
+			}
 		}
 	}
 
 	return len(session.pendingStatus)
 }
 
+// snapshotDrainStatusBaseline captures running changefeeds that have not yet
+// reported the active drain target epoch. The returned snapshot is used as a
+// monotonic pending set during one drain session.
 func (c *Controller) snapshotDrainStatusBaseline(target node.ID, epoch uint64) map[common.ChangeFeedID]struct{} {
 	cfs := c.changefeedDB.GetReplicating()
 	if len(cfs) == 0 {
@@ -999,15 +1005,20 @@ func (c *Controller) snapshotDrainStatusBaseline(target node.ID, epoch uint64) m
 			continue
 		}
 		status := cf.GetStatus()
-		if status != nil && status.DrainTargetNodeId == targetID && status.DrainTargetEpoch == epoch {
-			// Changefeeds that already acknowledged this drain epoch do not need further tracking.
-			continue
+		if status != nil {
+			progress := status.GetDrainProgress()
+			if progress != nil && progress.GetTargetNodeId() == targetID && progress.GetTargetEpoch() == epoch {
+				// Changefeeds that already acknowledged this drain epoch do not need further tracking.
+				continue
+			}
 		}
 		snapshot[cf.ID] = struct{}{}
 	}
 	return snapshot
 }
 
+// isDrainStatusConvergenceRelevant returns whether a changefeed should
+// participate in drain status convergence checks.
 func isDrainStatusConvergenceRelevant(cf *changefeed.Changefeed) bool {
 	if cf == nil {
 		return false
@@ -1058,6 +1069,8 @@ func (c *Controller) tryPassDrainCheckpointGate(target node.ID, epoch uint64) bo
 	return true
 }
 
+// snapshotDrainCheckpointBaseline freezes checkpointTs for relevant running
+// changefeeds in the current drain session.
 func (c *Controller) snapshotDrainCheckpointBaseline(target node.ID, epoch uint64) map[common.ChangeFeedID]uint64 {
 	cfs := c.changefeedDB.GetReplicating()
 	if len(cfs) == 0 {
@@ -1076,6 +1089,8 @@ func (c *Controller) snapshotDrainCheckpointBaseline(target node.ID, epoch uint6
 	return snapshot
 }
 
+// isDrainCheckpointGateRelevant returns whether a changefeed should block the
+// checkpoint progress gate of the given drain target epoch.
 func isDrainCheckpointGateRelevant(cf *changefeed.Changefeed, target node.ID, epoch uint64) bool {
 	if cf == nil {
 		return false
@@ -1088,9 +1103,15 @@ func isDrainCheckpointGateRelevant(cf *changefeed.Changefeed, target node.ID, ep
 	if status == nil {
 		return false
 	}
-	return status.DrainTargetNodeId == target.String() && status.DrainTargetEpoch == epoch
+	progress := status.GetDrainProgress()
+	if progress == nil {
+		return false
+	}
+	return progress.GetTargetNodeId() == target.String() && progress.GetTargetEpoch() == epoch
 }
 
+// resetDrainCheckpointGate clears the frozen checkpoint baseline for the
+// matching active drain session, so the next pass re-captures a new baseline.
 func (c *Controller) resetDrainCheckpointGate(target node.ID, epoch uint64) {
 	c.drainSessionMu.Lock()
 	defer c.drainSessionMu.Unlock()
@@ -1102,6 +1123,8 @@ func (c *Controller) resetDrainCheckpointGate(target node.ID, epoch uint64) {
 	session.checkpointBaseline = nil
 }
 
+// ensureDispatcherDrainTarget creates or reuses the single active drain
+// session. It rejects requests for a different target while one is active.
 func (c *Controller) ensureDispatcherDrainTarget(target node.ID) (uint64, error) {
 	c.drainSessionMu.Lock()
 	defer c.drainSessionMu.Unlock()
@@ -1129,6 +1152,8 @@ func (c *Controller) ensureDispatcherDrainTarget(target node.ID) (uint64, error)
 	return c.dispatcherDrainEpoch, nil
 }
 
+// getDispatcherDrainTarget returns the current active drain target and epoch.
+// The boolean return value indicates whether a session exists.
 func (c *Controller) getDispatcherDrainTarget() (node.ID, uint64, bool) {
 	c.drainSessionMu.Lock()
 	defer c.drainSessionMu.Unlock()
@@ -1138,6 +1163,8 @@ func (c *Controller) getDispatcherDrainTarget() (node.ID, uint64, bool) {
 	return c.drainSession.target, c.drainSession.epoch, true
 }
 
+// clearDispatcherDrainTarget closes the matching active drain session and
+// broadcasts an empty target at the same epoch to clear stale local targets.
 func (c *Controller) clearDispatcherDrainTarget(target node.ID, epoch uint64) {
 	c.drainSessionMu.Lock()
 	if c.drainSession == nil || c.drainSession.target != target || c.drainSession.epoch != epoch {
@@ -1153,6 +1180,8 @@ func (c *Controller) clearDispatcherDrainTarget(target node.ID, epoch uint64) {
 	c.broadcastDispatcherDrainTarget("", epoch)
 }
 
+// maybeBroadcastDispatcherDrainTarget sends the active drain target when forced,
+// dirty, or periodic resend is due.
 func (c *Controller) maybeBroadcastDispatcherDrainTarget(force bool) {
 	c.drainSessionMu.Lock()
 	if c.drainSession == nil {
@@ -1180,6 +1209,8 @@ func (c *Controller) maybeBroadcastDispatcherDrainTarget(force bool) {
 	c.drainSessionMu.Unlock()
 }
 
+// broadcastDispatcherDrainTarget sends SetDispatcherDrainTargetRequest to all
+// currently alive nodes as a best-effort broadcast.
 func (c *Controller) broadcastDispatcherDrainTarget(target node.ID, epoch uint64) {
 	if epoch == 0 || c.messageCenter == nil || c.nodeManager == nil {
 		return
@@ -1201,6 +1232,8 @@ func (c *Controller) broadcastDispatcherDrainTarget(target node.ID, epoch uint64
 	}
 }
 
+// aggregateDrainTargetDispatcherCount sums per-changefeed dispatcher counts
+// reported for the given drain target epoch.
 func (c *Controller) aggregateDrainTargetDispatcherCount(target node.ID, epoch uint64) int {
 	if target.IsEmpty() || epoch == 0 {
 		return 0
@@ -1217,10 +1250,11 @@ func (c *Controller) aggregateDrainTargetDispatcherCount(target node.ID, epoch u
 		if status == nil {
 			continue
 		}
-		if status.DrainTargetNodeId != targetID || status.DrainTargetEpoch != epoch {
+		progress := status.GetDrainProgress()
+		if progress == nil || progress.GetTargetNodeId() != targetID || progress.GetTargetEpoch() != epoch {
 			continue
 		}
-		dispatcherCount += int(status.DrainTargetDispatcherCount)
+		dispatcherCount += int(progress.GetTargetDispatcherCount())
 	}
 	return dispatcherCount
 }

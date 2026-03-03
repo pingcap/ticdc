@@ -217,11 +217,9 @@ func addRunningChangefeed(c *Controller, name string, nodeID node.ID, checkpoint
 func setChangefeedCheckpointTs(cf *changefeed.Changefeed, checkpointTs uint64) {
 	status := cf.GetStatus()
 	_, _, _ = cf.ForceUpdateStatus(&heartbeatpb.MaintainerStatus{
-		ChangefeedID:               cf.ID.ToPB(),
-		CheckpointTs:               checkpointTs,
-		DrainTargetNodeId:          status.DrainTargetNodeId,
-		DrainTargetEpoch:           status.DrainTargetEpoch,
-		DrainTargetDispatcherCount: status.DrainTargetDispatcherCount,
+		ChangefeedID:  cf.ID.ToPB(),
+		CheckpointTs:  checkpointTs,
+		DrainProgress: status.GetDrainProgress(),
 	})
 }
 
@@ -233,10 +231,12 @@ func setChangefeedDrainStatus(
 ) {
 	status := cf.GetStatus()
 	_, _, _ = cf.ForceUpdateStatus(&heartbeatpb.MaintainerStatus{
-		ChangefeedID:               cf.ID.ToPB(),
-		CheckpointTs:               status.CheckpointTs,
-		DrainTargetNodeId:          target.String(),
-		DrainTargetEpoch:           epoch,
-		DrainTargetDispatcherCount: dispatcherCount,
+		ChangefeedID: cf.ID.ToPB(),
+		CheckpointTs: status.CheckpointTs,
+		DrainProgress: &heartbeatpb.DrainProgress{
+			TargetNodeId:          target.String(),
+			TargetEpoch:           epoch,
+			TargetDispatcherCount: dispatcherCount,
+		},
 	})
 }
