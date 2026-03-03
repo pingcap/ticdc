@@ -272,7 +272,7 @@ func TestRemoveLastDispatcher(t *testing.T) {
 	require.True(t, ok, "changefeedStat for cfID2 should not be affected")
 }
 
-func TestEventCollectorBatchingByCount(t *testing.T) {
+func TestEventCollectorBatchByCount(t *testing.T) {
 	ctx := context.Background()
 	nodeInfo := node.NewInfo("127.0.0.1:18300", "")
 	mc := messaging.NewMessageCenter(ctx, nodeInfo.ID, config.NewDefaultMessageCenterConfig(nodeInfo.AdvertiseAddr), nil)
@@ -373,7 +373,7 @@ func TestEventCollectorBatchingByCount(t *testing.T) {
 	require.Equal(t, totalDML, sumDML)
 }
 
-func TestEventCollectorBatchingByBytes(t *testing.T) {
+func TestEventCollectorBatchByBytes(t *testing.T) {
 	ctx := context.Background()
 	nodeInfo := node.NewInfo("127.0.0.1:18300", "")
 	mc := messaging.NewMessageCenter(ctx, nodeInfo.ID, config.NewDefaultMessageCenterConfig(nodeInfo.AdvertiseAddr), nil)

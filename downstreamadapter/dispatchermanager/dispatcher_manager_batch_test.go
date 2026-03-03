@@ -52,75 +52,55 @@ func (s *mockBatchConfigSink) BatchBytes() int {
 	return s.batchBytes
 }
 
-func TestDispatcherManager_GetEventCollectorBatchCountAndBytes(t *testing.T) {
+func TestDispatcherManagerBatchConfig(t *testing.T) {
 	cases := []struct {
 		name           string
-		sinkType       common.SinkType
 		sinkBatchCount int
+		sinkBatchBytes int
 		cfg            *config.ChangefeedConfig
 		wantCount      int
 		wantBytes      int
 	}{
 		{
-			name:      "defaults-for-kafka",
-			sinkType:  common.KafkaSinkType,
-			cfg:       &config.ChangefeedConfig{},
-			wantCount: defaultEventCollectorBatchCount,
-			wantBytes: 0,
+			name:           "uses sink defaults",
+			sinkBatchCount: 0,
+			sinkBatchBytes: 0,
+			cfg:            &config.ChangefeedConfig{},
+			wantCount:      4096,
+			wantBytes:      0,
 		},
 		{
-			name:           "default-count-from-sink",
-			sinkType:       common.MysqlSinkType,
+			name:           "uses sink provided values",
 			sinkBatchCount: 2048,
-			cfg: &config.ChangefeedConfig{
-				SinkConfig: &config.SinkConfig{},
-			},
-			wantCount: 2048,
-			wantBytes: 0,
+			sinkBatchBytes: 8192,
+			cfg:            &config.ChangefeedConfig{},
+			wantCount:      2048,
+			wantBytes:      8192,
 		},
 		{
-			name:     "defaults-for-mysql-delegated-to-sink",
-			sinkType: common.MysqlSinkType,
-			cfg: &config.ChangefeedConfig{
-				SinkConfig: &config.SinkConfig{},
-			},
-			wantCount: defaultEventCollectorBatchCount,
-			wantBytes: 0,
-		},
-		{
-			name:     "defaults-for-cloud-storage-delegated-to-sink",
-			sinkType: common.CloudStorageSinkType,
-			cfg: &config.ChangefeedConfig{
-				SinkConfig: &config.SinkConfig{
-					CloudStorageConfig: &config.CloudStorageConfig{},
-				},
-			},
-			wantCount: defaultEventCollectorBatchCount,
-			wantBytes: 0,
-		},
-		{
-			name:     "override-count-only",
-			sinkType: common.KafkaSinkType,
+			name:           "overrides count only",
+			sinkBatchCount: 2048,
+			sinkBatchBytes: 8192,
 			cfg: &config.ChangefeedConfig{
 				EventCollectorBatchCount: 123,
-				SinkConfig:               &config.SinkConfig{},
 			},
 			wantCount: 123,
-			wantBytes: 0,
+			wantBytes: 8192,
 		},
 		{
-			name:     "override-bytes-only",
-			sinkType: common.MysqlSinkType,
+			name:           "overrides bytes only",
+			sinkBatchCount: 2048,
+			sinkBatchBytes: 8192,
 			cfg: &config.ChangefeedConfig{
 				EventCollectorBatchBytes: 456,
-				SinkConfig:               &config.SinkConfig{},
 			},
-			wantCount: defaultEventCollectorBatchCount,
+			wantCount: 2048,
 			wantBytes: 456,
 		},
 		{
-			name:     "override-both",
-			sinkType: common.CloudStorageSinkType,
+			name:           "overrides both",
+			sinkBatchCount: 2048,
+			sinkBatchBytes: 8192,
 			cfg: &config.ChangefeedConfig{
 				EventCollectorBatchCount: 123,
 				EventCollectorBatchBytes: 456,
@@ -134,8 +114,9 @@ func TestDispatcherManager_GetEventCollectorBatchCountAndBytes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			m := &DispatcherManager{
 				sink: &mockBatchConfigSink{
-					sinkType:   tc.sinkType,
+					sinkType:   common.MysqlSinkType,
 					batchCount: tc.sinkBatchCount,
+					batchBytes: tc.sinkBatchBytes,
 				},
 				config: tc.cfg,
 			}
@@ -145,7 +126,8 @@ func TestDispatcherManager_GetEventCollectorBatchCountAndBytes(t *testing.T) {
 		})
 	}
 }
-func TestDispatcherManager_BatchBytesFallbackThroughDispatcher(t *testing.T) {
+
+func TestDispatcherManagerBatchConfigPassThroughDispatcher(t *testing.T) {
 	sink := &mockBatchConfigSink{
 		sinkType:   common.MysqlSinkType,
 		batchCount: 2048,
@@ -158,7 +140,7 @@ func TestDispatcherManager_BatchBytesFallbackThroughDispatcher(t *testing.T) {
 
 	batchCount, batchBytes := manager.getEventCollectorBatchCountAndBytes()
 	require.Equal(t, 2048, batchCount)
-	require.Equal(t, 0, batchBytes)
+	require.Equal(t, 8192, batchBytes)
 
 	sharedInfo := dispatcher.NewSharedInfo(
 		common.NewChangefeedID(common.DefaultKeyspaceName),

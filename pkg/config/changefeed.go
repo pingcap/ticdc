@@ -192,7 +192,7 @@ type ChangefeedConfig struct {
 	Filter         *FilterConfig `toml:"filter" json:"filter"`
 	MemoryQuota    uint64        `toml:"memory-quota" json:"memory-quota"`
 	// EventCollectorBatchCount/Bytes are used by the event collector dynamic stream to achieve better batch performance.
-	// 0 means not set. BatchCount defaults to 4096 and BatchBytes defaults to sink-specific values.
+	// 0 means not set.
 	EventCollectorBatchCount int `json:"event_collector_batch_count"`
 	EventCollectorBatchBytes int `json:"event_collector_batch_bytes"`
 	// sync point related

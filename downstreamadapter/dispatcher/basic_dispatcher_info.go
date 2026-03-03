@@ -52,9 +52,7 @@ type SharedInfo struct {
 	// will break the splittability of this table.
 	enableSplittableCheck bool
 
-	// 0 means not set and DispatcherManager default capacity will be used.
 	eventCollectorBatchCount int
-	// 0 means not set and the default sink-specific capacity will be used.
 	eventCollectorBatchBytes int
 
 	// Shared resources
@@ -135,15 +133,7 @@ func (d *BasicDispatcher) GetChangefeedID() common.ChangeFeedID {
 }
 
 func (d *BasicDispatcher) GetEventCollectorBatchConfig() (batchCount int, batchBytes int) {
-	batchCount = d.sharedInfo.eventCollectorBatchCount
-	if batchCount == 0 && d.sink != nil {
-		batchCount = d.sink.BatchCount()
-	}
-	batchBytes = d.sharedInfo.eventCollectorBatchBytes
-	if batchBytes != 0 || d.sink == nil {
-		return batchCount, batchBytes
-	}
-	return batchCount, d.sink.BatchBytes()
+	return d.sharedInfo.eventCollectorBatchCount, d.sharedInfo.eventCollectorBatchBytes
 }
 
 func (d *BasicDispatcher) GetComponentStatus() heartbeatpb.ComponentState {

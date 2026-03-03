@@ -25,8 +25,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const testDefaultEventCollectorBatchCount = 4096
-
 type testBatchSink struct {
 	sinkType   common.SinkType
 	isNormal   bool
@@ -54,7 +52,7 @@ func (s *testBatchSink) BatchCount() int {
 	if s.batchCount > 0 {
 		return s.batchCount
 	}
-	return testDefaultEventCollectorBatchCount
+	return 4096
 }
 
 func (s *testBatchSink) BatchBytes() int { return s.batchBytes }
@@ -96,43 +94,13 @@ func newTestBasicDispatcherForBatchConfig(
 	)
 }
 
-func TestBasicDispatcherGetEventCollectorBatchConfig(t *testing.T) {
-	t.Run("sink provides count when config count is zero", func(t *testing.T) {
-		d := newTestBasicDispatcherForBatchConfig(
-			&testBatchSink{
-				sinkType:   common.MysqlSinkType,
-				isNormal:   true,
-				batchCount: 2048,
-				batchBytes: 1024,
-			},
-			0,
-			0,
-		)
-		gotCount, gotBytes := d.GetEventCollectorBatchConfig()
-		require.Equal(t, 2048, gotCount)
-		require.Equal(t, 1024, gotBytes)
-	})
-
-	t.Run("sink provides bytes when config bytes is zero", func(t *testing.T) {
-		d := newTestBasicDispatcherForBatchConfig(
-			&testBatchSink{
-				sinkType:   common.MysqlSinkType,
-				isNormal:   true,
-				batchBytes: 2048,
-			},
-			testDefaultEventCollectorBatchCount,
-			0,
-		)
-		gotCount, gotBytes := d.GetEventCollectorBatchConfig()
-		require.Equal(t, testDefaultEventCollectorBatchCount, gotCount)
-		require.Equal(t, 2048, gotBytes)
-	})
-
-	t.Run("config bytes override sink default bytes", func(t *testing.T) {
+func TestBasicDispatcherBatchConfig(t *testing.T) {
+	t.Run("returns values from shared info", func(t *testing.T) {
 		d := newTestBasicDispatcherForBatchConfig(
 			&testBatchSink{
 				sinkType:   common.CloudStorageSinkType,
 				isNormal:   true,
+				batchCount: 2048,
 				batchBytes: 4096,
 			},
 			123,
@@ -143,19 +111,35 @@ func TestBasicDispatcherGetEventCollectorBatchConfig(t *testing.T) {
 		require.Equal(t, 777, gotBytes)
 	})
 
-	t.Run("redo mode also uses sink provided bytes", func(t *testing.T) {
+	t.Run("zero values stay zero without sink fallback", func(t *testing.T) {
+		d := newTestBasicDispatcherForBatchConfig(
+			&testBatchSink{
+				sinkType:   common.MysqlSinkType,
+				isNormal:   true,
+				batchCount: 2048,
+				batchBytes: 2048,
+			},
+			0,
+			0,
+		)
+		gotCount, gotBytes := d.GetEventCollectorBatchConfig()
+		require.Equal(t, 0, gotCount)
+		require.Equal(t, 0, gotBytes)
+	})
+
+	t.Run("redo mode uses the same shared config", func(t *testing.T) {
 		d := newTestBasicDispatcherForBatchConfig(
 			&testBatchSink{
 				sinkType:   common.RedoSinkType,
 				isNormal:   true,
 				batchBytes: 8192,
 			},
-			testDefaultEventCollectorBatchCount,
-			0,
+			4096,
+			8192,
 		)
 		d.mode = common.RedoMode
 		gotCount, gotBytes := d.GetEventCollectorBatchConfig()
-		require.Equal(t, testDefaultEventCollectorBatchCount, gotCount)
+		require.Equal(t, 4096, gotCount)
 		require.Equal(t, 8192, gotBytes)
 	})
 }
