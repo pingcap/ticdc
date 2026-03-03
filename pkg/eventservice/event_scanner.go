@@ -190,7 +190,7 @@ func (s *eventScanner) scanAndMergeEvents(
 ) (bool, error) {
 	tableID := session.dataRange.Span.TableID
 	dispatcher := session.dispatcherStat
-	processor := newDMLProcessor(s.mounter, s.schemaGetter, dispatcher.filter, dispatcher.info.IsOutputRawChangeEvent())
+	processor := newDMLProcessor(s.mounter, s.schemaGetter, dispatcher.filter, dispatcher.info.IsOutputRawChangeEvent(), s.mode)
 
 	for {
 		shouldStop, err := s.checkScanConditions(session)
@@ -675,12 +675,13 @@ type dmlProcessor struct {
 
 	batchDML             *event.BatchDMLEvent
 	outputRawChangeEvent bool
+	mode                 int64
 }
 
 // newDMLProcessor creates a new DML processor
 func newDMLProcessor(
 	mounter event.Mounter, schemaGetter schemaGetter,
-	filter filter.Filter, outputRawChangeEvent bool,
+	filter filter.Filter, outputRawChangeEvent bool, mode int64,
 ) *dmlProcessor {
 	return &dmlProcessor{
 		mounter:              mounter,
@@ -689,6 +690,7 @@ func newDMLProcessor(
 		batchDML:             event.NewBatchDMLEvent(),
 		insertRowCache:       make([]*common.RawKVEntry, 0),
 		outputRawChangeEvent: outputRawChangeEvent,
+		mode:                 mode,
 	}
 }
 
@@ -754,7 +756,9 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 
 	rawEvent.Key = event.RemoveKeyspacePrefix(rawEvent.Key)
 
+	rawType := rawEvent.GetType()
 	if !rawEvent.IsUpdate() {
+		updateMetricEventServiceSendDMLTypeCount(p.mode, rawType, false)
 		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)
 	}
 
@@ -768,6 +772,8 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 			return err
 		}
 	}
+
+	updateMetricEventServiceSendDMLTypeCount(p.mode, rawType, shouldSplit)
 
 	if !shouldSplit {
 		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)

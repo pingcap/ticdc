@@ -189,9 +189,9 @@ func fromCsvValToColValue(csvConfig *common.Config, csvVal any, ft types.FieldTy
 	case mysql.TypeYear:
 		val, err = strconv.ParseInt(str, 10, 64)
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeTimestamp:
-		val, err = types.ParseTime(types.DefaultStmtNoWarningContext, str, ft.GetType(), ft.GetDecimal())
+		val, err = types.ParseTime(types.DefaultStmtNoWarningContext, str, ft.GetType(), types.MaxFsp)
 	case mysql.TypeDuration:
-		val, _, err = types.ParseDuration(types.DefaultStmtNoWarningContext, str, ft.GetDecimal())
+		val, _, err = types.ParseDuration(types.DefaultStmtNoWarningContext, str, types.MaxFsp)
 	case mysql.TypeBit:
 		var v uint64
 		v, err = strconv.ParseUint(str, 10, 64)
