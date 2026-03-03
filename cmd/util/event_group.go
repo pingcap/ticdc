@@ -89,7 +89,22 @@ func (g *EventsGroup) Append(row *commonEvent.DMLEvent, force bool) {
 			return g.events[i].CommitTs > row.CommitTs
 		})
 		if i > 0 && g.events[i-1].CommitTs == row.CommitTs {
-			mergeDMLEvent(g.events[i-1], row)
+			previous := g.events[i-1]
+			// If the table info version is different,
+			// it means the table schema has been updated between the two events.
+			// In this case we cannot merge them because the merged event may have an incompatible schema.
+			// We skip the replayed event and wait for it to be replayed again after the table info is updated.
+			// It should be occourred when the DML event is replayed after the table schema is updated,
+			// and the replayed event has an older table info version than the previous one in the group.
+			if compareTableInfoVersion(previous, row) {
+				log.Warn("skip replayed DML event due to incompatible table info version, the event may be replayed again after the table info is updated",
+					zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
+					zap.Uint64("commitTs", row.CommitTs),
+					zap.Any("previous", previous),
+					zap.Any("now", row))
+				return
+			}
+			mergeDMLEvent(previous, row)
 			return
 		}
 		g.events = slices.Insert(g.events, i, row)
@@ -98,6 +113,20 @@ func (g *EventsGroup) Append(row *commonEvent.DMLEvent, force bool) {
 	log.Panic("append event with smaller commit ts",
 		zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
 		zap.Uint64("lastCommitTs", lastDMLEvent.GetCommitTs()), zap.Uint64("commitTs", row.GetCommitTs()))
+}
+
+func compareTableInfoVersion(previous, now *commonEvent.DMLEvent) bool {
+	if previous.TableInfo == nil || now.TableInfo == nil {
+		return previous.TableInfo == nil && now.TableInfo == nil
+	}
+	previousTs := previous.TableInfo.GetUpdateTS()
+	nowTs := now.TableInfo.GetUpdateTS()
+	if previousTs > nowTs {
+		log.Panic("previous dml event has bigger table info version",
+			zap.Any("previous", previous),
+			zap.Any("now", now))
+	}
+	return previousTs == nowTs
 }
 
 // ResolveInto appends all events with CommitTs <= resolve into dst and removes them from the group.
