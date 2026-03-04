@@ -255,10 +255,10 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 					continue
 				}
 
-				var (
-					topic        string
-					partitionNum int32
-				)
+					var (
+						topic        string
+						partitionNum int32
+					)
 				if isStaticTopic {
 					if !staticPartitionReady {
 						var err error

@@ -178,6 +178,20 @@ func (s *EventRouter) GetTopicDispatchColumns(schema, table string) []string {
 	return s.matchTopicGenerator(schema, table).ReferencedColumns()
 }
 
+// GetTopicForTable returns the resolved topic name for the given schema and
+// table when the matched dispatch rule does not depend on row column values.
+// isStatic is true and topicName is the resolved topic when the rule is
+// table-static (no column placeholders). When isStatic is false the topic
+// cannot be determined without row data; callers must use GetTopicForRowChange
+// for each row instead.
+func (s *EventRouter) GetTopicForTable(schema, table string) (topicName string, isStatic bool) {
+	tg := s.matchTopicGenerator(schema, table)
+	if tg.UsesColumnPlaceholders() {
+		return "", false
+	}
+	return tg.Substitute(schema, table), true
+}
+
 func (s *EventRouter) matchTopicGenerator(schema, table string) topic.Generator {
 	for _, rule := range s.rules {
 		if rule.MatchTable(schema, table) {

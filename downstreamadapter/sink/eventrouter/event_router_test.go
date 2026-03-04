@@ -443,6 +443,41 @@ func TestGetTopicForDDLWithColumnPlaceholderFallback(t *testing.T) {
 	require.Equal(t, "default_topic", d.GetTopicForDDL(ddl))
 }
 
+func TestGetTopicForTable(t *testing.T) {
+	t.Parallel()
+
+	sinkConfig := newSinkConfig4Test()
+	d, err := NewEventRouter(sinkConfig, "test", false, false)
+	require.NoError(t, err)
+
+	// StaticTopicGenerator: rule with no topic expression uses the default topic.
+	topicName, isStatic := d.GetTopicForTable("test_default1", "table")
+	require.True(t, isStatic)
+	require.Equal(t, "test", topicName)
+
+	// DynamicTopicGenerator without column placeholders: {schema} and {table}
+	// tokens are table-static so the topic can be resolved without row data.
+	topicName, isStatic = d.GetTopicForTable("sbs", "table2")
+	require.True(t, isStatic)
+	require.Equal(t, "sbs_table2", topicName)
+
+	// DynamicTopicGenerator with column placeholder: topic cannot be resolved
+	// without row data.
+	colPlaceholderConfig := &config.SinkConfig{
+		DispatchRules: []*config.DispatchRule{
+			{
+				Matcher:   []string{"row_topic.*"},
+				TopicRule: "prefix_{column:topic_col}",
+			},
+		},
+	}
+	d2, err := NewEventRouter(colPlaceholderConfig, "default", false, false)
+	require.NoError(t, err)
+	topicName, isStatic = d2.GetTopicForTable("row_topic", "t")
+	require.False(t, isStatic)
+	require.Empty(t, topicName)
+}
+
 func TestGetActiveTopicsSkipsRowDependentTopics(t *testing.T) {
 	t.Parallel()
 
