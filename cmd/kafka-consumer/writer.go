@@ -213,14 +213,11 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 			log.Info("flush DML events before DDL done", zap.Uint64("DDLCommitTs", commitTs),
 				zap.Int("total", total), zap.Duration("duration", time.Since(start)),
 				zap.Any("tables", tableIDs))
-<<<<<<< HEAD
 			for _, item := range resolvedGroups {
 				if item.maxCommitTs > item.group.AppliedWatermark {
 					item.group.AppliedWatermark = item.maxCommitTs
 				}
 			}
-=======
->>>>>>> 3305fed7d (consumer: fix a panic when flushing a large number of dml events (#3312))
 			return w.mysqlSink.WriteBlockEvent(ddl)
 		case <-ticker.C:
 			log.Warn("DML events cannot be flushed in time",
@@ -348,14 +345,11 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 		case <-done:
 			log.Info("flush DML events done", zap.Uint64("watermark", watermark),
 				zap.Int("total", total), zap.Duration("duration", time.Since(start)))
-<<<<<<< HEAD
 			for _, item := range resolvedGroups {
 				if item.maxCommitTs > item.group.AppliedWatermark {
 					item.group.AppliedWatermark = item.maxCommitTs
 				}
 			}
-=======
->>>>>>> 3305fed7d (consumer: fix a panic when flushing a large number of dml events (#3312))
 			return nil
 		case <-ticker.C:
 			log.Warn("DML events cannot be flushed in time", zap.Uint64("watermark", watermark),
