@@ -95,6 +95,36 @@ func TestParallelDynamicStreamMetrics(t *testing.T) {
 	require.Equal(t, 1, metrics.RemovePath)
 }
 
+func TestAddPathKeepsDefaultBatchConfig(t *testing.T) {
+	handler := &mockHandler{}
+	stream := newParallelDynamicStream("test", handler, Option{
+		StreamCount: 1,
+		BatchCount:  4,
+	})
+	defer stream.Close()
+
+	require.NoError(t, stream.AddPath("path1", "dest1"))
+	require.Equal(t, NewBatchConfig(4, 0), stream.batchConfigRegistry.getBatchConfig(0))
+
+	// first-add wins: later explicit area batch config should not override an existing area
+	settings := NewAreaSettingsWithMaxPendingSizeAndBatchConfig(64*1024*1024, 0, "test", 1, 0)
+	require.NoError(t, stream.AddPath("path2", "dest2", settings))
+	require.Equal(t, NewBatchConfig(4, 0), stream.batchConfigRegistry.getBatchConfig(0))
+}
+
+func TestAddPathWithAreaSettingsKeepsDefaultBatchConfig(t *testing.T) {
+	handler := &mockHandler{}
+	stream := newParallelDynamicStream("test", handler, Option{
+		StreamCount: 1,
+		BatchCount:  4,
+	})
+	defer stream.Close()
+
+	settings := NewAreaSettingsWithMaxPendingSize(64*1024*1024, 0, "test")
+	require.NoError(t, stream.AddPath("path1", "dest1", settings))
+	require.Equal(t, NewBatchConfig(4, 0), stream.batchConfigRegistry.getBatchConfig(0))
+}
+
 func TestParallelDynamicStreamMemoryControl(t *testing.T) {
 	handler := &mockHandler{}
 	option := Option{

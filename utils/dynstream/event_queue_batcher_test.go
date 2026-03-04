@@ -34,10 +34,12 @@ func TestBatcherSetLimit(t *testing.T) {
 
 func TestBatchByBytes(t *testing.T) {
 	handler := mockHandler{}
-	eq := newEventQueue(&handler, newTestBatchConfigRegistry())
+	registry := newAreaBatchConfigRegistry[int](newDefaultBatchConfig())
+	registry.onAddPath(0, batchConfig{count: 10, bytes: 12})
+	eq := newEventQueue(&handler, registry)
 	b := newDefaultBatcher[*mockEvent]()
 
-	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, NewBatchConfig(10, 12))
+	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil)
 	eq.initPath(path)
 
 	for i := 1; i <= 4; i++ {
@@ -64,8 +66,10 @@ func TestBatchByBytes(t *testing.T) {
 	require.Equal(t, 4, events[0].value)
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
 
-	eq = newEventQueue(&handler, newTestBatchConfigRegistry())
-	path = newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, NewBatchConfig(10, 12))
+	registry = newAreaBatchConfigRegistry[int](newDefaultBatchConfig())
+	registry.onAddPath(0, batchConfig{count: 10, bytes: 12})
+	eq = newEventQueue(&handler, registry)
+	path = newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil)
 	eq.initPath(path)
 	for i := 1; i <= 4; i++ {
 		eq.appendEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{
@@ -89,10 +93,12 @@ func TestBatchByBytes(t *testing.T) {
 
 func TestBatchByHardCount(t *testing.T) {
 	handler := mockHandler{}
-	eq := newEventQueue(&handler, newTestBatchConfigRegistry())
+	registry := newAreaBatchConfigRegistry[int](newDefaultBatchConfig())
+	registry.onAddPath(0, batchConfig{count: 3, bytes: 100})
+	eq := newEventQueue(&handler, registry)
 	b := newDefaultBatcher[*mockEvent]()
 
-	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, NewBatchConfig(3, 100))
+	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil)
 	eq.initPath(path)
 
 	for i := 1; i <= 7; i++ {
@@ -118,10 +124,12 @@ func TestBatchByHardCount(t *testing.T) {
 
 func TestBatchByBytesLargeFirstEvent(t *testing.T) {
 	handler := mockHandler{}
-	eq := newEventQueue(&handler, newTestBatchConfigRegistry())
+	registry := newAreaBatchConfigRegistry[int](newDefaultBatchConfig())
+	registry.onAddPath(0, batchConfig{count: 10, bytes: 50})
+	eq := newEventQueue(&handler, registry)
 	b := newDefaultBatcher[*mockEvent]()
 
-	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, NewBatchConfig(10, 50))
+	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil)
 	eq.initPath(path)
 
 	eq.appendEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{

@@ -338,22 +338,19 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	// Fields used by the memory control.
 	areaMemStat *areaMemStat[A, P, T, D, H]
 
-	batchConfig batchConfig
-
 	pendingSize atomic.Int64 // The total size(bytes) of pending events in the pendingQueue of the path.
 
 	lastHandleEventTs atomic.Uint64
 }
 
 func newPathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
-	area A, metricLabel string, path P, dest D, batchConfig batchConfig,
+	area A, metricLabel string, path P, dest D,
 ) *pathInfo[A, P, T, D, H] {
 	pi := &pathInfo[A, P, T, D, H]{
 		area:         area,
 		metricLabel:  metricLabel,
 		path:         path,
 		dest:         dest,
-		batchConfig:  batchConfig,
 		pendingQueue: deque.NewDeque[eventWrap[A, P, T, D, H]](BlockLenInPendingQueue),
 	}
 	return pi

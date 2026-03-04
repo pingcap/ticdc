@@ -206,21 +206,17 @@ func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...Are
 
 	area := s.handler.GetArea(path, dest)
 	metricLabel := s.handler.GetMetricLabel(dest)
-	pathBatchConfig := newDefaultBatchConfig()
 	areaBatchConfig := batchConfig{}
 	if len(as) > 0 {
 		areaBatchConfig = as[0].batchConfig
-		if areaBatchConfig.count > 0 || areaBatchConfig.bytes > 0 {
-			pathBatchConfig = NewBatchConfig(areaBatchConfig.count, areaBatchConfig.bytes)
-		}
 	}
-	pi := newPathInfo[A, P, T, D, H](area, metricLabel, path, dest, pathBatchConfig)
+	s.batchConfigRegistry.onAddPath(area, areaBatchConfig)
+	pi := newPathInfo[A, P, T, D, H](area, metricLabel, path, dest)
 
 	streamID := s._statAddPathCount.Load() % int64(len(s.streams))
 	pi.setStream(s.streams[streamID])
 
 	s.pathMap.m[path] = pi
-	s.batchConfigRegistry.onAddPath(area, areaBatchConfig)
 	s._statAddPathCount.Add(1)
 	s.pathMap.Unlock()
 

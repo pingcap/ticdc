@@ -21,8 +21,9 @@ import (
 type areaBatchConfigRegistry[A Area] struct {
 	defaultConfig batchConfig
 
-	// The configs are stored as an immutable map in atomic.Value, so reads in the hot path
-	// don't need locks. Updates are copy-on-write and guarded by mu.
+	// The configs are stored as an immutable map in atomic.Value
+	// getBatchConfig can stay lock-free on the hot path (popEvents).
+	// The tradeoff is copy-on-write on updates.
 	configs atomic.Value // map[A]batchConfig
 
 	mu           sync.Mutex
@@ -63,12 +64,11 @@ func (s *areaBatchConfigRegistry[A]) onAddPath(area A, cfg batchConfig) {
 		return
 	}
 
-	newConfig := NewBatchConfig(cfg.count, cfg.bytes)
-	if newConfig == s.defaultConfig {
+	if cfg == s.defaultConfig {
 		return
 	}
 
-	s.setOverrideLocked(area, newConfig)
+	s.setOverrideLocked(area, cfg)
 }
 
 func (s *areaBatchConfigRegistry[A]) onRemovePath(area A) {
@@ -85,6 +85,10 @@ func (s *areaBatchConfigRegistry[A]) onRemovePath(area A) {
 }
 
 func (s *areaBatchConfigRegistry[A]) setOverrideLocked(area A, config batchConfig) {
+	// Copy-on-write update:
+	// - Read path is lock-free and wait-free (single atomic load + map lookup).
+	// - Write path is O(n) in override-count, but writes are expected to be infrequent
+	//   compared to reads, and n is usually small because only overridden areas are stored.
 	oldConfigs := s.configs.Load().(map[A]batchConfig)
 	newConfigs := make(map[A]batchConfig, len(oldConfigs)+1)
 	for k, v := range oldConfigs {
@@ -95,6 +99,7 @@ func (s *areaBatchConfigRegistry[A]) setOverrideLocked(area A, config batchConfi
 }
 
 func (s *areaBatchConfigRegistry[A]) removeOverrideLocked(area A) {
+	// Same copy-on-write rationale as setOverrideLocked.
 	oldConfigs := s.configs.Load().(map[A]batchConfig)
 	if _, ok := oldConfigs[area]; !ok {
 		return

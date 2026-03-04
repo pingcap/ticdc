@@ -290,10 +290,7 @@ func NewAreaSettingsWithMaxPendingSizeAndBatchConfig(
 	quota uint64, algorithm int, component string, batchCount int, batchBytes int,
 ) AreaSettings {
 	s := NewAreaSettingsWithMaxPendingSize(quota, algorithm, component)
-	s.batchConfig = batchConfig{
-		count: batchCount,
-		bytes: batchBytes,
-	}
+	s.batchConfig = NewBatchConfig(batchCount, batchBytes)
 	return s
 }
 

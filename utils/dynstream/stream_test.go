@@ -128,7 +128,7 @@ func TestStreamBasic(t *testing.T) {
 
 	stream.start()
 	defer stream.close()
-	pi := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test", "test/path", nil, newDefaultBatchConfig())
+	pi := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test", "test/path", nil)
 	stream.addPath(pi)
 	// Test basic event handling
 	inc := &atomic.Int64{}
@@ -175,7 +175,7 @@ func TestStreamBasicWithBuffer(t *testing.T) {
 
 	stream.start()
 	defer stream.close()
-	pi := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test", "test/path", nil, newDefaultBatchConfig())
+	pi := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test", "test/path", nil)
 	stream.addPath(pi)
 	// Test basic event handling
 	inc := &atomic.Int64{}
@@ -209,7 +209,7 @@ func TestStreamBasicWithBuffer(t *testing.T) {
 
 func TestPathInfo(t *testing.T) {
 	// case 1: new path info
-	pi := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test", "test/path", nil, newDefaultBatchConfig())
+	pi := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test", "test/path", nil)
 	require.Equal(t, 1, pi.area)
 	require.Equal(t, "test/path", pi.path)
 	require.Equal(t, int64(0), pi.pendingSize.Load())

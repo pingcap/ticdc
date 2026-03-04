@@ -137,9 +137,6 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(b *batcher[T]) ([]T, *pathInfo[A, 
 		firstProperty := firstEvent.eventType.Property
 
 		batchConfig := q.batchConfigRegistry.getBatchConfig(path.area)
-		if batchConfig == q.batchConfigRegistry.defaultConfig && (path.batchConfig.count > 0 || path.batchConfig.bytes > 0) {
-			batchConfig = path.batchConfig
-		}
 		b.setLimit(batchConfig)
 
 		var count int
