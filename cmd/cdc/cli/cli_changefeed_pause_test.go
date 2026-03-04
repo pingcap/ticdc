@@ -38,5 +38,5 @@ func TestChangefeedPauseCli(t *testing.T) {
 	o.changefeedID = "abc"
 	o.keyspace = "test"
 	require.Nil(t, o.complete(f))
-	require.NotNil(t, o.run())
+	require.NotNil(t, o.run(cmd))
 }

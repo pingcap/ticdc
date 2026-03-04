@@ -14,8 +14,6 @@
 package redo
 
 import (
-	"context"
-
 	"github.com/pingcap/ticdc/pkg/applier"
 	"github.com/spf13/cobra"
 )
@@ -32,7 +30,7 @@ func newMetaOptions() *metaOptions {
 
 // run runs the `redo meta` command.
 func (o *metaOptions) run(cmd *cobra.Command) error {
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	cfg := &applier.RedoApplierConfig{
 		Storage: o.storage,

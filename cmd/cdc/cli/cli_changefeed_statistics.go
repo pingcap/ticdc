@@ -95,7 +95,7 @@ func (o *statisticsChangefeedOptions) runCliWithAPIClient(ctx context.Context, c
 
 // run the `cli changefeed statistics` command.
 func (o *statisticsChangefeedOptions) run(cmd *cobra.Command) error {
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	tick := time.NewTicker(time.Duration(o.interval) * time.Second)
 	var lastTime time.Time
