@@ -26,7 +26,9 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/redo"
+	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
@@ -328,4 +330,63 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 	cancel()
 
 	require.ErrorIs(b, eg.Wait(), context.Canceled)
+}
+
+type mockBatchWriter struct {
+	mu        sync.Mutex
+	batchLens []int
+}
+
+func (m *mockBatchWriter) WriteEvents(_ context.Context, events ...writer.RedoEvent) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.batchLens = append(m.batchLens, len(events))
+	for _, event := range events {
+		event.PostFlush()
+	}
+	return nil
+}
+
+func (m *mockBatchWriter) Run(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (m *mockBatchWriter) Close() error {
+	return nil
+}
+
+func (m *mockBatchWriter) SetTableSchemaStore(_ *commonEvent.TableSchemaStore) {}
+
+func TestRedoSinkSendMessagesInBatch(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockWriter := &mockBatchWriter{}
+	s := &Sink{
+		dmlWriter: mockWriter,
+		logBuffer: chann.NewUnlimitedChannelDefault[writer.RedoEvent](),
+	}
+
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- s.sendMessages(ctx)
+	}()
+
+	totalEvents := redo.DefaultFlushBatchSize*2 + 17
+	events := make([]writer.RedoEvent, 0, totalEvents)
+	for i := 0; i < totalEvents; i++ {
+		events = append(events, &commonEvent.RedoRowEvent{})
+	}
+	s.logBuffer.Push(events...)
+	s.logBuffer.Close()
+
+	err := <-doneCh
+	require.NoError(t, err)
+
+	mockWriter.mu.Lock()
+	defer mockWriter.mu.Unlock()
+	require.Equal(t, []int{redo.DefaultFlushBatchSize, redo.DefaultFlushBatchSize, 17}, mockWriter.batchLens)
 }

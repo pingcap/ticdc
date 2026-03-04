@@ -233,6 +233,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 
 			rowsCount := uint64(event.Len())
 			rowCallback := toRowCallback(event.PostTxnFlushed, rowsCount)
+			events := make([]*commonEvent.MQRowEvent, 0, rowsCount)
 
 			for {
 				row, ok := event.GetNextRow()
@@ -246,7 +247,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 					return errors.Trace(err)
 				}
 
-				mqEvent := &commonEvent.MQRowEvent{
+				events = append(events, &commonEvent.MQRowEvent{
 					Key: commonEvent.TopicPartitionKey{
 						Topic:          topic,
 						Partition:      index,
@@ -263,9 +264,9 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 						ColumnSelector:  selector,
 						Checksum:        row.Checksum,
 					},
-				}
-				s.rowChan.Push(mqEvent)
+				})
 			}
+			s.rowChan.Push(events...)
 		}
 	}
 }
@@ -341,6 +342,7 @@ func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent) ([]*
 				zap.String("changefeed", s.changefeedID.Name()))
 			return nil, nil
 		}
+		buffer = buffer[:0]
 		return msgs, nil
 	}
 }

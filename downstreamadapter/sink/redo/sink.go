@@ -139,8 +139,9 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 			}
 		}
 	}
-	rowsCount := uint64(event.Len())
-	rowCallback := toRowCallback(event.PostTxnFlushed, rowsCount)
+	rowsCount := event.Len()
+	rowCallback := toRowCallback(event.PostTxnFlushed, uint64(rowsCount))
+	events := make([]writer.RedoEvent, 0, rowsCount)
 
 	for {
 		row, ok := event.GetNextRow()
@@ -148,7 +149,7 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 			event.Rewind()
 			break
 		}
-		s.logBuffer.Push(&commonEvent.RedoRowEvent{
+		events = append(events, &commonEvent.RedoRowEvent{
 			StartTs:         event.StartTs,
 			CommitTs:        event.CommitTs,
 			Event:           row,
@@ -157,6 +158,7 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 			Callback:        rowCallback,
 		})
 	}
+	s.logBuffer.Push(events...)
 }
 
 func (s *Sink) IsNormal() bool {
@@ -201,20 +203,30 @@ func (s *Sink) Close(_ bool) {
 }
 
 func (s *Sink) sendMessages(ctx context.Context) error {
+	buffer := make([]writer.RedoEvent, 0, redo.DefaultFlushBatchSize)
 	for {
-		e, ok := s.logBuffer.Get()
+		select {
+		case <-ctx.Done():
+			return errors.Trace(ctx.Err())
+		default:
+		}
+		events, ok := s.logBuffer.GetMultipleNoGroup(buffer)
 		if !ok {
 			return nil
 		}
+		if len(events) == 0 {
+			continue
+		}
+		buffer = events[:0]
 
 		start := time.Now()
-		err := s.dmlWriter.WriteEvents(ctx, e)
+		err := s.dmlWriter.WriteEvents(ctx, events...)
 		if err != nil {
 			return err
 		}
 
 		if s.metric != nil {
-			s.metric.observeRowWrite(1, time.Since(start))
+			s.metric.observeRowWrite(len(events), time.Since(start))
 		}
 	}
 }
