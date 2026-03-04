@@ -429,7 +429,7 @@ func (c *eventBroker) tickBootstrapResolvedTs(ctx context.Context) error {
 }
 
 func (c *eventBroker) sendBootstrapResolvedTsIfNeeded(dispatcher *dispatcherStat) {
-	if dispatcher == nil || dispatcher.isRemoved.Load() || dispatcher.epoch == 0 {
+	if dispatcher == nil || dispatcher.isRemoved.Load() || dispatcher.epoch > 0 {
 		return
 	}
 
