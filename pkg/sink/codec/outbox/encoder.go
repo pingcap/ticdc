@@ -68,6 +68,9 @@ func (e *Encoder) AppendRowChangedEvent(
 	// The sink pipeline already filters non-insert rows for outbox-json.
 	// Keep this guard to avoid generating unexpected messages.
 	if !event.IsInsert() {
+		if event.Callback != nil {
+			event.Callback()
+		}
 		return nil
 	}
 
