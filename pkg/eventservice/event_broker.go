@@ -45,6 +45,10 @@ const (
 
 	defaultMaxBatchSize            = 128
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
+	// defaultBootstrapResolvedTsInterval controls the synthetic resolvedTs tick
+	// before upstream resolvedTs catches up.
+	defaultBootstrapResolvedTsInterval = time.Second
+	bootstrapResolvedTsStep            = time.Second
 
 	defaultReportDispatcherStatToStoreInterval = time.Second * 10
 
@@ -171,6 +175,10 @@ func newEventBroker(
 
 	g.Go(func() error {
 		return c.logUninitializedDispatchers(ctx)
+	})
+
+	g.Go(func() error {
+		return c.tickBootstrapResolvedTs(ctx)
 	})
 
 	g.Go(func() error {
@@ -400,6 +408,41 @@ func (c *eventBroker) logUninitializedDispatchers(ctx context.Context) error {
 			})
 		}
 	}
+}
+
+func (c *eventBroker) tickBootstrapResolvedTs(ctx context.Context) error {
+	ticker := time.NewTicker(defaultBootstrapResolvedTsInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-ticker.C:
+			c.dispatchers.Range(func(_, value interface{}) bool {
+				dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
+				c.sendBootstrapResolvedTsIfNeeded(dispatcher)
+				return true
+			})
+		}
+	}
+}
+
+func (c *eventBroker) sendBootstrapResolvedTsIfNeeded(dispatcher *dispatcherStat) {
+	if dispatcher == nil || dispatcher.isRemoved.Load() || dispatcher.epoch == 0 {
+		return
+	}
+
+	sentResolvedTs := dispatcher.sentResolvedTs.Load()
+	receivedResolvedTs := dispatcher.receivedResolvedTs.Load()
+	// Stop synthetic advancement once upstream resolvedTs has caught up.
+	if dispatcher.hasReceivedFirstResolvedTs.Load() && receivedResolvedTs >= sentResolvedTs {
+		return
+	}
+
+	c.sendHandshakeIfNeed(dispatcher)
+	nextResolvedTs := oracle.GoTimeToTS(oracle.GetTimeFromTS(sentResolvedTs).Add(bootstrapResolvedTsStep))
+	c.sendResolvedTs(dispatcher, nextResolvedTs)
 }
 
 // getScanTaskDataRange determines the valid data range for scanning a given task.
@@ -1043,6 +1086,10 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	}
 	c.dispatchers.Store(id, dispatcherPtr)
 	c.metricsCollector.metricDispatcherCount.Inc()
+	if dispatcher.epoch > 0 {
+		c.sendHandshakeIfNeed(dispatcher)
+		c.sendResolvedTs(dispatcher, dispatcher.startTs)
+	}
 	log.Info("register dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID),
 		zap.Stringer("changefeedID", changefeedID),

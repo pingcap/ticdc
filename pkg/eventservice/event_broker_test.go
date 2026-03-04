@@ -349,6 +349,60 @@ func TestCURDDispatcher(t *testing.T) {
 	require.False(t, ok, "changefeedStatus should be removed after the last dispatcher is removed")
 }
 
+func TestAddDispatcherSendsStartTsResolvedAfterRegister(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	// Close the broker so we can assert the raw message channel ordering.
+	broker.close()
+
+	dispInfo := newMockDispatcherInfoForTest(t)
+	dispInfo.epoch = 1
+	dispInfo.startTs = 100
+
+	require.NoError(t, broker.addDispatcher(dispInfo))
+
+	disp := broker.getDispatcher(dispInfo.GetID()).Load()
+	require.NotNil(t, disp)
+	require.True(t, disp.isHandshaked())
+
+	handshakeEvent := <-broker.messageCh[disp.messageWorkerIndex]
+	require.Equal(t, event.TypeHandshakeEvent, handshakeEvent.msgType)
+
+	resolvedEvent := <-broker.messageCh[disp.messageWorkerIndex]
+	require.Equal(t, event.TypeResolvedEvent, resolvedEvent.msgType)
+	require.Equal(t, dispInfo.startTs, resolvedEvent.resolvedTsEvent.ResolvedTs)
+	require.Equal(t, uint64(1), resolvedEvent.resolvedTsEvent.Seq)
+}
+
+func TestSendBootstrapResolvedTsIfNeeded(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	// Close the broker so we can assert the raw message channel ordering.
+	broker.close()
+
+	dispInfo := newMockDispatcherInfoForTest(t)
+	dispInfo.epoch = 1
+	dispInfo.startTs = 100
+	changefeedStatus := broker.getOrSetChangefeedStatus(dispInfo.GetChangefeedID(), dispInfo.GetSyncPointInterval())
+	disp := newDispatcherStat(dispInfo, 1, 1, nil, changefeedStatus)
+
+	// Upstream hasn't caught up yet, broker should synthesize handshake + resolvedTs.
+	broker.sendBootstrapResolvedTsIfNeeded(disp)
+	handshakeEvent := <-broker.messageCh[disp.messageWorkerIndex]
+	require.Equal(t, event.TypeHandshakeEvent, handshakeEvent.msgType)
+	resolvedEvent := <-broker.messageCh[disp.messageWorkerIndex]
+	require.Equal(t, event.TypeResolvedEvent, resolvedEvent.msgType)
+	require.Equal(t, oracle.GoTimeToTS(oracle.GetTimeFromTS(dispInfo.startTs).Add(time.Second)), resolvedEvent.resolvedTsEvent.ResolvedTs)
+
+	// Upstream catches up, synthetic advancement should stop.
+	disp.hasReceivedFirstResolvedTs.Store(true)
+	disp.receivedResolvedTs.Store(disp.sentResolvedTs.Load())
+	broker.sendBootstrapResolvedTsIfNeeded(disp)
+	select {
+	case <-broker.messageCh[disp.messageWorkerIndex]:
+		require.Fail(t, "unexpected synthetic resolvedTs after upstream catch up")
+	default:
+	}
+}
+
 func TestResetDispatcher(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	defer broker.close()

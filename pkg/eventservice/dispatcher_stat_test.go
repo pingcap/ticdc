@@ -107,6 +107,11 @@ func TestDispatcherStatGetDataRange(t *testing.T) {
 	r, ok = stat.getDataRange()
 	require.False(t, ok)
 
+	// case 3.1: sent resolved ts should not go backward.
+	stat.updateSentResolvedTs(150)
+	require.Equal(t, uint64(200), stat.sentResolvedTs.Load())
+	require.Equal(t, uint64(200), stat.lastScannedCommitTs.Load())
+
 	// case 4: get range after resolved ts update again
 	stat.onResolvedTs(300)
 	r, ok = stat.getDataRange()
