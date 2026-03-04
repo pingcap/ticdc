@@ -128,9 +128,8 @@ func findIndexNameForConstraint(tableInfo *common.TableInfo, constraint *ast.Con
 		if index.Unique != wantUnique {
 			continue
 		}
-		// For `ADD INDEX` jobs, TableInfo may contain indices in non-public states.
-		// Only use public indices to avoid selecting transient metadata.
-		if index.State != timodel.StatePublic {
+		// Only use non-public indices.
+		if index.State == timodel.StatePublic {
 			continue
 		}
 		if !indexColumnsMatchKeyParts(index.Columns, keyParts) {
