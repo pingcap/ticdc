@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -278,12 +279,23 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 }
 
 func TestAppendRow2Group_DoesNotDropCommitTsFallbackBeforeApplied(t *testing.T) {
-	// CommitTs can go backwards after TiCDC restart/retry. The consumer should only
-	// drop replayed events that are already flushed to downstream.
-	w := &writer{}
-	progress := &partitionProgress{
-		partition:   0,
-		eventsGroup: make(map[int64]*util.EventsGroup),
+	// Scenario:
+	// 1) TiCDC writes DML messages to Pulsar in commitTs order.
+	// 2) Under network partition / changefeed restart, TiCDC may replay older commitTs
+	//    at a later time (commitTs appears to go backwards).
+	//
+	// The pulsar-consumer must not drop these "fallback commitTs" events unless they
+	// have already been flushed to downstream (AppliedWatermark), otherwise replayed
+	// messages cannot heal missing windows.
+	w := &writer{
+		progresses: []*partitionProgress{
+			{
+				partition:   0,
+				eventsGroup: make(map[int64]*util.EventsGroup),
+			},
+		},
+		protocol:               config.ProtocolCanalJSON,
+		partitionTableAccessor: codeccommon.NewPartitionTableAccessor(),
 	}
 
 	newDMLEvent := func(tableID int64, commitTs uint64) *commonEvent.DMLEvent {
@@ -298,10 +310,12 @@ func TestAppendRow2Group_DoesNotDropCommitTsFallbackBeforeApplied(t *testing.T) 
 		}
 	}
 
-	// Step 1: observe a larger commitTs first.
+	progress := w.progresses[0]
+
+	// Step 1: observe a larger commitTs first (e.g. produced before restart).
 	w.appendRow2Group(newDMLEvent(1, 200), progress)
 
-	// Step 2: observe a smaller commitTs later (replay/fallback).
+	// Step 2: observe a smaller commitTs later (e.g. replayed after restart).
 	w.appendRow2Group(newDMLEvent(1, 100), progress)
 
 	group := progress.eventsGroup[1]
@@ -312,7 +326,7 @@ func TestAppendRow2Group_DoesNotDropCommitTsFallbackBeforeApplied(t *testing.T) 
 	require.Len(t, resolved, 1)
 	require.Equal(t, uint64(100), resolved[0].CommitTs)
 
-	// Step 3: once commitTs=100 has been applied, replay can be ignored.
+	// Step 3: once downstream has flushed beyond commitTs=100, replay is safe to ignore.
 	group.AppliedWatermark = 200
 	w.appendRow2Group(newDMLEvent(1, 100), progress)
 	resolved = group.ResolveInto(150, nil)

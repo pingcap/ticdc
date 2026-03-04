@@ -510,22 +510,22 @@ func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionP
 		group = util.NewEventsGroup(progress.partition, tableID)
 		progress.eventsGroup[tableID] = group
 	}
-	// IMPORTANT: CommitTs can go backwards after a TiCDC restart/retry (at-least-once replay).
-	// We must not drop such events only because they are below watermarks. The only safe ignore
-	// condition is that this CommitTs has already been flushed to downstream.
 	if commitTs <= group.AppliedWatermark {
 		log.Warn("DML event replayed after applied, ignore it",
 			zap.Int64("tableID", tableID), zap.Int32("partition", group.Partition),
-			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
-			zap.Uint64("appliedWatermark", group.AppliedWatermark), zap.Uint64("partitionWatermark", progress.watermark),
+			zap.Uint64("commitTs", commitTs),
+			zap.Uint64("appliedWatermark", group.AppliedWatermark), zap.Uint64("highWatermark", group.HighWatermark),
+			zap.Uint64("partitionWatermark", progress.watermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Any("protocol", w.protocol))
 		return
 	}
 	forceInsert := commitTs < group.HighWatermark || commitTs < progress.watermark || w.enableTableAcrossNodes
 	if forceInsert {
 		log.Warn("DML event commit ts fallback, append with forceInsert",
+			zap.Int32("partition", group.Partition),
 			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
-			zap.Uint64("appliedWatermark", group.AppliedWatermark), zap.Uint64("partitionWatermark", progress.watermark),
+			zap.Uint64("appliedWatermark", group.AppliedWatermark),
+			zap.Uint64("partitionWatermark", progress.watermark),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 			zap.Stringer("eventType", dml.RowTypes[0]), zap.Any("protocol", w.protocol),
 			zap.Bool("IsPartition", dml.TableInfo.TableName.IsPartition))
@@ -534,6 +534,7 @@ func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionP
 	}
 	group.Append(dml, false)
 	log.Info("DML event append to the group",
+		zap.Int32("partition", group.Partition),
 		zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
 		zap.Uint64("appliedWatermark", group.AppliedWatermark),
 		zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),

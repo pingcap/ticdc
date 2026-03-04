@@ -11,21 +11,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package eventstore
+package main
 
-import (
-	"testing"
+type DDLType int
 
-	"github.com/cockroachdb/pebble"
-	"github.com/stretchr/testify/require"
+const (
+	ddlAddColumn DDLType = iota
+	ddlDropColumn
+	ddlAddIndex
+	ddlDropIndex
+	ddlTruncateTable
 )
 
-func TestDiskSpaceUsageClampsNegativeInProgressBytes(t *testing.T) {
-	m := &pebble.Metrics{}
-	m.WAL.PhysicalSize = 100
-	m.Table.ObsoleteSize = 50
-	m.Table.ZombieSize = 200
-	m.Compact.InProgressBytes = -1024
-
-	require.Equal(t, uint64(350), diskSpaceUsage(m))
+func (t DDLType) String() string {
+	switch t {
+	case ddlAddColumn:
+		return "add_column"
+	case ddlDropColumn:
+		return "drop_column"
+	case ddlAddIndex:
+		return "add_index"
+	case ddlDropIndex:
+		return "drop_index"
+	case ddlTruncateTable:
+		return "truncate_table"
+	default:
+		return "unknown"
+	}
 }
