@@ -24,7 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/version"
-	pdclient "github.com/tikv/pd/client"
+	pd "github.com/tikv/pd/client"
 	pdopt "github.com/tikv/pd/client"
 	etcdlogutil "go.etcd.io/etcd/client/pkg/v3/logutil"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -116,13 +116,7 @@ func (f *factoryImpl) EtcdClient() (*etcd.CDCEtcdClientImpl, error) {
 }
 
 // PdClient creates new pd client.
-<<<<<<< HEAD
-func (f *factoryImpl) PdClient() (pdclient.Client, error) {
-	ctx := context.Background()
-
-=======
 func (f *factoryImpl) PdClient() (pd.Client, error) {
->>>>>>> f414adea4 (cli: add default context for command line usage (#3479))
 	credential := f.GetCredential()
 	grpcTLSOption, err := f.ToGRPCDialOption()
 	if err != nil {
@@ -141,13 +135,8 @@ func (f *factoryImpl) PdClient() (pd.Client, error) {
 		}
 	}
 
-<<<<<<< HEAD
 	pdClient, err := pdopt.NewClientWithContext(
-		ctx, pdEndpoints, credential.PDSecurityOption(),
-=======
-	pdClient, err := pd.NewClientWithContext(
-		f.ctx, "cdc-factory", pdEndpoints, credential.PDSecurityOption(),
->>>>>>> f414adea4 (cli: add default context for command line usage (#3479))
+		f.ctx, pdEndpoints, credential.PDSecurityOption(),
 		pdopt.WithMaxErrorRetry(maxGetPDClientRetryTimes),
 		// TODO(hi-rustin): add gRPC metrics to Options.
 		// See also: https://github.com/pingcap/tiflow/pull/2341#discussion_r673032407.
