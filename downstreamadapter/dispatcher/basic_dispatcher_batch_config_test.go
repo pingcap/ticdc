@@ -16,35 +16,14 @@ package dispatcher
 import (
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
+	sinkmock "github.com/pingcap/ticdc/downstreamadapter/sink/mock"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/stretchr/testify/require"
 )
-
-type testBatchSink struct {
-	sink.Sink
-	batchCount int
-	batchBytes int
-}
-
-func newTestBatchSink(sinkType common.SinkType, batchCount int, batchBytes int) *testBatchSink {
-	return &testBatchSink{
-		Sink:       sink.NewMockSink(sinkType),
-		batchCount: batchCount,
-		batchBytes: batchBytes,
-	}
-}
-
-func (s *testBatchSink) BatchCount() int {
-	if s.batchCount > 0 {
-		return s.batchCount
-	}
-	return 4096
-}
-
-func (s *testBatchSink) BatchBytes() int { return s.batchBytes }
 
 func newTestBasicDispatcherForBatchConfig(
 	s sink.Sink,
@@ -85,8 +64,10 @@ func newTestBasicDispatcherForBatchConfig(
 
 func TestBasicDispatcherBatchConfig(t *testing.T) {
 	t.Run("returns values from shared info", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockSink := sinkmock.NewMockSink(ctrl)
 		d := newTestBasicDispatcherForBatchConfig(
-			newTestBatchSink(common.CloudStorageSinkType, 2048, 4096),
+			mockSink,
 			123,
 			777,
 		)
@@ -96,8 +77,10 @@ func TestBasicDispatcherBatchConfig(t *testing.T) {
 	})
 
 	t.Run("zero values stay zero without sink fallback", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockSink := sinkmock.NewMockSink(ctrl)
 		d := newTestBasicDispatcherForBatchConfig(
-			newTestBatchSink(common.MysqlSinkType, 2048, 2048),
+			mockSink,
 			0,
 			0,
 		)
@@ -107,8 +90,10 @@ func TestBasicDispatcherBatchConfig(t *testing.T) {
 	})
 
 	t.Run("redo mode uses the same shared config", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockSink := sinkmock.NewMockSink(ctrl)
 		d := newTestBasicDispatcherForBatchConfig(
-			newTestBatchSink(common.RedoSinkType, 0, 8192),
+			mockSink,
 			4096,
 			8192,
 		)

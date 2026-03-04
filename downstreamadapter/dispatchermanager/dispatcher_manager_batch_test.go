@@ -14,42 +14,26 @@
 package dispatchermanager
 
 import (
-	"context"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
+	sinkmock "github.com/pingcap/ticdc/downstreamadapter/sink/mock"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/stretchr/testify/require"
 )
 
-type mockBatchConfigSink struct {
-	sinkType   common.SinkType
-	batchCount int
-	batchBytes int
-}
-
-func (s *mockBatchConfigSink) SinkType() common.SinkType { return s.sinkType }
-func (s *mockBatchConfigSink) IsNormal() bool            { return true }
-func (s *mockBatchConfigSink) AddDMLEvent(_ *commonEvent.DMLEvent) {
-}
-func (s *mockBatchConfigSink) WriteBlockEvent(_ commonEvent.BlockEvent) error { return nil }
-func (s *mockBatchConfigSink) AddCheckpointTs(_ uint64)                       {}
-func (s *mockBatchConfigSink) SetTableSchemaStore(_ *commonEvent.TableSchemaStore) {
-}
-func (s *mockBatchConfigSink) Close(_ bool)                {}
-func (s *mockBatchConfigSink) Run(_ context.Context) error { return nil }
-func (s *mockBatchConfigSink) BatchCount() int {
-	if s.batchCount > 0 {
-		return s.batchCount
-	}
-	return 4096
-}
-func (s *mockBatchConfigSink) BatchBytes() int {
-	return s.batchBytes
+func newBatchConfigSink(t *testing.T, sinkType common.SinkType, batchCount int, batchBytes int) *sinkmock.MockSink {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	s := sinkmock.NewMockSink(ctrl)
+	s.EXPECT().SinkType().Return(sinkType).AnyTimes()
+	s.EXPECT().BatchCount().Return(batchCount).AnyTimes()
+	s.EXPECT().BatchBytes().Return(batchBytes).AnyTimes()
+	return s
 }
 
 func TestDispatcherManagerBatchConfig(t *testing.T) {
@@ -63,7 +47,7 @@ func TestDispatcherManagerBatchConfig(t *testing.T) {
 	}{
 		{
 			name:           "uses sink defaults",
-			sinkBatchCount: 0,
+			sinkBatchCount: 4096,
 			sinkBatchBytes: 0,
 			cfg:            &config.ChangefeedConfig{},
 			wantCount:      4096,
@@ -112,12 +96,9 @@ func TestDispatcherManagerBatchConfig(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			sink := newBatchConfigSink(t, common.MysqlSinkType, tc.sinkBatchCount, tc.sinkBatchBytes)
 			m := &DispatcherManager{
-				sink: &mockBatchConfigSink{
-					sinkType:   common.MysqlSinkType,
-					batchCount: tc.sinkBatchCount,
-					batchBytes: tc.sinkBatchBytes,
-				},
+				sink:   sink,
 				config: tc.cfg,
 			}
 			gotCount, gotBytes := m.getEventCollectorBatchCountAndBytes()
@@ -128,11 +109,7 @@ func TestDispatcherManagerBatchConfig(t *testing.T) {
 }
 
 func TestDispatcherManagerBatchConfigPassThroughDispatcher(t *testing.T) {
-	sink := &mockBatchConfigSink{
-		sinkType:   common.MysqlSinkType,
-		batchCount: 2048,
-		batchBytes: 8192,
-	}
+	sink := newBatchConfigSink(t, common.MysqlSinkType, 2048, 8192)
 	manager := &DispatcherManager{
 		sink:   sink,
 		config: &config.ChangefeedConfig{},
