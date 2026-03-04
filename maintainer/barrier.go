@@ -298,29 +298,53 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 		return nil
 	}
 
-	// there is a block event and the dispatcher write or pass action already
-	// which means we have sent pass or write action to it
-	// the writer already synced ddl to downstream
-	if event.writerDispatcher == dispatcherID {
+	// We should only see DONE after the event has been selected.
+	if !event.selected.Load() {
+		return event
+	}
+
+	// Phase 1: wait all influenced dispatchers to finish Action_Drain.
+	if !event.drainDispatcherAdvanced {
+		event.markDispatcherEventDone(dispatcherID)
+		if !event.allDispatcherReported() {
+			return event
+		}
+
+		event.drainDispatcherAdvanced = true
+		event.rangeChecker.Reset()
+		event.reportedDispatchers = make(map[common.DispatcherID]struct{})
+		event.lastResendTime = time.Now().Add(-20 * time.Second)
+		return event
+	}
+
+	// Phase 2: wait writer dispatcher to finish Action_Write.
+	if !event.writerDispatcherAdvanced {
+		if event.writerDispatcher != dispatcherID {
+			// Ignore stale DONE from non-writer dispatchers while waiting writer Action_Write.
+			return event
+		}
+
 		if event.needSchedule {
-			// we need do schedule when writerDispatcherAdvanced
-			// Otherwise, if we do schedule when just selected = true, then ask dispatcher execute ddl
-			// when meeting truncate table,
-			// there is possible that dml for the new table will arrive before truncate ddl executed.
-			// that will lead to data loss
+			// We should schedule only after writer finished Action_Write.
+			// Otherwise truncate/create like ddl may expose new table dml before old table cleanup.
 			scheduled := b.tryScheduleEvent(event)
 			if !scheduled {
-				// not scheduled yet, just return, wait for next resend
+				// Not scheduled yet, keep waiting and resend later.
 				return event
 			}
 		} else {
-			// the pass action will be sent periodically in resend logic if not acked
 			event.writerDispatcherAdvanced = true
 			event.lastResendTime = time.Now().Add(-20 * time.Second)
 		}
+
+		// Start Phase 3 from a clean coverage window.
+		event.rangeChecker.Reset()
+		event.reportedDispatchers = make(map[common.DispatcherID]struct{})
+		event.lastResendTime = time.Now().Add(-20 * time.Second)
+		return event
 	}
 
-	// checkpoint ts is advanced, clear the map, so do not need to resend message anymore
+	// Phase 3: wait all influenced dispatchers to finish Action_Pass.
 	event.markDispatcherEventDone(dispatcherID)
 	b.checkEventFinish(event)
 	return event
@@ -382,8 +406,9 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 		// the block event, and check whether we need to send write action
 		event.markDispatcherEventDone(dispatcherID)
 		status, targetID := event.checkEventAction(dispatcherID)
-		if status != nil && event.needSchedule {
-			// scheduling is only required for ddl that changes tables, enqueue the event
+		if event.selected.Load() && event.needSchedule {
+			// scheduling is only required for ddl that changes tables. enqueue once the
+			// barrier is selected, regardless of whether the action is sent immediately.
 			b.pendingEvents.add(event)
 		}
 		return event, status, targetID, true
@@ -430,16 +455,20 @@ func (b *Barrier) getOrInsertNewEvent(changefeedID common.ChangeFeedID, dispatch
 // check whether the event is get all the done message from dispatchers
 // if so, remove the event from blockedTs, not need to resend message anymore
 func (b *Barrier) checkEventFinish(be *BarrierEvent) {
+	if !be.selected.Load() {
+		return
+	}
+	if !be.drainDispatcherAdvanced || !be.writerDispatcherAdvanced {
+		return
+	}
 	if !be.allDispatcherReported() {
 		return
 	}
-	if be.selected.Load() {
-		log.Info("all dispatchers reported event done, remove event",
-			zap.String("changefeed", be.cfID.Name()),
-			zap.Uint64("committs", be.commitTs))
-		// already selected a dispatcher to write, now all dispatchers reported the block event
-		b.blockedEvents.Delete(getEventKey(be.commitTs, be.isSyncPoint))
-	}
+
+	log.Info("all dispatchers reported event done, remove event",
+		zap.String("changefeed", be.cfID.Name()),
+		zap.Uint64("committs", be.commitTs))
+	b.blockedEvents.Delete(getEventKey(be.commitTs, be.isSyncPoint))
 }
 
 func (b *Barrier) tryScheduleEvent(event *BarrierEvent) bool {

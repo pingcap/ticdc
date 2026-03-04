@@ -325,6 +325,27 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	// receive the action info
 	dispatcherStatus = &heartbeatpb.DispatcherStatus{
 		Action: &heartbeatpb.DispatcherAction{
+			Action:      heartbeatpb.Action(2),
+			CommitTs:    ddlEvent3.FinishedTs,
+			IsSyncPoint: false,
+		},
+	}
+	dispatcher.HandleDispatcherStatus(dispatcherStatus)
+	require.Eventually(t, func() bool {
+		blockPendingEvent, blockStage = dispatcher.blockEventStatus.getEventAndStage()
+		if blockPendingEvent == nil || blockStage != heartbeatpb.BlockStage_WAITING {
+			return false
+		}
+		checkpointTs, isEmpty = tableProgress.GetCheckpointTs()
+		if !isEmpty || checkpointTs != uint64(3) {
+			return false
+		}
+		return count.Load() == int32(4)
+	}, 5*time.Second, 10*time.Millisecond)
+
+	// receive the write action info
+	dispatcherStatus = &heartbeatpb.DispatcherStatus{
+		Action: &heartbeatpb.DispatcherAction{
 			Action:      heartbeatpb.Action_Write,
 			CommitTs:    ddlEvent3.FinishedTs,
 			IsSyncPoint: false,

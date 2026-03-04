@@ -124,12 +124,16 @@ func TestResendAction(t *testing.T) {
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 0)
 
-	// resend write action
+	// resend drain action
 	event.selected.Store(true)
 	event.writerDispatcherAdvanced = false
 	event.writerDispatcher = dispatcherIDs[0]
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
+	drainResp := msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
+	require.Len(t, drainResp.DispatcherStatuses, 1)
+	require.Equal(t, heartbeatpb.Action(2), drainResp.DispatcherStatuses[0].Action.Action)
+	require.Equal(t, uint64(10), drainResp.DispatcherStatuses[0].Action.CommitTs)
 
 	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked: true,
@@ -140,6 +144,7 @@ func TestResendAction(t *testing.T) {
 		},
 	}, false)
 	event.selected.Store(true)
+	event.drainDispatcherAdvanced = true
 	event.writerDispatcherAdvanced = true
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
@@ -158,6 +163,7 @@ func TestResendAction(t *testing.T) {
 		},
 	}, false)
 	event.selected.Store(true)
+	event.drainDispatcherAdvanced = true
 	event.writerDispatcherAdvanced = true
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
@@ -177,6 +183,7 @@ func TestResendAction(t *testing.T) {
 		},
 	}, false)
 	event.selected.Store(true)
+	event.drainDispatcherAdvanced = true
 	event.writerDispatcherAdvanced = true
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)

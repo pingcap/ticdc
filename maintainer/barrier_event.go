@@ -45,7 +45,10 @@ type BarrierEvent struct {
 	// table trigger dispatcher reported the block event, we should use it as the writer
 	tableTriggerDispatcherRelated bool
 	writerDispatcher              common.DispatcherID
-	writerDispatcherAdvanced      bool
+	// drainDispatcherAdvanced indicates all influenced dispatchers have finished
+	// Action_Drain for this barrier event.
+	drainDispatcherAdvanced  bool
+	writerDispatcherAdvanced bool
 
 	blockedDispatchers *heartbeatpb.InfluencedTables
 	dropDispatchers    *heartbeatpb.InfluencedTables
@@ -205,20 +208,16 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 
 	be.selected.Store(true)
 	be.writerDispatcher = dispatcher
-	be.lastResendTime = time.Now()
-	log.Info("all dispatcher reported heartbeat, schedule it, and select one to write",
+	be.drainDispatcherAdvanced = false
+	be.writerDispatcherAdvanced = false
+	// Trigger resend immediately so maintainer can send drain action in this round.
+	be.lastResendTime = time.Now().Add(-20 * time.Second)
+	log.Info("all dispatcher reported heartbeat, schedule it, and select one writer",
 		zap.String("changefeed", be.cfID.Name()),
 		zap.String("dispatcher", be.writerDispatcher.String()),
 		zap.Uint64("commitTs", be.commitTs),
 		zap.String("barrierType", be.blockedDispatchers.InfluenceType.String()))
-	stm := be.spanController.GetTaskByID(be.writerDispatcher)
-	return &heartbeatpb.DispatcherStatus{
-		InfluencedDispatchers: &heartbeatpb.InfluencedDispatchers{
-			InfluenceType: heartbeatpb.InfluenceType_Normal,
-			DispatcherIDs: []*heartbeatpb.DispatcherID{be.writerDispatcher.ToPB()},
-		},
-		Action: be.action(heartbeatpb.Action_Write),
-	}, stm.GetNodeID()
+	return nil, ""
 }
 
 func (be *BarrierEvent) scheduleBlockEvent() {
@@ -395,9 +394,21 @@ func (be *BarrierEvent) allDispatcherReported() bool {
 	return true
 }
 
+func (be *BarrierEvent) sendDrainAction(mode int64) []*messaging.TargetMessage {
+	// Action_Drain is only used for ordering. If some influenced dispatchers are gone,
+	// they are considered already beyond this barrier.
+	return be.sendActionToInfluencedDispatchers(mode, heartbeatpb.Action_Drain, false)
+}
+
 // send pass action to the related dispatchers, if find the related dispatchers are all removed, mark rangeCheck done
 // else return pass action messages
 func (be *BarrierEvent) sendPassAction(mode int64) []*messaging.TargetMessage {
+	return be.sendActionToInfluencedDispatchers(mode, heartbeatpb.Action_Pass, true)
+}
+
+func (be *BarrierEvent) sendActionToInfluencedDispatchers(
+	mode int64, action heartbeatpb.Action, markRemovedDone bool,
+) []*messaging.TargetMessage {
 	if be.blockedDispatchers == nil {
 		return []*messaging.TargetMessage{}
 	}
@@ -406,8 +417,10 @@ func (be *BarrierEvent) sendPassAction(mode int64) []*messaging.TargetMessage {
 	case heartbeatpb.InfluenceType_DB:
 		spans := be.spanController.GetTasksBySchemaID(be.blockedDispatchers.SchemaID)
 		if len(spans) == 0 {
-			// means tables are removed, mark the event done
-			be.rangeChecker.MarkCovered()
+			if markRemovedDone {
+				// means tables are removed, mark the event done
+				be.rangeChecker.MarkCovered()
+			}
 			return nil
 		} else {
 			// writerDispatcher for DB Type is always table trigger dispatcher, so we need to add it too
@@ -423,27 +436,29 @@ func (be *BarrierEvent) sendPassAction(mode int64) []*messaging.TargetMessage {
 				}
 				_, ok := msgMap[nodeID]
 				if !ok {
-					msgMap[nodeID] = be.newPassActionMessage(nodeID, mode)
+					msgMap[nodeID] = be.newActionMessage(nodeID, mode, action)
 				}
 			}
 		}
 	case heartbeatpb.InfluenceType_All:
 		// all type will not have drop-type ddl.
 		for _, n := range getAllNodes(be.nodeManager) {
-			msgMap[n] = be.newPassActionMessage(n, mode)
+			msgMap[n] = be.newActionMessage(n, mode, action)
 		}
 	case heartbeatpb.InfluenceType_Normal:
 		for _, tableID := range be.blockedDispatchers.TableIDs {
 			spans := be.spanController.GetTasksByTableID(tableID)
 			if len(spans) == 0 {
-				be.markTableDone(tableID)
+				if markRemovedDone {
+					be.markTableDone(tableID)
+				}
 			} else {
 				for _, stm := range spans {
 					nodeID := stm.GetNodeID()
 					dispatcherID := stm.ID
 					msg, ok := msgMap[nodeID]
 					if !ok {
-						msg = be.newPassActionMessage(nodeID, mode)
+						msg = be.newActionMessage(nodeID, mode, action)
 						msgMap[nodeID] = msg
 					}
 					influencedDispatchers := msg.Message[0].(*heartbeatpb.HeartBeatResponse).DispatcherStatuses[0].InfluencedDispatchers
@@ -605,6 +620,10 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 		return nil
 	}
 	be.lastResendTime = time.Now()
+	// wait all influenced dispatchers to finish Action_Drain first.
+	if !be.drainDispatcherAdvanced {
+		return be.sendDrainAction(mode)
+	}
 	// we select a dispatcher as the writer, still waiting for that dispatcher advance its checkpoint ts
 	if !be.writerDispatcherAdvanced {
 		// resend write action
@@ -673,7 +692,9 @@ func (be *BarrierEvent) newWriterActionMessage(capture node.ID, mode int64) *mes
 	return msg
 }
 
-func (be *BarrierEvent) newPassActionMessage(capture node.ID, mode int64) *messaging.TargetMessage {
+func (be *BarrierEvent) newActionMessage(
+	capture node.ID, mode int64, action heartbeatpb.Action,
+) *messaging.TargetMessage {
 	influenced := &heartbeatpb.InfluencedDispatchers{
 		InfluenceType: be.blockedDispatchers.InfluenceType,
 		SchemaID:      be.blockedDispatchers.SchemaID,
@@ -689,7 +710,7 @@ func (be *BarrierEvent) newPassActionMessage(capture node.ID, mode int64) *messa
 			ChangefeedID: be.cfID.ToPB(),
 			DispatcherStatuses: []*heartbeatpb.DispatcherStatus{
 				{
-					Action:                be.action(heartbeatpb.Action_Pass),
+					Action:                be.action(action),
 					InfluencedDispatchers: influenced,
 				},
 			},

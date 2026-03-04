@@ -28,16 +28,19 @@ type Action int32
 const (
 	Action_Write Action = 0
 	Action_Pass  Action = 1
+	Action_Drain Action = 2
 )
 
 var Action_name = map[int32]string{
 	0: "Write",
 	1: "Pass",
+	2: "Drain",
 }
 
 var Action_value = map[string]int32{
 	"Write": 0,
 	"Pass":  1,
+	"Drain": 2,
 }
 
 func (x Action) String() string {

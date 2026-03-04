@@ -798,27 +798,49 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 				zap.Any("action", action),
 				zap.Any("innerAction", int(action.Action)),
 				zap.Uint64("pendingEventCommitTs", pendingEvent.GetCommitTs()))
-			d.blockEventStatus.updateBlockStage(heartbeatpb.BlockStage_WRITING)
-			pendingEvent.PushFrontFlushFunc(func() {
-				// clear blockEventStatus should be before wake ds.
-				// otherwise, there may happen:
-				// 1. wake ds
-				// 2. get new ds and set new pending event
-				// 3. clear blockEventStatus(should be the old pending event, but clear the new one)
-				d.blockEventStatus.clear()
-			})
 			actionCommitTs := action.CommitTs
 			actionIsSyncPoint := action.IsSyncPoint
-			if action.Action == heartbeatpb.Action_Write {
+			d.blockEventStatus.updateBlockStage(heartbeatpb.BlockStage_WRITING)
+			switch action.Action {
+			case heartbeatpb.Action_Write:
+				pendingEvent.PushFrontFlushFunc(func() {
+					// clear blockEventStatus should be before wake ds.
+					// otherwise, there may happen:
+					// 1. wake ds
+					// 2. get new ds and set new pending event
+					// 3. clear blockEventStatus(should be the old pending event, but clear the new one)
+					d.blockEventStatus.clear()
+				})
 				d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
 					d.ExecuteBlockEventDDL(pendingEvent, actionCommitTs, actionIsSyncPoint)
 				})
 				return true
-			} else {
+			case heartbeatpb.Action_Pass:
+				pendingEvent.PushFrontFlushFunc(func() {
+					// clear blockEventStatus should be before wake ds.
+					// otherwise, there may happen:
+					// 1. wake ds
+					// 2. get new ds and set new pending event
+					// 3. clear blockEventStatus(should be the old pending event, but clear the new one)
+					d.blockEventStatus.clear()
+				})
 				d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
 					d.PassBlockEvent(pendingEvent, actionCommitTs, actionIsSyncPoint)
 				})
 				return true
+			case heartbeatpb.Action_Drain:
+				d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
+					d.DrainBlockEvent(pendingEvent, actionCommitTs, actionIsSyncPoint)
+				})
+				return true
+			default:
+				log.Error("unsupported action type",
+					zap.Stringer("dispatcher", d.id),
+					zap.Int("action", int(action.Action)),
+					zap.Uint64("commitTs", action.CommitTs),
+					zap.Bool("isSyncPoint", action.IsSyncPoint))
+				d.blockEventStatus.updateBlockStage(heartbeatpb.BlockStage_WAITING)
+				return false
 			}
 		} else {
 			ts, ok := d.blockEventStatus.getEventCommitTs()
@@ -872,6 +894,21 @@ func (d *BasicDispatcher) PassBlockEvent(pendingEvent commonEvent.BlockEvent, ac
 		return
 	}
 	failpoint.Inject("BlockAfterPass", nil)
+	d.reportBlockedEventDone(actionCommitTs, actionIsSyncPoint)
+}
+
+// DrainBlockEvent executes maintainer Action_Drain:
+// It only drains prior DML before the pending block event and keeps the pending
+// event for subsequent Write/Pass action.
+func (d *BasicDispatcher) DrainBlockEvent(pendingEvent commonEvent.BlockEvent, actionCommitTs uint64, actionIsSyncPoint bool) {
+	failpoint.Inject("BlockOrWaitBeforeDrain", nil)
+	err := d.sink.FlushDMLBeforeBlock(pendingEvent)
+	if err != nil {
+		d.HandleError(err)
+		return
+	}
+	d.blockEventStatus.updateBlockStage(heartbeatpb.BlockStage_WAITING)
+	failpoint.Inject("BlockAfterDrain", nil)
 	d.reportBlockedEventDone(actionCommitTs, actionIsSyncPoint)
 }
 
