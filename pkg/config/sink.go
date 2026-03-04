@@ -1103,20 +1103,24 @@ func (o *OutboxConfig) validate() error {
 	if o == nil {
 		return cerror.ErrSinkInvalidConfig.GenWithStack("outbox config is required for outbox-json protocol")
 	}
-	if strings.TrimSpace(o.IDColumn) == "" {
+	// Normalize and validate required columns.
+	o.IDColumn = strings.TrimSpace(o.IDColumn)
+	o.KeyColumn = strings.TrimSpace(o.KeyColumn)
+	o.ValueColumn = strings.TrimSpace(o.ValueColumn)
+	if o.IDColumn == "" {
 		return cerror.ErrSinkInvalidConfig.GenWithStack("outbox.id-column is required")
 	}
-	if strings.TrimSpace(o.KeyColumn) == "" {
+	if o.KeyColumn == "" {
 		return cerror.ErrSinkInvalidConfig.GenWithStack("outbox.key-column is required")
 	}
-	if strings.TrimSpace(o.ValueColumn) == "" {
+	if o.ValueColumn == "" {
 		return cerror.ErrSinkInvalidConfig.GenWithStack("outbox.value-column is required")
 	}
 
 	seenColumns := make(map[string]struct{}, 3+len(o.HeaderColumns))
 	requiredCols := []string{o.IDColumn, o.KeyColumn, o.ValueColumn}
 	for _, col := range requiredCols {
-		lowerCol := strings.ToLower(strings.TrimSpace(col))
+		lowerCol := strings.ToLower(col)
 		if _, ok := seenColumns[lowerCol]; ok {
 			return cerror.ErrSinkInvalidConfig.GenWithStack(
 				"outbox columns must be unique, duplicate column: %s", col)
