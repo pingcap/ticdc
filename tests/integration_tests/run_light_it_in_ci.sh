@@ -52,9 +52,9 @@ mysql_groups=(
 	# G09
 	'sequence cdc_server_tips ddl_sequence server_config_compatibility log_redaction fail_over_ddl_J'
 	# G10
-	'changefeed_error bdr_mode fail_over_ddl_K split_table_check'
+	'overwrite_resume_with_syncpoint restart_changefeed changefeed_error bdr_mode fail_over_ddl_K split_table_check'
 	# G11
-	'multi_tables_ddl ddl_attributes multi_cdc_cluster fail_over_ddl_L'
+	'kill_owner_with_ddl multi_tables_ddl ddl_attributes multi_cdc_cluster fail_over_ddl_L'
 	# G12
 	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema'
 	# G13
@@ -174,7 +174,7 @@ storage_groups=(
 	# G13
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N maintainer_failover_when_operator'
 	# G14
-	'csv_storage_multi_tables_ddl fail_over_ddl_O'
+	'csv_storage_partition_table csv_storage_multi_tables_ddl fail_over_ddl_O'
 	# G15
 	'split_region autorandom gc_safepoint'
 )

@@ -225,7 +225,6 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 				zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
 		}
 	}
-	return w.mysqlSink.WriteBlockEvent(ddl)
 }
 
 func (w *writer) getBlockTableIDs(ddl *commonEvent.DDLEvent) map[int64]struct{} {
@@ -357,7 +356,6 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 				zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
 		}
 	}
-	return nil
 }
 
 // WriteMessage is to decode kafka message to event.
