@@ -889,6 +889,7 @@ func isMysqlCompatible(sinkURIStr string) (bool, error) {
 	scheme := config.GetScheme(sinkURI)
 	return config.IsMySQLCompatibleScheme(scheme), nil
 }
+
 func isStorageSink(sinkURIStr string) (bool, error) {
 	sinkURI, err := url.Parse(sinkURIStr)
 	if err != nil {

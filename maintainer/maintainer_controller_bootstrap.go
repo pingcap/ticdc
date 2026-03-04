@@ -357,12 +357,11 @@ func (c *Controller) initializeComponents(
 	isStorageSinkBackend bool,
 ) {
 	// Initialize barrier
+	defaultBarrierFlushEnabled := c.enableTableAcrossNodes && isStorageSinkBackend
 	if c.enableRedo {
-		c.redoBarrier = NewBarrier(c.redoSpanController, c.redoOperatorController, c.enableTableAcrossNodes, allNodesResp, common.RedoMode)
-		c.redoBarrier.SetFlushEnabled(false)
+		c.redoBarrier = NewBarrierWithFlush(c.redoSpanController, c.redoOperatorController, c.enableTableAcrossNodes, false, allNodesResp, common.RedoMode)
 	}
-	c.barrier = NewBarrier(c.spanController, c.operatorController, c.enableTableAcrossNodes, allNodesResp, common.DefaultMode)
-	c.barrier.SetFlushEnabled(c.enableTableAcrossNodes && isStorageSinkBackend)
+	c.barrier = NewBarrierWithFlush(c.spanController, c.operatorController, c.enableTableAcrossNodes, defaultBarrierFlushEnabled, allNodesResp, common.DefaultMode)
 
 	// Start scheduler
 	c.taskHandlesMu.Lock()
