@@ -490,7 +490,7 @@ func unmarshalJsonToColumnSchema(data []byte) (*columnSchema, error) {
 
 // newColumnSchema4Decoder should only be used by the codec decoder for the test purpose,
 // do not call this method in the TiCDC code.
-func newColumnSchema4Decoder(tableInfo *model.TableInfo) *columnSchema {
+func NewColumnSchema4Decoder(tableInfo *model.TableInfo) *columnSchema {
 	return newColumnSchema(tableInfo, Digest{})
 }
 

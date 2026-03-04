@@ -18,6 +18,7 @@ import (
 	"sort"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"go.uber.org/zap"
 )
@@ -90,13 +91,10 @@ func (g *EventsGroup) Append(row *commonEvent.DMLEvent, force bool) {
 		})
 		if i > 0 && g.events[i-1].CommitTs == row.CommitTs {
 			previous := g.events[i-1]
-			// If the table info version is different,
-			// it means the table schema has been updated between the two events.
-			// In this case we cannot merge them because the merged event may have an incompatible schema.
-			// We skip the replayed event and wait for it to be replayed again after the table info is updated.
-			// It should be occourred when the DML event is replayed after the table schema is updated,
-			// and the replayed event has an older table info version than the previous one in the group.
-			if !compareTableInfoVersion(previous, row) {
+			// If the table info version is incompatible, we cannot merge the events,
+			//  and the event may be replayed again after the table info is updated.
+			// So we just skip this event to avoid potential panic in the downstream.
+			if !compareTableInfo(previous, row) {
 				log.Warn("skip replayed DML event due to incompatible table info version, the event may be replayed again after the table info is updated",
 					zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
 					zap.Uint64("commitTs", row.CommitTs),
@@ -115,15 +113,15 @@ func (g *EventsGroup) Append(row *commonEvent.DMLEvent, force bool) {
 		zap.Uint64("lastCommitTs", lastDMLEvent.GetCommitTs()), zap.Uint64("commitTs", row.GetCommitTs()))
 }
 
-func compareTableInfoVersion(previous, now *commonEvent.DMLEvent) bool {
-	previousTs := previous.TableInfo.GetUpdateTS()
-	nowTs := now.TableInfo.GetUpdateTS()
-	if previousTs > nowTs {
+func compareTableInfo(previous, now *commonEvent.DMLEvent) bool {
+	previousInfo := previous.TableInfo.ToTiDBTableInfo()
+	nowInfo := now.TableInfo.ToTiDBTableInfo()
+	if previousInfo.UpdateTS > nowInfo.UpdateTS {
 		log.Panic("previous dml event has bigger table info version",
 			zap.Any("previous", previous),
 			zap.Any("now", now))
 	}
-	return previousTs == nowTs
+	return common.NewColumnSchema4Decoder(previousInfo).SameWithTableInfo(nowInfo)
 }
 
 // ResolveInto appends all events with CommitTs <= resolve into dst and removes them from the group.
