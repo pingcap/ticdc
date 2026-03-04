@@ -119,7 +119,6 @@ func (e *encodingWorkerGroup) Run(ctx context.Context) (err error) {
 			}
 		}
 		close(e.closed)
-		close(e.outputCh)
 	}()
 	g, egCtx := errgroup.WithContext(ctx)
 	for i := 0; i < e.workerNum; i++ {
@@ -173,7 +172,10 @@ func (e *encodingWorkerGroup) input(
 	case <-ctx.Done():
 		return ctx.Err()
 	case err := <-e.closed:
-		return errors.WrapError(errors.ErrRedoWriterStopped, err)
+		if err != nil {
+			return errors.WrapError(errors.ErrRedoWriterStopped, err)
+		}
+		return errors.ErrRedoWriterStopped
 	case e.inputChs[idx] <- event:
 		return nil
 	}
@@ -186,7 +188,10 @@ func (e *encodingWorkerGroup) output(
 	case <-ctx.Done():
 		return ctx.Err()
 	case err := <-e.closed:
-		return errors.WrapError(errors.ErrRedoWriterStopped, err)
+		if err != nil {
+			return errors.WrapError(errors.ErrRedoWriterStopped, err)
+		}
+		return errors.ErrRedoWriterStopped
 	case e.outputCh <- event:
 		return nil
 	}
