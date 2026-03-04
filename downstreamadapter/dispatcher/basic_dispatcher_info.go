@@ -22,6 +22,8 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // SharedInfo contains all the shared configuration and resources
@@ -70,6 +72,10 @@ type SharedInfo struct {
 	// errCh is used to collect the errors that need to report to maintainer
 	// such as error of flush ddl events
 	errCh chan error
+
+	// metricHandleDDLHis records each DDL handling time duration,
+	// which includes the time of executing the DDL and waiting for the DDL to be resolved.
+	metricHandleDDLHis prometheus.Observer
 }
 
 // NewSharedInfo creates a new SharedInfo with the given parameters
@@ -91,21 +97,22 @@ func NewSharedInfo(
 	errCh chan error,
 ) *SharedInfo {
 	sharedInfo := &SharedInfo{
-		changefeedID:             changefeedID,
-		timezone:                 timezone,
-		bdrMode:                  bdrMode,
-		enableActiveActive:       enableActiveActive,
-		outputRawChangeEvent:     outputRawChangeEvent,
-		integrityConfig:          integrityConfig,
-		filterConfig:             filterConfig,
-		syncPointConfig:          syncPointConfig,
-		enableSplittableCheck:    enableSplittableCheck,
-		eventCollectorBatchCount: eventCollectorBatchCount,
+		changefeedID:          changefeedID,
+		timezone:              timezone,
+		bdrMode:               bdrMode,
+		enableActiveActive:    enableActiveActive,
+		outputRawChangeEvent:  outputRawChangeEvent,
+		integrityConfig:       integrityConfig,
+		filterConfig:          filterConfig,
+		syncPointConfig:       syncPointConfig,
+		enableSplittableCheck: enableSplittableCheck,
+    eventCollectorBatchCount: eventCollectorBatchCount,
 		eventCollectorBatchBytes: eventCollectorBatchBytes,
-		statusesChan:             statusesChan,
-		blockStatusesChan:        blockStatusesChan,
-		blockExecutor:            newBlockEventExecutor(),
-		errCh:                    errCh,
+		statusesChan:          statusesChan,
+		blockStatusesChan:     blockStatusesChan,
+		blockExecutor:         newBlockEventExecutor(),
+		errCh:                 errCh,
+		metricHandleDDLHis:    metrics.HandleDDLHistogram.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 	}
 
 	if txnAtomicity != nil {
@@ -274,4 +281,7 @@ func (s *SharedInfo) Close() {
 	if s.blockExecutor != nil {
 		s.blockExecutor.Close()
 	}
+	keyspace := s.changefeedID.Keyspace()
+	changefeedID := s.changefeedID.Name()
+	metrics.HandleDDLHistogram.DeleteLabelValues(keyspace, changefeedID)
 }
