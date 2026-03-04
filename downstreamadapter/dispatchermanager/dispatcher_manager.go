@@ -46,8 +46,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const defaultEventCollectorBatchCount = 4096
-
 /*
 DispatcherManager manages dispatchers for a changefeed instance with responsibilities including:
 

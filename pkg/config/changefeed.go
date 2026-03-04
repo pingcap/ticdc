@@ -188,13 +188,11 @@ type ChangefeedConfig struct {
 	TimeZone      string `json:"timezone" default:"system"`
 	CaseSensitive bool   `json:"case_sensitive" default:"false"`
 	// if true, force to replicate some ineligible tables
-	ForceReplicate bool          `json:"force_replicate" default:"false"`
-	Filter         *FilterConfig `toml:"filter" json:"filter"`
-	MemoryQuota    uint64        `toml:"memory-quota" json:"memory-quota"`
-	// EventCollectorBatchCount/Bytes are used by the event collector dynamic stream to achieve better batch performance.
-	// 0 means not set.
-	EventCollectorBatchCount int `json:"event_collector_batch_count"`
-	EventCollectorBatchBytes int `json:"event_collector_batch_bytes"`
+	ForceReplicate           bool          `json:"force_replicate" default:"false"`
+	Filter                   *FilterConfig `toml:"filter" json:"filter"`
+	MemoryQuota              uint64        `toml:"memory-quota" json:"memory-quota"`
+	EventCollectorBatchCount int           `json:"event_collector_batch_count"`
+	EventCollectorBatchBytes int           `json:"event_collector_batch_bytes"`
 	// sync point related
 	// TODO: Is syncPointRetention|default can be removed?
 	EnableSyncPoint       bool          `json:"enable_sync_point" default:"false"`

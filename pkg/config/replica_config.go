@@ -142,14 +142,10 @@ func (d *Duration) UnmarshalText(text []byte) error {
 type ReplicaConfig replicaConfig
 
 type replicaConfig struct {
-	MemoryQuota *uint64 `toml:"memory-quota" json:"memory-quota,omitempty"`
-	// EventCollectorBatchCount/Bytes are used by the event collector dynamic stream to achieve better batch performance.
-	// When set, they override defaults (BatchCount=4096, BatchBytes=sink-specific).
-	EventCollectorBatchCount *int  `toml:"event-collector-batch-count" json:"event-collector-batch-count,omitempty"`
-	EventCollectorBatchBytes *int  `toml:"event-collector-batch-bytes" json:"event-collector-batch-bytes,omitempty"`
-	CaseSensitive            *bool `toml:"case-sensitive" json:"case-sensitive,omitempty"`
-	ForceReplicate           *bool `toml:"force-replicate" json:"force-replicate,omitempty"`
-	CheckGCSafePoint         *bool `toml:"check-gc-safe-point" json:"check-gc-safe-point,omitempty"`
+	MemoryQuota      *uint64 `toml:"memory-quota" json:"memory-quota,omitempty"`
+	CaseSensitive    *bool   `toml:"case-sensitive" json:"case-sensitive,omitempty"`
+	ForceReplicate   *bool   `toml:"force-replicate" json:"force-replicate,omitempty"`
+	CheckGCSafePoint *bool   `toml:"check-gc-safe-point" json:"check-gc-safe-point,omitempty"`
 	// EnableSyncPoint is only available when the downstream is a Database.
 	EnableSyncPoint    *bool `toml:"enable-sync-point" json:"enable-sync-point,omitempty"`
 	EnableTableMonitor *bool `toml:"enable-table-monitor" json:"enable-table-monitor"`
@@ -188,6 +184,12 @@ type replicaConfig struct {
 	// Set it to 0 to disable metric collection.
 	// This option only takes effect when EnableActiveActive is true and the downstream is TiDB.
 	ActiveActiveSyncStatsInterval *time.Duration `toml:"active-active-sync-stats-interval" json:"active-active-sync-stats-interval,omitempty"`
+
+	// these fields are used by the event collector dynamic stream to achieve better batch performance.
+	// it's not initialized in the defaultReplicaConfig by the purpose.
+	// if it's set, will override the default value which derived from the internval sink.
+	EventCollectorBatchCount *int `toml:"event-collector-batch-count" json:"event-collector-batch-count,omitempty"`
+	EventCollectorBatchBytes *int `toml:"event-collector-batch-bytes" json:"event-collector-batch-bytes,omitempty"`
 
 	// Deprecated: we don't use this field since v8.0.0.
 	SQLMode string `toml:"sql-mode" json:"sql-mode"`
