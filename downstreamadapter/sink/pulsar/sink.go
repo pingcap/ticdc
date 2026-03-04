@@ -313,6 +313,12 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 			schema := event.TableInfo.GetSchemaName()
 			table := event.TableInfo.GetTableName()
 			partitionGenerator := s.comp.eventRouter.GetPartitionGenerator(schema, table)
+			staticTopic, isStaticTopic := s.comp.eventRouter.GetTopicForTable(schema, table)
+			// staticPartitionNum is resolved lazily on the first row that will
+			// actually be emitted, so that skip-only events (e.g. outbox-json
+			// update/delete transactions) never trigger a partition lookup.
+			var staticPartitionNum int32
+			var staticPartitionReady bool
 			selector := s.comp.columnSelector.Get(schema, table)
 			toRowCallback := func(postTxnFlushed []func(), totalCount uint64) func() {
 				var calledCount atomic.Uint64
@@ -351,13 +357,31 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 					continue
 				}
 
-				topic, err := s.comp.eventRouter.GetTopicForRowChange(&rowEvent)
-				if err != nil {
-					return errors.Trace(err)
-				}
-				partitionNum, err := s.comp.topicManager.GetPartitionNum(ctx, topic)
-				if err != nil {
-					return errors.Trace(err)
+				var (
+					topic        string
+					partitionNum int32
+				)
+				if isStaticTopic {
+					if !staticPartitionReady {
+						var err error
+						staticPartitionNum, err = s.comp.topicManager.GetPartitionNum(ctx, staticTopic)
+						if err != nil {
+							return errors.Trace(err)
+						}
+						staticPartitionReady = true
+					}
+					topic = staticTopic
+					partitionNum = staticPartitionNum
+				} else {
+					var err error
+					topic, err = s.comp.eventRouter.GetTopicForRowChange(&rowEvent)
+					if err != nil {
+						return errors.Trace(err)
+					}
+					partitionNum, err = s.comp.topicManager.GetPartitionNum(ctx, topic)
+					if err != nil {
+						return errors.Trace(err)
+					}
 				}
 
 				index, key, err := partitionGenerator.GeneratePartitionIndexAndKey(&row, partitionNum, event.TableInfo, event.CommitTs)
