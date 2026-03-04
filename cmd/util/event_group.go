@@ -95,7 +95,7 @@ func (g *EventsGroup) Append(row *commonEvent.DMLEvent, force bool) {
 			//  and the event may be replayed again after the table info is updated.
 			// So we just skip this event to avoid potential panic in the downstream.
 			if !compareTableInfo(previous, row) {
-				log.Warn("skip replayed DML event due to incompatible table info version, the event may be replayed again after the table info is updated",
+				log.Warn("skip replayed DML event due to incompatible table info, the event may be replayed again after the table info is updated",
 					zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
 					zap.Uint64("commitTs", row.CommitTs),
 					zap.Any("previous", previous),
