@@ -137,7 +137,9 @@ func (e *Encoder) EncodeDDLEvent(_ *commonEvent.DDLEvent) (*codecCommon.Message,
 }
 
 // Clean resets the encoder's buffered messages.
-func (e *Encoder) Clean() {}
+func (e *Encoder) Clean() {
+	e.messages = nil
+}
 
 // getRequiredColumnValue returns the encoded value for a required outbox column
 // and rejects missing, null, or empty values.
