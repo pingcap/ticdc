@@ -42,6 +42,7 @@ type Barrier struct {
 	spanController     *span.Controller
 	operatorController *operator.Controller
 	splitTableEnabled  bool
+	flushEnabled       bool
 	mode               int64
 }
 
@@ -58,10 +59,14 @@ func NewBarrier(spanController *span.Controller,
 		spanController:     spanController,
 		operatorController: operatorController,
 		splitTableEnabled:  splitTableEnabled,
+		flushEnabled:       true,
 		mode:               mode,
 	}
 	barrier.handleBootstrapResponse(bootstrapRespMap)
 	return &barrier
+}
+func (b *Barrier) SetFlushEnabled(enabled bool) {
+	b.flushEnabled = enabled
 }
 
 // HandleStatus handle the block status from dispatcher manager
@@ -168,6 +173,8 @@ func (b *Barrier) handleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 			event, ok := b.blockedEvents.Get(key)
 			if !ok {
 				event = NewBlockEvent(common.NewChangefeedIDFromPB(resp.ChangefeedID), common.NewDispatcherIDFromPB(span.ID), b.spanController, b.operatorController, blockState, b.splitTableEnabled)
+				event.flushEnabled = b.flushEnabled
+				event.flushDispatcherAdvanced = !b.flushEnabled
 				b.blockedEvents.Set(key, event)
 			}
 			switch blockState.Stage {
@@ -303,21 +310,25 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 		return event
 	}
 
-	// Phase 1: wait all influenced dispatchers to finish Action_Drain.
-	if !event.drainDispatcherAdvanced {
+	// Phase 1 (Flush, storage split-table only): all influenced dispatchers must flush pre-barrier DML first.
+	// This prevents pre-DDL data from overtaking the barrier write when a table is
+	// split into multiple dispatchers across nodes.
+	// DONE from all influenced dispatchers advances flushDispatcherAdvanced = true.
+	if !event.flushDispatcherAdvanced {
 		event.markDispatcherEventDone(dispatcherID)
 		if !event.allDispatcherReported() {
 			return event
 		}
 
-		event.drainDispatcherAdvanced = true
+		event.flushDispatcherAdvanced = true
 		event.rangeChecker.Reset()
 		event.reportedDispatchers = make(map[common.DispatcherID]struct{})
 		event.lastResendTime = time.Now().Add(-20 * time.Second)
 		return event
 	}
 
-	// Phase 2: wait writer dispatcher to finish Action_Write.
+	// Phase 2 (Write): only writerDispatcher executes Action_Write.
+	// DONE from writerDispatcher advances writerDispatcherAdvanced = true.
 	if !event.writerDispatcherAdvanced {
 		if event.writerDispatcher != dispatcherID {
 			// Ignore stale DONE from non-writer dispatchers while waiting writer Action_Write.
@@ -344,7 +355,8 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 		return event
 	}
 
-	// Phase 3: wait all influenced dispatchers to finish Action_Pass.
+	// Phase 3 (Pass): all influenced dispatchers report DONE for Action_Pass,
+	// then checkEventFinish removes the barrier from blockedEvents.
 	event.markDispatcherEventDone(dispatcherID)
 	b.checkEventFinish(event)
 	return event
@@ -447,6 +459,8 @@ func (b *Barrier) getOrInsertNewEvent(changefeedID common.ChangeFeedID, dispatch
 	event, ok := b.blockedEvents.Get(key)
 	if !ok {
 		event = NewBlockEvent(changefeedID, dispatcherID, b.spanController, b.operatorController, blockState, b.splitTableEnabled)
+		event.flushEnabled = b.flushEnabled
+		event.flushDispatcherAdvanced = !b.flushEnabled
 		b.blockedEvents.Set(key, event)
 	}
 	return event
@@ -458,7 +472,7 @@ func (b *Barrier) checkEventFinish(be *BarrierEvent) {
 	if !be.selected.Load() {
 		return
 	}
-	if !be.drainDispatcherAdvanced || !be.writerDispatcherAdvanced {
+	if !be.flushDispatcherAdvanced || !be.writerDispatcherAdvanced {
 		return
 	}
 	if !be.allDispatcherReported() {

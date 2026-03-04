@@ -828,9 +828,9 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 					d.PassBlockEvent(pendingEvent, actionCommitTs, actionIsSyncPoint)
 				})
 				return true
-			case heartbeatpb.Action_Drain:
+			case heartbeatpb.Action_Flush:
 				d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
-					d.DrainBlockEvent(pendingEvent, actionCommitTs, actionIsSyncPoint)
+					d.FlushBlockEvent(pendingEvent, actionCommitTs, actionIsSyncPoint)
 				})
 				return true
 			default:
@@ -897,18 +897,18 @@ func (d *BasicDispatcher) PassBlockEvent(pendingEvent commonEvent.BlockEvent, ac
 	d.reportBlockedEventDone(actionCommitTs, actionIsSyncPoint)
 }
 
-// DrainBlockEvent executes maintainer Action_Drain:
-// It only drains prior DML before the pending block event and keeps the pending
+// FlushBlockEvent executes maintainer Action_Flush:
+// It only flushes prior DML before the pending block event and keeps the pending
 // event for subsequent Write/Pass action.
-func (d *BasicDispatcher) DrainBlockEvent(pendingEvent commonEvent.BlockEvent, actionCommitTs uint64, actionIsSyncPoint bool) {
-	failpoint.Inject("BlockOrWaitBeforeDrain", nil)
+func (d *BasicDispatcher) FlushBlockEvent(pendingEvent commonEvent.BlockEvent, actionCommitTs uint64, actionIsSyncPoint bool) {
+	failpoint.Inject("BlockOrWaitBeforeFlush", nil)
 	err := d.sink.FlushDMLBeforeBlock(pendingEvent)
 	if err != nil {
 		d.HandleError(err)
 		return
 	}
 	d.blockEventStatus.updateBlockStage(heartbeatpb.BlockStage_WAITING)
-	failpoint.Inject("BlockAfterDrain", nil)
+	failpoint.Inject("BlockAfterFlush", nil)
 	d.reportBlockedEventDone(actionCommitTs, actionIsSyncPoint)
 }
 

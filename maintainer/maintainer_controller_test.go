@@ -1407,10 +1407,11 @@ func TestFinishBootstrap(t *testing.T) {
 			},
 			CheckpointTs: 10,
 		},
-	}, false)
+	}, false, false)
 	_ = msg
 	require.Nil(t, err)
 	require.NotNil(t, s.barrier)
+	require.False(t, s.barrier.flushEnabled)
 	require.True(t, s.bootstrapped)
 	require.Equal(t, msg.GetSchemas(), []*heartbeatpb.SchemaInfo{
 		{
@@ -1429,7 +1430,7 @@ func TestFinishBootstrap(t *testing.T) {
 	require.Equal(t, 0, s.spanController.GetSchedulingSize())
 	require.NotNil(t, s.spanController.GetTaskByID(dispatcherID2))
 
-	postBootstrapRequest, err := s.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{}, false)
+	postBootstrapRequest, err := s.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{}, false, false)
 	require.NoError(t, err)
 	require.Nil(t, postBootstrapRequest)
 }
@@ -1505,9 +1506,10 @@ func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 			Spans:        reportedSpans,
 			CheckpointTs: 10,
 		},
-	}, false)
+	}, false, false)
 	require.Nil(t, err)
 	require.NotNil(t, s.barrier)
+	require.False(t, s.barrier.flushEnabled)
 	// total 8 regions,
 	// table 1: 2 holes will be inserted to absent
 	// table 2: split to 2 spans, will be inserted to absent
@@ -1515,6 +1517,20 @@ func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 	// table 1 has two working span
 	require.Equal(t, 2, s.spanController.GetReplicatingSize())
 	require.True(t, s.bootstrapped)
+	// storage sink + split-table should enable flush phase
+	s2 := NewController(cfID, 1, nil, defaultConfig, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false)
+	s2.taskPool = &mockThreadPool{}
+	require.False(t, s2.bootstrapped)
+	_, err = s2.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+		"node1": {
+			ChangefeedID: cfID.ToPB(),
+			Spans:        reportedSpans,
+			CheckpointTs: 10,
+		},
+	}, false, true)
+	require.Nil(t, err)
+	require.NotNil(t, s2.barrier)
+	require.True(t, s2.barrier.flushEnabled)
 }
 
 func TestMapFindHole(t *testing.T) {

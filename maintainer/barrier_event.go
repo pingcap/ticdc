@@ -40,14 +40,19 @@ type BarrierEvent struct {
 	spanController     *span.Controller
 	operatorController *operator.Controller
 	nodeManager        *watcher.NodeManager
-	selected           atomic.Bool
-	hasNewTable        bool
+	// selected becomes true after all influenced dispatchers reach this barrier
+	// and maintainer chooses the writer dispatcher.
+	selected    atomic.Bool
+	hasNewTable bool
 	// table trigger dispatcher reported the block event, we should use it as the writer
 	tableTriggerDispatcherRelated bool
-	writerDispatcher              common.DispatcherID
-	// drainDispatcherAdvanced indicates all influenced dispatchers have finished
-	// Action_Drain for this barrier event.
-	drainDispatcherAdvanced  bool
+	// writerDispatcher is the only dispatcher that executes Action_Write for this barrier.
+	writerDispatcher common.DispatcherID
+	// flushDispatcherAdvanced marks Phase 1 completion: all influenced dispatchers
+	// have reported DONE for Action_Flush (flush pre-barrier DML only).
+	flushDispatcherAdvanced bool
+	// writerDispatcherAdvanced marks Phase 2 completion: the selected writer
+	// has reported DONE for Action_Write.
 	writerDispatcherAdvanced bool
 
 	blockedDispatchers *heartbeatpb.InfluencedTables
@@ -58,6 +63,8 @@ type BarrierEvent struct {
 	needSchedule       bool
 	// if the split table is enable for this changefeed, if not we can use tableID to check coverage
 	dynamicSplitEnabled bool
+	// flushEnabled controls whether this barrier uses the pre-write Flush phase.
+	flushEnabled bool
 
 	// Used to record reported dispatchers and has two main functions:
 	// 1. To facilitate subsequent verification of the dispatcher's existence (refer allDispatcherReported())
@@ -99,6 +106,7 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		needSchedule:       needSchedule(status),
 		// if the split table is enable for this changefeed, if not we can use tableID to check coverage
 		dynamicSplitEnabled: dynamicSplitEnabled,
+		flushEnabled:        true,
 
 		reportedDispatchers: make(map[common.DispatcherID]struct{}),
 		lastResendTime:      time.Time{},
@@ -208,9 +216,9 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 
 	be.selected.Store(true)
 	be.writerDispatcher = dispatcher
-	be.drainDispatcherAdvanced = false
+	be.flushDispatcherAdvanced = !be.flushEnabled
 	be.writerDispatcherAdvanced = false
-	// Trigger resend immediately so maintainer can send drain action in this round.
+	// Trigger resend immediately so maintainer can send the next action in this round.
 	be.lastResendTime = time.Now().Add(-20 * time.Second)
 	log.Info("all dispatcher reported heartbeat, schedule it, and select one writer",
 		zap.String("changefeed", be.cfID.Name()),
@@ -394,10 +402,10 @@ func (be *BarrierEvent) allDispatcherReported() bool {
 	return true
 }
 
-func (be *BarrierEvent) sendDrainAction(mode int64) []*messaging.TargetMessage {
-	// Action_Drain is only used for ordering. If some influenced dispatchers are gone,
+func (be *BarrierEvent) sendFlushAction(mode int64) []*messaging.TargetMessage {
+	// Action_Flush is only used for ordering. If some influenced dispatchers are gone,
 	// they are considered already beyond this barrier.
-	return be.sendActionToInfluencedDispatchers(mode, heartbeatpb.Action_Drain, false)
+	return be.sendActionToInfluencedDispatchers(mode, heartbeatpb.Action_Flush, false)
 }
 
 // send pass action to the related dispatchers, if find the related dispatchers are all removed, mark rangeCheck done
@@ -620,9 +628,12 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 		return nil
 	}
 	be.lastResendTime = time.Now()
-	// wait all influenced dispatchers to finish Action_Drain first.
-	if !be.drainDispatcherAdvanced {
-		return be.sendDrainAction(mode)
+	// Phase 1 (Flush, storage split-table only): all influenced dispatchers flush pre-barrier DML first.
+	// This fence is required for storage sink when split-table is enabled: one table may span
+	// multiple dispatchers on different nodes, and pre-DDL DML must not overtake
+	// the writer's Action_Write.
+	if !be.flushDispatcherAdvanced {
+		return be.sendFlushAction(mode)
 	}
 	// we select a dispatcher as the writer, still waiting for that dispatcher advance its checkpoint ts
 	if !be.writerDispatcherAdvanced {

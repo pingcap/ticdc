@@ -91,7 +91,7 @@ func TestOneBlockEvent(t *testing.T) {
 	require.Equal(t, uint64(10), event.commitTs)
 	require.True(t, event.writerDispatcher == spanController.GetDDLDispatcherID())
 	require.True(t, event.selected.Load())
-	require.False(t, event.drainDispatcherAdvanced)
+	require.False(t, event.flushDispatcherAdvanced)
 	require.False(t, event.writerDispatcherAdvanced)
 	require.Len(t, resp.DispatcherStatuses, 1)
 	require.Equal(t, resp.DispatcherStatuses[0].Ack.CommitTs, uint64(10))
@@ -100,11 +100,11 @@ func TestOneBlockEvent(t *testing.T) {
 	event.lastResendTime = time.Now().Add(-2 * time.Second)
 	resendMsgs := event.resend(common.DefaultMode)
 	if len(resendMsgs) > 0 {
-		require.True(t, resendMsgs[0].Message[0].(*heartbeatpb.HeartBeatResponse).DispatcherStatuses[0].Action.Action == heartbeatpb.Action_Drain)
+		require.True(t, resendMsgs[0].Message[0].(*heartbeatpb.HeartBeatResponse).DispatcherStatuses[0].Action.Action == heartbeatpb.Action_Flush)
 		require.True(t, resendMsgs[0].Message[0].(*heartbeatpb.HeartBeatResponse).DispatcherStatuses[0].Action.IsSyncPoint)
 	}
 
-	// all dispatchers report drain done
+	// all dispatchers report flush done
 	msgs = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
@@ -133,10 +133,10 @@ func TestOneBlockEvent(t *testing.T) {
 	resp = msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
 	require.Equal(t, resp.DispatcherStatuses[0].Ack.CommitTs, uint64(10))
 	require.Len(t, barrier.blockedEvents.m, 1)
-	require.True(t, event.drainDispatcherAdvanced)
+	require.True(t, event.flushDispatcherAdvanced)
 	require.False(t, event.writerDispatcherAdvanced)
 
-	// resend write action after drain phase done
+	// resend write action after flush phase done
 	resendMsgs = barrier.Resend()
 	require.Len(t, resendMsgs, 1)
 	writeResp := resendMsgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
@@ -333,7 +333,7 @@ func TestNormalBlock(t *testing.T) {
 	require.Equal(t, uint64(10), event.commitTs)
 	require.True(t, event.writerDispatcher == selectDispatcherID)
 
-	// Phase1: all influenced dispatchers report drain done.
+	// Phase1: all influenced dispatchers report flush done.
 	_ = barrier.HandleStatus("node2", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
@@ -371,7 +371,7 @@ func TestNormalBlock(t *testing.T) {
 		},
 	})
 	require.Len(t, barrier.blockedEvents.m, 1)
-	require.True(t, event.drainDispatcherAdvanced)
+	require.True(t, event.flushDispatcherAdvanced)
 	require.False(t, event.writerDispatcherAdvanced)
 
 	// Phase2: resend write action and writer reports done.
@@ -548,7 +548,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 	require.False(t, event.rangeChecker.IsFullyCovered())
 	require.True(t, event.tableTriggerDispatcherRelated)
 
-	// Phase1: all influenced dispatchers report drain done.
+	// Phase1: all influenced dispatchers report flush done.
 	_ = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
@@ -585,7 +585,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 		},
 	})
 	require.Len(t, barrier.blockedEvents.m, 1)
-	require.True(t, event.drainDispatcherAdvanced)
+	require.True(t, event.flushDispatcherAdvanced)
 	require.False(t, event.writerDispatcherAdvanced)
 
 	// Phase2: writer action and done.
@@ -784,7 +784,7 @@ func TestSchemaBlock(t *testing.T) {
 	resp = msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
 	require.Len(t, resp.DispatcherStatuses, 1)
 
-	// Phase1: all influenced dispatchers report drain done.
+	// Phase1: all influenced dispatchers report flush done.
 	_ = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
@@ -814,7 +814,7 @@ func TestSchemaBlock(t *testing.T) {
 			},
 		},
 	})
-	require.True(t, event.drainDispatcherAdvanced)
+	require.True(t, event.flushDispatcherAdvanced)
 	require.False(t, event.writerDispatcherAdvanced)
 
 	// Phase2: writer action and done.
@@ -972,13 +972,13 @@ func TestSyncPointBlock(t *testing.T) {
 	// the last one will be the writer
 	require.Equal(t, event.writerDispatcher, spanController.GetDDLDispatcherID())
 
-	// Phase1: resend drain actions and wait all done.
+	// Phase1: resend flush actions and wait all done.
 	resendMsgs := barrier.Resend()
 	require.Len(t, resendMsgs, 2)
 	for _, msg := range resendMsgs {
-		drainResp := msg.Message[0].(*heartbeatpb.HeartBeatResponse)
-		require.Len(t, drainResp.DispatcherStatuses, 1)
-		require.Equal(t, heartbeatpb.Action_Drain, drainResp.DispatcherStatuses[0].Action.Action)
+		flushResp := msg.Message[0].(*heartbeatpb.HeartBeatResponse)
+		require.Len(t, flushResp.DispatcherStatuses, 1)
+		require.Equal(t, heartbeatpb.Action_Flush, flushResp.DispatcherStatuses[0].Action.Action)
 	}
 
 	_ = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
@@ -1027,7 +1027,7 @@ func TestSyncPointBlock(t *testing.T) {
 			},
 		},
 	})
-	require.True(t, event.drainDispatcherAdvanced)
+	require.True(t, event.flushDispatcherAdvanced)
 	require.False(t, event.writerDispatcherAdvanced)
 
 	// Phase2: write action and writer done.
@@ -1881,7 +1881,7 @@ func TestDeferAllDBBlockEventFromDDLDispatcherWhilePendingSchedule(t *testing.T)
 	require.NotNil(t, event)
 	require.Nil(t, event.rangeChecker)
 
-	// Truncate barrier finishes drain phase first.
+	// Truncate barrier finishes flush phase first.
 	_ = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
