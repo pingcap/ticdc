@@ -16,12 +16,14 @@ package cloudstorage
 import (
 	"context"
 
+	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/utils/chann"
+	"go.uber.org/zap"
 )
 
 type eventFragmentKind uint8
@@ -133,10 +135,26 @@ func (d *defragmenter) Run(ctx context.Context) error {
 			}
 			// check whether to write messages to output channel right now
 			next := d.lastDispatchedSeq + 1
+			if frag.isDrain() {
+				log.Info("storage sink defragmenter observed drain marker",
+					zap.String("dispatcher", frag.dispatcherID.String()),
+					zap.Uint64("commitTs", frag.marker.commitTs),
+					zap.Uint64("seq", frag.seqNumber),
+					zap.Uint64("nextExpectedSeq", next),
+					zap.Uint64("lastDispatchedSeq", d.lastDispatchedSeq))
+			}
 			if frag.seqNumber == next {
 				d.writeMsgsConsecutive(ctx, frag)
 			} else if frag.seqNumber > next {
 				d.future[frag.seqNumber] = frag
+				if frag.isDrain() {
+					log.Info("storage sink defragmenter waits drain marker for missing sequence",
+						zap.String("dispatcher", frag.dispatcherID.String()),
+						zap.Uint64("commitTs", frag.marker.commitTs),
+						zap.Uint64("seq", frag.seqNumber),
+						zap.Uint64("nextExpectedSeq", next),
+						zap.Int("bufferedFragments", len(d.future)))
+				}
 			} else {
 				return nil
 			}
@@ -169,6 +187,13 @@ func (d *defragmenter) writeMsgsConsecutive(
 
 func (d *defragmenter) dispatchFragToDMLWorker(frag eventFragment) {
 	workerID := commonType.GID(frag.dispatcherID).Hash(uint64(len(d.outputChs)))
+	if frag.isDrain() {
+		log.Info("storage sink defragmenter dispatch drain marker to writer",
+			zap.Int("workerID", int(workerID)),
+			zap.String("dispatcher", frag.dispatcherID.String()),
+			zap.Uint64("commitTs", frag.marker.commitTs),
+			zap.Uint64("seq", frag.seqNumber))
+	}
 	d.outputChs[workerID].In() <- frag
 	if !frag.isDrain() {
 		frag.event.PostEnqueue()

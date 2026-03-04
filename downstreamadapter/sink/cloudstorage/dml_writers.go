@@ -17,6 +17,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/pingcap/log"
 	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -27,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"go.uber.org/atomic"
+	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -123,6 +125,14 @@ func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
 		DispatcherID:     event.GetDispatcherID(),
 	}
 	seq := d.lastSeqNum.Inc()
+	log.Info("storage sink add dml event",
+		zap.String("schema", tbl.TableNameWithPhysicTableID.Schema),
+		zap.String("table", tbl.TableNameWithPhysicTableID.Table),
+		zap.Int64("tableID", tbl.TableNameWithPhysicTableID.TableID),
+		zap.Uint64("tableVersion", tbl.TableInfoVersion),
+		zap.String("dispatcher", event.GetDispatcherID().String()),
+		zap.Uint64("commitTs", event.CommitTs),
+		zap.Uint64("seq", seq))
 	// emit a TxnCallbackableEvent encoupled with a sequence number starting from one.
 	d.msgCh.Push(newEventFragment(seq, tbl, event.GetDispatcherID(), event))
 }
@@ -132,14 +142,23 @@ func (d *dmlWriters) FlushDMLBeforeBlock(event commonEvent.BlockEvent) error {
 		return nil
 	}
 
+	log.Info("storage sink flush dml before block event",
+		zap.String("dispatcher", event.GetDispatcherID().String()),
+		zap.Uint64("commitTs", event.GetCommitTs()))
+
 	start := time.Now()
-	defer sinkmetrics.CloudStorageDDLDrainDurationHistogram.WithLabelValues(
-		d.changefeedID.Keyspace(),
-		d.changefeedID.ID().String(),
-	).Observe(time.Since(start).Seconds())
+	defer func() {
+		sinkmetrics.CloudStorageDDLDrainDurationHistogram.
+			WithLabelValues(d.changefeedID.Keyspace(), d.changefeedID.ID().String()).
+			Observe(time.Since(start).Seconds())
+	}()
 
 	doneCh := make(chan error, 1)
 	seq := d.lastSeqNum.Inc()
+	log.Info("storage sink start drain before block event",
+		zap.String("dispatcher", event.GetDispatcherID().String()),
+		zap.Uint64("commitTs", event.GetCommitTs()),
+		zap.Uint64("seq", seq))
 	// Drain marker shares the same global sequence as DML fragments.
 	// Defragmenter and writer will place it after all prior fragments, so once
 	// doneCh returns, previous DML of this dispatcher are already enqueued/drained.
@@ -147,7 +166,19 @@ func (d *dmlWriters) FlushDMLBeforeBlock(event commonEvent.BlockEvent) error {
 
 	select {
 	case err := <-doneCh:
-		return err
+		if err != nil {
+			log.Warn("storage sink drain before block event failed",
+				zap.String("dispatcher", event.GetDispatcherID().String()),
+				zap.Uint64("commitTs", event.GetCommitTs()),
+				zap.Duration("duration", time.Since(start)),
+				zap.Error(err))
+			return err
+		}
+		log.Info("storage sink drain before block event finished",
+			zap.String("dispatcher", event.GetDispatcherID().String()),
+			zap.Uint64("commitTs", event.GetCommitTs()),
+			zap.Duration("duration", time.Since(start)))
+		return nil
 	case <-d.ctx.Done():
 		return errors.Trace(d.ctx.Err())
 	}
