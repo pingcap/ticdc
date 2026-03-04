@@ -105,6 +105,7 @@ func (e eventFragment) isDrain() bool {
 // defragmenter is used to handle event fragments which can be registered
 // out of order.
 type defragmenter struct {
+	changefeedID      commonType.ChangeFeedID
 	lastDispatchedSeq uint64
 	future            map[uint64]eventFragment
 	inputCh           <-chan eventFragment
@@ -112,13 +113,15 @@ type defragmenter struct {
 }
 
 func newDefragmenter(
+	changefeedID commonType.ChangeFeedID,
 	inputCh <-chan eventFragment,
 	outputChs []*chann.DrainableChann[eventFragment],
 ) *defragmenter {
 	return &defragmenter{
-		future:    make(map[uint64]eventFragment),
-		inputCh:   inputCh,
-		outputChs: outputChs,
+		changefeedID: changefeedID,
+		future:       make(map[uint64]eventFragment),
+		inputCh:      inputCh,
+		outputChs:    outputChs,
 	}
 }
 
@@ -137,6 +140,8 @@ func (d *defragmenter) Run(ctx context.Context) error {
 			next := d.lastDispatchedSeq + 1
 			if frag.isDrain() {
 				log.Info("storage sink defragmenter observed drain marker",
+					zap.String("keyspace", d.changefeedID.Keyspace()),
+					zap.String("changefeed", d.changefeedID.ID().String()),
 					zap.String("dispatcher", frag.dispatcherID.String()),
 					zap.Uint64("commitTs", frag.marker.commitTs),
 					zap.Uint64("seq", frag.seqNumber),
@@ -149,6 +154,8 @@ func (d *defragmenter) Run(ctx context.Context) error {
 				d.future[frag.seqNumber] = frag
 				if frag.isDrain() {
 					log.Info("storage sink defragmenter waits drain marker for missing sequence",
+						zap.String("keyspace", d.changefeedID.Keyspace()),
+						zap.String("changefeed", d.changefeedID.ID().String()),
 						zap.String("dispatcher", frag.dispatcherID.String()),
 						zap.Uint64("commitTs", frag.marker.commitTs),
 						zap.Uint64("seq", frag.seqNumber),
@@ -189,6 +196,8 @@ func (d *defragmenter) dispatchFragToDMLWorker(frag eventFragment) {
 	workerID := commonType.GID(frag.dispatcherID).Hash(uint64(len(d.outputChs)))
 	if frag.isDrain() {
 		log.Info("storage sink defragmenter dispatch drain marker to writer",
+			zap.String("keyspace", d.changefeedID.Keyspace()),
+			zap.String("changefeed", d.changefeedID.ID().String()),
 			zap.Int("workerID", int(workerID)),
 			zap.String("dispatcher", frag.dispatcherID.String()),
 			zap.Uint64("commitTs", frag.marker.commitTs),

@@ -221,6 +221,8 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 	}
 
 	log.Info("storage sink executed ddl event",
+		zap.String("keyspace", s.changefeedID.Keyspace()),
+		zap.String("changefeed", s.changefeedID.ID().String()),
 		zap.String("schema", event.SchemaName),
 		zap.String("table", event.TableName),
 		zap.String("dispatcher", event.GetDispatcherID().String()),

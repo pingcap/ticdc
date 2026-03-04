@@ -82,7 +82,7 @@ func newDMLWriters(
 		msgCh:        messageCh,
 
 		encodeGroup:  encoderGroup,
-		defragmenter: newDefragmenter(encodedOutCh, writerInputChs),
+		defragmenter: newDefragmenter(changefeedID, encodedOutCh, writerInputChs),
 		writers:      writers,
 	}
 }
@@ -126,6 +126,8 @@ func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
 	}
 	seq := d.lastSeqNum.Inc()
 	log.Info("storage sink add dml event",
+		zap.String("keyspace", d.changefeedID.Keyspace()),
+		zap.String("changefeed", d.changefeedID.ID().String()),
 		zap.String("schema", tbl.TableNameWithPhysicTableID.Schema),
 		zap.String("table", tbl.TableNameWithPhysicTableID.Table),
 		zap.Int64("tableID", tbl.TableNameWithPhysicTableID.TableID),
@@ -143,6 +145,8 @@ func (d *dmlWriters) FlushDMLBeforeBlock(event commonEvent.BlockEvent) error {
 	}
 
 	log.Info("storage sink flush dml before block event",
+		zap.String("keyspace", d.changefeedID.Keyspace()),
+		zap.String("changefeed", d.changefeedID.ID().String()),
 		zap.String("dispatcher", event.GetDispatcherID().String()),
 		zap.Uint64("commitTs", event.GetCommitTs()))
 
@@ -156,6 +160,8 @@ func (d *dmlWriters) FlushDMLBeforeBlock(event commonEvent.BlockEvent) error {
 	doneCh := make(chan error, 1)
 	seq := d.lastSeqNum.Inc()
 	log.Info("storage sink start drain before block event",
+		zap.String("keyspace", d.changefeedID.Keyspace()),
+		zap.String("changefeed", d.changefeedID.ID().String()),
 		zap.String("dispatcher", event.GetDispatcherID().String()),
 		zap.Uint64("commitTs", event.GetCommitTs()),
 		zap.Uint64("seq", seq))
@@ -168,6 +174,8 @@ func (d *dmlWriters) FlushDMLBeforeBlock(event commonEvent.BlockEvent) error {
 	case err := <-doneCh:
 		if err != nil {
 			log.Warn("storage sink drain before block event failed",
+				zap.String("keyspace", d.changefeedID.Keyspace()),
+				zap.String("changefeed", d.changefeedID.ID().String()),
 				zap.String("dispatcher", event.GetDispatcherID().String()),
 				zap.Uint64("commitTs", event.GetCommitTs()),
 				zap.Duration("duration", time.Since(start)),
@@ -175,6 +183,8 @@ func (d *dmlWriters) FlushDMLBeforeBlock(event commonEvent.BlockEvent) error {
 			return err
 		}
 		log.Info("storage sink drain before block event finished",
+			zap.String("keyspace", d.changefeedID.Keyspace()),
+			zap.String("changefeed", d.changefeedID.ID().String()),
 			zap.String("dispatcher", event.GetDispatcherID().String()),
 			zap.Uint64("commitTs", event.GetCommitTs()),
 			zap.Duration("duration", time.Since(start)))
