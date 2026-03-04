@@ -305,6 +305,25 @@ func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
 	updateMetricEventServiceSendResolvedTsCount(d.info.GetMode())
 }
 
+func (c *eventBroker) sendBootstrapResolvedTs(d *dispatcherStat, watermark uint64) bool {
+	remoteID := node.ID(d.info.GetServerID())
+	c.emitSyncPointEventIfNeeded(watermark, d, remoteID)
+	re := event.NewResolvedEvent(watermark, d.id, d.epoch)
+	re.Seq = d.seq.Load()
+	resolvedEvent := newWrapResolvedEvent(remoteID, re)
+	ch := c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode()))
+	select {
+	case ch <- resolvedEvent:
+		d.updateSentResolvedTs(watermark)
+		updateMetricEventServiceSendResolvedTsCount(d.info.GetMode())
+		return true
+	default:
+		// Avoid blocking broker tick path. The next ticker round will retry.
+		resolvedEvent.reset()
+		return false
+	}
+}
+
 func (c *eventBroker) sendNotReusableEvent(
 	server node.ID,
 	d *dispatcherStat,
@@ -429,20 +448,26 @@ func (c *eventBroker) tickBootstrapResolvedTs(ctx context.Context) error {
 }
 
 func (c *eventBroker) sendBootstrapResolvedTsIfNeeded(dispatcher *dispatcherStat) {
-	if dispatcher == nil || dispatcher.isRemoved.Load() || dispatcher.epoch > 0 {
+	if dispatcher == nil || dispatcher.isRemoved.Load() {
+		return
+	}
+
+	// For epoch 0 dispatchers, drive the ready/reset handshake first.
+	if dispatcher.epoch == 0 {
+		c.checkAndSendReady(dispatcher)
 		return
 	}
 
 	sentResolvedTs := dispatcher.sentResolvedTs.Load()
 	receivedResolvedTs := dispatcher.receivedResolvedTs.Load()
-	// Stop synthetic advancement once upstream resolvedTs has caught up.
+	// Stop synthetic advancement once upstream resolved-ts catches up.
 	if dispatcher.hasReceivedFirstResolvedTs.Load() && receivedResolvedTs >= sentResolvedTs {
 		return
 	}
 
 	c.sendHandshakeIfNeed(dispatcher)
 	nextResolvedTs := oracle.GoTimeToTS(oracle.GetTimeFromTS(sentResolvedTs).Add(bootstrapResolvedTsStep))
-	c.sendResolvedTs(dispatcher, nextResolvedTs)
+	c.sendBootstrapResolvedTs(dispatcher, nextResolvedTs)
 }
 
 // getScanTaskDataRange determines the valid data range for scanning a given task.
@@ -1088,7 +1113,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	c.metricsCollector.metricDispatcherCount.Inc()
 	if dispatcher.epoch > 0 {
 		c.sendHandshakeIfNeed(dispatcher)
-		c.sendResolvedTs(dispatcher, dispatcher.startTs)
+		c.sendBootstrapResolvedTs(dispatcher, dispatcher.startTs)
 	}
 	log.Info("register dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID),

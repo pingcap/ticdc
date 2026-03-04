@@ -378,6 +378,15 @@ func TestSendBootstrapResolvedTsIfNeeded(t *testing.T) {
 	// Close the broker so we can assert the raw message channel ordering.
 	broker.close()
 
+	// For epoch 0 dispatcher, broker should drive ready/reset flow first.
+	dispInfoEpoch0 := newMockDispatcherInfoForTest(t)
+	dispInfoEpoch0.epoch = 0
+	changefeedStatusEpoch0 := broker.getOrSetChangefeedStatus(dispInfoEpoch0.GetChangefeedID(), dispInfoEpoch0.GetSyncPointInterval())
+	dispEpoch0 := newDispatcherStat(dispInfoEpoch0, 1, 1, nil, changefeedStatusEpoch0)
+	broker.sendBootstrapResolvedTsIfNeeded(dispEpoch0)
+	readyEvent := <-broker.messageCh[dispEpoch0.messageWorkerIndex]
+	require.Equal(t, event.TypeReadyEvent, readyEvent.msgType)
+
 	dispInfo := newMockDispatcherInfoForTest(t)
 	dispInfo.epoch = 1
 	dispInfo.startTs = 100
@@ -391,6 +400,8 @@ func TestSendBootstrapResolvedTsIfNeeded(t *testing.T) {
 	resolvedEvent := <-broker.messageCh[disp.messageWorkerIndex]
 	require.Equal(t, event.TypeResolvedEvent, resolvedEvent.msgType)
 	require.Equal(t, oracle.GoTimeToTS(oracle.GetTimeFromTS(dispInfo.startTs).Add(time.Second)), resolvedEvent.resolvedTsEvent.ResolvedTs)
+	// Synthetic resolvedTs should move scan progress to skip data.
+	require.Equal(t, resolvedEvent.resolvedTsEvent.ResolvedTs, disp.lastScannedCommitTs.Load())
 
 	// Upstream catches up, synthetic advancement should stop.
 	disp.hasReceivedFirstResolvedTs.Store(true)

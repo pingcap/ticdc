@@ -205,6 +205,11 @@ func (a *dispatcherStat) setHandshaked() {
 }
 
 func (a *dispatcherStat) updateSentResolvedTs(resolvedTs uint64) {
+	a.updateSentResolvedTsOnly(resolvedTs)
+	a.updateScanRange(resolvedTs, 0)
+}
+
+func (a *dispatcherStat) updateSentResolvedTsOnly(resolvedTs uint64) {
 	// Keep sentResolvedTs monotonic when resolvedTs can be emitted by multiple goroutines.
 	for {
 		old := a.sentResolvedTs.Load()
@@ -217,7 +222,6 @@ func (a *dispatcherStat) updateSentResolvedTs(resolvedTs uint64) {
 		}
 	}
 	a.lastSentResolvedTsTime.Store(time.Now())
-	a.updateScanRange(resolvedTs, 0)
 }
 
 func (a *dispatcherStat) updateScanRange(txnCommitTs, txnStartTs uint64) {
