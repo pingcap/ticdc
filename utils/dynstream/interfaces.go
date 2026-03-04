@@ -260,27 +260,22 @@ type AreaSettings struct {
 	// The algorithm of the memory control.
 	algorithm int
 
-	// control how to control events
+	// control how to batch events
 	batchConfig batchConfig
 }
 
 func NewAreaSettingsWithMaxPendingSize(
 	quota uint64, algorithm int, component string,
-	batchConfigs ...batchConfig,
 ) AreaSettings {
 	// The path max pending size is at least 1MB.
 	pathMaxPendingSize := max(quota/10, 1*1024*1024)
-	settingBatchConfig := batchConfig{}
-	if len(batchConfigs) > 0 {
-		settingBatchConfig = batchConfigs[0]
-	}
 	return AreaSettings{
 		component:          component,
 		feedbackInterval:   DefaultFeedbackInterval,
 		maxPendingSize:     quota,
 		pathMaxPendingSize: pathMaxPendingSize,
 		algorithm:          algorithm,
-		batchConfig:        settingBatchConfig,
+		batchConfig:        batchConfig{},
 	}
 }
 

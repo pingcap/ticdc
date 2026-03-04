@@ -13,7 +13,7 @@
 
 package dynstream
 
-// Tests for per-area batch config store.
+// Tests for per-area batch config registry.
 
 import (
 	"testing"
@@ -23,33 +23,33 @@ import (
 
 func TestAreaConfigNoPath(t *testing.T) {
 	defaultConfig := NewBatchConfig(4, 0)
-	store := newAreaBatchConfigStore[int](defaultConfig)
+	registry := newAreaBatchConfigRegistry[int](defaultConfig)
 
-	store.setAreaBatchConfig(1, 2, 0)
-	require.Equal(t, defaultConfig, store.getBatchConfig(1))
+	registry.setAreaBatchConfig(1, 2, 0)
+	require.Equal(t, defaultConfig, registry.getBatchConfig(1))
 }
 
 func TestAreaConfigClear(t *testing.T) {
 	defaultConfig := NewBatchConfig(4, 0)
-	store := newAreaBatchConfigStore[int](defaultConfig)
+	registry := newAreaBatchConfigRegistry[int](defaultConfig)
 
-	store.onAddPath(1)
-	store.setAreaBatchConfig(1, 2, 0)
-	require.Equal(t, NewBatchConfig(2, 0), store.getBatchConfig(1))
+	registry.onAddPath(1)
+	registry.setAreaBatchConfig(1, 2, 0)
+	require.Equal(t, NewBatchConfig(2, 0), registry.getBatchConfig(1))
 
 	// Reset to default by setting policy values back to the default.
-	store.setAreaBatchConfig(1, defaultConfig.softCount, defaultConfig.hardBytes)
-	require.Equal(t, defaultConfig, store.getBatchConfig(1))
+	registry.setAreaBatchConfig(1, defaultConfig.count, defaultConfig.bytes)
+	require.Equal(t, defaultConfig, registry.getBatchConfig(1))
 }
 
 func TestAreaConfigCleanup(t *testing.T) {
 	defaultConfig := NewBatchConfig(4, 0)
-	store := newAreaBatchConfigStore[int](defaultConfig)
+	registry := newAreaBatchConfigRegistry[int](defaultConfig)
 
-	store.onAddPath(1)
-	store.setAreaBatchConfig(1, 2, 0)
-	require.Equal(t, NewBatchConfig(2, 0), store.getBatchConfig(1))
+	registry.onAddPath(1)
+	registry.setAreaBatchConfig(1, 2, 0)
+	require.Equal(t, NewBatchConfig(2, 0), registry.getBatchConfig(1))
 
-	store.onRemovePath(1)
-	require.Equal(t, defaultConfig, store.getBatchConfig(1))
+	registry.onRemovePath(1)
+	require.Equal(t, defaultConfig, registry.getBatchConfig(1))
 }

@@ -272,6 +272,16 @@ func TestRemoveLastDispatcher(t *testing.T) {
 	require.True(t, ok, "changefeedStat for cfID2 should not be affected")
 }
 
+func TestBatchConfigAppliedOnce(t *testing.T) {
+	cf := newChangefeedStat(common.NewChangefeedID(common.DefaultKeyspaceName))
+
+	require.True(t, cf.tryMarkBatchConfigApplied(common.DefaultMode))
+	require.False(t, cf.tryMarkBatchConfigApplied(common.DefaultMode))
+
+	require.True(t, cf.tryMarkBatchConfigApplied(common.RedoMode))
+	require.False(t, cf.tryMarkBatchConfigApplied(common.RedoMode))
+}
+
 func TestEventCollectorBatchByCount(t *testing.T) {
 	ctx := context.Background()
 	nodeInfo := node.NewInfo("127.0.0.1:18300", "")

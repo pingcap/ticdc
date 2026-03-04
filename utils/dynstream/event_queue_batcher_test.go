@@ -28,13 +28,13 @@ func TestBatcherSetLimit(t *testing.T) {
 	b.setLimit(NewBatchConfig(8, 64))
 	require.Equal(t, 0, len(b.buf))
 	require.Equal(t, 0, b.nBytes)
-	require.Equal(t, 8, b.config.softCount)
-	require.Equal(t, 64, b.config.hardBytes)
+	require.Equal(t, 8, b.config.count)
+	require.Equal(t, 64, b.config.bytes)
 }
 
 func TestBatchByBytes(t *testing.T) {
 	handler := mockHandler{}
-	eq := newEventQueue(&handler)
+	eq := newEventQueue(&handler, newTestBatchConfigRegistry())
 	b := newDefaultBatcher[*mockEvent]()
 
 	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, NewBatchConfig(10, 12))
@@ -64,7 +64,7 @@ func TestBatchByBytes(t *testing.T) {
 	require.Equal(t, 4, events[0].value)
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
 
-	eq = newEventQueue(&handler)
+	eq = newEventQueue(&handler, newTestBatchConfigRegistry())
 	path = newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, NewBatchConfig(10, 12))
 	eq.initPath(path)
 	for i := 1; i <= 4; i++ {
@@ -89,7 +89,7 @@ func TestBatchByBytes(t *testing.T) {
 
 func TestBatchByHardCount(t *testing.T) {
 	handler := mockHandler{}
-	eq := newEventQueue(&handler)
+	eq := newEventQueue(&handler, newTestBatchConfigRegistry())
 	b := newDefaultBatcher[*mockEvent]()
 
 	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, NewBatchConfig(3, 100))
@@ -118,7 +118,7 @@ func TestBatchByHardCount(t *testing.T) {
 
 func TestBatchByBytesLargeFirstEvent(t *testing.T) {
 	handler := mockHandler{}
-	eq := newEventQueue(&handler)
+	eq := newEventQueue(&handler, newTestBatchConfigRegistry())
 	b := newDefaultBatcher[*mockEvent]()
 
 	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil, NewBatchConfig(10, 50))

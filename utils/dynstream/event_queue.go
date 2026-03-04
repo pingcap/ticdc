@@ -31,7 +31,7 @@ type eventQueue[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	// Used to reduce the block allocation in the paths pending queue.
 	eventBlockAlloc *deque.BlockAllocator[eventWrap[A, P, T, D, H]]
 
-	batchConfigStore *areaBatchConfigStore[A]
+	batchConfigRegistry *areaBatchConfigRegistry[A]
 
 	// Signal queue is used to decide which paths events should be popped.
 	signalQueue        *deque.Deque[eventSignal[A, P, T, D, H]]
@@ -40,18 +40,14 @@ type eventQueue[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 
 func newEventQueue[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	handler H,
-	batchConfigStore ...*areaBatchConfigStore[A],
+	batchConfigRegistry *areaBatchConfigRegistry[A],
 ) eventQueue[A, P, T, D, H] {
-	store := newAreaBatchConfigStore[A](newDefaultBatchConfig())
-	if len(batchConfigStore) > 0 && batchConfigStore[0] != nil {
-		store = batchConfigStore[0]
-	}
 	return eventQueue[A, P, T, D, H]{
-		handler:            handler,
-		eventBlockAlloc:    deque.NewBlockAllocator[eventWrap[A, P, T, D, H]](32, 1024),
-		batchConfigStore:   store,
-		signalQueue:        deque.NewDeque(1024, deque.NewBlockAllocator[eventSignal[A, P, T, D, H]](1024, 32)),
-		totalPendingLength: &atomic.Int64{},
+		handler:             handler,
+		eventBlockAlloc:     deque.NewBlockAllocator[eventWrap[A, P, T, D, H]](32, 1024),
+		batchConfigRegistry: batchConfigRegistry,
+		signalQueue:         deque.NewDeque(1024, deque.NewBlockAllocator[eventSignal[A, P, T, D, H]](1024, 32)),
+		totalPendingLength:  &atomic.Int64{},
 	}
 }
 
@@ -140,8 +136,8 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(b *batcher[T]) ([]T, *pathInfo[A, 
 		firstGroup := firstEvent.eventType.DataGroup
 		firstProperty := firstEvent.eventType.Property
 
-		batchConfig := q.batchConfigStore.getBatchConfig(path.area)
-		if batchConfig == q.batchConfigStore.defaultConfig && (path.batchConfig.softCount > 0 || path.batchConfig.hardBytes > 0) {
+		batchConfig := q.batchConfigRegistry.getBatchConfig(path.area)
+		if batchConfig == q.batchConfigRegistry.defaultConfig && (path.batchConfig.count > 0 || path.batchConfig.bytes > 0) {
 			batchConfig = path.batchConfig
 		}
 		b.setLimit(batchConfig)

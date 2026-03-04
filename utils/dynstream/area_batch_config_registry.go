@@ -13,14 +13,12 @@
 
 package dynstream
 
-// areaBatchConfigStore stores per-area batching config overrides.
-
 import (
 	"sync"
 	"sync/atomic"
 )
 
-type areaBatchConfigStore[A Area] struct {
+type areaBatchConfigRegistry[A Area] struct {
 	defaultConfig batchConfig
 
 	// The configs are stored as an immutable map in atomic.Value, so reads in the hot path
@@ -31,8 +29,8 @@ type areaBatchConfigStore[A Area] struct {
 	areaRefCount map[A]int
 }
 
-func newAreaBatchConfigStore[A Area](defaultConfig batchConfig) *areaBatchConfigStore[A] {
-	s := &areaBatchConfigStore[A]{
+func newAreaBatchConfigRegistry[A Area](defaultConfig batchConfig) *areaBatchConfigRegistry[A] {
+	s := &areaBatchConfigRegistry[A]{
 		defaultConfig: defaultConfig,
 		areaRefCount:  make(map[A]int),
 	}
@@ -40,7 +38,7 @@ func newAreaBatchConfigStore[A Area](defaultConfig batchConfig) *areaBatchConfig
 	return s
 }
 
-func (s *areaBatchConfigStore[A]) getBatchConfig(area A) batchConfig {
+func (s *areaBatchConfigRegistry[A]) getBatchConfig(area A) batchConfig {
 	configs := s.configs.Load().(map[A]batchConfig)
 	if config, ok := configs[area]; ok {
 		return config
@@ -48,13 +46,13 @@ func (s *areaBatchConfigStore[A]) getBatchConfig(area A) batchConfig {
 	return s.defaultConfig
 }
 
-func (s *areaBatchConfigStore[A]) onAddPath(area A) {
+func (s *areaBatchConfigRegistry[A]) onAddPath(area A) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.areaRefCount[area]++
 }
 
-func (s *areaBatchConfigStore[A]) onRemovePath(area A) {
+func (s *areaBatchConfigRegistry[A]) onRemovePath(area A) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -67,7 +65,7 @@ func (s *areaBatchConfigStore[A]) onRemovePath(area A) {
 	s.areaRefCount[area] = oldCount - 1
 }
 
-func (s *areaBatchConfigStore[A]) setAreaBatchConfig(area A, batchCount int, batchBytes int) {
+func (s *areaBatchConfigRegistry[A]) setAreaBatchConfig(area A, batchCount int, batchBytes int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -91,7 +89,7 @@ func (s *areaBatchConfigStore[A]) setAreaBatchConfig(area A, batchCount int, bat
 	s.setOverrideLocked(area, newConfig)
 }
 
-func (s *areaBatchConfigStore[A]) setOverrideLocked(area A, config batchConfig) {
+func (s *areaBatchConfigRegistry[A]) setOverrideLocked(area A, config batchConfig) {
 	oldConfigs := s.configs.Load().(map[A]batchConfig)
 	newConfigs := make(map[A]batchConfig, len(oldConfigs)+1)
 	for k, v := range oldConfigs {
@@ -101,7 +99,7 @@ func (s *areaBatchConfigStore[A]) setOverrideLocked(area A, config batchConfig) 
 	s.configs.Store(newConfigs)
 }
 
-func (s *areaBatchConfigStore[A]) removeOverrideLocked(area A) {
+func (s *areaBatchConfigRegistry[A]) removeOverrideLocked(area A) {
 	oldConfigs := s.configs.Load().(map[A]batchConfig)
 	if _, ok := oldConfigs[area]; !ok {
 		return

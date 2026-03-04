@@ -39,6 +39,11 @@ import (
 const (
 	receiveChanSize     = 1024 * 8
 	commonMsgRetryQuota = 3 // The number of retries for most droppable dispatcher requests.
+
+	// batchConfigApplied* mark whether the area-level batch config has been initialized
+	// for a changefeed on the corresponding dynamic stream mode.
+	batchConfigAppliedDefaultMode uint32 = 1 << iota
+	batchConfigAppliedRedoMode
 )
 
 // DispatcherMessage is the message send to EventService.
@@ -84,6 +89,7 @@ type changefeedStat struct {
 	metricMemoryUsageUsedRedo prometheus.Gauge
 	dispatcherCount           atomic.Int32
 	memoryReleaseCount        atomic.Uint32
+	batchConfigApplied        atomic.Uint32
 }
 
 func newChangefeedStat(changefeedID common.ChangeFeedID) *changefeedStat {
@@ -101,6 +107,25 @@ func (c *changefeedStat) removeMetrics() {
 	metrics.DynamicStreamMemoryUsage.DeleteLabelValues("event-collector", "used", c.changefeedID.Keyspace(), c.changefeedID.Name())
 	metrics.DynamicStreamMemoryUsage.DeleteLabelValues("event-collector-redo", "max", c.changefeedID.Keyspace(), c.changefeedID.Name())
 	metrics.DynamicStreamMemoryUsage.DeleteLabelValues("event-collector-redo", "used", c.changefeedID.Keyspace(), c.changefeedID.Name())
+}
+
+func (c *changefeedStat) tryMarkBatchConfigApplied(mode int64) bool {
+	var bit uint32
+	if mode == common.RedoMode {
+		bit = batchConfigAppliedRedoMode
+	} else {
+		bit = batchConfigAppliedDefaultMode
+	}
+
+	for {
+		old := c.batchConfigApplied.Load()
+		if old&bit != 0 {
+			return false
+		}
+		if c.batchConfigApplied.CompareAndSwap(old, old|bit) {
+			return true
+		}
+	}
 }
 
 /*
@@ -270,18 +295,14 @@ func (c *EventCollector) PrepareAddDispatcher(
 	ds := c.getDynamicStream(target.GetMode())
 
 	batchCount, batchBytes := target.GetEventCollectorBatchConfig()
-	if batchCount <= 0 {
-		batchCount = defaultEventCollectorBatchCount
-	}
-	if batchBytes < 0 {
-		batchBytes = 0
-	}
-
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector")
 	err := ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
 		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
-	} else {
+		stat.run()
+		return
+	}
+	if cfStat.tryMarkBatchConfigApplied(target.GetMode()) {
 		ds.SetAreaBatchConfig(changefeedID.ID(), batchCount, batchBytes)
 	}
 	stat.run()

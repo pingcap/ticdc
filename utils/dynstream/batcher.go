@@ -18,11 +18,15 @@ import (
 )
 
 type batchConfig struct {
-	softCount int
-	hardBytes int
+	// count controls event-count based flushing.
+	// If bytes == 0, it acts as the hard count limit.
+	// If bytes > 0, it acts as the count target.
+	count int
+	// bytes controls size based flushing. 0 disables byte based limit.
+	bytes int
 }
 
-const hardCountMultiple = 2
+const countCapMultiple = 2
 
 func newDefaultBatchConfig() batchConfig {
 	// Keep the default behavior consistent with the legacy Option.BatchCount=1:
@@ -30,20 +34,20 @@ func newDefaultBatchConfig() batchConfig {
 	return NewBatchConfig(1, 0)
 }
 
-// If hardBytes is 0, softCount is the hard limit.
-// If hardBytes is enabled, softCount is a soft target:
-// hardBytes is checked before appending the next event, so the current batch can
-// exceed hardBytes by at most one event.
-func NewBatchConfig(count, nBytes int) batchConfig {
+// If bytes is 0, count is the hard limit.
+// If bytes is enabled, count is a target:
+// bytes is checked before appending the next event, so the current batch can
+// exceed bytes by at most one event.
+func NewBatchConfig(count, bytes int) batchConfig {
 	if count <= 0 {
 		count = 1
 	}
-	if nBytes < 0 {
-		nBytes = 0
+	if bytes < 0 {
+		bytes = 0
 	}
 	return batchConfig{
-		softCount: count,
-		hardBytes: nBytes,
+		count: count,
+		bytes: bytes,
 	}
 }
 
@@ -66,12 +70,12 @@ func newBatcher[T Event](cfg batchConfig) *batcher[T] {
 }
 
 func (b *batcher[T]) setLimit(cfg batchConfig) {
-	if cfg.softCount <= 0 {
-		cfg.softCount = 1
+	if cfg.count <= 0 {
+		cfg.count = 1
 	}
 	b.config = cfg
-	if cap(b.buf) < cfg.softCount {
-		b.buf = make([]T, 0, cfg.softCount)
+	if cap(b.buf) < cfg.count {
+		b.buf = make([]T, 0, cfg.count)
 	} else {
 		b.buf = b.buf[:0]
 	}
@@ -93,21 +97,21 @@ func (b *batcher[T]) isFull() bool {
 		return false
 	}
 
-	// If hardBytes is disabled, softCount is the hard limit.
-	if b.config.hardBytes <= 0 {
-		return n >= b.config.softCount
+	// If bytes is disabled, count is the hard limit.
+	if b.config.bytes <= 0 {
+		return n >= b.config.count
 	}
 
-	// When hardBytes is enabled, keep batching past softCount for small events,
-	// but cap the total events with hardCount to avoid oversized batches.
-	hardCount := b.config.softCount * hardCountMultiple
-	if n >= hardCount {
+	// When bytes is enabled, keep batching past count for small events,
+	// but cap the total events with countCap to avoid oversized batches.
+	countCap := b.config.count * countCapMultiple
+	if n >= countCap {
 		return true
 	}
 
-	// hardBytes is checked before appending the next event.
-	// So with tiny events we can exceed hardBytes by at most one event.
-	return b.nBytes >= b.config.hardBytes
+	// bytes is checked before appending the next event.
+	// So with tiny events we can exceed bytes by at most one event.
+	return b.nBytes >= b.config.bytes
 }
 
 // flush returned events must be processed before adding more events to the batcher.

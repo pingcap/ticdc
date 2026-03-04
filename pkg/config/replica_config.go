@@ -187,7 +187,7 @@ type replicaConfig struct {
 
 	// these fields are used by the event collector dynamic stream to achieve better batch performance.
 	// it's not initialized in the defaultReplicaConfig by the purpose.
-	// if it's set, will override the default value which derived from the internval sink.
+	// if it's set, will override the default value which derived from the internal sink.
 	EventCollectorBatchCount *int `toml:"event-collector-batch-count" json:"event-collector-batch-count,omitempty"`
 	EventCollectorBatchBytes *int `toml:"event-collector-batch-bytes" json:"event-collector-batch-bytes,omitempty"`
 

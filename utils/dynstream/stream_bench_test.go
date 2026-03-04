@@ -60,7 +60,8 @@ func runStream(eventCount int, times int) {
 	handler := &incHandler{}
 
 	pi := newPathInfo[int, string, *inc, D, *incHandler](0, "test", "p1", D{}, newDefaultBatchConfig())
-	stream := newStream[int, string, *inc, D](1 /*id*/, "test", handler, NewOption())
+	registry := newAreaBatchConfigRegistry[int](newDefaultBatchConfig())
+	stream := newStream[int, string, *inc, D](1 /*id*/, "test", handler, NewOption(), registry)
 	stream.start()
 
 	total := &atomic.Int64{}
