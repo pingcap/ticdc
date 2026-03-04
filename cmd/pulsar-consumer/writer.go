@@ -344,6 +344,7 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 			log.Warn("DML events cannot be flushed in time", zap.Uint64("watermark", watermark),
 				zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
 		}
+	}
 }
 
 // WriteMessage is to decode pulsar message to event.

@@ -23,7 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	tidbmodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
+	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	tidbmysql "github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/stretchr/testify/require"
@@ -42,19 +42,19 @@ func TestShouldGenBatchSQL(t *testing.T) {
 		}
 		ti := &tidbmodel.TableInfo{
 			ID:         100,
-			Name:       ast.NewCIStr(tableName),
+			Name:       parser_model.NewCIStr(tableName),
 			PKIsHandle: pkIsHandle,
 			Columns: []*tidbmodel.ColumnInfo{
 				{
 					ID:        1,
-					Name:      ast.NewCIStr("id"),
+					Name:      parser_model.NewCIStr("id"),
 					Offset:    0,
 					FieldType: *idFieldType,
 					State:     tidbmodel.StatePublic,
 				},
 				{
 					ID:        2,
-					Name:      ast.NewCIStr("name"),
+					Name:      parser_model.NewCIStr("name"),
 					Offset:    1,
 					FieldType: *nameFieldType,
 					State:     tidbmodel.StatePublic,
@@ -79,18 +79,18 @@ func TestShouldGenBatchSQL(t *testing.T) {
 
 		ti := &tidbmodel.TableInfo{
 			ID:   101,
-			Name: ast.NewCIStr(tableName),
+			Name: parser_model.NewCIStr(tableName),
 			Columns: []*tidbmodel.ColumnInfo{
 				{
 					ID:        1,
-					Name:      ast.NewCIStr("a"),
+					Name:      parser_model.NewCIStr("a"),
 					Offset:    0,
 					FieldType: *aFieldType,
 					State:     tidbmodel.StatePublic,
 				},
 				{
 					ID:                  2,
-					Name:                ast.NewCIStr("b"),
+					Name:                parser_model.NewCIStr("b"),
 					Offset:              1,
 					FieldType:           *bFieldType,
 					State:               tidbmodel.StatePublic,
@@ -99,7 +99,7 @@ func TestShouldGenBatchSQL(t *testing.T) {
 				},
 				{
 					ID:        3,
-					Name:      ast.NewCIStr("c"),
+					Name:      parser_model.NewCIStr("c"),
 					Offset:    2,
 					FieldType: *cFieldType,
 					State:     tidbmodel.StatePublic,
@@ -108,17 +108,17 @@ func TestShouldGenBatchSQL(t *testing.T) {
 			Indices: []*tidbmodel.IndexInfo{
 				{
 					ID:     1,
-					Name:   ast.NewCIStr("idx1"),
+					Name:   parser_model.NewCIStr("idx1"),
 					Unique: true,
 					State:  tidbmodel.StatePublic,
 					Columns: []*tidbmodel.IndexColumn{
 						{
-							Name:   ast.NewCIStr("b"),
+							Name:   parser_model.NewCIStr("b"),
 							Offset: 1,
 							Length: types.UnspecifiedLength,
 						},
 						{
-							Name:   ast.NewCIStr("c"),
+							Name:   parser_model.NewCIStr("c"),
 							Offset: 2,
 							Length: types.UnspecifiedLength,
 						},
