@@ -14,14 +14,12 @@
 package mysql
 
 import (
-	"strings"
-
 	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
-	"github.com/pingcap/tidb/pkg/parser/format"
 )
 
 type indexKeyPart struct {
@@ -70,7 +68,7 @@ func restoreAnonymousIndexToNamedIndex(query string, tableInfo *common.TableInfo
 		return query, false, nil
 	}
 
-	restoredQuery, err := restoreDDLStmt(stmt)
+	restoredQuery, err := commonEvent.Restore(stmt)
 	if err != nil {
 		return query, false, err
 	}
@@ -180,18 +178,4 @@ func indexColumnsMatchKeyParts(indexColumns []*timodel.IndexColumn, keyParts []i
 		}
 	}
 	return true
-}
-
-func restoreDDLStmt(stmt ast.StmtNode) (string, error) {
-	var sb strings.Builder
-	restoreFlags := format.RestoreTiDBSpecialComment |
-		format.RestoreNameBackQuotes |
-		format.RestoreKeyWordUppercase |
-		format.RestoreStringSingleQuotes |
-		format.SkipPlacementRuleForRestore |
-		format.RestoreWithTTLEnableOff
-	if err := stmt.Restore(format.NewRestoreCtx(restoreFlags, &sb)); err != nil {
-		return "", errors.Trace(err)
-	}
-	return sb.String(), nil
 }
