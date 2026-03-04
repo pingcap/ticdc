@@ -17,11 +17,13 @@ import (
 	"context"
 	"testing"
 
+	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
 
@@ -273,4 +275,46 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 	}, s.ddls)
 	require.Len(t, w.ddlList, 1)
 	require.Equal(t, "CREATE TABLE `common_1`.`a` (`a` BIGINT PRIMARY KEY,`b` INT)", w.ddlList[0].Query)
+}
+
+func TestAppendRow2Group_DoesNotDropCommitTsFallbackBeforeApplied(t *testing.T) {
+	// CommitTs can go backwards after TiCDC restart/retry. The consumer should only
+	// drop replayed events that are already flushed to downstream.
+	w := &writer{}
+	progress := &partitionProgress{
+		partition:   0,
+		eventsGroup: make(map[int64]*util.EventsGroup),
+	}
+
+	newDMLEvent := func(tableID int64, commitTs uint64) *commonEvent.DMLEvent {
+		return &commonEvent.DMLEvent{
+			PhysicalTableID: tableID,
+			CommitTs:        commitTs,
+			RowTypes:        []common.RowType{common.RowTypeUpdate},
+			Rows:            chunk.NewChunkWithCapacity(nil, 0),
+			TableInfo: &common.TableInfo{
+				TableName: common.TableName{Schema: "test", Table: "t"},
+			},
+		}
+	}
+
+	// Step 1: observe a larger commitTs first.
+	w.appendRow2Group(newDMLEvent(1, 200), progress)
+
+	// Step 2: observe a smaller commitTs later (replay/fallback).
+	w.appendRow2Group(newDMLEvent(1, 100), progress)
+
+	group := progress.eventsGroup[1]
+	require.NotNil(t, group)
+
+	// Expect: commitTs=100 is still kept and can be resolved.
+	resolved := group.ResolveInto(150, nil)
+	require.Len(t, resolved, 1)
+	require.Equal(t, uint64(100), resolved[0].CommitTs)
+
+	// Step 3: once commitTs=100 has been applied, replay can be ignored.
+	group.AppliedWatermark = 200
+	w.appendRow2Group(newDMLEvent(1, 100), progress)
+	resolved = group.ResolveInto(150, nil)
+	require.Empty(t, resolved)
 }
