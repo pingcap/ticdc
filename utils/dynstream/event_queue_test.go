@@ -232,3 +232,47 @@ func TestRemovePath(t *testing.T) {
 	require.Equal(t, 0, len(events))
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
 }
+func TestAreaBatchCount(t *testing.T) {
+	handler := mockHandler{}
+	store := newAreaBatchConfigStore[int](NewBatchConfig(10, 0))
+	eq := newEventQueue(&handler, store)
+
+	path1 := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test", "path1", nil, batchConfig{})
+	path2 := newPathInfo[int, string, *mockEvent, any, *mockHandler](2, "test", "path2", nil, batchConfig{})
+	eq.initPath(path1)
+	eq.initPath(path2)
+
+	store.onAddPath(1)
+	store.onAddPath(2)
+	store.setAreaBatchConfig(1, 1, 0)
+
+	appendEvent := func(path *pathInfo[int, string, *mockEvent, any, *mockHandler], value int) {
+		eq.appendEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{
+			pathInfo: path,
+			event:    &mockEvent{value: value},
+			eventType: EventType{
+				DataGroup: 1,
+				Property:  BatchableData,
+			},
+		})
+	}
+
+	appendEvent(path1, 1)
+	appendEvent(path1, 2)
+	appendEvent(path2, 3)
+	appendEvent(path2, 4)
+
+	b := newDefaultBatcher[*mockEvent]()
+
+	events, path, _ := eq.popEvents(b)
+	require.Equal(t, path1, path)
+	require.Len(t, events, 1)
+
+	events, path, _ = eq.popEvents(b)
+	require.Equal(t, path1, path)
+	require.Len(t, events, 1)
+
+	events, path, _ = eq.popEvents(b)
+	require.Equal(t, path2, path)
+	require.Len(t, events, 2)
+}

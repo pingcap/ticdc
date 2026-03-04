@@ -37,6 +37,7 @@ type parallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D
 
 	eventExtraSize int
 	memControl     *memControl[A, P, T, D, H]
+	batchConfigs   *areaBatchConfigStore[A]
 
 	feedbackChan chan Feedback[A, P, D]
 
@@ -68,6 +69,7 @@ func newParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T
 	}
 
 	s.pathMap.m = make(map[P]*pathInfo[A, P, T, D, H])
+	s.batchConfigs = newAreaBatchConfigStore[A](NewBatchConfig(option.BatchCount, option.BatchBytes))
 
 	if option.EnableMemoryControl {
 		log.Info("Dynamic stream enable memory control")
@@ -75,7 +77,7 @@ func newParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T
 		s.memControl = newMemControl[A, P, T, D, H]()
 	}
 	for i := range option.StreamCount {
-		s.streams = append(s.streams, newStream(i, component, handler, option))
+		s.streams = append(s.streams, newStream(i, component, handler, option, s.batchConfigs))
 	}
 	return s
 }
@@ -214,6 +216,10 @@ func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...Are
 	pi.setStream(s.streams[streamID])
 
 	s.pathMap.m[path] = pi
+	s.batchConfigs.onAddPath(area)
+	if len(as) > 0 && (batchConfig.softCount > 0 || batchConfig.hardBytes > 0) {
+		s.batchConfigs.setAreaBatchConfig(area, batchConfig.softCount, batchConfig.hardBytes)
+	}
 	s._statAddPathCount.Add(1)
 	s.pathMap.Unlock()
 
@@ -241,6 +247,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) RemovePath(path P) error {
 	if s.memControl != nil {
 		s.memControl.removePathFromArea(pi)
 	}
+	s.batchConfigs.onRemovePath(pi.area)
 	delete(s.pathMap.m, path)
 	s.pathMap.Unlock()
 	pi.stream.addEvent(eventWrap[A, P, T, D, H]{pathInfo: pi})
@@ -252,6 +259,10 @@ func (s *parallelDynamicStream[A, P, T, D, H]) SetAreaSettings(area A, settings 
 	if s.memControl != nil {
 		s.memControl.setAreaSettings(area, settings)
 	}
+}
+
+func (s *parallelDynamicStream[A, P, T, D, H]) SetAreaBatchConfig(area A, batchCount int, batchBytes int) {
+	s.batchConfigs.setAreaBatchConfig(area, batchCount, batchBytes)
 }
 
 func (s *parallelDynamicStream[A, P, T, D, H]) GetMetrics() Metrics[A, P] {

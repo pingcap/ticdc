@@ -35,6 +35,12 @@ func newDefaultBatchConfig() batchConfig {
 // hardBytes is checked before appending the next event, so the current batch can
 // exceed hardBytes by at most one event.
 func NewBatchConfig(count, nBytes int) batchConfig {
+	if count <= 0 {
+		count = 1
+	}
+	if nBytes < 0 {
+		nBytes = 0
+	}
 	return batchConfig{
 		softCount: count,
 		hardBytes: nBytes,
