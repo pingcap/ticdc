@@ -120,14 +120,7 @@ func (c *HeartBeatCollector) RegisterDispatcherManager(m *DispatcherManager) err
 	if err != nil {
 		return errors.Trace(err)
 	}
-
-	batchConfig := dynstream.NewBatchConfig(1024, 0)
-	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(0, dynstream.MemoryControlForPuller, "heart-beat-collector", batchConfig)
-	err = c.schedulerDispatcherRequestDynamicStream.AddPath(
-		m.changefeedID.Id,
-		m,
-		areaSetting,
-	)
+	err = c.schedulerDispatcherRequestDynamicStream.AddPath(m.changefeedID.Id, m)
 	if err != nil {
 		return errors.Trace(err)
 	}
