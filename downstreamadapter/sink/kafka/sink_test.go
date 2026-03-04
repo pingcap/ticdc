@@ -97,7 +97,7 @@ func newKafkaSinkForTestWithProducers(ctx context.Context,
 
 		isNormal:            atomic.NewBool(true),
 		ctx:                 ctx,
-		discoveredRowTopics: make(map[string]struct{}),
+		discoveredRowTopics: make(map[string]time.Time),
 	}
 	go s.Run(ctx)
 	return s, nil
@@ -308,7 +308,7 @@ func TestGetCheckpointTopics(t *testing.T) {
 			eventRouter: router,
 		},
 		tableSchemaStore:    tableSchemaStore,
-		discoveredRowTopics: map[string]struct{}{"runtime_topic": {}},
+		discoveredRowTopics: map[string]time.Time{"runtime_topic": time.Now()},
 	}
 
 	topics := s.getCheckpointTopics(1)
