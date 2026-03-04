@@ -65,8 +65,6 @@ var (
 			Name:      "dml_event_count",
 			Help:      "Total count of DML events.",
 		}, []string{getKeyspaceLabel(), "changefeed"})
-<<<<<<< HEAD
-=======
 
 	ExecDMLEventRowsAffectedCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -83,7 +81,6 @@ var (
 			Name:      "active_active_conflict_skip_rows_total",
 			Help:      "Total number of rows skipped due to last-write-wins conflict resolution in TiDB active-active replication.",
 		}, []string{getKeyspaceLabel(), "changefeed"})
->>>>>>> bd2023796 (metrics: add DML rows affected metric (#3909))
 	// ExecutionErrorCounter is the counter of execution errors.
 	ExecutionErrorCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -242,14 +239,9 @@ func initSinkMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(TotalWriteBytesCounter)
 	registry.MustRegister(EventSizeHistogram)
 	registry.MustRegister(ExecDMLEventCounter)
-<<<<<<< HEAD
-=======
 	registry.MustRegister(ExecDMLEventRowsAffectedCounter)
-	registry.MustRegister(ActiveActiveConflictSkipRowsCounter)
->>>>>>> bd2023796 (metrics: add DML rows affected metric (#3909))
 	registry.MustRegister(ExecutionErrorCounter)
 
-	// txn sink metrics
 	registry.MustRegister(ConflictDetectDuration)
 	registry.MustRegister(QueueDuration)
 	registry.MustRegister(WorkerFlushDuration)

@@ -109,21 +109,10 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 	for _, sortedEventGroups := range eventsGroupSortedByUpdateTs {
 		for _, eventsInGroup := range sortedEventGroups {
 			tableInfo := eventsInGroup[0].TableInfo
-<<<<<<< HEAD
 			if !w.shouldGenBatchSQL(tableInfo, eventsInGroup) {
-				queryList, argsList = w.generateNormalSQLs(eventsInGroup)
+				queryList, argsList, rowTypesList = w.generateNormalSQLs(eventsInGroup)
 			} else {
-				queryList, argsList = w.generateBatchSQL(eventsInGroup)
-=======
-			if w.cfg.EnableActiveActive {
-				queryList, argsList, rowTypesList = w.genActiveActiveSQL(tableInfo, eventsInGroup)
-			} else {
-				if !w.shouldGenBatchSQL(tableInfo, eventsInGroup) {
-					queryList, argsList, rowTypesList = w.generateNormalSQLs(eventsInGroup)
-				} else {
-					queryList, argsList, rowTypesList = w.generateBatchSQL(eventsInGroup)
-				}
->>>>>>> bd2023796 (metrics: add DML rows affected metric (#3909))
+				queryList, argsList, rowTypesList = w.generateBatchSQL(eventsInGroup)
 			}
 			dmls.sqls = append(dmls.sqls, queryList...)
 			dmls.values = append(dmls.values, argsList...)
@@ -138,16 +127,6 @@ func (w *Writer) prepareDMLs(events []*commonEvent.DMLEvent) (*preparedDMLs, err
 	return dmls, nil
 }
 
-<<<<<<< HEAD
-=======
-func (w *Writer) genActiveActiveSQL(tableInfo *common.TableInfo, eventsInGroup []*commonEvent.DMLEvent) ([]string, [][]interface{}, []common.RowType) {
-	if !w.shouldGenBatchSQL(tableInfo, eventsInGroup) {
-		return w.generateActiveActiveNormalSQLs(eventsInGroup)
-	}
-	return w.generateActiveActiveBatchSQL(eventsInGroup)
-}
-
->>>>>>> bd2023796 (metrics: add DML rows affected metric (#3909))
 // shouldGenBatchSQL determines whether batch SQL generation should be used based on table properties and events.
 // Batch SQL generation is used when:
 // 1. BatchDMLEnable = true, and rows > 1
