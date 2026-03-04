@@ -380,7 +380,6 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
 	// if receive a table level DDL, just remove the table info to trigger create a new one.
 	delete(d.tableInfoCache, tableKey{schema: result.SchemaName, table: result.TableName})
-	delete(d.tableInfoCache, tableKey{schema: result.SchemaName, table: result.TableName})
 	return result
 }
 

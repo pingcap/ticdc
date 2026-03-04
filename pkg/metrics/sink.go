@@ -74,13 +74,6 @@ var (
 			Help:      "Total count of affected rows.",
 		}, []string{getKeyspaceLabel(), "changefeed", "count_type", "row_type"})
 
-	ActiveActiveConflictSkipRowsCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "sink",
-			Name:      "active_active_conflict_skip_rows_total",
-			Help:      "Total number of rows skipped due to last-write-wins conflict resolution in TiDB active-active replication.",
-		}, []string{getKeyspaceLabel(), "changefeed"})
 	// ExecutionErrorCounter is the counter of execution errors.
 	ExecutionErrorCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
