@@ -468,6 +468,7 @@ func (c *eventBroker) sendBootstrapResolvedTsIfNeeded(dispatcher *dispatcherStat
 	c.sendHandshakeIfNeed(dispatcher)
 	nextResolvedTs := oracle.GoTimeToTS(oracle.GetTimeFromTS(sentResolvedTs).Add(bootstrapResolvedTsStep))
 	c.sendBootstrapResolvedTs(dispatcher, nextResolvedTs)
+	log.Debug("fizz send resolvedTs", zap.Any("dispatcherID", dispatcher.id), zap.Any("resolvedTs", nextResolvedTs))
 }
 
 // getScanTaskDataRange determines the valid data range for scanning a given task.
