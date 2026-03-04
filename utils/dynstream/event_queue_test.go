@@ -246,9 +246,8 @@ func TestAreaBatchCount(t *testing.T) {
 	eq.initPath(path1)
 	eq.initPath(path2)
 
-	registry.onAddPath(1)
-	registry.onAddPath(2)
-	registry.setAreaBatchConfig(1, 1, 0)
+	registry.onAddPath(1, batchConfig{count: 1})
+	registry.onAddPath(2, batchConfig{})
 
 	appendEvent := func(path *pathInfo[int, string, *mockEvent, any, *mockHandler], value int) {
 		eq.appendEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{

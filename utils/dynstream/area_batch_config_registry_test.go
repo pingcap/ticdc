@@ -21,35 +21,41 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAreaConfigNoPath(t *testing.T) {
+func TestAreaConfigNoOverrideOnZeroConfig(t *testing.T) {
 	defaultConfig := NewBatchConfig(4, 0)
 	registry := newAreaBatchConfigRegistry[int](defaultConfig)
 
-	registry.setAreaBatchConfig(1, 2, 0)
+	registry.onAddPath(1, batchConfig{})
 	require.Equal(t, defaultConfig, registry.getBatchConfig(1))
 }
 
-func TestAreaConfigClear(t *testing.T) {
+func TestAreaConfigApplyOnFirstAdd(t *testing.T) {
 	defaultConfig := NewBatchConfig(4, 0)
 	registry := newAreaBatchConfigRegistry[int](defaultConfig)
 
-	registry.onAddPath(1)
-	registry.setAreaBatchConfig(1, 2, 0)
+	registry.onAddPath(1, batchConfig{count: 2})
 	require.Equal(t, NewBatchConfig(2, 0), registry.getBatchConfig(1))
-
-	// Reset to default by setting policy values back to the default.
-	registry.setAreaBatchConfig(1, defaultConfig.count, defaultConfig.bytes)
-	require.Equal(t, defaultConfig, registry.getBatchConfig(1))
 }
 
-func TestAreaConfigCleanup(t *testing.T) {
+func TestAreaConfigFirstAddWins(t *testing.T) {
 	defaultConfig := NewBatchConfig(4, 0)
 	registry := newAreaBatchConfigRegistry[int](defaultConfig)
 
-	registry.onAddPath(1)
-	registry.setAreaBatchConfig(1, 2, 0)
+	registry.onAddPath(1, batchConfig{count: 2})
+	registry.onAddPath(1, batchConfig{count: 3})
+	require.Equal(t, NewBatchConfig(2, 0), registry.getBatchConfig(1))
+}
+
+func TestAreaConfigReapplyAfterCleanup(t *testing.T) {
+	defaultConfig := NewBatchConfig(4, 0)
+	registry := newAreaBatchConfigRegistry[int](defaultConfig)
+
+	registry.onAddPath(1, batchConfig{count: 2})
 	require.Equal(t, NewBatchConfig(2, 0), registry.getBatchConfig(1))
 
 	registry.onRemovePath(1)
 	require.Equal(t, defaultConfig, registry.getBatchConfig(1))
+
+	registry.onAddPath(1, batchConfig{count: 3})
+	require.Equal(t, NewBatchConfig(3, 0), registry.getBatchConfig(1))
 }

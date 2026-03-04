@@ -206,20 +206,21 @@ func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...Are
 
 	area := s.handler.GetArea(path, dest)
 	metricLabel := s.handler.GetMetricLabel(dest)
-	batchConfig := newDefaultBatchConfig()
+	pathBatchConfig := newDefaultBatchConfig()
+	areaBatchConfig := batchConfig{}
 	if len(as) > 0 {
-		batchConfig = as[0].batchConfig
+		areaBatchConfig = as[0].batchConfig
+		if areaBatchConfig.count > 0 || areaBatchConfig.bytes > 0 {
+			pathBatchConfig = NewBatchConfig(areaBatchConfig.count, areaBatchConfig.bytes)
+		}
 	}
-	pi := newPathInfo[A, P, T, D, H](area, metricLabel, path, dest, batchConfig)
+	pi := newPathInfo[A, P, T, D, H](area, metricLabel, path, dest, pathBatchConfig)
 
 	streamID := s._statAddPathCount.Load() % int64(len(s.streams))
 	pi.setStream(s.streams[streamID])
 
 	s.pathMap.m[path] = pi
-	s.batchConfigRegistry.onAddPath(area)
-	if len(as) > 0 && (batchConfig.count > 0 || batchConfig.bytes > 0) {
-		s.batchConfigRegistry.setAreaBatchConfig(area, batchConfig.count, batchConfig.bytes)
-	}
+	s.batchConfigRegistry.onAddPath(area, areaBatchConfig)
 	s._statAddPathCount.Add(1)
 	s.pathMap.Unlock()
 
@@ -259,10 +260,6 @@ func (s *parallelDynamicStream[A, P, T, D, H]) SetAreaSettings(area A, settings 
 	if s.memControl != nil {
 		s.memControl.setAreaSettings(area, settings)
 	}
-}
-
-func (s *parallelDynamicStream[A, P, T, D, H]) SetAreaBatchConfig(area A, batchCount int, batchBytes int) {
-	s.batchConfigRegistry.setAreaBatchConfig(area, batchCount, batchBytes)
 }
 
 func (s *parallelDynamicStream[A, P, T, D, H]) GetMetrics() Metrics[A, P] {

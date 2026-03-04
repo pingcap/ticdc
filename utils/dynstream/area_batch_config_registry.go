@@ -46,10 +46,29 @@ func (s *areaBatchConfigRegistry[A]) getBatchConfig(area A) batchConfig {
 	return s.defaultConfig
 }
 
-func (s *areaBatchConfigRegistry[A]) onAddPath(area A) {
+func (s *areaBatchConfigRegistry[A]) onAddPath(area A, cfg batchConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.areaRefCount[area]++
+
+	oldCount := s.areaRefCount[area]
+	s.areaRefCount[area] = oldCount + 1
+	if oldCount > 0 {
+		// First-add semantics: once an area already has paths, later AddPath calls
+		// should not overwrite its batch config.
+		return
+	}
+
+	// Zero config means no explicit area batch config was provided.
+	if cfg.count <= 0 && cfg.bytes <= 0 {
+		return
+	}
+
+	newConfig := NewBatchConfig(cfg.count, cfg.bytes)
+	if newConfig == s.defaultConfig {
+		return
+	}
+
+	s.setOverrideLocked(area, newConfig)
 }
 
 func (s *areaBatchConfigRegistry[A]) onRemovePath(area A) {
@@ -63,30 +82,6 @@ func (s *areaBatchConfigRegistry[A]) onRemovePath(area A) {
 		return
 	}
 	s.areaRefCount[area] = oldCount - 1
-}
-
-func (s *areaBatchConfigRegistry[A]) setAreaBatchConfig(area A, batchCount int, batchBytes int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.areaRefCount[area] == 0 {
-		// Keep the same semantics as SetAreaSettings: avoid leaking per-area overrides for areas
-		// without any existing paths.
-		return
-	}
-
-	newConfig := NewBatchConfig(batchCount, batchBytes)
-
-	if newConfig == s.defaultConfig {
-		s.removeOverrideLocked(area)
-		return
-	}
-
-	configs := s.configs.Load().(map[A]batchConfig)
-	if currentConfig, ok := configs[area]; ok && currentConfig == newConfig {
-		return
-	}
-	s.setOverrideLocked(area, newConfig)
 }
 
 func (s *areaBatchConfigRegistry[A]) setOverrideLocked(area A, config batchConfig) {

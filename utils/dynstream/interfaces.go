@@ -192,9 +192,6 @@ type DynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] inter
 	// SetAreaSettings sets the settings of the area. An area uses the default settings if it is not set.
 	// This method can be called at any time. But to avoid the memory leak, setting on a area without existing paths is a no-op.
 	SetAreaSettings(area A, settings AreaSettings)
-	// SetAreaBatchConfig sets the batching config for an area.
-	// This method can be called at any time. It is a no-op if the area has no existing paths.
-	SetAreaBatchConfig(area A, batchCount int, batchBytes int)
 
 	GetMetrics() Metrics[A, P]
 }
@@ -264,6 +261,16 @@ type AreaSettings struct {
 	batchConfig batchConfig
 }
 
+func (s *AreaSettings) fix() {
+	if s.maxPendingSize <= 0 {
+		s.maxPendingSize = DefaultMaxPendingSize
+	}
+
+	if s.feedbackInterval == 0 {
+		s.feedbackInterval = DefaultFeedbackInterval
+	}
+}
+
 func NewAreaSettingsWithMaxPendingSize(
 	quota uint64, algorithm int, component string,
 ) AreaSettings {
@@ -279,14 +286,15 @@ func NewAreaSettingsWithMaxPendingSize(
 	}
 }
 
-func (s *AreaSettings) fix() {
-	if s.maxPendingSize <= 0 {
-		s.maxPendingSize = DefaultMaxPendingSize
+func NewAreaSettingsWithMaxPendingSizeAndBatchConfig(
+	quota uint64, algorithm int, component string, batchCount int, batchBytes int,
+) AreaSettings {
+	s := NewAreaSettingsWithMaxPendingSize(quota, algorithm, component)
+	s.batchConfig = batchConfig{
+		count: batchCount,
+		bytes: batchBytes,
 	}
-
-	if s.feedbackInterval == 0 {
-		s.feedbackInterval = DefaultFeedbackInterval
-	}
+	return s
 }
 
 type FeedbackType int
