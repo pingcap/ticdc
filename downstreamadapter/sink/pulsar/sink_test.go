@@ -66,7 +66,7 @@ func newPulsarSinkForTest(t *testing.T) (*sink, error) {
 		isNormal:            atomic.NewBool(true),
 		statistics:          statistics,
 		ctx:                 ctx,
-		discoveredRowTopics: make(map[string]struct{}),
+		discoveredRowTopics: make(map[string]time.Time),
 	}
 	go pulsarSink.Run(ctx)
 	return pulsarSink, nil
@@ -174,7 +174,7 @@ func TestGetCheckpointTopics(t *testing.T) {
 			eventRouter: router,
 		},
 		tableSchemaStore:    tableSchemaStore,
-		discoveredRowTopics: map[string]struct{}{"runtime_topic": {}},
+		discoveredRowTopics: map[string]time.Time{"runtime_topic": time.Now()},
 	}
 
 	topics := s.getCheckpointTopics(1)

@@ -51,7 +51,7 @@ type sink struct {
 	ctx      context.Context
 
 	discoveredRowTopicsMu sync.Mutex
-	discoveredRowTopics   map[string]struct{}
+	discoveredRowTopics   map[string]time.Time // topic → time of last message sent
 
 	tableSchemaStore *commonEvent.TableSchemaStore
 	checkpointTsChan chan uint64
@@ -110,7 +110,7 @@ func New(
 		isNormal:      atomic.NewBool(true),
 		ctx:           ctx,
 
-		discoveredRowTopics: make(map[string]struct{}),
+		discoveredRowTopics: make(map[string]time.Time),
 	}, nil
 }
 
@@ -405,6 +405,15 @@ const (
 	// batchInterval is the interval of the worker to collect a batch of messages.
 	// It shouldn't be too large, otherwise it will lead to a high latency.
 	batchInterval = 15 * time.Millisecond
+
+	// discoveredTopicRetention is how long a dynamically discovered row topic is
+	// retained in the checkpoint set after the last message was sent to it.
+	// Once a topic has been quiet for this duration its consumers have had
+	// sufficient time to process pending events; checkpoint messages to that
+	// topic are no longer needed until it becomes active again.
+	// This is intentionally not configurable: the right value requires knowledge
+	// of CDC checkpoint semantics that operators should not need to reason about.
+	discoveredTopicRetention = 30 * time.Minute
 )
 
 // batchEncodeRun collect messages into batch and add them to the encoder group.
@@ -550,24 +559,30 @@ func (s *sink) getAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
 }
 
 // addDiscoveredRowTopic records a topic that has been used by a publishable
-// row event.
+// row event, refreshing its last-seen timestamp.
 func (s *sink) addDiscoveredRowTopic(topic string) {
 	if topic == "" {
 		return
 	}
 	s.discoveredRowTopicsMu.Lock()
-	s.discoveredRowTopics[topic] = struct{}{}
+	s.discoveredRowTopics[topic] = time.Now()
 	s.discoveredRowTopicsMu.Unlock()
 }
 
 // snapshotDiscoveredRowTopics returns a point-in-time copy of the runtime
-// discovered row topics.
+// discovered row topics, evicting entries that have not been seen within
+// discoveredTopicRetention.
 func (s *sink) snapshotDiscoveredRowTopics() []string {
+	now := time.Now()
 	s.discoveredRowTopicsMu.Lock()
 	defer s.discoveredRowTopicsMu.Unlock()
 
 	topics := make([]string, 0, len(s.discoveredRowTopics))
-	for topic := range s.discoveredRowTopics {
+	for topic, lastSeen := range s.discoveredRowTopics {
+		if now.Sub(lastSeen) > discoveredTopicRetention {
+			delete(s.discoveredRowTopics, topic)
+			continue
+		}
 		topics = append(topics, topic)
 	}
 	return topics
