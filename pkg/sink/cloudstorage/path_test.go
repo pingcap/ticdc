@@ -346,17 +346,17 @@ func TestCheckOrWriteSchema(t *testing.T) {
 	require.True(t, hasNewerSchemaVersion)
 	require.Equal(t, 1, len(f.versionMap))
 
-	// test only table version changed, schema file should be reused
+	// test only table version changed, schema file should follow current version
 	table.TableInfoVersion = 101
 	hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
 	require.NoError(t, err)
 	require.False(t, hasNewerSchemaVersion)
-	require.Equal(t, uint64(tidbInfo.Version), f.versionMap[table])
+	require.Equal(t, table.TableInfoVersion, f.versionMap[table])
 
 	dir = filepath.Join(dir, "test/table1/meta")
 	files, err := os.ReadDir(dir)
 	require.NoError(t, err)
-	require.Equal(t, 1, len(files))
+	require.Equal(t, 2, len(files))
 
 	// test schema file is invalid
 	err = os.WriteFile(filepath.Join(dir,

@@ -36,3 +36,4 @@ fi
 "$MOCKGEN" -source pkg/sink/codec/simple/marshaller.go -destination pkg/sink/codec/simple/mock/marshaller.go
 "$MOCKGEN" -source pkg/keyspace/keyspace_manager.go -destination pkg/keyspace/keyspace_manager_mock.go -package keyspace
 "$MOCKGEN" -source pkg/txnutil/gc/gc_manager.go -destination pkg/txnutil/gc/gc_manager_mock.go -package gc
+"$MOCKGEN" -source downstreamadapter/sink/sink.go -destination downstreamadapter/sink/mock/sink_mock.go -package mock
