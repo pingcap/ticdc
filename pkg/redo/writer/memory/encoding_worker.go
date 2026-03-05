@@ -57,7 +57,7 @@ func toPolymorphicRedoEvent(
 
 	rawData, err := codec.MarshalRedoLog(rl, nil)
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapError(errors.ErrMarshalFailed, err)
 	}
 	lenField, padBytes := writer.EncodeFrameSize(len(rawData))
 	data := make([]byte, 8+len(rawData)+padBytes)
@@ -164,10 +164,7 @@ func (e *encodingWorkerGroup) input(
 	case <-ctx.Done():
 		return ctx.Err()
 	case err := <-e.closed:
-		if err != nil {
-			return errors.WrapError(errors.ErrRedoWriterStopped, err)
-		}
-		return errors.ErrRedoWriterStopped
+		return errors.ErrRedoWriterStopped.FastGenByArgs(err)
 	case e.inputChs[idx] <- event:
 		return nil
 	}
@@ -180,10 +177,7 @@ func (e *encodingWorkerGroup) output(
 	case <-ctx.Done():
 		return ctx.Err()
 	case err := <-e.closed:
-		if err != nil {
-			return errors.WrapError(errors.ErrRedoWriterStopped, err)
-		}
-		return errors.ErrRedoWriterStopped
+		return errors.ErrRedoWriterStopped.FastGenByArgs(err)
 	case e.outputCh <- event:
 		return nil
 	}
