@@ -280,8 +280,7 @@ func NewDispatcherManager(
 	manager.wg.Add(1)
 	go func() {
 		defer manager.wg.Done()
-		err := manager.sink.Run(ctx)
-		manager.handleError(ctx, err)
+		manager.runSinkWithExitHandling(ctx)
 	}()
 
 	// collect errors from error channel
@@ -516,6 +515,63 @@ func (e *DispatcherManager) handleError(ctx context.Context, err error) {
 			)
 		}
 	}
+}
+
+// runSinkWithExitHandling runs the sink and handles its exit.
+//
+// The sink is expected to run until the dispatcher manager is closed and `ctx` is canceled.
+// If the sink exits earlier (for example, due to an unrecoverable Kafka error like missing
+// topic / authorization), dispatchers may still keep pulling events from upstream and enqueue
+// them into the sink's internal unbounded channels. This results in unbounded memory growth,
+// GC/CPU runaway, and eventual OOM. To avoid this, we report the error and close the dispatcher
+// manager proactively.
+func (e *DispatcherManager) runSinkWithExitHandling(ctx context.Context) {
+	err := e.sink.Run(ctx)
+	e.handleError(ctx, err)
+
+	// Normal shutdown: the manager is closing and the sink exits due to context cancellation.
+	if errors.Is(errors.Cause(err), context.Canceled) {
+		return
+	}
+
+	// Sink exited unexpectedly. Report once and stop the manager to avoid buffering more events.
+	if err != nil {
+		e.reportErrorToMaintainer(err)
+	} else {
+		log.Error("sink exited without error", zap.Stringer("changefeedID", e.changefeedID))
+	}
+	e.TryClose(false)
+}
+
+// reportErrorToMaintainer enqueues an error message to maintainer immediately.
+//
+// Motivation: When the sink exits with an error, the dispatcher manager will be closed proactively
+// to avoid unbounded buffering of events. Closing cancels the manager context, which would make
+// the background `collectErrors` goroutine exit early and potentially drop the first (and most
+// important) error. We send the error once here to ensure it is visible to the maintainer.
+func (e *DispatcherManager) reportErrorToMaintainer(err error) {
+	if err == nil || errors.Is(errors.Cause(err), context.Canceled) {
+		return
+	}
+	if e.heartbeatRequestQueue == nil {
+		log.Error("heartbeat request queue is not initialized, skip reporting error",
+			zap.Stringer("changefeedID", e.changefeedID),
+			zap.Error(err),
+		)
+		return
+	}
+	var message heartbeatpb.HeartBeatRequest
+	message.ChangefeedID = e.changefeedID.ToPB()
+	message.Err = &heartbeatpb.RunningError{
+		Time:    time.Now().String(),
+		Node:    appcontext.GetID(),
+		Code:    string(errors.ErrorCode(err)),
+		Message: err.Error(),
+	}
+	e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{
+		TargetID: e.GetMaintainerID(),
+		Request:  &message,
+	})
 }
 
 // collectErrors collect the errors from the error channel and report to the maintainer.
