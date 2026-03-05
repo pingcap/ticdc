@@ -72,10 +72,14 @@ type ConsistentMemoryUsage struct {
 }
 
 // ValidateAndAdjust validates the consistency config and adjusts it if necessary.
+// The exported API keeps the default behavior and always enables redo storage
+// I/O checks for normal callers.
 func (c *ConsistentConfig) ValidateAndAdjust() error {
 	return c.validateAndAdjust(true)
 }
 
+// validateAndAdjust is an internal helper that allows toggling redo storage
+// I/O checks. enableIOCheck=false is only used by CLI-side pre-validation.
 func (c *ConsistentConfig) validateAndAdjust(enableIOCheck bool) error {
 	if !redo.IsConsistentEnabled(util.GetOrZero(c.Level)) {
 		return nil
