@@ -275,33 +275,37 @@ func TestWriteDDLEventWithInvalidExchangePartitionEvent(t *testing.T) {
 		},
 	}
 
+	parentDir := t.TempDir()
+	uri := fmt.Sprintf("file:///%s?protocol=csv&use-table-id-as-path=true", parentDir)
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	err = replicaConfig.ValidateAndAdjust(sinkURI)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
+	require.NoError(t, err)
+
+	tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
+		ID:   20,
+		Name: ast.NewCIStr("table1"),
+		Columns: []*timodel.ColumnInfo{
+			{
+				Name:      ast.NewCIStr("col1"),
+				FieldType: *types.NewFieldType(mysql.TypeLong),
+			},
+		},
+	})
+
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			parentDir := t.TempDir()
-			uri := fmt.Sprintf("file:///%s?protocol=csv&use-table-id-as-path=true", parentDir)
-			sinkURI, err := url.Parse(uri)
-			require.NoError(t, err)
-
-			replicaConfig := config.GetDefaultReplicaConfig()
-			err = replicaConfig.ValidateAndAdjust(sinkURI)
-			require.NoError(t, err)
-
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-
-			cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
-			require.NoError(t, err)
-
-			tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
-				ID:   20,
-				Name: ast.NewCIStr("table1"),
-				Columns: []*timodel.ColumnInfo{
-					{
-						Name:      ast.NewCIStr("col1"),
-						FieldType: *types.NewFieldType(mysql.TypeLong),
-					},
-				},
-			})
 			ddlEvent := &commonEvent.DDLEvent{
 				Query:           "alter table test.table1 exchange partition p0 with table test.table2",
 				Type:            byte(timodel.ActionExchangeTablePartition),
