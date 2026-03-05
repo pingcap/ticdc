@@ -16,18 +16,44 @@ package cloudstorage
 import (
 	"context"
 
+	"github.com/pingcap/log"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/hash"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/utils/chann"
+	"go.uber.org/zap"
 )
+
+type eventFragmentKind uint8
+
+const (
+	eventFragmentKindDML eventFragmentKind = iota
+	eventFragmentKindDrain
+)
+
+type drainMarker struct {
+	dispatcherID commonType.DispatcherID
+	commitTs     uint64
+	doneCh       chan error
+}
+
+func (m *drainMarker) done(err error) {
+	select {
+	case m.doneCh <- err:
+	default:
+	}
+}
 
 // eventFragment is used to attach a sequence number to TxnCallbackableEvent.
 type eventFragment struct {
+	kind eventFragmentKind
+
 	event          *commonEvent.DMLEvent
 	versionedTable cloudstorage.VersionedTableName
+	dispatcherID   commonType.DispatcherID
+	marker         *drainMarker
 
 	// The sequence number is mainly useful for TxnCallbackableEvent defragmentation.
 	// e.g. TxnCallbackableEvent 1~5 are dispatched to a group of encoding workers, but the
@@ -39,33 +65,63 @@ type eventFragment struct {
 	encodedMsgs []*common.Message
 }
 
-func newEventFragment(seq uint64, version cloudstorage.VersionedTableName, event *commonEvent.DMLEvent) eventFragment {
+func newEventFragment(
+	seq uint64,
+	version cloudstorage.VersionedTableName,
+	dispatcherID commonType.DispatcherID,
+	event *commonEvent.DMLEvent,
+) eventFragment {
 	return eventFragment{
+		kind:           eventFragmentKindDML,
 		seqNumber:      seq,
 		versionedTable: version,
+		dispatcherID:   dispatcherID,
 		event:          event,
 	}
+}
+
+func newDrainEventFragment(
+	seq uint64,
+	dispatcherID commonType.DispatcherID,
+	commitTs uint64,
+	doneCh chan error,
+) eventFragment {
+	return eventFragment{
+		kind:         eventFragmentKindDrain,
+		seqNumber:    seq,
+		dispatcherID: dispatcherID,
+		marker: &drainMarker{
+			dispatcherID: dispatcherID,
+			commitTs:     commitTs,
+			doneCh:       doneCh,
+		},
+	}
+}
+
+func (e eventFragment) isDrain() bool {
+	return e.kind == eventFragmentKindDrain
 }
 
 // defragmenter is used to handle event fragments which can be registered
 // out of order.
 type defragmenter struct {
+	changefeedID      commonType.ChangeFeedID
 	lastDispatchedSeq uint64
 	future            map[uint64]eventFragment
 	inputCh           <-chan eventFragment
 	outputChs         []*chann.DrainableChann[eventFragment]
-	hasher            *hash.PositionInertia
 }
 
 func newDefragmenter(
+	changefeedID commonType.ChangeFeedID,
 	inputCh <-chan eventFragment,
 	outputChs []*chann.DrainableChann[eventFragment],
 ) *defragmenter {
 	return &defragmenter{
-		future:    make(map[uint64]eventFragment),
-		inputCh:   inputCh,
-		outputChs: outputChs,
-		hasher:    hash.NewPositionInertia(),
+		changefeedID: changefeedID,
+		future:       make(map[uint64]eventFragment),
+		inputCh:      inputCh,
+		outputChs:    outputChs,
 	}
 }
 
@@ -82,10 +138,30 @@ func (d *defragmenter) Run(ctx context.Context) error {
 			}
 			// check whether to write messages to output channel right now
 			next := d.lastDispatchedSeq + 1
+			if frag.isDrain() {
+				log.Info("storage sink defragmenter observed drain marker",
+					zap.String("keyspace", d.changefeedID.Keyspace()),
+					zap.String("changefeed", d.changefeedID.ID().String()),
+					zap.String("dispatcher", frag.dispatcherID.String()),
+					zap.Uint64("commitTs", frag.marker.commitTs),
+					zap.Uint64("seq", frag.seqNumber),
+					zap.Uint64("nextExpectedSeq", next),
+					zap.Uint64("lastDispatchedSeq", d.lastDispatchedSeq))
+			}
 			if frag.seqNumber == next {
 				d.writeMsgsConsecutive(ctx, frag)
 			} else if frag.seqNumber > next {
 				d.future[frag.seqNumber] = frag
+				if frag.isDrain() {
+					log.Info("storage sink defragmenter waits drain marker for missing sequence",
+						zap.String("keyspace", d.changefeedID.Keyspace()),
+						zap.String("changefeed", d.changefeedID.ID().String()),
+						zap.String("dispatcher", frag.dispatcherID.String()),
+						zap.Uint64("commitTs", frag.marker.commitTs),
+						zap.Uint64("seq", frag.seqNumber),
+						zap.Uint64("nextExpectedSeq", next),
+						zap.Int("bufferedFragments", len(d.future)))
+				}
 			} else {
 				return nil
 			}
@@ -117,11 +193,20 @@ func (d *defragmenter) writeMsgsConsecutive(
 }
 
 func (d *defragmenter) dispatchFragToDMLWorker(frag eventFragment) {
-	tableName := frag.versionedTable.TableNameWithPhysicTableID
-	d.hasher.Reset()
-	d.hasher.Write([]byte(tableName.Schema), []byte(tableName.Table))
-	workerID := d.hasher.Sum32() % uint32(len(d.outputChs))
+	workerID := commonType.GID(frag.dispatcherID).Hash(uint64(len(d.outputChs)))
+	if frag.isDrain() {
+		log.Info("storage sink defragmenter dispatch drain marker to writer",
+			zap.String("keyspace", d.changefeedID.Keyspace()),
+			zap.String("changefeed", d.changefeedID.ID().String()),
+			zap.Int("workerID", int(workerID)),
+			zap.String("dispatcher", frag.dispatcherID.String()),
+			zap.Uint64("commitTs", frag.marker.commitTs),
+			zap.Uint64("seq", frag.seqNumber))
+	}
 	d.outputChs[workerID].In() <- frag
+	if !frag.isDrain() {
+		frag.event.PostEnqueue()
+	}
 	d.lastDispatchedSeq = frag.seqNumber
 }
 

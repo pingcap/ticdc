@@ -124,12 +124,29 @@ func TestResendAction(t *testing.T) {
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 0)
 
-	// resend write action
+	// resend flush action
 	event.selected.Store(true)
 	event.writerDispatcherAdvanced = false
 	event.writerDispatcher = dispatcherIDs[0]
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
+	flushResp := msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
+	require.Len(t, flushResp.DispatcherStatuses, 1)
+	require.Equal(t, heartbeatpb.Action_Flush, flushResp.DispatcherStatuses[0].Action.Action)
+	require.Equal(t, uint64(10), flushResp.DispatcherStatuses[0].Action.CommitTs)
+
+	// flush phase disabled: resend write action directly
+	event.lastResendTime = time.Time{}
+	event.flushEnabled = false
+	event.flushDispatcherAdvanced = true
+	event.writerDispatcherAdvanced = false
+	event.writerDispatcher = dispatcherIDs[0]
+	msgs = event.resend(common.DefaultMode)
+	require.Len(t, msgs, 1)
+	writeResp := msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
+	require.Len(t, writeResp.DispatcherStatuses, 1)
+	require.Equal(t, heartbeatpb.Action_Write, writeResp.DispatcherStatuses[0].Action.Action)
+	require.Equal(t, uint64(10), writeResp.DispatcherStatuses[0].Action.CommitTs)
 
 	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked: true,
@@ -140,6 +157,7 @@ func TestResendAction(t *testing.T) {
 		},
 	}, false)
 	event.selected.Store(true)
+	event.flushDispatcherAdvanced = true
 	event.writerDispatcherAdvanced = true
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
@@ -158,6 +176,7 @@ func TestResendAction(t *testing.T) {
 		},
 	}, false)
 	event.selected.Store(true)
+	event.flushDispatcherAdvanced = true
 	event.writerDispatcherAdvanced = true
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
@@ -177,6 +196,7 @@ func TestResendAction(t *testing.T) {
 		},
 	}, false)
 	event.selected.Store(true)
+	event.flushDispatcherAdvanced = true
 	event.writerDispatcherAdvanced = true
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)

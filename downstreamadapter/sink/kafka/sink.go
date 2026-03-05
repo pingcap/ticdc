@@ -144,6 +144,10 @@ func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.eventChan.Push(event)
 }
 
+func (s *sink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
+	return nil
+}
+
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	var err error
 	switch v := event.(type) {
@@ -219,6 +223,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 
 			partitionGenerator := s.comp.eventRouter.GetPartitionGenerator(schema, table)
 			selector := s.comp.columnSelector.Get(schema, table)
+<<<<<<< HEAD
 			toRowCallback := func(postTxnFlushed []func(), totalCount uint64) func() {
 				var calledCount atomic.Uint64
 				// The callback of the last row will trigger the callback of the txn.
@@ -234,6 +239,10 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 			rowsCount := event.Len()
 			rowCallback := toRowCallback(event.PostTxnFlushed, uint64(rowsCount))
 			events := make([]*commonEvent.MQRowEvent, 0, rowsCount)
+=======
+			rowsCount := uint64(event.Len())
+			rowCallback := helper.NewTxnPostFlushRowCallback(event, rowsCount)
+>>>>>>> 29db6eb28 (dispatcher,event,cloudstorage: add DML two-stage ack (#4263))
 
 			for {
 				row, ok := event.GetNextRow()
