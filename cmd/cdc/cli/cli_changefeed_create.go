@@ -155,9 +155,8 @@ func (o *createChangefeedOptions) completeReplicaCfg() error {
 	if err != nil {
 		return err
 	}
-	err = cfg.ValidateAndAdjustWithOptions(uri, config.ValidateOptions{
-		EnableRedoIOCheck: false,
-	})
+	cfg.EnableRedoIOCheck = putil.AddressOf(false)
+	err = cfg.ValidateAndAdjust(uri)
 	if err != nil {
 		return err
 	}
