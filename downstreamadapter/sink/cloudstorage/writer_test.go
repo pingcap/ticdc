@@ -130,10 +130,10 @@ func TestWriterRun(t *testing.T) {
 	cancel()
 	d.close()
 	wg.Wait()
+	t.Run("drain marker", verifyWriterDrainMarker)
 }
 
-func TestWriterDrainMarker(t *testing.T) {
-	t.Parallel()
+func verifyWriterDrainMarker(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

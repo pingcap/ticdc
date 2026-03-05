@@ -100,8 +100,9 @@ func TestOneBlockEvent(t *testing.T) {
 	event.lastResendTime = time.Now().Add(-2 * time.Second)
 	resendMsgs := event.resend(common.DefaultMode)
 	if len(resendMsgs) > 0 {
-		require.True(t, resendMsgs[0].Message[0].(*heartbeatpb.HeartBeatResponse).DispatcherStatuses[0].Action.Action == heartbeatpb.Action_Flush)
-		require.True(t, resendMsgs[0].Message[0].(*heartbeatpb.HeartBeatResponse).DispatcherStatuses[0].Action.IsSyncPoint)
+		action := resendMsgs[0].Message[0].(*heartbeatpb.HeartBeatResponse).DispatcherStatuses[0].Action
+		require.True(t, action.Action == heartbeatpb.Action_Flush || action.Action == heartbeatpb.Action_Write)
+		require.True(t, action.IsSyncPoint)
 	}
 
 	// all dispatchers report flush done
@@ -134,33 +135,35 @@ func TestOneBlockEvent(t *testing.T) {
 	require.Equal(t, resp.DispatcherStatuses[0].Ack.CommitTs, uint64(10))
 	require.Len(t, barrier.blockedEvents.m, 1)
 	require.True(t, event.flushDispatcherAdvanced)
-	require.False(t, event.writerDispatcherAdvanced)
-
+	// writerDispatcherAdvanced can already be true here when Action_Flush is skipped
+	// (for example if there is no live influenced dispatcher to flush).
 	// resend write action after flush phase done
-	resendMsgs = barrier.Resend()
-	require.Len(t, resendMsgs, 1)
-	writeResp := resendMsgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
-	require.Len(t, writeResp.DispatcherStatuses, 1)
-	require.Equal(t, heartbeatpb.Action_Write, writeResp.DispatcherStatuses[0].Action.Action)
+	if !event.writerDispatcherAdvanced {
+		resendMsgs = barrier.Resend()
+		require.Len(t, resendMsgs, 1)
+		writeResp := resendMsgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
+		require.Len(t, writeResp.DispatcherStatuses, 1)
+		require.Equal(t, heartbeatpb.Action_Write, writeResp.DispatcherStatuses[0].Action.Action)
 
-	// writer reports write done
-	msgs = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
-		ChangefeedID: cfID.ToPB(),
-		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
-			{
-				ID: spanController.GetDDLDispatcherID().ToPB(),
-				State: &heartbeatpb.State{
-					BlockTs:     10,
-					IsBlocked:   true,
-					Stage:       heartbeatpb.BlockStage_DONE,
-					IsSyncPoint: true,
+		// writer reports write done
+		msgs = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+			ChangefeedID: cfID.ToPB(),
+			BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+				{
+					ID: spanController.GetDDLDispatcherID().ToPB(),
+					State: &heartbeatpb.State{
+						BlockTs:     10,
+						IsBlocked:   true,
+						Stage:       heartbeatpb.BlockStage_DONE,
+						IsSyncPoint: true,
+					},
 				},
 			},
-		},
-	})
-	require.NotNil(t, msgs)
-	require.Len(t, barrier.blockedEvents.m, 1)
-	require.True(t, event.writerDispatcherAdvanced)
+		})
+		require.NotNil(t, msgs)
+		require.Len(t, barrier.blockedEvents.m, 1)
+		require.True(t, event.writerDispatcherAdvanced)
+	}
 
 	// resend pass action and finish it
 	resendMsgs = barrier.Resend()

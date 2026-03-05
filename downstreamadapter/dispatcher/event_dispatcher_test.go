@@ -426,6 +426,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	require.Equal(t, uint64(7), dispatcher.GetResolvedTs())
 	checkpointTs = dispatcher.GetCheckpointTs()
 	require.Equal(t, uint64(7), checkpointTs)
+	t.Run("cloud storage wake callback after batch enqueue", verifyDMLWakeCallbackStorageAfterBatchEnqueue)
 }
 
 // test uncompelete table span can correctly handle the ddl events
@@ -810,7 +811,7 @@ func TestBatchDMLEventsPartialFlush(t *testing.T) {
 	require.True(t, dispatcher.tableProgress.Empty())
 }
 
-func TestDMLWakeCallbackStorageAfterBatchEnqueue(t *testing.T) {
+func verifyDMLWakeCallbackStorageAfterBatchEnqueue(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 

@@ -52,7 +52,7 @@ func getTableFiles(t *testing.T, tableDir string) []string {
 	return fileNames
 }
 
-func TestAddDMLEventDoesNotCallPostEnqueueBeforePipelineRun(t *testing.T) {
+func verifyAddDMLEventDoesNotCallPostEnqueueBeforePipelineRun(t *testing.T) {
 	uri := fmt.Sprintf("file:///%s?protocol=csv", t.TempDir())
 	sinkURI, err := url.Parse(uri)
 	require.NoError(t, err)
@@ -94,6 +94,7 @@ func TestAddDMLEventDoesNotCallPostEnqueueBeforePipelineRun(t *testing.T) {
 }
 
 func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
+	t.Run("add dml does not call post enqueue before run", verifyAddDMLEventDoesNotCallPostEnqueueBeforePipelineRun)
 	parentDir := t.TempDir()
 
 	uri := fmt.Sprintf("file:///%s?protocol=csv&flush-interval=%ds", parentDir, 2)
