@@ -45,7 +45,7 @@ func TestTiKVEncryptionHTTPClientGetKeyspaceEncryptionMeta(t *testing.T) {
 	const dataKeyID = uint32(0x010203) // 24-bit big-endian -> [0x01 0x02 0x03]
 
 	handler := http.NewServeMux()
-	handler.HandleFunc("/encryption_meta", func(w http.ResponseWriter, r *http.Request) {
+	handler.HandleFunc("/encryption/get-meta", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
@@ -136,7 +136,7 @@ func TestTiKVEncryptionHTTPClientGetKeyspaceEncryptionMetaFromProtobuf(t *testin
 	require.NoError(t, err)
 
 	handler := http.NewServeMux()
-	handler.HandleFunc("/encryption_meta", func(w http.ResponseWriter, r *http.Request) {
+	handler.HandleFunc("/encryption/get-meta", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/protobuf")
 		_, _ = w.Write(payload)
 	})
@@ -167,7 +167,7 @@ func TestTiKVEncryptionHTTPClientNotFoundReturnsErrEncryptionMetaNotFound(t *tes
 	t.Parallel()
 
 	handler := http.NewServeMux()
-	handler.HandleFunc("/encryption_meta", func(w http.ResponseWriter, r *http.Request) {
+	handler.HandleFunc("/encryption/get-meta", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte("not found"))
 	})
@@ -195,7 +195,7 @@ func TestTiKVEncryptionHTTPClientRejectsVersionZeroMeta(t *testing.T) {
 	t.Parallel()
 
 	handler := http.NewServeMux()
-	handler.HandleFunc("/encryption_meta", func(w http.ResponseWriter, r *http.Request) {
+	handler.HandleFunc("/encryption/get-meta", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
   "keyspace_id": 1,
@@ -227,7 +227,7 @@ func TestTiKVEncryptionHTTPClientRejectsMetaMissingCurrentDataKey(t *testing.T) 
 	t.Parallel()
 
 	handler := http.NewServeMux()
-	handler.HandleFunc("/encryption_meta", func(w http.ResponseWriter, r *http.Request) {
+	handler.HandleFunc("/encryption/get-meta", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
   "keyspace_id": 1,

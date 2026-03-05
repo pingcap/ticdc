@@ -222,9 +222,9 @@ func (c *tikvEncryptionHTTPClient) getEncryptionMetaFromStore(ctx context.Contex
 
 func (c *tikvEncryptionHTTPClient) buildStatusURL(statusAddr string, keyspaceID uint32) string {
 	if strings.Contains(statusAddr, "://") {
-		return fmt.Sprintf("%s/encryption_meta?keyspace_id=%d", strings.TrimRight(statusAddr, "/"), keyspaceID)
+		return fmt.Sprintf("%s/encryption/get-meta?keyspace_id=%d", strings.TrimRight(statusAddr, "/"), keyspaceID)
 	}
-	return fmt.Sprintf("%s://%s/encryption_meta?keyspace_id=%d", c.httpScheme, statusAddr, keyspaceID)
+	return fmt.Sprintf("%s://%s/encryption/get-meta?keyspace_id=%d", c.httpScheme, statusAddr, keyspaceID)
 }
 
 type encryptionMetaResponse struct {
