@@ -35,7 +35,7 @@ type Backend interface {
 	// SetChangefeedProgress persists the operation progress status to db for a changefeed
 	SetChangefeedProgress(ctx context.Context, id common.ChangeFeedID, progress config.Progress) error
 	// ResumeChangefeed persists the resumed status to db for a changefeed
-	ResumeChangefeed(ctx context.Context, id common.ChangeFeedID, newCheckpointTs uint64) error
+	ResumeChangefeed(ctx context.Context, id common.ChangeFeedID, newCheckpointTs uint64, syncPointGuardTs uint64) error
 	// UpdateChangefeedCheckpointTs persists the checkpointTs for changefeeds
 	UpdateChangefeedCheckpointTs(ctx context.Context, checkpointTs map[common.ChangeFeedID]uint64) error
 }

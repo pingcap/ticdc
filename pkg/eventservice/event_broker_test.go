@@ -308,6 +308,34 @@ func TestDoScanSkipWhenChangefeedStatusNotFound(t *testing.T) {
 	require.False(t, disp.isTaskScanning.Load())
 }
 
+func TestSyncPointGuardFastForwardAndResume(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.enableSyncPoint = true
+	info.syncPointInterval = 10 * time.Second
+	info.nextSyncPoint = oracle.GoTimeToTS(time.Unix(0, 0).Add(10 * time.Second))
+	info.syncPointGuardTs = oracle.GoTimeToTS(time.Unix(0, 0).Add(35 * time.Second))
+
+	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	require.Equal(t, info.nextSyncPoint, disp.nextSyncPoint.Load())
+
+	require.False(t, broker.hasSyncPointEventsBeforeTs(oracle.GoTimeToTS(time.Unix(0, 0).Add(39*time.Second)), disp))
+	require.Equal(t, oracle.GoTimeToTS(time.Unix(0, 0).Add(40*time.Second)), disp.nextSyncPoint.Load())
+	require.True(t, broker.hasSyncPointEventsBeforeTs(oracle.GoTimeToTS(time.Unix(0, 0).Add(41*time.Second)), disp))
+
+	broker.emitSyncPointEventIfNeeded(oracle.GoTimeToTS(time.Unix(0, 0).Add(41*time.Second)), disp, node.ID("server1"))
+	msg := <-broker.messageCh[0]
+	require.Equal(t, event.TypeSyncPointEvent, msg.msgType)
+
+	syncPointEvent, ok := msg.e.(*event.SyncPointEvent)
+	require.True(t, ok)
+	require.Equal(t, oracle.GoTimeToTS(time.Unix(0, 0).Add(40*time.Second)), syncPointEvent.GetCommitTs())
+	require.Equal(t, oracle.GoTimeToTS(time.Unix(0, 0).Add(50*time.Second)), disp.nextSyncPoint.Load())
+}
+
 func TestCURDDispatcher(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	defer broker.close()

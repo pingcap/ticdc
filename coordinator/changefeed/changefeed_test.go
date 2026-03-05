@@ -57,6 +57,12 @@ func TestChangefeed_GetSetInfo(t *testing.T) {
 	}
 	cf.SetInfo(newInfo)
 	require.Equal(t, newInfo, cf.GetInfo())
+
+	msg := cf.NewAddMaintainerMessage(node.ID("server-1"))
+	req := msg.Message[0].(*heartbeatpb.AddMaintainerRequest)
+	var marshaledInfo config.ChangeFeedInfo
+	require.NoError(t, marshaledInfo.Unmarshal(req.Config))
+	require.Equal(t, newInfo.SinkURI, marshaledInfo.SinkURI)
 }
 
 func TestChangefeed_GetSetNodeID(t *testing.T) {

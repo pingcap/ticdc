@@ -554,6 +554,7 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 
 // hasSyncPointEventBeforeTs checks if there is any sync point events before the given ts.
 func (c *eventBroker) hasSyncPointEventsBeforeTs(ts uint64, d *dispatcherStat) bool {
+	c.fastForwardSyncPointIfNeeded(d)
 	return d.enableSyncPoint && ts > d.nextSyncPoint.Load()
 }
 
@@ -561,6 +562,7 @@ func (c *eventBroker) hasSyncPointEventsBeforeTs(ts uint64, d *dispatcherStat) b
 // We need call this function every time we send a event(whether dml/ddl/resolvedTs),
 // thus to ensure the sync point event is in correct order for each dispatcher.
 func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, remoteID node.ID) {
+	c.fastForwardSyncPointIfNeeded(d)
 	for d.enableSyncPoint && ts > d.nextSyncPoint.Load() {
 		commitTs := d.nextSyncPoint.Load()
 		d.nextSyncPoint.Store(oracle.GoTimeToTS(oracle.GetTimeFromTS(commitTs).Add(d.syncPointInterval)))
@@ -574,6 +576,21 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 		syncPointEvent := newWrapSyncPointEvent(remoteID, e)
 		c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- syncPointEvent
 	}
+}
+
+func (c *eventBroker) fastForwardSyncPointIfNeeded(d *dispatcherStat) {
+	if !d.enableSyncPoint || d.syncPointGuardTs == 0 || d.syncPointInterval <= 0 {
+		return
+	}
+	nextSyncPoint := d.nextSyncPoint.Load()
+	if nextSyncPoint > d.syncPointGuardTs {
+		return
+	}
+	nextSyncPointTime := oracle.GetTimeFromTS(nextSyncPoint)
+	guardTsTime := oracle.GetTimeFromTS(d.syncPointGuardTs)
+	steps := guardTsTime.Sub(nextSyncPointTime)/d.syncPointInterval + 1
+	nextSyncPoint = oracle.GoTimeToTS(nextSyncPointTime.Add(steps * d.syncPointInterval))
+	d.nextSyncPoint.Store(nextSyncPoint)
 }
 
 func (c *eventBroker) calculateScanLimit(task scanTask) scanLimit {

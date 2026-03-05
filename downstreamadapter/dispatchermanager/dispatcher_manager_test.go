@@ -57,6 +57,7 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 		nil,
 		nil,
 		nil,
+		0,
 		&defaultAtomicity,
 		false,
 		make(chan dispatcher.TableSpanStatusWithSeq, 1),
@@ -117,6 +118,7 @@ func createTestManager(t *testing.T) *DispatcherManager {
 		nil,   // integrityConfig
 		nil,   // filterConfig
 		nil,   // syncPointConfig
+		0,     // syncPointGuardTs
 		&defaultAtomicity,
 		false,
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
