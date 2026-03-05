@@ -403,9 +403,6 @@ func (s *subscriptionClient) wakeSubscription(subID SubscriptionID) {
 }
 
 func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
-	if s.ctx.Err() != nil {
-		return
-	}
 	// fast path
 	if !s.paused.Load() {
 		s.ds.Push(subID, event)
@@ -413,13 +410,16 @@ func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event reg
 	}
 	// slow path: wait until paused is false
 	s.mu.Lock()
-	for s.paused.Load() && s.ctx.Err() == nil {
-		s.cond.Wait()
+	for s.paused.Load() {
+		select {
+		case <-s.ctx.Done():
+			s.mu.Unlock()
+			return
+		default:
+			s.cond.Wait()
+		}
 	}
 	s.mu.Unlock()
-	if s.ctx.Err() != nil {
-		return
-	}
 	s.ds.Push(subID, event)
 }
 
