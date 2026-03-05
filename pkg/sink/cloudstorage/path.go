@@ -110,6 +110,13 @@ func generateSchemaFilePath(
 	return path.Join(dir, name)
 }
 
+func generateTablePath(tableName string, tableID int64, useTableIDAsPath bool) string {
+	if useTableIDAsPath && tableName != "" {
+		return fmt.Sprintf("%d", tableID)
+	}
+	return tableName
+}
+
 func generateDataFileName(enableTableAcrossNodes bool, dispatcherID string, index uint64, extension string, fileIndexWidth int) string {
 	indexFmt := "%0" + strconv.Itoa(fileIndexWidth) + "d"
 	if enableTableAcrossNodes {
@@ -194,7 +201,7 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	}
 
 	// Case 1: point check if the schema file exists.
-	tblSchemaFile, err := def.GenerateSchemaFilePath()
+	tblSchemaFile, err := def.GenerateSchemaFilePath(f.config.UseTableIDAsPath, table.TableNameWithPhysicTableID.TableID)
 	if err != nil {
 		return false, err
 	}
@@ -211,7 +218,9 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	_, checksum := mustParseSchemaName(tblSchemaFile)
 	schemaFileCnt := 0
 	lastVersion := uint64(0)
-	subDir := fmt.Sprintf(tableSchemaPrefix, def.Schema, def.Table)
+	subDir := fmt.Sprintf(tableSchemaPrefix,
+		def.Schema,
+		generateTablePath(def.Table, table.TableNameWithPhysicTableID.TableID, f.config.UseTableIDAsPath))
 	checksumSuffix := fmt.Sprintf("%010d.json", checksum)
 	hasNewerSchemaVersion := false
 	err = f.storage.WalkDir(ctx, &storage.WalkOption{
@@ -366,7 +375,12 @@ func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date str
 	var elems []string
 
 	elems = append(elems, tbl.TableNameWithPhysicTableID.Schema)
-	elems = append(elems, tbl.TableNameWithPhysicTableID.Table)
+	elems = append(elems,
+		generateTablePath(
+			tbl.TableNameWithPhysicTableID.Table,
+			tbl.TableNameWithPhysicTableID.TableID,
+			f.config.UseTableIDAsPath,
+		))
 	elems = append(elems, fmt.Sprintf("%d", f.versionMap[tbl]))
 
 	if f.config.EnablePartitionSeparator && tbl.TableNameWithPhysicTableID.IsPartition {

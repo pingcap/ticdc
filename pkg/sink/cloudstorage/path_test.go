@@ -138,6 +138,33 @@ func TestGenerateDataFilePath(t *testing.T) {
 	require.Equal(t, fmt.Sprintf("test/table1/5/2023-01-01/CDC_%s_000001.json", table.DispatcherID.String()), path)
 }
 
+func TestGenerateDataFilePathWithTableIDAsPath(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.TODO())
+	defer cancel()
+
+	table := VersionedTableName{
+		TableNameWithPhysicTableID: commonType.TableName{
+			Schema:  "test",
+			Table:   "table1",
+			TableID: 12345,
+		},
+		TableInfoVersion: 5,
+		DispatcherID:     commonType.NewDispatcherID(),
+	}
+
+	dir := t.TempDir()
+	f := testFilePathGenerator(ctx, t, dir)
+	f.config.UseTableIDAsPath = true
+	f.versionMap[table] = table.TableInfoVersion
+
+	date := f.GenerateDateStr()
+	path, err := f.GenerateDataFilePath(ctx, table, date)
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf("test/12345/5/CDC_%s_000001.json", table.DispatcherID.String()), path)
+}
+
 func TestFetchIndexFromFileName(t *testing.T) {
 	t.Parallel()
 

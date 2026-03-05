@@ -14,6 +14,7 @@ package cloudstorage
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -329,8 +330,9 @@ func (t *TableDefinition) Sum32(hasher *hash.PositionInertia) (uint32, error) {
 	return hasher.Sum32(), nil
 }
 
-// GenerateSchemaFilePath generates the schema file path for TableDefinition.
-func (t *TableDefinition) GenerateSchemaFilePath() (string, error) {
+// GenerateSchemaFilePath generates the schema file path for TableDefinition
+// with optional table id path.
+func (t *TableDefinition) GenerateSchemaFilePath(useTableIDAsPath bool, tableID int64) (string, error) {
 	checksum, err := t.Sum32(nil)
 	if err != nil {
 		return "", err
@@ -338,5 +340,9 @@ func (t *TableDefinition) GenerateSchemaFilePath() (string, error) {
 	if !t.IsTableSchema() && t.Table != "" {
 		log.Panic("invalid table definition", zap.Any("tableDef", t))
 	}
-	return generateSchemaFilePath(t.Schema, t.Table, t.TableVersion, checksum), nil
+	table := t.Table
+	if useTableIDAsPath && t.IsTableSchema() {
+		table = fmt.Sprintf("%d", tableID)
+	}
+	return generateSchemaFilePath(t.Schema, table, t.TableVersion, checksum), nil
 }
