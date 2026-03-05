@@ -134,7 +134,6 @@ func TestWriterRun(t *testing.T) {
 }
 
 func verifyWriterDrainMarker(t *testing.T) {
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	parentDir := t.TempDir()
