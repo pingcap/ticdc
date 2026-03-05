@@ -32,7 +32,6 @@ import (
 
 // polymorphicRedoEvent wraps RedoLog and callback for file worker.
 type polymorphicRedoEvent struct {
-	redoLog  *commonEvent.RedoLog
 	commitTs common.Ts
 	data     []byte
 	callback func()
@@ -55,24 +54,20 @@ func toPolymorphicRedoEvent(
 	if rl.Type == commonEvent.RedoLogTypeDDL {
 		rl.RedoDDL.SetTableSchemaStore(tableSchemaStore)
 	}
-	return &polymorphicRedoEvent{
-		redoLog:  rl,
-		commitTs: rl.GetCommitTs(),
-		callback: event.PostFlush,
-	}, nil
-}
 
-func encodeData(event *polymorphicRedoEvent) error {
-	rawData, err := codec.MarshalRedoLog(event.redoLog, nil)
+	rawData, err := codec.MarshalRedoLog(rl, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	lenField, padBytes := writer.EncodeFrameSize(len(rawData))
 	data := make([]byte, 8+len(rawData)+padBytes)
 	binary.LittleEndian.PutUint64(data[:8], lenField)
 	copy(data[8:], rawData)
-	event.data = data
-	return nil
+	return &polymorphicRedoEvent{
+		commitTs: rl.GetCommitTs(),
+		callback: event.PostFlush,
+		data:     data,
+	}, nil
 }
 
 type encodingWorkerGroup struct {
@@ -153,9 +148,6 @@ func (e *encodingWorkerGroup) runWorker(egCtx context.Context, idx int) error {
 			}
 			redoLogEvent, err := toPolymorphicRedoEvent(event, e.tableSchemaStore)
 			if err != nil {
-				return errors.Trace(err)
-			}
-			if err := encodeData(redoLogEvent); err != nil {
 				return errors.Trace(err)
 			}
 			if err := e.output(egCtx, redoLogEvent); err != nil {
