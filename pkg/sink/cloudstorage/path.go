@@ -92,10 +92,12 @@ func mustParseSchemaName(path string) (uint64, uint32) {
 
 func generateSchemaFilePath(
 	schema, table string, tableVersion uint64, checksum uint32,
-) string {
+) (string, error) {
 	if schema == "" || tableVersion == 0 {
-		log.Panic("invalid schema or tableVersion",
-			zap.String("schema", schema), zap.String("table", table), zap.Uint64("tableVersion", tableVersion))
+		return "", errors.ErrInternalCheckFailed.GenWithStackByArgs(
+			fmt.Sprintf("invalid schema or tableVersion, schema=%q table=%q tableVersion=%d",
+				schema, table, tableVersion),
+		)
 	}
 
 	var dir string
@@ -107,7 +109,7 @@ func generateSchemaFilePath(
 		dir = fmt.Sprintf(tableSchemaPrefix, schema, table)
 	}
 	name := fmt.Sprintf(schemaFileNameFormat, tableVersion, checksum)
-	return path.Join(dir, name)
+	return path.Join(dir, name), nil
 }
 
 func generateTablePath(tableName string, tableID int64, useTableIDAsPath bool) string {
