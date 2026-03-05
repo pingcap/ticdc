@@ -21,7 +21,6 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
-	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 )
 
@@ -63,7 +62,7 @@ type pendingEntry struct {
 // It is triggered after coordinator successfully updates the cluster-level GC state
 // (global GC safepoint on classic, or keyspace GC barrier on next-gen).
 type Cleaner struct {
-	pdClient pd.Client
+	pdClient gc.Client
 
 	// gcServiceIDPrefix is the prefix used to build the service ID passed to PD.
 	gcServiceIDPrefix string
@@ -81,7 +80,7 @@ type Cleaner struct {
 }
 
 func New(
-	pdClient pd.Client,
+	pdClient gc.Client,
 	gcServiceIDPrefix string,
 ) *Cleaner {
 	return &Cleaner{
