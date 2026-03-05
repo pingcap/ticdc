@@ -34,6 +34,8 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
+
+	"github.com/pingcap/ticdc/utils/dynstream"
 )
 
 func TestGenerateResolveLockTask(t *testing.T) {
@@ -179,6 +181,67 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 	region := task.GetRegionInfo()
 	require.True(t, region.isStopped())
 	require.True(t, region.filterLoop)
+}
+
+type mockDynamicStream struct{}
+
+func (s *mockDynamicStream) Start() {}
+
+func (s *mockDynamicStream) Close() {}
+
+func (s *mockDynamicStream) Push(_ SubscriptionID, _ regionEvent) {}
+
+func (s *mockDynamicStream) Wake(_ SubscriptionID) {}
+
+func (s *mockDynamicStream) Feedback() <-chan dynstream.Feedback[int, SubscriptionID, *subscribedSpan] {
+	return nil
+}
+
+func (s *mockDynamicStream) AddPath(_ SubscriptionID, _ *subscribedSpan, _ ...dynstream.AreaSettings) error {
+	return nil
+}
+
+func (s *mockDynamicStream) RemovePath(_ SubscriptionID) error {
+	return nil
+}
+
+func (s *mockDynamicStream) Release(_ SubscriptionID) {}
+
+func (s *mockDynamicStream) SetAreaSettings(_ int, _ dynstream.AreaSettings) {}
+
+func (s *mockDynamicStream) GetMetrics() dynstream.Metrics[int, SubscriptionID] {
+	return dynstream.Metrics[int, SubscriptionID]{}
+}
+
+func TestPushRegionEventToDSUnblocksOnClose(t *testing.T) {
+	client := &subscriptionClient{
+		ds:              &mockDynamicStream{},
+		regionTaskQueue: NewPriorityQueue(),
+	}
+	client.ctx, client.cancel = context.WithCancel(context.Background())
+	client.cond = sync.NewCond(&client.mu)
+
+	client.paused.Store(true)
+
+	done := make(chan struct{})
+	go func() {
+		client.pushRegionEventToDS(SubscriptionID(1), regionEvent{})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("pushRegionEventToDS should block when paused")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	require.NoError(t, client.Close(context.Background()))
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("pushRegionEventToDS should be unblocked by Close")
+	}
 }
 
 func TestEnqueueRegionToAllStoresRetryWhenCacheFull(t *testing.T) {

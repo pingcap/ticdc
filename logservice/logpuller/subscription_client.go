@@ -403,6 +403,9 @@ func (s *subscriptionClient) wakeSubscription(subID SubscriptionID) {
 }
 
 func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event regionEvent) {
+	if s.ctx.Err() != nil {
+		return
+	}
 	// fast path
 	if !s.paused.Load() {
 		s.ds.Push(subID, event)
@@ -410,10 +413,13 @@ func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event reg
 	}
 	// slow path: wait until paused is false
 	s.mu.Lock()
-	for s.paused.Load() {
+	for s.paused.Load() && s.ctx.Err() == nil {
 		s.cond.Wait()
 	}
 	s.mu.Unlock()
+	if s.ctx.Err() != nil {
+		return
+	}
 	s.ds.Push(subID, event)
 }
 
@@ -425,11 +431,15 @@ func (s *subscriptionClient) handleDSFeedBack(ctx context.Context) error {
 		case feedback := <-s.ds.Feedback():
 			switch feedback.FeedbackType {
 			case dynstream.PauseArea:
+				s.mu.Lock()
 				s.paused.Store(true)
+				s.mu.Unlock()
 				log.Info("subscription client pause push region event")
 			case dynstream.ResumeArea:
+				s.mu.Lock()
 				s.paused.Store(false)
 				s.cond.Broadcast()
+				s.mu.Unlock()
 				log.Info("subscription client resume push region event")
 			case dynstream.ReleasePath, dynstream.ResumePath:
 				// Ignore it, because it is no need to pause and resume a path in puller.
@@ -466,6 +476,10 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 // Close closes the client. Must be called after `Run` returns.
 func (s *subscriptionClient) Close(ctx context.Context) error {
 	s.cancel()
+	s.mu.Lock()
+	s.paused.Store(false)
+	s.cond.Broadcast()
+	s.mu.Unlock()
 	s.ds.Close()
 	s.regionTaskQueue.Close()
 	return nil
