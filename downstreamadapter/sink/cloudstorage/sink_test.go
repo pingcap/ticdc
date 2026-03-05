@@ -205,9 +205,10 @@ func TestWriteDDLEvent(t *testing.T) {
 		],
 		"TableColumnsTotal": 2
 	}`, string(tableSchema))
+	t.Run("flush dml before write ddl", verifyWriteDDLEventFlushDMLBeforeBlock)
 }
 
-func TestPassBlockEventDrainsBeforeWriteDDLEvent(t *testing.T) {
+func verifyWriteDDLEventFlushDMLBeforeBlock(t *testing.T) {
 	parentDir := t.TempDir()
 	uri := fmt.Sprintf("file:///%s?protocol=csv&flush-interval=3600s", parentDir)
 	sinkURI, err := url.Parse(uri)

@@ -61,6 +61,7 @@ func TestFilterDMLEventActiveActiveWithEnableDropsDeletes(t *testing.T) {
 	require.Equal(t, int64(2), row.Row.GetInt64(0))
 	require.False(t, row.Row.IsEmpty())
 	filtered.Rewind()
+	t.Run("keeps post enqueue callbacks on filtered event", verifyFilterDMLEventKeepsPostEnqueueCallbacksOnFilteredEvent)
 }
 
 func TestFilterDMLEventActiveActiveSkipsDeleteButKeepsFollowingRows(t *testing.T) {
@@ -317,7 +318,7 @@ func TestFilterDMLEventSoftDeleteTableMissingColumnReportsError(t *testing.T) {
 	require.Contains(t, handledErr.Error(), SoftDeleteTimeColumn)
 }
 
-func TestFilterDMLEventKeepsPostEnqueueCallbacksOnFilteredEvent(t *testing.T) {
+func verifyFilterDMLEventKeepsPostEnqueueCallbacksOnFilteredEvent(t *testing.T) {
 	ti := newTestTableInfo(t, true, true)
 	ts := newTimestampValue(time.Date(2025, time.March, 10, 0, 0, 0, 0, time.UTC))
 	event := newDMLEventForTest(t, ti,

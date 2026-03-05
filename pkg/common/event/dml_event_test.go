@@ -345,7 +345,7 @@ func TestBatchDMLEventHeaderValidation(t *testing.T) {
 	require.Contains(t, err.Error(), "incomplete data")
 }
 
-func TestDMLEventPostEnqueueFuncs(t *testing.T) {
+func TestDMLEventPostCallbacks(t *testing.T) {
 	t.Parallel()
 
 	event := &DMLEvent{}
@@ -361,9 +361,12 @@ func TestDMLEventPostEnqueueFuncs(t *testing.T) {
 	event.PostEnqueue()
 
 	require.Equal(t, int64(2), called.Load())
+	t.Run("post flush triggers post enqueue once", verifyDMLEventPostFlushTriggersPostEnqueueOnce)
+	t.Run("post flush order and fallback", verifyDMLEventPostFlushRunsFlushBeforePostEnqueueFallback)
+	t.Run("post enqueue concurrent with post flush", verifyDMLEventPostEnqueueConcurrentWithPostFlush)
 }
 
-func TestDMLEventPostFlushTriggersPostEnqueueOnce(t *testing.T) {
+func verifyDMLEventPostFlushTriggersPostEnqueueOnce(t *testing.T) {
 	t.Parallel()
 
 	event := &DMLEvent{}
@@ -383,7 +386,7 @@ func TestDMLEventPostFlushTriggersPostEnqueueOnce(t *testing.T) {
 	require.Equal(t, int64(2), flushCalled.Load())
 }
 
-func TestDMLEventPostFlushRunsFlushBeforePostEnqueueFallback(t *testing.T) {
+func verifyDMLEventPostFlushRunsFlushBeforePostEnqueueFallback(t *testing.T) {
 	t.Parallel()
 
 	event := &DMLEvent{}
@@ -401,7 +404,7 @@ func TestDMLEventPostFlushRunsFlushBeforePostEnqueueFallback(t *testing.T) {
 	require.Equal(t, []string{"flush", "enqueue", "flush"}, order)
 }
 
-func TestDMLEventPostEnqueueConcurrentWithPostFlush(t *testing.T) {
+func verifyDMLEventPostEnqueueConcurrentWithPostFlush(t *testing.T) {
 	t.Parallel()
 
 	event := &DMLEvent{}
