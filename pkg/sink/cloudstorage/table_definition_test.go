@@ -488,14 +488,18 @@ func TestTableDefinitionGenFilePath(t *testing.T) {
 		Version:      defaultTableDefinitionVersion,
 		TableVersion: 100,
 	}
-	schemaPath, err := schemaDef.GenerateSchemaFilePath()
+	schemaPath, err := schemaDef.GenerateSchemaFilePath(false, 0)
 	require.NoError(t, err)
 	require.Equal(t, "schema1/meta/schema_100_3233644819.json", schemaPath)
 
 	def, _ := generateTableDef()
-	tablePath, err := def.GenerateSchemaFilePath()
+	tablePath, err := def.GenerateSchemaFilePath(false, 0)
 	require.NoError(t, err)
 	require.Equal(t, "schema1/table1/meta/schema_100_3752767265.json", tablePath)
+
+	tablePath, err = def.GenerateSchemaFilePath(true, 12345)
+	require.NoError(t, err)
+	require.Equal(t, "schema1/12345/meta/schema_100_3752767265.json", tablePath)
 }
 
 func TestTableDefinitionSum32(t *testing.T) {

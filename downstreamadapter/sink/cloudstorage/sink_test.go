@@ -207,6 +207,119 @@ func TestWriteDDLEvent(t *testing.T) {
 	}`, string(tableSchema))
 }
 
+func TestWriteDDLEventWithTableIDAsPath(t *testing.T) {
+	parentDir := t.TempDir()
+	uri := fmt.Sprintf("file:///%s?protocol=csv&use-table-id-as-path=true", parentDir)
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	err = replicaConfig.ValidateAndAdjust(sinkURI)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
+	require.NoError(t, err)
+
+	go cloudStorageSink.Run(ctx)
+
+	tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
+		ID:   20,
+		Name: ast.NewCIStr("table1"),
+		Columns: []*timodel.ColumnInfo{
+			{
+				Name:      ast.NewCIStr("col1"),
+				FieldType: *types.NewFieldType(mysql.TypeLong),
+			},
+			{
+				Name:      ast.NewCIStr("col2"),
+				FieldType: *types.NewFieldType(mysql.TypeVarchar),
+			},
+		},
+	})
+	ddlEvent := &commonEvent.DDLEvent{
+		Query:      "alter table test.table1 add col2 varchar(64)",
+		Type:       byte(timodel.ActionAddColumn),
+		SchemaName: "test",
+		TableName:  "table1",
+		FinishedTs: 100,
+		TableInfo:  tableInfo,
+	}
+
+	err = cloudStorageSink.WriteBlockEvent(ddlEvent)
+	require.NoError(t, err)
+
+	tableDir := path.Join(parentDir, "test/20/meta/")
+	tableSchema, err := os.ReadFile(path.Join(tableDir, "schema_100_4192708364.json"))
+	require.NoError(t, err)
+	require.Contains(t, string(tableSchema), `"Table": "table1"`)
+}
+
+func TestWriteDDLEventWithInvalidExchangePartitionEvent(t *testing.T) {
+	testCases := []struct {
+		name               string
+		multipleTableInfos []*common.TableInfo
+	}{
+		{
+			name:               "nil source table info",
+			multipleTableInfos: []*common.TableInfo{nil},
+		},
+		{
+			name:               "short table infos",
+			multipleTableInfos: nil,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			parentDir := t.TempDir()
+			uri := fmt.Sprintf("file:///%s?protocol=csv&use-table-id-as-path=true", parentDir)
+			sinkURI, err := url.Parse(uri)
+			require.NoError(t, err)
+
+			replicaConfig := config.GetDefaultReplicaConfig()
+			err = replicaConfig.ValidateAndAdjust(sinkURI)
+			require.NoError(t, err)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
+			require.NoError(t, err)
+
+			tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
+				ID:   20,
+				Name: ast.NewCIStr("table1"),
+				Columns: []*timodel.ColumnInfo{
+					{
+						Name:      ast.NewCIStr("col1"),
+						FieldType: *types.NewFieldType(mysql.TypeLong),
+					},
+				},
+			})
+			ddlEvent := &commonEvent.DDLEvent{
+				Query:           "alter table test.table1 exchange partition p0 with table test.table2",
+				Type:            byte(timodel.ActionExchangeTablePartition),
+				SchemaName:      "test",
+				TableName:       "table1",
+				ExtraSchemaName: "test",
+				ExtraTableName:  "table2",
+				FinishedTs:      100,
+				TableInfo:       tableInfo,
+			}
+			ddlEvent.MultipleTableInfos = append([]*common.TableInfo{tableInfo}, tc.multipleTableInfos...)
+
+			err = cloudStorageSink.WriteBlockEvent(ddlEvent)
+			require.ErrorContains(t, err, "invalid exchange partition ddl event, source table info is missing")
+		})
+	}
+}
+
 func TestWriteCheckpointEvent(t *testing.T) {
 	parentDir := t.TempDir()
 	uri := fmt.Sprintf("file:///%s?protocol=csv", parentDir)
