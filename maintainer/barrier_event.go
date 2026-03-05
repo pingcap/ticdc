@@ -633,7 +633,22 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 	// multiple dispatchers on different nodes, and pre-DDL DML must not overtake
 	// the writer's Action_Write.
 	if !be.flushDispatcherAdvanced {
-		return be.sendFlushAction(mode)
+		msgs = be.sendFlushAction(mode)
+		if len(msgs) > 0 {
+			return msgs
+		}
+		// No influenced dispatcher needs Action_Flush (for example DB/ALL barriers with empty
+		// runtime influenced set like "DROP DATABASE IF EXISTS <db>" before any table exists).
+		// Advance flush phase immediately; otherwise the barrier can be stuck forever in phase 1.
+		be.flushDispatcherAdvanced = true
+		be.rangeChecker.Reset()
+		be.reportedDispatchers = make(map[common.DispatcherID]struct{})
+		be.lastResendTime = time.Now().Add(-20 * time.Second)
+		log.Info("barrier flush phase auto advanced due to empty influenced dispatchers",
+			zap.String("changefeed", be.cfID.Name()),
+			zap.Uint64("commitTs", be.commitTs),
+			zap.Bool("isSyncPoint", be.isSyncPoint),
+			zap.String("barrierType", be.blockedDispatchers.InfluenceType.String()))
 	}
 	// we select a dispatcher as the writer, still waiting for that dispatcher advance its checkpoint ts
 	if !be.writerDispatcherAdvanced {
