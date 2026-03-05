@@ -162,7 +162,7 @@ func (e *encodingWorkerGroup) input(
 ) error {
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return errors.Trace(ctx.Err())
 	case err := <-e.closed:
 		return errors.ErrRedoWriterStopped.FastGenByArgs(err)
 	case e.inputChs[idx] <- event:

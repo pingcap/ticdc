@@ -231,8 +231,8 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 				}
 			}
 
-			rowsCount := uint64(event.Len())
-			rowCallback := toRowCallback(event.PostTxnFlushed, rowsCount)
+			rowsCount := event.Len()
+			rowCallback := toRowCallback(event.PostTxnFlushed, uint64(rowsCount))
 			events := make([]*commonEvent.MQRowEvent, 0, rowsCount)
 
 			for {
