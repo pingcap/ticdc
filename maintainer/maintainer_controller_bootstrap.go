@@ -357,7 +357,7 @@ func (c *Controller) initializeComponents(
 	isStorageSinkBackend bool,
 ) {
 	// Initialize barrier
-	defaultBarrierFlushEnabled := c.enableTableAcrossNodes && isStorageSinkBackend
+	defaultBarrierFlushEnabled := isStorageSinkBackend
 	if c.enableRedo {
 		c.redoBarrier = NewBarrierWithFlush(c.redoSpanController, c.redoOperatorController, c.enableTableAcrossNodes, false, allNodesResp, common.RedoMode)
 	}

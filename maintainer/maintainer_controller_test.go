@@ -1435,6 +1435,60 @@ func TestFinishBootstrap(t *testing.T) {
 	require.Nil(t, postBootstrapRequest)
 }
 
+func TestFinishBootstrapStorageSinkWithoutTableAcrossNodesEnableFlush(t *testing.T) {
+	testutil.SetUpTestServices()
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
+	defaultConfig := config.GetDefaultReplicaConfig().Clone()
+	defaultConfig.Scheduler.EnableTableAcrossNodes = util.AddressOf(false)
+	s := NewController(cfID, 1, &mockThreadPool{},
+		defaultConfig, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false)
+
+	totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
+	span := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: totalSpan.StartKey, EndKey: totalSpan.EndKey}
+	schemaStore := eventservice.NewMockSchemaStore()
+	schemaStore.SetTables(
+		[]commonEvent.Table{
+			{
+				TableID:         1,
+				SchemaID:        1,
+				SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t"},
+			},
+		},
+	)
+	appcontext.SetService(appcontext.SchemaStore, schemaStore)
+
+	dispatcherID := common.NewDispatcherID()
+	_, err := s.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+		"node1": {
+			ChangefeedID: cfID.ToPB(),
+			Spans: []*heartbeatpb.BootstrapTableSpan{
+				{
+					ID:              dispatcherID.ToPB(),
+					SchemaID:        1,
+					Span:            span,
+					ComponentStatus: heartbeatpb.ComponentState_Working,
+					CheckpointTs:    10,
+				},
+			},
+			CheckpointTs: 10,
+		},
+	}, false, true)
+	require.NoError(t, err)
+	require.NotNil(t, s.barrier)
+	require.True(t, s.barrier.flushEnabled)
+}
+
 func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 	testutil.SetUpTestServices()
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
