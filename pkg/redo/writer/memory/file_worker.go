@@ -264,6 +264,9 @@ func (f *fileWorkerGroup) bgWriteLogs(
 func (f *fileWorkerGroup) syncWrite(egCtx context.Context, event *polymorphicRedoEvent) error {
 	data := event.data
 	file := f.newFileCache(data, event.commitTs)
+	if file == nil {
+		return errors.ErrRedoWriterStopped.FastGenByArgs("failed to create file cache")
+	}
 	if err := f.syncWriteFile(egCtx, file); err != nil {
 		return err
 	}
@@ -349,6 +352,9 @@ func (f *fileWorkerGroup) writeToCache(
 
 	if len(f.files) == 0 {
 		file := f.newFileCache(data, commitTs)
+		if file == nil {
+			return errors.ErrRedoWriterStopped.FastGenByArgs("failed to create file cache")
+		}
 		f.files = append(f.files, file)
 		return nil
 	}
@@ -361,6 +367,9 @@ func (f *fileWorkerGroup) writeToCache(
 		case f.flushCh <- file:
 		}
 		file := f.newFileCache(data, commitTs)
+		if file == nil {
+			return errors.ErrRedoWriterStopped.FastGenByArgs("failed to create file cache")
+		}
 		f.files = append(f.files, file)
 		return nil
 	}
