@@ -35,8 +35,10 @@ const (
 	// minSyncPointInterval is the minimum of SyncPointInterval can be set.
 	minSyncPointInterval = time.Second * 30
 	// minSyncPointRetention is the minimum of SyncPointRetention can be set.
-	minSyncPointRetention           = time.Hour * 1
-	minChangeFeedErrorStuckDuration = time.Minute * 30
+	minSyncPointRetention                = time.Hour * 1
+	minChangeFeedErrorStuckDuration      = time.Minute * 30
+	defaultActiveActiveProgressInterval  = time.Minute * 30
+	defaultActiveActiveSyncStatsInterval = time.Minute
 	// DefaultTiDBSourceID is the default source ID of TiDB cluster.
 	DefaultTiDBSourceID = 1
 )
@@ -45,12 +47,14 @@ var defaultReplicaConfig = &ReplicaConfig{
 	MemoryQuota:        util.AddressOf(uint64(DefaultChangefeedMemoryQuota)),
 	CaseSensitive:      util.AddressOf(false),
 	CheckGCSafePoint:   util.AddressOf(true),
+	EnableRedoIOCheck:  util.AddressOf(true),
 	EnableSyncPoint:    util.AddressOf(false),
 	EnableTableMonitor: util.AddressOf(false),
 	SyncPointInterval:  util.AddressOf(10 * time.Minute),
 	SyncPointRetention: util.AddressOf(24 * time.Hour),
 	BDRMode:            util.AddressOf(false),
 	Filter:             NewDefaultFilterConfig(),
+	EnableActiveActive: util.AddressOf(false),
 	Mounter: &MounterConfig{
 		WorkerNum: 16,
 	},
@@ -114,6 +118,8 @@ var defaultReplicaConfig = &ReplicaConfig{
 		SyncedCheckInterval: util.AddressOf(int64(5 * 60)),
 		CheckpointInterval:  util.AddressOf(int64(15)),
 	},
+	ActiveActiveProgressInterval:  util.AddressOf(defaultActiveActiveProgressInterval),
+	ActiveActiveSyncStatsInterval: util.AddressOf(defaultActiveActiveSyncStatsInterval),
 }
 
 // GetDefaultReplicaConfig returns the default replica config.
@@ -141,6 +147,9 @@ type replicaConfig struct {
 	CaseSensitive    *bool   `toml:"case-sensitive" json:"case-sensitive,omitempty"`
 	ForceReplicate   *bool   `toml:"force-replicate" json:"force-replicate,omitempty"`
 	CheckGCSafePoint *bool   `toml:"check-gc-safe-point" json:"check-gc-safe-point,omitempty"`
+	// EnableRedoIOCheck controls whether consistency storage validation should
+	// perform an I/O accessibility check. This field is internal only.
+	EnableRedoIOCheck *bool `toml:"-" json:"-"`
 	// EnableSyncPoint is only available when the downstream is a Database.
 	EnableSyncPoint    *bool `toml:"enable-sync-point" json:"enable-sync-point,omitempty"`
 	EnableTableMonitor *bool `toml:"enable-table-monitor" json:"enable-table-monitor"`
@@ -167,6 +176,18 @@ type replicaConfig struct {
 	Integrity                    *integrity.Config   `toml:"integrity" json:"integrity"`
 	ChangefeedErrorStuckDuration *time.Duration      `toml:"changefeed-error-stuck-duration" json:"changefeed-error-stuck-duration,omitempty"`
 	SyncedStatus                 *SyncedStatusConfig `toml:"synced-status" json:"synced-status,omitempty"`
+
+	// EnableActiveActive enables active-active replication mode on top of BDR.
+	// It requires BDRMode to be true and is only supported by TiDB and storage sinks.
+	EnableActiveActive *bool `toml:"enable-active-active" json:"enable-active-active,omitempty"`
+	// ActiveActiveProgressInterval controls how often the MySQL/TiDB sink updates the
+	// active-active progress table in EnableActiveActive mode (for hard delete safety checks).
+	ActiveActiveProgressInterval *time.Duration `toml:"active-active-progress-interval" json:"active-active-progress-interval,omitempty"`
+	// ActiveActiveSyncStatsInterval controls how often MySQL/TiDB sink queries
+	// the TiDB session variable @@tidb_cdc_active_active_sync_stats for conflict statistics.
+	// Set it to 0 to disable metric collection.
+	// This option only takes effect when EnableActiveActive is true and the downstream is TiDB.
+	ActiveActiveSyncStatsInterval *time.Duration `toml:"active-active-sync-stats-interval" json:"active-active-sync-stats-interval,omitempty"`
 
 	// Deprecated: we don't use this field since v8.0.0.
 	SQLMode string `toml:"sql-mode" json:"sql-mode"`
@@ -233,6 +254,9 @@ func (c *ReplicaConfig) Clone() *ReplicaConfig {
 		log.Panic("failed to unmarshal replica config",
 			zap.Error(cerror.WrapError(cerror.ErrDecodeFailed, err)))
 	}
+	if c.EnableRedoIOCheck != nil {
+		clone.EnableRedoIOCheck = util.AddressOf(*c.EnableRedoIOCheck)
+	}
 	return clone
 }
 
@@ -250,6 +274,11 @@ func (c *replicaConfig) fillFromV1(v1 *outdated.ReplicaConfigV1) {
 
 // ValidateAndAdjust verifies and adjusts the replica configuration.
 func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sink uri
+	enableRedoIOCheck := true
+	if c.EnableRedoIOCheck != nil {
+		enableRedoIOCheck = *c.EnableRedoIOCheck
+	}
+
 	if c.Sink != nil {
 		err := c.Sink.validateAndAdjust(sinkURI)
 		if err != nil {
@@ -258,7 +287,7 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 	}
 
 	if c.Consistent != nil {
-		err := c.Consistent.ValidateAndAdjust()
+		err := c.Consistent.validateAndAdjust(enableRedoIOCheck)
 		if err != nil {
 			return err
 		}
@@ -328,6 +357,41 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 				fmt.Sprintf("The ChangefeedErrorStuckDuration:%f must be larger than %f Seconds",
 					c.ChangefeedErrorStuckDuration.Seconds(),
 					minChangeFeedErrorStuckDuration.Seconds()))
+	}
+
+	if c.ActiveActiveProgressInterval == nil {
+		interval := defaultActiveActiveProgressInterval
+		c.ActiveActiveProgressInterval = util.AddressOf(interval)
+	}
+	if *c.ActiveActiveProgressInterval <= 0 {
+		return cerror.ErrInvalidReplicaConfig.
+			FastGenByArgs("the active-active-progress-interval must be larger than 0")
+	}
+
+	if c.ActiveActiveSyncStatsInterval == nil {
+		interval := defaultActiveActiveSyncStatsInterval
+		c.ActiveActiveSyncStatsInterval = util.AddressOf(interval)
+	}
+	if *c.ActiveActiveSyncStatsInterval < 0 {
+		return cerror.ErrInvalidReplicaConfig.
+			FastGenByArgs("the active-active-sync-stats-interval must be larger than or equal to 0")
+	}
+
+	if util.GetOrZero(c.EnableActiveActive) {
+		scheme := GetScheme(sinkURI)
+		if IsMySQLCompatibleScheme(scheme) {
+			if !util.GetOrZero(c.BDRMode) {
+				return cerror.ErrInvalidReplicaConfig.
+					FastGenByArgs("enable-active-active with mysql-class downstream requires bdr-mode to be true")
+			}
+		} else if !IsStorageScheme(scheme) {
+			return cerror.ErrInvalidReplicaConfig.
+				FastGenByArgs("enable-active-active only supports tidb sink and storage sink")
+		}
+		if c.Consistent != nil && redo.IsConsistentEnabled(util.GetOrZero(c.Consistent.Level)) {
+			return cerror.ErrInvalidReplicaConfig.
+				FastGenByArgs("enable-active-active is incompatible with redo log/consistency feature, please disable redo")
+		}
 	}
 
 	return nil

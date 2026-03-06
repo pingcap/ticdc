@@ -27,8 +27,18 @@ message Watermark {
 }
 
 enum Action {
+    // Write means the selected writer dispatcher executes the barrier event
+    // (DDL/syncpoint) to downstream.
     Write = 0;
+    // Pass means influenced dispatchers mark this barrier as passed after the
+    // writer has finished Write for the same (commitTs, isSyncPoint).
     Pass = 1;
+    // Flush means influenced dispatchers flush all DML before this barrier and
+    // keep the pending barrier event for the later Write/Pass steps.
+    // It is required for storage sink when split-table is enabled: one table may have multiple
+    // dispatchers on different nodes, and every dispatcher must flush pre-barrier
+    // DML first to prevent it from being reordered after the writer executes DDL.
+    Flush = 2;
 }
 
 message DispatcherAction {
@@ -96,6 +106,14 @@ enum ScheduleAction {
     Remove = 1;
 }
 
+enum OperatorType {
+    O_Add = 0;
+    O_Remove = 1;
+    O_Move = 2;
+    O_Split = 3;
+    O_Merge = 4;
+}
+
 message DispatcherConfig {
     TableSpan span = 1;
     uint64 startTs = 2;
@@ -113,6 +131,7 @@ message ScheduleDispatcherRequest {
     ChangefeedID changefeedID = 1;
     DispatcherConfig config = 2;
     ScheduleAction scheduleAction = 3;
+    OperatorType operatorType = 4;
 }
 
 message MergeDispatcherRequest {
@@ -185,6 +204,7 @@ message MaintainerBootstrapResponse {
     // redo_checkpoint_ts is similar to checkpoint_ts, for nodes with a table trigger redo dispatcher.
     // It will be used when redo enable.
     uint64 redo_checkpoint_ts = 5;
+    repeated ScheduleDispatcherRequest operators = 6;
 }
 
 message MaintainerPostBootstrapRequest {

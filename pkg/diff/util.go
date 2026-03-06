@@ -39,25 +39,36 @@ func ignoreColumns(tableInfo *model.TableInfo, columns []string) *model.TableInf
 	}
 
 	removeColMap := sliceToMap(columns)
-	for i := 0; i < len(tableInfo.Indices); i++ {
-		index := tableInfo.Indices[i]
+	n := 0
+	needRemove := false
+	for _, index := range tableInfo.Indices {
+		needRemove = false
 		for j := 0; j < len(index.Columns); j++ {
 			col := index.Columns[j]
 			if _, ok := removeColMap[col.Name.O]; ok {
-				tableInfo.Indices = append(tableInfo.Indices[:i], tableInfo.Indices[i+1:]...)
-				i--
+				needRemove = true
 				break
 			}
 		}
-	}
-
-	for j := 0; j < len(tableInfo.Columns); j++ {
-		col := tableInfo.Columns[j]
-		if _, ok := removeColMap[col.Name.O]; ok {
-			tableInfo.Columns = append(tableInfo.Columns[:j], tableInfo.Columns[j+1:]...)
-			j--
+		if !needRemove {
+			tableInfo.Indices[n] = index
+			n++
 		}
 	}
+	// To avoid memory leaks, nil out the rest.
+	clear(tableInfo.Indices[n:])
+	tableInfo.Indices = tableInfo.Indices[:n]
+
+	n = 0
+	for _, col := range tableInfo.Columns {
+		if _, ok := removeColMap[col.Name.O]; !ok {
+			tableInfo.Columns[n] = col
+			n++
+		}
+	}
+	// To avoid memory leaks, nil out the rest.
+	clear(tableInfo.Columns[n:])
+	tableInfo.Columns = tableInfo.Columns[:n]
 
 	// calculate column offset
 	colMap := make(map[string]int, len(tableInfo.Columns))

@@ -28,8 +28,10 @@ func getColsAndValuesOfIdx(
 	cols := make([]*timodel.ColumnInfo, 0, len(indexColumns.Columns))
 	values := make([]interface{}, 0, len(indexColumns.Columns))
 	for _, col := range indexColumns.Columns {
-		cols = append(cols, columns[col.Offset])
-		values = append(values, data[col.Offset])
+		if !columns[col.Offset].IsVirtualGenerated() {
+			cols = append(cols, columns[col.Offset])
+			values = append(values, data[col.Offset])
+		}
 	}
 
 	return cols, values

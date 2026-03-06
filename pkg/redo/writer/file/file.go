@@ -303,31 +303,32 @@ func (w *Writer) encode(ctx context.Context) error {
 		cacheEventPostFlush = cacheEventPostFlush[:0]
 		return nil
 	}
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-ticker.C:
-		err := flush()
-		if err != nil {
-			return errors.Trace(err)
-		}
-	case e := <-w.inputCh:
-		err := w.write(e)
-		if err != nil {
-			return err
-		}
-		num++
-		if num > redo.DefaultFlushBatchSize {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
 			err := flush()
 			if err != nil {
 				return errors.Trace(err)
 			}
-			e.PostFlush()
-		} else {
-			cacheEventPostFlush = append(cacheEventPostFlush, e.PostFlush)
+		case e := <-w.inputCh:
+			err := w.write(e)
+			if err != nil {
+				return err
+			}
+			num++
+			if num >= redo.DefaultFlushBatchSize {
+				err := flush()
+				if err != nil {
+					return errors.Trace(err)
+				}
+				e.PostFlush()
+			} else {
+				cacheEventPostFlush = append(cacheEventPostFlush, e.PostFlush)
+			}
 		}
 	}
-	return nil
 }
 
 func (w *Writer) close(ctx context.Context) error {

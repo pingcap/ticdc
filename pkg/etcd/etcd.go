@@ -98,6 +98,8 @@ type OwnerCaptureInfoClient interface {
 
 	GetOwnerRevision(context.Context, config.CaptureID) (int64, error)
 
+	GetLogCoordinatorRevision(context.Context, config.CaptureID) (int64, error)
+
 	GetCaptures(context.Context) (int64, []*config.CaptureInfo, error)
 }
 
@@ -593,6 +595,24 @@ func (c *CDCEtcdClientImpl) GetOwnerRevision(
 		return 0, errors.ErrOwnerNotFound.GenWithStackByArgs()
 	}
 	// Checks that the given capture is indeed the owner.
+	if string(resp.Kvs[0].Value) != captureID {
+		return 0, errors.ErrNotOwner.GenWithStackByArgs()
+	}
+	return resp.Kvs[0].ModRevision, nil
+}
+
+// GetLogCoordinatorRevision gets the Etcd revision for the elected log coordinator.
+func (c *CDCEtcdClientImpl) GetLogCoordinatorRevision(
+	ctx context.Context, captureID string,
+) (rev int64, err error) {
+	resp, err := c.Client.Get(ctx, LogCoordinatorKey(c.ClusterID), clientv3.WithFirstCreate()...)
+	if err != nil {
+		return 0, errors.WrapError(errors.ErrPDEtcdAPIError, err)
+	}
+	if len(resp.Kvs) == 0 {
+		return 0, errors.ErrOwnerNotFound.GenWithStackByArgs()
+	}
+	// Checks that the given capture is indeed the log coordinator.
 	if string(resp.Kvs[0].Value) != captureID {
 		return 0, errors.ErrNotOwner.GenWithStackByArgs()
 	}

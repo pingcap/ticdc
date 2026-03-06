@@ -33,7 +33,7 @@ const (
 	// For now, we only use it in event collector.
 	MemoryControlForEventCollector = 1
 
-	defaultReleaseMemoryRatio     = 0.4
+	defaultReleaseMemoryRatio     = 0.6
 	defaultDeadlockDuration       = 5 * time.Second
 	defaultReleaseMemoryThreshold = 256
 )
@@ -166,7 +166,7 @@ func (as *areaMemStat[A, P, T, D, H]) checkDeadlock() bool {
 
 	hasEventComeButNotOut := time.Since(as.lastAppendEventTime.Load().(time.Time)) < defaultDeadlockDuration && time.Since(as.lastSizeDecreaseTime.Load().(time.Time)) > defaultDeadlockDuration
 
-	memoryHighWaterMark := as.memoryUsageRatio() > (1 - defaultReleaseMemoryRatio)
+	memoryHighWaterMark := as.memoryUsageRatio() > defaultReleaseMemoryRatio
 
 	return hasEventComeButNotOut && memoryHighWaterMark
 }
