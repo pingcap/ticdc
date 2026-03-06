@@ -1,0 +1,167 @@
+// Copyright 2025 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package main
+
+import (
+	"math"
+	"net/url"
+	"strconv"
+	"strings"
+
+	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/cmd/util"
+	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	putil "github.com/pingcap/ticdc/pkg/util"
+	"go.uber.org/zap"
+)
+
+type option struct {
+	address       []string
+	topic         string
+	groupID       string
+	ca, cert, key string
+
+	protocol        config.Protocol
+	partitionNum    int32
+	maxMessageBytes int
+	maxBatchSize    int
+
+	codecConfig *common.Config
+	sinkConfig  *config.SinkConfig
+
+	timezone string
+
+	icebergWarehouse string
+	icebergCatalog   string
+	icebergNamespace string
+	icebergDatabase  string
+	icebergRegion    string
+	icebergMode      string
+}
+
+func newOption() *option {
+	return &option{
+		maxMessageBytes: math.MaxInt64,
+		maxBatchSize:    math.MaxInt64,
+		icebergCatalog:  "glue",
+		icebergMode:     "append",
+	}
+}
+
+func (o *option) Adjust(upstreamURIStr string, configFile string) {
+	upstreamURI, err := url.Parse(upstreamURIStr)
+	if err != nil {
+		panicWithLog("invalid upstream-uri", zap.Error(err))
+	}
+	scheme := strings.ToLower(upstreamURI.Scheme)
+	if scheme != "kafka" {
+		panicWithLog("invalid upstream-uri scheme, the scheme of upstream-uri must be `kafka`",
+			zap.String("upstreamURI", upstreamURIStr))
+	}
+
+	o.topic = strings.TrimFunc(upstreamURI.Path, func(r rune) bool {
+		return r == '/'
+	})
+	if len(o.topic) == 0 {
+		panicWithLog("no topic provided for the consumer")
+	}
+
+	o.address = strings.Split(upstreamURI.Host, ",")
+
+	s := upstreamURI.Query().Get("max-message-bytes")
+	if s != "" {
+		c, err := strconv.Atoi(s)
+		if err != nil {
+			panicWithLog("invalid max-message-bytes of upstream-uri")
+		}
+		o.maxMessageBytes = c
+	}
+
+	s = upstreamURI.Query().Get("max-batch-size")
+	if s != "" {
+		c, err := strconv.Atoi(s)
+		if err != nil {
+			panicWithLog("invalid max-batch-size of upstream-uri")
+		}
+		o.maxBatchSize = c
+	}
+
+	s = upstreamURI.Query().Get("protocol")
+	if s == "" {
+		s = "simple"
+	}
+	protocol, err := config.ParseSinkProtocolFromString(s)
+	if err != nil {
+		panicWithLog("invalid protocol", zap.String("protocol", s), zap.Error(err))
+	}
+	o.protocol = protocol
+
+	s = upstreamURI.Query().Get("partition-num")
+	if s != "" {
+		c, err := strconv.ParseInt(s, 10, 32)
+		if err != nil {
+			panicWithLog("invalid partition-num of upstream-uri")
+		}
+		o.partitionNum = int32(c)
+	}
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	if configFile != "" {
+		err = util.StrictDecodeFile(configFile, "kafka iceberg consumer", replicaConfig)
+		if err != nil {
+			panicWithLog("decode config file failed", zap.String("configFile", configFile), zap.Error(err))
+		}
+		if _, err = filter.VerifyTableRules(replicaConfig.Filter); err != nil {
+			panicWithLog("verify table rules failed", zap.Error(err))
+		}
+	}
+
+	o.sinkConfig = replicaConfig.Sink
+
+	icebergConfig := &config.IcebergConfig{
+		Warehouse: &o.icebergWarehouse,
+		Catalog:   &o.icebergCatalog,
+		Namespace: &o.icebergNamespace,
+		Database:  &o.icebergDatabase,
+		Region:    &o.icebergRegion,
+		Mode:      &o.icebergMode,
+	}
+	o.sinkConfig.IcebergConfig = icebergConfig
+
+	o.codecConfig = common.NewConfig(protocol)
+	if err = o.codecConfig.Apply(upstreamURI, replicaConfig.Sink); err != nil {
+		panicWithLog("codec config apply failed", zap.Error(err))
+	}
+
+	tz, err := putil.GetTimezone(o.timezone)
+	if err != nil {
+		panicWithLog("parse timezone failed", zap.Error(err))
+	}
+	o.codecConfig.TimeZone = tz
+
+	log.Info("consumer option adjusted",
+		zap.String("address", strings.Join(o.address, ",")),
+		zap.String("topic", o.topic),
+		zap.Int32("partitionNum", o.partitionNum),
+		zap.String("protocol", protocol.String()),
+		zap.String("groupID", o.groupID),
+		zap.String("icebergWarehouse", o.icebergWarehouse),
+		zap.String("icebergCatalog", o.icebergCatalog),
+		zap.String("icebergNamespace", o.icebergNamespace),
+		zap.String("icebergDatabase", o.icebergDatabase),
+		zap.String("icebergRegion", o.icebergRegion),
+		zap.String("icebergMode", o.icebergMode))
+}

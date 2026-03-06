@@ -23,7 +23,7 @@ OS=${1:-linux}
 ARCH=${2:-amd64}
 
 # Constants
-FILE_SERVER_URL="http://fileserver.pingcap.net"
+FILE_SERVER_URL="${FILE_SERVER_URL:-http://fileserver.pingcap.net}"
 TMP_DIR="tmp"
 THIRD_BIN_DIR="third_bin"
 BIN_DIR="bin"
@@ -49,6 +49,48 @@ download_file() {
 	wget --no-verbose --retry-connrefused --waitretry=1 -t 3 -O "${file_path}" "${url}"
 }
 
+download_file_with_fallback() {
+	local file_name=$1
+	local file_path=$2
+	shift 2
+	if [[ -f "${file_path}" ]]; then
+		echo "File ${file_name} already exists, skipping download"
+		return
+	fi
+	local url
+	for url in "$@"; do
+		if [[ -z "$url" ]]; then
+			continue
+		fi
+		echo ">>> Downloading ${file_name} from ${url}"
+		if wget --no-verbose --retry-connrefused --waitretry=1 -t 3 -O "${file_path}" "${url}"; then
+			return
+		fi
+		echo "Download failed from ${url}, trying next..." >&2
+	done
+	return 1
+}
+
+download_schema_registry() {
+	local file_name="schema-registry.tar.gz"
+	local file_path="${TMP_DIR}/${file_name}"
+	local schema_registry_path="download/builds/pingcap/cdc/${file_name}"
+	local schema_registry_urls=()
+	if [[ -n "${SCHEMA_REGISTRY_URL:-}" ]]; then
+		schema_registry_urls+=("${SCHEMA_REGISTRY_URL}")
+	fi
+	schema_registry_urls+=("${FILE_SERVER_URL}/${schema_registry_path}")
+	if [[ "${FILE_SERVER_URL}" != "https://fileserver.pingcap.net" ]]; then
+		schema_registry_urls+=("https://fileserver.pingcap.net/${schema_registry_path}")
+	fi
+	if [[ "${FILE_SERVER_URL}" != "http://fileserver.pingcap.net" ]]; then
+		schema_registry_urls+=("http://fileserver.pingcap.net/${schema_registry_path}")
+	fi
+
+	download_file_with_fallback "$file_name" "$file_path" "${schema_registry_urls[@]}"
+	download_and_extract "${FILE_SERVER_URL}/${schema_registry_path}" "$file_name"
+}
+
 download_binaries() {
 	log_green "Downloading binaries..."
 
@@ -60,13 +102,12 @@ download_binaries() {
 	local etcd_download_url="${FILE_SERVER_URL}/download/builds/pingcap/cdc/etcd-v3.4.7-linux-amd64.tar.gz"
 	local sync_diff_inspector_url="${FILE_SERVER_URL}/download/builds/pingcap/cdc/sync_diff_inspector_hash-a129f096_linux-amd64.tar.gz"
 	local jq_download_url="${FILE_SERVER_URL}/download/builds/pingcap/test/jq-1.6/jq-linux64"
-	local schema_registry_url="${FILE_SERVER_URL}/download/builds/pingcap/cdc/schema-registry.tar.gz"
 
 	# Download and extract binaries
 	# download_and_extract "$minio_download_url" "minio.tar.gz"
 	download_and_extract "$etcd_download_url" "etcd.tar.gz" "etcd-v3.4.7-linux-amd64/etcdctl"
 	download_and_extract "$sync_diff_inspector_url" "sync_diff_inspector.tar.gz"
-	download_and_extract "$schema_registry_url" "schema-registry.tar.gz"
+	download_schema_registry
 
 	download_file "$go_ycsb_download_url" "go-ycsb" "${THIRD_BIN_DIR}/go-ycsb"
 	download_file "$jq_download_url" "jq" "${THIRD_BIN_DIR}/jq"

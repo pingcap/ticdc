@@ -253,3 +253,29 @@ func TestTableSchemaStoreNonMysqlTableIDsBootstrapOnly(t *testing.T) {
 
 	require.ElementsMatch(t, []int64{10, 20}, store.GetAllNormalTableIds())
 }
+
+func TestTableSchemaStoreIcebergSinkType(t *testing.T) {
+	schemaInfos := []*heartbeatpb.SchemaInfo{
+		{
+			SchemaID:   1,
+			SchemaName: "db1",
+			Tables: []*heartbeatpb.TableInfo{
+				{TableID: 10, TableName: "t1"},
+			},
+		},
+	}
+
+	store := NewTableSchemaStore(schemaInfos, common.IcebergSinkType, false)
+	require.NotNil(t, store)
+	require.Nil(t, store.GetAllTableIds())
+	require.Nil(t, store.GetAllTableNames(1, true))
+
+	require.NotPanics(t, func() {
+		store.AddEvent(&DDLEvent{
+			FinishedTs: 100,
+			TableNameChange: &TableNameChange{
+				AddName: []SchemaTableName{{SchemaName: "db1", TableName: "t2"}},
+			},
+		})
+	})
+}
