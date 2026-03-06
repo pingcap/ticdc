@@ -30,8 +30,7 @@ const (
 type encodingGroup struct {
 	codecConfig *common.Config
 
-	concurrency  int
-	outputShards int
+	concurrency int
 
 	indexer *taskIndexer
 
@@ -68,12 +67,11 @@ func newEncodingGroup(
 	}
 
 	return &encodingGroup{
-		codecConfig:  codecConfig,
-		concurrency:  concurrency,
-		outputShards: outputShards,
-		indexer:      newTaskIndexer(concurrency, outputShards),
-		inputCh:      inputCh,
-		outputCh:     outputCh,
+		codecConfig: codecConfig,
+		concurrency: concurrency,
+		indexer:     newTaskIndexer(concurrency, outputShards),
+		inputCh:     inputCh,
+		outputCh:    outputCh,
 	}
 }
 
@@ -91,6 +89,12 @@ func (eg *encodingGroup) run(ctx context.Context) error {
 		close(outCh)
 	}
 	return err
+}
+
+func (eg *encodingGroup) closeInput() {
+	for _, inputCh := range eg.inputCh {
+		close(inputCh)
+	}
 }
 
 // runEncoder is the only place that mutates task.encodedMsgs.

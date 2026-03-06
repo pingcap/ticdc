@@ -271,6 +271,53 @@ func verifyWriteDDLEventFlushDMLBeforeBlock(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestFlushDMLBeforeBlockWithoutRun(t *testing.T) {
+	parentDir := t.TempDir()
+	uri := fmt.Sprintf("file:///%s?protocol=csv&flush-interval=3600s", parentDir)
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	err = replicaConfig.ValidateAndAdjust(sinkURI)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
+	require.NoError(t, err)
+
+	ddlEvent := &commonEvent.DDLEvent{
+		Query:        "alter table t add column c1 int",
+		Type:         byte(timodel.ActionAddColumn),
+		SchemaName:   "test",
+		TableName:    "t",
+		FinishedTs:   100,
+		DispatcherID: common.NewDispatcherID(),
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cloudStorageSink.FlushDMLBeforeBlock(ddlEvent)
+	}()
+
+	select {
+	case err := <-done:
+		require.ErrorContains(t, err, "not running")
+	case <-time.After(300 * time.Millisecond):
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("wait FlushDMLBeforeBlock exit timeout")
+		}
+		t.Fatal("FlushDMLBeforeBlock blocks before sink.Run")
+	}
+}
+
 func TestWriteCheckpointEvent(t *testing.T) {
 	parentDir := t.TempDir()
 	uri := fmt.Sprintf("file:///%s?protocol=csv", parentDir)

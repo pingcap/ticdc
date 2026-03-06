@@ -56,21 +56,11 @@ type writer struct {
 	metricsWorkerBusyRatio prometheus.Counter
 }
 
-type flushReason string
-
-const (
-	flushReasonInterval flushReason = "interval"
-	flushReasonSize     flushReason = "size"
-	flushReasonDDL      flushReason = "ddl"
-	flushReasonClose    flushReason = "close"
-)
-
 // writerTask is internal and never crosses component boundary.
 // marker task and data batch are mutually exclusive in normal flow.
 type writerTask struct {
 	batch  batchedTask
 	marker *drainMarker
-	reason flushReason
 }
 
 func newWriter(
@@ -300,15 +290,16 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 	return nil
 }
 
-// genAndDispatchTask builds table batches and emits flush tasks with explicit reasons.
+// genAndDispatchTask builds table batches and emits flush tasks.
 // Invariants:
 //  1. DDL marker will flush current batch first, then emit marker task.
-//  2. Writer close path flushes remaining batch with reason=close.
-//  3. Size-triggered flush only flushes target table shard batch.
+//  2. Writer close path flushes the remaining batch before exit.
+//  3. Size-triggered flush only flushes the target table shard batch.
 func (d *writer) genAndDispatchTask(ctx context.Context) error {
 	batchedTask := newBatchedTask()
 	ticker := time.NewTicker(d.config.FlushInterval)
 	defer ticker.Stop()
+	defer close(d.toBeFlushedCh)
 
 	for {
 		failpoint.Inject("passTickerOnce", func() {
@@ -328,7 +319,7 @@ func (d *writer) genAndDispatchTask(ctx context.Context) error {
 			select {
 			case <-ctx.Done():
 				return errors.Trace(ctx.Err())
-			case d.toBeFlushedCh <- writerTask{batch: batchedTask, reason: flushReasonInterval}:
+			case d.toBeFlushedCh <- writerTask{batch: batchedTask}:
 				log.Debug("flush task is emitted successfully when flush interval exceeds",
 					zap.Int("tablesLength", len(batchedTask.batch)))
 				batchedTask = newBatchedTask()
@@ -342,7 +333,7 @@ func (d *writer) genAndDispatchTask(ctx context.Context) error {
 				select {
 				case <-ctx.Done():
 					return errors.Trace(ctx.Err())
-				case d.toBeFlushedCh <- writerTask{batch: batchedTask, reason: flushReasonClose}:
+				case d.toBeFlushedCh <- writerTask{batch: batchedTask}:
 					return nil
 				}
 			}
@@ -352,14 +343,14 @@ func (d *writer) genAndDispatchTask(ctx context.Context) error {
 					select {
 					case <-ctx.Done():
 						return errors.Trace(ctx.Err())
-					case d.toBeFlushedCh <- writerTask{batch: batchedTask, reason: flushReasonDDL}:
+					case d.toBeFlushedCh <- writerTask{batch: batchedTask}:
 						batchedTask = newBatchedTask()
 					}
 				}
 				select {
 				case <-ctx.Done():
 					return errors.Trace(ctx.Err())
-				case d.toBeFlushedCh <- writerTask{marker: tableTask.marker, reason: flushReasonDDL}:
+				case d.toBeFlushedCh <- writerTask{marker: tableTask.marker}:
 				}
 				continue
 			}
@@ -371,7 +362,7 @@ func (d *writer) genAndDispatchTask(ctx context.Context) error {
 				select {
 				case <-ctx.Done():
 					return errors.Trace(ctx.Err())
-				case d.toBeFlushedCh <- writerTask{batch: taskByTable, reason: flushReasonSize}:
+				case d.toBeFlushedCh <- writerTask{batch: taskByTable}:
 					log.Debug("flush task is emitted successfully when file size exceeds",
 						zap.Any("table", table),
 						zap.Int("eventsLength", len(taskByTable.batch[table].msgs)))
@@ -442,12 +433,4 @@ func (t *batchedTask) generateTaskByTable(table cloudstorage.VersionedTableName)
 	return batchedTask{
 		batch: map[cloudstorage.VersionedTableName]*singleTableTask{table: tableTask},
 	}
-}
-
-func (t batchedTask) totalSize() uint64 {
-	var total uint64
-	for _, singleTask := range t.batch {
-		total += singleTask.size
-	}
-	return total
 }

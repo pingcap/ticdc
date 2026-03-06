@@ -193,3 +193,27 @@ func TestWriterDrainMarker(t *testing.T) {
 	cancel()
 	wg.Wait()
 }
+
+func TestWriterRunExitAfterCloseInput(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	parentDir := t.TempDir()
+	d := testWriter(ctx, t, parentDir)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- d.run(ctx)
+	}()
+
+	d.closeInput()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("writer.run did not exit after closeInput")
+	}
+
+	d.close()
+}

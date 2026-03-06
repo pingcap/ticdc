@@ -15,11 +15,13 @@ package cloudstorage
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	pkgcloudstorage "github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -30,7 +32,6 @@ import (
 
 // dmlWriters coordinates encoding and output shard writers.
 type dmlWriters struct {
-	ctx          context.Context
 	changefeedID commonType.ChangeFeedID
 	statistics   *metrics.Statistics
 
@@ -42,17 +43,19 @@ type dmlWriters struct {
 	encodeGroup *encodingGroup
 
 	writers []*writer
+
+	runCtxMu sync.RWMutex
+	runCtx   context.Context
 }
 
 func newDMLWriters(
-	ctx context.Context,
 	changefeedID commonType.ChangeFeedID,
 	storage storage.ExternalStorage,
 	config *pkgcloudstorage.Config,
 	encoderConfig *common.Config,
 	extension string,
 	statistics *metrics.Statistics,
-) (*dmlWriters, error) {
+) *dmlWriters {
 	messageCh := chann.NewUnlimitedChannelDefault[*task]()
 	encoderGroup := newEncodingGroup(
 		encoderConfig,
@@ -66,25 +69,33 @@ func newDMLWriters(
 	}
 
 	return &dmlWriters{
-		ctx:          ctx,
 		changefeedID: changefeedID,
 		statistics:   statistics,
 		msgCh:        messageCh,
 		encodeGroup:  encoderGroup,
 		writers:      writers,
-	}, nil
+	}
 }
 
 func (d *dmlWriters) run(ctx context.Context) error {
+	d.setRunCtx(ctx)
+	defer d.setRunCtx(nil)
+
+	runDone := make(chan struct{})
+	defer close(runDone)
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			d.msgCh.Close()
+		case <-runDone:
+		}
+	}()
+
 	eg, ctx := errgroup.WithContext(ctx)
 
 	eg.Go(func() error {
-		<-ctx.Done()
-		d.msgCh.Close()
-		return nil
-	})
-
-	eg.Go(func() error {
+		defer d.encodeGroup.closeInput()
 		return d.submitTaskToEncoder(ctx)
 	})
 
@@ -108,6 +119,18 @@ func (d *dmlWriters) run(ctx context.Context) error {
 		})
 	}
 	return eg.Wait()
+}
+
+func (d *dmlWriters) setRunCtx(ctx context.Context) {
+	d.runCtxMu.Lock()
+	defer d.runCtxMu.Unlock()
+	d.runCtx = ctx
+}
+
+func (d *dmlWriters) getRunCtx() context.Context {
+	d.runCtxMu.RLock()
+	defer d.runCtxMu.RUnlock()
+	return d.runCtx
 }
 
 func (d *dmlWriters) submitTaskToEncoder(ctx context.Context) error {
@@ -163,9 +186,13 @@ func (d *dmlWriters) flushDMLBeforeBlock(event commonEvent.BlockEvent) error {
 	// Invariant for DDL ordering:
 	// marker follows the same dispatcher route and is acked only after prior tasks
 	// in that route are fully drained by writer.
+	runCtx := d.getRunCtx()
+	if runCtx == nil {
+		return errors.New("cloud storage dml writers is not running")
+	}
 	drainTask := newDrainTask(event.GetDispatcherID(), event.GetCommitTs())
 	d.msgCh.Push(drainTask)
-	return drainTask.wait(d.ctx)
+	return drainTask.wait(runCtx)
 }
 
 func (d *dmlWriters) close() {
