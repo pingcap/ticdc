@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -111,6 +112,10 @@ func (s *Sink) Run(ctx context.Context) error {
 	return err
 }
 
+func (s *Sink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
+	return nil
+}
+
 func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	switch e := event.(type) {
 	case *commonEvent.DDLEvent:
@@ -128,20 +133,9 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 }
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	toRowCallback := func(postTxnFlushed []func(), totalCount uint64) func() {
-		var calledCount atomic.Uint64
-		// The callback of the last row will trigger the callback of the txn.
-		return func() {
-			if calledCount.Inc() == totalCount {
-				for _, callback := range postTxnFlushed {
-					callback()
-				}
-			}
-		}
-	}
 	rowsCount := event.Len()
-	rowCallback := toRowCallback(event.PostTxnFlushed, uint64(rowsCount))
 	events := make([]writer.RedoEvent, 0, rowsCount)
+	rowCallback := helper.NewTxnPostFlushRowCallback(event, uint64(rowsCount))
 
 	for {
 		row, ok := event.GetNextRow()

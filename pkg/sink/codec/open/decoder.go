@@ -422,9 +422,7 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 				col.SetCollate("utf8mb4_bin")
 			}
 		case mysql.TypeDuration:
-			// todo: how to find the correct decimal for the duration type ?
-			_, defaultDecimal := mysql.GetDefaultFieldLengthAndDecimal(col.GetType())
-			col.SetDecimal(defaultDecimal)
+			col.SetDecimal(tiTypes.MaxFsp)
 		case mysql.TypeEnum, mysql.TypeSet:
 			col.SetCharset("utf8mb4")
 			col.SetCollate("utf8mb4_bin")
@@ -655,7 +653,7 @@ func formatColumn(c column, ft types.FieldType) column {
 		default:
 			log.Panic("invalid column value for date / datetime / timestamp", zap.String("value", util.RedactAny(c.Value)), zap.Any("type", v))
 		}
-		c.Value, err = tiTypes.ParseTime(tiTypes.DefaultStmtNoWarningContext, data, ft.GetType(), ft.GetDecimal())
+		c.Value, err = tiTypes.ParseTime(tiTypes.DefaultStmtNoWarningContext, data, ft.GetType(), tiTypes.MaxFsp)
 		if err != nil {
 			log.Panic("invalid column value for date / datetime / timestamp", zap.String("value", util.RedactAny(c.Value)), zap.Error(err))
 		}
@@ -676,7 +674,7 @@ func formatColumn(c column, ft types.FieldType) column {
 		default:
 			log.Panic("invalid column value for duration", zap.String("value", util.RedactAny(c.Value)), zap.Any("type", v))
 		}
-		c.Value, _, err = tiTypes.ParseDuration(tiTypes.DefaultStmtNoWarningContext, data, ft.GetDecimal())
+		c.Value, _, err = tiTypes.ParseDuration(tiTypes.DefaultStmtNoWarningContext, data, tiTypes.MaxFsp)
 		if err != nil {
 			log.Panic("invalid column value for duration", zap.String("value", util.RedactAny(c.Value)), zap.Error(err))
 		}

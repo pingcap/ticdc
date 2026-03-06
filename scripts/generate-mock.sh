@@ -37,3 +37,4 @@ fi
 "$MOCKGEN" -source pkg/keyspace/keyspace_manager.go -destination pkg/keyspace/keyspace_manager_mock.go -package keyspace
 "$MOCKGEN" -source pkg/txnutil/gc/gc_manager.go -destination pkg/txnutil/gc/gc_manager_mock.go -package gc
 "$MOCKGEN" -source pkg/redo/writer/writer.go -destination pkg/redo/writer/writer_mock.go -package writer
+"$MOCKGEN" -source downstreamadapter/sink/sink.go -destination downstreamadapter/sink/mock/sink_mock.go -package mock
