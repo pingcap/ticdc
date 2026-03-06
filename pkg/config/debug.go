@@ -92,7 +92,7 @@ type EventStoreConfig struct {
 func NewDefaultEventStoreConfig() *EventStoreConfig {
 	return &EventStoreConfig{
 		CompressionThreshold:  16384, // 16KB
-		EnableZstdCompression: true,
+		EnableZstdCompression: false,
 		EnableDataSharing:     false,
 	}
 }

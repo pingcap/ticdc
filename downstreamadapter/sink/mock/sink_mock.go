@@ -100,6 +100,20 @@ func (mr *MockSinkMockRecorder) Close(removeChangefeed interface{}) *gomock.Call
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockSink)(nil).Close), removeChangefeed)
 }
 
+// FlushDMLBeforeBlock mocks base method.
+func (m *MockSink) FlushDMLBeforeBlock(event event.BlockEvent) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FlushDMLBeforeBlock", event)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// FlushDMLBeforeBlock indicates an expected call of FlushDMLBeforeBlock.
+func (mr *MockSinkMockRecorder) FlushDMLBeforeBlock(event interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FlushDMLBeforeBlock", reflect.TypeOf((*MockSink)(nil).FlushDMLBeforeBlock), event)
+}
+
 // IsNormal mocks base method.
 func (m *MockSink) IsNormal() bool {
 	m.ctrl.T.Helper()
