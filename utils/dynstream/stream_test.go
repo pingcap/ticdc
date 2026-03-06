@@ -123,7 +123,7 @@ func newInc(num int64, inc *atomic.Int64, notify ...*sync.WaitGroup) *Inc {
 
 func TestStreamBasic(t *testing.T) {
 	handler := mockHandler{}
-	stream := newStream(1, "test", &handler, Option{UseBuffer: false})
+	stream := newStream(1, "test", &handler, Option{UseBuffer: false}, newTestBatchConfigRegistry())
 	require.Equal(t, 0, stream.getPendingSize())
 
 	stream.start()
@@ -160,9 +160,17 @@ func TestStreamBasic(t *testing.T) {
 	require.Equal(t, 0, stream.getPendingSize())
 }
 
+func TestStreamOwnsSharedBatcher(t *testing.T) {
+	handler := mockHandler{}
+	stream := newStream(1, "test", &handler, Option{UseBuffer: false}, newTestBatchConfigRegistry())
+
+	require.NotNil(t, stream.batcher)
+	require.Equal(t, newDefaultBatchConfig(), stream.batcher.config)
+}
+
 func TestStreamBasicWithBuffer(t *testing.T) {
 	handler := mockHandler{}
-	stream := newStream(1, "test", &handler, Option{UseBuffer: true})
+	stream := newStream(1, "test", &handler, Option{UseBuffer: true}, newTestBatchConfigRegistry())
 	require.Equal(t, 0, stream.getPendingSize())
 
 	stream.start()

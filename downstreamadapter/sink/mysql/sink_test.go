@@ -68,7 +68,7 @@ func MysqlSinkForTest() (*Sink, sqlmock.Sqlmock) {
 
 func MysqlSinkForTestWithMaxTxnRows(maxTxnRows int) (*Sink, sqlmock.Sqlmock) {
 	ctx, sink, mock := getMysqlSink()
-	sink.maxTxnRows = maxTxnRows
+	sink.cfg.MaxTxnRow = maxTxnRows
 	go sink.Run(ctx)
 	return sink, mock
 }
