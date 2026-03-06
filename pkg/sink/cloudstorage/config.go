@@ -134,10 +134,8 @@ func (c *Config) Apply(
 	if err != nil {
 		return err
 	}
-	if urlParameter.UseTableIDAsPath != nil {
-		c.UseTableIDAsPath = *urlParameter.UseTableIDAsPath
-	}
 
+	c.UseTableIDAsPath = util.GetOrZero(urlParameter.UseTableIDAsPath)
 	c.DateSeparator = util.GetOrZero(sinkConfig.DateSeparator)
 	c.EnablePartitionSeparator = util.GetOrZero(sinkConfig.EnablePartitionSeparator)
 	c.FileIndexWidth = util.GetOrZero(sinkConfig.FileIndexWidth)
