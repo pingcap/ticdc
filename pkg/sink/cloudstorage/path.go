@@ -247,24 +247,18 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 		return true, nil
 	}
 
-	// Case 2: the table meta path is not empty and an equivalent schema already exists.
-	// Even if checksum is the same, we still write schema_{currentVersion}_{checksum}.json.
-	// Otherwise DML files may be written under an old table version directory and be
-	// treated as stale by downstream consumers.
+	// Case 2: the table meta path is not empty.
 	if schemaFileCnt != 0 && lastVersion != 0 {
-		log.Info("table schema file with exact version not found, write current version schema file",
+		log.Info("table schema file with exact version not found, using latest available",
 			zap.String("keyspace", f.changefeedID.Keyspace()),
 			zap.Stringer("changefeedID", f.changefeedID.ID()),
 			zap.Any("versionedTableName", table),
-			zap.Uint64("existingTableVersion", lastVersion),
-			zap.Uint64("tableVersion", table.TableInfoVersion),
+			zap.Uint64("tableVersion", lastVersion),
 			zap.Uint32("checksum", checksum))
-		encodedDetail, err := def.MarshalWithQuery()
-		if err != nil {
-			return false, err
-		}
-		f.versionMap[table] = table.TableInfoVersion
-		return false, f.storage.WriteFile(ctx, tblSchemaFile, encodedDetail)
+		// record the last version of the table schema file.
+		// we don't need to write schema file to external storage again.
+		f.versionMap[table] = lastVersion
+		return false, nil
 	}
 
 	// Case 3: the table meta path is empty, which happens when:

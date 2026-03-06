@@ -26,8 +26,9 @@ import (
 
 // SchemaPathKey is the key of schema path.
 type SchemaPathKey struct {
-	Schema       string
-	Table        string
+	Schema string
+	Table  string
+	// for the DDL, TableVersion is identical to the commit ts
 	TableVersion uint64
 }
 
