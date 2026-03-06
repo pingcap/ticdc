@@ -187,3 +187,16 @@ func TestInitExternalStorage(t *testing.T) {
 		require.NoError(t, err)
 	}
 }
+
+func TestValidateStorageWithOptionsSkipIOCheck(t *testing.T) {
+	t.Parallel()
+
+	uri, err := storage.ParseRawURL("s3:///redo-test-no-bucket")
+	require.NoError(t, err)
+
+	err = ValidateStorageWithOptions(uri, StorageValidationOptions{EnableIOCheck: false})
+	require.NoError(t, err)
+
+	err = ValidateStorageWithOptions(uri, StorageValidationOptions{EnableIOCheck: true})
+	require.Error(t, err)
+}
