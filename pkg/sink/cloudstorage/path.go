@@ -405,6 +405,13 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date string) (string, error) {
 	var elems []string
 
+	tableVersion, ok := f.versionMap[tbl]
+	if !ok || tableVersion == 0 {
+		return "", errors.ErrInternalCheckFailed.GenWithStackByArgs(
+			"table schema version is not initialized",
+		)
+	}
+
 	if f.config.UseTableIDAsPath {
 		tablePathPart, err := generateTablePath(
 			tbl.TableNameWithPhysicTableID.Table,
@@ -427,7 +434,7 @@ func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date str
 		}
 		elems = append(elems, tablePathPart)
 	}
-	elems = append(elems, fmt.Sprintf("%d", f.versionMap[tbl]))
+	elems = append(elems, fmt.Sprintf("%d", tableVersion))
 
 	if f.config.EnablePartitionSeparator && tbl.TableNameWithPhysicTableID.IsPartition && !f.config.UseTableIDAsPath {
 		elems = append(elems, fmt.Sprintf("%d", tbl.TableNameWithPhysicTableID.TableID))
