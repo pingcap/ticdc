@@ -81,6 +81,7 @@ type Config struct {
 	AWSRegion         string
 	GlueDatabase      string
 	Mode              Mode
+	Broker            string
 
 	CommitInterval      time.Duration
 	TargetFileSizeBytes int64
@@ -240,6 +241,9 @@ func (c *Config) Apply(_ context.Context, sinkURI *url.URL, sinkConfig *config.S
 	}
 	if v := strings.TrimSpace(query.Get("database")); v != "" {
 		c.GlueDatabase = v
+	}
+	if v := strings.TrimSpace(query.Get("broker")); v != "" {
+		c.Broker = v
 	}
 
 	if v := strings.TrimSpace(query.Get("mode")); v != "" {

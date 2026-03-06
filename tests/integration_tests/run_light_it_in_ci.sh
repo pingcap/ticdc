@@ -189,7 +189,7 @@ iceberg_groups=(
 	# G01
 	'iceberg_upsert_basic'
 	# G02
-	''
+	'iceberg_dual_write'
 	# G03
 	''
 	# G04

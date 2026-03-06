@@ -760,9 +760,11 @@ type IcebergConfig struct {
 
 	EnableGlobalCheckpointTable *bool `toml:"enable-global-checkpoint-table" json:"enable-global-checkpoint-table,omitempty"`
 
-	// AllowTakeover controls whether this changefeed is allowed to write to an Iceberg table that
-	// was previously owned by another changefeed.
 	AllowTakeover *bool `toml:"allow-takeover" json:"allow-takeover,omitempty"`
+	// Broker is the Kafka broker endpoints for dual-write mode.
+	// Format: "kafka1:9092,kafka2:9092"
+	Broker      *string      `toml:"broker" json:"broker,omitempty"`
+	KafkaConfig *KafkaConfig `toml:"kafka-config" json:"kafka-config,omitempty"`
 }
 
 // GetOutputRawChangeEvent returns the value of OutputRawChangeEvent

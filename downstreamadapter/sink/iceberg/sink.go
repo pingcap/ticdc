@@ -31,7 +31,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	sinkiceberg "github.com/pingcap/ticdc/pkg/sink/iceberg"
+	sinkkafka "github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tidb/br/pkg/storage"
@@ -78,6 +80,13 @@ type sink struct {
 
 	warehouseStorage storage.ExternalStorage
 	tableWriter      *sinkiceberg.TableWriter
+
+	kafkaProducer         sinkkafka.AsyncProducer
+	kafkaTopicPrefix      string
+	kafkaTopic            string
+	isDualWrite           bool
+	lastKafkaOffset       int64
+	lastIcebergSnapshotID int64
 
 	dmlCh *chann.UnlimitedChannel[*commonEvent.DMLEvent, any]
 	// checkpointTs is the changefeed-level checkpointTs provided by the coordinator.
@@ -139,6 +148,12 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 		return errors.ErrSinkURIInvalid.GenWithStackByArgs(fmt.Sprintf("iceberg mode is not supported yet: %s", cfg.Mode))
 	}
 
+	if sinkConfig != nil && sinkConfig.IcebergConfig != nil && sinkConfig.IcebergConfig.Broker != nil && *sinkConfig.IcebergConfig.Broker != "" {
+		if strings.TrimSpace(*sinkConfig.IcebergConfig.Broker) == "" {
+			return errors.ErrSinkURIInvalid.GenWithStackByArgs("iceberg dual-write broker cannot be empty")
+		}
+	}
+
 	warehouseStorage, err := util.GetExternalStorageWithDefaultTimeout(ctx, cfg.WarehouseURI)
 	if err != nil {
 		return err
@@ -190,13 +205,74 @@ func New(
 		return nil, err
 	}
 
+	var kafkaProducer sinkkafka.AsyncProducer
+	var isDualWrite bool
+	brokerEndpoints := ""
+	if sinkConfig != nil && sinkConfig.IcebergConfig != nil && sinkConfig.IcebergConfig.Broker != nil && *sinkConfig.IcebergConfig.Broker != "" {
+		brokerEndpoints = *sinkConfig.IcebergConfig.Broker
+	} else if cfg.Broker != "" {
+		brokerEndpoints = cfg.Broker
+	}
+
+	if brokerEndpoints != "" {
+		kafkaOpts := sinkkafka.NewOptions()
+		kafkaOpts.Topic = "ticdc-iceberg-dual-write"
+		kafkaOpts.BrokerEndpoints = strings.Split(brokerEndpoints, ",")
+		kafkaOpts.PartitionNum = 4
+		kafkaOpts.Version = "3.7.0"
+		kafkaClientID, err := sinkkafka.NewKafkaClientID("iceberg", changefeedID, "")
+		if err != nil {
+			warehouseStorage.Close()
+			return nil, errors.WrapError(errors.ErrKafkaInvalidClientID, err)
+		}
+		kafkaOpts.ClientID = kafkaClientID
+		if sinkConfig != nil && sinkConfig.IcebergConfig != nil && sinkConfig.IcebergConfig.KafkaConfig != nil {
+			kc := sinkConfig.IcebergConfig.KafkaConfig
+			if kc.PartitionNum != nil {
+				kafkaOpts.PartitionNum = *kc.PartitionNum
+			}
+			if kc.KafkaVersion != nil {
+				kafkaOpts.Version = *kc.KafkaVersion
+			}
+			if kc.Compression != nil {
+				kafkaOpts.Compression = *kc.Compression
+			}
+			if kc.MaxMessageBytes != nil {
+				kafkaOpts.MaxMessageBytes = *kc.MaxMessageBytes
+			}
+		}
+		factory, err := sinkkafka.NewSaramaFactory(ctx, kafkaOpts, changefeedID)
+		if err != nil {
+			warehouseStorage.Close()
+			return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
+		}
+		kafkaProducer, err = factory.AsyncProducer(ctx)
+		if err != nil {
+			warehouseStorage.Close()
+			return nil, errors.WrapError(errors.ErrKafkaNewProducer, err)
+		}
+		isDualWrite = true
+		log.Info("iceberg sink initialized with dual-write mode",
+			zap.String("namespace", changefeedID.Keyspace()),
+			zap.String("changefeed", changefeedID.Name()),
+			zap.String("broker", brokerEndpoints))
+	}
+
 	statistics := metrics.NewStatistics(changefeedID, "iceberg")
+	kafkaTopic := ""
+	if isDualWrite {
+		kafkaTopic = fmt.Sprintf("%s_%s", changefeedID.Keyspace(), changefeedID.Name())
+	}
 	s := &sink{
 		changefeedID:     changefeedID,
 		sinkURI:          sinkURI,
 		cfg:              cfg,
 		warehouseStorage: warehouseStorage,
 		tableWriter:      sinkiceberg.NewTableWriter(cfg, warehouseStorage),
+		kafkaProducer:    kafkaProducer,
+		kafkaTopicPrefix: "ticdc-iceberg",
+		kafkaTopic:       kafkaTopic,
+		isDualWrite:      isDualWrite,
 		dmlCh:            chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
 		buffers:          make(map[int64]*tableBuffer),
 		columnPlans:      make(map[int64]*tableColumnPlan),
@@ -273,6 +349,9 @@ func (s *sink) Close(_ bool) {
 	s.dmlCh.Close()
 	s.statistics.Close()
 	s.warehouseStorage.Close()
+	if s.kafkaProducer != nil {
+		s.kafkaProducer.Close()
+	}
 }
 
 func (s *sink) handleDDLEvent(ctx context.Context, event *commonEvent.DDLEvent) error {
@@ -384,7 +463,17 @@ func (s *sink) Run(ctx context.Context) error {
 		return s.commitLoop(ctx)
 	})
 
-	return g.Wait()
+	if s.kafkaProducer != nil {
+		g.Go(func() error {
+			return s.kafkaProducer.AsyncRunCallback(ctx)
+		})
+	}
+
+	err := g.Wait()
+	if err != nil {
+		s.isNormal.Store(false)
+	}
+	return err
 }
 
 func (s *sink) bufferLoop(ctx context.Context) error {
@@ -636,6 +725,23 @@ func collapseUpsertTxns(tableInfo *common.TableInfo, txns []pendingTxn, keyColum
 	return dataRows, deleteRows, nil
 }
 
+func (s *sink) writeToKafka(ctx context.Context, topic string, tableID int64, rows []sinkiceberg.ChangeRow, commitTs uint64) error {
+	if s.kafkaProducer == nil {
+		return nil
+	}
+
+	msg := &codeccommon.Message{
+		Key:   []byte(fmt.Sprintf("%d", tableID)),
+		Value: []byte(fmt.Sprintf("iceberg-change: tableID=%d commitTs=%d rows=%d", tableID, commitTs, len(rows))),
+	}
+
+	err := s.kafkaProducer.AsyncSend(ctx, topic, 0, msg)
+	if err != nil {
+		return errors.WrapError(errors.ErrKafkaSendMessage, err)
+	}
+	return nil
+}
+
 func (s *sink) commitOnce(ctx context.Context, resolvedTs uint64) error {
 	type task struct {
 		tableID   int64
@@ -702,6 +808,25 @@ func (s *sink) commitOnce(ctx context.Context, resolvedTs uint64) error {
 		dataRowsCount := len(rows)
 		if s.cfg.Mode == sinkiceberg.ModeUpsert {
 			dataRowsCount = len(rows) - deleteRowsCount
+		}
+
+		if s.isDualWrite && s.kafkaProducer != nil && len(rows) > 0 {
+			kafkaTopic := fmt.Sprintf("%s_%s_%s", s.kafkaTopicPrefix, t.tableInfo.GetSchemaName(), t.tableInfo.GetTableName())
+			if err := s.writeToKafka(ctx, kafkaTopic, t.tableID, rows, taskResolvedTs); err != nil {
+				log.Error("iceberg dual-write: failed to write to kafka, skipping iceberg commit",
+					zap.String("namespace", s.changefeedID.Keyspace()),
+					zap.String("changefeed", s.changefeedID.Name()),
+					zap.String("topic", kafkaTopic),
+					zap.Int64("tableID", t.tableID),
+					zap.Uint64("resolvedTs", taskResolvedTs),
+					zap.Error(err))
+				continue
+			}
+			log.Debug("iceberg dual-write: wrote to kafka",
+				zap.String("namespace", s.changefeedID.Keyspace()),
+				zap.String("changefeed", s.changefeedID.Name()),
+				zap.String("topic", kafkaTopic),
+				zap.Int("rows", len(rows)))
 		}
 
 		start := time.Now()
@@ -812,6 +937,16 @@ func (s *sink) commitOnce(ctx context.Context, resolvedTs uint64) error {
 					zap.Uint64("resolvedTs", taskResolvedTs),
 					zap.Error(err))
 			}
+		}
+
+		if s.isDualWrite && commitResult != nil {
+			s.lastIcebergSnapshotID = commitResult.SnapshotID
+			log.Debug("dual-write checkpoint updated",
+				zap.String("namespace", s.changefeedID.Keyspace()),
+				zap.String("changefeed", s.changefeedID.Name()),
+				zap.Int64("snapshotID", s.lastIcebergSnapshotID),
+				zap.Int64("kafkaOffset", s.lastKafkaOffset),
+				zap.Uint64("resolvedTs", taskResolvedTs))
 		}
 
 		for _, cb := range callbacks {
