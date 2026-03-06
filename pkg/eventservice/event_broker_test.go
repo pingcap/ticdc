@@ -176,6 +176,23 @@ func TestAddDispatcherUnregisterOnSchemaStoreError(t *testing.T) {
 	defer broker.close()
 
 	ss.registerTableError = errors.New("register schema store failed")
+<<<<<<< HEAD
+=======
+
+	info := newMockDispatcherInfoForTest(t)
+	err := broker.addDispatcher(info)
+	require.Error(t, err)
+
+	_, ok := es.spansMap.Load(info.GetTableSpan())
+	require.False(t, ok)
+	require.Equal(t, uint64(1), es.unregisterCount.Load())
+}
+
+func TestScanRangeCappedByScanWindow(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	// Close the broker, so we can catch all message in the test.
+	broker.close()
+>>>>>>> 3dae8aa91 (logservice: avoid dispatcher registration failure during schema store initialization (#4366))
 
 	info := newMockDispatcherInfoForTest(t)
 	err := broker.addDispatcher(info)
