@@ -15,11 +15,12 @@ package cloudstorage
 
 import (
 	"context"
+	"sync"
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
-	pkgcloudstorage "github.com/pingcap/ticdc/pkg/sink/cloudstorage"
+	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 )
 
@@ -33,7 +34,7 @@ const (
 type task struct {
 	kind           taskKind
 	event          *commonEvent.DMLEvent
-	versionedTable pkgcloudstorage.VersionedTableName
+	versionedTable cloudstorage.VersionedTableName
 	dispatcherID   commonType.DispatcherID
 
 	encodedMsgs []*common.Message
@@ -41,7 +42,7 @@ type task struct {
 }
 
 func newDMLTask(
-	version pkgcloudstorage.VersionedTableName,
+	version cloudstorage.VersionedTableName,
 	event *commonEvent.DMLEvent,
 ) *task {
 	return &task{
@@ -77,29 +78,40 @@ func (t *task) wait(ctx context.Context) error {
 type drainMarker struct {
 	dispatcherID commonType.DispatcherID
 	commitTs     uint64
-	doneCh       chan error
+	done         chan struct{}
+	mu           sync.Mutex
+	doneClosed   bool
+	err          error
 }
 
 func newDrainMarker(dispatcherID commonType.DispatcherID, commitTs uint64) *drainMarker {
 	return &drainMarker{
 		dispatcherID: dispatcherID,
 		commitTs:     commitTs,
-		doneCh:       make(chan error, 1),
+		done:         make(chan struct{}),
 	}
 }
 
+// finish is the only owner that may close done.
+// done must be closed to broadcast the result to all waiters.
 func (m *drainMarker) finish(err error) {
-	select {
-	case m.doneCh <- err:
-	default:
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.doneClosed {
+		return
 	}
+	m.err = err
+	m.doneClosed = true
+	close(m.done)
 }
 
 func (m *drainMarker) wait(ctx context.Context) error {
 	select {
-	case err := <-m.doneCh:
-		return err
 	case <-ctx.Done():
-		return errors.Trace(ctx.Err())
+		return errors.Trace(context.Cause(ctx))
+	case <-m.done:
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.err
 	}
 }

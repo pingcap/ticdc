@@ -15,6 +15,7 @@ package cloudstorage
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"testing"
 	"time"
@@ -23,7 +24,7 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	pkgcloudstorage "github.com/pingcap/ticdc/pkg/sink/cloudstorage"
+	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -37,7 +38,7 @@ import (
 func TestTaskIndexerRouteOutputShardStable(t *testing.T) {
 	t.Parallel()
 
-	indexer := newTaskIndexer(2, 4)
+	indexer := newIndexer(2, 4)
 	dispatcherID := commonType.NewDispatcherID()
 	first := indexer.routeOutputIndex(dispatcherID)
 	for i := 0; i < 32; i++ {
@@ -51,7 +52,7 @@ func TestTaskIndexerRouteOutputShardDistributed(t *testing.T) {
 	dispatcherA := commonType.NewDispatcherID()
 	dispatcherB := commonType.NewDispatcherID()
 
-	indexer := newTaskIndexer(2, 4)
+	indexer := newIndexer(2, 4)
 	shardA := indexer.routeOutputIndex(dispatcherA)
 	shardB := indexer.routeOutputIndex(dispatcherB)
 	for shardA == shardB {
@@ -69,7 +70,7 @@ func TestEncodingGroupRouteByDispatcher(t *testing.T) {
 	eg, egCtx := errgroup.WithContext(ctx)
 
 	encoderConfig := newTestTxnEncoderConfig(t)
-	group := newEncodingGroup(encoderConfig, 2, 4)
+	group := newEncoderGroup(encoderConfig, 2, 4)
 	eg.Go(func() error {
 		return group.run(egCtx)
 	})
@@ -87,7 +88,7 @@ func TestEncodingGroupRouteByDispatcher(t *testing.T) {
 	receivedB := make(chan []uint64, 1)
 	eg.Go(func() error {
 		values := make([]uint64, 0, 5)
-		err := group.consumeOutputShard(ctx, shardA, func(task *task) error {
+		err := group.consumeOutputShard(egCtx, shardA, func(task *task) error {
 			if task.dispatcherID != dispatcherA {
 				return nil
 			}
@@ -101,7 +102,7 @@ func TestEncodingGroupRouteByDispatcher(t *testing.T) {
 	})
 	eg.Go(func() error {
 		values := make([]uint64, 0, 5)
-		err := group.consumeOutputShard(ctx, shardB, func(task *task) error {
+		err := group.consumeOutputShard(egCtx, shardB, func(task *task) error {
 			if task.dispatcherID != dispatcherB {
 				return nil
 			}
@@ -146,14 +147,14 @@ func TestEncodingGroupEncodeDMLTask(t *testing.T) {
 	eg, egCtx := errgroup.WithContext(ctx)
 
 	encoderConfig := newTestTxnEncoderConfig(t)
-	group := newEncodingGroup(encoderConfig, 2, 1)
+	group := newEncoderGroup(encoderConfig, 2, 1)
 	eg.Go(func() error {
 		return group.run(egCtx)
 	})
 
 	dispatcherID := commonType.NewDispatcherID()
 	taskValue := newDMLTask(
-		pkgcloudstorage.VersionedTableName{
+		cloudstorage.VersionedTableName{
 			TableNameWithPhysicTableID: commonType.TableName{
 				Schema:  "test",
 				Table:   "table1",
@@ -168,7 +169,7 @@ func TestEncodingGroupEncodeDMLTask(t *testing.T) {
 
 	done := make(chan struct{}, 1)
 	eg.Go(func() error {
-		return group.consumeOutputShard(ctx, 0, func(task *task) error {
+		return group.consumeOutputShard(egCtx, 0, func(task *task) error {
 			require.Equal(t, taskValue, task)
 			done <- struct{}{}
 			return nil
@@ -182,6 +183,18 @@ func TestEncodingGroupEncodeDMLTask(t *testing.T) {
 
 	cancel()
 	require.ErrorIs(t, eg.Wait(), context.Canceled)
+}
+
+func TestEncoderGroupAddReturnsContextCause(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cause := errors.New("encoder group canceled")
+	cancel(cause)
+
+	group := newEncoderGroup(newTestTxnEncoderConfig(t), 1, 1)
+	err := group.add(ctx, newDrainTask(commonType.NewDispatcherID(), 1))
+	require.ErrorIs(t, err, cause)
 }
 
 func newTestTxnEncoderConfig(t *testing.T) *common.Config {

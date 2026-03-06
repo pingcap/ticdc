@@ -44,7 +44,7 @@ type writer struct {
 
 	toBeFlushedCh chan writerTask
 	inputCh       *chann.DrainableChann[*task]
-	isClosed      uint64
+	isClosed      atomic.Bool
 
 	statistics        *pmetrics.Statistics
 	filePathGenerator *cloudstorage.FilePathGenerator
@@ -120,7 +120,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 			d.metricsWorkerBusyRatio.Add(flushTimeSlice.Seconds())
 			flushTimeSlice = 0
 		case task, ok := <-d.toBeFlushedCh:
-			if !ok || atomic.LoadUint64(&d.isClosed) == 1 {
+			if !ok || d.isClosed.Load() {
 				return nil
 			}
 			if task.marker != nil {
@@ -310,7 +310,7 @@ func (d *writer) genAndDispatchTask(ctx context.Context) error {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
 		case <-ticker.C:
-			if atomic.LoadUint64(&d.isClosed) == 1 {
+			if d.isClosed.Load() {
 				return nil
 			}
 			if len(batchedTask.batch) == 0 {
@@ -326,7 +326,7 @@ func (d *writer) genAndDispatchTask(ctx context.Context) error {
 			default:
 			}
 		case tableTask, ok := <-d.inputCh.Out():
-			if !ok || atomic.LoadUint64(&d.isClosed) == 1 {
+			if !ok || d.isClosed.Load() {
 				if len(batchedTask.batch) == 0 {
 					return nil
 				}
@@ -386,7 +386,7 @@ func (d *writer) closeInput() {
 }
 
 func (d *writer) close() {
-	if !atomic.CompareAndSwapUint64(&d.isClosed, 0, 1) {
+	if !d.isClosed.CompareAndSwap(false, true) {
 		return
 	}
 }

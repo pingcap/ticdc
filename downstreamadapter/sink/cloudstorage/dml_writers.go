@@ -23,7 +23,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	pkgcloudstorage "github.com/pingcap/ticdc/pkg/sink/cloudstorage"
+	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tidb/br/pkg/storage"
@@ -40,7 +40,7 @@ type dmlWriters struct {
 	// encoding pipelines will read tasks from msgCh to encode events.
 	msgCh *chann.UnlimitedChannel[*task, any]
 
-	encodeGroup *encodingGroup
+	encodeGroup *encoderGroup
 
 	writers []*writer
 
@@ -48,16 +48,20 @@ type dmlWriters struct {
 	runCtx   context.Context
 }
 
+const (
+	defaultEncodingConcurrency = 8
+)
+
 func newDMLWriters(
 	changefeedID commonType.ChangeFeedID,
 	storage storage.ExternalStorage,
-	config *pkgcloudstorage.Config,
+	config *cloudstorage.Config,
 	encoderConfig *common.Config,
 	extension string,
 	statistics *metrics.Statistics,
 ) *dmlWriters {
 	messageCh := chann.NewUnlimitedChannelDefault[*task]()
-	encoderGroup := newEncodingGroup(
+	encoderGroup := newEncoderGroup(
 		encoderConfig,
 		defaultEncodingConcurrency,
 		config.WorkerCount,
@@ -155,7 +159,7 @@ func (d *dmlWriters) dispatchTaskToWriter(ctx context.Context, outputIndex int) 
 }
 
 func (d *dmlWriters) addDMLEvent(event *commonEvent.DMLEvent) {
-	table := pkgcloudstorage.VersionedTableName{
+	table := cloudstorage.VersionedTableName{
 		TableNameWithPhysicTableID: commonType.TableName{
 			Schema:      event.TableInfo.GetSchemaName(),
 			Table:       event.TableInfo.GetTableName(),

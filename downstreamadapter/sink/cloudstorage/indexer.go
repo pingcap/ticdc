@@ -19,19 +19,19 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 )
 
-type taskIndexer struct {
-	inputShards  int
-	outputShards int
+type indexer struct {
+	inputShards int
+	nextInput   uint64
 
-	nextInput uint64
+	outputShards int
 }
 
-// newTaskIndexer builds the routing policy used by storage sink task pipeline.
+// newIndexer builds the routing policy used by storage sink task pipeline.
 //
 // Invariants:
 // 1. Input index only affects encoder parallelism (round-robin).
 // 2. Output index is stable per dispatcher to preserve per-dispatcher ordering.
-func newTaskIndexer(inputShards, outputShards int) *taskIndexer {
+func newIndexer(inputShards, outputShards int) *indexer {
 	if inputShards <= 0 {
 		inputShards = 1
 	}
@@ -39,18 +39,18 @@ func newTaskIndexer(inputShards, outputShards int) *taskIndexer {
 		outputShards = 1
 	}
 
-	return &taskIndexer{
+	return &indexer{
 		inputShards:  inputShards,
 		outputShards: outputShards,
 	}
 }
 
-func (r *taskIndexer) next(dispatcherID commonType.DispatcherID) (int, int) {
+func (r *indexer) next(dispatcherID commonType.DispatcherID) (int, int) {
 	return r.nextInputIndex(), r.routeOutputIndex(dispatcherID)
 }
 
 // nextInputIndex uses round-robin so hot dispatchers do not pin a single encoder shard.
-func (r *taskIndexer) nextInputIndex() int {
+func (r *indexer) nextInputIndex() int {
 	if r.inputShards <= 1 {
 		return 0
 	}
@@ -58,7 +58,7 @@ func (r *taskIndexer) nextInputIndex() int {
 	return int((next - 1) % uint64(r.inputShards))
 }
 
-func (r *taskIndexer) routeOutputIndex(dispatcherID commonType.DispatcherID) int {
+func (r *indexer) routeOutputIndex(dispatcherID commonType.DispatcherID) int {
 	if r.outputShards <= 1 {
 		return 0
 	}
