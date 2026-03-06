@@ -514,6 +514,7 @@ func (info *ChangeFeedInfo) rmStorageOnlyFields() {
 	info.Config.Sink.DateSeparator = nil
 	info.Config.Sink.EnablePartitionSeparator = nil
 	info.Config.Sink.FileIndexWidth = nil
+	info.Config.Sink.UseTableIDAsPath = nil
 	info.Config.Sink.CloudStorageConfig = nil
 }
 

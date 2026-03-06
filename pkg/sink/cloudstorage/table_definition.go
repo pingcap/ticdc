@@ -332,6 +332,10 @@ func (t *TableDefinition) Sum32(hasher *hash.PositionInertia) (uint32, error) {
 // GenerateSchemaFilePath generates the schema file path for TableDefinition
 // with optional table id path.
 func (t *TableDefinition) GenerateSchemaFilePath(useTableIDAsPath bool, tableID int64) (string, error) {
+	checksum, err := t.Sum32(nil)
+	if err != nil {
+		return "", err
+	}
 	if t.Schema == "" {
 		return "", errors.ErrInternalCheckFailed.GenWithStackByArgs("schema cannot be empty")
 	}
@@ -342,25 +346,23 @@ func (t *TableDefinition) GenerateSchemaFilePath(useTableIDAsPath bool, tableID 
 		return "", errors.ErrInternalCheckFailed.GenWithStackByArgs("invalid table definition")
 	}
 	isTableSchema := t.TotalColumns != 0
-
-	checksum, err := t.Sum32(nil)
-	if err != nil {
-		return "", err
-	}
 	if !isTableSchema && t.Table != "" {
 		return "", errors.ErrInternalCheckFailed.GenWithStackByArgs(
 			"invalid table definition",
 		)
 	}
-	if useTableIDAsPath && t.Table != "" {
-		if tableID <= 0 {
-			return "", errors.ErrInternalCheckFailed.GenWithStackByArgs(
-				"invalid table id for table-id path",
-			)
-		}
+	if useTableIDAsPath && isTableSchema && tableID <= 0 {
+		return "", errors.ErrInternalCheckFailed.GenWithStackByArgs(
+			"invalid table id for table-id path",
+		)
 	}
-	table := generateTablePath(t.Table, tableID, useTableIDAsPath)
-	path, err := generateSchemaFilePath(t.Schema, table, t.TableVersion, checksum)
+
+	table := t.Table
+	if isTableSchema {
+		table = generateTablePath(t.Table, tableID, useTableIDAsPath)
+	}
+	omitSchema := useTableIDAsPath && isTableSchema
+	path, err := generateSchemaFilePath(t.Schema, table, t.TableVersion, checksum, omitSchema)
 	if err != nil {
 		return "", err
 	}

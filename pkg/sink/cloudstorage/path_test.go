@@ -162,7 +162,7 @@ func TestGenerateDataFilePathWithTableIDAsPath(t *testing.T) {
 	date := f.GenerateDateStr()
 	path, err := f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, fmt.Sprintf("test/12345/5/CDC_%s_000001.json", table.DispatcherID.String()), path)
+	require.Equal(t, fmt.Sprintf("12345/5/CDC_%s_000001.json", table.DispatcherID.String()), path)
 }
 
 func TestFetchIndexFromFileName(t *testing.T) {

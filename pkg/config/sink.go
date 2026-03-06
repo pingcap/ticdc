@@ -37,6 +37,8 @@ const (
 
 	// TxnAtomicityKey specifies the key of the transaction-atomicity in the SinkURI.
 	TxnAtomicityKey = "transaction-atomicity"
+	// UseTableIDAsPathKey specifies the key of the use-table-id-as-path in the SinkURI.
+	UseTableIDAsPathKey = "use-table-id-as-path"
 	// defaultTxnAtomicity is the default atomicity level.
 	defaultTxnAtomicity = noneTxnAtomicity
 	// unknownTxnAtomicity is an invalid atomicity level and will be treated as
@@ -154,6 +156,8 @@ type SinkConfig struct {
 	EnablePartitionSeparator *bool `toml:"enable-partition-separator" json:"enable-partition-separator,omitempty"`
 	// FileIndexWidth is only available when the downstream is Storage
 	FileIndexWidth *int `toml:"file-index-digit,omitempty" json:"file-index-digit,omitempty"`
+	// UseTableIDAsPath is only available when the downstream is Storage.
+	UseTableIDAsPath *bool `toml:"use-table-id-as-path" json:"use-table-id-as-path,omitempty"`
 
 	EnableKafkaSinkV2 *bool `toml:"enable-kafka-sink-v2" json:"enable-kafka-sink-v2,omitempty"`
 
@@ -945,6 +949,19 @@ func (s *SinkConfig) applyParameterBySinkURI(sinkURI *url.URL) error {
 			cfgInFile[ProtocolKey] = util.GetOrZero(s.Protocol)
 		}
 		s.Protocol = util.AddressOf(protocolFromURI)
+	}
+
+	useTableIDAsPathFromURI := params.Get(UseTableIDAsPathKey)
+	if useTableIDAsPathFromURI != "" {
+		enabled, err := strconv.ParseBool(useTableIDAsPathFromURI)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		if s.UseTableIDAsPath != nil && util.GetOrZero(s.UseTableIDAsPath) != enabled {
+			cfgInSinkURI[UseTableIDAsPathKey] = strconv.FormatBool(enabled)
+			cfgInFile[UseTableIDAsPathKey] = strconv.FormatBool(util.GetOrZero(s.UseTableIDAsPath))
+		}
+		s.UseTableIDAsPath = util.AddressOf(enabled)
 	}
 
 	getError := func() error {
