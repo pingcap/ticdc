@@ -152,31 +152,3 @@ func stringPtr(s string) *string {
 func int32Ptr(i int32) *int32 {
 	return &i
 }
-
-func TestDualWriteTopicNaming(t *testing.T) {
-	tests := []struct {
-		name           string
-		keyspace       string
-		changefeedName string
-		wantPrefix     string
-	}{
-		{
-			name:           "default keyspace",
-			keyspace:       "default",
-			changefeedName: "test-changefeed",
-			wantPrefix:     "ticdc-iceberg",
-		},
-		{
-			name:           "custom keyspace",
-			keyspace:       "mykeyspace",
-			changefeedName: "cf1",
-			wantPrefix:     "ticdc-iceberg",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.wantPrefix, "ticdc-iceberg")
-		})
-	}
-}

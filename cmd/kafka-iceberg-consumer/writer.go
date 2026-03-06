@@ -16,7 +16,9 @@ package main
 import (
 	"context"
 	"fmt"
+	neturl "net/url"
 	"strings"
+	"sync"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pingcap/log"
@@ -29,6 +31,7 @@ import (
 type writer struct {
 	icebergSink sink.Sink
 	topic       string
+	warnStub    sync.Once
 }
 
 func newWriter(ctx context.Context, o *option) *writer {
@@ -36,9 +39,9 @@ func newWriter(ctx context.Context, o *option) *writer {
 		topic: o.topic,
 	}
 
-	icebergSinkURI := fmt.Sprintf("iceberg://%s", o.icebergWarehouse)
-	if !strings.HasPrefix(o.icebergWarehouse, "s3://") && !strings.HasPrefix(o.icebergWarehouse, "file://") {
-		icebergSinkURI = fmt.Sprintf("iceberg://%s?warehouse=%s", o.icebergWarehouse, o.icebergWarehouse)
+	icebergSinkURI := fmt.Sprintf("iceberg://?warehouse=%s", neturl.QueryEscape(o.icebergWarehouse))
+	if strings.HasPrefix(o.icebergWarehouse, "s3://") || strings.HasPrefix(o.icebergWarehouse, "file://") {
+		icebergSinkURI = fmt.Sprintf("iceberg://%s", o.icebergWarehouse)
 	}
 
 	changefeedID := commonType.NewChangeFeedIDWithName("kafka-iceberg-consumer", commonType.DefaultKeyspaceName)
@@ -46,6 +49,10 @@ func newWriter(ctx context.Context, o *option) *writer {
 		ChangefeedID: changefeedID,
 		SinkURI:      icebergSinkURI,
 		SinkConfig:   o.sinkConfig,
+	}
+
+	if err := sink.Verify(ctx, cfg, changefeedID); err != nil {
+		log.Panic("iceberg sink config is invalid", zap.Error(err))
 	}
 
 	icebergSink, err := sink.New(ctx, cfg, changefeedID)
@@ -69,5 +76,9 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 		zap.ByteString("key", message.Key),
 		zap.ByteString("value", message.Value))
 
-	return true
+	w.warnStub.Do(func() {
+		log.Warn("kafka iceberg consumer event conversion is not implemented yet; offset commit is disabled")
+	})
+	_ = ctx
+	return false
 }

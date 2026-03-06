@@ -68,12 +68,15 @@ func (c *consumer) readMessage(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info("consumer exist: context cancelled")
+			log.Info("consumer exit: context cancelled")
 			return errors.Trace(ctx.Err())
 		default:
 		}
-		msg, err := c.client.ReadMessage(-1)
+		msg, err := c.client.ReadMessage(1000)
 		if err != nil {
+			if kafkaErr, ok := err.(kafka.Error); ok && kafkaErr.Code() == kafka.ErrTimedOut {
+				continue
+			}
 			log.Error("read message failed, just continue to retry", zap.Error(err))
 			continue
 		}
