@@ -13,8 +13,10 @@ TEST_DATA_DIR="$CASE_DIR/$TEST_OUT_DATA_DIR"
 
 echo "TEST_DATA_DIR: $TEST_DATA_DIR"
 
-# Random generate the sockets config.
-# Make sure we dont use the same sock.
+# Random generate the `socket` config for TiDB.
+# TiDB parses `socket = ...` as a root-level key. Our generated config ends with
+# `[instance]`, so appending `socket = ...` at the end would become `instance.socket`,
+# which is rejected by newer TiDB versions (and makes TiDB fail to start).
 randomGenSocketsConf() {
 	config_file="$1"
 	random_str=$(date '+%s%N')
@@ -22,7 +24,13 @@ randomGenSocketsConf() {
 		random_str=$(cat /dev/random | LC_ALL=C tr -dc "a-zA-Z0-9" | head -c 10)
 	fi
 
-	echo "socket = \"/tmp/tidb-$random_str.sock\"" >>"$config_file"
+	# Prepend the root-level `socket` and drop any existing `socket = ...` lines
+	# (old scripts appended it under `[instance]`, which becomes `instance.socket`).
+	{
+		echo "socket = \"/tmp/tidb-$random_str.sock\""
+		sed '/^[[:space:]]*socket[[:space:]]*=/d' "$config_file"
+	} >"$config_file.tmp"
+	mv "$config_file.tmp" "$config_file"
 }
 
 check_bin() {
@@ -343,6 +351,10 @@ check_port_available "$UP_TIKV_WORKER_HOST" "$UP_TIKV_WORKER_PORT" "Upstream TiK
 check_port_available "$DOWN_TIKV_WORKER_HOST" "$DOWN_TIKV_WORKER_PORT" "Downstream TiKV-Worker is not ready yet"
 
 ####################start TiDB####################
+# NOTE: TiDB config keys are section-sensitive. Keep `socket` and
+# `max-server-connections` at root level, and keep tuning knobs like
+# `run-auto-analyze` / `server-memory-quota` under `[performance]`. Otherwise
+# TiDB will report "invalid configuration options" and silently ignore them.
 touch "$OUT_DIR/upstream-tidb-system.toml"
 if [ -f "$tidb_config" ]; then
 	cat "$tidb_config" >>"$OUT_DIR/upstream-tidb-system.toml"
@@ -352,9 +364,7 @@ cat >>"$OUT_DIR/upstream-tidb-system.toml" <<EOF
 keyspace-name = "SYSTEM"
 enable-telemetry = false
 mem-quota-query = 671088640
-run-auto-analyze = false
-server-memory-quota = 2684354560
-analyze-always-skip-wide-columns = true
+max-server-connections = 0
 tikv-worker-url = "http://$UP_TIKV_WORKER_HOST:$UP_TIKV_WORKER_PORT"
 # temp-dir = "$TEST_DATA_DIR/upstream/tidb-system"
 
@@ -363,13 +373,14 @@ max-backups = 100
 
 [performance]
 tcp-keep-alive = true
+run-auto-analyze = false
+server-memory-quota = 2684354560
 
 [security]
 enable-sem = false
 
 [instance]
 tidb_service_scope = 'dxf_service'
-max-server-connections = 0
 EOF
 
 touch "$OUT_DIR/upstream-tidb-$KEYSPACE_NAME.toml"
@@ -381,9 +392,7 @@ cat >>"$OUT_DIR/upstream-tidb-$KEYSPACE_NAME.toml" <<EOF
 keyspace-name = "$KEYSPACE_NAME"
 enable-telemetry = false
 mem-quota-query = 671088640
-run-auto-analyze = false
-server-memory-quota = 2684354560
-analyze-always-skip-wide-columns = true
+max-server-connections = 0
 # temp-dir = "$TEST_DATA_DIR/upstream/tidb-$KEYSPACE_NAME"
 
 [log.file]
@@ -391,12 +400,12 @@ max-backups = 100
 
 [performance]
 tcp-keep-alive = true
+run-auto-analyze = false
+server-memory-quota = 2684354560
 
 [security]
 enable-sem = false
 
-[instance]
-max-server-connections = 0
 EOF
 
 cp "$OUT_DIR/upstream-tidb-$KEYSPACE_NAME.toml" "$OUT_DIR/upstream-tidb-$KEYSPACE_NAME-other.toml"
@@ -410,9 +419,7 @@ cat >>"$OUT_DIR/downstream-tidb-system.toml" <<EOF
 keyspace-name = "SYSTEM"
 enable-telemetry = false
 mem-quota-query = 671088640
-run-auto-analyze = false
-server-memory-quota = 2684354560
-analyze-always-skip-wide-columns = true
+max-server-connections = 0
 tikv-worker-url = "http://$DOWN_TIKV_WORKER_HOST:$DOWN_TIKV_WORKER_PORT"
 # temp-dir = "$TEST_DATA_DIR/downstream/tidb-system"
 
@@ -421,13 +428,14 @@ max-backups = 100
 
 [performance]
 tcp-keep-alive = true
+run-auto-analyze = false
+server-memory-quota = 2684354560
 
 [security]
 enable-sem = false
 
 [instance]
 tidb_service_scope = 'dxf_service'
-max-server-connections = 0
 EOF
 
 touch "$OUT_DIR/downstream-tidb-$KEYSPACE_NAME.toml"
@@ -439,9 +447,7 @@ cat >>"$OUT_DIR/downstream-tidb-$KEYSPACE_NAME.toml" <<EOF
 keyspace-name = "$KEYSPACE_NAME"
 enable-telemetry = false
 mem-quota-query = 671088640
-run-auto-analyze = false
-server-memory-quota = 2684354560
-analyze-always-skip-wide-columns = true
+max-server-connections = 0
 # temp-dir = "$TEST_DATA_DIR/downstream/tidb-$KEYSPACE_NAME"
 
 [log.file]
@@ -449,12 +455,12 @@ max-backups = 100
 
 [performance]
 tcp-keep-alive = true
+run-auto-analyze = false
+server-memory-quota = 2684354560
 
 [security]
 enable-sem = false
 
-[instance]
-max-server-connections = 0
 EOF
 
 echo "Starting upstream system TiDB"
