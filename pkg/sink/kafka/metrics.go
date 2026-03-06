@@ -16,6 +16,7 @@ package kafka
 import (
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/kafka/claimcheck"
+	"github.com/pingcap/ticdc/pkg/sink/kafka/franz"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -78,6 +79,57 @@ var (
 			Name:      "kafka_producer_response_rate",
 			Help:      "Responses/second received from all brokers.",
 		}, []string{"namespace", "changefeed", "broker"})
+
+	franzRequestsInFlightByClientGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "kafka_franz_producer_in_flight_requests",
+			Help:      "Current number of in-flight requests by client type and broker.",
+		}, []string{"namespace", "changefeed", "client", "broker"})
+	franzOutgoingByteTotalByClientGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "kafka_franz_producer_outgoing_byte_total",
+			Help:      "Total bytes written by kafka sink clients.",
+		}, []string{"namespace", "changefeed", "client", "broker"})
+	franzRequestTotalByClientGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "kafka_franz_producer_request_total",
+			Help:      "Total requests sent by kafka sink clients.",
+		}, []string{"namespace", "changefeed", "client", "broker"})
+	franzResponseTotalByClientGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "kafka_franz_producer_response_total",
+			Help:      "Total responses received by kafka sink clients.",
+		}, []string{"namespace", "changefeed", "client", "broker"})
+
+	franzRequestLatencyHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "kafka_franz_producer_request_latency_histogram",
+			Help:      "Request latency histogram for kafka producer in milliseconds.",
+		}, []string{"namespace", "changefeed", "client", "broker"})
+	franzCompressionRatioHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "kafka_franz_producer_compression_ratio_histogram",
+			Help:      "Compression ratio times 100 histogram for kafka producer.",
+		}, []string{"namespace", "changefeed", "client"})
+	franzRecordsPerRequestHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "kafka_franz_producer_records_per_request_histogram",
+			Help:      "Records per request histogram for kafka producer.",
+		}, []string{"namespace", "changefeed", "client"})
 )
 
 // InitMetrics registers all metrics in this file.
@@ -90,6 +142,15 @@ func InitMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(requestsInFlightGauge)
 	registry.MustRegister(responseRateGauge)
 
+	registry.MustRegister(franzRequestsInFlightByClientGauge)
+	registry.MustRegister(franzOutgoingByteTotalByClientGauge)
+	registry.MustRegister(franzRequestTotalByClientGauge)
+	registry.MustRegister(franzResponseTotalByClientGauge)
+	registry.MustRegister(franzRequestLatencyHistogram)
+	registry.MustRegister(franzCompressionRatioHistogram)
+	registry.MustRegister(franzRecordsPerRequestHistogram)
+
+	franz.InitAdminMetrics(registry)
 	claimcheck.InitMetrics(registry)
 	codec.InitMetrics(registry)
 }

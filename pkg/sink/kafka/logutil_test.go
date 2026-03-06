@@ -13,6 +13,7 @@
 package kafka
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -48,7 +49,9 @@ func TestBuildEventLogContextRowsIncluded(t *testing.T) {
 	}
 	info := &common.MessageLogInfo{Rows: rows}
 	ctx := BuildEventLogContext("ks", "cf", info)
-	expected := formatDMLInfo(rows)
+	data, err := json.Marshal(rows)
+	require.NoError(t, err)
+	expected := string(data)
 	require.Contains(t, ctx, "dmlInfo="+expected)
 	require.NotContains(t, ctx, "dmlInfoTruncated")
 	require.NotContains(t, ctx, "truncatedRows")
