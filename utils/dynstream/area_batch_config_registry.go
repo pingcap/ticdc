@@ -13,10 +13,7 @@
 
 package dynstream
 
-import (
-	"sync"
-	"sync/atomic"
-)
+import "sync/atomic"
 
 type areaBatchConfigRegistry[A Area] struct {
 	defaultConfig batchConfig
@@ -26,7 +23,8 @@ type areaBatchConfigRegistry[A Area] struct {
 	// The tradeoff is copy-on-write on updates.
 	configs atomic.Value // map[A]batchConfig
 
-	mu           sync.Mutex
+	// areaRefCount is not thread safe by itself.
+	// Callers must serialize updates externally
 	areaRefCount map[A]int
 }
 
@@ -47,10 +45,8 @@ func (s *areaBatchConfigRegistry[A]) getBatchConfig(area A) batchConfig {
 	return s.defaultConfig
 }
 
+// onAddPath is not thread safe.
 func (s *areaBatchConfigRegistry[A]) onAddPath(area A, cfg batchConfig) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	oldCount := s.areaRefCount[area]
 	s.areaRefCount[area] = oldCount + 1
 	if oldCount > 0 {
@@ -71,10 +67,8 @@ func (s *areaBatchConfigRegistry[A]) onAddPath(area A, cfg batchConfig) {
 	s.setOverrideLocked(area, cfg)
 }
 
+// onRemovePath is not thread safe.
 func (s *areaBatchConfigRegistry[A]) onRemovePath(area A) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	oldCount := s.areaRefCount[area]
 	if oldCount <= 1 {
 		delete(s.areaRefCount, area)

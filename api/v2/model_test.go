@@ -90,6 +90,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, "correctness", *apiCfgBack.Integrity.IntegrityCheckLevel)
 	require.Equal(t, "eventual", *apiCfgBack.Consistent.Level)
 }
+
 func TestReplicaConfigConversionBatchFields(t *testing.T) {
 	t.Parallel()
 

@@ -240,6 +240,7 @@ func TestRemovePath(t *testing.T) {
 	require.Equal(t, 0, len(events))
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
 }
+
 func TestAreaBatchCount(t *testing.T) {
 	handler := mockHandler{}
 	registry := newAreaBatchConfigRegistry[int](NewBatchConfig(10, 0))
