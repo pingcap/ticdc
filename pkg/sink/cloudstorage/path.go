@@ -53,6 +53,8 @@ const (
 	// The table schema is stored in the following path:
 	// <schema>/<table>/meta/schema_{tableVersion}_{checksum}.json
 	tableSchemaPrefix = "%s/%s/meta/"
+	// When use-table-id-as-path, schema is omitted: <table_id>/meta/...
+	tableIdPrefix = "%s/meta/"
 )
 
 var schemaRE = regexp.MustCompile(`meta/schema_\d+_\d{10}\.json$`)
@@ -91,7 +93,7 @@ func mustParseSchemaName(path string) (uint64, uint32) {
 }
 
 func generateSchemaFilePath(
-	schema, table string, tableVersion uint64, checksum uint32,
+	schema, table string, tableVersion uint64, checksum uint32, omitSchema bool,
 ) (string, error) {
 	if schema == "" || tableVersion == 0 {
 		return "", errors.ErrInternalCheckFailed.GenWithStackByArgs(
@@ -101,19 +103,29 @@ func generateSchemaFilePath(
 	}
 
 	var dir string
-	if table == "" {
-		// Generate db schema file path.
-		dir = fmt.Sprintf(dbSchemaPrefix, schema)
+	if omitSchema {
+		if table == "" {
+			return "", errors.ErrInternalCheckFailed.GenWithStackByArgs(
+				"table cannot be empty when 'use-table-id-as-path' is true",
+			)
+		}
+		// use-table-id-as-path: omit schema, path is <table_id>/meta/
+		dir = fmt.Sprintf(tableIdPrefix, table)
 	} else {
-		// Generate table schema file path.
-		dir = fmt.Sprintf(tableSchemaPrefix, schema, table)
+		if table == "" {
+			// Generate db schema file path.
+			dir = fmt.Sprintf(dbSchemaPrefix, schema)
+		} else {
+			// Generate table schema file path.
+			dir = fmt.Sprintf(tableSchemaPrefix, schema, table)
+		}
 	}
 	name := fmt.Sprintf(schemaFileNameFormat, tableVersion, checksum)
 	return path.Join(dir, name), nil
 }
 
 func generateTablePath(tableName string, tableID int64, useTableIDAsPath bool) string {
-	if useTableIDAsPath && tableName != "" {
+	if useTableIDAsPath {
 		return fmt.Sprintf("%d", tableID)
 	}
 	return tableName
@@ -215,14 +227,21 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 		f.versionMap[table] = table.TableInfoVersion
 		return false, nil
 	}
+	if f.config.UseTableIDAsPath && table.TableNameWithPhysicTableID.TableID <= 0 {
+		return false, errors.ErrInternalCheckFailed.GenWithStackByArgs("invalid table id for table-id path")
+	}
 
 	// walk the table meta path to find the last schema file
 	_, checksum := mustParseSchemaName(tblSchemaFile)
 	schemaFileCnt := 0
 	lastVersion := uint64(0)
-	subDir := fmt.Sprintf(tableSchemaPrefix,
-		def.Schema,
-		generateTablePath(def.Table, table.TableNameWithPhysicTableID.TableID, f.config.UseTableIDAsPath))
+	tablePathPart := generateTablePath(def.Table, table.TableNameWithPhysicTableID.TableID, f.config.UseTableIDAsPath)
+	var subDir string
+	if f.config.UseTableIDAsPath {
+		subDir = fmt.Sprintf(tableIdPrefix, tablePathPart)
+	} else {
+		subDir = fmt.Sprintf(tableSchemaPrefix, def.Schema, tablePathPart)
+	}
 	checksumSuffix := fmt.Sprintf("%010d.json", checksum)
 	hasNewerSchemaVersion := false
 	err = f.storage.WalkDir(ctx, &storage.WalkOption{
@@ -376,13 +395,22 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date string) string {
 	var elems []string
 
-	elems = append(elems, tbl.TableNameWithPhysicTableID.Schema)
-	elems = append(elems,
-		generateTablePath(
-			tbl.TableNameWithPhysicTableID.Table,
-			tbl.TableNameWithPhysicTableID.TableID,
-			f.config.UseTableIDAsPath,
-		))
+	if f.config.UseTableIDAsPath {
+		elems = append(elems,
+			generateTablePath(
+				tbl.TableNameWithPhysicTableID.Table,
+				tbl.TableNameWithPhysicTableID.TableID,
+				true,
+			))
+	} else {
+		elems = append(elems, tbl.TableNameWithPhysicTableID.Schema)
+		elems = append(elems,
+			generateTablePath(
+				tbl.TableNameWithPhysicTableID.Table,
+				tbl.TableNameWithPhysicTableID.TableID,
+				false,
+			))
+	}
 	elems = append(elems, fmt.Sprintf("%d", f.versionMap[tbl]))
 
 	if f.config.EnablePartitionSeparator && tbl.TableNameWithPhysicTableID.IsPartition {

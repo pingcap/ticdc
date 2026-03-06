@@ -492,6 +492,10 @@ func TestTableDefinitionGenFilePath(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "schema1/meta/schema_100_3233644819.json", schemaPath)
 
+	schemaPath, err = schemaDef.GenerateSchemaFilePath(true, 0)
+	require.NoError(t, err)
+	require.Equal(t, "schema1/meta/schema_100_3233644819.json", schemaPath)
+
 	def, _ := generateTableDef()
 	tablePath, err := def.GenerateSchemaFilePath(false, 0)
 	require.NoError(t, err)
@@ -499,7 +503,7 @@ func TestTableDefinitionGenFilePath(t *testing.T) {
 
 	tablePath, err = def.GenerateSchemaFilePath(true, 12345)
 	require.NoError(t, err)
-	require.Equal(t, "schema1/12345/meta/schema_100_3752767265.json", tablePath)
+	require.Equal(t, "12345/meta/schema_100_3752767265.json", tablePath)
 }
 
 func TestGenerateSchemaFilePathValidation(t *testing.T) {

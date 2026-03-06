@@ -254,10 +254,48 @@ func TestWriteDDLEventWithTableIDAsPath(t *testing.T) {
 	err = cloudStorageSink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)
 
-	tableDir := path.Join(parentDir, "test/20/meta/")
+	tableDir := path.Join(parentDir, "20/meta/")
 	tableSchema, err := os.ReadFile(path.Join(tableDir, "schema_100_4192708364.json"))
 	require.NoError(t, err)
 	require.Contains(t, string(tableSchema), `"Table": "table1"`)
+}
+
+func TestSkipDatabaseSchemaWithTableIDAsPath(t *testing.T) {
+	parentDir := t.TempDir()
+	uri := fmt.Sprintf("file:///%s?protocol=csv&use-table-id-as-path=true", parentDir)
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	err = replicaConfig.ValidateAndAdjust(sinkURI)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
+	require.NoError(t, err)
+
+	go cloudStorageSink.Run(ctx)
+
+	ddlEvent := &commonEvent.DDLEvent{
+		Query:      "create database test_db",
+		Type:       byte(timodel.ActionCreateSchema),
+		SchemaName: "test_db",
+		TableName:  "",
+		FinishedTs: 100,
+		TableInfo:  nil,
+	}
+
+	err = cloudStorageSink.WriteBlockEvent(ddlEvent)
+	require.NoError(t, err)
+
+	_, err = os.Stat(path.Join(parentDir, "test_db"))
+	require.Error(t, err)
+	require.True(t, os.IsNotExist(err))
 }
 
 func TestWriteDDLEventWithInvalidExchangePartitionEvent(t *testing.T) {

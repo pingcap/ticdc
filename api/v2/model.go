@@ -521,6 +521,7 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 			SafeMode:                         c.Sink.SafeMode,
 			OpenProtocol:                     openProtocolConfig,
 			Debezium:                         debeziumConfig,
+			UseTableIDAsPath:                 c.Sink.UseTableIDAsPath,
 		}
 
 		if c.Sink.TxnAtomicity != nil {
@@ -869,6 +870,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 			SafeMode:                         cloned.Sink.SafeMode,
 			DebeziumConfig:                   debeziumConfig,
 			OpenProtocolConfig:               openProtocolConfig,
+			UseTableIDAsPath:                 cloned.Sink.UseTableIDAsPath,
 		}
 
 		if cloned.Sink.TxnAtomicity != nil {
@@ -1129,6 +1131,7 @@ type SinkConfig struct {
 	DebeziumDisableSchema            *bool               `json:"debezium_disable_schema,omitempty"`
 	DebeziumConfig                   *DebeziumConfig     `json:"debezium,omitempty"`
 	OpenProtocolConfig               *OpenProtocolConfig `json:"open,omitempty"`
+	UseTableIDAsPath                 *bool               `json:"use_table_id_as_path,omitempty"`
 }
 
 // CSVConfig denotes the csv config
