@@ -114,7 +114,7 @@ func TestWriterRun(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		_ = d.Run(ctx)
+		_ = d.run(ctx)
 	}()
 
 	time.Sleep(4 * time.Second)
@@ -171,22 +171,19 @@ func TestWriterDrainMarker(t *testing.T) {
 	tableTask.encodedMsgs = []*common.Message{msg}
 	require.NoError(t, d.enqueueTask(ctx, tableTask))
 
-	doneCh := make(chan error, 1)
-	require.NoError(t, d.enqueueTask(ctx, newDrainTask(dispatcherID, 100, doneCh)))
+	drainTask := newDrainTask(dispatcherID, 100)
+	require.NoError(t, d.enqueueTask(ctx, drainTask))
 
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		_ = d.Run(ctx)
+		_ = d.run(ctx)
 	}()
 
-	select {
-	case err := <-doneCh:
-		require.NoError(t, err)
-	case <-time.After(10 * time.Second):
-		t.Fatal("wait drain marker timeout")
-	}
+	waitCtx, waitCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer waitCancel()
+	require.NoError(t, drainTask.wait(waitCtx))
 	require.Eventually(t, func() bool {
 		return callbackCnt.Load() == 1
 	}, 5*time.Second, 100*time.Millisecond)

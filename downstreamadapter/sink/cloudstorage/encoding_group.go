@@ -16,7 +16,6 @@ package cloudstorage
 import (
 	"context"
 
-	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -29,8 +28,7 @@ const (
 )
 
 type encodingGroup struct {
-	changeFeedID commonType.ChangeFeedID
-	codecConfig  *common.Config
+	codecConfig *common.Config
 
 	concurrency  int
 	outputShards int
@@ -45,10 +43,9 @@ type encodingGroup struct {
 //  1. inputCh: consumed by encoder shards.
 //  2. outputCh: consumed by downstream writer shards.
 //
-// Invariant: the same taskFuture is inserted into both queues, and writer side
-// must call future.Ready() before using encoded payload.
+// Invariant: the same taskFuture is inserted into both queues, and output-side
+// consumers only observe tasks after the future is ready.
 func newEncodingGroup(
-	changefeedID commonType.ChangeFeedID,
 	codecConfig *common.Config,
 	concurrency int,
 	outputShards int,
@@ -71,7 +68,6 @@ func newEncodingGroup(
 	}
 
 	return &encodingGroup{
-		changeFeedID: changefeedID,
 		codecConfig:  codecConfig,
 		concurrency:  concurrency,
 		outputShards: outputShards,
@@ -81,7 +77,7 @@ func newEncodingGroup(
 	}
 }
 
-func (eg *encodingGroup) Run(ctx context.Context) error {
+func (eg *encodingGroup) run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	for i := 0; i < eg.concurrency; i++ {
 		idx := i
@@ -132,7 +128,7 @@ func (eg *encodingGroup) runEncoder(ctx context.Context, index int) error {
 	}
 }
 
-func (eg *encodingGroup) Add(ctx context.Context, task *task) error {
+func (eg *encodingGroup) add(ctx context.Context, task *task) error {
 	if task == nil {
 		return errors.New("nil task")
 	}
@@ -155,10 +151,10 @@ func (eg *encodingGroup) Add(ctx context.Context, task *task) error {
 	return nil
 }
 
-func (eg *encodingGroup) ConsumeOutputShard(
+func (eg *encodingGroup) consumeOutputShard(
 	ctx context.Context,
 	index int,
-	handle func(*taskFuture) error,
+	handle func(*task) error,
 ) error {
 	if index < 0 || index >= len(eg.outputCh) {
 		return errors.Errorf("output index out of range: %d", index)
@@ -172,7 +168,10 @@ func (eg *encodingGroup) ConsumeOutputShard(
 			if !ok {
 				return nil
 			}
-			if err := handle(future); err != nil {
+			if err := future.ready(ctx); err != nil {
+				return err
+			}
+			if err := handle(future.task); err != nil {
 				return err
 			}
 		}
@@ -197,7 +196,7 @@ func (f *taskFuture) finish(err error) {
 	close(f.done)
 }
 
-func (f *taskFuture) Ready(ctx context.Context) error {
+func (f *taskFuture) ready(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		return errors.Trace(ctx.Err())

@@ -34,7 +34,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func TestTaskIndexerRouteOutputShardCached(t *testing.T) {
+func TestTaskIndexerRouteOutputShardStable(t *testing.T) {
 	t.Parallel()
 
 	indexer := newTaskIndexer(2, 4)
@@ -43,10 +43,9 @@ func TestTaskIndexerRouteOutputShardCached(t *testing.T) {
 	for i := 0; i < 32; i++ {
 		require.Equal(t, first, indexer.routeOutputIndex(dispatcherID))
 	}
-	require.Equal(t, 1, indexer.cachedOutputCount())
 }
 
-func TestTaskIndexerRouteOutputShardStable(t *testing.T) {
+func TestTaskIndexerRouteOutputShardDistributed(t *testing.T) {
 	t.Parallel()
 
 	dispatcherA := commonType.NewDispatcherID()
@@ -70,9 +69,9 @@ func TestEncodingGroupRouteByDispatcher(t *testing.T) {
 	eg, egCtx := errgroup.WithContext(ctx)
 
 	encoderConfig := newTestTxnEncoderConfig(t)
-	group := newEncodingGroup(commonType.NewChangefeedID4Test("test", "encoder-group"), encoderConfig, 2, 4)
+	group := newEncodingGroup(encoderConfig, 2, 4)
 	eg.Go(func() error {
-		return group.Run(egCtx)
+		return group.run(egCtx)
 	})
 
 	dispatcherA := commonType.NewDispatcherID()
@@ -88,14 +87,11 @@ func TestEncodingGroupRouteByDispatcher(t *testing.T) {
 	receivedB := make(chan []uint64, 1)
 	eg.Go(func() error {
 		values := make([]uint64, 0, 5)
-		err := group.ConsumeOutputShard(ctx, shardA, func(future *taskFuture) error {
-			if err := future.Ready(ctx); err != nil {
-				return err
-			}
-			if future.task.dispatcherID != dispatcherA {
+		err := group.consumeOutputShard(ctx, shardA, func(task *task) error {
+			if task.dispatcherID != dispatcherA {
 				return nil
 			}
-			values = append(values, future.task.marker.commitTs)
+			values = append(values, task.marker.commitTs)
 			if len(values) == 5 {
 				receivedA <- values
 			}
@@ -105,14 +101,11 @@ func TestEncodingGroupRouteByDispatcher(t *testing.T) {
 	})
 	eg.Go(func() error {
 		values := make([]uint64, 0, 5)
-		err := group.ConsumeOutputShard(ctx, shardB, func(future *taskFuture) error {
-			if err := future.Ready(ctx); err != nil {
-				return err
-			}
-			if future.task.dispatcherID != dispatcherB {
+		err := group.consumeOutputShard(ctx, shardB, func(task *task) error {
+			if task.dispatcherID != dispatcherB {
 				return nil
 			}
-			values = append(values, future.task.marker.commitTs)
+			values = append(values, task.marker.commitTs)
 			if len(values) == 5 {
 				receivedB <- values
 			}
@@ -122,8 +115,8 @@ func TestEncodingGroupRouteByDispatcher(t *testing.T) {
 	})
 
 	for i := uint64(1); i <= 5; i++ {
-		require.NoError(t, group.Add(ctx, newDrainTask(dispatcherA, i, nil)))
-		require.NoError(t, group.Add(ctx, newDrainTask(dispatcherB, i, nil)))
+		require.NoError(t, group.add(ctx, newDrainTask(dispatcherA, i)))
+		require.NoError(t, group.add(ctx, newDrainTask(dispatcherB, i)))
 	}
 
 	var resultA []uint64
@@ -153,10 +146,9 @@ func TestEncodingGroupEncodeDMLTask(t *testing.T) {
 	eg, egCtx := errgroup.WithContext(ctx)
 
 	encoderConfig := newTestTxnEncoderConfig(t)
-	changefeedID := commonType.NewChangefeedID4Test("test", "encoder-group")
-	group := newEncodingGroup(changefeedID, encoderConfig, 2, 1)
+	group := newEncodingGroup(encoderConfig, 2, 1)
 	eg.Go(func() error {
-		return group.Run(egCtx)
+		return group.run(egCtx)
 	})
 
 	dispatcherID := commonType.NewDispatcherID()
@@ -172,15 +164,12 @@ func TestEncodingGroupEncodeDMLTask(t *testing.T) {
 		},
 		newTestDMLEvent(dispatcherID, 100),
 	)
-	require.NoError(t, group.Add(ctx, taskValue))
+	require.NoError(t, group.add(ctx, taskValue))
 
 	done := make(chan struct{}, 1)
 	eg.Go(func() error {
-		return group.ConsumeOutputShard(ctx, 0, func(future *taskFuture) error {
-			if err := future.Ready(ctx); err != nil {
-				return err
-			}
-			require.Equal(t, taskValue, future.task)
+		return group.consumeOutputShard(ctx, 0, func(task *task) error {
+			require.Equal(t, taskValue, task)
 			done <- struct{}{}
 			return nil
 		})

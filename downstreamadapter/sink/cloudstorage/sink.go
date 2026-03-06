@@ -147,7 +147,7 @@ func (s *sink) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
-		return s.dmlWriters.Run(ctx)
+		return s.dmlWriters.run(ctx)
 	})
 
 	g.Go(func() error {
@@ -169,19 +169,14 @@ func (s *sink) IsNormal() bool {
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	s.dmlWriters.AddDMLEvent(event)
+	s.dmlWriters.addDMLEvent(event)
 }
 
 func (s *sink) FlushDMLBeforeBlock(event commonEvent.BlockEvent) error {
 	if event == nil {
 		return nil
 	}
-	return s.dmlWriters.FlushDMLBeforeBlock(event)
-}
-
-// PassBlockEvent keeps backward compatibility with older call sites.
-func (s *sink) PassBlockEvent(event commonEvent.BlockEvent) error {
-	return s.FlushDMLBeforeBlock(event)
+	return s.dmlWriters.flushDMLBeforeBlock(event)
 }
 
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {

@@ -20,7 +20,6 @@ import (
 	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	pkgcloudstorage "github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -56,7 +55,6 @@ func newDMLWriters(
 ) (*dmlWriters, error) {
 	messageCh := chann.NewUnlimitedChannelDefault[*task]()
 	encoderGroup := newEncodingGroup(
-		changefeedID,
 		encoderConfig,
 		defaultEncodingConcurrency,
 		config.WorkerCount,
@@ -77,7 +75,7 @@ func newDMLWriters(
 	}, nil
 }
 
-func (d *dmlWriters) Run(ctx context.Context) error {
+func (d *dmlWriters) run(ctx context.Context) error {
 	eg, ctx := errgroup.WithContext(ctx)
 
 	eg.Go(func() error {
@@ -91,7 +89,7 @@ func (d *dmlWriters) Run(ctx context.Context) error {
 	})
 
 	eg.Go(func() error {
-		return d.encodeGroup.Run(ctx)
+		return d.encodeGroup.run(ctx)
 	})
 
 	// One dispatcher goroutine per output shard.
@@ -106,7 +104,7 @@ func (d *dmlWriters) Run(ctx context.Context) error {
 	for i := range d.writers {
 		writer := d.writers[i]
 		eg.Go(func() error {
-			return writer.Run(ctx)
+			return writer.run(ctx)
 		})
 	}
 	return eg.Wait()
@@ -118,7 +116,7 @@ func (d *dmlWriters) submitTaskToEncoder(ctx context.Context) error {
 		if !ok {
 			return nil
 		}
-		if err := d.encodeGroup.Add(ctx, taskValue); err != nil {
+		if err := d.encodeGroup.add(ctx, taskValue); err != nil {
 			return err
 		}
 	}
@@ -128,18 +126,12 @@ func (d *dmlWriters) dispatchTaskToWriter(ctx context.Context, outputIndex int) 
 	writerShard := d.writers[outputIndex]
 	defer writerShard.closeInput()
 
-	return d.encodeGroup.ConsumeOutputShard(ctx, outputIndex, func(future *taskFuture) error {
-		// Principle: downstream must observe encode completion before consuming task payload.
-		if err := future.Ready(ctx); err != nil {
-			return err
-		}
-
-		taskValue := future.task
+	return d.encodeGroup.consumeOutputShard(ctx, outputIndex, func(taskValue *task) error {
 		return writerShard.enqueueTask(ctx, taskValue)
 	})
 }
 
-func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
+func (d *dmlWriters) addDMLEvent(event *commonEvent.DMLEvent) {
 	table := pkgcloudstorage.VersionedTableName{
 		TableNameWithPhysicTableID: commonType.TableName{
 			Schema:      event.TableInfo.GetSchemaName(),
@@ -157,7 +149,7 @@ func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
 	})
 }
 
-func (d *dmlWriters) FlushDMLBeforeBlock(event commonEvent.BlockEvent) error {
+func (d *dmlWriters) flushDMLBeforeBlock(event commonEvent.BlockEvent) error {
 	if event == nil {
 		return nil
 	}
@@ -168,23 +160,12 @@ func (d *dmlWriters) FlushDMLBeforeBlock(event commonEvent.BlockEvent) error {
 		d.changefeedID.ID().String(),
 	).Observe(time.Since(start).Seconds())
 
-	doneCh := make(chan error, 1)
 	// Invariant for DDL ordering:
 	// marker follows the same dispatcher route and is acked only after prior tasks
 	// in that route are fully drained by writer.
-	d.msgCh.Push(newDrainTask(event.GetDispatcherID(), event.GetCommitTs(), doneCh))
-
-	select {
-	case err := <-doneCh:
-		return err
-	case <-d.ctx.Done():
-		return errors.Trace(d.ctx.Err())
-	}
-}
-
-// PassBlockEvent keeps backward compatibility with older call sites.
-func (d *dmlWriters) PassBlockEvent(event commonEvent.BlockEvent) error {
-	return d.FlushDMLBeforeBlock(event)
+	drainTask := newDrainTask(event.GetDispatcherID(), event.GetCommitTs())
+	d.msgCh.Push(drainTask)
+	return drainTask.wait(d.ctx)
 }
 
 func (d *dmlWriters) close() {

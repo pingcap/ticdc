@@ -14,7 +14,6 @@
 package cloudstorage
 
 import (
-	"sync"
 	"sync/atomic"
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
@@ -25,9 +24,6 @@ type taskIndexer struct {
 	outputShards int
 
 	nextInput uint64
-
-	mu                sync.RWMutex
-	dispatcherToShard map[commonType.DispatcherID]int
 }
 
 // newTaskIndexer builds the routing policy used by storage sink task pipeline.
@@ -44,9 +40,8 @@ func newTaskIndexer(inputShards, outputShards int) *taskIndexer {
 	}
 
 	return &taskIndexer{
-		inputShards:       inputShards,
-		outputShards:      outputShards,
-		dispatcherToShard: make(map[commonType.DispatcherID]int),
+		inputShards:  inputShards,
+		outputShards: outputShards,
 	}
 }
 
@@ -67,30 +62,5 @@ func (r *taskIndexer) routeOutputIndex(dispatcherID commonType.DispatcherID) int
 	if r.outputShards <= 1 {
 		return 0
 	}
-
-	r.mu.RLock()
-	index, ok := r.dispatcherToShard[dispatcherID]
-	r.mu.RUnlock()
-	if ok {
-		return index
-	}
-
-	// We compute hash once and then cache it.
-	// Principle: stable routing + low per-task overhead.
-	index = commonType.GID(dispatcherID).Hash(uint64(r.outputShards))
-
-	r.mu.Lock()
-	if cached, exists := r.dispatcherToShard[dispatcherID]; exists {
-		r.mu.Unlock()
-		return cached
-	}
-	r.dispatcherToShard[dispatcherID] = index
-	r.mu.Unlock()
-	return index
-}
-
-func (r *taskIndexer) cachedOutputCount() int {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return len(r.dispatcherToShard)
+	return commonType.GID(dispatcherID).Hash(uint64(r.outputShards))
 }

@@ -27,7 +27,6 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	pmetrics "github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/utils/chann"
@@ -106,7 +105,7 @@ func newWriter(
 	}
 }
 
-func (d *writer) Run(ctx context.Context) error {
+func (d *writer) run(ctx context.Context) error {
 	eg, ctx := errgroup.WithContext(ctx)
 	eg.Go(func() error {
 		return d.flushMessages(ctx)
@@ -115,10 +114,6 @@ func (d *writer) Run(ctx context.Context) error {
 		return d.genAndDispatchTask(ctx)
 	})
 	return eg.Wait()
-}
-
-func (d *writer) SetClock(pdClock pdutil.Clock) {
-	d.filePathGenerator.SetClock(pdClock)
 }
 
 func (d *writer) flushMessages(ctx context.Context) error {
@@ -141,7 +136,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 			if task.marker != nil {
 				// Drain marker ack point:
 				// marker is emitted only after pending batch is flushed in genAndDispatchTask.
-				task.marker.done(nil)
+				task.marker.finish(nil)
 				continue
 			}
 			if len(task.batch.batch) == 0 {

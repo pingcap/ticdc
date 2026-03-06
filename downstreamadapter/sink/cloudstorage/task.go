@@ -14,8 +14,11 @@
 package cloudstorage
 
 import (
+	"context"
+
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	pkgcloudstorage "github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 )
@@ -52,21 +55,23 @@ func newDMLTask(
 func newDrainTask(
 	dispatcherID commonType.DispatcherID,
 	commitTs uint64,
-	doneCh chan error,
 ) *task {
 	return &task{
 		kind:         taskKindDrain,
 		dispatcherID: dispatcherID,
-		marker: &drainMarker{
-			dispatcherID: dispatcherID,
-			commitTs:     commitTs,
-			doneCh:       doneCh,
-		},
+		marker:       newDrainMarker(dispatcherID, commitTs),
 	}
 }
 
 func (t *task) isDrainTask() bool {
 	return t != nil && t.kind == taskKindDrain
+}
+
+func (t *task) wait(ctx context.Context) error {
+	if !t.isDrainTask() {
+		return nil
+	}
+	return t.marker.wait(ctx)
 }
 
 type drainMarker struct {
@@ -75,9 +80,26 @@ type drainMarker struct {
 	doneCh       chan error
 }
 
-func (m *drainMarker) done(err error) {
+func newDrainMarker(dispatcherID commonType.DispatcherID, commitTs uint64) *drainMarker {
+	return &drainMarker{
+		dispatcherID: dispatcherID,
+		commitTs:     commitTs,
+		doneCh:       make(chan error, 1),
+	}
+}
+
+func (m *drainMarker) finish(err error) {
 	select {
 	case m.doneCh <- err:
 	default:
+	}
+}
+
+func (m *drainMarker) wait(ctx context.Context) error {
+	select {
+	case err := <-m.doneCh:
+		return err
+	case <-ctx.Done():
+		return errors.Trace(ctx.Err())
 	}
 }
