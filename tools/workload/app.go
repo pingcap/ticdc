@@ -23,12 +23,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/errors"
-	plog "github.com/pingcap/log"
-	"go.uber.org/zap"
 	"workload/schema"
 	pbank "workload/schema/bank"
 	pbank2 "workload/schema/bank2"
+	pbank3 "workload/schema/bank3"
 	"workload/schema/bankupdate"
 	pcrawler "workload/schema/crawler"
 	pdc "workload/schema/dc"
@@ -36,6 +34,10 @@ import (
 	"workload/schema/shop"
 	psysbench "workload/schema/sysbench"
 	puuu "workload/schema/uuu"
+
+	"github.com/pingcap/errors"
+	plog "github.com/pingcap/log"
+	"go.uber.org/zap"
 )
 
 // WorkloadExecutor executes the workload and collects statistics
@@ -78,6 +80,7 @@ const (
 	uuu        = "uuu"
 	crawler    = "crawler"
 	bank2      = "bank2"
+	bank3      = "bank3"
 	bankUpdate = "bank_update"
 	dc         = "dc"
 )
@@ -134,6 +137,8 @@ func (app *WorkloadApp) createWorkload() schema.Workload {
 		workload = pcrawler.NewCrawlerWorkload()
 	case bank2:
 		workload = pbank2.NewBank2Workload()
+	case bank3:
+		workload = pbank3.NewBankWorkload(app.Config.Partitioned)
 	case bankUpdate:
 		workload = bankupdate.NewBankUpdateWorkload(app.Config.TotalRowCount, app.Config.UpdateLargeColumnSize)
 	case dc:
@@ -169,31 +174,54 @@ func (app *WorkloadApp) executeWorkload(wg *sync.WaitGroup) error {
 		return app.handleDDLExecution(wg)
 	}
 
-	if !app.Config.SkipCreateTable && app.Config.Action == "prepare" {
-		app.handlePrepareAction(insertConcurrency, wg)
-		return nil
+	if app.Config.Action == "prepare" {
+		return app.handlePrepareAction(insertConcurrency, wg)
+	}
+
+	if err := app.startDDLRunnerIfEnabled(wg); err != nil {
+		return err
 	}
 
 	app.handleWorkloadExecution(insertConcurrency, updateConcurrency, deleteConcurrency, wg)
 	return nil
 }
 
+func (app *WorkloadApp) startDDLRunnerIfEnabled(wg *sync.WaitGroup) error {
+	if app.Config.OnlyDML {
+		return nil
+	}
+	if strings.TrimSpace(app.Config.DDLConfigPath) == "" {
+		return nil
+	}
+	return app.handleDDLExecution(wg)
+}
+
 // handlePrepareAction handles the prepare action
-func (app *WorkloadApp) handlePrepareAction(insertConcurrency int, mainWg *sync.WaitGroup) {
-	plog.Info("start to create tables", zap.Int("tableCount", app.Config.TableCount))
-	wg := &sync.WaitGroup{}
-	for _, db := range app.DBManager.GetDBs() {
-		wg.Add(1)
-		go func(db *DBWrapper) {
-			defer wg.Done()
-			app.initTables(db.DB)
-		}(db)
+func (app *WorkloadApp) handlePrepareAction(insertConcurrency int, mainWg *sync.WaitGroup) error {
+	if !app.Config.SkipCreateTable {
+		plog.Info("start to create tables", zap.Int("tableCount", app.Config.TableCount))
+		wg := &sync.WaitGroup{}
+		for _, db := range app.DBManager.GetDBs() {
+			wg.Add(1)
+			go func(db *DBWrapper) {
+				defer wg.Done()
+				app.initTables(db.DB)
+			}(db)
+		}
+		wg.Wait()
+		plog.Info("all dbs create tables finished")
+	} else {
+		plog.Info("skip creating tables", zap.Int("tableCount", app.Config.TableCount))
 	}
-	wg.Wait()
-	plog.Info("All dbs create tables finished")
+
+	if err := app.startDDLRunnerIfEnabled(mainWg); err != nil {
+		return err
+	}
+
 	if app.Config.TotalRowCount != 0 {
-		app.executeInsertWorkers(insertConcurrency, wg)
+		app.executeInsertWorkers(insertConcurrency, mainWg)
 	}
+	return nil
 }
 
 // handleWorkloadExecution handles the workload execution
@@ -205,6 +233,9 @@ func (app *WorkloadApp) handleWorkloadExecution(insertConcurrency, updateConcurr
 		zap.Int("insertConcurrency", insertConcurrency),
 		zap.Int("updateConcurrency", updateConcurrency),
 		zap.Int("deleteConcurrency", deleteConcurrency),
+		zap.String("ddlConfig", strings.TrimSpace(app.Config.DDLConfigPath)),
+		zap.Int("ddlWorker", app.Config.DDLWorker),
+		zap.String("ddlTimeout", app.Config.DDLTimeout.String()),
 		zap.Int("batchSize", app.Config.BatchSize),
 		zap.String("action", app.Config.Action),
 	)
@@ -400,7 +431,6 @@ func (app *WorkloadApp) executeWithValues(conn *sql.Conn, sqlStr string, n int, 
 func (app *WorkloadApp) StartMetricsReporting() {
 	go app.reportMetrics()
 }
-
 func getSQLPreview(sql string) string {
 	if len(sql) > 512 {
 		return sql[:512] + "..."
