@@ -26,9 +26,16 @@ import (
 
 // SchemaPathKey is the key of schema path.
 type SchemaPathKey struct {
+	// Schema is the first directory level in storage sink paths.
+	// Example: <schema>/<table>/<tableVersion>/...
 	Schema string
+	// Table is the second directory level for table schema/data paths.
+	// For database-level schema files, this field is empty and the path is
+	// <schema>/meta/schema_{tableVersion}_{checksum}.json.
 	Table  string
-	// for the DDL, TableVersion is identical to the commit ts
+	// TableVersion is the schema version encoded in the path.
+	// In CDC it is carried by tableInfoVersion, and for DDL-related versions it
+	// is typically equal to the DDL finishedTs.
 	TableVersion uint64
 }
 
@@ -70,19 +77,29 @@ func (s *SchemaPathKey) ParseSchemaFilePath(path string) (uint32, error) {
 }
 
 type FileIndexKey struct {
+	// DispatcherID is used in file name only when table-across-nodes is enabled.
+	// File pattern: CDC_{dispatcherID}_{index}.{ext}
 	DispatcherID           string
+	// EnableTableAcrossNodes controls whether dispatcher ID is embedded in
+	// data/index file names to avoid collisions across captures.
 	EnableTableAcrossNodes bool
 }
 
 type FileIndex struct {
 	FileIndexKey
+	// Idx is the monotonically increasing file sequence number in one
+	// directory scope (schema/table/version[/partition][/date]).
 	Idx uint64
 }
 
 // DmlPathKey is the key of dml path.
 type DmlPathKey struct {
 	SchemaPathKey
+	// PartitionNum is an optional path level for partition table output.
+	// It is present only when partition-separator is enabled.
 	PartitionNum int64
+	// Date is an optional path level controlled by date-separator
+	// (year/month/day/none).
 	Date         string
 }
 
