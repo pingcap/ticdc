@@ -193,3 +193,16 @@ func TestValidateForPulsar(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateForPulsarWithColumnPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	topicExpr := Expression("persistent://public/default/{column:topic_key}")
+	require.NoError(t, topicExpr.validateForPulsar())
+
+	topicName, err := topicExpr.SubstituteWithValues("schema", "table", map[string]string{
+		"topic_key": "orders-created",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "persistent://public/default/orders-created", topicName)
+}

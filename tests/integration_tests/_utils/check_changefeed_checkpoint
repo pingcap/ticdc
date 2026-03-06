@@ -1,0 +1,33 @@
+#!/bin/bash
+# Poll a changefeed's checkpoint_ts and exit 0 only when it has advanced to or
+# beyond a target TSO.  Designed to be called via `ensure $MAX_RETRIES`.
+#
+# Usage: check_changefeed_checkpoint <changefeed_id> <target_ts>
+#
+# Parameters:
+#   $1: changefeed ID
+#   $2: minimum checkpoint_ts required (a PD TSO obtained after DML commits)
+
+changefeed_id=$1
+target_ts=$2
+
+info=$(cdc_cli_changefeed query -c "$changefeed_id" -s | grep -v "Command to ticdc")
+
+state=$(echo "$info" | jq -r '.state')
+if [ "$state" = "failed" ] || [ "$state" = "error" ]; then
+	echo "changefeed $changefeed_id is in state '$state'; will not advance to $target_ts"
+	exit 1
+fi
+
+checkpoint_ts=$(echo "$info" | jq -r '.checkpoint_ts')
+if [ -z "$checkpoint_ts" ] || [ "$checkpoint_ts" = "null" ]; then
+	echo "could not read checkpoint_ts for changefeed $changefeed_id"
+	exit 1
+fi
+
+if [ "$checkpoint_ts" -lt "$target_ts" ]; then
+	echo "checkpoint_ts $checkpoint_ts < target $target_ts; waiting"
+	exit 1
+fi
+
+echo "checkpoint_ts $checkpoint_ts reached target $target_ts"

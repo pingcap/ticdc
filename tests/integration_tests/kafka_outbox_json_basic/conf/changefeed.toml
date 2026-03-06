@@ -1,0 +1,4 @@
+[sink.outbox]
+id-column    = "id"
+key-column   = "event_key"
+value-column = "payload"

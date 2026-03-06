@@ -14,6 +14,9 @@
 package eventrouter
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/partition"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/topic"
@@ -23,6 +26,7 @@ import (
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	tableFilter "github.com/pingcap/tidb/pkg/util/table-filter"
+	"go.uber.org/zap"
 )
 
 type Rule struct {
@@ -34,8 +38,9 @@ type Rule struct {
 // EventRouter is a router, it determines which topic and which partition
 // an event should be dispatched to.
 type EventRouter struct {
-	defaultTopic string
-	rules        []Rule
+	defaultTopic          string
+	rules                 []Rule
+	outboxRequiredColumns []string
 }
 
 // NewEventRouter creates a new EventRouter.
@@ -73,15 +78,27 @@ func NewEventRouter(
 	}
 
 	return &EventRouter{
-		defaultTopic: defaultTopic,
-		rules:        rules,
+		defaultTopic:          defaultTopic,
+		rules:                 rules,
+		outboxRequiredColumns: sinkConfig.OutboxRequiredColumns(),
 	}, nil
 }
 
-// GetTopicForRowChange returns the target topic for row changes.
-func (s *EventRouter) GetTopicForRowChange(schema, table string) string {
+// GetTopicForRowChange returns the target topic for a row change after applying
+// any row-aware topic placeholders.
+func (s *EventRouter) GetTopicForRowChange(row *commonEvent.RowEvent) (string, error) {
+	schema := row.TableInfo.GetSchemaName()
+	table := row.TableInfo.GetTableName()
 	topicGenerator := s.matchTopicGenerator(schema, table)
-	return topicGenerator.Substitute(schema, table)
+	if !topicGenerator.UsesColumnPlaceholders() {
+		return topicGenerator.Substitute(schema, table), nil
+	}
+
+	columnValues, err := s.extractColumnValuesForTopic(row, topicGenerator.ReferencedColumns())
+	if err != nil {
+		return "", err
+	}
+	return topicGenerator.SubstituteWithValues(schema, table, columnValues)
 }
 
 // GetTopicForDDL returns the target topic for DDL.
@@ -103,6 +120,13 @@ func (s *EventRouter) GetTopicForDDL(ddl *commonEvent.DDLEvent) string {
 	}
 
 	topicGenerator := s.matchTopicGenerator(schema, table)
+	if topicGenerator.UsesColumnPlaceholders() {
+		log.Warn("column based topic rule falls back to default topic for ddl",
+			zap.String("schema", schema),
+			zap.String("table", table),
+			zap.String("defaultTopic", s.defaultTopic))
+		return s.defaultTopic
+	}
 	return topicGenerator.Substitute(schema, table)
 }
 
@@ -113,6 +137,10 @@ func (s *EventRouter) GetActiveTopics(activeTables []*commonEvent.SchemaTableNam
 	topicsMap := make(map[string]bool, len(activeTables))
 	for _, tableName := range activeTables {
 		topicDispatcher := s.matchTopicGenerator(tableName.SchemaName, tableName.TableName)
+		// Row dependent topics are runtime discovered and are not statically derivable here.
+		if topicDispatcher.UsesColumnPlaceholders() {
+			continue
+		}
 		topicName := topicDispatcher.Substitute(tableName.SchemaName, tableName.TableName)
 		if !topicsMap[topicName] {
 			topicsMap[topicName] = true
@@ -142,6 +170,26 @@ func (s *EventRouter) GetPartitionGenerator(schema, table string) partition.Gene
 // GetDefaultTopic returns the default topic name.
 func (s *EventRouter) GetDefaultTopic() string {
 	return s.defaultTopic
+}
+
+// GetTopicDispatchColumns returns all row column names referenced by topic
+// placeholders in the matched dispatch rule for the given table.
+func (s *EventRouter) GetTopicDispatchColumns(schema, table string) []string {
+	return s.matchTopicGenerator(schema, table).ReferencedColumns()
+}
+
+// GetTopicForTable returns the resolved topic name for the given schema and
+// table when the matched dispatch rule does not depend on row column values.
+// isStatic is true and topicName is the resolved topic when the rule is
+// table-static (no column placeholders). When isStatic is false the topic
+// cannot be determined without row data; callers must use GetTopicForRowChange
+// for each row instead.
+func (s *EventRouter) GetTopicForTable(schema, table string) (topicName string, isStatic bool) {
+	tg := s.matchTopicGenerator(schema, table)
+	if tg.UsesColumnPlaceholders() {
+		return "", false
+	}
+	return tg.Substitute(schema, table), true
 }
 
 func (s *EventRouter) matchTopicGenerator(schema, table string) topic.Generator {
@@ -181,6 +229,63 @@ func (s *EventRouter) VerifyTables(infos []*common.TableInfo) error {
 			}
 		default:
 		}
+
+		// Verify topic dispatch column placeholders are valid and CDC visible.
+		topicColumns := s.GetTopicDispatchColumns(table.TableName.Schema, table.TableName.Table)
+		if len(topicColumns) > 0 {
+			if _, err := table.OffsetsByNames(topicColumns); err != nil {
+				return err
+			}
+		}
+
+		if len(s.outboxRequiredColumns) > 0 {
+			if _, err := table.OffsetsByNames(s.outboxRequiredColumns); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
+}
+
+// extractColumnValuesForTopic collects the row values needed to resolve column
+// placeholders in a topic expression.
+func (s *EventRouter) extractColumnValuesForTopic(
+	row *commonEvent.RowEvent, columns []string,
+) (map[string]string, error) {
+	if len(columns) == 0 {
+		return map[string]string{}, nil
+	}
+
+	values := make(map[string]string, len(columns))
+	selectedRow := row.GetRows()
+	if row.IsDelete() {
+		selectedRow = row.GetPreRows()
+	}
+	for _, colName := range columns {
+		offset, ok := row.TableInfo.GetColumnOffsetByName(colName)
+		if !ok {
+			return nil, cerror.ErrDispatcherFailed.GenWithStack(
+				"topic dispatch column not found, table: %s, column: %s", row.TableInfo.TableName, colName)
+		}
+		columnInfo := row.TableInfo.GetColumns()[offset]
+		value := common.ExtractColVal(selectedRow, columnInfo, offset)
+		if value == nil {
+			return nil, cerror.ErrDispatcherFailed.GenWithStack(
+				"topic dispatch column value is null, table: %s, column: %s", row.TableInfo.TableName, colName)
+		}
+
+		stringValue := ""
+		switch v := value.(type) {
+		case []byte:
+			stringValue = string(v)
+		default:
+			stringValue = fmt.Sprint(v)
+		}
+		if strings.TrimSpace(stringValue) == "" {
+			return nil, cerror.ErrDispatcherFailed.GenWithStack(
+				"topic dispatch column value is empty, table: %s, column: %s", row.TableInfo.TableName, colName)
+		}
+		values[strings.ToLower(colName)] = stringValue
+	}
+	return values, nil
 }

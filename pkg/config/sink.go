@@ -16,6 +16,7 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -204,6 +205,8 @@ type SinkConfig struct {
 	OpenProtocol *OpenProtocolConfig `toml:"open" json:"open,omitempty"`
 	// DebeziumConfig related configurations
 	Debezium *DebeziumConfig `toml:"debezium" json:"debezium,omitempty"`
+	// Outbox related configurations
+	Outbox *OutboxConfig `toml:"outbox" json:"outbox,omitempty"`
 
 	CaseSensitive *bool `toml:"case-sensitive" json:"case-sensitive,omitempty"`
 	// Integrity is only available when the downstream is MQ.
@@ -246,6 +249,35 @@ func (s *SinkConfig) ShouldSendAllBootstrapAtStart() bool {
 	should := s.ShouldSendBootstrapMsg() && util.GetOrZero(s.SendAllBootstrapAtStart)
 	log.Info("should send all bootstrap at start", zap.Bool("should", should))
 	return should
+}
+
+// OutboxRequiredColumns returns the columns that must remain available when the
+// sink is configured for outbox-json.
+func (s *SinkConfig) OutboxRequiredColumns() []string {
+	if s == nil || s.Outbox == nil {
+		return nil
+	}
+
+	protocol, _ := ParseSinkProtocolFromString(util.GetOrZero(s.Protocol))
+	if protocol != ProtocolOutboxJSON {
+		return nil
+	}
+
+	outboxRequiredColumns := []string{
+		s.Outbox.IDColumn,
+		s.Outbox.KeyColumn,
+		s.Outbox.ValueColumn,
+	}
+	if len(s.Outbox.HeaderColumns) == 0 {
+		return outboxRequiredColumns
+	}
+
+	headerColumns := make([]string, 0, len(s.Outbox.HeaderColumns))
+	for _, column := range s.Outbox.HeaderColumns {
+		headerColumns = append(headerColumns, column)
+	}
+	sort.Strings(headerColumns)
+	return append(outboxRequiredColumns, headerColumns...)
 }
 
 // CSVConfig defines a series of configuration items for csv codec.
@@ -725,6 +757,11 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 	}
 
 	protocol, _ := ParseSinkProtocolFromString(util.GetOrZero(s.Protocol))
+	if protocol == ProtocolOutboxJSON {
+		if err := s.Outbox.validate(); err != nil {
+			return err
+		}
+	}
 
 	if s.KafkaConfig != nil && s.KafkaConfig.LargeMessageHandle != nil {
 		var (
@@ -894,6 +931,14 @@ func (s *SinkConfig) ValidateProtocol(scheme string) error {
 		}
 	case ProtocolAvro:
 		outputOldValue = false
+	case ProtocolOutboxJSON:
+		if scheme != KafkaScheme && scheme != KafkaSSLScheme {
+			return cerror.ErrSinkURIInvalid.GenWithStackByArgs(
+				fmt.Sprintf("protocol %s is incompatible with %s scheme", protocol, scheme))
+		}
+		if err := s.Outbox.validate(); err != nil {
+			return err
+		}
 	default:
 		return nil
 	}
@@ -1041,4 +1086,80 @@ type OpenProtocolConfig struct {
 // DebeziumConfig represents the configurations for debezium protocol encoding
 type DebeziumConfig struct {
 	OutputOldValue bool `toml:"output-old-value" json:"output-old-value"`
+}
+
+// OutboxConfig represents the configurations for outbox-json protocol encoding.
+type OutboxConfig struct {
+	IDColumn    string `toml:"id-column" json:"id-column"`
+	KeyColumn   string `toml:"key-column" json:"key-column"`
+	ValueColumn string `toml:"value-column" json:"value-column"`
+	// HeaderColumns maps output header key to source column name.
+	HeaderColumns map[string]string `toml:"header-columns" json:"header-columns,omitempty"`
+}
+
+// validate checks that the outbox-json configuration is complete and does not
+// reuse required columns or header names in conflicting ways.
+func (o *OutboxConfig) validate() error {
+	if o == nil {
+		return cerror.ErrSinkInvalidConfig.GenWithStack("outbox config is required for outbox-json protocol")
+	}
+	// Normalize and validate required columns.
+	o.IDColumn = strings.TrimSpace(o.IDColumn)
+	o.KeyColumn = strings.TrimSpace(o.KeyColumn)
+	o.ValueColumn = strings.TrimSpace(o.ValueColumn)
+	if o.IDColumn == "" {
+		return cerror.ErrSinkInvalidConfig.GenWithStack("outbox.id-column is required")
+	}
+	if o.KeyColumn == "" {
+		return cerror.ErrSinkInvalidConfig.GenWithStack("outbox.key-column is required")
+	}
+	if o.ValueColumn == "" {
+		return cerror.ErrSinkInvalidConfig.GenWithStack("outbox.value-column is required")
+	}
+
+	seenColumns := make(map[string]struct{}, 3+len(o.HeaderColumns))
+	requiredCols := []string{o.IDColumn, o.KeyColumn, o.ValueColumn}
+	for _, col := range requiredCols {
+		lowerCol := strings.ToLower(col)
+		if _, ok := seenColumns[lowerCol]; ok {
+			return cerror.ErrSinkInvalidConfig.GenWithStack(
+				"outbox columns must be unique, duplicate column: %s", col)
+		}
+		seenColumns[lowerCol] = struct{}{}
+	}
+
+	seenHeaders := make(map[string]struct{}, len(o.HeaderColumns))
+	normalizedHeaders := make(map[string]string, len(o.HeaderColumns))
+	for header, col := range o.HeaderColumns {
+		headerTrimmed := strings.TrimSpace(header)
+		if headerTrimmed == "" {
+			return cerror.ErrSinkInvalidConfig.GenWithStack("outbox.header-columns must not contain empty header name")
+		}
+		lowerHeader := strings.ToLower(headerTrimmed)
+		if lowerHeader == "id" {
+			return cerror.ErrSinkInvalidConfig.GenWithStack(
+				"outbox header name Id is reserved")
+		}
+		if _, ok := seenHeaders[lowerHeader]; ok {
+			return cerror.ErrSinkInvalidConfig.GenWithStack(
+				"outbox header names must be unique, duplicate header name: %s", headerTrimmed)
+		}
+		seenHeaders[lowerHeader] = struct{}{}
+
+		colTrimmed := strings.TrimSpace(col)
+		if colTrimmed == "" {
+			return cerror.ErrSinkInvalidConfig.GenWithStack("outbox.header-columns must not contain empty column value")
+		}
+
+		lowerCol := strings.ToLower(colTrimmed)
+		if _, ok := seenColumns[lowerCol]; ok {
+			return cerror.ErrSinkInvalidConfig.GenWithStack(
+				"outbox header source columns must be unique and not overlap required columns, duplicate column: %s", colTrimmed)
+		}
+		seenColumns[lowerCol] = struct{}{}
+		normalizedHeaders[headerTrimmed] = colTrimmed
+	}
+	o.HeaderColumns = normalizedHeaders
+
+	return nil
 }

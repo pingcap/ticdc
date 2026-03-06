@@ -20,7 +20,9 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -61,9 +63,10 @@ func newPulsarSinkForTest(t *testing.T) (*sink, error) {
 		partitionRule: helper.GetDDLDispatchRule(protocol),
 		comp:          comp,
 
-		isNormal:   atomic.NewBool(true),
-		statistics: statistics,
-		ctx:        ctx,
+		isNormal:            atomic.NewBool(true),
+		statistics:          statistics,
+		ctx:                 ctx,
+		discoveredRowTopics: make(map[string]time.Time),
 	}
 	go pulsarSink.Run(ctx)
 	return pulsarSink, nil
@@ -131,4 +134,49 @@ func TestPulsarSinkBasicFunctionality(t *testing.T) {
 	require.Len(t, pulsarSink.ddlProducer.(*mockProducer).GetAllEvents(), 1)
 
 	require.Equal(t, count.Load(), int64(3))
+}
+
+func TestGetCheckpointTopics(t *testing.T) {
+	t.Parallel()
+
+	sinkConfig := &config.SinkConfig{
+		DispatchRules: []*config.DispatchRule{
+			{
+				Matcher:   []string{"row_topic.*"},
+				TopicRule: "topic_{column:topic_key}",
+			},
+			{
+				Matcher:   []string{"static_topic.*"},
+				TopicRule: "topic_{schema}_{table}",
+			},
+		},
+	}
+	router, err := eventrouter.NewEventRouter(sinkConfig, "default_topic", true, false)
+	require.NoError(t, err)
+
+	tableSchemaStore := commonEvent.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{
+		{
+			SchemaName: "row_topic",
+			Tables: []*heartbeatpb.TableInfo{
+				{TableName: "t1"},
+			},
+		},
+		{
+			SchemaName: "static_topic",
+			Tables: []*heartbeatpb.TableInfo{
+				{TableName: "t2"},
+			},
+		},
+	}, common.PulsarSinkType, false)
+
+	s := &sink{
+		comp: component{
+			eventRouter: router,
+		},
+		tableSchemaStore:    tableSchemaStore,
+		discoveredRowTopics: map[string]time.Time{"runtime_topic": time.Now()},
+	}
+
+	topics := s.getCheckpointTopics(1)
+	require.Equal(t, []string{"default_topic", "runtime_topic", "topic_static_topic_t2"}, topics)
 }

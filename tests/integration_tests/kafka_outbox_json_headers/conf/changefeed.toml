@@ -1,0 +1,12 @@
+[sink.outbox]
+id-column    = "id"
+key-column   = "event_key"
+value-column = "payload"
+
+# Maps Kafka header key -> source column name.
+# Header key differs from column name to exercise the mapping.
+# Headers are emitted in order: Id (reserved, always first),
+# then traceparent, then tracestate (alphabetical).
+[sink.outbox.header-columns]
+traceparent = "trace_parent"
+tracestate  = "trace_state"

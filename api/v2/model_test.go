@@ -90,3 +90,36 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, "correctness", *apiCfgBack.Integrity.IntegrityCheckLevel)
 	require.Equal(t, "eventual", *apiCfgBack.Consistent.Level)
 }
+
+func TestReplicaConfigConversionOutboxConfig(t *testing.T) {
+	t.Parallel()
+
+	protocol := "outbox-json"
+	apiCfg := &ReplicaConfig{
+		Sink: &SinkConfig{
+			Protocol: &protocol,
+			OutboxConfig: &OutboxConfig{
+				IDColumn:      "id",
+				KeyColumn:     "aggregate_id",
+				ValueColumn:   "payload",
+				HeaderColumns: map[string]string{"event_type": "event_type"},
+			},
+		},
+	}
+
+	internalCfg := apiCfg.ToInternalReplicaConfig()
+	require.Equal(t, "outbox-json", util.GetOrZero(internalCfg.Sink.Protocol))
+	require.NotNil(t, internalCfg.Sink.Outbox)
+	require.Equal(t, "id", internalCfg.Sink.Outbox.IDColumn)
+	require.Equal(t, "aggregate_id", internalCfg.Sink.Outbox.KeyColumn)
+	require.Equal(t, "payload", internalCfg.Sink.Outbox.ValueColumn)
+	require.Equal(t, map[string]string{"event_type": "event_type"}, internalCfg.Sink.Outbox.HeaderColumns)
+
+	backToAPI := ToAPIReplicaConfig(internalCfg)
+	require.NotNil(t, backToAPI.Sink)
+	require.NotNil(t, backToAPI.Sink.OutboxConfig)
+	require.Equal(t, "id", backToAPI.Sink.OutboxConfig.IDColumn)
+	require.Equal(t, "aggregate_id", backToAPI.Sink.OutboxConfig.KeyColumn)
+	require.Equal(t, "payload", backToAPI.Sink.OutboxConfig.ValueColumn)
+	require.Equal(t, map[string]string{"event_type": "event_type"}, backToAPI.Sink.OutboxConfig.HeaderColumns)
+}
