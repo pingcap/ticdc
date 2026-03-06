@@ -226,7 +226,7 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 
 func (s *sink) writeFile(v *commonEvent.DDLEvent, def cloudstorage.TableDefinition, tableID int64) error {
 	// skip write database-level event for 'use-table-id-as-path' mode
-	if s.cfg.UseTableIDAsPath && !def.IsTableSchema() {
+	if s.cfg.UseTableIDAsPath && def.Table == "" {
 		log.Debug("skip database schema for table id path",
 			zap.String("schema", def.Schema),
 			zap.String("query", def.Query))

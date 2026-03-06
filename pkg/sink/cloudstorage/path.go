@@ -124,11 +124,16 @@ func generateSchemaFilePath(
 	return path.Join(dir, name), nil
 }
 
-func generateTablePath(tableName string, tableID int64, useTableIDAsPath bool) string {
+func generateTablePath(tableName string, tableID int64, useTableIDAsPath bool) (string, error) {
 	if useTableIDAsPath {
-		return fmt.Sprintf("%d", tableID)
+		if tableID <= 0 {
+			return "", errors.ErrInternalCheckFailed.GenWithStackByArgs(
+				"invalid table id for table-id path",
+			)
+		}
+		return fmt.Sprintf("%d", tableID), nil
 	}
-	return tableName
+	return tableName, nil
 }
 
 func generateDataFileName(enableTableAcrossNodes bool, dispatcherID string, index uint64, extension string, fileIndexWidth int) string {
@@ -227,15 +232,14 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 		f.versionMap[table] = table.TableInfoVersion
 		return false, nil
 	}
-	if f.config.UseTableIDAsPath && table.TableNameWithPhysicTableID.TableID <= 0 {
-		return false, errors.ErrInternalCheckFailed.GenWithStackByArgs("invalid table id for table-id path")
-	}
-
 	// walk the table meta path to find the last schema file
 	_, checksum := mustParseSchemaName(tblSchemaFile)
 	schemaFileCnt := 0
 	lastVersion := uint64(0)
-	tablePathPart := generateTablePath(def.Table, table.TableNameWithPhysicTableID.TableID, f.config.UseTableIDAsPath)
+	tablePathPart, err := generateTablePath(def.Table, table.TableNameWithPhysicTableID.TableID, f.config.UseTableIDAsPath)
+	if err != nil {
+		return false, err
+	}
 	var subDir string
 	if f.config.UseTableIDAsPath {
 		subDir = fmt.Sprintf(tableIdPrefix, tablePathPart)
@@ -335,20 +339,26 @@ func (f *FilePathGenerator) GenerateDateStr() string {
 }
 
 // GenerateIndexFilePath generates a canonical path for index file.
-func (f *FilePathGenerator) GenerateIndexFilePath(tbl VersionedTableName, date string) string {
-	dir := f.generateDataDirPath(tbl, date)
+func (f *FilePathGenerator) GenerateIndexFilePath(tbl VersionedTableName, date string) (string, error) {
+	dir, err := f.generateDataDirPath(tbl, date)
+	if err != nil {
+		return "", err
+	}
 	name := defaultIndexFileName
 	if f.config.EnableTableAcrossNodes {
 		name = fmt.Sprintf(defaultTableAcrossNodesIndexFileName, tbl.DispatcherID.String())
 	}
-	return path.Join(dir, name)
+	return path.Join(dir, name), nil
 }
 
 // GenerateDataFilePath generates a canonical path for data file.
 func (f *FilePathGenerator) GenerateDataFilePath(
 	ctx context.Context, tbl VersionedTableName, date string,
 ) (string, error) {
-	dir := f.generateDataDirPath(tbl, date)
+	dir, err := f.generateDataDirPath(tbl, date)
+	if err != nil {
+		return "", err
+	}
 	newIndexFile := false
 	if idx, ok := f.fileIndex[tbl]; !ok {
 		fileIdx, err := f.getFileIdxFromIndexFile(ctx, tbl, date)
@@ -392,28 +402,34 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 	return f.GenerateDataFilePath(ctx, tbl, date)
 }
 
-func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date string) string {
+func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date string) (string, error) {
 	var elems []string
 
 	if f.config.UseTableIDAsPath {
-		elems = append(elems,
-			generateTablePath(
-				tbl.TableNameWithPhysicTableID.Table,
-				tbl.TableNameWithPhysicTableID.TableID,
-				true,
-			))
+		tablePathPart, err := generateTablePath(
+			tbl.TableNameWithPhysicTableID.Table,
+			tbl.TableNameWithPhysicTableID.TableID,
+			true,
+		)
+		if err != nil {
+			return "", err
+		}
+		elems = append(elems, tablePathPart)
 	} else {
 		elems = append(elems, tbl.TableNameWithPhysicTableID.Schema)
-		elems = append(elems,
-			generateTablePath(
-				tbl.TableNameWithPhysicTableID.Table,
-				tbl.TableNameWithPhysicTableID.TableID,
-				false,
-			))
+		tablePathPart, err := generateTablePath(
+			tbl.TableNameWithPhysicTableID.Table,
+			tbl.TableNameWithPhysicTableID.TableID,
+			false,
+		)
+		if err != nil {
+			return "", err
+		}
+		elems = append(elems, tablePathPart)
 	}
 	elems = append(elems, fmt.Sprintf("%d", f.versionMap[tbl]))
 
-	if f.config.EnablePartitionSeparator && tbl.TableNameWithPhysicTableID.IsPartition {
+	if f.config.EnablePartitionSeparator && tbl.TableNameWithPhysicTableID.IsPartition && !f.config.UseTableIDAsPath {
 		elems = append(elems, fmt.Sprintf("%d", tbl.TableNameWithPhysicTableID.TableID))
 	}
 
@@ -421,13 +437,16 @@ func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date str
 		elems = append(elems, date)
 	}
 
-	return path.Join(elems...)
+	return path.Join(elems...), nil
 }
 
 func (f *FilePathGenerator) getFileIdxFromIndexFile(
 	ctx context.Context, tbl VersionedTableName, date string,
 ) (uint64, error) {
-	indexFile := f.GenerateIndexFilePath(tbl, date)
+	indexFile, err := f.GenerateIndexFilePath(tbl, date)
+	if err != nil {
+		return 0, err
+	}
 	exist, err := f.storage.FileExists(ctx, indexFile)
 	if err != nil {
 		return 0, err

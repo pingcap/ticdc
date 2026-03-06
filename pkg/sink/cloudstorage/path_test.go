@@ -237,8 +237,9 @@ func TestGenerateDataFilePathWithIndexFile(t *testing.T) {
 	}
 	f.versionMap[table] = table.TableInfoVersion
 	date := f.GenerateDateStr()
-	indexFilePath := f.GenerateIndexFilePath(table, date)
-	err := f.storage.WriteFile(ctx, indexFilePath, []byte(fmt.Sprintf("CDC_%s_000005.json\n", dispatcherID.String())))
+	indexFilePath, err := f.GenerateIndexFilePath(table, date)
+	require.NoError(t, err)
+	err = f.storage.WriteFile(ctx, indexFilePath, []byte(fmt.Sprintf("CDC_%s_000005.json\n", dispatcherID.String())))
 	require.NoError(t, err)
 
 	dataFilePath, err := f.GenerateDataFilePath(ctx, table, date)
@@ -269,7 +270,8 @@ func TestGenerateDataFilePathResyncIndexFile(t *testing.T) {
 	f2.versionMap[table] = table.TableInfoVersion
 
 	date := ""
-	indexFilePath := f1.GenerateIndexFilePath(table, date)
+	indexFilePath, err := f1.GenerateIndexFilePath(table, date)
+	require.NoError(t, err)
 
 	// Simulate dispatcher moved between captures:
 	// 1) f1 generates CDC_..._000001 and writes index file.

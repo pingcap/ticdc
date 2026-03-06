@@ -359,7 +359,11 @@ func (t *TableDefinition) GenerateSchemaFilePath(useTableIDAsPath bool, tableID 
 
 	table := t.Table
 	if isTableSchema {
-		table = generateTablePath(t.Table, tableID, useTableIDAsPath)
+		tablePath, err := generateTablePath(t.Table, tableID, useTableIDAsPath)
+		if err != nil {
+			return "", err
+		}
+		table = tablePath
 	}
 	omitSchema := useTableIDAsPath && isTableSchema
 	path, err := generateSchemaFilePath(t.Schema, table, t.TableVersion, checksum, omitSchema)
