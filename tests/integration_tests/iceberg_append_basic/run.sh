@@ -49,7 +49,7 @@ function wait_file_exists() {
 		if ls $file_pattern >/dev/null 2>&1; then
 			return 0
 		fi
-		((i++))
+		i=$((i + 1))
 		sleep 1
 	done
 	echo "file not found after ${check_time}s: ${file_pattern}"
@@ -85,14 +85,14 @@ function wait_changefeed_table_assigned() {
 		if [ "$code" != "200" ]; then
 			echo "wait table ${db_name}.${table_name}: http $code response: $body"
 			sleep 2
-			((i++))
+			i=$((i + 1))
 			continue
 		fi
 
 		if ! echo "$body" | jq -e . >/dev/null 2>&1; then
 			echo "wait table ${db_name}.${table_name}: invalid json response: $body"
 			sleep 2
-			((i++))
+			i=$((i + 1))
 			continue
 		fi
 
@@ -108,7 +108,7 @@ function wait_changefeed_table_assigned() {
 		fi
 
 		sleep 2
-		((i++))
+		i=$((i + 1))
 	done
 
 	echo "table ${db_name}.${table_name} not assigned to changefeed ${changefeed_id} after $((i * 2))s (last_http=${last_code})"
