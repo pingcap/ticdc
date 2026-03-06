@@ -38,11 +38,9 @@ import (
 )
 
 // It will send the events to cloud storage systems.
-// Messages are encoded in the specific protocol and then sent to the defragmenter.
-// The data flow is as follows: **data** -> encodingWorkers -> defragmenter -> dmlWorkers -> external storage
-// The defragmenter will defragment the out-of-order encoded messages and sends encoded
-// messages to individual dmlWorkers.
-// The dmlWorkers will write the encoded messages to external storage in parallel between different tables.
+// Messages are encoded in the specific protocol and routed by dispatcher to shard pipelines.
+// The data flow is as follows: **data** -> encoding pipeline -> dispatcher routers -> writer shards -> external storage.
+// The writer shards write encoded messages to external storage in parallel between different tables.
 type sink struct {
 	changefeedID common.ChangeFeedID
 	cfg          *cloudstorage.Config
@@ -120,13 +118,17 @@ func New(
 		return nil, err
 	}
 	statistics := metrics.NewStatistics(changefeedID, "cloudstorage")
+	dmlWriters, err := newDMLWriters(ctx, changefeedID, storage, cfg, encoderConfig, ext, statistics)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
 	return &sink{
 		changefeedID:             changefeedID,
 		sinkURI:                  sinkURI,
 		cfg:                      cfg,
 		cleanupJobs:              cleanupJobs,
 		storage:                  storage,
-		dmlWriters:               newDMLWriters(ctx, changefeedID, storage, cfg, encoderConfig, ext, statistics),
+		dmlWriters:               dmlWriters,
 		checkpointChan:           make(chan uint64, 16),
 		lastSendCheckpointTsTime: time.Now(),
 		outputRawChangeEvent:     sinkConfig.CloudStorageConfig.GetOutputRawChangeEvent(),
@@ -171,7 +173,15 @@ func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 }
 
 func (s *sink) FlushDMLBeforeBlock(event commonEvent.BlockEvent) error {
+	if event == nil {
+		return nil
+	}
 	return s.dmlWriters.FlushDMLBeforeBlock(event)
+}
+
+// PassBlockEvent keeps backward compatibility with older call sites.
+func (s *sink) PassBlockEvent(event commonEvent.BlockEvent) error {
+	return s.FlushDMLBeforeBlock(event)
 }
 
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
@@ -219,16 +229,6 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 			}
 		}
 	}
-
-	log.Info("storage sink executed ddl event",
-		zap.String("keyspace", s.changefeedID.Keyspace()),
-		zap.String("changefeed", s.changefeedID.ID().String()),
-		zap.String("schema", event.SchemaName),
-		zap.String("table", event.TableName),
-		zap.String("dispatcher", event.GetDispatcherID().String()),
-		zap.String("query", event.Query),
-		zap.Uint64("finishedTs", event.FinishedTs),
-		zap.Stringer("ddlType", event.GetDDLType()))
 	return nil
 }
 
@@ -288,18 +288,17 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 			}
 		}
 
-		if checkpoint < s.lastCheckpointTs.Load() {
-			continue
-		}
-
 		if time.Since(s.lastSendCheckpointTsTime) < 2*time.Second {
+			log.Warn("skip write checkpoint ts to external storage",
+				zap.Any("changefeedID", s.changefeedID),
+				zap.Uint64("checkpoint", checkpoint))
 			continue
 		}
 
 		start := time.Now()
 		message, err := json.Marshal(map[string]uint64{"checkpoint-ts": checkpoint})
 		if err != nil {
-			log.Panic("cloud storage marshal checkpoint failed, this should never happen",
+			log.Panic("CloudStorageSink marshal checkpoint failed, this should never happen",
 				zap.String("keyspace", s.changefeedID.Keyspace()),
 				zap.String("changefeed", s.changefeedID.Name()),
 				zap.Uint64("checkpoint", checkpoint),
@@ -308,7 +307,7 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 		}
 		err = s.storage.WriteFile(ctx, "metadata", message)
 		if err != nil {
-			log.Error("cloud storage write file failed",
+			log.Error("CloudStorageSink storage write file failed",
 				zap.String("keyspace", s.changefeedID.Keyspace()),
 				zap.String("changefeed", s.changefeedID.Name()),
 				zap.Duration("duration", time.Since(start)),

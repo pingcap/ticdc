@@ -44,7 +44,22 @@ var (
 	timezone         string
 )
 
+func isTestingProcess() bool {
+	if strings.HasSuffix(os.Args[0], ".test") {
+		return true
+	}
+	for _, arg := range os.Args[1:] {
+		if strings.HasPrefix(arg, "-test.") {
+			return true
+		}
+	}
+	return false
+}
+
 func init() {
+	if isTestingProcess() {
+		return
+	}
 	version.LogVersionInfo("storage consumer")
 	flag.StringVar(&upstreamURIStr, "upstream-uri", "", "storage uri")
 	flag.StringVar(&downstreamURIStr, "downstream-uri", "", "downstream sink uri")
