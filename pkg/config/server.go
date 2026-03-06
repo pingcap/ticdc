@@ -126,6 +126,7 @@ var defaultServerConfig = &ServerConfig{
 		EventStore:   NewDefaultEventStoreConfig(),
 		SchemaStore:  NewDefaultSchemaStoreConfig(),
 		EventService: NewDefaultEventServiceConfig(),
+		Encryption:   NewDefaultEncryptionConfig(),
 	},
 	ClusterID:              "default",
 	GcTunerMemoryThreshold: DisableMemoryLimit,

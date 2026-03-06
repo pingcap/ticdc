@@ -34,6 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/encryption"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -116,6 +117,8 @@ type dispatcherStat struct {
 	resolvedTs atomic.Uint64
 	// the max ts of events which is not needed by this dispatcher
 	checkpointTs uint64
+	// keyspaceID for encryption (0 means default/classic)
+	keyspaceID uint32
 	// the difference between `subStat`, `pendingSubStat` and `removingSubStat`:
 	//   1) if there is no existing subscriptions which can be reused,
 	//      or there is a existing subscription with exact span match,
@@ -182,9 +185,10 @@ type subscriptionStat struct {
 type subscriptionStats map[logpuller.SubscriptionID]*subscriptionStat
 
 type eventWithCallback struct {
-	subID   logpuller.SubscriptionID
-	tableID int64
-	kvs     []common.RawKVEntry
+	subID      logpuller.SubscriptionID
+	tableID    int64
+	keyspaceID uint32
+	kvs        []common.RawKVEntry
 	// kv with commitTs <= currentResolvedTs will be filtered out
 	currentResolvedTs uint64
 	enqueueTimeNano   int64
@@ -238,6 +242,8 @@ type eventStore struct {
 	compressionThreshold int
 	// enableZstdCompression controls whether to enable zstd compression for large values.
 	enableZstdCompression bool
+	// encryptionManager for encrypting/decrypting data (optional).
+	encryptionManager encryption.EncryptionManager
 }
 
 const (
@@ -257,6 +263,9 @@ func New(
 	if err != nil {
 		log.Panic("fail to remove path", zap.String("path", dbPath), zap.Error(err))
 	}
+
+	// Try to get encryption manager from appcontext (optional)
+	encMgr, _ := appcontext.TryGetService[encryption.EncryptionManager]("EncryptionManager")
 
 	store := &eventStore{
 		pdClock:   appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
@@ -280,6 +289,7 @@ func New(
 		},
 		compressionThreshold:  config.GetGlobalServerConfig().Debug.EventStore.CompressionThreshold,
 		enableZstdCompression: config.GetGlobalServerConfig().Debug.EventStore.EnableZstdCompression,
+		encryptionManager:     encMgr,
 	}
 	store.gcManager = newGCManager(store.dbs, deleteDataRange, compactDataRange)
 
@@ -483,6 +493,7 @@ func (e *eventStore) RegisterDispatcher(
 		dispatcherID: dispatcherID,
 		tableSpan:    dispatcherSpan,
 		checkpointTs: startTs,
+		keyspaceID:   dispatcherSpan.KeyspaceID,
 	}
 	stat.resolvedTs.Store(startTs)
 
@@ -609,6 +620,7 @@ func (e *eventStore) RegisterDispatcher(
 		subStat.eventCh.Push(eventWithCallback{
 			subID:             subStat.subID,
 			tableID:           subStat.tableSpan.TableID,
+			keyspaceID:        subStat.tableSpan.KeyspaceID,
 			kvs:               kvs,
 			currentResolvedTs: subStat.resolvedTs.Load(),
 			enqueueTimeNano:   now.UnixNano(),
@@ -900,16 +912,18 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	}
 
 	return &eventStoreIter{
-		tableSpan:     stat.tableSpan,
-		needCheckSpan: needCheckSpan,
-		innerIter:     iter,
-		prevStartTs:   0,
-		prevCommitTs:  0,
-		startTs:       dataRange.CommitTsStart,
-		endTs:         dataRange.CommitTsEnd,
-		rowCount:      0,
-		decoder:       decoder,
-		decoderPool:   e.decoderPool,
+		tableSpan:         stat.tableSpan,
+		needCheckSpan:     needCheckSpan,
+		innerIter:         iter,
+		prevStartTs:       0,
+		prevCommitTs:      0,
+		startTs:           dataRange.CommitTsStart,
+		endTs:             dataRange.CommitTsEnd,
+		rowCount:          0,
+		decoder:           decoder,
+		decoderPool:       e.decoderPool,
+		encryptionManager: e.encryptionManager,
+		keyspaceID:        stat.keyspaceID,
 	}
 }
 
@@ -1325,6 +1339,20 @@ func (e *eventStore) writeEvents(
 				metrics.EventStoreCompressedRowsCount.Inc()
 			}
 
+			// Encrypt if encryption is enabled (after compression)
+			if e.encryptionManager != nil {
+				encryptedValue, err := e.encryptionManager.EncryptData(context.Background(), event.keyspaceID, value)
+				if err != nil {
+					log.Error("encrypt event value failed",
+						zap.Uint32("keyspaceID", event.keyspaceID),
+						zap.Uint64("subID", uint64(event.subID)),
+						zap.Int64("tableID", event.tableID),
+						zap.Error(err))
+					return err
+				}
+				value = encryptedValue
+			}
+
 			key := EncodeKey(uint64(event.subID), event.tableID, &kv, compressionType)
 			if err := batch.Set(key, value, pebble.NoSync); err != nil {
 				log.Panic("failed to update pebble batch", zap.Error(err))
@@ -1370,6 +1398,9 @@ type eventStoreIter struct {
 	decoder     *zstd.Decoder
 	decoderPool *sync.Pool
 	decodeBuf   []byte
+	// encryptionManager for decrypting data (optional, can be nil).
+	encryptionManager encryption.EncryptionManager
+	keyspaceID        uint32
 }
 
 func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
@@ -1380,6 +1411,15 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		}
 		key := iter.innerIter.Key()
 		value := iter.innerIter.Value()
+
+		// Decrypt if encrypted data is detected and encryption manager is available
+		if encryption.IsEncrypted(value) && iter.encryptionManager != nil {
+			decryptedValue, err := iter.encryptionManager.DecryptData(context.Background(), iter.keyspaceID, value)
+			if err != nil {
+				log.Panic("failed to decrypt value", zap.Error(err))
+			}
+			value = decryptedValue
+		}
 
 		_, compressionType := DecodeKeyMetas(key)
 		var decodedValue []byte

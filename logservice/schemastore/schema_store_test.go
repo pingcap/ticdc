@@ -14,6 +14,8 @@
 package schemastore
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -24,6 +26,46 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+type flakyEncryptionManagerForTest struct {
+	failTimes int
+	calls     int
+}
+
+func (m *flakyEncryptionManagerForTest) EncryptData(ctx context.Context, keyspaceID uint32, data []byte) ([]byte, error) {
+	m.calls++
+	if m.calls <= m.failTimes {
+		return nil, errors.New("inject encryption failure")
+	}
+	return data, nil
+}
+
+func (m *flakyEncryptionManagerForTest) DecryptData(ctx context.Context, keyspaceID uint32, encryptedData []byte) ([]byte, error) {
+	return encryptedData, nil
+}
+
+type prefixEncryptionManagerForTest struct{}
+
+var encryptedPrefixForTest = []byte("enc:")
+
+func (m *prefixEncryptionManagerForTest) EncryptData(ctx context.Context, keyspaceID uint32, data []byte) ([]byte, error) {
+	encrypted := make([]byte, 0, len(encryptedPrefixForTest)+len(data))
+	encrypted = append(encrypted, encryptedPrefixForTest...)
+	encrypted = append(encrypted, data...)
+	return encrypted, nil
+}
+
+func (m *prefixEncryptionManagerForTest) DecryptData(ctx context.Context, keyspaceID uint32, encryptedData []byte) ([]byte, error) {
+	if len(encryptedData) < len(encryptedPrefixForTest) {
+		return nil, errors.New("encrypted data too short")
+	}
+	if string(encryptedData[:len(encryptedPrefixForTest)]) != string(encryptedPrefixForTest) {
+		return nil, errors.New("invalid encrypted prefix")
+	}
+	plaintext := make([]byte, len(encryptedData)-len(encryptedPrefixForTest))
+	copy(plaintext, encryptedData[len(encryptedPrefixForTest):])
+	return plaintext, nil
+}
 
 func TestIgnoreDDLByCommitTs(t *testing.T) {
 	// 1. Setup a mock SchemaStore.
@@ -107,4 +149,112 @@ func TestIgnoreDDLByCommitTs(t *testing.T) {
 	require.Contains(t, tableNames, "t1")
 	require.Contains(t, tableNames, "t3")
 	require.NotContains(t, tableNames, "t2")
+}
+
+func TestTryUpdateResolvedTsRetryAfterDDLHandleFailure(t *testing.T) {
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	dir := t.TempDir()
+	pstorage := newPersistentStorageForTest(dir, nil)
+	defer func() {
+		err := pstorage.close()
+		require.NoError(t, err)
+	}()
+	pstorage.encryptionManager = &flakyEncryptionManagerForTest{failTimes: 1}
+
+	store := &keyspaceSchemaStore{
+		pdClock:       mockPDClock,
+		unsortedCache: newDDLCache(),
+		dataStorage:   pstorage,
+		notifyCh:      make(chan any, 1),
+	}
+	store.resolvedTs.Store(pstorage.gcTs)
+	store.pendingResolvedTs.Store(pstorage.gcTs)
+
+	createSchema := buildCreateSchemaJobForTest(100, "test", 1000)
+	createSchema.BinlogInfo.SchemaVersion = 1
+	createTable := buildCreateTableJobForTest(100, 200, "t1", 1010)
+	createTable.BinlogInfo.SchemaVersion = 2
+
+	store.writeDDLEvent(DDLJobWithCommitTs{
+		Job:      createSchema,
+		CommitTs: 1000,
+	})
+	store.writeDDLEvent(DDLJobWithCommitTs{
+		Job:      createTable,
+		CommitTs: 1010,
+	})
+	store.advancePendingResolvedTs(1010)
+
+	// First attempt fails when writing create schema; dedup watermarks should not advance.
+	store.tryUpdateResolvedTs()
+	require.Equal(t, int64(0), store.schemaVersion)
+	require.Equal(t, uint64(0), store.finishedDDLTs)
+	require.Equal(t, uint64(0), store.resolvedTs.Load())
+
+	// Second attempt retries failed DDLs and succeeds.
+	store.tryUpdateResolvedTs()
+	require.Equal(t, int64(2), store.schemaVersion)
+	require.Equal(t, uint64(1010), store.finishedDDLTs)
+	require.Equal(t, uint64(1010), store.resolvedTs.Load())
+
+	tables, err := pstorage.getAllPhysicalTables(1010, nil)
+	require.NoError(t, err)
+	require.Len(t, tables, 1)
+	require.Equal(t, "t1", tables[0].SchemaTableName.TableName)
+}
+
+func TestGetAllPhysicalTablesDecryptsEncryptedDDLEvents(t *testing.T) {
+	dir := t.TempDir()
+	pstorage := newPersistentStorageForTest(dir, nil)
+	defer func() {
+		err := pstorage.close()
+		require.NoError(t, err)
+	}()
+	pstorage.encryptionManager = &prefixEncryptionManagerForTest{}
+
+	createSchema := buildCreateSchemaJobForTest(100, "test", 1000)
+	createSchema.BinlogInfo.SchemaVersion = 1
+	createTable := buildCreateTableJobForTest(100, 200, "t1", 1010)
+	createTable.BinlogInfo.SchemaVersion = 2
+
+	err := pstorage.handleDDLJob(createSchema)
+	require.NoError(t, err)
+	err = pstorage.handleDDLJob(createTable)
+	require.NoError(t, err)
+
+	tables, err := pstorage.getAllPhysicalTables(1010, nil)
+	require.NoError(t, err)
+	require.Len(t, tables, 1)
+	require.Equal(t, int64(200), tables[0].TableID)
+	require.Equal(t, int64(100), tables[0].SchemaID)
+	require.Equal(t, "t1", tables[0].SchemaTableName.TableName)
+}
+
+func TestRegisterTableDecryptsEncryptedDDLEvents(t *testing.T) {
+	dir := t.TempDir()
+	pstorage := newPersistentStorageForTest(dir, nil)
+	defer func() {
+		err := pstorage.close()
+		require.NoError(t, err)
+	}()
+	pstorage.encryptionManager = &prefixEncryptionManagerForTest{}
+
+	createSchema := buildCreateSchemaJobForTest(100, "test", 1000)
+	createSchema.BinlogInfo.SchemaVersion = 1
+	createTable := buildCreateTableJobForTest(100, 200, "t1", 1010)
+	createTable.BinlogInfo.SchemaVersion = 2
+
+	err := pstorage.handleDDLJob(createSchema)
+	require.NoError(t, err)
+	err = pstorage.handleDDLJob(createTable)
+	require.NoError(t, err)
+
+	err = pstorage.registerTable(200, 1010)
+	require.NoError(t, err)
+
+	tableInfo, err := pstorage.getTableInfo(200, 1010)
+	require.NoError(t, err)
+	require.NotNil(t, tableInfo)
 }
