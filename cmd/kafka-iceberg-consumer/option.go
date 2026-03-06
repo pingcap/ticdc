@@ -64,11 +64,11 @@ func newOption() *option {
 func (o *option) Adjust(upstreamURIStr string, configFile string) {
 	upstreamURI, err := url.Parse(upstreamURIStr)
 	if err != nil {
-		log.Panic("invalid upstream-uri", zap.Error(err))
+		panicWithLog("invalid upstream-uri", zap.Error(err))
 	}
 	scheme := strings.ToLower(upstreamURI.Scheme)
 	if scheme != "kafka" {
-		log.Panic("invalid upstream-uri scheme, the scheme of upstream-uri must be `kafka`",
+		panicWithLog("invalid upstream-uri scheme, the scheme of upstream-uri must be `kafka`",
 			zap.String("upstreamURI", upstreamURIStr))
 	}
 
@@ -76,7 +76,7 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) {
 		return r == '/'
 	})
 	if len(o.topic) == 0 {
-		log.Panic("no topic provided for the consumer")
+		panicWithLog("no topic provided for the consumer")
 	}
 
 	o.address = strings.Split(upstreamURI.Host, ",")
@@ -85,7 +85,7 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) {
 	if s != "" {
 		c, err := strconv.Atoi(s)
 		if err != nil {
-			log.Panic("invalid max-message-bytes of upstream-uri")
+			panicWithLog("invalid max-message-bytes of upstream-uri")
 		}
 		o.maxMessageBytes = c
 	}
@@ -94,7 +94,7 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) {
 	if s != "" {
 		c, err := strconv.Atoi(s)
 		if err != nil {
-			log.Panic("invalid max-batch-size of upstream-uri")
+			panicWithLog("invalid max-batch-size of upstream-uri")
 		}
 		o.maxBatchSize = c
 	}
@@ -105,7 +105,7 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) {
 	}
 	protocol, err := config.ParseSinkProtocolFromString(s)
 	if err != nil {
-		log.Panic("invalid protocol", zap.String("protocol", s), zap.Error(err))
+		panicWithLog("invalid protocol", zap.String("protocol", s), zap.Error(err))
 	}
 	o.protocol = protocol
 
@@ -113,7 +113,7 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) {
 	if s != "" {
 		c, err := strconv.ParseInt(s, 10, 32)
 		if err != nil {
-			log.Panic("invalid partition-num of upstream-uri")
+			panicWithLog("invalid partition-num of upstream-uri")
 		}
 		o.partitionNum = int32(c)
 	}
@@ -122,10 +122,10 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) {
 	if configFile != "" {
 		err = util.StrictDecodeFile(configFile, "kafka iceberg consumer", replicaConfig)
 		if err != nil {
-			log.Panic("decode config file failed", zap.String("configFile", configFile), zap.Error(err))
+			panicWithLog("decode config file failed", zap.String("configFile", configFile), zap.Error(err))
 		}
 		if _, err = filter.VerifyTableRules(replicaConfig.Filter); err != nil {
-			log.Panic("verify table rules failed", zap.Error(err))
+			panicWithLog("verify table rules failed", zap.Error(err))
 		}
 	}
 
@@ -143,12 +143,12 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) {
 
 	o.codecConfig = common.NewConfig(protocol)
 	if err = o.codecConfig.Apply(upstreamURI, replicaConfig.Sink); err != nil {
-		log.Panic("codec config apply failed", zap.Error(err))
+		panicWithLog("codec config apply failed", zap.Error(err))
 	}
 
 	tz, err := putil.GetTimezone(o.timezone)
 	if err != nil {
-		log.Panic("parse timezone failed", zap.Error(err))
+		panicWithLog("parse timezone failed", zap.Error(err))
 	}
 	o.codecConfig.TimeZone = tz
 

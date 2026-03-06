@@ -45,13 +45,13 @@ func newConsumer(ctx context.Context, o *option) *consumer {
 	}
 	client, err := kafka.NewConsumer(configMap)
 	if err != nil {
-		log.Panic("create kafka consumer failed", zap.Error(err))
+		panicWithLog("create kafka consumer failed", zap.Error(err))
 	}
 
 	topics := strings.Split(o.topic, ",")
 	err = client.SubscribeTopics(topics, nil)
 	if err != nil {
-		log.Panic("subscribe topics failed", zap.Strings("topics", topics), zap.Error(err))
+		panicWithLog("subscribe topics failed", zap.Strings("topics", topics), zap.Error(err))
 	}
 	return &consumer{
 		writer: newWriter(ctx, o),
@@ -77,7 +77,7 @@ func (c *consumer) readMessage(ctx context.Context) error {
 			if kafkaErr, ok := err.(kafka.Error); ok && kafkaErr.Code() == kafka.ErrTimedOut {
 				continue
 			}
-			log.Error("read message failed, just continue to retry", zap.Error(err))
+			log.Warn("read message failed, just continue to retry", zap.Error(err))
 			continue
 		}
 		needCommit := c.writer.WriteMessage(ctx, msg)
@@ -86,7 +86,7 @@ func (c *consumer) readMessage(ctx context.Context) error {
 		}
 		topicPartition, err := c.client.CommitMessage(msg)
 		if err != nil {
-			log.Error("commit message failed, just continue",
+			log.Warn("commit message failed, just continue",
 				zap.String("topic", *msg.TopicPartition.Topic), zap.Int32("partition", msg.TopicPartition.Partition),
 				zap.Any("offset", msg.TopicPartition.Offset), zap.Error(err))
 			continue

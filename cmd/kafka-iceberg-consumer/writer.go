@@ -49,7 +49,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 		decoders:    make(map[int32]codecCommon.Decoder),
 	}
 	if w.codecConfig == nil {
-		log.Panic("codec config is not initialized")
+		panicWithLog("codec config is not initialized")
 	}
 
 	icebergSinkURI := fmt.Sprintf("iceberg://?warehouse=%s", neturl.QueryEscape(o.icebergWarehouse))
@@ -65,12 +65,12 @@ func newWriter(ctx context.Context, o *option) *writer {
 	}
 
 	if err := sink.Verify(ctx, cfg, changefeedID); err != nil {
-		log.Panic("iceberg sink config is invalid", zap.Error(err))
+		panicWithLog("iceberg sink config is invalid", zap.Error(err))
 	}
 
 	icebergSink, err := sink.New(ctx, cfg, changefeedID)
 	if err != nil {
-		log.Panic("cannot create the iceberg sink", zap.Error(err))
+		panicWithLog("cannot create the iceberg sink", zap.Error(err))
 	}
 	w.icebergSink = icebergSink
 	log.Info("iceberg sink created", zap.String("sinkURI", icebergSinkURI))
@@ -91,7 +91,7 @@ func (w *writer) getDecoder(ctx context.Context, partition int32) codecCommon.De
 
 	dec, err := codec.NewEventDecoder(ctx, int(partition), w.codecConfig, w.topic, nil)
 	if err != nil {
-		log.Panic("create decoder failed",
+		panicWithLog("create decoder failed",
 			zap.Int32("partition", partition),
 			zap.String("topic", w.topic),
 			zap.Error(err))
@@ -149,7 +149,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 	decoder.AddKeyValue(message.Key, message.Value)
 	messageType, hasNext := decoder.HasNext()
 	if !hasNext {
-		log.Panic("next event is missing",
+		panicWithLog("next event is missing",
 			zap.String("topic", topic),
 			zap.Int32("partition", partition),
 			zap.Any("offset", offset))
@@ -172,7 +172,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 			return true
 		}
 		if err := w.icebergSink.WriteBlockEvent(ddl); err != nil {
-			log.Error("write block event failed",
+			log.Warn("write block event failed",
 				zap.String("topic", topic),
 				zap.Int32("partition", partition),
 				zap.Any("offset", offset),
@@ -201,7 +201,7 @@ func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool 
 		}
 		return w.flushDMLEvents(ctx, topic, partition, offset, rows)
 	default:
-		log.Panic("unknown message type",
+		panicWithLog("unknown message type",
 			zap.String("topic", topic),
 			zap.Int32("partition", partition),
 			zap.Any("offset", offset),

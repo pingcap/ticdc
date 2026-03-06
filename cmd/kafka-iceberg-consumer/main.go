@@ -72,7 +72,7 @@ func main() {
 		File:  logPath,
 	})
 	if err != nil {
-		log.Panic("init logger failed", zap.Error(err))
+		panicWithLog("init logger failed", zap.Error(err))
 	}
 	version.LogVersionInfo("kafka iceberg consumer")
 
@@ -121,7 +121,7 @@ func main() {
 	})
 	err = g.Wait()
 	if err != nil {
-		log.Error("kafka iceberg consumer exited with error", zap.Error(err))
+		log.Warn("kafka iceberg consumer exited with error", zap.Error(err))
 	} else {
 		log.Info("kafka iceberg consumer exited")
 	}
