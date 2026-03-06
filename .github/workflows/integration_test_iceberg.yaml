@@ -13,6 +13,7 @@ on:
       - cmd/iceberg-maintenance/**
       - tests/integration_tests/iceberg_*/**
       - tests/integration_tests/_utils/iceberg_spark_sql_scalar
+      - tests/integration_tests/_utils/test_prepare
       - tests/integration_tests/_utils/start_tidb_cluster_impl
       - tests/integration_tests/run_light_it_in_ci.sh
       - Makefile
@@ -31,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       kafka:
-        image: bitnami/kafka:3.7
+        image: bitnami/kafka:3.7.1-debian-12-r4
         ports:
           - 9092:9092
         env:
@@ -110,7 +111,8 @@ jobs:
         run: |
           set -euo pipefail
           script="${RUNNER_TEMP}/download_pingcap_oci_artifact.sh"
-          curl -fsSL "https://raw.githubusercontent.com/PingCAP-QE/ci/main/scripts/artifacts/download_pingcap_oci_artifact.sh" -o "$script"
+          OCI_SCRIPT_REF="c85044af9cd9338a471fc5ebcb19b5a72a83caee"
+          curl -fsSL "https://raw.githubusercontent.com/PingCAP-QE/ci/${OCI_SCRIPT_REF}/scripts/artifacts/download_pingcap_oci_artifact.sh" -o "$script"
           chmod +x "$script"
           python - "$script" <<'PY'
           import pathlib

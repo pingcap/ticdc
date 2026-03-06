@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -eu
+set -euo pipefail
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$CUR/../_utils/test_prepare"
@@ -34,7 +34,7 @@ function wait_kafka_ready() {
 		if (echo >"/dev/tcp/$BROKER_HOST/$BROKER_PORT") >/dev/null 2>&1; then
 			return 0
 		fi
-		((i++))
+		i=$((i + 1))
 		sleep 1
 	done
 	echo "Kafka broker $BROKER_ADDR is not ready after ${check_time}s"
@@ -50,7 +50,7 @@ function wait_log_contains() {
 		if [ -f "$log_file" ] && grep -q "$pattern" "$log_file"; then
 			return 0
 		fi
-		((i++))
+		i=$((i + 1))
 		sleep 1
 	done
 	echo "pattern not found after ${check_time}s: ${pattern}"
@@ -108,7 +108,7 @@ function wait_file_exists() {
 		if ls $file_pattern >/dev/null 2>&1; then
 			return 0
 		fi
-		((i++))
+		i=$((i + 1))
 		sleep 1
 	done
 	echo "file not found after ${check_time}s: ${file_pattern}"
@@ -123,7 +123,14 @@ function iceberg_check_dual_write() {
 
 	SINK_URI="iceberg://?warehouse=file://$WAREHOUSE_DIR&catalog=hadoop&namespace=ns&mode=append&commit-interval=1s&enable-checkpoint-table=true&enable-global-checkpoint-table=true&partitioning=days(_tidb_commit_time)&broker=$BROKER_ADDR"
 
-	changefeed_id=$(cdc_cli_changefeed create --start-ts="$start_ts" --sink-uri="$SINK_URI" | grep '^ID:' | head -n1 | awk '{print $2}')
+	changefeed_id=$(
+		cdc_cli_changefeed create --start-ts="$start_ts" --sink-uri="$SINK_URI" |
+			awk '/^ID:/ { print $2; exit }'
+	)
+	if [ -z "$changefeed_id" ]; then
+		echo "failed to create changefeed for dual-write case"
+		exit 1
+	fi
 	wait_changefeed_table_assigned "$changefeed_id" "test" "dual_write_test"
 
 	echo "Inserting test data..."
@@ -165,7 +172,7 @@ function iceberg_check_dual_write() {
 		if [ -n "$kafka_messages" ]; then
 			break
 		fi
-		((i++))
+		i=$((i + 1))
 		sleep 2
 	done
 	if [ -z "$kafka_messages" ]; then
@@ -239,14 +246,14 @@ function wait_changefeed_table_assigned() {
 		if [ "$code" != "200" ]; then
 			echo "wait table ${db_name}.${table_name}: http $code response: $body"
 			sleep 2
-			((i++))
+			i=$((i + 1))
 			continue
 		fi
 
 		if ! echo "$body" | jq -e . >/dev/null 2>&1; then
 			echo "wait table ${db_name}.${table_name}: invalid json response: $body"
 			sleep 2
-			((i++))
+			i=$((i + 1))
 			continue
 		fi
 
@@ -262,7 +269,7 @@ function wait_changefeed_table_assigned() {
 		fi
 
 		sleep 2
-		((i++))
+		i=$((i + 1))
 	done
 
 	echo "table ${db_name}.${table_name} not assigned to changefeed ${changefeed_id} after $((i * 2))s (last_http=${last_code})"

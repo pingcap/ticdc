@@ -298,6 +298,10 @@ func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.dmlCh.Push(event)
 }
 
+func (s *sink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
+	return nil
+}
+
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	switch e := event.(type) {
 	case *commonEvent.DDLEvent:
