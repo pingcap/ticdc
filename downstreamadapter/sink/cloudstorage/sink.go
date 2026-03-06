@@ -38,11 +38,9 @@ import (
 )
 
 // It will send the events to cloud storage systems.
-// Messages are encoded in the specific protocol and then sent to the defragmenter.
-// The data flow is as follows: **data** -> encodingWorkers -> defragmenter -> dmlWorkers -> external storage
-// The defragmenter will defragment the out-of-order encoded messages and sends encoded
-// messages to individual dmlWorkers.
-// The dmlWorkers will write the encoded messages to external storage in parallel between different tables.
+// Messages are encoded in the specific protocol and routed by dispatcher to shard pipelines.
+// The data flow is as follows: **data** -> encoding pipeline -> dispatcher routers -> writer shards -> external storage.
+// The writer shards write encoded messages to external storage in parallel between different tables.
 type sink struct {
 	changefeedID common.ChangeFeedID
 	cfg          *cloudstorage.Config
@@ -120,13 +118,14 @@ func New(
 		return nil, err
 	}
 	statistics := metrics.NewStatistics(changefeedID, "cloudstorage")
+	dmlWriters := newDMLWriters(changefeedID, storage, cfg, encoderConfig, ext, statistics)
 	return &sink{
 		changefeedID:             changefeedID,
 		sinkURI:                  sinkURI,
 		cfg:                      cfg,
 		cleanupJobs:              cleanupJobs,
 		storage:                  storage,
-		dmlWriters:               newDMLWriters(ctx, changefeedID, storage, cfg, encoderConfig, ext, statistics),
+		dmlWriters:               dmlWriters,
 		checkpointChan:           make(chan uint64, 16),
 		lastSendCheckpointTsTime: time.Now(),
 		outputRawChangeEvent:     sinkConfig.CloudStorageConfig.GetOutputRawChangeEvent(),
@@ -145,7 +144,7 @@ func (s *sink) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
-		return s.dmlWriters.Run(ctx)
+		return s.dmlWriters.run(ctx)
 	})
 
 	g.Go(func() error {
@@ -167,11 +166,14 @@ func (s *sink) IsNormal() bool {
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	s.dmlWriters.AddDMLEvent(event)
+	s.dmlWriters.addDMLEvent(event)
 }
 
 func (s *sink) FlushDMLBeforeBlock(event commonEvent.BlockEvent) error {
-	return s.dmlWriters.FlushDMLBeforeBlock(event)
+	if event == nil {
+		return nil
+	}
+	return s.dmlWriters.flushDMLBeforeBlock(event)
 }
 
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
@@ -219,16 +221,6 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 			}
 		}
 	}
-
-	log.Info("storage sink executed ddl event",
-		zap.String("keyspace", s.changefeedID.Keyspace()),
-		zap.String("changefeed", s.changefeedID.ID().String()),
-		zap.String("schema", event.SchemaName),
-		zap.String("table", event.TableName),
-		zap.String("dispatcher", event.GetDispatcherID().String()),
-		zap.String("query", event.Query),
-		zap.Uint64("finishedTs", event.FinishedTs),
-		zap.Stringer("ddlType", event.GetDDLType()))
 	return nil
 }
 
@@ -299,7 +291,7 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 		start := time.Now()
 		message, err := json.Marshal(map[string]uint64{"checkpoint-ts": checkpoint})
 		if err != nil {
-			log.Panic("cloud storage marshal checkpoint failed, this should never happen",
+			log.Panic("cloud storage sink marshal checkpoint failed, this should never happen",
 				zap.String("keyspace", s.changefeedID.Keyspace()),
 				zap.String("changefeed", s.changefeedID.Name()),
 				zap.Uint64("checkpoint", checkpoint),
@@ -308,7 +300,7 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 		}
 		err = s.storage.WriteFile(ctx, "metadata", message)
 		if err != nil {
-			log.Error("cloud storage write file failed",
+			log.Error("cloud storage sink write file failed",
 				zap.String("keyspace", s.changefeedID.Keyspace()),
 				zap.String("changefeed", s.changefeedID.Name()),
 				zap.Duration("duration", time.Since(start)),

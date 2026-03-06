@@ -15,9 +15,9 @@ package cloudstorage
 
 import (
 	"context"
+	"sync"
 	"time"
 
-	"github.com/pingcap/log"
 	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -27,35 +27,32 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tidb/br/pkg/storage"
-	"go.uber.org/atomic"
-	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
 
-// dmlWriters denotes a worker responsible for writing messages to cloud storage.
+// dmlWriters coordinates encoding and output shard writers.
 type dmlWriters struct {
-	ctx          context.Context
 	changefeedID commonType.ChangeFeedID
 	statistics   *metrics.Statistics
 
-	// msgCh is a channel to hold eventFragment.
-	// The caller of WriteEvents will write eventFragment to msgCh and
-	// the encodingWorkers will read eventFragment from msgCh to encode events.
-	msgCh       *chann.UnlimitedChannel[eventFragment, any]
-	encodeGroup *encodingGroup
+	// msgCh is a channel to hold task.
+	// The caller of WriteEvents will write tasks to msgCh and
+	// encoding pipelines will read tasks from msgCh to encode events.
+	msgCh *chann.UnlimitedChannel[*task, any]
 
-	// defragmenter is used to defragment the out-of-order encoded messages and
-	// sends encoded messages to individual dmlWorkers.
-	defragmenter *defragmenter
+	encodeGroup *encoderGroup
 
 	writers []*writer
 
-	// last sequence number
-	lastSeqNum atomic.Uint64
+	runCtxMu sync.RWMutex
+	runCtx   context.Context
 }
 
+const (
+	defaultEncodingConcurrency = 8
+)
+
 func newDMLWriters(
-	ctx context.Context,
 	changefeedID commonType.ChangeFeedID,
 	storage storage.ExternalStorage,
 	config *cloudstorage.Config,
@@ -63,58 +60,106 @@ func newDMLWriters(
 	extension string,
 	statistics *metrics.Statistics,
 ) *dmlWriters {
-	messageCh := chann.NewUnlimitedChannelDefault[eventFragment]()
-	encodedOutCh := make(chan eventFragment, defaultChannelSize)
-	encoderGroup := newEncodingGroup(changefeedID, encoderConfig, defaultEncodingConcurrency, messageCh, encodedOutCh)
+	messageCh := chann.NewUnlimitedChannelDefault[*task]()
+	encoderGroup := newEncoderGroup(
+		encoderConfig,
+		defaultEncodingConcurrency,
+		config.WorkerCount,
+	)
 
 	writers := make([]*writer, config.WorkerCount)
-	writerInputChs := make([]*chann.DrainableChann[eventFragment], config.WorkerCount)
 	for i := 0; i < config.WorkerCount; i++ {
-		inputCh := chann.NewAutoDrainChann[eventFragment]()
-		writerInputChs[i] = inputCh
-		writers[i] = newWriter(i, changefeedID, storage, config, extension, inputCh, statistics)
+		writers[i] = newWriter(i, changefeedID, storage, config, extension, statistics)
 	}
 
 	return &dmlWriters{
-		ctx:          ctx,
 		changefeedID: changefeedID,
 		statistics:   statistics,
 		msgCh:        messageCh,
-
 		encodeGroup:  encoderGroup,
-		defragmenter: newDefragmenter(changefeedID, encodedOutCh, writerInputChs),
 		writers:      writers,
 	}
 }
 
-func (d *dmlWriters) Run(ctx context.Context) error {
+func (d *dmlWriters) run(ctx context.Context) error {
+	d.setRunCtx(ctx)
+	defer d.setRunCtx(nil)
+
+	runDone := make(chan struct{})
+	defer close(runDone)
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			d.msgCh.Close()
+		case <-runDone:
+		}
+	}()
+
 	eg, ctx := errgroup.WithContext(ctx)
 
 	eg.Go(func() error {
-		<-ctx.Done()
-		d.msgCh.Close()
-		return nil
+		defer d.encodeGroup.closeInput()
+		return d.submitTaskToEncoder(ctx)
 	})
 
 	eg.Go(func() error {
-		return d.encodeGroup.Run(ctx)
+		return d.encodeGroup.run(ctx)
 	})
 
-	eg.Go(func() error {
-		return d.defragmenter.Run(ctx)
-	})
+	// One dispatcher goroutine per output shard.
+	// Invariant: each output shard has a single consumer to keep shard ordering.
+	for i := range d.writers {
+		index := i
+		eg.Go(func() error {
+			return d.dispatchTaskToWriter(ctx, index)
+		})
+	}
 
 	for i := range d.writers {
 		writer := d.writers[i]
 		eg.Go(func() error {
-			return writer.Run(ctx)
+			return writer.run(ctx)
 		})
 	}
 	return eg.Wait()
 }
 
-func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
-	tbl := cloudstorage.VersionedTableName{
+func (d *dmlWriters) setRunCtx(ctx context.Context) {
+	d.runCtxMu.Lock()
+	defer d.runCtxMu.Unlock()
+	d.runCtx = ctx
+}
+
+func (d *dmlWriters) getRunCtx() context.Context {
+	d.runCtxMu.RLock()
+	defer d.runCtxMu.RUnlock()
+	return d.runCtx
+}
+
+func (d *dmlWriters) submitTaskToEncoder(ctx context.Context) error {
+	for {
+		taskValue, ok := d.msgCh.Get()
+		if !ok {
+			return nil
+		}
+		if err := d.encodeGroup.add(ctx, taskValue); err != nil {
+			return err
+		}
+	}
+}
+
+func (d *dmlWriters) dispatchTaskToWriter(ctx context.Context, outputIndex int) error {
+	writerShard := d.writers[outputIndex]
+	defer writerShard.closeInput()
+
+	return d.encodeGroup.consumeOutputShard(ctx, outputIndex, func(taskValue *task) error {
+		return writerShard.enqueueTask(ctx, taskValue)
+	})
+}
+
+func (d *dmlWriters) addDMLEvent(event *commonEvent.DMLEvent) {
+	table := cloudstorage.VersionedTableName{
 		TableNameWithPhysicTableID: commonType.TableName{
 			Schema:      event.TableInfo.GetSchemaName(),
 			Table:       event.TableInfo.GetTableName(),
@@ -124,79 +169,38 @@ func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
 		TableInfoVersion: event.TableInfoVersion,
 		DispatcherID:     event.GetDispatcherID(),
 	}
-	seq := d.lastSeqNum.Inc()
-	log.Info("storage sink add dml event",
-		zap.String("keyspace", d.changefeedID.Keyspace()),
-		zap.String("changefeed", d.changefeedID.ID().String()),
-		zap.String("schema", tbl.TableNameWithPhysicTableID.Schema),
-		zap.String("table", tbl.TableNameWithPhysicTableID.Table),
-		zap.Int64("tableID", tbl.TableNameWithPhysicTableID.TableID),
-		zap.Uint64("tableVersion", tbl.TableInfoVersion),
-		zap.String("dispatcher", event.GetDispatcherID().String()),
-		zap.Uint64("commitTs", event.CommitTs),
-		zap.Uint64("seq", seq))
-	// emit a TxnCallbackableEvent encoupled with a sequence number starting from one.
-	d.msgCh.Push(newEventFragment(seq, tbl, event.GetDispatcherID(), event))
+
+	_ = d.statistics.RecordBatchExecution(func() (int, int64, error) {
+		d.msgCh.Push(newDMLTask(table, event))
+		return int(event.Len()), event.GetSize(), nil
+	})
 }
 
-func (d *dmlWriters) FlushDMLBeforeBlock(event commonEvent.BlockEvent) error {
+func (d *dmlWriters) flushDMLBeforeBlock(event commonEvent.BlockEvent) error {
 	if event == nil {
 		return nil
 	}
 
-	log.Info("storage sink flush dml before block event",
-		zap.String("keyspace", d.changefeedID.Keyspace()),
-		zap.String("changefeed", d.changefeedID.ID().String()),
-		zap.String("dispatcher", event.GetDispatcherID().String()),
-		zap.Uint64("commitTs", event.GetCommitTs()))
-
 	start := time.Now()
-	defer func() {
-		sinkmetrics.CloudStorageDDLDrainDurationHistogram.
-			WithLabelValues(d.changefeedID.Keyspace(), d.changefeedID.ID().String()).
-			Observe(time.Since(start).Seconds())
-	}()
+	defer sinkmetrics.CloudStorageDDLDrainDurationHistogram.WithLabelValues(
+		d.changefeedID.Keyspace(),
+		d.changefeedID.ID().String(),
+	).Observe(time.Since(start).Seconds())
 
-	doneCh := make(chan error, 1)
-	seq := d.lastSeqNum.Inc()
-	log.Info("storage sink start drain before block event",
-		zap.String("keyspace", d.changefeedID.Keyspace()),
-		zap.String("changefeed", d.changefeedID.ID().String()),
-		zap.String("dispatcher", event.GetDispatcherID().String()),
-		zap.Uint64("commitTs", event.GetCommitTs()),
-		zap.Uint64("seq", seq))
-	// Drain marker shares the same global sequence as DML fragments.
-	// Defragmenter and writer will place it after all prior fragments, so once
-	// doneCh returns, previous DML of this dispatcher are already enqueued/drained.
-	d.msgCh.Push(newDrainEventFragment(seq, event.GetDispatcherID(), event.GetCommitTs(), doneCh))
-
-	select {
-	case err := <-doneCh:
-		if err != nil {
-			log.Warn("storage sink drain before block event failed",
-				zap.String("keyspace", d.changefeedID.Keyspace()),
-				zap.String("changefeed", d.changefeedID.ID().String()),
-				zap.String("dispatcher", event.GetDispatcherID().String()),
-				zap.Uint64("commitTs", event.GetCommitTs()),
-				zap.Duration("duration", time.Since(start)),
-				zap.Error(err))
-			return err
-		}
-		log.Info("storage sink drain before block event finished",
-			zap.String("keyspace", d.changefeedID.Keyspace()),
-			zap.String("changefeed", d.changefeedID.ID().String()),
-			zap.String("dispatcher", event.GetDispatcherID().String()),
-			zap.Uint64("commitTs", event.GetCommitTs()),
-			zap.Duration("duration", time.Since(start)))
-		return nil
-	case <-d.ctx.Done():
-		return errors.Trace(d.ctx.Err())
+	// Invariant for DDL ordering:
+	// marker follows the same dispatcher route and is acked only after prior tasks
+	// in that route are fully drained by writer.
+	runCtx := d.getRunCtx()
+	if runCtx == nil {
+		return errors.New("cloud storage dml writers is not running")
 	}
+	drainTask := newDrainTask(event.GetDispatcherID(), event.GetCommitTs())
+	d.msgCh.Push(drainTask)
+	return drainTask.wait(runCtx)
 }
 
 func (d *dmlWriters) close() {
 	d.msgCh.Close()
-	d.encodeGroup.close()
 	for _, w := range d.writers {
 		w.close()
 	}

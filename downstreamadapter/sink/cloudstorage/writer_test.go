@@ -33,7 +33,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/ticdc/utils/chann"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -55,14 +54,14 @@ func testWriter(ctx context.Context, t *testing.T, dir string) *writer {
 	cfg.FileIndexWidth = 6
 	require.Nil(t, err)
 
-	changefeedID := commonType.NewChangefeedID4Test("test", "dml-worker-test")
-	statistics := metrics.NewStatistics(changefeedID, "dml-worker-test")
+	changefeedID := commonType.NewChangefeedID4Test("test", t.Name())
+	statistics := metrics.NewStatistics(changefeedID, t.Name())
 	pdlock := pdutil.NewMonotonicClock(pclock.New())
 	appcontext.SetService(appcontext.DefaultPDClock, pdlock)
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 	d := newWriter(1, changefeedID, storage,
-		cfg, ".json", chann.NewAutoDrainChann[eventFragment](), statistics)
+		cfg, ".json", statistics)
 	return d
 }
 
@@ -72,7 +71,6 @@ func TestWriterRun(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	parentDir := t.TempDir()
 	d := testWriter(ctx, t, parentDir)
-	fragCh := d.inputCh
 	table1Dir := path.Join(parentDir, "test/table1/99")
 
 	tidbTableInfo := &timodel.TableInfo{
@@ -87,38 +85,36 @@ func TestWriterRun(t *testing.T) {
 
 	dispatcherID := commonType.NewDispatcherID()
 	for i := 0; i < 5; i++ {
-		frag := eventFragment{
-			seqNumber: uint64(i),
-			versionedTable: cloudstorage.VersionedTableName{
-				TableNameWithPhysicTableID: commonType.TableName{
-					Schema:  "test",
-					Table:   "table1",
-					TableID: 100,
-				},
-				TableInfoVersion: 99,
-				DispatcherID:     dispatcherID,
+		tableName := cloudstorage.VersionedTableName{
+			TableNameWithPhysicTableID: commonType.TableName{
+				Schema:  "test",
+				Table:   "table1",
+				TableID: 100,
 			},
-			event: &commonEvent.DMLEvent{
-				PhysicalTableID: 100,
-				TableInfo:       tableInfo,
-				Rows:            chunk.MutRowFromValues(100, "hello world").ToRow().Chunk(),
-			},
-			encodedMsgs: []*common.Message{
-				{
-					Value: []byte(fmt.Sprintf(`{"id":%d,"database":"test","table":"table1","pkNames":[],"isDdl":false,`+
-						`"type":"INSERT","es":0,"ts":1663572946034,"sql":"","sqlType":{"c1":12,"c2":12},`+
-						`"data":[{"c1":"100","c2":"hello world"}],"old":null}`, i)),
-				},
+			TableInfoVersion: 99,
+			DispatcherID:     dispatcherID,
+		}
+		dmlEvent := &commonEvent.DMLEvent{
+			PhysicalTableID: 100,
+			TableInfo:       tableInfo,
+			Rows:            chunk.MutRowFromValues(100, "hello world").ToRow().Chunk(),
+		}
+		tableTask := newDMLTask(tableName, dmlEvent)
+		tableTask.encodedMsgs = []*common.Message{
+			{
+				Value: []byte(fmt.Sprintf(`{"id":%d,"database":"test","table":"table1","pkNames":[],"isDdl":false,`+
+					`"type":"INSERT","es":0,"ts":1663572946034,"sql":"","sqlType":{"c1":12,"c2":12},`+
+					`"data":[{"c1":"100","c2":"hello world"}],"old":null}`, i)),
 			},
 		}
-		fragCh.In() <- frag
+		require.NoError(t, d.enqueueTask(ctx, tableTask))
 	}
 
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		_ = d.Run(ctx)
+		_ = d.run(ctx)
 	}()
 
 	time.Sleep(4 * time.Second)
@@ -126,14 +122,15 @@ func TestWriterRun(t *testing.T) {
 	fileNames := getTableFiles(t, table1Dir)
 	require.Len(t, fileNames, 2)
 	require.ElementsMatch(t, []string{fmt.Sprintf("CDC_%s_000001.json", dispatcherID.String()), fmt.Sprintf("CDC_%s.index", dispatcherID.String())}, fileNames)
-	fragCh.CloseAndDrain()
+	d.closeInput()
 	cancel()
 	d.close()
 	wg.Wait()
-	t.Run("drain marker", verifyWriterDrainMarker)
 }
 
-func verifyWriterDrainMarker(t *testing.T) {
+func TestWriterDrainMarker(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	parentDir := t.TempDir()
@@ -149,18 +146,15 @@ func verifyWriterDrainMarker(t *testing.T) {
 	tableInfo := commonType.WrapTableInfo("test", tidbTableInfo)
 	dispatcherID := commonType.NewDispatcherID()
 
-	var callbackCnt int64
+	var callbackCnt atomic.Int64
 	msg := common.NewMsg(nil, []byte(`{"id":1}`))
 	msg.SetRowsCount(1)
 	msg.Callback = func() {
-		atomic.AddInt64(&callbackCnt, 1)
+		callbackCnt.Add(1)
 	}
 
-	d.inputCh.In() <- eventFragment{
-		kind:         eventFragmentKindDML,
-		seqNumber:    1,
-		dispatcherID: dispatcherID,
-		versionedTable: cloudstorage.VersionedTableName{
+	tableTask := newDMLTask(
+		cloudstorage.VersionedTableName{
 			TableNameWithPhysicTableID: commonType.TableName{
 				Schema:  "test",
 				Table:   "table1",
@@ -169,36 +163,57 @@ func verifyWriterDrainMarker(t *testing.T) {
 			TableInfoVersion: 99,
 			DispatcherID:     dispatcherID,
 		},
-		event: &commonEvent.DMLEvent{
+		&commonEvent.DMLEvent{
 			PhysicalTableID: 100,
 			TableInfo:       tableInfo,
 		},
-		encodedMsgs: []*common.Message{msg},
-	}
+	)
+	tableTask.encodedMsgs = []*common.Message{msg}
+	require.NoError(t, d.enqueueTask(ctx, tableTask))
 
-	doneCh := make(chan error, 1)
-	d.inputCh.In() <- newDrainEventFragment(2, dispatcherID, 100, doneCh)
+	drainTask := newDrainTask(dispatcherID, 100)
+	require.NoError(t, d.enqueueTask(ctx, drainTask))
 
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		_ = d.Run(ctx)
+		_ = d.run(ctx)
 	}()
 
-	select {
-	case err := <-doneCh:
-		require.NoError(t, err)
-	case <-time.After(10 * time.Second):
-		t.Fatal("wait drain marker timeout")
-	}
-
+	waitCtx, waitCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer waitCancel()
+	require.NoError(t, drainTask.wait(waitCtx))
 	require.Eventually(t, func() bool {
-		return atomic.LoadInt64(&callbackCnt) == 1
+		return callbackCnt.Load() == 1
 	}, 5*time.Second, 100*time.Millisecond)
 
-	d.inputCh.CloseAndDrain()
+	d.closeInput()
 	d.close()
 	cancel()
 	wg.Wait()
+}
+
+func TestWriterRunExitAfterCloseInput(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	parentDir := t.TempDir()
+	d := testWriter(ctx, t, parentDir)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- d.run(ctx)
+	}()
+
+	d.closeInput()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("writer.run did not exit after closeInput")
+	}
+
+	d.close()
 }

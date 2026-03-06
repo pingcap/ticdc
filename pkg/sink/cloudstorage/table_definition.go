@@ -191,6 +191,9 @@ type TableDefinition struct {
 	Table        string     `json:"Table"`
 	Schema       string     `json:"Schema"`
 	Version      uint64     `json:"Version"`
+	// TableVersion is the schema version encoded into schema file name:
+	// schema_{TableVersion}_{checksum}.json.
+	// It is passed from tableInfoVersion in path generation.
 	TableVersion uint64     `json:"TableVersion"`
 	Query        string     `json:"Query"`
 	Type         byte       `json:"Type"`
