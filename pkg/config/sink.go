@@ -995,7 +995,8 @@ func (s *SinkConfig) CheckCompatibilityWithSinkURI(
 	}
 
 	cfgParamsChanged := s.Protocol != oldSinkConfig.Protocol ||
-		s.TxnAtomicity != oldSinkConfig.TxnAtomicity
+		s.TxnAtomicity != oldSinkConfig.TxnAtomicity ||
+		s.UseTableIDAsPath != oldSinkConfig.UseTableIDAsPath
 
 	isURIParamsChanged := func(oldCfg SinkConfig) bool {
 		err := oldCfg.applyParameterBySinkURI(sinkURI)

@@ -171,7 +171,15 @@ func (d *writer) flushMessages(ctx context.Context) error {
 						zap.Error(err))
 					return errors.Trace(err)
 				}
-				indexFilePath := d.filePathGenerator.GenerateIndexFilePath(table, date)
+				indexFilePath, err := d.filePathGenerator.GenerateIndexFilePath(table, date)
+				if err != nil {
+					log.Error("failed to generate index file path",
+						zap.Int("workerID", d.id),
+						zap.String("keyspace", d.changeFeedID.Keyspace()),
+						zap.Stringer("changefeed", d.changeFeedID.ID()),
+						zap.Error(err))
+					return errors.Trace(err)
+				}
 
 				// first write the data file to external storage.
 				err = d.writeDataFile(ctx, dataFilePath, indexFilePath, task)
