@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -332,39 +333,36 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 	require.ErrorIs(b, eg.Wait(), context.Canceled)
 }
 
-type mockBatchWriter struct {
-	mu        sync.Mutex
-	batchLens []int
-}
-
-func (m *mockBatchWriter) WriteEvents(_ context.Context, events ...writer.RedoEvent) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.batchLens = append(m.batchLens, len(events))
-	for _, event := range events {
-		event.PostFlush()
-	}
-	return nil
-}
-
-func (m *mockBatchWriter) Run(ctx context.Context) error {
-	<-ctx.Done()
-	return ctx.Err()
-}
-
-func (m *mockBatchWriter) Close() error {
-	return nil
-}
-
-func (m *mockBatchWriter) SetTableSchemaStore(_ *commonEvent.TableSchemaStore) {}
-
 func TestRedoSinkSendMessagesInBatch(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mockWriter := &mockBatchWriter{}
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockWriter := writer.NewMockRedoLogWriter(ctrl)
+	expectWriteBatch := func(batchSize int) *gomock.Call {
+		args := make([]interface{}, 0, batchSize+1)
+		args = append(args, gomock.Any()) // context
+		for i := 0; i < batchSize; i++ {
+			args = append(args, gomock.Any())
+		}
+		return mockWriter.EXPECT().
+			WriteEvents(args[0], args[1:]...).
+			DoAndReturn(func(_ context.Context, events ...writer.RedoEvent) error {
+				require.Len(t, events, batchSize)
+				return nil
+			})
+	}
+
+	gomock.InOrder(
+		expectWriteBatch(redo.DefaultFlushBatchSize),
+		expectWriteBatch(redo.DefaultFlushBatchSize),
+		expectWriteBatch(17),
+	)
+
 	s := &Sink{
 		dmlWriter: mockWriter,
 		logBuffer: chann.NewUnlimitedChannelDefault[writer.RedoEvent](),
@@ -385,8 +383,4 @@ func TestRedoSinkSendMessagesInBatch(t *testing.T) {
 
 	err := <-doneCh
 	require.NoError(t, err)
-
-	mockWriter.mu.Lock()
-	defer mockWriter.mu.Unlock()
-	require.Equal(t, []int{redo.DefaultFlushBatchSize, redo.DefaultFlushBatchSize, 17}, mockWriter.batchLens)
 }
