@@ -23,6 +23,7 @@ import (
 	"os/signal"
 	"runtime/debug"
 	"syscall"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/pingcap/log"
@@ -81,8 +82,23 @@ func main() {
 	g, ctx := errgroup.WithContext(ctx)
 
 	if enableProfiling {
+		profilingServer := &http.Server{Addr: ":6060"}
 		g.Go(func() error {
-			return http.ListenAndServe(":6060", nil)
+			err := profilingServer.ListenAndServe()
+			if err != nil && err != http.ErrServerClosed {
+				return err
+			}
+			return nil
+		})
+		g.Go(func() error {
+			<-ctx.Done()
+			shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancelShutdown()
+			err := profilingServer.Shutdown(shutdownCtx)
+			if err != nil && err != http.ErrServerClosed {
+				return err
+			}
+			return nil
 		})
 	}
 

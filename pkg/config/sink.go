@@ -223,6 +223,9 @@ func (s *SinkConfig) MaskSensitiveData() {
 	if s.PulsarConfig != nil {
 		s.PulsarConfig.MaskSensitiveData()
 	}
+	if s.IcebergConfig != nil && s.IcebergConfig.KafkaConfig != nil {
+		s.IcebergConfig.KafkaConfig.MaskSensitiveData()
+	}
 }
 
 // ShouldSendBootstrapMsg returns whether the sink should send bootstrap message.

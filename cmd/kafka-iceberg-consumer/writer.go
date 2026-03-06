@@ -19,24 +19,37 @@ import (
 	neturl "net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/sink/codec"
+	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
 	"go.uber.org/zap"
 )
 
 type writer struct {
 	icebergSink sink.Sink
 	topic       string
-	warnStub    sync.Once
+	codecConfig *codecCommon.Config
+
+	decoderMu sync.Mutex
+	decoders  map[int32]codecCommon.Decoder
 }
 
 func newWriter(ctx context.Context, o *option) *writer {
 	w := &writer{
-		topic: o.topic,
+		topic:       o.topic,
+		codecConfig: o.codecConfig,
+		decoders:    make(map[int32]codecCommon.Decoder),
+	}
+	if w.codecConfig == nil {
+		log.Panic("codec config is not initialized")
 	}
 
 	icebergSinkURI := fmt.Sprintf("iceberg://?warehouse=%s", neturl.QueryEscape(o.icebergWarehouse))
@@ -68,17 +81,131 @@ func (w *writer) run(ctx context.Context) error {
 	return w.icebergSink.Run(ctx)
 }
 
-func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool {
-	log.Debug("received message from kafka",
-		zap.String("topic", *message.TopicPartition.Topic),
-		zap.Int32("partition", message.TopicPartition.Partition),
-		zap.Int64("offset", int64(message.TopicPartition.Offset)),
-		zap.ByteString("key", message.Key),
-		zap.ByteString("value", message.Value))
+func (w *writer) getDecoder(ctx context.Context, partition int32) codecCommon.Decoder {
+	w.decoderMu.Lock()
+	defer w.decoderMu.Unlock()
 
-	w.warnStub.Do(func() {
-		log.Warn("kafka iceberg consumer event conversion is not implemented yet; offset commit is disabled")
-	})
-	_ = ctx
+	if dec, ok := w.decoders[partition]; ok {
+		return dec
+	}
+
+	dec, err := codec.NewEventDecoder(ctx, int(partition), w.codecConfig, w.topic, nil)
+	if err != nil {
+		log.Panic("create decoder failed",
+			zap.Int32("partition", partition),
+			zap.String("topic", w.topic),
+			zap.Error(err))
+	}
+	w.decoders[partition] = dec
+	return dec
+}
+
+func (w *writer) flushDMLEvents(ctx context.Context, topic string, partition int32, offset kafka.Offset, rows []*commonEvent.DMLEvent) bool {
+	validRows := make([]*commonEvent.DMLEvent, 0, len(rows))
+	for _, row := range rows {
+		if row != nil {
+			validRows = append(validRows, row)
+		}
+	}
+	if len(validRows) == 0 {
+		return true
+	}
+
+	total := int64(len(validRows))
+	var flushed int64
+	done := make(chan struct{}, 1)
+	for _, row := range validRows {
+		row.AddPostFlushFunc(func() {
+			if atomic.AddInt64(&flushed, 1) == total {
+				close(done)
+			}
+		})
+		w.icebergSink.AddDMLEvent(row)
+	}
+
+	select {
+	case <-done:
+		return true
+	case <-ctx.Done():
+		log.Warn("dml events not flushed before context cancellation",
+			zap.String("topic", topic),
+			zap.Int32("partition", partition),
+			zap.Any("offset", offset),
+			zap.Int64("pending", total-flushed),
+			zap.Error(context.Cause(ctx)))
+		return false
+	}
+}
+
+func (w *writer) WriteMessage(ctx context.Context, message *kafka.Message) bool {
+	topic := w.topic
+	if message.TopicPartition.Topic != nil {
+		topic = *message.TopicPartition.Topic
+	}
+	partition := message.TopicPartition.Partition
+	offset := message.TopicPartition.Offset
+	decoder := w.getDecoder(ctx, partition)
+
+	decoder.AddKeyValue(message.Key, message.Value)
+	messageType, hasNext := decoder.HasNext()
+	if !hasNext {
+		log.Panic("next event is missing",
+			zap.String("topic", topic),
+			zap.Int32("partition", partition),
+			zap.Any("offset", offset))
+	}
+
+	switch messageType {
+	case codecCommon.MessageTypeResolved:
+		_ = decoder.NextResolvedEvent()
+		return true
+	case codecCommon.MessageTypeDDL:
+		ddl := decoder.NextDDLEvent()
+		if simpleDecoder, ok := decoder.(*simple.Decoder); ok {
+			if !w.flushDMLEvents(ctx, topic, partition, offset, simpleDecoder.GetCachedEvents()) {
+				return false
+			}
+		}
+
+		// Bootstrap/table-info messages in simple protocol may have empty query.
+		if ddl == nil || ddl.Query == "" {
+			return true
+		}
+		if err := w.icebergSink.WriteBlockEvent(ddl); err != nil {
+			log.Error("write block event failed",
+				zap.String("topic", topic),
+				zap.Int32("partition", partition),
+				zap.Any("offset", offset),
+				zap.String("schema", ddl.GetSchemaName()),
+				zap.String("table", ddl.GetTableName()),
+				zap.Uint64("commitTs", ddl.GetCommitTs()),
+				zap.Error(err))
+			return false
+		}
+		return true
+	case codecCommon.MessageTypeRow:
+		rows := make([]*commonEvent.DMLEvent, 0, 1)
+		row := decoder.NextDMLEvent()
+		if row != nil {
+			rows = append(rows, row)
+		}
+		for {
+			_, hasNext = decoder.HasNext()
+			if !hasNext {
+				break
+			}
+			nextRow := decoder.NextDMLEvent()
+			if nextRow != nil {
+				rows = append(rows, nextRow)
+			}
+		}
+		return w.flushDMLEvents(ctx, topic, partition, offset, rows)
+	default:
+		log.Panic("unknown message type",
+			zap.String("topic", topic),
+			zap.Int32("partition", partition),
+			zap.Any("offset", offset),
+			zap.Any("messageType", messageType))
+	}
 	return false
 }
