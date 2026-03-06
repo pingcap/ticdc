@@ -55,29 +55,6 @@ var (
 		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 13),
 	}, []string{"namespace", "changefeed"})
 
-	CloudStorageFlushTaskCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: namespace,
-		Subsystem: subsystem,
-		Name:      "cloud_storage_flush_tasks_total",
-		Help:      "Total number of cloud storage flush tasks by reason",
-	}, []string{"namespace", "changefeed", "reason"})
-
-	CloudStorageFlushDurationByReasonHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Namespace: namespace,
-		Subsystem: subsystem,
-		Name:      "cloud_storage_flush_duration_by_reason_seconds",
-		Help:      "Flush duration distributions by trigger reason",
-		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 13),
-	}, []string{"namespace", "changefeed", "reason"})
-
-	CloudStorageFlushFileSizeHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Namespace: namespace,
-		Subsystem: subsystem,
-		Name:      "cloud_storage_flush_file_size_bytes",
-		Help:      "Flushed payload bytes per task by reason",
-		Buckets:   prometheus.ExponentialBuckets(1024, 2.0, 16),
-	}, []string{"namespace", "changefeed", "reason"})
-
 	CloudStorageDDLDrainDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,
@@ -86,16 +63,14 @@ var (
 		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 13),
 	}, []string{"namespace", "changefeed"})
 
-	// CloudStorageShardBusySeconds records the busy seconds of each cloud storage output shard.
-	CloudStorageShardBusySeconds = prometheus.NewCounterVec(
+	// CloudStorageWorkerBusyRatio records the busy ratio of CloudStorage bgUpdateLog worker.
+	CloudStorageWorkerBusyRatio = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: namespace,
 			Subsystem: subsystem,
-			Name:      "cloud_storage_shard_busy_seconds_total",
-			Help:      "Busy seconds for cloud storage sink output shard.",
+			Name:      "cloud_storage_worker_busy_ratio",
+			Help:      "Busy ratio for cloud storage sink dml worker.",
 		}, []string{"namespace", "changefeed", "id"})
-
-	CloudStorageWorkerBusyRatio = CloudStorageShardBusySeconds
 )
 
 // InitCloudStorageMetrics registers all metrics in this file.
@@ -104,9 +79,6 @@ func InitCloudStorageMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(CloudStorageFileCountGauge)
 	registry.MustRegister(CloudStorageWriteDurationHistogram)
 	registry.MustRegister(CloudStorageFlushDurationHistogram)
-	registry.MustRegister(CloudStorageFlushTaskCounter)
-	registry.MustRegister(CloudStorageFlushDurationByReasonHistogram)
-	registry.MustRegister(CloudStorageFlushFileSizeHistogram)
 	registry.MustRegister(CloudStorageDDLDrainDurationHistogram)
-	registry.MustRegister(CloudStorageShardBusySeconds)
+	registry.MustRegister(CloudStorageWorkerBusyRatio)
 }

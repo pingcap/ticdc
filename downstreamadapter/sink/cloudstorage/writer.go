@@ -54,7 +54,7 @@ type writer struct {
 	metricFileCount        prometheus.Gauge
 	metricWriteDuration    prometheus.Observer
 	metricFlushDuration    prometheus.Observer
-	metricShardBusySeconds prometheus.Counter
+	metricsWorkerBusyRatio prometheus.Counter
 }
 
 type flushReason string
@@ -101,7 +101,7 @@ func newWriter(
 			WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String()),
 		metricFlushDuration: metrics.CloudStorageFlushDurationHistogram.
 			WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String()),
-		metricShardBusySeconds: metrics.CloudStorageShardBusySeconds.
+		metricsWorkerBusyRatio: metrics.CloudStorageWorkerBusyRatio.
 			WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String(), strconv.Itoa(id)),
 	}
 }
@@ -132,7 +132,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
 		case <-overseerTicker.C:
-			d.metricShardBusySeconds.Add(flushTimeSlice.Seconds())
+			d.metricsWorkerBusyRatio.Add(flushTimeSlice.Seconds())
 			flushTimeSlice = 0
 		case task, ok := <-d.toBeFlushedCh:
 			if !ok || atomic.LoadUint64(&d.isClosed) == 1 {
@@ -208,28 +208,8 @@ func (d *writer) flushMessages(ctx context.Context) error {
 
 			flushDuration := time.Since(start)
 			flushTimeSlice += flushDuration
-			d.observeFlushTask(task.reason, task.batch.totalSize(), flushDuration)
 		}
 	}
-}
-
-func (d *writer) observeFlushTask(reason flushReason, size uint64, duration time.Duration) {
-	reasonLabel := string(reason)
-	metrics.CloudStorageFlushTaskCounter.WithLabelValues(
-		d.changeFeedID.Keyspace(),
-		d.changeFeedID.ID().String(),
-		reasonLabel,
-	).Inc()
-	metrics.CloudStorageFlushDurationByReasonHistogram.WithLabelValues(
-		d.changeFeedID.Keyspace(),
-		d.changeFeedID.ID().String(),
-		reasonLabel,
-	).Observe(duration.Seconds())
-	metrics.CloudStorageFlushFileSizeHistogram.WithLabelValues(
-		d.changeFeedID.Keyspace(),
-		d.changeFeedID.ID().String(),
-		reasonLabel,
-	).Observe(float64(size))
 }
 
 func (d *writer) writeIndexFile(ctx context.Context, path, content string) error {
