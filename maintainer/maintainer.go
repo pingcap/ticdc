@@ -231,6 +231,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		redoSpanCountGauge:     metrics.SpanCountGauge.WithLabelValues(keyspaceName, name, "redo"),
 		redoTableCountGauge:    metrics.TableCountGauge.WithLabelValues(keyspaceName, name, "redo"),
 	}
+	m.controller.SetSelfNodeID(selfNode.ID)
 	m.nodeChanged.changed = false
 	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
 
@@ -380,7 +381,30 @@ func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 		BootstrapDone: m.initialized.Load(),
 		LastSyncedTs:  m.getWatermark().LastSyncedTs,
 	}
+	drainTarget, drainEpoch := m.controller.getDispatcherDrainTarget()
+	if !drainTarget.IsEmpty() && drainEpoch > 0 {
+		dispatcherCount := m.controller.spanController.GetTaskSizeByNodeID(drainTarget)
+		if m.enableRedo {
+			dispatcherCount += m.controller.redoSpanController.GetTaskSizeByNodeID(drainTarget)
+		}
+		if dispatcherCount < 0 {
+			dispatcherCount = 0
+		}
+		if dispatcherCount > math.MaxUint32 {
+			dispatcherCount = math.MaxUint32
+		}
+		status.DrainProgress = &heartbeatpb.DrainProgress{
+			TargetNodeId:          drainTarget.String(),
+			TargetEpoch:           drainEpoch,
+			TargetDispatcherCount: uint32(dispatcherCount),
+		}
+	}
 	return status
+}
+
+func (m *Maintainer) SetDispatcherDrainTarget(target node.ID, epoch uint64) {
+	m.controller.SetDispatcherDrainTarget(target, epoch)
+	m.statusChanged.Store(true)
 }
 
 func (m *Maintainer) initialize() error {
@@ -720,7 +744,7 @@ func (m *Maintainer) calculateNewCheckpointTs() (*heartbeatpb.Watermark, bool) {
 	newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForBarrier, ResolvedTs: minCheckpointTsForBarrier})
 	newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForScheduler, ResolvedTs: minCheckpointTsForScheduler})
 
-	log.Debug("can advance checkpointTs",
+	log.Info("can advance checkpointTs",
 		zap.Stringer("changefeedID", m.changefeedID),
 		zap.Uint64("newCheckpointTs", newWatermark.CheckpointTs),
 		zap.Uint64("newResolvedTs", newWatermark.ResolvedTs),

@@ -35,12 +35,14 @@ type basicScheduler struct {
 	operatorController *operator.Controller
 	changefeedDB       *changefeed.ChangefeedDB
 	nodeManager        *watcher.NodeManager
+	liveness           livenessReader
 }
 
 func NewBasicScheduler(
 	id string, batchSize int,
 	oc *operator.Controller,
 	changefeedDB *changefeed.ChangefeedDB,
+	liveness livenessReader,
 ) *basicScheduler {
 	return &basicScheduler{
 		id:                 id,
@@ -48,6 +50,7 @@ func NewBasicScheduler(
 		operatorController: oc,
 		changefeedDB:       changefeedDB,
 		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
+		liveness:           liveness,
 	}
 }
 
@@ -74,7 +77,7 @@ func (s *basicScheduler) doBasicSchedule(availableSize int) {
 	absentChangefeeds := s.changefeedDB.GetAbsentByGroup(id, availableSize)
 	nodeTaskSize := s.changefeedDB.GetTaskSizePerNodeByGroup(id)
 	// add the absent node to the node size map
-	nodeIDs := s.nodeManager.GetAliveNodeIDs()
+	nodeIDs := filterSchedulableNodeIDs(s.nodeManager.GetAliveNodeIDs(), s.liveness)
 	nodeSize := make(map[node.ID]int)
 	for _, id := range nodeIDs {
 		nodeSize[id] = nodeTaskSize[id]

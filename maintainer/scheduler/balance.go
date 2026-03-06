@@ -32,6 +32,8 @@ import (
 	"github.com/pingcap/ticdc/server/watcher"
 )
 
+const maxBalanceMovePerRound = 5
+
 // balanceScheduler mainly focus on two types of operations:
 // 1. Split operations: splits the one large span for the whole table into smaller ones.
 // 2. Move operations: distributes spans across nodes for balance the span count in each node.
@@ -47,6 +49,10 @@ type balanceScheduler struct {
 
 	random *rand.Rand
 	mode   int64
+
+	getDrainTarget drainTargetGetter
+
+	drainBalanceBlockedUntil time.Time
 }
 
 func NewBalanceScheduler(
@@ -57,6 +63,7 @@ func NewBalanceScheduler(
 	sc *span.Controller,
 	_ time.Duration,
 	mode int64,
+	getDrainTarget drainTargetGetter,
 ) *balanceScheduler {
 	return &balanceScheduler{
 		changefeedID:       changefeedID,
@@ -67,6 +74,7 @@ func NewBalanceScheduler(
 		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		splitter:           splitter,
 		mode:               mode,
+		getDrainTarget:     getDrainTarget,
 	}
 }
 
@@ -74,6 +82,12 @@ func (s *balanceScheduler) Execute() time.Time {
 	failpoint.Inject("StopBalanceScheduler", func() {
 		failpoint.Return(time.Now().Add(time.Second * 5))
 	})
+	now := time.Now()
+	if shouldPauseBalanceForDrain(s.getDrainTarget, now, &s.drainBalanceBlockedUntil) {
+		// Pause regular balance scheduling while dispatcher drain is active
+		// and keep a cooldown window after drain completion to avoid churn.
+		return time.Now().Add(time.Second * 5)
+	}
 
 	// TODO: consider to ignore split tables' dispatcher basic schedule operator to decide whether we can make balance schedule
 	if s.operatorController.OperatorSize() > 0 || s.spanController.GetAbsentSize() > 0 {
@@ -91,8 +105,14 @@ func (s *balanceScheduler) Execute() time.Time {
 		return time.Now().Add(time.Second * 5)
 	}
 
+	moveBudget := s.batchSize - count
+	if moveBudget > maxBalanceMovePerRound {
+		// Bound balance churn in one maintainer tick to reduce checkpoint lag spikes.
+		moveBudget = maxBalanceMovePerRound
+	}
+
 	// 2. do balance for the spans in defaultGroupID
-	s.schedulerDefaultGroup(s.batchSize - count)
+	s.schedulerDefaultGroup(moveBudget)
 
 	return time.Now().Add(time.Second * 5)
 }
@@ -106,6 +126,10 @@ func (s *balanceScheduler) Name() string {
 
 func (s *balanceScheduler) schedulerDefaultGroup(maxSize int) int {
 	nodes := s.nodeManager.GetAliveNodes()
+	nodes = filterAliveNodesByDrainTarget(nodes, s.getDrainTarget)
+	if len(nodes) == 0 {
+		return 0
+	}
 	group := pkgreplica.DefaultGroupID
 	// fast path, check the balance status
 	moveSize := pkgScheduler.CheckBalanceStatus(s.spanController.GetTaskSizePerNodeByGroup(group), nodes)

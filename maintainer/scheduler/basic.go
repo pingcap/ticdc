@@ -56,6 +56,7 @@ type basicScheduler struct {
 	spanController     *span.Controller
 	nodeManager        *watcher.NodeManager
 	mode               int64
+	getDrainTarget     drainTargetGetter
 }
 
 func NewBasicScheduler(
@@ -64,6 +65,7 @@ func NewBasicScheduler(
 	spanController *span.Controller,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
 	mode int64,
+	getDrainTarget drainTargetGetter,
 ) *basicScheduler {
 	scheduler := &basicScheduler{
 		changefeedID:               changefeedID,
@@ -73,6 +75,7 @@ func NewBasicScheduler(
 		nodeManager:                appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		schedulingTaskCountPerNode: 1,
 		mode:                       mode,
+		getDrainTarget:             getDrainTarget,
 	}
 
 	if schedulerCfg != nil && util.GetOrZero(schedulerCfg.SchedulingTaskCountPerNode) > 0 {
@@ -126,7 +129,10 @@ func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int)
 	// for the split table spans, each time each node can at most have s.schedulingTaskCountPerNode scheduling tasks.
 	// for the normal spans, we don't have the upper limit.
 	size := 0
-	nodeIDs := s.nodeManager.GetAliveNodeIDs()
+	nodeIDs := filterNodeIDsByDrainTarget(s.nodeManager.GetAliveNodeIDs(), s.getDrainTarget)
+	if len(nodeIDs) == 0 {
+		return 0
+	}
 	nodeSize := make(map[node.ID]int)
 	for _, id := range nodeIDs {
 		nodeSize[id] = scheduleNodeSize[id]

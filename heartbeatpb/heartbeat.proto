@@ -145,6 +145,13 @@ message MaintainerHeartbeat {
     repeated MaintainerStatus statuses = 1;
 }
 
+// DrainProgress is maintainer-observed progress for dispatcher drain on one target.
+message DrainProgress {
+    string target_node_id = 1;
+    uint64 target_epoch = 2;
+    uint32 target_dispatcher_count = 3;
+}
+
 message MaintainerStatus {
     ChangefeedID changefeedID = 1;
     string feed_state = 2;
@@ -153,6 +160,49 @@ message MaintainerStatus {
     repeated RunningError err = 5;
     bool bootstrap_done = 6;
     uint64 lastSyncedTs = 7;  // last synced ts of all tables in the changefeed, used in /:changefeed_id/synced API
+    // drain_progress reports the active dispatcher drain target observed by this maintainer.
+    // Nil means no active dispatcher drain target.
+    DrainProgress drain_progress = 8;
+}
+
+// NodeLiveness is node-reported liveness.
+// Coordinator uses it for destination filtering and safe rolling-restart handoff
+// without persisting a separate intent in etcd.
+// It is monotonic and only allows: ALIVE -> DRAINING -> STOPPING.
+enum NodeLiveness {
+    // ALIVE accepts new destination placement, maintainer creation, and leader campaign/service.
+    ALIVE = 0;
+    // DRAINING is excluded from destination selection and is being drained.
+    // In-flight operations may still complete, but no new leader campaign is allowed.
+    DRAINING = 1;
+    // STOPPING keeps destination exclusion and enforces shutdown safety.
+    // It rejects new maintainer creation, allows cleanup/remove, and must resign if leader.
+    STOPPING = 2;
+}
+
+// NodeHeartbeat is sent periodically from a node to the coordinator.
+message NodeHeartbeat {
+    NodeLiveness liveness = 1;
+    uint64 node_epoch = 2;
+}
+
+// SetNodeLivenessRequest asks a node to transition its local liveness.
+message SetNodeLivenessRequest {
+    NodeLiveness target = 1;
+    uint64 node_epoch = 2;
+}
+
+// SetNodeLivenessResponse reports the liveness state applied by the node.
+message SetNodeLivenessResponse {
+    NodeLiveness applied = 1;
+    uint64 node_epoch = 2;
+}
+
+// SetDispatcherDrainTargetRequest asks a maintainer manager to apply the dispatcher drain target.
+// target_node_id can be empty to clear the current target.
+message SetDispatcherDrainTargetRequest {
+    string target_node_id = 1;
+    uint64 target_epoch = 2;
 }
 
 message CoordinatorBootstrapRequest {

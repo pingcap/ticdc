@@ -396,6 +396,10 @@ func (c *coordinator) GetChangefeed(ctx context.Context, changefeedDisplayName c
 	return c.controller.GetChangefeed(ctx, changefeedDisplayName)
 }
 
+func (c *coordinator) DrainNode(ctx context.Context, target node.ID) (int, error) {
+	return c.controller.DrainNode(ctx, target)
+}
+
 func (c *coordinator) Initialized() bool {
 	return c.controller.initialized.Load()
 }
