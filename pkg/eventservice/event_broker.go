@@ -986,6 +986,9 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 			zap.Uint64("startTs", info.GetStartTs()), zap.String("span", common.FormatTableSpan(span)),
 			zap.Error(err),
 		)
+		// Mark removed to avoid processing notifications before unregister completes.
+		dispatcher.isRemoved.Store(true)
+		c.eventStore.UnregisterDispatcher(changefeedID, id)
 		status.removeDispatcher(id)
 		if status.isEmpty() {
 			c.changefeedMap.Delete(changefeedID)

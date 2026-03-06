@@ -171,6 +171,21 @@ func TestOnNotify(t *testing.T) {
 	log.Info("Pass case 6")
 }
 
+func TestAddDispatcherUnregisterOnSchemaStoreError(t *testing.T) {
+	broker, es, ss, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	ss.registerTableError = errors.New("register schema store failed")
+
+	info := newMockDispatcherInfoForTest(t)
+	err := broker.addDispatcher(info)
+	require.Error(t, err)
+
+	_, ok := es.spansMap.Load(info.GetTableSpan())
+	require.False(t, ok)
+	require.Equal(t, uint64(1), es.unregisterCount.Load())
+}
+
 func TestDoScanSkipWhenChangefeedStatusNotFound(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	broker.close()
