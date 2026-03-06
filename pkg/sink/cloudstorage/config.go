@@ -64,9 +64,10 @@ const (
 )
 
 type urlConfig struct {
-	WorkerCount   *int    `form:"worker-count"`
-	FlushInterval *string `form:"flush-interval"`
-	FileSize      *int    `form:"file-size"`
+	WorkerCount      *int    `form:"worker-count"`
+	FlushInterval    *string `form:"flush-interval"`
+	FileSize         *int    `form:"file-size"`
+	UseTableIDAsPath *bool   `form:"use-table-id-as-path"`
 }
 
 // Config is the configuration for cloud storage sink.
@@ -82,6 +83,7 @@ type Config struct {
 	OutputColumnID           bool
 	FlushConcurrency         int
 	EnableTableAcrossNodes   bool
+	UseTableIDAsPath         bool
 }
 
 // NewConfig returns the default cloud storage sink config.
@@ -133,6 +135,7 @@ func (c *Config) Apply(
 		return err
 	}
 
+	c.UseTableIDAsPath = util.GetOrZero(urlParameter.UseTableIDAsPath)
 	c.DateSeparator = util.GetOrZero(sinkConfig.DateSeparator)
 	c.EnablePartitionSeparator = util.GetOrZero(sinkConfig.EnablePartitionSeparator)
 	c.FileIndexWidth = util.GetOrZero(sinkConfig.FileIndexWidth)
@@ -167,6 +170,9 @@ func mergeConfig(
 		dest.WorkerCount = sinkConfig.CloudStorageConfig.WorkerCount
 		dest.FlushInterval = sinkConfig.CloudStorageConfig.FlushInterval
 		dest.FileSize = sinkConfig.CloudStorageConfig.FileSize
+	}
+	if sinkConfig != nil && sinkConfig.UseTableIDAsPath != nil {
+		dest.UseTableIDAsPath = sinkConfig.UseTableIDAsPath
 	}
 	if err := mergo.Merge(dest, urlParameters, mergo.WithOverride); err != nil {
 		return nil, cerror.WrapError(cerror.ErrStorageSinkInvalidConfig, err)
