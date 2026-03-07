@@ -206,6 +206,119 @@ func TestOneBlockEvent(t *testing.T) {
 	}
 }
 
+func TestBarrierIgnoresFlushDoneWhileWaitingWrite(t *testing.T) {
+	testutil.SetUpTestServices()
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
+	startTs := uint64(10)
+	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, startTs)
+	stm := spanController.GetTasksByTableID(1)[0]
+	spanController.BindSpanToNode("", "node1", stm)
+	spanController.MarkSpanReplicating(stm)
+
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode)
+	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID: spanController.GetDDLDispatcherID().ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked: true,
+					BlockTs:   10,
+					BlockTables: &heartbeatpb.InfluencedTables{
+						InfluenceType: heartbeatpb.InfluenceType_All,
+					},
+					IsSyncPoint: true,
+				},
+			},
+			{
+				ID: stm.ID.ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked: true,
+					BlockTs:   10,
+					BlockTables: &heartbeatpb.InfluencedTables{
+						InfluenceType: heartbeatpb.InfluenceType_All,
+					},
+					IsSyncPoint: true,
+				},
+			},
+		},
+	})
+	require.NotNil(t, msgs)
+
+	key := eventKey{
+		blockTs:     10,
+		isSyncPoint: true,
+	}
+	event := barrier.blockedEvents.m[key]
+	require.False(t, event.flushDispatcherAdvanced)
+	require.False(t, event.writerDispatcherAdvanced)
+
+	msgs = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID: spanController.GetDDLDispatcherID().ToPB(),
+				State: &heartbeatpb.State{
+					BlockTs:     10,
+					IsBlocked:   true,
+					Stage:       heartbeatpb.BlockStage_DONE,
+					IsSyncPoint: true,
+					DoneAction:  heartbeatpb.DoneAction_FlushDone,
+				},
+			},
+			{
+				ID: stm.ID.ToPB(),
+				State: &heartbeatpb.State{
+					BlockTs:     10,
+					IsBlocked:   true,
+					Stage:       heartbeatpb.BlockStage_DONE,
+					IsSyncPoint: true,
+					DoneAction:  heartbeatpb.DoneAction_FlushDone,
+				},
+			},
+		},
+	})
+	require.NotNil(t, msgs)
+	require.True(t, event.flushDispatcherAdvanced)
+	require.False(t, event.writerDispatcherAdvanced)
+
+	// A duplicated Flush DONE from the writer must not advance the writer phase.
+	msgs = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID: spanController.GetDDLDispatcherID().ToPB(),
+				State: &heartbeatpb.State{
+					BlockTs:     10,
+					IsBlocked:   true,
+					Stage:       heartbeatpb.BlockStage_DONE,
+					IsSyncPoint: true,
+					DoneAction:  heartbeatpb.DoneAction_FlushDone,
+				},
+			},
+		},
+	})
+	require.NotNil(t, msgs)
+	require.True(t, event.flushDispatcherAdvanced)
+	require.False(t, event.writerDispatcherAdvanced)
+
+	resendMsgs := barrier.Resend()
+	require.Len(t, resendMsgs, 1)
+	writeResp := resendMsgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
+	require.Len(t, writeResp.DispatcherStatuses, 1)
+	require.Equal(t, heartbeatpb.Action_Write, writeResp.DispatcherStatuses[0].Action.Action)
+}
+
 func TestNormalBlock(t *testing.T) {
 	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()

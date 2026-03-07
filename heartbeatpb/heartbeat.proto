@@ -41,6 +41,13 @@ enum Action {
     Flush = 2;
 }
 
+enum DoneAction {
+    Unknown = 0;
+    WriteDone = 1;
+    PassDone = 2;
+    FlushDone = 3;
+}
+
 message DispatcherAction {
     Action action = 1;
     uint64 CommitTs = 2;   // DDLCommitTs
@@ -294,6 +301,7 @@ message State {
     repeated SchemaIDChange UpdatedSchemas = 6;
     bool IsSyncPoint = 7;
     BlockStage stage = 8;  // means whether the block is waiting / writing / done
+    DoneAction done_action = 9;  // which action produced this DONE status
 }
 
 message TableSpanBlockStatus {
