@@ -14,6 +14,7 @@
 package schemastore
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -800,34 +801,328 @@ func buildPersistedDDLEventForExchangePartition(args buildPersistedDDLEventFuncA
 	return event
 }
 
+type renameTableQueryInfo struct {
+	oldSchemaName string
+	oldTableName  string
+	newSchemaName string
+	newTableName  string
+}
+
+func getRenameTablesArgsSafely(job *model.Job) (_ *model.RenameTablesArgs, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic when get rename tables args: %v", r)
+		}
+	}()
+	return model.GetRenameTablesArgs(job)
+}
+
+func decodeRenameTablesArgsFromRawArgs(job *model.Job) (*model.RenameTablesArgs, error) {
+	if len(job.RawArgs) == 0 {
+		return nil, fmt.Errorf("job raw args is empty")
+	}
+
+	if job.Version == model.JobVersion2 {
+		var args model.RenameTablesArgs
+		if err := json.Unmarshal(job.RawArgs, &args); err != nil {
+			return nil, err
+		}
+		return &args, nil
+	}
+
+	var rawArgs []json.RawMessage
+	if err := json.Unmarshal(job.RawArgs, &rawArgs); err != nil {
+		return nil, err
+	}
+
+	var (
+		oldSchemaIDs   []int64
+		newSchemaIDs   []int64
+		newTableNames  []ast.CIStr
+		tableIDs       []int64
+		oldSchemaNames []ast.CIStr
+		oldTableNames  []ast.CIStr
+	)
+	if len(rawArgs) > 0 {
+		if err := json.Unmarshal(rawArgs[0], &oldSchemaIDs); err != nil {
+			return nil, err
+		}
+	}
+	if len(rawArgs) > 1 {
+		if err := json.Unmarshal(rawArgs[1], &newSchemaIDs); err != nil {
+			return nil, err
+		}
+	}
+	if len(rawArgs) > 2 {
+		if err := json.Unmarshal(rawArgs[2], &newTableNames); err != nil {
+			return nil, err
+		}
+	}
+	if len(rawArgs) > 3 {
+		if err := json.Unmarshal(rawArgs[3], &tableIDs); err != nil {
+			return nil, err
+		}
+	}
+	if len(rawArgs) > 4 {
+		if err := json.Unmarshal(rawArgs[4], &oldSchemaNames); err != nil {
+			return nil, err
+		}
+	}
+	if len(rawArgs) > 5 {
+		if err := json.Unmarshal(rawArgs[5], &oldTableNames); err != nil {
+			return nil, err
+		}
+	}
+
+	n := len(oldSchemaIDs)
+	if len(newSchemaIDs) > n {
+		n = len(newSchemaIDs)
+	}
+	if len(newTableNames) > n {
+		n = len(newTableNames)
+	}
+	if len(tableIDs) > n {
+		n = len(tableIDs)
+	}
+
+	infos := make([]*model.RenameTableArgs, 0, n)
+	for i := 0; i < n; i++ {
+		info := &model.RenameTableArgs{}
+		if i < len(oldSchemaIDs) {
+			info.OldSchemaID = oldSchemaIDs[i]
+		}
+		if i < len(newSchemaIDs) {
+			info.NewSchemaID = newSchemaIDs[i]
+		}
+		if i < len(newTableNames) {
+			info.NewTableName = newTableNames[i]
+		}
+		if i < len(tableIDs) {
+			info.TableID = tableIDs[i]
+		}
+		if i < len(oldSchemaNames) {
+			info.OldSchemaName = oldSchemaNames[i]
+		}
+		if i < len(oldTableNames) {
+			info.OldTableName = oldTableNames[i]
+		}
+		infos = append(infos, info)
+	}
+
+	return &model.RenameTablesArgs{RenameTableInfos: infos}, nil
+}
+
+func getRenameTablesArgsWithFallback(job *model.Job) (*model.RenameTablesArgs, error) {
+	renameArgs, err := getRenameTablesArgsSafely(job)
+	if err == nil {
+		return renameArgs, nil
+	}
+
+	rawArgs, decodeErr := decodeRenameTablesArgsFromRawArgs(job)
+	if decodeErr != nil {
+		return nil, fmt.Errorf("get rename tables args failed: %v, decode from raw args failed: %v", err, decodeErr)
+	}
+
+	log.Warn("get rename tables args failed fallback to decode raw args",
+		zap.String("query", job.Query),
+		zap.Error(err),
+		zap.Int("rawArgLen", len(job.RawArgs)))
+	return rawArgs, nil
+}
+
+func parseRenameTablesQueryInfos(query string) []renameTableQueryInfo {
+	if query == "" {
+		return nil
+	}
+	stmt, err := parser.New().ParseOneStmt(query, "", "")
+	if err != nil {
+		log.Warn("parse rename tables query failed",
+			zap.String("query", query),
+			zap.Error(err))
+		return nil
+	}
+	renameStmt, ok := stmt.(*ast.RenameTableStmt)
+	if !ok {
+		return nil
+	}
+
+	queryInfos := make([]renameTableQueryInfo, 0, len(renameStmt.TableToTables))
+	for _, tableToTable := range renameStmt.TableToTables {
+		queryInfos = append(queryInfos, renameTableQueryInfo{
+			oldSchemaName: tableToTable.OldTable.Schema.O,
+			oldTableName:  tableToTable.OldTable.Name.O,
+			newSchemaName: tableToTable.NewTable.Schema.O,
+			newTableName:  tableToTable.NewTable.Name.O,
+		})
+	}
+	return queryInfos
+}
+
+func matchRenameQueryInfoByNewTable(
+	queryInfos []renameTableQueryInfo,
+	used map[int]struct{},
+	newSchemaName, newTableName string,
+) (renameTableQueryInfo, int, bool) {
+	for i, info := range queryInfos {
+		if _, ok := used[i]; ok {
+			continue
+		}
+		if !strings.EqualFold(info.newTableName, newTableName) {
+			continue
+		}
+		if info.newSchemaName == "" {
+			continue
+		}
+		if strings.EqualFold(info.newSchemaName, newSchemaName) {
+			return info, i, true
+		}
+	}
+
+	candidateIdx := -1
+	for i, info := range queryInfos {
+		if _, ok := used[i]; ok {
+			continue
+		}
+		if !strings.EqualFold(info.newTableName, newTableName) {
+			continue
+		}
+		if info.newSchemaName != "" && !strings.EqualFold(info.newSchemaName, newSchemaName) {
+			continue
+		}
+		if candidateIdx != -1 {
+			return renameTableQueryInfo{}, -1, false
+		}
+		candidateIdx = i
+	}
+	if candidateIdx == -1 {
+		return renameTableQueryInfo{}, -1, false
+	}
+	return queryInfos[candidateIdx], candidateIdx, true
+}
+
+func getSchemaIDByName(databaseMap map[int64]*BasicDatabaseInfo, schemaName string) int64 {
+	for schemaID, databaseInfo := range databaseMap {
+		if strings.EqualFold(databaseInfo.Name, schemaName) {
+			return schemaID
+		}
+	}
+	return 0
+}
+
 func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
 	// TODO: does rename tables has the same problem(finished ts is not the real commit ts) with rename table?
 	event := buildPersistedDDLEventCommon(args)
-	renameArgs, err := model.GetRenameTablesArgs(args.job)
+	renameArgs, err := getRenameTablesArgsWithFallback(args.job)
 	if err != nil {
 		log.Panic("GetRenameTablesArgs failed",
 			zap.String("query", args.job.Query),
 			zap.Error(err))
 	}
-	if len(renameArgs.RenameTableInfos) != len(args.job.BinlogInfo.MultipleTableInfos) {
-		log.Panic("should not happen",
-			zap.Int("renameArgsLen", len(renameArgs.RenameTableInfos)),
-			zap.Int("multipleTableInfosLen", len(args.job.BinlogInfo.MultipleTableInfos)))
+	renameTableInfos := renameArgs.RenameTableInfos
+	multipleTableInfos := args.job.BinlogInfo.MultipleTableInfos
+	if len(renameTableInfos) != len(multipleTableInfos) {
+		minLen := len(renameTableInfos)
+		if len(multipleTableInfos) < minLen {
+			minLen = len(multipleTableInfos)
+		}
+		log.Warn("rename tables args length mismatch with table infos use min length",
+			zap.Int("renameArgsLen", len(renameTableInfos)),
+			zap.Int("multipleTableInfosLen", len(multipleTableInfos)),
+			zap.Int("minLen", minLen),
+			zap.String("query", args.job.Query))
+		renameTableInfos = renameTableInfos[:minLen]
+		multipleTableInfos = multipleTableInfos[:minLen]
 	}
 
+	queryInfos := parseRenameTablesQueryInfos(args.job.Query)
+	usedQueryInfos := make(map[int]struct{}, len(queryInfos))
 	var querys []string
-	for _, info := range renameArgs.RenameTableInfos {
-		event.ExtraSchemaIDs = append(event.ExtraSchemaIDs, info.OldSchemaID)
-		event.ExtraSchemaNames = append(event.ExtraSchemaNames, info.OldSchemaName.O)
-		event.ExtraTableNames = append(event.ExtraTableNames, info.OldTableName.O)
+	for _, info := range renameTableInfos {
+		oldSchemaID := info.OldSchemaID
+		oldSchemaName := info.OldSchemaName.O
+		oldTableName := info.OldTableName.O
+		newSchemaName := getSchemaName(args.databaseMap, info.NewSchemaID)
+
+		if oldSchemaName == "" || oldTableName == "" {
+			queryInfo, queryInfoIndex, ok := matchRenameQueryInfoByNewTable(
+				queryInfos,
+				usedQueryInfos,
+				newSchemaName,
+				info.NewTableName.O,
+			)
+			if ok {
+				usedQueryInfos[queryInfoIndex] = struct{}{}
+				if oldSchemaName == "" {
+					oldSchemaName = queryInfo.oldSchemaName
+				}
+				if oldTableName == "" {
+					oldTableName = queryInfo.oldTableName
+				}
+				if oldSchemaID == 0 && oldSchemaName != "" {
+					oldSchemaID = getSchemaIDByName(args.databaseMap, oldSchemaName)
+				}
+				log.Warn("rename tables args miss old table identifiers fallback to query",
+					zap.Int64("tableID", info.TableID),
+					zap.Int64("oldSchemaIDInArgs", info.OldSchemaID),
+					zap.String("oldSchemaNameInArgs", info.OldSchemaName.O),
+					zap.String("oldTableNameInArgs", info.OldTableName.O),
+					zap.String("newSchemaNameInArgs", newSchemaName),
+					zap.String("newTableNameInArgs", info.NewTableName.O),
+					zap.String("oldSchemaNameInQuery", queryInfo.oldSchemaName),
+					zap.String("oldTableNameInQuery", queryInfo.oldTableName))
+			}
+		}
+
+		if tableInfo, ok := args.tableMap[info.TableID]; ok {
+			oldSchemaNameInStore := getSchemaName(args.databaseMap, tableInfo.SchemaID)
+			if oldSchemaID == 0 {
+				oldSchemaID = tableInfo.SchemaID
+			}
+			if oldSchemaName == "" {
+				oldSchemaName = oldSchemaNameInStore
+			}
+			if oldTableName == "" {
+				oldTableName = tableInfo.Name
+			} else if tableInfo.Name != "" &&
+				!strings.EqualFold(oldTableName, tableInfo.Name) {
+				// For cyclic rename statements, the old table name parsed from query can be
+				// a temporary name. Prefer schema store metadata to keep the table lifecycle correct.
+				log.Warn("rename tables query old table name mismatch with schema metadata prefer schema metadata",
+					zap.Int64("tableID", info.TableID),
+					zap.String("oldTableNameInQuery", oldTableName),
+					zap.String("oldTableNameInStore", tableInfo.Name),
+					zap.String("query", args.job.Query))
+				oldTableName = tableInfo.Name
+				oldSchemaName = oldSchemaNameInStore
+				oldSchemaID = tableInfo.SchemaID
+			}
+		}
+		if oldSchemaID == 0 && oldSchemaName != "" {
+			oldSchemaID = getSchemaIDByName(args.databaseMap, oldSchemaName)
+		}
+		if oldSchemaName == "" && oldSchemaID != 0 {
+			oldSchemaName = getSchemaName(args.databaseMap, oldSchemaID)
+		}
+		if oldSchemaID == 0 {
+			oldSchemaID = info.NewSchemaID
+		}
+		if oldSchemaName == "" {
+			oldSchemaName = newSchemaName
+		}
+		if oldTableName == "" {
+			oldTableName = info.NewTableName.O
+		}
+
+		event.ExtraSchemaIDs = append(event.ExtraSchemaIDs, oldSchemaID)
+		event.ExtraSchemaNames = append(event.ExtraSchemaNames, oldSchemaName)
+		event.ExtraTableNames = append(event.ExtraTableNames, oldTableName)
 		event.SchemaIDs = append(event.SchemaIDs, info.NewSchemaID)
-		SchemaName := getSchemaName(args.databaseMap, info.NewSchemaID)
-		event.SchemaNames = append(event.SchemaNames, SchemaName)
-		querys = append(querys, fmt.Sprintf("RENAME TABLE `%s`.`%s` TO `%s`.`%s`;", info.OldSchemaName.O, info.OldTableName.O, SchemaName, info.NewTableName.O))
+		event.SchemaNames = append(event.SchemaNames, newSchemaName)
+		querys = append(querys, fmt.Sprintf("RENAME TABLE `%s`.`%s` TO `%s`.`%s`;", oldSchemaName, oldTableName, newSchemaName, info.NewTableName.O))
 	}
 
 	event.Query = strings.Join(querys, "")
-	event.MultipleTableInfos = args.job.BinlogInfo.MultipleTableInfos
+	event.MultipleTableInfos = multipleTableInfos
 	// we have to reverse MultipleTableInfos to get correct schema name
 	// see https://github.com/pingcap/tidb/issues/63710
 	//
