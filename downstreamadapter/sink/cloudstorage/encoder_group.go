@@ -130,10 +130,6 @@ func (eg *encoderGroup) runEncoder(ctx context.Context, index int) error {
 }
 
 func (eg *encoderGroup) add(ctx context.Context, task *task) error {
-	if task == nil {
-		return errors.New("nil task")
-	}
-
 	future := newFuture(task)
 	inputIndex, outputIndex := eg.indexer.next(task.dispatcherID)
 	// Principle: encoder parallelism and writer ordering are decoupled.
