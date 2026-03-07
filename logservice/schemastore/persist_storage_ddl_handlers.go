@@ -817,13 +817,37 @@ func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) 
 
 	var querys []string
 	for _, info := range renameArgs.RenameTableInfos {
-		event.ExtraSchemaIDs = append(event.ExtraSchemaIDs, info.OldSchemaID)
-		event.ExtraSchemaNames = append(event.ExtraSchemaNames, info.OldSchemaName.O)
-		event.ExtraTableNames = append(event.ExtraTableNames, info.OldTableName.O)
+		oldSchemaID := info.OldSchemaID
+		oldSchemaName := info.OldSchemaName.O
+		oldTableName := info.OldTableName.O
+		if oldSchemaName == "" || oldTableName == "" || oldSchemaID == 0 {
+			if tableInfo, ok := args.tableMap[info.TableID]; ok {
+				if oldSchemaID == 0 {
+					oldSchemaID = tableInfo.SchemaID
+				}
+				if oldSchemaName == "" {
+					oldSchemaName = getSchemaName(args.databaseMap, tableInfo.SchemaID)
+				}
+				if oldTableName == "" {
+					oldTableName = tableInfo.Name
+				}
+				log.Warn("rename tables args miss old table identifiers fallback to schema store metadata",
+					zap.Int64("tableID", info.TableID),
+					zap.Int64("oldSchemaIDInArgs", info.OldSchemaID),
+					zap.String("oldSchemaNameInArgs", info.OldSchemaName.O),
+					zap.String("oldTableNameInArgs", info.OldTableName.O),
+					zap.Int64("oldSchemaIDInStore", tableInfo.SchemaID),
+					zap.String("oldTableNameInStore", tableInfo.Name))
+			}
+		}
+
+		event.ExtraSchemaIDs = append(event.ExtraSchemaIDs, oldSchemaID)
+		event.ExtraSchemaNames = append(event.ExtraSchemaNames, oldSchemaName)
+		event.ExtraTableNames = append(event.ExtraTableNames, oldTableName)
 		event.SchemaIDs = append(event.SchemaIDs, info.NewSchemaID)
 		SchemaName := getSchemaName(args.databaseMap, info.NewSchemaID)
 		event.SchemaNames = append(event.SchemaNames, SchemaName)
-		querys = append(querys, fmt.Sprintf("RENAME TABLE `%s`.`%s` TO `%s`.`%s`;", info.OldSchemaName.O, info.OldTableName.O, SchemaName, info.NewTableName.O))
+		querys = append(querys, fmt.Sprintf("RENAME TABLE `%s`.`%s` TO `%s`.`%s`;", oldSchemaName, oldTableName, SchemaName, info.NewTableName.O))
 	}
 
 	event.Query = strings.Join(querys, "")

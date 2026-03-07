@@ -3130,6 +3130,38 @@ func TestRenameTable(t *testing.T) {
 	assert.Equal(t, "RENAME TABLE `test`.`t1` TO `test`.`t2`", ddl.Query)
 }
 
+func TestBuildPersistedDDLEventForRenameTablesFallbackOldTableName(t *testing.T) {
+	job := buildRenameTablesJobForTest(
+		[]int64{100, 100},
+		[]int64{105, 105},
+		[]int64{200, 201},
+		[]string{"test_predelete", "test_predelete"},
+		[]string{"", ""},
+		[]string{"orders", "users"},
+		1010,
+	)
+
+	ddl := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			100: {Name: "test_predelete", Tables: map[int64]bool{200: true, 201: true}},
+			105: {Name: "sc_predeleted_test_predelete", Tables: map[int64]bool{200: true, 201: true}},
+		},
+		tableMap: map[int64]*BasicTableInfo{
+			200: {SchemaID: 100, Name: "orders"},
+			201: {SchemaID: 100, Name: "users"},
+		},
+	})
+
+	assert.Equal(t,
+		"RENAME TABLE `test_predelete`.`orders` TO `sc_predeleted_test_predelete`.`orders`;"+
+			"RENAME TABLE `test_predelete`.`users` TO `sc_predeleted_test_predelete`.`users`;",
+		ddl.Query)
+	assert.Equal(t, []string{"orders", "users"}, ddl.ExtraTableNames)
+	assert.Equal(t, []string{"test_predelete", "test_predelete"}, ddl.ExtraSchemaNames)
+	assert.Equal(t, []string{"sc_predeleted_test_predelete", "sc_predeleted_test_predelete"}, ddl.SchemaNames)
+}
+
 func TestBuildDDLEventForNewTableDDL_CreateTableLikeBlockedTableNames(t *testing.T) {
 	cases := []struct {
 		name     string
