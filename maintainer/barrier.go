@@ -320,11 +320,19 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 		return event
 	}
 
+	doneAction := status.State.DoneAction
+	if doneAction == heartbeatpb.DoneAction_Unknown {
+		doneAction = inferLegacyDoneAction(event, dispatcherID)
+	}
+
 	// Phase 1 (Flush, storage split-table only): all influenced dispatchers must flush pre-barrier DML first.
 	// This prevents pre-DDL data from overtaking the barrier write when a table is
 	// split into multiple dispatchers across nodes.
 	// DONE from all influenced dispatchers advances flushDispatcherAdvanced = true.
 	if !event.flushDispatcherAdvanced {
+		if doneAction != heartbeatpb.DoneAction_FlushDone {
+			return event
+		}
 		event.markDispatcherEventDone(dispatcherID)
 		if !event.allDispatcherReported() {
 			return event
@@ -342,6 +350,9 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 	if !event.writerDispatcherAdvanced {
 		if event.writerDispatcher != dispatcherID {
 			// Ignore stale DONE from non-writer dispatchers while waiting writer Action_Write.
+			return event
+		}
+		if doneAction != heartbeatpb.DoneAction_WriteDone {
 			return event
 		}
 
@@ -367,9 +378,25 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 
 	// Phase 3 (Pass): all influenced dispatchers report DONE for Action_Pass,
 	// then checkEventFinish removes the barrier from blockedEvents.
+	if doneAction != heartbeatpb.DoneAction_PassDone {
+		return event
+	}
 	event.markDispatcherEventDone(dispatcherID)
 	b.checkEventFinish(event)
 	return event
+}
+
+func inferLegacyDoneAction(event *BarrierEvent, dispatcherID common.DispatcherID) heartbeatpb.DoneAction {
+	switch {
+	case !event.flushDispatcherAdvanced:
+		return heartbeatpb.DoneAction_FlushDone
+	case !event.writerDispatcherAdvanced && event.writerDispatcher == dispatcherID:
+		return heartbeatpb.DoneAction_WriteDone
+	case event.writerDispatcherAdvanced:
+		return heartbeatpb.DoneAction_PassDone
+	default:
+		return heartbeatpb.DoneAction_Unknown
+	}
 }
 
 func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,

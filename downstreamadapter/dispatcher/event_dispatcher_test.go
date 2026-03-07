@@ -1200,3 +1200,55 @@ func TestHoldBlockEventUntilNoResendTasks(t *testing.T) {
 		require.FailNow(t, "expected deferred DB-level block status")
 	}
 }
+
+func TestFlushDoneStatusCarriesDoneAction(t *testing.T) {
+	keyspaceID := getTestingKeyspaceID()
+	ddlTableSpan := common.KeyspaceDDLSpan(keyspaceID)
+	mockSink := newDispatcherTestSink(t, common.MysqlSinkType)
+	dispatcher := newDispatcherForTest(mockSink.Sink(), ddlTableSpan)
+
+	nodeID := node.NewID()
+	syncPointEvent := commonEvent.NewSyncPointEvent(dispatcher.GetId(), 10, 1, 1)
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, syncPointEvent)}, func() {})
+	require.True(t, block)
+
+	select {
+	case msg := <-dispatcher.GetBlockStatusesChan():
+		require.True(t, msg.State.IsBlocked)
+		require.Equal(t, heartbeatpb.BlockStage_WAITING, msg.State.Stage)
+	case <-time.After(time.Second):
+		require.FailNow(t, "expected initial block status")
+	}
+
+	dispatcher.HandleDispatcherStatus(&heartbeatpb.DispatcherStatus{
+		Action: &heartbeatpb.DispatcherAction{
+			Action:      heartbeatpb.Action_Flush,
+			CommitTs:    10,
+			IsSyncPoint: true,
+		},
+	})
+
+	select {
+	case msg := <-dispatcher.GetBlockStatusesChan():
+		require.Equal(t, heartbeatpb.BlockStage_DONE, msg.State.Stage)
+		require.Equal(t, heartbeatpb.DoneAction_FlushDone, msg.State.DoneAction)
+	case <-time.After(time.Second):
+		require.FailNow(t, "expected flush done status")
+	}
+
+	dispatcher.HandleDispatcherStatus(&heartbeatpb.DispatcherStatus{
+		Action: &heartbeatpb.DispatcherAction{
+			Action:      heartbeatpb.Action_Flush,
+			CommitTs:    10,
+			IsSyncPoint: true,
+		},
+	})
+
+	select {
+	case msg := <-dispatcher.GetBlockStatusesChan():
+		require.Equal(t, heartbeatpb.BlockStage_DONE, msg.State.Stage)
+		require.Equal(t, heartbeatpb.DoneAction_FlushDone, msg.State.DoneAction)
+	case <-time.After(time.Second):
+		require.FailNow(t, "expected duplicate flush done status")
+	}
+}

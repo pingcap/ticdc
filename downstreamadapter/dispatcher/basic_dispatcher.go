@@ -861,6 +861,7 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 				BlockTs:     dispatcherStatus.GetAction().CommitTs,
 				IsSyncPoint: dispatcherStatus.GetAction().IsSyncPoint,
 				Stage:       heartbeatpb.BlockStage_DONE,
+				DoneAction:  doneActionFromAction(dispatcherStatus.GetAction().Action),
 			},
 			Mode: d.GetMode(),
 		}
@@ -881,7 +882,7 @@ func (d *BasicDispatcher) ExecuteBlockEventDDL(pendingEvent commonEvent.BlockEve
 		return
 	}
 	failpoint.Inject("BlockOrWaitReportAfterWrite", nil)
-	d.reportBlockedEventDone(actionCommitTs, actionIsSyncPoint)
+	d.reportBlockedEventDone(actionCommitTs, actionIsSyncPoint, heartbeatpb.DoneAction_WriteDone)
 }
 
 // PassBlockEvent executes maintainer Action_Pass:
@@ -894,7 +895,7 @@ func (d *BasicDispatcher) PassBlockEvent(pendingEvent commonEvent.BlockEvent, ac
 		return
 	}
 	failpoint.Inject("BlockAfterPass", nil)
-	d.reportBlockedEventDone(actionCommitTs, actionIsSyncPoint)
+	d.reportBlockedEventDone(actionCommitTs, actionIsSyncPoint, heartbeatpb.DoneAction_PassDone)
 }
 
 // FlushBlockEvent executes maintainer Action_Flush:
@@ -909,12 +910,12 @@ func (d *BasicDispatcher) FlushBlockEvent(pendingEvent commonEvent.BlockEvent, a
 	}
 	d.blockEventStatus.updateBlockStage(heartbeatpb.BlockStage_WAITING)
 	failpoint.Inject("BlockAfterFlush", nil)
-	d.reportBlockedEventDone(actionCommitTs, actionIsSyncPoint)
+	d.reportBlockedEventDone(actionCommitTs, actionIsSyncPoint, heartbeatpb.DoneAction_FlushDone)
 }
 
 // reportBlockedEventDone sends DONE status and wakes dispatcher-status stream path
 // so the next status for this dispatcher can be handled.
-func (d *BasicDispatcher) reportBlockedEventDone(actionCommitTs uint64, actionIsSyncPoint bool) {
+func (d *BasicDispatcher) reportBlockedEventDone(actionCommitTs uint64, actionIsSyncPoint bool, doneAction heartbeatpb.DoneAction) {
 	d.sharedInfo.blockStatusesChan <- &heartbeatpb.TableSpanBlockStatus{
 		ID: d.id.ToPB(),
 		State: &heartbeatpb.State{
@@ -922,10 +923,24 @@ func (d *BasicDispatcher) reportBlockedEventDone(actionCommitTs uint64, actionIs
 			BlockTs:     actionCommitTs,
 			IsSyncPoint: actionIsSyncPoint,
 			Stage:       heartbeatpb.BlockStage_DONE,
+			DoneAction:  doneAction,
 		},
 		Mode: d.GetMode(),
 	}
 	GetDispatcherStatusDynamicStream().Wake(d.id)
+}
+
+func doneActionFromAction(action heartbeatpb.Action) heartbeatpb.DoneAction {
+	switch action {
+	case heartbeatpb.Action_Write:
+		return heartbeatpb.DoneAction_WriteDone
+	case heartbeatpb.Action_Pass:
+		return heartbeatpb.DoneAction_PassDone
+	case heartbeatpb.Action_Flush:
+		return heartbeatpb.DoneAction_FlushDone
+	default:
+		return heartbeatpb.DoneAction_Unknown
+	}
 }
 
 // shouldBlock check whether the event should be blocked(to wait maintainer response)
