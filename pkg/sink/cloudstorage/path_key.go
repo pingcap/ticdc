@@ -32,7 +32,7 @@ type SchemaPathKey struct {
 	// Table is the second directory level for table schema/data paths.
 	// For database-level schema files, this field is empty and the path is
 	// <schema>/meta/schema_{tableVersion}_{checksum}.json.
-	Table  string
+	Table string
 	// TableVersion is the schema version encoded in the path.
 	// In CDC it is carried by tableInfoVersion, and for DDL-related versions it
 	// is typically equal to the DDL finishedTs.
@@ -79,7 +79,7 @@ func (s *SchemaPathKey) ParseSchemaFilePath(path string) (uint32, error) {
 type FileIndexKey struct {
 	// DispatcherID is used in file name only when table-across-nodes is enabled.
 	// File pattern: CDC_{dispatcherID}_{index}.{ext}
-	DispatcherID           string
+	DispatcherID string
 	// EnableTableAcrossNodes controls whether dispatcher ID is embedded in
 	// data/index file names to avoid collisions across captures.
 	EnableTableAcrossNodes bool
@@ -100,7 +100,7 @@ type DmlPathKey struct {
 	PartitionNum int64
 	// Date is an optional path level controlled by date-separator
 	// (year/month/day/none).
-	Date         string
+	Date string
 }
 
 // GenerateDMLFilePath generates the dml file path.

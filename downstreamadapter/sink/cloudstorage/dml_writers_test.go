@@ -232,7 +232,7 @@ func TestSubmitTaskToEncoderExitOnContextCancel(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- dmlWriters.submitTaskToEncoder(ctx)
+		done <- dmlWriters.addTasks(ctx)
 	}()
 
 	cancel()

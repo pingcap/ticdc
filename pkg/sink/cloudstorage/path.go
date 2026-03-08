@@ -145,7 +145,7 @@ type VersionedTableName struct {
 	TableInfoVersion uint64
 	// DispatcherID identifies the dispatcher producing this table stream.
 	// It participates in index/data file names when table-across-nodes is enabled.
-	DispatcherID     commonType.DispatcherID
+	DispatcherID commonType.DispatcherID
 }
 
 // FilePathGenerator is used to generate data file path and index file path.
@@ -157,9 +157,9 @@ type FilePathGenerator struct {
 	storage      storage.ExternalStorage
 	// fileIndex caches the last emitted data file index for one
 	// VersionedTableName and date bucket.
-	fileIndex    map[VersionedTableName]*indexWithDate
+	fileIndex map[VersionedTableName]*indexWithDate
 
-	hasher     *hash.PositionInertia
+	hasher *hash.PositionInertia
 	// versionMap maps an input VersionedTableName to the effective table version
 	// used in output directory:
 	// <schema>/<table>/<effectiveTableVersion>/...

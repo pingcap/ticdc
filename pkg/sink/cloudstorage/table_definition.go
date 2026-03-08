@@ -188,9 +188,9 @@ func (t *TableCol) ToTiColumnInfo(colID int64) (*timodel.ColumnInfo, error) {
 // TableDefinition is the detailed table definition used for cloud storage sink.
 // TODO: find a better name for this struct.
 type TableDefinition struct {
-	Table        string     `json:"Table"`
-	Schema       string     `json:"Schema"`
-	Version      uint64     `json:"Version"`
+	Table   string `json:"Table"`
+	Schema  string `json:"Schema"`
+	Version uint64 `json:"Version"`
 	// TableVersion is the schema version encoded into schema file name:
 	// schema_{TableVersion}_{checksum}.json.
 	// It is passed from tableInfoVersion in path generation.

@@ -15,13 +15,13 @@ package cloudstorage
 
 import (
 	"context"
-	"errors"
 	"sync/atomic"
 	"time"
 
 	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -92,7 +92,7 @@ func (d *dmlWriters) run(_ context.Context) error {
 	})
 
 	g.Go(func() error {
-		return d.submitTaskToEncoder(ctx)
+		return d.addTasks(ctx)
 	})
 
 	g.Go(func() error {
@@ -120,7 +120,7 @@ func (d *dmlWriters) run(_ context.Context) error {
 	return err
 }
 
-func (d *dmlWriters) submitTaskToEncoder(ctx context.Context) error {
+func (d *dmlWriters) addTasks(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -128,14 +128,14 @@ func (d *dmlWriters) submitTaskToEncoder(ctx context.Context) error {
 		default:
 		}
 
-		taskValue, ok, err := d.msgCh.GetWithContext(ctx)
+		task, ok, err := d.msgCh.GetWithContext(ctx)
 		if err != nil {
-			return err
+			return errors.Trace(err)
 		}
 		if !ok {
 			return nil
 		}
-		if err := d.encodeGroup.add(ctx, taskValue); err != nil {
+		if err := d.encodeGroup.add(ctx, task); err != nil {
 			return err
 		}
 	}
@@ -175,11 +175,7 @@ func (d *dmlWriters) addDMLEvent(event *commonEvent.DMLEvent) {
 		TableInfoVersion: event.TableInfoVersion,
 		DispatcherID:     event.GetDispatcherID(),
 	}
-
-	_ = d.statistics.RecordBatchExecution(func() (int, int64, error) {
-		d.msgCh.Push(newDMLTask(table, event))
-		return int(event.Len()), event.GetSize(), nil
-	})
+	d.msgCh.Push(newDMLTask(table, event))
 }
 
 func (d *dmlWriters) flushDMLBeforeBlock(event commonEvent.BlockEvent) error {
@@ -188,10 +184,12 @@ func (d *dmlWriters) flushDMLBeforeBlock(event commonEvent.BlockEvent) error {
 	}
 
 	start := time.Now()
-	defer sinkmetrics.CloudStorageDDLDrainDurationHistogram.WithLabelValues(
-		d.changefeedID.Keyspace(),
-		d.changefeedID.ID().String(),
-	).Observe(time.Since(start).Seconds())
+	defer func() {
+		sinkmetrics.CloudStorageDDLDrainDurationHistogram.WithLabelValues(
+			d.changefeedID.Keyspace(),
+			d.changefeedID.ID().String(),
+		).Observe(time.Since(start).Seconds())
+	}()
 
 	// Invariant for DDL ordering:
 	// marker follows the same dispatcher route and is acked only after prior tasks
