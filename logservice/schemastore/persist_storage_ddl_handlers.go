@@ -14,7 +14,6 @@
 package schemastore
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -808,128 +807,6 @@ type renameTableQueryInfo struct {
 	newTableName  string
 }
 
-func getRenameTablesArgsSafely(job *model.Job) (_ *model.RenameTablesArgs, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("panic when get rename tables args: %v", r)
-		}
-	}()
-	return model.GetRenameTablesArgs(job)
-}
-
-func decodeRenameTablesArgsFromRawArgs(job *model.Job) (*model.RenameTablesArgs, error) {
-	if len(job.RawArgs) == 0 {
-		return nil, fmt.Errorf("job raw args is empty")
-	}
-
-	if job.Version == model.JobVersion2 {
-		var args model.RenameTablesArgs
-		if err := json.Unmarshal(job.RawArgs, &args); err != nil {
-			return nil, err
-		}
-		return &args, nil
-	}
-
-	var rawArgs []json.RawMessage
-	if err := json.Unmarshal(job.RawArgs, &rawArgs); err != nil {
-		return nil, err
-	}
-
-	var (
-		oldSchemaIDs   []int64
-		newSchemaIDs   []int64
-		newTableNames  []ast.CIStr
-		tableIDs       []int64
-		oldSchemaNames []ast.CIStr
-		oldTableNames  []ast.CIStr
-	)
-	if len(rawArgs) > 0 {
-		if err := json.Unmarshal(rawArgs[0], &oldSchemaIDs); err != nil {
-			return nil, err
-		}
-	}
-	if len(rawArgs) > 1 {
-		if err := json.Unmarshal(rawArgs[1], &newSchemaIDs); err != nil {
-			return nil, err
-		}
-	}
-	if len(rawArgs) > 2 {
-		if err := json.Unmarshal(rawArgs[2], &newTableNames); err != nil {
-			return nil, err
-		}
-	}
-	if len(rawArgs) > 3 {
-		if err := json.Unmarshal(rawArgs[3], &tableIDs); err != nil {
-			return nil, err
-		}
-	}
-	if len(rawArgs) > 4 {
-		if err := json.Unmarshal(rawArgs[4], &oldSchemaNames); err != nil {
-			return nil, err
-		}
-	}
-	if len(rawArgs) > 5 {
-		if err := json.Unmarshal(rawArgs[5], &oldTableNames); err != nil {
-			return nil, err
-		}
-	}
-
-	n := len(oldSchemaIDs)
-	if len(newSchemaIDs) > n {
-		n = len(newSchemaIDs)
-	}
-	if len(newTableNames) > n {
-		n = len(newTableNames)
-	}
-	if len(tableIDs) > n {
-		n = len(tableIDs)
-	}
-
-	infos := make([]*model.RenameTableArgs, 0, n)
-	for i := 0; i < n; i++ {
-		info := &model.RenameTableArgs{}
-		if i < len(oldSchemaIDs) {
-			info.OldSchemaID = oldSchemaIDs[i]
-		}
-		if i < len(newSchemaIDs) {
-			info.NewSchemaID = newSchemaIDs[i]
-		}
-		if i < len(newTableNames) {
-			info.NewTableName = newTableNames[i]
-		}
-		if i < len(tableIDs) {
-			info.TableID = tableIDs[i]
-		}
-		if i < len(oldSchemaNames) {
-			info.OldSchemaName = oldSchemaNames[i]
-		}
-		if i < len(oldTableNames) {
-			info.OldTableName = oldTableNames[i]
-		}
-		infos = append(infos, info)
-	}
-
-	return &model.RenameTablesArgs{RenameTableInfos: infos}, nil
-}
-
-func getRenameTablesArgsWithFallback(job *model.Job) (*model.RenameTablesArgs, error) {
-	renameArgs, err := getRenameTablesArgsSafely(job)
-	if err == nil {
-		return renameArgs, nil
-	}
-
-	rawArgs, decodeErr := decodeRenameTablesArgsFromRawArgs(job)
-	if decodeErr != nil {
-		return nil, fmt.Errorf("get rename tables args failed: %v, decode from raw args failed: %v", err, decodeErr)
-	}
-
-	log.Warn("get rename tables args failed fallback to decode raw args",
-		zap.String("query", job.Query),
-		zap.Error(err),
-		zap.Int("rawArgLen", len(job.RawArgs)))
-	return rawArgs, nil
-}
-
 func parseRenameTablesQueryInfos(query string) []renameTableQueryInfo {
 	if query == "" {
 		return nil
@@ -1012,7 +889,7 @@ func getSchemaIDByName(databaseMap map[int64]*BasicDatabaseInfo, schemaName stri
 func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
 	// TODO: does rename tables has the same problem(finished ts is not the real commit ts) with rename table?
 	event := buildPersistedDDLEventCommon(args)
-	renameArgs, err := getRenameTablesArgsWithFallback(args.job)
+	renameArgs, err := model.GetRenameTablesArgs(args.job)
 	if err != nil {
 		log.Panic("GetRenameTablesArgs failed",
 			zap.String("query", args.job.Query),
