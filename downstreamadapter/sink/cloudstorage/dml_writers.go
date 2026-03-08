@@ -87,7 +87,6 @@ func (d *dmlWriters) run(_ context.Context) error {
 
 	g.Go(func() error {
 		<-ctx.Done()
-		d.msgCh.Close()
 		return nil
 	})
 
@@ -99,20 +98,30 @@ func (d *dmlWriters) run(_ context.Context) error {
 		return d.encodeGroup.run(ctx)
 	})
 
-	// One dispatcher goroutine per output shard.
-	// Invariant: each output shard has a single consumer to keep shard ordering.
+	outputs := d.encodeGroup.Outputs()
 	for idx := range d.writers {
-		g.Go(func() error {
-			return d.dispatchTaskToWriter(ctx, idx)
-		})
-	}
-
-	for i := range d.writers {
-		writer := d.writers[i]
+		writer := d.writers[idx]
 		g.Go(func() error {
 			return writer.run(ctx)
 		})
+		g.Go(func() error {
+			outputCh := outputs[idx]
+			for {
+				select {
+				case <-ctx.Done():
+					return context.Cause(ctx)
+				case future := <-outputCh:
+					if err := future.Ready(ctx); err != nil {
+						return err
+					}
+					if err := writer.enqueueTask(ctx, future.task); err != nil {
+						return err
+					}
+				}
+			}
+		})
 	}
+
 	err := g.Wait()
 	if d.closed.Load() && errors.Is(err, context.Canceled) {
 		return nil
@@ -137,29 +146,6 @@ func (d *dmlWriters) addTasks(ctx context.Context) error {
 		}
 		if err := d.encodeGroup.add(ctx, task); err != nil {
 			return err
-		}
-	}
-}
-
-func (d *dmlWriters) dispatchTaskToWriter(ctx context.Context, outputIndex int) error {
-	outputs := d.encodeGroup.Outputs()
-	if outputIndex < 0 || outputIndex >= len(outputs) {
-		return errors.New("cloud storage encoder group output index out of range")
-	}
-
-	outputCh := outputs[outputIndex]
-	writerShard := d.writers[outputIndex]
-	for {
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case future := <-outputCh:
-			if err := future.Ready(ctx); err != nil {
-				return err
-			}
-			if err := writerShard.enqueueTask(ctx, future.task); err != nil {
-				return err
-			}
 		}
 	}
 }
