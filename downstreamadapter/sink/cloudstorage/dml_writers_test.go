@@ -94,6 +94,61 @@ func verifyAddDMLEventDoesNotCallPostEnqueueBeforePipelineRun(t *testing.T) {
 	require.Equal(t, int64(0), atomic.LoadInt64(&enqueueCalled))
 }
 
+func TestCloudStoragePostEnqueueBeforeFlush(t *testing.T) {
+	uri := fmt.Sprintf("file:///%s?protocol=csv&flush-interval=3600s", t.TempDir())
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	err = replicaConfig.ValidateAndAdjust(sinkURI)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
+	require.NoError(t, err)
+
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- cloudStorageSink.Run(ctx)
+	}()
+
+	tableInfo := &common.TableInfo{
+		TableName: common.TableName{
+			Schema:  "test",
+			Table:   "t_enqueue_stage",
+			TableID: 101,
+		},
+	}
+	event := commonEvent.NewDMLEvent(common.NewDispatcherID(), tableInfo.TableName.TableID, 1, 1, tableInfo)
+	event.TableInfoVersion = 1
+	event.Length = 1
+	event.ApproximateSize = 1
+
+	var enqueueCalled atomic.Int64
+	var flushCalled atomic.Int64
+	event.AddPostEnqueueFunc(func() {
+		enqueueCalled.Add(1)
+	})
+	event.AddPostFlushFunc(func() {
+		flushCalled.Add(1)
+	})
+
+	cloudStorageSink.AddDMLEvent(event)
+
+	require.Eventually(t, func() bool {
+		return enqueueCalled.Load() == 1
+	}, 5*time.Second, 10*time.Millisecond)
+	require.Equal(t, int64(0), flushCalled.Load())
+
+	cancel()
+	require.ErrorIs(t, <-runDone, context.Canceled)
+}
+
 func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 	t.Run("add dml does not call post enqueue before run", verifyAddDMLEventDoesNotCallPostEnqueueBeforePipelineRun)
 	parentDir := t.TempDir()

@@ -320,7 +320,7 @@ func (d *writer) genAndDispatchTask(ctx context.Context) error {
 				batchedTask = newBatchedTask()
 			default:
 			}
-		case tableTask, ok := <-d.inputCh.Out():
+		case task, ok := <-d.inputCh.Out():
 			if !ok {
 				if len(batchedTask.batch) == 0 {
 					return nil
@@ -333,7 +333,7 @@ func (d *writer) genAndDispatchTask(ctx context.Context) error {
 				}
 			}
 
-			if tableTask.isDrainTask() {
+			if task.isDrainTask() {
 				if len(batchedTask.batch) > 0 {
 					select {
 					case <-ctx.Done():
@@ -345,13 +345,13 @@ func (d *writer) genAndDispatchTask(ctx context.Context) error {
 				select {
 				case <-ctx.Done():
 					return errors.Trace(ctx.Err())
-				case d.toBeFlushedCh <- writerTask{marker: tableTask.marker}:
+				case d.toBeFlushedCh <- writerTask{marker: task.marker}:
 				}
 				continue
 			}
 
-			batchedTask.handleSingleTableEvent(tableTask)
-			table := tableTask.versionedTable
+			batchedTask.handleSingleTableEvent(task)
+			table := task.versionedTable
 			if batchedTask.batch[table].size >= uint64(d.config.FileSize) {
 				taskByTable := batchedTask.generateTaskByTable(table)
 				select {
@@ -367,11 +367,14 @@ func (d *writer) genAndDispatchTask(ctx context.Context) error {
 	}
 }
 
-func (d *writer) enqueueTask(ctx context.Context, taskValue *task) error {
+func (d *writer) enqueueTask(ctx context.Context, t *task) error {
 	select {
 	case <-ctx.Done():
 		return errors.Trace(ctx.Err())
-	case d.inputCh.In() <- taskValue:
+	case d.inputCh.In() <- t:
+		if !t.isDrainTask() {
+			t.event.PostEnqueue()
+		}
 		return nil
 	}
 }

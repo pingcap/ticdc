@@ -82,8 +82,8 @@ func newDMLWriters(
 	}
 }
 
-func (d *dmlWriters) run(_ context.Context) error {
-	g, ctx := errgroup.WithContext(d.ctx)
+func (d *dmlWriters) run(ctx context.Context) error {
+	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
 		<-ctx.Done()
