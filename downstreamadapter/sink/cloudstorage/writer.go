@@ -94,14 +94,14 @@ func newWriter(
 }
 
 func (d *writer) run(ctx context.Context) error {
-	eg, ctx := errgroup.WithContext(ctx)
-	eg.Go(func() error {
+	g, ctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
 		return d.flushMessages(ctx)
 	})
-	eg.Go(func() error {
+	g.Go(func() error {
 		return d.genAndDispatchTask(ctx)
 	})
-	return eg.Wait()
+	return g.Wait()
 }
 
 func (d *writer) flushMessages(ctx context.Context) error {

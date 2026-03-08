@@ -15,7 +15,6 @@ package cloudstorage
 
 import (
 	"context"
-	"sync/atomic"
 	"time"
 
 	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
@@ -27,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tidb/br/pkg/storage"
+	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -43,14 +43,10 @@ type dmlWriters struct {
 	encodeGroup *encoderGroup
 
 	writers []*writer
-
-	ctx    context.Context
-	cancel context.CancelFunc
-	closed atomic.Bool
+	closed  atomic.Bool
 }
 
 func newDMLWriters(
-	ctx context.Context,
 	changefeedID commonType.ChangeFeedID,
 	storage storage.ExternalStorage,
 	config *cloudstorage.Config,
@@ -70,25 +66,17 @@ func newDMLWriters(
 		writers[i] = newWriter(i, changefeedID, storage, config, extension, statistics)
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
 	return &dmlWriters{
 		changefeedID: changefeedID,
 		statistics:   statistics,
 		msgCh:        messageCh,
 		encodeGroup:  encoderGroup,
 		writers:      writers,
-		ctx:          ctx,
-		cancel:       cancel,
 	}
 }
 
 func (d *dmlWriters) run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
-
-	g.Go(func() error {
-		<-ctx.Done()
-		return nil
-	})
 
 	g.Go(func() error {
 		return d.addTasks(ctx)
@@ -121,12 +109,7 @@ func (d *dmlWriters) run(ctx context.Context) error {
 			}
 		})
 	}
-
-	err := g.Wait()
-	if d.closed.Load() && errors.Is(err, context.Canceled) {
-		return nil
-	}
-	return err
+	return g.Wait()
 }
 
 func (d *dmlWriters) addTasks(ctx context.Context) error {
@@ -164,7 +147,7 @@ func (d *dmlWriters) addDMLEvent(event *commonEvent.DMLEvent) {
 	d.msgCh.Push(newDMLTask(table, event))
 }
 
-func (d *dmlWriters) flushDMLBeforeBlock(event commonEvent.BlockEvent) error {
+func (d *dmlWriters) flushDMLBeforeBlock(ctx context.Context, event commonEvent.BlockEvent) error {
 	if event == nil {
 		return nil
 	}
@@ -182,13 +165,12 @@ func (d *dmlWriters) flushDMLBeforeBlock(event commonEvent.BlockEvent) error {
 	// in that route are fully drained by writer.
 	drainTask := newDrainTask(event.GetDispatcherID(), event.GetCommitTs())
 	d.msgCh.Push(drainTask)
-	return drainTask.wait(d.ctx)
+	return drainTask.wait(ctx)
 }
 
 func (d *dmlWriters) close() {
 	if !d.closed.CompareAndSwap(false, true) {
 		return
 	}
-	d.cancel()
 	d.msgCh.Close()
 }

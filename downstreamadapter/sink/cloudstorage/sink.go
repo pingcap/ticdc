@@ -62,6 +62,8 @@ type sink struct {
 	isNormal    *atomic.Bool
 	cleanupJobs []func() /* only for test */
 
+	// some method lack of the context parameter,
+	// we have to use the context from the struct to perceive the context done from the upper layer
 	// To perceive the context done from the upper layer
 	ctx context.Context
 }
@@ -118,7 +120,7 @@ func New(
 		return nil, err
 	}
 	statistics := metrics.NewStatistics(changefeedID, "cloudstorage")
-	dmlWriters := newDMLWriters(ctx, changefeedID, storage, cfg, encoderConfig, ext, statistics)
+	dmlWriters := newDMLWriters(changefeedID, storage, cfg, encoderConfig, ext, statistics)
 	return &sink{
 		changefeedID:             changefeedID,
 		sinkURI:                  sinkURI,
@@ -140,6 +142,7 @@ func (s *sink) SinkType() common.SinkType {
 	return common.CloudStorageSinkType
 }
 
+// Run the sink, the ctx is the same as the ctx in the New function.
 func (s *sink) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 
@@ -170,10 +173,11 @@ func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 }
 
 func (s *sink) FlushDMLBeforeBlock(event commonEvent.BlockEvent) error {
-	if event == nil {
-		return nil
+	if err := s.dmlWriters.flushDMLBeforeBlock(s.ctx, event); err != nil {
+		s.isNormal.Store(false)
+		return err
 	}
-	return s.dmlWriters.flushDMLBeforeBlock(event)
+	return nil
 }
 
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
