@@ -71,6 +71,8 @@ func TestEncodingGroupRouteByDispatcher(t *testing.T) {
 
 	encoderConfig := newTestTxnEncoderConfig(t)
 	group := newEncoderGroup(encoderConfig, 2, 4)
+	outputs := group.Outputs()
+	require.Len(t, outputs, 4)
 	eg.Go(func() error {
 		return group.run(egCtx)
 	})
@@ -88,31 +90,49 @@ func TestEncodingGroupRouteByDispatcher(t *testing.T) {
 	receivedB := make(chan []uint64, 1)
 	eg.Go(func() error {
 		values := make([]uint64, 0, 5)
-		err := group.consumeOutputShard(egCtx, shardA, func(task *task) error {
-			if task.dispatcherID != dispatcherA {
-				return nil
+		for {
+			select {
+			case <-egCtx.Done():
+				return egCtx.Err()
+			case future := <-outputs[shardA]:
+				err := future.Ready(egCtx)
+				if err != nil {
+					return err
+				}
+				task := future.task
+				if task.dispatcherID != dispatcherA {
+					continue
+				}
+				values = append(values, task.marker.commitTs)
+				if len(values) == 5 {
+					receivedA <- values
+					return nil
+				}
 			}
-			values = append(values, task.marker.commitTs)
-			if len(values) == 5 {
-				receivedA <- values
-			}
-			return nil
-		})
-		return err
+		}
 	})
 	eg.Go(func() error {
 		values := make([]uint64, 0, 5)
-		err := group.consumeOutputShard(egCtx, shardB, func(task *task) error {
-			if task.dispatcherID != dispatcherB {
-				return nil
+		for {
+			select {
+			case <-egCtx.Done():
+				return egCtx.Err()
+			case future := <-outputs[shardB]:
+				err := future.Ready(egCtx)
+				if err != nil {
+					return err
+				}
+				task := future.task
+				if task.dispatcherID != dispatcherB {
+					continue
+				}
+				values = append(values, task.marker.commitTs)
+				if len(values) == 5 {
+					receivedB <- values
+					return nil
+				}
 			}
-			values = append(values, task.marker.commitTs)
-			if len(values) == 5 {
-				receivedB <- values
-			}
-			return nil
-		})
-		return err
+		}
 	})
 
 	for i := uint64(1); i <= 5; i++ {
@@ -148,6 +168,8 @@ func TestEncodingGroupEncodeDMLTask(t *testing.T) {
 
 	encoderConfig := newTestTxnEncoderConfig(t)
 	group := newEncoderGroup(encoderConfig, 2, 1)
+	outputs := group.Outputs()
+	require.Len(t, outputs, 1)
 	eg.Go(func() error {
 		return group.run(egCtx)
 	})
@@ -169,11 +191,21 @@ func TestEncodingGroupEncodeDMLTask(t *testing.T) {
 
 	done := make(chan struct{}, 1)
 	eg.Go(func() error {
-		return group.consumeOutputShard(egCtx, 0, func(task *task) error {
-			require.Equal(t, taskValue, task)
-			done <- struct{}{}
-			return nil
-		})
+		for {
+			select {
+			case <-egCtx.Done():
+				return egCtx.Err()
+			case future := <-outputs[0]:
+				err := future.Ready(egCtx)
+				if err != nil {
+					return err
+				}
+				task := future.task
+				require.Equal(t, taskValue, task)
+				done <- struct{}{}
+				return nil
+			}
+		}
 	})
 	select {
 	case <-done:

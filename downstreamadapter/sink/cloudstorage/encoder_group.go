@@ -22,6 +22,10 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+const (
+	defaultEncodingConcurrency = 8
+)
+
 type encoderGroup struct {
 	codecConfig *common.Config
 
@@ -45,10 +49,10 @@ func newEncoderGroup(
 	outputShards int,
 ) *encoderGroup {
 	if concurrency <= 0 {
-		concurrency = 1
+		concurrency = defaultEncodingConcurrency
 	}
 	if outputShards <= 0 {
-		outputShards = 1
+		outputShards = defaultEncodingConcurrency
 	}
 
 	const defaultChannelSize = 1024
@@ -78,22 +82,7 @@ func (eg *encoderGroup) run(ctx context.Context) error {
 			return eg.runEncoder(ctx, idx)
 		})
 	}
-
-	err := g.Wait()
-	// outputCh is owned by encoderGroup.run. It closes the fan-out only after all
-	// encoder goroutines have exited and no more futures can be published.
-	for _, outCh := range eg.outputCh {
-		close(outCh)
-	}
-	return err
-}
-
-// closeInput is owned by the upstream submit stage.
-// It closes each encoder input once no more tasks can be added.
-func (eg *encoderGroup) closeInput() {
-	for _, inputCh := range eg.inputCh {
-		close(inputCh)
-	}
+	return g.Wait()
 }
 
 // runEncoder is the only place that mutates task.encodedMsgs.
@@ -115,7 +104,7 @@ func (eg *encoderGroup) runEncoder(ctx context.Context, index int) error {
 			}
 			task := future.task
 			if task.isDrainTask() {
-				close(future.done)
+				future.Done()
 				continue
 			}
 
@@ -124,7 +113,7 @@ func (eg *encoderGroup) runEncoder(ctx context.Context, index int) error {
 				return errors.Trace(err)
 			}
 			task.encodedMsgs = encoder.Build()
-			close(future.done)
+			future.Done()
 		}
 	}
 }
@@ -143,9 +132,6 @@ func (eg *encoderGroup) add(ctx context.Context, task *task) error {
 	case eg.inputCh[inputIndex] <- future:
 	}
 
-	if err := context.Cause(ctx); err != nil {
-		return errors.Trace(err)
-	}
 	select {
 	case <-ctx.Done():
 		return errors.Trace(context.Cause(ctx))
@@ -154,31 +140,8 @@ func (eg *encoderGroup) add(ctx context.Context, task *task) error {
 	return nil
 }
 
-func (eg *encoderGroup) consumeOutputShard(
-	ctx context.Context,
-	index int,
-	handle func(*task) error,
-) error {
-	if index < 0 || index >= len(eg.outputCh) {
-		return errors.Errorf("output index out of range: %d", index)
-	}
-	outputCh := eg.outputCh[index]
-	for {
-		select {
-		case <-ctx.Done():
-			return errors.Trace(context.Cause(ctx))
-		case future, ok := <-outputCh:
-			if !ok {
-				return nil
-			}
-			if err := future.ready(ctx); err != nil {
-				return err
-			}
-			if err := handle(future.task); err != nil {
-				return err
-			}
-		}
-	}
+func (eg *encoderGroup) Outputs() []chan *future {
+	return eg.outputCh
 }
 
 type future struct {
@@ -195,7 +158,11 @@ func newFuture(task *task) *future {
 	}
 }
 
-func (f *future) ready(ctx context.Context) error {
+func (f *future) Done() {
+	close(f.done)
+}
+
+func (f *future) Ready(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		return errors.Trace(context.Cause(ctx))

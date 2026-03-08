@@ -18,7 +18,6 @@ import (
 	"context"
 	"path"
 	"strconv"
-	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/failpoint"
@@ -44,7 +43,6 @@ type writer struct {
 
 	toBeFlushedCh chan writerTask
 	inputCh       *chann.DrainableChann[*task]
-	isClosed      atomic.Bool
 
 	statistics        *pmetrics.Statistics
 	filePathGenerator *cloudstorage.FilePathGenerator
@@ -120,7 +118,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 			d.metricsWorkerBusyRatio.Add(flushTimeSlice.Seconds())
 			flushTimeSlice = 0
 		case task, ok := <-d.toBeFlushedCh:
-			if !ok || d.isClosed.Load() {
+			if !ok {
 				return nil
 			}
 			if task.marker != nil {
@@ -293,7 +291,7 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 // genAndDispatchTask builds table batches and emits flush tasks.
 // Invariants:
 //  1. DDL marker will flush current batch first, then emit marker task.
-//  2. Writer close path flushes the remaining batch before exit.
+//  2. Context cancellation stops batching immediately.
 //  3. Size-triggered flush only flushes the target table shard batch.
 func (d *writer) genAndDispatchTask(ctx context.Context) error {
 	batchedTask := newBatchedTask()
@@ -310,9 +308,6 @@ func (d *writer) genAndDispatchTask(ctx context.Context) error {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
 		case <-ticker.C:
-			if d.isClosed.Load() {
-				return nil
-			}
 			if len(batchedTask.batch) == 0 {
 				continue
 			}
@@ -326,7 +321,7 @@ func (d *writer) genAndDispatchTask(ctx context.Context) error {
 			default:
 			}
 		case tableTask, ok := <-d.inputCh.Out():
-			if !ok || d.isClosed.Load() {
+			if !ok {
 				if len(batchedTask.batch) == 0 {
 					return nil
 				}
@@ -378,16 +373,6 @@ func (d *writer) enqueueTask(ctx context.Context, taskValue *task) error {
 		return errors.Trace(ctx.Err())
 	case d.inputCh.In() <- taskValue:
 		return nil
-	}
-}
-
-func (d *writer) closeInput() {
-	d.inputCh.CloseAndDrain()
-}
-
-func (d *writer) close() {
-	if !d.isClosed.CompareAndSwap(false, true) {
-		return
 	}
 }
 

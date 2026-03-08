@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	putil "github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/stretchr/testify/require"
 )
 
@@ -219,6 +220,28 @@ func TestDMLWritersRunExitAfterClose(t *testing.T) {
 		require.NoError(t, err)
 	case <-time.After(5 * time.Second):
 		t.Fatal("dmlWriters.run did not exit after close")
+	}
+}
+
+func TestSubmitTaskToEncoderExitOnContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	dmlWriters := &dmlWriters{
+		msgCh:       chann.NewUnlimitedChannelDefault[*task](),
+		encodeGroup: newEncoderGroup(newTestTxnEncoderConfig(t), 1, 1),
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- dmlWriters.submitTaskToEncoder(ctx)
+	}()
+
+	cancel()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("submitTaskToEncoder did not exit after context cancel")
 	}
 }
 

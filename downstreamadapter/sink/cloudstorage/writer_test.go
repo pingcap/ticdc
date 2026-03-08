@@ -122,9 +122,7 @@ func TestWriterRun(t *testing.T) {
 	fileNames := getTableFiles(t, table1Dir)
 	require.Len(t, fileNames, 2)
 	require.ElementsMatch(t, []string{fmt.Sprintf("CDC_%s_000001.json", dispatcherID.String()), fmt.Sprintf("CDC_%s.index", dispatcherID.String())}, fileNames)
-	d.closeInput()
 	cancel()
-	d.close()
 	wg.Wait()
 }
 
@@ -188,16 +186,14 @@ func TestWriterDrainMarker(t *testing.T) {
 		return callbackCnt.Load() == 1
 	}, 5*time.Second, 100*time.Millisecond)
 
-	d.closeInput()
-	d.close()
 	cancel()
 	wg.Wait()
 }
 
-func TestWriterRunExitAfterCloseInput(t *testing.T) {
+func TestWriterRunExitAfterContextCancel(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
 	parentDir := t.TempDir()
 	d := testWriter(ctx, t, parentDir)
 
@@ -206,14 +202,12 @@ func TestWriterRunExitAfterCloseInput(t *testing.T) {
 		done <- d.run(ctx)
 	}()
 
-	d.closeInput()
+	cancel()
 
 	select {
 	case err := <-done:
-		require.NoError(t, err)
+		require.ErrorIs(t, err, context.Canceled)
 	case <-time.After(5 * time.Second):
-		t.Fatal("writer.run did not exit after closeInput")
+		t.Fatal("writer.run did not exit after context cancel")
 	}
-
-	d.close()
 }
