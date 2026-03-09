@@ -120,8 +120,11 @@ type DispatcherManager struct {
 	// sink is used to send all the events to the downstream.
 	sink sink.Sink
 	// redo related
+	// RedoEnable is immutable after construction and records whether redo is configured for the changefeed.
 	RedoEnable bool
-	redoSink   *redo.Sink
+	// redoReady publishes that redo components are fully initialized and safe for concurrent access.
+	redoReady atomic.Bool
+	redoSink  *redo.Sink
 	// redoGlobalTs stores the resolved-ts of the redo metadata and blocks events in the common dispatcher where the commit-ts is greater than the resolved-ts.
 	redoGlobalTs atomic.Uint64
 
@@ -197,6 +200,7 @@ func NewDispatcherManager(
 		latestRedoWatermark:   NewWatermark(0),
 		schemaIDToDispatchers: dispatcher.NewSchemaIDToDispatchers(),
 		sinkQuota:             cfConfig.MemoryQuota,
+		RedoEnable:            redoEnabled(cfConfig),
 
 		metricTableTriggerEventDispatcherCount: metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "eventDispatcher"),
 		metricEventDispatcherCount:             metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "eventDispatcher"),

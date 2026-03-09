@@ -15,12 +15,14 @@ package dispatchermanager
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/stretchr/testify/require"
@@ -201,4 +203,54 @@ func TestPreCheckForSchedulerHandler_CreateSkippedWhenDispatcherExists(t *testin
 
 	_, ok := preCheckForSchedulerHandler(createReq, dm)
 	require.False(t, ok)
+}
+
+func TestIsRedoDispatcherManagerReadySkipsComponentChecksUntilPublished(t *testing.T) {
+	t.Parallel()
+
+	dm := &DispatcherManager{
+		RedoEnable: true,
+	}
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 1000; i++ {
+			dm.redoDispatcherMap = newDispatcherMap[*dispatcher.RedoDispatcher]()
+			dm.redoSink = &redo.Sink{}
+			dm.redoSchemaIDToDispatchers = dispatcher.NewSchemaIDToDispatchers()
+			dm.redoDispatcherMap = nil
+			dm.redoSink = nil
+			dm.redoSchemaIDToDispatchers = nil
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 1000; i++ {
+			require.False(t, isRedoDispatcherManagerReady(dm))
+		}
+	}()
+
+	close(start)
+	wg.Wait()
+}
+
+func TestIsRedoDispatcherManagerReadyReturnsTrueAfterPublication(t *testing.T) {
+	t.Parallel()
+
+	dm := &DispatcherManager{
+		RedoEnable:                true,
+		redoDispatcherMap:         newDispatcherMap[*dispatcher.RedoDispatcher](),
+		redoSink:                  &redo.Sink{},
+		redoSchemaIDToDispatchers: dispatcher.NewSchemaIDToDispatchers(),
+	}
+	dm.redoReady.Store(true)
+
+	require.True(t, isRedoDispatcherManagerReady(dm))
 }
