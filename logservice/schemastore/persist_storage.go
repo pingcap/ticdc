@@ -169,33 +169,45 @@ func (p *persistentStorage) getGcSafePoint(ctx context.Context) (uint64, error) 
 	return gc.UnifyGetServiceGCSafepoint(ctx, p.pdCli, p.keyspaceID, defaultSchemaStoreGcServiceID)
 }
 
-func (p *persistentStorage) initialize(ctx context.Context) error {
-	var gcSafePoint uint64
-	fakeChangefeedID := common.NewChangefeedID(defaultSchemaStoreGcServiceID)
+func (p *persistentStorage) getAndEnsureGcSafePoint(ctx context.Context, fakeChangefeedID common.ChangeFeedID) (uint64, error) {
 	for {
-		var err error
-		gcSafePoint, err = p.getGcSafePoint(ctx)
+		gcSafePoint, err := p.getGcSafePoint(ctx)
 		if err == nil {
 			log.Info("get gc safepoint success", zap.Uint32("keyspaceID", p.keyspaceID), zap.Any("gcSafePoint", gcSafePoint))
-			// Ensure the start ts is valid during the gc service ttl
+			// Ensure the start ts is valid during the gc service ttl.
 			err = gc.EnsureChangefeedStartTsSafety(
 				ctx,
 				p.pdCli,
 				defaultSchemaStoreGcServiceID,
 				p.keyspaceID,
 				fakeChangefeedID,
-				defaultGcServiceTTL, gcSafePoint+1)
+				defaultGcServiceTTL,
+				gcSafePoint+1,
+			)
 			if err == nil {
-				break
+				return gcSafePoint, nil
 			}
+			log.Warn("ensure gc start ts safety failed, will retry in 1s",
+				zap.Uint32("keyspaceID", p.keyspaceID),
+				zap.Uint64("startTs", gcSafePoint+1),
+				zap.Error(err))
+		} else {
+			log.Warn("get ts failed, will retry in 1s", zap.Error(err))
 		}
 
-		log.Warn("get ts failed, will retry in 1s", zap.Error(err))
 		select {
 		case <-ctx.Done():
-			return errors.Trace(err)
+			return 0, errors.Trace(ctx.Err())
 		case <-time.After(time.Second):
 		}
+	}
+}
+
+func (p *persistentStorage) initialize(ctx context.Context) error {
+	fakeChangefeedID := common.NewChangefeedID(defaultSchemaStoreGcServiceID)
+	gcSafePoint, err := p.getAndEnsureGcSafePoint(ctx, fakeChangefeedID)
+	if err != nil {
+		return err
 	}
 
 	defer gc.UndoEnsureChangefeedStartTsSafety(ctx, p.pdCli, p.keyspaceID, defaultSchemaStoreGcServiceID, fakeChangefeedID)
@@ -255,32 +267,9 @@ func (p *persistentStorage) initialize(ctx context.Context) error {
 				zap.Uint32("keyspaceID", p.keyspaceID),
 				zap.Uint64("snapTs", gcSafePoint),
 				zap.Error(err))
-
-			select {
-			case <-ctx.Done():
-				return errors.Trace(ctx.Err())
-			case <-time.After(time.Second):
-			}
-
-			gcSafePoint, err = p.getGcSafePoint(ctx)
+			gcSafePoint, err = p.getAndEnsureGcSafePoint(ctx, fakeChangefeedID)
 			if err != nil {
-				log.Warn("get ts failed, will retry in 1s", zap.Error(err))
-				continue
-			}
-			log.Info("get gc safepoint success", zap.Uint32("keyspaceID", p.keyspaceID), zap.Any("gcSafePoint", gcSafePoint))
-			err = gc.EnsureChangefeedStartTsSafety(
-				ctx,
-				p.pdCli,
-				defaultSchemaStoreGcServiceID,
-				p.keyspaceID,
-				fakeChangefeedID,
-				defaultGcServiceTTL, gcSafePoint+1)
-			if err != nil {
-				log.Warn("ensure gc start ts safety failed, will retry in 1s",
-					zap.Uint32("keyspaceID", p.keyspaceID),
-					zap.Uint64("startTs", gcSafePoint+1),
-					zap.Error(err))
-				continue
+				return err
 			}
 		}
 	}
