@@ -3194,11 +3194,8 @@ func TestBuildPersistedDDLEventForRenameTablesFallbackQueryOldTableName(t *testi
 	assert.Equal(t, []string{"source_db", "source_db"}, ddl.ExtraSchemaNames)
 }
 
-func TestBuildPersistedDDLEventForRenameTablesCyclicRenameWithTemporaryTable(t *testing.T) {
-	// Simulate: rename table a to c, b to a, c to b;
-	// c only exists as a temporary name inside this statement.
-	// The query has 3 rename clauses, while rename table infos contain 2 entries.
-	// This should panic due to the strict consistency check.
+func TestBuildPersistedDDLEventForRenameTablesCyclicRenameNormal(t *testing.T) {
+	// Simulate: rename table a to b, b to a.
 	job := buildRenameTablesJobForTest(
 		[]int64{100, 100},
 		[]int64{100, 100},
@@ -3208,48 +3205,158 @@ func TestBuildPersistedDDLEventForRenameTablesCyclicRenameWithTemporaryTable(t *
 		[]string{"b", "a"},
 		1010,
 	)
-	job.Query = "RENAME TABLE `test`.`a` TO `test`.`c`, `test`.`b` TO `test`.`a`, `test`.`c` TO `test`.`b`"
-
-	require.Panics(t, func() {
-		_ = buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
-			job: job,
-			databaseMap: map[int64]*BasicDatabaseInfo{
-				100: {Name: "test", Tables: map[int64]bool{200: true, 201: true}},
-			},
-			tableMap: map[int64]*BasicTableInfo{
-				200: {SchemaID: 100, Name: "a"},
-				201: {SchemaID: 100, Name: "b"},
-			},
-		})
-	})
-}
-
-func TestBuildPersistedDDLEventForRenameTablesDoNotOverrideExistingArgsByQuery(t *testing.T) {
-	job := buildRenameTablesJobForTest(
-		[]int64{100},
-		[]int64{105},
-		[]int64{200},
-		[]string{"source_db"},
-		[]string{"source_t1_from_args"},
-		[]string{"target_t1"},
-		1010,
-	)
-	job.Query = "RENAME TABLE `source_db`.`source_t1_from_query` TO `target_db`.`target_t1`"
+	job.Query = "RENAME TABLE `test`.`a` TO `test`.`b`, `test`.`b` TO `test`.`a`"
 
 	ddl := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
 		job: job,
 		databaseMap: map[int64]*BasicDatabaseInfo{
-			100: {Name: "source_db", Tables: map[int64]bool{200: true}},
-			105: {Name: "target_db", Tables: map[int64]bool{200: true}},
+			100: {Name: "test", Tables: map[int64]bool{200: true, 201: true}},
 		},
 		tableMap: map[int64]*BasicTableInfo{
-			200: {SchemaID: 100, Name: "source_t1_from_store"},
+			200: {SchemaID: 100, Name: "a"},
+			201: {SchemaID: 100, Name: "b"},
 		},
 	})
 
-	assert.Equal(t, []string{"source_t1_from_args"}, ddl.ExtraTableNames)
-	assert.Equal(t, []string{"source_db"}, ddl.ExtraSchemaNames)
-	assert.Equal(t, "RENAME TABLE `source_db`.`source_t1_from_args` TO `target_db`.`target_t1`;", ddl.Query)
+	assert.Equal(t,
+		"RENAME TABLE `test`.`a` TO `test`.`b`;"+
+			"RENAME TABLE `test`.`b` TO `test`.`a`;",
+		ddl.Query)
+	assert.Equal(t, []string{"a", "b"}, ddl.ExtraTableNames)
+}
+
+func TestBuildPersistedDDLEventForRenameTablesDoNotOverrideExistingArgsByQuery(t *testing.T) {
+	job := buildRenameTablesJobForTest(
+		[]int64{100, 100},
+		[]int64{105, 105},
+		[]int64{200, 201},
+		[]string{"source_db", "source_db"},
+		[]string{"source_t1_from_args", "source_t2_from_args"},
+		[]string{"target_t1", "target_t2"},
+		1010,
+	)
+	job.Query = "RENAME TABLE `source_db`.`source_t1_from_query` TO `target_db`.`target_t1`, `source_db`.`source_t2_from_query` TO `target_db`.`target_t2`"
+
+	ddl := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			100: {Name: "source_db", Tables: map[int64]bool{200: true, 201: true}},
+			105: {Name: "target_db", Tables: map[int64]bool{200: true, 201: true}},
+		},
+		tableMap: map[int64]*BasicTableInfo{
+			200: {SchemaID: 100, Name: "source_t1_from_store"},
+			201: {SchemaID: 100, Name: "source_t2_from_store"},
+		},
+	})
+
+	assert.Equal(t, []string{"source_t1_from_args", "source_t2_from_args"}, ddl.ExtraTableNames)
+	assert.Equal(t, []string{"source_db", "source_db"}, ddl.ExtraSchemaNames)
+	assert.Equal(t,
+		"RENAME TABLE `source_db`.`source_t1_from_args` TO `target_db`.`target_t1`;"+
+			"RENAME TABLE `source_db`.`source_t2_from_args` TO `target_db`.`target_t2`;",
+		ddl.Query)
+}
+
+func TestBuildPersistedDDLEventForRenameTablesEscapesIdentifiers(t *testing.T) {
+	job := buildRenameTablesJobForTest(
+		[]int64{100, 100},
+		[]int64{105, 105},
+		[]int64{200, 201},
+		[]string{"source`db", "source`db"},
+		[]string{"source`t1", "source`t2"},
+		[]string{"target`t1", "target`t2"},
+		1010,
+	)
+
+	ddl := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			100: {Name: "source`db", Tables: map[int64]bool{200: true, 201: true}},
+			105: {Name: "target`db", Tables: map[int64]bool{200: true, 201: true}},
+		},
+		tableMap: map[int64]*BasicTableInfo{
+			200: {SchemaID: 100, Name: "source`t1"},
+			201: {SchemaID: 100, Name: "source`t2"},
+		},
+	})
+
+	assert.Equal(t,
+		"RENAME TABLE `source``db`.`source``t1` TO `target``db`.`target``t1`;"+
+			"RENAME TABLE `source``db`.`source``t2` TO `target``db`.`target``t2`;",
+		ddl.Query)
+}
+
+func TestBuildPersistedDDLEventForRenameTableEscapesIdentifiers(t *testing.T) {
+	job := buildRenameTableJobForTest(100, 101, "target`t", 100, &model.InvolvingSchemaInfo{
+		Database: "source`db",
+		Table:    "source`t",
+	})
+	// Keep empty to force using InvolvingSchemaInfo as source name.
+	job.Query = ""
+
+	ddl := buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			100: {Name: "target`db", Tables: map[int64]bool{101: true}},
+		},
+		tableMap: map[int64]*BasicTableInfo{
+			101: {SchemaID: 100, Name: "source`t"},
+		},
+	})
+
+	assert.Equal(t, "RENAME TABLE `source``db`.`source``t` TO `target``db`.`target``t`", ddl.Query)
+}
+
+func TestBuildPersistedDDLEventForDropTableEscapesIdentifiers(t *testing.T) {
+	job := buildDropTableJobForTest(100, 200, 1000)
+	ddl := buildPersistedDDLEventForDropTable(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			100: {Name: "schema`x", Tables: map[int64]bool{200: true}},
+		},
+		tableMap: map[int64]*BasicTableInfo{
+			200: {SchemaID: 100, Name: "table`x"},
+		},
+	})
+	assert.Equal(t, "DROP TABLE `schema``x`.`table``x`", ddl.Query)
+}
+
+func TestBuildPersistedDDLEventForDropViewEscapesIdentifiers(t *testing.T) {
+	job := buildDropViewJobForTest(100, 1000)
+	job.TableName = "view`x"
+	ddl := buildPersistedDDLEventForDropView(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			100: {Name: "schema`x", Tables: map[int64]bool{}},
+		},
+	})
+	assert.Equal(t, "DROP VIEW `schema``x`.`view``x`", ddl.Query)
+}
+
+func TestBuildPersistedDDLEventForExchangePartitionEscapesIdentifiers(t *testing.T) {
+	job := buildExchangePartitionJobForTest(100, 200, 300, "pt`x", []int64{301}, 1000)
+	job.Query = "ALTER TABLE `ignored`.`ignored` EXCHANGE PARTITION `p0` WITH TABLE `ignored2`.`ignored2` WITHOUT VALIDATION"
+
+	ddl := buildPersistedDDLEventForExchangePartition(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			100: {Name: "normal`db", Tables: map[int64]bool{200: true}},
+			101: {Name: "part`db", Tables: map[int64]bool{300: true}},
+		},
+		tableMap: map[int64]*BasicTableInfo{
+			200: {SchemaID: 100, Name: "normal`t"},
+			300: {SchemaID: 101, Name: "pt`x"},
+		},
+		partitionMap: map[int64]BasicPartitionInfo{
+			300: {
+				301: nil,
+			},
+		},
+	})
+
+	assert.Equal(t,
+		"ALTER TABLE `part``db`.`pt``x` EXCHANGE PARTITION `p0` WITH TABLE `normal``db`.`normal``t` WITHOUT VALIDATION",
+		ddl.Query)
 }
 
 func TestParseRenameTablesQueryInfos(t *testing.T) {

@@ -600,7 +600,7 @@ func buildPersistedDDLEventForDropView(args buildPersistedDDLEventFuncArgs) Pers
 	// We don't store the relationship: view_id -> table_name, get table name from args.job
 	event.TableName = args.job.TableName
 	// The query in job maybe "DROP VIEW test1.view1, test2.view2", we need rebuild it here.
-	event.Query = fmt.Sprintf("DROP VIEW `%s`.`%s`", event.SchemaName, event.TableName)
+	event.Query = fmt.Sprintf("DROP VIEW %s", common.QuoteSchema(event.SchemaName, event.TableName))
 	return event
 }
 
@@ -662,7 +662,7 @@ func buildPersistedDDLEventForDropTable(args buildPersistedDDLEventFuncArgs) Per
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = getTableName(args.tableMap, event.TableID)
 	// The query in job maybe "DROP TABLE test1.table1, test2.table2", we need rebuild it here.
-	event.Query = fmt.Sprintf("DROP TABLE `%s`.`%s`", event.SchemaName, event.TableName)
+	event.Query = fmt.Sprintf("DROP TABLE %s", common.QuoteSchema(event.SchemaName, event.TableName))
 	return event
 }
 
@@ -744,9 +744,9 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 				log.Error("unknown stmt type", zap.String("query", args.job.Query), zap.Any("stmt", stmt))
 			}
 		}
-		event.Query = fmt.Sprintf("RENAME TABLE `%s`.`%s` TO `%s`.`%s`",
-			oldSchemaName, oldTableName,
-			event.SchemaName, event.TableName)
+		event.Query = fmt.Sprintf("RENAME TABLE %s TO %s",
+			common.QuoteSchema(oldSchemaName, oldTableName),
+			common.QuoteSchema(event.SchemaName, event.TableName))
 	}
 	return event
 }
@@ -787,8 +787,10 @@ func buildPersistedDDLEventForExchangePartition(args buildPersistedDDLEventFuncA
 		// Note that partition name should be parsed from original query, not the upperQuery.
 		partName := strings.TrimSpace(event.Query[idx1:idx2])
 		partName = strings.Replace(partName, "`", "", -1)
-		event.Query = fmt.Sprintf("ALTER TABLE `%s`.`%s` EXCHANGE PARTITION `%s` WITH TABLE `%s`.`%s`",
-			event.ExtraSchemaName, event.ExtraTableName, partName, event.SchemaName, event.TableName)
+		event.Query = fmt.Sprintf("ALTER TABLE %s EXCHANGE PARTITION %s WITH TABLE %s",
+			common.QuoteSchema(event.ExtraSchemaName, event.ExtraTableName),
+			common.QuoteName(partName),
+			common.QuoteSchema(event.SchemaName, event.TableName))
 
 		if strings.HasSuffix(upperQuery, "WITHOUT VALIDATION") {
 			event.Query += " WITHOUT VALIDATION"
@@ -846,10 +848,11 @@ func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) 
 	}
 	renameTableInfos := renameArgs.RenameTableInfos
 	multipleTableInfos := args.job.BinlogInfo.MultipleTableInfos
-	if len(renameArgs.RenameTableInfos) != len(args.job.BinlogInfo.MultipleTableInfos) {
+	if len(renameTableInfos) != len(multipleTableInfos) {
 		log.Panic("should not happen",
-			zap.Int("renameArgsLen", len(renameArgs.RenameTableInfos)),
-			zap.Int("multipleTableInfosLen", len(args.job.BinlogInfo.MultipleTableInfos)))
+			zap.Int("renameArgsLen", len(renameTableInfos)),
+			zap.Int("multipleTableInfosLen", len(multipleTableInfos)),
+			zap.String("query", args.job.Query))
 	}
 
 	// TiDB <= v8.1 may emit empty old table names for RENAME TABLES args.
@@ -910,7 +913,9 @@ func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) 
 		event.ExtraTableNames = append(event.ExtraTableNames, oldTableName)
 		event.SchemaIDs = append(event.SchemaIDs, info.NewSchemaID)
 		event.SchemaNames = append(event.SchemaNames, newSchemaName)
-		querys = append(querys, fmt.Sprintf("RENAME TABLE `%s`.`%s` TO `%s`.`%s`;", oldSchemaName, oldTableName, newSchemaName, info.NewTableName.O))
+		querys = append(querys, fmt.Sprintf("RENAME TABLE %s TO %s;",
+			common.QuoteSchema(oldSchemaName, oldTableName),
+			common.QuoteSchema(newSchemaName, info.NewTableName.O)))
 	}
 
 	event.Query = strings.Join(querys, "")
