@@ -724,6 +724,8 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 		// InvolvingSchemaInfo returns the schema info involved in the job.
 		// The value should be stored in lower case.
 		//
+		// InvolvingSchemaInfo may store normalized lower-case names,
+		// while the original query can keep user-provided identifier case.
 		// Prefer names parsed from the original query whenever possible.
 		// See https://github.com/pingcap/ticdc/pull/2218 for background.
 		oldSchemaName := args.job.InvolvingSchemaInfo[0].Database
@@ -858,6 +860,8 @@ func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) 
 			zap.String("query", args.job.Query))
 	}
 
+	// RenameTableInfos may store normalized lower-case names,
+	// while the original query can keep user-provided identifier case.
 	// Prefer names parsed from the original query whenever possible.
 	// See https://github.com/pingcap/ticdc/pull/2218 for background.
 	//
