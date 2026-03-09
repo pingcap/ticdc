@@ -384,8 +384,10 @@ func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 	drainTarget, drainEpoch := m.controller.getDispatcherDrainTarget()
 	if !drainTarget.IsEmpty() && drainEpoch > 0 {
 		dispatcherCount := m.controller.spanController.GetTaskSizeByNodeID(drainTarget)
+		inflightDrainMoveCount := m.controller.operatorController.CountInflightDrainMovesFromNode(drainTarget)
 		if m.enableRedo {
 			dispatcherCount += m.controller.redoSpanController.GetTaskSizeByNodeID(drainTarget)
+			inflightDrainMoveCount += m.controller.redoOperatorController.CountInflightDrainMovesFromNode(drainTarget)
 		}
 		if dispatcherCount < 0 {
 			dispatcherCount = 0
@@ -393,10 +395,14 @@ func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 		if dispatcherCount > math.MaxUint32 {
 			dispatcherCount = math.MaxUint32
 		}
+		if inflightDrainMoveCount > math.MaxUint32 {
+			inflightDrainMoveCount = math.MaxUint32
+		}
 		status.DrainProgress = &heartbeatpb.DrainProgress{
-			TargetNodeId:          drainTarget.String(),
-			TargetEpoch:           drainEpoch,
-			TargetDispatcherCount: uint32(dispatcherCount),
+			TargetNodeId:                 drainTarget.String(),
+			TargetEpoch:                  drainEpoch,
+			TargetDispatcherCount:        uint32(dispatcherCount),
+			TargetInflightDrainMoveCount: uint32(inflightDrainMoveCount),
 		}
 	}
 	return status

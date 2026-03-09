@@ -81,7 +81,7 @@ func TestDrainNodeReturnsNonZeroBeforeStoppingObserved(t *testing.T) {
 	require.Equal(t, 1, remaining)
 }
 
-func TestDrainNodeRequiresCheckpointAdvanceAfterCompletionObserved(t *testing.T) {
+func TestDrainNodeCompletesAfterCompletionObserved(t *testing.T) {
 	c, drainController, target := newDrainTestController(t)
 	cf := addRunningChangefeed(c, "cf1", node.ID("other"), 100)
 
@@ -91,14 +91,9 @@ func TestDrainNodeRequiresCheckpointAdvanceAfterCompletionObserved(t *testing.T)
 
 	_, epoch, ok := c.getDispatcherDrainTarget()
 	require.True(t, ok)
-	setChangefeedDrainStatus(cf, target, epoch, 0)
+	setChangefeedDrainStatus(cf, target, epoch, 0, 0)
 	setTargetStoppingObserved(drainController, target)
 
-	remaining, err = c.DrainNode(context.Background(), target)
-	require.NoError(t, err)
-	require.Equal(t, 1, remaining)
-
-	setChangefeedCheckpointTs(cf, 101)
 	remaining, err = c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
 	require.Equal(t, 0, remaining)
@@ -114,19 +109,14 @@ func TestDrainNodeDispatcherCountBlocksCompletion(t *testing.T) {
 
 	_, epoch, ok := c.getDispatcherDrainTarget()
 	require.True(t, ok)
-	setChangefeedDrainStatus(cf, target, epoch, 2)
+	setChangefeedDrainStatus(cf, target, epoch, 2, 0)
 	setTargetStoppingObserved(drainController, target)
 
 	remaining, err = c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
 	require.Equal(t, 2, remaining)
 
-	setChangefeedDrainStatus(cf, target, epoch, 0)
-	remaining, err = c.DrainNode(context.Background(), target)
-	require.NoError(t, err)
-	require.Equal(t, 1, remaining)
-
-	setChangefeedCheckpointTs(cf, 101)
+	setChangefeedDrainStatus(cf, target, epoch, 0, 0)
 	remaining, err = c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
 	require.Equal(t, 0, remaining)
@@ -144,25 +134,18 @@ func TestDrainNodePendingStatusConvergenceBlocksCompletion(t *testing.T) {
 	require.True(t, ok)
 	setTargetStoppingObserved(drainController, target)
 
-	// Checkpoint progress alone must not complete drain before target epoch convergence.
-	setChangefeedCheckpointTs(cf, 101)
+	// Status convergence must finish before drain can complete.
 	remaining, err = c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
 	require.Equal(t, 1, remaining)
 
-	// After convergence, checkpoint gate still requires one forward step from its baseline.
-	setChangefeedDrainStatus(cf, target, epoch, 0)
-	remaining, err = c.DrainNode(context.Background(), target)
-	require.NoError(t, err)
-	require.Equal(t, 1, remaining)
-
-	setChangefeedCheckpointTs(cf, 102)
+	setChangefeedDrainStatus(cf, target, epoch, 0, 0)
 	remaining, err = c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
 	require.Equal(t, 0, remaining)
 }
 
-func TestDrainNodeCheckpointBaselineKeepsAcrossNonCandidate(t *testing.T) {
+func TestDrainNodeInflightDrainMovesBlockCompletion(t *testing.T) {
 	c, drainController, target := newDrainTestController(t)
 	cf := addRunningChangefeed(c, "cf1", node.ID("other"), 100)
 
@@ -172,24 +155,14 @@ func TestDrainNodeCheckpointBaselineKeepsAcrossNonCandidate(t *testing.T) {
 
 	_, epoch, ok := c.getDispatcherDrainTarget()
 	require.True(t, ok)
-	setChangefeedDrainStatus(cf, target, epoch, 0)
+	setChangefeedDrainStatus(cf, target, epoch, 0, 1)
 	setTargetStoppingObserved(drainController, target)
 
-	// First completion candidate freezes baseline and returns non-zero.
 	remaining, err = c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
 	require.Equal(t, 1, remaining)
 
-	// Checkpoint already advanced beyond frozen baseline.
-	setChangefeedCheckpointTs(cf, 101)
-
-	// A temporary non-candidate should not wipe the frozen checkpoint baseline.
-	setChangefeedDrainStatus(cf, target, epoch, 2)
-	remaining, err = c.DrainNode(context.Background(), target)
-	require.NoError(t, err)
-	require.Equal(t, 2, remaining)
-
-	setChangefeedDrainStatus(cf, target, epoch, 0)
+	setChangefeedDrainStatus(cf, target, epoch, 0, 0)
 	remaining, err = c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
 	require.Equal(t, 0, remaining)
@@ -247,29 +220,22 @@ func addRunningChangefeed(c *Controller, name string, nodeID node.ID, checkpoint
 	return cf
 }
 
-func setChangefeedCheckpointTs(cf *changefeed.Changefeed, checkpointTs uint64) {
-	status := cf.GetStatus()
-	_, _, _ = cf.ForceUpdateStatus(&heartbeatpb.MaintainerStatus{
-		ChangefeedID:  cf.ID.ToPB(),
-		CheckpointTs:  checkpointTs,
-		DrainProgress: status.GetDrainProgress(),
-	})
-}
-
 func setChangefeedDrainStatus(
 	cf *changefeed.Changefeed,
 	target node.ID,
 	epoch uint64,
 	dispatcherCount uint32,
+	inflightDrainMoveCount uint32,
 ) {
 	status := cf.GetStatus()
 	_, _, _ = cf.ForceUpdateStatus(&heartbeatpb.MaintainerStatus{
 		ChangefeedID: cf.ID.ToPB(),
 		CheckpointTs: status.CheckpointTs,
 		DrainProgress: &heartbeatpb.DrainProgress{
-			TargetNodeId:          target.String(),
-			TargetEpoch:           epoch,
-			TargetDispatcherCount: dispatcherCount,
+			TargetNodeId:                 target.String(),
+			TargetEpoch:                  epoch,
+			TargetDispatcherCount:        dispatcherCount,
+			TargetInflightDrainMoveCount: inflightDrainMoveCount,
 		},
 	})
 }

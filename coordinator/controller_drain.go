@@ -26,10 +26,6 @@ type drainSession struct {
 	pendingStatusInitialized bool
 	pendingStatus            map[common.ChangeFeedID]struct{}
 
-	// checkpointBaseline is the frozen checkpointTs baseline used by the checkpoint gate.
-	// Nil means the checkpoint gate is not active yet.
-	checkpointBaseline map[common.ChangeFeedID]uint64
-
 	dirty    bool
 	lastSent time.Time
 }
@@ -48,10 +44,8 @@ func newDispatcherDrainEpochSeed() uint64 {
 // It ensures an active target epoch, broadcasts the drain target, requests liveness
 // transition, then evaluates a one-shot drain observation.
 //
-// Drain completion requires two gates:
-// 1. completion candidate: liveness observed in STOPPING path and remaining work is zero;
-// 2. checkpoint gate: all relevant running changefeeds advance beyond the frozen baseline.
-//
+// Drain completion requires the target to reach STOPPING after DRAINING and for
+// all maintainer-side drain work to converge to zero.
 // The returned remaining is guaranteed to be non-zero until completion is proven.
 func (c *Controller) DrainNode(_ context.Context, target node.ID) (int, error) {
 	if c.nodeManager.GetNodeInfo(target) == nil {
@@ -81,20 +75,20 @@ func (c *Controller) DrainNode(_ context.Context, target node.ID) (int, error) {
 		observation.stoppingObserved,
 		observation.remaining,
 	) {
-		if c.tryPassDrainCheckpointGate(target, targetEpoch) {
-			c.clearDispatcherDrainTarget(target, targetEpoch)
-			return 0, nil
-		}
-		return 1, nil
+		c.clearDispatcherDrainTarget(target, targetEpoch)
+		return 0, nil
 	}
 
-	if observation.dispatcherCountOnTarget > 0 || observation.pendingStatusCount > 0 {
+	if observation.dispatcherCountOnTarget > 0 ||
+		observation.pendingStatusCount > 0 ||
+		observation.targetInflightDrainMoveCount > 0 {
 		log.Info("drain completion blocked by remaining work",
 			zap.Stringer("targetNodeID", target),
 			zap.Uint64("targetEpoch", targetEpoch),
 			zap.Int("maintainersOnTarget", observation.maintainersOnTarget),
 			zap.Int("inflightOpsInvolvingTarget", observation.inflightOpsInvolvingTarget),
 			zap.Int("dispatcherCountOnTarget", observation.dispatcherCountOnTarget),
+			zap.Int("targetInflightDrainMoveCount", observation.targetInflightDrainMoveCount),
 			zap.Int("pendingStatusCount", observation.pendingStatusCount),
 			zap.Int("remaining", observation.remaining))
 	}
@@ -109,6 +103,9 @@ type drainNodeObservation struct {
 	inflightOpsInvolvingTarget int
 	// dispatcherCountOnTarget is the sum of maintainer-reported dispatchers still on target.
 	dispatcherCountOnTarget int
+	// targetInflightDrainMoveCount is the sum of maintainer-reported dispatcher
+	// move operators still draining work away from the target node.
+	targetInflightDrainMoveCount int
 	// pendingStatusCount is the number of running changefeeds not converged to the active target epoch.
 	pendingStatusCount int
 	// remaining is the max of all workload dimensions used by drain completion gating.
@@ -127,11 +124,13 @@ func (c *Controller) observeDrainNode(target node.ID, epoch uint64) drainNodeObs
 		inflightOpsInvolvingTarget: c.operatorController.CountOperatorsInvolvingNode(target),
 	}
 	observation.dispatcherCountOnTarget = c.aggregateDrainTargetDispatcherCount(target, epoch)
+	observation.targetInflightDrainMoveCount = c.aggregateDrainTargetInflightMoveCount(target, epoch)
 	observation.pendingStatusCount = c.collectDrainPendingStatus(target, epoch)
 	observation.remaining = drainRemainingEstimate(
 		observation.maintainersOnTarget,
 		observation.inflightOpsInvolvingTarget,
 		observation.dispatcherCountOnTarget,
+		observation.targetInflightDrainMoveCount,
 		observation.pendingStatusCount,
 	)
 
@@ -219,106 +218,6 @@ func isDrainStatusConvergenceRelevant(cf *changefeed.Changefeed) bool {
 	}
 	info := cf.GetInfo()
 	return info != nil && shouldRunChangefeed(info.State)
-}
-
-// tryPassDrainCheckpointGate returns true only when all frozen running changefeeds
-// for the target have advanced checkpointTs beyond the first completion baseline.
-// If new relevant changefeeds appear after baseline initialization, they are added
-// to baseline and this pass returns false so the next pass can verify progression.
-func (c *Controller) tryPassDrainCheckpointGate(target node.ID, epoch uint64) bool {
-	c.drainSessionMu.Lock()
-	defer c.drainSessionMu.Unlock()
-
-	session := c.drainSession
-	if session == nil || session.target != target || session.epoch != epoch {
-		return false
-	}
-
-	if session.checkpointBaseline == nil {
-		baseline := c.snapshotDrainCheckpointBaseline(target, epoch)
-		// No relevant running changefeed means nothing is left to prove for checkpoint progress.
-		if len(baseline) == 0 {
-			return true
-		}
-		session.checkpointBaseline = baseline
-		return false
-	}
-
-	for id, baseTs := range session.checkpointBaseline {
-		cf := c.changefeedDB.GetByID(id)
-		if cf == nil {
-			// Removed changefeed should not block this drain checkpoint gate.
-			delete(session.checkpointBaseline, id)
-			continue
-		}
-		if !isDrainCheckpointGateRelevant(cf, target, epoch) {
-			// Non-relevant changefeed should not block this drain checkpoint gate.
-			delete(session.checkpointBaseline, id)
-			continue
-		}
-		// Drain completion requires forward checkpoint progress from the frozen baseline.
-		if cf.GetStatus().CheckpointTs <= baseTs {
-			return false
-		}
-	}
-
-	baselineExpanded := false
-	for _, cf := range c.changefeedDB.GetReplicating() {
-		if cf == nil || !isDrainCheckpointGateRelevant(cf, target, epoch) {
-			continue
-		}
-		if _, ok := session.checkpointBaseline[cf.ID]; ok {
-			continue
-		}
-		session.checkpointBaseline[cf.ID] = cf.GetStatus().CheckpointTs
-		baselineExpanded = true
-	}
-	if baselineExpanded {
-		return false
-	}
-
-	return true
-}
-
-// snapshotDrainCheckpointBaseline freezes checkpointTs for relevant running
-// changefeeds in the current drain session.
-func (c *Controller) snapshotDrainCheckpointBaseline(target node.ID, epoch uint64) map[common.ChangeFeedID]uint64 {
-	cfs := c.changefeedDB.GetReplicating()
-	if len(cfs) == 0 {
-		return nil
-	}
-	snapshot := make(map[common.ChangeFeedID]uint64, len(cfs))
-	for _, cf := range cfs {
-		if cf == nil {
-			continue
-		}
-		if !isDrainCheckpointGateRelevant(cf, target, epoch) {
-			continue
-		}
-		snapshot[cf.ID] = cf.GetStatus().CheckpointTs
-	}
-	return snapshot
-}
-
-// isDrainCheckpointGateRelevant returns whether a changefeed should block the
-// checkpoint progress gate of the given drain target epoch.
-func isDrainCheckpointGateRelevant(cf *changefeed.Changefeed, target node.ID, epoch uint64) bool {
-	if cf == nil {
-		return false
-	}
-	info := cf.GetInfo()
-	if info == nil || !shouldRunChangefeed(info.State) {
-		return false
-	}
-	status := cf.GetStatus()
-	if status == nil {
-		return false
-	}
-	progress := status.GetDrainProgress()
-	if progress == nil {
-		return false
-	}
-	return progress.GetTargetNodeId() == target.String() && progress.GetTargetEpoch() == epoch
 }
 
 // ensureDispatcherDrainTarget creates or reuses the single active drain
@@ -458,6 +357,33 @@ func (c *Controller) aggregateDrainTargetDispatcherCount(target node.ID, epoch u
 	return dispatcherCount
 }
 
+// aggregateDrainTargetInflightMoveCount sums per-changefeed drain move counts
+// reported for the given drain target epoch.
+func (c *Controller) aggregateDrainTargetInflightMoveCount(target node.ID, epoch uint64) int {
+	if target.IsEmpty() || epoch == 0 {
+		return 0
+	}
+
+	targetID := target.String()
+	inflightMoveCount := 0
+	cfs := c.changefeedDB.GetReplicating()
+	for _, cf := range cfs {
+		if cf == nil {
+			continue
+		}
+		status := cf.GetStatus()
+		if status == nil {
+			continue
+		}
+		progress := status.GetDrainProgress()
+		if progress == nil || progress.GetTargetNodeId() != targetID || progress.GetTargetEpoch() != epoch {
+			continue
+		}
+		inflightMoveCount += int(progress.GetTargetInflightDrainMoveCount())
+	}
+	return inflightMoveCount
+}
+
 // isDrainCompletionProven checks whether drain completion can be safely concluded.
 // Returning true is intentionally strict because v1 drain API must avoid premature zero remaining.
 func isDrainCompletionProven(
@@ -477,6 +403,7 @@ func drainRemainingEstimate(
 	maintainersOnTarget int,
 	inflightOpsInvolvingTarget int,
 	dispatcherCountOnTarget int,
+	targetInflightDrainMoveCount int,
 	pendingStatusCount int,
 ) int {
 	remaining := maintainersOnTarget
@@ -485,6 +412,9 @@ func drainRemainingEstimate(
 	}
 	if dispatcherCountOnTarget > remaining {
 		remaining = dispatcherCountOnTarget
+	}
+	if targetInflightDrainMoveCount > remaining {
+		remaining = targetInflightDrainMoveCount
 	}
 	if pendingStatusCount > remaining {
 		remaining = pendingStatusCount
