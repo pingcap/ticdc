@@ -49,7 +49,7 @@ func TestScheduleEvent(t *testing.T) {
 		BlockTs:           10,
 		NeedDroppedTables: &heartbeatpb.InfluencedTables{InfluenceType: heartbeatpb.InfluenceType_Normal, TableIDs: []int64{1}},
 		NeedAddedTables:   []*heartbeatpb.Table{{TableID: 2, SchemaID: 1, Splitable: true}, {TableID: 3, SchemaID: 1, Splitable: true}},
-	}, true)
+	}, true, true)
 	event.scheduleBlockEvent()
 	// drop table will be executed first
 	require.Equal(t, 2, spanController.GetAbsentSize())
@@ -62,7 +62,7 @@ func TestScheduleEvent(t *testing.T) {
 			SchemaID:      1,
 		},
 		NeedAddedTables: []*heartbeatpb.Table{{TableID: 4, SchemaID: 1, Splitable: true}},
-	}, false)
+	}, false, true)
 	event.scheduleBlockEvent()
 	// drop table will be executed first, then add the new table
 	require.Equal(t, 1, spanController.GetAbsentSize())
@@ -75,7 +75,7 @@ func TestScheduleEvent(t *testing.T) {
 			TableIDs:      []int64{4},
 		},
 		NeedAddedTables: []*heartbeatpb.Table{{TableID: 5, SchemaID: 1, Splitable: true}},
-	}, false)
+	}, false, true)
 	event.scheduleBlockEvent()
 	// drop table will be executed first, then add the new table
 	require.Equal(t, 1, spanController.GetAbsentSize())
@@ -111,7 +111,7 @@ func TestResendAction(t *testing.T) {
 		BlockTables: &heartbeatpb.InfluencedTables{
 			InfluenceType: heartbeatpb.InfluenceType_All,
 		},
-	}, false)
+	}, false, true)
 	// time is not reached
 	event.lastResendTime = time.Now()
 	event.selected.Store(true)
@@ -126,7 +126,6 @@ func TestResendAction(t *testing.T) {
 
 	// resend flush action
 	event.selected.Store(true)
-	event.writerDispatcherAdvanced = false
 	event.writerDispatcher = dispatcherIDs[0]
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
@@ -138,8 +137,7 @@ func TestResendAction(t *testing.T) {
 	// flush phase disabled: resend write action directly
 	event.lastResendTime = time.Time{}
 	event.flushEnabled = false
-	event.flushDispatcherAdvanced = true
-	event.writerDispatcherAdvanced = false
+	event.phase = barrierPhaseWrite
 	event.writerDispatcher = dispatcherIDs[0]
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
@@ -155,10 +153,9 @@ func TestResendAction(t *testing.T) {
 			InfluenceType: heartbeatpb.InfluenceType_DB,
 			SchemaID:      1,
 		},
-	}, false)
+	}, false, true)
 	event.selected.Store(true)
-	event.flushDispatcherAdvanced = true
-	event.writerDispatcherAdvanced = true
+	event.phase = barrierPhasePass
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
 	resp := msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
@@ -174,10 +171,9 @@ func TestResendAction(t *testing.T) {
 			InfluenceType: heartbeatpb.InfluenceType_All,
 			SchemaID:      1,
 		},
-	}, false)
+	}, false, true)
 	event.selected.Store(true)
-	event.flushDispatcherAdvanced = true
-	event.writerDispatcherAdvanced = true
+	event.phase = barrierPhasePass
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
 	resp = msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
@@ -194,10 +190,9 @@ func TestResendAction(t *testing.T) {
 			TableIDs:      []int64{1, 2},
 			SchemaID:      1,
 		},
-	}, false)
+	}, false, true)
 	event.selected.Store(true)
-	event.flushDispatcherAdvanced = true
-	event.writerDispatcherAdvanced = true
+	event.phase = barrierPhasePass
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
 	resp = msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
@@ -241,10 +236,10 @@ func TestSendPassActionTypeDBIncludesWriterNode(t *testing.T) {
 			InfluenceType: heartbeatpb.InfluenceType_DB,
 			SchemaID:      1,
 		},
-	}, false)
+	}, false, true)
 	event.selected.Store(true)
 	event.writerDispatcher = tableTriggerEventDispatcherID
-	event.writerDispatcherAdvanced = true
+	event.phase = barrierPhasePass
 
 	msgs := event.sendPassAction(common.DefaultMode)
 	require.Len(t, msgs, 2)
@@ -284,7 +279,7 @@ func TestUpdateSchemaID(t *testing.T) {
 				NewSchemaID: 2,
 			},
 		},
-	}, true)
+	}, true, true)
 	event.scheduleBlockEvent()
 	require.Equal(t, 1, spanController.GetAbsentSize())
 	// check the schema id and map is updated

@@ -32,6 +32,61 @@ import (
 	"go.uber.org/zap"
 )
 
+type barrierPhase uint8
+
+const (
+	barrierPhaseFlush barrierPhase = iota
+	barrierPhaseWrite
+	barrierPhasePass
+	// barrierPhaseFlushThenPass means Flush is still needed for ordering, but
+	// Write is already known to have completed.
+	barrierPhaseFlushThenPass
+)
+
+func (p barrierPhase) String() string {
+	switch p {
+	case barrierPhaseFlush:
+		return "flush"
+	case barrierPhaseWrite:
+		return "write"
+	case barrierPhasePass:
+		return "pass"
+	case barrierPhaseFlushThenPass:
+		return "flush_then_pass"
+	default:
+		return "unknown"
+	}
+}
+
+func initialBarrierPhase(flushEnabled bool) barrierPhase {
+	if flushEnabled {
+		return barrierPhaseFlush
+	}
+	return barrierPhaseWrite
+}
+
+func advancePastWritePhase(phase barrierPhase) barrierPhase {
+	if phase == barrierPhaseFlush || phase == barrierPhaseFlushThenPass {
+		return barrierPhaseFlushThenPass
+	}
+	return barrierPhasePass
+}
+
+func nextBarrierPhaseAfterFlush(phase barrierPhase) barrierPhase {
+	switch phase {
+	case barrierPhaseFlush:
+		return barrierPhaseWrite
+	case barrierPhaseFlushThenPass:
+		return barrierPhasePass
+	default:
+		return phase
+	}
+}
+
+func isFlushPendingPhase(phase barrierPhase) bool {
+	return phase == barrierPhaseFlush || phase == barrierPhaseFlushThenPass
+}
+
 // BarrierEvent is a barrier event that reported by dispatchers, note is a block multiple dispatchers
 // all of these dispatchers should report the same event
 type BarrierEvent struct {
@@ -48,12 +103,8 @@ type BarrierEvent struct {
 	tableTriggerDispatcherRelated bool
 	// writerDispatcher is the only dispatcher that executes Action_Write for this barrier.
 	writerDispatcher common.DispatcherID
-	// flushDispatcherAdvanced marks Phase 1 completion: all influenced dispatchers
-	// have reported DONE for Action_Flush (flush pre-barrier DML only).
-	flushDispatcherAdvanced bool
-	// writerDispatcherAdvanced marks Phase 2 completion: the selected writer
-	// has reported DONE for Action_Write.
-	writerDispatcherAdvanced bool
+	// phase is the next barrier phase that still needs to complete.
+	phase barrierPhase
 
 	blockedDispatchers *heartbeatpb.InfluencedTables
 	dropDispatchers    *heartbeatpb.InfluencedTables
@@ -88,6 +139,7 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 	operatorController *operator.Controller,
 	status *heartbeatpb.State,
 	dynamicSplitEnabled bool,
+	flushEnabled bool,
 ) *BarrierEvent {
 	event := &BarrierEvent{
 		cfID:               cfID,
@@ -106,7 +158,8 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		needSchedule:       needSchedule(status),
 		// if the split table is enable for this changefeed, if not we can use tableID to check coverage
 		dynamicSplitEnabled: dynamicSplitEnabled,
-		flushEnabled:        true,
+		flushEnabled:        flushEnabled,
+		phase:               initialBarrierPhase(flushEnabled),
 
 		reportedDispatchers: make(map[common.DispatcherID]struct{}),
 		lastResendTime:      time.Time{},
@@ -216,8 +269,7 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 
 	be.selected.Store(true)
 	be.writerDispatcher = dispatcher
-	be.flushDispatcherAdvanced = !be.flushEnabled
-	be.writerDispatcherAdvanced = false
+	be.phase = initialBarrierPhase(be.flushEnabled)
 	// Trigger resend immediately so maintainer can send the next action in this round.
 	be.lastResendTime = time.Now().Add(-20 * time.Second)
 	log.Info("all dispatcher reported heartbeat, schedule it, and select one writer",
@@ -504,7 +556,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 				if forwardBarrierEvent(replication, be) {
 					// one related table has forward checkpointTs, means the block event can be advanced
 					be.selected.Store(true)
-					be.writerDispatcherAdvanced = true
+					be.phase = advancePastWritePhase(be.phase)
 					log.Info("one related dispatcher has forward checkpointTs, means the block event can be advanced",
 						zap.String("changefeed", be.cfID.Name()),
 						zap.Uint64("commitTs", be.commitTs),
@@ -523,7 +575,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 			if forwardBarrierEvent(replication, be) {
 				// one related table has forward checkpointTs, means the block event can be advanced
 				be.selected.Store(true)
-				be.writerDispatcherAdvanced = true
+				be.phase = advancePastWritePhase(be.phase)
 				log.Info("one related dispatcher has forward checkpointTs, means the block event can be advanced",
 					zap.String("changefeed", be.cfID.Name()),
 					zap.Uint64("commitTs", be.commitTs),
@@ -540,7 +592,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 			if forwardBarrierEvent(replication, be) {
 				// one related table has forward checkpointTs, means the block event can be advanced
 				be.selected.Store(true)
-				be.writerDispatcherAdvanced = true
+				be.phase = advancePastWritePhase(be.phase)
 				log.Info("one related dispatcher has forward checkpointTs, means the block event can be advanced",
 					zap.String("changefeed", be.cfID.Name()),
 					zap.Uint64("commitTs", be.commitTs),
@@ -593,7 +645,7 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 					zap.Uint64("commitTs", be.commitTs),
 					zap.Bool("isSyncPoint", be.isSyncPoint),
 					zap.Bool("selected", be.selected.Load()),
-					zap.Bool("writerDispatcherAdvanced", be.writerDispatcherAdvanced),
+					zap.Stringer("phase", be.phase),
 					zap.String("coverage", be.rangeChecker.Detail()),
 					zap.Any("blocker", be.blockedDispatchers),
 					zap.Any("resend", msgs),
@@ -604,7 +656,7 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 					zap.Uint64("commitTs", be.commitTs),
 					zap.Bool("isSyncPoint", be.isSyncPoint),
 					zap.Bool("selected", be.selected.Load()),
-					zap.Bool("writerDispatcherAdvanced", be.writerDispatcherAdvanced),
+					zap.Stringer("phase", be.phase),
 					zap.Any("blocker", be.blockedDispatchers),
 					zap.Any("resend", msgs),
 				)
@@ -621,7 +673,7 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 				zap.Uint64("commitTs", be.commitTs),
 				zap.Bool("isSyncPoint", be.isSyncPoint),
 				zap.Bool("selected", be.selected.Load()),
-				zap.Bool("writerDispatcherAdvanced", be.writerDispatcherAdvanced),
+				zap.Stringer("phase", be.phase),
 				zap.Any("blocker", be.blockedDispatchers))
 		}
 		be.checkBlockedDispatchers()
@@ -632,7 +684,7 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 	// This fence is required for storage sink when split-table is enabled: one table may span
 	// multiple dispatchers on different nodes, and pre-DDL DML must not overtake
 	// the writer's Action_Write.
-	if !be.flushDispatcherAdvanced {
+	if isFlushPendingPhase(be.phase) {
 		msgs = be.sendFlushAction(mode)
 		if len(msgs) > 0 {
 			return msgs
@@ -640,7 +692,7 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 		// No influenced dispatcher needs Action_Flush (for example DB/ALL barriers with empty
 		// runtime influenced set like "DROP DATABASE IF EXISTS <db>" before any table exists).
 		// Advance flush phase immediately; otherwise the barrier can be stuck forever in phase 1.
-		be.flushDispatcherAdvanced = true
+		be.phase = nextBarrierPhaseAfterFlush(be.phase)
 		be.rangeChecker.Reset()
 		be.reportedDispatchers = make(map[common.DispatcherID]struct{})
 		be.lastResendTime = time.Now().Add(-20 * time.Second)
@@ -651,7 +703,7 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 			zap.String("barrierType", be.blockedDispatchers.InfluenceType.String()))
 	}
 	// we select a dispatcher as the writer, still waiting for that dispatcher advance its checkpoint ts
-	if !be.writerDispatcherAdvanced {
+	if be.phase == barrierPhaseWrite {
 		// resend write action
 		stm := be.spanController.GetTaskByID(be.writerDispatcher)
 		if stm == nil || stm.GetNodeID() == "" {
@@ -691,11 +743,10 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 		}
 
 		msgs = []*messaging.TargetMessage{be.newWriterActionMessage(stm.GetNodeID(), mode)}
-	} else {
-		// the writer dispatcher is advanced, resend pass action
-		return be.sendPassAction(mode)
+		return msgs
 	}
-	return msgs
+	// the writer dispatcher is advanced, resend pass action
+	return be.sendPassAction(mode)
 }
 
 func (be *BarrierEvent) newWriterActionMessage(capture node.ID, mode int64) *messaging.TargetMessage {

@@ -356,12 +356,10 @@ func (c *Controller) initializeComponents(
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
 	isStorageSinkBackend bool,
 ) {
-	// Initialize barrier
-	defaultBarrierFlushEnabled := isStorageSinkBackend
 	if c.enableRedo {
-		c.redoBarrier = NewBarrierWithFlush(c.redoSpanController, c.redoOperatorController, c.enableTableAcrossNodes, false, allNodesResp, common.RedoMode)
+		c.redoBarrier = NewBarrier(c.redoSpanController, c.redoOperatorController, c.enableTableAcrossNodes, false, allNodesResp, common.RedoMode)
 	}
-	c.barrier = NewBarrierWithFlush(c.spanController, c.operatorController, c.enableTableAcrossNodes, defaultBarrierFlushEnabled, allNodesResp, common.DefaultMode)
+	c.barrier = NewBarrier(c.spanController, c.operatorController, c.enableTableAcrossNodes, isStorageSinkBackend, allNodesResp, common.DefaultMode)
 
 	// Start scheduler
 	c.taskHandlesMu.Lock()
