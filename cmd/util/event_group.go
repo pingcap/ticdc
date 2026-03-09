@@ -18,6 +18,7 @@ import (
 	"sort"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"go.uber.org/zap"
 )
@@ -89,7 +90,19 @@ func (g *EventsGroup) Append(row *commonEvent.DMLEvent, force bool) {
 			return g.events[i].CommitTs > row.CommitTs
 		})
 		if i > 0 && g.events[i-1].CommitTs == row.CommitTs {
-			mergeDMLEvent(g.events[i-1], row)
+			previous := g.events[i-1]
+			// If the table info version is incompatible, we cannot merge the events,
+			//  and the event may be replayed again after the table info is updated.
+			// So we just skip this event to avoid potential panic in the downstream.
+			if !compareTableInfo(previous, row) {
+				log.Warn("skip replayed DML event due to incompatible table info, the event may be replayed again after the table info is updated",
+					zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
+					zap.Uint64("commitTs", row.CommitTs),
+					zap.Any("previous", previous),
+					zap.Any("now", row))
+				return
+			}
+			mergeDMLEvent(previous, row)
 			return
 		}
 		g.events = slices.Insert(g.events, i, row)
@@ -98,6 +111,17 @@ func (g *EventsGroup) Append(row *commonEvent.DMLEvent, force bool) {
 	log.Panic("append event with smaller commit ts",
 		zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
 		zap.Uint64("lastCommitTs", lastDMLEvent.GetCommitTs()), zap.Uint64("commitTs", row.GetCommitTs()))
+}
+
+func compareTableInfo(previous, now *commonEvent.DMLEvent) bool {
+	previousInfo := previous.TableInfo.ToTiDBTableInfo()
+	nowInfo := now.TableInfo.ToTiDBTableInfo()
+	if previousInfo.UpdateTS > nowInfo.UpdateTS {
+		log.Panic("previous dml event has bigger table info version",
+			zap.Any("previous", previous),
+			zap.Any("now", now))
+	}
+	return common.NewColumnSchema4Decoder(previousInfo).SameWithTableInfo(nowInfo)
 }
 
 // ResolveInto appends all events with CommitTs <= resolve into dst and removes them from the group.

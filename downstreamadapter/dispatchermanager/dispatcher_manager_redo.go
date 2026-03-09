@@ -45,10 +45,15 @@ func initRedoComponet(
 	if manager.config.Consistent == nil || !pkgRedo.IsConsistentEnabled(util.GetOrZero(manager.config.Consistent.Level)) {
 		return nil
 	}
-	manager.RedoEnable = true
 	manager.redoDispatcherMap = newDispatcherMap[*dispatcher.RedoDispatcher]()
 	manager.redoSink = redo.New(ctx, changefeedID, manager.config.Consistent)
+	if manager.redoSink == nil {
+		return errors.WrapError(errors.ErrStorageInitialize, errors.New("redo sink initialization returned nil"))
+	}
 	manager.redoSchemaIDToDispatchers = dispatcher.NewSchemaIDToDispatchers()
+	// Publish redo availability only after all redo components are initialized,
+	// so scheduler precheck won't observe a partially initialized manager.
+	manager.RedoEnable = true
 
 	totalQuota := manager.sinkQuota
 	consistentMemoryUsage := manager.config.Consistent.MemoryUsage

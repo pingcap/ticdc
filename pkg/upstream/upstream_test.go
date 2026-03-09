@@ -136,3 +136,16 @@ func TestRegisterTopo(t *testing.T) {
 		return len(resp.Kvs) == 0
 	}, time.Second*5, time.Millisecond*100)
 }
+
+func TestIsCreateTiStoreRetryable(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	require.True(t, isCreateTiStoreRetryable(ctx, context.Canceled))
+	require.True(t, isCreateTiStoreRetryable(ctx, errors.Trace(context.Canceled)))
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.False(t, isCreateTiStoreRetryable(canceledCtx, context.Canceled))
+	require.False(t, isCreateTiStoreRetryable(canceledCtx, errors.Trace(context.Canceled)))
+}
