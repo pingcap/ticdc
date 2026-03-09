@@ -237,15 +237,54 @@ func (p *persistentStorage) initialize(ctx context.Context) error {
 		}
 	}
 	if !isDataReusable {
-		p.initializeFromKVStorage(dbPath, gcSafePoint)
+		for {
+			err := p.initializeFromKVStorage(dbPath, gcSafePoint)
+			if err == nil {
+				break
+			}
+			if !isRetryableInitializeFromKVStorageError(err) {
+				return errors.Trace(err)
+			}
+			log.Warn("initialize from kv snapshot failed due to stale snapshot, will retry with latest gc safepoint",
+				zap.Uint32("keyspaceID", p.keyspaceID),
+				zap.Uint64("snapTs", gcSafePoint),
+				zap.Error(err))
+
+			select {
+			case <-ctx.Done():
+				return errors.Trace(ctx.Err())
+			case <-time.After(time.Second):
+			}
+
+			gcSafePoint, err = p.getGcSafePoint(ctx)
+			if err != nil {
+				log.Warn("get ts failed, will retry in 1s", zap.Error(err))
+				continue
+			}
+			log.Info("get gc safepoint success", zap.Uint32("keyspaceID", p.keyspaceID), zap.Any("gcSafePoint", gcSafePoint))
+			err = gc.EnsureChangefeedStartTsSafety(
+				ctx,
+				p.pdCli,
+				defaultSchemaStoreGcServiceID,
+				p.keyspaceID,
+				fakeChangefeedID,
+				defaultGcServiceTTL, gcSafePoint+1)
+			if err != nil {
+				log.Warn("ensure gc start ts safety failed, will retry in 1s",
+					zap.Uint32("keyspaceID", p.keyspaceID),
+					zap.Uint64("startTs", gcSafePoint+1),
+					zap.Error(err))
+				continue
+			}
+		}
 	}
 	return nil
 }
 
-func (p *persistentStorage) initializeFromKVStorage(dbPath string, gcTs uint64) {
+func (p *persistentStorage) initializeFromKVStorage(dbPath string, gcTs uint64) error {
 	now := time.Now()
 	if err := os.RemoveAll(dbPath); err != nil {
-		log.Fatal("fail to remove path in initializeFromKVStorage")
+		return errors.Trace(err)
 	}
 	p.db = openDB(dbPath)
 
@@ -254,8 +293,10 @@ func (p *persistentStorage) initializeFromKVStorage(dbPath string, gcTs uint64) 
 
 	var err error
 	if p.databaseMap, p.tableMap, p.partitionMap, err = persistSchemaSnapshot(p.db, p.kvStorage, gcTs, true); err != nil {
-		// TODO: retry
-		log.Fatal("fail to initialize from kv snapshot", zap.Error(err))
+		if closeErr := p.db.Close(); closeErr != nil {
+			log.Warn("close db failed after initialize from kv snapshot failed", zap.Error(closeErr))
+		}
+		return errors.Trace(err)
 	}
 
 	p.gcTs = gcTs
@@ -269,6 +310,18 @@ func (p *persistentStorage) initializeFromKVStorage(dbPath string, gcTs uint64) 
 		zap.Int("databaseMapLen", len(p.databaseMap)),
 		zap.Int("tableMapLen", len(p.tableMap)),
 		zap.Any("duration(s)", time.Since(now).Seconds()))
+	return nil
+}
+
+func isRetryableInitializeFromKVStorageError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if isGCLifeTimeError(err) {
+		return true
+	}
+	code, ok := errors.RFCCode(err)
+	return ok && code == errors.ErrSnapshotLostByGC.RFCCode()
 }
 
 func (p *persistentStorage) initializeFromDisk() {

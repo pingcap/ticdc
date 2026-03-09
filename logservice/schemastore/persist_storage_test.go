@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -2892,6 +2893,18 @@ func TestRegisterTable(t *testing.T) {
 			pStorage.close()
 		})
 	}
+}
+
+func TestIsRetryableInitializeFromKVStorageError(t *testing.T) {
+	require.True(t, isRetryableInitializeFromKVStorageError(
+		fmt.Errorf("snapshot is lost because GC life time is shorter than transaction duration"),
+	))
+	require.True(t, isRetryableInitializeFromKVStorageError(
+		cerror.ErrSnapshotLostByGC.GenWithStackByArgs(100, 200),
+	))
+	require.False(t, isRetryableInitializeFromKVStorageError(
+		fmt.Errorf("non retryable error"),
+	))
 }
 
 func TestGCPersistStorage(t *testing.T) {
