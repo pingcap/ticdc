@@ -814,20 +814,20 @@ type renameTableQueryInfo struct {
 	newTableName  string
 }
 
-func parseRenameTablesQueryInfos(query string) []renameTableQueryInfo {
+func parseRenameTablesQueryInfos(query string) ([]renameTableQueryInfo, bool) {
 	if query == "" {
-		return nil
+		return nil, false
 	}
 	stmt, err := parser.New().ParseOneStmt(query, "", "")
 	if err != nil {
 		log.Warn("parse rename tables query failed",
 			zap.String("query", query),
 			zap.Error(err))
-		return nil
+		return nil, false
 	}
 	renameStmt, ok := stmt.(*ast.RenameTableStmt)
 	if !ok {
-		return nil
+		return nil, false
 	}
 
 	queryInfos := make([]renameTableQueryInfo, 0, len(renameStmt.TableToTables))
@@ -839,7 +839,7 @@ func parseRenameTablesQueryInfos(query string) []renameTableQueryInfo {
 			newTableName:  tableToTable.NewTable.Name.O,
 		})
 	}
-	return queryInfos
+	return queryInfos, true
 }
 
 func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
@@ -864,27 +864,21 @@ func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) 
 	// while the original query can keep user-provided identifier case.
 	// Prefer names parsed from the original query whenever possible.
 	// See https://github.com/pingcap/ticdc/pull/2218 for background.
-	//
-	// TiDB <= v8.1 may emit empty old table names for RENAME TABLES args.
-	// See https://github.com/pingcap/tidb/pull/64421 for the upstream fix.
-	queryInfos := parseRenameTablesQueryInfos(args.job.Query)
-	useQueryInfos := len(queryInfos) > 0
-	if useQueryInfos && len(queryInfos) != len(renameTableInfos) {
+	queryInfos, queryParsed := parseRenameTablesQueryInfos(args.job.Query)
+	if queryParsed && len(queryInfos) != len(renameTableInfos) {
 		log.Panic("rename tables query info length is inconsistent with args",
 			zap.Int("queryInfosLen", len(queryInfos)),
 			zap.Int("renameArgsLen", len(renameTableInfos)),
 			zap.String("query", args.job.Query))
 	}
-	if len(renameTableInfos) > 0 && renameTableInfos[0].OldTableName.O == "" {
-		if useQueryInfos {
-			log.Info("rename tables args miss old table name fallback to query",
-				zap.Int("tableCount", len(renameTableInfos)),
-				zap.String("query", args.job.Query))
-		} else {
-			log.Panic("rename tables args miss old table name and query is not parseable",
-				zap.Int("tableCount", len(renameTableInfos)),
-				zap.String("query", args.job.Query))
-		}
+
+	// TiDB <= v8.1 may emit empty old table names for RENAME TABLES args.
+	// See https://github.com/pingcap/tidb/pull/64421 for the upstream fix.
+	if !queryParsed && renameTableInfos[0].OldTableName.O == "" {
+		// TODO: return error instead of falling back to args once builder supports error propagation.
+		log.Warn("rename tables args miss old table name and query is unavailable, keep args as-is",
+			zap.Int("tableCount", len(renameTableInfos)),
+			zap.String("query", args.job.Query))
 	}
 
 	var querys []string
@@ -894,7 +888,7 @@ func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) 
 		oldTableName := info.OldTableName.O
 		newSchemaName := getSchemaName(args.databaseMap, info.NewSchemaID)
 		newTableName := info.NewTableName.O
-		if useQueryInfos {
+		if queryParsed {
 			queryInfo := queryInfos[i]
 			if queryInfo.oldSchemaName != "" {
 				oldSchemaName = queryInfo.oldSchemaName

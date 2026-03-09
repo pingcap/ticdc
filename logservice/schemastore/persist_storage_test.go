@@ -3227,6 +3227,67 @@ func TestBuildPersistedDDLEventForRenameTablesPreferQueryNames(t *testing.T) {
 		ddl.Query)
 }
 
+func TestBuildPersistedDDLEventForRenameTablesKeepArgsWhenQueryUnavailable(t *testing.T) {
+	job := buildRenameTablesJobForTest(
+		[]int64{100, 100},
+		[]int64{105, 105},
+		[]int64{200, 201},
+		[]string{"source_db", "source_db"},
+		[]string{"source_t1_from_args", "source_t2_from_args"},
+		[]string{"target_t1", "target_t2"},
+		1010,
+	)
+	job.Query = "RENAME TABLE"
+
+	require.NotPanics(t, func() {
+		ddl := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
+			job: job,
+			databaseMap: map[int64]*BasicDatabaseInfo{
+				100: {Name: "source_db", Tables: map[int64]bool{200: true, 201: true}},
+				105: {Name: "target_db", Tables: map[int64]bool{200: true, 201: true}},
+			},
+			tableMap: map[int64]*BasicTableInfo{
+				200: {SchemaID: 100, Name: "source_t1_from_store"},
+				201: {SchemaID: 100, Name: "source_t2_from_store"},
+			},
+		})
+
+		assert.Equal(t, []string{"source_t1_from_args", "source_t2_from_args"}, ddl.ExtraTableNames)
+		assert.Equal(t, []string{"source_db", "source_db"}, ddl.ExtraSchemaNames)
+		assert.Equal(t,
+			"RENAME TABLE `source_db`.`source_t1_from_args` TO `target_db`.`target_t1`;"+
+				"RENAME TABLE `source_db`.`source_t2_from_args` TO `target_db`.`target_t2`;",
+			ddl.Query)
+	})
+}
+
+func TestBuildPersistedDDLEventForRenameTablesPanicOnQueryInfoLengthMismatch(t *testing.T) {
+	job := buildRenameTablesJobForTest(
+		[]int64{100, 100},
+		[]int64{105, 105},
+		[]int64{200, 201},
+		[]string{"source_db", "source_db"},
+		[]string{"source_t1", "source_t2"},
+		[]string{"target_t1", "target_t2"},
+		1010,
+	)
+	job.Query = "RENAME TABLE `source_db`.`source_t1` TO `target_db`.`target_t1`, `source_db`.`source_t2` TO `target_db`.`target_t2`, `source_db`.`source_t3` TO `target_db`.`target_t3`"
+
+	require.Panics(t, func() {
+		_ = buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
+			job: job,
+			databaseMap: map[int64]*BasicDatabaseInfo{
+				100: {Name: "source_db", Tables: map[int64]bool{200: true, 201: true}},
+				105: {Name: "target_db", Tables: map[int64]bool{200: true, 201: true}},
+			},
+			tableMap: map[int64]*BasicTableInfo{
+				200: {SchemaID: 100, Name: "source_t1"},
+				201: {SchemaID: 100, Name: "source_t2"},
+			},
+		})
+	})
+}
+
 func TestBuildPersistedDDLEventEscapesIdentifiers(t *testing.T) {
 	t.Run("rename tables", func(t *testing.T) {
 		job := buildRenameTablesJobForTest(
@@ -3335,11 +3396,13 @@ func TestParseRenameTablesQueryInfos(t *testing.T) {
 	cases := []struct {
 		name     string
 		query    string
+		parsed   bool
 		expected []renameTableQueryInfo
 	}{
 		{
-			name:  "multiple tables with schema",
-			query: "RENAME TABLE `db1`.`t1` TO `db2`.`t2`, `db1`.`t3` TO `db2`.`t4`",
+			name:   "multiple tables with schema",
+			query:  "RENAME TABLE `db1`.`t1` TO `db2`.`t2`, `db1`.`t3` TO `db2`.`t4`",
+			parsed: true,
 			expected: []renameTableQueryInfo{
 				{
 					oldSchemaName: "db1",
@@ -3356,8 +3419,9 @@ func TestParseRenameTablesQueryInfos(t *testing.T) {
 			},
 		},
 		{
-			name:  "without schema names",
-			query: "RENAME TABLE `t1` TO `t2`",
+			name:   "without schema names",
+			query:  "RENAME TABLE `t1` TO `t2`",
+			parsed: true,
 			expected: []renameTableQueryInfo{
 				{
 					oldSchemaName: "",
@@ -3370,23 +3434,27 @@ func TestParseRenameTablesQueryInfos(t *testing.T) {
 		{
 			name:     "empty query",
 			query:    "",
+			parsed:   false,
 			expected: nil,
 		},
 		{
 			name:     "non rename statement",
 			query:    "CREATE TABLE t(a INT)",
+			parsed:   false,
 			expected: nil,
 		},
 		{
 			name:     "invalid sql",
 			query:    "RENAME TABLE",
+			parsed:   false,
 			expected: nil,
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := parseRenameTablesQueryInfos(tc.query)
+			got, parsed := parseRenameTablesQueryInfos(tc.query)
+			assert.Equal(t, tc.parsed, parsed)
 			assert.Equal(t, tc.expected, got)
 		})
 	}
