@@ -898,17 +898,10 @@ func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) 
 	renameTableInfos := renameArgs.RenameTableInfos
 	multipleTableInfos := args.job.BinlogInfo.MultipleTableInfos
 	if len(renameTableInfos) != len(multipleTableInfos) {
-		minLen := len(renameTableInfos)
-		if len(multipleTableInfos) < minLen {
-			minLen = len(multipleTableInfos)
-		}
-		log.Warn("rename tables args length mismatch with table infos use min length",
+		log.Panic("should not happen",
 			zap.Int("renameArgsLen", len(renameTableInfos)),
 			zap.Int("multipleTableInfosLen", len(multipleTableInfos)),
-			zap.Int("minLen", minLen),
 			zap.String("query", args.job.Query))
-		renameTableInfos = renameTableInfos[:minLen]
-		multipleTableInfos = multipleTableInfos[:minLen]
 	}
 
 	queryInfos := parseRenameTablesQueryInfos(args.job.Query)
