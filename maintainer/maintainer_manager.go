@@ -214,9 +214,14 @@ func (m *Manager) sendNodeHeartbeat(force bool) {
 		return
 	}
 
+	drainTarget, drainEpoch := m.getDispatcherDrainTarget()
 	hb := &heartbeatpb.NodeHeartbeat{
 		Liveness:  m.toNodeLivenessPB(m.liveness.Load()),
 		NodeEpoch: m.nodeEpoch,
+		// Report the manager-level dispatcher drain target so coordinator can
+		// confirm both activation and clearing even when no maintainers exist.
+		DispatcherDrainTargetNodeId: drainTarget.String(),
+		DispatcherDrainTargetEpoch:  drainEpoch,
 	}
 	target := m.newCoordinatorTopicMessage(hb)
 	if err := m.mc.SendCommand(target); err != nil {
@@ -468,6 +473,9 @@ func (m *Manager) onSetDispatcherDrainTargetRequest(msg *messaging.TargetMessage
 		value.(*Maintainer).SetDispatcherDrainTarget(target, req.TargetEpoch)
 		return true
 	})
+	// A manager-level heartbeat is the authoritative acknowledgement that this
+	// node has applied the latest drain target, even when no maintainers exist.
+	m.sendNodeHeartbeat(true)
 }
 
 func (m *Manager) getDispatcherDrainTarget() (node.ID, uint64) {

@@ -152,3 +152,38 @@ func TestSetDispatcherDrainTargetRejectStaleUpdate(t *testing.T) {
 	require.Equal(t, node.ID("n4"), target)
 	require.Equal(t, uint64(2), epoch)
 }
+
+func TestSetDispatcherDrainTargetSendsNodeHeartbeatAck(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+
+	var liveness api.Liveness
+	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &liveness)
+	m.coordinatorID = node.ID("coordinator")
+	m.coordinatorVersion = 1
+
+	apply := func(target string, epoch uint64) *heartbeatpb.NodeHeartbeat {
+		msg := messaging.NewSingleTargetMessage(
+			m.nodeInfo.ID,
+			messaging.MaintainerManagerTopic,
+			&heartbeatpb.SetDispatcherDrainTargetRequest{
+				TargetNodeId: target,
+				TargetEpoch:  epoch,
+			},
+		)
+		msg.From = m.coordinatorID
+		m.onSetDispatcherDrainTargetRequest(msg)
+
+		out := <-mc.GetMessageChannel()
+		require.Equal(t, messaging.TypeNodeHeartbeatRequest, out.Type)
+		return out.Message[0].(*heartbeatpb.NodeHeartbeat)
+	}
+
+	hb := apply("n2", 1)
+	require.Equal(t, "n2", hb.DispatcherDrainTargetNodeId)
+	require.Equal(t, uint64(1), hb.DispatcherDrainTargetEpoch)
+
+	hb = apply("", 1)
+	require.Equal(t, "", hb.DispatcherDrainTargetNodeId)
+	require.Equal(t, uint64(1), hb.DispatcherDrainTargetEpoch)
+}

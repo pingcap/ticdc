@@ -30,6 +30,22 @@ type drainSession struct {
 	lastSent time.Time
 }
 
+type drainClearState struct {
+	// target is the node whose drain target is being cleared at this epoch.
+	target node.ID
+	epoch  uint64
+
+	// pendingNodes tracks manager-level clear acknowledgements from nodes that
+	// were alive when the clear was issued.
+	pendingNodes map[node.ID]struct{}
+
+	// dirty/lastSent follow the same resend contract as an active drain target.
+	// Clear is not fire-and-forget because losing the empty-target broadcast
+	// would leave some nodes with a stale local drain target indefinitely.
+	dirty    bool
+	lastSent time.Time
+}
+
 // newDispatcherDrainEpochSeed creates a non-zero epoch seed for this process lifetime.
 // It prevents immediate epoch reuse after coordinator restarts.
 func newDispatcherDrainEpochSeed() uint64 {
@@ -90,7 +106,7 @@ func (c *Controller) DrainNode(_ context.Context, target node.ID) (int, error) {
 			zap.Int("pendingStatusCount", observation.pendingStatusCount),
 			zap.Int("remaining", observation.remaining))
 	}
-	return observation.remaining, nil
+	return ensureDrainRemainingNonZero(observation.remaining), nil
 }
 
 type drainNodeObservation struct {
@@ -229,6 +245,7 @@ func (c *Controller) ensureDispatcherDrainTarget(target node.ID) (uint64, error)
 	}
 
 	pendingStatus := c.snapshotDrainStatusBaseline(target, c.dispatcherDrainEpoch)
+	c.drainClearState = nil
 	c.drainSession = &drainSession{
 		target:        target,
 		epoch:         c.dispatcherDrainEpoch,
@@ -260,28 +277,58 @@ func (c *Controller) clearDispatcherDrainTarget(target node.ID, epoch uint64) {
 		c.drainSessionMu.Unlock()
 		return
 	}
+	pendingNodes := make(map[node.ID]struct{}, len(c.nodeManager.GetAliveNodeIDs()))
+	for _, id := range c.nodeManager.GetAliveNodeIDs() {
+		pendingNodes[id] = struct{}{}
+	}
 	c.drainSession = nil
+	if len(pendingNodes) == 0 {
+		c.drainClearState = nil
+	} else {
+		// Freeze the nodes that must observe this clear. New nodes do not need
+		// to ack an old clear because they bootstrap from the current coordinator state.
+		c.drainClearState = &drainClearState{
+			target:       target,
+			epoch:        epoch,
+			pendingNodes: pendingNodes,
+			dirty:        true,
+		}
+	}
 	c.drainSessionMu.Unlock()
 
 	log.Info("dispatcher drain target cleared",
 		zap.Stringer("targetNodeID", target),
 		zap.Uint64("targetEpoch", epoch))
-	c.broadcastDispatcherDrainTarget("", epoch)
+	c.maybeBroadcastDispatcherDrainTarget(true)
 }
 
-// maybeBroadcastDispatcherDrainTarget sends the active drain target when forced,
-// dirty, or periodic resend is due.
+// maybeBroadcastDispatcherDrainTarget sends the active drain target or pending
+// clear tombstone when forced, dirty, or periodic resend is due.
 func (c *Controller) maybeBroadcastDispatcherDrainTarget(force bool) {
 	c.drainSessionMu.Lock()
-	if c.drainSession == nil {
+	var (
+		target       node.ID
+		epoch        uint64
+		needSend     bool
+		sendingClear bool
+	)
+	switch {
+	case c.drainSession != nil:
+		target = c.drainSession.target
+		epoch = c.drainSession.epoch
+		needSend = force ||
+			c.drainSession.dirty ||
+			time.Since(c.drainSession.lastSent) >= dispatcherDrainTargetResendIntvl
+	case c.drainClearState != nil:
+		epoch = c.drainClearState.epoch
+		sendingClear = true
+		needSend = force ||
+			c.drainClearState.dirty ||
+			time.Since(c.drainClearState.lastSent) >= dispatcherDrainTargetResendIntvl
+	default:
 		c.drainSessionMu.Unlock()
 		return
 	}
-	target := c.drainSession.target
-	epoch := c.drainSession.epoch
-	needSend := force ||
-		c.drainSession.dirty ||
-		time.Since(c.drainSession.lastSent) >= dispatcherDrainTargetResendIntvl
 	if !needSend {
 		c.drainSessionMu.Unlock()
 		return
@@ -291,6 +338,14 @@ func (c *Controller) maybeBroadcastDispatcherDrainTarget(force bool) {
 	c.broadcastDispatcherDrainTarget(target, epoch)
 
 	c.drainSessionMu.Lock()
+	if sendingClear {
+		if c.drainClearState != nil && c.drainClearState.epoch == epoch {
+			c.drainClearState.dirty = false
+			c.drainClearState.lastSent = time.Now()
+		}
+		c.drainSessionMu.Unlock()
+		return
+	}
 	if c.drainSession != nil && c.drainSession.target == target && c.drainSession.epoch == epoch {
 		c.drainSession.dirty = false
 		c.drainSession.lastSent = time.Now()
@@ -319,6 +374,72 @@ func (c *Controller) broadcastDispatcherDrainTarget(target node.ID, epoch uint64
 				zap.Error(err))
 		}
 	}
+}
+
+func (c *Controller) observeDispatcherDrainTargetHeartbeat(from node.ID, hb *heartbeatpb.NodeHeartbeat) {
+	if hb == nil {
+		return
+	}
+
+	c.drainSessionMu.Lock()
+	defer c.drainSessionMu.Unlock()
+
+	clearState := c.drainClearState
+	if clearState == nil {
+		return
+	}
+	if _, ok := clearState.pendingNodes[from]; !ok {
+		return
+	}
+
+	hbEpoch := hb.GetDispatcherDrainTargetEpoch()
+	hbTarget := node.ID(hb.GetDispatcherDrainTargetNodeId())
+	if hbEpoch < clearState.epoch {
+		// Older heartbeat cannot prove this node has observed the clear.
+		return
+	}
+	if hbEpoch == clearState.epoch && !hbTarget.IsEmpty() {
+		// Same epoch still carrying a target means the old target is still cached locally.
+		return
+	}
+
+	// Ack is accepted when the node reports either:
+	// 1) the same epoch with an empty target, or
+	// 2) any newer epoch, which necessarily supersedes the old clear.
+	delete(clearState.pendingNodes, from)
+	if len(clearState.pendingNodes) != 0 {
+		return
+	}
+
+	log.Info("dispatcher drain clear acknowledged by all nodes",
+		zap.Stringer("targetNodeID", clearState.target),
+		zap.Uint64("targetEpoch", clearState.epoch))
+	c.drainClearState = nil
+}
+
+func (c *Controller) observeDispatcherDrainTargetClearNodeRemoved(id node.ID) {
+	c.drainSessionMu.Lock()
+	defer c.drainSessionMu.Unlock()
+
+	clearState := c.drainClearState
+	if clearState == nil {
+		return
+	}
+	if _, ok := clearState.pendingNodes[id]; !ok {
+		return
+	}
+
+	// A removed node can no longer ack. Dropping it from the pending set keeps
+	// the clear tombstone from leaking when membership changes mid-clear.
+	delete(clearState.pendingNodes, id)
+	if len(clearState.pendingNodes) != 0 {
+		return
+	}
+
+	log.Info("dispatcher drain clear completed after pending nodes were removed",
+		zap.Stringer("targetNodeID", clearState.target),
+		zap.Uint64("targetEpoch", clearState.epoch))
+	c.drainClearState = nil
 }
 
 // aggregateDrainTargetProgress sums per-changefeed drain progress counters
@@ -382,6 +503,14 @@ func drainRemainingEstimate(
 	}
 	if pendingStatusCount > remaining {
 		remaining = pendingStatusCount
+	}
+	return remaining
+}
+
+// ensureDrainRemainingNonZero keeps v1 compatibility before completion is proven.
+func ensureDrainRemainingNonZero(remaining int) int {
+	if remaining == 0 {
+		return 1
 	}
 	return remaining
 }

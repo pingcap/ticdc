@@ -175,6 +175,10 @@ enum NodeLiveness {
 message NodeHeartbeat {
     NodeLiveness liveness = 1;
     uint64 node_epoch = 2;
+    // dispatcher_drain_target_* reports the manager-level dispatcher drain target
+    // currently applied on this node. Empty target means the drain target is clear.
+    string dispatcher_drain_target_node_id = 3;
+    uint64 dispatcher_drain_target_epoch = 4;
 }
 
 // SetNodeLivenessRequest asks a node to transition its local liveness.

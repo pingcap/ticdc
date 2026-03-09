@@ -94,6 +94,10 @@ type Controller struct {
 	// Only one drain session is allowed at a time.
 	drainSessionMu sync.Mutex
 	drainSession   *drainSession
+	// drainClearState keeps a clearing tombstone after the active drain session
+	// is closed. It lets coordinator resend the clear request until all nodes
+	// confirm they have dropped the stale drain target for that epoch.
+	drainClearState *drainClearState
 
 	dispatcherDrainEpoch uint64
 }
@@ -304,6 +308,7 @@ func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage
 	case messaging.TypeNodeHeartbeatRequest:
 		req := msg.Message[0].(*heartbeatpb.NodeHeartbeat)
 		c.drainController.ObserveHeartbeat(msg.From, req)
+		c.observeDispatcherDrainTargetHeartbeat(msg.From, req)
 	case messaging.TypeSetNodeLivenessResponse:
 		req := msg.Message[0].(*heartbeatpb.SetNodeLivenessResponse)
 		c.drainController.ObserveSetNodeLivenessResponse(msg.From, req)
@@ -859,6 +864,7 @@ func (c *Controller) RemoveNode(id node.ID) {
 	if ok && target == id {
 		c.clearDispatcherDrainTarget(id, epoch)
 	}
+	c.observeDispatcherDrainTargetClearNodeRemoved(id)
 }
 
 func (c *Controller) submitPeriodTask() {

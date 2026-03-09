@@ -196,6 +196,95 @@ func TestRemoveNodeClearsActiveDrainTarget(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestClearDispatcherDrainTargetTracksNodeHeartbeatAck(t *testing.T) {
+	c, _, target := newDrainTestController(t)
+	other := node.ID("other")
+	c.nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
+
+	epoch, err := c.ensureDispatcherDrainTarget(target)
+	require.NoError(t, err)
+
+	mc := c.messageCenter.(interface {
+		GetMessageChannel() chan *messaging.TargetMessage
+	})
+	drainMessageChannel(mc.GetMessageChannel())
+
+	c.clearDispatcherDrainTarget(target, epoch)
+	require.Nil(t, c.drainSession)
+	require.NotNil(t, c.drainClearState)
+	require.Len(t, c.drainClearState.pendingNodes, 2)
+
+	c.observeDispatcherDrainTargetHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+		DispatcherDrainTargetEpoch: epoch,
+	})
+	require.NotNil(t, c.drainClearState)
+	require.Len(t, c.drainClearState.pendingNodes, 1)
+
+	c.observeDispatcherDrainTargetHeartbeat(other, &heartbeatpb.NodeHeartbeat{
+		DispatcherDrainTargetEpoch: epoch,
+	})
+	require.Nil(t, c.drainClearState)
+}
+
+func TestClearDispatcherDrainTargetResendsUntilAck(t *testing.T) {
+	c, _, target := newDrainTestController(t)
+	epoch, err := c.ensureDispatcherDrainTarget(target)
+	require.NoError(t, err)
+
+	mc := c.messageCenter.(interface {
+		GetMessageChannel() chan *messaging.TargetMessage
+	})
+	drainMessageChannel(mc.GetMessageChannel())
+
+	c.clearDispatcherDrainTarget(target, epoch)
+	drainMessageChannel(mc.GetMessageChannel())
+
+	require.NotNil(t, c.drainClearState)
+	c.drainClearState.lastSent = time.Now().Add(-dispatcherDrainTargetResendIntvl - time.Second)
+	c.maybeBroadcastDispatcherDrainTarget(false)
+
+	msg := <-mc.GetMessageChannel()
+	require.Equal(t, messaging.TypeSetDispatcherDrainTargetRequest, msg.Type)
+	req := msg.Message[0].(*heartbeatpb.SetDispatcherDrainTargetRequest)
+	require.Equal(t, "", req.TargetNodeId)
+	require.Equal(t, epoch, req.TargetEpoch)
+}
+
+func TestHigherEpochHeartbeatAcknowledgesPendingClear(t *testing.T) {
+	c, _, target := newDrainTestController(t)
+	epoch, err := c.ensureDispatcherDrainTarget(target)
+	require.NoError(t, err)
+
+	c.clearDispatcherDrainTarget(target, epoch)
+	require.NotNil(t, c.drainClearState)
+
+	c.observeDispatcherDrainTargetHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+		DispatcherDrainTargetNodeId: "next-target",
+		DispatcherDrainTargetEpoch:  epoch + 1,
+	})
+	require.Nil(t, c.drainClearState)
+}
+
+func TestRemoveNodeAcknowledgesPendingClear(t *testing.T) {
+	c, _, target := newDrainTestController(t)
+	other := node.ID("other")
+	c.nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
+
+	epoch, err := c.ensureDispatcherDrainTarget(target)
+	require.NoError(t, err)
+
+	c.clearDispatcherDrainTarget(target, epoch)
+	require.NotNil(t, c.drainClearState)
+	require.Len(t, c.drainClearState.pendingNodes, 2)
+
+	c.RemoveNode(other)
+	require.NotNil(t, c.drainClearState)
+	require.Len(t, c.drainClearState.pendingNodes, 1)
+
+	c.RemoveNode(target)
+	require.Nil(t, c.drainClearState)
+}
+
 func setTargetStoppingObserved(
 	drainController *drain.Controller,
 	target node.ID,
@@ -205,6 +294,16 @@ func setTargetStoppingObserved(
 		NodeEpoch: 1,
 	}
 	drainController.ObserveSetNodeLivenessResponse(target, resp)
+}
+
+func drainMessageChannel(ch chan *messaging.TargetMessage) {
+	for {
+		select {
+		case <-ch:
+		default:
+			return
+		}
+	}
 }
 
 func addRunningChangefeed(c *Controller, name string, nodeID node.ID, checkpointTs uint64) *changefeed.Changefeed {
