@@ -88,6 +88,10 @@ type PersistedDDLEvent struct {
 	// TODO: do we need the following two fields?
 	BDRRole        string `msg:"bdr_role"`
 	CDCWriteSource uint64 `msg:"cdc_write_source"`
+
+	// IndexIDs store the index ids that are related to the ddl job, only used for add index.
+	// use these id to recover the index name for the anonymous add index
+	IndexIDs []int64 `msg:"index_ids"`
 }
 
 // TODO: use msgp.Raw to do version management

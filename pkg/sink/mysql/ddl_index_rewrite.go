@@ -17,18 +17,12 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 )
 
-type indexKeyPart struct {
-	nameL  string
-	length int
-}
-
-func restoreAnonymousIndexToNamedIndex(query string, tableInfo *common.TableInfo) (string, bool, error) {
-	if query == "" || tableInfo == nil {
+func restoreAnonymousIndexToNamedIndex(query string, tableInfo *common.TableInfo, indexIDs []int64) (string, bool, error) {
+	if query == "" || tableInfo == nil || len(indexIDs) == 0 {
 		return query, false, nil
 	}
 
@@ -43,7 +37,13 @@ func restoreAnonymousIndexToNamedIndex(query string, tableInfo *common.TableInfo
 		return query, false, nil
 	}
 
+	indexNameByID := getIndexNameByIDMap(tableInfo)
+	if len(indexNameByID) == 0 {
+		return query, false, nil
+	}
+
 	changed := false
+	indexIDPos := 0
 	for _, spec := range alterStmt.Specs {
 		if spec == nil || spec.Tp != ast.AlterTableAddConstraint || spec.Constraint == nil {
 			continue
@@ -55,8 +55,12 @@ func restoreAnonymousIndexToNamedIndex(query string, tableInfo *common.TableInfo
 		if !isIndexConstraint(constraint) {
 			continue
 		}
+		if indexIDPos >= len(indexIDs) {
+			continue
+		}
 
-		indexName, ok := findIndexNameForConstraint(tableInfo, constraint)
+		indexName, ok := indexNameByID[indexIDs[indexIDPos]]
+		indexIDPos++
 		if !ok {
 			continue
 		}
@@ -73,6 +77,21 @@ func restoreAnonymousIndexToNamedIndex(query string, tableInfo *common.TableInfo
 		return query, false, err
 	}
 	return restoredQuery, true, nil
+}
+
+func getIndexNameByIDMap(tableInfo *common.TableInfo) map[int64]string {
+	indices := tableInfo.GetIndices()
+	if len(indices) == 0 {
+		return nil
+	}
+	indexNameByID := make(map[int64]string, len(indices))
+	for _, index := range indices {
+		if index == nil {
+			continue
+		}
+		indexNameByID[index.ID] = index.Name.O
+	}
+	return indexNameByID
 }
 
 func isIndexConstraint(constraint *ast.Constraint) bool {
@@ -92,90 +111,4 @@ func isIndexConstraint(constraint *ast.Constraint) bool {
 	default:
 		return false
 	}
-}
-
-func isUniqueIndexConstraint(constraint *ast.Constraint) bool {
-	if constraint == nil {
-		return false
-	}
-	switch constraint.Tp {
-	case ast.ConstraintUniq, ast.ConstraintUniqKey, ast.ConstraintUniqIndex:
-		return true
-	default:
-		return false
-	}
-}
-
-func findIndexNameForConstraint(tableInfo *common.TableInfo, constraint *ast.Constraint) (string, bool) {
-	keyParts, ok := getConstraintKeyParts(constraint)
-	if !ok {
-		return "", false
-	}
-
-	wantUnique := isUniqueIndexConstraint(constraint)
-	indices := tableInfo.GetIndices()
-	if len(indices) == 0 {
-		return "", false
-	}
-
-	matches := make([]*timodel.IndexInfo, 0, 1)
-	for _, index := range indices {
-		if index == nil || index.Primary {
-			continue
-		}
-		if index.Unique != wantUnique {
-			continue
-		}
-		// Only use non-public indices.
-		if index.State == timodel.StatePublic {
-			continue
-		}
-		if !indexColumnsMatchKeyParts(index.Columns, keyParts) {
-			continue
-		}
-		matches = append(matches, index)
-	}
-	if len(matches) != 1 {
-		return "", false
-	}
-	return matches[0].Name.O, true
-}
-
-func getConstraintKeyParts(constraint *ast.Constraint) ([]indexKeyPart, bool) {
-	if constraint == nil || len(constraint.Keys) == 0 {
-		return nil, false
-	}
-
-	parts := make([]indexKeyPart, 0, len(constraint.Keys))
-	for _, key := range constraint.Keys {
-		if key == nil || key.Expr != nil || key.Column == nil {
-			return nil, false
-		}
-		parts = append(parts, indexKeyPart{
-			nameL:  key.Column.Name.L,
-			length: key.Length,
-		})
-	}
-	return parts, true
-}
-
-func indexColumnsMatchKeyParts(indexColumns []*timodel.IndexColumn, keyParts []indexKeyPart) bool {
-	if len(indexColumns) != len(keyParts) {
-		return false
-	}
-	for i, part := range keyParts {
-		col := indexColumns[i]
-		if col == nil {
-			return false
-		}
-		if col.Name.L != part.nameL {
-			return false
-		}
-		if part.length > 0 {
-			if col.Length != part.length {
-				return false
-			}
-		}
-	}
-	return true
 }

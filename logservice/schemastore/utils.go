@@ -79,3 +79,24 @@ func isSplitable(tableInfo *model.TableInfo) bool {
 	}
 	return true
 }
+
+func getIndexIDs(job *model.Job) []int64 {
+	res := make([]int64, 0)
+	idxArgs, err := model.GetModifyIndexArgs(job)
+	if idxArgs == nil || err != nil {
+		for idx, subJob := range job.MultiSchemaInfo.SubJobs {
+			proxyJob := subJob.ToProxyJob(job, idx)
+			idxArgs, err := model.GetModifyIndexArgs(&proxyJob)
+			if idxArgs != nil && err == nil {
+				for _, indexArg := range idxArgs.IndexArgs {
+					res = append(res, indexArg.IndexID)
+				}
+			}
+		}
+		return res
+	}
+	for _, indexArg := range idxArgs.IndexArgs {
+		res = append(res, indexArg.IndexID)
+	}
+	return res
+}

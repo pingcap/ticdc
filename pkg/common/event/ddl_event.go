@@ -105,6 +105,10 @@ type DDLEvent struct {
 	// If the DDL involves multiple tables, this field is not effective.
 	// The multiple table DDL event will be handled by filtering querys and table infos.
 	NotSync bool `msg:"not_sync"`
+
+	// IndexIDs store the index ids that are related to the ddl job, only used for add index.
+	// use these id to recover the index name for the anonymous add index
+	IndexIDs []int64 `msg:"index_ids"`
 }
 
 func (d *DDLEvent) String() string {

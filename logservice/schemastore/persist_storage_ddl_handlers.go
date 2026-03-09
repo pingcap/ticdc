@@ -173,7 +173,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		buildDDLEventFunc:          buildDDLEventForNormalDDLOnSingleTable,
 	},
 	model.ActionAddIndex: {
-		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForAddIndex,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
 		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
@@ -670,6 +670,15 @@ func buildPersistedDDLEventForNormalDDLOnSingleTable(args buildPersistedDDLEvent
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = getTableName(args.tableMap, event.TableID)
+	return event
+}
+
+func buildPersistedDDLEventForAddIndex(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+	event := buildPersistedDDLEventCommon(args)
+	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
+	event.TableName = getTableName(args.tableMap, event.TableID)
+	indexIDs := getIndexIDs(args.job)
+	event.IndexIDs = indexIDs
 	return event
 }
 
@@ -1743,7 +1752,8 @@ func buildDDLEventCommon(rawEvent *PersistedDDLEvent, tableFilter filter.Filter,
 		TiDBOnly:   tiDBOnly,
 		BDRMode:    rawEvent.BDRRole,
 
-		NotSync: notSync,
+		NotSync:  notSync,
+		IndexIDs: rawEvent.IndexIDs,
 	}, !filtered, nil
 }
 

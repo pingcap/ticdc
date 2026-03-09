@@ -57,7 +57,7 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 	shouldSwitchDB := needSwitchDB(event)
 
 	if event.GetDDLType() == timodel.ActionAddIndex {
-		newQuery, changed, err := restoreAnonymousIndexToNamedIndex(event.Query, event.TableInfo)
+		newQuery, changed, err := restoreAnonymousIndexToNamedIndex(event.Query, event.TableInfo, event.IndexIDs)
 		if err != nil {
 			log.Warn("failed to restore anonymous index name",
 				zap.String("changefeed", w.ChangefeedID.String()),
