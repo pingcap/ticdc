@@ -915,7 +915,11 @@ func (d *BasicDispatcher) FlushBlockEvent(pendingEvent commonEvent.BlockEvent, a
 
 // reportBlockedEventDone sends DONE status and wakes dispatcher-status stream path
 // so the next status for this dispatcher can be handled.
-func (d *BasicDispatcher) reportBlockedEventDone(actionCommitTs uint64, actionIsSyncPoint bool, doneAction heartbeatpb.DoneAction) {
+func (d *BasicDispatcher) reportBlockedEventDone(
+	actionCommitTs uint64,
+	actionIsSyncPoint bool,
+	doneAction heartbeatpb.DoneAction,
+) {
 	d.sharedInfo.blockStatusesChan <- &heartbeatpb.TableSpanBlockStatus{
 		ID: d.id.ToPB(),
 		State: &heartbeatpb.State{

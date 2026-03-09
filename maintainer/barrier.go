@@ -386,6 +386,15 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 	return event
 }
 
+// inferLegacyDoneAction recovers the most likely action behind a legacy DONE
+// message whose State.DoneAction is unset.
+//
+// Older dispatchers only reported Stage=DONE, so the maintainer has to infer
+// which phase produced the DONE from the barrier progress:
+//  1. Before flushDispatcherAdvanced, every DONE belongs to Flush.
+//  2. After Flush but before writerDispatcherAdvanced, only writerDispatcher can
+//     legitimately report WriteDone.
+//  3. After writerDispatcherAdvanced, remaining DONE messages belong to Pass.
 func inferLegacyDoneAction(event *BarrierEvent, dispatcherID common.DispatcherID) heartbeatpb.DoneAction {
 	switch {
 	case !event.flushDispatcherAdvanced:
@@ -395,6 +404,10 @@ func inferLegacyDoneAction(event *BarrierEvent, dispatcherID common.DispatcherID
 	case event.writerDispatcherAdvanced:
 		return heartbeatpb.DoneAction_PassDone
 	default:
+		// Safe fallback: this only happens while waiting for the writer's
+		// WriteDone and a non-writer reports a legacy DONE. handleEventDone
+		// ignores that stale DONE before it can advance the barrier, so
+		// returning Unknown does not change behavior.
 		return heartbeatpb.DoneAction_Unknown
 	}
 }
