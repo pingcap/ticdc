@@ -895,13 +895,13 @@ func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) 
 			zap.String("query", args.job.Query),
 			zap.Error(err))
 	}
+	if len(renameArgs.RenameTableInfos) != len(args.job.BinlogInfo.MultipleTableInfos) {
+		log.Panic("should not happen",
+			zap.Int("renameArgsLen", len(renameArgs.RenameTableInfos)),
+			zap.Int("multipleTableInfosLen", len(args.job.BinlogInfo.MultipleTableInfos)))
+	}
 	renameTableInfos := renameArgs.RenameTableInfos
 	multipleTableInfos := args.job.BinlogInfo.MultipleTableInfos
-	if len(renameTableInfos) != len(multipleTableInfos) {
-		log.Panic("should not happen",
-			zap.Int("renameArgsLen", len(renameTableInfos)),
-			zap.Int("multipleTableInfosLen", len(multipleTableInfos)))
-	}
 
 	queryInfos := parseRenameTablesQueryInfos(args.job.Query)
 	usedQueryInfos := make(map[int]struct{}, len(queryInfos))
@@ -912,9 +912,6 @@ func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) 
 		oldTableName := info.OldTableName.O
 		oldTableNameFromQuery := false
 		newSchemaName := getSchemaName(args.databaseMap, info.NewSchemaID)
-		if oldSchemaName == "" {
-			oldSchemaName = getSchemaName(args.databaseMap, oldSchemaID)
-		}
 
 		if oldTableName == "" {
 			queryInfo, queryInfoIndex, ok := matchRenameQueryInfoByNewTable(
@@ -978,12 +975,6 @@ func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) 
 					zap.String("query", args.job.Query))
 				oldTableName = tableInfo.Name
 			}
-		}
-		if oldSchemaName == "" {
-			oldSchemaName = newSchemaName
-		}
-		if oldTableName == "" {
-			oldTableName = info.NewTableName.O
 		}
 
 		event.ExtraSchemaIDs = append(event.ExtraSchemaIDs, oldSchemaID)

@@ -3167,7 +3167,7 @@ func TestBuildPersistedDDLEventForRenameTablesFallbackQueryOldTableName(t *testi
 		[]int64{100, 100},
 		[]int64{105, 105},
 		[]int64{200, 201},
-		[]string{"", ""},
+		[]string{"source_db", "source_db"},
 		[]string{"", ""},
 		[]string{"target_t1", "target_t2"},
 		1010,
@@ -3200,7 +3200,7 @@ func TestBuildPersistedDDLEventForRenameTablesCyclicRenameWithTemporaryTable(t *
 		[]int64{100, 100},
 		[]int64{100, 100},
 		[]int64{200, 201},
-		[]string{"", ""},
+		[]string{"test", "test"},
 		[]string{"", ""},
 		[]string{"b", "a"},
 		1010,
@@ -3224,34 +3224,6 @@ func TestBuildPersistedDDLEventForRenameTablesCyclicRenameWithTemporaryTable(t *
 		ddl.Query)
 	assert.Equal(t, []string{"a", "b"}, ddl.ExtraTableNames)
 	assert.NotContains(t, ddl.Query, "`c`")
-}
-
-func TestBuildPersistedDDLEventForRenameTablesUseOldSchemaIDForSchemaNameLookup(t *testing.T) {
-	job := buildRenameTablesJobForTest(
-		[]int64{101},
-		[]int64{105},
-		[]int64{200},
-		[]string{""},
-		[]string{"source_t1"},
-		[]string{"target_t1"},
-		1010,
-	)
-
-	ddl := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
-		job: job,
-		databaseMap: map[int64]*BasicDatabaseInfo{
-			100: {Name: "source_db_from_table_map", Tables: map[int64]bool{200: true}},
-			101: {Name: "source_db_from_args", Tables: map[int64]bool{200: true}},
-			105: {Name: "target_db", Tables: map[int64]bool{200: true}},
-		},
-		tableMap: map[int64]*BasicTableInfo{
-			200: {SchemaID: 100, Name: "source_t1"},
-		},
-	})
-
-	assert.Equal(t, []int64{101}, ddl.ExtraSchemaIDs)
-	assert.Equal(t, []string{"source_db_from_args"}, ddl.ExtraSchemaNames)
-	assert.Equal(t, "RENAME TABLE `source_db_from_args`.`source_t1` TO `target_db`.`target_t1`;", ddl.Query)
 }
 
 func TestBuildPersistedDDLEventForRenameTablesDoNotOverrideExistingArgsByQuery(t *testing.T) {
