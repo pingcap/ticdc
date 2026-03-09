@@ -81,7 +81,7 @@ const (
 	bank2      = "bank2"
 	bankUpdate = "bank_update"
 	dc         = "dc"
-	jsonZstd   = "json_zstd"
+	wideTableWithJSON = "wide_table_with_json"
 )
 
 // stmtCacheKey is used as the key for statement cache
@@ -140,7 +140,7 @@ func (app *WorkloadApp) createWorkload() schema.Workload {
 		workload = bankupdate.NewBankUpdateWorkload(app.Config.TotalRowCount, app.Config.UpdateLargeColumnSize)
 	case dc:
 		workload = pdc.NewDCWorkload()
-	case jsonZstd:
+	case wideTableWithJSON:
 		workload = pjsonzstd.NewJSONZstdWorkload(app.Config.RowSize, app.Config.TableCount, app.Config.TableStartIndex, app.Config.TotalRowCount, app.Config.JSONPayloadMode)
 	default:
 		plog.Panic("unsupported workload type", zap.String("workload", app.Config.WorkloadType))
@@ -331,7 +331,7 @@ func (app *WorkloadApp) doInsertOnce(conn *sql.Conn) (uint64, error) {
 	case bank2:
 		insertSQL, values := app.Workload.(*pbank2.Bank2Workload).BuildInsertSqlWithValues(tableIndex, app.Config.BatchSize)
 		res, err = app.executeWithValues(conn, insertSQL, tableIndex, values)
-	case jsonZstd:
+	case wideTableWithJSON:
 		insertSQL, values := app.Workload.(*pjsonzstd.JSONZstdWorkload).BuildInsertSqlWithValues(tableIndex, app.Config.BatchSize)
 		res, err = app.executeWithValues(conn, insertSQL, tableIndex, values)
 	default:

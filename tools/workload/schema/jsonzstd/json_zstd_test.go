@@ -42,18 +42,18 @@ func TestJSONZstdWorkloadBuildCreateTableStatement(t *testing.T) {
 	w := NewJSONZstdWorkload(1024, 2, 0, 100, "const").(*JSONZstdWorkload)
 
 	sql0 := w.BuildCreateTableStatement(0)
-	if !strings.Contains(sql0, "CREATE TABLE IF NOT EXISTS `json_zstd_entity_metadata`") {
+	if !strings.Contains(sql0, "CREATE TABLE IF NOT EXISTS `wide_table_with_json_entity_metadata`") {
 		t.Fatalf("unexpected entity table ddl: %s", sql0)
 	}
-	if !strings.Contains(sql0, "CREATE TABLE IF NOT EXISTS `json_zstd_batch_metadata`") {
+	if !strings.Contains(sql0, "CREATE TABLE IF NOT EXISTS `wide_table_with_json_batch_metadata`") {
 		t.Fatalf("unexpected batch table ddl: %s", sql0)
 	}
 
 	sql1 := w.BuildCreateTableStatement(1)
-	if !strings.Contains(sql1, "CREATE TABLE IF NOT EXISTS `json_zstd_entity_metadata_1`") {
+	if !strings.Contains(sql1, "CREATE TABLE IF NOT EXISTS `wide_table_with_json_entity_metadata_1`") {
 		t.Fatalf("unexpected entity table ddl for shard: %s", sql1)
 	}
-	if !strings.Contains(sql1, "CREATE TABLE IF NOT EXISTS `json_zstd_batch_metadata_1`") {
+	if !strings.Contains(sql1, "CREATE TABLE IF NOT EXISTS `wide_table_with_json_batch_metadata_1`") {
 		t.Fatalf("unexpected batch table ddl for shard: %s", sql1)
 	}
 }
@@ -71,7 +71,7 @@ func TestJSONZstdWorkloadBuildInsertSqlWithValues(t *testing.T) {
 		sql, values := w.BuildInsertSqlWithValues(0, 3)
 
 		switch {
-		case strings.Contains(sql, "INSERT INTO `json_zstd_entity_metadata`"):
+		case strings.Contains(sql, "INSERT INTO `wide_table_with_json_entity_metadata`"):
 			foundEntity = true
 			colCount := 10
 			if strings.Contains(sql, "migrated_at") {
@@ -87,7 +87,7 @@ func TestJSONZstdWorkloadBuildInsertSqlWithValues(t *testing.T) {
 			if len(media) != w.entityMediaSize {
 				t.Fatalf("entity media_metadata len mismatch: got %d, want %d", len(media), w.entityMediaSize)
 			}
-		case strings.Contains(sql, "INSERT INTO `json_zstd_batch_metadata`"):
+		case strings.Contains(sql, "INSERT INTO `wide_table_with_json_batch_metadata`"):
 			foundBatch = true
 			colCount := 9
 			if strings.Contains(sql, "aux_data") {
@@ -142,7 +142,7 @@ func TestJSONZstdWorkloadBuildUpdateSqlWithValues(t *testing.T) {
 		sql, values := w.BuildUpdateSqlWithValues(schema.UpdateOption{TableIndex: 0, Batch: 4})
 
 		switch {
-		case strings.Contains(sql, "UPDATE `json_zstd_entity_metadata`"):
+		case strings.Contains(sql, "UPDATE `wide_table_with_json_entity_metadata`"):
 			foundEntity = true
 			switch {
 			case strings.Contains(sql, "WHERE (`secondary_id` = ?)"):
@@ -160,7 +160,7 @@ func TestJSONZstdWorkloadBuildUpdateSqlWithValues(t *testing.T) {
 			default:
 				t.Fatalf("unexpected entity update sql: %s", sql)
 			}
-		case strings.Contains(sql, "UPDATE `json_zstd_batch_metadata`"):
+		case strings.Contains(sql, "UPDATE `wide_table_with_json_batch_metadata`"):
 			foundBatch = true
 			switch {
 			case strings.Contains(sql, "SET `updated_at` = ?, `status` = ?"):

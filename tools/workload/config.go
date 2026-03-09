@@ -59,7 +59,7 @@ type WorkloadConfig struct {
 	UpdateLargeColumnSize int
 	// For sysbench workload
 	RangeNum int
-	// Only for json_zstd workload
+	// Only for wide_table_with_json workload
 	JSONPayloadMode string
 
 	// Log related
@@ -109,7 +109,7 @@ func NewWorkloadConfig() *WorkloadConfig {
 		// For sysbench workload
 		RangeNum: 5,
 
-		// For json_zstd workload
+		// For wide_table_with_json workload
 		JSONPayloadMode: "const",
 
 		// Log related
@@ -132,7 +132,7 @@ func (c *WorkloadConfig) ParseFlags() error {
 	flag.Float64Var(&c.PercentageForDelete, "percentage-for-delete", c.PercentageForDelete, "percentage for delete: [0, 1.0]")
 	flag.BoolVar(&c.SkipCreateTable, "skip-create-table", c.SkipCreateTable, "do not create tables")
 	flag.StringVar(&c.Action, "action", c.Action, "action of the workload: [prepare, insert, update, delete, write, ddl, cleanup]")
-	flag.StringVar(&c.WorkloadType, "workload-type", c.WorkloadType, "workload type: [bank, sysbench, large_row, shop_item, uuu, bank2, bank_update, crawler, dc, json_zstd]")
+	flag.StringVar(&c.WorkloadType, "workload-type", c.WorkloadType, "workload type: [bank, sysbench, large_row, shop_item, uuu, bank2, bank_update, crawler, dc, wide_table_with_json]")
 	flag.StringVar(&c.DBHost, "database-host", c.DBHost, "database host")
 	flag.StringVar(&c.DBUser, "database-user", c.DBUser, "database user")
 	flag.StringVar(&c.DBPassword, "database-password", c.DBPassword, "database password")
@@ -151,8 +151,8 @@ func (c *WorkloadConfig) ParseFlags() error {
 	flag.IntVar(&c.UpdateLargeColumnSize, "update-large-column-size", c.UpdateLargeColumnSize, "the size of the large column to update")
 	// For sysbench workload
 	flag.IntVar(&c.RangeNum, "range-num", c.RangeNum, "the number of ranges for sysbench workload")
-	// For json_zstd workload
-	flag.StringVar(&c.JSONPayloadMode, "json-payload-mode", c.JSONPayloadMode, "payload mode for json_zstd: [const, zstd, random]")
+	// For wide_table_with_json workload
+	flag.StringVar(&c.JSONPayloadMode, "json-payload-mode", c.JSONPayloadMode, "payload mode for wide_table_with_json: [const, zstd, random]")
 
 	flag.Parse()
 

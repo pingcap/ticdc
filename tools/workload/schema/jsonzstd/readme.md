@@ -1,4 +1,4 @@
-# `json_zstd` workload
+# `wide_table_with_json` workload
 
 This workload generates **write/update/delete** traffic against a pair of generic metadata-style tables, with a focus on **large JSON-like payloads** and **compression behavior**.
 
@@ -12,8 +12,8 @@ It is useful for testing:
 
 For each shard index `n`, the workload uses two tables:
 
-- Entity table: `json_zstd_entity_metadata` / `json_zstd_entity_metadata_<n>`
-- Batch table: `json_zstd_batch_metadata` / `json_zstd_batch_metadata_<n>`
+- Entity table: `wide_table_with_json_entity_metadata` / `wide_table_with_json_entity_metadata_<n>`
+- Batch table: `wide_table_with_json_batch_metadata` / `wide_table_with_json_batch_metadata_<n>`
 
 `-table-count` controls how many shards to create, and `-table-start-index` controls the starting suffix.
 
@@ -51,7 +51,7 @@ Create tables + run mixed writes with zstd-friendly payloads:
   -database-host 127.0.0.1 \
   -database-port 4000 \
   -database-db-name json_payload \
-  -workload-type json_zstd \
+  -workload-type wide_table_with_json \
   -table-count 16 \
   -row-size $((16 * 1024)) \
   -json-payload-mode zstd \

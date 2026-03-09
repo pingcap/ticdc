@@ -163,7 +163,7 @@ func (app *WorkloadApp) executeUpdate(conn *sql.Conn, task *updateTask) (sql.Res
 		return app.executeBank2Update(conn, task)
 	case sysbench:
 		return app.executeSysbenchUpdate(conn, task)
-	case jsonZstd:
+	case wideTableWithJSON:
 		return app.executeJSONZstdUpdate(conn, task)
 	default:
 		return app.executeRegularUpdate(conn, task)

@@ -103,7 +103,7 @@ Additional parameters for update:
 
 ### 3. JSON Zstd Workload
 
-Generate writes for `json_zstd_entity_metadata` and `json_zstd_batch_metadata` (two tables per shard). Use `-row-size` to control payload width and `-table-count` to control shard count.
+Generate writes for `wide_table_with_json_entity_metadata` and `wide_table_with_json_batch_metadata` (two tables per shard). Use `-row-size` to control payload width and `-table-count` to control shard count.
 
 ```bash
 ./workload -action write \
@@ -112,7 +112,7 @@ Generate writes for `json_zstd_entity_metadata` and `json_zstd_batch_metadata` (
     -database-db-name json_payload \
     -total-row-count 1000000 \
     -table-count 16 \
-    -workload-type json_zstd \
+    -workload-type wide_table_with_json \
     -row-size $((16 * 1024)) \
     -thread 32 \
     -batch-size 32 \
@@ -125,4 +125,4 @@ Generate writes for `json_zstd_entity_metadata` and `json_zstd_batch_metadata` (
 - Ensure the database is properly configured and has the necessary permissions.
 - Adjust the thread and batch-size parameters based on your needs.
 - Use `-batch-in-txn` to wrap each batch in a single explicit transaction (BEGIN/COMMIT).
-- For `json_zstd`, use `-json-payload-mode zstd` to generate a zstd friendly JSON-like payload, or `-json-payload-mode random` for incompressible payloads.
+- For `wide_table_with_json`, use `-json-payload-mode zstd` to generate a zstd friendly JSON-like payload, or `-json-payload-mode random` for incompressible payloads.

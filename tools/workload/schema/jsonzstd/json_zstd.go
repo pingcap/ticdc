@@ -385,16 +385,16 @@ func (w *JSONZstdWorkload) putRand(r *rand.Rand) {
 
 func getEntityTableName(n int) string {
 	if n == 0 {
-		return "`json_zstd_entity_metadata`"
+		return "`wide_table_with_json_entity_metadata`"
 	}
-	return fmt.Sprintf("`json_zstd_entity_metadata_%d`", n)
+	return fmt.Sprintf("`wide_table_with_json_entity_metadata_%d`", n)
 }
 
 func getBatchTableName(n int) string {
 	if n == 0 {
-		return "`json_zstd_batch_metadata`"
+		return "`wide_table_with_json_batch_metadata`"
 	}
-	return fmt.Sprintf("`json_zstd_batch_metadata_%d`", n)
+	return fmt.Sprintf("`wide_table_with_json_batch_metadata_%d`", n)
 }
 
 func (w *JSONZstdWorkload) slot(tableIndex int) int {
