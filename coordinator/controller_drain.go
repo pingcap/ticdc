@@ -21,10 +21,10 @@ type drainSession struct {
 	target node.ID
 	epoch  uint64
 
-	// pendingStatusInitialized indicates the pending status baseline has been frozen for this session.
-	// The baseline only shrinks over time and must not be re-snapshotted when it becomes empty.
-	pendingStatusInitialized bool
-	pendingStatus            map[common.ChangeFeedID]struct{}
+	// pendingStatus is the frozen baseline of running changefeeds that had not
+	// yet acknowledged this drain epoch when the session was created.
+	// The set only shrinks over time during one drain session.
+	pendingStatus map[common.ChangeFeedID]struct{}
 
 	dirty    bool
 	lastSent time.Time
@@ -79,9 +79,7 @@ func (c *Controller) DrainNode(_ context.Context, target node.ID) (int, error) {
 		return 0, nil
 	}
 
-	if observation.dispatcherCountOnTarget > 0 ||
-		observation.pendingStatusCount > 0 ||
-		observation.targetInflightDrainMoveCount > 0 {
+	if observation.remaining > 0 {
 		log.Info("drain completion blocked by remaining work",
 			zap.Stringer("targetNodeID", target),
 			zap.Uint64("targetEpoch", targetEpoch),
@@ -92,7 +90,7 @@ func (c *Controller) DrainNode(_ context.Context, target node.ID) (int, error) {
 			zap.Int("pendingStatusCount", observation.pendingStatusCount),
 			zap.Int("remaining", observation.remaining))
 	}
-	return ensureDrainRemainingNonZero(observation.remaining), nil
+	return observation.remaining, nil
 }
 
 type drainNodeObservation struct {
@@ -123,8 +121,7 @@ func (c *Controller) observeDrainNode(target node.ID, epoch uint64) drainNodeObs
 		maintainersOnTarget:        len(c.changefeedDB.GetByNodeID(target)),
 		inflightOpsInvolvingTarget: c.operatorController.CountOperatorsInvolvingNode(target),
 	}
-	observation.dispatcherCountOnTarget = c.aggregateDrainTargetDispatcherCount(target, epoch)
-	observation.targetInflightDrainMoveCount = c.aggregateDrainTargetInflightMoveCount(target, epoch)
+	observation.dispatcherCountOnTarget, observation.targetInflightDrainMoveCount = c.aggregateDrainTargetProgress(target, epoch)
 	observation.pendingStatusCount = c.collectDrainPendingStatus(target, epoch)
 	observation.remaining = drainRemainingEstimate(
 		observation.maintainersOnTarget,
@@ -139,8 +136,9 @@ func (c *Controller) observeDrainNode(target node.ID, epoch uint64) drainNodeObs
 	return observation
 }
 
-// collectDrainPendingStatus tracks a frozen baseline of running changefeeds and
-// returns how many of them have not reported the active drain target epoch yet.
+// collectDrainPendingStatus advances the frozen pending baseline for the active
+// drain session and returns how many changefeeds have not yet reported the
+// active drain target epoch.
 func (c *Controller) collectDrainPendingStatus(target node.ID, epoch uint64) int {
 	if target.IsEmpty() || epoch == 0 {
 		return 0
@@ -152,11 +150,6 @@ func (c *Controller) collectDrainPendingStatus(target node.ID, epoch uint64) int
 	session := c.drainSession
 	if session == nil || session.target != target || session.epoch != epoch {
 		return 0
-	}
-
-	if !session.pendingStatusInitialized {
-		session.pendingStatusInitialized = true
-		session.pendingStatus = c.snapshotDrainStatusBaseline(target, epoch)
 	}
 
 	if len(session.pendingStatus) == 0 {
@@ -187,10 +180,6 @@ func (c *Controller) collectDrainPendingStatus(target node.ID, epoch uint64) int
 // monotonic pending set during one drain session.
 func (c *Controller) snapshotDrainStatusBaseline(target node.ID, epoch uint64) map[common.ChangeFeedID]struct{} {
 	cfs := c.changefeedDB.GetReplicating()
-	if len(cfs) == 0 {
-		return nil
-	}
-
 	targetID := target.String()
 	snapshot := make(map[common.ChangeFeedID]struct{}, len(cfs))
 	for _, cf := range cfs {
@@ -239,10 +228,12 @@ func (c *Controller) ensureDispatcherDrainTarget(target node.ID) (uint64, error)
 		c.dispatcherDrainEpoch = 1
 	}
 
+	pendingStatus := c.snapshotDrainStatusBaseline(target, c.dispatcherDrainEpoch)
 	c.drainSession = &drainSession{
-		target: target,
-		epoch:  c.dispatcherDrainEpoch,
-		dirty:  true,
+		target:        target,
+		epoch:         c.dispatcherDrainEpoch,
+		pendingStatus: pendingStatus,
+		dirty:         true,
 	}
 	log.Info("dispatcher drain target activated",
 		zap.Stringer("targetNodeID", target),
@@ -330,15 +321,14 @@ func (c *Controller) broadcastDispatcherDrainTarget(target node.ID, epoch uint64
 	}
 }
 
-// aggregateDrainTargetDispatcherCount sums per-changefeed dispatcher counts
+// aggregateDrainTargetProgress sums per-changefeed drain progress counters
 // reported for the given drain target epoch.
-func (c *Controller) aggregateDrainTargetDispatcherCount(target node.ID, epoch uint64) int {
+func (c *Controller) aggregateDrainTargetProgress(target node.ID, epoch uint64) (dispatcherCount int, inflightMoveCount int) {
 	if target.IsEmpty() || epoch == 0 {
-		return 0
+		return 0, 0
 	}
 
 	targetID := target.String()
-	dispatcherCount := 0
 	cfs := c.changefeedDB.GetReplicating()
 	for _, cf := range cfs {
 		if cf == nil {
@@ -353,35 +343,9 @@ func (c *Controller) aggregateDrainTargetDispatcherCount(target node.ID, epoch u
 			continue
 		}
 		dispatcherCount += int(progress.GetTargetDispatcherCount())
-	}
-	return dispatcherCount
-}
-
-// aggregateDrainTargetInflightMoveCount sums per-changefeed drain move counts
-// reported for the given drain target epoch.
-func (c *Controller) aggregateDrainTargetInflightMoveCount(target node.ID, epoch uint64) int {
-	if target.IsEmpty() || epoch == 0 {
-		return 0
-	}
-
-	targetID := target.String()
-	inflightMoveCount := 0
-	cfs := c.changefeedDB.GetReplicating()
-	for _, cf := range cfs {
-		if cf == nil {
-			continue
-		}
-		status := cf.GetStatus()
-		if status == nil {
-			continue
-		}
-		progress := status.GetDrainProgress()
-		if progress == nil || progress.GetTargetNodeId() != targetID || progress.GetTargetEpoch() != epoch {
-			continue
-		}
 		inflightMoveCount += int(progress.GetTargetInflightDrainMoveCount())
 	}
-	return inflightMoveCount
+	return dispatcherCount, inflightMoveCount
 }
 
 // isDrainCompletionProven checks whether drain completion can be safely concluded.
@@ -418,14 +382,6 @@ func drainRemainingEstimate(
 	}
 	if pendingStatusCount > remaining {
 		remaining = pendingStatusCount
-	}
-	return remaining
-}
-
-// ensureDrainRemainingNonZero keeps v1 compatibility before completion is proven.
-func ensureDrainRemainingNonZero(remaining int) int {
-	if remaining == 0 {
-		return 1
 	}
 	return remaining
 }
