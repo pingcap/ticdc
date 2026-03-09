@@ -12,6 +12,7 @@ function run() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
 	start_tidb_cluster --workdir $WORK_DIR
+	skip_if_tidb_version_less_than "v8.5.0"
 
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
