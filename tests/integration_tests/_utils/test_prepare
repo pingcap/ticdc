@@ -93,3 +93,79 @@ else
 fi
 
 export TEST_OUT_DATA_DIR=test_out_data
+
+function get_tidb_release_version() {
+	local tidbHost=${1:-$UP_TIDB_HOST}
+	local tidbPort=${2:-$UP_TIDB_PORT}
+
+	mysql -uroot -h${tidbHost} -P${tidbPort} --default-character-set utf8mb4 -e "select tidb_version()\G" \
+		| awk -F': ' '/Release Version/ {print $2; exit}' | tr -d ' '
+}
+
+function normalize_tidb_semver_triplet() {
+	local rawVersion=${1#v}
+	rawVersion=${rawVersion%%-*}
+	rawVersion=${rawVersion%%+*}
+
+	local major minor patch
+	IFS='.' read -r major minor patch <<<"$rawVersion"
+	major=${major:-0}
+	minor=${minor:-0}
+	patch=${patch:-0}
+
+	if ! [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ && "$patch" =~ ^[0-9]+$ ]]; then
+		return 1
+	fi
+
+	echo "$major $minor $patch"
+}
+
+function tidb_version_less_than() {
+	local currentVersion=$1
+	local minVersion=$2
+
+	local currentTriplet minTriplet
+	currentTriplet=$(normalize_tidb_semver_triplet "$currentVersion") || return 1
+	minTriplet=$(normalize_tidb_semver_triplet "$minVersion") || return 1
+
+	local currentMajor currentMinor currentPatch
+	local minMajor minMinor minPatch
+	read -r currentMajor currentMinor currentPatch <<<"$currentTriplet"
+	read -r minMajor minMinor minPatch <<<"$minTriplet"
+
+	if ((10#$currentMajor < 10#$minMajor)); then
+		return 0
+	fi
+	if ((10#$currentMajor > 10#$minMajor)); then
+		return 1
+	fi
+	if ((10#$currentMinor < 10#$minMinor)); then
+		return 0
+	fi
+	if ((10#$currentMinor > 10#$minMinor)); then
+		return 1
+	fi
+	if ((10#$currentPatch < 10#$minPatch)); then
+		return 0
+	fi
+	return 1
+}
+
+function skip_if_tidb_version_less_than() {
+	local minVersion=$1
+	local tidbHost=${2:-$UP_TIDB_HOST}
+	local tidbPort=${3:-$UP_TIDB_PORT}
+	local testName=${TEST_NAME:-unknown}
+
+	local tidbReleaseVersion
+	tidbReleaseVersion=$(get_tidb_release_version "$tidbHost" "$tidbPort" || true)
+	if [ -z "$tidbReleaseVersion" ]; then
+		echo "[$(date)] failed to parse TiDB release version from ${tidbHost}:${tidbPort}, continue test case ${testName}"
+		return
+	fi
+
+	if tidb_version_less_than "$tidbReleaseVersion" "$minVersion"; then
+		echo "[$(date)] <<<<<< skip test case ${testName}, TiDB version ${tidbReleaseVersion} is less than ${minVersion} >>>>>>"
+		exit 0
+	fi
+}
