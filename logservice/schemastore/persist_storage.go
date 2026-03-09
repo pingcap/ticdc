@@ -237,6 +237,12 @@ func (p *persistentStorage) initialize(ctx context.Context) error {
 		}
 	}
 	if !isDataReusable {
+		// Why retry here:
+		// EnsureChangefeedStartTsSafety protects startTs=gcSafePoint+1 from future GC,
+		// but bootstrap snapshot is still read at gcSafePoint. If upstream GC advances
+		// while reading metadata, TiDB can return "GC life time is shorter than
+		// transaction duration". In that case, refresh gcSafePoint and retry bootstrap
+		// instead of crashing the process.
 		for {
 			err := p.initializeFromKVStorage(dbPath, gcSafePoint)
 			if err == nil {
