@@ -19,7 +19,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
+	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
@@ -43,9 +43,9 @@ func TestEventsGroupAppendForceMergesExistingCommitTs(t *testing.T) {
 			Length:   0,
 			TableInfo: common.NewTableInfo4Decoder("test", &timodel.TableInfo{
 				ID:   100,
-				Name: ast.NewCIStr("t"),
+				Name: parser_model.NewCIStr("t"),
 				Columns: []*timodel.ColumnInfo{
-					{Name: ast.NewCIStr("a")},
+					{Name: parser_model.NewCIStr("a")},
 				},
 			}),
 		}
