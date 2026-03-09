@@ -3252,6 +3252,67 @@ func TestBuildPersistedDDLEventForRenameTablesDoNotOverrideExistingArgsByQuery(t
 	assert.Equal(t, "RENAME TABLE `source_db`.`source_t1_from_args` TO `target_db`.`target_t1`;", ddl.Query)
 }
 
+func TestParseRenameTablesQueryInfos(t *testing.T) {
+	cases := []struct {
+		name     string
+		query    string
+		expected []renameTableQueryInfo
+	}{
+		{
+			name:  "multiple tables with schema",
+			query: "RENAME TABLE `db1`.`t1` TO `db2`.`t2`, `db1`.`t3` TO `db2`.`t4`",
+			expected: []renameTableQueryInfo{
+				{
+					oldSchemaName: "db1",
+					oldTableName:  "t1",
+					newSchemaName: "db2",
+					newTableName:  "t2",
+				},
+				{
+					oldSchemaName: "db1",
+					oldTableName:  "t3",
+					newSchemaName: "db2",
+					newTableName:  "t4",
+				},
+			},
+		},
+		{
+			name:  "without schema names",
+			query: "RENAME TABLE `t1` TO `t2`",
+			expected: []renameTableQueryInfo{
+				{
+					oldSchemaName: "",
+					oldTableName:  "t1",
+					newSchemaName: "",
+					newTableName:  "t2",
+				},
+			},
+		},
+		{
+			name:     "empty query",
+			query:    "",
+			expected: nil,
+		},
+		{
+			name:     "non rename statement",
+			query:    "CREATE TABLE t(a INT)",
+			expected: nil,
+		},
+		{
+			name:     "invalid sql",
+			query:    "RENAME TABLE",
+			expected: nil,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseRenameTablesQueryInfos(tc.query)
+			assert.Equal(t, tc.expected, got)
+		})
+	}
+}
+
 func TestBuildDDLEventForNewTableDDL_CreateTableLikeBlockedTableNames(t *testing.T) {
 	cases := []struct {
 		name     string
