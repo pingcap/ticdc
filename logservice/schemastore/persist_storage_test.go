@@ -3254,6 +3254,34 @@ func TestBuildPersistedDDLEventForRenameTablesUseOldSchemaIDForSchemaNameLookup(
 	assert.Equal(t, "RENAME TABLE `source_db_from_args`.`source_t1` TO `target_db`.`target_t1`;", ddl.Query)
 }
 
+func TestBuildPersistedDDLEventForRenameTablesDoNotOverrideExistingArgsByQuery(t *testing.T) {
+	job := buildRenameTablesJobForTest(
+		[]int64{100},
+		[]int64{105},
+		[]int64{200},
+		[]string{"source_db"},
+		[]string{"source_t1_from_args"},
+		[]string{"target_t1"},
+		1010,
+	)
+	job.Query = "RENAME TABLE `source_db`.`source_t1_from_query` TO `target_db`.`target_t1`"
+
+	ddl := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			100: {Name: "source_db", Tables: map[int64]bool{200: true}},
+			105: {Name: "target_db", Tables: map[int64]bool{200: true}},
+		},
+		tableMap: map[int64]*BasicTableInfo{
+			200: {SchemaID: 100, Name: "source_t1_from_store"},
+		},
+	})
+
+	assert.Equal(t, []string{"source_t1_from_args"}, ddl.ExtraTableNames)
+	assert.Equal(t, []string{"source_db"}, ddl.ExtraSchemaNames)
+	assert.Equal(t, "RENAME TABLE `source_db`.`source_t1_from_args` TO `target_db`.`target_t1`;", ddl.Query)
+}
+
 func TestBuildDDLEventForNewTableDDL_CreateTableLikeBlockedTableNames(t *testing.T) {
 	cases := []struct {
 		name     string
