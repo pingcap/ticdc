@@ -4,18 +4,25 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//	http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 package dispatcherorchestrator
 
 import (
+	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
+	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
+	"github.com/pingcap/ticdc/downstreamadapter/dispatchermanager"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -196,4 +203,90 @@ func TestGetPendingMessageKey_SupportedTypes(t *testing.T) {
 	key, ok = getPendingMessageKey(closeReq)
 	require.True(t, ok)
 	require.Equal(t, pendingMessageKey{changefeedID: cfID, msgType: messaging.TypeMaintainerCloseRequest}, key)
+}
+
+func TestCreateBootstrapResponseSkipsRedoUntilReady(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := &heartbeatpb.ChangefeedID{
+		Keyspace: "test-namespace",
+		Name:     "test-changefeed",
+	}
+	redoDispatcherID := common.NewDispatcherID()
+	redoDispatcher := dispatcher.NewRedoDispatcher(
+		redoDispatcherID,
+		common.KeyspaceDDLSpan(0),
+		123,
+		0,
+		dispatcher.NewSchemaIDToDispatchers(),
+		false,
+		false,
+		nil,
+		nil,
+	)
+	redoDispatcherMap := &dispatchermanager.DispatcherMap[*dispatcher.RedoDispatcher]{}
+	redoDispatcherMap.Set(redoDispatcherID, redoDispatcher)
+
+	t.Run("nil redo map", func(t *testing.T) {
+		manager := newBootstrapTestManager(t)
+		manager.RedoEnable = true
+
+		require.NotPanics(t, func() {
+			response := createBootstrapResponse(changefeedID, manager, 0, 123)
+			require.Zero(t, response.RedoCheckpointTs)
+			require.Empty(t, response.Spans)
+		})
+	})
+
+	t.Run("partial redo state", func(t *testing.T) {
+		manager := newBootstrapTestManager(t)
+		manager.RedoEnable = true
+		setDispatcherManagerField(t, manager, "redoDispatcherMap", redoDispatcherMap)
+		manager.SetTableTriggerRedoDispatcher(redoDispatcher)
+
+		response := createBootstrapResponse(changefeedID, manager, 0, 123)
+		require.Zero(t, response.RedoCheckpointTs)
+		require.Empty(t, response.Spans)
+	})
+
+	t.Run("published redo state", func(t *testing.T) {
+		manager := newBootstrapTestManager(t)
+		manager.RedoEnable = true
+		setDispatcherManagerField(t, manager, "redoDispatcherMap", redoDispatcherMap)
+		setDispatcherManagerField(t, manager, "redoSchemaIDToDispatchers", dispatcher.NewSchemaIDToDispatchers())
+		setDispatcherManagerField(t, manager, "redoSink", &redo.Sink{})
+		manager.SetTableTriggerRedoDispatcher(redoDispatcher)
+		setDispatcherManagerRedoReady(t, manager, true)
+
+		response := createBootstrapResponse(changefeedID, manager, 0, 123)
+		require.Equal(t, uint64(123), response.RedoCheckpointTs)
+		require.Len(t, response.Spans, 1)
+	})
+}
+
+func newBootstrapTestManager(t *testing.T) *dispatchermanager.DispatcherManager {
+	t.Helper()
+
+	manager := &dispatchermanager.DispatcherManager{}
+	setDispatcherManagerField(t, manager, "dispatcherMap", &dispatchermanager.DispatcherMap[*dispatcher.EventDispatcher]{})
+	return manager
+}
+
+func setDispatcherManagerField[T any](t *testing.T, manager *dispatchermanager.DispatcherManager, field string, value T) {
+	t.Helper()
+
+	fieldValue := reflect.ValueOf(manager).Elem().FieldByName(field)
+	require.True(t, fieldValue.IsValid(), "field %s not found", field)
+
+	reflect.NewAt(fieldValue.Type(), unsafe.Pointer(fieldValue.UnsafeAddr())).Elem().Set(reflect.ValueOf(value))
+}
+
+func setDispatcherManagerRedoReady(t *testing.T, manager *dispatchermanager.DispatcherManager, ready bool) {
+	t.Helper()
+
+	fieldValue := reflect.ValueOf(manager).Elem().FieldByName("redoReady")
+	require.True(t, fieldValue.IsValid(), "field redoReady not found")
+
+	readyFlag := (*atomic.Bool)(unsafe.Pointer(fieldValue.UnsafeAddr()))
+	readyFlag.Store(ready)
 }

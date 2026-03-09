@@ -35,6 +35,9 @@ import (
 )
 
 func redoEnabled(cfConfig *config.ChangefeedConfig) bool {
+	if cfConfig == nil {
+		return false
+	}
 	return cfConfig.Consistent != nil && pkgRedo.IsConsistentEnabled(util.GetOrZero(cfConfig.Consistent.Level))
 }
 

@@ -254,3 +254,20 @@ func TestIsRedoDispatcherManagerReadyReturnsTrueAfterPublication(t *testing.T) {
 
 	require.True(t, isRedoDispatcherManagerReady(dm))
 }
+
+func TestDispatcherManagerIsRedoReadyRequiresPublication(t *testing.T) {
+	t.Parallel()
+
+	dm := &DispatcherManager{
+		RedoEnable:                true,
+		redoDispatcherMap:         newDispatcherMap[*dispatcher.RedoDispatcher](),
+		redoSink:                  &redo.Sink{},
+		redoSchemaIDToDispatchers: dispatcher.NewSchemaIDToDispatchers(),
+	}
+
+	require.False(t, dm.IsRedoReady())
+
+	dm.redoReady.Store(true)
+
+	require.True(t, dm.IsRedoReady())
+}

@@ -96,3 +96,8 @@ func (e *DispatcherManager) GetAllDispatchers(schemaID int64) []common.Dispatche
 func (e *DispatcherManager) GetCurrentOperatorMap() *sync.Map {
 	return &e.currentOperatorMap
 }
+
+// IsRedoReady reports whether redo is configured and its runtime components are fully initialized.
+func (e *DispatcherManager) IsRedoReady() bool {
+	return isRedoDispatcherManagerReady(e)
+}

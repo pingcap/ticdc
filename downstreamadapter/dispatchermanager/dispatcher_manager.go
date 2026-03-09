@@ -122,7 +122,7 @@ type DispatcherManager struct {
 	// redo related
 	// RedoEnable is immutable after construction and records whether redo is configured for the changefeed.
 	RedoEnable bool
-	// redoReady publishes that redo components are fully initialized and safe for concurrent access.
+	// redoReady set to true after the redo components are fully initialized and safe for concurrent access.
 	redoReady atomic.Bool
 	redoSink  *redo.Sink
 	// redoGlobalTs stores the resolved-ts of the redo metadata and blocks events in the common dispatcher where the commit-ts is greater than the resolved-ts.
