@@ -128,26 +128,22 @@ function tidb_version_less_than() {
 	currentTriplet=$(normalize_tidb_semver_triplet "$currentVersion") || return 1
 	minTriplet=$(normalize_tidb_semver_triplet "$minVersion") || return 1
 
-	local currentMajor currentMinor currentPatch
-	local minMajor minMinor minPatch
-	read -r currentMajor currentMinor currentPatch <<<"$currentTriplet"
-	read -r minMajor minMinor minPatch <<<"$minTriplet"
+	local -a currentParts minParts
+	read -r -a currentParts <<<"$currentTriplet"
+	read -r -a minParts <<<"$minTriplet"
 
-	if ((10#$currentMajor < 10#$minMajor)); then
-		return 0
-	fi
-	if ((10#$currentMajor > 10#$minMajor)); then
-		return 1
-	fi
-	if ((10#$currentMinor < 10#$minMinor)); then
-		return 0
-	fi
-	if ((10#$currentMinor > 10#$minMinor)); then
-		return 1
-	fi
-	if ((10#$currentPatch < 10#$minPatch)); then
-		return 0
-	fi
+	local idx currentPart minPart
+	for idx in 0 1 2; do
+		currentPart=$((10#${currentParts[$idx]}))
+		minPart=$((10#${minParts[$idx]}))
+		if ((currentPart < minPart)); then
+			return 0
+		fi
+		if ((currentPart > minPart)); then
+			return 1
+		fi
+	done
+
 	return 1
 }
 
