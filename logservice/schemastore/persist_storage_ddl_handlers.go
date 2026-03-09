@@ -944,9 +944,12 @@ func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) 
 		}
 
 		if tableInfo, ok := args.tableMap[info.TableID]; ok {
-			oldSchemaNameInStore := getSchemaName(args.databaseMap, tableInfo.SchemaID)
 			if oldSchemaID == 0 {
 				oldSchemaID = tableInfo.SchemaID
+			}
+			oldSchemaNameInStore := getSchemaName(args.databaseMap, oldSchemaID)
+			if oldSchemaNameInStore == "" {
+				oldSchemaNameInStore = getSchemaName(args.databaseMap, tableInfo.SchemaID)
 			}
 			if oldSchemaName == "" {
 				oldSchemaName = oldSchemaNameInStore
