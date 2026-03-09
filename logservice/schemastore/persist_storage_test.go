@@ -3195,7 +3195,7 @@ func TestBuildPersistedDDLEventForRenameTablesCyclicRename(t *testing.T) {
 	assert.Equal(t, []string{"a", "b", "c"}, ddl.ExtraTableNames)
 }
 
-func TestBuildPersistedDDLEventForRenameTablesDoNotOverrideExistingArgsByQuery(t *testing.T) {
+func TestBuildPersistedDDLEventForRenameTablesPreferQueryNames(t *testing.T) {
 	job := buildRenameTablesJobForTest(
 		[]int64{100, 100},
 		[]int64{105, 105},
@@ -3219,11 +3219,11 @@ func TestBuildPersistedDDLEventForRenameTablesDoNotOverrideExistingArgsByQuery(t
 		},
 	})
 
-	assert.Equal(t, []string{"source_t1_from_args", "source_t2_from_args"}, ddl.ExtraTableNames)
+	assert.Equal(t, []string{"source_t1_from_query", "source_t2_from_query"}, ddl.ExtraTableNames)
 	assert.Equal(t, []string{"source_db", "source_db"}, ddl.ExtraSchemaNames)
 	assert.Equal(t,
-		"RENAME TABLE `source_db`.`source_t1_from_args` TO `target_db`.`target_t1`;"+
-			"RENAME TABLE `source_db`.`source_t2_from_args` TO `target_db`.`target_t2`;",
+		"RENAME TABLE `source_db`.`source_t1_from_query` TO `target_db`.`target_t1`;"+
+			"RENAME TABLE `source_db`.`source_t2_from_query` TO `target_db`.`target_t2`;",
 		ddl.Query)
 }
 
