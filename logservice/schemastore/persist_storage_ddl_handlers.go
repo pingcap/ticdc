@@ -520,7 +520,7 @@ func getSchemaID(tableMap map[int64]*BasicTableInfo, tableID int64) int64 {
 // schemaName should be "Name.O"
 func findSchemaIDByName(databaseMap map[int64]*BasicDatabaseInfo, schemaName string) (int64, bool) {
 	for id, info := range databaseMap {
-		if info.Name == schemaName {
+		if strings.EqualFold(info.Name, schemaName) {
 			return id, true
 		}
 	}
@@ -530,7 +530,7 @@ func findSchemaIDByName(databaseMap map[int64]*BasicDatabaseInfo, schemaName str
 // tableName should be "Name.O"
 func findTableIDByName(tableMap map[int64]*BasicTableInfo, schemaID int64, tableName string) (int64, bool) {
 	for id, info := range tableMap {
-		if info.SchemaID == schemaID && info.Name == tableName {
+		if info.SchemaID == schemaID && strings.EqualFold(info.Name, tableName) {
 			return id, true
 		}
 	}
