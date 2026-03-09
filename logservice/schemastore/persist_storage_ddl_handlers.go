@@ -835,57 +835,6 @@ func parseRenameTablesQueryInfos(query string) []renameTableQueryInfo {
 	return queryInfos
 }
 
-func matchRenameQueryInfoByNewTable(
-	queryInfos []renameTableQueryInfo,
-	used map[int]struct{},
-	newSchemaName, newTableName string,
-) (renameTableQueryInfo, int, bool) {
-	for i, info := range queryInfos {
-		if _, ok := used[i]; ok {
-			continue
-		}
-		if !strings.EqualFold(info.newTableName, newTableName) {
-			continue
-		}
-		if info.newSchemaName == "" {
-			continue
-		}
-		if strings.EqualFold(info.newSchemaName, newSchemaName) {
-			return info, i, true
-		}
-	}
-
-	candidateIdx := -1
-	for i, info := range queryInfos {
-		if _, ok := used[i]; ok {
-			continue
-		}
-		if !strings.EqualFold(info.newTableName, newTableName) {
-			continue
-		}
-		if info.newSchemaName != "" && !strings.EqualFold(info.newSchemaName, newSchemaName) {
-			continue
-		}
-		if candidateIdx != -1 {
-			return renameTableQueryInfo{}, -1, false
-		}
-		candidateIdx = i
-	}
-	if candidateIdx == -1 {
-		return renameTableQueryInfo{}, -1, false
-	}
-	return queryInfos[candidateIdx], candidateIdx, true
-}
-
-func getSchemaIDByName(databaseMap map[int64]*BasicDatabaseInfo, schemaName string) int64 {
-	for schemaID, databaseInfo := range databaseMap {
-		if strings.EqualFold(databaseInfo.Name, schemaName) {
-			return schemaID
-		}
-	}
-	return 0
-}
-
 func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
 	// TODO: does rename tables has the same problem(finished ts is not the real commit ts) with rename table?
 	event := buildPersistedDDLEventCommon(args)
@@ -903,42 +852,59 @@ func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) 
 	renameTableInfos := renameArgs.RenameTableInfos
 	multipleTableInfos := args.job.BinlogInfo.MultipleTableInfos
 
-	queryInfos := parseRenameTablesQueryInfos(args.job.Query)
-	usedQueryInfos := make(map[int]struct{}, len(queryInfos))
+	needFillOldTableNamesFromQuery := len(renameTableInfos) > 0 && renameTableInfos[0].OldTableName.O == ""
+	queryInfos := make([]renameTableQueryInfo, 0)
+	if needFillOldTableNamesFromQuery {
+		queryInfos = parseRenameTablesQueryInfos(args.job.Query)
+		if len(queryInfos) != len(renameTableInfos) {
+			log.Warn("rename tables query info length is inconsistent with args",
+				zap.Int("queryInfosLen", len(queryInfos)),
+				zap.Int("renameArgsLen", len(renameTableInfos)),
+				zap.String("query", args.job.Query))
+		}
+	}
+
 	var querys []string
-	for _, info := range renameTableInfos {
+	for i, info := range renameTableInfos {
 		oldSchemaID := info.OldSchemaID
 		oldSchemaName := info.OldSchemaName.O
 		oldTableName := info.OldTableName.O
-		oldTableNameFromQuery := false
 		newSchemaName := getSchemaName(args.databaseMap, info.NewSchemaID)
 
-		if oldTableName == "" {
-			queryInfo, queryInfoIndex, ok := matchRenameQueryInfoByNewTable(
-				queryInfos,
-				usedQueryInfos,
-				newSchemaName,
-				info.NewTableName.O,
-			)
-			if ok && queryInfo.oldSchemaName != "" {
-				queryOldSchemaID := getSchemaIDByName(args.databaseMap, queryInfo.oldSchemaName)
-				if !strings.EqualFold(queryInfo.oldSchemaName, oldSchemaName) ||
-					(queryOldSchemaID != 0 && queryOldSchemaID != oldSchemaID) {
-					log.Warn("rename tables query schema is inconsistent with args",
-						zap.Int64("tableID", info.TableID),
-						zap.Int64("oldSchemaIDInArgs", oldSchemaID),
-						zap.String("oldSchemaNameInArgs", oldSchemaName),
-						zap.String("newSchemaNameInArgs", newSchemaName),
+		if needFillOldTableNamesFromQuery && oldTableName == "" {
+			if i >= len(queryInfos) {
+				log.Warn("rename tables query info is missing for old table name fallback",
+					zap.Int("index", i),
+					zap.String("newSchemaNameInArgs", newSchemaName),
+					zap.String("newTableNameInArgs", info.NewTableName.O),
+					zap.String("query", args.job.Query))
+			} else {
+				queryInfo := queryInfos[i]
+				if !strings.EqualFold(queryInfo.newTableName, info.NewTableName.O) {
+					log.Warn("rename tables query new table name is inconsistent with args",
+						zap.Int("index", i),
 						zap.String("newTableNameInArgs", info.NewTableName.O),
-						zap.String("oldSchemaNameInQuery", queryInfo.oldSchemaName),
-						zap.Int64("oldSchemaIDInQuery", queryOldSchemaID),
+						zap.String("newTableNameInQuery", queryInfo.newTableName),
 						zap.String("query", args.job.Query))
 				}
-			}
-			if ok && queryInfo.oldTableName != "" {
-				usedQueryInfos[queryInfoIndex] = struct{}{}
+				if queryInfo.newSchemaName != "" &&
+					!strings.EqualFold(queryInfo.newSchemaName, newSchemaName) {
+					log.Warn("rename tables query new schema name is inconsistent with args",
+						zap.Int("index", i),
+						zap.String("newSchemaNameInArgs", newSchemaName),
+						zap.String("newSchemaNameInQuery", queryInfo.newSchemaName),
+						zap.String("query", args.job.Query))
+				}
+				if queryInfo.oldSchemaName != "" &&
+					!strings.EqualFold(queryInfo.oldSchemaName, oldSchemaName) {
+					log.Warn("rename tables query old schema name is inconsistent with args",
+						zap.Int("index", i),
+						zap.String("oldSchemaNameInArgs", oldSchemaName),
+						zap.String("oldSchemaNameInQuery", queryInfo.oldSchemaName),
+						zap.Int64("oldSchemaIDInArgs", oldSchemaID),
+						zap.String("query", args.job.Query))
+				}
 				oldTableName = queryInfo.oldTableName
-				oldTableNameFromQuery = true
 				log.Warn("rename tables args miss old table name fallback to query",
 					zap.Int64("tableID", info.TableID),
 					zap.Int64("oldSchemaIDInArgs", oldSchemaID),
@@ -948,32 +914,6 @@ func buildPersistedDDLEventForRenameTables(args buildPersistedDDLEventFuncArgs) 
 					zap.String("newTableNameInArgs", info.NewTableName.O),
 					zap.String("oldSchemaNameInQuery", queryInfo.oldSchemaName),
 					zap.String("oldTableNameInQuery", queryInfo.oldTableName))
-			} else if ok {
-				log.Warn("rename tables query is inconsistent with args skip query fallback",
-					zap.Int64("tableID", info.TableID),
-					zap.Int64("oldSchemaIDInArgs", oldSchemaID),
-					zap.String("oldSchemaNameInArgs", oldSchemaName),
-					zap.String("newSchemaNameInArgs", newSchemaName),
-					zap.String("newTableNameInArgs", info.NewTableName.O),
-					zap.String("oldSchemaNameInQuery", queryInfo.oldSchemaName),
-					zap.String("oldTableNameInQuery", queryInfo.oldTableName))
-			}
-		}
-
-		if tableInfo, ok := args.tableMap[info.TableID]; ok {
-			if oldTableName == "" {
-				oldTableName = tableInfo.Name
-			} else if oldTableNameFromQuery &&
-				tableInfo.Name != "" &&
-				!strings.EqualFold(oldTableName, tableInfo.Name) {
-				// For cyclic rename statements, the old table name parsed from query can be
-				// a temporary name. Prefer schema store metadata to keep the table lifecycle correct.
-				log.Warn("rename tables query old table name mismatch with schema metadata prefer schema metadata",
-					zap.Int64("tableID", info.TableID),
-					zap.String("oldTableNameInQuery", oldTableName),
-					zap.String("oldTableNameInStore", tableInfo.Name),
-					zap.String("query", args.job.Query))
-				oldTableName = tableInfo.Name
 			}
 		}
 

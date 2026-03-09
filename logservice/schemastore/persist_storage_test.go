@@ -3140,6 +3140,7 @@ func TestBuildPersistedDDLEventForRenameTablesFallbackOldTableName(t *testing.T)
 		[]string{"target_t1", "target_t2"},
 		1010,
 	)
+	job.Query = "RENAME TABLE `source_db`.`source_t1` TO `target_db`.`target_t1`, `source_db`.`source_t2` TO `target_db`.`target_t2`"
 
 	ddl := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
 		job: job,
