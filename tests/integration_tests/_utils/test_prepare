@@ -99,7 +99,8 @@ function get_tidb_release_version() {
 	local tidbPort=${2:-$UP_TIDB_PORT}
 
 	mysql -uroot -h${tidbHost} -P${tidbPort} --default-character-set utf8mb4 -e "select tidb_version()\G" \
-		| awk -F': ' '/Release Version/ {print $2; exit}' | tr -d ' '
+		| sed -nE 's/.*Release Version:[[:space:]]*(v[0-9]+(\.[0-9]+){0,2}([-.+][0-9A-Za-z.-]+)?).*/\1/p' \
+		| head -n1
 }
 
 function normalize_tidb_semver_triplet() {
