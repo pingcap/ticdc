@@ -3197,6 +3197,8 @@ func TestBuildPersistedDDLEventForRenameTablesFallbackQueryOldTableName(t *testi
 func TestBuildPersistedDDLEventForRenameTablesCyclicRenameWithTemporaryTable(t *testing.T) {
 	// Simulate: rename table a to c, b to a, c to b;
 	// c only exists as a temporary name inside this statement.
+	// The query has 3 rename clauses, while rename table infos contain 2 entries.
+	// This should panic due to the strict consistency check.
 	job := buildRenameTablesJobForTest(
 		[]int64{100, 100},
 		[]int64{100, 100},
@@ -3208,23 +3210,18 @@ func TestBuildPersistedDDLEventForRenameTablesCyclicRenameWithTemporaryTable(t *
 	)
 	job.Query = "RENAME TABLE `test`.`a` TO `test`.`c`, `test`.`b` TO `test`.`a`, `test`.`c` TO `test`.`b`"
 
-	ddl := buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
-		job: job,
-		databaseMap: map[int64]*BasicDatabaseInfo{
-			100: {Name: "test", Tables: map[int64]bool{200: true, 201: true}},
-		},
-		tableMap: map[int64]*BasicTableInfo{
-			200: {SchemaID: 100, Name: "a"},
-			201: {SchemaID: 100, Name: "b"},
-		},
+	require.Panics(t, func() {
+		_ = buildPersistedDDLEventForRenameTables(buildPersistedDDLEventFuncArgs{
+			job: job,
+			databaseMap: map[int64]*BasicDatabaseInfo{
+				100: {Name: "test", Tables: map[int64]bool{200: true, 201: true}},
+			},
+			tableMap: map[int64]*BasicTableInfo{
+				200: {SchemaID: 100, Name: "a"},
+				201: {SchemaID: 100, Name: "b"},
+			},
+		})
 	})
-
-	assert.Equal(t,
-		"RENAME TABLE `test`.`a` TO `test`.`b`;"+
-			"RENAME TABLE `test`.`b` TO `test`.`a`;",
-		ddl.Query)
-	assert.Equal(t, []string{"a", "b"}, ddl.ExtraTableNames)
-	assert.NotContains(t, ddl.Query, "`c`")
 }
 
 func TestBuildPersistedDDLEventForRenameTablesDoNotOverrideExistingArgsByQuery(t *testing.T) {
