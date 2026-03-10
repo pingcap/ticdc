@@ -333,7 +333,11 @@ func (d *BasicDispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.S
 	return true, nil
 }
 
-func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {
+// AddBlockEventToSink write the BlockEvent to the sink.
+// shouldFlush is true if this block event no need to block.
+// shouldFlush is false, indicates that it's already flushed once, and send WAITING status to maintainer,
+// so just write the block event to sink without flushing again.
+func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent, shouldFlush bool) error {
 	// For ddl event, we need to check whether it should be sent to downstream.
 	// It may be marked as not sync by filter when building the event.
 	if event.GetType() == commonEvent.TypeDDLEvent {
@@ -344,48 +348,30 @@ func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) erro
 		// dispatcher progress, without sending this DDL to sink.
 		if ddl.NotSync {
 			log.Info("ignore DDL by NotSync", zap.Stringer("dispatcher", d.id), zap.Any("ddl", ddl))
-			return d.PassBlockEventToSink(event)
+			return d.PassBlockEventToSink(event, shouldFlush)
 		}
 	}
-	// Keep block-event write order with prior DML. For storage sink this may wait
-	// until prior DML are enqueued/flushed to the sink pipeline; for non-storage
-	// sinks it is usually a no-op.
-	if err := d.sink.FlushDMLBeforeBlock(event); err != nil {
-		return err
+	if shouldFlush {
+		// Keep block-event write order with prior DML.
+		// For storage sink this wait all previous enqueued DML events flushed.
+		// For non-storage sinks it is usually a no-op.
+		if err := d.sink.FlushDMLBeforeBlock(event); err != nil {
+			return err
+		}
 	}
 
 	d.tableProgress.Add(event)
 	return d.sink.WriteBlockEvent(event)
 }
 
-// PassBlockEventToSink is used when block event handling result is "pass"
-// (for example maintainer action=Pass or DDL NotSync).
-//
-// It intentionally does not call sink.WriteBlockEvent. Instead, it updates
-// local progress as if the event had been handled, then fires PostFlush
-// callbacks so wake/checkpoint logic can continue with consistent ordering.
-func (d *BasicDispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) error {
-	if err := d.sink.FlushDMLBeforeBlock(event); err != nil {
-		return err
-	}
-	d.tableProgress.Pass(event)
-	event.PostFlush()
-	return nil
-}
-
-func (d *BasicDispatcher) writePreparedBlockEvent(event commonEvent.BlockEvent) error {
-	if event.GetType() == commonEvent.TypeDDLEvent {
-		ddl := event.(*commonEvent.DDLEvent)
-		if ddl.NotSync {
-			log.Info("ignore DDL by NotSync", zap.Stringer("dispatcher", d.id), zap.Any("ddl", ddl))
-			return d.passPreparedBlockEvent(event)
+// PassBlockEventToSink is called if the BlockEvent no need to write to the downstream, such as Action_Pass or a filtered DDL with NotSync
+// shouldFlush has the same meaning as AddBlockEventToSink.
+func (d *BasicDispatcher) PassBlockEventToSink(event commonEvent.BlockEvent, shouldFlush bool) error {
+	if shouldFlush {
+		if err := d.sink.FlushDMLBeforeBlock(event); err != nil {
+			return err
 		}
 	}
-	d.tableProgress.Add(event)
-	return d.sink.WriteBlockEvent(event)
-}
-
-func (d *BasicDispatcher) passPreparedBlockEvent(event commonEvent.BlockEvent) error {
 	d.tableProgress.Pass(event)
 	event.PostFlush()
 	return nil
@@ -888,7 +874,7 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 // easier for tests and failpoints to control interleavings around block events.
 func (d *BasicDispatcher) ExecuteBlockEventDDL(pendingEvent commonEvent.BlockEvent, actionCommitTs uint64, actionIsSyncPoint bool) {
 	failpoint.Inject("BlockOrWaitBeforeWrite", nil)
-	err := d.writePreparedBlockEvent(pendingEvent)
+	err := d.AddBlockEventToSink(pendingEvent, false)
 	if err != nil {
 		d.HandleError(err)
 		return
@@ -897,11 +883,11 @@ func (d *BasicDispatcher) ExecuteBlockEventDDL(pendingEvent commonEvent.BlockEve
 	d.reportBlockedEventDone(actionCommitTs, actionIsSyncPoint)
 }
 
-// PassBlockEvent executes maintainer Action_Pass:
-// It relies on PassBlockEventToSink to preserve ordering and mark the event passed.
+// PassBlockEvent executes maintainer Action_Pass on a block event whose prior DMLs
+// were already drained before it entered WAITING.
 func (d *BasicDispatcher) PassBlockEvent(pendingEvent commonEvent.BlockEvent, actionCommitTs uint64, actionIsSyncPoint bool) {
 	failpoint.Inject("BlockOrWaitBeforePass", nil)
-	err := d.passPreparedBlockEvent(pendingEvent)
+	err := d.PassBlockEventToSink(pendingEvent, false)
 	if err != nil {
 		d.HandleError(err)
 		return
@@ -976,7 +962,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 				// we track it as a pending schedule-related event until the maintainer ACKs it.
 				d.pendingACKCount.Add(1)
 			}
-			err := d.AddBlockEventToSink(event)
+			err := d.AddBlockEventToSink(event, true)
 			if err != nil {
 				if needsScheduleACKTracking {
 					d.pendingACKCount.Add(-1)
@@ -1044,7 +1030,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 			d.holdBlockEvent(event)
 			return
 		}
-		d.prepareAndReportBlockedEvent(event)
+		d.flushBlockedEventAndReportToMaintainer(event)
 	}
 
 	// dealing with events which update schema ids
@@ -1103,7 +1089,7 @@ func (d *BasicDispatcher) tryDealWithHeldBlockEvent() {
 	// Thus, we ensure DB/All block events can generate correct range checkers.
 	if d.pendingACKCount.Load() == 0 {
 		if holding := d.popHoldingBlockEvent(); holding != nil {
-			d.prepareAndReportBlockedEvent(holding)
+			d.flushBlockedEventAndReportToMaintainer(holding)
 		}
 	} else if d.pendingACKCount.Load() < 0 {
 		d.HandleError(errors.ErrDispatcherFailed.GenWithStackByArgs(
@@ -1171,7 +1157,7 @@ func (d *BasicDispatcher) reportBlockedEventToMaintainer(event commonEvent.Block
 	d.sharedInfo.blockStatusesChan <- message
 }
 
-func (d *BasicDispatcher) prepareAndReportBlockedEvent(event commonEvent.BlockEvent) {
+func (d *BasicDispatcher) flushBlockedEventAndReportToMaintainer(event commonEvent.BlockEvent) {
 	d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
 		failpoint.Inject("BlockOrWaitBeforeFlush", nil)
 		if err := d.sink.FlushDMLBeforeBlock(event); err != nil {
