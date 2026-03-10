@@ -34,6 +34,13 @@ import (
 	"go.uber.org/zap"
 )
 
+func isRedoConfigEnabled(cfConfig *config.ChangefeedConfig) bool {
+	if cfConfig == nil {
+		return false
+	}
+	return cfConfig.Consistent != nil && pkgRedo.IsConsistentEnabled(util.GetOrZero(cfConfig.Consistent.Level))
+}
+
 func initRedoComponet(
 	ctx context.Context,
 	manager *DispatcherManager,
@@ -42,7 +49,7 @@ func initRedoComponet(
 	startTs uint64,
 	newChangefeed bool,
 ) error {
-	if manager.config.Consistent == nil || !pkgRedo.IsConsistentEnabled(util.GetOrZero(manager.config.Consistent.Level)) {
+	if !manager.IsRedoEnabled() {
 		return nil
 	}
 	manager.redoDispatcherMap = newDispatcherMap[*dispatcher.RedoDispatcher]()
@@ -51,9 +58,6 @@ func initRedoComponet(
 		return errors.WrapError(errors.ErrStorageInitialize, errors.New("redo sink initialization returned nil"))
 	}
 	manager.redoSchemaIDToDispatchers = dispatcher.NewSchemaIDToDispatchers()
-	// Publish redo availability only after all redo components are initialized,
-	// so scheduler precheck won't observe a partially initialized manager.
-	manager.RedoEnable = true
 
 	totalQuota := manager.sinkQuota
 	consistentMemoryUsage := manager.config.Consistent.MemoryUsage
@@ -83,6 +87,9 @@ func initRedoComponet(
 		err := manager.redoSink.Run(ctx)
 		manager.handleError(ctx, err)
 	}()
+	// Publish redo availability only after all redo components are initialized,
+	// so scheduler precheck won't observe a partially initialized manager.
+	manager.redoReady.Store(true)
 	return nil
 }
 
