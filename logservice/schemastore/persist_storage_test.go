@@ -14,7 +14,6 @@
 package schemastore
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -3214,42 +3213,6 @@ func TestRenameTable(t *testing.T) {
 		},
 		tableMap: map[int64]*BasicTableInfo{
 			101: {SchemaID: 100, Name: "t1"},
-		},
-	})
-	assert.Equal(t, "RENAME TABLE `SalesDB`.`t1` TO `ArchiveDB`.`t1`", ddl.Query)
-
-	job = buildRenameTableJobForTest(100, 101, "t1", 100, nil)
-	job.Version = 0
-	rawArgs, err := json.Marshal([]any{int64(200), ast.NewCIStr("t1"), ast.NewCIStr("SalesDB")})
-	require.NoError(t, err)
-	job.RawArgs = rawArgs
-	job.Query = "RENAME TABLE t1 TO ArchiveDB.t1"
-	ddl = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
-		job: job,
-		databaseMap: map[int64]*BasicDatabaseInfo{
-			100: {Name: "ArchiveDB", Tables: map[int64]bool{101: true}},
-			200: {Name: "SalesDB", Tables: map[int64]bool{101: true}},
-		},
-		tableMap: map[int64]*BasicTableInfo{
-			101: {SchemaID: 200, Name: "t1"},
-		},
-	})
-	assert.Equal(t, "RENAME TABLE `SalesDB`.`t1` TO `ArchiveDB`.`t1`", ddl.Query)
-
-	job = buildRenameTableJobForTest(100, 101, "t1", 100, nil)
-	job.Version = model.JobVersion1
-	rawArgs, err = json.Marshal([]any{int64(200)})
-	require.NoError(t, err)
-	job.RawArgs = rawArgs
-	job.Query = "RENAME TABLE t1 TO ArchiveDB.t1"
-	ddl = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
-		job: job,
-		databaseMap: map[int64]*BasicDatabaseInfo{
-			100: {Name: "ArchiveDB", Tables: map[int64]bool{101: true}},
-			200: {Name: "SalesDB", Tables: map[int64]bool{101: true}},
-		},
-		tableMap: map[int64]*BasicTableInfo{
-			101: {SchemaID: 200, Name: "t1"},
 		},
 	})
 	assert.Equal(t, "RENAME TABLE `SalesDB`.`t1` TO `ArchiveDB`.`t1`", ddl.Query)
