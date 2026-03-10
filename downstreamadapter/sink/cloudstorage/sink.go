@@ -204,19 +204,21 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 		def.FromTableInfo(event.ExtraSchemaName, event.ExtraTableName, event.TableInfo, event.FinishedTs, s.cfg.OutputColumnID)
 		def.Query = event.Query
 		def.Type = event.Type
-		if err := s.writeFile(event, def, event.GetTableID()); err != nil {
+		if err := s.writeFile(event, def); err != nil {
 			return err
 		}
 		var sourceTableDef cloudstorage.TableDefinition
 		sourceTableDef.FromTableInfo(event.SchemaName, event.TableName, sourceTableInfo, event.FinishedTs, s.cfg.OutputColumnID)
-		if err := s.writeFile(event, sourceTableDef, sourceTableInfo.TableName.TableID); err != nil {
+		sourceEvent := *event
+		sourceEvent.TableInfo = sourceTableInfo
+		if err := s.writeFile(&sourceEvent, sourceTableDef); err != nil {
 			return err
 		}
 	} else {
 		for _, e := range event.GetEvents() {
 			var def cloudstorage.TableDefinition
 			def.FromDDLEvent(e, s.cfg.OutputColumnID)
-			if err := s.writeFile(e, def, e.GetTableID()); err != nil {
+			if err := s.writeFile(e, def); err != nil {
 				return err
 			}
 		}
@@ -224,7 +226,7 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 	return nil
 }
 
-func (s *sink) writeFile(v *commonEvent.DDLEvent, def cloudstorage.TableDefinition, tableID int64) error {
+func (s *sink) writeFile(v *commonEvent.DDLEvent, def cloudstorage.TableDefinition) error {
 	// skip write database-level event for 'use-table-id-as-path' mode
 	if s.cfg.UseTableIDAsPath && def.Table == "" {
 		log.Debug("skip database schema for table id path",
@@ -237,7 +239,7 @@ func (s *sink) writeFile(v *commonEvent.DDLEvent, def cloudstorage.TableDefiniti
 		return errors.Trace(err)
 	}
 
-	path, err := def.GenerateSchemaFilePath(s.cfg.UseTableIDAsPath, tableID)
+	path, err := def.GenerateSchemaFilePath(s.cfg.UseTableIDAsPath, v.GetTableID())
 	if err != nil {
 		return errors.Trace(err)
 	}

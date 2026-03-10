@@ -505,6 +505,7 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 				FileCleanupCronSpec:  c.Sink.CloudStorageConfig.FileCleanupCronSpec,
 				FlushConcurrency:     c.Sink.CloudStorageConfig.FlushConcurrency,
 				OutputRawChangeEvent: c.Sink.CloudStorageConfig.OutputRawChangeEvent,
+				UseTableIDAsPath:     c.Sink.CloudStorageConfig.UseTableIDAsPath,
 			}
 		}
 		var debeziumConfig *config.DebeziumConfig
@@ -541,7 +542,6 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 			SafeMode:                         c.Sink.SafeMode,
 			OpenProtocol:                     openProtocolConfig,
 			Debezium:                         debeziumConfig,
-			UseTableIDAsPath:                 c.Sink.UseTableIDAsPath,
 		}
 
 		if c.Sink.TxnAtomicity != nil {
@@ -862,6 +862,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 				FileCleanupCronSpec:  cloned.Sink.CloudStorageConfig.FileCleanupCronSpec,
 				FlushConcurrency:     cloned.Sink.CloudStorageConfig.FlushConcurrency,
 				OutputRawChangeEvent: cloned.Sink.CloudStorageConfig.OutputRawChangeEvent,
+				UseTableIDAsPath:     cloned.Sink.CloudStorageConfig.UseTableIDAsPath,
 			}
 		}
 		var debeziumConfig *DebeziumConfig
@@ -897,7 +898,6 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 			SafeMode:                         cloned.Sink.SafeMode,
 			DebeziumConfig:                   debeziumConfig,
 			OpenProtocolConfig:               openProtocolConfig,
-			UseTableIDAsPath:                 cloned.Sink.UseTableIDAsPath,
 		}
 
 		if cloned.Sink.TxnAtomicity != nil {
@@ -1158,7 +1158,6 @@ type SinkConfig struct {
 	DebeziumDisableSchema            *bool               `json:"debezium_disable_schema,omitempty"`
 	DebeziumConfig                   *DebeziumConfig     `json:"debezium,omitempty"`
 	OpenProtocolConfig               *OpenProtocolConfig `json:"open,omitempty"`
-	UseTableIDAsPath                 *bool               `json:"use_table_id_as_path,omitempty"`
 }
 
 // CSVConfig denotes the csv config
@@ -1498,6 +1497,7 @@ type CloudStorageConfig struct {
 	FileCleanupCronSpec  *string `json:"file_cleanup_cron_spec,omitempty"`
 	FlushConcurrency     *int    `json:"flush_concurrency,omitempty"`
 	OutputRawChangeEvent *bool   `json:"output_raw_change_event,omitempty"`
+	UseTableIDAsPath     *bool   `json:"use_table_id_as_path,omitempty"`
 }
 
 // ChangefeedStatus holds common information of a changefeed in cdc
