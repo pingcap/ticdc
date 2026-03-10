@@ -101,7 +101,28 @@ Additional parameters for update:
 - large-ratio: Ratio of large rows in the dataset
 - percentage-for-update: Percentage of rows to update
 
+### 3. JSON Zstd Workload
+
+Generate writes for `wide_table_with_json_entity_metadata` and `wide_table_with_json_batch_metadata` (two tables per shard). Use `-row-size` to control payload width and `-table-count` to control shard count.
+
+```bash
+./workload -action write \
+    -database-host 127.0.0.1 \
+    -database-port 4000 \
+    -database-db-name json_payload \
+    -total-row-count 1000000 \
+    -table-count 16 \
+    -workload-type wide_table_with_json \
+    -row-size $((16 * 1024)) \
+    -thread 32 \
+    -batch-size 32 \
+    -percentage-for-update 0.5 \
+    -percentage-for-delete 0.05
+```
+
 ## Notes
 
 - Ensure the database is properly configured and has the necessary permissions.
 - Adjust the thread and batch-size parameters based on your needs.
+- Use `-batch-in-txn` to wrap each batch in a single explicit transaction (BEGIN/COMMIT).
+- For `wide_table_with_json`, use `-json-payload-mode zstd` to generate a zstd friendly JSON-like payload, or `-json-payload-mode random` for incompressible payloads.
