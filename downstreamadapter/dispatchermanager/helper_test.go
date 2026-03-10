@@ -205,7 +205,7 @@ func TestPreCheckForSchedulerHandler_CreateSkippedWhenDispatcherExists(t *testin
 	require.False(t, ok)
 }
 
-func TestIsRedoDispatcherManagerReadySkipsComponentChecksUntilPublished(t *testing.T) {
+func TestDispatcherManagerIsRedoReadySkipsComponentChecksUntilPublished(t *testing.T) {
 	t.Parallel()
 
 	dm := &DispatcherManager{
@@ -233,7 +233,7 @@ func TestIsRedoDispatcherManagerReadySkipsComponentChecksUntilPublished(t *testi
 		defer wg.Done()
 		<-start
 		for i := 0; i < 1000; i++ {
-			require.False(t, isRedoDispatcherManagerReady(dm))
+			require.False(t, dm.IsRedoReady())
 		}
 	}()
 
@@ -241,7 +241,7 @@ func TestIsRedoDispatcherManagerReadySkipsComponentChecksUntilPublished(t *testi
 	wg.Wait()
 }
 
-func TestIsRedoDispatcherManagerReadyReturnsTrueAfterPublication(t *testing.T) {
+func TestDispatcherManagerIsRedoReadyReturnsTrueAfterPublication(t *testing.T) {
 	t.Parallel()
 
 	dm := &DispatcherManager{
@@ -252,7 +252,7 @@ func TestIsRedoDispatcherManagerReadyReturnsTrueAfterPublication(t *testing.T) {
 	}
 	dm.redoReady.Store(true)
 
-	require.True(t, isRedoDispatcherManagerReady(dm))
+	require.True(t, dm.IsRedoReady())
 }
 
 func TestDispatcherManagerIsRedoReadyRequiresPublication(t *testing.T) {

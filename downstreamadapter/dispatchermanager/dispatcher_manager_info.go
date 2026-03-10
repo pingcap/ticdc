@@ -104,5 +104,9 @@ func (e *DispatcherManager) IsRedoEnabled() bool {
 
 // IsRedoReady reports whether redo is configured and its runtime components are fully initialized.
 func (e *DispatcherManager) IsRedoReady() bool {
-	return isRedoDispatcherManagerReady(e)
+	return e.IsRedoEnabled() &&
+		e.redoReady.Load() &&
+		e.redoSink != nil &&
+		e.redoDispatcherMap != nil &&
+		e.redoSchemaIDToDispatchers != nil
 }
