@@ -383,12 +383,17 @@ func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 	}
 	drainTarget, drainEpoch := m.controller.getDispatcherDrainTarget()
 	if !drainTarget.IsEmpty() && drainEpoch > 0 {
+		// Report drain progress against the controller snapshot that all local
+		// schedulers are using. Coordinator compares this status with its own
+		// drain epoch, so stale or cleared targets naturally stop contributing.
 		dispatcherCount := m.controller.spanController.GetTaskSizeByNodeID(drainTarget)
 		inflightDrainMoveCount := m.controller.operatorController.CountInflightDrainMovesFromNode(drainTarget)
 		if m.enableRedo {
 			dispatcherCount += m.controller.redoSpanController.GetTaskSizeByNodeID(drainTarget)
 			inflightDrainMoveCount += m.controller.redoOperatorController.CountInflightDrainMovesFromNode(drainTarget)
 		}
+		// DrainProgress is encoded as uint32 counters in heartbeat protobuf.
+		// Clamp the aggregated maintainer view before publishing it.
 		if dispatcherCount < 0 {
 			dispatcherCount = 0
 		}
@@ -408,6 +413,9 @@ func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 	return status
 }
 
+// SetDispatcherDrainTarget applies the newest drain target to this maintainer
+// and forces an earlier status report so coordinator observes the new epoch
+// without waiting for unrelated status changes.
 func (m *Maintainer) SetDispatcherDrainTarget(target node.ID, epoch uint64) {
 	m.controller.SetDispatcherDrainTarget(target, epoch)
 	m.statusChanged.Store(true)

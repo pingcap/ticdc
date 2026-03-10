@@ -135,6 +135,9 @@ func (s *basicScheduler) schedule(
 	// for the split table spans, each time each node can at most have s.schedulingTaskCountPerNode scheduling tasks.
 	// for the normal spans, we don't have the upper limit.
 	size := 0
+	// Basic scheduling must also avoid the active drain target; otherwise an
+	// absent dispatcher recreated during drain could be assigned back to the
+	// node that the drain scheduler is trying to evacuate.
 	nodeIDs := filterNodeIDsByDrainTarget(s.nodeManager.GetAliveNodeIDs(), state)
 	if len(nodeIDs) == 0 {
 		return 0

@@ -25,6 +25,10 @@ import (
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 )
 
+// NewScheduleController wires the per-changefeed schedulers that share one
+// drain state snapshot. Basic scheduling still handles absent work during
+// drain, while drain and balance schedulers use the same snapshot to avoid
+// placing new work back onto the node being evacuated.
 func NewScheduleController(changefeedID common.ChangeFeedID,
 	batchSize int,
 	oc, redoOC *operator.Controller,

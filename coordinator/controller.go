@@ -290,6 +290,9 @@ func (c *Controller) onPeriodTask() {
 		_ = c.messageCenter.SendCommand(req)
 	}
 
+	// Drain liveness transitions and drain-target broadcasts are retry-based
+	// control loops. Drive them from the periodic task so they keep progressing
+	// even when no fresh heartbeat or node-change event arrives.
 	c.drainController.AdvanceLiveness(func(id node.ID) bool {
 		return len(c.changefeedDB.GetByNodeID(id)) == 0 && c.operatorController.CountOperatorsInvolvingNode(id) == 0
 	})
@@ -860,6 +863,9 @@ func (c *Controller) getChangefeed(id common.ChangeFeedID) *changefeed.Changefee
 // RemoveNode is called when a node is removed
 func (c *Controller) RemoveNode(id node.ID) {
 	c.operatorController.OnNodeRemoved(id)
+	// Membership removal is the only authoritative signal that this node will
+	// never acknowledge the current drain epoch again. Clear every drain-side
+	// in-memory reference immediately to avoid leaking a stuck drain session.
 	target, epoch, ok := c.getDispatcherDrainTarget()
 	if ok && target == id {
 		c.clearDispatcherDrainTarget(id, epoch)

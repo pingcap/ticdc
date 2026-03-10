@@ -62,6 +62,9 @@ func (sm *Controller) Start(taskPool threadpool.ThreadPool) (handles []*threadpo
 	}
 	basicScheduler := sm.schedulers[BasicScheduler]
 	handles = append(handles, taskPool.Submit(basicScheduler, time.Now()))
+	// Drain schedulers run in dedicated tasks instead of the checker loop so
+	// node evacuation keeps making progress even when checker schedulers back off
+	// to coarse polling intervals.
 	drainScheduler, ok := sm.schedulers[DrainScheduler]
 	if ok {
 		handles = append(handles, taskPool.Submit(drainScheduler, time.Now()))

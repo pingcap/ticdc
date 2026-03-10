@@ -174,6 +174,8 @@ func (p *managerMaintainerSet) handleAddMaintainer(
 	}
 
 	maintainer := NewMaintainer(changefeedID, p.conf, info, p.nodeInfo, p.taskScheduler, req.CheckpointTs, req.IsNewChangefeed, req.KeyspaceId)
+	// Seed the maintainer with the manager-level drain snapshot before its event
+	// loop starts so late additions still honor an already-active drain target.
 	maintainer.SetDispatcherDrainTarget(target, epoch)
 	p.registry.Store(changefeedID, maintainer)
 	maintainer.pushEvent(&Event{changefeedID: changefeedID, eventType: EventInit})
