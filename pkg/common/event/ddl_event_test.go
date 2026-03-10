@@ -119,6 +119,57 @@ func TestDDLEvent(t *testing.T) {
 	require.Contains(t, err.Error(), "incomplete data")
 }
 
+func TestDDLEventDecodeV1WithMultipleTableInfos(t *testing.T) {
+	helper := NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.tk.MustExec("use test")
+	ddlJob1 := helper.DDL2Job("create table t1 (id int primary key)")
+	ddlJob2 := helper.DDL2Job("create table t2 (id int primary key)")
+	require.NotNil(t, ddlJob1)
+	require.NotNil(t, ddlJob2)
+
+	tableInfo1 := helper.GetTableInfo(ddlJob1)
+	tableInfo2 := helper.GetTableInfo(ddlJob2)
+	require.NotNil(t, tableInfo1)
+	require.NotNil(t, tableInfo2)
+
+	ddlEvent := &DDLEvent{
+		Version:            DDLEventVersion1,
+		DispatcherID:       common.NewDispatcherID(),
+		Type:               byte(ddlJob2.Type),
+		SchemaID:           ddlJob2.SchemaID,
+		SchemaName:         ddlJob2.SchemaName,
+		TableName:          ddlJob2.TableName,
+		Query:              ddlJob2.Query,
+		TableInfo:          tableInfo2,
+		FinishedTs:         ddlJob2.BinlogInfo.FinishedTS,
+		MultipleTableInfos: []*common.TableInfo{tableInfo1, tableInfo2},
+	}
+
+	data, err := ddlEvent.Marshal()
+	require.NoError(t, err)
+
+	reverseEvent := &DDLEvent{}
+	err = reverseEvent.Unmarshal(data)
+	require.NoError(t, err)
+	reverseEvent.eventSize = 0
+
+	require.Equal(t, ddlEvent.DispatcherID, reverseEvent.DispatcherID)
+	require.NotNil(t, reverseEvent.TableInfo)
+	require.Equal(t, ddlEvent.TableInfo.TableName.TableID, reverseEvent.TableInfo.TableName.TableID)
+	require.Len(t, reverseEvent.MultipleTableInfos, 2)
+	require.Equal(t, ddlEvent.MultipleTableInfos[0].TableName.TableID, reverseEvent.MultipleTableInfos[0].TableName.TableID)
+	require.Equal(t, ddlEvent.MultipleTableInfos[1].TableName.TableID, reverseEvent.MultipleTableInfos[1].TableName.TableID)
+
+	// Reuse the same object to ensure decode does not keep stale entries.
+	err = reverseEvent.Unmarshal(data)
+	require.NoError(t, err)
+	require.Len(t, reverseEvent.MultipleTableInfos, 2)
+	require.Equal(t, ddlEvent.MultipleTableInfos[0].TableName.TableID, reverseEvent.MultipleTableInfos[0].TableName.TableID)
+	require.Equal(t, ddlEvent.MultipleTableInfos[1].TableName.TableID, reverseEvent.MultipleTableInfos[1].TableName.TableID)
+}
+
 // TestSplitQueries tests the SplitQueries function
 func TestSplitQueries(t *testing.T) {
 	tests := []struct {
