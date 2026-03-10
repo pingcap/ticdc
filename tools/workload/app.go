@@ -430,6 +430,7 @@ func (app *WorkloadApp) executeWithValues(conn *sql.Conn, sqlStr string, n int, 
 func (app *WorkloadApp) StartMetricsReporting() {
 	go app.reportMetrics()
 }
+
 func getSQLPreview(sql string) string {
 	if len(sql) > 512 {
 		return sql[:512] + "..."
