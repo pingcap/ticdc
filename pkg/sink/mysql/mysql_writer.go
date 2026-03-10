@@ -168,6 +168,7 @@ func (w *Writer) FlushDDLEvent(event *commonEvent.DDLEvent) error {
 
 func (w *Writer) FlushSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 	if w.cfg.DryRun {
+		log.Info("dry-run mode, skip send syncpoint event", zap.Stringer("changefeedID", w.ChangefeedID), zap.Uint64("commitTs", event.GetCommitTs()))
 		return nil
 	}
 

@@ -173,3 +173,48 @@ func TestChangefeedCreateCli(t *testing.T) {
 	require.NoError(t, o.complete(f))
 	require.Contains(t, o.validate(cmd).Error(), "creating changefeed with `--sort-dir`")
 }
+
+func TestCompleteReplicaCfgSkipConsistentStorageIOCheckInCLI(t *testing.T) {
+	t.Parallel()
+
+	o := newCreateChangefeedOptions(newChangefeedCommonOptions())
+	o.commonChangefeedOptions.sinkURI = "blackhole://"
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "cf.toml")
+	content := `
+[consistent]
+level = "eventual"
+storage = "s3:///test/prefix"
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(content), 0o644))
+	o.commonChangefeedOptions.configFile = configPath
+
+	// The CLI still validates replica config, but it skips storage I/O check.
+	// Therefore this should pass even if the S3 URI misses bucket info.
+	require.NoError(t, o.completeReplicaCfg())
+	require.Equal(t, "eventual", *o.cfg.Consistent.Level)
+	require.Equal(t, "s3:///test/prefix", *o.cfg.Consistent.Storage)
+}
+
+func TestCompleteReplicaCfgStillValidateReplicaConfigInCLI(t *testing.T) {
+	t.Parallel()
+
+	o := newCreateChangefeedOptions(newChangefeedCommonOptions())
+	o.commonChangefeedOptions.sinkURI = "blackhole://"
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "cf.toml")
+	content := `
+[consistent]
+level = "eventual"
+storage = "nfs:///ticdc-cli-should-not-io-check"
+compression = "snappy"
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(content), 0o644))
+	o.commonChangefeedOptions.configFile = configPath
+
+	err := o.completeReplicaCfg()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "consistent.compression")
+}

@@ -19,9 +19,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -36,7 +38,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var mockSink = sink.NewMockSink(common.BlackHoleSinkType)
+func newDispatcherManagerTestSink(t *testing.T, sinkType common.SinkType) sink.Sink {
+	t.Helper()
+
+	ctrl := gomock.NewController(t)
+	mockSink := mock.NewMockSink(ctrl)
+	mockSink.EXPECT().SinkType().Return(sinkType).AnyTimes()
+	mockSink.EXPECT().IsNormal().Return(true).AnyTimes()
+	mockSink.EXPECT().AddDMLEvent(gomock.Any()).AnyTimes()
+	mockSink.EXPECT().FlushDMLBeforeBlock(gomock.Any()).Return(nil).AnyTimes()
+	mockSink.EXPECT().WriteBlockEvent(gomock.Any()).DoAndReturn(func(blockEvent event.BlockEvent) error {
+		blockEvent.PostFlush()
+		return nil
+	}).AnyTimes()
+	mockSink.EXPECT().AddCheckpointTs(gomock.Any()).AnyTimes()
+	mockSink.EXPECT().SetTableSchemaStore(gomock.Any()).AnyTimes()
+	mockSink.EXPECT().Close(gomock.Any()).AnyTimes()
+	mockSink.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
+	return mockSink
+}
 
 // createTestDispatcher creates a test dispatcher with given parameters
 func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.DispatcherID, tableID int64, startKey, endKey []byte) *dispatcher.EventDispatcher {
@@ -72,7 +92,7 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 		false, // skipSyncpointAtStartTs
 		false, // skipDMLAsStartTs
 		0,     // currentPDTs
-		mockSink,
+		manager.sink,
 		sharedInfo,
 		false,
 		&redoTs,
@@ -84,12 +104,13 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 // createTestManager creates a test DispatcherManager
 func createTestManager(t *testing.T) *DispatcherManager {
 	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	testSink := newDispatcherManagerTestSink(t, common.BlackHoleSinkType)
 	manager := &DispatcherManager{
 		changefeedID:            changefeedID,
 		dispatcherMap:           newDispatcherMap[*dispatcher.EventDispatcher](),
 		heartbeatRequestQueue:   NewHeartbeatRequestQueue(),
 		blockStatusRequestQueue: NewBlockStatusRequestQueue(),
-		sink:                    mockSink,
+		sink:                    testSink,
 		schemaIDToDispatchers:   dispatcher.NewSchemaIDToDispatchers(),
 		sinkQuota:               util.GetOrZero(config.GetDefaultReplicaConfig().MemoryQuota),
 		latestWatermark:         NewWatermark(0),

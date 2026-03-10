@@ -60,7 +60,7 @@ const (
 	// `0 0 2 * * ?` means 2:00:00 AM every day
 	defaultFileCleanupCronSpec = "0 0 2 * * *"
 
-	defaultEnableTableAcrossNodes = true
+	defaultEnableTableAcrossNodes = false
 )
 
 type urlConfig struct {

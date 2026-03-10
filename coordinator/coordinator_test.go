@@ -382,6 +382,8 @@ func TestScaleNode(t *testing.T) {
 	etcdClient := newMockEtcdClient(string(info.ID))
 	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+	appcontext.SetService(appcontext.SchemaStore, eventservice.NewMockSchemaStore())
 	nodeManager.GetAliveNodes()[info.ID] = info
 	cfg := config.NewDefaultMessageCenterConfig(info.AdvertiseAddr)
 	mc1 := messaging.NewMessageCenter(ctx, info.ID, cfg, nil)
