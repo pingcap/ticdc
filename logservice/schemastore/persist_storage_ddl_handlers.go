@@ -708,15 +708,39 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 	// 3. The original query has the highest priority because it keeps user-provided identifier case.
 	oldSchemaName := ""
 	oldTableName := ""
+	log.Info("rename table rebuild start",
+		zap.Int64("jobID", event.ID),
+		zap.Int64("jobVersion", int64(args.job.Version)),
+		zap.String("query", args.job.Query),
+		zap.ByteString("rawArgs", args.job.RawArgs),
+		zap.Any("involvingSchemaInfo", args.job.InvolvingSchemaInfo))
 	if len(args.job.InvolvingSchemaInfo) > 0 {
 		oldSchemaName = args.job.InvolvingSchemaInfo[0].Database
 		oldTableName = args.job.InvolvingSchemaInfo[0].Table
 	}
 	// RenameTableArgs keeps the old schema name even when the query omits it.
-	if renameArgs, err := getRenameTableArgsCompatible(args.job); err == nil && renameArgs.OldSchemaName.O != "" {
-		oldSchemaName = renameArgs.OldSchemaName.O
+	if renameArgs, err := getRenameTableArgsCompatible(args.job); err == nil {
+		log.Info("rename table args decoded",
+			zap.Int64("jobID", event.ID),
+			zap.Int64("oldSchemaID", renameArgs.OldSchemaID),
+			zap.String("oldSchemaName", renameArgs.OldSchemaName.O),
+			zap.String("newTableName", renameArgs.NewTableName.O))
+		if renameArgs.OldSchemaName.O != "" {
+			oldSchemaName = renameArgs.OldSchemaName.O
+		}
+	} else {
+		log.Warn("rename table args decode failed",
+			zap.Int64("jobID", event.ID),
+			zap.Int64("jobVersion", int64(args.job.Version)),
+			zap.Error(err))
 	}
 	if queryInfo, parsed := parseRenameTableQueryInfo(args.job.Query); parsed {
+		log.Info("rename table query parsed",
+			zap.Int64("jobID", event.ID),
+			zap.String("oldSchemaName", queryInfo.oldSchemaName),
+			zap.String("oldTableName", queryInfo.oldTableName),
+			zap.String("newSchemaName", queryInfo.newSchemaName),
+			zap.String("newTableName", queryInfo.newTableName))
 		if queryInfo.oldTableName != "" {
 			oldTableName = queryInfo.oldTableName
 		}
@@ -726,6 +750,7 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 	}
 	if oldSchemaName != "" && oldTableName != "" {
 		log.Info("rebuild rename table query",
+			zap.Int64("jobID", event.ID),
 			zap.String("query", event.Query),
 			zap.Int64("schemaID", event.SchemaID),
 			zap.String("schemaName", event.SchemaName),
