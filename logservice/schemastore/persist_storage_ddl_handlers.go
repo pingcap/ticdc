@@ -758,9 +758,12 @@ func getRenameTableArgsCompatible(job *model.Job) (*model.RenameTableArgs, error
 	case 0:
 		// TiDB v7.5.0 historical jobs still encode rename-table args in v1 layout,
 		// but the version field is left as zero.
-		jobClone := *job
-		jobClone.Version = model.JobVersion1
-		return model.GetRenameTableArgs(&jobClone)
+		compatJob := &model.Job{
+			Version:  model.JobVersion1,
+			SchemaID: job.SchemaID,
+			RawArgs:  job.RawArgs,
+		}
+		return model.GetRenameTableArgs(compatJob)
 	default:
 		return nil, errors.New("unsupported rename table job version")
 	}
