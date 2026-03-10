@@ -193,3 +193,29 @@ func TestReplicaConfig_EnableSplittableCheck_DefaultValue(t *testing.T) {
 	require.NotNil(t, config.Scheduler)
 	require.False(t, util.GetOrZero(config.Scheduler.EnableSplittableCheck))
 }
+
+func TestReplicaConfig_EnableRedoIOCheck_DefaultValue(t *testing.T) {
+	config := GetDefaultReplicaConfig()
+	require.True(t, util.GetOrZero(config.EnableRedoIOCheck))
+}
+
+func TestReplicaConfig_EnableRedoIOCheck_DefaultEnabled(t *testing.T) {
+	config := GetDefaultReplicaConfig()
+	config.Consistent.Level = util.AddressOf("eventual")
+	config.Consistent.Storage = util.AddressOf("s3:///redo-test-no-bucket")
+
+	sinkURI, err := url.Parse("blackhole://")
+	require.NoError(t, err)
+	require.Error(t, config.ValidateAndAdjust(sinkURI))
+}
+
+func TestReplicaConfig_EnableRedoIOCheck_CanDisableForCLI(t *testing.T) {
+	config := GetDefaultReplicaConfig()
+	config.EnableRedoIOCheck = util.AddressOf(false)
+	config.Consistent.Level = util.AddressOf("eventual")
+	config.Consistent.Storage = util.AddressOf("s3:///redo-test-no-bucket")
+
+	sinkURI, err := url.Parse("blackhole://")
+	require.NoError(t, err)
+	require.NoError(t, config.ValidateAndAdjust(sinkURI))
+}

@@ -622,7 +622,7 @@ func WrapTableInfo(schemaName string, info *model.TableInfo) *TableInfo {
 // NewTableInfo4Decoder is only used by the codec decoder for the test purpose,
 // do not call this method on the production code.
 func NewTableInfo4Decoder(schema string, tableInfo *model.TableInfo) *TableInfo {
-	cs := newColumnSchema4Decoder(tableInfo)
+	cs := NewColumnSchema4Decoder(tableInfo)
 	result := newTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs, tableInfo)
 	result.InitPrivateFields()
 	return result

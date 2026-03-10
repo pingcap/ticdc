@@ -144,6 +144,10 @@ func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.eventChan.Push(event)
 }
 
+func (s *sink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
+	return nil
+}
+
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	var err error
 	switch v := event.(type) {
@@ -219,20 +223,9 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 
 			partitionGenerator := s.comp.eventRouter.GetPartitionGenerator(schema, table)
 			selector := s.comp.columnSelector.Get(schema, table)
-			toRowCallback := func(postTxnFlushed []func(), totalCount uint64) func() {
-				var calledCount atomic.Uint64
-				// The callback of the last row will trigger the callback of the txn.
-				return func() {
-					if calledCount.Inc() == totalCount {
-						for _, callback := range postTxnFlushed {
-							callback()
-						}
-					}
-				}
-			}
-
-			rowsCount := uint64(event.Len())
-			rowCallback := toRowCallback(event.PostTxnFlushed, rowsCount)
+			rowsCount := event.Len()
+			events := make([]*commonEvent.MQRowEvent, 0, rowsCount)
+			rowCallback := helper.NewTxnPostFlushRowCallback(event, uint64(rowsCount))
 
 			for {
 				row, ok := event.GetNextRow()
@@ -246,7 +239,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 					return errors.Trace(err)
 				}
 
-				mqEvent := &commonEvent.MQRowEvent{
+				events = append(events, &commonEvent.MQRowEvent{
 					Key: commonEvent.TopicPartitionKey{
 						Topic:          topic,
 						Partition:      index,
@@ -263,9 +256,9 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 						ColumnSelector:  selector,
 						Checksum:        row.Checksum,
 					},
-				}
-				s.rowChan.Push(mqEvent)
+				})
 			}
+			s.rowChan.Push(events...)
 		}
 	}
 }
@@ -341,6 +334,7 @@ func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent) ([]*
 				zap.String("changefeed", s.changefeedID.Name()))
 			return nil, nil
 		}
+		buffer = buffer[:0]
 		return msgs, nil
 	}
 }
