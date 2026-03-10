@@ -3208,7 +3208,7 @@ func TestRenameTable(t *testing.T) {
 			101: {SchemaID: 200, Name: "t1"},
 		},
 	})
-	assert.Equal(t, "RENAME TABLE `SalesDB`.`t1` TO `ArchiveDB`.`t1`", ddl.Query)
+	assert.Equal(t, "RENAME TABLE t1 TO ArchiveDB.t1", ddl.Query)
 }
 
 func TestBuildPersistedDDLEventForRenameTablesFallbackOldTableName(t *testing.T) {

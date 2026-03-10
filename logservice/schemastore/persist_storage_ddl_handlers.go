@@ -714,15 +714,25 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 	// 3. The original query has the highest priority because it keeps user-provided identifier case.
 	oldSchemaName := ""
 	oldTableName := ""
+	rawArgsCount := 0
+	if len(args.job.RawArgs) > 0 {
+		var rawArgs []json.RawMessage
+		if err := json.Unmarshal(args.job.RawArgs, &rawArgs); err == nil {
+			rawArgsCount = len(rawArgs)
+		}
+	}
 	log.Info("rename table rebuild start",
 		zap.Int64("jobID", event.ID),
 		zap.Int64("jobVersion", int64(args.job.Version)),
 		zap.String("query", args.job.Query),
 		zap.ByteString("rawArgs", args.job.RawArgs),
+		zap.Int("rawArgsCount", rawArgsCount),
 		zap.Any("involvingSchemaInfo", args.job.InvolvingSchemaInfo))
+	hasInvolvingSchemaInfo := false
 	if len(args.job.InvolvingSchemaInfo) > 0 {
 		oldSchemaName = args.job.InvolvingSchemaInfo[0].Database
 		oldTableName = args.job.InvolvingSchemaInfo[0].Table
+		hasInvolvingSchemaInfo = oldSchemaName != "" || oldTableName != ""
 	}
 	// RenameTableArgs keeps the old schema name even when the query omits it.
 	if renameArgs, err := getRenameTableArgsCompatible(args.job); err == nil {
@@ -735,8 +745,10 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 		if renameArgs.OldSchemaName.O != "" {
 			oldSchemaName = renameArgs.OldSchemaName.O
 		}
-		// TiDB v7.5 may truncate rename-table args to only oldSchemaID in RawArgs.
-		if renameArgs.OldSchemaName.O == "" && renameArgs.OldSchemaID != 0 {
+		// TiDB v7.5 may truncate rename-table args to only oldSchemaID in RawArgs, which can be
+		// overwritten to the new schema ID. Only fall back to databaseMap when we still have
+		// a full args list and no better source.
+		if renameArgs.OldSchemaName.O == "" && renameArgs.OldSchemaID != 0 && rawArgsCount >= 2 && !hasInvolvingSchemaInfo {
 			if dbInfo, ok := args.databaseMap[renameArgs.OldSchemaID]; ok && dbInfo.Name != "" {
 				oldSchemaName = dbInfo.Name
 			}
