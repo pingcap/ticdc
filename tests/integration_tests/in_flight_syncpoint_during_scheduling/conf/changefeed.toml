@@ -1,0 +1,7 @@
+enable-sync-point = true
+sync-point-interval = "30s"
+
+[scheduler]
+enable-table-across-nodes = true
+region-threshold=1
+region-count-per-span=10

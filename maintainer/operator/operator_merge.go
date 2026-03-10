@@ -150,6 +150,7 @@ func NewMergeDispatcherOperator(
 	return op
 }
 
+// NewRestoredMergeDispatcherOperator builds a merge operator whose occupy sub-operators were restored from bootstrap.
 func NewRestoredMergeDispatcherOperator(
 	spanController *span.Controller,
 	toMergedReplicaSets []*replica.SpanReplication,

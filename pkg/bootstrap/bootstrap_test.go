@@ -24,129 +24,147 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestHandleBootstrapResponse(t *testing.T) {
-	b := NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse]("test", func(id node.ID) *messaging.TargetMessage {
+func TestHandleNewNodes(t *testing.T) {
+	b := NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse]("test", func(id node.ID, addr string) *messaging.TargetMessage {
 		return &messaging.TargetMessage{}
 	})
-	msgs := b.HandleNewNodes([]*node.Info{{ID: "ab"}, {ID: "cd"}})
-	require.Len(t, msgs, 2)
 
-	cfId := common.NewChangefeedID4Test("ns", "cf")
-	// not found
-	cached := b.HandleBootstrapResponse(
+	nodes := make(map[node.ID]*node.Info)
+
+	added, removed, requests, responses := b.HandleNodesChange(nodes)
+	require.Len(t, added, 0)
+	require.Len(t, removed, 0)
+	require.Len(t, requests, 0)
+	require.False(t, b.AllNodesReady())
+	require.Nil(t, responses, 0)
+
+	node1 := node.NewInfo("", "")
+	node2 := node.NewInfo("", "")
+	nodes[node1.ID] = node1
+	nodes[node2.ID] = node2
+
+	added, removed, requests, responses = b.HandleNodesChange(nodes)
+	require.Len(t, added, 2)
+	require.Len(t, removed, 0)
+	require.Len(t, requests, 2)
+	require.Len(t, b.GetAllNodeIDs(), 2)
+	require.Nil(t, responses)
+	require.False(t, b.AllNodesReady())
+
+	changefeedIDPB := common.NewChangefeedID4Test("ns", "cf").ToPB()
+
+	// not found, this should not happen in the real world,
+	// since response should be sent after the bootstrapper send request.
+	responses = b.HandleBootstrapResponse(
 		"ef",
 		&heartbeatpb.MaintainerBootstrapResponse{
-			ChangefeedID: cfId.ToPB(),
+			ChangefeedID: changefeedIDPB,
 			Spans:        []*heartbeatpb.BootstrapTableSpan{{}},
 		})
-	require.Nil(t, cached)
+	require.False(t, b.AllNodesReady())
+	require.Nil(t, responses)
 
-	// not all bootstrapped
-	cached = b.HandleBootstrapResponse(
-		"ab",
+	// receive one response, not bootstrapped yet
+	responses = b.HandleBootstrapResponse(
+		node1.ID,
 		&heartbeatpb.MaintainerBootstrapResponse{
-			ChangefeedID: cfId.ToPB(),
+			ChangefeedID: changefeedIDPB,
 			Spans:        []*heartbeatpb.BootstrapTableSpan{{}},
 		})
-	require.Nil(t, cached)
-	// all node bootstrapped
-	cached = b.HandleBootstrapResponse(
-		"cd",
+	require.False(t, b.AllNodesReady())
+	require.Nil(t, responses)
+
+	// all nodes responses received, bootstrapped
+	responses = b.HandleBootstrapResponse(
+		node2.ID,
 		&heartbeatpb.MaintainerBootstrapResponse{
-			ChangefeedID: cfId.ToPB(),
+			ChangefeedID: changefeedIDPB,
 			Spans:        []*heartbeatpb.BootstrapTableSpan{{}, {}},
 		})
-	require.NotNil(t, cached)
-	require.Equal(t, 1, len(cached["ab"].Spans))
-	require.Equal(t, 2, len(cached["cd"].Spans))
-	require.True(t, b.CheckAllNodeInitialized())
-}
+	require.True(t, b.AllNodesReady())
+	require.Len(t, responses, 2)
+	require.Equal(t, 1, len(responses[node1.ID].Spans))
+	require.Equal(t, 2, len(responses[node2.ID].Spans))
 
-func TestAddNewNode(t *testing.T) {
-	b := NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse]("test", func(id node.ID) *messaging.TargetMessage {
-		return &messaging.TargetMessage{}
-	})
-	msgs := b.HandleNewNodes([]*node.Info{{ID: "ab"}})
-	require.Len(t, msgs, 1)
-	require.True(t, b.nodes["ab"].state == NodeStateUninitialized)
-	msgs = b.HandleNewNodes([]*node.Info{{
-		ID: "ab",
-	}, {ID: "cd"}})
-	require.Len(t, msgs, 1)
-	require.True(t, b.nodes["ab"].state == NodeStateUninitialized)
-	require.True(t, b.nodes["cd"].state == NodeStateUninitialized)
-}
+	// add one new node
+	node3 := node.NewInfo("", "")
+	nodes[node3.ID] = node3
 
-func TestHandleRemoveNodes(t *testing.T) {
-	b := NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse]("test", func(id node.ID) *messaging.TargetMessage {
-		return &messaging.TargetMessage{}
-	})
-	msgs := b.HandleNewNodes([]*node.Info{{ID: "ab"}, {ID: "cd"}})
-	require.Len(t, msgs, 2)
-	// bootstrap one node and the remove another, bootstrapper should be initialized
-	cached := b.HandleRemoveNodes([]node.ID{"ef"})
-	require.Nil(t, cached)
-	cfId := common.NewChangefeedID4Test("ns", "cf")
-	cached = b.HandleBootstrapResponse(
-		"ab",
+	added, removed, requests, responses = b.HandleNodesChange(nodes)
+	require.Len(t, added, 1)
+	require.Len(t, removed, 0)
+	require.Len(t, requests, 1)
+	require.Nil(t, responses)
+	require.False(t, b.AllNodesReady())
+	responses = b.HandleBootstrapResponse(
+		node3.ID,
 		&heartbeatpb.MaintainerBootstrapResponse{
-			ChangefeedID: cfId.ToPB(),
-			Spans:        []*heartbeatpb.BootstrapTableSpan{{}, {}},
+			ChangefeedID: changefeedIDPB,
+			Spans:        []*heartbeatpb.BootstrapTableSpan{{}, {}, {}},
 		})
-	require.Nil(t, cached)
-	cached = b.HandleRemoveNodes([]node.ID{"cd"})
-	require.Equal(t, 2, len(cached["ab"].Spans))
-	require.True(t, b.CheckAllNodeInitialized())
+	require.True(t, b.AllNodesReady())
+	require.Len(t, responses, 1)
+	require.Equal(t, 3, len(responses[node3.ID].Spans))
+
+	// remove a node
+	delete(nodes, node1.ID)
+	added, removed, requests, responses = b.HandleNodesChange(nodes)
+	require.Len(t, added, 0)
+	require.Len(t, removed, 1)
+	require.Len(t, requests, 0)
+	require.Nil(t, responses)
+	require.True(t, b.AllNodesReady())
+
+	// add a new node, and remove one node
+	nodes[node1.ID] = node1
+	delete(nodes, node2.ID)
+	added, removed, requests, responses = b.HandleNodesChange(nodes)
+	require.Len(t, added, 1)
+	require.Len(t, removed, 1)
+	require.Len(t, requests, 1)
+	require.Nil(t, responses)
+	require.False(t, b.AllNodesReady())
+
+	responses = b.HandleBootstrapResponse(
+		node1.ID,
+		&heartbeatpb.MaintainerBootstrapResponse{
+			ChangefeedID: changefeedIDPB,
+			Spans:        []*heartbeatpb.BootstrapTableSpan{{}},
+		})
+	require.True(t, b.AllNodesReady())
+	require.Len(t, responses, 1)
+	require.Equal(t, 1, len(responses[node1.ID].Spans))
 }
 
 func TestResendBootstrapMessage(t *testing.T) {
-	b := NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse]("test", func(id node.ID) *messaging.TargetMessage {
+	b := NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse]("test", func(id node.ID, addr string) *messaging.TargetMessage {
 		return &messaging.TargetMessage{
 			To: id,
 		}
 	})
 	b.resendInterval = time.Second * 2
 	b.currentTime = func() time.Time { return time.Unix(0, 0) }
-	msgs := b.HandleNewNodes([]*node.Info{{ID: "ab"}})
+
+	nodes := make(map[node.ID]*node.Info)
+	node1 := node.NewInfo("", "")
+	nodes[node1.ID] = node1
+
+	_, _, msgs, _ := b.HandleNodesChange(nodes)
 	require.Len(t, msgs, 1)
 	b.currentTime = func() time.Time {
 		return time.Unix(1, 0)
 	}
-	msgs = b.HandleNewNodes([]*node.Info{{ID: "cd"}})
+
+	node2 := node.NewInfo("", "")
+	nodes[node2.ID] = node2
+
+	_, _, msgs, _ = b.HandleNodesChange(nodes)
 	require.Len(t, msgs, 1)
 	b.currentTime = func() time.Time {
 		return time.Unix(2, 0)
 	}
+
 	msgs = b.ResendBootstrapMessage()
 	require.Len(t, msgs, 1)
-	require.Equal(t, msgs[0].To, node.ID("ab"))
-}
-
-func TestCheckAllNodeInitialized(t *testing.T) {
-	b := NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse]("test", func(id node.ID) *messaging.TargetMessage {
-		return &messaging.TargetMessage{}
-	})
-	msgs := b.HandleNewNodes([]*node.Info{{ID: "ab"}})
-	require.Len(t, msgs, 1)
-	require.False(t, b.CheckAllNodeInitialized())
-	cfId := common.NewChangefeedID4Test("ns", "cf")
-	b.HandleBootstrapResponse(
-		"ab",
-		&heartbeatpb.MaintainerBootstrapResponse{
-			ChangefeedID: cfId.ToPB(),
-			Spans:        []*heartbeatpb.BootstrapTableSpan{{}},
-		})
-	require.True(t, b.CheckAllNodeInitialized())
-}
-
-func TestGetAllNodes(t *testing.T) {
-	b := NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse]("test", func(id node.ID) *messaging.TargetMessage {
-		return &messaging.TargetMessage{}
-	})
-	b.HandleNewNodes([]*node.Info{{ID: "ab"}, {ID: "cd"}})
-	nodes := b.GetAllNodeIDs()
-	require.Equal(t, 2, len(nodes))
-	// modify nodes out of bootstrap
-	delete(nodes, "ab")
-	require.Equal(t, 1, len(nodes))
+	require.Equal(t, msgs[0].To, node1.ID)
 }

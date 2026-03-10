@@ -26,6 +26,7 @@ import (
 	dmysql "github.com/go-sql-driver/mysql"
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/pingcap/errors"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -41,8 +42,10 @@ const (
 	txnModeOptimistic  = "optimistic"
 	txnModePessimistic = "pessimistic"
 
-	// DefaultWorkerCount is the default number of workers.
-	DefaultWorkerCount = 128
+	// DefaultTiDBWorkerCount is the default number of workers for TiDB downstream.
+	DefaultTiDBWorkerCount = 64
+	// DefaultMySQLWorkerCount is the default number of workers for MySQL downstream.
+	DefaultMySQLWorkerCount = 16
 	// DefaultMaxTxnRow is the default max number of rows in a transaction.
 	DefaultMaxTxnRow = 256
 	// defaultMaxMultiUpdateRowCount is the default max number of rows in a
@@ -70,9 +73,9 @@ const (
 	defaultCharacterSet   = "utf8mb4"
 
 	// BackoffBaseDelay indicates the base delay time for retrying.
-	BackoffBaseDelay = 500 * time.Millisecond
+	BackoffBaseDelay = 100 * time.Millisecond
 	// BackoffMaxDelay indicates the max delay time for retrying.
-	BackoffMaxDelay = 60 * time.Second
+	BackoffMaxDelay = 5 * time.Second
 
 	defaultBatchDMLEnable  = true
 	defaultMultiStmtEnable = true
@@ -91,21 +94,27 @@ const (
 )
 
 type Config struct {
-	sinkURI                *url.URL
-	WorkerCount            int
+	sinkURI     *url.URL
+	WorkerCount int
+	// workerCountSpecified indicates whether WorkerCount is explicitly set by user via sink URI or changefeed config.
+	// It is used to avoid overriding user configuration when applying downstream-specific defaults.
+	workerCountSpecified   bool
 	MaxTxnRow              int
 	MaxMultiUpdateRowCount int
 	MaxMultiUpdateRowSize  int
 	TidbTxnMode            string
-	ReadTimeout            string
-	WriteTimeout           string
-	DialTimeout            string
-	SafeMode               bool
-	Timezone               string
-	TLS                    string
-	SSLCa                  string
-	SSLCert                string
-	SSLKey                 string
+	// tidbTxnModeSpecified indicates whether TidbTxnMode is explicitly set by user via sink URI or changefeed config.
+	// It is used to avoid overriding user configuration when applying downstream-specific defaults.
+	tidbTxnModeSpecified bool
+	ReadTimeout          string
+	WriteTimeout         string
+	DialTimeout          string
+	SafeMode             bool
+	Timezone             string
+	TLS                  string
+	SSLCa                string
+	SSLCert              string
+	SSLKey               string
 
 	// retry number for dml
 	DMLMaxRetry uint64
@@ -131,6 +140,12 @@ type Config struct {
 
 	HasVectorType bool // HasVectorType is true if the column is vector type
 
+	EnableActiveActive bool
+	// ActiveActiveSyncStatsInterval controls how often MySQL/TiDB sink queries
+	// @@tidb_cdc_active_active_sync_stats for conflict statistics.
+	// Set it to 0 to disable the metric collection.
+	ActiveActiveSyncStatsInterval time.Duration
+
 	// DryRun is used to enable dry-run mode. In dry-run mode, the writer will not write data to the downstream.
 	DryRun bool
 	// DryRunDelay is the delay time for dry-run mode, it is used to simulate the delay time of real write.
@@ -147,23 +162,26 @@ type Config struct {
 // New returns the default mysql backend config.
 func New() *Config {
 	return &Config{
-		WorkerCount:            DefaultWorkerCount,
-		MaxTxnRow:              DefaultMaxTxnRow,
-		MaxMultiUpdateRowCount: defaultMaxMultiUpdateRowCount,
-		MaxMultiUpdateRowSize:  defaultMaxMultiUpdateRowSize,
-		TidbTxnMode:            defaultTiDBTxnMode,
-		ReadTimeout:            defaultReadTimeout,
-		WriteTimeout:           defaultWriteTimeout,
-		DialTimeout:            defaultDialTimeout,
-		SafeMode:               defaultSafeMode,
-		BatchDMLEnable:         defaultBatchDMLEnable,
-		MultiStmtEnable:        defaultMultiStmtEnable,
-		CachePrepStmts:         defaultCachePrepStmts,
-		SourceID:               config.DefaultTiDBSourceID,
-		DMLMaxRetry:            8,
-		HasVectorType:          defaultHasVectorType,
-		EnableDDLTs:            defaultEnableDDLTs,
-		SlowQuery:              slowQuery,
+		WorkerCount:                   DefaultTiDBWorkerCount,
+		workerCountSpecified:          false,
+		MaxTxnRow:                     DefaultMaxTxnRow,
+		MaxMultiUpdateRowCount:        defaultMaxMultiUpdateRowCount,
+		MaxMultiUpdateRowSize:         defaultMaxMultiUpdateRowSize,
+		TidbTxnMode:                   defaultTiDBTxnMode,
+		tidbTxnModeSpecified:          false,
+		ReadTimeout:                   defaultReadTimeout,
+		WriteTimeout:                  defaultWriteTimeout,
+		DialTimeout:                   defaultDialTimeout,
+		SafeMode:                      defaultSafeMode,
+		BatchDMLEnable:                defaultBatchDMLEnable,
+		MultiStmtEnable:               defaultMultiStmtEnable,
+		CachePrepStmts:                defaultCachePrepStmts,
+		SourceID:                      config.DefaultTiDBSourceID,
+		DMLMaxRetry:                   8,
+		HasVectorType:                 defaultHasVectorType,
+		EnableDDLTs:                   defaultEnableDDLTs,
+		SlowQuery:                     slowQuery,
+		ActiveActiveSyncStatsInterval: time.Minute,
 	}
 }
 
@@ -172,6 +190,12 @@ func (c *Config) mergeConfig(cfg *config.ChangefeedConfig) {
 		merge(&c.SafeMode, cfg.SinkConfig.SafeMode)
 		if cfg.SinkConfig.MySQLConfig != nil {
 			mConfig := cfg.SinkConfig.MySQLConfig
+			if mConfig.WorkerCount != nil {
+				c.workerCountSpecified = true
+			}
+			if mConfig.TiDBTxnMode != nil {
+				c.tidbTxnModeSpecified = true
+			}
 			merge(&c.WorkerCount, mConfig.WorkerCount)
 			merge(&c.MaxTxnRow, mConfig.MaxTxnRow)
 			merge(&c.MaxMultiUpdateRowCount, mConfig.MaxMultiUpdateRowCount)
@@ -211,7 +235,7 @@ func (c *Config) Apply(
 	}
 
 	query := sinkURI.Query()
-	if err = getWorkerCount(query, &c.WorkerCount); err != nil {
+	if err = getWorkerCount(query, &c.WorkerCount, &c.workerCountSpecified); err != nil {
 		return err
 	}
 	if err = getMaxTxnRow(query, &c.MaxTxnRow); err != nil {
@@ -223,7 +247,7 @@ func (c *Config) Apply(
 	if err = getMaxMultiUpdateRowSize(query, &c.MaxMultiUpdateRowSize); err != nil {
 		return err
 	}
-	if err = getTiDBTxnMode(query, &c.TidbTxnMode); err != nil {
+	if err = getTiDBTxnMode(query, &c.TidbTxnMode, &c.tidbTxnModeSpecified); err != nil {
 		return err
 	}
 	if err = c.getSSLCA(query, changefeedID, &c.TLS); err != nil {
@@ -287,6 +311,8 @@ func NewMysqlConfigAndDB(
 	if err != nil {
 		return nil, nil, err
 	}
+	cfg.EnableActiveActive = config.EnableActiveActive
+	cfg.ActiveActiveSyncStatsInterval = config.ActiveActiveSyncStatsInterval
 
 	dsnStr, err := GenerateDSN(ctx, cfg)
 	if err != nil {
@@ -313,9 +339,16 @@ func NewMysqlConfigAndDB(
 	// leading to exhaustion of available connections and a hang at the "Get Connection" call.
 	// This issue is less likely to occur when the connection pool is larger,
 	// as there are more connections available for use.
-	// Adding an extra connection to the connection pool solves the connection exhaustion issue.
-	db.SetMaxIdleConns(cfg.WorkerCount + 1)
-	db.SetMaxOpenConns(cfg.WorkerCount + 1)
+	// Adding extra connections to the pool helps avoid connection exhaustion.
+	// Each DML writer may hold a dedicated session for a while, and additional
+	// connections are also needed for multiple DDL/progress writers and stmt cache misses.
+	extraConn := 10
+	db.SetMaxIdleConns(cfg.WorkerCount + extraConn)
+	db.SetMaxOpenConns(cfg.WorkerCount + extraConn)
+	failpoint.Inject("MySQLSinkForceSingleConnection", func() {
+		db.SetMaxIdleConns(1)
+		db.SetMaxOpenConns(1)
+	})
 
 	// Inherit the default value of the prepared statement cache from the SinkURI Options
 	cachePrepStmts := cfg.CachePrepStmts
@@ -379,7 +412,7 @@ func IsSinkSafeMode(sinkURI *url.URL, replicaConfig *config.ReplicaConfig) (bool
 	return safeMode, nil
 }
 
-func getWorkerCount(values url.Values, workerCount *int) error {
+func getWorkerCount(values url.Values, workerCount *int, workerCountSpecified *bool) error {
 	s := values.Get("worker-count")
 	if len(s) == 0 {
 		return nil
@@ -398,7 +431,8 @@ func getWorkerCount(values url.Values, workerCount *int) error {
 			zap.Int("original", c), zap.Int("override", maxWorkerCount))
 		c = maxWorkerCount
 	}
-
+	// Record whether the user explicitly sets worker-count, so we won't override it with downstream defaults.
+	*workerCountSpecified = true
 	*workerCount = c
 	return nil
 }
@@ -473,12 +507,13 @@ func getMaxMultiUpdateRowSize(values url.Values, maxMultiUpdateRowSize *int) err
 	return nil
 }
 
-func getTiDBTxnMode(values url.Values, mode *string) error {
+func getTiDBTxnMode(values url.Values, mode *string, modeSpecified *bool) error {
 	s := values.Get("tidb-txn-mode")
 	if len(s) == 0 {
 		return nil
 	}
 	if s == txnModeOptimistic || s == txnModePessimistic {
+		*modeSpecified = true
 		*mode = s
 	} else {
 		log.Warn("invalid tidb-txn-mode, should be pessimistic or optimistic",
@@ -610,5 +645,17 @@ func getBool(values url.Values, key string, target *bool) error {
 func merge[T int | bool | string](dst, src *T) {
 	if src != nil {
 		*dst = *src
+	}
+}
+
+// setWorkerCountByDownstream sets WorkerCount based on downstream type when it is not explicitly specified by user.
+func (c *Config) setWorkerCountByDownstream() {
+	if c.workerCountSpecified {
+		return
+	}
+	if c.IsTiDB {
+		c.WorkerCount = DefaultTiDBWorkerCount
+	} else {
+		c.WorkerCount = DefaultMySQLWorkerCount
 	}
 }

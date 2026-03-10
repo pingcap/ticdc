@@ -55,6 +55,20 @@ var (
 			Name:      "resolved_ts_lag",
 			Help:      "resolved ts lag of eventService in seconds",
 		}, []string{"type"})
+	EventServiceScanWindowBaseTsGaugeVec = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "scan_window_base_ts",
+			Help:      "The base ts of the scan window for each changefeed",
+		}, []string{"changefeed"})
+	EventServiceScanWindowIntervalGaugeVec = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "scan_window_interval",
+			Help:      "The scan window interval in seconds for each changefeed",
+		}, []string{"changefeed"})
 	EventServiceScanDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
@@ -129,7 +143,6 @@ var (
 		Help:      "The size of scanned DML events from eventStore",
 		Buckets:   prometheus.ExponentialBuckets(1024, 2.0, 16), // 1KB to 64MB
 	})
-
 	EventServiceScannedTxnCount = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: "ticdc",
 		Subsystem: "event_service",
@@ -138,6 +151,31 @@ var (
 		Buckets:   prometheus.ExponentialBuckets(1, 2.0, 8), // 1 ~ 256
 	})
 
+	EventServiceSkipScanCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "skip_scan_count",
+			Help:      "The number of scans skipped",
+		}, []string{"reason"})
+
+	EventServiceGetDDLEventDuration = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "get_ddl_event_duration",
+			Help:      "The duration of getting DDL events from eventStore",
+			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
+		})
+
+	EventServiceInterruptScanCount = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "interrupt_scan_count",
+			Help:      "The number of scans interrupted",
+		})
+
 	EventServiceResetDispatcherCount = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
@@ -145,6 +183,13 @@ var (
 			Name:      "reset_dispatcher_count",
 			Help:      "The number of event dispatcher reset operations performed",
 		})
+
+	EventServiceSendDMLTypeCount = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "ticdc",
+		Subsystem: "event_service",
+		Name:      "send_dml_type_count",
+		Help:      "The number of different dml events type sent by the event service,  it is potentially inaccurat if some dml events are filter",
+	}, []string{"mode", "dml_type"})
 )
 
 // initEventServiceMetrics registers all metrics in this file.
@@ -154,6 +199,8 @@ func initEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceSendEventDuration)
 	registry.MustRegister(EventServiceResolvedTsGauge)
 	registry.MustRegister(EventServiceResolvedTsLagGauge)
+	registry.MustRegister(EventServiceScanWindowBaseTsGaugeVec)
+	registry.MustRegister(EventServiceScanWindowIntervalGaugeVec)
 	registry.MustRegister(EventServiceScanDuration)
 	registry.MustRegister(EventServiceScannedCount)
 	registry.MustRegister(EventServiceDispatcherGauge)
@@ -165,5 +212,9 @@ func initEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceAvailableMemoryQuotaGaugeVec)
 	registry.MustRegister(EventServiceScannedDMLSize)
 	registry.MustRegister(EventServiceScannedTxnCount)
+	registry.MustRegister(EventServiceSkipScanCount)
+	registry.MustRegister(EventServiceInterruptScanCount)
+	registry.MustRegister(EventServiceGetDDLEventDuration)
 	registry.MustRegister(EventServiceResetDispatcherCount)
+	registry.MustRegister(EventServiceSendDMLTypeCount)
 }

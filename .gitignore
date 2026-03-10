@@ -14,3 +14,6 @@ tools/workload/bin
 cdc-junit-report.xml
 
 /tests/integration_tests/*/test_out_data
+
+# temp files
+*.tmp

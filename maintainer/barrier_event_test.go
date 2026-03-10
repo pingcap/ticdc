@@ -33,7 +33,7 @@ import (
 func TestScheduleEvent(t *testing.T) {
 	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
@@ -86,7 +86,7 @@ func TestResendAction(t *testing.T) {
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
@@ -124,12 +124,29 @@ func TestResendAction(t *testing.T) {
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 0)
 
-	// resend write action
+	// resend flush action
 	event.selected.Store(true)
 	event.writerDispatcherAdvanced = false
 	event.writerDispatcher = dispatcherIDs[0]
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
+	flushResp := msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
+	require.Len(t, flushResp.DispatcherStatuses, 1)
+	require.Equal(t, heartbeatpb.Action_Flush, flushResp.DispatcherStatuses[0].Action.Action)
+	require.Equal(t, uint64(10), flushResp.DispatcherStatuses[0].Action.CommitTs)
+
+	// flush phase disabled: resend write action directly
+	event.lastResendTime = time.Time{}
+	event.flushEnabled = false
+	event.flushDispatcherAdvanced = true
+	event.writerDispatcherAdvanced = false
+	event.writerDispatcher = dispatcherIDs[0]
+	msgs = event.resend(common.DefaultMode)
+	require.Len(t, msgs, 1)
+	writeResp := msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
+	require.Len(t, writeResp.DispatcherStatuses, 1)
+	require.Equal(t, heartbeatpb.Action_Write, writeResp.DispatcherStatuses[0].Action.Action)
+	require.Equal(t, uint64(10), writeResp.DispatcherStatuses[0].Action.CommitTs)
 
 	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked: true,
@@ -140,6 +157,7 @@ func TestResendAction(t *testing.T) {
 		},
 	}, false)
 	event.selected.Store(true)
+	event.flushDispatcherAdvanced = true
 	event.writerDispatcherAdvanced = true
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
@@ -158,6 +176,7 @@ func TestResendAction(t *testing.T) {
 		},
 	}, false)
 	event.selected.Store(true)
+	event.flushDispatcherAdvanced = true
 	event.writerDispatcherAdvanced = true
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
@@ -177,6 +196,7 @@ func TestResendAction(t *testing.T) {
 		},
 	}, false)
 	event.selected.Store(true)
+	event.flushDispatcherAdvanced = true
 	event.writerDispatcherAdvanced = true
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
@@ -188,10 +208,57 @@ func TestResendAction(t *testing.T) {
 	require.Equal(t, resp.DispatcherStatuses[0].Action.CommitTs, uint64(10))
 }
 
+func TestSendPassActionTypeDBIncludesWriterNode(t *testing.T) {
+	testutil.SetUpTestServices()
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
+	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
+
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node2", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
+
+	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
+	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
+	absents := spanController.GetAbsentForTest(100)
+	for _, stm := range absents {
+		spanController.BindSpanToNode("", "node1", stm)
+		spanController.MarkSpanReplicating(stm)
+	}
+
+	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
+		IsBlocked: true,
+		BlockTs:   10,
+		BlockTables: &heartbeatpb.InfluencedTables{
+			InfluenceType: heartbeatpb.InfluenceType_DB,
+			SchemaID:      1,
+		},
+	}, false)
+	event.selected.Store(true)
+	event.writerDispatcher = tableTriggerEventDispatcherID
+	event.writerDispatcherAdvanced = true
+
+	msgs := event.sendPassAction(common.DefaultMode)
+	require.Len(t, msgs, 2)
+	targetNodes := make([]node.ID, 0, len(msgs))
+	for _, msg := range msgs {
+		targetNodes = append(targetNodes, msg.To)
+	}
+	require.ElementsMatch(t, []node.ID{"node1", "node2"}, targetNodes)
+}
+
 func TestUpdateSchemaID(t *testing.T) {
 	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{

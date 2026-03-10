@@ -117,11 +117,11 @@ func parseBit(s string, n int) string {
 }
 
 func getValueFromDefault(defaultVal any, tp *types.FieldType) any {
-	// defaultValue shoul be string
+	// defaultValue should be string
 	// see https://github.com/pingcap/tidb/blob/72b1b7c564c301de33a4bd335a05770c78528db4/pkg/ddl/add_column.go#L791
 	val, ok := defaultVal.(string)
 	if !ok {
-		log.Debug("default value is not string", zap.Any("defaultValue", defaultVal))
+		log.Warn("default value is not string", zap.Any("defaultValue", defaultVal))
 		return defaultVal
 	}
 	// TODO: more data types need be consider
@@ -135,6 +135,18 @@ func getValueFromDefault(defaultVal any, tp *types.FieldType) any {
 			return v
 		}
 		log.Error("unexpected column value type string for int column", zap.Error(err), zap.Any("defaultValue", defaultVal))
+	case mysql.TypeEnum:
+		v, err := types.ParseEnumName(tp.GetElems(), val, tp.GetCollate())
+		if err == nil {
+			return v
+		}
+		log.Error("unexpected column value type string for enum column", zap.Error(err), zap.Any("defaultValue", defaultVal))
+	case mysql.TypeSet:
+		v, err := types.ParseSetName(tp.GetElems(), val, tp.GetCollate())
+		if err == nil {
+			return v
+		}
+		log.Error("unexpected column value type string for set column", zap.Error(err), zap.Any("defaultValue", defaultVal))
 	case mysql.TypeDouble, mysql.TypeFloat:
 		v, err := strconv.ParseFloat(val, 64)
 		if err == nil {

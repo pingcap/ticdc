@@ -22,9 +22,12 @@ import (
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	mock_changefeed "github.com/pingcap/ticdc/coordinator/changefeed/mock"
 	"github.com/pingcap/ticdc/coordinator/operator"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
@@ -39,7 +42,7 @@ func TestResumeChangefeed(t *testing.T) {
 		backend:      backend,
 		changefeedDB: changefeedDB,
 	}
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),
@@ -49,7 +52,7 @@ func TestResumeChangefeed(t *testing.T) {
 	changefeedDB.AddStoppedChangefeed(cf)
 
 	// no changefeed
-	require.NotNil(t, controller.ResumeChangefeed(context.Background(), common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceNamme), 12, true))
+	require.NotNil(t, controller.ResumeChangefeed(context.Background(), common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceName), 12, true))
 
 	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any()).Return(errors.New("failed")).Times(1)
 	require.NotNil(t, controller.ResumeChangefeed(context.Background(), cfID, 12, true))
@@ -60,6 +63,32 @@ func TestResumeChangefeed(t *testing.T) {
 	require.Equal(t, config.StateNormal, changefeedDB.GetByID(cfID).GetInfo().State)
 }
 
+func TestResumeChangefeedNormalState(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	controller := &Controller{
+		backend:      backend,
+		changefeedDB: changefeedDB,
+	}
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateNormal,
+		SinkURI:      "mysql://127.0.0.1:3306",
+		Epoch:        233,
+	}, 1, true)
+	changefeedDB.AddReplicatingMaintainer(cf, "node1")
+
+	err := controller.ResumeChangefeed(context.Background(), cfID, 12, true)
+	require.NoError(t, err)
+
+	// The resume operation is skipped, so the epoch is not updated and should remain its original value.
+	changefeed := controller.changefeedDB.GetByID(cfID)
+	require.Equal(t, changefeed.GetInfo().Epoch, uint64(233))
+}
+
 func TestResumeChangefeedOverwriteUpdatesLastSavedCheckpointTs(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
@@ -68,7 +97,7 @@ func TestResumeChangefeedOverwriteUpdatesLastSavedCheckpointTs(t *testing.T) {
 		backend:      backend,
 		changefeedDB: changefeedDB,
 	}
-	cfID := common.NewChangeFeedIDWithName("test-overwrite", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test-overwrite", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),
@@ -84,6 +113,49 @@ func TestResumeChangefeedOverwriteUpdatesLastSavedCheckpointTs(t *testing.T) {
 	require.Equal(t, newCheckpointTs, changefeedDB.GetByID(cfID).GetLastSavedCheckPointTs())
 }
 
+func TestResumeChangefeedIgnoresStaleMaintainerErrorAndSchedules(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	controller := &Controller{
+		backend:      backend,
+		changefeedDB: changefeedDB,
+	}
+	cfID := common.NewChangeFeedIDWithName("test-stale-error", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateFailed,
+		SinkURI:      "mysql://127.0.0.1:3306",
+	}, 100, true)
+	changefeedDB.AddStoppedChangefeed(cf)
+
+	// Simulate a stale maintainer error retained in the in-memory status.
+	stale := cf.GetStatusForResume()
+	stale.State = heartbeatpb.ComponentState_Working
+	stale.BootstrapDone = true
+	stale.Err = []*heartbeatpb.RunningError{{
+		Node:    "node1",
+		Code:    "CDC:ErrChangefeedRetryable",
+		Message: "stale error",
+	}}
+	_, _, err := cf.ForceUpdateStatus(stale)
+	require.NotNil(t, err)
+
+	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+	require.NoError(t, controller.ResumeChangefeed(context.Background(), cfID, 100, false))
+
+	// The changefeed should be enqueued for scheduling and should not be blocked by the stale error.
+	waiting, _ := changefeedDB.GetWaitingSchedulingChangefeeds(10)
+	require.Len(t, waiting, 1)
+	require.Equal(t, cf, waiting[0])
+
+	status := cf.GetStatus()
+	require.False(t, status.BootstrapDone)
+	require.Len(t, status.Err, 0)
+	require.True(t, cf.ShouldRun())
+}
+
 func TestPauseChangefeed(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
@@ -92,13 +164,18 @@ func TestPauseChangefeed(t *testing.T) {
 	self := node.NewInfo("localhost:8300", "")
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	nodeManager.GetAliveNodes()[self.ID] = self
+
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+
 	controller := &Controller{
 		backend:      backend,
 		changefeedDB: changefeedDB,
-		operatorController: operator.NewOperatorController(nil, node.NewInfo("node1", ""),
-			changefeedDB, backend, nodeManager, 10),
+		operatorController: operator.NewOperatorController(node.NewInfo("node1", ""),
+			changefeedDB, backend, 10),
 	}
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),
@@ -108,7 +185,7 @@ func TestPauseChangefeed(t *testing.T) {
 	changefeedDB.AddReplicatingMaintainer(cf, "node1")
 
 	// no changefeed
-	require.NotNil(t, controller.PauseChangefeed(context.Background(), common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceNamme)))
+	require.NotNil(t, controller.PauseChangefeed(context.Background(), common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceName)))
 
 	go func() {
 		for {
@@ -137,7 +214,7 @@ func TestUpdateChangefeed(t *testing.T) {
 		backend:      backend,
 		changefeedDB: changefeedDB,
 	}
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),
@@ -153,7 +230,7 @@ func TestUpdateChangefeed(t *testing.T) {
 	}
 	// no changefeed
 	require.NotNil(t, controller.UpdateChangefeed(context.Background(), &config.ChangeFeedInfo{
-		ChangefeedID: common.NewChangeFeedIDWithName("test1", common.DefaultKeyspaceNamme),
+		ChangefeedID: common.NewChangeFeedIDWithName("test1", common.DefaultKeyspaceName),
 	}))
 
 	backend.EXPECT().UpdateChangefeed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(errors.New("failed")).Times(1)
@@ -176,7 +253,7 @@ func TestGetChangefeed(t *testing.T) {
 		changefeedDB: changefeedDB,
 		nodeManager:  nodeManager,
 	}
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),
@@ -202,13 +279,18 @@ func TestRemoveChangefeed(t *testing.T) {
 	self := node.NewInfo("localhost:8300", "")
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	nodeManager.GetAliveNodes()[self.ID] = self
+
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+
 	controller := &Controller{
 		backend:      backend,
 		changefeedDB: changefeedDB,
-		operatorController: operator.NewOperatorController(nil, node.NewInfo("node1", ""),
-			changefeedDB, backend, nodeManager, 10),
+		operatorController: operator.NewOperatorController(node.NewInfo("node1", ""),
+			changefeedDB, backend, 10),
 	}
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),
@@ -227,7 +309,7 @@ func TestRemoveChangefeed(t *testing.T) {
 	}()
 	changefeedDB.AddReplicatingMaintainer(cf, "node1")
 	// no changefeed
-	_, err := controller.RemoveChangefeed(context.Background(), common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceNamme))
+	_, err := controller.RemoveChangefeed(context.Background(), common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceName))
 	require.NotNil(t, err)
 
 	backend.EXPECT().SetChangefeedProgress(gomock.Any(), cfID, config.ProgressRemoving).Return(errors.New("failed")).Times(1)
@@ -250,10 +332,10 @@ func TestListChangefeed(t *testing.T) {
 	controller := &Controller{
 		backend:      backend,
 		changefeedDB: changefeedDB,
-		operatorController: operator.NewOperatorController(nil, node.NewInfo("node1", ""),
-			changefeedDB, backend, nodeManager, 10),
+		operatorController: operator.NewOperatorController(node.NewInfo("node1", ""),
+			changefeedDB, backend, 10),
 	}
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),
@@ -262,7 +344,7 @@ func TestListChangefeed(t *testing.T) {
 	},
 		1, true)
 	changefeedDB.AddReplicatingMaintainer(cf, "node1")
-	cf2ID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cf2ID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf2 := changefeed.NewChangefeed(cf2ID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),
@@ -272,7 +354,7 @@ func TestListChangefeed(t *testing.T) {
 		2, true)
 	changefeedDB.AddAbsentChangefeed(cf2)
 
-	cf3ID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cf3ID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf3 := changefeed.NewChangefeed(cf3ID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),
@@ -281,7 +363,7 @@ func TestListChangefeed(t *testing.T) {
 	},
 		2, true)
 	changefeedDB.AddStoppedChangefeed(cf3)
-	cfs, status, err := controller.ListChangefeeds(context.Background(), common.DefaultKeyspaceNamme)
+	cfs, status, err := controller.ListChangefeeds(context.Background(), common.DefaultKeyspaceName)
 	require.Nil(t, err)
 	require.Len(t, cfs, 3)
 	require.Len(t, status, 3)
@@ -297,11 +379,11 @@ func TestCreateChangefeed(t *testing.T) {
 	controller := &Controller{
 		backend:      backend,
 		changefeedDB: changefeedDB,
-		operatorController: operator.NewOperatorController(nil, node.NewInfo("node1", ""),
-			changefeedDB, backend, nodeManager, 10),
-		bootstrapped: atomic.NewBool(false),
+		operatorController: operator.NewOperatorController(node.NewInfo("node1", ""),
+			changefeedDB, backend, 10),
+		initialized: atomic.NewBool(false),
 	}
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cfConfig := &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		State:        config.StateNormal,
@@ -311,7 +393,7 @@ func TestCreateChangefeed(t *testing.T) {
 	require.NotNil(t, controller.CreateChangefeed(context.Background(), cfConfig))
 	require.Equal(t, 0, changefeedDB.GetSize())
 
-	controller.bootstrapped.Store(true)
+	controller.initialized.Store(true)
 	backend.EXPECT().CreateChangefeed(gomock.Any(), gomock.Any()).Return(errors.New("failed")).Times(1)
 	require.NotNil(t, controller.CreateChangefeed(context.Background(), cfConfig))
 	require.Equal(t, 0, changefeedDB.GetSize())
@@ -327,7 +409,7 @@ func TestCreateChangefeed(t *testing.T) {
 	require.Equal(t, 1, changefeedDB.GetAbsentSize())
 	controller.operatorController.AddOperator(operator.NewAddMaintainerOperator(changefeedDB, changefeedDB.GetByID(cfID), "node1"))
 
-	cf2ID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cf2ID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf2Config := &config.ChangeFeedInfo{
 		ChangefeedID: cf2ID,
 		State:        config.StateNormal,

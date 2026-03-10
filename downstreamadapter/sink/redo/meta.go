@@ -348,7 +348,7 @@ func (m *RedoMeta) maybeFlushMeta(ctx context.Context) error {
 	if !hasChange {
 		// check stuck
 		if time.Since(m.lastFlushTime) > redo.FlushWarnDuration {
-			log.Debug("Redo meta has not changed for a long time, redo table trigger dispatcher may be stuck",
+			log.Debug("Redo meta has not changed for a long time, table trigger redo dispatcher may be stuck",
 				zap.String("keyspace", m.changeFeedID.Keyspace()),
 				zap.String("changefeed", m.changeFeedID.Name()),
 				zap.Duration("lastFlushTime", time.Since(m.lastFlushTime)),
@@ -521,7 +521,7 @@ func getChangefeedMatcher(changeFeedID common.ChangeFeedID) string {
 }
 
 func getDeletedChangefeedMarker(changeFeedID common.ChangeFeedID) string {
-	if changeFeedID.Keyspace() == common.DefaultKeyspaceNamme {
+	if changeFeedID.Keyspace() == common.DefaultKeyspaceName {
 		return fmt.Sprintf("delete_%s", changeFeedID.Name())
 	}
 	return fmt.Sprintf("delete_%s_%s", changeFeedID.Keyspace(), changeFeedID.Name())

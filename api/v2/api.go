@@ -38,11 +38,19 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 
 	v2.GET("status", api.ServerStatus)
 	v2.POST("log", api.SetLogLevel)
+	v2.POST("log/redact", api.SetRedactMode)
 	// For compatibility with the old API.
 	// TiDB Operator relies on this API to determine whether the TiCDC node is healthy.
 	router.GET("/status", api.ServerStatus)
 	// Integration test relies on this API to determine whether the TiCDC node is healthy.
 	router.GET("/debug/info", gin.WrapF(api.handleDebugInfo))
+
+	debugGroup := router.Group("/debug")
+	debugGroup.Use(middleware.LogMiddleware())
+	debugGroup.Use(middleware.ErrorHandleMiddleware())
+	debugGroup.POST("/failpoints", api.EnableFailpoint)
+	debugGroup.DELETE("/failpoints", api.DisableFailpoint)
+	debugGroup.GET("/failpoints", api.ListFailpoints)
 
 	coordinatorMiddleware := middleware.ForwardToCoordinatorMiddleware(api.server)
 	authenticateMiddleware := middleware.AuthenticateMiddleware(api.server)
@@ -79,6 +87,8 @@ func RegisterOpenAPIV2Routes(router *gin.Engine, api OpenAPIV2) {
 
 	verifyTableGroup := v2.Group("/verify_table")
 	verifyTableGroup.POST("", api.VerifyTable)
+	getAllTablesGroup := v2.Group("/get_all_tables")
+	getAllTablesGroup.POST("", api.GetAllTables)
 
 	// processor apis
 	// Note: They are not useful in new arch cdc,

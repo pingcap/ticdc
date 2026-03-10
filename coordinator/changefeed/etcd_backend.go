@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
@@ -290,29 +291,53 @@ func (b *EtcdBackend) ResumeChangefeed(ctx context.Context,
 }
 
 func (b *EtcdBackend) SetChangefeedProgress(ctx context.Context, id common.ChangeFeedID, progress config.Progress) error {
-	status, modVersion, err := b.etcdClient.GetChangeFeedStatus(ctx, id)
-	if err != nil {
-		return errors.Trace(err)
+	// SetChangefeedProgress uses etcd ModRevision compare-and-swap (CAS) to avoid
+	// overwriting a newer checkpointTs written by the checkpoint updater.
+	//
+	// The checkpoint updater writes the same key periodically. If it updates the key
+	// between our Get and Txn, the compare fails and we must retry; otherwise
+	// user-facing APIs like "changefeed remove/pause" can flake with ErrMetaOpFailed.
+	const (
+		setProgressMaxRetries = 10
+		setProgressRetryDelay = 25 * time.Millisecond
+	)
+	for attempt := 0; attempt < setProgressMaxRetries; attempt++ {
+		status, modVersion, err := b.etcdClient.GetChangeFeedStatus(ctx, id)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		if status.Progress == progress {
+			// Another goroutine (or a previous retry) already persisted the desired progress.
+			return nil
+		}
+
+		status.Progress = progress
+		jobValue, err := status.Marshal()
+		if err != nil {
+			return errors.Trace(err)
+		}
+		jobKey := etcd.GetEtcdKeyJob(b.etcdClient.GetClusterID(), id.DisplayName)
+		putResp, err := b.etcdClient.GetEtcdClient().Txn(ctx,
+			[]clientv3.Cmp{clientv3.Compare(clientv3.ModRevision(jobKey), "=", modVersion)},
+			[]clientv3.Op{clientv3.OpPut(jobKey, jobValue)},
+			[]clientv3.Op{})
+		if err != nil {
+			return errors.Trace(err)
+		}
+		if putResp.Succeeded {
+			return nil
+		}
+
+		// Retry unless the caller's context is done.
+		select {
+		case <-ctx.Done():
+			return errors.Trace(ctx.Err())
+		case <-time.After(setProgressRetryDelay):
+		}
 	}
 
-	status.Progress = progress
-	jobValue, err := status.Marshal()
-	if err != nil {
-		return errors.Trace(err)
-	}
-	jobKey := etcd.GetEtcdKeyJob(b.etcdClient.GetClusterID(), id.DisplayName)
-	putResp, err := b.etcdClient.GetEtcdClient().Txn(ctx,
-		[]clientv3.Cmp{clientv3.Compare(clientv3.ModRevision(jobKey), "=", modVersion)},
-		[]clientv3.Op{clientv3.OpPut(jobKey, jobValue)},
-		[]clientv3.Op{})
-	if err != nil {
-		return errors.Trace(err)
-	}
-	if !putResp.Succeeded {
-		err = cerror.ErrMetaOpFailed.GenWithStackByArgs(fmt.Sprintf("update changefeed to %s-%d", id.DisplayName, progress))
-		return errors.Trace(err)
-	}
-	return nil
+	err := cerror.ErrMetaOpFailed.GenWithStackByArgs(fmt.Sprintf("update changefeed to %s-%d", id.DisplayName, progress))
+	return errors.Trace(err)
 }
 
 func (b *EtcdBackend) UpdateChangefeedCheckpointTs(ctx context.Context, cps map[common.ChangeFeedID]uint64) error {

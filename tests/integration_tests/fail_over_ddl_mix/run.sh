@@ -45,9 +45,9 @@ function prepare() {
 	esac
 	do_retry 5 3 cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "test" --config="$CUR/conf/$1.toml"
 	case $SINK_TYPE in
-	kafka) run_kafka_consumer $WORK_DIR $SINK_URI ;;
-	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
-	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI ;;
+	kafka) run_kafka_consumer $WORK_DIR $SINK_URI "$CUR/conf/$1.toml" ;;
+	storage) run_storage_consumer $WORK_DIR $SINK_URI "$CUR/conf/$1.toml" "" ;;
+	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI --config "$CUR/conf/$1.toml" ;;
 	esac
 }
 
@@ -221,8 +221,13 @@ main() {
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 500
 
 	checkpoint1=$(cdc_cli_changefeed query -c "test" 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
-	sleep 20
-	checkpoint2=$(cdc_cli_changefeed query -c "test" 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
+	for _ in $(seq 1 6); do
+		sleep 10
+		checkpoint2=$(cdc_cli_changefeed query -c "test" 2>&1 | grep -v "Command to ticdc" | jq '.checkpoint_tso')
+		if [[ "$checkpoint1" -ne "$checkpoint2" ]]; then
+			break
+		fi
+	done
 
 	if [[ "$checkpoint1" -eq "$checkpoint2" ]]; then
 		echo "checkpoint is not changed"
@@ -300,7 +305,7 @@ trap 'stop_test $WORK_DIR' EXIT
 main
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
-# stop_tidb_cluster
-# main_with_consistent
-# check_logs $WORK_DIR
-# echo "[$(date)] <<<<<< run consistent test case $TEST_NAME success! >>>>>>"
+stop_tidb_cluster
+main_with_consistent
+check_logs $WORK_DIR
+echo "[$(date)] <<<<<< run consistent test case $TEST_NAME success! >>>>>>"

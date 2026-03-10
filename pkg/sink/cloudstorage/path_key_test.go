@@ -14,8 +14,10 @@
 package cloudstorage
 
 import (
+	"fmt"
 	"testing"
 
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/stretchr/testify/require"
 )
 
@@ -60,18 +62,21 @@ func TestSchemaPathKey(t *testing.T) {
 func TestDmlPathKey(t *testing.T) {
 	t.Parallel()
 
+	dispatcherID := common.NewDispatcherID()
 	testCases := []struct {
-		index          int
+		index          uint64
 		fileIndexWidth int
 		extension      string
 		path           string
+		indexPath      string
 		dmlkey         DmlPathKey
 	}{
 		{
 			index:          10,
 			fileIndexWidth: 20,
 			extension:      ".csv",
-			path:           "schema1/table1/123456/2023-05-09/CDC00000000000000000010.csv",
+			path:           fmt.Sprintf("schema1/table1/123456/2023-05-09/CDC_%s_00000000000000000010.csv", dispatcherID.String()),
+			indexPath:      fmt.Sprintf("schema1/table1/123456/2023-05-09/meta/CDC_%s.index", dispatcherID.String()),
 			dmlkey: DmlPathKey{
 				SchemaPathKey: SchemaPathKey{
 					Schema:       "schema1",
@@ -86,11 +91,19 @@ func TestDmlPathKey(t *testing.T) {
 
 	for _, tc := range testCases {
 		var dmlkey DmlPathKey
-		idx, err := dmlkey.ParseDMLFilePath("day", tc.path)
+		id, err := dmlkey.ParseIndexFilePath("day", tc.indexPath)
 		require.NoError(t, err)
 		require.Equal(t, tc.dmlkey, dmlkey)
+		require.Equal(t, id, dispatcherID.String())
 
-		fileName := dmlkey.GenerateDMLFilePath(idx, tc.extension, tc.fileIndexWidth)
+		fileIndex := &FileIndex{
+			FileIndexKey: FileIndexKey{
+				DispatcherID:           id,
+				EnableTableAcrossNodes: id != "",
+			},
+			Idx: tc.index,
+		}
+		fileName := dmlkey.GenerateDMLFilePath(fileIndex, tc.extension, tc.fileIndexWidth)
 		require.Equal(t, tc.path, fileName)
 	}
 }

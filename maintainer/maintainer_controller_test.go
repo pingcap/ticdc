@@ -64,7 +64,7 @@ func TestSchedule(t *testing.T) {
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
 	nodeManager.GetAliveNodes()["node3"] = &node.Info{ID: "node3"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
@@ -102,7 +102,7 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableMoreThanNodeNum(t *testing.T) {
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
@@ -234,7 +234,7 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableLessThanNodeNum(t *testing.T) {
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
 
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
@@ -356,7 +356,7 @@ func TestSplitBalanceGroupsWithNodeRemove(t *testing.T) {
 	nodeManager.GetAliveNodes()["node3"] = &node.Info{ID: "node3"}
 
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
@@ -455,7 +455,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
 	nodeManager.GetAliveNodes()["node3"] = &node.Info{ID: "node3"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
@@ -1067,7 +1067,7 @@ func TestBalance(t *testing.T) {
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
@@ -1161,7 +1161,7 @@ func TestDefaultSpanIntoSplit(t *testing.T) {
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
@@ -1316,7 +1316,7 @@ func TestStoppedWhenMoving(t *testing.T) {
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID, common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
 			ID:              tableTriggerEventDispatcherID.ToPB(),
@@ -1367,7 +1367,7 @@ func TestFinishBootstrap(t *testing.T) {
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
@@ -1407,10 +1407,11 @@ func TestFinishBootstrap(t *testing.T) {
 			},
 			CheckpointTs: 10,
 		},
-	}, false)
+	}, false, false)
 	_ = msg
 	require.Nil(t, err)
 	require.NotNil(t, s.barrier)
+	require.False(t, s.barrier.flushEnabled)
 	require.True(t, s.bootstrapped)
 	require.Equal(t, msg.GetSchemas(), []*heartbeatpb.SchemaInfo{
 		{
@@ -1428,9 +1429,64 @@ func TestFinishBootstrap(t *testing.T) {
 	require.Equal(t, 1, s.spanController.GetReplicatingSize())
 	require.Equal(t, 0, s.spanController.GetSchedulingSize())
 	require.NotNil(t, s.spanController.GetTaskByID(dispatcherID2))
-	require.Panics(t, func() {
-		_, _ = s.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{}, false)
-	})
+
+	postBootstrapRequest, err := s.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{}, false, false)
+	require.NoError(t, err)
+	require.Nil(t, postBootstrapRequest)
+}
+
+func TestFinishBootstrapStorageSinkWithoutTableAcrossNodesEnableFlush(t *testing.T) {
+	testutil.SetUpTestServices()
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
+	defaultConfig := config.GetDefaultReplicaConfig().Clone()
+	defaultConfig.Scheduler.EnableTableAcrossNodes = util.AddressOf(false)
+	s := NewController(cfID, 1, &mockThreadPool{},
+		defaultConfig, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false)
+
+	totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
+	span := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: totalSpan.StartKey, EndKey: totalSpan.EndKey}
+	schemaStore := eventservice.NewMockSchemaStore()
+	schemaStore.SetTables(
+		[]commonEvent.Table{
+			{
+				TableID:         1,
+				SchemaID:        1,
+				SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t"},
+			},
+		},
+	)
+	appcontext.SetService(appcontext.SchemaStore, schemaStore)
+
+	dispatcherID := common.NewDispatcherID()
+	_, err := s.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+		"node1": {
+			ChangefeedID: cfID.ToPB(),
+			Spans: []*heartbeatpb.BootstrapTableSpan{
+				{
+					ID:              dispatcherID.ToPB(),
+					SchemaID:        1,
+					Span:            span,
+					ComponentStatus: heartbeatpb.ComponentState_Working,
+					CheckpointTs:    10,
+				},
+			},
+			CheckpointTs: 10,
+		},
+	}, false, true)
+	require.NoError(t, err)
+	require.NotNil(t, s.barrier)
+	require.True(t, s.barrier.flushEnabled)
 }
 
 func TestSplitTableWhenBootstrapFinished(t *testing.T) {
@@ -1439,7 +1495,7 @@ func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
@@ -1504,9 +1560,10 @@ func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 			Spans:        reportedSpans,
 			CheckpointTs: 10,
 		},
-	}, false)
+	}, false, false)
 	require.Nil(t, err)
 	require.NotNil(t, s.barrier)
+	require.False(t, s.barrier.flushEnabled)
 	// total 8 regions,
 	// table 1: 2 holes will be inserted to absent
 	// table 2: split to 2 spans, will be inserted to absent
@@ -1514,6 +1571,20 @@ func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 	// table 1 has two working span
 	require.Equal(t, 2, s.spanController.GetReplicatingSize())
 	require.True(t, s.bootstrapped)
+	// storage sink + split-table should enable flush phase
+	s2 := NewController(cfID, 1, nil, defaultConfig, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false)
+	s2.taskPool = &mockThreadPool{}
+	require.False(t, s2.bootstrapped)
+	_, err = s2.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+		"node1": {
+			ChangefeedID: cfID.ToPB(),
+			Spans:        reportedSpans,
+			CheckpointTs: 10,
+		},
+	}, false, true)
+	require.Nil(t, err)
+	require.NotNil(t, s2.barrier)
+	require.True(t, s2.barrier.flushEnabled)
 }
 
 func TestMapFindHole(t *testing.T) {
@@ -1615,7 +1686,7 @@ func TestLargeTableInitialization(t *testing.T) {
 	nodeManager.GetAliveNodes()["node3"] = &node.Info{ID: "node3"}
 
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,
 		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{

@@ -20,6 +20,7 @@ import (
 	"go.uber.org/zap"
 )
 
+// TrackMergeOperator records an in-flight merge request so bootstrap can restore it after maintainer failover.
 func (e *DispatcherManager) TrackMergeOperator(req *heartbeatpb.MergeDispatcherRequest) {
 	if req == nil || req.MergedDispatcherID == nil {
 		return
@@ -28,10 +29,12 @@ func (e *DispatcherManager) TrackMergeOperator(req *heartbeatpb.MergeDispatcherR
 	e.mergeOperatorMap.Store(mergedID.String(), cloneMergeDispatcherRequest(req))
 }
 
+// RemoveMergeOperator drops the persisted merge request once the merged dispatcher has converged.
 func (e *DispatcherManager) RemoveMergeOperator(mergedDispatcherID common.DispatcherID) {
 	e.mergeOperatorMap.Delete(mergedDispatcherID.String())
 }
 
+// MaybeCleanupMergeOperator removes a persisted merge request when the merged dispatcher is already complete or gone.
 func (e *DispatcherManager) MaybeCleanupMergeOperator(req *heartbeatpb.MergeDispatcherRequest) {
 	if req == nil || req.MergedDispatcherID == nil {
 		return
@@ -59,6 +62,7 @@ func (e *DispatcherManager) MaybeCleanupMergeOperator(req *heartbeatpb.MergeDisp
 	e.RemoveMergeOperator(mergedID)
 }
 
+// GetMergeOperators returns cloned in-flight merge requests for maintainer bootstrap.
 func (e *DispatcherManager) GetMergeOperators() []*heartbeatpb.MergeDispatcherRequest {
 	operators := make([]*heartbeatpb.MergeDispatcherRequest, 0)
 	e.mergeOperatorMap.Range(func(_, value any) bool {

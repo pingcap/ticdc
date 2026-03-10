@@ -25,7 +25,7 @@ import (
 
 func TestMoveMaintainerOperator_OnNodeRemove(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),
@@ -51,7 +51,7 @@ func TestMoveMaintainerOperator_OnNodeRemove(t *testing.T) {
 	require.True(t, op.canceled)
 	require.Nil(t, op.Schedule())
 
-	cf2ID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cf2ID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf2 := changefeed.NewChangefeed(cf2ID, &config.ChangeFeedInfo{
 		ChangefeedID: cf2ID,
 		Config:       config.GetDefaultReplicaConfig(),
@@ -74,4 +74,35 @@ func TestMoveMaintainerOperator_OnTaskRemoved(t *testing.T) {
 	require.Nil(t, op.Schedule())
 	// backend is nil, but op is canceled , no nil pointer error
 	op.PostFinish()
+}
+
+func TestMoveMaintainerOperator_CheckRequiresDestBootstrapDone(t *testing.T) {
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+	},
+		1, true)
+	changefeedDB.AddReplicatingMaintainer(cf, "n1")
+
+	op := NewMoveMaintainerOperator(changefeedDB, cf, "n1", "n2")
+
+	op.Check("n1", &heartbeatpb.MaintainerStatus{State: heartbeatpb.ComponentState_Stopped})
+	require.True(t, op.originNodeStopped)
+	require.False(t, op.finished)
+
+	op.Check("n2", &heartbeatpb.MaintainerStatus{
+		State:         heartbeatpb.ComponentState_Working,
+		BootstrapDone: false,
+	})
+	require.False(t, op.finished)
+
+	op.Check("n2", &heartbeatpb.MaintainerStatus{
+		State:         heartbeatpb.ComponentState_Working,
+		BootstrapDone: true,
+	})
+	require.True(t, op.finished)
+	require.Nil(t, op.Schedule())
 }

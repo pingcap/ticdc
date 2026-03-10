@@ -152,9 +152,9 @@ func (m *MoveDispatcherOperator) Schedule() *messaging.TargetMessage {
 
 	switch m.state {
 	case moveStateAddDest:
-		return m.replicaSet.NewAddDispatcherMessage(m.dest, heartbeatpb.OperatorType_O_Add)
+		return m.replicaSet.NewAddDispatcherMessage(m.dest, heartbeatpb.OperatorType_O_Move)
 	case moveStateRemoveOrigin, moveStateAbortRemoveOrigin:
-		return m.replicaSet.NewRemoveDispatcherMessage(m.origin, heartbeatpb.OperatorType_O_Remove)
+		return m.replicaSet.NewRemoveDispatcherMessage(m.origin, heartbeatpb.OperatorType_O_Move)
 	default:
 		return nil
 	}

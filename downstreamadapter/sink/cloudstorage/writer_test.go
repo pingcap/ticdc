@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"path"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -50,7 +51,7 @@ func testWriter(ctx context.Context, t *testing.T, dir string) *writer {
 	cfg := cloudstorage.NewConfig()
 	replicaConfig := config.GetDefaultReplicaConfig()
 	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
-	err = cfg.Apply(context.TODO(), sinkURI, replicaConfig.Sink)
+	err = cfg.Apply(context.TODO(), sinkURI, replicaConfig.Sink, true)
 	cfg.FileIndexWidth = 6
 	require.Nil(t, err)
 
@@ -84,6 +85,7 @@ func TestWriterRun(t *testing.T) {
 	}
 	tableInfo := commonType.WrapTableInfo("test", tidbTableInfo)
 
+	dispatcherID := commonType.NewDispatcherID()
 	for i := 0; i < 5; i++ {
 		frag := eventFragment{
 			seqNumber: uint64(i),
@@ -94,6 +96,7 @@ func TestWriterRun(t *testing.T) {
 					TableID: 100,
 				},
 				TableInfoVersion: 99,
+				DispatcherID:     dispatcherID,
 			},
 			event: &commonEvent.DMLEvent{
 				PhysicalTableID: 100,
@@ -122,9 +125,80 @@ func TestWriterRun(t *testing.T) {
 	// check whether files for table1 has been generated
 	fileNames := getTableFiles(t, table1Dir)
 	require.Len(t, fileNames, 2)
-	require.ElementsMatch(t, []string{"CDC000001.json", "CDC.index"}, fileNames)
+	require.ElementsMatch(t, []string{fmt.Sprintf("CDC_%s_000001.json", dispatcherID.String()), fmt.Sprintf("CDC_%s.index", dispatcherID.String())}, fileNames)
 	fragCh.CloseAndDrain()
 	cancel()
 	d.close()
+	wg.Wait()
+	t.Run("drain marker", verifyWriterDrainMarker)
+}
+
+func verifyWriterDrainMarker(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	parentDir := t.TempDir()
+	d := testWriter(ctx, t, parentDir)
+
+	tidbTableInfo := &timodel.TableInfo{
+		ID:   100,
+		Name: ast.NewCIStr("table1"),
+		Columns: []*timodel.ColumnInfo{
+			{ID: 1, Name: ast.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
+		},
+	}
+	tableInfo := commonType.WrapTableInfo("test", tidbTableInfo)
+	dispatcherID := commonType.NewDispatcherID()
+
+	var callbackCnt int64
+	msg := common.NewMsg(nil, []byte(`{"id":1}`))
+	msg.SetRowsCount(1)
+	msg.Callback = func() {
+		atomic.AddInt64(&callbackCnt, 1)
+	}
+
+	d.inputCh.In() <- eventFragment{
+		kind:         eventFragmentKindDML,
+		seqNumber:    1,
+		dispatcherID: dispatcherID,
+		versionedTable: cloudstorage.VersionedTableName{
+			TableNameWithPhysicTableID: commonType.TableName{
+				Schema:  "test",
+				Table:   "table1",
+				TableID: 100,
+			},
+			TableInfoVersion: 99,
+			DispatcherID:     dispatcherID,
+		},
+		event: &commonEvent.DMLEvent{
+			PhysicalTableID: 100,
+			TableInfo:       tableInfo,
+		},
+		encodedMsgs: []*common.Message{msg},
+	}
+
+	doneCh := make(chan error, 1)
+	d.inputCh.In() <- newDrainEventFragment(2, dispatcherID, 100, doneCh)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_ = d.Run(ctx)
+	}()
+
+	select {
+	case err := <-doneCh:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("wait drain marker timeout")
+	}
+
+	require.Eventually(t, func() bool {
+		return atomic.LoadInt64(&callbackCnt) == 1
+	}, 5*time.Second, 100*time.Millisecond)
+
+	d.inputCh.CloseAndDrain()
+	d.close()
+	cancel()
 	wg.Wait()
 }

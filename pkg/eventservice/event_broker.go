@@ -50,7 +50,8 @@ const (
 
 	maxReadyEventIntervalSeconds = 10
 	// defaultSendResolvedTsInterval use to control whether to send a resolvedTs event to the dispatcher when its scan is skipped.
-	defaultSendResolvedTsInterval = time.Second * 2
+	defaultSendResolvedTsInterval           = time.Second * 2
+	defaultRefreshMinSentResolvedTsInterval = time.Second * 1
 )
 
 // eventBroker get event from the eventStore, and send the event to the dispatchers.
@@ -180,6 +181,10 @@ func newEventBroker(
 		return c.metricsCollector.Run(ctx)
 	})
 
+	g.Go(func() error {
+		return c.refreshMinSentResolvedTs(ctx)
+	})
+
 	log.Info("new event broker created", zap.Uint64("id", id), zap.Uint64("scanLimitInBytes", c.scanLimitInBytes))
 	return c
 }
@@ -252,6 +257,23 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 		zap.Int64("EventTableID", e.GetTableID()),
 		zap.String("query", e.Query), zap.Uint64("commitTs", e.FinishedTs),
 		zap.Uint64("seq", e.Seq), zap.Int64("mode", d.info.GetMode()))
+}
+
+func (c *eventBroker) refreshMinSentResolvedTs(ctx context.Context) error {
+	ticker := time.NewTicker(defaultRefreshMinSentResolvedTsInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-ticker.C:
+			c.changefeedMap.Range(func(key, value interface{}) bool {
+				status := value.(*changefeedStatus)
+				status.refreshMinSentResolvedTs()
+				return true
+			})
+		}
+	}
 }
 
 func (c *eventBroker) sendSignalResolvedTs(d *dispatcherStat) {
@@ -404,9 +426,29 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		return false, common.DataRange{}
 	}
 	dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, ddlState.ResolvedTs)
+	commitTsEndBeforeWindow := dataRange.CommitTsEnd
+	scanMaxTs := task.changefeedStat.getScanMaxTs()
+	if scanMaxTs > 0 {
+		dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, scanMaxTs)
+		if dataRange.CommitTsEnd < commitTsEndBeforeWindow {
+			log.Debug("scan window capped",
+				zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
+				zap.Stringer("dispatcherID", task.id),
+				zap.Uint64("baseTs", task.changefeedStat.minSentTs.Load()),
+				zap.Uint64("scanMaxTs", scanMaxTs),
+				zap.Uint64("beforeEndTs", commitTsEndBeforeWindow),
+				zap.Uint64("afterEndTs", dataRange.CommitTsEnd),
+				zap.Duration("scanInterval", time.Duration(task.changefeedStat.scanInterval.Load())),
+			)
+		}
+	}
 
 	if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
 		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
+		// Scan range can become empty after applying capping (for example, scan window).
+		// Send a signal resolved-ts event (rate limited) to keep downstream responsive,
+		// but do not advance the watermark here.
+		c.sendSignalResolvedTs(task)
 		return false, common.DataRange{}
 	}
 
@@ -556,6 +598,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	if task.isRemoved.Load() {
 		return
 	}
+
 	// If the target is not ready to send, we don't need to scan the event store.
 	// To avoid the useless scan task.
 	if !c.msgSender.IsReadyToSend(remoteID) {
@@ -587,7 +630,11 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 
 	item, ok := c.changefeedMap.Load(changefeedID)
 	if !ok {
-		log.Panic("cannot found the changefeed status", zap.Any("changefeed", changefeedID.String()))
+		log.Info("changefeed status is not found, skip scan",
+			zap.Stringer("changefeed", changefeedID),
+			zap.Stringer("dispatcherID", task.id),
+			zap.Int64("tableID", task.info.GetTableSpan().GetTableID()))
+		return
 	}
 
 	status := item.(*changefeedStatus)
@@ -597,6 +644,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			zap.String("changefeed", changefeedID.String()), zap.String("remote", remoteID.String()))
 		return
 	}
+
 	available := item.(*atomic.Uint64)
 	if available.Load() < c.scanLimitInBytes {
 		task.resetScanLimit()
@@ -611,12 +659,14 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			zap.Uint64("available", available.Load()),
 			zap.Uint64("required", uint64(sl.maxDMLBytes)))
 		c.sendSignalResolvedTs(task)
+		metrics.EventServiceSkipScanCount.WithLabelValues("changefeed_quota").Inc()
 		return
 	}
 
 	if uint64(sl.maxDMLBytes) > task.availableMemoryQuota.Load() {
 		log.Debug("dispatcher available memory quota is not enough, skip scan", zap.Stringer("dispatcher", task.id), zap.Uint64("available", task.availableMemoryQuota.Load()), zap.Int64("required", int64(sl.maxDMLBytes)))
 		c.sendSignalResolvedTs(task)
+		metrics.EventServiceSkipScanCount.WithLabelValues("dispatcher_quota").Inc()
 		return
 	}
 
@@ -626,6 +676,10 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 		releaseQuota(available, uint64(sl.maxDMLBytes))
 	} else if scannedBytes >= 0 && scannedBytes < sl.maxDMLBytes {
 		releaseQuota(available, uint64(sl.maxDMLBytes-scannedBytes))
+	}
+
+	if interrupted {
+		metrics.EventServiceInterruptScanCount.Inc()
 	}
 
 	if err != nil {
@@ -914,7 +968,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	span := info.GetTableSpan()
 	changefeedID := info.GetChangefeedID()
 
-	status := c.getOrSetChangefeedStatus(changefeedID)
+	status := c.getOrSetChangefeedStatus(changefeedID, info.GetSyncPointInterval())
 	dispatcher := newDispatcherStat(info, uint64(len(c.taskChan)), uint64(len(c.messageCh)), nil, status)
 	dispatcherPtr := &atomic.Pointer[dispatcherStat]{}
 	dispatcherPtr.Store(dispatcher)
@@ -958,6 +1012,9 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		status.removeDispatcher(id)
 		if status.isEmpty() {
 			c.changefeedMap.Delete(changefeedID)
+			metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String())
+			metrics.EventServiceScanWindowBaseTsGaugeVec.DeleteLabelValues(changefeedID.String())
+			metrics.EventServiceScanWindowIntervalGaugeVec.DeleteLabelValues(changefeedID.String())
 		}
 		c.sendNotReusableEvent(node.ID(info.GetServerID()), dispatcher)
 		return nil
@@ -975,9 +1032,15 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 			zap.Uint64("startTs", info.GetStartTs()), zap.String("span", common.FormatTableSpan(span)),
 			zap.Error(err),
 		)
+		// Mark removed to avoid processing notifications before unregister completes.
+		dispatcher.isRemoved.Store(true)
+		c.eventStore.UnregisterDispatcher(changefeedID, id)
 		status.removeDispatcher(id)
 		if status.isEmpty() {
 			c.changefeedMap.Delete(changefeedID)
+			metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String())
+			metrics.EventServiceScanWindowBaseTsGaugeVec.DeleteLabelValues(changefeedID.String())
+			metrics.EventServiceScanWindowIntervalGaugeVec.DeleteLabelValues(changefeedID.String())
 		}
 		return err
 	}
@@ -999,15 +1062,24 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	id := dispatcherInfo.GetID()
 
+	var isTableTriggerDispatcher bool
 	statPtr, ok := c.dispatchers.Load(id)
 	if !ok {
 		statPtr, ok = c.tableTriggerDispatchers.Load(id)
 		if !ok {
 			return
 		}
-		c.tableTriggerDispatchers.Delete(id)
+		isTableTriggerDispatcher = true
 	}
+
 	stat := statPtr.(*atomic.Pointer[dispatcherStat]).Load()
+	stat.isRemoved.Store(true)
+
+	if isTableTriggerDispatcher {
+		c.tableTriggerDispatchers.Delete(id)
+	} else {
+		c.dispatchers.Delete(id)
+	}
 
 	stat.changefeedStat.removeDispatcher(id)
 	c.metricsCollector.metricDispatcherCount.Dec()
@@ -1019,9 +1091,10 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		)
 		c.changefeedMap.Delete(changefeedID)
 		metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String())
+		metrics.EventServiceScanWindowBaseTsGaugeVec.DeleteLabelValues(changefeedID.String())
+		metrics.EventServiceScanWindowIntervalGaugeVec.DeleteLabelValues(changefeedID.String())
 	}
 
-	stat.isRemoved.Store(true)
 	c.eventStore.UnregisterDispatcher(changefeedID, id)
 
 	span := dispatcherInfo.GetTableSpan()
@@ -1030,7 +1103,6 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		Name: changefeedID.Keyspace(),
 	}
 	c.schemaStore.UnregisterTable(keyspaceMeta, span.TableID)
-	c.dispatchers.Delete(id)
 
 	log.Info("remove dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID), zap.Stringer("changefeedID", changefeedID),
@@ -1089,7 +1161,8 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			return err
 		}
 	}
-	status := c.getOrSetChangefeedStatus(changefeedID)
+	status := c.getOrSetChangefeedStatus(changefeedID, dispatcherInfo.GetSyncPointInterval())
+
 	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.taskChan)), uint64(len(c.messageCh)), tableInfo, status)
 	newStat.copyStatistics(oldStat)
 
@@ -1128,18 +1201,22 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	return nil
 }
 
-func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
+func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID, syncPointInterval time.Duration) *changefeedStatus {
 	stat, ok := c.changefeedMap.Load(changefeedID)
 	if !ok {
-		stat = newChangefeedStatus(changefeedID)
+		stat = newChangefeedStatus(changefeedID, syncPointInterval)
 		log.Info("new changefeed status", zap.Stringer("changefeedID", changefeedID))
 		c.changefeedMap.Store(changefeedID, stat)
+		metrics.EventServiceScanWindowBaseTsGaugeVec.WithLabelValues(changefeedID.String()).Set(0)
+		metrics.EventServiceScanWindowIntervalGaugeVec.WithLabelValues(changefeedID.String()).Set(defaultScanInterval.Seconds())
 	}
 	return stat.(*changefeedStatus)
 }
 
 func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWithServerID) {
 	responseMap := make(map[string]*event.DispatcherHeartbeatResponse)
+	changedChangefeeds := make(map[*changefeedStatus]struct{})
+	now := time.Now().Unix()
 	for _, dp := range heartbeat.heartbeat.DispatcherProgresses {
 		dispatcherPtr := c.getDispatcher(dp.DispatcherID)
 		// Can't find the dispatcher, it means the dispatcher is removed.
@@ -1158,7 +1235,8 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 			dispatcher.checkpointTs.Store(dp.CheckpointTs)
 		}
 		// Update the last received heartbeat time to the current time.
-		dispatcher.lastReceivedHeartbeatTime.Store(time.Now().Unix())
+		dispatcher.lastReceivedHeartbeatTime.Store(now)
+		changedChangefeeds[dispatcher.changefeedStat] = struct{}{}
 	}
 	c.sendDispatcherResponse(responseMap)
 }
@@ -1170,21 +1248,33 @@ func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionC
 	}
 
 	holder := make(map[common.GID]uint64, len(availables))
+	usage := make(map[common.GID]float64, len(availables))
+	memoryRelease := make(map[common.GID]uint32, len(availables))
 	dispatcherAvailable := make(map[common.DispatcherID]uint64, len(availables))
 	for _, item := range availables {
 		holder[item.Gid] = item.Available
+		if m.HasUsageRatio() {
+			usage[item.Gid] = item.UsageRatio
+		}
+		memoryRelease[item.Gid] = item.MemoryReleaseCount
 		for dispatcherID, available := range item.DispatcherAvailable {
 			dispatcherAvailable[dispatcherID] = available
 		}
 	}
 
+	now := time.Now()
 	c.changefeedMap.Range(func(k, v interface{}) bool {
 		changefeedID := k.(common.ChangeFeedID)
 		changefeed := v.(*changefeedStatus)
-		available, ok := holder[changefeedID.ID()]
+		availableInMsg, ok := holder[changefeedID.ID()]
 		if ok {
-			changefeed.availableMemoryQuota.Store(from, atomic.NewUint64(available))
-			metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(available))
+			changefeed.availableMemoryQuota.Store(from, atomic.NewUint64(availableInMsg))
+			metrics.EventServiceAvailableMemoryQuotaGaugeVec.WithLabelValues(changefeedID.String()).Set(float64(availableInMsg))
+		}
+		if m.HasUsageRatio() {
+			if ratio, okUsage := usage[changefeedID.ID()]; okUsage && ok {
+				changefeed.updateMemoryUsage(now, ratio, memoryRelease[changefeedID.ID()])
+			}
 		}
 		return true
 	})

@@ -30,9 +30,9 @@ function run() {
 	cdc_cli_changefeed create --sink-uri="$SINK_URI" --server="127.0.0.1:8300" --config=$CUR/conf/cf.toml
 
 	case $SINK_TYPE in
-	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" ;;
-	storage) run_storage_consumer $WORK_DIR $SINK_URI "" "" ;;
-	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI ;;
+	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" "$CUR/conf/cf.toml" ;;
+	storage) run_storage_consumer $WORK_DIR $SINK_URI "$CUR/conf/cf.toml" "" ;;
+	pulsar) run_pulsar_consumer --upstream-uri $SINK_URI --config "$CUR/conf/cf.toml" ;;
 	esac
 
 	run_sql_file $CUR/data/test.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
@@ -48,7 +48,7 @@ function run() {
 	check_table_exists "event_filter.t_name2" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_table_exists "event_filter.t_name3" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_table_exists "event_filter.t_virtual" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-	sleep 10
+	sleep 20
 
 	# check those rows that are not filtered are synced to downstream
 	run_sql "select count(1) from event_filter.t1;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}

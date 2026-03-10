@@ -228,7 +228,7 @@ func (t *TableDefinition) ToDDLEvent() (*commonEvent.DDLEvent, error) {
 		Query:         t.Query,
 		SchemaName:    t.Schema,
 		TableName:     t.Table,
-		BlockedTables: &commonEvent.InfluencedTables{InfluenceType: commonEvent.InfluenceTypeAll}, // FIXME: correct BlockedTables
+		BlockedTables: &commonEvent.InfluencedTables{InfluenceType: commonEvent.InfluenceTypeAll},
 	}, nil
 }
 

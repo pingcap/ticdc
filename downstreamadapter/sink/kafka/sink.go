@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -143,6 +144,10 @@ func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.eventChan.Push(event)
 }
 
+func (s *sink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
+	return nil
+}
+
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	var err error
 	switch v := event.(type) {
@@ -218,20 +223,9 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 
 			partitionGenerator := s.comp.eventRouter.GetPartitionGenerator(schema, table)
 			selector := s.comp.columnSelector.Get(schema, table)
-			toRowCallback := func(postTxnFlushed []func(), totalCount uint64) func() {
-				var calledCount atomic.Uint64
-				// The callback of the last row will trigger the callback of the txn.
-				return func() {
-					if calledCount.Inc() == totalCount {
-						for _, callback := range postTxnFlushed {
-							callback()
-						}
-					}
-				}
-			}
-
-			rowsCount := uint64(event.Len())
-			rowCallback := toRowCallback(event.PostTxnFlushed, rowsCount)
+			rowsCount := event.Len()
+			events := make([]*commonEvent.MQRowEvent, 0, rowsCount)
+			rowCallback := helper.NewTxnPostFlushRowCallback(event, uint64(rowsCount))
 
 			for {
 				row, ok := event.GetNextRow()
@@ -245,7 +239,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 					return errors.Trace(err)
 				}
 
-				mqEvent := &commonEvent.MQRowEvent{
+				events = append(events, &commonEvent.MQRowEvent{
 					Key: commonEvent.TopicPartitionKey{
 						Topic:          topic,
 						Partition:      index,
@@ -262,9 +256,9 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 						ColumnSelector:  selector,
 						Checksum:        row.Checksum,
 					},
-				}
-				s.rowChan.Push(mqEvent)
+				})
 			}
+			s.rowChan.Push(events...)
 		}
 	}
 }
@@ -340,6 +334,7 @@ func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent) ([]*
 				zap.String("changefeed", s.changefeedID.Name()))
 			return nil, nil
 		}
+		buffer = buffer[:0]
 		return msgs, nil
 	}
 }
@@ -385,7 +380,7 @@ func (s *sink) sendMessages(ctx context.Context) error {
 				start := time.Now()
 				if err = s.statistics.RecordBatchExecution(func() (int, int64, error) {
 					message.SetPartitionKey(future.Key.PartitionKey)
-					log.Debug("send message to kafka", zap.String("messageKey", string(message.Key)), zap.String("messageValue", string(message.Value)))
+					log.Debug("send message to kafka", zap.String("messageKey", util.RedactBytes(message.Key)), zap.String("messageValue", util.RedactBytes(message.Value)))
 					if err = s.dmlProducer.AsyncSend(
 						ctx,
 						future.Key.Topic,
@@ -429,13 +424,14 @@ func (s *sink) sendDDLEvent(event *commonEvent.DDLEvent) error {
 		if err != nil {
 			return err
 		}
+		ddlType := e.GetDDLType().String()
 		if s.partitionRule == helper.PartitionAll {
-			err = s.statistics.RecordDDLExecution(func() error {
-				return s.ddlProducer.SendMessages(topic, partitionNum, message)
+			err = s.statistics.RecordDDLExecution(func() (string, error) {
+				return ddlType, s.ddlProducer.SendMessages(topic, partitionNum, message)
 			})
 		} else {
-			err = s.statistics.RecordDDLExecution(func() error {
-				return s.ddlProducer.SendMessage(topic, 0, message)
+			err = s.statistics.RecordDDLExecution(func() (string, error) {
+				return ddlType, s.ddlProducer.SendMessage(topic, 0, message)
 			})
 		}
 		if err != nil {
@@ -544,7 +540,7 @@ func (s *sink) getAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
 			zap.Uint64("ts", ts))
 		return nil
 	}
-	return s.tableSchemaStore.GetAllTableNames(ts)
+	return s.tableSchemaStore.GetAllTableNames(ts, true)
 }
 
 func (s *sink) Close(_ bool) {

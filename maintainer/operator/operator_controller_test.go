@@ -174,3 +174,31 @@ func TestController_AddMergeOperatorFailureCleansOccupyOperators(t *testing.T) {
 	require.NotNil(t, oc.GetOperator(toMergedReplicaSets[1].ID))
 	require.Equal(t, 1, oc.OperatorSize())
 }
+
+func TestController_RemoveReplicaSet_ReplacesRemoveOperatorOnTaskRemoved(t *testing.T) {
+	// Scenario: the barrier can enqueue the same remove task multiple times during failover/bootstrap.
+	// Steps:
+	// 1) Add a remove operator with a post-finish hook (simulates move/split remove phase).
+	// 2) Replace it with another remove operator via removeReplicaSet (task is removed / re-enqueued).
+	// Expect: replacement should not panic, and the canceled operator must not run its post-finish hook.
+	messageCenter, _, _ := messaging.NewMessageCenterForTest(t)
+	appcontext.SetService(appcontext.MessageCenter, messageCenter)
+
+	spanController, changefeedID, replicaSet, _, _ := setupTestEnvironment(t)
+	spanController.AddReplicatingSpan(replicaSet)
+
+	var postFinishCount syncatomic.Int32
+	oc := NewOperatorController(changefeedID, spanController, 1, common.DefaultMode)
+
+	require.True(t, oc.AddOperator(NewRemoveDispatcherOperator(
+		spanController,
+		replicaSet,
+		heartbeatpb.OperatorType_O_Move,
+		func() { postFinishCount.Add(1) },
+	)))
+
+	oc.removeReplicaSet(newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove))
+
+	require.Equal(t, int32(0), postFinishCount.Load())
+	require.NotNil(t, oc.GetOperator(replicaSet.ID))
+}

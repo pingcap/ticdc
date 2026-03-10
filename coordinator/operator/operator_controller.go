@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -47,23 +48,22 @@ type Controller struct {
 	nodeManger    *watcher.NodeManager
 }
 
-func NewOperatorController(mc messaging.MessageCenter,
+func NewOperatorController(
 	selfNode *node.Info,
 	db *changefeed.ChangefeedDB,
 	backend changefeed.Backend,
-	nodeManger *watcher.NodeManager,
 	batchSize int,
 ) *Controller {
 	oc := &Controller{
 		role:          "coordinator",
 		operators:     make(map[common.ChangeFeedID]*operator.OperatorWithTime[common.ChangeFeedID, *heartbeatpb.MaintainerStatus]),
 		runningQueue:  make(operator.OperatorQueue[common.ChangeFeedID, *heartbeatpb.MaintainerStatus], 0),
-		messageCenter: mc,
+		messageCenter: appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		batchSize:     batchSize,
 		changefeedDB:  db,
 		selfNode:      selfNode,
 		backend:       backend,
-		nodeManger:    nodeManger,
+		nodeManger:    appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 	}
 	return oc
 }
