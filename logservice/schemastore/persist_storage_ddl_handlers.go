@@ -709,10 +709,12 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 	//   => event.ExtraSchemaName becomes `test2`, which is wrong for the old name
 	// SchemaStore can still use ExtraSchemaID to update internal state,
 	// but the emitted event.Query must carry the correct old names.
-	// Rebuild them from independent sources instead:
+	// Rebuild them with the following precedence:
 	// 1. InvolvingSchemaInfo provides a fallback old schema/table pair, but names may be normalized.
-	// 2. RenameTableArgs.OldSchemaName preserves the old schema name when the query omits it.
-	// 3. The original query has the highest priority because it keeps user-provided identifier case.
+	// 2. RenameTableArgs.OldSchemaName overrides the fallback when available.
+	// 3. The original query (if it specifies old schema) has the highest priority for identifier case.
+	// 4. If the query omits old schema and ExtraSchemaID differs from SchemaID, use ExtraSchemaID to
+	//    recover the old schema name from the schema store.
 	oldSchemaName := ""
 	oldTableName := ""
 	rawArgsCount := 0
@@ -729,14 +731,12 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 		zap.ByteString("rawArgs", args.job.RawArgs),
 		zap.Int("rawArgsCount", rawArgsCount),
 		zap.Any("involvingSchemaInfo", args.job.InvolvingSchemaInfo))
-	hasInvolvingSchemaInfo := false
 	if len(args.job.InvolvingSchemaInfo) > 0 {
 		oldSchemaName = args.job.InvolvingSchemaInfo[0].Database
 		oldTableName = args.job.InvolvingSchemaInfo[0].Table
-		hasInvolvingSchemaInfo = oldSchemaName != "" || oldTableName != ""
 	}
 	// RenameTableArgs keeps the old schema name even when the query omits it.
-	if renameArgs, err := getRenameTableArgsCompatible(args.job); err == nil {
+	if renameArgs, err := model.GetRenameTableArgs(args.job); err == nil {
 		log.Info("rename table args decoded",
 			zap.Int64("jobID", event.ID),
 			zap.Int64("oldSchemaID", renameArgs.OldSchemaID),
@@ -746,20 +746,13 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 		if renameArgs.OldSchemaName.O != "" {
 			oldSchemaName = renameArgs.OldSchemaName.O
 		}
-		// TiDB v7.5 may truncate rename-table args to only oldSchemaID in RawArgs, which can be
-		// overwritten to the new schema ID. Only fall back to databaseMap when we still have
-		// a full args list and no better source.
-		if renameArgs.OldSchemaName.O == "" && renameArgs.OldSchemaID != 0 && rawArgsCount >= 2 && !hasInvolvingSchemaInfo {
-			if dbInfo, ok := args.databaseMap[renameArgs.OldSchemaID]; ok && dbInfo.Name != "" {
-				oldSchemaName = dbInfo.Name
-			}
-		}
 	} else {
 		log.Warn("rename table args decode failed",
 			zap.Int64("jobID", event.ID),
 			zap.Int64("jobVersion", int64(args.job.Version)),
 			zap.Error(err))
 	}
+	queryProvidedOldSchema := false
 	if queryInfo, parsed := parseRenameTableQueryInfo(args.job.Query); parsed {
 		log.Info("rename table query parsed",
 			zap.Int64("jobID", event.ID),
@@ -772,6 +765,12 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 		}
 		if queryInfo.oldSchemaName != "" {
 			oldSchemaName = queryInfo.oldSchemaName
+			queryProvidedOldSchema = true
+		}
+	}
+	if !queryProvidedOldSchema && event.ExtraSchemaID != 0 && event.ExtraSchemaID != event.SchemaID {
+		if extraName := getSchemaName(args.databaseMap, event.ExtraSchemaID); extraName != "" {
+			oldSchemaName = extraName
 		}
 	}
 	if oldSchemaName != "" && oldTableName != "" {
@@ -800,24 +799,6 @@ func buildPersistedDDLEventForNormalPartitionDDL(args buildPersistedDDLEventFunc
 		event.PrevPartitions = append(event.PrevPartitions, id)
 	}
 	return event
-}
-
-func getRenameTableArgsCompatible(job *model.Job) (*model.RenameTableArgs, error) {
-	switch job.Version {
-	case model.JobVersion1, model.JobVersion2:
-		return model.GetRenameTableArgs(job)
-	case 0:
-		// TiDB v7.5.0 historical jobs still encode rename-table args in v1 layout,
-		// but the version field is left as zero.
-		compatJob := &model.Job{
-			Version:  model.JobVersion1,
-			SchemaID: job.SchemaID,
-			RawArgs:  job.RawArgs,
-		}
-		return model.GetRenameTableArgs(compatJob)
-	default:
-		return nil, errors.New("unsupported rename table job version")
-	}
 }
 
 // buildPersistedDDLEventForExchangePartition build a exchange partition ddl event
