@@ -21,6 +21,11 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
+<<<<<<< HEAD
+=======
+	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
+>>>>>>> f1451ee9a (dispatchermanager: fix redo readiness race (#4403))
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -279,4 +284,22 @@ func TestPreCheckForSchedulerHandler_CreateSkippedWhenDispatcherExists(t *testin
 
 	_, ok := preCheckForSchedulerHandler(createReq, dm)
 	require.False(t, ok)
+}
+
+func TestDispatcherManagerIsRedoReadyRequiresPublication(t *testing.T) {
+	t.Parallel()
+
+	dm := &DispatcherManager{
+		redoEnabled:               true,
+		redoDispatcherMap:         newDispatcherMap[*dispatcher.RedoDispatcher](),
+		redoSink:                  &redo.Sink{},
+		redoSchemaIDToDispatchers: dispatcher.NewSchemaIDToDispatchers(),
+	}
+
+	require.True(t, dm.IsRedoEnabled())
+	require.False(t, dm.IsRedoReady())
+
+	dm.redoReady.Store(true)
+
+	require.True(t, dm.IsRedoReady())
 }
