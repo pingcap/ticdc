@@ -301,7 +301,7 @@ func (t *DDLEvent) Unmarshal(data []byte) error {
 }
 
 func (t DDLEvent) encodeV1() ([]byte, error) {
-	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize | multipleTableInfos | multipletableInfosDataSize
+	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize | multipleTableInfos | multipletableInfosDataSize | indexIDsData | indexIDsDataSize
 	// Note: version is now handled in the header by Marshal(), not here
 	data, err := json.Marshal(t)
 	if err != nil {
@@ -356,7 +356,7 @@ func (t DDLEvent) encodeV1() ([]byte, error) {
 }
 
 func (t *DDLEvent) decodeV1(data []byte) error {
-	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize | multipleTableInfos | multipleTableInfosDataSize
+	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize | multipleTableInfos | multipleTableInfosDataSize | indexIDsDataSize | indexIDsData
 	t.eventSize = int64(len(data))
 
 	end := len(data)
