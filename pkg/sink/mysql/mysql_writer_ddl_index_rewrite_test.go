@@ -14,6 +14,7 @@
 package mysql
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -79,6 +80,74 @@ func parseAddIndexConstraintNames(t *testing.T, query string) []string {
 		names = append(names, spec.Constraint.Name)
 	}
 	return names
+}
+
+func expectedAddIndexConstraintNames(t *testing.T, query string, tableInfo *common.TableInfo, indexIDs []int64) []string {
+	p := parser.New()
+	stmt, err := p.ParseOneStmt(query, "", "")
+	require.NoError(t, err)
+
+	alterStmt, ok := stmt.(*ast.AlterTableStmt)
+	require.True(t, ok)
+
+	names := make([]string, 0)
+	indexPos := 0
+	for _, spec := range alterStmt.Specs {
+		if spec == nil || spec.Tp != ast.AlterTableAddConstraint || spec.Constraint == nil {
+			continue
+		}
+		if !isIndexConstraint(spec.Constraint) {
+			continue
+		}
+		if spec.Constraint.Name != "" {
+			names = append(names, spec.Constraint.Name)
+		} else {
+			require.Less(t, indexPos, len(indexIDs))
+			names = append(names, getIndexNameByID(t, tableInfo, indexIDs[indexPos]))
+		}
+		indexPos++
+	}
+	require.Equal(t, indexPos, len(indexIDs))
+	return names
+}
+
+func assertRestoreAnonymousIndexToNamedIndex(
+	t *testing.T,
+	helper *commonEvent.EventTestHelper,
+	ddlSQL string,
+	anonymousQuery string,
+	expectedChanged bool,
+	expectedDDLType timodel.ActionType,
+) *common.TableInfo {
+	job := helper.DDL2Job(ddlSQL)
+	require.Equal(t, expectedDDLType, job.Type)
+
+	tableInfo := helper.GetTableInfo(job)
+	require.NotNil(t, tableInfo)
+
+	indexIDs := getIndexIDsFromJob(t, job)
+	restoredQuery, changed, err := restoreAnonymousIndexToNamedIndex(anonymousQuery, tableInfo, indexIDs)
+	require.NoError(t, err)
+	require.Equal(t, expectedChanged, changed)
+	if !expectedChanged {
+		require.Equal(t, anonymousQuery, restoredQuery)
+		return tableInfo
+	}
+
+	require.Equal(t, expectedAddIndexConstraintNames(t, anonymousQuery, tableInfo, indexIDs), parseAddIndexConstraintNames(t, restoredQuery))
+	return tableInfo
+}
+
+func getSecondaryIndexNames(tableInfo *common.TableInfo) []string {
+	indexNames := make([]string, 0)
+	for _, index := range tableInfo.GetIndices() {
+		if index == nil || index.Primary {
+			continue
+		}
+		indexNames = append(indexNames, index.Name.O)
+	}
+	slices.Sort(indexNames)
+	return indexNames
 }
 
 func TestExecDDL_RestoreAnonymousIndexToNamedIndex(t *testing.T) {
@@ -237,4 +306,185 @@ func TestExecDDL_RestoreAnonymousIndexToNamedIndexForMultiSchemaChange(t *testin
 	err = writer.execDDL(ddlEvent)
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestRestoreAnonymousIndexToNamedIndexDDLWaitCases(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	helper.DDL2Event("create table t_anon_idx (id int primary key, a int, b int, c int)")
+
+	testCases := []struct {
+		name            string
+		ddlSQL          string
+		anonymousQuery  string
+		expectedChanged bool
+		expectedDDLType timodel.ActionType
+	}{
+		{
+			name:            "single anonymous index",
+			ddlSQL:          "alter table t_anon_idx add index (a)",
+			anonymousQuery:  "ALTER TABLE `t_anon_idx` ADD INDEX (`a`)",
+			expectedChanged: true,
+			expectedDDLType: timodel.ActionAddIndex,
+		},
+		{
+			name:            "named and anonymous indexes",
+			ddlSQL:          "alter table t_anon_idx add index idx_b(b), add index (a)",
+			anonymousQuery:  "ALTER TABLE `t_anon_idx` ADD INDEX `idx_b`(`b`), ADD INDEX (`a`)",
+			expectedChanged: true,
+			expectedDDLType: timodel.ActionMultiSchemaChange,
+		},
+		{
+			name:            "anonymous index and anonymous unique",
+			ddlSQL:          "alter table t_anon_idx add index (a), add unique (b, c)",
+			anonymousQuery:  "ALTER TABLE `t_anon_idx` ADD INDEX (`a`), ADD UNIQUE (`b`, `c`)",
+			expectedChanged: true,
+			expectedDDLType: timodel.ActionMultiSchemaChange,
+		},
+		{
+			name:            "anonymous index before add column",
+			ddlSQL:          "alter table t_anon_idx add index (a), add column d int",
+			anonymousQuery:  "ALTER TABLE `t_anon_idx` ADD INDEX (`a`), ADD COLUMN `d` INT",
+			expectedChanged: true,
+			expectedDDLType: timodel.ActionMultiSchemaChange,
+		},
+		{
+			name:            "anonymous index after add column",
+			ddlSQL:          "alter table t_anon_idx add column e int, add index (a)",
+			anonymousQuery:  "ALTER TABLE `t_anon_idx` ADD COLUMN `e` INT, ADD INDEX (`a`)",
+			expectedChanged: true,
+			expectedDDLType: timodel.ActionMultiSchemaChange,
+		},
+		{
+			name:            "named index keeps original name",
+			ddlSQL:          "alter table t_anon_idx add index a_7(a)",
+			anonymousQuery:  "ALTER TABLE `t_anon_idx` ADD INDEX `a_7`(`a`)",
+			expectedChanged: false,
+			expectedDDLType: timodel.ActionAddIndex,
+		},
+		{
+			name:            "anonymous index after explicit suffix",
+			ddlSQL:          "alter table t_anon_idx add index (a)",
+			anonymousQuery:  "ALTER TABLE `t_anon_idx` ADD INDEX (`a`)",
+			expectedChanged: true,
+			expectedDDLType: timodel.ActionAddIndex,
+		},
+		{
+			name:            "repeated anonymous index second time",
+			ddlSQL:          "alter table t_anon_idx add index (a)",
+			anonymousQuery:  "ALTER TABLE `t_anon_idx` ADD INDEX (`a`)",
+			expectedChanged: true,
+			expectedDDLType: timodel.ActionAddIndex,
+		},
+		{
+			name:            "repeated anonymous index third time",
+			ddlSQL:          "alter table t_anon_idx add index (a)",
+			anonymousQuery:  "ALTER TABLE `t_anon_idx` ADD INDEX (`a`)",
+			expectedChanged: true,
+			expectedDDLType: timodel.ActionAddIndex,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			assertRestoreAnonymousIndexToNamedIndex(
+				t,
+				helper,
+				tc.ddlSQL,
+				tc.anonymousQuery,
+				tc.expectedChanged,
+				tc.expectedDDLType,
+			)
+		})
+	}
+}
+
+func TestCreateTableLikeKeepsAnonymousIndexNamesAfterDDLWaitCases(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	helper.DDL2Event("create table t_anon_idx (id int primary key, a int, b int, c int)")
+	var sourceTableInfo *common.TableInfo
+
+	assertRestoreAnonymousIndexToNamedIndex(
+		t,
+		helper,
+		"alter table t_anon_idx add index (a)",
+		"ALTER TABLE `t_anon_idx` ADD INDEX (`a`)",
+		true,
+		timodel.ActionAddIndex,
+	)
+	assertRestoreAnonymousIndexToNamedIndex(
+		t,
+		helper,
+		"alter table t_anon_idx add index idx_b(b), add index (a)",
+		"ALTER TABLE `t_anon_idx` ADD INDEX `idx_b`(`b`), ADD INDEX (`a`)",
+		true,
+		timodel.ActionMultiSchemaChange,
+	)
+	assertRestoreAnonymousIndexToNamedIndex(
+		t,
+		helper,
+		"alter table t_anon_idx add index (a), add unique (b, c)",
+		"ALTER TABLE `t_anon_idx` ADD INDEX (`a`), ADD UNIQUE (`b`, `c`)",
+		true,
+		timodel.ActionMultiSchemaChange,
+	)
+	assertRestoreAnonymousIndexToNamedIndex(
+		t,
+		helper,
+		"alter table t_anon_idx add index (a), add column d int",
+		"ALTER TABLE `t_anon_idx` ADD INDEX (`a`), ADD COLUMN `d` INT",
+		true,
+		timodel.ActionMultiSchemaChange,
+	)
+	sourceTableInfo = assertRestoreAnonymousIndexToNamedIndex(
+		t,
+		helper,
+		"alter table t_anon_idx add column e int, add index (a)",
+		"ALTER TABLE `t_anon_idx` ADD COLUMN `e` INT, ADD INDEX (`a`)",
+		true,
+		timodel.ActionMultiSchemaChange,
+	)
+	assertRestoreAnonymousIndexToNamedIndex(
+		t,
+		helper,
+		"alter table t_anon_idx add index a_7(a)",
+		"ALTER TABLE `t_anon_idx` ADD INDEX `a_7`(`a`)",
+		false,
+		timodel.ActionAddIndex,
+	)
+	sourceTableInfo = assertRestoreAnonymousIndexToNamedIndex(
+		t,
+		helper,
+		"alter table t_anon_idx add index (a)",
+		"ALTER TABLE `t_anon_idx` ADD INDEX (`a`)",
+		true,
+		timodel.ActionAddIndex,
+	)
+	sourceTableInfo = assertRestoreAnonymousIndexToNamedIndex(
+		t,
+		helper,
+		"alter table t_anon_idx add index (a)",
+		"ALTER TABLE `t_anon_idx` ADD INDEX (`a`)",
+		true,
+		timodel.ActionAddIndex,
+	)
+	sourceTableInfo = assertRestoreAnonymousIndexToNamedIndex(
+		t,
+		helper,
+		"alter table t_anon_idx add index (a)",
+		"ALTER TABLE `t_anon_idx` ADD INDEX (`a`)",
+		true,
+		timodel.ActionAddIndex,
+	)
+
+	likeJob := helper.DDL2Job("create table t_anon_idx_like like t_anon_idx")
+	likeTableInfo := helper.GetTableInfo(likeJob)
+	require.NotNil(t, sourceTableInfo)
+	require.NotNil(t, likeTableInfo)
+	require.Equal(t, getSecondaryIndexNames(sourceTableInfo), getSecondaryIndexNames(likeTableInfo))
 }

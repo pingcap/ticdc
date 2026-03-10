@@ -97,6 +97,10 @@ function run() {
 	run_sql "alter table test.t_anon_idx add index (a), add column d int;"
 	run_sql "alter table test.t_anon_idx add column e int, add index (a);"
 	run_sql "alter table test.t_anon_idx drop column d, drop column e;"
+	run_sql "alter table test.t_anon_idx add index a_7(a);"
+	run_sql "alter table test.t_anon_idx add index (a);"
+	run_sql "alter table test.t_anon_idx add index (a);"
+	run_sql "alter table test.t_anon_idx add index (a);"
 	run_sql "create table test.t_anon_idx_like like test.t_anon_idx;"
 	run_sql "insert into test.t_anon_idx values (4, 13, 23, 33);"
 	check_table_exists test.t_anon_idx ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
