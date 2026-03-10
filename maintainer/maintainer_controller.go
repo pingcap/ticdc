@@ -71,9 +71,14 @@ type Controller struct {
 	keyspaceMeta common.KeyspaceMeta
 	enableRedo   bool
 
+	// selfNodeID tracks the hosting node of this maintainer instance.
+	// Drain scheduling uses it to defer dispatcher moves until the
+	// maintainer itself is no longer colocated with the drain target.
 	selfNodeIDMu sync.RWMutex
 	selfNodeID   node.ID
 
+	// dispatcherDrainTarget stores the latest drain target observed by this
+	// changefeed-level controller. The epoch makes stale drain updates a no-op.
 	dispatcherDrainTarget struct {
 		sync.RWMutex
 		target node.ID
@@ -140,6 +145,8 @@ func NewController(changefeedID common.ChangeFeedID,
 		keyspaceMeta:           keyspaceMeta,
 		enableRedo:             enableRedo,
 	}
+	// Scheduler instances consume changefeed-local drain state through getters
+	// so they can observe updates without owning the mutable state themselves.
 	controller.schedulerController = NewScheduleController(
 		changefeedID,
 		batchSize,
@@ -280,18 +287,22 @@ func (c *Controller) GetMinRedoCheckpointTs(minCheckpointTs uint64) uint64 {
 	return min(minCheckpointTsForOperator, minCheckpointTsForSpan)
 }
 
+// SetSelfNodeID records the node currently hosting this maintainer.
 func (c *Controller) SetSelfNodeID(selfNodeID node.ID) {
 	c.selfNodeIDMu.Lock()
 	defer c.selfNodeIDMu.Unlock()
 	c.selfNodeID = selfNodeID
 }
 
+// getSelfNodeID returns a consistent snapshot of the maintainer host node.
 func (c *Controller) getSelfNodeID() node.ID {
 	c.selfNodeIDMu.RLock()
 	defer c.selfNodeIDMu.RUnlock()
 	return c.selfNodeID
 }
 
+// SetDispatcherDrainTarget applies the newest drain target visible to this
+// changefeed. Older epochs are ignored so scheduler state does not regress.
 func (c *Controller) SetDispatcherDrainTarget(target node.ID, epoch uint64) {
 	c.dispatcherDrainTarget.Lock()
 	defer c.dispatcherDrainTarget.Unlock()
@@ -302,6 +313,8 @@ func (c *Controller) SetDispatcherDrainTarget(target node.ID, epoch uint64) {
 	c.dispatcherDrainTarget.epoch = epoch
 }
 
+// getDispatcherDrainTarget returns the current drain target and epoch snapshot
+// used by schedulers and status reporting.
 func (c *Controller) getDispatcherDrainTarget() (node.ID, uint64) {
 	c.dispatcherDrainTarget.RLock()
 	defer c.dispatcherDrainTarget.RUnlock()

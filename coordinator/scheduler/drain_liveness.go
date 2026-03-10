@@ -13,15 +13,11 @@
 package scheduler
 
 import (
+	"github.com/pingcap/ticdc/coordinator/drain"
 	"github.com/pingcap/ticdc/pkg/node"
 )
 
-type livenessReader interface {
-	IsSchedulableDest(node.ID) bool
-	GetDrainingOrStoppingNodes() []node.ID
-}
-
-func filterSchedulableNodeIDs(nodeIDs []node.ID, liveness livenessReader) []node.ID {
+func filterSchedulableNodeIDs(nodeIDs []node.ID, liveness *drain.Controller) []node.ID {
 	if liveness == nil {
 		return nodeIDs
 	}
@@ -34,13 +30,13 @@ func filterSchedulableNodeIDs(nodeIDs []node.ID, liveness livenessReader) []node
 	return filtered
 }
 
-func hasDrainingOrStoppingNode(liveness livenessReader) bool {
+func hasDrainingOrStoppingNode(liveness *drain.Controller) bool {
 	return liveness != nil && len(liveness.GetDrainingOrStoppingNodes()) > 0
 }
 
 func filterSchedulableAliveNodes(
 	nodes map[node.ID]*node.Info,
-	liveness livenessReader,
+	liveness *drain.Controller,
 ) map[node.ID]*node.Info {
 	if liveness == nil {
 		return nodes

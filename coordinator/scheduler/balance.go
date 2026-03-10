@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/coordinator/changefeed"
+	"github.com/pingcap/ticdc/coordinator/drain"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -33,7 +34,7 @@ type balanceScheduler struct {
 	operatorController *operator.Controller
 	changefeedDB       *changefeed.ChangefeedDB
 	nodeManager        *watcher.NodeManager
-	liveness           livenessReader
+	liveness           *drain.Controller
 
 	random               *rand.Rand
 	lastRebalanceTime    time.Time
@@ -56,7 +57,7 @@ func NewBalanceScheduler(
 	oc *operator.Controller,
 	changefeedDB *changefeed.ChangefeedDB,
 	balanceInterval time.Duration,
-	liveness livenessReader,
+	liveness *drain.Controller,
 ) *balanceScheduler {
 	return &balanceScheduler{
 		id:                   id,

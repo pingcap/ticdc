@@ -19,6 +19,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
+	"github.com/pingcap/ticdc/coordinator/drain"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -35,7 +36,7 @@ type drainScheduler struct {
 	operatorController *operator.Controller
 	changefeedDB       *changefeed.ChangefeedDB
 	nodeManager        *watcher.NodeManager
-	liveness           livenessReader
+	liveness           *drain.Controller
 
 	// rrCursor rotates the starting draining node to avoid starving nodes later in the list.
 	rrCursor int
@@ -47,7 +48,7 @@ func NewDrainScheduler(
 	batchSize int,
 	oc *operator.Controller,
 	changefeedDB *changefeed.ChangefeedDB,
-	liveness livenessReader,
+	liveness *drain.Controller,
 ) *drainScheduler {
 	return &drainScheduler{
 		id:                 id,

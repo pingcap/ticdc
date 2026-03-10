@@ -31,6 +31,8 @@ import (
 	"go.uber.org/zap"
 )
 
+// nodeHeartbeatInterval bounds background node heartbeat frequency.
+// Forced heartbeats bypass this throttle to acknowledge state changes immediately.
 const nodeHeartbeatInterval = 5 * time.Second
 
 // Manager is the manager of all changefeed maintainer in a ticdc server, each ticdc server will
@@ -42,9 +44,16 @@ type Manager struct {
 	mc   messaging.MessageCenter
 	conf *config.SchedulerConfig
 
-	liveness  *api.Liveness
+	// liveness points to the server-wide node liveness state shared with other
+	// modules such as the elector and coordinator command handlers.
+	liveness *api.Liveness
+	// nodeEpoch identifies the current process lifetime. Coordinator commands
+	// must match it so stale requests from a previous process instance are ignored.
 	nodeEpoch uint64
 
+	// dispatcherDrainTarget caches the latest coordinator-issued dispatcher drain
+	// target at manager scope so this node can acknowledge activation and clear
+	// even when it temporarily hosts no maintainers.
 	dispatcherDrainTarget struct {
 		sync.RWMutex
 		target node.ID
@@ -64,6 +73,8 @@ type Manager struct {
 
 	taskScheduler threadpool.ThreadPool
 
+	// lastNodeHeartbeatSentAt records the last successful periodic node heartbeat
+	// send so background heartbeats can be throttled.
 	lastNodeHeartbeatSentAt time.Time
 }
 
@@ -204,6 +215,9 @@ func (m *Manager) sendMessages(msg *heartbeatpb.MaintainerHeartbeat) {
 	}
 }
 
+// sendNodeHeartbeat reports node-scoped liveness and dispatcher drain target to
+// coordinator. It is the authoritative acknowledgement channel for node-level
+// drain state, including cases where no changefeed maintainer exists locally.
 func (m *Manager) sendNodeHeartbeat(force bool) {
 	if m.coordinatorVersion <= 0 || m.coordinatorID.IsEmpty() {
 		return
@@ -417,6 +431,9 @@ func (m *Manager) handleMessage(msg *messaging.TargetMessage) {
 	}
 }
 
+// onSetNodeLivenessRequest applies a coordinator-driven liveness transition if
+// the request targets the current process epoch. The transition is monotonic:
+// the node may move forward to a stricter state but never roll back locally.
 func (m *Manager) onSetNodeLivenessRequest(msg *messaging.TargetMessage) {
 	if m.coordinatorID != msg.From {
 		log.Warn("ignore set node liveness request from non coordinator",
@@ -452,6 +469,10 @@ func (m *Manager) onSetNodeLivenessRequest(msg *messaging.TargetMessage) {
 	m.sendSetNodeLivenessResponse(current)
 }
 
+// onSetDispatcherDrainTargetRequest updates the latest dispatcher drain target
+// and forwards it to all existing maintainers. A manager-level node heartbeat
+// is sent after each accepted update so coordinator can observe the ack even
+// when this node currently hosts no maintainers.
 func (m *Manager) onSetDispatcherDrainTargetRequest(msg *messaging.TargetMessage) {
 	if m.coordinatorID != msg.From {
 		log.Warn("ignore set dispatcher drain target request from non coordinator",
@@ -478,12 +499,17 @@ func (m *Manager) onSetDispatcherDrainTargetRequest(msg *messaging.TargetMessage
 	m.sendNodeHeartbeat(true)
 }
 
+// getDispatcherDrainTarget returns a consistent snapshot of the manager-level
+// dispatcher drain target and its epoch.
 func (m *Manager) getDispatcherDrainTarget() (node.ID, uint64) {
 	m.dispatcherDrainTarget.RLock()
 	defer m.dispatcherDrainTarget.RUnlock()
 	return m.dispatcherDrainTarget.target, m.dispatcherDrainTarget.epoch
 }
 
+// tryUpdateDispatcherDrainTarget applies only monotonic target updates.
+// A higher epoch always wins, while the same epoch may only perform the
+// one-way transition from a non-empty target to an empty target.
 func (m *Manager) tryUpdateDispatcherDrainTarget(target node.ID, epoch uint64) bool {
 	m.dispatcherDrainTarget.Lock()
 	defer m.dispatcherDrainTarget.Unlock()
@@ -509,6 +535,8 @@ func (m *Manager) tryUpdateDispatcherDrainTarget(target node.ID, epoch uint64) b
 	return true
 }
 
+// sendSetNodeLivenessResponse returns the liveness currently applied by this
+// process together with the local process epoch.
 func (m *Manager) sendSetNodeLivenessResponse(applied api.Liveness) {
 	resp := &heartbeatpb.SetNodeLivenessResponse{
 		Applied:   m.toNodeLivenessPB(applied),
@@ -523,6 +551,7 @@ func (m *Manager) sendSetNodeLivenessResponse(applied api.Liveness) {
 	}
 }
 
+// fromNodeLivenessPB converts the protocol enum into the server-local liveness enum.
 func (m *Manager) fromNodeLivenessPB(l heartbeatpb.NodeLiveness) api.Liveness {
 	switch l {
 	case heartbeatpb.NodeLiveness_ALIVE:
@@ -536,6 +565,7 @@ func (m *Manager) fromNodeLivenessPB(l heartbeatpb.NodeLiveness) api.Liveness {
 	}
 }
 
+// toNodeLivenessPB converts the server-local liveness enum into the protocol enum.
 func (m *Manager) toNodeLivenessPB(l api.Liveness) heartbeatpb.NodeLiveness {
 	switch l {
 	case api.LivenessCaptureAlive:
