@@ -8,6 +8,21 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
+function check_downstream_indexes_match_upstream() {
+	schema_name=$1
+	table_name=$2
+	index_names=$(mysql -uroot -h${UP_TIDB_HOST} -P${UP_TIDB_PORT} --default-character-set utf8mb4 -N \
+		-e "SELECT DISTINCT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA='${schema_name}' AND TABLE_NAME='${table_name}' ORDER BY INDEX_NAME;")
+
+	while IFS= read -r index_name; do
+		if [ -z "$index_name" ]; then
+			continue
+		fi
+		run_sql "SHOW INDEX FROM \`${schema_name}\`.\`${table_name}\` WHERE Key_name='${index_name}';" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+		check_contains "Key_name: ${index_name}"
+	done <<<"${index_names}"
+}
+
 # This test simulates DDL operations that take a long time.
 # TiCDC blocks DDL operations until its state is not running, except for adding indexes.
 # TiCDC also checks add index ddl state before execute a new DDL.
@@ -71,6 +86,22 @@ function run() {
 	cleanup_process $CDC_BINARY
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 	# make sure all tables are equal in upstream and downstream
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
+
+	# anonymous add index related ddl
+	run_sql "create table test.t_anon_idx (id int primary key, a int, b int, c int);"
+	run_sql "insert into test.t_anon_idx values (1, 10, 20, 30), (2, 11, 21, 31), (3, 12, 22, 32);"
+	run_sql "alter table test.t_anon_idx add index (a);"
+	run_sql "alter table test.t_anon_idx add index idx_b (b), add index (a);"
+	run_sql "alter table test.t_anon_idx add index (a), add unique (b, c);"
+	run_sql "create table test.t_anon_idx_like like test.t_anon_idx;"
+	run_sql "insert into test.t_anon_idx values (4, 13, 23, 33);"
+	check_table_exists test.t_anon_idx ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
+	check_table_exists test.t_anon_idx_like ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 300
+	check_downstream_indexes_match_upstream test t_anon_idx
+	check_downstream_indexes_match_upstream test t_anon_idx_like
+
+	# ensure both data and index schema are eventually consistent after anonymous index ddl
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml 300
 	cleanup_process $CDC_BINARY
 }

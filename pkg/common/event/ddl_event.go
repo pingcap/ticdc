@@ -92,7 +92,7 @@ type DDLEvent struct {
 	eventSize int64 `json:"-"`
 
 	// for simple protocol
-	IsBootstrap bool `msg:"-"`
+	IsBootstrap bool `json:"-"`
 	// NotSync is used to indicate whether the event should be synced to downstream.
 	// If it is true, sink should not sync this event to downstream.
 	// It is used for some special DDL events that do not need to be synced,
@@ -104,11 +104,11 @@ type DDLEvent struct {
 	// to ensure the new truncated table can be handled correctly.
 	// If the DDL involves multiple tables, this field is not effective.
 	// The multiple table DDL event will be handled by filtering querys and table infos.
-	NotSync bool `msg:"not_sync"`
+	NotSync bool `json:"not_sync"`
 
 	// IndexIDs store the index ids that are related to the ddl job, only used for add index.
 	// use these id to recover the index name for the anonymous add index
-	IndexIDs []int64 `msg:"index_ids"`
+	IndexIDs []int64 `json:"index_ids"`
 }
 
 func (d *DDLEvent) String() string {
@@ -343,6 +343,15 @@ func (t DDLEvent) encodeV1() ([]byte, error) {
 	binary.BigEndian.PutUint64(multipleTableInfosDataSize, uint64(len(t.MultipleTableInfos)))
 	data = append(data, multipleTableInfosDataSize...)
 
+	// append index ids for add index ddl, to recover the index name for the anonymous add index
+	for _, info := range t.IndexIDs {
+		indexIDData := make([]byte, 8)
+		binary.BigEndian.PutUint64(indexIDData, uint64(info))
+		data = append(data, indexIDData...)
+	}
+	indexIDsDataSize := make([]byte, 8)
+	binary.BigEndian.PutUint64(indexIDsDataSize, uint64(len(t.IndexIDs)))
+	data = append(data, indexIDsDataSize...)
 	return data, nil
 }
 
@@ -351,7 +360,17 @@ func (t *DDLEvent) decodeV1(data []byte) error {
 	t.eventSize = int64(len(data))
 
 	end := len(data)
+	indexIDsDataSize := binary.BigEndian.Uint64(data[end-8 : end])
+	end -= 8
+	t.IndexIDs = make([]int64, 0, indexIDsDataSize)
+	for i := 0; i < int(indexIDsDataSize); i++ {
+		indexID := int64(binary.BigEndian.Uint64(data[end-8 : end]))
+		t.IndexIDs = append(t.IndexIDs, indexID)
+		end -= 8
+	}
+
 	multipleTableInfosDataSize := binary.BigEndian.Uint64(data[end-8 : end])
+	end -= 8
 	for i := 0; i < int(multipleTableInfosDataSize); i++ {
 		tableInfoDataSize := binary.BigEndian.Uint64(data[end-8 : end])
 		tableInfoData := data[end-8-int(tableInfoDataSize) : end-8]
@@ -362,7 +381,7 @@ func (t *DDLEvent) decodeV1(data []byte) error {
 		t.MultipleTableInfos = append(t.MultipleTableInfos, info)
 		end -= 8 + int(tableInfoDataSize)
 	}
-	end -= 8 + int(multipleTableInfosDataSize)
+
 	tableInfoDataSize := binary.BigEndian.Uint64(data[end-8 : end])
 	var err error
 	if tableInfoDataSize > 0 {

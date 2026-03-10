@@ -84,6 +84,9 @@ func getIndexIDs(job *model.Job) []int64 {
 	res := make([]int64, 0)
 	idxArgs, err := model.GetModifyIndexArgs(job)
 	if idxArgs == nil || err != nil {
+		if job.MultiSchemaInfo == nil {
+			return res
+		}
 		for idx, subJob := range job.MultiSchemaInfo.SubJobs {
 			proxyJob := subJob.ToProxyJob(job, idx)
 			idxArgs, err := model.GetModifyIndexArgs(&proxyJob)
