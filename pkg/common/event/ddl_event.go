@@ -342,33 +342,14 @@ func (t DDLEvent) encodeV1() ([]byte, error) {
 	multipleTableInfosDataSize := make([]byte, 8)
 	binary.BigEndian.PutUint64(multipleTableInfosDataSize, uint64(len(t.MultipleTableInfos)))
 	data = append(data, multipleTableInfosDataSize...)
-
-	// append index ids for add index ddl, to recover the index name for the anonymous add index
-	for _, info := range t.IndexIDs {
-		indexIDData := make([]byte, 8)
-		binary.BigEndian.PutUint64(indexIDData, uint64(info))
-		data = append(data, indexIDData...)
-	}
-	indexIDsDataSize := make([]byte, 8)
-	binary.BigEndian.PutUint64(indexIDsDataSize, uint64(len(t.IndexIDs)))
-	data = append(data, indexIDsDataSize...)
 	return data, nil
 }
 
 func (t *DDLEvent) decodeV1(data []byte) error {
-	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize | multipleTableInfos | multipleTableInfosDataSize | indexIDsDataSize | indexIDsData
+	// restData | dispatcherIDData | dispatcherIDDataSize | tableInfoData | tableInfoDataSize | multipleTableInfos | multipleTableInfosDataSize
 	t.eventSize = int64(len(data))
 
 	end := len(data)
-	indexIDsDataSize := binary.BigEndian.Uint64(data[end-8 : end])
-	end -= 8
-	t.IndexIDs = make([]int64, 0, indexIDsDataSize)
-	for i := 0; i < int(indexIDsDataSize); i++ {
-		indexID := int64(binary.BigEndian.Uint64(data[end-8 : end]))
-		t.IndexIDs = append(t.IndexIDs, indexID)
-		end -= 8
-	}
-
 	multipleTableInfosDataSize := binary.BigEndian.Uint64(data[end-8 : end])
 	end -= 8
 	for i := 0; i < int(multipleTableInfosDataSize); i++ {
