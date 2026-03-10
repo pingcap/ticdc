@@ -699,46 +699,22 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	// get the table's current table name from the ddl job
 	event.TableName = event.TableInfo.Name.O
+
+	// The old schema/table names cannot rely on ExtraSchemaName/ExtraTableName,
+	// because the snapshot used by schema store may already reflect the post-rename state.
+	// Rebuild them from independent sources instead:
+	// 1. InvolvingSchemaInfo provides a fallback old schema/table pair, but names may be normalized.
+	// 2. RenameTableArgs.OldSchemaName preserves the old schema name when the query omits it.
+	// 3. The original query has the highest priority because it keeps user-provided identifier case.
 	oldSchemaName := ""
 	oldTableName := ""
 	if len(args.job.InvolvingSchemaInfo) > 0 {
-		log.Info("buildPersistedDDLEvent for rename table",
-			zap.String("query", event.Query),
-			zap.Int64("schemaID", event.SchemaID),
-			zap.String("SchemaName", event.SchemaName),
-			zap.String("tableName", event.TableName),
-			zap.Int64("ExtraSchemaID", event.ExtraSchemaID),
-			zap.String("ExtraSchemaName", event.ExtraSchemaName),
-			zap.String("ExtraTableName", event.ExtraTableName),
-			zap.Any("involvingSchemaInfo", args.job.InvolvingSchemaInfo))
-		// The query in job maybe "RENAME TABLE table1 to test2.table2", we need rebuild it here.
-		//
-		// Note: Why use args.job.InvolvingSchemaInfo to build query?
-		// because event.ExtraSchemaID may not be accurate for rename table in some case.
-		// after pr: https://github.com/pingcap/tidb/pull/43341,
-		// assume there is a table `test.t` and a ddl: `rename table t to test2.t;`, and its commit ts is `100`.
-		// if you get a ddl snapshot at ts `99`, table `t` is already in `test2`.
-		// so event.ExtraSchemaName will also be `test2`.
-		// And because SchemaStore is the source of truth inside cdc,
-		// we can use event.ExtraSchemaID(even it is wrong) to update the internal state of the cdc.
-		// But event.Query will be emit to downstream(out of cdc), we must make it correct.
-		//
-		// InvolvingSchemaInfo returns the schema info involved in the job.
-		// The value should be stored in lower case.
-		//
-		// InvolvingSchemaInfo may store normalized lower-case names,
-		// while the original query can keep user-provided identifier case.
-		// Prefer names parsed from the original query whenever possible.
-		// See https://github.com/pingcap/ticdc/pull/2218 for background.
 		oldSchemaName = args.job.InvolvingSchemaInfo[0].Database
 		oldTableName = args.job.InvolvingSchemaInfo[0].Table
 	}
 	// RenameTableArgs keeps the old schema name even when the query omits it.
-	if args.job.Version == model.JobVersion1 || args.job.Version == model.JobVersion2 {
-		renameArgs, err := model.GetRenameTableArgs(args.job)
-		if err == nil && renameArgs.OldSchemaName.O != "" {
-			oldSchemaName = renameArgs.OldSchemaName.O
-		}
+	if renameArgs, err := getRenameTableArgsCompatible(args.job); err == nil && renameArgs.OldSchemaName.O != "" {
+		oldSchemaName = renameArgs.OldSchemaName.O
 	}
 	if queryInfo, parsed := parseRenameTableQueryInfo(args.job.Query); parsed {
 		if queryInfo.oldTableName != "" {
@@ -749,6 +725,17 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 		}
 	}
 	if oldSchemaName != "" && oldTableName != "" {
+		log.Info("rebuild rename table query",
+			zap.String("query", event.Query),
+			zap.Int64("schemaID", event.SchemaID),
+			zap.String("schemaName", event.SchemaName),
+			zap.String("tableName", event.TableName),
+			zap.Int64("extraSchemaID", event.ExtraSchemaID),
+			zap.String("extraSchemaName", event.ExtraSchemaName),
+			zap.String("extraTableName", event.ExtraTableName),
+			zap.String("oldSchemaName", oldSchemaName),
+			zap.String("oldTableName", oldTableName),
+			zap.Any("involvingSchemaInfo", args.job.InvolvingSchemaInfo))
 		event.Query = fmt.Sprintf("RENAME TABLE %s TO %s",
 			common.QuoteSchema(oldSchemaName, oldTableName),
 			common.QuoteSchema(event.SchemaName, event.TableName))
@@ -762,6 +749,21 @@ func buildPersistedDDLEventForNormalPartitionDDL(args buildPersistedDDLEventFunc
 		event.PrevPartitions = append(event.PrevPartitions, id)
 	}
 	return event
+}
+
+func getRenameTableArgsCompatible(job *model.Job) (*model.RenameTableArgs, error) {
+	switch job.Version {
+	case model.JobVersion1, model.JobVersion2:
+		return model.GetRenameTableArgs(job)
+	case 0:
+		// TiDB v7.5.0 historical jobs still encode rename-table args in v1 layout,
+		// but the version field is left as zero.
+		jobClone := *job
+		jobClone.Version = model.JobVersion1
+		return model.GetRenameTableArgs(&jobClone)
+	default:
+		return nil, errors.New("unsupported rename table job version")
+	}
 }
 
 // buildPersistedDDLEventForExchangePartition build a exchange partition ddl event
