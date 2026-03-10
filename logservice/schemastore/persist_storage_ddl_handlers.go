@@ -725,10 +725,12 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 			oldSchemaSource = "involving_schema_info"
 		}
 	}
-	if renameArgs, err := model.GetRenameTableArgs(args.job); err == nil {
-		if renameArgs.OldSchemaName.O != "" {
-			oldSchemaName = renameArgs.OldSchemaName.O
-			oldSchemaSource = "rename_table_args"
+	if args.job.Version == model.JobVersion1 || args.job.Version == model.JobVersion2 {
+		if renameArgs, err := model.GetRenameTableArgs(args.job); err == nil {
+			if renameArgs.OldSchemaName.O != "" {
+				oldSchemaName = renameArgs.OldSchemaName.O
+				oldSchemaSource = "rename_table_args"
+			}
 		}
 	}
 	queryProvidedOldSchema := false
