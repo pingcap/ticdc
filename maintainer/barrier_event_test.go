@@ -30,6 +30,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestNewBlockEventInitialWriterProgress(t *testing.T) {
+	testutil.SetUpTestServices()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
+
+	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
+		IsBlocked: true,
+		BlockTs:   10,
+		BlockTables: &heartbeatpb.InfluencedTables{
+			InfluenceType: heartbeatpb.InfluenceType_Normal,
+			TableIDs:      []int64{0},
+		},
+	}, false)
+	require.False(t, event.writerDispatcherAdvanced)
+}
+
 func TestScheduleEvent(t *testing.T) {
 	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
