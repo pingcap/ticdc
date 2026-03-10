@@ -699,6 +699,8 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	// get the table's current table name from the ddl job
 	event.TableName = event.TableInfo.Name.O
+	oldSchemaName := ""
+	oldTableName := ""
 	if len(args.job.InvolvingSchemaInfo) > 0 {
 		log.Info("buildPersistedDDLEvent for rename table",
 			zap.String("query", event.Query),
@@ -728,37 +730,25 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 		// while the original query can keep user-provided identifier case.
 		// Prefer names parsed from the original query whenever possible.
 		// See https://github.com/pingcap/ticdc/pull/2218 for background.
-		oldSchemaName := args.job.InvolvingSchemaInfo[0].Database
-		oldTableName := args.job.InvolvingSchemaInfo[0].Table
-		log.Info("rename table source names from involving schema info",
-			zap.String("oldSchemaName", oldSchemaName),
-			zap.String("oldTableName", oldTableName))
-		// RenameTableArgs keeps the old schema name even when the query omits it.
-		if args.job.Version == model.JobVersion1 || args.job.Version == model.JobVersion2 {
-			renameArgs, err := model.GetRenameTableArgs(args.job)
-			if err == nil && renameArgs.OldSchemaName.O != "" {
-				oldSchemaName = renameArgs.OldSchemaName.O
-			}
+		oldSchemaName = args.job.InvolvingSchemaInfo[0].Database
+		oldTableName = args.job.InvolvingSchemaInfo[0].Table
+	}
+	// RenameTableArgs keeps the old schema name even when the query omits it.
+	if args.job.Version == model.JobVersion1 || args.job.Version == model.JobVersion2 {
+		renameArgs, err := model.GetRenameTableArgs(args.job)
+		if err == nil && renameArgs.OldSchemaName.O != "" {
+			oldSchemaName = renameArgs.OldSchemaName.O
 		}
-		stmt, err := parser.New().ParseOneStmt(args.job.Query, "", "")
-		if err != nil {
-			log.Error("parse statement failed for build persisted DDL event", zap.Any("DDL", args.job.Query), zap.Error(err))
-		} else {
-			switch s := stmt.(type) {
-			case *ast.AlterTableStmt:
-				oldTableName = s.Table.Name.O
-				if schemaName := s.Table.Schema.O; schemaName != "" {
-					oldSchemaName = schemaName
-				}
-			case *ast.RenameTableStmt:
-				oldTableName = s.TableToTables[0].OldTable.Name.O
-				if schemaName := s.TableToTables[0].OldTable.Schema.O; schemaName != "" {
-					oldSchemaName = schemaName
-				}
-			default:
-				log.Error("unknown stmt type", zap.String("query", args.job.Query), zap.Any("stmt", stmt))
-			}
+	}
+	if queryInfo, parsed := parseRenameTableQueryInfo(args.job.Query); parsed {
+		if queryInfo.oldTableName != "" {
+			oldTableName = queryInfo.oldTableName
 		}
+		if queryInfo.oldSchemaName != "" {
+			oldSchemaName = queryInfo.oldSchemaName
+		}
+	}
+	if oldSchemaName != "" && oldTableName != "" {
 		event.Query = fmt.Sprintf("RENAME TABLE %s TO %s",
 			common.QuoteSchema(oldSchemaName, oldTableName),
 			common.QuoteSchema(event.SchemaName, event.TableName))
@@ -822,6 +812,39 @@ type renameTableQueryInfo struct {
 	oldTableName  string
 	newSchemaName string
 	newTableName  string
+}
+
+func parseRenameTableQueryInfo(query string) (renameTableQueryInfo, bool) {
+	if query == "" {
+		return renameTableQueryInfo{}, false
+	}
+	stmt, err := parser.New().ParseOneStmt(query, "", "")
+	if err != nil {
+		log.Warn("parse rename table query failed",
+			zap.String("query", query),
+			zap.Error(err))
+		return renameTableQueryInfo{}, false
+	}
+
+	switch s := stmt.(type) {
+	case *ast.AlterTableStmt:
+		return renameTableQueryInfo{
+			oldSchemaName: s.Table.Schema.O,
+			oldTableName:  s.Table.Name.O,
+		}, true
+	case *ast.RenameTableStmt:
+		if len(s.TableToTables) == 0 {
+			return renameTableQueryInfo{}, false
+		}
+		return renameTableQueryInfo{
+			oldSchemaName: s.TableToTables[0].OldTable.Schema.O,
+			oldTableName:  s.TableToTables[0].OldTable.Name.O,
+			newSchemaName: s.TableToTables[0].NewTable.Schema.O,
+			newTableName:  s.TableToTables[0].NewTable.Name.O,
+		}, true
+	default:
+		return renameTableQueryInfo{}, false
+	}
 }
 
 func parseRenameTablesQueryInfos(query string) ([]renameTableQueryInfo, bool) {
