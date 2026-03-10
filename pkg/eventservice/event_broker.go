@@ -270,6 +270,8 @@ func (c *eventBroker) refreshMinSentResolvedTs(ctx context.Context) error {
 			c.changefeedMap.Range(func(key, value interface{}) bool {
 				status := value.(*changefeedStatus)
 				status.refreshMinSentResolvedTs()
+				status.tryPromoteSyncPointPrepare()
+				status.tryAdvanceSyncPointInFlight()
 				return true
 			})
 		}
@@ -442,6 +444,21 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 			)
 		}
 	}
+	// Two-stage syncpoint:
+	// 1. Prepare stage: once any dispatcher detects crossing its next syncpoint, select a
+	//    global preparing ts and cap all dispatchers at that ts.
+	// 2. Commit stage: only after all active dispatchers have sent resolved-ts >= preparing ts.
+	if task.enableSyncPoint {
+		c.fastForwardSyncPointIfNeeded(task)
+		nextSyncPoint := task.nextSyncPoint.Load()
+		if nextSyncPoint > 0 && dataRange.CommitTsEnd > nextSyncPoint {
+			task.changefeedStat.tryStartSyncPointPrepare(nextSyncPoint)
+		}
+		preparingTs := task.changefeedStat.getSyncPointPreparingTs()
+		if preparingTs > 0 && !task.changefeedStat.isSyncPointCommitReady(preparingTs) {
+			dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, preparingTs)
+		}
+	}
 
 	if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
 		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
@@ -555,7 +572,15 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 // hasSyncPointEventBeforeTs checks if there is any sync point events before the given ts.
 func (c *eventBroker) hasSyncPointEventsBeforeTs(ts uint64, d *dispatcherStat) bool {
 	c.fastForwardSyncPointIfNeeded(d)
-	return d.enableSyncPoint && ts > d.nextSyncPoint.Load()
+	if !d.enableSyncPoint {
+		return false
+	}
+	nextSyncPoint := d.nextSyncPoint.Load()
+	if ts <= nextSyncPoint {
+		return false
+	}
+	d.changefeedStat.tryStartSyncPointPrepare(nextSyncPoint)
+	return d.changefeedStat.isSyncPointCommitReady(nextSyncPoint)
 }
 
 // emitSyncPointEventIfNeeded emits a sync point event if the current ts is greater than the next sync point, and updates the next sync point.
@@ -563,8 +588,24 @@ func (c *eventBroker) hasSyncPointEventsBeforeTs(ts uint64, d *dispatcherStat) b
 // thus to ensure the sync point event is in correct order for each dispatcher.
 func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, remoteID node.ID) {
 	c.fastForwardSyncPointIfNeeded(d)
-	for d.enableSyncPoint && ts > d.nextSyncPoint.Load() {
+	for d.enableSyncPoint {
 		commitTs := d.nextSyncPoint.Load()
+		if !d.changefeedStat.isSyncPointCommitReady(commitTs) {
+			if ts <= commitTs {
+				return
+			}
+			d.changefeedStat.tryStartSyncPointPrepare(commitTs)
+			if !d.changefeedStat.isSyncPointCommitReady(commitTs) {
+				return
+			}
+		} else if ts < commitTs {
+			return
+		}
+
+		if !d.changefeedStat.tryStartOrJoinSyncPoint(commitTs) {
+			return
+		}
+
 		d.nextSyncPoint.Store(oracle.GoTimeToTS(oracle.GetTimeFromTS(commitTs).Add(d.syncPointInterval)))
 
 		e := event.NewSyncPointEvent(d.id, commitTs, d.seq.Add(1), d.epoch)
@@ -1117,6 +1158,8 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		Name: changefeedID.Keyspace(),
 	}
 	c.schemaStore.UnregisterTable(keyspaceMeta, span.TableID)
+	stat.changefeedStat.tryPromoteSyncPointPrepare()
+	stat.changefeedStat.tryAdvanceSyncPointInFlight()
 
 	log.Info("remove dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID), zap.Stringer("changefeedID", changefeedID),
@@ -1253,6 +1296,10 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 		changedChangefeeds[dispatcher.changefeedStat] = struct{}{}
 	}
 	c.sendDispatcherResponse(responseMap)
+	for changefeed := range changedChangefeeds {
+		changefeed.tryPromoteSyncPointPrepare()
+		changefeed.tryAdvanceSyncPointInFlight()
+	}
 }
 
 func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionControl) {

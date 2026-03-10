@@ -320,10 +320,17 @@ func TestSyncPointGuardFastForwardAndResume(t *testing.T) {
 
 	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
 	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp.setHandshaked()
+	dispPtr := &atomic.Pointer[dispatcherStat]{}
+	dispPtr.Store(disp)
+	changefeedStatus.addDispatcher(info.GetID(), dispPtr)
 	require.Equal(t, info.nextSyncPoint, disp.nextSyncPoint.Load())
 
 	require.False(t, broker.hasSyncPointEventsBeforeTs(oracle.GoTimeToTS(time.Unix(0, 0).Add(39*time.Second)), disp))
 	require.Equal(t, oracle.GoTimeToTS(time.Unix(0, 0).Add(40*time.Second)), disp.nextSyncPoint.Load())
+	require.False(t, broker.hasSyncPointEventsBeforeTs(oracle.GoTimeToTS(time.Unix(0, 0).Add(41*time.Second)), disp))
+	disp.sentResolvedTs.Store(oracle.GoTimeToTS(time.Unix(0, 0).Add(40 * time.Second)))
+	changefeedStatus.tryPromoteSyncPointPrepare()
 	require.True(t, broker.hasSyncPointEventsBeforeTs(oracle.GoTimeToTS(time.Unix(0, 0).Add(41*time.Second)), disp))
 
 	broker.emitSyncPointEventIfNeeded(oracle.GoTimeToTS(time.Unix(0, 0).Add(41*time.Second)), disp, node.ID("server1"))
@@ -334,6 +341,74 @@ func TestSyncPointGuardFastForwardAndResume(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, oracle.GoTimeToTS(time.Unix(0, 0).Add(40*time.Second)), syncPointEvent.GetCommitTs())
 	require.Equal(t, oracle.GoTimeToTS(time.Unix(0, 0).Add(50*time.Second)), disp.nextSyncPoint.Load())
+}
+
+func TestSyncPointTwoStagePrepareThenCommit(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+
+	info1 := newMockDispatcherInfoForTest(t)
+	info1.enableSyncPoint = true
+	info1.syncPointInterval = 10 * time.Second
+	info1.nextSyncPoint = oracle.GoTimeToTS(time.Unix(0, 0).Add(10 * time.Second))
+
+	info2 := newMockDispatcherInfoForTest(t)
+	info2.enableSyncPoint = true
+	info2.syncPointInterval = 10 * time.Second
+	info2.nextSyncPoint = oracle.GoTimeToTS(time.Unix(0, 0).Add(10 * time.Second))
+	info2.changefeedID = info1.changefeedID
+
+	changefeedStatus := broker.getOrSetChangefeedStatus(info1.GetChangefeedID(), info1.GetSyncPointInterval())
+	disp1 := newDispatcherStat(info1, 1, 1, nil, changefeedStatus)
+	disp2 := newDispatcherStat(info2, 1, 1, nil, changefeedStatus)
+	disp1.setHandshaked()
+	disp2.setHandshaked()
+
+	disp1Ptr := &atomic.Pointer[dispatcherStat]{}
+	disp1Ptr.Store(disp1)
+	disp2Ptr := &atomic.Pointer[dispatcherStat]{}
+	disp2Ptr.Store(disp2)
+	changefeedStatus.addDispatcher(info1.GetID(), disp1Ptr)
+	changefeedStatus.addDispatcher(info2.GetID(), disp2Ptr)
+
+	// Crossing the syncpoint starts prepare stage, but no dispatcher can emit syncpoint yet.
+	require.False(t, broker.hasSyncPointEventsBeforeTs(oracle.GoTimeToTS(time.Unix(0, 0).Add(11*time.Second)), disp1))
+	require.Equal(t, oracle.GoTimeToTS(time.Unix(0, 0).Add(10*time.Second)), changefeedStatus.getSyncPointPreparingTs())
+	require.False(t, changefeedStatus.syncPointCommitReady.Load())
+	broker.emitSyncPointEventIfNeeded(oracle.GoTimeToTS(time.Unix(0, 0).Add(11*time.Second)), disp1, node.ID("server1"))
+	require.Len(t, broker.messageCh[disp1.messageWorkerIndex], 0)
+
+	// Commit stage is reached only after all active dispatchers sent resolved-ts >= preparing ts.
+	disp1.sentResolvedTs.Store(oracle.GoTimeToTS(time.Unix(0, 0).Add(10 * time.Second)))
+	disp2.sentResolvedTs.Store(oracle.GoTimeToTS(time.Unix(0, 0).Add(9 * time.Second)))
+	changefeedStatus.tryPromoteSyncPointPrepare()
+	require.False(t, changefeedStatus.syncPointCommitReady.Load())
+
+	disp2.sentResolvedTs.Store(oracle.GoTimeToTS(time.Unix(0, 0).Add(10 * time.Second)))
+	changefeedStatus.tryPromoteSyncPointPrepare()
+	require.True(t, changefeedStatus.syncPointCommitReady.Load())
+	require.Equal(t, oracle.GoTimeToTS(time.Unix(0, 0).Add(10*time.Second)), changefeedStatus.syncPointInFlightTs.Load())
+	require.True(t, broker.hasSyncPointEventsBeforeTs(oracle.GoTimeToTS(time.Unix(0, 0).Add(11*time.Second)), disp1))
+
+	// In commit stage, dispatcher can emit syncpoint even when ts == commitTs.
+	broker.emitSyncPointEventIfNeeded(oracle.GoTimeToTS(time.Unix(0, 0).Add(10*time.Second)), disp1, node.ID("server1"))
+	msg := <-broker.messageCh[disp1.messageWorkerIndex]
+	require.Equal(t, event.TypeSyncPointEvent, msg.msgType)
+	syncPointEvent, ok := msg.e.(*event.SyncPointEvent)
+	require.True(t, ok)
+	require.Equal(t, oracle.GoTimeToTS(time.Unix(0, 0).Add(10*time.Second)), syncPointEvent.GetCommitTs())
+
+	broker.emitSyncPointEventIfNeeded(oracle.GoTimeToTS(time.Unix(0, 0).Add(10*time.Second)), disp2, node.ID("server1"))
+	msg = <-broker.messageCh[disp2.messageWorkerIndex]
+	require.Equal(t, event.TypeSyncPointEvent, msg.msgType)
+
+	// Syncpoint lifecycle is finished only when all active dispatchers checkpoint > in-flight ts.
+	disp1.checkpointTs.Store(oracle.GoTimeToTS(time.Unix(0, 0).Add(11 * time.Second)))
+	disp2.checkpointTs.Store(oracle.GoTimeToTS(time.Unix(0, 0).Add(11 * time.Second)))
+	changefeedStatus.tryAdvanceSyncPointInFlight()
+	require.Equal(t, uint64(0), changefeedStatus.syncPointInFlightTs.Load())
+	require.Equal(t, uint64(0), changefeedStatus.getSyncPointPreparingTs())
+	require.False(t, changefeedStatus.syncPointCommitReady.Load())
 }
 
 func TestCURDDispatcher(t *testing.T) {
