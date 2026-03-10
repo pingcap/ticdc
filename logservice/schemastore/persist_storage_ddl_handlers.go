@@ -702,6 +702,12 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 
 	// The old schema/table names cannot rely on ExtraSchemaName/ExtraTableName,
 	// because the snapshot used by schema store may already reflect the post-rename state.
+	// Example (after https://github.com/pingcap/tidb/pull/43341):
+	//   table `test.t`, DDL `rename table t to test2.t;`, commit ts = 100
+	//   snapshot at ts = 99 already shows `t` under `test2`
+	//   => event.ExtraSchemaName becomes `test2`, which is wrong for the old name
+	// SchemaStore can still use ExtraSchemaID to update internal state,
+	// but the emitted event.Query must carry the correct old names.
 	// Rebuild them from independent sources instead:
 	// 1. InvolvingSchemaInfo provides a fallback old schema/table pair, but names may be normalized.
 	// 2. RenameTableArgs.OldSchemaName preserves the old schema name when the query omits it.
@@ -723,6 +729,7 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 		log.Info("rename table args decoded",
 			zap.Int64("jobID", event.ID),
 			zap.Int64("oldSchemaID", renameArgs.OldSchemaID),
+			zap.Int64("newSchemaID", renameArgs.NewSchemaID),
 			zap.String("oldSchemaName", renameArgs.OldSchemaName.O),
 			zap.String("newTableName", renameArgs.NewTableName.O))
 		if renameArgs.OldSchemaName.O != "" {
