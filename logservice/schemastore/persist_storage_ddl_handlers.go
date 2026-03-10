@@ -730,6 +730,9 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 		// See https://github.com/pingcap/ticdc/pull/2218 for background.
 		oldSchemaName := args.job.InvolvingSchemaInfo[0].Database
 		oldTableName := args.job.InvolvingSchemaInfo[0].Table
+		log.Info("rename table source names from involving schema info",
+			zap.String("oldSchemaName", oldSchemaName),
+			zap.String("oldTableName", oldTableName))
 		// RenameTableArgs keeps the old schema name even when the query omits it.
 		if args.job.Version == model.JobVersion1 || args.job.Version == model.JobVersion2 {
 			renameArgs, err := model.GetRenameTableArgs(args.job)
