@@ -3070,6 +3070,7 @@ func TestGCPersistStorage(t *testing.T) {
 }
 
 func TestRenameTable(t *testing.T) {
+	// Case: query specifies both old and new schema; use query for old schema/table.
 	// use t;
 	job := buildRenameTableJobForTest(100, 101, "t1", 101, &model.InvolvingSchemaInfo{
 		Database: "t",
@@ -3090,6 +3091,7 @@ func TestRenameTable(t *testing.T) {
 	})
 	assert.Equal(t, "RENAME TABLE `t`.`t3` TO `test`.`t1`", ddl.Query)
 
+	// Case: same-schema rename, query omits schema; fallback to InvolvingSchemaInfo.
 	// use test;
 	job = buildRenameTableJobForTest(100, 101, "t2", 100, &model.InvolvingSchemaInfo{
 		Database: "test",
@@ -3110,6 +3112,7 @@ func TestRenameTable(t *testing.T) {
 	})
 	assert.Equal(t, "RENAME TABLE `test`.`t1` TO `test`.`t2`", ddl.Query)
 
+	// Case: ALTER TABLE ... RENAME TO, same-schema rename; fallback to InvolvingSchemaInfo.
 	// use test;
 	job = buildRenameTableJobForTest(100, 101, "t2", 100, &model.InvolvingSchemaInfo{
 		Database: "test",
@@ -3130,6 +3133,7 @@ func TestRenameTable(t *testing.T) {
 	})
 	assert.Equal(t, "RENAME TABLE `test`.`t1` TO `test`.`t2`", ddl.Query)
 
+	// Case: RenameTableArgs has old schema name (TiDB >= v8.5), prefer args over InvolvingSchemaInfo.
 	// use SalesDB;
 	job = buildRenameTableJobForTest(100, 101, "t1", 100, &model.InvolvingSchemaInfo{
 		Database: "salesdb",
@@ -3154,6 +3158,7 @@ func TestRenameTable(t *testing.T) {
 	})
 	assert.Equal(t, "RENAME TABLE `SalesDB`.`t1` TO `ArchiveDB`.`t1`", ddl.Query)
 
+	// Case: query omits old schema, only InvolvingSchemaInfo available; use ExtraSchemaID to recover case.
 	job = buildRenameTableJobForTest(100, 101, "t1", 100, &model.InvolvingSchemaInfo{
 		Database: "salesdb",
 		Table:    "t1",
@@ -3171,6 +3176,7 @@ func TestRenameTable(t *testing.T) {
 	})
 	assert.Equal(t, "RENAME TABLE `SalesDB`.`t1` TO `ArchiveDB`.`t1`", ddl.Query)
 
+	// Case: args provide old schema name, no InvolvingSchemaInfo.
 	job = buildRenameTableJobForTest(100, 101, "t1", 100, nil)
 	job.Version = model.JobVersion2
 	job.FillArgs(&model.RenameTableArgs{
@@ -3191,6 +3197,7 @@ func TestRenameTable(t *testing.T) {
 	})
 	assert.Equal(t, "RENAME TABLE `SalesDB`.`t1` TO `ArchiveDB`.`t1`", ddl.Query)
 
+	// Case: legacy v0 raw args encode old schema name; args decode fails, fallback to ExtraSchemaID.
 	job = buildRenameTableJobForTest(100, 101, "t1", 100, nil)
 	job.Version = 0
 	rawArgs, err := json.Marshal([]any{int64(200), ast.NewCIStr("t1"), ast.NewCIStr("SalesDB")})
@@ -3209,6 +3216,7 @@ func TestRenameTable(t *testing.T) {
 	})
 	assert.Equal(t, "RENAME TABLE `SalesDB`.`t1` TO `ArchiveDB`.`t1`", ddl.Query)
 
+	// Case: raw args only carry old schema ID; args decode works but no name, fallback to ExtraSchemaID.
 	job = buildRenameTableJobForTest(100, 101, "t1", 100, nil)
 	job.Version = model.JobVersion1
 	rawArgs, err = json.Marshal([]any{int64(200)})
