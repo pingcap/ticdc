@@ -14,15 +14,12 @@
 package dispatcherorchestrator
 
 import (
-	"reflect"
-	"sync/atomic"
+	"sync"
 	"testing"
 	"time"
-	"unsafe"
 
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatchermanager"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -226,10 +223,12 @@ func TestCreateBootstrapResponseSkipsRedoUntilReady(t *testing.T) {
 	)
 	redoDispatcherMap := &dispatchermanager.DispatcherMap[*dispatcher.RedoDispatcher]{}
 	redoDispatcherMap.Set(redoDispatcherID, redoDispatcher)
+	dispatcherMap := &dispatchermanager.DispatcherMap[*dispatcher.EventDispatcher]{}
 
 	t.Run("nil redo map", func(t *testing.T) {
-		manager := newBootstrapTestManager(t)
-		setDispatcherManagerField(t, manager, "redoEnabled", true)
+		manager := &fakeBootstrapResponseManager{
+			dispatcherMap: dispatcherMap,
+		}
 
 		require.NotPanics(t, func() {
 			response := createBootstrapResponse(changefeedID, manager, 0, 123)
@@ -239,10 +238,11 @@ func TestCreateBootstrapResponseSkipsRedoUntilReady(t *testing.T) {
 	})
 
 	t.Run("partial redo state", func(t *testing.T) {
-		manager := newBootstrapTestManager(t)
-		setDispatcherManagerField(t, manager, "redoEnabled", true)
-		setDispatcherManagerField(t, manager, "redoDispatcherMap", redoDispatcherMap)
-		manager.SetTableTriggerRedoDispatcher(redoDispatcher)
+		manager := &fakeBootstrapResponseManager{
+			dispatcherMap:     dispatcherMap,
+			redoReady:         false,
+			redoDispatcherMap: redoDispatcherMap,
+		}
 
 		response := createBootstrapResponse(changefeedID, manager, 0, 123)
 		require.Zero(t, response.RedoCheckpointTs)
@@ -250,13 +250,11 @@ func TestCreateBootstrapResponseSkipsRedoUntilReady(t *testing.T) {
 	})
 
 	t.Run("published redo state", func(t *testing.T) {
-		manager := newBootstrapTestManager(t)
-		setDispatcherManagerField(t, manager, "redoEnabled", true)
-		setDispatcherManagerField(t, manager, "redoDispatcherMap", redoDispatcherMap)
-		setDispatcherManagerField(t, manager, "redoSchemaIDToDispatchers", dispatcher.NewSchemaIDToDispatchers())
-		setDispatcherManagerField(t, manager, "redoSink", &redo.Sink{})
-		manager.SetTableTriggerRedoDispatcher(redoDispatcher)
-		setDispatcherManagerRedoReady(t, manager, true)
+		manager := &fakeBootstrapResponseManager{
+			dispatcherMap:     dispatcherMap,
+			redoReady:         true,
+			redoDispatcherMap: redoDispatcherMap,
+		}
 
 		response := createBootstrapResponse(changefeedID, manager, 0, 123)
 		require.Equal(t, uint64(123), response.RedoCheckpointTs)
@@ -264,29 +262,25 @@ func TestCreateBootstrapResponseSkipsRedoUntilReady(t *testing.T) {
 	})
 }
 
-func newBootstrapTestManager(t *testing.T) *dispatchermanager.DispatcherManager {
-	t.Helper()
-
-	manager := &dispatchermanager.DispatcherManager{}
-	setDispatcherManagerField(t, manager, "dispatcherMap", &dispatchermanager.DispatcherMap[*dispatcher.EventDispatcher]{})
-	return manager
+type fakeBootstrapResponseManager struct {
+	dispatcherMap     *dispatchermanager.DispatcherMap[*dispatcher.EventDispatcher]
+	redoReady         bool
+	redoDispatcherMap *dispatchermanager.DispatcherMap[*dispatcher.RedoDispatcher]
+	currentOperators  sync.Map
 }
 
-func setDispatcherManagerField[T any](t *testing.T, manager *dispatchermanager.DispatcherManager, field string, value T) {
-	t.Helper()
-
-	fieldValue := reflect.ValueOf(manager).Elem().FieldByName(field)
-	require.True(t, fieldValue.IsValid(), "field %s not found", field)
-
-	reflect.NewAt(fieldValue.Type(), unsafe.Pointer(fieldValue.UnsafeAddr())).Elem().Set(reflect.ValueOf(value))
+func (m *fakeBootstrapResponseManager) GetDispatcherMap() *dispatchermanager.DispatcherMap[*dispatcher.EventDispatcher] {
+	return m.dispatcherMap
 }
 
-func setDispatcherManagerRedoReady(t *testing.T, manager *dispatchermanager.DispatcherManager, ready bool) {
-	t.Helper()
+func (m *fakeBootstrapResponseManager) IsRedoReady() bool {
+	return m.redoReady
+}
 
-	fieldValue := reflect.ValueOf(manager).Elem().FieldByName("redoReady")
-	require.True(t, fieldValue.IsValid(), "field redoReady not found")
+func (m *fakeBootstrapResponseManager) GetRedoDispatcherMap() *dispatchermanager.DispatcherMap[*dispatcher.RedoDispatcher] {
+	return m.redoDispatcherMap
+}
 
-	readyFlag := (*atomic.Bool)(unsafe.Pointer(fieldValue.UnsafeAddr()))
-	readyFlag.Store(ready)
+func (m *fakeBootstrapResponseManager) GetCurrentOperatorMap() *sync.Map {
+	return &m.currentOperators
 }

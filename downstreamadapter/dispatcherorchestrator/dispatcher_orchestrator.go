@@ -52,6 +52,13 @@ type DispatcherOrchestrator struct {
 	msgGuardWaitGroup util.GuardedWaitGroup
 }
 
+type bootstrapResponseManager interface {
+	GetDispatcherMap() *dispatchermanager.DispatcherMap[*dispatcher.EventDispatcher]
+	GetRedoDispatcherMap() *dispatchermanager.DispatcherMap[*dispatcher.RedoDispatcher]
+	GetCurrentOperatorMap() *sync.Map
+	IsRedoReady() bool
+}
+
 func New() *DispatcherOrchestrator {
 	m := &DispatcherOrchestrator{
 		mc:                 appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
@@ -367,7 +374,7 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 
 func createBootstrapResponse(
 	changefeedID *heartbeatpb.ChangefeedID,
-	manager *dispatchermanager.DispatcherManager,
+	manager bootstrapResponseManager,
 	startTs, redoStartTs uint64,
 ) *heartbeatpb.MaintainerBootstrapResponse {
 	response := &heartbeatpb.MaintainerBootstrapResponse{
@@ -449,7 +456,7 @@ func (m *DispatcherOrchestrator) handleDispatcherError(
 }
 
 func retrieveRedoDispatcherSpanForBootstrapResponse(
-	manager *dispatchermanager.DispatcherManager,
+	manager bootstrapResponseManager,
 	response *heartbeatpb.MaintainerBootstrapResponse,
 ) {
 	if !manager.IsRedoReady() {
@@ -469,7 +476,7 @@ func retrieveRedoDispatcherSpanForBootstrapResponse(
 }
 
 func retrieveDispatcherSpanForBootstrapResponse(
-	manager *dispatchermanager.DispatcherManager,
+	manager bootstrapResponseManager,
 	response *heartbeatpb.MaintainerBootstrapResponse,
 ) {
 	manager.GetDispatcherMap().ForEach(func(id common.DispatcherID, d *dispatcher.EventDispatcher) {
@@ -487,7 +494,7 @@ func retrieveDispatcherSpanForBootstrapResponse(
 
 func retrieveOperatorsForBootstrapResponse(
 	changefeedID *heartbeatpb.ChangefeedID,
-	manager *dispatchermanager.DispatcherManager,
+	manager bootstrapResponseManager,
 	response *heartbeatpb.MaintainerBootstrapResponse,
 ) {
 	manager.GetCurrentOperatorMap().Range(func(key, value any) bool {
