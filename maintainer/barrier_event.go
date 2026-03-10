@@ -61,7 +61,10 @@ type BarrierEvent struct {
 	schemaIDChange     []*heartbeatpb.SchemaIDChange
 	isSyncPoint        bool
 	needSchedule       bool
-	mode               int64
+	// mode is inherited from the owning Barrier and keeps this event's
+	// scheduling, resend messages, and logs within the same replication pipeline
+	// (common.DefaultMode or common.RedoMode).
+	mode int64
 	// if the split table is enable for this changefeed, if not we can use tableID to check coverage
 	dynamicSplitEnabled bool
 	// flushEnabled controls whether this barrier uses the pre-write Flush phase.

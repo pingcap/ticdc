@@ -43,7 +43,10 @@ type Barrier struct {
 	operatorController *operator.Controller
 	splitTableEnabled  bool
 	flushEnabled       bool
-	mode               int64
+	// mode identifies which replication pipeline this barrier belongs to
+	// (common.DefaultMode or common.RedoMode). Barrier state, resend messages,
+	// and logs must stay in the same mode.
+	mode int64
 }
 
 // NewBarrier create a new barrier for the changefeed
