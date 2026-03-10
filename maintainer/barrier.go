@@ -42,7 +42,6 @@ type Barrier struct {
 	spanController     *span.Controller
 	operatorController *operator.Controller
 	splitTableEnabled  bool
-	flushEnabled       bool
 	mode               int64
 }
 
@@ -50,7 +49,6 @@ type Barrier struct {
 func NewBarrier(spanController *span.Controller,
 	operatorController *operator.Controller,
 	splitTableEnabled bool,
-	flushEnabled bool,
 	bootstrapRespMap map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
 	mode int64,
 ) *Barrier {
@@ -60,7 +58,6 @@ func NewBarrier(spanController *span.Controller,
 		spanController:     spanController,
 		operatorController: operatorController,
 		splitTableEnabled:  splitTableEnabled,
-		flushEnabled:       flushEnabled,
 		mode:               mode,
 	}
 	barrier.handleBootstrapResponse(bootstrapRespMap)
@@ -170,7 +167,7 @@ func (b *Barrier) handleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 			key := getEventKey(blockState.BlockTs, blockState.IsSyncPoint)
 			event, ok := b.blockedEvents.Get(key)
 			if !ok {
-				event = NewBlockEvent(common.NewChangefeedIDFromPB(resp.ChangefeedID), common.NewDispatcherIDFromPB(span.ID), b.spanController, b.operatorController, blockState, b.splitTableEnabled, b.flushEnabled)
+				event = NewBlockEvent(common.NewChangefeedIDFromPB(resp.ChangefeedID), common.NewDispatcherIDFromPB(span.ID), b.spanController, b.operatorController, blockState, b.splitTableEnabled)
 				b.blockedEvents.Set(key, event)
 			}
 			switch blockState.Stage {
@@ -181,11 +178,10 @@ func (b *Barrier) handleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 				// it's the maintainer's responsibility to resend the write action
 				event.selected.Store(true)
 				event.writerDispatcher = common.NewDispatcherIDFromPB(span.ID)
-				event.phase = barrierPhaseWrite
 			case heartbeatpb.BlockStage_DONE:
 				// it's the maintainer's responsibility to resend the pass action
 				event.selected.Store(true)
-				event.phase = barrierPhasePass
+				event.writerDispatcherAdvanced = true
 			}
 			event.markDispatcherEventDone(common.NewDispatcherIDFromPB(span.ID))
 		}
@@ -307,37 +303,10 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 		return event
 	}
 
-	doneAction := status.State.DoneAction
-	if doneAction == heartbeatpb.DoneAction_Unknown {
-		doneAction = inferLegacyDoneAction(event, dispatcherID)
-	}
-
-	switch event.phase {
-	// Phase 1 (Flush, storage split-table only): all influenced dispatchers must flush pre-barrier DML first.
-	// This prevents pre-DDL data from overtaking the barrier write when a table is
-	// split into multiple dispatchers across nodes.
-	case barrierPhaseFlush, barrierPhaseFlushThenPass:
-		if doneAction != heartbeatpb.DoneAction_FlushDone {
-			return event
-		}
-		event.markDispatcherEventDone(dispatcherID)
-		if !event.allDispatcherReported() {
-			return event
-		}
-
-		event.phase = nextBarrierPhaseAfterFlush(event.phase)
-		event.rangeChecker.Reset()
-		event.reportedDispatchers = make(map[common.DispatcherID]struct{})
-		event.lastResendTime = time.Now().Add(-20 * time.Second)
-		return event
-
-	// Phase 2 (Write): only writerDispatcher executes Action_Write.
-	case barrierPhaseWrite:
+	if !event.writerDispatcherAdvanced {
+		// Phase 1 (Write): only writerDispatcher executes Action_Write.
 		if event.writerDispatcher != dispatcherID {
 			// Ignore stale DONE from non-writer dispatchers while waiting writer Action_Write.
-			return event
-		}
-		if doneAction != heartbeatpb.DoneAction_WriteDone {
 			return event
 		}
 
@@ -350,55 +319,22 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 				return event
 			}
 		} else {
-			event.phase = barrierPhasePass
+			event.writerDispatcherAdvanced = true
 			event.lastResendTime = time.Now().Add(-20 * time.Second)
 		}
 
-		// Start Phase 3 from a clean coverage window.
+		// Start pass coverage from a clean window.
 		event.rangeChecker.Reset()
 		event.reportedDispatchers = make(map[common.DispatcherID]struct{})
 		event.lastResendTime = time.Now().Add(-20 * time.Second)
 		return event
+	}
 
-	// Phase 3 (Pass): all influenced dispatchers report DONE for Action_Pass,
+	// Phase 2 (Pass): all influenced dispatchers report DONE for Action_Pass,
 	// then checkEventFinish removes the barrier from blockedEvents.
-	case barrierPhasePass:
-		if doneAction != heartbeatpb.DoneAction_PassDone {
-			return event
-		}
-		event.markDispatcherEventDone(dispatcherID)
-		b.checkEventFinish(event)
-		return event
-	default:
-		return event
-	}
-}
-
-// inferLegacyDoneAction recovers the most likely action behind a legacy DONE
-// message whose State.DoneAction is unset.
-//
-// Older dispatchers only reported Stage=DONE, so the maintainer has to infer
-// which phase produced the DONE from the barrier progress:
-//  1. In Flush-related phases, every DONE belongs to Flush.
-//  2. In Write phase, only writerDispatcher can
-//     legitimately report WriteDone.
-//  3. In Pass phase, remaining DONE messages belong to Pass.
-func inferLegacyDoneAction(event *BarrierEvent, dispatcherID common.DispatcherID) heartbeatpb.DoneAction {
-	switch event.phase {
-	case barrierPhaseFlush, barrierPhaseFlushThenPass:
-		return heartbeatpb.DoneAction_FlushDone
-	case barrierPhaseWrite:
-		if event.writerDispatcher == dispatcherID {
-			return heartbeatpb.DoneAction_WriteDone
-		}
-	case barrierPhasePass:
-		return heartbeatpb.DoneAction_PassDone
-	}
-	// Safe fallback: this only happens while waiting for the writer's
-	// WriteDone and a non-writer reports a legacy DONE. handleEventDone
-	// ignores that stale DONE before it can advance the barrier, so
-	// returning Unknown does not change behavior.
-	return heartbeatpb.DoneAction_Unknown
+	event.markDispatcherEventDone(dispatcherID)
+	b.checkEventFinish(event)
+	return event
 }
 
 func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
@@ -497,7 +433,7 @@ func (b *Barrier) getOrInsertNewEvent(changefeedID common.ChangeFeedID, dispatch
 ) *BarrierEvent {
 	event, ok := b.blockedEvents.Get(key)
 	if !ok {
-		event = NewBlockEvent(changefeedID, dispatcherID, b.spanController, b.operatorController, blockState, b.splitTableEnabled, b.flushEnabled)
+		event = NewBlockEvent(changefeedID, dispatcherID, b.spanController, b.operatorController, blockState, b.splitTableEnabled)
 		b.blockedEvents.Set(key, event)
 	}
 	return event
@@ -509,7 +445,7 @@ func (b *Barrier) checkEventFinish(be *BarrierEvent) {
 	if !be.selected.Load() {
 		return
 	}
-	if be.phase != barrierPhasePass {
+	if !be.writerDispatcherAdvanced {
 		return
 	}
 	if !be.allDispatcherReported() {
@@ -551,7 +487,7 @@ func (b *Barrier) tryScheduleEvent(event *BarrierEvent) bool {
 		return false
 	}
 	event.scheduleBlockEvent()
-	event.phase = barrierPhasePass
+	event.writerDispatcherAdvanced = true
 	event.lastResendTime = time.Now().Add(-20 * time.Second)
 	return true
 }

@@ -52,7 +52,7 @@ func TestOneBlockEvent(t *testing.T) {
 	spanController.BindSpanToNode("", "node1", stm)
 	spanController.MarkSpanReplicating(stm)
 
-	barrier := NewBarrier(spanController, operatorController, false, true, nil, common.DefaultMode)
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode)
 	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
@@ -91,7 +91,7 @@ func TestOneBlockEvent(t *testing.T) {
 	require.Equal(t, uint64(10), event.commitTs)
 	require.True(t, event.writerDispatcher == spanController.GetDDLDispatcherID())
 	require.True(t, event.selected.Load())
-	require.Equal(t, barrierPhaseFlush, event.phase)
+	require.False(t, event.writerDispatcherAdvanced)
 	require.Len(t, resp.DispatcherStatuses, 1)
 	require.Equal(t, resp.DispatcherStatuses[0].Ack.CommitTs, uint64(10))
 
@@ -100,11 +100,11 @@ func TestOneBlockEvent(t *testing.T) {
 	resendMsgs := event.resend(common.DefaultMode)
 	if len(resendMsgs) > 0 {
 		action := resendMsgs[0].Message[0].(*heartbeatpb.HeartBeatResponse).DispatcherStatuses[0].Action
-		require.True(t, action.Action == heartbeatpb.Action_Flush || action.Action == heartbeatpb.Action_Write)
+		require.Equal(t, heartbeatpb.Action_Write, action.Action)
 		require.True(t, action.IsSyncPoint)
 	}
 
-	// all dispatchers report flush done
+	// writer reports write done and maintainer moves to pass
 	msgs = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
@@ -133,36 +133,7 @@ func TestOneBlockEvent(t *testing.T) {
 	resp = msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
 	require.Equal(t, resp.DispatcherStatuses[0].Ack.CommitTs, uint64(10))
 	require.Len(t, barrier.blockedEvents.m, 1)
-	require.NotEqual(t, barrierPhaseFlush, event.phase)
-	// The barrier can already be in Pass here when Flush is auto-skipped and
-	// Write was inferred as done from restored/forwarded progress.
-	// resend write action after flush phase done
-	if event.phase == barrierPhaseWrite {
-		resendMsgs = barrier.Resend()
-		require.Len(t, resendMsgs, 1)
-		writeResp := resendMsgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
-		require.Len(t, writeResp.DispatcherStatuses, 1)
-		require.Equal(t, heartbeatpb.Action_Write, writeResp.DispatcherStatuses[0].Action.Action)
-
-		// writer reports write done
-		msgs = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
-			ChangefeedID: cfID.ToPB(),
-			BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
-				{
-					ID: spanController.GetDDLDispatcherID().ToPB(),
-					State: &heartbeatpb.State{
-						BlockTs:     10,
-						IsBlocked:   true,
-						Stage:       heartbeatpb.BlockStage_DONE,
-						IsSyncPoint: true,
-					},
-				},
-			},
-		})
-		require.NotNil(t, msgs)
-		require.Len(t, barrier.blockedEvents.m, 1)
-		require.Equal(t, barrierPhasePass, event.phase)
-	}
+	require.True(t, event.writerDispatcherAdvanced)
 
 	// resend pass action and finish it
 	resendMsgs = barrier.Resend()
@@ -205,116 +176,6 @@ func TestOneBlockEvent(t *testing.T) {
 	}
 }
 
-func TestBarrierIgnoresFlushDoneWhileWaitingWrite(t *testing.T) {
-	testutil.SetUpTestServices()
-	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
-	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		common.DDLSpanSchemaID,
-		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
-			ID:              tableTriggerEventDispatcherID.ToPB(),
-			ComponentStatus: heartbeatpb.ComponentState_Working,
-			CheckpointTs:    1,
-		}, "node1", false)
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
-	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
-	startTs := uint64(10)
-	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, startTs)
-	stm := spanController.GetTasksByTableID(1)[0]
-	spanController.BindSpanToNode("", "node1", stm)
-	spanController.MarkSpanReplicating(stm)
-
-	barrier := NewBarrier(spanController, operatorController, false, true, nil, common.DefaultMode)
-	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
-		ChangefeedID: cfID.ToPB(),
-		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
-			{
-				ID: spanController.GetDDLDispatcherID().ToPB(),
-				State: &heartbeatpb.State{
-					IsBlocked: true,
-					BlockTs:   10,
-					BlockTables: &heartbeatpb.InfluencedTables{
-						InfluenceType: heartbeatpb.InfluenceType_All,
-					},
-					IsSyncPoint: true,
-				},
-			},
-			{
-				ID: stm.ID.ToPB(),
-				State: &heartbeatpb.State{
-					IsBlocked: true,
-					BlockTs:   10,
-					BlockTables: &heartbeatpb.InfluencedTables{
-						InfluenceType: heartbeatpb.InfluenceType_All,
-					},
-					IsSyncPoint: true,
-				},
-			},
-		},
-	})
-	require.NotNil(t, msgs)
-
-	key := eventKey{
-		blockTs:     10,
-		isSyncPoint: true,
-	}
-	event := barrier.blockedEvents.m[key]
-	require.Equal(t, barrierPhaseFlush, event.phase)
-
-	msgs = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
-		ChangefeedID: cfID.ToPB(),
-		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
-			{
-				ID: spanController.GetDDLDispatcherID().ToPB(),
-				State: &heartbeatpb.State{
-					BlockTs:     10,
-					IsBlocked:   true,
-					Stage:       heartbeatpb.BlockStage_DONE,
-					IsSyncPoint: true,
-					DoneAction:  heartbeatpb.DoneAction_FlushDone,
-				},
-			},
-			{
-				ID: stm.ID.ToPB(),
-				State: &heartbeatpb.State{
-					BlockTs:     10,
-					IsBlocked:   true,
-					Stage:       heartbeatpb.BlockStage_DONE,
-					IsSyncPoint: true,
-					DoneAction:  heartbeatpb.DoneAction_FlushDone,
-				},
-			},
-		},
-	})
-	require.NotNil(t, msgs)
-	require.Equal(t, barrierPhaseWrite, event.phase)
-
-	// A duplicated Flush DONE from the writer must not advance the writer phase.
-	msgs = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
-		ChangefeedID: cfID.ToPB(),
-		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
-			{
-				ID: spanController.GetDDLDispatcherID().ToPB(),
-				State: &heartbeatpb.State{
-					BlockTs:     10,
-					IsBlocked:   true,
-					Stage:       heartbeatpb.BlockStage_DONE,
-					IsSyncPoint: true,
-					DoneAction:  heartbeatpb.DoneAction_FlushDone,
-				},
-			},
-		},
-	})
-	require.NotNil(t, msgs)
-	require.Equal(t, barrierPhaseWrite, event.phase)
-
-	resendMsgs := barrier.Resend()
-	require.Len(t, resendMsgs, 1)
-	writeResp := resendMsgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
-	require.Len(t, writeResp.DispatcherStatuses, 1)
-	require.Equal(t, heartbeatpb.Action_Write, writeResp.DispatcherStatuses[0].Action.Action)
-}
-
 func TestNormalBlock(t *testing.T) {
 	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
@@ -344,7 +205,7 @@ func TestNormalBlock(t *testing.T) {
 	spanController.MarkSpanReplicating(selectedRep)
 
 	newSpan := &heartbeatpb.Table{TableID: 10, SchemaID: 1}
-	barrier := NewBarrier(spanController, operatorController, false, true, nil, common.DefaultMode)
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode)
 
 	// first node block request
 	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
@@ -445,45 +306,9 @@ func TestNormalBlock(t *testing.T) {
 	require.Equal(t, uint64(10), event.commitTs)
 	require.True(t, event.writerDispatcher == selectDispatcherID)
 
-	// Phase1: all influenced dispatchers report flush done.
-	_ = barrier.HandleStatus("node2", &heartbeatpb.BlockStatusRequest{
-		ChangefeedID: cfID.ToPB(),
-		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
-			{
-				ID: blockedDispatcherIDS[2],
-				State: &heartbeatpb.State{
-					IsBlocked: true,
-					BlockTs:   10,
-					Stage:     heartbeatpb.BlockStage_DONE,
-				},
-			},
-		},
-	})
+	// Phase1: after all blocked dispatchers report WAITING, maintainer only needs to resend write.
 	require.Len(t, barrier.blockedEvents.m, 1)
-
-	_ = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
-		ChangefeedID: cfID.ToPB(),
-		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
-			{
-				ID: blockedDispatcherIDS[0],
-				State: &heartbeatpb.State{
-					IsBlocked: true,
-					BlockTs:   10,
-					Stage:     heartbeatpb.BlockStage_DONE,
-				},
-			},
-			{
-				ID: blockedDispatcherIDS[1],
-				State: &heartbeatpb.State{
-					IsBlocked: true,
-					BlockTs:   10,
-					Stage:     heartbeatpb.BlockStage_DONE,
-				},
-			},
-		},
-	})
-	require.Len(t, barrier.blockedEvents.m, 1)
-	require.Equal(t, barrierPhaseWrite, event.phase)
+	require.False(t, event.writerDispatcherAdvanced)
 
 	// Phase2: resend write action and writer reports done.
 	resendMsgs := barrier.Resend()
@@ -506,7 +331,7 @@ func TestNormalBlock(t *testing.T) {
 		},
 	})
 	require.Len(t, barrier.blockedEvents.m, 1)
-	require.Equal(t, barrierPhasePass, event.phase)
+	require.True(t, event.writerDispatcherAdvanced)
 
 	// Phase3: resend pass and wait all done.
 	resendMsgs = barrier.Resend()
@@ -577,7 +402,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 	}
 
 	newSpan := &heartbeatpb.Table{TableID: 10, SchemaID: 1}
-	barrier := NewBarrier(spanController, operatorController, false, true, nil, common.DefaultMode)
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode)
 
 	// first node block request
 	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
@@ -659,44 +484,9 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 	require.False(t, event.rangeChecker.IsFullyCovered())
 	require.True(t, event.tableTriggerDispatcherRelated)
 
-	// Phase1: all influenced dispatchers report flush done.
-	_ = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
-		ChangefeedID: cfID.ToPB(),
-		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
-			{
-				ID: tableTriggerEventDispatcherID.ToPB(),
-				State: &heartbeatpb.State{
-					IsBlocked: true,
-					BlockTs:   10,
-					Stage:     heartbeatpb.BlockStage_DONE,
-				},
-			},
-		},
-	})
+	// Phase1: after all blocked dispatchers report WAITING, maintainer only needs to resend write.
 	require.Len(t, barrier.blockedEvents.m, 1)
-	_ = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
-		ChangefeedID: cfID.ToPB(),
-		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
-			{
-				ID: blockedDispatcherIDS[0],
-				State: &heartbeatpb.State{
-					IsBlocked: true,
-					BlockTs:   10,
-					Stage:     heartbeatpb.BlockStage_DONE,
-				},
-			},
-			{
-				ID: blockedDispatcherIDS[1],
-				State: &heartbeatpb.State{
-					IsBlocked: true,
-					BlockTs:   10,
-					Stage:     heartbeatpb.BlockStage_DONE,
-				},
-			},
-		},
-	})
-	require.Len(t, barrier.blockedEvents.m, 1)
-	require.Equal(t, barrierPhaseWrite, event.phase)
+	require.False(t, event.writerDispatcherAdvanced)
 
 	// Phase2: writer action and done.
 	resendMsgs := barrier.Resend()
@@ -719,7 +509,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 		},
 	})
 	require.Len(t, barrier.blockedEvents.m, 1)
-	require.Equal(t, barrierPhasePass, event.phase)
+	require.True(t, event.writerDispatcherAdvanced)
 
 	// Phase3: pass action and all related dispatchers done.
 	resendMsgs = barrier.Resend()
@@ -788,7 +578,7 @@ func TestSchemaBlock(t *testing.T) {
 	}
 
 	newTable := &heartbeatpb.Table{TableID: 10, SchemaID: 2}
-	barrier := NewBarrier(spanController, operatorController, true, true, nil, common.DefaultMode)
+	barrier := NewBarrier(spanController, operatorController, true, nil, common.DefaultMode)
 
 	// first dispatcher  block request
 	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
@@ -894,37 +684,8 @@ func TestSchemaBlock(t *testing.T) {
 	resp = msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
 	require.Len(t, resp.DispatcherStatuses, 1)
 
-	// Phase1: all influenced dispatchers report flush done.
-	_ = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
-		ChangefeedID: cfID.ToPB(),
-		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
-			{
-				ID: spanController.GetDDLDispatcherID().ToPB(),
-				State: &heartbeatpb.State{
-					IsBlocked: true,
-					BlockTs:   10,
-					Stage:     heartbeatpb.BlockStage_DONE,
-				},
-			},
-			{
-				ID: dispatcherIDs[0],
-				State: &heartbeatpb.State{
-					IsBlocked: true,
-					BlockTs:   10,
-					Stage:     heartbeatpb.BlockStage_DONE,
-				},
-			},
-			{
-				ID: dispatcherIDs[1],
-				State: &heartbeatpb.State{
-					IsBlocked: true,
-					BlockTs:   10,
-					Stage:     heartbeatpb.BlockStage_DONE,
-				},
-			},
-		},
-	})
-	require.Equal(t, barrierPhaseWrite, event.phase)
+	// Phase1: after all blocked dispatchers report WAITING, maintainer only needs to resend write.
+	require.False(t, event.writerDispatcherAdvanced)
 
 	// Phase2: writer action and done.
 	resendMsgs := barrier.Resend()
@@ -1000,7 +761,7 @@ func TestSyncPointBlock(t *testing.T) {
 	spanController.BindSpanToNode("node1", "node2", selectedRep)
 	spanController.MarkSpanReplicating(selectedRep)
 
-	barrier := NewBarrier(spanController, operatorController, true, true, nil, common.DefaultMode)
+	barrier := NewBarrier(spanController, operatorController, true, nil, common.DefaultMode)
 	// first dispatcher  block request
 	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
@@ -1081,65 +842,11 @@ func TestSyncPointBlock(t *testing.T) {
 	// the last one will be the writer
 	require.Equal(t, event.writerDispatcher, spanController.GetDDLDispatcherID())
 
-	// Phase1: resend flush actions and wait all done.
-	resendMsgs := barrier.Resend()
-	require.Len(t, resendMsgs, 2)
-	for _, msg := range resendMsgs {
-		flushResp := msg.Message[0].(*heartbeatpb.HeartBeatResponse)
-		require.Len(t, flushResp.DispatcherStatuses, 1)
-		require.Equal(t, heartbeatpb.Action_Flush, flushResp.DispatcherStatuses[0].Action.Action)
-	}
-
-	_ = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
-		ChangefeedID: cfID.ToPB(),
-		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
-			{
-				ID: spanController.GetDDLDispatcherID().ToPB(),
-				State: &heartbeatpb.State{
-					IsBlocked:   true,
-					BlockTs:     10,
-					Stage:       heartbeatpb.BlockStage_DONE,
-					IsSyncPoint: true,
-				},
-			},
-			{
-				ID: dispatcherIDs[0],
-				State: &heartbeatpb.State{
-					IsBlocked:   true,
-					BlockTs:     10,
-					Stage:       heartbeatpb.BlockStage_DONE,
-					IsSyncPoint: true,
-				},
-			},
-			{
-				ID: dispatcherIDs[1],
-				State: &heartbeatpb.State{
-					IsBlocked:   true,
-					BlockTs:     10,
-					Stage:       heartbeatpb.BlockStage_DONE,
-					IsSyncPoint: true,
-				},
-			},
-		},
-	})
-	_ = barrier.HandleStatus("node2", &heartbeatpb.BlockStatusRequest{
-		ChangefeedID: cfID.ToPB(),
-		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
-			{
-				ID: dispatcherIDs[2],
-				State: &heartbeatpb.State{
-					IsBlocked:   true,
-					BlockTs:     10,
-					Stage:       heartbeatpb.BlockStage_DONE,
-					IsSyncPoint: true,
-				},
-			},
-		},
-	})
-	require.Equal(t, barrierPhaseWrite, event.phase)
+	// Phase1: after all blocked dispatchers report WAITING, maintainer only needs to resend write.
+	require.False(t, event.writerDispatcherAdvanced)
 
 	// Phase2: write action and writer done.
-	resendMsgs = barrier.Resend()
+	resendMsgs := barrier.Resend()
 	require.Len(t, resendMsgs, 1)
 	writeResp := resendMsgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
 	require.Len(t, writeResp.DispatcherStatuses, 1)
@@ -1234,7 +941,7 @@ func TestNonBlocked(t *testing.T) {
 		}, "node1", false)
 	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
-	barrier := NewBarrier(spanController, operatorController, false, true, nil, common.DefaultMode)
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode)
 
 	var blockedDispatcherIDS []*heartbeatpb.DispatcherID
 	for id := 1; id < 4; id++ {
@@ -1288,7 +995,7 @@ func TestUpdateCheckpointTs(t *testing.T) {
 		}, "node1", false)
 	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
-	barrier := NewBarrier(spanController, operatorController, false, true, nil, common.DefaultMode)
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode)
 	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
@@ -1317,7 +1024,7 @@ func TestUpdateCheckpointTs(t *testing.T) {
 	require.Equal(t, uint64(10), event.commitTs)
 	require.True(t, event.writerDispatcher == spanController.GetDDLDispatcherID())
 	require.True(t, event.selected.Load())
-	require.Equal(t, barrierPhaseFlush, event.phase)
+	require.False(t, event.writerDispatcherAdvanced)
 	require.Len(t, resp.DispatcherStatuses, 1)
 	require.Equal(t, resp.DispatcherStatuses[0].Ack.CommitTs, uint64(10))
 	// the checkpoint ts is updated
@@ -1350,7 +1057,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 		spanController.MarkSpanReplicating(stm)
 	}
 
-	barrier := NewBarrier(spanController, operatorController, false, true, map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+	barrier := NewBarrier(spanController, operatorController, false, map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
 		"nod1": {
 			ChangefeedID: cfID.ToPB(),
 			Spans: []*heartbeatpb.BootstrapTableSpan{
@@ -1384,11 +1091,11 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 	event := barrier.blockedEvents.m[getEventKey(6, false)]
 	require.NotNil(t, event)
 	require.False(t, event.selected.Load())
-	require.Equal(t, barrierPhaseFlush, event.phase)
+	require.False(t, event.writerDispatcherAdvanced)
 	require.True(t, event.allDispatcherReported())
 
 	// one waiting dispatcher, and one writing
-	barrier = NewBarrier(spanController, operatorController, false, true, map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+	barrier = NewBarrier(spanController, operatorController, false, map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
 		"nod1": {
 			ChangefeedID: cfID.ToPB(),
 			Spans: []*heartbeatpb.BootstrapTableSpan{
@@ -1422,10 +1129,10 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 	event = barrier.blockedEvents.m[getEventKey(6, false)]
 	require.NotNil(t, event)
 	require.True(t, event.selected.Load())
-	require.Equal(t, barrierPhaseWrite, event.phase)
+	require.False(t, event.writerDispatcherAdvanced)
 
 	// two done dispatchers
-	barrier = NewBarrier(spanController, operatorController, false, true, map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+	barrier = NewBarrier(spanController, operatorController, false, map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
 		"nod1": {
 			ChangefeedID: cfID.ToPB(),
 			Spans: []*heartbeatpb.BootstrapTableSpan{
@@ -1459,10 +1166,10 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 	event = barrier.blockedEvents.m[getEventKey(6, false)]
 	require.NotNil(t, event)
 	require.True(t, event.selected.Load())
-	require.Equal(t, barrierPhasePass, event.phase)
+	require.True(t, event.writerDispatcherAdvanced)
 
 	// nil, none stage
-	barrier = NewBarrier(spanController, operatorController, false, true, map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+	barrier = NewBarrier(spanController, operatorController, false, map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
 		"nod1": {
 			ChangefeedID: cfID.ToPB(),
 			Spans: []*heartbeatpb.BootstrapTableSpan{
@@ -1487,7 +1194,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 	event = barrier.blockedEvents.m[getEventKey(6, false)]
 	require.Nil(t, event)
 	// flush disabled: restored bootstrap event should skip flush phase and resend write directly.
-	barrier = NewBarrier(spanController, operatorController, false, false, map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+	barrier = NewBarrier(spanController, operatorController, false, map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
 		"nod1": {
 			ChangefeedID: cfID.ToPB(),
 			Spans: []*heartbeatpb.BootstrapTableSpan{
@@ -1521,7 +1228,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 	event = barrier.blockedEvents.m[getEventKey(6, false)]
 	require.NotNil(t, event)
 	require.True(t, event.selected.Load())
-	require.Equal(t, barrierPhaseWrite, event.phase)
+	require.False(t, event.writerDispatcherAdvanced)
 	bootstrapMsgs := barrier.Resend()
 	require.Len(t, bootstrapMsgs, 1)
 	bootstrapResp := bootstrapMsgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
@@ -1542,7 +1249,7 @@ func TestSyncPointBlockPerf(t *testing.T) {
 		}, "node1", false)
 	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
-	barrier := NewBarrier(spanController, operatorController, true, false, nil, common.DefaultMode)
+	barrier := NewBarrier(spanController, operatorController, true, nil, common.DefaultMode)
 	for id := 1; id < 1000; id++ {
 		spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: int64(id)}, 1)
 	}
@@ -1667,7 +1374,7 @@ func TestBarrierEventWithDispatcherReallocation(t *testing.T) {
 	spanController.MarkSpanReplicating(dispatcherC)
 
 	// create barrier
-	barrier := NewBarrier(spanController, operatorController, true, false, nil, common.DefaultMode)
+	barrier := NewBarrier(spanController, operatorController, true, nil, common.DefaultMode)
 
 	// report from dispatcherA
 	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
@@ -1850,7 +1557,7 @@ func TestBarrierEventWithDispatcherScheduling(t *testing.T) {
 	spanController.MarkSpanReplicating(dispatcherA)
 
 	// Create barrier
-	barrier := NewBarrier(spanController, operatorController, true, false, nil, common.DefaultMode)
+	barrier := NewBarrier(spanController, operatorController, true, nil, common.DefaultMode)
 
 	// Verify dispatcher A is in replicating state
 	require.True(t, spanController.IsReplicating(dispatcherA))
@@ -1976,7 +1683,7 @@ func TestDeferAllDBBlockEventFromDDLDispatcherWhilePendingSchedule(t *testing.T)
 	spanController.BindSpanToNode("", "node1", absents[0])
 	spanController.MarkSpanReplicating(absents[0])
 
-	barrier := NewBarrier(spanController, operatorController, false, false, nil, common.DefaultMode)
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode)
 
 	// Build a TRUNCATE TABLE-like block event, which requires scheduling and will be enqueued into pendingEvents
 	// when the write action is issued.

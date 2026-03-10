@@ -357,9 +357,9 @@ func (c *Controller) initializeComponents(
 	isStorageSinkBackend bool,
 ) {
 	if c.enableRedo {
-		c.redoBarrier = NewBarrier(c.redoSpanController, c.redoOperatorController, c.enableTableAcrossNodes, false, allNodesResp, common.RedoMode)
+		c.redoBarrier = NewBarrier(c.redoSpanController, c.redoOperatorController, c.enableTableAcrossNodes, allNodesResp, common.RedoMode)
 	}
-	c.barrier = NewBarrier(c.spanController, c.operatorController, c.enableTableAcrossNodes, isStorageSinkBackend, allNodesResp, common.DefaultMode)
+	c.barrier = NewBarrier(c.spanController, c.operatorController, c.enableTableAcrossNodes, allNodesResp, common.DefaultMode)
 
 	// Start scheduler
 	c.taskHandlesMu.Lock()

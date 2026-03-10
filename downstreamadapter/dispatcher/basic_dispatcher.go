@@ -373,6 +373,24 @@ func (d *BasicDispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) err
 	return nil
 }
 
+func (d *BasicDispatcher) writePreparedBlockEvent(event commonEvent.BlockEvent) error {
+	if event.GetType() == commonEvent.TypeDDLEvent {
+		ddl := event.(*commonEvent.DDLEvent)
+		if ddl.NotSync {
+			log.Info("ignore DDL by NotSync", zap.Stringer("dispatcher", d.id), zap.Any("ddl", ddl))
+			return d.passPreparedBlockEvent(event)
+		}
+	}
+	d.tableProgress.Add(event)
+	return d.sink.WriteBlockEvent(event)
+}
+
+func (d *BasicDispatcher) passPreparedBlockEvent(event commonEvent.BlockEvent) error {
+	d.tableProgress.Pass(event)
+	event.PostFlush()
+	return nil
+}
+
 // ensureActiveActiveTableInfo validates the table schema requirements for active-active mode.
 //
 // When enable-active-active is enabled, TiCDC relies on `_tidb_origin_ts` and
@@ -757,7 +775,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // 1. If the action is a write, we need to add the ddl event to the sink for writing to downstream.
 // 2. If the action is a pass, we just need to pass the event
 //
-// For block actions (write/pass), execution may involve downstream IO because we flush prior DML first.
+// For block actions (write/pass), execution may involve downstream IO.
 // To avoid blocking the dispatcher status dynamic stream handler, we execute the action asynchronously
 // and return await=true.
 // The status path will be waked up after the action finishes.
@@ -828,11 +846,6 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 					d.PassBlockEvent(pendingEvent, actionCommitTs, actionIsSyncPoint)
 				})
 				return true
-			case heartbeatpb.Action_Flush:
-				d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
-					d.FlushBlockEvent(pendingEvent, actionCommitTs, actionIsSyncPoint)
-				})
-				return true
 			default:
 				log.Error("unsupported action type",
 					zap.Stringer("dispatcher", d.id),
@@ -861,7 +874,6 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 				BlockTs:     dispatcherStatus.GetAction().CommitTs,
 				IsSyncPoint: dispatcherStatus.GetAction().IsSyncPoint,
 				Stage:       heartbeatpb.BlockStage_DONE,
-				DoneAction:  doneActionFromAction(dispatcherStatus.GetAction().Action),
 			},
 			Mode: d.GetMode(),
 		}
@@ -876,41 +888,26 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 // easier for tests and failpoints to control interleavings around block events.
 func (d *BasicDispatcher) ExecuteBlockEventDDL(pendingEvent commonEvent.BlockEvent, actionCommitTs uint64, actionIsSyncPoint bool) {
 	failpoint.Inject("BlockOrWaitBeforeWrite", nil)
-	err := d.AddBlockEventToSink(pendingEvent)
+	err := d.writePreparedBlockEvent(pendingEvent)
 	if err != nil {
 		d.HandleError(err)
 		return
 	}
 	failpoint.Inject("BlockOrWaitReportAfterWrite", nil)
-	d.reportBlockedEventDone(actionCommitTs, actionIsSyncPoint, heartbeatpb.DoneAction_WriteDone)
+	d.reportBlockedEventDone(actionCommitTs, actionIsSyncPoint)
 }
 
 // PassBlockEvent executes maintainer Action_Pass:
 // It relies on PassBlockEventToSink to preserve ordering and mark the event passed.
 func (d *BasicDispatcher) PassBlockEvent(pendingEvent commonEvent.BlockEvent, actionCommitTs uint64, actionIsSyncPoint bool) {
 	failpoint.Inject("BlockOrWaitBeforePass", nil)
-	err := d.PassBlockEventToSink(pendingEvent)
+	err := d.passPreparedBlockEvent(pendingEvent)
 	if err != nil {
 		d.HandleError(err)
 		return
 	}
 	failpoint.Inject("BlockAfterPass", nil)
-	d.reportBlockedEventDone(actionCommitTs, actionIsSyncPoint, heartbeatpb.DoneAction_PassDone)
-}
-
-// FlushBlockEvent executes maintainer Action_Flush:
-// It only flushes prior DML before the pending block event and keeps the pending
-// event for subsequent Write/Pass action.
-func (d *BasicDispatcher) FlushBlockEvent(pendingEvent commonEvent.BlockEvent, actionCommitTs uint64, actionIsSyncPoint bool) {
-	failpoint.Inject("BlockOrWaitBeforeFlush", nil)
-	err := d.sink.FlushDMLBeforeBlock(pendingEvent)
-	if err != nil {
-		d.HandleError(err)
-		return
-	}
-	d.blockEventStatus.updateBlockStage(heartbeatpb.BlockStage_WAITING)
-	failpoint.Inject("BlockAfterFlush", nil)
-	d.reportBlockedEventDone(actionCommitTs, actionIsSyncPoint, heartbeatpb.DoneAction_FlushDone)
+	d.reportBlockedEventDone(actionCommitTs, actionIsSyncPoint)
 }
 
 // reportBlockedEventDone sends DONE status and wakes dispatcher-status stream path
@@ -918,7 +915,6 @@ func (d *BasicDispatcher) FlushBlockEvent(pendingEvent commonEvent.BlockEvent, a
 func (d *BasicDispatcher) reportBlockedEventDone(
 	actionCommitTs uint64,
 	actionIsSyncPoint bool,
-	doneAction heartbeatpb.DoneAction,
 ) {
 	d.sharedInfo.blockStatusesChan <- &heartbeatpb.TableSpanBlockStatus{
 		ID: d.id.ToPB(),
@@ -927,24 +923,10 @@ func (d *BasicDispatcher) reportBlockedEventDone(
 			BlockTs:     actionCommitTs,
 			IsSyncPoint: actionIsSyncPoint,
 			Stage:       heartbeatpb.BlockStage_DONE,
-			DoneAction:  doneAction,
 		},
 		Mode: d.GetMode(),
 	}
 	GetDispatcherStatusDynamicStream().Wake(d.id)
-}
-
-func doneActionFromAction(action heartbeatpb.Action) heartbeatpb.DoneAction {
-	switch action {
-	case heartbeatpb.Action_Write:
-		return heartbeatpb.DoneAction_WriteDone
-	case heartbeatpb.Action_Pass:
-		return heartbeatpb.DoneAction_PassDone
-	case heartbeatpb.Action_Flush:
-		return heartbeatpb.DoneAction_FlushDone
-	default:
-		return heartbeatpb.DoneAction_Unknown
-	}
 }
 
 // shouldBlock check whether the event should be blocked(to wait maintainer response)
@@ -1062,7 +1044,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 			d.holdBlockEvent(event)
 			return
 		}
-		d.reportBlockedEventToMaintainer(event)
+		d.prepareAndReportBlockedEvent(event)
 	}
 
 	// dealing with events which update schema ids
@@ -1121,7 +1103,7 @@ func (d *BasicDispatcher) tryDealWithHeldBlockEvent() {
 	// Thus, we ensure DB/All block events can generate correct range checkers.
 	if d.pendingACKCount.Load() == 0 {
 		if holding := d.popHoldingBlockEvent(); holding != nil {
-			d.reportBlockedEventToMaintainer(holding)
+			d.prepareAndReportBlockedEvent(holding)
 		}
 	} else if d.pendingACKCount.Load() < 0 {
 		d.HandleError(errors.ErrDispatcherFailed.GenWithStackByArgs(
@@ -1187,6 +1169,18 @@ func (d *BasicDispatcher) reportBlockedEventToMaintainer(event commonEvent.Block
 	}
 	d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
 	d.sharedInfo.blockStatusesChan <- message
+}
+
+func (d *BasicDispatcher) prepareAndReportBlockedEvent(event commonEvent.BlockEvent) {
+	d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
+		failpoint.Inject("BlockOrWaitBeforeFlush", nil)
+		if err := d.sink.FlushDMLBeforeBlock(event); err != nil {
+			d.HandleError(err)
+			return
+		}
+		failpoint.Inject("BlockAfterFlush", nil)
+		d.reportBlockedEventToMaintainer(event)
+	})
 }
 
 // GetBlockEventStatus returns the current in-flight *blocking* barrier state for bootstrap.

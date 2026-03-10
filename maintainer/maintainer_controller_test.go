@@ -1411,7 +1411,6 @@ func TestFinishBootstrap(t *testing.T) {
 	_ = msg
 	require.Nil(t, err)
 	require.NotNil(t, s.barrier)
-	require.False(t, s.barrier.flushEnabled)
 	require.True(t, s.bootstrapped)
 	require.Equal(t, msg.GetSchemas(), []*heartbeatpb.SchemaInfo{
 		{
@@ -1486,7 +1485,6 @@ func TestFinishBootstrapStorageSinkWithoutTableAcrossNodesEnableFlush(t *testing
 	}, false, true)
 	require.NoError(t, err)
 	require.NotNil(t, s.barrier)
-	require.True(t, s.barrier.flushEnabled)
 }
 
 func TestSplitTableWhenBootstrapFinished(t *testing.T) {
@@ -1563,7 +1561,6 @@ func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 	}, false, false)
 	require.Nil(t, err)
 	require.NotNil(t, s.barrier)
-	require.False(t, s.barrier.flushEnabled)
 	// total 8 regions,
 	// table 1: 2 holes will be inserted to absent
 	// table 2: split to 2 spans, will be inserted to absent
@@ -1584,7 +1581,6 @@ func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 	}, false, true)
 	require.Nil(t, err)
 	require.NotNil(t, s2.barrier)
-	require.True(t, s2.barrier.flushEnabled)
 }
 
 func TestMapFindHole(t *testing.T) {
