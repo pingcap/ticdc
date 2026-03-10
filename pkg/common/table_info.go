@@ -152,11 +152,22 @@ func (ti *TableInfo) Marshal() ([]byte, error) {
 
 func UnmarshalJSONToTableInfo(data []byte) (*TableInfo, error) {
 	// otherField | columnSchemaData | columnSchemaDataSize
+	if len(data) < 8 {
+		return nil, fmt.Errorf("invalid table info data: length %d is too short", len(data))
+	}
+
 	ti := &TableInfo{}
 	var err error
 	var columnSchemaDataSize uint64
 	columnSchemaDataSizeValue := data[len(data)-8:]
 	columnSchemaDataSize = binary.BigEndian.Uint64(columnSchemaDataSizeValue)
+	if columnSchemaDataSize > uint64(len(data)-8) {
+		return nil, fmt.Errorf(
+			"invalid table info data: column schema size %d exceeds payload length %d",
+			columnSchemaDataSize,
+			len(data)-8,
+		)
+	}
 
 	columnSchemaData := data[len(data)-8-int(columnSchemaDataSize) : len(data)-8]
 	restData := data[:len(data)-8-int(columnSchemaDataSize)]
