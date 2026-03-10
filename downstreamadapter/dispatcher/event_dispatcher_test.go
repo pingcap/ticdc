@@ -429,6 +429,100 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	t.Run("cloud storage wake callback after batch enqueue", verifyDMLWakeCallbackStorageAfterBatchEnqueue)
 }
 
+func TestBlockingDDLFlushBeforeWaitingAndWriteDoesNotFlushAgain(t *testing.T) {
+	keyspaceID := getTestingKeyspaceID()
+	tableSpan := getUncompleteTableSpan()
+	tableSpan.KeyspaceID = keyspaceID
+	mockSink := newDispatcherTestSink(t, common.MysqlSinkType)
+
+	var flushCalls atomic.Int32
+	flushStarted := make(chan struct{}, 1)
+	flushRelease := make(chan struct{})
+	mockSink.SetFlushBeforeBlockHook(func(event commonEvent.BlockEvent) error {
+		if event.GetCommitTs() != 10 {
+			return nil
+		}
+		if flushCalls.Add(1) == 1 {
+			select {
+			case flushStarted <- struct{}{}:
+			default:
+			}
+			<-flushRelease
+		}
+		return nil
+	})
+
+	dispatcher := newDispatcherForTest(mockSink.Sink(), tableSpan)
+	nodeID := node.NewID()
+	ddlEvent := &commonEvent.DDLEvent{
+		FinishedTs: 10,
+		StartTs:    10,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{1},
+		},
+	}
+
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent)}, func() {})
+	require.True(t, block)
+
+	select {
+	case <-flushStarted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "expected local flush to start for blocking DDL")
+	}
+
+	pendingEvent, blockStage := dispatcher.blockEventStatus.getEventAndStage()
+	require.Nil(t, pendingEvent)
+	require.Equal(t, heartbeatpb.BlockStage_NONE, blockStage)
+
+	select {
+	case msg := <-dispatcher.GetBlockStatusesChan():
+		require.FailNow(t, "unexpected block status before local flush finishes", "received=%v", msg)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(flushRelease)
+
+	select {
+	case msg := <-dispatcher.GetBlockStatusesChan():
+		require.True(t, msg.State.IsBlocked)
+		require.Equal(t, uint64(10), msg.State.BlockTs)
+		require.Equal(t, heartbeatpb.BlockStage_WAITING, msg.State.Stage)
+	case <-time.After(time.Second):
+		require.FailNow(t, "expected blocking DDL to enter WAITING after local flush")
+	}
+
+	pendingEvent, blockStage = dispatcher.blockEventStatus.getEventAndStage()
+	require.Same(t, ddlEvent, pendingEvent)
+	require.Equal(t, heartbeatpb.BlockStage_WAITING, blockStage)
+	require.Equal(t, int32(1), flushCalls.Load())
+
+	await := dispatcher.HandleDispatcherStatus(&heartbeatpb.DispatcherStatus{
+		Action: &heartbeatpb.DispatcherAction{
+			Action:      heartbeatpb.Action_Write,
+			CommitTs:    ddlEvent.FinishedTs,
+			IsSyncPoint: false,
+		},
+	})
+	require.True(t, await)
+
+	select {
+	case msg := <-dispatcher.GetBlockStatusesChan():
+		require.True(t, msg.State.IsBlocked)
+		require.Equal(t, uint64(10), msg.State.BlockTs)
+		require.Equal(t, heartbeatpb.BlockStage_DONE, msg.State.Stage)
+	case <-time.After(time.Second):
+		require.FailNow(t, "expected DONE after write action")
+	}
+
+	require.Eventually(t, func() bool {
+		pendingEvent, blockStage = dispatcher.blockEventStatus.getEventAndStage()
+		return pendingEvent == nil && blockStage == heartbeatpb.BlockStage_NONE
+	}, time.Second, 10*time.Millisecond)
+	require.Equal(t, int32(1), flushCalls.Load())
+}
+
 // test uncompelete table span can correctly handle the ddl events
 func TestUncompeleteTableSpanDispatcherHandleEvents(t *testing.T) {
 	count.Swap(0)
