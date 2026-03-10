@@ -1021,9 +1021,21 @@ func (s *SinkConfig) CheckCompatibilityWithSinkURI(
 		return cfg.CloudStorageConfig.UseTableIDAsPath
 	}
 
+	useTableIDAsPathChanged := func() bool {
+		newVal := getUseTableIDAsPath(s)
+		oldVal := getUseTableIDAsPath(oldSinkConfig)
+		if newVal == nil && oldVal == nil {
+			return false
+		}
+		if newVal == nil || oldVal == nil {
+			return true
+		}
+		return *newVal != *oldVal
+	}
+
 	cfgParamsChanged := s.Protocol != oldSinkConfig.Protocol ||
 		s.TxnAtomicity != oldSinkConfig.TxnAtomicity ||
-		getUseTableIDAsPath(s) != getUseTableIDAsPath(oldSinkConfig)
+		useTableIDAsPathChanged()
 
 	isURIParamsChanged := func(oldCfg SinkConfig) bool {
 		err := oldCfg.applyParameterBySinkURI(sinkURI)
