@@ -14,7 +14,6 @@
 package schemastore
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -712,68 +711,43 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 	// Rebuild them with the following precedence:
 	// 1. InvolvingSchemaInfo provides a fallback old schema/table pair, but names may be normalized.
 	// 2. RenameTableArgs.OldSchemaName overrides the fallback when available.
+	//    It is reliable in TiDB >= v8.5, but can be missing in older versions.
 	// 3. The original query (if it specifies old schema) has the highest priority for identifier case.
 	// 4. If the query omits old schema and ExtraSchemaID differs from SchemaID, use ExtraSchemaID to
 	//    recover the old schema name from the schema store.
 	oldSchemaName := ""
 	oldTableName := ""
-	rawArgsCount := 0
-	if len(args.job.RawArgs) > 0 {
-		var rawArgs []json.RawMessage
-		if err := json.Unmarshal(args.job.RawArgs, &rawArgs); err == nil {
-			rawArgsCount = len(rawArgs)
-		}
-	}
-	log.Info("rename table rebuild start",
-		zap.Int64("jobID", event.ID),
-		zap.Int64("jobVersion", int64(args.job.Version)),
-		zap.String("query", args.job.Query),
-		zap.ByteString("rawArgs", args.job.RawArgs),
-		zap.Int("rawArgsCount", rawArgsCount),
-		zap.Any("involvingSchemaInfo", args.job.InvolvingSchemaInfo))
+	oldSchemaSource := "unknown"
 	if len(args.job.InvolvingSchemaInfo) > 0 {
 		oldSchemaName = args.job.InvolvingSchemaInfo[0].Database
 		oldTableName = args.job.InvolvingSchemaInfo[0].Table
+		if oldSchemaName != "" {
+			oldSchemaSource = "involving_schema_info"
+		}
 	}
-	// RenameTableArgs keeps the old schema name even when the query omits it.
-	gotRenameArgs := false
 	if renameArgs, err := model.GetRenameTableArgs(args.job); err == nil {
-		gotRenameArgs = true
-		log.Info("rename table args decoded",
-			zap.Int64("jobID", event.ID),
-			zap.Int64("oldSchemaID", renameArgs.OldSchemaID),
-			zap.Int64("newSchemaID", renameArgs.NewSchemaID),
-			zap.String("oldSchemaName", renameArgs.OldSchemaName.O),
-			zap.String("newTableName", renameArgs.NewTableName.O))
 		if renameArgs.OldSchemaName.O != "" {
 			oldSchemaName = renameArgs.OldSchemaName.O
+			oldSchemaSource = "rename_table_args"
 		}
-	} else {
-		log.Warn("rename table args decode failed",
-			zap.Int64("jobID", event.ID),
-			zap.Int64("jobVersion", int64(args.job.Version)),
-			zap.Error(err))
 	}
 	queryProvidedOldSchema := false
 	if queryInfo, parsed := parseRenameTableQueryInfo(args.job.Query); parsed {
-		log.Info("rename table query parsed",
-			zap.Int64("jobID", event.ID),
-			zap.String("oldSchemaName", queryInfo.oldSchemaName),
-			zap.String("oldTableName", queryInfo.oldTableName),
-			zap.String("newSchemaName", queryInfo.newSchemaName),
-			zap.String("newTableName", queryInfo.newTableName))
 		if queryInfo.oldTableName != "" {
 			oldTableName = queryInfo.oldTableName
 		}
 		if queryInfo.oldSchemaName != "" {
 			oldSchemaName = queryInfo.oldSchemaName
 			queryProvidedOldSchema = true
+			oldSchemaSource = "query"
 		}
 	}
-	// ExtraSchemaID can be incorrect due to snapshot timing, so only use it as a last resort.
-	if !gotRenameArgs && !queryProvidedOldSchema && event.ExtraSchemaID != 0 && event.ExtraSchemaID != event.SchemaID {
+	// ExtraSchemaID can be incorrect due to snapshot timing, so only use it if the query
+	// does not specify the old schema.
+	if !queryProvidedOldSchema && event.ExtraSchemaID != 0 && event.ExtraSchemaID != event.SchemaID {
 		if extraName := getSchemaName(args.databaseMap, event.ExtraSchemaID); extraName != "" {
 			oldSchemaName = extraName
+			oldSchemaSource = "extra_schema_id"
 		}
 	}
 	if oldSchemaName != "" && oldTableName != "" {
@@ -788,7 +762,7 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 			zap.String("extraTableName", event.ExtraTableName),
 			zap.String("oldSchemaName", oldSchemaName),
 			zap.String("oldTableName", oldTableName),
-			zap.Any("involvingSchemaInfo", args.job.InvolvingSchemaInfo))
+			zap.String("oldSchemaSource", oldSchemaSource))
 		event.Query = fmt.Sprintf("RENAME TABLE %s TO %s",
 			common.QuoteSchema(oldSchemaName, oldTableName),
 			common.QuoteSchema(event.SchemaName, event.TableName))
