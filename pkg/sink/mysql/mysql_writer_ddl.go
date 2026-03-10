@@ -56,7 +56,8 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 	ctx := w.ctx
 	shouldSwitchDB := needSwitchDB(event)
 
-	if event.GetDDLType() == timodel.ActionAddIndex {
+	switch event.GetDDLType() {
+	case timodel.ActionMultiSchemaChange, timodel.ActionAddIndex:
 		newQuery, changed, err := restoreAnonymousIndexToNamedIndex(event.Query, event.TableInfo, event.IndexIDs)
 		if err != nil {
 			log.Warn("failed to restore anonymous index name",
