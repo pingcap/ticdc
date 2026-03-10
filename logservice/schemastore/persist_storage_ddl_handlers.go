@@ -728,6 +728,12 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 		if renameArgs.OldSchemaName.O != "" {
 			oldSchemaName = renameArgs.OldSchemaName.O
 		}
+		// TiDB v7.5 may truncate rename-table args to only oldSchemaID in RawArgs.
+		if renameArgs.OldSchemaName.O == "" && renameArgs.OldSchemaID != 0 {
+			if dbInfo, ok := args.databaseMap[renameArgs.OldSchemaID]; ok && dbInfo.Name != "" {
+				oldSchemaName = dbInfo.Name
+			}
+		}
 	} else {
 		log.Warn("rename table args decode failed",
 			zap.Int64("jobID", event.ID),
