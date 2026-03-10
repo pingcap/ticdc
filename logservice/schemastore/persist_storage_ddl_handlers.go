@@ -731,6 +731,11 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 				oldSchemaName = renameArgs.OldSchemaName.O
 				oldSchemaSource = "rename_table_args"
 			}
+		} else {
+			log.Warn("failed to get rename table args from ddl job",
+				zap.Int64("jobID", args.job.ID),
+				zap.String("query", event.Query),
+				zap.Error(err))
 		}
 	}
 	queryProvidedOldSchema := false
