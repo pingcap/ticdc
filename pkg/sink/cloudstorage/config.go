@@ -167,12 +167,17 @@ func mergeConfig(
 ) (*urlConfig, error) {
 	dest := &urlConfig{}
 	if sinkConfig != nil && sinkConfig.CloudStorageConfig != nil {
+		if urlParameters != nil {
+			if err := config.CheckUseTableIDAsPathCompatibility(
+				sinkConfig, urlParameters.UseTableIDAsPath,
+			); err != nil {
+				return nil, err
+			}
+		}
 		dest.WorkerCount = sinkConfig.CloudStorageConfig.WorkerCount
 		dest.FlushInterval = sinkConfig.CloudStorageConfig.FlushInterval
 		dest.FileSize = sinkConfig.CloudStorageConfig.FileSize
-	}
-	if sinkConfig != nil && sinkConfig.UseTableIDAsPath != nil {
-		dest.UseTableIDAsPath = sinkConfig.UseTableIDAsPath
+		dest.UseTableIDAsPath = sinkConfig.CloudStorageConfig.UseTableIDAsPath
 	}
 	if err := mergo.Merge(dest, urlParameters, mergo.WithOverride); err != nil {
 		return nil, cerror.WrapError(cerror.ErrStorageSinkInvalidConfig, err)
