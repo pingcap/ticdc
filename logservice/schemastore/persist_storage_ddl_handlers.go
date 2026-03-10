@@ -730,6 +730,13 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 		// See https://github.com/pingcap/ticdc/pull/2218 for background.
 		oldSchemaName := args.job.InvolvingSchemaInfo[0].Database
 		oldTableName := args.job.InvolvingSchemaInfo[0].Table
+		// RenameTableArgs keeps the old schema name even when the query omits it.
+		if args.job.Version == model.JobVersion1 || args.job.Version == model.JobVersion2 {
+			renameArgs, err := model.GetRenameTableArgs(args.job)
+			if err == nil && renameArgs.OldSchemaName.O != "" {
+				oldSchemaName = renameArgs.OldSchemaName.O
+			}
+		}
 		stmt, err := parser.New().ParseOneStmt(args.job.Query, "", "")
 		if err != nil {
 			log.Error("parse statement failed for build persisted DDL event", zap.Any("DDL", args.job.Query), zap.Error(err))

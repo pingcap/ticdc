@@ -3128,6 +3128,30 @@ func TestRenameTable(t *testing.T) {
 		},
 	})
 	assert.Equal(t, "RENAME TABLE `test`.`t1` TO `test`.`t2`", ddl.Query)
+
+	// use SalesDB;
+	job = buildRenameTableJobForTest(100, 101, "t1", 100, &model.InvolvingSchemaInfo{
+		Database: "salesdb",
+		Table:    "t1",
+	})
+	job.Version = model.JobVersion2
+	job.FillArgs(&model.RenameTableArgs{
+		OldSchemaID:   200,
+		OldSchemaName: ast.NewCIStr("SalesDB"),
+		NewTableName:  ast.NewCIStr("t1"),
+	})
+	job.Query = "RENAME TABLE t1 TO ArchiveDB.t1"
+	ddl = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			100: {Name: "ArchiveDB", Tables: map[int64]bool{101: true}},
+			200: {Name: "SalesDB", Tables: map[int64]bool{101: true}},
+		},
+		tableMap: map[int64]*BasicTableInfo{
+			101: {SchemaID: 200, Name: "t1"},
+		},
+	})
+	assert.Equal(t, "RENAME TABLE `SalesDB`.`t1` TO `ArchiveDB`.`t1`", ddl.Query)
 }
 
 func TestBuildPersistedDDLEventForRenameTablesFallbackOldTableName(t *testing.T) {
