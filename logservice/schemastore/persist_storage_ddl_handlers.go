@@ -736,7 +736,9 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 		oldTableName = args.job.InvolvingSchemaInfo[0].Table
 	}
 	// RenameTableArgs keeps the old schema name even when the query omits it.
+	gotRenameArgs := false
 	if renameArgs, err := model.GetRenameTableArgs(args.job); err == nil {
+		gotRenameArgs = true
 		log.Info("rename table args decoded",
 			zap.Int64("jobID", event.ID),
 			zap.Int64("oldSchemaID", renameArgs.OldSchemaID),
@@ -768,7 +770,8 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 			queryProvidedOldSchema = true
 		}
 	}
-	if !queryProvidedOldSchema && event.ExtraSchemaID != 0 && event.ExtraSchemaID != event.SchemaID {
+	// ExtraSchemaID can be incorrect due to snapshot timing, so only use it as a last resort.
+	if !gotRenameArgs && !queryProvidedOldSchema && event.ExtraSchemaID != 0 && event.ExtraSchemaID != event.SchemaID {
 		if extraName := getSchemaName(args.databaseMap, event.ExtraSchemaID); extraName != "" {
 			oldSchemaName = extraName
 		}
