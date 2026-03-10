@@ -333,11 +333,8 @@ func (d *BasicDispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.S
 	return true, nil
 }
 
-// AddBlockEventToSink write the BlockEvent to the sink.
-// shouldFlush is true if this block event no need to block.
-// shouldFlush is false, indicates that it's already flushed once, and send WAITING status to maintainer,
-// so just write the block event to sink without flushing again.
-func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent, shouldFlush bool) error {
+// AddBlockEventToSink writes the block event to the sink.
+func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {
 	// For ddl event, we need to check whether it should be sent to downstream.
 	// It may be marked as not sync by filter when building the event.
 	if event.GetType() == commonEvent.TypeDDLEvent {
@@ -348,10 +345,10 @@ func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent, shou
 		// dispatcher progress, without sending this DDL to sink.
 		if ddl.NotSync {
 			log.Info("ignore DDL by NotSync", zap.Stringer("dispatcher", d.id), zap.Any("ddl", ddl))
-			return d.PassBlockEventToSink(event, shouldFlush)
+			return d.PassBlockEventToSink(event)
 		}
 	}
-	if shouldFlush {
+	if d.shouldFlushBlockEvent(event) {
 		// Keep block-event write order with prior DML.
 		// For storage sink this wait all previous enqueued DML events flushed.
 		// For non-storage sinks it is usually a no-op.
@@ -364,10 +361,9 @@ func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent, shou
 	return d.sink.WriteBlockEvent(event)
 }
 
-// PassBlockEventToSink is called if the BlockEvent no need to write to the downstream, such as Action_Pass or a filtered DDL with NotSync
-// shouldFlush has the same meaning as AddBlockEventToSink.
-func (d *BasicDispatcher) PassBlockEventToSink(event commonEvent.BlockEvent, shouldFlush bool) error {
-	if shouldFlush {
+// PassBlockEventToSink handles the local pass path for a block event.
+func (d *BasicDispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) error {
+	if d.shouldFlushBlockEvent(event) {
 		if err := d.sink.FlushDMLBeforeBlock(event); err != nil {
 			return err
 		}
@@ -375,6 +371,17 @@ func (d *BasicDispatcher) PassBlockEventToSink(event commonEvent.BlockEvent, sho
 	d.tableProgress.Pass(event)
 	event.PostFlush()
 	return nil
+}
+
+// shouldFlushBlockEvent returns false only when executing the already-pending block event
+// after maintainer has accepted it and moved the local stage to WRITING. That path already
+// drained prior DML before reporting WAITING, so Write/Pass must not flush again.
+func (d *BasicDispatcher) shouldFlushBlockEvent(event commonEvent.BlockEvent) bool {
+	pendingEvent, blockStage := d.blockEventStatus.getEventAndStage()
+	if pendingEvent == nil {
+		return true
+	}
+	return pendingEvent != event || blockStage != heartbeatpb.BlockStage_WRITING
 }
 
 // ensureActiveActiveTableInfo validates the table schema requirements for active-active mode.
@@ -874,7 +881,7 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 // easier for tests and failpoints to control interleavings around block events.
 func (d *BasicDispatcher) ExecuteBlockEventDDL(pendingEvent commonEvent.BlockEvent, actionCommitTs uint64, actionIsSyncPoint bool) {
 	failpoint.Inject("BlockOrWaitBeforeWrite", nil)
-	err := d.AddBlockEventToSink(pendingEvent, false)
+	err := d.AddBlockEventToSink(pendingEvent)
 	if err != nil {
 		d.HandleError(err)
 		return
@@ -887,7 +894,7 @@ func (d *BasicDispatcher) ExecuteBlockEventDDL(pendingEvent commonEvent.BlockEve
 // were already drained before it entered WAITING.
 func (d *BasicDispatcher) PassBlockEvent(pendingEvent commonEvent.BlockEvent, actionCommitTs uint64, actionIsSyncPoint bool) {
 	failpoint.Inject("BlockOrWaitBeforePass", nil)
-	err := d.PassBlockEventToSink(pendingEvent, false)
+	err := d.PassBlockEventToSink(pendingEvent)
 	if err != nil {
 		d.HandleError(err)
 		return
@@ -962,7 +969,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 				// we track it as a pending schedule-related event until the maintainer ACKs it.
 				d.pendingACKCount.Add(1)
 			}
-			err := d.AddBlockEventToSink(event, true)
+			err := d.AddBlockEventToSink(event)
 			if err != nil {
 				if needsScheduleACKTracking {
 					d.pendingACKCount.Add(-1)
