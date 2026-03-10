@@ -33,7 +33,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	pkgRedo "github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/stretchr/testify/require"
 )
@@ -56,6 +58,41 @@ func newDispatcherManagerTestSink(t *testing.T, sinkType common.SinkType) sink.S
 	mockSink.EXPECT().Close(gomock.Any()).AnyTimes()
 	mockSink.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
 	return mockSink
+}
+
+type testDynamicStream[A dynstream.Area, P dynstream.Path, T dynstream.Event, D dynstream.Dest, H dynstream.Handler[A, P, T, D]] struct {
+	onAddPath func() error
+}
+
+func (s *testDynamicStream[A, P, T, D, H]) Start() {}
+
+func (s *testDynamicStream[A, P, T, D, H]) Close() {}
+
+func (s *testDynamicStream[A, P, T, D, H]) Push(path P, event T) {}
+
+func (s *testDynamicStream[A, P, T, D, H]) Wake(path P) {}
+
+func (s *testDynamicStream[A, P, T, D, H]) Feedback() <-chan dynstream.Feedback[A, P, D] {
+	return nil
+}
+
+func (s *testDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, area ...dynstream.AreaSettings) error {
+	if s.onAddPath != nil {
+		return s.onAddPath()
+	}
+	return nil
+}
+
+func (s *testDynamicStream[A, P, T, D, H]) RemovePath(path P) error {
+	return nil
+}
+
+func (s *testDynamicStream[A, P, T, D, H]) Release(path P) {}
+
+func (s *testDynamicStream[A, P, T, D, H]) SetAreaSettings(area A, settings dynstream.AreaSettings) {}
+
+func (s *testDynamicStream[A, P, T, D, H]) GetMetrics() dynstream.Metrics[A, P] {
+	return dynstream.Metrics[A, P]{}
 }
 
 // createTestDispatcher creates a test dispatcher with given parameters
@@ -215,6 +252,74 @@ func TestCollectComponentStatusWhenChangedWatermarkSeqNoFallback(t *testing.T) {
 	require.NotNil(t, req.Request)
 	require.NotNil(t, req.Request.RedoWatermark)
 	require.Equal(t, uint64(200), req.Request.RedoWatermark.Seq)
+}
+
+func TestInitRedoComponentPublishesReadyAfterRedoRegistration(t *testing.T) {
+	manager := &DispatcherManager{
+		changefeedID:        common.NewChangeFeedIDWithName("redo-test", common.DefaultKeyspaceName),
+		latestRedoWatermark: NewWatermark(0),
+		sinkQuota:           200,
+		redoEnabled:         true,
+		config: &config.ChangefeedConfig{
+			Consistent: &config.ConsistentConfig{
+				Level:                 util.AddressOf(string(pkgRedo.ConsistentLevelEventual)),
+				MaxLogSize:            util.AddressOf(pkgRedo.DefaultMaxLogSize),
+				Storage:               util.AddressOf("blackhole://"),
+				FlushIntervalInMs:     util.AddressOf(int64(pkgRedo.MinFlushIntervalInMs)),
+				MetaFlushIntervalInMs: util.AddressOf(int64(pkgRedo.MinFlushIntervalInMs)),
+				EncodingWorkerNum:     util.AddressOf(1),
+				FlushWorkerNum:        util.AddressOf(1),
+				UseFileBackend:        util.AddressOf(false),
+				MemoryUsage: &config.ConsistentMemoryUsage{
+					MemoryQuotaPercentage: 25,
+				},
+			},
+		},
+	}
+	registrationStarted := make(chan struct{})
+	releaseRegistration := make(chan struct{})
+	hb := &HeartBeatCollector{
+		redoResolvedTsForwardMessageDynamicStream: &testDynamicStream[int, common.GID, RedoResolvedTsForwardMessage, *DispatcherManager, *RedoResolvedTsForwardMessageHandler]{
+			onAddPath: func() error {
+				select {
+				case <-registrationStarted:
+				default:
+					close(registrationStarted)
+				}
+				<-releaseRegistration
+				return nil
+			},
+		},
+		redoMetaMessageDynamicStream: &testDynamicStream[int, common.GID, RedoMetaMessage, *DispatcherManager, *RedoMetaMessageHandler]{},
+	}
+	appcontext.SetService(appcontext.HeartbeatCollector, hb)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- initRedoComponet(ctx, manager, manager.changefeedID, nil, 0, false)
+	}()
+
+	require.Eventually(t, func() bool {
+		select {
+		case <-registrationStarted:
+			return true
+		default:
+			return false
+		}
+	}, 5*time.Second, 10*time.Millisecond)
+	require.Equal(t, uint64(50), manager.redoQuota)
+	require.Equal(t, uint64(150), manager.sinkQuota)
+	require.False(t, manager.IsRedoReady())
+
+	close(releaseRegistration)
+	require.NoError(t, <-errCh)
+	require.True(t, manager.IsRedoReady())
+
+	cancel()
+	manager.wg.Wait()
 }
 
 func TestMergeDispatcherNormal(t *testing.T) {
