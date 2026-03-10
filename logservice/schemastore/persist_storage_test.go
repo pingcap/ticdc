@@ -3654,6 +3654,44 @@ func TestBuildDDLEventForNewTableDDL_CreateTableLikeBlockedTables(t *testing.T) 
 	require.ElementsMatch(t, []int64{common.DDLSpanTableID, 111, 112}, ddlEvent.BlockedTables.TableIDs)
 }
 
+func TestBuildDDLEventForCreateTablesQueryCountMismatch(t *testing.T) {
+	tableInfo1 := newEligibleTableInfoForTest(201, "t_26")
+	tableInfo2 := newEligibleTableInfoForTest(202, "t_27")
+	tableInfo1.State = model.StatePublic
+	tableInfo2.State = model.StatePublic
+	for _, column := range tableInfo1.Columns {
+		column.State = model.StatePublic
+	}
+	for _, column := range tableInfo2.Columns {
+		column.State = model.StatePublic
+	}
+
+	rawEvent := &PersistedDDLEvent{
+		Type:       byte(model.ActionCreateTables),
+		SchemaID:   100,
+		SchemaName: "test",
+		Query:      "CREATE TABLE `t_26` (`a` INT PRIMARY KEY,`b` INT)",
+		MultipleTableInfos: []*model.TableInfo{
+			tableInfo1,
+			tableInfo2,
+		},
+	}
+
+	ddlEvent, ok, err := buildDDLEventForCreateTables(rawEvent, nil, 0)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	querys, err := commonEvent.SplitQueries(ddlEvent.Query)
+	require.NoError(t, err)
+	require.Len(t, querys, 2)
+	require.Contains(t, querys[0], "CREATE TABLE `t_26`")
+	require.Contains(t, querys[1], "CREATE TABLE `t_27`")
+
+	require.Len(t, ddlEvent.NeedAddedTables, 2)
+	require.Equal(t, int64(201), ddlEvent.NeedAddedTables[0].TableID)
+	require.Equal(t, int64(202), ddlEvent.NeedAddedTables[1].TableID)
+}
+
 func TestUpdateDDLHistoryForAddDropTable_CreateTableLikeAddsReferTable(t *testing.T) {
 	args := updateDDLHistoryFuncArgs{
 		ddlEvent: &PersistedDDLEvent{

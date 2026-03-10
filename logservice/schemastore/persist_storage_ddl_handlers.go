@@ -14,6 +14,7 @@
 package schemastore
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"strings"
@@ -23,9 +24,12 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/tidb/pkg/executor"
+	"github.com/pingcap/tidb/pkg/meta/autoid"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/util/mock"
 	"go.uber.org/zap"
 )
 
@@ -2870,15 +2874,9 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	if allFiltered {
 		return commonEvent.DDLEvent{}, false, err
 	}
-	querys, err := commonEvent.SplitQueries(rawEvent.Query)
+	querys, err := splitCreateTablesQueries(rawEvent)
 	if err != nil {
-		log.Panic("split queries failed", zap.Error(err))
-	}
-	if len(querys) != len(rawEvent.MultipleTableInfos) {
-		log.Panic("query count not match table count",
-			zap.Int("queryCount", len(querys)),
-			zap.Int("tableCount", len(rawEvent.MultipleTableInfos)),
-			zap.String("query", rawEvent.Query))
+		return commonEvent.DDLEvent{}, false, err
 	}
 	ddlEvent.NeedAddedTables = make([]commonEvent.Table, 0, physicalTableCount)
 	addName := make([]commonEvent.SchemaTableName, 0, logicalTableCount)
@@ -2936,6 +2934,43 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 		log.Fatal("should not happen")
 	}
 	return ddlEvent, true, err
+}
+
+func splitCreateTablesQueries(rawEvent *PersistedDDLEvent) ([]string, error) {
+	querys, err := commonEvent.SplitQueries(rawEvent.Query)
+	if err == nil && len(querys) == len(rawEvent.MultipleTableInfos) {
+		return querys, nil
+	}
+
+	fields := []zap.Field{
+		zap.Int("queryCount", len(querys)),
+		zap.Int("tableCount", len(rawEvent.MultipleTableInfos)),
+		zap.String("query", rawEvent.Query),
+	}
+	if err != nil {
+		fields = append(fields, zap.Error(err))
+	}
+	log.Warn("create tables query count not match table count rebuild queries by table info", fields...)
+
+	ctx := mock.NewContext()
+	rebuiltQuerys := make([]string, 0, len(rawEvent.MultipleTableInfos))
+	for _, tableInfo := range rawEvent.MultipleTableInfos {
+		if tableInfo == nil {
+			return nil, cerror.WrapError(cerror.ErrTiDBUnexpectedJobMeta, errors.New("nil table info in create tables ddl"))
+		}
+
+		var queryBuilder bytes.Buffer
+		if err := executor.ConstructResultOfShowCreateTable(ctx, tableInfo, autoid.Allocators{}, &queryBuilder); err != nil {
+			return nil, cerror.WrapError(cerror.ErrTiDBUnexpectedJobMeta, err)
+		}
+
+		query := queryBuilder.String()
+		if !strings.HasSuffix(query, ";") {
+			query += ";"
+		}
+		rebuiltQuerys = append(rebuiltQuerys, query)
+	}
+	return rebuiltQuerys, nil
 }
 
 func buildDDLEventForAlterTablePartitioning(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
