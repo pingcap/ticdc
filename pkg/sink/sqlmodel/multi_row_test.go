@@ -41,9 +41,57 @@ func TestGenDeleteMultiRows(t *testing.T) {
 	require.Equal(t, []interface{}{1, 3}, args)
 }
 
+func TestGenDeleteMultiRowsWithNullFallbackToV1(t *testing.T) {
+	t.Parallel()
+
+	source1 := &common.TableName{Schema: "db", Table: "tb1"}
+	source2 := &common.TableName{Schema: "db", Table: "tb2"}
+	target := &common.TableName{Schema: "db", Table: "tb"}
+
+	sourceTI1 := mockTableInfo(t, "CREATE TABLE tb1 (c INT, c2 INT)")
+	sourceTI2 := mockTableInfo(t, "CREATE TABLE tb2 (c INT, c2 INT)")
+	targetTI := mockTableInfo(t, "CREATE TABLE tb (c INT, c2 INT)")
+
+	change1 := NewRowChange(source1, target, []interface{}{1, nil}, nil, sourceTI1, targetTI, nil)
+	change2 := NewRowChange(source2, target, []interface{}{3, 4}, nil, sourceTI2, targetTI, nil)
+	sql, args := GenDeleteSQL(DefaultWhereClause, change1, change2)
+
+	require.Equal(t, "DELETE FROM `db`.`tb` WHERE (`c` = ? AND `c2` IS ?) OR (`c` = ? AND `c2` = ?)", sql)
+	require.Equal(t, []interface{}{1, nil, 3, 4}, args)
+}
+
 func TestGenUpdateMultiRows(t *testing.T) {
 	t.Parallel()
 	testGenUpdateMultiRows(t, GenUpdateSQL)
+}
+
+func TestGenUpdateMultiRowsWithNullFallbackToV1(t *testing.T) {
+	t.Parallel()
+
+	source1 := &common.TableName{Schema: "db", Table: "tb1"}
+	source2 := &common.TableName{Schema: "db", Table: "tb2"}
+	target := &common.TableName{Schema: "db", Table: "tb"}
+
+	sourceTI1 := mockTableInfo(t, "CREATE TABLE tb1 (c INT, c2 INT)")
+	sourceTI2 := mockTableInfo(t, "CREATE TABLE tb2 (c INT, c2 INT)")
+	targetTI := mockTableInfo(t, "CREATE TABLE tb (c INT, c2 INT)")
+
+	change1 := NewRowChange(source1, target, []interface{}{1, nil}, []interface{}{10, 20}, sourceTI1, targetTI, nil)
+	change2 := NewRowChange(source2, target, []interface{}{3, 4}, []interface{}{30, 40}, sourceTI2, targetTI, nil)
+	sql, args := GenUpdateSQL(DefaultWhereClause, change1, change2)
+
+	expectedSQL := "UPDATE `db`.`tb` SET " +
+		"`c`=CASE WHEN `c` = ? AND `c2` IS ? THEN ? WHEN `c` = ? AND `c2` = ? THEN ? END, " +
+		"`c2`=CASE WHEN `c` = ? AND `c2` IS ? THEN ? WHEN `c` = ? AND `c2` = ? THEN ? END " +
+		"WHERE (`c` = ? AND `c2` IS ?) OR (`c` = ? AND `c2` = ?)"
+	expectedArgs := []interface{}{
+		1, nil, 10, 3, 4, 30,
+		1, nil, 20, 3, 4, 40,
+		1, nil, 3, 4,
+	}
+
+	require.Equal(t, expectedSQL, sql)
+	require.Equal(t, expectedArgs, args)
 }
 
 func TestGenUpdateMultiRowsOneColPK(t *testing.T) {
