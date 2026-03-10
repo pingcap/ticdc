@@ -141,15 +141,14 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 			KeyspaceId:   keyspaceMeta.ID,
 		}))
 
-	value, ok := manager.maintainers.Load(cfID)
+	maintainer, ok := manager.GetMaintainerForChangefeed(cfID)
 	if !ok {
 		require.Eventually(t, func() bool {
-			value, ok = manager.maintainers.Load(cfID)
+			maintainer, ok = manager.GetMaintainerForChangefeed(cfID)
 			return ok
 		}, 20*time.Second, 200*time.Millisecond)
 	}
 	require.True(t, ok)
-	maintainer := value.(*Maintainer)
 
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetSchedulingSize() == 4
@@ -282,10 +281,10 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 		return maintainer.scheduleState.Load() == int32(heartbeatpb.ComponentState_Stopped)
 	}, 20*time.Second, 200*time.Millisecond)
 
-	_, ok = manager.maintainers.Load(cfID)
+	_, ok = manager.GetMaintainerForChangefeed(cfID)
 	if ok {
 		require.Eventually(t, func() bool {
-			_, ok = manager.maintainers.Load(cfID)
+			_, ok = manager.GetMaintainerForChangefeed(cfID)
 			return ok == false
 		}, 20*time.Second, 200*time.Millisecond)
 	}
@@ -389,15 +388,14 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 			CheckpointTs: 10,
 		}))
 
-	value, ok := manager.maintainers.Load(cfID)
+	maintainer, ok := manager.GetMaintainerForChangefeed(cfID)
 	if !ok {
 		require.Eventually(t, func() bool {
-			value, ok = manager.maintainers.Load(cfID)
+			maintainer, ok = manager.GetMaintainerForChangefeed(cfID)
 			return ok
 		}, 20*time.Second, 200*time.Millisecond)
 	}
 	require.True(t, ok)
-	maintainer := value.(*Maintainer)
 
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetReplicatingSize() == 4
@@ -501,10 +499,10 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 		Removed: true,
 	}))
 
-	_, ok := manager.maintainers.Load(cfID)
+	_, ok := manager.GetMaintainerForChangefeed(cfID)
 	if ok {
 		require.Eventually(t, func() bool {
-			_, ok = manager.maintainers.Load(cfID)
+			_, ok = manager.GetMaintainerForChangefeed(cfID)
 			return !ok
 		}, 20*time.Second, 200*time.Millisecond)
 	}

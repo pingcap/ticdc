@@ -35,7 +35,7 @@ func TestSetNodeLivenessRejectEpochMismatch(t *testing.T) {
 
 	req := &heartbeatpb.SetNodeLivenessRequest{
 		Target:    heartbeatpb.NodeLiveness_DRAINING,
-		NodeEpoch: m.nodeEpoch + 1,
+		NodeEpoch: m.node.nodeEpoch + 1,
 	}
 	msg := messaging.NewSingleTargetMessage(m.nodeInfo.ID, messaging.MaintainerManagerTopic, req)
 	msg.From = m.coordinatorID
@@ -46,7 +46,7 @@ func TestSetNodeLivenessRejectEpochMismatch(t *testing.T) {
 	require.Equal(t, messaging.TypeSetNodeLivenessResponse, out.Type)
 	resp := out.Message[0].(*heartbeatpb.SetNodeLivenessResponse)
 	require.Equal(t, heartbeatpb.NodeLiveness_ALIVE, resp.Applied)
-	require.Equal(t, m.nodeEpoch, resp.NodeEpoch)
+	require.Equal(t, m.node.nodeEpoch, resp.NodeEpoch)
 	require.Equal(t, api.LivenessCaptureAlive, liveness.Load())
 }
 
@@ -61,7 +61,7 @@ func TestSetNodeLivenessApplyTransition(t *testing.T) {
 
 	req := &heartbeatpb.SetNodeLivenessRequest{
 		Target:    heartbeatpb.NodeLiveness_DRAINING,
-		NodeEpoch: m.nodeEpoch,
+		NodeEpoch: m.node.nodeEpoch,
 	}
 	msg := messaging.NewSingleTargetMessage(m.nodeInfo.ID, messaging.MaintainerManagerTopic, req)
 	msg.From = m.coordinatorID
