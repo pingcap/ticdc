@@ -14,6 +14,7 @@
 package schemastore
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
