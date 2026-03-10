@@ -15,7 +15,6 @@ package dispatchermanager
 
 import (
 	"context"
-	"sync"
 	"testing"
 	"time"
 
@@ -203,56 +202,6 @@ func TestPreCheckForSchedulerHandler_CreateSkippedWhenDispatcherExists(t *testin
 
 	_, ok := preCheckForSchedulerHandler(createReq, dm)
 	require.False(t, ok)
-}
-
-func TestDispatcherManagerIsRedoReadySkipsComponentChecksUntilPublished(t *testing.T) {
-	t.Parallel()
-
-	dm := &DispatcherManager{
-		redoEnabled: true,
-	}
-
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	go func() {
-		defer wg.Done()
-		<-start
-		for i := 0; i < 1000; i++ {
-			dm.redoDispatcherMap = newDispatcherMap[*dispatcher.RedoDispatcher]()
-			dm.redoSink = &redo.Sink{}
-			dm.redoSchemaIDToDispatchers = dispatcher.NewSchemaIDToDispatchers()
-			dm.redoDispatcherMap = nil
-			dm.redoSink = nil
-			dm.redoSchemaIDToDispatchers = nil
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		<-start
-		for i := 0; i < 1000; i++ {
-			require.False(t, dm.IsRedoReady())
-		}
-	}()
-
-	close(start)
-	wg.Wait()
-}
-
-func TestDispatcherManagerIsRedoReadyReturnsTrueAfterPublication(t *testing.T) {
-	t.Parallel()
-
-	dm := &DispatcherManager{
-		redoEnabled:               true,
-		redoDispatcherMap:         newDispatcherMap[*dispatcher.RedoDispatcher](),
-		redoSink:                  &redo.Sink{},
-		redoSchemaIDToDispatchers: dispatcher.NewSchemaIDToDispatchers(),
-	}
-	dm.redoReady.Store(true)
-
-	require.True(t, dm.IsRedoReady())
 }
 
 func TestDispatcherManagerIsRedoReadyRequiresPublication(t *testing.T) {

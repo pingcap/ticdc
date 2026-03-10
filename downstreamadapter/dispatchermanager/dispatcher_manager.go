@@ -733,7 +733,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	toCleanMap := make([]*cleanMap, 0)
 	dispatcherCount := 0
 
-	if e.IsRedoEnabled() {
+	if e.IsRedoReady() {
 		redoSeq := e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.RedoDispatcher) {
 			dispatcherCount++
 			status, cleanMap, watermark := getDispatcherStatus(id, dispatcherItem, needCompleteStatus)

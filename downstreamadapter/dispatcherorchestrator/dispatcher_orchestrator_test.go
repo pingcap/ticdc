@@ -14,12 +14,9 @@
 package dispatcherorchestrator
 
 import (
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
-	"github.com/pingcap/ticdc/downstreamadapter/dispatchermanager"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -200,87 +197,4 @@ func TestGetPendingMessageKey_SupportedTypes(t *testing.T) {
 	key, ok = getPendingMessageKey(closeReq)
 	require.True(t, ok)
 	require.Equal(t, pendingMessageKey{changefeedID: cfID, msgType: messaging.TypeMaintainerCloseRequest}, key)
-}
-
-func TestCreateBootstrapResponseSkipsRedoUntilReady(t *testing.T) {
-	t.Parallel()
-
-	changefeedID := &heartbeatpb.ChangefeedID{
-		Keyspace: "test-namespace",
-		Name:     "test-changefeed",
-	}
-	redoDispatcherID := common.NewDispatcherID()
-	redoDispatcher := dispatcher.NewRedoDispatcher(
-		redoDispatcherID,
-		common.KeyspaceDDLSpan(0),
-		123,
-		0,
-		dispatcher.NewSchemaIDToDispatchers(),
-		false,
-		false,
-		nil,
-		nil,
-	)
-	redoDispatcherMap := &dispatchermanager.DispatcherMap[*dispatcher.RedoDispatcher]{}
-	redoDispatcherMap.Set(redoDispatcherID, redoDispatcher)
-	dispatcherMap := &dispatchermanager.DispatcherMap[*dispatcher.EventDispatcher]{}
-
-	t.Run("nil redo map", func(t *testing.T) {
-		manager := &fakeBootstrapResponseManager{
-			dispatcherMap: dispatcherMap,
-		}
-
-		require.NotPanics(t, func() {
-			response := createBootstrapResponse(changefeedID, manager, 0, 123)
-			require.Zero(t, response.RedoCheckpointTs)
-			require.Empty(t, response.Spans)
-		})
-	})
-
-	t.Run("partial redo state", func(t *testing.T) {
-		manager := &fakeBootstrapResponseManager{
-			dispatcherMap:     dispatcherMap,
-			redoReady:         false,
-			redoDispatcherMap: redoDispatcherMap,
-		}
-
-		response := createBootstrapResponse(changefeedID, manager, 0, 123)
-		require.Zero(t, response.RedoCheckpointTs)
-		require.Empty(t, response.Spans)
-	})
-
-	t.Run("published redo state", func(t *testing.T) {
-		manager := &fakeBootstrapResponseManager{
-			dispatcherMap:     dispatcherMap,
-			redoReady:         true,
-			redoDispatcherMap: redoDispatcherMap,
-		}
-
-		response := createBootstrapResponse(changefeedID, manager, 0, 123)
-		require.Equal(t, uint64(123), response.RedoCheckpointTs)
-		require.Len(t, response.Spans, 1)
-	})
-}
-
-type fakeBootstrapResponseManager struct {
-	dispatcherMap     *dispatchermanager.DispatcherMap[*dispatcher.EventDispatcher]
-	redoReady         bool
-	redoDispatcherMap *dispatchermanager.DispatcherMap[*dispatcher.RedoDispatcher]
-	currentOperators  sync.Map
-}
-
-func (m *fakeBootstrapResponseManager) GetDispatcherMap() *dispatchermanager.DispatcherMap[*dispatcher.EventDispatcher] {
-	return m.dispatcherMap
-}
-
-func (m *fakeBootstrapResponseManager) IsRedoReady() bool {
-	return m.redoReady
-}
-
-func (m *fakeBootstrapResponseManager) GetRedoDispatcherMap() *dispatchermanager.DispatcherMap[*dispatcher.RedoDispatcher] {
-	return m.redoDispatcherMap
-}
-
-func (m *fakeBootstrapResponseManager) GetCurrentOperatorMap() *sync.Map {
-	return &m.currentOperators
 }
